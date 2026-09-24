@@ -28,6 +28,13 @@
   - 最初に読んだフレームの timestamp とそのときの壁時計の対応をとり、以降は timestamp の差を足して換算する
   - 音声は AudioData の timestamp が `performance.now()` 基準のため、従来どおり `LOC.toUnixEpochMicroseconds` で換算する
   - @voluntas
+- [ADD] moqt-devtools の subscriber に jitter buffer を追加する
+  - 復号したフレームを到着のタイミングのまま表示していたため、経路の到着の揺らぎがそのまま表示のかくつきになっていた。LOC TIMESTAMP (draft-ietf-moq-loc-04 Section 2.3.1.1 の壁時計) の間隔どおりの表示時刻 (TIMESTAMP + 直近 10 秒の遅れの最小値 + 再生遅延) に表示する
+  - 再生遅延は揺らぎの p95 を目標にし、上がったら直ちに追従し、下がったら毎秒 20 ms でゆっくり戻す。上限は 500 ms と表示待ちのキューの上限 (24 枚) を超えない長さの小さい方。購読の開始にまとめて届く cache replay と上限を超える揺らぎは目標に使わない
+  - 表示時刻を過ぎたフレームが複数あれば最新を描き、古いものは間に合わなかったフレームとして捨てる。TIMESTAMP が 2 秒以上飛んだら基準を取り直す
+  - Timescale のある TIMESTAMP と TIMESTAMP の無い Object は従来どおり届いた順に表示する
+  - 既定で有効にし、設定の Jitter Buffer と URL の `jitterBuffer=0` で無効にできる。現在の再生遅延 (`playoutDelayMs`) と間に合わずに捨てたフレーム数 (`lateFramesDropped`) を `playbackTiming` に出す
+  - @voluntas
 - [ADD] moqt-devtools の subscriber に受信から表示までの時間の統計を追加する
   - 映像のかくつきの原因 (到着の揺らぎ、送信から受信までの遅延、復号の遅れ、表示の止まり、表示キューのあふれ) を画面と `window.moqtDevTools.getSubscribers()` の `playbackTiming` から切り分けられるようにする
   - 到着の揺らぎ・遅延・復号時間・表示間隔の直近 10 秒の p50 / p95 / max、直近 1 秒の表示 fps、表示間隔がフレーム間隔の 1.5 倍を超えた回数とその合計時間、表示キューがあふれて捨てたフレーム数を出す

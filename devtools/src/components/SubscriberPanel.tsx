@@ -445,6 +445,23 @@ export function SubscriberPanel({
                 {instance.playbackTiming.value.displayQueueDrops}
               </div>
             </div>
+            <div class="bg-white rounded-lg p-3 border border-slate-200 col-span-2">
+              <div class="text-xs text-slate-500">playoutDelay (jitter buffer, ms)</div>
+              <div class="text-xl font-bold text-blue-600" data-testid="subscriber-playout-delay">
+                {instance.playbackTiming.value.playoutDelayMs === null
+                  ? "-"
+                  : instance.playbackTiming.value.playoutDelayMs.toFixed(1)}
+              </div>
+            </div>
+            <div class="bg-white rounded-lg p-3 border border-slate-200 col-span-2">
+              <div class="text-xs text-slate-500">lateFramesDropped</div>
+              <div
+                class="text-xl font-bold text-yellow-600"
+                data-testid="subscriber-late-frames-dropped"
+              >
+                {instance.playbackTiming.value.lateFramesDropped}
+              </div>
+            </div>
           </div>
 
           <h3 class="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">

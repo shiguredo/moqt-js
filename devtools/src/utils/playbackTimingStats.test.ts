@@ -148,6 +148,27 @@ test("snapshot: 表示 fps は直近 1 秒に描いたフレーム数になる",
   assert.equal(stats.snapshot(89 * (1_000 / 30)).displayFps, 30);
 });
 
+// jitter buffer が表示時刻を過ぎたフレームのうち最新以外を捨てた数 (間に合わなかった数)
+test("recordLateDrop: 間に合わずに捨てたフレームを数える", () => {
+  const stats = new PlaybackTimingStats();
+  stats.recordLateDrop();
+  stats.recordLateDrop();
+  stats.recordLateDrop();
+  assert.equal(stats.snapshot(0).lateFramesDropped, 3);
+});
+
+// 現在の再生遅延は jitter buffer が決め、統計はその最後の値を出す。
+// jitter buffer が働いていない (無効 / 壁時計の TIMESTAMP が無い) ときは null
+test("recordPlayoutDelay: 最後に記録した再生遅延を出す", () => {
+  const stats = new PlaybackTimingStats();
+  assert.isNull(stats.snapshot(0).playoutDelayMs);
+  stats.recordPlayoutDelay(40);
+  stats.recordPlayoutDelay(55);
+  assert.equal(stats.snapshot(0).playoutDelayMs, 55);
+  stats.recordPlayoutDelay(null);
+  assert.isNull(stats.snapshot(0).playoutDelayMs);
+});
+
 test("recordQueueDrop: 表示キューがあふれて捨てたフレームを数える", () => {
   const stats = new PlaybackTimingStats();
   stats.recordQueueDrop();
@@ -170,6 +191,8 @@ test("reset: 分布と累積の値を初期状態に戻す", () => {
   stats.recordDisplay(66.7, FRAME_MICROS * 2);
   stats.recordDisplay(300, FRAME_MICROS * 3);
   stats.recordQueueDrop();
+  stats.recordLateDrop();
+  stats.recordPlayoutDelay(40);
   stats.reset();
   assert.deepEqual(stats.snapshot(400), EMPTY_PLAYBACK_TIMING);
 

@@ -820,6 +820,21 @@ export function ConnectionSettings() {
             Use Dedicated Worker
           </label>
         </div>
+        {/* 復号したフレームを LOC TIMESTAMP (壁時計) の間隔どおりに表示し、到着の揺らぎを吸収する */}
+        <div class="flex items-center gap-2 mt-2">
+          <input
+            type="checkbox"
+            id="jitterBufferEnabled"
+            data-testid="settings-jitter-buffer"
+            checked={settings.jitterBufferEnabled.value}
+            onChange={(e) => (settings.jitterBufferEnabled.value = e.currentTarget.checked)}
+            disabled={settings.settingsDisabled.value}
+            class="rounded border-slate-300 text-blue-600 focus:ring-blue-500 disabled:cursor-not-allowed"
+          />
+          <label for="jitterBufferEnabled" class="text-sm text-slate-600">
+            Jitter Buffer (play video at LOC TIMESTAMP)
+          </label>
+        </div>
       </div>
 
       {/* Authorization Token Settings */}

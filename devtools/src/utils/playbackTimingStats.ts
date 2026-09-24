@@ -12,6 +12,8 @@
  * - 止まりの回数と時間、表示キューのあふれは購読の開始 (reset) からの累積である
  */
 
+import { TimedValues } from "./timedValues";
+
 /** 分布を求める直近の窓 (ミリ秒) */
 export const PLAYBACK_TIMING_WINDOW_MS = 10_000;
 
@@ -52,6 +54,16 @@ export interface PlaybackTimingSnapshot {
   readonly displayStallMs: number;
   /** 表示キューがあふれて捨てたフレーム数 (累積) */
   readonly displayQueueDrops: number;
+  /**
+   * jitter buffer の現在の再生遅延 (ミリ秒)。jitter buffer が働いていない
+   * (無効 / 壁時計の TIMESTAMP のフレームがまだ無い) ときは null
+   */
+  readonly playoutDelayMs: number | null;
+  /**
+   * jitter buffer が間に合わずに捨てたフレーム数 (累積)。表示時刻を過ぎたフレームが
+   * 複数あるとき、最新以外を捨てる
+   */
+  readonly lateFramesDropped: number;
 }
 
 /** 何も記録していないときの統計 */
@@ -64,6 +76,8 @@ export const EMPTY_PLAYBACK_TIMING: PlaybackTimingSnapshot = {
   displayStalls: 0,
   displayStallMs: 0,
   displayQueueDrops: 0,
+  playoutDelayMs: null,
+  lateFramesDropped: 0,
 };
 
 /**
@@ -99,58 +113,6 @@ export function formatTimingSummary(summary: TimingSummary | null): string {
 }
 
 /**
- * 記録した時刻の順に並んだ値の列
- *
- * 記録の時刻は単調に増える (`performance.now()`) ため、窓より古い値は先頭にある。
- * 先頭から捨てるときに配列を詰め直さないよう、読み始めの位置を進め、半分を超えたら
- * まとめて詰める。
- */
-class TimedValues {
-  private times: number[] = [];
-  private values: number[] = [];
-  private head = 0;
-
-  push(atMs: number, value: number): void {
-    this.times.push(atMs);
-    this.values.push(value);
-  }
-
-  /** atMs が minAtMs より前の値を捨てる */
-  prune(minAtMs: number): void {
-    while (this.head < this.times.length && (this.times[this.head] ?? minAtMs) < minAtMs) {
-      this.head++;
-    }
-    if (this.head > 0 && this.head * 2 >= this.times.length) {
-      this.times = this.times.slice(this.head);
-      this.values = this.values.slice(this.head);
-      this.head = 0;
-    }
-  }
-
-  current(): number[] {
-    return this.values.slice(this.head);
-  }
-
-  /** atMs が sinceMs より後の値の数 */
-  countAfter(sinceMs: number): number {
-    let count = 0;
-    for (let index = this.times.length - 1; index >= this.head; index--) {
-      if ((this.times[index] ?? sinceMs) <= sinceMs) {
-        break;
-      }
-      count++;
-    }
-    return count;
-  }
-
-  clear(): void {
-    this.times = [];
-    this.values = [];
-    this.head = 0;
-  }
-}
-
-/**
  * 受信した映像の到着・復号・表示の時間を記録し、統計を求める
  */
 export class PlaybackTimingStats {
@@ -172,6 +134,8 @@ export class PlaybackTimingStats {
   private displayStalls = 0;
   private displayStallMs = 0;
   private displayQueueDrops = 0;
+  private playoutDelayMs: number | null = null;
+  private lateFramesDropped = 0;
 
   constructor(windowMs: number = PLAYBACK_TIMING_WINDOW_MS) {
     this.windowMs = windowMs;
@@ -255,6 +219,16 @@ export class PlaybackTimingStats {
     this.displayQueueDrops++;
   }
 
+  /** jitter buffer が間に合わなかったフレームを捨てたことを記録する */
+  recordLateDrop(): void {
+    this.lateFramesDropped++;
+  }
+
+  /** jitter buffer の現在の再生遅延を記録する (働いていなければ null) */
+  recordPlayoutDelay(delayMs: number | null): void {
+    this.playoutDelayMs = delayMs;
+  }
+
   /**
    * 統計を求める
    *
@@ -283,6 +257,8 @@ export class PlaybackTimingStats {
       displayStalls: this.displayStalls,
       displayStallMs: this.displayStallMs,
       displayQueueDrops: this.displayQueueDrops,
+      playoutDelayMs: this.playoutDelayMs,
+      lateFramesDropped: this.lateFramesDropped,
     };
   }
 
@@ -299,5 +275,7 @@ export class PlaybackTimingStats {
     this.displayStalls = 0;
     this.displayStallMs = 0;
     this.displayQueueDrops = 0;
+    this.playoutDelayMs = null;
+    this.lateFramesDropped = 0;
   }
 }

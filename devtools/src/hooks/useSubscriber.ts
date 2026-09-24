@@ -35,6 +35,7 @@ import {
 } from "../utils/audioLevel";
 import { base64ToArrayBuffer } from "../utils/base64";
 import { EMPTY_PLAYBACK_TIMING, PlaybackTimingStats } from "../utils/playbackTimingStats";
+import { JITTER_BUFFER_MAX_QUEUED_FRAMES, PlayoutBuffer } from "../utils/playoutBuffer";
 import * as settings from "../signals/connectionSettings";
 import * as sub from "../signals/subscriber";
 import * as pub from "../signals/publisher";
@@ -68,7 +69,7 @@ interface AudioPlayback {
 const MAX_CANVAS_WIDTH = 1280;
 
 /**
- * 表示待ちフレームのキューの上限 (枚)
+ * jitter buffer が無効なときの表示待ちフレームのキューの上限 (枚)
  *
  * 到着と復号のゆらぎを吸収するために保持する。実回線では受信チャンクに複数の
  * Object がまとまって入り、復号もまとめて完了することがあるため、数枚では
@@ -78,6 +79,14 @@ const MAX_CANVAS_WIDTH = 1280;
  * 最新側へ追いつく)。
  */
 const MAX_PENDING_FRAMES = 12;
+
+/**
+ * 復号の出力で TIMESTAMP の種類を引くために覚えておく数の上限
+ *
+ * decoder に渡してから出力されるまでの間だけ覚える。出力されなかった (decoder のエラーで
+ * 捨てられたなど) 分が残り続けないよう、上限を超えたら古い方から忘れる
+ */
+const MAX_TRACKED_TIMESTAMP_KINDS = 256;
 
 /**
  * 受信から表示までの時間の統計を signal へ反映する間隔 (ミリ秒)
@@ -368,9 +377,14 @@ export function useSubscriber(
   const audioPlaybackPendingRef = useRef(false);
   // startSubscribing の中断検知用 AbortController (レンダリング間で安定参照)
   const abortControllerRef = useRef<AbortController | null>(null);
-  // 表示待ちのフレームと予約した描画 (presentFrame / clearPendingFrame が使う)
-  const pendingFramesRef = useRef<VideoFrame[]>([]);
+  // 表示待ちのフレーム (jitter buffer) と予約した描画 (presentFrame / clearPendingFrame が
+  // 使う)。購読を始めるたびに設定 (jitterBufferEnabled) に合わせて作り直す
+  const playoutBufferRef = useRef(new PlayoutBuffer<VideoFrame>(MAX_PENDING_FRAMES));
+  const jitterBufferEnabledRef = useRef(false);
   const frameAnimationRef = useRef<number | null>(null);
+  // decoder に渡したフレームの TIMESTAMP の種類 (chunk の timestamp で引く)。
+  // 復号の出力で、壁時計の TIMESTAMP のフレームだけを jitter buffer の表示時刻に使う
+  const videoTimestampKindsRef = useRef(new Map<number, "none" | "wallClock" | "mediaTime">());
   // 映像 Object を復号してよいかを Group の順序と欠落から決める (handleObject が使う)。
   // decoder を構成するたびに初期化し、キーフレームから始める
   const videoDecodeOrderRef = useRef(new VideoDecodeOrder());
@@ -379,13 +393,29 @@ export function useSubscriber(
   const playbackTimingRef = useRef(new PlaybackTimingStats());
   const playbackTimingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  /** 統計の記録を初期化し、signal への定期的な反映を始める */
+  /**
+   * 統計の記録と表示待ちのキューを初期化し、signal への定期的な反映を始める
+   *
+   * jitter buffer の有効・無効は購読を始めた時点の設定で決める (購読中は設定を
+   * 変更できない)。無効のときは全フレームを TIMESTAMP を使わずに積み、従来どおり
+   * 届いた順に 1 枚ずつ表示する
+   */
   function startPlaybackTiming(): void {
     stopPlaybackTiming();
     playbackTimingRef.current.reset();
+    const enabled = settings.jitterBufferEnabled.value;
+    jitterBufferEnabledRef.current = enabled;
+    for (const frame of playoutBufferRef.current.clear()) {
+      frame.close();
+    }
+    playoutBufferRef.current = new PlayoutBuffer<VideoFrame>(
+      enabled ? JITTER_BUFFER_MAX_QUEUED_FRAMES : MAX_PENDING_FRAMES,
+    );
+    videoTimestampKindsRef.current.clear();
     playbackTimingTimerRef.current = setInterval(() => {
       const instance = sub.getSubscriber(subscriberId);
       if (!instance) return;
+      playbackTimingRef.current.recordPlayoutDelay(playoutBufferRef.current.playoutDelayMs());
       instance.playbackTiming.value = playbackTimingRef.current.snapshot(performance.now());
     }, PLAYBACK_TIMING_PUBLISH_INTERVAL_MS);
   }
@@ -732,7 +762,15 @@ export function useSubscriber(
   }
 
   /**
-   * 復号済みフレームを小さなキューへ積み、表示周期ごとに 1 枚ずつ表示する
+   * 復号済みフレームを表示待ちのキュー (jitter buffer) へ積み、表示周期ごとに表示する
+   *
+   * jitter buffer が有効で、フレームの TIMESTAMP が壁時計 (Timescale 無し) のときは、
+   * TIMESTAMP の間隔どおりの表示時刻に表示し、到着の揺らぎを吸収する
+   * (utils/playoutBuffer.ts)。表示時刻を過ぎたフレームが複数あれば最新を描き、古いものは
+   * 間に合わなかったフレームとして捨てて数える。
+   *
+   * jitter buffer が無効のとき、または TIMESTAMP を壁時計として使えないフレームは、
+   * 届いた順に 1 周期に 1 枚ずつ表示する。以下はその場合の説明である。
    *
    * 表示は requestAnimationFrame で 1 周期に 1 枚に絞る。これをしないと 2 つの
    * 問題が起きる。
@@ -749,10 +787,14 @@ export function useSubscriber(
    * 最新側へ追いつく。
    */
   const presentFrame = (frame: VideoFrame): void => {
-    const pending = pendingFramesRef.current;
-    pending.push(frame);
-    while (pending.length > MAX_PENDING_FRAMES) {
-      pending.shift()?.close();
+    const kinds = videoTimestampKindsRef.current;
+    const kind = kinds.get(frame.timestamp);
+    kinds.delete(frame.timestamp);
+    const wallClockTimestamp =
+      jitterBufferEnabledRef.current && kind === "wallClock" ? frame.timestamp : null;
+    const overflow = playoutBufferRef.current.enqueue(frame, performance.now(), wallClockTimestamp);
+    for (const dropped of overflow) {
+      dropped.close();
       // あふれて捨てたフレームは表示されないため数える
       playbackTimingRef.current.recordQueueDrop();
     }
@@ -760,11 +802,12 @@ export function useSubscriber(
   };
 
   /**
-   * 表示待ちのフレームが残っている間、表示周期ごとに 1 枚ずつ出し続ける
+   * 表示待ちのフレームが残っている間、表示周期ごとに表示するフレームを選び続ける
    *
    * 予約を 1 回だけにすると、次のフレームが届くまでキューが減らない。到着が
    * まとまっている場合 (実回線では受信チャンクに複数の Object が入る)、表示が
-   * 到着のまとまりの数だけしか進まない。キューが空になるまで毎周期予約する。
+   * 到着のまとまりの数だけしか進まない。jitter buffer では表示時刻を待つフレームも
+   * ある。キューが空になるまで毎周期予約する。
    */
   const scheduleFrameDrain = (): void => {
     if (frameAnimationRef.current !== null) {
@@ -772,11 +815,15 @@ export function useSubscriber(
     }
     frameAnimationRef.current = requestAnimationFrame(() => {
       frameAnimationRef.current = null;
-      const next = pendingFramesRef.current.shift();
-      if (next) {
-        drawFrame(next);
+      const selection = playoutBufferRef.current.select(performance.now());
+      for (const late of selection.late) {
+        late.close();
+        playbackTimingRef.current.recordLateDrop();
       }
-      if (pendingFramesRef.current.length > 0) {
+      if (selection.draw !== null) {
+        drawFrame(selection.draw);
+      }
+      if (playoutBufferRef.current.size > 0) {
         scheduleFrameDrain();
       }
     });
@@ -788,10 +835,10 @@ export function useSubscriber(
       cancelAnimationFrame(frameAnimationRef.current);
       frameAnimationRef.current = null;
     }
-    for (const frame of pendingFramesRef.current) {
+    for (const frame of playoutBufferRef.current.clear()) {
       frame.close();
     }
-    pendingFramesRef.current = [];
+    videoTimestampKindsRef.current.clear();
   };
 
   const drawFrame = (frame: VideoFrame): void => {
@@ -911,6 +958,16 @@ export function useSubscriber(
       }
 
       playbackTimingRef.current.recordDecodeStart(performance.now(), plan.timestamp);
+      // 復号の出力で TIMESTAMP の種類を引くために覚える (presentFrame が使う)
+      const kinds = videoTimestampKindsRef.current;
+      kinds.delete(plan.timestamp);
+      kinds.set(plan.timestamp, plan.timestampKind);
+      for (const oldest of kinds.keys()) {
+        if (kinds.size <= MAX_TRACKED_TIMESTAMP_KINDS) {
+          break;
+        }
+        kinds.delete(oldest);
+      }
       decoderInstance.decode(chunk);
       instance.chunksDecoded.value += 1;
     } catch (error) {

@@ -70,6 +70,12 @@ export const catalogSubscriptionTimeout = signal(5000);
 // false: メインスレッドで実行
 export const useDedicatedWorker = signal(true);
 
+// 購読した映像の jitter buffer 設定
+// true: 復号したフレームを LOC TIMESTAMP (壁時計) の間隔どおりに表示し、到着の揺らぎを
+//       吸収する (デフォルト。utils/playoutBuffer.ts)
+// false: 届いたタイミングのまま表示する
+export const jitterBufferEnabled = signal(true);
+
 // 設定の無効化状態
 export const settingsDisabled = signal(false);
 
@@ -334,6 +340,11 @@ export function buildQueryString(): string {
     }
   }
 
+  // jitter buffer は既定で有効のため、無効にしたときだけ載せる
+  if (!jitterBufferEnabled.value) {
+    params.set("jitterBuffer", "0");
+  }
+
   if (isDebugPanelOpen.value) {
     params.set("debug", "1");
   }
@@ -510,6 +521,11 @@ export function initFromUrl(search: string): void {
   const debugParam = params.get("debug");
   if (debugParam === "1") {
     isDebugPanelOpen.value = true;
+  }
+
+  const jitterBufferParam = params.get("jitterBuffer");
+  if (jitterBufferParam === "0" || jitterBufferParam === "1") {
+    jitterBufferEnabled.value = jitterBufferParam === "1";
   }
 
   const authAliasTypeParam = params.get("authorizationTokenAliasType");

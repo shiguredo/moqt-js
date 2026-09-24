@@ -61,6 +61,8 @@ test("buildSubscriberStats: 受信から表示までの時間の統計を返す"
     displayStalls: 4,
     displayStallMs: 900,
     displayQueueDrops: 2,
+    playoutDelayMs: 40,
+    lateFramesDropped: 3,
   };
   instance.playbackTiming.value = timing;
   assert.deepEqual(buildSubscriberStats(instance).playbackTiming, timing);

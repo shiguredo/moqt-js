@@ -8,7 +8,9 @@ import {
   authorizationTokenType,
   authorizationTokenValue,
   buildAuthorizationToken,
+  buildQueryString,
   initFromUrl,
+  jitterBufferEnabled,
 } from "./connectionSettings";
 
 // テスト間で Authorization Token の signal を持ち越さないためのリセット
@@ -225,4 +227,37 @@ test("buildAuthorizationToken: REGISTER の設定でも c4m のバイト列を�
     assert.equal(token.tokenAlias, 7n);
     assert.deepEqual(token.tokenValue, new Uint8Array([0x10, 0x20]));
   }
+});
+
+// 購読した映像を LOC TIMESTAMP (壁時計) の間隔どおりに表示する jitter buffer は既定で
+// 有効にする。無効にすると従来どおり届いたタイミングのまま表示する
+test("jitterBufferEnabled: 既定は有効", () => {
+  assert.isTrue(jitterBufferEnabled.value);
+});
+
+// URL の jitterBuffer=0 で無効、jitterBuffer=1 で有効にする。それ以外の値は無視する
+test("initFromUrl: jitterBuffer で jitter buffer の有効・無効を反映する", () => {
+  jitterBufferEnabled.value = true;
+  initFromUrl("jitterBuffer=0");
+  assert.isFalse(jitterBufferEnabled.value);
+  initFromUrl("jitterBuffer=yes");
+  assert.isFalse(jitterBufferEnabled.value);
+  initFromUrl("jitterBuffer=1");
+  assert.isTrue(jitterBufferEnabled.value);
+});
+
+// Copy URL が作る URL は無効のときだけ jitterBuffer=0 を載せ (既定の有効は載せない)、
+// その URL から設定を復元できる
+test("buildQueryString: jitter buffer を無効にした設定を URL で往復できる", () => {
+  jitterBufferEnabled.value = true;
+  assert.isNull(new URLSearchParams(buildQueryString()).get("jitterBuffer"));
+
+  jitterBufferEnabled.value = false;
+  const query = buildQueryString();
+  assert.equal(new URLSearchParams(query).get("jitterBuffer"), "0");
+
+  jitterBufferEnabled.value = true;
+  initFromUrl(query);
+  assert.isFalse(jitterBufferEnabled.value);
+  jitterBufferEnabled.value = true;
 });

@@ -104,6 +104,7 @@ function generateSettingsText(): string {
     `Keyframe Interval: ${settings.keyframeInterval.value} frames`,
     `Max Cache Duration: ${cacheDurationText} (${cacheDurationMs} ms)`,
     `Use Dedicated Worker: ${settings.useDedicatedWorker.value}`,
+    `Jitter Buffer: ${settings.jitterBufferEnabled.value}`,
   ];
   if (settings.certificateHash.value) {
     lines.push(`Certificate Hash: ${settings.certificateHash.value}`);
@@ -186,6 +187,10 @@ function generateSubscriberStatsText(subscriberId: string): string {
   lines.push(`Display Stalls: ${timing.displayStalls}`);
   lines.push(`Display Stall Time: ${Math.round(timing.displayStallMs)} ms`);
   lines.push(`Display Queue Drops: ${timing.displayQueueDrops}`);
+  lines.push(
+    `Playout Delay: ${timing.playoutDelayMs === null ? "-" : `${timing.playoutDelayMs.toFixed(1)} ms`}`,
+  );
+  lines.push(`Late Frames Dropped: ${timing.lateFramesDropped}`);
   // Largest Location 情報
   const largestLocation = instance.largestLocation.value;
   if (largestLocation) {
