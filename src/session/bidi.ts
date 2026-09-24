@@ -387,6 +387,13 @@ export interface BidiSessionInternal {
   readonly publisherStreams: Map<bigint, PublisherStreamState>;
   readonly publisherSendQueues: Map<bigint, Promise<void>>;
   readonly closedSubgroups: Set<string>;
+  /**
+   * Group の切り替えなどで完了を待たずに始めた Subgroup ストリームの close
+   *
+   * PUBLISH_DONE の前 (publishClosePublisherStream) にすべての完了を待つ
+   * (draft-ietf-moq-transport-21 §9.9)。
+   */
+  readonly publisherPendingCloses: Map<bigint, Set<Promise<void>>>;
 
   emitDebug(
     direction: "send" | "recv",

@@ -68,6 +68,7 @@ function createHarness(): {
     publisherStreams: new Map(),
     closedSubgroups: new Set<string>(),
     publisherSendQueues: new Map(),
+    publisherPendingCloses: new Map(),
     grease: false,
     sessionState: "connected",
     statsUnidirectionalStreamsOpened: 0,

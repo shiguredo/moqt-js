@@ -517,6 +517,9 @@ export class SessionImpl implements Session {
   // 同一トラック内で並行実行されるとストリームの二重作成が発生する。
   // Promise チェーンでトラック単位のシリアライズを行う。
   publisherSendQueues = new Map<bigint, Promise<void>>();
+  // Group の切り替えなどで完了を待たずに始めた Subgroup ストリームの close
+  // (PUBLISH_DONE の前にすべて待つ。draft-ietf-moq-transport-21 §9.9)
+  publisherPendingCloses = new Map<bigint, Set<Promise<void>>>();
 
   // STOP_SENDING / delivery timeout で閉じた Subgroup の追跡
   // draft-ietf-moq-transport-21 §11.3.2 (Closing Subgroup Streams):

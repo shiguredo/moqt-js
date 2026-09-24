@@ -50,6 +50,7 @@ function createSessionForPublish(): {
     publisherStreams: new Map(),
     closedSubgroups: new Set<string>(),
     publisherSendQueues: new Map(),
+    publisherPendingCloses: new Map(),
     grease: false,
     statsUnidirectionalStreamsOpened: 0,
     closeWithError: (error: SessionError) => {
@@ -158,6 +159,7 @@ test("publishSendObjectInternal: createUnidirectionalStream の await 中に clo
     publisherStreams: new Map(),
     closedSubgroups: new Set<string>(),
     publisherSendQueues: new Map(),
+    publisherPendingCloses: new Map(),
     grease: false,
     statsUnidirectionalStreamsOpened: 0,
     closeWithError: () => {},
@@ -763,6 +765,7 @@ function createChunkRecordingSession(): {
     publisherStreams: new Map(),
     closedSubgroups: new Set<string>(),
     publisherSendQueues: new Map(),
+    publisherPendingCloses: new Map(),
     grease: false,
     statsUnidirectionalStreamsOpened: 0,
   } as unknown as SessionInternal;
@@ -820,6 +823,7 @@ function createCloseInterleavingSession(): {
     publisherStreams: new Map(),
     closedSubgroups: new Set<string>(),
     publisherSendQueues: new Map(),
+    publisherPendingCloses: new Map(),
     grease: false,
     statsUnidirectionalStreamsOpened: 0,
   } as unknown as SessionInternal;

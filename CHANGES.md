@@ -19,6 +19,12 @@
   - エンコード能力を超えて破棄したフレーム数を統計で確認できるようにする
   - `VideoStats` は公開型のため、この型を自前で構築しているコードは `droppedFrames` の追加が必要になる (後方互換なし)
   - @voluntas
+- [FIX] publisher が Group の切り替えで前の Subgroup の stream の close の完了を待たないようにする
+  - WebTransport の `WritableStreamDefaultWriter.close()` は FIN が ACK されるまで解決しない (Chrome)。Group を切り替えるたびにその完了を待ってから新しい stream を開いていたため、新しい Group の先頭の Object (キーフレーム) の送信が毎回 1 RTT 遅れ、同じトラックの後続の Object も待たされていた
+  - draft-ietf-moq-transport-21 に Group の切り替えで前の stream の完了を待つ要件は無い。FIN と RESET のどちらで閉じるか (Section 11.3.2) はその時点で決め、close の完了を待たずに新しい stream を開く。END_OF_GROUP の後の close も同じ
+  - close が失敗・タイムアウトして RESET に切り替わった場合は、閉じた Subgroup の登録を取り消す (従来どおり RESET で閉じた Subgroup への再送は拒否しない)
+  - Section 9.9 のとおり、購読の終了 (PUBLISH_DONE の前) では完了を待たずに始めた close もすべて完了を待つ
+  - @voluntas
 - [FIX] moqt-devtools の subscriber が Timescale のある映像の TIMESTAMP をマイクロ秒に換算する
   - draft-ietf-moq-loc-04 Section 2.3.1.2 の Timescale を見ずに TIMESTAMP をそのまま EncodedVideoChunk の timestamp (マイクロ秒) にしていたため、Timescale を載せる publisher の映像では単位が合わず、受信から表示までの時間の統計も誤っていた
   - 音声とライブラリの `createMediaSubscriber` と同じく `LOC.toDecoderMicroseconds` で換算する

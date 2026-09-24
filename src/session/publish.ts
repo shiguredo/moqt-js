@@ -178,17 +178,10 @@ export async function publishSendObjectInternal(
 
   // 新しい Group または最初のオブジェクト → 新しいストリームを開く
   if (!streamState || streamState.groupId !== groupId) {
-    // 前の Subgroup を §11.3.2 の判定で閉じる。
-    // 省略 (Forward State 0 または Location Filter の範囲外の見送り) がある場合は FIN ではなく
-    // RESET にする。
-    // FIN で閉じた場合だけ closedSubgroups へ追加する (RESET は「渡し切っていない」
-    // ため、購読者からの再送を FIN 済みとして拒否してはならない)。
+    // 前の Subgroup を §11.3.2 の判定で閉じる。close の完了は待たない
+    // (closeSubgroupStreamWithoutWaiting を参照)。
     if (streamState) {
-      const previousGroupId = streamState.groupId;
-      const outcome = await publishCloseSubgroupStream(session, trackAlias);
-      if (outcome === "fin") {
-        session.closedSubgroups.add(`${trackAlias}:${previousGroupId}`);
-      }
+      closeSubgroupStreamWithoutWaiting(session, trackAlias);
     }
 
     // Subgroup Header をエンコードする
@@ -334,11 +327,54 @@ export async function publishSendObjectInternal(
   // 場合は FIN ではなく RESET で
   // 閉じる (§11.3.2 の MUST)。
   if ((params.status ?? ObjectStatus.NORMAL) === ObjectStatus.END_OF_GROUP) {
-    const outcome = await publishCloseSubgroupStream(session, trackAlias);
-    if (outcome === "fin") {
-      session.closedSubgroups.add(`${trackAlias}:${groupId}`);
-    }
+    closeSubgroupStreamWithoutWaiting(session, trackAlias);
   }
+}
+
+/**
+ * 開いている Subgroup ストリームを §11.3.2 の判定で閉じ、close の完了を待たない
+ *
+ * WebTransport の `WritableStreamDefaultWriter.close()` は FIN が ACK されるまで解決しない
+ * (Chrome)。Group の切り替えでその完了を待つと、同じトラックの送信は publisherSendQueues で
+ * 直列化しているため、新しい Group の先頭の Object の送信が 1 RTT 遅れる。
+ * draft-ietf-moq-transport-21 に Group (Subgroup) の切り替えで前の stream の完了を待つ
+ * 要件は無い。§9.9 は "A sender MUST NOT send PUBLISH_DONE until it has closed all streams
+ * it will ever open" とするため、PUBLISH_DONE の前の終了処理
+ * (publishClosePublisherStreamInternal) で完了を待つ。
+ *
+ * FIN と RESET のどちらで閉じるか (§11.3.2 の省略の有無) はこの時点で決まる。FIN で閉じる
+ * Subgroup はこの時点で closedSubgroups へ追加し、以降の同じ Group への送信を拒否する。
+ * close が失敗・タイムアウトして RESET に切り替わった場合は追加を取り消す (RESET は
+ * 「渡し切っていない」ため、購読者からの再送を FIN 済みとして拒否してはならない)。
+ * publishCloseSubgroupStream は reject しないため、未処理の reject は出ない。
+ */
+function closeSubgroupStreamWithoutWaiting(session: BidiSessionInternal, trackAlias: bigint): void {
+  const streamState = session.publisherStreams.get(trackAlias);
+  if (!streamState) {
+    return;
+  }
+  const key = `${trackAlias}:${streamState.groupId}`;
+  // 省略がある Subgroup は RESET で閉じる (abort の完了はもともと待たない)
+  const finishing = !streamState.omittedObjects;
+  if (finishing) {
+    session.closedSubgroups.add(key);
+  }
+  // publishCloseSubgroupStream は最初の await の前に publisherStreams から削除する
+  const completion = publishCloseSubgroupStream(session, trackAlias).then((outcome) => {
+    if (finishing && outcome === "reset") {
+      session.closedSubgroups.delete(key);
+    }
+  });
+  let pending = session.publisherPendingCloses.get(trackAlias);
+  if (pending === undefined) {
+    pending = new Set();
+    session.publisherPendingCloses.set(trackAlias, pending);
+  }
+  const pendingCloses = pending;
+  pendingCloses.add(completion);
+  void completion.finally(() => {
+    pendingCloses.delete(completion);
+  });
 }
 
 /**
@@ -389,6 +425,8 @@ export function publishResetPublisherStream(
   // 送信キューの Map エントリを削除する。既にチェーンへ登録済みの送信は
   // publishSendObjectInternal の closed ガードで抑止される。
   session.publisherSendQueues.delete(trackAlias);
+  // 完了を待たずに始めた close の記録も捨てる (close 自体はタイムアウトまでに終わる)
+  session.publisherPendingCloses.delete(trackAlias);
 }
 
 /**
@@ -416,6 +454,13 @@ async function publishClosePublisherStreamInternal(
   // ストリームが無いときに何もしない現行の挙動を維持する
   if (session.publisherStreams.has(trackAlias)) {
     await publishCloseSubgroupStream(session, trackAlias, timeoutMs);
+  }
+  // draft-ietf-moq-transport-21 §9.9: PUBLISH_DONE の前に、Group の切り替えなどで完了を
+  // 待たずに始めた close もすべて完了させる (closeSubgroupStreamWithoutWaiting)
+  const pendingCloses = session.publisherPendingCloses.get(trackAlias);
+  if (pendingCloses !== undefined) {
+    await Promise.all(pendingCloses);
+    session.publisherPendingCloses.delete(trackAlias);
   }
 
   // publisher done 時に当該 trackAlias の closedSubgroups エントリをクリアする
