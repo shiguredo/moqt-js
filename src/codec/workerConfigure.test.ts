@@ -237,6 +237,8 @@ test("ConfigureGenerationTracker: 複数インスタンスは独立する", () =
 // ============================================================================
 // SentFrameCounter
 // ============================================================================
+// 増減・0 未満防止・reset の純粋な挙動を固定する。VideoEncoderWrapper への配線
+// (encode / encoded 応答 / configure / close) はブラウザ依存のため e2e で確認する。
 
 test("SentFrameCounter: increment と decrement で送信中のフレーム数を数える", () => {
   const counter = new SentFrameCounter();

@@ -113,6 +113,7 @@ export interface VideoEncoderTestResult {
   // configure 直後の encodeQueueSize
   queueSizeAfterConfigure: number;
   // encode ループ直後 (出力待機前) の encodeQueueSize
+  // (直接モードは実キュー長、Worker モードは未応答の送信数。両モードとも投入数になる)
   queueSizeAfterEncode: number;
   // 出力待機後の encodeQueueSize (Worker モードでも 0 に戻る)
   queueSizeAfterOutputWait: number;

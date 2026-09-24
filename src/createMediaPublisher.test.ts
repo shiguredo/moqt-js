@@ -20,9 +20,11 @@
  * Audio Config の再送は Forward State 変化のコールバック登録から
  * handleAudioEncodedChunk までを、publish 呼び出しを記録する最小セッションを
  * 注入して結合で検証する。
+ * encode キューの閾値超過による破棄と droppedFrames の加算も検証する。
  */
 
 import { test, assert } from "vite-plus/test";
+import type { MediaPublisherOptions } from "./createMediaPublisher";
 import {
   MediaPublisherImpl,
   PRIORITY_AUDIO,
@@ -115,11 +117,9 @@ interface PublisherLoopControl {
   currentState: MediaPublisherState;
   processAudioFrames(): Promise<void>;
   processVideoFrames(): Promise<void>;
-  // 閾値超過で破棄したフレーム数を観測する (video track 未設定でも読めるよう直接参照する)
-  videoStats: { droppedFrames: number };
 }
 
-function createLoopTestContext(): {
+function createLoopTestContext(options?: { video?: NonNullable<MediaPublisherOptions["video"]> }): {
   publisher: MediaPublisherImpl;
   control: PublisherLoopControl;
   errors: Error[];
@@ -127,7 +127,7 @@ function createLoopTestContext(): {
   const errors: Error[] = [];
   const publisher = new MediaPublisherImpl(
     "moqt://example.com/live",
-    { namespace: ["live"] },
+    { namespace: ["live"], ...(options?.video === undefined ? {} : { video: options.video }) },
     {
       onError: (error) => {
         errors.push(error);
@@ -186,7 +186,10 @@ function injectVideoLoop(
 test("processVideoFrames: encode キューの閾値 (2) を超えたフレームは破棄され droppedFrames に数える", async () => {
   // encodeQueueSize が 2 超の間は encode せず、フレームを閉じて破棄する (待たない)。
   // Worker モードでは encodeQueueSize が送信中のフレーム数になるため同じ判定で破棄される
-  const { control, errors } = createLoopTestContext();
+  // 公開統計 (getStats) に droppedFrames が出ることを検証するため video 付きで作る
+  const { publisher, control, errors } = createLoopTestContext({
+    video: { codec: "vp8", bitrate: 1000 },
+  });
   // 3 > 2 のため全フレームが破棄対象になる
   const { encoded, controller } = injectVideoLoop(control, 3);
 
@@ -206,12 +209,14 @@ test("processVideoFrames: encode キューの閾値 (2) を超えたフレーム
   assert.isTrue(first.closed);
   assert.isTrue(second.closed);
   assert.equal(errors.length, 0);
-  assert.equal(control.videoStats.droppedFrames, 2);
+  assert.equal(publisher.getStats().video?.droppedFrames, 2);
 });
 
 test("processVideoFrames: encode キューの閾値以内なら破棄せず encode する", async () => {
   // 2 <= 2 のため破棄しない (droppedFrames は増えない)
-  const { control, errors } = createLoopTestContext();
+  const { publisher, control, errors } = createLoopTestContext({
+    video: { codec: "vp8", bitrate: 1000 },
+  });
   const { encoded, controller } = injectVideoLoop(control, 2);
 
   const loop = control.processVideoFrames();
@@ -226,7 +231,7 @@ test("processVideoFrames: encode キューの閾値以内なら破棄せず enco
   assert.strictEqual(encoded[0], frame);
   assert.isTrue(frame.closed);
   assert.equal(errors.length, 0);
-  assert.equal(control.videoStats.droppedFrames, 0);
+  assert.equal(publisher.getStats().video?.droppedFrames, 0);
 });
 
 test("processAudioFrames: pause 後の旧ループは encode せず終了する", async () => {

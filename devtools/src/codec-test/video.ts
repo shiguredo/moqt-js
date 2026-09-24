@@ -129,7 +129,8 @@ export async function runVideoEncoderTest(useWorker: boolean): Promise<VideoEnco
     }
   }
 
-  // 出力待機の前なので、直接モードでは投入したフレーム数がそのまま残る
+  // 出力待機の前なので、両モードとも投入したフレーム数が残る
+  // (直接モードは実キュー長、Worker モードは未応答の送信数)
   const queueSizeAfterEncode = wrapper.encodeQueueSize;
 
   await waitForCondition(
