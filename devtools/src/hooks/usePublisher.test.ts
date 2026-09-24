@@ -24,7 +24,7 @@ const VIDEO_FRAMERATE = 30;
 const VIDEO_BITRATE = 2_000_000;
 
 // キーフレーム間隔の既定値 (devtools/src/signals/publisher.ts の keyframeInterval)
-const DEFAULT_KEYFRAME_INTERVAL = 3600;
+const DEFAULT_KEYFRAME_INTERVAL = 60;
 
 // 検証対象の全 codec。catalog の codec 文字列は getEncoderConfig と一致していなければ
 // 購読側が Decoder を設定できない (Catalog 誤記がそのまま配信不能になる)。

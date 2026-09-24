@@ -47,7 +47,8 @@ export const objectsWithExtensions = signal(0);
 // 内部状態
 export const frameReader = signal<ReadableStreamDefaultReader<VideoFrame> | null>(null);
 export const videoStreamCleanup = signal<(() => void) | null>(null);
-export const keyframeInterval = signal(3600);
+// キーフレーム間隔 (frames)。既定は connectionSettings と同じ 2 秒ぶん
+export const keyframeInterval = signal(60);
 export const pubCurrentObjectId = signal(0);
 
 // 音声トラックの状態

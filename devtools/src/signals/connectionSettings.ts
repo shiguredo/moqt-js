@@ -38,7 +38,10 @@ export const selectedCameraDeviceId = signal<string>("");
 export const resolution = signal("1280x720");
 export const framerate = signal(30);
 export const bitrate = signal(2000000);
-export const keyframeInterval = signal(3600);
+// キーフレーム間隔 (frames)。既定は framerate 30 の 2 秒ぶんにして、ライブラリの
+// 既定 (framerate の 2 倍) と揃える。長い間隔にすると、後から購読した相手が次の
+// キーフレームまで復号を始められず、relay の cache 上限も超えやすい
+export const keyframeInterval = signal(60);
 
 // 音声設定
 //

@@ -57,6 +57,15 @@ interface AudioPlayback {
 }
 
 /**
+ * canvas の幅の上限 (px)
+ *
+ * 4K のような大きなフレームで canvas の実寸をそのまま使うと、1 枚あたりの描画
+ * コストが大きくなり、60 / 120 fps の表示がかくつく。表示は CSS で拡縮されるため、
+ * canvas はこの幅に抑えて描く。
+ */
+const MAX_CANVAS_WIDTH = 1280;
+
+/**
  * Catalog の `videoTrack` から `VideoDecoderConfig` を組み立てる。
  * canonical 形式 (avc1 / hvc1) で必要な description は MSF Catalog の Initialization Data
  * (Base64) から復元する。
@@ -319,6 +328,9 @@ export function useSubscriber(
   const audioPlaybackPendingRef = useRef(false);
   // startSubscribing の中断検知用 AbortController (レンダリング間で安定参照)
   const abortControllerRef = useRef<AbortController | null>(null);
+  // 表示待ちのフレームと予約した描画 (presentFrame / clearPendingFrame が使う)
+  const pendingFrameRef = useRef<VideoFrame | null>(null);
+  const frameAnimationRef = useRef<number | null>(null);
 
   /**
    * 受信した音声を音声出力デバイスへ流す graph を作る
@@ -643,7 +655,51 @@ export function useSubscriber(
     }
   }
 
-  const renderFrame = (frame: VideoFrame): void => {
+  /**
+   * 復号済みフレームを 1 枚だけ保持し、次の描画周期で表示する
+   *
+   * 表示は requestAnimationFrame で 1 周期に 1 枚に絞る。これをしないと 2 つの
+   * 問題が起きる。
+   * - 120 fps の映像では 1 周期に複数枚の復号が完了し、すべて描画すると表示周期
+   *   より多く描くことになってかくつく
+   * - cache replay の追い上げ中は復号が表示より速いため、すべて描画すると早送りに
+   *   見える
+   *
+   * 常に最新の 1 枚だけを表示し、それより古いフレームは復号済みのまま破棄する。
+   */
+  const presentFrame = (frame: VideoFrame): void => {
+    const previous = pendingFrameRef.current;
+    pendingFrameRef.current = frame;
+    if (previous) {
+      previous.close();
+    }
+    if (frameAnimationRef.current !== null) {
+      return;
+    }
+    frameAnimationRef.current = requestAnimationFrame(() => {
+      frameAnimationRef.current = null;
+      const next = pendingFrameRef.current;
+      pendingFrameRef.current = null;
+      if (next) {
+        drawFrame(next);
+      }
+    });
+  };
+
+  /** 表示待ちのフレームを破棄し、予約した描画を取り消す */
+  const clearPendingFrame = (): void => {
+    if (frameAnimationRef.current !== null) {
+      cancelAnimationFrame(frameAnimationRef.current);
+      frameAnimationRef.current = null;
+    }
+    const pending = pendingFrameRef.current;
+    pendingFrameRef.current = null;
+    if (pending) {
+      pending.close();
+    }
+  };
+
+  const drawFrame = (frame: VideoFrame): void => {
     const instance = sub.getSubscriber(subscriberId);
     if (!instance) {
       frame.close();
@@ -652,24 +708,28 @@ export function useSubscriber(
 
     const canvas = canvasRef.current;
     if (!canvas) {
-      console.warn(`[${subscriberId}] renderFrame: canvas is null`);
+      console.warn(`[${subscriberId}] drawFrame: canvas is null`);
       frame.close();
       return;
     }
 
     const ctx = canvas.getContext("2d");
     if (!ctx) {
-      console.warn(`[${subscriberId}] renderFrame: failed to get 2d context`);
+      console.warn(`[${subscriberId}] drawFrame: failed to get 2d context`);
       frame.close();
       return;
     }
 
-    if (canvas.width !== frame.displayWidth || canvas.height !== frame.displayHeight) {
-      canvas.width = frame.displayWidth;
-      canvas.height = frame.displayHeight;
+    // 大きなフレームは上限幅まで縮めて描く (表示は CSS で拡縮される)
+    const scale = Math.min(1, MAX_CANVAS_WIDTH / frame.displayWidth);
+    const width = Math.max(1, Math.round(frame.displayWidth * scale));
+    const height = Math.max(1, Math.round(frame.displayHeight * scale));
+    if (canvas.width !== width || canvas.height !== height) {
+      canvas.width = width;
+      canvas.height = height;
     }
 
-    ctx.drawImage(frame, 0, 0);
+    ctx.drawImage(frame, 0, 0, width, height);
     frame.close();
 
     instance.framesDecoded.value += 1;
@@ -1029,7 +1089,7 @@ export function useSubscriber(
 
       const decoderInstance = new DecoderWrapper(useWorker, {
         output: ({ frame }) => {
-          renderFrame(frame);
+          presentFrame(frame);
         },
         error: (error) => {
           console.error(`[${subscriberId}] Decoder error:`, error);
@@ -1222,6 +1282,8 @@ export function useSubscriber(
   // close 系 (closeSubscriberResources) と signal リセット系 (resetSubscriberState) を
   // 順に呼ぶ orchestrator。SubscriberInstance を Map から削除しない (= 同じ id で再 setup 可能)。
   const teardownSubscriber = (): void => {
+    // 表示待ちのフレームを破棄する。teardown 後に古いフレームを描画しない
+    clearPendingFrame();
     // 再生の停止は instance の有無に関わらず行う。パネルの削除では Map から先に
     // 消えるため、この後の instance 取得が失敗しても AudioContext を残さない
     stopAudioPlayback();
