@@ -1,7 +1,7 @@
 # moqt-devtools の購読再生がかくつく (表示の早送り・120 fps の二重描画・巨大 canvas・ログ負荷)
 
 - Created: 2026-09-24
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-24
 - Branch: feature/fix-devtools-smooth-playback
 - Polished: {YYYY-MM-DD}
 
@@ -41,3 +41,18 @@ moqt-devtools の購読表示がかくつく。relay の cache replay 配送 (�
 
 - `devtools/src/hooks/useSubscriber.ts` / `devtools/src/hooks/debugMessageLog.ts` / `devtools/src/signals/connectionSettings.ts`
 - `e2e-test/browser/relay_interop/test_moqtjs_smoothness.py` (sora-moq 側)
+
+## 解決方法
+
+`devtools/src/hooks/useSubscriber.ts` / `debugMessageLog.ts` / `signals/connectionSettings.ts` /
+`signals/publisher.ts` を次のように直した。
+
+- 復号済みフレームは 1 枚だけ保持し、requestAnimationFrame で 1 周期 1 枚だけ表示する (`presentFrame`)。古いフレームは破棄し、teardown では保持分の破棄と予約の取り消しを行う (`clearPendingFrame`)
+- canvas の幅を 1280 px に抑えて縮めて描く (`MAX_CANVAS_WIDTH`)
+- ログへコピーする payload の上限を 4096 byte にした (`MAX_LOGGED_PAYLOAD_BYTES`)。超える場合は `payloadSize` だけを残す
+- `keyframeInterval` の既定を 3600 frames から 60 frames (30 fps で 2 秒) へ変更した (`usePublisher.test.ts` の定数も追随)
+
+検証:
+
+- `vp check` と全テスト (2611 tests) が通る
+- sora-moq の `e2e-test/browser/relay_interop/test_moqtjs_smoothness.py` で、60 fps / 120 fps の単独購読、60 fps の後着 2 人購読、cache 上限 (600 Object) 超過を含む 20 秒運転を実測し、4 件とも通過した (表示フレーム数は表示上限の 7 割以上、rAF 最大間隔 120 ms 以下)
