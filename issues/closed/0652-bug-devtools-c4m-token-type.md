@@ -1,7 +1,7 @@
 # c4m から取り込んだトークンを Token Type 0 で送っている
 
 - Created: 2026-09-21
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-24
 - Branch: feature/fix-devtools-c4m-token-type
 - Polished: 2026-09-21
 
@@ -50,4 +50,23 @@ MSF URL の c4m から取り込んだ CAT を out-of-band を表す Token Type 0
 
 ## 解決方法
 
-{未着手}
+- `devtools/src/signals/connectionSettings.ts` の `applyC4mFromUrl` は CAT を表す Token Type `"1"` (0x01) を設定するようにした (draft-ietf-moq-c4m-01 §7.1 Table 4)。JSDoc も 0x01 (CAT) と §7.1.1 (Payload は CBOR エンコードされた CWT) に直し、Token Type 0 が表に無い型で out-of-band 交渉になること (transport-21 §8.9) を根拠として明記した。Alias Type は `USE_VALUE` のままとする (§9.1.4: SETUP で DELETE / USE_ALIAS は PROTOCOL_VIOLATION)
+- `authorizationTokenType` の既定値 `"0"` と、Token Type が空文字のとき 0n になるフォールバックは変えない (手入力の Token Value は UTF-8 テキストであり §7.1.1 の Payload 定義に合わないため)
+- `initFromUrl` を `initFromUrl(search: string)` にし (`main.tsx` が `window.location.search` を渡す)、c4m の適用を Authorization Token のクエリパラメータより後ろへ移した。url → fragment の順に個別に適用して fragment の c4m を優先し、c4m を持つ URL ではクエリの Token Type / Token Value / Token Alias Type を置き換える。fragment に有効な c4m が無い場合と c4m が不正な場合は url の c4m を使う (何も変更しない)
+  - 実装途中で「fragment パラメータの存在だけで url の c4m が捨てられる」退行を作り込んだため、レビューで検出して url → fragment の個別適用に修正し、回帰テストを追加した
+- `devtools/src/components/ConnectionSettings.tsx` の Token Type 入力でも c4m から読み込んだ Base64 トークンを解除するようにし (入力した Token Type はそのまま使う)、Token Value の入力 / クリアでは解除に加えて Token Type を 0 に戻す (`clearImportedC4mToken`)。c4m を取り込んでいないときは Token Type を触らない (手入力を壊さない)。c4m の表示ブロックに `data-testid="authorization-token-c4m"` を 1 つだけ付け、Token Type / Token Value の入力にも `data-testid` を付けた
+- テストは `devtools/src/signals/connectionSettings.test.ts` を c4m 経路を通る形に書き換え、`initFromUrl` の優先順位 (両方に c4m / url のみ + c4m 無し fragment / fragment 不正 / c4m 無し) と Token Type の空文字フォールバックを固定した。`tests/e2e/devtools-authorization-token.spec.ts` を追加し、c4m の表示の出現数 (取り込み後 1 / 解除後 0)、Token Type の値、Token Value 編集での解除を実ブラウザで固定した
+- `CHANGES.md` の `## develop` の該当行を Token Type 0x01 (CAT) に直し、c4m の優先と解除の記述を足した (新しいエントリは足さない)
+
+### 検証
+
+- `npx vp check` / `npx vp test --run` (123 files / 2608 tests) / `npx vp run e2e-test` (32 passed) が通る
+- 変異テストで、fragment 優先の上書き (url の c4m が失われる退行) / c4m 適用順の退行 / Token Type を 0 のままにする、のいずれでも対応するテストが失敗することを確認した (レビュアーは独立に複数種を実施)
+- `clearImportedC4mToken` の呼び出し条件 (c4m 取り込み時のみ) は e2e で固定した
+
+## 残した課題
+
+- relay 側は c4m の Base64 文字列を扱うだけで Token Type を知らないため、0x01 を CAT として受理するかは相互運用 harness での確認が要る
+- `resetAuthorizationTokenSettings` は Token Type を `"0"` に固定するため、既定値の変更は Node テストを素通りする (既定値の確認は e2e のみ)
+- Token Type を手入力して解除したあと Server URL 欄を編集すると c4m が再取り込みされる (既存の挙動のまま)
+- devtools の Token Type 入力の選択肢は自由入力のままで、既知の型 (0x01 = CAT など) の候補表示はしていない

@@ -305,6 +305,16 @@ function HttpVersionBadge() {
 const AUDIO_CHANNEL_LABELS: Record<number, string> = { 1: "Mono", 2: "Stereo" };
 
 export function ConnectionSettings() {
+  // c4m から読み込んだトークンを解除し、Token Type を既定の 0 に戻す。
+  // c4m の取り込みで Token Type は CAT (0x01) になっているため、手入力の UTF-8
+  // トークンを CAT として送らないようにする
+  // (draft-ietf-moq-c4m-01 §7.1.1: 0x01 の Payload は CBOR エンコードされた CWT)。
+  // c4m を取り込んでいない場合は呼ばない (手入力した Token Type を保持する)
+  const clearImportedC4mToken = (): void => {
+    settings.authorizationTokenBase64.value = "";
+    settings.authorizationTokenType.value = "0";
+  };
+
   return (
     <div class="bg-white rounded-xl shadow-sm p-5 mb-6">
       <MoqtHelpModal />
@@ -859,13 +869,20 @@ export function ConnectionSettings() {
           <div>
             <label for="authorizationTokenType" class="block text-xs text-slate-500 mb-1">
               Token Type
-              <span class="ml-1 text-slate-400">(0 = out-of-band)</span>
+              <span class="ml-1 text-slate-400">(0 = out-of-band / 1 = CAT)</span>
             </label>
             <input
               type="text"
               id="authorizationTokenType"
               value={settings.authorizationTokenType.value}
-              onInput={(e) => (settings.authorizationTokenType.value = e.currentTarget.value)}
+              data-testid="authorization-token-type"
+              onInput={(e) => {
+                settings.authorizationTokenType.value = e.currentTarget.value;
+                // 手入力した場合は c4m から読み込んだ Base64 トークンを解除する
+                // (解除しないと送信内容と UI の表示が食い違う)。
+                // 入力した Token Type はそのまま使う
+                settings.authorizationTokenBase64.value = "";
+              }}
               disabled={settings.settingsDisabled.value}
               placeholder="0"
               class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:bg-slate-100 disabled:cursor-not-allowed"
@@ -879,12 +896,16 @@ export function ConnectionSettings() {
             <input
               type="text"
               id="authorizationTokenValue"
+              data-testid="authorization-token-value"
               autocomplete="off"
               value={settings.authorizationTokenValue.value}
               onInput={(e) => {
                 settings.authorizationTokenValue.value = e.currentTarget.value;
-                // 手入力した場合は c4m から読み込んだ Base64 トークンを解除する
-                settings.authorizationTokenBase64.value = "";
+                // c4m から読み込んだトークンがある場合だけ解除する
+                // (取り込んでいないときに手入力した Token Type を壊さない)
+                if (settings.authorizationTokenBase64.value) {
+                  clearImportedC4mToken();
+                }
               }}
               disabled={settings.settingsDisabled.value}
               placeholder="任意のトークン文字列 (UTF-8)"
@@ -893,7 +914,7 @@ export function ConnectionSettings() {
           </div>
         </div>
         {settings.authorizationTokenBase64.value && (
-          <div class="mt-2 flex items-center gap-2 text-xs">
+          <div class="mt-2 flex items-center gap-2 text-xs" data-testid="authorization-token-c4m">
             <span class="px-2 py-0.5 font-medium bg-amber-100 text-amber-700 rounded-full">
               c4m
             </span>
@@ -902,7 +923,7 @@ export function ConnectionSettings() {
             </span>
             <button
               type="button"
-              onClick={() => (settings.authorizationTokenBase64.value = "")}
+              onClick={() => clearImportedC4mToken()}
               class="text-slate-400 hover:text-slate-600 underline"
             >
               クリア

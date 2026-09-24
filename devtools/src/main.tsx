@@ -6,7 +6,7 @@ import { initTestApi } from "./testApi";
 import "./index.css";
 
 // URL のクエリパラメータから設定を読み込む
-initFromUrl();
+initFromUrl(window.location.search);
 
 // テスト用 API を初期化 (window.moqtDevTools を公開)
 initTestApi();
