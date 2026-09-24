@@ -21,7 +21,7 @@ MSF は `renderGroup` が同じ track を「同時に描画するよう設計さ
 
 ## 設計方針
 
-- 表示時刻を `LOC Timestamp + targetLatency` として求める。devtools の publisher (`devtools/src/hooks/usePublisher.ts`) は `createMediaPublisher` を使わずに自前で送るが、映像は `src/mediaClock.ts` で最初に読んだフレームとの対応から、音声は `LOC.toUnixEpochMicroseconds` で、どちらも wall-clock の Timestamp を送るため、購読側だけで同期が成立する
+- 表示時刻を `LOC Timestamp + targetLatency` として求める。devtools の publisher (`devtools/src/hooks/usePublisher.ts`) は `createMediaPublisher` を使わずに自前で送るが、映像は `src/mediaClock.ts` の `WallClockMapper` で読んだフレームとの対応から、音声は `LOC.toUnixEpochMicroseconds` で、どちらも wall-clock の Timestamp を送るため、購読側だけで同期が成立する
 - 音声を `AudioContext.currentTime` 基準で予約再生し、映像を同じ時刻に合わせて描画する
 - `isLive` が false のときは `targetLatency` を無視する (§5.2.8 の MUST)。`targetLatency` が無い場合も現在の挙動へフォールバックする
 - 同期ずれの推定値を `devtools/src/signals/subscriber.ts` の signal に持たせ、`window.moqtDevTools` と `data-testid` から読めるようにする。E2E で判定できるようにするため
