@@ -87,23 +87,17 @@ test("buildAuthorizationToken: c4m の Base64 トークンを CAT (Token Type 0x
   }
 });
 
-// c4m の取り込み後は Token Type が 0x01 になるため、Token Type の入力を空文字にしても
-// 0n には戻らない (signal の値をそのまま使う)。
-test("applyC4mFromUrl: c4m の取り込み後の Token Type は 0x01 で、既定の 0 に戻らない", () => {
+// Token Type が空文字のときは 0n になる (手入力で空にした場合のフォールバック)。
+test("buildAuthorizationToken: Token Type が空文字のときは 0n になる", () => {
   resetAuthorizationTokenSettings();
-  applyC4mFromUrl("moqt://example.com/moqt#msf:room-123--catalog&c4m=QUFB");
-
+  authorizationTokenValue.value = "manual-token";
   authorizationTokenType.value = "";
+
   const token = buildAuthorizationToken();
-  // aliasType が useValue かつ Token Type が空文字のときは 0n になる (実装のフォールバック)
+  assert.equal(token?.aliasType, AuthorizationTokenAliasType.USE_VALUE);
   if (token?.aliasType === AuthorizationTokenAliasType.USE_VALUE) {
     assert.equal(token.tokenType, 0n);
   }
-
-  // c4m の取り込み直後は 0x01
-  resetAuthorizationTokenSettings();
-  applyC4mFromUrl("moqt://example.com/moqt#msf:room-123--catalog&c4m=QUFB");
-  assert.equal(authorizationTokenType.value, "1");
 });
 
 // 手書きの共有 URL を想定し、c4m を持つ url パラメータと Authorization Token の
@@ -142,6 +136,26 @@ test("initFromUrl: fragment の c4m を url の c4m より優先する", () => {
 
   assert.equal(authorizationTokenBase64.value, fragmentC4m);
   assert.equal(authorizationTokenType.value, "1");
+});
+
+// fragment に c4m が無い場合でも url の c4m を取り込む (develop からの回帰の固定)。
+test("initFromUrl: fragment に c4m が無くても url の c4m を取り込む", () => {
+  resetAuthorizationTokenSettings();
+  const c4mBase64 = toBase64([0x01, 0x02]);
+  const params = new URLSearchParams();
+  params.set("url", `moqt://example.com/moqt#msf:room-123--catalog&c4m=${c4mBase64}`);
+  // c4m を含まない fragment (Copy URL が url と fragment を同時に書き出す形)
+  params.set("fragment", "msf:room-123--catalog--track:video");
+
+  initFromUrl(params.toString());
+
+  assert.equal(authorizationTokenBase64.value, c4mBase64);
+  assert.equal(authorizationTokenType.value, "1");
+  const token = buildAuthorizationToken();
+  if (token?.aliasType === AuthorizationTokenAliasType.USE_VALUE) {
+    assert.equal(token.tokenType, 1n);
+    assert.deepEqual(token.tokenValue, new Uint8Array([0x01, 0x02]));
+  }
 });
 
 // c4m が無い検索文字列ではクエリの Authorization Token 設定をそのまま適用する。

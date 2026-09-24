@@ -305,6 +305,15 @@ function HttpVersionBadge() {
 const AUDIO_CHANNEL_LABELS: Record<number, string> = { 1: "Mono", 2: "Stereo" };
 
 export function ConnectionSettings() {
+  // c4m から読み込んだトークンを解除する。
+  // c4m の取り込みで Token Type は CAT (0x01) になっているため、手入力の UTF-8
+  // トークンを CAT として送らないよう Token Type も 0 に戻す
+  // (draft-ietf-moq-c4m-01 §7.1.1: 0x01 の Payload は CBOR エンコードされた CWT)
+  const clearImportedC4mToken = (): void => {
+    settings.authorizationTokenBase64.value = "";
+    settings.authorizationTokenType.value = "0";
+  };
+
   return (
     <div class="bg-white rounded-xl shadow-sm p-5 mb-6">
       <MoqtHelpModal />
@@ -865,10 +874,12 @@ export function ConnectionSettings() {
               type="text"
               id="authorizationTokenType"
               value={settings.authorizationTokenType.value}
+              data-testid="authorization-token-type"
               onInput={(e) => {
                 settings.authorizationTokenType.value = e.currentTarget.value;
                 // 手入力した場合は c4m から読み込んだ Base64 トークンを解除する
-                // (解除しないと送信内容と UI の表示が食い違う)
+                // (解除しないと送信内容と UI の表示が食い違う)。
+                // 入力した Token Type はそのまま使う
                 settings.authorizationTokenBase64.value = "";
               }}
               disabled={settings.settingsDisabled.value}
@@ -884,12 +895,12 @@ export function ConnectionSettings() {
             <input
               type="text"
               id="authorizationTokenValue"
+              data-testid="authorization-token-value"
               autocomplete="off"
               value={settings.authorizationTokenValue.value}
               onInput={(e) => {
                 settings.authorizationTokenValue.value = e.currentTarget.value;
-                // 手入力した場合は c4m から読み込んだ Base64 トークンを解除する
-                settings.authorizationTokenBase64.value = "";
+                clearImportedC4mToken();
               }}
               disabled={settings.settingsDisabled.value}
               placeholder="任意のトークン文字列 (UTF-8)"
@@ -907,7 +918,7 @@ export function ConnectionSettings() {
             </span>
             <button
               type="button"
-              onClick={() => (settings.authorizationTokenBase64.value = "")}
+              onClick={() => clearImportedC4mToken()}
               class="text-slate-400 hover:text-slate-600 underline"
             >
               クリア

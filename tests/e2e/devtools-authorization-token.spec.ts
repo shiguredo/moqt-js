@@ -21,18 +21,33 @@ test("c4m の取り込みで表示が出て Token Type が 1 (CAT) になり、T
   // c4m から読み込んだトークンの表示が 1 つだけ出る
   await expect(page.getByTestId("authorization-token-c4m")).toHaveCount(1);
   // draft-ietf-moq-c4m-01 §7.1 Table 4: Token Type 0x01 は CAT
-  await expect(page.locator("#authorizationTokenType")).toHaveValue("1");
+  await expect(page.getByTestId("authorization-token-type")).toHaveValue("1");
   // c4m の取り込みでは Token Value をクリアする
-  await expect(page.locator("#authorizationTokenValue")).toHaveValue("");
+  await expect(page.getByTestId("authorization-token-value")).toHaveValue("");
 
-  // Token Type を手入力すると c4m の取り込みが解除される
-  await page.locator("#authorizationTokenType").fill("0");
+  // Token Type を手入力すると c4m の取り込みが解除される (入力した値はそのまま使う)
+  await page.getByTestId("authorization-token-type").fill("0");
   await expect(page.getByTestId("authorization-token-c4m")).toHaveCount(0);
+  await expect(page.getByTestId("authorization-token-type")).toHaveValue("0");
+});
+
+test("Token Value の編集で c4m が解除され Token Type が 0 に戻る", async ({ page }) => {
+  const params = new URLSearchParams();
+  params.set("url", `moqt://example.com/moqt#msf:room-123--catalog&c4m=${C4M_BASE64}`);
+
+  await page.goto(`${DEVTOOLS_URL}?${params.toString()}`);
+  await expect(page.getByTestId("authorization-token-c4m")).toHaveCount(1);
+
+  // 手入力の UTF-8 トークンは CAT ではないため、c4m 由来の Token Type 1 を残さない
+  await page.getByTestId("authorization-token-value").fill("manual-token");
+  await expect(page.getByTestId("authorization-token-c4m")).toHaveCount(0);
+  await expect(page.getByTestId("authorization-token-type")).toHaveValue("0");
+  await expect(page.getByTestId("authorization-token-value")).toHaveValue("manual-token");
 });
 
 test("c4m が無い URL では既定の Token Type 0 のままで c4m の表示も出ない", async ({ page }) => {
   await page.goto(DEVTOOLS_URL);
 
   await expect(page.getByTestId("authorization-token-c4m")).toHaveCount(0);
-  await expect(page.locator("#authorizationTokenType")).toHaveValue("0");
+  await expect(page.getByTestId("authorization-token-type")).toHaveValue("0");
 });

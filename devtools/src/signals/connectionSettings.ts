@@ -83,6 +83,7 @@ export const authorizationTokenAliasType = signal<AuthorizationTokenAliasTypeUi>
 // REGISTER 時のみ使用する Token Alias (10 進文字列で保持)
 export const authorizationTokenAlias = signal<string>("0");
 // Token Type (10 進文字列で保持、デフォルト 0 = out-of-band)
+// c4m から取り込んだときは CAT を表す "1" が入る (applyC4mFromUrl)
 export const authorizationTokenType = signal<string>("0");
 // Token Value (UTF-8 テキスト)。空の場合は送出しない。
 export const authorizationTokenValue = signal<string>("");
@@ -147,9 +148,8 @@ export function buildAuthorizationToken(): AuthorizationToken | undefined {
  * §7.1.1: 0x01 の Token Payload は CBOR エンコードされた CWT として直列化した CAT。
  * draft-ietf-moq-transport-21 §8.9: Token Type 0 は表に無い型であり out-of-band で
  * 交渉するもので、CAT として扱われない。そのため 0x01 を設定する。
- * SETUP の AUTHORIZATION_TOKEN (0x03) では USE_VALUE (0x3) で送るため、
- * Alias Type は useValue のままとする
- * (§9.1.4: SETUP で DELETE / USE_ALIAS を受けたら PROTOCOL_VIOLATION)。
+ * SETUP の AUTHORIZATION_TOKEN (0x03) では USE_VALUE (0x3) で送るため、Alias Type は
+ * useValue のままとする (§9.1.4: SETUP で DELETE / USE_ALIAS を受けたら PROTOCOL_VIOLATION)。
  *
  * @param input Server URL もしくは URI Fragment の入力値
  * @returns c4m を反映した場合は true、c4m が無い / 不正な場合は false
@@ -163,7 +163,6 @@ export function applyC4mFromUrl(input: string): boolean {
   // 取り込んだ c4m を優先するため、手入力の Token Value はクリアする
   authorizationTokenValue.value = "";
   authorizationTokenAliasType.value = "useValue";
-  // draft-ietf-moq-c4m-01 §7.1 Table 4: Token Type 0x01 (CAT)
   authorizationTokenType.value = "1";
   return true;
 }
@@ -413,29 +412,24 @@ function initAudioSettingsFromUrl(params: URLSearchParams): void {
  *
  * c4m の取り込みは Authorization Token のクエリパラメータより後に適用する。
  * c4m を持つ URL と Authorization Token のクエリパラメータを同時に持つ URL では
- * c4m を優先し、クエリの Token Type / Token Value を置き換える
- * (url より fragment の c4m を優先する)。
+ * c4m を優先し、クエリの Token Type / Token Value / Token Alias Type を置き換える
+ * (url より fragment の c4m を優先する)。c4m が無い入力ではクエリの値をそのまま使う。
  *
  * @param search 検索文字列 (`window.location.search`)
  */
 export function initFromUrl(search: string): void {
   const params = new URLSearchParams(search);
 
-  // c4m の取り込みで上書きされるため、後でまとめて適用する
-  let c4mInput: string | undefined;
-
+  // url / fragment の c4m はクエリの Authorization Token より後に適用して優先させる。
+  // fragment に c4m が無い場合でも url の c4m を取り込むため、個別に順に適用する
   const urlParam = params.get("url");
   if (urlParam) {
     url.value = urlParam;
-    // URL に msf fragment が含まれる場合は c4m を Authorization Token に反映する
-    c4mInput = urlParam;
   }
 
   const fragmentParam = params.get("fragment");
   if (fragmentParam) {
     fragment.value = fragmentParam;
-    // fragment の c4m を最優先にする
-    c4mInput = fragmentParam;
   }
 
   const namespaceParam = params.get("namespace");
@@ -532,8 +526,13 @@ export function initFromUrl(search: string): void {
   }
 
   // c4m を持つ URL では取り込んだトークンを優先する
-  // (クエリの Token Type / Token Value を置き換える)
-  if (c4mInput !== undefined) {
-    applyC4mFromUrl(c4mInput);
+  // (クエリの Token Type / Token Value / Token Alias Type を置き換える)。
+  // url → fragment の順に適用し、fragment の c4m を最優先にする。
+  // c4m が無い入力では何も変更しない (applyC4mFromUrl が false を返す)
+  if (urlParam) {
+    applyC4mFromUrl(urlParam);
+  }
+  if (fragmentParam) {
+    applyC4mFromUrl(fragmentParam);
   }
 }
