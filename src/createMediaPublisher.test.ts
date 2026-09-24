@@ -20,9 +20,11 @@
  * Audio Config の再送は Forward State 変化のコールバック登録から
  * handleAudioEncodedChunk までを、publish 呼び出しを記録する最小セッションを
  * 注入して結合で検証する。
+ * encode キューの閾値超過による破棄と droppedFrames の加算も検証する。
  */
 
 import { test, assert } from "vite-plus/test";
+import type { MediaPublisherOptions } from "./createMediaPublisher";
 import {
   MediaPublisherImpl,
   PRIORITY_AUDIO,
@@ -69,7 +71,7 @@ function createTestFrame(): TestFrame {
 /**
  * encode 呼び出し記録用の最小エンコーダー
  */
-function createRecordingEncoder(): {
+function createRecordingEncoder(encodeQueueSize = 0): {
   encoded: unknown[];
   isClosed: () => boolean;
   encoder: {
@@ -86,7 +88,8 @@ function createRecordingEncoder(): {
     isClosed: () => closed,
     encoder: {
       state: "configured",
-      encodeQueueSize: 0,
+      // 閾値超過 (2 超) を固定するため引数で差し替えられるようにする
+      encodeQueueSize,
       encode: (frame: unknown) => {
         encoded.push(frame);
       },
@@ -116,7 +119,7 @@ interface PublisherLoopControl {
   processVideoFrames(): Promise<void>;
 }
 
-function createLoopTestContext(): {
+function createLoopTestContext(options?: { video?: NonNullable<MediaPublisherOptions["video"]> }): {
   publisher: MediaPublisherImpl;
   control: PublisherLoopControl;
   errors: Error[];
@@ -124,7 +127,7 @@ function createLoopTestContext(): {
   const errors: Error[] = [];
   const publisher = new MediaPublisherImpl(
     "moqt://example.com/live",
-    { namespace: ["live"] },
+    { namespace: ["live"], ...(options?.video === undefined ? {} : { video: options.video }) },
     {
       onError: (error) => {
         errors.push(error);
@@ -163,19 +166,73 @@ function injectAudioLoop(control: PublisherLoopControl): {
   return { encoded, controller, isEncoderClosed: isClosed };
 }
 
-function injectVideoLoop(control: PublisherLoopControl): {
+function injectVideoLoop(
+  control: PublisherLoopControl,
+  encodeQueueSize = 0,
+): {
   encoded: unknown[];
   controller: ReadableStreamDefaultController<TestFrame>;
   isEncoderClosed: () => boolean;
 } {
   const { stream, controller } = createFrameStream();
-  const { encoder, encoded, isClosed } = createRecordingEncoder();
+  const { encoder, encoded, isClosed } = createRecordingEncoder(encodeQueueSize);
   control.videoFrameReader =
     stream.getReader() as unknown as ReadableStreamDefaultReader<VideoFrame>;
   control.videoEncoder = encoder as unknown as VideoEncoderWrapper;
   control.processingActive = true;
   return { encoded, controller, isEncoderClosed: isClosed };
 }
+
+test("processVideoFrames: encode キューの閾値 (2) を超えたフレームは破棄され droppedFrames に数える", async () => {
+  // encodeQueueSize が 2 超の間は encode せず、フレームを閉じて破棄する (待たない)。
+  // Worker モードでは encodeQueueSize が送信中のフレーム数になるため同じ判定で破棄される
+  // 公開統計 (getStats) に droppedFrames が出ることを検証するため video 付きで作る
+  const { publisher, control, errors } = createLoopTestContext({
+    video: { codec: "vp8", bitrate: 1000 },
+  });
+  // 3 > 2 のため全フレームが破棄対象になる
+  const { encoded, controller } = injectVideoLoop(control, 3);
+
+  const loop = control.processVideoFrames();
+  const first = createTestFrame();
+  const second = createTestFrame();
+  controller.enqueue(first);
+  controller.enqueue(second);
+  // 破棄の記録後にストリームを閉じる (両者とも microtask のため確定的)
+  await Promise.resolve();
+  await Promise.resolve();
+  controller.close();
+  await loop;
+
+  // encode は呼ばれず、両フレームとも閉じられる
+  assert.equal(encoded.length, 0);
+  assert.isTrue(first.closed);
+  assert.isTrue(second.closed);
+  assert.equal(errors.length, 0);
+  assert.equal(publisher.getStats().video?.droppedFrames, 2);
+});
+
+test("processVideoFrames: encode キューの閾値以内なら破棄せず encode する", async () => {
+  // 2 <= 2 のため破棄しない (droppedFrames は増えない)
+  const { publisher, control, errors } = createLoopTestContext({
+    video: { codec: "vp8", bitrate: 1000 },
+  });
+  const { encoded, controller } = injectVideoLoop(control, 2);
+
+  const loop = control.processVideoFrames();
+  const frame = createTestFrame();
+  controller.enqueue(frame);
+  await Promise.resolve();
+  await Promise.resolve();
+  controller.close();
+  await loop;
+
+  assert.equal(encoded.length, 1);
+  assert.strictEqual(encoded[0], frame);
+  assert.isTrue(frame.closed);
+  assert.equal(errors.length, 0);
+  assert.equal(publisher.getStats().video?.droppedFrames, 0);
+});
 
 test("processAudioFrames: pause 後の旧ループは encode せず終了する", async () => {
   // 公開 pause() で世代を進めた旧ループにフレームが届く場合を再現する

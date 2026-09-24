@@ -348,6 +348,7 @@ export class MediaPublisherImpl implements MediaPublisher {
   };
   private videoStats: VideoStats = {
     framesSent: 0,
+    droppedFrames: 0,
     keyFramesSent: 0,
     bytesSent: 0,
     currentGroupId: 0,
@@ -859,6 +860,10 @@ export class MediaPublisherImpl implements MediaPublisher {
 
         if (encoder.encodeQueueSize <= 2) {
           encoder.encode(frame, { keyFrame: isKeyFrame });
+        } else {
+          // エンコード能力を超えた入力はエンコードせず破棄する (待たない)。
+          // 破棄した数を統計に残す
+          this.videoStats.droppedFrames++;
         }
         frame.close();
       }

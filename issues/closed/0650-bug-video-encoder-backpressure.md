@@ -1,7 +1,7 @@
 # Worker モードで映像エンコーダのバックプレッシャが無効になっている
 
 - Created: 2026-09-21
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-24
 - Branch: feature/fix-video-encoder-backpressure
 - Polished: 2026-09-23
 
@@ -33,7 +33,7 @@
 - 配線 (`VideoEncoderWrapper` からの増加・減算・リセットの呼び出し位置) はブラウザ依存のため e2e とレビューで確認する
 - 対象は `src/codec/` / `src/createMediaPublisher.ts` / `src/index.ts` (公開型の再エクスポートは変更不要であることの確認) / `src/createMediaPublisher.test.ts` / `tests/e2e/codec-wrappers.spec.ts` / `devtools/src/codec-test/` / `docs/HIGH_LEVEL_API.md` / `CHANGES.md` とする
 - `src/createMediaPublisher.test.ts` の記録用エンコーダーは `encodeQueueSize` を固定値で返すため、その値を可変にして閾値超過と破棄を固定できるようにする
-- `CHANGES.md` の `## develop` の先頭に、`[FIX]` (Worker モードのバックプレッシャ修正) と `[ADD]` (`VideoStats.droppedFrames`) を追記する (セクション内は新しい順。2 件の前後は問わない)
+- `CHANGES.md` の `## develop` の先頭に、`[FIX]` (Worker モードのバックプレッシャ修正) と `[CHANGE]` (`VideoStats.droppedFrames` の追加。公開型への必須フィールド追加のため後方互換なし) を追記する
 
 ## 完了条件
 
@@ -44,7 +44,7 @@
 - 純粋なカウンタの増減・リセット・0 未満防止が `src/codec/workerConfigure.test.ts` で、閾値超過の破棄と `droppedFrames` が `src/createMediaPublisher.test.ts` で固定される。`src/codec/workerConfigure.test.ts` のヘッダコメントも送信キューのテストを含む形に更新する
 - `tests/e2e/codec-wrappers.spec.ts` の Worker モードの `queueSizeAfterEncode` が直接モードと同じ `6`、出力待機後が `0` になることを pin し、旧契約のコメントを更新する
 - `docs/HIGH_LEVEL_API.md` の統計の記述に `droppedFrames` が載り、`src/codec/VideoEncoder.ts` の `encodeQueueSize` の JSDoc に Worker モードの意味が入る
-- `CHANGES.md` の `## develop` の先頭に `[FIX]` と `[ADD]` が入る
+- `CHANGES.md` の `## develop` の先頭に `[FIX]` と `[CHANGE]` が入る
 - `npx vp check` / `npx vp test --run` / `npx vp run e2e-test` が通る
 
 ## 参照
@@ -56,4 +56,22 @@
 
 ## 解決方法
 
-{未着手}
+- `src/codec/workerConfigure.ts` に純粋カウンタ `SentFrameCounter` (increment / decrement / reset / size) を追加した。増加は `postMessage` の成功後、減算は `callbacks.output` を呼ぶ前 (output が例外を投げても数が戻る)、0 未満にはならない。モジュールヘッダに送信キューのロジックも置くことを明記した
+- `src/codec/VideoEncoder.ts` の `VideoEncoderWrapper` が Worker モードでこのカウンタを使い、`encodeQueueSize` は Worker モードで送信中のフレーム数を返す。Worker 内のキュー長は取得できないため、Worker のメッセージ待ち行列と encoder のキューを合わせた上限側の近似 (安全側) であることを JSDoc に明記した。`configure` の Worker 差し替え成功後と `close` で 0 に戻す
+- `src/createMediaPublisher.ts` の閾値 (`encodeQueueSize <= 2`) はそのままに、超過したフレームを破棄した数を `VideoStats.droppedFrames` として数えるようにした (`src/codec/types.ts` にフィールド追加、`docs/HIGH_LEVEL_API.md` の統計にも記載)
+- テストは `src/codec/workerConfigure.test.ts` にカウンタの増減・0 未満防止・リセット (ヘッダコメントも送信キューを含む形に更新)、`src/createMediaPublisher.test.ts` に閾値超過の破棄と `droppedFrames` (公開経路 `getStats()` 経由) と閾値以内の非破棄を追加した。記録用エンコーダーは `encodeQueueSize` を引数で差し替えられるようにした
+- `tests/e2e/codec-wrappers.spec.ts` は Worker モードの出力待機前を 6、待機後を 0 に更新し、出力待機後に未応答のフレームを残して `close` した直後も 0 になること (reset の配線) を pin した。`devtools/src/codec-test/` に待機後と close 前後の観測を追加した
+- `CHANGES.md` の `## develop` 先頭に `[CHANGE]` (`VideoStats.droppedFrames` 追加。公開型への必須フィールド追加のため後方互換なし) と `[FIX]` (Worker モードのバックプレッシャ) を追記した
+
+### 検証
+
+- `npx vp check` / `npx vp test --run` (123 files / 2602 tests) / `npx vp run e2e-test` (29 passed) が通る
+- 変異テストで、increment 削除 / decrement 削除 / close の reset 削除はいずれも e2e の pin が失敗し、`droppedFrames` の加算削除と閾値判定の無効化は単体テストが失敗することを確認した (レビュアーは独立に複数種を実施)
+- 増減と reset の配線はブラウザ依存 (Worker 生成・WebCodecs) のため Node の単体テストでは駆動できず、e2e とコードレビューで確認している
+
+## 残した課題
+
+- Worker 内のエンコーダーが error で閉じた後は `encoded` が返らずカウンタが増え続け、数フレームで閾値を超えて以後のフレームは破棄される (復帰しない相手への転送を止める安全側の挙動。復帰は再 configure か stop → start)。この状態は `droppedFrames` の増加としてしか観測できない
+- 閾値超過で破棄されたフレームもキーフレーム要求を消費するため、既定経路 (Worker モード) で次のキーフレームまで待つ期間が生じ得る (キーフレーム要求は 0680 が扱う)
+- 閾値 `2` はコードのリテラルとドキュメントに散在しており、名前付き定数化はしていない
+- devtools 本体の `EncoderWrapper` / `usePublisher` は Worker モードで 0 を返す旧契約のままで、この修正の効果は devtools の再生確認には出ない (0678 が扱う)

@@ -30,6 +30,8 @@ export interface AudioReceiverStats {
 // ビデオ統計
 export interface VideoStats {
   framesSent: number;
+  // エンコードが追いつかないため待たずに破棄したフレーム数 (閾値は createMediaPublisher の判定)
+  droppedFrames: number;
   keyFramesSent: number;
   bytesSent: number;
   currentGroupId: number;

@@ -1,13 +1,18 @@
 /**
- * Worker 初期化の応答契約と完了管理と世代管理のテスト
+ * Worker 初期化の応答契約と完了管理と世代管理と送信キューのテスト
  *
  * Wrapper と Worker はブラウザ依存 (Worker 生成・WebCodecs) のため、
- * ブラウザ非依存の純粋部分 (応答生成・完了管理・世代管理) を固定する。
- * 配線 (メッセージの送受信) はレビューで確認する。
+ * ブラウザ非依存の純粋部分 (応答生成・完了管理・世代管理・Worker へ送信中の
+ * フレーム数) を固定する。配線 (メッセージの送受信) はレビューで確認する。
  */
 
 import { test, assert } from "vite-plus/test";
-import { runWorkerInit, WorkerConfigureGate, ConfigureGenerationTracker } from "./workerConfigure";
+import {
+  runWorkerInit,
+  WorkerConfigureGate,
+  ConfigureGenerationTracker,
+  SentFrameCounter,
+} from "./workerConfigure";
 
 // ============================================================================
 // runWorkerInit
@@ -227,4 +232,62 @@ test("ConfigureGenerationTracker: 複数インスタンスは独立する", () =
   assert.isTrue(secondTracker.isLatest(secondGeneration));
   assert.isFalse(secondTracker.isLatest(firstGeneration));
   assert.isFalse(firstTracker.isLatest(secondGeneration));
+});
+
+// ============================================================================
+// SentFrameCounter
+// ============================================================================
+// 増減・0 未満防止・reset の純粋な挙動を固定する。VideoEncoderWrapper への配線
+// (encode / encoded 応答 / configure / close) はブラウザ依存のため e2e で確認する。
+
+test("SentFrameCounter: increment と decrement で送信中のフレーム数を数える", () => {
+  const counter = new SentFrameCounter();
+  assert.equal(counter.size, 0);
+
+  counter.increment();
+  counter.increment();
+  assert.equal(counter.size, 2);
+
+  counter.decrement();
+  assert.equal(counter.size, 1);
+  counter.decrement();
+  assert.equal(counter.size, 0);
+});
+
+test("SentFrameCounter: decrement は 0 未満にならない", () => {
+  const counter = new SentFrameCounter();
+  counter.decrement();
+  assert.equal(counter.size, 0);
+
+  counter.increment();
+  counter.decrement();
+  counter.decrement();
+  assert.equal(counter.size, 0);
+});
+
+test("SentFrameCounter: reset で 0 に戻る (Worker の差し替え / close)", () => {
+  const counter = new SentFrameCounter();
+  counter.increment();
+  counter.increment();
+  counter.increment();
+  assert.equal(counter.size, 3);
+
+  counter.reset();
+  assert.equal(counter.size, 0);
+
+  // reset 後も増減できる (再 configure 後に encode を再開できる)
+  counter.increment();
+  assert.equal(counter.size, 1);
+});
+
+test("SentFrameCounter: 増減を繰り返しても数がずれない", () => {
+  const counter = new SentFrameCounter();
+  for (let i = 0; i < 100; i++) {
+    counter.increment();
+    if (i % 3 === 0) {
+      counter.decrement();
+    }
+  }
+  // 100 回増やし、i=0,3,...,99 の 34 回減らす
+  assert.equal(counter.size, 66);
 });
