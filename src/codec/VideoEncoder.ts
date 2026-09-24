@@ -8,6 +8,7 @@ import type { VideoCodecType, VideoEncoderWrapperCallbacks } from "./types";
 import { getVideoEncoderConfig } from "./config";
 import {
   ConfigureGenerationTracker,
+  SentFrameCounter,
   configureWrapperWorker,
   disposeWorker,
   wrapperWorkerSlot,
@@ -32,6 +33,9 @@ export class VideoEncoderWrapper {
   private configured = false;
   // configure() 発行ごとの世代管理 (並行 configure の所有権分離用)
   private readonly generationTracker = new ConfigureGenerationTracker();
+  // Worker モードで Worker へ送信してまだ encoded 応答が返っていないフレーム数
+  // (Worker 内の encodeQueueSize は取得できないため、上限側の近似として数える)
+  private readonly sentFrames = new SentFrameCounter();
 
   constructor(useWorker: boolean, callbacks: VideoEncoderWrapperCallbacks) {
     this.useWorker = useWorker;
@@ -52,6 +56,9 @@ export class VideoEncoderWrapper {
 
     if (this.useWorker) {
       await this.configureWorker(config);
+      // 旧 Worker は差し替えで terminate され encoded 応答が返らないため、
+      // 差し替え後に送信中の数を 0 に戻す (configure 待機中に旧 Worker へ送った分も含める)
+      this.sentFrames.reset();
     } else {
       this.configureDirect(config);
     }
@@ -73,6 +80,8 @@ export class VideoEncoderWrapper {
       // dataTypes で "encoded" のみを受け取るため、種別の分岐は不要
       handleWorkerData: (response) => {
         const message = response as VideoEncoderWorkerData;
+        // 応答が返ったフレームを数から外す。output が例外を投げても数が戻るよう先に減算する
+        this.sentFrames.decrement();
         // exactOptionalPropertyTypes では optional な description に undefined を渡せないため、
         // 値がある場合だけ載せる
         const description = message.description ? new Uint8Array(message.description) : undefined;
@@ -146,6 +155,8 @@ export class VideoEncoderWrapper {
         },
         [frame],
       );
+      // postMessage が成功した後に数える (throw した場合に減らない数を残さない)
+      this.sentFrames.increment();
     } else if (isCodecConfigured(this.encoder)) {
       this.encoder.encode(frame, options);
     }
@@ -160,11 +171,16 @@ export class VideoEncoderWrapper {
 
   /**
    * エンコードキューのサイズを取得する
+   *
+   * 直接モードでは VideoEncoder.encodeQueueSize (実キュー長) を返す。
+   * Worker モードでは Worker 内のキュー長を取得できないため、Worker へ送信してまだ
+   * encoded 応答が返っていないフレーム数を返す (Worker のメッセージ待ち行列と
+   * encoder のキューを合わせた上限側の近似。実際より多く見える安全側に倒れる)。
+   * configure による Worker の差し替えと close で 0 に戻る。
    */
   get encodeQueueSize(): number {
     if (this.useWorker) {
-      // Worker モードでは直接取得できない
-      return 0;
+      return this.sentFrames.size;
     }
     return this.encoder?.encodeQueueSize ?? 0;
   }
@@ -176,6 +192,7 @@ export class VideoEncoderWrapper {
     // 待機中の configure 世代を無効化する。
     // 遅延成功した旧世代は破棄・reject される (中断扱い)。
     this.generationTracker.invalidateAll();
+    this.sentFrames.reset();
     if (this.useWorker && this.worker) {
       const closing = this.worker;
       this.worker = null;

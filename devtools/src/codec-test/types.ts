@@ -114,6 +114,12 @@ export interface VideoEncoderTestResult {
   queueSizeAfterConfigure: number;
   // encode ループ直後 (出力待機前) の encodeQueueSize
   queueSizeAfterEncode: number;
+  // 出力待機後の encodeQueueSize (Worker モードでも 0 に戻る)
+  queueSizeAfterOutputWait: number;
+  // close 直前 (未応答のフレームを残した状態) の encodeQueueSize
+  queueSizeBeforeClose: number;
+  // close 後の encodeQueueSize (0 に戻る)
+  queueSizeAfterClose: number;
   // encodeQueueSize が 0 以上の整数であること
   queueSizeIsNonNegativeInteger: boolean;
   // 到着した chunk 数

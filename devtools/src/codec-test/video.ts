@@ -139,9 +139,33 @@ export async function runVideoEncoderTest(useWorker: boolean): Promise<VideoEnco
 
   recordState("afterEncode");
 
+  // 出力を待った後のキューは空になる (Worker モードは encoded 応答ごとに減る)
+  const queueSizeAfterOutputWait = wrapper.encodeQueueSize;
+
   const forcedKeyFrameChunk = observedChunks[FORCED_KEY_FRAME_INDEX];
 
+  // close() 時点で送信中のフレームが残っていても 0 に戻ることを観測する。
+  // 出力を待たずに encode してから close する (Worker モードでは encoded 応答が返らない分が残る)。
+  // 後続の chunk 数の判定がぶれないよう、ここまでの観測を確定させる
+  const chunkCountBeforeClose = observedChunks.length;
+  const chunksBeforeClose = observedChunks.slice();
+  for (let index = 0; index < ENCODE_FRAME_COUNT; index += 1) {
+    const frame = createTestVideoFrame(
+      VIDEO_WIDTH,
+      VIDEO_HEIGHT,
+      pickFrameColor(index),
+      index * VIDEO_FRAME_DURATION,
+    );
+    wrapper.encode(frame, { keyFrame: false });
+    if (!useWorker) {
+      frame.close();
+    }
+  }
+  const queueSizeBeforeClose = wrapper.encodeQueueSize;
+
   wrapper.close();
+
+  const queueSizeAfterClose = wrapper.encodeQueueSize;
 
   recordState("afterClose");
 
@@ -164,13 +188,19 @@ export async function runVideoEncoderTest(useWorker: boolean): Promise<VideoEnco
     unconfiguredEncodeQueueSize,
     queueSizeAfterConfigure,
     queueSizeAfterEncode,
+    queueSizeAfterOutputWait,
+    queueSizeBeforeClose,
+    queueSizeAfterClose,
     queueSizeIsNonNegativeInteger:
-      Number.isInteger(queueSizeAfterEncode) && queueSizeAfterEncode >= 0,
-    chunkCount: observedChunks.length,
-    keyChunkCount: observedChunks.filter((chunk) => chunk.type === "key").length,
-    chunks: observedChunks,
+      Number.isInteger(queueSizeAfterEncode) &&
+      queueSizeAfterEncode >= 0 &&
+      Number.isInteger(queueSizeAfterOutputWait) &&
+      queueSizeAfterOutputWait >= 0,
+    chunkCount: chunkCountBeforeClose,
+    keyChunkCount: chunksBeforeClose.filter((chunk) => chunk.type === "key").length,
+    chunks: chunksBeforeClose,
     forcedKeyFrameChunkType: forcedKeyFrameChunk ? forcedKeyFrameChunk.type : null,
-    outputTimestamps: observedChunks.map((chunk) => chunk.timestamp),
+    outputTimestamps: chunksBeforeClose.map((chunk) => chunk.timestamp),
     encodeAfterClose,
     errorMessages,
   };

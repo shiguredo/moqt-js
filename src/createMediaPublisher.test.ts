@@ -69,7 +69,7 @@ function createTestFrame(): TestFrame {
 /**
  * encode 呼び出し記録用の最小エンコーダー
  */
-function createRecordingEncoder(): {
+function createRecordingEncoder(encodeQueueSize = 0): {
   encoded: unknown[];
   isClosed: () => boolean;
   encoder: {
@@ -86,7 +86,8 @@ function createRecordingEncoder(): {
     isClosed: () => closed,
     encoder: {
       state: "configured",
-      encodeQueueSize: 0,
+      // 閾値超過 (2 超) を固定するため引数で差し替えられるようにする
+      encodeQueueSize,
       encode: (frame: unknown) => {
         encoded.push(frame);
       },
@@ -114,6 +115,8 @@ interface PublisherLoopControl {
   currentState: MediaPublisherState;
   processAudioFrames(): Promise<void>;
   processVideoFrames(): Promise<void>;
+  // 閾値超過で破棄したフレーム数を観測する (video track 未設定でも読めるよう直接参照する)
+  videoStats: { droppedFrames: number };
 }
 
 function createLoopTestContext(): {
@@ -163,19 +166,68 @@ function injectAudioLoop(control: PublisherLoopControl): {
   return { encoded, controller, isEncoderClosed: isClosed };
 }
 
-function injectVideoLoop(control: PublisherLoopControl): {
+function injectVideoLoop(
+  control: PublisherLoopControl,
+  encodeQueueSize = 0,
+): {
   encoded: unknown[];
   controller: ReadableStreamDefaultController<TestFrame>;
   isEncoderClosed: () => boolean;
 } {
   const { stream, controller } = createFrameStream();
-  const { encoder, encoded, isClosed } = createRecordingEncoder();
+  const { encoder, encoded, isClosed } = createRecordingEncoder(encodeQueueSize);
   control.videoFrameReader =
     stream.getReader() as unknown as ReadableStreamDefaultReader<VideoFrame>;
   control.videoEncoder = encoder as unknown as VideoEncoderWrapper;
   control.processingActive = true;
   return { encoded, controller, isEncoderClosed: isClosed };
 }
+
+test("processVideoFrames: encode キューの閾値 (2) を超えたフレームは破棄され droppedFrames に数える", async () => {
+  // encodeQueueSize が 2 超の間は encode せず、フレームを閉じて破棄する (待たない)。
+  // Worker モードでは encodeQueueSize が送信中のフレーム数になるため同じ判定で破棄される
+  const { control, errors } = createLoopTestContext();
+  // 3 > 2 のため全フレームが破棄対象になる
+  const { encoded, controller } = injectVideoLoop(control, 3);
+
+  const loop = control.processVideoFrames();
+  const first = createTestFrame();
+  const second = createTestFrame();
+  controller.enqueue(first);
+  controller.enqueue(second);
+  // 破棄の記録後にストリームを閉じる (両者とも microtask のため確定的)
+  await Promise.resolve();
+  await Promise.resolve();
+  controller.close();
+  await loop;
+
+  // encode は呼ばれず、両フレームとも閉じられる
+  assert.equal(encoded.length, 0);
+  assert.isTrue(first.closed);
+  assert.isTrue(second.closed);
+  assert.equal(errors.length, 0);
+  assert.equal(control.videoStats.droppedFrames, 2);
+});
+
+test("processVideoFrames: encode キューの閾値以内なら破棄せず encode する", async () => {
+  // 2 <= 2 のため破棄しない (droppedFrames は増えない)
+  const { control, errors } = createLoopTestContext();
+  const { encoded, controller } = injectVideoLoop(control, 2);
+
+  const loop = control.processVideoFrames();
+  const frame = createTestFrame();
+  controller.enqueue(frame);
+  await Promise.resolve();
+  await Promise.resolve();
+  controller.close();
+  await loop;
+
+  assert.equal(encoded.length, 1);
+  assert.strictEqual(encoded[0], frame);
+  assert.isTrue(frame.closed);
+  assert.equal(errors.length, 0);
+  assert.equal(control.videoStats.droppedFrames, 0);
+});
 
 test("processAudioFrames: pause 後の旧ループは encode せず終了する", async () => {
   // 公開 pause() で世代を進めた旧ループにフレームが届く場合を再現する

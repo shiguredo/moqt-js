@@ -11,6 +11,15 @@
 
 ## develop
 
+- [CHANGE] `VideoStats.droppedFrames` を追加する
+  - エンコード能力を超えて破棄したフレーム数を統計で確認できるようにする
+  - `VideoStats` は公開型のため、この型を自前で構築しているコードは `droppedFrames` の追加が必要になる (後方互換なし)
+  - @voluntas
+- [FIX] Worker モードで映像エンコーダのバックプレッシャを有効にする
+  - `VideoEncoderWrapper.encodeQueueSize` は Worker モードで「直接取得できない」として常に 0 を返していたため、`createMediaPublisher` の `encodeQueueSize <= 2` の判定が常に真になり、エンコード能力を超えたフレームが Worker へ送られ続けていた
+  - Worker へ送信してまだ encoded 応答が返っていないフレーム数を数え、その値を Worker モードの `encodeQueueSize` として返す (Worker のメッセージ待ち行列と encoder のキューを合わせた上限側の近似)。`configure` による Worker の差し替えと `close` で 0 に戻す
+  - 閾値 (`<= 2`) を超えたフレームは従来どおりエンコードせず破棄する
+  - @voluntas
 - [FIX] Track Property の VIDEO_CONFIG / AUDIO_CONFIG を初期 configure に反映する
   - draft-ietf-moq-loc-04 Table 1 は VIDEO_CONFIG (0x0D) と AUDIO_CONFIG (0x0F) の Scope を「Track, Object」とするが、購読側は Catalog から決まる codec で先に configure しており Track Property の config を使えていなかった。Track Property にだけ config を載せる publisher では、最初の Object が再構成のために捨てられ、次のキーフレームまで映像が出なかった
   - media ごとに購読確立直後 (SUBSCRIBE_OK の trackProperties 取得後) に config を初期 configure へ反映し、その完了までに届いた Object を到着順に保留して復号に渡す (購読確立前にバッファから配送される Object も取りこぼさない)

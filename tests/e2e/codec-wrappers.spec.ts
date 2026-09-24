@@ -146,10 +146,16 @@ test("VideoEncoderWrapper 直接モード: 状態遷移と keyFrame 指定と ch
   expect(result.useWorker).toBe(false);
   expectVideoEncoderContract(result);
 
-  // configure 直後のキューは空で、6 フレーム投入直後は 6 件が未処理で残る
+  // configure 直後のキューは空で、6 フレーム投入直後は 6 件が未処理で残る。
+  // 出力を待つとキューは空に戻る
   expect(result.queueSizeAfterConfigure).toBe(0);
   expect(result.queueSizeIsNonNegativeInteger).toBe(true);
   expect(result.queueSizeAfterEncode).toBe(6);
+  expect(result.queueSizeAfterOutputWait).toBe(0);
+  // 未応答のフレームを残したまま close してもキューは 0 に戻る。
+  // 直接モードの encodeQueueSize は実キュー長のため、待機中の正確な件数は実装依存
+  expect(result.queueSizeBeforeClose).toBeGreaterThan(0);
+  expect(result.queueSizeAfterClose).toBe(0);
 });
 
 test("VideoEncoderWrapper Worker モード: Worker 経由でも同じ契約が成立する", async ({ page }) => {
@@ -162,10 +168,16 @@ test("VideoEncoderWrapper Worker モード: Worker 経由でも同じ契約が�
   expect(result.useWorker).toBe(true);
   expectVideoEncoderContract(result);
 
-  // Worker モードの encodeQueueSize は取得できないため常に 0 を返す契約
+  // Worker モードの encodeQueueSize は Worker へ送信してまだ encoded 応答が返っていない
+  // フレーム数 (Worker 内のキュー長は取得できないため上限側の近似)。
+  // 出力待機前は投入した 6 件、出力を待つと 0 に戻る (直接モードと同じ契約で扱える)
   expect(result.queueSizeAfterConfigure).toBe(0);
   expect(result.queueSizeIsNonNegativeInteger).toBe(true);
-  expect(result.queueSizeAfterEncode).toBe(0);
+  expect(result.queueSizeAfterEncode).toBe(6);
+  expect(result.queueSizeAfterOutputWait).toBe(0);
+  // 未応答のフレームを残したまま close してもキューは 0 に戻る (Worker の差し替えも同じ扱い)
+  expect(result.queueSizeBeforeClose).toBe(6);
+  expect(result.queueSizeAfterClose).toBe(0);
 });
 
 test("VideoEncoderWrapper 未設定時: encode() は例外を投げず何もしない", async ({ page }) => {

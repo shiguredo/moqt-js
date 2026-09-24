@@ -9,6 +9,11 @@ import type { WorkerErrorResponse, WorkerInitResponse } from "./workerMessages";
  * 初期化完了前の "error" は configure() の reject とし、
  * 完了後の "error" は従来どおり callbacks.error へ通知する。
  *
+ * 併せて Worker モードのエンコーダが Worker へ送信中のフレーム数を数える
+ * SentFrameCounter を置く (VideoEncoderWrapper.encodeQueueSize の Worker モードの値。
+ * Worker 内のキュー長は取得できないため、送信してまだ encoded 応答が返っていない
+ * フレーム数を上限側の近似として数える)。
+ *
  * ブラウザ非依存の契約 (純粋ロジック) と失敗時破棄手順を置く。
  * 純粋部分は契約テストで pin し、破棄手順の実行はブラウザ依存のため
  * レビューで確認する (モックは使わない)。
@@ -145,6 +150,44 @@ export class ConfigureGenerationTracker {
    */
   invalidateAll(): void {
     this.current += 1;
+  }
+}
+
+/**
+ * Worker へ送信中のフレーム数を数える純粋カウンタ
+ *
+ * Worker モードのエンコーダは Worker 内の VideoEncoder.encodeQueueSize を取得できないため、
+ * 「encode メッセージを送ってまだ encoded 応答が返っていないフレーム数」を数える。
+ * Worker のメッセージ待ち行列と encoder のキューを合わせた上限側の近似であり、
+ * 実際より多く見える安全側に倒れる。
+ *
+ * 増加は postMessage の成功後、減算は応答の処理前に行う。0 未満にはならない。
+ * configure による Worker の差し替え (旧 Worker は terminate されて応答が返らない) と
+ * close では reset する。
+ */
+export class SentFrameCounter {
+  private sentFrames = 0;
+
+  /** 送信したフレームを数える (postMessage の成功後) */
+  increment(): void {
+    this.sentFrames++;
+  }
+
+  /** 応答を受け取ったフレームを減らす (0 未満にはならない) */
+  decrement(): void {
+    if (this.sentFrames > 0) {
+      this.sentFrames--;
+    }
+  }
+
+  /** Worker の差し替え / close で 0 に戻す */
+  reset(): void {
+    this.sentFrames = 0;
+  }
+
+  /** 送信中のフレーム数 */
+  get size(): number {
+    return this.sentFrames;
   }
 }
 

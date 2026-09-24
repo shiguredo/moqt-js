@@ -145,6 +145,8 @@ interface AudioStats {
 
 interface VideoStats {
   framesSent: number;
+  // エンコードが追いつかないため待たずに破棄したフレーム数
+  droppedFrames: number;
   keyFramesSent: number;
   bytesSent: number;
   currentGroupId: number;
