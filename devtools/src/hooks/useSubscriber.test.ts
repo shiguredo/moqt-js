@@ -12,6 +12,7 @@ import {
 } from "./useSubscriber";
 import { AudioDecoderWrapper } from "../../../src/codec/AudioDecoder";
 import { buildObjectSendPlan } from "./usePublisher";
+import { createWallClockAnchor } from "../utils/wallClock";
 import { createSubscriberInstance, subscriberInstances } from "../signals/subscriber";
 import { settingsDisabled } from "../signals/connectionSettings";
 import {
@@ -191,23 +192,28 @@ function makeVideoObject(objectId: bigint, properties?: Uint8Array): MoqtObject 
 // isIndependent が delta と言えば delta)。逆方向 (Object ID が 0 以外かつ
 // isIndependent が true) はライブラリ側のテストで固定する。
 test("buildVideoChunkPlan: publisher が付与した Properties から chunk の type と timestamp を決める", () => {
+  // publisher はフレームの timestamp を壁時計 (Unix epoch マイクロ秒) に換算して送る。
+  // 約 1.79e15 は安全整数 (2^53 - 1) の範囲に収まり、Number にしても誤差が出ない
+  const anchor = createWallClockAnchor(0, 1_790_263_445_102.099);
   const keyPlan = buildObjectSendPlan(
     { groupId: 0, objectId: 0 },
     { data: new Uint8Array([0x01]), type: "key", timestamp: 33_333, duration: 33_333 },
+    anchor,
   );
   assert.deepEqual(
     buildVideoChunkPlan(makeVideoObject(BigInt(keyPlan.objectId), keyPlan.properties)),
-    { type: "key", timestamp: 33_333 },
+    { type: "key", timestamp: 1_790_263_445_135_432 },
   );
 
   // Group 先頭 (Object ID 0) でも Frame Marking が delta と言えば delta
   const deltaPlan = buildObjectSendPlan(
     { groupId: 1, objectId: 0 },
     { data: new Uint8Array([0x02]), type: "delta", timestamp: 66_666, duration: 33_333 },
+    anchor,
   );
   assert.deepEqual(
     buildVideoChunkPlan(makeVideoObject(BigInt(deltaPlan.objectId), deltaPlan.properties)),
-    { type: "delta", timestamp: 66_666 },
+    { type: "delta", timestamp: 1_790_263_445_168_765 },
   );
 });
 

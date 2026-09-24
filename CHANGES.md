@@ -19,6 +19,10 @@
   - エンコード能力を超えて破棄したフレーム数を統計で確認できるようにする
   - `VideoStats` は公開型のため、この型を自前で構築しているコードは `droppedFrames` の追加が必要になる (後方互換なし)
   - @voluntas
+- [FIX] moqt-devtools の publisher が映像の LOC TIMESTAMP を壁時計で送るようにする
+  - draft-ietf-moq-loc-04 Section 2.3.1.1 は Timescale の無い TIMESTAMP を Unix epoch のマイクロ秒 (壁時計) と定めるが、映像だけ VideoFrame の timestamp をそのまま送っていた
+  - VideoFrame の timestamp は取得元ごとに基準が異なる (Chromium では canvas の captureStream() が stream の開始、fake camera は別の大きな値) ため、最初に読んだフレームの timestamp とそのときの壁時計の対応をとり、以降は timestamp の差を足して換算する
+  - @voluntas
 - [FIX] 購読した映像を Group の順序と欠落を見て復号する
   - draft-ietf-moq-transport-21 Section 2.1 のとおり Object は順不同で届きうる。Group ごとに別の stream で届くため、前の Group の末尾が次の Group の先頭より後に届くことがあり、`createMediaSubscriber` は次の Group のキーフレームを復号した後に前の Group の delta を復号して映像を崩していた
   - 復号中の Group より古い Group の Object と、直前に復号した Object 以前の Object は復号しない

@@ -11,6 +11,7 @@ import {
 } from "./usePublisher";
 import { getAudioEncoderConfig } from "../../../src/codec/config";
 import { getEncoderConfig } from "../utils/codec";
+import { createWallClockAnchor } from "../utils/wallClock";
 import type { EncodedChunkData } from "../utils/EncoderWrapper";
 import type { CodecType } from "../types";
 import * as pub from "../signals/publisher";
@@ -29,6 +30,11 @@ const DEFAULT_KEYFRAME_INTERVAL = 60;
 // 検証対象の全 codec。catalog の codec 文字列は getEncoderConfig と一致していなければ
 // 購読側が Decoder を設定できない (Catalog 誤記がそのまま配信不能になる)。
 const ALL_CODECS: CodecType[] = ["vp8", "vp9", "av1", "h264", "h265"];
+
+// フレームの timestamp 0 を読んだときの壁時計 (2026-09-25 付近、Unix epoch ミリ秒)。
+// 送信する TIMESTAMP は、この壁時計にフレームの timestamp の差を足した値になる
+const TEST_WALL_CLOCK_MICROS = 1_790_263_445_102_099n;
+const TEST_ANCHOR = createWallClockAnchor(0, 1_790_263_445_102.099);
 
 /**
  * 検証用のエンコード済み chunk を作る
@@ -190,6 +196,7 @@ test("buildObjectSendPlan: キーフレームは新しい Group を開始し Obj
   const plan = buildObjectSendPlan(
     { groupId: 1000, objectId: 5 },
     makeChunk({ type: "key", timestamp: 0 }),
+    TEST_ANCHOR,
   );
 
   assert.equal(plan.isKeyFrame, true);
@@ -206,6 +213,7 @@ test("buildObjectSendPlan: デルタフレームは同じ Group の続きとし�
   const first = buildObjectSendPlan(
     { groupId: 1001, objectId: 0 },
     makeChunk({ type: "delta", timestamp: 33_333 }),
+    TEST_ANCHOR,
   );
   assert.equal(first.isKeyFrame, false);
   assert.equal(first.groupId, 1001);
@@ -217,6 +225,7 @@ test("buildObjectSendPlan: デルタフレームは同じ Group の続きとし�
   const second = buildObjectSendPlan(
     { groupId: first.nextGroupId, objectId: first.nextObjectId },
     makeChunk({ type: "delta", timestamp: 66_666 }),
+    TEST_ANCHOR,
   );
   assert.equal(second.groupId, 1001);
   assert.equal(second.objectId, 1);
@@ -230,12 +239,14 @@ test("buildObjectSendPlan: キーフレームは優先度 0、デルタフレー
   const keyPlan = buildObjectSendPlan(
     { groupId: 0, objectId: 0 },
     makeChunk({ type: "key", timestamp: 0 }),
+    TEST_ANCHOR,
   );
   assert.equal(keyPlan.priority, 0);
 
   const deltaPlan = buildObjectSendPlan(
     { groupId: 1, objectId: 0 },
     makeChunk({ type: "delta", timestamp: 33_333 }),
+    TEST_ANCHOR,
   );
   assert.equal(deltaPlan.priority, 128);
 });
@@ -247,14 +258,17 @@ test("buildObjectSendPlan: キーフレームは優先度 0、デルタフレー
 // 購読側は TIMESTAMP を EncodedVideoChunk の timestamp に、VIDEO_FRAME_MARKING が
 // あればその I ビットを、無ければ Group 先頭 (Object ID 0) をキーフレーム判定に使う。
 // 送信した Properties がそのまま読み戻せることを固定する。
+// draft-ietf-moq-loc-04 §2.3.1.1: Timescale を載せない TIMESTAMP は Unix epoch の
+// マイクロ秒 (壁時計) であるため、フレームの timestamp を壁時計に換算して載せる
 test("buildObjectSendPlan: LOC Properties に timestamp とキーフレーム判定を載せる", () => {
   const keyPlan = buildObjectSendPlan(
     { groupId: 0, objectId: 0 },
     makeChunk({ type: "key", timestamp: 33_333 }),
+    TEST_ANCHOR,
   );
   const keyProperties = LOC.decodeVideoProperties(keyPlan.properties);
 
-  assert.equal(keyProperties.timestamp, 33_333n);
+  assert.equal(keyProperties.timestamp, TEST_WALL_CLOCK_MICROS + 33_333n);
   assert.ok(keyProperties.frameMarking);
   assert.equal(keyProperties.frameMarking.isIndependent, true);
   // isDiscardable は WebCodecs が破棄可能性を提供しないため false 固定 (RFC 9626 §3.1 D)
@@ -267,12 +281,30 @@ test("buildObjectSendPlan: LOC Properties に timestamp とキーフレーム判
   const deltaPlan = buildObjectSendPlan(
     { groupId: 1, objectId: 0 },
     makeChunk({ type: "delta", timestamp: 66_666 }),
+    TEST_ANCHOR,
   );
   const deltaProperties = LOC.decodeVideoProperties(deltaPlan.properties);
 
-  assert.equal(deltaProperties.timestamp, 66_666n);
+  assert.equal(deltaProperties.timestamp, TEST_WALL_CLOCK_MICROS + 66_666n);
   assert.ok(deltaProperties.frameMarking);
   assert.equal(deltaProperties.frameMarking.isIndependent, false);
+});
+
+// VideoFrame の timestamp の基準は取得元ごとに異なる (fake camera は performance.now()
+// とも stream の開始とも異なる大きな値を基準にする)。最初のフレームを読んだときの
+// 壁時計との対応から換算するため、基準に依らず壁時計になる
+test("buildObjectSendPlan: 基準が大きな値のフレームも壁時計の TIMESTAMP にする", () => {
+  const firstFrameMicros = 289_052_241_600;
+  const anchor = createWallClockAnchor(firstFrameMicros, 1_790_263_445_102.099);
+  const plan = buildObjectSendPlan(
+    { groupId: 0, objectId: 0 },
+    makeChunk({ type: "key", timestamp: firstFrameMicros + 33_333 }),
+    anchor,
+  );
+  assert.equal(
+    LOC.decodeVideoProperties(plan.properties).timestamp,
+    TEST_WALL_CLOCK_MICROS + 33_333n,
+  );
 });
 
 // canonical 形式 (avc1 / hvc1) では WebCodecs が返す description (Video Config) が
@@ -284,6 +316,7 @@ test("buildObjectSendPlan: description があるときだけ Video Config を載
   const withConfig = buildObjectSendPlan(
     { groupId: 0, objectId: 0 },
     makeChunk({ type: "key", timestamp: 0, description }),
+    TEST_ANCHOR,
   );
   const withConfigProperties = LOC.decodeVideoProperties(withConfig.properties);
   assert.ok(withConfigProperties.config !== undefined);
@@ -292,6 +325,7 @@ test("buildObjectSendPlan: description があるときだけ Video Config を載
   const withoutConfig = buildObjectSendPlan(
     { groupId: 1, objectId: 0 },
     makeChunk({ type: "delta", timestamp: 33_333 }),
+    TEST_ANCHOR,
   );
   assert.equal(LOC.decodeVideoProperties(withoutConfig.properties).config, undefined);
 });
@@ -300,7 +334,7 @@ test("buildObjectSendPlan: description があるときだけ Video Config を載
 // (コピーするとフレームあたりのメモリ帯域が増える)。
 test("buildObjectSendPlan: payload は chunk の data をそのまま使う", () => {
   const chunk = makeChunk({ type: "key", timestamp: 0 });
-  const plan = buildObjectSendPlan({ groupId: 0, objectId: 0 }, chunk);
+  const plan = buildObjectSendPlan({ groupId: 0, objectId: 0 }, chunk, TEST_ANCHOR);
 
   assert.strictEqual(plan.payload, chunk.data);
 });
