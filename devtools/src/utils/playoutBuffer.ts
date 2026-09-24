@@ -12,7 +12,9 @@
  * - 基準の遅れ: 直近の窓の「表示できるようになった時刻 - TIMESTAMP」(遅れ) の最小値。
  *   送信側と受信側の時計のずれと、経路の最小の遅延を含む。遅れは到着ではなく復号の
  *   出力の時刻で測る (表示できる時刻には復号の時間も含まれるため)
- * - 再生遅延: 窓の中の「遅れ - 基準の遅れ」(揺らぎ) の p95 を目標にする。
+ * - 再生遅延: 窓の中の「遅れ - 基準の遅れ」(揺らぎ) の百分位を目標にする。百分位は
+ *   表示時刻の後に届くフレームが 1 秒に 1 枚までになるよう配信 fps から決める
+ *   (`playoutDelayPercentile`)。
  *   目標が上がったら直ちに追従し (遅れて届くフレームを減らす)、下がったときは毎秒
  *   `PLAYOUT_DELAY_DECAY_MS_PER_SECOND` でゆっくり戻す (表示時刻が前へ飛ぶと、その分の
  *   フレームを捨てることになる。毎秒 20 ms は再生を 2% 速めるだけで、目では分からない)
@@ -36,21 +38,62 @@ import { TimedValues } from "./timedValues";
 /**
  * 基準の遅れと揺らぎを求める直近の窓 (ミリ秒)
  *
- * p95 を求めるのに十分な数 (30 fps で 300 枚) のフレームを含み、経路の最小の遅延を
- * 表す程度に長い。長すぎると経路の遅延が変わったときに基準が追従しない
+ * 再生遅延の目標の百分位 (30 fps で約 96.7%、120 fps で約 99.2%) を求めるのに十分な数
+ * (30 fps で 300 枚、120 fps で 1200 枚) のフレームを含み、経路の最小の遅延を表す程度に
+ * 長い。長すぎると経路の遅延が変わったときに基準が追従しない
  */
 export const PLAYOUT_WINDOW_MS = 10_000;
 
 /**
+ * 表示時刻の後に届くことを許すフレームの数 (1 秒あたり)
+ *
+ * 表示時刻の後に届いたフレームは、その表示周期に描けず止まりになる。見る側が感じるのは
+ * 1 秒あたりの止まりの数であり、同じ割合で遅れを許すと、配信 fps が高いほど止まりが
+ * 増える (5% なら 30 fps で 1 秒に 1.5 回、120 fps で 6 回)。許す数を 1 秒あたりで決め、
+ * 再生遅延の目標にする揺らぎの百分位を配信 fps から求める (`playoutDelayPercentile`)
+ */
+export const LATE_FRAMES_PER_SECOND = 1;
+
+/**
+ * 再生遅延の目標にする揺らぎの百分位の下限
+ *
+ * 配信 fps が低い (20 fps 以下) と 1 秒に 1 枚は 5% を超えるため、95% のフレームは
+ * 表示時刻までに届く長さを保つ。経路のまれな大きな遅延の跳ね (数分に数回、300 ms 前後)
+ * まで吸収しようとすると、常に大きく遅れて表示することになるため、百分位は 100% にしない
+ */
+export const MIN_PLAYOUT_DELAY_PERCENTILE = 0.95;
+
+/**
  * 再生遅延の目標にする揺らぎの百分位
  *
- * 95% のフレームが表示時刻までに届く長さにする。経路のまれな大きな遅延の跳ね
- * (数分に数回、300 ms 前後) まで吸収しようとすると、常に大きく遅れて表示することになる
+ * 表示時刻の後に届くフレームが 1 秒に `LATE_FRAMES_PER_SECOND` 枚までになる百分位
+ * (1 - フレーム間隔 × 枚数 / 1 秒) と下限の大きい方。30 fps で約 96.7%、60 fps で約 98.3%、
+ * 120 fps で約 99.2% になる。
+ *
+ * @param frameIntervalMs - フレーム間隔 (ミリ秒)。不明なら null
  */
-export const PLAYOUT_DELAY_PERCENTILE = 0.95;
+export function playoutDelayPercentile(frameIntervalMs: number | null): number {
+  if (frameIntervalMs === null || frameIntervalMs <= 0) {
+    return MIN_PLAYOUT_DELAY_PERCENTILE;
+  }
+  return Math.max(
+    MIN_PLAYOUT_DELAY_PERCENTILE,
+    1 - (frameIntervalMs * LATE_FRAMES_PER_SECOND) / 1_000,
+  );
+}
 
 /** 再生遅延の上限 (ミリ秒)。これ以上遅れて表示するよりは、止まりを受け入れる */
 export const MAX_PLAYOUT_DELAY_MS = 500;
+
+/**
+ * 表示時刻を過ぎたフレームを捨てずに描く、表示時刻からの遅れの上限 (ミリ秒)
+ *
+ * 60 Hz の表示周期 (16.7 ms) 程度にする。この範囲の遅れは目で分からず、配信 fps と
+ * 表示周期が近いときに位相や取得の間隔の揺れで重なったフレームを捨てずに、後の周期で
+ * 追いつける。30 fps では 2 枚が表示時刻を過ぎると古い方は 1 フレーム (33.3 ms) 遅れて
+ * いるため捨て、最新を描く
+ */
+export const MAX_PRESENTATION_LAG_MS = 20;
 
 /** 目標が下がったときに再生遅延を下げる速さ (ミリ秒 / 秒) */
 export const PLAYOUT_DELAY_DECAY_MS_PER_SECOND = 20;
@@ -169,12 +212,12 @@ export class PlayoutBuffer<T> {
    * 先頭が壁時計の TIMESTAMP を持たないフレームなら、それを描く (届いた順に 1 枚ずつ)。
    * 先頭が表示時刻前なら何も描かずに待つ。
    *
-   * 表示時刻を過ぎたフレームが 1 枚ならそれを描く。2 枚以上なら、最新の 1 枚を次の選択に
-   * 残してその 1 つ前を描き、それより古いものを捨てる。最新を描いて 1 つ前も捨てると、
-   * 配信 fps と表示周期が近いとき (120 fps を 120 Hz で表示するなど)、表示時刻と選択の
-   * 位相のわずかな揺れで 2 枚が重なった周期のたびに 1 枚を捨て、次の周期は何も描けずに
-   * 表示が飛ぶ。1 枚を残すことで表示は最大 1 フレーム遅れるが、両方の周期で 1 枚ずつ描ける。
-   * 遅れが 1 フレームを超えて溜まったとき (3 枚以上) は古いものを捨てて追いつく。
+   * 表示時刻を過ぎたフレームのうち、表示時刻からの遅れが `MAX_PRESENTATION_LAG_MS` を
+   * 超えたものを捨て (最新の 1 枚は遅れていても残す)、残りの最も古いフレームを描く。
+   * 表示時刻を過ぎたフレームのうち最新だけを描くと、配信 fps と表示周期が近いとき
+   * (120 fps を 120 Hz で表示するなど)、表示時刻と選択の位相の揺れや publisher の取得の
+   * 間隔の揺れ (間隔の短い 2 枚) で 2 枚以上が重なった周期のたびに捨て、次の周期は何も
+   * 描けずに表示が飛ぶ。上限までの遅れを許して 1 枚ずつ描けば、後の周期で追いつける。
    *
    * @param nowMs - 現在の時刻 (`performance.now()`)
    */
@@ -199,8 +242,19 @@ export class PlayoutBuffer<T> {
     if (lastDue < 0) {
       return { draw: null, late: [] };
     }
-    // 表示時刻を過ぎたフレームが 2 枚以上なら、最新 (lastDue) を次の選択に残す
-    const drawIndex = Math.max(0, lastDue - 1);
+    // 表示時刻から上限を超えて遅れたフレームを捨てる (最新の lastDue は残す)
+    let drawIndex = 0;
+    while (drawIndex < lastDue) {
+      const frame = this.queue[drawIndex];
+      if (
+        frame === undefined ||
+        frame.timestampMs === null ||
+        frame.timestampMs + baseMs + delayMs >= nowMs - MAX_PRESENTATION_LAG_MS
+      ) {
+        break;
+      }
+      drawIndex++;
+    }
     const late = this.queue.splice(0, drawIndex).map((frame) => frame.item);
     const drawn = this.queue.shift();
     return { draw: drawn?.item ?? null, late };
@@ -261,14 +315,15 @@ export class PlayoutBuffer<T> {
     const baseMs = Math.min(...this.offsets.current());
     this.baseMs = baseMs;
 
-    const capMs = this.delayCapMs();
+    const frameIntervalMs = this.frameIntervalMs();
+    const capMs = this.delayCapMs(frameIntervalMs);
     // 再生遅延の上限を超える揺らぎは吸収できないため目標に使わない
     const jitters = this.learningOffsets
       .current()
       .map((offset) => offset - baseMs)
       .filter((jitter) => jitter <= MAX_PLAYOUT_DELAY_MS)
       .sort((a, b) => a - b);
-    const targetMs = Math.min(percentile(jitters, PLAYOUT_DELAY_PERCENTILE), capMs);
+    const targetMs = Math.min(percentile(jitters, playoutDelayPercentile(frameIntervalMs)), capMs);
     if (this.delayMs === null || targetMs >= this.delayMs) {
       this.delayMs = targetMs;
     } else {
@@ -284,15 +339,22 @@ export class PlayoutBuffer<T> {
    * 再生遅延の上限 (ミリ秒)。キューの上限を超えない長さ ((上限 - 余裕) 枚分のフレーム
    * 間隔) と `MAX_PLAYOUT_DELAY_MS` の小さい方
    */
-  private delayCapMs(): number {
-    if (this.frameIntervals.length === 0) {
+  private delayCapMs(frameIntervalMs: number | null): number {
+    if (frameIntervalMs === null) {
       return MAX_PLAYOUT_DELAY_MS;
     }
-    const sorted = [...this.frameIntervals].sort((a, b) => a - b);
-    const frameIntervalMs = percentile(sorted, 0.5);
     const queueCapMs =
       Math.max(0, this.maxQueuedFrames - PLAYOUT_QUEUE_HEADROOM_FRAMES) * frameIntervalMs;
     return Math.min(MAX_PLAYOUT_DELAY_MS, queueCapMs);
+  }
+
+  /** 直近のフレーム間隔 (TIMESTAMP の差の中央値、ミリ秒)。まだ分からなければ null */
+  private frameIntervalMs(): number | null {
+    if (this.frameIntervals.length === 0) {
+      return null;
+    }
+    const sorted = [...this.frameIntervals].sort((a, b) => a - b);
+    return percentile(sorted, 0.5);
   }
 
   /**

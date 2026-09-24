@@ -1,6 +1,7 @@
 import { test, assert } from "vite-plus/test";
 import {
   JITTER_BUFFER_MAX_QUEUED_FRAMES,
+  MAX_PRESENTATION_LAG_MS,
   MAX_PLAYOUT_DELAY_MS,
   PLAYOUT_DELAY_DECAY_MS_PER_SECOND,
   PLAYOUT_QUEUE_HEADROOM_FRAMES,
@@ -62,20 +63,39 @@ test("select: 表示時刻より前は描かず、過ぎたら描く", () => {
   assert.equal(buffer.size, 0);
 });
 
-// 表示時刻を過ぎたフレームが複数あるときは、最新の 1 枚を次の選択に残してその 1 つ前を
-// 描き、それより古いものは間に合わなかったフレームとして返す (捨てる)。並べ替えはしない。
-// 最新を描いて 1 つ前も捨てると、配信 fps と表示周期が近いとき、位相の揺れで 2 枚が重なった
-// 周期のたびに 1 枚を捨て、次の周期は何も描けずに表示が飛ぶ
-test("select: 表示時刻を過ぎたフレームが複数あれば最新を残して 1 つ前を描き、古いものを捨てる", () => {
+// 表示時刻を過ぎたフレームが複数あるときは、表示時刻からの遅れが MAX_PRESENTATION_LAG_MS
+// 以内のフレームを古い順に 1 枚ずつ描き、それより遅れたフレームは間に合わなかったフレーム
+// として返す (捨てる)。最新の 1 枚は遅れていても描く。並べ替えはしない。
+// 表示時刻を過ぎたフレームを最新の 1 枚だけにすると、配信 fps と表示周期が近いとき、
+// 表示時刻と選択の位相の揺れや、取得の間隔の揺れで 2 枚以上が重なった周期のたびに捨てて、
+// 次の周期は何も描けずに表示が飛ぶ
+test("select: 表示時刻からの遅れが上限以内のフレームは古い順に描き、それより遅れたものを捨てる", () => {
+  const buffer = new PlayoutBuffer<number>(JITTER_BUFFER_MAX_QUEUED_FRAMES);
+  const frameMs = 1_000 / 120;
+  for (let index = 0; index < 6; index++) {
+    enqueueAt(buffer, index, 0, frameMs);
+  }
+  // フレーム 0 から 4 は表示時刻を過ぎ、フレーム 5 はまだ (再生遅延はほぼ 0)。
+  // フレーム 0 と 1 は表示時刻から上限を超えて遅れている
+  const nowMs = LOCAL_ORIGIN_MS + 4 * frameMs + 1;
+  assert.isAbove(nowMs - (LOCAL_ORIGIN_MS + frameMs), MAX_PRESENTATION_LAG_MS);
+  assert.isBelow(nowMs - (LOCAL_ORIGIN_MS + 2 * frameMs), MAX_PRESENTATION_LAG_MS);
+  assert.deepEqual(buffer.select(nowMs), { draw: 2, late: [0, 1] });
+  // 残したフレームは次の選択から古い順に描く
+  assert.deepEqual(buffer.select(nowMs), { draw: 3, late: [] });
+  assert.deepEqual(buffer.select(nowMs), { draw: 4, late: [] });
+  assert.equal(buffer.size, 1);
+});
+
+// 30 fps では 2 枚が表示時刻を過ぎると古い方は上限を超えて遅れているため、最新を描いて
+// 古い方を捨てる
+test("select: 上限を超えて遅れたフレームを捨てて最新を描く", () => {
   const buffer = new PlayoutBuffer<number>(JITTER_BUFFER_MAX_QUEUED_FRAMES);
   for (let index = 0; index < 4; index++) {
     enqueueAt(buffer, index, 0);
   }
-  // フレーム 0 から 2 は表示時刻を過ぎ、フレーム 3 はまだ (再生遅延はほぼ 0)
   const nowMs = LOCAL_ORIGIN_MS + 2 * FRAME_MS + 1;
-  assert.deepEqual(buffer.select(nowMs), { draw: 1, late: [0] });
-  // 残したフレーム 2 は次の選択で描く
-  assert.deepEqual(buffer.select(nowMs), { draw: 2, late: [] });
+  assert.deepEqual(buffer.select(nowMs), { draw: 2, late: [0, 1] });
   assert.equal(buffer.size, 1);
 });
 
@@ -178,6 +198,32 @@ test("playoutDelayMs: 揺らぎが増えたら直ちに上げ、減ったらゆ�
   assert.isBelow(last?.delayMs ?? 0, 100);
 });
 
+/**
+ * 100 枚に 2 枚が 30 ms 遅れて届く到着列を frameMs の間隔で積み、最後の再生遅延を返す
+ */
+function delayForTwoPercentLate(frameMs: number): number | null {
+  const buffer = new PlayoutBuffer<number>(JITTER_BUFFER_MAX_QUEUED_FRAMES);
+  let available = 0;
+  for (let index = 0; index < 1_000; index++) {
+    const late = index % 100 === 17 || index % 100 === 67;
+    // 復号は順に行うため、到着は前のフレームより早くならない
+    available = Math.max(available, LOCAL_ORIGIN_MS + index * frameMs + (late ? 30 : 0));
+    buffer.enqueue(index, available, timestampOf(index * frameMs));
+    buffer.clear();
+  }
+  return buffer.playoutDelayMs();
+}
+
+// 見る側が感じるのは 1 秒あたりの止まりの数である。表示時刻の後に届くフレームを 1 秒に
+// 1 枚までにするため、再生遅延の目標にする揺らぎの百分位を配信 fps から決める
+// (30 fps で約 96.7%、120 fps で約 99.2%、下限は 95%)。
+// 2% のフレームが 30 ms 遅れる経路では、30 fps (1 秒に 0.6 枚) は遅れを許して再生遅延を
+// 上げず、120 fps (1 秒に 2.4 枚) は遅れを吸収するよう再生遅延を 30 ms にする
+test("playoutDelayMs: 表示時刻の後に届くフレームが 1 秒に 1 枚までになるよう配信 fps から百分位を決める", () => {
+  assert.closeTo(delayForTwoPercentLate(1_000 / 30) ?? -1, 0, TOLERANCE_MS);
+  assert.closeTo(delayForTwoPercentLate(1_000 / 120) ?? -1, 30, TOLERANCE_MS);
+});
+
 // 上限 (500 ms) を超える揺らぎは再生遅延では吸収できないため、再生遅延の目標に使わない。
 // 使うと再生遅延が上限に張り付き、常に大きく遅れて表示することになる
 test("playoutDelayMs: 上限を超える揺らぎは再生遅延に使わない", () => {
@@ -198,7 +244,7 @@ test("playoutDelayMs: 上限を超える揺らぎは再生遅延に使わない"
 
 // 購読の開始では relay の cache から Group の先頭以降のフレームがまとめて届く
 // (cache replay)。これは経路の揺らぎではないため、再生遅延の目標に使わない。
-// 古いフレームは表示時刻を過ぎているため、最新とその 1 つ前を除いて捨て、すぐに追いつく
+// 古いフレームは表示時刻から大きく遅れているため捨て、すぐに追いつく
 test("enqueue: 購読の開始にまとめて届いた古いフレームを再生遅延に使わない", () => {
   const buffer = new PlayoutBuffer<number>(JITTER_BUFFER_MAX_QUEUED_FRAMES);
   // Group の先頭から 20 枚 (約 0.67 秒前から現在まで) が、同じ時刻にまとめて届く
@@ -206,10 +252,10 @@ test("enqueue: 購読の開始にまとめて届いた古いフレームを再�
   for (let index = 0; index < 20; index++) {
     buffer.enqueue(index, burstAtMs + index * 0.1, timestampOf(index * FRAME_MS));
   }
+  // 表示時刻から上限を超えて遅れたフレーム (フレーム 18 まで) を捨てて最新を描く
   const selection = buffer.select(burstAtMs + 3);
-  assert.equal(selection.draw, 18);
-  assert.equal(selection.late.length, 18);
-  assert.equal(buffer.select(burstAtMs + 3).draw, 19);
+  assert.equal(selection.draw, 19);
+  assert.equal(selection.late.length, 19);
   // 以降は揺らぎ無しで届く
   for (let index = 20; index < 80; index++) {
     enqueueAt(buffer, index, 0);
