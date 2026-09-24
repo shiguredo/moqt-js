@@ -36,3 +36,14 @@ test("buildSubscriberStats: 復号前のレベルは null、復号後は dBFS �
   assert.equal(stats.audioPeakDbfs, -6);
   assert.equal(stats.audioRmsDbfs, -9);
 });
+
+test("buildSubscriberStats: Group の順序と欠落で捨てた映像フレーム数を返す", () => {
+  // 前の Group の遅着 Object (stale) と、参照先が欠けてキーフレームを待つ間の Object
+  // (missing-reference) を分けて数える。E2E はこの値で受信した映像の並びを確かめる
+  const instance = createSubscriberInstance("dropped-frames");
+  instance.staleFramesDropped.value = 5;
+  instance.missingReferenceFramesDropped.value = 7;
+  const stats = buildSubscriberStats(instance);
+  assert.equal(stats.staleFramesDropped, 5);
+  assert.equal(stats.missingReferenceFramesDropped, 7);
+});

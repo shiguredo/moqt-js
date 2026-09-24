@@ -11,9 +11,19 @@
 
 ## develop
 
+- [CHANGE] `VideoReceiverStats.staleFramesDropped` / `VideoReceiverStats.missingReferenceFramesDropped` を追加する
+  - Group の順序と欠落で復号せずに捨てた映像フレーム数を、理由ごとに統計で確認できるようにする
+  - `VideoReceiverStats` は公開型のため、この型を自前で構築しているコードは 2 つのフィールドの追加が必要になる (後方互換なし)
+  - @voluntas
 - [CHANGE] `VideoStats.droppedFrames` を追加する
   - エンコード能力を超えて破棄したフレーム数を統計で確認できるようにする
   - `VideoStats` は公開型のため、この型を自前で構築しているコードは `droppedFrames` の追加が必要になる (後方互換なし)
+  - @voluntas
+- [FIX] 購読した映像を Group の順序と欠落を見て復号する
+  - draft-ietf-moq-transport-21 Section 2.1 のとおり Object は順不同で届きうる。Group ごとに別の stream で届くため、前の Group の末尾が次の Group の先頭より後に届くことがあり、`createMediaSubscriber` は次の Group のキーフレームを復号した後に前の Group の delta を復号して映像を崩していた
+  - 復号中の Group より古い Group の Object と、直前に復号した Object 以前の Object は復号しない
+  - 同じ Group の delta は直前に復号した Object の次の Object だけを復号する。間の Object ID の欠けは Prior Object ID Gap (Section 10.9) が非存在を示すときだけ連続とみなし、示されない欠けの後は次のキーフレームまで復号しない
+  - 1 Group を複数の Subgroup に分ける publisher の Object ID の飛びも欠落として扱い、次のキーフレームまで待つ
   - @voluntas
 - [FIX] Worker モードで映像エンコーダのバックプレッシャを有効にする
   - `VideoEncoderWrapper.encodeQueueSize` は Worker モードで「直接取得できない」として常に 0 を返していたため、`createMediaPublisher` の `encodeQueueSize <= 2` の判定が常に真になり、エンコード能力を超えたフレームが Worker へ送られ続けていた

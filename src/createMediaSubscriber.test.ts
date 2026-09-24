@@ -604,11 +604,15 @@ test("applyInitialVideoConfig: 適用失敗は onError を通知し後続の Obj
   // 保留分の解放で再構成が 1 回起動し、その Object は再構成のため捨てられる
   assert.equal(configureCount, 2);
   assert.deepEqual(decoded, []);
-  // 再構成の完了後は復号が続く
+  // 再構成した decoder はキーフレームから始める。捨てた Object 0 を参照する Object 1 は
+  // 復号せず (参照先の欠落)、次の Group の先頭 (キーフレーム) から復号を続ける
   await waitForConfigured(control);
   control.handleVideoObject(makeIdentifiedObject(1n, 0x55));
   assert.equal(configureCount, 2);
-  assert.deepEqual(decoded, [0x55]);
+  assert.deepEqual(decoded, []);
+  assert.equal(subscriber.getStats().video?.missingReferenceFramesDropped, 1);
+  control.handleVideoObject({ ...makeIdentifiedObject(0n, 0x66), groupId: 2n });
+  assert.deepEqual(decoded, [0x66]);
 });
 
 /**
@@ -713,9 +717,14 @@ test("handleVideoObject: Frame Marking が無ければ Group 先頭を key と�
 });
 
 /**
- * Frame Marking がある場合はそれを優先し、Object ID 0 でも delta として渡す。
+ * Frame Marking がある場合はそれを優先し、Object ID 0 でもキーフレームとして扱わない。
+ *
+ * draft-ietf-moq-transport-21 Section 2.3: Group の Object は他の Group の Object に依存
+ * しないことが求められる (SHOULD NOT)。Group の先頭が delta の場合、参照するフレームは
+ * Group の外にあり、復号していないため decoder へ渡さない。キーフレームとして扱えば
+ * 復号されるため、渡らないことで delta として扱ったことを確かめる。
  */
-test("handleVideoObject: Frame Marking がある場合は Object ID 0 でも delta にする", () => {
+test("handleVideoObject: Frame Marking がある場合は Object ID 0 でもキーフレームにしない", () => {
   const subscriber = new MediaSubscriberImpl("moqt://example.com/live", {
     namespace: ["live"],
     video: {},
@@ -735,8 +744,9 @@ test("handleVideoObject: Frame Marking がある場合は Object ID 0 でも del
   });
   control.handleVideoObject(makeVideoObject(0n, deltaWire));
 
-  assert.deepEqual(decoded, [{ type: "delta", timestamp: 33_333 }]);
+  assert.deepEqual(decoded, []);
   assert.equal(subscriber.getStats().video?.keyFramesReceived, 0);
+  assert.equal(subscriber.getStats().video?.missingReferenceFramesDropped, 1);
 });
 
 /**

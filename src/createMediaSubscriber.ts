@@ -26,6 +26,7 @@ import {
 } from "./msf";
 import { AudioDecoderWrapper } from "./codec/AudioDecoder";
 import { VideoDecoderWrapper } from "./codec/VideoDecoder";
+import { VideoDecodeOrder, priorObjectIdGapOf } from "./videoDecodeOrder";
 import { DEFAULT_AUDIO_SAMPLE_RATE, resolveAudioChannelCount } from "./codec/config";
 import type {
   AudioCodecType,
@@ -366,7 +367,12 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     framesReceived: 0,
     keyFramesReceived: 0,
     bytesReceived: 0,
+    staleFramesDropped: 0,
+    missingReferenceFramesDropped: 0,
   };
+  // 映像 Object を復号してよいかを Group の順序と欠落から決める。decoder を構成し直した
+  // ときと decoder のエラー後は、キーフレームから始め直すため初期化する
+  private readonly videoDecodeOrder = new VideoDecodeOrder();
 
   constructor(
     url: string,
@@ -906,7 +912,9 @@ export class MediaSubscriberImpl implements MediaSubscriber {
         output: (data) => this.handleVideoDecodedData(data),
         error: (error) => {
           this.callbacks.onError?.(error);
-          // エラー後にデコーダーをリセット
+          // エラー後にデコーダーをリセットする。リセットした decoder はキーフレームから
+          // 始めるため、復号順の判定も初期化する
+          this.videoDecodeOrder.reset();
           void this.videoDecoder?.reset();
         },
       });
@@ -929,6 +937,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       // configure する。SUBSCRIBE_OK の VIDEO_CONFIG は subscribeMediaTracks が
       // 購読確立直後に applyInitialVideoConfig で反映する (canonical 形式に必要)。
       await this.videoDecoder.configure(videoCodec, width, height);
+      this.videoDecodeOrder.reset();
       this.videoDecoderConfigured = true;
     }
   }
@@ -1244,6 +1253,8 @@ export class MediaSubscriberImpl implements MediaSubscriber {
 
     try {
       await this.videoDecoder.configure(videoCodec, width, height, description);
+      // 構成し直した decoder はキーフレームから始める
+      this.videoDecodeOrder.reset();
       // 成功して初めて「適用済み」とする。失敗時は未適用のまま残し、
       // 同じ config を持つ後続 Object で再試行できるようにする。
       this.lastAppliedVideoConfig = description;
@@ -1301,6 +1312,24 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     this.videoStats.bytesReceived += obj.payload.length + (obj.properties?.length ?? 0);
     if (isKeyFrame) {
       this.videoStats.keyFramesReceived++;
+    }
+
+    // draft-ietf-moq-transport-21 Section 2.1: Object は順不同で届きうる。Group ごとに
+    // 別の stream で届くため、前の Group の末尾が次の Group の先頭より後に届くことがある。
+    // 参照するフレームを復号していない Object は decoder へ渡さない
+    const admission = this.videoDecodeOrder.admit({
+      groupId: obj.groupId,
+      objectId: obj.objectId,
+      isKeyFrame,
+      priorObjectIdGap: priorObjectIdGapOf(obj.properties),
+    });
+    if (!admission.decode) {
+      if (admission.reason === "stale") {
+        this.videoStats.staleFramesDropped++;
+      } else {
+        this.videoStats.missingReferenceFramesDropped++;
+      }
+      return;
     }
 
     // デコード

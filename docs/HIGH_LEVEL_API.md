@@ -268,11 +268,23 @@ interface VideoReceiverStats {
   framesReceived: number;
   keyFramesReceived: number;
   bytesReceived: number;
+  // 復号中の Group より古い Group の Object と、重複・遅着の Object として捨てたフレーム数
+  staleFramesDropped: number;
+  // 参照するフレームが欠けているため、キーフレームを待つ間に捨てたフレーム数
+  missingReferenceFramesDropped: number;
 }
 ```
 
 `AudioStats` / `VideoStats` は送信側 (`MediaStats`) の型である。受信側は
 `AudioReceiverStats` / `VideoReceiverStats` を使う。
+
+受信した映像は Group の順序と欠落を見て、参照するフレームを復号済みの Object だけを
+復号する。Object は順不同で届きうる (draft-ietf-moq-transport-21 Section 2.1) ため、
+次の Group のキーフレームを復号した後に届いた前の Group の Object は復号せず
+`staleFramesDropped` に数える。Group 内で Object ID が欠けた場合は、Prior Object ID Gap
+(Section 10.9) が非存在を示す分を除き欠落として扱い、次のキーフレームまでの Object を
+`missingReferenceFramesDropped` に数える。1 Group を複数の Subgroup に分ける publisher の
+Object ID の飛びも欠落として扱う。
 
 ---
 

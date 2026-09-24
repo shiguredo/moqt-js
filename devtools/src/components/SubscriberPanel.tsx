@@ -331,6 +331,18 @@ export function SubscriberPanel({
               <div class="text-xl font-bold text-yellow-600">{instance.chunksSkipped.value}</div>
             </div>
             <div class="bg-white rounded-lg p-3 border border-slate-200">
+              <div class="text-xs text-slate-500">staleFramesDropped</div>
+              <div class="text-xl font-bold text-yellow-600">
+                {instance.staleFramesDropped.value}
+              </div>
+            </div>
+            <div class="bg-white rounded-lg p-3 border border-slate-200">
+              <div class="text-xs text-slate-500">missingReferenceFramesDropped</div>
+              <div class="text-xl font-bold text-yellow-600">
+                {instance.missingReferenceFramesDropped.value}
+              </div>
+            </div>
+            <div class="bg-white rounded-lg p-3 border border-slate-200">
               <div class="text-xs text-slate-500">decodeErrors</div>
               <div class="text-xl font-bold text-red-600">{instance.decodeErrors.value}</div>
             </div>

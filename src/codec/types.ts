@@ -42,6 +42,12 @@ export interface VideoReceiverStats {
   framesReceived: number;
   keyFramesReceived: number;
   bytesReceived: number;
+  // 復号中の Group より古い Group の Object、または重複・遅着の Object として復号せずに
+  // 捨てたフレーム数 (VideoDecodeOrder の stale)
+  staleFramesDropped: number;
+  // 参照するフレームが欠けているためキーフレームを待つ間に捨てたフレーム数
+  // (VideoDecodeOrder の missing-reference)
+  missingReferenceFramesDropped: number;
 }
 
 // 送信側メディア統計

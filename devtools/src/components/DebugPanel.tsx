@@ -168,6 +168,8 @@ function generateSubscriberStatsText(subscriberId: string): string {
     `Chunks Created: ${instance.chunksCreated.value}`,
     `Chunks Decoded: ${instance.chunksDecoded.value}`,
     `Chunks Skipped: ${instance.chunksSkipped.value}`,
+    `Stale Frames Dropped: ${instance.staleFramesDropped.value}`,
+    `Missing Reference Frames Dropped: ${instance.missingReferenceFramesDropped.value}`,
     `Frames Decoded: ${instance.framesDecoded.value}`,
     `Keyframes Decoded: ${instance.keyFramesDecoded.value}`,
     `Decode Errors: ${instance.decodeErrors.value}`,

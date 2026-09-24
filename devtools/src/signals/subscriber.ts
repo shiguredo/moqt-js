@@ -42,6 +42,11 @@ export interface SubscriberInstance {
   chunksCreated: Signal<number>;
   chunksDecoded: Signal<number>;
   chunksSkipped: Signal<number>;
+  // Group の順序と欠落で復号せずに捨てた映像フレーム数 (VideoDecodeOrder)。
+  // stale は復号中の Group より古い Group の Object と重複・遅着の Object、
+  // missingReference は参照するフレームが欠けてキーフレームを待つ間の Object である
+  staleFramesDropped: Signal<number>;
+  missingReferenceFramesDropped: Signal<number>;
   decodeErrors: Signal<number>;
   decoderState: Signal<string>;
   // 最大の Location
@@ -99,6 +104,8 @@ export function createSubscriberInstance(id: string): SubscriberInstance {
     chunksCreated: signal(0),
     chunksDecoded: signal(0),
     chunksSkipped: signal(0),
+    staleFramesDropped: signal(0),
+    missingReferenceFramesDropped: signal(0),
     decodeErrors: signal(0),
     decoderState: signal("unconfigured"),
     largestLocation: signal<{ group: bigint; object: bigint } | null>(null),

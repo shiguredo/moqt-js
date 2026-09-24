@@ -47,6 +47,9 @@ export interface SubscriberStats {
   currentSubGroup: number;
   bytesReceived: number;
   objectsWithExtensions: number;
+  // Group の順序と欠落で復号せずに捨てた映像フレーム数 (VideoDecodeOrder の理由ごと)
+  staleFramesDropped: number;
+  missingReferenceFramesDropped: number;
   decoderState: string;
   largestLocation: { group: string; object: string } | null;
   // 音声トラックの受信数とデコード数 (catalog に音声トラックが無いときは 0 のまま)
@@ -111,6 +114,8 @@ export function buildSubscriberStats(sub: SubscriberInstance): SubscriberStats {
     currentSubGroup: sub.currentSubGroup.value,
     bytesReceived: sub.bytesReceived.value,
     objectsWithExtensions: sub.objectsWithExtensions.value,
+    staleFramesDropped: sub.staleFramesDropped.value,
+    missingReferenceFramesDropped: sub.missingReferenceFramesDropped.value,
     decoderState: sub.decoderState.value,
     largestLocation: convertLargestLocation(sub.largestLocation.value),
     audioObjectsReceived: sub.audioObjectsReceived.value,

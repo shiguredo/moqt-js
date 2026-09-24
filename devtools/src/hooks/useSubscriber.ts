@@ -20,6 +20,7 @@ import { logDebugMessage } from "./debugMessageLog";
 import { DecoderWrapper } from "../utils/DecoderWrapper";
 import { AudioDecoderWrapper } from "../../../src/codec/AudioDecoder.ts";
 import { isVideoKeyFrameObject } from "../../../src/createMediaSubscriber.ts";
+import { VideoDecodeOrder, priorObjectIdGapOf } from "../../../src/videoDecodeOrder.ts";
 import {
   DEFAULT_AUDIO_SAMPLE_RATE,
   requiresAudioSpecificConfig,
@@ -124,6 +125,8 @@ export function resetSubscriberStats(instance: sub.SubscriberInstance): void {
   instance.chunksCreated.value = 0;
   instance.chunksDecoded.value = 0;
   instance.chunksSkipped.value = 0;
+  instance.staleFramesDropped.value = 0;
+  instance.missingReferenceFramesDropped.value = 0;
   instance.decodeErrors.value = 0;
   instance.largestLocation.value = null;
   instance.audioObjectsReceived.value = 0;
@@ -346,6 +349,9 @@ export function useSubscriber(
   // 表示待ちのフレームと予約した描画 (presentFrame / clearPendingFrame が使う)
   const pendingFramesRef = useRef<VideoFrame[]>([]);
   const frameAnimationRef = useRef<number | null>(null);
+  // 映像 Object を復号してよいかを Group の順序と欠落から決める (handleObject が使う)。
+  // decoder を構成するたびに初期化し、キーフレームから始める
+  const videoDecodeOrderRef = useRef(new VideoDecodeOrder());
 
   /**
    * 受信した音声を音声出力デバイスへ流す graph を作る
@@ -810,10 +816,6 @@ export function useSubscriber(
         return;
       }
 
-      if (plan.type === "key") {
-        instance.keyFramesDecoded.value += 1;
-      }
-
       if (decoderInstance.state !== "configured") {
         console.warn(
           `[${subscriberId}] handleObject: decoder not in configured state:`,
@@ -822,6 +824,28 @@ export function useSubscriber(
         instance.decoderState.value = decoderInstance.state;
         instance.chunksSkipped.value += 1;
         return;
+      }
+
+      // draft-ietf-moq-transport-21 Section 2.1: Object は順不同で届きうる。Group ごとに
+      // 別の stream で届くため、前の Group の末尾が次の Group の先頭より後に届くことが
+      // ある。参照するフレームを復号していない Object は decoder へ渡さない
+      const admission = videoDecodeOrderRef.current.admit({
+        groupId: obj.groupId,
+        objectId: obj.objectId,
+        isKeyFrame: plan.type === "key",
+        priorObjectIdGap: priorObjectIdGapOf(obj.properties),
+      });
+      if (!admission.decode) {
+        if (admission.reason === "stale") {
+          instance.staleFramesDropped.value += 1;
+        } else {
+          instance.missingReferenceFramesDropped.value += 1;
+        }
+        return;
+      }
+
+      if (plan.type === "key") {
+        instance.keyFramesDecoded.value += 1;
       }
 
       decoderInstance.decode(chunk);
@@ -1150,6 +1174,8 @@ export function useSubscriber(
       const codecDisplay = `${videoTrackFromCatalog.codec} ${videoTrackFromCatalog.width}x${videoTrackFromCatalog.height}`;
 
       await decoderInstance.configure(decoderConfig);
+      // 構成した decoder はキーフレームから復号を始める
+      videoDecodeOrderRef.current.reset();
 
       // configure await 中に中断された場合、ローカル decoderInstance は instance に未代入のため
       // 中断元から見えない。startSubscribing 側で close する。
@@ -1197,10 +1223,12 @@ export function useSubscriber(
         actualTrackName,
         {
           object: (obj: MoqtObject) => {
-            // Promise チェーンで到着順にデコードする。
-            // 複数 Subgroup ストリームを並行使用する Publisher との接続では
-            // (groupId, objectId) 順の保証がないが、現状はリオーダーバッファを持たない。
-            // TODO: 複数 Subgroup 対応は別 issue で扱う。
+            // Promise チェーンで到着順に処理する。stream の間の到着順は保証されない
+            // (draft-ietf-moq-transport-21 Section 2.1) ため、handleObject が Group の
+            // 順序と欠落を見て、復号してよい Object だけを decoder へ渡す
+            // (VideoDecodeOrder)。並べ替えはしないため、遅れて届いた前の Group の
+            // Object は捨てる。1 Group を複数の Subgroup に分ける publisher の
+            // Object ID の飛びも欠落として扱い、次のキーフレームまで待つ
             chainRef.current = chainRef.current.then(() => handleObject(obj)).catch(() => {});
           },
           end: () => {

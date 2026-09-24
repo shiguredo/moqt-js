@@ -273,6 +273,8 @@ test("resetSubscriberStats: 統計値を初期値へ戻す", () => {
   instance.chunksCreated.value = 12;
   instance.chunksDecoded.value = 10;
   instance.chunksSkipped.value = 2;
+  instance.staleFramesDropped.value = 3;
+  instance.missingReferenceFramesDropped.value = 4;
   instance.decodeErrors.value = 1;
   instance.largestLocation.value = { group: 5n, object: 11n };
 
@@ -288,6 +290,8 @@ test("resetSubscriberStats: 統計値を初期値へ戻す", () => {
   assert.equal(instance.chunksCreated.value, 0);
   assert.equal(instance.chunksDecoded.value, 0);
   assert.equal(instance.chunksSkipped.value, 0);
+  assert.equal(instance.staleFramesDropped.value, 0);
+  assert.equal(instance.missingReferenceFramesDropped.value, 0);
   assert.equal(instance.decodeErrors.value, 0);
   assert.equal(instance.largestLocation.value, null);
 });
