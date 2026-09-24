@@ -3,6 +3,7 @@ import type { LOC, Session, Subscriber, Catalog } from "moqt-js";
 import type { StatusType } from "../types";
 import type { DecoderWrapper } from "../utils/DecoderWrapper";
 import type { AudioDecoderWrapper } from "../../../src/codec/AudioDecoder.ts";
+import { EMPTY_PLAYBACK_TIMING, type PlaybackTimingSnapshot } from "../utils/playbackTimingStats";
 
 /**
  * 個々の Subscriber インスタンスの状態。
@@ -48,6 +49,9 @@ export interface SubscriberInstance {
   staleFramesDropped: Signal<number>;
   missingReferenceFramesDropped: Signal<number>;
   decodeErrors: Signal<number>;
+  // 受信から表示までの時間の統計 (到着の揺らぎ・遅延・復号時間・表示間隔の分布と、
+  // 表示の止まり・表示キューのあふれの累積)。useSubscriber が一定間隔で更新する
+  playbackTiming: Signal<PlaybackTimingSnapshot>;
   decoderState: Signal<string>;
   // 最大の Location
   largestLocation: Signal<{ group: bigint; object: bigint } | null>;
@@ -107,6 +111,7 @@ export function createSubscriberInstance(id: string): SubscriberInstance {
     staleFramesDropped: signal(0),
     missingReferenceFramesDropped: signal(0),
     decodeErrors: signal(0),
+    playbackTiming: signal<PlaybackTimingSnapshot>(EMPTY_PLAYBACK_TIMING),
     decoderState: signal("unconfigured"),
     largestLocation: signal<{ group: bigint; object: bigint } | null>(null),
     dynamicGroupsSupported: signal(false),

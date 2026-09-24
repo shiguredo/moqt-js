@@ -13,6 +13,7 @@ import {
 import { AudioDecoderWrapper } from "../../../src/codec/AudioDecoder";
 import { buildObjectSendPlan } from "./usePublisher";
 import { createWallClockAnchor } from "../utils/wallClock";
+import { EMPTY_PLAYBACK_TIMING } from "../utils/playbackTimingStats";
 import { createSubscriberInstance, subscriberInstances } from "../signals/subscriber";
 import { settingsDisabled } from "../signals/connectionSettings";
 import {
@@ -202,7 +203,7 @@ test("buildVideoChunkPlan: publisher が付与した Properties から chunk の
   );
   assert.deepEqual(
     buildVideoChunkPlan(makeVideoObject(BigInt(keyPlan.objectId), keyPlan.properties)),
-    { type: "key", timestamp: 1_790_263_445_135_432 },
+    { type: "key", timestamp: 1_790_263_445_135_432, timestampKind: "wallClock" },
   );
 
   // Group 先頭 (Object ID 0) でも Frame Marking が delta と言えば delta
@@ -213,7 +214,7 @@ test("buildVideoChunkPlan: publisher が付与した Properties から chunk の
   );
   assert.deepEqual(
     buildVideoChunkPlan(makeVideoObject(BigInt(deltaPlan.objectId), deltaPlan.properties)),
-    { type: "delta", timestamp: 1_790_263_445_168_765 },
+    { type: "delta", timestamp: 1_790_263_445_168_765, timestampKind: "wallClock" },
   );
 });
 
@@ -221,12 +222,21 @@ test("buildVideoChunkPlan: publisher が付与した Properties から chunk の
 // LOC の拡張 (VIDEO_FRAME_MARKING) は任意であるため、無い場合は Group 先頭
 // (Object ID 0) をキーフレームとして扱う。それ以外はデルタ。
 test("buildVideoChunkPlan: Properties が無い / 空の Object は Object ID 0 を key にする", () => {
-  assert.deepEqual(buildVideoChunkPlan(makeVideoObject(0n)), { type: "key", timestamp: 0 });
+  assert.deepEqual(buildVideoChunkPlan(makeVideoObject(0n)), {
+    type: "key",
+    timestamp: 0,
+    timestampKind: "none",
+  });
   assert.deepEqual(buildVideoChunkPlan(makeVideoObject(0n, new Uint8Array())), {
     type: "key",
     timestamp: 0,
+    timestampKind: "none",
   });
-  assert.deepEqual(buildVideoChunkPlan(makeVideoObject(1n)), { type: "delta", timestamp: 0 });
+  assert.deepEqual(buildVideoChunkPlan(makeVideoObject(1n)), {
+    type: "delta",
+    timestamp: 0,
+    timestampKind: "none",
+  });
 });
 
 // TIMESTAMP だけを持つ Object も同じ規則で判定し、timestamp は Properties から取る
@@ -236,11 +246,22 @@ test("buildVideoChunkPlan: TIMESTAMP だけの Object は Object ID で type を
   assert.deepEqual(buildVideoChunkPlan(makeVideoObject(0n, properties)), {
     type: "key",
     timestamp: 1_000,
+    timestampKind: "wallClock",
   });
   assert.deepEqual(buildVideoChunkPlan(makeVideoObject(1n, properties)), {
     type: "delta",
     timestamp: 1_000,
+    timestampKind: "wallClock",
   });
+});
+
+// draft-ietf-moq-loc-04 §2.3.1.2: Timescale がある TIMESTAMP は壁時計ではなくメディア時刻
+// であり、送信から受信までの遅延を求めるのに使えない。再生時間の統計はこの区別で
+// 遅延を求めるかを決める
+test("buildVideoChunkPlan: Timescale がある TIMESTAMP はメディア時刻として区別する", () => {
+  const properties = LOC.encodeVideoProperties({ timestamp: 90_000n, timescale: 90_000n });
+
+  assert.equal(buildVideoChunkPlan(makeVideoObject(0n, properties)).timestampKind, "mediaTime");
 });
 
 // ============================================================================
@@ -283,6 +304,11 @@ test("resetSubscriberStats: 統計値を初期値へ戻す", () => {
   instance.missingReferenceFramesDropped.value = 4;
   instance.decodeErrors.value = 1;
   instance.largestLocation.value = { group: 5n, object: 11n };
+  instance.playbackTiming.value = {
+    ...EMPTY_PLAYBACK_TIMING,
+    displayStalls: 3,
+    displayQueueDrops: 2,
+  };
 
   resetSubscriberStats(instance);
 
@@ -300,6 +326,8 @@ test("resetSubscriberStats: 統計値を初期値へ戻す", () => {
   assert.equal(instance.missingReferenceFramesDropped.value, 0);
   assert.equal(instance.decodeErrors.value, 0);
   assert.equal(instance.largestLocation.value, null);
+  // 受信から表示までの時間の統計も前の購読の値を持ち越さない
+  assert.deepEqual(instance.playbackTiming.value, EMPTY_PLAYBACK_TIMING);
 });
 
 // ============================================================================

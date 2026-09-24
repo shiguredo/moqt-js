@@ -19,6 +19,11 @@
   - エンコード能力を超えて破棄したフレーム数を統計で確認できるようにする
   - `VideoStats` は公開型のため、この型を自前で構築しているコードは `droppedFrames` の追加が必要になる (後方互換なし)
   - @voluntas
+- [ADD] moqt-devtools の subscriber に受信から表示までの時間の統計を追加する
+  - 映像のかくつきの原因 (到着の揺らぎ、送信から受信までの遅延、復号の遅れ、表示の止まり、表示キューのあふれ) を画面と `window.moqtDevTools.getSubscribers()` の `playbackTiming` から切り分けられるようにする
+  - 到着の揺らぎ・遅延・復号時間・表示間隔の直近 10 秒の p50 / p95 / max、直近 1 秒の表示 fps、表示間隔がフレーム間隔の 1.5 倍を超えた回数とその合計時間、表示キューがあふれて捨てたフレーム数を出す
+  - 遅延は送信側の壁時計の LOC TIMESTAMP を基準にするため、別のマシンでは時計のずれを含む
+  - @voluntas
 - [FIX] moqt-devtools の publisher が映像の LOC TIMESTAMP を壁時計で送るようにする
   - draft-ietf-moq-loc-04 Section 2.3.1.1 は Timescale の無い TIMESTAMP を Unix epoch のマイクロ秒 (壁時計) と定めるが、映像だけ VideoFrame の timestamp をそのまま送っていた
   - VideoFrame の timestamp は取得元ごとに基準が異なる (Chromium では canvas の captureStream() が stream の開始、fake camera は別の大きな値) ため、最初に読んだフレームの timestamp とそのときの壁時計の対応をとり、以降は timestamp の差を足して換算する

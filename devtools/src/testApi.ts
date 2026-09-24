@@ -18,6 +18,7 @@ import {
 import { subscriberInstances, type SubscriberInstance } from "./signals/subscriber";
 import { url, certificateHash } from "./signals/connectionSettings";
 import type { StatusType } from "./types";
+import type { PlaybackTimingSnapshot } from "./utils/playbackTimingStats";
 
 /**
  * Publisher の統計情報
@@ -50,6 +51,10 @@ export interface SubscriberStats {
   // Group の順序と欠落で復号せずに捨てた映像フレーム数 (VideoDecodeOrder の理由ごと)
   staleFramesDropped: number;
   missingReferenceFramesDropped: number;
+  // 受信から表示までの時間の統計 (utils/playbackTimingStats.ts)。分布は直近 10 秒、
+  // 止まりと表示キューのあふれは購読開始からの累積。latencyMs は送信側の壁時計の
+  // LOC TIMESTAMP を基準にするため、別のマシンでは時計のずれを含む
+  playbackTiming: PlaybackTimingSnapshot;
   decoderState: string;
   largestLocation: { group: string; object: string } | null;
   // 音声トラックの受信数とデコード数 (catalog に音声トラックが無いときは 0 のまま)
@@ -116,6 +121,7 @@ export function buildSubscriberStats(sub: SubscriberInstance): SubscriberStats {
     objectsWithExtensions: sub.objectsWithExtensions.value,
     staleFramesDropped: sub.staleFramesDropped.value,
     missingReferenceFramesDropped: sub.missingReferenceFramesDropped.value,
+    playbackTiming: sub.playbackTiming.value,
     decoderState: sub.decoderState.value,
     largestLocation: convertLargestLocation(sub.largestLocation.value),
     audioObjectsReceived: sub.audioObjectsReceived.value,

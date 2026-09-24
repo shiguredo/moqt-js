@@ -2,6 +2,7 @@ import { useMemo, useRef, useEffect } from "preact/hooks";
 import { useSubscriber } from "../hooks/useSubscriber";
 import { AudioMeter } from "./AudioMeter";
 import { formatBitrate, formatBytes } from "../utils/logFormatters";
+import { formatTimingSummary } from "../utils/playbackTimingStats";
 import * as sub from "../signals/subscriber";
 
 function formatCatalogValue(key: string, value: unknown): string {
@@ -371,6 +372,78 @@ export function SubscriberPanel({
             <div class="bg-white rounded-lg p-3 border border-slate-200">
               <div class="text-xs text-slate-500">decoderState</div>
               <div class="text-sm font-bold text-slate-600">{instance.decoderState.value}</div>
+            </div>
+          </div>
+
+          <h3 class="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">
+            Playback Timing
+          </h3>
+          <p class="text-xs text-slate-500 mb-3">
+            分布は直近 10 秒の p50 / p95 / max (ms)。latency は送信側の壁時計の LOC TIMESTAMP
+            を基準にするため、別のマシンでは時計のずれを含む
+          </p>
+          <div class="grid grid-cols-4 gap-3 mb-3">
+            <div class="bg-white rounded-lg p-3 border border-slate-200 col-span-2">
+              <div class="text-xs text-slate-500">arrivalJitter</div>
+              <div class="text-sm font-bold text-blue-600" data-testid="subscriber-arrival-jitter">
+                {formatTimingSummary(instance.playbackTiming.value.arrivalJitterMs)}
+              </div>
+            </div>
+            <div class="bg-white rounded-lg p-3 border border-slate-200 col-span-2">
+              <div class="text-xs text-slate-500">latency</div>
+              <div class="text-sm font-bold text-blue-600" data-testid="subscriber-latency">
+                {formatTimingSummary(instance.playbackTiming.value.latencyMs)}
+              </div>
+            </div>
+            <div class="bg-white rounded-lg p-3 border border-slate-200 col-span-2">
+              <div class="text-xs text-slate-500">decodeTime</div>
+              <div class="text-sm font-bold text-blue-600" data-testid="subscriber-decode-time">
+                {formatTimingSummary(instance.playbackTiming.value.decodeTimeMs)}
+              </div>
+            </div>
+            <div class="bg-white rounded-lg p-3 border border-slate-200 col-span-2">
+              <div class="text-xs text-slate-500">displayInterval</div>
+              <div
+                class="text-sm font-bold text-blue-600"
+                data-testid="subscriber-display-interval"
+              >
+                {formatTimingSummary(instance.playbackTiming.value.displayIntervalMs)}
+              </div>
+            </div>
+          </div>
+          <div class="grid grid-cols-4 gap-3 mb-4">
+            <div class="bg-white rounded-lg p-3 border border-slate-200">
+              <div class="text-xs text-slate-500">displayFps</div>
+              <div class="text-xl font-bold text-blue-600" data-testid="subscriber-display-fps">
+                {instance.playbackTiming.value.displayFps}
+              </div>
+            </div>
+            <div class="bg-white rounded-lg p-3 border border-slate-200">
+              <div class="text-xs text-slate-500">displayStalls</div>
+              <div
+                class="text-xl font-bold text-yellow-600"
+                data-testid="subscriber-display-stalls"
+              >
+                {instance.playbackTiming.value.displayStalls}
+              </div>
+            </div>
+            <div class="bg-white rounded-lg p-3 border border-slate-200">
+              <div class="text-xs text-slate-500">displayStallMs</div>
+              <div
+                class="text-xl font-bold text-yellow-600"
+                data-testid="subscriber-display-stall-ms"
+              >
+                {Math.round(instance.playbackTiming.value.displayStallMs)}
+              </div>
+            </div>
+            <div class="bg-white rounded-lg p-3 border border-slate-200">
+              <div class="text-xs text-slate-500">displayQueueDrops</div>
+              <div
+                class="text-xl font-bold text-yellow-600"
+                data-testid="subscriber-display-queue-drops"
+              >
+                {instance.playbackTiming.value.displayQueueDrops}
+              </div>
             </div>
           </div>
 

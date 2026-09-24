@@ -14,6 +14,7 @@ import * as settings from "../signals/connectionSettings";
 import * as pub from "../signals/publisher";
 import * as sub from "../signals/subscriber";
 import { subscriberIds } from "../signals/subscriber";
+import { formatTimingSummary } from "../utils/playbackTimingStats";
 
 interface LogEntry {
   timestamp: number;
@@ -174,6 +175,17 @@ function generateSubscriberStatsText(subscriberId: string): string {
     `Keyframes Decoded: ${instance.keyFramesDecoded.value}`,
     `Decode Errors: ${instance.decodeErrors.value}`,
   ];
+  // 受信から表示までの時間の統計 (分布は直近 10 秒の p50 / p95 / max)
+  const timing = instance.playbackTiming.value;
+  lines.push(`--- Playback Timing (p50 / p95 / max ms, last 10 s) ---`);
+  lines.push(`Arrival Jitter: ${formatTimingSummary(timing.arrivalJitterMs)}`);
+  lines.push(`Latency (sender wall clock): ${formatTimingSummary(timing.latencyMs)}`);
+  lines.push(`Decode Time: ${formatTimingSummary(timing.decodeTimeMs)}`);
+  lines.push(`Display Interval: ${formatTimingSummary(timing.displayIntervalMs)}`);
+  lines.push(`Display FPS: ${timing.displayFps}`);
+  lines.push(`Display Stalls: ${timing.displayStalls}`);
+  lines.push(`Display Stall Time: ${Math.round(timing.displayStallMs)} ms`);
+  lines.push(`Display Queue Drops: ${timing.displayQueueDrops}`);
   // Largest Location 情報
   const largestLocation = instance.largestLocation.value;
   if (largestLocation) {

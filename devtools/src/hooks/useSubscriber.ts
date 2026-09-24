@@ -34,6 +34,7 @@ import {
   waveformSampleCount,
 } from "../utils/audioLevel";
 import { base64ToArrayBuffer } from "../utils/base64";
+import { EMPTY_PLAYBACK_TIMING, PlaybackTimingStats } from "../utils/playbackTimingStats";
 import * as settings from "../signals/connectionSettings";
 import * as sub from "../signals/subscriber";
 import * as pub from "../signals/publisher";
@@ -77,6 +78,14 @@ const MAX_CANVAS_WIDTH = 1280;
  * 最新側へ追いつく)。
  */
 const MAX_PENDING_FRAMES = 12;
+
+/**
+ * 受信から表示までの時間の統計を signal へ反映する間隔 (ミリ秒)
+ *
+ * 記録はフレームごとに行うが、signal への反映をフレームごとにすると再描画が
+ * 表示の負荷になり、測る対象 (表示の止まり) を自分で悪化させる。
+ */
+const PLAYBACK_TIMING_PUBLISH_INTERVAL_MS = 500;
 
 /**
  * Catalog の `videoTrack` から `VideoDecoderConfig` を組み立てる。
@@ -128,6 +137,7 @@ export function resetSubscriberStats(instance: sub.SubscriberInstance): void {
   instance.staleFramesDropped.value = 0;
   instance.missingReferenceFramesDropped.value = 0;
   instance.decodeErrors.value = 0;
+  instance.playbackTiming.value = EMPTY_PLAYBACK_TIMING;
   instance.largestLocation.value = null;
   instance.audioObjectsReceived.value = 0;
   instance.audioChunksDecoded.value = 0;
@@ -147,13 +157,20 @@ export function resetSubscriberStats(instance: sub.SubscriberInstance): void {
  * Object ID 0 をキーフレームとして扱う。Properties が無い / 空の Object も
  * Object ID だけで判定し、timestamp は 0 にする。
  *
+ * `timestampKind` は TIMESTAMP の種類である。draft-ietf-moq-loc-04 §2.3.1.1 / §2.3.1.2 に
+ * より、Timescale が無ければ Unix epoch マイクロ秒の壁時計 (`wallClock`)、あれば
+ * メディア時刻 (`mediaTime`) である。TIMESTAMP が無ければ `none`。再生時間の統計は
+ * `wallClock` のときだけ送信から受信までの遅延を求める。
+ *
  * ブラウザ API に依存しないため、LOC 復号の契約はここで検証できる。
  */
 export function buildVideoChunkPlan(obj: MoqtObject): {
   type: "key" | "delta";
   timestamp: number;
+  timestampKind: "none" | "wallClock" | "mediaTime";
 } {
   let timestamp = 0;
+  let timestampKind: "none" | "wallClock" | "mediaTime" = "none";
   let frameMarking: LOC.VideoFrameMarking | undefined;
 
   if (obj.properties !== undefined && obj.properties.length > 0) {
@@ -162,6 +179,7 @@ export function buildVideoChunkPlan(obj: MoqtObject): {
     // TIMESTAMP から timestamp を取得
     if (locProperties.timestamp !== undefined) {
       timestamp = Number(locProperties.timestamp);
+      timestampKind = locProperties.timescale === undefined ? "wallClock" : "mediaTime";
     }
 
     frameMarking = locProperties.frameMarking;
@@ -170,6 +188,7 @@ export function buildVideoChunkPlan(obj: MoqtObject): {
   return {
     type: isVideoKeyFrameObject(obj.objectId, frameMarking) ? "key" : "delta",
     timestamp,
+    timestampKind,
   };
 }
 
@@ -352,6 +371,33 @@ export function useSubscriber(
   // 映像 Object を復号してよいかを Group の順序と欠落から決める (handleObject が使う)。
   // decoder を構成するたびに初期化し、キーフレームから始める
   const videoDecodeOrderRef = useRef(new VideoDecodeOrder());
+  // 受信から表示までの時間の統計 (到着・復号・表示で記録する)。購読を始めるたびに
+  // 初期化し、PLAYBACK_TIMING_PUBLISH_INTERVAL_MS ごとに signal へ反映する
+  const playbackTimingRef = useRef(new PlaybackTimingStats());
+  const playbackTimingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  /** 統計の記録を初期化し、signal への定期的な反映を始める */
+  function startPlaybackTiming(): void {
+    stopPlaybackTiming();
+    playbackTimingRef.current.reset();
+    playbackTimingTimerRef.current = setInterval(() => {
+      const instance = sub.getSubscriber(subscriberId);
+      if (!instance) return;
+      instance.playbackTiming.value = playbackTimingRef.current.snapshot(performance.now());
+    }, PLAYBACK_TIMING_PUBLISH_INTERVAL_MS);
+  }
+
+  /**
+   * signal への反映を止め、記録を捨てる。signal には最後に反映した値を残す
+   * (他の統計と同じく、停止後も直前の購読の値を表示し、次の購読開始で初期化する)
+   */
+  function stopPlaybackTiming(): void {
+    if (playbackTimingTimerRef.current !== null) {
+      clearInterval(playbackTimingTimerRef.current);
+      playbackTimingTimerRef.current = null;
+    }
+    playbackTimingRef.current.reset();
+  }
 
   /**
    * 受信した音声を音声出力デバイスへ流す graph を作る
@@ -704,6 +750,8 @@ export function useSubscriber(
     pending.push(frame);
     while (pending.length > MAX_PENDING_FRAMES) {
       pending.shift()?.close();
+      // あふれて捨てたフレームは表示されないため数える
+      playbackTimingRef.current.recordQueueDrop();
     }
     scheduleFrameDrain();
   };
@@ -774,6 +822,7 @@ export function useSubscriber(
     }
 
     ctx.drawImage(frame, 0, 0, width, height);
+    playbackTimingRef.current.recordDisplay(performance.now(), frame.timestamp);
     frame.close();
 
     instance.framesDecoded.value += 1;
@@ -801,6 +850,16 @@ export function useSubscriber(
         instance.objectsWithExtensions.value += 1;
       }
       const plan = buildVideoChunkPlan(obj);
+
+      // 到着を記録する。TIMESTAMP が壁時計のときは、送信から受信までの遅延も求める
+      if (plan.timestampKind !== "none") {
+        const nowMs = performance.now();
+        playbackTimingRef.current.recordArrival(
+          nowMs,
+          plan.timestamp,
+          plan.timestampKind === "wallClock" ? performance.timeOrigin + nowMs : null,
+        );
+      }
 
       // LOC spec 準拠: payload は WebCodecs の internal data をそのまま使用
       const chunk = new EncodedVideoChunk({
@@ -848,6 +907,7 @@ export function useSubscriber(
         instance.keyFramesDecoded.value += 1;
       }
 
+      playbackTimingRef.current.recordDecodeStart(performance.now(), plan.timestamp);
       decoderInstance.decode(chunk);
       instance.chunksDecoded.value += 1;
     } catch (error) {
@@ -1153,6 +1213,7 @@ export function useSubscriber(
 
       const decoderInstance = new DecoderWrapper(useWorker, {
         output: ({ frame }) => {
+          playbackTimingRef.current.recordDecodeOutput(performance.now(), frame.timestamp);
           presentFrame(frame);
         },
         error: (error) => {
@@ -1198,6 +1259,7 @@ export function useSubscriber(
       instance.status.value = "connected";
       instance.statusMessage.value = "購読中...";
       resetSubscriberStats(instance);
+      startPlaybackTiming();
 
       // Subscriber オプションを構築する
       const subscribeOptions: {
@@ -1352,6 +1414,8 @@ export function useSubscriber(
   const teardownSubscriber = (): void => {
     // 表示待ちのフレームを破棄する。teardown 後に古いフレームを描画しない
     clearPendingFrame();
+    // 受信から表示までの時間の統計の記録を止める
+    stopPlaybackTiming();
     // 再生の停止は instance の有無に関わらず行う。パネルの削除では Map から先に
     // 消えるため、この後の instance 取得が失敗しても AudioContext を残さない
     stopAudioPlayback();
