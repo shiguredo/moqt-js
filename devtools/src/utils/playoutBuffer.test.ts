@@ -6,6 +6,7 @@ import {
   PLAYOUT_DELAY_DECAY_MS_PER_SECOND,
   PLAYOUT_QUEUE_HEADROOM_FRAMES,
   PlayoutBuffer,
+  type PlayoutSelection,
 } from "./playoutBuffer";
 
 // 送信側の壁時計 (Unix epoch ミリ秒)。メディア時刻 0 のフレームの TIMESTAMP にする
@@ -40,6 +41,13 @@ function enqueueAt(
 // 表示時刻と選択
 // ============================================================================
 
+/**
+ * 選択の結果から、描くフレームと捨てるフレームだけを取り出す (表示時刻は別のテストで確かめる)
+ */
+function drawAndLate<T>(selection: PlayoutSelection<T>): { draw: T | null; late: T[] } {
+  return { draw: selection.draw, late: selection.late };
+}
+
 // 表示時刻 = TIMESTAMP + 基準の遅れ (揺らぎ無しで届いたフレームの遅れ) + 再生遅延。
 // 表示時刻より前には描かず、過ぎた後の最初の選択で描く
 test("select: 表示時刻より前は描かず、過ぎたら描く", () => {
@@ -58,9 +66,54 @@ test("select: 表示時刻より前は描かず、過ぎたら描く", () => {
     presentationMs,
     TOLERANCE_MS,
   );
-  assert.deepEqual(buffer.select(presentationMs - 0.1), { draw: null, late: [] });
-  assert.deepEqual(buffer.select(presentationMs + TOLERANCE_MS), { draw: 3, late: [] });
+  assert.deepEqual(drawAndLate(buffer.select(presentationMs - 0.1)), { draw: null, late: [] });
+  assert.deepEqual(drawAndLate(buffer.select(presentationMs + TOLERANCE_MS)), {
+    draw: 3,
+    late: [],
+  });
   assert.equal(buffer.size, 0);
+});
+
+// 描くフレームの表示時刻を返す。止まりの原因を決めるとき、フレームが表示時刻に間に合ったか
+// (受け取り、復号) と、表示時刻そのものが遅れたか (再生遅延の増加) を見るために使う
+test("select: 描くフレームの表示時刻を返す", () => {
+  const buffer = new PlayoutBuffer<number>(JITTER_BUFFER_MAX_QUEUED_FRAMES);
+  enqueueAt(buffer, 0, 0);
+  enqueueAt(buffer, 1, 40);
+  const presentationMs = buffer.presentationTimeMs(timestampOf(FRAME_MS)) ?? 0;
+
+  // 表示時刻の前は描かず、表示時刻も返さない
+  assert.deepEqual(buffer.select(LOCAL_ORIGIN_MS), {
+    draw: null,
+    late: [],
+    drawPresentationMs: null,
+  });
+  // フレーム 0 の表示時刻に、フレーム 0 とその表示時刻を返す
+  const first = buffer.select(presentationMs - FRAME_MS + TOLERANCE_MS);
+  assert.equal(first.draw, 0, "フレーム 0 を描くこと");
+  assert.closeTo(
+    first.drawPresentationMs ?? 0,
+    presentationMs - FRAME_MS,
+    TOLERANCE_MS,
+    "フレーム 0 の表示時刻を返すこと",
+  );
+  // フレーム 1 の表示時刻に、フレーム 1 とその表示時刻を返す
+  const second = buffer.select(presentationMs + TOLERANCE_MS);
+  assert.equal(second.draw, 1, "フレーム 1 を描くこと");
+  assert.closeTo(
+    second.drawPresentationMs ?? 0,
+    presentationMs,
+    TOLERANCE_MS,
+    "フレーム 1 の表示時刻を返すこと",
+  );
+});
+
+// 壁時計の TIMESTAMP を持たないフレームは表示時刻を決めずに届いた順に描くため、表示時刻は無い
+test("select: TIMESTAMP の無いフレームの表示時刻は null にする", () => {
+  const buffer = new PlayoutBuffer<string>(JITTER_BUFFER_MAX_QUEUED_FRAMES);
+  buffer.enqueue("a", 0, null);
+
+  assert.deepEqual(buffer.select(0), { draw: "a", late: [], drawPresentationMs: null });
 });
 
 // 表示時刻を過ぎたフレームが複数あるときは、表示時刻からの遅れが MAX_PRESENTATION_LAG_MS
@@ -80,10 +133,10 @@ test("select: 表示時刻からの遅れが上限以内のフレームは古い
   const nowMs = LOCAL_ORIGIN_MS + 4 * frameMs + 1;
   assert.isAbove(nowMs - (LOCAL_ORIGIN_MS + frameMs), MAX_PRESENTATION_LAG_MS);
   assert.isBelow(nowMs - (LOCAL_ORIGIN_MS + 2 * frameMs), MAX_PRESENTATION_LAG_MS);
-  assert.deepEqual(buffer.select(nowMs), { draw: 2, late: [0, 1] });
+  assert.deepEqual(drawAndLate(buffer.select(nowMs)), { draw: 2, late: [0, 1] });
   // 残したフレームは次の選択から古い順に描く
-  assert.deepEqual(buffer.select(nowMs), { draw: 3, late: [] });
-  assert.deepEqual(buffer.select(nowMs), { draw: 4, late: [] });
+  assert.deepEqual(drawAndLate(buffer.select(nowMs)), { draw: 3, late: [] });
+  assert.deepEqual(drawAndLate(buffer.select(nowMs)), { draw: 4, late: [] });
   assert.equal(buffer.size, 1);
 });
 
@@ -95,7 +148,7 @@ test("select: 上限を超えて遅れたフレームを捨てて最新を描く
     enqueueAt(buffer, index, 0);
   }
   const nowMs = LOCAL_ORIGIN_MS + 2 * FRAME_MS + 1;
-  assert.deepEqual(buffer.select(nowMs), { draw: 2, late: [0, 1] });
+  assert.deepEqual(drawAndLate(buffer.select(nowMs)), { draw: 2, late: [0, 1] });
   assert.equal(buffer.size, 1);
 });
 
@@ -142,10 +195,10 @@ test("select: TIMESTAMP の無いフレームは届いた順に 1 枚ずつ描�
   buffer.enqueue("a", 0, null);
   buffer.enqueue("b", 0, null);
   buffer.enqueue("c", 0, null);
-  assert.deepEqual(buffer.select(0), { draw: "a", late: [] });
-  assert.deepEqual(buffer.select(0), { draw: "b", late: [] });
-  assert.deepEqual(buffer.select(0), { draw: "c", late: [] });
-  assert.deepEqual(buffer.select(0), { draw: null, late: [] });
+  assert.deepEqual(drawAndLate(buffer.select(0)), { draw: "a", late: [] });
+  assert.deepEqual(drawAndLate(buffer.select(0)), { draw: "b", late: [] });
+  assert.deepEqual(drawAndLate(buffer.select(0)), { draw: "c", late: [] });
+  assert.deepEqual(drawAndLate(buffer.select(0)), { draw: null, late: [] });
   assert.isNull(buffer.playoutDelayMs());
 });
 
@@ -294,9 +347,9 @@ test("enqueue: TIMESTAMP が大きく戻ったら基準を取り直す", () => {
   buffer.enqueue(2, nowMs, timestampOf(2 * FRAME_MS - 3_600_000));
   assert.closeTo(buffer.playoutDelayMs() ?? -1, 0, TOLERANCE_MS);
   // 積んでいたフレームは届いた順に 1 枚ずつ、新しいフレームは届いた時刻に描く
-  assert.deepEqual(buffer.select(nowMs), { draw: 0, late: [] });
-  assert.deepEqual(buffer.select(nowMs), { draw: 1, late: [] });
-  assert.deepEqual(buffer.select(nowMs + TOLERANCE_MS), { draw: 2, late: [] });
+  assert.deepEqual(drawAndLate(buffer.select(nowMs)), { draw: 0, late: [] });
+  assert.deepEqual(drawAndLate(buffer.select(nowMs)), { draw: 1, late: [] });
+  assert.deepEqual(drawAndLate(buffer.select(nowMs + TOLERANCE_MS)), { draw: 2, late: [] });
 });
 
 // TIMESTAMP が大きく進むと、フレームが先の時刻で待ち続ける。基準を取り直す
@@ -305,8 +358,8 @@ test("enqueue: TIMESTAMP が大きく進んだら基準を取り直す", () => {
   enqueueAt(buffer, 0, 0);
   const nowMs = LOCAL_ORIGIN_MS + FRAME_MS;
   buffer.enqueue(1, nowMs, timestampOf(FRAME_MS + 3_600_000));
-  assert.deepEqual(buffer.select(nowMs), { draw: 0, late: [] });
-  assert.deepEqual(buffer.select(nowMs + TOLERANCE_MS), { draw: 1, late: [] });
+  assert.deepEqual(drawAndLate(buffer.select(nowMs)), { draw: 0, late: [] });
+  assert.deepEqual(drawAndLate(buffer.select(nowMs + TOLERANCE_MS)), { draw: 1, late: [] });
 });
 
 // ============================================================================

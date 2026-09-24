@@ -2,7 +2,12 @@ import { useMemo, useRef, useEffect } from "preact/hooks";
 import { useSubscriber } from "../hooks/useSubscriber";
 import { AudioMeter } from "./AudioMeter";
 import { formatBitrate, formatBytes } from "../utils/logFormatters";
-import { formatTimingSummary } from "../utils/playbackTimingStats";
+import {
+  formatStallCauseTotal,
+  formatStallEvent,
+  formatTimingSummary,
+} from "../utils/playbackTimingStats";
+import { STALL_CAUSES } from "../utils/stallAnalysis";
 import * as sub from "../signals/subscriber";
 
 function formatCatalogValue(key: string, value: unknown): string {
@@ -462,6 +467,72 @@ export function SubscriberPanel({
                 {instance.playbackTiming.value.lateFramesDropped}
               </div>
             </div>
+          </div>
+
+          <h3 class="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">
+            Stall Causes
+          </h3>
+          <p class="text-xs text-slate-500 mb-3">
+            止まりごとに原因を 1 つ決めた回数 / 時間 (購読開始からの累積)。source: publisher の
+            TIMESTAMP の飛び、loss: Object が届いていない、discarded: 復号せずに破棄、arrival:
+            到着の遅れ、groupSwitchHold: Group の切り替えの保留、decode: 復号の遅れ、playout: jitter
+            buffer の再生遅延の増加、render: 描画の遅れ
+          </p>
+          <div class="grid grid-cols-4 gap-3 mb-3" data-testid="subscriber-stall-causes">
+            {STALL_CAUSES.map((cause) => (
+              <div key={cause} class="bg-white rounded-lg p-3 border border-slate-200">
+                <div class="text-xs text-slate-500">{cause}</div>
+                <div class="text-sm font-bold text-yellow-600">
+                  {formatStallCauseTotal(instance.playbackTiming.value.stallCauses[cause])}
+                </div>
+              </div>
+            ))}
+          </div>
+          <div class="grid grid-cols-4 gap-3 mb-3">
+            <div class="bg-white rounded-lg p-3 border border-slate-200">
+              <div class="text-xs text-slate-500">missingObjects</div>
+              <div class="text-xl font-bold text-red-600" data-testid="subscriber-missing-objects">
+                {instance.playbackTiming.value.missingObjects}
+              </div>
+            </div>
+            <div class="bg-white rounded-lg p-3 border border-slate-200">
+              <div class="text-xs text-slate-500">missingGroups</div>
+              <div class="text-xl font-bold text-red-600" data-testid="subscriber-missing-groups">
+                {instance.playbackTiming.value.missingGroups}
+              </div>
+            </div>
+            <div class="bg-white rounded-lg p-3 border border-slate-200">
+              <div class="text-xs text-slate-500">subgroupStreamResets</div>
+              <div
+                class="text-xl font-bold text-red-600"
+                data-testid="subscriber-subgroup-stream-resets"
+              >
+                {instance.playbackTiming.value.subgroupStreamResets}
+              </div>
+            </div>
+            <div class="bg-white rounded-lg p-3 border border-slate-200">
+              <div class="text-xs text-slate-500">groupSwitchHoldExpirations</div>
+              <div
+                class="text-xl font-bold text-yellow-600"
+                data-testid="subscriber-group-switch-hold-expirations"
+              >
+                {instance.playbackTiming.value.groupSwitchHoldExpirations}
+              </div>
+            </div>
+          </div>
+          <div class="bg-white rounded-lg p-3 border border-slate-200 mb-4">
+            <div class="text-xs text-slate-500 mb-1">recentStalls (UTC, 新しい順)</div>
+            <pre
+              class="text-xs font-mono text-slate-700 whitespace-pre-wrap break-all max-h-48 overflow-y-auto"
+              data-testid="subscriber-recent-stalls"
+            >
+              {instance.playbackTiming.value.recentStalls.length === 0
+                ? "-"
+                : [...instance.playbackTiming.value.recentStalls]
+                    .reverse()
+                    .map((stall) => formatStallEvent(stall))
+                    .join("\n")}
+            </pre>
           </div>
 
           <h3 class="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">

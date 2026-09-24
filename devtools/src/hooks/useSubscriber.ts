@@ -34,7 +34,11 @@ import {
   waveformSampleCount,
 } from "../utils/audioLevel";
 import { base64ToArrayBuffer } from "../utils/base64";
-import { EMPTY_PLAYBACK_TIMING, PlaybackTimingStats } from "../utils/playbackTimingStats";
+import {
+  EMPTY_PLAYBACK_TIMING,
+  PLAYBACK_TIMING_WINDOW_MS,
+  PlaybackTimingStats,
+} from "../utils/playbackTimingStats";
 import { JITTER_BUFFER_MAX_QUEUED_FRAMES, PlayoutBuffer } from "../utils/playoutBuffer";
 import { GroupSwitchGate } from "../../../src/groupSwitchGate.ts";
 import * as settings from "../signals/connectionSettings";
@@ -233,27 +237,48 @@ export interface ReceivedVideoObject {
 }
 
 /**
- * 映像 Object の到着を統計に記録する
+ * 受け取った映像 Object を統計に記録する (object コールバックで、保留に渡す前に呼ぶ)
  *
  * 到着時刻は object コールバックで受け取った時刻であり、Group の切り替えで保留した
  * 時間を含めない。保留は受信側の処理であり、経路 (relay と回線) の到着の遅れではない。
- * TIMESTAMP が無ければ記録しない。TIMESTAMP が壁時計のときは送信から受信までの遅延も
- * 求める
+ *
+ * - 位置 (Group ID / Object ID / Prior Object ID Gap) と Subgroup ID を、止まりの原因と
+ *   受信の欠けのために記録する
+ * - TIMESTAMP があれば、到着の揺らぎのために記録する。壁時計のときは送信から受信までの
+ *   遅延も求める
+ *
+ * LOC の Properties を読めない Object は、位置だけを記録する (復号の失敗は handleObject が
+ * 数える)。
  *
  * @param timeOriginMs - `performance.timeOrigin`。受け取った時刻を壁時計に換算する
  */
-export function recordVideoArrival(
+export function recordVideoReceived(
   stats: PlaybackTimingStats,
   received: ReceivedVideoObject,
-  plan: { timestamp: number; timestampKind: "none" | "wallClock" | "mediaTime" },
   timeOriginMs: number,
 ): void {
-  if (plan.timestampKind === "none") {
+  const obj = received.object;
+  let plan: ReturnType<typeof buildVideoChunkPlan> | null = null;
+  let priorObjectIdGap = 0n;
+  try {
+    plan = buildVideoChunkPlan(obj);
+    priorObjectIdGap = priorObjectIdGapOf(obj.properties);
+  } catch {
+    // 位置だけを記録する
+  }
+  const timestampMicros = plan === null || plan.timestampKind === "none" ? null : plan.timestamp;
+  stats.recordObjectReceived(
+    { groupId: obj.groupId, objectId: obj.objectId, priorObjectIdGap },
+    obj.subgroupId,
+    timestampMicros,
+    received.receivedAtMs,
+  );
+  if (plan === null || timestampMicros === null) {
     return;
   }
   stats.recordArrival(
     received.receivedAtMs,
-    plan.timestamp,
+    timestampMicros,
     plan.timestampKind === "wallClock" ? timeOriginMs + received.receivedAtMs : null,
   );
 }
@@ -430,7 +455,9 @@ export function useSubscriber(
   const videoDecodeOrderRef = useRef(new VideoDecodeOrder());
   // 受信から表示までの時間の統計 (到着・復号・表示で記録する)。購読を始めるたびに
   // 初期化し、PLAYBACK_TIMING_PUBLISH_INTERVAL_MS ごとに signal へ反映する
-  const playbackTimingRef = useRef(new PlaybackTimingStats());
+  const playbackTimingRef = useRef(
+    new PlaybackTimingStats(PLAYBACK_TIMING_WINDOW_MS, performance.timeOrigin),
+  );
   const playbackTimingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   // 前の Group の Subgroup の stream が開いている間、次の Group の映像 Object を保留する
   // (src/groupSwitchGate.ts)。Object は Group ごとに別の stream で届き、前の Group の末尾が
@@ -458,7 +485,12 @@ export function useSubscriber(
     videoGroupGateTimerRef.current = setTimeout(
       () => {
         videoGroupGateTimerRef.current = null;
-        enqueueVideoObjects(videoGroupGateRef.current.expire(performance.now()));
+        const expired = videoGroupGateRef.current.expire(performance.now());
+        if (expired.length > 0) {
+          // 前の Group の stream の終わりを待たずに保留を解いた
+          playbackTimingRef.current.recordGroupSwitchHoldExpired();
+        }
+        enqueueVideoObjects(expired);
       },
       Math.max(0, deadlineMs - performance.now()),
     );
@@ -874,9 +906,9 @@ export function useSubscriber(
       jitterBufferEnabledRef.current && kind === "wallClock" ? frame.timestamp : null;
     const overflow = playoutBufferRef.current.enqueue(frame, performance.now(), wallClockTimestamp);
     for (const dropped of overflow) {
+      // あふれて捨てたフレームは表示されないため数える (timestamp は close の前に読む)
+      playbackTimingRef.current.recordQueueDrop(dropped.timestamp);
       dropped.close();
-      // あふれて捨てたフレームは表示されないため数える
-      playbackTimingRef.current.recordQueueDrop();
     }
     scheduleFrameDrain();
   };
@@ -895,13 +927,20 @@ export function useSubscriber(
     }
     frameAnimationRef.current = requestAnimationFrame(() => {
       frameAnimationRef.current = null;
-      const selection = playoutBufferRef.current.select(performance.now());
+      const nowMs = performance.now();
+      const selection = playoutBufferRef.current.select(nowMs);
       for (const late of selection.late) {
+        // 捨てたフレームの表示時刻は、止まりの原因 (間に合わなかった段) を決めるのに使う。
+        // 間に合わずに捨てるのは表示時刻を持つフレームだけであり、表示時刻は選択と同じ
+        // 基準で求まる
+        playbackTimingRef.current.recordLateDrop(
+          late.timestamp,
+          playoutBufferRef.current.presentationTimeMs(late.timestamp) ?? nowMs,
+        );
         late.close();
-        playbackTimingRef.current.recordLateDrop();
       }
       if (selection.draw !== null) {
-        drawFrame(selection.draw);
+        drawFrame(selection.draw, selection.drawPresentationMs);
       }
       if (playoutBufferRef.current.size > 0) {
         scheduleFrameDrain();
@@ -921,7 +960,12 @@ export function useSubscriber(
     videoTimestampKindsRef.current.clear();
   };
 
-  const drawFrame = (frame: VideoFrame): void => {
+  /**
+   * フレームを canvas に描く
+   *
+   * @param presentationMs - jitter buffer の表示時刻。表示時刻を決めずに描くときは null
+   */
+  const drawFrame = (frame: VideoFrame, presentationMs: number | null): void => {
     const instance = sub.getSubscriber(subscriberId);
     if (!instance) {
       frame.close();
@@ -952,8 +996,22 @@ export function useSubscriber(
     }
 
     ctx.drawImage(frame, 0, 0, width, height);
-    playbackTimingRef.current.recordDisplay(performance.now(), frame.timestamp);
+    const stall = playbackTimingRef.current.recordDisplay(
+      performance.now(),
+      frame.timestamp,
+      presentationMs,
+    );
     frame.close();
+    if (stall !== null) {
+      // 止まりを原因と一緒にログへ残す (ログの時刻で relay のログと突き合わせる)
+      addLog("warn", `[${subscriberId}] display stall`, {
+        cause: stall.cause,
+        durationMs: Math.round(stall.durationMs),
+        groupId: stall.groupId,
+        objectId: stall.objectId,
+        mediaStepMs: Math.round(stall.mediaStepMs),
+      });
+    }
 
     instance.framesDecoded.value += 1;
   };
@@ -975,6 +1033,15 @@ export function useSubscriber(
     instance.currentSubGroup.value = Number(obj.subgroupId ?? 0n);
     instance.decoderState.value = decoderInstance.state;
 
+    // 止まりの原因のために記録するフレームの TIMESTAMP (TIMESTAMP が無い Object では null)
+    let timelineTimestamp: number | null = null;
+    // 復号せずに捨てたことを記録する
+    const recordDiscarded = (): void => {
+      if (timelineTimestamp !== null) {
+        playbackTimingRef.current.recordDiscarded(timelineTimestamp);
+      }
+    };
+
     try {
       // LOC Properties からメタデータを取得
       if (obj.properties && obj.properties.length > 0) {
@@ -982,9 +1049,11 @@ export function useSubscriber(
       }
       const plan = buildVideoChunkPlan(obj);
 
-      // 到着を object コールバックで受け取った時刻で記録する (Group の切り替えの保留を
-      // 含めない)。TIMESTAMP が壁時計のときは、送信から受信までの遅延も求める
-      recordVideoArrival(playbackTimingRef.current, received, plan, performance.timeOrigin);
+      // 保留から出た時刻を記録する (到着は object コールバックで記録済み)
+      if (plan.timestampKind !== "none") {
+        timelineTimestamp = plan.timestamp;
+        playbackTimingRef.current.recordObjectReleased(plan.timestamp, performance.now());
+      }
 
       // LOC spec 準拠: payload は WebCodecs の internal data をそのまま使用
       const chunk = new EncodedVideoChunk({
@@ -997,6 +1066,7 @@ export function useSubscriber(
 
       if (!instance.decoderConfigured.value) {
         instance.chunksSkipped.value += 1;
+        recordDiscarded();
         return;
       }
 
@@ -1007,6 +1077,7 @@ export function useSubscriber(
         );
         instance.decoderState.value = decoderInstance.state;
         instance.chunksSkipped.value += 1;
+        recordDiscarded();
         return;
       }
 
@@ -1025,6 +1096,7 @@ export function useSubscriber(
         } else {
           instance.missingReferenceFramesDropped.value += 1;
         }
+        recordDiscarded();
         return;
       }
 
@@ -1048,6 +1120,7 @@ export function useSubscriber(
     } catch (error) {
       console.error(`[${subscriberId}] handleObject: failed to decode object:`, error);
       instance.decodeErrors.value += 1;
+      recordDiscarded();
     }
   };
 
@@ -1428,19 +1501,29 @@ export function useSubscriber(
             // 渡す (VideoDecodeOrder)。保留の上限を過ぎてから届いた前の Group の Object は
             // 捨てる。1 Group を複数の Subgroup に分ける publisher の Object ID の飛びも
             // 欠落として扱い、次のキーフレームまで待つ
-            // 受け取った時刻を Object と一緒に保留へ渡し、到着の統計に使う
-            const receivedAtMs = performance.now();
+            // 受け取った時刻で到着を記録し、時刻を Object と一緒に保留へ渡す
+            const received: ReceivedVideoObject = { object: obj, receivedAtMs: performance.now() };
+            recordVideoReceived(playbackTimingRef.current, received, performance.timeOrigin);
             enqueueVideoObjects(
               videoGroupGateRef.current.push(
-                { object: obj, receivedAtMs },
+                received,
                 obj.groupId,
                 obj.subgroupId,
-                receivedAtMs,
+                received.receivedAtMs,
               ),
             );
           },
           // Subgroup の stream の終わりで、保留していた次の Group の Object を渡す
           subgroupEnd: (end) => {
+            // stream の終わり方を記録する。RESET_STREAM は relay が Group の途中で配信を
+            // やめたことを示すため、ログにも残す (ログの時刻で relay のログと突き合わせる)
+            playbackTimingRef.current.recordSubgroupEnd(end.groupId, end.subgroupId, end.reason);
+            if (end.reason === "reset") {
+              addLog("warn", `[${subscriberId}] subgroup stream reset`, {
+                groupId: end.groupId.toString(),
+                subgroupId: end.subgroupId?.toString() ?? null,
+              });
+            }
             enqueueVideoObjects(
               videoGroupGateRef.current.endSubgroup(end.groupId, end.subgroupId, performance.now()),
             );

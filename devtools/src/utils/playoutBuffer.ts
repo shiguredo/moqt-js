@@ -141,6 +141,11 @@ export interface PlayoutSelection<T> {
   readonly draw: T | null;
   /** 表示時刻を過ぎたが、より新しいフレームが 2 枚以上表示時刻を過ぎていたため捨てるフレーム */
   readonly late: T[];
+  /**
+   * 描くフレームの表示時刻 (`performance.now()` の時間軸、ミリ秒)。表示時刻を決めずに
+   * 届いた順に描く (壁時計の TIMESTAMP を持たない) フレームと、描くフレームが無いときは null
+   */
+  readonly drawPresentationMs: number | null;
 }
 
 /** 昇順に並べた値の nearest-rank 法の百分位 */
@@ -224,13 +229,13 @@ export class PlayoutBuffer<T> {
   select(nowMs: number): PlayoutSelection<T> {
     const head = this.queue[0];
     if (head === undefined) {
-      return { draw: null, late: [] };
+      return { draw: null, late: [], drawPresentationMs: null };
     }
     const baseMs = this.baseMs;
     const delayMs = this.delayMs;
     if (head.timestampMs === null || baseMs === null || delayMs === null) {
       this.queue.shift();
-      return { draw: head.item, late: [] };
+      return { draw: head.item, late: [], drawPresentationMs: null };
     }
     let lastDue = -1;
     for (const [index, frame] of this.queue.entries()) {
@@ -240,7 +245,7 @@ export class PlayoutBuffer<T> {
       lastDue = index;
     }
     if (lastDue < 0) {
-      return { draw: null, late: [] };
+      return { draw: null, late: [], drawPresentationMs: null };
     }
     // 表示時刻から上限を超えて遅れたフレームを捨てる (最新の lastDue は残す)
     let drawIndex = 0;
@@ -257,7 +262,15 @@ export class PlayoutBuffer<T> {
     }
     const late = this.queue.splice(0, drawIndex).map((frame) => frame.item);
     const drawn = this.queue.shift();
-    return { draw: drawn?.item ?? null, late };
+    if (drawn === undefined) {
+      return { draw: null, late, drawPresentationMs: null };
+    }
+    // lastDue までのフレームは壁時計の TIMESTAMP を持つ (null のフレームで走査を止めている)
+    return {
+      draw: drawn.item,
+      late,
+      drawPresentationMs: drawn.timestampMs === null ? null : drawn.timestampMs + baseMs + delayMs,
+    };
   }
 
   /**

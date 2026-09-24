@@ -14,7 +14,12 @@ import * as settings from "../signals/connectionSettings";
 import * as pub from "../signals/publisher";
 import * as sub from "../signals/subscriber";
 import { subscriberIds } from "../signals/subscriber";
-import { formatTimingSummary } from "../utils/playbackTimingStats";
+import {
+  formatStallCauseTotal,
+  formatStallEvent,
+  formatTimingSummary,
+} from "../utils/playbackTimingStats";
+import { STALL_CAUSES } from "../utils/stallAnalysis";
 
 interface LogEntry {
   timestamp: number;
@@ -191,6 +196,19 @@ function generateSubscriberStatsText(subscriberId: string): string {
     `Playout Delay: ${timing.playoutDelayMs === null ? "-" : `${timing.playoutDelayMs.toFixed(1)} ms`}`,
   );
   lines.push(`Late Frames Dropped: ${timing.lateFramesDropped}`);
+  // 止まりの原因ごとの回数 / 時間と受信の欠け (購読開始からの累積)、直近の止まり
+  lines.push(`--- Stall Causes (count / ms) ---`);
+  for (const cause of STALL_CAUSES) {
+    lines.push(`${cause}: ${formatStallCauseTotal(timing.stallCauses[cause])}`);
+  }
+  lines.push(`Missing Objects: ${timing.missingObjects}`);
+  lines.push(`Missing Groups: ${timing.missingGroups}`);
+  lines.push(`Subgroup Stream Resets: ${timing.subgroupStreamResets}`);
+  lines.push(`Group Switch Hold Expirations: ${timing.groupSwitchHoldExpirations}`);
+  lines.push(`--- Recent Stalls (UTC, oldest first) ---`);
+  for (const stall of timing.recentStalls) {
+    lines.push(formatStallEvent(stall));
+  }
   // Largest Location 情報
   const largestLocation = instance.largestLocation.value;
   if (largestLocation) {

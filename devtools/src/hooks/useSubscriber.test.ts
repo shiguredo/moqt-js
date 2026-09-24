@@ -5,7 +5,7 @@ import {
   buildVideoDecoderConfig,
   checkAborted,
   closeSubscriberResources,
-  recordVideoArrival,
+  recordVideoReceived,
   resetSubscriberState,
   resetSubscriberStats,
   resolveAudioTrack,
@@ -300,37 +300,33 @@ function makeTimedVideoObject(
 
 // 前の Group の stream が開いている間に届いた次の Group の Object は保留され
 // (GroupSwitchGate)、前の Group の stream の終わりで処理へ渡る。保留は受信側の処理で
-// あり、経路の到着の遅れではないため、到着はコールバックで受け取った時刻で記録する。
-// 保留を解いた時刻で記録すると、保留した時間が到着の揺らぎと遅延に入る
-test("recordVideoArrival: Group の切り替えで保留した Object は受け取った時刻で到着を記録する", () => {
+// あり、経路の到着の遅れではないため、到着は保留に渡す前に、コールバックで受け取った
+// 時刻で記録する。保留を解いた時刻で記録すると、保留した時間が到着の揺らぎと遅延に入る
+test("recordVideoReceived: 保留に渡す前に、受け取った時刻で到着を記録する", () => {
   const gate = new GroupSwitchGate<ReceivedVideoObject>();
   const stats = new PlaybackTimingStats();
   // performance.timeOrigin に相当する壁時計 (ミリ秒)。送信側は 40 ms 前に撮っている
   const timeOriginMs = 1_790_263_445_000;
   const firstTimestampMicros = (timeOriginMs - 40) * 1_000;
 
-  // 受け取った Object を保留へ渡し、処理へ渡った Object の到着を記録する (useSubscriber の
-  // object コールバックと handleObject と同じ流れ)
-  const record = (released: ReceivedVideoObject[]): void => {
-    for (const received of released) {
-      recordVideoArrival(stats, received, buildVideoChunkPlan(received.object), timeOriginMs);
-    }
+  // useSubscriber の object コールバックと同じく、受け取った Object を記録してから保留へ渡す
+  const receive = (object: MoqtObject, receivedAtMs: number): ReceivedVideoObject[] => {
+    const received: ReceivedVideoObject = { object, receivedAtMs };
+    recordVideoReceived(stats, received, timeOriginMs);
+    return gate.push(received, object.groupId, object.subgroupId, receivedAtMs);
   };
 
   // Group 0 の先頭は 0 ms に受け取り、そのまま処理へ渡る
-  const first = makeTimedVideoObject(0n, 0n, firstTimestampMicros);
-  record(gate.push({ object: first, receivedAtMs: 0 }, 0n, 0n, 0));
+  receive(makeTimedVideoObject(0n, 0n, firstTimestampMicros), 0);
 
   // Group 1 の先頭は 1 フレーム (40 ms) 後に撮られ、40 ms に受け取る。Group 0 の stream が
   // 開いているため保留され、まだ処理へ渡らない
-  const next = makeTimedVideoObject(1n, 0n, firstTimestampMicros + 40_000);
-  const held = gate.push({ object: next, receivedAtMs: 40 }, 1n, 0n, 40);
+  const held = receive(makeTimedVideoObject(1n, 0n, firstTimestampMicros + 40_000), 40);
   assert.deepEqual(held, [], "Group 0 の stream が開いている間は保留すること");
 
   // 90 ms に Group 0 の stream が終わり、保留していた Group 1 の先頭が処理へ渡る
   const released = gate.endSubgroup(0n, 0n, 90);
   assert.equal(released.length, 1, "Group 0 の stream の終わりで保留を解くこと");
-  record(released);
 
   // 2 つの Object はどちらも撮ってから 40 ms 後に受け取っており、到着の揺らぎは無い。
   // 保留を解いた 90 ms で記録すると、遅延の最大は 90 ms、揺らぎの最大は 50 ms になる
@@ -347,14 +343,18 @@ test("recordVideoArrival: Group の切り替えで保留した Object は受け�
   );
 });
 
-// TIMESTAMP の無い Object はメディア時刻が分からないため、到着を記録しない
-test("recordVideoArrival: TIMESTAMP の無い Object は記録しない", () => {
+// TIMESTAMP の無い Object はメディア時刻が分からないため到着を記録しないが、位置は記録し、
+// 受信の欠け (届かなかった Object) を数える
+test("recordVideoReceived: TIMESTAMP の無い Object は到着を記録せず、位置だけを記録する", () => {
   const stats = new PlaybackTimingStats();
-  const object = makeVideoObject(0n);
 
-  recordVideoArrival(stats, { object, receivedAtMs: 10 }, buildVideoChunkPlan(object), 0);
+  // 同じ Group の Object 0 と Object 2 を受け取る (Object 1 が届いていない)
+  recordVideoReceived(stats, { object: makeVideoObject(0n), receivedAtMs: 0 }, 0);
+  recordVideoReceived(stats, { object: makeVideoObject(2n), receivedAtMs: 10 }, 0);
 
-  assert.equal(stats.snapshot(10).arrivalJitterMs, null, "到着を記録しないこと");
+  const snapshot = stats.snapshot(10);
+  assert.isNull(snapshot.arrivalJitterMs, "到着を記録しないこと");
+  assert.equal(snapshot.missingObjects, 1, "Object ID の飛びを届かなかった Object に数えること");
 });
 
 // ============================================================================
