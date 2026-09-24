@@ -284,8 +284,11 @@ export function decodeTimescale(data: Uint8Array): bigint {
  *
  * draft-ietf-moq-loc-04 §2.3.1.1: TIMESCALE 不在の TIMESTAMP は
  * Unix epoch からのマイクロ秒 (壁時計) である。
- * WebCodecs の chunk.timestamp は timeOrigin 基準の単調時刻
- * (マイクロ秒) のため、壁時計基準に換算して送る。
+ * `performance.now()` と同じ基準 (timeOrigin からの経過) のマイクロ秒を、
+ * 壁時計基準に換算する。Chromium で MediaStreamTrackProcessor から読んだ
+ * AudioData の timestamp はこの基準である。VideoFrame の timestamp は取得元ごとに
+ * 基準が異なる (canvas の captureStream() は stream の開始、カメラは別の値) ため、
+ * この関数では換算できない (最初のフレームとの対応から換算する)。
  *
  * @param monotonicMicros - 単調時刻 (マイクロ秒、bigint)
  * @param timeOriginMs - 時刻原点の壁時計 (ミリ秒、number。呼び出し側が

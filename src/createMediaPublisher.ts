@@ -8,6 +8,7 @@ import { connectMediaSession } from "./createMedia/connect";
 import type { Session } from "./session";
 import type { Publisher } from "./publisher";
 import * as LOC from "./loc";
+import { createWallClockAnchor, toWallClockMicroseconds, type WallClockAnchor } from "./mediaClock";
 import {
   CATALOG_TRACK_NAME,
   createCatalog,
@@ -335,6 +336,10 @@ export class MediaPublisherImpl implements MediaPublisher {
   private videoFrameSource: VideoFrameSource | null = null;
   private audioFrameReader: ReadableStreamDefaultReader<AudioData> | null = null;
   private videoFrameReader: ReadableStreamDefaultReader<VideoFrame> | null = null;
+  // 最初に読んだ映像フレームの timestamp と、そのときの壁時計の対応。
+  // 映像の LOC TIMESTAMP を壁時計に換算するために使う (mediaClock.ts)。
+  // フレームの取得元を作るたびに作り直す
+  private videoClockAnchor: WallClockAnchor | null = null;
 
   // エンコーダー
   private audioEncoder: AudioEncoderWrapper | null = null;
@@ -790,6 +795,8 @@ export class MediaPublisherImpl implements MediaPublisher {
 
         this.videoFrameSource = createVideoFrameSource(videoTrack);
         this.videoFrameReader = this.videoFrameSource.readable.getReader();
+        // 対応は最初に読んだフレームでとる (processVideoFrames)
+        this.videoClockAnchor = null;
       }
     }
   }
@@ -853,6 +860,13 @@ export class MediaPublisherImpl implements MediaPublisher {
           frame.close();
           break;
         }
+
+        // 最初に読んだフレームの timestamp と壁時計の対応をとる。フレームは取得の
+        // 直後に読むため、この時点の壁時計を取得時刻とみなす
+        this.videoClockAnchor ??= createWallClockAnchor(
+          frame.timestamp,
+          performance.timeOrigin + performance.now(),
+        );
 
         // キーフレーム判定
         const isKeyFrame = shouldSendKeyFrame(this.videoFrameCount, this.keyframeInterval);
@@ -965,6 +979,8 @@ export class MediaPublisherImpl implements MediaPublisher {
     // LOC Properties をエンコード。
     // TIMESTAMP は Unix epoch マイクロ秒 (壁時計) で送る
     // (draft-ietf-moq-loc-04 §2.3.1.1。TIMESCALE は付けない)。
+    // VideoFrame の timestamp は取得元ごとに基準が異なるため、最初に読んだフレームとの
+    // 対応から換算する (mediaClock.ts)。
     // isDiscardable は WebCodecs が破棄可能性情報を提供しないため false 固定 (RFC 9626 §3.1 D の
     // 「the sender knows」を守るため)。isBaseLayerSync はソース上のキーフレーム意図マーカとして
     // 残すが、temporalLayerId=0 固定のためワイヤ上 B=0 に抑圧される (詳細は
@@ -983,8 +999,14 @@ export class MediaPublisherImpl implements MediaPublisher {
       this.lastSentVideoConfig = new Uint8Array(chunk.description);
     }
 
+    // フレームを読んだ時点で対応をとるため、ここで無いことは無い。念のため、無ければ
+    // この chunk を読んだ時点とみなして対応をとる
+    this.videoClockAnchor ??= createWallClockAnchor(
+      chunk.timestamp,
+      performance.timeOrigin + performance.now(),
+    );
     const properties = LOC.encodeVideoProperties({
-      timestamp: LOC.toUnixEpochMicroseconds(BigInt(chunk.timestamp), performance.timeOrigin),
+      timestamp: toWallClockMicroseconds(chunk.timestamp, this.videoClockAnchor),
       frameMarking: {
         isIndependent: chunk.type === "key",
         isDiscardable: false,

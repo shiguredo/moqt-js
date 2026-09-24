@@ -49,18 +49,22 @@ import { CATALOG_TRACK_NAME } from "./msf";
 import type { Publisher } from "./publisher";
 import type { PublishCallbacks, Session } from "./session";
 import * as LOC from "./loc";
+import { createWallClockAnchor, type WallClockAnchor } from "./mediaClock";
 
 /**
  * 破棄検出付きのテスト用フレーム
  */
 interface TestFrame {
   closed: boolean;
+  // VideoFrame / AudioData の timestamp (マイクロ秒)
+  timestamp: number;
   close(): void;
 }
 
-function createTestFrame(): TestFrame {
+function createTestFrame(timestamp = 0): TestFrame {
   const frame: TestFrame = {
     closed: false,
+    timestamp,
     close: () => {
       frame.closed = true;
     },
@@ -117,6 +121,8 @@ interface PublisherLoopControl {
   currentState: MediaPublisherState;
   processAudioFrames(): Promise<void>;
   processVideoFrames(): Promise<void>;
+  // 最初に読んだ映像フレームの timestamp と、そのときの壁時計の対応
+  videoClockAnchor: WallClockAnchor | null;
 }
 
 function createLoopTestContext(options?: { video?: NonNullable<MediaPublisherOptions["video"]> }): {
@@ -249,6 +255,37 @@ test("processAudioFrames: pause 後の旧ループは encode せず終了する"
   assert.equal(encoded.length, 0);
   assert.isTrue(frame.closed);
   assert.equal(errors.length, 0);
+});
+
+// draft-ietf-moq-loc-04 §2.3.1.1: Timescale を載せない TIMESTAMP は Unix epoch の壁時計である。
+// VideoFrame の timestamp は取得元ごとに基準が異なる (canvas の captureStream() は stream の
+// 開始、fake camera は別の大きな値) ため、最初に読んだフレームの timestamp とそのときの
+// 壁時計の対応をとり、以降の換算に使う
+test("processVideoFrames: 最初に読んだフレームで timestamp と壁時計の対応をとる", async () => {
+  const { control } = createLoopTestContext({ video: { codec: "vp8", bitrate: 1000 } });
+  const { controller } = injectVideoLoop(control);
+  // assert.isNull の型の絞り込みがループ後の読み出しに残らないよう、関数で読む
+  const readAnchor = (): WallClockAnchor | null => control.videoClockAnchor;
+  assert.isNull(readAnchor());
+
+  const before = performance.timeOrigin + performance.now();
+  const loop = control.processVideoFrames();
+  // fake camera 相当の大きな基準のフレーム
+  controller.enqueue(createTestFrame(289_052_241_600));
+  controller.enqueue(createTestFrame(289_052_274_933));
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+  controller.close();
+  await loop;
+  const after = performance.timeOrigin + performance.now();
+
+  // 対応は最初のフレームでとり、2 枚目では変えない
+  const anchor = readAnchor();
+  assert.isNotNull(anchor);
+  assert.equal(anchor?.mediaMicros, 289_052_241_600);
+  assert.isAtLeast(anchor?.wallClockMicros ?? 0, Math.floor(before * 1000));
+  assert.isAtMost(anchor?.wallClockMicros ?? 0, Math.ceil(after * 1000));
 });
 
 test("processVideoFrames: pause 後の旧ループは encode せず終了する", async () => {
@@ -900,6 +937,27 @@ function sendVideoChunk(control: PublisherLifecycleControl, description?: Uint8A
     description,
   });
 }
+
+// 映像の TIMESTAMP は、最初に読んだフレームの壁時計にフレームの timestamp の差を足した値に
+// する。timeOrigin に timestamp を足すと、canvas では stream の開始までの時間だけ古く、
+// fake camera では約 80 時間先の時刻になる
+test("handleVideoEncodedChunk: TIMESTAMP を最初のフレームとの対応から壁時計に換算する", () => {
+  const { control: loopControl } = createLoopTestContext();
+  const control = loopControl as unknown as PublisherLifecycleControl;
+  const { publisher: videoPublisher, sent } = createCapturingPublisher();
+  control.videoPublisher = videoPublisher;
+  // timestamp 0 のフレームを 2026-09-25 付近の壁時計に読んだ
+  control.videoClockAnchor = createWallClockAnchor(0, 1_790_263_445_102.099);
+
+  // sendVideoChunk は timestamp 1000 (マイクロ秒) の chunk を送る
+  sendVideoChunk(control);
+
+  assert.equal(sent.length, 1);
+  const decoded = LOC.decodeVideoProperties(sent[0].properties ?? new Uint8Array(0));
+  assert.equal(decoded.timestamp, 1_790_263_445_103_099n);
+  // 壁時計として送るため Timescale は載せない
+  assert.isUndefined(decoded.timescale);
+});
 
 test("handleVideoEncodedChunk: description が VIDEO_CONFIG として送られる", () => {
   const { control: loopControl } = createLoopTestContext();
