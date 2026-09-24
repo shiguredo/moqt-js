@@ -1,7 +1,7 @@
 # Subgroup データストリームのピア RESET_STREAM でセッションを閉じてしまう
 
 - Created: 2026-09-24
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-24
 - Branch: feature/fix-subgroup-reset-tolerance
 - Polished: {YYYY-MM-DD}
 
@@ -36,3 +36,19 @@ relay が Subgroup の続きを配らずに閉じるとき、受信側 (moqt-js)
 - `refs/moq/draft-ietf-moq-transport-21.txt` の Section 11.3.2
 - `src/session/dataStreamIncoming.ts` の `handleIncomingStream` / `dataStreamHandleSubgroupStream`
 - `src/session/errors.ts` の `isPeerStreamError`
+
+## 解決方法
+
+`src/session/dataStreamIncoming.ts` を次のように直した。
+
+- `dataStreamHandleSubgroupStream` の読み取りで、ピア起因のストリームエラー (`isPeerStreamError`) をこの stream の終端として扱い、配信済みの Object を保ったまま処理を終える。セッションは閉じない (`dataStreamHandleSubgroupReadError`)
+- pending mode の読み取りエラーでも同じくセッションを閉じず、pending entry を `end-of-stream` として abandon する (`dataStreamHandlePendingSubgroupReadError`)
+- ピア起因でないエラーは呼び出し元へ投げ直し、従来のセッション終了経路を変えない
+
+固定したテスト (`src/session.test.ts`):
+
+- 配信済み Object の後に reset: Object が保たれ、`session.state` が connected のまま
+- Object の途中で reset: 残りバイトを捨て、Object を配らずに connected のまま
+- pending mode の reset: entry が削除され、connected のまま
+
+`vp check` と全テスト (2611 tests) が通ることを確認した。
