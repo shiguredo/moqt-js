@@ -1,7 +1,7 @@
 # moqt-devtools の publisher が映像の LOC TIMESTAMP を VideoFrame の timestamp のまま送り、Unix epoch の壁時計として読めない
 
 - Created: 2026-09-25
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-25
 - Branch: feature/fix-devtools-video-timestamp-wall-clock
 - Polished: {YYYY-MM-DD}
 
@@ -34,3 +34,13 @@ VideoFrame の timestamp の基準は映像の取得元で異なる。Chromium �
 - 換算がフレームの間隔を保つことを PBT で固定する
 - 購読側が epoch マイクロ秒の TIMESTAMP を誤差なく timestamp にすることをテストで固定する
 - `vp check` と全テストが通る
+
+## 解決方法
+
+- `devtools/src/utils/wallClock.ts` を足した。`createWallClockAnchor(mediaMicros, wallClockMillis)` で最初に読んだフレームの timestamp とそのときの壁時計 (Unix epoch マイクロ秒に丸める) の対応を作り、`toWallClockMicroseconds(mediaMicros, anchor)` で対応の壁時計に timestamp の差を足して換算する。Unix epoch より前 (負) にはしない
+- `devtools/src/signals/publisher.ts` に対応 (`videoClockAnchor`) を持たせた。`usePublisher` の `processFrames` が最初に読んだフレームで `performance.timeOrigin + performance.now()` と対応をとり、配信の開始と `cleanupPublisher` で消す
+- `buildObjectSendPlan` は対応を引数で受け、TIMESTAMP を壁時計に換算して載せる
+- テスト: 基準が 0 (canvas) と大きな値 (fake camera) のフレームの換算、負にしないこと (`wallClock.test.ts`)、換算がフレームの間隔を保つことと安全整数に収まること (`wallClock.prop.ts`)、`buildObjectSendPlan` が壁時計の TIMESTAMP を載せること (`usePublisher.test.ts`)、購読側の `buildVideoChunkPlan` が epoch マイクロ秒を誤差なく timestamp にすること (`useSubscriber.test.ts`)
+- `vp check` と全テスト (127 ファイル / 2628 件) が通った
+
+ライブラリの `createMediaPublisher` にも同じ問題があり、別の issue で扱う。
