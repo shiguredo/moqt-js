@@ -19,6 +19,10 @@
   - エンコード能力を超えて破棄したフレーム数を統計で確認できるようにする
   - `VideoStats` は公開型のため、この型を自前で構築しているコードは `droppedFrames` の追加が必要になる (後方互換なし)
   - @voluntas
+- [FIX] moqt-devtools の subscriber が Timescale のある映像の TIMESTAMP をマイクロ秒に換算する
+  - draft-ietf-moq-loc-04 Section 2.3.1.2 の Timescale を見ずに TIMESTAMP をそのまま EncodedVideoChunk の timestamp (マイクロ秒) にしていたため、Timescale を載せる publisher の映像では単位が合わず、受信から表示までの時間の統計も誤っていた
+  - 音声とライブラリの `createMediaSubscriber` と同じく `LOC.toDecoderMicroseconds` で換算する
+  - @voluntas
 - [FIX] `createMediaPublisher` が映像の LOC TIMESTAMP を壁時計で送るようにする
   - draft-ietf-moq-loc-04 Section 2.3.1.1 は Timescale の無い TIMESTAMP を Unix epoch のマイクロ秒 (壁時計) と定める。映像の TIMESTAMP を `performance.timeOrigin` と VideoFrame の timestamp の和で求めていたが、VideoFrame の timestamp は `performance.now()` 基準ではなく、Chromium では canvas の captureStream() が stream の開始、fake camera は別の大きな値を基準にするため、壁時計にならなかった (fake camera では約 80 時間先の時刻になっていた)
   - 最初に読んだフレームの timestamp とそのときの壁時計の対応をとり、以降は timestamp の差を足して換算する

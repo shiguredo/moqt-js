@@ -264,6 +264,16 @@ test("buildVideoChunkPlan: Timescale がある TIMESTAMP はメディア時刻�
   assert.equal(buildVideoChunkPlan(makeVideoObject(0n, properties)).timestampKind, "mediaTime");
 });
 
+// draft-ietf-moq-loc-04 §2.3.1.2: Timescale は 1 秒あたりの TIMESTAMP の単位数である。
+// EncodedVideoChunk の timestamp はマイクロ秒のため、Timescale があれば換算する
+// (音声とライブラリの createMediaSubscriber と同じ LOC.toDecoderMicroseconds を使う)
+test("buildVideoChunkPlan: Timescale のある TIMESTAMP をマイクロ秒に換算する", () => {
+  // 90 kHz で 3003 (約 33.4 ms) は 33,366 マイクロ秒 (0 方向に丸める)
+  const properties = LOC.encodeVideoProperties({ timestamp: 3_003n, timescale: 90_000n });
+
+  assert.equal(buildVideoChunkPlan(makeVideoObject(1n, properties)).timestamp, 33_366);
+});
+
 // ============================================================================
 // REQUEST_UPDATE の NEW_GROUP_REQUEST の値
 // ============================================================================

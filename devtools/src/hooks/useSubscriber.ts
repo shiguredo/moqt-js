@@ -176,9 +176,12 @@ export function buildVideoChunkPlan(obj: MoqtObject): {
   if (obj.properties !== undefined && obj.properties.length > 0) {
     const locProperties = LOC.decodeVideoProperties(obj.properties);
 
-    // TIMESTAMP から timestamp を取得
+    // TIMESTAMP から timestamp を取得する。EncodedVideoChunk の timestamp はマイクロ秒の
+    // ため、Timescale があれば換算する (§2.3.1.2。音声と同じ換算)
     if (locProperties.timestamp !== undefined) {
-      timestamp = Number(locProperties.timestamp);
+      timestamp = Number(
+        LOC.toDecoderMicroseconds(locProperties.timestamp, locProperties.timescale),
+      );
       timestampKind = locProperties.timescale === undefined ? "wallClock" : "mediaTime";
     }
 
