@@ -75,7 +75,7 @@ const MAX_CANVAS_WIDTH = 1280;
  * 捨てる (配信 fps が表示 fps を超える場合と cache replay の追い上げ中は、常に
  * 最新側へ追いつく)。
  */
-const MAX_PENDING_FRAMES = 6;
+const MAX_PENDING_FRAMES = 12;
 
 /**
  * Catalog の `videoTrack` から `VideoDecoderConfig` を組み立てる。
@@ -269,7 +269,10 @@ export function closeSubscriberResources(
  */
 export function resetSubscriberState(
   instance: sub.SubscriberInstance,
-  chains: { video: { current: Promise<void> }; audio: { current: Promise<void> } },
+  chains: {
+    video: { current: Promise<void> };
+    audio: { current: Promise<void> };
+  },
   isOtherPublisherActive: () => boolean,
 ): void {
   instance.subscriber.value = null;
@@ -356,7 +359,10 @@ export function useSubscriber(
     let playback = audioPlaybackRef.current;
     if (playback === null) {
       const context = new AudioContext();
-      playback = { context, destination: context.createMediaStreamDestination() };
+      playback = {
+        context,
+        destination: context.createMediaStreamDestination(),
+      };
       audioPlaybackRef.current = playback;
     }
     if (playback.context.state === "suspended") {
@@ -652,7 +658,10 @@ export function useSubscriber(
       );
       for (let channel = 0; channel < numberOfChannels; channel++) {
         const channelData = new Float32Array(numberOfFrames);
-        audioData.copyTo(channelData, { planeIndex: channel, format: "f32-planar" });
+        audioData.copyTo(channelData, {
+          planeIndex: channel,
+          format: "f32-planar",
+        });
         audioBuffer.copyToChannel(channelData, channel);
       }
 
@@ -668,7 +677,7 @@ export function useSubscriber(
   }
 
   /**
-   * 復号済みフレームを小さなキューへ積み、次の描画周期で 1 枚ずつ表示する
+   * 復号済みフレームを小さなキューへ積み、表示周期ごとに 1 枚ずつ表示する
    *
    * 表示は requestAnimationFrame で 1 周期に 1 枚に絞る。これをしないと 2 つの
    * 問題が起きる。
@@ -677,11 +686,12 @@ export function useSubscriber(
    * - cache replay の追い上げ中は復号が表示より速いため、すべて描画すると早送りに
    *   見える
    *
-   * キューは `MAX_PENDING_FRAMES` 枚まで保持し、あふれた分は古い方から捨てる。到着が
-   * 少しゆらいでも (実回線では 20 ms に 2 から 3 Object がまとまって届くことがある)
-   * 表示周期ごとに 1 枚ずつ出せるため、フレームが落ちない。配信 fps が表示 fps を
-   * 超える場合と追い上げ中はキューがあふれ続け、常に古いフレームを捨てて最新側へ
-   * 追いつく。
+   * キューは `MAX_PENDING_FRAMES` 枚まで保持し、あふれた分は古い方から捨てる。実回線
+   * では受信チャンクに複数の Object が入り、復号もまとまって完了する (配備 relay の
+   * 実測で約 130 ms ごとに 8 枚) ため、数枚ではあふれてフレームが落ちる。表示周期の
+   * 方が配信周期より短ければキューは自然に減るため、通常の遅延は小さい。配信 fps が
+   * 表示 fps を超える場合と追い上げ中はキューがあふれ続け、常に古いフレームを捨てて
+   * 最新側へ追いつく。
    */
   const presentFrame = (frame: VideoFrame): void => {
     const pending = pendingFramesRef.current;
@@ -689,6 +699,17 @@ export function useSubscriber(
     while (pending.length > MAX_PENDING_FRAMES) {
       pending.shift()?.close();
     }
+    scheduleFrameDrain();
+  };
+
+  /**
+   * 表示待ちのフレームが残っている間、表示周期ごとに 1 枚ずつ出し続ける
+   *
+   * 予約を 1 回だけにすると、次のフレームが届くまでキューが減らない。到着が
+   * まとまっている場合 (実回線では受信チャンクに複数の Object が入る)、表示が
+   * 到着のまとまりの数だけしか進まない。キューが空になるまで毎周期予約する。
+   */
+  const scheduleFrameDrain = (): void => {
     if (frameAnimationRef.current !== null) {
       return;
     }
@@ -697,6 +718,9 @@ export function useSubscriber(
       const next = pendingFramesRef.current.shift();
       if (next) {
         drawFrame(next);
+      }
+      if (pendingFramesRef.current.length > 0) {
+        scheduleFrameDrain();
       }
     });
   };
@@ -1089,7 +1113,9 @@ export function useSubscriber(
         actualTrackName = videoTrackFromCatalog.name;
       } catch (error) {
         // 元のエラーを cause に保持し、スタックトレースを失わないようにする
-        throw new Error(`failed to get catalog: ${(error as Error).message}`, { cause: error });
+        throw new Error(`failed to get catalog: ${(error as Error).message}`, {
+          cause: error,
+        });
       }
 
       // Catalog 取得経路は finally で clearTimeout 済みのため追加 cleanup は不要。
