@@ -148,7 +148,8 @@ test("snapshot: 表示 fps は直近 1 秒に描いたフレーム数になる",
   assert.equal(stats.snapshot(89 * (1_000 / 30)).displayFps, 30);
 });
 
-// jitter buffer が表示時刻を過ぎたフレームのうち最新以外を捨てた数 (間に合わなかった数)
+// jitter buffer が表示時刻を過ぎたフレームのうち、最新とその 1 つ前より古いものを捨てた数
+// (間に合わなかった数)
 test("recordLateDrop: 間に合わずに捨てたフレームを数える", () => {
   const stats = new PlaybackTimingStats();
   stats.recordLateDrop();

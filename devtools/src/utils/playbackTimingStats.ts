@@ -61,7 +61,7 @@ export interface PlaybackTimingSnapshot {
   readonly playoutDelayMs: number | null;
   /**
    * jitter buffer が間に合わずに捨てたフレーム数 (累積)。表示時刻を過ぎたフレームが
-   * 複数あるとき、最新以外を捨てる
+   * 3 枚以上あるとき、最新とその 1 つ前より古いものを捨てる
    */
   readonly lateFramesDropped: number;
 }

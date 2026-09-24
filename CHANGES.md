@@ -37,7 +37,7 @@
 - [ADD] moqt-devtools の subscriber に jitter buffer を追加する
   - 復号したフレームを到着のタイミングのまま表示していたため、経路の到着の揺らぎがそのまま表示のかくつきになっていた。LOC TIMESTAMP (draft-ietf-moq-loc-04 Section 2.3.1.1 の壁時計) の間隔どおりの表示時刻 (TIMESTAMP + 直近 10 秒の遅れの最小値 + 再生遅延) に表示する
   - 再生遅延は揺らぎの p95 を目標にし、上がったら直ちに追従し、下がったら毎秒 20 ms でゆっくり戻す。上限は 500 ms と表示待ちのキューの上限 (24 枚) を超えない長さの小さい方。購読の開始にまとめて届く cache replay と上限を超える揺らぎは目標に使わない
-  - 表示時刻を過ぎたフレームが複数あれば最新を描き、古いものは間に合わなかったフレームとして捨てる。TIMESTAMP が 2 秒以上飛んだら基準を取り直す
+  - 表示時刻を過ぎたフレームが複数あれば最新の 1 枚を次の表示に残してその 1 つ前を描き、それより古いものは間に合わなかったフレームとして捨てる (配信 fps と表示周期が近いときに、位相の揺れで 2 枚が重なるたびに捨てて表示が飛ぶのを避ける)。TIMESTAMP が 2 秒以上飛んだら基準を取り直す
   - Timescale のある TIMESTAMP と TIMESTAMP の無い Object は従来どおり届いた順に表示する
   - 既定で有効にし、設定の Jitter Buffer と URL の `jitterBuffer=0` で無効にできる。現在の再生遅延 (`playoutDelayMs`) と間に合わずに捨てたフレーム数 (`lateFramesDropped`) を `playbackTiming` に出す
   - @voluntas

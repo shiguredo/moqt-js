@@ -96,7 +96,7 @@ interface QueuedFrame<T> {
 export interface PlayoutSelection<T> {
   /** 描くフレーム (無ければ null) */
   readonly draw: T | null;
-  /** 表示時刻を過ぎたが、より新しいフレームも表示時刻を過ぎていたため捨てるフレーム */
+  /** 表示時刻を過ぎたが、より新しいフレームが 2 枚以上表示時刻を過ぎていたため捨てるフレーム */
   readonly late: T[];
 }
 
@@ -167,8 +167,14 @@ export class PlayoutBuffer<T> {
    * 表示するフレームを選ぶ (requestAnimationFrame ごとに呼ぶ)
    *
    * 先頭が壁時計の TIMESTAMP を持たないフレームなら、それを描く (届いた順に 1 枚ずつ)。
-   * そうでなければ、先頭から表示時刻を過ぎたフレームのうち最新を描き、それより古いものを
-   * 捨てる。先頭が表示時刻前なら何も描かずに待つ。
+   * 先頭が表示時刻前なら何も描かずに待つ。
+   *
+   * 表示時刻を過ぎたフレームが 1 枚ならそれを描く。2 枚以上なら、最新の 1 枚を次の選択に
+   * 残してその 1 つ前を描き、それより古いものを捨てる。最新を描いて 1 つ前も捨てると、
+   * 配信 fps と表示周期が近いとき (120 fps を 120 Hz で表示するなど)、表示時刻と選択の
+   * 位相のわずかな揺れで 2 枚が重なった周期のたびに 1 枚を捨て、次の周期は何も描けずに
+   * 表示が飛ぶ。1 枚を残すことで表示は最大 1 フレーム遅れるが、両方の周期で 1 枚ずつ描ける。
+   * 遅れが 1 フレームを超えて溜まったとき (3 枚以上) は古いものを捨てて追いつく。
    *
    * @param nowMs - 現在の時刻 (`performance.now()`)
    */
@@ -190,9 +196,14 @@ export class PlayoutBuffer<T> {
       }
       lastDue = index;
     }
-    const due = this.queue.splice(0, lastDue + 1);
-    const drawn = due.pop();
-    return { draw: drawn?.item ?? null, late: due.map((frame) => frame.item) };
+    if (lastDue < 0) {
+      return { draw: null, late: [] };
+    }
+    // 表示時刻を過ぎたフレームが 2 枚以上なら、最新 (lastDue) を次の選択に残す
+    const drawIndex = Math.max(0, lastDue - 1);
+    const late = this.queue.splice(0, drawIndex).map((frame) => frame.item);
+    const drawn = this.queue.shift();
+    return { draw: drawn?.item ?? null, late };
   }
 
   /**

@@ -766,8 +766,8 @@ export function useSubscriber(
    *
    * jitter buffer が有効で、フレームの TIMESTAMP が壁時計 (Timescale 無し) のときは、
    * TIMESTAMP の間隔どおりの表示時刻に表示し、到着の揺らぎを吸収する
-   * (utils/playoutBuffer.ts)。表示時刻を過ぎたフレームが複数あれば最新を描き、古いものは
-   * 間に合わなかったフレームとして捨てて数える。
+   * (utils/playoutBuffer.ts)。表示時刻を過ぎたフレームが複数あれば最新の 1 枚を次の周期に
+   * 残してその 1 つ前を描き、それより古いものは間に合わなかったフレームとして捨てて数える。
    *
    * jitter buffer が無効のとき、または TIMESTAMP を壁時計として使えないフレームは、
    * 届いた順に 1 周期に 1 枚ずつ表示する。以下はその場合の説明である。

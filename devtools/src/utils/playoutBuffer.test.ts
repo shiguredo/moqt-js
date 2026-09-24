@@ -62,17 +62,57 @@ test("select: 表示時刻より前は描かず、過ぎたら描く", () => {
   assert.equal(buffer.size, 0);
 });
 
-// 表示時刻を過ぎたフレームが複数あるときは最新を描き、古いものは間に合わなかった
-// フレームとして返す (捨てる)。並べ替えはしない
-test("select: 表示時刻を過ぎたフレームのうち最新を描き、古いものを捨てる", () => {
+// 表示時刻を過ぎたフレームが複数あるときは、最新の 1 枚を次の選択に残してその 1 つ前を
+// 描き、それより古いものは間に合わなかったフレームとして返す (捨てる)。並べ替えはしない。
+// 最新を描いて 1 つ前も捨てると、配信 fps と表示周期が近いとき、位相の揺れで 2 枚が重なった
+// 周期のたびに 1 枚を捨て、次の周期は何も描けずに表示が飛ぶ
+test("select: 表示時刻を過ぎたフレームが複数あれば最新を残して 1 つ前を描き、古いものを捨てる", () => {
   const buffer = new PlayoutBuffer<number>(JITTER_BUFFER_MAX_QUEUED_FRAMES);
   for (let index = 0; index < 4; index++) {
     enqueueAt(buffer, index, 0);
   }
   // フレーム 0 から 2 は表示時刻を過ぎ、フレーム 3 はまだ (再生遅延はほぼ 0)
-  const selection = buffer.select(LOCAL_ORIGIN_MS + 2 * FRAME_MS + 1);
-  assert.deepEqual(selection, { draw: 2, late: [0, 1] });
+  const nowMs = LOCAL_ORIGIN_MS + 2 * FRAME_MS + 1;
+  assert.deepEqual(buffer.select(nowMs), { draw: 1, late: [0] });
+  // 残したフレーム 2 は次の選択で描く
+  assert.deepEqual(buffer.select(nowMs), { draw: 2, late: [] });
   assert.equal(buffer.size, 1);
+});
+
+// 配信 fps と表示周期が同じ (120 fps を 120 Hz で表示) で、表示時刻と選択の位相が
+// ±0.3 ms 揺れる。ある周期に 2 枚が表示時刻を過ぎ、次の周期には 1 枚も過ぎないことが
+// 繰り返されても、フレームを捨てずに全周期で 1 枚ずつ描く
+test("select: 配信 fps と表示周期が同じで位相が揺れてもフレームを捨てない", () => {
+  const buffer = new PlayoutBuffer<number>(JITTER_BUFFER_MAX_QUEUED_FRAMES);
+  const frameMs = 1_000 / 120;
+  const frames = 120 * 3;
+  const draws: number[] = [];
+  const late: number[] = [];
+  let enqueued = 0;
+  for (let tick = 0; tick < frames; tick++) {
+    // 選択の時刻は表示時刻 (揺らぎ 0.6 ms の再生遅延の後) の前後 0.3 ms に揺れる
+    const tickMs = LOCAL_ORIGIN_MS + tick * frameMs + 0.6 + (tick % 2 === 0 ? 0.3 : -0.3);
+    while (enqueued < frames && LOCAL_ORIGIN_MS + enqueued * frameMs + 0.6 <= tickMs) {
+      // 2 枚に 1 枚が 0.6 ms 遅れて届く
+      enqueueAt(buffer, enqueued, enqueued % 2 === 1 ? 0.6 : 0, frameMs);
+      enqueued++;
+    }
+    const selection = buffer.select(tickMs);
+    late.push(...selection.late);
+    if (selection.draw !== null) {
+      draws.push(selection.draw);
+    }
+  }
+  // 揺らぎを覚えるまでの最初の 1 秒を除き、フレームを捨てず、描いたフレームは連番である
+  const steady = draws.filter((index) => index >= 120);
+  assert.deepEqual(
+    late.filter((index) => index >= 120),
+    [],
+  );
+  for (let position = 1; position < steady.length; position++) {
+    assert.equal((steady[position] ?? 0) - (steady[position - 1] ?? 0), 1);
+  }
+  assert.isAbove(steady.length, 120 * 2 - 3);
 });
 
 // TIMESTAMP を壁時計として使えないフレーム (Timescale あり / TIMESTAMP 無し) は、
@@ -158,7 +198,7 @@ test("playoutDelayMs: 上限を超える揺らぎは再生遅延に使わない"
 
 // 購読の開始では relay の cache から Group の先頭以降のフレームがまとめて届く
 // (cache replay)。これは経路の揺らぎではないため、再生遅延の目標に使わない。
-// 古いフレームは表示時刻を過ぎているため、最新を描いて残りを捨て、すぐに追いつく
+// 古いフレームは表示時刻を過ぎているため、最新とその 1 つ前を除いて捨て、すぐに追いつく
 test("enqueue: 購読の開始にまとめて届いた古いフレームを再生遅延に使わない", () => {
   const buffer = new PlayoutBuffer<number>(JITTER_BUFFER_MAX_QUEUED_FRAMES);
   // Group の先頭から 20 枚 (約 0.67 秒前から現在まで) が、同じ時刻にまとめて届く
@@ -167,8 +207,9 @@ test("enqueue: 購読の開始にまとめて届いた古いフレームを再�
     buffer.enqueue(index, burstAtMs + index * 0.1, timestampOf(index * FRAME_MS));
   }
   const selection = buffer.select(burstAtMs + 3);
-  assert.equal(selection.draw, 19);
-  assert.equal(selection.late.length, 19);
+  assert.equal(selection.draw, 18);
+  assert.equal(selection.late.length, 18);
+  assert.equal(buffer.select(burstAtMs + 3).draw, 19);
   // 以降は揺らぎ無しで届く
   for (let index = 20; index < 80; index++) {
     enqueueAt(buffer, index, 0);
