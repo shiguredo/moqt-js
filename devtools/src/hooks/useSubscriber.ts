@@ -220,6 +220,45 @@ export function resolveNewGroupRequestValue(
 }
 
 /**
+ * 購読の object コールバックで受け取った映像 Object と、受け取った時刻
+ *
+ * 映像 Object は Group の切り替えの保留 (`GroupSwitchGate`) を通ってから処理するため、
+ * 処理する時刻は受け取った時刻より遅れうる。到着の統計は受け取った時刻で求める
+ * (`recordVideoArrival`)
+ */
+export interface ReceivedVideoObject {
+  readonly object: MoqtObject;
+  /** object コールバックで受け取った時刻 (`performance.now()`) */
+  readonly receivedAtMs: number;
+}
+
+/**
+ * 映像 Object の到着を統計に記録する
+ *
+ * 到着時刻は object コールバックで受け取った時刻であり、Group の切り替えで保留した
+ * 時間を含めない。保留は受信側の処理であり、経路 (relay と回線) の到着の遅れではない。
+ * TIMESTAMP が無ければ記録しない。TIMESTAMP が壁時計のときは送信から受信までの遅延も
+ * 求める
+ *
+ * @param timeOriginMs - `performance.timeOrigin`。受け取った時刻を壁時計に換算する
+ */
+export function recordVideoArrival(
+  stats: PlaybackTimingStats,
+  received: ReceivedVideoObject,
+  plan: { timestamp: number; timestampKind: "none" | "wallClock" | "mediaTime" },
+  timeOriginMs: number,
+): void {
+  if (plan.timestampKind === "none") {
+    return;
+  }
+  stats.recordArrival(
+    received.receivedAtMs,
+    plan.timestamp,
+    plan.timestampKind === "wallClock" ? timeOriginMs + received.receivedAtMs : null,
+  );
+}
+
+/**
  * `SubscriberInstance` が保持する外部リソース (映像と音声の `decoder` / `catalog` 購読 /
  * 音声トラックの購読 / `session`) を fire-and-forget で解除し、canvas を初期色で塗り潰す。
  *
@@ -397,16 +436,16 @@ export function useSubscriber(
   // (src/groupSwitchGate.ts)。Object は Group ごとに別の stream で届き、前の Group の末尾が
   // 次の Group の先頭より後に届くと、VideoDecodeOrder が古い Group として捨てるため。
   // 購読を始めるたびと停止で初期化する
-  const videoGroupGateRef = useRef(new GroupSwitchGate<MoqtObject>());
+  const videoGroupGateRef = useRef(new GroupSwitchGate<ReceivedVideoObject>());
   const videoGroupGateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   /**
    * 保留を通った映像 Object を到着順の Promise チェーンに積み、保留が残っていれば
    * 上限で保留を解くタイマーを張り直す
    */
-  function enqueueVideoObjects(objects: MoqtObject[]): void {
-    for (const obj of objects) {
-      chainRef.current = chainRef.current.then(() => handleObject(obj)).catch(() => {});
+  function enqueueVideoObjects(objects: ReceivedVideoObject[]): void {
+    for (const received of objects) {
+      chainRef.current = chainRef.current.then(() => handleObject(received)).catch(() => {});
     }
     if (videoGroupGateTimerRef.current !== null) {
       clearTimeout(videoGroupGateTimerRef.current);
@@ -919,7 +958,8 @@ export function useSubscriber(
     instance.framesDecoded.value += 1;
   };
 
-  const handleObject = async (obj: MoqtObject): Promise<void> => {
+  const handleObject = async (received: ReceivedVideoObject): Promise<void> => {
+    const obj = received.object;
     const instance = sub.getSubscriber(subscriberId);
     if (!instance) return;
 
@@ -942,15 +982,9 @@ export function useSubscriber(
       }
       const plan = buildVideoChunkPlan(obj);
 
-      // 到着を記録する。TIMESTAMP が壁時計のときは、送信から受信までの遅延も求める
-      if (plan.timestampKind !== "none") {
-        const nowMs = performance.now();
-        playbackTimingRef.current.recordArrival(
-          nowMs,
-          plan.timestamp,
-          plan.timestampKind === "wallClock" ? performance.timeOrigin + nowMs : null,
-        );
-      }
+      // 到着を object コールバックで受け取った時刻で記録する (Group の切り替えの保留を
+      // 含めない)。TIMESTAMP が壁時計のときは、送信から受信までの遅延も求める
+      recordVideoArrival(playbackTimingRef.current, received, plan, performance.timeOrigin);
 
       // LOC spec 準拠: payload は WebCodecs の internal data をそのまま使用
       const chunk = new EncodedVideoChunk({
@@ -1394,8 +1428,15 @@ export function useSubscriber(
             // 渡す (VideoDecodeOrder)。保留の上限を過ぎてから届いた前の Group の Object は
             // 捨てる。1 Group を複数の Subgroup に分ける publisher の Object ID の飛びも
             // 欠落として扱い、次のキーフレームまで待つ
+            // 受け取った時刻を Object と一緒に保留へ渡し、到着の統計に使う
+            const receivedAtMs = performance.now();
             enqueueVideoObjects(
-              videoGroupGateRef.current.push(obj, obj.groupId, obj.subgroupId, performance.now()),
+              videoGroupGateRef.current.push(
+                { object: obj, receivedAtMs },
+                obj.groupId,
+                obj.subgroupId,
+                receivedAtMs,
+              ),
             );
           },
           // Subgroup の stream の終わりで、保留していた次の Group の Object を渡す
