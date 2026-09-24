@@ -2,7 +2,7 @@
 
 - Created: 2026-09-24
 - Completed: {YYYY-MM-DD}
-- Branch: feature/fix-audio-codec-role-must-gap
+- Branch: feature/bug-audio-codec-role-must-gap
 - Polished: 2026-09-24
 
 ## 目的
