@@ -859,13 +859,18 @@ export function ConnectionSettings() {
           <div>
             <label for="authorizationTokenType" class="block text-xs text-slate-500 mb-1">
               Token Type
-              <span class="ml-1 text-slate-400">(0 = out-of-band)</span>
+              <span class="ml-1 text-slate-400">(0 = out-of-band / 1 = CAT)</span>
             </label>
             <input
               type="text"
               id="authorizationTokenType"
               value={settings.authorizationTokenType.value}
-              onInput={(e) => (settings.authorizationTokenType.value = e.currentTarget.value)}
+              onInput={(e) => {
+                settings.authorizationTokenType.value = e.currentTarget.value;
+                // 手入力した場合は c4m から読み込んだ Base64 トークンを解除する
+                // (解除しないと送信内容と UI の表示が食い違う)
+                settings.authorizationTokenBase64.value = "";
+              }}
               disabled={settings.settingsDisabled.value}
               placeholder="0"
               class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:bg-slate-100 disabled:cursor-not-allowed"
@@ -893,7 +898,7 @@ export function ConnectionSettings() {
           </div>
         </div>
         {settings.authorizationTokenBase64.value && (
-          <div class="mt-2 flex items-center gap-2 text-xs">
+          <div class="mt-2 flex items-center gap-2 text-xs" data-testid="authorization-token-c4m">
             <span class="px-2 py-0.5 font-medium bg-amber-100 text-amber-700 rounded-full">
               c4m
             </span>

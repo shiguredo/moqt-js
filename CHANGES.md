@@ -93,7 +93,7 @@
   - 各ヘルプの datatracker リンクに実装が準拠するバージョン (transport-21 / loc-04 / msf-01 / c4m-01) を付ける
   - @voluntas
 - [ADD] moqt-devtools で MSF URL の c4m パラメータを Authorization Token に反映する
-  - Server URL / URI Fragment に入力した MSF URL の c4m パラメータ (Base64 encoded C4M token) を取り出し、Base64 を復号した生バイト列を USE_VALUE / Token Type 0 の SETUP トークンとして送る
+  - Server URL / URI Fragment に入力した MSF URL の c4m パラメータ (Base64 encoded C4M token) を取り出し、Base64 を復号した生バイト列を USE_VALUE / Token Type 0x01 (CAT) の SETUP トークンとして送る (draft-ietf-moq-c4m-01 §7.1 Table 4)
   - 共有 URL のクエリパラメータ (url / fragment) からの復元でも同様に反映する
   - Authorization Token セクションに c4m から読み込んだトークンの表示とクリア操作を追加する
   - @voluntas
