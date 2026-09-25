@@ -63,6 +63,18 @@ draft-ietf-moq-transport-21 §3.1 は「Established な購読には Forward Stat
 - closed/0624 (devtools の catalog 送り直し) / closed/0629 (音声の config 送り直し。実装の形の出所) / 0682 (映像の VIDEO_CONFIG の送り直し) / 0679 / 0681 (同じファイルを触る未着手 issue)
 - `src/createMediaPublisher.ts` の `publishCatalog` / `createPublishers` / `disposeAllResources`、`src/session/requests.ts` の `requestsPublish`、`src/publisher.ts` の `setForwardState` / `guardSend`、`src/session/incomingPublish.ts` の `applyPublishRequestUpdate`、`src/createMediaSubscriber.ts` の `subscribeCatalog` / `catalogFetchFilter`、`devtools/src/hooks/usePublisher.ts` の `sendCatalogUpdate`
 
+## 追記: MAX_CACHE_DURATION を過ぎた catalog の送り直し (2026-09-25)
+
+devtools の publisher で、Forward State の変化による送り直しだけでは足りないことが分かった (0726)。relay が購読者の居ない間も Forward State を 1 に保つ場合 (sora-moq の prewarm) や、別の購読者が居続ける場合は Forward State が変わらず、catalog は送り直されない。draft-ietf-moq-transport-21 §10.3 により relay は MAX_CACHE_DURATION を過ぎた catalog を cache から配れないため、配信の開始から catalog の MAX_CACHE_DURATION を過ぎた後に購読を始めた相手は catalog を得られない。
+
+`src/createMediaPublisher.ts` の catalog は MAX_CACHE_DURATION が 3600000 ms (1 時間) で、配信の開始時に 1 回だけ送る。同じ理由で、配信の開始から 1 時間を過ぎると後から購読を始めた相手は catalog を得られない。draft-ietf-moq-msf-01 §5.1 の「キャッシュから落ちる程度の時間が経過したときに publish する SHOULD」に当たる。
+
+この issue で送り直しを入れるときは、Forward State の変化に加えて、catalog を送るたびに MAX_CACHE_DURATION の半分 (1 秒以上、30 秒以下) の後の送り直しを予約する。devtools は 0726 で `devtools/src/utils/catalogRepublish.ts` の `catalogRepublishIntervalMs` を使う形にした。ライブラリへ入れるときは、この関数を `src/` へ移して devtools からも使う。
+
+完了条件に次を足す。
+
+- catalog を送るたびに、MAX_CACHE_DURATION の半分 (1 秒以上、30 秒以下) の後に新しい Group で送り直す。`stop()` / `close()` で予約を取り消す
+
 ## 解決方法
 
 {未着手}
