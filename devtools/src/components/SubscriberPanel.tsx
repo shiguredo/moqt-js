@@ -1,6 +1,7 @@
 import { useMemo, useRef, useEffect } from "preact/hooks";
 import { useSubscriber } from "../hooks/useSubscriber";
 import { AudioMeter } from "./AudioMeter";
+import { HttpVersionBadge } from "./HttpVersionBadge";
 import {
   EventLog,
   StatList,
@@ -129,7 +130,10 @@ export function SubscriberPanel({
             </svg>
             Subscriber
             {instance.httpVersion.value !== null && (
-              <span data-testid="subscriber-http-version">{instance.httpVersion.value}</span>
+              <HttpVersionBadge
+                version={instance.httpVersion.value}
+                testId="subscriber-http-version"
+              />
             )}
           </h2>
           <div class="flex items-center gap-2">

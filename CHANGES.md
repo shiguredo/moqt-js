@@ -22,6 +22,9 @@
   - エンコード能力を超えて破棄したフレーム数を統計で確認できるようにする
   - `VideoStats` は公開型のため、この型を自前で構築しているコードは `droppedFrames` の追加が必要になる (後方互換なし)
   - @voluntas
+- [ADD] moqt-devtools の Server URL を OPFS に覚え、次に開いたときに戻す
+  - クエリの `url` があるページではそれを使い、覚えた値は上書きしない。localStorage には書かない
+  - @voluntas
 - [ADD] `SubscribeCallbacks.subgroupEnd` を追加する
   - 購読の Subgroup の stream が FIN または RESET_STREAM で終わったことを、その stream の最後の Object を object コールバックへ渡した後に知らせる (Group ID、確定した Subgroup ID、終わり方)
   - draft-ietf-moq-transport-21 Section 2.1 のとおり Object は順不同で届きうるため、前の Group の stream が終わるまで次の Group の Object を保留するアプリが使う
@@ -63,6 +66,23 @@
 - [ADD] moqt-devtools に表示モードを追加し、Publisher だけ / Subscriber だけのページを新しいタブで開けるようにする
   - URL クエリ `mode` で Publisher だけ / Subscriber だけを表示する。ヘッダーの副題に 3 つのモードを並べ、今のモードを示すとともに、他のモードのページを今の接続設定のまま新しいタブで開けるようにする
   - Catalog Timeout と Use Dedicated Worker を URL に載せ、同じ接続設定のページを URL で再現できるようにする
+  - @voluntas
+- [UPDATE] moqt-devtools の音声を Subgroup と Datagram から選んで送れるようにする
+  - Audio Delivery の既定は Subgroup。Datagram は draft-ietf-moq-transport-21 §11.2。WT-H2 (reliable-only) では Subgroup で送る
+  - 選んだ送り方は URL の `audioDelivery=datagram` に載る。既定の subgroup は載せない
+  - @voluntas
+- [UPDATE] moqt-devtools の Subscriber がいるページに音声出力デバイスの選択を追加する
+  - Publisher と Subscriber、および Subscriber だけのページで再生先 (Audio Output) を選べる。Publisher だけは再生しないため出さない
+  - 選んだデバイスは `<audio>` の setSinkId に渡す。URL の `audioOutputDeviceId` でも指定できる
+  - @voluntas
+- [UPDATE] moqt-devtools の Audio Source の既定を WebAudio (`dummy`) にする
+  - 映像の Canvas と同じく、開いた時点で生成した音を送る。`audioSource=none` を指定すれば音声なしに戻せる
+  - @voluntas
+- [UPDATE] moqt-devtools の生成した映像と音声の表示名を Canvas と WebAudio にする
+  - Audio Source の Dummy は、映像の Canvas と対になる Web Audio の入力である。URL の `videoSource=dummy` / `audioSource=dummy` は変えない
+  - @voluntas
+- [UPDATE] moqt-devtools の WebTransport のトランスポート表示を、Ready / Connected と同じ丸いバッジの WT-H2 / WT-H3 にする
+  - ページの HTTP バージョンではなく、WebTransport over HTTP/2 と WebTransport over HTTP/3 の区別である
   - @voluntas
 - [UPDATE] moqt-devtools の音声レベルメーターの見出し行を、値の文字数で動かないようにする
   - voice activity の on / off や peak / RMS の桁が変わっても、項目の位置とメーターの高さが変わらない
@@ -109,6 +129,9 @@
   - @voluntas
 - [UPDATE] moqt-devtools の見出しを「MOQT DevTools (draft-21)」にし、draft-21 から draft-ietf-moq-transport-21 の文書を開けるようにする
   - ページのタイトルも同じにする
+  - @voluntas
+- [FIX] moqt-devtools の音声レベルメーターの数値が、桁の変化で左右に動かないようにする
+  - peak / RMS は小数点の位置を、LOC Audio Level は `dBov` の位置を固定する。voice の on は off と同じ文字数にする
   - @voluntas
 - [FIX] `createMediaSubscriber` で、復号した音声を届いたその場で鳴らし、前の音との重なりと隙間でノイズになるのを修正する
   - 再生の遅れ (80 ms) だけ遅らせ、TIMESTAMP の間隔どおりに途切れなく並べて鳴らす。過ぎてから届いた音では基準を取り直し、遅れが 300 ms を超える分は捨てて縮める

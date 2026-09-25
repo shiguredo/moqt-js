@@ -43,11 +43,14 @@ import {
 import { JITTER_BUFFER_MAX_QUEUED_FRAMES, PlayoutBuffer } from "../utils/playoutBuffer";
 import { GroupSwitchGate } from "../../../src/groupSwitchGate.ts";
 import { AudioPlayoutScheduler } from "../../../src/audioPlayout.ts";
+import { applyAudioOutputSink } from "../utils/audioOutput";
+import { persistServerUrl } from "../utils/serverUrlStore";
 import { browserIsChromium, resolvePanelHttpVersion } from "../utils/httpVersion";
 import * as settings from "../signals/connectionSettings";
 import * as sub from "../signals/subscriber";
 import * as pub from "../signals/publisher";
 import { useRef, useEffect } from "preact/hooks";
+import { useSignalEffect } from "@preact/signals";
 import type { RefObject } from "preact";
 
 /**
@@ -506,6 +509,21 @@ export function useSubscriber(
   const audioPlaybackPendingRef = useRef(false);
   // startSubscribing の中断検知用 AbortController (レンダリング間で安定参照)
   const abortControllerRef = useRef<AbortController | null>(null);
+  // 再生先が変わったら、今の <audio> へすぐ反映する。空文字はブラウザの既定
+  useSignalEffect(() => {
+    const deviceId = settings.selectedAudioOutputDeviceId.value;
+    const audioElement = audioRef.current;
+    if (audioElement === null) {
+      return;
+    }
+    // 既定のまま再生を始めていないときは setSinkId を呼ばない
+    if (deviceId === "" && audioElement.srcObject === null) {
+      return;
+    }
+    void applyAudioOutputSink(audioElement, deviceId).catch((error: unknown) => {
+      console.error("Failed to set audio output device:", error);
+    });
+  });
   // 表示待ちのフレーム (jitter buffer) と予約した描画 (presentFrame / clearPendingFrame が
   // 使う)。購読を始めるたびに設定 (jitterBufferEnabled) に合わせて作り直す
   const playoutBufferRef = useRef(new PlayoutBuffer<VideoFrame>(MAX_PENDING_FRAMES));
@@ -633,6 +651,10 @@ export function useSubscriber(
     const audioElement = audioRef.current;
     if (audioElement) {
       audioElement.srcObject = playback.destination.stream;
+      const outputDeviceId = settings.selectedAudioOutputDeviceId.value;
+      if (outputDeviceId !== "") {
+        await applyAudioOutputSink(audioElement, outputDeviceId);
+      }
       await audioElement.play();
     }
   }
@@ -1300,6 +1322,7 @@ export function useSubscriber(
     // 購読中として扱う (Stop で止められ、Start Subscribing を重ねて押せない。接続設定の入力も
     // 無効のまま保つ)
     instance.isStarting.value = true;
+    void persistServerUrl(settings.url.value);
 
     try {
       instance.status.value = "disconnected";

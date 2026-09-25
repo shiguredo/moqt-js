@@ -423,7 +423,7 @@ test("stopPreview: 映像ストリームを解放して待機状態に戻す", (
   // MediaStream の実体は生成できないため null のままにし、解放処理の呼び出しだけを見る
   pub.isPreviewActive.value = true;
   pub.pubStatus.value = "connected";
-  pub.pubStatusMessage.value = "Preview: Dummy 1280x720 @ 30fps";
+  pub.pubStatusMessage.value = "Preview: Canvas 1280x720 @ 30fps";
 
   publisher.stopPreview();
 

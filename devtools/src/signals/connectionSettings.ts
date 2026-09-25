@@ -6,6 +6,7 @@ import {
 } from "moqt-js";
 import type {
   AudioCodecType,
+  AudioDelivery,
   AudioSourceType,
   DevtoolsMode,
   MicrophoneDevice,
@@ -13,6 +14,7 @@ import type {
   CodecType,
   VideoSourceType,
 } from "../types";
+import { toAudioOutputDevices, type AudioOutputDevice } from "../utils/audioOutput";
 import { base64ToArrayBuffer } from "../utils/base64";
 import { extractC4mBase64 } from "../utils/c4m";
 import { isResolution } from "../utils/codec";
@@ -44,10 +46,11 @@ export const keyframeInterval = signal(60);
 
 // 音声設定
 //
-// 既定は "none" にする。音声トラックを足すと catalog のトラック数が変わり、
-// 既存の相互運用の実測 (映像だけの catalog) が変わってしまうため。
-// 入力元は生成した音 ("dummy") と、選んだ音声入力デバイス ("microphone") から選べる。
-export const audioSource = signal<AudioSourceType>("none");
+// 既定は "dummy" (画面では WebAudio)。映像の Canvas と同じく、開いた時点で生成した
+// 音を送る。音声なしは "none" を選ぶ (URL では audioSource=none)。
+export const audioSource = signal<AudioSourceType>("dummy");
+// 音声 Object の送り方。既定は subgroup。datagram のときだけ URL に載せる
+export const audioDelivery = signal<AudioDelivery>("subgroup");
 export const audioCodec = signal<AudioCodecType>("opus");
 export const audioBitrate = signal(64000);
 export const audioSampleRate = signal(48000);
@@ -55,6 +58,10 @@ export const audioChannels = signal(2);
 // 音声入力デバイスの一覧と、選んだデバイス (audioSource が "microphone" のとき使う)
 export const microphoneDevices = signal<MicrophoneDevice[]>([]);
 export const selectedMicrophoneDeviceId = signal<string>("");
+// 再生先の音声出力デバイス。空文字はブラウザの既定。
+// Publisher と Subscriber、および Subscriber だけのページで使う
+export const audioOutputDevices = signal<AudioOutputDevice[]>([]);
+export const selectedAudioOutputDeviceId = signal<string>("");
 // マイクの音にかけるブラウザの音声処理。既定はブラウザの既定と同じ有効
 export const audioEchoCancellation = signal(true);
 export const audioNoiseSuppression = signal(true);
@@ -272,6 +279,39 @@ export async function fetchMicrophoneDevices(): Promise<void> {
 }
 
 /**
+ * 音声出力デバイスの一覧を取る
+ *
+ * selectAudioOutput で出力デバイスの許可を取り、enumerateDevices の audiooutput を
+ * 並べる。https://w3c.github.io/mediacapture-output/#dom-mediadevices-selectaudiooutput
+ * (この API は将来変わる可能性がある)
+ * ピッカーを取り消したときは、今の一覧と選択を残す。
+ */
+export async function fetchAudioOutputDevices(): Promise<void> {
+  const mediaDevices = navigator.mediaDevices as MediaDevices & {
+    selectAudioOutput?: () => Promise<MediaDeviceInfo>;
+  };
+  try {
+    if (typeof mediaDevices.selectAudioOutput === "function") {
+      const picked = await mediaDevices.selectAudioOutput();
+      selectedAudioOutputDeviceId.value = picked.deviceId;
+    }
+
+    const listed = toAudioOutputDevices(await mediaDevices.enumerateDevices());
+    audioOutputDevices.value = listed;
+
+    if (
+      selectedAudioOutputDeviceId.value !== "" &&
+      !listed.some((device) => device.deviceId === selectedAudioOutputDeviceId.value)
+    ) {
+      const [firstDevice] = listed;
+      selectedAudioOutputDeviceId.value = firstDevice?.deviceId ?? "";
+    }
+  } catch (error) {
+    console.error("Failed to fetch audio output devices:", error);
+  }
+}
+
+/**
  * `connect()` に渡す MOQT URI を現在の設定から構築する。
  * draft-ietf-moq-transport-21 §6.1.1 (Fragment Identifiers) に従い
  * `fragment` が空でなければ `#type:value` を連結する。
@@ -368,6 +408,9 @@ function buildQueryParams(targetMode: DevtoolsMode): URLSearchParams {
   if (audioSource.value) {
     params.set("audioSource", audioSource.value);
   }
+  if (audioDelivery.value === "datagram") {
+    params.set("audioDelivery", audioDelivery.value);
+  }
   if (audioCodec.value) {
     params.set("audioCodec", audioCodec.value);
   }
@@ -382,6 +425,9 @@ function buildQueryParams(targetMode: DevtoolsMode): URLSearchParams {
   }
   if (selectedMicrophoneDeviceId.value) {
     params.set("microphoneDeviceId", selectedMicrophoneDeviceId.value);
+  }
+  if (selectedAudioOutputDeviceId.value) {
+    params.set("audioOutputDeviceId", selectedAudioOutputDeviceId.value);
   }
   // 音声処理は既定 (有効) のときは載せず、無効にしたものだけ =0 で載せる
   if (!audioEchoCancellation.value) {
@@ -452,6 +498,9 @@ export const VIDEO_SOURCES: readonly VideoSourceType[] = ["none", "dummy", "came
 /** 音声の入力元の選択肢 */
 export const AUDIO_SOURCES: readonly AudioSourceType[] = ["none", "dummy", "microphone"];
 
+/** 音声 Object の送り方。既定は subgroup で、datagram のときだけ URL に載せる */
+export const AUDIO_DELIVERIES: readonly AudioDelivery[] = ["subgroup", "datagram"];
+
 /** 音声コーデックの選択肢 */
 export const AUDIO_CODECS: readonly AudioCodecType[] = ["opus", "aac"];
 
@@ -497,6 +546,11 @@ export function isAudioSourceType(value: string): value is AudioSourceType {
   return AUDIO_SOURCES.some((source) => source === value);
 }
 
+/** 音声 Object の送り方として受理できる値かを判定する */
+export function isAudioDelivery(value: string): value is AudioDelivery {
+  return AUDIO_DELIVERIES.some((delivery) => delivery === value);
+}
+
 /**
  * 音声コーデックとして受理できる値かを判定する
  */
@@ -515,6 +569,11 @@ function initAudioSettingsFromUrl(params: URLSearchParams): void {
   const audioSourceParam = params.get("audioSource");
   if (audioSourceParam !== null && isAudioSourceType(audioSourceParam)) {
     audioSource.value = audioSourceParam;
+  }
+
+  const audioDeliveryParam = params.get("audioDelivery");
+  if (audioDeliveryParam !== null && isAudioDelivery(audioDeliveryParam)) {
+    audioDelivery.value = audioDeliveryParam;
   }
 
   const audioCodecParam = params.get("audioCodec");
@@ -540,6 +599,11 @@ function initAudioSettingsFromUrl(params: URLSearchParams): void {
   const microphoneDeviceIdParam = params.get("microphoneDeviceId");
   if (microphoneDeviceIdParam) {
     selectedMicrophoneDeviceId.value = microphoneDeviceIdParam;
+  }
+
+  const audioOutputDeviceIdParam = params.get("audioOutputDeviceId");
+  if (audioOutputDeviceIdParam) {
+    selectedAudioOutputDeviceId.value = audioOutputDeviceIdParam;
   }
 
   // 音声処理は =0 で無効、=1 で有効にする。それ以外の値は無視する

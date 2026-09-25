@@ -8,22 +8,25 @@ const DEVTOOLS_URL = "http://localhost:5173/index.html";
 test("音声の設定が UI から URL へ反映され、生成された URL から復元される", async ({ page }) => {
   await page.goto(DEVTOOLS_URL);
 
-  // 既定値は音声なし・Opus・64000・48000・2ch
-  await expect(page.getByTestId("audio-source")).toHaveValue("none");
+  // 既定は Web Audio で作る音 (値は dummy)。送り方は Subgroup。コーデックは Opus・64000・48000・2ch
+  await expect(page.getByTestId("audio-source")).toHaveValue("dummy");
+  await expect(page.getByTestId("audio-delivery")).toHaveValue("subgroup");
   await expect(page.getByTestId("audio-codec")).toHaveValue("opus");
   await expect(page.getByTestId("audio-bitrate")).toHaveValue("64000");
   await expect(page.getByTestId("audio-sample-rate")).toHaveValue("48000");
   await expect(page.getByTestId("audio-channels")).toHaveValue("2");
 
   // UI から変更する (Copy URL は history.replaceState で URL を書き換える)
-  await page.getByTestId("audio-source").selectOption("dummy");
+  await page.getByTestId("audio-source").selectOption("none");
+  await page.getByTestId("audio-delivery").selectOption("datagram");
   await page.getByTestId("audio-codec").selectOption("aac");
   await page.getByTestId("audio-bitrate").selectOption("96000");
   await page.getByTestId("audio-sample-rate").selectOption("24000");
   await page.getByTestId("audio-channels").selectOption("1");
   await page.getByTestId("copy-url").click();
 
-  await expect(page).toHaveURL(/audioSource=dummy/);
+  await expect(page).toHaveURL(/audioSource=none/);
+  await expect(page).toHaveURL(/audioDelivery=datagram/);
   await expect(page).toHaveURL(/audioCodec=aac/);
   await expect(page).toHaveURL(/audioBitrate=96000/);
   await expect(page).toHaveURL(/audioSampleRate=24000/);
@@ -31,11 +34,27 @@ test("音声の設定が UI から URL へ反映され、生成された URL か
 
   // 生成された URL を開き直すと設定が復元される (UI → signal → URL → signal の往復)
   await page.goto(page.url());
-  await expect(page.getByTestId("audio-source")).toHaveValue("dummy");
+  await expect(page.getByTestId("audio-source")).toHaveValue("none");
+  await expect(page.getByTestId("audio-delivery")).toHaveValue("datagram");
   await expect(page.getByTestId("audio-codec")).toHaveValue("aac");
   await expect(page.getByTestId("audio-bitrate")).toHaveValue("96000");
   await expect(page.getByTestId("audio-sample-rate")).toHaveValue("24000");
   await expect(page.getByTestId("audio-channels")).toHaveValue("1");
+});
+
+test("Publisher と Subscriber、および Subscriber だけは音声出力デバイスを選べ、Publisher だけでは出さない", async ({
+  page,
+}) => {
+  // 既定は両方を表示する。再生先は Subscribe Settings にある
+  await page.goto(DEVTOOLS_URL);
+  await expect(page.getByTestId("audio-output-fetch-devices")).toBeVisible();
+
+  await page.goto(`${DEVTOOLS_URL}?mode=subscriber`);
+  await expect(page.getByTestId("audio-output-fetch-devices")).toBeVisible();
+
+  // Publisher だけは受信した音声を再生しない
+  await page.goto(`${DEVTOOLS_URL}?mode=publisher`);
+  await expect(page.getByTestId("audio-output-fetch-devices")).toHaveCount(0);
 });
 
 test("不正な音声の設定は既定値のままにし、有効な値は反映する", async ({ page }) => {

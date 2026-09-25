@@ -105,28 +105,36 @@ test("appendWaveform: 上限が 0 以下なら空を返す", () => {
 // level と voice activity は別の要素に出す (同じ値を 2 度表示しない)
 test("formatAudioLevel: 未報告と値を区別する", () => {
   assert.equal(formatAudioLevel(null), "not reported");
-  assert.equal(formatAudioLevel({ level: 42, voiceActivity: true }), "-42 dBov");
-  assert.equal(formatAudioLevel({ level: 42, voiceActivity: false }), "-42 dBov");
-  // 0 は最大音量 (0 dBov)。"-0" にしない
-  assert.equal(formatAudioLevel({ level: 0, voiceActivity: false }), "0 dBov");
+  assert.equal(formatAudioLevel({ level: 42, voiceActivity: true }), " -42 dBov");
+  assert.equal(formatAudioLevel({ level: 42, voiceActivity: false }), " -42 dBov");
+  // 0 は最大音量 (0 dBov)。"-0" にしない。桁は -127 に揃える
+  assert.equal(formatAudioLevel({ level: 0, voiceActivity: false }), "   0 dBov");
   // 127 はデジタル無音 (-127 dBov)
   assert.equal(formatAudioLevel({ level: 127, voiceActivity: false }), "-127 dBov");
 });
 
 // voice の値はラベル ("voice") を別に出すため、値だけを返す。
-// 幅を固定する見出し行に収まるよう、最も長い "off" は 3 文字にする
+// on は末尾空白で off と同じ 3 文字にする
 test("formatVoiceActivity: 値だけを返し、Audio Level が無いときは「-」にする", () => {
-  assert.equal(formatVoiceActivity({ level: 0, voiceActivity: true }), "on");
+  assert.equal(formatVoiceActivity({ level: 0, voiceActivity: true }), "on ");
   assert.equal(formatVoiceActivity({ level: 0, voiceActivity: false }), "off");
   // Audio Level が載っていない object には V ビットも無い。同じ「未報告」を
   // LOC Audio Level の欄と 2 度出さないため、ここは「-」にする
   assert.equal(formatVoiceActivity(null), INACTIVE_TEXT);
 });
 
-// 見出し行は値の幅を文字数で固定している。値が無いときに長い文字列を返すと幅が足りない
-test("formatDbfs: 値が無いときは「-」にする", () => {
+// 見出し行は小数点の位置を固定する。桁が減っても単位が左へ寄らない
+test("formatDbfs: 値が無いときは「-」にし、小数点の位置は桁で変わらない", () => {
   assert.equal(formatDbfs(null), INACTIVE_TEXT);
-  assert.equal(formatDbfs(0), "0.0 dBFS");
-  assert.equal(formatDbfs(-6.02), "-6.0 dBFS");
+  assert.equal(formatDbfs(0), "   0.0 dBFS");
+  assert.equal(formatDbfs(-6.02), "  -6.0 dBFS");
+  assert.equal(formatDbfs(-53.6), " -53.6 dBFS");
   assert.equal(formatDbfs(MIN_DBFS), "-100.0 dBFS");
+  const samples = [formatDbfs(0), formatDbfs(-6.02), formatDbfs(-53.6), formatDbfs(MIN_DBFS)];
+  const dotIndex = samples[0]?.indexOf(".") ?? -1;
+  for (const text of samples) {
+    assert.equal(text.length, "-100.0 dBFS".length);
+    assert.equal(text.indexOf("."), dotIndex);
+    assert.equal(text.endsWith(" dBFS"), true);
+  }
 });

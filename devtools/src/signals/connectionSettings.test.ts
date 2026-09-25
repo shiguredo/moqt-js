@@ -21,7 +21,9 @@ import {
   audioEchoCancellation,
   audioNoiseSuppression,
   audioSource,
+  audioDelivery,
   selectedMicrophoneDeviceId,
+  selectedAudioOutputDeviceId,
   url,
   useDedicatedWorker,
   videoSource,
@@ -276,6 +278,11 @@ test("buildQueryString: jitter buffer を無効にした設定を URL で往復�
   jitterBufferEnabled.value = true;
 });
 
+// 開いた時点の音声入力は Web Audio で作る音 (値は dummy)。映像の Canvas と揃える
+test("audioSource: 既定は dummy", () => {
+  assert.equal(audioSource.value, "dummy");
+});
+
 // 音声の入力にマイクを選べる。URL の audioSource=microphone も受理する
 test("isAudioSourceType: microphone を音声の入力として受理する", () => {
   assert.isTrue(isAudioSourceType("microphone"));
@@ -339,6 +346,39 @@ test("buildQueryString: マイクのデバイスと音声処理を URL で往復
   selectedMicrophoneDeviceId.value = "";
   audioEchoCancellation.value = true;
   audioAutoGainControl.value = true;
+});
+
+// 再生先の音声出力デバイス。空のときは URL に載せず、選んだときだけ往復する
+test("buildQueryString: 音声出力デバイスを URL で往復できる", () => {
+  selectedAudioOutputDeviceId.value = "";
+  assert.isNull(new URLSearchParams(buildQueryString()).get("audioOutputDeviceId"));
+
+  selectedAudioOutputDeviceId.value = "speaker-1";
+  const params = new URLSearchParams(buildQueryString());
+  assert.equal(params.get("audioOutputDeviceId"), "speaker-1");
+
+  selectedAudioOutputDeviceId.value = "";
+  initFromUrl(params.toString());
+  assert.equal(selectedAudioOutputDeviceId.value, "speaker-1");
+  selectedAudioOutputDeviceId.value = "";
+});
+
+// 音声の送り方。既定の subgroup は URL に載せず、datagram だけ往復する
+test("buildQueryString: audioDelivery=datagram を URL で往復でき、未知の値は無視する", () => {
+  audioDelivery.value = "subgroup";
+  assert.isNull(new URLSearchParams(buildQueryString()).get("audioDelivery"));
+
+  audioDelivery.value = "datagram";
+  const params = new URLSearchParams(buildQueryString());
+  assert.equal(params.get("audioDelivery"), "datagram");
+
+  audioDelivery.value = "subgroup";
+  initFromUrl(params.toString());
+  assert.equal(audioDelivery.value, "datagram");
+
+  initFromUrl("audioDelivery=stream");
+  assert.equal(audioDelivery.value, "datagram");
+  audioDelivery.value = "subgroup";
 });
 
 // URL の mode で表示モードを決める。both は既定のため Copy URL に載せず、publisher /

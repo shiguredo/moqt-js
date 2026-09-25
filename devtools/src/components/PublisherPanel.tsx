@@ -5,6 +5,7 @@ import { StatList, StatSection, StatsCollapse, TimingTable } from "./StatsView";
 import { PUBLISHER_LATENCY_BREAKDOWN_HELP, PUBLISH_TIMING_CAPTION } from "./statsHelp";
 import { formatBytes } from "../utils/logFormatters";
 import { AudioMeter } from "./AudioMeter";
+import { HttpVersionBadge } from "./HttpVersionBadge";
 import { CatalogTracks } from "./CatalogTracks";
 import { PANEL_OPTION_ROW_CLASS } from "./panelLayout";
 import * as pub from "../signals/publisher";
@@ -82,7 +83,7 @@ export function PublisherPanel() {
             </svg>
             Publisher
             {pub.httpVersion.value !== null && (
-              <span data-testid="publisher-http-version">{pub.httpVersion.value}</span>
+              <HttpVersionBadge version={pub.httpVersion.value} testId="publisher-http-version" />
             )}
           </h2>
           <span class={getBadgeClasses()}>{getBadgeText()}</span>

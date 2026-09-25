@@ -8,7 +8,7 @@
  */
 
 import { assert, test } from "vite-plus/test";
-import { isChromium, resolvePanelHttpVersion } from "./httpVersion";
+import { formatPanelHttpVersion, isChromium, resolvePanelHttpVersion } from "./httpVersion";
 
 test("supports-unreliable は H3 になる", () => {
   // datagram を運べる接続は HTTP/3。Chromium かどうかは見ない
@@ -51,6 +51,12 @@ test("UA-CH の brands に Chromium があれば Chromium とみなす", () => {
     }),
     true,
   );
+});
+
+test("画面の文言は WebTransport over H3 / H2 を表す WT-H3 / WT-H2 にする", () => {
+  // ページの HTTP バージョンではなく、WebTransport がどちらのトランスポートか
+  assert.equal(formatPanelHttpVersion("H3"), "WT-H3");
+  assert.equal(formatPanelHttpVersion("H2"), "WT-H2");
 });
 
 test("brands が無い、または Chromium を含まないときは Chromium とみなさない", () => {

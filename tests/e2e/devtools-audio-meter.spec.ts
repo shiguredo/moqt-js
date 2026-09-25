@@ -335,12 +335,12 @@ test("音声レベルメーターの見出し行の項目は、値が変わっ�
 
   // 表示そのものが壊れていないこと (位置だけを測る空のテストにしない)
   expect(layout.voiceOff.texts).toEqual({
-    peak: "-53.6 dBFS",
-    rms: "-63.5 dBFS",
-    level: "-72 dBov",
+    peak: " -53.6 dBFS",
+    rms: " -63.5 dBFS",
+    level: " -72 dBov",
     "voice-activity": "off",
   });
-  expect(layout.voiceOn.texts["voice-activity"]).toBe("on");
+  expect(layout.voiceOn.texts["voice-activity"]).toBe("on ");
   expect(layout.quiet.texts).toEqual({
     peak: "-100.0 dBFS",
     rms: "-100.0 dBFS",
@@ -348,21 +348,21 @@ test("音声レベルメーターの見出し行の項目は、値が変わっ�
     "voice-activity": "off",
   });
   expect(layout.loud.texts).toEqual({
-    peak: "0.0 dBFS",
-    rms: "-6.0 dBFS",
-    level: "0 dBov",
-    "voice-activity": "on",
+    peak: "   0.0 dBFS",
+    rms: "  -6.0 dBFS",
+    level: "   0 dBov",
+    "voice-activity": "on ",
   });
   expect(layout.notReported.texts).toEqual({
-    peak: "-53.6 dBFS",
-    rms: "-63.5 dBFS",
+    peak: " -53.6 dBFS",
+    rms: " -63.5 dBFS",
     level: "not reported",
     "voice-activity": "-",
   });
   expect(layout.notMeasured.texts).toEqual({
     peak: "-",
     rms: "-",
-    level: "-72 dBov",
+    level: " -72 dBov",
     "voice-activity": "off",
   });
   expect(layout.inactive.texts).toEqual({

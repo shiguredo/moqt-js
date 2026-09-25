@@ -149,18 +149,22 @@ export function appendWaveform(
  *
  * Audio Level が載っていない object を受けた状態は `not reported` (12 文字) と出す。
  * 値が無い状態 (まだ購読していない、音声を送っていない) は `INACTIVE_TEXT` と区別する。
+ * 数値は `-127` の幅に左を空白で埋め、`dBov` の位置を固定する。
  */
+const LEVEL_NUMBER_WIDTH = 4;
+
 export function formatAudioLevel(level: LOC.AudioLevel | null): string {
   if (level === null) {
     return "not reported";
   }
-  return `${String(-level.level)} dBov`;
+  return `${String(-level.level).padStart(LEVEL_NUMBER_WIDTH)} dBov`;
 }
 
 /**
  * LOC Audio Level の voice activity (RFC 6464 §3 の V ビット) を表示用にする
  *
- * `voice` のラベルは呼び出し側が別に出すため、値だけを返す (最長 3 文字の `off`)。
+ * `voice` のラベルは呼び出し側が別に出すため、値だけを返す。
+ * `on` は末尾を空白にして `off` と同じ 3 文字にし、切り替わっても幅が変わらないようにする。
  * Audio Level が載っていない object には V ビットも無いため、同じ状態を 2 度出さないよう
  * `formatAudioLevel` の `not reported` ではなく `INACTIVE_TEXT` にする。
  */
@@ -168,20 +172,23 @@ export function formatVoiceActivity(level: LOC.AudioLevel | null): string {
   if (level === null) {
     return INACTIVE_TEXT;
   }
-  return level.voiceActivity ? "on" : "off";
+  return level.voiceActivity ? "on " : "off";
 }
 
 /**
  * dBFS の数値を表示用の文字列にする
  *
  * 値が無い間 (音を受けているが、まだ復号していないなど) は `INACTIVE_TEXT` にする。
- * メーターの見出し行は値の幅を文字数で固定するため、null を別の長い文字列にしない。
+ * 数値があるときは `-100.0` の幅に左を空白で埋め、小数点と `dBFS` の位置を固定する。
+ * 左揃えのまま桁が減ると、単位ごと右の項目が動いて見える。
  */
+const DBFS_NUMBER_WIDTH = 6;
+
 export function formatDbfs(value: number | null): string {
   if (value === null) {
     return INACTIVE_TEXT;
   }
-  return `${value.toFixed(1)} dBFS`;
+  return `${value.toFixed(1).padStart(DBFS_NUMBER_WIDTH)} dBFS`;
 }
 
 // 振幅を dBFS へ換算する。0 と負の値は下限 (無音)、正の無限大は 0 dBFS に丸める

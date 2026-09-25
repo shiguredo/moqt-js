@@ -1,8 +1,9 @@
 import { signal } from "@preact/signals";
 import { useId } from "preact/hooks";
 import * as settings from "../signals/connectionSettings";
+import { persistServerUrl } from "../utils/serverUrlStore";
 import { isConnectionSettingsOpen, toggleConnectionSettings } from "../signals/layout";
-import type { AudioSourceType, DevtoolsMode, VideoSourceType } from "../types";
+import type { AudioDelivery, AudioSourceType, DevtoolsMode, VideoSourceType } from "../types";
 
 const showMoqtHelp = signal(false);
 const showMsfHelp = signal(false);
@@ -284,6 +285,11 @@ function LocHelpModal() {
   );
 }
 
+const AUDIO_DELIVERY_LABELS: Record<AudioDelivery, string> = {
+  subgroup: "Subgroup",
+  datagram: "Datagram",
+};
+
 // チャンネル数の表示名。許可リストに値を足したときはここにも足す
 const AUDIO_CHANNEL_LABELS: Record<number, string> = { 1: "Mono", 2: "Stereo" };
 
@@ -295,16 +301,17 @@ const AUDIO_CHANNEL_LABELS: Record<number, string> = { 1: "Mono", 2: "Stereo" };
 const DEVICE_CONTROL_SIZE_CLASS = "flex-1 basis-0 min-h-9";
 
 // 映像の入力元の表示名
+// 値 "dummy" は URL に残す。画面では生成方法の名前にする
 const VIDEO_SOURCE_LABELS: Record<VideoSourceType, string> = {
   none: "None",
-  dummy: "Dummy (Canvas)",
+  dummy: "Canvas",
   camera: "Camera (gUM)",
 };
 
-// 音声の入力元の表示名
+// 音声の入力元の表示名。Canvas で描く映像と対になるのは、Web Audio で作る音
 const AUDIO_SOURCE_LABELS: Record<AudioSourceType, string> = {
   none: "None",
-  dummy: "Dummy (440 Hz tone)",
+  dummy: "WebAudio",
   microphone: "Microphone (gUM)",
 };
 
@@ -345,7 +352,9 @@ function buildConnectionSummary(currentMode: DevtoolsMode): ConnectionSummaryIte
       value:
         audioSource === "none"
           ? AUDIO_SOURCE_LABELS.none
-          : `${AUDIO_SOURCE_LABELS[audioSource]} ${audioCodecLabel}`,
+          : `${AUDIO_SOURCE_LABELS[audioSource]} ${audioCodecLabel}${
+              settings.audioDelivery.value === "datagram" ? " Datagram" : ""
+            }`,
     },
   );
   return summary;
@@ -543,11 +552,15 @@ export function ConnectionSettings() {
             <input
               type="text"
               id="url"
+              data-testid="server-url"
               value={settings.url.value}
               onInput={(e) => {
                 settings.url.value = e.currentTarget.value;
                 // URL に msf fragment が含まれる場合は c4m を Authorization Token に反映する
                 settings.applyC4mFromUrl(e.currentTarget.value);
+              }}
+              onBlur={() => {
+                void persistServerUrl(settings.url.value);
               }}
               disabled={settings.settingsDisabled.value}
               class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors disabled:bg-slate-100 disabled:cursor-not-allowed"
@@ -828,11 +841,35 @@ export function ConnectionSettings() {
                   ))}
                 </select>
               </div>
+              <div>
+                <label for="audioDelivery" class="block text-xs text-slate-500 mb-1">
+                  Audio Delivery
+                </label>
+                <select
+                  id="audioDelivery"
+                  data-testid="audio-delivery"
+                  value={settings.audioDelivery.value}
+                  onChange={(e) => {
+                    const value = e.currentTarget.value;
+                    if (settings.isAudioDelivery(value)) {
+                      settings.audioDelivery.value = value;
+                    }
+                  }}
+                  disabled={settings.settingsDisabled.value}
+                  class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white disabled:bg-slate-100 disabled:cursor-not-allowed"
+                >
+                  {settings.AUDIO_DELIVERIES.map((value) => (
+                    <option key={value} value={value}>
+                      {AUDIO_DELIVERY_LABELS[value]}
+                    </option>
+                  ))}
+                </select>
+              </div>
               {/* 音声入力デバイス。音声の入力が microphone でない間も描き、操作できなくする
               (設定で項目が出たり消えたりしないようにする)。高さはカメラデバイスと同じ扱い */}
               <div class="flex flex-col">
                 <label for="microphoneDevice" class="block text-xs text-slate-500 mb-1">
-                  Audio Device
+                  Audio Input
                 </label>
                 {settings.microphoneDevices.value.length === 0 ? (
                   <button
@@ -1020,6 +1057,40 @@ export function ConnectionSettings() {
                     </option>
                   ))}
                 </select>
+              </div>
+              {/* 再生先。購読中でも切り替えられるように、接続中でも操作できる。
+                  Publisher だけのページには Subscriber が居ないため、この節ごと出さない */}
+              <div class="flex flex-col">
+                <label for="audioOutputDevice" class="block text-xs text-slate-500 mb-1">
+                  Audio Output
+                </label>
+                {settings.audioOutputDevices.value.length === 0 ? (
+                  <button
+                    type="button"
+                    data-testid="audio-output-fetch-devices"
+                    onClick={() => void settings.fetchAudioOutputDevices()}
+                    class={`${DEVICE_CONTROL_SIZE_CLASS} w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-blue-50 text-blue-700 hover:bg-blue-100`}
+                  >
+                    Fetch Devices
+                  </button>
+                ) : (
+                  <select
+                    id="audioOutputDevice"
+                    data-testid="audio-output-device"
+                    value={settings.selectedAudioOutputDeviceId.value}
+                    onChange={(e) =>
+                      (settings.selectedAudioOutputDeviceId.value = e.currentTarget.value)
+                    }
+                    class={`${DEVICE_CONTROL_SIZE_CLASS} w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white`}
+                  >
+                    <option value="">Default</option>
+                    {settings.audioOutputDevices.value.map((device) => (
+                      <option key={device.deviceId} value={device.deviceId}>
+                        {device.label}
+                      </option>
+                    ))}
+                  </select>
+                )}
               </div>
             </div>
           </div>

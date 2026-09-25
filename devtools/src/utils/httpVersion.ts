@@ -16,6 +16,15 @@
  */
 export type PanelHttpVersion = "H2" | "H3";
 
+/**
+ * 見出しのバッジに出す文言。
+ * ページの HTTP バージョンではなく、WebTransport over HTTP/2 (draft-ietf-webtrans-http2)
+ * と WebTransport over HTTP/3 (draft-ietf-webtrans-http3) の区別である。
+ */
+export function formatPanelHttpVersion(version: PanelHttpVersion): "WT-H2" | "WT-H3" {
+  return version === "H3" ? "WT-H3" : "WT-H2";
+}
+
 export function resolvePanelHttpVersion(
   reliability: string | undefined,
   chromium: boolean,

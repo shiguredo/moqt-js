@@ -49,6 +49,8 @@ import {
   CATALOG_REPUBLISH_MAX_INTERVAL_MS,
   catalogRepublishIntervalMs,
 } from "../utils/catalogRepublish";
+import { shouldSendAudioAsDatagram } from "../utils/audioDelivery";
+import { persistServerUrl } from "../utils/serverUrlStore";
 import { browserIsChromium, resolvePanelHttpVersion } from "../utils/httpVersion";
 import * as settings from "../signals/connectionSettings";
 import * as pub from "../signals/publisher";
@@ -514,7 +516,7 @@ export function usePublisher() {
   /**
    * 音声設定に従って音声のストリームを用意し、取れた音の形式を返す
    *
-   * `audioSource` が "none" のときは何も作らず null を返す (既定)。"dummy" は要求した
+   * `audioSource` が "none" のときは何も作らず null を返す。"dummy" は要求した
    * 形式で 440 Hz の音を作る。"microphone" は選んだデバイスから取り、サンプルレートと
    * チャンネル数はデバイスが決めた実際の値を返す (utils/microphone.ts)
    */
@@ -704,7 +706,7 @@ export function usePublisher() {
         pub.pubStatusMessage.value = "Preview: no video";
       } else {
         const deviceId = source === "camera" ? settings.selectedCameraDeviceId.value : undefined;
-        const sourceLabel = source === "dummy" ? "Dummy" : "Camera";
+        const sourceLabel = source === "dummy" ? "Canvas" : "Camera";
         pub.pubStatusMessage.value = `Preview: ${sourceLabel} ${width}x${height} @ ${framerate}fps`;
 
         const videoStreamResult = await getVideoStream(source, width, height, framerate, deviceId);
@@ -1062,6 +1064,9 @@ export function usePublisher() {
     pub.audioFrameReader.value = audioTrackProcessor.readable.getReader();
   }
 
+  // WT-H2 で Datagram を選んだときの警告は、配信ごとに 1 回だけ出す
+  let loggedAudioDatagramFallback = false;
+
   function handleAudioEncodedChunk(chunk: AudioEncodedChunkData): void {
     const audioPublisherInstance = pub.audioPublisher.value;
     if (!audioPublisherInstance || audioPublisherInstance.state !== "active") return;
@@ -1104,14 +1109,36 @@ export function usePublisher() {
       config: audioConfig,
     });
 
-    // Object を送信する (送信完了は待たない。完了待ちは stopPublishing の done() で行う)
-    void audioPublisherInstance.sendObject({
+    // Object を送信する (送信完了は待たない。完了待ちは stopPublishing の done() で行う)。
+    // Datagram は draft-ietf-moq-transport-21 §11.2。WT-H2 は datagram を運べない
+    const sendParams = {
       groupId: allocation.groupId,
       objectId: allocation.objectId,
       payload: chunk.data,
       properties,
       priority: PRIORITY_AUDIO,
-    });
+    };
+    if (
+      shouldSendAudioAsDatagram(settings.audioDelivery.value, pub.pubSession.value?.reliability)
+    ) {
+      try {
+        audioPublisherInstance.sendDatagram(sendParams);
+      } catch (error) {
+        console.error("Failed to send audio datagram:", error);
+      }
+      return;
+    }
+    if (
+      settings.audioDelivery.value === "datagram" &&
+      pub.pubSession.value?.reliability === "reliable-only" &&
+      !loggedAudioDatagramFallback
+    ) {
+      loggedAudioDatagramFallback = true;
+      console.warn(
+        "Audio datagram is unavailable on reliable-only WebTransport; sending on a subgroup stream",
+      );
+    }
+    void audioPublisherInstance.sendObject(sendParams);
   }
 
   // Catalog を新しい Group で送り直す
@@ -1151,6 +1178,8 @@ export function usePublisher() {
     // 配信を始めている途中として扱う (pub.isStarting)。connect を待つ間に Subscriber を
     // 止めても、接続設定の入力を有効に戻さない
     pub.isStarting.value = true;
+    loggedAudioDatagramFallback = false;
+    void persistServerUrl(settings.url.value);
     try {
       pub.pubStatus.value = "disconnected";
       pub.pubStatusMessage.value = "Connecting...";

@@ -165,7 +165,7 @@ interface AudioMeterProps {
 // inline-block にしないと width が効かず、文字数で欄の幅が変わる。
 // はみ出した文字で隣の欄を押さないよう、収まりきらない分は隠す
 const METER_VALUE_CLASS =
-  "inline-block overflow-hidden whitespace-nowrap font-mono tabular-nums text-slate-800";
+  "inline-block overflow-hidden whitespace-nowrap text-right font-mono tabular-nums text-slate-800";
 
 // 値の幅は、その欄に出うる最も長い文字列の文字数に合わせる。
 // 足りないと文字がはみ出し、広すぎると見出し行が 1 行に収まらない
