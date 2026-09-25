@@ -1,7 +1,7 @@
 # moqt-devtools の publisher が音声をマイクから取れず、音声入力デバイスを選べない
 
 - Created: 2026-09-25
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-25
 - Branch: feature/add-devtools-microphone-input
 - Polished: {YYYY-MM-DD}
 - Reporter: @voluntas
@@ -31,3 +31,14 @@ moqt-devtools の publisher は、音声の入力を「None」と「Dummy (440 H
 - 単体テストで、音声の入力の種類の判定と、マイクの getUserMedia の制約の組み立て (デバイス、ideal のサンプルレートとチャンネル数、3 つの音声処理) を固定する
 - 手元で、Chromium の偽のデバイス (`--use-fake-device-for-media-stream`) のマイクを選んで配信し、subscriber が音声を受け取って復号することを確かめる
 - `vp check` / `tsc --noEmit` / `vp test run` が通る
+
+## 解決方法
+
+- `devtools/src/types.ts` の `AudioSourceType` に `"microphone"` を足し、`AUDIO_SOURCES` にも足した
+- `devtools/src/signals/connectionSettings.ts` に、音声入力デバイスの一覧 (`microphoneDevices`、`fetchMicrophoneDevices`) と選んだデバイス (`selectedMicrophoneDeviceId`)、3 つの音声処理の切り替え (`audioEchoCancellation` / `audioNoiseSuppression` / `audioAutoGainControl`、既定は有効) を足した。URL には `microphoneDeviceId` と、無効にした音声処理だけを `=0` で載せる (jitter buffer と同じ形)
+- `devtools/src/utils/microphone.ts` に、getUserMedia の制約を組み立てる `buildMicrophoneConstraints` (デバイスは `exact`、サンプルレートとチャンネル数は `ideal`、3 つの音声処理) と、取れた音の形式を決める `resolveCapturedAudioFormat` (`getSettings()` の値、無い項目は要求した値) を足した
+- `devtools/src/hooks/usePublisher.ts` は、配信の開始で Catalog を作る前に `prepareAudioForPublishing` で音声のストリームを取る。マイクでは実際に取れたサンプルレートとチャンネル数で AudioEncoder の対応を確かめ、Catalog と AudioEncoder に使う。マイクを取れないときは警告のログを残し、映像だけを配信する
+- `devtools/src/components/ConnectionSettings.tsx` に Audio Device の選択 (一覧が無いときは Fetch Devices) と 3 つの音声処理の切り替えを足した。音声の入力が microphone でない間も描き、操作できなくする
+- テスト: `microphone.test.ts` で制約の組み立てと形式の決め方を固定し、`connectionSettings.test.ts` で microphone の受理、音声処理の既定、URL の往復を固定した。`resolveAudioPublishable` のテストに microphone を足した
+- 手元の relay と devtools で、Chromium の偽のデバイスのマイクを選び (一覧に 3 つ出た)、URL で自動ゲインを無効にして配信した。subscriber は音声の Object を 299 個受け取って 299 個とも復号した (peak -48 dBFS)。publisher の Catalog の音声トラックは、取れた音の形式 (48000 Hz / 2 ch) になった
+- `vp check` / `tsc --noEmit` / `vp test run` (2788 件) / Playwright の E2E (40 件) が通った
