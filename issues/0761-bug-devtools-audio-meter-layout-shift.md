@@ -1,7 +1,7 @@
 # moqt-devtools の音声レベルメーターの見出し行が、値の桁数と voice activity で動く
 
 - Created: 2026-09-25
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-26
 - Branch: feature/fix-devtools-audio-meter-layout-shift
 - Polished: {YYYY-MM-DD}
 
@@ -58,3 +58,10 @@ moqt-devtools の音声レベルメーターは、音声を受けると peak / R
 - `devtools/src/utils/audioLevel.ts` の `formatDbfs` / `formatAudioLevel` / `formatVoiceActivity`
 - draft-ietf-moq-loc-04 §2.3.3.2 (Audio Level: RFC 6464 §3 の -dBov と voice activity を vi64 の最下位 8 bit に符号化する)
 - RFC 6464 §3 (level は -dBov で、0〜127 が 0〜-127 dBov。デジタル無音は 127。V ビットが voice activity)
+
+## 解決方法
+
+- `devtools/src/components/AudioMeter.tsx` の `AudioMeter` で、ラベルと値を `METER_FIELD_CLASS` (`whitespace-nowrap`) の 1 項目にし、値は `font-mono` と `tabular-nums` で幅を固定した。peak / RMS は 11 ch (`-100.0 dBFS`)、LOC Audio Level は 12 ch (`not reported`)、voice は 3 ch (`off`)
+- `devtools/src/utils/audioLevel.ts` の `formatDbfs` は数値を `-100.0` の幅まで左に空白で埋め、小数点の位置を固定する。`formatAudioLevel` の数値も同じように埋める。peak / RMS の未計測と voice の未報告は `-` にし、LOC Audio Level が載っていない object は `not reported` のままにする。voice の `on` は末尾を空白にして `off` と同じ 3 文字にする
+- 見出しの値は 11 px にする。12 px のままでは、UI フォントが Inter より広い環境で見出し行が折り返し、下の Catalog と Statistics が動く
+- `tests/e2e/devtools-audio-meter.spec.ts` で、voice の on / off、`-100.0 dBFS` と `0.0 dBFS`、`-127 dBov` と `not reported` の間で項目の位置とメーターの高さが変わらないことを確かめた。CI の e2e が通った
