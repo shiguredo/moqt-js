@@ -1,7 +1,7 @@
 # moqt-devtools の Connection Settings を閉じられず、Publisher と Subscriber のパネルが画面の下に押し出される
 
 - Created: 2026-09-25
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-25
 - Branch: feature/update-devtools-collapse-connection-settings
 - Polished: {YYYY-MM-DD}
 - Reporter: @voluntas
@@ -31,3 +31,15 @@ moqt-devtools の Connection Settings は、接続先、トラック、映像、
 - 閉じた状態で再読み込みすると、閉じたまま始まる
 - 覚えた値の読み方 (覚えていない、読めない値、localStorage が使えない) を単体テストで固定する
 - `vp check` / `tsc --noEmit` / `vp test run` / 既存の Playwright の E2E が通る
+
+## 解決方法
+
+- `devtools/src/components/ConnectionSettings.tsx` の見出しの行 (開け閉めの矢印、アイコン、「Connection Settings」、`HttpVersionBadge`) を開け閉めのボタンにした。ヘルプのボタンを除く行いっぱいを押せる。`aria-expanded` / `aria-controls` を付け、矢印は開いている間は下を向く
+- 閉じている間は、`buildConnectionSummary` で作った要約 (Server URL、Namespace、Track、Video は入力と codec と解像度と fps、Audio は入力と codec。None のときは形式を出さない) を 1 行で出す。はみ出す分は省き、全文は `title` に持つ。要約の行を押しても開く
+- 設定の節は 1 つの要素で包み、閉じている間は `hidden` で隠す
+- 開け閉めの状態は `devtools/src/signals/layout.ts` の `isConnectionSettingsOpen` に置き、`devtools/src/utils/storedFlag.ts` で localStorage に覚える (既定は開く)。localStorage が使えないときは既定の値を使い、書けなくても投げない
+- テスト: `storedFlag.test.ts` で覚えた値の読み方 (1 / 0、覚えていない、読めない値、localStorage が使えない) を、`layout.test.ts` で既定が開いていることと開け閉めの入れ替わりを固定した
+- 手元の devtools (横幅 1440 px) で確かめた
+  - 既定は開いていて、見出しの行を押すと設定の節が隠れ、映像の上端が 1616 px から 520 px に上がった
+  - 閉じたまま再読み込みすると閉じたまま始まり、要約の行を押すと開いた。MOQT のヘルプのボタンを押しても開け閉めしない
+- `vp check` / `tsc --noEmit` / `vp test run` (2813 件) / 既存の Playwright の E2E (40 件) が通った
