@@ -1,7 +1,7 @@
 # devtools の subscriber が接続の途中 (catalog の待ちなど) に Stop を押せず、Start Subscribing を押せてしまう
 
 - Created: 2026-09-25
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-25
 - Branch: feature/fix-devtools-subscriber-stop-while-connecting
 - Polished: {YYYY-MM-DD}
 
@@ -30,3 +30,12 @@ moqt-devtools の subscriber は、Start Subscribing を押してから映像ト
 - 単体テストで、signal が `startSubscribing` の開始で立ち、確立と後始末で下りることを確かめる
 - sora-moq の相互運用 harness の E2E で、publisher の居ない relay に購読を始め、catalog を待っている間に Stop を押すと、購読が止まり Start Subscribing が押せる状態に戻ることを確かめる
 - `vp check` / `tsc --noEmit` / `vp test run` が通る
+
+## 解決方法
+
+- `devtools/src/signals/subscriber.ts` の `SubscriberInstance` に `isStarting` を足した。`useSubscriber.ts` の `startSubscribing` の開始で立て、映像トラックの購読の確立 (`instance.subscriber.value` の設定) と `resetSubscriberState` (後始末) で下ろす
+- ボタンの可否を `devtools/src/utils/subscriberControls.ts` の `subscriberControlState` にまとめた。確立済みか確立を待っている間を購読中とし、Stop を有効に、Start Subscribing と接続設定を無効にする。停止処理の間はどちらも押せない。`SubscriberPanel.tsx` はこの関数を使う。Request Keyframe は従来どおり確立した購読があるときだけ押せる
+- 接続の途中の Stop は既存の `stopSubscribing` (abort と後始末) をそのまま使う
+- テスト: 単体テスト (`subscriberControls.test.ts`) で入力の 8 通りを固定し、`resetSubscriberState` のテストに `isStarting` が下りることを足した。完了条件のコンポーネントテストは、このリポジトリにコンポーネントテストの仕組み (Vitest Browser Mode) が無いため、ボタンの可否を純粋な関数に切り出した単体テストと、次の E2E で代えた
+- sora-moq の相互運用 harness に `test_devtools_subscriber_stops_while_waiting_for_publisher` を足した (sora-moq 506cc6d0)。publisher の居ない relay に購読を始め、relay が SUBSCRIBE を保持している間に Stop が押せて Start Subscribing が押せないこと、Stop で最初の状態に戻ることを確かめる。修正前は「待っている間に Stop が押せない」で失敗した
+- 配備後 (2026-09-25) に、配備 moqt-devtools と配備 relay で publisher の居ない namespace を購読し、3 秒後に Stop が押せ、押してから 0.03 秒で Start Subscribing が押せる状態に戻ることを確かめた
