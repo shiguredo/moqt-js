@@ -60,6 +60,9 @@
   - 配信の開始で現れていた Forward State の行、catalog を受け取ると現れていた Catalog の欄、音声を購読すると現れていた音声のレベルメーターを常に描き、値が無い間は「-」を出す
   - 状態のメッセージを 1 行に収め (はみ出す分は省略し、全文はマウスを重ねると出る)、Catalog の一覧と統計の一覧 (recentStalls など) の高さを固定する。配信や購読の開始と停止で映像や下の項目の位置が動かない
   - @voluntas
+- [UPDATE] moqt-devtools の Publisher と Subscriber の映像の上端をそろえる
+  - 映像より上の 1 行の項目 (Publisher の Forward State、Subscriber の NEW_GROUP_REQUEST) を同じ高さの枠で描く。これまでは何もしていない状態で 36 px、配信中は 16 px ずれていた
+  - @voluntas
 - [FIX] moqt-devtools の subscriber で、停止した購読の session の close が遅れて届いても、次に始めた購読を止めないようにする
   - session の close のコールバックは relay との往復の後に届くため、停止の直後に Start Subscribing を押すと、前の session のコールバックが次の購読を後始末して中断し、表示が「Connecting...」のまま止まることがあった
   - session の close / error と映像トラックの購読の end / error のコールバックは、登録した回の購読が今の購読のときだけ表示を変えて後始末する

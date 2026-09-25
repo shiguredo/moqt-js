@@ -13,6 +13,7 @@ import {
 } from "./statsHelp";
 import { formatBytes } from "../utils/logFormatters";
 import { CatalogTracks } from "./CatalogTracks";
+import { PANEL_OPTION_ROW_CLASS } from "./panelLayout";
 import { formatLossEvent, formatStallEvent } from "../utils/playbackTimingStats";
 import { LATENCY_SEGMENTS } from "../utils/latencyBreakdown";
 import { STALL_CAUSES } from "../utils/stallAnalysis";
@@ -159,22 +160,21 @@ export function SubscriberPanel({
           {instance.statusMessage.value}
         </div>
 
-        {/* Subscribe Options */}
-        <div class="mb-4 space-y-2">
-          <div class="flex items-center gap-6">
-            <label class="flex items-center gap-2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={instance.newGroupRequestEnabled.value}
-                onChange={(e) => {
-                  instance.newGroupRequestEnabled.value = e.currentTarget.checked;
-                }}
-                disabled={isSubscribing}
-                class="w-4 h-4 text-blue-600 border-slate-300 rounded focus:ring-blue-500 disabled:cursor-not-allowed"
-              />
-              <span class="text-sm text-slate-600">NEW_GROUP_REQUEST</span>
-            </label>
-          </div>
+        {/* Subscribe Options。Publisher の Forward State の行と同じ高さの枠で描き、
+            映像の上端をそろえる */}
+        <div class={PANEL_OPTION_ROW_CLASS}>
+          <label class="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={instance.newGroupRequestEnabled.value}
+              onChange={(e) => {
+                instance.newGroupRequestEnabled.value = e.currentTarget.checked;
+              }}
+              disabled={isSubscribing}
+              class="w-4 h-4 text-blue-600 border-slate-300 rounded focus:ring-blue-500 disabled:cursor-not-allowed"
+            />
+            <span class="text-sm text-slate-600">NEW_GROUP_REQUEST</span>
+          </label>
         </div>
 
         {/* Buttons */}

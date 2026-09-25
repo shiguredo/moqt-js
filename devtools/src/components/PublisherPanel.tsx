@@ -5,6 +5,7 @@ import { StatList, StatSection, TimingTable } from "./StatsView";
 import { PUBLISHER_LATENCY_BREAKDOWN_HELP, PUBLISH_TIMING_CAPTION } from "./statsHelp";
 import { formatBytes } from "../utils/logFormatters";
 import { CatalogTracks } from "./CatalogTracks";
+import { PANEL_OPTION_ROW_CLASS } from "./panelLayout";
 import * as pub from "../signals/publisher";
 
 /** Forward State を表示用にする。配信していない間 (null) は「-」 */
@@ -96,17 +97,16 @@ export function PublisherPanel() {
 
         {/* Forward State。配信していない間も描き、値を「-」にする (配信の開始で行が
             現れると映像の位置が動く) */}
-        <div
-          class="mb-4 px-4 py-2 rounded-lg text-sm bg-slate-100 text-slate-600 truncate"
-          data-testid="publisher-forward-state"
-        >
-          Forward State:{" "}
-          <span
-            class={
-              pub.forwardState.value === true ? "text-green-700 font-medium" : "text-slate-500"
-            }
-          >
-            {formatForwardState(pub.forwardState.value)}
+        <div class={PANEL_OPTION_ROW_CLASS} data-testid="publisher-forward-state">
+          <span>
+            Forward State:{" "}
+            <span
+              class={
+                pub.forwardState.value === true ? "text-green-700 font-medium" : "text-slate-500"
+              }
+            >
+              {formatForwardState(pub.forwardState.value)}
+            </span>
           </span>
         </div>
 
