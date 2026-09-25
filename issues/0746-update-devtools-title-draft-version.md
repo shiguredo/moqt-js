@@ -1,7 +1,7 @@
 # moqt-devtools のタイトルから、対応している MOQT の draft が分からない
 
 - Created: 2026-09-25
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-25
 - Branch: feature/update-devtools-title-draft-version
 - Polished: {YYYY-MM-DD}
 - Reporter: @voluntas
@@ -26,3 +26,10 @@ moqt-devtools の見出しは「MOQT DevTools」だけで、どの draft の MOQ
 
 - 見出しに「MOQT DevTools (draft-21)」が出て、「draft-21」から draft-ietf-moq-transport-21 の文書を開ける
 - `vp check` / `tsc --noEmit` / `vp test run` / 既存の Playwright の E2E が通る
+
+## 解決方法
+
+- `devtools/src/App.tsx` の見出しを「MOQT DevTools (draft-21)」にし、「draft-21」を draft-ietf-moq-transport-21 の文書へのリンク (新しいタブで開く、`data-testid="moqt-draft-link"`) にした。文書の URL は定数 `MOQT_TRANSPORT_DRAFT_URL` にし、見出しとフッターで使う
+- `devtools/index.html` の `<title>` も「MOQT DevTools (draft-21)」にした
+- 手元の devtools で、見出しとページのタイトルが「MOQT DevTools (draft-21)」になり、リンク先が draft-ietf-moq-transport-21 の文書であることを確かめた
+- `vp check` / `tsc --noEmit` / `vp test run` (2807 件) / 既存の Playwright の E2E (40 件) が通った
