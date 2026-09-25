@@ -1,7 +1,7 @@
 # moqt-devtools が、購読や配信を始めている途中でも相手側の停止で接続設定を編集できる状態に戻す
 
 - Created: 2026-09-25
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-25
 - Branch: feature/fix-devtools-settings-enabled-while-starting
 - Polished: 2026-09-25
 
@@ -129,4 +129,28 @@ moqt-devtools は、Publisher か Subscriber が接続設定を使っている�
 
 ## 解決方法
 
-{未着手}
+- `devtools/src/signals/subscriber.ts` の `hasActiveSubscriber` が、`subscriber.value` に加えて `isStarting` のインスタンスも数えるようにした。`SubscriberInstance` の JSDoc と `isStarting` のコメントも合わせて直した
+- `devtools/src/signals/publisher.ts` に、配信を始めている途中を表す `isStarting` と、`pubSession !== null || isStarting` の computed `hasActivePublisher` を足した
+- `devtools/src/hooks/usePublisher.ts`
+  - `startPublishing` の開始 (try の前) で `pub.isStarting` を立てる
+  - 映像トラックの `session.publish` が返ったら、モジュール関数 `markVideoPublisherEstablished` で下ろす。この処理を `startPublishing` に直接書くと lint の `max-statements` (100) を超えるため、既存の `resetVideoPublishState` と同じくモジュールの関数に切り出した
+  - `cleanupPublisher` でも下ろす
+  - `catch` の条件なしの `settings.settingsDisabled.value = false;` を消した。入力を戻すかは `cleanupPublisher` が Subscriber の有無を見て決める
+- `devtools/src/hooks/useSubscriber.ts` の `resetSubscriberState` は、`subscriber` と `isStarting` を下ろしてから、`!sub.hasActiveSubscriber.value && !pub.hasActivePublisher.value` のときだけ入力を戻す
+- テスト
+  - `devtools/src/hooks/useSubscriber.prop.ts` (新規): `resetSubscriberState` の PBT。止めるインスタンス、任意の数の他の Subscriber、Publisher がそれぞれ開始の途中かの組み合わせで、止めたインスタンス自身を数えず、他のどれかが使っている間だけ入力を無効のまま残すことを確かめる (経路 1 と 3)
+  - `devtools/src/signals/subscriber.prop.ts` (新規): `hasActiveSubscriber` が任意の数のインスタンスの `isStarting` を数える PBT
+  - `devtools/src/signals/publisher.test.ts` (新規): `pubSession` が null のまま `isStarting` の真偽で `hasActivePublisher` が決まる
+  - `devtools/src/hooks/usePublisher.test.ts`: 開始の失敗 (不正な解像度) で、確立を待つ Subscriber が居れば入力を保ち、居なければ戻す (経路 2)。確立を待つ Subscriber が居る間の `stopPublishing` で入力を保つ。`connect` を待っている間は `pub.isStarting` が立ち、失敗の後始末で下りる
+  - `devtools/src/hooks/useSubscriber.test.ts`: 既存の「resetSubscriberState resets every state signal to initial value」で、確立済みで確立待ちも立っているインスタンスを一覧に登録し、止めたインスタンス自身を数えずに入力を戻すことを確かめた
+  - 各テストが守る修正は、実装を一時的に崩して失敗することで確かめた (`hasActiveSubscriber` の `isStarting`、`resetSubscriberState` の Publisher の判定、自身の `subscriber` と `isStarting` を判定の前に下ろす順序、`catch` の条件なしの処理、`pub.isStarting` の立て下ろし)
+- 設計方針から変えた点
+  - `resetSubscriberState` の引数 `isOtherPublisherActive` を消し、関数の中で `pub.hasActivePublisher` を直接読むようにした。引数で渡すと、テストが本番と同じ式をテストの中で書き直すことになり、`teardownSubscriber` の述語を戻してもテストが落ちなかったため。`pub.isStarting` を立てれば Fake なしに「Publisher が使っている」状態を作れるので、注入は不要になった
+  - 経路 1 と 3 と `hasActiveSubscriber` は、単体テストではなく PBT で確かめた。組み合わせで表せる性質であり、PBT で書けるものを単体テストで書かない規約に従った。`resetSubscriberState` の判定の既存の単体テスト 2 件 (`() => true` / `() => false` を渡していたもの) も PBT に置き換えた
+  - `pub.isStarting` の立て下ろしは、`WebTransport` が無いことに頼らず、`moqt://` で始まらない URL で確かめた。`connect` は async 関数なので URL の検証の例外は reject になり、実行環境の `WebTransport` の有無に依存しない
+  - 確立済みの Subscriber を止めたときに自身を数えないことは、既に `FakeSubscriber` を使っている既存の単体テストに assert を足して固定した (新しく Fake に頼るテストは増やしていない)
+- 確認: `npx vp check` / `npx vp test --run` (147 files / 2786 tests) / `npx tsc --noEmit` / `npx vp run e2e-test` (40 passed) が通る。差分レビューで、修正前の develop では経路 1〜3 で入力が有効に戻り、修正後は無効のまま残ることを headless Chromium で確かめた
+- 残した課題
+  - `hasActivePublisher` の `pubSession !== null` の項と、`markVideoPublisherEstablished` で `isStarting` を下ろす処理は、Fake を増やさない方針のためテストで固定していない (前者は変更前の `teardownSubscriber` の述語でも未検証だった。後者は `pubSession` が同じ間を覆うため外から観測できない)
+  - 停止した配信の session の close / error のコールバックや、古い `startPublishing` の `catch` が、次に始めた配信を後始末する問題 (対象外とした別 issue)
+  - 開始の途中でも Publish と Preview を押せる
