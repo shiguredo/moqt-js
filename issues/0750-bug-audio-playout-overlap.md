@@ -1,7 +1,7 @@
 # createMediaSubscriber が復号した音声を届いたその場で鳴らし、重なりと隙間でノイズになる
 
 - Created: 2026-09-25
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-25
 - Branch: feature/fix-audio-playout-overlap
 - Polished: {YYYY-MM-DD}
 - Reporter: @voluntas
@@ -35,3 +35,15 @@
 - `createMediaSubscriber` が決めた時刻で鳴らす
 - `CHANGES.md` の `## develop` に `[FIX]` で載る (遅れて鳴ることも書く)
 - `vp check` / `tsc --noEmit` / `vp test run` / 既存の Playwright の E2E が通る
+
+## 解決方法
+
+- `src/audioPlayout.ts` に、復号した音声を鳴らす時刻を決める `AudioPlayoutScheduler` を置いた。最初の音で基準を決め、timestamp の間隔どおりに並べる。timestamp が進まない音は前の音のすぐ後ろに並べ、前の音の終わりより前には鳴らさない。過ぎてから届いた音では基準を取り直す。遅れが上限を超える音は、並べる音が溜まりすぎているなら捨てて基準をその音の長さだけ前に寄せ、timestamp が大きく飛んだだけなら基準を取り直して鳴らす
+- 再生の遅れ `AUDIO_PLAYOUT_DELAY_SECONDS` は 80 ms、上限 `AUDIO_PLAYOUT_MAX_DELAY_SECONDS` は 300 ms、余裕 `AUDIO_PLAYOUT_MIN_LEAD_SECONDS` は 10 ms
+- `src/createMediaSubscriber.ts` の `handleAudioDecodedData` は、決めた時刻に `source.start(startAt)` で鳴らし、捨てると決めた音は鳴らさない。基準は AudioContext を作るとき (`createOutputStream`) に作り直す
+- テスト: `audioPlayout.test.ts` で個々の規則 (最初の音、揺らぎの吸収、音の抜け、進まない timestamp、重ねない、基準の取り直し、捨てる、timestamp の飛び、reset、値の指定) を、`audioPlayout.prop.ts` で鳴らす音が重ならない、今 + 余裕以上、遅れは上限以下であることを固定した
+- 実際に鳴った音で確かめたのは、同じモジュールを使う moqt-devtools の subscriber (`0751`)。配備の relay で 20 秒の再生の出力の切れ目は 1826 回から 2 回、重なって足された音は 48692 サンプルから 0 になった (映像と音声の配信)
+- `createMediaSubscriber` 自体はブラウザで通しでは確かめられていない。`examples/high-level-api` で受信を試したところ、次の既存の問題で止まった
+  - `examples/vite.config.ts` に `__MOQT_JS_VERSION__` の `define` が無く、ページの読み込みで `ReferenceError` になる
+  - それを避けても、手元の sora-moq の relay で `createMediaSubscriber` が「catalog receive timeout」で止まる (example 自身の `createMediaPublisher` で配信しても同じ)
+- `vp check` / `tsc --noEmit` / `vp test run` (2825 件) が通った
