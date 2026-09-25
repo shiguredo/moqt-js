@@ -1,7 +1,7 @@
 # moqt-devtools の publisher で映像を送らず音声だけを配信できない
 
 - Created: 2026-09-25
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-25
 - Branch: feature/add-devtools-video-source-none
 - Polished: {YYYY-MM-DD}
 - Reporter: @voluntas
@@ -41,3 +41,21 @@ moqt-devtools の publisher は、音声の入力には None があるが、映�
 - 手元の relay で Video Source を None にして音声だけを配信し、subscriber が音声を受け取って復号する。publisher の Stop で subscriber が「Stream ended」になる
 - 映像と音声の両方の配信が変わらない
 - `vp check` / `tsc --noEmit` / `vp test run` / 既存の Playwright の E2E が通る
+
+## 解決方法
+
+- `devtools/src/types.ts` の `VideoSourceType` に `"none"` を足した。`devtools/src/signals/connectionSettings.ts` に `VIDEO_SOURCES` と `isVideoSourceType` を置き、URL の読み込みと Video Source の select (`ConnectionSettings.tsx`、`as any` をなくした) で使う
+- `buildPublisherCatalog` の入力を `{ video?, audio? }` にし、映像トラックを省けるようにした。どちらも無いときは throw する
+- `devtools/src/hooks/usePublisher.ts` の `startPublishing`
+  - 映像の部分を `prepareVideoForPublishing` (Preview の映像を使うか新しく取る) と `startVideoPublishing` (映像トラックの PUBLISH、encoder、フレームの読み出し) に切り出し、Video Source が None のときは呼ばない。None のときは Preview の映像も手放す (`releaseVideoStream`)
+  - 映像と音声がどちらも None のときは接続の前に、映像が None で音声を用意できないときは catalog を送る前に throw する
+  - 音声だけのときは `startAudioPublishing` の `audioOnly` で、音声トラックの PUBLISH の確立で `isStarting` を下ろし、Forward State の行に音声トラックの値を出す。前の配信の映像の統計も持ち越さない
+- 配信中かの判定を `devtools/src/signals/publisher.ts` の `isPublishing` (映像か音声のトラックの Publisher がある) にまとめ、`PublisherPanel` のボタンの可否に使う
+- Preview は、None のときは映像を取らず音声だけを取り、表示を「Preview: no video」にする
+- テスト: `usePublisher.test.ts` で映像を省いた catalog とどちらも無いときの throw を、`connectionSettings.test.ts` で `isVideoSourceType` と URL の往復を固定した
+- 手元の relay と devtools で、Video Source を None、Audio Source を Dummy にして配信した
+  - publisher は「Publishing: room/audio-only/audio」になり、Catalog は音声トラックだけ (opus / 64 kbps / 48000 Hz / 2 ch)、購読者が付くと Forward State が 1 になった。Stop を押せる
+  - subscriber は音声の Object を約 3 秒で 151 個受け取って 151 個とも復号した。publisher の Stop で subscriber が「Stream ended」になった
+  - 映像の枠は None でも大きさが変わらず、Publisher と Subscriber で映像、音声のメーター、Catalog の上端がそろったまま
+  - Video Source が Dummy の配信 (映像と音声) も、映像 63 フレーム、音声 150 個を復号した (変わらない)
+- `vp check` / `tsc --noEmit` / `vp test run` (2807 件) / 既存の Playwright の E2E (40 件) が通った
