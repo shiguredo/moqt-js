@@ -1,7 +1,7 @@
 # 購読の Subgroup stream が reset されたときの error code を捨て、Object の欠落が relay のどの経路によるか分からない
 
 - Created: 2026-09-25
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-25
 - Branch: feature/add-subgroup-reset-error-code
 - Polished: {YYYY-MM-DD}
 
@@ -33,3 +33,12 @@ relay は reset の理由ごとに異なる error code を使う (moqt-draft-21 
 - moqt-devtools で、reset の code ごとの数とログを単体テストで固定する
 - 欠落と reset の一覧が止まりの一覧とは別に残ることを単体テストで固定する
 - `vp check` と全テスト (vitest) が通る
+
+## 解決方法
+
+- `src/error.ts` に `peerStreamErrorCode` を足した。read / write の失敗値の `streamErrorCode` が数値なら `normalizeDataStreamErrorCode` で正規化して返し (未知の code は INTERNAL_ERROR)、無ければ undefined を返す。bidi stream の reset (`createResetStreamErrorWithMessage`) も同じ関数を使うようにした
+- `src/session/publicTypes.ts` の `SubgroupStreamEnd` に `errorCode?: DataStreamErrorCode` を足し、`src/session/dataStreamIncoming.ts` の `dataStreamHandleSubgroupStream` が RESET_STREAM で終わった stream の code を載せる。FIN と code の無い失敗値では載せない。`DataStreamErrorCode` を `src/index.ts` から公開した
+- `devtools/src/utils/playbackTimingStats.ts` の `recordSubgroupEnd` が code と受け取った時刻を受け、reset を code ごとに数える (`subgroupStreamResetsByCode`、キーは `formatStreamResetCode` の「名前 (16 進の値)」、code が無ければ `no code`)。reset と欠落 (`loss`) の止まりは、止まりの一覧とは別の `recentLossEvents` (直近 30 件、`MAX_RECENT_LOSS_EVENTS`) に時刻順で残す。到着の遅れの止まりに押し出されない
+- `devtools/src/hooks/useSubscriber.ts` は reset のデバッグログに code を出す。`SubscriberPanel` と `DebugPanel` の統計のテキストに、code ごとの数と `recentLossEvents` (UTC) を出す
+- テスト: `peerStreamErrorCode` (既知 / 未知 / code 無し / 数値でない / object でない)、`SubgroupStreamEnd.errorCode` (0x0 / 0x1 / 0x2 / 0x5 / 未知の 0x99、FIN と code 無しでは載らない)、code ごとの数、`recentLossEvents` が止まりの一覧から押し出されても残ること、上限、1 行の文字列。`vp check` と全テスト (2743 件) が通った
+- 手元の relay と Chromium で、publisher の stream を途中で reset して subscriber に code が届くことも確かめようとしたが、確かめられなかった。cache を持たない relay では、Chrome が RESET_STREAM を送らなかった (NetLog で確認)。cache を持つ relay では、replay 中の購読の下流の stream は reset されず、Track の終了のときに初めて reset された (そのときは購読が先に閉じるため、通知されない)。実ブラウザでの code の値は、配備した devtools で reset が起きたときに確かめる
