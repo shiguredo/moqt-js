@@ -11,12 +11,14 @@ import {
   buildQueryString,
   initFromUrl,
   isAudioSourceType,
+  isVideoSourceType,
   jitterBufferEnabled,
   audioAutoGainControl,
   audioEchoCancellation,
   audioNoiseSuppression,
   audioSource,
   selectedMicrophoneDeviceId,
+  videoSource,
 } from "./connectionSettings";
 
 // テスト間で Authorization Token の signal を持ち越さないためのリセット
@@ -276,6 +278,27 @@ test("isAudioSourceType: microphone を音声の入力として受理する", ()
   initFromUrl("audioSource=microphone");
   assert.equal(audioSource.value, "microphone");
   audioSource.value = "none";
+});
+
+// 映像の入力に None (映像を送らず音声だけを配信する) を選べる。URL の videoSource=none も
+// 受理し、Copy URL で往復できる
+test("isVideoSourceType: none を映像の入力として受理し、URL で往復できる", () => {
+  assert.isTrue(isVideoSourceType("none"));
+  assert.isTrue(isVideoSourceType("dummy"));
+  assert.isTrue(isVideoSourceType("camera"));
+  assert.isFalse(isVideoSourceType("screen"));
+
+  videoSource.value = "none";
+  const query = buildQueryString();
+  assert.equal(new URLSearchParams(query).get("videoSource"), "none");
+  videoSource.value = "dummy";
+  initFromUrl(query);
+  assert.equal(videoSource.value, "none");
+
+  // 選択肢に無い値は受理せず、今の設定のまま残す
+  initFromUrl("videoSource=screen");
+  assert.equal(videoSource.value, "none");
+  videoSource.value = "dummy";
 });
 
 // 音声処理 (エコー除去 / ノイズ抑制 / 自動ゲイン) の既定はブラウザの既定と同じ有効

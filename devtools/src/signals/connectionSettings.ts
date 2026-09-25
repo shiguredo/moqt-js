@@ -410,9 +410,12 @@ export function buildQueryString(): string {
   return params.toString();
 }
 
-// 音声の選択式設定の許可リスト。ConnectionSettings の select はこの定数から生成し、
+// 映像と音声の選択式設定の許可リスト。ConnectionSettings の select はこの定数から生成し、
 // URL の検証も同じ定数を使う (選択肢に無い値を URL が受理すると、select の表示が
 // 空になって表示と実際の設定が食い違う)
+
+/** 映像の入力元の選択肢 */
+export const VIDEO_SOURCES: readonly VideoSourceType[] = ["none", "dummy", "camera"];
 
 /** 音声の入力元の選択肢 */
 export const AUDIO_SOURCES: readonly AudioSourceType[] = ["none", "dummy", "microphone"];
@@ -428,6 +431,15 @@ export const AUDIO_SAMPLE_RATES = [8000, 16000, 24000, 48000];
 
 /** 音声チャンネル数の選択肢。ダミー音声が作れる 1 (mono) と 2 (stereo) だけ */
 export const AUDIO_CHANNELS = [1, 2];
+
+/**
+ * 映像の入力元として受理できる値かを判定する
+ *
+ * URL クエリの検証と UI の select の両方で同じ許可リストを使う。
+ */
+export function isVideoSourceType(value: string): value is VideoSourceType {
+  return VIDEO_SOURCES.some((source) => source === value);
+}
 
 /**
  * 音声の入力元として受理できる値かを判定する
@@ -542,8 +554,8 @@ export function initFromUrl(search: string): void {
   }
 
   const videoSourceParam = params.get("videoSource");
-  if (videoSourceParam && ["dummy", "camera"].includes(videoSourceParam)) {
-    videoSource.value = videoSourceParam as VideoSourceType;
+  if (videoSourceParam !== null && isVideoSourceType(videoSourceParam)) {
+    videoSource.value = videoSourceParam;
   }
 
   const cameraDeviceIdParam = params.get("cameraDeviceId");

@@ -1,6 +1,6 @@
 import { signal } from "@preact/signals";
 import * as settings from "../signals/connectionSettings";
-import type { AudioSourceType } from "../types";
+import type { AudioSourceType, VideoSourceType } from "../types";
 
 const showMoqtHelp = signal(false);
 const showMsfHelp = signal(false);
@@ -309,6 +309,13 @@ function HttpVersionBadge() {
 // チャンネル数の表示名。許可リストに値を足したときはここにも足す
 const AUDIO_CHANNEL_LABELS: Record<number, string> = { 1: "Mono", 2: "Stereo" };
 
+// 映像の入力元の表示名
+const VIDEO_SOURCE_LABELS: Record<VideoSourceType, string> = {
+  none: "None",
+  dummy: "Dummy (Canvas)",
+  camera: "Camera (gUM)",
+};
+
 // 音声の入力元の表示名
 const AUDIO_SOURCE_LABELS: Record<AudioSourceType, string> = {
   none: "None",
@@ -547,18 +554,25 @@ export function ConnectionSettings() {
             </label>
             <select
               id="videoSource"
+              data-testid="video-source"
               value={settings.videoSource.value}
               onChange={(e) => {
-                settings.videoSource.value = e.currentTarget.value as any;
-                if (e.currentTarget.value === "camera") {
-                  void settings.fetchCameraDevices();
+                const value = e.currentTarget.value;
+                if (settings.isVideoSourceType(value)) {
+                  settings.videoSource.value = value;
+                  if (value === "camera") {
+                    void settings.fetchCameraDevices();
+                  }
                 }
               }}
               disabled={settings.settingsDisabled.value}
               class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white disabled:bg-slate-100 disabled:cursor-not-allowed"
             >
-              <option value="dummy">Dummy (Canvas)</option>
-              <option value="camera">Camera (gUM)</option>
+              {settings.VIDEO_SOURCES.map((value) => (
+                <option key={value} value={value}>
+                  {VIDEO_SOURCE_LABELS[value]}
+                </option>
+              ))}
             </select>
           </div>
           {/* カメラデバイス。映像の入力が camera でない間も描き、操作できなくする

@@ -19,7 +19,7 @@ import {
   isSameCodecDescription,
   parseResolution,
 } from "../utils/codec";
-import type { AudioCodecType, AudioSourceType, CodecType } from "../types";
+import type { AudioCodecType, AudioSourceType, CodecType, VideoSourceType } from "../types";
 import { createDummyVideoStream } from "../webcodecs-devtools/utils/dummyVideo";
 import { createDummyAudioStream } from "../webcodecs-devtools/utils/dummyAudio";
 import { readAllAudioSamples } from "../utils/audioLevel";
@@ -102,16 +102,22 @@ function markVideoPublisherEstablished(publisherInstance: Publisher): void {
   pub.isStarting.value = false;
 }
 
-/** 配信する映像トラックの Catalog を組み立てるための入力 */
+/** 配信するトラックの Catalog を組み立てるための入力 */
 export interface PublisherCatalogOptions {
+  /** 映像トラックを配信するときの設定。省略時 (映像の入力が None) は映像トラックを載せない */
+  video?: PublisherVideoCatalogOptions;
+  /** 音声トラックを配信するときの設定。省略時は音声トラックを載せない */
+  audio?: PublisherAudioCatalogOptions;
+}
+
+/** 配信する映像トラックの Catalog を組み立てるための入力 */
+export interface PublisherVideoCatalogOptions {
   trackName: string;
   codec: CodecType;
   width: number;
   height: number;
   framerate: number;
   bitrate: number;
-  /** 音声トラックを配信するときの設定。省略時は映像トラックだけを載せる */
-  audio?: PublisherAudioCatalogOptions;
 }
 
 /** 配信する音声トラックの Catalog を組み立てるための入力 */
@@ -125,7 +131,9 @@ export interface PublisherAudioCatalogOptions {
 /**
  * 配信する映像トラックと音声トラックの Catalog を組み立てる
  *
- * draft-ietf-moq-msf-01 §5.1 の full catalog を生成する。
+ * draft-ietf-moq-msf-01 §5.1 の full catalog を生成する。映像トラックと音声トラックは
+ * どちらか一方だけでもよい (catalog は映像トラックを必須としない)。どちらも無い catalog は
+ * 購読できる対象が無いため作らずに throw する。
  * codec 文字列は映像が `getCatalogCodec`、音声が `getAudioEncoderConfig` を通し、
  * Encoder に渡す設定と同一の対応表を使う (Catalog の codec 誤記は購読側の Decoder
  * 設定を壊すため、対応表の二重管理を避ける)。
@@ -138,19 +146,22 @@ export interface PublisherAudioCatalogOptions {
  * ブラウザ API に依存しないため、送信した Catalog の内容はここで検証できる。
  */
 export function buildPublisherCatalog(options: PublisherCatalogOptions): Catalog {
-  const tracks: CatalogTrack[] = [
-    {
-      name: options.trackName,
+  const tracks: CatalogTrack[] = [];
+
+  if (options.video) {
+    const video = options.video;
+    tracks.push({
+      name: video.trackName,
       packaging: "loc",
       isLive: true,
       role: "video",
-      codec: getCatalogCodec(options.codec),
-      width: options.width,
-      height: options.height,
-      framerate: options.framerate,
-      bitrate: options.bitrate,
-    },
-  ];
+      codec: getCatalogCodec(video.codec),
+      width: video.width,
+      height: video.height,
+      framerate: video.framerate,
+      bitrate: video.bitrate,
+    });
+  }
 
   if (options.audio) {
     const audio = options.audio;
@@ -167,6 +178,9 @@ export function buildPublisherCatalog(options: PublisherCatalogOptions): Catalog
     });
   }
 
+  if (tracks.length === 0) {
+    throw new Error("no track to publish: both video and audio are absent");
+  }
   return createCatalog(tracks);
 }
 
@@ -342,7 +356,7 @@ interface VideoStreamResult {
 }
 
 async function getVideoStream(
-  source: "dummy" | "camera",
+  source: Exclude<VideoSourceType, "none">,
   width: number,
   height: number,
   framerate: number,
@@ -394,6 +408,62 @@ async function getVideoStream(
       }
     },
   };
+}
+
+/** 配信に使う映像のトラックと、その幅と高さ */
+interface VideoInput {
+  track: MediaStreamTrack;
+  width: number;
+  height: number;
+}
+
+/**
+ * 配信に使う映像のストリームを用意する
+ *
+ * Preview の映像があればそのまま使い、無ければ新しく取る
+ */
+async function prepareVideoForPublishing(
+  source: Exclude<VideoSourceType, "none">,
+  width: number,
+  height: number,
+  framerate: number,
+): Promise<VideoInput> {
+  let actualWidth: number;
+  let actualHeight: number;
+  const hadPreview = pub.isPreviewActive.value && pub.mediaStream.value !== null;
+
+  if (hadPreview) {
+    actualWidth = width;
+    actualHeight = height;
+  } else {
+    const cameraDeviceId = source === "camera" ? settings.selectedCameraDeviceId.value : undefined;
+    const videoStreamResult = await getVideoStream(
+      source,
+      width,
+      height,
+      framerate,
+      cameraDeviceId,
+    );
+    pub.mediaStream.value = videoStreamResult.stream;
+    pub.videoStreamCleanup.value = videoStreamResult.cleanup;
+    actualWidth = videoStreamResult.width;
+    actualHeight = videoStreamResult.height;
+  }
+
+  const track = pub.mediaStream.value?.getVideoTracks()[0];
+  if (!track) {
+    throw new Error("Failed to get video track");
+  }
+  return { track, width: actualWidth, height: actualHeight };
+}
+
+/** 映像のストリーム (Preview や配信で取ったもの) を解放する */
+function releaseVideoStream(): void {
+  if (pub.videoStreamCleanup.value) {
+    pub.videoStreamCleanup.value();
+    pub.videoStreamCleanup.value = null;
+  }
+  pub.mediaStream.value = null;
 }
 
 // catalog の送り直し (draft-ietf-moq-msf-01 Section 5.1)
@@ -502,6 +572,7 @@ export function usePublisher() {
    * 取れた形式の AudioEncoder の設定にブラウザが対応していなければ音声を諦める
    * (Catalog だけ音声トラックを広告すると、購読側は object が来ないまま待ち続ける)。
    * マイクを取れない (許可されないなど) ときも、映像の配信は続けて音声だけを諦める
+   * (映像の入力が None のときは、呼び出し側が配信をやめる)
    */
   async function prepareAudioForPublishing(
     source: AudioSourceType,
@@ -517,7 +588,7 @@ export function usePublisher() {
     try {
       format = await startAudioStream(source, requested);
     } catch (error) {
-      addLog("warn", "[publisher] failed to capture audio, publishing video only", {
+      addLog("warn", "[publisher] failed to capture audio, publishing without audio", {
         source,
         message: error instanceof Error ? error.message : String(error),
       });
@@ -625,15 +696,20 @@ export function usePublisher() {
       const { width, height } = parseResolution(settings.resolution.value);
       const framerate = settings.framerate.value;
       const source = settings.videoSource.value;
-      const deviceId = source === "camera" ? settings.selectedCameraDeviceId.value : undefined;
-
-      const sourceLabel = source === "dummy" ? "Dummy" : "Camera";
       pub.pubStatus.value = "disconnected";
-      pub.pubStatusMessage.value = `Preview: ${sourceLabel} ${width}x${height} @ ${framerate}fps`;
 
-      const videoStreamResult = await getVideoStream(source, width, height, framerate, deviceId);
-      pub.mediaStream.value = videoStreamResult.stream;
-      pub.videoStreamCleanup.value = videoStreamResult.cleanup;
+      if (source === "none") {
+        // 映像を送らないときは映像のストリームを取らず、音声だけを確かめる
+        pub.pubStatusMessage.value = "Preview: no video";
+      } else {
+        const deviceId = source === "camera" ? settings.selectedCameraDeviceId.value : undefined;
+        const sourceLabel = source === "dummy" ? "Dummy" : "Camera";
+        pub.pubStatusMessage.value = `Preview: ${sourceLabel} ${width}x${height} @ ${framerate}fps`;
+
+        const videoStreamResult = await getVideoStream(source, width, height, framerate, deviceId);
+        pub.mediaStream.value = videoStreamResult.stream;
+        pub.videoStreamCleanup.value = videoStreamResult.cleanup;
+      }
 
       // 音声も Preview から取る (メーターで音を確かめられる)
       await startPreviewAudio();
@@ -647,11 +723,7 @@ export function usePublisher() {
   };
 
   const stopPreview = (): void => {
-    if (pub.videoStreamCleanup.value) {
-      pub.videoStreamCleanup.value();
-      pub.videoStreamCleanup.value = null;
-    }
-    pub.mediaStream.value = null;
+    releaseVideoStream();
     pub.isPreviewActive.value = false;
     pub.pubStatus.value = "disconnected";
     pub.pubStatusMessage.value = "Ready to publish";
@@ -810,6 +882,112 @@ export function usePublisher() {
    * 音声は chunk 1 つが Group 1 つになるため (draft-ietf-moq-loc-04 §4.1)、
    * 映像の Group とは共有できない。
    */
+  /**
+   * 映像トラックを配信する
+   *
+   * 映像トラックを PUBLISH し、encoder と映像のフレームの読み出しを用意する。フレームの
+   * 読み出しと符号化は呼び出し側が統計を初期化した後に始める (processFrames)
+   */
+  async function startVideoPublishing(
+    session: Session,
+    namespaceArray: string[],
+    videoInput: VideoInput,
+    options: {
+      trackName: string;
+      codec: CodecType;
+      framerate: number;
+      bitrate: number;
+      maxCacheDuration: number;
+      useWorker: boolean;
+    },
+  ): Promise<void> {
+    // Publisher を作成する
+    const publisherInstance = await session.publish(
+      namespaceArray,
+      options.trackName,
+      {
+        error: (error) => {
+          console.error("Publisher error:", error);
+          pub.pubStatus.value = "error";
+          pub.pubStatusMessage.value = `Publish error: ${error.message}`;
+        },
+        // draft-ietf-moq-transport-21 Section 3.1:
+        // Forward State の変化を追跡する
+        onForwardStateChange: (forward) => {
+          pub.forwardState.value = forward;
+        },
+        // draft-ietf-moq-transport-21 Section 9.20.20:
+        // 新しい Group の要求を受けたら、次に符号化するフレームをキーフレームにする
+        onNewGroupRequest: (newGroupRequest) => {
+          pub.newGroupRequestsReceived.value++;
+          pub.newGroupRequested.value = true;
+          addLog("info", "NEW_GROUP_REQUEST received", {
+            newGroupRequest: newGroupRequest.toString(),
+          });
+        },
+      },
+      {
+        maxCacheDuration: BigInt(options.maxCacheDuration),
+        // draft-ietf-moq-transport-21 Section 10.6: DYNAMIC_GROUPS=1 を広告し、後から視聴を
+        // 始めた購読者が NEW_GROUP_REQUEST でキーフレームを要求できるようにする
+        dynamicGroups: true,
+      },
+    );
+    markVideoPublisherEstablished(publisherInstance);
+
+    pub.pubStatus.value = "connected";
+    pub.pubStatusMessage.value = `Publishing: ${namespaceArray.join("/")}/${options.trackName}`;
+
+    // Encoder 設定を作成し、対応状況を確認する
+    const encoderConfig = getEncoderConfig(
+      options.codec,
+      videoInput.width,
+      videoInput.height,
+      options.bitrate,
+      options.framerate,
+    );
+
+    const support = await VideoEncoder.isConfigSupported(encoderConfig);
+    if (!support.supported) {
+      throw new Error(`Codec not supported: ${encoderConfig.codec}`);
+    }
+
+    // EncoderWrapper を作成する
+    const encoderInstance = new EncoderWrapper(options.useWorker, {
+      output: (chunk) => {
+        handleEncodedChunk(chunk);
+      },
+      error: (error) => {
+        console.error("Encoder error:", error);
+        pub.encodeErrors.value++;
+        pub.encoderState.value = encoderInstance.state;
+        pub.pubStatus.value = "error";
+        pub.pubStatusMessage.value = `Encoder error: ${error.message}`;
+      },
+    });
+    pub.encoder.value = encoderInstance;
+
+    // Encoder を設定する
+    await encoderInstance.configure(encoderConfig);
+    pub.encoderState.value = encoderInstance.state;
+
+    // configure 後の Encoder 状態を検証する
+    if (encoderInstance.state !== "configured") {
+      throw new Error(`Encoder failed to configure. State: ${encoderInstance.state}`);
+    }
+
+    // codec バッジを表示する
+    pub.pubCodec.value = `${options.codec.toUpperCase()} ${videoInput.width}x${videoInput.height}`;
+
+    // VideoFrame ソースを作成する
+    // MediaStreamTrackProcessor が利用可能な場合はそれを使い、
+    // 利用できない場合は requestVideoFrameCallback でフォールバックする
+    const videoFrameSource = createVideoFrameSource(videoInput.track);
+    pub.frameReader.value = videoFrameSource.readable.getReader();
+    // 対応は読んだフレームからとる (processFrames)
+    resetVideoPublishState();
+  }
+
   async function startAudioPublishing(
     session: Session,
     namespaceArray: string[],
@@ -821,6 +999,9 @@ export function usePublisher() {
       sampleRate: number;
       channels: number;
       maxCacheDuration: number;
+      // 映像を送らず音声だけを配信するか。このときは音声トラックの PUBLISH の確立で
+      // 配信を始めている途中を終え、Forward State の行に音声トラックの値を出す
+      audioOnly: boolean;
     },
   ): Promise<void> {
     const audioPublisherInstance = await session.publish(
@@ -837,6 +1018,9 @@ export function usePublisher() {
         // Catalog の送り直しと同じく、Forward State が 1 になった時点で
         // 保持している Audio Config を次の Object に載せ直す
         onForwardStateChange: (forward) => {
+          if (options.audioOnly) {
+            pub.forwardState.value = forward;
+          }
           if (forward) {
             pub.audioConfigResendRequested.value = true;
           }
@@ -847,6 +1031,10 @@ export function usePublisher() {
       },
     );
     pub.audioPublisher.value = audioPublisherInstance;
+    if (options.audioOnly) {
+      pub.forwardState.value = audioPublisherInstance.forwardState;
+      pub.isStarting.value = false;
+    }
 
     const audioEncoderInstance = new AudioEncoderWrapper(options.useWorker, {
       output: (chunk) => {
@@ -982,6 +1170,11 @@ export function usePublisher() {
       const audioChannelsValue = settings.audioChannels.value;
       pub.keyframeInterval.value = settings.keyframeInterval.value;
 
+      // 映像も音声も送らない設定では、配信するトラックが無いため接続しない
+      if (videoSourceValue === "none" && audioSourceValue === "none") {
+        throw new Error("nothing to publish: both video source and audio source are none");
+      }
+
       // 接続オプションを組み立てる
       const connectOptions = settings.buildConnectOptions();
 
@@ -1055,15 +1248,29 @@ export function usePublisher() {
         { sampleRate: audioSampleRateValue, channels: audioChannelsValue },
       );
       const audioPublishable = audioFormat !== null;
+      // 映像を送らず音声も用意できなければ、配信するトラックが無い。catalog を送る前にやめる
+      // (トラックの無い catalog を広告しない)
+      if (videoSourceValue === "none" && !audioPublishable) {
+        throw new Error(
+          `nothing to publish: video source is none and audio (${audioSourceValue}) is not available`,
+        );
+      }
 
       // Catalog を作成して送信
       const createdCatalog = buildPublisherCatalog({
-        trackName: trackNameValue,
-        codec: codecValue,
-        width,
-        height,
-        framerate: framerateValue,
-        bitrate: bitrateValue,
+        // 映像は映像の入力が None でないときだけトラックを載せる
+        ...(videoSourceValue === "none"
+          ? {}
+          : {
+              video: {
+                trackName: trackNameValue,
+                codec: codecValue,
+                width,
+                height,
+                framerate: framerateValue,
+                bitrate: bitrateValue,
+              },
+            }),
         // 音声は配信できるときだけトラックを載せる (形式は取れた音の値)
         ...(audioFormat !== null
           ? {
@@ -1099,127 +1306,34 @@ export function usePublisher() {
 
       pub.pubStatusMessage.value = "Connected, preparing encoder...";
 
-      // 既存のプレビューストリームがあれば再利用し、無ければ新規作成する
-      let actualWidth: number;
-      let actualHeight: number;
-      const hadPreview = pub.isPreviewActive.value && pub.mediaStream.value !== null;
-
-      if (hadPreview) {
-        actualWidth = width;
-        actualHeight = height;
+      // 映像のストリームを用意する。映像の入力が None なら作らず、Preview の映像も手放す
+      // (配信しない映像を映し続けない)
+      let videoInput: VideoInput | null = null;
+      if (videoSourceValue === "none") {
+        releaseVideoStream();
       } else {
-        const cameraDeviceId =
-          videoSourceValue === "camera" ? settings.selectedCameraDeviceId.value : undefined;
-        const videoStreamResult = await getVideoStream(
+        videoInput = await prepareVideoForPublishing(
           videoSourceValue,
           width,
           height,
           framerateValue,
-          cameraDeviceId,
         );
-        pub.mediaStream.value = videoStreamResult.stream;
-        pub.videoStreamCleanup.value = videoStreamResult.cleanup;
-        actualWidth = videoStreamResult.width;
-        actualHeight = videoStreamResult.height;
       }
-
-      // 映像トラックを取得する
-      const videoTrack = pub.mediaStream.value?.getVideoTracks()[0];
-      if (!videoTrack) {
-        throw new Error("Failed to get video track");
-      }
-
       const audioTrack = takeAudioTrackForPublishing(audioPublishable);
-
+      // Preview で取った映像と音声は配信に引き継いだ
       pub.isPreviewActive.value = false;
 
-      // Publisher を作成する
-      const publisherInstance = await session.publish(
-        namespaceArray,
-        trackNameValue,
-        {
-          error: (error) => {
-            console.error("Publisher error:", error);
-            pub.pubStatus.value = "error";
-            pub.pubStatusMessage.value = `Publish error: ${error.message}`;
-          },
-          // draft-ietf-moq-transport-21 Section 3.1:
-          // Forward State の変化を追跡する
-          onForwardStateChange: (forward) => {
-            pub.forwardState.value = forward;
-          },
-          // draft-ietf-moq-transport-21 Section 9.20.20:
-          // 新しい Group の要求を受けたら、次に符号化するフレームをキーフレームにする
-          onNewGroupRequest: (newGroupRequest) => {
-            pub.newGroupRequestsReceived.value++;
-            pub.newGroupRequested.value = true;
-            addLog("info", "NEW_GROUP_REQUEST received", {
-              newGroupRequest: newGroupRequest.toString(),
-            });
-          },
-        },
-        {
-          maxCacheDuration: BigInt(maxCacheDurationValue),
-          // draft-ietf-moq-transport-21 Section 10.6: DYNAMIC_GROUPS=1 を広告し、後から視聴を
-          // 始めた購読者が NEW_GROUP_REQUEST でキーフレームを要求できるようにする
-          dynamicGroups: true,
-        },
-      );
-      markVideoPublisherEstablished(publisherInstance);
-
-      pub.pubStatus.value = "connected";
-      pub.pubStatusMessage.value = `Publishing: ${namespaceArray.join("/")}/${trackNameValue}`;
-
-      // Encoder 設定を作成し、対応状況を確認する
-      const encoderConfig = getEncoderConfig(
-        codecValue,
-        actualWidth,
-        actualHeight,
-        bitrateValue,
-        framerateValue,
-      );
-
-      const support = await VideoEncoder.isConfigSupported(encoderConfig);
-      if (!support.supported) {
-        throw new Error(`Codec not supported: ${encoderConfig.codec}`);
-      }
-
-      // EncoderWrapper を作成する
       const useWorker = settings.useDedicatedWorker.value;
-
-      const encoderInstance = new EncoderWrapper(useWorker, {
-        output: (chunk) => {
-          handleEncodedChunk(chunk);
-        },
-        error: (error) => {
-          console.error("Encoder error:", error);
-          pub.encodeErrors.value++;
-          pub.encoderState.value = encoderInstance.state;
-          pub.pubStatus.value = "error";
-          pub.pubStatusMessage.value = `Encoder error: ${error.message}`;
-        },
-      });
-      pub.encoder.value = encoderInstance;
-
-      // Encoder を設定する
-      await encoderInstance.configure(encoderConfig);
-      pub.encoderState.value = encoderInstance.state;
-
-      // configure 後の Encoder 状態を検証する
-      if (encoderInstance.state !== "configured") {
-        throw new Error(`Encoder failed to configure. State: ${encoderInstance.state}`);
+      if (videoInput !== null) {
+        await startVideoPublishing(session, namespaceArray, videoInput, {
+          trackName: trackNameValue,
+          codec: codecValue,
+          framerate: framerateValue,
+          bitrate: bitrateValue,
+          maxCacheDuration: maxCacheDurationValue,
+          useWorker,
+        });
       }
-
-      // codec バッジを表示する
-      pub.pubCodec.value = `${codecValue.toUpperCase()} ${actualWidth}x${actualHeight}`;
-
-      // VideoFrame ソースを作成する
-      // MediaStreamTrackProcessor が利用可能な場合はそれを使い、
-      // 利用できない場合は requestVideoFrameCallback でフォールバックする
-      const videoFrameSource = createVideoFrameSource(videoTrack);
-      pub.frameReader.value = videoFrameSource.readable.getReader();
-      // 対応は読んだフレームからとる (processFrames)
-      resetVideoPublishState();
 
       // 音声トラックを配信する
       if (audioTrack && audioFormat !== null) {
@@ -1230,7 +1344,15 @@ export function usePublisher() {
           sampleRate: audioFormat.sampleRate,
           channels: audioFormat.channels,
           maxCacheDuration: maxCacheDurationValue,
+          // 映像を送らないときは、音声トラックが配信の確立と Forward State を表す
+          audioOnly: videoInput === null,
         });
+      }
+      if (videoInput === null) {
+        // 映像の統計 (符号化と送信の時間など) は前の配信のものを持ち越さない
+        resetVideoPublishState();
+        pub.pubStatus.value = "connected";
+        pub.pubStatusMessage.value = `Publishing: ${namespaceArray.join("/")}/${AUDIO_TRACK_NAME}`;
       }
 
       // 統計値をリセットする
@@ -1255,7 +1377,9 @@ export function usePublisher() {
       pub.audioConfigResendRequested.value = false;
 
       // フレームを読み出してエンコードする
-      void processFrames();
+      if (videoInput !== null) {
+        void processFrames();
+      }
       if (audioTrack) {
         void processAudioFrames();
       }
@@ -1359,11 +1483,7 @@ export function usePublisher() {
     }
 
     // 映像ストリームを解放する
-    if (pub.videoStreamCleanup.value) {
-      pub.videoStreamCleanup.value();
-      pub.videoStreamCleanup.value = null;
-    }
-    pub.mediaStream.value = null;
+    releaseVideoStream();
 
     // 音声ストリームを解放する
     stopAudioStream();

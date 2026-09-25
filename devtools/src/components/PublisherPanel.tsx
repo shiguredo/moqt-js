@@ -59,7 +59,7 @@ export function PublisherPanel() {
     return "Ready";
   };
 
-  const isPublishing = pub.publisher.value !== null;
+  const isPublishing = pub.isPublishing.value;
   const isStopping = pub.isStopping.value;
   const previewBtnDisabled = isPublishing || isStopping;
   const publishBtnDisabled = isPublishing || isStopping;

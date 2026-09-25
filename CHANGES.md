@@ -32,6 +32,10 @@
   - 取っている音の peak / RMS (dBFS) と波形を、Preview 中から出す (Preview でも音声を取るようにした)。配信中は直近に送った LOC Audio Level も出す
   - 値は subscriber のメーターと同じ計算で求め、送る側と受ける側を比べられる。音声を取っていない間は「-」にする
   - @voluntas
+- [ADD] moqt-devtools の publisher で映像の入力に None を選べるようにし、音声だけを配信できるようにする
+  - Video Source に None を足す。None のときは映像を取らず、catalog に映像トラックを載せずに音声トラックだけを配信する。Forward State の行には音声トラックの値を出す
+  - 映像も音声も配信できない設定 (どちらも None、音声を取れないなど) では、catalog を送る前に配信をやめる
+  - @voluntas
 - [ADD] moqt-devtools の subscriber に表示の止まりの原因と受信の欠けの統計を追加する
   - 止まりごとに原因を 1 つ決め (`source` / `loss` / `discarded` / `arrival` / `groupSwitchHold` / `decode` / `playout` / `render` / `unknown`)、原因ごとの回数と時間、直近 30 回の止まり (時刻、長さ、Group ID / Object ID) を `playbackTiming` に出す
   - 届かなかった Object と Group、RESET_STREAM で終わった Subgroup の stream、上限で解けた Group の切り替えの保留を数える。止まりと stream の reset はデバッグログにも出す

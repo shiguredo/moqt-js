@@ -108,12 +108,14 @@ function resetPublisherSignals(): void {
 // 設定値がトラックの各フィールドに反映されることを固定する。
 test("buildPublisherCatalog: 設定値が video トラックのフィールドに反映される", () => {
   const catalog = buildPublisherCatalog({
-    trackName: "video",
-    codec: "vp8",
-    width: VIDEO_WIDTH,
-    height: VIDEO_HEIGHT,
-    framerate: VIDEO_FRAMERATE,
-    bitrate: VIDEO_BITRATE,
+    video: {
+      trackName: "video",
+      codec: "vp8",
+      width: VIDEO_WIDTH,
+      height: VIDEO_HEIGHT,
+      framerate: VIDEO_FRAMERATE,
+      bitrate: VIDEO_BITRATE,
+    },
   });
 
   // 映像トラック 1 件だけを持つ full catalog になる
@@ -144,12 +146,14 @@ test("buildPublisherCatalog: 設定値が video トラックのフィールド�
 test("buildPublisherCatalog: codec は getEncoderConfig と同じ対応表から解決する", () => {
   for (const codec of ALL_CODECS) {
     const catalog = buildPublisherCatalog({
-      trackName: "video",
-      codec,
-      width: 640,
-      height: 480,
-      framerate: VIDEO_FRAMERATE,
-      bitrate: 1_000_000,
+      video: {
+        trackName: "video",
+        codec,
+        width: 640,
+        height: 480,
+        framerate: VIDEO_FRAMERATE,
+        bitrate: 1_000_000,
+      },
     });
 
     const [track] = catalog.tracks;
@@ -168,12 +172,14 @@ test("buildPublisherCatalog: codec は getEncoderConfig と同じ対応表から
 // (draft-ietf-moq-msf-01 §5.1 の wire format との往復)。
 test("buildPublisherCatalog: encodeCatalog で送信した Catalog を decodeCatalogMessage で読み戻せる", () => {
   const catalog = buildPublisherCatalog({
-    trackName: "video",
-    codec: "h264",
-    width: VIDEO_WIDTH,
-    height: VIDEO_HEIGHT,
-    framerate: VIDEO_FRAMERATE,
-    bitrate: VIDEO_BITRATE,
+    video: {
+      trackName: "video",
+      codec: "h264",
+      width: VIDEO_WIDTH,
+      height: VIDEO_HEIGHT,
+      framerate: VIDEO_FRAMERATE,
+      bitrate: VIDEO_BITRATE,
+    },
   });
 
   const encoded = encodeCatalog(catalog);
@@ -611,12 +617,14 @@ test("startPublishing: connect を待っている間は isStarting が立ち、�
 // 購読側はこの 4 つから Decoder を構成するため、すべて載ることを固定する。
 test("buildPublisherCatalog: 音声を有効にすると audio トラックが増える", () => {
   const catalog = buildPublisherCatalog({
-    trackName: "video",
-    codec: "vp8",
-    width: VIDEO_WIDTH,
-    height: VIDEO_HEIGHT,
-    framerate: VIDEO_FRAMERATE,
-    bitrate: VIDEO_BITRATE,
+    video: {
+      trackName: "video",
+      codec: "vp8",
+      width: VIDEO_WIDTH,
+      height: VIDEO_HEIGHT,
+      framerate: VIDEO_FRAMERATE,
+      bitrate: VIDEO_BITRATE,
+    },
     audio: {
       codec: "opus",
       bitrate: 64000,
@@ -646,26 +654,52 @@ test("buildPublisherCatalog: 音声を有効にすると audio トラックが�
 
 test("buildPublisherCatalog: 音声を省略すると映像トラックだけになる", () => {
   const catalog = buildPublisherCatalog({
-    trackName: "video",
-    codec: "vp8",
-    width: VIDEO_WIDTH,
-    height: VIDEO_HEIGHT,
-    framerate: VIDEO_FRAMERATE,
-    bitrate: VIDEO_BITRATE,
+    video: {
+      trackName: "video",
+      codec: "vp8",
+      width: VIDEO_WIDTH,
+      height: VIDEO_HEIGHT,
+      framerate: VIDEO_FRAMERATE,
+      bitrate: VIDEO_BITRATE,
+    },
   });
 
   assert.equal(catalog.tracks.length, 1);
   assert.equal(catalog.tracks[0]?.role, "video");
 });
 
+// 映像の入力が None のときは、音声トラックだけを載せる (MSF の catalog は映像トラックを
+// 必須としない)。購読側は映像トラックの無い catalog を音声だけで購読する
+test("buildPublisherCatalog: 映像を省略すると音声トラックだけになる", () => {
+  const catalog = buildPublisherCatalog({
+    audio: {
+      codec: "opus",
+      bitrate: 64000,
+      sampleRate: 48000,
+      channels: 2,
+    },
+  });
+
+  assert.equal(catalog.tracks.length, 1);
+  assert.equal(catalog.tracks[0]?.role, "audio");
+  assert.equal(catalog.tracks[0]?.name, "audio");
+});
+
+// 映像も音声も無い catalog は購読できる対象が無いため、作らずに throw する
+test("buildPublisherCatalog: 映像も音声も省略すると throw する", () => {
+  assert.throws(() => buildPublisherCatalog({}), /no track to publish/);
+});
+
 test("buildPublisherCatalog: AAC の codec 文字列も Encoder 設定と一致する", () => {
   const catalog = buildPublisherCatalog({
-    trackName: "video",
-    codec: "vp8",
-    width: VIDEO_WIDTH,
-    height: VIDEO_HEIGHT,
-    framerate: VIDEO_FRAMERATE,
-    bitrate: VIDEO_BITRATE,
+    video: {
+      trackName: "video",
+      codec: "vp8",
+      width: VIDEO_WIDTH,
+      height: VIDEO_HEIGHT,
+      framerate: VIDEO_FRAMERATE,
+      bitrate: VIDEO_BITRATE,
+    },
     audio: {
       codec: "aac",
       bitrate: 128000,
