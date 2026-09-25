@@ -28,6 +28,7 @@ moqt-devtools の publisher は、encoder と catalog の幅と高さを、送�
 1. Resolution を 1280x720 にして Preview を押す
 2. プレビュー中に Resolution を 640x360 に変える
 3. Publish を押す。映像は 1280x720 のまま送られ、encoder と catalog は 640x360 になる
+
 - 別の経路: カメラが 1280x720 を出せず 640x480 で取れた場合、catalog は 1280x720 になる。Preview から Publish したときは encoder も 1280x720 になる
 
 ## 設計方針
