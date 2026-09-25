@@ -1,8 +1,9 @@
 import { useRef } from "preact/hooks";
 import { useSignalEffect } from "@preact/signals";
 import { usePublisher } from "../hooks/usePublisher";
+import { StatList, StatSection, TimingTable } from "./StatsView";
+import { PUBLISHER_LATENCY_BREAKDOWN_HELP, PUBLISH_TIMING_CAPTION } from "./statsHelp";
 import { formatBitrate, formatBytes } from "../utils/logFormatters";
-import { formatTimingSummary } from "../utils/playbackTimingStats";
 import * as pub from "../signals/publisher";
 
 function formatCatalogValue(key: string, value: unknown): string {
@@ -58,6 +59,8 @@ export function PublisherPanel() {
   const previewBtnDisabled = isPublishing || isStopping;
   const publishBtnDisabled = isPublishing || isStopping;
   const stopBtnDisabled = !isPublishing || isStopping;
+  const publishTiming = pub.publishTiming.value;
+  const sessionStats = pub.pubSession.value?.getStatistics();
 
   return (
     <div class="bg-white rounded-xl shadow-sm overflow-hidden">
@@ -196,128 +199,85 @@ export function PublisherPanel() {
 
         {/* Statistics */}
         <div class="bg-slate-50 rounded-lg p-4">
-          <h3 class="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">
-            Encoding Pipeline
-          </h3>
-          <div class="grid grid-cols-4 gap-3 mb-4">
-            <div class="bg-white rounded-lg p-3 border border-slate-200">
-              <div class="text-xs text-slate-500">framesEncoded</div>
-              <div class="text-xl font-bold text-green-600">{pub.framesEncoded.value}</div>
-            </div>
-            <div class="bg-white rounded-lg p-3 border border-slate-200">
-              <div class="text-xs text-slate-500">chunksEncoded</div>
-              <div class="text-xl font-bold text-green-600">{pub.chunksEncoded.value}</div>
-            </div>
-            <div class="bg-white rounded-lg p-3 border border-slate-200">
-              <div class="text-xs text-slate-500">keyFrames</div>
-              <div class="text-xl font-bold text-green-600">{pub.keyFramesEncoded.value}</div>
-            </div>
-            <div class="bg-white rounded-lg p-3 border border-slate-200">
-              <div class="text-xs text-slate-500">encodeErrors</div>
-              <div class="text-xl font-bold text-red-600">{pub.encodeErrors.value}</div>
-            </div>
-            <div class="bg-white rounded-lg p-3 border border-slate-200">
-              <div class="text-xs text-slate-500">newGroupRequests</div>
-              <div
-                class="text-xl font-bold text-green-600"
-                data-testid="publisher-new-group-requests"
-              >
-                {pub.newGroupRequestsReceived.value}
-              </div>
-            </div>
-          </div>
+          <StatSection title="Encoding Pipeline">
+            <StatList
+              items={[
+                { label: "framesEncoded", value: pub.framesEncoded.value },
+                { label: "chunksEncoded", value: pub.chunksEncoded.value },
+                { label: "keyFrames", value: pub.keyFramesEncoded.value },
+                { label: "encodeErrors", value: pub.encodeErrors.value, tone: "error" },
+                {
+                  label: "newGroupRequests",
+                  value: pub.newGroupRequestsReceived.value,
+                  testId: "publisher-new-group-requests",
+                },
+              ]}
+            />
+          </StatSection>
 
-          <h3 class="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">
-            Transmission
-          </h3>
-          <div class="grid grid-cols-4 gap-3 mb-4">
-            <div class="bg-white rounded-lg p-3 border border-slate-200">
-              <div class="text-xs text-slate-500">objects</div>
-              <div class="text-xl font-bold text-green-600">{pub.objectsSent.value}</div>
-            </div>
-            <div class="bg-white rounded-lg p-3 border border-slate-200">
-              <div class="text-xs text-slate-500">withExtensions</div>
-              <div class="text-xl font-bold text-green-600">{pub.objectsWithExtensions.value}</div>
-            </div>
-            <div class="bg-white rounded-lg p-3 border border-slate-200">
-              <div class="text-xs text-slate-500">bytes</div>
-              <div class="text-xl font-bold text-green-600">{formatBytes(pub.bytesSent.value)}</div>
-            </div>
-          </div>
+          <StatSection title="Transmission">
+            <StatList
+              items={[
+                { label: "objects", value: pub.objectsSent.value },
+                { label: "withExtensions", value: pub.objectsWithExtensions.value },
+                { label: "bytes", value: formatBytes(pub.bytesSent.value) },
+              ]}
+            />
+          </StatSection>
 
-          <h3 class="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">
-            Latency Breakdown
-          </h3>
-          <p class="text-xs text-slate-500 mb-3">
-            publisher の中の遅れの直近 10 秒の p50 / p95 / max (ms)。encode: フレームを読んでから
-            encoder の出力まで、send: encoder の出力から送信 (WebTransport の stream への書き込み)
-            の完了まで。subscriber の arrival はこれに経路と relay を足したもの
-          </p>
-          <div class="grid grid-cols-4 gap-3 mb-4">
-            <div class="bg-white rounded-lg p-3 border border-slate-200 col-span-2">
-              <div class="text-xs text-slate-500">encode</div>
-              <div class="text-sm font-bold text-blue-600" data-testid="publisher-encode-time">
-                {formatTimingSummary(pub.publishTiming.value.encodeMs)}
-              </div>
-            </div>
-            <div class="bg-white rounded-lg p-3 border border-slate-200 col-span-2">
-              <div class="text-xs text-slate-500">send</div>
-              <div class="text-sm font-bold text-blue-600" data-testid="publisher-send-time">
-                {formatTimingSummary(pub.publishTiming.value.sendMs)}
-              </div>
-            </div>
-            <div class="bg-white rounded-lg p-3 border border-slate-200 col-span-2">
-              <div class="text-xs text-slate-500">encodeQueueDrops</div>
-              <div
-                class="text-xl font-bold text-yellow-600"
-                data-testid="publisher-encode-queue-drops"
-              >
-                {pub.publishTiming.value.encodeQueueDrops}
-              </div>
-            </div>
-          </div>
+          <StatSection
+            title="Latency Breakdown"
+            help={PUBLISHER_LATENCY_BREAKDOWN_HELP}
+            testId="publisher-latency-breakdown"
+          >
+            <TimingTable
+              caption={PUBLISH_TIMING_CAPTION}
+              testId="publisher-latency-breakdown"
+              rows={[
+                {
+                  label: "encode",
+                  summary: publishTiming.encodeMs,
+                  testId: "publisher-encode-time",
+                },
+                { label: "send", summary: publishTiming.sendMs, testId: "publisher-send-time" },
+              ]}
+            />
+            <StatList
+              items={[
+                {
+                  label: "encodeQueueDrops",
+                  value: publishTiming.encodeQueueDrops,
+                  tone: "warn",
+                  testId: "publisher-encode-queue-drops",
+                },
+              ]}
+            />
+          </StatSection>
 
-          <h3 class="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">Output</h3>
-          <div class="grid grid-cols-4 gap-3 mb-4">
-            <div class="bg-white rounded-lg p-3 border border-slate-200 col-span-2">
-              <div class="text-xs text-slate-500">currentGroup</div>
-              <div class="text-xl font-bold text-green-600">{pub.pubCurrentGroup.value}</div>
-            </div>
-            <div class="bg-white rounded-lg p-3 border border-slate-200">
-              <div class="text-xs text-slate-500">encoderState</div>
-              <div class="text-sm font-bold text-slate-600">{pub.encoderState.value}</div>
-            </div>
-          </div>
+          <StatSection title="Output">
+            <StatList
+              items={[
+                { label: "currentGroup", value: pub.pubCurrentGroup.value },
+                { label: "encoderState", value: pub.encoderState.value },
+              ]}
+            />
+          </StatSection>
 
-          <h3 class="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">
-            Control Stream
-          </h3>
-          <div class="grid grid-cols-4 gap-3">
-            <div class="bg-white rounded-lg p-3 border border-slate-200">
-              <div class="text-xs text-slate-500">messagesSent</div>
-              <div class="text-xl font-bold text-green-600">
-                {pub.pubSession.value?.getStatistics().controlMessagesSent ?? 0}
-              </div>
-            </div>
-            <div class="bg-white rounded-lg p-3 border border-slate-200">
-              <div class="text-xs text-slate-500">messagesReceived</div>
-              <div class="text-xl font-bold text-green-600">
-                {pub.pubSession.value?.getStatistics().controlMessagesReceived ?? 0}
-              </div>
-            </div>
-          </div>
-
-          <h3 class="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3 mt-4">
-            Data Streams
-          </h3>
-          <div class="grid grid-cols-4 gap-3">
-            <div class="bg-white rounded-lg p-3 border border-slate-200">
-              <div class="text-xs text-slate-500">streamsOpened</div>
-              <div class="text-xl font-bold text-green-600">
-                {pub.pubSession.value?.getStatistics().unidirectionalStreamsOpened ?? 0}
-              </div>
-            </div>
-          </div>
+          <StatSection title="Session">
+            <StatList
+              items={[
+                { label: "controlMessagesSent", value: sessionStats?.controlMessagesSent ?? "-" },
+                {
+                  label: "controlMessagesReceived",
+                  value: sessionStats?.controlMessagesReceived ?? "-",
+                },
+                {
+                  label: "unidirectionalStreamsOpened",
+                  value: sessionStats?.unidirectionalStreamsOpened ?? "-",
+                },
+              ]}
+            />
+          </StatSection>
         </div>
       </div>
     </div>

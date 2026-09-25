@@ -54,18 +54,33 @@ test("window.moqtDevTools から遅延の区間ごとの統計が読める", asy
   expect(timing.recentLossEvents).toEqual([]);
 });
 
+// 分布の表の列 (devtools/src/components/StatsView.tsx の TimingTable と同じ並び)
+const DISTRIBUTION_COLUMNS = ["p50", "p95", "max"] as const;
+
 test("publisher と subscriber の画面に遅延の区間を出す", async ({ page }) => {
   await page.goto(DEVTOOLS_URL);
 
-  // publisher: 記録が無いうちは分布を "-"、捨てたフレームの数を 0 にする
-  await expect(page.getByTestId("publisher-encode-time")).toHaveText("-");
-  await expect(page.getByTestId("publisher-send-time")).toHaveText("-");
+  // publisher: 記録が無いうちは分布の各列を "-"、捨てたフレームの数を 0 にする
+  for (const column of DISTRIBUTION_COLUMNS) {
+    await expect(page.getByTestId(`publisher-encode-time-${column}`)).toHaveText("-");
+    await expect(page.getByTestId(`publisher-send-time-${column}`)).toHaveText("-");
+  }
   await expect(page.getByTestId("publisher-encode-queue-drops")).toHaveText("0");
 
-  // subscriber: 区間ごとの分布と、reset と欠落の一覧
+  // subscriber: 区間ごとの分布を表の 1 行ずつに出す。記録が無いうちは各列を "-" にする
   for (const segment of SUBSCRIBER_SEGMENTS) {
-    await expect(page.getByTestId(`subscriber-latency-breakdown-${segment}`)).toHaveText("-");
+    for (const column of DISTRIBUTION_COLUMNS) {
+      await expect(
+        page.getByTestId(`subscriber-latency-breakdown-${segment}-${column}`),
+      ).toHaveText("-");
+    }
   }
+  // 区間の行は LATENCY_SEGMENTS の並びで出す (表示の遅延を最後の合計の行にする)
+  await expect(page.getByTestId("subscriber-latency-breakdown").getByRole("rowheader")).toHaveText([
+    ...SUBSCRIBER_SEGMENTS,
+  ]);
+
+  // subscriber: reset と欠落の一覧
   await expect(page.getByTestId("subscriber-subgroup-stream-resets-by-code")).toHaveText("-");
   await expect(page.getByTestId("subscriber-recent-loss-events")).toHaveText("-");
 });

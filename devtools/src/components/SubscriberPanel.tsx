@@ -1,13 +1,18 @@
 import { useMemo, useRef, useEffect } from "preact/hooks";
 import { useSubscriber } from "../hooks/useSubscriber";
 import { AudioMeter } from "./AudioMeter";
-import { formatBitrate, formatBytes } from "../utils/logFormatters";
+import { EventLog, StatList, StatSection, StatTable, TimingTable } from "./StatsView";
 import {
-  formatStallCauseTotal,
-  formatLossEvent,
-  formatStallEvent,
-  formatTimingSummary,
-} from "../utils/playbackTimingStats";
+  DECODING_PIPELINE_HELP,
+  LOSS_HELP,
+  PLAYBACK_TIMING_CAPTION,
+  PLAYBACK_TIMING_HELP,
+  STALL_CAUSES_HELP,
+  SUBSCRIBER_LATENCY_BREAKDOWN_HELP,
+  TOTAL_LATENCY_SEGMENT,
+} from "./statsHelp";
+import { formatBitrate, formatBytes } from "../utils/logFormatters";
+import { formatLossEvent, formatStallEvent } from "../utils/playbackTimingStats";
 import { LATENCY_SEGMENTS } from "../utils/latencyBreakdown";
 import { STALL_CAUSES } from "../utils/stallAnalysis";
 import * as sub from "../signals/subscriber";
@@ -68,6 +73,8 @@ export function SubscriberPanel({
   const isStopping = instance.isStopping.value;
   const subscribeBtnDisabled = isSubscribing || isStopping;
   const stopBtnDisabled = !isSubscribing || isStopping;
+  const timing = instance.playbackTiming.value;
+  const sessionStats = session?.getStatistics();
 
   const getStatusClasses = () => {
     const base = "mb-4 px-4 py-2 rounded-lg text-sm";
@@ -185,6 +192,27 @@ export function SubscriberPanel({
             </svg>
             Start Subscribing
           </button>
+          {/* 購読中の操作。統計の間ではなく、ほかの操作と並べる */}
+          <button
+            onClick={() => void requestKeyframe()}
+            disabled={!isSubscribing || !instance.dynamicGroupsSupported.value}
+            class="px-4 py-2.5 bg-purple-500 hover:bg-purple-600 disabled:bg-slate-300 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors flex items-center justify-center gap-2"
+            title={
+              instance.dynamicGroupsSupported.value
+                ? "NEW_GROUP_REQUEST を送信して新しいキーフレームを要求する"
+                : "Track did not include DYNAMIC_GROUPS=1 (draft-ietf-moq-transport-21 §9.20.20)"
+            }
+          >
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+              />
+            </svg>
+            Request Keyframe
+          </button>
           <button
             onClick={() => void stopSubscribing()}
             disabled={stopBtnDisabled}
@@ -280,368 +308,252 @@ export function SubscriberPanel({
 
         {/* Statistics */}
         <div class="bg-slate-50 rounded-lg p-4">
-          <h3 class="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">
-            Reception
-          </h3>
-          <div class="grid grid-cols-4 gap-3 mb-4">
-            <div class="bg-white rounded-lg p-3 border border-slate-200">
-              <div class="text-xs text-slate-500">objects</div>
-              <div class="text-xl font-bold text-blue-600">{instance.objectsReceived.value}</div>
-            </div>
-            <div class="bg-white rounded-lg p-3 border border-slate-200">
-              <div class="text-xs text-slate-500">withExtensions</div>
-              <div class="text-xl font-bold text-blue-600">
-                {instance.objectsWithExtensions.value}
-              </div>
-            </div>
-            <div class="bg-white rounded-lg p-3 border border-slate-200">
-              <div class="text-xs text-slate-500">bytes</div>
-              <div class="text-xl font-bold text-blue-600">
-                {formatBytes(instance.bytesReceived.value)}
-              </div>
-            </div>
-            <button
-              onClick={() => void requestKeyframe()}
-              disabled={!isSubscribing || !instance.dynamicGroupsSupported.value}
-              class="bg-purple-500 hover:bg-purple-600 disabled:bg-slate-200 disabled:cursor-not-allowed text-white rounded-lg p-3 border border-purple-600 disabled:border-slate-300 transition-colors flex flex-col items-center justify-center gap-1"
-              title={
-                instance.dynamicGroupsSupported.value
-                  ? "NEW_GROUP_REQUEST を送信して新しいキーフレームを要求する"
-                  : "Track did not include DYNAMIC_GROUPS=1 (draft-ietf-moq-transport-21 §9.20.20)"
-              }
-            >
-              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  stroke-width="2"
-                  d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-                />
-              </svg>
-              <span class="text-xs font-medium">Request Keyframe</span>
-            </button>
-          </div>
+          <StatSection title="Reception">
+            <StatList
+              items={[
+                { label: "objects", value: instance.objectsReceived.value },
+                { label: "withExtensions", value: instance.objectsWithExtensions.value },
+                { label: "bytes", value: formatBytes(instance.bytesReceived.value) },
+              ]}
+            />
+          </StatSection>
 
-          <h3 class="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">
-            Decoding Pipeline
-          </h3>
-          <div class="grid grid-cols-4 gap-3 mb-4">
-            <div class="bg-white rounded-lg p-3 border border-slate-200">
-              <div class="text-xs text-slate-500">chunksCreated</div>
-              <div class="text-xl font-bold text-blue-600">{instance.chunksCreated.value}</div>
-            </div>
-            <div class="bg-white rounded-lg p-3 border border-slate-200">
-              <div class="text-xs text-slate-500">chunksDecoded</div>
-              <div class="text-xl font-bold text-green-600">{instance.chunksDecoded.value}</div>
-            </div>
-            <div class="bg-white rounded-lg p-3 border border-slate-200">
-              <div class="text-xs text-slate-500">chunksSkipped</div>
-              <div class="text-xl font-bold text-yellow-600">{instance.chunksSkipped.value}</div>
-            </div>
-            <div class="bg-white rounded-lg p-3 border border-slate-200">
-              <div class="text-xs text-slate-500">staleFramesDropped</div>
-              <div class="text-xl font-bold text-yellow-600">
-                {instance.staleFramesDropped.value}
-              </div>
-            </div>
-            <div class="bg-white rounded-lg p-3 border border-slate-200">
-              <div class="text-xs text-slate-500">missingReferenceFramesDropped</div>
-              <div class="text-xl font-bold text-yellow-600">
-                {instance.missingReferenceFramesDropped.value}
-              </div>
-            </div>
-            <div class="bg-white rounded-lg p-3 border border-slate-200">
-              <div class="text-xs text-slate-500">decodeErrors</div>
-              <div class="text-xl font-bold text-red-600">{instance.decodeErrors.value}</div>
-            </div>
-          </div>
+          <StatSection
+            title="Decoding Pipeline"
+            help={DECODING_PIPELINE_HELP}
+            testId="subscriber-decoding-pipeline"
+          >
+            <StatList
+              items={[
+                { label: "chunksCreated", value: instance.chunksCreated.value },
+                { label: "chunksDecoded", value: instance.chunksDecoded.value },
+                { label: "chunksSkipped", value: instance.chunksSkipped.value, tone: "warn" },
+                {
+                  label: "staleFramesDropped",
+                  value: instance.staleFramesDropped.value,
+                  tone: "warn",
+                },
+                {
+                  label: "missingReferenceFramesDropped",
+                  value: instance.missingReferenceFramesDropped.value,
+                  tone: "warn",
+                },
+                { label: "decodeErrors", value: instance.decodeErrors.value, tone: "error" },
+              ]}
+            />
+          </StatSection>
 
-          <h3 class="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">Output</h3>
-          <div class="grid grid-cols-4 gap-3 mb-3">
-            <div class="bg-white rounded-lg p-3 border border-slate-200">
-              <div class="text-xs text-slate-500">framesDecoded</div>
-              <div class="text-xl font-bold text-blue-600">{instance.framesDecoded.value}</div>
-            </div>
-            <div class="bg-white rounded-lg p-3 border border-slate-200">
-              <div class="text-xs text-slate-500">keyFrames</div>
-              <div class="text-xl font-bold text-blue-600">{instance.keyFramesDecoded.value}</div>
-            </div>
-            <div class="bg-white rounded-lg p-3 border border-slate-200 col-span-2">
-              <div class="text-xs text-slate-500">currentGroup</div>
-              <div class="text-xl font-bold text-blue-600">{instance.currentGroup.value}</div>
-            </div>
-            <div class="bg-white rounded-lg p-3 border border-slate-200">
-              <div class="text-xs text-slate-500">currentSubGroup</div>
-              <div class="text-xl font-bold text-blue-600">{instance.currentSubGroup.value}</div>
-            </div>
-          </div>
-          <div class="grid grid-cols-4 gap-3 mb-4">
-            <div class="bg-white rounded-lg p-3 border border-slate-200">
-              <div class="text-xs text-slate-500">decoderState</div>
-              <div class="text-sm font-bold text-slate-600">{instance.decoderState.value}</div>
-            </div>
-          </div>
+          <StatSection title="Output">
+            <StatList
+              items={[
+                { label: "framesDecoded", value: instance.framesDecoded.value },
+                { label: "keyFrames", value: instance.keyFramesDecoded.value },
+                { label: "currentGroup", value: instance.currentGroup.value },
+                { label: "currentSubGroup", value: instance.currentSubGroup.value },
+                { label: "decoderState", value: instance.decoderState.value },
+              ]}
+            />
+          </StatSection>
 
-          <h3 class="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">
-            Playback Timing
-          </h3>
-          <p class="text-xs text-slate-500 mb-3">
-            分布は直近 10 秒の p50 / p95 / max (ms)。latency は送信側の壁時計の LOC TIMESTAMP
-            を基準にするため、別のマシンでは時計のずれを含む
-          </p>
-          <div class="grid grid-cols-4 gap-3 mb-3">
-            <div class="bg-white rounded-lg p-3 border border-slate-200 col-span-2">
-              <div class="text-xs text-slate-500">arrivalJitter</div>
-              <div class="text-sm font-bold text-blue-600" data-testid="subscriber-arrival-jitter">
-                {formatTimingSummary(instance.playbackTiming.value.arrivalJitterMs)}
-              </div>
-            </div>
-            <div class="bg-white rounded-lg p-3 border border-slate-200 col-span-2">
-              <div class="text-xs text-slate-500">latency</div>
-              <div class="text-sm font-bold text-blue-600" data-testid="subscriber-latency">
-                {formatTimingSummary(instance.playbackTiming.value.latencyMs)}
-              </div>
-            </div>
-            <div class="bg-white rounded-lg p-3 border border-slate-200 col-span-2">
-              <div class="text-xs text-slate-500">decodeTime</div>
-              <div class="text-sm font-bold text-blue-600" data-testid="subscriber-decode-time">
-                {formatTimingSummary(instance.playbackTiming.value.decodeTimeMs)}
-              </div>
-            </div>
-            <div class="bg-white rounded-lg p-3 border border-slate-200 col-span-2">
-              <div class="text-xs text-slate-500">displayInterval</div>
-              <div
-                class="text-sm font-bold text-blue-600"
-                data-testid="subscriber-display-interval"
-              >
-                {formatTimingSummary(instance.playbackTiming.value.displayIntervalMs)}
-              </div>
-            </div>
-          </div>
-          <div class="grid grid-cols-4 gap-3 mb-4">
-            <div class="bg-white rounded-lg p-3 border border-slate-200">
-              <div class="text-xs text-slate-500">displayFps</div>
-              <div class="text-xl font-bold text-blue-600" data-testid="subscriber-display-fps">
-                {instance.playbackTiming.value.displayFps}
-              </div>
-            </div>
-            <div class="bg-white rounded-lg p-3 border border-slate-200">
-              <div class="text-xs text-slate-500">displayStalls</div>
-              <div
-                class="text-xl font-bold text-yellow-600"
-                data-testid="subscriber-display-stalls"
-              >
-                {instance.playbackTiming.value.displayStalls}
-              </div>
-            </div>
-            <div class="bg-white rounded-lg p-3 border border-slate-200">
-              <div class="text-xs text-slate-500">displayStallMs</div>
-              <div
-                class="text-xl font-bold text-yellow-600"
-                data-testid="subscriber-display-stall-ms"
-              >
-                {Math.round(instance.playbackTiming.value.displayStallMs)}
-              </div>
-            </div>
-            <div class="bg-white rounded-lg p-3 border border-slate-200">
-              <div class="text-xs text-slate-500">displayQueueDrops</div>
-              <div
-                class="text-xl font-bold text-yellow-600"
-                data-testid="subscriber-display-queue-drops"
-              >
-                {instance.playbackTiming.value.displayQueueDrops}
-              </div>
-            </div>
-            <div class="bg-white rounded-lg p-3 border border-slate-200 col-span-2">
-              <div class="text-xs text-slate-500">playoutDelay (jitter buffer, ms)</div>
-              <div class="text-xl font-bold text-blue-600" data-testid="subscriber-playout-delay">
-                {instance.playbackTiming.value.playoutDelayMs === null
-                  ? "-"
-                  : instance.playbackTiming.value.playoutDelayMs.toFixed(1)}
-              </div>
-            </div>
-            <div class="bg-white rounded-lg p-3 border border-slate-200 col-span-2">
-              <div class="text-xs text-slate-500">lateFramesDropped</div>
-              <div
-                class="text-xl font-bold text-yellow-600"
-                data-testid="subscriber-late-frames-dropped"
-              >
-                {instance.playbackTiming.value.lateFramesDropped}
-              </div>
-            </div>
-          </div>
+          <StatSection
+            title="Playback Timing"
+            help={PLAYBACK_TIMING_HELP}
+            testId="subscriber-playback-timing"
+          >
+            <TimingTable
+              caption={PLAYBACK_TIMING_CAPTION}
+              rows={[
+                {
+                  label: "arrivalJitter",
+                  summary: timing.arrivalJitterMs,
+                  testId: "subscriber-arrival-jitter",
+                },
+                { label: "latency", summary: timing.latencyMs, testId: "subscriber-latency" },
+                {
+                  label: "decodeTime",
+                  summary: timing.decodeTimeMs,
+                  testId: "subscriber-decode-time",
+                },
+                {
+                  label: "displayInterval",
+                  summary: timing.displayIntervalMs,
+                  testId: "subscriber-display-interval",
+                },
+              ]}
+            />
+            <StatList
+              items={[
+                {
+                  label: "displayFps",
+                  value: timing.displayFps,
+                  testId: "subscriber-display-fps",
+                },
+                {
+                  label: "displayStalls",
+                  value: timing.displayStalls,
+                  tone: "warn",
+                  testId: "subscriber-display-stalls",
+                },
+                {
+                  label: "displayStallMs",
+                  value: Math.round(timing.displayStallMs),
+                  tone: "warn",
+                  testId: "subscriber-display-stall-ms",
+                },
+                {
+                  label: "displayQueueDrops",
+                  value: timing.displayQueueDrops,
+                  tone: "warn",
+                  testId: "subscriber-display-queue-drops",
+                },
+                {
+                  label: "playoutDelayMs",
+                  value: timing.playoutDelayMs === null ? "-" : timing.playoutDelayMs.toFixed(1),
+                  testId: "subscriber-playout-delay",
+                },
+                {
+                  label: "lateFramesDropped",
+                  value: timing.lateFramesDropped,
+                  tone: "warn",
+                  testId: "subscriber-late-frames-dropped",
+                },
+              ]}
+            />
+          </StatSection>
 
-          <h3 class="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">
-            Latency Breakdown
-          </h3>
-          <p class="text-xs text-slate-500 mb-3">
-            描いたフレームの遅延を区間ごとに分けた直近 10 秒の p50 / p95 / max (ms)。フレームごとに
-            arrival + hold + decodeWait + decode + displayWait = displayLatency になる。arrival:
-            TIMESTAMP から受信まで (publisher の符号化と送信、経路、relay)、hold: Group の切り替えの
-            保留、decodeWait: decoder に渡すまでの待ち、decode: 復号、displayWait: 復号から描くまで
-            (jitter buffer の待ち)、displayLatency: TIMESTAMP から描くまで。arrival と
-            displayLatency は publisher の壁時計の TIMESTAMP
-            を基準にするため、別のマシンでは時計のずれを含む。 publisher の中の遅れは publisher の
-            Latency Breakdown を見る
-          </p>
-          <div class="grid grid-cols-4 gap-3 mb-4" data-testid="subscriber-latency-breakdown">
-            {LATENCY_SEGMENTS.map((segment) => (
-              <div key={segment} class="bg-white rounded-lg p-3 border border-slate-200 col-span-2">
-                <div class="text-xs text-slate-500">{segment}</div>
-                <div
-                  class="text-sm font-bold text-blue-600"
-                  data-testid={`subscriber-latency-breakdown-${segment}`}
-                >
-                  {formatTimingSummary(instance.playbackTiming.value.latencyBreakdown[segment])}
-                </div>
-              </div>
-            ))}
-          </div>
+          <StatSection
+            title="Latency Breakdown"
+            help={SUBSCRIBER_LATENCY_BREAKDOWN_HELP}
+            testId="subscriber-latency-breakdown"
+          >
+            <TimingTable
+              caption={PLAYBACK_TIMING_CAPTION}
+              testId="subscriber-latency-breakdown"
+              rows={LATENCY_SEGMENTS.map((segment) => ({
+                label: segment,
+                summary: timing.latencyBreakdown[segment],
+                testId: `subscriber-latency-breakdown-${segment}`,
+                // 表示の遅延はほかの区間の和のため、合計の行として区切る
+                total: segment === TOTAL_LATENCY_SEGMENT,
+              }))}
+            />
+          </StatSection>
 
-          <h3 class="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">
-            Stall Causes
-          </h3>
-          <p class="text-xs text-slate-500 mb-3">
-            止まりごとに原因を 1 つ決めた回数 / 時間 (購読開始からの累積)。source: publisher の
-            TIMESTAMP の飛び、loss: Object が届いていない、discarded: 復号せずに破棄、arrival:
-            到着の遅れ、groupSwitchHold: Group の切り替えの保留、decode: 復号の遅れ、playout: jitter
-            buffer の再生遅延の増加、render: 描画の遅れ
-          </p>
-          <div class="grid grid-cols-4 gap-3 mb-3" data-testid="subscriber-stall-causes">
-            {STALL_CAUSES.map((cause) => (
-              <div key={cause} class="bg-white rounded-lg p-3 border border-slate-200">
-                <div class="text-xs text-slate-500">{cause}</div>
-                <div class="text-sm font-bold text-yellow-600">
-                  {formatStallCauseTotal(instance.playbackTiming.value.stallCauses[cause])}
-                </div>
-              </div>
-            ))}
-          </div>
-          <div class="grid grid-cols-4 gap-3 mb-3">
-            <div class="bg-white rounded-lg p-3 border border-slate-200">
-              <div class="text-xs text-slate-500">missingObjects</div>
-              <div class="text-xl font-bold text-red-600" data-testid="subscriber-missing-objects">
-                {instance.playbackTiming.value.missingObjects}
-              </div>
-            </div>
-            <div class="bg-white rounded-lg p-3 border border-slate-200">
-              <div class="text-xs text-slate-500">missingGroups</div>
-              <div class="text-xl font-bold text-red-600" data-testid="subscriber-missing-groups">
-                {instance.playbackTiming.value.missingGroups}
-              </div>
-            </div>
-            <div class="bg-white rounded-lg p-3 border border-slate-200">
-              <div class="text-xs text-slate-500">subgroupStreamResets</div>
-              <div
-                class="text-xl font-bold text-red-600"
-                data-testid="subscriber-subgroup-stream-resets"
-              >
-                {instance.playbackTiming.value.subgroupStreamResets}
-              </div>
-            </div>
-            <div class="bg-white rounded-lg p-3 border border-slate-200">
-              <div class="text-xs text-slate-500">groupSwitchHoldExpirations</div>
-              <div
-                class="text-xl font-bold text-yellow-600"
-                data-testid="subscriber-group-switch-hold-expirations"
-              >
-                {instance.playbackTiming.value.groupSwitchHoldExpirations}
-              </div>
-            </div>
-          </div>
-          <div class="bg-white rounded-lg p-3 border border-slate-200 mb-4">
-            <div class="text-xs text-slate-500 mb-1">recentStalls (UTC, 新しい順)</div>
-            <pre
-              class="text-xs font-mono text-slate-700 whitespace-pre-wrap break-all max-h-48 overflow-y-auto"
-              data-testid="subscriber-recent-stalls"
-            >
-              {instance.playbackTiming.value.recentStalls.length === 0
-                ? "-"
-                : [...instance.playbackTiming.value.recentStalls]
-                    .reverse()
-                    .map((stall) => formatStallEvent(stall))
-                    .join("\n")}
-            </pre>
-          </div>
-          <div class="bg-white rounded-lg p-3 border border-slate-200 mb-4">
-            <div class="text-xs text-slate-500 mb-1">
-              subgroupStreamResetsByCode (RESET_STREAM の error code ごとの数)
-            </div>
-            <pre
-              class="text-xs font-mono text-slate-700 whitespace-pre-wrap break-all"
-              data-testid="subscriber-subgroup-stream-resets-by-code"
-            >
-              {Object.keys(instance.playbackTiming.value.subgroupStreamResetsByCode).length === 0
-                ? "-"
-                : Object.entries(instance.playbackTiming.value.subgroupStreamResetsByCode)
-                    .map(([code, count]) => `${code}: ${count}`)
-                    .join("\n")}
-            </pre>
-          </div>
-          <div class="bg-white rounded-lg p-3 border border-slate-200 mb-4">
-            <div class="text-xs text-slate-500 mb-1">
-              recentLossEvents (stream の reset と欠落の止まり、UTC、新しい順)
-            </div>
-            <pre
-              class="text-xs font-mono text-slate-700 whitespace-pre-wrap break-all max-h-48 overflow-y-auto"
-              data-testid="subscriber-recent-loss-events"
-            >
-              {instance.playbackTiming.value.recentLossEvents.length === 0
-                ? "-"
-                : [...instance.playbackTiming.value.recentLossEvents]
-                    .reverse()
-                    .map((lossEvent) => formatLossEvent(lossEvent))
-                    .join("\n")}
-            </pre>
-          </div>
+          <StatSection
+            title="Stall Causes"
+            help={STALL_CAUSES_HELP}
+            testId="subscriber-stall-causes"
+          >
+            <StatTable
+              caption="since start"
+              columns={["count", "ms"]}
+              testId="subscriber-stall-causes"
+              rows={[
+                ...STALL_CAUSES.map((cause) => {
+                  const total = timing.stallCauses[cause];
+                  return {
+                    label: cause,
+                    values: [String(total.count), String(Math.round(total.ms))],
+                    testId: `subscriber-stall-cause-${cause}`,
+                    // 起きた原因だけを目立たせる
+                    tone: total.count > 0 ? ("warn" as const) : undefined,
+                  };
+                }),
+                // 原因ごとの和は止まりの回数と時間に一致する
+                {
+                  label: "total",
+                  values: [String(timing.displayStalls), String(Math.round(timing.displayStallMs))],
+                  testId: "subscriber-stall-cause-total",
+                  total: true,
+                },
+              ]}
+            />
+            <EventLog
+              label="recentStalls"
+              hint="UTC, newest first"
+              lines={[...timing.recentStalls].reverse().map((stall) => formatStallEvent(stall))}
+              testId="subscriber-recent-stalls"
+            />
+          </StatSection>
 
-          <h3 class="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">
-            Largest Location
-          </h3>
-          <div class="grid grid-cols-4 gap-3 mb-4">
-            <div class="bg-white rounded-lg p-3 border border-slate-200 col-span-2">
-              <div class="text-xs text-slate-500">largestGroup</div>
-              <div class="text-xl font-bold text-blue-600">
-                {instance.largestLocation.value?.group.toString() ?? "-"}
-              </div>
-            </div>
-            <div class="bg-white rounded-lg p-3 border border-slate-200 col-span-2">
-              <div class="text-xs text-slate-500">largestObject</div>
-              <div class="text-xl font-bold text-blue-600">
-                {instance.largestLocation.value?.object.toString() ?? "-"}
-              </div>
-            </div>
-          </div>
+          <StatSection title="Loss" help={LOSS_HELP} testId="subscriber-loss">
+            <StatList
+              items={[
+                {
+                  label: "missingObjects",
+                  value: timing.missingObjects,
+                  tone: "error",
+                  testId: "subscriber-missing-objects",
+                },
+                {
+                  label: "missingGroups",
+                  value: timing.missingGroups,
+                  tone: "error",
+                  testId: "subscriber-missing-groups",
+                },
+                {
+                  label: "subgroupStreamResets",
+                  value: timing.subgroupStreamResets,
+                  tone: "error",
+                  testId: "subscriber-subgroup-stream-resets",
+                },
+                {
+                  label: "groupSwitchHoldExpirations",
+                  value: timing.groupSwitchHoldExpirations,
+                  tone: "warn",
+                  testId: "subscriber-group-switch-hold-expirations",
+                },
+              ]}
+            />
+            <EventLog
+              label="subgroupStreamResetsByCode"
+              hint="count per error code"
+              showCount={false}
+              lines={Object.entries(timing.subgroupStreamResetsByCode).map(
+                ([code, count]) => `${code}: ${count}`,
+              )}
+              testId="subscriber-subgroup-stream-resets-by-code"
+            />
+            <EventLog
+              label="recentLossEvents"
+              hint="UTC, newest first"
+              lines={[...timing.recentLossEvents]
+                .reverse()
+                .map((lossEvent) => formatLossEvent(lossEvent))}
+              testId="subscriber-recent-loss-events"
+            />
+          </StatSection>
 
-          <h3 class="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">
-            Control Stream
-          </h3>
-          <div class="grid grid-cols-4 gap-3">
-            <div class="bg-white rounded-lg p-3 border border-slate-200">
-              <div class="text-xs text-slate-500">messagesSent</div>
-              <div class="text-xl font-bold text-blue-600">
-                {session?.getStatistics().controlMessagesSent ?? "-"}
-              </div>
-            </div>
-            <div class="bg-white rounded-lg p-3 border border-slate-200">
-              <div class="text-xs text-slate-500">messagesReceived</div>
-              <div class="text-xl font-bold text-blue-600">
-                {session?.getStatistics().controlMessagesReceived ?? "-"}
-              </div>
-            </div>
-          </div>
+          <StatSection title="Largest Location">
+            <StatList
+              items={[
+                {
+                  label: "largestGroup",
+                  value: instance.largestLocation.value?.group.toString() ?? "-",
+                },
+                {
+                  label: "largestObject",
+                  value: instance.largestLocation.value?.object.toString() ?? "-",
+                },
+              ]}
+            />
+          </StatSection>
 
-          <h3 class="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3 mt-4">
-            Data Streams
-          </h3>
-          <div class="grid grid-cols-4 gap-3">
-            <div class="bg-white rounded-lg p-3 border border-slate-200">
-              <div class="text-xs text-slate-500">streamsReceived</div>
-              <div class="text-xl font-bold text-blue-600">
-                {session?.getStatistics().unidirectionalStreamsReceived ?? "-"}
-              </div>
-            </div>
-          </div>
+          <StatSection title="Session">
+            <StatList
+              items={[
+                { label: "controlMessagesSent", value: sessionStats?.controlMessagesSent ?? "-" },
+                {
+                  label: "controlMessagesReceived",
+                  value: sessionStats?.controlMessagesReceived ?? "-",
+                },
+                {
+                  label: "unidirectionalStreamsReceived",
+                  value: sessionStats?.unidirectionalStreamsReceived ?? "-",
+                },
+              ]}
+            />
+          </StatSection>
         </div>
       </div>
     </div>
