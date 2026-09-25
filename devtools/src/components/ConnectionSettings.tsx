@@ -309,6 +309,13 @@ function HttpVersionBadge() {
 // チャンネル数の表示名。許可リストに値を足したときはここにも足す
 const AUDIO_CHANNEL_LABELS: Record<number, string> = { 1: "Mono", 2: "Stereo" };
 
+// デバイスの欄 (Camera Device / Audio Device) のボタンと select の大きさ。
+// 一覧を取る前は Fetch Devices のボタン (38 px)、取った後は select (37 px) を描くため、高さの違いで
+// 行の高さが変わり、下の項目が動く。欄を縦の flex にしてボタンと select を行の高さいっぱいに伸ばし、
+// 自身の高さ (flex-basis を 0) は行の高さに加えない。行の高さは同じ行の他の select が決める。
+// 行に他の項目が無くなっても潰れないよう、最小の高さを付ける
+const DEVICE_CONTROL_SIZE_CLASS = "flex-1 basis-0 min-h-9";
+
 // 映像の入力元の表示名
 const VIDEO_SOURCE_LABELS: Record<VideoSourceType, string> = {
   none: "None",
@@ -576,8 +583,9 @@ export function ConnectionSettings() {
             </select>
           </div>
           {/* カメラデバイス。映像の入力が camera でない間も描き、操作できなくする
-              (設定で項目が出たり消えたりしないようにする) */}
-          <div>
+              (設定で項目が出たり消えたりしないようにする)。ボタンと select は高さが違うため、
+              行の高さいっぱいに伸ばし、自身の高さを行の高さに加えない (DEVICE_CONTROL_SIZE_CLASS) */}
+          <div class="flex flex-col">
             <label for="cameraDevice" class="block text-xs text-slate-500 mb-1">
               Camera Device
             </label>
@@ -587,7 +595,7 @@ export function ConnectionSettings() {
                 data-testid="camera-fetch-devices"
                 onClick={() => void settings.fetchCameraDevices()}
                 disabled={settings.settingsDisabled.value || !cameraSelected}
-                class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-blue-50 text-blue-700 hover:bg-blue-100 disabled:bg-slate-100 disabled:cursor-not-allowed disabled:text-slate-400"
+                class={`${DEVICE_CONTROL_SIZE_CLASS} w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-blue-50 text-blue-700 hover:bg-blue-100 disabled:bg-slate-100 disabled:cursor-not-allowed disabled:text-slate-400`}
               >
                 Fetch Devices
               </button>
@@ -598,7 +606,7 @@ export function ConnectionSettings() {
                 value={settings.selectedCameraDeviceId.value}
                 onChange={(e) => (settings.selectedCameraDeviceId.value = e.currentTarget.value)}
                 disabled={settings.settingsDisabled.value || !cameraSelected}
-                class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white disabled:bg-slate-100 disabled:cursor-not-allowed"
+                class={`${DEVICE_CONTROL_SIZE_CLASS} w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white disabled:bg-slate-100 disabled:cursor-not-allowed`}
               >
                 {settings.cameraDevices.value.map((device) => (
                   <option key={device.deviceId} value={device.deviceId}>
@@ -719,8 +727,8 @@ export function ConnectionSettings() {
             </select>
           </div>
           {/* 音声入力デバイス。音声の入力が microphone でない間も描き、操作できなくする
-              (設定で項目が出たり消えたりしないようにする) */}
-          <div>
+              (設定で項目が出たり消えたりしないようにする)。高さはカメラデバイスと同じ扱い */}
+          <div class="flex flex-col">
             <label for="microphoneDevice" class="block text-xs text-slate-500 mb-1">
               Audio Device
             </label>
@@ -730,7 +738,7 @@ export function ConnectionSettings() {
                 data-testid="microphone-fetch-devices"
                 onClick={() => void settings.fetchMicrophoneDevices()}
                 disabled={settings.settingsDisabled.value || !microphoneSelected}
-                class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-blue-50 text-blue-700 hover:bg-blue-100 disabled:bg-slate-100 disabled:cursor-not-allowed disabled:text-slate-400"
+                class={`${DEVICE_CONTROL_SIZE_CLASS} w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-blue-50 text-blue-700 hover:bg-blue-100 disabled:bg-slate-100 disabled:cursor-not-allowed disabled:text-slate-400`}
               >
                 Fetch Devices
               </button>
@@ -743,7 +751,7 @@ export function ConnectionSettings() {
                   (settings.selectedMicrophoneDeviceId.value = e.currentTarget.value)
                 }
                 disabled={settings.settingsDisabled.value || !microphoneSelected}
-                class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white disabled:bg-slate-100 disabled:cursor-not-allowed"
+                class={`${DEVICE_CONTROL_SIZE_CLASS} w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white disabled:bg-slate-100 disabled:cursor-not-allowed`}
               >
                 {settings.microphoneDevices.value.map((device) => (
                   <option key={device.deviceId} value={device.deviceId}>

@@ -88,6 +88,9 @@
 - [UPDATE] moqt-devtools の見出しを「MOQT DevTools (draft-21)」にし、draft-21 から draft-ietf-moq-transport-21 の文書を開けるようにする
   - ページのタイトルも同じにする
   - @voluntas
+- [FIX] moqt-devtools の接続設定で、Camera Device と Audio Device の一覧を取っても設定の並びが動かないようにする
+  - 一覧を取る前の Fetch Devices のボタン (38 px) と、取った後の select (37 px) の高さの違いで、行の高さが変わって下の項目が 1 px 動いていた。ボタンと select を行の高さいっぱいに伸ばし、同じ行の他の select と同じ高さにする
+  - @voluntas
 - [FIX] moqt-devtools の subscriber で、映像トラックの無い catalog を購読できるようにする
   - これまでは「no video track in catalog」で購読をやめていた。映像トラックが無い catalog では音声トラックだけを購読し、映像の枠は空のまま描く
   - 音声だけの購読では、音声トラックの購読の確立で Stop を押せるようにし、音声トラックの終わり (publisher の停止など) で「Stream ended」にする
