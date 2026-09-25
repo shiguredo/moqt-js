@@ -1,7 +1,14 @@
 import { useMemo, useRef, useEffect } from "preact/hooks";
 import { useSubscriber } from "../hooks/useSubscriber";
 import { AudioMeter } from "./AudioMeter";
-import { EventLog, StatList, StatSection, StatTable, TimingTable } from "./StatsView";
+import {
+  EventLog,
+  StatList,
+  StatSection,
+  StatTable,
+  StatsCollapse,
+  TimingTable,
+} from "./StatsView";
 import {
   DECODING_PIPELINE_HELP,
   LOSS_HELP,
@@ -283,8 +290,8 @@ export function SubscriberPanel({
         {/* Catalog。catalog を受け取る前も描き、値を「-」にする */}
         <CatalogTracks tracks={catalog?.tracks ?? []} tone="blue" testId="subscriber-catalog" />
 
-        {/* Statistics */}
-        <div class="bg-slate-50 rounded-lg p-4">
+        {/* Statistics。既定で閉じ、「Statistics」を押すと開く */}
+        <StatsCollapse testId="subscriber-statistics">
           <StatSection title="Reception">
             <StatList
               items={[
@@ -531,7 +538,7 @@ export function SubscriberPanel({
               ]}
             />
           </StatSection>
-        </div>
+        </StatsCollapse>
       </div>
     </div>
   );

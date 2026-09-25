@@ -60,6 +60,9 @@
   - 配信の開始で現れていた Forward State の行、catalog を受け取ると現れていた Catalog の欄、音声を購読すると現れていた音声のレベルメーターを常に描き、値が無い間は「-」を出す
   - 状態のメッセージを 1 行に収め (はみ出す分は省略し、全文はマウスを重ねると出る)、Catalog の一覧と統計の一覧 (recentStalls など) の高さを固定する。配信や購読の開始と停止で映像や下の項目の位置が動かない
   - @voluntas
+- [UPDATE] moqt-devtools の統計の欄を既定で閉じ、パネルごとの「Statistics」で開け閉めする
+  - 閉じている間は統計の欄を描かない。`window.moqtDevTools` の統計は開け閉めに依らない
+  - @voluntas
 - [UPDATE] moqt-devtools の Publisher と Subscriber の映像の上端をそろえる
   - 映像より上の 1 行の項目 (Publisher の Forward State、Subscriber の NEW_GROUP_REQUEST) を同じ高さの枠で描く。これまでは何もしていない状態で 36 px、配信中は 16 px ずれていた
   - @voluntas

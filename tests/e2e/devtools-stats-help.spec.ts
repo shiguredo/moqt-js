@@ -18,6 +18,9 @@ const SUBSCRIBER_SEGMENTS = [
 
 test("統計の説明は (?) を押したときだけポップオーバーに出す", async ({ page }) => {
   await page.goto(DEVTOOLS_URL);
+  // 統計の欄は既定で閉じているため、先に開く
+  await page.getByTestId("publisher-statistics-toggle").click();
+  await page.getByTestId("subscriber-statistics-toggle").click();
 
   const button = page.getByTestId("subscriber-latency-breakdown-help-button");
   const popover = page.getByTestId("subscriber-latency-breakdown-help");
@@ -65,6 +68,9 @@ test("統計の説明は (?) を押したときだけポップオーバーに出
 
 test("すべての統計の説明を (?) から開ける", async ({ page }) => {
   await page.goto(DEVTOOLS_URL);
+  // 統計の欄は既定で閉じているため、先に開く
+  await page.getByTestId("publisher-statistics-toggle").click();
+  await page.getByTestId("subscriber-statistics-toggle").click();
 
   // (?) の data-testid は「説明の data-testid + "-button"」にする
   const buttons = page.locator('[data-testid$="-help-button"]');

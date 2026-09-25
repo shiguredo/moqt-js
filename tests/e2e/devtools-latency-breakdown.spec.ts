@@ -59,6 +59,9 @@ const DISTRIBUTION_COLUMNS = ["p50", "p95", "max"] as const;
 
 test("publisher と subscriber の画面に遅延の区間を出す", async ({ page }) => {
   await page.goto(DEVTOOLS_URL);
+  // 統計の欄は既定で閉じているため、先に開く
+  await page.getByTestId("publisher-statistics-toggle").click();
+  await page.getByTestId("subscriber-statistics-toggle").click();
 
   // publisher: 記録が無いうちは分布の各列を "-"、捨てたフレームの数を 0 にする
   for (const column of DISTRIBUTION_COLUMNS) {

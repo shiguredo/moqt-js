@@ -1,7 +1,7 @@
 import { useRef } from "preact/hooks";
 import { useSignalEffect } from "@preact/signals";
 import { usePublisher } from "../hooks/usePublisher";
-import { StatList, StatSection, TimingTable } from "./StatsView";
+import { StatList, StatSection, StatsCollapse, TimingTable } from "./StatsView";
 import { PUBLISHER_LATENCY_BREAKDOWN_HELP, PUBLISH_TIMING_CAPTION } from "./statsHelp";
 import { formatBytes } from "../utils/logFormatters";
 import { CatalogTracks } from "./CatalogTracks";
@@ -185,8 +185,8 @@ export function PublisherPanel() {
           testId="publisher-catalog"
         />
 
-        {/* Statistics */}
-        <div class="bg-slate-50 rounded-lg p-4">
+        {/* Statistics。既定で閉じ、「Statistics」を押すと開く */}
+        <StatsCollapse testId="publisher-statistics">
           <StatSection title="Encoding Pipeline">
             <StatList
               items={[
@@ -266,7 +266,7 @@ export function PublisherPanel() {
               ]}
             />
           </StatSection>
-        </div>
+        </StatsCollapse>
       </div>
     </div>
   );
