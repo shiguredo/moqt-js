@@ -99,6 +99,11 @@
   - 再生の遅れ (80 ms) だけ遅らせ、TIMESTAMP の間隔どおりに途切れなく並べて鳴らす。過ぎてから届いた音では基準を取り直し、遅れが 300 ms を超える分は捨てて縮める
   - 振る舞いが変わる: 音声は再生の遅れの分だけ遅れて鳴る
   - @voluntas
+- [FIX] moqt-devtools の subscriber で、受信した音声の再生がノイズっぽくなるのを修正する
+  - 復号した音声を届いたその場で鳴らし、前の音と重なるか隙間が空いていた。`createMediaSubscriber` と同じく、再生の遅れ (80 ms) だけ遅らせて TIMESTAMP の間隔どおりに途切れなく並べる
+  - 配備の relay で 20 秒の再生の出力を測ると、音の切れ目は 1826 回から 2 回、重なって足された音は 48692 サンプルから 0 になった (映像と音声の配信)
+  - 基準を取り直した回数と捨てた音の数を `window.moqtDevTools.getSubscribers()` の `audioPlayoutRebases` / `audioPlayoutDrops` に出す
+  - @voluntas
 - [FIX] moqt-devtools の接続設定で、Camera Device と Audio Device の一覧を取っても設定の並びが動かないようにする
   - 一覧を取る前の Fetch Devices のボタン (38 px) と、取った後の select (37 px) の高さの違いで、行の高さが変わって下の項目が 1 px 動いていた。ボタンと select を行の高さいっぱいに伸ばし、同じ行の他の select と同じ高さにする
   - @voluntas

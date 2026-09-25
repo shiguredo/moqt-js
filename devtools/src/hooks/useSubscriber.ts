@@ -42,6 +42,7 @@ import {
 } from "../utils/playbackTimingStats";
 import { JITTER_BUFFER_MAX_QUEUED_FRAMES, PlayoutBuffer } from "../utils/playoutBuffer";
 import { GroupSwitchGate } from "../../../src/groupSwitchGate.ts";
+import { AudioPlayoutScheduler } from "../../../src/audioPlayout.ts";
 import * as settings from "../signals/connectionSettings";
 import * as sub from "../signals/subscriber";
 import * as pub from "../signals/publisher";
@@ -99,6 +100,8 @@ interface TrackEndCallbacks {
 interface AudioPlayback {
   context: AudioContext;
   destination: MediaStreamAudioDestinationNode;
+  // 復号した音声を鳴らす時刻を決める。基準は AudioContext と一緒に作り直す
+  playout: AudioPlayoutScheduler;
 }
 
 /**
@@ -196,6 +199,8 @@ export function resetSubscriberStats(instance: sub.SubscriberInstance): void {
   instance.audioPeakDbfs.value = null;
   instance.audioRmsDbfs.value = null;
   instance.audioWaveform.value = null;
+  instance.audioPlayoutRebases.value = 0;
+  instance.audioPlayoutDrops.value = 0;
 }
 
 /**
@@ -616,6 +621,7 @@ export function useSubscriber(
       playback = {
         context,
         destination: context.createMediaStreamDestination(),
+        playout: new AudioPlayoutScheduler(),
       };
       audioPlaybackRef.current = playback;
     }
@@ -946,6 +952,24 @@ export function useSubscriber(
 
       const numberOfChannels = audioData.numberOfChannels;
       const numberOfFrames = audioData.numberOfFrames;
+
+      // 届いたその場で鳴らすと、届く間隔の揺らぎで前の音と重なるか隙間が空き、ノイズに
+      // なる。再生の遅れだけ遅らせ、timestamp の間隔どおりに途切れなく並べる
+      // (src/audioPlayout.ts)。基準を取り直した回数と捨てた音の数を数える
+      const rebasesBefore = playback.playout.rebases;
+      const decision = playback.playout.schedule(
+        playback.context.currentTime,
+        audioData.timestamp,
+        numberOfFrames / audioData.sampleRate,
+      );
+      if (playback.playout.rebases !== rebasesBefore) {
+        instance.audioPlayoutRebases.value += 1;
+      }
+      if (decision.kind === "drop") {
+        instance.audioPlayoutDrops.value += 1;
+        return;
+      }
+
       const audioBuffer = playback.context.createBuffer(
         numberOfChannels,
         numberOfFrames,
@@ -963,7 +987,7 @@ export function useSubscriber(
       const source = playback.context.createBufferSource();
       source.buffer = audioBuffer;
       source.connect(playback.destination);
-      source.start();
+      source.start(decision.startAt);
     } catch (error) {
       console.error(`[${subscriberId}] failed to play audio data:`, error);
     } finally {

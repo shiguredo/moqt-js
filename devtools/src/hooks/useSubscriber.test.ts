@@ -700,7 +700,7 @@ test("closeSubscriberResources: 音声の後始末を二重に呼んでも例外
   assert.equal(instance.audioSubscriber.value, null);
 });
 
-// 受信数・デコード数・最終レベルは購読のたびに 0 / null へ戻す。
+// 受信数・デコード数・最終レベル・鳴らし方の数は購読のたびに 0 / null へ戻す。
 // 前回の値が残ると E2E が「増えた」ことを判定できない。
 test("resetSubscriberStats: 音声の統計と最終レベルを初期化する", () => {
   resetTestEnvironment();
@@ -711,6 +711,8 @@ test("resetSubscriberStats: 音声の統計と最終レベルを初期化する"
   instance.audioPeakDbfs.value = -6;
   instance.audioRmsDbfs.value = -9;
   instance.audioWaveform.value = new Float32Array([1, 2, 3]);
+  instance.audioPlayoutRebases.value = 2;
+  instance.audioPlayoutDrops.value = 3;
 
   resetSubscriberStats(instance);
 
@@ -720,6 +722,8 @@ test("resetSubscriberStats: 音声の統計と最終レベルを初期化する"
   assert.equal(instance.audioPeakDbfs.value, null);
   assert.equal(instance.audioRmsDbfs.value, null);
   assert.equal(instance.audioWaveform.value, null);
+  assert.equal(instance.audioPlayoutRebases.value, 0);
+  assert.equal(instance.audioPlayoutDrops.value, 0);
 });
 
 test("resetSubscriberState: 音声の signal を初期化し再生を無効にする", () => {

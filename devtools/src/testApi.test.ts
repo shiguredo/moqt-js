@@ -38,6 +38,17 @@ test("buildSubscriberStats: 復号前のレベルは null、復号後は dBFS �
   assert.equal(stats.audioRmsDbfs, -9);
 });
 
+test("buildSubscriberStats: 受信した音声の鳴らし方の数を返す", () => {
+  // 鳴らす時刻を過ぎて届いたなどで基準を取り直した回数と、遅れが上限を超えて捨てた音の数。
+  // 再生の音の途切れの原因を切り分けるために読む
+  const instance = createSubscriberInstance("stats-audio-playout");
+  instance.audioPlayoutRebases.value = 2;
+  instance.audioPlayoutDrops.value = 3;
+  const stats = buildSubscriberStats(instance);
+  assert.equal(stats.audioPlayoutRebases, 2);
+  assert.equal(stats.audioPlayoutDrops, 3);
+});
+
 test("buildSubscriberStats: Group の順序と欠落で捨てた映像フレーム数を返す", () => {
   // 前の Group の遅着 Object (stale) と、参照先が欠けてキーフレームを待つ間の Object
   // (missing-reference) を分けて数える。E2E はこの値で受信した映像の並びを確かめる

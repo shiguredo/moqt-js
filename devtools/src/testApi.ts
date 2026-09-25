@@ -75,6 +75,9 @@ export interface SubscriberStats {
   // Audio Level が載っていない object を受けたときは null
   audioLastLevel: number | null;
   audioLastVoiceActivity: boolean | null;
+  // 受信した音声の鳴らし方の数。基準を取り直した回数と、遅れが上限を超えて捨てた音の数
+  audioPlayoutRebases: number;
+  audioPlayoutDrops: number;
 }
 
 /**
@@ -138,6 +141,8 @@ export function buildSubscriberStats(sub: SubscriberInstance): SubscriberStats {
     audioRmsDbfs: sub.audioRmsDbfs.value,
     audioLastLevel: sub.audioLastLevel.value?.level ?? null,
     audioLastVoiceActivity: sub.audioLastLevel.value?.voiceActivity ?? null,
+    audioPlayoutRebases: sub.audioPlayoutRebases.value,
+    audioPlayoutDrops: sub.audioPlayoutDrops.value,
   };
 }
 

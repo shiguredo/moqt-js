@@ -79,6 +79,10 @@ export interface SubscriberInstance {
   audioChunksDecoded: Signal<number>;
   // 受信した音声を音声出力デバイスで再生するか。既定は無効
   audioPlaybackEnabled: Signal<boolean>;
+  // 受信した音声の鳴らし方の数 (src/audioPlayout.ts)。購読ごとに数える。
+  // 鳴らす時刻を過ぎて届いたなどで基準を取り直した回数と、遅れが上限を超えて捨てた音の数
+  audioPlayoutRebases: Signal<number>;
+  audioPlayoutDrops: Signal<number>;
   // 復号した音声のレベル (dBFS)。まだ復号していない状態は null
   audioPeakDbfs: Signal<number | null>;
   audioRmsDbfs: Signal<number | null>;
@@ -128,6 +132,8 @@ export function createSubscriberInstance(id: string): SubscriberInstance {
     audioObjectsReceived: signal(0),
     audioChunksDecoded: signal(0),
     audioPlaybackEnabled: signal(false),
+    audioPlayoutRebases: signal(0),
+    audioPlayoutDrops: signal(0),
     audioPeakDbfs: signal<number | null>(null),
     audioRmsDbfs: signal<number | null>(null),
     audioWaveform: signal<Float32Array | null>(null),
