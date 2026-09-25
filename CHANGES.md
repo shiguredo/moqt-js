@@ -67,12 +67,19 @@
   - URL クエリ `mode` で Publisher だけ / Subscriber だけを表示する。ヘッダーの副題に 3 つのモードを並べ、今のモードを示すとともに、他のモードのページを今の接続設定のまま新しいタブで開けるようにする
   - Catalog Timeout と Use Dedicated Worker を URL に載せ、同じ接続設定のページを URL で再現できるようにする
   - @voluntas
+- [UPDATE] moqt-devtools と webcodecs-devtools のダミー映像を、Sora-DevTools のフェイク映像と同じ見た目にする
+  - グラデーションの上に、開始日時と `mmmm:ss.SSS` の経過時間を出す。文字の大きさは解像度に合わせる
+  - @voluntas
 - [UPDATE] moqt-devtools の接続設定を、Connection / Publisher / Subscriber に分けて並べる
   - Video と Audio は Publisher の中に置く。Catalog、再生先、Jitter Buffer は Subscriber の中に置く
+  - MAX_CACHE_DURATION は配信トラックの relay cache なので、Track Name と Codec の横に置く
   - Publisher だけのページでは Subscriber のまとまりを出さず、Subscriber だけのページでは Publisher のまとまりを出さない
   - @voluntas
-- [UPDATE] moqt-devtools の Server URL は、Remember Server URL を選んだときだけ OPFS に覚える
-  - 欄を離れただけでは残さない。外すと覚えていた URL を消す
+- [UPDATE] moqt-devtools の生成入力の表示名を Dummy (Canvas) と Dummy (WebAudio) にする
+  - URL の値は `videoSource=dummy` / `audioSource=dummy` のまま
+  - @voluntas
+- [UPDATE] moqt-devtools の Server URL は、Save を押したときだけ OPFS に覚える
+  - 覚えたあとは同じボタンが Purge になり、押すと消す。欄を離れただけでは残さない
   - @voluntas
 - [UPDATE] moqt-devtools の音声を Subgroup と Datagram から選んで送れるようにする
   - Audio Delivery の既定は Subgroup。Datagram は draft-ietf-moq-transport-21 §11.2。WT-H2 (reliable-only) では Subgroup で送る

@@ -7,7 +7,12 @@
  */
 
 import { test, assert } from "vite-plus/test";
-import { nextDummyFrame } from "./dummyVideo";
+import {
+  nextDummyFrame,
+  formatDummyElapsed,
+  formatDummyStartDateTime,
+  dummyCenterFontSize,
+} from "./dummyVideo";
 
 // 25 fps のフレーム間隔 (ミリ秒)。整数にして浮動小数点の誤差を避ける
 const FRAME_INTERVAL_MS = 40;
@@ -40,4 +45,22 @@ test("nextDummyFrame: 最初のフレームを描いた時刻からの経過で�
     frameIndex: 10,
     delayMs: 10,
   });
+});
+
+// Sora-DevTools のフェイク映像と同じ、中央の経過時間
+test("formatDummyElapsed: 経過時間を mmmm:ss.SSS にする", () => {
+  assert.equal(formatDummyElapsed(0), "0000:00.000");
+  assert.equal(formatDummyElapsed(61_234), "0001:01.234");
+  assert.equal(formatDummyElapsed(3_661_009), "0061:01.009");
+});
+
+// 上部に出す開始日時。ローカル時刻
+test("formatDummyStartDateTime: ローカル時刻を YYYY-MM-DD HH:mm:ss にする", () => {
+  assert.equal(formatDummyStartDateTime(new Date(2026, 8, 25, 23, 55, 7)), "2026-09-25 23:55:07");
+});
+
+// 中央の文字は短い辺の 15%。11 文字を超えたらその分だけ縮める
+test("dummyCenterFontSize: 11 文字までは短い辺の 15% で、超えたら縮む", () => {
+  assert.equal(dummyCenterFontSize(1280, 720, 11), 108);
+  assert.equal(dummyCenterFontSize(1280, 720, 22), 54);
 });

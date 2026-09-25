@@ -1,7 +1,7 @@
 /**
  * Server URL を OPFS に残すかの判定と、ファイルの中身の読み方
  *
- * 覚えるのは Remember Server URL を選んだときだけ。外したときと空欄のときは消す。
+ * 覚えるのは Save を押したときだけ。Purge を押したときは消す。
  */
 
 export type StoredServerUrlAction = { kind: "write"; url: string } | { kind: "delete" };
@@ -9,10 +9,11 @@ export type StoredServerUrlAction = { kind: "write"; url: string } | { kind: "de
 /**
  * 今の Server URL を OPFS に書くか、消すか
  *
- * `remember` が false のときは、覚えていた URL を消す。
+ * Save (`save` が true) のときは書く。空欄なら消す。
+ * Purge (`save` が false) のときは消す。
  */
-export function storedServerUrlAction(current: string, remember: boolean): StoredServerUrlAction {
-  if (!remember) {
+export function storedServerUrlAction(current: string, save: boolean): StoredServerUrlAction {
+  if (!save) {
     return { kind: "delete" };
   }
   const url = current.trim();
@@ -33,6 +34,26 @@ export function parseStoredServerUrl(raw: string): string | null {
     return null;
   }
   return text;
+}
+
+export type ServerUrlMemoryButton = { kind: "save"; disabled: boolean } | { kind: "purge" };
+
+/**
+ * Server URL 欄の Save / Purge
+ *
+ * 覚えていないとき、および欄を覚えた URL から変えたときは Save。
+ * 覚えた URL と欄が同じとき、および覚えたあと欄を空にしたときは Purge。
+ * 空欄でまだ覚えていないときは Save を押せない。
+ */
+export function serverUrlMemoryButton(
+  saved: string | null,
+  current: string,
+): ServerUrlMemoryButton {
+  const trimmed = current.trim();
+  if (saved !== null && (trimmed === saved || trimmed === "")) {
+    return { kind: "purge" };
+  }
+  return { kind: "save", disabled: trimmed === "" };
 }
 
 /**
@@ -86,12 +107,12 @@ export async function readStoredServerUrl(): Promise<string | null> {
 }
 
 /**
- * Remember Server URL が付いているときだけ OPFS に書く。外したときは消す
+ * Save が付いているときだけ OPFS に書く。Purge のときは消す
  *
  * 書けなくても画面の入力はそのまま使える。
  */
-export async function persistServerUrl(current: string, remember: boolean): Promise<void> {
-  const action = storedServerUrlAction(current, remember);
+export async function persistServerUrl(current: string, save: boolean): Promise<void> {
+  const action = storedServerUrlAction(current, save);
   try {
     const root = await privateDirectory();
     if (root === null) {

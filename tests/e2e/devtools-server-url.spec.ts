@@ -38,19 +38,30 @@ test("入力した Server URL を次に開いたときに戻す", async ({ page 
 
   const saved = "moqt://remembered.example:4443/";
   const input = page.getByTestId("server-url");
-  const remember = page.getByTestId("remember-server-url");
+  const memory = page.getByTestId("server-url-memory");
+  await expect(memory).toHaveText("Save");
   // 欄を変えただけでは覚えない
   await input.fill(saved);
   await input.blur();
   await expect.poll(() => readServerUrlFile(page)).toBe("");
 
-  await remember.check();
+  await memory.click();
   await expect.poll(() => readServerUrlFile(page)).toBe(saved);
+  await expect(memory).toHaveText("Purge");
 
-  // クエリの url が無い再読み込みでは、OPFS の値と Remember を戻す
+  // クエリの url が無い再読み込みでは、OPFS の値を戻し、ボタンは Purge になる
   await page.goto(DEVTOOLS_URL);
   await expect(input).toHaveValue(saved);
-  await expect(remember).toBeChecked();
+  await expect(memory).toHaveText("Purge");
+
+  await memory.click();
+  await expect.poll(() => readServerUrlFile(page)).toBe("");
+  await expect(memory).toHaveText("Save");
+  await expect(input).toHaveValue(saved);
+
+  await page.reload();
+  await expect(input).toHaveValue("moqt://127.0.0.1:4443/");
+  await expect(memory).toHaveText("Save");
 });
 
 test("共有リンクの url は表示するが、覚えた Server URL は上書きしない", async ({ page }) => {
@@ -61,18 +72,18 @@ test("共有リンクの url は表示するが、覚えた Server URL は上書
   const saved = "moqt://remembered.example:4443/";
   const shared = "moqt://shared.example:4443/";
   const input = page.getByTestId("server-url");
-  const remember = page.getByTestId("remember-server-url");
+  const memory = page.getByTestId("server-url-memory");
   await input.fill(saved);
-  await remember.check();
+  await memory.click();
   await expect.poll(() => readServerUrlFile(page)).toBe(saved);
 
   await page.goto(`${DEVTOOLS_URL}?url=${encodeURIComponent(shared)}`);
   await expect(input).toHaveValue(shared);
-  // 共有リンクを開いただけでは Remember は付かず、ファイルも書き換えない
-  await expect(remember).not.toBeChecked();
+  // 共有リンクを開いただけでは Save 済みにせず、ファイルも書き換えない
+  await expect(memory).toHaveText("Save");
   await expect.poll(() => readServerUrlFile(page)).toBe(saved);
 
   await page.goto(DEVTOOLS_URL);
   await expect(input).toHaveValue(saved);
-  await expect(remember).toBeChecked();
+  await expect(memory).toHaveText("Purge");
 });

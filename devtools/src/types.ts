@@ -5,11 +5,11 @@ export type CodecType = "vp8" | "vp9" | "av1" | "h264" | "h265";
 export type DevtoolsMode = "both" | "publisher" | "subscriber";
 
 // 映像の入力元。"none" は映像を送らず音声だけを配信する、"dummy" は Canvas で描いた映像、
-// "camera" は選んだカメラ。画面の表示名は Canvas / Camera (gUM)。URL の値は dummy のまま
+// "camera" は選んだカメラ。画面の表示名は Dummy (Canvas) / Camera (gUM)。URL の値は dummy のまま
 export type VideoSourceType = "none" | "dummy" | "camera";
 
 // 音声の入力元。"dummy" は Web Audio で作った 440 Hz の音 (映像の Canvas と対になる)、
-// "microphone" は選んだ音声入力デバイス。画面の表示名は WebAudio。URL の値は dummy のまま
+// "microphone" は選んだ音声入力デバイス。画面の表示名は Dummy (WebAudio)。URL の値は dummy のまま
 export type AudioSourceType = "none" | "dummy" | "microphone";
 
 // 音声 Object の送り方。既定は subgroup (ストリーム)。datagram は

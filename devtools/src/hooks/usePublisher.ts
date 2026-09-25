@@ -50,7 +50,6 @@ import {
   catalogRepublishIntervalMs,
 } from "../utils/catalogRepublish";
 import { shouldSendAudioAsDatagram } from "../utils/audioDelivery";
-import { persistServerUrl } from "../utils/serverUrlStore";
 import { browserIsChromium, resolvePanelHttpVersion } from "../utils/httpVersion";
 import * as settings from "../signals/connectionSettings";
 import * as pub from "../signals/publisher";
@@ -706,7 +705,7 @@ export function usePublisher() {
         pub.pubStatusMessage.value = "Preview: no video";
       } else {
         const deviceId = source === "camera" ? settings.selectedCameraDeviceId.value : undefined;
-        const sourceLabel = source === "dummy" ? "Canvas" : "Camera";
+        const sourceLabel = source === "dummy" ? "Dummy (Canvas)" : "Camera";
         pub.pubStatusMessage.value = `Preview: ${sourceLabel} ${width}x${height} @ ${framerate}fps`;
 
         const videoStreamResult = await getVideoStream(source, width, height, framerate, deviceId);
@@ -1179,7 +1178,6 @@ export function usePublisher() {
     // 止めても、接続設定の入力を有効に戻さない
     pub.isStarting.value = true;
     loggedAudioDatagramFallback = false;
-    void persistServerUrl(settings.url.value, settings.rememberServerUrl.value);
     try {
       pub.pubStatus.value = "disconnected";
       pub.pubStatusMessage.value = "Connecting...";

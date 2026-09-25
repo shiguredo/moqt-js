@@ -2,7 +2,7 @@ import type { ComponentChildren } from "preact";
 import { signal } from "@preact/signals";
 import { useId } from "preact/hooks";
 import * as settings from "../signals/connectionSettings";
-import { persistServerUrl } from "../utils/serverUrlStore";
+import { persistServerUrl, serverUrlMemoryButton } from "../utils/serverUrlStore";
 import { isConnectionSettingsOpen, toggleConnectionSettings } from "../signals/layout";
 import type {
   AudioDelivery,
@@ -311,14 +311,14 @@ const DEVICE_CONTROL_SIZE_CLASS = "flex-1 basis-0 min-h-9";
 // 値 "dummy" は URL に残す。画面では生成方法の名前にする
 const VIDEO_SOURCE_LABELS: Record<VideoSourceType, string> = {
   none: "None",
-  dummy: "Canvas",
+  dummy: "Dummy (Canvas)",
   camera: "Camera (gUM)",
 };
 
 // 音声の入力元の表示名。Canvas で描く映像と対になるのは、Web Audio で作る音
 const AUDIO_SOURCE_LABELS: Record<AudioSourceType, string> = {
   none: "None",
-  dummy: "WebAudio",
+  dummy: "Dummy (WebAudio)",
   microphone: "Microphone (gUM)",
 };
 
@@ -449,6 +449,21 @@ export function ConnectionSettings() {
   const clearImportedC4mToken = (): void => {
     settings.authorizationTokenBase64.value = "";
     settings.authorizationTokenType.value = "0";
+  };
+  const serverUrlMemory = serverUrlMemoryButton(settings.savedServerUrl.value, settings.url.value);
+  const serverUrlPurge = serverUrlMemory.kind === "purge";
+  const saveOrPurgeServerUrl = (): void => {
+    if (serverUrlPurge) {
+      settings.savedServerUrl.value = null;
+      void persistServerUrl(settings.url.value, false);
+      return;
+    }
+    const next = settings.url.value.trim();
+    if (next === "") {
+      return;
+    }
+    settings.savedServerUrl.value = next;
+    void persistServerUrl(next, true);
   };
 
   return (
@@ -587,39 +602,37 @@ export function ConnectionSettings() {
             <label for="url" class="block text-sm font-medium text-slate-600 mb-1">
               Server URL
             </label>
-            <input
-              type="text"
-              id="url"
-              data-testid="server-url"
-              value={settings.url.value}
-              onInput={(e) => {
-                settings.url.value = e.currentTarget.value;
-                // URL に msf fragment が含まれる場合は c4m を Authorization Token に反映する
-                settings.applyC4mFromUrl(e.currentTarget.value);
-              }}
-              onBlur={() => {
-                if (settings.rememberServerUrl.value) {
-                  void persistServerUrl(settings.url.value, true);
-                }
-              }}
-              disabled={settings.settingsDisabled.value}
-              class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors disabled:bg-slate-100 disabled:cursor-not-allowed"
-            />
-            <label class="mt-2 flex items-center gap-2 cursor-pointer">
+            <div class="flex items-center gap-2">
               <input
-                type="checkbox"
-                data-testid="remember-server-url"
-                checked={settings.rememberServerUrl.value}
-                onChange={(e) => {
-                  const remember = e.currentTarget.checked;
-                  settings.rememberServerUrl.value = remember;
-                  void persistServerUrl(settings.url.value, remember);
+                type="text"
+                id="url"
+                data-testid="server-url"
+                value={settings.url.value}
+                onInput={(e) => {
+                  settings.url.value = e.currentTarget.value;
+                  // URL に msf fragment が含まれる場合は c4m を Authorization Token に反映する
+                  settings.applyC4mFromUrl(e.currentTarget.value);
                 }}
                 disabled={settings.settingsDisabled.value}
-                class="w-4 h-4 text-blue-600 border-slate-300 rounded focus:ring-blue-500 disabled:cursor-not-allowed"
+                class="min-w-0 flex-1 px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors disabled:bg-slate-100 disabled:cursor-not-allowed"
               />
-              <span class="text-sm text-slate-600">Remember Server URL</span>
-            </label>
+              <button
+                type="button"
+                data-testid="server-url-memory"
+                disabled={
+                  settings.settingsDisabled.value ||
+                  (serverUrlMemory.kind === "save" && serverUrlMemory.disabled)
+                }
+                onClick={saveOrPurgeServerUrl}
+                class={`shrink-0 px-3 py-2 text-sm border rounded-lg disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed ${
+                  serverUrlPurge
+                    ? "border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100"
+                    : "border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100"
+                }`}
+              >
+                {serverUrlPurge ? "Purge" : "Save"}
+              </button>
+            </div>
           </div>
           <div class="lg:col-span-3">
             <label for="certificateHash" class="block text-sm font-medium text-slate-600 mb-1">
@@ -728,6 +741,29 @@ export function ConnectionSettings() {
                     <option value="av1">AV1</option>
                     <option value="h264">H.264</option>
                     <option value="h265">H.265</option>
+                  </select>
+                </div>
+                <div>
+                  <label for="maxCacheDuration" class="block text-xs text-slate-500 mb-1">
+                    MAX_CACHE_DURATION
+                    <span class="ml-1 text-slate-400">relay cache</span>
+                  </label>
+                  <select
+                    id="maxCacheDuration"
+                    value={settings.maxCacheDuration.value}
+                    onChange={(e) =>
+                      (settings.maxCacheDuration.value = Number(e.currentTarget.value))
+                    }
+                    disabled={settings.settingsDisabled.value}
+                    class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white disabled:bg-slate-100 disabled:cursor-not-allowed"
+                  >
+                    <option value="0">0 (no cache)</option>
+                    <option value="10000">10 sec</option>
+                    <option value="30000">30 sec</option>
+                    <option value="60000">1 min</option>
+                    <option value="180000">3 min</option>
+                    <option value="300000">5 min</option>
+                    <option value="600000">10 min</option>
                   </select>
                 </div>
               </div>
@@ -1068,34 +1104,6 @@ export function ConnectionSettings() {
                     <span class="text-sm text-slate-600">{option.label}</span>
                   </label>
                 ))}
-              </div>
-            </div>
-
-            <div>
-              <SettingsSubsection title="Publish" />
-              <div class="grid grid-cols-2 md:grid-cols-5 gap-4">
-                <div>
-                  <label for="maxCacheDuration" class="block text-xs text-slate-500 mb-1">
-                    MAX_CACHE_DURATION
-                  </label>
-                  <select
-                    id="maxCacheDuration"
-                    value={settings.maxCacheDuration.value}
-                    onChange={(e) =>
-                      (settings.maxCacheDuration.value = Number(e.currentTarget.value))
-                    }
-                    disabled={settings.settingsDisabled.value}
-                    class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white disabled:bg-slate-100 disabled:cursor-not-allowed"
-                  >
-                    <option value="0">0 (no cache)</option>
-                    <option value="10000">10 sec</option>
-                    <option value="30000">30 sec</option>
-                    <option value="60000">1 min</option>
-                    <option value="180000">3 min</option>
-                    <option value="300000">5 min</option>
-                    <option value="600000">10 min</option>
-                  </select>
-                </div>
               </div>
             </div>
           </RoleSettings>

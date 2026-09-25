@@ -44,7 +44,6 @@ import { JITTER_BUFFER_MAX_QUEUED_FRAMES, PlayoutBuffer } from "../utils/playout
 import { GroupSwitchGate } from "../../../src/groupSwitchGate.ts";
 import { AudioPlayoutScheduler } from "../../../src/audioPlayout.ts";
 import { applyAudioOutputSink } from "../utils/audioOutput";
-import { persistServerUrl } from "../utils/serverUrlStore";
 import { browserIsChromium, resolvePanelHttpVersion } from "../utils/httpVersion";
 import * as settings from "../signals/connectionSettings";
 import * as sub from "../signals/subscriber";
@@ -1322,7 +1321,6 @@ export function useSubscriber(
     // 購読中として扱う (Stop で止められ、Start Subscribing を重ねて押せない。接続設定の入力も
     // 無効のまま保つ)
     instance.isStarting.value = true;
-    void persistServerUrl(settings.url.value, settings.rememberServerUrl.value);
 
     try {
       instance.status.value = "disconnected";
