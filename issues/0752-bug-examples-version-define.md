@@ -1,7 +1,7 @@
 # examples のページが `__MOQT_JS_VERSION__` の未定義で読み込みの時点で止まる
 
 - Created: 2026-09-25
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-25
 - Branch: feature/fix-examples-version-define
 - Polished: {YYYY-MM-DD}
 
@@ -30,3 +30,9 @@
 - examples の開発サーバーでページを開いて、console にエラーが出ず、Start Subscribe で接続を始める
 - `vp run build:examples` が通る
 - `vp check` / `tsc --noEmit` / `vp test run` が通る
+
+## 解決方法
+
+- `examples/vite.config.ts` に、`devtools/vite.config.ts` と同じく `define` で `__MOQT_JS_VERSION__` を `package.json` の version から埋め込んだ
+- examples の開発サーバーで `high-level-api` のページを開くと、ページのエラーが出ず、Start Subscribe で接続を始める (「connecting to ...」「state: subscribing」がログに出る) ことを確かめた
+- `vp run build:examples` / `vp check` / `tsc --noEmit` が通った
