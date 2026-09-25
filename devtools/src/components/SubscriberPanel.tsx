@@ -78,7 +78,7 @@ export function SubscriberPanel({
     startDisabled: subscribeBtnDisabled,
     stopDisabled: stopBtnDisabled,
   } = subscriberControlState({
-    subscribed: instance.subscriber.value !== null,
+    subscribed: sub.hasEstablishedSubscription(instance),
     starting: instance.isStarting.value,
     stopping: instance.isStopping.value,
   });

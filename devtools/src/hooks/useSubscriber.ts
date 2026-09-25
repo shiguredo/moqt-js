@@ -59,6 +59,42 @@ export function resolveAudioTrack(catalog: Catalog): CatalogTrack | undefined {
   return getAudioTracks(catalog)[0];
 }
 
+/**
+ * Catalog から購読する映像トラックと音声トラック
+ *
+ * どちらか一方は必ずある。映像が無いときは音声だけを購読する
+ */
+export type CatalogMediaTracks =
+  | { video: CatalogTrack; audio: CatalogTrack | undefined }
+  | { video: undefined; audio: CatalogTrack };
+
+/**
+ * Catalog から購読する映像トラックと音声トラックを取り出す
+ *
+ * draft-ietf-moq-msf-01 の catalog は映像トラックを必須としないため、音声だけを広告する
+ * publisher も購読できるようにする。どちらのトラックも無い catalog は購読できないため
+ * throw する。ブラウザ API に依存しないため、この分岐はここで検証できる。
+ */
+export function resolveCatalogMediaTracks(catalog: Catalog): CatalogMediaTracks {
+  const video = getVideoTracks(catalog)[0];
+  const audio = resolveAudioTrack(catalog);
+  if (video !== undefined) {
+    return { video, audio };
+  }
+  if (audio !== undefined) {
+    return { video, audio };
+  }
+  throw new Error(
+    `no video or audio track in catalog: tracks=${JSON.stringify(catalog.tracks.map((track) => track.name))}`,
+  );
+}
+
+/** 購読するトラックの終わりとエラーを受けるコールバック */
+interface TrackEndCallbacks {
+  end: () => void;
+  error: (error: Error) => void;
+}
+
 /** 受信した音声を再生するための audio graph */
 interface AudioPlayback {
   context: AudioContext;
@@ -651,6 +687,10 @@ export function useSubscriber(
    * catalog の `samplerate` / `channelConfig` から decoder を構成する。受信 object の
    * LOC properties は Track Property と Object Property の両方から解決し、
    * AUDIO_LEVEL を signal へ、AUDIO_CONFIG (AAC) を decoder の description へ渡す。
+   *
+   * `trackCallbacks` を渡すと、音声トラックの終わりとエラーをそれに伝える (音声だけの
+   * 購読では、音声トラックの終わりが購読の終わりになる)。渡さないときはログだけを残す
+   * (映像と音声の購読では、購読の終わりは映像トラックで扱う)
    */
   async function startAudioSubscription(
     session: Session,
@@ -658,6 +698,7 @@ export function useSubscriber(
     audioTrack: CatalogTrack,
     instance: sub.SubscriberInstance,
     signal: AbortSignal,
+    trackCallbacks?: TrackEndCallbacks,
   ): Promise<void> {
     if (!audioTrack.codec) {
       throw new Error("audio track codec is not specified in catalog");
@@ -779,11 +820,13 @@ export function useSubscriber(
         },
         end: () => {
           addLog("info", `[${subscriberId}] audio stream ended`);
+          trackCallbacks?.end();
         },
         error: (error) => {
           addLog("error", `[${subscriberId}] audio subscribe error`, {
             message: error instanceof Error ? error.message : String(error),
           });
+          trackCallbacks?.error(error);
         },
       },
       {
@@ -810,6 +853,40 @@ export function useSubscriber(
       sampleRate,
       channels,
     });
+  }
+
+  /**
+   * 映像トラックの無い catalog で、音声トラックだけを購読する
+   *
+   * 音声トラックの購読の確立で、購読が確立したとみなす (isStarting を下ろす)。音声の
+   * 購読の失敗は、購読の失敗として呼び出し元へ投げる (映像と音声の購読のように、
+   * 音声を諦めて続ける対象が無い)。音声トラックの終わりとエラーは `trackCallbacks` で
+   * 購読の終わりとエラーとして扱う
+   */
+  async function subscribeAudioOnly(
+    session: Session,
+    namespaceArray: string[],
+    audioTrack: CatalogTrack,
+    instance: sub.SubscriberInstance,
+    signal: AbortSignal,
+    trackCallbacks: TrackEndCallbacks,
+  ): Promise<void> {
+    instance.statusMessage.value = "Preparing audio decoder...";
+    resetSubscriberStats(instance);
+    await startAudioSubscription(
+      session,
+      namespaceArray,
+      audioTrack,
+      instance,
+      signal,
+      trackCallbacks,
+    );
+    // startAudioSubscription 内の checkAborted は関数内で return するだけなので、
+    // 中断後もここへ来る。teardownSubscriber が確定させた表示を上書きしない
+    if (signal.aborted) return;
+    instance.isStarting.value = false;
+    instance.status.value = "connected";
+    instance.statusMessage.value = `Subscribed: ${namespaceArray.join("/")}/${audioTrack.name}`;
   }
 
   /**
@@ -1174,8 +1251,28 @@ export function useSubscriber(
     // この回の購読が今の購読か。この回が登録するコールバックは、今の購読の間だけ
     // 表示を変えて後始末する (停止した購読のコールバックが次の購読を止めないようにする)
     const isCurrentAttempt = createAttemptGuard(abortControllerRef, signal);
-    // 映像トラックの購読が確立するか後始末を終えるまで、購読中として扱う
-    // (Stop で止められ、Start Subscribing を重ねて押せない。接続設定の入力も無効のまま保つ)
+    // 購読するトラック (映像があれば映像、無ければ音声) の終わりとエラーの扱い
+    const trackCallbacks: TrackEndCallbacks = {
+      end: () => {
+        // 停止した購読の終わりは、次の購読に触らない (session の close と同じ理由)
+        if (!isCurrentAttempt()) return;
+        if (shouldApplyStatusUpdate()) {
+          instance.status.value = "disconnected";
+          instance.statusMessage.value = "Stream ended";
+        }
+        teardownSubscriber();
+      },
+      error: (error) => {
+        if (!isCurrentAttempt()) return;
+        if (shouldApplyStatusUpdate()) {
+          instance.status.value = "error";
+          instance.statusMessage.value = `Subscribe error: ${error.message}`;
+        }
+      },
+    };
+    // 購読するトラック (映像があれば映像、無ければ音声) の購読が確立するか後始末を終えるまで、
+    // 購読中として扱う (Stop で止められ、Start Subscribing を重ねて押せない。接続設定の入力も
+    // 無効のまま保つ)
     instance.isStarting.value = true;
 
     try {
@@ -1245,9 +1342,8 @@ export function useSubscriber(
       // Catalog 購読中 (最大 5 秒) の途中で "connected" にしないこと。
       instance.statusMessage.value = "Connected, subscribing to catalog...";
 
-      // Catalog を購読してコーデック情報を取得
-      let videoTrackFromCatalog: CatalogTrack | undefined;
-      let actualTrackName = settings.trackName.value;
+      // Catalog を購読して、購読する映像トラックと音声トラックを取り出す
+      let tracksFromCatalog: CatalogMediaTracks;
 
       try {
         // draft-ietf-moq-transport-21 に準拠した Catalog 購読:
@@ -1255,7 +1351,7 @@ export function useSubscriber(
         // 2. 独立した FETCH (フィルタなし) で過去の Catalog を取得
         // FETCH が INVALID_RANGE で失敗する場合 (Catalog 未 publish) は
         // live の SUBSCRIBE 経由で Catalog が届くのを待つ
-        const catalogPromise = new Promise<CatalogTrack | undefined>((resolve, reject) => {
+        const catalogPromise = new Promise<Catalog>((resolve, reject) => {
           // SUBSCRIBE と FETCH は独立したリクエストであり、古いフルカタログが
           // live の新しいフルカタログより後に届く可能性がある。instance.catalog を
           // 巻き戻さないよう、適用済みの最大 Location を保持して単調性を保証する。
@@ -1303,14 +1399,8 @@ export function useSubscriber(
                 catalog,
               });
               instance.catalog.value = catalog;
-
-              const videoTracks = getVideoTracks(catalog);
-              if (videoTracks.length > 0) {
-                resolve(videoTracks[0]);
-              } else {
-                addLog("warn", `[${subscriberId}] no video tracks in catalog`);
-                resolve(undefined);
-              }
+              // 購読するトラックは最初に届いた catalog から決める (後の catalog では解決済み)
+              resolve(catalog);
             } catch (error) {
               addLog("error", `[${subscriberId}] failed to decode catalog`, {
                 message: error instanceof Error ? error.message : String(error),
@@ -1414,28 +1504,26 @@ export function useSubscriber(
         // Catalog 取得をタイムアウト付きで待機
         const catalogTimeout = settings.catalogSubscriptionTimeout.value;
         let timeoutId: ReturnType<typeof setTimeout> | undefined;
-        const timeoutPromise = new Promise<CatalogTrack>((_, reject) => {
+        const timeoutPromise = new Promise<Catalog>((_, reject) => {
           timeoutId = setTimeout(() => {
             reject(new Error(`catalog subscription did not complete within ${catalogTimeout}ms`));
           }, catalogTimeout);
         });
 
+        let receivedCatalog: Catalog;
         try {
-          videoTrackFromCatalog = await Promise.race([catalogPromise, timeoutPromise]);
+          receivedCatalog = await Promise.race([catalogPromise, timeoutPromise]);
         } finally {
           // catalog 取得成功時もタイマーを解放する。タイムアウト発火後の
           // clearTimeout は無害。
           clearTimeout(timeoutId);
         }
 
-        if (!videoTrackFromCatalog) {
-          throw new Error("no video track in catalog");
-        }
-
+        tracksFromCatalog = resolveCatalogMediaTracks(receivedCatalog);
         addLog("info", `[${subscriberId}] using codec from catalog`, {
-          codec: videoTrackFromCatalog.codec,
+          video: tracksFromCatalog.video?.codec ?? null,
+          audio: tracksFromCatalog.audio?.codec ?? null,
         });
-        actualTrackName = videoTrackFromCatalog.name;
       } catch (error) {
         // 元のエラーを cause に保持し、スタックトレースを失わないようにする
         throw new Error(`failed to get catalog: ${(error as Error).message}`, {
@@ -1446,6 +1534,21 @@ export function useSubscriber(
       // Catalog 取得経路は finally で clearTimeout 済みのため追加 cleanup は不要。
       // .then 内側で catalogSubscriber の遅延代入レースは解消済み。
       if (checkAborted(signal, () => {})) return;
+
+      // 映像トラックの無い catalog では、映像の decoder と購読を作らず音声だけを購読する
+      if (tracksFromCatalog.video === undefined) {
+        await subscribeAudioOnly(
+          session,
+          namespaceArray,
+          tracksFromCatalog.audio,
+          instance,
+          signal,
+          trackCallbacks,
+        );
+        return;
+      }
+      const videoTrackFromCatalog = tracksFromCatalog.video;
+      const actualTrackName = videoTrackFromCatalog.name;
 
       instance.statusMessage.value = "Preparing decoder...";
 
@@ -1568,22 +1671,10 @@ export function useSubscriber(
               videoGroupGateRef.current.endSubgroup(end.groupId, end.subgroupId, performance.now()),
             );
           },
-          end: () => {
-            // 停止した購読の終わりは、次の購読に触らない (session の close と同じ理由)
-            if (!isCurrentAttempt()) return;
-            if (shouldApplyStatusUpdate()) {
-              instance.status.value = "disconnected";
-              instance.statusMessage.value = "Stream ended";
-            }
-            teardownSubscriber();
-          },
+          end: trackCallbacks.end,
           error: (error) => {
             console.error(`[${subscriberId}] Subscriber error:`, error);
-            if (!isCurrentAttempt()) return;
-            if (shouldApplyStatusUpdate()) {
-              instance.status.value = "error";
-              instance.statusMessage.value = `Subscribe error: ${error.message}`;
-            }
+            trackCallbacks.error(error);
           },
         },
         subscribeOptions,
@@ -1619,7 +1710,7 @@ export function useSubscriber(
       // catalog に音声トラックが無い publisher (映像だけを広告する実装) では
       // 音声の購読を開始せず、警告を出して映像だけを継続する。音声側の準備に
       // 失敗した場合も映像の視聴は妨げない (相互運用の実測では映像だけでも意味がある)
-      const audioTrackFromCatalog = resolveAudioTrack(catalogValue);
+      const audioTrackFromCatalog = tracksFromCatalog.audio;
       if (audioTrackFromCatalog === undefined) {
         addLog("warn", `[${subscriberId}] no audio track in catalog, continuing with video only`);
         return;
@@ -1675,7 +1766,9 @@ export function useSubscriber(
     instance.statusMessage.value = "Disconnecting...";
 
     try {
-      const subscriberInstance = instance.subscriber.value;
+      // 購読しているトラック (映像があれば映像、無ければ音声) の購読の解除を待つ。
+      // 映像と音声の購読の音声トラックは、後始末 (closeSubscriberResources) で解除する
+      const subscriberInstance = instance.subscriber.value ?? instance.audioSubscriber.value;
       if (subscriberInstance && subscriberInstance.state === "active") {
         await subscriberInstance.unsubscribe();
       }

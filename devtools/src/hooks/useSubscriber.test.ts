@@ -10,6 +10,7 @@ import {
   resetSubscriberState,
   resetSubscriberStats,
   resolveAudioTrack,
+  resolveCatalogMediaTracks,
   resolveNewGroupRequestValue,
   type ReceivedVideoObject,
 } from "./useSubscriber";
@@ -616,6 +617,43 @@ test("resolveAudioTrack: catalog の音声トラックを返す", () => {
   const audioTrack = resolveAudioTrack(catalog);
   assert.equal(audioTrack?.name, "audio");
   assert.equal(audioTrack?.codec, "opus");
+});
+
+// catalog から購読する映像トラックと音声トラックを取り出す。MSF の catalog は映像トラックを
+// 必須としないため、音声だけの catalog も購読できる。どちらも無い catalog は購読できない
+test("resolveCatalogMediaTracks: 映像と音声の両方を持つ catalog では両方を返す", () => {
+  const catalog = createCatalog([
+    makeCatalogTrack(),
+    makeCatalogTrack({ name: "audio", role: "audio", codec: "opus" }),
+  ]);
+
+  const tracks = resolveCatalogMediaTracks(catalog);
+  assert.equal(tracks.video?.name, "video");
+  assert.equal(tracks.audio?.name, "audio");
+});
+
+test("resolveCatalogMediaTracks: 映像だけの catalog では音声を undefined にする", () => {
+  const catalog = createCatalog([makeCatalogTrack()]);
+
+  const tracks = resolveCatalogMediaTracks(catalog);
+  assert.equal(tracks.video?.name, "video");
+  assert.equal(tracks.audio, undefined);
+});
+
+test("resolveCatalogMediaTracks: 音声だけの catalog では映像を undefined にし、音声を返す", () => {
+  const catalog = createCatalog([
+    makeCatalogTrack({ name: "audio", role: "audio", codec: "opus" }),
+  ]);
+
+  const tracks = resolveCatalogMediaTracks(catalog);
+  assert.equal(tracks.video, undefined);
+  assert.equal(tracks.audio?.name, "audio");
+});
+
+test("resolveCatalogMediaTracks: 映像も音声も無い catalog では throw する", () => {
+  const catalog = createCatalog([]);
+
+  assert.throws(() => resolveCatalogMediaTracks(catalog), /no video or audio track in catalog/);
 });
 
 test("closeSubscriberResources: 音声デコーダを閉じ、音声トラックの購読を解除する", () => {
