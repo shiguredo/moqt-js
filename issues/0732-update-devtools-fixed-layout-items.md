@@ -1,7 +1,7 @@
 # moqt-devtools の画面で、状態によって項目が出たり消えたりして、映像や下の項目の位置が動く
 
 - Created: 2026-09-25
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-25
 - Branch: feature/update-devtools-fixed-layout-items
 - Polished: {YYYY-MM-DD}
 - Reporter: @voluntas
@@ -37,3 +37,14 @@ moqt-devtools の画面では、配信や購読の状態によって項目が現
 - Playwright の E2E で、配信の前後と購読の前後で、Publisher と Subscriber の映像の枠の上端の位置と、各パネルの高さが変わらないことを確かめる (実リレーを起動しないテストでは、配信の前の状態で各項目が描かれていることを確かめる)
 - 音声のレベルメーターの E2E (`tests/e2e/devtools-audio-meter.spec.ts`) の「購読していないときはメーターを描画しない」を、「購読していないときは値を「-」にして描く」に直す
 - `vp check` / `tsc --noEmit` / `vp test run` / Playwright の E2E が通る
+
+## 解決方法
+
+- `devtools/src/components/PublisherPanel.tsx` の Forward State の行を常に描き、配信していない間は「Forward State: -」にした
+- 両パネルの状態のメッセージを 1 行に収め (`truncate`)、全文を `title` に持たせた
+- Catalog の欄を `devtools/src/components/CatalogTracks.tsx` にまとめ (Publisher と Subscriber で同じだった markup を共通にした)、常に描くようにした。catalog が無い間は「-」を出し、一覧の領域の高さを固定した (`h-44`、収まらない分は欄の中でスクロールする)
+- 音声のレベルメーター (`AudioMeter`) を常に描き、音声トラックを購読していない間は各値を「-」にした (`subscribed` を渡す)
+- `EventLog` の本文の高さを固定した (`max-h-48` から `h-24`)
+- 既存の E2E `tests/e2e/devtools-audio-meter.spec.ts` の「購読していないときはメーターを描画しない」を、「購読していないときもメーターを描き、値を「-」にする」に直した
+- 完了条件に書いた UI の E2E は、利用者の指示 (UI 系の E2E テストは一旦不要) により足していない。手元の relay と devtools で、何もしていない状態、配信中、配信と購読の最中の 3 つで、Publisher と Subscriber の映像の枠のページ上の位置 (1438 px / 1422 px) と各パネルの高さが変わらないことを実測で確かめた (修正前は、Subscriber の映像の位置からみた Publisher の映像の位置が、配信の開始で 52 px 動いていた)
+- `vp check` / `tsc --noEmit` / `vp test run` (2781 件) / Playwright の E2E (40 件) が通った
