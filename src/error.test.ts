@@ -18,6 +18,7 @@ import {
   normalizePublishDoneCode,
   normalizeSessionErrorCode,
   normalizeDataStreamErrorCode,
+  peerStreamErrorCode,
   SessionError,
   SessionErrorCode,
 } from "./error";
@@ -150,6 +151,46 @@ test("normalizeDataStreamErrorCode: 既知のコードはそのまま通す", ()
 test("normalizeDataStreamErrorCode: 未知のコードは INTERNAL_ERROR に正規化", () => {
   assert.equal(normalizeDataStreamErrorCode(0x99), DataStreamErrorCode.INTERNAL_ERROR);
   assert.equal(normalizeDataStreamErrorCode(0x9d), DataStreamErrorCode.INTERNAL_ERROR);
+});
+
+/**
+ * ピアの RESET_STREAM で失敗した read / write の失敗値 (WebTransportError) から、
+ * Data Stream Reset の error code を取り出す。
+ *
+ * draft-ietf-moq-transport-21 Section 12.5: 理由ごとに code が決まっている。
+ * Section 13: 未知の code は INTERNAL_ERROR として扱う。数値の code を持たない失敗値
+ * (code を渡さない実装、stream 以外の失敗) からは取り出さない。
+ */
+test("peerStreamErrorCode: 数値の streamErrorCode を正規化して返し、無ければ undefined を返す", () => {
+  // 既知の code はそのまま
+  assert.equal(
+    peerStreamErrorCode(
+      Object.assign(new Error("reset"), { source: "stream", streamErrorCode: 0x2 }),
+    ),
+    DataStreamErrorCode.DELIVERY_TIMEOUT,
+  );
+  assert.equal(
+    peerStreamErrorCode(
+      Object.assign(new Error("reset"), { source: "stream", streamErrorCode: 0x5 }),
+    ),
+    DataStreamErrorCode.TOO_FAR_BEHIND,
+  );
+  // 未知の code は INTERNAL_ERROR
+  assert.equal(
+    peerStreamErrorCode(
+      Object.assign(new Error("reset"), { source: "stream", streamErrorCode: 0x99 }),
+    ),
+    DataStreamErrorCode.INTERNAL_ERROR,
+  );
+  // code が無い、数値でない、object でない失敗値からは取り出さない
+  assert.isUndefined(peerStreamErrorCode(Object.assign(new Error("reset"), { source: "stream" })));
+  assert.isUndefined(
+    peerStreamErrorCode(
+      Object.assign(new Error("reset"), { source: "stream", streamErrorCode: "2" }),
+    ),
+  );
+  assert.isUndefined(peerStreamErrorCode("reset"));
+  assert.isUndefined(peerStreamErrorCode(null));
 });
 
 test("ClosedSubgroupError は Error を継承し name/trackAlias/groupId を保持する", () => {

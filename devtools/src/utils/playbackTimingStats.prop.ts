@@ -248,7 +248,11 @@ test("recordDisplay: 実際に近い時系列でも、原因ごとの止まり�
           if (isGroupEnd) {
             // Group の stream の終わりは、最後の Object の受け取りの直後に通知される
             add(receivedAtMs, (stats) => {
-              stats.recordSubgroupEnd(groupId, 0n, fate.resetAtGroupEnd ? "reset" : "fin");
+              if (fate.resetAtGroupEnd) {
+                stats.recordSubgroupEnd(groupId, 0n, "reset", 0x0, receivedAtMs);
+              } else {
+                stats.recordSubgroupEnd(groupId, 0n, "fin", null, receivedAtMs);
+              }
             });
           }
           if (fate.lost) {

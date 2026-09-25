@@ -77,6 +77,7 @@ export {
   ClosedSubgroupError,
   SessionErrorCode,
   RequestErrorCode,
+  DataStreamErrorCode,
   type RedirectInfo,
 } from "./error";
 

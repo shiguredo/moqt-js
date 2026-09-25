@@ -2,13 +2,17 @@ import { test, assert } from "vite-plus/test";
 import {
   DISPLAY_STALL_FACTOR,
   EMPTY_PLAYBACK_TIMING,
+  MAX_RECENT_LOSS_EVENTS,
   MAX_RECENT_STALLS,
   PLAYBACK_TIMING_WINDOW_MS,
   PlaybackTimingStats,
+  formatLossEvent,
   formatStallCauseTotal,
   formatStallEvent,
+  formatStreamResetCode,
   formatTimingSummary,
   summarizeTimings,
+  type LossEvent,
   type StallEvent,
 } from "./playbackTimingStats";
 
@@ -226,7 +230,7 @@ test("snapshot: 受信の欠けと保留の期限切れを出す", () => {
   stats.recordObjectReceived({ groupId: 0n, objectId: 0n, priorObjectIdGap: 0n }, 0n, null, 0);
   stats.recordObjectReceived({ groupId: 0n, objectId: 2n, priorObjectIdGap: 0n }, 0n, null, 0);
   stats.recordObjectReceived({ groupId: 2n, objectId: 0n, priorObjectIdGap: 0n }, 0n, null, 0);
-  stats.recordSubgroupEnd(0n, 0n, "reset");
+  stats.recordSubgroupEnd(0n, 0n, "reset", 0x0, 0);
   stats.recordGroupSwitchHoldExpired();
 
   const snapshot = stats.snapshot(0);
@@ -234,6 +238,142 @@ test("snapshot: 受信の欠けと保留の期限切れを出す", () => {
   assert.equal(snapshot.missingGroups, 1);
   assert.equal(snapshot.subgroupStreamResets, 1);
   assert.equal(snapshot.groupSwitchHoldExpirations, 1);
+});
+
+// RESET_STREAM を error code ごとに数える。code は reset の理由を表す
+// (draft-ietf-moq-transport-21 Section 12.5)。WebTransport が code を渡さなかった reset は
+// code 無しとして数え、FIN は数えない
+test("recordSubgroupEnd: reset を error code ごとに数え、FIN は数えない", () => {
+  const stats = new PlaybackTimingStats();
+  stats.recordSubgroupEnd(0n, 0n, "reset", 0x0, 0);
+  stats.recordSubgroupEnd(1n, 0n, "reset", 0x0, 0);
+  stats.recordSubgroupEnd(2n, 0n, "reset", 0x2, 0);
+  stats.recordSubgroupEnd(3n, 0n, "reset", null, 0);
+  stats.recordSubgroupEnd(4n, 0n, "fin", null, 0);
+
+  const snapshot = stats.snapshot(0);
+  assert.equal(snapshot.subgroupStreamResets, 4);
+  assert.deepEqual(snapshot.subgroupStreamResetsByCode, {
+    "INTERNAL_ERROR (0x0)": 2,
+    "DELIVERY_TIMEOUT (0x2)": 1,
+    "no code": 1,
+  });
+});
+
+// error code の表示は名前と 16 進の値にする。未知の値は名前を付けない
+test("formatStreamResetCode: 名前と 16 進の値にし、code が無ければ no code にする", () => {
+  assert.equal(formatStreamResetCode(0x0), "INTERNAL_ERROR (0x0)");
+  assert.equal(formatStreamResetCode(0x5), "TOO_FAR_BEHIND (0x5)");
+  assert.equal(formatStreamResetCode(0x12), "MALFORMED_TRACK (0x12)");
+  assert.equal(formatStreamResetCode(0x99), "0x99");
+  assert.equal(formatStreamResetCode(null), "no code");
+});
+
+// 欠落 (loss) の止まりと reset は、止まりの一覧とは別に時刻順で残す。到着の遅れの
+// 止まりが多くても押し出されない
+test("recentLossEvents: reset と欠落の止まりを残し、到着の遅れの止まりには押し出されない", () => {
+  const timeOriginMs = 1_790_263_445_000;
+  const stats = new PlaybackTimingStats(PLAYBACK_TIMING_WINDOW_MS, timeOriginMs);
+  const frameMicros = 40_000;
+  // Group 7 の Object 0 から 2 を間隔どおりに受け取って表示する
+  for (let index = 0; index < 3; index++) {
+    const timestampMicros = index * frameMicros;
+    const atMs = 1_000 + index * 40;
+    stats.recordObjectReceived(
+      { groupId: 7n, objectId: BigInt(index), priorObjectIdGap: 0n },
+      0n,
+      timestampMicros,
+      atMs - 5,
+    );
+    stats.recordObjectReleased(timestampMicros, atMs - 5);
+    stats.recordDecodeStart(atMs - 5, timestampMicros);
+    stats.recordDecodeOutput(atMs - 3, timestampMicros);
+    stats.recordDisplay(atMs, timestampMicros);
+  }
+  // Group 7 の stream が reset され、残りは届かない。次の Group 8 の先頭を 1,000 ms 後に表示する
+  stats.recordSubgroupEnd(7n, 0n, "reset", 0x0, 1_100);
+  const nextMicros = 1_080_000;
+  stats.recordObjectReceived(
+    { groupId: 8n, objectId: 0n, priorObjectIdGap: 0n },
+    0n,
+    nextMicros,
+    2_070,
+  );
+  stats.recordObjectReleased(nextMicros, 2_070);
+  stats.recordDecodeStart(2_070, nextMicros);
+  stats.recordDecodeOutput(2_072, nextMicros);
+  const lossStall = stats.recordDisplay(2_080, nextMicros);
+  if (lossStall === null) {
+    assert.fail("Group 8 の先頭の表示は止まりであること");
+  }
+  assert.equal(lossStall.cause, "loss", "届かなかった Object による止まりであること");
+
+  // 以降、記録の無いフレームで止まりを上限より多く起こし、止まりの一覧から押し出す
+  let nowMs = 2_080;
+  let timestampMicros = nextMicros;
+  for (let index = 0; index < MAX_RECENT_STALLS + 5; index++) {
+    nowMs += 200;
+    timestampMicros += frameMicros;
+    stats.recordDisplay(nowMs, timestampMicros);
+  }
+
+  const snapshot = stats.snapshot(nowMs);
+  assert.isFalse(
+    snapshot.recentStalls.some((stall) => stall.cause === "loss"),
+    "止まりの一覧からは押し出されていること",
+  );
+  const expected: LossEvent[] = [
+    {
+      kind: "streamReset",
+      event: {
+        wallClockMs: timeOriginMs + 1_100,
+        groupId: "7",
+        subgroupId: "0",
+        errorCode: 0x0,
+      },
+    },
+    { kind: "lossStall", event: lossStall },
+  ];
+  assert.deepEqual(snapshot.recentLossEvents, expected, "reset と欠落の止まりが残ること");
+});
+
+// reset と欠落の止まりの一覧は MAX_RECENT_LOSS_EVENTS 件だけ古い順に残す
+test("recentLossEvents: 上限の件数だけ残す", () => {
+  const stats = new PlaybackTimingStats();
+  for (let index = 0; index < MAX_RECENT_LOSS_EVENTS + 3; index++) {
+    stats.recordSubgroupEnd(BigInt(index), 0n, "reset", 0x0, index);
+  }
+  const events = stats.snapshot(0).recentLossEvents;
+  assert.equal(events.length, MAX_RECENT_LOSS_EVENTS);
+  assert.deepEqual(events[0]?.kind === "streamReset" ? events[0].event.groupId : null, "3");
+});
+
+// 1 件を 1 行の文字列にする。時刻は UTC の ISO 8601 にする (relay のログと突き合わせる)
+test("formatLossEvent: reset は位置と error code、欠落の止まりは止まりの 1 行にする", () => {
+  const wallClockMs = Date.UTC(2026, 8, 25, 0, 6, 4, 987);
+  assert.equal(
+    formatLossEvent({
+      kind: "streamReset",
+      event: { wallClockMs, groupId: "12", subgroupId: "0", errorCode: 0x2 },
+    }),
+    "2026-09-25T00:06:04.987Z stream reset group=12 subgroup=0 code=DELIVERY_TIMEOUT (0x2)",
+  );
+  assert.equal(
+    formatLossEvent({
+      kind: "streamReset",
+      event: { wallClockMs, groupId: "12", subgroupId: null, errorCode: null },
+    }),
+    "2026-09-25T00:06:04.987Z stream reset group=12 subgroup=- code=no code",
+  );
+  const stall: StallEvent = {
+    wallClockMs,
+    durationMs: 1_368,
+    cause: "loss",
+    groupId: "13",
+    objectId: "0",
+    mediaStepMs: 1_365,
+  };
+  assert.equal(formatLossEvent({ kind: "lossStall", event: stall }), formatStallEvent(stall));
 });
 
 // フレーム間隔がまだ分からない (表示が 2 枚目まで) うちは止まりを判定しない
@@ -302,7 +442,7 @@ test("reset: 分布と累積の値を初期状態に戻す", () => {
   stats.recordPlayoutDelay(40);
   stats.recordObjectReceived({ groupId: 0n, objectId: 0n, priorObjectIdGap: 0n }, 0n, 0, 0);
   stats.recordObjectReceived({ groupId: 0n, objectId: 3n, priorObjectIdGap: 0n }, 0n, null, 10);
-  stats.recordSubgroupEnd(0n, 0n, "reset");
+  stats.recordSubgroupEnd(0n, 0n, "reset", 0x0, 10);
   stats.recordGroupSwitchHoldExpired();
   stats.reset();
   assert.deepEqual(stats.snapshot(400), EMPTY_PLAYBACK_TIMING);

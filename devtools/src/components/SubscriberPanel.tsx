@@ -4,6 +4,7 @@ import { AudioMeter } from "./AudioMeter";
 import { formatBitrate, formatBytes } from "../utils/logFormatters";
 import {
   formatStallCauseTotal,
+  formatLossEvent,
   formatStallEvent,
   formatTimingSummary,
 } from "../utils/playbackTimingStats";
@@ -531,6 +532,37 @@ export function SubscriberPanel({
                 : [...instance.playbackTiming.value.recentStalls]
                     .reverse()
                     .map((stall) => formatStallEvent(stall))
+                    .join("\n")}
+            </pre>
+          </div>
+          <div class="bg-white rounded-lg p-3 border border-slate-200 mb-4">
+            <div class="text-xs text-slate-500 mb-1">
+              subgroupStreamResetsByCode (RESET_STREAM の error code ごとの数)
+            </div>
+            <pre
+              class="text-xs font-mono text-slate-700 whitespace-pre-wrap break-all"
+              data-testid="subscriber-subgroup-stream-resets-by-code"
+            >
+              {Object.keys(instance.playbackTiming.value.subgroupStreamResetsByCode).length === 0
+                ? "-"
+                : Object.entries(instance.playbackTiming.value.subgroupStreamResetsByCode)
+                    .map(([code, count]) => `${code}: ${count}`)
+                    .join("\n")}
+            </pre>
+          </div>
+          <div class="bg-white rounded-lg p-3 border border-slate-200 mb-4">
+            <div class="text-xs text-slate-500 mb-1">
+              recentLossEvents (stream の reset と欠落の止まり、UTC、新しい順)
+            </div>
+            <pre
+              class="text-xs font-mono text-slate-700 whitespace-pre-wrap break-all max-h-48 overflow-y-auto"
+              data-testid="subscriber-recent-loss-events"
+            >
+              {instance.playbackTiming.value.recentLossEvents.length === 0
+                ? "-"
+                : [...instance.playbackTiming.value.recentLossEvents]
+                    .reverse()
+                    .map((lossEvent) => formatLossEvent(lossEvent))
                     .join("\n")}
             </pre>
           </div>

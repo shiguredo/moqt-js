@@ -17,9 +17,9 @@ import {
   RequestErrorCode,
   SessionError,
   SessionErrorCode,
-  normalizeDataStreamErrorCode,
   normalizeRequestErrorCode,
   normalizePublishDoneCode,
+  peerStreamErrorCode,
 } from "../error";
 import { FetcherImpl, type Fetcher } from "../fetcher";
 import {
@@ -4475,14 +4475,10 @@ export function createFetchDataStreamResetError(rawError: unknown): Error {
  * ピアの RESET_STREAM 由来のエラーを指定メッセージの Error に変換する共通実装
  */
 function createResetStreamErrorWithMessage(rawError: unknown, message: string): Error {
-  if (typeof rawError !== "object" || rawError === null) {
+  const normalized = peerStreamErrorCode(rawError);
+  if (normalized === undefined) {
     return new Error(message);
   }
-  const streamErrorCode = (rawError as { streamErrorCode?: unknown }).streamErrorCode;
-  if (typeof streamErrorCode !== "number") {
-    return new Error(message);
-  }
-  const normalized = normalizeDataStreamErrorCode(streamErrorCode);
   const name = getDataStreamErrorCodeName(normalized);
   const error = new Error(`${message}: ${name}(0x${normalized.toString(16)})`);
   (error as Error & { streamErrorCode: DataStreamErrorCode }).streamErrorCode = normalized;

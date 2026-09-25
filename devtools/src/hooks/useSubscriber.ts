@@ -38,6 +38,7 @@ import {
   EMPTY_PLAYBACK_TIMING,
   PLAYBACK_TIMING_WINDOW_MS,
   PlaybackTimingStats,
+  formatStreamResetCode,
 } from "../utils/playbackTimingStats";
 import { JITTER_BUFFER_MAX_QUEUED_FRAMES, PlayoutBuffer } from "../utils/playoutBuffer";
 import { GroupSwitchGate } from "../../../src/groupSwitchGate.ts";
@@ -1517,11 +1518,18 @@ export function useSubscriber(
           subgroupEnd: (end) => {
             // stream の終わり方を記録する。RESET_STREAM は relay が Group の途中で配信を
             // やめたことを示すため、ログにも残す (ログの時刻で relay のログと突き合わせる)
-            playbackTimingRef.current.recordSubgroupEnd(end.groupId, end.subgroupId, end.reason);
+            playbackTimingRef.current.recordSubgroupEnd(
+              end.groupId,
+              end.subgroupId,
+              end.reason,
+              end.errorCode ?? null,
+              performance.now(),
+            );
             if (end.reason === "reset") {
               addLog("warn", `[${subscriberId}] subgroup stream reset`, {
                 groupId: end.groupId.toString(),
                 subgroupId: end.subgroupId?.toString() ?? null,
+                errorCode: formatStreamResetCode(end.errorCode ?? null),
               });
             }
             enqueueVideoObjects(

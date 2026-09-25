@@ -5818,6 +5818,8 @@ test("Subgroup データストリーム: FIN で終わると最後の Object の
   assert.equal(ends[0]?.reason, "fin");
   // 渡した Object と同じ Subgroup ID を知らせる
   assert.equal(ends[0]?.subgroupId, 0n);
+  // FIN には error code が無い
+  assert.isFalse(ends[0] !== undefined && "errorCode" in ends[0]);
 });
 
 /**
@@ -5846,7 +5848,51 @@ test("Subgroup データストリーム: RESET_STREAM で終わると subgroupEn
   assert.equal(ends.length, 1);
   assert.equal(ends[0]?.groupId, 1n);
   assert.equal(ends[0]?.reason, "reset");
+  // 失敗値が code を持たなければ error code は知らせない
+  assert.isFalse(ends[0] !== undefined && "errorCode" in ends[0]);
   assert.isUndefined(ctx.sessionError.current);
+});
+
+/**
+ * draft-ietf-moq-transport-21 Section 12.5: RESET_STREAM の error code は reset の理由を表す
+ * (期限切れは DELIVERY_TIMEOUT、停滞の打ち切りは TOO_FAR_BEHIND など)。subgroupEnd の
+ * errorCode で知らせれば、アプリは Object の欠落の経路を絞れる。未知の code は
+ * INTERNAL_ERROR として扱う (Section 13)。
+ */
+test("Subgroup データストリーム: RESET_STREAM の error code を subgroupEnd の errorCode で知らせる", async () => {
+  const cases: [number, DataStreamErrorCode][] = [
+    [0x0, DataStreamErrorCode.INTERNAL_ERROR],
+    [0x1, DataStreamErrorCode.CANCELLED],
+    [0x2, DataStreamErrorCode.DELIVERY_TIMEOUT],
+    [0x5, DataStreamErrorCode.TOO_FAR_BEHIND],
+    [0x99, DataStreamErrorCode.INTERNAL_ERROR],
+  ];
+  for (const [streamErrorCode, expected] of cases) {
+    const ctx = createDataStreamFinContext();
+    const ends: SubgroupStreamEnd[] = [];
+    const subscriber = new SubscriberImpl(["live"], "video", 1n, 7n, () => {});
+    subscriber.subgroupEndCallback = (end) => {
+      ends.push(end);
+    };
+    ctx.internal.subscribersByAlias.set(7n, [subscriber]);
+
+    const parts = buildSubgroupStreamParts();
+    const handlePromise = ctx.run();
+    await Promise.resolve();
+    ctx.enqueue(concatUint8Arrays([parts.headerBytes, parts.fieldsBytes, parts.payload]));
+    await yieldToMacrotask();
+    ctx.reset(Object.assign(new Error("reset by relay"), { source: "stream", streamErrorCode }));
+    await handlePromise;
+
+    assert.equal(ends.length, 1, `code 0x${streamErrorCode.toString(16)} の通知は 1 回`);
+    assert.equal(ends[0]?.reason, "reset");
+    assert.equal(
+      ends[0]?.errorCode,
+      expected,
+      `code 0x${streamErrorCode.toString(16)} は 0x${expected.toString(16)} として知らせる`,
+    );
+    assert.isUndefined(ctx.sessionError.current);
+  }
 });
 
 /**

@@ -16,6 +16,7 @@ import * as sub from "../signals/subscriber";
 import { subscriberIds } from "../signals/subscriber";
 import {
   formatStallCauseTotal,
+  formatLossEvent,
   formatStallEvent,
   formatTimingSummary,
 } from "../utils/playbackTimingStats";
@@ -204,10 +205,17 @@ function generateSubscriberStatsText(subscriberId: string): string {
   lines.push(`Missing Objects: ${timing.missingObjects}`);
   lines.push(`Missing Groups: ${timing.missingGroups}`);
   lines.push(`Subgroup Stream Resets: ${timing.subgroupStreamResets}`);
+  for (const [code, count] of Object.entries(timing.subgroupStreamResetsByCode)) {
+    lines.push(`  ${code}: ${count}`);
+  }
   lines.push(`Group Switch Hold Expirations: ${timing.groupSwitchHoldExpirations}`);
   lines.push(`--- Recent Stalls (UTC, oldest first) ---`);
   for (const stall of timing.recentStalls) {
     lines.push(formatStallEvent(stall));
+  }
+  lines.push(`--- Recent Stream Resets and Loss Stalls (UTC, oldest first) ---`);
+  for (const lossEvent of timing.recentLossEvents) {
+    lines.push(formatLossEvent(lossEvent));
   }
   // Largest Location 情報
   const largestLocation = instance.largestLocation.value;

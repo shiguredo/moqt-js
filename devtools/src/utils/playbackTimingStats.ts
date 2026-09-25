@@ -12,8 +12,11 @@
  * - 止まりの回数と時間、表示キューのあふれは購読の開始 (reset) からの累積である
  * - 止まりごとに原因を 1 つ決め (stallAnalysis.ts)、原因ごとの回数と時間、直近の止まりを
  *   残す。原因ごとの回数と時間の和は、止まりの回数と時間に一致する
+ * - Subgroup の stream の reset を error code ごとに数え、reset と欠落 (loss) の止まりを
+ *   止まりの一覧とは別に残す。到着の遅れの止まりが多くても押し出されない
  */
 
+import { DataStreamErrorCode } from "moqt-js";
 import { STALL_CAUSES, StallAnalyzer, type ObjectPosition, type StallCause } from "./stallAnalysis";
 import { TimedValues } from "./timedValues";
 
@@ -28,6 +31,9 @@ export const DISPLAY_STALL_FACTOR = 1.5;
 
 /** 残す直近の止まりの数 */
 export const MAX_RECENT_STALLS = 30;
+
+/** 残す直近の reset と欠落の止まりの数 */
+export const MAX_RECENT_LOSS_EVENTS = 30;
 
 /** 原因ごとの止まりの回数と時間の累積 */
 export interface StallCauseTotal {
@@ -49,6 +55,25 @@ export interface StallEvent {
   /** 止まりの前後に描いたフレームの TIMESTAMP の差 (ミリ秒) */
   readonly mediaStepMs: number;
 }
+
+/** 1 回の Subgroup の stream の reset */
+export interface StreamResetEvent {
+  /** reset を受け取った時刻 (壁時計、Unix epoch ミリ秒) */
+  readonly wallClockMs: number;
+  /** stream の Group ID と Subgroup ID (10 進の文字列)。Subgroup ID が未確定なら null */
+  readonly groupId: string;
+  readonly subgroupId: string | null;
+  /** RESET_STREAM の error code (draft-ietf-moq-transport-21 Section 12.5)。無ければ null */
+  readonly errorCode: number | null;
+}
+
+/**
+ * Object の欠落に関わる 1 件。Subgroup の stream の reset と、Object が届かなかったことに
+ * よる止まり (loss) を時刻順に並べる
+ */
+export type LossEvent =
+  | { readonly kind: "streamReset"; readonly event: StreamResetEvent }
+  | { readonly kind: "lossStall"; readonly event: StallEvent };
 
 /** 分布の要約 (ミリ秒) */
 export interface TimingSummary {
@@ -102,6 +127,13 @@ export interface PlaybackTimingSnapshot {
   /** RESET_STREAM で終わった Subgroup の stream の数 (累積) */
   readonly subgroupStreamResets: number;
   /**
+   * RESET_STREAM で終わった Subgroup の stream の数を error code ごとに数えた値 (累積)。
+   * キーは `formatStreamResetCode` の文字列
+   */
+  readonly subgroupStreamResetsByCode: Readonly<Record<string, number>>;
+  /** 直近の reset と欠落の止まり (古い順、最大 `MAX_RECENT_LOSS_EVENTS` 件) */
+  readonly recentLossEvents: readonly LossEvent[];
+  /**
    * Group の切り替えの保留が、前の Group の stream の終わりを待たずに上限の時間で
    * 解けた回数 (累積)
    */
@@ -134,6 +166,8 @@ export const EMPTY_PLAYBACK_TIMING: PlaybackTimingSnapshot = {
   missingObjects: 0,
   missingGroups: 0,
   subgroupStreamResets: 0,
+  subgroupStreamResetsByCode: {},
+  recentLossEvents: [],
   groupSwitchHoldExpirations: 0,
 };
 
@@ -197,6 +231,44 @@ export function formatStallEvent(stall: StallEvent): string {
 }
 
 /**
+ * RESET_STREAM の error code を「名前 (16 進の値)」にする
+ *
+ * 名前は draft-ietf-moq-transport-21 Section 12.5 の code の名前である。未知の値は名前を
+ * 付けず 16 進の値だけにし、code が無ければ "no code" にする
+ */
+export function formatStreamResetCode(errorCode: number | null): string {
+  if (errorCode === null) {
+    return "no code";
+  }
+  const hex = `0x${errorCode.toString(16)}`;
+  for (const [name, value] of Object.entries(DataStreamErrorCode)) {
+    if (value === errorCode) {
+      return `${name} (${hex})`;
+    }
+  }
+  return hex;
+}
+
+/**
+ * reset と欠落の止まりの 1 件を 1 行の文字列にする
+ *
+ * 時刻は UTC の ISO 8601 (ミリ秒まで) にする。欠落の止まりは `formatStallEvent` と同じ形にする
+ */
+export function formatLossEvent(lossEvent: LossEvent): string {
+  if (lossEvent.kind === "lossStall") {
+    return formatStallEvent(lossEvent.event);
+  }
+  const reset = lossEvent.event;
+  return [
+    new Date(reset.wallClockMs).toISOString(),
+    "stream reset",
+    `group=${reset.groupId}`,
+    `subgroup=${reset.subgroupId ?? "-"}`,
+    `code=${formatStreamResetCode(reset.errorCode)}`,
+  ].join(" ");
+}
+
+/**
  * 受信した映像の到着・復号・表示の時間を記録し、統計を求める
  */
 export class PlaybackTimingStats {
@@ -225,6 +297,8 @@ export class PlaybackTimingStats {
   private readonly stalls: StallAnalyzer;
   private stallCauses = emptyStallCauses();
   private recentStalls: StallEvent[] = [];
+  private subgroupStreamResetsByCode: Record<string, number> = {};
+  private recentLossEvents: LossEvent[] = [];
   private groupSwitchHoldExpirations = 0;
 
   /**
@@ -280,13 +354,34 @@ export class PlaybackTimingStats {
     this.stalls.recordDiscarded(timestampMicros);
   }
 
-  /** Subgroup の stream の終わりを記録する */
+  /**
+   * Subgroup の stream の終わりを記録する
+   *
+   * @param errorCode - RESET_STREAM の error code。FIN のときと、code が無いときは null
+   * @param nowMs - 終わりを受け取った時刻 (`performance.now()`)
+   */
   recordSubgroupEnd(
     groupId: bigint,
     subgroupId: bigint | undefined,
     reason: "fin" | "reset",
+    errorCode: number | null,
+    nowMs: number,
   ): void {
     this.stalls.recordSubgroupEnd(groupId, subgroupId, reason);
+    if (reason !== "reset") {
+      return;
+    }
+    const label = formatStreamResetCode(errorCode);
+    this.subgroupStreamResetsByCode[label] = (this.subgroupStreamResetsByCode[label] ?? 0) + 1;
+    this.pushLossEvent({
+      kind: "streamReset",
+      event: {
+        wallClockMs: this.timeOriginMs + nowMs,
+        groupId: groupId.toString(),
+        subgroupId: subgroupId === undefined ? null : subgroupId.toString(),
+        errorCode,
+      },
+    });
   }
 
   /** Group の切り替えの保留が上限の時間で解けたことを記録する */
@@ -423,6 +518,8 @@ export class PlaybackTimingStats {
       missingObjects: gaps.missingObjects,
       missingGroups: gaps.missingGroups,
       subgroupStreamResets: gaps.subgroupStreamResets,
+      subgroupStreamResetsByCode: { ...this.subgroupStreamResetsByCode },
+      recentLossEvents: [...this.recentLossEvents],
       groupSwitchHoldExpirations: this.groupSwitchHoldExpirations,
     };
   }
@@ -445,7 +542,17 @@ export class PlaybackTimingStats {
     this.stalls.reset();
     this.stallCauses = emptyStallCauses();
     this.recentStalls = [];
+    this.subgroupStreamResetsByCode = {};
+    this.recentLossEvents = [];
     this.groupSwitchHoldExpirations = 0;
+  }
+
+  /** reset と欠落の止まりの一覧に加え、上限を超えたら古い方から捨てる */
+  private pushLossEvent(lossEvent: LossEvent): void {
+    this.recentLossEvents.push(lossEvent);
+    if (this.recentLossEvents.length > MAX_RECENT_LOSS_EVENTS) {
+      this.recentLossEvents.shift();
+    }
   }
 
   /**
@@ -483,6 +590,9 @@ export class PlaybackTimingStats {
     this.recentStalls.push(stall);
     if (this.recentStalls.length > MAX_RECENT_STALLS) {
       this.recentStalls.shift();
+    }
+    if (cause === "loss") {
+      this.pushLossEvent({ kind: "lossStall", event: stall });
     }
     return stall;
   }

@@ -7,6 +7,7 @@
  * ここでは型のみを定義して session.ts から再エクスポートする。
  */
 
+import type { DataStreamErrorCode } from "../error";
 import type { AuthorizationToken, LocationFilter, Parameter, RangeFilterSpec } from "../message";
 import type { MoqtObject } from "../dataStream";
 import type { PendingSubgroupBufferOptions } from "../pendingSubgroupBuffer";
@@ -389,6 +390,13 @@ export interface SubgroupStreamEnd {
   subgroupId?: bigint;
   /** FIN で終わったら `"fin"`、ピアの RESET_STREAM で終わったら `"reset"` */
   reason: "fin" | "reset";
+  /**
+   * RESET_STREAM の error code (draft-ietf-moq-transport-21 Section 12.5)。reset の理由を
+   * 表す (期限切れは DELIVERY_TIMEOUT、停滞の打ち切りは TOO_FAR_BEHIND など)。未知の code は
+   * INTERNAL_ERROR として扱う (Section 13)。FIN で終わったときと、WebTransport が code を
+   * 渡さなかったときは未設定
+   */
+  errorCode?: DataStreamErrorCode;
 }
 
 export interface SubscribeCallbacks {

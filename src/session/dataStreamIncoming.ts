@@ -29,6 +29,7 @@ import {
   MalformedTrackError,
   SessionError,
   SessionErrorCode,
+  peerStreamErrorCode,
 } from "../error";
 import { decodeVarint } from "../varint";
 import type { FetcherImpl } from "../fetcher";
@@ -1114,7 +1115,13 @@ export async function dataStreamHandleSubgroupStream(
       } catch (err) {
         dataStreamHandleSubgroupReadError(err);
         // ピアの RESET_STREAM。配信済みの Object を保ち、この stream だけを終える
-        dataStreamNotifySubgroupEnd(subscribers, header, resolvedSubgroupId, "reset");
+        dataStreamNotifySubgroupEnd(
+          subscribers,
+          header,
+          resolvedSubgroupId,
+          "reset",
+          peerStreamErrorCode(err),
+        );
         return;
       }
 
@@ -1181,7 +1188,8 @@ function dataStreamFinishSubgroupStream(
  * draft-ietf-moq-transport-21 Section 2.1: Object は順不同で届きうる。Group ごとに別の
  * stream で届くため、アプリは stream の終わりで、それ以上その Subgroup の Object が
  * 届かないと判断できる (SubscribeCallbacks.subgroupEnd)。Subgroup ID は Object から
- * 確定した値を優先し、無ければ Subgroup Header の値を使う。
+ * 確定した値を優先し、無ければ Subgroup Header の値を使う。RESET_STREAM で終わった場合は、
+ * その error code (Section 12.5) を添える。
  * アプリ例外は Object の配送と同じく当該購読の error コールバックへ通知し、残りの購読への
  * 通知を続ける。反復前に複製する (error コールバック内の unsubscribe() が配列を変更
  * しても後続の購読への通知が欠けないようにする)。
@@ -1191,12 +1199,14 @@ function dataStreamNotifySubgroupEnd(
   header: SubgroupHeader,
   resolvedSubgroupId: bigint | undefined,
   reason: "fin" | "reset",
+  errorCode?: DataStreamErrorCode,
 ): void {
   const subgroupId = resolvedSubgroupId ?? header.subgroupId;
   const end: SubgroupStreamEnd = {
     groupId: header.groupId,
     reason,
     ...(subgroupId !== undefined ? { subgroupId } : {}),
+    ...(errorCode !== undefined ? { errorCode } : {}),
   };
   for (const subscriber of subscribers.slice()) {
     try {

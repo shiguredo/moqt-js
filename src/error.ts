@@ -180,6 +180,28 @@ export function normalizeDataStreamErrorCode(code: number): DataStreamErrorCode 
 }
 
 /**
+ * ピアの RESET_STREAM で失敗した read / write の失敗値から Data Stream Reset の error code を
+ * 取り出す
+ *
+ * WebTransport は失敗値 (WebTransportError) の `streamErrorCode` に code を載せる。
+ * draft-ietf-moq-transport-21 Section 12.5 の code に正規化し、未知の code は
+ * INTERNAL_ERROR として扱う (Section 13)。数値の code を持たない失敗値からは取り出さない。
+ *
+ * @param rawError - read / write の失敗値
+ * @returns 正規化した code。取り出せなければ undefined
+ */
+export function peerStreamErrorCode(rawError: unknown): DataStreamErrorCode | undefined {
+  if (typeof rawError !== "object" || rawError === null) {
+    return undefined;
+  }
+  const streamErrorCode = (rawError as { streamErrorCode?: unknown }).streamErrorCode;
+  if (typeof streamErrorCode !== "number") {
+    return undefined;
+  }
+  return normalizeDataStreamErrorCode(streamErrorCode);
+}
+
+/**
  * MOQT Error class
  */
 export class MoqtError extends Error {
