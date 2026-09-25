@@ -1,5 +1,7 @@
 import { signal } from "@preact/signals";
+import { useId } from "preact/hooks";
 import * as settings from "../signals/connectionSettings";
+import { isConnectionSettingsOpen, toggleConnectionSettings } from "../signals/layout";
 import type { AudioSourceType, VideoSourceType } from "../types";
 
 const showMoqtHelp = signal(false);
@@ -330,6 +332,42 @@ const AUDIO_SOURCE_LABELS: Record<AudioSourceType, string> = {
   microphone: "Microphone (gUM)",
 };
 
+/** 閉じている接続設定の欄に出す要約の 1 項目 */
+interface ConnectionSummaryItem {
+  label: string;
+  value: string;
+}
+
+/**
+ * 接続設定の要約を作る (欄を閉じている間に 1 行で出す)
+ *
+ * 接続先と、配信で送る映像と音声の要点を並べる。映像や音声の入力が None のときは形式を出さない
+ */
+function buildConnectionSummary(): ConnectionSummaryItem[] {
+  const videoSource = settings.videoSource.value;
+  const audioSource = settings.audioSource.value;
+  const audioCodecLabel = settings.audioCodec.value === "opus" ? "Opus" : "AAC";
+  return [
+    { label: "Server URL", value: settings.url.value || "-" },
+    { label: "Namespace", value: settings.namespace.value || "-" },
+    { label: "Track", value: settings.trackName.value || "-" },
+    {
+      label: "Video",
+      value:
+        videoSource === "none"
+          ? VIDEO_SOURCE_LABELS.none
+          : `${VIDEO_SOURCE_LABELS[videoSource]} ${settings.codec.value.toUpperCase()} ${settings.resolution.value} @ ${settings.framerate.value}fps`,
+    },
+    {
+      label: "Audio",
+      value:
+        audioSource === "none"
+          ? AUDIO_SOURCE_LABELS.none
+          : `${AUDIO_SOURCE_LABELS[audioSource]} ${audioCodecLabel}`,
+    },
+  ];
+}
+
 // マイクの音にかけるブラウザの音声処理の切り替え (getUserMedia の制約の名前で出す)
 const AUDIO_PROCESSING_OPTIONS = [
   {
@@ -350,6 +388,11 @@ const AUDIO_PROCESSING_OPTIONS = [
 ] as const;
 
 export function ConnectionSettings() {
+  // 設定の欄の開け閉め (見出しの行と、閉じている間の要約の行で切り替える)
+  const open = isConnectionSettingsOpen.value;
+  const contentId = useId();
+  const summaryItems = buildConnectionSummary();
+  const summaryText = summaryItems.map((item) => `${item.label}: ${item.value}`).join(" | ");
   // 映像の入力がカメラのときだけ、カメラデバイスの選択を操作できる
   const cameraSelected = settings.videoSource.value === "camera";
   // 音声の入力がマイクのときだけ、デバイスの選択と音声処理を操作できる
@@ -370,24 +413,52 @@ export function ConnectionSettings() {
       <LocHelpModal />
       <MsfHelpModal />
       <C4mHelpModal />
-      <h2 class="text-lg font-semibold text-slate-700 mb-4 flex items-center gap-2">
-        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            stroke-width="2"
-            d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"
-          />
-          <path
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            stroke-width="2"
-            d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
-          />
-        </svg>
-        Connection Settings
-        <HttpVersionBadge />
-        <div class="ml-auto flex items-center gap-2">
+      <h2
+        class={`text-lg font-semibold text-slate-700 flex items-center gap-2 ${open ? "mb-4" : ""}`}
+      >
+        {/* 見出しの行を押すと設定の欄を開け閉めする。ヘルプのボタンを除く行いっぱいを押せる */}
+        <button
+          type="button"
+          aria-expanded={open}
+          aria-controls={contentId}
+          onClick={toggleConnectionSettings}
+          data-testid="connection-settings-toggle"
+          title={open ? "Hide connection settings" : "Show connection settings"}
+          class="flex-1 min-w-0 flex items-center gap-2 text-left hover:text-slate-900"
+        >
+          {/* 開け閉めの印。開いている間は下を向く */}
+          <svg
+            aria-hidden="true"
+            class={`w-4 h-4 text-slate-400 transition-transform ${open ? "rotate-90" : ""}`}
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              d="M9 5l7 7-7 7"
+            />
+          </svg>
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"
+            />
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
+            />
+          </svg>
+          Connection Settings
+          <HttpVersionBadge />
+        </button>
+        <div class="flex items-center gap-2">
           <button
             onClick={() => (showMoqtHelp.value = true)}
             class="px-2 py-0.5 text-xs font-medium bg-green-100 text-green-700 rounded-full hover:bg-green-200 transition-colors flex items-center gap-1"
@@ -446,619 +517,642 @@ export function ConnectionSettings() {
           </button>
         </div>
       </h2>
-      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
-        <div class="lg:col-span-2">
-          <label for="url" class="block text-sm font-medium text-slate-600 mb-1">
-            Server URL
-          </label>
-          <input
-            type="text"
-            id="url"
-            value={settings.url.value}
-            onInput={(e) => {
-              settings.url.value = e.currentTarget.value;
-              // URL に msf fragment が含まれる場合は c4m を Authorization Token に反映する
-              settings.applyC4mFromUrl(e.currentTarget.value);
-            }}
-            disabled={settings.settingsDisabled.value}
-            class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors disabled:bg-slate-100 disabled:cursor-not-allowed"
-          />
-        </div>
-        <div class="lg:col-span-3">
-          <label for="certificateHash" class="block text-sm font-medium text-slate-600 mb-1">
-            Certificate Hash (Base64)
-            <span class="ml-1 text-xs text-slate-400">for self-signed certs</span>
-          </label>
-          <input
-            type="text"
-            id="certificateHash"
-            autocomplete="off"
-            value={settings.certificateHash.value}
-            onInput={(e) => (settings.certificateHash.value = e.currentTarget.value)}
-            disabled={settings.settingsDisabled.value}
-            placeholder="openssl x509 -in cert.pem -outform DER | openssl dgst -sha256 -binary | base64"
-            class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors disabled:bg-slate-100 disabled:cursor-not-allowed text-sm"
-          />
-        </div>
-      </div>
-      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 mt-4">
-        <div class="lg:col-span-2">
-          <label for="fragment" class="block text-sm font-medium text-slate-600 mb-1">
-            URI Fragment
-            <span class="ml-1 text-xs text-slate-400">type:value (draft-21 §6.1.1)</span>
-          </label>
-          <input
-            type="text"
-            id="fragment"
-            value={settings.fragment.value}
-            onInput={(e) => {
-              settings.fragment.value = e.currentTarget.value;
-              // fragment に msf fragment を貼り付けた場合は c4m を Authorization Token に反映する
-              settings.applyC4mFromUrl(e.currentTarget.value);
-            }}
-            disabled={settings.settingsDisabled.value}
-            placeholder="e.g. track:video"
-            class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors disabled:bg-slate-100 disabled:cursor-not-allowed text-sm"
-          />
-        </div>
-      </div>
-      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 mt-4">
-        <div>
-          <label for="namespace" class="block text-sm font-medium text-slate-600 mb-1">
-            Namespace
-            <span class="text-xs text-slate-400 ml-1">(split into a tuple by /)</span>
-          </label>
-          <input
-            type="text"
-            id="namespace"
-            placeholder="e.g. room/123 → [room, 123]"
-            value={settings.namespace.value}
-            onInput={(e) => (settings.namespace.value = e.currentTarget.value)}
-            disabled={settings.settingsDisabled.value}
-            class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors disabled:bg-slate-100 disabled:cursor-not-allowed"
-          />
-        </div>
-        <div>
-          <label for="trackName" class="block text-sm font-medium text-slate-600 mb-1">
-            Track Name
-          </label>
-          <input
-            type="text"
-            id="trackName"
-            value={settings.trackName.value}
-            onInput={(e) => (settings.trackName.value = e.currentTarget.value)}
-            disabled={settings.settingsDisabled.value}
-            class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors disabled:bg-slate-100 disabled:cursor-not-allowed"
-          />
-        </div>
-        <div>
-          <label for="codec" class="block text-sm font-medium text-slate-600 mb-1">
-            Codec
-          </label>
-          <select
-            id="codec"
-            value={settings.codec.value}
-            onChange={(e) => (settings.codec.value = e.currentTarget.value as any)}
-            disabled={settings.settingsDisabled.value}
-            class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors bg-white disabled:bg-slate-100 disabled:cursor-not-allowed"
-          >
-            <option value="vp8">VP8</option>
-            <option value="vp9">VP9</option>
-            <option value="av1">AV1</option>
-            <option value="h264">H.264</option>
-            <option value="h265">H.265</option>
-          </select>
-        </div>
-      </div>
-
-      {/* Video Settings */}
-      <div class="mt-4 pt-4 border-t border-slate-200">
-        <h3 class="text-sm font-medium text-slate-600 mb-3">Video Settings</h3>
-        <div class="grid grid-cols-2 md:grid-cols-5 gap-4">
-          <div>
-            <label for="videoSource" class="block text-xs text-slate-500 mb-1">
-              Video Source
+      {/* 閉じている間は、接続先と配信の設定の要約を 1 行で出す。押すと開く */}
+      {!open && (
+        <button
+          type="button"
+          aria-expanded={false}
+          aria-controls={contentId}
+          onClick={toggleConnectionSettings}
+          data-testid="connection-settings-summary"
+          title={summaryText}
+          class="mt-3 w-full px-3 py-2 rounded-lg bg-slate-50 hover:bg-slate-100 text-left text-sm text-slate-600 truncate"
+        >
+          {summaryItems.map((item, index) => (
+            <span key={item.label}>
+              {index > 0 && <span class="mx-2 text-slate-300">|</span>}
+              <span class="text-slate-500">{item.label}:</span>{" "}
+              <span class="font-mono text-slate-800">{item.value}</span>
+            </span>
+          ))}
+        </button>
+      )}
+      {/* 設定の節。閉じている間は隠す (入力は signal に結び付いているため、値は変わらない) */}
+      <div id={contentId} hidden={!open} data-testid="connection-settings-content">
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+          <div class="lg:col-span-2">
+            <label for="url" class="block text-sm font-medium text-slate-600 mb-1">
+              Server URL
             </label>
-            <select
-              id="videoSource"
-              data-testid="video-source"
-              value={settings.videoSource.value}
-              onChange={(e) => {
-                const value = e.currentTarget.value;
-                if (settings.isVideoSourceType(value)) {
-                  settings.videoSource.value = value;
-                  if (value === "camera") {
-                    void settings.fetchCameraDevices();
-                  }
-                }
+            <input
+              type="text"
+              id="url"
+              value={settings.url.value}
+              onInput={(e) => {
+                settings.url.value = e.currentTarget.value;
+                // URL に msf fragment が含まれる場合は c4m を Authorization Token に反映する
+                settings.applyC4mFromUrl(e.currentTarget.value);
               }}
               disabled={settings.settingsDisabled.value}
-              class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white disabled:bg-slate-100 disabled:cursor-not-allowed"
+              class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors disabled:bg-slate-100 disabled:cursor-not-allowed"
+            />
+          </div>
+          <div class="lg:col-span-3">
+            <label for="certificateHash" class="block text-sm font-medium text-slate-600 mb-1">
+              Certificate Hash (Base64)
+              <span class="ml-1 text-xs text-slate-400">for self-signed certs</span>
+            </label>
+            <input
+              type="text"
+              id="certificateHash"
+              autocomplete="off"
+              value={settings.certificateHash.value}
+              onInput={(e) => (settings.certificateHash.value = e.currentTarget.value)}
+              disabled={settings.settingsDisabled.value}
+              placeholder="openssl x509 -in cert.pem -outform DER | openssl dgst -sha256 -binary | base64"
+              class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors disabled:bg-slate-100 disabled:cursor-not-allowed text-sm"
+            />
+          </div>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 mt-4">
+          <div class="lg:col-span-2">
+            <label for="fragment" class="block text-sm font-medium text-slate-600 mb-1">
+              URI Fragment
+              <span class="ml-1 text-xs text-slate-400">type:value (draft-21 §6.1.1)</span>
+            </label>
+            <input
+              type="text"
+              id="fragment"
+              value={settings.fragment.value}
+              onInput={(e) => {
+                settings.fragment.value = e.currentTarget.value;
+                // fragment に msf fragment を貼り付けた場合は c4m を Authorization Token に反映する
+                settings.applyC4mFromUrl(e.currentTarget.value);
+              }}
+              disabled={settings.settingsDisabled.value}
+              placeholder="e.g. track:video"
+              class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors disabled:bg-slate-100 disabled:cursor-not-allowed text-sm"
+            />
+          </div>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 mt-4">
+          <div>
+            <label for="namespace" class="block text-sm font-medium text-slate-600 mb-1">
+              Namespace
+              <span class="text-xs text-slate-400 ml-1">(split into a tuple by /)</span>
+            </label>
+            <input
+              type="text"
+              id="namespace"
+              placeholder="e.g. room/123 → [room, 123]"
+              value={settings.namespace.value}
+              onInput={(e) => (settings.namespace.value = e.currentTarget.value)}
+              disabled={settings.settingsDisabled.value}
+              class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors disabled:bg-slate-100 disabled:cursor-not-allowed"
+            />
+          </div>
+          <div>
+            <label for="trackName" class="block text-sm font-medium text-slate-600 mb-1">
+              Track Name
+            </label>
+            <input
+              type="text"
+              id="trackName"
+              value={settings.trackName.value}
+              onInput={(e) => (settings.trackName.value = e.currentTarget.value)}
+              disabled={settings.settingsDisabled.value}
+              class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors disabled:bg-slate-100 disabled:cursor-not-allowed"
+            />
+          </div>
+          <div>
+            <label for="codec" class="block text-sm font-medium text-slate-600 mb-1">
+              Codec
+            </label>
+            <select
+              id="codec"
+              value={settings.codec.value}
+              onChange={(e) => (settings.codec.value = e.currentTarget.value as any)}
+              disabled={settings.settingsDisabled.value}
+              class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors bg-white disabled:bg-slate-100 disabled:cursor-not-allowed"
             >
-              {settings.VIDEO_SOURCES.map((value) => (
-                <option key={value} value={value}>
-                  {VIDEO_SOURCE_LABELS[value]}
-                </option>
-              ))}
+              <option value="vp8">VP8</option>
+              <option value="vp9">VP9</option>
+              <option value="av1">AV1</option>
+              <option value="h264">H.264</option>
+              <option value="h265">H.265</option>
             </select>
           </div>
-          {/* カメラデバイス。映像の入力が camera でない間も描き、操作できなくする
+        </div>
+
+        {/* Video Settings */}
+        <div class="mt-4 pt-4 border-t border-slate-200">
+          <h3 class="text-sm font-medium text-slate-600 mb-3">Video Settings</h3>
+          <div class="grid grid-cols-2 md:grid-cols-5 gap-4">
+            <div>
+              <label for="videoSource" class="block text-xs text-slate-500 mb-1">
+                Video Source
+              </label>
+              <select
+                id="videoSource"
+                data-testid="video-source"
+                value={settings.videoSource.value}
+                onChange={(e) => {
+                  const value = e.currentTarget.value;
+                  if (settings.isVideoSourceType(value)) {
+                    settings.videoSource.value = value;
+                    if (value === "camera") {
+                      void settings.fetchCameraDevices();
+                    }
+                  }
+                }}
+                disabled={settings.settingsDisabled.value}
+                class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white disabled:bg-slate-100 disabled:cursor-not-allowed"
+              >
+                {settings.VIDEO_SOURCES.map((value) => (
+                  <option key={value} value={value}>
+                    {VIDEO_SOURCE_LABELS[value]}
+                  </option>
+                ))}
+              </select>
+            </div>
+            {/* カメラデバイス。映像の入力が camera でない間も描き、操作できなくする
               (設定で項目が出たり消えたりしないようにする)。ボタンと select は高さが違うため、
               行の高さいっぱいに伸ばし、自身の高さを行の高さに加えない (DEVICE_CONTROL_SIZE_CLASS) */}
-          <div class="flex flex-col">
-            <label for="cameraDevice" class="block text-xs text-slate-500 mb-1">
-              Camera Device
-            </label>
-            {settings.cameraDevices.value.length === 0 ? (
-              <button
-                type="button"
-                data-testid="camera-fetch-devices"
-                onClick={() => void settings.fetchCameraDevices()}
-                disabled={settings.settingsDisabled.value || !cameraSelected}
-                class={`${DEVICE_CONTROL_SIZE_CLASS} w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-blue-50 text-blue-700 hover:bg-blue-100 disabled:bg-slate-100 disabled:cursor-not-allowed disabled:text-slate-400`}
-              >
-                Fetch Devices
-              </button>
-            ) : (
-              <select
-                id="cameraDevice"
-                data-testid="camera-device"
-                value={settings.selectedCameraDeviceId.value}
-                onChange={(e) => (settings.selectedCameraDeviceId.value = e.currentTarget.value)}
-                disabled={settings.settingsDisabled.value || !cameraSelected}
-                class={`${DEVICE_CONTROL_SIZE_CLASS} w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white disabled:bg-slate-100 disabled:cursor-not-allowed`}
-              >
-                {settings.cameraDevices.value.map((device) => (
-                  <option key={device.deviceId} value={device.deviceId}>
-                    {device.label}
-                  </option>
-                ))}
-              </select>
-            )}
-          </div>
-          <div>
-            <label for="resolution" class="block text-xs text-slate-500 mb-1">
-              Resolution
-            </label>
-            <select
-              id="resolution"
-              value={settings.resolution.value}
-              onChange={(e) => (settings.resolution.value = e.currentTarget.value)}
-              disabled={settings.settingsDisabled.value}
-              class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white disabled:bg-slate-100 disabled:cursor-not-allowed"
-            >
-              <option value="1920x1080">1080p (1920x1080)</option>
-              <option value="1280x720">720p (1280x720)</option>
-              <option value="960x540">540p (960x540)</option>
-              <option value="640x480">480p (640x480)</option>
-              <option value="320x240">240p (320x240)</option>
-            </select>
-          </div>
-          <div>
-            <label for="framerate" class="block text-xs text-slate-500 mb-1">
-              Frame Rate
-            </label>
-            <select
-              id="framerate"
-              value={settings.framerate.value}
-              onChange={(e) => (settings.framerate.value = Number(e.currentTarget.value))}
-              disabled={settings.settingsDisabled.value}
-              class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white disabled:bg-slate-100 disabled:cursor-not-allowed"
-            >
-              <option value="60">60 fps</option>
-              <option value="30">30 fps</option>
-              <option value="15">15 fps</option>
-            </select>
-          </div>
-          <div>
-            <label for="bitrate" class="block text-xs text-slate-500 mb-1">
-              Bitrate
-            </label>
-            <select
-              id="bitrate"
-              value={settings.bitrate.value}
-              onChange={(e) => (settings.bitrate.value = Number(e.currentTarget.value))}
-              disabled={settings.settingsDisabled.value}
-              class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white disabled:bg-slate-100 disabled:cursor-not-allowed"
-            >
-              <option value="16000000">16 Mbps</option>
-              <option value="8000000">8 Mbps</option>
-              <option value="4000000">4 Mbps</option>
-              <option value="2000000">2 Mbps</option>
-              <option value="1000000">1 Mbps</option>
-              <option value="500000">500 Kbps</option>
-            </select>
-          </div>
-          <div>
-            <label for="keyframeInterval" class="block text-xs text-slate-500 mb-1">
-              Keyframe Interval
-            </label>
-            <select
-              id="keyframeInterval"
-              value={settings.keyframeInterval.value}
-              onChange={(e) => (settings.keyframeInterval.value = Number(e.currentTarget.value))}
-              disabled={settings.settingsDisabled.value}
-              class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white disabled:bg-slate-100 disabled:cursor-not-allowed"
-            >
-              <option value="30">1 sec</option>
-              <option value="60">2 sec</option>
-              <option value="120">4 sec</option>
-              <option value="240">8 sec</option>
-              <option value="300">10 sec</option>
-              <option value="900">30 sec</option>
-              <option value="1800">60 sec</option>
-              <option value="2700">90 sec</option>
-              <option value="3600">120 sec</option>
-              <option value="7200">240 sec</option>
-            </select>
-          </div>
-        </div>
-      </div>
-
-      {/* Audio Settings */}
-      <div class="mt-4 pt-4 border-t border-slate-200">
-        <h3 class="text-sm font-medium text-slate-600 mb-3">Audio Settings</h3>
-        <div class="grid grid-cols-2 md:grid-cols-5 gap-4">
-          <div>
-            <label for="audioSource" class="block text-xs text-slate-500 mb-1">
-              Audio Source
-            </label>
-            <select
-              id="audioSource"
-              data-testid="audio-source"
-              value={settings.audioSource.value}
-              onChange={(e) => {
-                const value = e.currentTarget.value;
-                if (settings.isAudioSourceType(value)) {
-                  settings.audioSource.value = value;
-                  if (value === "microphone") {
-                    void settings.fetchMicrophoneDevices();
-                  }
-                }
-              }}
-              disabled={settings.settingsDisabled.value}
-              class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white disabled:bg-slate-100 disabled:cursor-not-allowed"
-            >
-              {settings.AUDIO_SOURCES.map((value) => (
-                <option key={value} value={value}>
-                  {AUDIO_SOURCE_LABELS[value]}
-                </option>
-              ))}
-            </select>
-          </div>
-          {/* 音声入力デバイス。音声の入力が microphone でない間も描き、操作できなくする
-              (設定で項目が出たり消えたりしないようにする)。高さはカメラデバイスと同じ扱い */}
-          <div class="flex flex-col">
-            <label for="microphoneDevice" class="block text-xs text-slate-500 mb-1">
-              Audio Device
-            </label>
-            {settings.microphoneDevices.value.length === 0 ? (
-              <button
-                type="button"
-                data-testid="microphone-fetch-devices"
-                onClick={() => void settings.fetchMicrophoneDevices()}
-                disabled={settings.settingsDisabled.value || !microphoneSelected}
-                class={`${DEVICE_CONTROL_SIZE_CLASS} w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-blue-50 text-blue-700 hover:bg-blue-100 disabled:bg-slate-100 disabled:cursor-not-allowed disabled:text-slate-400`}
-              >
-                Fetch Devices
-              </button>
-            ) : (
-              <select
-                id="microphoneDevice"
-                data-testid="microphone-device"
-                value={settings.selectedMicrophoneDeviceId.value}
-                onChange={(e) =>
-                  (settings.selectedMicrophoneDeviceId.value = e.currentTarget.value)
-                }
-                disabled={settings.settingsDisabled.value || !microphoneSelected}
-                class={`${DEVICE_CONTROL_SIZE_CLASS} w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white disabled:bg-slate-100 disabled:cursor-not-allowed`}
-              >
-                {settings.microphoneDevices.value.map((device) => (
-                  <option key={device.deviceId} value={device.deviceId}>
-                    {device.label}
-                  </option>
-                ))}
-              </select>
-            )}
-          </div>
-          <div>
-            <label for="audioCodec" class="block text-xs text-slate-500 mb-1">
-              Audio Codec
-            </label>
-            <select
-              id="audioCodec"
-              data-testid="audio-codec"
-              value={settings.audioCodec.value}
-              onChange={(e) => {
-                const value = e.currentTarget.value;
-                if (settings.isAudioCodecType(value)) {
-                  settings.audioCodec.value = value;
-                }
-              }}
-              disabled={settings.settingsDisabled.value}
-              class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white disabled:bg-slate-100 disabled:cursor-not-allowed"
-            >
-              {settings.AUDIO_CODECS.map((value) => (
-                <option key={value} value={value}>
-                  {value === "opus" ? "Opus" : "AAC"}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label for="audioBitrate" class="block text-xs text-slate-500 mb-1">
-              Audio Bitrate
-            </label>
-            <select
-              id="audioBitrate"
-              data-testid="audio-bitrate"
-              value={settings.audioBitrate.value}
-              onChange={(e) => (settings.audioBitrate.value = Number(e.currentTarget.value))}
-              disabled={settings.settingsDisabled.value}
-              class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white disabled:bg-slate-100 disabled:cursor-not-allowed"
-            >
-              {settings.AUDIO_BITRATES.map((value) => (
-                <option key={value} value={value}>
-                  {value / 1000} Kbps
-                </option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label for="audioSampleRate" class="block text-xs text-slate-500 mb-1">
-              Sample Rate
-            </label>
-            <select
-              id="audioSampleRate"
-              data-testid="audio-sample-rate"
-              value={settings.audioSampleRate.value}
-              onChange={(e) => (settings.audioSampleRate.value = Number(e.currentTarget.value))}
-              disabled={settings.settingsDisabled.value}
-              class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white disabled:bg-slate-100 disabled:cursor-not-allowed"
-            >
-              {settings.AUDIO_SAMPLE_RATES.map((value) => (
-                <option key={value} value={value}>
-                  {value} Hz
-                </option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label for="audioChannels" class="block text-xs text-slate-500 mb-1">
-              Channels
-            </label>
-            <select
-              id="audioChannels"
-              data-testid="audio-channels"
-              value={settings.audioChannels.value}
-              onChange={(e) => (settings.audioChannels.value = Number(e.currentTarget.value))}
-              disabled={settings.settingsDisabled.value}
-              class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white disabled:bg-slate-100 disabled:cursor-not-allowed"
-            >
-              {settings.AUDIO_CHANNELS.map((value) => (
-                <option key={value} value={value}>
-                  {AUDIO_CHANNEL_LABELS[value] ?? String(value)}
-                </option>
-              ))}
-            </select>
-          </div>
-        </div>
-        {/* マイクの音にかけるブラウザの音声処理。音声の入力が microphone でない間も描き、
-            操作できなくする */}
-        <div class="mt-3 flex flex-wrap items-center gap-6">
-          {AUDIO_PROCESSING_OPTIONS.map((option) => (
-            <label key={option.id} class="flex items-center gap-2 cursor-pointer">
-              <input
-                type="checkbox"
-                data-testid={option.id}
-                checked={option.signal.value}
-                onChange={(e) => (option.signal.value = e.currentTarget.checked)}
-                disabled={settings.settingsDisabled.value || !microphoneSelected}
-                class="w-4 h-4 text-blue-600 border-slate-300 rounded focus:ring-blue-500 disabled:cursor-not-allowed"
-              />
-              <span class="text-sm text-slate-600">{option.label}</span>
-            </label>
-          ))}
-        </div>
-      </div>
-
-      {/* Publish Settings */}
-      <div class="mt-4 pt-4 border-t border-slate-200">
-        <h3 class="text-sm font-medium text-slate-600 mb-3">Publish Settings</h3>
-        <div class="grid grid-cols-2 md:grid-cols-5 gap-4">
-          <div>
-            <label for="maxCacheDuration" class="block text-xs text-slate-500 mb-1">
-              MAX_CACHE_DURATION
-            </label>
-            <select
-              id="maxCacheDuration"
-              value={settings.maxCacheDuration.value}
-              onChange={(e) => (settings.maxCacheDuration.value = Number(e.currentTarget.value))}
-              disabled={settings.settingsDisabled.value}
-              class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white disabled:bg-slate-100 disabled:cursor-not-allowed"
-            >
-              <option value="0">0 (no cache)</option>
-              <option value="10000">10 sec</option>
-              <option value="30000">30 sec</option>
-              <option value="60000">1 min</option>
-              <option value="180000">3 min</option>
-              <option value="300000">5 min</option>
-              <option value="600000">10 min</option>
-            </select>
-          </div>
-        </div>
-      </div>
-
-      {/* Subscribe Settings */}
-      <div class="mt-4 pt-4 border-t border-slate-200">
-        <h3 class="text-sm font-medium text-slate-600 mb-3">Subscribe Settings</h3>
-        <div class="grid grid-cols-2 md:grid-cols-5 gap-4">
-          <div>
-            <label for="catalogSubscriptionTimeout" class="block text-xs text-slate-500 mb-1">
-              Catalog Timeout
-            </label>
-            <select
-              id="catalogSubscriptionTimeout"
-              value={settings.catalogSubscriptionTimeout.value}
-              onChange={(e) =>
-                (settings.catalogSubscriptionTimeout.value = Number(e.currentTarget.value))
-              }
-              disabled={settings.settingsDisabled.value}
-              class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white disabled:bg-slate-100 disabled:cursor-not-allowed"
-            >
-              <option value="3000">3 sec</option>
-              <option value="5000">5 sec</option>
-              <option value="10000">10 sec</option>
-              <option value="30000">30 sec</option>
-              <option value="60000">1 min</option>
-              <option value="120000">2 min</option>
-              <option value="300000">5 min</option>
-            </select>
-          </div>
-        </div>
-      </div>
-
-      {/* WebCodecs Settings */}
-      <div class="mt-4 pt-4 border-t border-slate-200">
-        <h3 class="text-sm font-medium text-slate-600 mb-3">WebCodecs Settings</h3>
-        <div class="flex items-center gap-2">
-          <input
-            type="checkbox"
-            id="useDedicatedWorker"
-            checked={settings.useDedicatedWorker.value}
-            onChange={(e) => (settings.useDedicatedWorker.value = e.currentTarget.checked)}
-            disabled={settings.settingsDisabled.value}
-            class="rounded border-slate-300 text-blue-600 focus:ring-blue-500 disabled:cursor-not-allowed"
-          />
-          <label for="useDedicatedWorker" class="text-sm text-slate-600">
-            Use Dedicated Worker
-          </label>
-        </div>
-        {/* 復号したフレームを LOC TIMESTAMP (壁時計) の間隔どおりに表示し、到着の揺らぎを吸収する */}
-        <div class="flex items-center gap-2 mt-2">
-          <input
-            type="checkbox"
-            id="jitterBufferEnabled"
-            data-testid="settings-jitter-buffer"
-            checked={settings.jitterBufferEnabled.value}
-            onChange={(e) => (settings.jitterBufferEnabled.value = e.currentTarget.checked)}
-            disabled={settings.settingsDisabled.value}
-            class="rounded border-slate-300 text-blue-600 focus:ring-blue-500 disabled:cursor-not-allowed"
-          />
-          <label for="jitterBufferEnabled" class="text-sm text-slate-600">
-            Jitter Buffer (play video at LOC TIMESTAMP)
-          </label>
-        </div>
-      </div>
-
-      {/* Authorization Token Settings */}
-      {/* draft-ietf-moq-transport-21 §9.1.4 (AUTHORIZATION TOKEN Setup Option) */}
-      <div class="mt-4 pt-4 border-t border-slate-200">
-        <h3 class="text-sm font-medium text-slate-600 mb-3">
-          Authorization Token
-          <span class="ml-2 text-xs text-slate-400">SETUP Option (0x03)</span>
-        </h3>
-        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
-          <div>
-            <label for="authorizationTokenAliasType" class="block text-xs text-slate-500 mb-1">
-              Alias Type
-            </label>
-            <select
-              id="authorizationTokenAliasType"
-              value={settings.authorizationTokenAliasType.value}
-              onChange={(e) => {
-                const v = e.currentTarget.value;
-                if (v === "useValue" || v === "register") {
-                  settings.authorizationTokenAliasType.value = v;
-                }
-              }}
-              disabled={settings.settingsDisabled.value}
-              class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white disabled:bg-slate-100 disabled:cursor-not-allowed"
-            >
-              <option value="useValue">USE_VALUE (0x3)</option>
-              <option value="register">REGISTER (0x1)</option>
-            </select>
-          </div>
-          {settings.authorizationTokenAliasType.value === "register" && (
+            <div class="flex flex-col">
+              <label for="cameraDevice" class="block text-xs text-slate-500 mb-1">
+                Camera Device
+              </label>
+              {settings.cameraDevices.value.length === 0 ? (
+                <button
+                  type="button"
+                  data-testid="camera-fetch-devices"
+                  onClick={() => void settings.fetchCameraDevices()}
+                  disabled={settings.settingsDisabled.value || !cameraSelected}
+                  class={`${DEVICE_CONTROL_SIZE_CLASS} w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-blue-50 text-blue-700 hover:bg-blue-100 disabled:bg-slate-100 disabled:cursor-not-allowed disabled:text-slate-400`}
+                >
+                  Fetch Devices
+                </button>
+              ) : (
+                <select
+                  id="cameraDevice"
+                  data-testid="camera-device"
+                  value={settings.selectedCameraDeviceId.value}
+                  onChange={(e) => (settings.selectedCameraDeviceId.value = e.currentTarget.value)}
+                  disabled={settings.settingsDisabled.value || !cameraSelected}
+                  class={`${DEVICE_CONTROL_SIZE_CLASS} w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white disabled:bg-slate-100 disabled:cursor-not-allowed`}
+                >
+                  {settings.cameraDevices.value.map((device) => (
+                    <option key={device.deviceId} value={device.deviceId}>
+                      {device.label}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </div>
             <div>
-              <label for="authorizationTokenAlias" class="block text-xs text-slate-500 mb-1">
-                Token Alias
+              <label for="resolution" class="block text-xs text-slate-500 mb-1">
+                Resolution
+              </label>
+              <select
+                id="resolution"
+                value={settings.resolution.value}
+                onChange={(e) => (settings.resolution.value = e.currentTarget.value)}
+                disabled={settings.settingsDisabled.value}
+                class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white disabled:bg-slate-100 disabled:cursor-not-allowed"
+              >
+                <option value="1920x1080">1080p (1920x1080)</option>
+                <option value="1280x720">720p (1280x720)</option>
+                <option value="960x540">540p (960x540)</option>
+                <option value="640x480">480p (640x480)</option>
+                <option value="320x240">240p (320x240)</option>
+              </select>
+            </div>
+            <div>
+              <label for="framerate" class="block text-xs text-slate-500 mb-1">
+                Frame Rate
+              </label>
+              <select
+                id="framerate"
+                value={settings.framerate.value}
+                onChange={(e) => (settings.framerate.value = Number(e.currentTarget.value))}
+                disabled={settings.settingsDisabled.value}
+                class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white disabled:bg-slate-100 disabled:cursor-not-allowed"
+              >
+                <option value="60">60 fps</option>
+                <option value="30">30 fps</option>
+                <option value="15">15 fps</option>
+              </select>
+            </div>
+            <div>
+              <label for="bitrate" class="block text-xs text-slate-500 mb-1">
+                Bitrate
+              </label>
+              <select
+                id="bitrate"
+                value={settings.bitrate.value}
+                onChange={(e) => (settings.bitrate.value = Number(e.currentTarget.value))}
+                disabled={settings.settingsDisabled.value}
+                class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white disabled:bg-slate-100 disabled:cursor-not-allowed"
+              >
+                <option value="16000000">16 Mbps</option>
+                <option value="8000000">8 Mbps</option>
+                <option value="4000000">4 Mbps</option>
+                <option value="2000000">2 Mbps</option>
+                <option value="1000000">1 Mbps</option>
+                <option value="500000">500 Kbps</option>
+              </select>
+            </div>
+            <div>
+              <label for="keyframeInterval" class="block text-xs text-slate-500 mb-1">
+                Keyframe Interval
+              </label>
+              <select
+                id="keyframeInterval"
+                value={settings.keyframeInterval.value}
+                onChange={(e) => (settings.keyframeInterval.value = Number(e.currentTarget.value))}
+                disabled={settings.settingsDisabled.value}
+                class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white disabled:bg-slate-100 disabled:cursor-not-allowed"
+              >
+                <option value="30">1 sec</option>
+                <option value="60">2 sec</option>
+                <option value="120">4 sec</option>
+                <option value="240">8 sec</option>
+                <option value="300">10 sec</option>
+                <option value="900">30 sec</option>
+                <option value="1800">60 sec</option>
+                <option value="2700">90 sec</option>
+                <option value="3600">120 sec</option>
+                <option value="7200">240 sec</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        {/* Audio Settings */}
+        <div class="mt-4 pt-4 border-t border-slate-200">
+          <h3 class="text-sm font-medium text-slate-600 mb-3">Audio Settings</h3>
+          <div class="grid grid-cols-2 md:grid-cols-5 gap-4">
+            <div>
+              <label for="audioSource" class="block text-xs text-slate-500 mb-1">
+                Audio Source
+              </label>
+              <select
+                id="audioSource"
+                data-testid="audio-source"
+                value={settings.audioSource.value}
+                onChange={(e) => {
+                  const value = e.currentTarget.value;
+                  if (settings.isAudioSourceType(value)) {
+                    settings.audioSource.value = value;
+                    if (value === "microphone") {
+                      void settings.fetchMicrophoneDevices();
+                    }
+                  }
+                }}
+                disabled={settings.settingsDisabled.value}
+                class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white disabled:bg-slate-100 disabled:cursor-not-allowed"
+              >
+                {settings.AUDIO_SOURCES.map((value) => (
+                  <option key={value} value={value}>
+                    {AUDIO_SOURCE_LABELS[value]}
+                  </option>
+                ))}
+              </select>
+            </div>
+            {/* 音声入力デバイス。音声の入力が microphone でない間も描き、操作できなくする
+              (設定で項目が出たり消えたりしないようにする)。高さはカメラデバイスと同じ扱い */}
+            <div class="flex flex-col">
+              <label for="microphoneDevice" class="block text-xs text-slate-500 mb-1">
+                Audio Device
+              </label>
+              {settings.microphoneDevices.value.length === 0 ? (
+                <button
+                  type="button"
+                  data-testid="microphone-fetch-devices"
+                  onClick={() => void settings.fetchMicrophoneDevices()}
+                  disabled={settings.settingsDisabled.value || !microphoneSelected}
+                  class={`${DEVICE_CONTROL_SIZE_CLASS} w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-blue-50 text-blue-700 hover:bg-blue-100 disabled:bg-slate-100 disabled:cursor-not-allowed disabled:text-slate-400`}
+                >
+                  Fetch Devices
+                </button>
+              ) : (
+                <select
+                  id="microphoneDevice"
+                  data-testid="microphone-device"
+                  value={settings.selectedMicrophoneDeviceId.value}
+                  onChange={(e) =>
+                    (settings.selectedMicrophoneDeviceId.value = e.currentTarget.value)
+                  }
+                  disabled={settings.settingsDisabled.value || !microphoneSelected}
+                  class={`${DEVICE_CONTROL_SIZE_CLASS} w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white disabled:bg-slate-100 disabled:cursor-not-allowed`}
+                >
+                  {settings.microphoneDevices.value.map((device) => (
+                    <option key={device.deviceId} value={device.deviceId}>
+                      {device.label}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </div>
+            <div>
+              <label for="audioCodec" class="block text-xs text-slate-500 mb-1">
+                Audio Codec
+              </label>
+              <select
+                id="audioCodec"
+                data-testid="audio-codec"
+                value={settings.audioCodec.value}
+                onChange={(e) => {
+                  const value = e.currentTarget.value;
+                  if (settings.isAudioCodecType(value)) {
+                    settings.audioCodec.value = value;
+                  }
+                }}
+                disabled={settings.settingsDisabled.value}
+                class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white disabled:bg-slate-100 disabled:cursor-not-allowed"
+              >
+                {settings.AUDIO_CODECS.map((value) => (
+                  <option key={value} value={value}>
+                    {value === "opus" ? "Opus" : "AAC"}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label for="audioBitrate" class="block text-xs text-slate-500 mb-1">
+                Audio Bitrate
+              </label>
+              <select
+                id="audioBitrate"
+                data-testid="audio-bitrate"
+                value={settings.audioBitrate.value}
+                onChange={(e) => (settings.audioBitrate.value = Number(e.currentTarget.value))}
+                disabled={settings.settingsDisabled.value}
+                class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white disabled:bg-slate-100 disabled:cursor-not-allowed"
+              >
+                {settings.AUDIO_BITRATES.map((value) => (
+                  <option key={value} value={value}>
+                    {value / 1000} Kbps
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label for="audioSampleRate" class="block text-xs text-slate-500 mb-1">
+                Sample Rate
+              </label>
+              <select
+                id="audioSampleRate"
+                data-testid="audio-sample-rate"
+                value={settings.audioSampleRate.value}
+                onChange={(e) => (settings.audioSampleRate.value = Number(e.currentTarget.value))}
+                disabled={settings.settingsDisabled.value}
+                class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white disabled:bg-slate-100 disabled:cursor-not-allowed"
+              >
+                {settings.AUDIO_SAMPLE_RATES.map((value) => (
+                  <option key={value} value={value}>
+                    {value} Hz
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label for="audioChannels" class="block text-xs text-slate-500 mb-1">
+                Channels
+              </label>
+              <select
+                id="audioChannels"
+                data-testid="audio-channels"
+                value={settings.audioChannels.value}
+                onChange={(e) => (settings.audioChannels.value = Number(e.currentTarget.value))}
+                disabled={settings.settingsDisabled.value}
+                class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white disabled:bg-slate-100 disabled:cursor-not-allowed"
+              >
+                {settings.AUDIO_CHANNELS.map((value) => (
+                  <option key={value} value={value}>
+                    {AUDIO_CHANNEL_LABELS[value] ?? String(value)}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+          {/* マイクの音にかけるブラウザの音声処理。音声の入力が microphone でない間も描き、
+            操作できなくする */}
+          <div class="mt-3 flex flex-wrap items-center gap-6">
+            {AUDIO_PROCESSING_OPTIONS.map((option) => (
+              <label key={option.id} class="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  data-testid={option.id}
+                  checked={option.signal.value}
+                  onChange={(e) => (option.signal.value = e.currentTarget.checked)}
+                  disabled={settings.settingsDisabled.value || !microphoneSelected}
+                  class="w-4 h-4 text-blue-600 border-slate-300 rounded focus:ring-blue-500 disabled:cursor-not-allowed"
+                />
+                <span class="text-sm text-slate-600">{option.label}</span>
+              </label>
+            ))}
+          </div>
+        </div>
+
+        {/* Publish Settings */}
+        <div class="mt-4 pt-4 border-t border-slate-200">
+          <h3 class="text-sm font-medium text-slate-600 mb-3">Publish Settings</h3>
+          <div class="grid grid-cols-2 md:grid-cols-5 gap-4">
+            <div>
+              <label for="maxCacheDuration" class="block text-xs text-slate-500 mb-1">
+                MAX_CACHE_DURATION
+              </label>
+              <select
+                id="maxCacheDuration"
+                value={settings.maxCacheDuration.value}
+                onChange={(e) => (settings.maxCacheDuration.value = Number(e.currentTarget.value))}
+                disabled={settings.settingsDisabled.value}
+                class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white disabled:bg-slate-100 disabled:cursor-not-allowed"
+              >
+                <option value="0">0 (no cache)</option>
+                <option value="10000">10 sec</option>
+                <option value="30000">30 sec</option>
+                <option value="60000">1 min</option>
+                <option value="180000">3 min</option>
+                <option value="300000">5 min</option>
+                <option value="600000">10 min</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        {/* Subscribe Settings */}
+        <div class="mt-4 pt-4 border-t border-slate-200">
+          <h3 class="text-sm font-medium text-slate-600 mb-3">Subscribe Settings</h3>
+          <div class="grid grid-cols-2 md:grid-cols-5 gap-4">
+            <div>
+              <label for="catalogSubscriptionTimeout" class="block text-xs text-slate-500 mb-1">
+                Catalog Timeout
+              </label>
+              <select
+                id="catalogSubscriptionTimeout"
+                value={settings.catalogSubscriptionTimeout.value}
+                onChange={(e) =>
+                  (settings.catalogSubscriptionTimeout.value = Number(e.currentTarget.value))
+                }
+                disabled={settings.settingsDisabled.value}
+                class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white disabled:bg-slate-100 disabled:cursor-not-allowed"
+              >
+                <option value="3000">3 sec</option>
+                <option value="5000">5 sec</option>
+                <option value="10000">10 sec</option>
+                <option value="30000">30 sec</option>
+                <option value="60000">1 min</option>
+                <option value="120000">2 min</option>
+                <option value="300000">5 min</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        {/* WebCodecs Settings */}
+        <div class="mt-4 pt-4 border-t border-slate-200">
+          <h3 class="text-sm font-medium text-slate-600 mb-3">WebCodecs Settings</h3>
+          <div class="flex items-center gap-2">
+            <input
+              type="checkbox"
+              id="useDedicatedWorker"
+              checked={settings.useDedicatedWorker.value}
+              onChange={(e) => (settings.useDedicatedWorker.value = e.currentTarget.checked)}
+              disabled={settings.settingsDisabled.value}
+              class="rounded border-slate-300 text-blue-600 focus:ring-blue-500 disabled:cursor-not-allowed"
+            />
+            <label for="useDedicatedWorker" class="text-sm text-slate-600">
+              Use Dedicated Worker
+            </label>
+          </div>
+          {/* 復号したフレームを LOC TIMESTAMP (壁時計) の間隔どおりに表示し、到着の揺らぎを吸収する */}
+          <div class="flex items-center gap-2 mt-2">
+            <input
+              type="checkbox"
+              id="jitterBufferEnabled"
+              data-testid="settings-jitter-buffer"
+              checked={settings.jitterBufferEnabled.value}
+              onChange={(e) => (settings.jitterBufferEnabled.value = e.currentTarget.checked)}
+              disabled={settings.settingsDisabled.value}
+              class="rounded border-slate-300 text-blue-600 focus:ring-blue-500 disabled:cursor-not-allowed"
+            />
+            <label for="jitterBufferEnabled" class="text-sm text-slate-600">
+              Jitter Buffer (play video at LOC TIMESTAMP)
+            </label>
+          </div>
+        </div>
+
+        {/* Authorization Token Settings */}
+        {/* draft-ietf-moq-transport-21 §9.1.4 (AUTHORIZATION TOKEN Setup Option) */}
+        <div class="mt-4 pt-4 border-t border-slate-200">
+          <h3 class="text-sm font-medium text-slate-600 mb-3">
+            Authorization Token
+            <span class="ml-2 text-xs text-slate-400">SETUP Option (0x03)</span>
+          </h3>
+          <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+            <div>
+              <label for="authorizationTokenAliasType" class="block text-xs text-slate-500 mb-1">
+                Alias Type
+              </label>
+              <select
+                id="authorizationTokenAliasType"
+                value={settings.authorizationTokenAliasType.value}
+                onChange={(e) => {
+                  const v = e.currentTarget.value;
+                  if (v === "useValue" || v === "register") {
+                    settings.authorizationTokenAliasType.value = v;
+                  }
+                }}
+                disabled={settings.settingsDisabled.value}
+                class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white disabled:bg-slate-100 disabled:cursor-not-allowed"
+              >
+                <option value="useValue">USE_VALUE (0x3)</option>
+                <option value="register">REGISTER (0x1)</option>
+              </select>
+            </div>
+            {settings.authorizationTokenAliasType.value === "register" && (
+              <div>
+                <label for="authorizationTokenAlias" class="block text-xs text-slate-500 mb-1">
+                  Token Alias
+                </label>
+                <input
+                  type="text"
+                  id="authorizationTokenAlias"
+                  value={settings.authorizationTokenAlias.value}
+                  onInput={(e) => (settings.authorizationTokenAlias.value = e.currentTarget.value)}
+                  disabled={settings.settingsDisabled.value}
+                  placeholder="0"
+                  class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:bg-slate-100 disabled:cursor-not-allowed"
+                />
+              </div>
+            )}
+            <div>
+              <label for="authorizationTokenType" class="block text-xs text-slate-500 mb-1">
+                Token Type
+                <span class="ml-1 text-slate-400">(0 = out-of-band / 1 = CAT)</span>
               </label>
               <input
                 type="text"
-                id="authorizationTokenAlias"
-                value={settings.authorizationTokenAlias.value}
-                onInput={(e) => (settings.authorizationTokenAlias.value = e.currentTarget.value)}
+                id="authorizationTokenType"
+                value={settings.authorizationTokenType.value}
+                data-testid="authorization-token-type"
+                onInput={(e) => {
+                  settings.authorizationTokenType.value = e.currentTarget.value;
+                  // 手入力した場合は c4m から読み込んだ Base64 トークンを解除する
+                  // (解除しないと送信内容と UI の表示が食い違う)。
+                  // 入力した Token Type はそのまま使う
+                  settings.authorizationTokenBase64.value = "";
+                }}
                 disabled={settings.settingsDisabled.value}
                 placeholder="0"
                 class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:bg-slate-100 disabled:cursor-not-allowed"
               />
             </div>
+            <div class="lg:col-span-2">
+              <label for="authorizationTokenValue" class="block text-xs text-slate-500 mb-1">
+                Token Value
+                <span class="ml-1 text-slate-400">(not sent when empty)</span>
+              </label>
+              <input
+                type="text"
+                id="authorizationTokenValue"
+                data-testid="authorization-token-value"
+                autocomplete="off"
+                value={settings.authorizationTokenValue.value}
+                onInput={(e) => {
+                  settings.authorizationTokenValue.value = e.currentTarget.value;
+                  // c4m から読み込んだトークンがある場合だけ解除する
+                  // (取り込んでいないときに手入力した Token Type を壊さない)
+                  if (settings.authorizationTokenBase64.value) {
+                    clearImportedC4mToken();
+                  }
+                }}
+                disabled={settings.settingsDisabled.value}
+                placeholder="Any token string (UTF-8)"
+                class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:bg-slate-100 disabled:cursor-not-allowed"
+              />
+            </div>
+          </div>
+          {settings.authorizationTokenBase64.value && (
+            <div class="mt-2 flex items-center gap-2 text-xs" data-testid="authorization-token-c4m">
+              <span class="px-2 py-0.5 font-medium bg-amber-100 text-amber-700 rounded-full">
+                c4m
+              </span>
+              <span class="text-slate-500">
+                Sends the token loaded from the c4m parameter in the URL with SETUP (Base64)
+              </span>
+              <button
+                type="button"
+                onClick={() => clearImportedC4mToken()}
+                class="text-slate-400 hover:text-slate-600 underline"
+              >
+                Clear
+              </button>
+            </div>
           )}
-          <div>
-            <label for="authorizationTokenType" class="block text-xs text-slate-500 mb-1">
-              Token Type
-              <span class="ml-1 text-slate-400">(0 = out-of-band / 1 = CAT)</span>
-            </label>
-            <input
-              type="text"
-              id="authorizationTokenType"
-              value={settings.authorizationTokenType.value}
-              data-testid="authorization-token-type"
-              onInput={(e) => {
-                settings.authorizationTokenType.value = e.currentTarget.value;
-                // 手入力した場合は c4m から読み込んだ Base64 トークンを解除する
-                // (解除しないと送信内容と UI の表示が食い違う)。
-                // 入力した Token Type はそのまま使う
-                settings.authorizationTokenBase64.value = "";
-              }}
-              disabled={settings.settingsDisabled.value}
-              placeholder="0"
-              class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:bg-slate-100 disabled:cursor-not-allowed"
-            />
-          </div>
-          <div class="lg:col-span-2">
-            <label for="authorizationTokenValue" class="block text-xs text-slate-500 mb-1">
-              Token Value
-              <span class="ml-1 text-slate-400">(not sent when empty)</span>
-            </label>
-            <input
-              type="text"
-              id="authorizationTokenValue"
-              data-testid="authorization-token-value"
-              autocomplete="off"
-              value={settings.authorizationTokenValue.value}
-              onInput={(e) => {
-                settings.authorizationTokenValue.value = e.currentTarget.value;
-                // c4m から読み込んだトークンがある場合だけ解除する
-                // (取り込んでいないときに手入力した Token Type を壊さない)
-                if (settings.authorizationTokenBase64.value) {
-                  clearImportedC4mToken();
-                }
-              }}
-              disabled={settings.settingsDisabled.value}
-              placeholder="Any token string (UTF-8)"
-              class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:bg-slate-100 disabled:cursor-not-allowed"
-            />
-          </div>
         </div>
-        {settings.authorizationTokenBase64.value && (
-          <div class="mt-2 flex items-center gap-2 text-xs" data-testid="authorization-token-c4m">
-            <span class="px-2 py-0.5 font-medium bg-amber-100 text-amber-700 rounded-full">
-              c4m
-            </span>
-            <span class="text-slate-500">
-              Sends the token loaded from the c4m parameter in the URL with SETUP (Base64)
-            </span>
-            <button
-              type="button"
-              onClick={() => clearImportedC4mToken()}
-              class="text-slate-400 hover:text-slate-600 underline"
-            >
-              Clear
-            </button>
-          </div>
-        )}
       </div>
     </div>
   );

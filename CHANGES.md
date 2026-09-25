@@ -85,6 +85,10 @@
 - [UPDATE] moqt-devtools の subscriber の Play Audio を、NEW_GROUP_REQUEST と同じ行の切り替えにする
   - 音声のメーターと Catalog の間にあった Play Audio の行をなくし、Publisher と Subscriber で音声のメーターと Catalog の上端をそろえる
   - @voluntas
+- [UPDATE] moqt-devtools の Connection Settings を見出しの行で開け閉めできるようにする
+  - 閉じている間は、接続先、Namespace、Track、映像と音声の要点を 1 行で出す。要約の行を押しても開く
+  - 開け閉めはブラウザ (localStorage) に覚え、再読み込みしても同じ状態で始める。既定は開く
+  - @voluntas
 - [UPDATE] moqt-devtools の見出しを「MOQT DevTools (draft-21)」にし、draft-21 から draft-ietf-moq-transport-21 の文書を開けるようにする
   - ページのタイトルも同じにする
   - @voluntas
