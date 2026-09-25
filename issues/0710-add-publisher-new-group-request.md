@@ -1,7 +1,7 @@
 # publisher が NEW_GROUP_REQUEST を受け取れず、後から視聴を始めた相手に新しい Group (キーフレーム) を出せない
 
 - Created: 2026-09-25
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-25
 - Branch: feature/add-publisher-new-group-request
 - Polished: {YYYY-MM-DD}
 
@@ -33,3 +33,14 @@ moqt-js の publisher は `PublishOptions.dynamicGroups` で DYNAMIC_GROUPS=1 �
 - moqt-devtools の publisher が要求を受けると新しい Group を始めることをテストで固定する
 - sora-moq の E2E で、devtools の subscriber の NEW_GROUP_REQUEST が relay を経由して devtools の publisher へ届き、新しい Group が始まることを確かめる
 - `vp check` と全テスト (vitest) が通る
+
+## 解決方法
+
+- `src/session/publicTypes.ts` の `PublishCallbacks` に `onNewGroupRequest(newGroupRequest: bigint)` を足した
+- `src/session/params.ts` に `extractNewGroupRequest` (純関数) を足した。NEW_GROUP_REQUEST の値を varint 1 つとして読み、読み切れない値と余りのある値は `ProtocolViolationError` にする (受信した値は `decodeParameters` が varint として読むため、wire からは届かない防御である)
+- `src/publisher.ts` の `PublisherImpl` に `dynamicGroups` と `newGroupRequestCallback` を足し、`src/session/requests.ts` が PUBLISH の送信時に `PublishOptions.dynamicGroups` とコールバックを設定する。`handleNewGroupRequest` は、DYNAMIC_GROUPS を広告していて、値が 0 か現在の Group (送った最大の Location の Group) より大きいとき (まだ何も送っていなければどの値でも) にコールバックを呼ぶ
+- `src/session/bidi.ts` の `applyPublishRequestUpdate` が、状態を変える前に NEW_GROUP_REQUEST を読み、受理した更新で `handleNewGroupRequest` を呼ぶ。moqt-js の publisher は PUBLISH で始めるため、SUBSCRIBE に載った要求は relay が REQUEST_UPDATE に載せて届ける (Section 9.20.20 の Relay Handling)
+- `src/createMediaPublisher.ts` は映像トラックを `VIDEO_PUBLISH_OPTIONS` (`dynamicGroups: true`) で publish し、`onNewGroupRequest` から既存の `requestKeyframe()` (フレーム番号を 0 に戻す) を呼ぶ。次のフレームまでに届いた複数の要求は 1 枚のキーフレームにまとまる
+- moqt-devtools の publisher (`devtools/src/hooks/usePublisher.ts`) は映像トラックを `dynamicGroups: true` で publish し、要求を受けたら `newGroupRequested` を立てる。キーフレームの判定は純関数 `decideKeyFrame` (直前のキーフレームからのフレーム数で間隔を数え、要求があれば次に符号化するフレームをキーフレームにして数え直す) にした。encoder の待ちで捨てたフレームは要求を消費しない。受けた要求の数を画面と `getPublisher().newGroupRequests` に出し、デバッグログにも残す
+- テスト: `extractNewGroupRequest` の単体テストと往復の PBT、`handleNewGroupRequest` の条件 (広告の有無、値が 0 / 現在の Group より大きい / 以下、未送信)、publish ロールの REQUEST_UPDATE の結合テスト (広告あり / なし)、`createMediaPublisher` の要求の次のフレームがキーフレームになるテスト、`decideKeyFrame` のテスト、画面と `getPublisher()` の E2E (`tests/e2e/devtools-new-group-request.spec.ts`)。`vp check` と全テスト (2768 件) が通った
+- sora-moq の E2E (`test_devtools_new_group_request_reaches_devtools_publisher`): devtools の publisher (キーフレームの間隔 200 秒) と subscriber を relay で向かい合わせ、購読時の NEW_GROUP_REQUEST と Request Keyframe (REQUEST_UPDATE) のそれぞれで、publisher が要求を受けて新しい Group を始め、subscriber の `currentGroup` が進むことを確かめた。relay は 2 回とも `new_group_request=0` の REQUEST_UPDATE を publisher へ送った。sora-moq の `make browser-test-moqtjs-devtools` (19 件) が通った
