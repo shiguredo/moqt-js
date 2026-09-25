@@ -1,5 +1,9 @@
 export type CodecType = "vp8" | "vp9" | "av1" | "h264" | "h265";
 
+// URL クエリ `mode` で選ぶ表示モード。"both" は Publisher と Subscriber の両方、
+// "publisher" / "subscriber" は片方だけを表示する
+export type DevtoolsMode = "both" | "publisher" | "subscriber";
+
 // 映像の入力元。"none" は映像を送らず音声だけを配信する、"dummy" は canvas で描いた映像、
 // "camera" は選んだカメラ
 export type VideoSourceType = "none" | "dummy" | "camera";

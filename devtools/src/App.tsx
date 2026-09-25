@@ -4,13 +4,26 @@ import { PublisherPanel } from "./components/PublisherPanel";
 import { SubscriberPanel } from "./components/SubscriberPanel";
 import { DebugPanel, logCount } from "./components/DebugPanel";
 import { isDebugPanelOpen, toggleDebugPanel } from "./signals/debug";
-import { buildQueryString } from "./signals/connectionSettings";
+import {
+  buildQueryString,
+  buildQueryStringForMode,
+  mode,
+  MODES,
+} from "./signals/connectionSettings";
 import { useCopyUrlButton } from "./hooks/useCopyUrlButton";
 import * as sub from "./signals/subscriber";
+import type { DevtoolsMode } from "./types";
 
 // 対応している MOQT の draft の文書。見出しとフッターからリンクする
 const MOQT_TRANSPORT_DRAFT_URL =
   "https://datatracker.ietf.org/doc/html/draft-ietf-moq-transport-21";
+
+// ヘッダーの副題に並べる表示モードの表示名。並びは MODES の順にする
+const MODE_LABELS: Record<DevtoolsMode, string> = {
+  both: "Publisher & Subscriber",
+  publisher: "Publisher",
+  subscriber: "Subscriber",
+};
 
 function handleAddSubscriber(): void {
   sub.addSubscriber();
@@ -19,6 +32,7 @@ function handleAddSubscriber(): void {
 export function App() {
   const subscriberIdList = sub.subscriberIds.value;
   const debugPanelOpen = isDebugPanelOpen.value;
+  const currentMode = mode.value;
   const { buttonText: copyButtonText, copy: copyUrlToClipboard } =
     useCopyUrlButton(buildQueryString);
 
@@ -94,7 +108,31 @@ export function App() {
               </a>
               )
             </h1>
-            <p class="text-slate-500 mt-1">Media over QUIC Transport - Publisher & Subscriber</p>
+            <p class="text-slate-500 mt-1">
+              Media over QUIC Transport -{" "}
+              {MODES.map((targetMode, index) => (
+                <span key={targetMode}>
+                  {index > 0 && <span class="text-slate-300"> | </span>}
+                  {targetMode === currentMode ? (
+                    // 今のモードは太字にし、リンクにしない。ページの中に切り替えの UI を
+                    // 置かないため、この表示が今のモードを知る唯一の手がかりになる
+                    <strong class="text-slate-700">{MODE_LABELS[targetMode]}</strong>
+                  ) : (
+                    // 他のモードは今の接続設定を載せた URL を新しいタブで開く。href を
+                    // 今の設定に追従させ、押す前にブラウザのメニューからコピーできるようにする
+                    <a
+                      href={`?${buildQueryStringForMode(targetMode)}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      data-testid={`mode-link-${targetMode}`}
+                      class="text-blue-500 hover:text-blue-600 underline"
+                    >
+                      {MODE_LABELS[targetMode]}
+                    </a>
+                  )}
+                </span>
+              ))}
+            </p>
             <p class="mt-2 flex justify-center gap-4">
               <a
                 href="/webcodecs-devtools.html"
@@ -116,37 +154,40 @@ export function App() {
 
           {/* Main Content */}
           <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* Publisher Panel */}
-            <PublisherPanel />
+            {/* Publisher Panel。subscriber モードでは表示しない */}
+            {currentMode !== "subscriber" && <PublisherPanel />}
 
-            {/* Subscriber Panels */}
-            {subscriberIdList.map((id) => (
-              <SubscriberPanel
-                key={id}
-                subscriberId={id}
-                canRemove={subscriberIdList.length > 1}
-                onRemove={() => sub.removeSubscriber(id)}
-              />
-            ))}
-          </div>
-
-          {/* Add Subscriber ボタン */}
-          <div class="mt-6 flex justify-center">
-            <button
-              onClick={handleAddSubscriber}
-              class="px-6 py-3 bg-blue-500 hover:bg-blue-600 text-white font-medium rounded-xl shadow-lg transition-all flex items-center gap-2"
-            >
-              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  stroke-width="2"
-                  d="M12 4v16m8-8H4"
+            {/* Subscriber Panels。publisher モードでは Subscriber を 1 つも作らないため表示しない */}
+            {currentMode !== "publisher" &&
+              subscriberIdList.map((id) => (
+                <SubscriberPanel
+                  key={id}
+                  subscriberId={id}
+                  canRemove={subscriberIdList.length > 1}
+                  onRemove={() => sub.removeSubscriber(id)}
                 />
-              </svg>
-              Add Subscriber
-            </button>
+              ))}
           </div>
+
+          {/* Add Subscriber ボタン。publisher モードでは表示しない */}
+          {currentMode !== "publisher" && (
+            <div class="mt-6 flex justify-center">
+              <button
+                onClick={handleAddSubscriber}
+                class="px-6 py-3 bg-blue-500 hover:bg-blue-600 text-white font-medium rounded-xl shadow-lg transition-all flex items-center gap-2"
+              >
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-width="2"
+                    d="M12 4v16m8-8H4"
+                  />
+                </svg>
+                Add Subscriber
+              </button>
+            </div>
+          )}
 
           {/* Footer */}
           <footer class="mt-6 text-center text-sm text-slate-400">

@@ -57,6 +57,10 @@
 - [ADD] moqt-devtools の subscriber に、RESET_STREAM の error code ごとの数と、stream の reset と欠落の止まりの一覧を追加する
   - reset と欠落 (`loss`) の止まりを、止まりの一覧とは別に時刻 (UTC) つきで直近 30 件残す。到着の遅れの止まりが多くても押し出されない。reset のデバッグログにも error code を出す
   - @voluntas
+- [ADD] moqt-devtools に表示モードを追加し、Publisher だけ / Subscriber だけのページを新しいタブで開けるようにする
+  - URL クエリ `mode` で Publisher だけ / Subscriber だけを表示する。ヘッダーの副題に 3 つのモードを並べ、今のモードを示すとともに、他のモードのページを今の接続設定のまま新しいタブで開けるようにする
+  - Catalog Timeout と Use Dedicated Worker を URL に載せ、同じ接続設定のページを URL で再現できるようにする
+  - @voluntas
 - [UPDATE] `createMediaPublisher` の映像トラックで DYNAMIC_GROUPS を広告し、NEW_GROUP_REQUEST を受けたら次のフレームをキーフレームにして新しい Group を始める
   - 後から視聴を始めた購読者が、次の定期のキーフレームを待たずに映像を出せる
   - 既定の振る舞いが変わる。映像トラックの PUBLISH に DYNAMIC_GROUPS=1 が載り、要求を受けるたびに定期の間隔の外でキーフレームを送る
