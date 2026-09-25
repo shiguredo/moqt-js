@@ -1482,6 +1482,9 @@
   - 内部使用と再エクスポートを兼ねる import + re-export パターンを許容するため `unicorn/prefer-export-from` を無効化する
   - 単一使用箇所の正規表現は位置引数のほうが読みやすいという既存方針に合わせ `eslint/prefer-named-capture-group` を無効化する
   - @voluntas
+- [FIX] examples のページが `__MOQT_JS_VERSION__` の未定義で読み込みの時点で止まるのを修正する
+  - `examples/vite.config.ts` に、devtools と同じくバージョン定数の `define` を足す
+  - @voluntas
 - [FIX] PBT の oddPropertyArb が再帰的 IMMUTABLE_PROPERTIES を生成して flaky に fail するのを修正する (#0314)
   - `fetch` / `publish` / `subscribe` / `session` の各 `.prop.ts` の `oddPropertyArb` から IMMUTABLE_PROPERTIES (0x0b) を除外する
   - 任意 data 付きの IMMUTABLE_PROPERTIES が再帰的に自身を含むと `decodeProperties` が `MalformedTrackError` を投げてラウンドトリップが成立しなかった
