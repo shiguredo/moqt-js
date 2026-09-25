@@ -152,17 +152,19 @@ interface SessionImplOptions {
 export interface Session {
   readonly state: SessionState;
   /**
-   * 下位 WebTransport の `reliability` をそのまま返す
-   * W3C WebTransport spec: https://www.w3.org/TR/webtransport/#dom-webtransport-reliability
+   * 下位 WebTransport の `reliability` をそのまま返す。
+   * W3C WebTransport: https://www.w3.org/TR/webtransport/#dom-webtransport-reliability
+   * (値の意味は仕様が変わる可能性がある)
    *
-   * - "pending": セッション未確立
-   * - "reliable-only": HTTP/2 系 (datagram 不可)
-   * - "supports-unreliable": HTTP/3 系 (datagram 可)
+   * - "pending": 接続がまだ確立していない
+   * - "reliable-only": HTTP/2 (draft-ietf-webtrans-http2、datagram 不可)
+   * - "supports-unreliable": HTTP/3 (draft-ietf-webtrans-http3、datagram 可)
+   * - undefined: ブラウザが属性を公開していない
    *
-   * draft-ietf-webtrans-http2 と draft-ietf-webtrans-http3 のどちらで接続しているか
-   * を判別する指標として利用する。
+   * 属性が無いことを "pending" に置き換えない。安定版の Chromium は
+   * WebTransportReliability が experimental のままなので、属性自体が無い。
    */
-  readonly reliability: string;
+  readonly reliability: string | undefined;
   /**
    * GOAWAY を受信したかどうか
    * draft-ietf-moq-transport-21 Section 9.2 (GOAWAY)
@@ -630,19 +632,13 @@ export class SessionImpl implements Session {
   }
 
   /**
-   * 下位 WebTransport の `reliability` をそのまま返す
-   * W3C WebTransport spec: https://www.w3.org/TR/webtransport/#dom-webtransport-reliability
-   *
-   * - "pending": セッション未確立
-   * - "reliable-only": HTTP/2 系 (datagram 不可)
-   * - "supports-unreliable": HTTP/3 系 (datagram 可)
-   *
-   * draft-ietf-webtrans-http2 と draft-ietf-webtrans-http3 のどちらで接続しているか
-   * を判別する指標として利用する。
+   * 下位 WebTransport の `reliability` をそのまま返す。
+   * 属性が無いブラウザでは undefined。仕様の "pending" には置き換えない。
+   * W3C WebTransport: https://www.w3.org/TR/webtransport/#dom-webtransport-reliability
    */
-  get reliability(): string {
+  get reliability(): string | undefined {
     const wt = this.transport as unknown as { reliability?: string };
-    return wt.reliability ?? "pending";
+    return wt.reliability;
   }
 
   get goawayReceived(): boolean {

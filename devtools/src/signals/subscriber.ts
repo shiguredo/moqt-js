@@ -1,5 +1,6 @@
 import { signal, computed, type Signal, type ReadonlySignal } from "@preact/signals";
 import type { LOC, Session, Subscriber, Catalog } from "moqt-js";
+import type { PanelHttpVersion } from "../utils/httpVersion";
 import type { StatusType } from "../types";
 import type { DecoderWrapper } from "../utils/DecoderWrapper";
 import type { AudioDecoderWrapper } from "../../../src/codec/AudioDecoder.ts";
@@ -26,6 +27,8 @@ export interface SubscriberInstance {
   decoderConfigured: Signal<boolean>;
   status: Signal<StatusType>;
   statusMessage: Signal<string>;
+  // 確立した WebTransport が HTTP/2 か HTTP/3 か。未接続、または判別できないときは null
+  httpVersion: Signal<PanelHttpVersion | null>;
   codec: Signal<string>;
   // 停止処理中フラグ (二重実行防止)
   isStopping: Signal<boolean>;
@@ -104,6 +107,7 @@ export function createSubscriberInstance(id: string): SubscriberInstance {
     decoderConfigured: signal(false),
     status: signal<StatusType>("disconnected"),
     statusMessage: signal("Ready to subscribe"),
+    httpVersion: signal<PanelHttpVersion | null>(null),
     codec: signal(""),
     isStopping: signal(false),
     isStarting: signal(false),

@@ -1,5 +1,6 @@
 import { computed, signal } from "@preact/signals";
 import type { Session, Publisher, Catalog, LOC } from "moqt-js";
+import type { PanelHttpVersion } from "../utils/httpVersion";
 import type { StatusType } from "../types";
 import type { EncoderWrapper } from "../utils/EncoderWrapper";
 import { WallClockMapper } from "../../../src/mediaClock.ts";
@@ -45,6 +46,9 @@ export const hasActivePublisher = computed(() => pubSession.value !== null || is
 
 // Forward State の追跡 (draft-ietf-moq-transport-21 Section 3.1)
 export const forwardState = signal<boolean | null>(null);
+
+// 確立した WebTransport が HTTP/2 か HTTP/3 か。未接続、または判別できないときは null
+export const httpVersion = signal<PanelHttpVersion | null>(null);
 
 // Publisher のステータス
 export const pubStatus = signal<StatusType>("disconnected");

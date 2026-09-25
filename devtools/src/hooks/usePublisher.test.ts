@@ -72,6 +72,7 @@ function resetPublisherSignals(): void {
   pub.isStopping.value = false;
   pub.isStarting.value = false;
   pub.forwardState.value = null;
+  pub.httpVersion.value = null;
   pub.pubStatus.value = "disconnected";
   pub.pubStatusMessage.value = "Ready to publish";
   pub.pubCodec.value = "";

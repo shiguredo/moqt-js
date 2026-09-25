@@ -49,6 +49,7 @@ import {
   CATALOG_REPUBLISH_MAX_INTERVAL_MS,
   catalogRepublishIntervalMs,
 } from "../utils/catalogRepublish";
+import { browserIsChromium, resolvePanelHttpVersion } from "../utils/httpVersion";
 import * as settings from "../signals/connectionSettings";
 import * as pub from "../signals/publisher";
 import * as sub from "../signals/subscriber";
@@ -1153,6 +1154,7 @@ export function usePublisher() {
     try {
       pub.pubStatus.value = "disconnected";
       pub.pubStatusMessage.value = "Connecting...";
+      pub.httpVersion.value = null;
       settings.settingsDisabled.value = true;
 
       const namespaceArray = settings.namespace.value.split("/").filter((s) => s.length > 0);
@@ -1207,7 +1209,7 @@ export function usePublisher() {
         connectOptions,
       );
       pub.pubSession.value = session;
-      settings.reliability.value = session.reliability;
+      pub.httpVersion.value = resolvePanelHttpVersion(session.reliability, browserIsChromium());
 
       pub.pubStatus.value = "connected";
       pub.pubStatusMessage.value = "Connected, publishing catalog...";
@@ -1505,6 +1507,7 @@ export function usePublisher() {
     // draft-ietf-moq-msf-01 §6.1 の MUST に反するため触らない。
     pub.pubCodec.value = "";
     pub.forwardState.value = null;
+    pub.httpVersion.value = null;
     // 配信を始めている途中だった場合も、後始末で終わる
     pub.isStarting.value = false;
 

@@ -284,30 +284,6 @@ function LocHelpModal() {
   );
 }
 
-/**
- * 現在の WebTransport.reliability を HTTP バージョンバッジとして表示する。
- * draft-ietf-webtrans-http2 / draft-ietf-webtrans-http3 の判別に利用する。
- */
-function HttpVersionBadge() {
-  const label = settings.toHttpVersionLabel(settings.reliability.value);
-
-  const color =
-    label === "HTTP/3"
-      ? "bg-green-100 text-green-700"
-      : label === "HTTP/2"
-        ? "bg-blue-100 text-blue-700"
-        : "bg-slate-100 text-slate-500";
-
-  return (
-    <span
-      class={`px-2 py-0.5 text-xs font-medium rounded-full ${color}`}
-      title={`WebTransport.reliability: ${settings.reliability.value}`}
-    >
-      {label === "--" ? "Pending" : label}
-    </span>
-  );
-}
-
 // チャンネル数の表示名。許可リストに値を足したときはここにも足す
 const AUDIO_CHANNEL_LABELS: Record<number, string> = { 1: "Mono", 2: "Stereo" };
 
@@ -477,7 +453,6 @@ export function ConnectionSettings() {
             />
           </svg>
           Connection Settings
-          <HttpVersionBadge />
         </button>
         <div class="flex items-center gap-2">
           <button

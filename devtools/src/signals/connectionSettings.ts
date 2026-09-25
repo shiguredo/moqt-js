@@ -3,7 +3,6 @@ import {
   type AuthorizationToken,
   AuthorizationTokenAliasType,
   type CertificateHash,
-  toHttpVersionLabel,
 } from "moqt-js";
 import type {
   AudioCodecType,
@@ -18,8 +17,6 @@ import { base64ToArrayBuffer } from "../utils/base64";
 import { extractC4mBase64 } from "../utils/c4m";
 import { isResolution } from "../utils/codec";
 import { isDebugPanelOpen } from "./debug";
-
-export { toHttpVersionLabel };
 
 // 接続設定
 export const url = signal("moqt://127.0.0.1:4443/");
@@ -91,10 +88,6 @@ export const settingsDisabled = signal(false);
 // 表示モード。URL クエリ `mode` で起動時に 1 回だけ決め、ページの中で切り替えない。
 // 別のモードのページはヘッダーの副題のリンクから新しいタブで開く
 export const mode = signal<DevtoolsMode>("both");
-
-// 現在のセッションの WebTransport.reliability。初期値は "pending"。
-// 接続確立時に Session.reliability を反映する。
-export const reliability = signal<string>("pending");
 
 // Authorization Token (SETUP オプション 0x03)
 // draft-ietf-moq-transport-21 §9.1.4 (AUTHORIZATION TOKEN Setup Option)

@@ -43,6 +43,7 @@ import {
 import { JITTER_BUFFER_MAX_QUEUED_FRAMES, PlayoutBuffer } from "../utils/playoutBuffer";
 import { GroupSwitchGate } from "../../../src/groupSwitchGate.ts";
 import { AudioPlayoutScheduler } from "../../../src/audioPlayout.ts";
+import { browserIsChromium, resolvePanelHttpVersion } from "../utils/httpVersion";
 import * as settings from "../signals/connectionSettings";
 import * as sub from "../signals/subscriber";
 import * as pub from "../signals/publisher";
@@ -428,6 +429,7 @@ export function resetSubscriberState(
   instance.decoderConfigured.value = false;
   instance.codec.value = "";
   instance.dynamicGroupsSupported.value = false;
+  instance.httpVersion.value = null;
 
   instance.audioSubscriber.value = null;
   instance.audioDecoder.value = null;
@@ -1302,6 +1304,7 @@ export function useSubscriber(
     try {
       instance.status.value = "disconnected";
       instance.statusMessage.value = "Connecting...";
+      instance.httpVersion.value = null;
       settings.settingsDisabled.value = true;
 
       const namespaceArray = settings.namespace.value.split("/").filter((s) => s.length > 0);
@@ -1360,7 +1363,10 @@ export function useSubscriber(
         return;
       }
       instance.session.value = session;
-      settings.reliability.value = session.reliability;
+      instance.httpVersion.value = resolvePanelHttpVersion(
+        session.reliability,
+        browserIsChromium(),
+      );
 
       // status は subscribe 完了時にのみ "connected" へ遷移する。
       // Catalog 購読中 (最大 5 秒) の途中で "connected" にしないこと。

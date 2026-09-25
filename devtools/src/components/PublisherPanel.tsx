@@ -81,6 +81,9 @@ export function PublisherPanel() {
               />
             </svg>
             Publisher
+            {pub.httpVersion.value !== null && (
+              <span data-testid="publisher-http-version">{pub.httpVersion.value}</span>
+            )}
           </h2>
           <span class={getBadgeClasses()}>{getBadgeText()}</span>
         </div>

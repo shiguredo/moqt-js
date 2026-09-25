@@ -11,6 +11,9 @@
 
 ## develop
 
+- [CHANGE] `Session.reliability` は、ブラウザが `WebTransport.reliability` を出さないとき `undefined` を返す
+  - 属性が無いことを、仕様の未確立を表す `"pending"` と区別する。安定版の Chromium は属性を出さない
+  - @voluntas
 - [CHANGE] `VideoReceiverStats.staleFramesDropped` / `VideoReceiverStats.missingReferenceFramesDropped` を追加する
   - Group の順序と欠落で復号せずに捨てた映像フレーム数を、理由ごとに統計で確認できるようにする
   - `VideoReceiverStats` は公開型のため、この型を自前で構築しているコードは 2 つのフィールドの追加が必要になる (後方互換なし)
@@ -60,6 +63,10 @@
 - [ADD] moqt-devtools に表示モードを追加し、Publisher だけ / Subscriber だけのページを新しいタブで開けるようにする
   - URL クエリ `mode` で Publisher だけ / Subscriber だけを表示する。ヘッダーの副題に 3 つのモードを並べ、今のモードを示すとともに、他のモードのページを今の接続設定のまま新しいタブで開けるようにする
   - Catalog Timeout と Use Dedicated Worker を URL に載せ、同じ接続設定のページを URL で再現できるようにする
+  - @voluntas
+- [UPDATE] moqt-devtools の HTTP バージョン表示を、Publisher / Subscriber の見出しの後ろの H2 / H3 にする
+  - Connection Settings の Pending バッジをやめる。接続が確立しているセッションにだけ出し、切れたら消す
+  - `WebTransport.reliability` が `"supports-unreliable"` なら H3、`"reliable-only"` なら H2 にする。属性が無い Chromium は HTTP/3 の WebTransport しか確立しないため H3 にする
   - @voluntas
 - [UPDATE] `createMediaPublisher` の映像トラックで DYNAMIC_GROUPS を広告し、NEW_GROUP_REQUEST を受けたら次のフレームをキーフレームにして新しい Group を始める
   - 後から視聴を始めた購読者が、次の定期のキーフレームを待たずに映像を出せる

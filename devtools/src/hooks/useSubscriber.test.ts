@@ -496,6 +496,7 @@ test("resetSubscriberState resets every state signal to initial value", () => {
   instance.decoderConfigured.value = true;
   instance.codec.value = "h264";
   instance.dynamicGroupsSupported.value = true;
+  instance.httpVersion.value = "H3";
   instance.largestLocation.value = { group: 1n, object: 1n };
   // 購読の確立を待っている途中で後始末する場合
   instance.isStarting.value = true;
@@ -515,6 +516,7 @@ test("resetSubscriberState resets every state signal to initial value", () => {
   assert.equal(instance.decoderConfigured.value, false);
   assert.equal(instance.codec.value, "");
   assert.equal(instance.dynamicGroupsSupported.value, false);
+  assert.equal(instance.httpVersion.value, null);
   assert.equal(instance.largestLocation.value, null);
   // 確立を待っていた購読も終わり、Start Subscribing を押せる状態に戻る
   assert.equal(instance.isStarting.value, false);

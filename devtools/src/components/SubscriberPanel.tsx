@@ -128,6 +128,9 @@ export function SubscriberPanel({
               />
             </svg>
             Subscriber
+            {instance.httpVersion.value !== null && (
+              <span data-testid="subscriber-http-version">{instance.httpVersion.value}</span>
+            )}
           </h2>
           <div class="flex items-center gap-2">
             <span class={getBadgeClasses()}>{getBadgeText()}</span>
