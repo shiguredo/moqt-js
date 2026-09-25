@@ -56,6 +56,10 @@
 - [UPDATE] moqt-devtools / webtransport-devtools / webcodecs-devtools と examples の画面の文言を英語にそろえる
   - ステータスメッセージ、接続設定のヘルプ、入力欄の補足、WebTransport API の説明など、画面に出していた日本語を英語にする
   - @voluntas
+- [FIX] moqt-devtools で、購読や配信を始めている途中に他の Subscriber や Publisher を止めたり、その開始が失敗したり切断されたりしても、接続設定の入力を無効のまま保つようにする
+  - 接続設定を使っているかの判定が、購読の確立を待っている Subscriber と connect を待っている Publisher を数えていなかった。そのため他の Subscriber や Publisher を止めると入力が編集できる状態に戻り、その後の購読や配信の間も有効のままだった
+  - 配信の開始に失敗したときも、購読が続いているのに入力を有効に戻していた。Subscriber の有無を見て戻すようにする
+  - @voluntas
 - [FIX] moqt-devtools の subscriber で、停止した購読の session の close が遅れて届いても、次に始めた購読を止めないようにする
   - session の close のコールバックは relay との往復の後に届くため、停止の直後に Start Subscribing を押すと、前の session のコールバックが次の購読を後始末して中断し、表示が「Connecting...」のまま止まることがあった
   - session の close / error と映像トラックの購読の end / error のコールバックは、登録した回の購読が今の購読のときだけ表示を変えて後始末する

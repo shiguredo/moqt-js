@@ -1,4 +1,4 @@
-import { signal } from "@preact/signals";
+import { computed, signal } from "@preact/signals";
 import type { Session, Publisher, Catalog } from "moqt-js";
 import type { StatusType } from "../types";
 import type { EncoderWrapper } from "../utils/EncoderWrapper";
@@ -28,6 +28,19 @@ export const mediaStream = signal<MediaStream | null>(null);
 export const isPreviewActive = signal(false);
 // 停止処理中フラグ（二重実行防止）
 export const isStopping = signal(false);
+// 配信を始めてから、映像トラックの PUBLISH が確立する (session.publish が返る) か
+// 後始末を終えるまで true。startPublishing は connect の後に pubSession を設定するため、
+// connect を待つ間は pubSession が null のまま接続設定を使っている。この間を覆う
+export const isStarting = signal(false);
+
+/**
+ * Publisher が接続設定を使っているか
+ *
+ * session があるか、配信を始めている途中なら使っている。Subscriber を止めたときや、Subscriber
+ * の開始の失敗や切断で後始末するときに、接続設定の入力を有効に戻してよいかの判定に使う
+ * (resetSubscriberState)。
+ */
+export const hasActivePublisher = computed(() => pubSession.value !== null || isStarting.value);
 
 // Forward State の追跡 (draft-ietf-moq-transport-21 Section 3.1)
 export const forwardState = signal<boolean | null>(null);

@@ -364,8 +364,12 @@ export function closeSubscriberResources(
  * (映像 / 音声の Promise チェーン) を巻き戻す。
  *
  * `status` / `statusMessage` / `isStopping` は触らない (停止操作の表示は呼び出し側の責務)。
- * `settingsDisabled` は `subscriber.value = null` の反映後に `hasActiveSubscriber`
- * computed で再計算されるため、本関数の末尾で再有効化判定を行う。
+ *
+ * 本関数の末尾で `settingsDisabled` の再有効化を判定する。他の Subscriber と Publisher の
+ * どれも接続設定を使っていなければ有効に戻す (購読の確立を待っている Subscriber と、配信を
+ * 始めている途中で connect を待っている Publisher も使っているとみなす)。
+ * `hasActiveSubscriber` はこのインスタンスの `subscriber` と `isStarting` も数えるため、
+ * 両方を下ろしてから判定する (止めたインスタンス自身を数えない)。
  */
 export function resetSubscriberState(
   instance: sub.SubscriberInstance,
@@ -373,7 +377,6 @@ export function resetSubscriberState(
     video: { current: Promise<void> };
     audio: { current: Promise<void> };
   },
-  isOtherPublisherActive: () => boolean,
 ): void {
   instance.subscriber.value = null;
   // 確立を待っている購読も後始末で終わる
@@ -402,7 +405,7 @@ export function resetSubscriberState(
   // 汚さないよう、世代の同一性は各ハンドラ側でも確認する
   chains.audio.current = Promise.resolve();
 
-  if (!sub.hasActiveSubscriber.value && !isOtherPublisherActive()) {
+  if (!sub.hasActiveSubscriber.value && !pub.hasActivePublisher.value) {
     settings.settingsDisabled.value = false;
   }
 }
@@ -1172,7 +1175,7 @@ export function useSubscriber(
     // 表示を変えて後始末する (停止した購読のコールバックが次の購読を止めないようにする)
     const isCurrentAttempt = createAttemptGuard(abortControllerRef, signal);
     // 映像トラックの購読が確立するか後始末を終えるまで、購読中として扱う
-    // (Stop で止められ、Start Subscribing を重ねて押せない)
+    // (Stop で止められ、Start Subscribing を重ねて押せない。接続設定の入力も無効のまま保つ)
     instance.isStarting.value = true;
 
     try {
@@ -1706,11 +1709,7 @@ export function useSubscriber(
     abortControllerRef.current = null;
 
     closeSubscriberResources(instance, canvasRef.current);
-    resetSubscriberState(
-      instance,
-      { video: chainRef, audio: audioChainRef },
-      () => pub.pubSession.value !== null,
-    );
+    resetSubscriberState(instance, { video: chainRef, audio: audioChainRef });
   };
 
   const requestKeyframe = async (): Promise<void> => {
