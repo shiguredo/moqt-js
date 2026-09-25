@@ -44,3 +44,4 @@ moqt-devtools で subscriber を停止してすぐに Start Subscribing を押�
 - テスト: 単体テストで、今の AbortController なら真、別の回に替わったか後始末で `null` になったら偽、中断しただけの今の AbortController なら真を返すことを固定した
 - sora-moq の相互運用 harness に `test_devtools_subscriber_restarts_while_previous_session_closes` を足した (sora-moq 2221a174)。relay の前に片道 150 ms の遅延を入れ、停止が終わった直後に Start Subscribing を押す操作を 3 回くり返す。修正前は 1 回目の再開で「Connecting...」のまま止まって失敗し、修正後は 3 回とも購読が確立して復号した
 - 手元の moqt-devtools (この修正を含む) と配備 relay で、停止が終わった直後の購読し直しを 8 回流した。8 回とも確立し、前の session のコールバックによる中断は 0 回だった
+- 配備後 (2026-09-25) に、配備 moqt-devtools (この修正を含む) と配備 relay で、停止が終わった直後の購読し直しを 8 回流した。8 回とも確立し (Start Subscribing から約 1.06 秒)、確立の時点で cache から最新 Group の先頭以降が届いた。修正前の配備では、同じ操作の 6 回のうち 1 回が「Connecting...」のまま止まっていた
