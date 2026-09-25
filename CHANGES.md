@@ -75,6 +75,9 @@
 - [UPDATE] moqt-devtools の Publisher と Subscriber の映像の上端をそろえる
   - 映像より上の 1 行の項目 (Publisher の Forward State、Subscriber の NEW_GROUP_REQUEST) を同じ高さの枠で描く。これまでは何もしていない状態で 36 px、配信中は 16 px ずれていた
   - @voluntas
+- [UPDATE] moqt-devtools の接続設定の Camera Device の欄を常に描き、Video Source が Camera でない間は操作できなくする
+  - Video Source を切り替えても、Video Settings の項目の位置が動かない (Audio Device の欄と同じ扱い)
+  - @voluntas
 - [FIX] moqt-devtools で、購読や配信を始めている途中に他の Subscriber や Publisher を止めたり、その開始が失敗したり切断されたりしても、接続設定の入力を無効のまま保つようにする
   - 接続設定を使っているかの判定が、購読の確立を待っている Subscriber と connect を待っている Publisher を数えていなかった。そのため他の Subscriber や Publisher を止めると入力が編集できる状態に戻り、その後の購読や配信の間も有効のままだった
   - 配信の開始に失敗したときも、購読が続いているのに入力を有効に戻していた。Subscriber の有無を見て戻すようにする

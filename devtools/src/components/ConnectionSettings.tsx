@@ -336,6 +336,8 @@ const AUDIO_PROCESSING_OPTIONS = [
 ] as const;
 
 export function ConnectionSettings() {
+  // 映像の入力がカメラのときだけ、カメラデバイスの選択を操作できる
+  const cameraSelected = settings.videoSource.value === "camera";
   // 音声の入力がマイクのときだけ、デバイスの選択と音声処理を操作できる
   const microphoneSelected = settings.audioSource.value === "microphone";
   // c4m から読み込んだトークンを解除し、Token Type を既定の 0 に戻す。
@@ -559,37 +561,39 @@ export function ConnectionSettings() {
               <option value="camera">Camera (gUM)</option>
             </select>
           </div>
-          {settings.videoSource.value === "camera" && (
-            <div>
-              <label for="cameraDevice" class="block text-xs text-slate-500 mb-1">
-                Camera Device
-              </label>
-              {settings.cameraDevices.value.length === 0 ? (
-                <button
-                  type="button"
-                  onClick={() => void settings.fetchCameraDevices()}
-                  disabled={settings.settingsDisabled.value}
-                  class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-blue-50 text-blue-700 hover:bg-blue-100 disabled:bg-slate-100 disabled:cursor-not-allowed disabled:text-slate-400"
-                >
-                  Fetch Devices
-                </button>
-              ) : (
-                <select
-                  id="cameraDevice"
-                  value={settings.selectedCameraDeviceId.value}
-                  onChange={(e) => (settings.selectedCameraDeviceId.value = e.currentTarget.value)}
-                  disabled={settings.settingsDisabled.value}
-                  class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white disabled:bg-slate-100 disabled:cursor-not-allowed"
-                >
-                  {settings.cameraDevices.value.map((device) => (
-                    <option key={device.deviceId} value={device.deviceId}>
-                      {device.label}
-                    </option>
-                  ))}
-                </select>
-              )}
-            </div>
-          )}
+          {/* カメラデバイス。映像の入力が camera でない間も描き、操作できなくする
+              (設定で項目が出たり消えたりしないようにする) */}
+          <div>
+            <label for="cameraDevice" class="block text-xs text-slate-500 mb-1">
+              Camera Device
+            </label>
+            {settings.cameraDevices.value.length === 0 ? (
+              <button
+                type="button"
+                data-testid="camera-fetch-devices"
+                onClick={() => void settings.fetchCameraDevices()}
+                disabled={settings.settingsDisabled.value || !cameraSelected}
+                class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-blue-50 text-blue-700 hover:bg-blue-100 disabled:bg-slate-100 disabled:cursor-not-allowed disabled:text-slate-400"
+              >
+                Fetch Devices
+              </button>
+            ) : (
+              <select
+                id="cameraDevice"
+                data-testid="camera-device"
+                value={settings.selectedCameraDeviceId.value}
+                onChange={(e) => (settings.selectedCameraDeviceId.value = e.currentTarget.value)}
+                disabled={settings.settingsDisabled.value || !cameraSelected}
+                class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white disabled:bg-slate-100 disabled:cursor-not-allowed"
+              >
+                {settings.cameraDevices.value.map((device) => (
+                  <option key={device.deviceId} value={device.deviceId}>
+                    {device.label}
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
           <div>
             <label for="resolution" class="block text-xs text-slate-500 mb-1">
               Resolution
