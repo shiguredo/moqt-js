@@ -61,6 +61,12 @@ export const publishTimingStats = signal(new PublishTimingStats());
 export const publishTiming = signal<PublishTimingSnapshot>(EMPTY_PUBLISH_TIMING);
 // 最後に publishTiming へ反映した時刻 (`performance.now()`)。画面の表示には使わない
 export const publishTimingUpdatedAtMs = signal(0);
+// 直前のキーフレームから符号化したフレーム数 (キーフレームの間隔を数える)
+export const framesSinceKeyFrame = signal(0);
+// 新しい Group の要求 (NEW_GROUP_REQUEST) を受けて、まだキーフレームにしていないか
+export const newGroupRequested = signal(false);
+// 受けた新しい Group の要求の数 (配信の開始からの累積)
+export const newGroupRequestsReceived = signal(0);
 export const videoStreamCleanup = signal<(() => void) | null>(null);
 // キーフレーム間隔 (frames)。既定は connectionSettings と同じ 2 秒ぶん
 export const keyframeInterval = signal(60);

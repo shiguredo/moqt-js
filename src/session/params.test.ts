@@ -12,9 +12,10 @@ import {
   encodeAuthorizationTokenParameter,
   validateFetchOkEndLocation,
   resolveFillGroupOrder,
+  extractNewGroupRequest,
 } from "./params";
-import { InvalidFilterError } from "../error";
-import { MAX_VARINT } from "../varint";
+import { InvalidFilterError, ProtocolViolationError } from "../error";
+import { MAX_VARINT, encodeVarint } from "../varint";
 import { MessageParameterType, GroupOrder } from "../message/types";
 import { TrackPropertyId } from "../properties";
 import { isGreaseValue } from "../grease";
@@ -392,4 +393,45 @@ test("buildTrackStatusParameters: includeProperties が INCLUDE_PROPERTIES に�
   );
   const omitted = buildTrackStatusParameters({});
   assert.isUndefined(omitted.find((p) => p.type === MessageParameterType.INCLUDE_PROPERTIES));
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.20.20 (NEW GROUP REQUEST Parameter):
+ * "The NEW_GROUP_REQUEST parameter (Parameter Type 0x32) is a varint."
+ * 値は varint 1 つである。パラメータが無ければ undefined、値 0 はそのまま 0 を返す。
+ * 読み切れない値と、varint の後ろに余りのある値は PROTOCOL_VIOLATION にする。
+ * 読み取りの往復は params.prop.ts が任意の値で確かめる
+ */
+test("extractNewGroupRequest: varint の値を返し、無ければ undefined、不正な値は ProtocolViolationError", () => {
+  assert.isUndefined(extractNewGroupRequest([]));
+  assert.isUndefined(
+    extractNewGroupRequest([{ type: MessageParameterType.FORWARD, value: new Uint8Array([1]) }]),
+  );
+  assert.equal(
+    extractNewGroupRequest([
+      { type: MessageParameterType.NEW_GROUP_REQUEST, value: encodeVarint(0n) },
+    ]),
+    0n,
+  );
+  assert.equal(
+    extractNewGroupRequest([
+      { type: MessageParameterType.NEW_GROUP_REQUEST, value: encodeVarint(1_790_294_740_225n) },
+    ]),
+    1_790_294_740_225n,
+  );
+  // 空の値は varint として読めない
+  assert.throws(
+    () =>
+      extractNewGroupRequest([
+        { type: MessageParameterType.NEW_GROUP_REQUEST, value: new Uint8Array() },
+      ]),
+    ProtocolViolationError,
+  );
+  // varint の後ろに余りがある
+  const trailing = new Uint8Array([...encodeVarint(5n), 0x00]);
+  assert.throws(
+    () =>
+      extractNewGroupRequest([{ type: MessageParameterType.NEW_GROUP_REQUEST, value: trailing }]),
+    ProtocolViolationError,
+  );
 });

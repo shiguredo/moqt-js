@@ -320,6 +320,19 @@ export class PublisherImpl implements Publisher {
   // セッションが利用する内部コールバック
   // セッションは未指定のコールバックを明示的に undefined で代入するため `| undefined` を付ける
   goawayCallback?: ((newSessionUri: string) => void) | undefined;
+  /**
+   * NEW_GROUP_REQUEST を受けたときのアプリのコールバック (PublishCallbacks.onNewGroupRequest)
+   *
+   * セッションが PUBLISH の送信時に設定する。handleNewGroupRequest が条件を満たしたときに呼ぶ。
+   */
+  newGroupRequestCallback?: ((newGroupRequest: bigint) => void) | undefined;
+  /**
+   * PUBLISH の Track Properties で DYNAMIC_GROUPS=1 を広告したか
+   *
+   * draft-ietf-moq-transport-21 §10.6 (DYNAMIC GROUPS)。セッションが PUBLISH の送信時に
+   * PublishOptions.dynamicGroups から設定する。
+   */
+  dynamicGroups = false;
   onSendObject?: (params: SendObjectParams) => Promise<void>;
   /**
    * Forward State 0 または Location Filter の範囲外で Object の送信を見送ったときに呼ばれる
@@ -434,6 +447,37 @@ export class PublisherImpl implements Publisher {
    */
   getLocationFilter(): LocationFilter | undefined {
     return this.publisherLocationFilter;
+  }
+
+  /**
+   * Internal: 受信した NEW_GROUP_REQUEST をアプリへ知らせる (セッションからのみ呼ぶ)
+   *
+   * draft-ietf-moq-transport-21 §9.20.20 (NEW GROUP REQUEST Parameter):
+   * "When an Original Publisher that supports dynamic Groups receives a NEW_GROUP_REQUEST
+   *  with a value of 0 or a value larger than the current Group, it SHOULD end the current
+   *  Group and begin a new Group as soon as practical."
+   * "If the original publisher does not support dynamic Groups, it ignores the parameter"
+   *
+   * - DYNAMIC_GROUPS を広告していなければ知らせない
+   * - 現在の Group は送った最大の Location の Group である。値が 0 (要求した側が Group を
+   *   知らない) か、現在の Group より大きいときだけ知らせる。現在の Group 以下の値は、
+   *   新しい Group が既に始まっていることを表す
+   * - まだ何も送っていなければ、どの値でも知らせる
+   *
+   * 新しい Group をいつ始めるか (次のキーフレームなど) はアプリが決める。
+   *
+   * @returns アプリへ知らせたら true
+   */
+  handleNewGroupRequest(newGroupRequest: bigint): boolean {
+    if (!this.dynamicGroups) {
+      return false;
+    }
+    const currentGroup = this.largestLocation?.group;
+    if (newGroupRequest !== 0n && currentGroup !== undefined && newGroupRequest <= currentGroup) {
+      return false;
+    }
+    this.newGroupRequestCallback?.(newGroupRequest);
+    return true;
   }
 
   /**

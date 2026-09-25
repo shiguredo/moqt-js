@@ -37,6 +37,7 @@ import {
   resolveAudioConfigToSend,
   resolveKeyframeInterval,
   shouldSendKeyFrame,
+  VIDEO_PUBLISH_OPTIONS,
   type VideoGroupState,
 } from "./createMediaPublisher";
 import type { AudioEncoderWrapper } from "./codec/AudioEncoder";
@@ -77,25 +78,30 @@ function createTestFrame(timestamp = 0): TestFrame {
  */
 function createRecordingEncoder(encodeQueueSize = 0): {
   encoded: unknown[];
+  keyFrames: boolean[];
   isClosed: () => boolean;
   encoder: {
     state: string;
     encodeQueueSize: number;
-    encode: (frame: unknown) => void;
+    encode: (frame: unknown, options?: { keyFrame?: boolean }) => void;
     close: () => void;
   };
 } {
   const encoded: unknown[] = [];
+  // encode ごとのキーフレームの指定 (encoded と同じ並び)
+  const keyFrames: boolean[] = [];
   let closed = false;
   return {
     encoded,
+    keyFrames,
     isClosed: () => closed,
     encoder: {
       state: "configured",
       // 閾値超過 (2 超) を固定するため引数で差し替えられるようにする
       encodeQueueSize,
-      encode: (frame: unknown) => {
+      encode: (frame: unknown, options?: { keyFrame?: boolean }) => {
         encoded.push(frame);
+        keyFrames.push(options?.keyFrame === true);
       },
       close: () => {
         closed = true;
@@ -121,6 +127,7 @@ interface PublisherLoopControl {
   currentState: MediaPublisherState;
   processAudioFrames(): Promise<void>;
   processVideoFrames(): Promise<void>;
+  requestKeyframe(): void;
   // 読んだ映像フレームの timestamp を壁時計に換算する
   videoWallClock: WallClockMapper;
 }
@@ -177,16 +184,17 @@ function injectVideoLoop(
   encodeQueueSize = 0,
 ): {
   encoded: unknown[];
+  keyFrames: boolean[];
   controller: ReadableStreamDefaultController<TestFrame>;
   isEncoderClosed: () => boolean;
 } {
   const { stream, controller } = createFrameStream();
-  const { encoder, encoded, isClosed } = createRecordingEncoder(encodeQueueSize);
+  const { encoder, encoded, keyFrames, isClosed } = createRecordingEncoder(encodeQueueSize);
   control.videoFrameReader =
     stream.getReader() as unknown as ReadableStreamDefaultReader<VideoFrame>;
   control.videoEncoder = encoder as unknown as VideoEncoderWrapper;
   control.processingActive = true;
-  return { encoded, controller, isEncoderClosed: isClosed };
+  return { encoded, keyFrames, controller, isEncoderClosed: isClosed };
 }
 
 test("processVideoFrames: encode キューの閾値 (2) を超えたフレームは破棄され droppedFrames に数える", async () => {
@@ -238,6 +246,48 @@ test("processVideoFrames: encode キューの閾値以内なら破棄せず enco
   assert.isTrue(frame.closed);
   assert.equal(errors.length, 0);
   assert.equal(publisher.getStats().video?.droppedFrames, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §10.6 / §9.20.20: 映像トラックは DYNAMIC_GROUPS=1 を広告し、
+ * 購読者が NEW_GROUP_REQUEST で新しい Group を要求できるようにする
+ */
+test("VIDEO_PUBLISH_OPTIONS: 映像トラックは DYNAMIC_GROUPS を広告する", () => {
+  assert.isTrue(VIDEO_PUBLISH_OPTIONS.dynamicGroups);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.20.20: NEW_GROUP_REQUEST を受けた publisher は、現在の Group を
+ * 終えて新しい Group をできるだけ早く始める SHOULD。映像は onNewGroupRequest から
+ * requestKeyframe() を呼び、次に符号化するフレームをキーフレーム (新しい Group の先頭) にする。
+ * キーフレームの間隔 60 の途中 (3 枚目) で要求を受けると、4 枚目がキーフレームになり、
+ * 以降は要求の後から数えた間隔に戻る
+ */
+test("processVideoFrames: 新しい Group の要求を受けると次のフレームをキーフレームにする", async () => {
+  const { control, errors } = createLoopTestContext({
+    video: { codec: "vp8", bitrate: 1000, keyframeInterval: 60 },
+  });
+  const { keyFrames, controller } = injectVideoLoop(control);
+  const loop = control.processVideoFrames();
+  const settle = async (): Promise<void> => {
+    await Promise.resolve();
+    await Promise.resolve();
+  };
+  for (let index = 0; index < 3; index++) {
+    controller.enqueue(createTestFrame(index));
+    await settle();
+  }
+  // PublishCallbacks.onNewGroupRequest と同じく requestKeyframe() を呼ぶ
+  control.requestKeyframe();
+  for (let index = 3; index < 6; index++) {
+    controller.enqueue(createTestFrame(index));
+    await settle();
+  }
+  controller.close();
+  await loop;
+
+  assert.deepEqual(keyFrames, [true, false, false, true, false, false]);
+  assert.equal(errors.length, 0);
 });
 
 test("processAudioFrames: pause 後の旧ループは encode せず終了する", async () => {

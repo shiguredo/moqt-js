@@ -252,6 +252,20 @@ export interface PublishCallbacks {
    * 当該リクエストのマイグレーション先 URI を通知する。
    */
   goaway?: (newSessionUri: string) => void;
+  /**
+   * 新しい Group の要求 (NEW_GROUP_REQUEST) を受けた時のコールバック
+   * draft-ietf-moq-transport-21 Section 9.20.20 (NEW GROUP REQUEST Parameter)
+   *
+   * 購読者が SUBSCRIBE / REQUEST_UPDATE に載せた NEW_GROUP_REQUEST を、relay は
+   * REQUEST_UPDATE で publisher へ伝える。`PublishOptions.dynamicGroups` を true にした
+   * PUBLISH で、値が 0 か現在の Group (送った最大の Group) より大きいときに呼ばれる。
+   * dynamic Groups に対応する publisher は、現在の Group を終えて新しい Group を
+   * できるだけ早く始める SHOULD (映像なら次のフレームをキーフレームにする)。
+   * 次の Group ID は publisher が決める (要求の値と一致させる必要は無い)。
+   *
+   * @param newGroupRequest - 要求の値 (購読者が知る最大の Group ID + 1、知らなければ 0)
+   */
+  onNewGroupRequest?: (newGroupRequest: bigint) => void;
 }
 
 /**

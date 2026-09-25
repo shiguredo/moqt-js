@@ -33,7 +33,7 @@ import {
   validateForwardValue,
   getParameterLocationValue,
 } from "../message";
-import { encodeVarint } from "../varint";
+import { decodeVarint, encodeVarint } from "../varint";
 import { TrackPropertyId, generateGreaseProperty, type Property } from "../properties";
 import { LOCPropertyId } from "../loc";
 import { ProtocolViolationError } from "../error";
@@ -974,6 +974,41 @@ export function extractForwardState(parameters: Parameter[]): boolean {
     }
   }
   return true;
+}
+
+/**
+ * 純粋関数: パラメータ一覧から NEW_GROUP_REQUEST の値を取り出す
+ *
+ * draft-ietf-moq-transport-21 §9.20.20 (NEW GROUP REQUEST Parameter):
+ * "The NEW_GROUP_REQUEST parameter (Parameter Type 0x32) is a varint."
+ * 値は varint 1 つである。受信した値は decodeParameters が varint として読んでいるが、
+ * 読み切れない値や varint の後ろに余りのある値は PROTOCOL_VIOLATION とする。
+ *
+ * @returns 値。パラメータが無ければ undefined
+ * @throws ProtocolViolationError 値が varint 1 つでない場合
+ */
+export function extractNewGroupRequest(parameters: Parameter[]): bigint | undefined {
+  const param = parameters.find(
+    (candidate) => candidate.type === MessageParameterType.NEW_GROUP_REQUEST,
+  );
+  if (param === undefined) {
+    return undefined;
+  }
+  let value: bigint;
+  let consumed: number;
+  try {
+    [value, consumed] = decodeVarint(param.value);
+  } catch {
+    throw new ProtocolViolationError(
+      `NEW_GROUP_REQUEST parameter is not a varint: ${param.value.length} bytes`,
+    );
+  }
+  if (consumed !== param.value.length) {
+    throw new ProtocolViolationError(
+      `NEW_GROUP_REQUEST parameter has trailing bytes: expected ${consumed} bytes, got ${param.value.length}`,
+    );
+  }
+  return value;
 }
 
 // ============================================================================

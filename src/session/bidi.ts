@@ -85,6 +85,7 @@ import type { TracksUpdateOptions, SessionState, TrackStatusResult } from "./pub
 import {
   compareLocations,
   extractForwardState,
+  extractNewGroupRequest,
   extractLargestLocation,
   validateFetchOkEndLocation,
   buildFillParameters,
@@ -3031,6 +3032,9 @@ function applyPublishRequestUpdate(
 ): boolean {
   const forwardParam = parameters.find((param) => param.type === MessageParameterType.FORWARD);
   const fillParam = parameters.find((param) => param.type === MessageParameterType.FILL_PARAMETERS);
+  // draft-ietf-moq-transport-21 §9.20.20: NEW_GROUP_REQUEST は状態を変える前に読む
+  // (読めない値は PROTOCOL_VIOLATION)
+  const newGroupRequest = extractNewGroupRequest(parameters);
 
   // 更新適用後の有効値 (省略時は現在値) で fill 範囲を判定する。拒否する更新を
   // 先に状態へ反映すると、アプリの onForwardStateChange が誤って呼ばれ、
@@ -3070,6 +3074,11 @@ function applyPublishRequestUpdate(
   }
   if (forwardParam !== undefined) {
     publisher.setForwardState(effectiveForwardState);
+  }
+  // draft-ietf-moq-transport-21 §9.20.20: 受理した更新の NEW_GROUP_REQUEST をアプリへ知らせる
+  // (DYNAMIC_GROUPS の広告と値の条件は handleNewGroupRequest が見る)
+  if (newGroupRequest !== undefined) {
+    publisher.handleNewGroupRequest(newGroupRequest);
   }
   return false;
 }

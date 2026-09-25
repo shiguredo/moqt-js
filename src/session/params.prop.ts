@@ -53,6 +53,7 @@ import {
   buildTrackStatusParameters,
   clampTimeoutMs,
   compareLocations,
+  extractNewGroupRequest,
   matchNamespacePrefix,
   mergeRangeFilters,
   namespacePrefixesOverlap,
@@ -77,6 +78,7 @@ import {
   type RangeFilterSpec,
 } from "../message";
 import { MessageParameterType, type Location } from "../message/types";
+import { MAX_VARINT, encodeVarint } from "../varint";
 import {
   AuthorizationTokenAliasType,
   type AuthorizationToken,
@@ -1088,6 +1090,21 @@ test("clampTimeoutMs: 2^31 - 1 を超える値だけが上限に張り付く", (
       if (timeout <= 2147483647n) {
         assert.equal(clamped, Number(timeout));
       }
+    }),
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.20.20: NEW_GROUP_REQUEST の値は varint である。
+ * 任意の値 (0 から 2^62 - 1) を varint にしたパラメータから同じ値を読み取る
+ */
+test("extractNewGroupRequest: 任意の varint の値を往復で読み取る", () => {
+  fc.assert(
+    fc.property(fc.bigInt({ min: 0n, max: MAX_VARINT }), (value) => {
+      const read = extractNewGroupRequest([
+        { type: MessageParameterType.NEW_GROUP_REQUEST, value: encodeVarint(value) },
+      ]);
+      assert.equal(read, value);
     }),
   );
 });

@@ -216,6 +216,15 @@ export function PublisherPanel() {
               <div class="text-xs text-slate-500">encodeErrors</div>
               <div class="text-xl font-bold text-red-600">{pub.encodeErrors.value}</div>
             </div>
+            <div class="bg-white rounded-lg p-3 border border-slate-200">
+              <div class="text-xs text-slate-500">newGroupRequests</div>
+              <div
+                class="text-xl font-bold text-green-600"
+                data-testid="publisher-new-group-requests"
+              >
+                {pub.newGroupRequestsReceived.value}
+              </div>
+            </div>
           </div>
 
           <h3 class="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">

@@ -27,6 +27,15 @@
   - 止まりごとに原因を 1 つ決め (`source` / `loss` / `discarded` / `arrival` / `groupSwitchHold` / `decode` / `playout` / `render` / `unknown`)、原因ごとの回数と時間、直近 30 回の止まり (時刻、長さ、Group ID / Object ID) を `playbackTiming` に出す
   - 届かなかった Object と Group、RESET_STREAM で終わった Subgroup の stream、上限で解けた Group の切り替えの保留を数える。止まりと stream の reset はデバッグログにも出す
   - @voluntas
+- [ADD] `PublishCallbacks.onNewGroupRequest` を追加する
+  - `PublishOptions.dynamicGroups` を true にした PUBLISH で、REQUEST_UPDATE の NEW_GROUP_REQUEST の値が 0 か現在の Group (送った最大の Group) より大きいときに呼ばれる (draft-ietf-moq-transport-21 Section 9.20.20)。dynamic Groups に対応する publisher は、現在の Group を終えて新しい Group をできるだけ早く始める SHOULD
+  - @voluntas
+- [ADD] `createMediaPublisher` の映像トラックで DYNAMIC_GROUPS を広告し、NEW_GROUP_REQUEST を受けたら次のフレームをキーフレームにして新しい Group を始める
+  - 後から視聴を始めた購読者が、次の定期のキーフレームを待たずに映像を出せる
+  - @voluntas
+- [ADD] moqt-devtools の publisher で DYNAMIC_GROUPS を広告し、NEW_GROUP_REQUEST を受けたら次のフレームをキーフレームにして新しい Group を始める
+  - 受けた要求の数を画面と `window.moqtDevTools.getPublisher()` の `newGroupRequests` に出し、デバッグログにも残す
+  - @voluntas
 - [ADD] moqt-devtools に遅延の区間ごとの統計を追加する
   - subscriber は描いたフレームごとに、到着 (TIMESTAMP から受信まで。publisher の符号化と送信、経路、relay)、Group の切り替えの保留、復号待ち、復号、表示待ち (jitter buffer)、表示の遅延 (TIMESTAMP から描くまで) を出す。フレームごとに区間の和が表示の遅延になる
   - publisher はフレームを読んでから encoder の出力まで (符号化)、出力から `sendObject` の完了まで (送信) の時間と、encoder の待ちで捨てたフレームの数を出す。遅延が moqt-js と経路 (relay を含む) のどちらで生じたかを統計だけで分けられる

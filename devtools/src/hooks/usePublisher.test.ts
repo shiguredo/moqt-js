@@ -7,6 +7,7 @@ import {
   resolveAudioLevelForTimestamp,
   resolveAudioPublishable,
   shouldRequestKeyFrame,
+  decideKeyFrame,
   usePublisher,
 } from "./usePublisher";
 import { getAudioEncoderConfig } from "../../../src/codec/config";
@@ -327,6 +328,42 @@ test("buildObjectSendPlan: payload は chunk の data をそのまま使う", ()
 // 先頭フレームと keyframeInterval フレームごとにキーフレームを要求する。
 // 間隔を無視して全フレームをキーフレームにすると帯域を浪費し、
 // 要求が一度も出ないと購読開始時に復号を始められない。
+// NEW_GROUP_REQUEST (draft-ietf-moq-transport-21 §9.20.20) を受けたら、次に符号化するフレームを
+// キーフレームにして新しい Group を始め、そこから keyframeInterval を数え直す。
+// 次のフレームまでに複数の要求が届いても、キーフレームは 1 枚にまとまる
+test("decideKeyFrame: 要求を受けると次のフレームをキーフレームにし、そこから間隔を数え直す", () => {
+  const interval = 5;
+  // 3 枚目の符号化の前に要求を受けたとする (要求は次のキーフレームで消える)
+  const requestedBefore = new Set([3]);
+  const keyFrames: boolean[] = [];
+  let framesSinceKeyFrame = 0;
+  let requested = false;
+  for (let frame = 0; frame < 12; frame++) {
+    if (requestedBefore.has(frame)) {
+      requested = true;
+    }
+    const decision = decideKeyFrame(framesSinceKeyFrame, interval, requested);
+    keyFrames.push(decision.keyFrame);
+    framesSinceKeyFrame = decision.nextFramesSinceKeyFrame;
+    if (decision.keyFrame) {
+      requested = false;
+    }
+  }
+  // 0 枚目 (先頭)、3 枚目 (要求)、そこから 5 枚ごと (8 枚目) がキーフレーム
+  assert.deepEqual(
+    keyFrames.map((keyFrame, frame) => (keyFrame ? frame : -1)).filter((frame) => frame >= 0),
+    [0, 3, 8],
+  );
+});
+
+test("decideKeyFrame: 要求が無ければ keyframeInterval ごとにキーフレームにする", () => {
+  assert.deepEqual(decideKeyFrame(0, 60, false), { keyFrame: true, nextFramesSinceKeyFrame: 1 });
+  assert.deepEqual(decideKeyFrame(1, 60, false), { keyFrame: false, nextFramesSinceKeyFrame: 2 });
+  assert.deepEqual(decideKeyFrame(60, 60, false), { keyFrame: true, nextFramesSinceKeyFrame: 1 });
+  // 要求があれば間隔の途中でもキーフレームにする
+  assert.deepEqual(decideKeyFrame(7, 60, true), { keyFrame: true, nextFramesSinceKeyFrame: 1 });
+});
+
 test("shouldRequestKeyFrame: 先頭フレームと keyframeInterval ごとに true になる", () => {
   assert.equal(shouldRequestKeyFrame(0, DEFAULT_KEYFRAME_INTERVAL), true);
   assert.equal(shouldRequestKeyFrame(DEFAULT_KEYFRAME_INTERVAL, DEFAULT_KEYFRAME_INTERVAL), true);

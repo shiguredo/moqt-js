@@ -15,6 +15,7 @@ import {
   pubStatus,
   objectsWithExtensions as pubObjectsWithExtensions,
   publishTimingStats,
+  newGroupRequestsReceived,
 } from "./signals/publisher";
 import type { PublishTimingSnapshot } from "./utils/publishTimingStats";
 import { subscriberInstances, type SubscriberInstance } from "./signals/subscriber";
@@ -38,6 +39,8 @@ export interface PublisherStats {
   // 符号化 (読んでから encoder の出力まで) と送信 (出力から sendObject の完了まで) の時間、
   // encoder の待ちで捨てたフレームの数 (publishTimingStats.ts)
   publishTiming: PublishTimingSnapshot;
+  // 受けた新しい Group の要求 (NEW_GROUP_REQUEST) の数
+  newGroupRequests: number;
 }
 
 /**
@@ -154,6 +157,7 @@ export function initTestApi(): void {
       encoderState: encoderState.value,
       objectsWithExtensions: pubObjectsWithExtensions.value,
       publishTiming: publishTimingStats.value.snapshot(performance.now()),
+      newGroupRequests: newGroupRequestsReceived.value,
     }),
 
     getSubscribers: () =>

@@ -161,6 +161,10 @@ export async function requestsPublish(
 
   // GOAWAY コールバックを設定（セッション内部コールバック）
   impl.goawayCallback = callbacks?.goaway;
+  // draft-ietf-moq-transport-21 §9.20.20 / §10.6: DYNAMIC_GROUPS を広告した PUBLISH だけが
+  // 受信した NEW_GROUP_REQUEST をアプリへ知らせる
+  impl.dynamicGroups = options?.dynamicGroups === true;
+  impl.newGroupRequestCallback = callbacks?.onNewGroupRequest;
 
   // draft-ietf-moq-transport-21 §3.1 (Subscriptions):
   // "The initiator of the subscription sets the initial Forward State in

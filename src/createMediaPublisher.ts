@@ -5,7 +5,7 @@
  */
 
 import { connectMediaSession } from "./createMedia/connect";
-import type { Session } from "./session";
+import type { PublishOptions, Session } from "./session";
 import type { Publisher } from "./publisher";
 import * as LOC from "./loc";
 import { WallClockMapper } from "./mediaClock";
@@ -197,6 +197,17 @@ export function resolveKeyframeInterval(video: VideoPublishOptions | undefined):
   const framerate = video?.framerate ?? DEFAULT_VIDEO_FRAMERATE;
   return video?.keyframeInterval ?? framerate * 2;
 }
+
+/**
+ * 映像トラックの PUBLISH の設定
+ *
+ * draft-ietf-moq-transport-21 §10.6 (DYNAMIC GROUPS) / §9.20.20 (NEW GROUP REQUEST Parameter):
+ * DYNAMIC_GROUPS=1 を広告し、購読者が NEW_GROUP_REQUEST で新しい Group を要求できるように
+ * する。後から視聴を始めた購読者は Group の先頭 (キーフレーム) を受け取るまで映像を出せない
+ * ため、要求を受けたら次のフレームをキーフレームにして新しい Group を始める
+ * (`PublishCallbacks.onNewGroupRequest` から `requestKeyframe()` を呼ぶ)。
+ */
+export const VIDEO_PUBLISH_OPTIONS: Readonly<PublishOptions> = { dynamicGroups: true };
 
 /**
  * 映像フレームがキーフレームのタイミングかを判定する純関数
@@ -646,9 +657,18 @@ export class MediaPublisherImpl implements MediaPublisher {
     // 映像パブリッシャー
     const video = this.resolvedVideo;
     if (video) {
-      this.videoPublisher = await this.session.publish(namespace, video.trackName, {
-        error: (error) => this.callbacks.onError?.(error),
-      });
+      this.videoPublisher = await this.session.publish(
+        namespace,
+        video.trackName,
+        {
+          error: (error) => this.callbacks.onError?.(error),
+          // draft-ietf-moq-transport-21 §9.20.20: 新しい Group の要求には、次のフレームを
+          // キーフレームにして新しい Group を始めることで応える。次のフレームまでに届いた
+          // 複数の要求は、フレーム番号を 0 に戻すだけなので 1 つの Group にまとまる
+          onNewGroupRequest: () => this.requestKeyframe(),
+        },
+        { ...VIDEO_PUBLISH_OPTIONS },
+      );
     }
 
     // Catalog を publish

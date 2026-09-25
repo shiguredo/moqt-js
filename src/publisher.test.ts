@@ -735,3 +735,41 @@ test("terminate: 拒否経路が先なら UPDATE_FAILED を 1 回だけ送る", 
 
   assert.deepEqual(statuses, [PublishDoneStatusCode.UPDATE_FAILED]);
 });
+
+/**
+ * draft-ietf-moq-transport-21 §9.20.20 (NEW GROUP REQUEST Parameter):
+ * "When an Original Publisher that supports dynamic Groups receives a NEW_GROUP_REQUEST
+ *  with a value of 0 or a value larger than the current Group, it SHOULD end the current
+ *  Group and begin a new Group as soon as practical."
+ * "If the original publisher does not support dynamic Groups, it ignores the parameter"
+ * DYNAMIC_GROUPS を広告した publisher だけが、値が 0 か現在の Group (送った最大の Group)
+ * より大きいときにアプリへ知らせる。現在の Group 以下の値は、要求した側がその Group を
+ * まだ知らないだけで、新しい Group は既に始まっている
+ */
+test("handleNewGroupRequest: DYNAMIC_GROUPS を広告し、値が 0 か現在の Group より大きいときだけ知らせる", async () => {
+  const requests: bigint[] = [];
+  const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n);
+  publisher.newGroupRequestCallback = (value) => {
+    requests.push(value);
+  };
+  publisher.onSendObject = async () => {};
+
+  // 広告していなければ、どの値でも知らせない
+  assert.isFalse(publisher.handleNewGroupRequest(0n));
+  assert.isFalse(publisher.handleNewGroupRequest(10n));
+  assert.deepEqual(requests, []);
+
+  publisher.dynamicGroups = true;
+  // まだ何も送っていなければ、どの値でも知らせる
+  assert.isTrue(publisher.handleNewGroupRequest(3n));
+  // Group 5 を送った後
+  await publisher.sendObject({ groupId: 5, objectId: 0, payload: new Uint8Array([1]) });
+  // 0 は「Group を知らない」ため知らせる
+  assert.isTrue(publisher.handleNewGroupRequest(0n));
+  // 現在の Group 以下は既に満たされている
+  assert.isFalse(publisher.handleNewGroupRequest(5n));
+  assert.isFalse(publisher.handleNewGroupRequest(1n));
+  // 現在の Group より大きい
+  assert.isTrue(publisher.handleNewGroupRequest(6n));
+  assert.deepEqual(requests, [3n, 0n, 6n]);
+});

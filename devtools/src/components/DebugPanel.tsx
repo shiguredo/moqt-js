@@ -141,6 +141,7 @@ function generatePublisherStatsText(): string {
     `Bytes Sent: ${formatBytes(pub.bytesSent.value)}`,
     `Current Group: ${pub.pubCurrentGroup.value}`,
     `Encode Errors: ${pub.encodeErrors.value}`,
+    `New Group Requests: ${pub.newGroupRequestsReceived.value}`,
   ];
   // 符号化と送信の時間 (publisher の中の遅れ)。受信側の arrival はこれに経路と relay を足したもの
   const publishTiming = pub.publishTimingStats.value.snapshot(performance.now());

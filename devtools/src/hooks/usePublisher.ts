@@ -74,14 +74,19 @@ const AUDIO_LEVEL_WINDOW_MS = 20;
 const PUBLISH_TIMING_UPDATE_INTERVAL_MS = 500;
 
 /**
- * 配信を始めるときに、映像の TIMESTAMP の壁時計への換算と、符号化と送信の時間の記録を
- * 作り直す (前の配信の対応や記録を持ち越さない)
+ * 配信を始めるときに、映像の配信の状態を作り直す (前の配信の対応や記録を持ち越さない)
+ *
+ * TIMESTAMP の壁時計への換算、符号化と送信の時間の記録、キーフレームの間隔の数え方と
+ * 新しい Group の要求を初期化する。
  */
-function resetVideoTiming(): void {
+function resetVideoPublishState(): void {
   pub.videoWallClock.value = new WallClockMapper();
   pub.publishTimingStats.value = new PublishTimingStats();
   pub.publishTiming.value = EMPTY_PUBLISH_TIMING;
   pub.publishTimingUpdatedAtMs.value = 0;
+  pub.framesSinceKeyFrame.value = 0;
+  pub.newGroupRequested.value = false;
+  pub.newGroupRequestsReceived.value = 0;
 }
 
 /** 配信する映像トラックの Catalog を組み立てるための入力 */
@@ -291,6 +296,29 @@ export function buildObjectSendPlan(
  */
 export function shouldRequestKeyFrame(framesEncoded: number, keyframeInterval: number): boolean {
   return framesEncoded % keyframeInterval === 0;
+}
+
+/**
+ * 次に符号化するフレームをキーフレームにするかを決める
+ *
+ * keyframeInterval ごとのキーフレームに加えて、新しい Group の要求 (NEW_GROUP_REQUEST) を
+ * 受けていれば次のフレームをキーフレームにして新しい Group を始める
+ * (draft-ietf-moq-transport-21 Section 9.20.20: dynamic Groups に対応する publisher は、現在の
+ * Group を終えて新しい Group をできるだけ早く始める SHOULD)。キーフレームにしたフレームから
+ * 間隔を数え直す。次のフレームまでに届いた複数の要求は 1 枚のキーフレームにまとまる
+ *
+ * @param framesSinceKeyFrame - 直前のキーフレームから符号化したフレーム数 (最初は 0)
+ * @param newGroupRequested - 新しい Group の要求を受けて、まだキーフレームにしていないか
+ * @returns キーフレームにするかと、このフレームを符号化した後のフレーム数
+ */
+export function decideKeyFrame(
+  framesSinceKeyFrame: number,
+  keyframeInterval: number,
+  newGroupRequested: boolean,
+): { keyFrame: boolean; nextFramesSinceKeyFrame: number } {
+  const keyFrame =
+    newGroupRequested || shouldRequestKeyFrame(framesSinceKeyFrame, keyframeInterval);
+  return { keyFrame, nextFramesSinceKeyFrame: (keyFrame ? 0 : framesSinceKeyFrame) + 1 };
 }
 
 interface VideoStreamResult {
@@ -521,9 +549,17 @@ export function usePublisher() {
         pub.publishTimingStats.value.recordRead(frame.timestamp, performance.now());
 
         if (encoderInstance.encodeQueueSize <= 2) {
-          encoderInstance.encode(frame, {
-            keyFrame: shouldRequestKeyFrame(pub.framesEncoded.value, pub.keyframeInterval.value),
-          });
+          // 新しい Group の要求は、符号化するフレームで消費する (捨てたフレームでは消費しない)
+          const decision = decideKeyFrame(
+            pub.framesSinceKeyFrame.value,
+            pub.keyframeInterval.value,
+            pub.newGroupRequested.value,
+          );
+          encoderInstance.encode(frame, { keyFrame: decision.keyFrame });
+          pub.framesSinceKeyFrame.value = decision.nextFramesSinceKeyFrame;
+          if (decision.keyFrame) {
+            pub.newGroupRequested.value = false;
+          }
           pub.framesEncoded.value++;
         } else {
           pub.publishTimingStats.value.recordEncodeQueueDrop(frame.timestamp);
@@ -974,9 +1010,21 @@ export function usePublisher() {
           onForwardStateChange: (forward) => {
             pub.forwardState.value = forward;
           },
+          // draft-ietf-moq-transport-21 Section 9.20.20:
+          // 新しい Group の要求を受けたら、次に符号化するフレームをキーフレームにする
+          onNewGroupRequest: (newGroupRequest) => {
+            pub.newGroupRequestsReceived.value++;
+            pub.newGroupRequested.value = true;
+            addLog("info", "NEW_GROUP_REQUEST received", {
+              newGroupRequest: newGroupRequest.toString(),
+            });
+          },
         },
         {
           maxCacheDuration: BigInt(maxCacheDurationValue),
+          // draft-ietf-moq-transport-21 Section 10.6: DYNAMIC_GROUPS=1 を広告し、後から視聴を
+          // 始めた購読者が NEW_GROUP_REQUEST でキーフレームを要求できるようにする
+          dynamicGroups: true,
         },
       );
       pub.forwardState.value = publisherInstance.forwardState;
@@ -1034,7 +1082,7 @@ export function usePublisher() {
       const videoFrameSource = createVideoFrameSource(videoTrack);
       pub.frameReader.value = videoFrameSource.readable.getReader();
       // 対応は読んだフレームからとる (processFrames)
-      resetVideoTiming();
+      resetVideoPublishState();
 
       // 音声トラックを配信する
       if (audioTrack) {
