@@ -15,6 +15,7 @@ import { formatBitrate, formatBytes } from "../utils/logFormatters";
 import { formatLossEvent, formatStallEvent } from "../utils/playbackTimingStats";
 import { LATENCY_SEGMENTS } from "../utils/latencyBreakdown";
 import { STALL_CAUSES } from "../utils/stallAnalysis";
+import { subscriberControlState } from "../utils/subscriberControls";
 import * as sub from "../signals/subscriber";
 
 function formatCatalogValue(key: string, value: unknown): string {
@@ -69,10 +70,16 @@ export function SubscriberPanel({
   const session = instance.session.value;
   const catalog = instance.catalog.value;
   const codec = instance.codec.value;
-  const isSubscribing = instance.subscriber.value !== null;
-  const isStopping = instance.isStopping.value;
-  const subscribeBtnDisabled = isSubscribing || isStopping;
-  const stopBtnDisabled = !isSubscribing || isStopping;
+  // 購読の確立を待っている間も購読中として扱い、Stop で止められるようにする
+  const {
+    active: isSubscribing,
+    startDisabled: subscribeBtnDisabled,
+    stopDisabled: stopBtnDisabled,
+  } = subscriberControlState({
+    subscribed: instance.subscriber.value !== null,
+    starting: instance.isStarting.value,
+    stopping: instance.isStopping.value,
+  });
   const timing = instance.playbackTiming.value;
   const sessionStats = session?.getStatistics();
 
@@ -195,7 +202,7 @@ export function SubscriberPanel({
           {/* 購読中の操作。統計の間ではなく、ほかの操作と並べる */}
           <button
             onClick={() => void requestKeyframe()}
-            disabled={!isSubscribing || !instance.dynamicGroupsSupported.value}
+            disabled={instance.subscriber.value === null || !instance.dynamicGroupsSupported.value}
             class="px-4 py-2.5 bg-purple-500 hover:bg-purple-600 disabled:bg-slate-300 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors flex items-center justify-center gap-2"
             title={
               instance.dynamicGroupsSupported.value

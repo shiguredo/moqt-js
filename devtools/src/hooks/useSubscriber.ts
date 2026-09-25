@@ -376,6 +376,8 @@ export function resetSubscriberState(
   isOtherPublisherActive: () => boolean,
 ): void {
   instance.subscriber.value = null;
+  // 確立を待っている購読も後始末で終わる
+  instance.isStarting.value = false;
   instance.catalogSubscriber.value = null;
   instance.catalog.value = null;
   instance.decoder.value = null;
@@ -1151,6 +1153,9 @@ export function useSubscriber(
     }
     abortControllerRef.current = new AbortController();
     const signal = abortControllerRef.current.signal;
+    // 映像トラックの購読が確立するか後始末を終えるまで、購読中として扱う
+    // (Stop で止められ、Start Subscribing を重ねて押せない)
+    instance.isStarting.value = true;
 
     try {
       instance.status.value = "disconnected";
@@ -1568,6 +1573,7 @@ export function useSubscriber(
       const largestLocation = subscriberInstance.largestLocation;
 
       instance.subscriber.value = subscriberInstance;
+      instance.isStarting.value = false;
       // SUBSCRIBE_OK の Track Properties に DYNAMIC_GROUPS=1 が含まれているかを
       // 1 回だけ確定させる。trackProperties は signal ではないため computed では
       // 追跡できず、ここで書き込んで UI ボタンの disable と連動させる。

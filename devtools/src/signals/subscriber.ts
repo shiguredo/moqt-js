@@ -29,6 +29,9 @@ export interface SubscriberInstance {
   codec: Signal<string>;
   // 停止処理中フラグ (二重実行防止)
   isStopping: Signal<boolean>;
+  // 購読を始めてから、映像トラックの購読が確立するか後始末を終えるまで true。
+  // 確立を待っている間も Stop で止められるようにする (utils/subscriberControls.ts)
+  isStarting: Signal<boolean>;
   // NEW_GROUP_REQUEST 設定 (初回接続時に新しいグループを要求)
   newGroupRequestEnabled: Signal<boolean>;
   // 統計
@@ -97,6 +100,7 @@ export function createSubscriberInstance(id: string): SubscriberInstance {
     statusMessage: signal("Ready to subscribe"),
     codec: signal(""),
     isStopping: signal(false),
+    isStarting: signal(false),
     newGroupRequestEnabled: signal(false),
     framesDecoded: signal(0),
     keyFramesDecoded: signal(0),
