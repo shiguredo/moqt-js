@@ -30,9 +30,6 @@
 - [ADD] `PublishCallbacks.onNewGroupRequest` を追加する
   - `PublishOptions.dynamicGroups` を true にした PUBLISH で、REQUEST_UPDATE の NEW_GROUP_REQUEST の値が 0 か現在の Group (送った最大の Group) より大きいときに呼ばれる (draft-ietf-moq-transport-21 Section 9.20.20)。dynamic Groups に対応する publisher は、現在の Group を終えて新しい Group をできるだけ早く始める SHOULD
   - @voluntas
-- [ADD] `createMediaPublisher` の映像トラックで DYNAMIC_GROUPS を広告し、NEW_GROUP_REQUEST を受けたら次のフレームをキーフレームにして新しい Group を始める
-  - 後から視聴を始めた購読者が、次の定期のキーフレームを待たずに映像を出せる
-  - @voluntas
 - [ADD] moqt-devtools の publisher で DYNAMIC_GROUPS を広告し、NEW_GROUP_REQUEST を受けたら次のフレームをキーフレームにして新しい Group を始める
   - 受けた要求の数を画面と `window.moqtDevTools.getPublisher()` の `newGroupRequests` に出し、デバッグログにも残す
   - @voluntas
@@ -46,6 +43,10 @@
   - @voluntas
 - [ADD] moqt-devtools の subscriber に、RESET_STREAM の error code ごとの数と、stream の reset と欠落の止まりの一覧を追加する
   - reset と欠落 (`loss`) の止まりを、止まりの一覧とは別に時刻 (UTC) つきで直近 30 件残す。到着の遅れの止まりが多くても押し出されない。reset のデバッグログにも error code を出す
+  - @voluntas
+- [UPDATE] `createMediaPublisher` の映像トラックで DYNAMIC_GROUPS を広告し、NEW_GROUP_REQUEST を受けたら次のフレームをキーフレームにして新しい Group を始める
+  - 後から視聴を始めた購読者が、次の定期のキーフレームを待たずに映像を出せる
+  - 既定の振る舞いが変わる。映像トラックの PUBLISH に DYNAMIC_GROUPS=1 が載り、要求を受けるたびに定期の間隔の外でキーフレームを送る
   - @voluntas
 - [FIX] moqt-devtools の jitter buffer が、購読の開始に relay の cache から追いつく途中のフレームの遅れを揺らぎとして学習しないようにする
   - 追いつく途中のフレームは実時間より速く、まとまって届いたとみなせない間隔で届くため、その遅れで再生遅延が約 500 ms まで上がり、毎秒 20 ms でしか下がらなかった。購読を始めるたびに表示の遅延が約 25 秒間数百ミリ秒大きかった
