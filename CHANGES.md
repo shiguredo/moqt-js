@@ -56,6 +56,10 @@
 - [UPDATE] moqt-devtools / webtransport-devtools / webcodecs-devtools と examples の画面の文言を英語にそろえる
   - ステータスメッセージ、接続設定のヘルプ、入力欄の補足、WebTransport API の説明など、画面に出していた日本語を英語にする
   - @voluntas
+- [FIX] moqt-devtools の publisher が catalog を relay の cache から落ちる前に新しい Group で送り直すようにする
+  - catalog を配信の開始時と Forward State が 1 に変わったときにしか送らなかったため、配信の開始から catalog の MAX_CACHE_DURATION (既定 10 分) を過ぎると、停止した後の購読し直しを含め、新しく視聴を始めた subscriber が `failed to get catalog` で失敗していた (draft-ietf-moq-transport-21 Section 10.3 により relay は期限を過ぎた catalog を配れない)
+  - draft-ietf-moq-msf-01 Section 5.1 に従い、catalog を送るたびに、MAX_CACHE_DURATION の半分 (1 秒以上、30 秒以下) の後の送り直しを予約する
+  - @voluntas
 - [FIX] moqt-devtools の jitter buffer が、購読の開始に relay の cache から追いつく途中のフレームの遅れを揺らぎとして学習しないようにする
   - 追いつく途中のフレームは実時間より速く、まとまって届いたとみなせない間隔で届くため、その遅れで再生遅延が約 500 ms まで上がり、毎秒 20 ms でしか下がらなかった。購読を始めるたびに表示の遅延が約 25 秒間数百ミリ秒大きかった
   - 開始と基準の取り直しの後、遅れの最小値が 250 ms の間に 20 ms 以上下がらなくなるまで (live に追いつくまで) に届いたフレームの揺らぎは、再生遅延の目標に使わない

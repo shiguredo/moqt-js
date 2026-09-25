@@ -41,6 +41,10 @@ import { logDebugMessage } from "./debugMessageLog";
 import { EncoderWrapper, type EncodedChunkData } from "../utils/EncoderWrapper";
 import { WallClockMapper } from "../../../src/mediaClock.ts";
 import { EMPTY_PUBLISH_TIMING, PublishTimingStats } from "../utils/publishTimingStats";
+import {
+  CATALOG_REPUBLISH_MAX_INTERVAL_MS,
+  catalogRepublishIntervalMs,
+} from "../utils/catalogRepublish";
 import * as settings from "../signals/connectionSettings";
 import * as pub from "../signals/publisher";
 import * as sub from "../signals/subscriber";
@@ -404,6 +408,49 @@ async function getVideoStream(
       }
     },
   };
+}
+
+// catalog の送り直し (draft-ietf-moq-msf-01 Section 5.1)
+//
+// catalog は relay の cache から落ちる前に新しい Group で送り直す (utils/catalogRepublish.ts)。
+// publisher はページに 1 つであるため、タイマーと間隔はモジュールで 1 つだけ持つ。
+// 配信の停止と後始末で止める
+let catalogRepublishTimer: ReturnType<typeof setTimeout> | undefined;
+let catalogRepublishInterval = CATALOG_REPUBLISH_MAX_INTERVAL_MS;
+
+/** 予約している catalog の送り直しを取り消す */
+function cancelCatalogRepublish(): void {
+  if (catalogRepublishTimer !== undefined) {
+    clearTimeout(catalogRepublishTimer);
+    catalogRepublishTimer = undefined;
+  }
+}
+
+/**
+ * catalog の送り直しを予約し直す
+ *
+ * catalog を送るたびに呼び、最後に送った時刻から間隔を数える。前の予約は取り消す
+ */
+function scheduleCatalogRepublish(send: () => Promise<void>): void {
+  cancelCatalogRepublish();
+  catalogRepublishTimer = setTimeout(() => {
+    catalogRepublishTimer = undefined;
+    send().catch((error: unknown) => {
+      addLog("warn", `[publisher] failed to republish ${CATALOG_TRACK_NAME}`, {
+        message: error instanceof Error ? error.message : String(error),
+      });
+    });
+  }, catalogRepublishInterval);
+}
+
+/**
+ * 配信の開始時に catalog の送り直しを始める
+ *
+ * 間隔は catalog の MAX_CACHE_DURATION から決める (utils/catalogRepublish.ts)
+ */
+function startCatalogRepublish(maxCacheDurationMs: number, send: () => Promise<void>): void {
+  catalogRepublishInterval = catalogRepublishIntervalMs(maxCacheDurationMs);
+  scheduleCatalogRepublish(send);
 }
 
 export function usePublisher() {
@@ -784,9 +831,12 @@ export function usePublisher() {
 
   // Catalog を新しい Group で送り直す
   //
+  // Forward State が 1 に変わったときと、catalog が relay の cache から落ちる前
+  // (scheduleCatalogRepublish の予約) に呼ぶ。
   // 同じ Location を 2 度送ると購読側で重複として扱われるため、送り直しは Group を
   // 進めて行う (draft-ietf-moq-msf-01 §6.1)。Object ID は Group の先頭 Object の
-  // ため 0 にする (§6.2)。Catalog Publisher が active でなければ何もしない。
+  // ため 0 にする (§6.2)。Catalog Publisher が active でなければ何もしない
+  // (送り直しの予約もしない)。
   const sendCatalogUpdate = async (): Promise<void> => {
     const catalogPublisherInstance = pub.catalogPublisher.value;
     const currentCatalog = pub.catalog.value;
@@ -799,6 +849,8 @@ export function usePublisher() {
     }
     const groupId = pub.catalogGroup.value + 1;
     pub.catalogGroup.value = groupId;
+    // 次の送り直しを、この送信から数えて予約し直す
+    scheduleCatalogRepublish(sendCatalogUpdate);
     await catalogPublisherInstance.sendObject({
       groupId,
       objectId: 0,
@@ -950,6 +1002,8 @@ export function usePublisher() {
         objectId: 0,
         payload: catalogPayload,
       });
+      // catalog が relay の cache から落ちる前に送り直す (draft-ietf-moq-msf-01 Section 5.1)
+      startCatalogRepublish(maxCacheDurationValue, sendCatalogUpdate);
       addLog("info", `[publisher] [SEND] OBJECT (${CATALOG_TRACK_NAME})`, {
         source: "publish",
         catalog: createdCatalog,
@@ -1141,6 +1195,9 @@ export function usePublisher() {
     pub.pubStatus.value = "disconnected";
     pub.pubStatusMessage.value = "Disconnecting...";
 
+    // 配信を終えるため catalog の送り直しを止める
+    cancelCatalogRepublish();
+
     try {
       // Complete catalog を送信
       if (pub.catalogPublisher.value && pub.catalogPublisher.value.state === "active") {
@@ -1179,6 +1236,9 @@ export function usePublisher() {
   };
 
   const cleanupPublisher = (): void => {
+    // catalog の送り直しを止める (切断やエラーでの後始末を含む)
+    cancelCatalogRepublish();
+
     // フレームリーダーをキャンセルする
     if (pub.frameReader.value) {
       void pub.frameReader.value.cancel();
