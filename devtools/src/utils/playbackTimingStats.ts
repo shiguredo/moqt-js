@@ -14,9 +14,13 @@
  *   残す。原因ごとの回数と時間の和は、止まりの回数と時間に一致する
  * - Subgroup の stream の reset を error code ごとに数え、reset と欠落 (loss) の止まりを
  *   止まりの一覧とは別に残す。到着の遅れの止まりが多くても押し出されない
+ * - 描いたフレームの遅延を区間ごと (到着・保留・復号待ち・復号・表示待ち・表示の遅延) に
+ *   分けて出す (latencyBreakdown.ts)。遅延が publisher・経路・relay と subscriber のどちらで
+ *   生じたかを分けるため
  */
 
 import { DataStreamErrorCode } from "moqt-js";
+import { LATENCY_SEGMENTS, LatencyBreakdown, type LatencySegment } from "./latencyBreakdown";
 import { STALL_CAUSES, StallAnalyzer, type ObjectPosition, type StallCause } from "./stallAnalysis";
 import { TimedValues } from "./timedValues";
 
@@ -134,6 +138,12 @@ export interface PlaybackTimingSnapshot {
   /** 直近の reset と欠落の止まり (古い順、最大 `MAX_RECENT_LOSS_EVENTS` 件) */
   readonly recentLossEvents: readonly LossEvent[];
   /**
+   * 描いたフレームの区間ごとの遅延 (latencyBreakdown.ts の区間)。フレームごとに、到着・保留・
+   * 復号待ち・復号・表示待ちの和が表示の遅延になる。到着と表示の遅延は壁時計の TIMESTAMP の
+   * フレームだけで求め、別のマシンでは時計のずれを含む
+   */
+  readonly latencyBreakdown: Readonly<Record<LatencySegment, TimingSummary | null>>;
+  /**
    * Group の切り替えの保留が、前の Group の stream の終わりを待たずに上限の時間で
    * 解けた回数 (累積)
    */
@@ -147,6 +157,15 @@ function emptyStallCauses(): Record<StallCause, StallCauseTotal> {
     totals[cause] = { count: 0, ms: 0 };
   }
   return totals;
+}
+
+/** どの区間も記録が無いときの区間ごとの遅延 */
+function emptyLatencyBreakdown(): Record<LatencySegment, TimingSummary | null> {
+  const breakdown = {} as Record<LatencySegment, TimingSummary | null>;
+  for (const segment of LATENCY_SEGMENTS) {
+    breakdown[segment] = null;
+  }
+  return breakdown;
 }
 
 /** 何も記録していないときの統計 */
@@ -168,6 +187,7 @@ export const EMPTY_PLAYBACK_TIMING: PlaybackTimingSnapshot = {
   subgroupStreamResets: 0,
   subgroupStreamResetsByCode: {},
   recentLossEvents: [],
+  latencyBreakdown: emptyLatencyBreakdown(),
   groupSwitchHoldExpirations: 0,
 };
 
@@ -300,6 +320,8 @@ export class PlaybackTimingStats {
   private subgroupStreamResetsByCode: Record<string, number> = {};
   private recentLossEvents: LossEvent[] = [];
   private groupSwitchHoldExpirations = 0;
+  // 描いたフレームの区間ごとの遅延
+  private readonly breakdown: LatencyBreakdown;
 
   /**
    * @param windowMs - 分布を求める直近の窓 (ミリ秒)。止まりの原因を決めるフレームの記録も
@@ -310,6 +332,7 @@ export class PlaybackTimingStats {
     this.windowMs = windowMs;
     this.timeOriginMs = timeOriginMs;
     this.stalls = new StallAnalyzer(windowMs);
+    this.breakdown = new LatencyBreakdown(windowMs, timeOriginMs);
   }
 
   /**
@@ -321,6 +344,7 @@ export class PlaybackTimingStats {
    *   TIMESTAMP が壁時計でない (Timescale がある) ときは null を渡し、遅延を求めない
    */
   recordArrival(nowMs: number, timestampMicros: number, wallClockNowMs: number | null): void {
+    this.breakdown.recordReceived(timestampMicros, nowMs, wallClockNowMs !== null);
     this.lateness.push(nowMs, nowMs - timestampMicros / 1_000);
     if (wallClockNowMs !== null) {
       this.latency.push(nowMs, wallClockNowMs - timestampMicros / 1_000);
@@ -347,6 +371,7 @@ export class PlaybackTimingStats {
   /** 映像の Object が Group の切り替えの保留から出たことを記録する */
   recordObjectReleased(timestampMicros: number, nowMs: number): void {
     this.stalls.recordReleased(timestampMicros, nowMs);
+    this.breakdown.recordReleased(timestampMicros, nowMs);
   }
 
   /** 映像の Object を復号せずに捨てたことを記録する */
@@ -396,6 +421,7 @@ export class PlaybackTimingStats {
    */
   recordDecodeStart(nowMs: number, timestampMicros: number): void {
     this.stalls.recordDecodeStart(timestampMicros);
+    this.breakdown.recordDecodeStart(timestampMicros, nowMs);
     const minAtMs = nowMs - this.windowMs;
     for (const [timestamp, startMs] of this.decodeStarts) {
       if (startMs >= minAtMs) {
@@ -413,6 +439,7 @@ export class PlaybackTimingStats {
    */
   recordDecodeOutput(nowMs: number, timestampMicros: number): void {
     this.stalls.recordDecodeOutput(timestampMicros, nowMs);
+    this.breakdown.recordDecodeOutput(timestampMicros, nowMs);
     const startMs = this.decodeStarts.get(timestampMicros);
     if (startMs === undefined) {
       return;
@@ -438,6 +465,7 @@ export class PlaybackTimingStats {
     presentationMs: number | null = null,
   ): StallEvent | null {
     this.stalls.recordDisplayed(timestampMicros, presentationMs);
+    this.breakdown.recordDisplayed(timestampMicros, nowMs);
     const previous = this.lastDisplay;
     let stall: StallEvent | null = null;
     if (previous !== null) {
@@ -502,6 +530,11 @@ export class PlaybackTimingStats {
     }
     const lateness = this.lateness.current();
     const earliest = Math.min(...lateness);
+    const breakdownValues = this.breakdown.current(nowMs);
+    const latencyBreakdown = emptyLatencyBreakdown();
+    for (const segment of LATENCY_SEGMENTS) {
+      latencyBreakdown[segment] = summarizeTimings(breakdownValues[segment]);
+    }
     return {
       arrivalJitterMs: summarizeTimings(lateness.map((value) => value - earliest)),
       latencyMs: summarizeTimings(this.latency.current()),
@@ -520,6 +553,7 @@ export class PlaybackTimingStats {
       subgroupStreamResets: gaps.subgroupStreamResets,
       subgroupStreamResetsByCode: { ...this.subgroupStreamResetsByCode },
       recentLossEvents: [...this.recentLossEvents],
+      latencyBreakdown,
       groupSwitchHoldExpirations: this.groupSwitchHoldExpirations,
     };
   }
@@ -545,6 +579,7 @@ export class PlaybackTimingStats {
     this.subgroupStreamResetsByCode = {};
     this.recentLossEvents = [];
     this.groupSwitchHoldExpirations = 0;
+    this.breakdown.reset();
   }
 
   /** reset と欠落の止まりの一覧に加え、上限を超えたら古い方から捨てる */

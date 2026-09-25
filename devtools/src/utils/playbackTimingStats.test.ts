@@ -376,6 +376,30 @@ test("formatLossEvent: reset は位置と error code、欠落の止まりは止�
   assert.equal(formatLossEvent({ kind: "lossStall", event: stall }), formatStallEvent(stall));
 });
 
+// 描いたフレームの遅延を区間ごとに出す。publisher が読んだ時刻 (TIMESTAMP) は受信側の
+// 950 ms、受け取り 1,000 ms、保留を出たのは 1,010 ms、decoder に渡したのは 1,012 ms、
+// 出力は 1,015 ms、描いたのは 1,045 ms
+test("snapshot: 描いたフレームの遅延を区間ごとに出す", () => {
+  const timeOriginMs = 1_790_263_445_000;
+  const stats = new PlaybackTimingStats(PLAYBACK_TIMING_WINDOW_MS, timeOriginMs);
+  const timestampMicros = (timeOriginMs + 950) * 1_000;
+  stats.recordArrival(1_000, timestampMicros, timeOriginMs + 1_000);
+  stats.recordObjectReleased(timestampMicros, 1_010);
+  stats.recordDecodeStart(1_012, timestampMicros);
+  stats.recordDecodeOutput(1_015, timestampMicros);
+  stats.recordDisplay(1_045, timestampMicros);
+
+  const breakdown = stats.snapshot(1_045).latencyBreakdown;
+  assert.deepEqual(breakdown, {
+    arrival: { p50: 50, p95: 50, max: 50 },
+    hold: { p50: 10, p95: 10, max: 10 },
+    decodeWait: { p50: 2, p95: 2, max: 2 },
+    decode: { p50: 3, p95: 3, max: 3 },
+    displayWait: { p50: 30, p95: 30, max: 30 },
+    displayLatency: { p50: 95, p95: 95, max: 95 },
+  });
+});
+
 // フレーム間隔がまだ分からない (表示が 2 枚目まで) うちは止まりを判定しない
 test("recordDisplay: フレーム間隔が分かる前の表示間隔は止まりにしない", () => {
   const stats = new PlaybackTimingStats();

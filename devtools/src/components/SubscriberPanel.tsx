@@ -8,6 +8,7 @@ import {
   formatStallEvent,
   formatTimingSummary,
 } from "../utils/playbackTimingStats";
+import { LATENCY_SEGMENTS } from "../utils/latencyBreakdown";
 import { STALL_CAUSES } from "../utils/stallAnalysis";
 import * as sub from "../signals/subscriber";
 
@@ -468,6 +469,33 @@ export function SubscriberPanel({
                 {instance.playbackTiming.value.lateFramesDropped}
               </div>
             </div>
+          </div>
+
+          <h3 class="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">
+            Latency Breakdown
+          </h3>
+          <p class="text-xs text-slate-500 mb-3">
+            描いたフレームの遅延を区間ごとに分けた直近 10 秒の p50 / p95 / max (ms)。フレームごとに
+            arrival + hold + decodeWait + decode + displayWait = displayLatency になる。arrival:
+            TIMESTAMP から受信まで (publisher の符号化と送信、経路、relay)、hold: Group の切り替えの
+            保留、decodeWait: decoder に渡すまでの待ち、decode: 復号、displayWait: 復号から描くまで
+            (jitter buffer の待ち)、displayLatency: TIMESTAMP から描くまで。arrival と
+            displayLatency は publisher の壁時計の TIMESTAMP
+            を基準にするため、別のマシンでは時計のずれを含む。 publisher の中の遅れは publisher の
+            Latency Breakdown を見る
+          </p>
+          <div class="grid grid-cols-4 gap-3 mb-4" data-testid="subscriber-latency-breakdown">
+            {LATENCY_SEGMENTS.map((segment) => (
+              <div key={segment} class="bg-white rounded-lg p-3 border border-slate-200 col-span-2">
+                <div class="text-xs text-slate-500">{segment}</div>
+                <div
+                  class="text-sm font-bold text-blue-600"
+                  data-testid={`subscriber-latency-breakdown-${segment}`}
+                >
+                  {formatTimingSummary(instance.playbackTiming.value.latencyBreakdown[segment])}
+                </div>
+              </div>
+            ))}
           </div>
 
           <h3 class="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">

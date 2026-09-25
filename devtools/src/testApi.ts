@@ -14,7 +14,9 @@ import {
   encoderState,
   pubStatus,
   objectsWithExtensions as pubObjectsWithExtensions,
+  publishTimingStats,
 } from "./signals/publisher";
+import type { PublishTimingSnapshot } from "./utils/publishTimingStats";
 import { subscriberInstances, type SubscriberInstance } from "./signals/subscriber";
 import { url, certificateHash } from "./signals/connectionSettings";
 import type { StatusType } from "./types";
@@ -33,6 +35,9 @@ export interface PublisherStats {
   bytesSent: number;
   encoderState: string;
   objectsWithExtensions: number;
+  // 符号化 (読んでから encoder の出力まで) と送信 (出力から sendObject の完了まで) の時間、
+  // encoder の待ちで捨てたフレームの数 (publishTimingStats.ts)
+  publishTiming: PublishTimingSnapshot;
 }
 
 /**
@@ -148,6 +153,7 @@ export function initTestApi(): void {
       bytesSent: bytesSent.value,
       encoderState: encoderState.value,
       objectsWithExtensions: pubObjectsWithExtensions.value,
+      publishTiming: publishTimingStats.value.snapshot(performance.now()),
     }),
 
     getSubscribers: () =>

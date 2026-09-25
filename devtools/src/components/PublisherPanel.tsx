@@ -2,6 +2,7 @@ import { useRef } from "preact/hooks";
 import { useSignalEffect } from "@preact/signals";
 import { usePublisher } from "../hooks/usePublisher";
 import { formatBitrate, formatBytes } from "../utils/logFormatters";
+import { formatTimingSummary } from "../utils/playbackTimingStats";
 import * as pub from "../signals/publisher";
 
 function formatCatalogValue(key: string, value: unknown): string {
@@ -232,6 +233,38 @@ export function PublisherPanel() {
             <div class="bg-white rounded-lg p-3 border border-slate-200">
               <div class="text-xs text-slate-500">bytes</div>
               <div class="text-xl font-bold text-green-600">{formatBytes(pub.bytesSent.value)}</div>
+            </div>
+          </div>
+
+          <h3 class="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">
+            Latency Breakdown
+          </h3>
+          <p class="text-xs text-slate-500 mb-3">
+            publisher の中の遅れの直近 10 秒の p50 / p95 / max (ms)。encode: フレームを読んでから
+            encoder の出力まで、send: encoder の出力から送信 (WebTransport の stream への書き込み)
+            の完了まで。subscriber の arrival はこれに経路と relay を足したもの
+          </p>
+          <div class="grid grid-cols-4 gap-3 mb-4">
+            <div class="bg-white rounded-lg p-3 border border-slate-200 col-span-2">
+              <div class="text-xs text-slate-500">encode</div>
+              <div class="text-sm font-bold text-blue-600" data-testid="publisher-encode-time">
+                {formatTimingSummary(pub.publishTiming.value.encodeMs)}
+              </div>
+            </div>
+            <div class="bg-white rounded-lg p-3 border border-slate-200 col-span-2">
+              <div class="text-xs text-slate-500">send</div>
+              <div class="text-sm font-bold text-blue-600" data-testid="publisher-send-time">
+                {formatTimingSummary(pub.publishTiming.value.sendMs)}
+              </div>
+            </div>
+            <div class="bg-white rounded-lg p-3 border border-slate-200 col-span-2">
+              <div class="text-xs text-slate-500">encodeQueueDrops</div>
+              <div
+                class="text-xl font-bold text-yellow-600"
+                data-testid="publisher-encode-queue-drops"
+              >
+                {pub.publishTiming.value.encodeQueueDrops}
+              </div>
             </div>
           </div>
 

@@ -27,6 +27,10 @@
   - 止まりごとに原因を 1 つ決め (`source` / `loss` / `discarded` / `arrival` / `groupSwitchHold` / `decode` / `playout` / `render` / `unknown`)、原因ごとの回数と時間、直近 30 回の止まり (時刻、長さ、Group ID / Object ID) を `playbackTiming` に出す
   - 届かなかった Object と Group、RESET_STREAM で終わった Subgroup の stream、上限で解けた Group の切り替えの保留を数える。止まりと stream の reset はデバッグログにも出す
   - @voluntas
+- [ADD] moqt-devtools に遅延の区間ごとの統計を追加する
+  - subscriber は描いたフレームごとに、到着 (TIMESTAMP から受信まで。publisher の符号化と送信、経路、relay)、Group の切り替えの保留、復号待ち、復号、表示待ち (jitter buffer)、表示の遅延 (TIMESTAMP から描くまで) を出す。フレームごとに区間の和が表示の遅延になる
+  - publisher はフレームを読んでから encoder の出力まで (符号化)、出力から `sendObject` の完了まで (送信) の時間と、encoder の待ちで捨てたフレームの数を出す。遅延が moqt-js と経路 (relay を含む) のどちらで生じたかを統計だけで分けられる
+  - @voluntas
 - [ADD] `SubgroupStreamEnd.errorCode` を追加し、`DataStreamErrorCode` を公開する
   - 購読の Subgroup の stream が RESET_STREAM で終わったとき、その error code (draft-ietf-moq-transport-21 Section 12.5) を知らせる。未知の code は INTERNAL_ERROR として扱う (Section 13)
   - relay は reset の理由ごとに code を使い分けるため (期限切れは DELIVERY_TIMEOUT、停滞の打ち切りは TOO_FAR_BEHIND など)、アプリは Object の欠落の経路を絞れる

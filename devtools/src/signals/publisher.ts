@@ -3,6 +3,11 @@ import type { Session, Publisher, Catalog } from "moqt-js";
 import type { StatusType } from "../types";
 import type { EncoderWrapper } from "../utils/EncoderWrapper";
 import { WallClockMapper } from "../../../src/mediaClock.ts";
+import {
+  EMPTY_PUBLISH_TIMING,
+  PublishTimingStats,
+  type PublishTimingSnapshot,
+} from "../utils/publishTimingStats";
 import type { AudioEncoderWrapper } from "../../../src/codec/AudioEncoder.ts";
 
 // Publisher の状態
@@ -50,6 +55,12 @@ export const frameReader = signal<ReadableStreamDefaultReader<VideoFrame> | null
 // 読んだ映像フレームの timestamp とそのときの壁時計から、映像の LOC TIMESTAMP を壁時計に
 // 換算する (ライブラリの src/mediaClock.ts の WallClockMapper)。配信を始めるたびに作り直す
 export const videoWallClock = signal(new WallClockMapper());
+// 送信する映像フレームの符号化と送信の時間 (publishTimingStats.ts)。配信を始めるたびに作り直す
+export const publishTimingStats = signal(new PublishTimingStats());
+// 画面に出す符号化と送信の時間。encoder の出力を受けたとき、一定の間隔で反映する
+export const publishTiming = signal<PublishTimingSnapshot>(EMPTY_PUBLISH_TIMING);
+// 最後に publishTiming へ反映した時刻 (`performance.now()`)。画面の表示には使わない
+export const publishTimingUpdatedAtMs = signal(0);
 export const videoStreamCleanup = signal<(() => void) | null>(null);
 // キーフレーム間隔 (frames)。既定は connectionSettings と同じ 2 秒ぶん
 export const keyframeInterval = signal(60);

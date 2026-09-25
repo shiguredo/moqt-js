@@ -20,6 +20,7 @@ import {
   formatStallEvent,
   formatTimingSummary,
 } from "../utils/playbackTimingStats";
+import { LATENCY_SEGMENTS } from "../utils/latencyBreakdown";
 import { STALL_CAUSES } from "../utils/stallAnalysis";
 
 interface LogEntry {
@@ -141,6 +142,12 @@ function generatePublisherStatsText(): string {
     `Current Group: ${pub.pubCurrentGroup.value}`,
     `Encode Errors: ${pub.encodeErrors.value}`,
   ];
+  // 符号化と送信の時間 (publisher の中の遅れ)。受信側の arrival はこれに経路と relay を足したもの
+  const publishTiming = pub.publishTimingStats.value.snapshot(performance.now());
+  lines.push(`--- Latency Breakdown (p50 / p95 / max ms, last 10 s) ---`);
+  lines.push(`encode: ${formatTimingSummary(publishTiming.encodeMs)}`);
+  lines.push(`send: ${formatTimingSummary(publishTiming.sendMs)}`);
+  lines.push(`Encode Queue Drops: ${publishTiming.encodeQueueDrops}`);
   // WebTransport ストリーム統計
   if (pub.pubSession.value) {
     const stats = pub.pubSession.value.getStatistics();
@@ -197,6 +204,12 @@ function generateSubscriberStatsText(subscriberId: string): string {
     `Playout Delay: ${timing.playoutDelayMs === null ? "-" : `${timing.playoutDelayMs.toFixed(1)} ms`}`,
   );
   lines.push(`Late Frames Dropped: ${timing.lateFramesDropped}`);
+  // 描いたフレームの遅延の区間ごとの分布 (arrival + hold + decodeWait + decode + displayWait
+  // = displayLatency)
+  lines.push(`--- Latency Breakdown (p50 / p95 / max ms, last 10 s) ---`);
+  for (const segment of LATENCY_SEGMENTS) {
+    lines.push(`${segment}: ${formatTimingSummary(timing.latencyBreakdown[segment])}`);
+  }
   // 止まりの原因ごとの回数 / 時間と受信の欠け (購読開始からの累積)、直近の止まり
   lines.push(`--- Stall Causes (count / ms) ---`);
   for (const cause of STALL_CAUSES) {

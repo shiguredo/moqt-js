@@ -40,6 +40,7 @@ import { addLog } from "../components/DebugPanel";
 import { logDebugMessage } from "./debugMessageLog";
 import { EncoderWrapper, type EncodedChunkData } from "../utils/EncoderWrapper";
 import { WallClockMapper } from "../../../src/mediaClock.ts";
+import { EMPTY_PUBLISH_TIMING, PublishTimingStats } from "../utils/publishTimingStats";
 import * as settings from "../signals/connectionSettings";
 import * as pub from "../signals/publisher";
 import * as sub from "../signals/subscriber";
@@ -63,6 +64,25 @@ const AUDIO_TRACK_NAME = "audio";
  * サンプルの RMS」で測ると定めるため、chunk 1 つ分に相当する長さで測る。
  */
 const AUDIO_LEVEL_WINDOW_MS = 20;
+
+/**
+ * 符号化と送信の時間の統計を画面へ反映する間隔 (ミリ秒)
+ *
+ * encoder の出力ごとに統計を求めると、分布を求める並べ替えが配信 fps の回数だけ走る。
+ * 画面の更新には 0.5 秒ごとで足りる
+ */
+const PUBLISH_TIMING_UPDATE_INTERVAL_MS = 500;
+
+/**
+ * 配信を始めるときに、映像の TIMESTAMP の壁時計への換算と、符号化と送信の時間の記録を
+ * 作り直す (前の配信の対応や記録を持ち越さない)
+ */
+function resetVideoTiming(): void {
+  pub.videoWallClock.value = new WallClockMapper();
+  pub.publishTimingStats.value = new PublishTimingStats();
+  pub.publishTiming.value = EMPTY_PUBLISH_TIMING;
+  pub.publishTimingUpdatedAtMs.value = 0;
+}
 
 /** 配信する映像トラックの Catalog を組み立てるための入力 */
 export interface PublisherCatalogOptions {
@@ -497,12 +517,16 @@ export function usePublisher() {
           frame.timestamp,
           performance.timeOrigin + performance.now(),
         );
+        // 符号化と送信の時間は読んだ時刻から測る (publishTimingStats.ts)
+        pub.publishTimingStats.value.recordRead(frame.timestamp, performance.now());
 
         if (encoderInstance.encodeQueueSize <= 2) {
           encoderInstance.encode(frame, {
             keyFrame: shouldRequestKeyFrame(pub.framesEncoded.value, pub.keyframeInterval.value),
           });
           pub.framesEncoded.value++;
+        } else {
+          pub.publishTimingStats.value.recordEncodeQueueDrop(frame.timestamp);
         }
         frame.close();
       }
@@ -517,6 +541,13 @@ export function usePublisher() {
     if (!publisherInstance || publisherInstance.state !== "active") return;
 
     pub.chunksEncoded.value++;
+    const publishTimingStats = pub.publishTimingStats.value;
+    const encodedAtMs = performance.now();
+    publishTimingStats.recordEncoded(chunk.timestamp, encodedAtMs);
+    if (encodedAtMs - pub.publishTimingUpdatedAtMs.value >= PUBLISH_TIMING_UPDATE_INTERVAL_MS) {
+      pub.publishTimingUpdatedAtMs.value = encodedAtMs;
+      pub.publishTiming.value = publishTimingStats.snapshot(encodedAtMs);
+    }
 
     // フレームを読んだ時点で記録するため、ここで記録が無いことは無い。念のため、無ければ
     // この chunk を読んだ時点とみなす
@@ -543,14 +574,19 @@ export function usePublisher() {
 
     pub.bytesSent.value += plan.payload.length + plan.properties.length;
 
-    // Object を送信する (送信完了は待たない。完了待ちは stopPublishing の done() で行う)
-    void publisherInstance.sendObject({
-      groupId: plan.groupId,
-      objectId: plan.objectId,
-      payload: plan.payload,
-      properties: plan.properties,
-      priority: plan.priority,
-    });
+    // Object を送信する (送信完了は待たない。完了待ちは stopPublishing の done() で行う)。
+    // 完了した時刻を送信の時間として記録する
+    void publisherInstance
+      .sendObject({
+        groupId: plan.groupId,
+        objectId: plan.objectId,
+        payload: plan.payload,
+        properties: plan.properties,
+        priority: plan.priority,
+      })
+      .then(() => {
+        publishTimingStats.recordSent(chunk.timestamp, performance.now());
+      });
 
     pub.objectsSent.value++;
   }
@@ -998,7 +1034,7 @@ export function usePublisher() {
       const videoFrameSource = createVideoFrameSource(videoTrack);
       pub.frameReader.value = videoFrameSource.readable.getReader();
       // 対応は読んだフレームからとる (processFrames)
-      pub.videoWallClock.value = new WallClockMapper();
+      resetVideoTiming();
 
       // 音声トラックを配信する
       if (audioTrack) {
