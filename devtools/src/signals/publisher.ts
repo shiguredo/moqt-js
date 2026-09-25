@@ -1,5 +1,5 @@
 import { computed, signal } from "@preact/signals";
-import type { Session, Publisher, Catalog } from "moqt-js";
+import type { Session, Publisher, Catalog, LOC } from "moqt-js";
 import type { StatusType } from "../types";
 import type { EncoderWrapper } from "../utils/EncoderWrapper";
 import { WallClockMapper } from "../../../src/mediaClock.ts";
@@ -98,6 +98,12 @@ export const audioFrameReader = signal<ReadableStreamDefaultReader<AudioData> | 
 // 符号化へ渡した音声のサンプルの記録。送る Object の LOC Audio Level を求める
 // (utils/audioLevelTimeline.ts)。音声の配信を始めるたびに作り直す
 export const audioLevelTimeline = signal(new AudioLevelTimeline());
+// 配信側の音声メーター。取っている音の peak / RMS (dBFS) と直近の波形は Preview 中から
+// 更新する (hooks/publisherAudioMeter.ts)。LOC Audio Level は直近に送った Object の値
+export const audioMeterPeakDbfs = signal<number | null>(null);
+export const audioMeterRmsDbfs = signal<number | null>(null);
+export const audioMeterWaveform = signal<Float32Array | null>(null);
+export const audioMeterLevel = signal<LOC.AudioLevel | null>(null);
 
 // 音声の Group ID。draft-ietf-moq-loc-04 §4.1 に従い chunk ごとに Group を進める
 export const pubCurrentAudioGroup = signal(Date.now());

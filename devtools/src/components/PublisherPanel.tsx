@@ -4,6 +4,7 @@ import { usePublisher } from "../hooks/usePublisher";
 import { StatList, StatSection, StatsCollapse, TimingTable } from "./StatsView";
 import { PUBLISHER_LATENCY_BREAKDOWN_HELP, PUBLISH_TIMING_CAPTION } from "./statsHelp";
 import { formatBytes } from "../utils/logFormatters";
+import { AudioMeter } from "./AudioMeter";
 import { CatalogTracks } from "./CatalogTracks";
 import { PANEL_OPTION_ROW_CLASS } from "./panelLayout";
 import * as pub from "../signals/publisher";
@@ -177,6 +178,18 @@ export function PublisherPanel() {
             </div>
           )}
         </div>
+
+        {/* 取っている音と送っている音のレベルメーターと波形。音声を取っていない間も描き、
+            値を「-」にする (Preview の開始で現れると下の項目の位置が動く) */}
+        <AudioMeter
+          peakDbfs={pub.audioMeterPeakDbfs}
+          rmsDbfs={pub.audioMeterRmsDbfs}
+          level={pub.audioMeterLevel}
+          waveform={pub.audioMeterWaveform}
+          active={pub.audioStream.value !== null}
+          levelActive={pub.audioPublisher.value !== null}
+          testIdPrefix="publisher-audio"
+        />
 
         {/* Catalog。catalog を受け取る前も描き、値を「-」にする */}
         <CatalogTracks

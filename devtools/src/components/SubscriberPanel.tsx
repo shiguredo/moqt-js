@@ -258,7 +258,15 @@ export function SubscriberPanel({
 
         {/* 受信した音声のレベルメーターと波形。音声トラックを購読していない間も描き、
             値を「-」にする (購読の開始でメーターが現れると下の項目の位置が動く) */}
-        <AudioMeter instance={instance} subscribed={instance.audioSubscriber.value !== null} />
+        <AudioMeter
+          peakDbfs={instance.audioPeakDbfs}
+          rmsDbfs={instance.audioRmsDbfs}
+          level={instance.audioLastLevel}
+          waveform={instance.audioWaveform}
+          active={instance.audioSubscriber.value !== null}
+          levelActive={instance.audioSubscriber.value !== null}
+          testIdPrefix="audio"
+        />
 
         {/* 受信した音声の再生 */}
         {/*

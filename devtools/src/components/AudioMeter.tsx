@@ -1,5 +1,5 @@
 import { useRef } from "preact/hooks";
-import { useSignalEffect } from "@preact/signals";
+import { useSignalEffect, type ReadonlySignal } from "@preact/signals";
 import type { LOC } from "moqt-js";
 import {
   MAX_DBFS,
@@ -8,13 +8,12 @@ import {
   formatDbfs,
   formatVoiceActivity,
 } from "../utils/audioLevel";
-import type { SubscriberInstance } from "../signals/subscriber";
 
 /** レベルメーターと波形に描く値 */
 interface AudioMeterValues {
-  /** 復号信号の peak (dBFS) */
+  /** 音の peak (dBFS)。受信側は復号した音、送信側は取っている音 */
   peakDbfs: number | null;
-  /** 復号信号の RMS (dBFS) */
+  /** 音の RMS (dBFS)。受信側は復号した音、送信側は取っている音 */
   rmsDbfs: number | null;
   /** LOC Audio Level (-dBov) */
   level: LOC.AudioLevel | null;
@@ -139,21 +138,40 @@ function drawWaveform(
 }
 
 interface AudioMeterProps {
-  instance: SubscriberInstance;
-  // 音声トラックを購読しているか。購読していない間は各値を「-」にし、波形は空にする
-  subscribed: boolean;
+  // 描く値。受信側は復号した音、送信側は取っている音 (peak / RMS / 波形) と送った
+  // LOC Audio Level。signal のまま受け、値が変わったときにメーターだけを描き直す
+  // (パネル全体を描き直さない)
+  peakDbfs: ReadonlySignal<number | null>;
+  rmsDbfs: ReadonlySignal<number | null>;
+  level: ReadonlySignal<LOC.AudioLevel | null>;
+  waveform: ReadonlySignal<Float32Array | null>;
+  // 音を受けている (取っている) か。していない間は peak / RMS を「-」にし、波形は空にする
+  active: boolean;
+  // LOC Audio Level を出すか (受信側は購読している間、送信側は音声を送っている間)。
+  // 出さない間は「-」にする
+  levelActive: boolean;
+  // data-testid の接頭辞 (受信側は "audio"、送信側は "publisher-audio")
+  testIdPrefix: string;
 }
 
-/** 購読していない間の値の表示 */
-const NOT_SUBSCRIBED = "-";
+/** 値が無い間の表示 */
+const INACTIVE = "-";
 
 /**
- * 受信した音声のレベルメーターと波形
+ * 音声のレベルメーターと波形
  *
  * 映像 canvas と同じく、signal が更新されたときだけ描き直す
  * (`requestAnimationFrame` による常時再描画はしない)。
  */
-export function AudioMeter({ instance, subscribed }: AudioMeterProps) {
+export function AudioMeter({
+  peakDbfs,
+  rmsDbfs,
+  level,
+  waveform,
+  active,
+  levelActive,
+  testIdPrefix,
+}: AudioMeterProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   useSignalEffect(() => {
@@ -166,42 +184,45 @@ export function AudioMeter({ instance, subscribed }: AudioMeterProps) {
       return;
     }
     drawAudioMeter(ctx, canvas.width, canvas.height, {
-      peakDbfs: instance.audioPeakDbfs.value,
-      rmsDbfs: instance.audioRmsDbfs.value,
-      level: instance.audioLastLevel.value,
-      waveform: instance.audioWaveform.value,
+      peakDbfs: peakDbfs.value,
+      rmsDbfs: rmsDbfs.value,
+      level: level.value,
+      waveform: waveform.value,
     });
   });
 
   return (
-    <div data-testid="audio-meter" class="bg-slate-50 border border-slate-200 rounded-lg p-3 mb-4">
+    <div
+      data-testid={`${testIdPrefix}-meter`}
+      class="bg-slate-50 border border-slate-200 rounded-lg p-3 mb-4"
+    >
       <div class="flex flex-wrap items-center justify-between gap-2 mb-2">
         <h3 class="text-xs font-semibold text-slate-600 uppercase tracking-wide">Audio</h3>
         <div class="flex flex-wrap items-center gap-3 text-xs text-slate-600">
           <span>
             peak{" "}
-            <span data-testid="audio-peak" class="font-mono text-slate-800">
-              {subscribed ? formatDbfs(instance.audioPeakDbfs.value) : NOT_SUBSCRIBED}
+            <span data-testid={`${testIdPrefix}-peak`} class="font-mono text-slate-800">
+              {active ? formatDbfs(peakDbfs.value) : INACTIVE}
             </span>
           </span>
           <span>
             rms{" "}
-            <span data-testid="audio-rms" class="font-mono text-slate-800">
-              {subscribed ? formatDbfs(instance.audioRmsDbfs.value) : NOT_SUBSCRIBED}
+            <span data-testid={`${testIdPrefix}-rms`} class="font-mono text-slate-800">
+              {active ? formatDbfs(rmsDbfs.value) : INACTIVE}
             </span>
           </span>
           <span>LOC Audio Level</span>
-          <span data-testid="audio-level" class="font-mono text-slate-800">
-            {subscribed ? formatAudioLevel(instance.audioLastLevel.value) : NOT_SUBSCRIBED}
+          <span data-testid={`${testIdPrefix}-level`} class="font-mono text-slate-800">
+            {levelActive ? formatAudioLevel(level.value) : INACTIVE}
           </span>
-          <span data-testid="audio-voice-activity" class="font-mono text-slate-800">
-            {subscribed ? formatVoiceActivity(instance.audioLastLevel.value) : NOT_SUBSCRIBED}
+          <span data-testid={`${testIdPrefix}-voice-activity`} class="font-mono text-slate-800">
+            {levelActive ? formatVoiceActivity(level.value) : INACTIVE}
           </span>
         </div>
       </div>
       <canvas
         ref={canvasRef}
-        data-testid="audio-waveform"
+        data-testid={`${testIdPrefix}-waveform`}
         width="640"
         height="96"
         class="w-full h-24 bg-slate-900 rounded"

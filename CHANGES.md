@@ -28,6 +28,10 @@
   - マイクのサンプルレートとチャンネル数はデバイスが決めるため、実際に取れた値を catalog と AudioEncoder に使う。マイクを取れないときは映像だけを配信する
   - 送る Object の LOC Audio Level を、生成したトーンを作り直して求めるのをやめ、符号化へ渡したサンプルのうち chunk の時間の範囲に重なる分の RMS から求める (RFC 6464 Section 3)
   - @voluntas
+- [ADD] moqt-devtools の publisher に音声のレベルメーターを追加する
+  - 取っている音の peak / RMS (dBFS) と波形を、Preview 中から出す (Preview でも音声を取るようにした)。配信中は直近に送った LOC Audio Level も出す
+  - 値は subscriber のメーターと同じ計算で求め、送る側と受ける側を比べられる。音声を取っていない間は「-」にする
+  - @voluntas
 - [ADD] moqt-devtools の subscriber に表示の止まりの原因と受信の欠けの統計を追加する
   - 止まりごとに原因を 1 つ決め (`source` / `loss` / `discarded` / `arrival` / `groupSwitchHold` / `decode` / `playout` / `render` / `unknown`)、原因ごとの回数と時間、直近 30 回の止まり (時刻、長さ、Group ID / Object ID) を `playbackTiming` に出す
   - 届かなかった Object と Group、RESET_STREAM で終わった Subgroup の stream、上限で解けた Group の切り替えの保留を数える。止まりと stream の reset はデバッグログにも出す

@@ -24,6 +24,7 @@ import { createDummyVideoStream } from "../webcodecs-devtools/utils/dummyVideo";
 import { createDummyAudioStream } from "../webcodecs-devtools/utils/dummyAudio";
 import { readAllAudioSamples } from "../utils/audioLevel";
 import { AudioLevelTimeline } from "../utils/audioLevelTimeline";
+import { startPublisherAudioMeter, stopPublisherAudioMeter } from "./publisherAudioMeter";
 import { AudioEncoderWrapper } from "../../../src/codec/AudioEncoder.ts";
 import type { AudioEncodedChunkData } from "../../../src/codec/types.ts";
 import { getAudioEncoderConfig } from "../../../src/codec/config.ts";
@@ -460,6 +461,7 @@ export function usePublisher() {
           track.stop();
         }
       };
+      startPublisherAudioMeter(generator.stream);
       return requested;
     }
     if (source === "microphone") {
@@ -486,6 +488,7 @@ export function usePublisher() {
       }
       pub.audioStream.value = stream;
       pub.audioStreamCleanup.value = cleanup;
+      startPublisherAudioMeter(stream);
       return resolveCapturedAudioFormat(track.getSettings(), requested);
     }
     return null;
@@ -579,8 +582,37 @@ export function usePublisher() {
     return audioTrack;
   }
 
+  /**
+   * Preview で音声も取る
+   *
+   * 配信を始める前に、メーターでマイクが音を拾っているかを確かめられるようにする。
+   * 取れないとき (許可されないなど) は警告のログを残し、映像の Preview は続ける
+   */
+  async function startPreviewAudio(): Promise<void> {
+    const source = settings.audioSource.value;
+    if (!resolveAudioPublishable(source)) {
+      stopAudioStream();
+      return;
+    }
+    try {
+      await startAudioStream(source, {
+        sampleRate: settings.audioSampleRate.value,
+        channels: settings.audioChannels.value,
+      });
+    } catch (error) {
+      addLog("warn", "[publisher] failed to capture audio for preview", {
+        source,
+        message: error instanceof Error ? error.message : String(error),
+      });
+      stopAudioStream();
+    }
+  }
+
   /** 音声のストリーム (ダミー音声 / マイク) を止める */
   function stopAudioStream(): void {
+    // メーターも止め、送った LOC Audio Level の表示も消す
+    stopPublisherAudioMeter();
+    pub.audioMeterLevel.value = null;
     if (pub.audioStreamCleanup.value) {
       pub.audioStreamCleanup.value();
       pub.audioStreamCleanup.value = null;
@@ -603,6 +635,9 @@ export function usePublisher() {
       pub.mediaStream.value = videoStreamResult.stream;
       pub.videoStreamCleanup.value = videoStreamResult.cleanup;
 
+      // 音声も Preview から取る (メーターで音を確かめられる)
+      await startPreviewAudio();
+
       pub.isPreviewActive.value = true;
     } catch (error) {
       console.error("Preview error:", error);
@@ -620,8 +655,8 @@ export function usePublisher() {
     pub.isPreviewActive.value = false;
     pub.pubStatus.value = "disconnected";
     pub.pubStatusMessage.value = "Ready to publish";
-    // 音声のダミーストリームはプレビューでは作らず、配信開始時に作る
-    // (takeAudioTrackForPublishing)。ここで止めるものは無い
+    // Preview で取った音声 (startPreviewAudio) も止める
+    stopAudioStream();
   };
 
   const togglePreview = (): void => {
@@ -856,6 +891,8 @@ export function usePublisher() {
     // chunk が符号化するサンプル列の RMS から -dBov を求める。符号化へ渡したときに
     // 記録したサンプルのうち、chunk の時間の範囲に重なる分を使う (processAudioFrames)
     const audioLevel = pub.audioLevelTimeline.value.levelFor(chunk.timestamp, chunk.duration);
+    // 配信側のメーターに、直近に送った LOC Audio Level を出す
+    pub.audioMeterLevel.value = audioLevel;
 
     // draft-ietf-moq-loc-04 §2.3.3.1 (Audio Config): AAC の AudioSpecificConfig は
     // 同じ値を毎 Object 送らない
