@@ -9,15 +9,21 @@ import {
   authorizationTokenValue,
   buildAuthorizationToken,
   buildQueryString,
+  buildQueryStringForMode,
+  catalogSubscriptionTimeout,
+  CATALOG_SUBSCRIPTION_TIMEOUTS,
   initFromUrl,
   isAudioSourceType,
   isVideoSourceType,
   jitterBufferEnabled,
+  mode,
   audioAutoGainControl,
   audioEchoCancellation,
   audioNoiseSuppression,
   audioSource,
   selectedMicrophoneDeviceId,
+  url,
+  useDedicatedWorker,
   videoSource,
 } from "./connectionSettings";
 
@@ -333,4 +339,161 @@ test("buildQueryString: マイクのデバイスと音声処理を URL で往復
   selectedMicrophoneDeviceId.value = "";
   audioEchoCancellation.value = true;
   audioAutoGainControl.value = true;
+});
+
+// URL の mode で表示モードを決める。both は既定のため Copy URL に載せず、publisher /
+// subscriber のときだけ載せて開き直しても同じモードで表示できる
+test("initFromUrl / buildQueryString: mode を URL で往復できる", () => {
+  mode.value = "both";
+  assert.isNull(new URLSearchParams(buildQueryString()).get("mode"));
+
+  initFromUrl("mode=publisher");
+  assert.equal(mode.value, "publisher");
+  const publisherQuery = buildQueryString();
+  assert.equal(new URLSearchParams(publisherQuery).get("mode"), "publisher");
+
+  // 開き直しても publisher のままになる
+  mode.value = "both";
+  initFromUrl(publisherQuery);
+  assert.equal(mode.value, "publisher");
+
+  initFromUrl("mode=subscriber");
+  assert.equal(mode.value, "subscriber");
+  assert.equal(new URLSearchParams(buildQueryString()).get("mode"), "subscriber");
+
+  mode.value = "both";
+});
+
+// 許可リストに無い mode は無視し、両方を表示する both のままにする
+test("initFromUrl: 許可リストに無い mode は無視する", () => {
+  mode.value = "both";
+  initFromUrl("mode=foo");
+  assert.equal(mode.value, "both");
+});
+
+// mode の無い URL では both (両方の表示) のままにする。許可リストにある both は
+// 明示的に指定しても受理し、publisher から both へ戻せる
+test("initFromUrl: mode が無い URL と mode=both は both にする", () => {
+  mode.value = "both";
+  initFromUrl("url=moqt%3A%2F%2Fexample.com");
+  assert.equal(mode.value, "both");
+
+  mode.value = "publisher";
+  initFromUrl("mode=both");
+  assert.equal(mode.value, "both");
+});
+
+// 副題のリンク用のクエリは、今の接続設定を保ったまま mode だけを差し替える。
+// both のリンクでは mode を載せない
+test("buildQueryStringForMode: 今の設定を保ったまま mode だけを差し替える", () => {
+  mode.value = "both";
+  url.value = "moqt://example.com/moqt";
+  try {
+    const publisherQuery = new URLSearchParams(buildQueryStringForMode("publisher"));
+    assert.equal(publisherQuery.get("mode"), "publisher");
+    assert.equal(publisherQuery.get("url"), "moqt://example.com/moqt");
+
+    const subscriberQuery = new URLSearchParams(buildQueryStringForMode("subscriber"));
+    assert.equal(subscriberQuery.get("mode"), "subscriber");
+    assert.equal(subscriberQuery.get("url"), "moqt://example.com/moqt");
+
+    const bothQuery = new URLSearchParams(buildQueryStringForMode("both"));
+    assert.isNull(bothQuery.get("mode"));
+    assert.equal(bothQuery.get("url"), "moqt://example.com/moqt");
+
+    // 今のモードの signal は変えない
+    assert.equal(mode.value, "both");
+  } finally {
+    url.value = "moqt://127.0.0.1:4443/";
+  }
+});
+
+// 副題のリンクのクエリは、mode 以外の設定を buildQueryString と同じ形で保つ
+test("buildQueryStringForMode: mode 以外の設定は buildQueryString と同じクエリになる", () => {
+  mode.value = "both";
+  url.value = "moqt://example.com/moqt";
+  catalogSubscriptionTimeout.value = 30000;
+  useDedicatedWorker.value = false;
+  try {
+    const baseParams = new URLSearchParams(buildQueryString());
+    const publisherParams = new URLSearchParams(buildQueryStringForMode("publisher"));
+    // mode 以外のキーと値が一致する
+    for (const [key, value] of baseParams) {
+      assert.equal(publisherParams.get(key), value, `${key} が保たれる`);
+    }
+    assert.equal(publisherParams.get("mode"), "publisher");
+    // both のクエリには mode が載らない
+    assert.isNull(baseParams.get("mode"));
+  } finally {
+    url.value = "moqt://127.0.0.1:4443/";
+    catalogSubscriptionTimeout.value = 5000;
+    useDedicatedWorker.value = true;
+  }
+  mode.value = "both";
+});
+
+// Catalog Timeout は他の数値の設定と同じく Copy URL に常に載せ、開き直すと select の値が戻る
+test("buildQueryString: catalogSubscriptionTimeout を URL で往復できる", () => {
+  catalogSubscriptionTimeout.value = 5000;
+  assert.equal(new URLSearchParams(buildQueryString()).get("catalogSubscriptionTimeout"), "5000");
+
+  initFromUrl("catalogSubscriptionTimeout=30000");
+  assert.equal(catalogSubscriptionTimeout.value, 30000);
+  assert.equal(new URLSearchParams(buildQueryString()).get("catalogSubscriptionTimeout"), "30000");
+
+  catalogSubscriptionTimeout.value = 5000;
+});
+
+// Catalog Timeout は選択肢のどの値も URL で往復できる
+test("initFromUrl / buildQueryString: catalogSubscriptionTimeout は全ての選択肢を往復できる", () => {
+  for (const timeout of CATALOG_SUBSCRIPTION_TIMEOUTS) {
+    catalogSubscriptionTimeout.value = 5000;
+    initFromUrl(`catalogSubscriptionTimeout=${timeout}`);
+    assert.equal(catalogSubscriptionTimeout.value, timeout, `${timeout} を復元する`);
+    assert.equal(
+      new URLSearchParams(buildQueryString()).get("catalogSubscriptionTimeout"),
+      String(timeout),
+      `${timeout} を URL に載せる`,
+    );
+  }
+  catalogSubscriptionTimeout.value = 5000;
+});
+
+// 選択肢に無い値や空文字の catalogSubscriptionTimeout は無視する
+// (select の表示が空にならないようにする)
+test("initFromUrl: 選択肢に無い catalogSubscriptionTimeout は無視する", () => {
+  catalogSubscriptionTimeout.value = 5000;
+  initFromUrl("catalogSubscriptionTimeout=12345");
+  assert.equal(catalogSubscriptionTimeout.value, 5000);
+  initFromUrl("catalogSubscriptionTimeout=");
+  assert.equal(catalogSubscriptionTimeout.value, 5000);
+  initFromUrl("catalogSubscriptionTimeout=0");
+  assert.equal(catalogSubscriptionTimeout.value, 5000);
+});
+
+// Dedicated Worker は既定で有効のため Copy URL に載せず、無効のときだけ載せる
+test("buildQueryString: useDedicatedWorker を無効にした設定を URL で往復できる", () => {
+  useDedicatedWorker.value = true;
+  assert.isNull(new URLSearchParams(buildQueryString()).get("useDedicatedWorker"));
+
+  useDedicatedWorker.value = false;
+  const query = buildQueryString();
+  assert.equal(new URLSearchParams(query).get("useDedicatedWorker"), "0");
+
+  useDedicatedWorker.value = true;
+  initFromUrl(query);
+  assert.isFalse(useDedicatedWorker.value);
+
+  useDedicatedWorker.value = true;
+});
+
+// useDedicatedWorker は =0 / =1 だけを受け付け、それ以外の値は無視する
+test("initFromUrl: 0 / 1 以外の useDedicatedWorker は無視する", () => {
+  useDedicatedWorker.value = true;
+  initFromUrl("useDedicatedWorker=yes");
+  assert.isTrue(useDedicatedWorker.value);
+  initFromUrl("useDedicatedWorker=0");
+  assert.isFalse(useDedicatedWorker.value);
+  initFromUrl("useDedicatedWorker=1");
+  assert.isTrue(useDedicatedWorker.value);
 });

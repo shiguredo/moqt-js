@@ -337,6 +337,9 @@ export function DebugPanel() {
   // logSequence を購読する。値自体は使わない。
   void logSequence.value;
 
+  // 表示モード。subscriber モードでは Publisher の通知ボタンを隠す
+  const currentMode = settings.mode.value;
+
   const logContainerRef = useRef<HTMLDivElement>(null);
   const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set());
   const [viewModes, setViewModes] = useState<Map<number, ViewMode>>(new Map());
@@ -544,16 +547,20 @@ export function DebugPanel() {
         >
           {buttonFeedback.feedback.value === "all" ? "Copied!" : "All"}
         </button>
-        <button
-          onClick={copyPublisherLogs}
-          class={`px-3 py-1 text-xs font-medium rounded transition-colors ${
-            buttonFeedback.feedback.value === "publisher"
-              ? "bg-green-500 text-white"
-              : "bg-slate-200 hover:bg-slate-300 text-slate-700"
-          }`}
-        >
-          {buttonFeedback.feedback.value === "publisher" ? "Copied!" : "Publisher"}
-        </button>
+        {/* Publisher は subscriber モードのページに存在しないためボタンも隠す。
+            publisher モードでは Subscriber が 0 個なので Subscriber ごとのボタンは出ない */}
+        {currentMode !== "subscriber" && (
+          <button
+            onClick={copyPublisherLogs}
+            class={`px-3 py-1 text-xs font-medium rounded transition-colors ${
+              buttonFeedback.feedback.value === "publisher"
+                ? "bg-green-500 text-white"
+                : "bg-slate-200 hover:bg-slate-300 text-slate-700"
+            }`}
+          >
+            {buttonFeedback.feedback.value === "publisher" ? "Copied!" : "Publisher"}
+          </button>
+        )}
         {subscriberIds.value.map((id) => (
           <button
             key={id}

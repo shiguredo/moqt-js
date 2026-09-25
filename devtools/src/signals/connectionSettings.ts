@@ -8,6 +8,7 @@ import {
 import type {
   AudioCodecType,
   AudioSourceType,
+  DevtoolsMode,
   MicrophoneDevice,
   CameraDevice,
   CodecType,
@@ -86,6 +87,10 @@ export const jitterBufferEnabled = signal(true);
 
 // 設定の無効化状態
 export const settingsDisabled = signal(false);
+
+// 表示モード。URL クエリ `mode` で起動時に 1 回だけ決め、ページの中で切り替えない。
+// 別のモードのページはヘッダーの副題のリンクから新しいタブで開く
+export const mode = signal<DevtoolsMode>("both");
 
 // 現在のセッションの WebTransport.reliability。初期値は "pending"。
 // 接続確立時に Session.reliability を反映する。
@@ -318,12 +323,21 @@ export function buildConnectOptions(): {
 }
 
 /**
- * 現在の設定をクエリパラメータ文字列として生成する
+ * 現在の設定をクエリパラメータとして組み立てる
+ *
+ * `targetMode` はこれから作る URL の表示モード。`both` のときは `mode` を載せない
+ * (既定値は載せない扱い。jitterBuffer / useDedicatedWorker と同じ)。
  */
-export function buildQueryString(): string {
+function buildQueryParams(targetMode: DevtoolsMode): URLSearchParams {
   const params = new URLSearchParams();
 
   params.set("url", url.value);
+
+  // both は既定のモードのため載せない。Copy URL で publisher / subscriber の mode を保ち、
+  // 副題のリンクでは今の設定のまま対象のモードへ差し替える
+  if (targetMode !== "both") {
+    params.set("mode", targetMode);
+  }
 
   if (fragment.value) {
     params.set("fragment", fragment.value);
@@ -389,6 +403,9 @@ export function buildQueryString(): string {
   if (maxCacheDuration.value >= 0) {
     params.set("maxCacheDuration", String(maxCacheDuration.value));
   }
+  // Catalog Timeout は他の数値の設定と同じく常に載せる。Subscriber のページを URL で
+  // 渡したときに既定値へ戻らないようにする
+  params.set("catalogSubscriptionTimeout", String(catalogSubscriptionTimeout.value));
   if (authorizationTokenValue.value) {
     params.set("authorizationTokenAliasType", authorizationTokenAliasType.value);
     params.set("authorizationTokenType", authorizationTokenType.value);
@@ -396,6 +413,11 @@ export function buildQueryString(): string {
     if (authorizationTokenAliasType.value === "register") {
       params.set("authorizationTokenAlias", authorizationTokenAlias.value);
     }
+  }
+
+  // Dedicated Worker は既定で有効のため、無効にしたときだけ載せる
+  if (!useDedicatedWorker.value) {
+    params.set("useDedicatedWorker", "0");
   }
 
   // jitter buffer は既定で有効のため、無効にしたときだけ載せる
@@ -407,10 +429,27 @@ export function buildQueryString(): string {
     params.set("debug", "1");
   }
 
-  return params.toString();
+  return params;
 }
 
-// 映像と音声の選択式設定の許可リスト。ConnectionSettings の select はこの定数から生成し、
+/**
+ * 現在の設定をクエリパラメータ文字列として生成する
+ */
+export function buildQueryString(): string {
+  return buildQueryParams(mode.value).toString();
+}
+
+/**
+ * 指定した表示モードのページを開くクエリパラメータ文字列を生成する
+ *
+ * 現在の接続設定はそのままに `mode` だけを差し替える (`both` では載せない)。
+ * ヘッダーの副題のリンクはこれを使い、画面で設定を変えたらリンク先へ反映する
+ */
+export function buildQueryStringForMode(targetMode: DevtoolsMode): string {
+  return buildQueryParams(targetMode).toString();
+}
+
+// 選択式設定の許可リスト。ConnectionSettings の select はこの定数から生成し、
 // URL の検証も同じ定数を使う (選択肢に無い値を URL が受理すると、select の表示が
 // 空になって表示と実際の設定が食い違う)
 
@@ -431,6 +470,21 @@ export const AUDIO_SAMPLE_RATES = [8000, 16000, 24000, 48000];
 
 /** 音声チャンネル数の選択肢。ダミー音声が作れる 1 (mono) と 2 (stereo) だけ */
 export const AUDIO_CHANNELS = [1, 2];
+
+/** 表示モードの選択肢。ヘッダーの副題に並べる順もこの順にする。DevtoolsMode に値を足すときはここにも足す */
+export const MODES: readonly DevtoolsMode[] = ["both", "publisher", "subscriber"];
+
+/** Catalog Timeout の選択肢 (ミリ秒) */
+export const CATALOG_SUBSCRIPTION_TIMEOUTS = [3000, 5000, 10000, 30000, 60000, 120000, 300000];
+
+/**
+ * 表示モードとして受理できる値かを判定する
+ *
+ * URL クエリの検証と、ヘッダーの副題に並べるモードの列挙で同じ許可リストを使う。
+ */
+export function isDevtoolsMode(value: string): value is DevtoolsMode {
+  return MODES.some((modeValue) => modeValue === value);
+}
 
 /**
  * 映像の入力元として受理できる値かを判定する
@@ -521,6 +575,13 @@ function initAudioSettingsFromUrl(params: URLSearchParams): void {
 export function initFromUrl(search: string): void {
   const params = new URLSearchParams(search);
 
+  // 表示モードは許可リストにある値だけを受理する。無い値や mode の無い URL では
+  // both のまま (Publisher と Subscriber の両方を表示する)
+  const modeParam = params.get("mode");
+  if (modeParam !== null && isDevtoolsMode(modeParam)) {
+    mode.value = modeParam;
+  }
+
   // url / fragment の c4m はクエリの Authorization Token より後に適用して優先させる。
   // fragment に c4m が無い場合でも url の c4m を取り込むため、個別に順に適用する
   const urlParam = params.get("url");
@@ -604,9 +665,25 @@ export function initFromUrl(search: string): void {
     }
   }
 
+  // Catalog Timeout は ConnectionSettings の select と同じ選択肢で検証する。
+  // 選択肢に無い値を受け入れると select の表示が空になり、表示と実際の設定が食い違う
+  const catalogSubscriptionTimeoutParam = params.get("catalogSubscriptionTimeout");
+  if (
+    catalogSubscriptionTimeoutParam !== null &&
+    CATALOG_SUBSCRIPTION_TIMEOUTS.includes(Number(catalogSubscriptionTimeoutParam))
+  ) {
+    catalogSubscriptionTimeout.value = Number(catalogSubscriptionTimeoutParam);
+  }
+
   const debugParam = params.get("debug");
   if (debugParam === "1") {
     isDebugPanelOpen.value = true;
+  }
+
+  // Dedicated Worker は =0 で無効、=1 で有効にする。それ以外の値は無視する
+  const useDedicatedWorkerParam = params.get("useDedicatedWorker");
+  if (useDedicatedWorkerParam === "0" || useDedicatedWorkerParam === "1") {
+    useDedicatedWorker.value = useDedicatedWorkerParam === "1";
   }
 
   const jitterBufferParam = params.get("jitterBuffer");
