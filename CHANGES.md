@@ -53,6 +53,9 @@
   - p50 / p95 / max の分布と、止まりの原因ごとの回数と時間を列をそろえた表にする。累積の値はラベルと値の 2 列で並べ、捨てた数やエラーの数は 0 でないときだけ色をつける
   - subscriber の受信の欠け (Object と Group の欠落、RESET_STREAM、上限で解けた Group の切り替えの保留) を Loss にまとめ、Request Keyframe を統計の中から操作のボタンの行へ移す
   - @voluntas
+- [UPDATE] moqt-devtools / webtransport-devtools / webcodecs-devtools と examples の画面の文言を英語にそろえる
+  - ステータスメッセージ、接続設定のヘルプ、入力欄の補足、WebTransport API の説明など、画面に出していた日本語を英語にする
+  - @voluntas
 - [FIX] moqt-devtools の jitter buffer が、購読の開始に relay の cache から追いつく途中のフレームの遅れを揺らぎとして学習しないようにする
   - 追いつく途中のフレームは実時間より速く、まとまって届いたとみなせない間隔で届くため、その遅れで再生遅延が約 500 ms まで上がり、毎秒 20 ms でしか下がらなかった。購読を始めるたびに表示の遅延が約 25 秒間数百ミリ秒大きかった
   - 開始と基準の取り直しの後、遅れの最小値が 250 ms の間に 20 ms 以上下がらなくなるまで (live に追いつくまで) に届いたフレームの揺らぎは、再生遅延の目標に使わない

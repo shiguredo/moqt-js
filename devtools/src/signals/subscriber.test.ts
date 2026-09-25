@@ -39,7 +39,7 @@ test("createSubscriberInstance initializes signals with expected defaults", () =
   assert.equal(instance.decoder.value, null);
   assert.equal(instance.decoderConfigured.value, false);
   assert.equal(instance.status.value, "disconnected");
-  assert.equal(instance.statusMessage.value, "購読開始待ち");
+  assert.equal(instance.statusMessage.value, "Ready to subscribe");
   assert.equal(instance.codec.value, "");
   assert.equal(instance.isStopping.value, false);
   assert.equal(instance.newGroupRequestEnabled.value, false);

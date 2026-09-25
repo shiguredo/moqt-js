@@ -34,7 +34,7 @@ export const forwardState = signal<boolean | null>(null);
 
 // Publisher のステータス
 export const pubStatus = signal<StatusType>("disconnected");
-export const pubStatusMessage = signal("配信開始待ち");
+export const pubStatusMessage = signal("Ready to publish");
 export const pubCodec = signal("");
 
 // Publisher の統計値

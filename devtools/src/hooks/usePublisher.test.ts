@@ -72,7 +72,7 @@ function resetPublisherSignals(): void {
   pub.isStopping.value = false;
   pub.forwardState.value = null;
   pub.pubStatus.value = "disconnected";
-  pub.pubStatusMessage.value = "配信開始待ち";
+  pub.pubStatusMessage.value = "Ready to publish";
   pub.pubCodec.value = "";
   pub.framesEncoded.value = 0;
   pub.keyFramesEncoded.value = 0;
@@ -414,7 +414,7 @@ test("stopPreview: 映像ストリームを解放して待機状態に戻す", (
   // MediaStream の実体は生成できないため null のままにし、解放処理の呼び出しだけを見る
   pub.isPreviewActive.value = true;
   pub.pubStatus.value = "connected";
-  pub.pubStatusMessage.value = "プレビュー中";
+  pub.pubStatusMessage.value = "Preview: Dummy 1280x720 @ 30fps";
 
   publisher.stopPreview();
 
@@ -423,7 +423,7 @@ test("stopPreview: 映像ストリームを解放して待機状態に戻す", (
   assert.equal(pub.mediaStream.value, null);
   assert.equal(pub.isPreviewActive.value, false);
   assert.equal(pub.pubStatus.value, "disconnected");
-  assert.equal(pub.pubStatusMessage.value, "配信開始待ち");
+  assert.equal(pub.pubStatusMessage.value, "Ready to publish");
 });
 
 // 解放処理が無い状態でも stopPreview は例外を投げない
@@ -454,7 +454,7 @@ test("togglePreview: プレビュー中は停止する", () => {
 
   assert.equal(cleanupCalls, 1);
   assert.equal(pub.isPreviewActive.value, false);
-  assert.equal(pub.pubStatusMessage.value, "配信開始待ち");
+  assert.equal(pub.pubStatusMessage.value, "Ready to publish");
 });
 
 // 解像度の検証は映像ストリームの取得より先に行われる。
@@ -472,7 +472,7 @@ test("startPreview: 解像度が不正なときは映像ストリームを取得
   }
 
   assert.equal(pub.pubStatus.value, "error");
-  assert.match(pub.pubStatusMessage.value, /^プレビュー失敗: invalid resolution/);
+  assert.match(pub.pubStatusMessage.value, /^Preview failed: invalid resolution/);
   // 映像ストリームは取得されていない
   assert.equal(pub.mediaStream.value, null);
   assert.equal(pub.videoStreamCleanup.value, null);

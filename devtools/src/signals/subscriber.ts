@@ -94,7 +94,7 @@ export function createSubscriberInstance(id: string): SubscriberInstance {
     decoder: signal<DecoderWrapper | null>(null),
     decoderConfigured: signal(false),
     status: signal<StatusType>("disconnected"),
-    statusMessage: signal("購読開始待ち"),
+    statusMessage: signal("Ready to subscribe"),
     codec: signal(""),
     isStopping: signal(false),
     newGroupRequestEnabled: signal(false),

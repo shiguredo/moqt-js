@@ -206,7 +206,9 @@ export async function configureEncoder(): Promise<void> {
 
     const support = await VideoEncoder.isConfigSupported(config);
     if (!support.supported) {
-      throw new Error("エンコーダー設定がサポートされていません");
+      throw new Error(
+        `VideoEncoder config is not supported: codec=${config.codec}, ${config.width}x${config.height}, framerate=${config.framerate}, bitrate=${config.bitrate}`,
+      );
     }
 
     const mode = encoderWorkerMode.value;
@@ -272,7 +274,9 @@ async function configureDecoder(): Promise<void> {
 
     const support = await VideoDecoder.isConfigSupported(config);
     if (!support.supported) {
-      throw new Error("デコーダー設定がサポートされていません");
+      throw new Error(
+        `VideoDecoder config is not supported: codec=${config.codec}, ${config.codedWidth}x${config.codedHeight}`,
+      );
     }
 
     const mode = decoderWorkerMode.value;

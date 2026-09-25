@@ -488,7 +488,7 @@ export function DebugPanel() {
         <button
           onClick={closeDebugPanel}
           class="p-2 hover:bg-slate-200 rounded-lg transition-colors"
-          title="閉じる (ESC)"
+          title="Close (Esc)"
         >
           <svg class="w-5 h-5 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path

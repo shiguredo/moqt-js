@@ -487,9 +487,9 @@ export function usePublisher() {
       const source = settings.videoSource.value;
       const deviceId = source === "camera" ? settings.selectedCameraDeviceId.value : undefined;
 
-      const sourceLabel = source === "dummy" ? "ダミー" : "カメラ";
+      const sourceLabel = source === "dummy" ? "Dummy" : "Camera";
       pub.pubStatus.value = "disconnected";
-      pub.pubStatusMessage.value = `プレビュー: ${sourceLabel} ${width}x${height} @ ${framerate}fps`;
+      pub.pubStatusMessage.value = `Preview: ${sourceLabel} ${width}x${height} @ ${framerate}fps`;
 
       const videoStreamResult = await getVideoStream(source, width, height, framerate, deviceId);
       pub.mediaStream.value = videoStreamResult.stream;
@@ -499,7 +499,7 @@ export function usePublisher() {
     } catch (error) {
       console.error("Preview error:", error);
       pub.pubStatus.value = "error";
-      pub.pubStatusMessage.value = `プレビュー失敗: ${(error as Error).message}`;
+      pub.pubStatusMessage.value = `Preview failed: ${(error as Error).message}`;
     }
   };
 
@@ -511,7 +511,7 @@ export function usePublisher() {
     pub.mediaStream.value = null;
     pub.isPreviewActive.value = false;
     pub.pubStatus.value = "disconnected";
-    pub.pubStatusMessage.value = "配信開始待ち";
+    pub.pubStatusMessage.value = "Ready to publish";
     // 音声のダミーストリームはプレビューでは作らず、配信開始時に作る
     // (takeAudioTrackForPublishing)。ここで止めるものは無い
   };
@@ -680,7 +680,7 @@ export function usePublisher() {
         error: (error) => {
           console.error("Audio publisher error:", error);
           pub.pubStatus.value = "error";
-          pub.pubStatusMessage.value = `音声配信エラー: ${error.message}`;
+          pub.pubStatusMessage.value = `Audio publish error: ${error.message}`;
         },
         // 音声には keyframe が無く Audio Config は最初の chunk にしか現れないため、
         // 同じ値を再送しない方針のままだと後から接続した購読者が AAC を復号できない。
@@ -709,7 +709,7 @@ export function usePublisher() {
         console.error("Audio encoder error:", error);
         pub.encodeErrors.value++;
         pub.pubStatus.value = "error";
-        pub.pubStatusMessage.value = `音声 Encoder エラー: ${error.message}`;
+        pub.pubStatusMessage.value = `Audio encoder error: ${error.message}`;
       },
     });
     pub.audioEncoder.value = audioEncoderInstance;
@@ -813,7 +813,7 @@ export function usePublisher() {
   const startPublishing = async (): Promise<void> => {
     try {
       pub.pubStatus.value = "disconnected";
-      pub.pubStatusMessage.value = "接続中...";
+      pub.pubStatusMessage.value = "Connecting...";
       settings.settingsDisabled.value = true;
 
       const namespaceArray = settings.namespace.value.split("/").filter((s) => s.length > 0);
@@ -846,7 +846,7 @@ export function usePublisher() {
               reason: (closeInfo.reason ?? "").slice(0, 1024),
             });
             pub.pubStatus.value = "disconnected";
-            pub.pubStatusMessage.value = `切断: closeCode=${closeInfo.closeCode}, reason=${closeInfo.reason}`;
+            pub.pubStatusMessage.value = `Disconnected: closeCode=${closeInfo.closeCode}, reason=${closeInfo.reason}`;
             cleanupPublisher();
           },
           error: (error) => {
@@ -855,7 +855,7 @@ export function usePublisher() {
               message: error.message ?? String(error),
             });
             pub.pubStatus.value = "error";
-            pub.pubStatusMessage.value = `エラー: ${error.message}`;
+            pub.pubStatusMessage.value = `Error: ${error.message}`;
             cleanupPublisher();
           },
           debug: handleDebugMessage,
@@ -866,7 +866,7 @@ export function usePublisher() {
       settings.reliability.value = session.reliability;
 
       pub.pubStatus.value = "connected";
-      pub.pubStatusMessage.value = "接続完了、Catalog を配信中...";
+      pub.pubStatusMessage.value = "Connected, publishing catalog...";
 
       // Catalog を publish
       const catalogPublisherInstance = await session.publish(
@@ -955,7 +955,7 @@ export function usePublisher() {
         catalog: createdCatalog,
       });
 
-      pub.pubStatusMessage.value = "接続完了、Encoder を準備中...";
+      pub.pubStatusMessage.value = "Connected, preparing encoder...";
 
       // 既存のプレビューストリームがあれば再利用し、無ければ新規作成する
       let actualWidth: number;
@@ -1003,7 +1003,7 @@ export function usePublisher() {
           error: (error) => {
             console.error("Publisher error:", error);
             pub.pubStatus.value = "error";
-            pub.pubStatusMessage.value = `配信エラー: ${error.message}`;
+            pub.pubStatusMessage.value = `Publish error: ${error.message}`;
           },
           // draft-ietf-moq-transport-21 Section 3.1:
           // Forward State の変化を追跡する
@@ -1031,7 +1031,7 @@ export function usePublisher() {
       pub.publisher.value = publisherInstance;
 
       pub.pubStatus.value = "connected";
-      pub.pubStatusMessage.value = `配信中: ${namespaceArray.join("/")}/${trackNameValue}`;
+      pub.pubStatusMessage.value = `Publishing: ${namespaceArray.join("/")}/${trackNameValue}`;
 
       // Encoder 設定を作成し、対応状況を確認する
       const encoderConfig = getEncoderConfig(
@@ -1059,7 +1059,7 @@ export function usePublisher() {
           pub.encodeErrors.value++;
           pub.encoderState.value = encoderInstance.state;
           pub.pubStatus.value = "error";
-          pub.pubStatusMessage.value = `Encoder エラー: ${error.message}`;
+          pub.pubStatusMessage.value = `Encoder error: ${error.message}`;
         },
       });
       pub.encoder.value = encoderInstance;
@@ -1125,7 +1125,7 @@ export function usePublisher() {
     } catch (error) {
       console.error("Connection error:", error);
       pub.pubStatus.value = "error";
-      pub.pubStatusMessage.value = `失敗: ${(error as Error).message}`;
+      pub.pubStatusMessage.value = `Failed: ${(error as Error).message}`;
       cleanupPublisher();
       settings.settingsDisabled.value = false;
     }
@@ -1139,7 +1139,7 @@ export function usePublisher() {
     pub.isStopping.value = true;
 
     pub.pubStatus.value = "disconnected";
-    pub.pubStatusMessage.value = "切断中...";
+    pub.pubStatusMessage.value = "Disconnecting...";
 
     try {
       // Complete catalog を送信
@@ -1174,7 +1174,7 @@ export function usePublisher() {
       cleanupPublisher();
       pub.isStopping.value = false;
       pub.pubStatus.value = "disconnected";
-      pub.pubStatusMessage.value = "配信開始待ち";
+      pub.pubStatusMessage.value = "Ready to publish";
     }
   };
 

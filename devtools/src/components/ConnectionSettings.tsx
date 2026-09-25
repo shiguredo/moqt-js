@@ -22,6 +22,7 @@ function MoqtHelpModal() {
           <h3 class="text-lg font-semibold text-slate-700">MOQT (Media over QUIC Transport)</h3>
           <button
             onClick={() => (showMoqtHelp.value = false)}
+            aria-label="Close"
             class="text-slate-400 hover:text-slate-600"
           >
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -37,25 +38,25 @@ function MoqtHelpModal() {
         <div class="space-y-4 text-sm text-slate-600">
           <div>
             <p>
-              QUIC 上でメディアをリアルタイム配信するためのプロトコルです。
-              低遅延かつ信頼性の高いメディアストリーミングを実現します。
+              A protocol for real-time media delivery over QUIC. It provides low-latency and
+              reliable media streaming.
             </p>
           </div>
           <div>
-            <h4 class="font-medium text-slate-700 mb-1">主要概念</h4>
+            <h4 class="font-medium text-slate-700 mb-1">Key Concepts</h4>
             <ul class="list-disc list-inside space-y-1 text-slate-500">
-              <li>Client - サーバーに接続してメディアを送受信</li>
-              <li>Server - クライアント間のメディア中継</li>
-              <li>SUBSCRIBE - トラックの購読リクエスト</li>
-              <li>ANNOUNCE - トラックの公開通知</li>
+              <li>Client - Connects to a server to send and receive media</li>
+              <li>Server - Relays media between clients</li>
+              <li>SUBSCRIBE - Requests a track</li>
+              <li>ANNOUNCE - Advertises a track</li>
             </ul>
           </div>
           <div>
-            <h4 class="font-medium text-slate-700 mb-1">データ構造</h4>
+            <h4 class="font-medium text-slate-700 mb-1">Data Model</h4>
             <ul class="list-disc list-inside space-y-1 text-slate-500">
-              <li>Track - メディアストリームの単位</li>
-              <li>Group - 関連オブジェクトの集合</li>
-              <li>Object - 最小のデータ単位</li>
+              <li>Track - A unit of media stream</li>
+              <li>Group - A set of related Objects</li>
+              <li>Object - The smallest unit of data</li>
             </ul>
           </div>
           <div class="pt-2 border-t border-slate-200">
@@ -90,6 +91,7 @@ function C4mHelpModal() {
           <h3 class="text-lg font-semibold text-slate-700">C4M (CAT-4-MOQT)</h3>
           <button
             onClick={() => (showC4mHelp.value = false)}
+            aria-label="Close"
             class="text-slate-400 hover:text-slate-600"
           >
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -105,30 +107,30 @@ function C4mHelpModal() {
         <div class="space-y-4 text-sm text-slate-600">
           <div>
             <p>
-              Common Access Token (CAT) を使った MOQT のトークンベース認可方式です。
-              トークンで接続の可否と、接続後のアクションを制御します。
+              Token-based authorization for MOQT using Common Access Token (CAT). The token controls
+              whether a connection is allowed and which actions it may perform.
             </p>
           </div>
           <div>
-            <h4 class="font-medium text-slate-700 mb-1">トークンの送信</h4>
+            <h4 class="font-medium text-slate-700 mb-1">Sending the Token</h4>
             <ul class="list-disc list-inside space-y-1 text-slate-500">
-              <li>SETUP - AUTHORIZATION_TOKEN (0x03) で接続時に送信</li>
-              <li>AUTHORIZATION_TOKEN パラメータ - SUBSCRIBE / FETCH などで送信</li>
-              <li>URL - MSF フラグメントの c4m パラメータに Base64 で指定</li>
+              <li>SETUP - Sent on connect as AUTHORIZATION_TOKEN (0x03)</li>
+              <li>AUTHORIZATION_TOKEN parameter - Sent with SUBSCRIBE, FETCH, etc.</li>
+              <li>URL - Base64 in the c4m parameter of the MSF fragment</li>
             </ul>
           </div>
           <div>
             <h4 class="font-medium text-slate-700 mb-1">moqt claim</h4>
             <ul class="list-disc list-inside space-y-1 text-slate-500">
-              <li>許可するアクションを namespace / track 単位で指定</li>
-              <li>既定はすべて Blocked</li>
-              <li>moqt-reval - 継続ストリームの再検証間隔 (秒)</li>
+              <li>Allowed actions per namespace / track</li>
+              <li>Everything is Blocked by default</li>
+              <li>moqt-reval - Revalidation interval for ongoing streams (seconds)</li>
             </ul>
           </div>
           <div>
             <p>
-              URL の c4m パラメータは Authorization Token に自動で反映されます。 トークンの検証は
-              Relay が行い、クライアントはトークンをそのまま送ります。
+              The c4m parameter in the URL is applied to the Authorization Token automatically. The
+              relay validates the token; the client sends it as is.
             </p>
           </div>
           <div class="pt-2 border-t border-slate-200">
@@ -163,6 +165,7 @@ function MsfHelpModal() {
           <h3 class="text-lg font-semibold text-slate-700">MSF (MOQT Streaming Format)</h3>
           <button
             onClick={() => (showMsfHelp.value = false)}
+            aria-label="Close"
             class="text-slate-400 hover:text-slate-600"
           >
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -178,25 +181,25 @@ function MsfHelpModal() {
         <div class="space-y-4 text-sm text-slate-600">
           <div>
             <p>
-              MOQT 上でメディアコンテンツを配信するためのストリーミングフォーマットです。 LOC
-              によるメディアパッケージングと Catalog によるメタデータ記述を組み合わせます。
+              A streaming format for delivering media over MOQT. It combines media packaging with
+              LOC and metadata description with a Catalog.
             </p>
           </div>
           <div>
-            <h4 class="font-medium text-slate-700 mb-1">構成要素</h4>
+            <h4 class="font-medium text-slate-700 mb-1">Components</h4>
             <ul class="list-disc list-inside space-y-1 text-slate-500">
-              <li>Catalog - トラックメタデータの JSON 記述</li>
-              <li>LOC - メディアパッケージング</li>
-              <li>Media Timeline - シーク・同期サポート</li>
-              <li>Event Timeline - イベントメタデータ</li>
+              <li>Catalog - Track metadata in JSON</li>
+              <li>LOC - Media packaging</li>
+              <li>Media Timeline - Seeking and synchronization</li>
+              <li>Event Timeline - Event metadata</li>
             </ul>
           </div>
           <div>
-            <h4 class="font-medium text-slate-700 mb-1">Catalog トラック</h4>
+            <h4 class="font-medium text-slate-700 mb-1">Catalog Track</h4>
             <ul class="list-disc list-inside space-y-1 text-slate-500">
-              <li>トラック名: catalog (固定)</li>
-              <li>フォーマット: JSON</li>
-              <li>配信可能なトラック情報を記述</li>
+              <li>Track name: catalog (fixed)</li>
+              <li>Format: JSON</li>
+              <li>Describes the tracks available</li>
             </ul>
           </div>
           <div class="pt-2 border-t border-slate-200">
@@ -231,6 +234,7 @@ function LocHelpModal() {
           <h3 class="text-lg font-semibold text-slate-700">LOC (Low Overhead Container)</h3>
           <button
             onClick={() => (showLocHelp.value = false)}
+            aria-label="Close"
             class="text-slate-400 hover:text-slate-600"
           >
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -246,19 +250,19 @@ function LocHelpModal() {
         <div class="space-y-4 text-sm text-slate-600">
           <div>
             <p>
-              MOQT 用の軽量メディアコンテナフォーマットです。WebCodecs との親和性が高く、
-              最小限のオーバーヘッドでメディアデータを転送できます。
+              A lightweight media container format for MOQT. It fits WebCodecs well and carries
+              media data with minimal overhead.
             </p>
           </div>
           <div>
             <h4 class="font-medium text-slate-700 mb-1">Properties</h4>
             <ul class="list-disc list-inside space-y-1 text-slate-500">
-              <li>Timestamp - タイムスタンプ</li>
-              <li>Timescale - Timestamp の単位</li>
-              <li>Video Frame Marking - キーフレーム判定</li>
-              <li>Video Config - デコーダ設定</li>
-              <li>Audio Config - デコーダ設定</li>
-              <li>Audio Level - オーディオレベル</li>
+              <li>Timestamp - Media timestamp</li>
+              <li>Timescale - Unit of Timestamp</li>
+              <li>Video Frame Marking - Keyframe detection</li>
+              <li>Video Config - Decoder configuration</li>
+              <li>Audio Config - Decoder configuration</li>
+              <li>Audio Level - Audio level</li>
             </ul>
           </div>
           <div class="pt-2 border-t border-slate-200">
@@ -448,7 +452,7 @@ export function ConnectionSettings() {
               settings.applyC4mFromUrl(e.currentTarget.value);
             }}
             disabled={settings.settingsDisabled.value}
-            placeholder="例: track:video"
+            placeholder="e.g. track:video"
             class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors disabled:bg-slate-100 disabled:cursor-not-allowed text-sm"
           />
         </div>
@@ -457,12 +461,12 @@ export function ConnectionSettings() {
         <div>
           <label for="namespace" class="block text-sm font-medium text-slate-600 mb-1">
             Namespace
-            <span class="text-xs text-slate-400 ml-1">(「/」で tuple に分割)</span>
+            <span class="text-xs text-slate-400 ml-1">(split into a tuple by /)</span>
           </label>
           <input
             type="text"
             id="namespace"
-            placeholder="例: room/123 → [room, 123]"
+            placeholder="e.g. room/123 → [room, 123]"
             value={settings.namespace.value}
             onInput={(e) => (settings.namespace.value = e.currentTarget.value)}
             disabled={settings.settingsDisabled.value}
@@ -906,7 +910,7 @@ export function ConnectionSettings() {
           <div class="lg:col-span-2">
             <label for="authorizationTokenValue" class="block text-xs text-slate-500 mb-1">
               Token Value
-              <span class="ml-1 text-slate-400">(空の場合は送出しない)</span>
+              <span class="ml-1 text-slate-400">(not sent when empty)</span>
             </label>
             <input
               type="text"
@@ -923,7 +927,7 @@ export function ConnectionSettings() {
                 }
               }}
               disabled={settings.settingsDisabled.value}
-              placeholder="任意のトークン文字列 (UTF-8)"
+              placeholder="Any token string (UTF-8)"
               class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:bg-slate-100 disabled:cursor-not-allowed"
             />
           </div>
@@ -934,14 +938,14 @@ export function ConnectionSettings() {
               c4m
             </span>
             <span class="text-slate-500">
-              URL の c4m パラメータから読み込んだトークンを SETUP で送信します (Base64)
+              Sends the token loaded from the c4m parameter in the URL with SETUP (Base64)
             </span>
             <button
               type="button"
               onClick={() => clearImportedC4mToken()}
               class="text-slate-400 hover:text-slate-600 underline"
             >
-              クリア
+              Clear
             </button>
           </div>
         )}

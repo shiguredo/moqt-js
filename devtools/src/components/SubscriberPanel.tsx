@@ -199,7 +199,7 @@ export function SubscriberPanel({
             class="px-4 py-2.5 bg-purple-500 hover:bg-purple-600 disabled:bg-slate-300 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors flex items-center justify-center gap-2"
             title={
               instance.dynamicGroupsSupported.value
-                ? "NEW_GROUP_REQUEST を送信して新しいキーフレームを要求する"
+                ? "Send NEW_GROUP_REQUEST to request a new keyframe"
                 : "Track did not include DYNAMIC_GROUPS=1 (draft-ietf-moq-transport-21 §9.20.20)"
             }
           >
@@ -266,8 +266,8 @@ export function SubscriberPanel({
           </button>
           <span class="text-xs text-slate-500">
             {instance.audioPlaybackEnabled.value
-              ? "受信した音声を再生中"
-              : "受信した音声は再生しない (既定)"}
+              ? "Playing received audio"
+              : "Received audio is not played (default)"}
           </span>
         </div>
         <audio ref={audioRef} data-testid="subscriber-audio-element" class="hidden" />
