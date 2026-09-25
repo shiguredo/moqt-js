@@ -22,6 +22,8 @@ import { isDebugPanelOpen } from "./debug";
 
 // 接続設定
 export const url = signal("moqt://127.0.0.1:4443/");
+// Remember Server URL を選んだときだけ、この欄を OPFS に残す。既定は覚えない
+export const rememberServerUrl = signal(false);
 // moqt URI の Fragment Identifier (draft-ietf-moq-transport-21 §6.1.1)
 // 入力形式は `type:value` (先頭の `#` は付けない)。空文字列なら fragment を付けない。
 export const fragment = signal("");

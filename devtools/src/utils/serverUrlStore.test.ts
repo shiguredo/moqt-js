@@ -1,39 +1,30 @@
 /**
  * Server URL を OPFS に残すかの判定
  *
- * 共有リンクの `url` はそのままでは覚えず、空欄は覚えていた URL を消す。
+ * Remember Server URL を選んだときだけ書き、外したときと空欄のときは消す。
  */
 
 import { assert, test } from "vite-plus/test";
 import { parseStoredServerUrl, queryServerUrl, storedServerUrlAction } from "./serverUrlStore";
 
-test("storedServerUrlAction: 入力した URL は書く", () => {
-  assert.deepEqual(storedServerUrlAction("moqt://example.test:4443/", null), {
+test("storedServerUrlAction: Remember を選んだ URL は書く", () => {
+  assert.deepEqual(storedServerUrlAction("moqt://example.test:4443/", true), {
     kind: "write",
     url: "moqt://example.test:4443/",
   });
   // 前後の空白は捨てる
-  assert.deepEqual(storedServerUrlAction("  moqt://example.test:4443/  ", null), {
+  assert.deepEqual(storedServerUrlAction("  moqt://example.test:4443/  ", true), {
     kind: "write",
     url: "moqt://example.test:4443/",
   });
 });
 
-test("storedServerUrlAction: 共有リンクの url と同じときは書かない", () => {
-  const queryUrl = "moqt://shared.example:4443/";
-  assert.deepEqual(storedServerUrlAction(queryUrl, queryUrl), { kind: "skip" });
+test("storedServerUrlAction: Remember を外したときは消す", () => {
+  assert.deepEqual(storedServerUrlAction("moqt://example.test:4443/", false), { kind: "delete" });
 });
 
-test("storedServerUrlAction: 共有リンクから書き換えた URL は書く", () => {
-  assert.deepEqual(
-    storedServerUrlAction("moqt://mine.example:4443/", "moqt://shared.example:4443/"),
-    { kind: "write", url: "moqt://mine.example:4443/" },
-  );
-});
-
-test("storedServerUrlAction: 空欄は覚えていた URL を消す", () => {
-  assert.deepEqual(storedServerUrlAction("   ", null), { kind: "delete" });
-  assert.deepEqual(storedServerUrlAction("", "moqt://shared.example:4443/"), { kind: "delete" });
+test("storedServerUrlAction: Remember を選んでも空欄なら消す", () => {
+  assert.deepEqual(storedServerUrlAction("   ", true), { kind: "delete" });
 });
 
 test("parseStoredServerUrl: 空白を除いた 1 行だけを URL にする", () => {

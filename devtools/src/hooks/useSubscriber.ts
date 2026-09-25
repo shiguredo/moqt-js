@@ -1322,7 +1322,7 @@ export function useSubscriber(
     // 購読中として扱う (Stop で止められ、Start Subscribing を重ねて押せない。接続設定の入力も
     // 無効のまま保つ)
     instance.isStarting.value = true;
-    void persistServerUrl(settings.url.value);
+    void persistServerUrl(settings.url.value, settings.rememberServerUrl.value);
 
     try {
       instance.status.value = "disconnected";

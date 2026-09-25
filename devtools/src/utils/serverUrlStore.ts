@@ -1,26 +1,19 @@
 /**
  * Server URL を OPFS に残すかの判定と、ファイルの中身の読み方
  *
- * クエリの `url` は共有リンクなので、その値のままでは覚え直さない。
- * 空欄は「覚えない」ではなく、覚えていた URL を消す。
+ * 覚えるのは Remember Server URL を選んだときだけ。外したときと空欄のときは消す。
  */
 
-export type StoredServerUrlAction =
-  | { kind: "skip" }
-  | { kind: "write"; url: string }
-  | { kind: "delete" };
+export type StoredServerUrlAction = { kind: "write"; url: string } | { kind: "delete" };
 
 /**
- * 今の Server URL を OPFS に書くか、消すか、何もしないか
+ * 今の Server URL を OPFS に書くか、消すか
  *
- * `queryUrl` と一字一句同じときは、共有リンクを開いただけなので書かない。
+ * `remember` が false のときは、覚えていた URL を消す。
  */
-export function storedServerUrlAction(
-  current: string,
-  queryUrl: string | null,
-): StoredServerUrlAction {
-  if (queryUrl !== null && current === queryUrl) {
-    return { kind: "skip" };
+export function storedServerUrlAction(current: string, remember: boolean): StoredServerUrlAction {
+  if (!remember) {
+    return { kind: "delete" };
   }
   const url = current.trim();
   if (url === "") {
@@ -62,15 +55,6 @@ export function queryServerUrl(search: string): string | null {
 /** OPFS 上の Server URL。このオリジンだけから読める */
 const SERVER_URL_FILE = "server-url.txt";
 
-// このページを開いたときの共有リンクの url。無いときは null。
-// 同じ値のままでは OPFS を上書きしない
-let notedQueryServerUrl: string | null = null;
-
-/** 起動時に、クエリの url を覚えておく対象から外す */
-export function noteQueryServerUrl(search: string): void {
-  notedQueryServerUrl = queryServerUrl(search);
-}
-
 async function privateDirectory(): Promise<FileSystemDirectoryHandle | null> {
   try {
     if (typeof navigator === "undefined" || navigator.storage?.getDirectory === undefined) {
@@ -102,15 +86,12 @@ export async function readStoredServerUrl(): Promise<string | null> {
 }
 
 /**
- * 今の Server URL を OPFS に書く。共有リンクのままなら何もしない
+ * Remember Server URL が付いているときだけ OPFS に書く。外したときは消す
  *
  * 書けなくても画面の入力はそのまま使える。
  */
-export async function persistServerUrl(current: string): Promise<void> {
-  const action = storedServerUrlAction(current, notedQueryServerUrl);
-  if (action.kind === "skip") {
-    return;
-  }
+export async function persistServerUrl(current: string, remember: boolean): Promise<void> {
+  const action = storedServerUrlAction(current, remember);
   try {
     const root = await privateDirectory();
     if (root === null) {

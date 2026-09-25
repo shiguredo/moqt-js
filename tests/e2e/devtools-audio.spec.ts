@@ -45,7 +45,7 @@ test("音声の設定が UI から URL へ反映され、生成された URL か
 test("Publisher と Subscriber、および Subscriber だけは音声出力デバイスを選べ、Publisher だけでは出さない", async ({
   page,
 }) => {
-  // 既定は両方を表示する。再生先は Subscribe Settings にある
+  // 既定は両方を表示する。再生先は Subscriber のまとまりにある
   await page.goto(DEVTOOLS_URL);
   await expect(page.getByTestId("audio-output-fetch-devices")).toBeVisible();
 

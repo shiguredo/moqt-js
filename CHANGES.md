@@ -67,6 +67,13 @@
   - URL クエリ `mode` で Publisher だけ / Subscriber だけを表示する。ヘッダーの副題に 3 つのモードを並べ、今のモードを示すとともに、他のモードのページを今の接続設定のまま新しいタブで開けるようにする
   - Catalog Timeout と Use Dedicated Worker を URL に載せ、同じ接続設定のページを URL で再現できるようにする
   - @voluntas
+- [UPDATE] moqt-devtools の接続設定を、Connection / Publisher / Subscriber に分けて並べる
+  - Video と Audio は Publisher の中に置く。Catalog、再生先、Jitter Buffer は Subscriber の中に置く
+  - Publisher だけのページでは Subscriber のまとまりを出さず、Subscriber だけのページでは Publisher のまとまりを出さない
+  - @voluntas
+- [UPDATE] moqt-devtools の Server URL は、Remember Server URL を選んだときだけ OPFS に覚える
+  - 欄を離れただけでは残さない。外すと覚えていた URL を消す
+  - @voluntas
 - [UPDATE] moqt-devtools の音声を Subgroup と Datagram から選んで送れるようにする
   - Audio Delivery の既定は Subgroup。Datagram は draft-ietf-moq-transport-21 §11.2。WT-H2 (reliable-only) では Subgroup で送る
   - 選んだ送り方は URL の `audioDelivery=datagram` に載る。既定の subgroup は載せない

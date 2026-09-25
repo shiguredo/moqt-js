@@ -38,13 +38,19 @@ test("入力した Server URL を次に開いたときに戻す", async ({ page 
 
   const saved = "moqt://remembered.example:4443/";
   const input = page.getByTestId("server-url");
+  const remember = page.getByTestId("remember-server-url");
+  // 欄を変えただけでは覚えない
   await input.fill(saved);
   await input.blur();
+  await expect.poll(() => readServerUrlFile(page)).toBe("");
+
+  await remember.check();
   await expect.poll(() => readServerUrlFile(page)).toBe(saved);
 
-  // クエリの url が無い再読み込みでは、OPFS の値を出す
+  // クエリの url が無い再読み込みでは、OPFS の値と Remember を戻す
   await page.goto(DEVTOOLS_URL);
   await expect(input).toHaveValue(saved);
+  await expect(remember).toBeChecked();
 });
 
 test("共有リンクの url は表示するが、覚えた Server URL は上書きしない", async ({ page }) => {
@@ -55,15 +61,18 @@ test("共有リンクの url は表示するが、覚えた Server URL は上書
   const saved = "moqt://remembered.example:4443/";
   const shared = "moqt://shared.example:4443/";
   const input = page.getByTestId("server-url");
+  const remember = page.getByTestId("remember-server-url");
   await input.fill(saved);
-  await input.blur();
+  await remember.check();
   await expect.poll(() => readServerUrlFile(page)).toBe(saved);
 
   await page.goto(`${DEVTOOLS_URL}?url=${encodeURIComponent(shared)}`);
   await expect(input).toHaveValue(shared);
-  // 共有リンクを開いただけではファイルを書き換えない
+  // 共有リンクを開いただけでは Remember は付かず、ファイルも書き換えない
+  await expect(remember).not.toBeChecked();
   await expect.poll(() => readServerUrlFile(page)).toBe(saved);
 
   await page.goto(DEVTOOLS_URL);
   await expect(input).toHaveValue(saved);
+  await expect(remember).toBeChecked();
 });

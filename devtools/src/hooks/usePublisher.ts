@@ -1179,7 +1179,7 @@ export function usePublisher() {
     // 止めても、接続設定の入力を有効に戻さない
     pub.isStarting.value = true;
     loggedAudioDatagramFallback = false;
-    void persistServerUrl(settings.url.value);
+    void persistServerUrl(settings.url.value, settings.rememberServerUrl.value);
     try {
       pub.pubStatus.value = "disconnected";
       pub.pubStatusMessage.value = "Connecting...";
