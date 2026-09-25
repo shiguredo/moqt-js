@@ -316,8 +316,9 @@ test("音声レベルメーターの見出し行の項目は、値が変わっ�
     return { inactive, voiceOff, voiceOn, quiet, loud, notReported, notMeasured };
   });
 
-  // 546 px の幅では見出し行が 1 行に収まる (折り返すと下の Catalog と Statistics が下へ動く)
-  expect(layout.quiet.headerHeight).toBe(16);
+  // 546 px の幅では見出し行が 1 行に収まる (折り返すと 40px 前後になり、下の Catalog と
+  // Statistics が動く)。行高は 16px で、flex の baseline で 1px 足されることがある
+  expect(layout.quiet.headerHeight).toBeLessThanOrEqual(20);
 
   // どの状態でも項目の位置と大きさ、見出し行とメーターの高さが変わらない
   for (const state of [

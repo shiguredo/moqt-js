@@ -137,6 +137,9 @@
 - [UPDATE] moqt-devtools の見出しを「MOQT DevTools (draft-21)」にし、draft-21 から draft-ietf-moq-transport-21 の文書を開けるようにする
   - ページのタイトルも同じにする
   - @voluntas
+- [FIX] moqt-devtools の音声メーターの見出しが、幅の広い UI フォントで折り返さないようにする
+  - 見出しの値を 11px にし、項目の間隔を詰める。折り返すと下の Catalog と Statistics が動く
+  - @voluntas
 - [FIX] moqt-devtools の音声レベルメーターの数値が、桁の変化で左右に動かないようにする
   - peak / RMS は小数点の位置を、LOC Audio Level は `dBov` の位置を固定する。voice の on は off と同じ文字数にする
   - @voluntas

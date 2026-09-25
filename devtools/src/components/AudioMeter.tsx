@@ -161,6 +161,9 @@ interface AudioMeterProps {
  * 値は `font-mono` の桁数 (`ch`) で幅を固定する。値の文字数で幅が変わると、右寄せの
  * 並び全体が動き、話している間ずっと画面が揺れる。`tabular-nums` は `font-mono` が
  * 使えない環境でも桁の幅を揃えるために付ける。
+ *
+ * 見出しの値は 11px。12px のままでは、UI フォントが Inter より広い環境で
+ * 見出し行が折り返し、下の Catalog と Statistics が動く。
  */
 // inline-block にしないと width が効かず、文字数で欄の幅が変わる。
 // はみ出した文字で隣の欄を押さないよう、収まりきらない分は隠す
@@ -220,7 +223,7 @@ export function AudioMeter({
     >
       <div class="flex flex-wrap items-center justify-between gap-2 mb-2">
         <h3 class="text-xs font-semibold text-slate-600 uppercase tracking-wide">Audio</h3>
-        <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-600">
+        <div class="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] leading-4 text-slate-600">
           <span class={METER_FIELD_CLASS}>
             <span>peak</span>
             <span
