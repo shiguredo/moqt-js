@@ -23,6 +23,10 @@
   - 購読の Subgroup の stream が FIN または RESET_STREAM で終わったことを、その stream の最後の Object を object コールバックへ渡した後に知らせる (Group ID、確定した Subgroup ID、終わり方)
   - draft-ietf-moq-transport-21 Section 2.1 のとおり Object は順不同で届きうるため、前の Group の stream が終わるまで次の Group の Object を保留するアプリが使う
   - @voluntas
+- [ADD] moqt-devtools の publisher で音声をマイクから取れるようにし、音声入力デバイスを選べるようにする
+  - Audio Source に Microphone を足し、Audio Device で入力デバイスを選ぶ。マイクの音にかけるブラウザの音声処理 (echoCancellation / noiseSuppression / autoGainControl) を切り替えられる。選んだデバイスと無効にした音声処理は URL (Copy URL) にも載せる
+  - マイクのサンプルレートとチャンネル数はデバイスが決めるため、実際に取れた値を catalog と AudioEncoder に使う。マイクを取れないときは映像だけを配信する
+  - @voluntas
 - [ADD] moqt-devtools の subscriber に表示の止まりの原因と受信の欠けの統計を追加する
   - 止まりごとに原因を 1 つ決め (`source` / `loss` / `discarded` / `arrival` / `groupSwitchHold` / `decode` / `playout` / `render` / `unknown`)、原因ごとの回数と時間、直近 30 回の止まり (時刻、長さ、Group ID / Object ID) を `playbackTiming` に出す
   - 届かなかった Object と Group、RESET_STREAM で終わった Subgroup の stream、上限で解けた Group の切り替えの保留を数える。止まりと stream の reset はデバッグログにも出す

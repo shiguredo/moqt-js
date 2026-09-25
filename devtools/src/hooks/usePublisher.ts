@@ -43,6 +43,11 @@ import { EncoderWrapper, type EncodedChunkData } from "../utils/EncoderWrapper";
 import { WallClockMapper } from "../../../src/mediaClock.ts";
 import { EMPTY_PUBLISH_TIMING, PublishTimingStats } from "../utils/publishTimingStats";
 import {
+  type AudioFormat,
+  buildMicrophoneConstraints,
+  resolveCapturedAudioFormat,
+} from "../utils/microphone";
+import {
   CATALOG_REPUBLISH_MAX_INTERVAL_MS,
   catalogRepublishIntervalMs,
 } from "../utils/catalogRepublish";
@@ -183,7 +188,7 @@ export function buildPublisherCatalog(options: PublisherCatalogOptions): Catalog
  * 確立した映像の配信まで巻き込んで止まるため、Catalog を作る前に判定する。
  */
 export function resolveAudioPublishable(audioSource: AudioSourceType): boolean {
-  return audioSource === "dummy" && isMediaStreamTrackProcessorAvailable();
+  return audioSource !== "none" && isMediaStreamTrackProcessorAvailable();
 }
 
 /**
@@ -469,23 +474,106 @@ function startCatalogRepublish(maxCacheDurationMs: number, send: () => Promise<v
 
 export function usePublisher() {
   /**
-   * 音声設定に従ってダミー音声のストリームを用意する
+   * 音声設定に従って音声のストリームを用意し、取れた音の形式を返す
    *
-   * `audioSource` が "none" のときは何も作らない (既定)。
+   * `audioSource` が "none" のときは何も作らず null を返す (既定)。"dummy" は要求した
+   * 形式で 440 Hz の音を作る。"microphone" は選んだデバイスから取り、サンプルレートと
+   * チャンネル数はデバイスが決めた実際の値を返す (utils/microphone.ts)
    */
-  function startAudioStream(sampleRate: number, channels: number): void {
+  async function startAudioStream(
+    source: AudioSourceType,
+    requested: AudioFormat,
+  ): Promise<AudioFormat | null> {
     stopAudioStream();
-    if (settings.audioSource.value !== "dummy") {
-      return;
+    if (source === "dummy") {
+      const generator = createDummyAudioStream(requested.sampleRate, requested.channels);
+      pub.audioStream.value = generator.stream;
+      pub.audioStreamCleanup.value = (): void => {
+        generator.stop();
+        for (const track of generator.stream.getTracks()) {
+          track.stop();
+        }
+      };
+      return requested;
     }
-    const generator = createDummyAudioStream(sampleRate, channels);
-    pub.audioStream.value = generator.stream;
-    pub.audioStreamCleanup.value = (): void => {
-      generator.stop();
-      for (const track of generator.stream.getTracks()) {
-        track.stop();
+    if (source === "microphone") {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: false,
+        audio: buildMicrophoneConstraints({
+          deviceId: settings.selectedMicrophoneDeviceId.value,
+          sampleRate: requested.sampleRate,
+          channels: requested.channels,
+          echoCancellation: settings.audioEchoCancellation.value,
+          noiseSuppression: settings.audioNoiseSuppression.value,
+          autoGainControl: settings.audioAutoGainControl.value,
+        }),
+      });
+      const cleanup = (): void => {
+        for (const track of stream.getTracks()) {
+          track.stop();
+        }
+      };
+      const [track] = stream.getAudioTracks();
+      if (track === undefined) {
+        cleanup();
+        throw new Error("microphone stream has no audio track");
       }
-    };
+      pub.audioStream.value = stream;
+      pub.audioStreamCleanup.value = cleanup;
+      return resolveCapturedAudioFormat(track.getSettings(), requested);
+    }
+    return null;
+  }
+
+  /**
+   * 配信に使う音声を用意し、配信できれば取れた音の形式を返す (できなければ null)
+   *
+   * Catalog を作る前に音声のストリームを取る。マイクではサンプルレートとチャンネル数を
+   * デバイスが決めるため、実際に取れた値を Catalog と AudioEncoder に使う。
+   * 取れた形式の AudioEncoder の設定にブラウザが対応していなければ音声を諦める
+   * (Catalog だけ音声トラックを広告すると、購読側は object が来ないまま待ち続ける)。
+   * マイクを取れない (許可されないなど) ときも、映像の配信は続けて音声だけを諦める
+   */
+  async function prepareAudioForPublishing(
+    source: AudioSourceType,
+    codec: AudioCodecType,
+    bitrate: number,
+    requested: AudioFormat,
+  ): Promise<AudioFormat | null> {
+    if (!resolveAudioPublishable(source)) {
+      stopAudioStream();
+      return null;
+    }
+    let format: AudioFormat | null;
+    try {
+      format = await startAudioStream(source, requested);
+    } catch (error) {
+      addLog("warn", "[publisher] failed to capture audio, publishing video only", {
+        source,
+        message: error instanceof Error ? error.message : String(error),
+      });
+      stopAudioStream();
+      return null;
+    }
+    if (format === null) {
+      return null;
+    }
+    const supported = await isAudioEncoderConfigSupported(
+      codec,
+      bitrate,
+      format.sampleRate,
+      format.channels,
+    );
+    if (!supported) {
+      addLog("warn", "[publisher] audio codec is not supported in this browser", {
+        codec,
+        sampleRate: format.sampleRate,
+        channels: format.channels,
+      });
+      stopAudioStream();
+      return null;
+    }
+    return format;
   }
 
   /**
@@ -510,21 +598,14 @@ export function usePublisher() {
   /**
    * 配信に使う音声トラックを取り出す
    *
-   * 音声のダミーストリームはここで作る (プレビューでは作らない)。配信に使う
-   * サンプルレートとチャンネル数は Catalog と Encoder と同じ捕捉値を使い、
-   * 実際の信号と設定が食い違わないようにする。音声を使わない場合は作成済みの
-   * ストリームをここで止める。
+   * 音声のストリームは `prepareAudioForPublishing` が用意している。音声を使わない
+   * 場合は作成済みのストリームをここで止める。
    */
-  function takeAudioTrackForPublishing(
-    audioPublishable: boolean,
-    sampleRate: number,
-    channels: number,
-  ): MediaStreamTrack | undefined {
+  function takeAudioTrackForPublishing(audioPublishable: boolean): MediaStreamTrack | undefined {
     if (!audioPublishable) {
       stopAudioStream();
       return undefined;
     }
-    startAudioStream(sampleRate, channels);
     const audioTrack = pub.audioStream.value?.getAudioTracks()[0];
     if (!audioTrack) {
       throw new Error("Failed to get audio track");
@@ -532,7 +613,7 @@ export function usePublisher() {
     return audioTrack;
   }
 
-  /** ダミー音声のストリームを止める */
+  /** 音声のストリーム (ダミー音声 / マイク) を止める */
   function stopAudioStream(): void {
     if (pub.audioStreamCleanup.value) {
       pub.audioStreamCleanup.value();
@@ -964,26 +1045,15 @@ export function usePublisher() {
       );
       pub.catalogPublisher.value = catalogPublisherInstance;
 
-      // 音声を配信するかどうかを決める。
-      //
-      // 対応していない組み合わせ (AAC + 48kHz 以外など) で Catalog だけ音声トラックを
-      // 広告すると、購読側は object が来ないまま待ち続ける。映像と同じく事前に確認する
-      let audioPublishable = resolveAudioPublishable(audioSourceValue);
-      if (audioPublishable) {
-        audioPublishable = await isAudioEncoderConfigSupported(
-          audioCodecValue,
-          audioBitrateValue,
-          audioSampleRateValue,
-          audioChannelsValue,
-        );
-        if (!audioPublishable) {
-          addLog("warn", "[publisher] audio codec is not supported in this browser", {
-            codec: audioCodecValue,
-            sampleRate: audioSampleRateValue,
-            channels: audioChannelsValue,
-          });
-        }
-      }
+      // 音声を配信するかどうかを決め、配信するなら取れた音の形式を得る
+      // (prepareAudioForPublishing)。Catalog と AudioEncoder にはこの形式を使う
+      const audioFormat = await prepareAudioForPublishing(
+        audioSourceValue,
+        audioCodecValue,
+        audioBitrateValue,
+        { sampleRate: audioSampleRateValue, channels: audioChannelsValue },
+      );
+      const audioPublishable = audioFormat !== null;
 
       // Catalog を作成して送信
       const createdCatalog = buildPublisherCatalog({
@@ -993,14 +1063,14 @@ export function usePublisher() {
         height,
         framerate: framerateValue,
         bitrate: bitrateValue,
-        // 音声は "dummy" かつ配信可能なときだけトラックを載せる
-        ...(audioPublishable
+        // 音声は配信できるときだけトラックを載せる (形式は取れた音の値)
+        ...(audioFormat !== null
           ? {
               audio: {
                 codec: audioCodecValue,
                 bitrate: audioBitrateValue,
-                sampleRate: audioSampleRateValue,
-                channels: audioChannelsValue,
+                sampleRate: audioFormat.sampleRate,
+                channels: audioFormat.channels,
               },
             }
           : {}),
@@ -1058,11 +1128,7 @@ export function usePublisher() {
         throw new Error("Failed to get video track");
       }
 
-      const audioTrack = takeAudioTrackForPublishing(
-        audioPublishable,
-        audioSampleRateValue,
-        audioChannelsValue,
-      );
+      const audioTrack = takeAudioTrackForPublishing(audioPublishable);
 
       pub.isPreviewActive.value = false;
 
@@ -1155,13 +1221,13 @@ export function usePublisher() {
       resetVideoPublishState();
 
       // 音声トラックを配信する
-      if (audioTrack) {
+      if (audioTrack && audioFormat !== null) {
         await startAudioPublishing(session, namespaceArray, audioTrack, {
           useWorker,
           codec: audioCodecValue,
           bitrate: audioBitrateValue,
-          sampleRate: audioSampleRateValue,
-          channels: audioChannelsValue,
+          sampleRate: audioFormat.sampleRate,
+          channels: audioFormat.channels,
           maxCacheDuration: maxCacheDurationValue,
         });
       }

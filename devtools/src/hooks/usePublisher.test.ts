@@ -772,4 +772,5 @@ test("resolveAudioConfigToSend: 送り直し要求で保持している Audio Co
 test("resolveAudioPublishable: 非対応環境と無効設定では false を返す", () => {
   assert.equal(resolveAudioPublishable("none"), false);
   assert.equal(resolveAudioPublishable("dummy"), false);
+  assert.equal(resolveAudioPublishable("microphone"), false);
 });

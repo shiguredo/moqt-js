@@ -10,7 +10,13 @@ import {
   buildAuthorizationToken,
   buildQueryString,
   initFromUrl,
+  isAudioSourceType,
   jitterBufferEnabled,
+  audioAutoGainControl,
+  audioEchoCancellation,
+  audioNoiseSuppression,
+  audioSource,
+  selectedMicrophoneDeviceId,
 } from "./connectionSettings";
 
 // テスト間で Authorization Token の signal を持ち越さないためのリセット
@@ -260,4 +266,48 @@ test("buildQueryString: jitter buffer を無効にした設定を URL で往復�
   initFromUrl(query);
   assert.isFalse(jitterBufferEnabled.value);
   jitterBufferEnabled.value = true;
+});
+
+// 音声の入力にマイクを選べる。URL の audioSource=microphone も受理する
+test("isAudioSourceType: microphone を音声の入力として受理する", () => {
+  assert.isTrue(isAudioSourceType("microphone"));
+  assert.isFalse(isAudioSourceType("line-in"));
+  audioSource.value = "none";
+  initFromUrl("audioSource=microphone");
+  assert.equal(audioSource.value, "microphone");
+  audioSource.value = "none";
+});
+
+// 音声処理 (エコー除去 / ノイズ抑制 / 自動ゲイン) の既定はブラウザの既定と同じ有効
+test("音声処理の切り替え: 既定は有効", () => {
+  assert.isTrue(audioEchoCancellation.value);
+  assert.isTrue(audioNoiseSuppression.value);
+  assert.isTrue(audioAutoGainControl.value);
+});
+
+// Copy URL は無効にした音声処理だけを =0 で載せ、その URL から設定を復元できる。
+// 選んだマイクのデバイスも載せる (カメラの cameraDeviceId と同じ)
+test("buildQueryString: マイクのデバイスと音声処理を URL で往復できる", () => {
+  selectedMicrophoneDeviceId.value = "mic-1";
+  audioEchoCancellation.value = false;
+  audioNoiseSuppression.value = true;
+  audioAutoGainControl.value = false;
+  const params = new URLSearchParams(buildQueryString());
+  assert.equal(params.get("microphoneDeviceId"), "mic-1");
+  assert.equal(params.get("audioEchoCancellation"), "0");
+  assert.isNull(params.get("audioNoiseSuppression"));
+  assert.equal(params.get("audioAutoGainControl"), "0");
+
+  selectedMicrophoneDeviceId.value = "";
+  audioEchoCancellation.value = true;
+  audioAutoGainControl.value = true;
+  initFromUrl(params.toString());
+  assert.equal(selectedMicrophoneDeviceId.value, "mic-1");
+  assert.isFalse(audioEchoCancellation.value);
+  assert.isTrue(audioNoiseSuppression.value);
+  assert.isFalse(audioAutoGainControl.value);
+
+  selectedMicrophoneDeviceId.value = "";
+  audioEchoCancellation.value = true;
+  audioAutoGainControl.value = true;
 });

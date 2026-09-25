@@ -8,6 +8,7 @@ import {
 import type {
   AudioCodecType,
   AudioSourceType,
+  MicrophoneDevice,
   CameraDevice,
   CodecType,
   VideoSourceType,
@@ -53,6 +54,13 @@ export const audioCodec = signal<AudioCodecType>("opus");
 export const audioBitrate = signal(64000);
 export const audioSampleRate = signal(48000);
 export const audioChannels = signal(2);
+// 音声入力デバイスの一覧と、選んだデバイス (audioSource が "microphone" のとき使う)
+export const microphoneDevices = signal<MicrophoneDevice[]>([]);
+export const selectedMicrophoneDeviceId = signal<string>("");
+// マイクの音にかけるブラウザの音声処理。既定はブラウザの既定と同じ有効
+export const audioEchoCancellation = signal(true);
+export const audioNoiseSuppression = signal(true);
+export const audioAutoGainControl = signal(true);
 
 // 配信設定
 // MAX_CACHE_DURATION: Relay がオブジェクトをキャッシュして良い最大時間（ミリ秒）
@@ -229,6 +237,43 @@ export async function fetchCameraDevices(): Promise<void> {
 }
 
 /**
+ * 音声入力デバイスの一覧を取る
+ *
+ * カメラと同じく、デバイスのラベルを得るため一時的にマイクへアクセスする。
+ * 選んだデバイスが一覧に無ければ先頭のデバイスを選ぶ
+ */
+export async function fetchMicrophoneDevices(): Promise<void> {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: false, audio: true });
+    for (const track of stream.getTracks()) {
+      track.stop();
+    }
+
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const audioDevices = devices
+      .filter((device) => device.kind === "audioinput")
+      .map((device) => ({
+        deviceId: device.deviceId,
+        label: device.label || `Microphone ${device.deviceId.substring(0, 8)}`,
+      }));
+    microphoneDevices.value = audioDevices;
+
+    const [firstAudioDevice] = audioDevices;
+    if (firstAudioDevice !== undefined) {
+      const selectedExists = audioDevices.some(
+        (device) => device.deviceId === selectedMicrophoneDeviceId.value,
+      );
+      if (!selectedExists) {
+        selectedMicrophoneDeviceId.value = firstAudioDevice.deviceId;
+      }
+    }
+  } catch (error) {
+    console.error("Failed to fetch microphone devices:", error);
+    microphoneDevices.value = [];
+  }
+}
+
+/**
  * `connect()` に渡す MOQT URI を現在の設定から構築する。
  * draft-ietf-moq-transport-21 §6.1.1 (Fragment Identifiers) に従い
  * `fragment` が空でなければ `#type:value` を連結する。
@@ -328,6 +373,19 @@ export function buildQueryString(): string {
   if (audioChannels.value) {
     params.set("audioChannels", String(audioChannels.value));
   }
+  if (selectedMicrophoneDeviceId.value) {
+    params.set("microphoneDeviceId", selectedMicrophoneDeviceId.value);
+  }
+  // 音声処理は既定 (有効) のときは載せず、無効にしたものだけ =0 で載せる
+  if (!audioEchoCancellation.value) {
+    params.set("audioEchoCancellation", "0");
+  }
+  if (!audioNoiseSuppression.value) {
+    params.set("audioNoiseSuppression", "0");
+  }
+  if (!audioAutoGainControl.value) {
+    params.set("audioAutoGainControl", "0");
+  }
   if (maxCacheDuration.value >= 0) {
     params.set("maxCacheDuration", String(maxCacheDuration.value));
   }
@@ -357,7 +415,7 @@ export function buildQueryString(): string {
 // 空になって表示と実際の設定が食い違う)
 
 /** 音声の入力元の選択肢 */
-export const AUDIO_SOURCES: readonly AudioSourceType[] = ["none", "dummy"];
+export const AUDIO_SOURCES: readonly AudioSourceType[] = ["none", "dummy", "microphone"];
 
 /** 音声コーデックの選択肢 */
 export const AUDIO_CODECS: readonly AudioCodecType[] = ["opus", "aac"];
@@ -419,6 +477,22 @@ function initAudioSettingsFromUrl(params: URLSearchParams): void {
   if (audioChannelsParam !== null && AUDIO_CHANNELS.includes(Number(audioChannelsParam))) {
     audioChannels.value = Number(audioChannelsParam);
   }
+
+  const microphoneDeviceIdParam = params.get("microphoneDeviceId");
+  if (microphoneDeviceIdParam) {
+    selectedMicrophoneDeviceId.value = microphoneDeviceIdParam;
+  }
+
+  // 音声処理は =0 で無効、=1 で有効にする。それ以外の値は無視する
+  const applyFlag = (name: string, target: { value: boolean }): void => {
+    const param = params.get(name);
+    if (param === "0" || param === "1") {
+      target.value = param === "1";
+    }
+  };
+  applyFlag("audioEchoCancellation", audioEchoCancellation);
+  applyFlag("audioNoiseSuppression", audioNoiseSuppression);
+  applyFlag("audioAutoGainControl", audioAutoGainControl);
 }
 
 /**
