@@ -85,6 +85,9 @@
 - [UPDATE] moqt-devtools の subscriber の Play Audio を、NEW_GROUP_REQUEST と同じ行の切り替えにする
   - 音声のメーターと Catalog の間にあった Play Audio の行をなくし、Publisher と Subscriber で音声のメーターと Catalog の上端をそろえる
   - @voluntas
+- [UPDATE] moqt-devtools の見出しを「MOQT DevTools (draft-21)」にし、draft-21 から draft-ietf-moq-transport-21 の文書を開けるようにする
+  - ページのタイトルも同じにする
+  - @voluntas
 - [FIX] moqt-devtools の subscriber で、映像トラックの無い catalog を購読できるようにする
   - これまでは「no video track in catalog」で購読をやめていた。映像トラックが無い catalog では音声トラックだけを購読し、映像の枠は空のまま描く
   - 音声だけの購読では、音声トラックの購読の確立で Stop を押せるようにし、音声トラックの終わり (publisher の停止など) で「Stream ended」にする

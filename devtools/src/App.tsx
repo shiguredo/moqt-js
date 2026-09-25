@@ -8,6 +8,10 @@ import { buildQueryString } from "./signals/connectionSettings";
 import { useCopyUrlButton } from "./hooks/useCopyUrlButton";
 import * as sub from "./signals/subscriber";
 
+// 対応している MOQT の draft の文書。見出しとフッターからリンクする
+const MOQT_TRANSPORT_DRAFT_URL =
+  "https://datatracker.ietf.org/doc/html/draft-ietf-moq-transport-21";
+
 function handleAddSubscriber(): void {
   sub.addSubscriber();
 }
@@ -75,7 +79,21 @@ export function App() {
         <div class="max-w-7xl mx-auto px-4 py-6">
           {/* Header */}
           <header class="text-center mb-6">
-            <h1 class="text-3xl font-bold text-slate-800">MOQT DevTools</h1>
+            {/* 対応している draft を見出しで示し、draft の文書を開けるようにする */}
+            <h1 class="text-3xl font-bold text-slate-800">
+              MOQT DevTools (
+              <a
+                href={MOQT_TRANSPORT_DRAFT_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                title="draft-ietf-moq-transport-21"
+                data-testid="moqt-draft-link"
+                class="text-blue-500 hover:text-blue-600 underline"
+              >
+                draft-21
+              </a>
+              )
+            </h1>
             <p class="text-slate-500 mt-1">Media over QUIC Transport - Publisher & Subscriber</p>
             <p class="mt-2 flex justify-center gap-4">
               <a
@@ -143,7 +161,7 @@ export function App() {
               </a>{" "}
               -{" "}
               <a
-                href="https://datatracker.ietf.org/doc/html/draft-ietf-moq-transport-21"
+                href={MOQT_TRANSPORT_DRAFT_URL}
                 target="_blank"
                 rel="noopener noreferrer"
                 class="hover:text-slate-600 underline"
