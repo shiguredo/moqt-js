@@ -1,7 +1,7 @@
 # moqt-devtools の接続設定で、デバイスの一覧を取ると設定の並びが 1 px 動く
 
 - Created: 2026-09-25
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-25
 - Branch: feature/fix-devtools-device-field-height-shift
 - Polished: {YYYY-MM-DD}
 
@@ -29,3 +29,16 @@ moqt-devtools の接続設定の Camera Device と Audio Device の欄は、一�
 
 - Fetch Devices を押す前と後で、Video Settings と Audio Settings の grid の高さが変わらず、ボタンと select の高さが同じ行の他の select と同じになる
 - `vp check` / `tsc --noEmit` / `vp test run` / 既存の Playwright の E2E が通る
+
+## 解決方法
+
+- `devtools/src/components/ConnectionSettings.tsx` の Camera Device と Audio Device の欄を縦の flex (`flex flex-col`) にし、Fetch Devices のボタンと select に `DEVICE_CONTROL_SIZE_CLASS` (`flex-1 basis-0 min-h-9`) を付けた。ボタンと select は行の高さいっぱいに伸び、自身の高さは行の高さに加えない。行の高さは同じ行の他の select が決める
+  - Tailwind の `flex-1` の flex-basis は 0% で、高さの決まっていない列の flex では中身の高さとして扱われ得るため、`basis-0` で 0 にする
+- 手元の devtools (Chromium の偽のデバイス) で、Fetch Devices を押す前と後の grid の高さとボタン / select の高さを測った
+
+| 横幅    | grid (押す前 / 後)                 | ボタン / select                | 同じ行の select |
+| ------- | ---------------------------------- | ------------------------------ | --------------- |
+| 1440 px | 130 px / 130 px (変更前 131 / 130) | 37 px / 37 px (変更前 38 / 37) | 37 px           |
+| 390 px  | 203 px / 203 px                    | 37 px / 37 px                  | 37 px           |
+
+- `vp check` / `tsc --noEmit` / `vp test run` (2807 件) / 既存の Playwright の E2E (40 件) が通った
