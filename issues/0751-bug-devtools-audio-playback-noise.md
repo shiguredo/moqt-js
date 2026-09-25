@@ -1,7 +1,7 @@
 # moqt-devtools の subscriber で、受信した音声の再生がノイズっぽくなる
 
 - Created: 2026-09-25
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-25
 - Branch: feature/fix-devtools-audio-playback-noise
 - Polished: {YYYY-MM-DD}
 - Reporter: @voluntas
@@ -26,3 +26,19 @@ moqt-devtools の subscriber で Play Audio を有効にすると、受信した
 
 - 配備の relay で、実際に鳴った音の切れ目と重なりが、上の実測より大きく減る (20 秒あたりの数で比べる)
 - `vp check` / `tsc --noEmit` / `vp test run` / 既存の Playwright の E2E が通る
+
+## 解決方法
+
+- `devtools/src/hooks/useSubscriber.ts` の `handleAudioDecoded` は、`0750` の `AudioPlayoutScheduler` で鳴らす時刻を決め、`source.start(startAt)` で鳴らす。捨てると決めた音は鳴らさない
+- 鳴らす時刻の基準は再生の AudioContext と一緒に作り、一緒に捨てる (Play Audio を有効にしたときに作り、無効にしたときと購読の後始末で捨てる)
+- 基準を取り直した回数と捨てた音の数を、購読ごとに `audioPlayoutRebases` / `audioPlayoutDrops` として数え、`window.moqtDevTools.getSubscribers()` に出す (`resetSubscriberStats` で 0 に戻す)
+- 配備の relay で、ダミー音声 (440 Hz) を 20 秒再生した出力を測った
+
+| 配信       | 音の切れ目     | 重なって足された音 (サンプル) | 無音の隙間          |
+| ---------- | -------------- | ----------------------------- | ------------------- |
+| 映像と音声 | 1826 回 → 2 回 | 48692 → 0                     | 0 回 → 1 回 (81 ms) |
+| 音声だけ   | 1873 回 → 0 回 | 55240 → 0                     | 1 回 (4 ms) → 0 回  |
+
+- 映像と音声の配信の無音の隙間は、基準の取り直し 1 回 (`audioPlayoutRebases` 1) の分。捨てた音は 0
+- 足される遅れは、直す前に測った復号の出力の時刻での見積もりで、音声だけの配信で p50 86 ms、映像と音声の配信で p50 113 ms (160 ms 前後の途切れの後は、その分だけ遅れて鳴る)
+- `vp check` / `tsc --noEmit` / `vp test run` (2826 件) / 既存の Playwright の E2E (40 件) が通った
