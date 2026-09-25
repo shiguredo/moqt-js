@@ -182,6 +182,27 @@ export function SubscriberPanel({
             />
             <span class="text-sm text-slate-600">NEW_GROUP_REQUEST</span>
           </label>
+          {/*
+            受信した音声の再生。既定では再生しない。相互運用の実測で毎回音が出ると
+            邪魔になるため、明示的に有効にしたときだけ音声出力デバイスへ繋ぐ。
+            購読の前も購読中も切り替えられる。Publisher のパネルに無い行を足すと
+            下の項目の位置が 2 つのパネルでずれるため、この行に置く
+          */}
+          <label class="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              data-testid="subscriber-audio-playback-toggle"
+              checked={instance.audioPlaybackEnabled.value}
+              onChange={(e) => {
+                // 表示は再生の状態 (audioPlaybackEnabled) に従う。押した時点では戻しておき、
+                // 再生を始め終えてから切り替える (始められなかったときに表示だけ残さない)
+                e.currentTarget.checked = instance.audioPlaybackEnabled.value;
+                void toggleAudioPlayback();
+              }}
+              class="w-4 h-4 text-blue-600 border-slate-300 rounded focus:ring-blue-500"
+            />
+            <span class="text-sm text-slate-600">Play Audio</span>
+          </label>
         </div>
 
         {/* Buttons */}
@@ -268,31 +289,7 @@ export function SubscriberPanel({
           testIdPrefix="audio"
         />
 
-        {/* 受信した音声の再生 */}
-        {/*
-          既定では再生しない。相互運用の実測で毎回音が出ると邪魔になるため、
-          トグルを明示的に有効にしたときだけ音声出力デバイスへ繋ぐ。
-          <audio> は表示せず、srcObject の設定先としてだけ使う。
-        */}
-        <div class="flex items-center gap-3 mb-4">
-          <button
-            type="button"
-            data-testid="subscriber-audio-playback-toggle"
-            onClick={() => void toggleAudioPlayback()}
-            class={`w-28 px-4 py-2 text-sm font-medium rounded-lg transition-colors ${
-              instance.audioPlaybackEnabled.value
-                ? "bg-blue-500 hover:bg-blue-600 text-white"
-                : "bg-slate-200 hover:bg-slate-300 text-slate-700"
-            }`}
-          >
-            {instance.audioPlaybackEnabled.value ? "Stop Audio" : "Play Audio"}
-          </button>
-          <span class="text-xs text-slate-500">
-            {instance.audioPlaybackEnabled.value
-              ? "Playing received audio"
-              : "Received audio is not played (default)"}
-          </span>
-        </div>
+        {/* 受信した音声の再生先。表示せず、srcObject の設定先としてだけ使う */}
         <audio ref={audioRef} data-testid="subscriber-audio-element" class="hidden" />
 
         {/* Catalog。catalog を受け取る前も描き、値を「-」にする */}

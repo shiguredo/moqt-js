@@ -62,21 +62,21 @@ test("音声再生トグルは既定で無効で、有効にすると audio 要�
   const audioElement = page.getByTestId("subscriber-audio-element");
   const toggle = page.getByTestId("subscriber-audio-playback-toggle");
 
-  // 既定では再生しない (srcObject が未設定でラベルは Play Audio)
-  await expect(toggle).toHaveText("Play Audio");
+  // 既定では再生しない (srcObject が未設定で checkbox は外れている)
+  await expect(toggle).not.toBeChecked();
   await expect(audioElement).toHaveJSProperty("paused", true);
   await expect(audioElement).toHaveJSProperty("srcObject", null);
 
   // トグルを有効にすると、devtools 側で組んだ MediaStreamAudioDestinationNode の
   // ストリームが srcObject に設定され、再生状態になる
   await toggle.click();
-  await expect(toggle).toHaveText("Stop Audio");
+  await expect(toggle).toBeChecked();
   await expect(audioElement).not.toHaveJSProperty("srcObject", null);
   await expect(audioElement).toHaveJSProperty("paused", false);
 
   // 無効に戻すと srcObject が外れて停止する
   await toggle.click();
-  await expect(toggle).toHaveText("Play Audio");
+  await expect(toggle).not.toBeChecked();
   await expect(audioElement).toHaveJSProperty("srcObject", null);
   await expect(audioElement).toHaveJSProperty("paused", true);
 });
