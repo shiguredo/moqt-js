@@ -28,6 +28,7 @@ import { AudioDecoderWrapper } from "./codec/AudioDecoder";
 import { VideoDecoderWrapper } from "./codec/VideoDecoder";
 import { VideoDecodeOrder, priorObjectIdGapOf } from "./videoDecodeOrder";
 import { GroupSwitchGate } from "./groupSwitchGate";
+import { AudioPlayoutScheduler } from "./audioPlayout";
 import { DEFAULT_AUDIO_SAMPLE_RATE, resolveAudioChannelCount } from "./codec/config";
 import type {
   AudioCodecType,
@@ -327,6 +328,8 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   private outputStream: MediaStream | null = null;
   private audioContext: AudioContext | null = null;
   private audioDestination: MediaStreamAudioDestinationNode | null = null;
+  // 復号した音声を鳴らす時刻を決める。AudioContext を作るたびに基準を作り直す
+  private readonly audioPlayout = new AudioPlayoutScheduler();
 
   // ビデオ出力用
   private videoTrackGenerator: MediaStreamTrackGenerator<VideoFrame> | null = null;
@@ -867,6 +870,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       this.audioContext = new AudioContext({
         sampleRate,
       });
+      this.audioPlayout.reset();
       // ブラウザの自動再生ポリシー対応
       if (this.audioContext.state === "suspended") {
         void this.audioContext.resume();
@@ -1408,6 +1412,17 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       const sampleRate = audioData.sampleRate;
       const numberOfFrames = audioData.numberOfFrames;
 
+      // 届いたその場で鳴らすと、届く間隔の揺らぎで前の音と重なるか隙間が空き、ノイズに
+      // なる。再生の遅れだけ遅らせ、timestamp の間隔どおりに途切れなく並べる (audioPlayout.ts)
+      const decision = this.audioPlayout.schedule(
+        this.audioContext.currentTime,
+        audioData.timestamp,
+        numberOfFrames / sampleRate,
+      );
+      if (decision.kind === "drop") {
+        return;
+      }
+
       const audioBuffer = this.audioContext.createBuffer(
         numberOfChannels,
         numberOfFrames,
@@ -1421,11 +1436,11 @@ export class MediaSubscriberImpl implements MediaSubscriber {
         audioBuffer.copyToChannel(channelData, channel);
       }
 
-      // AudioBufferSourceNode で再生
+      // AudioBufferSourceNode で、決めた時刻に再生
       const source = this.audioContext.createBufferSource();
       source.buffer = audioBuffer;
       source.connect(this.audioDestination);
-      source.start();
+      source.start(decision.startAt);
     } catch (error) {
       this.callbacks.onError?.(error instanceof Error ? error : new Error(String(error)));
     } finally {

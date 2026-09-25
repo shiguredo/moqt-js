@@ -95,6 +95,10 @@
 - [UPDATE] moqt-devtools の見出しを「MOQT DevTools (draft-21)」にし、draft-21 から draft-ietf-moq-transport-21 の文書を開けるようにする
   - ページのタイトルも同じにする
   - @voluntas
+- [FIX] `createMediaSubscriber` で、復号した音声を届いたその場で鳴らし、前の音との重なりと隙間でノイズになるのを修正する
+  - 再生の遅れ (80 ms) だけ遅らせ、TIMESTAMP の間隔どおりに途切れなく並べて鳴らす。過ぎてから届いた音では基準を取り直し、遅れが 300 ms を超える分は捨てて縮める
+  - 振る舞いが変わる: 音声は再生の遅れの分だけ遅れて鳴る
+  - @voluntas
 - [FIX] moqt-devtools の接続設定で、Camera Device と Audio Device の一覧を取っても設定の並びが動かないようにする
   - 一覧を取る前の Fetch Devices のボタン (38 px) と、取った後の select (37 px) の高さの違いで、行の高さが変わって下の項目が 1 px 動いていた。ボタンと select を行の高さいっぱいに伸ばし、同じ行の他の select と同じ高さにする
   - @voluntas
