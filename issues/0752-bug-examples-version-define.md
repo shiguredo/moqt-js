@@ -1,4 +1,4 @@
-# examples のページが __MOQT_JS_VERSION__ の未定義で読み込みの時点で止まる
+# examples のページが **MOQT_JS_VERSION** の未定義で読み込みの時点で止まる
 
 - Created: 2026-09-25
 - Completed: {YYYY-MM-DD}
