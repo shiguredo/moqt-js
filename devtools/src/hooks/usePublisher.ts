@@ -10,6 +10,7 @@ import {
   type Catalog,
   type CatalogTrack,
   type DebugMessage,
+  type Publisher,
   type Session,
 } from "moqt-js";
 import {
@@ -91,6 +92,19 @@ function resetVideoPublishState(): void {
   pub.framesSinceKeyFrame.value = 0;
   pub.newGroupRequested.value = false;
   pub.newGroupRequestsReceived.value = 0;
+}
+
+/**
+ * 映像トラックの PUBLISH が確立した (session.publish が返った) ことを signal に反映する
+ *
+ * 配信を始めている途中の状態 (isStarting) を終える。以降は pubSession があることで
+ * 接続設定を使っていると判定する (pub.hasActivePublisher)。Subscriber の isStarting が
+ * 映像トラックの購読の確立で下りるのとそろえる。
+ */
+function markVideoPublisherEstablished(publisherInstance: Publisher): void {
+  pub.forwardState.value = publisherInstance.forwardState;
+  pub.publisher.value = publisherInstance;
+  pub.isStarting.value = false;
 }
 
 /** 配信する映像トラックの Catalog を組み立てるための入力 */
@@ -863,6 +877,9 @@ export function usePublisher() {
   };
 
   const startPublishing = async (): Promise<void> => {
+    // 配信を始めている途中として扱う (pub.isStarting)。connect を待つ間に Subscriber を
+    // 止めても、接続設定の入力を有効に戻さない
+    pub.isStarting.value = true;
     try {
       pub.pubStatus.value = "disconnected";
       pub.pubStatusMessage.value = "Connecting...";
@@ -1081,8 +1098,7 @@ export function usePublisher() {
           dynamicGroups: true,
         },
       );
-      pub.forwardState.value = publisherInstance.forwardState;
-      pub.publisher.value = publisherInstance;
+      markVideoPublisherEstablished(publisherInstance);
 
       pub.pubStatus.value = "connected";
       pub.pubStatusMessage.value = `Publishing: ${namespaceArray.join("/")}/${trackNameValue}`;
@@ -1180,8 +1196,9 @@ export function usePublisher() {
       console.error("Connection error:", error);
       pub.pubStatus.value = "error";
       pub.pubStatusMessage.value = `Failed: ${(error as Error).message}`;
+      // 接続設定の入力を有効に戻すかは cleanupPublisher が Subscriber の有無を見て決める。
+      // 購読中や確立を待っている Subscriber が居れば、入力は無効のまま残す
       cleanupPublisher();
-      settings.settingsDisabled.value = false;
     }
   };
 
@@ -1301,8 +1318,11 @@ export function usePublisher() {
     // draft-ietf-moq-msf-01 §6.1 の MUST に反するため触らない。
     pub.pubCodec.value = "";
     pub.forwardState.value = null;
+    // 配信を始めている途中だった場合も、後始末で終わる
+    pub.isStarting.value = false;
 
-    // アクティブな Subscriber が居なければ設定を有効化する
+    // 接続設定を使っている Subscriber (購読の確立を待っているものを含む) が居なければ、
+    // 接続設定の入力を有効に戻す
     if (!sub.hasActiveSubscriber.value) {
       settings.settingsDisabled.value = false;
     }

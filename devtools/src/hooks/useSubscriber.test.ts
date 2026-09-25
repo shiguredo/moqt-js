@@ -18,6 +18,7 @@ import { buildObjectSendPlan } from "./usePublisher";
 import { EMPTY_PLAYBACK_TIMING, PlaybackTimingStats } from "../utils/playbackTimingStats";
 import { GroupSwitchGate } from "../../../src/groupSwitchGate";
 import { createSubscriberInstance, subscriberInstances } from "../signals/subscriber";
+import * as pub from "../signals/publisher";
 import { settingsDisabled } from "../signals/connectionSettings";
 import {
   FakeSession,
@@ -88,6 +89,10 @@ test("createAttemptGuard: 中断した AbortController でも今のものなら�
 function resetTestEnvironment(): void {
   subscriberInstances.value = new Map();
   settingsDisabled.value = false;
+  // resetSubscriberState は Publisher が接続設定を使っているか (pub.hasActivePublisher) も読む。
+  // Publisher は配信していない状態から始める
+  pub.pubSession.value = null;
+  pub.isStarting.value = false;
 }
 
 /**
@@ -493,15 +498,14 @@ test("resetSubscriberState resets every state signal to initial value", () => {
   instance.largestLocation.value = { group: 1n, object: 1n };
   // 購読の確立を待っている途中で後始末する場合
   instance.isStarting.value = true;
+  // 接続設定を使っているのは、この Subscriber だけ
+  subscriberInstances.value = new Map([[instance.id, instance]]);
+  settingsDisabled.value = true;
 
   const chainRef = { current: Promise.resolve().then(() => {}) };
   const previousChain = chainRef.current;
 
-  resetSubscriberState(
-    instance,
-    { video: chainRef, audio: { current: Promise.resolve() } },
-    () => false,
-  );
+  resetSubscriberState(instance, { video: chainRef, audio: { current: Promise.resolve() } });
 
   assert.equal(instance.subscriber.value, null);
   assert.equal(instance.catalogSubscriber.value, null);
@@ -514,6 +518,9 @@ test("resetSubscriberState resets every state signal to initial value", () => {
   // 確立を待っていた購読も終わり、Start Subscribing を押せる状態に戻る
   assert.equal(instance.isStarting.value, false);
   assert.notStrictEqual(chainRef.current, previousChain);
+  // subscriber と isStarting を下ろしてから判定するため、止めたインスタンス自身は数えない。
+  // 他に接続設定を使っているものが無いので、入力を有効に戻す
+  assert.equal(settingsDisabled.value, false);
 });
 
 test("resetSubscriberState does not touch status / statusMessage / isStopping", () => {
@@ -523,41 +530,14 @@ test("resetSubscriberState does not touch status / statusMessage / isStopping", 
   instance.statusMessage.value = "Subscribed to foo/bar";
   instance.isStopping.value = true;
   const chainRef = { current: Promise.resolve() };
-  resetSubscriberState(
-    instance,
-    { video: chainRef, audio: { current: Promise.resolve() } },
-    () => false,
-  );
+  resetSubscriberState(instance, { video: chainRef, audio: { current: Promise.resolve() } });
   assert.equal(instance.status.value, "connected");
   assert.equal(instance.statusMessage.value, "Subscribed to foo/bar");
   assert.equal(instance.isStopping.value, true);
 });
 
-test("resetSubscriberState re-enables settingsDisabled when no active subscriber/publisher", () => {
-  resetTestEnvironment();
-  const instance = createSubscriberInstance("reset-state-3");
-  settingsDisabled.value = true;
-  const chainRef = { current: Promise.resolve() };
-  resetSubscriberState(
-    instance,
-    { video: chainRef, audio: { current: Promise.resolve() } },
-    () => false,
-  );
-  assert.equal(settingsDisabled.value, false);
-});
-
-test("resetSubscriberState keeps settingsDisabled when other publisher is active", () => {
-  resetTestEnvironment();
-  const instance = createSubscriberInstance("reset-state-4");
-  settingsDisabled.value = true;
-  const chainRef = { current: Promise.resolve() };
-  resetSubscriberState(
-    instance,
-    { video: chainRef, audio: { current: Promise.resolve() } },
-    () => true,
-  );
-  assert.equal(settingsDisabled.value, true);
-});
+// 接続設定の入力を有効に戻すかの判定 (settingsDisabled) は resetSubscriberState の PBT が、
+// 止めるインスタンス、他の Subscriber、Publisher がそれぞれ開始の途中かどうかの組み合わせで固定する
 
 test("closeSubscriberResources sends catalog unsubscribe and clears the signal", () => {
   // 停止時に catalog 購読へ unsubscribe が送出されることの検証
@@ -719,11 +699,10 @@ test("resetSubscriberState: 音声の signal を初期化し再生を無効に�
   instance.audioRmsDbfs.value = -9;
   instance.audioWaveform.value = new Float32Array([1, 2, 3]);
 
-  resetSubscriberState(
-    instance,
-    { video: { current: Promise.resolve() }, audio: { current: Promise.resolve() } },
-    () => false,
-  );
+  resetSubscriberState(instance, {
+    video: { current: Promise.resolve() },
+    audio: { current: Promise.resolve() },
+  });
 
   assert.equal(instance.audioSubscriber.value, null);
   assert.equal(instance.audioDecoder.value, null);
@@ -744,7 +723,7 @@ test("resetSubscriberState: 音声 object の処理チェーンを巻き戻す",
   const audioChainRef = { current: Promise.resolve().then(() => {}) };
   const previousAudioChain = audioChainRef.current;
 
-  resetSubscriberState(instance, { video: chainRef, audio: audioChainRef }, () => false);
+  resetSubscriberState(instance, { video: chainRef, audio: audioChainRef });
 
   assert.notStrictEqual(audioChainRef.current, previousAudioChain);
 });

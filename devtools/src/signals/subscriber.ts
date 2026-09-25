@@ -11,8 +11,8 @@ import { EMPTY_PLAYBACK_TIMING, type PlaybackTimingSnapshot } from "../utils/pla
  * 各フィールドは Signal で保持し、フィールド単位で購読/更新する。
  * `subscriberInstances` Map は要素追加/削除のみで再生成し、フィールド更新では
  * 再生成しない (個別 Signal が再描画を駆動する)。
- * `hasActiveSubscriber` computed は `instance.subscriber.value` を追跡するため
- * Signal 化が必須。
+ * `hasActiveSubscriber` computed は `instance.subscriber.value` と `instance.isStarting.value`
+ * を追跡するため Signal 化が必須。
  */
 export interface SubscriberInstance {
   // props として親から渡される識別子。再描画駆動には使わないため signal 不要。
@@ -30,7 +30,8 @@ export interface SubscriberInstance {
   // 停止処理中フラグ (二重実行防止)
   isStopping: Signal<boolean>;
   // 購読を始めてから、映像トラックの購読が確立するか後始末を終えるまで true。
-  // 確立を待っている間も Stop で止められるようにする (utils/subscriberControls.ts)
+  // 確立を待っている間も Stop で止められるようにする (subscriberControlState)。
+  // この間も接続設定を使っているため、hasActiveSubscriber が数える
   isStarting: Signal<boolean>;
   // NEW_GROUP_REQUEST 設定 (初回接続時に新しいグループを要求)
   newGroupRequestEnabled: Signal<boolean>;
@@ -299,11 +300,17 @@ export const subscriberIds = computed(() => {
 });
 
 /**
- * アクティブな Subscriber があるかどうか
+ * 接続設定を使っている Subscriber があるかどうか
+ *
+ * 購読が確立しているか、確立を待っている (isStarting) インスタンスがあれば true。
+ * startSubscribing は接続の後にも Track Name や Catalog Timeout を読むため、確立を
+ * 待っている間も使っているとみなす。Publisher や他の Subscriber を止めたときや、それらの開始の
+ * 失敗や切断で後始末するときに、接続設定の入力を有効に戻してよいかの判定に使う
+ * (cleanupPublisher / resetSubscriberState)。
  */
 export const hasActiveSubscriber = computed(() => {
   for (const instance of subscriberInstances.value.values()) {
-    if (instance.subscriber.value !== null) {
+    if (instance.subscriber.value !== null || instance.isStarting.value) {
       return true;
     }
   }

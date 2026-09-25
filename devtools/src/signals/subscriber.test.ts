@@ -132,6 +132,9 @@ test("hasActiveSubscriber tracks instance.subscriber.value updates", () => {
   assert.equal(hasActiveSubscriber.value, false);
 });
 
+// 購読の確立を待っている (isStarting) インスタンスを数えることは、hasActiveSubscriber の PBT が
+// 任意の数のインスタンスで固定する
+
 test("getSubscriberInstanceSignal returns the same signal for the same id (cached)", () => {
   resetSubscribers();
   const id = addSubscriber();

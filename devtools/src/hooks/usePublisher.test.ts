@@ -16,6 +16,7 @@ import type { EncodedChunkData } from "../utils/EncoderWrapper";
 import type { CodecType } from "../types";
 import * as pub from "../signals/publisher";
 import * as settings from "../signals/connectionSettings";
+import { createSubscriberInstance, subscriberInstances } from "../signals/subscriber";
 
 // 映像設定の既定値 (devtools/src/signals/connectionSettings.ts) に合わせた検証用の値。
 // 実際の UI から渡る値と同じ組み合わせで Catalog を組み立てる。
@@ -70,6 +71,7 @@ function resetPublisherSignals(): void {
   pub.mediaStream.value = null;
   pub.isPreviewActive.value = false;
   pub.isStopping.value = false;
+  pub.isStarting.value = false;
   pub.forwardState.value = null;
   pub.pubStatus.value = "disconnected";
   pub.pubStatusMessage.value = "Ready to publish";
@@ -86,7 +88,8 @@ function resetPublisherSignals(): void {
   pub.frameReader.value = null;
   pub.videoStreamCleanup.value = null;
   pub.keyframeInterval.value = DEFAULT_KEYFRAME_INTERVAL;
-  pub.pubCurrentObjectId.value = 0; // 音声の signal も初期化する (テスト間で状態を持ち越さない)
+  pub.pubCurrentObjectId.value = 0;
+  // 音声の signal も初期化する (テスト間で状態を持ち越さない)
   pub.audioPublisher.value = null;
   pub.audioEncoder.value = null;
   pub.audioStream.value = null;
@@ -477,6 +480,127 @@ test("startPreview: 解像度が不正なときは映像ストリームを取得
   assert.equal(pub.mediaStream.value, null);
   assert.equal(pub.videoStreamCleanup.value, null);
   assert.equal(pub.isPreviewActive.value, false);
+});
+
+// ============================================================================
+// 接続設定の入力の無効化 (settingsDisabled)
+// ============================================================================
+
+/**
+ * 接続設定の入力の状態と Subscriber の一覧をテスト開始時の状態に戻す
+ */
+function resetSettingsUsage(): void {
+  subscriberInstances.value = new Map();
+  settings.settingsDisabled.value = false;
+}
+
+/**
+ * Subscriber の一覧を、購読の確立を待っている Subscriber 1 つだけに置き換える
+ *
+ * 確立を待っている間は subscriber.value が null のまま isStarting だけが立つ
+ * (startSubscribing が映像トラックの購読の確立を待っている状態)。
+ */
+function setOnlyStartingSubscriber(id: string): void {
+  const instance = createSubscriberInstance(id);
+  instance.isStarting.value = true;
+  subscriberInstances.value = new Map([[id, instance]]);
+}
+
+// 配信の開始に失敗しても、確立を待っている Subscriber はまだ接続設定を読む。
+// 不正な解像度は最初の await (connect) より前に例外になり、catch と後始末まで
+// 呼び出しの中で終わる (relay は要らない)
+test("startPublishing: 開始に失敗しても、確立を待っている Subscriber が居れば settingsDisabled を保つ", async () => {
+  resetPublisherSignals();
+  resetSettingsUsage();
+  setOnlyStartingSubscriber("starting-subscriber-1");
+  const publisher = usePublisher();
+
+  const previousResolution = settings.resolution.value;
+  settings.resolution.value = "1280";
+  try {
+    await publisher.startPublishing();
+
+    assert.equal(pub.pubStatus.value, "error");
+    assert.match(pub.pubStatusMessage.value, /^Failed: invalid resolution/);
+    // 配信を始めている途中ではなくなるが、Subscriber が使っているため入力は無効のまま
+    assert.isFalse(pub.isStarting.value);
+    assert.isTrue(settings.settingsDisabled.value);
+  } finally {
+    settings.resolution.value = previousResolution;
+    resetSettingsUsage();
+  }
+});
+
+// 誰も接続設定を使っていなければ、開始の失敗で入力を有効に戻す
+test("startPublishing: 開始に失敗し、Subscriber が居なければ settingsDisabled を戻す", async () => {
+  resetPublisherSignals();
+  resetSettingsUsage();
+  const publisher = usePublisher();
+
+  const previousResolution = settings.resolution.value;
+  settings.resolution.value = "1280";
+  try {
+    await publisher.startPublishing();
+
+    assert.equal(pub.pubStatus.value, "error");
+    assert.isFalse(pub.isStarting.value);
+    assert.isFalse(settings.settingsDisabled.value);
+  } finally {
+    settings.resolution.value = previousResolution;
+    resetSettingsUsage();
+  }
+});
+
+// 配信を止めても、確立を待っている Subscriber が居れば入力は無効のまま残す。
+// catalog / 映像 / 音声の publisher がどれも無いため、stopPublishing は done を待たずに
+// 後始末まで進む
+test("stopPublishing: 確立を待っている Subscriber が居れば settingsDisabled を保つ", async () => {
+  resetPublisherSignals();
+  resetSettingsUsage();
+  setOnlyStartingSubscriber("starting-subscriber-2");
+  settings.settingsDisabled.value = true;
+  const publisher = usePublisher();
+
+  try {
+    await publisher.stopPublishing();
+
+    assert.isTrue(settings.settingsDisabled.value);
+  } finally {
+    resetSettingsUsage();
+  }
+});
+
+// connect を待っている間 (session はまだ無い) は配信を始めている途中として扱う。
+// moqt:// で始まらない URL は async 関数の connect の中で例外になり、呼び出しは reject する。
+// startPublishing は最初の await (connect) で一度止まり、await の後の catch で途中の状態が
+// 終わる。実行環境の WebTransport の有無や relay に依存しない
+test("startPublishing: connect を待っている間は isStarting が立ち、失敗の後始末で下りる", async () => {
+  resetPublisherSignals();
+  resetSettingsUsage();
+  const publisher = usePublisher();
+
+  const previousUrl = settings.url.value;
+  settings.url.value = "invalid-url";
+  try {
+    const starting = publisher.startPublishing();
+    // 最初の await (connect) で止まっている。session はまだ無い
+    assert.isTrue(pub.isStarting.value);
+    assert.equal(pub.pubSession.value, null);
+    assert.isTrue(pub.hasActivePublisher.value);
+    assert.isTrue(settings.settingsDisabled.value);
+
+    await starting;
+
+    // connect の失敗 (URL の検証) で catch に入った
+    assert.equal(pub.pubStatus.value, "error");
+    assert.match(pub.pubStatusMessage.value, /^Failed: url must start with moqt:\/\//);
+    assert.isFalse(pub.isStarting.value);
+    assert.isFalse(pub.hasActivePublisher.value);
+    assert.isFalse(settings.settingsDisabled.value);
+  } finally {
+    settings.url.value = previousUrl;
+    resetSettingsUsage();
+  }
 });
 
 // ============================================================================
