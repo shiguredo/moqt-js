@@ -3,14 +3,16 @@ import { useSignalEffect } from "@preact/signals";
 import { usePublisher } from "../hooks/usePublisher";
 import { StatList, StatSection, TimingTable } from "./StatsView";
 import { PUBLISHER_LATENCY_BREAKDOWN_HELP, PUBLISH_TIMING_CAPTION } from "./statsHelp";
-import { formatBitrate, formatBytes } from "../utils/logFormatters";
+import { formatBytes } from "../utils/logFormatters";
+import { CatalogTracks } from "./CatalogTracks";
 import * as pub from "../signals/publisher";
 
-function formatCatalogValue(key: string, value: unknown): string {
-  if (key === "bitrate" && typeof value === "number") {
-    return formatBitrate(value);
+/** Forward State を表示用にする。配信していない間 (null) は「-」 */
+function formatForwardState(forwardState: boolean | null): string {
+  if (forwardState === null) {
+    return "-";
   }
-  return String(value);
+  return forwardState ? "1 (forwarding)" : "0 (not forwarding)";
 }
 
 export function PublisherPanel() {
@@ -27,7 +29,8 @@ export function PublisherPanel() {
   });
 
   const getStatusClasses = () => {
-    const base = "mb-4 px-4 py-2 rounded-lg text-sm";
+    // 1 行に収める。長い文言で折り返すと、下の映像の位置が動く (全文は title に持つ)
+    const base = "mb-4 px-4 py-2 rounded-lg text-sm truncate";
     if (pub.pubStatus.value === "connected") {
       return `${base} bg-green-50 text-green-700`;
     }
@@ -83,17 +86,29 @@ export function PublisherPanel() {
 
       <div class="p-5">
         {/* Status Message */}
-        <div class={getStatusClasses()}>{pub.pubStatusMessage.value}</div>
+        <div
+          class={getStatusClasses()}
+          title={pub.pubStatusMessage.value}
+          data-testid="publisher-status-message"
+        >
+          {pub.pubStatusMessage.value}
+        </div>
 
-        {/* Forward State */}
-        {pub.forwardState.value !== null && (
-          <div class="mb-4 px-4 py-2 rounded-lg text-sm bg-slate-100 text-slate-600">
-            Forward State:{" "}
-            <span class={pub.forwardState.value ? "text-green-700 font-medium" : "text-slate-500"}>
-              {pub.forwardState.value ? "1 (forwarding)" : "0 (not forwarding)"}
-            </span>
-          </div>
-        )}
+        {/* Forward State。配信していない間も描き、値を「-」にする (配信の開始で行が
+            現れると映像の位置が動く) */}
+        <div
+          class="mb-4 px-4 py-2 rounded-lg text-sm bg-slate-100 text-slate-600 truncate"
+          data-testid="publisher-forward-state"
+        >
+          Forward State:{" "}
+          <span
+            class={
+              pub.forwardState.value === true ? "text-green-700 font-medium" : "text-slate-500"
+            }
+          >
+            {formatForwardState(pub.forwardState.value)}
+          </span>
+        </div>
 
         {/* Buttons */}
         <div class="flex gap-3 mb-4">
@@ -163,39 +178,12 @@ export function PublisherPanel() {
           )}
         </div>
 
-        {/* Catalog */}
-        {pub.catalog.value && pub.catalog.value.tracks && pub.catalog.value.tracks.length > 0 && (
-          <div class="bg-green-50 rounded-lg p-4 mb-4 border border-green-200">
-            <h3 class="text-xs font-semibold text-green-700 uppercase tracking-wide mb-3 flex items-center gap-2">
-              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  stroke-width="2"
-                  d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
-                />
-              </svg>
-              Catalog
-            </h3>
-            {pub.catalog.value.tracks.map((track, index) => (
-              <div key={index} class="bg-white rounded-lg p-3 border border-green-100">
-                <div class="grid grid-cols-4 gap-2 text-xs">
-                  {Object.entries(track).map(([key, value]) => (
-                    <div key={key}>
-                      <div class="text-slate-500">{key}</div>
-                      <div
-                        class="font-semibold text-slate-700 truncate"
-                        title={formatCatalogValue(key, value)}
-                      >
-                        {formatCatalogValue(key, value)}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
+        {/* Catalog。catalog を受け取る前も描き、値を「-」にする */}
+        <CatalogTracks
+          tracks={pub.catalog.value?.tracks ?? []}
+          tone="green"
+          testId="publisher-catalog"
+        />
 
         {/* Statistics */}
         <div class="bg-slate-50 rounded-lg p-4">

@@ -56,6 +56,10 @@
 - [UPDATE] moqt-devtools / webtransport-devtools / webcodecs-devtools と examples の画面の文言を英語にそろえる
   - ステータスメッセージ、接続設定のヘルプ、入力欄の補足、WebTransport API の説明など、画面に出していた日本語を英語にする
   - @voluntas
+- [UPDATE] moqt-devtools の画面で、状態によって出たり消えたりしていた項目を固定項目にする
+  - 配信の開始で現れていた Forward State の行、catalog を受け取ると現れていた Catalog の欄、音声を購読すると現れていた音声のレベルメーターを常に描き、値が無い間は「-」を出す
+  - 状態のメッセージを 1 行に収め (はみ出す分は省略し、全文はマウスを重ねると出る)、Catalog の一覧と統計の一覧 (recentStalls など) の高さを固定する。配信や購読の開始と停止で映像や下の項目の位置が動かない
+  - @voluntas
 - [FIX] moqt-devtools の subscriber で、停止した購読の session の close が遅れて届いても、次に始めた購読を止めないようにする
   - session の close のコールバックは relay との往復の後に届くため、停止の直後に Start Subscribing を押すと、前の session のコールバックが次の購読を後始末して中断し、表示が「Connecting...」のまま止まることがあった
   - session の close / error と映像トラックの購読の end / error のコールバックは、登録した回の購読が今の購読のときだけ表示を変えて後始末する

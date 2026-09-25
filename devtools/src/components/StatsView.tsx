@@ -418,6 +418,9 @@ interface EventLogProps {
 
 /**
  * 直近のイベントの一覧
+ *
+ * 本文の高さは件数によらず固定する。件数が増えるたびに伸びると、その下の項目の
+ * 位置が動く。収まらない分は一覧の中でスクロールする
  */
 export function EventLog({ label, hint, lines, showCount = true, testId }: EventLogProps) {
   return (
@@ -430,7 +433,7 @@ export function EventLog({ label, hint, lines, showCount = true, testId }: Event
         <span class="text-[11px] text-slate-400">{hint}</span>
       </div>
       <pre
-        class="max-h-48 overflow-y-auto whitespace-pre-wrap break-all px-3 py-2 font-mono text-[11px] text-slate-700"
+        class="h-24 overflow-y-auto whitespace-pre-wrap break-all px-3 py-2 font-mono text-[11px] text-slate-700"
         data-testid={testId}
       >
         {lines.length === 0 ? "-" : lines.join("\n")}

@@ -11,19 +11,13 @@ import {
   SUBSCRIBER_LATENCY_BREAKDOWN_HELP,
   TOTAL_LATENCY_SEGMENT,
 } from "./statsHelp";
-import { formatBitrate, formatBytes } from "../utils/logFormatters";
+import { formatBytes } from "../utils/logFormatters";
+import { CatalogTracks } from "./CatalogTracks";
 import { formatLossEvent, formatStallEvent } from "../utils/playbackTimingStats";
 import { LATENCY_SEGMENTS } from "../utils/latencyBreakdown";
 import { STALL_CAUSES } from "../utils/stallAnalysis";
 import { subscriberControlState } from "../utils/subscriberControls";
 import * as sub from "../signals/subscriber";
-
-function formatCatalogValue(key: string, value: unknown): string {
-  if (key === "bitrate" && typeof value === "number") {
-    return formatBitrate(value);
-  }
-  return String(value);
-}
 
 interface SubscriberPanelProps {
   subscriberId: string;
@@ -84,7 +78,8 @@ export function SubscriberPanel({
   const sessionStats = session?.getStatistics();
 
   const getStatusClasses = () => {
-    const base = "mb-4 px-4 py-2 rounded-lg text-sm";
+    // 1 行に収める。長い文言で折り返すと、下の映像の位置が動く (全文は title に持つ)
+    const base = "mb-4 px-4 py-2 rounded-lg text-sm truncate";
     if (status === "connected") {
       return `${base} bg-blue-50 text-blue-700`;
     }
@@ -156,7 +151,13 @@ export function SubscriberPanel({
 
       <div class="p-5">
         {/* Status Message */}
-        <div class={getStatusClasses()}>{instance.statusMessage.value}</div>
+        <div
+          class={getStatusClasses()}
+          title={instance.statusMessage.value}
+          data-testid="subscriber-status-message"
+        >
+          {instance.statusMessage.value}
+        </div>
 
         {/* Subscribe Options */}
         <div class="mb-4 space-y-2">
@@ -248,9 +249,9 @@ export function SubscriberPanel({
           )}
         </div>
 
-        {/* 受信した音声のレベルメーターと波形。音声トラックを購読していないときは
-            描画しない (映像の表示を妨げない) */}
-        {instance.audioSubscriber.value !== null && <AudioMeter instance={instance} />}
+        {/* 受信した音声のレベルメーターと波形。音声トラックを購読していない間も描き、
+            値を「-」にする (購読の開始でメーターが現れると下の項目の位置が動く) */}
+        <AudioMeter instance={instance} subscribed={instance.audioSubscriber.value !== null} />
 
         {/* 受信した音声の再生 */}
         {/*
@@ -279,39 +280,8 @@ export function SubscriberPanel({
         </div>
         <audio ref={audioRef} data-testid="subscriber-audio-element" class="hidden" />
 
-        {/* Catalog */}
-        {catalog && catalog.tracks && catalog.tracks.length > 0 && (
-          <div class="bg-blue-50 rounded-lg p-4 mb-4 border border-blue-200">
-            <h3 class="text-xs font-semibold text-blue-700 uppercase tracking-wide mb-3 flex items-center gap-2">
-              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  stroke-width="2"
-                  d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
-                />
-              </svg>
-              Catalog
-            </h3>
-            {catalog.tracks.map((track, index) => (
-              <div key={index} class="bg-white rounded-lg p-3 border border-blue-100">
-                <div class="grid grid-cols-4 gap-2 text-xs">
-                  {Object.entries(track).map(([key, value]) => (
-                    <div key={key}>
-                      <div class="text-slate-500">{key}</div>
-                      <div
-                        class="font-semibold text-slate-700 truncate"
-                        title={formatCatalogValue(key, value)}
-                      >
-                        {formatCatalogValue(key, value)}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
+        {/* Catalog。catalog を受け取る前も描き、値を「-」にする */}
+        <CatalogTracks tracks={catalog?.tracks ?? []} tone="blue" testId="subscriber-catalog" />
 
         {/* Statistics */}
         <div class="bg-slate-50 rounded-lg p-4">
