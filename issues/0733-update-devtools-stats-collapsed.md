@@ -1,7 +1,7 @@
 # moqt-devtools の統計の欄が常に開いていて、画面が長く見づらい
 
 - Created: 2026-09-25
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-25
 - Branch: feature/update-devtools-stats-collapsed
 - Polished: {YYYY-MM-DD}
 - Reporter: @voluntas
@@ -28,3 +28,11 @@ moqt-devtools の Publisher と Subscriber のパネルは、映像の下に統�
 - Playwright の E2E で、既定では統計の欄が描かれず、「Statistics」を押すと描かれ、もう一度押すと閉じることを、Publisher と Subscriber のそれぞれで確かめる
 - 統計の欄を操作する既存の E2E は、先に「Statistics」を開いてから操作する形に直す
 - `vp check` / `tsc --noEmit` / `vp test run` / Playwright の E2E が通る
+
+## 解決方法
+
+- `devtools/src/components/StatsView.tsx` に `StatsCollapse` を足した。「Statistics」のボタン (`aria-expanded` / `aria-controls` を持ち、閉じているときは ▸、開いているときは ▾) で統計の欄をまとめて開け閉めする。既定で閉じ、閉じている間は統計の欄を DOM に置かない。開け閉めの状態はパネルごとの state に持ち、ページを読み込み直すと閉じた状態に戻る
+- `PublisherPanel.tsx` と `SubscriberPanel.tsx` の統計の欄を `StatsCollapse` で包んだ (testId は `publisher-statistics` / `subscriber-statistics`、ボタンは `-toggle` を付けたもの)
+- 統計の欄を操作する既存の E2E (`devtools-stats-help.spec.ts` / `devtools-latency-breakdown.spec.ts` / `devtools-new-group-request.spec.ts`) は、先に「Statistics」を開く操作だけを足した
+- 完了条件に書いた開け閉めの E2E は、利用者の指示 (UI 系の E2E テストは一旦不要) により足していない。手元で、既定で閉じていること、押すと開き、もう一度押すと閉じることを Publisher と Subscriber のそれぞれで確かめた。パネルの高さは、統計を閉じた状態で 2994 px から 1098 px になった
+- `vp check` / `tsc --noEmit` / `vp test run` (2781 件) / Playwright の E2E (40 件) が通った
