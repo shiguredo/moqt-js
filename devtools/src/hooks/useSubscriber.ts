@@ -407,6 +407,21 @@ export function resetSubscriberState(
   }
 }
 
+/**
+ * startSubscribing の 1 回の購読が、今の購読かを判定する関数を作る
+ *
+ * 購読を始めるたびに AbortController を作り直す。コールバックは、登録した回の signal が
+ * 今の AbortController の signal と同じときだけ今の購読のものである。停止した購読の
+ * session の close のコールバックは、close の完了 (relay との往復) の後に届くため、
+ * 次の購読を始めた後に届くことがある。そのコールバックで次の購読を後始末しない
+ */
+export function createAttemptGuard(
+  ref: { current: AbortController | null },
+  signal: AbortSignal,
+): () => boolean {
+  return () => ref.current?.signal === signal;
+}
+
 // AbortController ベースの中断検知ヘルパー。
 // signal.aborted が立っていれば cleanup を呼んでから true を返す。
 // cleanup が例外を投げても判定結果は失われないよう握り潰す
@@ -1153,6 +1168,9 @@ export function useSubscriber(
     }
     abortControllerRef.current = new AbortController();
     const signal = abortControllerRef.current.signal;
+    // この回の購読が今の購読か。この回が登録するコールバックは、今の購読の間だけ
+    // 表示を変えて後始末する (停止した購読のコールバックが次の購読を止めないようにする)
+    const isCurrentAttempt = createAttemptGuard(abortControllerRef, signal);
     // 映像トラックの購読が確立するか後始末を終えるまで、購読中として扱う
     // (Stop で止められ、Start Subscribing を重ねて押せない)
     instance.isStarting.value = true;
@@ -1177,8 +1195,12 @@ export function useSubscriber(
               // WebTransportCloseInfo.reason は optional のため未指定時は空文字にする
               reason: (closeInfo.reason ?? "").slice(0, 1024),
             });
+            // 停止した購読の session の close は、close の完了 (relay との往復) の後に
+            // 届くため、次の購読を始めた後に届くことがある。この回が今の購読でなければ、
+            // 表示も後始末も触らない (次の購読を中断しない)
+            if (!isCurrentAttempt()) return;
             // stop 主導中・cleanup 後の遅延発火では status / statusMessage を上書きしない。
-            // teardownSubscriber は abort 経路を維持するため常に呼ぶ。
+            // 今の購読の session が閉じたときは、進んでいる処理を中断するため後始末する。
             if (shouldApplyStatusUpdate()) {
               instance.status.value = "disconnected";
               instance.statusMessage.value = `Disconnected: closeCode=${closeInfo.closeCode}, reason=${closeInfo.reason}`;
@@ -1190,6 +1212,8 @@ export function useSubscriber(
               name: error.name ?? "Error",
               message: error.message ?? String(error),
             });
+            // close と同じく、停止した購読の session のエラーは次の購読に触らない
+            if (!isCurrentAttempt()) return;
             if (shouldApplyStatusUpdate()) {
               instance.status.value = "error";
               instance.statusMessage.value = `Error: ${error.message}`;
@@ -1542,6 +1566,8 @@ export function useSubscriber(
             );
           },
           end: () => {
+            // 停止した購読の終わりは、次の購読に触らない (session の close と同じ理由)
+            if (!isCurrentAttempt()) return;
             if (shouldApplyStatusUpdate()) {
               instance.status.value = "disconnected";
               instance.statusMessage.value = "Stream ended";
@@ -1550,6 +1576,7 @@ export function useSubscriber(
           },
           error: (error) => {
             console.error(`[${subscriberId}] Subscriber error:`, error);
+            if (!isCurrentAttempt()) return;
             if (shouldApplyStatusUpdate()) {
               instance.status.value = "error";
               instance.statusMessage.value = `Subscribe error: ${error.message}`;

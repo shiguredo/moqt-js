@@ -4,6 +4,7 @@ import {
   buildVideoChunkPlan,
   buildVideoDecoderConfig,
   checkAborted,
+  createAttemptGuard,
   closeSubscriberResources,
   recordVideoReceived,
   resetSubscriberState,
@@ -54,6 +55,34 @@ test("checkAborted swallows exceptions from cleanup but still returns true", () 
     throw new Error("cleanup error");
   });
   assert.equal(result, true);
+});
+
+// 購読を始めるたびに AbortController を作り直す。登録した回のコールバックは、その回の
+// AbortController が今のものである間だけ今の購読のものである。停止した購読の session の
+// close は、次の購読を始めた後に届くことがあり、次の購読を後始末してはならない
+test("createAttemptGuard: 登録した回の AbortController が今のものである間だけ真を返す", () => {
+  const first = new AbortController();
+  const ref: { current: AbortController | null } = { current: first };
+  const isFirstCurrent = createAttemptGuard(ref, first.signal);
+  assert.isTrue(isFirstCurrent());
+
+  // 次の購読を始めた (AbortController を作り直した)
+  const second = new AbortController();
+  ref.current = second;
+  assert.isFalse(isFirstCurrent());
+  assert.isTrue(createAttemptGuard(ref, second.signal)());
+
+  // 後始末で null になった
+  ref.current = null;
+  assert.isFalse(isFirstCurrent());
+});
+
+// 中断しただけでは替わっていない。今の回の session が閉じたときは後始末する
+test("createAttemptGuard: 中断した AbortController でも今のものなら真を返す", () => {
+  const controller = new AbortController();
+  const ref: { current: AbortController | null } = { current: controller };
+  controller.abort();
+  assert.isTrue(createAttemptGuard(ref, controller.signal)());
 });
 
 function resetTestEnvironment(): void {
