@@ -11,7 +11,7 @@
  */
 
 import { Fragment, type ComponentChildren } from "preact";
-import { useEffect, useId, useRef } from "preact/hooks";
+import { useEffect, useId, useRef, useState } from "preact/hooks";
 import type { TimingSummary } from "../utils/playbackTimingStats";
 
 /** 説明の 1 項目 */
@@ -418,6 +418,9 @@ interface EventLogProps {
 
 /**
  * 直近のイベントの一覧
+ *
+ * 本文の高さは件数によらず固定する。件数が増えるたびに伸びると、その下の項目の
+ * 位置が動く。収まらない分は一覧の中でスクロールする
  */
 export function EventLog({ label, hint, lines, showCount = true, testId }: EventLogProps) {
   return (
@@ -430,11 +433,50 @@ export function EventLog({ label, hint, lines, showCount = true, testId }: Event
         <span class="text-[11px] text-slate-400">{hint}</span>
       </div>
       <pre
-        class="max-h-48 overflow-y-auto whitespace-pre-wrap break-all px-3 py-2 font-mono text-[11px] text-slate-700"
+        class="h-24 overflow-y-auto whitespace-pre-wrap break-all px-3 py-2 font-mono text-[11px] text-slate-700"
         data-testid={testId}
       >
         {lines.length === 0 ? "-" : lines.join("\n")}
       </pre>
+    </div>
+  );
+}
+
+interface StatsCollapseProps {
+  /** 開いたときの統計の欄の testId。開け閉めのボタンは `${testId}-toggle` */
+  testId: string;
+  children: ComponentChildren;
+}
+
+/**
+ * パネルの統計の欄をまとめて開け閉めする
+ *
+ * 統計の欄は多く、常に開いていると画面が長くなり、映像と操作を見るだけのときに邪魔に
+ * なる。既定で閉じ、「Statistics」を押したときだけ描く。閉じている間は DOM に置かない。
+ * 値の計算と `window.moqtDevTools` の統計は開け閉めに依らない。開け閉めの状態は
+ * パネルごとに持ち、ページを読み込み直すと閉じた状態に戻る
+ */
+export function StatsCollapse({ testId, children }: StatsCollapseProps) {
+  const [open, setOpen] = useState(false);
+  const contentId = useId();
+  return (
+    <div class="bg-slate-50 rounded-lg">
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-controls={contentId}
+        onClick={() => setOpen(!open)}
+        data-testid={`${testId}-toggle`}
+        class="w-full flex items-center gap-2 px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
+      >
+        <span aria-hidden="true">{open ? "\u25BE" : "\u25B8"}</span>
+        Statistics
+      </button>
+      {open && (
+        <div id={contentId} class="px-4 pb-4" data-testid={testId}>
+          {children}
+        </div>
+      )}
     </div>
   );
 }

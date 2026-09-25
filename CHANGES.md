@@ -56,6 +56,16 @@
 - [UPDATE] moqt-devtools / webtransport-devtools / webcodecs-devtools と examples の画面の文言を英語にそろえる
   - ステータスメッセージ、接続設定のヘルプ、入力欄の補足、WebTransport API の説明など、画面に出していた日本語を英語にする
   - @voluntas
+- [UPDATE] moqt-devtools の画面で、状態によって出たり消えたりしていた項目を固定項目にする
+  - 配信の開始で現れていた Forward State の行、catalog を受け取ると現れていた Catalog の欄、音声を購読すると現れていた音声のレベルメーターを常に描き、値が無い間は「-」を出す
+  - 状態のメッセージを 1 行に収め (はみ出す分は省略し、全文はマウスを重ねると出る)、Catalog の一覧と統計の一覧 (recentStalls など) の高さを固定する。配信や購読の開始と停止で映像や下の項目の位置が動かない
+  - @voluntas
+- [UPDATE] moqt-devtools の統計の欄を既定で閉じ、パネルごとの「Statistics」で開け閉めする
+  - 閉じている間は統計の欄を描かない。`window.moqtDevTools` の統計は開け閉めに依らない
+  - @voluntas
+- [UPDATE] moqt-devtools の Publisher と Subscriber の映像の上端をそろえる
+  - 映像より上の 1 行の項目 (Publisher の Forward State、Subscriber の NEW_GROUP_REQUEST) を同じ高さの枠で描く。これまでは何もしていない状態で 36 px、配信中は 16 px ずれていた
+  - @voluntas
 - [FIX] moqt-devtools で、購読や配信を始めている途中に他の Subscriber や Publisher を止めたり、その開始が失敗したり切断されたりしても、接続設定の入力を無効のまま保つようにする
   - 接続設定を使っているかの判定が、購読の確立を待っている Subscriber と connect を待っている Publisher を数えていなかった。そのため他の Subscriber や Publisher を止めると入力が編集できる状態に戻り、その後の購読や配信の間も有効のままだった
   - 配信の開始に失敗したときも、購読が続いているのに入力を有効に戻していた。Subscriber の有無を見て戻すようにする

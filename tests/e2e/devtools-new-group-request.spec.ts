@@ -10,6 +10,8 @@ test("publisher が受けた新しい Group の要求の数を画面と window.m
   page,
 }) => {
   await page.goto(DEVTOOLS_URL);
+  // 統計の欄は既定で閉じているため、先に開く
+  await page.getByTestId("publisher-statistics-toggle").click();
 
   const newGroupRequests = await page.evaluate(() => {
     // 公開する統計の型は実装から借りる (フィールド名のずれを型で検出する)

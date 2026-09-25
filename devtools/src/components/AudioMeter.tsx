@@ -140,7 +140,12 @@ function drawWaveform(
 
 interface AudioMeterProps {
   instance: SubscriberInstance;
+  // 音声トラックを購読しているか。購読していない間は各値を「-」にし、波形は空にする
+  subscribed: boolean;
 }
+
+/** 購読していない間の値の表示 */
+const NOT_SUBSCRIBED = "-";
 
 /**
  * 受信した音声のレベルメーターと波形
@@ -148,7 +153,7 @@ interface AudioMeterProps {
  * 映像 canvas と同じく、signal が更新されたときだけ描き直す
  * (`requestAnimationFrame` による常時再描画はしない)。
  */
-export function AudioMeter({ instance }: AudioMeterProps) {
+export function AudioMeter({ instance, subscribed }: AudioMeterProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   useSignalEffect(() => {
@@ -176,21 +181,21 @@ export function AudioMeter({ instance }: AudioMeterProps) {
           <span>
             peak{" "}
             <span data-testid="audio-peak" class="font-mono text-slate-800">
-              {formatDbfs(instance.audioPeakDbfs.value)}
+              {subscribed ? formatDbfs(instance.audioPeakDbfs.value) : NOT_SUBSCRIBED}
             </span>
           </span>
           <span>
             rms{" "}
             <span data-testid="audio-rms" class="font-mono text-slate-800">
-              {formatDbfs(instance.audioRmsDbfs.value)}
+              {subscribed ? formatDbfs(instance.audioRmsDbfs.value) : NOT_SUBSCRIBED}
             </span>
           </span>
           <span>LOC Audio Level</span>
           <span data-testid="audio-level" class="font-mono text-slate-800">
-            {formatAudioLevel(instance.audioLastLevel.value)}
+            {subscribed ? formatAudioLevel(instance.audioLastLevel.value) : NOT_SUBSCRIBED}
           </span>
           <span data-testid="audio-voice-activity" class="font-mono text-slate-800">
-            {formatVoiceActivity(instance.audioLastLevel.value)}
+            {subscribed ? formatVoiceActivity(instance.audioLastLevel.value) : NOT_SUBSCRIBED}
           </span>
         </div>
       </div>

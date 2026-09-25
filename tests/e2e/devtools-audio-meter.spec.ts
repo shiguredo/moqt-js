@@ -6,17 +6,19 @@ import type { SubscriberStats } from "../../devtools/src/testApi";
 // dev サーバーは playwright.config.ts の webServer で起動される (port 5173)
 const DEVTOOLS_URL = "http://localhost:5173/index.html";
 
-test("音声トラックを購読していないときはレベルメーターを描画しない", async ({ page }) => {
+test("音声トラックを購読していないときもレベルメーターを描き、値を「-」にする", async ({
+  page,
+}) => {
   await page.goto(DEVTOOLS_URL);
 
-  // 購読パネル自身は描画されている (メーターの不在が空振りでないことの確認)
-  await expect(page.getByRole("button", { name: "Start Subscribing" })).toBeVisible();
-  await expect(page.getByTestId("subscriber-audio-playback-toggle")).toBeVisible();
-
-  // catalog を受信していない (音声トラックを購読していない) ため、メーターは DOM に無い
-  await expect(page.getByTestId("audio-meter")).toHaveCount(0);
-  await expect(page.getByTestId("audio-waveform")).toHaveCount(0);
-  await expect(page.getByTestId("audio-level")).toHaveCount(0);
+  // 状態によって項目が出たり消えたりすると、下の項目の位置が動く。メーターは常に描き、
+  // 音声トラックを購読していない間は各値を「-」にする
+  await expect(page.getByTestId("audio-meter")).toBeVisible();
+  await expect(page.getByTestId("audio-waveform")).toBeVisible();
+  await expect(page.getByTestId("audio-peak")).toHaveText("-");
+  await expect(page.getByTestId("audio-rms")).toHaveText("-");
+  await expect(page.getByTestId("audio-level")).toHaveText("-");
+  await expect(page.getByTestId("audio-voice-activity")).toHaveText("-");
 
   // 映像の canvas は描画されたままである (映像の表示を妨げない)
   await expect(page.getByTestId("subscriber-video-canvas")).toBeVisible();
