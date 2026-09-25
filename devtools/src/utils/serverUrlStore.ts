@@ -1,16 +1,16 @@
 /**
- * Server URL を OPFS に残すかの判定と、ファイルの中身の読み方
+ * Relay URI を OPFS に残すかの判定と、ファイルの中身の読み方
  *
- * 覚えるのは Save を押したときだけ。Purge を押したときは消す。
+ * 覚えるのは Save を押したときだけ。Forget を押したときは消す。
  */
 
 export type StoredServerUrlAction = { kind: "write"; url: string } | { kind: "delete" };
 
 /**
- * 今の Server URL を OPFS に書くか、消すか
+ * 今の Relay URI を OPFS に書くか、消すか
  *
  * Save (`save` が true) のときは書く。空欄なら消す。
- * Purge (`save` が false) のときは消す。
+ * Forget (`save` が false) のときは消す。
  */
 export function storedServerUrlAction(current: string, save: boolean): StoredServerUrlAction {
   if (!save) {
@@ -24,7 +24,7 @@ export function storedServerUrlAction(current: string, save: boolean): StoredSer
 }
 
 /**
- * OPFS から読んだ文字列を Server URL にする
+ * OPFS から読んだ文字列を Relay URI にする
  *
  * 空、または改行を含むものは覚えていないものとして扱う。
  */
@@ -36,28 +36,31 @@ export function parseStoredServerUrl(raw: string): string | null {
   return text;
 }
 
-export type ServerUrlMemoryButton = { kind: "save"; disabled: boolean } | { kind: "purge" };
-
-/**
- * Server URL 欄の Save / Purge
- *
- * 覚えていないとき、および欄を覚えた URL から変えたときは Save。
- * 覚えた URL と欄が同じとき、および覚えたあと欄を空にしたときは Purge。
- * 空欄でまだ覚えていないときは Save を押せない。
- */
-export function serverUrlMemoryButton(
-  saved: string | null,
-  current: string,
-): ServerUrlMemoryButton {
-  const trimmed = current.trim();
-  if (saved !== null && (trimmed === saved || trimmed === "")) {
-    return { kind: "purge" };
-  }
-  return { kind: "save", disabled: trimmed === "" };
+export interface RelayUriMemoryButtons {
+  saveEnabled: boolean;
+  forgetEnabled: boolean;
 }
 
 /**
- * 検索文字列から、共有リンクの Server URL を取り出す
+ * Relay URI 欄の Save / Forget
+ *
+ * 押せるのは片方だけ。覚えていないとき、および欄を覚えた URI から変えたときは Save。
+ * 覚えた URI と欄が同じとき、および覚えたあと欄を空にしたときは Forget。
+ * 空欄でまだ覚えていないときはどちらも押せない。
+ */
+export function relayUriMemoryButtons(
+  saved: string | null,
+  current: string,
+): RelayUriMemoryButtons {
+  const trimmed = current.trim();
+  if (saved !== null && (trimmed === saved || trimmed === "")) {
+    return { saveEnabled: false, forgetEnabled: true };
+  }
+  return { saveEnabled: trimmed !== "", forgetEnabled: false };
+}
+
+/**
+ * 検索文字列から、共有リンクの Relay URI を取り出す
  *
  * 無い、または空白だけのときは null。
  */
@@ -73,7 +76,7 @@ export function queryServerUrl(search: string): string | null {
   return url;
 }
 
-/** OPFS 上の Server URL。このオリジンだけから読める */
+/** OPFS 上の Relay URI。このオリジンだけから読める */
 const SERVER_URL_FILE = "server-url.txt";
 
 async function privateDirectory(): Promise<FileSystemDirectoryHandle | null> {
@@ -88,7 +91,7 @@ async function privateDirectory(): Promise<FileSystemDirectoryHandle | null> {
 }
 
 /**
- * OPFS に覚えた Server URL を読む
+ * OPFS に覚えた Relay URI を読む
  *
  * ファイルが無い、または読めないときは null。localStorage は使わない。
  */
@@ -107,7 +110,7 @@ export async function readStoredServerUrl(): Promise<string | null> {
 }
 
 /**
- * Save が付いているときだけ OPFS に書く。Purge のときは消す
+ * Save が付いているときだけ OPFS に書く。Forget のときは消す
  *
  * 書けなくても画面の入力はそのまま使える。
  */
@@ -127,6 +130,6 @@ export async function persistServerUrl(current: string, save: boolean): Promise<
     await writable.write(action.url);
     await writable.close();
   } catch {
-    // 覚えられなくても、今の Server URL はそのまま使える
+    // 覚えられなくても、今の Relay URI はそのまま使える
   }
 }

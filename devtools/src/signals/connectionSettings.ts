@@ -22,7 +22,7 @@ import { isDebugPanelOpen } from "./debug";
 
 // 接続設定
 export const url = signal("moqt://127.0.0.1:4443/");
-// Save を押した Server URL。Purge するまで OPFS に残す。null は覚えていない
+// Save を押した Relay URI。Forget するまで OPFS に残す。null は覚えていない
 export const savedServerUrl = signal<string | null>(null);
 // moqt URI の Fragment Identifier (draft-ietf-moq-transport-21 §6.1.1)
 // 入力形式は `type:value` (先頭の `#` は付けない)。空文字列なら fragment を付けない。
@@ -175,7 +175,7 @@ export function buildAuthorizationToken(): AuthorizationToken | undefined {
  * SETUP の AUTHORIZATION_TOKEN (0x03) では USE_VALUE (0x3) で送るため、Alias Type は
  * useValue のままとする (§9.1.4: SETUP で DELETE / USE_ALIAS を受けたら PROTOCOL_VIOLATION)。
  *
- * @param input Server URL もしくは URI Fragment の入力値
+ * @param input Relay URI もしくは URI Fragment の入力値
  * @returns c4m を反映した場合は true、c4m が無い / 不正な場合は false
  */
 export function applyC4mFromUrl(input: string): boolean {

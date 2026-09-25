@@ -8,7 +8,7 @@ import "./index.css";
 
 async function start(): Promise<void> {
   const search = window.location.search;
-  // クエリの url が無いときだけ、Save で残した URL を戻す
+  // クエリの url が無いときだけ、Save で残した Relay URI を戻す
   if (queryServerUrl(search) === null) {
     const stored = await readStoredServerUrl();
     if (stored !== null) {

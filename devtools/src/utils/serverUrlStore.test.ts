@@ -1,14 +1,14 @@
 /**
- * Server URL を OPFS に残すかの判定
+ * Relay URI を OPFS に残すかの判定
  *
- * Save を押したときだけ書き、Purge を押したときは消す。
+ * Save を押したときだけ書き、Forget を押したときは消す。
  */
 
 import { assert, test } from "vite-plus/test";
 import {
   parseStoredServerUrl,
   queryServerUrl,
-  serverUrlMemoryButton,
+  relayUriMemoryButtons,
   storedServerUrlAction,
 } from "./serverUrlStore";
 
@@ -39,37 +39,41 @@ test("parseStoredServerUrl: 空白を除いた 1 行だけを URL にする", ()
   assert.equal(parseStoredServerUrl("moqt://a/\nmoqt://b/"), null);
 });
 
-test("serverUrlMemoryButton: 覚えていない URL は Save", () => {
-  assert.deepEqual(serverUrlMemoryButton(null, "moqt://example.test:4443/"), {
-    kind: "save",
-    disabled: false,
+test("relayUriMemoryButtons: 覚えていない URI は Save だけ押せる", () => {
+  assert.deepEqual(relayUriMemoryButtons(null, "moqt://example.test:4443/"), {
+    saveEnabled: true,
+    forgetEnabled: false,
   });
-  // 空欄では Save を押せない
-  assert.deepEqual(serverUrlMemoryButton(null, "   "), { kind: "save", disabled: true });
+  // 空欄では Save も Forget も押せない
+  assert.deepEqual(relayUriMemoryButtons(null, "   "), {
+    saveEnabled: false,
+    forgetEnabled: false,
+  });
 });
 
-test("serverUrlMemoryButton: 覚えた URL と欄が同じときと、欄を空にしたときは Purge", () => {
+test("relayUriMemoryButtons: 覚えた URI と欄が同じときと、欄を空にしたときは Forget だけ押せる", () => {
   assert.deepEqual(
-    serverUrlMemoryButton("moqt://example.test:4443/", "moqt://example.test:4443/"),
+    relayUriMemoryButtons("moqt://example.test:4443/", "moqt://example.test:4443/"),
     {
-      kind: "purge",
+      saveEnabled: false,
+      forgetEnabled: true,
     },
   );
-  // 前後の空白は同じ URL とみなす
+  // 前後の空白は同じ URI とみなす
   assert.deepEqual(
-    serverUrlMemoryButton("moqt://example.test:4443/", "  moqt://example.test:4443/  "),
-    { kind: "purge" },
+    relayUriMemoryButtons("moqt://example.test:4443/", "  moqt://example.test:4443/  "),
+    { saveEnabled: false, forgetEnabled: true },
   );
-  assert.deepEqual(serverUrlMemoryButton("moqt://example.test:4443/", ""), { kind: "purge" });
+  assert.deepEqual(relayUriMemoryButtons("moqt://example.test:4443/", ""), {
+    saveEnabled: false,
+    forgetEnabled: true,
+  });
 });
 
-test("serverUrlMemoryButton: 欄を覚えた URL から変えたときは Save", () => {
+test("relayUriMemoryButtons: 欄を覚えた URI から変えたときは Save だけ押せる", () => {
   assert.deepEqual(
-    serverUrlMemoryButton("moqt://saved.example:4443/", "moqt://edited.example:4443/"),
-    {
-      kind: "save",
-      disabled: false,
-    },
+    relayUriMemoryButtons("moqt://saved.example:4443/", "moqt://edited.example:4443/"),
+    { saveEnabled: true, forgetEnabled: false },
   );
 });
 

@@ -22,7 +22,7 @@
   - エンコード能力を超えて破棄したフレーム数を統計で確認できるようにする
   - `VideoStats` は公開型のため、この型を自前で構築しているコードは `droppedFrames` の追加が必要になる (後方互換なし)
   - @voluntas
-- [ADD] moqt-devtools の Server URL を OPFS に覚え、次に開いたときに戻す
+- [ADD] moqt-devtools の Relay URI を OPFS に覚え、次に開いたときに戻す
   - クエリの `url` があるページではそれを使い、覚えた値は上書きしない。localStorage には書かない
   - @voluntas
 - [ADD] `SubscribeCallbacks.subgroupEnd` を追加する
@@ -78,8 +78,8 @@
 - [UPDATE] moqt-devtools の生成入力の表示名を Dummy (Canvas) と Dummy (WebAudio) にする
   - URL の値は `videoSource=dummy` / `audioSource=dummy` のまま
   - @voluntas
-- [UPDATE] moqt-devtools の Server URL は、Save を押したときだけ OPFS に覚える
-  - 覚えたあとは同じボタンが Purge になり、押すと消す。欄を離れただけでは残さない
+- [UPDATE] moqt-devtools の Relay URI は、Save を押したときだけ OPFS に覚える
+  - 欄の下に小さい Save と Forget を並べ、押せるのは片方だけにする。Forget は覚えた URI を消す
   - @voluntas
 - [UPDATE] moqt-devtools の音声を Subgroup と Datagram から選んで送れるようにする
   - Audio Delivery の既定は Subgroup。Datagram は draft-ietf-moq-transport-21 §11.2。WT-H2 (reliable-only) では Subgroup で送る

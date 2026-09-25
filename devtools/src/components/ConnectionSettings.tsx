@@ -2,7 +2,7 @@ import type { ComponentChildren } from "preact";
 import { signal } from "@preact/signals";
 import { useId } from "preact/hooks";
 import * as settings from "../signals/connectionSettings";
-import { persistServerUrl, serverUrlMemoryButton } from "../utils/serverUrlStore";
+import { persistServerUrl, relayUriMemoryButtons } from "../utils/serverUrlStore";
 import { isConnectionSettingsOpen, toggleConnectionSettings } from "../signals/layout";
 import type {
   AudioDelivery,
@@ -332,11 +332,11 @@ interface ConnectionSummaryItem {
  * 接続設定の要約を作る (欄を閉じている間に 1 行で出す)
  *
  * 接続先と、配信で送る映像と音声の要点を並べる。映像や音声の入力が None のときは形式を出さない。
- * subscriber モードは Publisher だけが使う設定を隠すため、Server URL と Namespace だけにする
+ * subscriber モードは Publisher だけが使う設定を隠すため、Relay URI と Namespace だけにする
  */
 function buildConnectionSummary(currentMode: DevtoolsMode): ConnectionSummaryItem[] {
   const summary: ConnectionSummaryItem[] = [
-    { label: "Server URL", value: settings.url.value || "-" },
+    { label: "Relay URI", value: settings.url.value || "-" },
     { label: "Namespace", value: settings.namespace.value || "-" },
   ];
   if (currentMode === "subscriber") {
@@ -450,20 +450,21 @@ export function ConnectionSettings() {
     settings.authorizationTokenBase64.value = "";
     settings.authorizationTokenType.value = "0";
   };
-  const serverUrlMemory = serverUrlMemoryButton(settings.savedServerUrl.value, settings.url.value);
-  const serverUrlPurge = serverUrlMemory.kind === "purge";
-  const saveOrPurgeServerUrl = (): void => {
-    if (serverUrlPurge) {
-      settings.savedServerUrl.value = null;
-      void persistServerUrl(settings.url.value, false);
+  const relayUriMemory = relayUriMemoryButtons(settings.savedServerUrl.value, settings.url.value);
+  const saveRelayUri = (): void => {
+    if (!relayUriMemory.saveEnabled) {
       return;
     }
     const next = settings.url.value.trim();
-    if (next === "") {
-      return;
-    }
     settings.savedServerUrl.value = next;
     void persistServerUrl(next, true);
+  };
+  const forgetRelayUri = (): void => {
+    if (!relayUriMemory.forgetEnabled) {
+      return;
+    }
+    settings.savedServerUrl.value = null;
+    void persistServerUrl(settings.url.value, false);
   };
 
   return (
@@ -600,37 +601,39 @@ export function ConnectionSettings() {
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
           <div class="lg:col-span-2">
             <label for="url" class="block text-sm font-medium text-slate-600 mb-1">
-              Server URL
+              Relay URI
             </label>
-            <div class="flex items-center gap-2">
-              <input
-                type="text"
-                id="url"
-                data-testid="server-url"
-                value={settings.url.value}
-                onInput={(e) => {
-                  settings.url.value = e.currentTarget.value;
-                  // URL に msf fragment が含まれる場合は c4m を Authorization Token に反映する
-                  settings.applyC4mFromUrl(e.currentTarget.value);
-                }}
-                disabled={settings.settingsDisabled.value}
-                class="min-w-0 flex-1 px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors disabled:bg-slate-100 disabled:cursor-not-allowed"
-              />
+            <input
+              type="text"
+              id="url"
+              data-testid="relay-uri"
+              value={settings.url.value}
+              onInput={(e) => {
+                settings.url.value = e.currentTarget.value;
+                // URL に msf fragment が含まれる場合は c4m を Authorization Token に反映する
+                settings.applyC4mFromUrl(e.currentTarget.value);
+              }}
+              disabled={settings.settingsDisabled.value}
+              class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors disabled:bg-slate-100 disabled:cursor-not-allowed"
+            />
+            <div class="mt-1.5 flex items-center gap-1.5">
               <button
                 type="button"
-                data-testid="server-url-memory"
-                disabled={
-                  settings.settingsDisabled.value ||
-                  (serverUrlMemory.kind === "save" && serverUrlMemory.disabled)
-                }
-                onClick={saveOrPurgeServerUrl}
-                class={`shrink-0 px-3 py-2 text-sm border rounded-lg disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed ${
-                  serverUrlPurge
-                    ? "border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100"
-                    : "border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100"
-                }`}
+                data-testid="relay-uri-save"
+                disabled={settings.settingsDisabled.value || !relayUriMemory.saveEnabled}
+                onClick={saveRelayUri}
+                class="px-2 py-0.5 text-xs border border-blue-200 rounded bg-blue-50 text-blue-700 hover:bg-blue-100 disabled:bg-slate-100 disabled:text-slate-400 disabled:border-slate-200 disabled:cursor-not-allowed"
               >
-                {serverUrlPurge ? "Purge" : "Save"}
+                Save
+              </button>
+              <button
+                type="button"
+                data-testid="relay-uri-forget"
+                disabled={settings.settingsDisabled.value || !relayUriMemory.forgetEnabled}
+                onClick={forgetRelayUri}
+                class="px-2 py-0.5 text-xs border border-rose-200 rounded bg-rose-50 text-rose-700 hover:bg-rose-100 disabled:bg-slate-100 disabled:text-slate-400 disabled:border-slate-200 disabled:cursor-not-allowed"
+              >
+                Forget
               </button>
             </div>
           </div>
