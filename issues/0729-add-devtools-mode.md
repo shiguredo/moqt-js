@@ -1,7 +1,7 @@
 # moqt-devtools が Publisher と Subscriber を常に両方表示し、片方だけのページを開けない
 
 - Created: 2026-09-25
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-25
 - Branch: feature/add-devtools-mode
 - Polished: 2026-09-25
 - Updated: 2026-09-25
@@ -119,4 +119,12 @@ URL クエリ `mode` で Publisher だけ / Subscriber だけを表示できる�
 
 ## 解決方法
 
-{未着手}
+- `devtools/src/types.ts` に `DevtoolsMode` (`both` / `publisher` / `subscriber`) を追加した
+- `devtools/src/signals/connectionSettings.ts` に `mode` signal と許可リスト `MODES` / `isDevtoolsMode` を追加し、`buildQueryString` と `buildQueryStringForMode` が `buildQueryParams` で組み立てを共有するようにした。`both` では `mode` を載せない。`catalogSubscriptionTimeout` は選択肢を `CATALOG_SUBSCRIPTION_TIMEOUTS` に定数化して常に載せ、`useDedicatedWorker` は無効のときだけ `=0` で載せ、`initFromUrl` はどちらも許可リストで検証する
+- `devtools/src/main.tsx` は publisher モードでは最初の Subscriber を作らないようにした
+- `devtools/src/App.tsx` はモードに応じて Publisher パネル / Subscriber パネル / Add Subscriber ボタンを出し分け、副題に 3 つのモードを並べて今のモードを太字、他のモードは今の接続設定を載せた URL を新しいタブで開くリンクにした
+- `devtools/src/components/ConnectionSettings.tsx` は publisher モードで Subscribe Settings と Jitter Buffer を、subscriber モードで Track Name / Codec / Video Settings / Audio Settings / Publish Settings を隠し、閉じたときの要約を subscriber モードでは Server URL / Namespace だけにした。Catalog Timeout の select は定数から生成する
+- `devtools/src/components/DebugPanel.tsx` は subscriber モードで Copy for LLM の Publisher のボタンを隠すようにした
+- `devtools/src/signals/connectionSettings.test.ts` に `mode` / `catalogSubscriptionTimeout` / `useDedicatedWorker` の URL の往復、許可リストに無い値の無視、既定値を URL に載せないこと、指定したモードのクエリが今の設定を保ったまま `mode` だけを差し替えることのテストを追加した
+- ヘッドレス Chromium で各モードの表示 (隠す節、副題の太字とリンク、新しいタブで開いたときのモード)、Copy URL の `mode` / `catalogSubscriptionTimeout` / `useDedicatedWorker` の保持と開き直しを確かめた
+- `vp check` / `tsc --noEmit` / `vp test --run` / `vp run e2e-test` が通った
