@@ -34,6 +34,10 @@
 - [ADD] moqt-devtools の subscriber に、RESET_STREAM の error code ごとの数と、stream の reset と欠落の止まりの一覧を追加する
   - reset と欠落 (`loss`) の止まりを、止まりの一覧とは別に時刻 (UTC) つきで直近 30 件残す。到着の遅れの止まりが多くても押し出されない。reset のデバッグログにも error code を出す
   - @voluntas
+- [FIX] moqt-devtools の jitter buffer が、購読の開始に relay の cache から追いつく途中のフレームの遅れを揺らぎとして学習しないようにする
+  - 追いつく途中のフレームは実時間より速く、まとまって届いたとみなせない間隔で届くため、その遅れで再生遅延が約 500 ms まで上がり、毎秒 20 ms でしか下がらなかった。購読を始めるたびに表示の遅延が約 25 秒間数百ミリ秒大きかった
+  - 開始と基準の取り直しの後、遅れの最小値が 250 ms の間に 20 ms 以上下がらなくなるまで (live に追いつくまで) に届いたフレームの揺らぎは、再生遅延の目標に使わない
+  - @voluntas
 - [FIX] moqt-devtools と webcodecs-devtools の dummy の映像がフレームを抜かないようにする
   - canvas を `Math.floor(1000 / framerate)` ms ごとに描いて `captureStream(framerate)` で取り出していたため、描く周期が設定より速く、ずれが 1 フレーム分に積み上がるたびにフレームが抜けていた (30 fps で約 3.3 秒ごと、120 fps で 3 割のフレーム)
   - 描く時刻を最初のフレームからの経過で決め、`captureStream(0)` と `requestFrame()` で描いたフレームを 1 枚ずつ取り出す

@@ -21,12 +21,16 @@
  *
  * 次のフレームの揺らぎは再生遅延の目標に使わない (基準の遅れには使う)。
  *
- * - 開始 (と基準の取り直し) の後の最初のフレーム。購読の開始では relay の cache から
- *   Group の先頭以降の古いフレームがまとめて届き (cache replay)、その先頭は経路の揺らぎ
- *   ではない大きな遅れを持つ
+ * - 開始 (と基準の取り直し) の後、live に追いつくまでに届いたフレーム。購読の開始では
+ *   relay の cache から Group の先頭以降の古いフレームが実時間より速く届き (cache replay)、
+ *   遅れは経路の揺らぎではなく、cache に溜まっていた時間である。届く間隔はフレーム間隔の
+ *   半分以上あることが多く、まとまって届いたフレームとしては除けない。追いつく間は遅れの
+ *   最小値 (基準の遅れ) が下がり続けるため、基準の遅れが `CATCH_UP_CHECK_INTERVAL_MS` の
+ *   間に `CATCH_UP_MIN_BASE_DROP_MS` 以上下がらなくなるまでを追いつき中とする。
+ *   遅れの推移だけで決めるため、送信側と受信側の時計のずれに依らない
  * - 前のフレームからフレーム間隔の半分より短い間隔で届いたフレーム (まとまって届いた
  *   フレーム)。まとまりの中では先頭のフレームが最も遅れており、後続は先頭の遅れを
- *   引き継いだだけで新しい情報を持たない。cache replay の後続もここで除く
+ *   引き継いだだけで新しい情報を持たない
  * - 揺らぎが再生遅延の上限を超えるフレーム。再生遅延では吸収できず、使うと再生遅延が
  *   上限に張り付く
  *
@@ -94,6 +98,23 @@ export const MAX_PLAYOUT_DELAY_MS = 500;
  * いるため捨て、最新を描く
  */
 export const MAX_PRESENTATION_LAG_MS = 20;
+
+/**
+ * 追いつき中かを確かめる間隔 (ミリ秒)
+ *
+ * 追いつく間は、届くフレームが遅れの最小値を下げ続ける。2026-09-25 の配備 relay の実測では
+ * cache から実時間の約 2 倍の速さで届き、この間隔で基準の遅れが 200 ms 以上下がった。
+ * 短すぎると、2 枚ずつ届いて最小値が一時的に下がらない間に追いつき中を終えてしまう
+ */
+export const CATCH_UP_CHECK_INTERVAL_MS = 250;
+
+/**
+ * 追いつき中とみなす、`CATCH_UP_CHECK_INTERVAL_MS` の間の基準の遅れの下がり幅 (ミリ秒)
+ *
+ * 実時間の 1.1 倍の速さで追いつく場合も 25 ms 下がる。live に追いついた後の経路の
+ * 最小の遅延の変化 (数ミリ秒) より十分大きくする
+ */
+export const CATCH_UP_MIN_BASE_DROP_MS = 20;
 
 /** 目標が下がったときに再生遅延を下げる速さ (ミリ秒 / 秒) */
 export const PLAYOUT_DELAY_DECAY_MS_PER_SECOND = 20;
@@ -173,6 +194,10 @@ export class PlayoutBuffer<T> {
   private lastTimestampMs: number | null = null;
   // 続けて積んだフレームの TIMESTAMP の差 (ミリ秒)
   private frameIntervals: number[] = [];
+  // 開始 (と基準の取り直し) の後、live に追いつくまでの間か
+  private catchingUp = true;
+  // 追いつき中かを最後に確かめた時刻と、そのときの基準の遅れ。最初のフレームで決める
+  private catchUpCheckpoint: { atMs: number; baseMs: number } | null = null;
 
   /**
    * @param maxQueuedFrames - 表示待ちのキューの上限 (枚)。超えたら古い方から捨てる
@@ -321,12 +346,13 @@ export class PlayoutBuffer<T> {
     const minAtMs = nowMs - PLAYOUT_WINDOW_MS;
     this.offsets.push(nowMs, offsetMs);
     this.offsets.prune(minAtMs);
-    if (learns) {
+    const baseMs = Math.min(...this.offsets.current());
+    this.baseMs = baseMs;
+    // live に追いつくまでに届いたフレームの遅れは経路の揺らぎではない
+    if (learns && !this.isCatchingUp(nowMs, baseMs)) {
       this.learningOffsets.push(nowMs, offsetMs);
     }
     this.learningOffsets.prune(minAtMs);
-    const baseMs = Math.min(...this.offsets.current());
-    this.baseMs = baseMs;
 
     const frameIntervalMs = this.frameIntervalMs();
     const capMs = this.delayCapMs(frameIntervalMs);
@@ -346,6 +372,34 @@ export class PlayoutBuffer<T> {
       this.delayMs = Math.min(Math.max(targetMs, decayedMs), capMs);
     }
     this.lastUpdateMs = nowMs;
+  }
+
+  /**
+   * 開始 (と基準の取り直し) の後、live に追いつくまでの間かを決める
+   *
+   * `CATCH_UP_CHECK_INTERVAL_MS` ごとに基準の遅れの下がり幅を見て、
+   * `CATCH_UP_MIN_BASE_DROP_MS` より小さければ追いついたとみなす。一度追いついたら、
+   * 基準を取り直すまで追いつき中に戻らない (live の経路の揺らぎは学習する)
+   */
+  private isCatchingUp(nowMs: number, baseMs: number): boolean {
+    if (!this.catchingUp) {
+      return false;
+    }
+    const checkpoint = this.catchUpCheckpoint;
+    if (checkpoint === null) {
+      this.catchUpCheckpoint = { atMs: nowMs, baseMs };
+      return true;
+    }
+    if (nowMs - checkpoint.atMs < CATCH_UP_CHECK_INTERVAL_MS) {
+      return true;
+    }
+    if (checkpoint.baseMs - baseMs >= CATCH_UP_MIN_BASE_DROP_MS) {
+      this.catchUpCheckpoint = { atMs: nowMs, baseMs };
+      return true;
+    }
+    this.catchingUp = false;
+    this.catchUpCheckpoint = null;
+    return false;
   }
 
   /**
@@ -382,6 +436,8 @@ export class PlayoutBuffer<T> {
     this.lastTimestampMs = null;
     this.lastArrivalMs = null;
     this.frameIntervals = [];
+    this.catchingUp = true;
+    this.catchUpCheckpoint = null;
     for (const frame of this.queue) {
       frame.timestampMs = null;
     }

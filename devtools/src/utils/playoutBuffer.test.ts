@@ -1,5 +1,6 @@
 import { test, assert } from "vite-plus/test";
 import {
+  CATCH_UP_CHECK_INTERVAL_MS,
   JITTER_BUFFER_MAX_QUEUED_FRAMES,
   MAX_PRESENTATION_LAG_MS,
   MAX_PLAYOUT_DELAY_MS,
@@ -42,6 +43,20 @@ function enqueueAt(
 // ============================================================================
 
 /**
+ * 開始の後の追いつき中 (`CATCH_UP_CHECK_INTERVAL_MS` の間) を揺らぎ 0 のフレームで終え、
+ * 積んだフレームを取り除く。以降のフレームの揺らぎは再生遅延の目標に使われる。
+ * 返り値は次に積むフレームの番号
+ */
+function passCatchUp(buffer: PlayoutBuffer<number>): number {
+  const frames = Math.ceil(CATCH_UP_CHECK_INTERVAL_MS / FRAME_MS) + 1;
+  for (let index = 0; index < frames; index++) {
+    enqueueAt(buffer, index, 0);
+  }
+  buffer.clear();
+  return frames;
+}
+
+/**
  * 選択の結果から、描くフレームと捨てるフレームだけを取り出す (表示時刻は別のテストで確かめる)
  */
 function drawAndLate<T>(selection: PlayoutSelection<T>): { draw: T | null; late: T[] } {
@@ -52,23 +67,24 @@ function drawAndLate<T>(selection: PlayoutSelection<T>): { draw: T | null; late:
 // 表示時刻より前には描かず、過ぎた後の最初の選択で描く
 test("select: 表示時刻より前は描かず、過ぎたら描く", () => {
   const buffer = new PlayoutBuffer<number>(JITTER_BUFFER_MAX_QUEUED_FRAMES);
-  // 揺らぎ 0 のフレームと 40 ms 遅れたフレームで、再生遅延が 40 ms になる
-  enqueueAt(buffer, 0, 0);
-  enqueueAt(buffer, 1, 40);
+  // 揺らぎ 0 のフレームの後に 40 ms 遅れたフレームが届き、再生遅延が 40 ms になる
+  const start = passCatchUp(buffer);
+  enqueueAt(buffer, start, 40);
   assert.closeTo(buffer.playoutDelayMs() ?? 0, 40, TOLERANCE_MS);
   buffer.clear();
 
-  // 揺らぎ 0 で届いたフレーム 3 は、届いてから 40 ms 待って描く
-  enqueueAt(buffer, 3, 0);
-  const presentationMs = LOCAL_ORIGIN_MS + 3 * FRAME_MS + 40;
+  // 揺らぎ 0 で届いた 2 枚後のフレームは、届いてから 40 ms 待って描く
+  const index = start + 2;
+  enqueueAt(buffer, index, 0);
+  const presentationMs = LOCAL_ORIGIN_MS + index * FRAME_MS + 40;
   assert.closeTo(
-    buffer.presentationTimeMs(timestampOf(3 * FRAME_MS)) ?? 0,
+    buffer.presentationTimeMs(timestampOf(index * FRAME_MS)) ?? 0,
     presentationMs,
     TOLERANCE_MS,
   );
   assert.deepEqual(drawAndLate(buffer.select(presentationMs - 0.1)), { draw: null, late: [] });
   assert.deepEqual(drawAndLate(buffer.select(presentationMs + TOLERANCE_MS)), {
-    draw: 3,
+    draw: index,
     late: [],
   });
   assert.equal(buffer.size, 0);
@@ -78,33 +94,34 @@ test("select: 表示時刻より前は描かず、過ぎたら描く", () => {
 // (受け取り、復号) と、表示時刻そのものが遅れたか (再生遅延の増加) を見るために使う
 test("select: 描くフレームの表示時刻を返す", () => {
   const buffer = new PlayoutBuffer<number>(JITTER_BUFFER_MAX_QUEUED_FRAMES);
-  enqueueAt(buffer, 0, 0);
-  enqueueAt(buffer, 1, 40);
-  const presentationMs = buffer.presentationTimeMs(timestampOf(FRAME_MS)) ?? 0;
+  const start = passCatchUp(buffer);
+  enqueueAt(buffer, start, 0);
+  enqueueAt(buffer, start + 1, 40);
+  const presentationMs = buffer.presentationTimeMs(timestampOf((start + 1) * FRAME_MS)) ?? 0;
 
   // 表示時刻の前は描かず、表示時刻も返さない
-  assert.deepEqual(buffer.select(LOCAL_ORIGIN_MS), {
+  assert.deepEqual(buffer.select(LOCAL_ORIGIN_MS + start * FRAME_MS), {
     draw: null,
     late: [],
     drawPresentationMs: null,
   });
-  // フレーム 0 の表示時刻に、フレーム 0 とその表示時刻を返す
+  // 1 枚目の表示時刻に、1 枚目とその表示時刻を返す
   const first = buffer.select(presentationMs - FRAME_MS + TOLERANCE_MS);
-  assert.equal(first.draw, 0, "フレーム 0 を描くこと");
+  assert.equal(first.draw, start, "1 枚目を描くこと");
   assert.closeTo(
     first.drawPresentationMs ?? 0,
     presentationMs - FRAME_MS,
     TOLERANCE_MS,
-    "フレーム 0 の表示時刻を返すこと",
+    "1 枚目の表示時刻を返すこと",
   );
-  // フレーム 1 の表示時刻に、フレーム 1 とその表示時刻を返す
+  // 2 枚目の表示時刻に、2 枚目とその表示時刻を返す
   const second = buffer.select(presentationMs + TOLERANCE_MS);
-  assert.equal(second.draw, 1, "フレーム 1 を描くこと");
+  assert.equal(second.draw, start + 1, "2 枚目を描くこと");
   assert.closeTo(
     second.drawPresentationMs ?? 0,
     presentationMs,
     TOLERANCE_MS,
-    "フレーム 1 の表示時刻を返すこと",
+    "2 枚目の表示時刻を返すこと",
   );
 });
 
@@ -315,6 +332,176 @@ test("enqueue: 購読の開始にまとめて届いた古いフレームを再�
     buffer.clear();
   }
   assert.closeTo(buffer.playoutDelayMs() ?? -1, 0, TOLERANCE_MS);
+});
+
+/**
+ * 購読を始めたときの、復号の出力の時刻と TIMESTAMP の列 (実測)
+ *
+ * 2026-09-25 に配備 relay (prewarm 有効) で dummy の映像 (30 fps、2 秒の Group) を購読した
+ * ときの最初の 90 枚。[最初のフレームからの受信側の経過 (ms), 最初のフレームからのメディア
+ * 時刻 (ms)] の組である。relay は cache から Group の先頭以降を送り、最初のフレームは
+ * TIMESTAMP から `JOIN_FIRST_OFFSET_MS` 遅れて届いた。以降は実時間の約 2 倍の速さで届き
+ * (届く間隔の多くはフレーム間隔の半分以上ある)、55 枚目 (約 0.89 秒後) で live に追いついた
+ * (遅れ約 57 ms)。その後は live で、経路の揺らぎは約 20 ms 以内である
+ */
+const JOIN_CATCH_UP_ARRIVALS: readonly (readonly [number, number])[] = [
+  [0, 0],
+  [0.8, 16.9],
+  [1.5, 47.4],
+  [2.1, 80.3],
+  [5.1, 112.9],
+  [5.1, 147.8],
+  [5.1, 187.8],
+  [30, 217.2],
+  [46.4, 255.3],
+  [65.8, 286.3],
+  [84, 318.4],
+  [102, 347.3],
+  [113.9, 383],
+  [121.8, 412.9],
+  [154.9, 448.5],
+  [156.5, 489.4],
+  [202, 512.6],
+  [203.6, 546.2],
+  [233.9, 580.3],
+  [240.4, 621.4],
+  [276.6, 654.2],
+  [279.5, 687.2],
+  [304.7, 721.1],
+  [323, 748.1],
+  [324.6, 788.6],
+  [353.6, 819.6],
+  [370.7, 854.6],
+  [388.7, 886.2],
+  [404.9, 918.6],
+  [440.2, 954.3],
+  [442, 979.1],
+  [479.7, 1022.4],
+  [484.5, 1054.4],
+  [522.4, 1079.5],
+  [528.9, 1112.3],
+  [561, 1156],
+  [563.4, 1185.7],
+  [595.8, 1219.6],
+  [599.6, 1253.3],
+  [640.1, 1287.3],
+  [641.9, 1321.4],
+  [681.7, 1346.2],
+  [683.5, 1387.8],
+  [718.9, 1412.8],
+  [722.9, 1450.5],
+  [734.9, 1487.9],
+  [754.7, 1519.5],
+  [772.7, 1554.8],
+  [790.6, 1581.8],
+  [796.4, 1621.5],
+  [814.3, 1653],
+  [836.6, 1679.5],
+  [842.6, 1721.8],
+  [856.6, 1746],
+  [888.9, 1788.4],
+  [918.9, 1812.8],
+  [960.1, 1853.5],
+  [982.7, 1887.5],
+  [1015, 1919.7],
+  [1039.9, 1946],
+  [1074.2, 1984.7],
+  [1121.5, 2012.8],
+  [1154.6, 2046.1],
+  [1192.6, 2087.8],
+  [1222.8, 2119.4],
+  [1248.5, 2154.4],
+  [1276.3, 2179.6],
+  [1309.6, 2219],
+  [1340.1, 2246.4],
+  [1374.6, 2279.6],
+  [1404.8, 2313],
+  [1445.3, 2355.2],
+  [1473.3, 2379.6],
+  [1518.6, 2420.9],
+  [1546.5, 2452.8],
+  [1582.6, 2487.8],
+  [1608.8, 2512.8],
+  [1634.7, 2546.1],
+  [1675.2, 2582.4],
+  [1726.7, 2621.5],
+  [1740, 2646.3],
+  [1776.5, 2679.6],
+  [1818.7, 2718.1],
+  [1845.2, 2753.1],
+  [1886.9, 2788.1],
+  [1905.1, 2814.8],
+  [1953.6, 2855.2],
+  [1970.2, 2879.7],
+  [2018.9, 2920.2],
+  [2045.1, 2946.2],
+];
+
+/** 実測の列の最初のフレームの、TIMESTAMP から表示できるようになるまでの遅れ (ms) */
+const JOIN_FIRST_OFFSET_MS = 957.1;
+
+/** 実測の列を積む。返り値は最後のフレームの受信側の時刻と番号 */
+function enqueueJoinCatchUp(buffer: PlayoutBuffer<number>): { atMs: number; index: number } {
+  let last = { atMs: LOCAL_ORIGIN_MS, index: -1 };
+  JOIN_CATCH_UP_ARRIVALS.forEach(([arrivalMs, mediaMs], index) => {
+    const atMs = LOCAL_ORIGIN_MS + JOIN_FIRST_OFFSET_MS + arrivalMs;
+    buffer.enqueue(index, atMs, timestampOf(mediaMs));
+    buffer.clear();
+    last = { atMs, index };
+  });
+  return last;
+}
+
+// 購読の開始では、relay の cache から古いフレームが実時間より速く届いて live に追いつく。
+// 追いつく途中のフレームの遅れは経路の揺らぎではない。まとまって届いたとみなせない間隔
+// (フレーム間隔の半分以上) で届くものも、再生遅延の目標に使わない。使うと再生遅延が
+// 数百ミリ秒になり、窓 (10 秒) から抜けた後も毎秒 20 ms でしか下がらない
+test("playoutDelayMs: 購読の開始に cache から追いつく途中のフレームの遅れを再生遅延に使わない", () => {
+  const buffer = new PlayoutBuffer<number>(JITTER_BUFFER_MAX_QUEUED_FRAMES);
+  enqueueJoinCatchUp(buffer);
+  // live の揺らぎ (約 20 ms) 程度に収まる。追いつく途中の遅れを学習すると 400 ms を超える
+  assert.isBelow(buffer.playoutDelayMs() ?? Infinity, 50);
+});
+
+// 別の publisher への切り替えなどで TIMESTAMP が飛ぶと基準を取り直す。取り直した後も、
+// cache から追いつく途中のフレームの遅れは再生遅延に使わない
+test("playoutDelayMs: 基準を取り直した後も cache から追いつく途中のフレームの遅れを使わない", () => {
+  const buffer = new PlayoutBuffer<number>(JITTER_BUFFER_MAX_QUEUED_FRAMES);
+  // 1 時間前の TIMESTAMP で 2 秒分、揺らぎ 0 のフレームを積む
+  const hourMs = 3_600_000;
+  for (let index = 0; index < 60; index++) {
+    buffer.enqueue(
+      index,
+      LOCAL_ORIGIN_MS + index * FRAME_MS,
+      timestampOf(index * FRAME_MS - hourMs),
+    );
+    buffer.clear();
+  }
+  // TIMESTAMP が 1 時間進み (基準を取り直す)、cache から追いつく実測の列が続く
+  JOIN_CATCH_UP_ARRIVALS.forEach(([arrivalMs, mediaMs], index) => {
+    const atMs = LOCAL_ORIGIN_MS + 60 * FRAME_MS + JOIN_FIRST_OFFSET_MS + arrivalMs;
+    buffer.enqueue(60 + index, atMs, timestampOf(60 * FRAME_MS + mediaMs));
+    buffer.clear();
+  });
+  assert.isBelow(buffer.playoutDelayMs() ?? Infinity, 50);
+});
+
+// 追いついた後の経路の遅延の跳ねは、従来どおり再生遅延に使う
+test("playoutDelayMs: cache から追いついた後の経路の遅延の跳ねは再生遅延に使う", () => {
+  const buffer = new PlayoutBuffer<number>(JITTER_BUFFER_MAX_QUEUED_FRAMES);
+  const last = enqueueJoinCatchUp(buffer);
+  const lastMediaMs = JOIN_CATCH_UP_ARRIVALS[JOIN_CATCH_UP_ARRIVALS.length - 1]?.[1] ?? 0;
+  // 以降は最後のフレームと同じ遅れで届き、30 枚に 3 枚が 100 ms 遅れる
+  // (復号は順に行うため、到着は前のフレームより早くならない)
+  let available = last.atMs;
+  for (let step = 1; step <= 90; step++) {
+    const mediaMs = lastMediaMs + step * FRAME_MS;
+    const late = step % 30 === 10 || step % 30 === 20 || step % 30 === 25;
+    available = Math.max(available, last.atMs + step * FRAME_MS + (late ? 100 : 0));
+    buffer.enqueue(last.index + step, available, timestampOf(mediaMs));
+    buffer.clear();
+  }
+  assert.isAtLeast(buffer.playoutDelayMs() ?? 0, 90);
 });
 
 // 表示待ちのキューには上限があるため、フレーム間隔が短いほど長く待てない。
