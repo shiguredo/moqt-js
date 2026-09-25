@@ -40,6 +40,25 @@ export function readAudioSamples(audioData: AudioData): Float32Array {
 }
 
 /**
+ * `AudioData` の全チャンネルのサンプルを f32-planar で読み出す
+ *
+ * LOC Audio Level は符号化するサンプル全体の RMS で求める (RFC 6464 Section 3)。
+ * `readAudioSamples` は波形の表示のために第 1 チャンネルだけを読むため、別に用意する。
+ * `AudioData` の所有者は呼び出し側のままであり、本関数は `close()` しない。
+ */
+export function readAllAudioSamples(audioData: AudioData): Float32Array {
+  const frames = audioData.numberOfFrames;
+  const samples = new Float32Array(frames * audioData.numberOfChannels);
+  for (let channel = 0; channel < audioData.numberOfChannels; channel++) {
+    audioData.copyTo(samples.subarray(channel * frames, (channel + 1) * frames), {
+      planeIndex: channel,
+      format: "f32-planar",
+    });
+  }
+  return samples;
+}
+
+/**
  * サンプル列から peak と RMS を dBFS で求める純関数
  *
  * 0 dBFS が最大 (振幅 1.0) で、値が小さいほど静かである。無音と空のサンプル列は

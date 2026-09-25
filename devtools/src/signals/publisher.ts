@@ -9,6 +9,7 @@ import {
   type PublishTimingSnapshot,
 } from "../utils/publishTimingStats";
 import type { AudioEncoderWrapper } from "../../../src/codec/AudioEncoder.ts";
+import { AudioLevelTimeline } from "../utils/audioLevelTimeline";
 
 // Publisher の状態
 export const pubSession = signal<Session | null>(null);
@@ -94,6 +95,9 @@ export const audioEncoder = signal<AudioEncoderWrapper | null>(null);
 export const audioStream = signal<MediaStream | null>(null);
 export const audioStreamCleanup = signal<(() => void) | null>(null);
 export const audioFrameReader = signal<ReadableStreamDefaultReader<AudioData> | null>(null);
+// 符号化へ渡した音声のサンプルの記録。送る Object の LOC Audio Level を求める
+// (utils/audioLevelTimeline.ts)。音声の配信を始めるたびに作り直す
+export const audioLevelTimeline = signal(new AudioLevelTimeline());
 
 // 音声の Group ID。draft-ietf-moq-loc-04 §4.1 に従い chunk ごとに Group を進める
 export const pubCurrentAudioGroup = signal(Date.now());

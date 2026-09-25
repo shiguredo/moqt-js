@@ -21,12 +21,9 @@ import {
 } from "../utils/codec";
 import type { AudioCodecType, AudioSourceType, CodecType } from "../types";
 import { createDummyVideoStream } from "../webcodecs-devtools/utils/dummyVideo";
-import {
-  createDummyAudioStream,
-  createToneSamples,
-  summarizeToneLevel,
-  type ToneAudioLevel,
-} from "../webcodecs-devtools/utils/dummyAudio";
+import { createDummyAudioStream } from "../webcodecs-devtools/utils/dummyAudio";
+import { readAllAudioSamples } from "../utils/audioLevel";
+import { AudioLevelTimeline } from "../utils/audioLevelTimeline";
 import { AudioEncoderWrapper } from "../../../src/codec/AudioEncoder.ts";
 import type { AudioEncodedChunkData } from "../../../src/codec/types.ts";
 import { getAudioEncoderConfig } from "../../../src/codec/config.ts";
@@ -66,14 +63,6 @@ export function handleDebugMessage(message: DebugMessage): void {
  * 映像トラック名 (`settings.trackName`) は利用者が変えられるため、音声は固定名にする。
  */
 const AUDIO_TRACK_NAME = "audio";
-
-/**
- * Audio Level を求める窓の長さ (ミリ秒)
- *
- * Opus の 1 フレーム相当。RFC 6464 §3 は audio level を「ペイロードが符号化する
- * サンプルの RMS」で測ると定めるため、chunk 1 つ分に相当する長さで測る。
- */
-const AUDIO_LEVEL_WINDOW_MS = 20;
 
 /**
  * 符号化と送信の時間の統計を画面へ反映する間隔 (ミリ秒)
@@ -349,29 +338,6 @@ interface VideoStreamResult {
   width: number;
   height: number;
   cleanup: () => void;
-}
-
-/**
- * 送信する音声 chunk の Audio Level を求める
- *
- * RFC 6464 §3 は audio level を「ペイロードが符号化するサンプルの RMS」で -dBov と
- * して測ると定める。ダミー音声のサンプル列は `createToneSamples` が作るため、
- * chunk の timestamp に対応する絶対フレーム位置から同じ純関数で切り出して求める。
- *
- * ブラウザ API に依存しないため、Audio Level の算出はここで検証できる。
- *
- * @param sampleRate - 配信する音声のサンプルレート (Hz)
- * @param channels - 配信する音声のチャンネル数
- * @param timestampMicros - chunk の timestamp (マイクロ秒)
- */
-export function resolveAudioLevelForTimestamp(
-  sampleRate: number,
-  channels: number,
-  timestampMicros: number,
-): ToneAudioLevel {
-  const windowFrames = Math.max(1, Math.round((sampleRate * AUDIO_LEVEL_WINDOW_MS) / 1000));
-  const startFrame = Math.round((timestampMicros / 1_000_000) * sampleRate);
-  return summarizeToneLevel(createToneSamples(sampleRate, channels, windowFrames, startFrame));
 }
 
 async function getVideoStream(
@@ -784,6 +750,13 @@ export function usePublisher() {
           break;
         }
 
+        // 送る Object の LOC Audio Level は、符号化するサンプルから求める
+        // (RFC 6464 Section 3)。符号化へ渡す前にサンプルを時刻つきで記録する
+        pub.audioLevelTimeline.value.record(
+          audioData.timestamp,
+          audioData.duration,
+          readAllAudioSamples(audioData),
+        );
         // 音声フレームは落としても後続の Object で上書きされるため、映像のような
         // encodeQueueSize による抑制はしない (src/createMediaPublisher.ts と同じ)
         encoder.encode(audioData);
@@ -842,10 +815,7 @@ export function usePublisher() {
 
     const audioEncoderInstance = new AudioEncoderWrapper(options.useWorker, {
       output: (chunk) => {
-        handleAudioEncodedChunk(chunk, {
-          sampleRate: options.sampleRate,
-          channels: options.channels,
-        });
+        handleAudioEncodedChunk(chunk);
       },
       error: (error) => {
         console.error("Audio encoder error:", error);
@@ -862,14 +832,13 @@ export function usePublisher() {
       options.channels,
     );
 
+    // 前の配信のサンプルの記録を持ち越さない
+    pub.audioLevelTimeline.value = new AudioLevelTimeline();
     const audioTrackProcessor = new MediaStreamTrackProcessor<AudioData>({ track: audioTrack });
     pub.audioFrameReader.value = audioTrackProcessor.readable.getReader();
   }
 
-  function handleAudioEncodedChunk(
-    chunk: AudioEncodedChunkData,
-    audioFormat: { sampleRate: number; channels: number },
-  ): void {
+  function handleAudioEncodedChunk(chunk: AudioEncodedChunkData): void {
     const audioPublisherInstance = pub.audioPublisher.value;
     if (!audioPublisherInstance || audioPublisherInstance.state !== "active") return;
 
@@ -884,14 +853,9 @@ export function usePublisher() {
     pub.pubCurrentAudioGroup.value = allocation.state.groupId;
 
     // LOC Audio Level (draft-ietf-moq-loc-04 §2.3.3.2) は RFC 6464 §3 に従い、
-    // chunk が符号化するサンプル列の RMS から -dBov を求める。
-    // 配信開始時に確定したサンプルレートとチャンネル数を使う (設定が後から変わっても
-    // 実際に流れている信号と食い違わせない)
-    const audioLevel = resolveAudioLevelForTimestamp(
-      audioFormat.sampleRate,
-      audioFormat.channels,
-      chunk.timestamp,
-    );
+    // chunk が符号化するサンプル列の RMS から -dBov を求める。符号化へ渡したときに
+    // 記録したサンプルのうち、chunk の時間の範囲に重なる分を使う (processAudioFrames)
+    const audioLevel = pub.audioLevelTimeline.value.levelFor(chunk.timestamp, chunk.duration);
 
     // draft-ietf-moq-loc-04 §2.3.3.1 (Audio Config): AAC の AudioSpecificConfig は
     // 同じ値を毎 Object 送らない

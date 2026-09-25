@@ -91,11 +91,18 @@ export function createToneSamples(
  * @param samples - RMS を求めるサンプル列 (createToneSamples の出力)
  */
 export function summarizeToneLevel(samples: Float32Array): ToneAudioLevel {
-  if (samples.length === 0) {
-    // サンプルが無い場合は測定不能のため無音として扱う (NaN を wire に載せない)
-    return { level: AUDIO_LEVEL_SILENCE, voiceActivity: false };
-  }
+  return levelFromSampleStats(sampleStatsOf(samples));
+}
 
+/** LOC Audio Level を求めるための、サンプル列の二乗和、数、peak */
+export interface SampleStats {
+  sumOfSquares: number;
+  count: number;
+  peak: number;
+}
+
+/** サンプル列の二乗和、数、peak を求める純関数 */
+export function sampleStatsOf(samples: Float32Array): SampleStats {
   let sumOfSquares = 0;
   let peak = 0;
   for (const value of samples) {
@@ -105,8 +112,22 @@ export function summarizeToneLevel(samples: Float32Array): ToneAudioLevel {
       peak = magnitude;
     }
   }
+  return { sumOfSquares, count: samples.length, peak };
+}
 
-  const rms = Math.sqrt(sumOfSquares / samples.length);
+/**
+ * サンプル列の二乗和、数、peak から LOC Audio Level を求める純関数
+ *
+ * 複数の区間の値を足し合わせてから求められるよう、サンプル列ではなく集計値を受ける
+ * (utils/audioLevelTimeline.ts)。規則は `summarizeToneLevel` と同じである。
+ */
+export function levelFromSampleStats(stats: SampleStats): ToneAudioLevel {
+  if (stats.count === 0) {
+    // サンプルが無い場合は測定不能のため無音として扱う (NaN を wire に載せない)
+    return { level: AUDIO_LEVEL_SILENCE, voiceActivity: false };
+  }
+
+  const rms = Math.sqrt(stats.sumOfSquares / stats.count);
   // 無音 (rms 0) と、NaN / Infinity を含む異常な入力は測定不能として無音に丸める
   // (NaN を wire に載せない)
   if (!Number.isFinite(rms) || rms === 0) {
@@ -115,7 +136,7 @@ export function summarizeToneLevel(samples: Float32Array): ToneAudioLevel {
 
   const dbov = -20 * Math.log10(rms);
   const level = Math.min(AUDIO_LEVEL_SILENCE, Math.max(0, Math.round(dbov)));
-  return { level, voiceActivity: peak >= VOICE_ACTIVITY_PEAK_THRESHOLD };
+  return { level, voiceActivity: stats.peak >= VOICE_ACTIVITY_PEAK_THRESHOLD };
 }
 
 /**

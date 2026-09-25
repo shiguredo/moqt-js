@@ -26,6 +26,7 @@
 - [ADD] moqt-devtools の publisher で音声をマイクから取れるようにし、音声入力デバイスを選べるようにする
   - Audio Source に Microphone を足し、Audio Device で入力デバイスを選ぶ。マイクの音にかけるブラウザの音声処理 (echoCancellation / noiseSuppression / autoGainControl) を切り替えられる。選んだデバイスと無効にした音声処理は URL (Copy URL) にも載せる
   - マイクのサンプルレートとチャンネル数はデバイスが決めるため、実際に取れた値を catalog と AudioEncoder に使う。マイクを取れないときは映像だけを配信する
+  - 送る Object の LOC Audio Level を、生成したトーンを作り直して求めるのをやめ、符号化へ渡したサンプルのうち chunk の時間の範囲に重なる分の RMS から求める (RFC 6464 Section 3)
   - @voluntas
 - [ADD] moqt-devtools の subscriber に表示の止まりの原因と受信の欠けの統計を追加する
   - 止まりごとに原因を 1 つ決め (`source` / `loss` / `discarded` / `arrival` / `groupSwitchHold` / `decode` / `playout` / `render` / `unknown`)、原因ごとの回数と時間、直近 30 回の止まり (時刻、長さ、Group ID / Object ID) を `playbackTiming` に出す

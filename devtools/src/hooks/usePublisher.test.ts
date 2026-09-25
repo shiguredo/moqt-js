@@ -4,7 +4,6 @@ import {
   buildObjectSendPlan,
   buildPublisherCatalog,
   resolveAudioConfigToSend,
-  resolveAudioLevelForTimestamp,
   resolveAudioPublishable,
   shouldRequestKeyFrame,
   decideKeyFrame,
@@ -681,32 +680,8 @@ test("buildPublisherCatalog: AAC の codec 文字列も Encoder 設定と一致�
 });
 
 // ============================================================================
-// 音声の Audio Level
+// 音声の Audio Config
 // ============================================================================
-
-// RFC 6464 §3 の level は -dBov (0 が最大、127 がデジタル無音)。
-// ダミー音声の振幅は 0.2〜0.3 の範囲で変わる。RMS は振幅の 1/sqrt(2) になるため、
-// 20 ms 窓の level は 13〜17 付近になる。
-test("resolveAudioLevelForTimestamp: トーンの Audio Level を -dBov で返す", () => {
-  for (const timestamp of [0, 500_000, 1_000_000, 1_500_000]) {
-    const level = resolveAudioLevelForTimestamp(48000, 2, timestamp);
-    assert.isAtLeast(level.level, 0);
-    assert.isAtMost(level.level, 127);
-    assert.isAtLeast(level.level, 12);
-    assert.isAtMost(level.level, 18);
-    assert.equal(level.voiceActivity, true);
-  }
-});
-
-// 振幅のエンベロープは 2 秒周期で変化する。全ての timestamp で同じ値になると、
-// 送信側が固定値を載せているのかエンベロープを反映しているのか区別できない。
-test("resolveAudioLevelForTimestamp: 振幅の変化が level に現れる", () => {
-  const levels = [0, 250_000, 500_000, 750_000, 1_000_000, 1_250_000, 1_500_000, 1_750_000].map(
-    (timestamp) => resolveAudioLevelForTimestamp(48000, 2, timestamp).level,
-  );
-
-  assert.isAbove(new Set(levels).size, 1);
-});
 
 // draft-ietf-moq-loc-04 §2.3.3.1 (Audio Config): AAC の AudioSpecificConfig は
 // 同じ値を毎 Object 送らない。opus は description を持たないため何も載らない
