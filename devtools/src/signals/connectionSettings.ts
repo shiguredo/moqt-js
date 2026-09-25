@@ -48,7 +48,7 @@ export const keyframeInterval = signal(60);
 //
 // 既定は "none" にする。音声トラックを足すと catalog のトラック数が変わり、
 // 既存の相互運用の実測 (映像だけの catalog) が変わってしまうため。
-// マイクからの取得は扱わない ("dummy" のみ)。
+// 入力元は生成した音 ("dummy") と、選んだ音声入力デバイス ("microphone") から選べる。
 export const audioSource = signal<AudioSourceType>("none");
 export const audioCodec = signal<AudioCodecType>("opus");
 export const audioBitrate = signal(64000);

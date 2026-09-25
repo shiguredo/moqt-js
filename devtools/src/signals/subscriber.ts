@@ -321,7 +321,7 @@ export function hasEstablishedSubscription(instance: SubscriberInstance): boolea
  *
  * 購読が確立しているか (hasEstablishedSubscription)、確立を待っている (isStarting)
  * インスタンスがあれば true。
- * startSubscribing は接続の後にも Track Name や Catalog Timeout を読むため、確立を
+ * startSubscribing は接続の後にも Catalog Timeout や Use Dedicated Worker を読むため、確立を
  * 待っている間も使っているとみなす。Publisher や他の Subscriber を止めたときや、それらの開始の
  * 失敗や切断で後始末するときに、接続設定の入力を有効に戻してよいかの判定に使う
  * (cleanupPublisher / resetSubscriberState)。
