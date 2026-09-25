@@ -67,6 +67,11 @@
   - URL クエリ `mode` で Publisher だけ / Subscriber だけを表示する。ヘッダーの副題に 3 つのモードを並べ、今のモードを示すとともに、他のモードのページを今の接続設定のまま新しいタブで開けるようにする
   - Catalog Timeout と Use Dedicated Worker を URL に載せ、同じ接続設定のページを URL で再現できるようにする
   - @voluntas
+- [UPDATE] moqt-devtools の Jitter Buffer を Subscriber の Video に置き、Dedicated Worker の説明を足す
+  - Jitter Buffer は映像の LOC TIMESTAMP 再生なので、Audio Output とは別の節にし、節の間に余白を置く
+  - Dedicated Worker は映像と音声の encoder と decoder の両方に使う
+  - Publisher の Track / Audio / Video と Subscriber の Catalog / Audio / Video を、Audio が先の白い枠で分ける
+  - @voluntas
 - [UPDATE] moqt-devtools と webcodecs-devtools のダミー映像を、Sora-DevTools のフェイク映像と同じ見た目にする
   - グラデーションの上に、開始日時と `mmmm:ss.SSS` の経過時間を出す。文字の大きさは解像度に合わせる
   - @voluntas
