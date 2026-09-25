@@ -89,6 +89,9 @@
   - 閉じている間は、接続先、Namespace、Track、映像と音声の要点を 1 行で出す。要約の行を押しても開く
   - 開け閉めはブラウザ (localStorage) に覚え、再読み込みしても同じ状態で始める。既定は開く
   - @voluntas
+- [UPDATE] moqt-devtools の Catalog の欄を、スクロールせずに読めるよう詰めて並べる
+  - Track ごとにキーと値を横に詰めて並べ、幅が足りない分だけ折り返す。一覧の高さの固定とスクロールをやめ、余白を小さくする。映像と音声の 2 Track の catalog で、欄は 238 px から 130 px になった
+  - @voluntas
 - [UPDATE] moqt-devtools の見出しを「MOQT DevTools (draft-21)」にし、draft-21 から draft-ietf-moq-transport-21 の文書を開けるようにする
   - ページのタイトルも同じにする
   - @voluntas

@@ -32,19 +32,19 @@ interface CatalogTracksProps {
 /**
  * catalog の Track の一覧
  *
- * catalog を受け取る前も欄を描き、値を「-」にする。受け取った時点で欄が現れたり、
- * Track の数で高さが変わったりすると、その下の項目 (画面の幅が狭いときは下に並ぶ
- * パネルの映像) の位置が動く。一覧の領域の高さは固定し、収まらない分は欄の中で
- * スクロールする
+ * Track ごとに、キーと値を 1 組ずつ横に詰めて並べ、幅が足りない分だけ折り返す。高さは
+ * Track の数と中身に合わせ、欄の中でスクロールさせない (映像と音声の Track を一目で読める)。
+ * 長い値 (initRef など) は 1 組の幅に収めて省き、全文はマウスを重ねると出る。
+ * catalog を受け取る前も欄を描き、値を「-」にする
  */
 export function CatalogTracks({ tracks, tone, testId }: CatalogTracksProps) {
   const classes = TONE_CLASSES[tone];
   return (
-    <div class={`rounded-lg p-4 mb-4 border ${classes.box}`} data-testid={testId}>
+    <div class={`rounded-lg px-3 py-2 mb-4 border ${classes.box}`} data-testid={testId}>
       <h3
-        class={`text-xs font-semibold uppercase tracking-wide mb-3 flex items-center gap-2 ${classes.title}`}
+        class={`text-xs font-semibold uppercase tracking-wide mb-1 flex items-center gap-1.5 ${classes.title}`}
       >
-        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path
             stroke-linecap="round"
             stroke-linejoin="round"
@@ -54,25 +54,24 @@ export function CatalogTracks({ tracks, tone, testId }: CatalogTracksProps) {
         </svg>
         Catalog
       </h3>
-      <div class="h-44 overflow-y-auto space-y-2" data-testid={`${testId}-tracks`}>
+      <div class="space-y-1" data-testid={`${testId}-tracks`}>
         {tracks.length === 0 ? (
           <div class="text-xs text-slate-400">-</div>
         ) : (
           tracks.map((track, index) => (
-            <div key={index} class={`bg-white rounded-lg p-3 border ${classes.card}`}>
-              <div class="grid grid-cols-4 gap-2 text-xs">
-                {Object.entries(track).map(([key, value]) => (
-                  <div key={key}>
-                    <div class="text-slate-500">{key}</div>
-                    <div
-                      class="font-semibold text-slate-700 truncate"
-                      title={formatCatalogValue(key, value)}
-                    >
-                      {formatCatalogValue(key, value)}
-                    </div>
-                  </div>
-                ))}
-              </div>
+            <div
+              key={index}
+              class={`bg-white rounded px-2 py-1 border ${classes.card} flex flex-wrap gap-x-3 gap-y-0.5 text-xs leading-4`}
+            >
+              {Object.entries(track).map(([key, value]) => {
+                const text = formatCatalogValue(key, value);
+                return (
+                  <span key={key} class="max-w-full flex gap-1 min-w-0" title={`${key}: ${text}`}>
+                    <span class="text-slate-500 shrink-0">{key}</span>
+                    <span class="font-semibold text-slate-700 truncate">{text}</span>
+                  </span>
+                );
+              })}
             </div>
           ))
         )}
