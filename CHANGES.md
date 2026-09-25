@@ -64,6 +64,10 @@
   - URL クエリ `mode` で Publisher だけ / Subscriber だけを表示する。ヘッダーの副題に 3 つのモードを並べ、今のモードを示すとともに、他のモードのページを今の接続設定のまま新しいタブで開けるようにする
   - Catalog Timeout と Use Dedicated Worker を URL に載せ、同じ接続設定のページを URL で再現できるようにする
   - @voluntas
+- [UPDATE] moqt-devtools の音声レベルメーターの見出し行を、値の文字数で動かないようにする
+  - voice activity の on / off や peak / RMS の桁が変わっても、項目の位置とメーターの高さが変わらない
+  - peak / RMS の未計測と voice activity の未報告は「-」にする。LOC Audio Level が載っていない object は `not reported` のままにする
+  - @voluntas
 - [UPDATE] moqt-devtools の HTTP バージョン表示を、Publisher / Subscriber の見出しの後ろの H2 / H3 にする
   - Connection Settings の Pending バッジをやめる。接続が確立しているセッションにだけ出し、切れたら消す
   - `WebTransport.reliability` が `"supports-unreliable"` なら H3、`"reliable-only"` なら H2 にする。属性が無い Chromium は HTTP/3 の WebTransport しか確立しないため H3 にする

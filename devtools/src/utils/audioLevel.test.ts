@@ -1,5 +1,6 @@
 import { test, assert } from "vite-plus/test";
 import {
+  INACTIVE_TEXT,
   MIN_DBFS,
   appendWaveform,
   formatAudioLevel,
@@ -112,14 +113,19 @@ test("formatAudioLevel: 未報告と値を区別する", () => {
   assert.equal(formatAudioLevel({ level: 127, voiceActivity: false }), "-127 dBov");
 });
 
-test("formatVoiceActivity: 未報告と値を区別する", () => {
-  assert.equal(formatVoiceActivity(null), "not reported");
-  assert.equal(formatVoiceActivity({ level: 0, voiceActivity: true }), "voice: on");
-  assert.equal(formatVoiceActivity({ level: 0, voiceActivity: false }), "voice: off");
+// voice の値はラベル ("voice") を別に出すため、値だけを返す。
+// 幅を固定する見出し行に収まるよう、最も長い "off" は 3 文字にする
+test("formatVoiceActivity: 値だけを返し、Audio Level が無いときは「-」にする", () => {
+  assert.equal(formatVoiceActivity({ level: 0, voiceActivity: true }), "on");
+  assert.equal(formatVoiceActivity({ level: 0, voiceActivity: false }), "off");
+  // Audio Level が載っていない object には V ビットも無い。同じ「未報告」を
+  // LOC Audio Level の欄と 2 度出さないため、ここは「-」にする
+  assert.equal(formatVoiceActivity(null), INACTIVE_TEXT);
 });
 
-test("formatDbfs: 未計測と値を区別する", () => {
-  assert.equal(formatDbfs(null), "not measured");
+// 見出し行は値の幅を文字数で固定している。値が無いときに長い文字列を返すと幅が足りない
+test("formatDbfs: 値が無いときは「-」にする", () => {
+  assert.equal(formatDbfs(null), INACTIVE_TEXT);
   assert.equal(formatDbfs(0), "0.0 dBFS");
   assert.equal(formatDbfs(-6.02), "-6.0 dBFS");
   assert.equal(formatDbfs(MIN_DBFS), "-100.0 dBFS");

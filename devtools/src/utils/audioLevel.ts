@@ -14,6 +14,14 @@ const WAVEFORM_WINDOW_MS = 100;
 /** 復号信号の上限 (dBFS)。振幅 1.0 が 0 dBFS */
 export const MAX_DBFS = 0;
 
+/**
+ * 値が無いときの表示
+ *
+ * 無音 (-100 dBFS) や 0 (0 dBov) と区別する。メーターの見出し行は値の幅を文字数で
+ * 固定しており、値が無いときも同じ幅の欄にこの文字列を出す。
+ */
+export const INACTIVE_TEXT = "-";
+
 /** 復号信号のレベル (dBFS) */
 interface DecodedAudioLevel {
   /** 最大振幅を dBFS にしたもの */
@@ -138,6 +146,9 @@ export function appendWaveform(
  * draft-ietf-moq-loc-04 §2.3.3.2 の値は RFC 6464 §3 の -dBov であり、0 が最大音量、
  * 127 がデジタル無音を表す。載っていない object では `null` が渡る。
  * voice activity は `formatVoiceActivity` で別に表示する (同じ値を 2 度出さない)。
+ *
+ * Audio Level が載っていない object を受けた状態は `not reported` (12 文字) と出す。
+ * 値が無い状態 (まだ購読していない、音声を送っていない) は `INACTIVE_TEXT` と区別する。
  */
 export function formatAudioLevel(level: LOC.AudioLevel | null): string {
   if (level === null) {
@@ -146,18 +157,29 @@ export function formatAudioLevel(level: LOC.AudioLevel | null): string {
   return `${String(-level.level)} dBov`;
 }
 
-/** LOC Audio Level の voice activity (RFC 6464 §3 の V ビット) を表示用にする */
+/**
+ * LOC Audio Level の voice activity (RFC 6464 §3 の V ビット) を表示用にする
+ *
+ * `voice` のラベルは呼び出し側が別に出すため、値だけを返す (最長 3 文字の `off`)。
+ * Audio Level が載っていない object には V ビットも無いため、同じ状態を 2 度出さないよう
+ * `formatAudioLevel` の `not reported` ではなく `INACTIVE_TEXT` にする。
+ */
 export function formatVoiceActivity(level: LOC.AudioLevel | null): string {
   if (level === null) {
-    return "not reported";
+    return INACTIVE_TEXT;
   }
-  return level.voiceActivity ? "voice: on" : "voice: off";
+  return level.voiceActivity ? "on" : "off";
 }
 
-/** dBFS の数値を表示用の文字列にする (未計測は `null`) */
+/**
+ * dBFS の数値を表示用の文字列にする
+ *
+ * 値が無い間 (音を受けているが、まだ復号していないなど) は `INACTIVE_TEXT` にする。
+ * メーターの見出し行は値の幅を文字数で固定するため、null を別の長い文字列にしない。
+ */
 export function formatDbfs(value: number | null): string {
   if (value === null) {
-    return "not measured";
+    return INACTIVE_TEXT;
   }
   return `${value.toFixed(1)} dBFS`;
 }

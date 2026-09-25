@@ -2,6 +2,7 @@ import { useRef } from "preact/hooks";
 import { useSignalEffect, type ReadonlySignal } from "@preact/signals";
 import type { LOC } from "moqt-js";
 import {
+  INACTIVE_TEXT,
   MAX_DBFS,
   MIN_DBFS,
   formatAudioLevel,
@@ -154,8 +155,29 @@ interface AudioMeterProps {
   testIdPrefix: string;
 }
 
-/** 値が無い間の表示 */
-const INACTIVE = "-";
+/**
+ * 見出し行の値に共通のクラス
+ *
+ * 値は `font-mono` の桁数 (`ch`) で幅を固定する。値の文字数で幅が変わると、右寄せの
+ * 並び全体が動き、話している間ずっと画面が揺れる。`tabular-nums` は `font-mono` が
+ * 使えない環境でも桁の幅を揃えるために付ける。
+ */
+// inline-block にしないと width が効かず、文字数で欄の幅が変わる。
+// はみ出した文字で隣の欄を押さないよう、収まりきらない分は隠す
+const METER_VALUE_CLASS =
+  "inline-block overflow-hidden whitespace-nowrap font-mono tabular-nums text-slate-800";
+
+// 値の幅は、その欄に出うる最も長い文字列の文字数に合わせる。
+// 足りないと文字がはみ出し、広すぎると見出し行が 1 行に収まらない
+/** peak / rms の幅 (`-100.0 dBFS` と `-`) */
+const DBFS_VALUE_WIDTH_CLASS = "w-[11ch]";
+/** LOC Audio Level の幅 (`not reported` と `-127 dBov`) */
+const LEVEL_VALUE_WIDTH_CLASS = "w-[12ch]";
+/** voice activity の幅 (`off` と `-`) */
+const VOICE_VALUE_WIDTH_CLASS = "w-[3ch]";
+
+/** 見出し行のラベルと値の組。ラベルと値が別の行に分かれないよう 1 つの項目にする */
+const METER_FIELD_CLASS = "flex shrink-0 items-baseline gap-1 whitespace-nowrap";
 
 /**
  * 音声のレベルメーターと波形
@@ -198,25 +220,42 @@ export function AudioMeter({
     >
       <div class="flex flex-wrap items-center justify-between gap-2 mb-2">
         <h3 class="text-xs font-semibold text-slate-600 uppercase tracking-wide">Audio</h3>
-        <div class="flex flex-wrap items-center gap-3 text-xs text-slate-600">
-          <span>
-            peak{" "}
-            <span data-testid={`${testIdPrefix}-peak`} class="font-mono text-slate-800">
-              {active ? formatDbfs(peakDbfs.value) : INACTIVE}
+        <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-600">
+          <span class={METER_FIELD_CLASS}>
+            <span>peak</span>
+            <span
+              data-testid={`${testIdPrefix}-peak`}
+              class={`${METER_VALUE_CLASS} ${DBFS_VALUE_WIDTH_CLASS}`}
+            >
+              {active ? formatDbfs(peakDbfs.value) : INACTIVE_TEXT}
             </span>
           </span>
-          <span>
-            rms{" "}
-            <span data-testid={`${testIdPrefix}-rms`} class="font-mono text-slate-800">
-              {active ? formatDbfs(rmsDbfs.value) : INACTIVE}
+          <span class={METER_FIELD_CLASS}>
+            <span>rms</span>
+            <span
+              data-testid={`${testIdPrefix}-rms`}
+              class={`${METER_VALUE_CLASS} ${DBFS_VALUE_WIDTH_CLASS}`}
+            >
+              {active ? formatDbfs(rmsDbfs.value) : INACTIVE_TEXT}
             </span>
           </span>
-          <span>LOC Audio Level</span>
-          <span data-testid={`${testIdPrefix}-level`} class="font-mono text-slate-800">
-            {levelActive ? formatAudioLevel(level.value) : INACTIVE}
+          <span class={METER_FIELD_CLASS}>
+            <span>LOC Audio Level</span>
+            <span
+              data-testid={`${testIdPrefix}-level`}
+              class={`${METER_VALUE_CLASS} ${LEVEL_VALUE_WIDTH_CLASS}`}
+            >
+              {levelActive ? formatAudioLevel(level.value) : INACTIVE_TEXT}
+            </span>
           </span>
-          <span data-testid={`${testIdPrefix}-voice-activity`} class="font-mono text-slate-800">
-            {levelActive ? formatVoiceActivity(level.value) : INACTIVE}
+          <span class={METER_FIELD_CLASS}>
+            <span>voice</span>
+            <span
+              data-testid={`${testIdPrefix}-voice-activity`}
+              class={`${METER_VALUE_CLASS} ${VOICE_VALUE_WIDTH_CLASS}`}
+            >
+              {levelActive ? formatVoiceActivity(level.value) : INACTIVE_TEXT}
+            </span>
           </span>
         </div>
       </div>
