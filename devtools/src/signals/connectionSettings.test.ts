@@ -17,6 +17,11 @@ import {
   isVideoSourceType,
   jitterBufferEnabled,
   mode,
+  renderGroup,
+  RENDER_GROUP_OPTIONS,
+  resolveOptionNumber,
+  targetLatency,
+  TARGET_LATENCY_OPTIONS,
   audioAutoGainControl,
   audioEchoCancellation,
   audioNoiseSuppression,
@@ -525,6 +530,149 @@ test("buildQueryString: useDedicatedWorker を無効にした設定を URL で�
   assert.isFalse(useDedicatedWorker.value);
 
   useDedicatedWorker.value = true;
+});
+
+// 目標遅延 (draft-ietf-moq-msf-01 §5.2.8) と同時レンダリンググループ (§5.2.11) の既定は
+// 「未指定」(null)。未指定のときは catalog に載せないため、Copy URL にも載せない
+test("buildQueryString: 未指定の targetLatency と renderGroup は URL に載せない", () => {
+  targetLatency.value = null;
+  renderGroup.value = null;
+
+  const params = new URLSearchParams(buildQueryString());
+  assert.isNull(params.get("targetLatency"));
+  assert.isNull(params.get("renderGroup"));
+});
+
+// 指定した値は Copy URL に載り、開き直すと select の値が戻る。
+// 0 ms と renderGroup の 0 はどちらも有効値であり、「未指定」と区別して往復する
+test("initFromUrl / buildQueryString: targetLatency を全ての選択肢で往復できる", () => {
+  for (const latency of TARGET_LATENCY_OPTIONS) {
+    targetLatency.value = null;
+
+    targetLatency.value = latency;
+    const query = buildQueryString();
+    assert.equal(
+      new URLSearchParams(query).get("targetLatency"),
+      String(latency),
+      `${latency} ms を URL に載せる`,
+    );
+
+    targetLatency.value = null;
+    initFromUrl(query);
+    assert.equal(targetLatency.value, latency, `${latency} ms を復元する`);
+  }
+  targetLatency.value = null;
+});
+
+test("initFromUrl / buildQueryString: renderGroup を全ての選択肢で往復できる", () => {
+  for (const group of RENDER_GROUP_OPTIONS) {
+    renderGroup.value = null;
+
+    renderGroup.value = group;
+    const query = buildQueryString();
+    assert.equal(
+      new URLSearchParams(query).get("renderGroup"),
+      String(group),
+      `renderGroup ${group} を URL に載せる`,
+    );
+
+    renderGroup.value = null;
+    initFromUrl(query);
+    assert.equal(renderGroup.value, group, `renderGroup ${group} を復元する`);
+  }
+  renderGroup.value = null;
+});
+
+// 許可リストに無い値と非整数は無視する。小数表記や指数表記も整数の値としては等しくても、
+// select の選択肢が作る表記ではないため受理しない。既に指定済みの値は不正な URL で
+// 上書きしない (空文字は「未指定」であり、下のテストで別に固定する)
+test("initFromUrl: 許可リストに無い値と非整数の targetLatency は無視する", () => {
+  for (const invalid of ["12345", "50.5", "50.0", "1e2", "abc", "-50", "0.0.0"]) {
+    targetLatency.value = null;
+    initFromUrl(`targetLatency=${invalid}`);
+    assert.isNull(targetLatency.value, `${invalid} を無視する`);
+  }
+
+  // 既に指定済みの値は、不正な URL で上書きしない
+  targetLatency.value = 100;
+  initFromUrl("targetLatency=12345");
+  assert.equal(targetLatency.value, 100);
+  targetLatency.value = null;
+});
+
+test("initFromUrl: 許可リストに無い値と非整数の renderGroup は無視する", () => {
+  for (const invalid of ["2", "0.5", "1.0", "yes", "0.0.0"]) {
+    renderGroup.value = null;
+    initFromUrl(`renderGroup=${invalid}`);
+    assert.isNull(renderGroup.value, `${invalid} を無視する`);
+  }
+
+  // 既に指定済みの値は、不正な URL で上書きしない
+  renderGroup.value = 0;
+  initFromUrl("renderGroup=2");
+  assert.equal(renderGroup.value, 0);
+  renderGroup.value = null;
+});
+
+// 空文字は select の「未指定」であり、URL でも未指定 (null) として反映する。
+// Number("") が 0 になることにつられて 0 ms / renderGroup 0 を設定しない
+// (0 は有効値であり、未指定とは別の指定である)
+test("initFromUrl: 空文字の targetLatency と renderGroup は未指定 (null) にする", () => {
+  targetLatency.value = 200;
+  initFromUrl("targetLatency=");
+  assert.isNull(targetLatency.value);
+
+  renderGroup.value = 1;
+  initFromUrl("renderGroup=");
+  assert.isNull(renderGroup.value);
+});
+
+// select の onChange と URL の復元 (initFromUrl) は同じ変換関数 (resolveOptionNumber) を通る。
+// ここでは画面の select が作る値 (空文字 = 未指定、0、許可リストの値) を固定し、URL 側は上の
+// initFromUrl のテストで固定する。0 が有効値の targetLatency / renderGroup では、空文字を
+// null にすることと 0 を 0 のまま残すことが要になる
+test("resolveOptionNumber: 空文字 (未指定) は null にする", () => {
+  assert.isNull(resolveOptionNumber("", TARGET_LATENCY_OPTIONS, 200));
+  assert.isNull(resolveOptionNumber("", RENDER_GROUP_OPTIONS, 1));
+  // select は空文字だけを「未指定」に使う。空白だけの値も未指定として扱う
+  assert.isNull(resolveOptionNumber(" ", TARGET_LATENCY_OPTIONS, 200));
+});
+
+// Number("") は 0 になるため、空文字を 0 として扱うと 0 ms / renderGroup 0 を指定した
+// ことになってしまう。0 は有効値であり、未指定とは別の指定である
+test("resolveOptionNumber: 0 は未指定にせず 0 を返す", () => {
+  assert.equal(resolveOptionNumber("0", TARGET_LATENCY_OPTIONS, null), 0);
+  assert.equal(resolveOptionNumber("0", RENDER_GROUP_OPTIONS, null), 0);
+});
+
+// select の選択肢から来た値はそのまま採用する。選択肢と同じ許可リストを渡しているため、
+// select で選べる値は必ず受理される
+test("resolveOptionNumber: 許可リストの値はその値を返す", () => {
+  for (const latency of TARGET_LATENCY_OPTIONS) {
+    assert.equal(resolveOptionNumber(String(latency), TARGET_LATENCY_OPTIONS, null), latency);
+  }
+  for (const group of RENDER_GROUP_OPTIONS) {
+    assert.equal(resolveOptionNumber(String(group), RENDER_GROUP_OPTIONS, null), group);
+  }
+});
+
+// 許可リストに無い値 (initFromUrl の検証と同じ規則) と、整数の表記でない値は受理せず、
+// 現在の値のまま保つ。URL の不正な値で表示と実際の設定が食い違わないようにするため
+test("resolveOptionNumber: 許可リストに無い値と非整数は既存の値を保つ", () => {
+  for (const invalid of ["12345", "50.5", "50.0", "1e2", "abc", "-50", "0.0.0"]) {
+    assert.equal(
+      resolveOptionNumber(invalid, TARGET_LATENCY_OPTIONS, 100),
+      100,
+      `${invalid} は既存値を保つ`,
+    );
+  }
+  for (const invalid of ["2", "0.5", "1.0", "yes", "0.0.0"]) {
+    assert.equal(
+      resolveOptionNumber(invalid, RENDER_GROUP_OPTIONS, 0),
+      0,
+      `${invalid} は既存値を保つ`,
+    );
+  }
 });
 
 // useDedicatedWorker は =0 / =1 だけを受け付け、それ以外の値は無視する

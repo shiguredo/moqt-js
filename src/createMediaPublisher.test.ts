@@ -43,10 +43,13 @@ import {
 import type { AudioEncoderWrapper } from "./codec/AudioEncoder";
 import type { VideoEncoderWrapper } from "./codec/VideoEncoder";
 import type { MediaPublisherState } from "./codec/types";
-import { resolveAudioPublishSettings } from "./createMedia/settings";
-import type { ResolvedAudioPublishSettings } from "./createMedia/settings";
+import { resolveAudioPublishSettings, resolveVideoPublishSettings } from "./createMedia/settings";
+import type {
+  ResolvedAudioPublishSettings,
+  ResolvedVideoPublishSettings,
+} from "./createMedia/settings";
 import type { VideoFrameSource } from "./frameSource";
-import { CATALOG_TRACK_NAME } from "./msf";
+import { CATALOG_TRACK_NAME, decodeCatalogMessage } from "./msf";
 import type { Publisher } from "./publisher";
 import type { PublishCallbacks, Session } from "./session";
 import * as LOC from "./loc";
@@ -1687,8 +1690,296 @@ test("送信する Object の Priority 引数は各定数どおりになる", ()
  */
 interface PublisherCatalogControl extends PublisherLifecycleControl {
   resolvedAudio: ResolvedAudioPublishSettings | null;
+  // 映像トラックを載せるには解決済みの映像設定と mediaStream の両方が要る
+  resolvedVideo: ResolvedVideoPublishSettings | null;
   publishCatalog(): Promise<void>;
 }
+
+/**
+ * 送信 payload を記録する最小 Publisher
+ *
+ * Catalog の内容はエンコード済みの payload にしか残らない。createRecordingSendPublisher は
+ * Group ID / Object ID / Priority だけを記録して payload を残さないため、payload をそのまま
+ * 保持して呼び出し側が decodeCatalogMessage で読み戻せる制御口を別に用意する。
+ */
+function createRecordingCatalogSendPublisher(): {
+  publisher: Publisher;
+  sent: { groupId: number; objectId: number; payload: Uint8Array }[];
+} {
+  const sent: { groupId: number; objectId: number; payload: Uint8Array }[] = [];
+  const publisher = {
+    state: "active",
+    sendObject: (params: { groupId: number; objectId: number; payload: Uint8Array }) => {
+      sent.push({ groupId: params.groupId, objectId: params.objectId, payload: params.payload });
+    },
+  } as unknown as Publisher;
+  return { publisher, sent };
+}
+
+/**
+ * 送信 payload の Catalog から track の JSON オブジェクトを取り出す
+ *
+ * 符号化 (JSON.stringify) は値が undefined のキーを落とすため、キーが元から無いことは
+ * decodeCatalogMessage を通した結果では区別できない。キーの有無は payload そのもので確かめる。
+ */
+function parseCatalogTrackObjects(payload: Uint8Array): Record<string, unknown>[] {
+  const parsed = JSON.parse(new TextDecoder().decode(payload)) as unknown;
+  if (typeof parsed !== "object" || parsed === null || !("tracks" in parsed)) {
+    throw new Error("expected a catalog object with tracks in the sent payload");
+  }
+  const tracks: unknown = parsed.tracks;
+  if (!Array.isArray(tracks)) {
+    throw new Error("expected a tracks array in the sent payload");
+  }
+  return tracks as Record<string, unknown>[];
+}
+
+/**
+ * targetLatency / renderGroup を載せた Catalog の送信を駆動する制御口
+ *
+ * publishCatalog は接続を要する start() の中からしか呼ばれないため、解決済みの音声・映像
+ * 設定と mediaStream、Catalog Publisher を private 経由で注入して直接駆動する。
+ * 音声と映像の両方の track を載せ、payload を記録する。
+ */
+function createCatalogPublishContext(options: MediaPublisherOptions): {
+  control: PublisherCatalogControl;
+  sent: { groupId: number; objectId: number; payload: Uint8Array }[];
+} {
+  const publisher = new MediaPublisherImpl("moqt://example.com/live", options);
+  const control = publisher as unknown as PublisherCatalogControl;
+  control.currentState = "publishing";
+  control.resolvedAudio = resolveAudioPublishSettings({
+    codec: "aac",
+    bitrate: 64000,
+    trackName: "audio",
+  });
+  control.resolvedVideo = resolveVideoPublishSettings(
+    { codec: "vp8", bitrate: 1000000, width: 1280, height: 720, framerate: 30 },
+    undefined,
+  );
+  // 映像トラックは mediaStream があるときだけ載る
+  control.mediaStream = {} as MediaStream;
+  const { publisher: catalogPublisher, sent } = createRecordingCatalogSendPublisher();
+  control.catalogPublisher = catalogPublisher;
+  return { control, sent };
+}
+
+/**
+ * 不正な targetLatency / renderGroup で publishCatalog を呼び、投げた Error と送信の記録を返す
+ *
+ * 検証の目的は例外を投げることだけでなく、購読側が復号できない catalog を送らないことである。
+ * そのため送信済みの payload も返し、呼び出し側が「1 件も送っていない」ことを確かめられる
+ * ようにする。投げなかったときはテストを失敗させる。
+ */
+async function captureCatalogPublishFailure(options: MediaPublisherOptions): Promise<{
+  error: Error;
+  sent: { groupId: number; objectId: number; payload: Uint8Array }[];
+}> {
+  const { control, sent } = createCatalogPublishContext(options);
+  try {
+    await control.publishCatalog();
+  } catch (error) {
+    if (!(error instanceof Error)) {
+      // 元の例外を cause に残す (投げ直しで情報を落とさない)
+      throw new Error(`expected an Error, got ${String(error)}`, { cause: error });
+    }
+    return { error, sent };
+  }
+  throw new Error("expected publishCatalog to throw, but it resolved");
+}
+
+/**
+ * draft-ietf-moq-msf-01 §5.2.8 (targetLatency) / §5.2.11 (renderGroup):
+ * 同じ render group と alternate group の track は同一の targetLatency でなければならない
+ * (MUST)。publisher は値を 1 つだけ持ち、指定した値を catalog の音声と映像の両方の track に
+ * 同じ値で載せることを、送信 payload の読み戻しで固定する。
+ */
+test("publishCatalog: 指定した targetLatency と renderGroup を音声と映像の両方の track に載せる", async () => {
+  const { control, sent } = createCatalogPublishContext({
+    namespace: ["live"],
+    audio: { codec: "aac", bitrate: 64000 },
+    video: { codec: "vp8", bitrate: 1000000 },
+    targetLatency: 100,
+    renderGroup: 1,
+  });
+
+  await control.publishCatalog();
+
+  assert.equal(sent.length, 1);
+  const decoded = decodeCatalogMessage(sent[0].payload);
+  // delta update ではなく full catalog が返る
+  if (!("version" in decoded)) {
+    throw new Error("expected a full catalog, got a delta update");
+  }
+  assert.deepEqual(
+    decoded.tracks.map((track) => track.role),
+    ["audio", "video"],
+  );
+  for (const track of decoded.tracks) {
+    assert.equal(track.targetLatency, 100);
+    assert.equal(track.renderGroup, 1);
+  }
+});
+
+/**
+ * draft-ietf-moq-msf-01 §5.2.8: 宣言が無く isLive が true のときは購読側が表示の遅れを
+ * 選んでよい MAY。指定しないときは catalog に載せず、購読側のフォールバックの経路にする。
+ * 符号化は undefined の値を落とすため、キーの有無は復号後ではなく payload の JSON で確かめる。
+ */
+test("publishCatalog: 指定しないときは catalog にキーを載せない", async () => {
+  const { control, sent } = createCatalogPublishContext({
+    namespace: ["live"],
+    audio: { codec: "aac", bitrate: 64000 },
+    video: { codec: "vp8", bitrate: 1000000 },
+  });
+
+  await control.publishCatalog();
+
+  const trackObjects = parseCatalogTrackObjects(sent[0].payload);
+  assert.equal(trackObjects.length, 2);
+  for (const track of trackObjects) {
+    assert.isFalse("targetLatency" in track);
+    assert.isFalse("renderGroup" in track);
+  }
+});
+
+test("publishCatalog: targetLatency だけを指定すると renderGroup のキーは載らない", async () => {
+  // targetLatency と renderGroup は独立の任意指定であるため、片方だけでもよい。
+  // 指定した片方だけが載り、もう片方のキーは payload に現れない
+  const { control, sent } = createCatalogPublishContext({
+    namespace: ["live"],
+    audio: { codec: "aac", bitrate: 64000 },
+    video: { codec: "vp8", bitrate: 1000000 },
+    targetLatency: 200,
+  });
+
+  await control.publishCatalog();
+
+  const trackObjects = parseCatalogTrackObjects(sent[0].payload);
+  assert.equal(trackObjects.length, 2);
+  for (const track of trackObjects) {
+    assert.equal(track.targetLatency, 200);
+    assert.isFalse("renderGroup" in track);
+  }
+});
+
+test("publishCatalog: renderGroup だけを指定すると targetLatency のキーは載らない", async () => {
+  const { control, sent } = createCatalogPublishContext({
+    namespace: ["live"],
+    audio: { codec: "aac", bitrate: 64000 },
+    video: { codec: "vp8", bitrate: 1000000 },
+    renderGroup: 0,
+  });
+
+  await control.publishCatalog();
+
+  const trackObjects = parseCatalogTrackObjects(sent[0].payload);
+  assert.equal(trackObjects.length, 2);
+  for (const track of trackObjects) {
+    // renderGroup の 0 は有効値であり、未指定と同じ扱いにしない
+    assert.equal(track.renderGroup, 0);
+    assert.isFalse("targetLatency" in track);
+  }
+});
+
+test("publishCatalog: targetLatency の 0 ms も未指定と区別して載せる", async () => {
+  // 0 ms は「符号化から表示まで遅らせない」という有効な指定である。
+  // 0 を偽値として落とすと、購読側は宣言が無いものとして遅延を自分で選んでしまう
+  const { control, sent } = createCatalogPublishContext({
+    namespace: ["live"],
+    audio: { codec: "aac", bitrate: 64000 },
+    video: { codec: "vp8", bitrate: 1000000 },
+    targetLatency: 0,
+  });
+
+  await control.publishCatalog();
+
+  const trackObjects = parseCatalogTrackObjects(sent[0].payload);
+  assert.equal(trackObjects.length, 2);
+  for (const track of trackObjects) {
+    assert.equal(track.targetLatency, 0);
+  }
+});
+
+/**
+ * JSON.stringify は非有限値を null に落とし、購読側の検証 (src/msf/catalogTrackValidation.ts)
+ * は typeof null !== "number" で例外にする。拒否しないと自分の出力を自分で復号できない
+ * catalog を送ってしまうため、符号化と送信の前に拒否する。あわせて payload を 1 件も
+ * 送っていないことも固定する。
+ */
+test("publishCatalog: targetLatency の非有限値を拒否する", async () => {
+  for (const targetLatency of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+    const { error, sent } = await captureCatalogPublishFailure({
+      namespace: ["live"],
+      audio: { codec: "aac", bitrate: 64000 },
+      video: { codec: "vp8", bitrate: 1000000 },
+      targetLatency,
+    });
+
+    // どちらのフィールドが原因かをメッセージから読み取れる
+    assert.isTrue(error.message.includes("targetLatency"));
+    assert.isTrue(error.message.includes(String(targetLatency)));
+    assert.equal(sent.length, 0);
+  }
+});
+
+test("publishCatalog: renderGroup の非有限値を拒否する", async () => {
+  for (const renderGroup of [Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, Number.NaN]) {
+    const { error, sent } = await captureCatalogPublishFailure({
+      namespace: ["live"],
+      audio: { codec: "aac", bitrate: 64000 },
+      video: { codec: "vp8", bitrate: 1000000 },
+      renderGroup,
+    });
+
+    assert.isTrue(error.message.includes("renderGroup"));
+    assert.isTrue(error.message.includes(String(renderGroup)));
+    assert.equal(sent.length, 0);
+  }
+});
+
+/**
+ * renderGroup の整数性は decode 側で見ないため、encode 側が整数性を守る唯一の防波堤になる。
+ * 同じ値でも 1 は整数、1.5 は整数でないため、有限性の検証だけでは防げない。
+ */
+test("publishCatalog: renderGroup の非整数を拒否する", async () => {
+  for (const renderGroup of [1.5, -0.5]) {
+    const { error, sent } = await captureCatalogPublishFailure({
+      namespace: ["live"],
+      audio: { codec: "aac", bitrate: 64000 },
+      video: { codec: "vp8", bitrate: 1000000 },
+      renderGroup,
+    });
+
+    assert.isTrue(error.message.includes("renderGroup"));
+    assert.isTrue(error.message.includes(String(renderGroup)));
+    assert.equal(sent.length, 0);
+  }
+});
+
+/**
+ * 0 ms と renderGroup の 0 はどちらも有効値である (未指定とは別の指定)。
+ * 検証を「偽値」や「0 より大きい」で書くと 0 が落ちるため、検証を足しても 0 が通ることと、
+ * 0 のまま catalog に載ることを回帰として固定する。
+ */
+test("publishCatalog: targetLatency と renderGroup の 0 は検証を通り catalog に載る", async () => {
+  const { control, sent } = createCatalogPublishContext({
+    namespace: ["live"],
+    audio: { codec: "aac", bitrate: 64000 },
+    video: { codec: "vp8", bitrate: 1000000 },
+    targetLatency: 0,
+    renderGroup: 0,
+  });
+
+  await control.publishCatalog();
+
+  const trackObjects = parseCatalogTrackObjects(sent[0].payload);
+  assert.equal(trackObjects.length, 2);
+  for (const track of trackObjects) {
+    assert.equal(track.targetLatency, 0);
+    assert.equal(track.renderGroup, 0);
+  }
+});
 
 /**
  * draft-ietf-moq-transport-21 §5.1.1 / draft-ietf-moq-msf-01 §5:

@@ -778,6 +778,65 @@ export function ConnectionSettings() {
                       <option value="600000">10 min</option>
                     </select>
                   </div>
+                  {/* draft-ietf-moq-msf-01 §5.2.8 (targetLatency) / §5.2.11 (renderGroup):
+                      音声と映像の両方の track に同じ値を載せる catalog の宣言。
+                      未指定 (Unset) のときは catalog に載せず、購読側が遅延を選ぶ */}
+                  <div>
+                    <label for="targetLatency" class="block text-xs text-slate-500 mb-1">
+                      Target Latency
+                    </label>
+                    <select
+                      id="targetLatency"
+                      data-testid="target-latency"
+                      value={settings.targetLatency.value ?? ""}
+                      onChange={(e) => {
+                        // 空値は「未指定」(null)。Number("") は 0 になるため 0 ms と区別する。
+                        // 変換の規則は URL から復元するときと同じ関数に任せる
+                        settings.targetLatency.value = settings.resolveOptionNumber(
+                          e.currentTarget.value,
+                          settings.TARGET_LATENCY_OPTIONS,
+                          settings.targetLatency.value,
+                        );
+                      }}
+                      disabled={settings.settingsDisabled.value}
+                      class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white disabled:bg-slate-100 disabled:cursor-not-allowed"
+                    >
+                      <option value="">Unset</option>
+                      {settings.TARGET_LATENCY_OPTIONS.map((value) => (
+                        <option key={value} value={value}>
+                          {value} ms
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label for="renderGroup" class="block text-xs text-slate-500 mb-1">
+                      Render Group
+                    </label>
+                    <select
+                      id="renderGroup"
+                      data-testid="render-group"
+                      value={settings.renderGroup.value ?? ""}
+                      onChange={(e) => {
+                        // 空値は「未指定」(null)。0 は有効なグループである。
+                        // 変換の規則は URL から復元するときと同じ関数に任せる
+                        settings.renderGroup.value = settings.resolveOptionNumber(
+                          e.currentTarget.value,
+                          settings.RENDER_GROUP_OPTIONS,
+                          settings.renderGroup.value,
+                        );
+                      }}
+                      disabled={settings.settingsDisabled.value}
+                      class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white disabled:bg-slate-100 disabled:cursor-not-allowed"
+                    >
+                      <option value="">Unset</option>
+                      {settings.RENDER_GROUP_OPTIONS.map((value) => (
+                        <option key={value} value={value}>
+                          {value}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
               </SettingsCard>
               <SettingsCard>

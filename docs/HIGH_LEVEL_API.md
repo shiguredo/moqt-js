@@ -60,6 +60,18 @@ interface MediaPublisherOptions {
     width?: number; // optional: 指定しない場合は MediaStream から取得
     height?: number; // optional
   };
+  // 符号化から表示までの wallclock の差 (ms)
+  // 指定すると catalog の音声と映像の両方の track に同じ値を載せる
+  // (同じ render group と alternate group の track は同一の値でなければならない MUST)。
+  // 未指定のときは載せず、購読側が表示の遅れを選ぶ (§5.2.8 の MAY)。0 ms は有効値。
+  // 宣言した値がそのまま使われるとは限らない。購読側は表示の遅れを、表示待ちのキューが
+  // 吸収できる長さと上限 500 ms の小さい方へ切り下げる。60 fps の購読では 500 ms を宣言
+  // しても約 333 ms になり、切り下げた分は `AvSyncStats.targetLatencyLimitedMs` で分かる
+  targetLatency?: number; // draft-ietf-moq-msf-01 §5.2.8
+  // 同時レンダリンググループ
+  // 指定すると catalog の音声と映像の両方の track に同じ値を載せる
+  // (同じ group の track は同時に描画する SHOULD)。0 は有効値
+  renderGroup?: number; // draft-ietf-moq-msf-01 §5.2.11
   useWorker?: boolean; // default: true
   serverCertificateHashes?: ArrayBuffer[]; // 自己署名証明書のハッシュ
   // SETUP Option (0x03) として送出する Authorization Token
@@ -70,6 +82,16 @@ interface MediaPublisherOptions {
   pendingSubgroup?: Partial<PendingSubgroupBufferOptions>;
 }
 ```
+
+`renderGroup` は同じ group の track を同時に描画する表明であり、音声と映像の両方を配信する
+ときに意味を持つ (片方だけ配信するときは、同時に描画する相手が居ない)。`targetLatency` は
+音声と映像で同じ値にするための宣言 (draft-ietf-moq-msf-01 §5.2.8 の MUST) であり、片方だけ
+配信するときも購読側の表示の遅れの下限として使われる。0 ms を宣言しても、購読側は
+`max(targetLatency, 揺らぎから求めた再生遅延)` を使うため、音声には 80 ms
+(`AUDIO_PLAYOUT_DELAY_FLOOR_MS`) の下限がある。publisher は `targetLatency` が有限数で
+あることと `renderGroup` が有限の整数であることを検証する (非有限値は JSON で null になり
+購読側が復号できなくなる)。それ以外の範囲は呼び出し側の責任になる。節番号は
+draft-ietf-moq-msf-01 由来であり、将来の draft 改版で変わる可能性がある。
 
 ### コールバック
 

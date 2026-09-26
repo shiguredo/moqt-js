@@ -124,6 +124,24 @@ export interface MediaPublisherOptions {
   namespace: string[];
   audio?: AudioPublishOptions;
   video?: VideoPublishOptions;
+  // 符号化から表示までの wallclock の差 (ms)
+  // draft-ietf-moq-msf-01 §5.2.8 (targetLatency)
+  // 指定すると catalog の音声と映像の両方の track に同じ値を載せる。同じ render group と
+  // alternate group の track は同一の値でなければならない (§5.2.8 の MUST) ため、値は
+  // publisher で 1 つだけ持ち、全 track に同じ値を載せる。
+  // 指定しないときは catalog に載せない。宣言が無く isLive が true のときは購読側が
+  // 表示の遅れを選んでよい (§5.2.8 の MAY) ため、載せないことが購読側のフォールバックになる。
+  // 有限数であることは publisher が検証する。それ以外の範囲は呼び出し側の責任になる。
+  // この節番号は draft 由来であり将来の draft 改版で変わる可能性がある。
+  targetLatency?: number;
+  // 同時レンダリンググループ
+  // draft-ietf-moq-msf-01 §5.2.11 (renderGroup)
+  // 指定すると catalog の音声と映像の両方の track に同じ値を載せる。同じ group の track は
+  // 同時に描画する SHOULD (§5.2.11) を表明する。
+  // 有限数であることと整数であることは publisher が検証する。それ以外の範囲は呼び出し側の
+  // 責任になる。
+  // この節番号は draft 由来であり将来の draft 改版で変わる可能性がある。
+  renderGroup?: number;
   useWorker?: boolean;
   serverCertificateHashes?: ArrayBuffer[];
   // SETUP Option (Option Type 0x03) として送出する Authorization Token
