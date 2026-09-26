@@ -314,3 +314,64 @@ test("Copy for LLM は Relay URI と fragment の c4m (認可トークン) を�
   expect(fragmentText).toContain("fragment: msf:room-123--video&c4m=<redacted>");
   expect(fragmentText).not.toContain(c4mBase64);
 });
+
+test("1000 件表示でも、ログを 1 件追加したときに描画される行は 1 件だけ", async ({ page }) => {
+  // 行を毎回作り直すと、1 件追加するたびに表示中のすべての行を描画することになる。
+  // Preact の描画フックを包んで、追加した行だけが描画されることを確かめる
+  await page.goto(DEVTOOLS_URL);
+  await openDebugPanel(page);
+  await addLogs(
+    page,
+    Array.from({ length: 1000 }, (_, index) => ({
+      level: "info" as const,
+      message: `filler-${index}`,
+      data: { index },
+    })),
+  );
+  await expect(page.getByTestId("debug-log-count")).toHaveText("Logs: 1000");
+  await expect(page.getByTestId("debug-log-row")).toHaveCount(1000);
+
+  const counts = await page.evaluate(async () => {
+    const findResource = (pattern: RegExp): string => {
+      const names = performance.getEntriesByType("resource").map((entry) => entry.name);
+      const url = names.reverse().find((name) => pattern.test(name));
+      if (url === undefined) {
+        throw new Error(`no loaded module: ${String(pattern)}`);
+      }
+      return url;
+    };
+
+    type RenderHook = (vnode: { type: unknown }, ...rest: unknown[]) => void;
+    const preact = (await import(findResource(/\/deps\/preact\.js/))) as {
+      options: { __r?: RenderHook };
+    };
+    const debugLog = (await import(findResource(/\/src\/signals\/debugLog\.ts/))) as {
+      addLog: (level: string, message: string, data?: unknown) => void;
+    };
+
+    const counters = new Map<string, number>();
+    const previous = preact.options.__r;
+    preact.options.__r = function __r(vnode, ...rest) {
+      const name = typeof vnode.type === "function" ? (vnode.type as { name: string }).name : "";
+      counters.set(name, (counters.get(name) ?? 0) + 1);
+      if (previous !== undefined) previous.call(this, vnode, ...rest);
+    };
+
+    debugLog.addLog("info", "measured", { index: 1000 });
+    // 信号の反映と Preact の描画 (マイクロタスク) を待つ
+    for (let i = 0; i < 32; i++) await Promise.resolve();
+    return Object.fromEntries(counters);
+  });
+
+  // 追加した 1 行だけが描画される
+  expect(counts.DebugLogRow ?? 0).toBe(1);
+  // 一覧と件数は再描画されるが、パネル本体と App は再描画されない
+  expect(counts.DebugLogList ?? 0).toBe(1);
+  expect(counts.DebugLogCount ?? 0).toBe(1);
+  expect(counts.DebugPanel ?? 0).toBe(0);
+  expect(counts.App ?? 0).toBe(0);
+
+  // 表示は変わらない (新しいログが先頭に出て、行数は上限のまま)
+  await expect(page.getByTestId("debug-log-row")).toHaveCount(1000);
+  await expect(page.getByTestId("debug-log-row").nth(0)).toContainText("measured");
+});

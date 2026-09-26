@@ -199,6 +199,10 @@
   - 経過時間の基準は、描画のたびに変わりうる「残っている最も古いログ」から「ログを消してから最初の 1 件」に変える。上限に達した後も最古の行が +0.000 に戻らなくなる
   - @voluntas
 
+- [UPDATE] moqt-devtools のデバッグパネルで、ログを 1 件追加したときに描画される行を 1 件だけにする
+  - 行の vnode をログの連番で保持し、展開の状態・表示モード・コピーの表示が変わったときだけ作り直す。Preact は同じ vnode を再び受け取ると部分木の差分を省略するため、1000 件表示でも 1 件追加で描画される行は 1 件になる (実測: 1 件追加の中央値 18.4 ms → 7.2 ms、行の描画 1000 回 → 1 回)
+  - 上限で捨てたログの vnode はキャッシュから落とす。表示の内容と操作は変えない
+  - @voluntas
 - [FIX] moqt-devtools の「Copy for LLM」に認可トークンの値が出るのを修正する
   - Relay URI と URI Fragment の c4m (Base64 encoded C4M token) を伏せ字にする。AUTHORIZATION_TOKEN を載せうるメッセージ (SETUP / PUBLISH / SUBSCRIBE / FETCH / TRACK_STATUS / PUBLISH_NAMESPACE / SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS / REQUEST_UPDATE) の payload はログへ残さない。payload の hex dump は画面の Binary タブ、行コピー、Copy for LLM に出るため、残さないことで値がどこにも出なくなる (バイト数と decoded は今までどおり読める)
   - @voluntas
