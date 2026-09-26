@@ -155,6 +155,13 @@ export interface SubscriberAudioStats {
   datagramObjectsReceived: number;
   /** 復号した音声 Chunk の数。objectsReceived との差が復号せずに捨てた数になる */
   chunksDecoded: number;
+  /**
+   * relay の cache から追いつく途中で、復号したが鳴らさなかった音声 Object の数
+   *
+   * SUBSCRIBE_OK の LARGEST_OBJECT 以前の位置の Object であり、購読を始めるたびに増える。
+   * 再生が有効なときだけ数える
+   */
+  catchUpObjectsSkipped: number;
   /** 音声のデコーダを構成できたか */
   decoderConfigured: boolean;
   /** 受信した音声を音声出力デバイスで再生するか */
@@ -185,6 +192,14 @@ export interface SubscriberStats {
   /** NEW_GROUP_REQUEST を初回接続時に要求するかどうか */
   newGroupRequestEnabled: boolean;
   framesDecoded: number;
+  /**
+   * relay の cache から追いつく途中で、復号したが描かなかったフレーム数
+   *
+   * SUBSCRIBE_OK の LARGEST_OBJECT 以前の位置のフレームであり、購読を始めるたびに増える
+   */
+  catchUpFramesSkipped: number;
+  /** relay の cache から追いつく途中かどうか (映像と音声の両方が境界を越えるまで true) */
+  catchUpPending: boolean;
   keyFramesDecoded: number;
   objectsReceived: number;
   currentGroup: number;
@@ -291,6 +306,8 @@ export function buildSubscriberStats(sub: SubscriberInstance): SubscriberStats {
     dynamicGroupsSupported: sub.dynamicGroupsSupported.value,
     newGroupRequestEnabled: sub.newGroupRequestEnabled.value,
     framesDecoded: sub.framesDecoded.value,
+    catchUpFramesSkipped: sub.catchUpFramesSkipped.value,
+    catchUpPending: sub.catchUpPending.value,
     keyFramesDecoded: sub.keyFramesDecoded.value,
     objectsReceived: sub.objectsReceived.value,
     currentGroup: sub.currentGroup.value,
@@ -312,6 +329,7 @@ export function buildSubscriberStats(sub: SubscriberInstance): SubscriberStats {
       objectsReceived: sub.audioObjectsReceived.value,
       datagramObjectsReceived: sub.audioDatagramObjectsReceived.value,
       chunksDecoded: sub.audioChunksDecoded.value,
+      catchUpObjectsSkipped: sub.audioCatchUpObjectsSkipped.value,
       decoderConfigured: sub.audioDecoderConfigured.value,
       playbackEnabled: sub.audioPlaybackEnabled.value,
       peakDbfs: sub.audioPeakDbfs.value,

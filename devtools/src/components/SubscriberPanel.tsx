@@ -279,11 +279,22 @@ export function SubscriberPanel({
           <div class="absolute top-2 left-2 px-2 py-1 bg-black/60 rounded text-xs text-white font-medium">
             Remote Stream
           </div>
-          {codec && (
-            <div class="absolute top-2 right-2 px-2 py-1 bg-blue-500/80 rounded text-xs text-white font-medium">
-              {codec}
-            </div>
-          )}
+          {/* 購読の開始に relay の cache から追いつくまでの間、古いフレームは描かない */}
+          <div class="absolute top-2 right-2 flex items-center gap-2">
+            {instance.catchUpPending.value && (
+              <div
+                data-testid="subscriber-catching-up"
+                class="px-2 py-1 bg-amber-500/80 rounded text-xs text-white font-medium"
+              >
+                Catching up
+              </div>
+            )}
+            {codec && (
+              <div class="px-2 py-1 bg-blue-500/80 rounded text-xs text-white font-medium">
+                {codec}
+              </div>
+            )}
+          </div>
         </div>
 
         {/* 受信した音声のレベルメーターと波形。音声トラックを購読していない間も描き、
@@ -329,6 +340,13 @@ export function SubscriberPanel({
                   testId: "subscriber-audio-datagram-objects",
                 },
                 { label: "chunksDecoded", value: instance.audioChunksDecoded.value },
+                {
+                  // relay の cache から追いつくまでに鳴らさなかった音声 Object の数
+                  label: "catchUpObjectsSkipped",
+                  value: instance.audioCatchUpObjectsSkipped.value,
+                  tone: "warn",
+                  testId: "subscriber-audio-catch-up-objects-skipped",
+                },
               ]}
             />
           </StatSection>
@@ -362,6 +380,13 @@ export function SubscriberPanel({
             <StatList
               items={[
                 { label: "framesDecoded", value: instance.framesDecoded.value },
+                {
+                  // relay の cache から追いつくまでに描かなかったフレームの数
+                  label: "catchUpFramesSkipped",
+                  value: instance.catchUpFramesSkipped.value,
+                  tone: "warn",
+                  testId: "subscriber-catch-up-frames-skipped",
+                },
                 { label: "keyFrames", value: instance.keyFramesDecoded.value },
                 { label: "currentGroup", value: instance.currentGroup.value },
                 { label: "currentSubGroup", value: instance.currentSubGroup.value },

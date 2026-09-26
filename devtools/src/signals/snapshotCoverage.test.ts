@@ -179,6 +179,7 @@ const SUBSCRIBER_COVERAGE: CoverageExpectation = {
     audioObjectsReceived: "audio.objectsReceived",
     audioDatagramObjectsReceived: "audio.datagramObjectsReceived",
     audioChunksDecoded: "audio.chunksDecoded",
+    audioCatchUpObjectsSkipped: "audio.catchUpObjectsSkipped",
     audioDecoderConfigured: "audio.decoderConfigured",
     audioPlaybackEnabled: "audio.playbackEnabled",
     audioPeakDbfs: "audio.peakDbfs",

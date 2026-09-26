@@ -14,11 +14,13 @@ import {
   createAttemptGuard,
   closeSubscriberResources,
   recordVideoReceived,
+  rememberDecodeInput,
   resetSubscriberState,
   resetSubscriberStats,
   resolveAudioTrack,
   resolveCatalogMediaTracks,
   resolveNewGroupRequestValue,
+  type DecodeInput,
   type ReceivedVideoObject,
 } from "./useSubscriber";
 import { AudioDecoderWrapper } from "../../../src/codec/AudioDecoder";
@@ -348,6 +350,49 @@ test("buildVideoChunkPlan: Track の TIMESCALE があるときはメディア時
 });
 
 // ============================================================================
+// 復号へ渡した Object の情報 (位置と TIMESTAMP の種類)
+// ============================================================================
+
+test("rememberDecodeInput: TIMESTAMP の種類と位置を覚える", () => {
+  // 復号の出力では Object の位置が分からないため、decoder へ渡した TIMESTAMP で引く
+  const inputs = new Map<number, DecodeInput>();
+  rememberDecodeInput(inputs, 1_000, {
+    timestampKind: "wallClock",
+    location: { group: 5n, object: 3n },
+  });
+  assert.deepEqual(inputs.get(1_000), {
+    timestampKind: "wallClock",
+    location: { group: 5n, object: 3n },
+  });
+});
+
+test("rememberDecodeInput: TIMESTAMP を持たない Object は覚えない", () => {
+  // TIMESTAMP が無い Object はすべて同じ TIMESTAMP (0) を共有するため、位置を一意に引けない。
+  // 復号の出力では位置が分からないものとして扱い、境界の判定をせずに描く・鳴らす
+  const inputs = new Map<number, DecodeInput>();
+  rememberDecodeInput(inputs, 0, {
+    timestampKind: "none",
+    location: { group: 5n, object: 3n },
+  });
+  assert.isFalse(inputs.has(0), "TIMESTAMP を持たない Object の位置を覚えた");
+});
+
+test("rememberDecodeInput: 同じ TIMESTAMP の Object が重なったら、その TIMESTAMP の分を忘れる", () => {
+  // 同じ TIMESTAMP の Object が 2 つあるとき、復号の出力がどちらの位置かは決められない。
+  // 先に覚えていた分も忘れ、どちらも位置が分からないものとして扱う
+  const inputs = new Map<number, DecodeInput>();
+  rememberDecodeInput(inputs, 1_000, {
+    timestampKind: "mediaTime",
+    location: { group: 1n, object: 1n },
+  });
+  rememberDecodeInput(inputs, 1_000, {
+    timestampKind: "mediaTime",
+    location: { group: 1n, object: 2n },
+  });
+  assert.isFalse(inputs.has(1_000), "同じ TIMESTAMP の位置を覚えたままにした");
+});
+
+// ============================================================================
 // 映像 Object の到着の記録
 // ============================================================================
 
@@ -465,6 +510,7 @@ test("resetSubscriberStats: 統計値を初期値へ戻す", () => {
   instance.chunksCreated.value = 12;
   instance.chunksDecoded.value = 10;
   instance.chunksSkipped.value = 2;
+  instance.catchUpFramesSkipped.value = 4;
   instance.staleFramesDropped.value = 3;
   instance.missingReferenceFramesDropped.value = 4;
   instance.decodeErrors.value = 1;
@@ -487,6 +533,7 @@ test("resetSubscriberStats: 統計値を初期値へ戻す", () => {
   assert.equal(instance.chunksCreated.value, 0);
   assert.equal(instance.chunksDecoded.value, 0);
   assert.equal(instance.chunksSkipped.value, 0);
+  assert.equal(instance.catchUpFramesSkipped.value, 0);
   assert.equal(instance.staleFramesDropped.value, 0);
   assert.equal(instance.missingReferenceFramesDropped.value, 0);
   assert.equal(instance.decodeErrors.value, 0);
@@ -535,6 +582,8 @@ test("resetSubscriberState resets every state signal to initial value", () => {
   instance.dynamicGroupsSupported.value = true;
   instance.httpVersion.value = "H3";
   instance.largestLocation.value = { group: 1n, object: 1n };
+  // relay の cache から追いつく途中の表示
+  instance.catchUpPending.value = true;
   // 購読の確立を待っている途中で後始末する場合
   instance.isStarting.value = true;
   // 接続設定を使っているのは、この Subscriber だけ
@@ -557,6 +606,7 @@ test("resetSubscriberState resets every state signal to initial value", () => {
   assert.equal(instance.largestLocation.value, null);
   // 確立を待っていた購読も終わり、Start Subscribing を押せる状態に戻る
   assert.equal(instance.isStarting.value, false);
+  assert.equal(instance.catchUpPending.value, false);
   assert.notStrictEqual(chainRef.current, previousChain);
   // subscriber と isStarting を下ろしてから判定するため、止めたインスタンス自身は数えない。
   // 他に接続設定を使っているものが無いので、入力を有効に戻す
@@ -753,6 +803,7 @@ test("resetSubscriberStats: 音声の統計と最終レベルを初期化する"
   instance.audioWaveform.value = new Float32Array([1, 2, 3]);
   instance.audioPlayoutRebases.value = 2;
   instance.audioPlayoutDrops.value = 3;
+  instance.audioCatchUpObjectsSkipped.value = 5;
 
   resetSubscriberStats(instance);
 
@@ -765,6 +816,7 @@ test("resetSubscriberStats: 音声の統計と最終レベルを初期化する"
   assert.equal(instance.audioWaveform.value, null);
   assert.equal(instance.audioPlayoutRebases.value, 0);
   assert.equal(instance.audioPlayoutDrops.value, 0);
+  assert.equal(instance.audioCatchUpObjectsSkipped.value, 0);
 });
 
 test("resetSubscriberState: 音声の signal を初期化し再生を無効にする", () => {
