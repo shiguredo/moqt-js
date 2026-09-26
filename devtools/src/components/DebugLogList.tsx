@@ -2,7 +2,8 @@ import { useRef } from "preact/hooks";
 import { useSignalEffect } from "@preact/signals";
 import { autoScroll } from "../signals/debug";
 import { getLogBuffer, logSequence, type LogEntry } from "../signals/debugLog";
-import { DebugLogRow, type ViewMode } from "./DebugLogRow";
+import type { ViewMode } from "../utils/logRowState";
+import { DebugLogRow } from "./DebugLogRow";
 
 interface DebugLogListProps {
   /** 展開している行のログの連番 */
@@ -57,8 +58,9 @@ export function DebugLogList({
       // (noUncheckedIndexedAccess で型上 undefined を含むための防御)
       continue;
     }
-    // 表示の key には配列の添字ではなくログの連番を使う。添字だと、上限に達して
-    // 最古を捨てたときに展開状態が別の行へ移る
+    // 表示の key には配列の添字ではなくログの連番を使う。上限に達すると最古のログを
+    // 捨てるため、添字を key にすると残っている行の key が 1 つずつずれ、同じログの行を
+    // 同じ行として扱えなくなる
     rows.push(
       <DebugLogRow
         key={log.id}

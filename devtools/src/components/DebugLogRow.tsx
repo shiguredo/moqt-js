@@ -1,8 +1,6 @@
 import type { LogEntry, LogLevel } from "../signals/debugLog";
 import { formatHexDump, formatMessageData } from "../utils/logFormatters";
-
-/** 展開したときの表示。data か payload (hex dump) か */
-export type ViewMode = "data" | "binary";
+import type { ViewMode } from "../utils/logRowState";
 
 interface DebugLogRowProps {
   entry: LogEntry;

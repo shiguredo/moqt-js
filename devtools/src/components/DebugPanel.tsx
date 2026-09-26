@@ -11,48 +11,9 @@ import {
 } from "../signals/debugExport";
 import { subscriberIds } from "../signals/subscriber";
 import { formatLogEntryText } from "../utils/debugExportText";
+import { pruneLogIds, pruneViewModes, type ViewMode } from "../utils/logRowState";
 import { DebugLogCount } from "./DebugLogCount";
 import { DebugLogList } from "./DebugLogList";
-import type { ViewMode } from "./DebugLogRow";
-
-/**
- * 上限で捨てられたログの展開状態を落とす
- *
- * ログの連番は増え続けるため、捨てられたログの連番を持ち続けると状態が単調に増える。
- * 残っている最も古い連番より小さい連番は捨てられたログのもの。
- * 変わらない場合は同じ参照を返し、無駄な再描画を起こさない。
- */
-function pruneLogIds(values: ReadonlySet<number>, oldestLogId: number | null): ReadonlySet<number> {
-  if (oldestLogId === null || values.size === 0) {
-    return values;
-  }
-  let next: Set<number> | null = null;
-  for (const value of values) {
-    if (value < oldestLogId) {
-      next ??= new Set(values);
-      next.delete(value);
-    }
-  }
-  return next ?? values;
-}
-
-/** 上限で捨てられたログの表示モードを落とす (pruneLogIds と同じ考え方) */
-function pruneViewModes(
-  viewModes: ReadonlyMap<number, ViewMode>,
-  oldestLogId: number | null,
-): ReadonlyMap<number, ViewMode> {
-  if (oldestLogId === null || viewModes.size === 0) {
-    return viewModes;
-  }
-  let next: Map<number, ViewMode> | null = null;
-  for (const logId of viewModes.keys()) {
-    if (logId < oldestLogId) {
-      next ??= new Map(viewModes);
-      next.delete(logId);
-    }
-  }
-  return next ?? viewModes;
-}
 
 /**
  * デバッグパネル

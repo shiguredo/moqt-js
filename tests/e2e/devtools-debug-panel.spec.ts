@@ -24,12 +24,13 @@ interface InjectedLog {
  */
 async function addLogs(page: Page, logs: InjectedLog[]): Promise<void> {
   await page.evaluate(async (entries) => {
+    // 同じモジュールが HMR で読み直されると URL が複数になるため、最後に読み込まれた
+    // もの (= アプリが今使っている実体) を使う
     const findResource = (pattern: RegExp): string => {
-      const url = performance
-        .getEntriesByType("resource")
-        .map((entry) => entry.name)
-        .find((name) => pattern.test(name));
-      if (!url) {
+      const names = performance.getEntriesByType("resource").map((entry) => entry.name);
+      // 後ろから探す (新しく読み込まれたものから見る)
+      const url = names.reverse().find((name) => pattern.test(name));
+      if (url === undefined) {
         throw new Error(`no loaded module: ${String(pattern)}`);
       }
       return url;
@@ -196,14 +197,15 @@ test("上限で捨てたログの展開状態を残さない", async ({ page }) 
 
   // 上限 (1000 件) まで追加し、さらに 1 件足して最古を捨てる。ここで表示の位置と
   // ログの連番がずれる (先頭の行の連番は 1000、表示の位置は 0)
-  await addLogs(
-    page,
-    Array.from({ length: 1001 }, (_, index) => ({
+  await addLogs(page, [
+    ...Array.from({ length: 1000 }, (_, index) => ({
       level: "info" as const,
       message: `keep-${index}`,
       data: { index },
     })),
-  );
+    // 1001 件目 (最新) は payload も持つ。Binary タブの確認に使う
+    { level: "info" as const, message: "keep-1000", data: { index: 1000 }, payload: [0xde, 0xad] },
+  ]);
   await expect(page.getByTestId("debug-log-count")).toHaveText("Logs: 1000");
   await expect(rows.nth(0)).toContainText("keep-1000");
 
@@ -211,6 +213,14 @@ test("上限で捨てたログの展開状態を残さない", async ({ page }) 
   await rows.nth(0).click();
   await expect(rows.nth(0).locator("pre")).toContainText("index: 1000");
   await expect(page.getByRole("button", { name: "Collapse All" })).toBeVisible();
+
+  // 表示モードも同じくログの連番で引く。添字で引いていると、Binary を選んでも
+  // この行は data のままになる
+  await rows
+    .nth(0)
+    .getByRole("button", { name: /^Binary/ })
+    .click();
+  await expect(rows.nth(0).locator("pre")).toContainText("0000  de ad");
 
   // 展開していた行を捨てるまで追加する (1000 件追加すると、残るのは後ろの 1000 件)
   await addLogs(
@@ -241,4 +251,17 @@ test("パネルを閉じているときは Debug ボタンにログ件数のバ�
   await openDebugPanel(page);
   await expect(page.getByTestId("debug-log-badge")).toHaveCount(0);
   await expect(page.getByTestId("debug-log-count")).toHaveText("Logs: 1");
+});
+
+test("Debug ボタンのバッジは 100 件以上を 99+ にする", async ({ page }) => {
+  await page.goto(DEVTOOLS_URL);
+  await addLogs(
+    page,
+    Array.from({ length: 100 }, (_, index) => ({
+      level: "info" as const,
+      message: `badge-${index}`,
+    })),
+  );
+
+  await expect(page.getByTestId("debug-log-badge")).toHaveText("99+");
 });
