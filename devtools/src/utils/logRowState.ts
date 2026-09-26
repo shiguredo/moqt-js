@@ -35,15 +35,30 @@ export function pruneViewModes(
   viewModes: ReadonlyMap<number, ViewMode>,
   oldestLogId: number | null,
 ): ReadonlyMap<number, ViewMode> {
-  if (oldestLogId === null || viewModes.size === 0) {
-    return viewModes;
+  return pruneMapByLogId(viewModes, oldestLogId);
+}
+
+/**
+ * 上限で捨てられたログの値を落とす (連番をキーにした Map)
+ *
+ * 表示モードや行の vnode のキャッシュのように、ログの連番をキーにした Map へ使う。
+ * 落とすものが無ければ同じ Map を返す (呼び出し側の再描画を起こさない)。
+ * 上限に達した後は 1 件追加ごとに全キーを走査するが、1000 件で約 11 µs のため
+ * 1 件追加のコストにはほとんど効かない (実測)。
+ */
+export function pruneMapByLogId<T>(
+  values: ReadonlyMap<number, T>,
+  oldestLogId: number | null,
+): ReadonlyMap<number, T> {
+  if (oldestLogId === null || values.size === 0) {
+    return values;
   }
-  let next: Map<number, ViewMode> | null = null;
-  for (const logId of viewModes.keys()) {
+  let next: Map<number, T> | null = null;
+  for (const logId of values.keys()) {
     if (logId < oldestLogId) {
-      next ??= new Map(viewModes);
+      next ??= new Map(values);
       next.delete(logId);
     }
   }
-  return next ?? viewModes;
+  return next ?? values;
 }

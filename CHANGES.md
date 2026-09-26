@@ -198,7 +198,11 @@
   - 日時・経過時間・差分は追加時に 1 回だけ整形して持ち、行は `DebugLogRow` に切り出して展開の状態を行の識別子 (連番) で持つ。上限で捨てたログの展開状態と表示モードを残さないようにする
   - 経過時間の基準は、描画のたびに変わりうる「残っている最も古いログ」から「ログを消してから最初の 1 件」に変える。上限に達した後も最古の行が +0.000 に戻らなくなる
   - @voluntas
-
+- [UPDATE] moqt-devtools のデバッグパネルで、ログを 1 件追加したときに描画される行を 1 件だけにする
+  - 行の vnode をログの連番で保持し、展開の状態・表示モード・コピーの表示が変わったときだけ作り直す。Preact は同じ vnode を再び受け取ると部分木の差分を省略するため、1000 件表示でも 1 件追加で描画される行は 1 件になる (実測: 同じ計測方法で 1 件追加の中央値 23.0 ms → 7.6 ms、描画される行 1000 件 → 1 件)
+  - 上限で捨てたログの vnode はキャッシュから落とす。`data` と `payload` は追加後に書き換えない前提になる (行を描画し直さないため、書き換えても表示は古いまま)
+  - 1 件追加のコストは表示中の件数に比例する分が残る (1000 件で約 3 ms のうち、表示中の子の走査が大半)。表示する行を画面に入る分だけにする対応は別に行う
+  - @voluntas
 - [FIX] moqt-devtools の「Copy for LLM」に認可トークンの値が出るのを修正する
   - Relay URI と URI Fragment の c4m (Base64 encoded C4M token) を伏せ字にする。AUTHORIZATION_TOKEN を載せうるメッセージ (SETUP / PUBLISH / SUBSCRIBE / FETCH / TRACK_STATUS / PUBLISH_NAMESPACE / SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS / REQUEST_UPDATE) の payload はログへ残さない。payload の hex dump は画面の Binary タブ、行コピー、Copy for LLM に出るため、残さないことで値がどこにも出なくなる (バイト数と decoded は今までどおり読める)
   - @voluntas
