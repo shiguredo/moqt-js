@@ -214,23 +214,6 @@ function nearestRank(sorted: readonly number[], ratio: number): number {
 }
 
 /**
- * 分布の要約を「p50 / p95 / max」(ミリ秒、小数 1 桁) の文字列にする。値が無ければ "-"
- */
-export function formatTimingSummary(summary: TimingSummary | null): string {
-  if (summary === null) {
-    return "-";
-  }
-  return `${summary.p50.toFixed(1)} / ${summary.p95.toFixed(1)} / ${summary.max.toFixed(1)}`;
-}
-
-/**
- * 原因ごとの止まりの累積を「回数 / 時間 ms」の文字列にする
- */
-export function formatStallCauseTotal(total: StallCauseTotal): string {
-  return `${total.count} / ${Math.round(total.ms)} ms`;
-}
-
-/**
  * 1 回の止まりを 1 行の文字列にする
  *
  * 時刻は UTC の ISO 8601 (ミリ秒まで) にする。relay のログと突き合わせるときに時差で

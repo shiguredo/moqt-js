@@ -26,6 +26,13 @@
   - エンコード能力を超えて破棄したフレーム数を統計で確認できるようにする
   - `VideoStats` は公開型のため、この型を自前で構築しているコードは `droppedFrames` の追加が必要になる (後方互換なし)
   - @voluntas
+- [CHANGE] moqt-devtools の `window.moqtDevTools` が返す Subscriber の統計で、音声の項目を `audio` の下へまとめる
+  - `audioObjectsReceived` / `audioChunksDecoded` / `audioPeakDbfs` / `audioRmsDbfs` / `audioLastLevel` / `audioLastVoiceActivity` / `audioPlayoutRebases` / `audioPlayoutDrops` を `audio.objectsReceived` などの入れ子にする。E2E が読む名前が変わるため後方互換はない
+  - @voluntas
+- [ADD] moqt-devtools の `window.moqtDevTools` が返す publisher / subscriber の統計に、画面が出していた項目を足す
+  - publisher に codec、chunksEncoded、encodeErrors、statusMessage、httpVersion、forwardState、audioPublisher と音声メーター、Session の統計、Catalog を足す
+  - subscriber に codec、statusMessage、httpVersion、decoderConfigured、chunksCreated / chunksDecoded / chunksSkipped、decodeErrors、dynamicGroupsSupported、newGroupRequestEnabled、音声の decoderConfigured と playbackEnabled、Session の統計、Catalog を足す
+  - @voluntas
 - [ADD] moqt-devtools の subscriber が音声と映像を同じ時間軸で同期して再生する
   - 音声も `PlaybackTimeline` へ記録し、catalog の `targetLatency` から求めた同じ表示時刻で鳴らす。`targetLatency` の解決はライブラリと共有する純関数 (`src/msf/tracks.ts`) が持ち、同じ render group / alternate group で値が異なるときは警告をログに残す
   - `AudioContext` の時計は `AudioClockBridge` で `performance.now()` に対応づけ、`AudioPlayoutScheduler` には目標の開始時刻を渡す。jitter buffer が無効のときと音声だけを購読するときは、同期せず到着基準で並べる
@@ -181,7 +188,20 @@
 - [UPDATE] moqt-devtools の設定入力で再描画される範囲を狭める
   - 副題のモードリンクが接続設定の signal を読んでいたため、Relay URI に 10 文字入力するたびに App と SubscriberPanel が再描画されていた (23.7 ms)。副題を別のコンポーネントへ切り出して signal の購読を閉じ、8.4 ms にした
   - @voluntas
+- [UPDATE] moqt-devtools のデバッグパネルの「Copy for LLM」に、設定と統計の全項目を出す
+  - 接続設定・publisher・subscriber の項目を手書きで列挙していたため、Target Latency / Render Group と音声の設定、現在の表示モード、Subscriber の sub group、同期の推定 (avSync)、音声の統計、Chunks と Decode Errors、Session の統計、Catalog が本文から抜けていた。統計のスナップショット (`window.moqtDevTools` と同じ実装) から本文を組み立て、項目を足せば本文にも出るようにする
+  - 認可トークンの Token Value と c4m の signal は、値ではなく送るかどうかと種別だけを出す
+  - 本文を検証するテストを追加する
+  - @voluntas
+- [UPDATE] moqt-devtools のデバッグログの蓄積を signals へ移し、ログの購読範囲を狭める
+  - ログの蓄積が `DebugPanel` コンポーネントにあり、hooks と App がコンポーネントを import していた。`signals/debugLog.ts` へ移し、パネル本体と App はログの連番を読まないようにする。ログを 1 件追加したときに再描画されるのはログの一覧と件数だけになる
+  - 日時・経過時間・差分は追加時に 1 回だけ整形して持ち、行は `DebugLogRow` に切り出して展開の状態を行の識別子 (連番) で持つ。上限で捨てたログの展開状態と表示モードを残さないようにする
+  - 経過時間の基準は、描画のたびに変わりうる「残っている最も古いログ」から「ログを消してから最初の 1 件」に変える。上限に達した後も最古の行が +0.000 に戻らなくなる
+  - @voluntas
 
+- [FIX] moqt-devtools のデバッグパネルのログの差分が `(+-12ms)` のように表示されるのを修正する
+  - 表示は新しい順だが、差分を時系列で 1 つ新しいログとの差で計算していたため符号が負になっていた。時系列で 1 つ古いログとの差にし、`(+12ms)` と出す
+  - @voluntas
 - [FIX] moqt-devtools の音声メーターの見出しが、幅の広い UI フォントで折り返さないようにする
   - 見出しの値を 11px にし、項目の間隔を詰める。折り返すと下の Catalog と Statistics が動く
   - @voluntas
