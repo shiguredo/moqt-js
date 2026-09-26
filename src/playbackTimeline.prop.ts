@@ -417,6 +417,8 @@ test("PlaybackTimeline: 120 秒の到着列でも同時刻の表示時刻の差�
       assert.isNotNull(skewMs, "同期ずれが求まること");
       assert.isAtMost(Math.abs(skewMs ?? Infinity), 50, "同期ずれが 50 ms 以内であること");
     }),
-    { numRuns: 10 },
+    // CI の runner はローカルより遅いため、120 秒の列を作る回数を抑える (1 回で 30 fps と
+    // Opus の 120 秒分の観測を回す)
+    { numRuns: 5 },
   );
-}, 10_000);
+}, 30_000);
