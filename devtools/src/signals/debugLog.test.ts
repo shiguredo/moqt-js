@@ -9,11 +9,25 @@ import {
   logSequence,
 } from "./debugLog";
 import { autoScroll } from "./debug";
+import { formatElapsedTime } from "../utils/logFormatters";
 
 // 表示用の文字列の形。追加時に整形した値がその形であることを確かめる
 const ABSOLUTE_TIME_PATTERN = /^\d{2}:\d{2}:\d{2}\.\d{3}$/;
 const ELAPSED_TIME_PATTERN = /^\+\d+\.\d{3}$/;
 const DELTA_TIME_PATTERN = /^\(\+\d+ms\)$/;
+
+/**
+ * 次のミリ秒まで待つ
+ *
+ * `Date.now()` は同じミリ秒を返しうるため、連続して追加したログの差分が 0 になり、
+ * 差分の向きを確かめられない。時計が進むまで待ってから次のログを追加する
+ * (テストで時刻を差し替える仕組みは使わない)。
+ */
+function waitForNextMillisecond(currentTimestamp: number): void {
+  while (Date.now() === currentTimestamp) {
+    // 時計が進むまで待つ
+  }
+}
 
 beforeEach(() => {
   __resetLogStateForTest();
@@ -59,15 +73,24 @@ test("addLog: 最初のログの経過時間は 0 で、差分は出さない", 
 
 test("addLog: 差分は時系列で 1 つ前のログとの差になる", () => {
   // 表示は新しい順に並べるため、行の差分は「表示で次の行」ではなく
-  // 「時系列で 1 つ前」との差でなければならない
+  // 「時系列で 1 つ前」との差でなければならない。逆向きに計算すると差分が負になり
+  // "(+-12ms)" のような表示になる。
+  // Date.now() は同じミリ秒を返しうるため、時計を進めてから次を追加する
   addLog("info", "oldest");
-  addLog("info", "middle");
-  addLog("info", "newest");
-
-  const [oldest, middle, newest] = getLogBuffer();
+  const oldest = getLogBuffer()[0];
   assert.isDefined(oldest);
+  waitForNextMillisecond(oldest.timestamp);
+  addLog("info", "middle");
+  const middle = getLogBuffer()[1];
   assert.isDefined(middle);
+  waitForNextMillisecond(middle.timestamp);
+  addLog("info", "newest");
+  const newest = getLogBuffer()[2];
   assert.isDefined(newest);
+
+  // 時計が進んでいるため差分は 1 ms 以上になる (向きが逆なら負になる)
+  assert.isAtLeast(middle.timestamp - oldest.timestamp, 1);
+  assert.isAtLeast(newest.timestamp - middle.timestamp, 1);
   assert.equal(oldest.formattedDelta, "");
   assert.equal(middle.formattedDelta, `(+${middle.timestamp - oldest.timestamp}ms)`);
   assert.equal(newest.formattedDelta, `(+${newest.timestamp - middle.timestamp}ms)`);
@@ -76,22 +99,59 @@ test("addLog: 差分は時系列で 1 つ前のログとの差になる", () => 
 test("addLog: 上限に達しても経過時間の基準は動かず、既存の行の表示は変わらない", () => {
   // 基準を「残っている最も古いログ」にすると、上限到達で最古を捨てるたびに
   // 表示中の全行の経過時間が変わり、行の表示を作り直す必要が出る。
-  // 基準はログを消すまで動かさない
+  // 基準はログを消すまで動かさない。
+  //
+  // 時計が止まっていると経過時間が全部 "+0.000" になり、基準が動いても値が変わらない。
+  // 50 件ごとに時計を進めて、基準のずれが値に現れるようにする
+  const waitIfNeeded = (index: number) => {
+    if (index % 50 !== 49) {
+      return;
+    }
+    const last = getLogBuffer().at(-1);
+    assert.isDefined(last);
+    waitForNextMillisecond(last.timestamp);
+  };
+
   for (let i = 0; i < MAX_LOGS; i++) {
     addLog("info", `msg-${i}`);
+    waitIfNeeded(i);
   }
-  const beforeDrop = getLogBuffer()[1];
-  assert.isDefined(beforeDrop);
-  const elapsedBeforeDrop = beforeDrop.formattedElapsed;
-  const deltaBeforeDrop = beforeDrop.formattedDelta;
+  const first = getLogBuffer()[0];
+  assert.isDefined(first);
 
-  addLog("info", "overflow");
+  // 上限超過で 60 件捨てると、残る最も古いログは最初の 1 件より後になる。
+  // 基準が「最初の 1 件」のままなら、その行の経過時間は "+0.000" ではない
+  const futureOldest = getLogBuffer()[60];
+  assert.isDefined(futureOldest);
+  const elapsedBeforeDrop = futureOldest.formattedElapsed;
+  assert.notEqual(elapsedBeforeDrop, "+0.000");
+
+  for (let i = 0; i < 60; i++) {
+    addLog("info", `overflow-${i}`);
+    waitIfNeeded(i);
+  }
 
   assert.equal(getLogBuffer().length, MAX_LOGS);
-  // 先頭が 1 つ繰り上がり、捨てられていない行の表示は同じ値のまま
-  assert.equal(getLogBuffer()[0]?.message, beforeDrop.message);
+  assert.equal(getLogBuffer()[0]?.message, "msg-60");
+  // 捨てられていない行の表示は、上限超過の前後で変わらない
   assert.equal(getLogBuffer()[0]?.formattedElapsed, elapsedBeforeDrop);
-  assert.equal(getLogBuffer()[0]?.formattedDelta, deltaBeforeDrop);
+
+  // 追加した行の経過時間は「最初の 1 件からの経過」になる。基準を残っている最も古い
+  // ログへ移すと msg-60 からの経過になり、この値と一致しなくなる
+  const overflow = getLogBuffer().at(-1);
+  const oldest = getLogBuffer()[0];
+  assert.isDefined(overflow);
+  assert.isDefined(oldest);
+  assert.equal(
+    overflow.formattedElapsed,
+    formatElapsedTime(overflow.timestamp, first.timestamp),
+    "追加した行の経過時間は最初の 1 件を基準にする",
+  );
+  assert.notEqual(
+    formatElapsedTime(overflow.timestamp, oldest.timestamp),
+    overflow.formattedElapsed,
+    "基準を残っている最も古いログへ移すと値が変わる (このテストが基準の移動を検出できる)",
+  );
 });
 
 test("addLog: 上限を超えたら最古を捨て、連番は進み続ける", () => {

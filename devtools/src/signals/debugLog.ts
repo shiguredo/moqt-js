@@ -53,8 +53,12 @@ let firstTimestamp: number | null = null;
 // 追加・クリアのたびに増える連番。値は表示に使わず、再描画のトリガにだけ使う
 export const logSequence = signal(0);
 
-/** テスト用に logBuffer のスナップショットを返す */
-// readonly は型レベルの不変性宣言で、呼び出し側に書き換えを意図させない
+/**
+ * 保持しているログを古い順に返す
+ *
+ * 配列そのものを返す (コピーしない)。呼び出し側は読み取り専用として扱い、
+ * 追加と削除は `addLog` / `clearLog` だけが行う。
+ */
 export function getLogBuffer(): readonly LogEntry[] {
   return logBuffer;
 }
