@@ -1,7 +1,7 @@
 # publisher が catalog に targetLatency と renderGroup を載せる
 
 - Created: 2026-09-26
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-26
 - Branch: feature/add-publisher-target-latency
 - Polished: 2026-09-26
 
@@ -25,7 +25,7 @@ MSF の `targetLatency` は「符号化から表示までの wallclock の差」
 - 指定しないときは catalog に載せない (§5.2.8 は「宣言が無く `isLive` が true のとき、購読側が遅延を選んでよい MAY」であるため、載せないことが購読側のフォールバックの経路になる)
 - `targetLatency` と `renderGroup` は独立の任意指定にする (片方だけでもよい)。`renderGroup` を指定しないと「同じ group の track を同時に描画する SHOULD」は表明されないが、`targetLatency` の同一値 MUST は 1 つの値で満たされる
 - `buffers` は publisher のオプションにも catalog にも無いため §5.2.8 の MUST NOT には抵触しない。`buffers` を publisher に足す作業は本 issue に含めない (排他の型表現が必要になったらそのときの issue で扱う)
-- publisher では値の検証を足さない (受信側の catalog の検証は `src/msf/catalogTrackValidation.ts` が持つ)。`renderGroup` の整数性は encode 側でも decode 側でも検証されないため、指定する値は呼び出し側の責任になる
+- publisher では値の範囲の検証はしない (受信側の catalog の検証は `src/msf/catalogTrackValidation.ts` が持つ)。ただし自分の出力を自分で復号できない catalog を送らないよう、`targetLatency` の有限性と `renderGroup` の有限性・整数性は publisher で検証して throw する (非有限値は `JSON.stringify` が `null` に落ち、受信側が復号を拒否する)。0 は有効値として通す
 - devtools の publisher は `PublisherCatalogOptions` (音声と映像の子設定を持つ親) のトップレベルに同じ 2 つを足す。設定は signal を `number | null` (`null` が未指定) にし、`<select>` に「未指定」(ラベルは `Unset`。UI は英語表記) を既定として用意する。選択肢と URL の受理値は同じ許可リスト定数から作る (`devtools/src/signals/connectionSettings.ts` の `AUDIO_BITRATES` と同じ形。`TARGET_LATENCY_OPTIONS` は `[0, 50, 100, 200, 500]`、`RENDER_GROUP_OPTIONS` は `[0, 1]` を初期値にする)。URL クエリは指定があるときだけ `targetLatency` / `renderGroup` を載せ、`initFromUrl` が許可リストで検証して読み戻す。`targetLatency` の 0 ms と `renderGroup` の 0 は有効値であるため「0 = 未指定」とは扱わない (未指定は空値の `<option>` から `null` に写す)
 - devtools の `targetLatency` の候補値は 200 ms 以下を主にする (購読側は表示の遅れを `MAX_PLAYOUT_DELAY_MS` = 500 ms とキューの長さの小さい方で切り下げる。キュー由来の上限は `(24 - 4) × フレーム間隔` で、30 fps は約 667 ms、60 fps は約 333 ms、jitter buffer 無効 (12 枚) の 30 fps は約 267 ms になる。500 ms を候補に残す場合は 30 fps かつ jitter buffer 有効のときだけ切り下げられないことを注記する)
 - 実機での確認 (購読側が `targetLatency` どおりの時刻に表示するか) は 0636 が持つ。本 issue は「catalog に載る」ところまでとする。0636 の完了条件には「devtools の購読側が catalog の `targetLatency` を読み、`window.moqtDevTools.getSubscriber(id)` の統計と data-testid に出る使っている目標遅延が publisher の設定値と一致する」を反映済みである。ライブラリ側の `getStats().avSync.targetLatencyMs` は devtools の購読には無い API であり、devtools の確認には使えない
@@ -45,6 +45,7 @@ MSF の `targetLatency` は「符号化から表示までの wallclock の差」
 
 - `createMediaPublisher` が、指定した `targetLatency` (ms) と `renderGroup` を catalog の音声と映像の両方の track に載せる。送信した catalog の payload を `decodeCatalogMessage` で読み戻し、両方の track の値が指定どおりであることを検証する (`src/createMediaPublisher.test.ts` の `publishCatalog` を駆動する既存の形を使う。既存の記録用 publisher は payload を記録していないため、payload を記録する制御口を足す。映像の track を載せるには `resolvedVideo` と `mediaStream` の注入も要る)
 - 指定しないときは catalog に載らない。片方だけ指定したときはその片方だけが載る (送信した payload の JSON にキーが無いことを見る。符号化は `undefined` を落とすため、キーの有無は復号してからではなく payload そのもので確かめる)
+- `targetLatency` の非有限値と `renderGroup` の非有限値・非整数は throw する。`targetLatency: 0` と `renderGroup: 0` は通り、未指定と区別して載る
 - devtools の publisher が、設定と URL クエリで指定した同じ 2 つを catalog に載せ、未指定のときは URL にも catalog にも載らない (`devtools/src/hooks/usePublisher.test.ts` と `devtools/src/signals/connectionSettings.test.ts` の URL 往復)。`buildPublisherCatalog` への配線は接続を要する `startPublishing` を経由するため単体テストで観測できない (モックは使えない)。設定から `PublisherCatalogOptions` を組み立てる純関数を切り出してそれを検証し、`usePublisher` の配線そのものは E2E に委ねる
 - `docs/HIGH_LEVEL_API.md` の publisher のオプションの記載と実装が一致する
 - `CHANGES.md` の `## develop` に `[ADD]` を 2 件載せる (ライブラリと moqt-devtools)
@@ -73,4 +74,13 @@ MSF の `targetLatency` は「符号化から表示までの wallclock の差」
 
 ## 解決方法
 
-{未着手}
+- `src/codec/types.ts` の `MediaPublisherOptions` に `targetLatency` (ms) と `renderGroup` (整数) を足した。指定すると catalog の音声と映像の両方の track に同じ値を載せ、指定しないときはキーを載せない (draft-ietf-moq-msf-01 §5.2.8 の MAY により、載せないことが購読側のフォールバックの経路になる)。0 は有効値として未指定と区別する
+- `src/createMediaPublisher.ts` の `createCatalogTracks` が、指定があるときだけ音声と映像の両方の track に同じ値を載せる (§5.2.8 の「同じ render group と alternate group の track は同一の値でなければならない MUST」を 1 つの値で構造的に守る)
+- 自分の出力を自分で復号できない catalog を送らないよう、`assertCatalogLatencyOptions` で `targetLatency` の有限性と `renderGroup` の有限性・整数性を検証する (非有限値は `JSON.stringify` が `null` に落ち、受信側の `catalogTrackValidation` が復号を拒否するため)。0 は通す
+- `devtools/src/hooks/usePublisher.ts` の `PublisherCatalogOptions` (音声と映像の子設定を持つ親) に同じ 2 つを足し、`buildPublisherCatalog` が両方の track に同じ値を載せる。検証はライブラリと同じ関数を使う
+- devtools の設定は `devtools/src/signals/connectionSettings.ts` に `signal<number | null>` を足し (`null` が未指定)、`TARGET_LATENCY_OPTIONS` = `[0, 50, 100, 200, 500]` と `RENDER_GROUP_OPTIONS` = `[0, 1]` を select の選択肢と URL の受理値の両方に使う。URL は指定があるときだけ `targetLatency` / `renderGroup` を載せ、`resolveOptionNumber` (空文字は `null`、整数表記かつ許可リストにある値だけ受理。0 は有効値) で読み戻す
+- devtools の設定 UI に「Unset」を既定にした選択を足した。signal を読んで `PublisherCatalogOptions` を組み立てる純関数 (`buildPublisherCatalogOptionsFromSettings`) を切り出し、配線を signal を直接書き換えるテストで固定した
+- `docs/HIGH_LEVEL_API.md` に 2 つのフィールドの意味・単位・既定・検証と、宣言値と実効値のずれ (購読側が表示の遅れを上限で切り下げる) を書いた。`CHANGES.md` の `## develop` に `[ADD]` を 2 件 (ライブラリと moqt-devtools) 載せた
+- テスト: 送信した payload を `decodeCatalogMessage` で読み戻して両方の track の値を確かめる / 未指定は payload の JSON にキーが無い / 片方だけ指定 / 0 と未指定の区別 / 非有限値と非整数の拒否 (`src/createMediaPublisher.test.ts`)、devtools の純関数と signal の配線 (`devtools/src/hooks/usePublisher.test.ts`)、URL の往復と `resolveOptionNumber` (`devtools/src/signals/connectionSettings.test.ts`)
+- `vp check` / `tsc --noEmit` (ルートと devtools) / `vp test run` (160 ファイル / 2966 テスト) が通った
+- 残課題: devtools の `usePublisher` の配線のうち、実際の配信時の catalog 送信は接続が要るため単体テストで観測できない。実機で確かめる (0636 の実機確認に含める)
