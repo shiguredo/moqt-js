@@ -1,7 +1,7 @@
 # moqt-devtools の DebugPanel を現在の実装に合わせて整備する
 
 - Created: 2026-09-26
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-26
 - Branch: feature/refactor-devtools-debug-panel
 - Polished: {YYYY-MM-DD}
 
@@ -53,3 +53,18 @@ moqt-devtools の DebugPanel (`devtools/src/components/DebugPanel.tsx`) は早�
 - `devtools/src/testApi.ts` の `PublisherStats` / `SubscriberStats` / `buildSubscriberStats` / `initTestApi`
 - `devtools/src/signals/connectionSettings.ts` の signal と `buildQueryParams`
 - `devtools/src/utils/logFormatters.ts` の `formatAbsoluteTime` / `formatElapsedTime` / `formatDeltaTime`
+
+## 解決方法
+
+- ログの蓄積を `devtools/src/signals/debugLog.ts` へ移した。`autoScroll` は `devtools/src/signals/debug.ts` へ移し、hooks は signals を import するようになった (components への依存が無くなった)。件数の signal は連番だけにし、件数は一覧の長さから読む (`DebugLogCount` / `DebugLogBadge`)
+- 日時・経過時間・差分は追加時に 1 回だけ整形して `LogEntry` に持たせた。経過時間の基準は「ログを消してから最初の 1 件」に固定し、上限到達で古いログを捨てても基準が動かないようにした
+- 行を `devtools/src/components/DebugLogRow.tsx`、一覧を `DebugLogList.tsx`、件数を `DebugLogCount.tsx` と `DebugLogBadge.tsx` に分けた。ログの連番を読むのは一覧と件数だけで、`DebugPanel` と App は読まない。上限で捨てたログの展開状態と表示モードは `devtools/src/utils/logRowState.ts` の枝刈りで落とす
+- 統計のスナップショットを `devtools/src/signals/statsSnapshot.ts` へ移し、テスト用 API と Copy for LLM で共有した。画面とコピーが出していた項目 (codec、chunks、decodeErrors、httpVersion、statusMessage、forwardState、audio、avSync、Session の統計、Catalog など) を足し、音声の項目は `audio` の下へまとめた。Catalog の bigint は文字列にして `JSON.stringify` できる形にした
+- 接続設定のスナップショットを `devtools/src/signals/connectionSettingsSnapshot.ts` に足した (URL だけでなく fragment も出す)。認可トークンは値ではなく送るかどうかと種別だけを載せる
+- Copy for LLM の本文を `devtools/src/utils/debugExportText.ts` (整形の純関数) と `devtools/src/signals/debugExport.ts` (値の収集) へ移し、スナップショットのキーから組み立てるようにした。配信を始めていない publisher の節を出さない判定もテストで固定した
+- テスト: `devtools/src/signals/debugLog.test.ts`、`statsSnapshot.test.ts`、`connectionSettingsSnapshot.test.ts`、`debugExport.test.ts`、`snapshotCoverage.test.ts` (signal とスナップショットの対応を固定し、除外した signal がスナップショットに出ていないことも見る)、`utils/debugExportText.test.ts` / `debugExportText.prop.ts`、`utils/logRowState.test.ts`、`tests/e2e/devtools-debug-panel.spec.ts` (表示と操作、上限で捨てたログの状態、Copy for LLM の本文とボタン、バッジ)
+- 画面の表示は 2 点だけ変えた。経過時間の基準を「ログを消してから最初の 1 件」にし、上限に達した後も最古の行が `+0.000` に戻らないようにした。行の差分は時系列で 1 つ新しいログとの差で計算していたため `(+-12ms)` と出ていたのを、1 つ古いログとの差にして `(+12ms)` と出るようにした
+- 実測 (Chromium、1000 件表示、`preact.options.__r` で描画を数える): ログを 1 件追加したときに再描画されるのはログの一覧・件数・表示中の行だけになり、パネル本体と App は再描画されなくなった。行をコンポーネントへ切り出した分、1 件追加の所要時間は増えた (同じ計測方法で 15.9 ms から 18.4 ms)。行の vnode を使い回して件数に依らないコストにする対応は別 issue で行う
+- 認可トークンの値が本文に出ないことのうち、スナップショットに載せないことは固定した。c4m を含む Relay URI と payload の hex dump から値を消すのは別 issue で行う
+- レビューは 2 系統を 2 周行い、指摘 (テストが恒真で変異を検出できない、コメントと実装の食い違い、bigint で JSON 化が例外になる、変更履歴の種別、除外リストの検証漏れ) を修正した
+- `vp check` / `vp exec tsc --noEmit` / `vp exec tsc -p devtools --noEmit` / `vp test run` (167 ファイル / 3032 テスト) / `vp run e2e-test` (54 件) が通った
