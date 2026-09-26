@@ -36,7 +36,7 @@ import {
   PRIORITY_VIDEO_DELTA,
   PRIORITY_VIDEO_KEY,
 } from "../../../src/createMediaPublisher.ts";
-import { addLog } from "../components/DebugPanel";
+import { addLog } from "../signals/debugLog";
 import { logDebugMessage } from "./debugMessageLog";
 import { EncoderWrapper, type EncodedChunkData } from "../utils/EncoderWrapper";
 import { WallClockMapper } from "../../../src/mediaClock.ts";

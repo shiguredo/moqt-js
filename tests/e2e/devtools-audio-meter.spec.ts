@@ -399,11 +399,11 @@ test("window.moqtDevTools から音声の統計が読める", async ({ page }) =
 
   for (const audioStats of [stats.first, stats.byId]) {
     expect(audioStats).not.toBeNull();
-    expect(audioStats?.audioObjectsReceived).toBe(0);
-    expect(audioStats?.audioChunksDecoded).toBe(0);
-    expect(audioStats?.audioPeakDbfs).toBeNull();
-    expect(audioStats?.audioRmsDbfs).toBeNull();
-    expect(audioStats?.audioLastLevel).toBeNull();
-    expect(audioStats?.audioLastVoiceActivity).toBeNull();
+    expect(audioStats?.audio.objectsReceived).toBe(0);
+    expect(audioStats?.audio.chunksDecoded).toBe(0);
+    expect(audioStats?.audio.peakDbfs).toBeNull();
+    expect(audioStats?.audio.rmsDbfs).toBeNull();
+    expect(audioStats?.audio.lastLevel).toBeNull();
+    expect(audioStats?.audio.lastVoiceActivity).toBeNull();
   }
 });

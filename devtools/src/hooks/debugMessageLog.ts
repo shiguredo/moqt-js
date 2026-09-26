@@ -1,5 +1,5 @@
 import type { DebugMessage } from "moqt-js";
-import { addLog } from "../components/DebugPanel";
+import { addLog } from "../signals/debugLog";
 
 /**
  * ログへコピーする payload の上限 (byte)

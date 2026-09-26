@@ -3,7 +3,8 @@ import { ConnectionSettings } from "./components/ConnectionSettings";
 import { ModeSubtitle } from "./components/ModeSubtitle";
 import { PublisherPanel } from "./components/PublisherPanel";
 import { SubscriberPanel } from "./components/SubscriberPanel";
-import { DebugPanel, logCount } from "./components/DebugPanel";
+import { DebugPanel } from "./components/DebugPanel";
+import { DebugLogBadge } from "./components/DebugLogCount";
 import { isDebugPanelOpen, toggleDebugPanel } from "./signals/debug";
 import { buildQueryString, mode } from "./signals/connectionSettings";
 import { useCopyUrlButton } from "./hooks/useCopyUrlButton";
@@ -69,12 +70,8 @@ export function App() {
               />
             </svg>
             <span>Debug</span>
-            {/* ログ件数バッジ */}
-            {logCount.value > 0 && !debugPanelOpen && (
-              <span class="bg-red-500 text-white text-xs font-bold rounded-full min-w-[24px] h-6 flex items-center justify-center px-1.5">
-                {logCount.value > 99 ? "99+" : logCount.value}
-              </span>
-            )}
+            {/* ログ件数バッジ。件数を読むのはこのコンポーネントの中だけにする */}
+            {!debugPanelOpen && <DebugLogBadge />}
           </button>
         </div>
 

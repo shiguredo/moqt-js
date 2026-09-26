@@ -2,7 +2,7 @@ import { test, assert, beforeEach } from "vite-plus/test";
 import type { DebugMessage } from "moqt-js";
 import { handleDebugMessage as handleSubscriberDebugMessage } from "./useSubscriber";
 import { handleDebugMessage as handlePublisherDebugMessage } from "./usePublisher";
-import { __resetLogStateForTest, getLogBuffer } from "../components/DebugPanel";
+import { __resetLogStateForTest, getLogBuffer } from "../signals/debugLog";
 
 beforeEach(() => {
   __resetLogStateForTest();

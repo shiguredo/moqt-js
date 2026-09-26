@@ -11,7 +11,7 @@
  */
 
 import { isMediaStreamTrackProcessorAvailable } from "moqt-js";
-import { addLog } from "../components/DebugPanel";
+import { addLog } from "../signals/debugLog";
 import { readAudioSamples } from "../utils/audioLevel";
 import { AudioMeterAccumulator } from "../utils/audioMeterAccumulator";
 import * as pub from "../signals/publisher";

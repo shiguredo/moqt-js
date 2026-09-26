@@ -16,7 +16,7 @@ import {
   type Subscriber,
   type Property,
 } from "moqt-js";
-import { addLog } from "../components/DebugPanel";
+import { addLog } from "../signals/debugLog";
 import { logDebugMessage } from "./debugMessageLog";
 import { DecoderWrapper } from "../utils/DecoderWrapper";
 import { AudioDecoderWrapper } from "../../../src/codec/AudioDecoder.ts";

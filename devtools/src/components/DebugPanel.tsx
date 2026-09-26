@@ -1,366 +1,78 @@
-import { signal, useSignalEffect, batch } from "@preact/signals";
-import { useEffect, useRef, useState, useCallback } from "preact/hooks";
+import { useCallback, useEffect, useState } from "preact/hooks";
+import { useSignalEffect } from "@preact/signals";
 import { useCopyFeedback } from "../hooks/useCopyFeedback";
-import {
-  formatAbsoluteTime,
-  formatBytes,
-  formatDeltaTime,
-  formatElapsedTime,
-  formatHexDump,
-  formatMessageData,
-} from "../utils/logFormatters";
-import { isDebugPanelOpen, closeDebugPanel } from "../signals/debug";
 import * as settings from "../signals/connectionSettings";
-import * as pub from "../signals/publisher";
-import * as sub from "../signals/subscriber";
-import { subscriberIds } from "../signals/subscriber";
+import { autoScroll, closeDebugPanel, isDebugPanelOpen } from "../signals/debug";
+import { clearLog, getLogBuffer, logSequence, type LogEntry } from "../signals/debugLog";
 import {
-  formatStallCauseTotal,
-  formatLossEvent,
-  formatStallEvent,
-  formatTimingSummary,
-} from "../utils/playbackTimingStats";
-import { LATENCY_SEGMENTS } from "../utils/latencyBreakdown";
-import { STALL_CAUSES } from "../utils/stallAnalysis";
+  buildAllExportText,
+  buildPublisherExportText,
+  buildSubscriberExportText,
+} from "../signals/debugExport";
+import { subscriberIds } from "../signals/subscriber";
+import { formatLogEntryText } from "../utils/debugExportText";
+import { DebugLogCount } from "./DebugLogCount";
+import { DebugLogList } from "./DebugLogList";
+import type { ViewMode } from "./DebugLogRow";
 
-interface LogEntry {
-  // ログごとの連番。表示の key と展開状態の識別に使う。配列の添字を使うと、
-  // MAX_LOGS 到達後に最古を捨てたときに展開状態が別の行へ移る
-  id: number;
-  timestamp: number;
-  level: "info" | "warn" | "error" | "debug";
-  message: string;
-  data?: unknown;
-  payload?: Uint8Array;
-}
-
-// 配列本体は破壊的に操作するため signal にしない。テスト用に getter を export する。
-const logBuffer: LogEntry[] = [];
-// ログの連番。表示の key と展開状態の識別に使う
-let logIdCounter = 0;
-const MAX_LOGS = 1000;
-// 追加イベントの累積カウンタ。MAX_LOGS 到達後も増え続け、autoScroll effect /
-// 描画再評価のトリガになる。
-export const logSequence = signal(0);
-// 現在の件数表示用 signal。logSequence と一緒に更新する。
-export const logCount = signal(0);
-export const autoScroll = signal(true);
-
-// テスト用に logBuffer のスナップショットを返す。
-// readonly は型レベルの不変性宣言で、呼び出し側に書き換えを意図させない。
-export function getLogBuffer(): readonly LogEntry[] {
-  return logBuffer;
-}
-
-// テスト用に logBuffer / logCount / logSequence を初期状態へ戻す。
-export function __resetLogStateForTest(): void {
-  logBuffer.length = 0;
-  logCount.value = 0;
-  logSequence.value = 0;
-}
-
-export function addLog(
-  level: LogEntry["level"],
-  message: string,
-  data?: unknown,
-  payload?: Uint8Array,
-) {
-  // exactOptionalPropertyTypes では optional な data / payload に undefined を渡せないため、
-  // 値がある場合だけ載せる
-  const entry: LogEntry = {
-    id: logIdCounter++,
-    timestamp: Date.now(),
-    level,
-    message,
-    ...(data !== undefined ? { data } : {}),
-    ...(payload !== undefined ? { payload } : {}),
-  };
-
-  logBuffer.push(entry);
-  if (logBuffer.length > MAX_LOGS) {
-    // MAX_LOGS 到達後は shift 1 回で先頭を捨てる。
-    // 旧実装の [...array, entry].slice(-MAX_LOGS) のフルコピー × 2 を 1 回に削減。
-    logBuffer.shift();
+/**
+ * 上限で捨てられたログの展開状態を落とす
+ *
+ * ログの連番は増え続けるため、捨てられたログの連番を持ち続けると状態が単調に増える。
+ * 残っている最も古い連番より小さい連番は捨てられたログのもの。
+ * 変わらない場合は同じ参照を返し、無駄な再描画を起こさない。
+ */
+function pruneLogIds<T extends ReadonlySet<number>>(values: T, oldestLogId: number | null): T {
+  if (oldestLogId === null || values.size === 0) {
+    return values;
   }
-  // 2 つの signal を同時更新するため batch で effect の二重発火を防ぐ。
-  batch(() => {
-    logCount.value = logBuffer.length;
-    logSequence.value += 1;
-  });
-}
-
-// 接続設定をテキストとして生成
-function generateSettingsText(): string {
-  // ビットレートを読みやすい形式に変換
-  const bitrateValue = settings.bitrate.value;
-  const bitrateText =
-    bitrateValue >= 1000000
-      ? `${(bitrateValue / 1000000).toFixed(1)} Mbps`
-      : `${(bitrateValue / 1000).toFixed(0)} kbps`;
-
-  // キャッシュ時間を読みやすい形式に変換
-  const cacheDurationMs = settings.maxCacheDuration.value;
-  const cacheDurationText =
-    cacheDurationMs >= 60000
-      ? `${(cacheDurationMs / 60000).toFixed(1)} min`
-      : `${(cacheDurationMs / 1000).toFixed(1)} sec`;
-
-  const lines = [
-    "=== Connection Settings ===",
-    `URL: ${settings.url.value}`,
-    `Namespace: ${settings.namespace.value}`,
-    `Track Name: ${settings.trackName.value}`,
-    `Codec: ${settings.codec.value.toUpperCase()}`,
-    `Resolution: ${settings.resolution.value}`,
-    `Framerate: ${settings.framerate.value} fps`,
-    `Bitrate: ${bitrateText} (${bitrateValue} bps)`,
-    `Keyframe Interval: ${settings.keyframeInterval.value} frames`,
-    `Max Cache Duration: ${cacheDurationText} (${cacheDurationMs} ms)`,
-    `Use Dedicated Worker: ${settings.useDedicatedWorker.value}`,
-    `Jitter Buffer: ${settings.jitterBufferEnabled.value}`,
-  ];
-  if (settings.certificateHash.value) {
-    lines.push(`Certificate Hash: ${settings.certificateHash.value}`);
-  }
-  return lines.join("\n");
-}
-
-// Publisher 統計情報をテキストとして生成
-function generatePublisherStatsText(): string {
-  // Publisher を使ったことがあるかどうかを判定
-  // objectsSent は disconnect 時にリセットされるため、他の指標も確認する
-  const hasPublished =
-    pub.pubCodec.value !== "" || pub.framesEncoded.value > 0 || pub.catalog.value !== null;
-  if (!hasPublished && pub.pubStatus.value === "disconnected") {
-    return "";
-  }
-  const lines = [
-    "=== Publisher Statistics ===",
-    `Status: ${pub.pubStatus.value}`,
-    `Codec: ${pub.pubCodec.value}`,
-    `Encoder State: ${pub.encoderState.value}`,
-    `Frames Encoded: ${pub.framesEncoded.value}`,
-    `Keyframes Encoded: ${pub.keyFramesEncoded.value}`,
-    `Chunks Encoded: ${pub.chunksEncoded.value}`,
-    `Objects Sent: ${pub.objectsSent.value}`,
-    `Objects With Extensions: ${pub.objectsWithExtensions.value}`,
-    `Bytes Sent: ${formatBytes(pub.bytesSent.value)}`,
-    `Current Group: ${pub.pubCurrentGroup.value}`,
-    `Encode Errors: ${pub.encodeErrors.value}`,
-    `New Group Requests: ${pub.newGroupRequestsReceived.value}`,
-  ];
-  // 符号化と送信の時間 (publisher の中の遅れ)。受信側の arrival はこれに経路と relay を足したもの
-  const publishTiming = pub.publishTimingStats.value.snapshot(performance.now());
-  lines.push(`--- Latency Breakdown (p50 / p95 / max ms, last 10 s) ---`);
-  lines.push(`encode: ${formatTimingSummary(publishTiming.encodeMs)}`);
-  lines.push(`send: ${formatTimingSummary(publishTiming.sendMs)}`);
-  lines.push(`Encode Queue Drops: ${publishTiming.encodeQueueDrops}`);
-  // WebTransport ストリーム統計
-  if (pub.pubSession.value) {
-    const stats = pub.pubSession.value.getStatistics();
-    lines.push(`--- Control Stream ---`);
-    lines.push(`Control Messages Sent: ${stats.controlMessagesSent}`);
-    lines.push(`Control Messages Received: ${stats.controlMessagesReceived}`);
-    lines.push(`--- Data Streams ---`);
-    lines.push(`Unidirectional Streams Opened: ${stats.unidirectionalStreamsOpened}`);
-  }
-  // Catalog 情報
-  if (pub.catalog.value) {
-    lines.push(`Catalog: ${JSON.stringify(pub.catalog.value, null, 2)}`);
-  }
-  return lines.join("\n");
-}
-
-// Subscriber 統計情報をテキストとして生成
-function generateSubscriberStatsText(subscriberId: string): string {
-  const instance = sub.getSubscriber(subscriberId);
-  if (!instance) {
-    return "";
-  }
-  const lines = [
-    `=== Subscriber Statistics (${subscriberId}) ===`,
-    `Status: ${instance.status.value}`,
-    `Codec: ${instance.codec.value}`,
-    `Decoder State: ${instance.decoderState.value}`,
-    `Decoder Configured: ${instance.decoderConfigured.value}`,
-    `Objects Received: ${instance.objectsReceived.value}`,
-    `Objects With Extensions: ${instance.objectsWithExtensions.value}`,
-    `Bytes Received: ${formatBytes(instance.bytesReceived.value)}`,
-    `Current Group: ${instance.currentGroup.value}`,
-    `Chunks Created: ${instance.chunksCreated.value}`,
-    `Chunks Decoded: ${instance.chunksDecoded.value}`,
-    `Chunks Skipped: ${instance.chunksSkipped.value}`,
-    `Stale Frames Dropped: ${instance.staleFramesDropped.value}`,
-    `Missing Reference Frames Dropped: ${instance.missingReferenceFramesDropped.value}`,
-    `Frames Decoded: ${instance.framesDecoded.value}`,
-    `Keyframes Decoded: ${instance.keyFramesDecoded.value}`,
-    `Decode Errors: ${instance.decodeErrors.value}`,
-  ];
-  // 受信から表示までの時間の統計 (分布は直近 10 秒の p50 / p95 / max)
-  const timing = instance.playbackTiming.value;
-  lines.push(`--- Playback Timing (p50 / p95 / max ms, last 10 s) ---`);
-  lines.push(`Arrival Jitter: ${formatTimingSummary(timing.arrivalJitterMs)}`);
-  lines.push(`Latency (sender wall clock): ${formatTimingSummary(timing.latencyMs)}`);
-  lines.push(`Decode Time: ${formatTimingSummary(timing.decodeTimeMs)}`);
-  lines.push(`Display Interval: ${formatTimingSummary(timing.displayIntervalMs)}`);
-  lines.push(`Display FPS: ${timing.displayFps}`);
-  lines.push(`Display Stalls: ${timing.displayStalls}`);
-  lines.push(`Display Stall Time: ${Math.round(timing.displayStallMs)} ms`);
-  lines.push(`Display Queue Drops: ${timing.displayQueueDrops}`);
-  lines.push(
-    `Playout Delay: ${timing.playoutDelayMs === null ? "-" : `${timing.playoutDelayMs.toFixed(1)} ms`}`,
-  );
-  lines.push(`Late Frames Dropped: ${timing.lateFramesDropped}`);
-  // 描いたフレームの遅延の区間ごとの分布 (arrival + hold + decodeWait + decode + displayWait
-  // = displayLatency)
-  lines.push(`--- Latency Breakdown (p50 / p95 / max ms, last 10 s) ---`);
-  for (const segment of LATENCY_SEGMENTS) {
-    lines.push(`${segment}: ${formatTimingSummary(timing.latencyBreakdown[segment])}`);
-  }
-  // 止まりの原因ごとの回数 / 時間と受信の欠け (購読開始からの累積)、直近の止まり
-  lines.push(`--- Stall Causes (count / ms) ---`);
-  for (const cause of STALL_CAUSES) {
-    lines.push(`${cause}: ${formatStallCauseTotal(timing.stallCauses[cause])}`);
-  }
-  lines.push(`Missing Objects: ${timing.missingObjects}`);
-  lines.push(`Missing Groups: ${timing.missingGroups}`);
-  lines.push(`Subgroup Stream Resets: ${timing.subgroupStreamResets}`);
-  for (const [code, count] of Object.entries(timing.subgroupStreamResetsByCode)) {
-    lines.push(`  ${code}: ${count}`);
-  }
-  lines.push(`Group Switch Hold Expirations: ${timing.groupSwitchHoldExpirations}`);
-  lines.push(`--- Recent Stalls (UTC, oldest first) ---`);
-  for (const stall of timing.recentStalls) {
-    lines.push(formatStallEvent(stall));
-  }
-  lines.push(`--- Recent Stream Resets and Loss Stalls (UTC, oldest first) ---`);
-  for (const lossEvent of timing.recentLossEvents) {
-    lines.push(formatLossEvent(lossEvent));
-  }
-  // Largest Location 情報
-  const largestLocation = instance.largestLocation.value;
-  if (largestLocation) {
-    lines.push(`Largest Group: ${largestLocation.group}`);
-    lines.push(`Largest Object: ${largestLocation.object}`);
-  }
-  // セッション統計情報
-  const session = instance.session.value;
-  if (session) {
-    const stats = session.getStatistics();
-    lines.push(`--- Session Statistics ---`);
-    lines.push(`Subgroup Headers Received: ${stats.subgroupHeadersReceived}`);
-    lines.push(`Fetch Headers Received: ${stats.fetchHeadersReceived}`);
-    lines.push(`Objects Received Via Fetch: ${stats.objectsReceivedViaFetch}`);
-    lines.push(`Objects Received Via Subscribe: ${stats.objectsReceivedViaSubscribe}`);
-    lines.push(`Bytes Received Via Fetch: ${formatBytes(stats.bytesReceivedViaFetch)}`);
-    lines.push(`Bytes Received Via Subscribe: ${formatBytes(stats.bytesReceivedViaSubscribe)}`);
-    lines.push(`Pending Subgroup Streams: ${stats.pendingSubgroupStreamsCount}`);
-    lines.push(`Pending Subgroup Bytes: ${formatBytes(stats.pendingSubgroupStreamsBytes)}`);
-    lines.push(`Active Subscribers: ${stats.activeSubscribers}`);
-    lines.push(`Active Fetchers: ${stats.activeFetchers}`);
-    lines.push(`--- Control Stream ---`);
-    lines.push(`Control Messages Sent: ${stats.controlMessagesSent}`);
-    lines.push(`Control Messages Received: ${stats.controlMessagesReceived}`);
-    lines.push(`--- Data Streams ---`);
-    lines.push(`Unidirectional Streams Received: ${stats.unidirectionalStreamsReceived}`);
-  }
-  // Catalog 情報
-  const catalog = instance.catalog.value;
-  if (catalog) {
-    lines.push(`Catalog: ${JSON.stringify(catalog, null, 2)}`);
-  }
-  return lines.join("\n");
-}
-
-// ログをフィルタリングしてテキストとして生成
-function generateLogsText(filter?: string): string {
-  const filteredLogs = filter ? logBuffer.filter((log) => log.message.includes(filter)) : logBuffer;
-
-  return filteredLogs
-    .map((log) => {
-      const timestamp = formatAbsoluteTime(log.timestamp);
-      const parts: string[] = [`${timestamp} ${log.message}`];
-
-      if (log.data) {
-        parts.push(formatMessageData(log.data));
-      }
-
-      if (log.payload && log.payload.length > 0) {
-        parts.push(`Binary (${log.payload.length} bytes):\n${formatHexDump(log.payload)}`);
-      }
-
-      return parts.join(" ");
-    })
-    .join("\n\n");
-}
-
-// LLM 用のフルログを生成
-function generateFullLogText(filter?: string, subscriberId?: string): string {
-  const sections: string[] = [];
-
-  // 接続設定
-  sections.push(generateSettingsText());
-
-  // 統計情報
-  if (subscriberId) {
-    // Subscriber 指定時はその Subscriber の統計のみ
-    const subStats = generateSubscriberStatsText(subscriberId);
-    if (subStats) {
-      sections.push(subStats);
-    }
-  } else if (filter === "[publisher]") {
-    // Publisher ログの場合
-    const pubStats = generatePublisherStatsText();
-    if (pubStats) {
-      sections.push(pubStats);
-    }
-  } else {
-    // 全ログの場合は両方
-    const pubStats = generatePublisherStatsText();
-    if (pubStats) {
-      sections.push(pubStats);
-    }
-    for (const id of subscriberIds.value) {
-      const subStats = generateSubscriberStatsText(id);
-      if (subStats) {
-        sections.push(subStats);
-      }
+  let next: Set<number> | null = null;
+  for (const value of values) {
+    if (value < oldestLogId) {
+      next ??= new Set(values);
+      next.delete(value);
     }
   }
-
-  // ログ
-  const logsText = generateLogsText(filter);
-  const filterLabel = filter ? ` (${filter})` : "";
-  sections.push(`=== Debug Logs${filterLabel} ===\n${logsText}`);
-
-  return sections.join("\n\n");
+  return (next ?? values) as T;
 }
 
-type ViewMode = "data" | "binary";
+/** 上限で捨てられたログの表示モードを落とす (pruneLogIds と同じ考え方) */
+function pruneViewModes(
+  viewModes: ReadonlyMap<number, ViewMode>,
+  oldestLogId: number | null,
+): ReadonlyMap<number, ViewMode> {
+  if (oldestLogId === null || viewModes.size === 0) {
+    return viewModes;
+  }
+  let next: Map<number, ViewMode> | null = null;
+  for (const logId of viewModes.keys()) {
+    if (logId < oldestLogId) {
+      next ??= new Map(viewModes);
+      next.delete(logId);
+    }
+  }
+  return next ?? viewModes;
+}
 
+/**
+ * デバッグパネル
+ *
+ * ログの一覧は `DebugLogList`、件数は `DebugLogCount` が出す。パネル本体はログの連番を
+ * 読まないため、ログを追加してもここは再描画されない。
+ */
 export function DebugPanel() {
-  // ログ追加イベント (MAX_LOGS 到達後も含む) で再レンダリングをトリガするため、
-  // logSequence を購読する。値自体は使わない。
-  void logSequence.value;
-
   // 表示モード。subscriber モードでは Publisher の通知ボタンを隠す
   const currentMode = settings.mode.value;
 
-  const logContainerRef = useRef<HTMLDivElement>(null);
   // 展開状態と表示モードは配列の添字ではなくログの連番で持つ。添字で持つと、
-  // MAX_LOGS 到達後に最古を捨てたときに状態が別の行へ移る
-  const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set());
-  const [viewModes, setViewModes] = useState<Map<number, ViewMode>>(new Map());
-  // 行コピーとボタンコピーは同時に「Copied!」表示しうるため hook を分離する。
+  // 上限到達後に最古を捨てたときに状態が別の行へ移る
+  const [expandedRows, setExpandedRows] = useState<ReadonlySet<number>>(new Set());
+  const [viewModes, setViewModes] = useState<ReadonlyMap<number, ViewMode>>(new Map());
+  // 行コピーとボタンコピーは同時に「Copied!」表示しうるため hook を分離する
   const rowFeedback = useCopyFeedback();
   const buttonFeedback = useCopyFeedback();
 
-  const getViewMode = (logId: number): ViewMode => viewModes.get(logId) ?? "data";
-  const setViewMode = (logId: number, mode: ViewMode) => {
-    setViewModes((prev) => new Map(prev).set(logId, mode));
-  };
-
-  const toggleRow = (logId: number) => {
+  const toggleRow = useCallback((logId: number) => {
     setExpandedRows((previous) => {
       const next = new Set(previous);
       if (next.has(logId)) {
@@ -370,69 +82,27 @@ export function DebugPanel() {
       }
       return next;
     });
-  };
+  }, []);
 
-  const isAllExpanded = expandedRows.size > 0;
+  const selectViewMode = useCallback((logId: number, viewMode: ViewMode) => {
+    setViewModes((previous) => new Map(previous).set(logId, viewMode));
+  }, []);
 
-  const toggleExpandAll = () => {
-    if (isAllExpanded) {
-      setExpandedRows(new Set());
-    } else {
-      // data を持つ行だけを展開する。識別にはログの連番を使う
-      setExpandedRows(new Set(logBuffer.filter((entry) => Boolean(entry.data)).map((e) => e.id)));
-    }
-  };
-
-  const copyToClipboard = useCallback(
-    async (log: LogEntry, event: MouseEvent) => {
+  const copyRow = useCallback(
+    async (entry: LogEntry, event: MouseEvent) => {
       event.stopPropagation();
-      const timestamp = formatAbsoluteTime(log.timestamp);
-      const parts: string[] = [`${timestamp} ${log.message}`];
-
-      if (log.data) {
-        parts.push(formatMessageData(log.data));
-      }
-
-      if (log.payload && log.payload.length > 0) {
-        parts.push(`Binary (${log.payload.length} bytes):\n${formatHexDump(log.payload)}`);
-      }
-
-      await rowFeedback.copy(parts.join(" "), String(log.id));
+      await rowFeedback.copy(formatLogEntryText(entry), String(entry.id));
     },
     [rowFeedback],
   );
 
-  // 一括コピー: 全ログ
-  const copyAllLogs = useCallback(async () => {
-    await buttonFeedback.copy(generateFullLogText(), "all");
-  }, [buttonFeedback]);
-
-  // 一括コピー: Publisher ログ
-  const copyPublisherLogs = useCallback(async () => {
-    await buttonFeedback.copy(generateFullLogText("[publisher]"), "publisher");
-  }, [buttonFeedback]);
-
-  // 一括コピー: Subscriber ログ
-  const copySubscriberLogs = useCallback(
-    async (subscriberId: string) => {
-      await buttonFeedback.copy(
-        generateFullLogText(`[${subscriberId}]`, subscriberId),
-        subscriberId,
-      );
-    },
-    [buttonFeedback],
-  );
-
-  // 新しいログ追加時にトップへオートスクロール。
-  // logSequence の変化でのみ発火し、autoScroll トグル単体では発火しない。
+  // 上限で捨てられたログの状態を落とす。useSignalEffect は再描画を起こさないため、
+  // ログを追加してもパネル本体は再描画されない
   useSignalEffect(() => {
-    const sequence = logSequence.value;
-    if (sequence === 0) return;
-    if (!autoScroll.peek()) return;
-    if (logBuffer.length === 0) return;
-    if (logContainerRef.current) {
-      logContainerRef.current.scrollTop = 0;
-    }
+    void logSequence.value;
+    const oldestLogId = getLogBuffer()[0]?.id ?? null;
+    setExpandedRows((previous) => pruneLogIds(previous, oldestLogId));
+    setViewModes((previous) => pruneViewModes(previous, oldestLogId));
   });
 
   // ESC キーでパネルを閉じる
@@ -446,32 +116,47 @@ export function DebugPanel() {
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, []);
 
-  const clearLogs = () => {
-    logBuffer.length = 0;
-    batch(() => {
-      logCount.value = 0;
-      // clear イベントを effect 側へ伝播させるため bump する。
-      logSequence.value += 1;
-    });
-  };
+  const hasExpandedRows = expandedRows.size > 0;
 
-  const getLevelColor = (level: LogEntry["level"]): string => {
-    switch (level) {
-      case "error":
-        return "text-red-600 bg-red-50";
-      case "warn":
-        return "text-yellow-600 bg-yellow-50";
-      case "info":
-        return "text-blue-600 bg-blue-50";
-      default:
-        // "debug" および未知のレベルは灰色で表示する
-        return "text-slate-600 bg-slate-50";
+  const toggleExpandAll = () => {
+    if (hasExpandedRows) {
+      setExpandedRows(new Set());
+      return;
     }
+    // data を持つ行だけを展開する。識別にはログの連番を使う
+    setExpandedRows(
+      new Set(
+        getLogBuffer()
+          .filter((entry) => entry.data !== undefined)
+          .map((entry) => entry.id),
+      ),
+    );
   };
 
-  // 最初のログのタイムスタンプ
-  const [firstLog] = logBuffer;
-  const firstTimestamp = firstLog !== undefined ? firstLog.timestamp : 0;
+  const clearLogs = () => {
+    clearLog();
+    // 捨てたログの状態を残さない
+    setExpandedRows(new Set());
+    setViewModes(new Map());
+  };
+
+  // 一括コピー: 全ログ
+  const copyAllLogs = useCallback(async () => {
+    await buttonFeedback.copy(buildAllExportText(), "all");
+  }, [buttonFeedback]);
+
+  // 一括コピー: Publisher ログ
+  const copyPublisherLogs = useCallback(async () => {
+    await buttonFeedback.copy(buildPublisherExportText(), "publisher");
+  }, [buttonFeedback]);
+
+  // 一括コピー: Subscriber ログ
+  const copySubscriberLogs = useCallback(
+    async (subscriberId: string) => {
+      await buttonFeedback.copy(buildSubscriberExportText(subscriberId), subscriberId);
+    },
+    [buttonFeedback],
+  );
 
   if (!isDebugPanelOpen.value) {
     return null;
@@ -511,7 +196,9 @@ export function DebugPanel() {
       {/* コントロール */}
       <div class="flex items-center justify-between p-3 border-b border-slate-100">
         <div class="flex items-center gap-4 text-sm text-slate-600">
-          <span>Logs: {logCount.value}</span>
+          <span data-testid="debug-log-count">
+            Logs: <DebugLogCount />
+          </span>
         </div>
         <div class="flex items-center gap-3">
           <label class="flex items-center gap-2 text-sm text-slate-600">
@@ -527,7 +214,7 @@ export function DebugPanel() {
             onClick={toggleExpandAll}
             class="w-24 py-1.5 bg-blue-500 hover:bg-blue-600 text-white text-sm font-medium rounded-lg transition-colors"
           >
-            {isAllExpanded ? "Collapse All" : "Expand All"}
+            {hasExpandedRows ? "Collapse All" : "Expand All"}
           </button>
           <button
             onClick={clearLogs}
@@ -543,6 +230,7 @@ export function DebugPanel() {
         <span class="text-sm text-slate-500">Copy for LLM:</span>
         <button
           onClick={copyAllLogs}
+          data-testid="debug-log-copy-all"
           class={`px-3 py-1 text-xs font-medium rounded transition-colors ${
             buttonFeedback.feedback.value === "all"
               ? "bg-green-500 text-white"
@@ -556,6 +244,7 @@ export function DebugPanel() {
         {currentMode !== "subscriber" && (
           <button
             onClick={copyPublisherLogs}
+            data-testid="debug-log-copy-publisher"
             class={`px-3 py-1 text-xs font-medium rounded transition-colors ${
               buttonFeedback.feedback.value === "publisher"
                 ? "bg-green-500 text-white"
@@ -569,6 +258,7 @@ export function DebugPanel() {
           <button
             key={id}
             onClick={() => copySubscriberLogs(id)}
+            data-testid={`debug-log-copy-${id}`}
             class={`px-3 py-1 text-xs font-medium rounded transition-colors ${
               buttonFeedback.feedback.value === id
                 ? "bg-green-500 text-white"
@@ -580,159 +270,15 @@ export function DebugPanel() {
         ))}
       </div>
 
-      {/* ログコンテナ */}
-      <div
-        ref={logContainerRef}
-        class="h-[calc(100vh-190px)] overflow-y-auto p-4 font-mono text-sm"
-      >
-        {logCount.value === 0 ? (
-          <div class="flex items-center justify-center h-full text-slate-400">
-            No logs yet. MOQT operations will appear here.
-          </div>
-        ) : (
-          <div class="space-y-1">
-            {(() => {
-              const elements = [];
-              const logsArray = logBuffer;
-              for (let i = logsArray.length - 1; i >= 0; i--) {
-                const log = logsArray[i];
-                if (log === undefined) {
-                  // ループ境界 (0 <= i < logsArray.length) により到達しない
-                  // (noUncheckedIndexedAccess で型上 undefined を含むための防御)
-                  continue;
-                }
-                // 表示の key と展開状態には配列の添字ではなくログの連番を使う
-                const logId = log.id;
-                const nextLog = i < logsArray.length - 1 ? logsArray[i + 1] : null;
-                const previousTimestamp = nextLog ? nextLog.timestamp : null;
-                const isExpanded = expandedRows.has(logId);
-                elements.push(
-                  <div
-                    key={logId}
-                    class={`rounded cursor-pointer transition-colors hover:ring-2 hover:ring-slate-300 ${getLevelColor(log.level)}`}
-                    onClick={() => toggleRow(logId)}
-                  >
-                    <div class="flex gap-2 p-2 items-center">
-                      {/* 展開アイコン */}
-                      {log.data && (
-                        <svg
-                          class={`w-4 h-4 text-slate-400 transition-transform ${isExpanded ? "rotate-90" : ""}`}
-                          fill="none"
-                          stroke="currentColor"
-                          viewBox="0 0 24 24"
-                        >
-                          <path
-                            stroke-linecap="round"
-                            stroke-linejoin="round"
-                            stroke-width="2"
-                            d="M9 5l7 7-7 7"
-                          />
-                        </svg>
-                      )}
-                      {!log.data && <div class="w-4" />}
-                      {/* タイムスタンプ列 */}
-                      <div class="flex flex-col text-xs whitespace-nowrap min-w-[140px]">
-                        <span class="text-slate-600 font-medium">
-                          {formatAbsoluteTime(log.timestamp)}
-                        </span>
-                        <div class="flex gap-2 text-slate-400">
-                          <span>{formatElapsedTime(log.timestamp, firstTimestamp)}</span>
-                          {previousTimestamp !== null && (
-                            <span class="text-slate-300">
-                              {formatDeltaTime(log.timestamp, previousTimestamp)}
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                      {/* メッセージ */}
-                      <span class="flex-1 break-all">{log.message}</span>
-                      {/* コピーボタン */}
-                      <button
-                        onClick={(event) => copyToClipboard(log, event)}
-                        class="p-1 hover:bg-white/50 rounded transition-colors"
-                        title="Copy to clipboard"
-                      >
-                        {rowFeedback.feedback.value === String(logId) ? (
-                          <svg
-                            class="w-4 h-4 text-green-600"
-                            fill="none"
-                            stroke="currentColor"
-                            viewBox="0 0 24 24"
-                          >
-                            <path
-                              stroke-linecap="round"
-                              stroke-linejoin="round"
-                              stroke-width="2"
-                              d="M5 13l4 4L19 7"
-                            />
-                          </svg>
-                        ) : (
-                          <svg
-                            class="w-4 h-4 text-slate-400 hover:text-slate-600"
-                            fill="none"
-                            stroke="currentColor"
-                            viewBox="0 0 24 24"
-                          >
-                            <path
-                              stroke-linecap="round"
-                              stroke-linejoin="round"
-                              stroke-width="2"
-                              d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"
-                            />
-                          </svg>
-                        )}
-                      </button>
-                    </div>
-                    {/* データ（展開時のみ表示） */}
-                    {(log.data ?? log.payload) && isExpanded && (
-                      <div class="mx-2 mb-2">
-                        {/* タブ */}
-                        {log.payload && (
-                          <div class="flex gap-1 mb-1">
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setViewMode(logId, "data");
-                              }}
-                              class={`px-2 py-0.5 text-xs rounded-t transition-colors ${
-                                getViewMode(logId) === "data"
-                                  ? "bg-white/70 text-slate-700 font-medium"
-                                  : "bg-white/30 text-slate-500 hover:bg-white/50"
-                              }`}
-                            >
-                              Data
-                            </button>
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setViewMode(logId, "binary");
-                              }}
-                              class={`px-2 py-0.5 text-xs rounded-t transition-colors ${
-                                getViewMode(logId) === "binary"
-                                  ? "bg-white/70 text-slate-700 font-medium"
-                                  : "bg-white/30 text-slate-500 hover:bg-white/50"
-                              }`}
-                            >
-                              Binary ({log.payload.length} bytes)
-                            </button>
-                          </div>
-                        )}
-                        {/* コンテンツ */}
-                        <pre class="text-xs p-3 bg-white/70 rounded overflow-auto max-h-96">
-                          {getViewMode(logId) === "binary" && log.payload
-                            ? formatHexDump(log.payload)
-                            : formatMessageData(log.data)}
-                        </pre>
-                      </div>
-                    )}
-                  </div>,
-                );
-              }
-              return elements;
-            })()}
-          </div>
-        )}
-      </div>
+      {/* ログの一覧 */}
+      <DebugLogList
+        expandedRows={expandedRows}
+        viewModes={viewModes}
+        copiedKey={rowFeedback.feedback.value}
+        onToggleRow={toggleRow}
+        onCopyRow={copyRow}
+        onSelectViewMode={selectViewMode}
+      />
     </div>
   );
 }
