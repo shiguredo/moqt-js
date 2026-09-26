@@ -17,7 +17,7 @@
  */
 
 import { summarizeTimings, type TimingSummary } from "./playbackTimingStats";
-import { TimedValues } from "./timedValues";
+import { TimedValues } from "../../../src/timedValues.ts";
 
 /** 分布を求める直近の窓 (ミリ秒) */
 export const PUBLISH_TIMING_WINDOW_MS = 10_000;

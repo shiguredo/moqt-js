@@ -87,7 +87,7 @@ export const useDedicatedWorker = signal(true);
 
 // 購読した映像の jitter buffer 設定
 // true: 復号したフレームを LOC TIMESTAMP (壁時計) の間隔どおりに表示し、到着の揺らぎを
-//       吸収する (デフォルト。utils/playoutBuffer.ts)
+//       吸収する (デフォルト。src/playoutBuffer.ts)
 // false: 届いたタイミングのまま表示する
 export const jitterBufferEnabled = signal(true);
 

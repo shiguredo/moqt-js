@@ -22,7 +22,7 @@
 import { DataStreamErrorCode } from "moqt-js";
 import { LATENCY_SEGMENTS, LatencyBreakdown, type LatencySegment } from "./latencyBreakdown";
 import { STALL_CAUSES, StallAnalyzer, type ObjectPosition, type StallCause } from "./stallAnalysis";
-import { TimedValues } from "./timedValues";
+import { TimedValues } from "../../../src/timedValues.ts";
 
 /** 分布を求める直近の窓 (ミリ秒) */
 export const PLAYBACK_TIMING_WINDOW_MS = 10_000;

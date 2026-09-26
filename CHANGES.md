@@ -67,6 +67,10 @@
   - URL クエリ `mode` で Publisher だけ / Subscriber だけを表示する。ヘッダーの副題に 3 つのモードを並べ、今のモードを示すとともに、他のモードのページを今の接続設定のまま新しいタブで開けるようにする
   - Catalog Timeout と Use Dedicated Worker を URL に載せ、同じ接続設定のページを URL で再現できるようにする
   - @voluntas
+- [UPDATE] `createMediaSubscriber` が映像を LOC TIMESTAMP の間隔で表示する
+  - 表示時刻の計算 (`PlayoutBuffer`) を `src/` に移し、表示周期で描くと決めたフレームだけを `MediaStreamTrackGenerator` に書く
+  - 再生遅延の分だけ、復号した直後に出していた従来より遅れて出る
+  - @voluntas
 - [UPDATE] moqt-devtools の Jitter Buffer を Subscriber の Video に置き、Dedicated Worker の説明を足す
   - Jitter Buffer は映像の LOC TIMESTAMP 再生なので、Audio Output とは別の節にし、節の間に余白を置く
   - Dedicated Worker は映像と音声の encoder と decoder の両方に使う

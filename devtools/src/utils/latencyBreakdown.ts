@@ -20,7 +20,7 @@
  * ブラウザ API に依存しないよう、時刻は呼び出し側が引数で渡す (`performance.now()`)。
  */
 
-import { TimedValues } from "./timedValues";
+import { TimedValues } from "../../../src/timedValues.ts";
 
 /** 区間の並び (表示の順) */
 export const LATENCY_SEGMENTS = [
