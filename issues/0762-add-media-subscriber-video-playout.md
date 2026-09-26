@@ -3,7 +3,7 @@
 - Created: 2026-09-26
 - Completed: {YYYY-MM-DD}
 - Branch: feature/add-media-subscriber-video-playout
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-09-26
 
 ## 目的
 
@@ -15,14 +15,15 @@
 - `devtools/src/hooks/useSubscriber.ts` の `presentFrame` は、jitter buffer が有効で TIMESTAMP が壁時計のときだけ `PlayoutBuffer` に timestamp を渡し、`requestAnimationFrame` で canvas に描く。無効のときは届いた順に 1 周期に 1 枚描く
 - `src/createMediaSubscriber.ts` の `handleVideoDecodedData` は、復号した `VideoFrame` を待たずに `videoWriter.write` する
 - 音声は `handleAudioDecodedData` が `src/audioPlayout.ts` の `AudioPlayoutScheduler` で鳴らす時刻を決める。devtools の音声再生も同じモジュールを使う
-- `createMediaPublisher` は映像の TIMESTAMP を `LOC.toUnixEpochMicroseconds` で壁時計にする
+- `createMediaPublisher` の映像は `WallClockMapper.toWallClockMicroseconds` で壁時計の TIMESTAMP にする。`LOC.toUnixEpochMicroseconds` は音声である (`handleAudioEncodedChunk`)
 - `PlayoutBuffer` は `devtools/src/utils/timedValues.ts` の `TimedValues` を使う。`TimedValues` は devtools の統計 (`playbackTimingStats` / `publishTimingStats` / `latencyBreakdown`) も使っている
 - テストは `devtools/src/utils/playoutBuffer.test.ts` と `devtools/src/utils/playoutBuffer.prop.ts` にある
 
 ## 設計方針
 
 - 表示時刻の計算は `PlayoutBuffer` のままライブラリ (`src/`) に置く。アルゴリズム (基準の遅れ、再生遅延、追いつき、間に合わなかったフレームを捨てる) は変えない。`select` は表示周期ごとに呼ぶ (`devtools` は `requestAnimationFrame`)
-- `MediaStreamTrackGenerator` は `write` したフレームをその時点でトラックへ出す。表示時刻を `VideoFrame.timestamp` に書き換えて先に `write` しても、表示は待つ。`createMediaSubscriber` は `select` が描くと決めたフレームだけを `videoWriter.write` し、表示時刻前のフレームはキューに残す
+- `MediaStreamTrackGenerator` は `write` したフレームをその時点でトラックへ出す。`VideoFrame.timestamp` を表示時刻に書き換えて先に `write` しても、表示は待たない。`createMediaSubscriber` は `PlayoutBuffer.select` が描くと決めたフレームだけを `videoWriter.write` する
+- `select` は表示周期ごとに呼び、キューが残っている間は次の周期も予約する。devtools は `requestAnimationFrame` の `scheduleFrameDrain` がこれを行う。`createMediaSubscriber` も同じで、復号の出力のときだけ `select` しない。次のフレームが届くまで期限を過ぎたフレームが残るためである
 - キューの上限で捨てたフレームと、表示に間に合わず捨てたフレームは `close` する。`write` に成功したフレームは Generator の所有なので閉じない (`handleVideoDecodedData` の今の所有と同じ)
 - フレームをどこへ渡すかは受け側に残す。devtools は canvas、`createMediaSubscriber` は `MediaStreamTrackGenerator`
 - Timescale がある TIMESTAMP と TIMESTAMP の無いフレームは、devtools と同じく壁時計の表示時刻に使わない
@@ -33,7 +34,7 @@
 ## 完了条件
 
 - `PlayoutBuffer` と `TimedValues`、既存の単体テストと PBT が `src/` にあり、devtools はそこを使う。`src/index.ts` には出さない
-- `createMediaSubscriber` は `select` が描くと決めたフレームだけを `videoWriter.write` する。表示時刻前のフレームは書かない
+- `createMediaSubscriber` は、キューが残っている間、表示周期ごとに `select` を呼ぶ。描くと決めたフレームだけを `videoWriter.write` し、表示時刻前のフレームは書かない。復号の出力のときだけの `select` では完了しない
 - 捨てた `VideoFrame` は `close` する。`write` に成功したフレームは閉じない
 - Timescale がある TIMESTAMP と TIMESTAMP の無いフレームは、壁時計の表示時刻に使わない
 - `vp check` / `tsc --noEmit` / `vp test run` が通る
