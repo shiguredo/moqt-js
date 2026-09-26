@@ -54,3 +54,22 @@ function isBase64(value: string): boolean {
     return false;
   }
 }
+
+/** c4m の値に置き換える伏せ字 */
+const C4M_REDACTED = "c4m=<redacted>";
+
+/**
+ * c4m パラメータの値を伏せ字にする
+ *
+ * c4m は Base64 encoded C4M token (CAT) を持つ (draft-ietf-moq-msf-01 §11.1.1)。
+ * デバッグパネルの「Copy for LLM」は不具合の報告のために外部へ貼る前提のため、
+ * 値そのものを載せない。Relay URI は接続に使う値なので signal は変えず、
+ * テキストへ出すときだけこの関数を通す。
+ *
+ * 入力は URL 全体と fragment 単体の両方を受け付ける (`extractC4mBase64` と同じ)。
+ * `extractC4mBase64` は最初の c4m だけを返すが、伏せ字は `c4m=` の出現をすべて潰す。
+ */
+export function maskC4mValue(input: string): string {
+  // parameter-list の区切りは `&` のため、`&` の手前までを値として扱う
+  return input.replaceAll(/c4m=[^&]*/g, C4M_REDACTED);
+}

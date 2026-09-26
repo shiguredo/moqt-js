@@ -265,3 +265,23 @@ test("Debug ボタンのバッジは 100 件以上を 99+ にする", async ({ p
 
   await expect(page.getByTestId("debug-log-badge")).toHaveText("99+");
 });
+
+test("Copy for LLM は Relay URI の c4m (認可トークン) を伏せる", async ({ page }) => {
+  // c4m 付きの Relay URI で開くと、トークンは authorizationTokenBase64 へ取り込まれる。
+  // Relay URI の行と fragment の行に値が出ないことを確かめる
+  const c4mBase64 = "c2VudGluZWwtYzRtLXRva2Vu";
+  const relayUri = `moqt://relay.example/moqt#msf:room-123--video&c4m=${c4mBase64}`;
+  await page.goto(`${DEVTOOLS_URL}?url=${encodeURIComponent(relayUri)}`);
+  await openDebugPanel(page);
+
+  const copyButton = page.getByTestId("debug-log-copy-all");
+  await copyButton.click();
+  await expect(copyButton).toHaveText("Copied!");
+  const text = await page.evaluate(() => navigator.clipboard.readText());
+
+  // 値は伏せ字にし、トークンの Base64 は本文のどこにも出さない
+  expect(text).toContain("c4m=<redacted>");
+  expect(text).not.toContain(c4mBase64);
+  // 取り込んだことは読める
+  expect(text).toContain("authorizationTokenFromC4m: true");
+});
