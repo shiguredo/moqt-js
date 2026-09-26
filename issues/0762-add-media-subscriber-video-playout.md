@@ -1,7 +1,7 @@
 # `createMediaSubscriber` が映像を LOC TIMESTAMP の間隔で表示する
 
 - Created: 2026-09-26
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-26
 - Branch: feature/add-media-subscriber-video-playout
 - Polished: 2026-09-26
 
@@ -38,3 +38,10 @@
 - 捨てた `VideoFrame` は `close` する。`write` に成功したフレームは閉じない
 - Timescale がある TIMESTAMP と TIMESTAMP の無いフレームは、壁時計の表示時刻に使わない
 - `vp check` / `tsc --noEmit` / `vp test run` が通る
+
+## 解決方法
+
+- `PlayoutBuffer` と `TimedValues`、単体テストと PBT を `src/` に移した。devtools の統計と `useSubscriber` はそこを import する。`src/index.ts` には出していない
+- `createMediaSubscriber` の `handleVideoDecodedData` はフレームを `PlayoutBuffer` に積み、`writeDueVideoFrames` が `select` で今描けるものだけを `videoWriter.write` する。表示時刻前のフレームは残し、`requestAnimationFrame` で次の周期も選ぶ
+- Timescale が無い TIMESTAMP だけ壁時計として覚える。捨てたフレームは `close` し、`write` に成功したフレームは閉じない
+- `vp check` / `tsc --noEmit` / `vp test run` (2864 件) が通った
