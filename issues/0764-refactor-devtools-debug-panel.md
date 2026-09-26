@@ -26,18 +26,20 @@ moqt-devtools の DebugPanel (`devtools/src/components/DebugPanel.tsx`) は早�
 
 - ログの蓄積を `devtools/src/signals/debugLog.ts` へ移す。`autoScroll` はパネルの表示状態なので `devtools/src/signals/debug.ts` へ移す。hooks と `App` は signals を import するようになり、components への依存が無くなる
 - `LogEntry` に表示用の整形済みの値を追加し、追記時に 1 回だけ作る (`messageLog.ts` の `StreamMessage.formattedTimestamp` と同じ作法)。経過時間の基準は「ログを消してから最初の 1 件」に固定する (上限到達で古いログを捨てても基準が動かないため、行の表示を作り直さずに済む)
-- Copy for LLM のテキストを `devtools/src/utils/debugExport.ts` へ移す。統計の節は `devtools/src/testApi.ts` のスナップショットから生成し、フィールドを足せばコピー本文にも自動で出る形にする
-- 統計のスナップショット (`PublisherStats` / `SubscriberStats` / `buildPublisherStats` / `buildSubscriberStats`) を `devtools/src/signals/statsSnapshot.ts` へ移し、テスト用 API とコピー本文で 1 つの実装を共有する。現在コピー本文にしか無い情報 (session の `getStatistics()`、catalog、`codec` など) はスナップショット側へ足す
-- 接続設定のスナップショットを 1 つ作り、設定の節はそこから生成する。テストで signal の網羅を固定し、除外する signal は理由を書く
-- 認可トークンの値 (`authorizationTokenValue` / `authorizationTokenBase64`) はコピー本文に載せない。載せたかどうかと種別だけを載せる
+- Copy for LLM のテキストを `devtools/src/utils/debugExportText.ts` (整形の純関数) と `devtools/src/signals/debugExport.ts` (現在の値の収集) へ移す。統計の節はスナップショットから生成し、フィールドを足せばコピー本文にも自動で出る形にする
+- 統計のスナップショット (`PublisherStats` / `SubscriberStats` / `buildPublisherStats` / `buildSubscriberStats`) を `devtools/src/signals/statsSnapshot.ts` へ移し、テスト用 API とコピー本文で 1 つの実装を共有する。現在コピー本文にしか無い情報 (session の `getStatistics()`、catalog、`codec` など) はスナップショット側へ足す。画面のパネルは表示の粒度が合わないため signal を直接読むままにし、統合は別途行う
+- 接続設定のスナップショット (`devtools/src/signals/connectionSettingsSnapshot.ts`) を作り、設定の節はそこから生成する。テストで signal の網羅を固定し、除外する signal は理由を書く (項目の足し忘れを検出する)
+- 認可トークンの値 (`authorizationTokenValue` / `authorizationTokenBase64`) はスナップショットに載せない。載せたかどうかと種別だけを載せる (値そのものが本文へ出る経路の対応は別 issue)
 - 行の表示は `DebugLogRow` に切り出す。見た目と操作 (展開、折りたたみ、行コピー、一括コピー、オートスクロール、Esc) は変えない
 
 ## 完了条件
 
-- hooks と `App` が `components/DebugPanel` を import しない
+- hooks が `components/DebugPanel` からログの状態 (`addLog` / 件数 / `autoScroll`) を import しない (`App` はパネルの描画のためだけに import する)
 - Copy for LLM のテキストに、接続設定・publisher・subscriber のスナップショットにあるすべてのフィールドが出る (テストで固定する)
 - 認可トークンの値はスナップショットに入れず、送るかどうかと種別だけを出す (テストで固定する)。c4m を含む Relay URI と payload の hex dump から値を消すのは別 issue で行う
-- 画面の表示 (行の日時・経過・差分、展開、コピー) が変わらない
+- 画面の表示と操作は次を除いて変えない
+  - 経過時間の基準を「ログを消してから最初の 1 件」にし、上限に達した後も最古の行が `+0.000` に戻らないようにする
+  - 行の差分の符号を直し、`(+-12ms)` ではなく `(+12ms)` と出す
 - `vp check` / `vp exec tsc --noEmit` / `vp exec tsc -p devtools --noEmit` / `vp test run` / `vp run e2e-test` が通る
 
 ## 参照
