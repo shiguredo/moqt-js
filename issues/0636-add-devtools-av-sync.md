@@ -43,6 +43,8 @@ MSF は `renderGroup` が同じ track を「同時に描画するよう設計さ
 - `targetLatency` の解決が純関数 (`src/msf/tracks.ts`) として切り出され、ライブラリと devtools の両方がそれを使っている (規則が 2 か所に無い)。規則の単体テストは純関数を置く `src/msf/tracks.ts` 側 (`src/msf.test.ts`) に置く。固定する規則は 7 通り: 両方に無い / 片方にだけある / 両方にあって同じ / 同じ `renderGroup` で異なる (通知して大きい方) / 同じ `altGroup` で異なる (通知して大きい方) / group が無いか異なる (通知しない) / `isLive` が false のトラックの値を無視する (§5.2.8 の MUST)。上限による切り下げはキュー長とフレーム間隔に依存するため純関数では決まらず、`src/playbackTimeline.test.ts` の既存テストが持つ
 - `targetLatency` 未設定時と `isLive` が false のときのフォールバックが、同じ純関数の単体テストで固定されている (純関数が `null` を返すこと)。`null` を渡された時間軸が揺らぎから求めた再生の遅れだけを使うことは `src/playbackTimeline.test.ts` の既存テストが持つ
 - `window.moqtDevTools` の統計と `data-testid` に同期の 5 項目 (`skewMs` / `presentationDelayMs` / `targetLatencyMs` / `targetLatencyLimitedMs` / `audioClockFallback`) が出る。5 項目は 0635 の `AvSyncStats` と同じ意味にするが、型は devtools の統計の形に合わせる (`skewMs` / `presentationDelayMs` / `targetLatencyMs` は `number | null`、`targetLatencyLimitedMs` は `number` (未購読では 0)、`audioClockFallback` は `boolean` (未購読では false))。E2E (`tests/e2e/`) は「項目が公開され、未購読ではこの既定値であること」を確かめる (relay を起動しないため、同期の数値そのものは単体テストで固定する)
+- 0763 で足した devtools の `Target Latency` / `Render Group` の選択が UI → URL → 復元まで動くことを E2E で確かめる (`tests/e2e/devtools-audio.spec.ts` の音声設定と同じ形。`data-testid` は `target-latency` / `render-group`)。0763 のレビューではこの往復が未カバーだった
+- publisher 側の実機確認として、`Target Latency` を `Unset` / `0` / `100` にして配信し、catalog に載る値がそれぞれ「キーが無い」/ `0` / `100` になることを確かめる (0763 のレビューでは、devtools の設定から catalog への配線のうち実配信の経路が未検証のまま残っている)
 - 同期の数値の導出 (純関数の解決規則、フォールバック、統計の既定値) は単体テストで固定する
 - `vp check` / `tsc --noEmit` / `vp test run` / `vp run e2e-test` が通る
 
