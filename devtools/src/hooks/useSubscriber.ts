@@ -41,8 +41,9 @@ import {
   formatStreamResetCode,
 } from "../utils/playbackTimingStats";
 import { JITTER_BUFFER_MAX_QUEUED_FRAMES, PlayoutBuffer } from "../../../src/playoutBuffer.ts";
+import { PlaybackTimeline } from "../../../src/playbackTimeline.ts";
 import { GroupSwitchGate } from "../../../src/groupSwitchGate.ts";
-import { AudioPlayoutScheduler } from "../../../src/audioPlayout.ts";
+import { AUDIO_PLAYOUT_DELAY_SECONDS, AudioPlayoutScheduler } from "../../../src/audioPlayout.ts";
 import { applyAudioOutputSink } from "../utils/audioOutput";
 import { browserIsChromium, resolvePanelHttpVersion } from "../utils/httpVersion";
 import * as settings from "../signals/connectionSettings";
@@ -524,8 +525,18 @@ export function useSubscriber(
     });
   });
   // 表示待ちのフレーム (jitter buffer) と予約した描画 (presentFrame / clearPendingFrame が
-  // 使う)。購読を始めるたびに設定 (jitterBufferEnabled) に合わせて作り直す
-  const playoutBufferRef = useRef(new PlayoutBuffer<VideoFrame>(MAX_PENDING_FRAMES));
+  // 使う)。購読を始めるたびに設定 (jitterBufferEnabled) に合わせて作り直す。
+  // 表示時刻は共有の時間軸 (src/playbackTimeline.ts) が決める。devtools の音声と映像を
+  // 揃えることは 0636 が行うため、ここでは映像だけを時間軸へ記録する
+  const playoutTimelineRef = useRef(
+    new PlaybackTimeline({
+      timeOriginMs: performance.timeOrigin,
+      maxQueuedFrames: MAX_PENDING_FRAMES,
+    }),
+  );
+  const playoutBufferRef = useRef(
+    new PlayoutBuffer<VideoFrame>(MAX_PENDING_FRAMES, playoutTimelineRef.current),
+  );
   const jitterBufferEnabledRef = useRef(false);
   const frameAnimationRef = useRef<number | null>(null);
   // decoder に渡したフレームの TIMESTAMP の種類 (chunk の timestamp で引く)。
@@ -601,8 +612,15 @@ export function useSubscriber(
     for (const frame of playoutBufferRef.current.clear()) {
       frame.close();
     }
+    // キューの上限が変わるため、時間軸も作り直す (表示の遅れの上限がキューから決まる)
+    const maxQueuedFrames = enabled ? JITTER_BUFFER_MAX_QUEUED_FRAMES : MAX_PENDING_FRAMES;
+    playoutTimelineRef.current = new PlaybackTimeline({
+      timeOriginMs: performance.timeOrigin,
+      maxQueuedFrames,
+    });
     playoutBufferRef.current = new PlayoutBuffer<VideoFrame>(
-      enabled ? JITTER_BUFFER_MAX_QUEUED_FRAMES : MAX_PENDING_FRAMES,
+      maxQueuedFrames,
+      playoutTimelineRef.current,
     );
     videoTimestampKindsRef.current.clear();
     playbackTimingTimerRef.current = setInterval(() => {
@@ -984,6 +1002,13 @@ export function useSubscriber(
         playback.context.currentTime,
         audioData.timestamp,
         numberOfFrames / audioData.sampleRate,
+        {
+          // devtools の音声と映像を揃えるのは 0636。ここでは今までどおり到着基準で並べる
+          targetStartSeconds: null,
+          enforceTarget: false,
+          delaySeconds: AUDIO_PLAYOUT_DELAY_SECONDS,
+          presentationDelaySeconds: AUDIO_PLAYOUT_DELAY_SECONDS,
+        },
       );
       if (playback.playout.rebases !== rebasesBefore) {
         instance.audioPlayoutRebases.value += 1;
@@ -1049,7 +1074,15 @@ export function useSubscriber(
     kinds.delete(frame.timestamp);
     const wallClockTimestamp =
       jitterBufferEnabledRef.current && kind === "wallClock" ? frame.timestamp : null;
-    const overflow = playoutBufferRef.current.enqueue(frame, performance.now(), wallClockTimestamp);
+    if (wallClockTimestamp !== null) {
+      // 復号の出力を共有の時間軸へ記録する (音声と同じ式で表示時刻を決める)
+      playoutTimelineRef.current.observe(
+        "video",
+        performance.timeOrigin + performance.now(),
+        wallClockTimestamp,
+      );
+    }
+    const overflow = playoutBufferRef.current.enqueue(frame, wallClockTimestamp);
     for (const dropped of overflow) {
       // あふれて捨てたフレームは表示されないため数える (timestamp は close の前に読む)
       playbackTimingRef.current.recordQueueDrop(dropped.timestamp);

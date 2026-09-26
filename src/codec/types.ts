@@ -56,10 +56,33 @@ export interface MediaStats {
   video: VideoStats | null;
 }
 
+// 受信側の音声と映像の同期の推定値
+export interface AvSyncStats {
+  // 同期ずれの推定値 (ms)。映像の表示が音声より遅れていれば正。
+  // 音声は予約した時刻、映像は write した時刻の実績から求める (実際に音が出るまでの
+  // 出力遅延と、映像が表示されるまでの表示周期の遅れは含まない)。
+  // どちらかの実績が 1 秒より古いときは null
+  skewMs: number | null;
+  // 表示の遅れ (ms)。TIMESTAMP から表示時刻までの差で、時計のずれの分だけ負にもなる。
+  // 基準が未確立なら null
+  presentationDelayMs: number | null;
+  // catalog から解決した目標遅延 (ms)。無い、または使えないときは null。
+  // 実際に表示の遅れに使う値は、上限に収まらない分 (targetLatencyLimitedMs) を
+  // 切り下げた値になる
+  targetLatencyMs: number | null;
+  // 表示の遅れの上限に収まらず切り下げた分 (ms)
+  targetLatencyLimitedMs: number;
+  // AudioContext.getOutputTimestamp() を使えず currentTime で代用しているか
+  audioClockFallback: boolean;
+}
+
 // 受信側メディア統計
 export interface MediaReceiverStats {
   audio: AudioReceiverStats | null;
   video: VideoReceiverStats | null;
+  // 音声と映像の同期の推定値。片方しか購読していない、またはどちらかが壁時計の
+  // TIMESTAMP を使えないときは null
+  avSync: AvSyncStats | null;
 }
 
 // オーディオ配信オプション

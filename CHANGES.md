@@ -11,6 +11,10 @@
 
 ## develop
 
+- [CHANGE] `MediaReceiverStats.avSync` を追加する
+  - 音声と映像の同期の推定値 (同期ずれ、表示の遅れ、使っている目標遅延、切り下げた分、時計の代用の有無) を統計で確認できるようにする
+  - `MediaReceiverStats` は公開型のため、この型を自前で構築しているコードは `avSync` の追加が必要になる (後方互換なし)
+  - @voluntas
 - [CHANGE] `Session.reliability` は、ブラウザが `WebTransport.reliability` を出さないとき `undefined` を返す
   - 属性が無いことを、仕様の未確立を表す `"pending"` と区別する。安定版の Chromium は属性を出さない
   - @voluntas
@@ -21,6 +25,11 @@
 - [CHANGE] `VideoStats.droppedFrames` を追加する
   - エンコード能力を超えて破棄したフレーム数を統計で確認できるようにする
   - `VideoStats` は公開型のため、この型を自前で構築しているコードは `droppedFrames` の追加が必要になる (後方互換なし)
+  - @voluntas
+- [ADD] 音声と映像を LOC Timestamp と catalog の targetLatency で同期して再生する
+  - 表示時刻を `TIMESTAMP (µs) + 基準の遅れ + max(targetLatency (ms), 揺らぎから求めた再生遅延)` として 1 つの式で求め、`AudioContext` と `performance.now()` の 2 つの時計を `AudioContext.getOutputTimestamp()` で対応づける
+  - `isLive` が false の track の `targetLatency` は無視する (draft-ietf-moq-msf-01 Section 5.2.8 の MUST)。無いとき、および片方にしか無いときは、揺らぎから求めた同じ遅れを使って音声と映像を揃える
+  - `src/playbackTimeline.ts` を追加し、`PlayoutBuffer` は共有の時間軸が決めた表示時刻で選ぶキューにした。`AudioPlayoutScheduler` は時間軸が決めた目標の開始時刻に従い、目標を過ぎた音を捨てる
   - @voluntas
 - [ADD] moqt-devtools の Relay URI を OPFS に覚え、次に開いたときに戻す
   - クエリの `url` があるページではそれを使い、覚えた値は上書きしない。localStorage には書かない

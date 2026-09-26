@@ -6,14 +6,15 @@
  * VideoDecoder と videoStats に伝わること (handleVideoObject)、復号フレーム破棄の
  * 所有権 (handleVideoDecodedData / handleAudioDecodedData)、Catalog 取得失敗後の
  * hygiene、extractTrackInfo の role なし解決と未解決通知、Track Property の
- * VIDEO_CONFIG / AUDIO_CONFIG の初期 configure への反映と保留キューを検証する。
+ * VIDEO_CONFIG / AUDIO_CONFIG の初期 configure への反映と保留キュー、音声と映像の
+ * 表示時刻 (targetLatency の解決、共有の時間軸、AudioContext の時計との換算) を検証する。
  */
 
 import { test, assert } from "vite-plus/test";
 import { MediaSubscriberImpl } from "./createMediaSubscriber";
 import type { FetchOptions, Session } from "./session";
 import type { Subscriber, RequestUpdateOptions } from "./subscriber";
-import type { MediaSubscriberState } from "./codec/types";
+import type { MediaReceiverStats, MediaSubscriberState } from "./codec/types";
 import { TrackPropertyId } from "./properties";
 import type { Fetcher } from "./fetcher";
 import {
@@ -37,6 +38,16 @@ import type { SubgroupStreamEnd } from "./session";
 import { GROUP_SWITCH_HOLD_MS } from "./groupSwitchGate";
 import type { Location } from "./message";
 import { useValueToken } from "./testSupport/helpers";
+import {
+  AUDIO_CLOCK_DEADBAND_MS,
+  AUDIO_PLAYOUT_DELAY_SECONDS,
+  type AudioClockMapping,
+} from "./audioPlayout";
+import {
+  AUDIO_PLAYOUT_DELAY_FLOOR_MS,
+  MAX_PLAYOUT_DELAY_MS,
+  PlaybackTimeline,
+} from "./playbackTimeline";
 
 /** テスト用の最小フルカタログ */
 function makeCatalog(tracks: Catalog["tracks"] = []): Catalog {
@@ -1036,7 +1047,11 @@ test("handleAudioDecodedData: 音声変換成功時は AudioData を閉じて通
     },
   );
   const control = subscriber as unknown as SubscriberFrameControl;
+  // 目標の表示時刻を AudioContext.currentTime の秒へ換算するため、実装は
+  // getOutputTimestamp と currentTime を読む (未開始の状態を表す 0/0 と 0 を返す)
   control.audioContext = {
+    currentTime: 0,
+    getOutputTimestamp: () => ({ contextTime: 0, performanceTime: 0 }),
     createBuffer: () => ({
       copyToChannel: () => {},
     }),
@@ -1544,4 +1559,1230 @@ test("extractTrackInfo: role ありカタログの名前不一致は先頭を採
 
   assert.strictEqual(control.audioTrackInfo?.name, "audio");
   assert.equal(errors.length, 0);
+});
+
+// ============================================================================
+// 音声と映像の表示時刻（draft-ietf-moq-msf-01 §5.2.8 / §5.2.11、
+// draft-ietf-moq-loc-04 §2.3.1.1 / §2.3.1.2、src/playbackTimeline.ts）
+// ============================================================================
+
+/**
+ * 音声と映像の同期の検証用の制御口
+ *
+ * 表示時刻の計算は src/playbackTimeline.ts が持ち、createMediaSubscriber 側は
+ * catalog の targetLatency の解決、共有の時間軸への記録、AudioContext の時計との換算を担う。
+ * AudioContext / AudioData / VideoFrame はブラウザ専用 API であり node 環境に実物がないため、
+ * 既存の検証と同じく記録用の最小オブジェクトを注入する (モジュール置換は行わない)。
+ */
+interface SubscriberAvSyncControl {
+  readonly playbackTimeline: PlaybackTimeline;
+  audioTrackInfo: CatalogTrack | null;
+  videoTrackInfo: CatalogTrack | null;
+  audioContext: AudioContext | null;
+  audioDestination: MediaStreamAudioDestinationNode | null;
+  // 映像の表示時刻の検証で使う書き込み先 (実装は write だけを呼ぶ)
+  videoWriter: WritableStreamDefaultWriter<VideoFrame> | null;
+  // Object から復号へ渡す時刻を確かめるため、デコーダも制御口に含める
+  audioDecoder: {
+    decode(payload: Uint8Array, type: "key" | "delta", timestamp: number, duration: number): void;
+  } | null;
+  audioDecoderConfigured: boolean;
+  audioTimestampKinds: Map<number, "wallClock" | "mediaTime">;
+  videoTimestampKinds: Map<number, "wallClock" | "mediaTime">;
+  audioWallClockSeen: boolean;
+  videoWallClockSeen: boolean;
+  // トラックを解決できているかを検証するため、extractTrackInfo が読む入力も制御口に含める
+  receivedCatalog: Catalog | null;
+  extractTrackInfo(): void;
+  createOutputStream(): void;
+  handleAudioObject(obj: MoqtObject): void;
+  handleAudioDecodedData(data: { data: AudioData }): void;
+  handleVideoDecodedData(data: { frame: VideoFrame }): void;
+}
+
+// テストで使う targetLatency と許容幅
+// 目標の表示時刻の計算に再生遅延の下限 (80 ms) ではなく targetLatency を使わせる値
+const AV_SYNC_TARGET_LATENCY_MS = 120;
+// 上限 (MAX_PLAYOUT_DELAY_MS) を超える targetLatency (切り下げの検証用)
+const AV_SYNC_TOO_LARGE_TARGET_LATENCY_MS = MAX_PLAYOUT_DELAY_MS + 100;
+// ミリ秒の換算の丸め (Number の倍精度はミリ秒で 0.25 ms 程度) と実時間の進行を吸収する幅
+const AV_SYNC_TOLERANCE_MS = 5;
+/**
+ * 表示時刻の到来を待つ上限 (ミリ秒)
+ *
+ * 表示時刻は `performance.now()` の軸で決まるため実時間を待つ必要がある。待ち続けて
+ * テストが止まらないように上限を置く
+ */
+const AV_SYNC_WAIT_TIMEOUT_MS = 2_000;
+/**
+ * 観測の時刻 (`performance.timeOrigin + performance.now()`、ミリ秒) の壁時計の TIMESTAMP
+ *
+ * この値を持つのと同じ時刻で観測すると基準の遅れ (受信側と送信側の時計のずれ) が 0 になり、
+ * 表示時刻が「観測の時刻 + 表示の遅れ」になる。映像の表示時刻の検証で使う。
+ *
+ * @param observedWallClockMs - 観測に使う時刻 (ミリ秒)
+ */
+function wallClockTimestampMicrosOf(observedWallClockMs: number): number {
+  return Math.round(observedWallClockMs * 1_000);
+}
+
+/**
+ * 対応の `contextTime` を時刻の基準にした、壁時計の TIMESTAMP (Unix epoch マイクロ秒)
+ *
+ * この TIMESTAMP を対応と同じ時刻で観測すると、基準の遅れ (受信側と送信側の時計のずれ) が
+ * 音声の出力遅延の分だけ負になり、表示時刻が「TIMESTAMP + 表示の遅れ」として読める。
+ *
+ * @param mapping - `getOutputTimestamp()` が返す対応
+ */
+function wallClockTimestampMicrosFor(mapping: AudioClockMapping): number {
+  return Math.round(mapping.contextTime * 1_000_000);
+}
+
+/**
+ * 音声の時計の基準にする時刻 (`performance.now()` のミリ秒)
+ *
+ * `getOutputTimestamp()` の `performanceTime` は `performance.now()` と同じ原点の時刻である
+ * (https://webaudio.github.io/web-audio-api/#dom-audiocontext-getoutputtimestamp)。
+ * テストはこの 1 点を基準に、対応の値と `AudioContext.currentTime` を組み立てる。
+ */
+function avSyncReferenceMs(): number {
+  return performance.now();
+}
+
+/**
+ * `getOutputTimestamp()` が返す対応が持つ、音声の出力遅延 (ミリ秒)
+ *
+ * 実物は数十 ms である (https://webaudio.github.io/web-audio-api/#dom-audiocontext-getoutputtimestamp)。
+ * テストではこの値の対応を作り、`AudioContext.currentTime` と組み合わせて目標の表示時刻を
+ * AudioContext の秒へ換算させる
+ */
+const AV_SYNC_AUDIO_DEVICE_DELAY_MS = 100;
+
+/**
+ * `getOutputTimestamp()` が返す対応 (基準の時刻から作る)
+ *
+ * 差 (`contextTime` - `performanceTime` / 1000) は音声の出力遅延であり、数十 ms である。
+ *
+ * @param referenceMs - 基準の時刻 (`performance.now()` のミリ秒)
+ */
+function audioClockMappingAt(referenceMs: number): AudioClockMapping {
+  return {
+    // 差 (contextTime * 1000 - performanceTime) がそのまま音声の出力遅延になる
+    contextTime: referenceMs / 1_000 + AV_SYNC_AUDIO_DEVICE_DELAY_MS / 1_000,
+    performanceTime: referenceMs,
+  };
+}
+
+/** 音声の壁時計の TIMESTAMP を観測済みにする (avSync を出せる条件を満たす) */
+function markWallClockObserved(control: SubscriberAvSyncControl): void {
+  control.audioWallClockSeen = true;
+  control.videoWallClockSeen = true;
+}
+
+/**
+ * catalog を解決して共有の targetLatency を決める
+ *
+ * extractTrackInfo が音声と映像の track info を解決し、その値から targetLatency を
+ * 1 つ決めて時間軸へ渡す経路をそのまま駆動する。
+ */
+function resolveSharedTargetLatency(
+  control: SubscriberAvSyncControl,
+  catalog: Catalog,
+): MediaReceiverStats {
+  control.receivedCatalog = catalog;
+  control.extractTrackInfo();
+  return (control as unknown as { getStats(): MediaReceiverStats }).getStats();
+}
+
+/** targetLatency の検証に使う track の宣言 */
+interface TargetLatencyTrackOptions {
+  isLive: boolean;
+  targetLatency?: number;
+  renderGroup?: number;
+  altGroup?: number;
+}
+
+/** 宣言どおりの CatalogTrack を作る (exactOptionalPropertyTypes のため値がある場合だけ載せる) */
+function makeTargetLatencyTrack(name: string, options: TargetLatencyTrackOptions): CatalogTrack {
+  return {
+    name,
+    packaging: "loc",
+    isLive: options.isLive,
+    ...(options.targetLatency === undefined ? {} : { targetLatency: options.targetLatency }),
+    ...(options.renderGroup === undefined ? {} : { renderGroup: options.renderGroup }),
+    ...(options.altGroup === undefined ? {} : { altGroup: options.altGroup }),
+  };
+}
+
+/** 音声と映像の track を持つ最小カタログ (role は省略し、名前一致で解決させる) */
+function makeAudioVideoCatalog(
+  audio: TargetLatencyTrackOptions,
+  video: TargetLatencyTrackOptions,
+): Catalog {
+  return makeCatalog([
+    makeTargetLatencyTrack("audio", audio),
+    makeTargetLatencyTrack("video", video),
+  ]);
+}
+
+/**
+ * 音声と映像の両方を購読している MediaSubscriber を作る
+ *
+ * 目標の表示時刻は「音声と映像の両方を購読している」ときだけ使うため、
+ * 同期の検証はこの購読で行う。
+ */
+function createAvSyncSubscriber(): {
+  subscriber: MediaSubscriberImpl;
+  control: SubscriberAvSyncControl;
+  errors: Error[];
+} {
+  const errors: Error[] = [];
+  const subscriber = new MediaSubscriberImpl(
+    "moqt://example.com/live",
+    { namespace: ["live"], audio: {}, video: {} },
+    {
+      onError: (error) => {
+        errors.push(error);
+      },
+    },
+  );
+  return { subscriber, control: subscriber as unknown as SubscriberAvSyncControl, errors };
+}
+
+/**
+ * draft-ietf-moq-msf-01 §5.2.8:
+ * 両方のトラックに `targetLatency` があり、同じ `renderGroup` で値も同じなら、
+ * その値をそのまま使う。
+ */
+test("targetLatency: 両方にあって同じ値ならその値を使う", () => {
+  const { control, errors } = createAvSyncSubscriber();
+  markWallClockObserved(control);
+  const stats = resolveSharedTargetLatency(
+    control,
+    makeAudioVideoCatalog(
+      { isLive: true, targetLatency: AV_SYNC_TARGET_LATENCY_MS, renderGroup: 1 },
+      { isLive: true, targetLatency: AV_SYNC_TARGET_LATENCY_MS, renderGroup: 1 },
+    ),
+  );
+
+  assert.equal(errors.length, 0);
+  assert.equal(stats.avSync?.targetLatencyMs, AV_SYNC_TARGET_LATENCY_MS);
+  assert.equal(stats.avSync?.targetLatencyLimitedMs, 0);
+  // 解決の経路が 1 つの値を使うことの陽性対照 (時間軸へ渡っていることを読む)
+  assert.equal(control.playbackTimeline.targetLatencyMs, AV_SYNC_TARGET_LATENCY_MS);
+  assert.equal(stats.avSync?.skewMs, null);
+});
+
+/**
+ * draft-ietf-moq-msf-01 §5.2.8:
+ * 同じ `renderGroup` のトラックが異なる `targetLatency` を持つのは MUST 違反であり、
+ * `onError` で通知する。使う値は大きい方にする (小さい方の要求より早く出さない)。
+ */
+test("targetLatency: 同じ renderGroup で異なる値なら onError を通知して大きい方を使う", () => {
+  const { control, errors } = createAvSyncSubscriber();
+  markWallClockObserved(control);
+  const largerMs = AV_SYNC_TARGET_LATENCY_MS + 80;
+  const stats = resolveSharedTargetLatency(
+    control,
+    makeAudioVideoCatalog(
+      { isLive: true, targetLatency: AV_SYNC_TARGET_LATENCY_MS, renderGroup: 1 },
+      { isLive: true, targetLatency: largerMs, renderGroup: 1 },
+    ),
+  );
+
+  // 違反の通知は 1 回だけ
+  assert.equal(errors.length, 1);
+  assert.match(errors[0].message, /targetLatency differs between tracks in the same render group/);
+  assert.equal(stats.avSync?.targetLatencyMs, largerMs);
+  assert.equal(control.playbackTimeline.targetLatencyMs, largerMs);
+});
+
+/**
+ * draft-ietf-moq-msf-01 §5.2.8:
+ * 異なる `renderGroup` のトラックは同じ値でなければならない MUST の対象ではないため、
+ * 通知しない。値が 1 つに決まることは同じなので大きい方を使う。
+ */
+test("targetLatency: renderGroup も altGroup も無いか異なるときは通知しない", () => {
+  const { control, errors } = createAvSyncSubscriber();
+  markWallClockObserved(control);
+  const largerMs = AV_SYNC_TARGET_LATENCY_MS + 80;
+  const stats = resolveSharedTargetLatency(
+    control,
+    makeAudioVideoCatalog(
+      { isLive: true, targetLatency: AV_SYNC_TARGET_LATENCY_MS, renderGroup: 1 },
+      { isLive: true, targetLatency: largerMs, renderGroup: 2 },
+    ),
+  );
+
+  assert.equal(errors.length, 0);
+  assert.equal(stats.avSync?.targetLatencyMs, largerMs);
+});
+
+/**
+ * draft-ietf-moq-msf-01 §5.2.8:
+ * 異なる `renderGroup` でも `altGroup` が同じなら同じ値でなければならない MUST の
+ * 対象であるため、通知する。
+ */
+test("targetLatency: altGroup が同じで異なる値なら onError を通知する", () => {
+  const { control, errors } = createAvSyncSubscriber();
+  markWallClockObserved(control);
+  const largerMs = AV_SYNC_TARGET_LATENCY_MS + 80;
+  const stats = resolveSharedTargetLatency(
+    control,
+    makeAudioVideoCatalog(
+      { isLive: true, targetLatency: AV_SYNC_TARGET_LATENCY_MS, altGroup: 3 },
+      { isLive: true, targetLatency: largerMs, altGroup: 3 },
+    ),
+  );
+
+  assert.equal(errors.length, 1);
+  assert.equal(stats.avSync?.targetLatencyMs, largerMs);
+});
+
+/**
+ * draft-ietf-moq-msf-01 §5.2.8:
+ * 片方にしか `targetLatency` が無いときは、もう片方は遅延を選んでよい (MAY) ため、
+ * あるほうの値を使って揃える。
+ */
+test("targetLatency: 片方にだけあるときはその値を使う", () => {
+  const { control, errors } = createAvSyncSubscriber();
+  markWallClockObserved(control);
+  const stats = resolveSharedTargetLatency(
+    control,
+    makeAudioVideoCatalog(
+      { isLive: true },
+      { isLive: true, targetLatency: AV_SYNC_TARGET_LATENCY_MS },
+    ),
+  );
+
+  assert.equal(errors.length, 0);
+  assert.equal(stats.avSync?.targetLatencyMs, AV_SYNC_TARGET_LATENCY_MS);
+  assert.equal(control.playbackTimeline.targetLatencyMs, AV_SYNC_TARGET_LATENCY_MS);
+});
+
+/**
+ * draft-ietf-moq-msf-01 §5.2.8:
+ * `renderGroup` が異なっても `altGroup` が同じなら同じ値でなければならない MUST の
+ * 対象であるため、通知する。`renderGroup` が同じで `altGroup` が異なる場合も同じである。
+ */
+test("targetLatency: 片方の group だけが同じで異なる値なら onError を通知する", () => {
+  const errors: Error[] = [];
+  const subscriber = new MediaSubscriberImpl(
+    "moqt://example.com/live",
+    { namespace: ["live"], audio: {}, video: {} },
+    {
+      onError: (error) => {
+        errors.push(error);
+      },
+    },
+  );
+  const control = subscriber as unknown as SubscriberAvSyncControl;
+  markWallClockObserved(control);
+  const largerMs = AV_SYNC_TARGET_LATENCY_MS + 80;
+
+  // renderGroup が異なり altGroup が同じ (altGroup の MUST に触れる)
+  const statsViaAltGroup = resolveSharedTargetLatency(
+    control,
+    makeAudioVideoCatalog(
+      { isLive: true, targetLatency: AV_SYNC_TARGET_LATENCY_MS, renderGroup: 1, altGroup: 3 },
+      { isLive: true, targetLatency: largerMs, renderGroup: 2, altGroup: 3 },
+    ),
+  );
+  assert.equal(errors.length, 1);
+  assert.equal(statsViaAltGroup.avSync?.targetLatencyMs, largerMs);
+
+  // renderGroup が同じで altGroup が異なる (renderGroup の MUST に触れる)
+  const statsViaRenderGroup = resolveSharedTargetLatency(
+    control,
+    makeAudioVideoCatalog(
+      { isLive: true, targetLatency: AV_SYNC_TARGET_LATENCY_MS, renderGroup: 1, altGroup: 3 },
+      { isLive: true, targetLatency: largerMs, renderGroup: 1, altGroup: 4 },
+    ),
+  );
+  assert.equal(errors.length, 2);
+  assert.equal(statsViaRenderGroup.avSync?.targetLatencyMs, largerMs);
+});
+
+/** 上のテストの逆 (音声にだけある場合) も同じ扱いになる */
+test("targetLatency: 音声にだけあるときもその値を使う", () => {
+  const { control, errors } = createAvSyncSubscriber();
+  markWallClockObserved(control);
+  const stats = resolveSharedTargetLatency(
+    control,
+    makeAudioVideoCatalog(
+      { isLive: true, targetLatency: AV_SYNC_TARGET_LATENCY_MS },
+      { isLive: true },
+    ),
+  );
+
+  assert.equal(errors.length, 0);
+  assert.equal(stats.avSync?.targetLatencyMs, AV_SYNC_TARGET_LATENCY_MS);
+  assert.equal(control.playbackTimeline.targetLatencyMs, AV_SYNC_TARGET_LATENCY_MS);
+});
+
+/**
+ * draft-ietf-moq-msf-01 §5.2.8:
+ * `isLive` が false のトラックの `targetLatency` は無視する MUST。片方が false なら
+ * 使える値はもう片方だけになり、両方が false なら `targetLatency` を使わない。
+ */
+test("targetLatency: isLive が false のトラックの値は無視する", () => {
+  const { control, errors } = createAvSyncSubscriber();
+  markWallClockObserved(control);
+  // 映像だけ isLive が false のため、音声の値が使われる (無視しなければ大きい方を選ぶ)
+  const largerMs = AV_SYNC_TARGET_LATENCY_MS + 80;
+  const stats = resolveSharedTargetLatency(
+    control,
+    makeAudioVideoCatalog(
+      { isLive: true, targetLatency: AV_SYNC_TARGET_LATENCY_MS },
+      { isLive: false, targetLatency: largerMs },
+    ),
+  );
+
+  assert.equal(errors.length, 0);
+  assert.equal(stats.avSync?.targetLatencyMs, AV_SYNC_TARGET_LATENCY_MS);
+});
+
+test("targetLatency: 両方 isLive が false なら targetLatency を使わない", () => {
+  const { control, errors } = createAvSyncSubscriber();
+  markWallClockObserved(control);
+  const stats = resolveSharedTargetLatency(
+    control,
+    makeAudioVideoCatalog(
+      { isLive: false, targetLatency: AV_SYNC_TARGET_LATENCY_MS },
+      { isLive: false, targetLatency: AV_SYNC_TARGET_LATENCY_MS },
+    ),
+  );
+
+  assert.equal(errors.length, 0);
+  assert.isNull(stats.avSync?.targetLatencyMs);
+  assert.isNull(control.playbackTimeline.targetLatencyMs);
+});
+
+/**
+ * 完了条件: 表示の遅れの上限 (`MAX_PLAYOUT_DELAY_MS` とキューが吸収できる長さの小さい方) を
+ * 超える `targetLatency` は切り下げ、切り下げた分を統計に出す (同期は保たれる)。
+ * 上限は基準の遅れではなく「表示の遅れ - 基準の遅れ」に掛かるため、ここでは学習が無い
+ * (フレーム間隔が不明な) 状態の `MAX_PLAYOUT_DELAY_MS` が上限になる。
+ */
+test("targetLatency: 上限を超える値は切り下げて切り下げた分を統計に出す", () => {
+  const { control, errors } = createAvSyncSubscriber();
+  markWallClockObserved(control);
+  const stats = resolveSharedTargetLatency(
+    control,
+    makeAudioVideoCatalog(
+      {
+        isLive: true,
+        targetLatency: AV_SYNC_TOO_LARGE_TARGET_LATENCY_MS,
+        renderGroup: 1,
+      },
+      {
+        isLive: true,
+        targetLatency: AV_SYNC_TOO_LARGE_TARGET_LATENCY_MS,
+        renderGroup: 1,
+      },
+    ),
+  );
+
+  assert.equal(errors.length, 0);
+  // 使っている値は宣言のままで、表示の遅れに掛ける分だけが切り下がる
+  assert.equal(stats.avSync?.targetLatencyMs, AV_SYNC_TOO_LARGE_TARGET_LATENCY_MS);
+  assert.equal(
+    stats.avSync?.targetLatencyLimitedMs,
+    AV_SYNC_TOO_LARGE_TARGET_LATENCY_MS - MAX_PLAYOUT_DELAY_MS,
+  );
+});
+
+/**
+ * `avSync` を出せない条件を固定する。片方だけの購読では揃える相手がいないため出さず、
+ * トラックがカタログで解決できていないときも出さない。
+ */
+test("avSync: 音声だけの購読では null になる", () => {
+  const errors: Error[] = [];
+  const subscriber = new MediaSubscriberImpl(
+    "moqt://example.com/live",
+    { namespace: ["live"], audio: {} },
+    {
+      onError: (error) => {
+        errors.push(error);
+      },
+    },
+  );
+  const control = subscriber as unknown as SubscriberAvSyncControl;
+  markWallClockObserved(control);
+  const stats = resolveSharedTargetLatency(
+    control,
+    makeCatalog([
+      makeTargetLatencyTrack("audio", {
+        isLive: true,
+        targetLatency: AV_SYNC_TARGET_LATENCY_MS,
+      }),
+    ]),
+  );
+
+  assert.equal(errors.length, 0);
+  assert.isNull(stats.avSync);
+});
+
+test("avSync: トラックがカタログで解決できていないときは null になる", () => {
+  const { control, errors } = createAvSyncSubscriber();
+  markWallClockObserved(control);
+  // 映像のトラックがカタログに無い
+  const stats = resolveSharedTargetLatency(
+    control,
+    makeCatalog([
+      makeTargetLatencyTrack("audio", {
+        isLive: true,
+        targetLatency: AV_SYNC_TARGET_LATENCY_MS,
+      }),
+    ]),
+  );
+
+  // 解決できなかったことは onError で通知される (null は値の型で表す)
+  assert.equal(errors.length, 1);
+  assert.isNull(control.videoTrackInfo);
+  assert.isNull(stats.avSync);
+});
+
+/**
+ * 壁時計の TIMESTAMP を観測していないトラックがあると、表示時刻を決められない
+ * (音声の timestamp がメディア時刻になる) ため `avSync` を出さない。トラックの解決と
+ * 片方の観測だけでは出ないことを固定する。
+ */
+test("avSync: 壁時計の TIMESTAMP を観測していないときは null になる", () => {
+  const { control, errors } = createAvSyncSubscriber();
+  // 映像だけ観測済みにする
+  control.videoWallClockSeen = true;
+  const stats = resolveSharedTargetLatency(
+    control,
+    makeAudioVideoCatalog(
+      { isLive: true, targetLatency: AV_SYNC_TARGET_LATENCY_MS },
+      { isLive: true, targetLatency: AV_SYNC_TARGET_LATENCY_MS },
+    ),
+  );
+
+  assert.equal(errors.length, 0);
+  assert.isNull(stats.avSync);
+});
+
+/**
+ * 音声の予約のときに測った値
+ *
+ * 実装は `getOutputTimestamp()` を読んだ時点の `performance.now()` で目標の表示時刻を
+ * 求める (src/createMediaSubscriber.ts の handleAudioDecodedData)。テスト側でも
+ * `getOutputTimestamp()` の中で同じ時点の値を測るため、実時間の進行に依存しない。
+ */
+interface AudioReservation {
+  /** `getOutputTimestamp()` を読んだ時点の `performance.now()` (ミリ秒) */
+  readAtMs: number;
+  /** その時点で実装が使う目標の表示時刻 (`performance.now()` のミリ秒) */
+  presentationMs: number;
+  /** その時点の `AudioContext.currentTime` (秒) */
+  currentTimeSeconds: number;
+  /** `start(when)` に渡った値 (秒)。目標を過ぎて捨てられた音では空になる */
+  startedAtSeconds: number[];
+  /** 音声の出力遅延 (ミリ秒)。`getOutputTimestamp()` の対応から求める */
+  deviceDelayMs: number;
+}
+
+/**
+ * 予約時刻の期待値 (ミリ秒)。目標の表示時刻と音声の出力遅延の和になる
+ *
+ * @param reservation - 予約のときに測った値
+ */
+function expectedStartMs(reservation: AudioReservation): number {
+  return reservation.presentationMs + reservation.deviceDelayMs;
+}
+
+/**
+ * 「目標の表示時刻 + 音声の出力遅延」と予約時刻の許容幅 (ミリ秒)
+ *
+ * 目標の表示時刻は `performance.now()` の軸で決まるため、実装が目標を求めてから
+ * `start(when)` を呼ぶまでの実時間の進行 (数ミリ秒から数十ミリ秒) だけ予約時刻が先になる。
+ * 目標の表示時刻を測る位置をずらしても変わらない値で確かめるため、この幅を持たせる
+ */
+const AV_SYNC_START_TOLERANCE_MS = 50;
+
+/**
+ * 音声を 1 つ鳴らし、予約のときに測った値と `start(when)` を記録する
+ *
+ * 音声の出力 (AudioContext / MediaStreamAudioDestinationNode) と track info は
+ * ブラウザ専用 API であり node 環境に実物がないため、既存の検証と同じく記録用の
+ * 最小オブジェクトを注入する (モジュール置換は行わない)。
+ *
+ * `currentTime` は予約の間ずっと同じ値を返す (実装は 1 つの音につき 1 回だけ読む)。値は
+ * 目標の表示時刻より少し前になるようにする。目標の表示時刻は `performance.now()` の軸で
+ * 決まるため、実時間の進行に任せると目標を過ぎて音が捨てられ得るためである。
+ *
+ * @param control - 駆動する MediaSubscriber
+ * @param timestampMicros - AudioData の timestamp
+ * @param mapping - この予約のときの `getOutputTimestamp()`。null なら未開始 (0/0)
+ * @param currentTimeSeconds - この予約のときの `AudioContext.currentTime` (秒)。
+ *   省略時は目標の表示時刻から組み立てる
+ */
+function playAudioFrame(
+  control: SubscriberAvSyncControl,
+  timestampMicros: number,
+  mapping: AudioClockMapping | null,
+  currentTimeSeconds?: number,
+): AudioReservation {
+  // 音声のトラックが解決できている状態にする (購読が揃っていることの条件)
+  control.audioTrackInfo = {
+    name: "audio",
+    packaging: "loc",
+    isLive: true,
+    codec: "opus",
+    samplerate: 48_000,
+    channelConfig: "2",
+  };
+  // 未開始の対応は 0/0 を返す (実物と同じ)
+  const effectiveMapping: AudioClockMapping = mapping ?? { contextTime: 0, performanceTime: 0 };
+  // 「今」は 1 点で測る (測る位置が違うと目標の表示時刻との差がぶれる)
+  const nowMs = performance.now();
+  const reservation: AudioReservation = {
+    readAtMs: nowMs,
+    presentationMs: 0,
+    // `currentTime` は対応の `contextTime` と同じ座標であり、対応を取った後も進む。
+    // 明示されないときは下で対応から組み立てる
+    currentTimeSeconds: currentTimeSeconds ?? 0,
+    startedAtSeconds: [],
+    // 対応が無い (未開始) ときは音声の出力遅延も無い
+    deviceDelayMs:
+      mapping === null
+        ? 0
+        : effectiveMapping.contextTime * 1_000 - effectiveMapping.performanceTime,
+  };
+  control.audioContext = {
+    get currentTime() {
+      return reservation.currentTimeSeconds;
+    },
+    getOutputTimestamp: () => {
+      reservation.presentationMs =
+        control.playbackTimeline.presentationPerformanceMs("audio", timestampMicros) ?? 0;
+      return effectiveMapping;
+    },
+    createBuffer: () => ({ copyToChannel: () => {} }),
+    createBufferSource: () => ({
+      buffer: null,
+      connect: () => {},
+      start: (when: number) => {
+        reservation.startedAtSeconds.push(when);
+      },
+    }),
+  } as unknown as AudioContext;
+  control.audioDestination = {} as MediaStreamAudioDestinationNode;
+  if (currentTimeSeconds === undefined) {
+    // 目標の表示時刻があるときは、その少し前 (不感帯の半分) を「今」にする。目標の時刻を
+    // 過ぎず、並べすぎの上限にも届かない位置になる。目標が無いとき (目標を使わない音) は
+    // 到着基準の並べ方になるため、対応から求めた時刻にその遅れを足す
+    const contextTimeSeconds =
+      effectiveMapping.contextTime + (nowMs - effectiveMapping.performanceTime) / 1_000;
+    const targetSeconds = control.playbackTimeline.presentationPerformanceMs(
+      "audio",
+      timestampMicros,
+    );
+    reservation.currentTimeSeconds =
+      targetSeconds === null
+        ? Math.max(contextTimeSeconds, nowMs / 1_000) + AUDIO_PLAYOUT_DELAY_SECONDS
+        : targetSeconds / 1_000 - AUDIO_CLOCK_DEADBAND_MS / 2_000;
+  }
+
+  control.handleAudioDecodedData({
+    data: {
+      numberOfChannels: 1,
+      sampleRate: 48_000,
+      numberOfFrames: 960,
+      timestamp: timestampMicros,
+      copyTo: () => {},
+      close: () => {},
+    } as unknown as AudioData,
+  });
+  return reservation;
+}
+
+/**
+ * 完了条件: 音声の予約時刻は、共有の時間軸が決めた目標の表示時刻
+ * (`Timestamp + 基準の遅れ + max(targetLatency, 再生遅延)`) を
+ * `getOutputTimestamp` の `{ contextTime, performanceTime }` で `AudioContext.currentTime` の
+ * 秒へ換算した値になる。実物と同じく `contextTime` と `performanceTime` を一致させ、
+ * 予約のたびに取り直しても対応が変わらない状態で確かめる。
+ */
+test("handleAudioDecodedData: 対応が無いときは目標の表示時刻を換算できない", () => {
+  const { control, errors } = createAvSyncSubscriber();
+  control.receivedCatalog = makeAudioVideoCatalog(
+    { isLive: true, targetLatency: AV_SYNC_TARGET_LATENCY_MS },
+    { isLive: true, targetLatency: AV_SYNC_TARGET_LATENCY_MS },
+  );
+  control.extractTrackInfo();
+  // 対応と、その対応を基準にした TIMESTAMP を同じ時刻で観測する
+  const mapping = audioClockMappingAt(avSyncReferenceMs());
+  const wallClockTimestamp = wallClockTimestampMicrosFor(mapping);
+  const observedWallClockMs = performance.timeOrigin + performance.now();
+  control.playbackTimeline.observe("audio", observedWallClockMs, wallClockTimestamp);
+  control.playbackTimeline.observe("video", observedWallClockMs, wallClockTimestamp);
+  control.audioTimestampKinds.set(wallClockTimestamp, "wallClock");
+
+  // getOutputTimestamp が未開始 (0/0) のときは対応が無いため、目標の表示時刻を
+  // AudioContext の秒へ換算できない (音声の出力遅延も無い)
+  const reservation = playAudioFrame(control, wallClockTimestamp, null);
+
+  assert.equal(reservation.deviceDelayMs, 0);
+  assert.isAbove(reservation.presentationMs, 0);
+  // 対応が無いので、この音は到着基準 (今 + 再生の遅れ) で予約される
+  assert.equal(reservation.startedAtSeconds.length, 1);
+  const startedAtMs = (reservation.startedAtSeconds[0] ?? 0) * 1_000;
+  const playoutDelayMs = control.playbackTimeline.playoutDelayMs ?? AUDIO_PLAYOUT_DELAY_FLOOR_MS;
+  assert.isAbove(startedAtMs, reservation.currentTimeSeconds * 1_000);
+  assert.isAtMost(
+    startedAtMs,
+    reservation.currentTimeSeconds * 1_000 + playoutDelayMs + AV_SYNC_START_TOLERANCE_MS,
+  );
+  assert.equal(errors.length, 0);
+});
+
+/**
+ * 完了条件: 音声の予約時刻は、共有の時間軸が決めた目標の表示時刻
+ * (`Timestamp + 基準の遅れ + max(targetLatency, 再生遅延)`) を
+ * `getOutputTimestamp` の `{ contextTime, performanceTime }` で `AudioContext.currentTime` の
+ * 秒へ換算した値になる。
+ */
+test("handleAudioDecodedData: 目標の表示時刻を getOutputTimestamp で換算して予約する", () => {
+  const { control, errors } = createAvSyncSubscriber();
+  control.receivedCatalog = makeAudioVideoCatalog(
+    { isLive: true, targetLatency: AV_SYNC_TARGET_LATENCY_MS },
+    { isLive: true, targetLatency: AV_SYNC_TARGET_LATENCY_MS },
+  );
+  control.extractTrackInfo();
+  // 対応と、その対応を基準にした TIMESTAMP を同じ時刻で観測する
+  const mapping = audioClockMappingAt(avSyncReferenceMs());
+  const wallClockTimestamp = wallClockTimestampMicrosFor(mapping);
+  const observedWallClockMs = performance.timeOrigin + performance.now();
+  control.playbackTimeline.observe("audio", observedWallClockMs, wallClockTimestamp);
+  control.playbackTimeline.observe("video", observedWallClockMs, wallClockTimestamp);
+  control.audioTimestampKinds.set(wallClockTimestamp, "wallClock");
+
+  const reservation = playAudioFrame(control, wallClockTimestamp, mapping);
+
+  assert.equal(reservation.startedAtSeconds.length, 1);
+  // 予約時刻は「目標の表示時刻 + 音声の出力遅延」を AudioContext の秒にした値になる
+  assert.closeTo(
+    (reservation.startedAtSeconds[0] ?? 0) * 1_000,
+    expectedStartMs(reservation),
+    AV_SYNC_START_TOLERANCE_MS,
+  );
+  // 目標の表示時刻には共有の時間軸の式 (max(targetLatency, 再生遅延)) が効いていること
+  assert.equal(control.playbackTimeline.targetLatencyMs, AV_SYNC_TARGET_LATENCY_MS);
+  assert.equal(control.playbackTimeline.playoutDelayMs, AUDIO_PLAYOUT_DELAY_FLOOR_MS);
+  assert.equal(errors.length, 0);
+});
+
+/**
+ * 完了条件: `targetLatency` が上限 (`MAX_PLAYOUT_DELAY_MS` = 500 ms) に近いときも音を捨てない。
+ *
+ * 並べすぎの上限は「表示に使う遅れ (`max(targetLatency, 再生遅延)`) + 余裕」から決まる。
+ * 揺らぎから求めた再生遅延 (80 ms) だけを上限にすると、目標が 300 ms より先にある音を
+ * すべて捨てて無音になる。
+ */
+test("handleAudioDecodedData: targetLatency が 500 ms でも目標の時刻に予約する", () => {
+  const { control, errors } = createAvSyncSubscriber();
+  control.receivedCatalog = makeAudioVideoCatalog(
+    { isLive: true, targetLatency: MAX_PLAYOUT_DELAY_MS },
+    { isLive: true, targetLatency: MAX_PLAYOUT_DELAY_MS },
+  );
+  control.extractTrackInfo();
+  // 対応と、その対応を基準にした TIMESTAMP を同じ時刻で観測する
+  const mapping = audioClockMappingAt(avSyncReferenceMs());
+  const wallClockTimestamp = wallClockTimestampMicrosFor(mapping);
+  const observedWallClockMs = performance.timeOrigin + performance.now();
+  control.playbackTimeline.observe("audio", observedWallClockMs, wallClockTimestamp);
+  control.playbackTimeline.observe("video", observedWallClockMs, wallClockTimestamp);
+  control.audioTimestampKinds.set(wallClockTimestamp, "wallClock");
+
+  // 「今」を目標の表示時刻の 500 ms 前にする (目標との距離が表示に使う遅れと等しい)
+  const targetPerfMs =
+    control.playbackTimeline.presentationPerformanceMs("audio", wallClockTimestamp) ?? 0;
+  const targetSeconds = (targetPerfMs + AV_SYNC_AUDIO_DEVICE_DELAY_MS) / 1_000;
+  const reservation = playAudioFrame(
+    control,
+    wallClockTimestamp,
+    mapping,
+    targetSeconds - MAX_PLAYOUT_DELAY_MS / 1_000,
+  );
+
+  assert.equal(errors.length, 0);
+  assert.equal(reservation.startedAtSeconds.length, 1, "音を捨てないこと");
+  assert.closeTo(
+    (reservation.startedAtSeconds[0] ?? 0) * 1_000,
+    expectedStartMs(reservation),
+    AV_SYNC_START_TOLERANCE_MS,
+  );
+});
+
+/**
+ * 完了条件: `getOutputTimestamp()` の対応が予約のたびに変わっても、差が
+ * `AUDIO_CLOCK_DEADBAND_MS` 未満なら前の対応を使い、予約時刻が跳ねない。
+ */
+test("handleAudioDecodedData: 対応の差が不感帯未満なら前の対応を使う", () => {
+  const { control, errors } = createAvSyncSubscriber();
+  control.receivedCatalog = makeAudioVideoCatalog(
+    { isLive: true, targetLatency: AV_SYNC_TARGET_LATENCY_MS },
+    { isLive: true, targetLatency: AV_SYNC_TARGET_LATENCY_MS },
+  );
+  control.extractTrackInfo();
+  // 対応と、その対応を基準にした TIMESTAMP を同じ時刻で観測する
+  const firstMapping = audioClockMappingAt(avSyncReferenceMs());
+  const wallClockTimestamp = wallClockTimestampMicrosFor(firstMapping);
+  const observedWallClockMs = performance.timeOrigin + performance.now();
+  control.playbackTimeline.observe("audio", observedWallClockMs, wallClockTimestamp);
+  control.playbackTimeline.observe("video", observedWallClockMs, wallClockTimestamp);
+  control.audioTimestampKinds.set(wallClockTimestamp, "wallClock");
+
+  // 1 つ目の予約で時計の対応を作る (復号の出力の種類は 1 つの音につき 1 回だけ引かれる)
+  playAudioFrame(control, wallClockTimestamp, firstMapping);
+  control.audioTimestampKinds.set(wallClockTimestamp, "wallClock");
+
+  // 2 つ目の対応は、1 つ目と同じ出力遅延で `AUDIO_CLOCK_DEADBAND_MS` の 3 分の 1 だけ
+  // ずらす (実物の読み取りの揺れに相当する)。予約の直前に取り直す
+  const jitterMs = AUDIO_CLOCK_DEADBAND_MS / 3;
+  const secondReferenceMs = avSyncReferenceMs();
+  const jitteredMapping: AudioClockMapping = {
+    contextTime: secondReferenceMs / 1_000 + (AV_SYNC_AUDIO_DEVICE_DELAY_MS + jitterMs) / 1_000,
+    performanceTime: secondReferenceMs,
+  };
+  // 1 つ目と同じ装置の遅延であること (差は `AUDIO_CLOCK_DEADBAND_MS` の内側)
+  const firstDeviceDelayMs = firstMapping.contextTime * 1_000 - firstMapping.performanceTime;
+  const jitteredDeviceDelayMs =
+    jitteredMapping.contextTime * 1_000 - jitteredMapping.performanceTime;
+  playAudioFrame(control, wallClockTimestamp, jitteredMapping);
+
+  // 差が不感帯の内側であること (取り直しても対応を動かさない条件)
+  assert.isBelow(Math.abs(jitteredDeviceDelayMs - firstDeviceDelayMs), AUDIO_CLOCK_DEADBAND_MS);
+  // 前の対応のまま (揺れた分は換算に乗らない)
+  const bridgeOffsetMs = (
+    control as unknown as { audioClockBridge: { currentOffsetMs: number | null } }
+  ).audioClockBridge.currentOffsetMs;
+  assert.isNotNull(bridgeOffsetMs);
+  assert.closeTo(bridgeOffsetMs ?? 0, firstDeviceDelayMs, AV_SYNC_TOLERANCE_MS);
+  assert.isBelow(Math.abs((bridgeOffsetMs ?? 0) - jitteredDeviceDelayMs), AUDIO_CLOCK_DEADBAND_MS);
+  assert.equal(errors.length, 0);
+});
+
+/**
+ * 完了条件: `getOutputTimestamp()` が未開始 (contextTime と performanceTime が 0) のときは
+ * `currentTime` と `performance.now()` の差で代用する。代用は `onError` を通知せず、
+ * 統計の `audioClockFallback` に出る。
+ */
+test("handleAudioDecodedData: getOutputTimestamp が 0/0 でもエラーにせず代用中を統計に出す", () => {
+  const { subscriber, control, errors } = createAvSyncSubscriber();
+  control.receivedCatalog = makeAudioVideoCatalog(
+    { isLive: true, targetLatency: AV_SYNC_TARGET_LATENCY_MS },
+    { isLive: true, targetLatency: AV_SYNC_TARGET_LATENCY_MS },
+  );
+  control.extractTrackInfo();
+  const mapping = audioClockMappingAt(avSyncReferenceMs());
+  const wallClockTimestamp = wallClockTimestampMicrosFor(mapping);
+  const wallClockMs = performance.timeOrigin + performance.now();
+  control.playbackTimeline.observe("audio", wallClockMs, wallClockTimestamp);
+  control.playbackTimeline.observe("video", wallClockMs, wallClockTimestamp);
+  control.audioTimestampKinds.set(wallClockTimestamp, "wallClock");
+
+  // AudioContext は動いている (currentTime が 0 より大きい) が、getOutputTimestamp は
+  // まだ 0/0 を返す状態にする。代用の対応は「currentTime - performance.now()」である
+  const fallbackCurrentTimeSeconds = performance.now() / 1_000;
+  const reservation = playAudioFrame(control, wallClockTimestamp, null, fallbackCurrentTimeSeconds);
+
+  assert.equal(errors.length, 0);
+  assert.equal(reservation.startedAtSeconds.length, 1);
+  // 代用の対応 (currentTime - performance.now()) で換算した目標の時刻に鳴る
+  const fallbackOffsetMs = reservation.currentTimeSeconds * 1_000 - reservation.readAtMs;
+  assert.closeTo(
+    (reservation.startedAtSeconds[0] ?? 0) * 1_000,
+    reservation.presentationMs + fallbackOffsetMs,
+    AV_SYNC_TOLERANCE_MS,
+  );
+  // 代用中は統計に出る (購読が揃っていれば読める)
+  markWallClockObserved(control);
+  assert.isTrue(subscriber.getStats().avSync?.audioClockFallback);
+  assert.equal(errors.length, 0);
+});
+
+/**
+ * draft-ietf-moq-loc-04 §2.3.1.2:
+ * TIMESCALE がある TIMESTAMP はメディア時刻であり壁時計ではないため、目標の表示時刻を
+ * 使わず到着基準の並べ方にフォールバックする (`start(when)` は今 + 再生の遅れになる)。
+ */
+test("handleAudioDecodedData: TIMESCALE がある TIMESTAMP は到着基準になる", () => {
+  const { subscriber, control, errors } = createAvSyncSubscriber();
+  // 復号の出力は decoder に渡した timestamp で届く。Object から駆動して対応を確かめる
+  const decodedTimestamps: number[] = [];
+  control.audioDecoder = {
+    decode: (_payload, _type, timestamp) => {
+      decodedTimestamps.push(timestamp);
+    },
+  };
+  control.audioDecoderConfigured = true;
+  control.receivedCatalog = makeAudioVideoCatalog(
+    { isLive: true, targetLatency: AV_SYNC_TARGET_LATENCY_MS },
+    { isLive: true, targetLatency: AV_SYNC_TARGET_LATENCY_MS },
+  );
+  control.extractTrackInfo();
+  const mapping = audioClockMappingAt(avSyncReferenceMs());
+  const wallClockTimestamp = wallClockTimestampMicrosFor(mapping);
+  const observedWallClockMs = performance.timeOrigin + performance.now();
+  control.playbackTimeline.observe("audio", observedWallClockMs, wallClockTimestamp);
+  control.playbackTimeline.observe("video", observedWallClockMs, wallClockTimestamp);
+
+  // TIMESCALE がある TIMESTAMP はメディア時刻 (1 秒 = 1000 の目盛り)
+  const timescale = 1_000n;
+  const mediaTimestamp = 1_500n;
+  control.handleAudioObject({
+    groupId: 1n,
+    objectId: 0n,
+    status: 0,
+    payload: new Uint8Array([0xaa]),
+    properties: LOC.encodeAudioProperties({ timestamp: mediaTimestamp, timescale }),
+  });
+
+  // decoder にはマイクロ秒へ換算した値が渡る (§2.3.1.2)
+  const decodedTimestamp = Number(LOC.toDecoderMicroseconds(mediaTimestamp, timescale));
+  assert.deepEqual(decodedTimestamps, [decodedTimestamp]);
+
+  const reservation = playAudioFrame(control, decodedTimestamp, mapping);
+
+  // 目標を使わないため、基準は「最初の音の到着 (今) + 再生の遅れ」になる
+  assert.equal(reservation.startedAtSeconds.length, 1);
+  // currentTime は固定値であるため、予約時刻は「currentTime + 再生の遅れ」になる
+  assert.closeTo(
+    (reservation.startedAtSeconds[0] ?? 0) * 1_000,
+    reservation.currentTimeSeconds * 1_000 + AUDIO_PLAYOUT_DELAY_SECONDS * 1_000,
+    AV_SYNC_TOLERANCE_MS,
+  );
+  // 壁時計の TIMESTAMP を観測していないため同期の推定は出さない
+  assert.isNull(subscriber.getStats().avSync);
+  assert.equal(errors.length, 0);
+});
+
+/**
+ * draft-ietf-moq-loc-04 §2.3.1.1:
+ * TIMESCALE が無い TIMESTAMP は Unix epoch マイクロ秒の壁時計であるため、目標の表示時刻を
+ * 使う。TIMESCALE の有無で扱いが変わることを上のテストと対にして固定する。
+ */
+test("handleAudioDecodedData: TIMESCALE が無い TIMESTAMP は目標の表示時刻を使う", () => {
+  const { subscriber, control, errors } = createAvSyncSubscriber();
+  const decodedTimestamps: number[] = [];
+  control.audioDecoder = {
+    decode: (_payload, _type, timestamp) => {
+      decodedTimestamps.push(timestamp);
+    },
+  };
+  control.audioDecoderConfigured = true;
+  control.receivedCatalog = makeAudioVideoCatalog(
+    { isLive: true, targetLatency: AV_SYNC_TARGET_LATENCY_MS },
+    { isLive: true, targetLatency: AV_SYNC_TARGET_LATENCY_MS },
+  );
+  control.extractTrackInfo();
+  // TIMESTAMP は観測の時刻そのものにする (基準の遅れが 0 になり、目標の表示時刻が
+  // 「観測の時刻 + 表示の遅れ」になる)
+  const mapping = audioClockMappingAt(avSyncReferenceMs());
+  const observedWallClockMs = performance.timeOrigin + performance.now();
+  const wallClockTimestamp = Math.round(observedWallClockMs * 1_000);
+  control.playbackTimeline.observe("audio", observedWallClockMs, wallClockTimestamp);
+  control.playbackTimeline.observe("video", observedWallClockMs, wallClockTimestamp);
+
+  // TIMESCALE を付けない TIMESTAMP は壁時計として扱われる
+  control.handleAudioObject({
+    groupId: 1n,
+    objectId: 0n,
+    status: 0,
+    payload: new Uint8Array([0xaa]),
+    properties: LOC.encodeAudioProperties({ timestamp: BigInt(wallClockTimestamp) }),
+  });
+
+  const decodedTimestamp = wallClockTimestamp;
+  assert.deepEqual(decodedTimestamps, [decodedTimestamp]);
+
+  // 復号の出力の種類は 1 つの音につき 1 回だけ引かれる (予約のたびに登録し直す)
+  control.audioTimestampKinds.set(decodedTimestamp, "wallClock");
+  const reservation = playAudioFrame(control, decodedTimestamp, mapping);
+  // 壁時計の TIMESTAMP を観測済みになる (同期の推定を出せる条件)
+  assert.isTrue(control.audioWallClockSeen);
+
+  // 壁時計の TIMESTAMP を使っている (同期の推定を出せる条件が立つ)
+  // 壁時計の TIMESTAMP なので、目標の表示時刻を AudioContext の秒へ換算して予約する
+  // (到着基準との差は予約時刻が再生の遅れの下限より先かどうかで分かる)
+  assert.equal(reservation.startedAtSeconds.length, 1);
+  assert.closeTo(
+    (reservation.startedAtSeconds[0] ?? 0) * 1_000,
+    expectedStartMs(reservation),
+    AV_SYNC_START_TOLERANCE_MS,
+  );
+  // 壁時計の TIMESTAMP を使っているため、時計の代用はしていない
+  assert.isNotNull(subscriber.getStats());
+  assert.isTrue(control.audioWallClockSeen);
+  assert.equal(errors.length, 0);
+});
+
+/**
+ * 映像の表示時刻の検証用の制御口
+ */
+/** 映像の表示時刻の検証で使う制御口 (書き込み先は基底の videoWriter を使う) */
+type SubscriberVideoTimelineControl = SubscriberAvSyncControl;
+
+/** 記録用の VideoFrame (timestamp を持ち、閉じられたかどうかを記録する) */
+function createTimestampedRecordingFrame(timestamp: number): {
+  frame: VideoFrame;
+  isClosed: () => boolean;
+} {
+  let closed = false;
+  const frame = {
+    timestamp,
+    close: () => {
+      closed = true;
+    },
+  } as unknown as VideoFrame;
+  return { frame, isClosed: () => closed };
+}
+
+/**
+ * write に渡ったフレームを記録する書き込み先
+ *
+ * MediaStreamTrackGenerator はブラウザ専用 API であり node 環境に実物がないため、
+ * 既存の検証と同じく記録用の最小オブジェクトを注入する (モジュール置換は行わない)。
+ */
+function createRecordingVideoWriter(): {
+  writer: WritableStreamDefaultWriter<VideoFrame>;
+  written: VideoFrame[];
+} {
+  const written: VideoFrame[] = [];
+  const writer = {
+    write: async (frame: VideoFrame) => {
+      written.push(frame);
+    },
+  } as unknown as WritableStreamDefaultWriter<VideoFrame>;
+  return { writer, written };
+}
+
+/**
+ * 表示周期 (`requestAnimationFrame`) の予約を捕まえておく入れ物
+ *
+ * 実装は表示時刻を過ぎたフレームをその場で書き、残っていれば表示周期で次を選ぶ。
+ * node 環境に表示周期は無いため、予約されたコールバックをテスト側で実行する
+ * (フレームの選択と書き込みは実装を通す)。
+ */
+let pendingAnimationFrame: FrameRequestCallback | null = null;
+let animationFrameCount = 0;
+
+/** コールバックを呼ばずに予約だけを捕まえる (表示周期を作り直さない) */
+function installAnimationFrameRecorder(): void {
+  const globalWithAnimationFrame = globalThis as unknown as {
+    requestAnimationFrame?: (callback: FrameRequestCallback) => number;
+  };
+  // node 環境には表示周期が無いため、テストの間だけ差し替え、後で元に戻す
+  restoreAnimationFrame();
+  originalAnimationFrame = globalWithAnimationFrame.requestAnimationFrame;
+  globalWithAnimationFrame.requestAnimationFrame = (callback) => {
+    pendingAnimationFrame = callback;
+    animationFrameCount++;
+    return 0;
+  };
+}
+
+/** 差し替えた表示周期を元に戻す (テストの終了時に呼ぶ) */
+function restoreAnimationFrame(): void {
+  const globalWithAnimationFrame = globalThis as unknown as {
+    requestAnimationFrame?: (callback: FrameRequestCallback) => number;
+  };
+  if (originalAnimationFrame === undefined) {
+    delete globalWithAnimationFrame.requestAnimationFrame;
+  } else {
+    globalWithAnimationFrame.requestAnimationFrame = originalAnimationFrame;
+  }
+  originalAnimationFrame = undefined;
+}
+
+// 差し替える前の表示周期 (元に戻すために持つ)
+let originalAnimationFrame: ((callback: FrameRequestCallback) => number) | undefined;
+
+/** 予約された表示周期のコールバックを 1 回実行する */
+function runPendingAnimationFrame(): VideoFrame[] {
+  const callback = pendingAnimationFrame;
+  pendingAnimationFrame = null;
+  if (callback === null) {
+    return [];
+  }
+  callback(performance.now());
+  return [];
+}
+
+/** 表示周期の予約を消す (前のテストの持ち越しを防ぐ) */
+function clearPendingAnimationFrame(): void {
+  pendingAnimationFrame = null;
+  animationFrameCount = 0;
+}
+
+/**
+ * 復号したフレームを 1 つ積み、表示時刻に応じた選択を駆動する
+ *
+ * @param control - 駆動する MediaSubscriber
+ * @param timestampMicros - 復号したフレームの TIMESTAMP (壁時計、Unix epoch マイクロ秒)
+ * @param videoWriter - 書いたフレームを記録する書き込み先
+ */
+function driveVideoTimeline(
+  control: SubscriberAvSyncControl,
+  timestampMicros: number,
+  videoWriter: WritableStreamDefaultWriter<VideoFrame>,
+): void {
+  // 映像のトラックが解決できている状態にする (購読が揃っていることの条件)
+  control.videoTrackInfo = {
+    name: "video",
+    packaging: "loc",
+    isLive: true,
+    codec: "av01.0.04M.08",
+  };
+  control.videoWriter = videoWriter;
+  control.videoTimestampKinds.set(timestampMicros, "wallClock");
+  const frame = createTimestampedRecordingFrame(timestampMicros);
+  control.handleVideoDecodedData({ frame: frame.frame });
+}
+
+/**
+ * 実時間を待つ (表示時刻の到来待ち)
+ *
+ * 表示時刻は `performance.now()` の軸で決まるため、表示時刻を過ぎたフレームが
+ * `write` されることを確かめるには実時間を進める必要がある。上限を付けて待ち、
+ * 進まなかったことをテストの失敗として返す (停止しない)。
+ */
+async function waitForDueMs(targetMs: number): Promise<number> {
+  let elapsedMs = 0;
+  while (elapsedMs < AV_SYNC_WAIT_TIMEOUT_MS) {
+    if (performance.now() >= targetMs) {
+      return elapsedMs;
+    }
+    const stepMs = Math.min(5, AV_SYNC_WAIT_TIMEOUT_MS - elapsedMs);
+    await new Promise((resolve) => {
+      setTimeout(resolve, stepMs);
+    });
+    elapsedMs += stepMs;
+  }
+  return elapsedMs;
+}
+
+/**
+ * 完了条件: 映像の表示時刻は `Timestamp + 表示の遅れ` の式で決まり、表示時刻を過ぎた
+ * フレームだけが `videoWriter.write` に渡る。表示時刻が来ていないフレームは書かない。
+ *
+ * 表示時刻は `performance.now()` の軸で決まるため、書き込みは表示時刻の到来を実時間で
+ * 待って確かめる。値そのものは時間軸の式 (表示時刻 - TIMESTAMP = 表示の遅れ) と突き合わせる。
+ */
+test("handleVideoDecodedData: 表示時刻を過ぎたフレームだけを書く", async () => {
+  const { control, errors } = createAvSyncSubscriber();
+  control.receivedCatalog = makeAudioVideoCatalog(
+    { isLive: true, targetLatency: AV_SYNC_TARGET_LATENCY_MS },
+    { isLive: true, targetLatency: AV_SYNC_TARGET_LATENCY_MS },
+  );
+  control.extractTrackInfo();
+  // 基準の遅れを 0 にして、表示時刻を「観測時刻 + 表示の遅れ」にする
+  const observedWallClockMs = performance.timeOrigin + performance.now();
+  const timestampMicros = wallClockTimestampMicrosOf(observedWallClockMs);
+  control.playbackTimeline.observe("audio", observedWallClockMs, timestampMicros);
+  control.playbackTimeline.observe("video", observedWallClockMs, timestampMicros);
+
+  const presentationMs = control.playbackTimeline.presentationPerformanceMs(
+    "video",
+    timestampMicros,
+  );
+  const presentationDelayMs = control.playbackTimeline.presentationDelayMs;
+  assert.isNotNull(presentationMs);
+  assert.isNotNull(presentationDelayMs);
+  // 表示の遅れが targetLatency になること (基準の遅れは 0)
+  assert.closeTo(presentationDelayMs ?? 0, AV_SYNC_TARGET_LATENCY_MS, AV_SYNC_TOLERANCE_MS);
+
+  const { writer, written } = createRecordingVideoWriter();
+  clearPendingAnimationFrame();
+  installAnimationFrameRecorder();
+  try {
+    // 表示時刻がまだ来ていないため、この選択では書かず、表示周期に次の選択を予約する
+    driveVideoTimeline(control, timestampMicros, writer);
+    assert.equal(written.length, 0);
+    assert.equal(animationFrameCount, 1);
+
+    // 表示時刻が来たら、予約された表示周期の選択が書く
+    await waitForDueMs(presentationMs ?? 0);
+    assert.isAtLeast(performance.now(), presentationMs ?? 0);
+    runPendingAnimationFrame();
+    assert.equal(written.length, 1);
+    assert.equal(written[0]?.timestamp, timestampMicros);
+  } finally {
+    clearPendingAnimationFrame();
+    restoreAnimationFrame();
+  }
+  assert.equal(errors.length, 0);
+});
+
+/**
+ * 完了条件: 同じ TIMESTAMP の音声と映像が同じ表示時刻から予約されること。音声の
+ * `start(when)` は `getOutputTimestamp()` の対応で `AudioContext` の秒へ換算され、映像の
+ * 表示時刻は `performance.now()` のミリ秒で決まる。同じ時間軸に同じ TIMESTAMP を
+ * 同じ時刻で観測させ、2 つの式が同じ表示の遅れ (TIMESTAMP からの差) を導くことを確かめる。
+ *
+ * TIMESTAMP は「まだ表示時刻を過ぎていない」値にする。上限で切り下げても表示時刻が
+ * 未来に残るため、音声は捨てられず、映像も `write` されずにキューに残る。
+ */
+test("handleAudioDecodedData と handleVideoDecodedData: 同じ TIMESTAMP は同じ表示の遅れになる", () => {
+  const subscriber = new MediaSubscriberImpl(
+    "moqt://example.com/live",
+    { namespace: ["live"], audio: {}, video: {} },
+    {},
+  );
+  const control = subscriber as unknown as SubscriberVideoTimelineControl;
+  control.receivedCatalog = makeAudioVideoCatalog(
+    { isLive: true, targetLatency: AV_SYNC_TARGET_LATENCY_MS },
+    { isLive: true, targetLatency: AV_SYNC_TARGET_LATENCY_MS },
+  );
+  control.extractTrackInfo();
+  // 同じ TIMESTAMP を同じ時刻で観測する (基準の遅れと再生遅延が 1 つに決まる)
+  const mapping = audioClockMappingAt(avSyncReferenceMs());
+  const sharedTimestampMicros = wallClockTimestampMicrosFor(mapping);
+  const observedWallClockMs = performance.timeOrigin + performance.now();
+  control.playbackTimeline.observe("audio", observedWallClockMs, sharedTimestampMicros);
+  control.playbackTimeline.observe("video", observedWallClockMs, sharedTimestampMicros);
+  markWallClockObserved(control);
+
+  // 音声: 目標の表示時刻を AudioContext の秒へ換算する
+  control.audioTimestampKinds.set(sharedTimestampMicros, "wallClock");
+  const recording = playAudioFrame(control, sharedTimestampMicros, mapping);
+  assert.equal(recording.startedAtSeconds.length, 1);
+  const audioPresentationMs =
+    (recording.startedAtSeconds[0] ?? 0) * 1_000 -
+    (mapping.contextTime * 1_000 - mapping.performanceTime);
+
+  // 映像: 同じ TIMESTAMP のフレームの表示時刻を式から求める
+  const videoPresentationMs = control.playbackTimeline.presentationPerformanceMs(
+    "video",
+    sharedTimestampMicros,
+  );
+  assert.isNotNull(videoPresentationMs);
+
+  // 表示時刻がまだ来ていないフレームは書かない (キューに残る)
+  const { writer: videoWriter, written: videoWritten } = createRecordingVideoWriter();
+  clearPendingAnimationFrame();
+  installAnimationFrameRecorder();
+  try {
+    driveVideoTimeline(control, sharedTimestampMicros, videoWriter);
+    assert.equal(videoWritten.length, 0);
+  } finally {
+    clearPendingAnimationFrame();
+    restoreAnimationFrame();
+  }
+
+  // 2 つの式が導く表示の遅れ (TIMESTAMP からの差) が一致する。表示時刻は
+  // 「TIMESTAMP + 基準の遅れ + 表示の遅れ」であり、基準の遅れは観測の時刻で決まる
+  const audioDelayMs = audioPresentationMs - sharedTimestampMicros / 1_000;
+  const videoDelayMs = (videoPresentationMs ?? 0) - sharedTimestampMicros / 1_000;
+  assert.closeTo(audioDelayMs, videoDelayMs, AV_SYNC_TOLERANCE_MS);
+  // 予約時刻は「目標の表示時刻 + 音声の出力遅延」になっている
+  assert.closeTo(
+    (recording.startedAtSeconds[0] ?? 0) * 1_000,
+    recording.presentationMs + recording.deviceDelayMs,
+    AV_SYNC_START_TOLERANCE_MS,
+  );
 });

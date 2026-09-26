@@ -52,7 +52,7 @@ MSF は `renderGroup` が同じ track を「同時に描画するよう設計さ
 - 目標の時刻を過ぎて届いた音は捨てる (映像が表示時刻を過ぎたフレームを捨てるのと同じ)。**基準の取り直しはしない**。取り直すと音声だけが後ろへずれ、共有の時間軸を使う映像とずれる。揺らぎは共有の再生遅延が吸収し、それを超えて遅れて届いた音だけを捨てる (現在は基準の取り直しで遅れを積み上げていた)。音を 1 つ捨てた分のずれは 1 フレーム (音声の符号化の単位。Opus で 20 ms) で、次の音から目標へ戻る
 - 例外は TIMESTAMP の飛び (上記の 2 秒) で、このときは共有の時間軸ごと取り直す
 - 「音声だけを購読している」は `videoTrackInfo` が null のとき (映像を要求していない、または要求したがカタログで解決できなかった) とする。このときは揃える相手がいないため、目標の時刻に届かなかった音は捨てずに基準を取り直す (現在の挙動。音の連続性を優先する)。取り直し先は時間軸が使っている再生遅延 (下限 80 ms) とし、取り直した基準 (timestamp と時刻の組) を時間軸へ返して同じマッピングを保つ。両方を購読しているときは捨てる。壁時計の TIMESTAMP を持たないときは常に現在の基準の決め方を使う。`reset()` は購読のやり直しと AudioContext の作り直しで基準を消すために残す
-- 並べすぎの上限は、現在の `AUDIO_PLAYOUT_MAX_DELAY_SECONDS` (300 ms) を「再生遅延 + 220 ms (300 ms - 80 ms)」に読み替える。判定は現在の実装と同じく「今 + 上限」と「前の音の終わり」の遅い方で行う。絶対値 300 ms のままだと、再生遅延が 500 ms のときに鳴らす音をすべて捨てて無音になる。並べすぎの是正は現在の「基準を音の長さだけ前に寄せる」ではなく、その音を捨てて目標へ戻す (目標より前に鳴らすと映像とずれるため)
+- 並べすぎの上限は、現在の `AUDIO_PLAYOUT_MAX_DELAY_SECONDS` (300 ms) を「表示に使っている遅れ (`max(targetLatency, 再生遅延)`) + 220 ms (300 ms - 80 ms)」に読み替える。目標の表示時刻は今から `max(targetLatency, 再生遅延)` だけ先にあるため、揺らぎから求めた再生遅延だけを上限にすると、`targetLatency` が 220 ms を超えるときに鳴らす音をすべて捨てて無音になる。判定は現在の実装と同じく「今 + 上限」と「前の音の終わり」の遅い方で行う。並べすぎの是正は現在の「基準を音の長さだけ前に寄せる」ではなく、その音を捨てて目標へ戻す (目標より前に鳴らすと映像とずれるため)
 - `AudioContext` は既定 128 フレーム (48 kHz で約 2.67 ms) ごとに描画し、`currentTime` もその単位で進む。`start(when)` はサンプル単位で正確に予約できるが、`currentTime` の読み取りと予約の間の遅れがあるため `AUDIO_PLAYOUT_MIN_LEAD_SECONDS` = 10 ms の余裕はそのまま置く
 
 ### targetLatency と isLive の解決
@@ -75,7 +75,7 @@ MSF は `renderGroup` が同じ track を「同時に描画するよう設計さ
 - `src/audioPlayout.ts` / `src/audioPlayout.test.ts` / `src/audioPlayout.prop.ts`: `schedule` は共有の時間軸が決めた目標の開始時刻と、目標を守るか (音声と映像の両方を購読しているか) を引数で受け取り、連続性 (重ならない・隙間を残す・目標を過ぎたら捨てる・並べすぎたら捨てる) の規則を持つ。目標を守らないときは現在の基準の取り直しを使う。上限の判定を再生遅延 + 余裕に変える
 - `src/createMediaSubscriber.ts` / `src/createMediaSubscriber.test.ts`: `CatalogTrack` から `targetLatency` を解決して時間軸へ渡し、音声は `getOutputTimestamp` で換算した時刻を、映像は共有の時間軸の表示時刻を使って write する。同期ずれを統計に出す
 - `src/codec/types.ts` / `src/index.ts`: 統計型 `AvSyncStats` を足し、`MediaReceiverStats` から読めるようにする
-- `devtools/src/hooks/useSubscriber.ts`: 同じモジュールを使うため、新しい API に合わせて呼び出しを直す。devtools の音声と映像を同期させることと統計の露出は 0636 が持つ (本 issue では今の挙動を変えない)
+- `devtools/src/hooks/useSubscriber.ts`: 同じモジュールを使うため、新しい API に合わせて呼び出しを直す (時間軸はキューの上限に合わせて作り直す)。並べすぎの是正をやめる変更は devtools の音声にも及ぶ (基準を前に寄せない)。devtools の音声と映像を同期させることと統計の露出は 0636 が持つ
 - `docs/HIGH_LEVEL_API.md`: `MediaReceiverStats` の統計の定義を実装に合わせる
 - `CHANGES.md`: `MediaReceiverStats` の変更を `## develop` に `[CHANGE]` で載せる
 
