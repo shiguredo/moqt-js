@@ -1,5 +1,12 @@
 import { test, assert } from "vite-plus/test";
-import { LOC, createCatalog, getVideoTracks, type CatalogTrack, type MoqtObject } from "moqt-js";
+import {
+  LOC,
+  createCatalog,
+  getVideoTracks,
+  type CatalogTrack,
+  type MoqtObject,
+  type Property,
+} from "moqt-js";
 import {
   buildVideoChunkPlan,
   buildVideoDecoderConfig,
@@ -238,7 +245,7 @@ test("buildVideoChunkPlan: publisher が付与した Properties から chunk の
     1_790_263_445_135_432n,
   );
   assert.deepEqual(
-    buildVideoChunkPlan(makeVideoObject(BigInt(keyPlan.objectId), keyPlan.properties)),
+    buildVideoChunkPlan(undefined, makeVideoObject(BigInt(keyPlan.objectId), keyPlan.properties)),
     { type: "key", timestamp: 1_790_263_445_135_432, timestampKind: "wallClock" },
   );
 
@@ -249,7 +256,10 @@ test("buildVideoChunkPlan: publisher が付与した Properties から chunk の
     1_790_263_445_168_765n,
   );
   assert.deepEqual(
-    buildVideoChunkPlan(makeVideoObject(BigInt(deltaPlan.objectId), deltaPlan.properties)),
+    buildVideoChunkPlan(
+      undefined,
+      makeVideoObject(BigInt(deltaPlan.objectId), deltaPlan.properties),
+    ),
     { type: "delta", timestamp: 1_790_263_445_168_765, timestampKind: "wallClock" },
   );
 });
@@ -258,17 +268,17 @@ test("buildVideoChunkPlan: publisher が付与した Properties から chunk の
 // LOC の拡張 (VIDEO_FRAME_MARKING) は任意であるため、無い場合は Group 先頭
 // (Object ID 0) をキーフレームとして扱う。それ以外はデルタ。
 test("buildVideoChunkPlan: Properties が無い / 空の Object は Object ID 0 を key にする", () => {
-  assert.deepEqual(buildVideoChunkPlan(makeVideoObject(0n)), {
+  assert.deepEqual(buildVideoChunkPlan(undefined, makeVideoObject(0n)), {
     type: "key",
     timestamp: 0,
     timestampKind: "none",
   });
-  assert.deepEqual(buildVideoChunkPlan(makeVideoObject(0n, new Uint8Array())), {
+  assert.deepEqual(buildVideoChunkPlan(undefined, makeVideoObject(0n, new Uint8Array())), {
     type: "key",
     timestamp: 0,
     timestampKind: "none",
   });
-  assert.deepEqual(buildVideoChunkPlan(makeVideoObject(1n)), {
+  assert.deepEqual(buildVideoChunkPlan(undefined, makeVideoObject(1n)), {
     type: "delta",
     timestamp: 0,
     timestampKind: "none",
@@ -279,12 +289,12 @@ test("buildVideoChunkPlan: Properties が無い / 空の Object は Object ID 0 
 test("buildVideoChunkPlan: TIMESTAMP だけの Object は Object ID で type を判定する", () => {
   const properties = LOC.encodeVideoProperties({ timestamp: 1_000n });
 
-  assert.deepEqual(buildVideoChunkPlan(makeVideoObject(0n, properties)), {
+  assert.deepEqual(buildVideoChunkPlan(undefined, makeVideoObject(0n, properties)), {
     type: "key",
     timestamp: 1_000,
     timestampKind: "wallClock",
   });
-  assert.deepEqual(buildVideoChunkPlan(makeVideoObject(1n, properties)), {
+  assert.deepEqual(buildVideoChunkPlan(undefined, makeVideoObject(1n, properties)), {
     type: "delta",
     timestamp: 1_000,
     timestampKind: "wallClock",
@@ -297,7 +307,10 @@ test("buildVideoChunkPlan: TIMESTAMP だけの Object は Object ID で type を
 test("buildVideoChunkPlan: Timescale がある TIMESTAMP はメディア時刻として区別する", () => {
   const properties = LOC.encodeVideoProperties({ timestamp: 90_000n, timescale: 90_000n });
 
-  assert.equal(buildVideoChunkPlan(makeVideoObject(0n, properties)).timestampKind, "mediaTime");
+  assert.equal(
+    buildVideoChunkPlan(undefined, makeVideoObject(0n, properties)).timestampKind,
+    "mediaTime",
+  );
 });
 
 // draft-ietf-moq-loc-04 §2.3.1.2: Timescale は 1 秒あたりの TIMESTAMP の単位数である。
@@ -307,7 +320,31 @@ test("buildVideoChunkPlan: Timescale のある TIMESTAMP をマイクロ秒に�
   // 90 kHz で 3003 (約 33.4 ms) は 33,366 マイクロ秒 (0 方向に丸める)
   const properties = LOC.encodeVideoProperties({ timestamp: 3_003n, timescale: 90_000n });
 
-  assert.equal(buildVideoChunkPlan(makeVideoObject(1n, properties)).timestamp, 33_366);
+  assert.equal(buildVideoChunkPlan(undefined, makeVideoObject(1n, properties)).timestamp, 33_366);
+});
+
+// draft-ietf-moq-loc-04 §2.3.1.2 / Table 1: TIMESCALE は Track と Object の両方に置ける。
+// Track に TIMESCALE を載せる publisher では、Object の TIMESTAMP もメディア時刻である。
+// Track を見ずに壁時計と判定すると、送信から受信までの遅延と表示時刻が無効な値になる
+test("buildVideoChunkPlan: Track の TIMESCALE があるときはメディア時刻として扱う", () => {
+  const trackProperties: Property[] = [{ id: LOC.LOCPropertyId.TIMESCALE, value: 90_000n }];
+  // Object は TIMESTAMP だけを持ち、TIMESCALE を持たない
+  const objectProperties = LOC.encodeVideoProperties({ timestamp: 3_003n });
+
+  const plan = buildVideoChunkPlan(trackProperties, makeVideoObject(1n, objectProperties));
+
+  // 種類はメディア時刻になり、Track の TIMESCALE でマイクロ秒へ換算する
+  assert.equal(plan.timestampKind, "mediaTime");
+  assert.equal(plan.timestamp, 33_366);
+
+  // Object も TIMESCALE を持つときは Object を優先する (resolveVideoProperties と同じ規則)
+  const bothProperties = LOC.encodeVideoProperties({ timestamp: 48_000n, timescale: 48_000n });
+  const withObjectTimescale = buildVideoChunkPlan(
+    trackProperties,
+    makeVideoObject(1n, bothProperties),
+  );
+  assert.equal(withObjectTimescale.timestampKind, "mediaTime");
+  assert.equal(withObjectTimescale.timestamp, 1_000_000);
 });
 
 // ============================================================================
@@ -347,7 +384,7 @@ test("recordVideoReceived: 保留に渡す前に、受け取った時刻で到�
   // useSubscriber の object コールバックと同じく、受け取った Object を記録してから保留へ渡す
   const receive = (object: MoqtObject, receivedAtMs: number): ReceivedVideoObject[] => {
     const received: ReceivedVideoObject = { object, receivedAtMs };
-    recordVideoReceived(stats, received, timeOriginMs);
+    recordVideoReceived(stats, received, timeOriginMs, undefined);
     return gate.push(received, object.groupId, object.subgroupId, receivedAtMs);
   };
 
@@ -384,8 +421,8 @@ test("recordVideoReceived: TIMESTAMP の無い Object は到着を記録せず�
   const stats = new PlaybackTimingStats();
 
   // 同じ Group の Object 0 と Object 2 を受け取る (Object 1 が届いていない)
-  recordVideoReceived(stats, { object: makeVideoObject(0n), receivedAtMs: 0 }, 0);
-  recordVideoReceived(stats, { object: makeVideoObject(2n), receivedAtMs: 10 }, 0);
+  recordVideoReceived(stats, { object: makeVideoObject(0n), receivedAtMs: 0 }, 0, undefined);
+  recordVideoReceived(stats, { object: makeVideoObject(2n), receivedAtMs: 10 }, 0, undefined);
 
   const snapshot = stats.snapshot(10);
   assert.isNull(snapshot.arrivalJitterMs, "到着を記録しないこと");
@@ -771,3 +808,10 @@ test("resetSubscriberState: 音声 object の処理チェーンを巻き戻す",
 
   assert.notStrictEqual(audioChainRef.current, previousAudioChain);
 });
+
+// 音声の再生を止めたとき (stopAudioPlayback) に共有の時間軸から音声の状態を消すことは、
+// ここでは固定できない。stopAudioPlayback は useSubscriber の中の閉じた関数であり、
+// AudioContext を作るため、ブラウザ API を持たないこのテスト環境からは呼べない (実物の
+// 代わりになるものを置くこともできない)。時間軸側の規則は src/playbackTimeline.test.ts の
+// resetStream のテストが、再生の遅れの下限の適用は src/createMediaSubscriber.test.ts の
+// 「音声を観測していなくても再生の遅れが下限を下回らない」が固定する

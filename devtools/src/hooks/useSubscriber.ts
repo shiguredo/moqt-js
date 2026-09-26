@@ -14,6 +14,7 @@ import {
   type CatalogTrack,
   type Session,
   type Subscriber,
+  type Property,
 } from "moqt-js";
 import { addLog } from "../components/DebugPanel";
 import { logDebugMessage } from "./debugMessageLog";
@@ -41,9 +42,11 @@ import {
   formatStreamResetCode,
 } from "../utils/playbackTimingStats";
 import { JITTER_BUFFER_MAX_QUEUED_FRAMES, PlayoutBuffer } from "../../../src/playoutBuffer.ts";
-import { PlaybackTimeline } from "../../../src/playbackTimeline.ts";
+import { AUDIO_PLAYOUT_DELAY_FLOOR_MS, PlaybackTimeline } from "../../../src/playbackTimeline.ts";
 import { GroupSwitchGate } from "../../../src/groupSwitchGate.ts";
-import { AUDIO_PLAYOUT_DELAY_SECONDS, AudioPlayoutScheduler } from "../../../src/audioPlayout.ts";
+import { AudioClockBridge, AudioPlayoutScheduler } from "../../../src/audioPlayout.ts";
+// targetLatency の解決規則はライブラリと共有する純関数が持つ (規則を 2 か所に書かない)
+import { effectiveTargetLatencyMs, resolveSharedTargetLatencyMs } from "../../../src/msf/tracks.ts";
 import { applyAudioOutputSink } from "../utils/audioOutput";
 import { browserIsChromium, resolvePanelHttpVersion } from "../utils/httpVersion";
 import * as settings from "../signals/connectionSettings";
@@ -106,6 +109,8 @@ interface AudioPlayback {
   destination: MediaStreamAudioDestinationNode;
   // 復号した音声を鳴らす時刻を決める。基準は AudioContext と一緒に作り直す
   playout: AudioPlayoutScheduler;
+  // AudioContext の時計と performance.now() の対応。予約のたびに取り直す
+  clock: AudioClockBridge;
 }
 
 /**
@@ -196,6 +201,8 @@ export function resetSubscriberStats(instance: sub.SubscriberInstance): void {
   instance.missingReferenceFramesDropped.value = 0;
   instance.decodeErrors.value = 0;
   instance.playbackTiming.value = EMPTY_PLAYBACK_TIMING;
+  // 同期の推定も前の購読の値を持ち越さない (映像の購読を始めると作り直す)
+  instance.avSync.value = sub.EMPTY_AV_SYNC;
   instance.largestLocation.value = null;
   instance.audioObjectsReceived.value = 0;
   instance.audioChunksDecoded.value = 0;
@@ -222,9 +229,17 @@ export function resetSubscriberStats(instance: sub.SubscriberInstance): void {
  * メディア時刻 (`mediaTime`) である。TIMESTAMP が無ければ `none`。再生時間の統計は
  * `wallClock` のときだけ送信から受信までの遅延を求める。
  *
+ * TIMESCALE は Track と Object の両方に置ける (同 §2.3.1.2) ため、`trackProperties`
+ * (SUBSCRIBE_OK の Track Properties) も見て解決する (Object 優先、Track はフォールバック。
+ * 音声側の `LOC.resolveAudioProperties` と同じ形)。Track に TIMESCALE を載せる publisher の
+ * 映像を壁時計と誤判定し、同期の推定が無効な値になるのを避ける。
+ *
  * ブラウザ API に依存しないため、LOC 復号の契約はここで検証できる。
  */
-export function buildVideoChunkPlan(obj: MoqtObject): {
+export function buildVideoChunkPlan(
+  trackProperties: ReadonlyArray<Property> | undefined,
+  obj: MoqtObject,
+): {
   type: "key" | "delta";
   timestamp: number;
   timestampKind: "none" | "wallClock" | "mediaTime";
@@ -234,7 +249,7 @@ export function buildVideoChunkPlan(obj: MoqtObject): {
   let frameMarking: LOC.VideoFrameMarking | undefined;
 
   if (obj.properties !== undefined && obj.properties.length > 0) {
-    const locProperties = LOC.decodeVideoProperties(obj.properties);
+    const locProperties = LOC.resolveVideoProperties(trackProperties, obj.properties);
 
     // TIMESTAMP から timestamp を取得する。EncodedVideoChunk の timestamp はマイクロ秒の
     // ため、Timescale があれば換算する (§2.3.1.2。音声と同じ換算)
@@ -297,17 +312,21 @@ export interface ReceivedVideoObject {
  * 数える)。
  *
  * @param timeOriginMs - `performance.timeOrigin`。受け取った時刻を壁時計に換算する
+ * @param trackProperties - SUBSCRIBE_OK の Track Properties。TIMESTAMP の種類
+ *   (壁時計かメディア時刻か) は TIMESCALE が Track と Object のどちらにあっても決まる
+ *   (draft-ietf-moq-loc-04 §2.3.1.2) ため、Object の Properties と合わせて解決する
  */
 export function recordVideoReceived(
   stats: PlaybackTimingStats,
   received: ReceivedVideoObject,
   timeOriginMs: number,
+  trackProperties: ReadonlyArray<Property> | undefined,
 ): void {
   const obj = received.object;
   let plan: ReturnType<typeof buildVideoChunkPlan> | null = null;
   let priorObjectIdGap = 0n;
   try {
-    plan = buildVideoChunkPlan(obj);
+    plan = buildVideoChunkPlan(trackProperties, obj);
     priorObjectIdGap = priorObjectIdGapOf(obj.properties);
   } catch {
     // 位置だけを記録する
@@ -443,6 +462,8 @@ export function resetSubscriberState(
   instance.audioWaveform.value = null;
   // 再生トグルは既定 (無効) に戻す。audio graph は呼び出し側が停止する
   instance.audioPlaybackEnabled.value = false;
+  // 同期の推定は購読が無い状態の既定値に戻す
+  instance.avSync.value = sub.EMPTY_AV_SYNC;
 
   instance.largestLocation.value = null;
 
@@ -526,8 +547,8 @@ export function useSubscriber(
   });
   // 表示待ちのフレーム (jitter buffer) と予約した描画 (presentFrame / clearPendingFrame が
   // 使う)。購読を始めるたびに設定 (jitterBufferEnabled) に合わせて作り直す。
-  // 表示時刻は共有の時間軸 (src/playbackTimeline.ts) が決める。devtools の音声と映像を
-  // 揃えることは 0636 が行うため、ここでは映像だけを時間軸へ記録する
+  // 表示時刻は共有の時間軸 (src/playbackTimeline.ts) が決める。音声と映像の両方を
+  // この 1 つの時間軸へ observe することで、同じ式の表示時刻で揃える
   const playoutTimelineRef = useRef(
     new PlaybackTimeline({
       timeOriginMs: performance.timeOrigin,
@@ -542,6 +563,9 @@ export function useSubscriber(
   // decoder に渡したフレームの TIMESTAMP の種類 (chunk の timestamp で引く)。
   // 復号の出力で、壁時計の TIMESTAMP のフレームだけを jitter buffer の表示時刻に使う
   const videoTimestampKindsRef = useRef(new Map<number, "none" | "wallClock" | "mediaTime">());
+  // 音声も同じ対応表を持つ。Timescale がある TIMESTAMP はメディア時刻であり、壁時計の
+  // 時刻と対応しないため、目標の開始時刻を求めずに到着基準で並べる
+  const audioTimestampKindsRef = useRef(new Map<number, "none" | "wallClock" | "mediaTime">());
   // 映像 Object を復号してよいかを Group の順序と欠落から決める (handleObject が使う)。
   // decoder を構成するたびに初期化し、キーフレームから始める
   const videoDecodeOrderRef = useRef(new VideoDecodeOrder());
@@ -598,13 +622,58 @@ export function useSubscriber(
   }
 
   /**
+   * 音声と映像で共有する `targetLatency` を決める (ミリ秒)
+   *
+   * 解決の規則はライブラリと共有する純関数 (src/msf/tracks.ts) が持つ。ここでは同じ
+   * render group / alternate group のトラックで値が異なるとき (draft-ietf-moq-msf-01
+   * §5.2.8 の MUST 違反) の警告だけを行う (ライブラリは onError で通知する)。
+   */
+  function resolveTargetLatencyMs(tracks: CatalogMediaTracks): number | null {
+    const resolved = resolveSharedTargetLatencyMs(tracks.audio ?? null, tracks.video ?? null);
+    if (resolved.conflict) {
+      addLog("warn", `[${subscriberId}] targetLatency differs between tracks in the same group`, {
+        audio: effectiveTargetLatencyMs(tracks.audio ?? null),
+        video: effectiveTargetLatencyMs(tracks.video ?? null),
+        used: resolved.value,
+      });
+    }
+    return resolved.value;
+  }
+
+  /**
+   * 同期の 5 項目の今の値をまとめる
+   *
+   * jitter buffer が無効のときは映像を時間軸へ記録せず、音声も到着基準で並べるため、
+   * 同期の推定として意味を持たない。このときは既定値に固定する (有効に戻ると、
+   * 作り直した時間軸で推定をやり直す)。
+   */
+  function currentAvSyncSnapshot(): sub.AvSyncSnapshot {
+    if (!jitterBufferEnabledRef.current) {
+      return sub.EMPTY_AV_SYNC;
+    }
+    const timeline = playoutTimelineRef.current;
+    return {
+      skewMs: timeline.skewMs(),
+      presentationDelayMs: timeline.presentationDelayMs,
+      targetLatencyMs: timeline.targetLatencyMs,
+      targetLatencyLimitedMs: timeline.targetLatencyLimitedMs,
+      // 音声を再生していない間は AudioContext が無く、時計の代用も起きていない
+      audioClockFallback: audioPlaybackRef.current?.clock.usingFallback ?? false,
+    };
+  }
+
+  /**
    * 統計の記録と表示待ちのキューを初期化し、signal への定期的な反映を始める
    *
    * jitter buffer の有効・無効は購読を始めた時点の設定で決める (購読中は設定を
    * 変更できない)。無効のときは全フレームを TIMESTAMP を使わずに積み、従来どおり
-   * 届いた順に 1 枚ずつ表示する
+   * 届いた順に 1 枚ずつ表示する。
+   *
+   * `tracks` は購読する音声と映像のトラックである。catalog の `targetLatency` を解決して
+   * 時間軸へ渡し、音声と映像で同じ表示時刻の式を使う (draft-ietf-moq-msf-01 §5.2.8)。
+   * 音声だけを購読するときは映像の時間軸を作らないため、この関数は呼ばない
    */
-  function startPlaybackTiming(): void {
+  function startPlaybackTiming(tracks: CatalogMediaTracks): void {
     stopPlaybackTiming();
     playbackTimingRef.current.reset();
     const enabled = settings.jitterBufferEnabled.value;
@@ -618,6 +687,8 @@ export function useSubscriber(
       timeOriginMs: performance.timeOrigin,
       maxQueuedFrames,
     });
+    // 作り直した時間軸にも同じ targetLatency を渡す (無いときは null でフォールバック)
+    playoutTimelineRef.current.setTargetLatencyMs(resolveTargetLatencyMs(tracks));
     playoutBufferRef.current = new PlayoutBuffer<VideoFrame>(
       maxQueuedFrames,
       playoutTimelineRef.current,
@@ -628,12 +699,17 @@ export function useSubscriber(
       if (!instance) return;
       playbackTimingRef.current.recordPlayoutDelay(playoutBufferRef.current.playoutDelayMs());
       instance.playbackTiming.value = playbackTimingRef.current.snapshot(performance.now());
+      // 同期の推定も同じ周期で反映する (フレームごとに反映すると再描画が表示の負荷になる)
+      instance.avSync.value = currentAvSyncSnapshot();
     }, PLAYBACK_TIMING_PUBLISH_INTERVAL_MS);
   }
 
   /**
    * signal への反映を止め、記録を捨てる。signal には最後に反映した値を残す
    * (他の統計と同じく、停止後も直前の購読の値を表示し、次の購読開始で初期化する)
+   *
+   * 時間軸を作り直すまで音声を同期させないため、jitter buffer の状態も下ろす
+   * (音声だけの購読では映像の時間軸が無い)
    */
   function stopPlaybackTiming(): void {
     if (playbackTimingTimerRef.current !== null) {
@@ -641,6 +717,7 @@ export function useSubscriber(
       playbackTimingTimerRef.current = null;
     }
     playbackTimingRef.current.reset();
+    jitterBufferEnabledRef.current = false;
   }
 
   /**
@@ -659,6 +736,7 @@ export function useSubscriber(
         context,
         destination: context.createMediaStreamDestination(),
         playout: new AudioPlayoutScheduler(),
+        clock: new AudioClockBridge(),
       };
       audioPlaybackRef.current = playback;
     }
@@ -692,6 +770,10 @@ export function useSubscriber(
         // 既に閉じている場合は無視する
       });
     }
+    // 時間軸からも音声の基準と学習と実績を消す。残すと共有の再生遅延に音声の下限
+    // (AUDIO_PLAYOUT_DELAY_FLOOR_MS) が残り、映像の表示が音声を一度も再生していない購読より
+    // 遅れたまま固定される。世代は進めない (積んでいる映像フレームを到着順に落とさない)
+    playoutTimelineRef.current.resetStream("audio");
   }
 
   /**
@@ -787,6 +869,8 @@ export function useSubscriber(
 
     instance.audioDecoder.value = audioDecoderInstance;
     instance.audioDecoderConfigured.value = true;
+    // 前の購読で復号に渡した TIMESTAMP の種類を持ち越さない (decoder ごと作り直す)
+    audioTimestampKindsRef.current.clear();
 
     // 直前に decoder へ渡した Audio Config。AAC のときだけ使う
     let appliedAudioConfig: Uint8Array | undefined;
@@ -835,11 +919,31 @@ export function useSubscriber(
         }
 
         // TIMESTAMP は TIMESCALE の有無に応じてマイクロ秒へ換算する
-        // (draft-ietf-moq-loc-04 §2.3.1.1 / §2.3.1.2)
+        // (draft-ietf-moq-loc-04 §2.3.1.1 / §2.3.1.2)。
+        // Timescale がある TIMESTAMP は壁時計ではなくメディア時刻であるため、映像と
+        // 同じく、復号の出力で同期の表示時刻に使わない (kind は復号の出力で引く)
+        const timestampKind: "none" | "wallClock" | "mediaTime" =
+          locProperties.timestamp === undefined
+            ? "none"
+            : locProperties.timescale === undefined
+              ? "wallClock"
+              : "mediaTime";
         const timestamp =
           locProperties.timestamp === undefined
             ? 0
             : Number(LOC.toDecoderMicroseconds(locProperties.timestamp, locProperties.timescale));
+
+        // 復号の出力で TIMESTAMP の種類を引くために覚える (handleAudioDecoded が使う)。
+        // 出力されなかった分が残り続けないよう、上限を超えたら古い方から忘れる
+        const kinds = audioTimestampKindsRef.current;
+        kinds.delete(timestamp);
+        kinds.set(timestamp, timestampKind);
+        for (const oldest of kinds.keys()) {
+          if (kinds.size <= MAX_TRACKED_TIMESTAMP_KINDS) {
+            break;
+          }
+          kinds.delete(oldest);
+        }
 
         audioDecoderInstance.decode(obj.payload, "key", timestamp, 0);
         current.audioChunksDecoded.value += 1;
@@ -908,7 +1012,10 @@ export function useSubscriber(
    * 音声トラックの購読の確立で、購読が確立したとみなす (isStarting を下ろす)。音声の
    * 購読の失敗は、購読の失敗として呼び出し元へ投げる (映像と音声の購読のように、
    * 音声を諦めて続ける対象が無い)。音声トラックの終わりとエラーは `trackCallbacks` で
-   * 購読の終わりとエラーとして扱う
+   * 購読の終わりとエラーとして扱う。
+   *
+   * 映像の時間軸が無いため、音声は到着基準で並べ、同期の推定も出さない
+   * (statistics は `resetSubscriberStats` が既定値に戻す)
    */
   async function subscribeAudioOnly(
     session: Session,
@@ -920,6 +1027,8 @@ export function useSubscriber(
   ): Promise<void> {
     instance.statusMessage.value = "Preparing audio decoder...";
     resetSubscriberStats(instance);
+    // 前の購読で jitter buffer が有効でも、映像の時間軸が無いこの購読では同期しない
+    jitterBufferEnabledRef.current = false;
     await startAudioSubscription(
       session,
       namespaceArray,
@@ -994,20 +1103,67 @@ export function useSubscriber(
       const numberOfChannels = audioData.numberOfChannels;
       const numberOfFrames = audioData.numberOfFrames;
 
+      // 復号の出力で TIMESTAMP の種類を引く (handleAudioObject が覚えた値)。
+      // 壁時計の TIMESTAMP を持たない音 (TIMESTAMP 無し、Timescale あり) は映像と
+      // 対応づけられないため、時間軸へ記録せず到着基準で並べる
+      const kinds = audioTimestampKindsRef.current;
+      const kind = kinds.get(audioData.timestamp);
+      kinds.delete(audioData.timestamp);
+      // jitter buffer が無効のときは映像を時間軸へ記録しないため、音声も記録しない
+      // (同期しないまま音声だけ目標へ合わせると映像とずれる)
+      const wallClockTimestamp =
+        jitterBufferEnabledRef.current && kind === "wallClock" ? audioData.timestamp : null;
+      const timeline = playoutTimelineRef.current;
+      if (wallClockTimestamp !== null) {
+        // 復号の出力を共有の時間軸へ記録する。映像と同じ式で表示時刻を決める
+        timeline.observe("audio", performance.timeOrigin + performance.now(), wallClockTimestamp);
+      }
+
+      // AudioContext の時計と performance.now() の対応を取り直す。まだ描画が始まって
+      // いない (currentTime が 0 で getOutputTimestamp も 0) ときは対応を作らない
+      const mapping = playback.context.getOutputTimestamp();
+      const contextTime = mapping.contextTime ?? 0;
+      const performanceTime = mapping.performanceTime ?? 0;
+      const hasMapping = contextTime !== 0 || performanceTime !== 0;
+      if (hasMapping || playback.context.currentTime > 0) {
+        playback.clock.update(
+          hasMapping ? { contextTime, performanceTime } : null,
+          playback.context.currentTime,
+          performance.now(),
+        );
+      }
+
+      // 目標の開始時刻 (`AudioContext.currentTime` の秒)。時間軸が表示時刻を決められない
+      // とき (壁時計の TIMESTAMP を持たない、基準の差が閾値を超えて共有が切れた) は
+      // null にして到着基準へフォールバックする
+      const targetMs =
+        wallClockTimestamp === null
+          ? null
+          : timeline.presentationPerformanceMs("audio", wallClockTimestamp);
+      const targetStartSeconds = targetMs === null ? null : playback.clock.toAudioSeconds(targetMs);
+
       // 届いたその場で鳴らすと、届く間隔の揺らぎで前の音と重なるか隙間が空き、ノイズに
       // なる。再生の遅れだけ遅らせ、timestamp の間隔どおりに途切れなく並べる
-      // (src/audioPlayout.ts)。基準を取り直した回数と捨てた音の数を数える
+      // (src/audioPlayout.ts)。目標があるとき (壁時計の TIMESTAMP を持ち、jitter buffer が
+      // 有効な購読) だけ守り、無いときと音声だけのときは取り直して連続を優先する。
+      // 音声を観測していないとき (壁時計の TIMESTAMP を持たない / Track の TIMESCALE を使う)
+      // は共有の再生遅延に下限が入らないため、ここで下限を必ず適用する。
+      // 基準を取り直した回数と捨てた音の数を数える
       const rebasesBefore = playback.playout.rebases;
       const decision = playback.playout.schedule(
         playback.context.currentTime,
         audioData.timestamp,
         numberOfFrames / audioData.sampleRate,
         {
-          // devtools の音声と映像を揃えるのは 0636。ここでは今までどおり到着基準で並べる
-          targetStartSeconds: null,
-          enforceTarget: false,
-          delaySeconds: AUDIO_PLAYOUT_DELAY_SECONDS,
-          presentationDelaySeconds: AUDIO_PLAYOUT_DELAY_SECONDS,
+          targetStartSeconds,
+          enforceTarget: targetStartSeconds !== null && jitterBufferEnabledRef.current,
+          delaySeconds:
+            Math.max(
+              timeline.playoutDelayMs ?? AUDIO_PLAYOUT_DELAY_FLOOR_MS,
+              AUDIO_PLAYOUT_DELAY_FLOOR_MS,
+            ) / 1_000,
+          presentationDelaySeconds:
+            (timeline.presentationExtraDelayMs ?? AUDIO_PLAYOUT_DELAY_FLOOR_MS) / 1_000,
         },
       );
       if (playback.playout.rebases !== rebasesBefore) {
@@ -1036,6 +1192,19 @@ export function useSubscriber(
       source.buffer = audioBuffer;
       source.connect(playback.destination);
       source.start(decision.startAt);
+
+      // 実際に鳴らす時刻を実績として記録する (同期ずれの推定に使う)。捨てた音は
+      // 鳴らないため記録しない。第 3 引数は Unix epoch マイクロ秒
+      if (wallClockTimestamp !== null) {
+        const presentedMs = playback.clock.toPerformanceMs(decision.startAt);
+        if (presentedMs !== null) {
+          timeline.recordPresentation(
+            "audio",
+            wallClockTimestamp,
+            BigInt(Math.round((performance.timeOrigin + presentedMs) * 1_000)),
+          );
+        }
+      }
     } catch (error) {
       console.error(`[${subscriberId}] failed to play audio data:`, error);
     } finally {
@@ -1179,6 +1348,16 @@ export function useSubscriber(
       frame.timestamp,
       presentationMs,
     );
+    // 表示時刻を決められたフレームだけ、実際に描いた時刻を実績として記録する
+    // (同期ずれの推定に使う)。表示時刻が null のフレームは音声と対応づけられない。
+    // 第 3 引数は Unix epoch マイクロ秒
+    if (presentationMs !== null) {
+      playoutTimelineRef.current.recordPresentation(
+        "video",
+        frame.timestamp,
+        BigInt(Math.round((performance.timeOrigin + performance.now()) * 1_000)),
+      );
+    }
     frame.close();
     if (stall !== null) {
       // 止まりを原因と一緒にログへ残す (ログの時刻で relay のログと突き合わせる)
@@ -1225,7 +1404,7 @@ export function useSubscriber(
       if (obj.properties && obj.properties.length > 0) {
         instance.objectsWithExtensions.value += 1;
       }
-      const plan = buildVideoChunkPlan(obj);
+      const plan = buildVideoChunkPlan(instance.subscriber.value?.trackProperties, obj);
 
       // 保留から出た時刻を記録する (到着は object コールバックで記録済み)
       if (plan.timestampKind !== "none") {
@@ -1687,7 +1866,8 @@ export function useSubscriber(
       instance.status.value = "connected";
       instance.statusMessage.value = "Subscribing...";
       resetSubscriberStats(instance);
-      startPlaybackTiming();
+      // 購読する音声と映像のトラックから targetLatency を解決して時間軸へ渡す
+      startPlaybackTiming(tracksFromCatalog);
       resetVideoGroupGate();
 
       // Subscriber オプションを構築する
@@ -1723,7 +1903,14 @@ export function useSubscriber(
             // 欠落として扱い、次のキーフレームまで待つ
             // 受け取った時刻で到着を記録し、時刻を Object と一緒に保留へ渡す
             const received: ReceivedVideoObject = { object: obj, receivedAtMs: performance.now() };
-            recordVideoReceived(playbackTimingRef.current, received, performance.timeOrigin);
+            // TIMESTAMP の種類は Track の TIMESCALE でも変わるため、Track Properties も渡す
+            // (SUBSCRIBE_OK の到着前に届いた Object では Object の Properties だけで判定する)
+            recordVideoReceived(
+              playbackTimingRef.current,
+              received,
+              performance.timeOrigin,
+              instance.subscriber.value?.trackProperties,
+            );
             enqueueVideoObjects(
               videoGroupGateRef.current.push(
                 received,

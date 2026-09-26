@@ -26,6 +26,11 @@
   - エンコード能力を超えて破棄したフレーム数を統計で確認できるようにする
   - `VideoStats` は公開型のため、この型を自前で構築しているコードは `droppedFrames` の追加が必要になる (後方互換なし)
   - @voluntas
+- [ADD] moqt-devtools の subscriber が音声と映像を同じ時間軸で同期して再生する
+  - 音声も `PlaybackTimeline` へ記録し、catalog の `targetLatency` から求めた同じ表示時刻で鳴らす。`targetLatency` の解決はライブラリと共有する純関数 (`src/msf/tracks.ts`) が持ち、同じ render group / alternate group で値が異なるときは警告をログに残す
+  - `AudioContext` の時計は `AudioClockBridge` で `performance.now()` に対応づけ、`AudioPlayoutScheduler` には目標の開始時刻を渡す。jitter buffer が無効のときと音声だけを購読するときは、同期せず到着基準で並べる
+  - 同期ずれ (`skewMs`)、表示の遅れ (`presentationDelayMs`)、使っている目標遅延 (`targetLatencyMs`)、切り下げた分 (`targetLatencyLimitedMs`)、時計の代用 (`audioClockFallback`) を画面と `window.moqtDevTools.getSubscriber(id)` に出す。同期の推定が意味を持たないときは既定値 (null / null / null / 0 / false) にする
+  - @voluntas
 - [ADD] `MediaPublisherOptions` に `targetLatency` と `renderGroup` を追加し、catalog の音声と映像の両方の track に載せる
   - `targetLatency` は符号化から表示までの wallclock の差 (ms)。指定すると音声と映像の両方の track に同じ値を載せる。同じ render group と alternate group の track は同一の値でなければならない (draft-ietf-moq-msf-01 Section 5.2.8 の MUST) ため、publisher は値 1 つだけを持つ
   - `renderGroup` は同じ group の track を同時に描画する表明である (Section 5.2.11)。どちらも未指定のときは catalog に載せず、購読側が表示の遅れを選ぶ (Section 5.2.8 の MAY)。0 ms と renderGroup の 0 は有効値である

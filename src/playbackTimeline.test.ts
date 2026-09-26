@@ -22,7 +22,7 @@ import {
   PlaybackTimeline,
 } from "./playbackTimeline";
 import { AUDIO_CLOCK_DEADBAND_MS } from "./audioPlayout";
-import { MAX_PRESENTATION_LAG_MS } from "./playoutBuffer";
+import { MAX_PRESENTATION_LAG_MS, PlayoutBuffer } from "./playoutBuffer";
 
 // 送信側の壁時計 (Unix epoch ミリ秒)。メディア時刻 0 の TIMESTAMP にする
 const EPOCH_MS = 1_790_263_445_000;
@@ -532,6 +532,70 @@ test("reset: 基準と学習と実績を消す", () => {
   // 次の観測で作り直す
   timeline.observe("video", EPOCH_MS, timestampOf(0));
   assert.closeTo(timeline.presentationDelayMs ?? 0, 300, TOLERANCE_MS);
+});
+
+// 音声の再生を止めたときは、音声の基準と学習と実績だけを消す。消さないと共有の再生遅延に
+// 音声の下限 (80 ms) が残り、音声を一度も再生していない購読より映像の表示が遅れたまま
+// 固定される。消した後は残った映像の値だけで表示時刻を決める
+test("resetStream: 音声だけを消すと映像だけの値になる", () => {
+  const timeline = createTimeline();
+  // 音声を観測しているため、共有の再生遅延に下限 (80 ms) が入る
+  timeline.observe("audio", EPOCH_MS, timestampOf(0));
+  for (let index = 0; index < 30; index++) {
+    timeline.observe("video", EPOCH_MS + index * FRAME_MS, timestampOf(index * FRAME_MS));
+  }
+  assert.closeTo(timeline.playoutDelayMs ?? 0, AUDIO_PLAYOUT_DELAY_FLOOR_MS, TOLERANCE_MS);
+  assert.closeTo(
+    wallClockMsOf(timeline, "video", 0),
+    EPOCH_MS + AUDIO_PLAYOUT_DELAY_FLOOR_MS,
+    TOLERANCE_MS,
+  );
+  // 音声の実績 (同期ずれの推定に使う) も作っておく
+  const timestampMicros = timestampOf(1_000);
+  const presentedWallClockMicros = timeline.presentationWallClockMicros("video", timestampMicros);
+  assert.isNotNull(presentedWallClockMicros);
+  timeline.recordPresentation("audio", timestampMicros, presentedWallClockMicros ?? 0n);
+  timeline.recordPresentation("video", timestampMicros, presentedWallClockMicros ?? 0n);
+  assert.closeTo(timeline.skewMs() ?? -1, 0, TOLERANCE_MS);
+
+  timeline.resetStream("audio");
+
+  // 共有の再生遅延には揺らぎ 0 の映像だけが残る (音声の下限 80 ms は入らない)
+  assert.closeTo(timeline.playoutDelayMs ?? -1, 0, TOLERANCE_MS);
+  // 映像の表示時刻も音声の下限を含まない
+  assert.closeTo(wallClockMsOf(timeline, "video", 0), EPOCH_MS, TOLERANCE_MS);
+  assert.closeTo(wallClockMsOf(timeline, "video", 1_000), EPOCH_MS + 1_000, TOLERANCE_MS);
+  // 消したトラックの実績は残らない
+  assert.isNull(timeline.skewMs(), "音声の実績を消すこと");
+});
+
+// 世代は「積んでいる映像フレームの表示時刻を決められるか」の目印である (src/playoutBuffer.ts)。
+// 音声だけを消すときに世代を進めると、積んでいるフレームが到着順に落ち、表示時刻を待たずに
+// 描かれる。音声の再生を止めても映像の表示の規則は変えない
+test("resetStream: 世代を進めず、映像の積んだフレームの扱いを変えない", () => {
+  const timeline = createTimeline();
+  timeline.observe("audio", EPOCH_MS, timestampOf(0));
+  timeline.observe("video", EPOCH_MS, timestampOf(0));
+  const buffer = new PlayoutBuffer<string>(MAX_QUEUED_FRAMES, timeline);
+  const timestampMicros = timestampOf(1_000);
+  assert.deepEqual(buffer.enqueue("frame", timestampMicros), [], "あふれずに積めること");
+  const presentationMs = buffer.presentationTimeMs(timestampMicros);
+  assert.isNotNull(presentationMs, "積んだ時点で表示時刻が決まること");
+  const generationBefore = timeline.generation;
+
+  timeline.resetStream("audio");
+
+  assert.equal(timeline.generation, generationBefore, "世代を進めないこと");
+  // 表示時刻を過ぎたフレームは、表示時刻どおりに描かれる (到着順に落ちない)。表示時刻は
+  // 音声の下限 (80 ms) を含まない映像だけの値になる
+  const selection = buffer.select((presentationMs ?? 0) + 1);
+  assert.equal(selection.draw, "frame");
+  assert.isNotNull(selection.drawPresentationMs, "表示時刻を使い続けること");
+  assert.closeTo(
+    selection.drawPresentationMs ?? -1,
+    (presentationMs ?? 0) - AUDIO_PLAYOUT_DELAY_FLOOR_MS,
+    TOLERANCE_MS,
+  );
 });
 
 // ============================================================================

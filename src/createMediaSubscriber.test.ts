@@ -2462,6 +2462,53 @@ test("handleAudioDecodedData: TIMESCALE がある TIMESTAMP は到着基準に�
 });
 
 /**
+ * 完了条件: 共有の時間軸が音声を観測していない (壁時計の TIMESTAMP を持たない) ときも、
+ * 到着基準の再生の遅れは下限 `AUDIO_PLAYOUT_DELAY_FLOOR_MS` を下回らない。
+ *
+ * 共有の再生遅延は音声を観測したときにだけ下限が入る (src/playbackTimeline.ts)。音声を
+ * 観測していないと揺らぎから求めた小さい値になり、そのまま並べると到着の揺らぎを吸収
+ * できずに音が途切れる。
+ */
+test("handleAudioDecodedData: 音声を観測していなくても再生の遅れが下限を下回らない", () => {
+  const { control, errors } = createAvSyncSubscriber();
+  control.audioDecoderConfigured = true;
+  control.receivedCatalog = makeAudioVideoCatalog(
+    { isLive: true, targetLatency: AV_SYNC_TARGET_LATENCY_MS },
+    { isLive: true, targetLatency: AV_SYNC_TARGET_LATENCY_MS },
+  );
+  control.extractTrackInfo();
+  const mapping = audioClockMappingAt(avSyncReferenceMs());
+  // 映像だけを観測する (音声の復号の出力は観測しない)。共有の再生遅延には音声の下限が
+  // 入らず、揺らぎ 0 の映像の値になる
+  control.playbackTimeline.observe(
+    "video",
+    performance.timeOrigin + performance.now(),
+    wallClockTimestampMicrosFor(mapping),
+  );
+  const observedDelayMs = control.playbackTimeline.playoutDelayMs;
+  assert.isNotNull(observedDelayMs, "映像を観測したため共有の再生遅延があること");
+  assert.isBelow(
+    observedDelayMs ?? Infinity,
+    AUDIO_PLAYOUT_DELAY_FLOOR_MS,
+    "音声を観測していないため下限が入らないこと",
+  );
+
+  // 目標の表示時刻を使わない音 (Timescale のある TIMESTAMP) として鳴らす
+  const decodedTimestamp = 1_500_000;
+  control.audioTimestampKinds.set(decodedTimestamp, "mediaTime");
+  const reservation = playAudioFrame(control, decodedTimestamp, mapping, 1_000);
+
+  assert.equal(errors.length, 0);
+  assert.equal(reservation.startedAtSeconds.length, 1);
+  // 到着基準の再生の遅れは下限 (80 ms) になる
+  assert.closeTo(
+    (reservation.startedAtSeconds[0] ?? 0) * 1_000,
+    reservation.currentTimeSeconds * 1_000 + AUDIO_PLAYOUT_DELAY_SECONDS * 1_000,
+    AV_SYNC_TOLERANCE_MS,
+  );
+});
+
+/**
  * draft-ietf-moq-loc-04 §2.3.1.1:
  * TIMESCALE が無い TIMESTAMP は Unix epoch マイクロ秒の壁時計であるため、目標の表示時刻を
  * 使う。TIMESCALE の有無で扱いが変わることを上のテストと対にして固定する。

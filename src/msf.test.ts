@@ -44,6 +44,7 @@ import {
   validateCatalog,
   validateCatalogTrack,
 } from "./msf";
+import { effectiveTargetLatencyMs, resolveSharedTargetLatencyMs } from "./msf/tracks";
 import { MsfCompressionAlgorithm } from "./properties";
 
 // =============================================================================
@@ -1791,6 +1792,131 @@ test("getTracksByAltGroup / getTracksByRenderGroup: グループ番号でフィ�
   };
   assert.strictEqual(getTracksByAltGroup(catalog, 1).length, 2);
   assert.strictEqual(getTracksByRenderGroup(catalog, 10).length, 3);
+});
+
+// =============================================================================
+// targetLatency の解決 (§5.2.8)
+// =============================================================================
+
+/** targetLatency の解決のテストで使うライブのトラックを作る */
+function targetLatencyTrack(
+  options: {
+    targetLatency?: number;
+    renderGroup?: number;
+    altGroup?: number;
+    isLive?: boolean;
+  } = {},
+): CatalogTrack {
+  const track: CatalogTrack = { name: "track", packaging: "loc", isLive: options.isLive ?? true };
+  if (options.targetLatency !== undefined) track.targetLatency = options.targetLatency;
+  if (options.renderGroup !== undefined) track.renderGroup = options.renderGroup;
+  if (options.altGroup !== undefined) track.altGroup = options.altGroup;
+  return track;
+}
+
+test("effectiveTargetLatencyMs: isLive が false のトラックの宣言は無視する (§5.2.8 の MUST)", () => {
+  // §5.2.8: isLive が false の track の targetLatency は無視する MUST
+  assert.isNull(
+    effectiveTargetLatencyMs(targetLatencyTrack({ targetLatency: 100, isLive: false })),
+  );
+  // 未解決 (トラックが無い) ときも使える値は無い
+  assert.isNull(effectiveTargetLatencyMs(null));
+  // ライブのトラックは宣言した値をそのまま使う
+  assert.strictEqual(effectiveTargetLatencyMs(targetLatencyTrack({ targetLatency: 100 })), 100);
+  // 宣言が無いときは null を返し、購読側が遅延を選ぶ (§5.2.8 の MAY)
+  assert.isNull(effectiveTargetLatencyMs(targetLatencyTrack()));
+});
+
+test("resolveSharedTargetLatencyMs: 両方に無いときは null を返し、共有する値を作らない (§5.2.8)", () => {
+  // どちらも宣言していないときは、揺らぎから求めた再生の遅れだけを使うフォールバックになる
+  assert.deepEqual(resolveSharedTargetLatencyMs(targetLatencyTrack(), targetLatencyTrack()), {
+    value: null,
+    conflict: false,
+  });
+  // どちらも解決できていない (購読していない、catalog から引けない) ときも同じ
+  assert.deepEqual(resolveSharedTargetLatencyMs(null, null), { value: null, conflict: false });
+});
+
+test("resolveSharedTargetLatencyMs: 片方にだけあるときはその値を使い、通知しない (§5.2.8)", () => {
+  const audio = targetLatencyTrack({ targetLatency: 100, renderGroup: 1 });
+  const video = targetLatencyTrack({ renderGroup: 1 });
+  // 宣言が無い側は遅延を選んでよい (MAY) ため、宣言がある側の値に揃える
+  assert.deepEqual(resolveSharedTargetLatencyMs(audio, video), { value: 100, conflict: false });
+  assert.deepEqual(resolveSharedTargetLatencyMs(video, audio), { value: 100, conflict: false });
+  // 解決できていないトラック (null) を渡したときも同じ
+  assert.deepEqual(resolveSharedTargetLatencyMs(audio, null), { value: 100, conflict: false });
+  assert.deepEqual(resolveSharedTargetLatencyMs(null, audio), { value: 100, conflict: false });
+});
+
+test("resolveSharedTargetLatencyMs: 両方にあって同じときはその値を使い、通知しない (§5.2.8)", () => {
+  const audio = targetLatencyTrack({ targetLatency: 100, renderGroup: 1 });
+  const video = targetLatencyTrack({ targetLatency: 100, renderGroup: 1 });
+  assert.deepEqual(resolveSharedTargetLatencyMs(audio, video), { value: 100, conflict: false });
+  // 0 ms は未指定ではなく有効な値であり、同じ値として扱う
+  assert.deepEqual(
+    resolveSharedTargetLatencyMs(
+      targetLatencyTrack({ targetLatency: 0 }),
+      targetLatencyTrack({ targetLatency: 0 }),
+    ),
+    { value: 0, conflict: false },
+  );
+});
+
+test("resolveSharedTargetLatencyMs: 同じ render group で値が異なるときは大きい方を使い、通知する (§5.2.8 の MUST)", () => {
+  // §5.2.8: 同じ render group の track は同じ targetLatency でなければならない MUST
+  const audio = targetLatencyTrack({ targetLatency: 100, renderGroup: 1 });
+  const video = targetLatencyTrack({ targetLatency: 200, renderGroup: 1 });
+  assert.deepEqual(resolveSharedTargetLatencyMs(audio, video), { value: 200, conflict: true });
+  // 音声と映像を入れ替えても大きい方を使う (小さい方の要求より早く出さない)
+  assert.deepEqual(resolveSharedTargetLatencyMs(video, audio), { value: 200, conflict: true });
+});
+
+test("resolveSharedTargetLatencyMs: 同じ alternate group で値が異なるときは大きい方を使い、通知する (§5.2.8 の MUST)", () => {
+  // §5.2.8 の MUST は同じ alternate group の track にも掛かる (ABR の切り替え先)
+  const audio = targetLatencyTrack({ targetLatency: 150, altGroup: 2 });
+  const video = targetLatencyTrack({ targetLatency: 50, altGroup: 2 });
+  assert.deepEqual(resolveSharedTargetLatencyMs(audio, video), { value: 150, conflict: true });
+  assert.deepEqual(resolveSharedTargetLatencyMs(video, audio), { value: 150, conflict: true });
+});
+
+test("resolveSharedTargetLatencyMs: group が無いか異なるときは大きい方を使い、通知しない (§5.2.8)", () => {
+  // group が無い track 同士は仕様に反しないため通知しない
+  assert.deepEqual(
+    resolveSharedTargetLatencyMs(
+      targetLatencyTrack({ targetLatency: 100 }),
+      targetLatencyTrack({ targetLatency: 300 }),
+    ),
+    { value: 300, conflict: false },
+  );
+  // render group も alternate group も異なるときも通知しない
+  assert.deepEqual(
+    resolveSharedTargetLatencyMs(
+      targetLatencyTrack({ targetLatency: 100, renderGroup: 1, altGroup: 1 }),
+      targetLatencyTrack({ targetLatency: 300, renderGroup: 2, altGroup: 2 }),
+    ),
+    { value: 300, conflict: false },
+  );
+  // 片方だけが group を持つときも仕様に反しないため通知しない
+  assert.deepEqual(
+    resolveSharedTargetLatencyMs(
+      targetLatencyTrack({ targetLatency: 100, renderGroup: 1 }),
+      targetLatencyTrack({ targetLatency: 300 }),
+    ),
+    { value: 300, conflict: false },
+  );
+});
+
+test("resolveSharedTargetLatencyMs: isLive が false のトラックの値は無視する (§5.2.8 の MUST)", () => {
+  const live = targetLatencyTrack({ targetLatency: 200, renderGroup: 1 });
+  const notLive = targetLatencyTrack({ targetLatency: 100, renderGroup: 1, isLive: false });
+  // isLive が false の側の値は使わないため、値の差は無く通知も要らない
+  assert.deepEqual(resolveSharedTargetLatencyMs(notLive, live), { value: 200, conflict: false });
+  assert.deepEqual(resolveSharedTargetLatencyMs(live, notLive), { value: 200, conflict: false });
+  // どちらも isLive が false のときは共有する値が無く、フォールバックになる
+  assert.deepEqual(resolveSharedTargetLatencyMs(notLive, notLive), {
+    value: null,
+    conflict: false,
+  });
 });
 
 // =============================================================================

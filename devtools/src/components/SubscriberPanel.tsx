@@ -84,6 +84,8 @@ export function SubscriberPanel({
     stopping: instance.isStopping.value,
   });
   const timing = instance.playbackTiming.value;
+  // 音声と映像の同期の推定値。未購読、jitter buffer が無効、音声だけの購読では既定値
+  const avSync = instance.avSync.value;
   const sessionStats = session?.getStatistics();
 
   const getStatusClasses = () => {
@@ -412,6 +414,44 @@ export function SubscriberPanel({
                   value: timing.lateFramesDropped,
                   tone: "warn",
                   testId: "subscriber-late-frames-dropped",
+                },
+              ]}
+            />
+          </StatSection>
+
+          {/* 音声と映像の同期の推定。値の意味はライブラリの AvSyncStats と同じで、
+              未購読や jitter buffer が無効のときは既定値 (null / 0 / false) になる */}
+          <StatSection title="A/V Sync">
+            <StatList
+              items={[
+                {
+                  label: "skewMs",
+                  value: avSync.skewMs === null ? "-" : avSync.skewMs.toFixed(1),
+                  testId: "subscriber-av-sync-skew",
+                },
+                {
+                  label: "presentationDelayMs",
+                  value:
+                    avSync.presentationDelayMs === null
+                      ? "-"
+                      : avSync.presentationDelayMs.toFixed(1),
+                  testId: "subscriber-av-sync-presentation-delay",
+                },
+                {
+                  label: "targetLatencyMs",
+                  value: avSync.targetLatencyMs ?? "-",
+                  testId: "subscriber-av-sync-target-latency",
+                },
+                {
+                  label: "targetLatencyLimitedMs",
+                  value: avSync.targetLatencyLimitedMs,
+                  tone: avSync.targetLatencyLimitedMs > 0 ? "warn" : undefined,
+                  testId: "subscriber-av-sync-target-latency-limited",
+                },
+                {
+                  label: "audioClockFallback",
+                  value: String(avSync.audioClockFallback),
+                  testId: "subscriber-av-sync-audio-clock-fallback",
                 },
               ]}
             />

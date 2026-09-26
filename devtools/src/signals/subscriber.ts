@@ -7,6 +7,35 @@ import type { AudioDecoderWrapper } from "../../../src/codec/AudioDecoder.ts";
 import { EMPTY_PLAYBACK_TIMING, type PlaybackTimingSnapshot } from "../utils/playbackTimingStats";
 
 /**
+ * 音声と映像の同期の推定値 (表示とテスト用 API へ出す snapshot)
+ *
+ * 値の意味はライブラリの `AvSyncStats` (src/codec/types.ts) と同じである。片方しか
+ * 購読していない、jitter buffer が無効、またはまだ表示時刻を決められていないときは
+ * 既定値 (`EMPTY_AV_SYNC`) のままにする。
+ */
+export interface AvSyncSnapshot {
+  /** 同期ずれの推定値 (ms)。映像の表示が音声より遅れていれば正。実績が無ければ null */
+  skewMs: number | null;
+  /** 表示の遅れ (ms)。TIMESTAMP から表示時刻までの差。基準が未確立なら null */
+  presentationDelayMs: number | null;
+  /** catalog から解決した目標遅延 (ms)。無い、または使えないときは null */
+  targetLatencyMs: number | null;
+  /** 表示の遅れの上限に収まらず切り下げた分 (ms)。使っていないときは 0 */
+  targetLatencyLimitedMs: number;
+  /** AudioContext.getOutputTimestamp() を使えず currentTime で代用しているか */
+  audioClockFallback: boolean;
+}
+
+/** 同期の推定が無いときの値 (未購読、jitter buffer が無効、音声だけの購読) */
+export const EMPTY_AV_SYNC: AvSyncSnapshot = {
+  skewMs: null,
+  presentationDelayMs: null,
+  targetLatencyMs: null,
+  targetLatencyLimitedMs: 0,
+  audioClockFallback: false,
+};
+
+/**
  * 個々の Subscriber インスタンスの状態。
  *
  * 各フィールドは Signal で保持し、フィールド単位で購読/更新する。
@@ -60,6 +89,10 @@ export interface SubscriberInstance {
   // 受信から表示までの時間の統計 (到着の揺らぎ・遅延・復号時間・表示間隔の分布と、
   // 表示の止まり・表示キューのあふれの累積)。useSubscriber が一定間隔で更新する
   playbackTiming: Signal<PlaybackTimingSnapshot>;
+  // 音声と映像の同期の推定値 (同期ずれ・表示の遅れ・目標遅延・切り下げた分・時計の代用)。
+  // 映像の購読を始めたときから useSubscriber が一定間隔で更新する。片方しか購読して
+  // いない、または jitter buffer が無効なときは既定値のまま
+  avSync: Signal<AvSyncSnapshot>;
   decoderState: Signal<string>;
   // 最大の Location
   largestLocation: Signal<{ group: bigint; object: bigint } | null>;
@@ -126,6 +159,7 @@ export function createSubscriberInstance(id: string): SubscriberInstance {
     missingReferenceFramesDropped: signal(0),
     decodeErrors: signal(0),
     playbackTiming: signal<PlaybackTimingSnapshot>(EMPTY_PLAYBACK_TIMING),
+    avSync: signal<AvSyncSnapshot>(EMPTY_AV_SYNC),
     decoderState: signal("unconfigured"),
     largestLocation: signal<{ group: bigint; object: bigint } | null>(null),
     dynamicGroupsSupported: signal(false),
