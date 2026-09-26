@@ -181,6 +181,15 @@
 - [UPDATE] moqt-devtools の設定入力で再描画される範囲を狭める
   - 副題のモードリンクが接続設定の signal を読んでいたため、Relay URI に 10 文字入力するたびに App と SubscriberPanel が再描画されていた (23.7 ms)。副題を別のコンポーネントへ切り出して signal の購読を閉じ、8.4 ms にした
   - @voluntas
+- [UPDATE] moqt-devtools のデバッグパネルの「Copy for LLM」に、設定と統計の全項目を出す
+  - 接続設定・publisher・subscriber の項目を手書きで列挙していたため、Target Latency / Render Group と音声の設定、現在の表示モード、Subscriber の sub group、同期の推定 (avSync)、音声の統計、Chunks と Decode Errors、Session の統計、Catalog が本文から抜けていた。統計のスナップショット (`window.moqtDevTools` と同じ実装) から本文を組み立て、項目を足せば本文にも出るようにする
+  - 認可トークンは、値ではなく送るかどうかと種別だけを出す
+  - 本文を検証するテストを追加する
+  - @voluntas
+- [UPDATE] moqt-devtools のデバッグログの蓄積を signals へ移し、ログの購読範囲を狭める
+  - ログの蓄積が `DebugPanel` コンポーネントにあり、hooks と App がコンポーネントを import していた。`signals/debugLog.ts` へ移し、パネル本体と App はログの連番を読まないようにする。ログを 1 件追加したときに再描画されるのはログの一覧と件数だけになる
+  - 日時・経過時間・差分は追加時に 1 回だけ整形して持ち、行は `DebugLogRow` に切り出して展開の状態を行の識別子 (連番) で持つ。上限で捨てたログの展開状態と表示モードを残さないようにする
+  - @voluntas
 
 - [FIX] moqt-devtools の音声メーターの見出しが、幅の広い UI フォントで折り返さないようにする
   - 見出しの値を 11px にし、項目の間隔を詰める。折り返すと下の Catalog と Statistics が動く
