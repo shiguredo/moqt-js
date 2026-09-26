@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "preact/hooks";
 import { useSignalEffect } from "@preact/signals";
 import { useCopyFeedback } from "../hooks/useCopyFeedback";
-import * as settings from "../signals/connectionSettings";
+import { mode } from "../signals/connectionSettings";
 import { autoScroll, closeDebugPanel, isDebugPanelOpen } from "../signals/debug";
 import { clearLog, getLogBuffer, logSequence, type LogEntry } from "../signals/debugLog";
 import {
@@ -22,7 +22,7 @@ import type { ViewMode } from "./DebugLogRow";
  * 残っている最も古い連番より小さい連番は捨てられたログのもの。
  * 変わらない場合は同じ参照を返し、無駄な再描画を起こさない。
  */
-function pruneLogIds<T extends ReadonlySet<number>>(values: T, oldestLogId: number | null): T {
+function pruneLogIds(values: ReadonlySet<number>, oldestLogId: number | null): ReadonlySet<number> {
   if (oldestLogId === null || values.size === 0) {
     return values;
   }
@@ -33,7 +33,7 @@ function pruneLogIds<T extends ReadonlySet<number>>(values: T, oldestLogId: numb
       next.delete(value);
     }
   }
-  return (next ?? values) as T;
+  return next ?? values;
 }
 
 /** 上限で捨てられたログの表示モードを落とす (pruneLogIds と同じ考え方) */
@@ -62,7 +62,7 @@ function pruneViewModes(
  */
 export function DebugPanel() {
   // 表示モード。subscriber モードでは Publisher の通知ボタンを隠す
-  const currentMode = settings.mode.value;
+  const currentMode = mode.value;
 
   // 展開状態と表示モードは配列の添字ではなくログの連番で持つ。添字で持つと、
   // 上限到達後に最古を捨てたときに状態が別の行へ移る

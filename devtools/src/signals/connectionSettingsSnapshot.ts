@@ -21,7 +21,10 @@ import * as settings from "./connectionSettings";
  * 外部 (LLM など) へ渡す前提のため、設定されているかどうかと種別だけを持つ。
  */
 export interface ConnectionSettingsSnapshot {
-  /** Relay URI。c4m を含む場合はそのまま入る (伏せるのはコピー用のテキスト側の責務) */
+  /**
+   * Relay URI。c4m を含む場合はトークンの Base64 もそのまま入る
+   * (コピー用のテキストへ出すときの伏せ字は未実装)
+   */
   url: string;
   /** URI Fragment (type:value) */
   fragment: string;

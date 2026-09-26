@@ -181,7 +181,7 @@ const SUBSCRIBER_COVERAGE: CoverageExpectation = {
 };
 
 test("ConnectionSettingsSnapshot: 接続設定の signal を網羅する", () => {
-  // 0763 で足した targetLatency / renderGroup と音声の設定がコピー本文から抜けていた。
+  // 以前、Target Latency / Render Group と音声の設定がコピー本文から抜けていた。
   // 設定を足したら、このスナップショットへ足すか、出さない理由を書く
   assert.deepEqual(
     findUncoveredSignals(
@@ -203,7 +203,7 @@ test("PublisherStats: publisher の signal を網羅する", () => {
 });
 
 test("SubscriberStats: Subscriber インスタンスの signal を網羅する", () => {
-  // 0635 / 0636 で足した同期の推定と音声の統計がコピー本文から抜けていた
+  // 以前、同期の推定と音声の統計がコピー本文から抜けていた
   const instance = createSubscriberInstance("coverage");
   assert.deepEqual(
     findUncoveredSignals(

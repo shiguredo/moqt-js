@@ -33,9 +33,11 @@ import { url } from "./connectionSettings";
 /**
  * 統計のスナップショット
  *
- * 画面の表示、`window.moqtDevTools` (テスト用 API)、デバッグパネルの「Copy for LLM」が
- * 同じ統計を別々に組み立てていると、統計を足したときにどれかへ足し忘れる。
- * 変換をここ 1 箇所に置き、3 つともこのスナップショットから読む。
+ * `window.moqtDevTools` (テスト用 API) とデバッグパネルの「Copy for LLM」が同じ統計を
+ * 別々に組み立てていると、統計を足したときにどちらかへ足し忘れる。変換をここ 1 箇所に
+ * 置き、両方ともこのスナップショットから読む。
+ * 画面のパネル (`PublisherPanel` / `SubscriberPanel`) は今も signal を直接読む
+ * (表示の粒度がスナップショットと合わないため)。画面の統合は別途行う。
  *
  * 値が無いことは null で表す。0 や false は値があるため null へ潰さない。
  */

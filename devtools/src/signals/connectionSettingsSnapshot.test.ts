@@ -113,7 +113,7 @@ test("buildConnectionSettingsSnapshot: 接続に使う設定をそのまま写�
 });
 
 test("buildConnectionSettingsSnapshot: targetLatency と renderGroup の未指定は null のままにする", () => {
-  // 0 は有効値 (0763 の catalog の扱いと同じ)。未指定 (null) と 0 を区別できないと、
+  // 0 は有効値 (catalog の targetLatency と同じ扱い)。未指定 (null) と 0 を区別できないと、
   // コピー本文から「指定したかどうか」が読めなくなる
   resetSettingSignals();
 

@@ -4,7 +4,7 @@ import { ModeSubtitle } from "./components/ModeSubtitle";
 import { PublisherPanel } from "./components/PublisherPanel";
 import { SubscriberPanel } from "./components/SubscriberPanel";
 import { DebugPanel } from "./components/DebugPanel";
-import { DebugLogBadge } from "./components/DebugLogCount";
+import { DebugLogBadge } from "./components/DebugLogBadge";
 import { isDebugPanelOpen, toggleDebugPanel } from "./signals/debug";
 import { buildQueryString, mode } from "./signals/connectionSettings";
 import { useCopyUrlButton } from "./hooks/useCopyUrlButton";

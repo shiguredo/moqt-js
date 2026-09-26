@@ -13,9 +13,8 @@ import type { PublisherStats, SubscriberStats } from "./signals/statsSnapshot";
 import { subscriberInstances } from "./signals/subscriber";
 import { url, certificateHash } from "./signals/connectionSettings";
 
-// 統計の型はテストからも参照するため、ここから再 export する
+// 統計の型は E2E が参照するため、ここから再 export する
 export type { PublisherStats, SubscriberStats };
-export { buildPublisherStats, buildSubscriberStats };
 
 /**
  * 接続設定
