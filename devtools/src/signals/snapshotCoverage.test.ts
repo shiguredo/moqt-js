@@ -69,6 +69,24 @@ function findUncoveredSignals(
   return uncovered;
 }
 
+/**
+ * 除外した signal がスナップショットへ出ていないかを返す
+ *
+ * 除外リストに書いたままスナップショットへも出していると、除外の理由と実装が食い違う。
+ */
+function findUnexpectedInclusions(
+  source: Record<string, unknown>,
+  snapshot: object,
+  expectation: CoverageExpectation,
+): string[] {
+  const paths = new Set<string>();
+  collectSnapshotPaths(snapshot, "", paths);
+  // 実在する signal だけを見る (消えた signal は findStaleExclusions が見る)
+  return Object.keys(expectation.excluded).filter(
+    (name) => paths.has(name) && isSignal(source[name]),
+  );
+}
+
 /** 消えた signal を除外したままにしていないか (理由を書いた signal が実在するか) を返す */
 function findStaleExclusions(
   source: Record<string, unknown>,
@@ -123,29 +141,29 @@ const PUBLISHER_COVERAGE: CoverageExpectation = {
   excluded: {
     pubSession:
       "Session の実体 (制御ストリームとデータストリームの統計は sessionStatistics に出す)",
-    publisher: "Publisher の実体",
-    catalogPublisher: "Publisher の実体",
+    publisher: "Publisher の実体。統計は objectsSent / bytesSent / currentGroup に出す",
+    catalogPublisher: "Catalog 用の Publisher の実体。送った Catalog は catalog に出す",
     catalogGroup: "Catalog を送る Group ID。時刻由来の値で、診断に使わない",
-    encoder: "エンコーダの実体",
-    mediaStream: "MediaStream の実体",
+    encoder: "エンコーダの実体。状態は encoderState、統計は framesEncoded / chunksEncoded に出す",
+    mediaStream: "映像の MediaStream の実体 (統計ではない)",
     isPreviewActive: "画面のプレビューを出しているかどうか",
     isStopping: "停止処理の途中かどうか (一時的な状態)",
     isStarting: "開始処理の途中かどうか (一時的な状態)",
     hasActivePublisher: "pubSession と isStarting から求まる computed",
     isPublishing: "publisher と audioPublisher から求まる computed",
-    frameReader: "映像の読み取りの実体",
-    videoWallClock: "LOC TIMESTAMP の時刻換算の実体",
+    frameReader: "映像の読み取りの実体 (統計ではない)",
+    videoWallClock: "LOC TIMESTAMP の時刻換算の実体 (統計ではない)",
     publishTimingUpdatedAtMs: "画面へ反映する間隔を測るための値",
     framesSinceKeyFrame: "キーフレームの間隔を数える途中の値",
     newGroupRequested: "NEW_GROUP_REQUEST を処理している途中かどうか",
-    videoStreamCleanup: "映像の後始末の実体",
+    videoStreamCleanup: "映像の後始末の実体 (統計ではない)",
     keyframeInterval: "接続設定の keyframeIntervalFrames と同じ値を配信側が持っている",
     pubCurrentObjectId: "Object ID の採番の途中の値",
-    audioEncoder: "音声のエンコーダの実体",
-    audioStream: "音声の MediaStream の実体",
-    audioStreamCleanup: "音声の後始末の実体",
-    audioFrameReader: "音声の読み取りの実体",
-    audioLevelTimeline: "LOC Audio Level の算出の実体",
+    audioEncoder: "音声のエンコーダの実体。音声の送信状態は audio に出す",
+    audioStream: "音声の MediaStream の実体 (統計ではない)",
+    audioStreamCleanup: "音声の後始末の実体 (統計ではない)",
+    audioFrameReader: "音声の読み取りの実体 (統計ではない)",
+    audioLevelTimeline: "LOC Audio Level の算出の実体。直近の値は audio.lastSentLevel に出す",
     audioMeterWaveform: "波形の配列は大きく、コピーする統計ではない",
     pubCurrentAudioGroup: "音声の Group ID。時刻由来の値で、診断に使わない",
     pubAudioGroupStarted: "音声の Group の採番の途中の状態",
@@ -168,14 +186,14 @@ const SUBSCRIBER_COVERAGE: CoverageExpectation = {
     audioPlayoutDrops: "audio.playoutDrops",
   },
   excluded: {
-    session: "Session の実体 (制御ストリームとデータストリームの統計は sessionStatistics に出す)",
-    subscriber: "Subscriber の実体",
-    catalogSubscriber: "Subscriber の実体",
-    decoder: "デコーダの実体",
+    session: "Session の実体。制御ストリームとデータストリームの統計は sessionStatistics に出す",
+    subscriber: "映像の Subscriber の実体。状態は status / codec に出す",
+    catalogSubscriber: "Catalog 用の Subscriber の実体。受けた Catalog は catalog に出す",
+    decoder: "映像のデコーダの実体。状態は decoderState / decoderConfigured に出す",
     isStopping: "停止処理の途中かどうか (一時的な状態)",
     isStarting: "開始処理の途中かどうか (一時的な状態)",
-    audioSubscriber: "Subscriber の実体",
-    audioDecoder: "音声のデコーダの実体",
+    audioSubscriber: "音声の Subscriber の実体。状態は audio.decoderConfigured などに出す",
+    audioDecoder: "音声のデコーダの実体。状態は audio.decoderConfigured に出す",
     audioWaveform: "波形の配列は大きく、コピーする統計ではない",
   },
 };
@@ -192,6 +210,14 @@ test("ConnectionSettingsSnapshot: 接続設定の signal を網羅する", () =>
     [],
   );
   assert.deepEqual(findStaleExclusions(connectionSettings, CONNECTION_SETTINGS_COVERAGE), []);
+  assert.deepEqual(
+    findUnexpectedInclusions(
+      connectionSettings,
+      buildConnectionSettingsSnapshot(),
+      CONNECTION_SETTINGS_COVERAGE,
+    ),
+    [],
+  );
 });
 
 test("PublisherStats: publisher の signal を網羅する", () => {
@@ -200,6 +226,10 @@ test("PublisherStats: publisher の signal を網羅する", () => {
     [],
   );
   assert.deepEqual(findStaleExclusions(publisherSignals, PUBLISHER_COVERAGE), []);
+  assert.deepEqual(
+    findUnexpectedInclusions(publisherSignals, buildPublisherStats(), PUBLISHER_COVERAGE),
+    [],
+  );
 });
 
 test("SubscriberStats: Subscriber インスタンスの signal を網羅する", () => {
@@ -215,6 +245,14 @@ test("SubscriberStats: Subscriber インスタンスの signal を網羅する",
   );
   assert.deepEqual(
     findStaleExclusions(instance as unknown as Record<string, unknown>, SUBSCRIBER_COVERAGE),
+    [],
+  );
+  assert.deepEqual(
+    findUnexpectedInclusions(
+      instance as unknown as Record<string, unknown>,
+      buildSubscriberStats(instance),
+      SUBSCRIBER_COVERAGE,
+    ),
     [],
   );
 });

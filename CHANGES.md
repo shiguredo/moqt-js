@@ -27,8 +27,11 @@
   - `VideoStats` は公開型のため、この型を自前で構築しているコードは `droppedFrames` の追加が必要になる (後方互換なし)
   - @voluntas
 - [CHANGE] moqt-devtools の `window.moqtDevTools` が返す Subscriber の統計で、音声の項目を `audio` の下へまとめる
-  - `audioObjectsReceived` / `audioChunksDecoded` / `audioPeakDbfs` / `audioRmsDbfs` / `audioLastLevel` / `audioLastVoiceActivity` / `audioPlayoutRebases` / `audioPlayoutDrops` を `audio.objectsReceived` などの入れ子にし、Publisher の統計にも `audio` を足す。E2E が読む名前が変わるため後方互換はない
-  - 併せて publisher / subscriber の統計に、画面とデバッグパネルが出していた項目 (codec、chunks、decodeErrors、httpVersion、statusMessage、Session の統計、Catalog など) を足す
+  - `audioObjectsReceived` / `audioChunksDecoded` / `audioPeakDbfs` / `audioRmsDbfs` / `audioLastLevel` / `audioLastVoiceActivity` / `audioPlayoutRebases` / `audioPlayoutDrops` を `audio.objectsReceived` などの入れ子にする。E2E が読む名前が変わるため後方互換はない
+  - @voluntas
+- [ADD] moqt-devtools の `window.moqtDevTools` が返す publisher / subscriber の統計に、画面が出していた項目を足す
+  - publisher に codec、chunksEncoded、encodeErrors、statusMessage、httpVersion、forwardState、audioPublisher と音声メーター、Session の統計、Catalog を足す
+  - subscriber に codec、statusMessage、httpVersion、decoderConfigured、chunksCreated / chunksDecoded / chunksSkipped、decodeErrors、dynamicGroupsSupported、newGroupRequestEnabled、音声の decoderConfigured と playbackEnabled、Session の統計、Catalog を足す
   - @voluntas
 - [ADD] moqt-devtools の subscriber が音声と映像を同じ時間軸で同期して再生する
   - 音声も `PlaybackTimeline` へ記録し、catalog の `targetLatency` から求めた同じ表示時刻で鳴らす。`targetLatency` の解決はライブラリと共有する純関数 (`src/msf/tracks.ts`) が持ち、同じ render group / alternate group で値が異なるときは警告をログに残す
@@ -187,7 +190,7 @@
   - @voluntas
 - [UPDATE] moqt-devtools のデバッグパネルの「Copy for LLM」に、設定と統計の全項目を出す
   - 接続設定・publisher・subscriber の項目を手書きで列挙していたため、Target Latency / Render Group と音声の設定、現在の表示モード、Subscriber の sub group、同期の推定 (avSync)、音声の統計、Chunks と Decode Errors、Session の統計、Catalog が本文から抜けていた。統計のスナップショット (`window.moqtDevTools` と同じ実装) から本文を組み立て、項目を足せば本文にも出るようにする
-  - 認可トークンの Token Value と c4m の signal は、値ではなく送るかどうかと種別だけを出す。c4m を含む Relay URI の行と、ログの payload の hex dump に値が出る経路は別途対応する
+  - 認可トークンの Token Value と c4m の signal は、値ではなく送るかどうかと種別だけを出す
   - 本文を検証するテストを追加する
   - @voluntas
 - [UPDATE] moqt-devtools のデバッグログの蓄積を signals へ移し、ログの購読範囲を狭める

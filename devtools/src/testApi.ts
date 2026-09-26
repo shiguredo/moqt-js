@@ -4,8 +4,9 @@
  * Playwright (Python/JavaScript) から統計情報を取得するための
  * window.moqtDevTools グローバルオブジェクトを公開する。
  *
- * 統計の組み立ては signals/statsSnapshot.ts が唯一の実装である。画面の表示と
- * デバッグパネルの「Copy for LLM」も同じスナップショットを読む。
+ * 統計の組み立ては signals/statsSnapshot.ts が唯一の実装である。デバッグパネルの
+ * 「Copy for LLM」も同じスナップショットを読む (画面のパネルは表示の粒度が合わないため
+ * signal を直接読む)。
  */
 
 import { buildPublisherStats, buildSubscriberStats } from "./signals/statsSnapshot";

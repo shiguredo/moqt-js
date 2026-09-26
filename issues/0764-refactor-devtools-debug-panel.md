@@ -29,7 +29,10 @@ moqt-devtools の DebugPanel (`devtools/src/components/DebugPanel.tsx`) は早�
 - Copy for LLM のテキストを `devtools/src/utils/debugExportText.ts` (整形の純関数) と `devtools/src/signals/debugExport.ts` (現在の値の収集) へ移す。統計の節はスナップショットから生成し、フィールドを足せばコピー本文にも自動で出る形にする
 - 統計のスナップショット (`PublisherStats` / `SubscriberStats` / `buildPublisherStats` / `buildSubscriberStats`) を `devtools/src/signals/statsSnapshot.ts` へ移し、テスト用 API とコピー本文で 1 つの実装を共有する。現在コピー本文にしか無い情報 (session の `getStatistics()`、catalog、`codec` など) はスナップショット側へ足す。画面のパネルは表示の粒度が合わないため signal を直接読むままにし、統合は別途行う
 - 接続設定のスナップショット (`devtools/src/signals/connectionSettingsSnapshot.ts`) を作り、設定の節はそこから生成する。テストで signal の網羅を固定し、除外する signal は理由を書く (項目の足し忘れを検出する)
+  - 設定の節には `fragment` も出す (今までは URL の行だけだった)。c4m を含む場合はその値が出るため、伏せ字は別 issue で行う
 - 認可トークンの値 (`authorizationTokenValue` / `authorizationTokenBase64`) はスナップショットに載せない。載せたかどうかと種別だけを載せる (値そのものが本文へ出る経路の対応は別 issue)
+- 統計の節は今までどおり、配信を始めていない publisher の節を出さない。この判定は `devtools/src/signals/debugExport.ts` に置き、テストで固定する
+- スナップショットは `window.moqtDevTools` から JSON として取り出せる形にする (Catalog の Media Timeline Template の bigint は文字列にする)
 - 行の表示は `DebugLogRow` に切り出す。見た目と操作 (展開、折りたたみ、行コピー、一括コピー、オートスクロール、Esc) は変えない
 
 ## 完了条件
@@ -37,6 +40,7 @@ moqt-devtools の DebugPanel (`devtools/src/components/DebugPanel.tsx`) は早�
 - hooks が `components/DebugPanel` からログの状態 (`addLog` / 件数 / `autoScroll`) を import しない (`App` はパネルの描画のためだけに import する)
 - Copy for LLM のテキストに、接続設定・publisher・subscriber のスナップショットにあるすべてのフィールドが出る (テストで固定する)
 - 認可トークンの値はスナップショットに入れず、送るかどうかと種別だけを出す (テストで固定する)。c4m を含む Relay URI と payload の hex dump から値を消すのは別 issue で行う
+- スナップショットが `JSON.stringify` できる (Catalog の bigint を文字列にする。テストで固定する)
 - 画面の表示と操作は次を除いて変えない
   - 経過時間の基準を「ログを消してから最初の 1 件」にし、上限に達した後も最古の行が `+0.000` に戻らないようにする
   - 行の差分の符号を直し、`(+-12ms)` ではなく `(+12ms)` と出す

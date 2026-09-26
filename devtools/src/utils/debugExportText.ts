@@ -64,11 +64,20 @@ function isFlatArray(value: readonly unknown[]): boolean {
  *
  * `JSON.stringify` は bigint で例外になる。Catalog の Media Timeline Template は
  * `[bigint, bigint]` を含むため、文字列へ置き換えてから直列化する。
+ * 直列化できない値 (undefined や循環参照) でもコピーが失敗しないよう、その場で
+ * 読める文字列にする。
  */
 function toJsonText(value: unknown): string {
-  return JSON.stringify(value, (_key, item: unknown) =>
-    typeof item === "bigint" ? item.toString() : item,
-  );
+  try {
+    return (
+      JSON.stringify(value, (_key, item: unknown) =>
+        typeof item === "bigint" ? item.toString() : item,
+      ) ?? "-"
+    );
+  } catch {
+    // 循環参照など、JSON にできない値
+    return "(unserializable)";
+  }
 }
 
 /**
