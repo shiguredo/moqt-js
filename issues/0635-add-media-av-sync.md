@@ -1,7 +1,7 @@
 # 音声と映像を LOC Timestamp と targetLatency で同期して再生する
 
 - Created: 2026-09-20
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-26
 - Branch: feature/add-media-av-sync
 - Polished: 2026-09-26
 
@@ -133,4 +133,55 @@ MSF は `renderGroup` が同じ track を「同時に描画するよう設計さ
 
 ## 解決方法
 
-{未着手}
+- `src/playbackTimeline.ts` を足した。音声と映像で共有する表示時刻の時間軸で、表示時刻を
+  `(TIMESTAMP (µs) / 1000) + 基準の遅れ (ms) + max(targetLatency (ms), 再生遅延 (ms))` として
+  `performance.now()` の軸で求める (Unix epoch マイクロ秒では `TIMESTAMP + (基準の遅れ + max(...)) × 1000`)
+  - 「基準の遅れ」はトラックごとの「復号の出力の壁時計の時刻 - TIMESTAMP」の直近 10 秒の最小値。
+    共有の値は 2 つのトラックの大きい方にする
+  - 「再生遅延」は「遅れ - 基準の遅れ」の百分位から求めた揺らぎ (上限はキューが吸収できる長さと
+    `MAX_PLAYOUT_DELAY_MS` の小さい方)。共有の値は 2 つのトラックの大きい方で、音声を観測して
+    いるときは `AUDIO_PLAYOUT_DELAY_FLOOR_MS` (80 ms) を下限にする
+  - 上限は `max(targetLatency, 再生遅延)` の側にだけ掛け、切り下げた分を `targetLatencyLimitedMs` に出す
+  - 2 つのトラックの基準の差が `PLAYOUT_QUEUE_CAP_MS` (キューが吸収できる長さ) - `max(targetLatency, 再生遅延)`
+    (下限 `PLAYOUT_BASE_MAX_DIFFERENCE_MIN_MS` = 100 ms) を超えたら基準を共有しない。大きい側は
+    表示時刻を返さず、使う側が到着基準の再生へフォールバックする (0754 のドリフトで映像が
+    1 枚も描かれなくなるのを防ぐ)
+  - TIMESTAMP の飛び (`PLAYBACK_DISCONTINUITY_MS` = 2 秒) は共有の時間軸ごと取り直す。取り直す前に
+    積んだフレームは時間軸の世代 (`generation`) で見分け、届いた順に描く
+- `src/playoutBuffer.ts` は基準の遅れ・再生遅延・フレーム間隔の学習を時間軸へ移し、共有の時間軸が
+  決めた表示時刻で選ぶキューにした。選択の規則 (表示時刻前は描かない、2 枚以上過ぎたら最新を残して
+  1 つ前を描く、`MAX_PRESENTATION_LAG_MS` を超えたら捨てる、TIMESTAMP 無しは到着順) は変えていない
+- `src/audioPlayout.ts` は `schedule` が目標の開始時刻と、目標を守るかを目標
+  (`AudioPlayoutTarget`) として受け取るようにした。目標を守るときは、目標を過ぎた音・並べすぎの音・
+  前の音と重なる音を捨てる (基準を取り直さない)。並べすぎの上限は「表示に使っている遅れ +
+  `AUDIO_PLAYOUT_BACKLOG_SECONDS`」から決める (`AUDIO_PLAYOUT_MAX_DELAY_SECONDS` の読み替え)。
+  音声だけを購読しているときと壁時計の TIMESTAMP を持たないときは、今までどおり到着基準で並べ、
+  届かなければ基準を取り直す
+- `src/audioPlayout.ts` に `AudioClockBridge` を足した。`AudioContext.getOutputTimestamp()` の
+  `{ contextTime, performanceTime }` で `performance.now()` の軸の目標時刻を `AudioContext.currentTime`
+  の秒へ換算する。対応は予約のたびに取り直し、差が `AUDIO_CLOCK_DEADBAND_MS` (30 ms、libwebrtc の
+  `kMinDeltaMs`) 未満なら前の値を使い、1 回の変更は `AUDIO_CLOCK_MAX_CHANGE_MS` (80 ms、
+  `kMaxChangeMs`) までにする。未開始 (0/0) のときは `currentTime` で代用し、代用中を統計に出す
+- `src/createMediaSubscriber.ts` は `CatalogTrack` から `targetLatency` と `isLive` を解決し
+  (§5.2.8 の MUST に従い `isLive` が false のトラックの値は無視する。同じ `renderGroup` または
+  `altGroup` で値が異なるときは `onError` を通知して大きい方を使う)、音声は時計の対応で換算した
+  時刻に予約し、映像は共有の時間軸の表示時刻で write する。壁時計の TIMESTAMP を持たない
+  フレームは到着基準で再生する
+- `src/codec/types.ts` / `src/index.ts` に `AvSyncStats` を足し、`MediaReceiverStats.avSync` から
+  `skewMs` / `presentationDelayMs` / `targetLatencyMs` / `targetLatencyLimitedMs` / `audioClockFallback`
+  を読めるようにした。片方だけの購読、トラックが未解決、壁時計の TIMESTAMP を観測していないときは
+  null。`MediaReceiverStats` は公開型のため CHANGES.md の `## develop` に `[CHANGE]` を載せた
+- `docs/HIGH_LEVEL_API.md` の統計の節に `avSync` と表示時刻の式を書いた
+- `devtools/src/hooks/useSubscriber.ts` は新しい API に合わせた (時間軸はキューの上限に合わせて
+  作り直す)。devtools の音声と映像を揃えることと統計の露出は 0636 が持つ
+- テスト: 表示時刻の式・共有の基準と再生遅延・上限の掛かり方と切り下げ・基準の差の閾値と
+  フォールバック・窓の学習 (まとまって届く、追いつき中、TIMESTAMP の飛び)・減衰・`skewMs`・
+  120 秒の到着列で ±50 ms (内訳は不感帯 30 ms + 映像の write の遅れ 20 ms)・毎秒 48 ms のドリフトで
+  30 fps と 60 fps の映像が表示され続ける (`playbackTimeline.test.ts` / `.prop.ts`)。表示時刻前は
+  描かない、2 枚以上過ぎたら最新を残して 1 つ前、`MAX_PRESENTATION_LAG_MS` を超えたら捨てる、
+  TIMESTAMP なしと取り直し後は到着順、キューの上限 (`playoutBuffer.test.ts` / `.prop.ts`)。目標を
+  守る/守らないの分岐、上限 500 ms の目標でも捨てないこと、捨てが連鎖しないこと、`AudioClockBridge`
+  の換算と不感帯と変更上限 (`audioPlayout.test.ts` / `.prop.ts`)。`targetLatency` の解決の 8 通りと
+  `avSync` の null 条件、上限 500 ms の `targetLatency` で音を捨てないこと、TIMESCALE ありの
+  フォールバック、同じ TIMESTAMP の音声と映像が同じ表示の遅れになること (`createMediaSubscriber.test.ts`)
+- `vp check` / `tsc --noEmit` / `vp test run` (160 ファイル / 2936 テスト) が通った
