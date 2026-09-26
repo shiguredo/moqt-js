@@ -400,10 +400,23 @@ test("window.moqtDevTools から音声の統計が読める", async ({ page }) =
   for (const audioStats of [stats.first, stats.byId]) {
     expect(audioStats).not.toBeNull();
     expect(audioStats?.audio.objectsReceived).toBe(0);
+    // datagram で届いた数は受信数の内数。購読前は 0
+    expect(audioStats?.audio.datagramObjectsReceived).toBe(0);
     expect(audioStats?.audio.chunksDecoded).toBe(0);
     expect(audioStats?.audio.peakDbfs).toBeNull();
     expect(audioStats?.audio.rmsDbfs).toBeNull();
     expect(audioStats?.audio.lastLevel).toBeNull();
     expect(audioStats?.audio.lastVoiceActivity).toBeNull();
   }
+});
+
+// 音声は Subgroup (stream) と Datagram の両方で届きうる (draft-ietf-moq-transport-21 §11)。
+// どちらの経路で届いたかを画面で確かめられるように、統計に経路別の数を出す
+test("subscriber の画面に音声の経路別の受信数を出す", async ({ page }) => {
+  await page.goto(DEVTOOLS_URL);
+  // 統計の欄は既定で閉じているため、先に開く
+  await page.getByTestId("subscriber-statistics-toggle").click();
+
+  // 未購読では音声の受信数は 0 (datagram で届いた数も 0)
+  await expect(page.getByTestId("subscriber-audio-datagram-objects")).toHaveText("0");
 });

@@ -745,6 +745,7 @@ test("resetSubscriberStats: 音声の統計と最終レベルを初期化する"
   resetTestEnvironment();
   const instance = createSubscriberInstance("reset-stats-audio-1");
   instance.audioObjectsReceived.value = 10;
+  instance.audioDatagramObjectsReceived.value = 4;
   instance.audioChunksDecoded.value = 10;
   instance.audioLastLevel.value = { level: 14, voiceActivity: true };
   instance.audioPeakDbfs.value = -6;
@@ -756,6 +757,7 @@ test("resetSubscriberStats: 音声の統計と最終レベルを初期化する"
   resetSubscriberStats(instance);
 
   assert.equal(instance.audioObjectsReceived.value, 0);
+  assert.equal(instance.audioDatagramObjectsReceived.value, 0);
   assert.equal(instance.audioChunksDecoded.value, 0);
   assert.equal(instance.audioLastLevel.value, null);
   assert.equal(instance.audioPeakDbfs.value, null);

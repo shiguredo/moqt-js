@@ -177,6 +177,7 @@ const SUBSCRIBER_COVERAGE: CoverageExpectation = {
   mapped: {
     audioLastLevel: "audio.lastLevel",
     audioObjectsReceived: "audio.objectsReceived",
+    audioDatagramObjectsReceived: "audio.datagramObjectsReceived",
     audioChunksDecoded: "audio.chunksDecoded",
     audioDecoderConfigured: "audio.decoderConfigured",
     audioPlaybackEnabled: "audio.playbackEnabled",

@@ -29,6 +29,10 @@
 - [CHANGE] moqt-devtools の `window.moqtDevTools` が返す Subscriber の統計で、音声の項目を `audio` の下へまとめる
   - `audioObjectsReceived` / `audioChunksDecoded` / `audioPeakDbfs` / `audioRmsDbfs` / `audioLastLevel` / `audioLastVoiceActivity` / `audioPlayoutRebases` / `audioPlayoutDrops` を `audio.objectsReceived` などの入れ子にする。E2E が読む名前が変わるため後方互換はない
   - @voluntas
+- [ADD] moqt-devtools の subscriber が、音声 Object を Subgroup と Datagram のどちらで受けたかを出す
+  - 音声の購読に `datagram` callback を登録し、datagram で届いた Object も Subgroup と同じ処理へ流す。統計に `audio.datagramObjectsReceived` を足し、`audio.objectsReceived` との差が Subgroup で届いた数になる
+  - 統計の Audio の欄に objects / datagramObjects / chunksDecoded を出す。publisher が datagram を選べたか (relay や経路の都合で Subgroup に落ちていないか) を画面と `window.moqtDevTools` で確かめられる
+  - @voluntas
 - [ADD] moqt-devtools の publisher で音声トラック名を設定できるようにする
   - 音声のトラック名を `audioTrackName` として URL に載せ、`session.publish` と catalog の `name` に使う。既定は `audio` で、ライブラリの `DEFAULT_AUDIO_TRACK_NAME` と同じ
   - Copy URL はトラック名を `videoTrackName` と `audioTrackName` で書き出し、旧 URL の `trackName` は映像トラック名として読み続ける

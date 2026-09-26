@@ -316,6 +316,23 @@ export function SubscriberPanel({
             />
           </StatSection>
 
+          {/* 音声は Subgroup (stream) と Datagram の両方で届きうる (draft-ietf-moq-transport-21
+              §11)。datagramObjects が増えないときは、publisher か relay が Subgroup で
+              送っている (音声の受信そのものは objects で分かる) */}
+          <StatSection title="Audio">
+            <StatList
+              items={[
+                { label: "objects", value: instance.audioObjectsReceived.value },
+                {
+                  label: "datagramObjects",
+                  value: instance.audioDatagramObjectsReceived.value,
+                  testId: "subscriber-audio-datagram-objects",
+                },
+                { label: "chunksDecoded", value: instance.audioChunksDecoded.value },
+              ]}
+            />
+          </StatSection>
+
           <StatSection
             title="Decoding Pipeline"
             help={DECODING_PIPELINE_HELP}

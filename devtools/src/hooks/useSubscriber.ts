@@ -205,6 +205,7 @@ export function resetSubscriberStats(instance: sub.SubscriberInstance): void {
   instance.avSync.value = sub.EMPTY_AV_SYNC;
   instance.largestLocation.value = null;
   instance.audioObjectsReceived.value = 0;
+  instance.audioDatagramObjectsReceived.value = 0;
   instance.audioChunksDecoded.value = 0;
   instance.audioLastLevel.value = null;
   instance.audioPeakDbfs.value = null;
@@ -875,13 +876,23 @@ export function useSubscriber(
     // 直前に decoder へ渡した Audio Config。AAC のときだけ使う
     let appliedAudioConfig: Uint8Array | undefined;
 
-    const handleAudioObject = async (obj: MoqtObject): Promise<void> => {
+    /**
+     * 受信した音声 Object を復号へ流す
+     *
+     * @param viaDatagram - datagram で届いた Object かどうか。経路別の数を出すためだけに
+     *   使い、処理は Subgroup と同じにする (音声は Group 1 つ = Object 1 つのため、
+     *   datagram でも復号の順序は到着順で足りる)
+     */
+    const handleAudioObject = async (obj: MoqtObject, viaDatagram: boolean): Promise<void> => {
       const current = getCurrentAudioSubscriber(audioDecoderInstance);
       if (current === null) {
         return;
       }
 
       current.audioObjectsReceived.value += 1;
+      if (viaDatagram) {
+        current.audioDatagramObjectsReceived.value += 1;
+      }
 
       try {
         // draft-ietf-moq-loc-04 §2.3 は LOC Public Properties を Object Properties として
@@ -955,19 +966,30 @@ export function useSubscriber(
       }
     };
 
+    // 到着順にデコードする。映像とは独立したチェーンにすることで、映像のデコード待ちが
+    // 音声の到着を遅らせないようにする。datagram で届いた Object も同じチェーンへ流す
+    // (同じ Track の音声は 1 本の順序で扱う。draft-ietf-moq-transport-21 §11)
+    const queueAudioObject = (obj: MoqtObject, viaDatagram: boolean): void => {
+      audioChainRef.current = audioChainRef.current
+        .then(() => handleAudioObject(obj, viaDatagram))
+        .catch((error: unknown) => {
+          // handleAudioObject は内部で握るため、ここへ来るのは想定外の失敗だけ
+          console.error(`[${subscriberId}] audio object chain failed:`, error);
+        });
+    };
+
     const audioSubscriberInstance = await session.subscribe(
       namespaceArray,
       audioTrack.name,
       {
         object: (obj: MoqtObject) => {
-          // 到着順にデコードする。映像とは独立したチェーンにすることで、
-          // 映像のデコード待ちが音声の到着を遅らせないようにする
-          audioChainRef.current = audioChainRef.current
-            .then(() => handleAudioObject(obj))
-            .catch((error: unknown) => {
-              // handleAudioObject は内部で握るため、ここへ来るのは想定外の失敗だけ
-              console.error(`[${subscriberId}] audio object chain failed:`, error);
-            });
+          queueAudioObject(obj, false);
+        },
+        // datagram callback を登録しないと、datagram で届いた Object は object callback へ
+        // フォールバックする (src/session/incoming.ts)。経路を数えるために登録し、
+        // Subgroup と同じ処理へ流す。登録した場合 datagram はこちらにだけ届く
+        datagram: (obj: MoqtObject) => {
+          queueAudioObject(obj, true);
         },
         end: () => {
           addLog("info", `[${subscriberId}] audio stream ended`);

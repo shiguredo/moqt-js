@@ -112,6 +112,11 @@ export interface SubscriberInstance {
   // 受信数は decode に渡す前の object も数えるため、両者の差が「復号せずに捨てた数」に
   // なる (映像の objectsReceived / chunksDecoded と同じ関係)
   audioObjectsReceived: Signal<number>;
+  // 受信した音声 Object のうち datagram で届いた数。audioObjectsReceived との差が
+  // Subgroup (stream) で届いた数になる。draft-ietf-moq-transport-21 §11 は同じ Track での
+  // Subgroup と Datagram の併用を許すため、publisher が datagram を選べたか (relay や
+  // 経路の都合で subgroup に落ちていないか) をここで確認する
+  audioDatagramObjectsReceived: Signal<number>;
   audioChunksDecoded: Signal<number>;
   // 受信した音声を音声出力デバイスで再生するか。既定は無効
   audioPlaybackEnabled: Signal<boolean>;
@@ -168,6 +173,7 @@ export function createSubscriberInstance(id: string): SubscriberInstance {
     audioDecoderConfigured: signal(false),
     audioLastLevel: signal<LOC.AudioLevel | null>(null),
     audioObjectsReceived: signal(0),
+    audioDatagramObjectsReceived: signal(0),
     audioChunksDecoded: signal(0),
     audioPlaybackEnabled: signal(false),
     audioPlayoutRebases: signal(0),

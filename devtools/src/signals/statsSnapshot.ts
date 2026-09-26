@@ -145,6 +145,14 @@ export interface PublisherStats {
 export interface SubscriberAudioStats {
   /** 受信した音声 Object の数 (復号に渡す前のものも数える) */
   objectsReceived: number;
+  /**
+   * 受信した音声 Object のうち datagram で届いた数
+   *
+   * draft-ietf-moq-transport-21 §11 は同じ Track での Subgroup と Datagram の併用を許す。
+   * objectsReceived との差が Subgroup (stream) で届いた数になり、publisher が datagram を
+   * 選べたかどうかを確かめられる
+   */
+  datagramObjectsReceived: number;
   /** 復号した音声 Chunk の数。objectsReceived との差が復号せずに捨てた数になる */
   chunksDecoded: number;
   /** 音声のデコーダを構成できたか */
@@ -302,6 +310,7 @@ export function buildSubscriberStats(sub: SubscriberInstance): SubscriberStats {
     // level 0 (最大音量) と voiceActivity false (無音) は値があるため null に潰さない
     audio: {
       objectsReceived: sub.audioObjectsReceived.value,
+      datagramObjectsReceived: sub.audioDatagramObjectsReceived.value,
       chunksDecoded: sub.audioChunksDecoded.value,
       decoderConfigured: sub.audioDecoderConfigured.value,
       playbackEnabled: sub.audioPlaybackEnabled.value,

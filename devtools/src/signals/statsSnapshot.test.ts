@@ -149,6 +149,8 @@ test("buildSubscriberStats: 音声の受信とデコード、再生の状態を�
   // 音声だけの購読では映像の統計が 0 のままになるため、音声側の累積を別に読む
   const instance = createSubscriberInstance("audio-state");
   instance.audioObjectsReceived.value = 21;
+  // datagram で届いた数は受信数の内数 (差が Subgroup で届いた数になる)
+  instance.audioDatagramObjectsReceived.value = 8;
   instance.audioChunksDecoded.value = 20;
   instance.audioDecoderConfigured.value = true;
   instance.audioPlaybackEnabled.value = true;
@@ -156,6 +158,7 @@ test("buildSubscriberStats: 音声の受信とデコード、再生の状態を�
   const stats = buildSubscriberStats(instance);
 
   assert.equal(stats.audio.objectsReceived, 21);
+  assert.equal(stats.audio.datagramObjectsReceived, 8);
   assert.equal(stats.audio.chunksDecoded, 20);
   assert.equal(stats.audio.decoderConfigured, true);
   assert.equal(stats.audio.playbackEnabled, true);
