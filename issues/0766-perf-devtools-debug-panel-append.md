@@ -1,7 +1,7 @@
 # moqt-devtools のデバッグパネルで、ログを 1 件追加したときに描画される行を 1 件だけにする
 
 - Created: 2026-09-26
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-26
 - Branch: feature/perf-devtools-debug-panel-append
 - Polished: {YYYY-MM-DD}
 
@@ -41,3 +41,14 @@ moqt-devtools のデバッグパネルは、ログを 1 件追加するたびに
 - `devtools/src/webtransport-devtools/messageLog.ts` の `MAX_STREAM_MESSAGES`
 - `tests/e2e/devtools-debug-panel.spec.ts` (表示と操作の E2E)
 - `tests/e2e/devtools-rerender-scope.spec.ts` (描画回数の数え方)
+
+## 解決方法
+
+- `devtools/src/components/DebugLogList.tsx` で行の vnode をログの連番の Map に保持し、展開の状態・表示モード・コピーの表示が変わったときだけ作り直すようにした。Preact は `_original` が一致する vnode を再び受け取ると部分木の差分を省略するため、ログを 1 件追加したときに描画される `DebugLogRow` が 1000 件から 1 件になった
+  - 実測 (Chromium、dev サーバー、1 件追加の中央値): 1000 件表示で 23.0 ms → 7.6 ms、100 件表示 2.2 ms → 0.4 ms。絶対値は計測環境で変わる (別の環境では 1000 件で 3.0〜16.5 ms)
+- 上限で捨てたログの vnode は `devtools/src/utils/logRowState.ts` の `pruneMapByLogId` で落とす (単体テスト付き)。ログを消したときはキャッシュを空にする。落とさないと、あふれさせ続けたときに 1 件追加のコストが増え続ける (実測: 500 件あふれさせると 3.1 ms → 6.0 ms)
+- 行へ渡すコールバック (`copyRow`) の参照を安定させ、`data` / `payload` は追加後に書き換えない前提をコメントに書いた (行を描画し直さないため、書き換えても表示は古いままになる)
+- テスト: 1000 件表示で 1 件追加したときに描画される行が 1 件であること、パネル本体と App が 0 回であることを E2E で固定した (`preact.options.__r` を包み、描画の完了は DOM を待ってから数える)。行コピーの表示 (その行だけコピー済みになり 1.5 秒で戻る) も E2E で固定し、行の作り直しの条件からコピーの表示を外すと落ちるようにした
+- 残る課題: 表示中の件数に比例する分 (Preact が表示中の子を走査する分と枝刈りの全キー走査) は残る。1000 件で約 7.6 ms の大半がこれである。表示する行を画面に入る分だけにするか表示件数を絞る対応は 0767 で行う
+- レビューは 2 系統を行い、指摘 (行コピーの表示がテストで固定されていない、枝刈りが 3 つ目の実装でテストが無い、実測値が再現しない、0766 と 0767 のタイトルと完了条件が同じ) を修正した
+- `vp check` / `vp exec tsc --noEmit` / `vp exec tsc -p devtools --noEmit` / `vp test run` (169 ファイル / 3052 テスト) / `vp run e2e-test` (57 件) が通った
