@@ -34,6 +34,7 @@ test("formatSnapshotSection: 値の型ごとに 1 行ずつ出す", () => {
     text: "value",
     flag: true,
     missing: null,
+    emptyText: "",
   });
 
   assert.equal(
@@ -46,6 +47,8 @@ test("formatSnapshotSection: 値の型ごとに 1 行ずつ出す", () => {
       "text: value",
       "flag: true",
       "missing: -",
+      // 空文字列も値が無いものとして "-" にする (未設定と空を区別しない)
+      "emptyText: -",
     ].join("\n"),
   );
 });
@@ -94,6 +97,20 @@ test("formatSnapshotSection: 配列は単純なら 1 行、オブジェクトを
 
 test("formatSnapshotSection: 空のオブジェクトは {} にする", () => {
   assert.equal(formatSnapshotSection("Test", { none: {} }), "=== Test ===\nnone: {}");
+});
+
+test("formatSnapshotSection: bigint を含む配列でも例外にならず、文字列として出す", () => {
+  // Catalog の Media Timeline Template は [bigint, bigint] を含む。
+  // JSON.stringify は bigint で例外になるため、文字列へ置き換えてから出す
+  const section = formatSnapshotSection("Test", {
+    template: [{ start: 10n, end: 20n }],
+    numbers: [1n, 2n],
+  });
+
+  assert.equal(
+    section,
+    ["=== Test ===", "template:", '  - {"start":"10","end":"20"}', 'numbers: ["1","2"]'].join("\n"),
+  );
 });
 
 test("formatLogEntryText: 時刻と本文と data と payload を並べる", () => {
@@ -166,6 +183,29 @@ test("buildDebugExportText: Publisher の統計が null のときは節を出さ
   assert.include(withPublisher, "status: disconnected");
 });
 
+test("buildDebugExportText: 接続設定・Publisher・Subscriber・ログの順に節を並べる", () => {
+  // 節の順は読み手が追いやすい順に固定する。publisher と subscriber の両方がある
+  // ときに順が入れ替わらないことを確かめる
+  const text = buildDebugExportText({
+    connection: buildConnectionSettingsSnapshot(),
+    publisher: buildPublisherStats(),
+    subscribers: [buildSubscriberStats(createSubscriberInstance("subscriber-order"))],
+    logs: [createLogEntry({ message: "order" })],
+  });
+
+  const order = [
+    text.indexOf("=== Connection Settings ==="),
+    text.indexOf("=== Publisher Statistics ==="),
+    text.indexOf("=== Subscriber Statistics (subscriber-order) ==="),
+    text.indexOf("=== Debug Logs ==="),
+  ];
+  assert.deepEqual(
+    order,
+    [...order].sort((left, right) => left - right),
+  );
+  assert.isTrue(order.every((index) => index >= 0));
+});
+
 test("buildDebugExportText: Subscriber ごとに節を出し、id を見出しに入れる", () => {
   const text = buildDebugExportText({
     connection: buildConnectionSettingsSnapshot(),
@@ -181,4 +221,37 @@ test("buildDebugExportText: Subscriber ごとに節を出し、id を見出し�
   assert.include(text, "=== Subscriber Statistics (subscriber-2) ===");
   // 見出しの順は渡した順
   assert.isTrue(text.indexOf("subscriber-1") < text.indexOf("subscriber-2"));
+});
+
+/** オブジェクトのキーを入れ子も含めて集める */
+function collectKeys(value: unknown, keys: Set<string>): void {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return;
+  }
+  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+    keys.add(key);
+    collectKeys(child, keys);
+  }
+}
+
+test("buildDebugExportText: 実際のスナップショットのすべてのキーが本文に出る", () => {
+  // 節を組み立てる側が項目を選んでしまうと、スナップショットに足した項目が本文から
+  // 抜ける。実際のスナップショットのキー (入れ子も含む) が本文に現れることを確かめる
+  const connection = buildConnectionSettingsSnapshot();
+  const publisher = buildPublisherStats();
+  const subscriber = buildSubscriberStats(createSubscriberInstance("export-coverage"));
+
+  const text = buildDebugExportText({
+    connection,
+    publisher,
+    subscribers: [subscriber],
+    logs: [createLogEntry({ message: "coverage" })],
+  });
+
+  const keys = new Set<string>();
+  collectKeys(connection, keys);
+  collectKeys(publisher, keys);
+  collectKeys(subscriber, keys);
+  const missing = [...keys].filter((key) => !text.includes(`${key}:`));
+  assert.deepEqual(missing, []);
 });

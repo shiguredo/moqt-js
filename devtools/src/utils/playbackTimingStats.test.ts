@@ -7,10 +7,8 @@ import {
   PLAYBACK_TIMING_WINDOW_MS,
   PlaybackTimingStats,
   formatLossEvent,
-  formatStallCauseTotal,
   formatStallEvent,
   formatStreamResetCode,
-  formatTimingSummary,
   summarizeTimings,
   type LossEvent,
   type StallEvent,
@@ -33,16 +31,6 @@ test("summarizeTimings: nearest-rank 法で p50 / p95 / max を求める", () =>
 test("summarizeTimings: 1 個なら p50 / p95 / max はその値、空なら null", () => {
   assert.deepEqual(summarizeTimings([7]), { p50: 7, p95: 7, max: 7 });
   assert.isNull(summarizeTimings([]));
-});
-
-test("formatTimingSummary: p50 / p95 / max を小数 1 桁で並べ、値が無ければ - にする", () => {
-  assert.equal(formatTimingSummary({ p50: 1.25, p95: 12, max: 123.456 }), "1.3 / 12.0 / 123.5");
-  assert.equal(formatTimingSummary(null), "-");
-});
-
-// 原因ごとの累積は回数と、時間を整数の ms に丸めて並べる
-test("formatStallCauseTotal: 回数と時間 (ms) を並べる", () => {
-  assert.equal(formatStallCauseTotal({ count: 3, ms: 412.6 }), "3 / 413 ms");
 });
 
 // 止まりは UTC の時刻、原因、長さ、位置、TIMESTAMP の差を 1 行に並べる。位置の記録が

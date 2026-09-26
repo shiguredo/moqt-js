@@ -1,7 +1,7 @@
 import type { ConnectionSettingsSnapshot } from "../signals/connectionSettingsSnapshot";
 import type { LogEntry } from "../signals/debugLog";
 import type { PublisherStats, SubscriberStats } from "../signals/statsSnapshot";
-import { formatHexDump, formatMessageData } from "./logFormatters";
+import { formatBytes, formatHexDump, formatMessageData } from "./logFormatters";
 
 /**
  * 「Copy for LLM」でコピーするテキストの整形
@@ -11,8 +11,8 @@ import { formatHexDump, formatMessageData } from "./logFormatters";
  * `signals/statsSnapshot.ts`) のキーから組み立てる。項目を手書きで列挙すると、
  * 設定や統計を足したときにコピー本文へ足し忘れる。
  *
- * 外部 signal は参照せず、渡された値だけで組み立てる純粋関数にしてある。
- * 呼び出し側 (`signals/debugExport.ts`) が現在の値を集める。
+ * 外部 signal は参照せず、渡された値だけで組み立てる純粋関数にしてある (スナップショットの
+ * 型だけを借りる)。呼び出し側 (`signals/debugExport.ts`) が現在の値を集める。
  */
 
 /** テキストへ出す値一式 */
@@ -28,6 +28,16 @@ export interface DebugExportInput {
   filter?: string;
 }
 
+/**
+ * キーごとの追加の表記
+ *
+ * バイト数は桁が大きく、そのままの数値では読みにくいため、可読な表記を添える。
+ */
+const KEY_SUFFIXES: Record<string, (value: number) => string> = {
+  bytesSent: (value) => ` (${formatBytes(value)})`,
+  bytesReceived: (value) => ` (${formatBytes(value)})`,
+};
+
 /** 数値を 1 行のテキストにする */
 function formatNumber(value: number): string {
   if (Number.isInteger(value)) {
@@ -37,14 +47,27 @@ function formatNumber(value: number): string {
   return String(Math.round(value * 1000) / 1000);
 }
 
-/** 配列の要素を 1 行に収められるか (数値・文字列・真偽値だけの配列) */
+/** 配列の要素を 1 行に収められるか (数値・文字列・真偽値・bigint だけの配列) */
 function isFlatArray(value: readonly unknown[]): boolean {
   return value.every(
     (item) =>
       item === null ||
       typeof item === "number" ||
       typeof item === "string" ||
-      typeof item === "boolean",
+      typeof item === "boolean" ||
+      typeof item === "bigint",
+  );
+}
+
+/**
+ * 1 行の JSON にする
+ *
+ * `JSON.stringify` は bigint で例外になる。Catalog の Media Timeline Template は
+ * `[bigint, bigint]` を含むため、文字列へ置き換えてから直列化する。
+ */
+function toJsonText(value: unknown): string {
+  return JSON.stringify(value, (_key, item: unknown) =>
+    typeof item === "bigint" ? item.toString() : item,
   );
 }
 
@@ -66,11 +89,11 @@ function formatEntryLines(key: string, value: unknown, indent: string): string[]
         return [`${indent}${key}: []`];
       }
       if (isFlatArray(value)) {
-        return [`${indent}${key}: ${JSON.stringify(value)}`];
+        return [`${indent}${key}: ${toJsonText(value)}`];
       }
       const lines = [`${indent}${key}:`];
       for (const item of value) {
-        lines.push(`${indent}  - ${JSON.stringify(item)}`);
+        lines.push(`${indent}  - ${toJsonText(item)}`);
       }
       return lines;
     }
@@ -86,7 +109,8 @@ function formatEntryLines(key: string, value: unknown, indent: string): string[]
   }
 
   if (typeof value === "number") {
-    return [`${indent}${key}: ${formatNumber(value)}`];
+    const suffix = KEY_SUFFIXES[key]?.(value) ?? "";
+    return [`${indent}${key}: ${formatNumber(value)}${suffix}`];
   }
 
   if (typeof value === "string" || typeof value === "boolean" || typeof value === "bigint") {
@@ -122,9 +146,10 @@ export function formatLogEntryText(entry: LogEntry): string {
     parts.push(formatMessageData(entry.data));
   }
   if (entry.payload !== undefined && entry.payload.length > 0) {
-    parts.push(`Binary (${entry.payload.length} bytes):\n${formatHexDump(entry.payload)}`);
+    // hex dump の見出しが data の最終行に繋がらないよう、行を分けて並べる
+    parts.push(`Binary (${entry.payload.length} bytes):`, formatHexDump(entry.payload));
   }
-  return parts.join(" ");
+  return parts.join("\n");
 }
 
 /** ログの節を組み立てる */

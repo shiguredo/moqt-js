@@ -113,8 +113,7 @@ test("デバッグパネルがログを新しい順に表示し、展開と折�
 
 test("Copy for LLM が設定と統計の項目とログを出す", async ({ page }) => {
   await page.goto(DEVTOOLS_URL);
-  // Subscriber を 1 つ足して、Subscriber の統計の節も出す
-  await page.getByRole("button", { name: "Add Subscriber" }).click();
+  // Subscriber は起動時に 1 つ作られる (devtools/src/main.tsx) ため、その節が出る
   await openDebugPanel(page);
   await addLogs(page, [{ level: "info", message: "copy-log", data: { requestId: 7 } }]);
 
@@ -149,4 +148,97 @@ test("Copy for LLM が設定と統計の項目とログを出す", async ({ page
 
   // 配信していないページでは Publisher の節を出さない
   expect(text).not.toContain("Publisher Statistics");
+});
+
+test("Copy for LLM の Publisher と Subscriber のボタンは、その接続のログだけを出す", async ({
+  page,
+}) => {
+  await page.goto(DEVTOOLS_URL);
+  await openDebugPanel(page);
+  // 起動時に作られた Subscriber の id を、そのコピーボタンを押すために使う
+  const targetId = await page.evaluate(() => {
+    const host = window as unknown as {
+      moqtDevTools: { getSubscribers: () => { id: string }[] };
+    };
+    return host.moqtDevTools.getSubscribers()[0]?.id ?? "";
+  });
+  expect(targetId).toMatch(/^subscriber-[0-9a-f]{8}$/);
+
+  await addLogs(page, [
+    { level: "info", message: "[publisher] [SEND] OBJECT" },
+    { level: "info", message: `[${targetId}] [RECV] OBJECT` },
+  ]);
+
+  // Publisher のボタンは [publisher] のログだけを出す
+  const publisherButton = page.getByTestId("debug-log-copy-publisher");
+  await publisherButton.click();
+  await expect(publisherButton).toHaveText("Copied!");
+  const publisherText = await page.evaluate(() => navigator.clipboard.readText());
+  expect(publisherText).toContain("=== Debug Logs ([publisher]) ===");
+  expect(publisherText).toContain("[publisher] [SEND] OBJECT");
+  expect(publisherText).not.toContain(`[${targetId}] [RECV] OBJECT`);
+
+  // Subscriber のボタンはその id の統計とログを出す
+  const subscriberButton = page.getByTestId(`debug-log-copy-${targetId}`);
+  await subscriberButton.click();
+  await expect(subscriberButton).toHaveText("Copied!");
+  const subscriberText = await page.evaluate(() => navigator.clipboard.readText());
+  expect(subscriberText).toContain(`=== Subscriber Statistics (${targetId}) ===`);
+  expect(subscriberText).toContain(`=== Debug Logs ([${targetId}]) ===`);
+  expect(subscriberText).toContain(`[${targetId}] [RECV] OBJECT`);
+  expect(subscriberText).not.toContain("[publisher] [SEND] OBJECT");
+});
+
+test("上限で捨てたログの展開状態を残さない", async ({ page }) => {
+  await page.goto(DEVTOOLS_URL);
+  await openDebugPanel(page);
+  const rows = page.getByTestId("debug-log-row");
+
+  // 上限 (1000 件) まで追加し、さらに 1 件足して最古を捨てる。ここで表示の位置と
+  // ログの連番がずれる (先頭の行の連番は 1000、表示の位置は 0)
+  await addLogs(
+    page,
+    Array.from({ length: 1001 }, (_, index) => ({
+      level: "info" as const,
+      message: `keep-${index}`,
+      data: { index },
+    })),
+  );
+  await expect(page.getByTestId("debug-log-count")).toHaveText("Logs: 1000");
+  await expect(rows.nth(0)).toContainText("keep-1000");
+
+  // 最新の行を展開する。展開の状態を配列の添字で持っていると、この行は開かない
+  await rows.nth(0).click();
+  await expect(rows.nth(0).locator("pre")).toContainText("index: 1000");
+  await expect(page.getByRole("button", { name: "Collapse All" })).toBeVisible();
+
+  // 展開していた行を捨てるまで追加する (1000 件追加すると、残るのは後ろの 1000 件)
+  await addLogs(
+    page,
+    Array.from({ length: 1000 }, (_, index) => ({
+      level: "info" as const,
+      message: `filler-${index}`,
+    })),
+  );
+
+  await expect(page.getByTestId("debug-log-count")).toHaveText("Logs: 1000");
+  // 捨てたログの展開状態が残っていれば "Collapse All" のままになる
+  await expect(page.getByRole("button", { name: "Expand All" })).toBeVisible();
+  await expect(page.locator('[data-testid="debug-log-row"] pre')).toHaveCount(0);
+  // 一覧の先頭は、残っている最新のログ
+  await expect(rows.nth(0)).toContainText("filler-999");
+});
+
+test("パネルを閉じているときは Debug ボタンにログ件数のバッジを出す", async ({ page }) => {
+  await page.goto(DEVTOOLS_URL);
+  const badge = page.getByTestId("debug-log-badge");
+  await expect(badge).toHaveCount(0);
+
+  await addLogs(page, [{ level: "info", message: "badge-log" }]);
+  await expect(badge).toHaveText("1");
+
+  // パネルを開いている間は件数をツールバーに出すため、バッジは出さない
+  await openDebugPanel(page);
+  await expect(page.getByTestId("debug-log-badge")).toHaveCount(0);
+  await expect(page.getByTestId("debug-log-count")).toHaveText("Logs: 1");
 });
