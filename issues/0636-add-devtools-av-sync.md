@@ -25,7 +25,7 @@ MSF は `renderGroup` が同じ track を「同時に描画するよう設計さ
 - 音声を `AudioContext.currentTime` 基準で予約再生し、映像を同じ時刻に合わせて描画する
 - `isLive` が false のときは `targetLatency` を無視する (§5.2.8 の MUST)。`targetLatency` が無い場合も現在の挙動へフォールバックする
 - 同期ずれの推定値を `devtools/src/signals/subscriber.ts` の signal に持たせ、`window.moqtDevTools` と `data-testid` から読めるようにする。E2E で判定できるようにするため
-- ライブラリ側の「音声と映像を LOC Timestamp と targetLatency で同期して再生する」(0635) と計算方法を揃える。devtools は `createMediaSubscriber` を使わないため実装は共有できないが、ずれの定義と `isLive` / `targetLatency` 欠落時の扱いを一致させる
+- ライブラリ側の「音声と映像を LOC Timestamp と targetLatency で同期して再生する」(0635) と同じ計算を使う。devtools は `createMediaSubscriber` を使わないが、`devtools/src/hooks/useSubscriber.ts` が `src/playoutBuffer.ts` / `src/audioPlayout.ts` を直接 import しているため、0635 が足す `src/playbackTimeline.ts` の時間軸・ずれの定義・`isLive` / `targetLatency` 欠落時の扱いを共有する
 
 ## 完了条件
 
@@ -39,7 +39,7 @@ MSF は `renderGroup` が同じ track を「同時に描画するよう設計さ
 
 - draft-ietf-moq-msf-01 §5.2.8 (Target latency: 符号化から表示までの wallclock の差。同じ render group の track は同一の値でなければならない)
 - draft-ietf-moq-msf-01 §5.2.11 (Render group: 同じ group の track は同時に描画する SHOULD)
-- draft-ietf-moq-msf-01 §5.2.7 (isLive: false なら targetLatency を無視する)
+- draft-ietf-moq-msf-01 §5.2.7 (isLive: トラックに新しい Object が追加されるかの表明)。isLive が false なら targetLatency を無視する MUST は §5.2.8
 - draft-ietf-moq-loc-04 §2.3.1.1 (Timestamp: Timescale が無ければ Unix epoch マイクロ秒)
 
 ## 解決方法
