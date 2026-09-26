@@ -70,6 +70,9 @@ const C4M_REDACTED = "c4m=<redacted>";
  * `extractC4mBase64` は最初の c4m だけを返すが、伏せ字は `c4m=` の出現をすべて潰す。
  */
 export function maskC4mValue(input: string): string {
-  // parameter-list の区切りは `&` のため、`&` の手前までを値として扱う
-  return input.replaceAll(/c4m=[^&]*/g, C4M_REDACTED);
+  // parameter-list の区切りは `&` のため、`&` の手前までを値として扱う。
+  // 本文全体 (複数行) へかけることがあるため、改行と空白も値に含めない
+  // (含めると c4m の後ろの行まで消える)。`c4m=` の部分一致で潰すため、`xc4m=` の
+  // ような別の parameter も伏せ字になるが、安全側に倒す
+  return input.replaceAll(/c4m=[^&\s]*/g, C4M_REDACTED);
 }

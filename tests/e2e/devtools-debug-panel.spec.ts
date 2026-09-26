@@ -266,13 +266,29 @@ test("Debug ボタンのバッジは 100 件以上を 99+ にする", async ({ p
   await expect(page.getByTestId("debug-log-badge")).toHaveText("99+");
 });
 
-test("Copy for LLM は Relay URI の c4m (認可トークン) を伏せる", async ({ page }) => {
+test("Copy for LLM は Relay URI と fragment の c4m (認可トークン) を伏せる", async ({ page }) => {
   // c4m 付きの Relay URI で開くと、トークンは authorizationTokenBase64 へ取り込まれる。
-  // Relay URI の行と fragment の行に値が出ないことを確かめる
+  // Relay URI の行だけでなく、統計の節の serverUrl (配信中のページで出る) と
+  // fragment の行にも値が出ないことを確かめる
   const c4mBase64 = "c2VudGluZWwtYzRtLXRva2Vu";
   const relayUri = `moqt://relay.example/moqt#msf:room-123--video&c4m=${c4mBase64}`;
   await page.goto(`${DEVTOOLS_URL}?url=${encodeURIComponent(relayUri)}`);
   await openDebugPanel(page);
+  // Publisher の節を出す (配信を始めた状態にする)
+  await page.evaluate(async () => {
+    const findResource = (pattern: RegExp): string => {
+      const names = performance.getEntriesByType("resource").map((entry) => entry.name);
+      const url = names.reverse().find((name) => pattern.test(name));
+      if (url === undefined) {
+        throw new Error(`no loaded module: ${String(pattern)}`);
+      }
+      return url;
+    };
+    const publisher = (await import(findResource(/\/src\/signals\/publisher\.ts/))) as {
+      pubStatus: { value: string };
+    };
+    publisher.pubStatus.value = "connected";
+  });
 
   const copyButton = page.getByTestId("debug-log-copy-all");
   await copyButton.click();
@@ -280,8 +296,21 @@ test("Copy for LLM は Relay URI の c4m (認可トークン) を伏せる", asy
   const text = await page.evaluate(() => navigator.clipboard.readText());
 
   // 値は伏せ字にし、トークンの Base64 は本文のどこにも出さない
+  expect(text).toContain("=== Publisher Statistics ===");
   expect(text).toContain("c4m=<redacted>");
   expect(text).not.toContain(c4mBase64);
   // 取り込んだことは読める
   expect(text).toContain("authorizationTokenFromC4m: true");
+
+  // fragment 欄に貼り付けた場合も同じ
+  await page.goto(
+    `${DEVTOOLS_URL}?fragment=${encodeURIComponent(`msf:room-123--video&c4m=${c4mBase64}`)}`,
+  );
+  await openDebugPanel(page);
+  const fragmentCopyButton = page.getByTestId("debug-log-copy-all");
+  await fragmentCopyButton.click();
+  await expect(fragmentCopyButton).toHaveText("Copied!");
+  const fragmentText = await page.evaluate(() => navigator.clipboard.readText());
+  expect(fragmentText).toContain("fragment: msf:room-123--video&c4m=<redacted>");
+  expect(fragmentText).not.toContain(c4mBase64);
 });

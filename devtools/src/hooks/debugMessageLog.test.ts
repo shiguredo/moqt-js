@@ -11,38 +11,43 @@ import { logDebugMessage } from "./debugMessageLog";
  * AUTHORIZATION_TOKEN を載せうるメッセージの payload を残すと、画面の Binary タブ、
  * 行コピー、Copy for LLM の hex dump に認可トークンのバイト列が出る。残さないことを
  * ここで固定する。
+ *
+ * 判定はメッセージ型で行い、payload の中身は見ない。このテストの payload は
+ * 中身に意味の無いサンプルである。
  */
-
-// ログへ残す必要がある値 (認可トークンではない別の setup option)
-const TOKENISH_PAYLOAD = new Uint8Array([0x03, 0x00, 0x04, 0xde, 0xad, 0xbe, 0xef]);
+const SAMPLE_PAYLOAD = new Uint8Array([0xde, 0xad, 0xbe, 0xef]);
 
 beforeEach(() => {
   __resetLogStateForTest();
 });
 
 /** moqt-js のメッセージ型から DebugMessage を組み立てる */
-function makeMessage(type: number, payload: Uint8Array = TOKENISH_PAYLOAD): DebugMessage {
+function makeMessage(
+  type: number,
+  payload: Uint8Array = SAMPLE_PAYLOAD,
+  decoded?: Record<string, unknown>,
+): DebugMessage {
   return {
     direction: "send",
     type,
-    // 実際に moqt-js が載せる名前を使う (名前がずれたらこのテストが落ちる)
     typeName: getMessageTypeName(type),
     payload,
     timestamp: 0,
+    ...(decoded === undefined ? {} : { decoded }),
   };
 }
 
-/** ログに残った payload を返す */
-function storedPayload(): Uint8Array | undefined {
+/** ログ 1 件を取り出す */
+function firstEntry() {
   const [entry] = getLogBuffer();
   if (entry === undefined) {
     throw new Error("expected exactly one log entry");
   }
-  return entry.payload;
+  return entry;
 }
 
 // draft-ietf-moq-transport-21 §9.1.4 (SETUP の Setup Option) と §9.20.3
-// (AUTHORIZATION_TOKEN Message Parameter) でトークンを載せうる型
+// (AUTHORIZATION TOKEN Parameter) でトークンを載せうる型
 const CREDENTIAL_MESSAGE_TYPES: readonly number[] = [
   MessageType.SETUP,
   MessageType.PUBLISH,
@@ -55,18 +60,57 @@ const CREDENTIAL_MESSAGE_TYPES: readonly number[] = [
   MessageType.REQUEST_UPDATE,
 ];
 
+/**
+ * 認可トークンを載せない型と、その理由
+ *
+ * メッセージ型を足したら「載せうる」か「載せない (理由)」のどちらかへ分類することを
+ * テストで強制する。仕様の版が上がって応答にも credential を載せられるようになったら
+ * (draft-ietf-moq-privacy-pass-auth の AUTH CHALLENGE / AUTH RESPONSE など)、
+ * ここを見直して載せうる側へ移す。
+ */
+const NON_CREDENTIAL_MESSAGE_TYPE_REASONS: Record<string, string> = {
+  GOAWAY: "セッションの終了通知で、payload に credential を載せる枠が無い",
+  REQUEST_OK: "応答。draft-ietf-moq-transport-21 §9.20.3 の対象は要求側の 8 型と SETUP",
+  REQUEST_ERROR: "応答。エラーコードと理由のみ",
+  SUBSCRIBE_OK: "応答。draft-ietf-moq-transport-21 §9.20.3 の対象は要求側の 8 型と SETUP",
+  PUBLISH_DONE: "配信の終了通知 (応答)。draft-ietf-moq-transport-21 §9.20.3 の対象外",
+  PUBLISH_STATE_NOTIFY: "購読の状態通知 (片方向)",
+  FETCH_OK: "応答。draft-ietf-moq-transport-21 §9.20.3 の対象は要求側の 8 型と SETUP",
+  PUBLISH_SKIPPED: "PUBLISH を送らないことの通知 (応答)",
+  NAMESPACE: "namespace discovery の通知",
+  NAMESPACE_DONE: "namespace discovery の終了通知",
+};
+
 test("logDebugMessage: 認可トークンを載せうるメッセージの payload はログに残さない", () => {
   for (const type of CREDENTIAL_MESSAGE_TYPES) {
     __resetLogStateForTest();
     logDebugMessage("[publisher]", makeMessage(type));
 
-    assert.equal(storedPayload(), undefined, `${getMessageTypeName(type)} の payload`);
-    // 何バイトだったかと、メッセージの種別は読める
-    const [entry] = getLogBuffer();
-    assert.isDefined(entry);
+    const entry = firstEntry();
+    assert.equal(entry.payload, undefined, `${getMessageTypeName(type)} の payload`);
+    // 何バイトだったかと、payload を残さなかった理由は読める
     assert.include(entry.message, getMessageTypeName(type));
-    assert.deepEqual(entry.data, { type, payloadSize: TOKENISH_PAYLOAD.length });
+    assert.deepEqual(entry.data, {
+      type,
+      payloadSize: SAMPLE_PAYLOAD.length,
+      payloadOmitted: "authorization-token",
+    });
   }
+});
+
+test("logDebugMessage: 認可トークンを載せうるメッセージでも decoded は残す", () => {
+  // どのメッセージだったかの情報 (requestId など) は診断に要る
+  const type = MessageType.SUBSCRIBE;
+  logDebugMessage("[subscriber-1]", makeMessage(type, SAMPLE_PAYLOAD, { requestId: 7 }));
+
+  const entry = firstEntry();
+  assert.equal(entry.payload, undefined);
+  assert.deepEqual(entry.data, {
+    type,
+    payloadSize: SAMPLE_PAYLOAD.length,
+    payloadOmitted: "authorization-token",
+    requestId: 7,
+  });
 });
 
 test("logDebugMessage: 認可トークンを載せないメッセージの payload は今までどおり残す", () => {
@@ -84,16 +128,56 @@ test("logDebugMessage: 認可トークンを載せないメッセージの paylo
     __resetLogStateForTest();
     logDebugMessage("[subscriber-1]", makeMessage(type));
 
-    const stored = storedPayload();
+    const entry = firstEntry();
+    const stored = entry.payload;
     assert.isDefined(stored, `${getMessageTypeName(type)} の payload`);
     // ログ保持に備えた独立コピーであること (元のバッファと共有しない)
-    assert.notStrictEqual(stored.buffer, TOKENISH_PAYLOAD.buffer);
-    assert.deepEqual(Array.from(stored), Array.from(TOKENISH_PAYLOAD));
+    assert.notStrictEqual(stored.buffer, SAMPLE_PAYLOAD.buffer);
+    assert.deepEqual(Array.from(stored), Array.from(SAMPLE_PAYLOAD));
+    // payload を残した理由の欄は出さない
+    assert.notProperty(entry.data as Record<string, unknown>, "payloadOmitted");
   }
 });
 
+test("logDebugMessage: payload の上限を超える分はコピーしない", () => {
+  // 120 fps や 4K の映像では 1 Object が数十 KB になる。毎 Object をコピーすると
+  // メインスレッドの負荷で再生がかくつくため、上限 (4096 バイト) を超えたら残さない。
+  // 残さない理由は認可トークンではないため payloadOmitted は付けない
+  const type = MessageType.SUBSCRIBE_OK;
+  const oversized = new Uint8Array(4097);
+  logDebugMessage("[subscriber-1]", makeMessage(type, oversized));
+
+  const entry = firstEntry();
+  assert.equal(entry.payload, undefined);
+  assert.deepEqual(entry.data, { type, payloadSize: 4097 });
+
+  // 上限ちょうどは残す
+  __resetLogStateForTest();
+  logDebugMessage("[subscriber-1]", makeMessage(type, new Uint8Array(4096)));
+  assert.equal(firstEntry().payload?.length, 4096);
+});
+
 test("logDebugMessage: 認可トークンを載せうるメッセージでも、空の payload は undefined のまま", () => {
-  // 空の payload は今までも残していない (上限 0 バイト)
+  // 空の payload は今までも残していない (0 バイト)
   logDebugMessage("[publisher]", makeMessage(MessageType.SUBSCRIBE, new Uint8Array()));
-  assert.equal(storedPayload(), undefined);
+  assert.equal(firstEntry().payload, undefined);
+});
+
+test("logDebugMessage: すべてのメッセージ型が payload を残すか残さないかに分類されている", () => {
+  // メッセージ型を足したら、認可トークンを載せうるかどうかを必ず判断させる。
+  // 判断を忘れると payload がそのままログに残る
+  const classified = new Set<string>([
+    ...CREDENTIAL_MESSAGE_TYPES.map((type) => getMessageTypeName(type)),
+    ...Object.keys(NON_CREDENTIAL_MESSAGE_TYPE_REASONS),
+  ]);
+
+  const unclassified = Object.entries(MessageType)
+    .filter(([name]) => !classified.has(name))
+    .map(([name]) => name);
+  assert.deepEqual(unclassified, []);
+
+  // 分類の表に、もう存在しない型が残っていないこと
+  const knownNames = new Set(Object.keys(MessageType));
+  const stale = [...classified].filter((name) => !knownNames.has(name));
+  assert.deepEqual(stale, []);
 });

@@ -4,6 +4,7 @@ import {
   buildPublisherExportText,
   buildSubscriberExportText,
 } from "./debugExport";
+import * as settings from "./connectionSettings";
 import { __resetLogStateForTest, addLog, clearLog } from "./debugLog";
 import * as pub from "./publisher";
 import { addSubscriber, removeSubscriber, subscriberInstances } from "./subscriber";
@@ -113,6 +114,27 @@ test("buildSubscriberExportText: 見つからない id では接続設定とロ�
   assert.include(text, "=== Connection Settings ===");
   assert.notInclude(text, "Subscriber Statistics");
   assert.include(text, "=== Debug Logs ([gone]) ===");
+});
+
+test("buildAllExportText: Relay URI の c4m (認可トークン) を伏せ字にする", () => {
+  // Relay URI は設定の節 (url / fragment) と統計の節 (serverUrl) の両方に出る。
+  // 配信を始めたページでは Publisher の節も出るため、節ごとではなく本文全体で伏せる
+  const c4mBase64 = "c2VudGluZWwtYzRtLXRva2Vu";
+  const relayUri = `moqt://relay.example/moqt#msf:room-123--video&c4m=${c4mBase64}`;
+  settings.url.value = relayUri;
+  pub.pubStatus.value = "connected";
+
+  try {
+    const text = buildAllExportText();
+
+    assert.include(text, "=== Publisher Statistics ===");
+    assert.include(text, "url: moqt://relay.example/moqt#msf:room-123--video&c4m=<redacted>");
+    assert.include(text, "serverUrl: moqt://relay.example/moqt#msf:room-123--video&c4m=<redacted>");
+    assert.notInclude(text, c4mBase64);
+  } finally {
+    settings.url.value = "moqt://127.0.0.1:4443/";
+    resetPublisherState();
+  }
 });
 
 test("buildAllExportText: ログを消しても節は残る", () => {

@@ -1,5 +1,7 @@
 import { test, assert, beforeEach } from "vite-plus/test";
 import type { DebugMessage } from "moqt-js";
+import { getMessageTypeName } from "../../../src/message/debug.ts";
+import { MessageType } from "../../../src/message/types.ts";
 import { handleDebugMessage as handleSubscriberDebugMessage } from "./useSubscriber";
 import { handleDebugMessage as handlePublisherDebugMessage } from "./usePublisher";
 import { __resetLogStateForTest, getLogBuffer } from "../signals/debugLog";
@@ -8,11 +10,12 @@ beforeEach(() => {
   __resetLogStateForTest();
 });
 
+// payload を残す型 (GOAWAY) を使う。型と表示名は moqt-js の対応から取る
 function makeMessage(payload: Uint8Array): DebugMessage {
   return {
     direction: "recv",
-    type: 0x10,
-    typeName: "SUBSCRIBE_OK",
+    type: MessageType.GOAWAY,
+    typeName: getMessageTypeName(MessageType.GOAWAY),
     payload,
     timestamp: 0,
   };

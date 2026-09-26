@@ -25,8 +25,9 @@ moqt-devtools のデバッグパネルの「Copy for LLM」は、不具合の報
   - `payloadSize` と `decoded` は残すため、何バイトでどんな項目だったかは読める。画面の Binary タブも出なくなる
   - 未知の型で届いた payload は残る (仕様違反の peer が他の型に載せた場合は防げない)。これは対象外とし、コメントに理由を書く
 - c4m を含む Relay URI と URI Fragment は、コピー用のテキストでは値を伏せる (`c4m=<redacted>`)。`devtools/src/utils/c4m.ts` に伏せ字の純関数を足し、URL 全体と fragment 単体の両方の入力形、`c4m=` の全出現を対象にする
-  - `url` / `fragment` の signal は接続に使う値のため変えない。伏せるのは `devtools/src/signals/connectionSettingsSnapshot.ts` のスナップショットで行う
-- テスト: トークンを設定した状態のコピー本文に値が出ないこと、トークンを載せうる型の payload が保持されないこと、c4m 付きの URL から開いたコピー本文に c4m が出ないことを固定する
+  - `url` / `fragment` の signal は接続に使う値のため変えない。伏せるのは `devtools/src/signals/connectionSettingsSnapshot.ts` のスナップショットと、本文を組み立てる `devtools/src/signals/debugExport.ts` の最後で行う (統計の節の `serverUrl` のように、同じ Relay URI が別の節からも入るため)
+- メッセージ型を足したら「認可トークンを載せうる」か「載せない (理由)」のどちらかへ分類することをテストで強制する (載せ忘れると payload がそのままログに残るため)
+- テスト: トークンを設定した状態のコピー本文に値が出ないこと、トークンを載せうる型の payload が保持されないこと (decoded と payloadSize は残ること)、c4m 付きの URL と fragment から開いたコピー本文に c4m が出ないことを固定する。伏せ字の性質は Property-Based Testing で確かめる
 
 ## 完了条件
 
