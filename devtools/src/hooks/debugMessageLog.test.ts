@@ -3,7 +3,7 @@ import type { DebugMessage } from "moqt-js";
 import { getMessageTypeName } from "../../../src/message/debug.ts";
 import { MessageType } from "../../../src/message/types.ts";
 import { __resetLogStateForTest, getLogBuffer } from "../signals/debugLog";
-import { logDebugMessage } from "./debugMessageLog";
+import { CREDENTIAL_MESSAGE_TYPES, logDebugMessage } from "./debugMessageLog";
 
 /**
  * ログの payload の扱い
@@ -47,8 +47,9 @@ function firstEntry() {
 }
 
 // draft-ietf-moq-transport-21 §9.1.4 (SETUP の Setup Option) と §9.20.3
-// (AUTHORIZATION TOKEN Parameter) でトークンを載せうる型
-const CREDENTIAL_MESSAGE_TYPES: readonly number[] = [
+// (AUTHORIZATION TOKEN Parameter) でトークンを載せうる型。仕様から書き出した期待値で、
+// 実装の一覧 (CREDENTIAL_MESSAGE_TYPES) と一致することをテストで確かめる
+const EXPECTED_CREDENTIAL_MESSAGE_TYPES: readonly number[] = [
   MessageType.SETUP,
   MessageType.PUBLISH,
   MessageType.SUBSCRIBE,
@@ -81,8 +82,19 @@ const NON_CREDENTIAL_MESSAGE_TYPE_REASONS: Record<string, string> = {
   NAMESPACE_DONE: "namespace discovery の終了通知",
 };
 
+test("CREDENTIAL_MESSAGE_TYPES: 仕様から書き出した型の一覧と一致する", () => {
+  // 実装の一覧は仕様 (draft-ietf-moq-transport-21 §9.1.4 / §9.20.3) と一致していること。
+  // 型を足した・消した・取り違えたらここで落ちる
+  const sortNumbers = (values: Iterable<number>): number[] =>
+    [...values].sort((left, right) => left - right);
+  assert.deepEqual(
+    sortNumbers(CREDENTIAL_MESSAGE_TYPES),
+    sortNumbers(EXPECTED_CREDENTIAL_MESSAGE_TYPES),
+  );
+});
+
 test("logDebugMessage: 認可トークンを載せうるメッセージの payload はログに残さない", () => {
-  for (const type of CREDENTIAL_MESSAGE_TYPES) {
+  for (const type of EXPECTED_CREDENTIAL_MESSAGE_TYPES) {
     __resetLogStateForTest();
     logDebugMessage("[publisher]", makeMessage(type));
 
@@ -167,7 +179,7 @@ test("logDebugMessage: すべてのメッセージ型が payload を残すか残
   // メッセージ型を足したら、認可トークンを載せうるかどうかを必ず判断させる。
   // 判断を忘れると payload がそのままログに残る
   const classified = new Set<string>([
-    ...CREDENTIAL_MESSAGE_TYPES.map((type) => getMessageTypeName(type)),
+    ...[...CREDENTIAL_MESSAGE_TYPES].map((type) => getMessageTypeName(type)),
     ...Object.keys(NON_CREDENTIAL_MESSAGE_TYPE_REASONS),
   ]);
 
@@ -180,4 +192,27 @@ test("logDebugMessage: すべてのメッセージ型が payload を残すか残
   const knownNames = new Set(Object.keys(MessageType));
   const stale = [...classified].filter((name) => !knownNames.has(name));
   assert.deepEqual(stale, []);
+
+  // 両方の表に載っている型が無いこと (載せうる側と載せない側は排他)
+  const credentialNames = new Set(
+    [...CREDENTIAL_MESSAGE_TYPES].map((type) => getMessageTypeName(type)),
+  );
+  const both = Object.keys(NON_CREDENTIAL_MESSAGE_TYPE_REASONS).filter((name) =>
+    credentialNames.has(name),
+  );
+  assert.deepEqual(both, []);
+});
+
+test("logDebugMessage: 手入力の認可トークン (Token Value) を載せた SETUP の payload も残さない", () => {
+  // c4m から取り込んだトークンだけでなく、Token Value 欄へ入力したトークンも
+  // SETUP の AUTHORIZATION TOKEN Setup Option として payload に入る。
+  // 本文全体の伏せ字は c4m しか対象にしないため、payload を残さないことが根拠になる
+  const tokenValue = "sentinel-token-value-must-not-appear";
+  const payload = new TextEncoder().encode(`AUTHORIZATION_TOKEN=${tokenValue}`);
+  logDebugMessage("[publisher]", makeMessage(MessageType.SETUP, payload));
+
+  const entry = firstEntry();
+  assert.equal(entry.payload, undefined);
+  assert.notInclude(entry.message, tokenValue);
+  assert.notInclude(JSON.stringify(entry.data), tokenValue);
 });

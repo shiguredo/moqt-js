@@ -21,7 +21,7 @@ const MAX_LOGGED_PAYLOAD_BYTES = 4096;
  * 根拠にしている仕様はドラフトであり、将来の版で対象のメッセージが増えうる。
  * メッセージ型を足したらこの一覧を見直すこと (テストが全型の分類を強制する)。
  */
-const CREDENTIAL_MESSAGE_TYPES: ReadonlySet<number> = new Set([
+export const CREDENTIAL_MESSAGE_TYPES: ReadonlySet<number> = new Set([
   MessageType.SETUP,
   MessageType.PUBLISH,
   MessageType.SUBSCRIBE,
