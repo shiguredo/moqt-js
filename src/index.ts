@@ -172,6 +172,7 @@ export {
   type MediaReceiverStats,
   type AudioReceiverStats,
   type VideoReceiverStats,
+  type AvSyncStats,
   type AudioSubscribeOptions,
   type VideoSubscribeOptions,
 } from "./createMediaSubscriber";

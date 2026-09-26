@@ -257,6 +257,9 @@ created ──start()──► subscribing ──(SUBSCRIBE_OK)──► active
 interface MediaReceiverStats {
   audio: AudioReceiverStats | null;
   video: VideoReceiverStats | null;
+  // 音声と映像の同期の推定値。片方しか購読していない、またはどちらかが壁時計の
+  // TIMESTAMP を使えないときは null
+  avSync: AvSyncStats | null;
 }
 
 interface AudioReceiverStats {
@@ -273,7 +276,32 @@ interface VideoReceiverStats {
   // 参照するフレームが欠けているため、キーフレームを待つ間に捨てたフレーム数
   missingReferenceFramesDropped: number;
 }
+
+interface AvSyncStats {
+  // 同期ずれの推定値 (ms)。映像の表示が音声より遅れていれば正。
+  // 音声は予約した時刻、映像は write した時刻の実績から求める (実際に音が出るまでの
+  // 出力遅延と、映像が表示されるまでの表示周期の遅れは含まない)。
+  // どちらかの実績が 1 秒より古いときは null
+  skewMs: number | null;
+  // 表示の遅れ (ms)。TIMESTAMP から表示時刻までの差。基準が未確立なら null
+  presentationDelayMs: number | null;
+  // catalog から解決した目標遅延 (ms)。無い、または使えないときは null。
+  // 実際に表示の遅れに使う値は、上限に収まらない分を切り下げた値になる
+  targetLatencyMs: number | null;
+  // 表示の遅れの上限に収まらず切り下げた分 (ms)
+  targetLatencyLimitedMs: number;
+  // AudioContext.getOutputTimestamp() を使えず currentTime で代用しているか
+  audioClockFallback: boolean;
+}
 ```
+
+音声と映像の表示時刻は 1 つの式で決める。`LOC Timestamp` (Timescale が無ければ Unix epoch
+マイクロ秒の壁時計) に、基準の遅れ (送受信の時計のずれと、経路と復号の最小遅延) と
+`max(catalog の targetLatency, 揺らぎから求めた再生遅延)` を足した時刻が目標になる
+(draft-ietf-moq-msf-01 Section 5.2.8 / Section 5.2.11)。同じ render group の track は
+同じ `targetLatency` を持つため、同じ式を使えば音声と映像が揃う。`isLive` が false の
+track の `targetLatency` は無視する (Section 5.2.8 の MUST)。`targetLatency` が無いときは
+揺らぎから求めた遅れだけを使い、その場合も音声と映像で同じ値を使う。
 
 `AudioStats` / `VideoStats` は送信側 (`MediaStats`) の型である。受信側は
 `AudioReceiverStats` / `VideoReceiverStats` を使う。

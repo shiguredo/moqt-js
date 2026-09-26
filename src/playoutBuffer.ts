@@ -1,93 +1,24 @@
 /**
- * 復号した映像フレームを LOC TIMESTAMP (壁時計) の間隔どおりに表示する jitter buffer
+ * 復号した映像フレームを、共有の時間軸が決めた表示時刻に合わせて選ぶキュー
  *
- * 到着のタイミングのままフレームを表示すると、経路の到着の揺らぎがそのまま表示間隔の
- * 揺らぎ (かくつき) になる。draft-ietf-moq-loc-04 Section 2.3.1.1 により、Timescale の
- * 無い TIMESTAMP は Unix epoch マイクロ秒の壁時計であり、フレームを撮った間隔を表す。
- * フレームを TIMESTAMP に一定の遅れを足した時刻に表示すれば、その遅れの範囲の揺らぎを
- * 吸収できる。
+ * 到着のタイミングのままフレームを出し入れすると、経路の到着の揺らぎがそのまま表示間隔の
+ * 揺らぎ (かくつき) になる。表示時刻は `src/playbackTimeline.ts` が LOC TIMESTAMP と
+ * 共有の基準の遅れ・再生遅延から決める (音声と同じ式)。学習 (基準の遅れ、再生遅延、
+ * フレーム間隔) は時間軸が持つ。
  *
- * 表示時刻 = TIMESTAMP + 基準の遅れ + 再生遅延
+ * - 表示時刻を過ぎたフレームのうち最新の 1 枚を描き、それより古いものを捨てる
+ * - 表示時刻を過ぎたフレームが 2 枚以上あるときは、最新を次の選択に残してその 1 つ前を
+ *   描く。配信 fps と表示周期が近いとき、位相の揺れで重なった周期と空の周期が続いても
+ *   両方の周期で 1 枚ずつ描ける
+ * - 表示時刻を過ぎたフレームのうち `MAX_PRESENTATION_LAG_MS` を超えて遅れたものは捨てる
+ *   (最新の 1 枚は遅れていても残す)
+ * - 表示時刻を決められないフレーム (壁時計の TIMESTAMP を持たない、または時間軸が
+ *   そのトラックの TIMESTAMP を使わない) は、届いた順に 1 回の選択で 1 枚ずつ描く
  *
- * - 基準の遅れ: 直近の窓の「表示できるようになった時刻 - TIMESTAMP」(遅れ) の最小値。
- *   送信側と受信側の時計のずれと、経路の最小の遅延を含む。遅れは到着ではなく復号の
- *   出力の時刻で測る (表示できる時刻には復号の時間も含まれるため)
- * - 再生遅延: 窓の中の「遅れ - 基準の遅れ」(揺らぎ) の百分位を目標にする。百分位は
- *   表示時刻の後に届くフレームが 1 秒に 1 枚までになるよう配信 fps から決める
- *   (`playoutDelayPercentile`)。
- *   目標が上がったら直ちに追従し (遅れて届くフレームを減らす)、下がったときは毎秒
- *   `PLAYOUT_DELAY_DECAY_MS_PER_SECOND` でゆっくり戻す (表示時刻が前へ飛ぶと、その分の
- *   フレームを捨てることになる。毎秒 20 ms は再生を 2% 速めるだけで、目では分からない)
- *
- * 次のフレームの揺らぎは再生遅延の目標に使わない (基準の遅れには使う)。
- *
- * - 開始 (と基準の取り直し) の後、live に追いつくまでに届いたフレーム。購読の開始では
- *   relay の cache から Group の先頭以降の古いフレームが実時間より速く届き (cache replay)、
- *   遅れは経路の揺らぎではなく、cache に溜まっていた時間である。届く間隔はフレーム間隔の
- *   半分以上あることが多く、まとまって届いたフレームとしては除けない。追いつく間は遅れの
- *   最小値 (基準の遅れ) が下がり続けるため、基準の遅れが `CATCH_UP_CHECK_INTERVAL_MS` の
- *   間に `CATCH_UP_MIN_BASE_DROP_MS` 以上下がらなくなるまでを追いつき中とする。
- *   遅れの推移だけで決めるため、送信側と受信側の時計のずれに依らない
- * - 前のフレームからフレーム間隔の半分より短い間隔で届いたフレーム (まとまって届いた
- *   フレーム)。まとまりの中では先頭のフレームが最も遅れており、後続は先頭の遅れを
- *   引き継いだだけで新しい情報を持たない
- * - 揺らぎが再生遅延の上限を超えるフレーム。再生遅延では吸収できず、使うと再生遅延が
- *   上限に張り付く
- *
- * 時刻は呼び出し側が引数で渡す (`performance.now()`)。ブラウザ API に依存しない。
+ * 時刻は呼び出し側が引数で渡す。ブラウザ API に依存しない。
  */
 
-import { TimedValues } from "./timedValues";
-
-/**
- * 基準の遅れと揺らぎを求める直近の窓 (ミリ秒)
- *
- * 再生遅延の目標の百分位 (30 fps で約 96.7%、120 fps で約 99.2%) を求めるのに十分な数
- * (30 fps で 300 枚、120 fps で 1200 枚) のフレームを含み、経路の最小の遅延を表す程度に
- * 長い。長すぎると経路の遅延が変わったときに基準が追従しない
- */
-export const PLAYOUT_WINDOW_MS = 10_000;
-
-/**
- * 表示時刻の後に届くことを許すフレームの数 (1 秒あたり)
- *
- * 表示時刻の後に届いたフレームは、その表示周期に描けず止まりになる。見る側が感じるのは
- * 1 秒あたりの止まりの数であり、同じ割合で遅れを許すと、配信 fps が高いほど止まりが
- * 増える (5% なら 30 fps で 1 秒に 1.5 回、120 fps で 6 回)。許す数を 1 秒あたりで決め、
- * 再生遅延の目標にする揺らぎの百分位を配信 fps から求める (`playoutDelayPercentile`)
- */
-export const LATE_FRAMES_PER_SECOND = 1;
-
-/**
- * 再生遅延の目標にする揺らぎの百分位の下限
- *
- * 配信 fps が低い (20 fps 以下) と 1 秒に 1 枚は 5% を超えるため、95% のフレームは
- * 表示時刻までに届く長さを保つ。経路のまれな大きな遅延の跳ね (数分に数回、300 ms 前後)
- * まで吸収しようとすると、常に大きく遅れて表示することになるため、百分位は 100% にしない
- */
-export const MIN_PLAYOUT_DELAY_PERCENTILE = 0.95;
-
-/**
- * 再生遅延の目標にする揺らぎの百分位
- *
- * 表示時刻の後に届くフレームが 1 秒に `LATE_FRAMES_PER_SECOND` 枚までになる百分位
- * (1 - フレーム間隔 × 枚数 / 1 秒) と下限の大きい方。30 fps で約 96.7%、60 fps で約 98.3%、
- * 120 fps で約 99.2% になる。
- *
- * @param frameIntervalMs - フレーム間隔 (ミリ秒)。不明なら null
- */
-export function playoutDelayPercentile(frameIntervalMs: number | null): number {
-  if (frameIntervalMs === null || frameIntervalMs <= 0) {
-    return MIN_PLAYOUT_DELAY_PERCENTILE;
-  }
-  return Math.max(
-    MIN_PLAYOUT_DELAY_PERCENTILE,
-    1 - (frameIntervalMs * LATE_FRAMES_PER_SECOND) / 1_000,
-  );
-}
-
-/** 再生遅延の上限 (ミリ秒)。これ以上遅れて表示するよりは、止まりを受け入れる */
-export const MAX_PLAYOUT_DELAY_MS = 500;
+import type { PlaybackStream, PlaybackTimeline } from "./playbackTimeline";
 
 /**
  * 表示時刻を過ぎたフレームを捨てずに描く、表示時刻からの遅れの上限 (ミリ秒)
@@ -100,60 +31,21 @@ export const MAX_PLAYOUT_DELAY_MS = 500;
 export const MAX_PRESENTATION_LAG_MS = 20;
 
 /**
- * 追いつき中かを確かめる間隔 (ミリ秒)
- *
- * 追いつく間は、届くフレームが遅れの最小値を下げ続ける。2026-09-25 の配備 relay の実測では
- * cache から実時間の約 2 倍の速さで届き、この間隔で基準の遅れが 200 ms 以上下がった。
- * 短すぎると、2 枚ずつ届いて最小値が一時的に下がらない間に追いつき中を終えてしまう
- */
-export const CATCH_UP_CHECK_INTERVAL_MS = 250;
-
-/**
- * 追いつき中とみなす、`CATCH_UP_CHECK_INTERVAL_MS` の間の基準の遅れの下がり幅 (ミリ秒)
- *
- * 実時間の 1.1 倍の速さで追いつく場合も 25 ms 下がる。live に追いついた後の経路の
- * 最小の遅延の変化 (数ミリ秒) より十分大きくする
- */
-export const CATCH_UP_MIN_BASE_DROP_MS = 20;
-
-/** 目標が下がったときに再生遅延を下げる速さ (ミリ秒 / 秒) */
-export const PLAYOUT_DELAY_DECAY_MS_PER_SECOND = 20;
-
-/**
- * 遅れが基準からこれ以上離れたら、TIMESTAMP の飛びとみなして基準を取り直す (ミリ秒)
- *
- * publisher の時計の変更や別の publisher への切り替えで TIMESTAMP が大きく戻ると、以降の
- * フレームがすべて遅れて見えて再生遅延が上限に張り付き、大きく進むとフレームが先の時刻で
- * 待ち続ける。再生遅延の上限 (500 ms) と通常の揺らぎより十分大きくする。
- * 2 秒を超える経路の停止も取り直しの対象になるが、停止の後は取り直した方が早く戻る
- */
-export const PLAYOUT_DISCONTINUITY_MS = 2_000;
-
-/**
- * jitter buffer が有効なときの表示待ちのキューの上限 (枚)
+ * 表示待ちのキューの上限 (枚)
  *
  * 保持している VideoFrame は decoder のメモリを占める。30 fps で再生遅延の上限 (500 ms)
  * を保持できる枚数に余裕を足した値にする
  */
 export const JITTER_BUFFER_MAX_QUEUED_FRAMES = 24;
 
-/**
- * キューの上限のうち、揺らぎで一時的に増える分として空けておく枚数
- *
- * 再生遅延は (上限 - この枚数) 枚分のフレーム間隔までに抑える。フレーム間隔が短い
- * (120 fps など) ほど長く待てない
- */
-export const PLAYOUT_QUEUE_HEADROOM_FRAMES = 4;
-
-// フレーム間隔を求めるために保持する TIMESTAMP の差の数
-const FRAME_INTERVAL_SAMPLES = 32;
-
 /** 表示待ちのフレーム */
 interface QueuedFrame<T> {
   readonly item: T;
-  // 壁時計の TIMESTAMP (ミリ秒)。壁時計として使えないフレームは null で、届いた順に
+  // 壁時計の TIMESTAMP (マイクロ秒)。壁時計として使えないフレームは null で、届いた順に
   // 1 枚ずつ表示する
-  timestampMs: number | null;
+  readonly timestampMicros: number | null;
+  // 積んだときの時間軸の世代。基準を取り直すと表示時刻を決められなくなる
+  readonly generation: number;
 }
 
 /** 1 回の選択の結果 */
@@ -169,11 +61,6 @@ export interface PlayoutSelection<T> {
   readonly drawPresentationMs: number | null;
 }
 
-/** 昇順に並べた値の nearest-rank 法の百分位 */
-function percentile(sorted: readonly number[], ratio: number): number {
-  return sorted[Math.max(0, Math.ceil(ratio * sorted.length) - 1)] ?? 0;
-}
-
 /**
  * 復号したフレームを積み、表示時刻に合わせて選ぶ
  *
@@ -181,29 +68,23 @@ function percentile(sorted: readonly number[], ratio: number): number {
  */
 export class PlayoutBuffer<T> {
   private readonly maxQueuedFrames: number;
+  private readonly timeline: PlaybackTimeline;
+  private readonly stream: PlaybackStream;
   private queue: QueuedFrame<T>[] = [];
-  // 表示できるようになった時刻 - TIMESTAMP (ミリ秒)。基準の遅れ (最小値) に使う
-  private readonly offsets = new TimedValues();
-  // offsets のうち再生遅延の目標に使うもの (最初のフレームとまとまって届いたフレームを除く)
-  private readonly learningOffsets = new TimedValues();
-  // 直前に積んだ壁時計の TIMESTAMP のフレームの、表示できるようになった時刻
-  private lastArrivalMs: number | null = null;
-  private baseMs: number | null = null;
-  private delayMs: number | null = null;
-  private lastUpdateMs = 0;
-  private lastTimestampMs: number | null = null;
-  // 続けて積んだフレームの TIMESTAMP の差 (ミリ秒)
-  private frameIntervals: number[] = [];
-  // 開始 (と基準の取り直し) の後、live に追いつくまでの間か
-  private catchingUp = true;
-  // 追いつき中かを最後に確かめた時刻と、そのときの基準の遅れ。最初のフレームで決める
-  private catchUpCheckpoint: { atMs: number; baseMs: number } | null = null;
 
   /**
    * @param maxQueuedFrames - 表示待ちのキューの上限 (枚)。超えたら古い方から捨てる
+   * @param timeline - 表示時刻を決める共有の時間軸
+   * @param stream - このキューのトラック (既定は video)
    */
-  constructor(maxQueuedFrames: number) {
+  constructor(
+    maxQueuedFrames: number,
+    timeline: PlaybackTimeline,
+    stream: PlaybackStream = "video",
+  ) {
     this.maxQueuedFrames = maxQueuedFrames;
+    this.timeline = timeline;
+    this.stream = stream;
   }
 
   /** 表示待ちのフレーム数 */
@@ -215,17 +96,12 @@ export class PlayoutBuffer<T> {
    * 復号したフレームを積む
    *
    * @param item - フレーム
-   * @param nowMs - 表示できるようになった時刻 (`performance.now()`)
    * @param timestampMicros - 壁時計の TIMESTAMP (Unix epoch マイクロ秒)。壁時計として
    *   使えないフレーム (Timescale あり / TIMESTAMP 無し) は null
    * @returns キューの上限を超えたため捨てるフレーム (古い方から)
    */
-  enqueue(item: T, nowMs: number, timestampMicros: number | null): T[] {
-    const timestampMs = timestampMicros === null ? null : timestampMicros / 1_000;
-    if (timestampMs !== null) {
-      this.observe(nowMs, timestampMs);
-    }
-    this.queue.push({ item, timestampMs });
+  enqueue(item: T, timestampMicros: number | null): T[] {
+    this.queue.push({ item, timestampMicros, generation: this.timeline.generation });
     const overflow: T[] = [];
     while (this.queue.length > this.maxQueuedFrames) {
       const head = this.queue.shift();
@@ -237,17 +113,10 @@ export class PlayoutBuffer<T> {
   }
 
   /**
-   * 表示するフレームを選ぶ (requestAnimationFrame ごとに呼ぶ)
+   * 表示するフレームを選ぶ (表示周期ごとに呼ぶ)
    *
-   * 先頭が壁時計の TIMESTAMP を持たないフレームなら、それを描く (届いた順に 1 枚ずつ)。
+   * 先頭が表示時刻を決められないフレームなら、それを描く (届いた順に 1 枚ずつ)。
    * 先頭が表示時刻前なら何も描かずに待つ。
-   *
-   * 表示時刻を過ぎたフレームのうち、表示時刻からの遅れが `MAX_PRESENTATION_LAG_MS` を
-   * 超えたものを捨て (最新の 1 枚は遅れていても残す)、残りの最も古いフレームを描く。
-   * 表示時刻を過ぎたフレームのうち最新だけを描くと、配信 fps と表示周期が近いとき
-   * (120 fps を 120 Hz で表示するなど)、表示時刻と選択の位相の揺れや publisher の取得の
-   * 間隔の揺れ (間隔の短い 2 枚) で 2 枚以上が重なった周期のたびに捨て、次の周期は何も
-   * 描けずに表示が飛ぶ。上限までの遅れを許して 1 枚ずつ描けば、後の周期で追いつける。
    *
    * @param nowMs - 現在の時刻 (`performance.now()`)
    */
@@ -256,15 +125,14 @@ export class PlayoutBuffer<T> {
     if (head === undefined) {
       return { draw: null, late: [], drawPresentationMs: null };
     }
-    const baseMs = this.baseMs;
-    const delayMs = this.delayMs;
-    if (head.timestampMs === null || baseMs === null || delayMs === null) {
+    if (this.framePresentationMs(head) === null) {
       this.queue.shift();
       return { draw: head.item, late: [], drawPresentationMs: null };
     }
     let lastDue = -1;
     for (const [index, frame] of this.queue.entries()) {
-      if (frame.timestampMs === null || frame.timestampMs + baseMs + delayMs > nowMs) {
+      const presentationMs = this.framePresentationMs(frame);
+      if (presentationMs === null || presentationMs > nowMs) {
         break;
       }
       lastDue = index;
@@ -276,11 +144,8 @@ export class PlayoutBuffer<T> {
     let drawIndex = 0;
     while (drawIndex < lastDue) {
       const frame = this.queue[drawIndex];
-      if (
-        frame === undefined ||
-        frame.timestampMs === null ||
-        frame.timestampMs + baseMs + delayMs >= nowMs - MAX_PRESENTATION_LAG_MS
-      ) {
+      const presentationMs = frame === undefined ? null : this.framePresentationMs(frame);
+      if (presentationMs === null || presentationMs >= nowMs - MAX_PRESENTATION_LAG_MS) {
         break;
       }
       drawIndex++;
@@ -290,156 +155,47 @@ export class PlayoutBuffer<T> {
     if (drawn === undefined) {
       return { draw: null, late, drawPresentationMs: null };
     }
-    // lastDue までのフレームは壁時計の TIMESTAMP を持つ (null のフレームで走査を止めている)
     return {
       draw: drawn.item,
       late,
-      drawPresentationMs: drawn.timestampMs === null ? null : drawn.timestampMs + baseMs + delayMs,
+      drawPresentationMs: this.framePresentationMs(drawn),
     };
   }
 
   /**
    * 壁時計の TIMESTAMP のフレームの表示時刻 (`performance.now()` の時間軸、ミリ秒)。
-   * まだ基準が無ければ null
+   * まだ基準が無い、またはこのトラックの TIMESTAMP を使わないときは null
    */
-  presentationTimeMs(timestampMicros: number): number | null {
-    if (this.baseMs === null || this.delayMs === null) {
+  presentationTimeMs(timestampMicros: number | null): number | null {
+    if (timestampMicros === null) {
       return null;
     }
-    return timestampMicros / 1_000 + this.baseMs + this.delayMs;
+    return this.timeline.presentationPerformanceMs(this.stream, timestampMicros);
+  }
+
+  /**
+   * 積んだときの世代が今と同じフレームの表示時刻
+   *
+   * 基準を取り直した後に残っているフレームは、新しい基準では表示時刻が飛びの分だけ未来に
+   * なる。決められないものとして null を返し、届いた順に描く (取り直し前の `PlayoutBuffer`
+   * が積んでいたフレームの timestamp を消していたのと同じ扱い)。
+   */
+  private framePresentationMs(frame: QueuedFrame<T>): number | null {
+    if (frame.generation !== this.timeline.generation) {
+      return null;
+    }
+    return this.presentationTimeMs(frame.timestampMicros);
   }
 
   /** 現在の再生遅延 (ミリ秒)。壁時計の TIMESTAMP のフレームをまだ積んでいなければ null */
   playoutDelayMs(): number | null {
-    return this.delayMs;
+    return this.timeline.playoutDelayMs;
   }
 
-  /** 表示待ちのフレームをすべて取り出す (呼び出し側が閉じる)。基準と再生遅延は残す */
+  /** 表示待ちのフレームをすべて取り出す (呼び出し側が閉じる) */
   clear(): T[] {
     const items = this.queue.map((frame) => frame.item);
     this.queue = [];
     return items;
-  }
-
-  /** 壁時計の TIMESTAMP のフレームの遅れを記録し、基準の遅れと再生遅延を更新する */
-  private observe(nowMs: number, timestampMs: number): void {
-    const offsetMs = nowMs - timestampMs;
-    if (this.baseMs !== null && Math.abs(offsetMs - this.baseMs) >= PLAYOUT_DISCONTINUITY_MS) {
-      this.restart();
-    }
-
-    // 最初のフレームと、まとまって届いたフレームは再生遅延の目標に使わない
-    let learns = false;
-    if (this.lastTimestampMs !== null && this.lastArrivalMs !== null) {
-      const intervalMs = timestampMs - this.lastTimestampMs;
-      if (intervalMs > 0) {
-        this.frameIntervals.push(intervalMs);
-        if (this.frameIntervals.length > FRAME_INTERVAL_SAMPLES) {
-          this.frameIntervals.shift();
-        }
-      }
-      learns = nowMs - this.lastArrivalMs >= intervalMs / 2;
-    }
-    this.lastTimestampMs = timestampMs;
-    this.lastArrivalMs = nowMs;
-
-    const minAtMs = nowMs - PLAYOUT_WINDOW_MS;
-    this.offsets.push(nowMs, offsetMs);
-    this.offsets.prune(minAtMs);
-    const baseMs = Math.min(...this.offsets.current());
-    this.baseMs = baseMs;
-    // live に追いつくまでに届いたフレームの遅れは経路の揺らぎではない
-    if (learns && !this.isCatchingUp(nowMs, baseMs)) {
-      this.learningOffsets.push(nowMs, offsetMs);
-    }
-    this.learningOffsets.prune(minAtMs);
-
-    const frameIntervalMs = this.frameIntervalMs();
-    const capMs = this.delayCapMs(frameIntervalMs);
-    // 再生遅延の上限を超える揺らぎは吸収できないため目標に使わない
-    const jitters = this.learningOffsets
-      .current()
-      .map((offset) => offset - baseMs)
-      .filter((jitter) => jitter <= MAX_PLAYOUT_DELAY_MS)
-      .sort((a, b) => a - b);
-    const targetMs = Math.min(percentile(jitters, playoutDelayPercentile(frameIntervalMs)), capMs);
-    if (this.delayMs === null || targetMs >= this.delayMs) {
-      this.delayMs = targetMs;
-    } else {
-      const elapsedMs = Math.max(0, nowMs - this.lastUpdateMs);
-      const decayedMs = this.delayMs - (PLAYOUT_DELAY_DECAY_MS_PER_SECOND * elapsedMs) / 1_000;
-      // フレーム間隔が短くなって上限が下がったときは、上限まで直ちに下げる
-      this.delayMs = Math.min(Math.max(targetMs, decayedMs), capMs);
-    }
-    this.lastUpdateMs = nowMs;
-  }
-
-  /**
-   * 開始 (と基準の取り直し) の後、live に追いつくまでの間かを決める
-   *
-   * `CATCH_UP_CHECK_INTERVAL_MS` ごとに基準の遅れの下がり幅を見て、
-   * `CATCH_UP_MIN_BASE_DROP_MS` より小さければ追いついたとみなす。一度追いついたら、
-   * 基準を取り直すまで追いつき中に戻らない (live の経路の揺らぎは学習する)
-   */
-  private isCatchingUp(nowMs: number, baseMs: number): boolean {
-    if (!this.catchingUp) {
-      return false;
-    }
-    const checkpoint = this.catchUpCheckpoint;
-    if (checkpoint === null) {
-      this.catchUpCheckpoint = { atMs: nowMs, baseMs };
-      return true;
-    }
-    if (nowMs - checkpoint.atMs < CATCH_UP_CHECK_INTERVAL_MS) {
-      return true;
-    }
-    if (checkpoint.baseMs - baseMs >= CATCH_UP_MIN_BASE_DROP_MS) {
-      this.catchUpCheckpoint = { atMs: nowMs, baseMs };
-      return true;
-    }
-    this.catchingUp = false;
-    this.catchUpCheckpoint = null;
-    return false;
-  }
-
-  /**
-   * 再生遅延の上限 (ミリ秒)。キューの上限を超えない長さ ((上限 - 余裕) 枚分のフレーム
-   * 間隔) と `MAX_PLAYOUT_DELAY_MS` の小さい方
-   */
-  private delayCapMs(frameIntervalMs: number | null): number {
-    if (frameIntervalMs === null) {
-      return MAX_PLAYOUT_DELAY_MS;
-    }
-    const queueCapMs =
-      Math.max(0, this.maxQueuedFrames - PLAYOUT_QUEUE_HEADROOM_FRAMES) * frameIntervalMs;
-    return Math.min(MAX_PLAYOUT_DELAY_MS, queueCapMs);
-  }
-
-  /** 直近のフレーム間隔 (TIMESTAMP の差の中央値、ミリ秒)。まだ分からなければ null */
-  private frameIntervalMs(): number | null {
-    if (this.frameIntervals.length === 0) {
-      return null;
-    }
-    const sorted = [...this.frameIntervals].sort((a, b) => a - b);
-    return percentile(sorted, 0.5);
-  }
-
-  /**
-   * TIMESTAMP の飛びで基準を取り直す。積んでいるフレームは新しい基準で表示時刻を求め
-   * られないため、届いた順に 1 枚ずつ表示する
-   */
-  private restart(): void {
-    this.offsets.clear();
-    this.learningOffsets.clear();
-    this.baseMs = null;
-    this.delayMs = null;
-    this.lastTimestampMs = null;
-    this.lastArrivalMs = null;
-    this.frameIntervals = [];
-    this.catchingUp = true;
-    this.catchUpCheckpoint = null;
-    for (const frame of this.queue) {
-      frame.timestampMs = null;
-    }
   }
 }

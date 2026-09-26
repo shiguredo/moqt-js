@@ -28,13 +28,15 @@ import { AudioDecoderWrapper } from "./codec/AudioDecoder";
 import { VideoDecoderWrapper } from "./codec/VideoDecoder";
 import { VideoDecodeOrder, priorObjectIdGapOf } from "./videoDecodeOrder";
 import { GroupSwitchGate } from "./groupSwitchGate";
-import { AudioPlayoutScheduler } from "./audioPlayout";
+import { AudioClockBridge, AudioPlayoutScheduler } from "./audioPlayout";
 import { JITTER_BUFFER_MAX_QUEUED_FRAMES, PlayoutBuffer } from "./playoutBuffer";
+import { AUDIO_PLAYOUT_DELAY_FLOOR_MS, PlaybackTimeline } from "./playbackTimeline";
 import { DEFAULT_AUDIO_SAMPLE_RATE, resolveAudioChannelCount } from "./codec/config";
 import type {
   AudioCodecType,
   AudioReceiverStats,
   AudioSubscribeOptions,
+  AvSyncStats,
   MediaReceiverStats,
   MediaSubscriber,
   MediaSubscriberCallbacks,
@@ -44,6 +46,13 @@ import type {
   VideoReceiverStats,
   VideoSubscribeOptions,
 } from "./codec/types";
+
+/**
+ * 復号出力の timestamp の種類を覚えておく上限 (件)
+ *
+ * 復号されなかったフレームの分が残らないよう、古い方から捨てる
+ */
+const TIMESTAMP_KIND_MAX_TRACKED = 256;
 
 /**
  * authInfo に応じて Authorization Token を解決する純粋関数
@@ -291,6 +300,38 @@ function decoderTimestampOf(resolved: TimestampSource): number {
 }
 
 /**
+ * トラックが宣言する `targetLatency` を使える値にする (ミリ秒)
+ *
+ * draft-ietf-moq-msf-01 §5.2.8: `isLive` が false のトラックの `targetLatency` は
+ * 無視する MUST。宣言が無いときは null (`buffers` があるときは検証で併存が禁じられている)。
+ */
+function effectiveTargetLatencyMs(track: CatalogTrack | null): number | null {
+  if (track === null || !track.isLive) {
+    return null;
+  }
+  return track.targetLatency ?? null;
+}
+
+/**
+ * 2 つのトラックが同じ render group か alternate group に属するか
+ *
+ * draft-ietf-moq-msf-01 §5.2.8 の「同じ値でなければならない MUST」は同じ group の
+ * track に限られる。group が無い、または異なる場合は仕様に反しない。
+ */
+function sharesRenderOrAlternateGroup(
+  audio: CatalogTrack | null,
+  video: CatalogTrack | null,
+): boolean {
+  if (audio === null || video === null) {
+    return false;
+  }
+  const sameRenderGroup =
+    audio.renderGroup !== undefined && audio.renderGroup === video.renderGroup;
+  const sameAlternateGroup = audio.altGroup !== undefined && audio.altGroup === video.altGroup;
+  return sameRenderGroup || sameAlternateGroup;
+}
+
+/**
  * MediaSubscriber の実装クラス
  *
  * 単体テストから復号ハンドラを駆動するため export する
@@ -331,10 +372,25 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   private audioDestination: MediaStreamAudioDestinationNode | null = null;
   // 復号した音声を鳴らす時刻を決める。AudioContext を作るたびに基準を作り直す
   private readonly audioPlayout = new AudioPlayoutScheduler();
+  // AudioContext の時計と performance.now() の対応。予約のたびに取り直す
+  private readonly audioClockBridge = new AudioClockBridge();
+  // 音声と映像で共有する表示時刻の時間軸。同じ targetLatency と同じ遅れを使う
+  private readonly playbackTimeline = new PlaybackTimeline({
+    timeOriginMs: performance.timeOrigin,
+    maxQueuedFrames: JITTER_BUFFER_MAX_QUEUED_FRAMES,
+  });
   // 復号した映像を LOC TIMESTAMP の間隔で出す。表示周期ごとに select する
-  private readonly videoPlayout = new PlayoutBuffer<VideoFrame>(JITTER_BUFFER_MAX_QUEUED_FRAMES);
+  private readonly videoPlayout = new PlayoutBuffer<VideoFrame>(
+    JITTER_BUFFER_MAX_QUEUED_FRAMES,
+    this.playbackTimeline,
+  );
   // 復号出力の timestamp から、壁時計かメディア時刻かを引く。decode に渡した値をキーにする
   private readonly videoTimestampKinds = new Map<number, "wallClock" | "mediaTime">();
+  // 音声も同じ対応表を持つ (Timescale がある TIMESTAMP は壁時計ではない)
+  private readonly audioTimestampKinds = new Map<number, "wallClock" | "mediaTime">();
+  // 音声と映像の両方で壁時計の TIMESTAMP を観測したか (同期の推定を出せるか)
+  private audioWallClockSeen = false;
+  private videoWallClockSeen = false;
   private videoFrameDrain: number | null = null;
   private videoPlayoutStopped = false;
 
@@ -536,6 +592,11 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     }
     this.videoGroupGate.reset();
     this.clearVideoPlayout();
+    // 共有の時間軸と時計の対応を消し、次の購読で作り直す
+    this.playbackTimeline.reset();
+    this.audioTimestampKinds.clear();
+    this.audioWallClockSeen = false;
+    this.videoWallClockSeen = false;
     this.audioDecoderConfigured = false;
     this.videoDecoderConfigured = false;
     this.audioDecoder?.close();
@@ -572,6 +633,30 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     return {
       audio: this.options.audio ? { ...this.audioStats } : null,
       video: this.options.video ? { ...this.videoStats } : null,
+      avSync: this.avSyncStats(),
+    };
+  }
+
+  /**
+   * 音声と映像の同期の推定値
+   *
+   * 片方しか購読していない、トラックが解決できていない、またはどちらかが壁時計の
+   * TIMESTAMP を観測していないときは null (映像の表示時刻が決まらない、音声の timestamp が
+   * メディア時刻になるため比較できない)。
+   */
+  private avSyncStats(): AvSyncStats | null {
+    if (this.audioTrackInfo === null || this.videoTrackInfo === null) {
+      return null;
+    }
+    if (!this.audioWallClockSeen || !this.videoWallClockSeen) {
+      return null;
+    }
+    return {
+      skewMs: this.playbackTimeline.skewMs(),
+      presentationDelayMs: this.playbackTimeline.presentationDelayMs,
+      targetLatencyMs: this.playbackTimeline.targetLatencyMs,
+      targetLatencyLimitedMs: this.playbackTimeline.targetLatencyLimitedMs,
+      audioClockFallback: this.audioClockBridge.usingFallback,
     };
   }
 
@@ -835,6 +920,43 @@ export class MediaSubscriberImpl implements MediaSubscriber {
         "video",
       );
     }
+
+    // 解決した track から targetLatency を決めて共有の時間軸へ渡す (draft-ietf-moq-msf-01 §5.2.8)
+    this.playbackTimeline.setTargetLatencyMs(this.resolveSharedTargetLatencyMs());
+  }
+
+  /**
+   * 音声と映像で使う `targetLatency` を 1 つ決める (ミリ秒)
+   *
+   * draft-ietf-moq-msf-01 §5.2.8:
+   * - `isLive` が false の track の `targetLatency` は無視する (MUST)
+   * - 同じ render group (または alternate group) の track は同じ値でなければならない (MUST)
+   * - 無い場合、プレイヤーが遅延を選んでよい (MAY)
+   *
+   * 片方にしか無いときは、もう片方は遅延を選んでよいため同じ値を使って揃える。両方にあって
+   * 異なるときは、同じ group なら MUST 違反として通知し、大きい方を使う (小さい方の要求より
+   * 早く出さない)。group が違う、または無いときは仕様に反しないため通知しない。
+   */
+  private resolveSharedTargetLatencyMs(): number | null {
+    const audioMs = effectiveTargetLatencyMs(this.audioTrackInfo);
+    const videoMs = effectiveTargetLatencyMs(this.videoTrackInfo);
+    if (audioMs === null) {
+      return videoMs;
+    }
+    if (videoMs === null) {
+      return audioMs;
+    }
+    if (audioMs === videoMs) {
+      return audioMs;
+    }
+    if (sharesRenderOrAlternateGroup(this.audioTrackInfo, this.videoTrackInfo)) {
+      this.callbacks.onError?.(
+        new Error(
+          `targetLatency differs between tracks in the same render group: audio ${audioMs}, video ${videoMs} (draft-ietf-moq-msf-01 Section 5.2.8)`,
+        ),
+      );
+    }
+    return Math.max(audioMs, videoMs);
   }
 
   /**
@@ -879,6 +1001,8 @@ export class MediaSubscriberImpl implements MediaSubscriber {
         sampleRate,
       });
       this.audioPlayout.reset();
+      // AudioContext を作り直したので、時間軸の基準も作り直す。時計の対応は次の予約で取る
+      this.playbackTimeline.reset();
       // ブラウザの自動再生ポリシー対応
       if (this.audioContext.state === "suspended") {
         void this.audioContext.resume();
@@ -1190,9 +1314,31 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     this.audioStats.bytesReceived += obj.payload.length + (obj.properties?.length ?? 0);
 
     const timestamp = decoderTimestampOf(locProperties);
+    this.rememberAudioTimestampKind(timestamp, locProperties);
 
     // デコード
     this.audioDecoder.decode(obj.payload, "key", timestamp, 0);
+  }
+
+  /**
+   * 復号出力の timestamp から壁時計かどうかを引けるように覚える
+   *
+   * Timescale が無い TIMESTAMP だけ壁時計である (draft-ietf-moq-loc-04 §2.3.1.1)。
+   * 無い TIMESTAMP は decoder に 0 を渡すため、種類は覚えず壁時計にしない。
+   */
+  private rememberAudioTimestampKind(timestamp: number, source: TimestampSource): void {
+    if (source.timestamp === undefined) {
+      return;
+    }
+    const kinds = this.audioTimestampKinds;
+    kinds.delete(timestamp);
+    kinds.set(timestamp, source.timescale === undefined ? "wallClock" : "mediaTime");
+    for (const oldest of kinds.keys()) {
+      if (kinds.size <= TIMESTAMP_KIND_MAX_TRACKED) {
+        break;
+      }
+      kinds.delete(oldest);
+    }
   }
 
   /**
@@ -1421,12 +1567,53 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       const sampleRate = audioData.sampleRate;
       const numberOfFrames = audioData.numberOfFrames;
 
-      // 届いたその場で鳴らすと、届く間隔の揺らぎで前の音と重なるか隙間が空き、ノイズに
-      // なる。再生の遅れだけ遅らせ、timestamp の間隔どおりに途切れなく並べる (audioPlayout.ts)
+      // 復号の出力を共有の時間軸へ記録し、映像と同じ式で目標の時刻を求める
+      // (src/playbackTimeline.ts)。壁時計の TIMESTAMP を持たない音は目標を持たず、
+      // 到着基準の並べ方にフォールバックする
+      const kind = this.audioTimestampKinds.get(audioData.timestamp);
+      this.audioTimestampKinds.delete(audioData.timestamp);
+      const isWallClock = kind === "wallClock";
+      // 直近の音が壁時計の TIMESTAMP を持つか (同期の推定を出せるかの判定に使う)
+      this.audioWallClockSeen = isWallClock;
+      if (isWallClock) {
+        this.playbackTimeline.observe(
+          "audio",
+          performance.timeOrigin + performance.now(),
+          audioData.timestamp,
+        );
+      }
+      // AudioContext の時計と performance.now() の対応を取り直す。まだ描画が始まって
+      // いない (currentTime が 0 で getOutputTimestamp も 0) ときは対応を作らない
+      const mapping = this.audioContext.getOutputTimestamp();
+      const contextTime = mapping.contextTime ?? 0;
+      const performanceTime = mapping.performanceTime ?? 0;
+      const hasMapping = contextTime !== 0 || performanceTime !== 0;
+      if (hasMapping || this.audioContext.currentTime > 0) {
+        this.audioClockBridge.update(
+          hasMapping ? { contextTime, performanceTime } : null,
+          this.audioContext.currentTime,
+          performance.now(),
+        );
+      }
+      const targetMs = isWallClock
+        ? this.playbackTimeline.presentationPerformanceMs("audio", audioData.timestamp)
+        : null;
+      const targetStartSeconds =
+        targetMs === null ? null : this.audioClockBridge.toAudioSeconds(targetMs);
       const decision = this.audioPlayout.schedule(
         this.audioContext.currentTime,
         audioData.timestamp,
         numberOfFrames / sampleRate,
+        {
+          targetStartSeconds,
+          // 映像も購読しているときだけ目標を守る。音声だけのときは取り直して連続を優先する
+          enforceTarget: this.videoTrackInfo !== null,
+          delaySeconds:
+            (this.playbackTimeline.playoutDelayMs ?? AUDIO_PLAYOUT_DELAY_FLOOR_MS) / 1_000,
+          presentationDelaySeconds:
+            (this.playbackTimeline.presentationExtraDelayMs ?? AUDIO_PLAYOUT_DELAY_FLOOR_MS) /
+            1_000,
+        },
       );
       if (decision.kind === "drop") {
         return;
@@ -1450,6 +1637,18 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       source.buffer = audioBuffer;
       source.connect(this.audioDestination);
       source.start(decision.startAt);
+
+      // 実際に鳴らす時刻を実績として記録する (同期ずれの推定に使う)
+      if (isWallClock) {
+        const presentedMs = this.audioClockBridge.toPerformanceMs(decision.startAt);
+        if (presentedMs !== null) {
+          this.playbackTimeline.recordPresentation(
+            "audio",
+            audioData.timestamp,
+            BigInt(Math.round((performance.timeOrigin + presentedMs) * 1_000)),
+          );
+        }
+      }
     } catch (error) {
       this.callbacks.onError?.(error instanceof Error ? error : new Error(String(error)));
     } finally {
@@ -1469,7 +1668,17 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     const kind = this.videoTimestampKinds.get(frame.timestamp);
     this.videoTimestampKinds.delete(frame.timestamp);
     const wallClockTimestamp = kind === "wallClock" ? frame.timestamp : null;
-    const overflow = this.videoPlayout.enqueue(frame, performance.now(), wallClockTimestamp);
+    // 直近のフレームが壁時計の TIMESTAMP を持つか (同期の推定を出せるかの判定に使う)
+    this.videoWallClockSeen = wallClockTimestamp !== null;
+    if (wallClockTimestamp !== null) {
+      // 映像も共有の時間軸へ記録する。音声と同じ式で表示時刻を決める
+      this.playbackTimeline.observe(
+        "video",
+        performance.timeOrigin + performance.now(),
+        wallClockTimestamp,
+      );
+    }
+    const overflow = this.videoPlayout.enqueue(frame, wallClockTimestamp);
     for (const dropped of overflow) {
       dropped.close();
     }
@@ -1511,6 +1720,14 @@ export class MediaSubscriberImpl implements MediaSubscriber {
         return;
       }
       this.writeVideoFrame(selection.draw);
+      // 実際に書く時刻 (表示時刻) を実績として記録する (同期ずれの推定に使う)
+      if (selection.drawPresentationMs !== null) {
+        this.playbackTimeline.recordPresentation(
+          "video",
+          selection.draw.timestamp,
+          BigInt(Math.round((performance.timeOrigin + performance.now()) * 1_000)),
+        );
+      }
     }
   }
 
@@ -1559,9 +1776,8 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     const kinds = this.videoTimestampKinds;
     kinds.delete(timestamp);
     kinds.set(timestamp, source.timescale === undefined ? "wallClock" : "mediaTime");
-    const maxTracked = 256;
     for (const oldest of kinds.keys()) {
-      if (kinds.size <= maxTracked) {
+      if (kinds.size <= TIMESTAMP_KIND_MAX_TRACKED) {
         break;
       }
       kinds.delete(oldest);
@@ -1598,6 +1814,7 @@ export type {
   MediaReceiverStats,
   AudioReceiverStats,
   VideoReceiverStats,
+  AvSyncStats,
   AudioSubscribeOptions,
   VideoSubscribeOptions,
 };
