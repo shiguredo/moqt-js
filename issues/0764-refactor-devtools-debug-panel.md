@@ -36,7 +36,7 @@ moqt-devtools の DebugPanel (`devtools/src/components/DebugPanel.tsx`) は早�
 
 - hooks と `App` が `components/DebugPanel` を import しない
 - Copy for LLM のテキストに、接続設定・publisher・subscriber のスナップショットにあるすべてのフィールドが出る (テストで固定する)
-- 認可トークンの値がコピー本文に出ない (テストで固定する)
+- 認可トークンの値はスナップショットに入れず、送るかどうかと種別だけを出す (テストで固定する)。c4m を含む Relay URI と payload の hex dump から値を消すのは別 issue で行う
 - 画面の表示 (行の日時・経過・差分、展開、コピー) が変わらない
 - `vp check` / `vp exec tsc --noEmit` / `vp exec tsc -p devtools --noEmit` / `vp test run` / `vp run e2e-test` が通る
 

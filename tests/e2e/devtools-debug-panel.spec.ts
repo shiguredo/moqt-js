@@ -118,7 +118,10 @@ test("Copy for LLM が設定と統計の項目とログを出す", async ({ page
   await openDebugPanel(page);
   await addLogs(page, [{ level: "info", message: "copy-log", data: { requestId: 7 } }]);
 
-  await page.getByTestId("debug-log-copy-all").click();
+  const copyButton = page.getByTestId("debug-log-copy-all");
+  await copyButton.click();
+  // クリップボードへの書き込みの完了を待つ ("Copied!" は書き込みが成功した後だけ出る)
+  await expect(copyButton).toHaveText("Copied!");
   const text = await page.evaluate(() => navigator.clipboard.readText());
 
   // 設定の節。Target Latency / Render Group と音声の設定、認可トークンの設定の有無を出す
