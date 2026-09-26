@@ -156,17 +156,29 @@ test("buildConnectionSettingsSnapshot: 認可トークンの値は入れず、�
   }
 });
 
-test("buildConnectionSettingsSnapshot: c4m から取り込んだトークンも値は入れない", () => {
+test("buildConnectionSettingsSnapshot: c4m から取り込んだトークンも値は入れず、URL と fragment では伏せ字にする", () => {
+  // Relay URI と URI Fragment のどちらにも c4m を書ける。取り込んだ後も signal には
+  // 残るため、テキストへ出す値 (スナップショット) の時点で伏せる
   resetSettingSignals();
   const c4mBase64 = "c2VudGluZWwtYzRtLXRva2Vu";
-  settings.authorizationTokenBase64.value = c4mBase64;
-  settings.authorizationTokenType.value = "1";
+  const relayUri = `moqt://relay.example/moqt#msf:room-123--video&c4m=${c4mBase64}`;
 
   try {
+    settings.url.value = relayUri;
+    assert.isTrue(settings.applyC4mFromUrl(relayUri));
+
     const snapshot = buildConnectionSettingsSnapshot();
     assert.equal(snapshot.authorizationTokenConfigured, true);
     assert.equal(snapshot.authorizationTokenFromC4m, true);
+    assert.equal(snapshot.url, "moqt://relay.example/moqt#msf:room-123--video&c4m=<redacted>");
+    // スナップショットのどこにもトークンの値が現れない
     assert.notInclude(JSON.stringify(snapshot), c4mBase64);
+
+    // fragment に貼り付けた場合も同じ
+    settings.fragment.value = `msf:room-123--video&c4m=${c4mBase64}`;
+    const withFragment = buildConnectionSettingsSnapshot();
+    assert.equal(withFragment.fragment, "msf:room-123--video&c4m=<redacted>");
+    assert.notInclude(JSON.stringify(withFragment), c4mBase64);
   } finally {
     resetSettingSignals();
   }

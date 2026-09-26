@@ -6,6 +6,7 @@ import type {
   DevtoolsMode,
   VideoSourceType,
 } from "../types";
+import { maskC4mValue } from "../utils/c4m";
 import type { AuthorizationTokenAliasTypeUi } from "./connectionSettings";
 import * as settings from "./connectionSettings";
 
@@ -17,16 +18,14 @@ import * as settings from "./connectionSettings";
  * 2 箇所で手書きすると、設定を足したときにどちらかへ足し忘れる。
  * テキスト用の一覧はこの 1 箇所にまとめる。
  *
- * 認可トークンの値 (Token Value と c4m の Base64) は入れない。コピーしたテキストは
- * 外部 (LLM など) へ渡す前提のため、設定されているかどうかと種別だけを持つ。
+ * 認可トークンの値は入れない。コピーしたテキストは外部 (LLM など) へ渡す前提のため、
+ * Token Value と c4m の Base64 は載せず、設定されているかどうかと種別だけを持つ。
+ * Relay URI と URI Fragment の中の c4m は伏せ字にする (`utils/c4m.ts` の `maskC4mValue`)。
  */
 export interface ConnectionSettingsSnapshot {
-  /**
-   * Relay URI。c4m を含む場合はトークンの Base64 もそのまま入る
-   * (コピー用のテキストへ出すときの伏せ字は未実装)
-   */
+  /** Relay URI。c4m (Base64 encoded C4M token) は伏せ字にして入る */
   url: string;
-  /** URI Fragment (type:value) */
+  /** URI Fragment (type:value)。c4m は伏せ字にして入る */
   fragment: string;
   /** 表示モード。既定は both */
   mode: DevtoolsMode;
@@ -87,8 +86,10 @@ export interface ConnectionSettingsSnapshot {
 /** 現在の接続設定をスナップショットへ変換する */
 export function buildConnectionSettingsSnapshot(): ConnectionSettingsSnapshot {
   return {
-    url: settings.url.value,
-    fragment: settings.fragment.value,
+    // Relay URI と URI Fragment のどちらにも c4m (認可トークン) を書けるため、
+    // テキストへ出す値の時点で伏せる
+    url: maskC4mValue(settings.url.value),
+    fragment: maskC4mValue(settings.fragment.value),
     mode: settings.mode.value,
     namespace: settings.namespace.value,
     trackName: settings.trackName.value,

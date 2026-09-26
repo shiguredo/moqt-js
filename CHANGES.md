@@ -199,6 +199,9 @@
   - 経過時間の基準は、描画のたびに変わりうる「残っている最も古いログ」から「ログを消してから最初の 1 件」に変える。上限に達した後も最古の行が +0.000 に戻らなくなる
   - @voluntas
 
+- [FIX] moqt-devtools の「Copy for LLM」に認可トークンの値が出るのを修正する
+  - Relay URI と URI Fragment の c4m (Base64 encoded C4M token) を伏せ字にする。AUTHORIZATION_TOKEN を載せうるメッセージ (SETUP / PUBLISH / SUBSCRIBE / FETCH / TRACK_STATUS / PUBLISH_NAMESPACE / SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS / REQUEST_UPDATE) の payload はログへ残さない。payload の hex dump は画面の Binary タブ、行コピー、Copy for LLM に出るため、残さないことで値がどこにも出なくなる (バイト数と decoded は今までどおり読める)
+  - @voluntas
 - [FIX] moqt-devtools のデバッグパネルのログの差分が `(+-12ms)` のように表示されるのを修正する
   - 表示は新しい順だが、差分を時系列で 1 つ新しいログとの差で計算していたため符号が負になっていた。時系列で 1 つ古いログとの差にし、`(+12ms)` と出す
   - @voluntas

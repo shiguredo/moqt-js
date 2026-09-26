@@ -1,7 +1,7 @@
 # moqt-devtools の Copy for LLM に認可トークンの値が出る
 
 - Created: 2026-09-26
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-26
 - Branch: feature/fix-devtools-copy-token-leak
 - Polished: {YYYY-MM-DD}
 
@@ -25,8 +25,9 @@ moqt-devtools のデバッグパネルの「Copy for LLM」は、不具合の報
   - `payloadSize` と `decoded` は残すため、何バイトでどんな項目だったかは読める。画面の Binary タブも出なくなる
   - 未知の型で届いた payload は残る (仕様違反の peer が他の型に載せた場合は防げない)。これは対象外とし、コメントに理由を書く
 - c4m を含む Relay URI と URI Fragment は、コピー用のテキストでは値を伏せる (`c4m=<redacted>`)。`devtools/src/utils/c4m.ts` に伏せ字の純関数を足し、URL 全体と fragment 単体の両方の入力形、`c4m=` の全出現を対象にする
-  - `url` / `fragment` の signal は接続に使う値のため変えない。伏せるのは `devtools/src/signals/connectionSettingsSnapshot.ts` のスナップショットで行う
-- テスト: トークンを設定した状態のコピー本文に値が出ないこと、トークンを載せうる型の payload が保持されないこと、c4m 付きの URL から開いたコピー本文に c4m が出ないことを固定する
+  - `url` / `fragment` の signal は接続に使う値のため変えない。伏せるのは `devtools/src/signals/connectionSettingsSnapshot.ts` のスナップショットと、本文を組み立てる `devtools/src/signals/debugExport.ts` の最後で行う (統計の節の `serverUrl` のように、同じ Relay URI が別の節からも入るため)
+- メッセージ型を足したら「認可トークンを載せうる」か「載せない (理由)」のどちらかへ分類することをテストで強制する (載せ忘れると payload がそのままログに残るため)
+- テスト: トークンを設定した状態のコピー本文に値が出ないこと、トークンを載せうる型の payload が保持されないこと (decoded と payloadSize は残ること)、c4m 付きの URL と fragment から開いたコピー本文に c4m が出ないことを固定する。伏せ字の性質は Property-Based Testing で確かめる
 
 ## 完了条件
 
@@ -44,3 +45,14 @@ moqt-devtools のデバッグパネルの「Copy for LLM」は、不具合の報
 - `devtools/src/utils/debugExportText.ts` の `formatLogEntryText` / `formatSnapshotSection`
 - `src/session/connection.ts` の SETUP 送信の `emitDebug`
 - `src/session/params.ts` の `encodeAuthorizationTokenParameter` と各メッセージのパラメータ構築
+
+## 解決方法
+
+- `devtools/src/hooks/debugMessageLog.ts` で、認可トークンを載せうるメッセージ (SETUP / PUBLISH / SUBSCRIBE / FETCH / TRACK_STATUS / PUBLISH_NAMESPACE / SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS / REQUEST_UPDATE) の payload をログへコピーしないようにした。payload からトークンのバイト範囲は特定できないため hex dump を部分的に伏せることはできず、保持しないことが唯一確実である。`payloadSize` と `decoded` は残し、payload を残さなかった理由を `data` の `payloadOmitted` に記録する (payload が無いメッセージと区別できる)
+  - 判定はメッセージ型の数値 (`src/message/types.ts` の `MessageType`) で行う (表示名は変わりうるため)
+  - メッセージ型を足したら「載せうる」か「載せない (理由)」のどちらかへ分類することをテストで強制する。仕様の版が上がって応答にも credential を載せられるようになったら気づける
+- `devtools/src/utils/c4m.ts` に `maskC4mValue` を足し、c4m の値を `c4m=<redacted>` にした。Relay URI と URI Fragment のどちらにも書けるため両方に適用し、`c4m=` の出現をすべて潰す。値の範囲は `&` と空白 (改行を含む) までにする (本文全体へかけるため、改行を値に含めると後続の節まで消える。Property-Based Testing がこの不具合を検出した)
+- 伏せ字は `devtools/src/signals/connectionSettingsSnapshot.ts` (設定の節) と `devtools/src/signals/debugExport.ts` の本文全体の 2 箇所で行う。統計の節の `serverUrl` のように同じ Relay URI が別の節からも入るため、節ごとではなくテキスト全体にもかける。signal と `window.moqtDevTools` が返す値は変えない (Copy URL は設定を渡す共有リンクのため、今までどおり値を載せる。意図をコメントに書いた)
+- テスト: payload の扱い (`devtools/src/hooks/debugMessageLog.test.ts`)、伏せ字の性質 (`devtools/src/utils/c4m.prop.ts` の PBT と `c4m.test.ts` の境界)、スナップショット (`connectionSettingsSnapshot.test.ts`)、本文 (`debugExport.test.ts`)、E2E (`tests/e2e/devtools-debug-panel.spec.ts` で c4m 付きの Relay URI と fragment から開き、Publisher の節も出した状態で本文に値が出ないことを確認)
+- レビューで見つけた「Publisher の節の `serverUrl` から漏れる」経路と「伏せ字が行をまたいで後続の節を消す」不具合を直した
+- `vp check` / `vp exec tsc --noEmit` / `vp exec tsc -p devtools --noEmit` / `vp test run` (169 ファイル / 3051 テスト) / `vp run e2e-test` (55 件) が通った

@@ -466,6 +466,9 @@ function buildQueryParams(targetMode: DevtoolsMode): URLSearchParams {
   // Catalog Timeout は他の数値の設定と同じく常に載せる。Subscriber のページを URL で
   // 渡したときに既定値へ戻らないようにする
   params.set("catalogSubscriptionTimeout", String(catalogSubscriptionTimeout.value));
+  // Copy URL は設定をそのまま渡す共有リンクのため、認可トークンの値も載せる。
+  // デバッグパネルの「Copy for LLM」は外部へ貼る前提のため、この値と c4m を伏せる
+  // (devtools/src/signals/debugExport.ts の maskC4mValue)
   if (authorizationTokenValue.value) {
     params.set("authorizationTokenAliasType", authorizationTokenAliasType.value);
     params.set("authorizationTokenType", authorizationTokenType.value);

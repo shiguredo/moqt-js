@@ -1,5 +1,5 @@
 import { test, assert } from "vite-plus/test";
-import { extractC4mBase64 } from "./c4m";
+import { extractC4mBase64, maskC4mValue } from "./c4m";
 
 // draft-ietf-moq-msf-01 §11.1.1 の c4m 例 (パディング省略の Base64)
 const C4M_EXAMPLE = "gqhkYWxnIGVzaGFyqGR0eXBNhdZ9hdWQAY3VybGZlbWlzcwZleWV2aW5uZWlhdGVwQWNyZW5lY";
@@ -72,4 +72,44 @@ test("extractC4mBase64: c4m の値が空の場合は undefined を返す", () =>
 // `=` を含まない parameter は key=value 形式ではないため読み飛ばす。
 test("extractC4mBase64: = を含まない parameter は読み飛ばす", () => {
   assert.equal(extractC4mBase64(`msf:room-123--catalog&c4m&c4m=${C4M_EXAMPLE}`), C4M_EXAMPLE);
+});
+
+// 伏せ字は URL 全体の c4m を潰す。接続に使う値 (signal) は変えず、テキストへ出すときだけ通す。
+test("maskC4mValue: URL 全体の c4m の値を伏せ字にする", () => {
+  const url = `moqt://example.com/moqt#msf:room-123--catalog&c4m=${C4M_EXAMPLE}`;
+
+  assert.equal(maskC4mValue(url), "moqt://example.com/moqt#msf:room-123--catalog&c4m=<redacted>");
+});
+
+// fragment 欄への貼り付けも同じ関数で扱える。
+test("maskC4mValue: fragment 単体の c4m の値を伏せ字にする", () => {
+  assert.equal(
+    maskC4mValue(`msf:room-123--catalog&c4m=${C4M_EXAMPLE}`),
+    "msf:room-123--catalog&c4m=<redacted>",
+  );
+});
+
+// parameter の区切りは `&` のため、値は `&` の手前までを潰し、後ろの parameter は残す。
+test("maskC4mValue: 他の parameter は残す", () => {
+  assert.equal(
+    maskC4mValue(`msf:room-123--catalog&connection=wt&c4m=${C4M_EXAMPLE}&location-range=1.0`),
+    "msf:room-123--catalog&connection=wt&c4m=<redacted>&location-range=1.0",
+  );
+});
+
+// extractC4mBase64 は最初の c4m しか見ないが、伏せ字は出現をすべて潰す。
+test("maskC4mValue: c4m が複数あってもすべて伏せ字にする", () => {
+  assert.equal(
+    maskC4mValue("msf:room-123--catalog&c4m=QUFB&c4m=QkJC"),
+    "msf:room-123--catalog&c4m=<redacted>&c4m=<redacted>",
+  );
+});
+
+// c4m を持たない入力は変えない。
+test("maskC4mValue: c4m が無い入力はそのまま返す", () => {
+  assert.equal(
+    maskC4mValue("moqt://example.com/moqt#msf:room-123--catalog&connection=wt"),
+    "moqt://example.com/moqt#msf:room-123--catalog&connection=wt",
+  );
+  assert.equal(maskC4mValue(""), "");
 });
