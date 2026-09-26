@@ -1,7 +1,7 @@
 # moqt-devtools の副題のモードリンクが設定変更のたびに App 全体を再描画しないようにする
 
 - Created: 2026-09-25
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-26
 - Branch: feature/refactor-devtools-mode-subtitle-render
 - Polished: {YYYY-MM-DD}
 
@@ -36,3 +36,12 @@ moqt-devtools のヘッダーの副題に並べたモードのリンクは、`hr
 - `devtools/src/App.tsx` の `App` / `MODE_LABELS`
 - `devtools/src/signals/connectionSettings.ts` の `buildQueryStringForMode` / `buildQueryParams`
 - `devtools/src/components/DebugPanel.tsx` の `DebugPanel` (ログの組み立て)
+
+## 解決方法
+
+- `devtools/src/components/ModeSubtitle.tsx` を足し、`App` が持っていた副題 (`Media over QUIC Transport - ...` の行) と `MODE_LABELS` を移した。`mode` と `buildQueryStringForMode` を読むのはこのコンポーネントの中だけになり、接続設定の signal の購読が副題に閉じる
+- `devtools/src/App.tsx` の `App` は接続設定の signal を読まなくなった。Copy URL ボタンは `useCopyUrlButton` がクリック時に `buildQueryString` を呼ぶ形のままで、描画時の購読を作らない
+- 副題の表示・リンクの `href`・`target="_blank"`・`data-testid` (`mode-link-{mode}`) は変えていない
+- テスト: `tests/e2e/devtools-rerender-scope.spec.ts` を足した。実ブラウザで Preact の描画フック (`options.__r`) を包んでコンポーネントごとの描画回数を数え、Relay URI へ 10 文字入力したときに `App` と `SubscriberPanel` が 0 回、`ModeSubtitle` が 1 回以上再描画されること、`mode-link-publisher` の `href` が入力した URL へ追従することを確かめる。devtools にはコンポーネントテストの基盤 (Vitest Browser Mode) が無いため、再描画の範囲はこの E2E で確かめる
+- 実測 (Relay URI へ 10 文字入力したときの描画時間): 修正前は `App` が 10 回再描画されて 23.7 ms かかっていた。修正後は 8.4 ms になり、再描画されるのは副題だけになる
+- `npx vp check` / `npx vp test --run` (161 ファイル / 2986 テスト) / `npx vp run e2e-test` (48 件) が通った

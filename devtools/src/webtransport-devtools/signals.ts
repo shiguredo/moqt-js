@@ -1,4 +1,11 @@
 import { signal, computed } from "@preact/signals";
+import {
+  appendMessage,
+  clearMessageLog,
+  createMessageLogFields,
+  type MessageLogFields,
+  type StreamMessage,
+} from "./messageLog";
 import { toHttpVersionLabel } from "moqt-js";
 import { base64ToArrayBuffer } from "../utils/base64";
 import {
@@ -446,43 +453,40 @@ function detectStaticApiSupport(): StaticApiGroup[] {
 // ページロード時に 1 回評価する
 export const wtStaticApiSupport = signal<StaticApiGroup[]>(detectStaticApiSupport());
 
-// メッセージ種別
-export interface StreamMessage {
-  direction: "send" | "recv";
-  data: string;
-  timestamp: number;
-}
-
 // 双方向ストリーム
-export interface BidiStreamInfo {
+export interface BidiStreamInfo extends MessageLogFields {
   id: number;
   stream: WebTransportBidirectionalStream;
   writer: WritableStreamDefaultWriter<Uint8Array>;
-  messages: StreamMessage[];
   closed: boolean;
 }
 export const bidiStreams = signal<BidiStreamInfo[]>([]);
 
 // 送信側の単方向ストリーム
-export interface UniSendStreamInfo {
+export interface UniSendStreamInfo extends MessageLogFields {
   id: number;
   stream: WebTransportSendStream;
   writer: WritableStreamDefaultWriter<Uint8Array>;
-  messages: StreamMessage[];
   closed: boolean;
 }
 export const uniSendStreams = signal<UniSendStreamInfo[]>([]);
 
 // 受信側の単方向ストリーム
-export interface UniRecvStreamInfo {
+export interface UniRecvStreamInfo extends MessageLogFields {
   id: number;
-  messages: StreamMessage[];
   closed: boolean;
 }
 export const uniRecvStreams = signal<UniRecvStreamInfo[]>([]);
 
-// データグラム
-export const datagramMessages = signal<StreamMessage[]>([]);
+// データグラム。配列は破壊的に追記するため signal にしない (上の MessageLogFields と同じ扱い)
+export const datagramMessages: StreamMessage[] = [];
+export const datagramMessagesVersion = signal(0);
+
+// データグラムの一覧を、ストリームと同じ追記・クリアの手順で扱えるようにする
+const datagramLog: MessageLogFields = {
+  messages: datagramMessages,
+  messagesVersion: datagramMessagesVersion,
+};
 
 // ストリーム採番用のカウンタ
 let bidiStreamCounter = 0;
@@ -552,19 +556,6 @@ export function applyDatagramSettings(): void {
   if (outgoingMaxBufferedResult.value !== undefined) {
     datagrams.outgoingMaxBufferedDatagrams = outgoingMaxBufferedResult.value;
   }
-}
-
-/**
- * 表示用にタイムスタンプを整形する
- */
-export function formatTimestamp(timestamp: number): string {
-  const date = new Date(timestamp);
-  return date.toLocaleTimeString("ja-JP", {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    fractionalSecondDigits: 3,
-  });
 }
 
 /**
@@ -824,7 +815,7 @@ export function disconnect(closeInfo?: WebTransportCloseInfo): void {
   bidiStreams.value = [];
   uniSendStreams.value = [];
   uniRecvStreams.value = [];
-  datagramMessages.value = [];
+  clearMessageLog(datagramLog);
   bidiStreamCounter = 0;
   uniSendStreamCounter = 0;
   uniRecvStreamCounter = 0;
@@ -888,10 +879,7 @@ async function receiveDatagrams(wt: WebTransport): Promise<void> {
       const decoder = new TextDecoder();
       const text = decoder.decode(value);
 
-      datagramMessages.value = [
-        ...datagramMessages.value,
-        { direction: "recv", data: text, timestamp: Date.now() },
-      ];
+      appendMessage(datagramLog, "recv", text);
     }
   } catch {
     // ストリームが閉じられた
@@ -904,7 +892,7 @@ async function receiveDatagrams(wt: WebTransport): Promise<void> {
  * データグラムメッセージをクリアする
  */
 export function clearDatagramMessages(): void {
-  datagramMessages.value = [];
+  clearMessageLog(datagramLog);
 }
 
 /**
@@ -921,7 +909,7 @@ async function receiveIncomingStreams(wt: WebTransport): Promise<void> {
       const id = uniRecvStreamCounter++;
       const streamInfo: UniRecvStreamInfo = {
         id,
-        messages: [],
+        ...createMessageLogFields(),
         closed: false,
       };
 
@@ -952,18 +940,12 @@ async function readIncomingStream(
 
       const text = decoder.decode(value);
 
-      uniRecvStreams.value = uniRecvStreams.value.map((s) => {
-        if (s.id === streamId) {
-          return {
-            ...s,
-            messages: [
-              ...s.messages,
-              { direction: "recv" as const, data: text, timestamp: Date.now() },
-            ],
-          };
-        }
-        return s;
-      });
+      // 対象のストリームの一覧へ追記する。配列を作り直さないため、ほかの
+      // ストリームとパネルは再描画されない
+      const streamInfo = uniRecvStreams.value.find((s) => s.id === streamId);
+      if (streamInfo) {
+        appendMessage(streamInfo, "recv", text);
+      }
     }
   } catch {
     // ストリームが閉じられた
@@ -1026,7 +1008,7 @@ export async function createBidiStream(): Promise<void> {
       id,
       stream,
       writer,
-      messages: [],
+      ...createMessageLogFields(),
       closed: false,
     };
 
@@ -1056,18 +1038,10 @@ async function readBidiStream(
 
       const text = decoder.decode(value);
 
-      bidiStreams.value = bidiStreams.value.map((s) => {
-        if (s.id === streamId) {
-          return {
-            ...s,
-            messages: [
-              ...s.messages,
-              { direction: "recv" as const, data: text, timestamp: Date.now() },
-            ],
-          };
-        }
-        return s;
-      });
+      const streamInfo = bidiStreams.value.find((s) => s.id === streamId);
+      if (streamInfo) {
+        appendMessage(streamInfo, "recv", text);
+      }
     }
   } catch {
     // ストリームが閉じられた
@@ -1089,18 +1063,7 @@ export async function sendBidiMessage(streamId: number, message: string): Promis
   try {
     await streamInfo.writer.write(data);
 
-    bidiStreams.value = bidiStreams.value.map((s) => {
-      if (s.id === streamId) {
-        return {
-          ...s,
-          messages: [
-            ...s.messages,
-            { direction: "send" as const, data: message, timestamp: Date.now() },
-          ],
-        };
-      }
-      return s;
-    });
+    appendMessage(streamInfo, "send", message);
   } catch (err) {
     console.error("Failed to send bidi message:", err);
   }
@@ -1138,12 +1101,10 @@ export function removeBidiStream(streamId: number): void {
  * 双方向ストリームのメッセージをクリアする
  */
 export function clearBidiMessages(streamId: number): void {
-  bidiStreams.value = bidiStreams.value.map((s) => {
-    if (s.id === streamId) {
-      return { ...s, messages: [] };
-    }
-    return s;
-  });
+  const streamInfo = bidiStreams.value.find((s) => s.id === streamId);
+  if (streamInfo) {
+    clearMessageLog(streamInfo);
+  }
 }
 
 /**
@@ -1181,7 +1142,7 @@ export async function createUniStream(): Promise<void> {
       id,
       stream,
       writer,
-      messages: [],
+      ...createMessageLogFields(),
       closed: false,
     };
 
@@ -1204,18 +1165,7 @@ export async function sendUniMessage(streamId: number, message: string): Promise
   try {
     await streamInfo.writer.write(data);
 
-    uniSendStreams.value = uniSendStreams.value.map((s) => {
-      if (s.id === streamId) {
-        return {
-          ...s,
-          messages: [
-            ...s.messages,
-            { direction: "send" as const, data: message, timestamp: Date.now() },
-          ],
-        };
-      }
-      return s;
-    });
+    appendMessage(streamInfo, "send", message);
   } catch (err) {
     console.error("Failed to send uni message:", err);
   }
@@ -1253,12 +1203,10 @@ export function removeUniStream(streamId: number): void {
  * 単方向ストリームのメッセージをクリアする
  */
 export function clearUniMessages(streamId: number): void {
-  uniSendStreams.value = uniSendStreams.value.map((s) => {
-    if (s.id === streamId) {
-      return { ...s, messages: [] };
-    }
-    return s;
-  });
+  const streamInfo = uniSendStreams.value.find((s) => s.id === streamId);
+  if (streamInfo) {
+    clearMessageLog(streamInfo);
+  }
 }
 
 /**
@@ -1288,10 +1236,7 @@ export async function sendDatagram(message: string): Promise<void> {
     await writer.write(data);
     writer.releaseLock();
 
-    datagramMessages.value = [
-      ...datagramMessages.value,
-      { direction: "send", data: message, timestamp: Date.now() },
-    ];
+    appendMessage(datagramLog, "send", message);
   } catch (err) {
     console.error("Failed to send datagram:", err);
   }

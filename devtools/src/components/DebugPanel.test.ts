@@ -63,3 +63,20 @@ test("logSequence does not fire on autoScroll toggle but fires on addLog", () =>
     dispose();
   }
 });
+
+test("addLog: 表示の key に使う連番は上限に達しても重複しない", () => {
+  // 表示の key と展開状態の識別に使う連番。配列の添字を使うと、上限に達して
+  // 最古を捨てたときに展開状態が別の行へ移る
+  const appendedCount = MAX_LOGS + 10;
+  for (let i = 0; i < appendedCount; i++) {
+    addLog("info", `msg-${i}`);
+  }
+
+  const ids = getLogBuffer().map((entry) => entry.id);
+  assert.equal(ids.length, MAX_LOGS);
+  // 連番は重複しない (同じ id の行が 2 つできると key が衝突する)
+  assert.equal(new Set(ids).size, ids.length);
+  // 残っているのは新しい MAX_LOGS 件であり、古い方は捨てられている
+  assert.equal(getLogBuffer()[0]?.message, `msg-${appendedCount - MAX_LOGS}`);
+  assert.equal(getLogBuffer().at(-1)?.message, `msg-${appendedCount - 1}`);
+});
