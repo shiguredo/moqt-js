@@ -2099,6 +2099,12 @@
   - `src/session.ts` は 6,157 行から 1,183 行になり、Session インターフェースと各モジュールへの委譲だけが残る
   - @voluntas
 
+- [FIX] moqt-devtools の subscriber が、relay の cache から追いつく途中の映像を描かず、音声も鳴らさないようにする
+  - 購読を始めると relay は cache から古い Object を実時間より速く配るため、映像は早送りになり、音声は cache から届いた分かどうかではなく鳴らす時刻を過ぎているかと並べすぎの上限で鳴らすか捨てるかを決めていた。キーフレームの間隔が長い配信 (例: 90 秒) では、何十秒も前の映像を早送りで見せ続けていた
+  - SUBSCRIBE_OK の LARGEST_OBJECT (draft-ietf-moq-transport-21 Section 9.20.18) を追いつきの境界にし、この位置以前のフレームは復号するが描かず、音声 Object は復号するが鳴らさない。境界より後の Object から従来どおり再生する
+  - 描かなかったフレーム数を `catchUpFramesSkipped`、鳴らさなかった音声 Object 数を `audio.catchUpObjectsSkipped` として画面と `window.moqtDevTools` に出し、追いつくまで画面に「Catching up」を出す
+  - @voluntas
+
 ## 2026.2.0
 
 **リリース日**: 2026-05-13

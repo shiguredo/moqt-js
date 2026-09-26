@@ -125,6 +125,8 @@ test("buildSubscriberStats: 画面とコピー本文に出す状態と復号の�
   instance.chunksCreated.value = 11;
   instance.chunksDecoded.value = 10;
   instance.chunksSkipped.value = 1;
+  instance.catchUpFramesSkipped.value = 7;
+  instance.catchUpPending.value = true;
   instance.decodeErrors.value = 2;
   instance.dynamicGroupsSupported.value = true;
   instance.newGroupRequestEnabled.value = true;
@@ -140,6 +142,9 @@ test("buildSubscriberStats: 画面とコピー本文に出す状態と復号の�
   assert.equal(stats.chunksCreated, 11);
   assert.equal(stats.chunksDecoded, 10);
   assert.equal(stats.chunksSkipped, 1);
+  // relay の cache から追いつく途中の数と状態も、画面と同じ値を返す
+  assert.equal(stats.catchUpFramesSkipped, 7);
+  assert.equal(stats.catchUpPending, true);
   assert.equal(stats.decodeErrors, 2);
   assert.equal(stats.dynamicGroupsSupported, true);
   assert.equal(stats.newGroupRequestEnabled, true);
@@ -152,6 +157,7 @@ test("buildSubscriberStats: 音声の受信とデコード、再生の状態を�
   // datagram で届いた数は受信数の内数 (差が Subgroup で届いた数になる)
   instance.audioDatagramObjectsReceived.value = 8;
   instance.audioChunksDecoded.value = 20;
+  instance.audioCatchUpObjectsSkipped.value = 6;
   instance.audioDecoderConfigured.value = true;
   instance.audioPlaybackEnabled.value = true;
 
@@ -160,6 +166,7 @@ test("buildSubscriberStats: 音声の受信とデコード、再生の状態を�
   assert.equal(stats.audio.objectsReceived, 21);
   assert.equal(stats.audio.datagramObjectsReceived, 8);
   assert.equal(stats.audio.chunksDecoded, 20);
+  assert.equal(stats.audio.catchUpObjectsSkipped, 6);
   assert.equal(stats.audio.decoderConfigured, true);
   assert.equal(stats.audio.playbackEnabled, true);
 });

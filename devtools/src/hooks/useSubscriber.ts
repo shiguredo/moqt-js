@@ -15,6 +15,7 @@ import {
   type Session,
   type Subscriber,
   type Property,
+  type Location,
 } from "moqt-js";
 import { addLog } from "../signals/debugLog";
 import { logDebugMessage } from "./debugMessageLog";
@@ -35,6 +36,7 @@ import {
   waveformSampleCount,
 } from "../utils/audioLevel";
 import { base64ToArrayBuffer } from "../utils/base64";
+import { CatchUpGate } from "../utils/catchUpGate";
 import {
   EMPTY_PLAYBACK_TIMING,
   PLAYBACK_TIMING_WINDOW_MS,
@@ -135,12 +137,17 @@ const MAX_CANVAS_WIDTH = 1280;
 const MAX_PENDING_FRAMES = 12;
 
 /**
- * 復号の出力で TIMESTAMP の種類を引くために覚えておく数の上限
+ * 復号の出力で TIMESTAMP の種類と位置を引くために覚えておく数の上限
  *
  * decoder に渡してから出力されるまでの間だけ覚える。出力されなかった (decoder のエラーで
- * 捨てられたなど) 分が残り続けないよう、上限を超えたら古い方から忘れる
+ * 捨てられたなど) 分が残り続けないよう、上限を超えたら古い方から忘れる。
+ *
+ * relay の cache から追いつく途中は decoder へまとめて渡すため、上限は追いつく分の数より
+ * 大きくする。30 fps の映像 90 秒で 2700 枚、20 ms ごとの音声 90 秒で 4500 個であり、
+ * 余裕をみて 8192 にする。上限を超えた分は位置が分からないため、cache から届いた分でも
+ * 描画と再生をしてしまう (そこまで溜まるのは復号が追いつかない場合である)
  */
-const MAX_TRACKED_TIMESTAMP_KINDS = 256;
+const MAX_TRACKED_DECODE_INPUTS = 8192;
 
 /**
  * 受信から表示までの時間の統計を signal へ反映する間隔 (ミリ秒)
@@ -197,6 +204,7 @@ export function resetSubscriberStats(instance: sub.SubscriberInstance): void {
   instance.chunksCreated.value = 0;
   instance.chunksDecoded.value = 0;
   instance.chunksSkipped.value = 0;
+  instance.catchUpFramesSkipped.value = 0;
   instance.staleFramesDropped.value = 0;
   instance.missingReferenceFramesDropped.value = 0;
   instance.decodeErrors.value = 0;
@@ -207,6 +215,7 @@ export function resetSubscriberStats(instance: sub.SubscriberInstance): void {
   instance.audioObjectsReceived.value = 0;
   instance.audioDatagramObjectsReceived.value = 0;
   instance.audioChunksDecoded.value = 0;
+  instance.audioCatchUpObjectsSkipped.value = 0;
   instance.audioLastLevel.value = null;
   instance.audioPeakDbfs.value = null;
   instance.audioRmsDbfs.value = null;
@@ -283,6 +292,51 @@ export function resolveNewGroupRequestValue(
   largestLocation: { group: bigint; object: bigint } | null,
 ): bigint {
   return largestLocation === null ? 0n : largestLocation.group + 1n;
+}
+
+/**
+ * 復号へ渡したフレーム (映像 Object) と音声 Object の情報
+ *
+ * 復号の出力では Object の位置が分からないため、decoder へ渡すときの TIMESTAMP で引けるように
+ * 覚える。TIMESTAMP の種類は jitter buffer の表示時刻に使えるかどうかの判定に、位置は relay の
+ * cache から追いつく途中かどうかの判定 (CatchUpGate) に使う。
+ */
+export interface DecodeInput {
+  /** TIMESTAMP の種類 (draft-ietf-moq-loc-04 Section 2.3.1.1 / Section 2.3.1.2) */
+  readonly timestampKind: "none" | "wallClock" | "mediaTime";
+  /** Object の位置 (Group ID と Object ID) */
+  readonly location: Location;
+}
+
+/**
+ * 復号へ渡した Object の情報を、復号の出力で引けるように覚える
+ *
+ * TIMESTAMP から位置を一意に引けない Object は覚えない。TIMESTAMP を持たない Object は
+ * すべて同じ TIMESTAMP (0) を共有し、同じ TIMESTAMP の Object が重なったときはどちらの位置か
+ * 決められないためである。復号の出力では位置が分からないものとして扱い、境界の判定をせずに
+ * 従来どおり描く・鳴らす (utils/catchUpGate.ts)。
+ *
+ * 出力されなかった (decoder のエラーで捨てられたなど) 分が残り続けないよう、上限を超えたら
+ * 古い方から忘れる。
+ */
+export function rememberDecodeInput(
+  inputs: Map<number, DecodeInput>,
+  timestamp: number,
+  input: DecodeInput,
+): void {
+  if (input.timestampKind === "none" || inputs.has(timestamp)) {
+    // 位置を一意に引けないため覚えない。既に覚えていた分 (同じ TIMESTAMP の先の Object) も
+    // 忘れ、どちらも位置が分からないものとして扱う
+    inputs.delete(timestamp);
+    return;
+  }
+  inputs.set(timestamp, input);
+  for (const oldest of inputs.keys()) {
+    if (inputs.size <= MAX_TRACKED_DECODE_INPUTS) {
+      break;
+    }
+    inputs.delete(oldest);
+  }
 }
 
 /**
@@ -467,6 +521,8 @@ export function resetSubscriberState(
   instance.avSync.value = sub.EMPTY_AV_SYNC;
 
   instance.largestLocation.value = null;
+  // 追いつき中の表示も購読が無い状態に戻す (境界そのものは呼び出し側が消す)
+  instance.catchUpPending.value = false;
 
   chains.video.current = Promise.resolve();
   // 音声のチェーンも巻き戻す。停止後に残った処理が新しいセッションの signal を
@@ -561,12 +617,18 @@ export function useSubscriber(
   );
   const jitterBufferEnabledRef = useRef(false);
   const frameAnimationRef = useRef<number | null>(null);
-  // decoder に渡したフレームの TIMESTAMP の種類 (chunk の timestamp で引く)。
-  // 復号の出力で、壁時計の TIMESTAMP のフレームだけを jitter buffer の表示時刻に使う
-  const videoTimestampKindsRef = useRef(new Map<number, "none" | "wallClock" | "mediaTime">());
+  // decoder に渡したフレームの情報 (chunk の timestamp で引く)。復号の出力で、壁時計の
+  // TIMESTAMP のフレームだけを jitter buffer の表示時刻に使い、relay の cache から届いた
+  // フレームは描かずに捨てる (位置を追いつきの境界と比べる)
+  const videoDecodeInputsRef = useRef(new Map<number, DecodeInput>());
   // 音声も同じ対応表を持つ。Timescale がある TIMESTAMP はメディア時刻であり、壁時計の
   // 時刻と対応しないため、目標の開始時刻を求めずに到着基準で並べる
-  const audioTimestampKindsRef = useRef(new Map<number, "none" | "wallClock" | "mediaTime">());
+  const audioDecodeInputsRef = useRef(new Map<number, DecodeInput>());
+  // relay の cache から追いつく途中かどうかを、SUBSCRIBE_OK の LARGEST_OBJECT を境界に
+  // 判定する。映像と音声は別の Track であり、SUBSCRIBE_OK が返す境界も別であるため、
+  // Track ごとに 1 つ持つ
+  const videoCatchUpGateRef = useRef(new CatchUpGate());
+  const audioCatchUpGateRef = useRef(new CatchUpGate());
   // 映像 Object を復号してよいかを Group の順序と欠落から決める (handleObject が使う)。
   // decoder を構成するたびに初期化し、キーフレームから始める
   const videoDecodeOrderRef = useRef(new VideoDecodeOrder());
@@ -694,7 +756,7 @@ export function useSubscriber(
       maxQueuedFrames,
       playoutTimelineRef.current,
     );
-    videoTimestampKindsRef.current.clear();
+    videoDecodeInputsRef.current.clear();
     playbackTimingTimerRef.current = setInterval(() => {
       const instance = sub.getSubscriber(subscriberId);
       if (!instance) return;
@@ -719,6 +781,48 @@ export function useSubscriber(
     }
     playbackTimingRef.current.reset();
     jitterBufferEnabledRef.current = false;
+  }
+
+  /**
+   * relay の cache から追いつく途中かどうかの境界を初期化する (購読を始めるたびに呼ぶ)
+   *
+   * 境界は各 Track の SUBSCRIBE_OK の LARGEST_OBJECT で設定する。この時点では前の購読の
+   * 境界を消し、追いつき中ではないものとして扱う
+   */
+  function resetCatchUpGates(): void {
+    videoCatchUpGateRef.current.reset();
+    audioCatchUpGateRef.current.reset();
+    const instance = sub.getSubscriber(subscriberId);
+    if (instance !== undefined) {
+      instance.catchUpPending.value = false;
+    }
+  }
+
+  /**
+   * 画面の「Catching up」の表示を更新する
+   *
+   * 購読する Track (映像と音声) のうち、境界を越えていないものがあれば追いつき中とする。
+   * 境界の無い Track (購読の時点で Object が無い) は完了として扱う
+   */
+  function refreshCatchUpPending(instance: sub.SubscriberInstance): void {
+    instance.catchUpPending.value =
+      !videoCatchUpGateRef.current.catchUpCompleted ||
+      !audioCatchUpGateRef.current.catchUpCompleted;
+  }
+
+  /**
+   * 位置が分からない Object を再生したとき、その Track の追いつき中の表示を終える
+   *
+   * TIMESTAMP を持たない publisher では位置を引けず、境界と比べられない。判定できないまま
+   * 「Catching up」を出し続けないよう、その Track は追いつきを終えたものとして扱う
+   * (境界は消さないため、位置が分かる Object の判定は続く)
+   */
+  function markCatchUpUndecided(instance: sub.SubscriberInstance, gate: CatchUpGate): void {
+    if (gate.catchUpCompleted) {
+      return;
+    }
+    gate.markPositionUnknown();
+    refreshCatchUpPending(instance);
   }
 
   /**
@@ -870,8 +974,8 @@ export function useSubscriber(
 
     instance.audioDecoder.value = audioDecoderInstance;
     instance.audioDecoderConfigured.value = true;
-    // 前の購読で復号に渡した TIMESTAMP の種類を持ち越さない (decoder ごと作り直す)
-    audioTimestampKindsRef.current.clear();
+    // 前の購読で復号に渡した TIMESTAMP の種類と位置を持ち越さない (decoder ごと作り直す)
+    audioDecodeInputsRef.current.clear();
 
     // 直前に decoder へ渡した Audio Config。AAC のときだけ使う
     let appliedAudioConfig: Uint8Array | undefined;
@@ -944,17 +1048,12 @@ export function useSubscriber(
             ? 0
             : Number(LOC.toDecoderMicroseconds(locProperties.timestamp, locProperties.timescale));
 
-        // 復号の出力で TIMESTAMP の種類を引くために覚える (handleAudioDecoded が使う)。
-        // 出力されなかった分が残り続けないよう、上限を超えたら古い方から忘れる
-        const kinds = audioTimestampKindsRef.current;
-        kinds.delete(timestamp);
-        kinds.set(timestamp, timestampKind);
-        for (const oldest of kinds.keys()) {
-          if (kinds.size <= MAX_TRACKED_TIMESTAMP_KINDS) {
-            break;
-          }
-          kinds.delete(oldest);
-        }
+        // 復号の出力で TIMESTAMP の種類と位置を引くために覚える (handleAudioDecoded が使う)。
+        // 位置は relay の cache から追いつく途中かどうかの判定に使う
+        rememberDecodeInput(audioDecodeInputsRef.current, timestamp, {
+          timestampKind,
+          location: { group: obj.groupId, object: obj.objectId },
+        });
 
         audioDecoderInstance.decode(obj.payload, "key", timestamp, 0);
         current.audioChunksDecoded.value += 1;
@@ -1020,6 +1119,17 @@ export function useSubscriber(
     }
 
     instance.audioSubscriber.value = audioSubscriberInstance;
+    // SUBSCRIBE_OK の LARGEST_OBJECT を、音声トラックで relay の cache から追いつく途中か
+    // どうかの境界にする。この位置以前の音声 Object は復号しても鳴らさない
+    const audioLargestLocation = audioSubscriberInstance.largestLocation;
+    audioCatchUpGateRef.current.setBoundary(audioLargestLocation ?? null);
+    if (audioLargestLocation !== undefined && audioLargestLocation !== null) {
+      addLog("info", `[${subscriberId}] audio catch up boundary set`, {
+        groupId: audioLargestLocation.group.toString(),
+        objectId: audioLargestLocation.object.toString(),
+      });
+    }
+    refreshCatchUpPending(instance);
     addLog("info", `[${subscriberId}] subscribed audio track`, {
       trackName: audioTrack.name,
       codec: audioTrack.codec,
@@ -1084,6 +1194,29 @@ export function useSubscriber(
   }
 
   /**
+   * relay の cache から届いた音声 Object を鳴らさずに捨てるかを決める
+   *
+   * 境界以前の位置の音は、復号したが鳴らさない。戻り値が true のときは鳴らす (live か、
+   * 位置を覚えていない音)。境界を越えたかどうかは、再生が無効のときも画面へ伝える。
+   */
+  function admitPlayAudio(instance: sub.SubscriberInstance, location: Location): boolean {
+    const decision = audioCatchUpGateRef.current.evaluate(location);
+    if (decision.live) {
+      if (decision.boundaryReached) {
+        // 境界を越えた最初の音。ここから live の音を鳴らす
+        addLog("info", `[${subscriberId}] catch up complete, playing live audio objects`, {
+          groupId: location.group.toString(),
+          objectId: location.object.toString(),
+          skippedObjects: instance.audioCatchUpObjectsSkipped.value,
+        });
+        refreshCatchUpPending(instance);
+      }
+      return true;
+    }
+    return false;
+  }
+
+  /**
    * 復号した AudioData を可視化し、必要なら再生する
    *
    * 所有者はこの decode ハンドラであり、読み出しを終えた後に 1 回だけ `close()` する。
@@ -1118,23 +1251,40 @@ export function useSubscriber(
 
     try {
       const playback = audioPlaybackRef.current;
+
+      // 復号の出力で TIMESTAMP の種類と位置を引く (handleAudioObject が覚えた値)。
+      // 壁時計の TIMESTAMP を持たない音 (TIMESTAMP 無し、Timescale あり) は映像と
+      // 対応づけられないため、時間軸へ記録せず到着基準で並べる
+      const inputs = audioDecodeInputsRef.current;
+      const input = inputs.get(audioData.timestamp);
+      inputs.delete(audioData.timestamp);
+
+      // relay の cache から届いた音は鳴らさない。復号は続ける (Audio Config はどの
+      // Object にも載りうるため、cache の分の復号を飛ばすと適用を落とすことがある)。
+      // 再生が無効のときも判定し、追いついたことを画面の「Catching up」へ伝える
+      // 位置が分からない音は鳴らす。境界と比べられないため、追いつき中の表示を出し続けない
+      if (input === undefined) {
+        markCatchUpUndecided(instance, audioCatchUpGateRef.current);
+      }
+      const live = input === undefined || admitPlayAudio(instance, input.location);
+
       if (!instance.audioPlaybackEnabled.value || playback === null) {
+        return;
+      }
+      if (!live) {
+        instance.audioCatchUpObjectsSkipped.value += 1;
         return;
       }
 
       const numberOfChannels = audioData.numberOfChannels;
       const numberOfFrames = audioData.numberOfFrames;
 
-      // 復号の出力で TIMESTAMP の種類を引く (handleAudioObject が覚えた値)。
-      // 壁時計の TIMESTAMP を持たない音 (TIMESTAMP 無し、Timescale あり) は映像と
-      // 対応づけられないため、時間軸へ記録せず到着基準で並べる
-      const kinds = audioTimestampKindsRef.current;
-      const kind = kinds.get(audioData.timestamp);
-      kinds.delete(audioData.timestamp);
       // jitter buffer が無効のときは映像を時間軸へ記録しないため、音声も記録しない
       // (同期しないまま音声だけ目標へ合わせると映像とずれる)
       const wallClockTimestamp =
-        jitterBufferEnabledRef.current && kind === "wallClock" ? audioData.timestamp : null;
+        jitterBufferEnabledRef.current && input?.timestampKind === "wallClock"
+          ? audioData.timestamp
+          : null;
       const timeline = playoutTimelineRef.current;
       if (wallClockTimestamp !== null) {
         // 復号の出力を共有の時間軸へ記録する。映像と同じ式で表示時刻を決める
@@ -1235,6 +1385,29 @@ export function useSubscriber(
   }
 
   /**
+   * relay の cache から届いた映像フレームを描かずに捨てるかを決める
+   *
+   * 境界以前の位置のフレームは、参照のために復号したが描かない。戻り値が true のときは描く
+   * (live か、位置を覚えていないフレーム)。
+   */
+  function admitPresentFrame(instance: sub.SubscriberInstance, location: Location): boolean {
+    const decision = videoCatchUpGateRef.current.evaluate(location);
+    if (decision.live) {
+      if (decision.boundaryReached) {
+        // 境界を越えた最初のフレーム。ここから live の表示になる
+        addLog("info", `[${subscriberId}] catch up complete, presenting live video frames`, {
+          groupId: location.group.toString(),
+          objectId: location.object.toString(),
+          skippedFrames: instance.catchUpFramesSkipped.value,
+        });
+        refreshCatchUpPending(instance);
+      }
+      return true;
+    }
+    return false;
+  }
+
+  /**
    * 復号済みフレームを表示待ちのキュー (jitter buffer) へ積み、表示周期ごとに表示する
    *
    * jitter buffer が有効で、フレームの TIMESTAMP が壁時計 (Timescale 無し) のときは、
@@ -1252,6 +1425,10 @@ export function useSubscriber(
    * - cache replay の追い上げ中は復号が表示より速いため、すべて描画すると早送りに
    *   見える
    *
+   * relay の cache から届いたフレーム (SUBSCRIBE_OK の LARGEST_OBJECT 以前の位置) は、
+   * ここでキューへ積まずに閉じる。復号はしているため参照は壊れない
+   * (utils/catchUpGate.ts)。
+   *
    * キューは `MAX_PENDING_FRAMES` 枚まで保持し、あふれた分は古い方から捨てる。実回線
    * では受信チャンクに複数の Object が入り、復号もまとまって完了する (配備 relay の
    * 実測で約 130 ms ごとに 8 枚) ため、数枚ではあふれてフレームが落ちる。表示周期の
@@ -1260,11 +1437,29 @@ export function useSubscriber(
    * 最新側へ追いつく。
    */
   const presentFrame = (frame: VideoFrame): void => {
-    const kinds = videoTimestampKindsRef.current;
-    const kind = kinds.get(frame.timestamp);
-    kinds.delete(frame.timestamp);
+    const instance = sub.getSubscriber(subscriberId);
+    if (instance === undefined) {
+      // 購読が終わっている。描く先が無いため閉じる
+      frame.close();
+      return;
+    }
+    const inputs = videoDecodeInputsRef.current;
+    const input = inputs.get(frame.timestamp);
+    inputs.delete(frame.timestamp);
+    if (input === undefined) {
+      // 位置が分からないフレーム (TIMESTAMP を持たない、位置を一意に引けない) は境界と
+      // 比べられないため、追いつき中の表示を出し続けない
+      markCatchUpUndecided(instance, videoCatchUpGateRef.current);
+    } else if (!admitPresentFrame(instance, input.location)) {
+      // 描かなかったフレームも数える (境界を越えたときのログと画面が読む)
+      instance.catchUpFramesSkipped.value += 1;
+      frame.close();
+      return;
+    }
     const wallClockTimestamp =
-      jitterBufferEnabledRef.current && kind === "wallClock" ? frame.timestamp : null;
+      jitterBufferEnabledRef.current && input?.timestampKind === "wallClock"
+        ? frame.timestamp
+        : null;
     if (wallClockTimestamp !== null) {
       // 復号の出力を共有の時間軸へ記録する (音声と同じ式で表示時刻を決める)
       playoutTimelineRef.current.observe(
@@ -1326,7 +1521,7 @@ export function useSubscriber(
     for (const frame of playoutBufferRef.current.clear()) {
       frame.close();
     }
-    videoTimestampKindsRef.current.clear();
+    videoDecodeInputsRef.current.clear();
   };
 
   /**
@@ -1484,16 +1679,12 @@ export function useSubscriber(
       }
 
       playbackTimingRef.current.recordDecodeStart(performance.now(), plan.timestamp);
-      // 復号の出力で TIMESTAMP の種類を引くために覚える (presentFrame が使う)
-      const kinds = videoTimestampKindsRef.current;
-      kinds.delete(plan.timestamp);
-      kinds.set(plan.timestamp, plan.timestampKind);
-      for (const oldest of kinds.keys()) {
-        if (kinds.size <= MAX_TRACKED_TIMESTAMP_KINDS) {
-          break;
-        }
-        kinds.delete(oldest);
-      }
+      // 復号の出力で TIMESTAMP の種類と位置を引くために覚える (presentFrame が使う)。
+      // 位置は relay の cache から追いつく途中かどうかの判定に使う
+      rememberDecodeInput(videoDecodeInputsRef.current, plan.timestamp, {
+        timestampKind: plan.timestampKind,
+        location: { group: obj.groupId, object: obj.objectId },
+      });
       decoderInstance.decode(chunk);
       instance.chunksDecoded.value += 1;
     } catch (error) {
@@ -1555,6 +1746,8 @@ export function useSubscriber(
     // 購読中として扱う (Stop で止められ、Start Subscribing を重ねて押せない。接続設定の入力も
     // 無効のまま保つ)
     instance.isStarting.value = true;
+    // 前の購読の追いつきの状態を持ち越さない (境界は各 Track の SUBSCRIBE_OK で設定する)
+    resetCatchUpGates();
 
     try {
       instance.status.value = "disconnected";
@@ -1997,6 +2190,16 @@ export function useSubscriber(
       instance.status.value = "connected";
       instance.statusMessage.value = `Subscribed: ${namespaceArray.join("/")}/${actualTrackName}`;
       instance.largestLocation.value = largestLocation ?? null;
+      // SUBSCRIBE_OK の LARGEST_OBJECT を、relay の cache から追いつく途中かどうかの境界に
+      // する。この位置以前のフレームは復号しても描かない (utils/catchUpGate.ts)
+      videoCatchUpGateRef.current.setBoundary(largestLocation ?? null);
+      if (largestLocation !== undefined && largestLocation !== null) {
+        addLog("info", `[${subscriberId}] video catch up boundary set`, {
+          groupId: largestLocation.group.toString(),
+          objectId: largestLocation.object.toString(),
+        });
+      }
+      refreshCatchUpPending(instance);
 
       // 音声トラックを購読する
       //
@@ -2083,6 +2286,8 @@ export function useSubscriber(
     stopPlaybackTiming();
     // Group の切り替えで保留していた映像 Object を捨てる
     resetVideoGroupGate();
+    // 追いつきの境界を消し、画面の「Catching up」も消す
+    resetCatchUpGates();
     // 再生の停止は instance の有無に関わらず行う。パネルの削除では Map から先に
     // 消えるため、この後の instance 取得が失敗しても AudioContext を残さない
     stopAudioPlayback();

@@ -70,6 +70,12 @@ export interface SubscriberInstance {
   newGroupRequestEnabled: Signal<boolean>;
   // 統計
   framesDecoded: Signal<number>;
+  // relay の cache から追いつく途中で、復号したが描かなかったフレーム数。
+  // SUBSCRIBE_OK の LARGEST_OBJECT を境界にした判定 (utils/catchUpGate.ts) で数える
+  catchUpFramesSkipped: Signal<number>;
+  // relay の cache から追いつく途中かどうか。購読する Track (映像と音声) のどれかが
+  // 境界を越えるまで true で、画面の「Catching up」に使う
+  catchUpPending: Signal<boolean>;
   keyFramesDecoded: Signal<number>;
   objectsReceived: Signal<number>;
   currentGroup: Signal<number>;
@@ -118,6 +124,9 @@ export interface SubscriberInstance {
   // 経路の都合で subgroup に落ちていないか) をここで確認する
   audioDatagramObjectsReceived: Signal<number>;
   audioChunksDecoded: Signal<number>;
+  // relay の cache から追いつく途中で、復号したが鳴らさなかった音声 Object の数。
+  // 再生が有効なときだけ数える (utils/catchUpGate.ts)
+  audioCatchUpObjectsSkipped: Signal<number>;
   // 受信した音声を音声出力デバイスで再生するか。既定は無効
   audioPlaybackEnabled: Signal<boolean>;
   // 受信した音声の鳴らし方の数 (src/audioPlayout.ts)。購読ごとに数える。
@@ -151,6 +160,8 @@ export function createSubscriberInstance(id: string): SubscriberInstance {
     isStarting: signal(false),
     newGroupRequestEnabled: signal(false),
     framesDecoded: signal(0),
+    catchUpFramesSkipped: signal(0),
+    catchUpPending: signal(false),
     keyFramesDecoded: signal(0),
     objectsReceived: signal(0),
     currentGroup: signal(0),
@@ -175,6 +186,7 @@ export function createSubscriberInstance(id: string): SubscriberInstance {
     audioObjectsReceived: signal(0),
     audioDatagramObjectsReceived: signal(0),
     audioChunksDecoded: signal(0),
+    audioCatchUpObjectsSkipped: signal(0),
     audioPlaybackEnabled: signal(false),
     audioPlayoutRebases: signal(0),
     audioPlayoutDrops: signal(0),
