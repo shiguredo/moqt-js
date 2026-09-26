@@ -1,7 +1,7 @@
 # devtools のメッセージ一覧が 1 件追加ごとに全体を再構築する
 
 - Created: 2026-09-21
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-26
 - Branch: feature/refactor-devtools-message-list
 - Polished: {YYYY-MM-DD}
 
@@ -36,4 +36,15 @@ devtools のストリーム詳細はメッセージを 1 件受信するたび�
 
 ## 解決方法
 
-{未着手}
+- `devtools/src/webtransport-devtools/messageLog.ts` を足し、ストリームとデータグラムで共有するメッセージ一覧を連番 ID の追記型にした
+  - `StreamMessage` に、一覧をまたいで一意な連番の `id` と、追加時に 1 回だけ整形した `formattedTimestamp` を持たせた
+  - 一覧の配列は signal にせず破壊的に追記し、追加とクリアは `messagesVersion` の連番で伝える。表示側は連番を読んだ項目だけを再描画する
+  - 保持するのは新しい `MAX_STREAM_MESSAGES` (200) 件までにした。最古の破棄は上限 200 件の配列への `shift()` 1 回で、1 件追加のコストは接続時間に依らず一定になる (読み出し位置を持つリングバッファにはしていない)
+- `devtools/src/webtransport-devtools/signals.ts` の `bidiStreams` / `uniSendStreams` / `uniRecvStreams` は一覧を `MessageLogFields` として持ち、データグラムも配列と `datagramMessagesVersion` の組にした。1 件受信するたびに `messages: [...s.messages, msg]` で一覧とストリーム一覧を作り直す経路を無くした
+- `BidiStreamPanel` / `UniSendStreamPanel` / `UniRecvStreamPanel` / `DatagramPanel` は `messagesVersion` を読み、メッセージが増えたときはそのパネルだけを再描画する。表示の key は配列の添字ではなく `msg.id` にした
+- `MessageItem` は `formattedTimestamp` をそのまま表示し、描画のたびに `formatTimestamp` を呼ばない
+- `devtools/src/components/DebugPanel.tsx` は `LogEntry` に連番の `id` を足し、表示の key と展開状態 (`expandedRows`)・表示モード (`viewModes`) を配列の添字ではなく id で持つようにした。`addLog` は `logIdCounter` を進める
+- テスト: `devtools/src/webtransport-devtools/messageLog.test.ts` に 5 件 (連番と整形済みの日時、一覧をまたいだ連番の一意性、上限 200 件で最古を捨てる、配列を作り直さず連番で伝える、クリアで空にする)、`devtools/src/components/DebugPanel.test.ts` に上限到達後も連番が重複しないことを固定する 1 件を足した。展開状態が同じ行に残ること自体は、key と状態の識別に使う連番が重複しないことで担保する (行を操作する描画テストは足していない)
+- 実測 (1000 件表示): 1 件追記が 44.8 ms から 3.0 ms になった (上限 200 件では 1.2 ms)。パネル本体の再描画は 0 回になる。日時は追加時に 1 回だけ整形する
+- `npx vp check` / `npx vp test --run` (161 ファイル / 2986 テスト) が通った
+- 残り: DebugPanel のログ追加 (17.5〜19.2 ms) と webcodecs-devtools の FrameLogPanel の日時整形は今回の対象外
