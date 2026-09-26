@@ -29,6 +29,11 @@
 - [CHANGE] moqt-devtools の `window.moqtDevTools` が返す Subscriber の統計で、音声の項目を `audio` の下へまとめる
   - `audioObjectsReceived` / `audioChunksDecoded` / `audioPeakDbfs` / `audioRmsDbfs` / `audioLastLevel` / `audioLastVoiceActivity` / `audioPlayoutRebases` / `audioPlayoutDrops` を `audio.objectsReceived` などの入れ子にする。E2E が読む名前が変わるため後方互換はない
   - @voluntas
+- [ADD] moqt-devtools の publisher で音声トラック名を設定できるようにする
+  - 音声のトラック名を `audioTrackName` として URL に載せ、`session.publish` と catalog の `name` に使う。既定は `audio` で、ライブラリの `DEFAULT_AUDIO_TRACK_NAME` と同じ
+  - Copy URL はトラック名を `videoTrackName` と `audioTrackName` で書き出し、旧 URL の `trackName` は映像トラック名として読み続ける
+  - 「Copy for LLM」の設定一覧も `videoTrackName` / `audioTrackName` を出す
+  - @voluntas
 - [ADD] moqt-devtools の `window.moqtDevTools` が返す publisher / subscriber の統計に、画面が出していた項目を足す
   - publisher に codec、chunksEncoded、encodeErrors、statusMessage、httpVersion、forwardState、audioPublisher と音声メーター、Session の統計、Catalog を足す
   - subscriber に codec、statusMessage、httpVersion、decoderConfigured、chunksCreated / chunksDecoded / chunksSkipped、decodeErrors、dynamicGroupsSupported、newGroupRequestEnabled、音声の decoderConfigured と playbackEnabled、Session の統計、Catalog を足す
@@ -94,6 +99,11 @@
 - [ADD] moqt-devtools に表示モードを追加し、Publisher だけ / Subscriber だけのページを新しいタブで開けるようにする
   - URL クエリ `mode` で Publisher だけ / Subscriber だけを表示する。ヘッダーの副題に 3 つのモードを並べ、今のモードを示すとともに、他のモードのページを今の接続設定のまま新しいタブで開けるようにする
   - Catalog Timeout と Use Dedicated Worker を URL に載せ、同じ接続設定のページを URL で再現できるようにする
+  - @voluntas
+- [UPDATE] moqt-devtools の publisher の接続設定を Tracks / Audio / Video / Catalog / Relay Cache に分ける
+  - 配信するトラックの宣言 (Advertised / Role / Track Name / Codec) を Tracks カードにまとめ、映像と音声を 2 列で並べる。Codec は Audio カードから Tracks カードへ移す
+  - 全トラックに同じ値を載せる catalog の宣言 (Target Latency / Render Group) を Catalog カード、relay への publish のオプション (MAX_CACHE_DURATION) を Relay Cache カードに分ける
+  - カードの並びは Tracks → Audio → Video → Catalog → Relay Cache。catalog の `tracks` も音声 → 映像の順に積み、Catalog パネルの並びと揃える
   - @voluntas
 - [UPDATE] `createMediaSubscriber` が映像を LOC TIMESTAMP の間隔で表示する
   - 表示時刻の計算 (`PlayoutBuffer`) を `src/` に移し、表示周期で描くと決めたフレームだけを `MediaStreamTrackGenerator` に書く
@@ -202,6 +212,12 @@
   - 行の vnode をログの連番で保持し、展開の状態・表示モード・コピーの表示が変わったときだけ作り直す。Preact は同じ vnode を再び受け取ると部分木の差分を省略するため、1000 件表示でも 1 件追加で描画される行は 1 件になる (実測: 同じ計測方法で 1 件追加の中央値 23.0 ms → 7.6 ms、描画される行 1000 件 → 1 件)
   - 上限で捨てたログの vnode はキャッシュから落とす。`data` と `payload` は追加後に書き換えない前提になる (行を描画し直さないため、書き換えても表示は古いまま)
   - 1 件追加のコストは表示中の件数に比例する分が残る (1000 件で約 3 ms のうち、表示中の子の走査が大半)。表示する行を画面に入る分だけにする対応は別に行う
+  - @voluntas
+- [FIX] moqt-devtools の publisher が、空のトラック名や重複したトラック名の catalog を送るのを修正する
+  - draft-ietf-moq-msf-01 §5.2.3 の name (Required) と namespace ごとの一意性を満たさない catalog は、購読側の復号で初めて分かる。Tracks カードに理由を出し、Publish は接続の前に拒否する
+  - @voluntas
+- [FIX] moqt-devtools の publisher で、音声を用意できなかった理由がログに出ない場合があるのを修正する
+  - MediaStreamTrackProcessor が無いブラウザ (Safari / Firefox) では音声だけを諦めるが、理由を残さずに映像だけの catalog を送っていた。ライブラリ側と同じ文言で警告を出す
   - @voluntas
 - [FIX] moqt-devtools の「Copy for LLM」に認可トークンの値が出るのを修正する
   - Relay URI と URI Fragment の c4m (Base64 encoded C4M token) を伏せ字にする。AUTHORIZATION_TOKEN を載せうるメッセージ (SETUP / PUBLISH / SUBSCRIBE / FETCH / TRACK_STATUS / PUBLISH_NAMESPACE / SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS / REQUEST_UPDATE) の payload はログへ残さない。payload の hex dump は画面の Binary タブ、行コピー、Copy for LLM に出るため、残さないことで値がどこにも出なくなる (バイト数と decoded は今までどおり読める)

@@ -30,7 +30,10 @@ export interface ConnectionSettingsSnapshot {
   /** 表示モード。既定は both */
   mode: DevtoolsMode;
   namespace: string;
-  trackName: string;
+  /** 映像トラック名。catalog の映像トラックの名前になる */
+  videoTrackName: string;
+  /** 音声トラック名。catalog の音声トラックの名前になる (既定は audio) */
+  audioTrackName: string;
   codec: CodecType;
   videoSource: VideoSourceType;
   /** 選んだカメラの deviceId。既定は空文字列 (ブラウザが選ぶ) */
@@ -92,7 +95,8 @@ export function buildConnectionSettingsSnapshot(): ConnectionSettingsSnapshot {
     fragment: maskC4mValue(settings.fragment.value),
     mode: settings.mode.value,
     namespace: settings.namespace.value,
-    trackName: settings.trackName.value,
+    videoTrackName: settings.videoTrackName.value,
+    audioTrackName: settings.audioTrackName.value,
     codec: settings.codec.value,
     videoSource: settings.videoSource.value,
     cameraDeviceId: settings.selectedCameraDeviceId.value,

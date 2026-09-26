@@ -9,7 +9,8 @@ function resetSettingSignals(): void {
   settings.fragment.value = "";
   settings.mode.value = "both";
   settings.namespace.value = "room/123";
-  settings.trackName.value = "video";
+  settings.videoTrackName.value = "video";
+  settings.audioTrackName.value = "audio";
   settings.codec.value = "vp8";
   settings.videoSource.value = "dummy";
   settings.selectedCameraDeviceId.value = "";
@@ -48,7 +49,8 @@ test("buildConnectionSettingsSnapshot: 接続に使う設定をそのまま写�
   settings.fragment.value = "msf:room--video";
   settings.mode.value = "subscriber";
   settings.namespace.value = "room/456";
-  settings.trackName.value = "audio";
+  settings.videoTrackName.value = "main";
+  settings.audioTrackName.value = "mic";
   settings.codec.value = "h265";
   settings.videoSource.value = "camera";
   settings.selectedCameraDeviceId.value = "camera-1";
@@ -81,7 +83,8 @@ test("buildConnectionSettingsSnapshot: 接続に使う設定をそのまま写�
     assert.equal(snapshot.fragment, "msf:room--video");
     assert.equal(snapshot.mode, "subscriber");
     assert.equal(snapshot.namespace, "room/456");
-    assert.equal(snapshot.trackName, "audio");
+    assert.equal(snapshot.videoTrackName, "main");
+    assert.equal(snapshot.audioTrackName, "mic");
     assert.equal(snapshot.codec, "h265");
     assert.equal(snapshot.videoSource, "camera");
     assert.equal(snapshot.cameraDeviceId, "camera-1");

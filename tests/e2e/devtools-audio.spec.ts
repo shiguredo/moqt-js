@@ -209,3 +209,61 @@ test("ダミー音声は MediaStreamTrackProcessor が使えるブラウザで�
 
   expect(publishable).toEqual({ dummy: true, none: false });
 });
+
+// Tracks カードで映像と音声のトラック名を別々に設定でき、Copy URL で往復できる。
+// 旧 URL の trackName は映像トラック名として読み続ける (共有済みの URL を壊さない)
+test("Tracks カードのトラック名が UI から URL へ反映され、生成された URL から復元される", async ({
+  page,
+}) => {
+  await page.goto(DEVTOOLS_URL);
+
+  // 既定はライブラリの DEFAULT_VIDEO_TRACK_NAME / DEFAULT_AUDIO_TRACK_NAME と同じ値。
+  // Chromium は音声を取り出せるため、どちらも広告する予定になる
+  await expect(page.getByTestId("video-track-name")).toHaveValue("video");
+  await expect(page.getByTestId("audio-track-name")).toHaveValue("audio");
+  await expect(page.getByTestId("video-track-advertised")).toHaveText("Yes");
+  await expect(page.getByTestId("audio-track-advertised")).toHaveText("Yes");
+
+  // UI から変更する (Copy URL は history.replaceState で URL を書き換える)
+  await page.getByTestId("video-track-name").fill("cam");
+  await page.getByTestId("audio-track-name").fill("mic");
+  await page.getByTestId("copy-url").click();
+
+  await expect(page).toHaveURL(/videoTrackName=cam/);
+  await expect(page).toHaveURL(/audioTrackName=mic/);
+  // 書き出しは新しいキーだけにする
+  await expect(page).not.toHaveURL(/[?&]trackName=/);
+
+  // 生成された URL を開き直すと設定が復元される (UI → signal → URL → signal の往復)
+  await page.goto(page.url());
+  await expect(page.getByTestId("video-track-name")).toHaveValue("cam");
+  await expect(page.getByTestId("audio-track-name")).toHaveValue("mic");
+
+  // 旧 URL の trackName は映像トラック名として復元する
+  await page.goto(`${DEVTOOLS_URL}?trackName=legacy`);
+  await expect(page.getByTestId("video-track-name")).toHaveValue("legacy");
+  await expect(page.getByTestId("audio-track-name")).toHaveValue("audio");
+});
+
+// 同じトラック名は MSF §5.2.3 に反するため配信の前に拒否される。画面では Tracks カードの
+// 下に理由を出す。入力が None のトラックは広告しないため、名前も検証しない
+test("Tracks カードは同じトラック名に警告を出し、広告しないトラックの名前は検証しない", async ({
+  page,
+}) => {
+  await page.goto(`${DEVTOOLS_URL}?videoTrackName=same&audioTrackName=same`);
+  await expect(page.getByTestId("tracks-name-warning")).toHaveText(
+    /Audio and video track names must differ/,
+  );
+
+  // 別名にすると警告は消える
+  await page.getByTestId("audio-track-name").fill("mic");
+  await expect(page.getByTestId("tracks-name-warning")).toHaveCount(0);
+
+  // 映像の名前を音声と同じにすると警告が出る
+  await page.getByTestId("video-track-name").fill("mic");
+  await expect(page.getByTestId("tracks-name-warning")).toHaveText(/must differ/);
+
+  // 映像の入力を None にすると映像は広告しないため、同名でも警告しない
+  await page.getByTestId("video-source").selectOption("none");
+  await expect(page.getByTestId("tracks-name-warning")).toHaveCount(0);
+});

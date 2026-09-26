@@ -612,10 +612,36 @@ test("startPublishing: connect を待っている間は isStarting が立ち、�
   }
 });
 
+// 空名のトラックは接続の前に拒否する (draft-ietf-moq-msf-01 §5.2.3)。
+// connect まで進むと relay に publish だけを作って止まるため、URL の検証より先に止める。
+// 同名の検証は広告する 2 トラックが揃っているときだけ効く。Node には
+// MediaStreamTrackProcessor が無く音声を広告しないため、ここでは映像の空名を固定する
+// (同名は utils/publishTracks.test.ts と buildPublisherCatalog のテストで固定する)
+test("startPublishing: 空のトラック名は接続の前に拒否する", async () => {
+  resetPublisherSignals();
+  resetSettingsUsage();
+  resetCatalogSettings();
+  const publisher = usePublisher();
+
+  settings.videoTrackName.value = "";
+  try {
+    await publisher.startPublishing();
+
+    assert.equal(pub.pubStatus.value, "error");
+    assert.match(pub.pubStatusMessage.value, /^Failed: track name must not be empty/);
+    assert.isFalse(pub.isStarting.value);
+    // 接続していない (接続の前に検証している)
+    assert.equal(pub.pubSession.value, null);
+    assert.isFalse(settings.settingsDisabled.value);
+  } finally {
+    resetCatalogSettings();
+    resetSettingsUsage();
+  }
+});
+
 // ============================================================================
 // 音声トラックの Catalog 生成
 // ============================================================================
-
 // 音声トラックは MSF §5.2.18 (codec) / §5.2.22 (bitrate) / §5.2.28 (samplerate) /
 // §5.2.29 (channelConfig) が audio codec を指定する track に MUST で要求する。
 // 購読側はこの 4 つから Decoder を構成するため、すべて載ることを固定する。
@@ -630,6 +656,7 @@ test("buildPublisherCatalog: 音声を有効にすると audio トラックが�
       bitrate: VIDEO_BITRATE,
     },
     audio: {
+      trackName: "audio",
       codec: "opus",
       bitrate: 64000,
       sampleRate: 48000,
@@ -643,7 +670,7 @@ test("buildPublisherCatalog: 音声を有効にすると audio トラックが�
     throw new Error("expected an audio track");
   }
 
-  // 音声トラック名はライブラリの DEFAULT_AUDIO_TRACK_NAME と同じ固定名にする
+  // 音声トラック名は映像と同じく設定から渡した値がそのまま載る (MSF §5.2.3)
   assert.equal(audioTrack.name, "audio");
   assert.equal(audioTrack.packaging, "loc");
   assert.equal(audioTrack.isLive, true);
@@ -677,6 +704,7 @@ test("buildPublisherCatalog: 音声を省略すると映像トラックだけに
 test("buildPublisherCatalog: 映像を省略すると音声トラックだけになる", () => {
   const catalog = buildPublisherCatalog({
     audio: {
+      trackName: "audio",
       codec: "opus",
       bitrate: 64000,
       sampleRate: 48000,
@@ -705,6 +733,7 @@ test("buildPublisherCatalog: AAC の codec 文字列も Encoder 設定と一致�
       bitrate: VIDEO_BITRATE,
     },
     audio: {
+      trackName: "audio",
       codec: "aac",
       bitrate: 128000,
       sampleRate: 48000,
@@ -715,6 +744,48 @@ test("buildPublisherCatalog: AAC の codec 文字列も Encoder 設定と一致�
   const audioTrack = catalog.tracks.find((track) => track.role === "audio");
   assert.equal(audioTrack?.codec, getAudioEncoderConfig("aac", 128000, 48000, 1).codec);
   assert.equal(audioTrack?.channelConfig, "1");
+});
+
+// トラック名は設定から渡す。相手の実装に合わせて変えられるようにし、既定は
+// ライブラリの DEFAULT_VIDEO_TRACK_NAME / DEFAULT_AUDIO_TRACK_NAME と同じにする
+test("buildPublisherCatalog: トラック名は設定の値がそのまま載る", () => {
+  const catalog = buildPublisherCatalog({
+    video: { ...makeVideoCatalogOptions(), trackName: "cam" },
+    audio: { ...makeAudioCatalogOptions(), trackName: "mic" },
+  });
+
+  // 並びは Audio → Video (画面の Tracks カードと同じ)
+  assert.deepEqual(
+    catalog.tracks.map((track) => track.name),
+    ["mic", "cam"],
+  );
+});
+
+// draft-ietf-moq-msf-01 §5.2.3: name は Required で、catalog の中で namespace ごとに
+// 一意でなければならない MUST。空名と同名は購読側の復号 (decodeCatalogMessage) で
+// 初めて分かるため、catalog を作る時点で拒否する
+test("buildPublisherCatalog: 空名と同名のトラック名を拒否する", () => {
+  assert.throws(
+    () =>
+      buildPublisherCatalog({
+        video: makeVideoCatalogOptions(),
+        audio: { ...makeAudioCatalogOptions(), trackName: "" },
+      }),
+    /track name must not be empty per draft-ietf-moq-msf-01 §5\.2\.3/,
+  );
+
+  assert.throws(
+    () =>
+      buildPublisherCatalog({
+        video: { ...makeVideoCatalogOptions(), trackName: "same" },
+        audio: { ...makeAudioCatalogOptions(), trackName: "same" },
+      }),
+    /track names must be unique per namespace per draft-ietf-moq-msf-01 §5\.2\.3/,
+  );
+
+  // 1 トラックだけの catalog は同名の問題が起きない
+  const audioOnly = buildPublisherCatalog({ audio: makeAudioCatalogOptions() });
+  assert.equal(audioOnly.tracks.length, 1);
 });
 
 // ============================================================================
@@ -739,7 +810,7 @@ function makeVideoCatalogOptions(): PublisherVideoCatalogOptions {
  * 検証用の音声トラックの設定 (画面の既定値と同じ組み合わせ)
  */
 function makeAudioCatalogOptions(): PublisherAudioCatalogOptions {
-  return { codec: "opus", bitrate: 64000, sampleRate: 48000, channels: 2 };
+  return { trackName: "audio", codec: "opus", bitrate: 64000, sampleRate: 48000, channels: 2 };
 }
 
 // draft-ietf-moq-msf-01 §5.2.8: 同じ render group と alternate group の track は同一の
@@ -756,7 +827,8 @@ test("buildPublisherCatalog: targetLatency と renderGroup を音声と映像の
 
   assert.deepEqual(
     catalog.tracks.map((track) => track.role),
-    ["video", "audio"],
+    // 画面 (Tracks カード) が Audio → Video の順に並べるため、catalog も同じ順に積む
+    ["audio", "video"],
   );
   for (const track of catalog.tracks) {
     assert.equal(track.targetLatency, 100);
@@ -897,7 +969,8 @@ test("buildPublisherCatalogOptions: トラックの無い設定ではトラッ�
  */
 function resetCatalogSettings(): void {
   settings.videoSource.value = "dummy";
-  settings.trackName.value = "video";
+  settings.videoTrackName.value = "video";
+  settings.audioTrackName.value = "audio";
   settings.codec.value = "vp8";
   settings.resolution.value = "1280x720";
   settings.framerate.value = 30;
@@ -989,7 +1062,8 @@ test("buildPublisherCatalogOptionsFromSettings: 指定した 100 ms と renderGr
 test("buildPublisherCatalogOptionsFromSettings: 映像と音声の設定と、取れた音の形式を反映する", () => {
   resetCatalogSettings();
   try {
-    settings.trackName.value = "main";
+    settings.videoTrackName.value = "main";
+    settings.audioTrackName.value = "mic";
     settings.resolution.value = "640x360";
     settings.framerate.value = 15;
     settings.bitrate.value = 1_000_000;
@@ -1002,6 +1076,7 @@ test("buildPublisherCatalogOptionsFromSettings: 映像と音声の設定と、�
     const audioOnly = buildPublisherCatalogOptionsFromSettings({ sampleRate: 16000, channels: 1 });
     assert.isFalse("video" in audioOnly);
     assert.deepEqual(audioOnly.audio, {
+      trackName: "mic",
       codec: "aac",
       bitrate: 128_000,
       sampleRate: 16000,

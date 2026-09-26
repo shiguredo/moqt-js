@@ -28,7 +28,12 @@ export const savedServerUrl = signal<string | null>(null);
 // 入力形式は `type:value` (先頭の `#` は付けない)。空文字列なら fragment を付けない。
 export const fragment = signal("");
 export const namespace = signal("room/123");
-export const trackName = signal("video");
+// 配信するトラックの名前。catalog の track name になり、同じ namespace の中で一意でなければ
+// ならない (draft-ietf-moq-msf-01 §5.2.3)。既定値は src/createMedia/settings.ts の
+// DEFAULT_VIDEO_TRACK_NAME / DEFAULT_AUDIO_TRACK_NAME と同じにする
+export const videoTrackName = signal("video");
+export const audioTrackName = signal("audio");
+// 映像トラックのコーデック。音声は audioCodec
 export const codec = signal<CodecType>("vp8");
 
 // 自己署名証明書用の証明書ハッシュ (Base64 でエンコードした SHA-256 ハッシュ)
@@ -391,8 +396,13 @@ function buildQueryParams(targetMode: DevtoolsMode): URLSearchParams {
   if (namespace.value) {
     params.set("namespace", namespace.value);
   }
-  if (trackName.value) {
-    params.set("trackName", trackName.value);
+  // トラック名は映像と音声で別のキーにする。旧 URL の trackName は映像トラック名として
+  // 読むだけにし (initFromUrl)、書き出しは videoTrackName / audioTrackName にする
+  if (videoTrackName.value) {
+    params.set("videoTrackName", videoTrackName.value);
+  }
+  if (audioTrackName.value) {
+    params.set("audioTrackName", audioTrackName.value);
   }
   if (codec.value) {
     params.set("codec", codec.value);
@@ -757,9 +767,16 @@ export function initFromUrl(search: string): void {
     namespace.value = namespaceParam;
   }
 
-  const trackNameParam = params.get("trackName");
-  if (trackNameParam) {
-    trackName.value = trackNameParam;
+  // 共有済みの URL の trackName は映像トラック名として読み続ける (互換)。
+  // 新しい URL は videoTrackName を使う
+  const videoTrackNameParam = params.get("videoTrackName") ?? params.get("trackName");
+  if (videoTrackNameParam) {
+    videoTrackName.value = videoTrackNameParam;
+  }
+
+  const audioTrackNameParam = params.get("audioTrackName");
+  if (audioTrackNameParam) {
+    audioTrackName.value = audioTrackNameParam;
   }
 
   const codecParam = params.get("codec");

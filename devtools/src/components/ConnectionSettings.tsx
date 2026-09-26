@@ -1,9 +1,17 @@
 import type { ComponentChildren } from "preact";
 import { signal } from "@preact/signals";
 import { useId } from "preact/hooks";
+import { isMediaStreamTrackProcessorAvailable } from "moqt-js";
 import * as settings from "../signals/connectionSettings";
 import { persistServerUrl, relayUriMemoryButtons } from "../utils/serverUrlStore";
 import { isConnectionSettingsOpen, toggleConnectionSettings } from "../signals/layout";
+import {
+  resolveAudioAdvertisement,
+  resolveTrackNameProblem,
+  resolveVideoAdvertisement,
+  type TrackAdvertisement,
+  type TrackNameProblem,
+} from "../utils/publishTracks";
 import type {
   AudioDelivery,
   AudioSourceType,
@@ -322,6 +330,29 @@ const AUDIO_SOURCE_LABELS: Record<AudioSourceType, string> = {
   microphone: "Microphone (gUM)",
 };
 
+/**
+ * catalog に載せる予定を Tracks カードの表示にする
+ *
+ * 配信を始めるまで確定しない要素 (カメラとマイクの許可、AudioEncoder の対応) は
+ * 「予定」に含めない。実際に音声を用意できなかった場合は、配信時のログと status message に
+ * 理由を出す (utils/publishTracks.ts の resolveAudioAdvertisement)
+ */
+function formatTrackAdvertisement(advertisement: TrackAdvertisement): string {
+  if (advertisement.advertised) {
+    return "Yes";
+  }
+  return advertisement.reason === "source-none"
+    ? "No (source is None)"
+    : "No (not available in this browser)";
+}
+
+// トラック名の問題の表示。draft-ietf-moq-msf-01 §5.2.3: name は Required で、
+// catalog の中で namespace ごとに一意でなければならない MUST
+const TRACK_NAME_PROBLEM_LABELS: Record<TrackNameProblem, string> = {
+  empty: "Track name must not be empty (draft-ietf-moq-msf-01 §5.2.3)",
+  duplicate: "Audio and video track names must differ (draft-ietf-moq-msf-01 §5.2.3)",
+};
+
 /** 閉じている接続設定の欄に出す要約の 1 項目 */
 interface ConnectionSummaryItem {
   label: string;
@@ -345,8 +376,20 @@ function buildConnectionSummary(currentMode: DevtoolsMode): ConnectionSummaryIte
   const videoSource = settings.videoSource.value;
   const audioSource = settings.audioSource.value;
   const audioCodecLabel = settings.audioCodec.value === "opus" ? "Opus" : "AAC";
+  // 広告するトラックの名前を並べる (Tracks カードと同じく Audio → Video の順)。
+  // 入力が None のトラックは catalog に載らないため出さない
+  const advertisedTrackNames: string[] = [];
+  if (audioSource !== "none") {
+    advertisedTrackNames.push(settings.audioTrackName.value || "-");
+  }
+  if (videoSource !== "none") {
+    advertisedTrackNames.push(settings.videoTrackName.value || "-");
+  }
   summary.push(
-    { label: "Track", value: settings.trackName.value || "-" },
+    {
+      label: "Tracks",
+      value: advertisedTrackNames.length > 0 ? advertisedTrackNames.join(", ") : "-",
+    },
     {
       label: "Audio",
       value:
@@ -446,6 +489,21 @@ export function ConnectionSettings() {
   const cameraSelected = settings.videoSource.value === "camera";
   // 音声の入力がマイクのときだけ、デバイスの選択と音声処理を操作できる
   const microphoneSelected = settings.audioSource.value === "microphone";
+  // Tracks カードに出す、catalog に載せる予定。配信を始めるまで確定しない要素
+  // (カメラとマイクの許可、AudioEncoder の対応) は含めない
+  const videoAdvertisement = resolveVideoAdvertisement(settings.videoSource.value);
+  const audioAdvertisement = resolveAudioAdvertisement(
+    settings.audioSource.value,
+    isMediaStreamTrackProcessorAvailable(),
+  );
+  const videoAdvertisementText = formatTrackAdvertisement(videoAdvertisement);
+  const audioAdvertisementText = formatTrackAdvertisement(audioAdvertisement);
+  // 広告するトラックの名前だけを検証する。配信しないトラックの名前は catalog に出ないため、
+  // 空でも同名でも配信の内容は変わらない (配信前の検証と同じ規則。utils/publishTracks.ts)
+  const trackNameProblem = resolveTrackNameProblem([
+    ...(audioAdvertisement.advertised ? [settings.audioTrackName.value] : []),
+    ...(videoAdvertisement.advertised ? [settings.videoTrackName.value] : []),
+  ]);
   // c4m から読み込んだトークンを解除し、Token Type を既定の 0 に戻す。
   // c4m の取り込みで Token Type は CAT (0x01) になっているため、手入力の UTF-8
   // トークンを CAT として送らないようにする
@@ -722,31 +780,94 @@ export function ConnectionSettings() {
           <RoleSettings title="Publisher" tone="publisher">
             <div class="space-y-4">
               <SettingsCard>
-                <SettingsSubsection title="Track" />
-                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
-                  <div>
-                    <label for="trackName" class="block text-xs text-slate-500 mb-1">
+                <SettingsSubsection title="Tracks" />
+                {/* 配信するトラックの一覧。トラック名とコーデックは catalog のトラックの宣言で
+                    あり、符号化の設定 (Video / Audio カード) とは分ける。Advertised は catalog に
+                    載せる予定を出し、配信を始めるまで確定しない要素は含めない */}
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                  {/* 音声トラック。画面の並びは Audio → Video で揃える */}
+                  <div class="rounded border border-slate-200 px-3 py-3">
+                    <h5 class="text-xs font-semibold text-slate-600 mb-2">Audio</h5>
+                    <div class="flex gap-2 text-xs mb-1">
+                      <span class="w-24 shrink-0 text-slate-500">Advertised</span>
+                      <span class="font-medium text-slate-700" data-testid="audio-track-advertised">
+                        {audioAdvertisementText}
+                      </span>
+                    </div>
+                    <div class="flex gap-2 text-xs mb-3">
+                      <span class="w-24 shrink-0 text-slate-500">Role</span>
+                      <span class="font-mono text-slate-700">audio</span>
+                    </div>
+                    <label for="audioTrackName" class="block text-xs text-slate-500 mb-1">
                       Track Name
                     </label>
                     <input
                       type="text"
-                      id="trackName"
-                      value={settings.trackName.value}
-                      onInput={(e) => (settings.trackName.value = e.currentTarget.value)}
+                      id="audioTrackName"
+                      data-testid="audio-track-name"
+                      value={settings.audioTrackName.value}
+                      onInput={(e) => (settings.audioTrackName.value = e.currentTarget.value)}
                       disabled={settings.settingsDisabled.value}
-                      class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors disabled:bg-slate-100 disabled:cursor-not-allowed bg-white"
+                      class="w-full px-3 py-2 mb-3 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors disabled:bg-slate-100 disabled:cursor-not-allowed bg-white"
                     />
-                  </div>
-                  <div>
-                    <label for="codec" class="block text-xs text-slate-500 mb-1">
+                    <label for="audioCodec" class="block text-xs text-slate-500 mb-1">
                       Codec
                     </label>
                     <select
-                      id="codec"
+                      id="audioCodec"
+                      data-testid="audio-codec"
+                      value={settings.audioCodec.value}
+                      onChange={(e) => {
+                        const value = e.currentTarget.value;
+                        if (settings.isAudioCodecType(value)) {
+                          settings.audioCodec.value = value;
+                        }
+                      }}
+                      disabled={settings.settingsDisabled.value}
+                      class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white disabled:bg-slate-100 disabled:cursor-not-allowed"
+                    >
+                      {settings.AUDIO_CODECS.map((value) => (
+                        <option key={value} value={value}>
+                          {value === "opus" ? "Opus" : "AAC"}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  {/* 映像トラック */}
+                  <div class="rounded border border-slate-200 px-3 py-3">
+                    <h5 class="text-xs font-semibold text-slate-600 mb-2">Video</h5>
+                    <div class="flex gap-2 text-xs mb-1">
+                      <span class="w-24 shrink-0 text-slate-500">Advertised</span>
+                      <span class="font-medium text-slate-700" data-testid="video-track-advertised">
+                        {videoAdvertisementText}
+                      </span>
+                    </div>
+                    <div class="flex gap-2 text-xs mb-3">
+                      <span class="w-24 shrink-0 text-slate-500">Role</span>
+                      <span class="font-mono text-slate-700">video</span>
+                    </div>
+                    <label for="videoTrackName" class="block text-xs text-slate-500 mb-1">
+                      Track Name
+                    </label>
+                    <input
+                      type="text"
+                      id="videoTrackName"
+                      data-testid="video-track-name"
+                      value={settings.videoTrackName.value}
+                      onInput={(e) => (settings.videoTrackName.value = e.currentTarget.value)}
+                      disabled={settings.settingsDisabled.value}
+                      class="w-full px-3 py-2 mb-3 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors disabled:bg-slate-100 disabled:cursor-not-allowed bg-white"
+                    />
+                    <label for="videoCodec" class="block text-xs text-slate-500 mb-1">
+                      Codec
+                    </label>
+                    <select
+                      id="videoCodec"
+                      data-testid="video-codec"
                       value={settings.codec.value}
                       onChange={(e) => (settings.codec.value = e.currentTarget.value as CodecType)}
                       disabled={settings.settingsDisabled.value}
-                      class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors bg-white disabled:bg-slate-100 disabled:cursor-not-allowed"
+                      class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white disabled:bg-slate-100 disabled:cursor-not-allowed"
                     >
                       <option value="vp8">VP8</option>
                       <option value="vp9">VP9</option>
@@ -755,89 +876,14 @@ export function ConnectionSettings() {
                       <option value="h265">H.265</option>
                     </select>
                   </div>
-                  <div>
-                    <label for="maxCacheDuration" class="block text-xs text-slate-500 mb-1">
-                      MAX_CACHE_DURATION
-                      <span class="ml-1 text-slate-400">relay cache</span>
-                    </label>
-                    <select
-                      id="maxCacheDuration"
-                      value={settings.maxCacheDuration.value}
-                      onChange={(e) =>
-                        (settings.maxCacheDuration.value = Number(e.currentTarget.value))
-                      }
-                      disabled={settings.settingsDisabled.value}
-                      class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white disabled:bg-slate-100 disabled:cursor-not-allowed"
-                    >
-                      <option value="0">0 (no cache)</option>
-                      <option value="10000">10 sec</option>
-                      <option value="30000">30 sec</option>
-                      <option value="60000">1 min</option>
-                      <option value="180000">3 min</option>
-                      <option value="300000">5 min</option>
-                      <option value="600000">10 min</option>
-                    </select>
-                  </div>
-                  {/* draft-ietf-moq-msf-01 §5.2.8 (targetLatency) / §5.2.11 (renderGroup):
-                      音声と映像の両方の track に同じ値を載せる catalog の宣言。
-                      未指定 (Unset) のときは catalog に載せず、購読側が遅延を選ぶ */}
-                  <div>
-                    <label for="targetLatency" class="block text-xs text-slate-500 mb-1">
-                      Target Latency
-                    </label>
-                    <select
-                      id="targetLatency"
-                      data-testid="target-latency"
-                      value={settings.targetLatency.value ?? ""}
-                      onChange={(e) => {
-                        // 空値は「未指定」(null)。Number("") は 0 になるため 0 ms と区別する。
-                        // 変換の規則は URL から復元するときと同じ関数に任せる
-                        settings.targetLatency.value = settings.resolveOptionNumber(
-                          e.currentTarget.value,
-                          settings.TARGET_LATENCY_OPTIONS,
-                          settings.targetLatency.value,
-                        );
-                      }}
-                      disabled={settings.settingsDisabled.value}
-                      class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white disabled:bg-slate-100 disabled:cursor-not-allowed"
-                    >
-                      <option value="">Unset</option>
-                      {settings.TARGET_LATENCY_OPTIONS.map((value) => (
-                        <option key={value} value={value}>
-                          {value} ms
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label for="renderGroup" class="block text-xs text-slate-500 mb-1">
-                      Render Group
-                    </label>
-                    <select
-                      id="renderGroup"
-                      data-testid="render-group"
-                      value={settings.renderGroup.value ?? ""}
-                      onChange={(e) => {
-                        // 空値は「未指定」(null)。0 は有効なグループである。
-                        // 変換の規則は URL から復元するときと同じ関数に任せる
-                        settings.renderGroup.value = settings.resolveOptionNumber(
-                          e.currentTarget.value,
-                          settings.RENDER_GROUP_OPTIONS,
-                          settings.renderGroup.value,
-                        );
-                      }}
-                      disabled={settings.settingsDisabled.value}
-                      class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white disabled:bg-slate-100 disabled:cursor-not-allowed"
-                    >
-                      <option value="">Unset</option>
-                      {settings.RENDER_GROUP_OPTIONS.map((value) => (
-                        <option key={value} value={value}>
-                          {value}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
                 </div>
+                {/* 空名と同名は MSF §5.2.3 に反し、配信の開始時に拒否される。
+                    入力の途中で出さず、問題がある間だけ出す */}
+                {trackNameProblem !== null && (
+                  <p class="mt-3 text-xs text-red-600" data-testid="tracks-name-warning">
+                    {TRACK_NAME_PROBLEM_LABELS[trackNameProblem]}
+                  </p>
+                )}
               </SettingsCard>
               <SettingsCard>
                 <SettingsSubsection title="Audio" />
@@ -927,30 +973,6 @@ export function ConnectionSettings() {
                         ))}
                       </select>
                     )}
-                  </div>
-                  <div>
-                    <label for="audioCodec" class="block text-xs text-slate-500 mb-1">
-                      Audio Codec
-                    </label>
-                    <select
-                      id="audioCodec"
-                      data-testid="audio-codec"
-                      value={settings.audioCodec.value}
-                      onChange={(e) => {
-                        const value = e.currentTarget.value;
-                        if (settings.isAudioCodecType(value)) {
-                          settings.audioCodec.value = value;
-                        }
-                      }}
-                      disabled={settings.settingsDisabled.value}
-                      class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white disabled:bg-slate-100 disabled:cursor-not-allowed"
-                    >
-                      {settings.AUDIO_CODECS.map((value) => (
-                        <option key={value} value={value}>
-                          {value === "opus" ? "Opus" : "AAC"}
-                        </option>
-                      ))}
-                    </select>
                   </div>
                   <div>
                     <label for="audioBitrate" class="block text-xs text-slate-500 mb-1">
@@ -1176,6 +1198,101 @@ export function ConnectionSettings() {
                       <option value="2700">90 sec</option>
                       <option value="3600">120 sec</option>
                       <option value="7200">240 sec</option>
+                    </select>
+                  </div>
+                </div>
+              </SettingsCard>
+              {/* 音声と映像の両方の track に同じ値を載せる catalog の宣言。トラックごとの
+                  設定ではないため、Video / Audio カードとは分ける */}
+              <SettingsCard>
+                <SettingsSubsection title="Catalog" />
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {/* draft-ietf-moq-msf-01 §5.2.8 (targetLatency) / §5.2.11 (renderGroup):
+                      音声と映像の両方の track に同じ値を載せる catalog の宣言。
+                      未指定 (Unset) のときは catalog に載せず、購読側が遅延を選ぶ */}
+                  <div>
+                    <label for="targetLatency" class="block text-xs text-slate-500 mb-1">
+                      Target Latency
+                    </label>
+                    <select
+                      id="targetLatency"
+                      data-testid="target-latency"
+                      value={settings.targetLatency.value ?? ""}
+                      onChange={(e) => {
+                        // 空値は「未指定」(null)。Number("") は 0 になるため 0 ms と区別する。
+                        // 変換の規則は URL から復元するときと同じ関数に任せる
+                        settings.targetLatency.value = settings.resolveOptionNumber(
+                          e.currentTarget.value,
+                          settings.TARGET_LATENCY_OPTIONS,
+                          settings.targetLatency.value,
+                        );
+                      }}
+                      disabled={settings.settingsDisabled.value}
+                      class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white disabled:bg-slate-100 disabled:cursor-not-allowed"
+                    >
+                      <option value="">Unset</option>
+                      {settings.TARGET_LATENCY_OPTIONS.map((value) => (
+                        <option key={value} value={value}>
+                          {value} ms
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label for="renderGroup" class="block text-xs text-slate-500 mb-1">
+                      Render Group
+                    </label>
+                    <select
+                      id="renderGroup"
+                      data-testid="render-group"
+                      value={settings.renderGroup.value ?? ""}
+                      onChange={(e) => {
+                        // 空値は「未指定」(null)。0 は有効なグループである。
+                        // 変換の規則は URL から復元するときと同じ関数に任せる
+                        settings.renderGroup.value = settings.resolveOptionNumber(
+                          e.currentTarget.value,
+                          settings.RENDER_GROUP_OPTIONS,
+                          settings.renderGroup.value,
+                        );
+                      }}
+                      disabled={settings.settingsDisabled.value}
+                      class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white disabled:bg-slate-100 disabled:cursor-not-allowed"
+                    >
+                      <option value="">Unset</option>
+                      {settings.RENDER_GROUP_OPTIONS.map((value) => (
+                        <option key={value} value={value}>
+                          {value}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              </SettingsCard>
+              {/* MAX_CACHE_DURATION は catalog の宣言ではなく、relay に要求するキャッシュの
+                  時間 (session.publish のオプション)。catalog の宣言と混ぜない */}
+              <SettingsCard>
+                <SettingsSubsection title="Relay Cache" />
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label for="maxCacheDuration" class="block text-xs text-slate-500 mb-1">
+                      MAX_CACHE_DURATION
+                    </label>
+                    <select
+                      id="maxCacheDuration"
+                      value={settings.maxCacheDuration.value}
+                      onChange={(e) =>
+                        (settings.maxCacheDuration.value = Number(e.currentTarget.value))
+                      }
+                      disabled={settings.settingsDisabled.value}
+                      class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white disabled:bg-slate-100 disabled:cursor-not-allowed"
+                    >
+                      <option value="0">0 (no cache)</option>
+                      <option value="10000">10 sec</option>
+                      <option value="30000">30 sec</option>
+                      <option value="60000">1 min</option>
+                      <option value="180000">3 min</option>
+                      <option value="300000">5 min</option>
+                      <option value="600000">10 min</option>
                     </select>
                   </div>
                 </div>

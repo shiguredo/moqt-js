@@ -51,6 +51,11 @@ import {
   catalogRepublishIntervalMs,
 } from "../utils/catalogRepublish";
 import { shouldSendAudioAsDatagram } from "../utils/audioDelivery";
+import {
+  assertTrackNames,
+  resolveAudioAdvertisement,
+  resolveVideoAdvertisement,
+} from "../utils/publishTracks";
 import { browserIsChromium, resolvePanelHttpVersion } from "../utils/httpVersion";
 import * as settings from "../signals/connectionSettings";
 import * as pub from "../signals/publisher";
@@ -59,14 +64,6 @@ import * as sub from "../signals/subscriber";
 export function handleDebugMessage(message: DebugMessage): void {
   logDebugMessage("[publisher]", message);
 }
-
-/**
- * 音声トラック名
- *
- * `src/createMedia/settings.ts` の `DEFAULT_AUDIO_TRACK_NAME` と同じ値にする。
- * 映像トラック名 (`settings.trackName`) は利用者が変えられるため、音声は固定名にする。
- */
-const AUDIO_TRACK_NAME = "audio";
 
 /**
  * 符号化と送信の時間の統計を画面へ反映する間隔 (ミリ秒)
@@ -142,6 +139,7 @@ export interface PublisherVideoCatalogOptions {
 
 /** 配信する音声トラックの Catalog を組み立てるための入力 */
 export interface PublisherAudioCatalogOptions {
+  trackName: string;
   codec: AudioCodecType;
   bitrate: number;
   sampleRate: number;
@@ -204,7 +202,7 @@ export function buildPublisherCatalogOptionsFromSettings(
       videoSourceValue === "none"
         ? null
         : {
-            trackName: settings.trackName.value,
+            trackName: settings.videoTrackName.value,
             codec: settings.codec.value,
             width,
             height,
@@ -216,6 +214,7 @@ export function buildPublisherCatalogOptionsFromSettings(
       audioFormat === null
         ? null
         : {
+            trackName: settings.audioTrackName.value,
             codec: settings.audioCodec.value,
             bitrate: settings.audioBitrate.value,
             sampleRate: audioFormat.sampleRate,
@@ -251,6 +250,10 @@ export function buildPublisherCatalogOptionsFromSettings(
  * 指定した値は有限数であること (renderGroup はさらに整数であること) を検証し、
  * そうでなければ throw する。非有限値は JSON で null になり、購読側が復号できなくなる。
  *
+ * トラックは音声 → 映像の順に積む。画面 (Tracks カード) が音声と映像をこの順に並べるため、
+ * catalog をそのまま表示する Catalog パネルと並びを揃える。配列の順序に仕様上の意味は無い。
+ * トラック名は空でなく、互いに異なることを検証する (§5.2.3)。
+ *
  * ブラウザ API に依存しないため、送信した Catalog の内容はここで検証できる。
  */
 export function buildPublisherCatalog(options: PublisherCatalogOptions): Catalog {
@@ -270,6 +273,22 @@ export function buildPublisherCatalog(options: PublisherCatalogOptions): Catalog
     ...(options.renderGroup !== undefined ? { renderGroup: options.renderGroup } : {}),
   };
 
+  if (options.audio) {
+    const audio = options.audio;
+    tracks.push({
+      name: audio.trackName,
+      packaging: "loc",
+      isLive: true,
+      role: "audio",
+      codec: getAudioEncoderConfig(audio.codec, audio.bitrate, audio.sampleRate, audio.channels)
+        .codec,
+      bitrate: audio.bitrate,
+      samplerate: audio.sampleRate,
+      channelConfig: String(audio.channels),
+      ...latencyFields,
+    });
+  }
+
   if (options.video) {
     const video = options.video;
     tracks.push({
@@ -286,25 +305,13 @@ export function buildPublisherCatalog(options: PublisherCatalogOptions): Catalog
     });
   }
 
-  if (options.audio) {
-    const audio = options.audio;
-    tracks.push({
-      name: AUDIO_TRACK_NAME,
-      packaging: "loc",
-      isLive: true,
-      role: "audio",
-      codec: getAudioEncoderConfig(audio.codec, audio.bitrate, audio.sampleRate, audio.channels)
-        .codec,
-      bitrate: audio.bitrate,
-      samplerate: audio.sampleRate,
-      channelConfig: String(audio.channels),
-      ...latencyFields,
-    });
-  }
-
   if (tracks.length === 0) {
     throw new Error("no track to publish: both video and audio are absent");
   }
+  // 空名と同名は購読側の catalog の検証 (decodeCatalogMessage) で初めて分かる。
+  // 自分の catalog を自分で復号できなくなるため、送る前に拒否する
+  // (draft-ietf-moq-msf-01 §5.2.3: name は Required、namespace ごとに一意 MUST)
+  assertTrackNames(tracks.map((track) => track.name));
   return createCatalog(tracks);
 }
 
@@ -696,7 +703,11 @@ export function usePublisher() {
    * 取れた形式の AudioEncoder の設定にブラウザが対応していなければ音声を諦める
    * (Catalog だけ音声トラックを広告すると、購読側は object が来ないまま待ち続ける)。
    * マイクを取れない (許可されないなど) ときも、映像の配信は続けて音声だけを諦める
-   * (映像の入力が None のときは、呼び出し側が配信をやめる)
+   * (映像の入力が None のときは、呼び出し側が配信をやめる)。
+   *
+   * 諦めた理由は必ずログに残す。映像は MediaStreamTrackProcessor が無いブラウザでも
+   * HTMLVideoElement で配信できるため、理由が無いと「映像だけの catalog」が何も
+   * 告げずに届く (画面では Tracks カードの Advertised が予定を示す)。
    */
   async function prepareAudioForPublishing(
     source: AudioSourceType,
@@ -705,6 +716,16 @@ export function usePublisher() {
     requested: AudioFormat,
   ): Promise<AudioFormat | null> {
     if (!resolveAudioPublishable(source)) {
+      // 音声を送らない設定 (source が "none") は意図した設定のためログに出さない。
+      // MediaStreamTrackProcessor が無いブラウザで音声だけを諦めた場合は、
+      // 映像だけの catalog が理由を告げずに届くため、必ず理由を残す
+      if (source !== "none") {
+        addLog(
+          "warn",
+          "[publisher] MediaStreamTrackProcessor is required for audio publishing but is not available in this browser, publishing without audio",
+          { source },
+        );
+      }
       stopAudioStream();
       return null;
     }
@@ -1117,6 +1138,8 @@ export function usePublisher() {
     namespaceArray: string[],
     audioTrack: MediaStreamTrack,
     options: {
+      // 配信する音声トラックの名前 (catalog の name と同じ値)
+      trackName: string;
       useWorker: boolean;
       codec: AudioCodecType;
       bitrate: number;
@@ -1130,7 +1153,7 @@ export function usePublisher() {
   ): Promise<void> {
     const audioPublisherInstance = await session.publish(
       namespaceArray,
-      AUDIO_TRACK_NAME,
+      options.trackName,
       {
         error: (error) => {
           console.error("Audio publisher error:", error);
@@ -1307,13 +1330,14 @@ export function usePublisher() {
       settings.settingsDisabled.value = true;
 
       const namespaceArray = settings.namespace.value.split("/").filter((s) => s.length > 0);
-      const trackNameValue = settings.trackName.value;
+      const videoTrackNameValue = settings.videoTrackName.value;
       const codecValue = settings.codec.value;
       const videoSourceValue = settings.videoSource.value;
       const { width, height } = parseResolution(settings.resolution.value);
       const framerateValue = settings.framerate.value;
       const bitrateValue = settings.bitrate.value;
       const maxCacheDurationValue = settings.maxCacheDuration.value;
+      const audioTrackNameValue = settings.audioTrackName.value;
       const audioSourceValue = settings.audioSource.value;
       const audioCodecValue = settings.audioCodec.value;
       const audioBitrateValue = settings.audioBitrate.value;
@@ -1325,6 +1349,22 @@ export function usePublisher() {
       if (videoSourceValue === "none" && audioSourceValue === "none") {
         throw new Error("nothing to publish: both video source and audio source are none");
       }
+
+      // 配信する予定のトラック名を接続の前に検証する (draft-ietf-moq-msf-01 §5.2.3)。
+      // 接続してから catalog を組み立てる段で失敗すると、relay に publish だけを作って
+      // 止まることになる。広告しないトラックの名前は catalog に出ないため検証しない
+      // (画面の Tracks カードの警告と同じ判定を使う。utils/publishTracks.ts)
+      const advertisedTrackNames: string[] = [];
+      if (resolveVideoAdvertisement(videoSourceValue).advertised) {
+        advertisedTrackNames.push(videoTrackNameValue);
+      }
+      if (
+        resolveAudioAdvertisement(audioSourceValue, isMediaStreamTrackProcessorAvailable())
+          .advertised
+      ) {
+        advertisedTrackNames.push(audioTrackNameValue);
+      }
+      assertTrackNames(advertisedTrackNames);
 
       // 接続オプションを組み立てる
       const connectOptions = settings.buildConnectOptions();
@@ -1454,7 +1494,7 @@ export function usePublisher() {
       const useWorker = settings.useDedicatedWorker.value;
       if (videoInput !== null) {
         await startVideoPublishing(session, namespaceArray, videoInput, {
-          trackName: trackNameValue,
+          trackName: videoTrackNameValue,
           codec: codecValue,
           framerate: framerateValue,
           bitrate: bitrateValue,
@@ -1466,6 +1506,7 @@ export function usePublisher() {
       // 音声トラックを配信する
       if (audioTrack && audioFormat !== null) {
         await startAudioPublishing(session, namespaceArray, audioTrack, {
+          trackName: audioTrackNameValue,
           useWorker,
           codec: audioCodecValue,
           bitrate: audioBitrateValue,
@@ -1480,7 +1521,7 @@ export function usePublisher() {
         // 映像の統計 (符号化と送信の時間など) は前の配信のものを持ち越さない
         resetVideoPublishState();
         pub.pubStatus.value = "connected";
-        pub.pubStatusMessage.value = `Publishing: ${namespaceArray.join("/")}/${AUDIO_TRACK_NAME}`;
+        pub.pubStatusMessage.value = `Publishing: ${namespaceArray.join("/")}/${audioTrackNameValue}`;
       }
 
       // 統計値をリセットする

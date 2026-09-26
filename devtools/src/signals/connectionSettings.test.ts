@@ -32,6 +32,8 @@ import {
   url,
   useDedicatedWorker,
   videoSource,
+  videoTrackName,
+  audioTrackName,
 } from "./connectionSettings";
 
 // テスト間で Authorization Token の signal を持ち越さないためのリセット
@@ -317,6 +319,46 @@ test("isVideoSourceType: none を映像の入力として受理し、URL で往�
   initFromUrl("videoSource=screen");
   assert.equal(videoSource.value, "none");
   videoSource.value = "dummy";
+});
+
+// トラック名は映像と音声で別々に設定でき、Copy URL で往復できる。
+// 旧 URL の trackName は映像トラック名として読み続ける (共有済みの URL を壊さない)
+test("buildQueryString / initFromUrl: 映像と音声のトラック名を URL で往復できる", () => {
+  videoTrackName.value = "cam";
+  audioTrackName.value = "mic";
+
+  const query = buildQueryString();
+  const params = new URLSearchParams(query);
+  assert.equal(params.get("videoTrackName"), "cam");
+  assert.equal(params.get("audioTrackName"), "mic");
+  // 書き出しは新しいキーだけにする (旧 trackName は載せない)
+  assert.isNull(params.get("trackName"));
+
+  // 既定値へ戻してから、書き出した URL で復元する
+  videoTrackName.value = "video";
+  audioTrackName.value = "audio";
+  initFromUrl(query);
+  assert.equal(videoTrackName.value, "cam");
+  assert.equal(audioTrackName.value, "mic");
+
+  // 旧 URL の trackName は映像トラック名として読む
+  initFromUrl("trackName=legacy");
+  assert.equal(videoTrackName.value, "legacy");
+  assert.equal(audioTrackName.value, "mic");
+
+  // 新しいキーがあるときは新しいキーを優先する
+  initFromUrl("videoTrackName=new&trackName=legacy");
+  assert.equal(videoTrackName.value, "new");
+
+  videoTrackName.value = "video";
+  audioTrackName.value = "audio";
+});
+
+// トラック名の既定は、ライブラリの DEFAULT_VIDEO_TRACK_NAME / DEFAULT_AUDIO_TRACK_NAME と
+// 同じ値にする (既定のまま配信すると、高レベル API の購読側と名前が一致する)
+test("videoTrackName / audioTrackName: 既定は video と audio", () => {
+  assert.equal(videoTrackName.peek(), "video");
+  assert.equal(audioTrackName.peek(), "audio");
 });
 
 // 音声処理 (エコー除去 / ノイズ抑制 / 自動ゲイン) の既定はブラウザの既定と同じ有効
