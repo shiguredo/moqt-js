@@ -26,6 +26,13 @@
   - エンコード能力を超えて破棄したフレーム数を統計で確認できるようにする
   - `VideoStats` は公開型のため、この型を自前で構築しているコードは `droppedFrames` の追加が必要になる (後方互換なし)
   - @voluntas
+- [ADD] `MediaPublisherOptions` に `targetLatency` と `renderGroup` を追加し、catalog の音声と映像の両方の track に載せる
+  - `targetLatency` は符号化から表示までの wallclock の差 (ms)。指定すると音声と映像の両方の track に同じ値を載せる。同じ render group と alternate group の track は同一の値でなければならない (draft-ietf-moq-msf-01 Section 5.2.8 の MUST) ため、publisher は値 1 つだけを持つ
+  - `renderGroup` は同じ group の track を同時に描画する表明である (Section 5.2.11)。どちらも未指定のときは catalog に載せず、購読側が表示の遅れを選ぶ (Section 5.2.8 の MAY)。0 ms と renderGroup の 0 は有効値である
+  - @voluntas
+- [ADD] moqt-devtools の publisher が catalog に targetLatency と renderGroup を載せられるようにする
+  - 未指定 (Unset) を既定にした選択を追加し、0 は有効値として未指定と区別する。Copy URL には指定があるときだけ載せ、URL の値は選択肢と同じ許可リストで検証する
+  - @voluntas
 - [ADD] 音声と映像を LOC Timestamp と catalog の targetLatency で同期して再生する
   - 表示時刻を `TIMESTAMP (µs) + 基準の遅れ + max(targetLatency (ms), 揺らぎから求めた再生遅延)` として 1 つの式で求め、`AudioContext` と `performance.now()` の 2 つの時計を `AudioContext.getOutputTimestamp()` で対応づける
   - `isLive` が false の track の `targetLatency` は無視する (draft-ietf-moq-msf-01 Section 5.2.8 の MUST)。無いとき、および片方にしか無いときは、揺らぎから求めた同じ遅れを使って音声と映像を揃える

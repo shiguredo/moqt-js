@@ -75,6 +75,17 @@ export const audioAutoGainControl = signal(true);
 // デフォルト: 600000ms (10分)
 export const maxCacheDuration = signal(600000);
 
+// Catalog 設定
+// 目標遅延 (ms)。null は未指定で、catalog に targetLatency を載せない
+// draft-ietf-moq-msf-01 §5.2.8 (targetLatency): 同じ render group と alternate group の
+// track は同一の値でなければならない MUST のため、音声と映像の両方の track に同じ値を載せる。
+// 0 ms は「符号化から表示まで遅らせない」という有効な指定であり、null (未指定) と区別する
+export const targetLatency = signal<number | null>(null);
+// 同時レンダリンググループ。null は未指定で、catalog に renderGroup を載せない
+// draft-ietf-moq-msf-01 §5.2.11 (renderGroup): 同じ group の track は同時に描画する SHOULD。
+// 0 は有効な指定であり、null (未指定) と区別する
+export const renderGroup = signal<number | null>(null);
+
 // 購読設定
 // Catalog 取得時のタイムアウト（ミリ秒）
 // デフォルト: 5000ms (5秒)
@@ -444,6 +455,14 @@ function buildQueryParams(targetMode: DevtoolsMode): URLSearchParams {
   if (maxCacheDuration.value >= 0) {
     params.set("maxCacheDuration", String(maxCacheDuration.value));
   }
+  // targetLatency / renderGroup は指定があるときだけ載せる。
+  // 0 は有効値のため、0 かどうかではなく未指定 (null) かどうかで判定する
+  if (targetLatency.value !== null) {
+    params.set("targetLatency", String(targetLatency.value));
+  }
+  if (renderGroup.value !== null) {
+    params.set("renderGroup", String(renderGroup.value));
+  }
   // Catalog Timeout は他の数値の設定と同じく常に載せる。Subscriber のページを URL で
   // 渡したときに既定値へ戻らないようにする
   params.set("catalogSubscriptionTimeout", String(catalogSubscriptionTimeout.value));
@@ -522,6 +541,28 @@ export const MODES: readonly DevtoolsMode[] = ["both", "publisher", "subscriber"
 export const CATALOG_SUBSCRIPTION_TIMEOUTS = [3000, 5000, 10000, 30000, 60000, 120000, 300000];
 
 /**
+ * 目標遅延の選択肢 (ミリ秒)
+ *
+ * ここで選んだ値は catalog に載る宣言であり、購読側が表示の遅れにそのまま使うとは限らない。
+ * 購読側は `MAX_PLAYOUT_DELAY_MS` (500 ms) と、表示待ちのキューが吸収できる長さ
+ * ((キューの上限 - `PLAYOUT_QUEUE_HEADROOM_FRAMES` (4 枚)) × フレーム間隔) の小さい方へ
+ * 切り下げる (`src/playbackTimeline.ts` の `presentationDelayCapMs` / `playoutQueueCapMs`)。
+ *
+ * - ライブラリの購読はキューが `JITTER_BUFFER_MAX_QUEUED_FRAMES` (24 枚) 固定で 20 枚分に
+ *   なるため、30 fps (約 33 ms 間隔) では 20 枚分が約 667 ms になり 500 ms がそのまま
+ *   使われるが、60 fps (約 17 ms) では jitter buffer が有効でも約 333 ms に切り下げられる
+ * - devtools で jitter buffer を無効にした購読はキューが `MAX_PENDING_FRAMES` (12 枚) に
+ *   なって 8 枚分になるため、30 fps でも約 267 ms に切り下げられる
+ *
+ * 切り下げられた分は購読側の統計の `targetLatencyLimitedMs` で分かる。主な候補は切り下げの
+ * 影響が小さい 200 ms 以下にする。
+ */
+export const TARGET_LATENCY_OPTIONS = [0, 50, 100, 200, 500] as const;
+
+/** 同時レンダリンググループの選択肢 (§5.2.11 の宣言に使う値。0 は有効な指定) */
+export const RENDER_GROUP_OPTIONS = [0, 1] as const;
+
+/**
  * 表示モードとして受理できる値かを判定する
  *
  * URL クエリの検証と、ヘッダーの副題に並べるモードの列挙で同じ許可リストを使う。
@@ -558,6 +599,41 @@ export function isAudioDelivery(value: string): value is AudioDelivery {
  */
 export function isAudioCodecType(value: string): value is AudioCodecType {
   return AUDIO_CODECS.some((codec) => codec === value);
+}
+
+/**
+ * select と URL クエリの選択式の数値設定を、許可リストで検証して値に写す
+ *
+ * select の値と URL クエリの値は同じ規則で検証する。空文字は select の「未指定」であり
+ * null にする (`Number("")` は 0 になるため、0 が有効値の targetLatency / renderGroup では
+ * 未指定と区別できない)。許可リストに無い値と、整数の表記になっていない値 (`50.0` / `1e2`
+ * など。値としては等しくても select が作る表記ではない) は受理せず、`current` をそのまま
+ * 返す。先頭に 0 が付いた表記 (`"050"`) は値 50 として受理するが、許可リストの値に一致する
+ * ため実害は無い (select の表示は 50 になる)。URL の不正な値を受け入れると select の表示が
+ * 空になり、表示と実際の設定が食い違う。
+ *
+ * ConnectionSettings の select の onChange と `initFromUrl` の両方がこれを使うため、
+ * 画面から変えたときと URL から復元したときで同じ値になる。
+ *
+ * @param value - select の値、または URL クエリの値
+ * @param options - 受理する値の許可リスト (select の選択肢と同じ定数)
+ * @param current - 受理できない値を渡されたときに保つ現在の値
+ * @returns 変換した値。空文字は未指定の null
+ */
+export function resolveOptionNumber(
+  value: string,
+  options: readonly number[],
+  current: number | null,
+): number | null {
+  const trimmed = value.trim();
+  if (trimmed.length === 0) {
+    return null;
+  }
+  if (!/^[0-9]+$/.test(trimmed)) {
+    return current;
+  }
+  const parsed = Number(trimmed);
+  return options.includes(parsed) ? parsed : current;
 }
 
 /**
@@ -618,6 +694,26 @@ function initAudioSettingsFromUrl(params: URLSearchParams): void {
   applyFlag("audioEchoCancellation", audioEchoCancellation);
   applyFlag("audioNoiseSuppression", audioNoiseSuppression);
   applyFlag("audioAutoGainControl", audioAutoGainControl);
+}
+
+/**
+ * URL クエリの数値を許可リストで検証し、選択式設定の signal に反映する
+ *
+ * 値の解釈は select の onChange と同じ `resolveOptionNumber` に任せる。空文字 (select の
+ * 「未指定」) は未指定に、許可リストに無い値と整数の表記でない値は現在の値のままにするため、
+ * 不正な URL で表示と実際の設定が食い違わない。
+ */
+function applyOptionNumber(
+  params: URLSearchParams,
+  name: string,
+  options: readonly number[],
+  target: { value: number | null },
+): void {
+  const param = params.get(name);
+  if (param === null) {
+    return;
+  }
+  target.value = resolveOptionNumber(param, options, target.value);
 }
 
 /**
@@ -723,6 +819,12 @@ export function initFromUrl(search: string): void {
       maxCacheDuration.value = parsed;
     }
   }
+
+  // targetLatency / renderGroup は ConnectionSettings の select と同じ許可リストで検証する。
+  // 選択肢に無い値を受け入れると select の表示が空になり、表示と実際の設定が食い違う。
+  // 0 は有効値のため、空文字 (select の「未指定」) は 0 ではなく未指定として反映する
+  applyOptionNumber(params, "targetLatency", TARGET_LATENCY_OPTIONS, targetLatency);
+  applyOptionNumber(params, "renderGroup", RENDER_GROUP_OPTIONS, renderGroup);
 
   // Catalog Timeout は ConnectionSettings の select と同じ選択肢で検証する。
   // 選択肢に無い値を受け入れると select の表示が空になり、表示と実際の設定が食い違う

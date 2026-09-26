@@ -3,12 +3,15 @@ import { LOC, decodeCatalogMessage, encodeCatalog } from "moqt-js";
 import {
   buildObjectSendPlan,
   buildPublisherCatalog,
+  buildPublisherCatalogOptions,
+  buildPublisherCatalogOptionsFromSettings,
   resolveAudioConfigToSend,
   resolveAudioPublishable,
   shouldRequestKeyFrame,
   decideKeyFrame,
   usePublisher,
 } from "./usePublisher";
+import type { PublisherAudioCatalogOptions, PublisherVideoCatalogOptions } from "./usePublisher";
 import { getAudioEncoderConfig } from "../../../src/codec/config";
 import { getEncoderConfig } from "../utils/codec";
 import type { EncodedChunkData } from "../utils/EncoderWrapper";
@@ -712,6 +715,314 @@ test("buildPublisherCatalog: AAC の codec 文字列も Encoder 設定と一致�
   const audioTrack = catalog.tracks.find((track) => track.role === "audio");
   assert.equal(audioTrack?.codec, getAudioEncoderConfig("aac", 128000, 48000, 1).codec);
   assert.equal(audioTrack?.channelConfig, "1");
+});
+
+// ============================================================================
+// Catalog の targetLatency / renderGroup (draft-ietf-moq-msf-01 §5.2.8 / §5.2.11)
+// ============================================================================
+
+/**
+ * 検証用の映像トラックの設定 (画面の既定値と同じ組み合わせ)
+ */
+function makeVideoCatalogOptions(): PublisherVideoCatalogOptions {
+  return {
+    trackName: "video",
+    codec: "vp8",
+    width: VIDEO_WIDTH,
+    height: VIDEO_HEIGHT,
+    framerate: VIDEO_FRAMERATE,
+    bitrate: VIDEO_BITRATE,
+  };
+}
+
+/**
+ * 検証用の音声トラックの設定 (画面の既定値と同じ組み合わせ)
+ */
+function makeAudioCatalogOptions(): PublisherAudioCatalogOptions {
+  return { codec: "opus", bitrate: 64000, sampleRate: 48000, channels: 2 };
+}
+
+// draft-ietf-moq-msf-01 §5.2.8: 同じ render group と alternate group の track は同一の
+// targetLatency でなければならない MUST。publisher は値 1 つから音声と映像の両方の track に
+// 同じ値を載せる。§5.2.11: 同じ renderGroup の track は同時に描画する SHOULD。
+// 受信側の検証 (src/msf/catalogTrackValidation.ts) を通ることも wire format の往復で固定する
+test("buildPublisherCatalog: targetLatency と renderGroup を音声と映像の両方の track に載せる", () => {
+  const catalog = buildPublisherCatalog({
+    video: makeVideoCatalogOptions(),
+    audio: makeAudioCatalogOptions(),
+    targetLatency: 100,
+    renderGroup: 1,
+  });
+
+  assert.deepEqual(
+    catalog.tracks.map((track) => track.role),
+    ["video", "audio"],
+  );
+  for (const track of catalog.tracks) {
+    assert.equal(track.targetLatency, 100);
+    assert.equal(track.renderGroup, 1);
+  }
+
+  // 送信したバイト列を購読側が読み戻しても値が残る
+  const decoded = decodeCatalogMessage(encodeCatalog(catalog));
+  if (!("version" in decoded)) {
+    throw new Error("expected a full catalog, got a delta update");
+  }
+  assert.deepEqual(decoded, catalog);
+});
+
+// draft-ietf-moq-msf-01 §5.2.8: 宣言が無く isLive が true のときは購読側が表示の遅れを
+// 選んでよい MAY。未指定のときはキーを載せず、購読側のフォールバックの経路にする
+test("buildPublisherCatalog: 未指定のときは targetLatency と renderGroup を載せない", () => {
+  const catalog = buildPublisherCatalog({
+    video: makeVideoCatalogOptions(),
+    audio: makeAudioCatalogOptions(),
+  });
+
+  for (const track of catalog.tracks) {
+    assert.isFalse("targetLatency" in track);
+    assert.isFalse("renderGroup" in track);
+    assert.isUndefined(track.targetLatency);
+    assert.isUndefined(track.renderGroup);
+  }
+});
+
+// 非有限値は JSON.stringify が null に落ち、購読側の検証
+// (src/msf/catalogTrackValidation.ts) が typeof null !== "number" で例外にする。
+// 画面と URL の設定は許可リストで到達しないが、この純関数は直接呼べるため、
+// 符号化の前に拒否する。どのフィールドが原因かはメッセージから読み取れる
+test("buildPublisherCatalog: targetLatency の非有限値を拒否する", () => {
+  for (const targetLatency of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+    assert.throws(
+      () => buildPublisherCatalog({ video: makeVideoCatalogOptions(), targetLatency }),
+      /targetLatency must be finite/,
+    );
+  }
+});
+
+// renderGroup の整数性は decode 側で見ないため、encode 側が整数性を守る唯一の防波堤になる。
+// 0 は有効値であり、検証を偽値で書くと落ちるため、0 が通ることもあわせて固定する
+test("buildPublisherCatalog: renderGroup の非有限値と非整数を拒否し、0 は通す", () => {
+  assert.throws(
+    () => buildPublisherCatalog({ video: makeVideoCatalogOptions(), renderGroup: Number.NaN }),
+    /renderGroup must be finite/,
+  );
+  assert.throws(
+    () => buildPublisherCatalog({ video: makeVideoCatalogOptions(), renderGroup: 1.5 }),
+    /renderGroup must be an integer/,
+  );
+
+  const catalog = buildPublisherCatalog({ video: makeVideoCatalogOptions(), renderGroup: 0 });
+  assert.equal(catalog.tracks.length, 1);
+  for (const track of catalog.tracks) {
+    assert.equal(track.renderGroup, 0);
+  }
+});
+
+// buildPublisherCatalog への配線は接続を要する startPublishing を経由するため単体テストで
+// 観測できない (モックは使えない)。画面と URL の設定 (未指定は null) を
+// PublisherCatalogOptions へ写す純関数を検証する
+test("buildPublisherCatalogOptions: 未指定 (null) の項目はキーを落とす", () => {
+  assert.deepEqual(
+    buildPublisherCatalogOptions({
+      video: null,
+      audio: null,
+      targetLatency: null,
+      renderGroup: null,
+    }),
+    {},
+  );
+
+  // 映像だけを配信するときは audio のキーを載せない (exactOptionalPropertyTypes)、
+  // targetLatency / renderGroup の未指定もキーを載せない
+  const videoOnly = buildPublisherCatalogOptions({
+    video: makeVideoCatalogOptions(),
+    audio: null,
+    targetLatency: null,
+    renderGroup: null,
+  });
+  assert.isFalse("audio" in videoOnly);
+  assert.isFalse("targetLatency" in videoOnly);
+  assert.isFalse("renderGroup" in videoOnly);
+  assert.deepEqual(videoOnly.video, makeVideoCatalogOptions());
+});
+
+// 0 ms と renderGroup の 0 はどちらも有効な指定であるため、null (未指定) と区別して残す
+test("buildPublisherCatalogOptions: targetLatency と renderGroup の 0 は未指定と区別して残す", () => {
+  const options = buildPublisherCatalogOptions({
+    video: makeVideoCatalogOptions(),
+    audio: makeAudioCatalogOptions(),
+    targetLatency: 0,
+    renderGroup: 0,
+  });
+
+  assert.equal(options.targetLatency, 0);
+  assert.equal(options.renderGroup, 0);
+
+  // 残した値がそのまま両方の track に載る
+  const catalog = buildPublisherCatalog(options);
+  for (const track of catalog.tracks) {
+    assert.equal(track.targetLatency, 0);
+    assert.equal(track.renderGroup, 0);
+  }
+});
+
+// トラックを 1 つも配信しない設定でも、この純関数はトラックを増やさない。
+// targetLatency / renderGroup は宣言であり、載せる相手の track を勝手に作らない
+// (トラックが無い catalog を buildPublisherCatalog が throw する既存の挙動は
+// 「buildPublisherCatalog: 映像も音声も省略すると throw する」で確認している)
+test("buildPublisherCatalogOptions: トラックの無い設定ではトラックのキーを足さない", () => {
+  const options = buildPublisherCatalogOptions({
+    video: null,
+    audio: null,
+    targetLatency: 100,
+    renderGroup: 1,
+  });
+
+  assert.isFalse("video" in options);
+  assert.isFalse("audio" in options);
+  // 指定した宣言だけが残る
+  assert.deepEqual(options, { targetLatency: 100, renderGroup: 1 });
+});
+
+// ============================================================================
+// 設定から Catalog の入力を組み立てる配線
+// ============================================================================
+
+/**
+ * Catalog の入力の組み立てが読む設定の signal を既定値へ戻す
+ *
+ * 設定の signal もモジュールスコープで共有されるため、テストの前後で
+ * devtools/src/signals/connectionSettings.ts の初期値へ戻し、他のテストへ持ち越さない。
+ */
+function resetCatalogSettings(): void {
+  settings.videoSource.value = "dummy";
+  settings.trackName.value = "video";
+  settings.codec.value = "vp8";
+  settings.resolution.value = "1280x720";
+  settings.framerate.value = 30;
+  settings.bitrate.value = 2_000_000;
+  settings.audioSource.value = "dummy";
+  settings.audioCodec.value = "opus";
+  settings.audioBitrate.value = 64_000;
+  settings.audioSampleRate.value = 48_000;
+  settings.audioChannels.value = 2;
+  settings.targetLatency.value = null;
+  settings.renderGroup.value = null;
+}
+
+// draft-ietf-moq-msf-01 §5.2.8: 宣言が無く isLive が true のときは購読側が表示の遅れを
+// 選んでよい MAY。未指定 (null) のときにキーを作ると、この MAY の経路が消えて購読側が
+// 0 ms の宣言として扱う。signal を直接書き換えて実際の設定を読ませる
+test("buildPublisherCatalogOptionsFromSettings: 未指定 (null) のときは targetLatency と renderGroup のキーを作らない", () => {
+  resetCatalogSettings();
+  try {
+    settings.targetLatency.value = null;
+    settings.renderGroup.value = null;
+
+    const options = buildPublisherCatalogOptionsFromSettings({ sampleRate: 48000, channels: 2 });
+
+    assert.isFalse("targetLatency" in options);
+    assert.isFalse("renderGroup" in options);
+    // トラックの設定は既定値のまま載る (未指定でも映像と音声のトラックは落とさない)
+    assert.deepEqual(options.video, makeVideoCatalogOptions());
+    assert.deepEqual(options.audio, makeAudioCatalogOptions());
+  } finally {
+    resetCatalogSettings();
+  }
+});
+
+// 0 ms と renderGroup の 0 はどちらも有効な指定である。未指定と同じ扱いにすると、購読側が
+// 表示の遅れを選ぶ §5.2.8 の MAY の経路に落ちて宣言が消えるため、0 は 0 のまま残す
+test("buildPublisherCatalogOptionsFromSettings: 0 のときは未指定と区別して 0 を載せる", () => {
+  resetCatalogSettings();
+  try {
+    settings.targetLatency.value = 0;
+    settings.renderGroup.value = 0;
+
+    const options = buildPublisherCatalogOptionsFromSettings({ sampleRate: 48000, channels: 2 });
+
+    assert.isTrue("targetLatency" in options);
+    assert.isTrue("renderGroup" in options);
+    assert.equal(options.targetLatency, 0);
+    assert.equal(options.renderGroup, 0);
+
+    // 残した値がそのまま音声と映像の両方の track に載る
+    const catalog = buildPublisherCatalog(options);
+    assert.equal(catalog.tracks.length, 2);
+    for (const track of catalog.tracks) {
+      assert.equal(track.targetLatency, 0);
+      assert.equal(track.renderGroup, 0);
+    }
+  } finally {
+    resetCatalogSettings();
+  }
+});
+
+// 指定した値は音声と映像の両方の track に同じ値で載る (draft-ietf-moq-msf-01 §5.2.8 の
+// MUST / §5.2.11)。値 1 つから両方の track を作るため、track ごとに値がずれない
+test("buildPublisherCatalogOptionsFromSettings: 指定した 100 ms と renderGroup 1 を載せる", () => {
+  resetCatalogSettings();
+  try {
+    settings.targetLatency.value = 100;
+    settings.renderGroup.value = 1;
+
+    const options = buildPublisherCatalogOptionsFromSettings({ sampleRate: 48000, channels: 2 });
+
+    assert.equal(options.targetLatency, 100);
+    assert.equal(options.renderGroup, 1);
+
+    const catalog = buildPublisherCatalog(options);
+    assert.equal(catalog.tracks.length, 2);
+    for (const track of catalog.tracks) {
+      assert.equal(track.targetLatency, 100);
+      assert.equal(track.renderGroup, 1);
+    }
+  } finally {
+    resetCatalogSettings();
+  }
+});
+
+// 画面と URL の設定がそのまま Catalog の入力になる。解像度は "WIDTHxHEIGHT" の文字列から
+// 数値へ、音声のサンプルレートとチャンネル数は設定ではなく実際に取れた音の形式を使う
+// (マイクではデバイスが決めるため)。配信しないトラックのキーは作らない
+test("buildPublisherCatalogOptionsFromSettings: 映像と音声の設定と、取れた音の形式を反映する", () => {
+  resetCatalogSettings();
+  try {
+    settings.trackName.value = "main";
+    settings.resolution.value = "640x360";
+    settings.framerate.value = 15;
+    settings.bitrate.value = 1_000_000;
+    settings.audioCodec.value = "aac";
+    settings.audioBitrate.value = 128_000;
+    settings.audioSource.value = "microphone";
+
+    // 映像の入力が None のときは映像トラックを載せない (音声だけの配信)
+    settings.videoSource.value = "none";
+    const audioOnly = buildPublisherCatalogOptionsFromSettings({ sampleRate: 16000, channels: 1 });
+    assert.isFalse("video" in audioOnly);
+    assert.deepEqual(audioOnly.audio, {
+      codec: "aac",
+      bitrate: 128_000,
+      sampleRate: 16000,
+      channels: 1,
+    });
+
+    // 音声を用意できなかったときは音声トラックを載せない (映像の設定はそのまま載る)
+    settings.videoSource.value = "camera";
+    const videoOnly = buildPublisherCatalogOptionsFromSettings(null);
+    assert.isFalse("audio" in videoOnly);
+    assert.deepEqual(videoOnly.video, {
+      trackName: "main",
+      codec: "vp8",
+      width: 640,
+      height: 360,
+      framerate: 15,
+      bitrate: 1_000_000,
+    });
+  } finally {
+    resetCatalogSettings();
+  }
 });
 
 // ============================================================================

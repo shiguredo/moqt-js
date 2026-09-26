@@ -31,6 +31,7 @@ import { getAudioEncoderConfig } from "../../../src/codec/config.ts";
 import {
   allocateAudioObject,
   allocateInitialGroupId,
+  assertCatalogLatencyOptions,
   PRIORITY_AUDIO,
   PRIORITY_VIDEO_DELTA,
   PRIORITY_VIDEO_KEY,
@@ -110,6 +111,23 @@ export interface PublisherCatalogOptions {
   video?: PublisherVideoCatalogOptions;
   /** 音声トラックを配信するときの設定。省略時は音声トラックを載せない */
   audio?: PublisherAudioCatalogOptions;
+  /**
+   * 符号化から表示までの wallclock の差 (ms)
+   *
+   * draft-ietf-moq-msf-01 §5.2.8 (targetLatency)。
+   * 指定すると音声と映像の両方の track に同じ値を載せる (同じ render group と alternate
+   * group の track は同一の値でなければならない MUST)。未指定のときは載せず、購読側が
+   * 表示の遅れを選ぶ (§5.2.8 の MAY)。0 ms は有効値である。
+   */
+  targetLatency?: number;
+  /**
+   * 同時レンダリンググループ
+   *
+   * draft-ietf-moq-msf-01 §5.2.11 (renderGroup)。
+   * 指定すると音声と映像の両方の track に同じ値を載せる (同じ group の track は同時に
+   * 描画する SHOULD)。0 は有効値である。
+   */
+  renderGroup?: number;
 }
 
 /** 配信する映像トラックの Catalog を組み立てるための入力 */
@@ -130,6 +148,86 @@ export interface PublisherAudioCatalogOptions {
   channels: number;
 }
 
+/** 設定から `PublisherCatalogOptions` を組み立てるための入力 */
+export interface PublisherCatalogSettings {
+  /** 映像トラックの設定。映像の入力が None のときは null (映像トラックを載せない) */
+  video: PublisherVideoCatalogOptions | null;
+  /** 音声トラックの設定。音声を配信できないときは null (音声トラックを載せない) */
+  audio: PublisherAudioCatalogOptions | null;
+  /** 目標遅延 (ms)。未指定は null (catalog に載せない。draft-ietf-moq-msf-01 §5.2.8) */
+  targetLatency: number | null;
+  /** 同時レンダリンググループ。未指定は null (catalog に載せない。§5.2.11) */
+  renderGroup: number | null;
+}
+
+/**
+ * 設定から配信するトラックの Catalog の入力を組み立てる純関数
+ *
+ * 画面と URL の設定は「未指定」を null で表すため、null の項目はキーを落として
+ * `buildPublisherCatalog` へ渡す (`exactOptionalPropertyTypes` では optional な
+ * フィールドに undefined を入れられない)。targetLatency の 0 ms と renderGroup の 0 は
+ * 有効値であり、null のときだけ落とす (0 = 未指定とは扱わない)。
+ * ブラウザ API に依存しないため、設定の写像はここで検証できる。
+ */
+export function buildPublisherCatalogOptions(
+  options: PublisherCatalogSettings,
+): PublisherCatalogOptions {
+  return {
+    ...(options.video !== null ? { video: options.video } : {}),
+    ...(options.audio !== null ? { audio: options.audio } : {}),
+    ...(options.targetLatency !== null ? { targetLatency: options.targetLatency } : {}),
+    ...(options.renderGroup !== null ? { renderGroup: options.renderGroup } : {}),
+  };
+}
+
+/**
+ * 配信するトラックの Catalog の入力を現在の設定から組み立てる
+ *
+ * 画面と URL で変えられる設定を読み、`PublisherCatalogSettings` を経由して
+ * `buildPublisherCatalogOptions` へ渡す。未指定 (null) の項目をキーごと落とす判断は
+ * `buildPublisherCatalogOptions` に 1 つだけ置き、この関数は設定の読み出しに徹する。
+ *
+ * 音声のサンプルレートとチャンネル数だけは設定ではなく、実際に取れた音の形式を使う
+ * (マイクではデバイスが決めるため、Catalog と AudioEncoder を同じ値にそろえる)。
+ *
+ * @param audioFormat - 実際に取れた音の形式。音声を配信しないときは null
+ */
+export function buildPublisherCatalogOptionsFromSettings(
+  audioFormat: AudioFormat | null,
+): PublisherCatalogOptions {
+  const videoSourceValue = settings.videoSource.value;
+  // 解像度は設定の "WIDTHxHEIGHT" から数値にする
+  const { width, height } = parseResolution(settings.resolution.value);
+  return buildPublisherCatalogOptions({
+    // 映像は映像の入力が None でないときだけトラックを載せる
+    video:
+      videoSourceValue === "none"
+        ? null
+        : {
+            trackName: settings.trackName.value,
+            codec: settings.codec.value,
+            width,
+            height,
+            framerate: settings.framerate.value,
+            bitrate: settings.bitrate.value,
+          },
+    // 音声は配信できるときだけトラックを載せる (形式は実際に取れた音の値)
+    audio:
+      audioFormat === null
+        ? null
+        : {
+            codec: settings.audioCodec.value,
+            bitrate: settings.audioBitrate.value,
+            sampleRate: audioFormat.sampleRate,
+            channels: audioFormat.channels,
+          },
+    // targetLatency / renderGroup は「未指定」(null) のときだけ catalog に載せない。
+    // 0 ms と renderGroup の 0 はどちらも有効値のため、0 かどうかでは判定しない
+    targetLatency: settings.targetLatency.value,
+    renderGroup: settings.renderGroup.value,
+  });
+}
+
 /**
  * 配信する映像トラックと音声トラックの Catalog を組み立てる
  *
@@ -145,10 +243,32 @@ export interface PublisherAudioCatalogOptions {
  * §5.2.29 (channelConfig) がいずれも audio codec を指定する track に MUST で
  * 要求するため。
  *
+ * targetLatency / renderGroup は音声と映像の両方の track に同じ値を載せる。
+ * draft-ietf-moq-msf-01 §5.2.8: 同じ render group と alternate group の track は同一の
+ * targetLatency でなければならない MUST。§5.2.11: 同じ renderGroup の track は同時に
+ * 描画する SHOULD。未指定のときはキーを載せない (§5.2.8: 宣言が無く isLive が true の
+ * ときは購読側が遅延を選んでよい MAY のため、載せないことが購読側のフォールバックになる)。
+ * 指定した値は有限数であること (renderGroup はさらに整数であること) を検証し、
+ * そうでなければ throw する。非有限値は JSON で null になり、購読側が復号できなくなる。
+ *
  * ブラウザ API に依存しないため、送信した Catalog の内容はここで検証できる。
  */
 export function buildPublisherCatalog(options: PublisherCatalogOptions): Catalog {
   const tracks: CatalogTrack[] = [];
+
+  // 非有限値は JSON.stringify が null に落とし、購読側の検証
+  // (src/msf/catalogTrackValidation.ts) で例外になる。画面と URL の設定は許可リストで
+  // 到達しないが、この純関数は直接呼べるため、符号化の前に拒否する。
+  // 検証は core と同じ関数を使い、メッセージと境界が 2 か所でずれないようにする
+  assertCatalogLatencyOptions(options);
+
+  // exactOptionalPropertyTypes では optional なフィールドに undefined を渡せないため、
+  // 指定がある項目だけを載せる。targetLatency の 0 ms と renderGroup の 0 は有効値である
+  // ため、0 かどうかではなく指定の有無で判定する
+  const latencyFields: Pick<CatalogTrack, "targetLatency" | "renderGroup"> = {
+    ...(options.targetLatency !== undefined ? { targetLatency: options.targetLatency } : {}),
+    ...(options.renderGroup !== undefined ? { renderGroup: options.renderGroup } : {}),
+  };
 
   if (options.video) {
     const video = options.video;
@@ -162,6 +282,7 @@ export function buildPublisherCatalog(options: PublisherCatalogOptions): Catalog
       height: video.height,
       framerate: video.framerate,
       bitrate: video.bitrate,
+      ...latencyFields,
     });
   }
 
@@ -177,6 +298,7 @@ export function buildPublisherCatalog(options: PublisherCatalogOptions): Catalog
       bitrate: audio.bitrate,
       samplerate: audio.sampleRate,
       channelConfig: String(audio.channels),
+      ...latencyFields,
     });
   }
 
@@ -1286,32 +1408,9 @@ export function usePublisher() {
       }
 
       // Catalog を作成して送信
-      const createdCatalog = buildPublisherCatalog({
-        // 映像は映像の入力が None でないときだけトラックを載せる
-        ...(videoSourceValue === "none"
-          ? {}
-          : {
-              video: {
-                trackName: trackNameValue,
-                codec: codecValue,
-                width,
-                height,
-                framerate: framerateValue,
-                bitrate: bitrateValue,
-              },
-            }),
-        // 音声は配信できるときだけトラックを載せる (形式は取れた音の値)
-        ...(audioFormat !== null
-          ? {
-              audio: {
-                codec: audioCodecValue,
-                bitrate: audioBitrateValue,
-                sampleRate: audioFormat.sampleRate,
-                channels: audioFormat.channels,
-              },
-            }
-          : {}),
-      });
+      const createdCatalog = buildPublisherCatalog(
+        buildPublisherCatalogOptionsFromSettings(audioFormat),
+      );
       const catalogPayload = encodeCatalog(createdCatalog);
       // draft-ietf-moq-msf-01 §6.1:
       // Group ID は Track ごとに単調増加が MUST であり、publisher が再起動した場合は

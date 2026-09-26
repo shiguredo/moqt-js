@@ -311,6 +311,39 @@ export function resolveAudioConfigToSend(
 }
 
 /**
+ * Catalog に載せる targetLatency / renderGroup の指定を検証する
+ *
+ * `JSON.stringify` は非有限値 (NaN / Infinity) を `null` に落とす。購読側の検証
+ * (src/msf/catalogTrackValidation.ts) は `typeof value !== "number"` で例外にするため、
+ * 自分の出力を自分で復号できない catalog を送ることになる。符号化の前に拒否して守る。
+ * renderGroup の整数性は decode 側で見ないため、encode 側が整数性を守る唯一の防波堤になる。
+ * 0 は targetLatency (0 ms) と renderGroup のどちらも有効値であるため、検証では弾かない。
+ *
+ * 単体テストと devtools から同じ検証を使うため export する
+ * (パッケージ公開 API には含めない)。
+ *
+ * @param options - 検証する指定。未指定 (undefined) の項目は検証しない
+ */
+export function assertCatalogLatencyOptions(options: {
+  targetLatency?: number;
+  renderGroup?: number;
+}): void {
+  const { targetLatency, renderGroup } = options;
+  if (targetLatency !== undefined && !Number.isFinite(targetLatency)) {
+    throw new Error(`targetLatency must be finite, got ${targetLatency}`);
+  }
+  if (renderGroup !== undefined) {
+    if (!Number.isFinite(renderGroup)) {
+      throw new Error(`renderGroup must be finite, got ${renderGroup}`);
+    }
+    // decode 側は整数性を見ないため、ここが唯一の防波堤になる
+    if (!Number.isInteger(renderGroup)) {
+      throw new Error(`renderGroup must be an integer, got ${renderGroup}`);
+    }
+  }
+}
+
+/**
  * MediaPublisher の実装クラス
  *
  * 単体テストから処理ループを駆動するため export する
@@ -717,9 +750,31 @@ export class MediaPublisherImpl implements MediaPublisher {
 
   /**
    * Catalog 用のトラック情報を生成する
+   *
+   * targetLatency と renderGroup は音声と映像の両方の track に同じ値を載せる。
+   * draft-ietf-moq-msf-01 §5.2.8: 同じ render group と alternate group の track は
+   * 同一の targetLatency でなければならない MUST。§5.2.11: 同じ renderGroup の track は
+   * 同時に描画する SHOULD。値はオプションで 1 つだけ持ち、両方の track に同じ値を載せる。
+   * 指定しないときはキーを載せない (§5.2.8: 宣言が無く isLive が true のときは購読側が
+   * 遅延を選んでよい MAY のため、載せないことが購読側のフォールバックの経路になる)。
+   * 指定した値は有限数であること (renderGroup はさらに整数であること) を検証し、
+   * そうでなければ throw する。非有限値は JSON で null になり、購読側が復号できなくなる。
    */
   private createCatalogTracks(): CatalogTrack[] {
     const tracks: CatalogTrack[] = [];
+
+    // 非有限値と renderGroup の非整数は、購読側が復号できない catalog になるため拒否する
+    assertCatalogLatencyOptions(this.options);
+
+    // exactOptionalPropertyTypes では optional なフィールドに undefined を渡せないため、
+    // 指定がある項目だけを載せる。targetLatency の 0 ms と renderGroup の 0 は有効値である
+    // ため、0 かどうかではなく指定の有無で判定する
+    const latencyFields: Pick<CatalogTrack, "targetLatency" | "renderGroup"> = {
+      ...(this.options.targetLatency !== undefined
+        ? { targetLatency: this.options.targetLatency }
+        : {}),
+      ...(this.options.renderGroup !== undefined ? { renderGroup: this.options.renderGroup } : {}),
+    };
 
     // Audio トラック
     const audio = this.resolvedAudio;
@@ -733,6 +788,7 @@ export class MediaPublisherImpl implements MediaPublisher {
         bitrate: audio.bitrate,
         samplerate: audio.sampleRate,
         channelConfig: String(audio.channels),
+        ...latencyFields,
       });
     }
 
@@ -749,6 +805,7 @@ export class MediaPublisherImpl implements MediaPublisher {
         width: video.width,
         height: video.height,
         framerate: video.framerate,
+        ...latencyFields,
       });
     }
 
