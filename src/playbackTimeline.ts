@@ -415,14 +415,30 @@ export class PlaybackTimeline {
     return videoOffsetMs - audioOffsetMs;
   }
 
+  /**
+   * 1 つのトラックの基準と学習と実績だけを消す。世代は進めない
+   *
+   * 音声の再生を止めたときなど、そのトラックを観測していない状態に戻す。表示時刻の式は
+   * 残ったトラックの値だけで決まるようになる (音声の下限も入らない)。世代を進めると、
+   * 既に積んでいる映像フレームの表示時刻が決められなくなり、到着順に落ちてしまう
+   */
+  resetStream(stream: PlaybackStream): void {
+    this.streams[stream] = this.createStreamState();
+    if (stream === "audio") {
+      this.audioPresentation = null;
+    } else {
+      this.videoPresentation = null;
+    }
+    // 学習を消すとキューの上限 (フレーム間隔) も変わるため、切り下げた分を取り直す
+    this.updateLimitedMs();
+  }
+
   /** 基準と学習をすべて消す。次の観測で作り直す (TIMESTAMP の飛び、購読のやり直し) */
   reset(): void {
     this.generationValue += 1;
     for (const stream of ["audio", "video"] as const) {
-      this.streams[stream] = this.createStreamState();
+      this.resetStream(stream);
     }
-    this.audioPresentation = null;
-    this.videoPresentation = null;
   }
 
   /**

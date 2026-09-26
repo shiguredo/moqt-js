@@ -24,6 +24,8 @@ import {
   type Catalog,
   type CatalogTrack,
 } from "./msf";
+// targetLatency の解決規則は devtools と共有するため、公開 API を経由せずに直接 import する
+import { effectiveTargetLatencyMs, resolveSharedTargetLatencyMs } from "./msf/tracks";
 import { AudioDecoderWrapper } from "./codec/AudioDecoder";
 import { VideoDecoderWrapper } from "./codec/VideoDecoder";
 import { VideoDecodeOrder, priorObjectIdGapOf } from "./videoDecodeOrder";
@@ -297,38 +299,6 @@ function decoderTimestampOf(resolved: TimestampSource): number {
     return 0;
   }
   return Number(LOC.toDecoderMicroseconds(resolved.timestamp, resolved.timescale));
-}
-
-/**
- * トラックが宣言する `targetLatency` を使える値にする (ミリ秒)
- *
- * draft-ietf-moq-msf-01 §5.2.8: `isLive` が false のトラックの `targetLatency` は
- * 無視する MUST。宣言が無いときは null (`buffers` があるときは検証で併存が禁じられている)。
- */
-function effectiveTargetLatencyMs(track: CatalogTrack | null): number | null {
-  if (track === null || !track.isLive) {
-    return null;
-  }
-  return track.targetLatency ?? null;
-}
-
-/**
- * 2 つのトラックが同じ render group か alternate group に属するか
- *
- * draft-ietf-moq-msf-01 §5.2.8 の「同じ値でなければならない MUST」は同じ group の
- * track に限られる。group が無い、または異なる場合は仕様に反しない。
- */
-function sharesRenderOrAlternateGroup(
-  audio: CatalogTrack | null,
-  video: CatalogTrack | null,
-): boolean {
-  if (audio === null || video === null) {
-    return false;
-  }
-  const sameRenderGroup =
-    audio.renderGroup !== undefined && audio.renderGroup === video.renderGroup;
-  const sameAlternateGroup = audio.altGroup !== undefined && audio.altGroup === video.altGroup;
-  return sameRenderGroup || sameAlternateGroup;
 }
 
 /**
@@ -928,35 +898,20 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   /**
    * 音声と映像で使う `targetLatency` を 1 つ決める (ミリ秒)
    *
-   * draft-ietf-moq-msf-01 §5.2.8:
-   * - `isLive` が false の track の `targetLatency` は無視する (MUST)
-   * - 同じ render group (または alternate group) の track は同じ値でなければならない (MUST)
-   * - 無い場合、プレイヤーが遅延を選んでよい (MAY)
-   *
-   * 片方にしか無いときは、もう片方は遅延を選んでよいため同じ値を使って揃える。両方にあって
-   * 異なるときは、同じ group なら MUST 違反として通知し、大きい方を使う (小さい方の要求より
-   * 早く出さない)。group が違う、または無いときは仕様に反しないため通知しない。
+   * 解決の規則は純関数 (`resolveSharedTargetLatencyMs`) が持ち、ここでは同じ render
+   * group / alternate group の track で値が異なるとき (draft-ietf-moq-msf-01 §5.2.8 の
+   * MUST 違反) の通知だけを行う。
    */
   private resolveSharedTargetLatencyMs(): number | null {
-    const audioMs = effectiveTargetLatencyMs(this.audioTrackInfo);
-    const videoMs = effectiveTargetLatencyMs(this.videoTrackInfo);
-    if (audioMs === null) {
-      return videoMs;
-    }
-    if (videoMs === null) {
-      return audioMs;
-    }
-    if (audioMs === videoMs) {
-      return audioMs;
-    }
-    if (sharesRenderOrAlternateGroup(this.audioTrackInfo, this.videoTrackInfo)) {
+    const resolved = resolveSharedTargetLatencyMs(this.audioTrackInfo, this.videoTrackInfo);
+    if (resolved.conflict) {
       this.callbacks.onError?.(
         new Error(
-          `targetLatency differs between tracks in the same render group: audio ${audioMs}, video ${videoMs} (draft-ietf-moq-msf-01 Section 5.2.8)`,
+          `targetLatency differs between tracks in the same render group: audio ${effectiveTargetLatencyMs(this.audioTrackInfo)}, video ${effectiveTargetLatencyMs(this.videoTrackInfo)} (draft-ietf-moq-msf-01 Section 5.2.8)`,
         ),
       );
     }
-    return Math.max(audioMs, videoMs);
+    return resolved.value;
   }
 
   /**
@@ -1608,8 +1563,13 @@ export class MediaSubscriberImpl implements MediaSubscriber {
           targetStartSeconds,
           // 映像も購読しているときだけ目標を守る。音声だけのときは取り直して連続を優先する
           enforceTarget: this.videoTrackInfo !== null,
+          // 音声を観測していないとき (壁時計の TIMESTAMP を持たない / Track の TIMESCALE を
+          // 使う) は共有の再生遅延に下限が入らないため、ここで下限を必ず適用する
           delaySeconds:
-            (this.playbackTimeline.playoutDelayMs ?? AUDIO_PLAYOUT_DELAY_FLOOR_MS) / 1_000,
+            Math.max(
+              this.playbackTimeline.playoutDelayMs ?? AUDIO_PLAYOUT_DELAY_FLOOR_MS,
+              AUDIO_PLAYOUT_DELAY_FLOOR_MS,
+            ) / 1_000,
           presentationDelaySeconds:
             (this.playbackTimeline.presentationExtraDelayMs ?? AUDIO_PLAYOUT_DELAY_FLOOR_MS) /
             1_000,

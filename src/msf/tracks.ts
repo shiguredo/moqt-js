@@ -109,6 +109,83 @@ export function createCompleteCatalog(): Catalog {
 }
 
 // =============================================================================
+// targetLatency の解決
+// =============================================================================
+
+/**
+ * トラックが宣言する `targetLatency` を使える値にする (ミリ秒)
+ *
+ * draft-ietf-moq-msf-01 §5.2.8: `isLive` が false のトラックの `targetLatency` は
+ * 無視する MUST。宣言が無いときは null を返し、使う側が表示の遅れを選ぶ (MAY)。
+ *
+ * @param track - 対象のトラック。解決できていないときは null
+ */
+export function effectiveTargetLatencyMs(track: CatalogTrack | null): number | null {
+  if (track === null || !track.isLive) {
+    return null;
+  }
+  return track.targetLatency ?? null;
+}
+
+/**
+ * 2 つのトラックが同じ render group か alternate group に属するか
+ *
+ * draft-ietf-moq-msf-01 §5.2.8 の「同じ値でなければならない MUST」は同じ group の
+ * track に限られる。group が無い、または異なる場合は仕様に反しない。
+ */
+function sharesRenderOrAlternateGroup(
+  audio: CatalogTrack | null,
+  video: CatalogTrack | null,
+): boolean {
+  if (audio === null || video === null) {
+    return false;
+  }
+  const sameRenderGroup =
+    audio.renderGroup !== undefined && audio.renderGroup === video.renderGroup;
+  const sameAlternateGroup = audio.altGroup !== undefined && audio.altGroup === video.altGroup;
+  return sameRenderGroup || sameAlternateGroup;
+}
+
+/**
+ * 音声と映像で使う `targetLatency` を 1 つ決める (ミリ秒)
+ *
+ * draft-ietf-moq-msf-01 §5.2.8:
+ * - `isLive` が false の track の `targetLatency` は無視する (MUST)
+ * - 同じ render group (または alternate group) の track は同じ値でなければならない (MUST)
+ * - 無い場合、プレイヤーが遅延を選んでよい (MAY)
+ *
+ * 片方にしか無いときは、もう片方は遅延を選んでよいため同じ値を使って揃える。両方にあって
+ * 異なるときは、同じ group なら MUST 違反として `conflict` を真にして通知を呼び出し側へ
+ * 委ね (ライブラリは `onError`、devtools は警告ログ)、大きい方を使う (小さい方の要求より
+ * 早く出さない)。group が違う、または無いときは仕様に反しないため通知しない。
+ *
+ * @param audio - 購読する音声トラック。購読しない、または解決できていないときは null
+ * @param video - 購読する映像トラック。購読しない、または解決できていないときは null
+ * @returns `value` は共有して使う値 (使わないときは null)、`conflict` は同じ group の
+ *   track で値が異なり通知が必要かどうか
+ */
+export function resolveSharedTargetLatencyMs(
+  audio: CatalogTrack | null,
+  video: CatalogTrack | null,
+): { value: number | null; conflict: boolean } {
+  const audioMs = effectiveTargetLatencyMs(audio);
+  const videoMs = effectiveTargetLatencyMs(video);
+  if (audioMs === null) {
+    return { value: videoMs, conflict: false };
+  }
+  if (videoMs === null) {
+    return { value: audioMs, conflict: false };
+  }
+  if (audioMs === videoMs) {
+    return { value: audioMs, conflict: false };
+  }
+  return {
+    value: Math.max(audioMs, videoMs),
+    conflict: sharesRenderOrAlternateGroup(audio, video),
+  };
+}
+
+// =============================================================================
 // Group 番号付け
 // =============================================================================
 

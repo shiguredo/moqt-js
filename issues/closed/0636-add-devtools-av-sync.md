@@ -1,7 +1,7 @@
 # devtools の音声と映像を同期して再生する
 
 - Created: 2026-09-20
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-26
 - Branch: feature/add-devtools-av-sync
 - Polished: 2026-09-26
 
@@ -93,4 +93,17 @@ relay と devtools の publisher / subscriber を実機で動かし、120 秒程
 
 ## 解決方法
 
-{未着手}
+- `src/msf/tracks.ts` に `effectiveTargetLatencyMs` と `resolveSharedTargetLatencyMs` を純関数として切り出し、`src/createMediaSubscriber.ts` と devtools の購読側が同じ規則を使うようにした (§5.2.8 の `isLive` の MUST、同じ render group / alternate group の同一値 MUST の通知要否、片方だけのときの採用、`null` のフォールバック)。`createMediaSubscriber` の挙動は変えていない
+- devtools の購読側 (`devtools/src/hooks/useSubscriber.ts`) を 0635 と同じ計算に載せた
+  - 音声も共有の `PlaybackTimeline` へ `observe` し、`AudioClockBridge` で `AudioContext.currentTime` の秒へ換算した目標の開始時刻を `AudioPlayoutScheduler.schedule` に渡す (映像も購読しているときだけ目標を守る)
+  - 音声も TIMESTAMP の種類 (Track と Object の TIMESCALE) を持ち、壁時計でない音は到着基準にする。時間軸が表示時刻を返さないときも同じ
+  - `recordPresentation` で音声は予約した時刻、映像は描いた時刻を記録する (第 3 引数は Unix epoch マイクロ秒の `bigint`)
+  - jitter buffer 無効時と音声のみの購読では観測せず到着基準にし、統計は既定値に固定する
+- `src/playbackTimeline.ts` に `resetStream(stream)` を足した。音声の再生を止めたときに音声の状態を捨て、映像の表示の遅れが音声由来の下限を含んだまま固定されないようにする (世代は進めないため、積んでいる映像フレームの扱いは変わらない)
+- 映像の TIMESTAMP の種類の判定を `LOC.resolveVideoProperties` に寄せ、Track レベルの TIMESCALE も見るようにした (draft-ietf-moq-loc-04 §2.3.1.2)
+- 壁時計の TIMESTAMP を持たない音の到着基準の遅れに `AUDIO_PLAYOUT_DELAY_FLOOR_MS` (80 ms) の下限を必ず掛けるようにした (devtools とライブラリの両方)
+- 同期の 5 項目 (`skewMs` / `presentationDelayMs` / `targetLatencyMs` / `targetLatencyLimitedMs` / `audioClockFallback`) を `devtools/src/signals/subscriber.ts` の signal に足し、`window.moqtDevTools.getSubscriber(id)` の統計と `SubscriberPanel` の `data-testid` (`subscriber-av-sync-*`) から読めるようにした。未購読と音声のみの購読では既定値 (null / null / null / 0 / false)
+- テスト: 解決規則の 7 通りと `effectiveTargetLatencyMs` のフォールバック (`src/msf.test.ts`)、`resetStream` の挙動と音声の下限が映像に残らないこと (`src/playbackTimeline.test.ts`)、到着基準の下限 80 ms (`src/createMediaSubscriber.test.ts`)、Track の TIMESCALE の扱い (`devtools/src/hooks/useSubscriber.test.ts`)、統計の既定値と公開 (`devtools/src/testApi.test.ts`)、E2E 3 件 (`tests/e2e/devtools-av-sync.spec.ts`: 5 項目の公開と既定値、画面の表示、0763 の select の UI → URL 往復)
+- `CHANGES.md` の `## develop` に `[ADD]` (moqt-devtools) を載せた
+- `vp check` / `tsc --noEmit` (ルートと devtools) / `vp test run` (160 ファイル / 2980 テスト) / `vp run e2e-test` (47 件) が通った
+- 実機での確認 (relay で 120 秒の連続再生と ±50 ms、publisher の `Target Latency` が `Unset` / `0` / `100` のときの catalog の値) は「実機での確認」の節の手順どおりに行う (自動化しない)
