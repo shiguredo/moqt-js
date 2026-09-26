@@ -1,7 +1,7 @@
 # devtools の subscriber が relay の cache から追いつく途中の古い映像を描き、音声は鳴らすかどうかを推定で決めている
 
 - Created: 2026-09-25
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-27
 - Branch: feature/update-devtools-hide-catch-up-frames
 - Polished: 2026-09-27
 - Reporter: @voluntas
@@ -41,3 +41,14 @@ moqt-devtools の subscriber は、購読の開始に relay の cache から届�
 - cache から届く Object 列を模した入力で、境界を越えるまでは再生せず、越えたら再生し、越えたことを 1 回だけ知らせることをテストで固定する (映像と音声は同じ判定を使う)
 - sora-moq (Sora の Media over QUIC 実装であり、リレー機能を提供する) の相互運用 harness (`e2e-test/browser/relay_interop/`。`make browser-test-moqtjs-devtools` で実行する) で、cache から追いつく購読の `window.moqtDevTools.getSubscribers()` を読み、`catchUpFramesSkipped` が 1 以上であること、`catchUpPending` が true から false に変わること、`framesDecoded` が境界を越えた後に 1 以上になること、`audio.catchUpObjectsSkipped` が 1 以上になること (音声は再生を有効にした購読で確かめる) を確かめる
 - `vp check` / `tsc --noEmit` / `vp test run` が通る
+
+## 解決方法
+
+- `devtools/src/utils/catchUpGate.ts` に `CatchUpGate` を置いた。SUBSCRIBE_OK の LARGEST_OBJECT (draft-ietf-moq-transport-21 Section 9.20.18) を境界に、Location (Group ID と Object ID) の辞書順で境界以前かどうかを判定する。境界より後の最初の Object でだけ `boundaryReached` を返し、境界を越えた後に遅着した境界以前の Object は再生しない。境界が無い (購読の時点で Object が無い) ときはすべて live として扱う
+- `devtools/src/hooks/useSubscriber.ts` の `presentFrame` は、復号へ渡したときの TIMESTAMP で引いた位置が境界以前ならフレームを閉じて描かない (復号は続けるため参照は壊れない)。`handleAudioDecoded` も同じ判定で境界以前の音を鳴らさない (Audio Config は Object ごとに運ばれるため復号は続ける)
+- 位置は `rememberDecodeInput` で覚える。TIMESTAMP を持たない Object と、同じ TIMESTAMP の Object が重なったときは位置を一意に引けないため覚えず、境界の判定をせずに従来どおり描く・鳴らす。この場合その Track の「Catching up」は、位置が分からない最初の出力で終える (`CatchUpGate.markPositionUnknown`)
+- 境界は Track ごと (映像と音声の SUBSCRIBE_OK が別の LARGEST_OBJECT を返す) に持ち、購読の開始と後始末で初期化する。映像と音声の両方が境界を越えるまで、画面に「Catching up」を出す
+- 統計に `catchUpFramesSkipped` / `catchUpPending` / `audio.catchUpObjectsSkipped` を足し、画面と `window.moqtDevTools.getSubscribers()` に出す。境界を越えた最初のフレームと音声 Object はデバッグログに残す
+- テスト: `catchUpGate.test.ts` で境界値 (境界と同じ位置、辞書順、遅着、reset、位置が分からない場合) を、`catchUpGate.prop.ts` で辞書順の判定と、境界を越えたことの通知が 1 回だけであることを固定する。`useSubscriber.test.ts` に `rememberDecodeInput` の 3 件と統計のリセットを足した
+- 実測: sora-moq の相互運用 harness で、cache から追いつく late subscriber が `catchUpFramesSkipped` 12 / `framesDecoded` 1 (境界以前は描かず、境界より後で描く)、`audio.catchUpObjectsSkipped` 1、`catchUpPending` が true から false に変わることを確認した
+- `vp check` / `tsc --noEmit` / `vp test run` (3075 件) が通った
