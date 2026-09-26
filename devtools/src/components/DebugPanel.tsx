@@ -24,6 +24,9 @@ import { LATENCY_SEGMENTS } from "../utils/latencyBreakdown";
 import { STALL_CAUSES } from "../utils/stallAnalysis";
 
 interface LogEntry {
+  // ログごとの連番。表示の key と展開状態の識別に使う。配列の添字を使うと、
+  // MAX_LOGS 到達後に最古を捨てたときに展開状態が別の行へ移る
+  id: number;
   timestamp: number;
   level: "info" | "warn" | "error" | "debug";
   message: string;
@@ -33,6 +36,8 @@ interface LogEntry {
 
 // 配列本体は破壊的に操作するため signal にしない。テスト用に getter を export する。
 const logBuffer: LogEntry[] = [];
+// ログの連番。表示の key と展開状態の識別に使う
+let logIdCounter = 0;
 const MAX_LOGS = 1000;
 // 追加イベントの累積カウンタ。MAX_LOGS 到達後も増え続け、autoScroll effect /
 // 描画再評価のトリガになる。
@@ -63,6 +68,7 @@ export function addLog(
   // exactOptionalPropertyTypes では optional な data / payload に undefined を渡せないため、
   // 値がある場合だけ載せる
   const entry: LogEntry = {
+    id: logIdCounter++,
     timestamp: Date.now(),
     level,
     message,
@@ -341,24 +347,26 @@ export function DebugPanel() {
   const currentMode = settings.mode.value;
 
   const logContainerRef = useRef<HTMLDivElement>(null);
+  // 展開状態と表示モードは配列の添字ではなくログの連番で持つ。添字で持つと、
+  // MAX_LOGS 到達後に最古を捨てたときに状態が別の行へ移る
   const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set());
   const [viewModes, setViewModes] = useState<Map<number, ViewMode>>(new Map());
   // 行コピーとボタンコピーは同時に「Copied!」表示しうるため hook を分離する。
   const rowFeedback = useCopyFeedback();
   const buttonFeedback = useCopyFeedback();
 
-  const getViewMode = (index: number): ViewMode => viewModes.get(index) ?? "data";
-  const setViewMode = (index: number, mode: ViewMode) => {
-    setViewModes((prev) => new Map(prev).set(index, mode));
+  const getViewMode = (logId: number): ViewMode => viewModes.get(logId) ?? "data";
+  const setViewMode = (logId: number, mode: ViewMode) => {
+    setViewModes((prev) => new Map(prev).set(logId, mode));
   };
 
-  const toggleRow = (index: number) => {
+  const toggleRow = (logId: number) => {
     setExpandedRows((previous) => {
       const next = new Set(previous);
-      if (next.has(index)) {
-        next.delete(index);
+      if (next.has(logId)) {
+        next.delete(logId);
       } else {
-        next.add(index);
+        next.add(logId);
       }
       return next;
     });
@@ -370,17 +378,13 @@ export function DebugPanel() {
     if (isAllExpanded) {
       setExpandedRows(new Set());
     } else {
-      // index と要素を同時に取るため entries() を使う
-      // (noUncheckedIndexedAccess で index access が undefined を含むため)
-      const allIndices = new Set(
-        [...logBuffer.entries()].filter(([, entry]) => Boolean(entry.data)).map(([i]) => i),
-      );
-      setExpandedRows(allIndices);
+      // data を持つ行だけを展開する。識別にはログの連番を使う
+      setExpandedRows(new Set(logBuffer.filter((entry) => Boolean(entry.data)).map((e) => e.id)));
     }
   };
 
   const copyToClipboard = useCallback(
-    async (log: LogEntry, index: number, event: MouseEvent) => {
+    async (log: LogEntry, event: MouseEvent) => {
       event.stopPropagation();
       const timestamp = formatAbsoluteTime(log.timestamp);
       const parts: string[] = [`${timestamp} ${log.message}`];
@@ -393,7 +397,7 @@ export function DebugPanel() {
         parts.push(`Binary (${log.payload.length} bytes):\n${formatHexDump(log.payload)}`);
       }
 
-      await rowFeedback.copy(parts.join(" "), String(index));
+      await rowFeedback.copy(parts.join(" "), String(log.id));
     },
     [rowFeedback],
   );
@@ -597,15 +601,16 @@ export function DebugPanel() {
                   // (noUncheckedIndexedAccess で型上 undefined を含むための防御)
                   continue;
                 }
-                const originalIndex = i;
+                // 表示の key と展開状態には配列の添字ではなくログの連番を使う
+                const logId = log.id;
                 const nextLog = i < logsArray.length - 1 ? logsArray[i + 1] : null;
                 const previousTimestamp = nextLog ? nextLog.timestamp : null;
-                const isExpanded = expandedRows.has(originalIndex);
+                const isExpanded = expandedRows.has(logId);
                 elements.push(
                   <div
-                    key={originalIndex}
+                    key={logId}
                     class={`rounded cursor-pointer transition-colors hover:ring-2 hover:ring-slate-300 ${getLevelColor(log.level)}`}
-                    onClick={() => toggleRow(originalIndex)}
+                    onClick={() => toggleRow(logId)}
                   >
                     <div class="flex gap-2 p-2 items-center">
                       {/* 展開アイコン */}
@@ -643,11 +648,11 @@ export function DebugPanel() {
                       <span class="flex-1 break-all">{log.message}</span>
                       {/* コピーボタン */}
                       <button
-                        onClick={(event) => copyToClipboard(log, originalIndex, event)}
+                        onClick={(event) => copyToClipboard(log, event)}
                         class="p-1 hover:bg-white/50 rounded transition-colors"
                         title="Copy to clipboard"
                       >
-                        {rowFeedback.feedback.value === String(originalIndex) ? (
+                        {rowFeedback.feedback.value === String(logId) ? (
                           <svg
                             class="w-4 h-4 text-green-600"
                             fill="none"
@@ -687,10 +692,10 @@ export function DebugPanel() {
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
-                                setViewMode(originalIndex, "data");
+                                setViewMode(logId, "data");
                               }}
                               class={`px-2 py-0.5 text-xs rounded-t transition-colors ${
-                                getViewMode(originalIndex) === "data"
+                                getViewMode(logId) === "data"
                                   ? "bg-white/70 text-slate-700 font-medium"
                                   : "bg-white/30 text-slate-500 hover:bg-white/50"
                               }`}
@@ -700,10 +705,10 @@ export function DebugPanel() {
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
-                                setViewMode(originalIndex, "binary");
+                                setViewMode(logId, "binary");
                               }}
                               class={`px-2 py-0.5 text-xs rounded-t transition-colors ${
-                                getViewMode(originalIndex) === "binary"
+                                getViewMode(logId) === "binary"
                                   ? "bg-white/70 text-slate-700 font-medium"
                                   : "bg-white/30 text-slate-500 hover:bg-white/50"
                               }`}
@@ -714,7 +719,7 @@ export function DebugPanel() {
                         )}
                         {/* コンテンツ */}
                         <pre class="text-xs p-3 bg-white/70 rounded overflow-auto max-h-96">
-                          {getViewMode(originalIndex) === "binary" && log.payload
+                          {getViewMode(logId) === "binary" && log.payload
                             ? formatHexDump(log.payload)
                             : formatMessageData(log.data)}
                         </pre>

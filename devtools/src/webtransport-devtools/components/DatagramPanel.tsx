@@ -10,7 +10,11 @@ import { DatagramIcon, ClearIcon } from "./Icons";
  */
 export function DatagramPanel() {
   const input = useSignal("");
-  const messagesRef = useAutoScroll([store.datagramMessages.value.length]);
+  // 追加の連番を読んで、データグラムが届くたびにこのパネルだけを再描画する。
+  // 配列は作り直さないため、長さを読むだけでは再描画されない
+  void store.datagramMessagesVersion.value;
+  const messages = store.datagramMessages;
+  const messagesRef = useAutoScroll([messages.length]);
 
   const handleSend = () => {
     if (input.value.trim()) {
@@ -25,9 +29,9 @@ export function DatagramPanel() {
         <h2 class="text-lg font-semibold text-slate-700 flex items-center gap-2">
           <DatagramIcon />
           Datagrams
-          {store.datagramMessages.value.length > 0 && (
+          {messages.length > 0 && (
             <span class="text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full">
-              {store.datagramMessages.value.length}
+              {messages.length}
             </span>
           )}
         </h2>
@@ -62,10 +66,12 @@ export function DatagramPanel() {
       </div>
 
       <div ref={messagesRef} class="max-h-60 overflow-y-auto bg-slate-50 rounded-lg p-3">
-        {store.datagramMessages.value.length === 0 ? (
+        {messages.length === 0 ? (
           <p class="text-slate-400 text-sm">No datagrams</p>
         ) : (
-          store.datagramMessages.value.map((msg, i) => <MessageItem key={i} msg={msg} />)
+          // key は配列の添字ではなくメッセージの連番にする。最古を捨てたときに
+          // 表示の対応がずれないようにするため
+          messages.map((msg) => <MessageItem key={msg.id} msg={msg} />)
         )}
       </div>
     </div>

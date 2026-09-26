@@ -174,6 +174,14 @@
 - [UPDATE] moqt-devtools の見出しを「MOQT DevTools (draft-21)」にし、draft-21 から draft-ietf-moq-transport-21 の文書を開けるようにする
   - ページのタイトルも同じにする
   - @voluntas
+- [UPDATE] moqt-devtools のメッセージ一覧の描画コストを下げる
+  - WebTransport のメッセージ一覧は 1 件追加するたびに一覧全体とすべてのストリームを作り直しており、1000 件を表示した状態では 1 件あたり 44.8 ms かかっていた。追加時に日時を 1 回だけ整形して保持し、配列を作り直さず連番で通知する形にして 3.0 ms にした。表示するのは新しい 200 件までにする
+  - ログ一覧の描画の key に連番の ID を使い、行の展開状態が別の行へ移らないようにした
+  - @voluntas
+- [UPDATE] moqt-devtools の設定入力で再描画される範囲を狭める
+  - 副題のモードリンクが接続設定の signal を読んでいたため、Relay URI に 10 文字入力するたびに App と SubscriberPanel が再描画されていた (23.7 ms)。副題を別のコンポーネントへ切り出して signal の購読を閉じ、8.4 ms にした
+  - @voluntas
+
 - [FIX] moqt-devtools の音声メーターの見出しが、幅の広い UI フォントで折り返さないようにする
   - 見出しの値を 11px にし、項目の間隔を詰める。折り返すと下の Catalog と Statistics が動く
   - @voluntas

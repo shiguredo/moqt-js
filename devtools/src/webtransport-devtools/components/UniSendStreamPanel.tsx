@@ -11,6 +11,9 @@ import { OutgoingStreamIcon, ClearIcon, StopIcon, CloseIcon } from "./Icons";
 function UniSendStreamItem({ streamId }: { streamId: number }) {
   const input = useSignal("");
   const stream = store.uniSendStreams.value.find((s) => s.id === streamId);
+  // 追加の連番を読んで、このストリームにメッセージを送るたびにこの項目だけを
+  // 再描画する。配列は作り直さないため、長さを読むだけでは再描画されない
+  void stream?.messagesVersion.value;
   const messagesRef = useAutoScroll([stream?.messages.length]);
 
   if (!stream) return null;
@@ -81,7 +84,8 @@ function UniSendStreamItem({ streamId }: { streamId: number }) {
         {stream.messages.length === 0 ? (
           <p class="text-slate-400 text-xs">No messages</p>
         ) : (
-          stream.messages.map((msg, i) => <MessageItem key={i} msg={msg} />)
+          // key は配列の添字ではなくメッセージの連番にする
+          stream.messages.map((msg) => <MessageItem key={msg.id} msg={msg} />)
         )}
       </div>
     </div>

@@ -1,29 +1,17 @@
 import { version } from "moqt-js";
 import { ConnectionSettings } from "./components/ConnectionSettings";
+import { ModeSubtitle } from "./components/ModeSubtitle";
 import { PublisherPanel } from "./components/PublisherPanel";
 import { SubscriberPanel } from "./components/SubscriberPanel";
 import { DebugPanel, logCount } from "./components/DebugPanel";
 import { isDebugPanelOpen, toggleDebugPanel } from "./signals/debug";
-import {
-  buildQueryString,
-  buildQueryStringForMode,
-  mode,
-  MODES,
-} from "./signals/connectionSettings";
+import { buildQueryString, mode } from "./signals/connectionSettings";
 import { useCopyUrlButton } from "./hooks/useCopyUrlButton";
 import * as sub from "./signals/subscriber";
-import type { DevtoolsMode } from "./types";
 
 // 対応している MOQT の draft の文書。見出しとフッターからリンクする
 const MOQT_TRANSPORT_DRAFT_URL =
   "https://datatracker.ietf.org/doc/html/draft-ietf-moq-transport-21";
-
-// ヘッダーの副題に並べる表示モードの表示名。並びは MODES の順にする
-const MODE_LABELS: Record<DevtoolsMode, string> = {
-  both: "Publisher & Subscriber",
-  publisher: "Publisher",
-  subscriber: "Subscriber",
-};
 
 function handleAddSubscriber(): void {
   sub.addSubscriber();
@@ -108,31 +96,8 @@ export function App() {
               </a>
               )
             </h1>
-            <p class="text-slate-500 mt-1">
-              Media over QUIC Transport -{" "}
-              {MODES.map((targetMode, index) => (
-                <span key={targetMode}>
-                  {index > 0 && <span class="text-slate-300"> | </span>}
-                  {targetMode === currentMode ? (
-                    // 今のモードは太字にし、リンクにしない。ページの中に切り替えの UI を
-                    // 置かないため、この表示が今のモードを知る唯一の手がかりになる
-                    <strong class="text-slate-700">{MODE_LABELS[targetMode]}</strong>
-                  ) : (
-                    // 他のモードは今の接続設定を載せた URL を新しいタブで開く。href を
-                    // 今の設定に追従させ、押す前にブラウザのメニューからコピーできるようにする
-                    <a
-                      href={`?${buildQueryStringForMode(targetMode)}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      data-testid={`mode-link-${targetMode}`}
-                      class="text-blue-500 hover:text-blue-600 underline"
-                    >
-                      {MODE_LABELS[targetMode]}
-                    </a>
-                  )}
-                </span>
-              ))}
-            </p>
+            {/* 副題。接続設定の signal を読むのはこのコンポーネントの中だけにする */}
+            <ModeSubtitle />
             <p class="mt-2 flex justify-center gap-4">
               <a
                 href="/webcodecs-devtools.html"
