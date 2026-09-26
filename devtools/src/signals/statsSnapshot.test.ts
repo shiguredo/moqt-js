@@ -183,6 +183,34 @@ test("buildSubscriberStats: Session と Catalog が無いときは null を返�
   assert.equal(stats.catalog, null);
 });
 
+test("buildPublisherStats: Catalog の bigint を文字列にして、JSON にできる形で返す", () => {
+  // Catalog の Media Timeline Template は [bigint, bigint] を含む。JSON.stringify は
+  // bigint で例外になるため、スナップショットの時点で文字列にする
+  pub.catalog.value = {
+    version: "draft-01",
+    tracks: [
+      {
+        name: "video",
+        packaging: "eventtimeline",
+        isLive: true,
+        template: [0, 40, [10n, 20n], [1n, 2n], 1_700_000_000_000, 40],
+      },
+    ],
+  };
+
+  try {
+    const stats = buildPublisherStats();
+    assert.equal(
+      JSON.stringify(stats.catalog),
+      '{"version":"draft-01","tracks":[{"name":"video","packaging":"eventtimeline","isLive":true,"template":[0,40,["10","20"],["1","2"],1700000000000,40]}]}',
+    );
+    // スナップショット全体も JSON にできる (テスト用 API から取り出す前提)
+    assert.isString(JSON.stringify(stats));
+  } finally {
+    pub.catalog.value = null;
+  }
+});
+
 test("buildPublisherStats: 配信前は既定値を返す", () => {
   // 配信していないページでも統計の形は同じにする (コピー本文は配信の有無で節を省く)
   const stats = buildPublisherStats();

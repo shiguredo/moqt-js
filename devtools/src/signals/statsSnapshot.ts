@@ -1,4 +1,4 @@
-import type { Catalog, SessionStatistics } from "moqt-js";
+import type { SessionStatistics } from "moqt-js";
 import type { PanelHttpVersion } from "../utils/httpVersion";
 import type { PlaybackTimingSnapshot } from "../utils/playbackTimingStats";
 import type { PublishTimingSnapshot } from "../utils/publishTimingStats";
@@ -41,6 +41,55 @@ import { url } from "./connectionSettings";
  *
  * 値が無いことは null で表す。0 や false は値があるため null へ潰さない。
  */
+
+/**
+ * JSON へ直列化できる値
+ *
+ * スナップショットは `window.moqtDevTools` から JSON として取り出せる必要がある。
+ * bigint は `JSON.stringify` で例外になるため、文字列にしてから持つ。
+ */
+export type JsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | JsonValue[]
+  | { [key: string]: JsonValue };
+
+/**
+ * JSON へ直列化できる値へ変換する
+ *
+ * Catalog の Media Timeline Template は `[bigint, bigint]` を含む。`largestLocation` と
+ * 同じく、取り出す側が JSON にできるよう bigint は文字列にする。JSON に無い値
+ * (undefined / 関数 / シンボル) は落とす。
+ */
+function toJsonValue(value: unknown): JsonValue {
+  if (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  ) {
+    return value;
+  }
+  if (typeof value === "bigint") {
+    return value.toString();
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => toJsonValue(item));
+  }
+  if (typeof value === "object") {
+    const result: Record<string, JsonValue> = {};
+    for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+      if (child === undefined) {
+        continue;
+      }
+      result[key] = toJsonValue(child);
+    }
+    return result;
+  }
+  return null;
+}
 
 /**
  * Publisher の音声の状態
@@ -88,8 +137,8 @@ export interface PublisherStats {
   audio: PublisherAudioStats;
   /** 制御ストリームとデータストリームの統計。未接続のときは null */
   sessionStatistics: SessionStatistics | null;
-  /** 送信している Catalog。まだ送っていないときは null */
-  catalog: Catalog | null;
+  /** 送信している Catalog (bigint は文字列)。まだ送っていないときは null */
+  catalog: JsonValue | null;
 }
 
 /** Subscriber の音声の統計 */
@@ -164,8 +213,8 @@ export interface SubscriberStats {
   largestLocation: { group: string; object: string } | null;
   /** 制御ストリームとデータストリームの統計。未接続のときは null */
   sessionStatistics: SessionStatistics | null;
-  /** 受信した Catalog。まだ受信していないときは null */
-  catalog: Catalog | null;
+  /** 受信した Catalog (bigint は文字列)。まだ受信していないときは null */
+  catalog: JsonValue | null;
 }
 
 /** Publisher の統計を現在の signal から組み立てる */
@@ -199,7 +248,7 @@ export function buildPublisherStats(): PublisherStats {
       lastSentVoiceActivity: audioLevel?.voiceActivity ?? null,
     },
     sessionStatistics: session === null ? null : session.getStatistics(),
-    catalog: catalog.value,
+    catalog: catalog.value === null ? null : toJsonValue(catalog.value),
   };
 }
 
@@ -265,6 +314,6 @@ export function buildSubscriberStats(sub: SubscriberInstance): SubscriberStats {
     },
     largestLocation: convertLargestLocation(sub.largestLocation.value),
     sessionStatistics: session === null ? null : session.getStatistics(),
-    catalog: sub.catalog.value,
+    catalog: sub.catalog.value === null ? null : toJsonValue(sub.catalog.value),
   };
 }
