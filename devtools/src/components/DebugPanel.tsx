@@ -32,6 +32,7 @@ export function DebugPanel() {
   // 行コピーとボタンコピーは同時に「Copied!」表示しうるため hook を分離する
   const rowFeedback = useCopyFeedback();
   const buttonFeedback = useCopyFeedback();
+  const rowCopy = rowFeedback.copy;
 
   const toggleRow = useCallback((logId: number) => {
     setExpandedRows((previous) => {
@@ -49,12 +50,15 @@ export function DebugPanel() {
     setViewModes((previous) => new Map(previous).set(logId, viewMode));
   }, []);
 
+  // 行のコールバックは参照を安定させる (行の vnode を使い回すため、参照が変わると
+  // すべての行を描画し直すことになる)。`copy` は useCopyFeedback の中で useCallback
+  // されているため、依存は `copy` にする
   const copyRow = useCallback(
     async (entry: LogEntry, event: MouseEvent) => {
       event.stopPropagation();
-      await rowFeedback.copy(formatLogEntryText(entry), String(entry.id));
+      await rowCopy(formatLogEntryText(entry), String(entry.id));
     },
-    [rowFeedback],
+    [rowCopy],
   );
 
   // 上限で捨てられたログの状態を落とす。useSignalEffect は再描画を起こさないため、

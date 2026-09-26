@@ -3,7 +3,7 @@ import { useMemo, useRef } from "preact/hooks";
 import { useSignalEffect } from "@preact/signals";
 import { autoScroll } from "../signals/debug";
 import { getLogBuffer, logSequence, type LogEntry } from "../signals/debugLog";
-import type { ViewMode } from "../utils/logRowState";
+import { pruneMapByLogId, type ViewMode } from "../utils/logRowState";
 import { DebugLogRow } from "./DebugLogRow";
 
 interface DebugLogListProps {
@@ -26,10 +26,14 @@ interface DebugLogListProps {
  *
  * 表示は新しい順にする。並べ替えのため配列は作り直さず、末尾から読む。
  *
- * 行の vnode はログの連番で保持し、追記では作り直さない。Preact は同じ vnode
- * オブジェクトを再び受け取るとその部分木の差分を省略するため、1 件追加するコストが
- * 表示中の件数に比例しなくなる (1000 件表示では、作り直すと 1 件あたり 1000 行分に
- * なる)。展開の状態・表示モード・コピーの表示が変わったときだけ作り直す。
+ * 行の vnode はログの連番で保持し、追記では作り直さない。Preact は `_original` が
+ * 一致する vnode を再び受け取ると、その部分木の差分を省略する (内部実装への依存のため
+ * `tests/e2e/devtools-debug-panel.spec.ts` が描画回数で固定する)。作り直すと 1 件追加で
+ * 表示中のすべての行を描画することになり、1000 件表示では 1 件あたり 1000 行分になる。
+ *
+ * 作り直すのは展開の状態・表示モード・コピーの表示が変わったときだけで、コールバックは
+ * 参照が安定していること (`entry` は追加後に書き換えないこと) が前提。表示に効く値を
+ * 足したら `rowCache` の依存にも足すこと (oxlint の exhaustive-deps は無効にしてある)。
  */
 export function DebugLogList({
   expandedRows,
@@ -57,7 +61,7 @@ export function DebugLogList({
   });
 
   // 行の vnode のキャッシュ。展開の状態・表示モード・コピーの表示が変わったら
-  // 作り直す (依存が変わると新しい Map になる)
+  // 作り直す (依存が変わると新しい Map になり、すべての行を描画し直す)
   const rowCache = useMemo(
     () => new Map<number, JSX.Element>(),
     [expandedRows, viewModes, copiedKey],
@@ -94,12 +98,17 @@ export function DebugLogList({
   }
 
   // 上限で捨てたログの vnode をキャッシュから落とす。連番は増え続けるため、残すと
-  // 長いセッションで増え続ける。捨てるものがあるときだけ連番を走査する
-  const oldestLogId = logs[0]?.id;
-  if (oldestLogId !== undefined && rowCache.size > logs.length) {
-    for (const logId of rowCache.keys()) {
-      if (logId < oldestLogId) {
-        rowCache.delete(logId);
+  // 長いセッションでメモリと 1 件追加のコストが増え続ける (実測: 500 件あふれさせると
+  // 1 件追加が 3.1 ms から 6.0 ms になった)。ログを消したときも残さない
+  const oldestLogId = logs[0]?.id ?? null;
+  if (oldestLogId === null) {
+    rowCache.clear();
+  } else if (rowCache.size > logs.length) {
+    const pruned = pruneMapByLogId(rowCache, oldestLogId);
+    if (pruned !== rowCache) {
+      rowCache.clear();
+      for (const [logId, row] of pruned) {
+        rowCache.set(logId, row);
       }
     }
   }

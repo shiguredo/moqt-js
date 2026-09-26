@@ -317,7 +317,8 @@ test("Copy for LLM は Relay URI と fragment の c4m (認可トークン) を�
 
 test("1000 件表示でも、ログを 1 件追加したときに描画される行は 1 件だけ", async ({ page }) => {
   // 行を毎回作り直すと、1 件追加するたびに表示中のすべての行を描画することになる。
-  // Preact の描画フックを包んで、追加した行だけが描画されることを確かめる
+  // Preact の描画フックを包んで、追加した行だけが描画されることを確かめる。
+  // 描画の完了は DOM を待ってから数える (待ち時間に依存しない)
   await page.goto(DEVTOOLS_URL);
   await openDebugPanel(page);
   await addLogs(
@@ -331,7 +332,7 @@ test("1000 件表示でも、ログを 1 件追加したときに描画される
   await expect(page.getByTestId("debug-log-count")).toHaveText("Logs: 1000");
   await expect(page.getByTestId("debug-log-row")).toHaveCount(1000);
 
-  const counts = await page.evaluate(async () => {
+  await page.evaluate(async () => {
     const findResource = (pattern: RegExp): string => {
       const names = performance.getEntriesByType("resource").map((entry) => entry.name);
       const url = names.reverse().find((name) => pattern.test(name));
@@ -352,16 +353,23 @@ test("1000 件表示でも、ログを 1 件追加したときに描画される
     const counters = new Map<string, number>();
     const previous = preact.options.__r;
     preact.options.__r = function __r(vnode, ...rest) {
+      // dev サーバーはミニファイしないため、関数名でコンポーネントを判別できる
       const name = typeof vnode.type === "function" ? (vnode.type as { name: string }).name : "";
       counters.set(name, (counters.get(name) ?? 0) + 1);
       if (previous !== undefined) previous.call(this, vnode, ...rest);
     };
 
     debugLog.addLog("info", "measured", { index: 1000 });
-    // 信号の反映と Preact の描画 (マイクロタスク) を待つ
-    for (let i = 0; i < 32; i++) await Promise.resolve();
-    return Object.fromEntries(counters);
+    (window as unknown as { __renderCounts: Map<string, number> }).__renderCounts = counters;
   });
+
+  // 描画が終わったことを DOM で待ってから数を読む
+  await expect(page.getByTestId("debug-log-row").nth(0)).toContainText("measured");
+  const counts = await page.evaluate(() =>
+    Object.fromEntries(
+      (window as unknown as { __renderCounts: Map<string, number> }).__renderCounts,
+    ),
+  );
 
   // 追加した 1 行だけが描画される
   expect(counts.DebugLogRow ?? 0).toBe(1);
@@ -373,5 +381,27 @@ test("1000 件表示でも、ログを 1 件追加したときに描画される
 
   // 表示は変わらない (新しいログが先頭に出て、行数は上限のまま)
   await expect(page.getByTestId("debug-log-row")).toHaveCount(1000);
-  await expect(page.getByTestId("debug-log-row").nth(0)).toContainText("measured");
+});
+
+test("行のコピーで、その行だけがコピー済みの表示になる", async ({ page }) => {
+  // 行の vnode を使い回すため、コピーの表示 (isCopied) を行の作り直しの条件から
+  // 外すと表示が変わらなくなる。その条件をここで固定する
+  await page.goto(DEVTOOLS_URL);
+  await openDebugPanel(page);
+  await addLogs(page, [
+    { level: "info", message: "copy-row-1", data: { index: 1 } },
+    { level: "info", message: "copy-row-2", data: { index: 2 } },
+  ]);
+
+  const rows = page.getByTestId("debug-log-row");
+  await expect(rows).toHaveCount(2);
+  const copiedMark = rows.nth(0).locator("svg.text-green-600");
+
+  await rows.nth(0).getByTitle("Copy to clipboard").click();
+  // コピーした行だけがコピー済みの表示になる
+  await expect(copiedMark).toHaveCount(1);
+  await expect(rows.nth(1).locator("svg.text-green-600")).toHaveCount(0);
+
+  // 1.5 秒で元に戻る
+  await expect(copiedMark).toHaveCount(0);
 });

@@ -74,6 +74,9 @@ export function __resetLogStateForTest(): void {
 /**
  * ログを 1 件追加する
  *
+ * 行は追加時に作った vnode を使い回す (再描画しない) ため、`data` と `payload` は
+ * 追加後に書き換えないこと。書き換えても表示は古いままになる。
+ *
  * @param level 重要度
  * @param message 本文
  * @param data 付加情報。展開したときとコピー時に表示する
