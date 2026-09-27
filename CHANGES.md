@@ -29,6 +29,10 @@
 - [CHANGE] moqt-devtools の `window.moqtDevTools` が返す Subscriber の統計で、音声の項目を `audio` の下へまとめる
   - `audioObjectsReceived` / `audioChunksDecoded` / `audioPeakDbfs` / `audioRmsDbfs` / `audioLastLevel` / `audioLastVoiceActivity` / `audioPlayoutRebases` / `audioPlayoutDrops` を `audio.objectsReceived` などの入れ子にする。E2E が読む名前が変わるため後方互換はない
   - @voluntas
+- [ADD] moqt-devtools に event timeline のメッセージ送受信を追加する
+  - publisher の catalog に `eventtimeline` トラックを 1 本追加し、Messages の入力から送ったテキストを `{ t: 壁時計, data: { text } }` の entry として送る。メッセージごとに Group を進め、Group の先頭 Object にその時点の履歴 (直近 100 件) を載せる
+  - subscriber は catalog の `packaging: "eventtimeline"` のトラックを購読し、受信した entry を時刻と data の一覧で表示する。audio / video 以外のデータを MSF の枠で送受信する例になる
+  - @voluntas
 - [ADD] moqt-devtools の subscriber が、音声 Object を Subgroup と Datagram のどちらで受けたかを出す
   - 音声の購読に `datagram` callback を登録し、datagram で届いた Object も Subgroup と同じ処理へ流す。統計に `audio.datagramObjectsReceived` を足し、`audio.objectsReceived` との差が Subgroup で届いた数になる
   - 統計の Audio の欄に objects / datagramObjects / chunksDecoded を出す。publisher が datagram を選べたか (relay や経路の都合で Subgroup に落ちていないか) を画面と `window.moqtDevTools` で確かめられる
