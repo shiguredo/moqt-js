@@ -14,6 +14,7 @@ import {
 import type { PublisherAudioCatalogOptions, PublisherVideoCatalogOptions } from "./usePublisher";
 import { getAudioEncoderConfig } from "../../../src/codec/config";
 import { getEncoderConfig } from "../utils/codec";
+import { CHAT_EVENT_TYPE, EVENT_TRACK_NAME } from "../utils/eventTimeline";
 import type { EncodedChunkData } from "../utils/EncoderWrapper";
 import type { CodecType } from "../types";
 import * as pub from "../signals/publisher";
@@ -102,6 +103,10 @@ function resetPublisherSignals(): void {
   pub.pubAudioGroupStarted.value = false;
   pub.lastSentAudioConfig.value = null;
   pub.audioConfigResendRequested.value = false;
+  // event timeline の signal も初期化する (テスト間で状態を持ち越さない)
+  pub.eventPublisher.value = null;
+  pub.eventGroup.value = 0;
+  pub.eventMessagesSent.value = 0;
 }
 
 // ============================================================================
@@ -110,6 +115,7 @@ function resetPublisherSignals(): void {
 
 // Catalog は購読側が Decoder を設定する唯一の情報源であるため、
 // 設定値がトラックの各フィールドに反映されることを固定する。
+// buildPublisherCatalog は event timeline トラックも常に載せるため、role で映像トラックを特定する
 test("buildPublisherCatalog: 設定値が video トラックのフィールドに反映される", () => {
   const catalog = buildPublisherCatalog({
     video: {
@@ -122,12 +128,12 @@ test("buildPublisherCatalog: 設定値が video トラックのフィールド�
     },
   });
 
-  // 映像トラック 1 件だけを持つ full catalog になる
-  assert.equal(catalog.tracks.length, 1);
-  const [track] = catalog.tracks;
+  // 映像トラックと event timeline トラックの 2 件を持つ full catalog になる
+  assert.equal(catalog.tracks.length, 2);
+  const track = catalog.tracks.find((candidate) => candidate.role === "video");
   if (track === undefined) {
-    // 上の length 検証により到達しない (型を絞るためのガード)
-    throw new Error("expected exactly one track");
+    // 上の length 検証と buildPublisherCatalog の実装により到達しない (型を絞るためのガード)
+    throw new Error("expected a video track");
   }
 
   // LOC パッケージングの live な映像トラックとして宣言する (draft-ietf-moq-msf-01 §5.2)
@@ -160,9 +166,9 @@ test("buildPublisherCatalog: codec は getEncoderConfig と同じ対応表から
       },
     });
 
-    const [track] = catalog.tracks;
+    const track = catalog.tracks.find((candidate) => candidate.role === "video");
     if (track === undefined) {
-      throw new Error("expected exactly one track");
+      throw new Error("expected a video track");
     }
 
     // getEncoderConfig の codec 文字列 (vp8 / vp09.00.10.08 / av01.0.04M.08 /
@@ -639,6 +645,30 @@ test("startPublishing: 空のトラック名は接続の前に拒否する", asy
   }
 });
 
+// event timeline トラックの名前と衝突する映像トラック名は、接続の前に拒否する。
+// Node には MediaStreamTrackProcessor が無く音声を広告しないため、映像だけで衝突する
+test("startPublishing: event timeline と同名のトラック名は接続の前に拒否する", async () => {
+  resetPublisherSignals();
+  resetSettingsUsage();
+  resetCatalogSettings();
+  const publisher = usePublisher();
+
+  settings.videoTrackName.value = EVENT_TRACK_NAME;
+  try {
+    await publisher.startPublishing();
+
+    assert.equal(pub.pubStatus.value, "error");
+    assert.match(pub.pubStatusMessage.value, /^Failed: track names must be unique/);
+    assert.isFalse(pub.isStarting.value);
+    // 接続していない (接続の前に検証している)
+    assert.equal(pub.pubSession.value, null);
+    assert.isFalse(settings.settingsDisabled.value);
+  } finally {
+    resetCatalogSettings();
+    resetSettingsUsage();
+  }
+});
+
 // ============================================================================
 // 音声トラックの Catalog 生成
 // ============================================================================
@@ -664,7 +694,7 @@ test("buildPublisherCatalog: 音声を有効にすると audio トラックが�
     },
   });
 
-  assert.equal(catalog.tracks.length, 2);
+  assert.equal(catalog.tracks.length, 3);
   const audioTrack = catalog.tracks.find((track) => track.role === "audio");
   if (audioTrack === undefined) {
     throw new Error("expected an audio track");
@@ -683,7 +713,7 @@ test("buildPublisherCatalog: 音声を有効にすると audio トラックが�
   assert.equal(audioTrack.channelConfig, "2");
 });
 
-test("buildPublisherCatalog: 音声を省略すると映像トラックだけになる", () => {
+test("buildPublisherCatalog: 音声を省略すると映像トラックと event timeline トラックになる", () => {
   const catalog = buildPublisherCatalog({
     video: {
       trackName: "video",
@@ -695,13 +725,17 @@ test("buildPublisherCatalog: 音声を省略すると映像トラックだけに
     },
   });
 
-  assert.equal(catalog.tracks.length, 1);
-  assert.equal(catalog.tracks[0]?.role, "video");
+  assert.equal(catalog.tracks.length, 2);
+  assert.deepEqual(
+    catalog.tracks.map((track) => track.role),
+    ["video", "eventtimeline"],
+  );
+  assert.equal(catalog.tracks[0]?.name, "video");
 });
 
 // 映像の入力が None のときは、音声トラックだけを載せる (MSF の catalog は映像トラックを
 // 必須としない)。購読側は映像トラックの無い catalog を音声だけで購読する
-test("buildPublisherCatalog: 映像を省略すると音声トラックだけになる", () => {
+test("buildPublisherCatalog: 映像を省略すると音声トラックと event timeline トラックになる", () => {
   const catalog = buildPublisherCatalog({
     audio: {
       trackName: "audio",
@@ -712,8 +746,11 @@ test("buildPublisherCatalog: 映像を省略すると音声トラックだけに
     },
   });
 
-  assert.equal(catalog.tracks.length, 1);
-  assert.equal(catalog.tracks[0]?.role, "audio");
+  assert.equal(catalog.tracks.length, 2);
+  assert.deepEqual(
+    catalog.tracks.map((track) => track.role),
+    ["audio", "eventtimeline"],
+  );
   assert.equal(catalog.tracks[0]?.name, "audio");
 });
 
@@ -747,17 +784,18 @@ test("buildPublisherCatalog: AAC の codec 文字列も Encoder 設定と一致�
 });
 
 // トラック名は設定から渡す。相手の実装に合わせて変えられるようにし、既定は
-// ライブラリの DEFAULT_VIDEO_TRACK_NAME / DEFAULT_AUDIO_TRACK_NAME と同じにする
+// ライブラリの DEFAULT_VIDEO_TRACK_NAME / DEFAULT_AUDIO_TRACK_NAME と同じにする。
+// event timeline トラックの名前は devtools の固定値 (utils/eventTimeline.ts)
 test("buildPublisherCatalog: トラック名は設定の値がそのまま載る", () => {
   const catalog = buildPublisherCatalog({
     video: { ...makeVideoCatalogOptions(), trackName: "cam" },
     audio: { ...makeAudioCatalogOptions(), trackName: "mic" },
   });
 
-  // 並びは Audio → Video (画面の Tracks カードと同じ)
+  // 並びは Audio → Video → event timeline (画面の Tracks カードと同じ)
   assert.deepEqual(
     catalog.tracks.map((track) => track.name),
-    ["mic", "cam"],
+    ["mic", "cam", EVENT_TRACK_NAME],
   );
 });
 
@@ -783,9 +821,60 @@ test("buildPublisherCatalog: 空名と同名のトラック名を拒否する", 
     /track names must be unique per namespace per draft-ietf-moq-msf-01 §5\.2\.3/,
   );
 
-  // 1 トラックだけの catalog は同名の問題が起きない
+  // event timeline トラックの名前と衝突するメディアのトラック名も拒否する
+  assert.throws(
+    () =>
+      buildPublisherCatalog({
+        video: { ...makeVideoCatalogOptions(), trackName: EVENT_TRACK_NAME },
+      }),
+    /track names must be unique per namespace per draft-ietf-moq-msf-01 §5\.2\.3/,
+  );
+
+  // 1 トラックだけの catalog は同名の問題が起きない (event timeline トラックは常に載る)
   const audioOnly = buildPublisherCatalog({ audio: makeAudioCatalogOptions() });
-  assert.equal(audioOnly.tracks.length, 1);
+  assert.equal(audioOnly.tracks.length, 2);
+});
+
+// ============================================================================
+// event timeline トラック (draft-ietf-moq-msf-01 §5.2.5 / §8.2)
+// ============================================================================
+
+// audio / video 以外のデータを流す例として、event timeline トラックを常に 1 本載せる。
+// packaging / role / mimeType / eventType は §5.2.5 / §8.2 の MUST を満たす
+test("buildPublisherCatalog: event timeline トラックを常に 1 本載せる", () => {
+  const catalog = buildPublisherCatalog({
+    video: makeVideoCatalogOptions(),
+    audio: makeAudioCatalogOptions(),
+  });
+
+  const eventTracks = catalog.tracks.filter((track) => track.packaging === "eventtimeline");
+  assert.equal(eventTracks.length, 1);
+  const eventTrack = eventTracks[0];
+  if (eventTrack === undefined) {
+    // 上の length 検証により到達しない (型を絞るためのガード)
+    throw new Error("expected an event timeline track");
+  }
+  assert.equal(eventTrack.name, EVENT_TRACK_NAME);
+  assert.equal(eventTrack.role, "eventtimeline");
+  assert.equal(eventTrack.isLive, true);
+  assert.equal(eventTrack.eventType, CHAT_EVENT_TYPE);
+  assert.equal(eventTrack.mimeType, "application/json");
+  // depends は event timeline が対応するメディアのトラック名 (§8.2)
+  assert.deepEqual(eventTrack.depends, ["audio", "video"]);
+});
+
+// depends は同時に配信するメディアトラックだけを載せる (§8.2)。
+// 映像だけ / 音声だけの配信では、そのトラック名だけになる
+test("buildPublisherCatalog: event timeline の depends は配信するメディアトラックだけになる", () => {
+  const videoOnly = buildPublisherCatalog({ video: makeVideoCatalogOptions() });
+  assert.deepEqual(videoOnly.tracks.find((track) => track.packaging === "eventtimeline")?.depends, [
+    "video",
+  ]);
+
+  const audioOnly = buildPublisherCatalog({ audio: makeAudioCatalogOptions() });
+  assert.deepEqual(audioOnly.tracks.find((track) => track.packaging === "eventtimeline")?.depends, [
+    "audio",
+  ]);
 });
 
 // ============================================================================
@@ -827,13 +916,18 @@ test("buildPublisherCatalog: targetLatency と renderGroup を音声と映像の
 
   assert.deepEqual(
     catalog.tracks.map((track) => track.role),
-    // 画面 (Tracks カード) が Audio → Video の順に並べるため、catalog も同じ順に積む
-    ["audio", "video"],
+    // 画面 (Tracks カード) が Audio → Video の順に並べるため、catalog も同じ順に積む。
+    // event timeline はメディアを描画しないため末尾に積む
+    ["audio", "video", "eventtimeline"],
   );
-  for (const track of catalog.tracks) {
+  for (const track of catalog.tracks.filter((candidate) => candidate.role !== "eventtimeline")) {
     assert.equal(track.targetLatency, 100);
     assert.equal(track.renderGroup, 1);
   }
+  // event timeline トラックには targetLatency / renderGroup を載せない
+  const eventTrack = catalog.tracks.find((track) => track.role === "eventtimeline");
+  assert.isUndefined(eventTrack?.targetLatency);
+  assert.isUndefined(eventTrack?.renderGroup);
 
   // 送信したバイト列を購読側が読み戻しても値が残る
   const decoded = decodeCatalogMessage(encodeCatalog(catalog));
@@ -885,10 +979,9 @@ test("buildPublisherCatalog: renderGroup の非有限値と非整数を拒否し
   );
 
   const catalog = buildPublisherCatalog({ video: makeVideoCatalogOptions(), renderGroup: 0 });
-  assert.equal(catalog.tracks.length, 1);
-  for (const track of catalog.tracks) {
-    assert.equal(track.renderGroup, 0);
-  }
+  assert.equal(catalog.tracks.length, 2);
+  const videoTrack = catalog.tracks.find((track) => track.role === "video");
+  assert.equal(videoTrack?.renderGroup, 0);
 });
 
 // buildPublisherCatalog への配線は接続を要する startPublishing を経由するため単体テストで
@@ -931,9 +1024,9 @@ test("buildPublisherCatalogOptions: targetLatency と renderGroup の 0 は未�
   assert.equal(options.targetLatency, 0);
   assert.equal(options.renderGroup, 0);
 
-  // 残した値がそのまま両方の track に載る
+  // 残した値がそのまま映像と音声の track に載る (event timeline には載せない)
   const catalog = buildPublisherCatalog(options);
-  for (const track of catalog.tracks) {
+  for (const track of catalog.tracks.filter((candidate) => candidate.role !== "eventtimeline")) {
     assert.equal(track.targetLatency, 0);
     assert.equal(track.renderGroup, 0);
   }
@@ -1020,10 +1113,10 @@ test("buildPublisherCatalogOptionsFromSettings: 0 のときは未指定と区別
     assert.equal(options.targetLatency, 0);
     assert.equal(options.renderGroup, 0);
 
-    // 残した値がそのまま音声と映像の両方の track に載る
+    // 残した値がそのまま映像と音声の両方の track に載る
     const catalog = buildPublisherCatalog(options);
-    assert.equal(catalog.tracks.length, 2);
-    for (const track of catalog.tracks) {
+    assert.equal(catalog.tracks.length, 3);
+    for (const track of catalog.tracks.filter((candidate) => candidate.role !== "eventtimeline")) {
       assert.equal(track.targetLatency, 0);
       assert.equal(track.renderGroup, 0);
     }
@@ -1046,8 +1139,8 @@ test("buildPublisherCatalogOptionsFromSettings: 指定した 100 ms と renderGr
     assert.equal(options.renderGroup, 1);
 
     const catalog = buildPublisherCatalog(options);
-    assert.equal(catalog.tracks.length, 2);
-    for (const track of catalog.tracks) {
+    assert.equal(catalog.tracks.length, 3);
+    for (const track of catalog.tracks.filter((candidate) => candidate.role !== "eventtimeline")) {
       assert.equal(track.targetLatency, 100);
       assert.equal(track.renderGroup, 1);
     }

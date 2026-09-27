@@ -4,12 +4,14 @@ import {
   CATALOG_TRACK_NAME,
   createCatalog,
   encodeCatalog,
+  encodeEventTimeline,
   createCompleteCatalog,
   createVideoFrameSource,
   isMediaStreamTrackProcessorAvailable,
   type Catalog,
   type CatalogTrack,
   type DebugMessage,
+  type EventTimelineEntry,
   type Publisher,
   type Session,
 } from "moqt-js";
@@ -51,6 +53,12 @@ import {
   catalogRepublishIntervalMs,
 } from "../utils/catalogRepublish";
 import { shouldSendAudioAsDatagram } from "../utils/audioDelivery";
+import {
+  appendChatEventEntry,
+  buildChatEventEntry,
+  CHAT_EVENT_TYPE,
+  EVENT_TRACK_NAME,
+} from "../utils/eventTimeline";
 import {
   assertTrackNames,
   resolveAudioAdvertisement,
@@ -228,7 +236,7 @@ export function buildPublisherCatalogOptionsFromSettings(
 }
 
 /**
- * 配信する映像トラックと音声トラックの Catalog を組み立てる
+ * 配信する映像トラックと音声トラック、event timeline トラックの Catalog を組み立てる
  *
  * draft-ietf-moq-msf-01 §5.1 の full catalog を生成する。映像トラックと音声トラックは
  * どちらか一方だけでもよい (catalog は映像トラックを必須としない)。どちらも無い catalog は
@@ -250,8 +258,14 @@ export function buildPublisherCatalogOptionsFromSettings(
  * 指定した値は有限数であること (renderGroup はさらに整数であること) を検証し、
  * そうでなければ throw する。非有限値は JSON で null になり、購読側が復号できなくなる。
  *
- * トラックは音声 → 映像の順に積む。画面 (Tracks カード) が音声と映像をこの順に並べるため、
- * catalog をそのまま表示する Catalog パネルと並びを揃える。配列の順序に仕様上の意味は無い。
+ * event timeline トラックは audio / video 以外のデータを流す例として常に 1 本載せる。
+ * packaging / role / mimeType / eventType は §5.2.5 / §8.2 の MUST を満たし、depends には
+ * 同時に配信するメディアトラック名をすべて載せる。targetLatency / renderGroup は
+ * メディアを描画するトラックではないため載せない。
+ *
+ * トラックは音声 → 映像 → event timeline の順に積む。画面 (Tracks カード) が音声と
+ * 映像をこの順に並べるため、catalog をそのまま表示する Catalog パネルと並びを揃える。
+ * 配列の順序に仕様上の意味は無い。
  * トラック名は空でなく、互いに異なることを検証する (§5.2.3)。
  *
  * ブラウザ API に依存しないため、送信した Catalog の内容はここで検証できる。
@@ -308,6 +322,20 @@ export function buildPublisherCatalog(options: PublisherCatalogOptions): Catalog
   if (tracks.length === 0) {
     throw new Error("no track to publish: both video and audio are absent");
   }
+
+  // event timeline トラック (§5.2.5 / §8.2)。depends は event timeline が対応する
+  // メディアトラック名で、ここでは上で積んだ audio / video の名前をそのまま使う
+  const depends = tracks.map((track) => track.name);
+  tracks.push({
+    name: EVENT_TRACK_NAME,
+    packaging: "eventtimeline",
+    isLive: true,
+    role: "eventtimeline",
+    eventType: CHAT_EVENT_TYPE,
+    mimeType: "application/json",
+    depends,
+  });
+
   // 空名と同名は購読側の catalog の検証 (decodeCatalogMessage) で初めて分かる。
   // 自分の catalog を自分で復号できなくなるため、送る前に拒否する
   // (draft-ietf-moq-msf-01 §5.2.3: name は Required、namespace ごとに一意 MUST)
@@ -1211,6 +1239,9 @@ export function usePublisher() {
   // WT-H2 で Datagram を選んだときの警告は、配信ごとに 1 回だけ出す
   let loggedAudioDatagramFallback = false;
 
+  // event timeline に載せる履歴。配信を始めるたびに空にする (draft-ietf-moq-msf-01 §8.3)
+  let eventHistory: EventTimelineEntry[] = [];
+
   function handleAudioEncodedChunk(chunk: AudioEncodedChunkData): void {
     const audioPublisherInstance = pub.audioPublisher.value;
     if (!audioPublisherInstance || audioPublisherInstance.state !== "active") return;
@@ -1318,6 +1349,68 @@ export function usePublisher() {
     });
   };
 
+  /**
+   * event timeline トラックを publish する
+   *
+   * catalog が広告する event timeline トラックを実際に publish する。devtools は
+   * audio / video 以外のデータを流す例としてここにチャットのメッセージを送る。
+   * 失敗しても catalog には載っているため、購読側は購読を始められる (保留になる)
+   */
+  async function startEventPublishing(
+    session: Session,
+    namespaceArray: string[],
+    maxCacheDuration: number,
+  ): Promise<void> {
+    const eventPublisherInstance = await session.publish(
+      namespaceArray,
+      EVENT_TRACK_NAME,
+      {
+        error: (error) => {
+          console.error("Event timeline publisher error:", error);
+          addLog("error", "[publisher] event timeline publish error", {
+            message: error.message,
+          });
+        },
+      },
+      {
+        maxCacheDuration: BigInt(maxCacheDuration),
+      },
+    );
+    pub.eventPublisher.value = eventPublisherInstance;
+  }
+
+  /**
+   * event timeline にチャットのメッセージを 1 件送る
+   *
+   * draft-ietf-moq-msf-01 §8.3: Group の先頭 Object には、それまでに蓄積されアクセス
+   * 可能な全レコードを載せなければならない (MUST)。devtools はメッセージごとに新しい
+   * Group を始め、Object ID 0 にその時点の履歴 (直近 EVENT_HISTORY_LIMIT 件) を載せる。
+   * 後から購読を始めた相手も、直近の Group の先頭 Object から履歴を受け取れる
+   */
+  const sendEventMessage = async (text: string): Promise<void> => {
+    const eventPublisherInstance = pub.eventPublisher.value;
+    if (!eventPublisherInstance || eventPublisherInstance.state !== "active") return;
+    if (text.length === 0) return;
+
+    eventHistory = appendChatEventEntry(eventHistory, buildChatEventEntry(text, Date.now()));
+    const groupId = pub.eventGroup.value + 1;
+    pub.eventGroup.value = groupId;
+    try {
+      await eventPublisherInstance.sendObject({
+        groupId,
+        objectId: 0,
+        payload: encodeEventTimeline(eventHistory),
+      });
+      pub.eventMessagesSent.value++;
+    } catch (error) {
+      // 送信に失敗しても配信そのものは続ける。呼び出し側は void で呼ぶため、
+      // ここで受け止めてログに残す (unhandled rejection にしない)
+      addLog("error", "[publisher] failed to send event timeline message", {
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  };
+
   const startPublishing = async (): Promise<void> => {
     // 配信を始めている途中として扱う (pub.isStarting)。connect を待つ間に Subscriber を
     // 止めても、接続設定の入力を有効に戻さない
@@ -1364,6 +1457,9 @@ export function usePublisher() {
       ) {
         advertisedTrackNames.push(audioTrackNameValue);
       }
+      // event timeline トラックは配信の有無にかかわらず常に広告する。メディアの
+      // トラック名との衝突 (同名) もここで拒否する
+      advertisedTrackNames.push(EVENT_TRACK_NAME);
       assertTrackNames(advertisedTrackNames);
 
       // 接続オプションを組み立てる
@@ -1517,6 +1613,16 @@ export function usePublisher() {
           audioOnly: videoInput === null,
         });
       }
+
+      // event timeline トラックを配信する。メディアの配信を壊さないよう、失敗しても
+      // 警告に留める (catalog には載っているため、購読側は購読を保留にできる)
+      try {
+        await startEventPublishing(session, namespaceArray, maxCacheDurationValue);
+      } catch (error) {
+        addLog("warn", "[publisher] failed to publish event timeline track", {
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
       if (videoInput === null) {
         // 映像の統計 (符号化と送信の時間など) は前の配信のものを持ち越さない
         resetVideoPublishState();
@@ -1544,6 +1650,11 @@ export function usePublisher() {
       // 直前に送った Audio Config と送り直し要求は配信ごとに忘れる
       pub.lastSentAudioConfig.value = null;
       pub.audioConfigResendRequested.value = false;
+      // event timeline の履歴と Group ID も配信ごとに初期化する。Group ID は音声と
+      // 同じく単調ガード付きの割り当てを使い、再開時の単調性を守る (§6.1)
+      eventHistory = [];
+      pub.eventGroup.value = allocateInitialGroupId();
+      pub.eventMessagesSent.value = 0;
 
       // フレームを読み出してエンコードする
       if (videoInput !== null) {
@@ -1603,6 +1714,10 @@ export function usePublisher() {
 
       if (pub.audioPublisher.value && pub.audioPublisher.value.state === "active") {
         await pub.audioPublisher.value.done();
+      }
+
+      if (pub.eventPublisher.value && pub.eventPublisher.value.state === "active") {
+        await pub.eventPublisher.value.done();
       }
     } finally {
       cleanupPublisher();
@@ -1667,6 +1782,7 @@ export function usePublisher() {
 
     pub.publisher.value = null;
     pub.audioPublisher.value = null;
+    pub.eventPublisher.value = null;
     pub.catalogPublisher.value = null;
     pub.catalog.value = null;
     // catalogGroup は次回の startPublishing が Date.now() で設定し直す。
@@ -1691,5 +1807,6 @@ export function usePublisher() {
     togglePreview,
     startPublishing,
     stopPublishing,
+    sendEventMessage,
   };
 }

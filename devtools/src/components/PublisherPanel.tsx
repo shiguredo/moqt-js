@@ -7,6 +7,7 @@ import { formatBytes } from "../utils/logFormatters";
 import { AudioMeter } from "./AudioMeter";
 import { HttpVersionBadge } from "./HttpVersionBadge";
 import { CatalogTracks } from "./CatalogTracks";
+import { MessageComposer } from "./MessageComposer";
 import { PANEL_OPTION_ROW_CLASS } from "./panelLayout";
 import * as pub from "../signals/publisher";
 
@@ -20,7 +21,7 @@ function formatForwardState(forwardState: boolean | null): string {
 
 export function PublisherPanel() {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const { togglePreview, startPublishing, stopPublishing } = usePublisher();
+  const { togglePreview, startPublishing, stopPublishing, sendEventMessage } = usePublisher();
 
   // mediaStream の変化に追従して video 要素の srcObject を更新する
   useSignalEffect(() => {
@@ -193,6 +194,13 @@ export function PublisherPanel() {
           active={pub.audioStream.value !== null}
           levelActive={pub.audioPublisher.value !== null}
           testIdPrefix="publisher-audio"
+        />
+
+        {/* event timeline のメッセージ入力。audio / video 以外を送る例 */}
+        <MessageComposer
+          disabled={pub.eventPublisher.value === null}
+          onSend={(text) => void sendEventMessage(text)}
+          sentCount={pub.eventMessagesSent.value}
         />
 
         {/* Catalog。catalog を受け取る前も描き、値を「-」にする */}

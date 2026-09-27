@@ -13,6 +13,8 @@ import {
   chunksEncoded,
   encodeErrors,
   encoderState,
+  eventMessagesSent,
+  eventPublisher,
   forwardState,
   framesEncoded,
   httpVersion,
@@ -108,6 +110,14 @@ export interface PublisherAudioStats {
   lastSentVoiceActivity: boolean | null;
 }
 
+/** Publisher の event timeline の状態 */
+export interface PublisherEventStats {
+  /** event timeline トラックの PUBLISH が確立しているか */
+  publishing: boolean;
+  /** event timeline に送ったメッセージの数 */
+  messagesSent: number;
+}
+
 /** Publisher の統計 */
 export interface PublisherStats {
   status: StatusType;
@@ -135,6 +145,8 @@ export interface PublisherStats {
   /** 符号化 (読んでから encoder の出力まで) と送信 (出力から sendObject の完了まで) の時間 */
   publishTiming: PublishTimingSnapshot;
   audio: PublisherAudioStats;
+  /** event timeline (audio / video 以外のデータ) の状態 */
+  event: PublisherEventStats;
   /** 制御ストリームとデータストリームの統計。未接続のときは null */
   sessionStatistics: SessionStatistics | null;
   /** 送信している Catalog (bigint は文字列)。まだ送っていないときは null */
@@ -276,6 +288,10 @@ export function buildPublisherStats(): PublisherStats {
       meterRmsDbfs: audioMeterRmsDbfs.value,
       lastSentLevel: audioLevel?.level ?? null,
       lastSentVoiceActivity: audioLevel?.voiceActivity ?? null,
+    },
+    event: {
+      publishing: eventPublisher.value !== null,
+      messagesSent: eventMessagesSent.value,
     },
     sessionStatistics: session === null ? null : session.getStatistics(),
     catalog: catalog.value === null ? null : toJsonValue(catalog.value),

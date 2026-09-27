@@ -251,6 +251,22 @@ test("buildPublisherStats: 配信前は既定値を返す", () => {
   assert.equal(stats.audio.publishing, false);
   assert.equal(stats.audio.lastSentLevel, null);
   assert.equal(stats.audio.lastSentVoiceActivity, null);
+  // event timeline もまだ無い
+  assert.equal(stats.event.publishing, false);
+  assert.equal(stats.event.messagesSent, 0);
+});
+
+test("buildPublisherStats: event timeline に送ったメッセージの数を返す", () => {
+  // 配信していない状態では実体を作れないため、送信数の signal だけを差し替えて写像を固定する
+  const previousSent = pub.eventMessagesSent.value;
+  pub.eventMessagesSent.value = 3;
+  try {
+    const stats = buildPublisherStats();
+    assert.equal(stats.event.publishing, false);
+    assert.equal(stats.event.messagesSent, 3);
+  } finally {
+    pub.eventMessagesSent.value = previousSent;
+  }
 });
 
 test("buildPublisherStats: 符号化と送信の累積、状態、音声のメーターを返す", () => {
