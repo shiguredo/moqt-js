@@ -1,7 +1,7 @@
 # moqt-devtools に eventtimeline のメッセージ送受信を追加する
 
 - Created: 2026-09-27
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-27
 - Branch: feature/add-devtools-eventtimeline-messages
 - Polished: {YYYY-MM-DD}
 
@@ -37,3 +37,13 @@ moqt-devtools は audio / video の publish / subscribe しか扱えず、MSF �
 - `buildPublisherCatalog` と新規純関数の単体テスト、メッセージ UI の Playwright E2E が通る
 - `CHANGES.md` の `## develop` に `[ADD]` で載る
 - `vp check` / `tsc --noEmit` / `vp test run` / 既存の Playwright の E2E が通る
+
+## 解決方法
+
+- `devtools/src/utils/eventTimeline.ts` にトラック名 (`events`)、eventType (`com.shiguredo.moqtdevtools.chat`)、entry の生成、履歴の追記 (上限 100 件)、表示用の整形を置いた
+- `buildPublisherCatalog` が audio / video に加えて eventtimeline トラックを載せるようにした。depends は同時に配信するメディアトラック名、mimeType は `application/json`、role は `eventtimeline` とした (draft-ietf-moq-msf-01 §5.2.5 / §8.2)
+- publisher は `sendEventMessage` でメッセージごとに新しい Group を開始し、Object ID 0 にその時点の履歴を載せる (§8.3)。PublisherPanel に Messages カードを追加した
+- subscriber は `resolveEventTimelineTrack` で catalog の eventtimeline トラックを選び、`decodeEventTimeline` の結果を SubscriberPanel の Messages カードに表示する
+- `window.moqtDevTools` と Copy for LLM の統計に event timeline の状態と受信メッセージを足した
+- 単体テストと `tests/e2e/devtools-event-timeline.spec.ts` を追加し、`CHANGES.md` の `## develop` に `[ADD]` を記載した
+- 実リレー経由の publish → subscribe は未確認 (リポジトリの E2E は実リレーを起動しない構成)
