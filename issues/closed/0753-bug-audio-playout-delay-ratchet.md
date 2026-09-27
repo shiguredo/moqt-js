@@ -1,7 +1,7 @@
 # 受信した音声の再生の遅れが、遅れて届いた音の後に上がったまま戻らない
 
 - Created: 2026-09-25
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-28
 - Branch: feature/fix-audio-playout-delay-ratchet
 - Polished: {YYYY-MM-DD}
 - Reporter: @voluntas
@@ -31,3 +31,12 @@
 - 単体テストと fast-check で戻り方を固定する
 - `CHANGES.md` の `## develop` に `[FIX]` で載る
 - `vp check` / `tsc --noEmit` / `vp test run` / 既存の Playwright の E2E が通る
+
+## 解決方法
+
+closed の `0635` (音声と映像を LOC Timestamp と targetLatency で同期して再生する、Completed: 2026-09-26) で解決済みのため、対応不要として closed にする。根拠は次のとおり。
+
+- 報告したメカニズム (鳴らす時刻を過ぎて届いた音での基準の取り直しによる遅れのラチェット) は 0635 で廃止された。`src/audioPlayout.ts` の `AudioPlayoutScheduler.schedule` は、目標の開始時刻を守るとき (`src/createMediaSubscriber.ts` は映像も購読しているときだけ `enforceTarget` を true にし、moqt-devtools の購読側 (`devtools/src/hooks/useSubscriber.ts`) も同じ) は目標を過ぎた音を捨て、基準を取り直さない (捨てた分は 1 フレームで、次の音から目標へ戻る)。基準の取り直し (`scheduleByArrival`) を使うのは到着基準の経路 (音声のみの購読、壁時計の TIMESTAMP を持たない音、jitter buffer 無効、0754 の TIMESTAMP のドリフトによるフォールバック) だけである
+- 「少しずつ目標へ戻す」は `src/playbackTimeline.ts` に実装されている。共有の再生遅延は `PLAYBACK_DELAY_DECAY_MS_PER_SECOND` (毎秒 20 ms) で目標へ戻され (`observe`)、上がったときは直ちに追従する。`src/playbackTimeline.test.ts` の「観測する: 再生遅延を毎秒 PLAYBACK_DELAY_DECAY_MS_PER_SECOND ずつ下げる」と `src/playbackTimeline.prop.ts` で固定されている。この「毎秒 20 ms ずつ戻す作り」は本 issue の設計方針が参考に挙げた jitter buffer の仕組みであり、参照先の `devtools/src/utils/playoutBuffer.ts` は closed の 0762 で `src/playoutBuffer.ts` へ移り、学習は 0635 で `src/playbackTimeline.ts` へ移っている (参照先は現存しない)
+- 0635 の実装順に「0753 は本 issue で音声の再生の遅れが共有の値になり、基準の取り直しもやめるため前提が変わる。本 issue を完了後に『共有の再生遅延を目標へ戻す』問題として作り直す」とある。作り直し先の「共有の再生遅延を目標へ戻す」も上記の減衰で満たされているため、本 issue に対応が残っていない
+- 本 issue の 2026-09-25 の実測は 0635 より前の到着基準の実装に対するもので、現行実装では計算の前提が変わっている。実機での連続再生の確認は closed の 0636 の「実機での確認」節 (relay で 120 秒、±50 ms) に引き継がれており、送り側の TIMESTAMP のドリフト (到着基準へのフォールバックと取り直しの続発) は 0754 が持つため、本 issue とは別の原因である
