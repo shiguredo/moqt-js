@@ -1,7 +1,7 @@
 # vp up 後に pnpm-workspace.yaml の overrides が古く、CI の build と e2e が失敗する
 
 - Created: 2026-09-27
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-27
 - Branch: feature/add-devtools-eventtimeline-messages
 - Polished: {YYYY-MM-DD}
 
@@ -32,3 +32,10 @@ develop の CI が `build` と `e2e` で失敗しており、以降の PR がす
 
 - `vp run build` と `vp run e2e-test` が通る
 - develop の CI (`lint` / `build` / `typecheck` / `e2e`) が pass する
+
+## 解決方法
+
+- `pnpm-workspace.yaml` の `overrides` を `vite: npm:@voidzero-dev/vite-plus-core@1.0.0-rc.1` と `"@voidzero-dev/vite-plus-core": 1.0.0-rc.1` に揃えた
+- `vp install` で `pnpm-lock.yaml` を再生成し、vite-plus 1.0.0-rc.1 の `vite` が 1.0.0-rc.1 に解決されることを確認した
+- ローカルで `vp check` / `tsc --noEmit` / `vp test run` / `vp run e2e-test` が通ることを確認した
+- PR #406 の CI を通すため、0768 の作業ブランチに含めて対応した
