@@ -197,6 +197,8 @@ const SUBSCRIBER_COVERAGE: CoverageExpectation = {
     audioSubscriber: "音声の Subscriber の実体。状態は audio.decoderConfigured などに出す",
     audioDecoder: "音声のデコーダの実体。状態は audio.decoderConfigured に出す",
     audioWaveform: "波形の配列は大きく、コピーする統計ではない",
+    eventSubscriber:
+      "event timeline の Subscriber の実体。受信したメッセージは eventMessages に出す",
   },
 };
 

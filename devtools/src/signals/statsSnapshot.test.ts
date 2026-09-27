@@ -185,6 +185,25 @@ test("buildSubscriberStats: Largest Location の bigint を文字列にする", 
   assert.equal(buildSubscriberStats(instance).largestLocation, null);
 });
 
+test("buildSubscriberStats: event timeline のメッセージを JSON にできる形で返す", () => {
+  // audio / video 以外のデータ (draft-ietf-moq-msf-01 §8) として受信した entry を
+  // そのまま返す。Location の bigint は Largest Location と同じく文字列にする
+  const instance = createSubscriberInstance("event-messages");
+  instance.eventMessages.value = [
+    { t: 1000, data: { text: "hello" } },
+    { l: [12n, 0n], data: { text: "linked" } },
+  ];
+
+  const stats = buildSubscriberStats(instance);
+
+  assert.deepEqual(stats.eventMessages, [
+    { t: 1000, data: { text: "hello" } },
+    { l: ["12", "0"], data: { text: "linked" } },
+  ]);
+  // スナップショット全体も JSON にできる (テスト用 API から取り出す前提)
+  assert.isString(JSON.stringify(stats));
+});
+
 test("buildSubscriberStats: Session と Catalog が無いときは null を返す", () => {
   // 未購読では getStatistics() を呼べないため null にする。コピー本文の整形は
   // null を "-" として出す

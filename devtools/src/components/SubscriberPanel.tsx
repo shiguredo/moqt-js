@@ -21,6 +21,7 @@ import {
 } from "./statsHelp";
 import { formatBytes } from "../utils/logFormatters";
 import { CatalogTracks } from "./CatalogTracks";
+import { MessageList } from "./MessageList";
 import { PANEL_OPTION_ROW_CLASS } from "./panelLayout";
 import { formatLossEvent, formatStallEvent } from "../utils/playbackTimingStats";
 import { LATENCY_SEGMENTS } from "../utils/latencyBreakdown";
@@ -311,6 +312,9 @@ export function SubscriberPanel({
 
         {/* 受信した音声の再生先。表示せず、srcObject の設定先としてだけ使う */}
         <audio ref={audioRef} data-testid="subscriber-audio-element" class="hidden" />
+
+        {/* 受信した event timeline のメッセージ。audio / video 以外のデータ */}
+        <MessageList entries={instance.eventMessages.value} testId="subscriber-messages" />
 
         {/* Catalog。catalog を受け取る前も描き、値を「-」にする */}
         <CatalogTracks tracks={catalog?.tracks ?? []} tone="blue" testId="subscriber-catalog" />

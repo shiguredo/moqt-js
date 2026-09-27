@@ -1,5 +1,5 @@
 import { signal, computed, type Signal, type ReadonlySignal } from "@preact/signals";
-import type { LOC, Session, Subscriber, Catalog } from "moqt-js";
+import type { LOC, Session, Subscriber, Catalog, EventTimelineEntry } from "moqt-js";
 import type { PanelHttpVersion } from "../utils/httpVersion";
 import type { StatusType } from "../types";
 import type { DecoderWrapper } from "../utils/DecoderWrapper";
@@ -138,6 +138,11 @@ export interface SubscriberInstance {
   audioRmsDbfs: Signal<number | null>;
   // 直近 100 ms の波形 (第 1 チャンネル)。まだ復号していない状態は null
   audioWaveform: Signal<Float32Array | null>;
+  // event timeline トラックの購読 (catalog に eventtimeline トラックが無いときは null)
+  eventSubscriber: Signal<Subscriber | null>;
+  // 受信した event timeline の entry。devtools publisher は Group の先頭 Object に
+  // その時点の全履歴を載せるため、受信のたびに置き換える (draft-ietf-moq-msf-01 §8.3)
+  eventMessages: Signal<EventTimelineEntry[]>;
 }
 
 /**
@@ -193,6 +198,8 @@ export function createSubscriberInstance(id: string): SubscriberInstance {
     audioPeakDbfs: signal<number | null>(null),
     audioRmsDbfs: signal<number | null>(null),
     audioWaveform: signal<Float32Array | null>(null),
+    eventSubscriber: signal<Subscriber | null>(null),
+    eventMessages: signal<EventTimelineEntry[]>([]),
   };
 }
 
