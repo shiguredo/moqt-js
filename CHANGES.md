@@ -2109,6 +2109,13 @@
   - 描かなかったフレーム数を `catchUpFramesSkipped`、鳴らさなかった音声 Object 数を `audio.catchUpObjectsSkipped` として画面と `window.moqtDevTools` に出し、追いつくまで画面に「Catching up」を出す
   - @voluntas
 
+### misc
+
+- [UPDATE] pnpm-workspace.yaml の overrides を vite-plus 1.0.0-rc.1 に揃える
+  - `vp up` で `package.json` の `vite-plus` を 1.0.0-rc.1 に上げた際、`pnpm-workspace.yaml` の `overrides` が 0.3.3 のままだったため、vite-plus 1.0.0-rc.1 が解決する `vite` が 0.3.3 になり `vp run build` が失敗していた
+  - `vite` と `@voidzero-dev/vite-plus-core` の override を 1.0.0-rc.1 に揃え、`pnpm-lock.yaml` を再生成する。ライブラリの挙動に変更はない
+  - @voluntas
+
 ## 2026.2.0
 
 **リリース日**: 2026-05-13
