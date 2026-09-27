@@ -3,7 +3,7 @@
 - Created: 2026-09-25
 - Completed: {YYYY-MM-DD}
 - Branch: feature/fix-audio-timestamp-drift
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-09-27
 - Reporter: @voluntas
 
 ## 目的
