@@ -13,6 +13,8 @@ import {
   chunksEncoded,
   encodeErrors,
   encoderState,
+  eventMessagesSent,
+  eventPublisher,
   forwardState,
   framesEncoded,
   httpVersion,
@@ -108,6 +110,14 @@ export interface PublisherAudioStats {
   lastSentVoiceActivity: boolean | null;
 }
 
+/** Publisher の event timeline の状態 */
+export interface PublisherEventStats {
+  /** event timeline トラックの PUBLISH が確立しているか */
+  publishing: boolean;
+  /** event timeline に送ったメッセージの数 */
+  messagesSent: number;
+}
+
 /** Publisher の統計 */
 export interface PublisherStats {
   status: StatusType;
@@ -135,6 +145,8 @@ export interface PublisherStats {
   /** 符号化 (読んでから encoder の出力まで) と送信 (出力から sendObject の完了まで) の時間 */
   publishTiming: PublishTimingSnapshot;
   audio: PublisherAudioStats;
+  /** event timeline (audio / video 以外のデータ) の状態 */
+  event: PublisherEventStats;
   /** 制御ストリームとデータストリームの統計。未接続のときは null */
   sessionStatistics: SessionStatistics | null;
   /** 送信している Catalog (bigint は文字列)。まだ送っていないときは null */
@@ -232,6 +244,13 @@ export interface SubscriberStats {
    */
   avSync: AvSyncSnapshot;
   audio: SubscriberAudioStats;
+  /**
+   * 受信した event timeline の entry (audio / video 以外のデータ)
+   *
+   * data の構造は catalog の eventType が定義する (draft-ietf-moq-msf-01 §5.2.5)。
+   * bigint は文字列にして、JSON として取り出せる形で持つ
+   */
+  eventMessages: JsonValue;
   /** 最大の Location */
   largestLocation: { group: string; object: string } | null;
   /** 制御ストリームとデータストリームの統計。未接続のときは null */
@@ -269,6 +288,10 @@ export function buildPublisherStats(): PublisherStats {
       meterRmsDbfs: audioMeterRmsDbfs.value,
       lastSentLevel: audioLevel?.level ?? null,
       lastSentVoiceActivity: audioLevel?.voiceActivity ?? null,
+    },
+    event: {
+      publishing: eventPublisher.value !== null,
+      messagesSent: eventMessagesSent.value,
     },
     sessionStatistics: session === null ? null : session.getStatistics(),
     catalog: catalog.value === null ? null : toJsonValue(catalog.value),
@@ -339,6 +362,7 @@ export function buildSubscriberStats(sub: SubscriberInstance): SubscriberStats {
       playoutRebases: sub.audioPlayoutRebases.value,
       playoutDrops: sub.audioPlayoutDrops.value,
     },
+    eventMessages: toJsonValue(sub.eventMessages.value),
     largestLocation: convertLargestLocation(sub.largestLocation.value),
     sessionStatistics: session === null ? null : session.getStatistics(),
     catalog: sub.catalog.value === null ? null : toJsonValue(sub.catalog.value),

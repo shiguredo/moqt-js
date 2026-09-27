@@ -29,6 +29,10 @@
 - [CHANGE] moqt-devtools の `window.moqtDevTools` が返す Subscriber の統計で、音声の項目を `audio` の下へまとめる
   - `audioObjectsReceived` / `audioChunksDecoded` / `audioPeakDbfs` / `audioRmsDbfs` / `audioLastLevel` / `audioLastVoiceActivity` / `audioPlayoutRebases` / `audioPlayoutDrops` を `audio.objectsReceived` などの入れ子にする。E2E が読む名前が変わるため後方互換はない
   - @voluntas
+- [ADD] moqt-devtools に event timeline のメッセージ送受信を追加する
+  - publisher の catalog に `eventtimeline` トラックを 1 本追加し、Messages の入力から送ったテキストを `{ t: 壁時計, data: { text } }` の entry として送る。メッセージごとに Group を進め、Group の先頭 Object にその時点の履歴 (直近 100 件) を載せる
+  - subscriber は catalog の `packaging: "eventtimeline"` のトラックを購読し、受信した entry を時刻と data の一覧で表示する。audio / video 以外のデータを MSF の枠で送受信する例になる
+  - @voluntas
 - [ADD] moqt-devtools の subscriber が、音声 Object を Subgroup と Datagram のどちらで受けたかを出す
   - 音声の購読に `datagram` callback を登録し、datagram で届いた Object も Subgroup と同じ処理へ流す。統計に `audio.datagramObjectsReceived` を足し、`audio.objectsReceived` との差が Subgroup で届いた数になる
   - 統計の Audio の欄に objects / datagramObjects / chunksDecoded を出す。publisher が datagram を選べたか (relay や経路の都合で Subgroup に落ちていないか) を画面と `window.moqtDevTools` で確かめられる
@@ -2103,6 +2107,13 @@
   - 購読を始めると relay は cache から古い Object を実時間より速く配るため、映像は早送りになり、音声は cache から届いた分かどうかではなく鳴らす時刻を過ぎているかと並べすぎの上限で鳴らすか捨てるかを決めていた。キーフレームの間隔が長い配信 (例: 90 秒) では、何十秒も前の映像を早送りで見せ続けていた
   - SUBSCRIBE_OK の LARGEST_OBJECT (draft-ietf-moq-transport-21 Section 9.20.18) を追いつきの境界にし、この位置以前のフレームは復号するが描かず、音声 Object は復号するが鳴らさない。境界より後の Object から従来どおり再生する
   - 描かなかったフレーム数を `catchUpFramesSkipped`、鳴らさなかった音声 Object 数を `audio.catchUpObjectsSkipped` として画面と `window.moqtDevTools` に出し、追いつくまで画面に「Catching up」を出す
+  - @voluntas
+
+### misc
+
+- [UPDATE] pnpm-workspace.yaml の overrides を vite-plus 1.0.0-rc.1 に揃える
+  - `vp up` で `package.json` の `vite-plus` を 1.0.0-rc.1 に上げた際、`pnpm-workspace.yaml` の `overrides` が 0.3.3 のままだったため、vite-plus 1.0.0-rc.1 が解決する `vite` が 0.3.3 になり `vp run build` が失敗していた
+  - `vite` と `@voidzero-dev/vite-plus-core` の override を 1.0.0-rc.1 に揃え、`pnpm-lock.yaml` を再生成する。ライブラリの挙動に変更はない
   - @voluntas
 
 ## 2026.2.0

@@ -19,6 +19,7 @@ import {
   resetSubscriberStats,
   resolveAudioTrack,
   resolveCatalogMediaTracks,
+  resolveEventTimelineTrack,
   resolveNewGroupRequestValue,
   type DecodeInput,
   type ReceivedVideoObject,
@@ -745,6 +746,60 @@ test("resolveCatalogMediaTracks: 映像も音声も無い catalog では throw �
   assert.throws(() => resolveCatalogMediaTracks(catalog), /no video or audio track in catalog/);
 });
 
+// ============================================================================
+// Catalog からの event timeline トラックの解決
+// ============================================================================
+
+// devtools は audio / video 以外のデータを流す例として、packaging が eventtimeline の
+// トラックを購読する (draft-ietf-moq-msf-01 §5.2.4)。event timeline を広告しない
+// publisher では購読しない
+test("resolveEventTimelineTrack: eventtimeline のトラックを返す", () => {
+  const catalog = createCatalog([
+    makeCatalogTrack(),
+    makeCatalogTrack({
+      name: "events",
+      packaging: "eventtimeline",
+      role: "eventtimeline",
+      eventType: "com.example.chat",
+      mimeType: "application/json",
+      depends: ["video"],
+    }),
+  ]);
+
+  const eventTrack = resolveEventTimelineTrack(catalog);
+  assert.equal(eventTrack?.name, "events");
+  assert.equal(eventTrack?.eventType, "com.example.chat");
+});
+
+test("resolveEventTimelineTrack: eventtimeline のトラックが無ければ undefined を返す", () => {
+  const catalog = createCatalog([makeCatalogTrack()]);
+
+  assert.equal(resolveEventTimelineTrack(catalog), undefined);
+});
+
+test("resolveEventTimelineTrack: 最初の eventtimeline のトラックだけを返す", () => {
+  const catalog = createCatalog([
+    makeCatalogTrack({
+      name: "events-1",
+      packaging: "eventtimeline",
+      role: "eventtimeline",
+      eventType: "com.example.first",
+      mimeType: "application/json",
+      depends: ["video"],
+    }),
+    makeCatalogTrack({
+      name: "events-2",
+      packaging: "eventtimeline",
+      role: "eventtimeline",
+      eventType: "com.example.second",
+      mimeType: "application/json",
+      depends: ["video"],
+    }),
+  ]);
+
+  assert.equal(resolveEventTimelineTrack(catalog)?.name, "events-1");
+});
+
 test("closeSubscriberResources: 音声デコーダを閉じ、音声トラックの購読を解除する", () => {
   resetTestEnvironment();
   const instance = createSubscriberInstance("close-resources-audio-1");
@@ -759,6 +814,8 @@ test("closeSubscriberResources: 音声デコーダを閉じ、音声トラック
     calls,
   });
   instance.audioDecoderConfigured.value = true;
+  const eventSubscriber = new FakeSubscriber({ label: "event.unsubscribe", calls });
+  instance.eventSubscriber.value = eventSubscriber;
 
   closeSubscriberResources(instance, null);
 
@@ -766,12 +823,15 @@ test("closeSubscriberResources: 音声デコーダを閉じ、音声トラック
   assert.equal(instance.audioSubscriber.value, null);
   assert.equal(instance.audioDecoder.value, null);
   assert.equal(instance.audioDecoderConfigured.value, false);
-  // decoder → audioDecoder → catalog → audio → session の順で送出されること
+  assert.equal(eventSubscriber.state, "closed");
+  assert.equal(instance.eventSubscriber.value, null);
+  // decoder → audioDecoder → catalog → audio → event → session の順で送出されること
   assert.deepEqual(calls, [
     "decoder.close",
     "audioDecoder.close",
     "catalog.unsubscribe",
     "audio.unsubscribe",
+    "event.unsubscribe",
     "session.close",
   ]);
 });
@@ -833,6 +893,8 @@ test("resetSubscriberState: 音声の signal を初期化し再生を無効に�
   instance.audioPeakDbfs.value = -6;
   instance.audioRmsDbfs.value = -9;
   instance.audioWaveform.value = new Float32Array([1, 2, 3]);
+  instance.eventSubscriber.value = new FakeSubscriber();
+  instance.eventMessages.value = [{ t: 1000, data: { text: "hello" } }];
 
   resetSubscriberState(instance, {
     video: { current: Promise.resolve() },
@@ -847,6 +909,9 @@ test("resetSubscriberState: 音声の signal を初期化し再生を無効に�
   assert.equal(instance.audioPeakDbfs.value, null);
   assert.equal(instance.audioRmsDbfs.value, null);
   assert.equal(instance.audioWaveform.value, null);
+  // event timeline の購読とメッセージも初期化する
+  assert.equal(instance.eventSubscriber.value, null);
+  assert.deepEqual(instance.eventMessages.value, []);
 });
 
 // 停止後に前のセッションの音声 object 処理が残ると、signal を書き戻したり

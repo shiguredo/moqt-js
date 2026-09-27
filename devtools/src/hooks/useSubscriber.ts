@@ -3,6 +3,7 @@ import {
   connect,
   LOC,
   decodeCatalogMessage,
+  decodeEventTimeline,
   getAudioTracks,
   getVideoTracks,
   resolveInitData,
@@ -97,6 +98,18 @@ export function resolveCatalogMediaTracks(catalog: Catalog): CatalogMediaTracks 
   throw new Error(
     `no video or audio track in catalog: tracks=${JSON.stringify(catalog.tracks.map((track) => track.name))}`,
   );
+}
+
+/**
+ * Catalog から購読する event timeline トラックを取り出す
+ *
+ * devtools は audio / video 以外のデータを流す例として event timeline を購読する。
+ * packaging が "eventtimeline" の最初のトラックだけを対象にする (draft-ietf-moq-msf-01
+ * §5.2.4)。event timeline を広告しない publisher では undefined を返し、購読しない。
+ * ブラウザ API に依存しないため、この分岐はここで検証できる
+ */
+export function resolveEventTimelineTrack(catalog: Catalog): CatalogTrack | undefined {
+  return catalog.tracks.find((track) => track.packaging === "eventtimeline");
 }
 
 /** 購読するトラックの終わりとエラーを受けるコールバック */
@@ -468,6 +481,15 @@ export function closeSubscriberResources(
     });
   }
 
+  // event timeline トラックの購読も catalog 購読と同じ順序で解除する
+  const eventSubscriberInstance = instance.eventSubscriber.value;
+  instance.eventSubscriber.value = null;
+  if (eventSubscriberInstance) {
+    void eventSubscriberInstance.unsubscribe().catch(() => {
+      // 送信失敗時は握り潰す (session.close と同形)
+    });
+  }
+
   // 再入時に sessionInstance が null になっているよう close() より先に立てる。
   const sessionInstance = instance.session.value;
   instance.session.value = null;
@@ -517,6 +539,9 @@ export function resetSubscriberState(
   instance.audioWaveform.value = null;
   // 再生トグルは既定 (無効) に戻す。audio graph は呼び出し側が停止する
   instance.audioPlaybackEnabled.value = false;
+  // event timeline の購読と受信したメッセージも購読が無い状態に戻す
+  instance.eventSubscriber.value = null;
+  instance.eventMessages.value = [];
   // 同期の推定は購読が無い状態の既定値に戻す
   instance.avSync.value = sub.EMPTY_AV_SYNC;
 
@@ -914,6 +939,93 @@ export function useSubscriber(
       audioPlaybackPendingRef.current = false;
     }
   };
+
+  /**
+   * event timeline トラックを購読する
+   *
+   * 受信した Object を decodeEventTimeline で entry の配列に戻し、表示を置き換える。
+   * devtools の publisher は Group の先頭 Object にその時点の全履歴を載せるため、
+   * 置き換えで履歴が揃う (draft-ietf-moq-msf-01 §8.3)。data の構造は catalog の
+   * eventType (§5.2.5) が定義する
+   */
+  async function startEventSubscription(
+    session: Session,
+    namespaceArray: string[],
+    eventTrack: CatalogTrack,
+    instance: sub.SubscriberInstance,
+    signal: AbortSignal,
+  ): Promise<void> {
+    const eventSubscriberInstance = await session.subscribe(
+      namespaceArray,
+      eventTrack.name,
+      {
+        object: (obj: MoqtObject) => {
+          // 停止した購読の Object が遅れて届いても、表示を変えない
+          if (signal.aborted) return;
+          try {
+            instance.eventMessages.value = decodeEventTimeline(obj.payload);
+          } catch (error) {
+            addLog("error", `[${subscriberId}] failed to decode event timeline`, {
+              message: error instanceof Error ? error.message : String(error),
+            });
+          }
+        },
+        end: () => {
+          addLog("info", `[${subscriberId}] event timeline stream ended`);
+        },
+        error: (error) => {
+          addLog("error", `[${subscriberId}] event timeline subscribe error`, {
+            message: error instanceof Error ? error.message : String(error),
+          });
+        },
+      },
+      {
+        // draft-ietf-moq-transport-21 §9.20.7 (RENDEZVOUS TIMEOUT):
+        // Catalog が広告する event timeline トラックは、Catalog の到着直後にはまだ
+        // publish されていないことがある。relay に購読を保持させる
+        rendezvousTimeout: BigInt(settings.catalogSubscriptionTimeout.value),
+      },
+    );
+
+    if (
+      checkAborted(signal, () => {
+        void eventSubscriberInstance.unsubscribe().catch(() => {});
+      })
+    ) {
+      return;
+    }
+    instance.eventSubscriber.value = eventSubscriberInstance;
+  }
+
+  /**
+   * Catalog に event timeline トラックがあれば購読を始める
+   *
+   * 購読の確立は待たない (映像 / 音声の購読を遅らせない)。失敗してもメディアの視聴は
+   * 妨げないため、警告ログだけを残す。Catalog は instance が保持しているもの
+   * (受信のたびに置き換わる) を読む
+   */
+  function startEventSubscriptionIfAdvertised(
+    session: Session,
+    namespaceArray: string[],
+    instance: sub.SubscriberInstance,
+    signal: AbortSignal,
+  ): void {
+    const catalog = instance.catalog.value;
+    if (catalog === null) {
+      return;
+    }
+    const eventTrack = resolveEventTimelineTrack(catalog);
+    if (eventTrack === undefined) {
+      return;
+    }
+    void startEventSubscription(session, namespaceArray, eventTrack, instance, signal).catch(
+      (error: unknown) => {
+        addLog("warn", `[${subscriberId}] failed to start event timeline subscription`, {
+          message: error instanceof Error ? error.message : String(error),
+        });
+      },
+    );
+  }
 
   /**
    * 音声トラックを購読して復号する
@@ -2012,6 +2124,10 @@ export function useSubscriber(
       // Catalog 取得経路は finally で clearTimeout 済みのため追加 cleanup は不要。
       // .then 内側で catalogSubscriber の遅延代入レースは解消済み。
       if (checkAborted(signal, () => {})) return;
+
+      // event timeline トラックがあれば購読する。映像 / 音声の購読を待たせないよう、
+      // 確立は待たずに進める (startEventSubscriptionIfAdvertised)
+      startEventSubscriptionIfAdvertised(session, namespaceArray, instance, signal);
 
       // 映像トラックの無い catalog では、映像の decoder と購読を作らず音声だけを購読する
       if (tracksFromCatalog.video === undefined) {

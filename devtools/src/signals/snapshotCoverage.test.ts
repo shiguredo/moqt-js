@@ -137,6 +137,8 @@ const PUBLISHER_COVERAGE: CoverageExpectation = {
     audioMeterPeakDbfs: "audio.meterPeakDbfs",
     audioMeterRmsDbfs: "audio.meterRmsDbfs",
     audioMeterLevel: "audio.lastSentLevel",
+    eventPublisher: "event.publishing",
+    eventMessagesSent: "event.messagesSent",
   },
   excluded: {
     pubSession:
@@ -169,6 +171,7 @@ const PUBLISHER_COVERAGE: CoverageExpectation = {
     pubAudioGroupStarted: "音声の Group の採番の途中の状態",
     lastSentAudioConfig: "Audio Config のバイナリ",
     audioConfigResendRequested: "Audio Config の送り直しの要求の状態",
+    eventGroup: "event timeline の Group ID。時刻由来の値で、診断に使わない",
   },
 };
 
@@ -197,6 +200,8 @@ const SUBSCRIBER_COVERAGE: CoverageExpectation = {
     audioSubscriber: "音声の Subscriber の実体。状態は audio.decoderConfigured などに出す",
     audioDecoder: "音声のデコーダの実体。状態は audio.decoderConfigured に出す",
     audioWaveform: "波形の配列は大きく、コピーする統計ではない",
+    eventSubscriber:
+      "event timeline の Subscriber の実体。受信したメッセージは eventMessages に出す",
   },
 };
 

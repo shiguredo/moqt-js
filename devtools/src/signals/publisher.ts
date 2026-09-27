@@ -128,3 +128,13 @@ export const lastSentAudioConfig = signal<Uint8Array | null>(null);
 // Audio Config の送り直し要求。後から接続した購読者のために、保持している値を
 // 次の Object に載せ直す (WebCodecs は description を最初の chunk にしか付けない)
 export const audioConfigResendRequested = signal(false);
+
+// event timeline トラックの状態
+//
+// devtools は audio / video 以外のデータを流す例として、event timeline にチャットの
+// メッセージを送る (draft-ietf-moq-msf-01 §8)。Group ID はメッセージごとに進める
+export const eventPublisher = signal<Publisher | null>(null);
+// 最後に event timeline を送った Group ID。配信を始めるたびに設定し直す
+export const eventGroup = signal(Date.now());
+// 送信したメッセージの数 (画面の表示用)
+export const eventMessagesSent = signal(0);
