@@ -3,15 +3,15 @@
 - Created: 2026-09-25
 - Completed: {YYYY-MM-DD}
 - Branch: feature/fix-devtools-c4m-clear-while-in-use
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-09-28
 
 ## 目的
 
-moqt-devtools は、Publisher か Subscriber が接続設定を使っている間、接続設定の入力を `settingsDisabled` で無効にする。ところが Authorization Token の節にある c4m のトークンの Clear ボタンだけは、この間も押せる。押すと取り込んだトークンと Token Type が書き換わり、画面と Copy URL の内容が、使っている接続設定と食い違う。
+moqt-devtools は、Publisher か Subscriber が接続設定を使っている間、接続設定の入力を `settingsDisabled` で無効にする。ところが Authorization Token の節にある c4m のトークンの Clear ボタンだけは、この間も押せる。押すと取り込んだトークンと Token Type が書き換わり、画面の表示が、使っている接続設定と食い違う。
 
 ## 現状
 
-- `devtools/src/components/ConnectionSettings.tsx` の `ConnectionSettings` では、接続設定の入力とボタンの 26 か所が `disabled={settings.settingsDisabled.value}` を持つ
+- `devtools/src/components/ConnectionSettings.tsx` の `ConnectionSettings` では、接続設定の入力とボタンの 28 か所が `disabled={settings.settingsDisabled.value}` を持つ
 - c4m から読み込んだトークンを示す行 (`data-testid="authorization-token-c4m"`) の Clear ボタンは `disabled` を持たない
   - `onClick={() => clearImportedC4mToken()}`
   - `clearImportedC4mToken` は `settings.authorizationTokenBase64` を空にし、`settings.authorizationTokenType` を `"0"` にする
@@ -28,8 +28,10 @@ moqt-devtools は、Publisher か Subscriber が接続設定を使っている�
 
 - Clear ボタンに `disabled={settings.settingsDisabled.value}` を足し、他の入力と同じく使っている間は押せなくする
 - 無効のときの見た目を、同じ画面の他のボタンの `disabled:` の class に合わせる
-- E2E で確かめる: `tests/e2e/devtools-authorization-token.spec.ts` の c4m を読み込む流れに、`settingsDisabled` を立てた状態で Clear が無効になることを足す。Clear に `data-testid` を足す
-  - 実際に購読を始めるには relay が要るため、E2E では `settingsDisabled` を立てる別の方法を決める (例: 到達しない URL へ購読を始め、接続を待っている間に確かめる)。決められない場合は、コンポーネントテストの仕組み (open の `0632-test-component-test-setup.md`) を待つ
+- E2E で確かめる: `tests/e2e/devtools-authorization-token.spec.ts` の c4m を読み込む流れに、次を足す。Clear に `data-testid` を足す
+  - `settingsDisabled` ではないとき: Clear を押すと c4m の表示が消え、Token Type が 0 になる (既存の e2e は Token Type / Token Value の入力経由の解除だけを検証しており、Clear ボタン自体は押していない)
+  - `settingsDisabled` のとき: Clear が無効になる
+  - `settingsDisabled` は購読を開始した瞬間に立つが、接続の確立には relay が要る。E2E では到達しない URL へ購読を始め、接続を待っている間に確かめる。この方法を決められない場合は、コンポーネントテストの仕組み (open の `0632-test-component-test-setup.md`) を待つ
 
 ## 完了条件
 
