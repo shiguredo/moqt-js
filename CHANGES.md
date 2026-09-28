@@ -2123,6 +2123,10 @@
   - `vp up` で `package.json` の `vite-plus` を 1.0.0-rc.1 に上げた際、`pnpm-workspace.yaml` の `overrides` が 0.3.3 のままだったため、vite-plus 1.0.0-rc.1 が解決する `vite` が 0.3.3 になり `vp run build` が失敗していた
   - `vite` と `@voidzero-dev/vite-plus-core` の override を 1.0.0-rc.1 に揃え、`pnpm-lock.yaml` を再生成する。ライブラリの挙動に変更はない
   - @voluntas
+- [UPDATE] CI で再生時刻の計算を回すテストがタイムアウトしないよう、テストのタイムアウトを緩める
+  - GitHub Actions の runner が遅いとき、`src/playbackTimeline.prop.ts` の 120 秒の到着列のテストが 20 秒、`src/playbackTimeline.test.ts` と `src/playoutBuffer.prop.ts` のテストが Vitest の既定の 5 秒を超えて fail していた
+  - テストの内容は変えず、既定のタイムアウトを 30 秒にし、120 秒の到着列のテストは 60 秒にする
+  - @voluntas
 
 ## 2026.2.0
 

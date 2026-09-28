@@ -421,4 +421,6 @@ test("PlaybackTimeline: 120 秒の到着列でも同時刻の表示時刻の差�
     // Opus の 120 秒分の観測を回す)
     { numRuns: 5 },
   );
-}, 20_000);
+  // ローカルでは数秒で終わるが、CI の遅い runner では 20 秒を超えることがあったため、
+  // 実行時間で fail しないよう余裕を持たせる (vite.config.ts の testTimeout は 30 秒)
+}, 60_000);
