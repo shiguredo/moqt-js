@@ -22,7 +22,7 @@ devtools の Preact コンポーネント (signal を読んで DOM と canvas �
 
 ## 設計方針
 
-- Vitest Browser Mode を導入し、`devtools/src/**/*.ct.tsx` をテスト対象に加える。ブラウザは既存の E2E と同じ Playwright の Chromium を使う。`vitest-browser-preact` (レンダラ) と `@vitest/browser-playwright` (ブラウザプロバイダ。vite-plus の peer 依存) を固定バージョンで追加する。`@vitest/browser` は vite-plus が同梱するため追加せず、プロバイダは `shiguredo-typescript` の参照設定と同じ `vite-plus/test/browser/providers/playwright` から import する
+- Vitest Browser Mode を導入し、`devtools/src/**/*.ct.tsx` をテスト対象に加える。ブラウザは既存の E2E と同じ Playwright の Chromium を使う。`vitest-browser-preact` (レンダラ) と `@vitest/browser-playwright` (ブラウザプロバイダ。vite-plus の peer 依存) を固定バージョンで追加する。`@vitest/browser` は vite-plus が同梱するため追加せず、プロバイダは `shiguredo-typescript` の参照設定と同じ `vite-plus/test/browser/providers/playwright` から import する。ただし、vite-plus@1.0.0-rc.1 の同梱は `vitest` / `@vitest/browser` とも 5.0.1 であるのに対し、`pnpm-workspace.yaml` の overrides が `vitest` を 4.1.11 に上書きしており (現在の lockfile も `vitest@4.1.11` + `@vitest/browser@5.0.1` を解決済み)、`@vitest/browser@5.0.1` は `vitest@5.0.1` を peer に要求するため一致しない。overrides の `vitest` を 5.0.1 に揃えて lockfile を更新し、追加する `@vitest/browser-playwright` は vite-plus の peer 指定と同じ 5.0.1、`vitest-browser-preact` は `vitest ^4.0.0 || ^5.0.0` を peer に持つ版に固定すること
 - 既存の Node テスト (`*.test.ts` / `*.prop.ts`) は Node のまま実行する。単一の `test` 設定で `test.browser` を有効にすると既存テストまでブラウザ実行になるため、`test.projects` で Node 用と Browser 用の 2 プロジェクトに分離する (CT の設定を別ファイルへ切り出す場合は `test.projects` から参照する)。`vp test run` の 1 コマンドで両方が実行されるようにする
 - `vite.config.ts` の lint 緩和パターン (`**/*.test.ts` / `**/*.prop.ts`) に `*.ct.tsx` も含め、`vp check` が通る状態にする
 - `vitest-browser-preact` の `render` でコンポーネントを描画し、`@preact/signals` の signal を書き換えて DOM の変化を検証する
