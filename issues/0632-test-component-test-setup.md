@@ -22,9 +22,9 @@ devtools の Preact コンポーネント (signal を読んで DOM と canvas �
 
 ## 設計方針
 
-- Vitest Browser Mode を導入し、`devtools/src/**/*.ct.tsx` をテスト対象に加える。ブラウザは既存の E2E と同じ Playwright の Chromium を使う。`vitest-browser-preact` (レンダラ) と `@vitest/browser` / `@vitest/browser-playwright` (ブラウザプロバイダ) を固定バージョンで追加する
-- 既存の Node テスト (`*.test.ts` / `*.prop.ts`) は Node のまま実行する。単一の `test` 設定で `test.browser` を有効にすると既存テストまでブラウザ実行になるため、`test.projects` での分離または CT 専用の設定を使い、`npx vp test --run` で両方が実行されるようにする
-- `vite.config.ts` の lint 緩和パターン (`**/*.test.ts` / `**/*.prop.ts`) に `*.ct.tsx` も含め、`npx vp check` が通る状態にする
+- Vitest Browser Mode を導入し、`devtools/src/**/*.ct.tsx` をテスト対象に加える。ブラウザは既存の E2E と同じ Playwright の Chromium を使う。`vitest-browser-preact` (レンダラ) と `@vitest/browser-playwright` (ブラウザプロバイダ。vite-plus の peer 依存) を固定バージョンで追加する。`@vitest/browser` は vite-plus が同梱するため追加せず、プロバイダは `shiguredo-typescript` の参照設定と同じ `vite-plus/test/browser/providers/playwright` から import する
+- 既存の Node テスト (`*.test.ts` / `*.prop.ts`) は Node のまま実行する。単一の `test` 設定で `test.browser` を有効にすると既存テストまでブラウザ実行になるため、`test.projects` で Node 用と Browser 用の 2 プロジェクトに分離する (CT の設定を別ファイルへ切り出す場合は `test.projects` から参照する)。`vp test run` の 1 コマンドで両方が実行されるようにする
+- `vite.config.ts` の lint 緩和パターン (`**/*.test.ts` / `**/*.prop.ts`) に `*.ct.tsx` も含め、`vp check` が通る状態にする
 - `vitest-browser-preact` の `render` でコンポーネントを描画し、`@preact/signals` の signal を書き換えて DOM の変化を検証する
 - 対象は devtools のコンポーネントとし、少なくとも `AudioMeter` (`active` / `levelActive` の切り替えと signal 駆動の canvas 再描画) を含める。`SubscriberPanel` は `subscriberInstances` にインスタンスを登録して描画し、メーターが常に表示され `audioSubscriber` が null の間は「-」であることを固定する範囲とする (実値への切り替えは実音声が必要なため対象外)。ライブラリ (`src/`) は純関数と Node で動くテストの方針を維持する
 - 役割は「純関数 = Node の単体テスト」「コンポーネント = Browser Mode」「アプリ全体の結合 = Playwright の E2E」「実リレー = 相互運用 harness」に分ける。`tests/e2e/devtools-audio-meter.spec.ts` のうちコンポーネント単体を検証している部分 (`drawAudioMeter` の描画、`AudioMeter` のレイアウト・テキスト) は `*.ct.tsx` へ移し、アプリ全体を確認する E2E だけを残す (shiguredo-typescript の「コンポーネント単体で検証できるものを E2E テストで書かないこと」に従う)
@@ -32,13 +32,13 @@ devtools の Preact コンポーネント (signal を読んで DOM と canvas �
 
 ## 完了条件
 
-- `npx vp test --run` で `*.ct.tsx` が実行され、既存の Node テスト (`*.test.ts` / `*.prop.ts`) も従来どおり通る
+- `vp test run` で `*.ct.tsx` が実行され、既存の Node テスト (`*.test.ts` / `*.prop.ts`) も従来どおり通る
 - `AudioMeter` の DOM テキスト (peak / rms / LOC Audio Level / voice activity) と signal 駆動の canvas 再描画が固定される
 - `active` / `levelActive` の切り替えでメーターの値が「-」と実値に切り替わることが固定される
 - `SubscriberPanel` のメーターが常に描画され、`audioSubscriber` が null の間は「-」であることが固定される
 - `tests/e2e/devtools-audio-meter.spec.ts` からコンポーネント単体の検証が `*.ct.tsx` へ移り、E2E にはアプリ全体の確認だけが残る
 - CI のブラウザを導入した job で Browser Mode が実行される
-- `npx vp check` / `npx vp test --run` / `npx vp run e2e-test` が通る
+- `vp check` / `vp test run` / `vp run e2e-test` が通る
 
 ## 参照
 
