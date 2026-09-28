@@ -1,7 +1,7 @@
 # moqt-devtools の subscriber の Subscribed 表示を publisher と同じ Full Track Name の規則に揃える
 
 - Created: 2026-09-29
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-29
 - Branch: feature/fix-devtools-track-status-display
 - Polished: {YYYY-MM-DD}
 - Reporter: @voluntas
@@ -33,3 +33,8 @@ moqt-devtools の subscriber の `Subscribed:` 表示は、映像と音声の購
 - 映像 + 音声の購読で、ステータスが `Subscribed: room-123--audio, room-123--video` のように audio と video の両方の Full Track Name を示す
 - 音声のみの購読では音声トラックだけ、映像のみの購読と音声の購読失敗時は映像トラックだけを示す
 - `vp check` / `tsc --noEmit` / `vp test run` が通る
+
+## 解決方法
+
+- `devtools/src/hooks/useSubscriber.ts` の `Subscribed:` の設定 4 か所を、`devtools/src/utils/trackStatusMessage.ts` の `buildMediaTrackStatusMessage` に置き換えた。表記は publisher と同じ draft-ietf-moq-transport-21 §8.8 の形式になる
+- `subscribeAudioOnly` は音声トラックだけ、`startSubscribing` は映像トラックの確立時と音声の購読に失敗したときに映像トラックだけ、音声の購読が確立したら audio → video の順で両方を並べる
