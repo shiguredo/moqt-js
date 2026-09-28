@@ -1,7 +1,7 @@
 # CI の遅い runner で再生時刻の計算のテストがタイムアウトするのを緩める
 
 - Created: 2026-09-29
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-29
 - Branch: feature/fix-ci-test-timeouts
 - Polished: {YYYY-MM-DD}
 
@@ -32,3 +32,9 @@ GitHub Actions の runner が遅いとき、再生時刻 (PlaybackTimeline / Pla
 
 - 再生時刻の計算の重いテストが、CI の遅い runner でもタイムアウトせずに完走する
 - `vp check` / `tsc --noEmit` / `vp test run` が通る
+
+## 解決方法
+
+- `vite.config.ts` の `test` に `testTimeout: 30_000` を指定し、Vitest の既定を 5 秒から 30 秒にした
+- `src/playbackTimeline.prop.ts` の 120 秒の到着列のテストのタイムアウトを 20 秒から 60 秒にした
+- テストの内容 (到着列の長さ、実行回数、検証する性質) は変えていない
