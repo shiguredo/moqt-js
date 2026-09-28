@@ -3,7 +3,7 @@
 - Created: 2026-09-25
 - Completed: {YYYY-MM-DD}
 - Branch: feature/fix-devtools-stale-publisher-cleanup
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-09-28
 
 ## 目的
 
@@ -15,9 +15,9 @@ Subscriber 側では、closed の `0728-bug-devtools-stale-session-close-aborts-
 
 - `devtools/src/hooks/usePublisher.ts` の `startPublishing` が `connect` に渡す `close` / `error` のコールバックは、表示を `disconnected` / `error` に変え、条件なしで `cleanupPublisher()` を呼ぶ
 - `src/session.ts` の Session は、自分から閉じた場合も `transport.closed` の後に `callbacks.close` を呼ぶ。そのため、停止した配信の close は後から届く
-- `cleanupPublisher` は、呼ばれた時点の `pub.pubSession` / `pub.publisher` / `pub.catalogPublisher` / `pub.audioPublisher` / encoder / フレームの読み出しを閉じて null にし、`pub.isStarting` を下ろす。どの配信のものかは見ない
+- `cleanupPublisher` は、呼ばれた時点の `pub.pubSession` / `pub.publisher` / `pub.catalogPublisher` / `pub.audioPublisher` / `pub.eventPublisher` / encoder / フレームの読み出しを閉じて null にし、`pub.isStarting` を下ろす。どの配信のものかは見ない
   - `pubSession` の close も `cleanupPublisher` の中で投げっぱなし (`close().catch(...)`) で、完了を待たない
-- `stopPublishing` の `finally` で `cleanupPublisher` を呼んだ後、Publish のボタンは `devtools/src/components/PublisherPanel.tsx` の `publishBtnDisabled = isPublishing || isStopping` で押せるようになる (`isPublishing = pub.publisher.value !== null`)
+- `stopPublishing` の `finally` で `cleanupPublisher` を呼んだ後、Publish のボタンは `devtools/src/components/PublisherPanel.tsx` の `publishBtnDisabled = isPublishing || isStopping` で押せるようになる (`isPublishing = pub.isPublishing.value`。`pub.isPublishing` は `pub.publisher` / `pub.audioPublisher` が null でないとき)
 - 前の回の `startPublishing` の `catch` も、今の回かを見ずに `cleanupPublisher()` を呼ぶ。開始を重ねた場合 (`0739` で扱う Publish の二重押しなど)、先に失敗した回の後始末が後の回の配信を閉じる
 - Subscriber 側の仕組み: `devtools/src/hooks/useSubscriber.ts` の `createAttemptGuard` は、登録した回の `AbortSignal` が今の `AbortController` のものかを判定する。`startSubscribing` はこの判定を通ったコールバックだけで表示を変えて後始末する
 
