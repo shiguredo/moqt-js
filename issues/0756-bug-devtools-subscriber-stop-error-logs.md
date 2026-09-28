@@ -3,7 +3,7 @@
 - Created: 2026-09-25
 - Completed: {YYYY-MM-DD}
 - Branch: feature/fix-devtools-subscriber-stop-error-logs
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-09-28
 
 ## 目的
 
@@ -13,15 +13,17 @@ moqt-devtools の subscriber で Stop を押すと、自分から止めただけ
 
 - 実測 (2026-09-25、手元の sora-moq の relay): 購読してから Stop を押すと、デバッグログに `[subscriber-...] webtransport error` が 2 回 (映像と音声の配信では 3 回)、`[subscriber-...] [RECV] DATAGRAM_LOOP_ERROR` が 1 回、`webtransport closed` が 1 回出る。映像だけ、音声だけのどちらでも出る
 - `src/session/dataStreamIncoming.ts` の `dataStreamStartDatagramLoop` は、datagram の読み出しで例外が出ると `DATAGRAM_LOOP_ERROR` の debug を出し、`notifyErrorIfActive` を呼ぶ。session を閉じたときに読み出しが例外で終わる場合も、この経路を通るとみている
+- catch で `notifyErrorIfActive` を呼ぶ経路はほかにもあり、`src/session/dataStreamIncoming.ts` の `dataStreamStartIncomingStreamLoop` (無条件の `STREAM_LOOP_ERROR` の debug 付き) と `src/session/incomingPublish.ts` の `incomingPublishStartBidiStreamLoop` / `incomingPublishReadFirstBidiMessage` である。`webtransport error` が複数回出るのは、これらの経路がそれぞれ `callbacks.error` へ到達しているためとみている
 - `devtools/src/hooks/useSubscriber.ts` の `startSubscribing` は、`connect` の `error` コールバックで「webtransport error」のログを出す
 
 ## 設計方針
 
 - 自分から session を閉じたときに、どの経路が例外を出し、なぜ `error` コールバックまで届くのかを確かめる
-- 自分から閉じたことによる終わりは、エラーとして通知しない (ログにも出さない)。相手や経路による本当のエラーは今と同じく通知する
+- 自分から閉じたことによる終わりは、エラーとして通知しない。エラー系の debug (`DATAGRAM_LOOP_ERROR` / `STREAM_LOOP_ERROR` など) も出さない。なお `webtransport closed` の warn は停止中でも DebugPanel に残す既存設計 (close / error コールバック先頭の addLog) のため対象外とする
+- 自分から閉じた以外の理由による本当のエラーは今と同じく通知する
 
 ## 完了条件
 
 - Stop で「webtransport error」と「DATAGRAM_LOOP_ERROR」が出ない
-- relay を止めるなど本当に切れたときは、今と同じくエラーを通知する
+- relay を止めるなど、自分から閉じていないのに本当に切れたときは、今と同じく通知される (peer 起点のセッション終了は現行どおり `callbacks.close` 経由の `webtransport closed` と statusMessage になり、`callbacks.error` は呼ばれない)。自分から閉じた以外の理由のエラーは、今と同じく `webtransport error` で通知する
 - `vp check` / `tsc --noEmit` / `vp test run` / 既存の Playwright の E2E が通る
