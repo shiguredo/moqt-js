@@ -42,3 +42,65 @@ export function fullTrackNameKey(
   // brand は型のみで実行時表現を持たないため、生成はここで 1 回だけ行う
   return fields.map((field) => `${field.length}:${field}`).join("|") as FullTrackNameKey;
 }
+
+// Full Track Name の文字列表現に使う UTF-8 エンコーダ (プロトコルのワイヤ表現と
+// 同じバイト列にする)
+const fullTrackNameEncoder = new TextEncoder();
+
+/**
+ * Track Namespace Field / Track Name の 1 セグメントをエスケープする
+ *
+ * draft-ietf-moq-transport-21 §8.8:
+ * バイト a-z / A-Z / 0-9 / _ (0x5f) はそのまま、それ以外のバイトは "." に続けて
+ * 小文字 16 進 2 桁で表す。プロトコルは文字列をバイト列として扱うため、UTF-8 の
+ * バイトごとにエスケープする。
+ */
+function escapeFullTrackNameSegment(value: string): string {
+  let escaped = "";
+  for (const byte of fullTrackNameEncoder.encode(value)) {
+    const isUnreserved =
+      (byte >= 0x30 && byte <= 0x39) ||
+      (byte >= 0x41 && byte <= 0x5a) ||
+      (byte >= 0x61 && byte <= 0x7a) ||
+      byte === 0x5f;
+    if (isUnreserved) {
+      escaped += String.fromCharCode(byte);
+    } else {
+      escaped += `.${byte.toString(16).padStart(2, "0")}`;
+    }
+  }
+  return escaped;
+}
+
+/**
+ * Full Track Name の文字列表現を組み立てる
+ *
+ * draft-ietf-moq-transport-21 §8.8 (Representing Namespace and Track Names):
+ * ログ等の用途で推奨される形式として、Track Namespace の各フィールドを "-" で
+ * 並べ、Track Name を "--" でつなぐ。フィールドと Track Name のバイトは
+ * escapeFullTrackNameSegment の規則でエスケープする。draft-ietf-moq-msf-01
+ * §11.1.2 は同じ形式を MSF fragment の namespace-name 文字列に使う
+ * (`parseMsfFragmentValue` が parse 側)。
+ *
+ * "/" などの区切りで連結した文字列と違い、この表現は namespace のフィールド
+ * 境界と Track Name の境界が一意に読める (fullTrackNameKey の doc コメントが
+ * 挙げる曖昧さが無い)。
+ *
+ * Track Namespace Field は §8.7 が 1 バイト以上を MUST とするため、空の
+ * フィールドは区切りと区別できず Error にする。Track Name は §8.7 が空を
+ * 許すため、空でも描画する。
+ *
+ * @throws Error 空の Track Namespace Field を渡したとき
+ */
+export function formatFullTrackName(trackNamespace: readonly string[], trackName: string): string {
+  const namespaceSegments: string[] = [];
+  for (const [index, field] of trackNamespace.entries()) {
+    if (field.length === 0) {
+      throw new Error(
+        `track namespace field at index ${index} must not be empty per draft-ietf-moq-transport-21 §8.7`,
+      );
+    }
+    namespaceSegments.push(escapeFullTrackNameSegment(field));
+  }
+  return `${namespaceSegments.join("-")}--${escapeFullTrackNameSegment(trackName)}`;
+}

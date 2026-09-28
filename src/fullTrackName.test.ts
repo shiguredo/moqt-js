@@ -1,10 +1,11 @@
 /**
- * Full Track Name の比較キーの単体テスト
- * draft-ietf-moq-transport-21 Section 2.4.1 (Track Naming)
+ * Full Track Name の比較キーと文字列表現の単体テスト
+ * draft-ietf-moq-transport-21 Section 2.4.1 (Track Naming) / Section 8.8
+ * (Representing Namespace and Track Names)
  */
 
 import { test, assert } from "vite-plus/test";
-import { fullTrackNameKey } from "./fullTrackName";
+import { formatFullTrackName, fullTrackNameKey } from "./fullTrackName";
 
 /**
  * draft-ietf-moq-transport-21 §2.4.1:
@@ -37,4 +38,58 @@ test("fullTrackNameKey: 空の Track Namespace / Track Name でも境界が残�
   // 空フィールドの位置と個数が違えば別のキーになる
   assert.notEqual(fullTrackNameKey(["", "a"], ""), fullTrackNameKey(["a"], ""));
   assert.notEqual(fullTrackNameKey([], "a"), fullTrackNameKey(["a"], ""));
+});
+
+/**
+ * draft-ietf-moq-transport-21 §8.8:
+ * Track Namespace のフィールドを "-" で並べ、Track Name を "--" でつなぐ。
+ * 仕様の例 (draft-ietf-moq-msf-01 §11.1.3) をそのまま検証する。
+ */
+test("formatFullTrackName: 仕様の例を組み立てる", () => {
+  assert.equal(
+    formatFullTrackName(["customer", "livestream", "123"], "catalog"),
+    "customer-livestream-123--catalog",
+  );
+  assert.equal(formatFullTrackName(["room", "123"], "video"), "room-123--video");
+});
+
+/**
+ * draft-ietf-moq-transport-21 §8.8:
+ * a-z / A-Z / 0-9 / _ 以外のバイトは "." + 小文字 16 進 2 桁にする。構造の
+ * 区切り ("-" / "--") と紛らわしい文字、非 ASCII の UTF-8 バイトを検証する。
+ */
+test("formatFullTrackName: 予約文字と非 ASCII をエスケープする", () => {
+  // "-" / "." / "/" は .2d / .2e / .2f になるため、区切りと混ざらない
+  assert.equal(formatFullTrackName(["a-b.c/d"], "e-f.g"), "a.2db.2ec.2fd--e.2df.2eg");
+  // 非 ASCII は UTF-8 のバイトごとにエスケープする ("あ" = E3 81 82)
+  assert.equal(formatFullTrackName(["あ"], "い"), ".e3.81.82--.e3.81.84");
+  // 大文字 hex は使わず、予約文字集合はそのまま出す
+  assert.equal(formatFullTrackName(["AZaz09_"], "Z"), "AZaz09_--Z");
+});
+
+/**
+ * draft-ietf-moq-transport-21 §2.4.1:
+ * "/" 連結では namespace ["a"] + track "b/c" と namespace ["a","b"] + track "c" が
+ * 同じ "a/b/c" になっていた。§8.8 の表現ではエスケープが両者を区別する。
+ */
+test("formatFullTrackName: 区切り文字の曖昧さで異なる Full Track Name が同じ文字列にならない", () => {
+  assert.equal(formatFullTrackName(["a"], "b/c"), "a--b.2fc");
+  assert.equal(formatFullTrackName(["a", "b"], "c"), "a-b--c");
+  assert.notEqual(formatFullTrackName(["a"], "b/c"), formatFullTrackName(["a", "b"], "c"));
+});
+
+/**
+ * draft-ietf-moq-transport-21 §8.7:
+ * Track Namespace は 0 フィールドを許す。空のときは "--" の左側だけが空になる。
+ * Track Namespace Field は 1 バイト以上を MUST とするため、空のフィールドは
+ * 区切りと区別できず拒否する。
+ */
+test("formatFullTrackName: 空の Track Namespace と空の Track Name を扱う", () => {
+  assert.equal(formatFullTrackName([], "video"), "--video");
+  // Track Name は §8.7 が空を許す (カタログでは §5.2.3 が空を拒否する)
+  assert.equal(formatFullTrackName(["room"], ""), "room--");
+  assert.throws(
+    () => formatFullTrackName(["room", "", "123"], "video"),
+    /track namespace field at index 1 must not be empty/,
+  );
 });

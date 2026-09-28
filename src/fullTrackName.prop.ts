@@ -1,13 +1,15 @@
 /**
- * Full Track Name の比較キー Property-Based Tests
- * draft-ietf-moq-transport-21 Section 2.4.1 (Track Naming)
+ * Full Track Name の比較キーと文字列表現 Property-Based Tests
+ * draft-ietf-moq-transport-21 Section 2.4.1 (Track Naming) / Section 8.8
+ * (Representing Namespace and Track Names)
  */
 
 import { test, assert } from "vite-plus/test";
 import * as fc from "fast-check";
-import { fullTrackNameKey } from "./fullTrackName";
+import { formatFullTrackName, fullTrackNameKey } from "./fullTrackName";
 import { SubscriberImpl } from "./subscriber";
 import { FetcherImpl } from "./fetcher";
+import { parseMsfFragmentValue } from "./msf/fragment";
 
 /**
  * フィールド境界の曖昧さを突く文字を含む Track Namespace Field / Track Name の Arbitrary
@@ -135,5 +137,66 @@ test("getFullTrackNameKey は fullTrackNameKey と同じ比較キーを返す", 
       assert.equal(subscriber.getFullTrackNameKey(), fullTrackNameKey(namespace, trackName));
       assert.equal(fetcher.getFullTrackNameKey(), fullTrackNameKey(namespace, trackName));
     }),
+  );
+});
+
+/**
+ * §8.8 の文字列表現の round-trip に使う Track Namespace Field / Track Name の Arbitrary
+ *
+ * Track Namespace Field は §8.7 が 1 バイト以上を MUST とするため空を生成しない。
+ * Track Name も MSF fragment (§11.1.2) が空を許さないため 1 文字以上にする。
+ * エスケープ対象の構造文字 (`-` / `--` / `&` / `.` / `?` など) と、非 ASCII を
+ * 含む valid な Unicode (`unit: "grapheme"` は孤立サロゲートを生成しない) を混ぜる。
+ */
+const displayFieldArb = fc.oneof(
+  fc.constantFrom("-", "--", "&", ".", "|", "/", "?", "a-b", "a.2db", ".2d", "_", "0"),
+  fc.string({ unit: "grapheme", minLength: 1, maxLength: 8 }),
+);
+
+const displayFullTrackNameArb = fc.tuple(
+  fc.array(displayFieldArb, { maxLength: 3 }),
+  displayFieldArb,
+);
+
+/**
+ * draft-ietf-moq-transport-21 §8.8 と draft-ietf-moq-msf-01 §11.1.2:
+ * 文字列表現は MSF fragment の namespace-name 文字列として parse でき、
+ * Track Namespace と Track Name が元の値に戻らなければならない。
+ */
+test("formatFullTrackName: parseMsfFragmentValue と round-trip する", () => {
+  fc.assert(
+    fc.property(displayFullTrackNameArb, ([trackNamespace, trackName]) => {
+      const formatted = formatFullTrackName(trackNamespace, trackName);
+      // parameter 無しの track-identifier として parse できる
+      const parsed = parseMsfFragmentValue(formatted);
+      assert.deepEqual(parsed.trackNamespace, trackNamespace);
+      assert.equal(parsed.trackName, trackName);
+      assert.deepEqual(parsed.parameters, []);
+    }),
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-21 §2.4.1 / §8.8:
+ * 異なる Full Track Name が同じ文字列になってはならない。"/" 連結では
+ * namespace ["a"] + track "b/c" と namespace ["a","b"] + track "c" が衝突していた。
+ * 文字列が一致した場合は Track Namespace と Track Name の双方が一致していなければ
+ * ならない (単射性)。
+ */
+test("formatFullTrackName: 異なる Full Track Name は同じ文字列にならない", () => {
+  fc.assert(
+    fc.property(
+      displayFullTrackNameArb,
+      displayFullTrackNameArb,
+      ([namespaceA, trackNameA], [namespaceB, trackNameB]) => {
+        const formattedA = formatFullTrackName(namespaceA, trackNameA);
+        const formattedB = formatFullTrackName(namespaceB, trackNameB);
+        if (formattedA !== formattedB) {
+          return;
+        }
+        assert.deepEqual(namespaceA, namespaceB);
+        assert.equal(trackNameA, trackNameB);
+      },
+    ),
   );
 });
