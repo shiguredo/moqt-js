@@ -3,7 +3,7 @@
 - Created: 2026-09-25
 - Completed: {YYYY-MM-DD}
 - Branch: feature/fix-devtools-publisher-buttons-while-starting
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-09-28
 
 ## 目的
 
@@ -14,11 +14,11 @@ closed の `0730-bug-devtools-settings-enabled-while-starting.md` で、配信�
 ## 現状
 
 - `devtools/src/components/PublisherPanel.tsx` のボタンの判定
-  - `isPublishing = pub.publisher.value !== null`
+  - `isPublishing = pub.isPublishing.value` (`devtools/src/signals/publisher.ts` の `isPublishing` は、`pub.publisher` / `pub.audioPublisher` が null でないとき true。映像を送らず音声だけを配信するときも true になる)
   - `previewBtnDisabled = isPublishing || isStopping`
   - `publishBtnDisabled = isPublishing || isStopping`
   - `stopBtnDisabled = !isPublishing || isStopping`
-- `devtools/src/hooks/usePublisher.ts` の `startPublishing` は、最初に `pub.isStarting` を立て、映像トラックの `session.publish` が返ったとき (`markVideoPublisherEstablished` で `pub.publisher` を設定する) に下ろす。その間 `pub.publisher` は null なので、Publish と Preview は押せ、Stop は押せない
+- `devtools/src/hooks/usePublisher.ts` の `startPublishing` は、最初に `pub.isStarting` を立て、映像トラックの `session.publish` が返ったとき (`markVideoPublisherEstablished` で `pub.publisher` を設定する)、映像を送らないときは音声トラックの `session.publish` が返ったとき (`startAudioPublishing`) に下ろす。その間 `pub.publisher` も `pub.audioPublisher` も null なので、Publish と Preview は押せ、Stop は押せない
 - `startPublishing` には、開始の途中に再び呼ばれたときの防ぎが無い。2 回目の呼び出しは新しい `connect` を始め、`pub.pubSession` を上書きする。先の回の session は閉じられずに残る
 - `togglePreview` は、プレビュー中なら `stopPreview` を、そうでなければ `startPreview` を呼ぶ。開始の途中でも呼べる
   - `stopPreview` は映像ストリーム (`pub.mediaStream`) を解放し、表示を「Ready to publish」に、`pubStatus` を `disconnected` にする。`startPublishing` は、映像ストリームを取る時点で `pub.isPreviewActive` が立っていれば、プレビューの映像を流用する (`hadPreview`)。プレビューを止めるのはその後 (`pub.isPreviewActive = false`) である
@@ -37,7 +37,7 @@ closed の `0730-bug-devtools-settings-enabled-while-starting.md` で、配信�
 ## 設計方針
 
 - Publisher のボタンの可否を、Subscriber 側の `subscriberControlState` と同じく純粋な関数にまとめる
-  - 配信中は、確立済み (`pub.publisher` が null でない) か、配信を始めている途中 (`pub.isStarting`) とする
+  - 入力は、確立済み (`pub.isPublishing`。映像か音声の publisher が設定済み)、開始の途中 (`pub.isStarting`)、停止処理 (`pub.isStopping`) の 3 つの真偽値とする。配信中は、確立済みか配信を始めている途中とする。映像を送らないときは音声の publisher だけが確立するため、`pub.publisher` が null でないかどうかでは確立済みを判定しない
   - 配信中と停止処理の間は、Publish と Preview を押せない
   - Stop は、確立済みのときだけ押せる (開始の途中の Stop は扱わない。対象外)
 - `startPublishing` の冒頭で、開始の途中なら何もしないで戻る防ぎも入れる (ボタンを押せなくしても、テスト用 API などの別の経路から呼ばれうるため)
@@ -58,8 +58,10 @@ closed の `0730-bug-devtools-settings-enabled-while-starting.md` で、配信�
 
 - closed の `0727-bug-devtools-subscriber-stop-disabled-while-connecting.md` (Subscriber 側のボタンの可否)
 - closed の `0730-bug-devtools-settings-enabled-while-starting.md` (`pub.isStarting` を足した)
+- closed の `0744-add-devtools-video-source-none.md` (映像を送らず音声だけを配信できるようにした。`pub.isPublishing` が音声の publisher も数える)
 - `devtools/src/components/PublisherPanel.tsx` のボタンの判定
 - `devtools/src/hooks/usePublisher.ts` の `startPublishing` / `togglePreview` / `stopPreview`
+- `devtools/src/signals/publisher.ts` の `isPublishing` / `isStarting`
 - `devtools/src/utils/subscriberControls.ts` の `subscriberControlState`
 
 ## 解決方法
