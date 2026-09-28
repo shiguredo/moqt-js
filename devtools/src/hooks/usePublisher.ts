@@ -54,6 +54,10 @@ import {
 } from "../utils/catalogRepublish";
 import { shouldSendAudioAsDatagram } from "../utils/audioDelivery";
 import {
+  buildMediaTrackStatusMessage,
+  type EstablishedMediaTrackNames,
+} from "../utils/trackStatusMessage";
+import {
   appendChatEventEntry,
   buildChatEventEntry,
   CHAT_EVENT_TYPE,
@@ -1108,8 +1112,9 @@ export function usePublisher() {
     );
     markVideoPublisherEstablished(publisherInstance);
 
+    // 配信ステータスのメッセージは、メディアトラックが揃った後に startPublishing が
+    // 確立した全トラックを並べて設定する
     pub.pubStatus.value = "connected";
-    pub.pubStatusMessage.value = `Publishing: ${namespaceArray.join("/")}/${options.trackName}`;
 
     // Encoder 設定を作成し、対応状況を確認する
     const encoderConfig = getEncoderConfig(
@@ -1588,6 +1593,8 @@ export function usePublisher() {
       pub.isPreviewActive.value = false;
 
       const useWorker = settings.useDedicatedWorker.value;
+      // 確立したメディアトラックの名前。最後に配信ステータスへまとめて出す
+      const establishedMediaTracks: EstablishedMediaTrackNames = {};
       if (videoInput !== null) {
         await startVideoPublishing(session, namespaceArray, videoInput, {
           trackName: videoTrackNameValue,
@@ -1597,6 +1604,7 @@ export function usePublisher() {
           maxCacheDuration: maxCacheDurationValue,
           useWorker,
         });
+        establishedMediaTracks.video = videoTrackNameValue;
       }
 
       // 音声トラックを配信する
@@ -1612,6 +1620,7 @@ export function usePublisher() {
           // 映像を送らないときは、音声トラックが配信の確立と Forward State を表す
           audioOnly: videoInput === null,
         });
+        establishedMediaTracks.audio = audioTrackNameValue;
       }
 
       // event timeline トラックを配信する。メディアの配信を壊さないよう、失敗しても
@@ -1626,9 +1635,15 @@ export function usePublisher() {
       if (videoInput === null) {
         // 映像の統計 (符号化と送信の時間など) は前の配信のものを持ち越さない
         resetVideoPublishState();
-        pub.pubStatus.value = "connected";
-        pub.pubStatusMessage.value = `Publishing: ${namespaceArray.join("/")}/${audioTrackNameValue}`;
       }
+      // 配信ステータスには、確立したメディアトラックの Full Track Name を audio → video の
+      // 順で並べる (Catalog と Tracks カードの並びに揃える)。event timeline は publish の
+      // 失敗を警告に留めるデータトラックのため含めない
+      pub.pubStatusMessage.value = buildMediaTrackStatusMessage(
+        "Publishing",
+        namespaceArray,
+        establishedMediaTracks,
+      );
 
       // 統計値をリセットする
       pub.framesEncoded.value = 0;
