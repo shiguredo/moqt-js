@@ -52,6 +52,7 @@ import { AudioClockBridge, AudioPlayoutScheduler } from "../../../src/audioPlayo
 import { effectiveTargetLatencyMs, resolveSharedTargetLatencyMs } from "../../../src/msf/tracks.ts";
 import { applyAudioOutputSink } from "../utils/audioOutput";
 import { browserIsChromium, resolvePanelHttpVersion } from "../utils/httpVersion";
+import { buildMediaTrackStatusMessage } from "../utils/trackStatusMessage";
 import * as settings from "../signals/connectionSettings";
 import * as sub from "../signals/subscriber";
 import * as pub from "../signals/publisher";
@@ -1286,7 +1287,10 @@ export function useSubscriber(
     if (signal.aborted) return;
     instance.isStarting.value = false;
     instance.status.value = "connected";
-    instance.statusMessage.value = `Subscribed: ${namespaceArray.join("/")}/${audioTrack.name}`;
+    // 映像を購読しないため、確立した音声トラックだけを並べる
+    instance.statusMessage.value = buildMediaTrackStatusMessage("Subscribed", namespaceArray, {
+      audio: audioTrack.name,
+    });
   }
 
   /**
@@ -2304,7 +2308,10 @@ export function useSubscriber(
         subscriberInstance.trackProperties,
       );
       instance.status.value = "connected";
-      instance.statusMessage.value = `Subscribed: ${namespaceArray.join("/")}/${actualTrackName}`;
+      // この時点では映像トラックだけが確立している (音声はこの後で購読する)
+      instance.statusMessage.value = buildMediaTrackStatusMessage("Subscribed", namespaceArray, {
+        video: actualTrackName,
+      });
       instance.largestLocation.value = largestLocation ?? null;
       // SUBSCRIBE_OK の LARGEST_OBJECT を、relay の cache から追いつく途中かどうかの境界に
       // する。この位置以前のフレームは復号しても描かない (utils/catchUpGate.ts)
@@ -2340,7 +2347,12 @@ export function useSubscriber(
         // startAudioSubscription 内の checkAborted は関数内で return するだけなので、
         // 中断後もここへ来る。teardownSubscriber が確定させた表示を上書きしない
         if (signal.aborted) return;
-        instance.statusMessage.value = `Subscribed: ${namespaceArray.join("/")}/${actualTrackName}`;
+        // 映像と音声の両方が確立したため、Catalog と Tracks カードと同じ
+        // audio → video の順で並べる
+        instance.statusMessage.value = buildMediaTrackStatusMessage("Subscribed", namespaceArray, {
+          audio: audioTrackFromCatalog.name,
+          video: actualTrackName,
+        });
       } catch (error) {
         // 中断時は teardownSubscriber が status / statusMessage を確定済み。
         // 映像経路と同じく上書きしない
@@ -2348,8 +2360,10 @@ export function useSubscriber(
         addLog("error", `[${subscriberId}] failed to start audio subscription`, {
           message: error instanceof Error ? error.message : String(error),
         });
-        // 中間メッセージを残さず、映像の購読状態の表示に戻す
-        instance.statusMessage.value = `Subscribed: ${namespaceArray.join("/")}/${actualTrackName}`;
+        // 中間メッセージを残さず、映像トラックだけの購読状態の表示に戻す
+        instance.statusMessage.value = buildMediaTrackStatusMessage("Subscribed", namespaceArray, {
+          video: actualTrackName,
+        });
       }
     } catch (error) {
       // 中断時は teardownSubscriber が status / statusMessage / settingsDisabled を確定済み。
