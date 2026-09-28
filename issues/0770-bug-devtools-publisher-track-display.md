@@ -1,7 +1,7 @@
 # moqt-devtools の publisher の Publishing 表示が音声トラックを出さず、Full Track Name の表記も仕様の形式でない
 
 - Created: 2026-09-29
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-29
 - Branch: feature/fix-devtools-track-status-display
 - Polished: {YYYY-MM-DD}
 - Reporter: @voluntas
@@ -38,3 +38,10 @@ moqt-devtools の publisher の `Publishing:` ステータス表示は、映像�
 - `formatFullTrackName` の単体テストと、`parseMsfFragmentValue` との round-trip の PBT が通る
 - ステータスメッセージを組み立てる純関数の単体テストが通る
 - `vp check` / `tsc --noEmit` / `vp test run` が通る
+
+## 解決方法
+
+- `src/fullTrackName.ts` に `formatFullTrackName(trackNamespace, trackName)` を追加した。draft-ietf-moq-transport-21 §8.8 / draft-ietf-moq-msf-01 §11.1.2 の形式 (namespace のフィールドを `-`、track name を `--`、`[A-Za-z0-9_]` 以外の UTF-8 バイトを `.` + 小文字 16 進 2 桁) で組み立てる。空の Track Namespace Field は §8.7 が 1 バイト以上を MUST とするため Error にし、空の Track Name は §8.7 が許すため描画する
+- `src/fullTrackName.test.ts` に仕様の例・エスケープ・区切りの曖昧さ・空の Track Namespace / Track Name の検証を追加し、`src/fullTrackName.prop.ts` に `parseMsfFragmentValue` との round-trip と単射性の PBT を追加した
+- `devtools/src/utils/trackStatusMessage.ts` に `buildMediaTrackStatusMessage(label, trackNamespace, tracks)` を追加した。確立したメディアトラックを audio → video の順で並べる
+- `devtools/src/hooks/usePublisher.ts` は、`startVideoPublishing` / `startAudioPublishing` から `pubStatusMessage` への書き込みを外し、`startPublishing` がメディアトラックの確立後に `Publishing: ...` を設定するようにした。映像のみ・音声のみの配信でも同じ規則になる
