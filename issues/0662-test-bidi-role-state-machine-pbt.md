@@ -3,7 +3,7 @@
 - Created: 2026-09-21
 - Completed: {YYYY-MM-DD}
 - Branch: feature/test-bidi-role-state-machine-pbt
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-09-29
 
 ## 目的
 
@@ -18,15 +18,16 @@
 
 ## 設計方針
 
-- ロール 3 値 × メッセージ種 (PUBLISH_DONE / PUBLISH_STATE_NOTIFY / REQUEST_OK / REQUEST_ERROR / REQUEST_UPDATE / GOAWAY) × `initialMessages` の有無 × MAX_REQUEST_UPDATES の未応答数 × FIN / RESET の組合せを任意生成する
-- 期待遷移 (セッションを閉じる / 購読を closed にする / 継続する) と、メッセージ列のチャンク分割を変えても結果が変わらないことを検証する
-- 実ストリームと実 SessionImpl で構築する。`src/testSupport/bidi.ts` の `createBidiSession` は使わない (0666 で実ストリームに置き換える)
+- ロール 3 値 × メッセージ種 (PUBLISH_DONE / PUBLISH_STATE_NOTIFY / REQUEST_OK / REQUEST_ERROR / REQUEST_UPDATE / GOAWAY) × `initialMessages` の有無 × MAX_REQUEST_UPDATES の未応答数 × FIN / RESET の組合せを任意生成する。生成するメッセージはデコード可能なペイロードに限定する (破損ペイロードの挙動は既存の単体テストの領分)
+- 期待遷移 (セッションを閉じる / 購読を closed にする / 継続する) は、role と生成したメッセージ列から各ハンドラの仕様解釈 (固定テストが固定した挙動) に従って独立に導出したモデルで計算し、実装の観測結果と一致することを検証する (`namespaceLoops.prop.ts` の active 集合モデルと同じ流儀)
+- メッセージ列のチャンク分割を変えても結果が変わらないことも検証する。ただし、1 回の read 内の REQUEST_UPDATE 群が MAX_REQUEST_UPDATES の上限超過に達し得る列は、超過検出が read 境界 (受信グループ) に依存するため分割非依存の対象から除外する。この read 境界依存は `bidiReadRequestStreamMessages` が 1 回の read で得た列を同時に未応答と数え、read 単位で戻す実装の意図であり、境界の挙動は既存の固定テスト (`bidiRequestUpdateScopeAudit.test.ts`) が固定する
+- 実ストリームと実 SessionImpl で構築する。`src/testSupport/bidi.ts` の `createBidiSession` は使わない (0666 で実ストリーム版へ置き換わる予定だが、本 issue はそれに依存せず `session.test.ts` と同じ実 SessionImpl 構築で進める)
 - 同ファイル冒頭の「fc.property の同期評価に載せられない」という記述は実態に合わないため、対象範囲を更新する
 
 ## 完了条件
 
-- ロールごとの遷移と分割非依存を検証する PBT が `src/session/bidi.prop.ts` に追加される
-- `pnpm test` が通る
+- ロールごとの期待遷移とチャンク分割非依存 (設計方針の除外条件に従う) を検証する PBT が `src/session/bidi.prop.ts` に追加される
+- `npx vp check` / `npx vp test --run` が通る
 
 ## 参照
 
