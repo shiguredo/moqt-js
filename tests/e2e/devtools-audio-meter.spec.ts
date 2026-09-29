@@ -248,9 +248,26 @@ test("音声レベルメーターの見出し行の項目は、値が変わっ�
       if (!meter || !header) {
         throw new Error("no element: layout-audio-meter");
       }
+
+      // 値の末尾の単位 (dBFS / dBov) の左端の x を測る。単位が無い値 ("-" や
+      // "not reported") は null にする
+      const unitX = (testId: string): number | null => {
+        const value = document.querySelector(`[data-testid="${testId}"]`)?.firstChild;
+        const valueText = value?.textContent ?? "";
+        if (value === null || value === undefined || !/(dBFS|dBov)$/.test(valueText)) {
+          return null;
+        }
+        const range = document.createRange();
+        range.setStart(value, valueText.length - 4);
+        range.setEnd(value, valueText.length);
+        return Math.round(range.getBoundingClientRect().x);
+      };
+
       return {
         boxes,
         texts,
+        peakUnitX: unitX("layout-audio-peak"),
+        levelUnitX: unitX("layout-audio-level"),
         headerHeight: Math.round(header.getBoundingClientRect().height),
         meterHeight: Math.round(meter.getBoundingClientRect().height),
       };
@@ -333,6 +350,28 @@ test("音声レベルメーターの見出し行の項目は、値が変わっ�
     expect(state.headerHeight).toBe(layout.inactive.headerHeight);
     expect(state.meterHeight).toBe(layout.inactive.meterHeight);
   }
+
+  // 値の桁数が変わっても単位 (dBFS / dBov) の位置が動かないこと。
+  // 空白が潰れると単位だけが動き、値の変化が読み取れなくなる
+  const peakUnitXs = [
+    layout.voiceOff.peakUnitX,
+    layout.voiceOn.peakUnitX,
+    layout.quiet.peakUnitX,
+    layout.loud.peakUnitX,
+    layout.notReported.peakUnitX,
+  ].filter((x): x is number => x !== null);
+  expect(peakUnitXs).toHaveLength(5);
+  expect(new Set(peakUnitXs).size).toBe(1);
+
+  const levelUnitXs = [
+    layout.voiceOff.levelUnitX,
+    layout.voiceOn.levelUnitX,
+    layout.quiet.levelUnitX,
+    layout.loud.levelUnitX,
+    layout.notMeasured.levelUnitX,
+  ].filter((x): x is number => x !== null);
+  expect(levelUnitXs).toHaveLength(5);
+  expect(new Set(levelUnitXs).size).toBe(1);
 
   // 表示そのものが壊れていないこと (位置だけを測る空のテストにしない)
   expect(layout.voiceOff.texts).toEqual({

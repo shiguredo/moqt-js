@@ -22,5 +22,7 @@ export const METER_FIELD_CLASS = "flex flex-col gap-0.5";
 export const METER_LABEL_CLASS = "text-[10px] uppercase tracking-wide text-slate-400";
 
 /** 項目の値。幅は呼び出し側が `w-[11ch]` などで固定する */
+// `whitespace-pre`: 数値の左を空白で埋めた文字列 (formatDbfs / formatAudioLevel) を
+// そのまま描く。nowrap では先頭の空白が潰され、桁数で単位の位置が動く
 export const METER_VALUE_CLASS =
-  "inline-block overflow-hidden whitespace-nowrap font-mono text-xs font-semibold tabular-nums text-slate-800";
+  "inline-block overflow-hidden whitespace-pre font-mono text-xs font-semibold tabular-nums text-slate-800";
