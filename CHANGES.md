@@ -11,7 +11,10 @@
 
 ## develop
 
-- [CHANGE] moqt-devtools の Namespace の初期値を `moqt-devtools/{ランダムな 8 文字}` にする
+- [CHANGE] moqt-devtools の event timeline の eventType を `app.shiguredo.moqt-devtools.chat` にする
+  - 逆ドメイン名の取り方を見直す。catalog の eventType が変わる (購読側は packaging でトラックを探すため、購読の動作は変わらない)
+  - @voluntas
+- [CHANGE] moqt-devtools の Namespace の初期値を `devtools/{ランダムな 16 文字}` にする
   - 複数の devtools が同じ relay に繋がっても namespace が衝突しないようにする。共有するときは Copy URL や Save で持ち出す。Namespace は接続先の特定に使うため、URI Fragment の左に置く
   - @voluntas
 - [CHANGE] `MediaReceiverStats.avSync` を追加する
@@ -111,6 +114,10 @@
   - URL クエリ `mode` で Publisher だけ / Subscriber だけを表示する。ヘッダーの副題に 3 つのモードを並べ、今のモードを示すとともに、他のモードのページを今の接続設定のまま新しいタブで開けるようにする
   - Catalog Timeout と Use Dedicated Worker を URL に載せ、同じ接続設定のページを URL で再現できるようにする
   - @voluntas
+- [UPDATE] moqt-devtools の Tracks カードに event timeline トラックを出す
+  - audio / video と同じ形で、role / track name / event type を出す。トラック名と eventType は devtools の取り決めで固定
+  - 接続設定の要約の Tracks にも events を足す
+  - @voluntas
 - [UPDATE] moqt-devtools の統計を Audio / Video / Messages に分ける
   - 統計の欄に Audio / Video / Messages (event timeline) / A/V Sync / Session の大見出しを付け、audio → video の順に並べる
   - 音声の符号化 (chunksEncoded / encodeErrors) と送信 (objects / datagramObjects / bytes) を追加する。これまで encodeErrors は音声の符号化エラーも混ぜていたため、音声は audioEncodeErrors に分ける
@@ -120,7 +127,7 @@
   - @voluntas
 - [UPDATE] moqt-devtools の track 表示を整理し、ステータスを接続状態にする
   - ステータスメッセージは接続の段階 (`Publishing` / `Subscribed` など) だけを示すようにし、トラックの一覧は出さない。どのトラックがあるかは Catalog パネルとデバッグパネルで確認する
-  - Catalog パネルは既定で折りたたみ、見出しを押したときだけ中身を出す。折りたたみ時はトラックの Full Track Name を 1 行で出す最小表示にする
+  - Catalog パネルは既定で折りたたみ、見出しを押したときだけ中身を出す。折りたたみ時は track name を `/` 区切りで 1 行に出す最小表示にする
   - Catalog パネルはトラックを Media (`packaging: "loc"`) と Data (それ以外) に分け、見出しに件数を出す。各トラックは 1 行目に namespace を含む Full Track Name、2 行目以降に残りのキーと値を出す。表記は namespace のフィールドを `-`、track name を `--` でつなぎ、`[A-Za-z0-9_]` 以外のバイトを `.` + 小文字 16 進 2 桁でエスケープする (draft-ietf-moq-transport-21 §8.8 / draft-ietf-moq-msf-01 §11.1.2)。track の `namespace` は §5.2.2 に従い、指定があればそちらを使う
   - パネルの並びを Catalog → Audio → Video → Messages → Statistics にし、Catalog を映像の上に出す
   - Messages カードを amber にし、Catalog の色 (Publisher は緑、Subscriber は青) と見分けられるようにする
