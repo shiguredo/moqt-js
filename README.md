@@ -9,7 +9,7 @@
 > このライブラリは開発中であり、仕様が積極的に変更される場合があります。
 
 > [!WARNING]
-> このライブラリは時雨堂が開発している MOQT Relay サーバーとのみ疎通確認を行っています。
+> このライブラリは時雨堂が開発している Sora MoQ とのみ疎通確認を行っています。
 > 他の MOQT Relay サーバーとの疎通確認は行っておらず、今後も予定はありません。
 
 ## About Shiguredo's open source software
@@ -32,6 +32,7 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
   - WebTransport API を利用
   - Publisher / Subscriber 対応
   - 高レベル API (WebCodecs / MediaStream 対応)
+  - 音声と映像の同期再生
 - Media over QUIC Transport (MOQT) 対応
   - [Media over QUIC Transport](https://datatracker.ietf.org/doc/html/draft-ietf-moq-transport-21)
   - `draft-21` 対応
@@ -65,6 +66,7 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
 
 - PUBLISH メッセージ
 - PUBLISH_DONE メッセージ (Stream Count 対応)
+- PUBLISH_STATE_NOTIFY メッセージ (購読状態の変化の通知)
 - Object Stream 送信 (Subgroup Header)
 - Object Datagram 送信
 - Datagram と Subgroup の混在送信
@@ -388,19 +390,24 @@ moqt-js を利用した MOQT の動作確認ツールです。
 
 - Publisher / Subscriber 両方の動作確認
 - 複数 Subscriber の同時接続
-- ダミー映像 / カメラ映像の選択
-- コーデック選択 (VP8 / VP9 / AV1 / H.264 / H.265)
+- 音声の入力元の選択 (ダミー音声 / マイク / 音声なし)
+- 映像の入力元の選択 (ダミー映像 / カメラ映像 / 映像なし)
+- コーデック選択 (音声: Opus / AAC、映像: VP8 / VP9 / AV1 / H.264 / H.265)
 - 解像度 / フレームレート / ビットレート / キーフレーム間隔の設定
-- MAX_CACHE_DURATION の設定
+- MAX_CACHE_DURATION / targetLatency / renderGroup の設定
 - 自己署名証明書のハッシュ指定
 - Authorization Token の指定 (MSF URL の c4m パラメータ対応)
 - WebCodecs Dedicated Worker 対応
+- 音声レベルメーター (peak / RMS / 波形)
+- 音声と映像の同期再生
+- event timeline のメッセージ送受信
 - デバッグパネル (MOQT プロトコルメッセージのログ表示)
-- 統計情報の表示 (エンコード/デコードフレーム数、送受信バイト数など)
+- 統計情報の表示 (音声 / 映像 / メッセージ / A/V 同期 / セッション)
 - カタログ情報の表示
 - HTTP/2 / HTTP/3 接続判別表示
 - Forward State の表示
 - キーフレームリクエスト (NEW_GROUP_REQUEST)
+- 表示モード (Publisher のみ / Subscriber のみ)
 - 設定を URL クエリパラメータで共有
 
 ### webcodecs-devtools
