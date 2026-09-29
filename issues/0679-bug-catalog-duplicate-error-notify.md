@@ -55,4 +55,13 @@
 
 ## 解決方法
 
-{未着手}
+- `src/publisher.ts` に非公開の `WeakSet<object>` (`publisherNotifiedErrors`) と内部向けの判定関数 `isErrorNotifiedByPublisher(error)` を追加した。`PublisherImpl.handleError` が通知した error に印を付け、判定関数は印の有無だけを返す (オブジェクト以外は偽)
+- `src/createMediaPublisher.ts` の `start()` の catch の通知を private メソッド `notifyStartFailure(error)` に切り出し、印付きの error では通知せずに再 throw するようにした。巻き戻し (`disposeAllResources`) と再 throw の挙動は変えていない
+- 印を付けるだけで通知回数は変えない。`handleError` は印が付いていても通知し、抑止するのは呼び出し側の catch だけである (テストで契約として固定した)
+- テストで固定した範囲: 判定関数の真偽と `handleError` の通知回数 (`src/publisher.test.ts`)、`sendObject` の事前検証 reject と委譲先 (ID / priority 検証) の reject に印が付くこと (`src/session/publish.test.ts`)、catalog 送信の事前検証 reject が印付きで `createPublishers()` を伝い通知 1 回で終わることと、`notifyStartFailure` が印付きで通知せず印なしで 1 回通知すること (`src/createMediaPublisher.test.ts`)
+- 実測: 抑止の分岐 (`if (isErrorNotifiedByPublisher(error)) return;`) を削ると `start 失敗の通知: publisher 層が通知済みの error は通知しない` が落ちる。`handleError` の印付けを削ると 9 テストが落ちる (`src/publisher.test.ts` 4 件、`src/session/publish.test.ts` 3 件、`src/createMediaPublisher.test.ts` 2 件)
+- 残る未固定の範囲: `start()` は node に WebTransport が無く接続できないため、印付きの失敗を `start()` の catch まで運べない。catch から `notifyStartFailure` を呼ぶ配線 (1 行) はテストで固定できておらず、クラス自身の `connectToServer` を差し替える形のテストはモックに当たるため取らなかった
+- `start()` の catch が扱う「通知済み」の定義は publisher 層に閉じている。セッション層が通知した error では二重通知が残る (既存の穴。本 issue の対象外)
+- 印付きの経路では利用者の `onError` が `disposeAllResources` より前に走る (通知の担い手が publisher 側へ移るため)。印のない失敗は従来どおり巻き戻しの後に通知する
+- 判定関数の利用者は `createMediaPublisher` の `start()` の通知 (`notifyStartFailure`) に限る
+- `CHANGES.md` の `## develop` に `[FIX]` を追記した

@@ -51,8 +51,10 @@ import type {
 } from "./createMedia/settings";
 import type { VideoFrameSource } from "./frameSource";
 import { CATALOG_TRACK_NAME, decodeCatalogMessage } from "./msf";
-import type { Publisher } from "./publisher";
+import { PublisherImpl, isErrorNotifiedByPublisher, type Publisher } from "./publisher";
 import type { PublishCallbacks, Session } from "./session";
+import { ProtocolViolationError } from "./error";
+import { ObjectStatus } from "./message/types";
 import * as LOC from "./loc";
 import { WallClockMapper } from "./mediaClock";
 import {
@@ -702,6 +704,68 @@ test("start 失敗時は巻き戻し・通知・再 throw を行い state を変
   // 巻き戻しを通ったこと (mediaStream の null 化で観測する)
   const lifecycle = publisher as unknown as { mediaStream: MediaStream | null };
   assert.isNull(lifecycle.mediaStream);
+});
+
+/**
+ * start 失敗の通知の検証用の制御口
+ *
+ * start() は接続を要するため、通知の抑止の判断を切り出した private メソッドを直接
+ * 駆動する。start() の catch が通知を伴わない失敗で onError を 1 回呼ぶことは、
+ * 実物の接続失敗を使う前のテストが検証している。印付きの失敗を catch まで運ぶ経路は
+ * node に WebTransport が無く接続できないため、ここでは駆動しない。
+ */
+interface PublisherStartFailureControl extends PublisherLifecycleControl {
+  notifyStartFailure(error: unknown): void;
+}
+
+/**
+ * publisher 層が通知済みの error を作る
+ *
+ * 印は実物の PublisherImpl.handleError だけが付ける。通知先は検証対象ではないため
+ * 記録せず、印を付けるためだけに実物へ通知させる (モックは使わない)。
+ */
+function createNotifiedError(message: string): Error {
+  const error = new Error(message);
+  new PublisherImpl(["namespace"], "track", 0n, 0n).handleError(error);
+  return error;
+}
+
+test("start 失敗の通知: publisher 層が通知済みの error は通知しない", () => {
+  // catalog 送信の await が受けた reject は publisher 層が通知済みのため、
+  // start() の catch で通知し直すと 1 件の失敗で onError が 2 回呼ばれる。
+  // 印付きでは通知しないことを固定する (抑止の分岐を削るとこのテストが落ちる)
+  const { control, errors } = createLoopTestContext();
+  const startFailure = control as unknown as PublisherStartFailureControl;
+  const failure = createNotifiedError("send rejected after notify");
+
+  startFailure.notifyStartFailure(failure);
+
+  assert.equal(errors.length, 0);
+});
+
+test("start 失敗の通知: 通知を伴わない error は 1 回通知する", () => {
+  // 接続失敗や closed の同期 throw は publisher 層の通知を伴わないため、
+  // 従来どおり onError へ同じ error を 1 回だけ通知する
+  const { control, errors } = createLoopTestContext();
+  const startFailure = control as unknown as PublisherStartFailureControl;
+  const failure = new Error("connection failed");
+
+  startFailure.notifyStartFailure(failure);
+
+  assert.equal(errors.length, 1);
+  assert.strictEqual(errors[0], failure);
+});
+
+test("start 失敗の通知: Error 以外の throw は Error に包んで通知する", () => {
+  // throw される値は Error に限らないため、Error 以外は文字列化して通知する
+  const { control, errors } = createLoopTestContext();
+  const startFailure = control as unknown as PublisherStartFailureControl;
+
+  startFailure.notifyStartFailure("connection failed");
+
+  assert.equal(errors.length, 1);
+  assert.instanceOf(errors[0], Error);
+  assert.isTrue((errors[0]?.message ?? "").includes("connection failed"));
 });
 
 test("破棄段階の失敗は後続を止めず最初の失敗を throw し旧 state が残る", async () => {
@@ -1540,6 +1604,48 @@ test("createPublishers: Forward State が 1 になると Audio Config の送り�
   audioCallbacks?.onForwardStateChange?.(true);
   audioCallbacks?.onForwardStateChange?.(false);
   assert.isTrue(control.audioConfigResendRequested);
+});
+
+test("createPublishers: catalog 送信の事前検証 reject は印付きで 1 回だけ通知される", async () => {
+  // start() は createPublishers() を await し、その中で publishCatalog() が catalog 送信を
+  // await する。事前検証の違反は publisher 層が通知してから返値を reject するため、
+  // reject が createPublishers() を伝って start() の catch に届く。
+  // ここでは実物の publisher に事前検証で拒否させ、通知が publisher 層の 1 回で終わることと、
+  // reject に印が付いたまま伝わることを固定する。
+  // start() 自体は node に WebTransport が無く接続できないため、start() の catch が
+  // 受ける位置 (createPublishers() の直後) までを駆動し、通知の抑止は
+  // start 失敗の通知のテストで確認する
+  const { control: loopControl, errors } = createLoopTestContext();
+  const control = loopControl as unknown as PublisherForwardControl;
+  // 高レベル API と同じ配線にする (publisher の error コールバックが onError に直結する)
+  const catalogPublisher = new PublisherImpl(["live"], CATALOG_TRACK_NAME, 0n, 0n, (error) => {
+    errors.push(error);
+  });
+  // END_OF_TRACK を受理させ、その後の catalog 送信を guard の事前検証で拒否させる
+  // (委譲先を持たない publisher でも END_OF_TRACK の記録は行われる)
+  await catalogPublisher.sendObject({
+    groupId: 0,
+    objectId: 0,
+    payload: new Uint8Array(0),
+    status: ObjectStatus.END_OF_TRACK,
+  });
+  const { session } = createPublishRecordingSession(
+    new Map<string, Publisher>([[CATALOG_TRACK_NAME, catalogPublisher]]),
+  );
+  control.session = session;
+
+  let rejected: unknown = null;
+  try {
+    await control.createPublishers();
+  } catch (error) {
+    rejected = error;
+  }
+
+  // 事前検証の違反は publisher 層が通知してから返値の reject になる
+  assert.instanceOf(rejected, ProtocolViolationError);
+  assert.equal(errors.length, 1);
+  assert.strictEqual(errors[0], rejected);
+  assert.isTrue(isErrorNotifiedByPublisher(rejected));
 });
 
 /**

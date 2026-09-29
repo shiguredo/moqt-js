@@ -275,6 +275,11 @@
   - 上限で捨てたログの vnode はキャッシュから落とす。`data` と `payload` は追加後に書き換えない前提になる (行を描画し直さないため、書き換えても表示は古いまま)
   - 1 件追加のコストは表示中の件数に比例する分が残る (1000 件で約 3 ms のうち、表示中の子の走査が大半)。表示する行を画面に入る分だけにする対応は別に行う
   - @voluntas
+- [FIX] `createMediaPublisher` の `start` が publisher 層で通知済みの失敗を二重通知し得る経路を塞ぐ
+  - `publishCatalog` は元から catalog の送信だけを `await sendObject(...)` している (書き込み完了を待つため)。事前検証の違反は publisher 層が `error` コールバックで通知してから返値を reject する契約のため、reject が `start` の catch にも届くと同一の失敗が `onError` へ 2 回通知される (現行の catalog 送信は事前検証で reject しないため未到達である)
+  - `PublisherImpl.handleError` が通知した error に印を付け、内部向けの判定関数 (`isErrorNotifiedByPublisher`) で「通知済みの error では通知しない」catch にする。印を付けるだけで通知回数は変えない
+  - 通知を伴わない失敗 (接続失敗や closed の同期 throw) は従来どおり `onError` へ 1 回通知し、巻き戻しと再 throw の挙動も変えない
+  - @voluntas
 - [FIX] moqt-devtools の映像エンコーダのバックプレッシャが Worker モードで無効になっているのを修正する
   - `devtools/src/utils/EncoderWrapper.ts` の `encodeQueueSize` は、Worker モードで Worker へ送信してまだ `encoded` 応答が返っていないフレーム数を返す (ライブラリ側と同じ純粋カウンタを使う)。0 固定だったため、閾値を超えたフレームを破棄する判定が常に真になり、全フレームを Worker へ送っていた
   - `configure` と `close` で送信中のフレーム数を 0 に戻し、再 `configure` では旧 Worker を破棄してから作り直す。戻す位置は Worker の差し替えの直後 (同期) とし、`configure` の待機中に新しい Worker へ送ったフレームの数まで消えないようにする。戻さないと数が張り付き、以後のフレームがすべて破棄される

@@ -6,7 +6,7 @@
  */
 
 import { test, assert } from "vite-plus/test";
-import { PublisherImpl } from "../publisher";
+import { PublisherImpl, isErrorNotifiedByPublisher } from "../publisher";
 import { SessionError } from "../error";
 import { concatUint8Arrays } from "../testSupport/helpers";
 import {
@@ -270,6 +270,8 @@ test("publishSendObject: 不正 objectId (-1) で reject しセッションを�
   assert.isTrue(rejected!.message.includes("invalid object id"));
   assert.equal(errors.length, 1);
   assert.strictEqual(errors[0], rejected);
+  // 通知済みの印が付く (呼び出し側が同じ失敗を通知し直さないための判定に使う)
+  assert.isTrue(isErrorNotifiedByPublisher(rejected));
   // セッションは閉じない
   assert.isUndefined(closedWithError());
   // 新規 Group でもストリームが生成されず、統計も進まない
@@ -342,6 +344,8 @@ test("publishSendObject: groupId が 2^64 以上の場合に reject しセッシ
   assert.isTrue(rejected!.message.includes("invalid group id"));
   assert.equal(errors.length, 1);
   assert.strictEqual(errors[0], rejected);
+  // 通知済みの印が付く (呼び出し側が同じ失敗を通知し直さないための判定に使う)
+  assert.isTrue(isErrorNotifiedByPublisher(rejected));
   assert.isUndefined(closedWithError());
   assert.equal(unidirectionalStreamCreated(), 0);
   assert.equal(session.statsUnidirectionalStreamsOpened, 0);
@@ -378,6 +382,8 @@ test("publishSendObject: 範囲外 priority (300) で reject し副作用を残�
   assert.isTrue(rejected!.message.includes("invalid publisher priority"));
   assert.equal(errors.length, 1);
   assert.strictEqual(errors[0], rejected);
+  // 通知済みの印が付く (呼び出し側が同じ失敗を通知し直さないための判定に使う)
+  assert.isTrue(isErrorNotifiedByPublisher(rejected));
   assert.isUndefined(closedWithError());
   assert.equal(unidirectionalStreamCreated(), 0);
   assert.equal(session.statsUnidirectionalStreamsOpened, 0);
