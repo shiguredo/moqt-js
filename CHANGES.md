@@ -110,8 +110,10 @@
   - @voluntas
 - [UPDATE] moqt-devtools の track 表示を整理し、ステータスを接続状態にする
   - ステータスメッセージは接続の段階 (`Publishing` / `Subscribed` など) だけを示すようにし、トラックの一覧は出さない。どのトラックがあるかは Catalog パネルとデバッグパネルで確認する
-  - Catalog パネルはトラックを Media (`packaging: "loc"`) と Data (それ以外) に分けて並べ、各行の先頭に Full Track Name を出す。表記は namespace のフィールドを `-`、track name を `--` でつなぎ、`[A-Za-z0-9_]` 以外のバイトを `.` + 小文字 16 進 2 桁でエスケープする (draft-ietf-moq-transport-21 §8.8 / draft-ietf-moq-msf-01 §11.1.2)。track の `namespace` は §5.2.2 に従い、指定があればそちらを使う
+  - Catalog パネルはトラックを Media (`packaging: "loc"`) と Data (それ以外) に分け、見出しに件数を出す。各トラックは 1 行目に namespace を含む Full Track Name、2 行目以降に残りのキーと値を出す。表記は namespace のフィールドを `-`、track name を `--` でつなぎ、`[A-Za-z0-9_]` 以外のバイトを `.` + 小文字 16 進 2 桁でエスケープする (draft-ietf-moq-transport-21 §8.8 / draft-ietf-moq-msf-01 §11.1.2)。track の `namespace` は §5.2.2 に従い、指定があればそちらを使う
   - パネルの並びを Catalog → Audio → Video → Messages → Statistics にし、Catalog を映像の上に出す
+  - Messages カードを amber にし、Catalog の色 (Publisher は緑、Subscriber は青) と見分けられるようにする
+  - Video を Audio と同じ枠のカードにし、映像からは読み取れない値を出す。Publisher は符号化 fps、符号化と送信の遅延 (p50)、encoder の待ちで捨てたフレーム数、Subscriber は表示 fps、受信から表示までと復号の遅延 (p50)、表示されなかったフレーム数
   - デバッグパネルのログ行は、メッセージの decoded に track の情報があれば行末に Full Track Name を付ける。展開した Data の `Track Namespace` / `Track Name` は `Full Track Name` の 1 行にまとめ、namespace 単体と `Track Namespace Prefix` は `-` 区切りの表記にする。catalog の OBJECT ログも namespace を含む Full Track Name にする
   - @voluntas
 - [UPDATE] moqt-devtools の publisher の接続設定を Tracks / Audio / Video / Catalog / Relay Cache に分ける
@@ -226,6 +228,9 @@
   - 行の vnode をログの連番で保持し、展開の状態・表示モード・コピーの表示が変わったときだけ作り直す。Preact は同じ vnode を再び受け取ると部分木の差分を省略するため、1000 件表示でも 1 件追加で描画される行は 1 件になる (実測: 同じ計測方法で 1 件追加の中央値 23.0 ms → 7.6 ms、描画される行 1000 件 → 1 件)
   - 上限で捨てたログの vnode はキャッシュから落とす。`data` と `payload` は追加後に書き換えない前提になる (行を描画し直さないため、書き換えても表示は古いまま)
   - 1 件追加のコストは表示中の件数に比例する分が残る (1000 件で約 3 ms のうち、表示中の子の走査が大半)。表示する行を画面に入る分だけにする対応は別に行う
+  - @voluntas
+- [FIX] moqt-devtools のメッセージ入力で、日本語入力の変換確定の Enter がそのまま送信されるのを修正する
+  - 変換中 (`KeyboardEvent.isComposing`) の Enter では送信せず、変換の確定に使う。Messages の入力欄と、webtransport-devtools の双方向 / 送信用単方向ストリーム / データグラムの入力欄に適用する
   - @voluntas
 - [FIX] moqt-devtools の publisher が、空のトラック名や重複したトラック名の catalog を送るのを修正する
   - draft-ietf-moq-msf-01 §5.2.3 の name (Required) と namespace ごとの一意性を満たさない catalog は、購読側の復号で初めて分かる。Tracks カードに理由を出し、Publish は接続の前に拒否する
