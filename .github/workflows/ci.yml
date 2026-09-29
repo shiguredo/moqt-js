@@ -23,6 +23,9 @@ jobs:
           cache: true
       # vp check は整形・lint・型をまとめて検証する。整形崩れも CI で止めるため
       # vp lint ではなく vp check を使う (型は別 job で複数バージョンを検証する)。
+      # tests/e2e の spec は package.json の exports 経由で moqt-js を import する
+      # ため、dist を先に作らないと型解決に失敗する (TS2307)。
+      - run: vp run build
       - run: vp check
 
   build:
