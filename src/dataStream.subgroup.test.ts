@@ -1002,3 +1002,156 @@ test("SubgroupHeader: 0x7f を超える Type Flags はエンコードを拒否�
     /invalid subgroup header type: 0x80, does not match form 0b0XX1XXXX/,
   );
 });
+
+// Subgroup ID の契約 (draft-ietf-moq-transport-21 §11.3.1)
+// SUBGROUP_ID_MODE は 0b00 (0 固定) / 0b01 (先頭 Object ID) / 0b10 (フィールド) であり、
+// encode は decode の返り値と往復できる値だけを受理する。
+
+test("SubgroupHeader: Subgroup ID フィールドを持つ type で subgroupId 未指定は throw する", () => {
+  // 0b10 の代表 (0x3c は Priority Present = No、0x14 は Yes)。decode は無条件に読むため、
+  // 省略すると Publisher Priority や Object ID Delta が Subgroup ID として読まれる
+  assert.throws(
+    () =>
+      encodeSubgroupHeader({
+        type: 0x3c,
+        trackAlias: 1n,
+        groupId: 2n,
+        firstObject: false,
+      }),
+    /subgroupId is required when the Subgroup ID field is present: type 0x3c, got undefined/,
+  );
+  assert.throws(
+    () =>
+      encodeSubgroupHeader({
+        type: 0x14,
+        trackAlias: 1n,
+        groupId: 2n,
+        publisherPriority: 128,
+        firstObject: false,
+      }),
+    /subgroupId is required when the Subgroup ID field is present: type 0x14, got undefined/,
+  );
+});
+
+test("SubgroupHeader: 0b00 の type は subgroupId が 0n または未指定だけを通す", () => {
+  // Subgroup ID = 0 固定。decode は 0n を返すため、往復できるのは 0n と未指定だけ
+  const base = {
+    type: 0x10,
+    trackAlias: 1n,
+    groupId: 2n,
+    publisherPriority: 128,
+    firstObject: false,
+  };
+  encodeSubgroupHeader(base);
+  encodeSubgroupHeader({ ...base, subgroupId: 0n });
+  assert.throws(
+    () => encodeSubgroupHeader({ ...base, subgroupId: 1n }),
+    /subgroupId must be 0 or omitted when the Subgroup ID is fixed to 0: type 0x10, got 1/,
+  );
+});
+
+test("SubgroupHeader: 0b01 の type は subgroupId 未指定だけを通す", () => {
+  // Subgroup ID = 先頭 Object の Object ID。wire に載せるフィールドが無い
+  const base = {
+    type: 0x12,
+    trackAlias: 1n,
+    groupId: 2n,
+    publisherPriority: 128,
+    firstObject: false,
+  };
+  encodeSubgroupHeader(base);
+  assert.throws(
+    () => encodeSubgroupHeader({ ...base, subgroupId: 1n }),
+    /subgroupId must be omitted when the Subgroup ID is the first Object ID: type 0x12, got 1/,
+  );
+});
+
+test("SubgroupHeader: 3 つの SUBGROUP_ID_MODE で decode → encode → decode が往復する", () => {
+  // decode の返り値 (0b00 は 0n、0b01 は undefined、0b10 は値) がそのまま encode に通り、
+  // もう一度 decode しても同じ値になること。契約の両方向をここで固定する
+  for (const header of [
+    { type: 0x10, trackAlias: 1n, groupId: 2n, publisherPriority: 128, firstObject: false },
+    { type: 0x12, trackAlias: 1n, groupId: 2n, publisherPriority: 128, firstObject: false },
+    {
+      type: 0x14,
+      trackAlias: 1n,
+      groupId: 2n,
+      publisherPriority: 128,
+      subgroupId: 7n,
+      firstObject: false,
+    },
+  ] as const) {
+    const decoded = decodeSubgroupHeader(encodeSubgroupHeader(header))[0];
+    const redecoded = decodeSubgroupHeader(encodeSubgroupHeader(decoded))[0];
+    assert.deepEqual(redecoded, decoded);
+  }
+});
+
+test("SubgroupHeader: SUBGROUP_ID_MODE ごとに 16 type すべてで契約が成立する", () => {
+  // Subgroup ID フィールドを持つのは 0b10 の 16 type であり、契約は mask 0x06 の
+  // モードで決まる。16 type すべてで同じ結果になることを固定する
+  const modes: { mode: number; types: number[] }[] = [
+    { mode: 0b00, types: [] },
+    { mode: 0b01, types: [] },
+    { mode: 0b10, types: [] },
+  ];
+  // Priority Present の type では publisherPriority も必須であるため、必要な type に
+  // だけ付けたヘッダを組み立てる (0x40 の FIRST_OBJECT を除いた値で判定する)
+  const withPublisherPriority = (type: number) => {
+    const normalized = type & 0x3f;
+    return {
+      type,
+      trackAlias: 1n,
+      groupId: 2n,
+      ...(normalized >= 0x10 && normalized <= 0x1d ? { publisherPriority: 128 } : {}),
+      firstObject: false,
+    };
+  };
+  for (let type = 0x10; type <= 0x7d; type++) {
+    // bit 4 が立たない値は Type Flags の形式に合わない。0b11 (予約) はどのモードにも
+    // 一致しないため、この時点で捨てる
+    if ((type & 0x10) === 0) continue;
+    const entry = modes.find((candidate) => candidate.mode === (type & 0x06) >> 1);
+    entry?.types.push(type);
+  }
+  // 予約 (0b11) を除く有効な 48 type が 3 モードに 16 ずつ分かれる
+  assert.equal(modes[0].types.length, 16);
+  assert.equal(modes[1].types.length, 16);
+  assert.equal(modes[2].types.length, 16);
+
+  for (const type of modes[2].types) {
+    // 0b10: subgroupId 未指定は型値を含むエラーになる (Subgroup ID の検証が
+    // Publisher Priority の検証より先に走るため、priority は渡さない)
+    assert.throws(
+      () => encodeSubgroupHeader({ type, trackAlias: 1n, groupId: 2n, firstObject: false }),
+      new RegExp(
+        `subgroupId is required when the Subgroup ID field is present: type 0x${type.toString(16)}, got undefined`,
+      ),
+    );
+  }
+  for (const type of modes[0].types) {
+    // 0b00: 0n と未指定は通り、それ以外は型値を含むエラーになる。
+    // 未指定を通すには Priority Present の type で publisherPriority も要る
+    const header = withPublisherPriority(type);
+    encodeSubgroupHeader(header);
+    encodeSubgroupHeader({ ...header, subgroupId: 0n });
+    assert.throws(
+      () => encodeSubgroupHeader({ ...header, subgroupId: 1n }),
+      new RegExp(
+        `subgroupId must be 0 or omitted when the Subgroup ID is fixed to 0: type 0x${type.toString(16)}, got 1`,
+      ),
+    );
+  }
+  for (const type of modes[1].types) {
+    // 0b01: 未指定だけが通る。未指定を通すには Priority Present の type で
+    // publisherPriority も要る
+    const header = withPublisherPriority(type);
+    encodeSubgroupHeader(header);
+    assert.throws(
+      () => encodeSubgroupHeader({ ...header, subgroupId: 1n }),
+      new RegExp(
+        `subgroupId must be omitted when the Subgroup ID is the first Object ID: type 0x${type.toString(16)}, got 1`,
+      ),
+    );
+  }
+});

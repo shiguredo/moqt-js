@@ -263,6 +263,9 @@
   - 上限で捨てたログの vnode はキャッシュから落とす。`data` と `payload` は追加後に書き換えない前提になる (行を描画し直さないため、書き換えても表示は古いまま)
   - 1 件追加のコストは表示中の件数に比例する分が残る (1000 件で約 3 ms のうち、表示中の子の走査が大半)。表示する行を画面に入る分だけにする対応は別に行う
   - @voluntas
+- [FIX] `encodeSubgroupHeader` が Subgroup ID フィールド必須の type で `subgroupId` の省略を黙過するのを修正する
+  - SUBGROUP_ID_MODE ごとに契約を決め、0b10 (フィールドあり) は `subgroupId` 必須、0b00 (Subgroup ID は 0 固定) は `0n` か未指定、0b01 (先頭 Object の Object ID) は未指定だけを受理する。省略すると受信側がフィールド 1 つ分ずれて読み、Publisher Priority や Object ID Delta を Subgroup ID として読むため
+  - @voluntas
 - [FIX] `keyframeInterval` の値域を検証し、0 や非整数で周期キーフレームを要求しなくなるのを修正する
   - 1 以上の整数だけを受理し、0 / 負値 / 非整数 / NaN / ±Infinity は `createMediaPublisher()` が reject する。未指定時の既定は `Math.round(framerate * 2)` にして整数に丸める (framerate が 0 / 負値 / 非有限、または `Math.round(framerate * 2)` が 1 未満なら reject)
   - @voluntas
