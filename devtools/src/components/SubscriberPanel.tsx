@@ -1,4 +1,6 @@
 import { useMemo, useRef, useEffect } from "preact/hooks";
+import type { ReadonlySignal } from "@preact/signals";
+import type { ComponentChildren } from "preact";
 import { useSubscriber } from "../hooks/useSubscriber";
 import { AudioMeter } from "./AudioMeter";
 import { VideoCard } from "./VideoCard";
@@ -31,7 +33,7 @@ import { LATENCY_SEGMENTS } from "../utils/latencyBreakdown";
 import { STALL_CAUSES } from "../utils/stallAnalysis";
 import { subscriberControlState } from "../utils/subscriberControls";
 import * as settings from "../signals/connectionSettings";
-import { buildSubscriberStats } from "../signals/statsSnapshot";
+import { type SubscriberStats, buildSubscriberStats } from "../signals/statsSnapshot";
 import { createStatsSignal, startStatsTick } from "../signals/statsTick";
 import * as sub from "../signals/subscriber";
 
@@ -88,11 +90,6 @@ export function SubscriberPanel({
   if (!instance) {
     return null;
   }
-  const stats = statsSignal.value;
-  if (stats === null) {
-    // instance があるときは getSubscriber も引けるため到達しない (型を絞るためのガード)
-    return null;
-  }
 
   const status = instance.status.value;
   const catalog = instance.catalog.value;
@@ -107,13 +104,6 @@ export function SubscriberPanel({
     starting: instance.isStarting.value,
     stopping: instance.isStopping.value,
   });
-  // 表示されなかったフレーム数の合計。relay の cache から追いつくまでに意図的に
-  // 描かなかった分 (catchUpFramesSkipped) は含めない
-  const videoDropped =
-    stats.staleFramesDropped +
-    stats.missingReferenceFramesDropped +
-    stats.playbackTiming.lateFramesDropped +
-    stats.playbackTiming.displayQueueDrops;
 
   const getStatusClasses = () => {
     // 1 行に収める。長い文言で折り返すと、下の映像の位置が動く (全文は title に持つ)
@@ -322,22 +312,9 @@ export function SubscriberPanel({
 
         {/* Video。Audio と同じ枠で囲み、映像からは読み取れない値 (表示 fps、受信から
             表示までと復号の遅延、捨てたフレーム数) をヘッダーに出す */}
-        <VideoCard
-          testIdPrefix="subscriber-video"
-          fps={instance.subscriber.value === null ? null : stats.playbackTiming.displayFps}
-          latency={[
-            {
-              label: "latency",
-              summary: stats.playbackTiming.latencyMs,
-              testId: "subscriber-video-latency",
-            },
-            {
-              label: "decode",
-              summary: stats.playbackTiming.decodeTimeMs,
-              testId: "subscriber-video-decode",
-            },
-          ]}
-          dropped={instance.subscriber.value === null ? null : videoDropped}
+        <SubscriberVideoCard
+          statsSignal={statsSignal}
+          subscriberActive={instance.subscriber.value !== null}
         >
           <canvas
             ref={canvasRef}
@@ -365,7 +342,7 @@ export function SubscriberPanel({
               </div>
             )}
           </div>
-        </VideoCard>
+        </SubscriberVideoCard>
 
         {/* 受信した event timeline のメッセージ。audio / video 以外のデータ */}
         <MessageList entries={instance.eventMessages.value} testId="subscriber-messages" />
@@ -373,406 +350,464 @@ export function SubscriberPanel({
         {/* Statistics。既定で閉じ、「Statistics」を押すと開く。Audio / Video /
             Messages (event timeline) の種類ごとに分ける (audio → video の順) */}
         <StatsCollapse testId="subscriber-statistics">
-          <StatGroup title="Audio">
-            <StatSection title="Reception">
-              <StatList
-                items={[
-                  { label: "objects", value: stats.audio.objectsReceived },
-                  {
-                    label: "datagramObjects",
-                    value: stats.audio.datagramObjectsReceived,
-                    testId: "subscriber-audio-datagram-objects",
-                  },
-                  { label: "chunksDecoded", value: stats.audio.chunksDecoded },
-                  {
-                    // relay の cache から追いつくまでに鳴らさなかった音声 Object の数
-                    label: "catchUpObjectsSkipped",
-                    value: stats.audio.catchUpObjectsSkipped,
-                    tone: "warn",
-                    testId: "subscriber-audio-catch-up-objects-skipped",
-                  },
-                ]}
-              />
-            </StatSection>
-
-            <StatSection title="Playout">
-              <StatList
-                items={[
-                  {
-                    label: "decoderConfigured",
-                    value: String(stats.audio.decoderConfigured),
-                  },
-                  {
-                    label: "playbackEnabled",
-                    value: String(stats.audio.playbackEnabled),
-                  },
-                  {
-                    label: "playoutRebases",
-                    value: stats.audio.playoutRebases,
-                    tone: "warn",
-                  },
-                  {
-                    label: "playoutDrops",
-                    value: stats.audio.playoutDrops,
-                    tone: "warn",
-                  },
-                ]}
-              />
-            </StatSection>
-
-            <StatSection title="Meter">
-              <StatList
-                items={[
-                  { label: "peakDbfs", value: formatDbfsShort(stats.audio.peakDbfs) },
-                  { label: "rmsDbfs", value: formatDbfsShort(stats.audio.rmsDbfs) },
-                  {
-                    label: "peakDbfsRight",
-                    value: formatDbfsShort(stats.audio.peakDbfsRight),
-                  },
-                  {
-                    label: "rmsDbfsRight",
-                    value: formatDbfsShort(stats.audio.rmsDbfsRight),
-                  },
-                  { label: "lastLevel", value: stats.audio.lastLevel ?? "-" },
-                  {
-                    label: "lastVoiceActivity",
-                    value:
-                      stats.audio.lastVoiceActivity === null
-                        ? "-"
-                        : String(stats.audio.lastVoiceActivity),
-                  },
-                ]}
-              />
-            </StatSection>
-          </StatGroup>
-
-          <StatGroup title="Video">
-            <StatSection title="Reception">
-              <StatList
-                items={[
-                  { label: "objects", value: stats.objectsReceived },
-                  { label: "withExtensions", value: stats.objectsWithExtensions },
-                  { label: "bytes", value: formatBytes(stats.bytesReceived) },
-                ]}
-              />
-            </StatSection>
-
-            <StatSection
-              title="Decoding"
-              help={DECODING_PIPELINE_HELP}
-              testId="subscriber-decoding-pipeline"
-            >
-              <StatList
-                items={[
-                  { label: "chunksCreated", value: stats.chunksCreated },
-                  { label: "chunksDecoded", value: stats.chunksDecoded },
-                  { label: "chunksSkipped", value: stats.chunksSkipped, tone: "warn" },
-                  {
-                    label: "staleFramesDropped",
-                    value: stats.staleFramesDropped,
-                    tone: "warn",
-                  },
-                  {
-                    label: "missingReferenceFramesDropped",
-                    value: stats.missingReferenceFramesDropped,
-                    tone: "warn",
-                  },
-                  { label: "decodeErrors", value: stats.decodeErrors, tone: "error" },
-                ]}
-              />
-            </StatSection>
-
-            <StatSection title="Output">
-              <StatList
-                items={[
-                  { label: "framesDecoded", value: stats.framesDecoded },
-                  {
-                    // relay の cache から追いつくまでに描かなかったフレームの数
-                    label: "catchUpFramesSkipped",
-                    value: stats.catchUpFramesSkipped,
-                    tone: "warn",
-                    testId: "subscriber-catch-up-frames-skipped",
-                  },
-                  { label: "keyFrames", value: stats.keyFramesDecoded },
-                  { label: "currentGroup", value: stats.currentGroup },
-                  { label: "currentSubGroup", value: stats.currentSubGroup },
-                  { label: "decoderState", value: stats.decoderState },
-                ]}
-              />
-            </StatSection>
-
-            <StatSection
-              title="Playback Timing"
-              help={PLAYBACK_TIMING_HELP}
-              testId="subscriber-playback-timing"
-            >
-              <TimingTable
-                caption={PLAYBACK_TIMING_CAPTION}
-                rows={[
-                  {
-                    label: "arrivalJitter",
-                    summary: stats.playbackTiming.arrivalJitterMs,
-                    testId: "subscriber-arrival-jitter",
-                  },
-                  {
-                    label: "latency",
-                    summary: stats.playbackTiming.latencyMs,
-                    testId: "subscriber-latency",
-                  },
-                  {
-                    label: "decodeTime",
-                    summary: stats.playbackTiming.decodeTimeMs,
-                    testId: "subscriber-decode-time",
-                  },
-                  {
-                    label: "displayInterval",
-                    summary: stats.playbackTiming.displayIntervalMs,
-                    testId: "subscriber-display-interval",
-                  },
-                ]}
-              />
-              <StatList
-                items={[
-                  {
-                    label: "displayFps",
-                    value: stats.playbackTiming.displayFps,
-                    testId: "subscriber-display-fps",
-                  },
-                  {
-                    label: "displayStalls",
-                    value: stats.playbackTiming.displayStalls,
-                    tone: "warn",
-                    testId: "subscriber-display-stalls",
-                  },
-                  {
-                    label: "displayStallMs",
-                    value: Math.round(stats.playbackTiming.displayStallMs),
-                    tone: "warn",
-                    testId: "subscriber-display-stall-ms",
-                  },
-                  {
-                    label: "displayQueueDrops",
-                    value: stats.playbackTiming.displayQueueDrops,
-                    tone: "warn",
-                    testId: "subscriber-display-queue-drops",
-                  },
-                  {
-                    label: "playoutDelayMs",
-                    value:
-                      stats.playbackTiming.playoutDelayMs === null
-                        ? "-"
-                        : stats.playbackTiming.playoutDelayMs.toFixed(1),
-                    testId: "subscriber-playout-delay",
-                  },
-                  {
-                    label: "lateFramesDropped",
-                    value: stats.playbackTiming.lateFramesDropped,
-                    tone: "warn",
-                    testId: "subscriber-late-frames-dropped",
-                  },
-                ]}
-              />
-            </StatSection>
-
-            <StatSection
-              title="Latency Breakdown"
-              help={SUBSCRIBER_LATENCY_BREAKDOWN_HELP}
-              testId="subscriber-latency-breakdown"
-            >
-              <TimingTable
-                caption={PLAYBACK_TIMING_CAPTION}
-                testId="subscriber-latency-breakdown"
-                rows={LATENCY_SEGMENTS.map((segment) => ({
-                  label: segment,
-                  summary: stats.playbackTiming.latencyBreakdown[segment],
-                  testId: `subscriber-latency-breakdown-${segment}`,
-                  // 表示の遅延はほかの区間の和のため、合計の行として区切る
-                  total: segment === TOTAL_LATENCY_SEGMENT,
-                }))}
-              />
-            </StatSection>
-
-            <StatSection
-              title="Stall Causes"
-              help={STALL_CAUSES_HELP}
-              testId="subscriber-stall-causes"
-            >
-              <StatTable
-                caption="since start"
-                columns={["count", "ms"]}
-                testId="subscriber-stall-causes"
-                rows={[
-                  ...STALL_CAUSES.map((cause) => {
-                    const total = stats.playbackTiming.stallCauses[cause];
-                    return {
-                      label: cause,
-                      values: [String(total.count), String(Math.round(total.ms))],
-                      testId: `subscriber-stall-cause-${cause}`,
-                      // 起きた原因だけを目立たせる
-                      tone: total.count > 0 ? ("warn" as const) : undefined,
-                    };
-                  }),
-                  // 原因ごとの和は止まりの回数と時間に一致する
-                  {
-                    label: "total",
-                    values: [
-                      String(stats.playbackTiming.displayStalls),
-                      String(Math.round(stats.playbackTiming.displayStallMs)),
-                    ],
-                    testId: "subscriber-stall-cause-total",
-                    total: true,
-                  },
-                ]}
-              />
-              <EventLog
-                label="recentStalls"
-                hint="UTC, newest first"
-                lines={[...stats.playbackTiming.recentStalls]
-                  .reverse()
-                  .map((stall) => formatStallEvent(stall))}
-                testId="subscriber-recent-stalls"
-              />
-            </StatSection>
-
-            <StatSection title="Loss" help={LOSS_HELP} testId="subscriber-loss">
-              <StatList
-                items={[
-                  {
-                    label: "missingObjects",
-                    value: stats.playbackTiming.missingObjects,
-                    tone: "error",
-                    testId: "subscriber-missing-objects",
-                  },
-                  {
-                    label: "missingGroups",
-                    value: stats.playbackTiming.missingGroups,
-                    tone: "error",
-                    testId: "subscriber-missing-groups",
-                  },
-                  {
-                    label: "subgroupStreamResets",
-                    value: stats.playbackTiming.subgroupStreamResets,
-                    tone: "error",
-                    testId: "subscriber-subgroup-stream-resets",
-                  },
-                  {
-                    label: "groupSwitchHoldExpirations",
-                    value: stats.playbackTiming.groupSwitchHoldExpirations,
-                    tone: "warn",
-                    testId: "subscriber-group-switch-hold-expirations",
-                  },
-                ]}
-              />
-              <EventLog
-                label="subgroupStreamResetsByCode"
-                hint="count per error code"
-                showCount={false}
-                lines={Object.entries(stats.playbackTiming.subgroupStreamResetsByCode).map(
-                  ([code, count]) => `${code}: ${count}`,
-                )}
-                testId="subscriber-subgroup-stream-resets-by-code"
-              />
-              <EventLog
-                label="recentLossEvents"
-                hint="UTC, newest first"
-                lines={[...stats.playbackTiming.recentLossEvents]
-                  .reverse()
-                  .map((lossEvent) => formatLossEvent(lossEvent))}
-                testId="subscriber-recent-loss-events"
-              />
-            </StatSection>
-
-            <StatSection title="Largest Location">
-              <StatList
-                items={[
-                  {
-                    label: "largestGroup",
-                    value: stats.largestLocation?.group ?? "-",
-                  },
-                  {
-                    label: "largestObject",
-                    value: stats.largestLocation?.object ?? "-",
-                  },
-                ]}
-              />
-            </StatSection>
-          </StatGroup>
-
-          <StatGroup title="Messages">
-            <StatSection title="Reception">
-              <StatList
-                items={[
-                  { label: "objects", value: stats.event.objectsReceived },
-                  {
-                    // 表示している履歴の件数。event timeline は Group の先頭 Object に
-                    // その時点の履歴を載せるため、受信した Object の数とは別
-                    label: "entries",
-                    value: stats.event.entries,
-                    testId: "subscriber-message-entries",
-                  },
-                ]}
-              />
-            </StatSection>
-          </StatGroup>
-
-          {/* 音声と映像の同期の推定。値の意味はライブラリの AvSyncStats と同じで、
-              未購読や jitter buffer が無効のときは既定値 (null / 0 / false) になる */}
-          <StatGroup title="A/V Sync">
-            <StatList
-              items={[
-                {
-                  label: "skewMs",
-                  value: stats.avSync.skewMs === null ? "-" : stats.avSync.skewMs.toFixed(1),
-                  testId: "subscriber-av-sync-skew",
-                },
-                {
-                  label: "presentationDelayMs",
-                  value:
-                    stats.avSync.presentationDelayMs === null
-                      ? "-"
-                      : stats.avSync.presentationDelayMs.toFixed(1),
-                  testId: "subscriber-av-sync-presentation-delay",
-                },
-                {
-                  label: "targetLatencyMs",
-                  value: stats.avSync.targetLatencyMs ?? "-",
-                  testId: "subscriber-av-sync-target-latency",
-                },
-                {
-                  label: "targetLatencyLimitedMs",
-                  value: stats.avSync.targetLatencyLimitedMs,
-                  tone: stats.avSync.targetLatencyLimitedMs > 0 ? "warn" : undefined,
-                  testId: "subscriber-av-sync-target-latency-limited",
-                },
-                {
-                  label: "audioClockFallback",
-                  value: String(stats.avSync.audioClockFallback),
-                  testId: "subscriber-av-sync-audio-clock-fallback",
-                },
-              ]}
-            />
-          </StatGroup>
-
-          <StatGroup title="Session">
-            <StatList
-              items={[
-                {
-                  label: "controlMessagesSent",
-                  value: stats.sessionStatistics?.controlMessagesSent ?? "-",
-                },
-                {
-                  label: "controlMessagesReceived",
-                  value: stats.sessionStatistics?.controlMessagesReceived ?? "-",
-                },
-                {
-                  label: "unidirectionalStreamsReceived",
-                  value: stats.sessionStatistics?.unidirectionalStreamsReceived ?? "-",
-                },
-              ]}
-            />
-          </StatGroup>
+          <SubscriberStats statsSignal={statsSignal} />
         </StatsCollapse>
       </div>
     </div>
+  );
+}
+
+/** 統計。1 秒ごとにまとめて読み直したスナップショットを描く */
+function SubscriberStats({ statsSignal }: { statsSignal: ReadonlySignal<SubscriberStats | null> }) {
+  const stats = statsSignal.value;
+  if (stats === null) {
+    return null;
+  }
+  return (
+    <>
+      <StatGroup title="Audio">
+        <StatSection title="Reception">
+          <StatList
+            items={[
+              { label: "objects", value: stats.audio.objectsReceived },
+              {
+                label: "datagramObjects",
+                value: stats.audio.datagramObjectsReceived,
+                testId: "subscriber-audio-datagram-objects",
+              },
+              { label: "chunksDecoded", value: stats.audio.chunksDecoded },
+              {
+                // relay の cache から追いつくまでに鳴らさなかった音声 Object の数
+                label: "catchUpObjectsSkipped",
+                value: stats.audio.catchUpObjectsSkipped,
+                tone: "warn",
+                testId: "subscriber-audio-catch-up-objects-skipped",
+              },
+            ]}
+          />
+        </StatSection>
+
+        <StatSection title="Playout">
+          <StatList
+            items={[
+              {
+                label: "decoderConfigured",
+                value: String(stats.audio.decoderConfigured),
+              },
+              {
+                label: "playbackEnabled",
+                value: String(stats.audio.playbackEnabled),
+              },
+              {
+                label: "playoutRebases",
+                value: stats.audio.playoutRebases,
+                tone: "warn",
+              },
+              {
+                label: "playoutDrops",
+                value: stats.audio.playoutDrops,
+                tone: "warn",
+              },
+            ]}
+          />
+        </StatSection>
+
+        <StatSection title="Meter">
+          <StatList
+            items={[
+              { label: "peakDbfs", value: formatDbfsShort(stats.audio.peakDbfs) },
+              { label: "rmsDbfs", value: formatDbfsShort(stats.audio.rmsDbfs) },
+              {
+                label: "peakDbfsRight",
+                value: formatDbfsShort(stats.audio.peakDbfsRight),
+              },
+              {
+                label: "rmsDbfsRight",
+                value: formatDbfsShort(stats.audio.rmsDbfsRight),
+              },
+              { label: "lastLevel", value: stats.audio.lastLevel ?? "-" },
+              {
+                label: "lastVoiceActivity",
+                value:
+                  stats.audio.lastVoiceActivity === null
+                    ? "-"
+                    : String(stats.audio.lastVoiceActivity),
+              },
+            ]}
+          />
+        </StatSection>
+      </StatGroup>
+
+      <StatGroup title="Video">
+        <StatSection title="Reception">
+          <StatList
+            items={[
+              { label: "objects", value: stats.objectsReceived },
+              { label: "withExtensions", value: stats.objectsWithExtensions },
+              { label: "bytes", value: formatBytes(stats.bytesReceived) },
+            ]}
+          />
+        </StatSection>
+
+        <StatSection
+          title="Decoding"
+          help={DECODING_PIPELINE_HELP}
+          testId="subscriber-decoding-pipeline"
+        >
+          <StatList
+            items={[
+              { label: "chunksCreated", value: stats.chunksCreated },
+              { label: "chunksDecoded", value: stats.chunksDecoded },
+              { label: "chunksSkipped", value: stats.chunksSkipped, tone: "warn" },
+              {
+                label: "staleFramesDropped",
+                value: stats.staleFramesDropped,
+                tone: "warn",
+              },
+              {
+                label: "missingReferenceFramesDropped",
+                value: stats.missingReferenceFramesDropped,
+                tone: "warn",
+              },
+              { label: "decodeErrors", value: stats.decodeErrors, tone: "error" },
+            ]}
+          />
+        </StatSection>
+
+        <StatSection title="Output">
+          <StatList
+            items={[
+              { label: "framesDecoded", value: stats.framesDecoded },
+              {
+                // relay の cache から追いつくまでに描かなかったフレームの数
+                label: "catchUpFramesSkipped",
+                value: stats.catchUpFramesSkipped,
+                tone: "warn",
+                testId: "subscriber-catch-up-frames-skipped",
+              },
+              { label: "keyFrames", value: stats.keyFramesDecoded },
+              { label: "currentGroup", value: stats.currentGroup },
+              { label: "currentSubGroup", value: stats.currentSubGroup },
+              { label: "decoderState", value: stats.decoderState },
+            ]}
+          />
+        </StatSection>
+
+        <StatSection
+          title="Playback Timing"
+          help={PLAYBACK_TIMING_HELP}
+          testId="subscriber-playback-timing"
+        >
+          <TimingTable
+            caption={PLAYBACK_TIMING_CAPTION}
+            rows={[
+              {
+                label: "arrivalJitter",
+                summary: stats.playbackTiming.arrivalJitterMs,
+                testId: "subscriber-arrival-jitter",
+              },
+              {
+                label: "latency",
+                summary: stats.playbackTiming.latencyMs,
+                testId: "subscriber-latency",
+              },
+              {
+                label: "decodeTime",
+                summary: stats.playbackTiming.decodeTimeMs,
+                testId: "subscriber-decode-time",
+              },
+              {
+                label: "displayInterval",
+                summary: stats.playbackTiming.displayIntervalMs,
+                testId: "subscriber-display-interval",
+              },
+            ]}
+          />
+          <StatList
+            items={[
+              {
+                label: "displayFps",
+                value: stats.playbackTiming.displayFps,
+                testId: "subscriber-display-fps",
+              },
+              {
+                label: "displayStalls",
+                value: stats.playbackTiming.displayStalls,
+                tone: "warn",
+                testId: "subscriber-display-stalls",
+              },
+              {
+                label: "displayStallMs",
+                value: Math.round(stats.playbackTiming.displayStallMs),
+                tone: "warn",
+                testId: "subscriber-display-stall-ms",
+              },
+              {
+                label: "displayQueueDrops",
+                value: stats.playbackTiming.displayQueueDrops,
+                tone: "warn",
+                testId: "subscriber-display-queue-drops",
+              },
+              {
+                label: "playoutDelayMs",
+                value:
+                  stats.playbackTiming.playoutDelayMs === null
+                    ? "-"
+                    : stats.playbackTiming.playoutDelayMs.toFixed(1),
+                testId: "subscriber-playout-delay",
+              },
+              {
+                label: "lateFramesDropped",
+                value: stats.playbackTiming.lateFramesDropped,
+                tone: "warn",
+                testId: "subscriber-late-frames-dropped",
+              },
+            ]}
+          />
+        </StatSection>
+
+        <StatSection
+          title="Latency Breakdown"
+          help={SUBSCRIBER_LATENCY_BREAKDOWN_HELP}
+          testId="subscriber-latency-breakdown"
+        >
+          <TimingTable
+            caption={PLAYBACK_TIMING_CAPTION}
+            testId="subscriber-latency-breakdown"
+            rows={LATENCY_SEGMENTS.map((segment) => ({
+              label: segment,
+              summary: stats.playbackTiming.latencyBreakdown[segment],
+              testId: `subscriber-latency-breakdown-${segment}`,
+              // 表示の遅延はほかの区間の和のため、合計の行として区切る
+              total: segment === TOTAL_LATENCY_SEGMENT,
+            }))}
+          />
+        </StatSection>
+
+        <StatSection title="Stall Causes" help={STALL_CAUSES_HELP} testId="subscriber-stall-causes">
+          <StatTable
+            caption="since start"
+            columns={["count", "ms"]}
+            testId="subscriber-stall-causes"
+            rows={[
+              ...STALL_CAUSES.map((cause) => {
+                const total = stats.playbackTiming.stallCauses[cause];
+                return {
+                  label: cause,
+                  values: [String(total.count), String(Math.round(total.ms))],
+                  testId: `subscriber-stall-cause-${cause}`,
+                  // 起きた原因だけを目立たせる
+                  tone: total.count > 0 ? ("warn" as const) : undefined,
+                };
+              }),
+              // 原因ごとの和は止まりの回数と時間に一致する
+              {
+                label: "total",
+                values: [
+                  String(stats.playbackTiming.displayStalls),
+                  String(Math.round(stats.playbackTiming.displayStallMs)),
+                ],
+                testId: "subscriber-stall-cause-total",
+                total: true,
+              },
+            ]}
+          />
+          <EventLog
+            label="recentStalls"
+            hint="UTC, newest first"
+            lines={[...stats.playbackTiming.recentStalls]
+              .reverse()
+              .map((stall) => formatStallEvent(stall))}
+            testId="subscriber-recent-stalls"
+          />
+        </StatSection>
+
+        <StatSection title="Loss" help={LOSS_HELP} testId="subscriber-loss">
+          <StatList
+            items={[
+              {
+                label: "missingObjects",
+                value: stats.playbackTiming.missingObjects,
+                tone: "error",
+                testId: "subscriber-missing-objects",
+              },
+              {
+                label: "missingGroups",
+                value: stats.playbackTiming.missingGroups,
+                tone: "error",
+                testId: "subscriber-missing-groups",
+              },
+              {
+                label: "subgroupStreamResets",
+                value: stats.playbackTiming.subgroupStreamResets,
+                tone: "error",
+                testId: "subscriber-subgroup-stream-resets",
+              },
+              {
+                label: "groupSwitchHoldExpirations",
+                value: stats.playbackTiming.groupSwitchHoldExpirations,
+                tone: "warn",
+                testId: "subscriber-group-switch-hold-expirations",
+              },
+            ]}
+          />
+          <EventLog
+            label="subgroupStreamResetsByCode"
+            hint="count per error code"
+            showCount={false}
+            lines={Object.entries(stats.playbackTiming.subgroupStreamResetsByCode).map(
+              ([code, count]) => `${code}: ${count}`,
+            )}
+            testId="subscriber-subgroup-stream-resets-by-code"
+          />
+          <EventLog
+            label="recentLossEvents"
+            hint="UTC, newest first"
+            lines={[...stats.playbackTiming.recentLossEvents]
+              .reverse()
+              .map((lossEvent) => formatLossEvent(lossEvent))}
+            testId="subscriber-recent-loss-events"
+          />
+        </StatSection>
+
+        <StatSection title="Largest Location">
+          <StatList
+            items={[
+              {
+                label: "largestGroup",
+                value: stats.largestLocation?.group ?? "-",
+              },
+              {
+                label: "largestObject",
+                value: stats.largestLocation?.object ?? "-",
+              },
+            ]}
+          />
+        </StatSection>
+      </StatGroup>
+
+      <StatGroup title="Messages">
+        <StatSection title="Reception">
+          <StatList
+            items={[
+              { label: "objects", value: stats.event.objectsReceived },
+              {
+                // 表示している履歴の件数。event timeline は Group の先頭 Object に
+                // その時点の履歴を載せるため、受信した Object の数とは別
+                label: "entries",
+                value: stats.event.entries,
+                testId: "subscriber-message-entries",
+              },
+            ]}
+          />
+        </StatSection>
+      </StatGroup>
+
+      {/* 音声と映像の同期の推定。値の意味はライブラリの AvSyncStats と同じで、
+              未購読や jitter buffer が無効のときは既定値 (null / 0 / false) になる */}
+      <StatGroup title="A/V Sync">
+        <StatList
+          items={[
+            {
+              label: "skewMs",
+              value: stats.avSync.skewMs === null ? "-" : stats.avSync.skewMs.toFixed(1),
+              testId: "subscriber-av-sync-skew",
+            },
+            {
+              label: "presentationDelayMs",
+              value:
+                stats.avSync.presentationDelayMs === null
+                  ? "-"
+                  : stats.avSync.presentationDelayMs.toFixed(1),
+              testId: "subscriber-av-sync-presentation-delay",
+            },
+            {
+              label: "targetLatencyMs",
+              value: stats.avSync.targetLatencyMs ?? "-",
+              testId: "subscriber-av-sync-target-latency",
+            },
+            {
+              label: "targetLatencyLimitedMs",
+              value: stats.avSync.targetLatencyLimitedMs,
+              tone: stats.avSync.targetLatencyLimitedMs > 0 ? "warn" : undefined,
+              testId: "subscriber-av-sync-target-latency-limited",
+            },
+            {
+              label: "audioClockFallback",
+              value: String(stats.avSync.audioClockFallback),
+              testId: "subscriber-av-sync-audio-clock-fallback",
+            },
+          ]}
+        />
+      </StatGroup>
+
+      <StatGroup title="Session">
+        <StatList
+          items={[
+            {
+              label: "controlMessagesSent",
+              value: stats.sessionStatistics?.controlMessagesSent ?? "-",
+            },
+            {
+              label: "controlMessagesReceived",
+              value: stats.sessionStatistics?.controlMessagesReceived ?? "-",
+            },
+            {
+              label: "unidirectionalStreamsReceived",
+              value: stats.sessionStatistics?.unidirectionalStreamsReceived ?? "-",
+            },
+          ]}
+        />
+      </StatGroup>
+    </>
+  );
+}
+
+/**
+ * Video カード
+ *
+ * 統計 (表示 fps、受信から表示までと復号の遅延、捨てたフレーム数) は 1 秒ごとに
+ * まとめて読み直し、このコンポーネントだけを描き直す
+ */
+function SubscriberVideoCard({
+  statsSignal,
+  subscriberActive,
+  children,
+}: {
+  statsSignal: ReadonlySignal<SubscriberStats | null>;
+  subscriberActive: boolean;
+  children: ComponentChildren;
+}) {
+  const stats = statsSignal.value;
+  if (stats === null) {
+    return null;
+  }
+  // 表示されなかったフレーム数の合計。relay の cache から追いつくまでに意図的に
+  // 描かなかった分 (catchUpFramesSkipped) は含めない
+  const dropped =
+    stats.staleFramesDropped +
+    stats.missingReferenceFramesDropped +
+    stats.playbackTiming.lateFramesDropped +
+    stats.playbackTiming.displayQueueDrops;
+  return (
+    <VideoCard
+      testIdPrefix="subscriber-video"
+      fps={subscriberActive ? stats.playbackTiming.displayFps : null}
+      latency={[
+        {
+          label: "latency",
+          summary: stats.playbackTiming.latencyMs,
+          testId: "subscriber-video-latency",
+        },
+        {
+          label: "decode",
+          summary: stats.playbackTiming.decodeTimeMs,
+          testId: "subscriber-video-decode",
+        },
+      ]}
+      dropped={subscriberActive ? dropped : null}
+    >
+      {children}
+    </VideoCard>
   );
 }
