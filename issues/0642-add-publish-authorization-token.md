@@ -3,7 +3,7 @@
 - Created: 2026-09-21
 - Completed: {YYYY-MM-DD}
 - Branch: feature/add-publish-authorization-token
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-09-29
 
 ## 目的
 
