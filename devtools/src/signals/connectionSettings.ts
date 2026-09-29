@@ -50,7 +50,7 @@ export const fragment = signal("");
  * 複数の devtools が同じ relay に繋がっても namespace が衝突しないよう、ページごとに
  * ランダムな接尾辞を付ける。共有するときは Copy URL や Save で持ち出す
  */
-export const namespace = signal(`devtools/${randomNamespaceSuffix()}`);
+export const namespace = signal(`moqt/devtools/${randomNamespaceSuffix()}`);
 // namespace 設定を Track Namespace のフィールドへ分解したもの。空のフィールドは落とす。
 // 接続処理と画面表示 (Full Track Name の組み立て) が同じ分解を使う
 export const namespaceArray = computed(() =>

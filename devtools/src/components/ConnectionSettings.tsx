@@ -730,7 +730,7 @@ export function ConnectionSettings() {
             <input
               type="text"
               id="namespace"
-              placeholder="e.g. devtools/a1B2c3D4e5F6g7H8"
+              placeholder="e.g. moqt/devtools/a1B2c3D4e5F6g7H8"
               value={settings.namespace.value}
               onInput={(e) => (settings.namespace.value = e.currentTarget.value)}
               disabled={settings.settingsDisabled.value}

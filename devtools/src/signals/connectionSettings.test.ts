@@ -729,8 +729,8 @@ test("initFromUrl: 0 / 1 以外の useDedicatedWorker は無視する", () => {
   assert.isTrue(useDedicatedWorker.value);
 });
 
-// namespace の初期値は devtools/ + ランダム 16 文字 (a-zA-Z0-9)。複数の devtools が
+// namespace の初期値は moqt/devtools/ + ランダム 16 文字 (a-zA-Z0-9)。複数の devtools が
 // 同じ relay に繋がっても namespace が衝突しないようにする
-test("namespace の初期値は devtools/ + ランダム 16 文字", () => {
-  assert.match(namespace.value, /^devtools\/[a-zA-Z0-9]{16}$/);
+test("namespace の初期値は moqt/devtools/ + ランダム 16 文字", () => {
+  assert.match(namespace.value, /^moqt\/devtools\/[a-zA-Z0-9]{16}$/);
 });
