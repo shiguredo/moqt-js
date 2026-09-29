@@ -1,7 +1,7 @@
 # keyframeInterval の値域が検証されず 0 でキーフレームを要求しなくなる
 
 - Created: 2026-09-21
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-29
 - Branch: feature/fix-keyframe-interval-zero
 - Polished: 2026-09-23
 
@@ -56,4 +56,13 @@
 
 ## 解決方法
 
-{未着手}
+`src/createMediaPublisher.ts` の `resolveKeyframeInterval` に値域検証を追加した。
+
+- `keyframeInterval` は 1 以上の整数のみ受理し、0 / 負値 / 非整数 / NaN / ±Infinity は `keyframeInterval must be an integer >= 1, got <値>` で throw する。0 に特別な意味を持たせる根拠が MSF / LOC / WebCodecs に無く (draft-ietf-moq-msf-01 §5.2.24 の `maxGopDuration` はミリ秒指定の別概念、WebCodecs の `keyFrame: false` は UA の判断に委ねる意味)、0 を「毎フレームキーフレーム」と解釈すると帯域を浪費するため
+- `keyframeInterval` 未指定時は `Math.round(framerate * 2)` を使い、整数に丸める (既定 framerate は 30 なので 60)。この値が 1 未満または非有限なら `framerate must be a number >= 0.25 (Math.round(framerate * 2) >= 1), got <値>` で throw する (framerate が 0 / 負値 / 非有限の場合と、正の有限値でも 2 倍が 0.5 未満の場合が含まれる。導出できる下限は 0.25)
+- 検証は `MediaPublisherImpl` のコンストラクタから呼ばれるため、`createMediaPublisher()` の時点で reject する。`resolveVideoPublishSettings` は触らない (`start()` の途中で throw すると `onError` が呼ばれない位置になるため)
+- `shouldSendKeyFrame` の実装は変えず、JSDoc に前提 (`keyframeInterval` は 1 以上の整数で、値域は `resolveKeyframeInterval` が検証する) を書いた。`requestKeyframe()` も変えていない
+
+`src/codec/types.ts` の `VideoPublishOptions.keyframeInterval` に値域・既定値・無効値の reject を、`docs/HIGH_LEVEL_API.md` の同じ箇所と説明段落に同じ内容 (framerate から導出できない条件を含む) を書いた。`CHANGES.md` の `## develop` の FIX 群先頭に `[FIX]` を追記した。
+
+`src/createMediaPublisher.test.ts` に 6 テストを追加した。拒否する 6 値 (0 / -5 / 1.5 / NaN / ±Infinity) とメッセージに値が含まれること、`framerate` の拒否 5 値、丸めの境界 (29.97 → 60、0.25 → 1、0.24 は reject)、60 の受理、`createMediaPublisher()` が公開 API として reject すること、`shouldSendKeyFrame` が間隔 1 で frameCount 1 でも true になることを固定した。`npx vp check` と `npx vp test --run` (3322 テスト) が通る。
