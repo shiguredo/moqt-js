@@ -1,7 +1,7 @@
 # encodeSubgroupHeader が Subgroup ID フィールド必須の type で subgroupId の省略を黙過する
 
 - Created: 2026-09-21
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-29
 - Branch: feature/fix-subgroup-id-omitted
 - Polished: 2026-09-21
 
@@ -57,4 +57,14 @@
 
 ## 解決方法
 
-{未着手}
+`src/dataStream/subgroup.ts` の `subgroupIdMode(headerType)` ((type & 0x06) >> 1) を新設し、SUBGROUP_ID_MODE の判定を 1 箇所に集約した。`hasSubgroupIdField` は削除し、`hasReservedSubgroupIdMode` と `decodeSubgroupHeader` のフィールド有無・Subgroup ID = 0 の判定もこの関数から導く。encode と decode が別々の mask / 下位ニブル判定を持たなくなり、片側だけを変えたときのフィールドずれが起きない。
+
+`encodeSubgroupHeader` に SUBGROUP_ID_MODE ごとの契約検証を追加した (Publisher Priority の検証と同じ位置、既存の型検証の後)。判定は未 OR の `header.type` で行う (mask 0x06 は FIRST_OBJECT 0x40 と END_OF_GROUP 0x08 の影響を受けない)。
+
+- 0b10 (フィールドあり): `subgroupId` が undefined なら `subgroupId is required when the Subgroup ID field is present: type 0x.., got undefined` で throw する。decode が無条件に読むため、省略するとフィールド 1 つ分ずれて Publisher Priority や Object ID Delta を Subgroup ID として読む
+- 0b00 (Subgroup ID = 0): undefined と `0n` だけを受理し、それ以外は `got <値>` 付きで throw する (decode は `0n` を返す)
+- 0b01 (Subgroup ID = 先頭 Object の Object ID): undefined だけを受理し、値が入っていれば throw する (wire に載せるフィールドが無い)
+
+`SubgroupHeader` の JSDoc に 3 モードの契約 (値の決まり方と encode / decode の扱い) と必須フィールドを書き、§11.3.1 を参照した。`CHANGES.md` の `## develop` の FIX 群先頭に `[FIX]` を追記した。
+
+`src/dataStream.subgroup.test.ts` に 5 テストを追加した。0b10 の代表 2 type (0x3c / 0x14) の未指定 throw とメッセージの型値、0b00 の `0n` と未指定の受理および `0n` 以外の拒否、0b01 の未指定の受理と値ありの拒否、3 モードの decode → encode → decode の往復、SUBGROUP_ID_MODE ごとに 16 type すべてで契約が成立すること (48 type を 3 モードに振り分けて長さ 16 を確認し、各モードで受理・拒否を検証する) を固定した。`npx vp check` と `npx vp test --run` (3327 テスト) が通る。
