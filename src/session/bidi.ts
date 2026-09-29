@@ -69,6 +69,10 @@ import { PublisherImpl, type Publisher, type PublishStateNotifyOptions } from ".
 import type { Property } from "../properties";
 import { clearPriorGapTracking, type PriorGapTracking } from "./priorGapTracking";
 import {
+  clearEndOfGroupTracking as clearEndOfGroupTrackingForTrackAlias,
+  type EndOfGroupTracking,
+} from "./endOfGroupTracking";
+import {
   NAMESPACE_REQUEST_UPDATE_ALLOWED_PARAMS,
   PUBLISH_OK_ALLOWED_PARAMS,
   PUBLISH_STATE_NOTIFY_ALLOWED_PARAMS,
@@ -279,12 +283,16 @@ export interface BidiSessionInternal {
    *  END_OF_GROUP, or the last Object before a FIN in a Subgroup which has the
    *  END_OF_GROUP bit set."
    *
-   * キーは `${trackAlias}:${groupId}`。ストリーム (Subgroup) をまたいだ追跡に
-   * 使うためセッションに保持する。購読が尽きたら clearEndOfGroupTracking が
-   * 該当 alias のエントリを削除する。free function から読み書きするため
-   * readonly 不可。
+   * キーは Track Alias と Group ID の 2 段 Map。ストリーム (Subgroup) をまたいだ
+   * 追跡に使うためセッションに保持する。購読が尽きたら clearEndOfGroupTracking が
+   * 該当 alias のエントリを削除する。free function から読み書きするため readonly 不可。
+   *
+   * Track Alias 数と 1 Track Alias の Group 数には上限があり、超過時は最も古い
+   * エントリから破棄する。破棄した Track Alias / Group では既知の最終 Object ID が
+   * 無いために条件 4 の判定自体を行わないため、超過を検出できなくなる。検出漏れ
+   * だけが生じ、誤検出は生まない。
    */
-  receivedEndOfGroupFinalObjectIds: Map<string, bigint>;
+  receivedEndOfGroupFinalObjectIds: EndOfGroupTracking;
 
   /**
    * Track 単位の Prior Group ID Gap / Prior Object ID Gap 追跡
@@ -2153,21 +2161,21 @@ function deleteSubscriber(session: BidiSessionInternal, requestId: bigint): void
  * Track Alias に紐づく Group 単位の END_OF_GROUP 追跡を捨てる
  *
  * draft-ietf-moq-transport-21 §12.1 条件 4 の検出用に
- * `receivedEndOfGroupFinalObjectIds` を `${trackAlias}:${groupId}` で保持している。
- * その alias の購読が尽きた時点でエントリを削除し、無制限な増加を防ぐ。
+ * `receivedEndOfGroupFinalObjectIds` を Track Alias と Group ID の 2 段 Map で
+ * 保持している。その alias の購読が尽きた時点でエントリを削除し、無制限な増加を
+ * 防ぐ。削除は Track Alias をキーにした 1 操作であり、前方一致の全走査は行わない。
+ *
+ * 破棄した Track Alias では既知の最終 Object ID が無いために条件 4 の判定自体を
+ * 行わない。そのため超過を検出できなくなるが、検出漏れだけが生じ、誤検出は生まない。
  */
 function clearEndOfGroupTracking(session: BidiSessionInternal, trackAlias: bigint): void {
-  // テストのモックセッションは追跡マップを持たない場合がある
+  // テストのモックセッションは unknown 経由で構築されるため、実行時に追跡マップが
+  // undefined になり得る
   const tracking = session.receivedEndOfGroupFinalObjectIds;
   if (tracking === undefined) {
     return;
   }
-  const prefix = `${trackAlias}:`;
-  for (const key of tracking.keys()) {
-    if (key.startsWith(prefix)) {
-      tracking.delete(key);
-    }
-  }
+  clearEndOfGroupTrackingForTrackAlias(tracking, trackAlias);
 }
 
 /**

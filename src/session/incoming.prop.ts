@@ -78,6 +78,7 @@ import {
 } from "../dataStream";
 import { priorGroupIdGapProperties, priorObjectIdGapProperties } from "../testSupport/helpers";
 import { concatChunks, type FetchObjectSink } from "./stream";
+import { recordEndOfGroupFinalObjectId } from "./endOfGroupTracking";
 import type { PriorGapTracking } from "./priorGapTracking";
 import type { SessionInternal } from "./types";
 import { encodeVarint } from "../varint";
@@ -350,7 +351,7 @@ function createSubgroupSession(): SessionInternal & SubgroupSessionState {
     statsObjectsReceivedViaSubscribe: 0,
     statsBytesReceivedViaSubscribe: 0,
     // draft-ietf-moq-transport-21 §12.1 条件 4: Group 単位の最終 Object 追跡
-    receivedEndOfGroupFinalObjectIds: new Map<string, bigint>(),
+    receivedEndOfGroupFinalObjectIds: new Map<bigint, Map<bigint, bigint>>(),
     // draft-ietf-moq-transport-21 §10.8 / §10.9: Track 単位の Prior ID Gap 追跡
     priorGapTrackingByTrack: new Map(),
   } as unknown as SessionInternal & SubgroupSessionState;
@@ -444,7 +445,7 @@ function buildSubgroupWire(stream: SubgroupStreamSpec, headerType: number): Uint
 /**
  * Subgroup の feed を 1 バイトずつに分割して実行する
  *
- * 本番 (SessionImpl.handleSubgroupStream) と同形に、前回の残りバッファと新しい
+ * 本番 (dataStreamHandleSubgroupStream) と同形に、前回の残りバッファと新しい
  * チャンクを連結してから feed し、返り値で previousObjectId / resolvedSubgroupId /
  * 確定した Group 最終 Object ID を引き継ぐ。
  */
@@ -472,8 +473,11 @@ function feedSubgroupByteWise(
     previousObjectId = result.previousObjectId;
     resolvedSubgroupId = result.resolvedSubgroupId;
     if (result.updatedEndOfGroupFinalObjectId !== undefined) {
-      session.receivedEndOfGroupFinalObjectIds.set(
-        `${header.trackAlias}:${header.groupId}`,
+      // 本番 (dataStreamHandleSubgroupStream) と同じ記録経路を呼ぶ
+      recordEndOfGroupFinalObjectId(
+        session.receivedEndOfGroupFinalObjectIds,
+        header.trackAlias,
+        header.groupId,
         result.updatedEndOfGroupFinalObjectId,
       );
     }
@@ -1049,7 +1053,7 @@ function createDatagramSession(): {
     pendingRequestUpdate: new Map(),
     fillFetchTargets: new Map(),
     // draft-ietf-moq-transport-21 §12.1 条件 4: Group 単位の最終 Object 追跡
-    receivedEndOfGroupFinalObjectIds: new Map<string, bigint>(),
+    receivedEndOfGroupFinalObjectIds: new Map<bigint, Map<bigint, bigint>>(),
     // draft-ietf-moq-transport-21 §10.8 / §10.9: Track 単位の Prior ID Gap 追跡
     priorGapTrackingByTrack: new Map(),
     closeWithError: (error: SessionError) => {

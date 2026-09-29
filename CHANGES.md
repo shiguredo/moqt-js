@@ -275,6 +275,11 @@
   - 上限で捨てたログの vnode はキャッシュから落とす。`data` と `payload` は追加後に書き換えない前提になる (行を描画し直さないため、書き換えても表示は古いまま)
   - 1 件追加のコストは表示中の件数に比例する分が残る (1000 件で約 3 ms のうち、表示中の子の走査が大半)。表示する行を画面に入る分だけにする対応は別に行う
   - @voluntas
+- [FIX] END_OF_GROUP の最終 Object ID 追跡が、購読が続く間 Group 数に比例して増え続けるのを修正する
+  - 追跡を Track Alias と Group ID の 2 段 Map にし、Track Alias 1024 件 / 1 Track Alias あたり Group 1024 件の上限を設け、超過時は最も古いエントリから破棄する (`src/session/endOfGroupTracking.ts`)
+  - 上限で破棄した Track Alias / Group では、既知の最終 Object ID が無いために §12.1 条件 4 の判定自体を行わない。超過を検出できなくなるが検出漏れだけで、誤検出は生まない
+  - Track Alias 単位の破棄を 1 操作にし、`${trackAlias}:${groupId}` の前方一致による全走査とキー文字列の生成をやめる
+  - @voluntas
 - [FIX] 高レベル API が送信と再構成の失敗を処理せず unhandled rejection になるのを修正する
   - `createMediaPublisher` の音声 / 映像の送信 2 箇所が、`Publisher.sendObject` の返値の reject を回収する。reject は Publisher 側が通知してから返す契約であるため、呼び出し側は通知せず、1 件の失敗で 2 回通知にならないようにする。委譲先が同期 throw する場合は通知を伴わないため `onError` へ 1 回流す
   - `createMediaSubscriber` の自動再生ポリシー対応の `AudioContext.resume()` の失敗を `onError` へ 1 回流す

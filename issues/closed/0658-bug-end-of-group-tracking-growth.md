@@ -1,7 +1,7 @@
 # END_OF_GROUP の最終 Object ID 追跡が Group ごとに増え続ける
 
 - Created: 2026-09-21
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-29
 - Branch: feature/fix-end-of-group-tracking-growth
 - Polished: 2026-09-22
 
@@ -48,4 +48,16 @@
 
 ## 解決方法
 
-{未着手}
+`src/session/endOfGroupTracking.ts` を新設し、追跡の型と操作を `src/session/priorGapTracking.ts` と同じ構成でまとめた。保持先を `Map<string, bigint>` (`${trackAlias}:${groupId}` のキー文字列) から `EndOfGroupTracking = Map<bigint, Map<bigint, bigint>>` の 2 段 Map に変え、`recordEndOfGroupFinalObjectId` / `getEndOfGroupFinalObjectId` / `clearEndOfGroupTracking` の 3 関数を公開している。
+
+上限は `MAX_TRACKED_TRACK_ALIASES = 1024` と `MAX_TRACKED_GROUPS_PER_ALIAS = 1024` とした (priorGapTracking と同値)。Track Alias 数が上限を超えたら最古の Track Alias を丸ごと破棄し、1 Track Alias の Group 数が上限を超えたらその Track Alias の最古の Group を破棄する。挿入順が古い順であることは Map の仕様に依存するため、priorGapTracking と同じコメントで根拠を残した。破棄ループは新しい Group を挿入するときだけ回し、既存 Group の上書きで他の Group を失わないようにしている (上書きでは件数が増えないため)。
+
+上限で破棄した Track Alias / Group では §12.1 条件 4 の超過を検出できなくなる。既知の最終 Object が無ければ判定自体を行わないため、生じるのは検出漏れだけで誤検出は生まない。この内容を新モジュールの関数と `src/session.ts` / `src/session/bidi.ts` の宣言コメントに書いた。上限で破棄した Track Alias が後で再登録された場合も、破棄した Group の履歴は戻らないため、その Track Alias では検出できないままになることも記した。
+
+`clearEndOfGroupTracking` は前方一致の全走査とキー文字列の生成をやめ、Track Alias のエントリを 1 操作 (`Map.delete`) で消す。`src/session/bidi.ts` の呼び出し側は、テストのモックセッションが追跡マップを持たない場合に備えて undefined を許容する形を維持した (モックは `unknown` 経由で構築されるため実行時に undefined になり得る)。
+
+テストは `src/session/endOfGroupTracking.test.ts` に 6 件 (記録と取得、上書き、既存 Group の上書きで他を失わないこと、Group 数の上限、Track Alias 数の上限で内側の Group ごと破棄されること、Track Alias 単位の破棄) を追加し、`src/session.test.ts` に本番の書き込み経路のテストを 1 件追加した。このテストは実 `SessionImpl` を 2 本の Subgroup ストリームで駆動し、Track Alias 7 / Group 1 の END_OF_GROUP (Object ID 5) の記録と、別 Subgroup の Object ID 6 が malformed として cancel されることを固定する (記録呼び出しの削除・引数の取り違え・上限の不等号の誤りをいずれも検出する)。`src/session/incoming.test.ts` にも読み出し経路の回帰テストを 1 件追加した。
+
+`CHANGES.md` の `## develop` の FIX 群先頭に `[FIX]` を追記した。あわせて、削除済みの `SessionImpl.handleSubgroupStream` を参照していたコメント (incoming.ts / incoming.prop.ts / dataStreamIncoming.ts / session.test.ts / docs/LOW_LEVEL_API.md) を現在の関数名に直した。
+
+`npx vp check` と `npx vp test --run` (3406 テスト) が通る。
