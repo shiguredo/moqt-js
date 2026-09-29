@@ -6,7 +6,7 @@
 
 import { connectMediaSession } from "./createMedia/connect";
 import type { PublishOptions, Session } from "./session";
-import type { Publisher, SendObjectParams } from "./publisher";
+import { isErrorNotifiedByPublisher, type Publisher, type SendObjectParams } from "./publisher";
 import * as LOC from "./loc";
 import { WallClockMapper } from "./mediaClock";
 import {
@@ -523,7 +523,10 @@ export class MediaPublisherImpl implements MediaPublisher {
       } catch {
         // 元のエラーを優先する
       }
-      this.callbacks.onError?.(error instanceof Error ? error : new Error(String(error)));
+      // この呼び出し 1 行は Node のテストで固定できない (start() は WebTransport の
+      // 接続から始まり、connectToServer に注入点が無い)。配線を変えるときは、
+      // catalog 送信の reject を catch まで運ぶテストを先に用意すること。
+      this.notifyStartFailure(error);
       throw error;
     }
   }
@@ -647,6 +650,24 @@ export class MediaPublisherImpl implements MediaPublisher {
   }
 
   // 内部メソッド
+
+  /**
+   * start 失敗の通知
+   *
+   * 送信の失敗の通知の担い手は publisher 層に固定する。事前検証の違反は publisher 層が
+   * error コールバックで通知してから返値を reject するため、通知済みの error
+   * (isErrorNotifiedByPublisher) では通知しない。ここで通知し直すと 1 件の失敗で
+   * onError が 2 回呼ばれる。catalog 送信の await の reject は createPublishers() を
+   * 通って start() の catch に届く (catalog だけ await するため)。
+   * 通知を伴わない失敗 (接続失敗、closed の同期 throw など) は 1 回だけ通知する。
+   * throw される値は Error に限らないため unknown で受け、Error 以外は文字列化して通知する。
+   */
+  private notifyStartFailure(error: unknown): void {
+    if (isErrorNotifiedByPublisher(error)) {
+      return;
+    }
+    this.callbacks.onError?.(error instanceof Error ? error : new Error(String(error)));
+  }
 
   private async connectToServer(): Promise<void> {
     // exactOptionalPropertyTypes では optional なフィールドに undefined を渡せないため、

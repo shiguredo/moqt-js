@@ -6,7 +6,7 @@
 import { test, assert } from "vite-plus/test";
 import { ProtocolViolationError } from "./error";
 import { ObjectStatus, PublishDoneStatusCode } from "./message/types";
-import { PublisherImpl } from "./publisher";
+import { PublisherImpl, isErrorNotifiedByPublisher } from "./publisher";
 
 test("closed 状態では sendObject がエラーになる", () => {
   const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n);
@@ -229,6 +229,8 @@ test("非 NORMAL + 非空 payload の sendObject は失敗する", async () => {
     assert.isTrue(thrown instanceof ProtocolViolationError);
     assert.equal(errors.length, 1);
     assert.strictEqual(errors[0], thrown);
+    // 通知した error には印が付く (呼び出し側が通知し直さないための判定に使う)
+    assert.isTrue(isErrorNotifiedByPublisher(thrown));
     assert.equal(sent, 0);
   }
 });
@@ -812,4 +814,78 @@ test("handleNewGroupRequest: DYNAMIC_GROUPS を広告し、値が 0 か現在の
   // 現在の Group より大きい
   assert.isTrue(publisher.handleNewGroupRequest(6n));
   assert.deepEqual(requests, [3n, 0n, 6n]);
+});
+
+/**
+ * publisher 層が通知した error の印
+ *
+ * 事前検証の違反は publisher 層が error コールバックで通知してから返値を reject する。
+ * 高レベル API の start() は catalog 送信の await の reject を catch するため、
+ * 通知済みかどうかを判定できないと同じ失敗を 2 回通知してしまう。
+ * ここでは判定関数の真偽と、通知回数が印で変わらないことを固定する。
+ * 印付きの reject が catalog 送信の await を伝わることと、start 失敗の通知の抑止は
+ * createMediaPublisher.test.ts で固定する。
+ */
+
+test("handleError: 通知した error には印が付き、通知は 1 回", () => {
+  // 通知の担い手である publisher 層が handleError を呼んだ error は判定関数で真になる。
+  // 印を付けても通知回数は 1 回のままである
+  const errors: Error[] = [];
+  const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n, (error) => {
+    errors.push(error);
+  });
+  const failure = new Error("handler failed");
+
+  publisher.handleError(failure);
+
+  assert.isTrue(isErrorNotifiedByPublisher(failure));
+  assert.equal(errors.length, 1);
+  assert.strictEqual(errors[0], failure);
+});
+
+test("handleError: 印が付いていても通知を抑止しない", () => {
+  // 印は「通知済み」を示すだけで、handleError 自身の通知を抑止しない契約を固定する。
+  // 印を理由に handleError 側へ抑止を入れる改修を防ぐ (sendObject は通知してから
+  // 返値を reject する契約であり、抑止してよいのは呼び出し側の catch だけである)
+  const errors: Error[] = [];
+  const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n, (error) => {
+    errors.push(error);
+  });
+  const failure = new Error("handler failed");
+
+  publisher.handleError(failure);
+  publisher.handleError(failure);
+
+  assert.isTrue(isErrorNotifiedByPublisher(failure));
+  assert.equal(errors.length, 2);
+});
+
+test("handleError: 通知していない error には印が付かない", () => {
+  // 印は参照で比較するため、同じ文言の別インスタンスには付かない。通知していない error は
+  // 呼び出し側が通知する (start() の catch が 1 回通知する経路を塞がない)。
+  // throw される値は Error に限らないため、オブジェクト以外は判定関数が throw せず偽を返す
+  const errors: Error[] = [];
+  const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n, (error) => {
+    errors.push(error);
+  });
+
+  publisher.handleError(new Error("handler failed"));
+
+  assert.isFalse(isErrorNotifiedByPublisher(new Error("handler failed")));
+  assert.isFalse(isErrorNotifiedByPublisher("handler failed"));
+  assert.isFalse(isErrorNotifiedByPublisher(null));
+  assert.isFalse(isErrorNotifiedByPublisher(undefined));
+  assert.equal(errors.length, 1);
+});
+
+test("handleError: error コールバック未指定でも印は付く", () => {
+  // 印は「publisher 層がこの失敗の通知責任を果たした」ことを示すため、通知先が無くても付く。
+  // 高レベル API が作る publisher には必ず error コールバックが配線されるため、
+  // 印付きは利用者への通知済みでもある
+  const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n);
+  const failure = new Error("handler failed");
+
+  publisher.handleError(failure);
+
+  assert.isTrue(isErrorNotifiedByPublisher(failure));
 });

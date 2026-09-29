@@ -1,12 +1,41 @@
 /**
  * MOQT Publisher
  * draft-ietf-moq-transport-21 Section 3 (Publishing and Retrieving Tracks)
+ *
+ * publisher 層は送信の失敗を error コールバックで通知する担い手である。
  */
 
 import { ObjectStatus, PublishDoneStatusCode, type Location } from "./message/types";
 import type { LocationFilter } from "./message/parameter";
 import { objectMatchesFilter, resolveFilter, type ResolvedFilter } from "./filter";
 import { ProtocolViolationError } from "./error";
+
+/**
+ * publisher 層が error コールバックで通知した error の印
+ *
+ * 事前検証 (guard / status / 委譲先の検証) の違反は publisher 層が通知してから
+ * 返値を reject する。呼び出し側が同じ失敗を通知し直すと 1 件の失敗で 2 回通知に
+ * なるため、この印で「publisher 層がこの失敗の通知責任を果たした」ことを示し、
+ * 呼び出し側が通知の要否を判定する。
+ * error は参照で比較するため WeakSet で保持する (通知済みの error が解放されれば
+ * 印も一緒に消える)。
+ */
+const publisherNotifiedErrors = new WeakSet<object>();
+
+/**
+ * Internal: error が publisher 層の通知済みかどうかを返す (高レベル API からのみ使う)
+ *
+ * PublisherImpl.handleError が通知した error だけが真になる。印は参照で比較するため、
+ * 同じ内容でも別インスタンスなら偽である。この判定関数と印のコレクションは publisher 層の
+ * 内部契約に留める (パッケージ公開 API には含めない)。
+ * 引数を unknown で受けるのは throw される値が Error に限らないためである。WeakSet.has は
+ * object 以外を受け取れない (型) ため、typeof / null で絞ってから判定する。
+ * 通知を伴わない失敗 (closed の同期 throw、接続失敗、同期 throw の伝搬) は偽になり、
+ * 呼び出し側が従来どおり 1 回通知する。
+ */
+export function isErrorNotifiedByPublisher(error: unknown): boolean {
+  return typeof error === "object" && error !== null && publisherNotifiedErrors.has(error);
+}
 
 /**
  * Publisher state
@@ -801,8 +830,16 @@ export class PublisherImpl implements Publisher {
 
   /**
    * Handle error
+   *
+   * 通知した error に印を付け、呼び出し側が同じ失敗を通知し直さないようにする
+   * (1 件の失敗で 2 回通知になるのを防ぐ)。印を付けるだけで通知の回数は変えず、
+   * error コールバックが未指定でも印は付く (高レベル API が作る publisher には
+   * 必ず error コールバックが配線されるため、印付きは利用者への通知済みでもある)。
+   * 印を理由にここで通知を抑止しないこと。抑止するのは呼び出し側 (高レベル API の
+   * start 失敗の通知) だけである。
    */
   handleError(error: Error): void {
+    publisherNotifiedErrors.add(error);
     this.errorCallback?.(error);
   }
 
