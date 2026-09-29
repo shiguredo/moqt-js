@@ -9,6 +9,7 @@
  */
 
 import { buildValidatedCatalogTrack } from "./catalogTrackValidation";
+import { setOwnField } from "./ownFields";
 import { MSF_KNOWN_VERSIONS } from "./version";
 import type { MsfVersion, PackagingType } from "./version";
 import type {
@@ -28,7 +29,7 @@ import type {
  * unknown 値を `Catalog` として検証して返す (draft-ietf-moq-msf-01 §5.1)
  *
  * §5: A parser MUST ignore fields it does not understand.
- * 未知フィールド (root level) は ignore する。
+ * 未知フィールド (root level) は検証しないが §5.4 の変数置換と再 encode のために保持する。
  *
  * MUST 違反、および initRef の参照切れ (§5.2.13 の厳格化) で throw する。
  * `Error` メッセージは「先頭小文字、末尾ピリオドなし、期待値と実際値を含む」方針に従う。
@@ -149,7 +150,7 @@ export function validateCatalog(value: unknown): Catalog {
   const catalogRecord = catalog as unknown as Record<string, unknown>;
   for (const key of Object.keys(obj)) {
     if (!KNOWN_CATALOG_ROOT_FIELDS.has(key)) {
-      catalogRecord[key] = obj[key];
+      setOwnField(catalogRecord, key, obj[key]);
     }
   }
   return catalog;
@@ -343,8 +344,9 @@ function validateInitDataEntry(value: unknown, index: number): InitDataEntry {
  * その他の MUST / MUST NOT (eventType / template / buffers / encryption / mimeType 等)
  * は ctx 共通で検証する。
  *
- * §5: A parser MUST ignore fields it does not understand. → 既知フィールドのみ
- * pick して返し、未知フィールドは黙って捨てる。
+ * §5: A parser MUST ignore fields it does not understand. → 本実装は「ignore」を
+ * 「検証はしないが保持する」と解釈し、track 直下の未知フィールドを §5.4 の変数置換と
+ * 再 encode のために保持する (buffers 内の未知キーは §5.2.9 の MUST により無視するため保持しない)。
  */
 export function validateCatalogTrack(value: unknown, ctx: ValidationContext): CatalogTrack {
   if (typeof value !== "object" || value === null) {

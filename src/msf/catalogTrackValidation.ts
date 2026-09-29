@@ -9,6 +9,7 @@
  */
 
 import { toMsfLocationBigInt } from "./json";
+import { setOwnField } from "./ownFields";
 import type { PackagingType } from "./version";
 import type {
   AccessibilityDescriptor,
@@ -114,7 +115,7 @@ export function buildValidatedCatalogTrack(
   const trackRecord = track as unknown as Record<string, unknown>;
   for (const key of Object.keys(obj)) {
     if (!KNOWN_TRACK_FIELDS.has(key)) {
-      trackRecord[key] = obj[key];
+      setOwnField(trackRecord, key, obj[key]);
     }
   }
 

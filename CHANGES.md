@@ -263,6 +263,10 @@
   - 上限で捨てたログの vnode はキャッシュから落とす。`data` と `payload` は追加後に書き換えない前提になる (行を描画し直さないため、書き換えても表示は古いまま)
   - 1 件追加のコストは表示中の件数に比例する分が残る (1000 件で約 3 ms のうち、表示中の子の走査が大半)。表示する行を画面に入る分だけにする対応は別に行う
   - @voluntas
+- [FIX] MSF Catalog の `__proto__` で戻り値のプロトタイプが差し替わるのを修正する
+  - 未知フィールドの保持・再出力・変数置換で動的キーへ代入していた箇所を `setOwnField` に寄せ、`__proto__` だけ own data property として定義する。細工された Catalog で `[[Prototype]]` が差し替わると、継承経由で本来無いプロパティが見えたり、null プロトタイプにされた場合は `Object.prototype` のメソッド呼び出しが失敗する
+  - decode 後の Catalog は own `__proto__` を持ち得るため、利用者側で複製するときは `Object.assign` ではなく spread か `structuredClone` を使う
+  - @voluntas
 - [FIX] moqt-devtools のバイト数の単位を KiB / MiB にする
   - 1024 進で丸めているのに KB / MB と表示していた。1000 進のビットレート (kbps / Mbps) と区別できるようにする
   - @voluntas
