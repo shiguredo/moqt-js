@@ -7,6 +7,7 @@ import {
   formatElapsedTime,
   formatHexDump,
   formatMessageData,
+  formatTrackNameSuffix,
   isParameter,
 } from "./logFormatters";
 
@@ -171,6 +172,78 @@ test("formatMessageData は underscore なしの大文字キーを Parameters �
   // FOO はフィールドとして Parameters セクションより前に出る
   assert.ok(result.includes("FOO: 1"));
   assert.ok(result.indexOf("FOO: 1") < result.indexOf("Parameters:"));
+});
+
+// trackNamespace + trackName は仕様の Full Track Name 形式 (draft-ietf-moq-transport-21
+// §8.8) の 1 行にまとめ、生の配列とトラック名を別々に出さない。
+test("formatMessageData は trackNamespace と trackName を Full Track Name 1 行にまとめる", () => {
+  const result = formatMessageData({ trackNamespace: ["room", "123"], trackName: "video" });
+  assert.ok(result.includes("Full Track Name: room-123--video"));
+  // 生のフィールドの行が残っていない ("Full Track Name" の部分一致と区別する)
+  assert.ok(!result.includes("\n  Track Namespace:"));
+  assert.ok(!result.includes("\n  Track Name:"));
+});
+
+// フィールドの並びが trackName → trackNamespace でも同じ結果になる
+// (decoded のプロパティ順に依存しない)。
+test("formatMessageData は trackName が先でも Full Track Name 1 行にまとめる", () => {
+  const result = formatMessageData({ trackName: "video", trackNamespace: ["room"] });
+  assert.ok(result.includes("Full Track Name: room--video"));
+  assert.ok(!result.includes("\n  Track Namespace:"));
+  assert.ok(!result.includes("\n  Track Name:"));
+});
+
+// エスケープ規則は Full Track Name の組み立てと共通。
+test("formatMessageData は Full Track Name の区切り文字を §8.8 の規則でエスケープする", () => {
+  const result = formatMessageData({ trackNamespace: ["a"], trackName: "b/c" });
+  assert.ok(result.includes("Full Track Name: a--b.2fc"));
+});
+
+// trackName を持たないメッセージ (PUBLISH_NAMESPACE など) は namespace 単体を
+// §8.8 の namespace 表記で出す。
+test("formatMessageData は trackNamespace 単体を §8.8 の表記にする", () => {
+  const result = formatMessageData({ trackNamespace: ["room", "123"] });
+  assert.ok(result.includes("Track Namespace: room-123"));
+  const prefix = formatMessageData({ trackNamespacePrefix: ["live", "sports"] });
+  assert.ok(prefix.includes("Track Namespace Prefix: live-sports"));
+});
+
+// decoded には string[] 以外の値 (バイト列など) も来る。§8.8 の表記にできない値は
+// 生の値のまま出し、ログの表示を壊さない。
+test("formatMessageData は表記できない trackNamespace を生の値のまま出す", () => {
+  const bytes = [new Uint8Array([0x72]), new Uint8Array([0x31])];
+  const result = formatMessageData({ trackNamespace: bytes, trackName: "video" });
+  assert.ok(result.includes("Track Namespace"));
+  assert.ok(result.includes("Track Name: video"));
+  // 空の Track Namespace Field (§8.7 違反) でも throw しない
+  const emptyField = formatMessageData({
+    trackNamespace: ["room", "", "123"],
+    trackName: "video",
+  });
+  assert.ok(emptyField.includes("Track Namespace"));
+});
+
+// 空の Track Namespace (0 フィールド) は §8.7 が許すが、§8.8 の表記は空文字列に
+// なるため、生の値 ("[]") のまま出す。
+test("formatMessageData は空の trackNamespace を [] のまま出す", () => {
+  const result = formatMessageData({ trackNamespace: [] });
+  assert.ok(result.includes("Track Namespace: []"));
+});
+
+// ログ行の末尾に付ける Full Track Name。decoded が track の情報を持たないときは
+// 何も付けない (行はメッセージ種別のまま)。
+test("formatTrackNameSuffix: Full Track Name を先頭の空白付きで返す", () => {
+  assert.equal(
+    formatTrackNameSuffix({ trackNamespace: ["room", "123"], trackName: "video" }),
+    " room-123--video",
+  );
+  assert.equal(formatTrackNameSuffix({}), "");
+  assert.equal(formatTrackNameSuffix(undefined), "");
+  // 表記にできない値 (バイト列) では何も付けない
+  assert.equal(
+    formatTrackNameSuffix({ trackNamespace: [new Uint8Array([0x72])], trackName: "video" }),
+    "",
+  );
 });
 
 // formatBytes は devtools 内で唯一の実装であり、各パネルが同じ丸めを使う。

@@ -27,6 +27,7 @@ import { formatLossEvent, formatStallEvent } from "../utils/playbackTimingStats"
 import { LATENCY_SEGMENTS } from "../utils/latencyBreakdown";
 import { STALL_CAUSES } from "../utils/stallAnalysis";
 import { subscriberControlState } from "../utils/subscriberControls";
+import * as settings from "../signals/connectionSettings";
 import * as sub from "../signals/subscriber";
 
 interface SubscriberPanelProps {
@@ -168,7 +169,7 @@ export function SubscriberPanel({
       </div>
 
       <div class="p-5">
-        {/* Status Message */}
+        {/* Status Message。接続の段階を示す。トラックの一覧は Catalog パネルが出す */}
         <div
           class={getStatusClasses()}
           title={instance.statusMessage.value}
@@ -268,6 +269,29 @@ export function SubscriberPanel({
           </button>
         </div>
 
+        {/* Catalog。catalog を受け取る前も描き、値を「-」にする */}
+        <CatalogTracks
+          tracks={catalog?.tracks ?? []}
+          trackNamespace={settings.namespaceArray.value}
+          tone="blue"
+          testId="subscriber-catalog"
+        />
+
+        {/* 受信した音声のレベルメーターと波形。音声トラックを購読していない間も描き、
+            値を「-」にする (購読の開始でメーターが現れると下の項目の位置が動く) */}
+        <AudioMeter
+          peakDbfs={instance.audioPeakDbfs}
+          rmsDbfs={instance.audioRmsDbfs}
+          level={instance.audioLastLevel}
+          waveform={instance.audioWaveform}
+          active={instance.audioSubscriber.value !== null}
+          levelActive={instance.audioSubscriber.value !== null}
+          testIdPrefix="audio"
+        />
+
+        {/* 受信した音声の再生先。表示せず、srcObject の設定先としてだけ使う */}
+        <audio ref={audioRef} data-testid="subscriber-audio-element" class="hidden" />
+
         {/* Canvas Container */}
         <div class="relative bg-slate-900 rounded-lg overflow-hidden aspect-video mb-4">
           <canvas
@@ -298,26 +322,8 @@ export function SubscriberPanel({
           </div>
         </div>
 
-        {/* 受信した音声のレベルメーターと波形。音声トラックを購読していない間も描き、
-            値を「-」にする (購読の開始でメーターが現れると下の項目の位置が動く) */}
-        <AudioMeter
-          peakDbfs={instance.audioPeakDbfs}
-          rmsDbfs={instance.audioRmsDbfs}
-          level={instance.audioLastLevel}
-          waveform={instance.audioWaveform}
-          active={instance.audioSubscriber.value !== null}
-          levelActive={instance.audioSubscriber.value !== null}
-          testIdPrefix="audio"
-        />
-
-        {/* 受信した音声の再生先。表示せず、srcObject の設定先としてだけ使う */}
-        <audio ref={audioRef} data-testid="subscriber-audio-element" class="hidden" />
-
         {/* 受信した event timeline のメッセージ。audio / video 以外のデータ */}
         <MessageList entries={instance.eventMessages.value} testId="subscriber-messages" />
-
-        {/* Catalog。catalog を受け取る前も描き、値を「-」にする */}
-        <CatalogTracks tracks={catalog?.tracks ?? []} tone="blue" testId="subscriber-catalog" />
 
         {/* Statistics。既定で閉じ、「Statistics」を押すと開く */}
         <StatsCollapse testId="subscriber-statistics">

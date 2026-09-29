@@ -52,7 +52,7 @@ import { AudioClockBridge, AudioPlayoutScheduler } from "../../../src/audioPlayo
 import { effectiveTargetLatencyMs, resolveSharedTargetLatencyMs } from "../../../src/msf/tracks.ts";
 import { applyAudioOutputSink } from "../utils/audioOutput";
 import { browserIsChromium, resolvePanelHttpVersion } from "../utils/httpVersion";
-import { buildMediaTrackStatusMessage } from "../utils/trackStatusMessage";
+import { formatFullTrackName } from "../../../src/fullTrackName.ts";
 import * as settings from "../signals/connectionSettings";
 import * as sub from "../signals/subscriber";
 import * as pub from "../signals/publisher";
@@ -1287,10 +1287,8 @@ export function useSubscriber(
     if (signal.aborted) return;
     instance.isStarting.value = false;
     instance.status.value = "connected";
-    // 映像を購読しないため、確立した音声トラックだけを並べる
-    instance.statusMessage.value = buildMediaTrackStatusMessage("Subscribed", namespaceArray, {
-      audio: audioTrack.name,
-    });
+    // 音声トラックの購読が確立した (トラックの一覧は Catalog パネルが出す)
+    instance.statusMessage.value = "Subscribed";
   }
 
   /**
@@ -1871,7 +1869,7 @@ export function useSubscriber(
       instance.httpVersion.value = null;
       settings.settingsDisabled.value = true;
 
-      const namespaceArray = settings.namespace.value.split("/").filter((s) => s.length > 0);
+      const namespaceArray = settings.namespaceArray.value;
       const connectOptions = settings.buildConnectOptions();
 
       // MOQT サーバへ接続する
@@ -1988,10 +1986,14 @@ export function useSubscriber(
               }
               lastCatalogLocation = location;
               // RECV OBJECT 自体は addLog 経由で残るのでここで重複ログは出さない。
-              addLog("info", `[${subscriberId}] [RECV] OBJECT (${CATALOG_TRACK_NAME})`, {
-                source,
-                catalog,
-              });
+              addLog(
+                "info",
+                `[${subscriberId}] [RECV] OBJECT (${formatFullTrackName(namespaceArray, CATALOG_TRACK_NAME)})`,
+                {
+                  source,
+                  catalog,
+                },
+              );
               instance.catalog.value = catalog;
               // 購読するトラックは最初に届いた catalog から決める (後の catalog では解決済み)
               resolve(catalog);
@@ -2308,10 +2310,8 @@ export function useSubscriber(
         subscriberInstance.trackProperties,
       );
       instance.status.value = "connected";
-      // この時点では映像トラックだけが確立している (音声はこの後で購読する)
-      instance.statusMessage.value = buildMediaTrackStatusMessage("Subscribed", namespaceArray, {
-        video: actualTrackName,
-      });
+      // 映像トラックの購読が確立した (音声はこの後で購読する)
+      instance.statusMessage.value = "Subscribed";
       instance.largestLocation.value = largestLocation ?? null;
       // SUBSCRIBE_OK の LARGEST_OBJECT を、relay の cache から追いつく途中かどうかの境界に
       // する。この位置以前のフレームは復号しても描かない (utils/catchUpGate.ts)
@@ -2347,12 +2347,8 @@ export function useSubscriber(
         // startAudioSubscription 内の checkAborted は関数内で return するだけなので、
         // 中断後もここへ来る。teardownSubscriber が確定させた表示を上書きしない
         if (signal.aborted) return;
-        // 映像と音声の両方が確立したため、Catalog と Tracks カードと同じ
-        // audio → video の順で並べる
-        instance.statusMessage.value = buildMediaTrackStatusMessage("Subscribed", namespaceArray, {
-          audio: audioTrackFromCatalog.name,
-          video: actualTrackName,
-        });
+        // 映像と音声の両方が確立した
+        instance.statusMessage.value = "Subscribed";
       } catch (error) {
         // 中断時は teardownSubscriber が status / statusMessage を確定済み。
         // 映像経路と同じく上書きしない
@@ -2360,10 +2356,8 @@ export function useSubscriber(
         addLog("error", `[${subscriberId}] failed to start audio subscription`, {
           message: error instanceof Error ? error.message : String(error),
         });
-        // 中間メッセージを残さず、映像トラックだけの購読状態の表示に戻す
-        instance.statusMessage.value = buildMediaTrackStatusMessage("Subscribed", namespaceArray, {
-          video: actualTrackName,
-        });
+        // 中間メッセージを残さず、購読が確立した表示に戻す
+        instance.statusMessage.value = "Subscribed";
       }
     } catch (error) {
       // 中断時は teardownSubscriber が status / statusMessage / settingsDisabled を確定済み。

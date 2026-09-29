@@ -1,12 +1,16 @@
 // DebugPanel で使用する純粋関数 formatter 群を集約する。
 // JSX を含まず外部 signal も参照しないため utils/ 配下に置く。
 
+import { formatFullTrackName, formatTrackNamespace } from "../../../src/fullTrackName.ts";
+
 // RFC 形式のフィールド名マッピング
 export const RFC_FIELD_NAMES: Record<string, string> = {
   requestId: "Request ID",
   trackAlias: "Track Alias",
   trackNamespace: "Track Namespace",
   trackName: "Track Name",
+  // trackNamespace + trackName の組を 1 行にまとめたときに使う表示名
+  fullTrackName: "Full Track Name",
   errorCode: "Error Code",
   reason: "Reason",
   statusCode: "Status Code",
@@ -16,13 +20,67 @@ export const RFC_FIELD_NAMES: Record<string, string> = {
   subscriptionRequestId: "Subscription Request ID",
 };
 
-// MOQT Parameter 名 (draft-ietf-moq-transport-21) は ALL_CAPS_WITH_UNDERSCORES。
-// formatMessageData では Parameters セクションへ振り分けるために本関数で判定する。
+/**
+ * Track Namespace Field の配列かどうか
+ *
+ * decoded には wire の値がそのまま入るため、string[] 以外 (バイト列など) も来る。
+ * 文字列の配列のときだけ §8.8 の表記へ組み立てる
+ */
+function isTrackNamespaceFields(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((field) => typeof field === "string");
+}
+
+/**
+ * trackNamespace + trackName を Full Track Name の表記にする (組み立てられないときは null)
+ *
+ * 空の Track Namespace Field など §8.8 の表記にできない値では
+ * formatFullTrackName が throw する。ログ表示を壊さないよう、そのときは null を
+ * 返して呼び出し側が生の値を出す
+ */
+function tryFormatFullTrackName(trackNamespace: unknown, trackName: unknown): string | null {
+  if (!isTrackNamespaceFields(trackNamespace) || typeof trackName !== "string") {
+    return null;
+  }
+  try {
+    return formatFullTrackName(trackNamespace, trackName);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Track Namespace 単体を §8.8 の表記にする (組み立てられないときは null)
+ *
+ * trackNamespace + trackName の組が無いメッセージ (PUBLISH_NAMESPACE など) と
+ * trackNamespacePrefix で使う
+ */
+function tryFormatTrackNamespace(value: unknown): string | null {
+  if (!isTrackNamespaceFields(value)) {
+    return null;
+  }
+  try {
+    return formatTrackNamespace(value);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * MOQT Parameter 名 (draft-ietf-moq-transport-21) は ALL_CAPS_WITH_UNDERSCORES。
+ * formatMessageData では Parameters セクションへ振り分けるために本関数で判定する。
+ */
 export function isParameter(key: string): boolean {
   return key === key.toUpperCase() && key.includes("_");
 }
 
-// RFC 仕様書風のフォーマット
+/**
+ * RFC 仕様書風のフォーマット
+ *
+ * trackNamespace + trackName の組は `Full Track Name: room-123--video` の 1 行に
+ * まとめる (§8.8 の表記)。namespace 単体と trackNamespacePrefix は `-` 区切りの
+ * 表記にする。表記にできない値 (バイト列や空の Track Namespace Field) は生の値の
+ * まま出す
+ */
 export function formatMessageData(data: unknown, indent = 0): string {
   if (data === null || data === undefined) {
     return "";
@@ -61,8 +119,35 @@ export function formatMessageData(data: unknown, indent = 0): string {
   const fields: [string, unknown][] = [];
   const parameters: [string, unknown][] = [];
 
+  // trackNamespace と trackName の組を Full Track Name の 1 行にまとめるため、
+  // 同じオブジェクトのもう一方の値を引けるようにする
+  const entryValues = new Map(entries);
+
   for (const [key, value] of entries) {
     if (value === undefined) {
+      continue;
+    }
+    if (key === "trackName") {
+      // trackNamespace と組で Full Track Name にできるときは、trackNamespace の側で出す
+      if (tryFormatFullTrackName(entryValues.get("trackNamespace"), value) !== null) {
+        continue;
+      }
+    }
+    if (key === "trackNamespace") {
+      const fullTrackName = tryFormatFullTrackName(value, entryValues.get("trackName"));
+      if (fullTrackName !== null) {
+        fields.push(["fullTrackName", fullTrackName]);
+        continue;
+      }
+      // trackName が無いメッセージ (PUBLISH_NAMESPACE など) は namespace 単体の表記にする。
+      // 空の namespace (0 フィールド) は表記が空文字列になるため生の値 ("[]") のまま出す
+      const namespace = tryFormatTrackNamespace(value);
+      fields.push([key, namespace === null || namespace === "" ? value : namespace]);
+      continue;
+    }
+    if (key === "trackNamespacePrefix") {
+      const namespace = tryFormatTrackNamespace(value);
+      fields.push([key, namespace === null || namespace === "" ? value : namespace]);
       continue;
     }
     if (isParameter(key)) {
@@ -98,6 +183,21 @@ export function formatMessageData(data: unknown, indent = 0): string {
   }
 
   return `{\n${lines.join("\n")}\n${spaces}}`;
+}
+
+/**
+ * ログ行の末尾に付ける Full Track Name (trackNamespace + trackName があるときだけ)
+ *
+ * メッセージのログ行は `[publisher] [SEND] PUBLISH` のように種別だけを出すため、
+ * どのトラックのメッセージかを行から読めるようにする。表記にできない値では
+ * 何も付けない
+ */
+export function formatTrackNameSuffix(decoded: Record<string, unknown> | undefined): string {
+  if (decoded === undefined) {
+    return "";
+  }
+  const fullTrackName = tryFormatFullTrackName(decoded["trackNamespace"], decoded["trackName"]);
+  return fullTrackName === null ? "" : ` ${fullTrackName}`;
 }
 
 // バイナリデータを hex dump 形式でフォーマット

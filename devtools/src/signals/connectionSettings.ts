@@ -1,4 +1,4 @@
-import { signal } from "@preact/signals";
+import { computed, signal } from "@preact/signals";
 import {
   type AuthorizationToken,
   AuthorizationTokenAliasType,
@@ -28,6 +28,11 @@ export const savedServerUrl = signal<string | null>(null);
 // 入力形式は `type:value` (先頭の `#` は付けない)。空文字列なら fragment を付けない。
 export const fragment = signal("");
 export const namespace = signal("room/123");
+// namespace 設定を Track Namespace のフィールドへ分解したもの。空のフィールドは落とす。
+// 接続処理と画面表示 (Full Track Name の組み立て) が同じ分解を使う
+export const namespaceArray = computed(() =>
+  namespace.value.split("/").filter((field) => field.length > 0),
+);
 // 配信するトラックの名前。catalog の track name になり、同じ namespace の中で一意でなければ
 // ならない (draft-ietf-moq-msf-01 §5.2.3)。既定値は src/createMedia/settings.ts の
 // DEFAULT_VIDEO_TRACK_NAME / DEFAULT_AUDIO_TRACK_NAME と同じにする

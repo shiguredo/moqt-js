@@ -108,6 +108,12 @@
   - URL クエリ `mode` で Publisher だけ / Subscriber だけを表示する。ヘッダーの副題に 3 つのモードを並べ、今のモードを示すとともに、他のモードのページを今の接続設定のまま新しいタブで開けるようにする
   - Catalog Timeout と Use Dedicated Worker を URL に載せ、同じ接続設定のページを URL で再現できるようにする
   - @voluntas
+- [UPDATE] moqt-devtools の track 表示を整理し、ステータスを接続状態にする
+  - ステータスメッセージは接続の段階 (`Publishing` / `Subscribed` など) だけを示すようにし、トラックの一覧は出さない。どのトラックがあるかは Catalog パネルとデバッグパネルで確認する
+  - Catalog パネルはトラックを Media (`packaging: "loc"`) と Data (それ以外) に分けて並べ、各行の先頭に Full Track Name を出す。表記は namespace のフィールドを `-`、track name を `--` でつなぎ、`[A-Za-z0-9_]` 以外のバイトを `.` + 小文字 16 進 2 桁でエスケープする (draft-ietf-moq-transport-21 §8.8 / draft-ietf-moq-msf-01 §11.1.2)。track の `namespace` は §5.2.2 に従い、指定があればそちらを使う
+  - パネルの並びを Catalog → Audio → Video → Messages → Statistics にし、Catalog を映像の上に出す
+  - デバッグパネルのログ行は、メッセージの decoded に track の情報があれば行末に Full Track Name を付ける。展開した Data の `Track Namespace` / `Track Name` は `Full Track Name` の 1 行にまとめ、namespace 単体と `Track Namespace Prefix` は `-` 区切りの表記にする。catalog の OBJECT ログも namespace を含む Full Track Name にする
+  - @voluntas
 - [UPDATE] moqt-devtools の publisher の接続設定を Tracks / Audio / Video / Catalog / Relay Cache に分ける
   - 配信するトラックの宣言 (Advertised / Role / Track Name / Codec) を Tracks カードにまとめ、映像と音声を 2 列で並べる。Codec は Audio カードから Tracks カードへ移す
   - 全トラックに同じ値を載せる catalog の宣言 (Target Latency / Render Group) を Catalog カード、relay への publish のオプション (MAX_CACHE_DURATION) を Relay Cache カードに分ける
@@ -220,10 +226,6 @@
   - 行の vnode をログの連番で保持し、展開の状態・表示モード・コピーの表示が変わったときだけ作り直す。Preact は同じ vnode を再び受け取ると部分木の差分を省略するため、1000 件表示でも 1 件追加で描画される行は 1 件になる (実測: 同じ計測方法で 1 件追加の中央値 23.0 ms → 7.6 ms、描画される行 1000 件 → 1 件)
   - 上限で捨てたログの vnode はキャッシュから落とす。`data` と `payload` は追加後に書き換えない前提になる (行を描画し直さないため、書き換えても表示は古いまま)
   - 1 件追加のコストは表示中の件数に比例する分が残る (1000 件で約 3 ms のうち、表示中の子の走査が大半)。表示する行を画面に入る分だけにする対応は別に行う
-  - @voluntas
-- [UPDATE] moqt-devtools のステータス表示の Full Track Name を、MOQT が推奨する形式にする
-  - namespace のフィールドを `-`、track name を `--` でつなぎ、`[A-Za-z0-9_]` 以外のバイトを `.` + 小文字 16 進 2 桁でエスケープする (draft-ietf-moq-transport-21 Section 8.8 / draft-ietf-moq-msf-01 Section 11.1.2)。`/` 連結では namespace の区切りと track name の区切りを区別できず、namespace ["a"] + track "b/c" と namespace ["a","b"] + track "c" がどちらも "a/b/c" になっていた
-  - subscriber の `Subscribed:` は、音声トラックの購読が確立したら音声と映像の両方を audio → video の順で並べる (これまでは映像トラックだけだった)
   - @voluntas
 - [FIX] moqt-devtools の publisher が、空のトラック名や重複したトラック名の catalog を送るのを修正する
   - draft-ietf-moq-msf-01 §5.2.3 の name (Required) と namespace ごとの一意性を満たさない catalog は、購読側の復号で初めて分かる。Tracks カードに理由を出し、Publish は接続の前に拒否する
@@ -2111,10 +2113,6 @@
   - 購読を始めると relay は cache から古い Object を実時間より速く配るため、映像は早送りになり、音声は cache から届いた分かどうかではなく鳴らす時刻を過ぎているかと並べすぎの上限で鳴らすか捨てるかを決めていた。キーフレームの間隔が長い配信 (例: 90 秒) では、何十秒も前の映像を早送りで見せ続けていた
   - SUBSCRIBE_OK の LARGEST_OBJECT (draft-ietf-moq-transport-21 Section 9.20.18) を追いつきの境界にし、この位置以前のフレームは復号するが描かず、音声 Object は復号するが鳴らさない。境界より後の Object から従来どおり再生する
   - 描かなかったフレーム数を `catchUpFramesSkipped`、鳴らさなかった音声 Object 数を `audio.catchUpObjectsSkipped` として画面と `window.moqtDevTools` に出し、追いつくまで画面に「Catching up」を出す
-  - @voluntas
-
-- [FIX] moqt-devtools の publisher の Publishing 表示に、音声トラックが出ないのを修正する
-  - 映像と音声を配信していても映像トラックの名前しか出しておらず、音声が配信されているかを Catalog を見ないと確認できなかった。確立したメディアトラックを audio → video の順で並べる
   - @voluntas
 
 ### misc

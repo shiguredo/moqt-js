@@ -9,6 +9,7 @@ import { HttpVersionBadge } from "./HttpVersionBadge";
 import { CatalogTracks } from "./CatalogTracks";
 import { MessageComposer } from "./MessageComposer";
 import { PANEL_OPTION_ROW_CLASS } from "./panelLayout";
+import * as settings from "../signals/connectionSettings";
 import * as pub from "../signals/publisher";
 
 /** Forward State を表示用にする。配信していない間 (null) は「-」 */
@@ -92,7 +93,7 @@ export function PublisherPanel() {
       </div>
 
       <div class="p-5">
-        {/* Status Message */}
+        {/* Status Message。接続の段階を示す。トラックの一覧は Catalog パネルが出す */}
         <div
           class={getStatusClasses()}
           title={pub.pubStatusMessage.value}
@@ -171,18 +172,13 @@ export function PublisherPanel() {
           </button>
         </div>
 
-        {/* Video Container */}
-        <div class="relative bg-slate-900 rounded-lg overflow-hidden aspect-video mb-4">
-          <video ref={videoRef} autoPlay muted playsInline class="w-full h-full object-contain" />
-          <div class="absolute top-2 left-2 px-2 py-1 bg-black/60 rounded text-xs text-white font-medium">
-            Local Camera
-          </div>
-          {pub.pubCodec.value && (
-            <div class="absolute top-2 right-2 px-2 py-1 bg-green-500/80 rounded text-xs text-white font-medium">
-              {pub.pubCodec.value}
-            </div>
-          )}
-        </div>
+        {/* Catalog。catalog を受け取る前も描き、値を「-」にする */}
+        <CatalogTracks
+          tracks={pub.catalog.value?.tracks ?? []}
+          trackNamespace={settings.namespaceArray.value}
+          tone="green"
+          testId="publisher-catalog"
+        />
 
         {/* 取っている音と送っている音のレベルメーターと波形。音声を取っていない間も描き、
             値を「-」にする (Preview の開始で現れると下の項目の位置が動く) */}
@@ -196,18 +192,24 @@ export function PublisherPanel() {
           testIdPrefix="publisher-audio"
         />
 
+        {/* Video Container */}
+        <div class="relative bg-slate-900 rounded-lg overflow-hidden aspect-video mb-4">
+          <video ref={videoRef} autoPlay muted playsInline class="w-full h-full object-contain" />
+          <div class="absolute top-2 left-2 px-2 py-1 bg-black/60 rounded text-xs text-white font-medium">
+            Local Camera
+          </div>
+          {pub.pubCodec.value && (
+            <div class="absolute top-2 right-2 px-2 py-1 bg-green-500/80 rounded text-xs text-white font-medium">
+              {pub.pubCodec.value}
+            </div>
+          )}
+        </div>
+
         {/* event timeline のメッセージ入力。audio / video 以外を送る例 */}
         <MessageComposer
           disabled={pub.eventPublisher.value === null}
           onSend={(text) => void sendEventMessage(text)}
           sentCount={pub.eventMessagesSent.value}
-        />
-
-        {/* Catalog。catalog を受け取る前も描き、値を「-」にする */}
-        <CatalogTracks
-          tracks={pub.catalog.value?.tracks ?? []}
-          tone="green"
-          testId="publisher-catalog"
         />
 
         {/* Statistics。既定で閉じ、「Statistics」を押すと開く */}

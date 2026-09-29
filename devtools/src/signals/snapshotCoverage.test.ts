@@ -121,6 +121,8 @@ const CONNECTION_SETTINGS_COVERAGE: CoverageExpectation = {
     microphoneDevices: "選べる音声入力の一覧で、選んだ値は microphoneDeviceId として出す",
     audioOutputDevices: "選べる音声出力の一覧で、選んだ値は audioOutputDeviceId として出す",
     settingsDisabled: "他の接続が設定を使っている間の入力の状態で、設定の値ではない",
+    namespaceArray:
+      "namespace を Track Namespace のフィールドへ分解した computed。値は namespace に出す",
   },
 };
 

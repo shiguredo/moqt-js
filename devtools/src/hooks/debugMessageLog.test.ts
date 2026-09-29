@@ -216,3 +216,20 @@ test("logDebugMessage: 手入力の認可トークン (Token Value) を載せた
   assert.notInclude(entry.message, tokenValue);
   assert.notInclude(JSON.stringify(entry.data), tokenValue);
 });
+
+test("logDebugMessage: track を持つメッセージの行末に Full Track Name を付ける", () => {
+  // 行からどのトラックのメッセージかを読めるようにする (§8.8 の表記)
+  logDebugMessage(
+    "[publisher]",
+    makeMessage(MessageType.PUBLISH, SAMPLE_PAYLOAD, {
+      trackNamespace: ["room", "123"],
+      trackName: "video",
+    }),
+  );
+  assert.equal(firstEntry().message, "[publisher] [SEND] PUBLISH room-123--video");
+});
+
+test("logDebugMessage: track の情報が無いメッセージの行には何も付けない", () => {
+  logDebugMessage("[publisher]", makeMessage(MessageType.SETUP, SAMPLE_PAYLOAD, {}));
+  assert.equal(firstEntry().message, "[publisher] [SEND] SETUP");
+});

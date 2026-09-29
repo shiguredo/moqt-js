@@ -38,6 +38,7 @@ import {
   PRIORITY_VIDEO_DELTA,
   PRIORITY_VIDEO_KEY,
 } from "../../../src/createMediaPublisher.ts";
+import { formatFullTrackName } from "../../../src/fullTrackName.ts";
 import { addLog } from "../signals/debugLog";
 import { logDebugMessage } from "./debugMessageLog";
 import { EncoderWrapper, type EncodedChunkData } from "../utils/EncoderWrapper";
@@ -53,10 +54,6 @@ import {
   catalogRepublishIntervalMs,
 } from "../utils/catalogRepublish";
 import { shouldSendAudioAsDatagram } from "../utils/audioDelivery";
-import {
-  buildMediaTrackStatusMessage,
-  type EstablishedMediaTrackNames,
-} from "../utils/trackStatusMessage";
 import {
   appendChatEventEntry,
   buildChatEventEntry,
@@ -1348,10 +1345,14 @@ export function usePublisher() {
       objectId: 0,
       payload: encodeCatalog(currentCatalog),
     });
-    addLog("info", `[publisher] [SEND] OBJECT (${CATALOG_TRACK_NAME}, updated)`, {
-      source: "publish",
-      catalogGroup: groupId,
-    });
+    addLog(
+      "info",
+      `[publisher] [SEND] OBJECT (${formatFullTrackName(settings.namespaceArray.value, CATALOG_TRACK_NAME)}, updated)`,
+      {
+        source: "publish",
+        catalogGroup: groupId,
+      },
+    );
   };
 
   /**
@@ -1427,7 +1428,7 @@ export function usePublisher() {
       pub.httpVersion.value = null;
       settings.settingsDisabled.value = true;
 
-      const namespaceArray = settings.namespace.value.split("/").filter((s) => s.length > 0);
+      const namespaceArray = settings.namespaceArray.value;
       const videoTrackNameValue = settings.videoTrackName.value;
       const codecValue = settings.codec.value;
       const videoSourceValue = settings.videoSource.value;
@@ -1568,10 +1569,14 @@ export function usePublisher() {
       });
       // catalog が relay の cache から落ちる前に送り直す (draft-ietf-moq-msf-01 Section 5.1)
       startCatalogRepublish(maxCacheDurationValue, sendCatalogUpdate);
-      addLog("info", `[publisher] [SEND] OBJECT (${CATALOG_TRACK_NAME})`, {
-        source: "publish",
-        catalog: createdCatalog,
-      });
+      addLog(
+        "info",
+        `[publisher] [SEND] OBJECT (${formatFullTrackName(namespaceArray, CATALOG_TRACK_NAME)})`,
+        {
+          source: "publish",
+          catalog: createdCatalog,
+        },
+      );
 
       pub.pubStatusMessage.value = "Connected, preparing encoder...";
 
@@ -1593,8 +1598,6 @@ export function usePublisher() {
       pub.isPreviewActive.value = false;
 
       const useWorker = settings.useDedicatedWorker.value;
-      // 確立したメディアトラックの名前。最後に配信ステータスへまとめて出す
-      const establishedMediaTracks: EstablishedMediaTrackNames = {};
       if (videoInput !== null) {
         await startVideoPublishing(session, namespaceArray, videoInput, {
           trackName: videoTrackNameValue,
@@ -1604,7 +1607,6 @@ export function usePublisher() {
           maxCacheDuration: maxCacheDurationValue,
           useWorker,
         });
-        establishedMediaTracks.video = videoTrackNameValue;
       }
 
       // 音声トラックを配信する
@@ -1620,7 +1622,6 @@ export function usePublisher() {
           // 映像を送らないときは、音声トラックが配信の確立と Forward State を表す
           audioOnly: videoInput === null,
         });
-        establishedMediaTracks.audio = audioTrackNameValue;
       }
 
       // event timeline トラックを配信する。メディアの配信を壊さないよう、失敗しても
@@ -1636,14 +1637,8 @@ export function usePublisher() {
         // 映像の統計 (符号化と送信の時間など) は前の配信のものを持ち越さない
         resetVideoPublishState();
       }
-      // 配信ステータスには、確立したメディアトラックの Full Track Name を audio → video の
-      // 順で並べる (Catalog と Tracks カードの並びに揃える)。event timeline は publish の
-      // 失敗を警告に留めるデータトラックのため含めない
-      pub.pubStatusMessage.value = buildMediaTrackStatusMessage(
-        "Publishing",
-        namespaceArray,
-        establishedMediaTracks,
-      );
+      // 配信ステータスは接続の段階を示す (トラックの一覧は Catalog パネルが出す)
+      pub.pubStatusMessage.value = "Publishing";
 
       // 統計値をリセットする
       pub.framesEncoded.value = 0;
@@ -1716,10 +1711,14 @@ export function usePublisher() {
           objectId: 0,
           payload: completeCatalogPayload,
         });
-        addLog("info", `[publisher] [SEND] OBJECT (${CATALOG_TRACK_NAME}, complete)`, {
-          source: "publish",
-          catalog: completeCatalog,
-        });
+        addLog(
+          "info",
+          `[publisher] [SEND] OBJECT (${formatFullTrackName(settings.namespaceArray.value, CATALOG_TRACK_NAME)}, complete)`,
+          {
+            source: "publish",
+            catalog: completeCatalog,
+          },
+        );
         await pub.catalogPublisher.value.done();
       }
 
