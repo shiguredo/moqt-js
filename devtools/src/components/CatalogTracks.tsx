@@ -146,8 +146,9 @@ function CatalogTrackGroup({ label, tracks, trackNamespace, cardClass }: Catalog
  * catalog の Track の一覧
  *
  * 既定で折りたたみ、見出しを押したときだけ中身を描く (catalog は接続の確認に使う
- * 補助の情報であり、常に開いていると画面が長くなる)。折りたたみ時は見出しだけの
- * 最小表示にし、閉じている間は DOM に置かない。
+ * 補助の情報であり、常に開いていると画面が長くなる)。折りたたみ時は track name を
+ * ` / ` 区切りで 1 行に出す (例: `audio / video / events`)。閉じている間は中身を
+ * DOM に置かない。
  *
  * 開いたときは Track をメディア (`packaging: "loc"`) とデータ (それ以外) に分けて
  * 並べる (§5.2.4)。グループの見出しには件数を出す。Track ごとに、1 行目へ namespace を
@@ -165,10 +166,8 @@ export function CatalogTracks({ tracks, trackNamespace, tone, testId }: CatalogT
   const contentId = useId();
   const mediaTracks = tracks.filter((track) => resolveTrackGroup(track) === "media");
   const dataTracks = tracks.filter((track) => resolveTrackGroup(track) === "data");
-  // 折りたたみ時に出す最小表示。catalog にあるトラックの Full Track Name
-  const trackLabels = tracks.map(
-    (track) => resolveTrackFullTrackName(track, trackNamespace) ?? track.name,
-  );
+  // 折りたたみ時に出す最小表示。catalog にあるトラックの名前
+  const trackLabels = tracks.map((track) => track.name);
   return (
     <div class={`rounded-lg mb-4 border ${classes.box}`} data-testid={testId}>
       <button
@@ -189,14 +188,14 @@ export function CatalogTracks({ tracks, trackNamespace, tone, testId }: CatalogT
           />
         </svg>
         <span class="shrink-0">Catalog</span>
-        {/* 折りたたみ時も、どのトラックがあるかを Full Track Name で最小限に出す */}
+        {/* 折りたたみ時も、どのトラックがあるかを track name で最小限に出す */}
         {!open && (
           <span
             class="min-w-0 flex-1 truncate text-left font-normal normal-case tracking-normal text-slate-500"
             data-testid={`${testId}-summary`}
-            title={trackLabels.length === 0 ? undefined : trackLabels.join(", ")}
+            title={trackLabels.length === 0 ? undefined : trackLabels.join(" / ")}
           >
-            {trackLabels.length === 0 ? "-" : trackLabels.join(", ")}
+            {trackLabels.length === 0 ? "-" : trackLabels.join(" / ")}
           </span>
         )}
       </button>
