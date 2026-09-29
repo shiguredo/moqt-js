@@ -3,7 +3,7 @@
 - Created: 2026-09-21
 - Completed: {YYYY-MM-DD}
 - Branch: feature/test-varint-non-minimal-acceptance
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-09-29
 
 ## 目的
 
@@ -25,7 +25,7 @@ MOQT の varint は非最短表現を受理しなければならない。実装�
 ## 完了条件
 
 - 非最短表現の受理がテストで固定され、最短形のみを受理する変更で退行を検出できる
-- `pnpm test` が通る
+- `npx vp check` / `npx vp test --run` が通る
 
 ## 参照
 
