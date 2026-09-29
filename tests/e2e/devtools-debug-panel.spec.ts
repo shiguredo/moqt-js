@@ -266,9 +266,9 @@ test("Debug ボタンのバッジは 100 件以上を 99+ にする", async ({ p
   await expect(page.getByTestId("debug-log-badge")).toHaveText("99+");
 });
 
-test("Copy for LLM は Relay URI と fragment の c4m (認可トークン) を伏せる", async ({ page }) => {
-  // c4m 付きの Relay URI で開くと、トークンは authorizationTokenBase64 へ取り込まれる。
-  // Relay URI の行だけでなく、統計の節の serverUrl (配信中のページで出る) と
+test("Copy for LLM は MOQT URI と fragment の c4m (認可トークン) を伏せる", async ({ page }) => {
+  // c4m 付きの MOQT URI で開くと、トークンは authorizationTokenBase64 へ取り込まれる。
+  // MOQT URI の行だけでなく、統計の節の serverUrl (配信中のページで出る) と
   // fragment の行にも値が出ないことを確かめる
   const c4mBase64 = "c2VudGluZWwtYzRtLXRva2Vu";
   const relayUri = `moqt://relay.example/moqt#msf:room-123--video&c4m=${c4mBase64}`;

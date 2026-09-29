@@ -160,7 +160,7 @@ test("buildConnectionSettingsSnapshot: 認可トークンの値は入れず、�
 });
 
 test("buildConnectionSettingsSnapshot: c4m から取り込んだトークンも値は入れず、URL と fragment では伏せ字にする", () => {
-  // Relay URI と URI Fragment のどちらにも c4m を書ける。取り込んだ後も signal には
+  // MOQT URI と URI Fragment のどちらにも c4m を書ける。取り込んだ後も signal には
   // 残るため、テキストへ出す値 (スナップショット) の時点で伏せる
   resetSettingSignals();
   const c4mBase64 = "c2VudGluZWwtYzRtLXRva2Vu";

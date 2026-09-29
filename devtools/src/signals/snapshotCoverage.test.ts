@@ -116,11 +116,21 @@ const CONNECTION_SETTINGS_COVERAGE: CoverageExpectation = {
     authorizationTokenBase64: "authorizationTokenFromC4m",
   },
   excluded: {
-    savedServerUrl: "Save で覚えた Relay URI で、今の接続に使う値ではない",
+    savedServerUrl: "Save で覚えた MOQT URI で、今の接続に使う値ではない",
     cameraDevices: "選べるカメラの一覧で、選んだ値は cameraDeviceId として出す",
     microphoneDevices: "選べる音声入力の一覧で、選んだ値は microphoneDeviceId として出す",
     audioOutputDevices: "選べる音声出力の一覧で、選んだ値は audioOutputDeviceId として出す",
     settingsDisabled: "他の接続が設定を使っている間の入力の状態で、設定の値ではない",
+    namespaceLocked:
+      "msf fragment が namespace を固定しているかどうかの入力の状態で、設定の値ではない",
+    audioTrackNameLocked:
+      "c4m が音声トラック名を固定しているかどうかの入力の状態で、設定の値ではない",
+    videoTrackNameLocked:
+      "c4m が映像トラック名を固定しているかどうかの入力の状態で、設定の値ではない",
+    c4mTrackNames:
+      "c4m の取り込みを画面に出すための導出値で、設定の値ではない (値は authorizationTokenFromC4m で分かる)",
+    c4mTokenInfo:
+      "c4m の取り込みを画面に出すための導出値で、設定の値ではない (値は authorizationTokenFromC4m で分かる)",
     namespaceArray:
       "namespace を Track Namespace のフィールドへ分解した computed。値は namespace に出す",
   },

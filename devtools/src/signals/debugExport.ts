@@ -13,7 +13,7 @@ import { getSubscriber, subscriberInstances } from "./subscriber";
  * ここは「どの節を出すか」だけを決める。
  *
  * 最後に本文全体の c4m (認可トークン) を伏せる。設定の節だけでなく、統計の節の
- * `serverUrl` のように同じ Relay URI が別の節からも入るため、節ごとではなく
+ * `serverUrl` のように同じ MOQT URI が別の節からも入るため、節ごとではなく
  * テキスト全体に対して行う。
  */
 

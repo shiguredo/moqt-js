@@ -66,8 +66,10 @@ test("接続設定を変えても App と子パネルは再描画されず、副
     host.__renderCounters = counters;
   });
 
-  const relayUri = page.getByTestId("relay-uri");
+  const relayUri = page.getByTestId("moqt-uri");
   await expect(relayUri).toBeVisible();
+  // MOQT URI の初期値は空のため、接続先を入れてから入力の再描画を数える
+  await relayUri.fill("moqt://127.0.0.1:4443/");
   await relayUri.click();
   await page.evaluate(() => {
     const host = window as unknown as { __renderCounters?: { counts: Map<string, number> } };

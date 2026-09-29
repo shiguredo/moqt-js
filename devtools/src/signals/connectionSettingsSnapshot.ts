@@ -20,10 +20,10 @@ import * as settings from "./connectionSettings";
  *
  * 認可トークンの値は入れない。コピーしたテキストは外部 (LLM など) へ渡す前提のため、
  * Token Value と c4m の Base64 は載せず、設定されているかどうかと種別だけを持つ。
- * Relay URI と URI Fragment の中の c4m は伏せ字にする (`utils/c4m.ts` の `maskC4mValue`)。
+ * MOQT URI と URI Fragment の中の c4m は伏せ字にする (`utils/c4m.ts` の `maskC4mValue`)。
  */
 export interface ConnectionSettingsSnapshot {
-  /** Relay URI。c4m (Base64 encoded C4M token) は伏せ字にして入る */
+  /** MOQT URI。c4m (Base64 encoded C4M token) は伏せ字にして入る */
   url: string;
   /** URI Fragment (type:value)。c4m は伏せ字にして入る */
   fragment: string;
@@ -89,7 +89,7 @@ export interface ConnectionSettingsSnapshot {
 /** 現在の接続設定をスナップショットへ変換する */
 export function buildConnectionSettingsSnapshot(): ConnectionSettingsSnapshot {
   return {
-    // Relay URI と URI Fragment のどちらにも c4m (認可トークン) を書けるため、
+    // MOQT URI と URI Fragment のどちらにも c4m (認可トークン) を書けるため、
     // テキストへ出す値の時点で伏せる
     url: maskC4mValue(settings.url.value),
     fragment: maskC4mValue(settings.fragment.value),

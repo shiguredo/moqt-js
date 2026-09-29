@@ -60,34 +60,6 @@ export function parseTrackMatch(text: string): C4M.Match | undefined {
 }
 
 /**
- * マッチを入力の書式へ戻す
- */
-export function formatMatch(match: C4M.Match): string {
-  const pattern = new TextDecoder().decode(match.pattern);
-  switch (match.type) {
-    case "prefix":
-      return `prefix:${pattern}`;
-    case "suffix":
-      return `suffix:${pattern}`;
-    case "exact":
-      return pattern;
-    default:
-      throw new Error("unsupported match type");
-  }
-}
-
-/**
- * 名前空間マッチを入力の書式へ戻す
- */
-export function formatNamespaceMatches(matches: C4M.NamespaceMatch[]): string {
-  return matches
-    .map((namespaceMatch) =>
-      namespaceMatch.type === "end" ? "end" : formatMatch(namespaceMatch.match),
-    )
-    .join(", ");
-}
-
-/**
  * `,` 区切りの入力を一覧にする (空要素は除く)
  */
 export function parseList(text: string): string[] {

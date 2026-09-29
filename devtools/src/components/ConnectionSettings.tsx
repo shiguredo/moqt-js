@@ -347,6 +347,85 @@ function formatTrackAdvertisement(advertisement: TrackAdvertisement): string {
     : "No (not available in this browser)";
 }
 
+/**
+ * c4m から取り込んだトークンのデコード結果
+ *
+ * 署名の検証はしない (送信するトークンは relay が検証する)。デコードできない場合は
+ * 何も描かない。
+ */
+function C4mTokenDetails() {
+  const info = settings.c4mTokenInfo.value;
+  if (info === null) {
+    return null;
+  }
+  return (
+    <div class="mt-2" data-testid="authorization-token-c4m-details">
+      <dl class="grid grid-cols-[auto_1fr] gap-x-4 gap-y-0.5 text-xs">
+        <dt class="text-slate-500">Format</dt>
+        <dd class="font-mono text-slate-800" data-testid="c4m-token-format">
+          {info.format}
+          {info.algorithm !== undefined ? ` / ${info.algorithm}` : ""}
+        </dd>
+        {info.issuer !== undefined && (
+          <>
+            <dt class="text-slate-500">iss</dt>
+            <dd class="break-all text-slate-800">{info.issuer}</dd>
+          </>
+        )}
+        {info.audience !== undefined && (
+          <>
+            <dt class="text-slate-500">aud</dt>
+            <dd class="break-all text-slate-800">{info.audience}</dd>
+          </>
+        )}
+        {info.expiration !== undefined && (
+          <>
+            <dt class="text-slate-500">exp</dt>
+            <dd class="font-mono text-slate-800">{info.expiration}</dd>
+          </>
+        )}
+        {info.notBefore !== undefined && (
+          <>
+            <dt class="text-slate-500">nbf</dt>
+            <dd class="font-mono text-slate-800">{info.notBefore}</dd>
+          </>
+        )}
+        {info.issuedAt !== undefined && (
+          <>
+            <dt class="text-slate-500">iat</dt>
+            <dd class="font-mono text-slate-800">{info.issuedAt}</dd>
+          </>
+        )}
+      </dl>
+      {info.scopes.length > 0 && (
+        <div class="mt-2">
+          <div class="text-xs text-slate-500">moqt scopes</div>
+          {/* 1 スコープ 1 行。桁を広げないよう w-auto にし、値は左揃えで詰める。
+              列名は MOQT / C4M の用語に合わせて Track Name にする */}
+          <table class="mt-1 w-auto border-collapse text-left text-xs">
+            <thead>
+              <tr class="text-slate-500">
+                <th class="border-b border-amber-200 py-0.5 pr-4 font-medium">Actions</th>
+                <th class="border-b border-amber-200 py-0.5 pr-4 font-medium">Namespace</th>
+                <th class="border-b border-amber-200 py-0.5 font-medium">Track Name</th>
+              </tr>
+            </thead>
+            <tbody>
+              {info.scopes.map((scope, index) => (
+                <tr key={index} class="align-top" data-testid="c4m-token-scope">
+                  <td class="py-0.5 pr-4 font-mono text-slate-800">{scope.actions.join(", ")}</td>
+                  <td class="py-0.5 pr-4 font-mono text-slate-800">{scope.namespace}</td>
+                  <td class="py-0.5 font-mono text-slate-800">{scope.track}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // トラック名の問題の表示。draft-ietf-moq-msf-01 §5.2.3: name は Required で、
 // catalog の中で namespace ごとに一意でなければならない MUST
 const TRACK_NAME_PROBLEM_LABELS: Record<TrackNameProblem, string> = {
@@ -364,11 +443,11 @@ interface ConnectionSummaryItem {
  * 接続設定の要約を作る (欄を閉じている間に 1 行で出す)
  *
  * 接続先と、配信で送る映像と音声の要点を並べる。映像や音声の入力が None のときは形式を出さない。
- * subscriber モードは Publisher だけが使う設定を隠すため、Relay URI と Namespace だけにする
+ * subscriber モードは Publisher だけが使う設定を隠すため、MOQT URI と Namespace だけにする
  */
 function buildConnectionSummary(currentMode: DevtoolsMode): ConnectionSummaryItem[] {
   const summary: ConnectionSummaryItem[] = [
-    { label: "Relay URI", value: settings.url.value || "-" },
+    { label: "MOQT URI", value: settings.url.value || "-" },
     { label: "Namespace", value: settings.namespace.value || "-" },
   ];
   if (currentMode === "subscriber") {
@@ -516,12 +595,17 @@ export function ConnectionSettings() {
     settings.authorizationTokenBase64.value = "";
     settings.authorizationTokenType.value = "0";
   };
-  const relayUriMemory = relayUriMemoryButtons(settings.savedServerUrl.value, settings.url.value);
+  // Save / Forget は URL と fragment を合わせた接続 URL で扱う。画面では fragment を
+  // 別の欄に分けて表示するが、覚える値は接続に使う 1 つの URL にする
+  const relayUriMemory = relayUriMemoryButtons(
+    settings.savedServerUrl.value,
+    settings.buildConnectUrl(),
+  );
   const saveRelayUri = (): void => {
     if (!relayUriMemory.saveEnabled) {
       return;
     }
-    const next = settings.url.value.trim();
+    const next = settings.buildConnectUrl().trim();
     settings.savedServerUrl.value = next;
     void persistServerUrl(next, true);
   };
@@ -530,7 +614,7 @@ export function ConnectionSettings() {
       return;
     }
     settings.savedServerUrl.value = null;
-    void persistServerUrl(settings.url.value, false);
+    void persistServerUrl(settings.buildConnectUrl(), false);
   };
 
   return (
@@ -667,25 +751,26 @@ export function ConnectionSettings() {
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
           <div class="lg:col-span-2">
             <label for="url" class="block text-sm font-medium text-slate-600 mb-1">
-              Relay URI
+              MOQT URI
             </label>
             <input
               type="text"
               id="url"
-              data-testid="relay-uri"
+              data-testid="moqt-uri"
               value={settings.url.value}
               onInput={(e) => {
-                settings.url.value = e.currentTarget.value;
-                // URL に msf fragment が含まれる場合は c4m を Authorization Token に反映する
-                settings.applyC4mFromUrl(e.currentTarget.value);
+                // MOQT URI の fragment を URI Fragment 欄へ映す。
+                // c4m の取り込みと msf fragment の namespace の固定もここで行う
+                settings.applyRelayUriInput(e.currentTarget.value);
               }}
+              placeholder="moqt://moq.example.com/"
               disabled={settings.settingsDisabled.value}
               class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors disabled:bg-slate-100 disabled:cursor-not-allowed"
             />
             <div class="mt-1.5 flex items-center gap-1.5">
               <button
                 type="button"
-                data-testid="relay-uri-save"
+                data-testid="moqt-uri-save"
                 disabled={settings.settingsDisabled.value || !relayUriMemory.saveEnabled}
                 onClick={saveRelayUri}
                 class="px-2 py-0.5 text-xs border border-blue-200 rounded bg-blue-50 text-blue-700 hover:bg-blue-100 disabled:bg-slate-100 disabled:text-slate-400 disabled:border-slate-200 disabled:cursor-not-allowed"
@@ -694,7 +779,7 @@ export function ConnectionSettings() {
               </button>
               <button
                 type="button"
-                data-testid="relay-uri-forget"
+                data-testid="moqt-uri-forget"
                 disabled={settings.settingsDisabled.value || !relayUriMemory.forgetEnabled}
                 onClick={forgetRelayUri}
                 class="px-2 py-0.5 text-xs border border-rose-200 rounded bg-rose-50 text-rose-700 hover:bg-rose-100 disabled:bg-slate-100 disabled:text-slate-400 disabled:border-slate-200 disabled:cursor-not-allowed"
@@ -725,37 +810,168 @@ export function ConnectionSettings() {
           <div class="lg:col-span-2">
             <label for="namespace" class="block text-sm font-medium text-slate-600 mb-1">
               Namespace
-              <span class="text-xs text-slate-400 ml-1">(split into a tuple by /)</span>
+              <span class="text-xs text-slate-400 ml-1">
+                {settings.namespaceLocked.value
+                  ? "(fixed by the msf fragment)"
+                  : "(split into a tuple by /)"}
+              </span>
             </label>
+            {/* msf fragment が namespace を指定している間は編集できない (認可された
+                namespace から外れないようにする) */}
             <input
               type="text"
               id="namespace"
+              data-testid="namespace"
               placeholder="e.g. moqt/devtools/a1B2c3D4e5F6g7H8"
               value={settings.namespace.value}
               onInput={(e) => (settings.namespace.value = e.currentTarget.value)}
+              readOnly={settings.namespaceLocked.value}
               disabled={settings.settingsDisabled.value}
-              class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors disabled:bg-slate-100 disabled:cursor-not-allowed"
+              class={`w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors disabled:bg-slate-100 disabled:cursor-not-allowed ${
+                settings.namespaceLocked.value ? "bg-slate-100 text-slate-500" : ""
+              }`}
             />
           </div>
           <div class="lg:col-span-3">
             <label for="fragment" class="block text-sm font-medium text-slate-600 mb-1">
               URI Fragment
-              <span class="ml-1 text-xs text-slate-400">type:value (draft-21 §6.1.1)</span>
+              <span class="ml-1 text-xs text-slate-400">(from the MOQT URI)</span>
             </label>
+            {/* MOQT URI の fragment の表示専用。変えるときは MOQT URI を編集する */}
             <input
               type="text"
               id="fragment"
+              data-testid="uri-fragment"
               value={settings.fragment.value}
-              onInput={(e) => {
-                settings.fragment.value = e.currentTarget.value;
-                // fragment に msf fragment を貼り付けた場合は c4m を Authorization Token に反映する
-                settings.applyC4mFromUrl(e.currentTarget.value);
-              }}
+              readOnly
               disabled={settings.settingsDisabled.value}
-              placeholder="e.g. track:video"
-              class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors disabled:bg-slate-100 disabled:cursor-not-allowed text-sm"
+              class="w-full px-3 py-2 border border-slate-300 rounded-lg bg-slate-100 text-slate-500 transition-colors disabled:cursor-not-allowed text-sm"
             />
           </div>
+        </div>
+
+        {/* Authorization Token Settings */}
+        {/* draft-ietf-moq-transport-21 §9.1.4 (AUTHORIZATION TOKEN Setup Option) */}
+        <div class="mt-4 pt-4 border-t border-slate-200">
+          <h3 class="text-sm font-medium text-slate-600 mb-3">
+            Authorization Token
+            <span class="ml-2 text-xs text-slate-400">SETUP Option (0x03)</span>
+          </h3>
+          <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+            <div>
+              <label for="authorizationTokenAliasType" class="block text-xs text-slate-500 mb-1">
+                Alias Type
+              </label>
+              <select
+                id="authorizationTokenAliasType"
+                value={settings.authorizationTokenAliasType.value}
+                onChange={(e) => {
+                  const v = e.currentTarget.value;
+                  if (v === "useValue" || v === "register") {
+                    settings.authorizationTokenAliasType.value = v;
+                  }
+                }}
+                disabled={settings.settingsDisabled.value}
+                class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white disabled:bg-slate-100 disabled:cursor-not-allowed"
+              >
+                <option value="useValue">USE_VALUE (0x3)</option>
+                <option value="register">REGISTER (0x1)</option>
+              </select>
+            </div>
+            {settings.authorizationTokenAliasType.value === "register" && (
+              <div>
+                <label for="authorizationTokenAlias" class="block text-xs text-slate-500 mb-1">
+                  Token Alias
+                </label>
+                <input
+                  type="text"
+                  id="authorizationTokenAlias"
+                  value={settings.authorizationTokenAlias.value}
+                  onInput={(e) => (settings.authorizationTokenAlias.value = e.currentTarget.value)}
+                  disabled={settings.settingsDisabled.value}
+                  placeholder="0"
+                  class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:bg-slate-100 disabled:cursor-not-allowed"
+                />
+              </div>
+            )}
+            <div>
+              <label for="authorizationTokenType" class="block text-xs text-slate-500 mb-1">
+                Token Type
+                <span class="ml-1 text-slate-400">(0 = out-of-band / 1 = CAT)</span>
+              </label>
+              <input
+                type="text"
+                id="authorizationTokenType"
+                value={settings.authorizationTokenType.value}
+                data-testid="authorization-token-type"
+                onInput={(e) => {
+                  settings.authorizationTokenType.value = e.currentTarget.value;
+                  // 手入力した場合は c4m から読み込んだ Base64 トークンを解除する
+                  // (解除しないと送信内容と UI の表示が食い違う)。
+                  // 入力した Token Type はそのまま使う
+                  settings.authorizationTokenBase64.value = "";
+                }}
+                disabled={settings.settingsDisabled.value}
+                placeholder="0"
+                class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:bg-slate-100 disabled:cursor-not-allowed"
+              />
+            </div>
+            <div class="lg:col-span-2">
+              <label for="authorizationTokenValue" class="block text-xs text-slate-500 mb-1">
+                Token Value
+                <span class="ml-1 text-slate-400">(not sent when empty)</span>
+              </label>
+              <input
+                type="text"
+                id="authorizationTokenValue"
+                data-testid="authorization-token-value"
+                autocomplete="off"
+                value={settings.authorizationTokenValue.value}
+                onInput={(e) => {
+                  settings.authorizationTokenValue.value = e.currentTarget.value;
+                  // c4m から読み込んだトークンがある場合だけ解除する
+                  // (取り込んでいないときに手入力した Token Type を壊さない)
+                  if (settings.authorizationTokenBase64.value) {
+                    clearImportedC4mToken();
+                  }
+                }}
+                disabled={settings.settingsDisabled.value}
+                placeholder="Any token string (UTF-8)"
+                class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:bg-slate-100 disabled:cursor-not-allowed"
+              />
+            </div>
+          </div>
+          {/* c4m から取り込んだトークン。デコード結果をそのまま出し、画面で確認できるようにする。
+              幅は内容に合わせる (接続設定の右端まで広げない) */}
+          {settings.authorizationTokenBase64.value && (
+            <div
+              class="mt-3 w-fit max-w-full rounded-lg border border-amber-200 bg-amber-50/60 px-3 py-2"
+              data-testid="authorization-token-c4m"
+            >
+              <div class="flex flex-wrap items-center gap-2 text-xs">
+                <span class="px-2 py-0.5 font-medium bg-amber-100 text-amber-700 rounded-full">
+                  c4m
+                </span>
+                <span class="text-slate-600">
+                  Sends the token loaded from the c4m parameter in the URL with SETUP (Base64)
+                </span>
+                {/* moqt クレームが exact で許可する track name。取り込みが画面で分かるように出す */}
+                {settings.c4mTrackNames.value.length > 0 && (
+                  <span class="text-slate-600" data-testid="authorization-token-c4m-tracks">
+                    Tracks: {settings.c4mTrackNames.value.join(", ")}
+                  </span>
+                )}
+                <button
+                  type="button"
+                  onClick={() => clearImportedC4mToken()}
+                  class="text-slate-500 hover:text-slate-700 underline"
+                >
+                  Clear
+                </button>
+              </div>
+              <C4mTokenDetails />
+            </div>
+          )}
         </div>
 
         {/* 映像と音声の Encoder / Decoder を Dedicated Worker で動かす。
@@ -802,6 +1018,9 @@ export function ConnectionSettings() {
                     </div>
                     <label for="audioTrackName" class="block text-xs text-slate-500 mb-1">
                       Track Name
+                      {settings.audioTrackNameLocked.value && (
+                        <span class="text-slate-400 ml-1">(fixed by c4m)</span>
+                      )}
                     </label>
                     <input
                       type="text"
@@ -809,8 +1028,13 @@ export function ConnectionSettings() {
                       data-testid="audio-track-name"
                       value={settings.audioTrackName.value}
                       onInput={(e) => (settings.audioTrackName.value = e.currentTarget.value)}
+                      readOnly={settings.audioTrackNameLocked.value}
                       disabled={settings.settingsDisabled.value}
-                      class="w-full px-3 py-2 mb-3 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors disabled:bg-slate-100 disabled:cursor-not-allowed bg-white"
+                      class={`w-full px-3 py-2 mb-3 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors disabled:bg-slate-100 disabled:cursor-not-allowed ${
+                        settings.audioTrackNameLocked.value
+                          ? "bg-slate-100 text-slate-500"
+                          : "bg-white"
+                      }`}
                     />
                     <label for="audioCodec" class="block text-xs text-slate-500 mb-1">
                       Codec
@@ -850,6 +1074,9 @@ export function ConnectionSettings() {
                     </div>
                     <label for="videoTrackName" class="block text-xs text-slate-500 mb-1">
                       Track Name
+                      {settings.videoTrackNameLocked.value && (
+                        <span class="text-slate-400 ml-1">(fixed by c4m)</span>
+                      )}
                     </label>
                     <input
                       type="text"
@@ -857,8 +1084,13 @@ export function ConnectionSettings() {
                       data-testid="video-track-name"
                       value={settings.videoTrackName.value}
                       onInput={(e) => (settings.videoTrackName.value = e.currentTarget.value)}
+                      readOnly={settings.videoTrackNameLocked.value}
                       disabled={settings.settingsDisabled.value}
-                      class="w-full px-3 py-2 mb-3 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors disabled:bg-slate-100 disabled:cursor-not-allowed bg-white"
+                      class={`w-full px-3 py-2 mb-3 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors disabled:bg-slate-100 disabled:cursor-not-allowed ${
+                        settings.videoTrackNameLocked.value
+                          ? "bg-slate-100 text-slate-500"
+                          : "bg-white"
+                      }`}
                     />
                     <label for="videoCodec" class="block text-xs text-slate-500 mb-1">
                       Codec
@@ -1433,116 +1665,6 @@ export function ConnectionSettings() {
             </div>
           </RoleSettings>
         )}
-
-        {/* Authorization Token Settings */}
-        {/* draft-ietf-moq-transport-21 §9.1.4 (AUTHORIZATION TOKEN Setup Option) */}
-        <div class="mt-4 pt-4 border-t border-slate-200">
-          <h3 class="text-sm font-medium text-slate-600 mb-3">
-            Authorization Token
-            <span class="ml-2 text-xs text-slate-400">SETUP Option (0x03)</span>
-          </h3>
-          <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
-            <div>
-              <label for="authorizationTokenAliasType" class="block text-xs text-slate-500 mb-1">
-                Alias Type
-              </label>
-              <select
-                id="authorizationTokenAliasType"
-                value={settings.authorizationTokenAliasType.value}
-                onChange={(e) => {
-                  const v = e.currentTarget.value;
-                  if (v === "useValue" || v === "register") {
-                    settings.authorizationTokenAliasType.value = v;
-                  }
-                }}
-                disabled={settings.settingsDisabled.value}
-                class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white disabled:bg-slate-100 disabled:cursor-not-allowed"
-              >
-                <option value="useValue">USE_VALUE (0x3)</option>
-                <option value="register">REGISTER (0x1)</option>
-              </select>
-            </div>
-            {settings.authorizationTokenAliasType.value === "register" && (
-              <div>
-                <label for="authorizationTokenAlias" class="block text-xs text-slate-500 mb-1">
-                  Token Alias
-                </label>
-                <input
-                  type="text"
-                  id="authorizationTokenAlias"
-                  value={settings.authorizationTokenAlias.value}
-                  onInput={(e) => (settings.authorizationTokenAlias.value = e.currentTarget.value)}
-                  disabled={settings.settingsDisabled.value}
-                  placeholder="0"
-                  class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:bg-slate-100 disabled:cursor-not-allowed"
-                />
-              </div>
-            )}
-            <div>
-              <label for="authorizationTokenType" class="block text-xs text-slate-500 mb-1">
-                Token Type
-                <span class="ml-1 text-slate-400">(0 = out-of-band / 1 = CAT)</span>
-              </label>
-              <input
-                type="text"
-                id="authorizationTokenType"
-                value={settings.authorizationTokenType.value}
-                data-testid="authorization-token-type"
-                onInput={(e) => {
-                  settings.authorizationTokenType.value = e.currentTarget.value;
-                  // 手入力した場合は c4m から読み込んだ Base64 トークンを解除する
-                  // (解除しないと送信内容と UI の表示が食い違う)。
-                  // 入力した Token Type はそのまま使う
-                  settings.authorizationTokenBase64.value = "";
-                }}
-                disabled={settings.settingsDisabled.value}
-                placeholder="0"
-                class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:bg-slate-100 disabled:cursor-not-allowed"
-              />
-            </div>
-            <div class="lg:col-span-2">
-              <label for="authorizationTokenValue" class="block text-xs text-slate-500 mb-1">
-                Token Value
-                <span class="ml-1 text-slate-400">(not sent when empty)</span>
-              </label>
-              <input
-                type="text"
-                id="authorizationTokenValue"
-                data-testid="authorization-token-value"
-                autocomplete="off"
-                value={settings.authorizationTokenValue.value}
-                onInput={(e) => {
-                  settings.authorizationTokenValue.value = e.currentTarget.value;
-                  // c4m から読み込んだトークンがある場合だけ解除する
-                  // (取り込んでいないときに手入力した Token Type を壊さない)
-                  if (settings.authorizationTokenBase64.value) {
-                    clearImportedC4mToken();
-                  }
-                }}
-                disabled={settings.settingsDisabled.value}
-                placeholder="Any token string (UTF-8)"
-                class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:bg-slate-100 disabled:cursor-not-allowed"
-              />
-            </div>
-          </div>
-          {settings.authorizationTokenBase64.value && (
-            <div class="mt-2 flex items-center gap-2 text-xs" data-testid="authorization-token-c4m">
-              <span class="px-2 py-0.5 font-medium bg-amber-100 text-amber-700 rounded-full">
-                c4m
-              </span>
-              <span class="text-slate-500">
-                Sends the token loaded from the c4m parameter in the URL with SETUP (Base64)
-              </span>
-              <button
-                type="button"
-                onClick={() => clearImportedC4mToken()}
-                class="text-slate-400 hover:text-slate-600 underline"
-              >
-                Clear
-              </button>
-            </div>
-          )}
-        </div>
       </div>
     </div>
   );

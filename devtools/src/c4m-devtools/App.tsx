@@ -20,13 +20,12 @@ import {
 } from "./utils/keys";
 import {
   formatBytes,
-  formatMatch,
-  formatNamespaceMatches,
   parseList,
   parseNamespaceMatches,
   parseOptionalNumber,
   parseTrackMatch,
 } from "./utils/claims";
+import { formatMatch, formatNamespaceMatches } from "../utils/c4m";
 
 const TEXT_ENCODER = new TextEncoder();
 const cryptoImpl = new C4M.WebCrypto();
