@@ -9,12 +9,12 @@ overrides:
   # 版がずれると @preact/preset-vite 等が返すプラグイン型と vite-plus の型が
   # 別パッケージ由来になり、型比較が破綻する (TS2321 / TS2769)
   # @vitest/coverage-v8 は直接依存のため overrides では固定できず、
-  # vp up -L のたびに package.json 側で 4.1.11 に戻す必要がある
-  vite: npm:@voidzero-dev/vite-plus-core@1.0.0-rc.1
+  # vp up -L のたびに package.json 側で 5.0.1 に戻す必要がある
+  vite: npm:@voidzero-dev/vite-plus-core@1.0.0
   # @preact/preset-vite / @tailwindcss/vite は core を直接 peer 依存するため、
   # vite 経由の override だけでは揃わない
-  "@voidzero-dev/vite-plus-core": 1.0.0-rc.1
-  vitest: 4.1.11
+  "@voidzero-dev/vite-plus-core": 1.0.0
+  vitest: 5.0.1
 
 allowBuilds:
   esbuild: true
