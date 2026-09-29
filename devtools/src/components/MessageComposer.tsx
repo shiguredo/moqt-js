@@ -28,10 +28,10 @@ export function MessageComposer({ disabled, onSend, sentCount }: MessageComposer
 
   return (
     <div
-      class="rounded-lg px-3 py-2 mb-4 border bg-green-50 border-green-200"
+      class="rounded-lg px-3 py-2 mb-4 border bg-amber-50 border-amber-200"
       data-testid="publisher-messages"
     >
-      <h3 class="text-xs font-semibold uppercase tracking-wide mb-1 flex items-center gap-1.5 text-green-700">
+      <h3 class="text-xs font-semibold uppercase tracking-wide mb-1 flex items-center gap-1.5 text-amber-700">
         <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path
             stroke-linecap="round"
@@ -56,14 +56,14 @@ export function MessageComposer({ disabled, onSend, sentCount }: MessageComposer
           disabled={disabled}
           placeholder="Message to send on the event timeline"
           data-testid="publisher-message-input"
-          class="flex-1 min-w-0 px-2 py-1 text-xs bg-white border border-green-200 rounded focus:outline-none focus:ring-1 focus:ring-green-400 disabled:bg-slate-100 disabled:text-slate-400"
+          class="flex-1 min-w-0 px-2 py-1 text-xs bg-white border border-amber-200 rounded focus:outline-none focus:ring-1 focus:ring-amber-400 disabled:bg-slate-100 disabled:text-slate-400"
         />
         <button
           type="button"
           onClick={send}
           disabled={sendDisabled}
           data-testid="publisher-message-send"
-          class="w-16 py-1 text-xs font-medium bg-green-500 hover:bg-green-600 disabled:bg-slate-300 disabled:cursor-not-allowed text-white rounded transition-colors"
+          class="w-16 py-1 text-xs font-medium bg-amber-500 hover:bg-amber-600 disabled:bg-slate-300 disabled:cursor-not-allowed text-white rounded transition-colors"
         >
           Send
         </button>
