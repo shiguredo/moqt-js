@@ -31,13 +31,19 @@ test("buildSubscriberStats: 復号前のレベルは null、復号後は dBFS �
   const instance = createSubscriberInstance("stats-audio-3");
   assert.equal(buildSubscriberStats(instance).audio.peakDbfs, null);
   assert.equal(buildSubscriberStats(instance).audio.rmsDbfs, null);
+  assert.equal(buildSubscriberStats(instance).audio.peakDbfsRight, null);
+  assert.equal(buildSubscriberStats(instance).audio.rmsDbfsRight, null);
 
-  instance.audioPeakDbfs.value = -6;
-  instance.audioRmsDbfs.value = -9;
+  instance.audioPeakDbfsLeft.value = -6;
+  instance.audioRmsDbfsLeft.value = -9;
+  instance.audioPeakDbfsRight.value = -7;
+  instance.audioRmsDbfsRight.value = -10;
 
   const stats = buildSubscriberStats(instance);
   assert.equal(stats.audio.peakDbfs, -6);
   assert.equal(stats.audio.rmsDbfs, -9);
+  assert.equal(stats.audio.peakDbfsRight, -7);
+  assert.equal(stats.audio.rmsDbfsRight, -10);
 });
 
 test("buildSubscriberStats: 受信した音声の鳴らし方の数を返す", () => {
@@ -286,8 +292,10 @@ test("buildPublisherStats: 符号化と送信の累積、状態、音声のメ�
   pub.bytesSent.value = 12345;
   pub.pubCurrentGroup.value = 99;
   pub.newGroupRequestsReceived.value = 4;
-  pub.audioMeterPeakDbfs.value = -6.5;
-  pub.audioMeterRmsDbfs.value = -12.25;
+  pub.audioMeterPeakDbfsLeft.value = -6.5;
+  pub.audioMeterRmsDbfsLeft.value = -12.25;
+  pub.audioMeterPeakDbfsRight.value = -7.5;
+  pub.audioMeterRmsDbfsRight.value = -13.25;
   pub.audioMeterLevel.value = { level: -20, voiceActivity: true };
 
   try {
@@ -309,6 +317,8 @@ test("buildPublisherStats: 符号化と送信の累積、状態、音声のメ�
     assert.equal(stats.newGroupRequests, 4);
     assert.equal(stats.audio.meterPeakDbfs, -6.5);
     assert.equal(stats.audio.meterRmsDbfs, -12.25);
+    assert.equal(stats.audio.meterPeakDbfsRight, -7.5);
+    assert.equal(stats.audio.meterRmsDbfsRight, -13.25);
     assert.equal(stats.audio.lastSentLevel, -20);
     assert.equal(stats.audio.lastSentVoiceActivity, true);
   } finally {
@@ -328,8 +338,10 @@ test("buildPublisherStats: 符号化と送信の累積、状態、音声のメ�
     pub.bytesSent.value = 0;
     pub.pubCurrentGroup.value = 0;
     pub.newGroupRequestsReceived.value = 0;
-    pub.audioMeterPeakDbfs.value = null;
-    pub.audioMeterRmsDbfs.value = null;
+    pub.audioMeterPeakDbfsLeft.value = null;
+    pub.audioMeterRmsDbfsLeft.value = null;
+    pub.audioMeterPeakDbfsRight.value = null;
+    pub.audioMeterRmsDbfsRight.value = null;
     pub.audioMeterLevel.value = null;
   }
 });

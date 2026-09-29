@@ -133,11 +133,15 @@ export interface SubscriberInstance {
   // 鳴らす時刻を過ぎて届いたなどで基準を取り直した回数と、遅れが上限を超えて捨てた音の数
   audioPlayoutRebases: Signal<number>;
   audioPlayoutDrops: Signal<number>;
-  // 復号した音声のレベル (dBFS)。まだ復号していない状態は null
-  audioPeakDbfs: Signal<number | null>;
-  audioRmsDbfs: Signal<number | null>;
-  // 直近 100 ms の波形 (第 1 チャンネル)。まだ復号していない状態は null
-  audioWaveform: Signal<Float32Array | null>;
+  // 復号した音声のレベル (dBFS)。左右のチャンネルを別々に持ち、モノラルのときは右が
+  // null のまま。まだ復号していない状態も null
+  audioPeakDbfsLeft: Signal<number | null>;
+  audioPeakDbfsRight: Signal<number | null>;
+  audioRmsDbfsLeft: Signal<number | null>;
+  audioRmsDbfsRight: Signal<number | null>;
+  // 直近 100 ms の波形 (チャンネルごと)。まだ復号していない状態は null
+  audioWaveformLeft: Signal<Float32Array | null>;
+  audioWaveformRight: Signal<Float32Array | null>;
   // event timeline トラックの購読 (catalog に eventtimeline トラックが無いときは null)
   eventSubscriber: Signal<Subscriber | null>;
   // 受信した event timeline の entry。devtools publisher は Group の先頭 Object に
@@ -195,9 +199,12 @@ export function createSubscriberInstance(id: string): SubscriberInstance {
     audioPlaybackEnabled: signal(false),
     audioPlayoutRebases: signal(0),
     audioPlayoutDrops: signal(0),
-    audioPeakDbfs: signal<number | null>(null),
-    audioRmsDbfs: signal<number | null>(null),
-    audioWaveform: signal<Float32Array | null>(null),
+    audioPeakDbfsLeft: signal<number | null>(null),
+    audioPeakDbfsRight: signal<number | null>(null),
+    audioRmsDbfsLeft: signal<number | null>(null),
+    audioRmsDbfsRight: signal<number | null>(null),
+    audioWaveformLeft: signal<Float32Array | null>(null),
+    audioWaveformRight: signal<Float32Array | null>(null),
     eventSubscriber: signal<Subscriber | null>(null),
     eventMessages: signal<EventTimelineEntry[]>([]),
   };

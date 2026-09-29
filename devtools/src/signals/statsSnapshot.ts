@@ -5,8 +5,10 @@ import type { PublishTimingSnapshot } from "../utils/publishTimingStats";
 import type { StatusType } from "../types";
 import {
   audioMeterLevel,
-  audioMeterPeakDbfs,
-  audioMeterRmsDbfs,
+  audioMeterPeakDbfsLeft,
+  audioMeterPeakDbfsRight,
+  audioMeterRmsDbfsLeft,
+  audioMeterRmsDbfsRight,
   audioPublisher,
   bytesSent,
   catalog,
@@ -105,6 +107,9 @@ export interface PublisherAudioStats {
   /** 配信側の音声メーターの peak / RMS (dBFS)。まだ測っていないときは null */
   meterPeakDbfs: number | null;
   meterRmsDbfs: number | null;
+  /** 第 2 チャンネル (右) の peak / RMS。モノラルでは null */
+  meterPeakDbfsRight: number | null;
+  meterRmsDbfsRight: number | null;
   /** 直近に送った Object の LOC Audio Level (-dBov) と voice activity */
   lastSentLevel: number | null;
   lastSentVoiceActivity: boolean | null;
@@ -181,6 +186,9 @@ export interface SubscriberAudioStats {
   /** 復号した音声のレベル (dBFS)。まだ復号していないときは null */
   peakDbfs: number | null;
   rmsDbfs: number | null;
+  /** 第 2 チャンネル (右) のレベル。モノラルでは null */
+  peakDbfsRight: number | null;
+  rmsDbfsRight: number | null;
   /** 直近に受信した Object の LOC Audio Level (-dBov) と voice activity */
   lastLevel: number | null;
   lastVoiceActivity: boolean | null;
@@ -284,8 +292,10 @@ export function buildPublisherStats(): PublisherStats {
     publishTiming: publishTimingStats.value.snapshot(performance.now()),
     audio: {
       publishing: audioPublisher.value !== null,
-      meterPeakDbfs: audioMeterPeakDbfs.value,
-      meterRmsDbfs: audioMeterRmsDbfs.value,
+      meterPeakDbfs: audioMeterPeakDbfsLeft.value,
+      meterRmsDbfs: audioMeterRmsDbfsLeft.value,
+      meterPeakDbfsRight: audioMeterPeakDbfsRight.value,
+      meterRmsDbfsRight: audioMeterRmsDbfsRight.value,
       lastSentLevel: audioLevel?.level ?? null,
       lastSentVoiceActivity: audioLevel?.voiceActivity ?? null,
     },
@@ -355,8 +365,10 @@ export function buildSubscriberStats(sub: SubscriberInstance): SubscriberStats {
       catchUpObjectsSkipped: sub.audioCatchUpObjectsSkipped.value,
       decoderConfigured: sub.audioDecoderConfigured.value,
       playbackEnabled: sub.audioPlaybackEnabled.value,
-      peakDbfs: sub.audioPeakDbfs.value,
-      rmsDbfs: sub.audioRmsDbfs.value,
+      peakDbfs: sub.audioPeakDbfsLeft.value,
+      rmsDbfs: sub.audioRmsDbfsLeft.value,
+      peakDbfsRight: sub.audioPeakDbfsRight.value,
+      rmsDbfsRight: sub.audioRmsDbfsRight.value,
       lastLevel: audioLevel?.level ?? null,
       lastVoiceActivity: audioLevel?.voiceActivity ?? null,
       playoutRebases: sub.audioPlayoutRebases.value,

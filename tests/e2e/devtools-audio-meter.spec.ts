@@ -14,9 +14,12 @@ test("音声トラックを購読していないときもレベルメーター�
   // 状態によって項目が出たり消えたりすると、下の項目の位置が動く。メーターは常に描き、
   // 音声トラックを購読していない間は各値を「-」にする
   await expect(page.getByTestId("audio-meter")).toBeVisible();
-  await expect(page.getByTestId("audio-waveform")).toBeVisible();
-  await expect(page.getByTestId("audio-peak")).toHaveText("-");
-  await expect(page.getByTestId("audio-rms")).toHaveText("-");
+  await expect(page.getByTestId("audio-waveform-left")).toBeVisible();
+  await expect(page.getByTestId("audio-waveform-right")).toBeVisible();
+  await expect(page.getByTestId("audio-peak-left")).toHaveText("-");
+  await expect(page.getByTestId("audio-peak-right")).toHaveText("-");
+  await expect(page.getByTestId("audio-rms-left")).toHaveText("-");
+  await expect(page.getByTestId("audio-rms-right")).toHaveText("-");
   await expect(page.getByTestId("audio-level")).toHaveText("-");
   await expect(page.getByTestId("audio-voice-activity")).toHaveText("-");
 
@@ -24,34 +27,28 @@ test("音声トラックを購読していないときもレベルメーター�
   await expect(page.getByTestId("subscriber-video-canvas")).toBeVisible();
 });
 
-test("レベルメーターは信号を canvas に描く", async ({ page }) => {
-  // 描画は canvas への直接描画であり DOM からは読めないため、実際の canvas に
-  // 描いて画素が変わったことを確認する (空の canvas では背景だけになる)
+test("波形は canvas に信号を描く", async ({ page }) => {
+  // 波形はチャンネルごとの canvas に描く。描画は canvas への直接描画であり DOM からは
+  // 読めないため、実際の canvas に描いて画素を確認する
   await page.goto(DEVTOOLS_URL);
 
   const result = await page.evaluate(async () => {
-    const modulePath = "/src/components/AudioMeter.tsx";
-    const module = (await import(modulePath)) as {
-      drawAudioMeter: (
+    // リテラルの import にすると、このファイルを型検査するときにパスを解決しようとする。
+    // devtools の Vite が配信する URL であり、テストの TypeScript からは見えない
+    const audioMeterUrl = "/src/components/AudioMeter.tsx";
+    const module = (await import(audioMeterUrl)) as {
+      drawAudioWaveform: (
         ctx: CanvasRenderingContext2D,
         width: number,
         height: number,
-        values: {
-          peakDbfs: number | null;
-          rmsDbfs: number | null;
-          level: { level: number; voiceActivity: boolean } | null;
-          waveform: Float32Array | null;
-        },
+        waveform: Float32Array | null,
       ) => void;
     };
 
     const canvasWidth = 320;
-    const canvasHeight = 96;
+    const canvasHeight = 48;
 
-    // メーターを描いた canvas を作る (canvas は DOM から読めないため画素で確認する)
-    const drawCanvas = (
-      values: Parameters<typeof module.drawAudioMeter>[3],
-    ): CanvasRenderingContext2D => {
+    const draw = (waveform: Float32Array | null): CanvasRenderingContext2D => {
       const canvas = document.createElement("canvas");
       canvas.width = canvasWidth;
       canvas.height = canvasHeight;
@@ -59,21 +56,19 @@ test("レベルメーターは信号を canvas に描く", async ({ page }) => {
       if (!ctx) {
         throw new Error("failed to get 2d context");
       }
-      module.drawAudioMeter(ctx, canvas.width, canvas.height, values);
+      module.drawAudioWaveform(ctx, canvas.width, canvas.height, waveform);
       return ctx;
     };
 
-    const countColoredPixels = (values: Parameters<typeof module.drawAudioMeter>[3]): number => {
-      const ctx = drawCanvas(values);
+    // 波形の色 (#38bdf8、青が 248) の画素を数える。中心線 (灰色) と分ける
+    const waveformPixels = (waveform: Float32Array | null): number => {
+      const ctx = draw(waveform);
       const data = ctx.getImageData(0, 0, canvasWidth, canvasHeight).data;
       let colored = 0;
       for (let index = 0; index < data.length; index += 4) {
-        // 背景 (暗い slate、R=14) を除くための閾値。バー・波形・目盛りはこれを超える
-        const red = data[index] ?? 0;
-        const green = data[index + 1] ?? 0;
         const blue = data[index + 2] ?? 0;
         const alpha = data[index + 3] ?? 0;
-        if (alpha > 0 && (red > 60 || green > 60 || blue > 60)) {
+        if (alpha > 0 && blue > 200) {
           colored += 1;
         }
       }
@@ -86,74 +81,46 @@ test("レベルメーターは信号を canvas に描く", async ({ page }) => {
       waveform[index] = 0.5 * Math.sin(index / 10);
     }
 
-    // 上段 peak 行だけを走査し、バーの左右の端を求める。
-    // 目盛りは右端が 0 dB、左端が -100 dB であり、バーは左端から現在の値まで伸びる
-    const peakBarRange = (peakDbfs: number): { left: number; right: number } => {
-      const ctx = drawCanvas({ peakDbfs, rmsDbfs: null, level: null, waveform: null });
-      // peak 行 (最上段 y=0〜15、行間 4) の中央付近だけを見る。
-      // 行高は drawAudioMeter の Math.max(4, floor(height / 6)) = 16 (height 96)
-      const data = ctx.getImageData(0, 4, canvasWidth, 8).data;
-      let left = -1;
-      let right = -1;
-      for (let x = 0; x < canvasWidth; x++) {
-        const offset = x * 4;
-        const red = data[offset] ?? 0;
-        const alpha = data[offset + 3] ?? 0;
-        // peak 行は赤 (#f87171、R=248)。目盛りの合成色 (R=148) を除くため 150 とする
-        if (alpha > 0 && red > 150) {
-          if (left === -1) {
-            left = x;
+    // 波形が描かれている x の範囲を求める
+    const ctx = draw(waveform);
+    const data = ctx.getImageData(0, 0, canvasWidth, canvasHeight).data;
+    let minX = -1;
+    let maxX = -1;
+    for (let x = 0; x < canvasWidth; x++) {
+      for (let y = 0; y < canvasHeight; y++) {
+        const offset = (y * canvasWidth + x) * 4;
+        const blue = data[offset + 2] ?? 0;
+        if (blue > 200) {
+          if (minX === -1) {
+            minX = x;
           }
-          right = x;
+          maxX = x;
+          break;
         }
       }
-      return { left, right };
-    };
+    }
 
     return {
-      withSignal: countColoredPixels({
-        peakDbfs: -6,
-        rmsDbfs: -9,
-        level: { level: 14, voiceActivity: true },
-        waveform,
-      }),
-      // 未計測 (すべて null) でも目盛りだけは描かれ、例外にならない
-      withNulls: countColoredPixels({
-        peakDbfs: null,
-        rmsDbfs: null,
-        level: null,
-        waveform: null,
-      }),
-      // -50 dBFS は目盛りの中間、-6 dBFS は右寄りになる
-      middle: peakBarRange(-50),
-      loud: peakBarRange(-6),
-      silent: peakBarRange(-100),
+      withSignal: waveformPixels(waveform),
+      withNull: waveformPixels(null),
+      minX,
+      maxX,
     };
   });
 
-  // 信号があるときはレベルバーと波形が描かれる
+  // 波形があるときだけ青い画素が描かれる (null では中心線だけ)
   expect(result.withSignal).toBeGreaterThan(100);
-  // 未計測でも目盛りの線が描かれる (全く描かれないと描画自体の失敗に気付けない)
-  expect(result.withNulls).toBeGreaterThan(0);
-  expect(result.withSignal).toBeGreaterThan(result.withNulls);
-
-  // バーは左端 (静かな側) から伸び、0 dB が右端になる。
-  // 向きが逆だと -50 dBFS のバーが右半分に寄るため、ここで検出できる
-  expect(result.middle.left).toBe(0);
-  expect(result.middle.right).toBeGreaterThan(140);
-  expect(result.middle.right).toBeLessThan(180);
-  expect(result.loud.right).toBeGreaterThan(result.middle.right);
-  // canvas 幅 320 に対し -6 dBFS は約 301 px まで伸びる
-  expect(result.loud.right).toBeGreaterThan(290);
-  // 無音 (-100 dBFS) は左端の 1 px だけになる
-  expect(result.silent.right).toBeLessThanOrEqual(1);
+  expect(result.withNull).toBe(0);
+  // 波形は左端から右端まで描く (4800 サンプルを幅いっぱいに写す)
+  expect(result.minX).toBeLessThanOrEqual(1);
+  expect(result.maxX).toBeGreaterThanOrEqual(318);
 });
 
-test("音声レベルメーターの見出し行の項目は、値が変わっても位置が動かない", async ({ page }) => {
+test("音声レベルメーターの値は、値が変わっても位置が動かない", async ({ page }) => {
   await page.goto(DEVTOOLS_URL);
 
-  // 見出し行は値の文字数で項目の幅が変わると、話している間ずっと画面が揺れる。
-  // 実際のパネルと同じ幅 (max-w-7xl の 2 列で、メーターの内側は 546 px) で AudioMeter を描き、
+  // 値の文字数で項目の幅が変わると、音が鳴っている間ずっと画面が揺れる。実際のパネルと
+  // 同じ幅 (max-w-7xl の 2 列で、メーターの内側は 572 px) で AudioMeter を描き、
   // 値と voice activity を変えても項目の位置とメーターの高さが変わらないことを確認する。
   // コンポーネントテストの基盤が無いため、実ブラウザの E2E から描画する (CSS も実際のものが当たる)
   const layout = await page.evaluate(async () => {
@@ -185,34 +152,44 @@ test("音声レベルメーターの見出し行の項目は、値が変わっ�
       AudioMeter: unknown;
     };
 
-    // 実際のパネルの列と同じ幅で描く (メーターの外側が 572 px、内側の p-3 と border を
-    // 引いた見出し行の幅が 546 px になる)
+    // 実際のパネルの列と同じ幅で描く (メーターの外側が 572 px、内側の p-2 と border を
+    // 引いた幅になる)
     const host = document.createElement("div");
     host.style.width = "572px";
     document.body.append(host);
 
-    const peakDbfs = signals.signal<number | null>(null);
-    const rmsDbfs = signals.signal<number | null>(null);
+    const peakDbfsLeft = signals.signal<number | null>(null);
+    const peakDbfsRight = signals.signal<number | null>(null);
+    const rmsDbfsLeft = signals.signal<number | null>(null);
+    const rmsDbfsRight = signals.signal<number | null>(null);
     const level = signals.signal<{ level: number; voiceActivity: boolean } | null>(null);
-    const waveform = signals.signal<Float32Array | null>(null);
+    const waveformLeft = signals.signal<Float32Array | null>(null);
+    const waveformRight = signals.signal<Float32Array | null>(null);
 
-    // 1 つの状態を描き、値の項目の位置と、見出し行とメーターの高さ、表示の文字列を測る
+    // 1 つの状態を描き、値の項目の位置と、見出しとメーターの高さ、表示の文字列を測る
     const measure = async (state: {
       active: boolean;
       levelActive: boolean;
-      peakDbfs: number | null;
-      rmsDbfs: number | null;
+      peakDbfsLeft: number | null;
+      peakDbfsRight: number | null;
+      rmsDbfsLeft: number | null;
+      rmsDbfsRight: number | null;
       level: { level: number; voiceActivity: boolean } | null;
     }) => {
-      peakDbfs.value = state.peakDbfs;
-      rmsDbfs.value = state.rmsDbfs;
+      peakDbfsLeft.value = state.peakDbfsLeft;
+      peakDbfsRight.value = state.peakDbfsRight;
+      rmsDbfsLeft.value = state.rmsDbfsLeft;
+      rmsDbfsRight.value = state.rmsDbfsRight;
       level.value = state.level;
       preact.render(
         preact.h(AudioMeter, {
-          peakDbfs,
-          rmsDbfs,
+          peakDbfsLeft,
+          peakDbfsRight,
+          rmsDbfsLeft,
+          rmsDbfsRight,
           level,
-          waveform,
+          waveformLeft,
+          waveformRight,
           active: state.active,
           levelActive: state.levelActive,
           testIdPrefix: "layout-audio",
@@ -228,7 +205,14 @@ test("音声レベルメーターの見出し行の項目は、値が変わっ�
 
       const boxes: Record<string, { x: number; y: number; width: number; height: number }> = {};
       const texts: Record<string, string> = {};
-      for (const name of ["peak", "rms", "level", "voice-activity"]) {
+      for (const name of [
+        "peak-left",
+        "peak-right",
+        "rms-left",
+        "rms-right",
+        "level",
+        "voice-activity",
+      ]) {
         const element = document.querySelector(`[data-testid="layout-audio-${name}"]`);
         if (!element) {
           throw new Error(`no element: layout-audio-${name}`);
@@ -266,7 +250,8 @@ test("音声レベルメーターの見出し行の項目は、値が変わっ�
       return {
         boxes,
         texts,
-        peakUnitX: unitX("layout-audio-peak"),
+        peakLeftUnitX: unitX("layout-audio-peak-left"),
+        peakRightUnitX: unitX("layout-audio-peak-right"),
         levelUnitX: unitX("layout-audio-level"),
         headerHeight: Math.round(header.getBoundingClientRect().height),
         meterHeight: Math.round(meter.getBoundingClientRect().height),
@@ -277,67 +262,80 @@ test("音声レベルメーターの見出し行の項目は、値が変わっ�
     const inactive = await measure({
       active: false,
       levelActive: false,
-      peakDbfs: null,
-      rmsDbfs: null,
+      peakDbfsLeft: null,
+      peakDbfsRight: null,
+      rmsDbfsLeft: null,
+      rmsDbfsRight: null,
       level: null,
     });
     // 音を受けていて voice activity が off の状態
     const voiceOff = await measure({
       active: true,
       levelActive: true,
-      peakDbfs: -53.6,
-      rmsDbfs: -63.5,
+      peakDbfsLeft: -53.6,
+      peakDbfsRight: -55,
+      rmsDbfsLeft: -63.5,
+      rmsDbfsRight: -65,
       level: { level: 72, voiceActivity: false },
     });
     // voice activity だけが on になった状態 (値は同じ)
     const voiceOn = await measure({
       active: true,
       levelActive: true,
-      peakDbfs: -53.6,
-      rmsDbfs: -63.5,
+      peakDbfsLeft: -53.6,
+      peakDbfsRight: -55,
+      rmsDbfsLeft: -63.5,
+      rmsDbfsRight: -65,
       level: { level: 72, voiceActivity: true },
     });
     // 最も静かな値 (peak / RMS は 11 文字、LOC Audio Level は 9 文字)
     const quiet = await measure({
       active: true,
       levelActive: true,
-      peakDbfs: -100,
-      rmsDbfs: -100,
+      peakDbfsLeft: -100,
+      peakDbfsRight: -100,
+      rmsDbfsLeft: -100,
+      rmsDbfsRight: -100,
       level: { level: 127, voiceActivity: false },
     });
-    // 最も大きい値 (peak / RMS は 8 文字、LOC Audio Level は 6 文字)
+    // 最も大きい値 (peak / RMS は 11 文字、LOC Audio Level は 8 文字)
     const loud = await measure({
       active: true,
       levelActive: true,
-      peakDbfs: 0,
-      rmsDbfs: -6,
+      peakDbfsLeft: 0,
+      peakDbfsRight: -1,
+      rmsDbfsLeft: -6,
+      rmsDbfsRight: -7,
       level: { level: 0, voiceActivity: true },
     });
-    // Audio Level が載っていない Object を受けた状態 (LOC Audio Level は 12 文字)
+    // Audio Level が載っていない Object を受けた状態
     const notReported = await measure({
       active: true,
       levelActive: true,
-      peakDbfs: -53.6,
-      rmsDbfs: -63.5,
+      peakDbfsLeft: -53.6,
+      peakDbfsRight: -55,
+      rmsDbfsLeft: -63.5,
+      rmsDbfsRight: -65,
       level: null,
     });
     // 音を受けているが、まだ復号していない状態 (peak / RMS は値なし)
     const notMeasured = await measure({
       active: true,
       levelActive: true,
-      peakDbfs: null,
-      rmsDbfs: null,
+      peakDbfsLeft: null,
+      peakDbfsRight: null,
+      rmsDbfsLeft: null,
+      rmsDbfsRight: null,
       level: { level: 72, voiceActivity: false },
     });
 
     return { inactive, voiceOff, voiceOn, quiet, loud, notReported, notMeasured };
   });
 
-  // 見出し (Audio と voice) は 1 行に固定する。数値は各行の左に並び、値の幅 (`ch` 固定) と
-  // drawAudioMeter の行の高さで決まるため、値が変わっても見出しの高さは変わらない
+  // 見出し (Audio と voice) は 1 行に固定する
   expect(layout.quiet.headerHeight).toBeLessThanOrEqual(20);
 
-  // どの状態でも項目の位置と大きさ、見出し行とメーターの高さが変わらない
+  // どの状態でも項目の位置と大きさ、見出しとメーターの高さが変わらない
   for (const state of [
     layout.voiceOff,
     layout.voiceOn,
@@ -353,15 +351,25 @@ test("音声レベルメーターの見出し行の項目は、値が変わっ�
 
   // 値の桁数が変わっても単位 (dBFS / dBov) の位置が動かないこと。
   // 空白が潰れると単位だけが動き、値の変化が読み取れなくなる
-  const peakUnitXs = [
-    layout.voiceOff.peakUnitX,
-    layout.voiceOn.peakUnitX,
-    layout.quiet.peakUnitX,
-    layout.loud.peakUnitX,
-    layout.notReported.peakUnitX,
+  const peakLeftUnitXs = [
+    layout.voiceOff.peakLeftUnitX,
+    layout.voiceOn.peakLeftUnitX,
+    layout.quiet.peakLeftUnitX,
+    layout.loud.peakLeftUnitX,
+    layout.notReported.peakLeftUnitX,
   ].filter((x): x is number => x !== null);
-  expect(peakUnitXs).toHaveLength(5);
-  expect(new Set(peakUnitXs).size).toBe(1);
+  expect(peakLeftUnitXs).toHaveLength(5);
+  expect(new Set(peakLeftUnitXs).size).toBe(1);
+
+  const peakRightUnitXs = [
+    layout.voiceOff.peakRightUnitX,
+    layout.voiceOn.peakRightUnitX,
+    layout.quiet.peakRightUnitX,
+    layout.loud.peakRightUnitX,
+    layout.notReported.peakRightUnitX,
+  ].filter((x): x is number => x !== null);
+  expect(peakRightUnitXs).toHaveLength(5);
+  expect(new Set(peakRightUnitXs).size).toBe(1);
 
   const levelUnitXs = [
     layout.voiceOff.levelUnitX,
@@ -375,41 +383,45 @@ test("音声レベルメーターの見出し行の項目は、値が変わっ�
 
   // 表示そのものが壊れていないこと (位置だけを測る空のテストにしない)
   expect(layout.voiceOff.texts).toEqual({
-    peak: " -53.6 dBFS",
-    rms: " -63.5 dBFS",
+    "peak-left": " -53.6 dBFS",
+    "peak-right": " -55.0 dBFS",
+    "rms-left": " -63.5 dBFS",
+    "rms-right": " -65.0 dBFS",
     level: " -72 dBov",
     "voice-activity": "off",
   });
   expect(layout.voiceOn.texts["voice-activity"]).toBe("on ");
   expect(layout.quiet.texts).toEqual({
-    peak: "-100.0 dBFS",
-    rms: "-100.0 dBFS",
+    "peak-left": "-100.0 dBFS",
+    "peak-right": "-100.0 dBFS",
+    "rms-left": "-100.0 dBFS",
+    "rms-right": "-100.0 dBFS",
     level: "-127 dBov",
     "voice-activity": "off",
   });
   expect(layout.loud.texts).toEqual({
-    peak: "   0.0 dBFS",
-    rms: "  -6.0 dBFS",
+    "peak-left": "   0.0 dBFS",
+    "peak-right": "  -1.0 dBFS",
+    "rms-left": "  -6.0 dBFS",
+    "rms-right": "  -7.0 dBFS",
     level: "   0 dBov",
     "voice-activity": "on ",
   });
   expect(layout.notReported.texts).toEqual({
-    peak: " -53.6 dBFS",
-    rms: " -63.5 dBFS",
+    "peak-left": " -53.6 dBFS",
+    "peak-right": " -55.0 dBFS",
+    "rms-left": " -63.5 dBFS",
+    "rms-right": " -65.0 dBFS",
     level: "not reported",
     "voice-activity": "-",
   });
   expect(layout.notMeasured.texts).toEqual({
-    peak: "-",
-    rms: "-",
+    "peak-left": "-",
+    "peak-right": "-",
+    "rms-left": "-",
+    "rms-right": "-",
     level: " -72 dBov",
     "voice-activity": "off",
-  });
-  expect(layout.inactive.texts).toEqual({
-    peak: "-",
-    rms: "-",
-    level: "-",
-    "voice-activity": "-",
   });
 });
 
@@ -444,6 +456,8 @@ test("window.moqtDevTools から音声の統計が読める", async ({ page }) =
     expect(audioStats?.audio.chunksDecoded).toBe(0);
     expect(audioStats?.audio.peakDbfs).toBeNull();
     expect(audioStats?.audio.rmsDbfs).toBeNull();
+    expect(audioStats?.audio.peakDbfsRight).toBeNull();
+    expect(audioStats?.audio.rmsDbfsRight).toBeNull();
     expect(audioStats?.audio.lastLevel).toBeNull();
     expect(audioStats?.audio.lastVoiceActivity).toBeNull();
   }

@@ -184,10 +184,13 @@ export function PublisherPanel() {
         {/* 取っている音と送っている音のレベルメーターと波形。音声を取っていない間も描き、
             値を「-」にする (Preview の開始で現れると下の項目の位置が動く) */}
         <AudioMeter
-          peakDbfs={pub.audioMeterPeakDbfs}
-          rmsDbfs={pub.audioMeterRmsDbfs}
+          peakDbfsLeft={pub.audioMeterPeakDbfsLeft}
+          peakDbfsRight={pub.audioMeterPeakDbfsRight}
+          rmsDbfsLeft={pub.audioMeterRmsDbfsLeft}
+          rmsDbfsRight={pub.audioMeterRmsDbfsRight}
           level={pub.audioMeterLevel}
-          waveform={pub.audioMeterWaveform}
+          waveformLeft={pub.audioMeterWaveformLeft}
+          waveformRight={pub.audioMeterWaveformRight}
           active={pub.audioStream.value !== null}
           levelActive={pub.audioPublisher.value !== null}
           testIdPrefix="publisher-audio"

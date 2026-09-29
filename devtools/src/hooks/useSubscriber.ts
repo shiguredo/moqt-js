@@ -231,9 +231,12 @@ export function resetSubscriberStats(instance: sub.SubscriberInstance): void {
   instance.audioChunksDecoded.value = 0;
   instance.audioCatchUpObjectsSkipped.value = 0;
   instance.audioLastLevel.value = null;
-  instance.audioPeakDbfs.value = null;
-  instance.audioRmsDbfs.value = null;
-  instance.audioWaveform.value = null;
+  instance.audioPeakDbfsLeft.value = null;
+  instance.audioPeakDbfsRight.value = null;
+  instance.audioRmsDbfsLeft.value = null;
+  instance.audioRmsDbfsRight.value = null;
+  instance.audioWaveformLeft.value = null;
+  instance.audioWaveformRight.value = null;
   instance.audioPlayoutRebases.value = 0;
   instance.audioPlayoutDrops.value = 0;
 }
@@ -535,9 +538,12 @@ export function resetSubscriberState(
   instance.audioDecoder.value = null;
   instance.audioDecoderConfigured.value = false;
   instance.audioLastLevel.value = null;
-  instance.audioPeakDbfs.value = null;
-  instance.audioRmsDbfs.value = null;
-  instance.audioWaveform.value = null;
+  instance.audioPeakDbfsLeft.value = null;
+  instance.audioPeakDbfsRight.value = null;
+  instance.audioRmsDbfsLeft.value = null;
+  instance.audioRmsDbfsRight.value = null;
+  instance.audioWaveformLeft.value = null;
+  instance.audioWaveformRight.value = null;
   // 再生トグルは既定 (無効) に戻す。audio graph は呼び出し側が停止する
   instance.audioPlaybackEnabled.value = false;
   // event timeline の購読と受信したメッセージも購読が無い状態に戻す
@@ -1348,16 +1354,33 @@ export function useSubscriber(
 
     try {
       // 可視化用の読み出しは close() の前に済ませる (所有者はこのハンドラ)。
-      // 再生の有無に関わらずレベルと波形を更新する
-      const samples = readAudioSamples(audioData);
-      const level = summarizeAudioLevel(samples);
-      instance.audioPeakDbfs.value = level.peakDbfs;
-      instance.audioRmsDbfs.value = level.rmsDbfs;
-      instance.audioWaveform.value = appendWaveform(
-        instance.audioWaveform.value,
-        samples,
-        waveformSampleCount(audioData.sampleRate),
+      // 再生の有無に関わらずレベルと波形を更新する。左右のチャンネルは別々に求める
+      const maxSamples = waveformSampleCount(audioData.sampleRate);
+      const samplesLeft = readAudioSamples(audioData);
+      const levelLeft = summarizeAudioLevel(samplesLeft);
+      instance.audioPeakDbfsLeft.value = levelLeft.peakDbfs;
+      instance.audioRmsDbfsLeft.value = levelLeft.rmsDbfs;
+      instance.audioWaveformLeft.value = appendWaveform(
+        instance.audioWaveformLeft.value,
+        samplesLeft,
+        maxSamples,
       );
+      if (audioData.numberOfChannels > 1) {
+        const samplesRight = readAudioSamples(audioData, 1);
+        const levelRight = summarizeAudioLevel(samplesRight);
+        instance.audioPeakDbfsRight.value = levelRight.peakDbfs;
+        instance.audioRmsDbfsRight.value = levelRight.rmsDbfs;
+        instance.audioWaveformRight.value = appendWaveform(
+          instance.audioWaveformRight.value,
+          samplesRight,
+          maxSamples,
+        );
+      } else {
+        // モノラルのときは右チャンネルを出さない (メーターの右は「-」のまま)
+        instance.audioPeakDbfsRight.value = null;
+        instance.audioRmsDbfsRight.value = null;
+        instance.audioWaveformRight.value = null;
+      }
     } catch (error) {
       // 計測に失敗しても再生は試みる (原因の切り分けができるよう別のメッセージにする)
       console.error(`[${subscriberId}] failed to measure decoded audio data:`, error);
