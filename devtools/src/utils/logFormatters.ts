@@ -273,14 +273,16 @@ export function formatDeltaTime(
 // devtools 内で唯一の実装とし、各パネルはこれを import する
 // (以前は codec.ts / webcodecs-devtools/signals.ts / DebugPanel.tsx に
 //  丸めの異なる実装が並立していた)。
+// 1024 進のため、単位は 2 進接頭辞 (KiB / MiB) にして 1000 進の KB / MB と区別する。
+// ビットレート (formatBitrate) は 1000 進のまま kbps / Mbps を使う
 export function formatBytes(bytes: number): string {
   if (bytes < 1024) {
     return `${bytes} B`;
   }
   if (bytes < 1024 * 1024) {
-    return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / 1024).toFixed(1)} KiB`;
   }
-  return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
+  return `${(bytes / 1024 / 1024).toFixed(2)} MiB`;
 }
 
 // ビットレートを表示用にフォーマットする。formatBytes と同じく唯一の実装。

@@ -247,14 +247,15 @@ test("formatTrackNameSuffix: Full Track Name を先頭の空白付きで返す",
 });
 
 // formatBytes は devtools 内で唯一の実装であり、各パネルが同じ丸めを使う。
+// 単位は 1024 進の 2 進接頭辞 (KiB / MiB) にして、1000 進の KB / MB と区別する
 test("formatBytes switches unit at 1024 and 1024*1024", () => {
   assert.equal(formatBytes(0), "0 B");
   assert.equal(formatBytes(1023), "1023 B");
-  assert.equal(formatBytes(1024), "1.0 KB");
-  assert.equal(formatBytes(1536), "1.5 KB");
-  assert.equal(formatBytes(1024 * 1024 - 1), "1024.0 KB");
-  assert.equal(formatBytes(1024 * 1024), "1.00 MB");
-  assert.equal(formatBytes(1024 * 1024 * 2.5), "2.50 MB");
+  assert.equal(formatBytes(1024), "1.0 KiB");
+  assert.equal(formatBytes(1536), "1.5 KiB");
+  assert.equal(formatBytes(1024 * 1024 - 1), "1024.0 KiB");
+  assert.equal(formatBytes(1024 * 1024), "1.00 MiB");
+  assert.equal(formatBytes(1024 * 1024 * 2.5), "2.50 MiB");
 });
 
 // ビットレートは 1000 進 (通信速度の慣例)。
