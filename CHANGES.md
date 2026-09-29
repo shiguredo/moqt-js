@@ -275,6 +275,9 @@
   - 上限で捨てたログの vnode はキャッシュから落とす。`data` と `payload` は追加後に書き換えない前提になる (行を描画し直さないため、書き換えても表示は古いまま)
   - 1 件追加のコストは表示中の件数に比例する分が残る (1000 件で約 3 ms のうち、表示中の子の走査が大半)。表示する行を画面に入る分だけにする対応は別に行う
   - @voluntas
+- [FIX] moqt-devtools の C4M DevTools のアクション表示を draft-21 の SETUP に合わせる
+  - ClientSetup / ServerSetup は 1 つの SETUP にまとめて表示し、認可判定とスコープ選択も同じ表示名にする
+  - @voluntas
 - [FIX] `createMediaPublisher` の `start` が publisher 層で通知済みの失敗を二重通知し得る経路を塞ぐ
   - `publishCatalog` は元から catalog の送信だけを `await sendObject(...)` している (書き込み完了を待つため)。事前検証の違反は publisher 層が `error` コールバックで通知してから返値を reject する契約のため、reject が `start` の catch にも届くと同一の失敗が `onError` へ 2 回通知される (現行の catalog 送信は事前検証で reject しないため未到達である)
   - `PublisherImpl.handleError` が通知した error に印を付け、内部向けの判定関数 (`isErrorNotifiedByPublisher`) で「通知済みの error では通知しない」catch にする。印を付けるだけで通知回数は変えない

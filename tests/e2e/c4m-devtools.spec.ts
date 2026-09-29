@@ -46,14 +46,14 @@ test("生成した Ed25519 の鍵で compact 形式のトークンを発行し�
   await page.getByTestId("c4m-verify-button").click();
   await expect(page.getByTestId("c4m-verify-result")).toHaveText("Signature verified");
 
-  // 認可判定: Publish は example.com にだけ許可される
-  await page.getByTestId("c4m-authorize-action").selectOption("Publish");
+  // 認可判定: PUBLISH は example.com にだけ許可される
+  await page.getByTestId("c4m-authorize-action").selectOption("PUBLISH");
   await page.getByTestId("c4m-authorize-namespace").fill("example.com");
   await page.getByTestId("c4m-authorize-track").fill("video-hd");
   await expect(page.getByTestId("c4m-authorize-result")).toHaveText("Allowed");
   await page.getByTestId("c4m-authorize-namespace").fill("other.example.com");
   await expect(page.getByTestId("c4m-authorize-result")).toHaveText("Denied");
-  await page.getByTestId("c4m-authorize-action").selectOption("Subscribe");
+  await page.getByTestId("c4m-authorize-action").selectOption("SUBSCRIBE");
   await page.getByTestId("c4m-authorize-namespace").fill("example.com");
   await expect(page.getByTestId("c4m-authorize-result")).toHaveText("Denied");
 });
