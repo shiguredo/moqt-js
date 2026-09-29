@@ -1,7 +1,7 @@
 # publishCatalog の await 経路で送信 reject が二重に通知される
 
 - Created: 2026-09-23
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-29
 - Branch: feature/fix-catalog-duplicate-error-notify
 - Polished: 2026-09-23
 
