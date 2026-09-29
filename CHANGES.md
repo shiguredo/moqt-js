@@ -35,6 +35,11 @@
 - [CHANGE] moqt-devtools の `window.moqtDevTools` が返す Subscriber の統計で、音声の項目を `audio` の下へまとめる
   - `audioObjectsReceived` / `audioChunksDecoded` / `audioPeakDbfs` / `audioRmsDbfs` / `audioLastLevel` / `audioLastVoiceActivity` / `audioPlayoutRebases` / `audioPlayoutDrops` を `audio.objectsReceived` などの入れ子にする。E2E が読む名前が変わるため後方互換はない
   - @voluntas
+- [ADD] C4M (draft-ietf-moq-c4m-01) の CBOR / COSE / CAT コーデックを追加する
+  - CBOR (RFC 8949) / COSE (RFC 9052) / CAT (CTA-5007-B) を依存ゼロで実装する。`C4M` 名前空間で CBOR のデータ項目、COSE_Sign1 / COSE_Mac0 / CWT の構造、CAT のクレームとトークンのデコード / 発行 / 検証を公開する
+  - 署名と検証は Web Crypto API だけを使い、HMAC-SHA256 / 384 / 512 と ES256 / ES384 / ES512、EdDSA に対応する
+  - draft-ietf-moq-c4m-01 付録 A のテストベクタ (CBOR / CAT / DPoP / スコープ / 検証) をテストで固定する
+  - @voluntas
 - [ADD] moqt-devtools に event timeline のメッセージ送受信を追加する
   - publisher の catalog に `eventtimeline` トラックを 1 本追加し、Messages の入力から送ったテキストを `{ t: 壁時計, data: { text } }` の entry として送る。メッセージごとに Group を進め、Group の先頭 Object にその時点の履歴 (直近 100 件) を載せる
   - subscriber は catalog の `packaging: "eventtimeline"` のトラックを購読し、受信した entry を時刻と data の一覧で表示する。audio / video 以外のデータを MSF の枠で送受信する例になる
