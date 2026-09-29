@@ -24,6 +24,7 @@ import {
 import { clampTimeoutMs } from "./params";
 import { isPeerStreamError, isSessionClosedError, toProtocolViolationSessionError } from "./errors";
 import { publishCloseSubgroupStream } from "./publish";
+import type { EndOfGroupTracking } from "./endOfGroupTracking";
 import type { SessionInternal } from "./types";
 import type { ConnectCallbacks, SessionState } from "./publicTypes";
 import type { AuthTokenCache } from "./authTokenCache";
@@ -61,7 +62,7 @@ export interface SessionLifecycleInternal {
 
   // 追跡 Map / Set (close() が全消しする)
   readonly closedSubgroups: Set<string>;
-  readonly receivedEndOfGroupFinalObjectIds: Map<string, bigint>;
+  readonly receivedEndOfGroupFinalObjectIds: EndOfGroupTracking;
   readonly priorGapTrackingByTrack: Map<string, unknown>;
   readonly goawayReceivedOnRequestStreams: Set<bigint>;
   readonly unmatchedRequestOkAllowances: Map<bigint, number>;

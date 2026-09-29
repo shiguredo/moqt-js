@@ -2,7 +2,7 @@
  * 受信データストリーム処理の free function 群
  *
  * SessionImpl の startIncomingStreamLoop / startDatagramLoop /
- * handleIncomingStream / handleFillFetchStream / handleSubgroupStream /
+ * handleIncomingStream / handleFillFetchStream / dataStreamHandleSubgroupStream /
  * handleIncomingStreamError / handleMalformedFetchTrack /
  * handleMalformedSubgroupTrack / handlePeerFetchStreamReset /
  * processFetchObjects / processSubgroupObjects / createDataStreamTimeout
@@ -42,6 +42,7 @@ import { cancelStreamQuiet, concatChunks } from "./stream";
 import type { SessionInternal } from "./types";
 import type { ConnectCallbacks, SessionState, SubgroupStreamEnd } from "./publicTypes";
 import type { PriorGapTracking } from "./priorGapTracking";
+import { recordEndOfGroupFinalObjectId, type EndOfGroupTracking } from "./endOfGroupTracking";
 import type { FullTrackNameKey } from "../fullTrackName";
 
 /**
@@ -66,7 +67,7 @@ export interface DataStreamSessionInternal {
   readonly fillFetchTargets: Map<bigint, bidi.FillFetchTarget>;
   readonly subscribersByAlias: Map<bigint, SubscriberImpl[]>;
   readonly pendingSubgroupBuffer: PendingSubgroupBuffer;
-  readonly receivedEndOfGroupFinalObjectIds: Map<string, bigint>;
+  readonly receivedEndOfGroupFinalObjectIds: EndOfGroupTracking;
   readonly priorGapTrackingByTrack: Map<FullTrackNameKey, PriorGapTracking>;
 
   statsUnidirectionalStreamsReceived: number;
@@ -1074,10 +1075,14 @@ export async function dataStreamHandleSubgroupStream(
           resolvedSubgroupId = processResult.resolvedSubgroupId;
           // draft-ietf-moq-transport-21 §12.1 条件 4:
           // 確定した Group 最終 Object を Group 単位で記録する。Subgroup ストリームを
-          // またいだ後続 Object の malformed 検出に使う。
+          // またいだ後続 Object の malformed 検出に使う。上限を超えた分は追跡から
+          // 外れるため、外れた Track Alias / Group では超過を検出できない
+          // (検出漏れのみで誤検出は生まない)。
           if (processResult.updatedEndOfGroupFinalObjectId !== undefined) {
-            session.receivedEndOfGroupFinalObjectIds.set(
-              `${header.trackAlias}:${header.groupId}`,
+            recordEndOfGroupFinalObjectId(
+              session.receivedEndOfGroupFinalObjectIds,
+              header.trackAlias,
+              header.groupId,
               processResult.updatedEndOfGroupFinalObjectId,
             );
           }

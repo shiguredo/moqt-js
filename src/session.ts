@@ -58,6 +58,7 @@ import {
   type DataStreamSessionInternal,
 } from "./session/dataStreamIncoming";
 import type { PriorGapTracking } from "./session/priorGapTracking";
+import type { EndOfGroupTracking } from "./session/endOfGroupTracking";
 import type { FullTrackNameKey } from "./fullTrackName";
 import type { PublisherStreamState, SessionInternal } from "./session/types";
 import {
@@ -537,11 +538,18 @@ export class SessionImpl implements Session {
   /**
    * Group 単位の END_OF_GROUP 既知最終 Object ID
    *
-   * draft-ietf-moq-transport-21 §12.1 条件 4 の検出に使う。キーは
-   * `${trackAlias}:${groupId}`。closedSubgroups と同じ粒度で、Subgroup ストリームを
+   * draft-ietf-moq-transport-21 §12.1 条件 4 の検出に使う。キーは Track Alias と
+   * Group ID の 2 段 Map。closedSubgroups と同じ粒度で、Subgroup ストリームを
    * またいで「この Group の最終 Object はこれ」という既知情報を保持する。
+   * 購読が尽きた Track Alias のエントリは bidi 層が削除し、セッション終了時は
+   * close() が全消しする。
+   *
+   * Track Alias 数と 1 Track Alias の Group 数には上限があり、超過時は最も古い
+   * エントリから破棄する。破棄した Track Alias / Group では既知の最終 Object ID が
+   * 無いために条件 4 の判定自体を行わないため、超過を検出できなくなる。検出漏れ
+   * だけが生じ、誤検出は生まない。
    */
-  receivedEndOfGroupFinalObjectIds = new Map<string, bigint>();
+  receivedEndOfGroupFinalObjectIds: EndOfGroupTracking = new Map<bigint, Map<bigint, bigint>>();
 
   /**
    * Track 単位の Prior Group ID Gap / Prior Object ID Gap 追跡

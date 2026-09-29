@@ -7,8 +7,8 @@
  * (incomingClassifyFirstBidiMessage / incomingSendRequestErrorAndClose /
  * incomingHandleFirstBidiMessage) を free function として抽出する。
  *
- * handleIncomingStream / handleSubgroupStream は SessionImpl に残留する
- * （状態結合が強いため）。
+ * handleIncomingStream と dataStreamHandleSubgroupStream は dataStreamIncoming.ts に
+ * 移っている (状態結合が強いため)。
  */
 
 import { decodeVarint } from "../varint";
@@ -30,6 +30,7 @@ import { RequestErrorCode, SessionError, SessionErrorCode, MalformedTrackError }
 import { ControlStreamWriter, type ControlMessage } from "../controlStream";
 import { toSessionCloseError } from "./errors";
 import { cancelMalformedTrackPeers } from "./bidi";
+import { getEndOfGroupFinalObjectId } from "./endOfGroupTracking";
 import { assertNoPriorIdGapTrackViolation } from "./priorGapTracking";
 import {
   processFetchObjects as streamProcessFetchObjects,
@@ -650,7 +651,7 @@ export function incomingProcessFetchObjects(
  * 統計カウンターと配送フックを stream.ts の純粋関数に注入する薄いブリッジ。
  * resolvedSubgroupId を透過し、feed 間の解決値を引き継ぐ
  * (明示型・0 系はヘッダ値のため透過しても no-op になる)。
- * SessionImpl.handleSubgroupStream から呼ばれる。
+ * dataStreamHandleSubgroupStream から呼ばれる。
  */
 export function incomingProcessSubgroupObjects(
   session: SessionInternal,
@@ -667,9 +668,14 @@ export function incomingProcessSubgroupObjects(
 } {
   // draft-ietf-moq-transport-21 §12.1 条件 4:
   // Group の最終 Object は Group 単位で既知になる。Subgroup ストリームをまたいだ
-  // 検出のためセッションが `${trackAlias}:${groupId}` で保持する。
-  const endOfGroupKey = `${header.trackAlias}:${header.groupId}`;
-  const endOfGroupFinalObjectId = session.receivedEndOfGroupFinalObjectIds.get(endOfGroupKey);
+  // 検出のためセッションが Track Alias と Group ID の 2 段 Map で保持する。
+  // 上限を超えて追跡から外れた Track Alias / Group は未登録として undefined に
+  // なるため、その Group では超過を検出しない (検出漏れのみで誤検出は生まない)。
+  const endOfGroupFinalObjectId = getEndOfGroupFinalObjectId(
+    session.receivedEndOfGroupFinalObjectIds,
+    header.trackAlias,
+    header.groupId,
+  );
   // draft-ietf-moq-transport-21 §10.8 / §10.9:
   // Subgroup は Full Track Name を直接持たないため、Track Alias から購読を引き、
   // その購読が持つ比較キー (fullTrackNameKey の戻り値) を追跡対象のキーにする。

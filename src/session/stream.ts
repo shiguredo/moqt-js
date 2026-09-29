@@ -258,7 +258,7 @@ export function processSubgroupObjects(
       //  Subgroup which has the END_OF_GROUP bit set."
       // Group の最終 Object が既知 (他 Subgroup で END_OF_GROUP を検出済み) なら、
       // それより大きい Object ID を持つ Object は malformed である。この既知情報は
-      // セッションが `${trackAlias}:${groupId}` 単位で保持するため、Subgroup
+      // セッションが Track Alias と Group ID の 2 段 Map で保持するため、Subgroup
       // ストリームをまたいでも検出できる。
       //
       // 対象範囲: Object Status が END_OF_GROUP の Object による確定だけを扱う。

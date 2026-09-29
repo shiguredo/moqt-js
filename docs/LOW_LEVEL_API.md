@@ -383,7 +383,7 @@ FIN (ピアの graceful 終了) 検出時点で残バッファが非空、つま
 失効範囲は Object 1 個ではなくセッション全体 (全 Track・全 Fetch) であり、アプリは再接続が必要になる。
 早期終了が RESET_STREAM で行われた場合は read が reject されるだけで本判定には該当しない (§11.3.2 は配信途中での終了を reset と規定している)。
 
-- Subgroup stream: `handleSubgroupStream()` の subscriber mode ループで FIN 検出後に残バッファを検査する。pending mode (subscribers 未登録) は payload を decode していないため対象外
+- Subgroup stream: `dataStreamHandleSubgroupStream()` の subscriber mode ループで FIN 検出後に残バッファを検査する。pending mode (subscribers 未登録) は payload を decode していないため対象外
 - Fetch data stream: `handleIncomingStream()` の終了処理で残バッファが非空なら `fetcher.handleEnd()` を呼ばずにセッションを閉じる
 - sessionState が既に closed の経路 (transport.closed ハンドラ経由など) で検出した違反は黙殺し、通知しない (終了済みセッションへの通知は spurious になるため)
 

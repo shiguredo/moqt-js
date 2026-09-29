@@ -96,6 +96,7 @@ import {
 import { REQUEST_UPDATE_STREAM_CLOSED_MESSAGE } from "./session/namespaceLoops";
 import { incomingHandleFirstBidiMessage } from "./session/incoming";
 import type { PriorGapTracking } from "./session/priorGapTracking";
+import type { EndOfGroupTracking } from "./session/endOfGroupTracking";
 import type { FullTrackNameKey } from "./fullTrackName";
 import type { SessionInternal } from "./session/types";
 
@@ -4600,8 +4601,21 @@ test("FETCH データストリーム: Mandatory Track Property で FETCH を can
 // データストリームの FIN 時の未完成 Object 検証 (§11.3)
 // ============================================================================
 
+/** 受信データストリーム (Subgroup / Fetch) 1 本分の操作 */
+interface DataStreamHandle {
+  /** 受信方向が cancel されたか (STOP_SENDING 相当の打ち切りの検証用) */
+  isCancelled: () => boolean;
+  /** cancel の reason (打ち切りの診断内容の検証用) */
+  cancelReasons: unknown[];
+  enqueue: (data: Uint8Array) => void;
+  fin: () => void;
+  /** peer 起点のストリーム reset (RESET_STREAM 相当) を再現する */
+  reset: (error: Error) => void;
+  run: () => Promise<void>;
+}
+
 /** createDataStreamFinContext が返す検証用コンテキスト */
-interface DataStreamFinContext {
+interface DataStreamFinContext extends DataStreamHandle {
   session: SessionImpl;
   internal: {
     fetchers: Map<bigint, FetcherImpl>;
@@ -4611,25 +4625,26 @@ interface DataStreamFinContext {
     requestStreams: Map<bigint, RequestStreamEntry>;
     // draft-ietf-moq-transport-21 §10.8 / §10.9 の Track 単位追跡
     priorGapTrackingByTrack: Map<FullTrackNameKey, PriorGapTracking>;
+    // draft-ietf-moq-transport-21 §12.1 条件 4 の Group 単位の最終 Object ID 追跡
+    receivedEndOfGroupFinalObjectIds: EndOfGroupTracking;
     // draft-ietf-moq-transport-21 §12.2 (タイムアウト) / §12.5 (バッファ上限)
     dataStreamTimeoutMs: number;
     dataStreamMaxBufferBytes: number;
     handleIncomingStream(stream: ReadableStream<Uint8Array>): Promise<void>;
   };
   sessionError: { current: Error | undefined };
-  /** 受信方向が cancel されたか (STOP_SENDING 相当の打ち切りの検証用) */
-  isCancelled: () => boolean;
-  /** cancel の reason (打ち切りの診断内容の検証用) */
-  cancelReasons: unknown[];
   /** debug コールバックが受け取った記録 (fill 失敗通知などの検証用) */
   debugRecords: { typeName: string; decoded?: Record<string, unknown> }[];
-  enqueue: (data: Uint8Array) => void;
-  fin: () => void;
-  /** peer 起点のストリーム reset (RESET_STREAM 相当) を再現する */
-  reset: (error: Error) => void;
   /** peer 起点のセッション終了 (transport.closed) を再現する */
   closeTransport: () => Promise<void>;
-  run: () => Promise<void>;
+  /**
+   * 同じセッションに 2 本目以降の受信データストリームを開く
+   *
+   * セッションに載る追跡 (draft-ietf-moq-transport-21 §12.1 条件 4 の Group 単位の
+   * 最終 Object ID など) は Subgroup ストリームをまたいで共有されるため、SessionImpl
+   * を共有したまま複数のデータストリームを別々に駆動できるようにする。
+   */
+  openStream: () => DataStreamHandle;
 }
 
 /**
@@ -4640,6 +4655,9 @@ interface DataStreamFinContext {
  * セッションが閉じられたことは callbacks.error に記録された SessionError と
  * session.state の両方で判定する (closeWithError は callbacks.error 通知後に
  * close を呼び、close は同期先頭で sessionState を closed にする)。
+ *
+ * 返るコンテキスト自身が 1 本目のストリームの操作であり、2 本目以降は
+ * openStream() で同じセッションに追加する。
  */
 function createDataStreamFinContext(
   options: { dataStreamTimeoutMs?: number; dataStreamMaxBufferBytes?: number } = {},
@@ -4665,6 +4683,8 @@ function createDataStreamFinContext(
     requestStreams: Map<bigint, RequestStreamEntry>;
     // draft-ietf-moq-transport-21 §10.8 / §10.9 の Track 単位追跡
     priorGapTrackingByTrack: Map<FullTrackNameKey, PriorGapTracking>;
+    // draft-ietf-moq-transport-21 §12.1 条件 4 の Group 単位の最終 Object ID 追跡
+    receivedEndOfGroupFinalObjectIds: EndOfGroupTracking;
     // draft-ietf-moq-transport-21 §12.2 (タイムアウト) / §12.5 (バッファ上限)
     dataStreamTimeoutMs: number;
     dataStreamMaxBufferBytes: number;
@@ -4678,38 +4698,47 @@ function createDataStreamFinContext(
     internal.dataStreamMaxBufferBytes = options.dataStreamMaxBufferBytes;
   }
 
-  let controller!: ReadableStreamDefaultController<Uint8Array>;
-  // 受信方向の打ち切り (STOP_SENDING 相当) を観測する。
-  // reason も記録し、打ち切りの診断内容 (EXCESSIVE_LOAD のコード) を検証できるようにする
-  let cancelled = false;
-  const cancelReasons: unknown[] = [];
-  const stream = new ReadableStream<Uint8Array>({
-    start(c) {
-      controller = c;
-    },
-    cancel(reason) {
-      cancelled = true;
-      cancelReasons.push(reason);
-    },
-  });
+  const openStream = (): DataStreamHandle => {
+    let controller!: ReadableStreamDefaultController<Uint8Array>;
+    // 受信方向の打ち切り (STOP_SENDING 相当) を観測する。
+    // reason も記録し、打ち切りの診断内容 (EXCESSIVE_LOAD のコード) を検証できるようにする
+    let cancelled = false;
+    const cancelReasons: unknown[] = [];
+    const stream = new ReadableStream<Uint8Array>({
+      start(c) {
+        controller = c;
+      },
+      cancel(reason) {
+        cancelled = true;
+        cancelReasons.push(reason);
+      },
+    });
+
+    return {
+      isCancelled: () => cancelled,
+      cancelReasons,
+      enqueue: (data: Uint8Array) => {
+        controller.enqueue(data);
+      },
+      fin: () => {
+        controller.close();
+      },
+      // ピアの RESET_STREAM は readable の read() を reject させる
+      reset: (error: Error) => {
+        controller.error(error);
+      },
+      run: () => internal.handleIncomingStream(stream),
+    };
+  };
+  const firstStream = openStream();
 
   return {
+    ...firstStream,
     session,
     internal,
     sessionError,
     debugRecords,
-    isCancelled: () => cancelled,
-    cancelReasons,
-    enqueue: (data: Uint8Array) => {
-      controller.enqueue(data);
-    },
-    fin: () => {
-      controller.close();
-    },
-    // ピアの RESET_STREAM は readable の read() を reject させる
-    reset: (error: Error) => {
-      controller.error(error);
-    },
+    openStream,
     // transport.closed ハンドラは close() を経ずに sessionState を closed へ
     // 遷移させ、request 系の state も閉じる (markRequestObjectsClosed)。
     // pending の reject 等の終了処理は行わない。ハンドラの .then は
@@ -4719,7 +4748,6 @@ function createDataStreamFinContext(
       resolveClosed({});
       await Promise.resolve();
     },
-    run: () => internal.handleIncomingStream(stream),
   };
 }
 
@@ -4750,6 +4778,38 @@ function buildSubgroupStreamParts(properties?: Uint8Array): StreamParts {
   const fieldsBytes = encodeObjectFields(0n, 10n, headerType, ObjectStatus.NORMAL, properties);
   const payload = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
   return { headerBytes, fieldsBytes, payload };
+}
+
+/**
+ * Subgroup データストリーム (Object 1 つ) の構成バイト列を構築する
+ *
+ * Subgroup ID を明示するヘッダタイプを使うため、同じ Track Alias / Group ID の
+ * まま Subgroup ID だけを変えたストリームを複数作れる。Object は payload 0
+ * バイトであり、Object Status に END_OF_GROUP も指定できる。ストリームの先頭
+ * Object は Object ID Delta がそのまま Object ID になる。
+ */
+function buildSingleObjectSubgroupStreamBytes(options: {
+  trackAlias: bigint;
+  groupId: bigint;
+  subgroupId: bigint;
+  objectId: bigint;
+  status: ObjectStatus;
+}): Uint8Array {
+  const headerBytes = encodeSubgroupHeader({
+    type: SubgroupHeaderType.EXPLICIT,
+    trackAlias: options.trackAlias,
+    groupId: options.groupId,
+    subgroupId: options.subgroupId,
+    publisherPriority: 128,
+    firstObject: false,
+  });
+  const fieldsBytes = encodeObjectFields(
+    options.objectId,
+    0n,
+    SubgroupHeaderType.EXPLICIT,
+    options.status,
+  );
+  return concatUint8Arrays([headerBytes, fieldsBytes]);
 }
 
 /**
@@ -6060,7 +6120,7 @@ test("Subgroup pending mode: 未完成 Object の途中の FIN でも閉じず a
  * pending 中に subscriber が登録された場合は pending chunks を結合して
  * subscriber mode へ合流し、後続 Object が配信されることを検証する。
  * 本テストは逐次登録の合流を検証する。同時解決時の合流優先は
- * handleSubgroupStream の done 分岐による (chunk done 勝ちでも再取得する)。
+ * dataStreamHandleSubgroupStream の done 分岐による (chunk done 勝ちでも再取得する)。
  */
 test("Subgroup pending mode: 待機中に subscriber 登録で合流し Object が配信される", async () => {
   const ctx = createDataStreamFinContext();
@@ -7391,6 +7451,117 @@ test("Subgroup データストリーム: END_OF_GROUP status 途中切れの FIN
   assert.equal(ctx.session.state, "closed");
   // 先頭の完成 Object は FIN 前に配信済み
   assert.equal(delivered, 1);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §12.1 条件 4:
+ * "An Object is received in a Group whose Object ID is larger than the final
+ *  Object in the Group. The final Object in a Group is the Object with Status
+ *  END_OF_GROUP, or the last Object before a FIN in a Subgroup which has the
+ *  END_OF_GROUP bit set."
+ *
+ * Group の最終 Object は Subgroup ストリームをまたいで既知になる。同じ Group の
+ * 1 本目の Subgroup ストリームで Object Status が END_OF_GROUP の Object を
+ * 受信すると、その Group の最終 Object ID がセッションの追跡 Map に記録され、
+ * 2 本目の Subgroup ストリームでそれを超える Object ID は malformed になる。
+ *
+ * 本テストは実 SessionImpl を 2 本のストリームで駆動し、記録側
+ * (dataStreamHandleSubgroupStream の記録) と読み出し側
+ * (incomingProcessSubgroupObjects の判定) を 1 本の経路として固定する。
+ * Track Alias と Group ID には 0 以外の異なる値を使うため、記録の引数が
+ * 取り違えられると追跡 Map のキーが変わり、このテストは落ちる。
+ */
+test("Subgroup データストリーム: 別 Subgroup で既知の最終 Object を超える Object ID を受信すると malformed として cancel する", async () => {
+  const ctx = createDataStreamFinContext();
+  let delivered = 0;
+  let notified: Error | undefined;
+  const subscriber = new SubscriberImpl(
+    ["live"],
+    "video",
+    1n,
+    7n,
+    () => {
+      delivered++;
+    },
+    undefined,
+    undefined,
+    (error) => {
+      notified = error;
+    },
+  );
+  ctx.internal.subscribersByAlias.set(7n, [subscriber]);
+
+  // 1 本目: Track Alias 7 / Group 1 の Subgroup 1。Object ID 5 が END_OF_GROUP
+  const firstRun = ctx.run();
+  ctx.enqueue(
+    buildSingleObjectSubgroupStreamBytes({
+      trackAlias: 7n,
+      groupId: 1n,
+      subgroupId: 1n,
+      objectId: 5n,
+      status: ObjectStatus.END_OF_GROUP,
+    }),
+  );
+  ctx.fin();
+  await firstRun;
+
+  // 1 本目は正常に終わり、Group 1 の最終 Object ID 5 だけが記録されている
+  assert.isUndefined(ctx.sessionError.current);
+  assert.equal(delivered, 1);
+  assert.isFalse(ctx.isCancelled());
+  assert.equal(ctx.internal.receivedEndOfGroupFinalObjectIds.size, 1);
+  assert.equal(ctx.internal.receivedEndOfGroupFinalObjectIds.get(7n)?.size, 1);
+  assert.equal(ctx.internal.receivedEndOfGroupFinalObjectIds.get(7n)?.get(1n), 5n);
+  // Track Alias と Group ID を取り違えたキーでは記録されていない
+  assert.isUndefined(ctx.internal.receivedEndOfGroupFinalObjectIds.get(1n));
+
+  // 2 本目: 同じ Group 1 の別 Subgroup 2。Object ID 6 は既知の最終 Object 5 を超える。
+  // malformed として打ち切られた時点で読み出しループが終わり handleIncomingStream は
+  // 解決する。打ち切られなければ次の chunk を待ち続けるため、タイムアウトで落とす
+  const secondStream = ctx.openStream();
+  const secondRun = secondStream.run();
+  secondStream.enqueue(
+    buildSingleObjectSubgroupStreamBytes({
+      trackAlias: 7n,
+      groupId: 1n,
+      subgroupId: 2n,
+      objectId: 6n,
+      status: ObjectStatus.NORMAL,
+    }),
+  );
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timeoutHandle = setTimeout(() => {
+      reject(new Error("2 本目の malformed 検出がタイムアウトしました"));
+    }, 5000);
+  });
+  try {
+    await Promise.race([secondRun, timeout]);
+  } finally {
+    if (timeoutHandle !== undefined) {
+      clearTimeout(timeoutHandle);
+    }
+  }
+
+  // 超過した Object は配送されず、malformed track として購読が cancel される
+  assert.equal(delivered, 1);
+  assert.instanceOf(notified, MalformedTrackError);
+  assert.match(notified.message, /object id 6 exceeds final object 5 in group 1/);
+  assert.equal(subscriber.state, "closed");
+  assert.equal((ctx.internal.subscribersByAlias.get(7n) ?? []).length, 0);
+  // セッションは閉じず、1 本目も打ち切られていない
+  assert.isUndefined(ctx.sessionError.current);
+  assert.isFalse(ctx.isCancelled());
+  // 2 本目は STOP_SENDING 相当で打ち切られる。診断内容に Track Alias が入る
+  assert.isTrue(secondStream.isCancelled());
+  assert.equal(secondStream.cancelReasons.length, 1);
+  const cancelReason = secondStream.cancelReasons[0];
+  assert.isTrue(
+    typeof cancelReason === "string" && cancelReason.startsWith("malformed track: trackAlias=7,"),
+  );
+  // malformed を検出しても追跡 Map の中身は読み出しで変化しない。cancel で
+  // Track Alias 7 の購読が尽きたため、最後に bidi 層がエントリを破棄する
+  assert.equal(ctx.internal.receivedEndOfGroupFinalObjectIds.size, 0);
 });
 
 /**

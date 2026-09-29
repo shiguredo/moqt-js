@@ -40,6 +40,7 @@ import { encodeProperties } from "../properties";
 import { fullTrackNameKey } from "../fullTrackName";
 import { GroupOrder } from "../message/types";
 import { concatChunks, type FetchObjectSink } from "./stream";
+import { recordEndOfGroupFinalObjectId } from "./endOfGroupTracking";
 
 // ============================================================================
 // incomingSendRequestErrorAndClose のテスト
@@ -1278,7 +1279,7 @@ function createSubgroupDeliveryTestContext(hooks: { debugError?: Error } = {}): 
     statsObjectsReceivedViaSubscribe: 0,
     statsBytesReceivedViaSubscribe: 0,
     // draft-ietf-moq-transport-21 §12.1 条件 4: Group 単位の最終 Object 追跡
-    receivedEndOfGroupFinalObjectIds: new Map<string, bigint>(),
+    receivedEndOfGroupFinalObjectIds: new Map<bigint, Map<bigint, bigint>>(),
     // draft-ietf-moq-transport-21 §10.8 / §10.9: Track 単位の Prior ID Gap 追跡
     priorGapTrackingByTrack: new Map(),
   } as unknown as SessionInternal;
@@ -1479,6 +1480,46 @@ test("incomingProcessSubgroupObjects: 購読の比較キーで追跡状態を更
     MalformedTrackError,
   );
   // malformed の Object は配送しない
+  assert.equal(delivered.length, 1);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §12.1 条件 4:
+ * セッションの追跡マップ (Track Alias と Group ID の 2 段 Map) に別 Subgroup で
+ * 確定した最終 Object ID があるとき、それより大きい Object ID の Object を
+ * malformed として検出する。既知の最終 Object ちょうどまでは malformed にしない。
+ */
+test("incomingProcessSubgroupObjects: 追跡マップの既知最終 Object を超える Object は MalformedTrackError", () => {
+  const { session } = createSubgroupDeliveryTestContext();
+  const delivered: number[] = [];
+  const subscriber = new SubscriberImpl(["test"], "track", 0n, 7n, () => {
+    delivered.push(1);
+  });
+  // 別 Subgroup で Group 0 の最終 Object が Object ID 1 として確定済みとする
+  recordEndOfGroupFinalObjectId(session.receivedEndOfGroupFinalObjectIds, 7n, 0n, 1n);
+
+  // 既知の最終 Object ちょうど (Object ID 1) は配信する
+  incomingProcessSubgroupObjects(
+    session,
+    subgroupObjectWire(1n, 0xaa),
+    [subscriber],
+    subgroupTestHeader(),
+    -1n,
+  );
+  assert.equal(delivered.length, 1);
+
+  // 既知の最終 Object を超える Object ID 2 は malformed
+  assert.throws(
+    () =>
+      incomingProcessSubgroupObjects(
+        session,
+        subgroupObjectWire(2n, 0xbb),
+        [subscriber],
+        subgroupTestHeader(),
+        -1n,
+      ),
+    MalformedTrackError,
+  );
   assert.equal(delivered.length, 1);
 });
 
