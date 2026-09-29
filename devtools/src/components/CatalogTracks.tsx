@@ -77,31 +77,34 @@ interface CatalogTrackRowProps {
   cardClass: string;
 }
 
-/** トラック 1 件の行。行の先頭に namespace を含む Full Track Name を出す */
+/** トラック 1 件の行。1 行目に Full Track Name、2 行目以降に残りのキーと値 */
 function CatalogTrackRow({ track, trackNamespace, cardClass }: CatalogTrackRowProps) {
   const fullTrackName = resolveTrackFullTrackName(track, trackNamespace);
+  // Full Track Name を組み立てられないときは track name をそのまま出す
+  // (name は Full Track Name に含まれるため、行から消えないようにする)
+  const title = fullTrackName ?? track.name;
   return (
-    <div
-      class={`bg-white rounded px-2 py-1 border ${cardClass} flex flex-wrap gap-x-3 gap-y-0.5 text-xs leading-4`}
-    >
-      {fullTrackName !== null && (
-        <span class="max-w-full flex gap-1 min-w-0" title={`Full Track Name: ${fullTrackName}`}>
-          <span class="text-slate-500 shrink-0">Full Track Name</span>
-          <span class="font-semibold text-slate-700 truncate">{fullTrackName}</span>
-        </span>
-      )}
-      {Object.entries(track)
-        // name (§5.2.3) は Full Track Name に含まれる
-        .filter(([key]) => key !== "name")
-        .map(([key, value]) => {
-          const text = formatCatalogValue(key, value);
-          return (
-            <span key={key} class="max-w-full flex gap-1 min-w-0" title={`${key}: ${text}`}>
-              <span class="text-slate-500 shrink-0">{key}</span>
-              <span class="font-semibold text-slate-700 truncate">{text}</span>
-            </span>
-          );
-        })}
+    <div class={`bg-white rounded px-2 py-1 border ${cardClass}`}>
+      <div
+        class="text-xs font-semibold text-slate-700 truncate"
+        title={fullTrackName === null ? `name: ${track.name}` : `Full Track Name: ${fullTrackName}`}
+      >
+        {title}
+      </div>
+      <div class="flex flex-wrap gap-x-3 text-xs leading-4">
+        {Object.entries(track)
+          // name (§5.2.3) は 1 行目に出す
+          .filter(([key]) => key !== "name")
+          .map(([key, value]) => {
+            const text = formatCatalogValue(key, value);
+            return (
+              <span key={key} class="max-w-full flex gap-1 min-w-0" title={`${key}: ${text}`}>
+                <span class="text-slate-500 shrink-0">{key}</span>
+                <span class="text-slate-700 truncate">{text}</span>
+              </span>
+            );
+          })}
+      </div>
     </div>
   );
 }
@@ -121,7 +124,9 @@ function CatalogTrackGroup({ label, tracks, trackNamespace, cardClass }: Catalog
   }
   return (
     <div>
-      <div class="text-xs font-medium text-slate-500 mb-0.5">{label}</div>
+      <div class="text-xs font-semibold text-slate-500 mb-0.5">
+        {label} ({tracks.length})
+      </div>
       <div class="space-y-1">
         {tracks.map((track, index) => (
           <CatalogTrackRow
@@ -140,13 +145,14 @@ function CatalogTrackGroup({ label, tracks, trackNamespace, cardClass }: Catalog
  * catalog の Track の一覧
  *
  * Track をメディア (`packaging: "loc"`) とデータ (それ以外) に分けて並べる
- * (§5.2.4)。Track ごとに、キーと値を 1 組ずつ横に詰めて並べ、幅が足りない分だけ
- * 折り返す。高さは Track の数と中身に合わせ、欄の中でスクロールさせない (映像と
- * 音声の Track を一目で読める)。長い値 (initRef など) は 1 組の幅に収めて省き、
- * 全文はマウスを重ねると出る。catalog を受け取る前も欄を描き、値を「-」にする。
+ * (§5.2.4)。グループの見出しには件数を出す。Track ごとに、1 行目へ namespace を
+ * 含む Full Track Name を出し (draft-ietf-moq-transport-21 §8.8)、2 行目以降へ
+ * 残りのキーと値を 1 組ずつ横に詰めて並べる。幅が足りない分だけ折り返す。高さは
+ * Track の数と中身に合わせ、欄の中でスクロールさせない (映像と音声の Track を
+ * 一目で読める)。長い値 (initRef など) は 1 組の幅に収めて省き、全文はマウスを
+ * 重ねると出る。catalog を受け取る前も欄を描き、値を「-」にする。
  *
- * 各行の先頭には、namespace を含む Full Track Name を出す (draft-ietf-moq-transport-21
- * §8.8)。track name 単体は Full Track Name に含まれるため出さない
+ * track name 単体 (`name`) は 1 行目の Full Track Name に含まれるため出さない
  */
 export function CatalogTracks({ tracks, trackNamespace, tone, testId }: CatalogTracksProps) {
   const classes = TONE_CLASSES[tone];
