@@ -1,7 +1,7 @@
 # 高レベル API が送信の reject を処理せず unhandled rejection になる
 
 - Created: 2026-09-21
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-29
 - Branch: feature/fix-media-send-rejection-propagation
 - Polished: 2026-09-23
 
@@ -62,4 +62,18 @@
 
 ## 解決方法
 
-{未着手}
+`src/createMediaPublisher.ts` に private の `sendFrameFireAndForget(publisher, params)` を新設し、音声 / 映像の送信 2 箇所をここに集約した。`publisher.sendObject(params)` の reject は `.catch` で回収し、**呼び出し側では通知しない** (`PublisherImpl.sendObject` の事前検証と委譲先が reject の前に `handleError` で通知する契約であり、ここで通知すると 1 件の失敗で 2 回通知になるため)。委譲先が同期 throw する場合は通知を伴わないため、`try` / `catch` で受けて `onError` へ 1 回流す。通知の throw は吸収し、encoder の output コールバックへ例外を漏らさない。
+
+`src/createMediaSubscriber.ts` の 3 箇所を直した。
+
+- 自動再生ポリシー対応の `AudioContext.resume()` は `.catch` で受け、失敗を `onError` へ 1 回流す (通知の throw も吸収する)
+- `reconfigureAudioDecoder` / `reconfigureVideoDecoder` は、codec / channels の解決を含む関数全体を `try` に入れ、同期 throw も `onError` へ 1 回流して reject しない契約にした。呼び出し側は `void` で呼ぶため、reject を残すと未処理の rejection になる
+- 映像デコーダーの error コールバックを `handleVideoDecoderError` に切り出し、`onError` が throw しても復号順の初期化と `reset()` を続けるようにした。`reset()` は 0677 で例外を投げない `Promise<boolean>` になったため、結果は見ない (打ち切りは `reset()` の中で完結する)
+
+`src/publisher.ts` の `sendObject` / `sendDatagram` の JSDoc を実装に合わせた。事前検証は自分で通知してから reject すること、closed では検証の前に同期 throw すること、`sendDatagram` の Forward State 0 は通知も throw もなく return することを明記し、公開 interface 側は契約 (reject は必ず通知を伴う。1 件の失敗につき通知 1 回) だけに整理した。あわせて `publisher.test.ts` に END_OF_GROUP 送信後の同一 Group への `sendObject` の単体テストを追加した (通知してから reject し、委譲先へ渡らない。別 Group へは送れる)。
+
+テストは 15 件追加した (`createMediaPublisher.test.ts` / `createMediaSubscriber.test.ts` / `publisher.test.ts`)。reject する publisher / 同期 throw する publisher / reject する `resume()` / `onError` が throw する場合を cast で注入し、`unhandledRejection` を 50 ms 監視して 0 件であることと `onError` の回数を固定した。監視の定型は `src/testSupport/helpers.ts` の `withUnhandledRejectionWatch` / `waitForUnhandledRejectionDetection` に、AudioContext の差し替えは `withSuspendedAudioContext` に集約した。
+
+`CHANGES.md` の `## develop` の FIX 群先頭に `[FIX]` を追記した。`publishCatalog` の await 経路は通知の由来を分類する別の設計が必要なため対象外とし、0679 で扱う。
+
+`npx vp check` と `npx vp test --run` (3363 テスト) が通る。
