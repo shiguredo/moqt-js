@@ -6,8 +6,13 @@
  * 出力 (chunk / frame / AudioData) を実データから要約する。
  */
 
-import type { AudioCodecType } from "../../../src/codec/types.ts";
-import { getAudioDecoderConfig, getAudioEncoderConfig } from "../../../src/codec/config.ts";
+import type { AudioCodecType, VideoCodecType } from "../../../src/codec/types.ts";
+import {
+  getAudioDecoderConfig,
+  getAudioEncoderConfig,
+  getVideoDecoderConfig,
+} from "../../../src/codec/config.ts";
+import { isVideoDecoderConfigSupported } from "../../../src/codec/configSupport.ts";
 import { closeCodecQuiet } from "../../../src/codec/codecLifecycle.ts";
 import type { ObservedAudioData, ObservedEncodedChunk, ObservedVideoFrame } from "./types.ts";
 
@@ -443,5 +448,58 @@ export async function selectSupportedAudioCodec(): Promise<AudioCodecSelection> 
   const rejections = rejectedCodecs.length === 0 ? "" : `: ${rejectedCodecs.join(", ")}`;
   throw new Error(
     `no encodable audio codec in this browser (candidates: ${candidatesLabel})${rejections}`,
+  );
+}
+
+// 非対応 codec を探すときの映像コーデック候補。
+// 候補は VideoCodecType の値を手で並べたものである (型に値を足しても自動では候補に
+// ならない)。ブラウザのビルドによって対応状況が変わるため、先頭から順に対応確認を
+// 試し、非対応が返るものを実測で選ぶ。
+// 先頭は参照 chunk の符号化に使う vp8 にする。対応が確実な codec を先に試すことで、
+// 選定結果の supportedCodecs (対応と判定した候補) が空にならず、選んだ非対応 codec が
+// 対応側へ混ざっていないことを e2e で検証できる (h265 のように非対応の可能性が高い
+// codec を先頭に置くと supportedCodecs が空になり、検証が空振りする)
+// CI の chromium (Linux) は HEVC の復号器を持たないため、現状は h265 が選ばれる。
+// 全候補が対応になった場合は候補の更新が必要になる (選定は理由付きで失敗する)
+export const VIDEO_CODEC_CANDIDATES: readonly VideoCodecType[] = [
+  "vp8",
+  "h265",
+  "av1",
+  "h264",
+  "vp9",
+];
+
+/** 非対応映像コーデックの選定結果 */
+export interface UnsupportedVideoCodecSelection {
+  /** 実測で非対応と判定されたコーデック */
+  codec: VideoCodecType;
+  /** configure に載る codec 文字列 (非対応と判定された実物) */
+  codecString: string;
+  /** 対応と判定されて除外した候補 (試した順のコーデック名) */
+  supportedCodecs: VideoCodecType[];
+}
+
+/**
+ * 実ブラウザが復号に対応していない映像コーデックを 1 件選ぶ
+ *
+ * 候補を先頭から順に試し、対応確認 (規則は src/codec/configSupport.ts を正本とする) が
+ * 非対応を返した最初の候補を選ぶ。候補を順に試すのは、Chromium のビルドによって
+ * h265 などの対応状況が変わるためである。WebCodecs 非搭載の環境では対応確認が Error を
+ * 投げるため選定は成立しない (非対応 codec の経路を駆動できないことを明示する)。
+ * 全候補が対応と報告された場合もテストを skip せず Error を投げる。
+ */
+export async function selectUnsupportedVideoCodec(): Promise<UnsupportedVideoCodecSelection> {
+  const supportedCodecs: VideoCodecType[] = [];
+  for (const codec of VIDEO_CODEC_CANDIDATES) {
+    const config = getVideoDecoderConfig(codec, VIDEO_WIDTH, VIDEO_HEIGHT);
+    if (!(await isVideoDecoderConfigSupported(config))) {
+      return { codec, codecString: config.codec, supportedCodecs };
+    }
+    supportedCodecs.push(codec);
+  }
+  // ここへ来る時点で全候補が supportedCodecs に入っている (候補は非空の定数であるため、
+  // 「1 件も無い」場合の分岐は置かない)
+  throw new Error(
+    `no unsupported video codec in this browser (all candidates are supported: ${supportedCodecs.join(", ")})`,
   );
 }

@@ -124,6 +124,9 @@ export class WorkerConfigureGate {
  * 自世代を破棄する (先発破棄)。旧世代の遅延成功は reject する (中断扱い)。
  * 失敗時は世代の新旧によらず自世代を破棄して個別エラーで reject する。
  * close() / reset() 時は無効化して待機中の世代を旧世代化する (中断扱い)。
+ * VideoDecoderWrapper の reset() は「無効化と採番の間で await を挟まない」手順を
+ * 守ったうえで currentGeneration を自世代として控え、後発の構成操作に追い越された
+ * かを判定する (追い越された場合は後発世代を破棄しない)。
  */
 export class ConfigureGenerationTracker {
   private current = 0;
@@ -150,6 +153,17 @@ export class ConfigureGenerationTracker {
    */
   invalidateAll(): void {
     this.current += 1;
+  }
+
+  /**
+   * 現在の世代番号
+   *
+   * 最後に採番した世代を返す (invalidateAll() でも進む)。呼び出し直後の値が
+   * 「自分が採番した世代」になる手順 (同期での無効化 → 採番) を守ったうえで使い、
+   * その後に値が変わっていれば後発の構成操作に追い越されたと判定する。
+   */
+  get currentGeneration(): number {
+    return this.current;
   }
 }
 

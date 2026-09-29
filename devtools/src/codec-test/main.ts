@@ -12,7 +12,12 @@
 
 import { runAudioDecoderTest, runAudioEncoderTest, runAudioSamplesTest } from "./audio.ts";
 import {
+  runVideoDecoderCloseDuringConfigureTest,
+  runVideoDecoderConcurrentResetTest,
+  runVideoDecoderResetBudgetTest,
+  runVideoDecoderResetRestoreTest,
   runVideoDecoderTest,
+  runVideoDecoderUnsupportedCodecTest,
   runVideoEncoderReconfigureTest,
   runVideoEncoderTest,
 } from "./video.ts";
@@ -35,6 +40,16 @@ const CODEC_TESTS: { [Name in CodecTestName]: () => Promise<CodecTestResultMap[N
   videoEncoderWorker: () => runVideoEncoderTest(true),
   videoDecoderDirect: () => runVideoDecoderTest(false),
   videoDecoderWorker: () => runVideoDecoderTest(true),
+  videoDecoderUnsupportedCodecDirect: () => runVideoDecoderUnsupportedCodecTest(false),
+  videoDecoderUnsupportedCodecWorker: () => runVideoDecoderUnsupportedCodecTest(true),
+  videoDecoderResetBudgetDirect: () => runVideoDecoderResetBudgetTest(false),
+  videoDecoderResetBudgetWorker: () => runVideoDecoderResetBudgetTest(true),
+  videoDecoderResetRestoreDirect: () => runVideoDecoderResetRestoreTest(false),
+  videoDecoderResetRestoreWorker: () => runVideoDecoderResetRestoreTest(true),
+  videoDecoderConcurrentResetDirect: () => runVideoDecoderConcurrentResetTest(false),
+  videoDecoderConcurrentResetWorker: () => runVideoDecoderConcurrentResetTest(true),
+  videoDecoderCloseDuringConfigureDirect: () => runVideoDecoderCloseDuringConfigureTest(false),
+  videoDecoderCloseDuringConfigureWorker: () => runVideoDecoderCloseDuringConfigureTest(true),
   audioEncoderDirect: () => runAudioEncoderTest(false),
   audioEncoderWorker: () => runAudioEncoderTest(true),
   audioDecoderDirect: () => runAudioDecoderTest(false),

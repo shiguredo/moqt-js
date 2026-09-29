@@ -1495,6 +1495,13 @@ export class MediaSubscriberImpl implements MediaSubscriber {
           // エラー後にデコーダーをリセットする。リセットした decoder はキーフレームから
           // 始めるため、復号順の判定も初期化する
           this.videoDecodeOrder.reset();
+          // reset() は例外を投げないため reject の伝搬は無い。再初期化できない場合
+          // (予算切れ / lastConfig 無し / 非対応 codec / 構成の失敗) は false を返し、
+          // Worker と VideoDecoder は reset() の中で破棄済みで configured も false に
+          // なっている。以降の decode() は未構成の警告を 1 回だけ出して何もしないため、
+          // ここで再試行や再通知をすると恒久エラーのループに戻る。打ち切りは reset() の
+          // 中で完結するので結果は見ない (後発の configure() に追い越された場合も
+          // reset() は何もせず false を返し、その configure() が構成を続ける)
           void this.videoDecoder?.reset();
         },
       });

@@ -6,10 +6,17 @@ import type {
   AudioSamplesTestResult,
   CodecTestName,
   CodecTestResultMap,
+  VideoDecoderCloseDuringConfigureTestResult,
+  VideoDecoderConcurrentResetTestResult,
+  VideoDecoderResetBudgetTestResult,
+  VideoDecoderRestoreTestResult,
   VideoDecoderTestResult,
+  VideoDecoderUnsupportedCodecTestResult,
   VideoEncoderReconfigureTestResult,
   VideoEncoderTestResult,
 } from "../../devtools/src/codec-test/types";
+// 非対応 codec の候補順はテストページと共有する (選定結果の並びを突き合わせる)
+import { VIDEO_CODEC_CANDIDATES } from "../../devtools/src/codec-test/support";
 
 // codec Wrapper / Worker プロトコルの契約テスト
 //
@@ -312,6 +319,274 @@ test("VideoDecoderWrapper 未設定時: decode() は例外を投げず何もし�
     });
   }
 });
+
+// ============================================================================
+// VideoDecoderWrapper の非対応 codec と復帰の予算
+// ============================================================================
+
+// 非対応 codec はテストページが実ブラウザで実測して選ぶ
+// (devtools/src/codec-test/support.ts の VIDEO_CODEC_CANDIDATES を候補順に試す)。
+// 事前確認は Worker の生成 / VideoDecoder の configure の直前にあるため、この経路では
+// Worker も VideoDecoder も作られない。テストからは state とエラーメッセージで確認する。
+
+/**
+ * 非対応 codec の configure と reset の契約を検証する
+ */
+function expectVideoDecoderUnsupportedCodecContract(
+  result: VideoDecoderUnsupportedCodecTestResult,
+): void {
+  // 選ばれたのは映像の候補 (VIDEO_CODEC_CANDIDATES) のいずれかであり、configure に
+  // 載る codec 文字列 (非対応と判定された実物) が結果に載る
+  expect(VIDEO_CODEC_CANDIDATES).toContain(result.codec);
+  expect(result.codecString).not.toBe("");
+
+  // 候補は先頭から順に試される。先頭の候補 (vp8) は参照 chunk を符号化する codec であり、
+  // 対応と判定されて supportedCodecs に載る。空の場合は検証が空振りするため失敗させる
+  expect(result.supportedCodecs.length).toBeGreaterThan(0);
+
+  // 選んだ非対応 codec は supportedCodecs (対応と判定されて除外した候補) に含まれない
+  expect(result.supportedCodecs).not.toContain(result.codec);
+
+  // supportedCodecs は選んだ codec の直前までの候補と一致する (順序と対応判定の確認)
+  expect([...result.supportedCodecs, result.codec]).toEqual(
+    VIDEO_CODEC_CANDIDATES.slice(0, result.supportedCodecs.length + 1),
+  );
+
+  // configure 前は unconfigured
+  expect(result.stateBeforeConfigure).toBe("unconfigured");
+
+  // isConfigSupported が false の codec では Worker も VideoDecoder も作らず、
+  // codec 文字列を含むエラーで configure が失敗する
+  expect(result.configureErrorMessage).toBe(`Decoder codec not supported: ${result.codecString}`);
+  expect(result.stateAfterFailedConfigure).toBe("unconfigured");
+
+  // 同じ config で reset() を呼んでも再初期化せず false を返す。
+  // 事前確認が reset() の再初期化経路でも効いていることの確認になる
+  expect(result.resetReturned).toBe(false);
+  expect(result.stateAfterReset).toBe("unconfigured");
+
+  // configure の失敗も reset() の失敗も何も復号せず、error コールバックも呼ばない
+  expect(result.outputCount).toBe(0);
+  expect(result.errorMessages).toEqual([]);
+}
+
+for (const name of [
+  "videoDecoderUnsupportedCodecDirect",
+  "videoDecoderUnsupportedCodecWorker",
+] as const) {
+  test(`VideoDecoderWrapper 非対応 codec: configure と reset が失敗する (${name})`, async ({
+    page,
+  }) => {
+    await openCodecTestPage(page);
+
+    const result = await runCodecTest(page, name);
+
+    expect(result.test).toBe(name);
+    expect(result.useWorker).toBe(name === "videoDecoderUnsupportedCodecWorker");
+    expectVideoDecoderUnsupportedCodecContract(result);
+  });
+}
+
+/**
+ * 復帰予算の上限と打ち切りの契約を検証する
+ */
+function expectVideoDecoderResetBudgetContract(result: VideoDecoderResetBudgetTestResult): void {
+  // configure 前 (lastConfig が無い) の reset() は false を返し、何も作り直さない
+  expect(result.resetWithoutConfig).toBe(false);
+  expect(result.stateAfterResetWithoutConfig).toBe("unconfigured");
+
+  // 対応 codec の configure 後は configured
+  expect(result.stateAfterConfigure).toBe("configured");
+
+  // 復号フレームを 1 枚も出さないまま同じ config で reset() を呼ぶと、
+  // 上限の 3 回が成功し、4 回目で打ち切られる
+  expect(result.resetResults).toEqual([true, true, true, false]);
+
+  // 打ち切り後は Worker も VideoDecoder も破棄され、state は unconfigured になる
+  expect(result.stateAfterBudgetExhausted).toBe("unconfigured");
+
+  // 以降の decode() は configured = false のため、実 chunk を投入しても復号しない
+  // (呼び出しは複数回行い、未構成の警告が 1 回だけであることを別途数える)
+  expect(result.decodeAttemptsAfterBudgetExhausted).toBeGreaterThan(1);
+  expect(result.framesDecodedAfterBudgetExhausted).toBe(0);
+
+  // reset() の失敗は error コールバックを呼ばない (恒久エラーで通知が増えない)
+  expect(result.errorMessages).toEqual([]);
+}
+
+/**
+ * ページのコンソール出力 (warning) を集める配列を返す
+ *
+ * テスト本体を実行する前に登録する。ブラウザ側のコードへ手を入れず、
+ * 実際に出た警告だけを数える。
+ */
+function collectConsoleWarnings(page: Page): string[] {
+  const warnings: string[] = [];
+  page.on("console", (message) => {
+    if (message.type() === "warning") {
+      warnings.push(message.text());
+    }
+  });
+  return warnings;
+}
+
+/**
+ * 未構成のまま decode() が呼ばれたときの警告の件数を数える
+ */
+function countNotConfiguredWarnings(warnings: readonly string[]): number {
+  return warnings.filter((text) => text.includes("VideoDecoderWrapper: not configured")).length;
+}
+
+for (const name of ["videoDecoderResetBudgetDirect", "videoDecoderResetBudgetWorker"] as const) {
+  test(`VideoDecoderWrapper 予算: 同じ config の reset() は 3 回で打ち切られる (${name})`, async ({
+    page,
+  }) => {
+    await openCodecTestPage(page);
+    const warnings = collectConsoleWarnings(page);
+
+    const result = await runCodecTest(page, name);
+
+    expect(result.test).toBe(name);
+    expect(result.useWorker).toBe(name === "videoDecoderResetBudgetWorker");
+    expectVideoDecoderResetBudgetContract(result);
+
+    // 打ち切り後は未構成のまま decode() が呼ばれ続ける (受信のたびに呼ばれる)。
+    // 警告は呼び出しのたびではなく、未構成になった最初の 1 回だけにする
+    // (毎回出すと 30 fps の受信で毎秒 30 件の警告になる)
+    expect(countNotConfiguredWarnings(warnings)).toBe(1);
+  });
+}
+
+/**
+ * 予算が戻る 2 条件 (復号フレームの出力 / 参照の異なる config) の契約を検証する
+ */
+function expectVideoDecoderRestoreContract(result: VideoDecoderRestoreTestResult): void {
+  // 復号フレームを出さないまま上限まで reset() が成功する
+  expect(result.resetResultsBeforeDecodedFrame).toEqual([true, true, true]);
+
+  // 復号フレームを 1 枚出力すると予算が戻るため、次の reset() も成功する
+  // (戻らなければ、この reset() は false になる)
+  expect(result.frameCount).toBeGreaterThan(0);
+  expect(result.resetAfterDecodedFrame).toBe(true);
+
+  // ここまでの reset() で 1 回消費しているため、残り 2 回が成功し 3 回目で打ち切られる
+  expect(result.resetResultsBeforeDifferentConfig).toEqual([true, true, false]);
+
+  // 参照の異なる config の configure で予算が戻るため、reset() が再び成功する
+  expect(result.resetAfterDifferentConfig).toBe(true);
+  expect(result.stateAfterDifferentConfigReset).toBe("configured");
+
+  expect(result.errorMessages).toEqual([]);
+}
+
+for (const name of ["videoDecoderResetRestoreDirect", "videoDecoderResetRestoreWorker"] as const) {
+  test(`VideoDecoderWrapper 予算: 復号フレームと異なる config で予算が戻る (${name})`, async ({
+    page,
+  }) => {
+    await openCodecTestPage(page);
+
+    const result = await runCodecTest(page, name);
+
+    expect(result.test).toBe(name);
+    expect(result.useWorker).toBe(name === "videoDecoderResetRestoreWorker");
+    expectVideoDecoderRestoreContract(result);
+  });
+}
+
+/**
+ * 並行する reset() / configure() の交錯の契約を検証する
+ */
+function expectVideoDecoderConcurrentResetContract(
+  result: VideoDecoderConcurrentResetTestResult,
+): void {
+  // 2 つの reset() が同時に走っても、後発世代まで破棄して両方を失敗させない。
+  // 先に作り直した方だけが true を返し、他方は破棄で進んだ世代を検出して false になる
+  // (両方 false になると Worker も VideoDecoder も残らず、以降の decode() が何もしない
+  //  状態になる。true が 1 件であることがそれを含む。直接モードも破棄が世代を進める)
+  expect(result.concurrentResetResults.filter(Boolean)).toHaveLength(1);
+
+  // 後発世代のデコーダーが公開されたまま残り、実 chunk を復号できる
+  expect(result.stateAfterConcurrentReset).toBe("configured");
+  expect(result.framesDecodedAfterConcurrentReset).toBeGreaterThan(0);
+
+  // reset() の対応確認の await 中に参照の異なる config の configure() が始まった場合、
+  // reset() は追い越されて何もせず false を返し、configure() は失敗しない
+  expect(result.resetReturnedDuringConfigure).toBe(false);
+  expect(result.configureErrorMessage).toBeNull();
+
+  // configure() の構成が公開されたまま残り、実 chunk を復号できる
+  expect(result.stateAfterConcurrentConfigure).toBe("configured");
+  expect(result.framesDecodedAfterConcurrentConfigure).toBeGreaterThan(0);
+
+  // 交錯の失敗は error コールバックを呼ばない
+  expect(result.errorMessages).toEqual([]);
+}
+
+for (const name of [
+  "videoDecoderConcurrentResetDirect",
+  "videoDecoderConcurrentResetWorker",
+] as const) {
+  test(`VideoDecoderWrapper 交錯: 並行する reset() と configure() が互いを壊さない (${name})`, async ({
+    page,
+  }) => {
+    await openCodecTestPage(page);
+
+    const result = await runCodecTest(page, name);
+
+    expect(result.test).toBe(name);
+    expect(result.useWorker).toBe(name === "videoDecoderConcurrentResetWorker");
+    expectVideoDecoderConcurrentResetContract(result);
+  });
+}
+
+/**
+ * configure() の対応確認中に close() が先行したときの契約を検証する
+ *
+ * テストページは await を挟まずに configure() と close() を呼ぶ。configure() は対応確認の
+ * await を持つため、対応確認の解決より解放が先に走る。解放のあとに Worker や VideoDecoder を
+ * 作ると誰も破棄せず、state も configured へ戻る (解放のあとに作られたものは呼び出し側の
+ * 参照から外れている)。イベント順と state で固定する。実ブラウザのテストからは生成の実体を
+ * 観測できないため、作られていれば state が configured になる性質で確認する (直接モードの
+ * 生成数は Node の単体テストが数える)。
+ */
+function expectVideoDecoderCloseDuringConfigureContract(
+  result: VideoDecoderCloseDuringConfigureTestResult,
+): void {
+  // 解放が先に走り、configure() は構成せずに失敗する。
+  // イベント名はテストページ (devtools/src/codec-test/video.ts) が記録する
+  expect(result.events).toEqual(["configure started", "close called", "configure rejected"]);
+  expect(result.configureErrorMessage).toBe(
+    "video decoder configure superseded by newer generation",
+  );
+
+  // 解放のあとに Worker も VideoDecoder も作らないため、state は unconfigured のままになる
+  expect(result.stateAfterAbortedConfigure).toBe("unconfigured");
+  expect(result.framesDecodedAfterAbortedConfigure).toBe(0);
+
+  // やり直した configure() は成功し、実 chunk を復号できる (解放で Wrapper は壊れない)
+  expect(result.stateAfterReconfigure).toBe("configured");
+  expect(result.framesDecodedAfterReconfigure).toBeGreaterThan(0);
+
+  // configure() の失敗は error コールバックを呼ばない
+  expect(result.errorMessages).toEqual([]);
+}
+
+for (const name of [
+  "videoDecoderCloseDuringConfigureDirect",
+  "videoDecoderCloseDuringConfigureWorker",
+] as const) {
+  test(`VideoDecoderWrapper 解放: configure() 中に close() したら Worker も VideoDecoder も作らない (${name})`, async ({
+    page,
+  }) => {
+    await openCodecTestPage(page);
+
+    const result = await runCodecTest(page, name);
+
+    expect(result.test).toBe(name);
+    expect(result.useWorker).toBe(name === "videoDecoderCloseDuringConfigureWorker");
+    expectVideoDecoderCloseDuringConfigureContract(result);
+  });
+}
 
 // ============================================================================
 // AudioEncoderWrapper
