@@ -79,7 +79,9 @@ jobs:
 
   e2e:
     runs-on: ubuntu-slim
-    timeout-minutes: 10
+    # 遅い runner では 66 テストが 10 分を超えることがある (実際に 10m33s で
+    # キャンセルされた)。テストの内容と並列度は変えず、余裕を持たせる
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1
