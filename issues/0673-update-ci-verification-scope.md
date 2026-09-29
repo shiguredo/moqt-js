@@ -12,7 +12,7 @@ CI / prek / カバレッジの検証範囲がリポジトリの実態より狭�
 ## 現状
 
 - `.github/workflows/ci.yml` の build job は `vp test` と `vp run build` だけを実行する。`vp run build` は `package.json` の `build` (`vp pack`) であり、ライブラリのバンドルのみを検証する。`build:devtools` (`vp build devtools`) と `build:examples` (`vp build examples`) は ci.yml のどの job でも実行されない。devtools は `deploy-cloudflare.yml` (workflow_dispatch、手動) のときだけビルドされ、examples はどのワークフローでもビルドされない
-- devtools は `src/` の内部モジュールを直接 import している (`devtools/src/hooks/usePublisher.ts` の `../../../src/createMediaPublisher.ts`、`devtools/src/codec-test/video.ts` の `../../../src/codec/VideoEncoder.ts` など)。内部の変更で devtools のビルドだけが壊れても、ci.yml の job はビルドしないため検出できない (`vp test` は vitest であり、e2e は devtools を `vp dev` で起動する)
+- devtools は `src/` の内部モジュールを直接 import している (`devtools/src/hooks/usePublisher.ts` の `../../../src/createMediaPublisher.ts`、`devtools/src/codec-test/video.ts` の `../../../src/codec/VideoEncoder.ts` など)。ci.yml はどの job でも devtools / examples をビルドしない。型レベルの破損は lint job の `vp check` の型検査が検出し得るが (closed 0773 で `tests/e2e` の spec まで型検査されることを実測)、ビルド (バンドル) と examples の実行時挙動は検証されない (`vp test` は vitest であり、e2e は devtools を `vp dev` で起動する)
 - `prek.toml` の `vp-check` は `types_or = ["ts", "tsx", "javascript", "jsx", "css", "json"]` であり、markdown が無い。ドキュメントだけのコミットでは pre-commit の整形検証 (`vp check`) が走らない。CI の lint job はファイル指定なしで `vp check` を実行するため `.md` の整形は既に検証される (closed 0603、`ci.yml` のコメント。`paths-ignore` も `**.md` / `**.txt` を除外していない)。残るギャップは pre-commit (prek) のローカル検証だけである。`.md` は oxfmt の整形対象であり、`npx vp fmt` が箇条書きの記号と空行と行末空白を実際に書き換えることを確認した
 - `vite.config.ts` の `test.coverage.exclude` が `src/message/debug.ts` を除外している。同ファイルの `getMessageTypeName` は `src/session/namespaces.ts` / `src/session/lifecycle.ts` / `src/session/namespaceLoops.ts` が使う本番コードであり、`src/message/session.test.ts` が `getMessageTypeName` を直接テストしている。テスト済みの本番実装がカバレッジ表示から 1 ファイル欠ける
 
@@ -32,7 +32,7 @@ CI / prek / カバレッジの検証範囲がリポジトリの実態より狭�
 ## 参照
 
 - `.github/workflows/ci.yml` / `.github/workflows/deploy-cloudflare.yml` / `prek.toml` / `vite.config.ts` / `package.json`
-- closed 0603 (CI の品質ゲート。`vp check` が `.md` の整形まで検証する根拠) / closed 0509 (devtools / examples のビルドをローカルで検証した実績)
+- closed 0603 (CI の品質ゲート。`vp check` が `.md` の整形まで検証する根拠) / closed 0509 (devtools / examples のビルドをローカルで検証した実績) / closed 0773 (`vp check` の型検査が `tests/e2e` の spec まで及ぶ実績)
 - `AGENTS.md` (GitHub Actions では `shiguredo-github-actions` スキルを参照すること)
 
 ## 解決方法
