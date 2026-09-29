@@ -1,7 +1,7 @@
 # キュー超過で破棄したフレームのキーフレーム要求が失われる
 
 - Created: 2026-09-23
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-29
 - Branch: feature/fix-dropped-keyframe-request
 - Polished: 2026-09-23
 
@@ -51,4 +51,14 @@
 
 ## 解決方法
 
-{未着手}
+`src/createMediaPublisher.ts` の `processVideoFrames` で、キーフレームの判定 (`shouldSendKeyFrame`) と通し番号 (`videoFrameCount`) の加算を `encode` する分岐の中へ移した。破棄したフレームでは判定も加算もしないため、通し番号は据え置かれ、次に `encode` するフレームが同じ番号で判定を受ける。要求を次のフレームへ移すための繰り越し状態は要らない (devtools の同じループが元からこの順序で、繰り越し状態を持たずに正しく動いている)。
+
+加算は `encoder.encode(...)` の後ろに置いた。`encode` が同期 throw した場合 (Worker への送信や直接モードの `encoder.encode` が例外を投げる場合) に、encode していないフレームで通し番号が進まないようにするためである。あわせて `frame.close()` を分岐全体の `finally` へ移し、破棄・encode・同期 throw のどの経路でも 1 回だけ閉じるようにした (従来は同期 throw の経路で閉じ忘れていた)。世代が変わって処理を打ち切る経路の close は `try` の外にあり、二重 close にはならない。
+
+`shouldSendKeyFrame` と `requestKeyframe`、`videoFrameCount` の JSDoc とコメントを、新しい意味 (通し番号は「リセット以後に実際に encode したフレームの数」であり、要求は次に `encode` するフレームで消費される) に合わせた。
+
+`src/createMediaPublisher.test.ts` の記録用エンコーダーに `failNextEncode` を足し (次の `encode` を 1 回だけ同期 throw させ、投げた encode は記録しない)、キュー超過で破棄したフレームの要求が次の `encode` フレームへ移ること、通し番号が実際に `encode` したフレームの数だけ進むこと、同期 throw でもフレームを閉じて通し番号を据え置くことを固定する 3 テストを追加した。あわせて重複していた `settle` を 1 箇所に集約し、encode されたフレームの検証を同一性 (`strictEqual`) にし、`closeCount` と重複する `closed` の検証を削った。
+
+統計の項目は追加していない (破棄数は 0650 の `VideoStats.droppedFrames` のまま)。`CHANGES.md` の `## develop` の FIX 群先頭に `[FIX]` を追記した。
+
+`npx vp check` と `npx vp test --run` (3430 テスト) が通る。
