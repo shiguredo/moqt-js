@@ -11,10 +11,10 @@
 
 ## develop
 
-- [CHANGE] moqt-devtools の event timeline の eventType を `app.shiguredo.moqt-devtools.chat` にする
-  - 逆ドメイン名の取り方を見直す。catalog の eventType が変わる (購読側は packaging でトラックを探すため、購読の動作は変わらない)
+- [CHANGE] moqt-devtools の event timeline の eventType を `app.shiguredo.moqt-devtools.messages` にする
+  - 逆ドメイン名の取り方を見直し、画面の呼び名 (Messages) に揃える。catalog の eventType が変わる (購読側は packaging でトラックを探すため、購読の動作は変わらない)
   - @voluntas
-- [CHANGE] moqt-devtools の Namespace の初期値を `devtools/{ランダムな 16 文字}` にする
+- [CHANGE] moqt-devtools の Namespace の初期値を `moqt/devtools/{ランダムな 16 文字}` にする
   - 複数の devtools が同じ relay に繋がっても namespace が衝突しないようにする。共有するときは Copy URL や Save で持ち出す。Namespace は接続先の特定に使うため、URI Fragment の左に置く
   - @voluntas
 - [CHANGE] `MediaReceiverStats.avSync` を追加する
