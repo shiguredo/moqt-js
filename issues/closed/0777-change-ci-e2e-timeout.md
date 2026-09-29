@@ -1,7 +1,7 @@
 # CI の e2e ジョブのタイムアウトを 15 分にする
 
 - Created: 2026-09-29
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-29
 - Branch: feature/change-ci-e2e-timeout
 - Polished: {YYYY-MM-DD}
 
@@ -27,7 +27,9 @@
 
 ## 解決方法
 
-{未着手}
+- `.github/workflows/ci.yml` の e2e ジョブの `timeout-minutes` を 10 から 15 に変更した
+- テストの内容と並列度 (`playwright.config.ts` の `workers: 1` / `fullyParallel: false`) は変更していない
+- PR #412 の 1 回目の e2e が 10m33s でキャンセルされ、再実行が 6m20s で成功したことを根拠にした
 
 ## 参照
 
