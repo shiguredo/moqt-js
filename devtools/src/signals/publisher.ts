@@ -86,7 +86,8 @@ export const newGroupRequested = signal(false);
 // 受けた新しい Group の要求の数 (配信の開始からの累積)
 export const newGroupRequestsReceived = signal(0);
 export const videoStreamCleanup = signal<(() => void) | null>(null);
-// キーフレーム間隔 (frames)。既定は connectionSettings と同じ 2 秒ぶん
+// キーフレーム間隔 (frames)。既定は framerate 30 の 2 秒ぶん。配信の開始時に接続設定
+// (signals/connectionSettings.ts) の値で上書きするため、ここは配信を始める前の値になる
 export const keyframeInterval = signal(60);
 export const pubCurrentObjectId = signal(0);
 

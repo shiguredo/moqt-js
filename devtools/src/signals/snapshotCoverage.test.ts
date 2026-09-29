@@ -178,7 +178,8 @@ const PUBLISHER_COVERAGE: CoverageExpectation = {
     framesSinceKeyFrame: "キーフレームの間隔を数える途中の値",
     newGroupRequested: "NEW_GROUP_REQUEST を処理している途中かどうか",
     videoStreamCleanup: "映像の後始末の実体 (統計ではない)",
-    keyframeInterval: "接続設定の keyframeIntervalFrames と同じ値を配信側が持っている",
+    keyframeInterval:
+      "配信の開始時に接続設定の keyframeIntervalFrames から写した値で、配信側だけの設定ではない",
     pubCurrentObjectId: "Object ID の採番の途中の値",
     audioEncoder: "音声のエンコーダの実体。音声の送信状態は audio に出す",
     audioStream: "音声の MediaStream の実体 (統計ではない)",

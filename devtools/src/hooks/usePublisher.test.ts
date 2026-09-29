@@ -7,7 +7,6 @@ import {
   buildPublisherCatalogOptionsFromSettings,
   resolveAudioConfigToSend,
   resolveAudioPublishable,
-  shouldRequestKeyFrame,
   decideKeyFrame,
   usePublisher,
 } from "./usePublisher";
@@ -27,9 +26,6 @@ const VIDEO_WIDTH = 1280;
 const VIDEO_HEIGHT = 720;
 const VIDEO_FRAMERATE = 30;
 const VIDEO_BITRATE = 2_000_000;
-
-// キーフレーム間隔の既定値 (devtools/src/signals/publisher.ts の keyframeInterval)
-const DEFAULT_KEYFRAME_INTERVAL = 60;
 
 // 検証対象の全 codec。catalog の codec 文字列は getEncoderConfig と一致していなければ
 // 購読側が Decoder を設定できない (Catalog 誤記がそのまま配信不能になる)。
@@ -91,7 +87,9 @@ function resetPublisherSignals(): void {
   pub.objectsWithExtensions.value = 0;
   pub.frameReader.value = null;
   pub.videoStreamCleanup.value = null;
-  pub.keyframeInterval.value = DEFAULT_KEYFRAME_INTERVAL;
+  // 配信側の signal の初期値 (signals/publisher.ts)。配信の開始時に接続設定の値で
+  // 上書きされるため、テストでも配信を始める前の値へ戻す
+  pub.keyframeInterval.value = 60;
   pub.pubCurrentObjectId.value = 0;
   // 音声の signal も初期化する (テスト間で状態を持ち越さない)
   pub.audioPublisher.value = null;
@@ -346,6 +344,7 @@ test("buildObjectSendPlan: payload は chunk の data をそのまま使う", ()
 // 先頭フレームと keyframeInterval フレームごとにキーフレームを要求する。
 // 間隔を無視して全フレームをキーフレームにすると帯域を浪費し、
 // 要求が一度も出ないと購読開始時に復号を始められない。
+// 間隔そのものの判定 (境界値と無効値) は utils/keyframeInterval.test.ts が固定する。
 // NEW_GROUP_REQUEST (draft-ietf-moq-transport-21 §9.20.20) を受けたら、次に符号化するフレームを
 // キーフレームにして新しい Group を始め、そこから keyframeInterval を数え直す。
 // 次のフレームまでに複数の要求が届いても、キーフレームは 1 枚にまとまる
@@ -380,38 +379,6 @@ test("decideKeyFrame: 要求が無ければ keyframeInterval ごとにキーフ�
   assert.deepEqual(decideKeyFrame(60, 60, false), { keyFrame: true, nextFramesSinceKeyFrame: 1 });
   // 要求があれば間隔の途中でもキーフレームにする
   assert.deepEqual(decideKeyFrame(7, 60, true), { keyFrame: true, nextFramesSinceKeyFrame: 1 });
-});
-
-test("shouldRequestKeyFrame: 先頭フレームと keyframeInterval ごとに true になる", () => {
-  assert.equal(shouldRequestKeyFrame(0, DEFAULT_KEYFRAME_INTERVAL), true);
-  assert.equal(shouldRequestKeyFrame(DEFAULT_KEYFRAME_INTERVAL, DEFAULT_KEYFRAME_INTERVAL), true);
-  assert.equal(
-    shouldRequestKeyFrame(DEFAULT_KEYFRAME_INTERVAL * 2, DEFAULT_KEYFRAME_INTERVAL),
-    true,
-  );
-
-  // 間隔の途中はキーフレームを要求しない
-  assert.equal(shouldRequestKeyFrame(1, DEFAULT_KEYFRAME_INTERVAL), false);
-  assert.equal(shouldRequestKeyFrame(2, DEFAULT_KEYFRAME_INTERVAL), false);
-  assert.equal(
-    shouldRequestKeyFrame(DEFAULT_KEYFRAME_INTERVAL - 1, DEFAULT_KEYFRAME_INTERVAL),
-    false,
-  );
-  assert.equal(
-    shouldRequestKeyFrame(DEFAULT_KEYFRAME_INTERVAL + 1, DEFAULT_KEYFRAME_INTERVAL),
-    false,
-  );
-  assert.equal(
-    shouldRequestKeyFrame(DEFAULT_KEYFRAME_INTERVAL * 2 - 1, DEFAULT_KEYFRAME_INTERVAL),
-    false,
-  );
-});
-
-// 間隔 1 は「全フレームをキーフレームにする」設定として扱われる。
-test("shouldRequestKeyFrame: 間隔 1 では全フレームで true になる", () => {
-  for (const framesEncoded of [0, 1, 2, 3]) {
-    assert.equal(shouldRequestKeyFrame(framesEncoded, 1), true);
-  }
 });
 
 // ============================================================================

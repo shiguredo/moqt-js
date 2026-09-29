@@ -2,6 +2,7 @@ import type { ComponentChildren } from "preact";
 import { signal } from "@preact/signals";
 import { useId } from "preact/hooks";
 import { isMediaStreamTrackProcessorAvailable } from "moqt-js";
+import { DEFAULT_VIDEO_FRAMERATE } from "../../../src/codec/config.ts";
 import * as settings from "../signals/connectionSettings";
 import { persistServerUrl, relayUriMemoryButtons } from "../utils/serverUrlStore";
 import { isConnectionSettingsOpen, toggleConnectionSettings } from "../signals/layout";
@@ -13,6 +14,7 @@ import {
   type TrackNameProblem,
 } from "../utils/publishTracks";
 import { MESSAGES_EVENT_TYPE, EVENT_TRACK_NAME } from "../utils/eventTimeline";
+import { KEYFRAME_INTERVAL_OPTIONS } from "../utils/keyframeInterval";
 import type {
   AudioDelivery,
   AudioSourceType,
@@ -1446,6 +1448,7 @@ export function ConnectionSettings() {
                     </label>
                     <select
                       id="keyframeInterval"
+                      data-testid="keyframe-interval"
                       value={settings.keyframeInterval.value}
                       onChange={(e) =>
                         (settings.keyframeInterval.value = Number(e.currentTarget.value))
@@ -1453,16 +1456,12 @@ export function ConnectionSettings() {
                       disabled={settings.settingsDisabled.value}
                       class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white disabled:bg-slate-100 disabled:cursor-not-allowed"
                     >
-                      <option value="30">1 sec</option>
-                      <option value="60">2 sec</option>
-                      <option value="120">4 sec</option>
-                      <option value="240">8 sec</option>
-                      <option value="300">10 sec</option>
-                      <option value="900">30 sec</option>
-                      <option value="1800">60 sec</option>
-                      <option value="2700">90 sec</option>
-                      <option value="3600">120 sec</option>
-                      <option value="7200">240 sec</option>
+                      {/* 値は frames。ラベルは既定 framerate で割った秒数。選択肢は URL の検証と同じ定数から生成する */}
+                      {KEYFRAME_INTERVAL_OPTIONS.map((frames) => (
+                        <option key={frames} value={frames}>
+                          {frames / DEFAULT_VIDEO_FRAMERATE} sec
+                        </option>
+                      ))}
                     </select>
                   </div>
                 </div>

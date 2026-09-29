@@ -275,6 +275,11 @@
   - 上限で捨てたログの vnode はキャッシュから落とす。`data` と `payload` は追加後に書き換えない前提になる (行を描画し直さないため、書き換えても表示は古いまま)
   - 1 件追加のコストは表示中の件数に比例する分が残る (1000 件で約 3 ms のうち、表示中の子の走査が大半)。表示する行を画面に入る分だけにする対応は別に行う
   - @voluntas
+- [FIX] moqt-devtools の Keyframe Interval の復元に値域の検証がなく、0 でキーフレームを要求しなくなるのを修正する
+  - クエリパラメータ `keyframeInterval` を select の選択肢と同じ許可リストで検証し、0 / 負値 / 非整数 / 10 進表記でない値 / 選択肢に無い値 / 空文字は既定値のまま残す。`Number.parseInt` の結果だけを見る検証では `"1.5"` が 1、`"30abc"` が 30 として受理されていた
+  - キーフレームの判定を devtools の共有モジュール (`devtools/src/utils/keyframeInterval.ts`) に寄せ、0 / 負値 / 非整数 / NaN / ±Infinity は無効な間隔として既定値 (3600 フレーム) に正規化したうえでライブラリの `shouldSendKeyFrame` に委譲する (配信ループを抜けないよう throw しない)。剰余の実装は devtools に重複しなくなる
+  - Keyframe Interval の moqt-devtools の select の選択肢と、無効な間隔を正規化するときに使う既定値の定義を共有モジュールに寄せ、`ConnectionSettings.tsx` の選択肢は定数から生成する。各画面の signal の初期値 (moqt-devtools 300 / 配信側 60 / webcodecs-devtools 3600 フレーム) は変えない
+  - @voluntas
 - [FIX] END_OF_GROUP の最終 Object ID 追跡が、購読が続く間 Group 数に比例して増え続けるのを修正する
   - 追跡を Track Alias と Group ID の 2 段 Map にし、Track Alias 1024 件 / 1 Track Alias あたり Group 1024 件の上限を設け、超過時は最も古いエントリから破棄する (`src/session/endOfGroupTracking.ts`)
   - 上限で破棄した Track Alias / Group では、既知の最終 Object ID が無いために §12.1 条件 4 の判定自体を行わない。超過を検出できなくなるが検出漏れだけで、誤検出は生まない
