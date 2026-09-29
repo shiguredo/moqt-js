@@ -1,7 +1,7 @@
 # ライブラリ側の映像デコーダが恒久エラーで Worker を再生成し続ける
 
 - Created: 2026-09-23
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-29
 - Branch: feature/fix-video-decoder-reset-loop
 - Polished: 2026-09-23
 
@@ -60,4 +60,25 @@
 
 ## 解決方法
 
-{未着手}
+`src/codec/configSupport.ts` に `isVideoDecoderConfigSupported()` を新設し、`VideoDecoder.isConfigSupported` の false と reject の両方を非対応として扱う判定を 1 箇所にまとめた (devtools の codec-test も同じ関数を使う)。`src/codec/VideoDecoder.ts` の `applyConfig()` を configure と reset の共通経路にし、Worker も `VideoDecoder` も作る前にこの確認を通す。非対応なら `Decoder codec not supported: <codec>` で失敗する (WebCodecs 非搭載の環境は別文言にした)。
+
+`src/codec/decoderResetBudget.ts` に純粋クラス `DecoderResetBudget` を新設した。同じ config での再初期化は復号フレームを 1 枚も出力しないまま連続 3 回までとし、復号フレームの出力と `configure()` の呼び出しで消費を 0 に戻す (`reset()` の再入では戻さない)。上限・復帰・0 未満防止は `src/codec/decoderResetBudget.test.ts` の Node 単体テストで固定した。
+
+`reset()` は例外を投げない `Promise<boolean>` になった。`lastConfig` 無し・予算切れ・事前確認の非対応・再初期化の失敗では false を返し、`teardownQuietly()` で Worker と `VideoDecoder` を破棄して `configured` を false にする (以降の `decode()` は何もしない)。`callbacks.error` は呼ばない。`teardown()` は破棄対象を控えてから参照と `configured` を先に落とす形にし、破棄が失敗しても `reset()` が reject しないことを構造的にした。
+
+`configure()` と `reset()` の両方に、対応確認の await をまたいだ追い越し判定を入れた。await の前に世代と `lastConfig` を控え、await の後に変わっていれば生成せずに中断する。これにより、解放 (`close()`) や後発の `configure()` と競合しても、破棄済みの Wrapper が Worker や `VideoDecoder` を作り直してリークすることがない (3 周目のレビューで実測された退行を塞いだ)。
+
+`src/createMediaSubscriber.ts` の映像 error コールバックは `void this.videoDecoder?.reset()` のままにした。打ち切りは `reset()` の中で完結し、呼び出し側に残る作業が無いためである。`VideoDecoderWrapper.decode()` の未構成警告は `warnNotConfiguredOnce()` で 1 回に絞った (打ち切り後は受信のたびに警告が出るため)。
+
+Node テスト (`src/codec/VideoDecoder.test.ts` / `configSupport.test.ts` / `decoderResetBudget.test.ts`) と、`devtools/src/codec-test/video.ts` に追加した実ブラウザ駆動の経路 (`tests/e2e/codec-wrappers.spec.ts` の 10 テスト: 非対応 codec、予算の打ち切り、予算の復帰、configure と close の競合、交錯する reset) で固定した。
+
+設計方針との差 (実装時に判断した点):
+
+- error コールバックは `reset()` の戻り値を見ない。打ち切りは `reset()` 内で完結するため、呼び出し側で結果を扱う必要が無い
+- Node テストは純粋クラスに限定せず、WebCodecs の境界 (`globalThis.VideoDecoder`) を置き換えて Wrapper も駆動する。e2e では「configure 成功後に対応確認が false へ変わる」経路を駆動できないため
+- 追い越された `reset()` も予算を 1 回分消費する (予算は再初期化の試行で消費する規則のため)。追い越された `configure()` は reject し、その旨のエラーが `start()` の失敗として利用者に届く
+- 予算の復帰は「`lastConfig` と参照の異なる config」ではなく「`configure()` が呼ばれたとき」とした (`getVideoDecoderConfig()` が毎回新しいオブジェクトを返すため等価)
+
+`CHANGES.md` の `## develop` の FIX 群先頭に `[FIX]` を追記した。`issues/0657` の「reset() の戻り値を見て結果を扱う」という記述は、上記の判断に合わせて更新した。
+
+`npx vp check` / `npx vp test --run` (3348 テスト) / `npx vp run e2e-test` (76 テスト) が通る。
