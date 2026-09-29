@@ -1,31 +1,27 @@
 // デコーダー用 DedicatedWorker
 
-interface DecoderInitMessage {
-  type: "init";
-  config: VideoDecoderConfig;
-}
-
-interface DecoderDecodeMessage {
-  type: "decode";
-  data: ArrayBuffer;
-  chunkType: "key" | "delta";
-  timestamp: number;
-  duration: number;
-}
-
-interface DecoderCloseMessage {
-  type: "close";
-}
-
-interface DecoderResetKeyframeWaitMessage {
-  type: "resetKeyframeWait";
-}
+// コーデックのライフサイクル (state 判定と閉じる前の確認) と初期化応答の契約は、
+// ライブラリ側の Worker と同じ規則で動かす必要があるため共有モジュールを import する
+import {
+  closeCodecQuiet,
+  isCodecConfigured,
+  replaceCodec,
+} from "../../../../src/codec/codecLifecycle.ts";
+import { runWorkerInit, workerErrorResponse } from "../../../../src/codec/workerConfigure.ts";
+// Wrapper とのメッセージの型はプロトコルの正本 (src/codec/workerMessages.ts) を使う
+import {
+  ignoreUnknownWorkerRequest,
+  type VideoDecoderWorkerResetKeyframeWaitRequest,
+  type WorkerCloseRequest,
+  type WorkerDecodeRequest,
+  type WorkerInitRequest,
+} from "../../../../src/codec/workerMessages.ts";
 
 type DecoderWorkerMessage =
-  | DecoderInitMessage
-  | DecoderDecodeMessage
-  | DecoderCloseMessage
-  | DecoderResetKeyframeWaitMessage;
+  | WorkerInitRequest<VideoDecoderConfig>
+  | WorkerDecodeRequest
+  | WorkerCloseRequest
+  | VideoDecoderWorkerResetKeyframeWaitRequest;
 
 let decoder: VideoDecoder | null = null;
 // configure() 後、最初のキーフレームを受信するまでデルタフレームをスキップ
@@ -36,46 +32,40 @@ self.onmessage = (e: MessageEvent<DecoderWorkerMessage>) => {
 
   switch (message.type) {
     case "init": {
-      if (decoder) {
-        // エラー状態では既に closed になっているのでチェック
-        if (decoder.state !== "closed") {
-          decoder.close();
-        }
-        decoder = null;
-      }
-
-      // 新しいデコーダーはキーフレームを必要とする
-      needsKeyframe = true;
-
-      decoder = new VideoDecoder({
-        output: (frame: VideoFrame) => {
-          // VideoFrame は transferable
-          self.postMessage(
-            {
-              type: "decoded",
-              frame,
+      // 初期化は runWorkerInit() に委ねる。configure() の同期 throw は "error" 応答になり、
+      // "configured" は送られない (Wrapper の configure() が reject してハングしない)。
+      // message が空文字にならないよう、失敗理由の文言化も共有モジュールに任せる
+      const result = runWorkerInit(() => {
+        decoder = replaceCodec(
+          decoder,
+          new VideoDecoder({
+            output: (frame: VideoFrame) => {
+              // VideoFrame は transferable
+              self.postMessage(
+                {
+                  type: "decoded",
+                  frame,
+                },
+                { transfer: [frame] },
+              );
             },
-            { transfer: [frame] },
-          );
-        },
-        error: (error: DOMException) => {
-          self.postMessage({
-            type: "error",
-            message: error.message,
-          });
-        },
-      });
+            error: (error: DOMException) => {
+              self.postMessage(workerErrorResponse(error));
+            },
+          }),
+        );
 
-      decoder.configure(message.config);
+        // 新しいデコーダーはキーフレームを必要とする
+        needsKeyframe = true;
 
-      self.postMessage({
-        type: "configured",
+        decoder.configure(message.config);
       });
+      self.postMessage(result);
       break;
     }
 
     case "decode": {
-      if (decoder && decoder.state === "configured") {
+      if (isCodecConfigured(decoder)) {
         // キーフレームが必要な状態でデルタフレームを受信した場合はスキップ
         if (needsKeyframe && message.chunkType !== "key") {
           self.postMessage({
@@ -100,23 +90,15 @@ self.onmessage = (e: MessageEvent<DecoderWorkerMessage>) => {
           decoder.decode(chunk);
         } catch (error) {
           // decode() は同期的にエラーをスローすることがある
-          self.postMessage({
-            type: "error",
-            message: error instanceof Error ? error.message : String(error),
-          });
+          self.postMessage(workerErrorResponse(error));
         }
       }
       break;
     }
 
     case "close": {
-      if (decoder) {
-        // エラー状態では既に closed になっているのでチェック
-        if (decoder.state !== "closed") {
-          decoder.close();
-        }
-        decoder = null;
-      }
+      closeCodecQuiet(decoder);
+      decoder = null;
       break;
     }
 
@@ -125,5 +107,8 @@ self.onmessage = (e: MessageEvent<DecoderWorkerMessage>) => {
       needsKeyframe = true;
       break;
     }
+
+    default:
+      ignoreUnknownWorkerRequest(message);
   }
 };

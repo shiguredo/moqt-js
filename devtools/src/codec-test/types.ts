@@ -170,12 +170,35 @@ export interface VideoDecoderTestResult {
 }
 
 /**
+ * 非対応 codec で configure() と reset() が失敗したときの観測結果
+ *
+ * ライブラリ側の VideoDecoderWrapper と devtools の DecoderWrapper の e2e テストで共有する。
+ * どちらも「Worker も VideoDecoder も作らずに configure() が失敗し、失敗した設定は
+ * reset() で再試行されない」ことを同じ形で観測する。
+ */
+export interface DecoderConfigureFailureObservation {
+  // configure の失敗理由 (失敗しなかった場合は null)
+  configureErrorMessage: string | null;
+  // configure の失敗後の state (unconfigured のまま)
+  stateAfterFailedConfigure: string;
+  // 同じ config の reset() の結果 (再試行せず false)
+  resetReturned: boolean;
+  // reset() の後の state (unconfigured のまま)
+  stateAfterReset: string;
+  // output コールバックの呼び出し回数 (1 枚も復号しないため 0 件)
+  outputCount: number;
+  // error コールバックに届いたメッセージ (configure の失敗も reset() の打ち切りも
+  // 通知しないため 0 件)
+  errorMessages: string[];
+}
+
+/**
  * VideoDecoderWrapper の非対応 codec のテスト結果
  *
  * 実ブラウザが復号に対応していないコーデックを実測で選び、configure() と reset() が
  * 失敗する経路を観測する。
  */
-export interface VideoDecoderUnsupportedCodecTestResult {
+export interface VideoDecoderUnsupportedCodecTestResult extends DecoderConfigureFailureObservation {
   test: string;
   useWorker: boolean;
   // 実測で選んだ非対応コーデックの名前
@@ -186,17 +209,47 @@ export interface VideoDecoderUnsupportedCodecTestResult {
   supportedCodecs: string[];
   // configure 前の state (unconfigured)
   stateBeforeConfigure: string;
-  // configure の失敗理由 (失敗しなかった場合は null)
-  configureErrorMessage: string | null;
-  // configure の失敗後の state (unconfigured のまま)
-  stateAfterFailedConfigure: string;
-  // 同じ config で reset() した結果 (false)
-  resetReturned: boolean;
-  // reset() 後の state (unconfigured のまま)
-  stateAfterReset: string;
-  // output コールバックの呼び出し回数 (1 枚も復号しないため 0 件)
-  outputCount: number;
-  // error コールバックに届いたメッセージ (configure も reset も通知しないため 0 件)
+}
+
+/**
+ * 同じ config の reset() で復帰の予算を使い切ったときの観測結果
+ *
+ * ライブラリ側の VideoDecoderWrapper と devtools の DecoderWrapper の e2e テストで共有する。
+ */
+export interface DecoderResetBudgetExhaustionObservation {
+  // lastConfig が無いときの reset() の結果 (false)
+  resetWithoutConfig: boolean;
+  // 対応 codec の configure 直後の state (configured)
+  stateAfterConfigure: string;
+  // 復号フレームを出さずに reset() を繰り返した結果 (上限の 3 回が true、4 回目が false)
+  resetResults: boolean[];
+  // 打ち切り直後の state (unconfigured)
+  stateAfterBudgetExhausted: string;
+  // 打ち切り後に実 chunk を投入して復号したフレーム数 (configured = false のため 0 件)
+  framesDecodedAfterBudgetExhausted: number;
+  // error コールバックに届いたメッセージ (reset() の失敗も通知しないため 0 件)
+  errorMessages: string[];
+}
+
+/**
+ * 予算を使い切った状態から復帰の条件で予算が戻ったときの観測結果
+ *
+ * ライブラリ側の VideoDecoderWrapper と devtools の DecoderWrapper の e2e テストで共有する。
+ * 予算を使い切るまでに呼ぶ reset() の回数はテストごとに異なるため、結果の並びは
+ * テスト側の assert で固定する。
+ */
+export interface DecoderResetRestoreObservation {
+  // 復号フレームを出す前に reset() を繰り返した結果
+  resetResultsBeforeDecodedFrame: boolean[];
+  // 復号フレームを 1 枚出力した後の reset() の結果 (予算が戻るため true)
+  resetAfterDecodedFrame: boolean;
+  // 予算を使い切ってから参照の異なる config で configure するまでの reset() の結果
+  resetResultsBeforeDifferentConfig: boolean[];
+  // 参照の異なる config の configure 後の reset() の結果 (予算が戻るため true)
+  resetAfterDifferentConfig: boolean;
+  // 参照の異なる config の configure と reset() の後の state (configured)
+  stateAfterDifferentConfigReset: string;
+  // error コールバックに届いたメッセージ (0 件)
   errorMessages: string[];
 }
 
@@ -206,25 +259,13 @@ export interface VideoDecoderUnsupportedCodecTestResult {
  * 復号フレームを 1 枚も出さないまま同じ config で reset() を繰り返し、
  * 上限で打ち切られることを観測する。
  */
-export interface VideoDecoderResetBudgetTestResult {
+export interface VideoDecoderResetBudgetTestResult extends DecoderResetBudgetExhaustionObservation {
   test: string;
   useWorker: boolean;
-  // lastConfig が無いときの reset() の結果 (false)
-  resetWithoutConfig: boolean;
   // lastConfig が無いときの reset() の直後の state (unconfigured)
   stateAfterResetWithoutConfig: string;
-  // 対応 codec の configure 直後の state (configured)
-  stateAfterConfigure: string;
-  // 復号フレームを出さずに reset() を繰り返した結果 (上限の 3 回が true、4 回目が false)
-  resetResults: boolean[];
-  // 打ち切り直後の state (unconfigured)
-  stateAfterBudgetExhausted: string;
   // 打ち切り後に実 chunk を投入して decode() を呼んだ回数
   decodeAttemptsAfterBudgetExhausted: number;
-  // 打ち切り後に実 chunk を投入して復号したフレーム数 (configured = false のため 0 件)
-  framesDecodedAfterBudgetExhausted: number;
-  // error コールバックに届いたメッセージ (reset() の失敗も通知しないため 0 件)
-  errorMessages: string[];
 }
 
 /**
@@ -261,24 +302,11 @@ export interface VideoDecoderConcurrentResetTestResult {
  * 予算を使い切った状態から、復号フレームの出力と参照の異なる config の configure で
  * 予算が戻ることを観測する。
  */
-export interface VideoDecoderRestoreTestResult {
+export interface VideoDecoderRestoreTestResult extends DecoderResetRestoreObservation {
   test: string;
   useWorker: boolean;
-  // 復号フレームを出す前に予算を使い切るまでの reset() の結果 (すべて true)
-  resetResultsBeforeDecodedFrame: boolean[];
-  // 復号フレームを 1 枚出力した後の reset() の結果 (予算が戻るため true)
-  resetAfterDecodedFrame: boolean;
-  // 使い切ってから参照の異なる config で configure するまでの reset() の結果
-  // (残り 2 回が true、3 回目が false)
-  resetResultsBeforeDifferentConfig: boolean[];
-  // 参照の異なる config の configure 後の reset() の結果 (予算が戻るため true)
-  resetAfterDifferentConfig: boolean;
-  // 参照の異なる config の configure と reset() の後の state (configured)
-  stateAfterDifferentConfigReset: string;
   // 復号したフレーム数 (復帰条件の確認用)
   frameCount: number;
-  // error コールバックに届いたメッセージ (0 件)
-  errorMessages: string[];
 }
 
 /**
@@ -418,6 +446,111 @@ export interface VideoDecoderCloseDuringConfigureTestResult {
   errorMessages: string[];
 }
 
+/**
+ * 対応確認 (VideoDecoder.isConfigSupported) の実測結果
+ *
+ * 対応確認には false を返す経路と reject する経路があるため、テスト内で直接呼んで
+ * どちらの分岐に入る設定かを確かめた結果を持つ。
+ */
+export interface ConfigSupportObservation {
+  // supported の値 (reject した場合は null)
+  supported: boolean | null;
+  // reject したか
+  rejected: boolean;
+}
+
+/**
+ * devtools の DecoderWrapper の非対応 codec のテスト結果
+ *
+ * devtools の購読側が使う Wrapper (devtools/src/utils/DecoderWrapper.ts) が、非対応 codec の
+ * configure で Worker も VideoDecoder も作らずに失敗することと、失敗した設定が残らずに
+ * 同じ config の reset() が false を返すことを観測する。isConfigSupported が false を返す
+ * 経路と reject する経路を分けて固定する。
+ */
+export interface DevtoolsDecoderUnsupportedCodecTestResult extends DecoderConfigureFailureObservation {
+  test: string;
+  useWorker: boolean;
+  // 対応確認が false を返す codec 文字列 (vp09.99.99.99)
+  unsupportedCodecString: string;
+  // false を返す codec の対応確認の実測結果
+  unsupportedCodecSupport: ConfigSupportObservation;
+  // 対応確認が reject する codec 文字列 (空文字)
+  invalidCodecString: string;
+  // reject する codec の対応確認の実測結果
+  invalidCodecSupport: ConfigSupportObservation;
+  // reject する codec の configure の失敗理由 (失敗しなかった場合は null)
+  invalidCodecConfigureErrorMessage: string | null;
+  // reject する codec の configure 後の state (unconfigured のまま)
+  stateAfterInvalidCodecConfigure: string;
+  // reject する codec の reset() の結果 (false)
+  invalidCodecResetReturned: boolean;
+}
+
+/**
+ * devtools の DecoderWrapper の復帰予算のテスト結果
+ *
+ * 同じ config で復号フレームを出さないまま reset() を繰り返すと上限の 3 回で打ち切られる
+ * ことと、予算が戻る 2 条件 (復号フレームの出力 / 参照の異なる config の configure) を、
+ * それぞれ予算を使い切った状態から観測する。あわせて、追い越されて失敗した configure() が
+ * 予算を戻さないこと (戻すと呼び出し側が毎回新しい設定を渡すだけで上限が無効になる) を
+ * 観測する。
+ */
+export interface DevtoolsDecoderResetBudgetTestResult
+  extends DecoderResetBudgetExhaustionObservation, DecoderResetRestoreObservation {
+  test: string;
+  useWorker: boolean;
+  // configure に使う対応 codec の codec 文字列 (vp8)
+  supportedCodecString: string;
+  // 予算を使い切った状態で出力した復号フレーム数 (1 件以上)
+  framesDecodedBeforeRestore: number;
+  // 予算を使い切ってから追い越される configure() を始めるまでの reset() の結果 (上限の 3 回が true)
+  resetResultsBeforeSupersededConfigure: boolean[];
+  // 追い越されて失敗した configure() の直後に呼んだ reset() の結果 (予算が戻っていないため false)
+  resetAfterSupersededConfigure: boolean;
+  // 追い越された configure() の失敗理由
+  supersededConfigureErrorMessage: string | null;
+  // その reset() の後の state (打ち切ったため unconfigured)
+  stateAfterSupersededConfigure: string;
+}
+
+/**
+ * devtools の DecoderWrapper の configure() の対応確認中に close() が先行したときのテスト結果
+ *
+ * VideoDecoderCloseDuringConfigureTestResult と同じ観測に加えて、close() が終端として
+ * 働くこと (close() の後の reset() が作り直さず false を返すこと) を観測する。
+ */
+export interface DevtoolsDecoderCloseDuringConfigureTestResult extends VideoDecoderCloseDuringConfigureTestResult {
+  // 解放 (close) が先行した configure() の後の reset() の結果 (close() 済みのため false。
+  // lastConfig は configure が失敗したため残っておらず、closed の判定が先に効く)
+  resetAfterAbortedConfigure: boolean;
+  // やり直した configure() と close() の後の reset() の結果 (close は終端のため false)
+  resetAfterClose: boolean;
+  // close() の後の reset() の後の state (unconfigured のまま)
+  stateAfterCloseReset: string;
+}
+
+/**
+ * devtools の DecoderWrapper の並行する configure() のテスト結果
+ *
+ * configure() は対応確認を await するため、先発の await 中に後発の configure() が始まると
+ * 先発は世代の判定で失敗し、後発がデコーダーの所有権を持つ。先発が Worker も VideoDecoder も
+ * 作らないことと、後発の構成が残って実 chunk を復号できることを観測する。
+ */
+export interface DevtoolsDecoderConcurrentConfigureTestResult {
+  test: string;
+  useWorker: boolean;
+  // 先発の configure の失敗理由 (後発に追い越されて失敗する)
+  firstConfigureErrorMessage: string | null;
+  // 後発の configure の失敗理由 (成功するため null)
+  secondConfigureErrorMessage: string | null;
+  // 交錯の直後の state (configured)
+  stateAfterConcurrentConfigure: string;
+  // 後発の configure の後に実 chunk を復号したフレーム数 (1 件以上)
+  framesDecodedAfterConcurrentConfigure: number;
+  // error コールバックに届いたメッセージ (configure の失敗も通知しないため 0 件)
+  errorMessages: string[];
+}
+
 export interface CodecTestResultMap {
   videoEncoderDirect: VideoEncoderTestResult;
   videoEncoderWorker: VideoEncoderTestResult;
@@ -433,6 +566,14 @@ export interface CodecTestResultMap {
   videoDecoderConcurrentResetWorker: VideoDecoderConcurrentResetTestResult;
   videoDecoderCloseDuringConfigureDirect: VideoDecoderCloseDuringConfigureTestResult;
   videoDecoderCloseDuringConfigureWorker: VideoDecoderCloseDuringConfigureTestResult;
+  devtoolsDecoderUnsupportedCodecDirect: DevtoolsDecoderUnsupportedCodecTestResult;
+  devtoolsDecoderUnsupportedCodecWorker: DevtoolsDecoderUnsupportedCodecTestResult;
+  devtoolsDecoderResetBudgetDirect: DevtoolsDecoderResetBudgetTestResult;
+  devtoolsDecoderResetBudgetWorker: DevtoolsDecoderResetBudgetTestResult;
+  devtoolsDecoderCloseDuringConfigureDirect: DevtoolsDecoderCloseDuringConfigureTestResult;
+  devtoolsDecoderCloseDuringConfigureWorker: DevtoolsDecoderCloseDuringConfigureTestResult;
+  devtoolsDecoderConcurrentConfigureDirect: DevtoolsDecoderConcurrentConfigureTestResult;
+  devtoolsDecoderConcurrentConfigureWorker: DevtoolsDecoderConcurrentConfigureTestResult;
   audioEncoderDirect: AudioEncoderTestResult;
   audioEncoderWorker: AudioEncoderTestResult;
   audioDecoderDirect: AudioDecoderTestResult;

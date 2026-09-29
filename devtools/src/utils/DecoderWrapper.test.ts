@@ -7,9 +7,10 @@
  * ここではブラウザ API に依存しない「未設定時の状態機械」と、
  * 設定が無い状態での reset の扱いだけを固定する。
  *
- * 実ブラウザでの decode 契約 (キーフレーム待ち・resetKeyframeWait・復号フレーム) は
- * tests/e2e/codec-wrappers.spec.ts が、ライブラリ側の VideoDecoderWrapper
- * (src/codec/VideoDecoder.ts) を実 Chromium で検証している。
+ * 実ブラウザでの configure / decode / reset の契約 (非対応 codec の事前確認・キーフレーム待ち・
+ * resetKeyframeWait・復号フレーム・復帰の予算) は tests/e2e/codec-wrappers.spec.ts が、
+ * この Wrapper とライブラリ側の VideoDecoderWrapper (src/codec/VideoDecoder.ts) の両方を
+ * 実 Chromium で検証している。
  */
 
 import { test, assert } from "vite-plus/test";
@@ -65,15 +66,17 @@ test("DecoderWrapper: 生成しただけでは Worker を起動しない", () =>
   assert.equal(wrapper.state, "unconfigured");
 });
 
-// 設定が無い状態での reset() は何もせずに戻る (console.warn のみ)。
-// デコーダエラーからの復帰が configure 前に走っても例外にしない。
-test("DecoderWrapper: 設定が無い状態の reset は例外を投げない", async () => {
+// 設定が無い状態での reset() は再初期化せず false を返す (console.warn のみ)。
+// デコーダエラーからの復帰が configure 前に走っても例外にせず、呼び出し側が
+// 打ち切りとして扱えるようにする。
+test("DecoderWrapper: 設定が無い状態の reset は例外を投げず false を返す", async () => {
   for (const useWorker of [false, true]) {
     const { callbacks, counts } = makeCallbacks();
     const wrapper = new DecoderWrapper(useWorker, callbacks);
 
-    await wrapper.reset();
+    const restarted = await wrapper.reset();
 
+    assert.isFalse(restarted);
     assert.equal(wrapper.state, "unconfigured");
     assert.equal(counts.errors, 0);
   }

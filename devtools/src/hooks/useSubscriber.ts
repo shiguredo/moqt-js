@@ -2178,10 +2178,33 @@ export function useSubscriber(
 
       instance.statusMessage.value = "Preparing decoder...";
 
-      // デコーダラッパーを生成する
-      const useWorker = settings.useDedicatedWorker.value;
+      // デコーダーのエラー後に再初期化する。再初期化できなかった場合は、受信のたびに
+      // Worker と VideoDecoder を作り直し続けないよう購読を止める。error コールバックは
+      // 同期のため、reset() の結果はこの非同期関数の中で await して見る
+      const restartDecoderAfterError = async (error: Error): Promise<void> => {
+        // 停止した購読では再初期化しない。reset() の configure は await の後に Worker と
+        // VideoDecoder を作るため、停止と重なると誰も破棄しないものが残る
+        if (signal.aborted) {
+          return;
+        }
+        const restarted = await decoderInstance.reset();
+        // 停止した購読の結果で表示と後始末を上書きしない (停止後は reset() が打ち切りで
+        // false を返しても、購読は既に teardownSubscriber が終えている)
+        if (signal.aborted) {
+          return;
+        }
+        if (restarted) {
+          return;
+        }
+        // 再初期化しなかった理由 (予算切れ / 設定無し / close 済み / 対応確認の失敗 /
+        // 構成の失敗) は reset() が警告に出している。表示は startSubscribing の外側の
+        // catch と同じ形にし、同じ後始末を行う
+        instance.status.value = "error";
+        instance.statusMessage.value = `Failed: decoder restart failed: ${error.message}`;
+        teardownSubscriber();
+      };
 
-      const decoderInstance = new DecoderWrapper(useWorker, {
+      const decoderInstance = new DecoderWrapper(settings.useDedicatedWorker.value, {
         output: ({ frame }) => {
           playbackTimingRef.current.recordDecodeOutput(performance.now(), frame.timestamp);
           presentFrame(frame);
@@ -2190,7 +2213,7 @@ export function useSubscriber(
           console.error(`[${subscriberId}] Decoder error:`, error);
           instance.decodeErrors.value += 1;
           // デコーダーをリセットして次のキーフレームを待つ
-          void decoderInstance.reset();
+          void restartDecoderAfterError(error);
         },
       });
 
@@ -2204,13 +2227,22 @@ export function useSubscriber(
       const decoderConfig = buildVideoDecoderConfig(videoTrackFromCatalog, catalogValue);
       const codecDisplay = `${videoTrackFromCatalog.codec} ${videoTrackFromCatalog.width}x${videoTrackFromCatalog.height}`;
 
+      // decoder は構成が終わる前でも instance に載せる。configure() の await 中に
+      // パネルが削除されると removeSubscriber が instance.decoder を見るが、未代入だと
+      // 何も破棄せず、teardownSubscriber も Map から消えた instance では早期 return する
+      // ため中断もされない。configure が解決すると Worker と VideoDecoder が残る。
+      // 先に載せておけば closeSubscriberResources が instance.decoder 経由で破棄できる。
+      // 構成前の受信は handleObject が decoderConfigured で止め、decode() も configured が
+      // false の間 early return するため、復号の挙動は変わらない
+      instance.decoder.value = decoderInstance;
+
       await decoderInstance.configure(decoderConfig);
       // 構成した decoder はキーフレームから復号を始める
       videoDecodeOrderRef.current.reset();
 
-      // configure await 中に中断された場合、ローカル decoderInstance は instance に未代入のため
-      // 中断元から見えない。startSubscribing 側で close する。
-      // DecoderWrapper.close は同期メソッドで state !== "closed" ガード付き、例外を投げない。
+      // configure await 中に中断された場合、中断元の teardownSubscriber も
+      // instance.decoder 経由で close する。configure が解決してから中断された場合は
+      // ここで閉じる。DecoderWrapper.close は同期メソッドで冪等、例外を投げない。
       if (
         checkAborted(signal, () => {
           decoderInstance.close();
@@ -2219,7 +2251,6 @@ export function useSubscriber(
         return;
       }
 
-      instance.decoder.value = decoderInstance;
       instance.decoderConfigured.value = true;
       instance.decoderState.value = decoderInstance.state;
       instance.codec.value = codecDisplay;

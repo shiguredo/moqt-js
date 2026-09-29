@@ -275,6 +275,13 @@
   - 上限で捨てたログの vnode はキャッシュから落とす。`data` と `payload` は追加後に書き換えない前提になる (行を描画し直さないため、書き換えても表示は古いまま)
   - 1 件追加のコストは表示中の件数に比例する分が残る (1000 件で約 3 ms のうち、表示中の子の走査が大半)。表示する行を画面に入る分だけにする対応は別に行う
   - @voluntas
+- [FIX] moqt-devtools の購読側で、非対応 codec のときに映像デコーダーが Worker を再生成し続けるのを修正する
+  - `devtools/src/utils/DecoderWrapper.ts` は、対応確認・復帰の予算・Worker の初期化応答・コーデックのライフサイクルをライブラリ側と共有するモジュール (`src/codec/configSupport.ts` / `src/codec/decoderResetBudget.ts` / `src/codec/workerConfigure.ts` / `src/codec/codecLifecycle.ts`) から import して使い、devtools 側の別実装と手書きの後始末をなくす。Worker の生成・公開・破棄も共有の手順に委ね、初期化の応答が `configured` より先に `error` になった場合 (Worker の読み込み失敗を含む) は Worker を破棄して `configure` を reject する
+  - `DecoderWrapper.configure()` は対応確認の await 明けに世代を判定し、待機中に `close()` / 別の `configure()` / 別の `reset()` が始まっていた場合は Worker も `VideoDecoder` も作らずに失敗する。`close()` は世代を無効化する終端であり、以降の `reset()` は作り直さず false を返す
+  - 購読側の error コールバックは `reset()` の前に購読の中断を確認し、再初期化できなかった場合は status を error にして `Failed: decoder restart failed: <message>` を表示して購読を後始末する (受信のたびに Worker と `VideoDecoder` を作り直し続けない)
+  - 購読側は `DecoderWrapper` を `configure()` の await より前に `instance.decoder` へ載せ、decode error からの再初期化が作った Worker を後始末が破棄できるようにする。復帰の予算を戻すのは世代の判定を通った `configure()` だけで、追い越されて失敗した `configure()` では戻さない (戻すと呼び出し側が毎回新しい設定を渡すだけで上限が無効になる)。未構成のまま `decode()` を呼ばれたときの警告も 1 回だけにする
+  - デコーダー Worker の init を共有の `runWorkerInit()` で実行し、`configure` の同期 throw を error 応答にする (message を読めない例外でも空文字の応答を送らない)。メッセージの型も共有のプロトコル定義を使う
+  - @voluntas
 - [FIX] moqt-devtools の Keyframe Interval の復元に値域の検証がなく、0 でキーフレームを要求しなくなるのを修正する
   - クエリパラメータ `keyframeInterval` を select の選択肢と同じ許可リストで検証し、0 / 負値 / 非整数 / 10 進表記でない値 / 選択肢に無い値 / 空文字は既定値のまま残す。`Number.parseInt` の結果だけを見る検証では `"1.5"` が 1、`"30abc"` が 30 として受理されていた
   - キーフレームの判定を devtools の共有モジュール (`devtools/src/utils/keyframeInterval.ts`) に寄せ、0 / 負値 / 非整数 / NaN / ±Infinity は無効な間隔として既定値 (3600 フレーム) に正規化したうえでライブラリの `shouldSendKeyFrame` に委譲する (配信ループを抜けないよう throw しない)。剰余の実装は devtools に重複しなくなる

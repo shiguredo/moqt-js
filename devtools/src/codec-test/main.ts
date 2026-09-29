@@ -12,6 +12,12 @@
 
 import { runAudioDecoderTest, runAudioEncoderTest, runAudioSamplesTest } from "./audio.ts";
 import {
+  runDevtoolsDecoderCloseDuringConfigureTest,
+  runDevtoolsDecoderConcurrentConfigureTest,
+  runDevtoolsDecoderResetBudgetTest,
+  runDevtoolsDecoderUnsupportedCodecTest,
+} from "./devtoolsDecoder.ts";
+import {
   runVideoDecoderCloseDuringConfigureTest,
   runVideoDecoderConcurrentResetTest,
   runVideoDecoderResetBudgetTest,
@@ -50,6 +56,15 @@ const CODEC_TESTS: { [Name in CodecTestName]: () => Promise<CodecTestResultMap[N
   videoDecoderConcurrentResetWorker: () => runVideoDecoderConcurrentResetTest(true),
   videoDecoderCloseDuringConfigureDirect: () => runVideoDecoderCloseDuringConfigureTest(false),
   videoDecoderCloseDuringConfigureWorker: () => runVideoDecoderCloseDuringConfigureTest(true),
+  devtoolsDecoderUnsupportedCodecDirect: () => runDevtoolsDecoderUnsupportedCodecTest(false),
+  devtoolsDecoderUnsupportedCodecWorker: () => runDevtoolsDecoderUnsupportedCodecTest(true),
+  devtoolsDecoderResetBudgetDirect: () => runDevtoolsDecoderResetBudgetTest(false),
+  devtoolsDecoderResetBudgetWorker: () => runDevtoolsDecoderResetBudgetTest(true),
+  devtoolsDecoderCloseDuringConfigureDirect: () =>
+    runDevtoolsDecoderCloseDuringConfigureTest(false),
+  devtoolsDecoderCloseDuringConfigureWorker: () => runDevtoolsDecoderCloseDuringConfigureTest(true),
+  devtoolsDecoderConcurrentConfigureDirect: () => runDevtoolsDecoderConcurrentConfigureTest(false),
+  devtoolsDecoderConcurrentConfigureWorker: () => runDevtoolsDecoderConcurrentConfigureTest(true),
   audioEncoderDirect: () => runAudioEncoderTest(false),
   audioEncoderWorker: () => runAudioEncoderTest(true),
   audioDecoderDirect: () => runAudioDecoderTest(false),
