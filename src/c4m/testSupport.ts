@@ -19,6 +19,7 @@ import {
   ClaimValidationError,
   type ClaimValidationErrorCode,
 } from "./cat";
+import { JwkError, type JwkErrorCode } from "./jwk";
 
 /**
  * 16 進文字列をバイト列へ変換する
@@ -192,6 +193,19 @@ export function assertCryptoError(run: () => unknown, code: CryptoErrorCode): Cr
   assert.ok(
     error instanceof CryptoError,
     `CryptoError を期待したが ${String(error)} が送出された (code=${code})`,
+  );
+  assert.equal(error.code, code);
+  return error;
+}
+
+/**
+ * JwkError を期待してコードを検証する
+ */
+export function assertJwkError(run: () => unknown, code: JwkErrorCode): JwkError {
+  const error = captureThrownError(run);
+  assert.ok(
+    error instanceof JwkError,
+    `JwkError を期待したが ${String(error)} が送出された (code=${code})`,
   );
   assert.equal(error.code, code);
   return error;

@@ -18,5 +18,6 @@ export * from "./cat";
 export * from "./cbor";
 export * from "./cose";
 export * from "./crypto";
+export * from "./jwk";
 export * from "./moqt";
 export * from "./webcrypto";
