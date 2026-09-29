@@ -784,13 +784,15 @@ class CborDecoder {
       return BigInt(((bytes[0] ?? 0) << 8) | (bytes[1] ?? 0));
     }
     if (additional === 26) {
+      // RFC 8949 Section 3: argument は network byte order の符号なし整数である。
+      // JavaScript のビット演算は符号付き 32 ビットのため 2^31 以上で負になる。
+      // additional information 27 と同じく 1 バイトずつ bigint へ積む
       const bytes = this.readExact(4);
-      return BigInt(
-        ((bytes[0] ?? 0) << 24) |
-          ((bytes[1] ?? 0) << 16) |
-          ((bytes[2] ?? 0) << 8) |
-          (bytes[3] ?? 0),
-      );
+      let value = 0n;
+      for (const byte of bytes) {
+        value = (value << 8n) | BigInt(byte);
+      }
+      return value;
     }
     if (additional === 27) {
       const bytes = this.readExact(8);

@@ -1,7 +1,7 @@
 # CBOR デコーダが 4 バイト引数を符号付き 32 ビットで読み、2^31 以上の引数で値が壊れる
 
 - Created: 2026-09-29
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-29
 - Branch: feature/fix-cbor-4byte-argument-sign
 - Polished: 2026-09-29
 - Reporter: @voluntas
@@ -46,4 +46,11 @@ CBOR のデコーダが additional information 26 (4 バイト引数) を符号�
 
 ## 解決方法
 
-{未着手}
+- `src/c4m/cbor.ts` の `CborDecoder.readArgument` の additional information 26 (4 バイト引数) の読み込みを、符号付き 32 ビットのビット演算から additional information 27 と同じ 1 バイトずつの bigint の積み上げ (`(value << 8n) | BigInt(byte)`) に変更した (RFC 8949 Section 3 の network byte order の符号なし整数に一致)
+- `src/c4m/cbor.test.ts` に固定値テストを追加した
+  - 4 バイト引数の符号なし整数 / 負の整数 (2^31 と 2^32 - 1) のデコードと再エンコード
+  - 4 バイト引数のタグ (2^32 - 1) の保持
+  - 4 バイト引数の長さ (major type 2 〜 5) が 2^31 以上のときの unexpectedEof
+  - 切り詰められた 4 バイト head (unexpectedEof) と、2^31 が lengthOverflow にならない前提の長さテスト
+- `src/c4m/cbor.prop.ts` の PBT を回帰網として使い、修正後に 20 回連続で通過することを確認した
+- 未リリース機能 (`## develop` の C4M 追加) 内の修正のため、`CHANGES.md` への追記は行っていない
