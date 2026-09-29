@@ -275,6 +275,11 @@
   - 上限で捨てたログの vnode はキャッシュから落とす。`data` と `payload` は追加後に書き換えない前提になる (行を描画し直さないため、書き換えても表示は古いまま)
   - 1 件追加のコストは表示中の件数に比例する分が残る (1000 件で約 3 ms のうち、表示中の子の走査が大半)。表示する行を画面に入る分だけにする対応は別に行う
   - @voluntas
+- [FIX] `createMediaPublisher` の映像配信で、キュー超過で破棄したフレームがキーフレームの要求を消費し、要求したキーフレームが現れないのを修正する
+  - `createMediaPublisher` の `processVideoFrames` は、キーフレームの判定と通し番号の加算をエンコードキューの閾値判定より先に行っていた。閾値を超えて破棄したフレームでも番号が進むため、`requestKeyframe()` が番号を 0 に戻した直後にキューが閾値を超えていると要求が消費され、キーフレームは次の間隔 (`keyframeInterval` フレーム後) まで現れなかった
+  - 判定と加算を encode する分岐の中へ移し、破棄したフレームでは番号を据え置く。繰り越し状態は持たず、次に encode するフレームが同じ番号で判定を受けて要求を引き継ぐ (直接モードに加え、Worker モードでも `encodeQueueSize` が送信中のフレーム数を返すため到達する)
+  - `encode` が同期 throw した場合もフレームを 1 回だけ閉じ、通し番号を据え置く。加算を `encode` の後ろへ、`close()` を分岐の `finally` へ移す (加算が前にあると encode していないフレームで番号が進んで要求を消費し、`close()` が分岐の外にあると throw の経路で閉じ忘れる)
+  - @voluntas
 - [FIX] `createMediaPublisher` の `start` が publisher 層で通知済みの失敗を二重通知し得る経路を塞ぐ
   - `publishCatalog` は元から catalog の送信だけを `await sendObject(...)` している (書き込み完了を待つため)。事前検証の違反は publisher 層が `error` コールバックで通知してから返値を reject する契約のため、reject が `start` の catch にも届くと同一の失敗が `onError` へ 2 回通知される (現行の catalog 送信は事前検証で reject しないため未到達である)
   - `PublisherImpl.handleError` が通知した error に印を付け、内部向けの判定関数 (`isErrorNotifiedByPublisher`) で「通知済みの error では通知しない」catch にする。印を付けるだけで通知回数は変えない

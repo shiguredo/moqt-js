@@ -228,7 +228,7 @@ export function resolveKeyframeInterval(video: VideoPublishOptions | undefined):
  * draft-ietf-moq-transport-21 §10.6 (DYNAMIC GROUPS) / §9.20.20 (NEW GROUP REQUEST Parameter):
  * DYNAMIC_GROUPS=1 を広告し、購読者が NEW_GROUP_REQUEST で新しい Group を要求できるように
  * する。後から視聴を始めた購読者は Group の先頭 (キーフレーム) を受け取るまで映像を出せない
- * ため、要求を受けたら次のフレームをキーフレームにして新しい Group を始める
+ * ため、要求を受けたら次に encode するフレームをキーフレームにして新しい Group を始める
  * (`PublishCallbacks.onNewGroupRequest` から `requestKeyframe()` を呼ぶ)。
  */
 export const VIDEO_PUBLISH_OPTIONS: Readonly<PublishOptions> = { dynamicGroups: true };
@@ -237,9 +237,12 @@ export const VIDEO_PUBLISH_OPTIONS: Readonly<PublishOptions> = { dynamicGroups: 
  * 映像フレームがキーフレームのタイミングかを判定する純関数
  *
  * フレーム番号が間隔の倍数ならキーフレームにする。`requestKeyframe()` はフレーム
- * 番号を 0 に戻すため、要求直後のフレームは必ずキーフレームになる。
+ * 番号を 0 に戻すため、要求の後に次に encode するフレームは必ずキーフレームになる
+ * (encode せず破棄したフレームは番号を進めないため、要求は消費されず次の
+ * encode するフレームへ移る)。
  *
- * @param frameCount - キーフレーム判定に使うフレーム番号
+ * @param frameCount - キーフレーム判定に使うフレーム番号 (`requestKeyframe()` の
+ *   リセット以後に実際に encode したフレームの数)
  * @param keyframeInterval - キーフレームを送るフレーム間隔 (1 以上の整数。値域は
  *   `resolveKeyframeInterval` が検証する)
  * @returns キーフレームのタイミングなら true
@@ -431,6 +434,8 @@ export class MediaPublisherImpl implements MediaPublisher {
   private audioGroupId: number;
   private videoGroupId: number;
   private videoObjectId = 0;
+  // キーフレーム判定に使う通し番号。encode したフレームだけを数え、
+  // 破棄したフレームは数えない (requestKeyframe() で 0 に戻す)
   private videoFrameCount = 0;
   // 音声・映像の初回オブジェクト送信済みか (初回は加算せず初期値を送る)
   private audioGroupStarted = false;
@@ -597,14 +602,17 @@ export class MediaPublisherImpl implements MediaPublisher {
   }
 
   /**
-   * キーフレームを即座に送信する
+   * 次に encode するフレームをキーフレームにするよう要求する
+   *
+   * 判定に使う通し番号を 0 に戻す。破棄したフレームは番号を進めないため、
+   * 要求は次に encode するフレームまで消費されない。
    */
   requestKeyframe(): void {
     if (this.currentState !== "publishing") {
       return;
     }
 
-    // 次のフレームでキーフレームを強制する
+    // 次に encode するフレームでキーフレームを強制する
     this.videoFrameCount = 0;
   }
 
@@ -987,18 +995,29 @@ export class MediaPublisherImpl implements MediaPublisher {
         // 遅れが最も小さいフレームに合わせて換算する (WallClockMapper)
         this.videoWallClock.observe(frame.timestamp, performance.timeOrigin + performance.now());
 
-        // キーフレーム判定
-        const isKeyFrame = shouldSendKeyFrame(this.videoFrameCount, this.keyframeInterval);
-        this.videoFrameCount++;
-
-        if (encoder.encodeQueueSize <= 2) {
-          encoder.encode(frame, { keyFrame: isKeyFrame });
-        } else {
-          // エンコード能力を超えた入力はエンコードせず破棄する (待たない)。
-          // 破棄した数を統計に残す
-          this.videoStats.droppedFrames++;
+        try {
+          if (encoder.encodeQueueSize <= 2) {
+            // キーフレーム判定と通し番号の加算は、実際に encode するフレームだけで行う。
+            // 破棄するフレームでも判定と加算を行うと、requestKeyframe() が 0 に戻した
+            // 通し番号を破棄した分だけ進めてしまい、キーフレームの要求を消費する。
+            // 要求は次の間隔 (keyframeInterval フレーム後) まで現れなくなる。
+            // 据え置いた通し番号で次のフレームが判定を受けるため、繰り越し状態を持たずに
+            // 要求は次に encode するフレームへ移る
+            const isKeyFrame = shouldSendKeyFrame(this.videoFrameCount, this.keyframeInterval);
+            encoder.encode(frame, { keyFrame: isKeyFrame });
+            // 加算は encode の後ろに置く。encode が同期 throw した場合は encode して
+            // いないため通し番号を進めず、次のフレームが同じ番号で判定を受ける
+            this.videoFrameCount++;
+          } else {
+            // エンコード能力を超えた入力はエンコードせず破棄する (待たない)。
+            // 破棄した数を統計に残す
+            this.videoStats.droppedFrames++;
+          }
+        } finally {
+          // encode が同期 throw した場合も閉じ忘れないよう finally で閉じる
+          // (破棄した場合と encode した場合を合わせて close は 1 回だけ)
+          frame.close();
         }
-        frame.close();
       }
     } catch (error) {
       // 旧世代ループの失敗は通知しない (多重発火の防止)
