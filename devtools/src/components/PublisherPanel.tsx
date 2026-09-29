@@ -222,10 +222,24 @@ export function PublisherPanel() {
           <div class="absolute top-2 left-2 px-2 py-1 bg-black/60 rounded text-xs text-white font-medium">
             Local Camera
           </div>
-          {pub.pubCodec.value && (
-            <div class="absolute top-2 right-2 px-2 py-1 bg-green-500/80 rounded text-xs text-white font-medium">
-              {pub.pubCodec.value}
+          {/* プレビュー中は右上に Preview、配信を始めたらコーデックと解像度
+              (pubCodec) に置き換える */}
+          {pub.isPreviewActive.value ? (
+            <div
+              data-testid="publisher-preview-badge"
+              class="absolute top-2 right-2 px-2 py-1 bg-slate-500/80 rounded text-xs text-white font-medium"
+            >
+              Preview
             </div>
+          ) : (
+            pub.pubCodec.value !== "" && (
+              <div
+                data-testid="publisher-codec-badge"
+                class="absolute top-2 right-2 px-2 py-1 bg-green-500/80 rounded text-xs text-white font-medium"
+              >
+                {pub.pubCodec.value}
+              </div>
+            )
           )}
         </VideoCard>
 
