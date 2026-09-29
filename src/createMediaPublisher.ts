@@ -188,14 +188,38 @@ export function allocateVideoObject(
 /**
  * 映像のキーフレーム間隔を解決する純関数
  *
- * `keyframeInterval` 未指定時は framerate の 2 倍を使う (既定 framerate は 30)。
+ * `keyframeInterval` は 1 以上の整数のみ受理する。0 に特別な意味を持たせる根拠が
+ * MSF / LOC / WebCodecs に無い (draft-ietf-moq-msf-01 §5.2.24 の `maxGopDuration` は
+ * ミリ秒指定の別概念であり、WebCodecs の `keyFrame: false` はキーフレームにするかを
+ * UA に委ねる意味である) ため、0 を「毎フレームキーフレーム」と解釈すると帯域を
+ * 大きく浪費する。剰余で判定する `shouldSendKeyFrame` は非整数の間隔だと値によって
+ * 周期要求が先頭の 1 回で止まる (例: `framerate: 29.97` の 59.94)。
+ *
+ * `keyframeInterval` 未指定時は `Math.round(framerate * 2)` を使う (既定 framerate は
+ * 30 なので 60)。この値が 1 未満または非有限なら reject する (framerate が 0 / 負値 /
+ * 非有限の場合と、正の有限値でも 2 倍が 0.5 未満の場合が含まれる)。節番号は
+ * draft-ietf-moq-msf-01 由来であり、将来の draft 改版で変わる可能性がある。
  *
  * @param video - 映像配信オプション (映像を配信しない場合は undefined)
- * @returns キーフレームを送るフレーム間隔
+ * @returns キーフレームを送るフレーム間隔 (1 以上の整数)
  */
 export function resolveKeyframeInterval(video: VideoPublishOptions | undefined): number {
+  const specifiedInterval = video?.keyframeInterval;
+  if (specifiedInterval !== undefined) {
+    if (!Number.isInteger(specifiedInterval) || specifiedInterval < 1) {
+      throw new Error(`keyframeInterval must be an integer >= 1, got ${specifiedInterval}`);
+    }
+    return specifiedInterval;
+  }
+
   const framerate = video?.framerate ?? DEFAULT_VIDEO_FRAMERATE;
-  return video?.keyframeInterval ?? framerate * 2;
+  const interval = Math.round(framerate * 2);
+  if (!Number.isFinite(interval) || interval < 1) {
+    throw new Error(
+      `framerate must be a number >= 0.25 (Math.round(framerate * 2) >= 1), got ${framerate}`,
+    );
+  }
+  return interval;
 }
 
 /**
@@ -216,7 +240,8 @@ export const VIDEO_PUBLISH_OPTIONS: Readonly<PublishOptions> = { dynamicGroups: 
  * 番号を 0 に戻すため、要求直後のフレームは必ずキーフレームになる。
  *
  * @param frameCount - キーフレーム判定に使うフレーム番号
- * @param keyframeInterval - キーフレームを送るフレーム間隔
+ * @param keyframeInterval - キーフレームを送るフレーム間隔 (1 以上の整数。値域は
+ *   `resolveKeyframeInterval` が検証する)
  * @returns キーフレームのタイミングなら true
  */
 export function shouldSendKeyFrame(frameCount: number, keyframeInterval: number): boolean {

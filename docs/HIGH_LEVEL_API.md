@@ -56,7 +56,7 @@ interface MediaPublisherOptions {
     codec: "h264" | "h265" | "vp8" | "vp9" | "av1";
     bitrate: number;
     framerate?: number; // default: 30
-    keyframeInterval?: number; // default: framerate * 2
+    keyframeInterval?: number; // 1 以上の整数。default: Math.round(framerate * 2)。無効値は reject
     width?: number; // optional: 指定しない場合は MediaStream から取得
     height?: number; // optional
   };
@@ -92,6 +92,12 @@ interface MediaPublisherOptions {
 あることと `renderGroup` が有限の整数であることを検証する (非有限値は JSON で null になり
 購読側が復号できなくなる)。それ以外の範囲は呼び出し側の責任になる。節番号は
 draft-ietf-moq-msf-01 由来であり、将来の draft 改版で変わる可能性がある。
+
+`keyframeInterval` はキーフレームを送るフレーム間隔 (1 以上の整数) である。未指定時は
+`Math.round(framerate * 2)` を使い、既定の `framerate` (30) なら 60 になる。0 / 負値 /
+非整数 / `NaN` / `±Infinity` は `createMediaPublisher()` が reject する。`keyframeInterval`
+を指定しない場合、`framerate` から 1 以上の整数を導出できない (0 / 負値 / 非有限、または
+2 倍が 0.5 未満の正値) ときも reject する。
 
 ### コールバック
 
