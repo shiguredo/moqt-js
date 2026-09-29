@@ -1,7 +1,7 @@
 # devtools の keyframeInterval に値域検証がなく 0 でキーフレームを要求しなくなる
 
 - Created: 2026-09-23
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-29
 - Branch: feature/fix-devtools-keyframe-interval-range
 - Polished: 2026-09-23
 
@@ -59,4 +59,14 @@
 
 ## 解決方法
 
-{未着手}
+`devtools/src/utils/keyframeInterval.ts` を新設し、キーフレーム間隔の判定・値域・既定値を 1 箇所に寄せた。`DEFAULT_KEYFRAME_INTERVAL = 3600` は無効値の正規化に使う既定値であり、`KEYFRAME_INTERVAL_OPTIONS` (30 / 60 / 120 / 240 / 300 / 900 / 1800 / 2700 / 3600 / 7200) は select の選択肢と URL の許可リストの正本である。`shouldRequestKeyFrame` は 1 以上の整数以外 (0 / 負値 / 非整数 / NaN / ±Infinity) を `DEFAULT_KEYFRAME_INTERVAL` に正規化してから `src/createMediaPublisher.ts` の `shouldSendKeyFrame` に委譲し、throw しない (throw すると配信ループごと抜けるため)。剰余の実装はライブラリの 1 箇所だけになった。
+
+`devtools/src/hooks/usePublisher.ts` の `shouldRequestKeyFrame` の定義を削除して共有モジュールを使い、`devtools/src/webcodecs-devtools/signals.ts` のインラインの剰余も共有関数に置き換えた。`devtools/src/components/ConnectionSettings.tsx` の select は `KEYFRAME_INTERVAL_OPTIONS` から生成し、ラベルは `DEFAULT_VIDEO_FRAMERATE` (30) で割った秒数にする (従来の表示と一致する)。
+
+`devtools/src/signals/connectionSettings.ts` の `initFromUrl` は、既存の `resolveOptionNumber` に `KEYFRAME_INTERVAL_OPTIONS` を渡して検証する形にした。`Number.parseInt` の結果だけを検証すると `"1.5"` が 1 として受理され、`?keyframeInterval=0` で `framesEncoded % 0` が NaN になってキーフレームの要求が一度も出なくなる。許可リストの判定を新設せず既存の関数に寄せることで、`targetLatency` / `renderGroup` と同じ規則 (trim する、選択肢が作る表記だけを受理する) に揃えた。null のときは signal に代入しない。
+
+各 signal の初期値は現行の値 (moqt-devtools の接続設定 300 / 配信側 60、webcodecs-devtools 3600) のまま維持する。既定値を `DEFAULT_KEYFRAME_INTERVAL` に揃えると moqt-devtools の既定が 10 秒ぶんから 120 秒ぶんに変わり、issue の目的 (値域検証の追加) を超える挙動変更になるためである。この点は issue の現状・設計方針・完了条件の記述も実態に合わせて直した。
+
+テストは `devtools/src/utils/keyframeInterval.test.ts` (選択肢が既定 framerate の倍数であること、無効値の正規化、境界値。`usePublisher.test.ts` から移設)、`devtools/src/signals/keyframeIntervalDefaults.test.ts` (3 つの signal の初期値が 300 / 60 / 3600 のままであること)、`devtools/src/signals/connectionSettings.test.ts` (URL の受理・拒否)、`tests/e2e/devtools-keyframe-interval.spec.ts` (select の選択肢 10 件の value とラベル、`?keyframeInterval=0` で select が空表示にならず 300 のまま、`?keyframeInterval=240` が反映されること) を追加・移設した。
+
+`CHANGES.md` の `## develop` の FIX 群先頭に `[FIX]` を追記した。`npx vp check` / `npx vp test --run` (3415 テスト) / `npx vp run e2e-test` (80 テスト) が通る。
