@@ -20,6 +20,16 @@ import { extractC4mBase64 } from "../utils/c4m";
 import { isResolution } from "../utils/codec";
 import { isDebugPanelOpen } from "./debug";
 
+/**
+ * namespace の初期値に使う 8 文字のランダムな文字列 (0-9 a-z)
+ */
+function randomNamespaceSuffix(): string {
+  const bytes = new Uint8Array(8);
+  crypto.getRandomValues(bytes);
+  // 36 文字 (0-9 a-z) へ写す。剰余の偏りは namespace の用途では問題にしない
+  return Array.from(bytes, (byte) => (byte % 36).toString(36)).join("");
+}
+
 // 接続設定
 export const url = signal("moqt://127.0.0.1:4443/");
 // Save を押した Relay URI。Forget するまで OPFS に残す。null は覚えていない
@@ -27,7 +37,13 @@ export const savedServerUrl = signal<string | null>(null);
 // moqt URI の Fragment Identifier (draft-ietf-moq-transport-21 §6.1.1)
 // 入力形式は `type:value` (先頭の `#` は付けない)。空文字列なら fragment を付けない。
 export const fragment = signal("");
-export const namespace = signal("room/123");
+/**
+ * Namespace の初期値
+ *
+ * 複数の devtools が同じ relay に繋がっても namespace が衝突しないよう、ページごとに
+ * ランダムな接尾辞を付ける。共有するときは Copy URL や Save で持ち出す
+ */
+export const namespace = signal(`moqt-devtools/${randomNamespaceSuffix()}`);
 // namespace 設定を Track Namespace のフィールドへ分解したもの。空のフィールドは落とす。
 // 接続処理と画面表示 (Full Track Name の組み立て) が同じ分解を使う
 export const namespaceArray = computed(() =>

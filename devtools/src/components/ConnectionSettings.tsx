@@ -717,8 +717,24 @@ export function ConnectionSettings() {
             />
           </div>
         </div>
+        {/* Namespace は接続先の特定に使うため、URI Fragment より左に置く */}
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 mt-4">
           <div class="lg:col-span-2">
+            <label for="namespace" class="block text-sm font-medium text-slate-600 mb-1">
+              Namespace
+              <span class="text-xs text-slate-400 ml-1">(split into a tuple by /)</span>
+            </label>
+            <input
+              type="text"
+              id="namespace"
+              placeholder="e.g. moqt-devtools/a1b2c3d4"
+              value={settings.namespace.value}
+              onInput={(e) => (settings.namespace.value = e.currentTarget.value)}
+              disabled={settings.settingsDisabled.value}
+              class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors disabled:bg-slate-100 disabled:cursor-not-allowed"
+            />
+          </div>
+          <div class="lg:col-span-3">
             <label for="fragment" class="block text-sm font-medium text-slate-600 mb-1">
               URI Fragment
               <span class="ml-1 text-xs text-slate-400">type:value (draft-21 §6.1.1)</span>
@@ -735,23 +751,6 @@ export function ConnectionSettings() {
               disabled={settings.settingsDisabled.value}
               placeholder="e.g. track:video"
               class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors disabled:bg-slate-100 disabled:cursor-not-allowed text-sm"
-            />
-          </div>
-        </div>
-        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 mt-4">
-          <div>
-            <label for="namespace" class="block text-sm font-medium text-slate-600 mb-1">
-              Namespace
-              <span class="text-xs text-slate-400 ml-1">(split into a tuple by /)</span>
-            </label>
-            <input
-              type="text"
-              id="namespace"
-              placeholder="e.g. room/123 → [room, 123]"
-              value={settings.namespace.value}
-              onInput={(e) => (settings.namespace.value = e.currentTarget.value)}
-              disabled={settings.settingsDisabled.value}
-              class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors disabled:bg-slate-100 disabled:cursor-not-allowed"
             />
           </div>
         </div>

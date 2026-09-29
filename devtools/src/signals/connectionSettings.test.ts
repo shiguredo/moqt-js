@@ -17,6 +17,7 @@ import {
   isVideoSourceType,
   jitterBufferEnabled,
   mode,
+  namespace,
   renderGroup,
   RENDER_GROUP_OPTIONS,
   resolveOptionNumber,
@@ -726,4 +727,10 @@ test("initFromUrl: 0 / 1 以外の useDedicatedWorker は無視する", () => {
   assert.isFalse(useDedicatedWorker.value);
   initFromUrl("useDedicatedWorker=1");
   assert.isTrue(useDedicatedWorker.value);
+});
+
+// namespace の初期値は moqt-devtools/ + ランダム 8 文字 (0-9 a-z)。複数の devtools が
+// 同じ relay に繋がっても namespace が衝突しないようにする
+test("namespace の初期値は moqt-devtools/ + ランダム 8 文字", () => {
+  assert.match(namespace.value, /^moqt-devtools\/[0-9a-z]{8}$/);
 });
