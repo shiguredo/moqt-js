@@ -1,7 +1,7 @@
 # devtools 本体でも Worker モードの映像エンコーダのバックプレッシャが無効になっている
 
 - Created: 2026-09-23
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-29
 - Branch: feature/fix-devtools-encoder-backpressure
 - Polished: 2026-09-23
 
@@ -62,4 +62,22 @@
 
 ## 解決方法
 
-{未着手}
+`devtools/src/utils/EncoderWrapper.ts` の `encodeQueueSize` は、Worker モードで Worker へ送信してまだ `encoded` 応答が返っていないフレーム数を返すようにした。カウンタは 0650 が `src/codec/workerConfigure.ts` に置いた純粋クラス `SentFrameCounter` をそのまま import して使い、devtools 用の別実装は作っていない。増加は `postMessage` の成功後、減算は `callbacks.output` を呼ぶ前に行い、0 未満にはならない。
+
+数を 0 に戻すのは、Worker の差し替えの直後 (同期)、`close()`、Worker が `error` 応答を返したとき、初期化の失敗のときである。差し替えの直後に置くのは、`configure` の待機中に新しい Worker へ送ったフレームの数まで消えないようにするためである (待機中も `encode` は新しい Worker へ送られて数えられる)。再 configure では `teardownWorker()` で旧 Worker を破棄してから作り直し、旧世代の `encoded` が新しいカウンタを減らさないようにした。
+
+Worker が `error` 応答を返したら送信中の数を 0 に戻し、`configured` を false にして投入を止める。戻さないと閾値を超えたまま張り付き、以後すべてのフレームが破棄される (`close` か再 configure まで復帰しない)。初期化が終わる前の失敗は `configure` の reject で伝え、初期化の後に届いた失敗は `error` コールバックで通知する。
+
+Worker の初期化の応答を待っている `configure` は、`close` と再 `configure` が世代を無効化したら `encoder configure superseded by newer generation` で失敗するようにした。破棄は Worker の配送口を外して terminate するため、配送口を外す前に待機を中断しないと `configure` の Promise が未解決のまま残り、WebTransport の切断で後始末が `close` を呼ぶ経路で配信の開始処理が永久に待ち続ける。中断の口は世代ごとに持ち、破棄は待機中の全世代を中断し、解決した世代は自分の口だけを外す。Worker の失敗の後始末は自世代の中で完結させ、後発の `configure` が公開した Worker と待機を巻き込まないようにした。
+
+`devtools/src/webcodecs-devtools/workers/encoder.worker.ts` は、初期化の応答・失敗理由の文言化・コーデックの破棄と状態判定をライブラリ側の共有モジュール (`src/codec/workerConfigure.ts` / `src/codec/codecLifecycle.ts` / `src/codec/workerMessages.ts`) から import して使うようにした。設定できない config を未処理の例外にせず `error` 応答で返し (message は常に非空)、`encode()` が例外を投げても `VideoFrame` を閉じる。エンコーダーの Worker は `new Worker(new URL(..., import.meta.url), { type: "module" })` で生成し、`?worker` の仮想モジュールを静的に import しない (oxlint がクエリを外して実ファイルを解決し、default export を誤検知するため)。
+
+`devtools/src/utils/EncoderWrapper.ts` の状態のラベル・未設定の警告・直接モードの投入の判定・直接モードの破棄・再 configure の差し替えも、`codecStateLabel` / `warnCodecNotConfigured` / `isCodecConfigured` / `closeCodecQuiet` / `replaceCodec` に委ねた。
+
+上限の判定は `devtools/src/utils/encodeQueueBackpressure.ts` の `shouldDropFrame` に切り出し、`devtools/src/hooks/usePublisher.ts` の閾値 (`encodeQueueSize <= 2`) と破棄の挙動は変えていない。破棄したフレーム数は既存の `publishTiming.encodeQueueDrops` の 1 箇所で数え、画面 (`PublisherPanel`) とコピー本文の表示も同じ名前のままにした。同じ値が別名でもう 1 行出るのを避けるため、issue が求めていた `droppedFrames` signal は追加していない。
+
+実ブラウザの固定は `devtools/src/codec-test/devtoolsEncoder.ts` (新規。devtools の `EncoderWrapper` を Worker モードで駆動する runner) と `tests/e2e/codec-wrappers.spec.ts` で行った。configure 前後・投入直後 (投入数)・出力待機後 (0)・再 configure 前後・close 前後・output の例外後・Worker の error 後・初期化の失敗後・configure 中の close・旧 Worker の初期化失敗後の後発 configure を固定している。`devtools/src/utils/EncoderWrapper.test.ts` は Node で Worker 往復を実行できないため状態機械の検証にとどめ、「0 を返す条件 (未設定、または送信中 0 件)」にコメントを更新した。
+
+配信開始時のリセットと破棄数の増加は、devtools アプリの映像配信を起動する経路が Node にも e2e にも無いため自動テストで駆動できない。閾値の判定は `shouldDropFrame` の単体テストで、破棄数の統計は `encodeQueueDrops` の既存テストで固定した。
+
+`CHANGES.md` の `## develop` の FIX 群先頭に `[FIX]` を追記した。`npx vp check` / `npx vp test --run` (3419 テスト) / `npx vp run e2e-test` (91 テスト) が通る。
