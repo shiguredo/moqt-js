@@ -34,13 +34,13 @@ export interface GeneratedSymmetricKey {
 export type GeneratedKey = GeneratedAsymmetricKey | GeneratedSymmetricKey;
 
 /** 対称鍵の入力形式 */
-export type SecretInputFormat = "auto" | "hex" | "base64url" | "text";
+export type SecretInputFormat = "detect" | "hex" | "base64url" | "text";
 
 /** 解釈した対称鍵 */
 export interface ParsedSecret {
   secret: Uint8Array;
-  /** auto を解決した実際の形式 */
-  format: Exclude<SecretInputFormat, "auto">;
+  /** `detect` を解決した実際の形式 */
+  format: Exclude<SecretInputFormat, "detect">;
 }
 
 const TEXT_ENCODER = new TextEncoder();
@@ -137,12 +137,13 @@ function hexToBytes(text: string): Uint8Array | undefined {
 /**
  * 対称鍵の入力を解釈する
  *
- * `auto` は 16 進表記らしい場合だけ 16 進として扱い、それ以外は base64url を
- * 試してから UTF-8 のテキストとして扱う。
+ * `detect` は 16 進表記らしい場合だけ 16 進として扱い、それ以外は base64url を
+ * 試してから UTF-8 のテキストとして扱う。解釈結果は `format` で返すため、画面に
+ * 表示して確認できる。
  */
 export function parseSecretInput(
   text: string,
-  format: SecretInputFormat = "auto",
+  format: SecretInputFormat = "detect",
 ): ParsedSecret | undefined {
   const trimmed = text.trim();
   if (trimmed.length === 0) {
@@ -182,6 +183,91 @@ export function parseSecretInput(
 export function parseJwkInput(text: string): { jwk: C4M.Jwk; coseKey: C4M.CoseKey } {
   const jwk = C4M.decodeJwk(text.trim());
   return { jwk, coseKey: C4M.jwkToCoseKey(jwk) };
+}
+
+/**
+ * 鍵入力の解釈結果
+ *
+ * `inspectKeyInput` が返し、画面表示と実際の鍵解決の両方で使う。
+ */
+export type KeyInputInspection =
+  | { type: "empty" }
+  | {
+      type: "jwk";
+      jwk: C4M.Jwk;
+      coseKey: C4M.CoseKey;
+      /** 署名に使える秘密鍵を持っているかどうか */
+      hasPrivateKey: boolean;
+    }
+  | {
+      type: "secret";
+      secret: Uint8Array;
+      format: Exclude<SecretInputFormat, "detect">;
+    }
+  | { type: "error"; message: string };
+
+/**
+ * JWK が秘密鍵のメンバーを持っているかどうかを返す
+ *
+ * `oct` は鍵そのものが共通鍵であり、常に署名に使える。
+ */
+export function hasPrivateKey(jwk: C4M.Jwk): boolean {
+  switch (jwk.kty) {
+    case "EC":
+    case "OKP":
+      return jwk.d !== undefined;
+    case "oct":
+      return true;
+    default:
+      return false;
+  }
+}
+
+/**
+ * JWK の種類を画面表示用に説明する
+ */
+export function describeJwk(jwk: C4M.Jwk): string {
+  switch (jwk.kty) {
+    case "EC":
+      return `EC ${jwk.crv} (${jwk.d !== undefined ? "private key" : "public key"})`;
+    case "OKP":
+      return `OKP ${jwk.crv} (${jwk.d !== undefined ? "private key" : "public key"})`;
+    case "oct":
+      return "oct (symmetric secret)";
+    default:
+      return "unsupported key";
+  }
+}
+
+/**
+ * 鍵の入力を解釈する
+ *
+ * 値が `{` で始まる場合は JWK として解釈し、形式の指定は使わない。それ以外は
+ * `parseSecretInput` と同じ規則で解釈する。エラーは例外ではなく値で返し、入力の
+ * たびに画面表示できるようにする。
+ */
+export function inspectKeyInput(text: string, format: SecretInputFormat): KeyInputInspection {
+  const trimmed = text.trim();
+  if (trimmed.length === 0) {
+    return { type: "empty" };
+  }
+  if (trimmed.startsWith("{")) {
+    try {
+      const { jwk, coseKey } = parseJwkInput(trimmed);
+      return { type: "jwk", jwk, coseKey, hasPrivateKey: hasPrivateKey(jwk) };
+    } catch (error) {
+      return { type: "error", message: error instanceof Error ? error.message : String(error) };
+    }
+  }
+  try {
+    const parsed = parseSecretInput(trimmed, format);
+    if (parsed === undefined) {
+      return { type: "empty" };
+    }
+    return { type: "secret", secret: parsed.secret, format: parsed.format };
+  } catch (error) {
+    return { type: "error", message: error instanceof Error ? error.message : String(error) };
+  }
 }
 
 /**

@@ -18,6 +18,8 @@ test("生成した Ed25519 の鍵で compact 形式のトークンを発行し�
   // 生成した鍵を署名と検証に使う
   await page.getByTestId("c4m-use-for-sign").click();
   await page.getByTestId("c4m-use-for-verify").click();
+  // 署名鍵の解釈結果はすぐに表示される
+  await expect(page.getByTestId("c4m-signing-key-status")).toContainText("private key");
 
   // Publish を example.com にだけ許可するスコープを設定する
   await page.getByTestId("c4m-scope-0-namespace").fill("example.com");
@@ -39,6 +41,8 @@ test("生成した Ed25519 の鍵で compact 形式のトークンを発行し�
   await expect(page.getByTestId("c4m-format")).toHaveText("compact");
   await expect(page.getByTestId("c4m-alg")).toContainText("EdDsa");
   await expect(page.getByTestId("c4m-claim-iss")).toHaveText("https://auth.example.com");
+  // 検証鍵の解釈結果はトークンの検証欄に表示される
+  await expect(page.getByTestId("c4m-verify-key-status")).toContainText("public key");
   await page.getByTestId("c4m-verify-button").click();
   await expect(page.getByTestId("c4m-verify-result")).toHaveText("Signature verified");
 
@@ -63,6 +67,8 @@ test("生成した HMAC の対称鍵で COSE 形式のトークンを発行し�
   await expect(page.getByTestId("c4m-key-secret")).not.toHaveValue("");
   await page.getByTestId("c4m-use-for-sign").click();
   await page.getByTestId("c4m-use-for-verify").click();
+  // 生成した secret は hex として解釈される
+  await expect(page.getByTestId("c4m-signing-key-status")).toContainText("hex, 32 bytes");
 
   // COSE 形式で発行する
   await page.getByTestId("c4m-issuer").fill("https://auth.example.com");
@@ -74,6 +80,7 @@ test("生成した HMAC の対称鍵で COSE 形式のトークンを発行し�
   await page.getByTestId("c4m-output-load").click();
   await expect(page.getByTestId("c4m-format")).toHaveText("coseMac0");
   await expect(page.getByTestId("c4m-alg")).toContainText("HmacSha256");
+  await expect(page.getByTestId("c4m-verify-key-status")).toContainText("hex, 32 bytes");
   await page.getByTestId("c4m-verify-button").click();
   await expect(page.getByTestId("c4m-verify-result")).toHaveText("Signature verified");
 });

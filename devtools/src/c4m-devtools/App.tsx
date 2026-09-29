@@ -10,11 +10,12 @@ import { C4M } from "moqt-js";
 import {
   type GeneratedKey,
   type KeyGenerationAlgorithm,
+  type KeyInputInspection,
   type SecretInputFormat,
   bytesToHex,
+  describeJwk,
   generateKey,
-  parseJwkInput,
-  parseSecretInput,
+  inspectKeyInput,
   publicJwkOf,
 } from "./utils/keys";
 import {
@@ -65,7 +66,9 @@ const decodeError = signal<string | undefined>(undefined);
 const decoded = signal<C4M.CatToken | undefined>(undefined);
 
 const verifyKeyText = signal("");
-const verifyAlgorithm = signal<"auto" | C4M.Algorithm>("auto");
+/** 検証鍵の secret の入力形式 (`detect` は hex → base64url → text の順で解釈) */
+const verifySecretFormat = signal<SecretInputFormat>("detect");
+const verifyAlgorithm = signal<"any" | C4M.Algorithm>("any");
 const verifyType = signal("");
 const verifyResult = signal<string | undefined>(undefined);
 const verifyOk = signal<boolean | undefined>(undefined);
@@ -77,7 +80,8 @@ const keyError = signal<string | undefined>(undefined);
 const keyBusy = signal(false);
 
 const signingKeyText = signal("");
-const signingSecretFormat = signal<SecretInputFormat>("auto");
+/** 署名鍵の secret の入力形式 (`detect` は hex → base64url → text の順で解釈) */
+const signingSecretFormat = signal<SecretInputFormat>("detect");
 
 const issuer = signal("");
 const subject = signal("");
@@ -144,6 +148,47 @@ function CopyButton({ name, text }: { name: string; text: string }) {
     >
       {copiedField.value === name ? "Copied" : "Copy"}
     </button>
+  );
+}
+
+/**
+ * 鍵入力の解釈結果を表示する
+ *
+ * `inspectKeyInput` の結果をそのまま出すことで、`Detect` が何を選んだのかと、
+ * JWK が署名に使えるかを入力のたびに確認できるようにする。
+ */
+function KeyStatus({
+  inspection,
+  testId,
+  role,
+}: {
+  inspection: KeyInputInspection;
+  testId: string;
+  role: "sign" | "verify";
+}) {
+  let text: string;
+  let className: string;
+  if (inspection.type === "error") {
+    text = `Invalid key: ${inspection.message}`;
+    className = "text-red-600";
+  } else if (inspection.type === "jwk") {
+    const cannotSign = role === "sign" && !inspection.hasPrivateKey;
+    text = `JWK: ${describeJwk(inspection.jwk)}${cannotSign ? " (no private key, cannot sign)" : ""}`;
+    className = cannotSign ? "text-amber-700" : "text-emerald-700";
+  } else if (inspection.type === "secret") {
+    text = `Secret: ${inspection.format}, ${inspection.secret.length} bytes`;
+    className = "text-emerald-700";
+  } else {
+    text =
+      role === "sign"
+        ? "Empty: uses the generated key if there is one"
+        : "Paste a JWK or a secret to verify";
+    className = "text-slate-400";
+  }
+  return (
+    <p data-testid={testId} class={`text-xs ${className}`}>
+      {text}
+    </p>
   );
 }
 
@@ -394,9 +439,25 @@ function TokenPanel() {
           <div class="border-t border-slate-200 pt-3 space-y-2">
             <h3 class="font-semibold text-slate-700">Verify signature</h3>
             <div>
-              <label class={LABEL_CLASS} for="c4m-verify-key">
-                Verification key (JWK, or secret for HMAC)
-              </label>
+              <div class="flex items-center justify-between mb-1">
+                <label class={LABEL_CLASS} for="c4m-verify-key">
+                  Verification key (JWK, or secret for HMAC)
+                </label>
+                <select
+                  data-testid="c4m-verify-secret-format"
+                  class="border border-slate-300 rounded px-2 py-1 text-xs"
+                  value={verifySecretFormat.value}
+                  onChange={(event) => {
+                    verifySecretFormat.value = (event.target as HTMLSelectElement)
+                      .value as SecretInputFormat;
+                  }}
+                >
+                  <option value="detect">Detect (hex, then base64url, then text)</option>
+                  <option value="hex">hex</option>
+                  <option value="base64url">base64url</option>
+                  <option value="text">text</option>
+                </select>
+              </div>
               <textarea
                 id="c4m-verify-key"
                 data-testid="c4m-verify-key"
@@ -405,6 +466,11 @@ function TokenPanel() {
                 onInput={(event) => {
                   verifyKeyText.value = (event.target as HTMLTextAreaElement).value;
                 }}
+              />
+              <KeyStatus
+                inspection={inspectKeyInput(verifyKeyText.value, verifySecretFormat.value)}
+                testId="c4m-verify-key-status"
+                role="verify"
               />
             </div>
             <div class="flex flex-wrap gap-2 items-end">
@@ -419,11 +485,11 @@ function TokenPanel() {
                   value={verifyAlgorithm.value}
                   onChange={(event) => {
                     verifyAlgorithm.value = (event.target as HTMLSelectElement).value as
-                      | "auto"
+                      | "any"
                       | C4M.Algorithm;
                   }}
                 >
-                  <option value="auto">auto</option>
+                  <option value="any">any</option>
                   {(
                     [
                       "HmacSha256",
@@ -486,18 +552,17 @@ function TokenPanel() {
  * 検証鍵を入力から解決する
  */
 function resolveVerifyKey(): C4M.CoseKey {
-  const text = verifyKeyText.value.trim();
-  if (text.length === 0) {
-    throw new Error("enter a verification key");
+  const inspection = inspectKeyInput(verifyKeyText.value, verifySecretFormat.value);
+  if (inspection.type === "error") {
+    throw new Error(inspection.message);
   }
-  if (text.startsWith("{")) {
-    return parseJwkInput(text).coseKey;
+  if (inspection.type === "jwk") {
+    return inspection.coseKey;
   }
-  const secret = parseSecretInput(text, "auto");
-  if (secret === undefined) {
-    throw new Error("enter a verification key");
+  if (inspection.type === "secret") {
+    return C4M.symmetricKey(inspection.secret);
   }
-  return C4M.symmetricKey(secret.secret);
+  throw new Error("enter a verification key");
 }
 
 async function verifyToken(): Promise<void> {
@@ -510,7 +575,7 @@ async function verifyToken(): Promise<void> {
   verifyOk.value = undefined;
   try {
     const options: C4M.CatVerifyOptions = {};
-    if (verifyAlgorithm.value !== "auto") {
+    if (verifyAlgorithm.value !== "any") {
       options.expectedAlgorithm = verifyAlgorithm.value;
     }
     if (verifyType.value.trim().length > 0) {
@@ -703,17 +768,18 @@ async function generateKeyPair(): Promise<void> {
  * 署名鍵を入力から解決する
  */
 function resolveSigningKey(): { coseKey: C4M.CoseKey; publicJwk: C4M.Jwk | undefined } {
-  const text = signingKeyText.value.trim();
-  if (text.length > 0) {
-    if (text.startsWith("{")) {
-      const parsed = parseJwkInput(text);
-      return { coseKey: parsed.coseKey, publicJwk: publicJwkOf(parsed.jwk) };
+  const inspection = inspectKeyInput(signingKeyText.value, signingSecretFormat.value);
+  if (inspection.type === "error") {
+    throw new Error(inspection.message);
+  }
+  if (inspection.type === "jwk") {
+    if (!inspection.hasPrivateKey) {
+      throw new Error("the signing JWK has no private key");
     }
-    const secret = parseSecretInput(text, signingSecretFormat.value);
-    if (secret === undefined) {
-      throw new Error("signing key is empty");
-    }
-    return { coseKey: C4M.symmetricKey(secret.secret), publicJwk: undefined };
+    return { coseKey: inspection.coseKey, publicJwk: publicJwkOf(inspection.jwk) };
+  }
+  if (inspection.type === "secret") {
+    return { coseKey: C4M.symmetricKey(inspection.secret), publicJwk: undefined };
   }
   const generated = generatedKey.value;
   if (generated === undefined) {
@@ -968,7 +1034,7 @@ function IssuePanel() {
       <div>
         <div class="flex items-center justify-between mb-1">
           <label class={LABEL_CLASS} for="c4m-signing-key">
-            Signing key (JWK, or secret for HMAC). Empty uses the generated key.
+            Signing key (JWK with a private key, or secret for HMAC). Empty uses the generated key.
           </label>
           <div class="flex items-center gap-2">
             <select
@@ -980,7 +1046,7 @@ function IssuePanel() {
                   .value as SecretInputFormat;
               }}
             >
-              <option value="auto">auto</option>
+              <option value="detect">Detect (hex, then base64url, then text)</option>
               <option value="hex">hex</option>
               <option value="base64url">base64url</option>
               <option value="text">text</option>
@@ -995,6 +1061,11 @@ function IssuePanel() {
           onInput={(event) => {
             signingKeyText.value = (event.target as HTMLTextAreaElement).value;
           }}
+        />
+        <KeyStatus
+          inspection={inspectKeyInput(signingKeyText.value, signingSecretFormat.value)}
+          testId="c4m-signing-key-status"
+          role="sign"
         />
       </div>
       <div class="space-y-2">
