@@ -3,17 +3,16 @@
 - Created: 2026-09-21
 - Completed: {YYYY-MM-DD}
 - Branch: feature/update-sync-api-docs
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-09-29
 
 ## 目的
 
-`docs/HIGH_LEVEL_API.md` / `docs/LOW_LEVEL_API.md` / `docs/MSF.md` / `README.md` が実装と食い違っている。docs を読んだ利用者が存在しないオプション値や受け付けられない URL を使うことになるため、実装に合わせる。
+`docs/HIGH_LEVEL_API.md` / `docs/LOW_LEVEL_API.md` / `docs/MSF.md` が実装と食い違っている。docs を読んだ利用者が存在しないオプション値や受け付けられない URL を使うことになるため、実装に合わせる。`README.md` の食い違いは 0672 で扱う。
 
 ## 現状
 
 すべて現行の docs とコードで確認した。
 
-- `docs/HIGH_LEVEL_API.md` の `MediaSubscriber.requestKeyframe` の説明が「SUBSCRIBE_UPDATE 送信」となっている。実装 (`src/createMediaSubscriber.ts` の `requestKeyframe`) は `Subscriber.update` を呼び、`src/subscriber.ts` が §9.5 の `REQUEST_UPDATE` を送る。draft-21 に SUBSCRIBE_UPDATE は無い
 - `docs/HIGH_LEVEL_API.md` の使用例 2 箇所が `https://relay.example.com/moqt` を渡している。`src/moqtUri.ts` の `normalizeMoqtUri` は `moqt://` で始まらない URL を `Error` で拒否し、`moqt://` の例は README 側にしかない
 - `docs/LOW_LEVEL_API.md` の `ConnectOptions` 表が `moqtImplementation` を「SETUP Option 0x0A」としている。`SetupOptionType.MOQT_IMPLEMENTATION` は 0x07 で、draft-21 §9.1.5 (MOQT IMPLEMENTATION) も 0x07 と定める
 - `docs/LOW_LEVEL_API.md` の `ConnectOptions` 表に次の 5 つが無い (`src/session/publicTypes.ts` に定義がある)
@@ -27,18 +26,19 @@
 
 ## 設計方針
 
-- docs を実装に合わせる。API 名・オプション名・既定値・使用例の URL を実装と一致させる
+- docs を実装に合わせる。API 名・オプション名・既定値・使用例の URL を実装と一致させる (URL は `moqt://` 形式に置き換える)
 - `MOQLOG` / `MOQMETRICS` は `docs/MSF.md` の公開 API 一覧に追記する。README 側は 0672 で扱う
-- Priority の説明は 0638 (Publisher Priority の向き) で扱うため本 issue では触れない
+- `MediaSubscriber.requestKeyframe` の説明は 2026-09-24 に「REQUEST_UPDATE 送信」へ修正済みであり、実装 (`src/createMediaSubscriber.ts` の `requestKeyframe` が `Subscriber.update` 経由で §9.5 の `REQUEST_UPDATE` を送る) と一致しているため、本 issue では扱わない
+- Priority の説明は closed/0638 (Publisher Priority の向き) で解決済みであるため、本 issue では触れない
 
 ## 完了条件
 
-- docs の API 名・オプション名・既定値・例が実装と一致する
+- `docs/HIGH_LEVEL_API.md` / `docs/LOW_LEVEL_API.md` / `docs/MSF.md` の API 名・オプション名・既定値・例が実装と一致する (`README.md` は対象外。0672 で扱う)
 - `pnpm exec vp check` が通る
 
 ## 参照
 
-- issues/0638-bug-publisher-priority-order.md (Priority の説明。本 issue では扱わない)
+- closed/0638-bug-publisher-priority-order.md (Priority の説明。解決済み。本 issue では扱わない)
 - issues/0672-update-readme-implementation-status.md (README 側の記載)
 - `src/session/publicTypes.ts` (`ConnectOptions` の各フィールドと既定値)
 - `src/message/types.ts` (`SetupOptionType`) / `src/moqtUri.ts` (`normalizeMoqtUri`)
