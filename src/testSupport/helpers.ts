@@ -42,6 +42,45 @@ export const nodeProcess = (
 ).process;
 
 /**
+ * 未処理の rejection を収集しながらテスト本体を実行する
+ *
+ * Node の `unhandledRejection` をテスト本体の実行中だけ購読し、収集した reason を
+ * 本体へ渡す。購読の解除は本体が throw しても必ず行う。
+ * `unhandledRejection` は reject の後のマイクロタスクより遅れて発火するため、
+ * 判定の前に waitForUnhandledRejectionDetection で待つこと。
+ *
+ * @param run - 収集した未処理の rejection を受け取るテスト本体
+ * @returns テスト本体の戻り値
+ */
+export async function withUnhandledRejectionWatch<T>(
+  run: (unhandled: unknown[]) => Promise<T>,
+): Promise<T> {
+  const unhandled: unknown[] = [];
+  const onUnhandled = (reason: unknown) => {
+    unhandled.push(reason);
+  };
+  nodeProcess.on("unhandledRejection", onUnhandled);
+  try {
+    return await run(unhandled);
+  } finally {
+    nodeProcess.off("unhandledRejection", onUnhandled);
+  }
+}
+
+/**
+ * 未処理の rejection の発火を待つ
+ *
+ * `unhandledRejection` は reject の後のマイクロタスクで発火するため、駆動した直後に
+ * 判定すると検出できない。50 ms の壁時計待ちで確実に検出できる
+ * (CI 負荷を考慮した十分な余裕)。
+ */
+export function waitForUnhandledRejectionDetection(): Promise<void> {
+  return new Promise<void>((resolve) => {
+    setTimeout(() => resolve(), 50);
+  });
+}
+
+/**
  * globalThis.VideoDecoder を置き換えてテスト本体を実行し、必ず元に戻す
  *
  * Node には WebCodecs が無いため、この境界だけを置き換えて判定規則を固定する。

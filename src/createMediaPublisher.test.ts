@@ -55,6 +55,10 @@ import type { Publisher } from "./publisher";
 import type { PublishCallbacks, Session } from "./session";
 import * as LOC from "./loc";
 import { WallClockMapper } from "./mediaClock";
+import {
+  waitForUnhandledRejectionDetection,
+  withUnhandledRejectionWatch,
+} from "./testSupport/helpers";
 
 /**
  * 破棄検出付きのテスト用フレーム
@@ -798,7 +802,7 @@ function createRecordingSendPublisher(): {
   const sent: { groupId: number; objectId: number; priority?: number }[] = [];
   const publisher = {
     state: "active",
-    sendObject: (params: { groupId: number; objectId: number; priority?: number }) => {
+    sendObject: async (params: { groupId: number; objectId: number; priority?: number }) => {
       sent.push({
         groupId: params.groupId,
         objectId: params.objectId,
@@ -1296,6 +1300,152 @@ test("handleVideoEncodedChunk: publisher が active でない間は保持値を�
 });
 
 /**
+ * 送信が失敗する Publisher
+ *
+ * sendObject の失敗の形を切り替える。本番の Publisher は事前検証の違反で自分で通知して
+ * から返値を reject するため、通知を伴う reject ("notifyThenReject") が本番の契約である。
+ * 通知を伴わない reject ("reject") は reject の回収だけを検証する分岐、同期 throw
+ * ("throw") は通知を伴わない失敗の分岐である。Publisher の実装は WebTransport を要する
+ * ため、失敗の形だけを持つ最小オブジェクトを cast で注入する。
+ *
+ * @param mode - 失敗の形
+ * @param notify - 通知を伴う失敗で呼ぶ通知先 (テストの onError 収集)
+ */
+function createFailingSendPublisher(
+  mode: "reject" | "notifyThenReject" | "throw",
+  notify: (error: Error) => void,
+): {
+  publisher: Publisher;
+  callCount: () => number;
+} {
+  let count = 0;
+  const publisher = {
+    state: "active",
+    sendObject: (): Promise<void> => {
+      count++;
+      if (mode === "throw") {
+        throw new Error("send threw");
+      }
+      let failure: Error;
+      if (mode === "notifyThenReject") {
+        // 本番の契約 (事前検証の違反は自分で通知してから返値を reject する) を再現する
+        failure = new Error("send rejected after notify");
+        notify(failure);
+      } else {
+        failure = new Error("send rejected");
+      }
+      return Promise.reject(failure);
+    },
+  } as unknown as Publisher;
+  return { publisher, callCount: () => count };
+}
+
+/**
+ * 送信が失敗する Publisher を注入して chunk を 1 件流す
+ *
+ * 音声 / 映像の送信箇所が、返値の reject を回収し (未処理の rejection にせず)、
+ * 通知を伴わない失敗 (同期 throw) を onError へ 1 回流すこと、通知を伴う reject では
+ * 通知を重ねないことを駆動する。
+ *
+ * @param kind - 音声側 / 映像側のどちらの送信箇所を駆動するか
+ * @param mode - 失敗の形 (createFailingSendPublisher を参照)
+ */
+async function driveSendFailure(
+  kind: "audio" | "video",
+  mode: "reject" | "notifyThenReject" | "throw",
+): Promise<{ callCount: number; errors: Error[]; unhandled: unknown[] }> {
+  const { control: loopControl, errors } = createLoopTestContext();
+  const control = loopControl as unknown as PublisherGroupControl;
+  const { publisher, callCount } = createFailingSendPublisher(mode, (error) => {
+    errors.push(error);
+  });
+  return withUnhandledRejectionWatch(async (unhandled) => {
+    if (kind === "audio") {
+      control.audioPublisher = publisher;
+      control.handleAudioEncodedChunk({
+        data: new Uint8Array([0xaa]),
+        type: "key",
+        timestamp: 0,
+        duration: null,
+      });
+    } else {
+      control.videoPublisher = publisher;
+      control.handleVideoEncodedChunk({
+        data: new Uint8Array([0xaa]),
+        type: "key",
+        timestamp: 0,
+        duration: null,
+      });
+    }
+    await waitForUnhandledRejectionDetection();
+    return { callCount: callCount(), errors, unhandled };
+  });
+}
+
+test("handleAudioEncodedChunk: 送信の reject は通知せず未処理にもしない", async () => {
+  // 通知の担い手は Publisher 側である (事前検証が自分で通知してから返値を reject する)。
+  // 呼び出し側が同じ失敗を通知すると 1 件の失敗で 2 回通知になるため、ここでは
+  // reject を回収するだけにして通知が 0 回であることを固定する
+  const { callCount, errors, unhandled } = await driveSendFailure("audio", "reject");
+
+  assert.equal(callCount, 1);
+  assert.equal(errors.length, 0);
+  assert.equal(unhandled.length, 0);
+});
+
+test("handleVideoEncodedChunk: 送信の reject は通知せず未処理にもしない", async () => {
+  // 映像側も音声側と同じ扱いであることの検証
+  const { callCount, errors, unhandled } = await driveSendFailure("video", "reject");
+
+  assert.equal(callCount, 1);
+  assert.equal(errors.length, 0);
+  assert.equal(unhandled.length, 0);
+});
+
+test("handleAudioEncodedChunk: 通知を伴う送信の reject でも onError は合計 1 回", async () => {
+  // 本番の契約 (Publisher が通知してから返値を reject する) を再現する。呼び出し側は
+  // 通知し直さないため、1 件の失敗で onError は 1 回のままである
+  const { callCount, errors, unhandled } = await driveSendFailure("audio", "notifyThenReject");
+
+  assert.equal(callCount, 1);
+  assert.equal(errors.length, 1);
+  assert.isTrue((errors[0]?.message ?? "").includes("send rejected after notify"));
+  assert.equal(unhandled.length, 0);
+});
+
+test("handleVideoEncodedChunk: 通知を伴う送信の reject でも onError は合計 1 回", async () => {
+  // 映像側も音声側と同じ扱いであることの検証
+  const { callCount, errors, unhandled } = await driveSendFailure("video", "notifyThenReject");
+
+  assert.equal(callCount, 1);
+  assert.equal(errors.length, 1);
+  assert.isTrue((errors[0]?.message ?? "").includes("send rejected after notify"));
+  assert.equal(unhandled.length, 0);
+});
+
+test("handleAudioEncodedChunk: 送信の同期 throw は onError に 1 回届く", async () => {
+  // 同期 throw は Publisher 側の通知を伴わない (closed の throw は先頭の state ガードで
+  // 到達せず、委譲先が同期 throw する場合の防御である)。呼び出し元へ例外を漏らさず、
+  // 通知を 1 回だけ行うことを固定する
+  const { callCount, errors, unhandled } = await driveSendFailure("audio", "throw");
+
+  assert.equal(callCount, 1);
+  assert.equal(errors.length, 1);
+  assert.isTrue((errors[0]?.message ?? "").includes("send threw"));
+  assert.equal(unhandled.length, 0);
+});
+
+test("handleVideoEncodedChunk: 送信の同期 throw は onError に 1 回届く", async () => {
+  // 映像側も音声側と同じ扱いであることの検証
+  const { callCount, errors, unhandled } = await driveSendFailure("video", "throw");
+
+  assert.equal(callCount, 1);
+  assert.equal(errors.length, 1);
+  assert.isTrue((errors[0]?.message ?? "").includes("send threw"));
+  assert.equal(unhandled.length, 0);
+});
+
+/**
  * Forward State 変化の登録を検証するための制御口
  *
  * createPublishers() は接続を要する start() からしか呼べないため、publish 呼び出しを
@@ -1784,7 +1934,7 @@ function createRecordingCatalogSendPublisher(): {
   const sent: { groupId: number; objectId: number; payload: Uint8Array }[] = [];
   const publisher = {
     state: "active",
-    sendObject: (params: { groupId: number; objectId: number; payload: Uint8Array }) => {
+    sendObject: async (params: { groupId: number; objectId: number; payload: Uint8Array }) => {
       sent.push({ groupId: params.groupId, objectId: params.objectId, payload: params.payload });
     },
   } as unknown as Publisher;

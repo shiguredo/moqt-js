@@ -404,6 +404,46 @@ test("明示 NORMAL の非空 payload と空 payload の END_OF_GROUP は送信�
   assert.equal(sent, 2);
 });
 
+test("END_OF_GROUP 送信後の同一 Group への sendObject は失敗する", async () => {
+  // draft-ietf-moq-transport-21 §11.1.2 (Object Status):
+  // END_OF_GROUP は Group の最終 Object を宣言するため、同じ Group への後続送信は
+  // guard で拒否され、通知してから返値の reject になることを単体層で固定する。
+  // 委譲先へ渡さないことと、別の Group への送信は妨げないことも合わせて確認する
+  const errors: Error[] = [];
+  const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n, (error) => {
+    errors.push(error);
+  });
+  let sent = 0;
+  publisher.onSendObject = async () => {
+    sent++;
+  };
+
+  await publisher.sendObject({
+    groupId: 0,
+    objectId: 0,
+    payload: new Uint8Array(0),
+    status: ObjectStatus.END_OF_GROUP,
+  });
+
+  let thrown: unknown = null;
+  try {
+    await publisher.sendObject({ groupId: 0, objectId: 1, payload: new Uint8Array([1]) });
+  } catch (error) {
+    thrown = error;
+  }
+
+  assert.isTrue(thrown instanceof ProtocolViolationError);
+  assert.equal(errors.length, 1);
+  assert.strictEqual(errors[0], thrown);
+  // 拒否した分は委譲先へ渡らない
+  assert.equal(sent, 1);
+
+  // 別の Group へは送信できる (END_OF_GROUP は宣言した Group にだけ効く)
+  await publisher.sendObject({ groupId: 1, objectId: 0, payload: new Uint8Array([1]) });
+  assert.equal(sent, 2);
+  assert.equal(errors.length, 1);
+});
+
 test("2 回目の END_OF_TRACK 自体が拒否される", async () => {
   const errors: Error[] = [];
   const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n, (error) => {

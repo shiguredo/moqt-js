@@ -263,6 +263,13 @@
   - 上限で捨てたログの vnode はキャッシュから落とす。`data` と `payload` は追加後に書き換えない前提になる (行を描画し直さないため、書き換えても表示は古いまま)
   - 1 件追加のコストは表示中の件数に比例する分が残る (1000 件で約 3 ms のうち、表示中の子の走査が大半)。表示する行を画面に入る分だけにする対応は別に行う
   - @voluntas
+- [FIX] 高レベル API が送信と再構成の失敗を処理せず unhandled rejection になるのを修正する
+  - `createMediaPublisher` の音声 / 映像の送信 2 箇所が、`Publisher.sendObject` の返値の reject を回収する。reject は Publisher 側が通知してから返す契約であるため、呼び出し側は通知せず、1 件の失敗で 2 回通知にならないようにする。委譲先が同期 throw する場合は通知を伴わないため `onError` へ 1 回流す
+  - `createMediaSubscriber` の自動再生ポリシー対応の `AudioContext.resume()` の失敗を `onError` へ 1 回流す
+  - `createMediaSubscriber` の `reconfigureAudioDecoder` / `reconfigureVideoDecoder` を reject しない契約にし、codec / channels の解決が同期 throw した場合も含めて `onError` へ 1 回流す (呼び出し側は `void` で呼ぶため、reject を残すと未処理の rejection になる)
+  - `Publisher.sendObject` の JSDoc に、事前検証が自分で通知してから reject することと、closed では同期 throw することを明記する。`sendDatagram` の JSDoc の「closed 後は検証前に no-op で返す」も実装 (同期 throw) に合わせる
+  - `createMediaSubscriber` の映像デコーダーの error コールバックは、`onError` が throw しても復帰 (復号順の初期化と `reset()`) を止めない。`reconfigure*` と `resume()` も通知の throw を吸収し、未処理の rejection を残さない
+  - @voluntas
 - [FIX] ライブラリの映像デコーダーが恒久エラーで Worker の再生成を繰り返すのを修正する
   - 非対応 codec は `VideoDecoder.isConfigSupported` の事前確認で検出し、Worker も `VideoDecoder` も作らずに `Decoder codec not supported: <codec>` で失敗する。false と reject の両方を非対応として扱い、確認は Worker の生成 / `VideoDecoder` の configure の直前 (`src/codec/configSupport.ts`) に置く。WebCodecs 非搭載の環境は codec の非対応と区別できる文言で失敗する
   - 同じ config で復号フレームを得ないまま再初期化できる回数の上限を 3 回にする (`DecoderResetBudget`)。復号フレームを 1 枚でも出力したときと `configure()` を呼んだときに予算を 0 に戻し、再初期化の試行で消費する (`configure()` を呼んだ時点で戻るため、対応確認や構成が失敗した場合も戻る。再初期化の試行は失敗しても 1 回分消費する)
