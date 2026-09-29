@@ -22,6 +22,13 @@ import {
   validatePublisherPriority,
 } from "./common";
 
+// Subgroup ID の契約違反のエラー文言。型値と実際値は呼び出し側が連結する
+const ERR_SUBGROUP_ID_REQUIRED = "subgroupId is required when the Subgroup ID field is present";
+const ERR_SUBGROUP_ID_ZERO_MODE =
+  "subgroupId must be 0 or omitted when the Subgroup ID is fixed to 0";
+const ERR_SUBGROUP_ID_FIRST_OBJECT_MODE =
+  "subgroupId must be omitted when the Subgroup ID is the first Object ID";
+
 /**
  * Subgroup Header Type Flags (Section 11.3.1)
  *
@@ -187,6 +194,14 @@ export const SubgroupHeaderType = {
 
 /**
  * Subgroup Header
+ *
+ * draft-ietf-moq-transport-21 §11.3.1: Subgroup ID は SUBGROUP_ID_MODE (bit 1-2) で
+ * 決まる。Type Flags が有効な場合に限り、0b00 は 0 に固定され (encode は undefined または
+ * `0n` だけを受理し、decode は `0n` を返す)、0b01 は先頭 Object の Object ID になり
+ * (encode は undefined だけを受理し、decode は `subgroupId` を載せずに先頭 Object の
+ * Object ID で解決する)、0b10 はフィールドで明示する (encode は `subgroupId` が必須)。
+ *
+ * Priority Present の type は `publisherPriority` が必須である。
  */
 export interface SubgroupHeader {
   type: number;
@@ -218,12 +233,15 @@ export interface SubgroupHeader {
 }
 
 /**
- * Check if subgroup header type has explicit Subgroup ID field
+ * SUBGROUP_ID_MODE (bit 1-2) を取り出す
  * draft-ietf-moq-transport-21 Section 11.3.1
+ *
+ * 0b00 は Subgroup ID が 0、0b01 は先頭 Object の Object ID、0b10 はフィールドで
+ * 明示する。0b11 は予約である。Subgroup ID の有無と値の決まり方はこのモードで決まり、
+ * 受理する値の判定は encode / decode 側で行う。
  */
-function hasSubgroupIdField(headerType: number): boolean {
-  const lowNibble = headerType & 0x0f;
-  return lowNibble === 0x04 || lowNibble === 0x05 || lowNibble === 0x0c || lowNibble === 0x0d;
+function subgroupIdMode(headerType: number): number {
+  return (headerType & 0x06) >> 1;
 }
 
 /**
@@ -288,9 +306,32 @@ export function encodeSubgroupHeader(header: SubgroupHeader): Uint8Array {
   parts.push(encodeVarint(header.trackAlias));
   parts.push(encodeVarint(header.groupId));
 
-  // Subgroup ID フィールド (明示的な Subgroup ID を持つタイプのみ)
-  if (hasSubgroupIdField(header.type) && header.subgroupId !== undefined) {
+  // Subgroup ID フィールド (SUBGROUP_ID_MODE で有無と値の契約が決まる)
+  // draft-ietf-moq-transport-21 §11.3.1: 0b10 の type はフィールドが present であり、
+  // decode 側は無条件に読む。省略するとフィールドずれで Publisher Priority や
+  // Object ID Delta が Subgroup ID として読まれるため、Priority Present と同じく
+  // throw する。0b00 は Subgroup ID が 0 に固定され、0b01 は先頭 Object の Object ID に
+  // なるため、decode の返り値と往復できる値だけを受け付ける (判定は未 OR の
+  // header.type で行う。mask 0x06 は FIRST_OBJECT 0x40 と END_OF_GROUP 0x08 の
+  // 影響を受けない)。
+  const mode = subgroupIdMode(header.type);
+  if (mode === 0b10) {
+    if (header.subgroupId === undefined) {
+      throw new Error(
+        `${ERR_SUBGROUP_ID_REQUIRED}: type 0x${header.type.toString(16)}, got undefined`,
+      );
+    }
     parts.push(encodeVarint(header.subgroupId));
+  } else if (mode === 0b00) {
+    if (header.subgroupId !== undefined && header.subgroupId !== 0n) {
+      throw new Error(
+        `${ERR_SUBGROUP_ID_ZERO_MODE}: type 0x${header.type.toString(16)}, got ${header.subgroupId}`,
+      );
+    }
+  } else if (header.subgroupId !== undefined) {
+    throw new Error(
+      `${ERR_SUBGROUP_ID_FIRST_OBJECT_MODE}: type 0x${header.type.toString(16)}, got ${header.subgroupId}`,
+    );
   }
 
   // Publisher Priority (8 ビット) - Priority Present を持つタイプのみ
@@ -322,7 +363,7 @@ export function encodeSubgroupHeader(header: SubgroupHeader): Uint8Array {
  * (encodeSubgroupHeader) の双方から使い、判定を 1 箇所に保つ。
  */
 export function hasReservedSubgroupIdMode(type: number): boolean {
-  return (type & 0x06) >> 1 === 0x03;
+  return subgroupIdMode(type) === 0b11;
 }
 
 /**
@@ -374,25 +415,19 @@ export function decodeSubgroupHeader(data: Uint8Array, offset = 0): [SubgroupHea
   }
 
   // タイプに基づいて Subgroup ID フィールドの有無を判定
-  // draft-ietf-moq-transport-21 Section 11.3.1:
-  // - Types 0x14-0x15, 0x1C-0x1D, 0x34-0x35, 0x3C-0x3D,
-  //   0x54-0x55, 0x5C-0x5D, 0x74-0x75, 0x7C-0x7D: Subgroup ID Field Present
-  // - Types 0x10-0x11, 0x18-0x19, 0x30-0x31, 0x38-0x39,
-  //   0x50-0x51, 0x58-0x59, 0x70-0x71, 0x78-0x79: Subgroup ID = 0
-  // - Types 0x12-0x13, 0x1A-0x1B, 0x32-0x33, 0x3A-0x3B,
-  //   0x52-0x53, 0x5A-0x5B, 0x72-0x73, 0x7A-0x7B: Subgroup ID = First Object ID (no field)
-  const lowNibble = typeNum & 0x0f;
-  if (lowNibble === 0x04 || lowNibble === 0x05 || lowNibble === 0x0c || lowNibble === 0x0d) {
+  // draft-ietf-moq-transport-21 Section 11.3.1: SUBGROUP_ID_MODE がフィールドの有無と
+  // 値の決まり方を定める。判定は subgroupIdMode に集約し、encode 側と食い違わないようにする
+  const subgroupMode = subgroupIdMode(typeNum);
+  if (subgroupMode === 0b10) {
     // 明示的な Subgroup ID フィールドが存在
     const [sid, sidConsumed] = decodeVarint(data, offset + totalConsumed);
     subgroupId = sid;
     totalConsumed += sidConsumed;
-  } else if (lowNibble === 0x00 || lowNibble === 0x01 || lowNibble === 0x08 || lowNibble === 0x09) {
+  } else if (subgroupMode === 0b00) {
     // Subgroup ID = 0
     subgroupId = 0n;
   }
-  // タイプ 0x02, 0x03, 0x0A, 0x0B:
-  // Subgroup ID = First Object ID (最初のオブジェクト読み取り時に設定)
+  // 0b01 (Subgroup ID = First Object ID) は最初のオブジェクト読み取り時に設定する
 
   // Publisher Priority (8 ビット)
   // draft-ietf-moq-transport-21 Section 11.3.1
