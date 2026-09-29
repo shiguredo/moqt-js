@@ -4,6 +4,7 @@ import { useAutoScroll } from "../hooks/useAutoScroll";
 import { ActionButton } from "./ActionButton";
 import { MessageItem } from "./MessageItem";
 import { OutgoingStreamIcon, ClearIcon, StopIcon, CloseIcon } from "./Icons";
+import { shouldSendOnEnter } from "../../utils/messageInput";
 
 /**
  * 送信用単方向ストリームアイテム
@@ -68,7 +69,10 @@ function UniSendStreamItem({ streamId }: { streamId: number }) {
             type="text"
             value={input.value}
             onInput={(e) => (input.value = e.currentTarget.value)}
-            onKeyDown={(e) => e.key === "Enter" && handleSend()}
+            onKeyDown={(e) => {
+              // 日本語入力の変換確定の Enter では送信しない (shouldSendOnEnter)
+              if (shouldSendOnEnter(e)) handleSend();
+            }}
             placeholder="Enter message..."
             class="flex-1 px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
           />

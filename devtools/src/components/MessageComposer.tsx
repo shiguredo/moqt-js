@@ -1,4 +1,5 @@
 import { useState } from "preact/hooks";
+import { shouldSendOnEnter } from "../utils/messageInput";
 
 interface MessageComposerProps {
   /** event timeline トラックの publisher が active でないときは true */
@@ -48,10 +49,12 @@ export function MessageComposer({ disabled, onSend, sentCount }: MessageComposer
           value={text}
           onInput={(event) => setText(event.currentTarget.value)}
           onKeyDown={(event) => {
-            if (event.key === "Enter") {
-              event.preventDefault();
-              send();
+            // 日本語入力の変換確定の Enter では送信しない (shouldSendOnEnter)
+            if (!shouldSendOnEnter(event)) {
+              return;
             }
+            event.preventDefault();
+            send();
           }}
           disabled={disabled}
           placeholder="Message to send on the event timeline"
