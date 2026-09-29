@@ -35,6 +35,11 @@
 - [CHANGE] moqt-devtools の `window.moqtDevTools` が返す Subscriber の統計で、音声の項目を `audio` の下へまとめる
   - `audioObjectsReceived` / `audioChunksDecoded` / `audioPeakDbfs` / `audioRmsDbfs` / `audioLastLevel` / `audioLastVoiceActivity` / `audioPlayoutRebases` / `audioPlayoutDrops` を `audio.objectsReceived` などの入れ子にする。E2E が読む名前が変わるため後方互換はない
   - @voluntas
+- [ADD] moqt-devtools に C4M トークンの生成と検証ツールを追加する
+  - `c4m-devtools.html` で CAT トークンをデコードし、クレーム / moqt スコープ / 有効期限を表示する。JWK または対称鍵を貼り付けて署名を検証でき、アクション + namespace + track の認可判定もできる
+  - Web Crypto API の `generateKey` で ES256 / ES384 / ES512 / EdDSA の鍵ペアと HMAC の対称鍵を生成し、クレームとスコープを指定して compact / COSE 形式のトークンを発行できる。鍵はメモリ上だけで扱う
+  - `C4M` 名前空間に JWK (RFC 7517) のデコード / エンコード、RFC 7638 のサムプリント、`CoseKey` との変換を追加する
+  - @voluntas
 - [ADD] C4M (draft-ietf-moq-c4m-01) の CBOR / COSE / CAT コーデックを追加する
   - CBOR (RFC 8949) / COSE (RFC 9052) / CAT (CTA-5007-B) を依存ゼロで実装する。`C4M` 名前空間で CBOR のデータ項目、COSE_Sign1 / COSE_Mac0 / CWT の構造、CAT のクレームとトークンのデコード / 発行 / 検証を公開する
   - 署名と検証は Web Crypto API だけを使い、HMAC-SHA256 / 384 / 512 と ES256 / ES384 / ES512、EdDSA に対応する

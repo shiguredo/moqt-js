@@ -96,6 +96,9 @@ export function App() {
             {/* 副題。接続設定の signal を読むのはこのコンポーネントの中だけにする */}
             <ModeSubtitle />
             <p class="mt-2 flex justify-center gap-4">
+              <a href="/c4m-devtools.html" class="text-blue-500 hover:text-blue-600 underline">
+                C4M DevTools
+              </a>
               <a
                 href="/webcodecs-devtools.html"
                 class="text-blue-500 hover:text-blue-600 underline"
