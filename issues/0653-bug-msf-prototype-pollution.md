@@ -1,7 +1,7 @@
 # Catalog の未知フィールド取り込みでプロトタイプが差し替わる
 
 - Created: 2026-09-21
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-29
 - Branch: feature/fix-msf-prototype-pollution
 - Polished: 2026-09-21
 
@@ -53,4 +53,15 @@ MSF Catalog の decode、変数置換、delta 適用は、JSON の `__proto__` �
 
 ## 解決方法
 
-{未着手}
+未知フィールドを保持・再出力・変数置換する経路の動的キー代入を、新規モジュール `src/msf/ownFields.ts` の `setOwnField(record, key, value)` に統一した。`key` が `"__proto__"` のときだけ `Object.defineProperty` で own data property (writable / enumerable / configurable をすべて true) を作り、それ以外は通常の代入にする。属性を `JSON.parse` が作る own data property と揃えることで、以降の代入・spread・`JSON.stringify` の扱いが変わらず round-trip が保たれる。
+
+- `src/msf/catalogValidation.ts`: root の未知フィールド保持と `validateCatalogTrack` の track 直下の未知フィールド保持
+- `src/msf/catalogTrackValidation.ts`: `buildValidatedCatalogTrack` の track 直下の未知フィールド保持
+- `src/msf/catalogCodec.ts`: `encodeCatalog` / `encodeCatalogDelta` の未知フィールド再出力と `decodeCatalogDelta` の未知フィールド保持
+- `src/msf/catalogDelta.ts`: `applyCatalogDelta` の base catalog からの引き継ぎ
+- `src/msf/variables.ts`: `resolveCatalogVariables` / `substituteTrack` の書き戻し、`authInfo` の組み直し、`substituteUnknownValue` のネスト組み直し
+- `serializeTrackForJson` はスプレッドでコピーしており `Object.assign` を使わない旨をコメントに明記した (`Object.assign` は `[[Set]]` を使うため own `__proto__` で `[[Prototype]]` を差し替える)。`validateCatalogTrack` の JSDoc が実装と反対の「未知フィールドは黙って捨てる」と書いていたのも実装に合わせた
+
+`src/msf.test.ts` に 12 テストを追加した。入力は `JSON.parse` が own `__proto__` を作ることを使うため生の JSON 文字列で組み立て、`assertOwnProtoField` で `[[Prototype]]` が `Object.prototype` のままであること、own data property として保持されること、descriptor の属性が `JSON.parse` と一致することを検証する。対象は full catalog (object / null / 配列 / 偽の既知フィールド)・track・Catalog Delta・`applyCatalogDelta`・`resolveCatalogVariables` (root / track / ネスト / authInfo)・template 付き track の round-trip である。スプレッドを `Object.assign` に戻す変異試験で template 付き track のテストが落ちることも確認した。
+
+`CHANGES.md` の `## develop` に `[FIX]` を追記し、decode 後の Catalog が own `__proto__` を持ち得るため利用者側の複製は spread か `structuredClone` を使う旨も記載した。
