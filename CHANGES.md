@@ -275,6 +275,17 @@
   - 上限で捨てたログの vnode はキャッシュから落とす。`data` と `payload` は追加後に書き換えない前提になる (行を描画し直さないため、書き換えても表示は古いまま)
   - 1 件追加のコストは表示中の件数に比例する分が残る (1000 件で約 3 ms のうち、表示中の子の走査が大半)。表示する行を画面に入る分だけにする対応は別に行う
   - @voluntas
+- [FIX] moqt-devtools の映像エンコーダのバックプレッシャが Worker モードで無効になっているのを修正する
+  - `devtools/src/utils/EncoderWrapper.ts` の `encodeQueueSize` は、Worker モードで Worker へ送信してまだ `encoded` 応答が返っていないフレーム数を返す (ライブラリ側と同じ純粋カウンタを使う)。0 固定だったため、閾値を超えたフレームを破棄する判定が常に真になり、全フレームを Worker へ送っていた
+  - `configure` と `close` で送信中のフレーム数を 0 に戻し、再 `configure` では旧 Worker を破棄してから作り直す。戻す位置は Worker の差し替えの直後 (同期) とし、`configure` の待機中に新しい Worker へ送ったフレームの数まで消えないようにする。戻さないと数が張り付き、以後のフレームがすべて破棄される
+  - Worker が `error` 応答を返したら送信中のフレーム数を 0 に戻し、`configured` を false にして投入を止める。初期化が終わる前の失敗は `configure` の reject で伝え、初期化の後に届いた失敗は `error` コールバックで通知する。戻さないと閾値を超えたまま張り付いて、以後すべてのフレームが破棄される
+  - エンコーダー Worker は、初期化の応答・失敗理由の文言化・コーデックの破棄と状態判定をライブラリ側の共有モジュール (`src/codec/workerConfigure.ts` / `src/codec/codecLifecycle.ts` / `src/codec/workerMessages.ts`) から import して使う。設定できない config を未処理の例外にせず `error` 応答で返し (message は常に非空)、`encode()` が例外を投げても `VideoFrame` を閉じる
+  - `devtools/src/utils/EncoderWrapper.ts` の状態のラベル・未設定の警告・直接モードの投入の判定・直接モードの破棄・再 configure の差し替えは、ライブラリ側の共有モジュール (`src/codec/codecLifecycle.ts` / `src/codec/workerConfigure.ts`) の `codecStateLabel` / `warnCodecNotConfigured` / `isCodecConfigured` / `closeCodecQuiet` / `replaceCodec` に委ね、Worker の失敗理由の文言化も `toFailureMessage` を通す
+  - Worker の初期化の応答を待っている `configure` は、`close` と再 `configure` が世代を無効化したら `encoder configure superseded by newer generation` で失敗する。破棄は Worker の配送口を外して terminate するため、配送口を外す前に待機を中断しないと `configure` の Promise が未解決のまま残り、WebTransport の切断で後始末が `close` を呼ぶ経路で配信の開始処理が永久に待ち続ける。中断の口は世代ごとに持ち、破棄は待機中の全世代を中断し、解決した世代は自分の口だけを外す
+  - Worker の失敗の後始末は自世代の中で完結させ、破棄するのは自世代の Worker だけにする。今の Worker と送信中の数、`configured` に触るのは失敗した Worker が今の Worker のときだけにし、後発の `configure` が公開した Worker と待機を巻き込まないようにする
+  - エンコーダーの Worker は `new Worker(new URL(..., import.meta.url), { type: "module" })` で生成し、`?worker` の仮想モジュールを静的に import しない (oxlint がクエリを外して実ファイルを解決し、default export を誤検知するため)。生成は `configure` の中で同期に行い、初期化の応答を待つ間に投入されたフレームも新しい Worker へ送られて数えられる
+  - 上限の判定を `devtools/src/utils/encodeQueueBackpressure.ts` の `shouldDropFrame` に切り出す。破棄したフレーム数は既存の `publishTiming.encodeQueueDrops` の 1 箇所で数え、画面とコピー本文の表示も同じ名前のままにする (同じ値が別名でもう 1 行出ることはない)
+  - @voluntas
 - [FIX] moqt-devtools の購読側で、非対応 codec のときに映像デコーダーが Worker を再生成し続けるのを修正する
   - `devtools/src/utils/DecoderWrapper.ts` は、対応確認・復帰の予算・Worker の初期化応答・コーデックのライフサイクルをライブラリ側と共有するモジュール (`src/codec/configSupport.ts` / `src/codec/decoderResetBudget.ts` / `src/codec/workerConfigure.ts` / `src/codec/codecLifecycle.ts`) から import して使い、devtools 側の別実装と手書きの後始末をなくす。Worker の生成・公開・破棄も共有の手順に委ね、初期化の応答が `configured` より先に `error` になった場合 (Worker の読み込み失敗を含む) は Worker を破棄して `configure` を reject する
   - `DecoderWrapper.configure()` は対応確認の await 明けに世代を判定し、待機中に `close()` / 別の `configure()` / 別の `reset()` が始まっていた場合は Worker も `VideoDecoder` も作らずに失敗する。`close()` は世代を無効化する終端であり、以降の `reset()` は作り直さず false を返す

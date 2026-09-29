@@ -44,6 +44,7 @@ import { logDebugMessage } from "./debugMessageLog";
 import { EncoderWrapper, type EncodedChunkData } from "../utils/EncoderWrapper";
 import { WallClockMapper } from "../../../src/mediaClock.ts";
 import { EMPTY_PUBLISH_TIMING, PublishTimingStats } from "../utils/publishTimingStats";
+import { shouldDropFrame } from "../utils/encodeQueueBackpressure";
 import {
   type AudioFormat,
   buildMicrophoneConstraints,
@@ -929,7 +930,11 @@ export function usePublisher() {
         // 符号化と送信の時間は読んだ時刻から測る (publishTimingStats.ts)
         pub.publishTimingStats.value.recordRead(frame.timestamp, performance.now());
 
-        if (encoderInstance.encodeQueueSize <= 2) {
+        if (shouldDropFrame(encoderInstance.encodeQueueSize)) {
+          // 閾値を超えたフレームは待たずに破棄する (エンコーダの追従を諦めて遅延を伸ばさない)。
+          // 破棄した数は publishTimingStats が数え、統計の encodeQueueDrops はその値から作る
+          pub.publishTimingStats.value.recordEncodeQueueDrop(frame.timestamp);
+        } else {
           // 新しい Group の要求は、符号化するフレームで消費する (捨てたフレームでは消費しない)
           const decision = decideKeyFrame(
             pub.framesSinceKeyFrame.value,
@@ -942,8 +947,6 @@ export function usePublisher() {
             pub.newGroupRequested.value = false;
           }
           pub.framesEncoded.value++;
-        } else {
-          pub.publishTimingStats.value.recordEncodeQueueDrop(frame.timestamp);
         }
         frame.close();
       }

@@ -12,6 +12,11 @@
 
 import { runAudioDecoderTest, runAudioEncoderTest, runAudioSamplesTest } from "./audio.ts";
 import {
+  runDevtoolsEncoderCloseDuringConfigureTest,
+  runDevtoolsEncoderFailedWorkerConfigureTest,
+  runDevtoolsEncoderWorkerTest,
+} from "./devtoolsEncoder.ts";
+import {
   runDevtoolsDecoderCloseDuringConfigureTest,
   runDevtoolsDecoderConcurrentConfigureTest,
   runDevtoolsDecoderResetBudgetTest,
@@ -72,6 +77,9 @@ const CODEC_TESTS: { [Name in CodecTestName]: () => Promise<CodecTestResultMap[N
   audioSamples: () => runAudioSamplesTest(),
   videoEncoderReconfigureDirect: () => runVideoEncoderReconfigureTest(false),
   videoEncoderReconfigureWorker: () => runVideoEncoderReconfigureTest(true),
+  devtoolsEncoderWorker: () => runDevtoolsEncoderWorkerTest(),
+  devtoolsEncoderCloseDuringConfigure: () => runDevtoolsEncoderCloseDuringConfigureTest(),
+  devtoolsEncoderFailedWorkerConfigure: () => runDevtoolsEncoderFailedWorkerConfigureTest(),
 };
 
 /**

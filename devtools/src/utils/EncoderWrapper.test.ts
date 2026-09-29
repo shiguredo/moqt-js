@@ -6,8 +6,9 @@
  * (この環境では `VideoEncoder is not defined` / `Worker is not defined` で失敗する)。
  * ここではブラウザ API に依存しない「未設定時の状態機械」だけを固定する。
  *
- * 実ブラウザでの encode 契約は tests/e2e/codec-wrappers.spec.ts が、ライブラリ側の
- * VideoEncoderWrapper (src/codec/VideoEncoder.ts) を実 Chromium で検証している。
+ * 実ブラウザでの encode 契約は tests/e2e/codec-wrappers.spec.ts が検証している。ライブラリ側の
+ * VideoEncoderWrapper (src/codec/VideoEncoder.ts) と、この devtools の EncoderWrapper の
+ * Worker モード (devtools/src/codec-test/ の runner 経由) を実 Chromium で駆動する。
  */
 
 import { test, assert } from "vite-plus/test";
@@ -41,7 +42,8 @@ function makeCallbacks(): { callbacks: EncoderWrapperCallbacks; counts: Callback
 }
 
 // configure 前は unconfigured であり、encodeQueueSize は 0 を返す。
-// Worker モードはキューを Worker 内部で管理するため常に 0 になる契約。
+// Worker モードの encodeQueueSize は Worker へ送信してまだ encoded 応答が返っていない
+// フレーム数であり、0 を返す条件は「未設定」または「送信中 0 件」である。
 test("EncoderWrapper: configure 前は unconfigured で encodeQueueSize は 0", () => {
   for (const useWorker of [false, true]) {
     const { callbacks, counts } = makeCallbacks();
