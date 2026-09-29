@@ -11,6 +11,12 @@
 
 ## develop
 
+- [CHANGE] moqt-devtools の event timeline の eventType を `app.shiguredo.moqt-devtools.messages` にする
+  - 逆ドメイン名の取り方を見直し、画面の呼び名 (Messages) に揃える。catalog の eventType が変わる (購読側は packaging でトラックを探すため、購読の動作は変わらない)
+  - @voluntas
+- [CHANGE] moqt-devtools の Namespace の初期値を `moqt/devtools/{ランダムな 16 文字}` にする
+  - 複数の devtools が同じ relay に繋がっても namespace が衝突しないようにする。共有するときは Copy URL や Save で持ち出す。Namespace は接続先の特定に使うため、URI Fragment の左に置く
+  - @voluntas
 - [CHANGE] `MediaReceiverStats.avSync` を追加する
   - 音声と映像の同期の推定値 (同期ずれ、表示の遅れ、使っている目標遅延、切り下げた分、時計の代用の有無) を統計で確認できるようにする
   - `MediaReceiverStats` は公開型のため、この型を自前で構築しているコードは `avSync` の追加が必要になる (後方互換なし)
@@ -107,6 +113,31 @@
 - [ADD] moqt-devtools に表示モードを追加し、Publisher だけ / Subscriber だけのページを新しいタブで開けるようにする
   - URL クエリ `mode` で Publisher だけ / Subscriber だけを表示する。ヘッダーの副題に 3 つのモードを並べ、今のモードを示すとともに、他のモードのページを今の接続設定のまま新しいタブで開けるようにする
   - Catalog Timeout と Use Dedicated Worker を URL に載せ、同じ接続設定のページを URL で再現できるようにする
+  - @voluntas
+- [UPDATE] moqt-devtools の初期値を変更する
+  - 映像のコーデックを VP9、キーフレーム間隔を 10 秒 (framerate 30 で 300 frames) にする。音声は Opus のまま
+  - @voluntas
+- [UPDATE] moqt-devtools の Tracks カードに event timeline トラックを出す
+  - audio / video と同じ形で、role / track name / event type を出す。トラック名と eventType は devtools の取り決めで固定
+  - 接続設定の要約の Tracks にも events を足す
+  - @voluntas
+- [UPDATE] moqt-devtools の統計を Audio / Video / Messages に分ける
+  - 統計の欄に Audio / Video / Messages (event timeline) / A/V Sync / Session の大見出しを付け、audio → video の順に並べる
+  - 音声の符号化 (chunksEncoded / encodeErrors) と送信 (objects / datagramObjects / bytes) を追加する。これまで encodeErrors は音声の符号化エラーも混ぜていたため、音声は audioEncodeErrors に分ける
+  - メッセージの送受信 (publisher の messagesSent、subscriber の objectsReceived / entries) を追加する
+  - Audio のメーターの値 (peak / rms の L / R) は小数点以下 1 桁に丸める
+  - 統計は 1 秒ごとにまとめて読み直し、前の値から変わった枠を薄く色付けする (カウンタが更新するたびにパネルを描き直さない)
+  - @voluntas
+- [UPDATE] moqt-devtools の track 表示を整理し、ステータスを接続状態にする
+  - ステータスメッセージは接続の段階 (`Publishing` / `Subscribed` など) だけを示すようにし、トラックの一覧は出さない。どのトラックがあるかは Catalog パネルとデバッグパネルで確認する
+  - Catalog パネルは既定で折りたたみ、見出しを押したときだけ中身を出す。折りたたみ時は track name を `/` 区切りで 1 行に出す最小表示にする
+  - Catalog パネルはトラックを Media (`packaging: "loc"`) と Data (それ以外) に分け、見出しに件数を出す。各トラックは 1 行目に namespace を含む Full Track Name、2 行目以降に残りのキーと値を出す。表記は namespace のフィールドを `-`、track name を `--` でつなぎ、`[A-Za-z0-9_]` 以外のバイトを `.` + 小文字 16 進 2 桁でエスケープする (draft-ietf-moq-transport-21 §8.8 / draft-ietf-moq-msf-01 §11.1.2)。track の `namespace` は §5.2.2 に従い、指定があればそちらを使う
+  - パネルの並びを Catalog → Audio → Video → Messages → Statistics にし、Catalog を映像の上に出す
+  - Messages カードを amber にし、Catalog の色 (Publisher は緑、Subscriber は青) と見分けられるようにする
+  - Video を Audio と同じ枠のカードにし、映像からは読み取れない値を出す。Publisher は符号化 fps、符号化と送信の遅延 (p50)、encoder の待ちで捨てたフレーム数、Subscriber は表示 fps、受信から表示までと復号の遅延 (p50)、表示されなかったフレーム数
+  - Video の右上に、プレビュー中は `Preview`、配信中はコーデックと解像度を出す
+  - Audio はレベル (peak / rms / LOC) と波形の描画を分ける。レベルはバー (HTML)、波形はチャンネルごとの canvas にし、peak / rms と波形は左右のチャンネル (L / R) を別々に出す。LOC Audio Level は Object 全体の値のため 1 本のバーにする
+  - デバッグパネルのログ行は、メッセージの decoded に track の情報があれば行末に Full Track Name を付ける。展開した Data の `Track Namespace` / `Track Name` は `Full Track Name` の 1 行にまとめ、namespace 単体と `Track Namespace Prefix` は `-` 区切りの表記にする。catalog の OBJECT ログも namespace を含む Full Track Name にする
   - @voluntas
 - [UPDATE] moqt-devtools の publisher の接続設定を Tracks / Audio / Video / Catalog / Relay Cache に分ける
   - 配信するトラックの宣言 (Advertised / Role / Track Name / Codec) を Tracks カードにまとめ、映像と音声を 2 列で並べる。Codec は Audio カードから Tracks カードへ移す
@@ -221,9 +252,14 @@
   - 上限で捨てたログの vnode はキャッシュから落とす。`data` と `payload` は追加後に書き換えない前提になる (行を描画し直さないため、書き換えても表示は古いまま)
   - 1 件追加のコストは表示中の件数に比例する分が残る (1000 件で約 3 ms のうち、表示中の子の走査が大半)。表示する行を画面に入る分だけにする対応は別に行う
   - @voluntas
-- [UPDATE] moqt-devtools のステータス表示の Full Track Name を、MOQT が推奨する形式にする
-  - namespace のフィールドを `-`、track name を `--` でつなぎ、`[A-Za-z0-9_]` 以外のバイトを `.` + 小文字 16 進 2 桁でエスケープする (draft-ietf-moq-transport-21 Section 8.8 / draft-ietf-moq-msf-01 Section 11.1.2)。`/` 連結では namespace の区切りと track name の区切りを区別できず、namespace ["a"] + track "b/c" と namespace ["a","b"] + track "c" がどちらも "a/b/c" になっていた
-  - subscriber の `Subscribed:` は、音声トラックの購読が確立したら音声と映像の両方を audio → video の順で並べる (これまでは映像トラックだけだった)
+- [FIX] moqt-devtools のバイト数の単位を KiB / MiB にする
+  - 1024 進で丸めているのに KB / MB と表示していた。1000 進のビットレート (kbps / Mbps) と区別できるようにする
+  - @voluntas
+- [FIX] moqt-devtools の音声メーターの単位が、値の桁数で動くのを修正する
+  - HTML は連続する空白を 1 つに潰すため、空白で桁を揃えた値が崩れ、値が変わるたびに `dBFS` / `dBov` が動いていた。値を `whitespace-pre` で表示し、単位の位置を固定する
+  - @voluntas
+- [FIX] moqt-devtools のメッセージ入力で、日本語入力の変換確定の Enter がそのまま送信されるのを修正する
+  - 変換中 (`KeyboardEvent.isComposing`) の Enter では送信せず、変換の確定に使う。Messages の入力欄と、webtransport-devtools の双方向 / 送信用単方向ストリーム / データグラムの入力欄に適用する
   - @voluntas
 - [FIX] moqt-devtools の publisher が、空のトラック名や重複したトラック名の catalog を送るのを修正する
   - draft-ietf-moq-msf-01 §5.2.3 の name (Required) と namespace ごとの一意性を満たさない catalog は、購読側の復号で初めて分かる。Tracks カードに理由を出し、Publish は接続の前に拒否する
@@ -2111,10 +2147,6 @@
   - 購読を始めると relay は cache から古い Object を実時間より速く配るため、映像は早送りになり、音声は cache から届いた分かどうかではなく鳴らす時刻を過ぎているかと並べすぎの上限で鳴らすか捨てるかを決めていた。キーフレームの間隔が長い配信 (例: 90 秒) では、何十秒も前の映像を早送りで見せ続けていた
   - SUBSCRIBE_OK の LARGEST_OBJECT (draft-ietf-moq-transport-21 Section 9.20.18) を追いつきの境界にし、この位置以前のフレームは復号するが描かず、音声 Object は復号するが鳴らさない。境界より後の Object から従来どおり再生する
   - 描かなかったフレーム数を `catchUpFramesSkipped`、鳴らさなかった音声 Object 数を `audio.catchUpObjectsSkipped` として画面と `window.moqtDevTools` に出し、追いつくまで画面に「Catching up」を出す
-  - @voluntas
-
-- [FIX] moqt-devtools の publisher の Publishing 表示に、音声トラックが出ないのを修正する
-  - 映像と音声を配信していても映像トラックの名前しか出しておらず、音声が配信されているかを Catalog を見ないと確認できなかった。確立したメディアトラックを audio → video の順で並べる
   - @voluntas
 
 ### misc

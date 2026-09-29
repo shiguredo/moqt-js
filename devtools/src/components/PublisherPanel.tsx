@@ -1,14 +1,20 @@
-import { useRef } from "preact/hooks";
-import { useSignalEffect } from "@preact/signals";
+import { useEffect, useMemo, useRef } from "preact/hooks";
+import { useSignalEffect, type ReadonlySignal } from "@preact/signals";
+import type { ComponentChildren } from "preact";
 import { usePublisher } from "../hooks/usePublisher";
-import { StatList, StatSection, StatsCollapse, TimingTable } from "./StatsView";
+import { StatGroup, StatList, StatSection, StatsCollapse, TimingTable } from "./StatsView";
 import { PUBLISHER_LATENCY_BREAKDOWN_HELP, PUBLISH_TIMING_CAPTION } from "./statsHelp";
 import { formatBytes } from "../utils/logFormatters";
+import { formatDbfsShort } from "../utils/audioLevel";
 import { AudioMeter } from "./AudioMeter";
+import { VideoCard } from "./VideoCard";
 import { HttpVersionBadge } from "./HttpVersionBadge";
 import { CatalogTracks } from "./CatalogTracks";
 import { MessageComposer } from "./MessageComposer";
 import { PANEL_OPTION_ROW_CLASS } from "./panelLayout";
+import * as settings from "../signals/connectionSettings";
+import { type PublisherStats, buildPublisherStats } from "../signals/statsSnapshot";
+import { createStatsSignal, startStatsTick } from "../signals/statsTick";
 import * as pub from "../signals/publisher";
 
 /** Forward State を表示用にする。配信していない間 (null) は「-」 */
@@ -66,8 +72,12 @@ export function PublisherPanel() {
   const previewBtnDisabled = isPublishing || isStopping;
   const publishBtnDisabled = isPublishing || isStopping;
   const stopBtnDisabled = !isPublishing || isStopping;
-  const publishTiming = pub.publishTiming.value;
-  const sessionStats = pub.pubSession.value?.getStatistics();
+  // 統計は 1 秒に 1 回だけまとめて読み直す。値は statsSignal を読む子コンポーネント
+  // (PublisherVideoCard / PublisherStats) だけが購読し、パネル全体は描き直さない
+  const statsSignal = useMemo(() => createStatsSignal(buildPublisherStats), []);
+  useEffect(() => {
+    startStatsTick();
+  }, []);
 
   return (
     <div class="bg-white rounded-xl shadow-sm overflow-hidden">
@@ -92,7 +102,7 @@ export function PublisherPanel() {
       </div>
 
       <div class="p-5">
-        {/* Status Message */}
+        {/* Status Message。接続の段階を示す。トラックの一覧は Catalog パネルが出す */}
         <div
           class={getStatusClasses()}
           title={pub.pubStatusMessage.value}
@@ -171,30 +181,56 @@ export function PublisherPanel() {
           </button>
         </div>
 
-        {/* Video Container */}
-        <div class="relative bg-slate-900 rounded-lg overflow-hidden aspect-video mb-4">
-          <video ref={videoRef} autoPlay muted playsInline class="w-full h-full object-contain" />
-          <div class="absolute top-2 left-2 px-2 py-1 bg-black/60 rounded text-xs text-white font-medium">
-            Local Camera
-          </div>
-          {pub.pubCodec.value && (
-            <div class="absolute top-2 right-2 px-2 py-1 bg-green-500/80 rounded text-xs text-white font-medium">
-              {pub.pubCodec.value}
-            </div>
-          )}
-        </div>
+        {/* Catalog。catalog を受け取る前も描き、値を「-」にする */}
+        <CatalogTracks
+          tracks={pub.catalog.value?.tracks ?? []}
+          trackNamespace={settings.namespaceArray.value}
+          tone="green"
+          testId="publisher-catalog"
+        />
 
         {/* 取っている音と送っている音のレベルメーターと波形。音声を取っていない間も描き、
             値を「-」にする (Preview の開始で現れると下の項目の位置が動く) */}
         <AudioMeter
-          peakDbfs={pub.audioMeterPeakDbfs}
-          rmsDbfs={pub.audioMeterRmsDbfs}
+          peakDbfsLeft={pub.audioMeterPeakDbfsLeft}
+          peakDbfsRight={pub.audioMeterPeakDbfsRight}
+          rmsDbfsLeft={pub.audioMeterRmsDbfsLeft}
+          rmsDbfsRight={pub.audioMeterRmsDbfsRight}
           level={pub.audioMeterLevel}
-          waveform={pub.audioMeterWaveform}
+          waveformLeft={pub.audioMeterWaveformLeft}
+          waveformRight={pub.audioMeterWaveformRight}
           active={pub.audioStream.value !== null}
           levelActive={pub.audioPublisher.value !== null}
           testIdPrefix="publisher-audio"
         />
+
+        {/* Video。Audio と同じ枠で囲み、映像からは読み取れない値 (符号化 fps、符号化と
+            送信の遅延、捨てたフレーム数) をヘッダーに出す */}
+        <PublisherVideoCard statsSignal={statsSignal}>
+          <video ref={videoRef} autoPlay muted playsInline class="w-full h-full object-contain" />
+          <div class="absolute top-2 left-2 px-2 py-1 bg-black/60 rounded text-xs text-white font-medium">
+            Local Camera
+          </div>
+          {/* プレビュー中は右上に Preview、配信を始めたらコーデックと解像度
+              (pubCodec) に置き換える */}
+          {pub.isPreviewActive.value ? (
+            <div
+              data-testid="publisher-preview-badge"
+              class="absolute top-2 right-2 px-2 py-1 bg-slate-500/80 rounded text-xs text-white font-medium"
+            >
+              Preview
+            </div>
+          ) : (
+            pub.pubCodec.value !== "" && (
+              <div
+                data-testid="publisher-codec-badge"
+                class="absolute top-2 right-2 px-2 py-1 bg-green-500/80 rounded text-xs text-white font-medium"
+              >
+                {pub.pubCodec.value}
+              </div>
+            )
+          )}
+        </PublisherVideoCard>
 
         {/* event timeline のメッセージ入力。audio / video 以外を送る例 */}
         <MessageComposer
@@ -203,96 +239,205 @@ export function PublisherPanel() {
           sentCount={pub.eventMessagesSent.value}
         />
 
-        {/* Catalog。catalog を受け取る前も描き、値を「-」にする */}
-        <CatalogTracks
-          tracks={pub.catalog.value?.tracks ?? []}
-          tone="green"
-          testId="publisher-catalog"
-        />
-
-        {/* Statistics。既定で閉じ、「Statistics」を押すと開く */}
+        {/* Statistics。既定で閉じ、「Statistics」を押すと開く。Audio / Video /
+            Messages (event timeline) の種類ごとに分ける (audio → video の順) */}
         <StatsCollapse testId="publisher-statistics">
-          <StatSection title="Encoding Pipeline">
-            <StatList
-              items={[
-                { label: "framesEncoded", value: pub.framesEncoded.value },
-                { label: "chunksEncoded", value: pub.chunksEncoded.value },
-                { label: "keyFrames", value: pub.keyFramesEncoded.value },
-                { label: "encodeErrors", value: pub.encodeErrors.value, tone: "error" },
-                {
-                  label: "newGroupRequests",
-                  value: pub.newGroupRequestsReceived.value,
-                  testId: "publisher-new-group-requests",
-                },
-              ]}
-            />
-          </StatSection>
-
-          <StatSection title="Transmission">
-            <StatList
-              items={[
-                { label: "objects", value: pub.objectsSent.value },
-                { label: "withExtensions", value: pub.objectsWithExtensions.value },
-                { label: "bytes", value: formatBytes(pub.bytesSent.value) },
-              ]}
-            />
-          </StatSection>
-
-          <StatSection
-            title="Latency Breakdown"
-            help={PUBLISHER_LATENCY_BREAKDOWN_HELP}
-            testId="publisher-latency-breakdown"
-          >
-            <TimingTable
-              caption={PUBLISH_TIMING_CAPTION}
-              testId="publisher-latency-breakdown"
-              rows={[
-                {
-                  label: "encode",
-                  summary: publishTiming.encodeMs,
-                  testId: "publisher-encode-time",
-                },
-                { label: "send", summary: publishTiming.sendMs, testId: "publisher-send-time" },
-              ]}
-            />
-            <StatList
-              items={[
-                {
-                  label: "encodeQueueDrops",
-                  value: publishTiming.encodeQueueDrops,
-                  tone: "warn",
-                  testId: "publisher-encode-queue-drops",
-                },
-              ]}
-            />
-          </StatSection>
-
-          <StatSection title="Output">
-            <StatList
-              items={[
-                { label: "currentGroup", value: pub.pubCurrentGroup.value },
-                { label: "encoderState", value: pub.encoderState.value },
-              ]}
-            />
-          </StatSection>
-
-          <StatSection title="Session">
-            <StatList
-              items={[
-                { label: "controlMessagesSent", value: sessionStats?.controlMessagesSent ?? "-" },
-                {
-                  label: "controlMessagesReceived",
-                  value: sessionStats?.controlMessagesReceived ?? "-",
-                },
-                {
-                  label: "unidirectionalStreamsOpened",
-                  value: sessionStats?.unidirectionalStreamsOpened ?? "-",
-                },
-              ]}
-            />
-          </StatSection>
+          <PublisherStats statsSignal={statsSignal} />
         </StatsCollapse>
       </div>
     </div>
+  );
+}
+
+/** 統計。1 秒ごとにまとめて読み直したスナップショットを描く */
+function PublisherStats({ statsSignal }: { statsSignal: ReadonlySignal<PublisherStats> }) {
+  const stats = statsSignal.value;
+  return (
+    <>
+      <StatGroup title="Audio">
+        <StatSection title="Encoding">
+          <StatList
+            items={[
+              { label: "chunksEncoded", value: stats.audio.chunksEncoded },
+              { label: "encodeErrors", value: stats.audio.encodeErrors, tone: "error" },
+            ]}
+          />
+        </StatSection>
+
+        <StatSection title="Sending">
+          <StatList
+            items={[
+              { label: "objects", value: stats.audio.objectsSent },
+              {
+                label: "datagramObjects",
+                value: stats.audio.datagramObjectsSent,
+                testId: "publisher-audio-datagram-objects",
+              },
+              { label: "bytes", value: formatBytes(stats.audio.bytesSent) },
+              {
+                label: "meterPeakDbfs",
+                value: formatDbfsShort(stats.audio.meterPeakDbfs),
+              },
+              {
+                label: "meterRmsDbfs",
+                value: formatDbfsShort(stats.audio.meterRmsDbfs),
+              },
+              {
+                label: "meterPeakDbfsRight",
+                value: formatDbfsShort(stats.audio.meterPeakDbfsRight),
+              },
+              {
+                label: "meterRmsDbfsRight",
+                value: formatDbfsShort(stats.audio.meterRmsDbfsRight),
+              },
+              { label: "lastSentLevel", value: stats.audio.lastSentLevel ?? "-" },
+              {
+                label: "lastSentVoiceActivity",
+                value:
+                  stats.audio.lastSentVoiceActivity === null
+                    ? "-"
+                    : String(stats.audio.lastSentVoiceActivity),
+              },
+            ]}
+          />
+        </StatSection>
+      </StatGroup>
+
+      <StatGroup title="Video">
+        <StatSection title="Encoding">
+          <StatList
+            items={[
+              { label: "framesEncoded", value: stats.framesEncoded },
+              { label: "chunksEncoded", value: stats.chunksEncoded },
+              { label: "keyFrames", value: stats.keyFramesEncoded },
+              { label: "encodeErrors", value: stats.encodeErrors, tone: "error" },
+              {
+                label: "newGroupRequests",
+                value: stats.newGroupRequests,
+                testId: "publisher-new-group-requests",
+              },
+            ]}
+          />
+        </StatSection>
+
+        <StatSection title="Transmission">
+          <StatList
+            items={[
+              { label: "objects", value: stats.objectsSent },
+              { label: "withExtensions", value: stats.objectsWithExtensions },
+              { label: "bytes", value: formatBytes(stats.bytesSent) },
+            ]}
+          />
+        </StatSection>
+
+        <StatSection
+          title="Latency"
+          help={PUBLISHER_LATENCY_BREAKDOWN_HELP}
+          testId="publisher-latency-breakdown"
+        >
+          <TimingTable
+            caption={PUBLISH_TIMING_CAPTION}
+            testId="publisher-latency-breakdown"
+            rows={[
+              {
+                label: "encode",
+                summary: stats.publishTiming.encodeMs,
+                testId: "publisher-encode-time",
+              },
+              {
+                label: "send",
+                summary: stats.publishTiming.sendMs,
+                testId: "publisher-send-time",
+              },
+            ]}
+          />
+          <StatList
+            items={[
+              {
+                label: "encodeQueueDrops",
+                value: stats.publishTiming.encodeQueueDrops,
+                tone: "warn",
+                testId: "publisher-encode-queue-drops",
+              },
+            ]}
+          />
+        </StatSection>
+
+        <StatSection title="Output">
+          <StatList
+            items={[
+              { label: "currentGroup", value: stats.currentGroup },
+              { label: "encoderState", value: stats.encoderState },
+            ]}
+          />
+        </StatSection>
+      </StatGroup>
+
+      <StatGroup title="Messages">
+        <StatSection title="Sending">
+          <StatList
+            items={[
+              {
+                label: "messagesSent",
+                value: stats.event.messagesSent,
+                testId: "publisher-messages-sent-stat",
+              },
+            ]}
+          />
+        </StatSection>
+      </StatGroup>
+
+      <StatGroup title="Session">
+        <StatList
+          items={[
+            {
+              label: "controlMessagesSent",
+              value: stats.sessionStatistics?.controlMessagesSent ?? "-",
+            },
+            {
+              label: "controlMessagesReceived",
+              value: stats.sessionStatistics?.controlMessagesReceived ?? "-",
+            },
+            {
+              label: "unidirectionalStreamsOpened",
+              value: stats.sessionStatistics?.unidirectionalStreamsOpened ?? "-",
+            },
+          ]}
+        />
+      </StatGroup>
+    </>
+  );
+}
+
+/**
+ * Video カード
+ *
+ * 統計 (符号化 fps、符号化と送信の遅延、捨てたフレーム数) は 1 秒ごとにまとめて読み直し、
+ * このコンポーネントだけを描き直す
+ */
+function PublisherVideoCard({
+  statsSignal,
+  children,
+}: {
+  statsSignal: ReadonlySignal<PublisherStats>;
+  children: ComponentChildren;
+}) {
+  const stats = statsSignal.value;
+  return (
+    <VideoCard
+      testIdPrefix="publisher-video"
+      fps={pub.publisher.value === null ? null : stats.publishTiming.encodedFps}
+      latency={[
+        {
+          label: "encode",
+          summary: stats.publishTiming.encodeMs,
+          testId: "publisher-video-encode",
+        },
+        { label: "send", summary: stats.publishTiming.sendMs, testId: "publisher-video-send" },
+      ]}
+      dropped={pub.publisher.value === null ? null : stats.publishTiming.encodeQueueDrops}
+    >
+      {children}
+    </VideoCard>
   );
 }

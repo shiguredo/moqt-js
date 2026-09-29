@@ -1,6 +1,7 @@
 import type { DebugMessage } from "moqt-js";
 import { MessageType } from "../../../src/message/types.ts";
 import { addLog } from "../signals/debugLog";
+import { formatTrackNameSuffix } from "../utils/logFormatters";
 
 /**
  * ログへコピーする payload の上限 (byte)
@@ -53,10 +54,13 @@ function canStorePayload(message: DebugMessage): boolean {
  *
  * `prefix` はどの接続のログかを示す識別子で、Publisher は `[publisher]`、
  * Subscriber は `[subscriber-1]` のような ID を渡す。
+ *
+ * 行末には decoded が持つ Full Track Name を付ける (`[publisher] [SEND] PUBLISH
+ * room-123--video`)。どのトラックのメッセージかを展開せずに読める。
  */
 export function logDebugMessage(prefix: string, message: DebugMessage): void {
   const direction = message.direction === "send" ? "SEND" : "RECV";
-  const logMessage = `${prefix} [${direction}] ${message.typeName}`;
+  const logMessage = `${prefix} [${direction}] ${message.typeName}${formatTrackNameSuffix(message.decoded)}`;
 
   const storePayload = canStorePayload(message);
   const data: Record<string, unknown> = {

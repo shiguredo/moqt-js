@@ -3,113 +3,34 @@ import { useSignalEffect, type ReadonlySignal } from "@preact/signals";
 import type { LOC } from "moqt-js";
 import {
   INACTIVE_TEXT,
-  MAX_DBFS,
-  MIN_DBFS,
+  dbfsToRatio,
   formatAudioLevel,
   formatDbfs,
   formatVoiceActivity,
 } from "../utils/audioLevel";
-
-/** レベルメーターと波形に描く値 */
-interface AudioMeterValues {
-  /** 音の peak (dBFS)。受信側は復号した音、送信側は取っている音 */
-  peakDbfs: number | null;
-  /** 音の RMS (dBFS)。受信側は復号した音、送信側は取っている音 */
-  rmsDbfs: number | null;
-  /** LOC Audio Level (-dBov) */
-  level: LOC.AudioLevel | null;
-  /** 直近の波形 (第 1 チャンネル) */
-  waveform: Float32Array | null;
-}
+import { METER_TITLE_CLASS, METER_VALUE_CLASS } from "./meterLayout";
 
 /**
- * レベルメーターと波形を canvas に描く
+ * 波形を canvas に描く
  *
- * 2 系統 (復号信号と LOC Audio Level) は同じゲージに混ぜず、上段に別々の行として描く。
- * 下段は直近の波形である。
+ * 背景と中心線 (無音の位置) を描き、波形があれば折れ線で重ねる。レベル (peak / rms /
+ * LOC) のバーとは描画を分け、この canvas は波形だけを描く。チャンネルごとに 1 つの
+ * canvas を描く
  */
-export function drawAudioMeter(
+export function drawAudioWaveform(
   ctx: CanvasRenderingContext2D,
   width: number,
   height: number,
-  values: AudioMeterValues,
-): void {
-  ctx.clearRect(0, 0, width, height);
-
-  const meterHeight = Math.max(4, Math.floor(height / 6));
-  // 上から peak / rms / LOC Audio Level の 3 行、その下が波形
-  const METER_ROW_COUNT = 3;
-  const rowGap = 4;
-
-  const rowY = (row: number): number => row * (meterHeight + rowGap);
-
-  const fill = (row: number, dbfs: number | null, color: string): void => {
-    drawMeterRow(ctx, width, rowY(row), meterHeight, dbfs, color);
-  };
-
-  fill(0, values.peakDbfs, "#f87171");
-  fill(1, values.rmsDbfs, "#4ade80");
-  // LOC の level は -dBov (0 が最大) のため dBFS と同じ向きに写像する
-  fill(2, values.level === null ? null : -values.level.level, "#60a5fa");
-
-  // 目盛りの縦線 (0 / -20 / -40 / -60 / -80 / -100 dB)
-  ctx.strokeStyle = "rgba(148, 163, 184, 0.4)";
-  ctx.lineWidth = 1;
-  for (let db = MAX_DBFS; db >= MIN_DBFS; db -= 20) {
-    // 上端 (0 dB) は x = width になり線幅の半分が canvas の外へ出るため内側に寄せる
-    const x = Math.min(width - 1, Math.round(dbfsToX(db, width)));
-    ctx.beginPath();
-    ctx.moveTo(x, 0);
-    ctx.lineTo(x, METER_ROW_COUNT * (meterHeight + rowGap) - rowGap);
-    ctx.stroke();
-  }
-
-  drawWaveform(ctx, width, height, rowY(METER_ROW_COUNT), values.waveform);
-}
-
-function drawMeterRow(
-  ctx: CanvasRenderingContext2D,
-  width: number,
-  y: number,
-  height: number,
-  dbfs: number | null,
-  color: string,
-): void {
-  ctx.fillStyle = "rgba(15, 23, 42, 0.9)";
-  ctx.fillRect(0, y, width, height);
-
-  if (dbfs === null) {
-    return;
-  }
-
-  // 左端 (MIN_DBFS) から現在のレベルまで塗る。無音でも 1 px は残し、
-  // 「描かれていない」のか「無音」なのかを区別できるようにする
-  const x = dbfsToX(dbfs, width);
-  ctx.fillStyle = color;
-  ctx.fillRect(0, y, Math.max(1, x), height);
-}
-
-/** dB の値を canvas の x 座標にする (0 dB が右端、MIN_DBFS が左端) */
-function dbfsToX(dbfs: number, width: number): number {
-  const clamped = Math.max(MIN_DBFS, Math.min(MAX_DBFS, dbfs));
-  return ((clamped - MIN_DBFS) / (MAX_DBFS - MIN_DBFS)) * width;
-}
-
-function drawWaveform(
-  ctx: CanvasRenderingContext2D,
-  width: number,
-  height: number,
-  y: number,
   waveform: Float32Array | null,
 ): void {
-  const waveformHeight = Math.max(1, height - y);
+  ctx.clearRect(0, 0, width, height);
   ctx.fillStyle = "rgba(15, 23, 42, 0.9)";
-  ctx.fillRect(0, y, width, waveformHeight);
+  ctx.fillRect(0, 0, width, height);
 
   // 中心線 (無音の位置)
   ctx.strokeStyle = "rgba(148, 163, 184, 0.4)";
   ctx.lineWidth = 1;
-  const centerY = y + waveformHeight / 2;
+  const centerY = height / 2;
   ctx.beginPath();
   ctx.moveTo(0, centerY);
   ctx.lineTo(width, centerY);
@@ -119,7 +40,7 @@ function drawWaveform(
     return;
   }
 
-  const half = waveformHeight / 2;
+  const half = height / 2;
   ctx.strokeStyle = "#38bdf8";
   ctx.lineWidth = 1;
   ctx.beginPath();
@@ -142,10 +63,17 @@ interface AudioMeterProps {
   // 描く値。受信側は復号した音、送信側は取っている音 (peak / RMS / 波形) と送った
   // LOC Audio Level。signal のまま受け、値が変わったときにメーターだけを描き直す
   // (パネル全体を描き直さない)
-  peakDbfs: ReadonlySignal<number | null>;
-  rmsDbfs: ReadonlySignal<number | null>;
+  /** 第 1 チャンネル (左) の peak (dBFS) */
+  peakDbfsLeft: ReadonlySignal<number | null>;
+  /** 第 2 チャンネル (右) の peak (dBFS)。モノラルでは null */
+  peakDbfsRight: ReadonlySignal<number | null>;
+  rmsDbfsLeft: ReadonlySignal<number | null>;
+  rmsDbfsRight: ReadonlySignal<number | null>;
   level: ReadonlySignal<LOC.AudioLevel | null>;
-  waveform: ReadonlySignal<Float32Array | null>;
+  /** 第 1 チャンネル (左) の直近の波形 */
+  waveformLeft: ReadonlySignal<Float32Array | null>;
+  /** 第 2 チャンネル (右) の直近の波形。モノラルでは null */
+  waveformRight: ReadonlySignal<Float32Array | null>;
   // 音を受けている (取っている) か。していない間は peak / RMS を「-」にし、波形は空にする
   active: boolean;
   // LOC Audio Level を出すか (受信側は購読している間、送信側は音声を送っている間)。
@@ -155,23 +83,8 @@ interface AudioMeterProps {
   testIdPrefix: string;
 }
 
-/**
- * 見出し行の値に共通のクラス
- *
- * 値は `font-mono` の桁数 (`ch`) で幅を固定する。値の文字数で幅が変わると、右寄せの
- * 並び全体が動き、話している間ずっと画面が揺れる。`tabular-nums` は `font-mono` が
- * 使えない環境でも桁の幅を揃えるために付ける。
- *
- * 見出しの値は 11px。12px のままでは、UI フォントが Inter より広い環境で
- * 見出し行が折り返し、下の Catalog と Statistics が動く。
- */
-// inline-block にしないと width が効かず、文字数で欄の幅が変わる。
-// はみ出した文字で隣の欄を押さないよう、収まりきらない分は隠す
-const METER_VALUE_CLASS =
-  "inline-block overflow-hidden whitespace-nowrap text-right font-mono tabular-nums text-slate-800";
-
 // 値の幅は、その欄に出うる最も長い文字列の文字数に合わせる。
-// 足りないと文字がはみ出し、広すぎると見出し行が 1 行に収まらない
+// 足りないと文字がはみ出し、広すぎると見出しが 1 行に収まらない
 /** peak / rms の幅 (`-100.0 dBFS` と `-`) */
 const DBFS_VALUE_WIDTH_CLASS = "w-[11ch]";
 /** LOC Audio Level の幅 (`not reported` と `-127 dBov`) */
@@ -179,28 +92,83 @@ const LEVEL_VALUE_WIDTH_CLASS = "w-[12ch]";
 /** voice activity の幅 (`off` と `-`) */
 const VOICE_VALUE_WIDTH_CLASS = "w-[3ch]";
 
-/** 見出し行のラベルと値の組。ラベルと値が別の行に分かれないよう 1 つの項目にする */
-const METER_FIELD_CLASS = "flex shrink-0 items-baseline gap-1 whitespace-nowrap";
+/**
+ * 値の欄の幅 (rem)。`5.5rem` は LOC Audio Level の `not reported` (12 文字) が入る幅
+ */
+const VALUE_COLUMN_CLASS = "5.5rem";
+
+/** メーターの行のラベル。幅を固定し、色は行ごとに付ける */
+const METER_ROW_LABEL_CLASS = "text-[10px] leading-none";
+
+/** バーに重ねる目盛りの位置 (dBFS)。右端 (0 dB) はバーの端で表す */
+const METER_TICK_DBFS = [-20, -40, -60, -80, -100] as const;
+
+/** 波形の canvas の大きさ (描画は幅と高さで正規化するため、表示に合わせた比率にする) */
+const WAVEFORM_CANVAS_WIDTH = 320;
+const WAVEFORM_CANVAS_HEIGHT = 24;
+
+interface MeterBarProps {
+  /** バーの割合 (0..1)。値が無いときは null (塗らない) */
+  ratio: number | null;
+  /** バーの色 (行のラベルと揃える) */
+  fillClass: string;
+  /** 追加のクラス (LOC の行は列をまたぐ) */
+  class?: string;
+}
+
+/** レベルのバー。目盛りを重ねる */
+function MeterBar({ ratio, fillClass, class: className }: MeterBarProps) {
+  return (
+    <div class={`relative h-1.5 min-w-0 overflow-hidden rounded bg-slate-800 ${className ?? ""}`}>
+      {ratio !== null && (
+        <div
+          class={`absolute inset-y-0 left-0 rounded-sm ${fillClass}`}
+          style={{ width: `${ratio * 100}%` }}
+        />
+      )}
+      {METER_TICK_DBFS.map((db) => (
+        <div
+          key={db}
+          class="absolute inset-y-0 w-px bg-slate-500/60"
+          style={{ left: `${dbfsToRatio(db) * 100}%` }}
+        />
+      ))}
+    </div>
+  );
+}
+
+/** バーの割合にする。値が無い (「-」) ときは null */
+function barRatio(value: number | null): number | null {
+  return value === null ? null : dbfsToRatio(value);
+}
 
 /**
  * 音声のレベルメーターと波形
  *
- * 映像 canvas と同じく、signal が更新されたときだけ描き直す
- * (`requestAnimationFrame` による常時再描画はしない)。
+ * レベル (peak / rms / LOC) はバー (HTML)、波形はチャンネルごとの canvas と、描画を
+ * 分ける。左右のチャンネルは列で分け、peak / rms と波形は左右それぞれに出す。
+ * LOC Audio Level は Object 全体の値のため 1 つだけ出す。
+ *
+ * canvas は signal が更新されたときだけ描き直す (`requestAnimationFrame` による
+ * 常時再描画はしない)。
  */
 export function AudioMeter({
-  peakDbfs,
-  rmsDbfs,
+  peakDbfsLeft,
+  peakDbfsRight,
+  rmsDbfsLeft,
+  rmsDbfsRight,
   level,
-  waveform,
+  waveformLeft,
+  waveformRight,
   active,
   levelActive,
   testIdPrefix,
 }: AudioMeterProps) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const leftCanvasRef = useRef<HTMLCanvasElement>(null);
+  const rightCanvasRef = useRef<HTMLCanvasElement>(null);
 
   useSignalEffect(() => {
-    const canvas = canvasRef.current;
+    const canvas = leftCanvasRef.current;
     if (!canvas) {
       return;
     }
@@ -208,67 +176,114 @@ export function AudioMeter({
     if (!ctx) {
       return;
     }
-    drawAudioMeter(ctx, canvas.width, canvas.height, {
-      peakDbfs: peakDbfs.value,
-      rmsDbfs: rmsDbfs.value,
-      level: level.value,
-      waveform: waveform.value,
-    });
+    drawAudioWaveform(ctx, canvas.width, canvas.height, waveformLeft.value);
+  });
+
+  useSignalEffect(() => {
+    const canvas = rightCanvasRef.current;
+    if (!canvas) {
+      return;
+    }
+    const ctx = canvas.getContext("2d");
+    if (!ctx) {
+      return;
+    }
+    drawAudioWaveform(ctx, canvas.width, canvas.height, waveformRight.value);
   });
 
   return (
     <div
       data-testid={`${testIdPrefix}-meter`}
-      class="bg-slate-50 border border-slate-200 rounded-lg p-3 mb-4"
+      class="bg-slate-50 border border-slate-200 rounded-lg p-2 mb-4"
     >
-      <div class="flex flex-wrap items-center justify-between gap-2 mb-2">
-        <h3 class="text-xs font-semibold text-slate-600 uppercase tracking-wide">Audio</h3>
-        <div class="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] leading-4 text-slate-600">
-          <span class={METER_FIELD_CLASS}>
-            <span>peak</span>
-            <span
-              data-testid={`${testIdPrefix}-peak`}
-              class={`${METER_VALUE_CLASS} ${DBFS_VALUE_WIDTH_CLASS}`}
-            >
-              {active ? formatDbfs(peakDbfs.value) : INACTIVE_TEXT}
-            </span>
+      <div class="flex items-center justify-between gap-2 mb-1">
+        <h3 class={METER_TITLE_CLASS}>Audio</h3>
+        <span class="flex items-center gap-1 text-[10px] leading-none text-slate-500">
+          <span>voice</span>
+          <span
+            data-testid={`${testIdPrefix}-voice-activity`}
+            class={`${METER_VALUE_CLASS} ${VOICE_VALUE_WIDTH_CLASS}`}
+          >
+            {levelActive ? formatVoiceActivity(level.value) : INACTIVE_TEXT}
           </span>
-          <span class={METER_FIELD_CLASS}>
-            <span>rms</span>
-            <span
-              data-testid={`${testIdPrefix}-rms`}
-              class={`${METER_VALUE_CLASS} ${DBFS_VALUE_WIDTH_CLASS}`}
-            >
-              {active ? formatDbfs(rmsDbfs.value) : INACTIVE_TEXT}
-            </span>
-          </span>
-          <span class={METER_FIELD_CLASS}>
-            <span>LOC Audio Level</span>
-            <span
-              data-testid={`${testIdPrefix}-level`}
-              class={`${METER_VALUE_CLASS} ${LEVEL_VALUE_WIDTH_CLASS}`}
-            >
-              {levelActive ? formatAudioLevel(level.value) : INACTIVE_TEXT}
-            </span>
-          </span>
-          <span class={METER_FIELD_CLASS}>
-            <span>voice</span>
-            <span
-              data-testid={`${testIdPrefix}-voice-activity`}
-              class={`${METER_VALUE_CLASS} ${VOICE_VALUE_WIDTH_CLASS}`}
-            >
-              {levelActive ? formatVoiceActivity(level.value) : INACTIVE_TEXT}
-            </span>
-          </span>
-        </div>
+        </span>
       </div>
-      <canvas
-        ref={canvasRef}
-        data-testid={`${testIdPrefix}-waveform`}
-        width="640"
-        height="96"
-        class="w-full h-24 bg-slate-900 rounded"
-      />
+      {/* レベルはバー、波形は canvas。左右のチャンネルは列で分ける */}
+      <div
+        class="grid items-center gap-x-2 gap-y-1"
+        style={{
+          gridTemplateColumns: `auto ${VALUE_COLUMN_CLASS} minmax(0, 1fr) ${VALUE_COLUMN_CLASS} minmax(0, 1fr)`,
+        }}
+      >
+        {/* チャンネルの見出し */}
+        <span />
+        <span class="text-[10px] leading-none text-slate-500">L</span>
+        <span />
+        <span class="text-[10px] leading-none text-slate-500">R</span>
+        <span />
+
+        <span class={`${METER_ROW_LABEL_CLASS} text-red-500`}>peak</span>
+        <span
+          data-testid={`${testIdPrefix}-peak-left`}
+          class={`${METER_VALUE_CLASS} ${DBFS_VALUE_WIDTH_CLASS}`}
+        >
+          {active ? formatDbfs(peakDbfsLeft.value) : INACTIVE_TEXT}
+        </span>
+        <MeterBar ratio={active ? barRatio(peakDbfsLeft.value) : null} fillClass="bg-red-400" />
+        <span
+          data-testid={`${testIdPrefix}-peak-right`}
+          class={`${METER_VALUE_CLASS} ${DBFS_VALUE_WIDTH_CLASS}`}
+        >
+          {active ? formatDbfs(peakDbfsRight.value) : INACTIVE_TEXT}
+        </span>
+        <MeterBar ratio={active ? barRatio(peakDbfsRight.value) : null} fillClass="bg-red-400" />
+
+        <span class={`${METER_ROW_LABEL_CLASS} text-green-600`}>rms</span>
+        <span
+          data-testid={`${testIdPrefix}-rms-left`}
+          class={`${METER_VALUE_CLASS} ${DBFS_VALUE_WIDTH_CLASS}`}
+        >
+          {active ? formatDbfs(rmsDbfsLeft.value) : INACTIVE_TEXT}
+        </span>
+        <MeterBar ratio={active ? barRatio(rmsDbfsLeft.value) : null} fillClass="bg-green-400" />
+        <span
+          data-testid={`${testIdPrefix}-rms-right`}
+          class={`${METER_VALUE_CLASS} ${DBFS_VALUE_WIDTH_CLASS}`}
+        >
+          {active ? formatDbfs(rmsDbfsRight.value) : INACTIVE_TEXT}
+        </span>
+        <MeterBar ratio={active ? barRatio(rmsDbfsRight.value) : null} fillClass="bg-green-400" />
+
+        <span class={`${METER_ROW_LABEL_CLASS} text-blue-500`}>LOC</span>
+        <span
+          data-testid={`${testIdPrefix}-level`}
+          class={`${METER_VALUE_CLASS} ${LEVEL_VALUE_WIDTH_CLASS}`}
+        >
+          {levelActive ? formatAudioLevel(level.value) : INACTIVE_TEXT}
+        </span>
+        {/* LOC Audio Level は Object 全体の値のため、左右に分けず 1 本にする */}
+        <MeterBar
+          class="col-span-3"
+          ratio={levelActive && level.value !== null ? dbfsToRatio(-level.value.level) : null}
+          fillClass="bg-blue-400"
+        />
+
+        <span class={`${METER_ROW_LABEL_CLASS} text-sky-600`}>wave</span>
+        <canvas
+          ref={leftCanvasRef}
+          data-testid={`${testIdPrefix}-waveform-left`}
+          width={WAVEFORM_CANVAS_WIDTH}
+          height={WAVEFORM_CANVAS_HEIGHT}
+          class="col-span-2 h-6 w-full min-w-0 rounded bg-slate-900"
+        />
+        <canvas
+          ref={rightCanvasRef}
+          data-testid={`${testIdPrefix}-waveform-right`}
+          width={WAVEFORM_CANVAS_WIDTH}
+          height={WAVEFORM_CANVAS_HEIGHT}
+          class="col-span-2 h-6 w-full min-w-0 rounded bg-slate-900"
+        />
+      </div>
     </div>
   );
 }

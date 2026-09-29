@@ -14,7 +14,7 @@ import {
 import type { PublisherAudioCatalogOptions, PublisherVideoCatalogOptions } from "./usePublisher";
 import { getAudioEncoderConfig } from "../../../src/codec/config";
 import { getEncoderConfig } from "../utils/codec";
-import { CHAT_EVENT_TYPE, EVENT_TRACK_NAME } from "../utils/eventTimeline";
+import { MESSAGES_EVENT_TYPE, EVENT_TRACK_NAME } from "../utils/eventTimeline";
 import type { EncodedChunkData } from "../utils/EncoderWrapper";
 import type { CodecType } from "../types";
 import * as pub from "../signals/publisher";
@@ -857,7 +857,7 @@ test("buildPublisherCatalog: event timeline トラックを常に 1 本載せる
   assert.equal(eventTrack.name, EVENT_TRACK_NAME);
   assert.equal(eventTrack.role, "eventtimeline");
   assert.equal(eventTrack.isLive, true);
-  assert.equal(eventTrack.eventType, CHAT_EVENT_TYPE);
+  assert.equal(eventTrack.eventType, MESSAGES_EVENT_TYPE);
   assert.equal(eventTrack.mimeType, "application/json");
   // depends は event timeline が対応するメディアのトラック名 (§8.2)
   assert.deepEqual(eventTrack.depends, ["audio", "video"]);

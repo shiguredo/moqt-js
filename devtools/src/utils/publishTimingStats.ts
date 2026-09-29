@@ -22,6 +22,9 @@ import { TimedValues } from "../../../src/timedValues.ts";
 /** 分布を求める直近の窓 (ミリ秒) */
 export const PUBLISH_TIMING_WINDOW_MS = 10_000;
 
+/** 符号化 fps を数える窓 (ミリ秒) */
+export const ENCODED_FPS_WINDOW_MS = 1_000;
+
 /** 統計の値 */
 export interface PublishTimingSnapshot {
   /** フレームを読んでから encoder の出力まで (直近の窓の p50 / p95 / max、ミリ秒) */
@@ -30,6 +33,8 @@ export interface PublishTimingSnapshot {
   readonly sendMs: TimingSummary | null;
   /** encoder の待ちが上限を超えて符号化せずに捨てたフレームの数 (累積) */
   readonly encodeQueueDrops: number;
+  /** 直近 1 秒に encoder が出力したフレーム数 (符号化 fps) */
+  readonly encodedFps: number;
 }
 
 /** 何も記録していないときの統計 */
@@ -37,6 +42,7 @@ export const EMPTY_PUBLISH_TIMING: PublishTimingSnapshot = {
   encodeMs: null,
   sendMs: null,
   encodeQueueDrops: 0,
+  encodedFps: 0,
 };
 
 /**
@@ -106,6 +112,8 @@ export class PublishTimingStats {
       encodeMs: summarizeTimings(this.encodeTimes.current()),
       sendMs: summarizeTimings(this.sendTimes.current()),
       encodeQueueDrops: this.encodeQueueDrops,
+      // 出力の記録は分布と同じ窓に残っているため、直近 1 秒の数を数える
+      encodedFps: this.encodeTimes.countAfter(nowMs - ENCODED_FPS_WINDOW_MS),
     };
   }
 

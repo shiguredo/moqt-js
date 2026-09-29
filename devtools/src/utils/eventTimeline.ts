@@ -3,7 +3,7 @@ import type { EventTimelineEntry } from "moqt-js";
 /**
  * event timeline (draft-ietf-moq-msf-01 §8) を devtools で扱うための純関数
  *
- * devtools は audio / video 以外のデータを流す例として、event timeline にチャットの
+ * devtools は audio / video 以外のデータを流す例として、event timeline に
  * メッセージを載せる。entry の data の構造は catalog の eventType (§5.2.5) が定義する。
  * ここで定義する eventType は devtools 同士の取り決めであり、MSF に登録された型では
  * ない (§10.5 の "Custom application-specific metadata" に相当する)
@@ -12,8 +12,8 @@ import type { EventTimelineEntry } from "moqt-js";
 /** devtools が event timeline に使うトラック名 */
 export const EVENT_TRACK_NAME = "events";
 
-/** devtools のチャットメッセージを示す eventType (逆ドメイン名, §5.2.5) */
-export const CHAT_EVENT_TYPE = "com.shiguredo.moqtdevtools.chat";
+/** devtools の Messages を示す eventType (逆ドメイン名, §5.2.5) */
+export const MESSAGES_EVENT_TYPE = "app.shiguredo.moqt-devtools.messages";
 
 /**
  * event timeline の payload に載せる履歴の上限 (件)
@@ -25,12 +25,12 @@ export const CHAT_EVENT_TYPE = "com.shiguredo.moqtdevtools.chat";
 export const EVENT_HISTORY_LIMIT = 100;
 
 /**
- * チャットのメッセージ 1 件を event timeline の entry にする (§8.1)
+ * メッセージ 1 件を event timeline の entry にする (§8.1)
  *
  * index 参照は壁時計 (`t`、Unix epoch ミリ秒) を使う。メディアの再生位置とは独立した
  * メッセージのため、Media PTS や MOQT Location は使わない
  */
-export function buildChatEventEntry(text: string, wallClockMs: number): EventTimelineEntry {
+export function buildMessageEventEntry(text: string, wallClockMs: number): EventTimelineEntry {
   return { t: wallClockMs, data: { text } };
 }
 
@@ -40,7 +40,7 @@ export function buildChatEventEntry(text: string, wallClockMs: number): EventTim
  * 落とした記録は以降の Group の先頭 Object に含まれなくなる (§8.3 の「アクセス可能な
  * 全レコード」の範囲から外れる)
  */
-export function appendChatEventEntry(
+export function appendMessageEventEntry(
   history: readonly EventTimelineEntry[],
   entry: EventTimelineEntry,
 ): EventTimelineEntry[] {

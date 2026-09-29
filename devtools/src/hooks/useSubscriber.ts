@@ -52,7 +52,7 @@ import { AudioClockBridge, AudioPlayoutScheduler } from "../../../src/audioPlayo
 import { effectiveTargetLatencyMs, resolveSharedTargetLatencyMs } from "../../../src/msf/tracks.ts";
 import { applyAudioOutputSink } from "../utils/audioOutput";
 import { browserIsChromium, resolvePanelHttpVersion } from "../utils/httpVersion";
-import { buildMediaTrackStatusMessage } from "../utils/trackStatusMessage";
+import { formatFullTrackName } from "../../../src/fullTrackName.ts";
 import * as settings from "../signals/connectionSettings";
 import * as sub from "../signals/subscriber";
 import * as pub from "../signals/publisher";
@@ -231,9 +231,12 @@ export function resetSubscriberStats(instance: sub.SubscriberInstance): void {
   instance.audioChunksDecoded.value = 0;
   instance.audioCatchUpObjectsSkipped.value = 0;
   instance.audioLastLevel.value = null;
-  instance.audioPeakDbfs.value = null;
-  instance.audioRmsDbfs.value = null;
-  instance.audioWaveform.value = null;
+  instance.audioPeakDbfsLeft.value = null;
+  instance.audioPeakDbfsRight.value = null;
+  instance.audioRmsDbfsLeft.value = null;
+  instance.audioRmsDbfsRight.value = null;
+  instance.audioWaveformLeft.value = null;
+  instance.audioWaveformRight.value = null;
   instance.audioPlayoutRebases.value = 0;
   instance.audioPlayoutDrops.value = 0;
 }
@@ -535,13 +538,17 @@ export function resetSubscriberState(
   instance.audioDecoder.value = null;
   instance.audioDecoderConfigured.value = false;
   instance.audioLastLevel.value = null;
-  instance.audioPeakDbfs.value = null;
-  instance.audioRmsDbfs.value = null;
-  instance.audioWaveform.value = null;
+  instance.audioPeakDbfsLeft.value = null;
+  instance.audioPeakDbfsRight.value = null;
+  instance.audioRmsDbfsLeft.value = null;
+  instance.audioRmsDbfsRight.value = null;
+  instance.audioWaveformLeft.value = null;
+  instance.audioWaveformRight.value = null;
   // 再生トグルは既定 (無効) に戻す。audio graph は呼び出し側が停止する
   instance.audioPlaybackEnabled.value = false;
   // event timeline の購読と受信したメッセージも購読が無い状態に戻す
   instance.eventSubscriber.value = null;
+  instance.eventObjectsReceived.value = 0;
   instance.eventMessages.value = [];
   // 同期の推定は購読が無い状態の既定値に戻す
   instance.avSync.value = sub.EMPTY_AV_SYNC;
@@ -963,6 +970,8 @@ export function useSubscriber(
         object: (obj: MoqtObject) => {
           // 停止した購読の Object が遅れて届いても、表示を変えない
           if (signal.aborted) return;
+          // 受信した Object の数。Group の先頭 Object に履歴が載るため、履歴の件数とは別
+          instance.eventObjectsReceived.value++;
           try {
             instance.eventMessages.value = decodeEventTimeline(obj.payload);
           } catch (error) {
@@ -1287,10 +1296,8 @@ export function useSubscriber(
     if (signal.aborted) return;
     instance.isStarting.value = false;
     instance.status.value = "connected";
-    // 映像を購読しないため、確立した音声トラックだけを並べる
-    instance.statusMessage.value = buildMediaTrackStatusMessage("Subscribed", namespaceArray, {
-      audio: audioTrack.name,
-    });
+    // 音声トラックの購読が確立した (トラックの一覧は Catalog パネルが出す)
+    instance.statusMessage.value = "Subscribed";
   }
 
   /**
@@ -1350,16 +1357,33 @@ export function useSubscriber(
 
     try {
       // 可視化用の読み出しは close() の前に済ませる (所有者はこのハンドラ)。
-      // 再生の有無に関わらずレベルと波形を更新する
-      const samples = readAudioSamples(audioData);
-      const level = summarizeAudioLevel(samples);
-      instance.audioPeakDbfs.value = level.peakDbfs;
-      instance.audioRmsDbfs.value = level.rmsDbfs;
-      instance.audioWaveform.value = appendWaveform(
-        instance.audioWaveform.value,
-        samples,
-        waveformSampleCount(audioData.sampleRate),
+      // 再生の有無に関わらずレベルと波形を更新する。左右のチャンネルは別々に求める
+      const maxSamples = waveformSampleCount(audioData.sampleRate);
+      const samplesLeft = readAudioSamples(audioData);
+      const levelLeft = summarizeAudioLevel(samplesLeft);
+      instance.audioPeakDbfsLeft.value = levelLeft.peakDbfs;
+      instance.audioRmsDbfsLeft.value = levelLeft.rmsDbfs;
+      instance.audioWaveformLeft.value = appendWaveform(
+        instance.audioWaveformLeft.value,
+        samplesLeft,
+        maxSamples,
       );
+      if (audioData.numberOfChannels > 1) {
+        const samplesRight = readAudioSamples(audioData, 1);
+        const levelRight = summarizeAudioLevel(samplesRight);
+        instance.audioPeakDbfsRight.value = levelRight.peakDbfs;
+        instance.audioRmsDbfsRight.value = levelRight.rmsDbfs;
+        instance.audioWaveformRight.value = appendWaveform(
+          instance.audioWaveformRight.value,
+          samplesRight,
+          maxSamples,
+        );
+      } else {
+        // モノラルのときは右チャンネルを出さない (メーターの右は「-」のまま)
+        instance.audioPeakDbfsRight.value = null;
+        instance.audioRmsDbfsRight.value = null;
+        instance.audioWaveformRight.value = null;
+      }
     } catch (error) {
       // 計測に失敗しても再生は試みる (原因の切り分けができるよう別のメッセージにする)
       console.error(`[${subscriberId}] failed to measure decoded audio data:`, error);
@@ -1871,7 +1895,7 @@ export function useSubscriber(
       instance.httpVersion.value = null;
       settings.settingsDisabled.value = true;
 
-      const namespaceArray = settings.namespace.value.split("/").filter((s) => s.length > 0);
+      const namespaceArray = settings.namespaceArray.value;
       const connectOptions = settings.buildConnectOptions();
 
       // MOQT サーバへ接続する
@@ -1988,10 +2012,14 @@ export function useSubscriber(
               }
               lastCatalogLocation = location;
               // RECV OBJECT 自体は addLog 経由で残るのでここで重複ログは出さない。
-              addLog("info", `[${subscriberId}] [RECV] OBJECT (${CATALOG_TRACK_NAME})`, {
-                source,
-                catalog,
-              });
+              addLog(
+                "info",
+                `[${subscriberId}] [RECV] OBJECT (${formatFullTrackName(namespaceArray, CATALOG_TRACK_NAME)})`,
+                {
+                  source,
+                  catalog,
+                },
+              );
               instance.catalog.value = catalog;
               // 購読するトラックは最初に届いた catalog から決める (後の catalog では解決済み)
               resolve(catalog);
@@ -2308,10 +2336,8 @@ export function useSubscriber(
         subscriberInstance.trackProperties,
       );
       instance.status.value = "connected";
-      // この時点では映像トラックだけが確立している (音声はこの後で購読する)
-      instance.statusMessage.value = buildMediaTrackStatusMessage("Subscribed", namespaceArray, {
-        video: actualTrackName,
-      });
+      // 映像トラックの購読が確立した (音声はこの後で購読する)
+      instance.statusMessage.value = "Subscribed";
       instance.largestLocation.value = largestLocation ?? null;
       // SUBSCRIBE_OK の LARGEST_OBJECT を、relay の cache から追いつく途中かどうかの境界に
       // する。この位置以前のフレームは復号しても描かない (utils/catchUpGate.ts)
@@ -2347,12 +2373,8 @@ export function useSubscriber(
         // startAudioSubscription 内の checkAborted は関数内で return するだけなので、
         // 中断後もここへ来る。teardownSubscriber が確定させた表示を上書きしない
         if (signal.aborted) return;
-        // 映像と音声の両方が確立したため、Catalog と Tracks カードと同じ
-        // audio → video の順で並べる
-        instance.statusMessage.value = buildMediaTrackStatusMessage("Subscribed", namespaceArray, {
-          audio: audioTrackFromCatalog.name,
-          video: actualTrackName,
-        });
+        // 映像と音声の両方が確立した
+        instance.statusMessage.value = "Subscribed";
       } catch (error) {
         // 中断時は teardownSubscriber が status / statusMessage を確定済み。
         // 映像経路と同じく上書きしない
@@ -2360,10 +2382,8 @@ export function useSubscriber(
         addLog("error", `[${subscriberId}] failed to start audio subscription`, {
           message: error instanceof Error ? error.message : String(error),
         });
-        // 中間メッセージを残さず、映像トラックだけの購読状態の表示に戻す
-        instance.statusMessage.value = buildMediaTrackStatusMessage("Subscribed", namespaceArray, {
-          video: actualTrackName,
-        });
+        // 中間メッセージを残さず、購読が確立した表示に戻す
+        instance.statusMessage.value = "Subscribed";
       }
     } catch (error) {
       // 中断時は teardownSubscriber が status / statusMessage / settingsDisabled を確定済み。

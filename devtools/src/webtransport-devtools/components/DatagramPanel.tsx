@@ -4,6 +4,7 @@ import { useAutoScroll } from "../hooks/useAutoScroll";
 import { ActionButton } from "./ActionButton";
 import { MessageItem } from "./MessageItem";
 import { DatagramIcon, ClearIcon } from "./Icons";
+import { shouldSendOnEnter } from "../../utils/messageInput";
 
 /**
  * データグラムパネル
@@ -50,7 +51,10 @@ export function DatagramPanel() {
           data-testid="datagram-input"
           value={input.value}
           onInput={(e) => (input.value = e.currentTarget.value)}
-          onKeyDown={(e) => e.key === "Enter" && handleSend()}
+          onKeyDown={(e) => {
+            // 日本語入力の変換確定の Enter では送信しない (shouldSendOnEnter)
+            if (shouldSendOnEnter(e)) handleSend();
+          }}
           disabled={store.connectionStatus.value !== "connected"}
           placeholder="Enter datagram message..."
           class="flex-1 px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:bg-slate-100 disabled:cursor-not-allowed"

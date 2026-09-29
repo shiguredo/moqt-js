@@ -1,4 +1,4 @@
-import { signal } from "@preact/signals";
+import { computed, signal } from "@preact/signals";
 import {
   type AuthorizationToken,
   AuthorizationTokenAliasType,
@@ -20,6 +20,23 @@ import { extractC4mBase64 } from "../utils/c4m";
 import { isResolution } from "../utils/codec";
 import { isDebugPanelOpen } from "./debug";
 
+/** namespace の初期値に使う文字 (a-zA-Z0-9) */
+const NAMESPACE_ALPHABET = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+
+/**
+ * namespace の初期値に使う 16 文字のランダムな文字列 (a-zA-Z0-9)
+ */
+function randomNamespaceSuffix(): string {
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  let suffix = "";
+  for (const byte of bytes) {
+    // 62 文字への写像。剰余の偏りは namespace の用途では問題にしない
+    suffix += NAMESPACE_ALPHABET.charAt(byte % NAMESPACE_ALPHABET.length);
+  }
+  return suffix;
+}
+
 // 接続設定
 export const url = signal("moqt://127.0.0.1:4443/");
 // Save を押した Relay URI。Forget するまで OPFS に残す。null は覚えていない
@@ -27,14 +44,25 @@ export const savedServerUrl = signal<string | null>(null);
 // moqt URI の Fragment Identifier (draft-ietf-moq-transport-21 §6.1.1)
 // 入力形式は `type:value` (先頭の `#` は付けない)。空文字列なら fragment を付けない。
 export const fragment = signal("");
-export const namespace = signal("room/123");
+/**
+ * Namespace の初期値
+ *
+ * 複数の devtools が同じ relay に繋がっても namespace が衝突しないよう、ページごとに
+ * ランダムな接尾辞を付ける。共有するときは Copy URL や Save で持ち出す
+ */
+export const namespace = signal(`moqt/devtools/${randomNamespaceSuffix()}`);
+// namespace 設定を Track Namespace のフィールドへ分解したもの。空のフィールドは落とす。
+// 接続処理と画面表示 (Full Track Name の組み立て) が同じ分解を使う
+export const namespaceArray = computed(() =>
+  namespace.value.split("/").filter((field) => field.length > 0),
+);
 // 配信するトラックの名前。catalog の track name になり、同じ namespace の中で一意でなければ
 // ならない (draft-ietf-moq-msf-01 §5.2.3)。既定値は src/createMedia/settings.ts の
 // DEFAULT_VIDEO_TRACK_NAME / DEFAULT_AUDIO_TRACK_NAME と同じにする
 export const videoTrackName = signal("video");
 export const audioTrackName = signal("audio");
 // 映像トラックのコーデック。音声は audioCodec
-export const codec = signal<CodecType>("vp8");
+export const codec = signal<CodecType>("vp9");
 
 // 自己署名証明書用の証明書ハッシュ (Base64 でエンコードした SHA-256 ハッシュ)
 export const certificateHash = signal("");
@@ -46,10 +74,10 @@ export const selectedCameraDeviceId = signal<string>("");
 export const resolution = signal("1280x720");
 export const framerate = signal(30);
 export const bitrate = signal(2000000);
-// キーフレーム間隔 (frames)。既定は framerate 30 の 2 秒ぶんにして、ライブラリの
-// 既定 (framerate の 2 倍) と揃える。長い間隔にすると、後から購読した相手が次の
-// キーフレームまで復号を始められず、relay の cache 上限も超えやすい
-export const keyframeInterval = signal(60);
+// キーフレーム間隔 (frames)。既定は framerate 30 の 10 秒ぶん。長い間隔にすると、
+// 後から購読した相手が次のキーフレームまで復号を始められず、relay の cache 上限も
+// 超えやすい
+export const keyframeInterval = signal(300);
 
 // 音声設定
 //

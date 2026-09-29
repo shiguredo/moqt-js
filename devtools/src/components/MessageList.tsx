@@ -16,8 +16,8 @@ interface MessageListProps {
  */
 export function MessageList({ entries, testId }: MessageListProps) {
   return (
-    <div class="rounded-lg px-3 py-2 mb-4 border bg-blue-50 border-blue-200" data-testid={testId}>
-      <h3 class="text-xs font-semibold uppercase tracking-wide mb-1 flex items-center gap-1.5 text-blue-700">
+    <div class="rounded-lg px-3 py-2 mb-4 border bg-amber-50 border-amber-200" data-testid={testId}>
+      <h3 class="text-xs font-semibold uppercase tracking-wide mb-1 flex items-center gap-1.5 text-amber-700">
         <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path
             stroke-linecap="round"

@@ -113,14 +113,26 @@ export const audioFrameReader = signal<ReadableStreamDefaultReader<AudioData> | 
 // (utils/audioLevelTimeline.ts)。音声の配信を始めるたびに作り直す
 export const audioLevelTimeline = signal(new AudioLevelTimeline());
 // 配信側の音声メーター。取っている音の peak / RMS (dBFS) と直近の波形は Preview 中から
-// 更新する (hooks/publisherAudioMeter.ts)。LOC Audio Level は直近に送った Object の値
-export const audioMeterPeakDbfs = signal<number | null>(null);
-export const audioMeterRmsDbfs = signal<number | null>(null);
-export const audioMeterWaveform = signal<Float32Array | null>(null);
+// 更新する (hooks/publisherAudioMeter.ts)。左右のチャンネルを別々に持ち、モノラルの
+// ときは右が null のままになる。LOC Audio Level は直近に送った Object の値
+export const audioMeterPeakDbfsLeft = signal<number | null>(null);
+export const audioMeterPeakDbfsRight = signal<number | null>(null);
+export const audioMeterRmsDbfsLeft = signal<number | null>(null);
+export const audioMeterRmsDbfsRight = signal<number | null>(null);
+export const audioMeterWaveformLeft = signal<Float32Array | null>(null);
+export const audioMeterWaveformRight = signal<Float32Array | null>(null);
 export const audioMeterLevel = signal<LOC.AudioLevel | null>(null);
 
 // 音声の Group ID。draft-ietf-moq-loc-04 §4.1 に従い chunk ごとに Group を進める
 export const pubCurrentAudioGroup = signal(Date.now());
+// 送った音声 Object の数とバイト数 (video の objectsSent / bytesSent と同じく、配信の
+// たびに 0 に戻す)。datagramObjects は内数で、Subgroup で送った数は objectsSent との差
+export const audioObjectsSent = signal(0);
+export const audioDatagramObjectsSent = signal(0);
+export const audioBytesSent = signal(0);
+// 音声の符号化の統計 (video の chunksEncoded / encodeErrors を音声向けに分けたもの)
+export const audioChunksEncoded = signal(0);
+export const audioEncodeErrors = signal(0);
 // 最初の音声 Object を送ったかどうか。初回は割当済みの Group ID をそのまま使う
 export const pubAudioGroupStarted = signal(false);
 // 直前に送った Audio Config (AAC の AudioSpecificConfig)。同じ値を毎 Object 送らない

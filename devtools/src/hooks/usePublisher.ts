@@ -38,6 +38,7 @@ import {
   PRIORITY_VIDEO_DELTA,
   PRIORITY_VIDEO_KEY,
 } from "../../../src/createMediaPublisher.ts";
+import { formatFullTrackName } from "../../../src/fullTrackName.ts";
 import { addLog } from "../signals/debugLog";
 import { logDebugMessage } from "./debugMessageLog";
 import { EncoderWrapper, type EncodedChunkData } from "../utils/EncoderWrapper";
@@ -54,13 +55,9 @@ import {
 } from "../utils/catalogRepublish";
 import { shouldSendAudioAsDatagram } from "../utils/audioDelivery";
 import {
-  buildMediaTrackStatusMessage,
-  type EstablishedMediaTrackNames,
-} from "../utils/trackStatusMessage";
-import {
-  appendChatEventEntry,
-  buildChatEventEntry,
-  CHAT_EVENT_TYPE,
+  appendMessageEventEntry,
+  buildMessageEventEntry,
+  MESSAGES_EVENT_TYPE,
   EVENT_TRACK_NAME,
 } from "../utils/eventTimeline";
 import {
@@ -335,7 +332,7 @@ export function buildPublisherCatalog(options: PublisherCatalogOptions): Catalog
     packaging: "eventtimeline",
     isLive: true,
     role: "eventtimeline",
-    eventType: CHAT_EVENT_TYPE,
+    eventType: MESSAGES_EVENT_TYPE,
     mimeType: "application/json",
     depends,
   });
@@ -1222,7 +1219,7 @@ export function usePublisher() {
       },
       error: (error) => {
         console.error("Audio encoder error:", error);
-        pub.encodeErrors.value++;
+        pub.audioEncodeErrors.value++;
         pub.pubStatus.value = "error";
         pub.pubStatusMessage.value = `Audio encoder error: ${error.message}`;
       },
@@ -1250,6 +1247,7 @@ export function usePublisher() {
   function handleAudioEncodedChunk(chunk: AudioEncodedChunkData): void {
     const audioPublisherInstance = pub.audioPublisher.value;
     if (!audioPublisherInstance || audioPublisherInstance.state !== "active") return;
+    pub.audioChunksEncoded.value++;
 
     // LOC draft-ietf-moq-loc-04 §4.1 (Application with one audio track):
     // 音声 chunk 1 つ = Object 1 つ = Group 1 つ。2 つ目以降は Group を進め、
@@ -1298,9 +1296,13 @@ export function usePublisher() {
       properties,
       priority: PRIORITY_AUDIO,
     };
+    // 送った Object を数える (video の objectsSent / bytesSent と同じ扱い)
+    pub.audioObjectsSent.value++;
+    pub.audioBytesSent.value += chunk.data.length + properties.length;
     if (
       shouldSendAudioAsDatagram(settings.audioDelivery.value, pub.pubSession.value?.reliability)
     ) {
+      pub.audioDatagramObjectsSent.value++;
       try {
         audioPublisherInstance.sendDatagram(sendParams);
       } catch (error) {
@@ -1348,17 +1350,21 @@ export function usePublisher() {
       objectId: 0,
       payload: encodeCatalog(currentCatalog),
     });
-    addLog("info", `[publisher] [SEND] OBJECT (${CATALOG_TRACK_NAME}, updated)`, {
-      source: "publish",
-      catalogGroup: groupId,
-    });
+    addLog(
+      "info",
+      `[publisher] [SEND] OBJECT (${formatFullTrackName(settings.namespaceArray.value, CATALOG_TRACK_NAME)}, updated)`,
+      {
+        source: "publish",
+        catalogGroup: groupId,
+      },
+    );
   };
 
   /**
    * event timeline トラックを publish する
    *
    * catalog が広告する event timeline トラックを実際に publish する。devtools は
-   * audio / video 以外のデータを流す例としてここにチャットのメッセージを送る。
+   * audio / video 以外のデータを流す例としてここにメッセージを送る。
    * 失敗しても catalog には載っているため、購読側は購読を始められる (保留になる)
    */
   async function startEventPublishing(
@@ -1385,7 +1391,7 @@ export function usePublisher() {
   }
 
   /**
-   * event timeline にチャットのメッセージを 1 件送る
+   * event timeline にメッセージを 1 件送る
    *
    * draft-ietf-moq-msf-01 §8.3: Group の先頭 Object には、それまでに蓄積されアクセス
    * 可能な全レコードを載せなければならない (MUST)。devtools はメッセージごとに新しい
@@ -1397,7 +1403,7 @@ export function usePublisher() {
     if (!eventPublisherInstance || eventPublisherInstance.state !== "active") return;
     if (text.length === 0) return;
 
-    eventHistory = appendChatEventEntry(eventHistory, buildChatEventEntry(text, Date.now()));
+    eventHistory = appendMessageEventEntry(eventHistory, buildMessageEventEntry(text, Date.now()));
     const groupId = pub.eventGroup.value + 1;
     pub.eventGroup.value = groupId;
     try {
@@ -1427,7 +1433,7 @@ export function usePublisher() {
       pub.httpVersion.value = null;
       settings.settingsDisabled.value = true;
 
-      const namespaceArray = settings.namespace.value.split("/").filter((s) => s.length > 0);
+      const namespaceArray = settings.namespaceArray.value;
       const videoTrackNameValue = settings.videoTrackName.value;
       const codecValue = settings.codec.value;
       const videoSourceValue = settings.videoSource.value;
@@ -1568,10 +1574,14 @@ export function usePublisher() {
       });
       // catalog が relay の cache から落ちる前に送り直す (draft-ietf-moq-msf-01 Section 5.1)
       startCatalogRepublish(maxCacheDurationValue, sendCatalogUpdate);
-      addLog("info", `[publisher] [SEND] OBJECT (${CATALOG_TRACK_NAME})`, {
-        source: "publish",
-        catalog: createdCatalog,
-      });
+      addLog(
+        "info",
+        `[publisher] [SEND] OBJECT (${formatFullTrackName(namespaceArray, CATALOG_TRACK_NAME)})`,
+        {
+          source: "publish",
+          catalog: createdCatalog,
+        },
+      );
 
       pub.pubStatusMessage.value = "Connected, preparing encoder...";
 
@@ -1593,8 +1603,6 @@ export function usePublisher() {
       pub.isPreviewActive.value = false;
 
       const useWorker = settings.useDedicatedWorker.value;
-      // 確立したメディアトラックの名前。最後に配信ステータスへまとめて出す
-      const establishedMediaTracks: EstablishedMediaTrackNames = {};
       if (videoInput !== null) {
         await startVideoPublishing(session, namespaceArray, videoInput, {
           trackName: videoTrackNameValue,
@@ -1604,7 +1612,6 @@ export function usePublisher() {
           maxCacheDuration: maxCacheDurationValue,
           useWorker,
         });
-        establishedMediaTracks.video = videoTrackNameValue;
       }
 
       // 音声トラックを配信する
@@ -1620,7 +1627,6 @@ export function usePublisher() {
           // 映像を送らないときは、音声トラックが配信の確立と Forward State を表す
           audioOnly: videoInput === null,
         });
-        establishedMediaTracks.audio = audioTrackNameValue;
       }
 
       // event timeline トラックを配信する。メディアの配信を壊さないよう、失敗しても
@@ -1636,14 +1642,8 @@ export function usePublisher() {
         // 映像の統計 (符号化と送信の時間など) は前の配信のものを持ち越さない
         resetVideoPublishState();
       }
-      // 配信ステータスには、確立したメディアトラックの Full Track Name を audio → video の
-      // 順で並べる (Catalog と Tracks カードの並びに揃える)。event timeline は publish の
-      // 失敗を警告に留めるデータトラックのため含めない
-      pub.pubStatusMessage.value = buildMediaTrackStatusMessage(
-        "Publishing",
-        namespaceArray,
-        establishedMediaTracks,
-      );
+      // 配信ステータスは接続の段階を示す (トラックの一覧は Catalog パネルが出す)
+      pub.pubStatusMessage.value = "Publishing";
 
       // 統計値をリセットする
       pub.framesEncoded.value = 0;
@@ -1655,6 +1655,11 @@ export function usePublisher() {
       pub.chunksEncoded.value = 0;
       pub.encodeErrors.value = 0;
       pub.objectsWithExtensions.value = 0;
+      pub.audioObjectsSent.value = 0;
+      pub.audioDatagramObjectsSent.value = 0;
+      pub.audioBytesSent.value = 0;
+      pub.audioChunksEncoded.value = 0;
+      pub.audioEncodeErrors.value = 0;
       pub.pubAudioGroupStarted.value = false;
       // draft-ietf-moq-msf-01 §6.1: 配信を再開したときの開始 Group ID は、前回
       // publish したどの Group ID よりも大きいことを MUST とする。音声は chunk
@@ -1716,10 +1721,14 @@ export function usePublisher() {
           objectId: 0,
           payload: completeCatalogPayload,
         });
-        addLog("info", `[publisher] [SEND] OBJECT (${CATALOG_TRACK_NAME}, complete)`, {
-          source: "publish",
-          catalog: completeCatalog,
-        });
+        addLog(
+          "info",
+          `[publisher] [SEND] OBJECT (${formatFullTrackName(settings.namespaceArray.value, CATALOG_TRACK_NAME)}, complete)`,
+          {
+            source: "publish",
+            catalog: completeCatalog,
+          },
+        );
         await pub.catalogPublisher.value.done();
       }
 

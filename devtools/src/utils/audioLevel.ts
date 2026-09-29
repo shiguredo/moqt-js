@@ -31,19 +31,23 @@ interface DecodedAudioLevel {
 }
 
 /**
- * 復号した `AudioData` から第 1 チャンネルのサンプル列を読み出す
+ * 復号した `AudioData` から指定チャンネルのサンプル列を読み出す
  *
  * `devtools/src/codec-test/support.ts` の `summarizeAudioData` と同じ手順
  * (`allocationSize` + `copyTo` の `format: "f32-planar"`) で読み出す。
  * `AudioData` はブラウザ専用 API であり Node の vitest では生成できないため、
  * この関数の検証は実ブラウザ (codec-test ページ) で行う。
  *
+ * メーターは左右のチャンネルを別々に読む (既定は第 1 チャンネル)。
  * `AudioData` の所有者は呼び出し側のままであり、本関数は `close()` しない。
+ *
+ * @param audioData - 読み出す対象
+ * @param channel - 読むチャンネル (0 始まり)
  */
-export function readAudioSamples(audioData: AudioData): Float32Array {
-  const byteLength = audioData.allocationSize({ planeIndex: 0, format: "f32-planar" });
+export function readAudioSamples(audioData: AudioData, channel = 0): Float32Array {
+  const byteLength = audioData.allocationSize({ planeIndex: channel, format: "f32-planar" });
   const samples = new Float32Array(byteLength / Float32Array.BYTES_PER_ELEMENT);
-  audioData.copyTo(samples, { planeIndex: 0, format: "f32-planar" });
+  audioData.copyTo(samples, { planeIndex: channel, format: "f32-planar" });
   return samples;
 }
 
@@ -189,6 +193,26 @@ export function formatDbfs(value: number | null): string {
     return INACTIVE_TEXT;
   }
   return `${value.toFixed(1).padStart(DBFS_NUMBER_WIDTH)} dBFS`;
+}
+
+/**
+ * dBFS の値を統計表向けに短くする
+ *
+ * 生の値は小数が長く読みづらいため、小数点以下 1 桁に丸める。値が無いときは「-」
+ */
+export function formatDbfsShort(value: number | null): string {
+  return value === null ? INACTIVE_TEXT : value.toFixed(1);
+}
+
+/**
+ * dBFS の値をバーの割合 (0..1) にする
+ *
+ * 0 dBFS が 1 (右端)、MIN_DBFS が 0 (左端) になる。メーターのバーの幅と目盛りの
+ * 位置に使う
+ */
+export function dbfsToRatio(dbfs: number): number {
+  const clamped = Math.max(MIN_DBFS, Math.min(MAX_DBFS, dbfs));
+  return (clamped - MIN_DBFS) / (MAX_DBFS - MIN_DBFS);
 }
 
 // 振幅を dBFS へ換算する。0 と負の値は下限 (無音)、正の無限大は 0 dBFS に丸める

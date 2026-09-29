@@ -858,9 +858,12 @@ test("resetSubscriberStats: 音声の統計と最終レベルを初期化する"
   instance.audioDatagramObjectsReceived.value = 4;
   instance.audioChunksDecoded.value = 10;
   instance.audioLastLevel.value = { level: 14, voiceActivity: true };
-  instance.audioPeakDbfs.value = -6;
-  instance.audioRmsDbfs.value = -9;
-  instance.audioWaveform.value = new Float32Array([1, 2, 3]);
+  instance.audioPeakDbfsLeft.value = -6;
+  instance.audioRmsDbfsLeft.value = -9;
+  instance.audioPeakDbfsRight.value = -7;
+  instance.audioRmsDbfsRight.value = -10;
+  instance.audioWaveformLeft.value = new Float32Array([1, 2, 3]);
+  instance.audioWaveformRight.value = new Float32Array([4, 5, 6]);
   instance.audioPlayoutRebases.value = 2;
   instance.audioPlayoutDrops.value = 3;
   instance.audioCatchUpObjectsSkipped.value = 5;
@@ -871,9 +874,12 @@ test("resetSubscriberStats: 音声の統計と最終レベルを初期化する"
   assert.equal(instance.audioDatagramObjectsReceived.value, 0);
   assert.equal(instance.audioChunksDecoded.value, 0);
   assert.equal(instance.audioLastLevel.value, null);
-  assert.equal(instance.audioPeakDbfs.value, null);
-  assert.equal(instance.audioRmsDbfs.value, null);
-  assert.equal(instance.audioWaveform.value, null);
+  assert.equal(instance.audioPeakDbfsLeft.value, null);
+  assert.equal(instance.audioRmsDbfsLeft.value, null);
+  assert.equal(instance.audioPeakDbfsRight.value, null);
+  assert.equal(instance.audioRmsDbfsRight.value, null);
+  assert.equal(instance.audioWaveformLeft.value, null);
+  assert.equal(instance.audioWaveformRight.value, null);
   assert.equal(instance.audioPlayoutRebases.value, 0);
   assert.equal(instance.audioPlayoutDrops.value, 0);
   assert.equal(instance.audioCatchUpObjectsSkipped.value, 0);
@@ -890,10 +896,14 @@ test("resetSubscriberState: 音声の signal を初期化し再生を無効に�
   instance.audioDecoderConfigured.value = true;
   instance.audioLastLevel.value = { level: 14, voiceActivity: true };
   instance.audioPlaybackEnabled.value = true;
-  instance.audioPeakDbfs.value = -6;
-  instance.audioRmsDbfs.value = -9;
-  instance.audioWaveform.value = new Float32Array([1, 2, 3]);
+  instance.audioPeakDbfsLeft.value = -6;
+  instance.audioRmsDbfsLeft.value = -9;
+  instance.audioPeakDbfsRight.value = -7;
+  instance.audioRmsDbfsRight.value = -10;
+  instance.audioWaveformLeft.value = new Float32Array([1, 2, 3]);
+  instance.audioWaveformRight.value = new Float32Array([4, 5, 6]);
   instance.eventSubscriber.value = new FakeSubscriber();
+  instance.eventObjectsReceived.value = 3;
   instance.eventMessages.value = [{ t: 1000, data: { text: "hello" } }];
 
   resetSubscriberState(instance, {
@@ -906,11 +916,15 @@ test("resetSubscriberState: 音声の signal を初期化し再生を無効に�
   assert.equal(instance.audioDecoderConfigured.value, false);
   assert.equal(instance.audioLastLevel.value, null);
   assert.equal(instance.audioPlaybackEnabled.value, false);
-  assert.equal(instance.audioPeakDbfs.value, null);
-  assert.equal(instance.audioRmsDbfs.value, null);
-  assert.equal(instance.audioWaveform.value, null);
+  assert.equal(instance.audioPeakDbfsLeft.value, null);
+  assert.equal(instance.audioRmsDbfsLeft.value, null);
+  assert.equal(instance.audioPeakDbfsRight.value, null);
+  assert.equal(instance.audioRmsDbfsRight.value, null);
+  assert.equal(instance.audioWaveformLeft.value, null);
+  assert.equal(instance.audioWaveformRight.value, null);
   // event timeline の購読とメッセージも初期化する
   assert.equal(instance.eventSubscriber.value, null);
+  assert.equal(instance.eventObjectsReceived.value, 0);
   assert.deepEqual(instance.eventMessages.value, []);
 });
 

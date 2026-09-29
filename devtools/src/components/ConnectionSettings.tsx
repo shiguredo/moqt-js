@@ -12,6 +12,7 @@ import {
   type TrackAdvertisement,
   type TrackNameProblem,
 } from "../utils/publishTracks";
+import { MESSAGES_EVENT_TYPE, EVENT_TRACK_NAME } from "../utils/eventTimeline";
 import type {
   AudioDelivery,
   AudioSourceType,
@@ -376,8 +377,9 @@ function buildConnectionSummary(currentMode: DevtoolsMode): ConnectionSummaryIte
   const videoSource = settings.videoSource.value;
   const audioSource = settings.audioSource.value;
   const audioCodecLabel = settings.audioCodec.value === "opus" ? "Opus" : "AAC";
-  // 広告するトラックの名前を並べる (Tracks カードと同じく Audio → Video の順)。
-  // 入力が None のトラックは catalog に載らないため出さない
+  // 広告するトラックの名前を並べる (Tracks カードと同じく Audio → Video → Event の順)。
+  // 入力が None のトラックは catalog に載らないため出さない。event timeline は
+  // 名前が固定で、常に catalog に載る
   const advertisedTrackNames: string[] = [];
   if (audioSource !== "none") {
     advertisedTrackNames.push(settings.audioTrackName.value || "-");
@@ -385,6 +387,7 @@ function buildConnectionSummary(currentMode: DevtoolsMode): ConnectionSummaryIte
   if (videoSource !== "none") {
     advertisedTrackNames.push(settings.videoTrackName.value || "-");
   }
+  advertisedTrackNames.push(EVENT_TRACK_NAME);
   summary.push(
     {
       label: "Tracks",
@@ -717,8 +720,24 @@ export function ConnectionSettings() {
             />
           </div>
         </div>
+        {/* Namespace は接続先の特定に使うため、URI Fragment より左に置く */}
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 mt-4">
           <div class="lg:col-span-2">
+            <label for="namespace" class="block text-sm font-medium text-slate-600 mb-1">
+              Namespace
+              <span class="text-xs text-slate-400 ml-1">(split into a tuple by /)</span>
+            </label>
+            <input
+              type="text"
+              id="namespace"
+              placeholder="e.g. moqt/devtools/a1B2c3D4e5F6g7H8"
+              value={settings.namespace.value}
+              onInput={(e) => (settings.namespace.value = e.currentTarget.value)}
+              disabled={settings.settingsDisabled.value}
+              class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors disabled:bg-slate-100 disabled:cursor-not-allowed"
+            />
+          </div>
+          <div class="lg:col-span-3">
             <label for="fragment" class="block text-sm font-medium text-slate-600 mb-1">
               URI Fragment
               <span class="ml-1 text-xs text-slate-400">type:value (draft-21 §6.1.1)</span>
@@ -735,23 +754,6 @@ export function ConnectionSettings() {
               disabled={settings.settingsDisabled.value}
               placeholder="e.g. track:video"
               class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors disabled:bg-slate-100 disabled:cursor-not-allowed text-sm"
-            />
-          </div>
-        </div>
-        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 mt-4">
-          <div>
-            <label for="namespace" class="block text-sm font-medium text-slate-600 mb-1">
-              Namespace
-              <span class="text-xs text-slate-400 ml-1">(split into a tuple by /)</span>
-            </label>
-            <input
-              type="text"
-              id="namespace"
-              placeholder="e.g. room/123 → [room, 123]"
-              value={settings.namespace.value}
-              onInput={(e) => (settings.namespace.value = e.currentTarget.value)}
-              disabled={settings.settingsDisabled.value}
-              class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors disabled:bg-slate-100 disabled:cursor-not-allowed"
             />
           </div>
         </div>
@@ -784,7 +786,7 @@ export function ConnectionSettings() {
                 {/* 配信するトラックの一覧。トラック名とコーデックは catalog のトラックの宣言で
                     あり、符号化の設定 (Video / Audio カード) とは分ける。Advertised は catalog に
                     載せる予定を出し、配信を始めるまで確定しない要素は含めない */}
-                <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
                   {/* 音声トラック。画面の並びは Audio → Video で揃える */}
                   <div class="rounded border border-slate-200 px-3 py-3">
                     <h5 class="text-xs font-semibold text-slate-600 mb-2">Audio</h5>
@@ -875,6 +877,37 @@ export function ConnectionSettings() {
                       <option value="h264">H.264</option>
                       <option value="h265">H.265</option>
                     </select>
+                  </div>
+                  {/* event timeline トラック。audio / video 以外のデータを流す例で、
+                      トラック名と eventType は devtools の取り決めで固定 */}
+                  <div class="rounded border border-slate-200 px-3 py-3">
+                    <h5 class="text-xs font-semibold text-slate-600 mb-2">Event</h5>
+                    <div class="flex gap-2 text-xs mb-1">
+                      <span class="w-24 shrink-0 text-slate-500">Advertised</span>
+                      <span class="font-medium text-slate-700" data-testid="event-track-advertised">
+                        Yes
+                      </span>
+                    </div>
+                    <div class="flex gap-2 text-xs mb-3">
+                      <span class="w-24 shrink-0 text-slate-500">Role</span>
+                      <span class="font-mono text-slate-700">eventtimeline</span>
+                    </div>
+                    <div class="block text-xs text-slate-500 mb-1">Track Name</div>
+                    <input
+                      type="text"
+                      data-testid="event-track-name"
+                      value={EVENT_TRACK_NAME}
+                      readOnly
+                      class="w-full px-3 py-2 mb-3 text-sm border border-slate-300 rounded-lg bg-slate-100 text-slate-500"
+                    />
+                    <div class="block text-xs text-slate-500 mb-1">Event Type</div>
+                    <input
+                      type="text"
+                      data-testid="event-track-type"
+                      value={MESSAGES_EVENT_TYPE}
+                      readOnly
+                      class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-slate-100 text-slate-500"
+                    />
                   </div>
                 </div>
                 {/* 空名と同名は MSF §5.2.3 に反し、配信の開始時に拒否される。

@@ -227,6 +227,23 @@ export function StatSection({ title, help, testId, children }: StatSectionProps)
   );
 }
 
+/**
+ * 統計の種類ごとの大見出し (Video / Audio / Messages など)
+ *
+ * 配下のセクションをまとめる。種類 (トラック) が増えても、どの統計が何のものかを
+ * ここで分ける
+ */
+export function StatGroup({ title, children }: { title: string; children: ComponentChildren }) {
+  return (
+    <div class="mb-6 last:mb-0">
+      <h3 class="mb-3 border-b border-slate-200 pb-1 text-sm font-semibold text-slate-700">
+        {title}
+      </h3>
+      {children}
+    </div>
+  );
+}
+
 /** 問題のある値の色 (warn: 捨てた数や止まりなど、error: エラーや欠落の数) */
 export type StatTone = "warn" | "error";
 
@@ -262,15 +279,32 @@ function toneIfNonZero(value: string | number, tone: StatTone | undefined): Stat
 
 /**
  * ラベルと値の行を 2 列に並べる
+ *
+ * 前回の描画から値が変わった項目は、次の描画まで枠を薄く色付けする (統計は 1 秒ごとに
+ * 更新されるため、どの値が動いたかをひと目で分かるようにする)
  */
 export function StatList({ items }: { items: readonly StatValue[] }) {
+  // 前回の描画の値 (ラベルごと)。値が変わったかの判定だけに使う
+  const previousValues = useRef(new Map<string, string | number>());
+  const changedLabels = new Set<string>();
+  for (const item of items) {
+    const previous = previousValues.current.get(item.label);
+    if (previous !== undefined && String(previous) !== String(item.value)) {
+      changedLabels.add(item.label);
+    }
+  }
+  // 次の描画で比べる値を覚える
+  previousValues.current = new Map(items.map((item) => [item.label, item.value]));
+
   return (
     // 1px の隙間から背景の色を見せて、表のような区切りの線にする
     <dl class="grid grid-cols-1 gap-px overflow-hidden rounded-lg border border-slate-200 bg-slate-200 sm:grid-cols-2">
       {items.map((item) => (
         <div
           key={item.label}
-          class="flex items-baseline justify-between gap-3 bg-white px-3 py-1.5"
+          class={`flex items-baseline justify-between gap-3 px-3 py-1.5 transition-colors ${
+            changedLabels.has(item.label) ? "bg-sky-50" : "bg-white"
+          }`}
         >
           <dt class="min-w-0 text-xs text-slate-500 [overflow-wrap:anywhere]">{item.label}</dt>
           <dd

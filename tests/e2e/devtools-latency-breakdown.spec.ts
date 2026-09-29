@@ -37,11 +37,12 @@ test("window.moqtDevTools から遅延の区間ごとの統計が読める", asy
     return { publisher: api.getPublisher(), subscriber: first };
   });
 
-  // publisher: 符号化と送信の時間、encoder の待ちで捨てたフレームの数
+  // publisher: 符号化と送信の時間、encoder の待ちで捨てたフレームの数、符号化 fps
   expect(stats.publisher.publishTiming).toEqual({
     encodeMs: null,
     sendMs: null,
     encodeQueueDrops: 0,
+    encodedFps: 0,
   });
   // subscriber: 描いたフレームの区間ごとの遅延
   const timing = stats.subscriber.playbackTiming;

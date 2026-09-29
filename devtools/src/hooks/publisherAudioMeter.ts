@@ -28,9 +28,12 @@ let stopCurrentMeter: (() => void) | null = null;
 
 /** 取っている音の値を消す (メーターは「-」と空の波形に戻る) */
 function clearMeterValues(): void {
-  pub.audioMeterPeakDbfs.value = null;
-  pub.audioMeterRmsDbfs.value = null;
-  pub.audioMeterWaveform.value = null;
+  pub.audioMeterPeakDbfsLeft.value = null;
+  pub.audioMeterPeakDbfsRight.value = null;
+  pub.audioMeterRmsDbfsLeft.value = null;
+  pub.audioMeterRmsDbfsRight.value = null;
+  pub.audioMeterWaveformLeft.value = null;
+  pub.audioMeterWaveformRight.value = null;
 }
 
 /**
@@ -83,15 +86,22 @@ async function readMeter(
         return;
       }
       try {
+        const samplesLeft = readAudioSamples(audioData);
+        // モノラルのときは右チャンネルを読まない (メーターの右は「-」のまま)
+        const samplesRight = audioData.numberOfChannels > 1 ? readAudioSamples(audioData, 1) : null;
         const snapshot = accumulator.push(
-          readAudioSamples(audioData),
+          samplesLeft,
+          samplesRight,
           audioData.sampleRate,
           performance.now(),
         );
         if (snapshot !== null) {
-          pub.audioMeterPeakDbfs.value = snapshot.peakDbfs;
-          pub.audioMeterRmsDbfs.value = snapshot.rmsDbfs;
-          pub.audioMeterWaveform.value = snapshot.waveform;
+          pub.audioMeterPeakDbfsLeft.value = snapshot.left.peakDbfs;
+          pub.audioMeterRmsDbfsLeft.value = snapshot.left.rmsDbfs;
+          pub.audioMeterWaveformLeft.value = snapshot.left.waveform;
+          pub.audioMeterPeakDbfsRight.value = snapshot.right?.peakDbfs ?? null;
+          pub.audioMeterRmsDbfsRight.value = snapshot.right?.rmsDbfs ?? null;
+          pub.audioMeterWaveformRight.value = snapshot.right?.waveform ?? null;
         }
       } finally {
         audioData.close();

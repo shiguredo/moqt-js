@@ -27,6 +27,24 @@ test("snapshot: 符号化と送信の時間をフレームごとに対応づけ�
   assert.deepEqual(snapshot.encodeMs, { p50: 3, p95: 4, max: 4 });
   assert.deepEqual(snapshot.sendMs, { p50: 1, p95: 5, max: 5 });
   assert.equal(snapshot.encodeQueueDrops, 0);
+  // 3 枚とも直近 1 秒に出力している
+  assert.equal(snapshot.encodedFps, 3);
+});
+
+// 符号化 fps は直近 1 秒に出力したフレーム数にする。窓の外の出力は数えない
+test("snapshot: 符号化 fps を直近 1 秒の出力から求める", () => {
+  const stats = new PublishTimingStats();
+  stats.recordRead(0, 0);
+  stats.recordEncoded(0, 0);
+  stats.recordRead(FRAME_MICROS, 500);
+  stats.recordEncoded(FRAME_MICROS, 500);
+  stats.recordRead(FRAME_MICROS * 2, 1_500);
+  stats.recordEncoded(FRAME_MICROS * 2, 1_500);
+
+  // 1500 ms の時点では、1000 ms より後の 1 枚だけを数える
+  assert.equal(stats.snapshot(1_500).encodedFps, 1);
+  // 分布の窓 (10 秒) の中でも、直近 1 秒より古い出力は数えない
+  assert.equal(stats.snapshot(2_500).encodedFps, 0);
 });
 
 // encoder の待ちが上限を超えて符号化せずに捨てたフレームを数える。捨てたフレームの

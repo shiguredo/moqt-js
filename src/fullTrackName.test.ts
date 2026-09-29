@@ -5,7 +5,7 @@
  */
 
 import { test, assert } from "vite-plus/test";
-import { formatFullTrackName, fullTrackNameKey } from "./fullTrackName";
+import { formatFullTrackName, formatTrackNamespace, fullTrackNameKey } from "./fullTrackName";
 
 /**
  * draft-ietf-moq-transport-21 §2.4.1:
@@ -90,6 +90,25 @@ test("formatFullTrackName: 空の Track Namespace と空の Track Name を扱う
   assert.equal(formatFullTrackName(["room"], ""), "room--");
   assert.throws(
     () => formatFullTrackName(["room", "", "123"], "video"),
+    /track namespace field at index 1 must not be empty/,
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-21 §8.8:
+ * namespace 単体の表記は track name を除いた部分であり、`--` の左側がそのまま残る。
+ * ログ等で namespace だけを出すときに使う。
+ */
+test("formatTrackNamespace: Track Namespace だけを組み立てる", () => {
+  assert.equal(formatTrackNamespace(["customer", "livestream", "123"]), "customer-livestream-123");
+  assert.equal(formatTrackNamespace(["room", "123"]), "room-123");
+  // Track Namespace は §8.7 が 0 フィールドを許す
+  assert.equal(formatTrackNamespace([]), "");
+  // フィールドのエスケープ規則は Full Track Name と同じ
+  assert.equal(formatTrackNamespace(["a-b.c/d"]), "a.2db.2ec.2fd");
+  assert.equal(formatTrackNamespace(["あ"]), ".e3.81.82");
+  assert.throws(
+    () => formatTrackNamespace(["room", "", "123"]),
     /track namespace field at index 1 must not be empty/,
   );
 });

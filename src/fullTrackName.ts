@@ -73,26 +73,20 @@ function escapeFullTrackNameSegment(value: string): string {
 }
 
 /**
- * Full Track Name の文字列表現を組み立てる
+ * Track Namespace の文字列表現を組み立てる
  *
  * draft-ietf-moq-transport-21 §8.8 (Representing Namespace and Track Names):
- * ログ等の用途で推奨される形式として、Track Namespace の各フィールドを "-" で
- * 並べ、Track Name を "--" でつなぐ。フィールドと Track Name のバイトは
- * escapeFullTrackNameSegment の規則でエスケープする。draft-ietf-moq-msf-01
- * §11.1.2 は同じ形式を MSF fragment の namespace-name 文字列に使う
- * (`parseMsfFragmentValue` が parse 側)。
- *
- * "/" などの区切りで連結した文字列と違い、この表現は namespace のフィールド
- * 境界と Track Name の境界が一意に読める (fullTrackNameKey の doc コメントが
- * 挙げる曖昧さが無い)。
+ * Full Track Name の文字列表現は、Track Namespace の各フィールドを "-" で並べ、
+ * Track Name を "--" でつなぐ。この関数は前半 (Track Namespace まで) を
+ * 組み立てる。namespace 単体をログ等へ出すときに使う。各フィールドのバイトは
+ * escapeFullTrackNameSegment の規則でエスケープする。
  *
  * Track Namespace Field は §8.7 が 1 バイト以上を MUST とするため、空の
- * フィールドは区切りと区別できず Error にする。Track Name は §8.7 が空を
- * 許すため、空でも描画する。
+ * フィールドは区切りと区別できず Error にする。
  *
  * @throws Error 空の Track Namespace Field を渡したとき
  */
-export function formatFullTrackName(trackNamespace: readonly string[], trackName: string): string {
+export function formatTrackNamespace(trackNamespace: readonly string[]): string {
   const namespaceSegments: string[] = [];
   for (const [index, field] of trackNamespace.entries()) {
     if (field.length === 0) {
@@ -102,5 +96,28 @@ export function formatFullTrackName(trackNamespace: readonly string[], trackName
     }
     namespaceSegments.push(escapeFullTrackNameSegment(field));
   }
-  return `${namespaceSegments.join("-")}--${escapeFullTrackNameSegment(trackName)}`;
+  return namespaceSegments.join("-");
+}
+
+/**
+ * Full Track Name の文字列表現を組み立てる
+ *
+ * draft-ietf-moq-transport-21 §8.8 (Representing Namespace and Track Names):
+ * ログ等の用途で推奨される形式として、Track Namespace の各フィールドを "-" で
+ * 並べ、Track Name を "--" でつなぐ。Track Namespace の部分は
+ * formatTrackNamespace が組み立て、Track Name のバイトは
+ * escapeFullTrackNameSegment の規則でエスケープする。draft-ietf-moq-msf-01
+ * §11.1.2 は同じ形式を MSF fragment の namespace-name 文字列に使う
+ * (`parseMsfFragmentValue` が parse 側)。
+ *
+ * "/" などの区切りで連結した文字列と違い、この表現は namespace のフィールド
+ * 境界と Track Name の境界が一意に読める (fullTrackNameKey の doc コメントが
+ * 挙げる曖昧さが無い)。
+ *
+ * Track Name は §8.7 が空を許すため、空でも描画する。
+ *
+ * @throws Error 空の Track Namespace Field を渡したとき
+ */
+export function formatFullTrackName(trackNamespace: readonly string[], trackName: string): string {
+  return `${formatTrackNamespace(trackNamespace)}--${escapeFullTrackNameSegment(trackName)}`;
 }
