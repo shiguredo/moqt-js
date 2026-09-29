@@ -20,14 +20,21 @@ import { extractC4mBase64 } from "../utils/c4m";
 import { isResolution } from "../utils/codec";
 import { isDebugPanelOpen } from "./debug";
 
+/** namespace の初期値に使う文字 (a-zA-Z0-9) */
+const NAMESPACE_ALPHABET = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+
 /**
- * namespace の初期値に使う 8 文字のランダムな文字列 (0-9 a-z)
+ * namespace の初期値に使う 16 文字のランダムな文字列 (a-zA-Z0-9)
  */
 function randomNamespaceSuffix(): string {
-  const bytes = new Uint8Array(8);
+  const bytes = new Uint8Array(16);
   crypto.getRandomValues(bytes);
-  // 36 文字 (0-9 a-z) へ写す。剰余の偏りは namespace の用途では問題にしない
-  return Array.from(bytes, (byte) => (byte % 36).toString(36)).join("");
+  let suffix = "";
+  for (const byte of bytes) {
+    // 62 文字への写像。剰余の偏りは namespace の用途では問題にしない
+    suffix += NAMESPACE_ALPHABET.charAt(byte % NAMESPACE_ALPHABET.length);
+  }
+  return suffix;
 }
 
 // 接続設定
@@ -43,7 +50,7 @@ export const fragment = signal("");
  * 複数の devtools が同じ relay に繋がっても namespace が衝突しないよう、ページごとに
  * ランダムな接尾辞を付ける。共有するときは Copy URL や Save で持ち出す
  */
-export const namespace = signal(`moqt-devtools/${randomNamespaceSuffix()}`);
+export const namespace = signal(`devtools/${randomNamespaceSuffix()}`);
 // namespace 設定を Track Namespace のフィールドへ分解したもの。空のフィールドは落とす。
 // 接続処理と画面表示 (Full Track Name の組み立て) が同じ分解を使う
 export const namespaceArray = computed(() =>
