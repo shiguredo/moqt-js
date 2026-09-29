@@ -195,6 +195,7 @@ test("buildSubscriberStats: event timeline のメッセージを JSON にでき�
   // audio / video 以外のデータ (draft-ietf-moq-msf-01 §8) として受信した entry を
   // そのまま返す。Location の bigint は Largest Location と同じく文字列にする
   const instance = createSubscriberInstance("event-messages");
+  instance.eventObjectsReceived.value = 2;
   instance.eventMessages.value = [
     { t: 1000, data: { text: "hello" } },
     { l: [12n, 0n], data: { text: "linked" } },
@@ -202,6 +203,7 @@ test("buildSubscriberStats: event timeline のメッセージを JSON にでき�
 
   const stats = buildSubscriberStats(instance);
 
+  assert.deepEqual(stats.event, { objectsReceived: 2, entries: 2 });
   assert.deepEqual(stats.eventMessages, [
     { t: 1000, data: { text: "hello" } },
     { l: ["12", "0"], data: { text: "linked" } },
@@ -292,6 +294,11 @@ test("buildPublisherStats: 符号化と送信の累積、状態、音声のメ�
   pub.bytesSent.value = 12345;
   pub.pubCurrentGroup.value = 99;
   pub.newGroupRequestsReceived.value = 4;
+  pub.audioObjectsSent.value = 12;
+  pub.audioDatagramObjectsSent.value = 5;
+  pub.audioBytesSent.value = 3456;
+  pub.audioChunksEncoded.value = 13;
+  pub.audioEncodeErrors.value = 1;
   pub.audioMeterPeakDbfsLeft.value = -6.5;
   pub.audioMeterRmsDbfsLeft.value = -12.25;
   pub.audioMeterPeakDbfsRight.value = -7.5;
@@ -315,6 +322,11 @@ test("buildPublisherStats: 符号化と送信の累積、状態、音声のメ�
     assert.equal(stats.bytesSent, 12345);
     assert.equal(stats.currentGroup, 99);
     assert.equal(stats.newGroupRequests, 4);
+    assert.equal(stats.audio.objectsSent, 12);
+    assert.equal(stats.audio.datagramObjectsSent, 5);
+    assert.equal(stats.audio.bytesSent, 3456);
+    assert.equal(stats.audio.chunksEncoded, 13);
+    assert.equal(stats.audio.encodeErrors, 1);
     assert.equal(stats.audio.meterPeakDbfs, -6.5);
     assert.equal(stats.audio.meterRmsDbfs, -12.25);
     assert.equal(stats.audio.meterPeakDbfsRight, -7.5);
@@ -338,6 +350,11 @@ test("buildPublisherStats: 符号化と送信の累積、状態、音声のメ�
     pub.bytesSent.value = 0;
     pub.pubCurrentGroup.value = 0;
     pub.newGroupRequestsReceived.value = 0;
+    pub.audioObjectsSent.value = 0;
+    pub.audioDatagramObjectsSent.value = 0;
+    pub.audioBytesSent.value = 0;
+    pub.audioChunksEncoded.value = 0;
+    pub.audioEncodeErrors.value = 0;
     pub.audioMeterPeakDbfsLeft.value = null;
     pub.audioMeterRmsDbfsLeft.value = null;
     pub.audioMeterPeakDbfsRight.value = null;

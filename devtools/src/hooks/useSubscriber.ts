@@ -548,6 +548,7 @@ export function resetSubscriberState(
   instance.audioPlaybackEnabled.value = false;
   // event timeline の購読と受信したメッセージも購読が無い状態に戻す
   instance.eventSubscriber.value = null;
+  instance.eventObjectsReceived.value = 0;
   instance.eventMessages.value = [];
   // 同期の推定は購読が無い状態の既定値に戻す
   instance.avSync.value = sub.EMPTY_AV_SYNC;
@@ -969,6 +970,8 @@ export function useSubscriber(
         object: (obj: MoqtObject) => {
           // 停止した購読の Object が遅れて届いても、表示を変えない
           if (signal.aborted) return;
+          // 受信した Object の数。Group の先頭 Object に履歴が載るため、履歴の件数とは別
+          instance.eventObjectsReceived.value++;
           try {
             instance.eventMessages.value = decodeEventTimeline(obj.payload);
           } catch (error) {

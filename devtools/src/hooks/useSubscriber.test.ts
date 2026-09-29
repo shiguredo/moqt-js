@@ -903,6 +903,7 @@ test("resetSubscriberState: 音声の signal を初期化し再生を無効に�
   instance.audioWaveformLeft.value = new Float32Array([1, 2, 3]);
   instance.audioWaveformRight.value = new Float32Array([4, 5, 6]);
   instance.eventSubscriber.value = new FakeSubscriber();
+  instance.eventObjectsReceived.value = 3;
   instance.eventMessages.value = [{ t: 1000, data: { text: "hello" } }];
 
   resetSubscriberState(instance, {
@@ -923,6 +924,7 @@ test("resetSubscriberState: 音声の signal を初期化し再生を無効に�
   assert.equal(instance.audioWaveformRight.value, null);
   // event timeline の購読とメッセージも初期化する
   assert.equal(instance.eventSubscriber.value, null);
+  assert.equal(instance.eventObjectsReceived.value, 0);
   assert.deepEqual(instance.eventMessages.value, []);
 });
 

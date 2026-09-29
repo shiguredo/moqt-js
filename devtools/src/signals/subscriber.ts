@@ -144,6 +144,9 @@ export interface SubscriberInstance {
   audioWaveformRight: Signal<Float32Array | null>;
   // event timeline トラックの購読 (catalog に eventtimeline トラックが無いときは null)
   eventSubscriber: Signal<Subscriber | null>;
+  // 受信した event timeline の Object の数。Group の先頭 Object にその時点の履歴が
+  // 載るため、表示中の履歴の件数 (eventMessages) とは別に数える
+  eventObjectsReceived: Signal<number>;
   // 受信した event timeline の entry。devtools publisher は Group の先頭 Object に
   // その時点の全履歴を載せるため、受信のたびに置き換える (draft-ietf-moq-msf-01 §8.3)
   eventMessages: Signal<EventTimelineEntry[]>;
@@ -206,6 +209,7 @@ export function createSubscriberInstance(id: string): SubscriberInstance {
     audioWaveformLeft: signal<Float32Array | null>(null),
     audioWaveformRight: signal<Float32Array | null>(null),
     eventSubscriber: signal<Subscriber | null>(null),
+    eventObjectsReceived: signal(0),
     eventMessages: signal<EventTimelineEntry[]>([]),
   };
 }

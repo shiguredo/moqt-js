@@ -1219,7 +1219,7 @@ export function usePublisher() {
       },
       error: (error) => {
         console.error("Audio encoder error:", error);
-        pub.encodeErrors.value++;
+        pub.audioEncodeErrors.value++;
         pub.pubStatus.value = "error";
         pub.pubStatusMessage.value = `Audio encoder error: ${error.message}`;
       },
@@ -1247,6 +1247,7 @@ export function usePublisher() {
   function handleAudioEncodedChunk(chunk: AudioEncodedChunkData): void {
     const audioPublisherInstance = pub.audioPublisher.value;
     if (!audioPublisherInstance || audioPublisherInstance.state !== "active") return;
+    pub.audioChunksEncoded.value++;
 
     // LOC draft-ietf-moq-loc-04 §4.1 (Application with one audio track):
     // 音声 chunk 1 つ = Object 1 つ = Group 1 つ。2 つ目以降は Group を進め、
@@ -1295,9 +1296,13 @@ export function usePublisher() {
       properties,
       priority: PRIORITY_AUDIO,
     };
+    // 送った Object を数える (video の objectsSent / bytesSent と同じ扱い)
+    pub.audioObjectsSent.value++;
+    pub.audioBytesSent.value += chunk.data.length + properties.length;
     if (
       shouldSendAudioAsDatagram(settings.audioDelivery.value, pub.pubSession.value?.reliability)
     ) {
+      pub.audioDatagramObjectsSent.value++;
       try {
         audioPublisherInstance.sendDatagram(sendParams);
       } catch (error) {
@@ -1650,6 +1655,11 @@ export function usePublisher() {
       pub.chunksEncoded.value = 0;
       pub.encodeErrors.value = 0;
       pub.objectsWithExtensions.value = 0;
+      pub.audioObjectsSent.value = 0;
+      pub.audioDatagramObjectsSent.value = 0;
+      pub.audioBytesSent.value = 0;
+      pub.audioChunksEncoded.value = 0;
+      pub.audioEncodeErrors.value = 0;
       pub.pubAudioGroupStarted.value = false;
       // draft-ietf-moq-msf-01 §6.1: 配信を再開したときの開始 Group ID は、前回
       // publish したどの Group ID よりも大きいことを MUST とする。音声は chunk

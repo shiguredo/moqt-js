@@ -4,11 +4,16 @@ import type { PlaybackTimingSnapshot } from "../utils/playbackTimingStats";
 import type { PublishTimingSnapshot } from "../utils/publishTimingStats";
 import type { StatusType } from "../types";
 import {
+  audioBytesSent,
+  audioChunksEncoded,
+  audioDatagramObjectsSent,
+  audioEncodeErrors,
   audioMeterLevel,
   audioMeterPeakDbfsLeft,
   audioMeterPeakDbfsRight,
   audioMeterRmsDbfsLeft,
   audioMeterRmsDbfsRight,
+  audioObjectsSent,
   audioPublisher,
   bytesSent,
   catalog,
@@ -104,6 +109,13 @@ function toJsonValue(value: unknown): JsonValue {
 export interface PublisherAudioStats {
   /** 音声トラックの PUBLISH が確立しているか */
   publishing: boolean;
+  /** 符号化した音声 Chunk の数と、符号化のエラー数 */
+  chunksEncoded: number;
+  encodeErrors: number;
+  /** 送った音声 Object の数とバイト数。datagramObjectsSent は objectsSent の内数 */
+  objectsSent: number;
+  datagramObjectsSent: number;
+  bytesSent: number;
   /** 配信側の音声メーターの peak / RMS (dBFS)。まだ測っていないときは null */
   meterPeakDbfs: number | null;
   meterRmsDbfs: number | null;
@@ -198,6 +210,18 @@ export interface SubscriberAudioStats {
   playoutDrops: number;
 }
 
+/** Subscriber の Messages (event timeline) の統計 */
+export interface SubscriberEventStats {
+  /**
+   * 受信した event timeline の Object の数
+   *
+   * Group の先頭 Object にその時点の履歴が載るため、表示している履歴の件数とは別
+   */
+  objectsReceived: number;
+  /** 表示している履歴の件数 */
+  entries: number;
+}
+
 /** Subscriber の統計 */
 export interface SubscriberStats {
   id: string;
@@ -252,6 +276,7 @@ export interface SubscriberStats {
    */
   avSync: AvSyncSnapshot;
   audio: SubscriberAudioStats;
+  event: SubscriberEventStats;
   /**
    * 受信した event timeline の entry (audio / video 以外のデータ)
    *
@@ -292,6 +317,11 @@ export function buildPublisherStats(): PublisherStats {
     publishTiming: publishTimingStats.value.snapshot(performance.now()),
     audio: {
       publishing: audioPublisher.value !== null,
+      chunksEncoded: audioChunksEncoded.value,
+      encodeErrors: audioEncodeErrors.value,
+      objectsSent: audioObjectsSent.value,
+      datagramObjectsSent: audioDatagramObjectsSent.value,
+      bytesSent: audioBytesSent.value,
       meterPeakDbfs: audioMeterPeakDbfsLeft.value,
       meterRmsDbfs: audioMeterRmsDbfsLeft.value,
       meterPeakDbfsRight: audioMeterPeakDbfsRight.value,
@@ -373,6 +403,10 @@ export function buildSubscriberStats(sub: SubscriberInstance): SubscriberStats {
       lastVoiceActivity: audioLevel?.voiceActivity ?? null,
       playoutRebases: sub.audioPlayoutRebases.value,
       playoutDrops: sub.audioPlayoutDrops.value,
+    },
+    event: {
+      objectsReceived: sub.eventObjectsReceived.value,
+      entries: sub.eventMessages.value.length,
     },
     eventMessages: toJsonValue(sub.eventMessages.value),
     largestLocation: convertLargestLocation(sub.largestLocation.value),

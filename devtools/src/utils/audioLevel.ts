@@ -196,6 +196,15 @@ export function formatDbfs(value: number | null): string {
 }
 
 /**
+ * dBFS の値を統計表向けに短くする
+ *
+ * 生の値は小数が長く読みづらいため、小数点以下 1 桁に丸める。値が無いときは「-」
+ */
+export function formatDbfsShort(value: number | null): string {
+  return value === null ? INACTIVE_TEXT : value.toFixed(1);
+}
+
+/**
  * dBFS の値をバーの割合 (0..1) にする
  *
  * 0 dBFS が 1 (右端)、MIN_DBFS が 0 (左端) になる。メーターのバーの幅と目盛りの
