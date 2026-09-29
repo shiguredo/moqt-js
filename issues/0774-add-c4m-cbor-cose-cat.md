@@ -1,7 +1,7 @@
 # C4M の CBOR / COSE / CAT コーデックを追加する
 
 - Created: 2026-09-29
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-29
 - Branch: feature/add-c4m-cbor-cose-cat
 - Polished: {YYYY-MM-DD}
 
@@ -36,7 +36,15 @@ devtools が受け取る C4M (CAT) トークンの中身を確認・検証する
 
 ## 解決方法
 
-{未着手}
+- `src/c4m/` に依存ゼロの CBOR (RFC 8949) / COSE (RFC 9052) / CAT (CTA-5007-B / draft-ietf-moq-c4m-01) を追加した
+  - `cbor.ts` は RFC 8949 Section 4.2 の決定論的エンコード、bigint 整数、値を保つ最短幅の浮動小数点数、indefinite 長のデコード、重複キー / 深度 / UTF-8 の検証を行う
+  - `cose.ts` は COSE_Sign1 / COSE_Mac0 / CWT の構造と protected / unprotected ヘッダ (`alg` / `kid` / `typ` / `crit`) を扱う
+  - `crypto.ts` / `webcrypto.ts` は署名 / 検証を `CoseCrypto` に分離し、Web Crypto API だけを使う実装を提供する (HMAC-SHA256 / 384 / 512、ES256 / ES384 / ES512、EdDSA)
+  - `moqt.ts` は `moqt` / `moqt-reval` / `catdpop` クレームとスコープ認可、`cat.ts` は compact 形式 / COSE 形式のデコード、発行ビルダー、署名検証、時刻検証を提供する
+  - `refs/cbor/` に RFC 原文を追加した
+- `src/index.ts` で `C4M` 名前空間として公開した
+- `src/c4m/cbor.test.ts` / `cose.test.ts` / `cat.test.ts` / `moqt.test.ts` / `webcrypto.test.ts` で付録 A の全テストベクタ (CBOR / トークン / DPoP バインディング / スコープ認可 / 検証) と Web Crypto の署名 / 検証を固定し、`cbor.prop.ts` / `base64url.prop.ts` で往復の PBT を追加した
+- `CHANGES.md` に `[ADD]` を追記した
 
 ## 参照
 
