@@ -25,6 +25,7 @@ import {
   parseOptionalNumber,
   parseTrackMatch,
 } from "./utils/claims";
+import { ACTION_GROUPS, actionDisplayNames, isActionAllowedByName } from "./utils/actions";
 import { formatMatch, formatNamespaceMatches } from "../utils/c4m";
 
 const TEXT_ENCODER = new TextEncoder();
@@ -101,7 +102,7 @@ const buildBusy = signal(false);
 const buildMessage = signal<string | undefined>(undefined);
 const output = signal("");
 
-const authorizeAction = signal<C4M.MoqtAction>("Publish");
+const authorizeAction = signal("PUBLISH");
 const authorizeNamespace = signal("");
 const authorizeTrack = signal("");
 
@@ -291,7 +292,7 @@ function TokenPanel() {
       ? "no token"
       : token.claims().moqt === undefined
         ? "no moqt claim"
-        : C4M.authorizeCatClaims(
+        : isActionAllowedByName(
               token.claims(),
               authorizeAction.value,
               namespace,
@@ -364,11 +365,8 @@ function TokenPanel() {
               <ul class="space-y-1">
                 {token.claims().moqt?.scopes.map((scope, index) => (
                   <li key={index} data-testid={`c4m-scope-${index}`} class="font-mono text-xs">
-                    actions=[
-                    {scope.actions
-                      .map((action) => C4M.moqtActionFromKey(action) ?? action)
-                      .join(", ")}
-                    ] namespace=[{formatNamespaceMatches(scope.namespace)}] track=[
+                    actions=[{actionDisplayNames(scope.actions).join(", ")}] namespace=[
+                    {formatNamespaceMatches(scope.namespace)}] track=[
                     {scope.track !== undefined ? formatMatch(scope.track) : "any"}]
                   </li>
                 ))}
@@ -388,13 +386,12 @@ function TokenPanel() {
                   class="border border-slate-300 rounded-lg px-3 py-2 text-sm"
                   value={authorizeAction.value}
                   onChange={(event) => {
-                    authorizeAction.value = (event.target as HTMLSelectElement)
-                      .value as C4M.MoqtAction;
+                    authorizeAction.value = (event.target as HTMLSelectElement).value;
                   }}
                 >
-                  {C4M.MOQT_ACTIONS.map((action) => (
-                    <option key={action} value={action}>
-                      {action}
+                  {ACTION_GROUPS.map((group) => (
+                    <option key={group.name} value={group.name}>
+                      {group.name}
                     </option>
                   ))}
                 </select>
@@ -880,27 +877,31 @@ function ScopeEditor({ form, index }: { form: ScopeForm; index: number }) {
       data-testid={`c4m-scope-form-${index}`}
     >
       <div class="flex flex-wrap gap-x-4 gap-y-1">
-        {C4M.MOQT_ACTIONS.map((action) => (
-          <label key={action} class="flex items-center gap-1 text-xs text-slate-700">
+        {ACTION_GROUPS.map((group) => (
+          <label key={group.name} class="flex items-center gap-1 text-xs text-slate-700">
             <input
               type="checkbox"
-              data-testid={`c4m-scope-${index}-action-${action}`}
-              checked={form.actions.includes(action)}
+              data-testid={`c4m-scope-${index}-action-${group.name}`}
+              checked={group.actions.every((action) => form.actions.includes(action))}
               onChange={(event) => {
                 const checked = (event.target as HTMLInputElement).checked;
-                scopeForms.value = scopeForms.value.map((scope) =>
-                  scope.id === form.id
-                    ? {
-                        ...scope,
-                        actions: checked
-                          ? [...scope.actions, action]
-                          : scope.actions.filter((entry) => entry !== action),
-                      }
-                    : scope,
-                );
+                scopeForms.value = scopeForms.value.map((scope) => {
+                  if (scope.id !== form.id) {
+                    return scope;
+                  }
+                  // SETUP のように複数の claim アクションを持つ表示は、まとめて付け外しする
+                  const groupActions = new Set<C4M.MoqtAction>(group.actions);
+                  const actions = checked
+                    ? [
+                        ...scope.actions,
+                        ...group.actions.filter((action) => !scope.actions.includes(action)),
+                      ]
+                    : scope.actions.filter((action) => !groupActions.has(action));
+                  return { ...scope, actions };
+                });
               }}
             />
-            {action}
+            {group.name}
           </label>
         ))}
       </div>
