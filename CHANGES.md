@@ -114,6 +114,7 @@
   - パネルの並びを Catalog → Audio → Video → Messages → Statistics にし、Catalog を映像の上に出す
   - Messages カードを amber にし、Catalog の色 (Publisher は緑、Subscriber は青) と見分けられるようにする
   - Video を Audio と同じ枠のカードにし、映像からは読み取れない値を出す。Publisher は符号化 fps、符号化と送信の遅延 (p50)、encoder の待ちで捨てたフレーム数、Subscriber は表示 fps、受信から表示までと復号の遅延 (p50)、表示されなかったフレーム数
+  - Audio はレベル (peak / rms / LOC) と波形の描画を分ける。レベルはバー (HTML)、波形はチャンネルごとの canvas にし、peak / rms と波形は左右のチャンネル (L / R) を別々に出す。LOC Audio Level は Object 全体の値のため 1 本のバーにする
   - デバッグパネルのログ行は、メッセージの decoded に track の情報があれば行末に Full Track Name を付ける。展開した Data の `Track Namespace` / `Track Name` は `Full Track Name` の 1 行にまとめ、namespace 単体と `Track Namespace Prefix` は `-` 区切りの表記にする。catalog の OBJECT ログも namespace を含む Full Track Name にする
   - @voluntas
 - [UPDATE] moqt-devtools の publisher の接続設定を Tracks / Audio / Video / Catalog / Relay Cache に分ける
