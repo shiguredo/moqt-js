@@ -27,6 +27,7 @@ import { test, assert } from "vite-plus/test";
 import type { MediaPublisherOptions } from "./createMediaPublisher";
 import {
   MediaPublisherImpl,
+  createMediaPublisher,
   PRIORITY_AUDIO,
   PRIORITY_CATALOG,
   PRIORITY_VIDEO_DELTA,
@@ -1533,6 +1534,80 @@ test("resolveKeyframeInterval: keyframeInterval 指定時は framerate より優
   );
   // framerate 未指定でも明示指定を尊重すること
   assert.equal(resolveKeyframeInterval({ codec: "vp8", bitrate: 1000000, keyframeInterval: 1 }), 1);
+});
+
+test("resolveKeyframeInterval: 1 以上の整数でない keyframeInterval は値域エラーで reject する", () => {
+  // 0 は「毎フレームキーフレーム」と解釈すると帯域を浪費し、非整数は剰余の判定で
+  // 値によっては周期要求が先頭の 1 回で止まるため、1 以上の整数だけを受理する。
+  // エラーメッセージに受け取った値を含めること
+  const invalidValues = [
+    0,
+    -5,
+    1.5,
+    Number.NaN,
+    Number.POSITIVE_INFINITY,
+    Number.NEGATIVE_INFINITY,
+  ];
+  for (const value of invalidValues) {
+    assert.throws(
+      () => resolveKeyframeInterval({ codec: "vp8", bitrate: 1000000, keyframeInterval: value }),
+      new RegExp(`keyframeInterval must be an integer >= 1, got ${value}$`),
+    );
+  }
+});
+
+test("resolveKeyframeInterval: 60 は受理する", () => {
+  // 1 の受理は「keyframeInterval 指定時は framerate より優先する」テストが固定している
+  assert.equal(
+    resolveKeyframeInterval({ codec: "vp8", bitrate: 1000000, keyframeInterval: 60 }),
+    60,
+  );
+});
+
+test("resolveKeyframeInterval: framerate から既定値を導出できない場合は reject する", () => {
+  // framerate が 0 / 負値 / 非有限なら解決後の値が 1 未満または非有限になる。
+  // 丸め由来の拒否 (2 倍が 0.5 未満の正値) は次のテストが固定する
+  const invalidFramerates = [0, -5, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY];
+  for (const framerate of invalidFramerates) {
+    assert.throws(
+      () => resolveKeyframeInterval({ codec: "vp8", bitrate: 1000000, framerate }),
+      new RegExp(
+        `framerate must be a number >= 0\\.25 \\(Math\\.round\\(framerate \\* 2\\) >= 1\\), got ${framerate}$`,
+      ),
+    );
+  }
+});
+
+test("resolveKeyframeInterval: framerate 由来の既定値は整数に丸める", () => {
+  // 29.97 の 2 倍 59.94 は剰余の判定で周期要求が先頭の 1 回で止まるため丸める。
+  // 導出できる下限は 2 倍が 0.5 以上になる 0.25 である
+  assert.equal(resolveKeyframeInterval({ codec: "vp8", bitrate: 1000000, framerate: 29.97 }), 60);
+  assert.equal(resolveKeyframeInterval({ codec: "vp8", bitrate: 1000000, framerate: 0.25 }), 1);
+  assert.throws(
+    () => resolveKeyframeInterval({ codec: "vp8", bitrate: 1000000, framerate: 0.24 }),
+    /framerate must be a number >= 0\.25/,
+  );
+});
+
+test("createMediaPublisher: 不正な keyframeInterval は公開 API で reject する", async () => {
+  // 値域検証はコンストラクタで走るため、接続にも WebCodecs にも到達せず reject する
+  let rejected: unknown = null;
+  try {
+    await createMediaPublisher("moqt://example.com/moqt", {
+      namespace: ["live"],
+      video: { codec: "vp8", bitrate: 1000000, keyframeInterval: 0 },
+    });
+  } catch (error) {
+    rejected = error;
+  }
+  assert.instanceOf(rejected, Error);
+  assert.include((rejected as Error).message, "keyframeInterval must be an integer >= 1, got 0");
+});
+
+test("shouldSendKeyFrame: 間隔 1 では frameCount 1 でもキーフレームになる", () => {
+  // フレーム番号 0 の判定は既存テストが固定しているため、1 との差だけを見る
+  assert.isTrue(shouldSendKeyFrame(1, 1));
+  assert.isFalse(shouldSendKeyFrame(1, 60));
 });
 
 test("shouldSendKeyFrame: フレーム番号 0 はキーフレームになる", () => {

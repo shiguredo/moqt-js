@@ -263,6 +263,9 @@
   - 上限で捨てたログの vnode はキャッシュから落とす。`data` と `payload` は追加後に書き換えない前提になる (行を描画し直さないため、書き換えても表示は古いまま)
   - 1 件追加のコストは表示中の件数に比例する分が残る (1000 件で約 3 ms のうち、表示中の子の走査が大半)。表示する行を画面に入る分だけにする対応は別に行う
   - @voluntas
+- [FIX] `keyframeInterval` の値域を検証し、0 や非整数で周期キーフレームを要求しなくなるのを修正する
+  - 1 以上の整数だけを受理し、0 / 負値 / 非整数 / NaN / ±Infinity は `createMediaPublisher()` が reject する。未指定時の既定は `Math.round(framerate * 2)` にして整数に丸める (framerate が 0 / 負値 / 非有限、または `Math.round(framerate * 2)` が 1 未満なら reject)
+  - @voluntas
 - [FIX] `createMediaSubscriber` の `stop` が確保済みのリソースを解放せず、`"stopped"` から再開できないのを修正する
   - `stop` は `close` と同じ解放 (Subscriber / デコーダ / `MediaStreamTrackGenerator` / `AudioContext` / `MediaStreamAudioDestinationNode` / session / 出力 `MediaStream`) を行い、`"stopped"` から `start()` で再開できるようにする。session は閉じて再 start で再接続し、統計は引き継ぐ
   - `start` は `"created"` と `"stopped"` を受け付け、失敗時は確保済みを解放して遷移前の state に戻す (再試行できる)。解放が先行した場合も終端 (`"closed"`) でなければ遷移前の state に戻し、開始の途中で死んだ `"subscribing"` を残さない (ピア起点の close は解放のあとに `"closed"` にするため上書きされない)。終端 (`"closed"`) を跨いだ `start` は解放の検査でも中止し、`"active"` に戻さない。巻き戻しの遷移で利用者の `onStateChange` が throw しても、元のエラーを throw し `onError` を通知する (state は代入済みで遷移前に戻っており、通知の失敗で元の失敗を隠さない)

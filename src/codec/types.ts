@@ -100,6 +100,9 @@ export interface VideoPublishOptions {
   codec: VideoCodecType;
   bitrate: number;
   framerate?: number;
+  // キーフレームを送るフレーム間隔 (1 以上の整数)。
+  // 既定は Math.round(framerate * 2) で、framerate の既定 30 なら 60。
+  // 0 / 負値 / 非整数 / NaN / ±Infinity は createMediaPublisher() が reject する。
   keyframeInterval?: number;
   width?: number;
   height?: number;
