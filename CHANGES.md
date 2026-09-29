@@ -38,6 +38,7 @@
 - [ADD] moqt-devtools に C4M トークンの生成と検証ツールを追加する
   - `c4m-devtools.html` で CAT トークンをデコードし、クレーム / moqt スコープ / 有効期限を表示する。JWK または対称鍵を貼り付けて署名を検証でき、アクション + namespace + track の認可判定もできる
   - Web Crypto API の `generateKey` で ES256 / ES384 / ES512 / EdDSA の鍵ペアと HMAC の対称鍵を生成し、クレームとスコープを指定して compact / COSE 形式のトークンを発行できる。鍵はメモリ上だけで扱う
+  - 署名鍵 / 検証鍵の入力は、解釈結果 (JWK の種類と秘密鍵の有無、secret の形式とバイト数) を入力欄の下に表示する
   - `C4M` 名前空間に JWK (RFC 7517) のデコード / エンコード、RFC 7638 のサムプリント、`CoseKey` との変換を追加する
   - @voluntas
 - [ADD] C4M (draft-ietf-moq-c4m-01) の CBOR / COSE / CAT コーデックを追加する
