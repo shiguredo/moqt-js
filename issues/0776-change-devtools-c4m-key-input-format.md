@@ -1,7 +1,7 @@
 # moqt-devtools の C4M ツールで鍵入力の解釈を画面に表示する
 
 - Created: 2026-09-29
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-29
 - Branch: feature/change-devtools-c4m-key-input-format
 - Polished: {YYYY-MM-DD}
 
@@ -31,7 +31,13 @@ C4M ツールの署名鍵 / 検証鍵の入力は、選択した形式 (`auto`) 
 
 ## 解決方法
 
-{未着手}
+- `devtools/src/c4m-devtools/utils/keys.ts` に `inspectKeyInput` / `describeJwk` / `hasPrivateKey` を追加し、入力の解釈結果 (empty / JWK / secret / error) を値で返すようにした
+- `devtools/src/c4m-devtools/App.tsx` の署名鍵 / 検証鍵の解決を `inspectKeyInput` 経由にし、入力欄の下に解釈結果を表示するようにした
+  - JWK は種類と秘密鍵の有無 (`EC P-256 (private key)` など)、secret は形式とバイト数 (`hex, 32 bytes` など)、エラーはその内容を出す
+  - 署名に使う JWK に秘密鍵が無い場合は表示の時点で分かるようにした
+- 形式の選択の `auto` を `Detect (hex, then base64url, then text)` に変え、検証鍵にも同じ選択を追加した。期待アルゴリズムの選択の `auto` は `any` に変えた
+- `devtools/src/c4m-devtools/utils/keys.test.ts` に `inspectKeyInput` / `describeJwk` / `hasPrivateKey` のテストを追加し、`tests/e2e/c4m-devtools.spec.ts` で解釈結果の表示を固定した
+- `CHANGES.md` の既存の `[ADD]` エントリに鍵入力の表示を追記した
 
 ## 参照
 
