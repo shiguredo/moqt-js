@@ -42,6 +42,29 @@ export const nodeProcess = (
 ).process;
 
 /**
+ * globalThis.VideoDecoder を置き換えてテスト本体を実行し、必ず元に戻す
+ *
+ * Node には WebCodecs が無いため、この境界だけを置き換えて判定規則を固定する。
+ * 実ブラウザの VideoDecoder を駆動する経路は e2e で確認する。
+ *
+ * @param replacement - 置き換える値 (undefined にすると WebCodecs 非搭載の環境を再現する)
+ * @param run - 置き換えた状態で実行するテスト本体
+ */
+export async function withVideoDecoder(
+  replacement: unknown,
+  run: () => Promise<void>,
+): Promise<void> {
+  const target = globalThis as unknown as { VideoDecoder: unknown };
+  const originalVideoDecoder = target.VideoDecoder;
+  target.VideoDecoder = replacement;
+  try {
+    await run();
+  } finally {
+    target.VideoDecoder = originalVideoDecoder;
+  }
+}
+
+/**
  * テスト用の MoqtObject を生成する
  *
  * ペイロードは固定値で、group / object の位置だけをテストから指定する。

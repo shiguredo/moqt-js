@@ -5315,13 +5315,15 @@ test("start / stop: close の解放中は while closing で拒否する", async 
 
 /**
  * 完了条件: デコーダの configure の await 中に解放が先行した場合、次の段階
- * (メディアトラックの購読) へ進まずに中止する。映像側でも同じ検査が働くことを、
- * 映像デコーダだけで駆動して固定する (音声側は setupDecoders の別のテストが担う)。
+ * (メディアトラックの購読) へ進まずに中止する。解放のあとに Worker や VideoDecoder を
+ * 作らないことを、映像デコーダだけで駆動して固定する (音声側は setupDecoders の
+ * 別のテストが担う)。
  *
  * VideoDecoderWrapper は WebCodecs の VideoDecoder を作る。node には無いため、その境界
- * だけを置き換えて configure まで到達させる (useWorker: false にして worker を使わない
- * 直接実行にする)。configure は同期で完了するため、await の解決までの間に close() の
- * 解放 (世代番号を進める) を先行させる。
+ * だけを置き換えて configure の対応確認まで到達させる (useWorker: false にして worker を
+ * 使わない直接実行にする)。対応確認の解決はテスト側で保留し、その間に close() の解放が
+ * Wrapper を閉じるまで進める。解放のあとに作られた Worker や VideoDecoder は誰も破棄しない
+ * ため、置き換えた VideoDecoder の生成と close を数えて作られていないことまで固定する。
  */
 test("setupDecoders: 映像デコーダの configure の await 中に close したら中止する", async () => {
   const subscriber = new MediaSubscriberImpl("moqt://example.com/live", {
@@ -5346,20 +5348,45 @@ test("setupDecoders: 映像デコーダの configure の await 中に close し�
   const target = globalThis as unknown as { VideoDecoder: unknown };
   const originalVideoDecoder = target.VideoDecoder;
   const configuredCodecs: string[] = [];
+  // 実装は configure の直前に対応確認 (isConfigSupported) を通る。そこへ渡る codec も取る
+  const probedCodecs: string[] = [];
+  // 解放のあとにデコーダーが作られていないことを数える。作られると誰も閉じないため、
+  // 解放で参照が切れたことだけでは検出できない
+  let createdCodecCount = 0;
+  let closedCodecCount = 0;
+  // 対応確認の解決をテスト側で制御し、解放がデコーダーを閉じるまで保留させる
+  let releaseSupportCheck: () => void = () => {};
+  const supportCheckPending = new Promise<void>((resolve) => {
+    releaseSupportCheck = resolve;
+  });
   target.VideoDecoder = class {
     readonly state = "configured";
+    constructor() {
+      createdCodecCount += 1;
+    }
+    // 境界の置き換えとして対応ありを返す (非対応の分岐は実ブラウザの e2e が固定する)
+    static async isConfigSupported(config: { codec: string }): Promise<{ supported: boolean }> {
+      probedCodecs.push(config.codec);
+      // 解放がデコーダーを閉じるまで対応確認を保留する (await の窓をテスト側で作る)
+      await supportCheckPending;
+      return { supported: true };
+    }
     configure(config: { codec: string }): void {
       configuredCodecs.push(config.codec);
     }
     decode(): void {}
-    close(): void {}
+    close(): void {
+      closedCodecCount += 1;
+    }
   };
 
   let thrown: unknown = null;
   try {
     const pending = control.setupDecoders(control.sessionGeneration);
-    // await の解決の間に解放を先行させる
+    // 解放を先行させ、デコーダーを閉じるまで待つ (configure の対応確認は保留のまま)
     await subscriber.close();
+    // 保留していた対応確認を解放のあとに解決させる (close() が先行した状態で再開する)
+    releaseSupportCheck();
     await pending;
   } catch (error) {
     thrown = error;
@@ -5367,11 +5394,14 @@ test("setupDecoders: 映像デコーダの configure の await 中に close し�
     target.VideoDecoder = originalVideoDecoder;
   }
 
-  // デコーダは構成されたが、解放が先行したため中止されること
-  assert.deepEqual(configuredCodecs, ["vp8"]);
+  // 対応確認までは進むが、解放が先行したためデコーダーは作らずに中止されること
+  assert.deepEqual(probedCodecs, ["vp8"]);
+  assert.equal(createdCodecCount, 0);
+  assert.deepEqual(configuredCodecs, []);
+  assert.equal(closedCodecCount, 0);
   assert.instanceOf(thrown, Error);
-  assert.equal((thrown as Error).message, "start aborted: resources were disposed during start");
-  // 解放でデコーダは閉じられ、参照も残らないこと
+  assert.equal((thrown as Error).message, "video decoder configure superseded by newer generation");
+  // 解放で参照は切り離され、解放のあとに作られたデコーダーも残らないこと
   assert.isNull(control.videoDecoder);
   assert.equal(subscriber.state, "closed");
 });

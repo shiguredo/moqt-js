@@ -17,7 +17,7 @@
 - `src/publisher.ts` の `guardSend` は Publisher が closed のとき同期 throw する。`sendObject` の戻り値は Promise なので closed だけは同期 throw になる。`src/createMediaPublisher.ts` の `handleAudioEncodedChunk` / `handleVideoEncodedChunk` は先頭の state ガードで closed を弾くためこの throw は現状到達しない。到達し得るのは委譲先が同期 throw する場合で、その場合は両ハンドラから例外が漏れ、通知も 0 回になる
 - `src/publisher.ts` の `sendDatagram` の JSDoc は「closed 後は検証前に no-op で返す」と書いているが、実装は `guardSend` の同期 throw で、`src/publisher.test.ts` は throw を固定している。JSDoc が実装と食い違っている
 - `src/createMediaSubscriber.ts` の `void this.audioContext.resume()` は reject を処理しない
-- `src/createMediaSubscriber.ts` の `void this.videoDecoder?.reset()` は video decoder の error コールバックからのみ呼ばれる。`src/codec/VideoDecoder.ts` の `reset()` は失敗を `callbacks.error` に流さず reject するだけである (0677 がこの契約を「例外を投げない `Promise<boolean>`」に変え、呼び出し側で結果を見る形にする。0677 の 17 行目が reject の処理を本 issue の担当と明記している)
+- `src/createMediaSubscriber.ts` の `void this.videoDecoder?.reset()` は video decoder の error コールバックからのみ呼ばれる。`src/codec/VideoDecoder.ts` の `reset()` は例外を投げない `Promise<boolean>` を返し、false のときは Worker と `VideoDecoder` の破棄まで `reset()` の中で完結する。そのため呼び出し側に未処理の reject は残らず、打ち切りも `reset()` の中で完結するため戻り値は見ない
 - `src/createMediaSubscriber.ts` の `void this.reconfigureAudioDecoder(...)` / `void this.reconfigureVideoDecoder(...)` は `await configure()` を catch して `onError` へ流すが、try の外にある同期 throw (`parseAudioCodec` / `resolveAudioChannelCount` / `parseVideoCodec` など) は async 関数の reject になり `void` 呼び出し側で未処理になる。ただし同じ値は `setupDecoders` が先に検査しているため現行では到達しない
 - `src/createMediaPublisher.ts` の `publishCatalog` は `await this.catalogPublisher.sendObject(...)` を `start()` の try の中から呼ぶ。catalog の送信は groupId 0 / objectId 0 / `priority: PRIORITY_CATALOG` (= 0) 固定で事前検証に掛からず、委譲先の送信失敗は catch が通知して resolve するため、現行この経路は reject し得ない。将来 reject するようになると `start()` の catch が 2 回目を通知する
 - `src/createMediaSubscriber.ts` の catalog fetch の `void this.session...` は `.catch` 済みである
@@ -31,7 +31,7 @@
 - `publishCatalog` の `await sendObject(...)` は本 issue の対象外とする。reject は通知済みだが `start()` の catch が再度通知する経路で、通知を重複させない仕組み (reject の由来の分類) は別の設計変更になる。ここでは対象外と明記し、0679 で扱う
 - 不変条件を「送信 reject は通知済み」と定める以上、高レベル API の `void` 送信 2 箇所の catch は通知しない。完了条件で `onError` に 1 回を要求するのは、同期 throw の経路、`resume()`、`reconfigure*` の 3 つである
 - `void this.audioContext.resume()` は catch して `onError` へ流す
-- `void this.videoDecoder?.reset()` は 0677 の完了後の契約に合わせる。0677 の `reset()` は例外を投げない `Promise<boolean>` を返し、`onError` も呼ばないため、呼び出し側は戻り値を見て結果を扱い、catch は防御として残す (reject は起きない)。`onError` は呼ばない。video decoder の error コールバックの中から呼ばれるため、通知すると恒久的な失敗で通知が反復する (同型の反復は 0651 が devtools 側で、0677 がライブラリ側で扱う)
+- `void this.videoDecoder?.reset()` は 0677 の完了後の契約に合わせる。0677 の `reset()` は例外を投げない `Promise<boolean>` を返し、`onError` も呼ばないため、呼び出し側は戻り値を見ずに `void` で呼ぶ (reject は起きないため catch も置かない)。`onError` は呼ばない。video decoder の error コールバックの中から呼ばれるため、通知すると恒久的な失敗で通知が反復する (同型の反復は 0651 が devtools 側で、0677 がライブラリ側で扱う)
 - `reconfigureAudioDecoder` / `reconfigureVideoDecoder` は reject しない契約にし、関数全体 (try の外の同期 throw を含む) を catch して `onError` に 1 回流す。これで `void` 呼び出し側に未処理の reject が残らない。現行の値では到達しないが、将来の防御である
 - フレーム処理の fire-and-forget 性 (落としても良いのは後続 Object で上書きされるため) は変えない。変えるのは reject の扱いだけである
 - 対象は `src/createMediaPublisher.ts` / `src/createMediaSubscriber.ts` / `src/createMediaPublisher.test.ts` / `src/createMediaSubscriber.test.ts` / `CHANGES.md` と `src/publisher.ts` の JSDoc・不変条件テストとする。`sendDatagram` の挙動、`publishCatalog` の await 経路、セッション内部 (`src/session/lifecycle.ts`)、テストコード内の `void sendObject` は対象外とする (`sendDatagram` は JSDoc の是正のみ行う)
@@ -44,7 +44,7 @@
 - `createMediaPublisher` の送信箇所で reject が未処理にならない (unhandled rejection が 0)
 - 委譲先が同期 throw する場合 (現行の実装では到達しないが、cast 注入で再現する) も `createMediaPublisher` の送信箇所から例外が漏れず、`onError` に 1 回届く
 - `audioContext.resume()` の失敗が `onError` に 1 回届く
-- video decoder の `reset()` は 0677 の契約 (`Promise<boolean>` を返し例外を投げない) の呼び出し側として扱われ、reject が未処理にならず、戻り値を見て結果を扱い、`onError` の回数も増えない。防御として置く catch は到達しない
+- video decoder の `reset()` は 0677 の契約 (`Promise<boolean>` を返し例外を投げない) の呼び出し側として扱われ、reject が未処理にならず、`onError` の回数も増えない。false のときの打ち切りは `reset()` の中で完結するため戻り値は見ない (catch も置かない)
 - `reconfigureAudioDecoder` / `reconfigureVideoDecoder` が reject しなくなり、try の外の同期 throw も `onError` に 1 回届く
 - `src/createMediaPublisher.test.ts` と `src/createMediaSubscriber.test.ts` に、reject する publisher / 同期 throw する publisher / reject する `resume()` を cast で注入して駆動するテストが追加される (`src/session.test.ts` の `unhandledRejection` 監視と同じ 50ms 待ちの方式)。`reset()` は 0677 の契約に合わせ、false を返す呼び出しで `onError` が増えないことを固定する。既存の `src/publisher.test.ts` の期待値は変更しない
 - `src/publisher.ts` の `sendObject` / `sendDatagram` の JSDoc が実装 (事前検証の通知、closed の同期 throw) と一致する

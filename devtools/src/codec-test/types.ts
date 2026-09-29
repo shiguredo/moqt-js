@@ -33,8 +33,8 @@ export interface UnconfiguredOperationResult {
 /**
  * 未設定時の decode() の観測結果
  *
- * デコーダー Wrapper は state ゲッターを持たない (エンコーダー Wrapper との
- * 非対称) ため、戻り値と出力件数のみで判定する。
+ * decode() の戻り値 (void のため常に "undefined") と output / error コールバックの
+ * 呼び出し回数で判定する。state はこの型に含めず、呼び出し側が Wrapper から別途読む。
  */
 export interface DecoderOperationResult {
   // 戻り値の型 (void のため常に "undefined")
@@ -170,6 +170,118 @@ export interface VideoDecoderTestResult {
 }
 
 /**
+ * VideoDecoderWrapper の非対応 codec のテスト結果
+ *
+ * 実ブラウザが復号に対応していないコーデックを実測で選び、configure() と reset() が
+ * 失敗する経路を観測する。
+ */
+export interface VideoDecoderUnsupportedCodecTestResult {
+  test: string;
+  useWorker: boolean;
+  // 実測で選んだ非対応コーデックの名前
+  codec: string;
+  // configure に載る codec 文字列 (非対応と判定された実物)
+  codecString: string;
+  // 対応と判定されて除外した候補 (試した順のコーデック名。選んだ非対応 codec は含まない)
+  supportedCodecs: string[];
+  // configure 前の state (unconfigured)
+  stateBeforeConfigure: string;
+  // configure の失敗理由 (失敗しなかった場合は null)
+  configureErrorMessage: string | null;
+  // configure の失敗後の state (unconfigured のまま)
+  stateAfterFailedConfigure: string;
+  // 同じ config で reset() した結果 (false)
+  resetReturned: boolean;
+  // reset() 後の state (unconfigured のまま)
+  stateAfterReset: string;
+  // output コールバックの呼び出し回数 (1 枚も復号しないため 0 件)
+  outputCount: number;
+  // error コールバックに届いたメッセージ (configure も reset も通知しないため 0 件)
+  errorMessages: string[];
+}
+
+/**
+ * VideoDecoderWrapper の復帰予算のテスト結果
+ *
+ * 復号フレームを 1 枚も出さないまま同じ config で reset() を繰り返し、
+ * 上限で打ち切られることを観測する。
+ */
+export interface VideoDecoderResetBudgetTestResult {
+  test: string;
+  useWorker: boolean;
+  // lastConfig が無いときの reset() の結果 (false)
+  resetWithoutConfig: boolean;
+  // lastConfig が無いときの reset() の直後の state (unconfigured)
+  stateAfterResetWithoutConfig: string;
+  // 対応 codec の configure 直後の state (configured)
+  stateAfterConfigure: string;
+  // 復号フレームを出さずに reset() を繰り返した結果 (上限の 3 回が true、4 回目が false)
+  resetResults: boolean[];
+  // 打ち切り直後の state (unconfigured)
+  stateAfterBudgetExhausted: string;
+  // 打ち切り後に実 chunk を投入して decode() を呼んだ回数
+  decodeAttemptsAfterBudgetExhausted: number;
+  // 打ち切り後に実 chunk を投入して復号したフレーム数 (configured = false のため 0 件)
+  framesDecodedAfterBudgetExhausted: number;
+  // error コールバックに届いたメッセージ (reset() の失敗も通知しないため 0 件)
+  errorMessages: string[];
+}
+
+/**
+ * VideoDecoderWrapper の並行する reset() / configure() の交錯のテスト結果
+ *
+ * `Promise.all([reset(), reset()])` と、reset() の対応確認の await 中に参照の異なる
+ * config で configure() する交錯を駆動する。後発の構成操作がデコーダーの所有権を持つ
+ * とき、先発の reset() が後発世代を壊さずに false を返すことを観測する。
+ */
+export interface VideoDecoderConcurrentResetTestResult {
+  test: string;
+  useWorker: boolean;
+  // Promise.all([reset(), reset()]) の結果 (後発に追い越された reset() は false)
+  concurrentResetResults: boolean[];
+  // 2 つの reset() の直後の state (configured)
+  stateAfterConcurrentReset: string;
+  // 2 つの reset() の後に実 chunk を復号したフレーム数 (構成が残るため 1 件以上)
+  framesDecodedAfterConcurrentReset: number;
+  // reset() の対応確認中に configure() したときの configure() の失敗理由 (成功するため null)
+  configureErrorMessage: string | null;
+  // 同じ交錯で reset() が返した結果 (configure() に追い越されるため false)
+  resetReturnedDuringConfigure: boolean;
+  // 交錯の直後の state (configured)
+  stateAfterConcurrentConfigure: string;
+  // 交錯の後に実 chunk を復号したフレーム数 (configure() の構成が残るため 1 件以上)
+  framesDecodedAfterConcurrentConfigure: number;
+  // error コールバックに届いたメッセージ (configure も reset() も通知しないため 0 件)
+  errorMessages: string[];
+}
+
+/**
+ * VideoDecoderWrapper の予算の復帰条件のテスト結果
+ *
+ * 予算を使い切った状態から、復号フレームの出力と参照の異なる config の configure で
+ * 予算が戻ることを観測する。
+ */
+export interface VideoDecoderRestoreTestResult {
+  test: string;
+  useWorker: boolean;
+  // 復号フレームを出す前に予算を使い切るまでの reset() の結果 (すべて true)
+  resetResultsBeforeDecodedFrame: boolean[];
+  // 復号フレームを 1 枚出力した後の reset() の結果 (予算が戻るため true)
+  resetAfterDecodedFrame: boolean;
+  // 使い切ってから参照の異なる config で configure するまでの reset() の結果
+  // (残り 2 回が true、3 回目が false)
+  resetResultsBeforeDifferentConfig: boolean[];
+  // 参照の異なる config の configure 後の reset() の結果 (予算が戻るため true)
+  resetAfterDifferentConfig: boolean;
+  // 参照の異なる config の configure と reset() の後の state (configured)
+  stateAfterDifferentConfigReset: string;
+  // 復号したフレーム数 (復帰条件の確認用)
+  frameCount: number;
+  // error コールバックに届いたメッセージ (0 件)
+  errorMessages: string[];
+}
+
+/**
  * AudioEncoderWrapper のテスト結果
  */
 export interface AudioEncoderTestResult {
@@ -280,11 +392,47 @@ export interface AudioSamplesTestResult {
   secondChannelPeak: number;
 }
 
+/**
+ * VideoDecoderWrapper の configure() の対応確認中に close() が先行したときのテスト結果
+ *
+ * configure() は対応確認を await するため、その解決までの間に close() を呼ぶと、解放の
+ * あとに Worker や VideoDecoder を作ってはならない (作ると誰も破棄せず、close() の後に
+ * state も configured へ戻る)。イベント順と state で観測する。
+ */
+export interface VideoDecoderCloseDuringConfigureTestResult {
+  test: string;
+  useWorker: boolean;
+  // 観測したイベントの順序 (configure started / close called / configure rejected)
+  events: string[];
+  // configure() の失敗理由 (失敗しなかった場合は null)
+  configureErrorMessage: string | null;
+  // 解放が先行した configure() の直後の state (unconfigured のまま)
+  stateAfterAbortedConfigure: string;
+  // 解放が先行した configure() で復号したフレーム数 (1 枚も復号しないため 0 件)
+  framesDecodedAfterAbortedConfigure: number;
+  // やり直した configure() の直後の state (configured)
+  stateAfterReconfigure: string;
+  // やり直しの後に実 chunk を復号したフレーム数 (1 件以上)
+  framesDecodedAfterReconfigure: number;
+  // error コールバックに届いたメッセージ (configure の失敗も通知しないため 0 件)
+  errorMessages: string[];
+}
+
 export interface CodecTestResultMap {
   videoEncoderDirect: VideoEncoderTestResult;
   videoEncoderWorker: VideoEncoderTestResult;
   videoDecoderDirect: VideoDecoderTestResult;
   videoDecoderWorker: VideoDecoderTestResult;
+  videoDecoderUnsupportedCodecDirect: VideoDecoderUnsupportedCodecTestResult;
+  videoDecoderUnsupportedCodecWorker: VideoDecoderUnsupportedCodecTestResult;
+  videoDecoderResetBudgetDirect: VideoDecoderResetBudgetTestResult;
+  videoDecoderResetBudgetWorker: VideoDecoderResetBudgetTestResult;
+  videoDecoderResetRestoreDirect: VideoDecoderRestoreTestResult;
+  videoDecoderResetRestoreWorker: VideoDecoderRestoreTestResult;
+  videoDecoderConcurrentResetDirect: VideoDecoderConcurrentResetTestResult;
+  videoDecoderConcurrentResetWorker: VideoDecoderConcurrentResetTestResult;
+  videoDecoderCloseDuringConfigureDirect: VideoDecoderCloseDuringConfigureTestResult;
+  videoDecoderCloseDuringConfigureWorker: VideoDecoderCloseDuringConfigureTestResult;
   audioEncoderDirect: AudioEncoderTestResult;
   audioEncoderWorker: AudioEncoderTestResult;
   audioDecoderDirect: AudioDecoderTestResult;

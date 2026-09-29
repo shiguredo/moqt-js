@@ -1,12 +1,18 @@
 /**
  * codec テストページの共通ヘルパーの単体テスト
  *
- * 候補順の解決はブラウザ API に依存しない純関数のため、Node の vitest で固定する。
- * 実ブラウザでの符号化プローブは e2e (tests/e2e/codec-wrappers.spec.ts) が担う。
+ * 候補順の解決と非対応コーデックの選定はブラウザ API に依存しない部分のため、
+ * Node の vitest で固定する (Node に無いブラウザ API は境界として置き換える)。
+ * 実ブラウザでの符号化プローブと選定結果は e2e (tests/e2e/codec-wrappers.spec.ts) が担う。
  */
 
 import { test, assert } from "vite-plus/test";
-import { resolveAudioCodecCandidates } from "./support.ts";
+import { withVideoDecoder } from "../../../src/testSupport/helpers.ts";
+import {
+  VIDEO_CODEC_CANDIDATES,
+  resolveAudioCodecCandidates,
+  selectUnsupportedVideoCodec,
+} from "./support.ts";
 
 test("resolveAudioCodecCandidates: 指定が無ければ既定の候補順になる", () => {
   // クエリパラメータが無い場合は既定の候補順 (opus 優先) をそのまま使う
@@ -50,4 +56,59 @@ test("resolveAudioCodecCandidates: 有効な候補が無ければ空になる", 
   // 空配列は「符号化できる候補が無い」として選定側が明示的な Error にする
   assert.deepEqual(resolveAudioCodecCandidates("?audioCodecs="), []);
   assert.deepEqual(resolveAudioCodecCandidates("?audioCodecs=unknown"), []);
+});
+
+test("selectUnsupportedVideoCodec: 候補を先頭から試して最初の非対応を選ぶ", async () => {
+  // h264 (avc1) だけが非対応の環境を再現する。選ばれるのは h264 であり、
+  // 候補のうち h264 より前のものだけが supportedCodecs に載る (h264 自身は載らない)
+  await withVideoDecoder(
+    {
+      isConfigSupported: async (config: VideoDecoderConfig) => ({
+        supported: !config.codec.startsWith("avc1"),
+      }),
+    },
+    async () => {
+      const selection = await selectUnsupportedVideoCodec();
+
+      assert.equal(selection.codec, "h264");
+      assert.equal(selection.codecString, "avc1.42001f");
+      assert.deepEqual(
+        selection.supportedCodecs,
+        VIDEO_CODEC_CANDIDATES.slice(0, VIDEO_CODEC_CANDIDATES.indexOf("h264")),
+      );
+      // 候補の先頭は対応 codec (vp8) であり、対応と判定した候補が 1 件以上載る。
+      // e2e はこの性質を使って「選んだ非対応 codec が supportedCodecs に含まれない」
+      // ことを空振りせずに検証するため、候補順の変更でこの性質を壊さない
+      assert.isTrue(selection.supportedCodecs.length > 0);
+    },
+  );
+});
+
+test("selectUnsupportedVideoCodec: 全候補が非対応なら先頭を選び supportedCodecs は空になる", async () => {
+  // 1 件も対応が無い環境では候補の先頭が選ばれ、対応と判定した候補は 1 つも無い
+  await withVideoDecoder({ isConfigSupported: async () => ({ supported: false }) }, async () => {
+    const selection = await selectUnsupportedVideoCodec();
+
+    assert.equal(selection.codec, VIDEO_CODEC_CANDIDATES[0]);
+    assert.deepEqual(selection.supportedCodecs, []);
+  });
+});
+
+test("selectUnsupportedVideoCodec: 全候補が対応なら理由付きで Error になる", async () => {
+  // 非対応 codec の経路を駆動できない環境は、テストを skip せず選定の時点で失敗させる
+  await withVideoDecoder({ isConfigSupported: async () => ({ supported: true }) }, async () => {
+    let thrown: unknown = null;
+    try {
+      await selectUnsupportedVideoCodec();
+    } catch (error) {
+      thrown = error;
+    }
+
+    assert.instanceOf(thrown, Error);
+    // 候補はすべて VIDEO_CODEC_CANDIDATES の並びのまま報告される
+    assert.equal(
+      (thrown as Error).message,
+      `no unsupported video codec in this browser (all candidates are supported: ${VIDEO_CODEC_CANDIDATES.join(", ")})`,
+    );
+  });
 });

@@ -234,6 +234,31 @@ test("ConfigureGenerationTracker: 複数インスタンスは独立する", () =
   assert.isFalse(firstTracker.isLatest(secondGeneration));
 });
 
+test("ConfigureGenerationTracker: currentGeneration は採番と無効化で進む", () => {
+  // reset() は「無効化 → 採番」を同期で行い、その直後の currentGeneration を
+  // 自世代として控える。控えた値を isLatest で判定するため、無効化でも値が進む
+  // 必要がある (進まないと close() による破棄を追い越しとして検出できない)
+  const tracker = new ConfigureGenerationTracker();
+  const initialGeneration = tracker.currentGeneration;
+
+  // 採番すると現在の世代がその値になり、以前の値は旧世代になる
+  const firstGeneration = tracker.begin();
+  assert.equal(tracker.currentGeneration, firstGeneration);
+  assert.isFalse(tracker.isLatest(initialGeneration));
+
+  // 無効化でも値が進み、進んだ値が最新のまま残る (次の採番まで有効)
+  tracker.invalidateAll();
+  assert.isTrue(tracker.currentGeneration > firstGeneration);
+  const invalidatedGeneration = tracker.currentGeneration;
+  assert.isTrue(tracker.isLatest(invalidatedGeneration));
+
+  // 再採番でさらに進み、無効化で進んだ値も旧世代になる
+  const secondGeneration = tracker.begin();
+  assert.equal(tracker.currentGeneration, secondGeneration);
+  assert.isTrue(tracker.isLatest(secondGeneration));
+  assert.isFalse(tracker.isLatest(invalidatedGeneration));
+});
+
 // ============================================================================
 // SentFrameCounter
 // ============================================================================
