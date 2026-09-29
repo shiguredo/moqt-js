@@ -1,7 +1,7 @@
 # createMediaSubscriber の stop() がリソースを解放せず再開もできない
 
 - Created: 2026-09-21
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-29
 - Branch: feature/fix-media-subscriber-stop-lifecycle
 - Polished: 2026-09-23
 
@@ -88,4 +88,17 @@
 
 ## 解決方法
 
-{未着手}
+`stop` / `close` / `start` 失敗時の解放を `src/createMediaSubscriber.ts` の `disposeAllResources()` に統一し、`"stopped"` から再 `start` できる契約にした。解放は subscriber 3 種の unsubscribe (各 Subscriber の state が `"active"` のときだけ) → decoder 2 種の close → `videoWriter` の close と `videoTrackGenerator` の track stop → `audioDestination` の track stop → `audioContext` の close → session の close → 参照の null 化 → 実行時状態の初期化、の順で行い、段階失敗は後続を止めず最後に最初の失敗を throw する。統計 (`audioStats` / `videoStats`) は再 start へ引き継ぐ。
+
+- **世代番号**: `connectToServer` が session を作るときに `sessionGeneration` を捕捉し、`disposeAllResources()` の冒頭で進める。`onSessionClose` の処理は `handleSessionClose(generation)` に切り出し、捕捉値が現在値と一致しない通知 (自己起点の解放後の遅延通知、再 start 後の旧 session の通知) は state も `onClose` も動かさない
+- **解放の共有**: `stop` / `close` / ピア起点の close は `runDisposal()` が返す 1 つの Promise を共有する。破棄の前に参照を切り離すため、相乗りした呼び出しが自分で解放をやり直すと「破棄するものが無い成功」になり進行中の失敗を検知できないため、成否を共有する
+- **終端の単発性**: `transitionToClosed()` が state の遷移と `onClose` を対で行い、`onStateChange` が throw しても `onClose` を通知する。並行 `close()` は進行中の Promise を共有し、`userDisposalCount` でピア起点の経路が利用者起点の解放に譲る
+- **開始の取り消し**: `stop()` は `"active"` 以外では `cannot stop in state` で throw する (issue の設計方針どおり)。開始の途中 (`"subscribing"`) の取り消しは `close()` を使う。解放中の `start()` / `stop()` は `cannot start while closing` / `cannot stop while closing` で拒否する
+- **解放が先行した start の中止**: `assertStartNotDisposed()` を `start` の全 await の直後 (11 箇所) に置き、解放が先行していれば `start aborted: resources were disposed during start` で中止する。接続で受け取った session は代入せずその場で閉じる
+- **失敗時の巻き戻し**: `start` の失敗では解放して遷移前の state に戻し (終端 `"closed"` へ進んでいる場合を除く)、巻き戻しの `setState` の失敗で元のエラーと `onError` を隠さない
+
+`src/audioPlayout.ts` の `AudioClockBridge` に `reset()` を追加し、`createOutputStream` (AudioContext の作り直し) と `disposeAllResources` の両方で呼ぶ。古い AudioContext の時計対応を残すと、再 start 後の音声が目標時刻に追いつかない。
+
+`docs/HIGH_LEVEL_API.md` の状態遷移図・メソッド表・契約の記述、`src/codec/types.ts` の `MediaSubscriber` の JSDoc、実装クラスの JSDoc を実装に合わせて更新した。`CHANGES.md` の `## develop` の FIX 群先頭に `[FIX]` を追記した。
+
+`src/createMediaSubscriber.test.ts` に 22 テスト、`src/audioPlayout.test.ts` に 1 テスト、`src/audioPlayout.prop.ts` に 1 プロパティを追加した (計 3316 テスト)。停止での解放と参照の切り離し・解放の失敗と再試行・`stop` の状態ガード・`close` の終端性と並行呼び出しの単発性・`"stopped"` からの再 start・世代不一致の通知の破棄・ピア起点の close と利用者起点の解放の競合・解放中の fail fast・解放が先行した start の中止 (11 箇所)・破棄の順序・統計の引き継ぎを固定した。`npx vp check` と `npx vp test --run` が通る。

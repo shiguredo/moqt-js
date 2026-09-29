@@ -4,7 +4,7 @@
  * MediaStream を使用した簡単なメディア受信機能を提供する
  */
 
-import { connectMediaSession } from "./createMedia/connect";
+import { connectMediaSession, type MediaConnectSettings } from "./createMedia/connect";
 import { DEFAULT_AUDIO_TRACK_NAME, DEFAULT_VIDEO_TRACK_NAME } from "./createMedia/settings";
 import { supportsDynamicGroups } from "./properties";
 import { compareLocations } from "./session/params";
@@ -92,6 +92,14 @@ export async function resolveAuthorizationToken(
 
 // デフォルト設定
 const CATALOG_RECEIVE_TIMEOUT = 5000;
+
+/**
+ * 解放が先行した start を中止するときのエラー文言
+ *
+ * 接続で受け取った session を閉じてから throw する経路 (connectToServer) と、
+ * 各段階の await の直後の検査 (assertStartNotDisposed) で同じ文言を使う。
+ */
+const START_ABORTED_DISPOSED = "start aborted: resources were disposed during start";
 
 /**
  * Catalog Object payload を現在カタログへ適用した結果
@@ -309,6 +317,15 @@ function decoderTimestampOf(resolved: TimestampSource): number {
  */
 export class MediaSubscriberImpl implements MediaSubscriber {
   private currentState: MediaSubscriberState = "created";
+  // 進行中の close() の解放と終端遷移。同時に呼ばれた close() はこれを共有し、解放と
+  // 終端通知を 1 回に保つ。解放は await を挟むため、state だけを見た単発性の判定では
+  // 2 回目の close() が早期 return を通過してしまう
+  private closing: Promise<void> | null = null;
+  // 進行中の解放 (disposeAllResources)。利用者起点 (stop / close) とピア起点
+  // (handleSessionClose) で共有し、相乗りした呼び出しにも解放の成否を伝える。解放は
+  // 破棄の前に参照を切り離すため、相乗りした側が自分で解放をやり直すと「破棄するものが
+  // 無い成功」になり、進行中の失敗を検知できない
+  private disposalInFlight: Promise<void> | null = null;
   private readonly url: string;
   private readonly options: MediaSubscriberOptions;
   private readonly callbacks: MediaSubscriberCallbacks;
@@ -318,10 +335,23 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   private catalogSubscriber: Subscriber | null = null;
   private audioSubscriber: Subscriber | null = null;
   private videoSubscriber: Subscriber | null = null;
+  // session close 通知の世代番号。解放 (disposeAllResources) のたびに進む
+  // (捕捉値と一致しない通知は自己起点の解放によるものとして捨てる)
+  private sessionGeneration = 0;
+  // 利用者起点の解放 (stop / close) の回数。ピア起点の close の解放 (handleSessionClose) が
+  // 進行中に利用者が stop / close を呼んだかを、解放の前後で比較して判定する
+  // (解放中は state が "active" のままであるため、state では判定できない)
+  private userDisposalCount = 0;
 
   // Catalog
   private receivedCatalog: Catalog | null = null;
   private catalogResolve: ((catalog: Catalog) => void) | null = null;
+  // Catalog 受信待ちの reject。解放時に待ちを打ち切るために持つ
+  // (resolve だけでは解放後に start() の await が永久に解決しない)
+  private catalogReject: ((error: Error) => void) | null = null;
+  // Catalog 受信待ちを await しているか。解放で打ち切るのは await が付いた
+  // 待ちだけであり (await が付く前の reject には受け手が無い)、その判定に使う
+  private catalogWaiting = false;
   // Catalog FETCH フェーズ中フラグと live SUBSCRIBE バッファ
   private catalogFetchInProgress = false;
   private pendingCatalogObjects: MoqtObject[] = [];
@@ -445,21 +475,88 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   }
 
   /**
+   * 終端 ("closed") へ遷移して onClose を通知する (解放の完了後に呼ぶ)
+   *
+   * 遷移と通知を対にして行う。setState は state を代入してから onStateChange を呼ぶため、
+   * 利用者の onStateChange が throw しても state は "closed" になり、その場合も onClose を
+   * 通知する (通知の回収経路が close() の早期 return だけであるため)。setState の失敗は
+   * 呼び出し元へ伝播する。
+   * すでに "closed" なら何もしない。終端の遷移と onClose は 1 回だけでなければならず、
+   * 通常は呼び出し元 (close() と handleSessionClose) の単発性の判定で抑えられている。
+   * この検査はそれらを通過した経路が将来増えたときの保険である。
+   */
+  private transitionToClosed(): void {
+    if (this.currentState === "closed") {
+      return;
+    }
+    try {
+      this.setState("closed");
+    } finally {
+      this.callbacks.onClose?.();
+    }
+  }
+
+  /**
+   * 進行中の解放を共有して実行する
+   *
+   * stop / close / ピア起点の close 通知 (handleSessionClose) の解放を 1 つの Promise に
+   * まとめる。解放は await を挟み、破棄の前に参照を切り離すため、相乗りした呼び出しが
+   * 自分で解放をやり直すと「破棄するものが無い成功」に見え、進行中の解放が失敗しても
+   * 検知できない。実行中の Promise を共有することで、相乗りした呼び出しにも成否 (throw) が
+   * 伝わる。
+   * 解放が終わったら参照を外し、次の呼び出しは新しい解放を始める (失敗した段階は
+   * 切り離し済みであり、呼び直しが進めるのは残りの段階と終端遷移である)。
+   *
+   * @returns 進行中の解放、または新しく始めた解放の完了
+   */
+  private runDisposal(): Promise<void> {
+    this.disposalInFlight ??= this.disposeAllResources().finally(() => {
+      this.disposalInFlight = null;
+    });
+    return this.disposalInFlight;
+  }
+
+  /**
    * 購読を開始する
+   *
+   * "created" と "stopped" から呼べる。停止で解放した資源は作り直し、session は
+   * 閉じて再接続する (再利用しない)。
+   * "subscribing" (開始の途中) の停止は拒否されるため、開始を取り消すには close() を使う
+   * (停止と再開の契約は docs/HIGH_LEVEL_API.md の MediaSubscriber を参照)。
+   * close() が解放と終端遷移を進めている間は cannot start while closing で拒否する。
+   * 失敗時は確保済みを解放して遷移前の state に戻すため再試行できる。解放自体の失敗でも
+   * 巻き戻しの onStateChange が throw しても、元の失敗を隠さず onError を通知して元の
+   * エラーを throw する。実行中にピア起点の close または利用者の close() が重なった場合は
+   * "closed" を優先するため start は失敗し、onError と onClose が続けて呼ばれ得る。
+   * 巻き戻しは終端 ("closed") へ進んでいなければ遷移前の state に戻す (解放が先行した
+   * 場合も同じ。ピア起点の close は解放のあとに "closed" にするため上書きされず、
+   * 解放が途中で失敗した場合も "subscribing" のまま取り残さない)。解放が先行した場合は、
+   * 接続で受け取った session を含めてそれ以上購読 / 通知 / リソース作成を進めずに失敗する。
+   * 並行呼び出しは未対応であり直列に呼ぶこと。
    */
   async start(): Promise<void> {
-    if (this.currentState !== "created") {
+    // close() が解放と終端遷移を進めている間は終端へ動く途中であり、開始を重ねても
+    // 途中で "closed" になる。state だけを見た判定では "active" のままなので、ここで拒否する
+    if (this.closing !== null) {
+      throw new Error("cannot start while closing");
+    }
+    if (this.currentState !== "created" && this.currentState !== "stopped") {
       throw new Error(`cannot start in state: ${this.currentState}`);
     }
 
+    // 失敗時に戻す遷移前の state
+    const previousState = this.currentState;
+    // 実行中に解放が先行したか (ピア起点の close / 利用者の stop / close) を判定するために
+    // 捕捉する。各段階の await の直後の検査 (assertStartNotDisposed) がこの値を基準にする
+    const startGeneration = this.sessionGeneration;
     this.setState("subscribing");
 
     try {
       // サーバーに接続
-      await this.connectToServer();
+      await this.connectToServer(startGeneration);
 
       // Catalog を subscribe して受信を待つ
-      await this.subscribeCatalog();
+      await this.subscribeCatalog(startGeneration);
 
       // Catalog からトラック情報を取得
       this.extractTrackInfo();
@@ -468,13 +565,35 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       this.createOutputStream();
 
       // デコーダーを設定
-      await this.setupDecoders();
+      await this.setupDecoders(startGeneration);
 
       // メディアトラックを subscribe
-      await this.subscribeMediaTracks();
+      await this.subscribeMediaTracks(startGeneration);
 
-      this.setState("active");
+      this.finishStart(startGeneration);
     } catch (error) {
+      // 確保済みを巻き戻す。解放が先行していても、参照は既に切り離し済みでこの呼び出しは
+      // no-op になり、進行中の解放があればそちらが引き続き後始末するため、無条件に呼ぶ。
+      // 巻き戻し自体の失敗で元の失敗を隠さないよう握り潰す。
+      try {
+        await this.disposeAllResources();
+      } catch {
+        // 元のエラーを優先する
+      }
+      // 終端 ("closed") へ進んでいなければ遷移前の state に戻す。解放が先行した場合も
+      // 同じで、"subscribing" のまま取り残すと start も stop も拒否されて close 以外の
+      // 出口が無くなる。ピア起点の close はこのあと transitionToClosed で "closed" に
+      // するため、戻した state は上書きされる (終端と onClose の単発性は崩れない)。
+      // setState は state を代入してから onStateChange を呼ぶため、利用者の onStateChange が
+      // throw しても state は遷移前に戻っている。通知の失敗で onError の通知と元のエラーの
+      // throw を妨げないよう握り潰す
+      if (this.state !== "closed") {
+        try {
+          this.setState(previousState);
+        } catch {
+          // 元のエラーを優先する (state は代入済みで遷移前に戻っている)
+        }
+      }
       this.callbacks.onError?.(error instanceof Error ? error : new Error(String(error)));
       throw error;
     }
@@ -482,24 +601,52 @@ export class MediaSubscriberImpl implements MediaSubscriber {
 
   /**
    * 購読を停止する
+   *
+   * "active" からのみ呼べる。それ以外 ("stopped" での再 stop を含む) は
+   * cannot stop in state で throw し、解放もしない。開始の途中 ("subscribing") も
+   * 拒否されるため、開始を取り消すには close() を使う。
+   * close と同じ解放を行い、"stopped" は再 start 可能な完全停止である。
+   * session は閉じて再 start 時に再接続し、統計は引き継ぐ。`mediaStream` と
+   * `catalog` は解放で無効になるため、再 start の後は新しい `mediaStream` を使う。
+   * 解放が失敗した場合は state を変えず onClose も呼ばず、元のエラーを throw する
+   * (破棄の前に参照を切り離しているため、失敗した段階はやり直されず、呼び直しが
+   * 進めるのは残りの段階と終端遷移である)。
+   * ピア起点の close の解放中に呼ばれた場合は進行中の解放を共有して完了を待ち、state を
+   * "stopped" にする。あとから解放を終えたピア起点の経路は state も onClose も動かさない。
+   * 解放が成功していれば、利用者の onStateChange が throw しても stop は失敗しない
+   * (state は代入済みで "stopped" になっており、解放も完了しているため)。
+   * ピア起点の close と違い onClose は通知しない。close() が解放と終端遷移を進めている
+   * 間は cannot stop while closing で拒否する。
+   * 並行呼び出しは未対応であり直列に呼ぶこと。
    */
   async stop(): Promise<void> {
+    // close() が解放と終端遷移を進めている間は終端へ動く途中である。state だけを見た
+    // 判定では "active" のままなので、停止を重ねず終端を close() に任せる
+    if (this.closing !== null) {
+      throw new Error("cannot stop while closing");
+    }
     if (this.currentState !== "active") {
       throw new Error(`cannot stop in state: ${this.currentState}`);
     }
 
-    // Subscriber を終了
-    if (this.catalogSubscriber && this.catalogSubscriber.state === "active") {
-      await this.catalogSubscriber.unsubscribe();
-    }
-    if (this.audioSubscriber && this.audioSubscriber.state === "active") {
-      await this.audioSubscriber.unsubscribe();
-    }
-    if (this.videoSubscriber && this.videoSubscriber.state === "active") {
-      await this.videoSubscriber.unsubscribe();
-    }
+    // 利用者起点の解放として数える (ピア起点の close の解放と重なった場合はこちらを優先する)
+    this.userDisposalCount++;
+    // ピア起点の close の解放が進行中ならそれを共有し、その成否を受ける
+    await this.runDisposal();
 
-    this.setState("stopped");
+    // 解放中に close() が終端まで進んでいれば "stopped" に戻さない。戻すと close() の
+    // 終端性が崩れ、state が "closed" でなくなるため次の close() が早期 return を通過して
+    // onClose が 2 回呼ばれる
+    if (this.state !== "closed") {
+      // setState は state を代入してから onStateChange を呼ぶ。解放は成功しており state も
+      // "stopped" になっているため、通知の失敗で stop を失敗させない (close() の終端遷移と
+      // 同じ扱いにする)
+      try {
+        this.setState("stopped");
+      } catch {
+        // 通知の失敗を伝える経路が無い (state は代入済み)
+      }
+    }
   }
 
   /**
@@ -541,59 +688,51 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   }
 
   /**
-   * リソースを解放する
+   * リソースを解放する (終端)
+   *
+   * stop と同じ解放を行い、以後 start 不可の終端とする。解放のあとに
+   * "closed" にして onClose を通知する。解放が失敗した場合は state を変えず
+   * onClose も呼ばず、元のエラーを throw する (破棄の前に参照を切り離しているため、
+   * 失敗した段階はやり直されず、呼び直しが進めるのは残りの段階と終端遷移である)。
+   * 進行中の解放 (stop() またはピア起点の close が始めた解放) があればそれを共有して
+   * 完了を待つため、その成否がこの close() にも伝わる (解放が失敗すれば終端へ進まず、
+   * 同じエラーを throw する)。
+   * ピア起点の close の解放中に呼ばれた場合も onClose は 1 回だけ通知され、
+   * あとから解放を終えたピア起点の経路は state も onClose も動かさない。
+   * 同時に呼ばれた close() はこの解放と終端遷移を共有するため、解放も終端の通知
+   * (onStateChange の "closed" と onClose) も 1 回だけになる。終端の遷移は冪等であり、
+   * 解放をまたいで終端へ進む経路が重なっても 2 回通知しない。close() が解放と終端遷移を
+   * 進めている間は start() と stop() を cannot start while closing /
+   * cannot stop while closing で拒否する。
+   * stop() との並行呼び出しは未対応であり直列に呼ぶこと。
+   * ピア起点の close 通知の経路で解放が失敗した場合も、この close() で回収する。
    */
   async close(): Promise<void> {
+    // 進行中の解放 (close 自身 / stop / ピア起点の close) があればそれを共有する。解放は
+    // await を挟むため、state だけを見た単発性の判定では同時に呼ばれた 2 回目が早期 return を
+    // 通過してしまう
+    if (this.closing !== null) {
+      return this.closing;
+    }
     if (this.currentState === "closed") {
       return;
     }
 
-    // デコーダーを閉じる
-    // 保留分は破棄し、以後は保留せずハンドラの configured ガードで decode しない
-    // (デコーダを閉じた後に decode / configure を呼ばない)
-    this.audioInitialConfigPending = false;
-    this.videoInitialConfigPending = false;
-    this.pendingAudioObjects = [];
-    this.pendingVideoObjects = [];
-    // Group の切り替えで保留していた映像 Object も破棄する
-    if (this.videoGroupGateTimer !== null) {
-      clearTimeout(this.videoGroupGateTimer);
-      this.videoGroupGateTimer = null;
+    // 利用者起点の解放として数える (ピア起点の close の解放と重なった場合はこちらが終端を決める)
+    this.userDisposalCount++;
+    // 解放 (進行中ならそれを共有する) と終端遷移を 1 つの Promise にまとめ、同時に呼ばれた
+    // close() と共有する。解放が成功したときだけ終端へ進む
+    const closing = this.runDisposal().then(() => {
+      this.transitionToClosed();
+    });
+    this.closing = closing;
+    try {
+      await closing;
+    } finally {
+      // 参照を残さない。解放が失敗した場合も、呼び直しが残りの段階と終端遷移を進める
+      // (失敗した段階は切り離し済みのためやり直されない)
+      this.closing = null;
     }
-    this.videoGroupGate.reset();
-    this.clearVideoPlayout();
-    // 共有の時間軸と時計の対応を消し、次の購読で作り直す
-    this.playbackTimeline.reset();
-    this.audioTimestampKinds.clear();
-    this.audioWallClockSeen = false;
-    this.videoWallClockSeen = false;
-    this.audioDecoderConfigured = false;
-    this.videoDecoderConfigured = false;
-    this.audioDecoder?.close();
-    this.videoDecoder?.close();
-
-    // VideoTrackGenerator を閉じる
-    if (this.videoWriter) {
-      try {
-        await this.videoWriter.close();
-      } catch {
-        // 無視
-      }
-    }
-
-    // AudioContext を閉じる
-    if (this.audioContext) {
-      await this.audioContext.close();
-    }
-
-    // セッションを閉じる
-    if (this.session) {
-      await this.session.close();
-    }
-
-    this.outputStream = null;
-    this.setState("closed");
-    this.callbacks.onClose?.();
   }
 
   /**
@@ -632,10 +771,288 @@ export class MediaSubscriberImpl implements MediaSubscriber {
 
   // 内部メソッド
 
-  private async connectToServer(): Promise<void> {
+  /**
+   * 実行中に解放が先行していないことを確かめる
+   *
+   * start は各段階の await の直後にこれを呼ぶ。解放 (disposeAllResources) は世代番号を
+   * 進めるため、start の開始時に捕捉した値との比較で分かる。解放が先行していれば、
+   * 購読 / 通知 (onCatalog) / リソース作成をこれ以上進めない。
+   * 終端 ("closed") も中止の条件にする。start の失敗時の巻き戻しは "closed" 以外を
+   * 遷移前の state に戻すため、ピア起点の close の解放が終わって start より先に終端へ
+   * 進んだ場合、世代番号だけでは中止を判定できない (終端のあとに "active" へ戻さない)。
+   * 検査までに確保した資源 (購読オブジェクト / デコーダ / 出力) は、start の失敗時の
+   * 巻き戻し (disposeAllResources) が解放する。接続で受け取った session だけは採用すると
+   * 閉じる経路が state の終端判定に隠れるため、connectToServer がその場で閉じる。
+   *
+   * @param startGeneration start の開始時に捕捉した世代番号
+   * @throws 解放が先行した場合 (start aborted: resources were disposed during start)
+   */
+  private assertStartNotDisposed(startGeneration: number): void {
+    if (this.sessionGeneration !== startGeneration || this.currentState === "closed") {
+      throw new Error(START_ABORTED_DISPOSED);
+    }
+  }
+
+  /**
+   * start の完了検査を通して state を "active" にする
+   *
+   * 実行中に解放 (disposeAllResources) が先行していれば "active" にしない。解放は
+   * 世代番号を進めるため、start の開始時に捕捉した値との比較で判定できる。終端
+   * ("closed") へ進んでいる場合も "active" にしない (失敗時の巻き戻しで遷移前の state へ
+   * 戻ったあとに再開した start は、解放の時点で世代番号が既に進んでいるため、
+   * 世代番号では終端を跨いだことを判定できない)。
+   *
+   * @param startGeneration start の開始時に捕捉した世代番号
+   * @throws 解放が先行した場合 (start aborted: resources were disposed during start)
+   */
+  private finishStart(startGeneration: number): void {
+    this.assertStartNotDisposed(startGeneration);
+    this.setState("active");
+  }
+
+  /**
+   * 確保済みのリソースをすべて解放する
+   *
+   * stop / close / ピア起点の close 通知 (handleSessionClose) と、start 失敗時の
+   * 巻き戻しで共用する。利用者起点とピア起点の解放は runDisposal が 1 つの Promise に
+   * まとめる (start の巻き戻しは、進行中の解放を待たずに失敗を返すため直接呼ぶ)。
+   * 解放のあとは "created" と同じ実行時状態に戻り、再 start で作り直せる。
+   * 破棄する参照は session / catalogSubscriber / audioSubscriber / videoSubscriber /
+   * audioDecoder / videoDecoder / videoWriter / videoTrackGenerator / audioDestination /
+   * audioContext / outputStream である。参照は破棄の前に切り離すため、段階失敗が
+   * あっても切り離し済みの段階はやり直されない (切り離し済みの参照に対する破棄は
+   * 行わない)。呼び直しが進めるのは、失敗した段階より後の段階と終端遷移である。
+   * 初期値に戻す実行時状態は receivedCatalog / audioTrackInfo / videoTrackInfo /
+   * catalogResolve / catalogReject / catalogWaiting / catalogFetchInProgress /
+   * pendingCatalogObjects / catalogFetchLastLocation / catalogTimer /
+   * catalogReceiveFailed / audioDecoderConfigured / videoDecoderConfigured /
+   * lastAppliedVideoConfig / lastAppliedAudioConfig / audioInitialConfigPending /
+   * videoInitialConfigPending / videoGroupGateTimer / videoDecodeOrder /
+   * videoPlayoutStopped / videoFrameDrain / audioWallClockSeen / videoWallClockSeen /
+   * audioTimestampKinds / videoTimestampKinds / 保留中の Object (音声 / 映像 / Group の
+   * 切り替え) と表示待ちの映像フレーム (videoPlayout) / 共有の時間軸 (playbackTimeline) /
+   * 時計の対応 (audioClockBridge) である。
+   * 統計 (audioStats / videoStats) は publisher と同じく再 start へ引き継ぐ。
+   * 音声の再生スケジューラ (audioPlayout) は AudioContext と対で作り直すため、
+   * ここではなく createOutputStream が初期化する。
+   * 破棄の段階失敗は後続を止めず、最後に最初の失敗を throw する。
+   * 解放のあとに届く旧 session の close 通知で state と onClose が動くことはない
+   * (世代番号を進めるため)。
+   */
+  private async disposeAllResources(): Promise<void> {
+    // 世代番号を進める。これ以降に届く旧 session の close 通知は
+    // handleSessionClose が世代不一致で捨てる (stop / close / start 失敗の全経路)
+    this.sessionGeneration++;
+
+    // Catalog の受信経路を await より前に止める。session の close は保留中の FETCH を
+    // reject し、その終了処理 (finishCatalogFetchPhase) がバッファ済みの live
+    // オブジェクトをドレインする。フルカタログが揃っていれば解放中に onCatalog が
+    // 発火し、catalog 待ちも resolve してしまう。ドレインは catalogFetchInProgress で
+    // 止まり (フェーズ終了の早期 return)、遅れて届く live / FETCH のオブジェクトは
+    // catalogReceiveFailed で捨てられる。受信タイムアウトも解除し、解放の途中で
+    // タイムアウトの reject が先に届かないようにする。catalogReceiveFailed だけは
+    // 解放中の遅延オブジェクトを捨てるラッチとして true にし、後段の初期化節で戻す
+    this.catalogFetchInProgress = false;
+    this.pendingCatalogObjects = [];
+    this.catalogFetchLastLocation = null;
+    this.clearCatalogTimer();
+    this.catalogReceiveFailed = true;
+
+    // 段階破棄の失敗を集め、後続を止めず最後に最初の失敗を投げる
+    let firstFailure: Error | null = null;
+    const guard = async (task: () => Promise<void> | void): Promise<void> => {
+      try {
+        await task();
+      } catch (error) {
+        firstFailure ??= error instanceof Error ? error : new Error(String(error));
+      }
+    };
+
+    // Subscriber を終了する。購読が確立している ("active") ものだけを対象にする
+    // (MediaSubscriber の state とは独立であり、start 失敗の巻き戻しでは
+    //  "subscribing" のまま購読が確立している場合がある)
+    const catalogSubscriber = this.catalogSubscriber;
+    this.catalogSubscriber = null;
+    await guard(async () => {
+      if (catalogSubscriber !== null && catalogSubscriber.state === "active") {
+        await catalogSubscriber.unsubscribe();
+      }
+    });
+    const audioSubscriber = this.audioSubscriber;
+    this.audioSubscriber = null;
+    await guard(async () => {
+      if (audioSubscriber !== null && audioSubscriber.state === "active") {
+        await audioSubscriber.unsubscribe();
+      }
+    });
+    const videoSubscriber = this.videoSubscriber;
+    this.videoSubscriber = null;
+    await guard(async () => {
+      if (videoSubscriber !== null && videoSubscriber.state === "active") {
+        await videoSubscriber.unsubscribe();
+      }
+    });
+
+    // デコーダを閉じる
+    const audioDecoder = this.audioDecoder;
+    this.audioDecoder = null;
+    await guard(() => audioDecoder?.close());
+    const videoDecoder = this.videoDecoder;
+    this.videoDecoder = null;
+    await guard(() => videoDecoder?.close());
+
+    // 映像出力を閉じる。MediaStreamTrackGenerator は MediaStreamTrack を継承する
+    // ため、track の停止は stop() で行う
+    const videoWriter = this.videoWriter;
+    this.videoWriter = null;
+    await guard(() => videoWriter?.close());
+    const videoTrackGenerator = this.videoTrackGenerator;
+    this.videoTrackGenerator = null;
+    await guard(() => videoTrackGenerator?.stop());
+
+    // 音声出力の track を止める。Web Audio の仕様には MediaStreamAudioDestinationNode の
+    // track が AudioContext.close() で終了するという規定が無いため、明示的に停止する
+    const audioDestination = this.audioDestination;
+    this.audioDestination = null;
+    await guard(() => {
+      for (const track of audioDestination?.stream.getAudioTracks() ?? []) {
+        track.stop();
+      }
+    });
+
+    // AudioContext を閉じる
+    const audioContext = this.audioContext;
+    this.audioContext = null;
+    await guard(() => audioContext?.close());
+
+    // session を閉じる (再 start では接続からやり直す)
+    const session = this.session;
+    this.session = null;
+    await guard(async () => {
+      if (session !== null) {
+        await session.close();
+      }
+    });
+
+    // 実行時状態を初期値に戻す (統計 (audioStats / videoStats) は引き継ぐ)
+
+    // 保留分は破棄し、以後は保留せずハンドラの configured ガードで decode しない
+    this.audioInitialConfigPending = false;
+    this.videoInitialConfigPending = false;
+    this.pendingAudioObjects = [];
+    this.pendingVideoObjects = [];
+    // Group の切り替えで保留していた映像 Object も破棄する
+    if (this.videoGroupGateTimer !== null) {
+      clearTimeout(this.videoGroupGateTimer);
+      this.videoGroupGateTimer = null;
+    }
+    this.videoGroupGate.reset();
+    // 復号順の判定も初期化する (setupDecoders の成功パスでも初期化するが、
+    // 前世代で最後に許可した Object を持ち越さないようここでも戻す)
+    this.videoDecodeOrder.reset();
+    // 表示待ちの映像を破棄し、予約した選択を取り消す。次の購読で作り直す
+    this.clearVideoPlayout();
+    this.videoPlayoutStopped = false;
+    // 共有の時間軸と、AudioContext ごとの時計の対応も作り直す (AudioClockBridge.reset の JSDoc を参照)
+    this.playbackTimeline.reset();
+    this.audioClockBridge.reset();
+    this.audioTimestampKinds.clear();
+    this.audioWallClockSeen = false;
+    this.videoWallClockSeen = false;
+    // Catalog の受信状態を初期値に戻す。受信待ちが残っていれば打ち切る
+    // (解放後に await が残ると start() が永久に解決しない)
+    this.receivedCatalog = null;
+    this.audioTrackInfo = null;
+    this.videoTrackInfo = null;
+    const catalogReject = this.catalogReject;
+    const catalogWaitPending = this.catalogWaiting;
+    this.catalogWaiting = false;
+    this.catalogResolve = null;
+    this.catalogReject = null;
+    // フェーズの状態とタイマーは先頭で初期値にしてある。ここではラッチを戻す
+    this.catalogReceiveFailed = false;
+    if (catalogWaitPending) {
+      catalogReject?.(new Error("catalog receive aborted: resources disposed"));
+    }
+    // デコーダの設定状態を初期値に戻す (閉じた後に decode しない)
+    this.audioDecoderConfigured = false;
+    this.videoDecoderConfigured = false;
+    this.lastAppliedVideoConfig = null;
+    this.lastAppliedAudioConfig = null;
+    // 出力の参照を切り離す (次の start で新しい MediaStream を作る)
+    this.outputStream = null;
+
+    if (firstFailure !== null) {
+      const failure: Error = firstFailure;
+      throw failure;
+    }
+  }
+
+  /**
+   * session の close 通知を処理する
+   *
+   * 世代番号が現在値と一致する通知だけをピア起点の close として扱う。解放
+   * (disposeAllResources) は世代番号を進めるため、stop / close / start 失敗の
+   * 巻き戻しで解放した後に届く旧 session の通知はここで捨てる (state も onClose も
+   * 動かさない。新しい session を確立した後に旧 session の通知が届く場合も同じ)。
+   * 一致する通知では解放してから "closed" にして onClose を通知する
+   * (解放せずに "closed" にすると close の早期 return で解放経路が消える)。
+   * 解放は runDisposal で進行中のものと共有する。解放を共有する通知が重なった場合は、
+   * 終端の判定 (state が "closed" か) で 2 回目の遷移と onClose の通知を防ぐ。
+   * 解放の間に利用者起点の解放 (stop / close) が始まった場合は、state と onClose は
+   * そちらの経路に任せ、ここでは終端遷移も onClose も行わない (解放中は state が
+   * "active" のままであるため、利用者起点の解放の回数で判定する。重なった stop の
+   * あとに "closed" へ動かすと stop の事後条件が崩れ、重なった close では onClose が
+   * 2 回呼ばれる)。
+   * 解放が失敗した場合は state を変えず onError で通知する。この onError が throw しても
+   * この経路は reject しない (呼び出し元 (connectToServer) の回収が同じ失敗をもう一度
+   * onError へ流し、二重に通知するため)。onSessionClose は void の同期コールバックであり
+   * 同じ通知は再送されないため、呼び出し側が close() を呼んで回収する (解放は失敗した段階
+   * より後を回収し、参照は切り離し済みのため同じ段階はやり直されない)。
+   * 終端遷移の経路 (onStateChange / onClose) が throw した場合はこの Promise が reject する。
+   * 呼び出し元 (connectToServer) が回収し、未処理の rejection にしない。
+   *
+   * @param generation 通知を受け取った session の世代番号 (start が捕捉し、connectToServer が
+   *   クロージャへ渡す値)
+   */
+  private async handleSessionClose(generation: number): Promise<void> {
+    if (generation !== this.sessionGeneration) {
+      return;
+    }
+
+    // 解放の前後で利用者起点の解放の回数を比較し、重なったかを判定する
+    const userDisposalCount = this.userDisposalCount;
+    try {
+      await this.runDisposal();
+    } catch (error) {
+      // 解放の失敗を通知する。通知の失敗でこの経路を reject させない
+      // (呼び出し元が同じ失敗をもう一度 onError へ流すと二重通知になる)
+      try {
+        this.callbacks.onError?.(error instanceof Error ? error : new Error(String(error)));
+      } catch {
+        // 通知の失敗を伝える経路がこれ以上無い
+      }
+      return;
+    }
+    // 解放を共有する通知が重なった場合、先に終端へ進んだ側が state と onClose を決める
+    if (this.userDisposalCount !== userDisposalCount || this.currentState === "closed") {
+      return;
+    }
+
+    this.transitionToClosed();
+  }
+
+  /**
+   * サーバーに接続して session を確保する
+   *
+   * @param startGeneration start の開始時に捕捉した世代番号 (この session の close 通知を
+   *   扱うかの判定にも使う)
+   * @throws 解放が先行した場合 (受け取った session をその場で閉じてから)
+   */
+  private async connectToServer(startGeneration: number): Promise<void> {
     // exactOptionalPropertyTypes では optional なフィールドに undefined を渡せないため、
     // 値がある場合だけ載せる
-    this.session = await connectMediaSession({
+    const session = await this.openSession({
       url: this.url,
       ...(this.options.serverCertificateHashes !== undefined
         ? { serverCertificateHashes: this.options.serverCertificateHashes }
@@ -647,16 +1064,48 @@ export class MediaSubscriberImpl implements MediaSubscriber {
         ? { pendingSubgroup: this.options.pendingSubgroup }
         : {}),
       onSessionClose: () => {
-        if (this.currentState !== "closed") {
-          this.setState("closed");
-          this.callbacks.onClose?.();
-        }
+        // void の同期コールバックであり、解放の完了は待たずに進める。
+        // handleSessionClose は解放の失敗を内部で onError に流すため、ここで回収する
+        // のは通知経路 (onError / onStateChange / onClose) が throw した分である。
+        // 未処理の rejection にしないため、onError への通知も含めて握る
+        void this.handleSessionClose(startGeneration).catch((error: unknown) => {
+          try {
+            this.callbacks.onError?.(error instanceof Error ? error : new Error(String(error)));
+          } catch {
+            // 通知の失敗を伝える経路がこれ以上無い
+          }
+        });
       },
       // onSessionError は void を返す必要があるため、block body で undefined を返さないようにする
       onSessionError: (error) => {
         this.callbacks.onError?.(error);
       },
     });
+
+    // 接続の await 中に解放 (stop / close / ピア起点の close) が先行していれば、受け取った
+    // session をその場で閉じて採用しない。採用すると state は既に "stopped" / "closed" で
+    // close() も早期 return するため、閉じる経路が残らない
+    if (this.sessionGeneration !== startGeneration) {
+      try {
+        await session.close();
+      } catch (error) {
+        // 中止の理由を伝える妨げにしない。session の参照はここで捨てるため再試行できない
+        this.callbacks.onError?.(error instanceof Error ? error : new Error(String(error)));
+      }
+      throw new Error(START_ABORTED_DISPOSED);
+    }
+
+    this.session = session;
+  }
+
+  /**
+   * 接続して Session を確保する
+   *
+   * WebTransport を要する唯一の境界であり、単体テストはここを置き換えて接続の完了
+   * (await の解決) を制御する (モジュール置換は行わない)。
+   */
+  private openSession(settings: MediaConnectSettings): Promise<Session> {
+    return connectMediaSession(settings);
   }
 
   /**
@@ -684,9 +1133,13 @@ export class MediaSubscriberImpl implements MediaSubscriber {
    * オブジェクトを破棄する。session.subscribe 失敗時は即時掃除して
    * throw する。成功時を含めタイマーは解除する。
    *
+   * @param startGeneration start の開始時に捕捉した世代番号 (解放が先行していないかの検査用)
    * @param timeoutMs Catalog 受信タイムアウト (ミリ秒、省略時は CATALOG_RECEIVE_TIMEOUT)
    */
-  private async subscribeCatalog(timeoutMs: number = CATALOG_RECEIVE_TIMEOUT): Promise<void> {
+  private async subscribeCatalog(
+    startGeneration: number,
+    timeoutMs: number = CATALOG_RECEIVE_TIMEOUT,
+  ): Promise<void> {
     if (!this.session) {
       throw new Error("session not connected");
     }
@@ -698,11 +1151,13 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     // resolve しない契約のため、`!receivedCatalog` だけではフェーズ未完了時にハングする。
     const catalogPromise = new Promise<Catalog>((resolve, reject) => {
       this.catalogResolve = resolve;
+      this.catalogReject = reject;
 
       this.catalogTimer = setTimeout(() => {
         this.catalogTimer = null;
         if (this.catalogResolve !== null) {
           this.catalogResolve = null;
+          this.catalogReject = null;
           // 失敗後に live object が永久バッファされないようフェーズ状態を解除する
           this.catalogFetchInProgress = false;
           this.pendingCatalogObjects = [];
@@ -750,11 +1205,16 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       // catalogSubscriber は未登録のため unsubscribe 不要である。
       this.clearCatalogTimer();
       this.catalogResolve = null;
+      this.catalogReject = null;
       this.catalogFetchInProgress = false;
       this.pendingCatalogObjects = [];
       this.catalogFetchLastLocation = null;
       throw error;
     }
+
+    // 購読の await 中に解放が先行していれば、FETCH の発行も受信待ちもしない
+    // (確保した購読は start の巻き戻しが解放する)
+    this.assertStartNotDisposed(startGeneration);
 
     // 既存 catalog を FETCH で取得する。要求範囲は最新 Group の先頭 Object から
     // Largest Object までとする (catalogFetchFilter を参照)。LARGEST_OBJECT が
@@ -798,10 +1258,16 @@ export class MediaSubscriberImpl implements MediaSubscriber {
 
     // Catalog を受信するまで待つ
     try {
+      // 解放で打ち切る対象にする (await が付いた待ちだけを打ち切る)
+      this.catalogWaiting = true;
       await catalogPromise;
     } finally {
+      this.catalogWaiting = false;
       this.clearCatalogTimer();
     }
+
+    // 受信の await 中に解放が先行していれば、トラック情報の抽出も出力の作成も行わない
+    this.assertStartNotDisposed(startGeneration);
   }
 
   /**
@@ -858,6 +1324,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     }
     this.catalogResolve(this.receivedCatalog);
     this.catalogResolve = null;
+    this.catalogReject = null;
   }
 
   /**
@@ -956,8 +1423,9 @@ export class MediaSubscriberImpl implements MediaSubscriber {
         sampleRate,
       });
       this.audioPlayout.reset();
-      // AudioContext を作り直したので、時間軸の基準も作り直す。時計の対応は次の予約で取る
+      // AudioContext を作り直したため、再生の基準もすべて作り直す (時計の対応は AudioClockBridge.reset の JSDoc を参照)
       this.playbackTimeline.reset();
+      this.audioClockBridge.reset();
       // ブラウザの自動再生ポリシー対応
       if (this.audioContext.state === "suspended") {
         void this.audioContext.resume();
@@ -977,7 +1445,12 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     }
   }
 
-  private async setupDecoders(): Promise<void> {
+  /**
+   * デコーダーを設定する
+   *
+   * @param startGeneration start の開始時に捕捉した世代番号 (解放が先行していないかの検査用)
+   */
+  private async setupDecoders(startGeneration: number): Promise<void> {
     const useWorker = this.options.useWorker ?? true;
 
     // 音声デコーダー
@@ -1007,6 +1480,9 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       // configure する。SUBSCRIBE_OK の AUDIO_CONFIG は subscribeMediaTracks が
       // 購読確立直後に applyInitialAudioConfig で反映する (AAC の復号に必要)。
       await this.audioDecoder.configure(audioCodec, sampleRate, channels);
+      // 解放が先行していれば、映像デコーダの作成も購読も進めない
+      // (確保したデコーダは start の巻き戻しが閉じる)
+      this.assertStartNotDisposed(startGeneration);
       this.audioDecoderConfigured = true;
     }
 
@@ -1041,6 +1517,8 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       // configure する。SUBSCRIBE_OK の VIDEO_CONFIG は subscribeMediaTracks が
       // 購読確立直後に applyInitialVideoConfig で反映する (canonical 形式に必要)。
       await this.videoDecoder.configure(videoCodec, width, height);
+      // 解放が先行していれば、購読も進めない (確保したデコーダは start の巻き戻しが閉じる)
+      this.assertStartNotDisposed(startGeneration);
       this.videoDecodeOrder.reset();
       this.videoDecoderConfigured = true;
     }
@@ -1061,8 +1539,10 @@ export class MediaSubscriberImpl implements MediaSubscriber {
 
   /**
    * メディアトラックを subscribe する
+   *
+   * @param startGeneration start の開始時に捕捉した世代番号 (解放が先行していないかの検査用)
    */
-  private async subscribeMediaTracks(): Promise<void> {
+  private async subscribeMediaTracks(startGeneration: number): Promise<void> {
     if (!this.session) {
       throw new Error("session not connected");
     }
@@ -1077,6 +1557,8 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       this.audioInitialConfigPending = true;
       // draft-ietf-moq-msf-01 §11.4.3: authInfo を持つ track にはトークンを MUST 付与
       const authorizationToken = await this.resolveTrackAuthorizationToken(this.audioTrackInfo);
+      // 解放が先行していれば、購読要求も出さない (解放で session は切り離し済み)
+      this.assertStartNotDisposed(startGeneration);
       this.audioSubscriber = await this.session.subscribe(
         namespace,
         trackName,
@@ -1091,10 +1573,15 @@ export class MediaSubscriberImpl implements MediaSubscriber {
         // 値がある場合だけ載せる
         authorizationToken === undefined ? {} : { authorizationToken },
       );
+      // 購読の await 中に解放が先行していれば、初期 configure の適用も映像側の購読も行わない
+      // (確立した購読は start の巻き戻しが解除する)
+      this.assertStartNotDisposed(startGeneration);
       // draft-ietf-moq-loc-04 Table 1: AUDIO_CONFIG は Track Property でも届く。
       // 購読確立直後に初期 configure へ反映し、保留していた Object を到着順に処理する
       // (media ごとに行う。音声の適用が映像の SUBSCRIBE_OK 待ちにならないようにする)
       await this.applyInitialAudioConfig();
+      // 適用の await 中に解放が先行していれば、映像側の購読も進めない
+      this.assertStartNotDisposed(startGeneration);
     }
 
     // 映像サブスクライバー
@@ -1108,6 +1595,8 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       const videoAuthorizationToken = await this.resolveTrackAuthorizationToken(
         this.videoTrackInfo,
       );
+      // 解放が先行していれば、購読要求も出さない (解放で session は切り離し済み)
+      this.assertStartNotDisposed(startGeneration);
       // exactOptionalPropertyTypes では optional な authorizationToken に undefined を渡せないため、
       // 値がある場合だけ載せる
       const subscribeOptions: SubscribeOptions =
@@ -1133,8 +1622,13 @@ export class MediaSubscriberImpl implements MediaSubscriber {
         },
         subscribeOptions,
       );
+      // 購読の await 中に解放が先行していれば、初期 configure の適用も行わない
+      // (確立した購読は start の巻き戻しが解除する)
+      this.assertStartNotDisposed(startGeneration);
       // draft-ietf-moq-loc-04 Table 1: VIDEO_CONFIG は Track Property でも届く
       await this.applyInitialVideoConfig();
+      // 適用の await 中に解放が先行していれば、start を "active" にしない
+      this.assertStartNotDisposed(startGeneration);
     }
   }
 

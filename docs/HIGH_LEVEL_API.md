@@ -233,13 +233,13 @@ interface MediaSubscriberCallbacks {
 
 ### メソッド
 
-| メソッド                           | 説明                                    |
-| ---------------------------------- | --------------------------------------- |
-| `start(): Promise<void>`           | 購読開始                                |
-| `stop(): Promise<void>`            | 購読停止                                |
-| `requestKeyframe(): Promise<void>` | キーフレーム要求（REQUEST_UPDATE 送信） |
-| `close(): Promise<void>`           | リソース解放                            |
-| `getStats(): MediaReceiverStats`   | 受信側の統計情報取得                    |
+| メソッド                           | 説明                                                                                                                                                                                                                                                                                                                              |
+| ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `start(): Promise<void>`           | 購読開始（`"created"` と `"stopped"` から呼べる。開始を取り消すには `close()` を使う。実行中にピア起点の close または `close()` が重なると `"closed"` を優先して失敗する。失敗時は解放して遷移前の state に戻る。`close()` が解放と終端遷移を進めている間は `cannot start while closing`）                                        |
+| `stop(): Promise<void>`            | 購読停止（`"active"` からのみ。`"subscribing"` を含むそれ以外は `cannot stop in state` で throw。解放して `"stopped"` にする。ピア起点の close の解放中は進行中の解放を共有して完了を待つ。解放の失敗時は state と `onClose` を変えず元のエラーを throw。`close()` が解放と終端遷移を進めている間は `cannot stop while closing`） |
+| `requestKeyframe(): Promise<void>` | キーフレーム要求（REQUEST_UPDATE 送信）                                                                                                                                                                                                                                                                                           |
+| `close(): Promise<void>`           | リソース解放（終端。どの状態からでも可能。開始の取り消しもこれを使う。進行中の解放（`stop()` / ピア起点の close）は共有して完了を待ち、その成否が結果になる。同時に呼んでも解放と通知は 1 回。解放の失敗時は state と `onClose` を変えず元のエラーを throw）                                                                      |
+| `getStats(): MediaReceiverStats`   | 受信側の統計情報取得                                                                                                                                                                                                                                                                                                              |
 
 ### プロパティ
 
@@ -254,24 +254,75 @@ interface MediaSubscriberCallbacks {
 ```typescript
 type MediaSubscriberState =
   | "created" // createMediaSubscriber() 直後
-  | "subscribing" // start() 後、SUBSCRIBE_OK 待ち
-  | "active" // SUBSCRIBE_OK 受信後
-  | "stopped" // stop() 後
-  | "closed"; // close() 後
+  | "subscribing" // start() 後、購読確立待ち
+  | "active" // 購読確立後 (カタログ受信と各メディアトラックの購読確立)
+  | "stopped" // stop() 後 (解放済み。start() で再開できる)
+  | "closed"; // close() 後 (終端)
 ```
 
 ### 状態遷移
 
 ```
-created ──start()──► subscribing ──(SUBSCRIBE_OK)──► active
-                                                       │
-                                       stop()◄─────────┘
-                                         │
-                                         ▼
-                                      stopped
+                    start()              (購読確立)
+created / stopped ──────────► subscribing ─────────► active
+         ▲                        │                    │
+         │  start の失敗          │                    │
+         └────────────────────────┘                    │
+         └──────────────── stop() ─────────────────────┘
 
-* → close() → closed (どの状態からでも可能)
+* ──(ピア起点の close)──► closed
+* ──close()──► closed (どの状態からでも可能。終端)
 ```
+
+`created` と `stopped` は同じ辺 (`start()`) を持つため 1 つにまとめている。
+`start()` が失敗したときの戻り先は遷移前の state (`"created"` または `"stopped"`) である。
+`(購読確立)` はカタログの受信と各メディアトラックの購読確立が完了した時点である
+(SUBSCRIBE_OK の受信だけでは `"active"` にならない)。
+
+`stop()` は `close()` と同じ解放を行い、`mediaStream` と `catalog` は無効になる。
+再開するときは `start()` を呼び、再 start 後の新しい `mediaStream` を使う。
+`close()` のあとに `start()` を呼ぶと `cannot start in state: closed` で拒否される。
+`stop()` の成功時に `onClose` は通知しない (停止であり終端ではない)。
+
+`"subscribing"` (開始の途中) の `stop()` も `cannot stop in state: subscribing` で
+拒否される。`start()` はカタログの受信と各トラックの購読が確立するまで返らないため、
+この間の `stop()` は要求を記録せずに拒否するだけで、購読はそのまま進む。
+開始を取り消すには `close()` を使う (解放して `"closed"` の終端へ進み、`start()` は
+失敗する)。停止したい場合は `"active"` になってから `stop()` を呼ぶ。
+
+`stop()` と `close()` は、解放が失敗したときは state を変えず `onClose` も呼ばず、元の
+エラーを throw する。破棄の前に参照を切り離しているため、失敗した段階はやり直されず、
+呼び直しが進めるのは失敗した段階より後の解放と終端遷移である。
+
+解放は共有される。`stop()` またはピア起点の close の解放が進行中に `close()` を呼ぶと、
+`close()` はその完了を待ってから `"closed"` へ進む。進行中の解放が失敗した場合は
+`"closed"` にならず、`close()` も同じエラーを throw する (解放に相乗りした呼び出しも
+失敗を検知できる)。逆に、進行中の解放に `stop()` が相乗りした場合は、解放のあとに
+`stop()` が state を `"stopped"` にする。あとから解放を終えたピア起点の経路は state も
+`onClose` も動かさない。
+`close()` を await せずに重ねて呼んだ場合も、解放は 1 回で `onStateChange` の
+`"closed"` と `onClose` は 1 回だけ通知される。終端の遷移は冪等であり、解放をまたいで
+終端へ進む経路が重なっても 2 回通知しない。`close()` が解放と終端遷移を進めている間は
+`start()` / `stop()` を `cannot start while closing` / `cannot stop while closing` で
+拒否する (解放中は state がまだ `"active"` などのため、state だけでは重なりを判定できない)。
+
+`stop()` と `close()` が解放をまたいで重なった場合も終端の `"closed"` が残る
+(`stop()` は state が `"closed"` なら `"stopped"` に戻さない)。`"closed"` のあとの
+`close()` は早期 return するため、`onClose` は 1 回だけ通知される。
+
+ピア起点の close の通知では、解放してから `"closed"` にして `onClose` を通知する。
+この経路で解放が失敗した場合は state を変えず `onError` で通知し、`close()` を呼べば
+解放を回収できる (同じ通知は再送されないため)。解放が進行中の間に `close()` が呼ばれて
+いれば、同じ失敗が `close()` の結果としても返る。
+
+`start()` の実行中にピア起点の close または `close()` が重なった場合は `"closed"` が
+優先され、`start()` は失敗する (`onError` と `onClose` が続けて呼ばれ得る)。
+解放が先行した場合はそれ以上購読も通知もリソース作成も行わず、接続で受け取った
+session も閉じる。`start()` が失敗した場合は確保済みを解放し、終端 (`"closed"`) へ
+進んでいなければ遷移前の state (`"created"` または `"stopped"`) に戻るため再試行できる。
+解放が途中で失敗した場合も `"subscribing"` のまま取り残さない (ピア起点の close は
+解放のあとに `"closed"` にするため、戻した state は上書きされる)。巻き戻しの遷移で
+`onStateChange` が throw しても `onError` の通知と元のエラーは失われない。
 
 ### 統計情報
 

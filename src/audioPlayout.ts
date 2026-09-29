@@ -260,6 +260,7 @@ export interface AudioClockMapping {
  *
  * - 対応は予約のたびに取り直し、直前の値との差が `AUDIO_CLOCK_DEADBAND_MS` 未満なら無視し、
  *   大きくても 1 回の変更を `AUDIO_CLOCK_MAX_CHANGE_MS` までにする
+ * - `AudioContext` を作り直したときは `reset()` で対応を消し、次の予約で取り直す
  * - `getOutputTimestamp()` が未開始 (両方 0) のときは `currentTime` と `performance.now()` の
  *   差で代用する。この差は音声の出力遅延を含まないため、鳴るのは目標より出力遅延の分だけ
  *   後ろになる (`usingFallback` で分かる)
@@ -296,6 +297,20 @@ export class AudioClockBridge {
       }
     }
     this.fallback = mapping === null;
+  }
+
+  /**
+   * 対応を消す。呼び出し側が `AudioContext` を作り直すときに呼ぶ
+   *
+   * 消したあとは、次の予約 (`update`) が観測値から対応を作り直す。
+   * 対応は「`AudioContext` の時計 − `performance.now()`」であり、AudioContext ごとに
+   * 異なる。作り直した AudioContext に古い対応を使い続けると、`currentTime` が 0 から
+   * 始まる分だけ目標の時刻がずれ、`update()` が 1 回で動かせる上限
+   * (`AUDIO_CLOCK_MAX_CHANGE_MS`) では追いつかない。
+   */
+  reset(): void {
+    this.offsetMs = null;
+    this.fallback = false;
   }
 
   /**
