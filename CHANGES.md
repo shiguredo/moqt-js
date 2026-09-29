@@ -11,6 +11,9 @@
 
 ## develop
 
+- [CHANGE] moqt-devtools の Namespace の初期値を `moqt-devtools/{ランダムな 8 文字}` にする
+  - 複数の devtools が同じ relay に繋がっても namespace が衝突しないようにする。共有するときは Copy URL や Save で持ち出す。Namespace は接続先の特定に使うため、URI Fragment の左に置く
+  - @voluntas
 - [CHANGE] `MediaReceiverStats.avSync` を追加する
   - 音声と映像の同期の推定値 (同期ずれ、表示の遅れ、使っている目標遅延、切り下げた分、時計の代用の有無) を統計で確認できるようにする
   - `MediaReceiverStats` は公開型のため、この型を自前で構築しているコードは `avSync` の追加が必要になる (後方互換なし)
@@ -108,8 +111,16 @@
   - URL クエリ `mode` で Publisher だけ / Subscriber だけを表示する。ヘッダーの副題に 3 つのモードを並べ、今のモードを示すとともに、他のモードのページを今の接続設定のまま新しいタブで開けるようにする
   - Catalog Timeout と Use Dedicated Worker を URL に載せ、同じ接続設定のページを URL で再現できるようにする
   - @voluntas
+- [UPDATE] moqt-devtools の統計を Audio / Video / Messages に分ける
+  - 統計の欄に Audio / Video / Messages (event timeline) / A/V Sync / Session の大見出しを付け、audio → video の順に並べる
+  - 音声の符号化 (chunksEncoded / encodeErrors) と送信 (objects / datagramObjects / bytes) を追加する。これまで encodeErrors は音声の符号化エラーも混ぜていたため、音声は audioEncodeErrors に分ける
+  - メッセージの送受信 (publisher の messagesSent、subscriber の objectsReceived / entries) を追加する
+  - Audio のメーターの値 (peak / rms の L / R) は小数点以下 1 桁に丸める
+  - 統計は 1 秒ごとにまとめて読み直し、前の値から変わった枠を薄く色付けする (カウンタが更新するたびにパネルを描き直さない)
+  - @voluntas
 - [UPDATE] moqt-devtools の track 表示を整理し、ステータスを接続状態にする
   - ステータスメッセージは接続の段階 (`Publishing` / `Subscribed` など) だけを示すようにし、トラックの一覧は出さない。どのトラックがあるかは Catalog パネルとデバッグパネルで確認する
+  - Catalog パネルは既定で折りたたみ、見出しを押したときだけ中身を出す。折りたたみ時はトラックの Full Track Name を 1 行で出す最小表示にする
   - Catalog パネルはトラックを Media (`packaging: "loc"`) と Data (それ以外) に分け、見出しに件数を出す。各トラックは 1 行目に namespace を含む Full Track Name、2 行目以降に残りのキーと値を出す。表記は namespace のフィールドを `-`、track name を `--` でつなぎ、`[A-Za-z0-9_]` 以外のバイトを `.` + 小文字 16 進 2 桁でエスケープする (draft-ietf-moq-transport-21 §8.8 / draft-ietf-moq-msf-01 §11.1.2)。track の `namespace` は §5.2.2 に従い、指定があればそちらを使う
   - パネルの並びを Catalog → Audio → Video → Messages → Statistics にし、Catalog を映像の上に出す
   - Messages カードを amber にし、Catalog の色 (Publisher は緑、Subscriber は青) と見分けられるようにする
@@ -229,6 +240,9 @@
   - 行の vnode をログの連番で保持し、展開の状態・表示モード・コピーの表示が変わったときだけ作り直す。Preact は同じ vnode を再び受け取ると部分木の差分を省略するため、1000 件表示でも 1 件追加で描画される行は 1 件になる (実測: 同じ計測方法で 1 件追加の中央値 23.0 ms → 7.6 ms、描画される行 1000 件 → 1 件)
   - 上限で捨てたログの vnode はキャッシュから落とす。`data` と `payload` は追加後に書き換えない前提になる (行を描画し直さないため、書き換えても表示は古いまま)
   - 1 件追加のコストは表示中の件数に比例する分が残る (1000 件で約 3 ms のうち、表示中の子の走査が大半)。表示する行を画面に入る分だけにする対応は別に行う
+  - @voluntas
+- [FIX] moqt-devtools のバイト数の単位を KiB / MiB にする
+  - 1024 進で丸めているのに KB / MB と表示していた。1000 進のビットレート (kbps / Mbps) と区別できるようにする
   - @voluntas
 - [FIX] moqt-devtools の音声メーターの単位が、値の桁数で動くのを修正する
   - HTML は連続する空白を 1 つに潰すため、空白で桁を揃えた値が崩れ、値が変わるたびに `dBFS` / `dBov` が動いていた。値を `whitespace-pre` で表示し、単位の位置を固定する
