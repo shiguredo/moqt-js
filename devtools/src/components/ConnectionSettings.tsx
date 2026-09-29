@@ -12,7 +12,7 @@ import {
   type TrackAdvertisement,
   type TrackNameProblem,
 } from "../utils/publishTracks";
-import { CHAT_EVENT_TYPE, EVENT_TRACK_NAME } from "../utils/eventTimeline";
+import { MESSAGES_EVENT_TYPE, EVENT_TRACK_NAME } from "../utils/eventTimeline";
 import type {
   AudioDelivery,
   AudioSourceType,
@@ -904,7 +904,7 @@ export function ConnectionSettings() {
                     <input
                       type="text"
                       data-testid="event-track-type"
-                      value={CHAT_EVENT_TYPE}
+                      value={MESSAGES_EVENT_TYPE}
                       readOnly
                       class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-slate-100 text-slate-500"
                     />

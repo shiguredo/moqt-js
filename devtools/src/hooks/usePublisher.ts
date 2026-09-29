@@ -55,9 +55,9 @@ import {
 } from "../utils/catalogRepublish";
 import { shouldSendAudioAsDatagram } from "../utils/audioDelivery";
 import {
-  appendChatEventEntry,
-  buildChatEventEntry,
-  CHAT_EVENT_TYPE,
+  appendMessageEventEntry,
+  buildMessageEventEntry,
+  MESSAGES_EVENT_TYPE,
   EVENT_TRACK_NAME,
 } from "../utils/eventTimeline";
 import {
@@ -332,7 +332,7 @@ export function buildPublisherCatalog(options: PublisherCatalogOptions): Catalog
     packaging: "eventtimeline",
     isLive: true,
     role: "eventtimeline",
-    eventType: CHAT_EVENT_TYPE,
+    eventType: MESSAGES_EVENT_TYPE,
     mimeType: "application/json",
     depends,
   });
@@ -1364,7 +1364,7 @@ export function usePublisher() {
    * event timeline トラックを publish する
    *
    * catalog が広告する event timeline トラックを実際に publish する。devtools は
-   * audio / video 以外のデータを流す例としてここにチャットのメッセージを送る。
+   * audio / video 以外のデータを流す例としてここにメッセージを送る。
    * 失敗しても catalog には載っているため、購読側は購読を始められる (保留になる)
    */
   async function startEventPublishing(
@@ -1391,7 +1391,7 @@ export function usePublisher() {
   }
 
   /**
-   * event timeline にチャットのメッセージを 1 件送る
+   * event timeline にメッセージを 1 件送る
    *
    * draft-ietf-moq-msf-01 §8.3: Group の先頭 Object には、それまでに蓄積されアクセス
    * 可能な全レコードを載せなければならない (MUST)。devtools はメッセージごとに新しい
@@ -1403,7 +1403,7 @@ export function usePublisher() {
     if (!eventPublisherInstance || eventPublisherInstance.state !== "active") return;
     if (text.length === 0) return;
 
-    eventHistory = appendChatEventEntry(eventHistory, buildChatEventEntry(text, Date.now()));
+    eventHistory = appendMessageEventEntry(eventHistory, buildMessageEventEntry(text, Date.now()));
     const groupId = pub.eventGroup.value + 1;
     pub.eventGroup.value = groupId;
     try {

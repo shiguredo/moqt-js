@@ -1,9 +1,9 @@
 import { test, assert } from "vite-plus/test";
 import { decodeEventTimeline, encodeEventTimeline } from "moqt-js";
 import {
-  appendChatEventEntry,
-  buildChatEventEntry,
-  CHAT_EVENT_TYPE,
+  appendMessageEventEntry,
+  buildMessageEventEntry,
+  MESSAGES_EVENT_TYPE,
   EVENT_HISTORY_LIMIT,
   EVENT_TRACK_NAME,
   formatEventEntryData,
@@ -16,9 +16,9 @@ import {
 // catalog の検証 (src/msf/catalogTrackValidation.ts) は eventtimeline のトラックに
 // eventType / depends / mimeType を MUST で要求する。eventType は逆ドメイン名の
 // 形式で、MSF に登録された型ではないことを固定する
-test("EVENT_TRACK_NAME と CHAT_EVENT_TYPE は devtools の取り決めの値になる", () => {
+test("EVENT_TRACK_NAME と MESSAGES_EVENT_TYPE は devtools の取り決めの値になる", () => {
   assert.equal(EVENT_TRACK_NAME, "events");
-  assert.equal(CHAT_EVENT_TYPE, "app.shiguredo.moqt-devtools.chat");
+  assert.equal(MESSAGES_EVENT_TYPE, "app.shiguredo.moqt-devtools.messages");
 });
 
 // ============================================================================
@@ -27,8 +27,8 @@ test("EVENT_TRACK_NAME と CHAT_EVENT_TYPE は devtools の取り決めの値に
 
 // draft-ietf-moq-msf-01 §8.1: entry は index 参照を 1 つ持ち、data の構造は
 // catalog の eventType が定義する。メッセージは壁時計 (`t`) で並べる
-test("buildChatEventEntry: 壁時計と text を持つ entry を作る", () => {
-  const entry = buildChatEventEntry("hello", 1_790_263_445_102);
+test("buildMessageEventEntry: 壁時計と text を持つ entry を作る", () => {
+  const entry = buildMessageEventEntry("hello", 1_790_263_445_102);
 
   assert.equal(entry.t, 1_790_263_445_102);
   // Media PTS (`m`) と Location (`l`) は使わない
@@ -41,12 +41,12 @@ test("buildChatEventEntry: 壁時計と text を持つ entry を作る", () => {
 // 履歴の追記
 // ============================================================================
 
-test("appendChatEventEntry: 履歴の末尾に 1 件足す", () => {
-  const first = buildChatEventEntry("one", 1000);
-  const second = buildChatEventEntry("two", 2000);
+test("appendMessageEventEntry: 履歴の末尾に 1 件足す", () => {
+  const first = buildMessageEventEntry("one", 1000);
+  const second = buildMessageEventEntry("two", 2000);
 
   const original = [first];
-  const history = appendChatEventEntry(original, second);
+  const history = appendMessageEventEntry(original, second);
 
   assert.deepEqual(history, [first, second]);
   // 引数の配列は書き換えない
@@ -55,18 +55,24 @@ test("appendChatEventEntry: 履歴の末尾に 1 件足す", () => {
 
 // draft-ietf-moq-msf-01 §8.3: Group の先頭 Object には、それまでに蓄積されアクセス
 // 可能な全レコードを載せる。上限を超えたら古い方から落とし、payload の増加を抑える
-test("appendChatEventEntry: 上限を超えたら古い entry から落とす", () => {
+test("appendMessageEventEntry: 上限を超えたら古い entry から落とす", () => {
   const entries = Array.from({ length: EVENT_HISTORY_LIMIT }, (_, index) =>
-    buildChatEventEntry(`message ${index}`, index),
+    buildMessageEventEntry(`message ${index}`, index),
   );
 
-  const history = appendChatEventEntry(entries, buildChatEventEntry("newest", EVENT_HISTORY_LIMIT));
+  const history = appendMessageEventEntry(
+    entries,
+    buildMessageEventEntry("newest", EVENT_HISTORY_LIMIT),
+  );
 
   assert.equal(history.length, EVENT_HISTORY_LIMIT);
   // 先頭の 1 件が落ち、2 件目が新しい先頭になる
   assert.deepEqual(history[0], entries[1]);
   // 末尾は追加した entry になる
-  assert.deepEqual(history[history.length - 1], buildChatEventEntry("newest", EVENT_HISTORY_LIMIT));
+  assert.deepEqual(
+    history[history.length - 1],
+    buildMessageEventEntry("newest", EVENT_HISTORY_LIMIT),
+  );
 });
 
 // ============================================================================
@@ -98,8 +104,8 @@ test("formatEventEntryData: text を持たない data は JSON として表示�
 
 // 送信側が encodeEventTimeline に渡す entry の配列を、購読側が decodeEventTimeline で
 // 読み戻せることを固定する (devtools の publisher と subscriber はこの経路だけを使う)
-test("buildChatEventEntry: encodeEventTimeline と decodeEventTimeline で往復できる", () => {
-  const history = [buildChatEventEntry("one", 1000), buildChatEventEntry("two", 2000)];
+test("buildMessageEventEntry: encodeEventTimeline と decodeEventTimeline で往復できる", () => {
+  const history = [buildMessageEventEntry("one", 1000), buildMessageEventEntry("two", 2000)];
 
   const decoded = decodeEventTimeline(encodeEventTimeline(history));
 
