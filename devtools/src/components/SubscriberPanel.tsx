@@ -1,6 +1,7 @@
 import { useMemo, useRef, useEffect } from "preact/hooks";
 import { useSubscriber } from "../hooks/useSubscriber";
 import { AudioMeter } from "./AudioMeter";
+import { VideoCard } from "./VideoCard";
 import { HttpVersionBadge } from "./HttpVersionBadge";
 import {
   EventLog,
@@ -86,6 +87,13 @@ export function SubscriberPanel({
     stopping: instance.isStopping.value,
   });
   const timing = instance.playbackTiming.value;
+  // 表示されなかったフレーム数の合計。relay の cache から追いつくまでに意図的に
+  // 描かなかった分 (catchUpFramesSkipped) は含めない
+  const videoDropped =
+    instance.staleFramesDropped.value +
+    instance.missingReferenceFramesDropped.value +
+    timing.lateFramesDropped +
+    timing.displayQueueDrops;
   // 音声と映像の同期の推定値。未購読、jitter buffer が無効、音声だけの購読では既定値
   const avSync = instance.avSync.value;
   const sessionStats = session?.getStatistics();
@@ -292,8 +300,21 @@ export function SubscriberPanel({
         {/* 受信した音声の再生先。表示せず、srcObject の設定先としてだけ使う */}
         <audio ref={audioRef} data-testid="subscriber-audio-element" class="hidden" />
 
-        {/* Canvas Container */}
-        <div class="relative bg-slate-900 rounded-lg overflow-hidden aspect-video mb-4">
+        {/* Video。Audio と同じ枠で囲み、映像からは読み取れない値 (表示 fps、受信から
+            表示までと復号の遅延、捨てたフレーム数) をヘッダーに出す */}
+        <VideoCard
+          testIdPrefix="subscriber-video"
+          fps={instance.subscriber.value === null ? null : timing.displayFps}
+          latency={[
+            {
+              label: "latency",
+              summary: timing.latencyMs,
+              testId: "subscriber-video-latency",
+            },
+            { label: "decode", summary: timing.decodeTimeMs, testId: "subscriber-video-decode" },
+          ]}
+          dropped={instance.subscriber.value === null ? null : videoDropped}
+        >
           <canvas
             ref={canvasRef}
             data-testid="subscriber-video-canvas"
@@ -320,7 +341,7 @@ export function SubscriberPanel({
               </div>
             )}
           </div>
-        </div>
+        </VideoCard>
 
         {/* 受信した event timeline のメッセージ。audio / video 以外のデータ */}
         <MessageList entries={instance.eventMessages.value} testId="subscriber-messages" />

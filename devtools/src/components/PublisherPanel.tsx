@@ -5,6 +5,7 @@ import { StatList, StatSection, StatsCollapse, TimingTable } from "./StatsView";
 import { PUBLISHER_LATENCY_BREAKDOWN_HELP, PUBLISH_TIMING_CAPTION } from "./statsHelp";
 import { formatBytes } from "../utils/logFormatters";
 import { AudioMeter } from "./AudioMeter";
+import { VideoCard } from "./VideoCard";
 import { HttpVersionBadge } from "./HttpVersionBadge";
 import { CatalogTracks } from "./CatalogTracks";
 import { MessageComposer } from "./MessageComposer";
@@ -192,8 +193,17 @@ export function PublisherPanel() {
           testIdPrefix="publisher-audio"
         />
 
-        {/* Video Container */}
-        <div class="relative bg-slate-900 rounded-lg overflow-hidden aspect-video mb-4">
+        {/* Video。Audio と同じ枠で囲み、映像からは読み取れない値 (符号化 fps、符号化と
+            送信の遅延、捨てたフレーム数) をヘッダーに出す */}
+        <VideoCard
+          testIdPrefix="publisher-video"
+          fps={pub.publisher.value === null ? null : publishTiming.encodedFps}
+          latency={[
+            { label: "encode", summary: publishTiming.encodeMs, testId: "publisher-video-encode" },
+            { label: "send", summary: publishTiming.sendMs, testId: "publisher-video-send" },
+          ]}
+          dropped={pub.publisher.value === null ? null : publishTiming.encodeQueueDrops}
+        >
           <video ref={videoRef} autoPlay muted playsInline class="w-full h-full object-contain" />
           <div class="absolute top-2 left-2 px-2 py-1 bg-black/60 rounded text-xs text-white font-medium">
             Local Camera
@@ -203,7 +213,7 @@ export function PublisherPanel() {
               {pub.pubCodec.value}
             </div>
           )}
-        </div>
+        </VideoCard>
 
         {/* event timeline のメッセージ入力。audio / video 以外を送る例 */}
         <MessageComposer

@@ -316,8 +316,8 @@ test("音声レベルメーターの見出し行の項目は、値が変わっ�
     return { inactive, voiceOff, voiceOn, quiet, loud, notReported, notMeasured };
   });
 
-  // 546 px の幅では見出し行が 1 行に収まる (折り返すと 40px 前後になり、下の Catalog と
-  // Statistics が動く)。行高は 16px で、flex の baseline で 1px 足されることがある
+  // 見出し (Audio と voice) は 1 行に固定する。数値は各行の左に並び、値の幅 (`ch` 固定) と
+  // drawAudioMeter の行の高さで決まるため、値が変わっても見出しの高さは変わらない
   expect(layout.quiet.headerHeight).toBeLessThanOrEqual(20);
 
   // どの状態でも項目の位置と大きさ、見出し行とメーターの高さが変わらない
