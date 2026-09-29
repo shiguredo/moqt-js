@@ -3,7 +3,7 @@
 - Created: 2026-09-21
 - Completed: {YYYY-MM-DD}
 - Branch: feature/test-ineffective-property-tests
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-09-29
 
 ## 目的
 
@@ -17,12 +17,12 @@
 
 ## 設計方針
 
-- (a) は分岐に到達する入力へ差し替え、値まで検証する。`decodeProperties` は不完全な内側 KVP を握り潰すが、`assertKnownPropertyValueInObjectProperties` は既知 Type の不完全 varint を `SessionError` として伝播させる。この対比もテストで固定し、どちらの挙動が正しいかを読めるようにする
+- (a) は分岐に到達する入力 `[0x0b, 0x01, 0x80]` へ差し替え、外側 Property (id=0x0B) の data が内側バイト列 `[0x80]` のまま保存されることまで検証する (内側 KVP は不完全であり、デコード済みの内側の値は存在しない)。`decodeProperties` は不完全な内側 KVP を握り潰すが、`assertKnownPropertyValueInObjectProperties` は既知 Type の不完全 varint を `SessionError` として伝播させる。この対比もテストで固定し、どちらの挙動が正しいかを読めるようにする
 - (b) は `encodeProperty` → `decodeProperties` の実際のラウンドトリップにする。同等の検証が `encodeProperties` → `parseProperties` のラウンドトリップと `src/properties.test.ts` の固定値テストにあるため、削除を選んでも検証は残る
 
 ## 完了条件
 
-- (a) のテストが IncompleteDataError の分岐を踏み、内側の値まで検証する
+- (a) のテストが IncompleteDataError の分岐を踏み、外側 Property の id (0x0B) と data (内側バイト列 `[0x80]` が保存されていること) まで検証する
 - (a) の対比 (既知 Type の不完全 varint の伝播) がテストで固定される
 - (b) のテストが実ラウンドトリップを検証するか、削除されている
 - `npx vp check` / `npx vp test --run` が通る
