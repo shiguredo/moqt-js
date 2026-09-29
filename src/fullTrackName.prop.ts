@@ -6,7 +6,7 @@
 
 import { test, assert } from "vite-plus/test";
 import * as fc from "fast-check";
-import { formatFullTrackName, fullTrackNameKey } from "./fullTrackName";
+import { formatFullTrackName, formatTrackNamespace, fullTrackNameKey } from "./fullTrackName";
 import { SubscriberImpl } from "./subscriber";
 import { FetcherImpl } from "./fetcher";
 import { parseMsfFragmentValue } from "./msf/fragment";
@@ -172,6 +172,22 @@ test("formatFullTrackName: parseMsfFragmentValue と round-trip する", () => {
       assert.deepEqual(parsed.trackNamespace, trackNamespace);
       assert.equal(parsed.trackName, trackName);
       assert.deepEqual(parsed.parameters, []);
+    }),
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-21 §8.8 と draft-ietf-moq-msf-01 §11.1.2:
+ * namespace 単体の文字列表現も、Full Track Name の -- の左側としてそのまま
+ * parse でき、Track Namespace が元の値に戻らなければならない。
+ */
+test("formatTrackNamespace: parseMsfFragmentValue と round-trip する", () => {
+  fc.assert(
+    fc.property(fc.array(displayFieldArb, { maxLength: 3 }), (trackNamespace) => {
+      // 空の namespace は "--" だけになるが、parse 側は空 tuple として許容する
+      const formatted = `${formatTrackNamespace(trackNamespace)}--x`;
+      const parsed = parseMsfFragmentValue(formatted);
+      assert.deepEqual(parsed.trackNamespace, trackNamespace);
     }),
   );
 });
