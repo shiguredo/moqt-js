@@ -213,9 +213,56 @@ export interface MediaSubscriber {
   readonly state: MediaSubscriberState;
   readonly mediaStream: MediaStream | null;
   readonly catalog: import("../msf").Catalog | null;
+  /**
+   * 購読を開始する
+   *
+   * "created" と "stopped" から呼べる。"stopped" からは停止で解放した資源を
+   * 作り直して再接続するため、`mediaStream` と `catalog` は再 start 後の新しい値を
+   * 読むこと。開始を取り消すには close() を使う (状態遷移と停止 / 再開の契約は
+   * docs/HIGH_LEVEL_API.md の MediaSubscriber を参照)。
+   * "subscribing" (開始の途中) の stop() は拒否され、close() が解放と終端遷移を
+   * 進めている間は cannot start while closing で拒否する。
+   * 失敗した場合は確保済みを解放して遷移前の state に戻るため再試行できる。解放が
+   * 先行した場合はそれ以上購読も通知もリソース作成も行わず、接続で受け取った session も
+   * 閉じる。ピア起点の close または利用者の close() が実行中に重なった場合は "closed" を
+   * 優先するため start は失敗し、onError と onClose が続けて呼ばれ得る。巻き戻しの
+   * onStateChange が throw しても onError の通知と元のエラーは失われない。
+   * 並行呼び出しは未対応であり直列に呼ぶこと。
+   */
   start(): Promise<void>;
+  /**
+   * 購読を停止する
+   *
+   * "active" からのみ呼べる。それ以外 ("stopped" での再 stop を含む) は
+   * cannot stop in state で throw し、解放もしない。"subscribing" (開始の途中) も
+   * 拒否される (開始を取り消すには close() を使う)。
+   * close と同じ解放を行い、state は再 start 可能な "stopped" になる。
+   * `mediaStream` と `catalog` は解放で無効になる。解放が失敗した場合は
+   * state を変えず onClose も呼ばず、元のエラーを throw する (失敗した段階は
+   * やり直されず、呼び直しが進めるのは残りの段階と終端遷移である)。ピア起点の
+   * close と違い onClose は通知しない。ピア起点の close の解放中に呼ばれた場合は
+   * 進行中の解放を共有して完了を待ち、この stop が state を "stopped" にする
+   * (あとから解放を終えたピア起点の経路は state も onClose も動かさない)。
+   * close() が解放と終端遷移を進めている間は cannot stop while closing で拒否する。
+   */
   stop(): Promise<void>;
   requestKeyframe(): Promise<void>;
+  /**
+   * リソースを解放する (終端)
+   *
+   * stop と同じ解放を行い、以後 start 不可の終端 ("closed") とする。
+   * "closed" での再 close は何もしない。解放が失敗した場合は state を変えず
+   * onClose も呼ばず、元のエラーを throw する (失敗した段階はやり直されず、
+   * 呼び直しが進めるのは残りの段階と終端遷移である)。解放のあとに届いた session の
+   * close 通知では state も onClose も変わらない。進行中の解放 (stop() または
+   * ピア起点の close が始めた解放) があればそれを共有して完了を待つため、その成否が
+   * この close() にも伝わる (解放が失敗すれば終端へ進まず同じエラーを throw する)。
+   * ピア起点の close の解放中に呼ばれた場合も onClose は 1 回だけ通知される。
+   * await せずに close を重ねて呼んだ場合も解放は 1 回で、onStateChange の "closed" と
+   * onClose は 1 回だけ通知される (終端の遷移は冪等)。close() が解放と終端遷移を
+   * 進めている間は start() と stop() を cannot start while closing /
+   * cannot stop while closing で拒否する。
+   */
   close(): Promise<void>;
   getStats(): MediaReceiverStats;
 }

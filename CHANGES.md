@@ -263,6 +263,21 @@
   - 上限で捨てたログの vnode はキャッシュから落とす。`data` と `payload` は追加後に書き換えない前提になる (行を描画し直さないため、書き換えても表示は古いまま)
   - 1 件追加のコストは表示中の件数に比例する分が残る (1000 件で約 3 ms のうち、表示中の子の走査が大半)。表示する行を画面に入る分だけにする対応は別に行う
   - @voluntas
+- [FIX] `createMediaSubscriber` の `stop` が確保済みのリソースを解放せず、`"stopped"` から再開できないのを修正する
+  - `stop` は `close` と同じ解放 (Subscriber / デコーダ / `MediaStreamTrackGenerator` / `AudioContext` / `MediaStreamAudioDestinationNode` / session / 出力 `MediaStream`) を行い、`"stopped"` から `start()` で再開できるようにする。session は閉じて再 start で再接続し、統計は引き継ぐ
+  - `start` は `"created"` と `"stopped"` を受け付け、失敗時は確保済みを解放して遷移前の state に戻す (再試行できる)。解放が先行した場合も終端 (`"closed"`) でなければ遷移前の state に戻し、開始の途中で死んだ `"subscribing"` を残さない (ピア起点の close は解放のあとに `"closed"` にするため上書きされない)。終端 (`"closed"`) を跨いだ `start` は解放の検査でも中止し、`"active"` に戻さない。巻き戻しの遷移で利用者の `onStateChange` が throw しても、元のエラーを throw し `onError` を通知する (state は代入済みで遷移前に戻っており、通知の失敗で元の失敗を隠さない)
+  - `"subscribing"` (開始の途中) の `stop()` は `cannot stop in state` で拒否する。`start()` は購読が確立するまで返らないため、この間の `stop()` は解放も要求の記録も行わず、開始を取り消すには `close()` を使う
+  - session の close 通知を世代番号で判定し、解放のあとに届く旧 session の通知で state と `onClose` が変わるのを修正する。ピア起点の close 通知では解放してから `"closed"` と `onClose` を通知し、解放されないまま `"closed"` に固定される経路を無くす
+  - 接続の完了が解放に先行した場合は、接続で受け取った session をその場で閉じて `start` を中止する (session を採用すると、state は既に `"stopped"` / `"closed"` で `close()` も早期 return するため閉じる経路が残らない)。購読 / カタログ通知 / リソース作成も行わない
+  - `close()` が解放と終端遷移を進めている間は `start()` / `stop()` を `cannot start while closing` / `cannot stop while closing` で拒否する (解放中は state が `"active"` のままで、state だけでは重なりを判定できない)
+  - 解放は 1 つの Promise を共有し、`stop()` / `close()` / ピア起点の close 通知が相乗りした場合も成否がすべての呼び出し元に伝わる。相乗りした側が自分で解放をやり直すと、参照は切り離し済みのため「破棄するものが無い成功」になり、進行中の失敗を検知できない
+  - ピア起点の close の解放中に `stop()` / `close()` が重なった場合は進行中の解放を共有して完了を待ち、state と `onClose` は利用者起点の経路が決める (あとから解放を終えたピア起点の経路は state も `onClose` も動かさない。`stop()` のあとに state が `"closed"` に化けるのと、`onClose` の二重通知を防ぐ)
+  - `stop()` の終端遷移は state が `"closed"` なら行わない。解放をまたいで `stop()` と `close()` が重なっても `"closed"` が残り、次の `close()` は早期 return するため `onClose` は 1 回だけになる。解放が成功していれば、利用者の `onStateChange` が throw しても `stop()` は失敗しない (state は代入済みで `"stopped"` になっており、解放も完了しているため)
+  - `close()` は進行中の解放 (`stop()` やピア起点の close が始めた解放) を共有して完了を待ち、その成否が `close()` の結果になる。解放が失敗すれば `"closed"` へ進まず同じエラーを throw する。await せず重ねて呼んでも解放は 1 回で、`onStateChange` の `"closed"` と `onClose` は 1 回だけ通知される (単発性を呼び出し回数ではなく解放の実行回数に結び付ける)
+  - 解放の段階失敗では state と `onClose` を変えず最初の失敗を throw する。破棄の前に参照を切り離すため失敗した段階はやり直されず、呼び直しが進めるのは失敗した段階より後の解放と終端遷移である。ピア起点の通知経路の失敗は `onError` で通知し、`close()` で回収する (この通知が throw してもピア起点の経路は reject せず、`onError` を二重に呼ばない)
+  - 終端遷移は 1 回だけ行う (すでに `"closed"` なら何もしない)。解放を共有する複数の経路 (ピア起点の close 通知など) が終端へ進んでも `onClose` と `onStateChange` の `"closed"` は 2 回通知しない
+  - 終端遷移で利用者の `onStateChange` が throw しても `onClose` を通知する (state を代入してから `onStateChange` を呼ぶため `"closed"` は固定され、`close()` の早期 return で通知の回収経路が消えるのを防ぐ)
+  - @voluntas
 - [FIX] MSF Catalog の `__proto__` で戻り値のプロトタイプが差し替わるのを修正する
   - 未知フィールドの保持・再出力・変数置換で動的キーへ代入していた箇所を `setOwnField` に寄せ、`__proto__` だけ own data property として定義する。細工された Catalog で `[[Prototype]]` が差し替わると、継承経由で本来無いプロパティが見えたり、null プロトタイプにされた場合は `Object.prototype` のメソッド呼び出しが失敗する
   - decode 後の Catalog は own `__proto__` を持ち得るため、利用者側で複製するときは `Object.assign` ではなく spread か `structuredClone` を使う

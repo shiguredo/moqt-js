@@ -11,7 +11,7 @@
  *   間なら目標の時刻そのもので鳴らす。外側の目標はさらに外側でも捨てる (単調)
  * - 目標を守るときは、窓の中かつ前の音の終わりより後ろの音を捨てない (捨てが連鎖しない)
  * - 時計の対応付けは、不感帯 (30 ms) 未満の差では動かず、1 回の変更は上限 (80 ms) まで。
- *   対応からの換算は往復する
+ *   対応からの換算は往復し、reset の直後の update は前の対応に依存せず観測値そのものを採る
  *
  * 個々の規則は audioPlayout.test.ts の単体テストが固定する。
  */
@@ -266,6 +266,53 @@ test("AudioClockBridge: 対応から換算した値は元の軸に戻る", () =>
         // contextTime * 1000 - performanceTime なので performanceTime と同じ桁になりうる
         const offsetMs = Math.abs(valueOf(bridge.currentOffsetMs));
         assert.closeTo(roundTripped, presentationMs, Math.max(1, presentationMs, offsetMs) * 1e-9);
+      },
+    ),
+  );
+});
+
+test("AudioClockBridge: reset 直後の update は前の対応に依存せず観測値を採る", () => {
+  fc.assert(
+    fc.property(
+      fc.array(clockUpdateArbitrary, { minLength: 1, maxLength: 100 }),
+      clockUpdateArbitrary,
+      (updates, last) => {
+        const bridge = new AudioClockBridge();
+        // reset の前に好きなだけ対応を動かす (不感帯の据え置きと上限の頭打ちを含む)
+        for (const update of updates) {
+          bridge.update(
+            update.useMapping
+              ? {
+                  contextTime: update.contextTimeSeconds,
+                  performanceTime: update.performanceTimeMs,
+                }
+              : null,
+            update.contextTimeSeconds,
+            update.performanceTimeMs,
+          );
+        }
+
+        bridge.reset();
+        // 対応が無くなる (次の update は前の値との比較をしない)
+        assert.isNull(bridge.currentOffsetMs);
+
+        const mapping = last.useMapping
+          ? { contextTime: last.contextTimeSeconds, performanceTime: last.performanceTimeMs }
+          : null;
+        bridge.update(mapping, last.contextTimeSeconds, last.performanceTimeMs);
+
+        // 前の対応との差ではなく、観測値そのものを採る (据え置きも頭打ちも無い)
+        const observedMs =
+          mapping === null
+            ? last.contextTimeSeconds * 1_000 - last.performanceTimeMs
+            : mapping.contextTime * 1_000 - mapping.performanceTime;
+        assert.closeTo(
+          valueOf(bridge.currentOffsetMs),
+          observedMs,
+          Math.max(1, Math.abs(observedMs)) * 1e-9,
+        );
+        // 代用の印も、最後に渡した対応だけで決まる
+        assert.equal(bridge.usingFallback, !last.useMapping);
       },
     ),
   );

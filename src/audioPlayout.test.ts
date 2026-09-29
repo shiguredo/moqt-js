@@ -529,3 +529,27 @@ test("AudioClockBridge: 1 回の変更は上限までにする", () => {
   bridge.update({ contextTime: behindSeconds, performanceTime: 5_000 }, behindSeconds, 5_000);
   assert.closeTo(valueOf(bridge.currentOffsetMs), 95_000, EPSILON);
 });
+
+// AudioClockBridge: reset で対応と代用の印を消し、次の予約で取り直す (影響は reset の
+// JSDoc を参照)
+test("AudioClockBridge: reset で対応と代用の印を消す", () => {
+  const bridge = new AudioClockBridge();
+  // 代用 (currentTime と performance.now の差) で対応を作る
+  bridge.update(null, 12.5, 4_000);
+  assert.isTrue(bridge.usingFallback);
+  assert.isNotNull(bridge.currentOffsetMs);
+
+  bridge.reset();
+
+  // 対応が無くなり、換算もできなくなること
+  assert.isNull(bridge.currentOffsetMs);
+  assert.isFalse(bridge.usingFallback);
+  assert.isNull(bridge.toAudioSeconds(5_000));
+  assert.isNull(bridge.toPerformanceMs(12.5));
+
+  // 次の予約で取り直すこと (古い対応との差の補正を待たない)
+  bridge.update({ contextTime: 500, performanceTime: 400_000 }, 500, 400_000);
+  assert.isFalse(bridge.usingFallback);
+  assert.closeTo(valueOf(bridge.currentOffsetMs), 100_000, EPSILON);
+  assert.closeTo(valueOf(bridge.toAudioSeconds(401_000)), 501, EPSILON);
+});
