@@ -275,6 +275,13 @@
   - 上限で捨てたログの vnode はキャッシュから落とす。`data` と `payload` は追加後に書き換えない前提になる (行を描画し直さないため、書き換えても表示は古いまま)
   - 1 件追加のコストは表示中の件数に比例する分が残る (1000 件で約 3 ms のうち、表示中の子の走査が大半)。表示する行を画面に入る分だけにする対応は別に行う
   - @voluntas
+- [FIX] 高レベル API が送信と再構成の失敗を処理せず unhandled rejection になるのを修正する
+  - `createMediaPublisher` の音声 / 映像の送信 2 箇所が、`Publisher.sendObject` の返値の reject を回収する。reject は Publisher 側が通知してから返す契約であるため、呼び出し側は通知せず、1 件の失敗で 2 回通知にならないようにする。委譲先が同期 throw する場合は通知を伴わないため `onError` へ 1 回流す
+  - `createMediaSubscriber` の自動再生ポリシー対応の `AudioContext.resume()` の失敗を `onError` へ 1 回流す
+  - `createMediaSubscriber` の `reconfigureAudioDecoder` / `reconfigureVideoDecoder` を reject しない契約にし、codec / channels の解決が同期 throw した場合も含めて `onError` へ 1 回流す (呼び出し側は `void` で呼ぶため、reject を残すと未処理の rejection になる)
+  - `Publisher.sendObject` の JSDoc に、事前検証が自分で通知してから reject することと、closed では同期 throw することを明記する。`sendDatagram` の JSDoc の「closed 後は検証前に no-op で返す」も実装 (同期 throw) に合わせる
+  - `createMediaSubscriber` の映像デコーダーの error コールバックは、`onError` が throw しても復帰 (復号順の初期化と `reset()`) を止めない。`reconfigure*` と `resume()` も通知の throw を吸収し、未処理の rejection を残さない
+  - @voluntas
 - [FIX] moqt-devtools で、base64url で発行された c4m を取り込めないのを修正する
   - URL の c4m を標準 Base64 として `atob` で復号していたため、base64url の `-` と `_` を含むトークンが無視されていた。標準 Base64 と base64url の両方を受け付け、Token Type 0x01 (CAT) として送る生バイト列も同じ規則で復号する
   - @voluntas

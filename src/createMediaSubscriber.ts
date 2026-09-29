@@ -1426,9 +1426,18 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       // AudioContext を作り直したため、再生の基準もすべて作り直す (時計の対応は AudioClockBridge.reset の JSDoc を参照)
       this.playbackTimeline.reset();
       this.audioClockBridge.reset();
-      // ブラウザの自動再生ポリシー対応
+      // ブラウザの自動再生ポリシー対応。resume() の失敗は他に通知先が無く、
+      // 放置すると未処理の rejection になるため onError へ 1 回流す。
+      // 通知の失敗でもこの経路を reject させない (返値の Promise を捨てるため、
+      // reject を残すと未処理の rejection になる)
       if (this.audioContext.state === "suspended") {
-        void this.audioContext.resume();
+        void this.audioContext.resume().catch((error: unknown) => {
+          try {
+            this.callbacks.onError?.(error instanceof Error ? error : new Error(String(error)));
+          } catch {
+            // 通知の失敗を伝える経路がこれ以上無い
+          }
+        });
       }
       this.audioDestination = this.audioContext.createMediaStreamDestination();
       const audioTrack = this.audioDestination.stream.getAudioTracks()[0];
@@ -1490,20 +1499,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     if (this.videoTrackInfo) {
       this.videoDecoder = new VideoDecoderWrapper(useWorker, {
         output: (data) => this.handleVideoDecodedData(data),
-        error: (error) => {
-          this.callbacks.onError?.(error);
-          // エラー後にデコーダーをリセットする。リセットした decoder はキーフレームから
-          // 始めるため、復号順の判定も初期化する
-          this.videoDecodeOrder.reset();
-          // reset() は例外を投げないため reject の伝搬は無い。再初期化できない場合
-          // (予算切れ / lastConfig 無し / 非対応 codec / 構成の失敗) は false を返し、
-          // Worker と VideoDecoder は reset() の中で破棄済みで configured も false に
-          // なっている。以降の decode() は未構成の警告を 1 回だけ出して何もしないため、
-          // ここで再試行や再通知をすると恒久エラーのループに戻る。打ち切りは reset() の
-          // 中で完結するので結果は見ない (後発の configure() に追い越された場合も
-          // reset() は何もせず false を返し、その configure() が構成を続ける)
-          void this.videoDecoder?.reset();
-        },
+        error: (error) => this.handleVideoDecoderError(error),
       });
 
       // Catalog または options から codec を取得
@@ -1834,30 +1830,42 @@ export class MediaSubscriberImpl implements MediaSubscriber {
    *
    * draft-ietf-moq-loc-04 §2.3.3.1: description が変わったら新しい設定で構成し直す。
    * codec / sampleRate / channels はカタログの値を引き続き使う (config のみ更新する)。
+   *
+   * reject しない契約とする。codec / channels の解決は同期 throw し得るため、同期 throw
+   * し得る解決処理を try の外に残さず、configure の失敗と同じく失敗を onError へ 1 回流す。
+   * 呼び出し側は `void` で呼ぶため、関数の外へ reject を残すと未処理の rejection になる。
+   * onError が throw した場合も通知の失敗を伝える経路が他に無いため握り潰し、この関数を
+   * reject させない。
    */
   private async reconfigureAudioDecoder(description: Uint8Array): Promise<void> {
-    if (!this.audioDecoder || !this.audioTrackInfo) return;
-
-    let audioCodec: AudioCodecType;
-    if (this.options.audio?.codec) {
-      audioCodec = this.options.audio.codec;
-    } else if (this.audioTrackInfo.codec) {
-      audioCodec = parseAudioCodec(this.audioTrackInfo.codec);
-    } else {
-      return;
-    }
-
-    const sampleRate = this.audioTrackInfo.samplerate ?? DEFAULT_AUDIO_SAMPLE_RATE;
-    const channels = resolveAudioChannelCount(this.audioTrackInfo.channelConfig);
-
     try {
+      if (!this.audioDecoder || !this.audioTrackInfo) return;
+
+      let audioCodec: AudioCodecType;
+      if (this.options.audio?.codec) {
+        audioCodec = this.options.audio.codec;
+      } else if (this.audioTrackInfo.codec) {
+        audioCodec = parseAudioCodec(this.audioTrackInfo.codec);
+      } else {
+        return;
+      }
+
+      const sampleRate = this.audioTrackInfo.samplerate ?? DEFAULT_AUDIO_SAMPLE_RATE;
+      const channels = resolveAudioChannelCount(this.audioTrackInfo.channelConfig);
+
       await this.audioDecoder.configure(audioCodec, sampleRate, channels, description);
       // 成功して初めて「適用済み」とする。失敗時は未適用のまま残し、
       // 同じ config を持つ後続 Object で再試行できるようにする。
       this.lastAppliedAudioConfig = description;
       this.audioDecoderConfigured = true;
     } catch (error) {
-      this.callbacks.onError?.(error instanceof Error ? error : new Error(String(error)));
+      // 通知の失敗でこの経路を reject させない (呼び出し側は `void` で呼ぶため、
+      // reject を残すと未処理の rejection になる)
+      try {
+        this.callbacks.onError?.(error instanceof Error ? error : new Error(String(error)));
+      } catch {
+        // 通知の失敗を伝える経路がこれ以上無い
+      }
     }
   }
 
@@ -1866,23 +1874,29 @@ export class MediaSubscriberImpl implements MediaSubscriber {
    *
    * draft-ietf-moq-loc-04 §2.3.2.1: description が変わったら新しい設定で構成し直す。
    * codec / 解像度はカタログの値を引き続き使う (config のみ更新する)。
+   *
+   * reject しない契約とする。codec の解決は同期 throw し得るため、同期 throw し得る
+   * 解決処理を try の外に残さず、configure の失敗と同じく失敗を onError へ 1 回流す。
+   * 呼び出し側は `void` で呼ぶため、関数の外へ reject を残すと未処理の rejection になる。
+   * onError が throw した場合も通知の失敗を伝える経路が他に無いため握り潰し、この関数を
+   * reject させない。
    */
   private async reconfigureVideoDecoder(description: Uint8Array): Promise<void> {
-    if (!this.videoDecoder || !this.videoTrackInfo) return;
-
-    let videoCodec: VideoCodecType;
-    if (this.options.video?.codec) {
-      videoCodec = this.options.video.codec;
-    } else if (this.videoTrackInfo.codec) {
-      videoCodec = parseVideoCodec(this.videoTrackInfo.codec);
-    } else {
-      return;
-    }
-
-    const width = this.videoTrackInfo.width ?? 640;
-    const height = this.videoTrackInfo.height ?? 480;
-
     try {
+      if (!this.videoDecoder || !this.videoTrackInfo) return;
+
+      let videoCodec: VideoCodecType;
+      if (this.options.video?.codec) {
+        videoCodec = this.options.video.codec;
+      } else if (this.videoTrackInfo.codec) {
+        videoCodec = parseVideoCodec(this.videoTrackInfo.codec);
+      } else {
+        return;
+      }
+
+      const width = this.videoTrackInfo.width ?? 640;
+      const height = this.videoTrackInfo.height ?? 480;
+
       await this.videoDecoder.configure(videoCodec, width, height, description);
       // 構成し直した decoder はキーフレームから始める
       this.videoDecodeOrder.reset();
@@ -1891,7 +1905,13 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       this.lastAppliedVideoConfig = description;
       this.videoDecoderConfigured = true;
     } catch (error) {
-      this.callbacks.onError?.(error instanceof Error ? error : new Error(String(error)));
+      // 通知の失敗でこの経路を reject させない (呼び出し側は `void` で呼ぶため、
+      // reject を残すと未処理の rejection になる)
+      try {
+        this.callbacks.onError?.(error instanceof Error ? error : new Error(String(error)));
+      } catch {
+        // 通知の失敗を伝える経路がこれ以上無い
+      }
     }
   }
 
@@ -2144,6 +2164,29 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       dropped.close();
     }
     this.scheduleVideoFrameDrain();
+  }
+
+  /**
+   * 映像デコーダーのエラーを受けて復帰を試みる
+   *
+   * 通知は 1 回だけ行い、通知の失敗で復帰を止めない。通知したあとデコーダーを
+   * リセットし、リセットした decoder はキーフレームから始めるため復号順の判定も
+   * 初期化する。reset() は例外を投げない Promise<boolean> を返し、再初期化できない
+   * 場合の打ち切り (Worker と VideoDecoder の破棄、以降の decode() の抑止) まで
+   * その中で完結するため、ここでは戻り値を見ない (契約は VideoDecoderWrapper.reset の
+   * JSDoc を参照)。
+   */
+  private handleVideoDecoderError(error: Error): void {
+    // 通知の失敗で復帰 (復号順の初期化と reset()) を止めない。通知の失敗を
+    // 伝える経路が他に無いため握り潰す
+    try {
+      this.callbacks.onError?.(error);
+    } catch {
+      // 通知の失敗を伝える経路がこれ以上無い
+    }
+    this.videoDecodeOrder.reset();
+    // catch は置かない。reject しない契約であり、戻り値も見ない
+    void this.videoDecoder?.reset();
   }
 
   /**

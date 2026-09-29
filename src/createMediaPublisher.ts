@@ -6,7 +6,7 @@
 
 import { connectMediaSession } from "./createMedia/connect";
 import type { PublishOptions, Session } from "./session";
-import type { Publisher } from "./publisher";
+import type { Publisher, SendObjectParams } from "./publisher";
 import * as LOC from "./loc";
 import { WallClockMapper } from "./mediaClock";
 import {
@@ -1033,8 +1033,8 @@ export class MediaPublisherImpl implements MediaPublisher {
     this.audioStats.bytesSent += payload.length + properties.length;
     this.audioStats.currentGroupId = this.audioGroupId;
 
-    // 音声フレームは fire-and-forget。落としても良いし、後続のオブジェクトで上書きされる
-    void this.audioPublisher.sendObject({
+    // 音声フレームは fire-and-forget (後続のオブジェクトで上書きされるため落としても良い)
+    this.sendFrameFireAndForget(this.audioPublisher, {
       groupId: audioAllocation.groupId,
       objectId: audioAllocation.objectId,
       payload,
@@ -1119,8 +1119,8 @@ export class MediaPublisherImpl implements MediaPublisher {
     this.videoStats.bytesSent += payload.length + properties.length;
     this.videoStats.currentGroupId = this.videoGroupId;
 
-    // 映像フレームは fire-and-forget。落としても良いし、後続のオブジェクトで上書きされる
-    void this.videoPublisher.sendObject({
+    // 映像フレームは fire-and-forget (後続のオブジェクトで上書きされるため落としても良い)
+    this.sendFrameFireAndForget(this.videoPublisher, {
       groupId: videoAllocation.groupId,
       objectId: videoAllocation.objectId,
       payload,
@@ -1130,6 +1130,25 @@ export class MediaPublisherImpl implements MediaPublisher {
     // 送信を試みた時点で「Group を開始済み」にする
     // (次に届くキーフレームから新しい Group を開始する)
     this.videoGroupStarted = videoAllocation.state.started;
+  }
+
+  /**
+   * フレームを fire-and-forget で送る
+   *
+   * 落としても良いし、後続の Object で上書きされる。事前検証の違反は Publisher 側が
+   * error 通知してから返値を reject するため、呼び出し側は通知せず reject を回収する
+   * だけにする (通知すると 1 件の失敗で 2 回通知になる)。
+   * 同期 throw は通知を伴わないため 1 回だけ通知する。closed の throw は両ハンドラの
+   * 先頭の state ガードで到達しないが、委譲先が同期 throw する場合の防御である。
+   */
+  private sendFrameFireAndForget(publisher: Publisher, params: SendObjectParams): void {
+    try {
+      void publisher.sendObject(params).catch(() => {
+        // 通知は Publisher 側の責務である (ここで通知すると二重通知になる)
+      });
+    } catch (error) {
+      this.callbacks.onError?.(error instanceof Error ? error : new Error(String(error)));
+    }
   }
 
   /**

@@ -46,7 +46,11 @@ import type { SubgroupStreamEnd } from "./session";
 import { GROUP_SWITCH_HOLD_MS } from "./groupSwitchGate";
 import type { VideoDecodeOrder } from "./videoDecodeOrder";
 import type { AuthorizationToken, Location } from "./message";
-import { useValueToken } from "./testSupport/helpers";
+import {
+  useValueToken,
+  waitForUnhandledRejectionDetection,
+  withUnhandledRejectionWatch,
+} from "./testSupport/helpers";
 import {
   AUDIO_CLOCK_DEADBAND_MS,
   AUDIO_PLAYOUT_DELAY_SECONDS,
@@ -676,6 +680,213 @@ test("applyInitialAudioConfig: Track Property の AUDIO_CONFIG が初期 configu
 });
 
 /**
+ * 再構成は reject しない契約であり、同期 throw し得る codec / channels の解決も
+ * onError に 1 回届ける。解決できない codec は setupDecoders が先に検査するため現行の
+ * 値では到達しないが、`void` 呼び出し側に未処理の rejection を残さないための防御である。
+ * cast で解決できない codec を注入して駆動する。
+ */
+test("handleAudioObject: 再構成の codec 解決が throw しても onError に 1 回届く", async () => {
+  await withUnhandledRejectionWatch(async (unhandled) => {
+    const errors: Error[] = [];
+    const subscriber = new MediaSubscriberImpl(
+      "moqt://example.com/live",
+      { namespace: ["live"], audio: {} },
+      {
+        onError: (error) => {
+          errors.push(error);
+        },
+      },
+    );
+    const control = subscriber as unknown as SubscriberInitialConfigControl;
+    let configureCount = 0;
+    control.audioDecoder = {
+      configure: async () => {
+        configureCount++;
+      },
+      decode: () => {},
+    };
+    control.audioDecoderConfigured = true;
+    // 解決できない codec を注入する (parseAudioCodec が同期 throw する)
+    control.audioTrackInfo = { name: "audio", packaging: "loc", isLive: true, codec: "bogus" };
+
+    // Object Property の AUDIO_CONFIG が直前と違うため再構成の分岐に入る
+    control.handleAudioObject({
+      groupId: 1n,
+      objectId: 0n,
+      status: 0,
+      payload: new Uint8Array([0xaa]),
+      properties: LOC.encodeAudioProperties({
+        timestamp: 0n,
+        config: new Uint8Array([1, 2, 3]),
+      }),
+    });
+
+    await waitForUnhandledRejectionDetection();
+
+    // 同期 throw は onError に 1 回だけ届き、configure へは進まない
+    assert.equal(errors.length, 1);
+    assert.isTrue((errors[0]?.message ?? "").includes("unsupported audio codec"));
+    assert.equal(configureCount, 0);
+    assert.equal(unhandled.length, 0);
+  });
+});
+
+/**
+ * 再構成の失敗通知 (onError) が throw しても、再構成の経路は reject しない。
+ * 通知の失敗を伝える経路が他に無いため握り潰す。呼び出し側 (handleAudioObject) は
+ * `void` で呼ぶため、reject を残すと未処理の rejection になる。
+ */
+test("handleAudioObject: 再構成の onError が throw しても未処理の rejection にならない", async () => {
+  await withUnhandledRejectionWatch(async (unhandled) => {
+    const notificationFailure = new Error("onError failure");
+    const notified: Error[] = [];
+    const subscriber = new MediaSubscriberImpl(
+      "moqt://example.com/live",
+      { namespace: ["live"], audio: {} },
+      {
+        onError: (error) => {
+          notified.push(error);
+          throw notificationFailure;
+        },
+      },
+    );
+    const control = subscriber as unknown as SubscriberInitialConfigControl;
+    let configureCount = 0;
+    control.audioDecoder = {
+      configure: async () => {
+        configureCount++;
+      },
+      decode: () => {},
+    };
+    control.audioDecoderConfigured = true;
+    // 解決できない codec を注入する (parseAudioCodec が同期 throw する)
+    control.audioTrackInfo = { name: "audio", packaging: "loc", isLive: true, codec: "bogus" };
+
+    // Object Property の AUDIO_CONFIG が直前と違うため再構成の分岐に入る
+    control.handleAudioObject({
+      groupId: 1n,
+      objectId: 0n,
+      status: 0,
+      payload: new Uint8Array([0xaa]),
+      properties: LOC.encodeAudioProperties({
+        timestamp: 0n,
+        config: new Uint8Array([1, 2, 3]),
+      }),
+    });
+
+    await waitForUnhandledRejectionDetection();
+
+    // 通知は codec の解決失敗の 1 回だけで、通知の失敗が未処理の rejection として残らないこと
+    assert.equal(notified.length, 1);
+    assert.isTrue((notified[0]?.message ?? "").includes("unsupported audio codec"));
+    assert.equal(configureCount, 0);
+    assert.equal(unhandled.length, 0);
+  });
+});
+
+/**
+ * 映像側の再構成も同じ契約であり、同期 throw し得る codec の解決を onError に 1 回届ける。
+ * cast で解決できない codec を注入して駆動する。
+ */
+test("handleVideoObject: 再構成の codec 解決が throw しても onError に 1 回届く", async () => {
+  await withUnhandledRejectionWatch(async (unhandled) => {
+    const errors: Error[] = [];
+    const subscriber = new MediaSubscriberImpl(
+      "moqt://example.com/live",
+      { namespace: ["live"], video: {} },
+      {
+        onError: (error) => {
+          errors.push(error);
+        },
+      },
+    );
+    const control = subscriber as unknown as SubscriberInitialConfigControl;
+    let configureCount = 0;
+    control.videoDecoder = {
+      configure: async () => {
+        configureCount++;
+      },
+      decode: () => {},
+    };
+    control.videoDecoderConfigured = true;
+    // 解決できない codec を注入する (parseVideoCodec が同期 throw する)
+    control.videoTrackInfo = { name: "video", packaging: "loc", isLive: true, codec: "bogus" };
+
+    // Object Property の VIDEO_CONFIG が直前と違うため再構成の分岐に入る
+    control.handleVideoObject({
+      groupId: 1n,
+      objectId: 0n,
+      status: 0,
+      payload: new Uint8Array([0xaa]),
+      properties: LOC.encodeVideoProperties({
+        timestamp: 0n,
+        config: new Uint8Array([1, 2, 3]),
+      }),
+    });
+
+    await waitForUnhandledRejectionDetection();
+
+    assert.equal(errors.length, 1);
+    assert.isTrue((errors[0]?.message ?? "").includes("unsupported video codec"));
+    assert.equal(configureCount, 0);
+    assert.equal(unhandled.length, 0);
+  });
+});
+
+/**
+ * 映像側の再構成も、失敗通知 (onError) が throw しても reject しない。
+ * 呼び出し側 (handleVideoObject) は `void` で呼ぶため、reject を残すと
+ * 未処理の rejection になる。
+ */
+test("handleVideoObject: 再構成の onError が throw しても未処理の rejection にならない", async () => {
+  await withUnhandledRejectionWatch(async (unhandled) => {
+    const notificationFailure = new Error("onError failure");
+    const notified: Error[] = [];
+    const subscriber = new MediaSubscriberImpl(
+      "moqt://example.com/live",
+      { namespace: ["live"], video: {} },
+      {
+        onError: (error) => {
+          notified.push(error);
+          throw notificationFailure;
+        },
+      },
+    );
+    const control = subscriber as unknown as SubscriberInitialConfigControl;
+    let configureCount = 0;
+    control.videoDecoder = {
+      configure: async () => {
+        configureCount++;
+      },
+      decode: () => {},
+    };
+    control.videoDecoderConfigured = true;
+    // 解決できない codec を注入する (parseVideoCodec が同期 throw する)
+    control.videoTrackInfo = { name: "video", packaging: "loc", isLive: true, codec: "bogus" };
+
+    // Object Property の VIDEO_CONFIG が直前と違うため再構成の分岐に入る
+    control.handleVideoObject({
+      groupId: 1n,
+      objectId: 0n,
+      status: 0,
+      payload: new Uint8Array([0xaa]),
+      properties: LOC.encodeVideoProperties({
+        timestamp: 0n,
+        config: new Uint8Array([1, 2, 3]),
+      }),
+    });
+
+    await waitForUnhandledRejectionDetection();
+
+    // 通知は codec の解決失敗の 1 回だけで、通知の失敗が未処理の rejection として残らないこと
+    assert.equal(notified.length, 1);
+    assert.isTrue((notified[0]?.message ?? "").includes("unsupported video codec"));
+    assert.equal(configureCount, 0);
+    assert.equal(unhandled.length, 0);
+  });
+});
+
+/**
  * 映像 Object の判定・統計・デコードの検証用の制御口
  *
  * handleVideoObject を直接駆動し、キーフレーム判定が VideoDecoderWrapper と
@@ -934,6 +1145,151 @@ test("handleVideoDecodedData: 書き込み成功時は VideoFrame を閉じな�
 
   assert.isFalse(isClosed());
   assert.equal(errors.length, 0);
+});
+
+/**
+ * 映像デコーダーのエラー通知の検証用の制御口
+ *
+ * error コールバックは setupDecoders が VideoDecoderWrapper に組むため、その中身を
+ * private 経由で直接駆動する。decoder は configure にブラウザの VideoDecoder を要する
+ * ため、reset() だけを持つ最小オブジェクトを注入する (モジュール置換は行わない)。
+ */
+interface SubscriberVideoErrorControl {
+  videoDecoder: { reset(): Promise<boolean> } | null;
+  videoDecodeOrder: VideoDecodeOrder;
+  handleVideoDecoderError(error: Error): void;
+}
+
+/**
+ * video decoder の error コールバックは reset() の結果を見ない。
+ * reset() は例外を投げない Promise<boolean> を返し、false のときは Worker と
+ * VideoDecoder の破棄まで reset() の中で完結するため、呼び出し側は打ち切りも再通知も
+ * しない (再通知すると恒久エラーで通知が反復する)。エラー 1 件につき通知 1 回と、
+ * false を返す reset() で通知が増えないことを固定する。
+ */
+test("handleVideoDecoderError: reset() が false でも onError は増えない", async () => {
+  await withUnhandledRejectionWatch(async (unhandled) => {
+    const errors: Error[] = [];
+    const subscriber = new MediaSubscriberImpl(
+      "moqt://example.com/live",
+      { namespace: ["live"], video: {} },
+      {
+        onError: (error) => {
+          errors.push(error);
+        },
+      },
+    );
+    const control = subscriber as unknown as SubscriberVideoErrorControl;
+    let resetCount = 0;
+    control.videoDecoder = {
+      reset: async () => {
+        resetCount++;
+        // 再初期化できない場合は false を返し、打ち切りは reset() の中で完結する
+        return false;
+      },
+    };
+    // 復号順の判定を進めておく (エラーで初期化されることを観測できる状態にする)
+    assert.isTrue(
+      control.videoDecodeOrder.admit({
+        groupId: 5n,
+        objectId: 0n,
+        isKeyFrame: true,
+        priorObjectIdGap: 0n,
+      }).decode,
+    );
+    assert.isFalse(
+      control.videoDecodeOrder.admit({
+        groupId: 1n,
+        objectId: 0n,
+        isKeyFrame: true,
+        priorObjectIdGap: 0n,
+      }).decode,
+    );
+    const failure = new Error("decoder failed");
+
+    control.handleVideoDecoderError(failure);
+
+    // 復帰は 1 回だけ試し、戻り値 (false) は見ない
+    assert.equal(resetCount, 1);
+    assert.equal(errors.length, 1);
+    assert.strictEqual(errors[0], failure);
+    // 復号順の判定も初期化され、古い Group でも次のキーフレームから復号できる
+    assert.isTrue(
+      control.videoDecodeOrder.admit({
+        groupId: 1n,
+        objectId: 0n,
+        isKeyFrame: true,
+        priorObjectIdGap: 0n,
+      }).decode,
+    );
+
+    await waitForUnhandledRejectionDetection();
+
+    // false の reset() で通知は増えず、未処理の rejection も残らない
+    assert.equal(errors.length, 1);
+    assert.equal(unhandled.length, 0);
+  });
+});
+
+/**
+ * 失敗通知 (onError) が throw しても、通知の失敗で復帰 (reset() と復号順の初期化) を
+ * 止めない。通知はエラー 1 件につき 1 回であり、通知の失敗を伝える経路が他に無いため
+ * 握り潰す。止めるとデコーダーが復帰しないまま以降の Object を復号できなくなる。
+ */
+test("handleVideoDecoderError: onError が throw しても reset() と復号順の初期化を行う", () => {
+  const notificationFailure = new Error("onError failure");
+  const notified: Error[] = [];
+  const subscriber = new MediaSubscriberImpl(
+    "moqt://example.com/live",
+    { namespace: ["live"], video: {} },
+    {
+      onError: (error) => {
+        notified.push(error);
+        throw notificationFailure;
+      },
+    },
+  );
+  const control = subscriber as unknown as SubscriberVideoErrorControl;
+  let resetCount = 0;
+  control.videoDecoder = {
+    reset: async () => {
+      resetCount++;
+      return false;
+    },
+  };
+  // 復号順の判定を進めておく (エラーで初期化されることを観測できる状態にする)
+  assert.isTrue(
+    control.videoDecodeOrder.admit({
+      groupId: 5n,
+      objectId: 0n,
+      isKeyFrame: true,
+      priorObjectIdGap: 0n,
+    }).decode,
+  );
+  assert.isFalse(
+    control.videoDecodeOrder.admit({
+      groupId: 1n,
+      objectId: 0n,
+      isKeyFrame: true,
+      priorObjectIdGap: 0n,
+    }).decode,
+  );
+
+  // 通知が throw しても例外は漏れず、復帰と復号順の初期化は続く
+  const failure = new Error("decoder failed");
+  control.handleVideoDecoderError(failure);
+
+  assert.equal(notified.length, 1);
+  assert.strictEqual(notified[0], failure);
+  assert.equal(resetCount, 1);
+  assert.isTrue(
+    control.videoDecodeOrder.admit({
+      groupId: 1n,
+      objectId: 0n,
+      isKeyFrame: true,
+      priorObjectIdGap: 0n,
+    }).decode,
+  );
 });
 
 test("handleAudioDecodedData: 音声変換失敗時に onError 通知し AudioData を閉じる", () => {
@@ -3154,6 +3510,134 @@ test("createOutputStream: AudioContext を作り直すと時計の対応を初�
   assert.isNull(control.audioClockBridge.currentOffsetMs);
   assert.isFalse(control.audioClockBridge.usingFallback);
   assert.isNull(control.audioClockBridge.toAudioSeconds(5_000));
+});
+
+/**
+ * resume() が失敗する suspended の AudioContext と MediaStream を差し替える
+ *
+ * AudioContext / MediaStream は node 環境に実物が無いブラウザ専用 API であり、
+ * createOutputStream はグローバルから作る。この 2 つだけを差し替えて (モジュール置換は
+ * 行わない) 駆動し、同期の createOutputStream の実行中に限定して元に戻す。
+ * 自動再生ポリシーで止まっている (state が "suspended") 状態だけを再現する。
+ *
+ * @param run - 差し替えた状態で createOutputStream を駆動する本体
+ * @returns resume() を呼ばれた回数 (実装がこの分岐を通った印)
+ */
+function withSuspendedAudioContext(run: () => void): { resumeCount: () => number } {
+  let resumeCount = 0;
+  const target = globalThis as unknown as { AudioContext: unknown; MediaStream: unknown };
+  const originalAudioContext = target.AudioContext;
+  const originalMediaStream = target.MediaStream;
+  target.AudioContext = class {
+    // 自動再生ポリシーで止まっている状態
+    readonly state = "suspended";
+    resume(): Promise<void> {
+      resumeCount++;
+      return Promise.reject(new Error("resume failed"));
+    }
+    createMediaStreamDestination(): MediaStreamAudioDestinationNode {
+      return {
+        stream: { getAudioTracks: () => [] },
+      } as unknown as MediaStreamAudioDestinationNode;
+    }
+  };
+  target.MediaStream = class {
+    addTrack(): void {}
+  };
+  try {
+    run();
+  } finally {
+    target.AudioContext = originalAudioContext;
+    target.MediaStream = originalMediaStream;
+  }
+  return { resumeCount: () => resumeCount };
+}
+
+/**
+ * 自動再生ポリシー対応の `resume()` が失敗しても未処理の rejection にせず、
+ * onError へ 1 回だけ流す。resume() の失敗は他に通知先が無い。
+ */
+test("createOutputStream: suspended の resume() の失敗は onError に 1 回届く", async () => {
+  await withUnhandledRejectionWatch(async (unhandled) => {
+    const errors: Error[] = [];
+    const subscriber = new MediaSubscriberImpl(
+      "moqt://example.com/live",
+      { namespace: ["live"], audio: {} },
+      {
+        onError: (error) => {
+          errors.push(error);
+        },
+      },
+    );
+    const control = subscriber as unknown as SubscriberLifecycleControl & {
+      createOutputStream(): void;
+    };
+    // 音声の track が解決できている状態にする (AudioContext を作る分岐に入る)
+    control.audioTrackInfo = {
+      name: "audio",
+      packaging: "loc",
+      isLive: true,
+      codec: "opus",
+      samplerate: 48_000,
+    };
+
+    const { resumeCount } = withSuspendedAudioContext(() => {
+      control.createOutputStream();
+    });
+    assert.equal(resumeCount(), 1);
+
+    await waitForUnhandledRejectionDetection();
+
+    // 失敗は onError に 1 回だけ届き、未処理の rejection は残らない
+    assert.equal(errors.length, 1);
+    assert.isTrue((errors[0]?.message ?? "").includes("resume failed"));
+    assert.equal(unhandled.length, 0);
+  });
+});
+
+/**
+ * resume() の失敗通知 (onError) が throw しても未処理の rejection にしない。
+ * 通知の失敗を伝える経路が他に無いため握り潰す。resume() の返値は `void` で捨てるため、
+ * catch ハンドラの失敗を残すと未処理の rejection になる。
+ */
+test("createOutputStream: resume() の失敗通知が throw しても未処理の rejection にならない", async () => {
+  await withUnhandledRejectionWatch(async (unhandled) => {
+    const notificationFailure = new Error("onError failure");
+    const notified: Error[] = [];
+    const subscriber = new MediaSubscriberImpl(
+      "moqt://example.com/live",
+      { namespace: ["live"], audio: {} },
+      {
+        onError: (error) => {
+          notified.push(error);
+          throw notificationFailure;
+        },
+      },
+    );
+    const control = subscriber as unknown as SubscriberLifecycleControl & {
+      createOutputStream(): void;
+    };
+    // 音声の track が解決できている状態にする (AudioContext を作る分岐に入る)
+    control.audioTrackInfo = {
+      name: "audio",
+      packaging: "loc",
+      isLive: true,
+      codec: "opus",
+      samplerate: 48_000,
+    };
+
+    const { resumeCount } = withSuspendedAudioContext(() => {
+      control.createOutputStream();
+    });
+    assert.equal(resumeCount(), 1);
+
+    await waitForUnhandledRejectionDetection();
+
+    // 通知は resume() の失敗の 1 回だけで、通知の失敗が未処理の rejection として残らないこと
+    assert.equal(notified.length, 1);
+    assert.isTrue((notified[0]?.message ?? "").includes("resume failed"));
+    assert.equal(unhandled.length, 0);
+  });
 });
 
 /**

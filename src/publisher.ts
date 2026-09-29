@@ -183,6 +183,14 @@ export interface Publisher {
    * fail-fast で error 通知 + 返値の reject になる
    * (組み合わせ規則は draft-ietf-moq-transport-21 §11.1.2 / §11.1.3、
    * END_OF_TRACK 後は §11.1.2 の EOT 定義による解釈)。
+   * END_OF_GROUP を送信済みの Group への後続送信も同じ扱いになる
+   * (§11.1.2 の END_OF_GROUP の定義による解釈)。
+   *
+   * 返値が reject する経路は必ず error 通知を伴う (1 件の失敗につき通知は 1 回)。
+   * reject を受けた呼び出し側は通知し直さなくてよい。
+   *
+   * Publisher が closed の場合は検証の前に同期 throw する (sendDatagram と同じ契約。
+   * 返値は Promise だが reject ではなく throw になる)。
    *
    * 購読の Location Filter の範囲外 Object は送信せず、error 通知もなく
    * 解決済みの Promise<void> を返す (draft-ietf-moq-transport-21 §3.3.1)。
@@ -200,10 +208,10 @@ export interface Publisher {
    * draft-ietf-moq-transport-21 Section 2.2, Section 11.2
    *
    * 範囲外の Group / Object ID は error 通知 + throw する
-   * (セッションは閉じない)。closed 後は検証前に no-op で返す。
+   * (セッションは閉じない)。Publisher が closed の場合は検証の前に同期 throw する。
    * 範囲外・非整数の priority も error 通知 + throw になる。
-   * END_OF_TRACK 送信後の呼び出しも error 通知 + throw になる
-   * (§11.1.2 の EOT 定義による解釈)。
+   * END_OF_TRACK / END_OF_GROUP 送信後の呼び出しも error 通知 + throw になる
+   * (§11.1.2 の EOT / END_OF_GROUP の定義による解釈)。
    * 購読の Location Filter の範囲外 Datagram は送信せず、何もせず return する
    * (draft-ietf-moq-transport-21 §3.3.1)。
    */
@@ -599,10 +607,15 @@ export class PublisherImpl implements Publisher {
    * Catalog のように relay 到達を保証してから後続処理に進めたい場合は await する。
    * リアルタイムフレームのように落としても良い場合は `void` で破棄して構わない。
    *
-   * status / payload の組み合わせ違反と END_OF_TRACK 送信後の呼び出しは
-   * fail-fast で error 通知 + 返値の reject になる
+   * 事前検証 (guard / status) の違反は自分で error 通知してから返値の reject になる。
+   * guard 違反は END_OF_TRACK 送信後と END_OF_GROUP 送信済み Group への送信である
    * (組み合わせ規則は draft-ietf-moq-transport-21 §11.1.2 / §11.1.3、
-   * END_OF_TRACK 後は §11.1.2 の EOT 定義による解釈)。
+   * END_OF_TRACK 後と END_OF_GROUP 済み Group は §11.1.2 の各定義による解釈)。
+   * 委譲先 (onSendObject) の ID / priority 検証も自分で error 通知してから reject する。
+   * どちらの経路も reject は必ず通知を伴うため、呼び出し側は通知し直さなくてよい。
+   *
+   * Publisher が closed の場合は検証の前に同期 throw する (sendDatagram と同じ契約。
+   * 返値は Promise だが reject ではなく throw になる。この経路は通知を伴わない)。
    *
    * 購読の Location Filter の範囲外 Object は送信せず、解決済みの
    * Promise<void> を返す (§3.3.1)。あわせて、届かない Object を残したまま Subgroup を
@@ -713,9 +726,15 @@ export class PublisherImpl implements Publisher {
    * Send a datagram on this track
    * draft-ietf-moq-transport-21 Section 11.2 (Datagrams)
    *
-   * END_OF_TRACK 送信後の呼び出しは fail-fast で error 通知 + throw になる
-   * (§11.1.2 の EOT 定義による解釈)。購読の Location Filter の範囲外 Datagram は
-   * 送信しない (§3.3.1)。
+   * 事前検証 (guard) の違反は自分で error 通知してから throw になる。
+   * guard 違反は END_OF_TRACK 送信後と END_OF_GROUP 送信済み Group への送信である
+   * (§11.1.2 の EOT / END_OF_GROUP の各定義による解釈。END_OF_GROUP 済みの判定は
+   * sendObject が END_OF_GROUP を受理した Group による。Datagram 自身の
+   * endOfGroup は記録しないため、後続の送信は妨げない)。
+   * Forward State 0 の間は送信せず、通知もなく return する (§3.1)。
+   * Publisher が closed の場合は検証の前に同期 throw する (この経路は通知を伴わない)。
+   * 委譲先 (onSendDatagram) の ID / priority 検証も自分で error 通知してから throw する。
+   * 購読の Location Filter の範囲外 Datagram は送信しない (§3.3.1)。
    */
   sendDatagram(params: SendDatagramParams): void {
     const guard = this.guardSend("datagram", params.groupId);
