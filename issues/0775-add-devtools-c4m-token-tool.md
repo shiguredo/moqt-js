@@ -1,7 +1,7 @@
 # moqt-devtools に C4M トークンの生成と検証ツールを追加する
 
 - Created: 2026-09-29
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-29
 - Branch: feature/add-devtools-c4m-token-tool
 - Polished: {YYYY-MM-DD}
 
@@ -39,7 +39,14 @@ moqt-devtools は MSF URI Fragment の `c4m` を取り込んで Token Type 0x01 
 
 ## 解決方法
 
-{未着手}
+- `devtools/c4m-devtools.html` と `devtools/src/c4m-devtools/` を追加した
+  - Token: compact / COSE / Base64 包みのトークンをデコードしてヘッダ / クレーム / moqt スコープ / 有効期限を表示する。JWK または対称鍵で署名を検証し、アクション + namespace + track の認可判定を行う
+  - Keys: Web Crypto API の `generateKey` で ES256 / ES384 / ES512 / EdDSA の鍵ペアと HMAC の対称鍵を生成する。鍵はメモリ上だけで扱い、保存しない
+  - Issue token: クレームと moqt スコープを指定して compact / COSE 形式のトークンを発行する。cnf の jkt は署名鍵のサムプリントから設定できる
+- `devtools/vite.config.ts` に `c4m-devtools` の入力を追加し、`devtools/src/App.tsx` のヘッダーからリンクした
+- ライブラリに `src/c4m/jwk.ts` を追加した (JWK のデコード / エンコード、RFC 7638 のサムプリント、`CoseKey` との相互変換)
+- `devtools/src/c4m-devtools/utils/` の単体テストと `tests/e2e/c4m-devtools.spec.ts` の e2e テストで、鍵生成から発行 / デコード / 検証と認可判定を固定した
+- `CHANGES.md` に `[ADD]` を追記した
 
 ## 参照
 
