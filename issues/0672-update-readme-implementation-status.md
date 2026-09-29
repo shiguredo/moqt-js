@@ -3,7 +3,7 @@
 - Created: 2026-09-21
 - Completed: {YYYY-MM-DD}
 - Branch: feature/update-readme-implementation-status
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-09-29
 
 ## 目的
 
@@ -11,9 +11,10 @@ README の「実装状況」は draft ごとの対応を網羅する形で書か
 
 ## 現状
 
-「実装状況」に無い実装済み機能が 5 つある。いずれも `src/` に実装があることを確認した。
+「実装状況」に無い実装済み機能が 4 つある。いずれも `src/` に実装があることを確認した。
 
-- `PUBLISH_STATE_NOTIFY` (`MessageType.PUBLISH_STATE_NOTIFY`、`Publisher.notifyStateChange`、`src/publisher.ts`)
+なお `PUBLISH_STATE_NOTIFY` (`MessageType.PUBLISH_STATE_NOTIFY`、`Publisher.notifyStateChange`、`src/publisher.ts`) は既に README の Publisher 節に記載済みであるため、本 issue の対象から除外する。
+
 - `INCLUDE_PROPERTIES` パラメータ (draft-21 §9.20.22、`src/session/params.ts` の `buildIncludePropertiesParameter` が構築し、`buildSubscribeParameters` / `buildFetchParameters` / `buildSubscribeTracksParameters` / `buildTrackStatusParameters` が載せる)
 - `FILL_PARAMETERS` パラメータ (draft-21 §9.20.16、`SubscribeOptions.fill` から `src/session/params.ts` の `buildFillParameters` が構築する)
 - `TRACK_NAMESPACE_PREFIX` パラメータ (draft-21 §9.20.21、`src/message/parameter/trackNamespace.ts` の `encodeParameterTrackNamespace` が送信し、`src/message/parameter/messageParameter.ts` が受信時に §8.7 の Track Namespace として復号する)
@@ -29,7 +30,7 @@ README の「実装状況」は draft ごとの対応を網羅する形で書か
 
 ## 完了条件
 
-- README の「実装状況」に上記 5 機能と `MOQLOG` / `MOQMETRICS` が載っている
+- README の「実装状況」に上記 4 機能と `MOQLOG` / `MOQMETRICS` が載っている
 - 記載した内容が `src/` の実装と一致する
 - `pnpm exec vp check` が通る
 
