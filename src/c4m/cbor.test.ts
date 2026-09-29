@@ -95,6 +95,33 @@ test("負の整数は最小の長さでエンコードする", () => {
   assert.equal(cborAsInteger(cborInteger(-1n)), -1n);
 });
 
+test("4 バイト引数の値は 2^31 以上でも符号なしで読む", () => {
+  // JavaScript のビット演算は符号付き 32 ビットのため、2^31 以上が負にならないことを固定する
+  assert.deepEqual(decodeCbor(decodeHex("1a80000000")), cborUnsigned(2147483648n));
+  assert.deepEqual(decodeCbor(decodeHex("1affffffff")), cborUnsigned(4294967295n));
+  assert.deepEqual(decodeCbor(decodeHex("3a80000000")), cborNegative(2147483648n));
+  assert.deepEqual(decodeCbor(decodeHex("3affffffff")), cborNegative(4294967295n));
+  assert.equal(cborAsInteger(decodeCbor(decodeHex("3a80000000"))), -2147483649n);
+  // デコードした値は元のバイト列へ再エンコードできる
+  assert.equal(encodeHex(encodeCbor(decodeCbor(decodeHex("1affffffff")))), "1affffffff");
+  assert.equal(encodeHex(encodeCbor(decodeCbor(decodeHex("3affffffff")))), "3affffffff");
+});
+
+test("4 バイト引数のタグは 2^31 以上でも保持される", () => {
+  const value = decodeCbor(decodeHex("daffffffff00"));
+  assert.deepEqual(value, cborTag(4294967295n, cborUnsigned(0n)));
+  assert.equal(encodeHex(encodeCbor(value)), "daffffffff00");
+});
+
+test("4 バイト引数の長さが 2^31 以上のときは unexpectedEof になる", () => {
+  // 2^31 は Number.MAX_SAFE_INTEGER 未満のため長さの変換は成功し、本体を読むところで
+  // 入力が尽きて unexpectedEof になる
+  assertCborError(() => decodeCbor(decodeHex("5a80000000")), "unexpectedEof");
+  assertCborError(() => decodeCbor(decodeHex("7a80000000")), "unexpectedEof");
+  assertCborError(() => decodeCbor(decodeHex("9a80000000")), "unexpectedEof");
+  assertCborError(() => decodeCbor(decodeHex("ba80000000")), "unexpectedEof");
+});
+
 test("浮動小数点数は値を保つ最短の幅でエンコードする", () => {
   // 付録 A.2 / A.5 のベクタに出てくる値
   assert.deepEqual(encodeCbor(cborFloat(100)), decodeHex("f95640"));
@@ -194,6 +221,7 @@ test("重複するマップキーはデコードとエンコードの両方で�
 test("不正な入力を拒否する", () => {
   assertCborError(() => decodeCbor(new Uint8Array(0)), "unexpectedEof");
   assertCborError(() => decodeCbor(new Uint8Array([0x18])), "unexpectedEof");
+  assertCborError(() => decodeCbor(decodeHex("1a800000")), "unexpectedEof");
   assertCborError(() => decodeCbor(new Uint8Array([0x1c])), "invalidAdditionalInformation", 28);
   assertCborError(() => decodeCbor(new Uint8Array([0xf8, 0x1f])), "invalidSimpleValue", 31);
   assertCborError(() => decodeCbor(decodeHex("61ff")), "invalidUtf8");
