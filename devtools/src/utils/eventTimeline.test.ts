@@ -18,7 +18,7 @@ import {
 // 形式で、MSF に登録された型ではないことを固定する
 test("EVENT_TRACK_NAME と CHAT_EVENT_TYPE は devtools の取り決めの値になる", () => {
   assert.equal(EVENT_TRACK_NAME, "events");
-  assert.equal(CHAT_EVENT_TYPE, "com.shiguredo.moqtdevtools.chat");
+  assert.equal(CHAT_EVENT_TYPE, "app.shiguredo.moqt-devtools.chat");
 });
 
 // ============================================================================

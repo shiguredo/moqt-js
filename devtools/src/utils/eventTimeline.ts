@@ -13,7 +13,7 @@ import type { EventTimelineEntry } from "moqt-js";
 export const EVENT_TRACK_NAME = "events";
 
 /** devtools のチャットメッセージを示す eventType (逆ドメイン名, §5.2.5) */
-export const CHAT_EVENT_TYPE = "com.shiguredo.moqtdevtools.chat";
+export const CHAT_EVENT_TYPE = "app.shiguredo.moqt-devtools.chat";
 
 /**
  * event timeline の payload に載せる履歴の上限 (件)
