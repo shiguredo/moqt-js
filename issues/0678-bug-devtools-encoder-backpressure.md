@@ -19,7 +19,7 @@
 - 0650 は `src/codec/VideoEncoder.ts` の `encodeQueueSize` と `src/createMediaPublisher.ts` の閾値判定を直す計画で、未着手である。現状のライブラリ側は Worker モードで 0 を返したままである。0650 も「devtools 本体の `EncoderWrapper` / `usePublisher` の同種の欠陥は 0678 で扱う」としている
 - `devtools/src/utils/EncoderWrapper.test.ts` は configure / encode / Worker 往復を Node の vitest では実行できないと明記し、未設定時の状態機械だけを固定している。同ファイルのコメントには「Worker モードはキューを Worker 内部で管理するため常に 0 になる契約」と 0 固定の契約が書かれている
 - `tests/e2e/codec-wrappers.spec.ts` が実ブラウザで駆動するのはライブラリ側の `src/codec/VideoEncoder.ts` であり、devtools の `EncoderWrapper` を駆動する経路は無い
-- devtools の統計は `devtools/src/signals/publisher.ts` の独自 signal (`framesEncoded` / `chunksEncoded` / `encodeErrors` など) で、`devtools/src/components/PublisherPanel.tsx` と `devtools/src/components/DebugPanel.tsx` が表示する。`devtools/src/testApi.ts` が公開するのは `framesEncoded` 系の一部だけで、`chunksEncoded` / `encodeErrors` は公開していない。破棄したフレームを数える項目は無い
+- devtools の統計は `devtools/src/signals/publisher.ts` の独自 signal (`framesEncoded` / `chunksEncoded` / `encodeErrors` など) で、`devtools/src/components/PublisherPanel.tsx` と `devtools/src/components/DebugPanel.tsx` が表示する。`devtools/src/testApi.ts` が公開するのは `framesEncoded` 系の一部だけで、`chunksEncoded` / `encodeErrors` は公開していない。破棄したフレーム数を数える専用の signal は無く、数えているのは `devtools/src/utils/publishTimingStats.ts` の `PublishTimingStats.encodeQueueDrops` (`devtools/src/hooks/usePublisher.ts` の閾値の判定が偽のときに `recordEncodeQueueDrop` を呼ぶ) である。ただし Worker モードでは `encodeQueueSize` が 0 固定のため判定が常に真になり、この値は増えない
 
 ## 設計方針
 
@@ -28,13 +28,14 @@
 - 増加は Worker への `postMessage` が成功した後に数え、減算は `callbacks.output` を呼ぶ前に済ませる (`output` が例外を投げても数が戻るようにする)
 - 再 configure では旧 Worker を `terminate()` してから作り直す。現行は代入するだけで旧 Worker を破棄せず、旧世代の `encoded` が新しいカウンタを減らしてしまう。`close()` と同じ後始末を再 configure の前に行う。カウンタは 0 未満にしない
 - `configure` と `close` でカウンタを 0 にリセットする。リセットしないと再 configure 後にカウンタが閾値を超えたまま張り付き、以後すべてのフレームが破棄される
-- `devtools/src/hooks/usePublisher.ts` の閾値 `<= 2` と破棄の挙動は変えない。破棄したフレームは `devtools/src/signals/publisher.ts` に `droppedFrames` signal を足して数え、`PublisherPanel.tsx` と `DebugPanel.tsx` の既存の統計表示に出す。配信開始時に他の統計を 0 に戻している箇所 (`devtools/src/hooks/usePublisher.ts` の `pub.framesEncoded.value = 0` などが並ぶリセット) に `droppedFrames` も加える。リセットしないと前回の配信の破棄数が残る (0650 がライブラリの `VideoStats.droppedFrames` で同じ意味の値を足す)
+- `devtools/src/hooks/usePublisher.ts` の閾値 `<= 2` と破棄の挙動は変えない。破棄したフレームは `devtools/src/signals/publisher.ts` に `droppedFrames` signal を足さず、既存の `PublishTimingStats.encodeQueueDrops` を再利用して数える。同じ破棄数を 2 つの名前で出すと同じ数字が 2 行並び、統計を読む側が内訳と誤解するためである (ライブラリ側が 0650 で足す `VideoStats.droppedFrames` と同じ「閾値を超えて破棄したフレーム数」を、devtools では既にある名前で表す)。`PublisherPanel.tsx` は既に `publishTiming.encodeQueueDrops` を表示しているため画面側の追加は要らない。配信開始時は `devtools/src/hooks/usePublisher.ts` の `resetVideoPublishState` が `pub.publishTimingStats.value = new PublishTimingStats()` で統計ごと作り直すため、前回の配信の破棄数は残らない (リセット用の代入を別に足さない)
 - 配線の検証は次の 3 段で行う
   - 送信中カウンタの純粋部分は 0650 の `src/codec/workerConfigure.test.ts` が固定する。0678 は新しいカウンタ実装を追加しない
   - devtools の `EncoderWrapper` の配線は `devtools/src/codec-test/` のテストページに devtools の `EncoderWrapper` を Worker モードで駆動する runner を足し、`tests/e2e/codec-wrappers.spec.ts` で固定する
   - `devtools/src/utils/EncoderWrapper.test.ts` は configure / encode / Worker 往復を Node で実行できないため、状態機械の検証にとどめる。configure 前は `encodeQueueSize` が 0 という期待値は現行のまま成立するので検証内容は変えず、「常に 0 になる契約」という旧契約のコメントだけを、0 を返す条件 (未設定、または送信中 0 件) を書く形に直す
+- 待機中の `configure` の中断の口は世代ごとに持ち、Worker の破棄は待機中の全世代を中断し、解決した世代は自分の口だけを外す。失敗の後始末 (Worker の破棄・送信中フレーム数と `configured` の復帰) は自世代の中で完結させる。1 つの口を共有すると、解決した世代が別の世代の口を外して待機を中断できなくし、失敗の後始末が今の Worker を巻き込むと後発の `configure` が解決しなくなる
 - `devtools/src/webcodecs-devtools/signals.ts` と `src/` は変更しない。ライブラリ側は 0650 が扱う
-- 対象は `devtools/src/utils/EncoderWrapper.ts` / `devtools/src/utils/EncoderWrapper.test.ts` / `devtools/src/hooks/usePublisher.ts` / `devtools/src/signals/publisher.ts` / `devtools/src/components/PublisherPanel.tsx` / `devtools/src/components/DebugPanel.tsx` / `devtools/src/codec-test/` / `tests/e2e/codec-wrappers.spec.ts` / `CHANGES.md` とする
+- 対象は `devtools/src/utils/EncoderWrapper.ts` / `devtools/src/utils/EncoderWrapper.test.ts` / `devtools/src/hooks/usePublisher.ts` / `devtools/src/utils/encodeQueueBackpressure.ts` / `devtools/src/utils/encodeQueueBackpressure.test.ts` / `devtools/src/signals/debugExport.test.ts` / `devtools/src/codec-test/` / `devtools/src/webcodecs-devtools/workers/encoder.worker.ts` / `tests/e2e/codec-wrappers.spec.ts` / `CHANGES.md` とする
 - `CHANGES.md` の `## develop` の先頭に `[FIX]` を追記する
 
 ## 完了条件
@@ -42,9 +43,10 @@
 - devtools の Worker モードで `encodeQueueSize` が送信中のフレーム数を返し、`encoded` 応答のたびに減る
 - 再 configure で旧 Worker が破棄され、旧世代の `encoded` が新しいカウンタを減らさない (減算は 0 で止まるため e2e では判別できない。破棄の配線はレビューで確認する)
 - `configure` と `close` でカウンタが 0 に戻り、0 未満にならない
-- 閾値 2 を超えたフレームが破棄され、`droppedFrames` が増えて `PublisherPanel` / `DebugPanel` の統計に出る。配信開始時に 0 に戻る。破棄の発生は devtools アプリの映像配信を起動する経路が Node にも e2e にも無いため、レビューと画面表示で確認する
+- 閾値 2 を超えたフレームが破棄され、`encodeQueueDrops` が増えて `PublisherPanel` の統計に出る。配信開始時に統計が作り直されて 0 に戻る。破棄の発生は devtools アプリの映像配信を起動する経路が Node にも e2e にも無いため、レビューと画面表示で確認する
 - 直接モード (Worker を使わない経路) の挙動が変わらない
 - `devtools/src/codec-test/` の追加 runner と `tests/e2e/codec-wrappers.spec.ts` で、Worker モードの投入直後の `encodeQueueSize` が投入フレーム数、出力待機後が 0、再 configure 後が 0 になることが固定される
+- `devtools/src/codec-test/` の追加 runner と `tests/e2e/codec-wrappers.spec.ts` で、旧世代の Worker が初期化に失敗した後でも後発の `configure` が解決し、やり直した `configure` で実フレームが符号化できることが固定される
 - 送信中カウンタの純粋部分の増減・リセット・0 未満防止が 0650 の `src/codec/workerConfigure.test.ts` で固定されており、0678 がカウンタの実装を追加していない
 - `devtools/src/utils/EncoderWrapper.test.ts` の旧契約のコメントが、0 を返す条件 (未設定、または送信中 0 件) を書く形に更新される
 - `CHANGES.md` の `## develop` の先頭に `[FIX]` が入る

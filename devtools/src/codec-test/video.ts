@@ -15,6 +15,7 @@ import {
   VIDEO_HEIGHT,
   VIDEO_WIDTH,
   createTestVideoFrame,
+  pickFrameColor,
   selectUnsupportedVideoCodec,
   summarizeEncodedChunk,
   summarizeVideoFrame,
@@ -36,24 +37,6 @@ import type {
   VideoEncoderReconfigureTestResult,
   VideoEncoderTestResult,
 } from "./types.ts";
-
-// フレームごとに異なる色で塗り、符号化対象が単調にならないようにする
-const FRAME_COLORS = ["#ff0000", "#00ff00", "#0000ff", "#ffff00", "#ff00ff", "#00ffff"] as const;
-
-/**
- * フレーム番号に対応する塗りつぶし色を返す
- *
- * FRAME_COLORS を使い切ったら先頭へ戻る。noUncheckedIndexedAccess により
- * 添字アクセスの結果は undefined になり得るため、値を取り出す箇所をここに集約する。
- */
-function pickFrameColor(frameIndex: number): string {
-  const color = FRAME_COLORS[frameIndex % FRAME_COLORS.length];
-  if (color === undefined) {
-    // frameIndex は 0 以上でのみ呼ばれるため、ここでのガードは到達しない防御
-    throw new Error(`no frame color for index ${String(frameIndex)}`);
-  }
-  return color;
-}
 
 // エンコードするフレーム数 (先頭と index 3 の 2 件を keyFrame: true にする)
 const ENCODE_FRAME_COUNT = 6;

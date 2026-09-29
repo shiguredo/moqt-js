@@ -24,6 +24,24 @@ export const VIDEO_BITRATE = 500_000;
 // 30fps のフレーム間隔 (マイクロ秒)
 export const VIDEO_FRAME_DURATION = Math.round(1_000_000 / VIDEO_FRAMERATE);
 
+// フレームごとに異なる色で塗り、符号化対象が単調にならないようにする
+const FRAME_COLORS = ["#ff0000", "#00ff00", "#0000ff", "#ffff00", "#ff00ff", "#00ffff"] as const;
+
+/**
+ * フレーム番号に対応する塗りつぶし色を返す
+ *
+ * FRAME_COLORS を使い切ったら先頭へ戻る。noUncheckedIndexedAccess により
+ * 添字アクセスの結果は undefined になり得るため、値を取り出す箇所をここに集約する。
+ */
+export function pickFrameColor(frameIndex: number): string {
+  const color = FRAME_COLORS[frameIndex % FRAME_COLORS.length];
+  if (color === undefined) {
+    // frameIndex は 0 以上でのみ呼ばれるため、ここでのガードは到達しない防御
+    throw new Error(`no frame color for index ${String(frameIndex)}`);
+  }
+  return color;
+}
+
 // オーディオテストの共通パラメータ
 export const AUDIO_SAMPLE_RATE = 48_000;
 export const AUDIO_CHANNELS = 2;
@@ -69,8 +87,12 @@ export async function waitWithoutOutput(durationMs = 200): Promise<void> {
 
 /**
  * 指定した時間だけ待つ
+ *
+ * 「何も起きない」ことの観測 (waitWithoutOutput) と、Promise が settle するかの観測で
+ * 共有する。後者はポーリングでは判定できない (未解決の Promise を条件にできない) ため、
+ * 固定時間だけ待ってから状態を見る。
  */
-function waitForDuration(durationMs: number): Promise<void> {
+export function waitForDuration(durationMs: number): Promise<void> {
   return new Promise<void>((resolve) => {
     window.setTimeout(resolve, durationMs);
   });

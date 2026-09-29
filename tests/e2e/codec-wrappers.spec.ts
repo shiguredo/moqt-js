@@ -10,6 +10,9 @@ import type {
   DevtoolsDecoderConcurrentConfigureTestResult,
   DevtoolsDecoderResetBudgetTestResult,
   DevtoolsDecoderUnsupportedCodecTestResult,
+  DevtoolsEncoderCloseDuringConfigureTestResult,
+  DevtoolsEncoderFailedWorkerConfigureTestResult,
+  DevtoolsEncoderWorkerTestResult,
   VideoDecoderCloseDuringConfigureTestResult,
   VideoDecoderConcurrentResetTestResult,
   VideoDecoderResetBudgetTestResult,
@@ -1092,6 +1095,287 @@ for (const name of ["videoEncoderReconfigureDirect", "videoEncoderReconfigureWor
     expect(result.errorMessages).toEqual([]);
   });
 }
+
+// ============================================================================
+// devtools の EncoderWrapper の Worker モードの送信中のフレーム数
+// ============================================================================
+
+// devtools の配信 (devtools/src/hooks/usePublisher.ts) は devtools の EncoderWrapper の
+// encodeQueueSize が閾値以下かを判定してフレームを投入する。Worker モードでは Worker 内の
+// キュー長を取得できないため、Worker へ送信してまだ encoded 応答が返っていないフレーム数を
+// 返す契約を pin する。0 固定のままだと判定が常に真になり、破棄の経路が働かない。
+//
+// 駆動するのは devtools/src/codec-test/devtoolsEncoder.ts の runner である。1 回の configure で
+// 投入するフレーム数は結果の encodeFrameCount を使う (runner と期待値を二重に持たない)
+//
+// 観測する契約は次の 5 つである。
+//
+// 1. 投入の直後は送信中の数が投入数になり、出力を待つと 0 に戻る
+// 2. 再 configure と close で 0 に戻る (戻らないと閾値に張り付いて全フレームが破棄される)
+// 3. 1 件目の output が例外を投げても減算され、待機後に 0 に戻る (減算は output の前)
+// 4. Worker が error 応答を返したら 0 に戻り、configured でなくなって投入が止まる
+// 5. 再 configure の応答を待つ間に新しい Worker へ送ったフレームの数は、完了後も消えない
+
+/**
+ * devtools の EncoderWrapper の Worker モードの送信中のフレーム数の契約を検証する
+ */
+function expectDevtoolsEncoderWorkerContract(result: DevtoolsEncoderWorkerTestResult): void {
+  const encodeFrameCount = result.encodeFrameCount;
+  expect(encodeFrameCount).toBeGreaterThan(0);
+
+  // configure 前 (未設定) は 0、configure 直後 (送信中 0 件) も 0
+  expect(result.queueSizeBeforeConfigure).toBe(0);
+  expect(result.queueSizeAfterConfigure).toBe(0);
+
+  // フレームを投入した直後は投入数がそのまま残り、出力を待つと encoded 応答ごとに減って 0 に戻る
+  expect(result.queueSizeAfterEncode).toBe(encodeFrameCount);
+  expect(result.queueSizeAfterOutputWait).toBe(0);
+
+  // 応答を待たずに投入したフレームを残したまま再 configure しても 0 に戻る。
+  // 戻らないと、閾値 (2) を超えたまま張り付いて以後のフレームがすべて破棄される
+  expect(result.queueSizeBeforeReconfigure).toBe(encodeFrameCount);
+  expect(result.queueSizeAfterReconfigure).toBe(0);
+
+  // 差し替えた新しい Worker でも encode が続く (破棄で Wrapper は壊れない)
+  expect(result.secondConfigChunkCount).toBe(encodeFrameCount);
+
+  // 未応答のフレームを残したまま close しても 0 に戻る
+  expect(result.queueSizeBeforeClose).toBe(encodeFrameCount);
+  expect(result.queueSizeAfterClose).toBe(0);
+
+  // configure 前は unconfigured、configure 後は configured、close 後は unconfigured に戻る
+  expect(result.stateHistory.map((entry) => entry.state)).toEqual([
+    "unconfigured",
+    "configured",
+    "configured",
+    "configured",
+    "configured",
+    "unconfigured",
+  ]);
+
+  // 1 回目と 2 回目の configure でそれぞれ投入したフレームが出力される
+  // (各回の先頭を keyFrame: true にしてあるため key chunk は 2 件になる)
+  expect(result.chunkCount).toBe(encodeFrameCount * 2);
+  expect(result.keyChunkCount).toBe(2);
+  expect(result.outputTimestamps[0]).toBe(0);
+  expectMonotonicIncrease(result.outputTimestamps);
+
+  // error コールバックへ届く経路 (初期化の後に届いた失敗の通知) は
+  // expectDevtoolsEncoderWorkerErrorContract が固定する。正常系の観測だけを並べるこの runner の
+  // 結果では通知は空にしかならないため、ここでは主張しない
+}
+
+/**
+ * output が例外を投げても減算される契約を検証する
+ */
+function expectDevtoolsEncoderOutputThrowsContract(result: DevtoolsEncoderWorkerTestResult): void {
+  const encodeFrameCount = result.encodeFrameCount;
+
+  // 投入の直後は投入数が残る (どのフレームも送信されている)
+  expect(result.outputThrowsQueueSizeAfterEncode).toBe(encodeFrameCount);
+  // 例外になった 1 件目も含めて output が呼ばれ、その数も戻る。
+  // 減算が output の後だと、例外を投げたフレームの数が残って 0 にならない
+  expect(result.outputThrowsChunkCount).toBe(encodeFrameCount);
+  expect(result.outputThrowsQueueSizeAfterWait).toBe(0);
+  // 例外はブラウザが未処理のエラーとして報告する (output が実際に throw したことの確認)
+  expect(result.outputThrowsUncaughtMessages).toEqual([
+    expect.stringContaining("output callback failed on purpose"),
+  ]);
+}
+
+/**
+ * Worker が error 応答を返した後の契約を検証する
+ */
+function expectDevtoolsEncoderWorkerErrorContract(result: DevtoolsEncoderWorkerTestResult): void {
+  const encodeFrameCount = result.encodeFrameCount;
+
+  // 失敗する codec で再 configure する前に、未応答のフレームが送信中として残っている
+  expect(result.queueSizeBeforeWorkerError).toBe(encodeFrameCount);
+
+  // 設定できない codec は configure では失敗せず、encode で初めて失敗するため、
+  // error は初期化後 (configure の応答の後) の通知として届く
+  expect(result.workerErrorNotifyMessages).toHaveLength(1);
+
+  // Worker が error 応答を返したら送信中の数は 0 に戻る。
+  // 戻らないと閾値 (2) を超えたまま張り付いて、以後のフレームがすべて破棄される
+  expect(result.queueSizeAfterWorkerError).toBe(0);
+
+  // configured でなくなるため、その後の encode は Worker へ送られない (数が増えない)
+  expect(result.stateAfterWorkerError).toBe("unconfigured");
+  expect(result.queueSizeAfterEncodePostError).toBe(0);
+}
+
+/**
+ * 初期化に失敗する configure の契約を検証する
+ */
+function expectDevtoolsEncoderFailedConfigureContract(
+  result: DevtoolsEncoderWorkerTestResult,
+): void {
+  // 失敗する configure の前に、未応答のフレームが送信中として残っている
+  expect(result.queueSizeBeforeFailedConfigure).toBe(result.encodeFrameCount);
+
+  // 初期化の失敗は configure の reject で伝わり、error コールバックは呼ばない
+  expect(result.failedConfigureMessage).toEqual(expect.any(String));
+  expect(result.failedConfigureNotifyMessages).toEqual([]);
+
+  // 失敗した configure でも送信中の数は 0 に戻る。戻さないと、応答が返らないフレームの数が
+  // 閾値 (2) を超えたまま残り、以後すべてのフレームが破棄される
+  expect(result.queueSizeAfterFailedConfigure).toBe(0);
+  expect(result.stateAfterFailedConfigure).toBe("unconfigured");
+}
+
+/**
+ * 再 configure の応答を待つ間の契約を検証する
+ */
+function expectDevtoolsEncoderReconfigureWaitContract(
+  result: DevtoolsEncoderWorkerTestResult,
+): void {
+  const encodeFrameCount = result.encodeFrameCount;
+
+  // 再 configure の前に、旧 Worker の未応答のフレームが送信中として残っている
+  expect(result.queueSizeBeforeReconfigureWait).toBe(encodeFrameCount);
+
+  // 応答を待つ間に投入したフレームは新しい Worker へ送られて数えられる
+  expect(result.queueSizeDuringReconfigureWait).toBe(encodeFrameCount);
+
+  // 待機中の投入の数は configure の完了で消えない。消えると、実際より少なく見える
+  // (数のリセットが configure の完了後だと、待機中に送ったフレームの数まで戻ってしまう)
+  expect(result.queueSizeAfterReconfigureWait).toBe(encodeFrameCount);
+  expect(result.reconfigureWaitErrorMessages).toEqual([]);
+}
+
+test("devtools の EncoderWrapper Worker モード: encodeQueueSize が送信中のフレーム数になる", async ({
+  page,
+}) => {
+  await openCodecTestPage(page);
+
+  const result = await runCodecTest(page, "devtoolsEncoderWorker");
+
+  // Worker モードの devtools EncoderWrapper を実 Chromium の Worker で駆動している
+  expect(result.test).toBe("devtoolsEncoderWorker");
+  expect(result.useWorker).toBe(true);
+  expectDevtoolsEncoderWorkerContract(result);
+  expectDevtoolsEncoderOutputThrowsContract(result);
+  expectDevtoolsEncoderWorkerErrorContract(result);
+  expectDevtoolsEncoderFailedConfigureContract(result);
+  expectDevtoolsEncoderReconfigureWaitContract(result);
+});
+
+// ============================================================================
+// devtools の EncoderWrapper の解放 (configure 中の close)
+// ============================================================================
+
+// devtools の配信 (devtools/src/hooks/usePublisher.ts) は WebTransport の close / error で
+// cleanupPublisher() を呼ぶため、映像配信の開始処理が await している configure() の最中でも
+// EncoderWrapper.close() が走り得る。close() は Worker の配送口を外して terminate するため、
+// 中断を届けないと configure() の Promise が未解決のまま残り、開始処理が永久に待ち続ける。
+// 追い越しとして失敗することを固定する (DecoderWrapper の
+// devtoolsDecoderCloseDuringConfigure* と同じ観点)。
+
+/**
+ * devtools の EncoderWrapper の configure() 中に close() が先行したときの契約を検証する
+ */
+function expectDevtoolsEncoderCloseDuringConfigureContract(
+  result: DevtoolsEncoderCloseDuringConfigureTestResult,
+): void {
+  // 解放が先に走り、configure() は Worker を公開せずに失敗する。
+  // イベント名はテストページ (devtools/src/codec-test/devtoolsEncoder.ts) が記録する。
+  // 中断が届かない実装では configure() が settle せず "configure not settled" になる
+  expect(result.events).toEqual(["configure started", "close called", "configure rejected"]);
+  expect(result.configureErrorMessage).toBe("encoder configure superseded by newer generation");
+
+  // 解放のあとは unconfigured に戻り、送信中のフレーム数も 0 になる
+  expect(result.stateAfterAbortedConfigure).toBe("unconfigured");
+  expect(result.queueSizeAfterAbortedConfigure).toBe(0);
+
+  // 解放のあとに encode しても Worker へ送らない (数が増えない)
+  expect(result.queueSizeAfterEncodePostAbort).toBe(0);
+
+  // やり直した configure() は成功し、実フレームを符号化できる (解放で Wrapper は壊れない)
+  expect(result.stateAfterReconfigure).toBe("configured");
+  expect(result.chunkCountAfterReconfigure).toBe(result.encodeFrameCount);
+  expect(result.queueSizeAfterReconfigureEncode).toBe(result.encodeFrameCount);
+  expect(result.queueSizeAfterReconfigureWait).toBe(0);
+
+  // configure() の失敗は error コールバックを呼ばない
+  expect(result.errorMessages).toEqual([]);
+}
+
+test("devtools の EncoderWrapper 解放: configure() 中に close() したら追い越しとして失敗する", async ({
+  page,
+}) => {
+  await openCodecTestPage(page);
+
+  const result = await runCodecTest(page, "devtoolsEncoderCloseDuringConfigure");
+
+  // Worker モードの devtools EncoderWrapper を実 Chromium の Worker で駆動している
+  expect(result.test).toBe("devtoolsEncoderCloseDuringConfigure");
+  expect(result.useWorker).toBe(true);
+  expectDevtoolsEncoderCloseDuringConfigureContract(result);
+});
+
+// ============================================================================
+// devtools の EncoderWrapper の Worker の初期化の失敗と configure のやり直し
+// ============================================================================
+
+// 初期化に失敗した configure は reject し、失敗した Worker を破棄して configured を false に
+// 戻す。この後始末が今の Worker や後発の configure の待機を巻き込むと、解決するはずの
+// configure が失敗したり、未解決のまま残ったりする。初期化の失敗と後発の configure の
+// 順序を 2 つ固定する (旧世代の Worker の応答を待たずに後発を呼ぶ順序と、旧世代の失敗を
+// 待ってからやり直す順序)。
+
+/**
+ * devtools の EncoderWrapper の Worker の初期化の失敗後の契約を検証する
+ */
+function expectDevtoolsEncoderFailedWorkerConfigureContract(
+  result: DevtoolsEncoderFailedWorkerConfigureTestResult,
+): void {
+  const encodeFrameCount = result.encodeFrameCount;
+  expect(encodeFrameCount).toBeGreaterThan(0);
+
+  // 旧世代 (初期化に失敗する設定) の応答を待たずに後発 (成功する設定) の configure を呼ぶと、
+  // 旧世代は追い越されて失敗し、後発が構成を持つ。旧世代の Worker の初期化の失敗は
+  // 後発の待機中に届かない (届けば、後発の configure が失敗したり待機が壊れたりする)
+  expect(result.firstConfigureErrorMessage).toBe(
+    "encoder configure superseded by newer generation",
+  );
+  expect(result.secondConfigureErrorMessage).toBeNull();
+
+  // 後発の構成が残り、実フレームを符号化できる
+  expect(result.stateAfterSecondConfigure).toBe("configured");
+  expect(result.secondChunkCount).toBe(encodeFrameCount);
+  expect(result.queueSizeAfterSecondEncode).toBe(encodeFrameCount);
+  expect(result.queueSizeAfterSecondWait).toBe(0);
+  expect(result.secondErrorMessages).toEqual([]);
+
+  // 初期化に失敗した configure はブラウザが返した理由で reject し、state と送信中の数が戻る
+  expect(result.failedConfigureMessage).toEqual(expect.any(String));
+  expect(result.stateAfterFailedConfigure).toBe("unconfigured");
+  expect(result.queueSizeAfterFailedConfigure).toBe(0);
+
+  // 失敗した Worker を破棄した後にやり直した configure は解決し、実フレームを符号化できる
+  expect(result.retryConfigureErrorMessage).toBeNull();
+  expect(result.stateAfterRetry).toBe("configured");
+  expect(result.retryChunkCount).toBe(encodeFrameCount);
+  expect(result.queueSizeAfterRetryEncode).toBe(encodeFrameCount);
+  expect(result.queueSizeAfterRetryWait).toBe(0);
+
+  // 初期化の失敗は reject で伝わり、error コールバックは呼ばない
+  expect(result.errorMessages).toEqual([]);
+}
+
+test("devtools の EncoderWrapper 初期化失敗: 旧 Worker が初期化に失敗した後も configure が解決する", async ({
+  page,
+}) => {
+  await openCodecTestPage(page);
+
+  const result = await runCodecTest(page, "devtoolsEncoderFailedWorkerConfigure");
+
+  // Worker モードの devtools EncoderWrapper を実 Chromium の Worker で駆動している
+  expect(result.test).toBe("devtoolsEncoderFailedWorkerConfigure");
+  expect(result.useWorker).toBe(true);
+  expectDevtoolsEncoderFailedWorkerConfigureContract(result);
+});
 
 // ============================================================================
 // devtools の可視化が使う AudioData の読み出し

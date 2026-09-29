@@ -551,6 +551,165 @@ export interface DevtoolsDecoderConcurrentConfigureTestResult {
   errorMessages: string[];
 }
 
+/**
+ * devtools の EncoderWrapper の Worker モードのテスト結果
+ *
+ * devtools の配信が使う Wrapper (devtools/src/utils/EncoderWrapper.ts) の encodeQueueSize が、
+ * Worker モードで Worker へ送信してまだ encoded 応答が返っていないフレーム数を返すことを
+ * 観測する。configure / close と再 configure での 0 への復帰、output が例外を投げたときの
+ * 減算、Worker が error 応答を返した後の投入の停止も同じ経路で確認する。
+ */
+export interface DevtoolsEncoderWorkerTestResult {
+  test: string;
+  useWorker: boolean;
+  // 1 回の configure で投入するフレーム数 (e2e が期待値に使う)
+  encodeFrameCount: number;
+  // 状態遷移の記録
+  stateHistory: StateTransition[];
+  // configure 前の encodeQueueSize (未設定のため 0)
+  queueSizeBeforeConfigure: number;
+  // configure 直後の encodeQueueSize (送信中 0 件のため 0)
+  queueSizeAfterConfigure: number;
+  // フレームを投入した直後 (出力待機前) の encodeQueueSize (投入したフレーム数)
+  queueSizeAfterEncode: number;
+  // 出力を待った後の encodeQueueSize (encoded 応答ごとに減って 0)
+  queueSizeAfterOutputWait: number;
+  // 応答を待たずに投入したフレームを残したまま再 configure する直前の encodeQueueSize
+  queueSizeBeforeReconfigure: number;
+  // 再 configure 直後の encodeQueueSize (旧 Worker の破棄で 0)
+  queueSizeAfterReconfigure: number;
+  // 2 回目の configure の後に投入して出力された chunk 数
+  secondConfigChunkCount: number;
+  // 応答を待たずに投入したフレームを残したまま close する直前の encodeQueueSize
+  queueSizeBeforeClose: number;
+  // close 直後の encodeQueueSize (0)
+  queueSizeAfterClose: number;
+  // close の前に到着した chunk 数 (1 回目と 2 回目の configure の分)
+  chunkCount: number;
+  // うち key chunk の数 (各 configure の先頭の 1 件ずつ)
+  keyChunkCount: number;
+  // 出力の timestamp (到着順)
+  outputTimestamps: number[];
+  // 1 件目の output が例外を投げたときの、投入直後の encodeQueueSize
+  outputThrowsQueueSizeAfterEncode: number;
+  // 1 件目の output が例外を投げたときの、出力を待った後の encodeQueueSize (0)
+  outputThrowsQueueSizeAfterWait: number;
+  // output が呼ばれた回数 (例外になった 1 件目を含む)
+  outputThrowsChunkCount: number;
+  // output の例外をブラウザが未処理のエラーとして報告したメッセージ
+  outputThrowsUncaughtMessages: string[];
+  // Worker が error 応答を返す前に投入したフレームを残したままの encodeQueueSize
+  queueSizeBeforeWorkerError: number;
+  // Worker が error 応答を返した後の encodeQueueSize (0)
+  queueSizeAfterWorkerError: number;
+  // Worker が error 応答を返した後に encode した後の encodeQueueSize (送らないため 0)
+  queueSizeAfterEncodePostError: number;
+  // Worker が error 応答を返した後の state (configured でない)
+  stateAfterWorkerError: string;
+  // error コールバックに届いたメッセージ (初期化の失敗は reject で伝えるため 1 件)
+  workerErrorNotifyMessages: string[];
+  // 初期化に失敗する configure の前に、未応答のフレームを残したままの encodeQueueSize
+  queueSizeBeforeFailedConfigure: number;
+  // 初期化に失敗した configure の後の encodeQueueSize (0)
+  queueSizeAfterFailedConfigure: number;
+  // 初期化に失敗した configure の後の state (configured でない)
+  stateAfterFailedConfigure: string;
+  // 初期化に失敗した configure の reject メッセージ
+  failedConfigureMessage: string | null;
+  // error コールバックに届いたメッセージ (初期化の失敗は reject で伝えるため空)
+  failedConfigureNotifyMessages: string[];
+  // 再 configure の応答を待つ前に、未応答のフレームを残したままの encodeQueueSize
+  queueSizeBeforeReconfigureWait: number;
+  // 再 configure の応答を待つ間に投入した後の encodeQueueSize
+  queueSizeDuringReconfigureWait: number;
+  // 再 configure が解決した直後の encodeQueueSize (待機中の投入が消えていないこと)
+  queueSizeAfterReconfigureWait: number;
+  // 再 configure の待機を観測した Wrapper の error コールバックに届いたメッセージ (空)
+  reconfigureWaitErrorMessages: string[];
+}
+
+/**
+ * devtools の EncoderWrapper の Worker モードで、初期化に失敗した Worker の後の configure のテスト結果
+ *
+ * 初期化に失敗した configure は reject し、失敗した Worker を破棄して configured を false に
+ * 戻す。この後始末が今の Worker や後発の configure の待機を巻き込まないことを、後発の
+ * configure が解決するかと、やり直した configure が実フレームを符号化できるかで観測する。
+ */
+export interface DevtoolsEncoderFailedWorkerConfigureTestResult {
+  test: string;
+  useWorker: boolean;
+  // 1 回の configure で投入するフレーム数 (e2e が期待値に使う)
+  encodeFrameCount: number;
+  // 旧世代 (初期化に失敗する設定) を待たずに後発の configure を呼んだ場合
+  // 旧世代の configure の失敗理由 (追い越されて失敗する)
+  firstConfigureErrorMessage: string | null;
+  // 後発の configure の失敗理由 (解決するため null)
+  secondConfigureErrorMessage: string | null;
+  // 後発の configure が解決した直後の state (configured)
+  stateAfterSecondConfigure: string;
+  // 後発の Worker で投入したフレームのうち出力された chunk 数 (投入数と一致する)
+  secondChunkCount: number;
+  // 後発の Worker へ投入した直後 / 出力を待った後の encodeQueueSize (投入数 / 0)
+  queueSizeAfterSecondEncode: number;
+  queueSizeAfterSecondWait: number;
+  // 後発の観測で error コールバックに届いたメッセージ (空)
+  secondErrorMessages: string[];
+  // 初期化に失敗した configure を待ってからやり直した場合
+  // 初期化に失敗した configure の reject メッセージ (ブラウザが返す失敗理由)
+  failedConfigureMessage: string | null;
+  // 失敗した configure の直後の state (unconfigured) と encodeQueueSize (0)
+  stateAfterFailedConfigure: string;
+  queueSizeAfterFailedConfigure: number;
+  // やり直した configure の失敗理由 (解決するため null)
+  retryConfigureErrorMessage: string | null;
+  // やり直しの configure が解決した直後の state (configured)
+  stateAfterRetry: string;
+  // やり直しの後に投入したフレームのうち出力された chunk 数 (投入数と一致する)
+  retryChunkCount: number;
+  // やり直しの後に投入した直後 / 出力を待った後の encodeQueueSize (投入数 / 0)
+  queueSizeAfterRetryEncode: number;
+  queueSizeAfterRetryWait: number;
+  // 初期化の失敗とやり直しで error コールバックに届いたメッセージ
+  // (初期化の失敗は reject で伝えるため空)
+  errorMessages: string[];
+}
+
+/**
+ * devtools の EncoderWrapper の Worker モードの configure() の待機中に close() が先行したときのテスト結果
+ *
+ * Worker モードの configure() は Worker を生成し、初期化の応答を待つ。その間に close() が
+ * 始まると、close() は Worker の配送口を外して terminate する。中断を届けないと待機中の
+ * configure() の Promise は未解決のまま残り、呼び出し側が待ち続ける。イベント順・失敗理由・
+ * state で観測し、あわせて close() のあとにやり直した configure() が成功することを確認する。
+ */
+export interface DevtoolsEncoderCloseDuringConfigureTestResult {
+  test: string;
+  useWorker: boolean;
+  // 1 回の configure で投入するフレーム数 (e2e が期待値に使う)
+  encodeFrameCount: number;
+  // 観測したイベントの順序 (configure started / close called / configure rejected)。
+  // 中断が届かない実装では configure() が settle しないため "configure not settled" になる
+  events: string[];
+  // configure() の失敗理由 (失敗しなかった場合は null)
+  configureErrorMessage: string | null;
+  // 解放が先行した configure() の直後の state (unconfigured のまま)
+  stateAfterAbortedConfigure: string;
+  // 解放が先行した configure() の直後の encodeQueueSize (0)
+  queueSizeAfterAbortedConfigure: number;
+  // 解放のあとに encode した後の encodeQueueSize (Worker へ送らないため 0)
+  queueSizeAfterEncodePostAbort: number;
+  // やり直した configure() の直後の state (configured)
+  stateAfterReconfigure: string;
+  // やり直しの後に投入したフレームのうち、出力された chunk 数 (投入数と一致する)
+  chunkCountAfterReconfigure: number;
+  // やり直しの後に投入した直後の encodeQueueSize (投入数)
+  queueSizeAfterReconfigureEncode: number;
+  // やり直しの後に出力を待った後の encodeQueueSize (0)
+  queueSizeAfterReconfigureWait: number;
+  // error コールバックに届いたメッセージ (configure の失敗も通知しないため空)
+  errorMessages: string[];
+}
+
 export interface CodecTestResultMap {
   videoEncoderDirect: VideoEncoderTestResult;
   videoEncoderWorker: VideoEncoderTestResult;
@@ -581,6 +740,9 @@ export interface CodecTestResultMap {
   audioSamples: AudioSamplesTestResult;
   videoEncoderReconfigureDirect: VideoEncoderReconfigureTestResult;
   videoEncoderReconfigureWorker: VideoEncoderReconfigureTestResult;
+  devtoolsEncoderWorker: DevtoolsEncoderWorkerTestResult;
+  devtoolsEncoderCloseDuringConfigure: DevtoolsEncoderCloseDuringConfigureTestResult;
+  devtoolsEncoderFailedWorkerConfigure: DevtoolsEncoderFailedWorkerConfigureTestResult;
 }
 
 /**

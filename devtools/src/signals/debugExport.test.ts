@@ -7,6 +7,7 @@ import {
 import * as settings from "./connectionSettings";
 import { __resetLogStateForTest, addLog, clearLog } from "./debugLog";
 import * as pub from "./publisher";
+import { PublishTimingStats } from "../utils/publishTimingStats";
 import { addSubscriber, removeSubscriber, subscriberInstances } from "./subscriber";
 
 /**
@@ -21,6 +22,8 @@ function resetPublisherState(): void {
   pub.pubStatus.value = "disconnected";
   pub.pubCodec.value = "";
   pub.framesEncoded.value = 0;
+  // 破棄したフレーム数を数える記録も作り直す (配信を始めるときと同じ扱い)
+  pub.publishTimingStats.value = new PublishTimingStats();
   pub.catalog.value = null;
 }
 
@@ -88,6 +91,21 @@ test("buildPublisherExportText: Publisher の節と [publisher] のログだけ�
   // 他の Subscriber のログと統計は出さない
   assert.notInclude(text, "[subscriber-1] [RECV] OBJECT");
   assert.notInclude(text, "Subscriber Statistics");
+});
+
+// 破棄したフレーム数は publishTiming の統計 (encodeQueueDrops) の 1 箇所にだけ出す。
+// 同じ値を別名でも出すと同じ数字が 2 行並び、不具合の報告を読む側が内訳と誤解する
+test("buildPublisherExportText: 破棄したフレーム数を 1 つの名前でだけ出す", () => {
+  // 配信を始めた状態にして Publisher の節を出させる
+  pub.framesEncoded.value = 1;
+  // 破棄したフレーム数は publishTimingStats が数える (2 件の破棄を記録する)
+  pub.publishTimingStats.value.recordEncodeQueueDrop(0);
+  pub.publishTimingStats.value.recordEncodeQueueDrop(33_333);
+
+  const text = buildPublisherExportText();
+
+  assert.include(text, "encodeQueueDrops: 2");
+  assert.notInclude(text, "droppedFrames");
 });
 
 test("buildSubscriberExportText: 指定した Subscriber の節と、その id のログだけを出す", () => {
