@@ -20,7 +20,8 @@
  * Audio Config の再送は Forward State 変化のコールバック登録から
  * handleAudioEncodedChunk までを、publish 呼び出しを記録する最小セッションを
  * 注入して結合で検証する。
- * encode キューの閾値超過による破棄と droppedFrames の加算も検証する。
+ * encode キューの閾値超過による破棄と droppedFrames の加算、破棄したフレームの
+ * キーフレーム要求が次に encode するフレームへ移ることも検証する。
  */
 
 import { test, assert } from "vite-plus/test";
@@ -67,6 +68,8 @@ import {
  */
 interface TestFrame {
   closed: boolean;
+  // close() が呼ばれた回数 (二重 close と閉じ忘れの検出用)
+  closeCount: number;
   // VideoFrame / AudioData の timestamp (マイクロ秒)
   timestamp: number;
   close(): void;
@@ -75,9 +78,11 @@ interface TestFrame {
 function createTestFrame(timestamp = 0): TestFrame {
   const frame: TestFrame = {
     closed: false,
+    closeCount: 0,
     timestamp,
     close: () => {
       frame.closed = true;
+      frame.closeCount++;
     },
   };
   return frame;
@@ -85,14 +90,25 @@ function createTestFrame(timestamp = 0): TestFrame {
 
 /**
  * encode 呼び出し記録用の最小エンコーダー
+ *
+ * `encodeQueueSize` はキュー滞留の変化を再現できるよう、初期値の引数と更新関数の
+ * 両方を持つ (閾値超過で破棄した後にキューが空いて次のフレームが encode される経路を
+ * 検証するため)。`keyFrames` は encode の options の `keyFrame` を記録し、破棄した
+ * フレームのキーフレーム要求が次に encode するフレームへ移ったかを観測できるようにする。
+ * `failNextEncode` は次の encode を 1 回だけ同期 throw させ、実エンコーダー
+ * (`VideoEncoderWrapper.encode` は `encoder.encode` / `worker.postMessage` の例外を
+ * そのまま伝える) が失敗したときのフレームの close と通し番号の据え置きを
+ * 検証できるようにする。
  */
 function createRecordingEncoder(encodeQueueSize = 0): {
   encoded: unknown[];
   keyFrames: boolean[];
   isClosed: () => boolean;
+  setEncodeQueueSize: (value: number) => void;
+  failNextEncode: (error: Error) => void;
   encoder: {
     state: string;
-    encodeQueueSize: number;
+    readonly encodeQueueSize: number;
     encode: (frame: unknown, options?: { keyFrame?: boolean }) => void;
     close: () => void;
   };
@@ -101,15 +117,32 @@ function createRecordingEncoder(encodeQueueSize = 0): {
   // encode ごとのキーフレームの指定 (encoded と同じ並び)
   const keyFrames: boolean[] = [];
   let closed = false;
+  // ループの途中でキュー滞留を変えられるよう、読み出しは getter にする
+  let queueSize = encodeQueueSize;
+  // 次の encode で同期 throw させるエラー (使い捨てであり、1 回投げたら消える)
+  let nextEncodeError: Error | null = null;
   return {
     encoded,
     keyFrames,
     isClosed: () => closed,
+    setEncodeQueueSize: (value: number) => {
+      queueSize = value;
+    },
+    failNextEncode: (error: Error) => {
+      nextEncodeError = error;
+    },
     encoder: {
       state: "configured",
-      // 閾値超過 (2 超) を固定するため引数で差し替えられるようにする
-      encodeQueueSize,
+      get encodeQueueSize(): number {
+        return queueSize;
+      },
       encode: (frame: unknown, options?: { keyFrame?: boolean }) => {
+        // 実エンコーダーと同じく、throw した encode は記録に残さない
+        const error = nextEncodeError;
+        if (error !== null) {
+          nextEncodeError = null;
+          throw error;
+        }
         encoded.push(frame);
         keyFrames.push(options?.keyFrame === true);
       },
@@ -175,6 +208,17 @@ function createFrameStream(): {
   return { stream, controller };
 }
 
+/**
+ * 処理ループが投入したフレームを 1 枚処理し終えるまで microtask を排出する
+ *
+ * ループは `reader.read()` の解決とその後の処理で 2 段の microtask を要するため
+ * 2 回 await する (タイマーは使わない。テストを実時間に依存させないため)。
+ */
+async function settle(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
 function injectAudioLoop(control: PublisherLoopControl): {
   encoded: unknown[];
   controller: ReadableStreamDefaultController<TestFrame>;
@@ -195,16 +239,26 @@ function injectVideoLoop(
 ): {
   encoded: unknown[];
   keyFrames: boolean[];
+  setEncodeQueueSize: (value: number) => void;
+  failNextEncode: (error: Error) => void;
   controller: ReadableStreamDefaultController<TestFrame>;
   isEncoderClosed: () => boolean;
 } {
   const { stream, controller } = createFrameStream();
-  const { encoder, encoded, keyFrames, isClosed } = createRecordingEncoder(encodeQueueSize);
+  const { encoder, encoded, keyFrames, setEncodeQueueSize, failNextEncode, isClosed } =
+    createRecordingEncoder(encodeQueueSize);
   control.videoFrameReader =
     stream.getReader() as unknown as ReadableStreamDefaultReader<VideoFrame>;
   control.videoEncoder = encoder as unknown as VideoEncoderWrapper;
   control.processingActive = true;
-  return { encoded, keyFrames, controller, isEncoderClosed: isClosed };
+  return {
+    encoded,
+    keyFrames,
+    setEncodeQueueSize,
+    failNextEncode,
+    controller,
+    isEncoderClosed: isClosed,
+  };
 }
 
 test("processVideoFrames: encode キューの閾値 (2) を超えたフレームは破棄され droppedFrames に数える", async () => {
@@ -228,10 +282,10 @@ test("processVideoFrames: encode キューの閾値 (2) を超えたフレーム
   controller.close();
   await loop;
 
-  // encode は呼ばれず、両フレームとも閉じられる
+  // encode は呼ばれず、両フレームとも閉じられる (close は 1 回だけ)
   assert.equal(encoded.length, 0);
-  assert.isTrue(first.closed);
-  assert.isTrue(second.closed);
+  assert.equal(first.closeCount, 1);
+  assert.equal(second.closeCount, 1);
   assert.equal(errors.length, 0);
   assert.equal(publisher.getStats().video?.droppedFrames, 2);
 });
@@ -253,8 +307,142 @@ test("processVideoFrames: encode キューの閾値以内なら破棄せず enco
 
   assert.equal(encoded.length, 1);
   assert.strictEqual(encoded[0], frame);
-  assert.isTrue(frame.closed);
+  assert.equal(frame.closeCount, 1);
   assert.equal(errors.length, 0);
+  assert.equal(publisher.getStats().video?.droppedFrames, 0);
+});
+
+// 破棄するフレームではキーフレームの判定も通し番号の加算も行わない。行うと、
+// requestKeyframe() が通し番号を 0 に戻した直後にキューが閾値を超えていた場合、
+// 破棄した分だけ番号が進んで要求が消費され、キーフレームは次の間隔まで現れない。
+// 記録用エンコーダーの encodeQueueSize を変えて閾値超過と回復を作り、
+// encode の options (keyFrame) の記録で要求が次の encode するフレームへ移ることを固定する
+test("processVideoFrames: キュー超過で破棄したフレームはキーフレームの要求を消費しない", async () => {
+  const { publisher, control, errors } = createLoopTestContext({
+    video: { codec: "vp8", bitrate: 1000, keyframeInterval: 60 },
+  });
+  const { encoded, keyFrames, setEncodeQueueSize, controller } = injectVideoLoop(control);
+  const loop = control.processVideoFrames();
+
+  // 1 枚目はキューに空きがあるため encode され、間隔の先頭としてキーフレームになる
+  const first = createTestFrame();
+  controller.enqueue(first);
+  await settle();
+
+  // キューが閾値 (2) を超えた状態でキーフレームを要求する
+  // (PublishCallbacks.onNewGroupRequest と同じく requestKeyframe() を呼ぶ)
+  setEncodeQueueSize(3);
+  control.requestKeyframe();
+
+  // 要求の直後に届いた 3 枚はすべて破棄される
+  const dropped = [createTestFrame(), createTestFrame(), createTestFrame()];
+  for (const frame of dropped) {
+    controller.enqueue(frame);
+    await settle();
+  }
+
+  // キューが空いたため、次の 1 枚は encode される
+  setEncodeQueueSize(0);
+  const second = createTestFrame();
+  controller.enqueue(second);
+  await settle();
+  controller.close();
+  await loop;
+
+  // 破棄した 3 枚は encode されず、要求は次に encode するフレームが引き継ぐ。
+  // 破棄したフレームで通し番号を進めると 2 枚目は keyFrame: false になる
+  assert.equal(encoded.length, 2);
+  assert.strictEqual(encoded[0], first);
+  assert.strictEqual(encoded[1], second);
+  assert.deepEqual(keyFrames, [true, true]);
+  assert.equal(publisher.getStats().video?.droppedFrames, 3);
+  // 破棄したフレームも encode したフレームも close() は 1 回だけである
+  for (const frame of [first, ...dropped, second]) {
+    assert.equal(frame.closeCount, 1);
+  }
+  assert.equal(errors.length, 0);
+});
+
+// shouldSendKeyFrame に渡す通し番号は「requestKeyframe() のリセット以後に実際に
+// encode したフレームの数」になる。破棄したフレームを数えると、間隔の境界が
+// 破棄のたびに後ろへずれ、周期のキーフレームが現れなくなる
+test("processVideoFrames: キーフレームの通し番号は実際に encode したフレームの数だけ進む", async () => {
+  const { publisher, control, errors } = createLoopTestContext({
+    video: { codec: "vp8", bitrate: 1000, keyframeInterval: 3 },
+  });
+  const { encoded, keyFrames, setEncodeQueueSize, controller } = injectVideoLoop(control);
+  const loop = control.processVideoFrames();
+
+  // 間隔 (3 枚) の境界に届かない 2 枚を encode する
+  for (let index = 0; index < 2; index++) {
+    controller.enqueue(createTestFrame(index));
+    await settle();
+  }
+
+  // キューが閾値を超えている間の 2 枚は破棄される
+  setEncodeQueueSize(3);
+  for (let index = 2; index < 4; index++) {
+    controller.enqueue(createTestFrame(index));
+    await settle();
+  }
+
+  // キューが空いた後は 3 枚目と 4 枚目が encode される
+  setEncodeQueueSize(0);
+  for (let index = 4; index < 6; index++) {
+    controller.enqueue(createTestFrame(index));
+    await settle();
+  }
+  controller.close();
+  await loop;
+
+  // encode したのは 4 枚であり、3 枚ごとのキーフレームは 4 枚目に現れる。
+  // 破棄した 2 枚を数えると通し番号が 6 になり、キーフレームは現れない
+  assert.equal(encoded.length, 4);
+  assert.deepEqual(keyFrames, [true, false, false, true]);
+  assert.equal(publisher.getStats().video?.droppedFrames, 2);
+  assert.equal(errors.length, 0);
+});
+
+// encode が同期 throw しても、フレームは必ず 1 回閉じられ、通し番号は進まない。
+// VideoEncoderWrapper.encode は try/catch を持たず encoder.encode と worker.postMessage の
+// 例外をそのまま伝えるため、この経路は実際に起こり得る。加算を encode より前に置くと
+// encode していないフレームで番号が進み、キーフレームの要求を消費する。
+// close() を分岐の外に置くと throw の経路で閉じ忘れる
+test("processVideoFrames: encode が同期 throw するとフレームを閉じ、通し番号を進めない", async () => {
+  const { publisher, control, errors } = createLoopTestContext({
+    video: { codec: "vp8", bitrate: 1000, keyframeInterval: 60 },
+  });
+  const { encoded, keyFrames, failNextEncode, controller } = injectVideoLoop(control);
+
+  // キーフレームを要求した直後のフレームで encode が同期 throw する。
+  // 通し番号が進むと要求が消費され、次に encode するフレームがキーフレームにならない
+  control.requestKeyframe();
+  const failed = createTestFrame();
+  failNextEncode(new Error("VideoEncoder.encode failed"));
+  // encode の同期 throw はループ全体の catch を抜けて終了するため、
+  // 次のフレームは新しいループで処理する (通し番号はインスタンスに残る)
+  const firstLoop = control.processVideoFrames();
+  controller.enqueue(failed);
+  await settle();
+  await firstLoop;
+
+  const secondLoop = control.processVideoFrames();
+  const next = createTestFrame();
+  controller.enqueue(next);
+  await settle();
+  controller.close();
+  await secondLoop;
+
+  // throw したフレームは encode されず、通し番号も据え置かれる (要求は next が引き継ぐ)
+  assert.equal(encoded.length, 1);
+  assert.strictEqual(encoded[0], next);
+  assert.deepEqual(keyFrames, [true]);
+  // throw したフレームも次のフレームも close() は 1 回だけである
+  assert.equal(failed.closeCount, 1);
+  assert.equal(next.closeCount, 1);
+  // encode の同期 throw は onError へ 1 回通知される (破棄の統計は増えない)
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0]?.message, "VideoEncoder.encode failed");
   assert.equal(publisher.getStats().video?.droppedFrames, 0);
 });
 
@@ -279,10 +467,6 @@ test("processVideoFrames: 新しい Group の要求を受けると次のフレ�
   });
   const { keyFrames, controller } = injectVideoLoop(control);
   const loop = control.processVideoFrames();
-  const settle = async (): Promise<void> => {
-    await Promise.resolve();
-    await Promise.resolve();
-  };
   for (let index = 0; index < 3; index++) {
     controller.enqueue(createTestFrame(index));
     await settle();
