@@ -4,10 +4,9 @@
 
 import { test, assert } from "vite-plus/test";
 import { C4M } from "moqt-js";
+import { formatMatch, formatNamespaceMatches } from "../../utils/c4m";
 import {
   formatBytes,
-  formatMatch,
-  formatNamespaceMatches,
   formatUnixTime,
   parseList,
   parseMatch,

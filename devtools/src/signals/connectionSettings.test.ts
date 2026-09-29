@@ -1,23 +1,31 @@
 import { test, assert } from "vite-plus/test";
-import { AuthorizationTokenAliasType } from "moqt-js";
+import { AuthorizationTokenAliasType, C4M } from "moqt-js";
 import {
   applyC4mFromUrl,
+  applyRelayUriInput,
+  audioTrackNameLocked,
   authorizationTokenAlias,
   authorizationTokenAliasType,
   authorizationTokenBase64,
   authorizationTokenType,
   authorizationTokenValue,
   buildAuthorizationToken,
+  buildConnectUrl,
   buildQueryString,
   buildQueryStringForMode,
+  c4mTrackNames,
   catalogSubscriptionTimeout,
   CATALOG_SUBSCRIPTION_TIMEOUTS,
+  fragment,
   initFromUrl,
   isAudioSourceType,
   isVideoSourceType,
   jitterBufferEnabled,
   mode,
   namespace,
+  namespaceArray,
+  namespaceLocked,
+  refreshMsfFragmentSettings,
   renderGroup,
   RENDER_GROUP_OPTIONS,
   resolveOptionNumber,
@@ -34,8 +42,14 @@ import {
   useDedicatedWorker,
   videoSource,
   videoTrackName,
+  videoTrackNameLocked,
   audioTrackName,
 } from "./connectionSettings";
+import {
+  buildCat,
+  buildCatWithTrackNames,
+  buildCatWithoutMoqtClaim,
+} from "../utils/c4mTestSupport";
 
 // テスト間で Authorization Token の signal を持ち越さないためのリセット
 function resetAuthorizationTokenSettings(): void {
@@ -44,6 +58,19 @@ function resetAuthorizationTokenSettings(): void {
   authorizationTokenType.value = "0";
   authorizationTokenValue.value = "";
   authorizationTokenBase64.value = "";
+}
+
+// テスト間で msf fragment の取り込み (namespace の固定とトラック名) を持ち越さないためのリセット
+const INITIAL_NAMESPACE = namespace.value;
+function resetMsfFragmentSettings(): void {
+  // MOQT URI を空にして、URL 由来の fragment と固定を解除する
+  applyRelayUriInput("");
+  // 手入力の fragment もテスト間で持ち越さない
+  fragment.value = "";
+  refreshMsfFragmentSettings();
+  namespace.value = INITIAL_NAMESPACE;
+  videoTrackName.value = "video";
+  audioTrackName.value = "audio";
 }
 
 // バイト列を Base64 文字列に変換する (C4M トークンの入力を作る)
@@ -492,7 +519,7 @@ test("buildQueryStringForMode: 今の設定を保ったまま mode だけを差�
     // 今のモードの signal は変えない
     assert.equal(mode.value, "both");
   } finally {
-    url.value = "moqt://127.0.0.1:4443/";
+    url.value = "";
   }
 });
 
@@ -513,7 +540,7 @@ test("buildQueryStringForMode: mode 以外の設定は buildQueryString と同�
     // both のクエリには mode が載らない
     assert.isNull(baseParams.get("mode"));
   } finally {
-    url.value = "moqt://127.0.0.1:4443/";
+    url.value = "";
     catalogSubscriptionTimeout.value = 5000;
     useDedicatedWorker.value = true;
   }
@@ -730,7 +757,291 @@ test("initFromUrl: 0 / 1 以外の useDedicatedWorker は無視する", () => {
 });
 
 // namespace の初期値は moqt/devtools/ + ランダム 16 文字 (a-zA-Z0-9)。複数の devtools が
-// 同じ relay に繋がっても namespace が衝突しないようにする
+// 同じ relay に繋がっても namespace が衝突しないようにする。
+// 接続設定を読み込むテストが namespace を書き換えるため、信号の初期値ではなく読み込み直後の値を確かめる
 test("namespace の初期値は moqt/devtools/ + ランダム 16 文字", () => {
-  assert.match(namespace.value, /^moqt\/devtools\/[a-zA-Z0-9]{16}$/);
+  assert.match(INITIAL_NAMESPACE, /^moqt\/devtools\/[a-zA-Z0-9]{16}$/);
+});
+
+// --- msf fragment の namespace ---
+
+// MOQT URI に msf fragment があるときは、その namespace を Namespace 欄へ反映して固定する。
+// msf fragment が接続先の namespace を決めるため、ユーザーの編集で認可された namespace から
+// 外れないようにする (draft-ietf-moq-msf-01 §11.1.2)
+test("refreshMsfFragmentSettings: msf fragment の namespace を反映して固定する", () => {
+  resetMsfFragmentSettings();
+  url.value = "moqt://sora-moq.example/#msf:15551-spam--catalog&c4m=QUFB";
+
+  refreshMsfFragmentSettings();
+
+  assert.equal(namespace.value, "15551/spam");
+  assert.isTrue(namespaceLocked.value);
+  assert.deepEqual(namespaceArray.value, ["15551", "spam"]);
+  resetMsfFragmentSettings();
+});
+
+// 解析できない msf fragment では固定しない (入力途中の値で固定されない)
+test("refreshMsfFragmentSettings: 解析できない msf fragment では固定しない", () => {
+  resetMsfFragmentSettings();
+  url.value = "moqt://sora-moq.example/#msf:15551-spam-";
+
+  refreshMsfFragmentSettings();
+
+  assert.isFalse(namespaceLocked.value);
+  assert.equal(namespace.value, INITIAL_NAMESPACE);
+  resetMsfFragmentSettings();
+});
+
+// msf fragment が無くなると固定を解除する。直前の値は Namespace 欄に残り、編集できる
+test("refreshMsfFragmentSettings: msf fragment が無くなると固定を解除する", () => {
+  resetMsfFragmentSettings();
+  url.value = "moqt://sora-moq.example/#msf:15551-spam--catalog";
+  refreshMsfFragmentSettings();
+  assert.isTrue(namespaceLocked.value);
+
+  url.value = "moqt://sora-moq.example/";
+  refreshMsfFragmentSettings();
+
+  assert.isFalse(namespaceLocked.value);
+  assert.equal(namespace.value, "15551/spam");
+  resetMsfFragmentSettings();
+});
+
+// namespace フィールドの percent-encoding (%11.1.2 の `.HH`) を decode して反映する
+test("refreshMsfFragmentSettings: percent-encoded な namespace フィールドを decode する", () => {
+  resetMsfFragmentSettings();
+  url.value = "moqt://sora-moq.example/#msf:a.2db-c--video";
+
+  refreshMsfFragmentSettings();
+
+  assert.equal(namespace.value, "a-b/c");
+  assert.deepEqual(namespaceArray.value, ["a-b", "c"]);
+  resetMsfFragmentSettings();
+});
+
+// Namespace の欄は `/` 区切りの文字列であり、フィールド自身に `/` を含む namespace を
+// 表示から復元できない。接続に使うフィールド列は msf fragment の値をそのまま保つ
+test("refreshMsfFragmentSettings: フィールドに / を含む namespace でも接続のフィールド列は msf fragment のまま", () => {
+  resetMsfFragmentSettings();
+  url.value = "moqt://sora-moq.example/#msf:a.2fb-c--video";
+
+  refreshMsfFragmentSettings();
+
+  assert.deepEqual(namespaceArray.value, ["a/b", "c"]);
+  resetMsfFragmentSettings();
+});
+
+// URL で開いたときも msf fragment の namespace を反映する。namespace クエリより優先する
+// (msf fragment が接続先の namespace を決めるため)
+test("initFromUrl: msf fragment の namespace を namespace クエリより優先する", () => {
+  resetMsfFragmentSettings();
+  const params = new URLSearchParams();
+  params.set("url", "moqt://example.com/moqt#msf:15551-spam--catalog");
+  params.set("namespace", "other/namespace");
+
+  initFromUrl(params.toString());
+
+  assert.equal(namespace.value, "15551/spam");
+  assert.isTrue(namespaceLocked.value);
+  assert.deepEqual(namespaceArray.value, ["15551", "spam"]);
+  resetMsfFragmentSettings();
+});
+
+// クエリに url が無いとき (Save で覚えていた MOQT URI を戻したとき) も、入力欄の MOQT URI の
+// msf fragment と c4m を取り込む。namespace の固定だけが適用されて Authorization Token が
+// 取り込まれない、という食い違いを作らない
+test("initFromUrl: クエリの url が無いときも入力欄の MOQT URI の msf fragment と c4m を取り込む", () => {
+  resetAuthorizationTokenSettings();
+  resetMsfFragmentSettings();
+  url.value = "moqt://sora-moq.example/#msf:15551-spam--catalog&c4m=QUFB";
+
+  initFromUrl("");
+
+  // MOQT URI は fragment を含めたまま、URI Fragment 欄へ映す
+  assert.equal(url.value, "moqt://sora-moq.example/#msf:15551-spam--catalog&c4m=QUFB");
+  assert.equal(fragment.value, "msf:15551-spam--catalog&c4m=QUFB");
+  assert.equal(authorizationTokenBase64.value, "QUFB");
+  assert.equal(authorizationTokenType.value, "1");
+  assert.equal(namespace.value, "15551/spam");
+  assert.isTrue(namespaceLocked.value);
+  resetMsfFragmentSettings();
+});
+
+// --- MOQT URI と URI Fragment ---
+
+// MOQT URI に URL 全体を貼り付けても fragment は消さず、URI Fragment 欄へ映す。
+// fragment から c4m を取り込み、msf fragment の namespace を固定する
+test("applyRelayUriInput: MOQT URI の fragment を URI Fragment 欄へ映す", () => {
+  resetAuthorizationTokenSettings();
+  resetMsfFragmentSettings();
+
+  applyRelayUriInput("moqt://sora-moq.example/#msf:15551-spam--catalog&c4m=QUFB");
+
+  // 貼り付けた URL はそのまま残る (fragment が消えない)
+  assert.equal(url.value, "moqt://sora-moq.example/#msf:15551-spam--catalog&c4m=QUFB");
+  assert.equal(fragment.value, "msf:15551-spam--catalog&c4m=QUFB");
+  // 映した fragment から c4m を取り込み、namespace を固定する
+  assert.equal(authorizationTokenBase64.value, "QUFB");
+  assert.equal(authorizationTokenType.value, "1");
+  assert.equal(namespace.value, "15551/spam");
+  assert.isTrue(namespaceLocked.value);
+  // 接続に使う URL は貼り付けた URL と同じ
+  assert.equal(buildConnectUrl(), "moqt://sora-moq.example/#msf:15551-spam--catalog&c4m=QUFB");
+  resetMsfFragmentSettings();
+});
+
+// MOQT URI から fragment を消すと URI Fragment 欄も消え、namespace の固定が解除される
+test("applyRelayUriInput: MOQT URI から fragment を消すと URI Fragment 欄も消える", () => {
+  resetMsfFragmentSettings();
+  applyRelayUriInput("moqt://sora-moq.example/#msf:15551-spam--catalog");
+  assert.equal(fragment.value, "msf:15551-spam--catalog");
+  assert.isTrue(namespaceLocked.value);
+
+  applyRelayUriInput("moqt://sora-moq.example/");
+
+  assert.equal(url.value, "moqt://sora-moq.example/");
+  assert.equal(fragment.value, "");
+  assert.isFalse(namespaceLocked.value);
+  resetMsfFragmentSettings();
+});
+
+// `type:value` の形でない `#` 以降は fragment ではないため、URI Fragment 欄へ映さない
+test("applyRelayUriInput: type:value でない # 以降は映さない", () => {
+  resetMsfFragmentSettings();
+
+  applyRelayUriInput("moqt://example.com/moqt#foo");
+
+  assert.equal(url.value, "moqt://example.com/moqt#foo");
+  assert.equal(fragment.value, "");
+  resetMsfFragmentSettings();
+});
+
+// クエリの url に fragment が含まれる共有リンクでも、MOQT URI はそのままに URI Fragment 欄へ映す
+test("initFromUrl: クエリの url の fragment を URI Fragment 欄へ映して復元する", () => {
+  resetAuthorizationTokenSettings();
+  resetMsfFragmentSettings();
+  const params = new URLSearchParams();
+  params.set("url", "moqt://example.com/moqt#msf:15551-spam--catalog&c4m=QUFB");
+
+  initFromUrl(params.toString());
+
+  assert.equal(url.value, "moqt://example.com/moqt#msf:15551-spam--catalog&c4m=QUFB");
+  assert.equal(fragment.value, "msf:15551-spam--catalog&c4m=QUFB");
+  assert.equal(authorizationTokenBase64.value, "QUFB");
+  assert.equal(namespace.value, "15551/spam");
+  resetMsfFragmentSettings();
+});
+
+// クエリの fragment は MOQT URI の fragment より優先する (共有リンクの値)
+test("initFromUrl: クエリの fragment を MOQT URI の fragment より優先する", () => {
+  resetMsfFragmentSettings();
+  const params = new URLSearchParams();
+  params.set("url", "moqt://example.com/moqt#msf:15551-spam--catalog");
+  params.set("fragment", "msf:room-123--video");
+
+  initFromUrl(params.toString());
+
+  assert.equal(url.value, "moqt://example.com/moqt#msf:15551-spam--catalog");
+  assert.equal(fragment.value, "msf:room-123--video");
+  assert.equal(namespace.value, "room/123");
+  assert.isTrue(namespaceLocked.value);
+  resetMsfFragmentSettings();
+});
+
+// --- c4m の track name ---
+
+// 取り込んだトークンの exact な track name を画面表示用に取り出せる。
+// トークンを解除すると空になる (取り込みの表示と送信内容が食い違わない)
+test("c4mTrackNames: 取り込んだトークンの track name を返し、解除で空になる", async () => {
+  resetAuthorizationTokenSettings();
+  const base64Url = await buildCatWithTrackNames(["catalog", "audio", "video", "events"]);
+
+  applyC4mFromUrl(`moqt://example.com/moqt#msf:15551-spam--catalog&c4m=${base64Url}`);
+
+  assert.deepEqual(c4mTrackNames.value, ["catalog", "audio", "video", "events"]);
+  resetAuthorizationTokenSettings();
+  assert.deepEqual(c4mTrackNames.value, []);
+});
+
+// c4m の moqt クレームが exact で audio / video を許可しているときは、その名前を
+// それぞれのトラック名の欄へ反映する (署名検証はしない)
+test("applyC4mFromUrl: c4m の exact な track name を audio / video の欄へ反映する", async () => {
+  resetAuthorizationTokenSettings();
+  resetMsfFragmentSettings();
+  videoTrackName.value = "camera";
+  audioTrackName.value = "microphone";
+  const base64Url = await buildCatWithTrackNames(["catalog", "audio", "video", "events"]);
+
+  const applied = applyC4mFromUrl(
+    `moqt://example.com/moqt#msf:15551-spam--catalog&c4m=${base64Url}`,
+  );
+
+  assert.equal(applied, true);
+  assert.equal(audioTrackName.value, "audio");
+  assert.equal(videoTrackName.value, "video");
+  // トークンが固定したトラック名は編集できない (トークンを解除するまで読み取り専用)
+  assert.isTrue(audioTrackNameLocked.value);
+  assert.isTrue(videoTrackNameLocked.value);
+  resetMsfFragmentSettings();
+});
+
+// moqt クレームが audio / video を許可していないときは、トラック名の欄を変えない
+// (トークンは track の役割を持たないため、名前が一致するものだけを反映する)
+test("applyC4mFromUrl: トークンに無い track name の欄は変えない", async () => {
+  resetAuthorizationTokenSettings();
+  resetMsfFragmentSettings();
+  videoTrackName.value = "camera";
+  audioTrackName.value = "microphone";
+  const base64Url = await buildCatWithoutMoqtClaim();
+
+  const applied = applyC4mFromUrl(
+    `moqt://example.com/moqt#msf:15551-spam--catalog&c4m=${base64Url}`,
+  );
+
+  assert.equal(applied, true);
+  assert.equal(audioTrackName.value, "microphone");
+  assert.equal(videoTrackName.value, "camera");
+  // トークンが名前を固定していないため、トラック名の欄は編集できる
+  assert.isFalse(audioTrackNameLocked.value);
+  assert.isFalse(videoTrackNameLocked.value);
+  resetMsfFragmentSettings();
+});
+
+// prefix の track match は 1 つの名前を表さないため、トラック名の欄へ反映しない
+test("applyC4mFromUrl: prefix の track match はトラック名の欄へ反映しない", async () => {
+  resetAuthorizationTokenSettings();
+  resetMsfFragmentSettings();
+  videoTrackName.value = "camera";
+  const scope = C4M.createMoqtScope(["Publish"]);
+  // track match だけの scope は表現できないため、namespace match を置く
+  scope.namespace.push(C4M.namespaceMatchValue(C4M.exactMatch(new TextEncoder().encode("15551"))));
+  scope.track = C4M.prefixMatch(new TextEncoder().encode("cam"));
+  const base64Url = await buildCat([scope]);
+
+  applyC4mFromUrl(`moqt://example.com/moqt#msf:15551-spam--catalog&c4m=${base64Url}`);
+
+  assert.equal(videoTrackName.value, "camera");
+  resetMsfFragmentSettings();
+});
+
+// base64url (パディング省略) で発行された c4m でも、復号した生バイト列を CAT として送る。
+// 標準 Base64 の atob では復号できないため、C4M のデコーダと同じ規則を使う
+test("buildAuthorizationToken: base64url の c4m を復号して CAT として送る", async () => {
+  resetAuthorizationTokenSettings();
+  const base64Url = await buildCatWithTrackNames(["audio"]);
+
+  const applied = applyC4mFromUrl(
+    `moqt://example.com/moqt#msf:15551-spam--catalog&c4m=${base64Url}`,
+  );
+
+  assert.equal(applied, true);
+  assert.equal(authorizationTokenBase64.value, base64Url);
+  const token = buildAuthorizationToken();
+  assert.equal(token?.aliasType, AuthorizationTokenAliasType.USE_VALUE);
+  if (token?.aliasType === AuthorizationTokenAliasType.USE_VALUE) {
+    assert.equal(token.tokenType, 1n);
+    // COSE 形式のトークンは CWT タグ (61) から始まる (draft-ietf-moq-c4m-01 §2)
+    assert.equal(token.tokenValue[0], 0xd8);
+    assert.equal(token.tokenValue[1], 0x3d);
+  }
 });

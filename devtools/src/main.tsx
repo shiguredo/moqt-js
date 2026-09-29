@@ -1,6 +1,11 @@
 import { render } from "preact";
 import { App } from "./App";
-import { initFromUrl, mode, savedServerUrl, url } from "./signals/connectionSettings";
+import {
+  applyRelayUriInput,
+  initFromUrl,
+  mode,
+  savedServerUrl,
+} from "./signals/connectionSettings";
 import * as sub from "./signals/subscriber";
 import { initTestApi } from "./testApi";
 import { queryServerUrl, readStoredServerUrl } from "./utils/serverUrlStore";
@@ -8,11 +13,13 @@ import "./index.css";
 
 async function start(): Promise<void> {
   const search = window.location.search;
-  // クエリの url が無いときだけ、Save で残した Relay URI を戻す
+  // クエリの url が無いときだけ、Save で残した MOQT URI を戻す
   if (queryServerUrl(search) === null) {
     const stored = await readStoredServerUrl();
     if (stored !== null) {
-      url.value = stored;
+      // fragment を URI Fragment 欄へ映し、c4m の取り込みと msf fragment の namespace の
+      // 固定も行う
+      applyRelayUriInput(stored);
       savedServerUrl.value = stored;
     }
   }

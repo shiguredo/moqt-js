@@ -116,8 +116,8 @@ test("buildSubscriberExportText: 見つからない id では接続設定とロ�
   assert.include(text, "=== Debug Logs ([gone]) ===");
 });
 
-test("Copy for LLM の 3 つの本文が Relay URI の c4m (認可トークン) を伏せ字にする", () => {
-  // Relay URI は設定の節 (url / fragment) と統計の節 (serverUrl) の両方に出る。
+test("Copy for LLM の 3 つの本文が MOQT URI の c4m (認可トークン) を伏せ字にする", () => {
+  // MOQT URI は設定の節 (url / fragment) と統計の節 (serverUrl) の両方に出る。
   // 配信を始めたページでは Publisher の節も出るため、節ごとではなく本文全体で伏せる。
   // ボタンは 3 つ (All / Publisher / Subscriber) あるため、どの本文でも伏せ字にする
   const c4mBase64 = "c2VudGluZWwtYzRtLXRva2Vu";

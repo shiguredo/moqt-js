@@ -397,6 +397,8 @@ moqt-js を利用した MOQT の動作確認ツールです。
 - MAX_CACHE_DURATION / targetLatency / renderGroup の設定
 - 自己署名証明書のハッシュ指定
 - Authorization Token の指定 (MSF URL の c4m パラメータ対応)
+- MOQT URI の `#msf:` fragment を URI Fragment 欄へ映して表示し、namespace の固定と c4m の track name の反映を行う
+- c4m のトークンのデコード結果 (クレームと moqt スコープ) を Authorization Token の欄に表示する
 - WebCodecs Dedicated Worker 対応
 - 音声レベルメーター (peak / RMS / 波形)
 - 音声と映像の同期再生

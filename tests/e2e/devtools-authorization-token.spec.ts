@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { C4M } from "moqt-js";
 
 // devtools の Authorization Token の UI テスト
 // 実リレーは起動しない。c4m の取り込みと Token Type 入力による解除を UI で観測する。
@@ -7,6 +8,26 @@ const DEVTOOLS_URL = "http://localhost:5173/index.html";
 
 // c4m の Base64 トークン (draft-ietf-moq-msf-01 §11.1.1 / draft-ietf-moq-c4m-01 §2)
 const C4M_BASE64 = "QUFB";
+
+const TEXT_ENCODER = new TextEncoder();
+
+// moqt クレームに exact な track name のスコープを持つ CAT を発行し、URL に載る base64url
+// (パディング省略) で返す。トークンの発行にはライブラリの実装 (Web Crypto API) を使う
+async function buildCatWithTrackNames(trackNames: readonly string[]): Promise<string> {
+  const scopes = trackNames.map((trackName) => {
+    const scope = C4M.createMoqtScope(["Subscribe", "Publish"]);
+    scope.namespace.push(C4M.namespaceMatchValue(C4M.exactMatch(TEXT_ENCODER.encode("15551"))));
+    scope.namespace.push(C4M.namespaceMatchValue(C4M.exactMatch(TEXT_ENCODER.encode("spam"))));
+    scope.namespace.push(C4M.namespaceMatchEnd());
+    scope.track = C4M.exactMatch(TEXT_ENCODER.encode(trackName));
+    return scope;
+  });
+  const claims = C4M.createCatClaims();
+  claims.moqt = { scopes };
+  const key = C4M.symmetricKey(new Uint8Array(32).fill(0x0b));
+  const tokenBytes = await new C4M.CatTokenBuilder({ claims }).buildCose(new C4M.WebCrypto(), key);
+  return C4M.encodeBase64Url(tokenBytes);
+}
 
 test("c4m の取り込みで表示が出て Token Type が 1 (CAT) になり、Token Type の編集で解除される", async ({
   page,
@@ -55,4 +76,58 @@ test("c4m が無い URL では既定の Token Type 0 のままで c4m の表示�
   await page.getByTestId("authorization-token-type").fill("2");
   await page.getByTestId("authorization-token-value").fill("manual-token");
   await expect(page.getByTestId("authorization-token-type")).toHaveValue("2");
+});
+
+// Sora の MSF URL を想定し、msf fragment の namespace が Namespace 欄へ反映されて
+// 編集できなくなることを確かめる。msf fragment が接続先の namespace を決めるため、
+// ユーザーの編集で認可された namespace から外れないようにする
+test("msf fragment の namespace を固定し、c4m の track name を反映する", async ({ page }) => {
+  const c4m = await buildCatWithTrackNames(["catalog", "audio", "video", "events"]);
+  const msfFragment = `msf:15551-spam--catalog&c4m=${c4m}`;
+  const params = new URLSearchParams();
+  params.set("url", `moqt://sora-moq.example/#${msfFragment}`);
+  // 既定と違うトラック名を指定しておき、c4m の track name で上書きされることを確かめる
+  params.set("videoTrackName", "cam");
+  params.set("audioTrackName", "mic");
+
+  await page.goto(`${DEVTOOLS_URL}?${params.toString()}`);
+
+  // MOQT URI は貼り付けた URL のまま (fragment が消えない)。
+  // fragment は URI Fragment 欄へ映し、読み取り専用にする
+  await expect(page.getByTestId("moqt-uri")).toHaveValue(`moqt://sora-moq.example/#${msfFragment}`);
+  const fragmentInput = page.getByTestId("uri-fragment");
+  await expect(fragmentInput).toHaveValue(msfFragment);
+  await expect(fragmentInput).toHaveAttribute("readonly", "");
+
+  // Namespace は msf fragment の値になり、読み取り専用になる
+  const namespaceInput = page.getByTestId("namespace");
+  await expect(namespaceInput).toHaveValue("15551/spam");
+  await expect(namespaceInput).toHaveAttribute("readonly", "");
+
+  // c4m の取り込みは従来どおり (Token Type は CAT を表す 1)
+  await expect(page.getByTestId("authorization-token-c4m")).toHaveCount(1);
+  await expect(page.getByTestId("authorization-token-type")).toHaveValue("1");
+  // 取り込んだトークンが許可する track name を画面に出す
+  await expect(page.getByTestId("authorization-token-c4m-tracks")).toHaveText(
+    "Tracks: catalog, audio, video, events",
+  );
+
+  // moqt クレームの exact な track name が audio / video の欄へ反映され、読み取り専用になる
+  // (URL の videoTrackName / audioTrackName より c4m を優先する)
+  const audioTrackNameInput = page.getByTestId("audio-track-name");
+  const videoTrackNameInput = page.getByTestId("video-track-name");
+  await expect(audioTrackNameInput).toHaveValue("audio");
+  await expect(videoTrackNameInput).toHaveValue("video");
+  await expect(audioTrackNameInput).toHaveAttribute("readonly", "");
+  await expect(videoTrackNameInput).toHaveAttribute("readonly", "");
+
+  // デコード結果 (形式 / alg / スコープ) は常に表示する
+  await expect(page.getByTestId("authorization-token-c4m-details")).toBeVisible();
+  await expect(page.getByTestId("c4m-token-format")).toHaveText("coseMac0 / HmacSha256");
+  await expect(page.getByTestId("c4m-token-scope")).toHaveCount(4);
+  // スコープは Actions / Namespace / Track の 3 列で 1 スコープ 1 行にする
+  const firstScope = page.getByTestId("c4m-token-scope").first();
+  await expect(firstScope.locator("td").nth(0)).toHaveText("SUBSCRIBE, PUBLISH");
+  await expect(firstScope.locator("td").nth(1)).toHaveText("15551, spam, end");
+  await expect(firstScope.locator("td").nth(2)).toHaveText("catalog");
 });

@@ -1,5 +1,5 @@
 /**
- * Relay URI を OPFS に残すかの判定
+ * MOQT URI を OPFS に残すかの判定
  *
  * Save を押したときだけ書き、Forget を押したときは消す。
  */

@@ -11,6 +11,9 @@
 
 ## develop
 
+- [CHANGE] `C4M.moqtActionName` が ClientSetup / ServerSetup に `SETUP` を返すようにする
+  - draft-ietf-moq-transport-21 で CLIENT_SETUP と SERVER_SETUP が 1 つの SETUP メッセージに統合されたため。Authorization Context (Table 2) と同じ名前になる
+  - @voluntas
 - [CHANGE] moqt-devtools の event timeline の eventType を `app.shiguredo.moqt-devtools.messages` にする
   - 逆ドメイン名の取り方を見直し、画面の呼び名 (Messages) に揃える。catalog の eventType が変わる (購読側は packaging でトラックを探すため、購読の動作は変わらない)
   - @voluntas
@@ -34,6 +37,15 @@
   - @voluntas
 - [CHANGE] moqt-devtools の `window.moqtDevTools` が返す Subscriber の統計で、音声の項目を `audio` の下へまとめる
   - `audioObjectsReceived` / `audioChunksDecoded` / `audioPeakDbfs` / `audioRmsDbfs` / `audioLastLevel` / `audioLastVoiceActivity` / `audioPlayoutRebases` / `audioPlayoutDrops` を `audio.objectsReceived` などの入れ子にする。E2E が読む名前が変わるため後方互換はない
+  - @voluntas
+- [ADD] moqt-devtools が MOQT URI / URI Fragment の msf fragment から namespace と track name を取り込む
+  - MOQT URI は fragment を含めたまま保持し、fragment を URI Fragment 欄へ映して読み取り専用にする (貼り付けた URL から fragment が消えない)。msf fragment が接続先の namespace と適用する c4m を決めるため、画面から変えられないようにする。Copy URL と Save は MOQT URI をそのまま 1 つの URL として扱う
+  - msf fragment の namespace を Namespace 欄へ反映し、読み取り専用にする (draft-ietf-moq-msf-01 §11.1.2)
+  - c4m の moqt クレームが exact で許可する track name のうち audio / video を、それぞれのトラック名の欄へ反映して読み取り専用にし、許可されている track name の一覧を Authorization Token の欄に表示する (署名検証はしない。送信するトークンは relay が検証する)。トークンを解除するとトラック名は編集できる
+  - 取り込んだトークンのデコード結果 (形式 / alg / iss / aud / exp / nbf / iat / moqt スコープの Actions / Namespace / Track Name) を Authorization Token の欄に常時表示する
+  - @voluntas
+- [UPDATE] moqt-devtools の Relay URI 欄の表示名を MOQT URI に変更し、初期値を空にする
+  - 接続先の URI を MOQT URI と呼ぶ。何も入力されていないことが分かるように初期値を持たせず、`moqt://moq.example.com/` を参考値として placeholder に出す
   - @voluntas
 - [ADD] moqt-devtools に C4M トークンの生成と検証ツールを追加する
   - `c4m-devtools.html` で CAT トークンをデコードし、クレーム / moqt スコープ / 有効期限を表示する。JWK または対称鍵を貼り付けて署名を検証でき、アクション + namespace + track の認可判定もできる
@@ -269,6 +281,9 @@
   - `createMediaSubscriber` の `reconfigureAudioDecoder` / `reconfigureVideoDecoder` を reject しない契約にし、codec / channels の解決が同期 throw した場合も含めて `onError` へ 1 回流す (呼び出し側は `void` で呼ぶため、reject を残すと未処理の rejection になる)
   - `Publisher.sendObject` の JSDoc に、事前検証が自分で通知してから reject することと、closed では同期 throw することを明記する。`sendDatagram` の JSDoc の「closed 後は検証前に no-op で返す」も実装 (同期 throw) に合わせる
   - `createMediaSubscriber` の映像デコーダーの error コールバックは、`onError` が throw しても復帰 (復号順の初期化と `reset()`) を止めない。`reconfigure*` と `resume()` も通知の throw を吸収し、未処理の rejection を残さない
+  - @voluntas
+- [FIX] moqt-devtools で、base64url で発行された c4m を取り込めないのを修正する
+  - URL の c4m を標準 Base64 として `atob` で復号していたため、base64url の `-` と `_` を含むトークンが無視されていた。標準 Base64 と base64url の両方を受け付け、Token Type 0x01 (CAT) として送る生バイト列も同じ規則で復号する
   - @voluntas
 - [FIX] ライブラリの映像デコーダーが恒久エラーで Worker の再生成を繰り返すのを修正する
   - 非対応 codec は `VideoDecoder.isConfigSupported` の事前確認で検出し、Worker も `VideoDecoder` も作らずに `Decoder codec not supported: <codec>` で失敗する。false と reject の両方を非対応として扱い、確認は Worker の生成 / `VideoDecoder` の configure の直前 (`src/codec/configSupport.ts`) に置く。WebCodecs 非搭載の環境は codec の非対応と区別できる文言で失敗する
