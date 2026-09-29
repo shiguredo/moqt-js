@@ -15,6 +15,7 @@ import {
   validateRemoveTrack,
 } from "./catalogValidation";
 import { assertJsonSafeBigInt } from "./json";
+import { setOwnField } from "./ownFields";
 import type {
   Catalog,
   CatalogDelta,
@@ -72,7 +73,7 @@ export function encodeCatalog(catalog: Catalog): Uint8Array {
   const catalogRecord = catalog as unknown as Record<string, unknown>;
   for (const key of Object.keys(catalog)) {
     if (!KNOWN_CATALOG_ROOT_FIELDS.has(key)) {
-      obj[key] = catalogRecord[key];
+      setOwnField(obj, key, catalogRecord[key]);
     }
   }
 
@@ -84,7 +85,8 @@ export function encodeCatalog(catalog: Catalog): Uint8Array {
  * track を JSON シリアライズ可能な形に変換する (bigint → number)。
  *
  * `template` の Location bigint は number に変換する。それ以外のフィールドは
- * そのまま返す。`Object.assign` で shallow copy し、template だけ差し替える。
+ * そのまま返す。スプレッドで shallow copy し、template だけ差し替える (`Object.assign`
+ * は `[[Set]]` 経由で写すため、own `__proto__` で `[[Prototype]]` を差し替えてしまう)。
  */
 function serializeTrackForJson(track: CatalogTrack): Record<string, unknown> {
   if (track.template === undefined) {
@@ -149,7 +151,7 @@ export function encodeCatalogDelta(delta: CatalogDelta): Uint8Array {
   const deltaRecord = delta as unknown as Record<string, unknown>;
   for (const key of Object.keys(delta)) {
     if (!KNOWN_CATALOG_DELTA_ROOT_FIELDS.has(key)) {
-      obj[key] = deltaRecord[key];
+      setOwnField(obj, key, deltaRecord[key]);
     }
   }
 
@@ -258,7 +260,7 @@ function decodeCatalogDelta(obj: Record<string, unknown>): CatalogDelta {
   const deltaRecord = delta as unknown as Record<string, unknown>;
   for (const key of Object.keys(obj)) {
     if (!KNOWN_CATALOG_DELTA_ROOT_FIELDS.has(key)) {
-      deltaRecord[key] = obj[key];
+      setOwnField(deltaRecord, key, obj[key]);
     }
   }
 

@@ -13,6 +13,7 @@ import {
   validatePackagingSpecificRules,
   validateRoleSpecificRules,
 } from "./catalogTrackValidation";
+import { setOwnField } from "./ownFields";
 import type { Catalog, CatalogDelta, CatalogTrack } from "./types";
 
 // =============================================================================
@@ -169,7 +170,7 @@ export function applyCatalogDelta(
   const resultRecord = result as unknown as Record<string, unknown>;
   for (const key of Object.keys(current)) {
     if (!KNOWN_CATALOG_ROOT_FIELDS.has(key)) {
-      resultRecord[key] = currentRecord[key];
+      setOwnField(resultRecord, key, currentRecord[key]);
     }
   }
 

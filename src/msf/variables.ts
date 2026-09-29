@@ -6,6 +6,7 @@
 
 import { KNOWN_CATALOG_ROOT_FIELDS } from "./catalogValidation";
 import { KNOWN_TRACK_FIELDS } from "./catalogTrackValidation";
+import { setOwnField } from "./ownFields";
 import type { AuthInfo, Catalog, CatalogTrack, InitDataEntry, PublishTrack } from "./types";
 
 // =============================================================================
@@ -51,12 +52,13 @@ export function resolveCatalogVariables(
   }
 
   const result: Catalog = { ...catalog };
-  // root level の未知フィールドにも %var% 置換を適用する（§5.4）
+  // root level の未知フィールドにも %var% 置換を適用する（§5.4）。
+  // result は spread 済みのため setOwnField に揃えても挙動は変わらない
   const catalogRecord = catalog as unknown as Record<string, unknown>;
   const resultRecord = result as unknown as Record<string, unknown>;
   for (const key of Object.keys(catalog)) {
     if (!KNOWN_CATALOG_ROOT_FIELDS.has(key)) {
-      resultRecord[key] = substituteUnknownValue(catalogRecord[key], variables, key);
+      setOwnField(resultRecord, key, substituteUnknownValue(catalogRecord[key], variables, key));
     }
   }
   result.tracks = catalog.tracks.map((track) => substituteTrack(track, variables));
@@ -104,6 +106,9 @@ function substituteTrack(
   variables: Readonly<Record<string, string>>,
 ): CatalogTrack {
   const result: CatalogTrack = { ...track };
+  // 動的キーで書き戻すため、既知 / 未知フィールドで共用する Record ビューを用意する
+  const trackRecord = track as unknown as Record<string, unknown>;
+  const resultRecord = result as unknown as Record<string, unknown>;
   // 単純な string field
   const stringFields: (keyof CatalogTrack)[] = [
     "name",
@@ -126,11 +131,7 @@ function substituteTrack(
   for (const key of stringFields) {
     const value = track[key];
     if (typeof value === "string") {
-      (result as unknown as Record<string, unknown>)[key] = substituteString(
-        value,
-        variables,
-        `tracks[].${key}`,
-      );
+      setOwnField(resultRecord, key, substituteString(value, variables, `tracks[].${key}`));
     }
   }
   // depends は string[]
@@ -151,9 +152,9 @@ function substituteTrack(
     const replaced: AuthInfo = {};
     for (const [k, v] of Object.entries(track.authInfo)) {
       if (typeof v === "string") {
-        replaced[k] = substituteString(v, variables, `tracks[].authInfo.${k}`);
+        setOwnField(replaced, k, substituteString(v, variables, `tracks[].authInfo.${k}`));
       } else {
-        replaced[k] = v;
+        setOwnField(replaced, k, v);
       }
     }
     result.authInfo = replaced;
@@ -177,12 +178,13 @@ function substituteTrack(
   // 未知フィールド（KNOWN_TRACK_FIELDS 以外）にも %var% 置換を適用する（§5.4、§5.6.14 例 c4m）。
   // §5.4 にネスト再帰規則は無いが、本実装ではネスト object / array 内の string も走査する
   // （再帰方針は本実装で定義しテストで固定する）。
+  // result は spread 済みのため setOwnField に揃えても挙動は変わらない
   for (const key of Object.keys(track)) {
     if (!KNOWN_TRACK_FIELDS.has(key)) {
-      (result as unknown as Record<string, unknown>)[key] = substituteUnknownValue(
-        (track as unknown as Record<string, unknown>)[key],
-        variables,
-        `tracks[].${key}`,
+      setOwnField(
+        resultRecord,
+        key,
+        substituteUnknownValue(trackRecord[key], variables, `tracks[].${key}`),
       );
     }
   }
@@ -209,7 +211,7 @@ function substituteUnknownValue(
   if (typeof value === "object" && value !== null) {
     const replaced: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(value)) {
-      replaced[k] = substituteUnknownValue(v, variables, `${fieldPath}.${k}`);
+      setOwnField(replaced, k, substituteUnknownValue(v, variables, `${fieldPath}.${k}`));
     }
     return replaced;
   }

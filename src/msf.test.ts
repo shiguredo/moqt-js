@@ -58,6 +58,23 @@ function encodeRaw(obj: unknown): Uint8Array {
   return new TextEncoder().encode(JSON.stringify(obj));
 }
 
+/** JSON 文字列をそのままバイト列にする (`__proto__` を own property として持つ入力の組み立てに使う) */
+function encodeRawJson(json: string): Uint8Array {
+  return new TextEncoder().encode(json);
+}
+
+/** `__proto__` が own data property として保持され、`[[Prototype]]` が差し替わっていないことを検証する */
+function assertOwnProtoField(value: object, expected: unknown): void {
+  assert.strictEqual(Object.getPrototypeOf(value), Object.prototype);
+  assert.isTrue(Object.hasOwn(value, "__proto__"));
+  assert.deepEqual(Object.getOwnPropertyDescriptor(value, "__proto__"), {
+    value: expected,
+    writable: true,
+    enumerable: true,
+    configurable: true,
+  });
+}
+
 // =============================================================================
 // 定数 / バージョン
 // =============================================================================
@@ -669,6 +686,144 @@ test("Catalog: 未知ルートフィールドは検証しないが保持する (
   assert.deepEqual((decoded as unknown as Record<string, unknown>).customRootField, {
     foo: "bar",
   });
+});
+
+// __proto__ の取り扱い（§5 の未知フィールド保持）
+//
+// JSON.parse は "__proto__" を own data property として作るため Object.keys に現れる。
+// 通常の代入で別のオブジェクトへ写すと Object.prototype の __proto__ setter が呼ばれ
+// [[Prototype]] が差し替わる。保持・再出力・置換の各経路がそれを踏まないことを固定する。
+// 入力は生の JSON 文字列にする (オブジェクトリテラルの "__proto__" は own property に
+// ならないため、リテラルで書くと検証にならない)。
+
+test("Catalog: __proto__ を含む未知ルートフィールドを decode してもプロトタイプが差し替わらない (§5)", () => {
+  const json =
+    '{"version":"draft-01","tracks":[{"name":"v","packaging":"loc","isLive":true}],"__proto__":{"polluted":true}}';
+  const decoded = decodeCatalogMessage(encodeRawJson(json)) as Catalog;
+  assertOwnProtoField(decoded, { polluted: true });
+  // encode → 再 decode でも own property として保持される (round-trip)
+  assertOwnProtoField(decodeCatalogMessage(encodeCatalog(decoded)), { polluted: true });
+});
+
+test("Catalog: 未知ルートフィールドの __proto__ が null でもプロトタイプが差し替わらない (§5)", () => {
+  // 通常の代入では null プロトタイプになり、Object.prototype のメソッドを継承経由で
+  // 呼べないオブジェクトができていた
+  const json =
+    '{"version":"draft-01","tracks":[{"name":"v","packaging":"loc","isLive":true}],"__proto__":null}';
+  const decoded = decodeCatalogMessage(encodeRawJson(json)) as Catalog;
+  assertOwnProtoField(decoded, null);
+});
+
+test("Catalog: 未知ルートフィールドの __proto__ に偽の既知フィールドを入れても encode に漏れない (§5)", () => {
+  // 通常の代入では差し替えたプロトタイプ経由で generatedAt / isComplete が見え、
+  // 再 encode の JSON に載っていた
+  const json =
+    '{"version":"draft-01","tracks":[{"name":"v","packaging":"loc","isLive":true}],"__proto__":{"generatedAt":"evil","isComplete":true}}';
+  const decoded = decodeCatalogMessage(encodeRawJson(json)) as Catalog;
+  assert.isUndefined(decoded.generatedAt);
+  assert.isUndefined(decoded.isComplete);
+  const redecoded = decodeCatalogMessage(encodeCatalog(decoded)) as Catalog;
+  assert.isFalse(Object.hasOwn(redecoded, "generatedAt"));
+  assert.isFalse(Object.hasOwn(redecoded, "isComplete"));
+});
+
+test("Catalog: __proto__ を含む未知 track フィールドを decode してもプロトタイプが差し替わらない (§5)", () => {
+  const json =
+    '{"version":"draft-01","tracks":[{"name":"v","packaging":"loc","isLive":true,"__proto__":{"polluted":true}}]}';
+  const decoded = decodeCatalogMessage(encodeRawJson(json)) as Catalog;
+  assertOwnProtoField(decoded.tracks[0], { polluted: true });
+  // encode の wire にも own property として現れる
+  const wire = JSON.parse(new TextDecoder().decode(encodeCatalog(decoded))) as {
+    tracks: Record<string, unknown>[];
+  };
+  assert.isTrue(Object.hasOwn(wire.tracks[0], "__proto__"));
+});
+
+test("Catalog: 未知ルートフィールドの __proto__ が配列でもプロトタイプが差し替わらない (§5)", () => {
+  // 通常の代入では配列インスタンスがプロトタイプになり、継承経由で length と添字が見えていた
+  const json =
+    '{"version":"draft-01","tracks":[{"name":"v","packaging":"loc","isLive":true}],"__proto__":[1,2]}';
+  const decoded = decodeCatalogMessage(encodeRawJson(json)) as Catalog;
+  assertOwnProtoField(decoded, [1, 2]);
+  assert.isUndefined((decoded as unknown as { length?: number }).length);
+});
+
+test("Catalog: template を持つ track でも __proto__ が encode で保持される (§5 / §7.4.1)", () => {
+  // template を持つ track だけが serializeTrackForJson のコピー経路を通る。このコピーが
+  // Object.assign だと own `__proto__` が wire から消え、プロトタイプが差し替わる
+  const json =
+    '{"version":"draft-01","tracks":[{"name":"vod","packaging":"mediatimeline","isLive":false,"depends":["v"],"mimeType":"application/json","template":[0,1000,[0,0],[0,0],0,0],"__proto__":{"polluted":true}}]}';
+  const decoded = decodeCatalogMessage(encodeRawJson(json)) as Catalog;
+  const redecoded = decodeCatalogMessage(encodeCatalog(decoded)) as Catalog;
+  assertOwnProtoField(redecoded.tracks[0], { polluted: true });
+  // template の bigint 変換を含めて round-trip する
+  assert.deepStrictEqual(redecoded.tracks[0].template, [0, 1000, [0n, 0n], [0n, 0n], 0, 0]);
+});
+
+test("CatalogDelta: __proto__ を含む未知ルートフィールドを decode してもプロトタイプが差し替わらない (§5)", () => {
+  const json =
+    '{"deltaUpdate":[{"op":"add","tracks":[{"name":"v","packaging":"loc","isLive":true}]}],"__proto__":{"polluted":true}}';
+  const decoded = decodeCatalogMessage(encodeRawJson(json)) as CatalogDelta;
+  assertOwnProtoField(decoded, { polluted: true });
+  // encode → 再 decode でも保持される (round-trip)
+  assertOwnProtoField(decodeCatalogMessage(encodeCatalogDelta(decoded)), { polluted: true });
+});
+
+test("applyCatalogDelta: 引き継いだ __proto__ でもプロトタイプが差し替わらない (§5)", () => {
+  const json =
+    '{"version":"draft-01","tracks":[{"name":"v","packaging":"loc","isLive":true}],"__proto__":{"polluted":true}}';
+  const current = decodeCatalogMessage(encodeRawJson(json)) as Catalog;
+  const delta: CatalogDelta = {
+    deltaUpdate: true,
+    operations: [{ type: "add", tracks: [{ name: "audio", packaging: "loc", isLive: true }] }],
+  };
+  const result = applyCatalogDelta(current, delta);
+  assertOwnProtoField(result, { polluted: true });
+  assert.strictEqual(result.tracks.length, 2);
+});
+
+test("resolveCatalogVariables: 未知 root field の __proto__ を置換してもプロトタイプが差し替わらない (§5.4)", () => {
+  // string 値の __proto__ は decode の代入で無視されてフィールドごと消えていた
+  // (この関数自身の代入先は spread 済みのため挙動は変わらない)
+  const json =
+    '{"version":"draft-01","tracks":[{"name":"v","packaging":"loc","isLive":true}],"__proto__":"%id%"}';
+  const decoded = decodeCatalogMessage(encodeRawJson(json)) as Catalog;
+  const resolved = resolveCatalogVariables(decoded, { id: "42" });
+  assertOwnProtoField(resolved, "42");
+});
+
+test("resolveCatalogVariables: 未知 track フィールドの __proto__ を置換してもプロトタイプが差し替わらない (§5.4)", () => {
+  const json =
+    '{"version":"draft-01","tracks":[{"name":"v","packaging":"loc","isLive":true,"__proto__":"%id%"}]}';
+  const decoded = decodeCatalogMessage(encodeRawJson(json)) as Catalog;
+  const resolved = resolveCatalogVariables(decoded, { id: "42" });
+  assertOwnProtoField(resolved.tracks[0], "42");
+});
+
+test("resolveCatalogVariables: ネストした未知フィールドの __proto__ でもプロトタイプが差し替わらない (§5.4)", () => {
+  const json =
+    '{"version":"draft-01","tracks":[{"name":"v","packaging":"loc","isLive":true,"vendorExt":{"__proto__":{"polluted":true},"url":"https://log.example/%id%"}}]}';
+  const decoded = decodeCatalogMessage(encodeRawJson(json)) as Catalog;
+  const resolved = resolveCatalogVariables(decoded, { id: "42" });
+  const vendorExt = (resolved.tracks[0] as unknown as Record<string, unknown>).vendorExt as {
+    url: string;
+  };
+  assertOwnProtoField(vendorExt, { polluted: true });
+  // ネスト内の string も従来どおり置換される
+  assert.strictEqual(vendorExt.url, "https://log.example/42");
+});
+
+test("resolveCatalogVariables: authInfo の __proto__ が object 値でもプロトタイプが差し替わらない (§5.2.42)", () => {
+  // authInfo の値は scheme-specific の configuration object であり (§5.2.42)、
+  // object を代入すると通常の代入ではプロトタイプが差し替わっていた
+  const json =
+    '{"version":"draft-01","tracks":[{"name":"v","packaging":"loc","isLive":true,"authInfo":{"__proto__":{"cat":true},"scheme":"%id%"}}]}';
+  const decoded = decodeCatalogMessage(encodeRawJson(json)) as Catalog;
+  const resolved = resolveCatalogVariables(decoded, { id: "42" });
+  const authInfo = resolved.tracks[0].authInfo;
+  assert.isDefined(authInfo);
+  assertOwnProtoField(authInfo as object, { cat: true });
+  assert.strictEqual((authInfo as Record<string, unknown>).scheme, "42");
 });
 
 test("Catalog: template の round-trip と precision loss reject (§7.4.1)", () => {
