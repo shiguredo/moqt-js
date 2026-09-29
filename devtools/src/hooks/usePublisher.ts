@@ -54,6 +54,7 @@ import {
   catalogRepublishIntervalMs,
 } from "../utils/catalogRepublish";
 import { shouldSendAudioAsDatagram } from "../utils/audioDelivery";
+import { shouldRequestKeyFrame } from "../utils/keyframeInterval";
 import {
   appendMessageEventEntry,
   buildMessageEventEntry,
@@ -474,18 +475,6 @@ export function buildObjectSendPlan(
 }
 
 /**
- * フレームにキーフレームを要求するかを判定する
- *
- * 先頭フレーム (framesEncoded = 0) と keyframeInterval フレームごとに要求する。
- * 要求しないフレームはエンコーダがデルタフレームとして符号化する。
- * 間隔を無視して全フレームをキーフレームにすると帯域を浪費し、
- * 逆に要求が一度も出ないと購読を開始できないため、境界を検証できる形にする。
- */
-export function shouldRequestKeyFrame(framesEncoded: number, keyframeInterval: number): boolean {
-  return framesEncoded % keyframeInterval === 0;
-}
-
-/**
  * 次に符号化するフレームをキーフレームにするかを決める
  *
  * keyframeInterval ごとのキーフレームに加えて、新しい Group の要求 (NEW_GROUP_REQUEST) を
@@ -493,6 +482,9 @@ export function shouldRequestKeyFrame(framesEncoded: number, keyframeInterval: n
  * (draft-ietf-moq-transport-21 Section 9.20.20: dynamic Groups に対応する publisher は、現在の
  * Group を終えて新しい Group をできるだけ早く始める SHOULD)。キーフレームにしたフレームから
  * 間隔を数え直す。次のフレームまでに届いた複数の要求は 1 枚のキーフレームにまとまる
+ *
+ * 間隔ごとの判定は共有モジュール (utils/keyframeInterval.ts) の `shouldRequestKeyFrame` に
+ * 任せる。無効な間隔は既定値として扱われるため、この関数は throw しない
  *
  * @param framesSinceKeyFrame - 直前のキーフレームから符号化したフレーム数 (最初は 0)
  * @param newGroupRequested - 新しい Group の要求を受けて、まだキーフレームにしていないか

@@ -1,6 +1,7 @@
 import { signal, computed } from "@preact/signals";
 import { createVideoFrameSource } from "moqt-js";
 import { createDummyVideoStream, type DummyVideoGenerator } from "./utils/dummyVideo";
+import { DEFAULT_KEYFRAME_INTERVAL, shouldRequestKeyFrame } from "../utils/keyframeInterval";
 
 // デバイス情報
 export interface MediaDevice {
@@ -24,7 +25,12 @@ export const videoCodec = signal("vp09.00.10.08");
 export const resolution = signal("960x540");
 export const framerate = signal(30);
 export const bitrate = signal(2_000_000);
-export const keyframeInterval = signal(3600);
+// キーフレーム間隔 (frames)。既定は共有モジュール (utils/keyframeInterval.ts) の
+// DEFAULT_KEYFRAME_INTERVAL (無効な間隔を正規化するときの既定値でもある。30 fps で
+// 120 秒ぶん)。判定は同じモジュールの shouldRequestKeyFrame に任せる。ConfigPanel の
+// 選択肢 (30 / 60 / 90 / 120) はこの既定値 3600 を含まないため、開いた直後は select が
+// 空表示になる (既知の不一致。挙動は変えず、ここに記録だけ残す)
+export const keyframeInterval = signal(DEFAULT_KEYFRAME_INTERVAL);
 
 // Worker モード
 export type WorkerMode = "none" | "dedicated";
@@ -555,7 +561,10 @@ export async function startCapture(): Promise<void> {
           }
 
           if (encoderStatus.value === "configured") {
-            const keyFrame = encoderStats.value.frameCount % keyframeInterval.value === 0;
+            const keyFrame = shouldRequestKeyFrame(
+              encoderStats.value.frameCount,
+              keyframeInterval.value,
+            );
             const mode = encoderWorkerMode.value;
 
             if (mode === "none" && videoEncoder) {

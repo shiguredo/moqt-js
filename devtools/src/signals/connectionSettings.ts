@@ -18,6 +18,7 @@ import { toAudioOutputDevices, type AudioOutputDevice } from "../utils/audioOutp
 import { base64ToArrayBuffer } from "../utils/base64";
 import { decodeC4mBase64, decodeC4mTokenInfo, extractC4mBase64 } from "../utils/c4m";
 import { isResolution } from "../utils/codec";
+import { KEYFRAME_INTERVAL_OPTIONS } from "../utils/keyframeInterval";
 import { parseMsfFragmentFromInput } from "../utils/msfFragment";
 import { isDebugPanelOpen } from "./debug";
 
@@ -110,7 +111,9 @@ export const framerate = signal(30);
 export const bitrate = signal(2000000);
 // キーフレーム間隔 (frames)。既定は framerate 30 の 10 秒ぶん。長い間隔にすると、
 // 後から購読した相手が次のキーフレームまで復号を始められず、relay の cache 上限も
-// 超えやすい
+// 超えやすい。共有モジュール (utils/keyframeInterval.ts) の DEFAULT_KEYFRAME_INTERVAL は
+// 無効な間隔を正規化するときの既定値 (120 秒ぶん) で、moqt-devtools のこの signal の
+// 既定には使わない (webcodecs-devtools は同定数を画面の既定にしている)
 export const keyframeInterval = signal(300);
 
 // 音声設定
@@ -1047,11 +1050,20 @@ export function initFromUrl(search: string): void {
     }
   }
 
+  // キーフレーム間隔は ConnectionSettings の select と同じ許可リストで検証する
+  // (検証の規則は applyOptionNumber と同じく resolveOptionNumber に任せる)。選択肢に無い値を
+  // 受け入れると select の表示が空になり、表示と実際の設定が食い違う。0 / 負値 / 非整数を
+  // 通すと、剰余によるキーフレームの要求が一度も出なくなる。この signal は null を持てない
+  // ため、未指定 (空文字) のときは初期値のまま残す
   const keyframeIntervalParam = params.get("keyframeInterval");
-  if (keyframeIntervalParam) {
-    const parsed = Number.parseInt(keyframeIntervalParam, 10);
-    if (!Number.isNaN(parsed)) {
-      keyframeInterval.value = parsed;
+  if (keyframeIntervalParam !== null) {
+    const resolvedKeyframeInterval = resolveOptionNumber(
+      keyframeIntervalParam,
+      KEYFRAME_INTERVAL_OPTIONS,
+      keyframeInterval.value,
+    );
+    if (resolvedKeyframeInterval !== null) {
+      keyframeInterval.value = resolvedKeyframeInterval;
     }
   }
 

@@ -21,6 +21,7 @@ import {
   isAudioSourceType,
   isVideoSourceType,
   jitterBufferEnabled,
+  keyframeInterval,
   mode,
   namespace,
   namespaceArray,
@@ -50,6 +51,11 @@ import {
   buildCatWithTrackNames,
   buildCatWithoutMoqtClaim,
 } from "../utils/c4mTestSupport";
+import { KEYFRAME_INTERVAL_OPTIONS } from "../utils/keyframeInterval";
+
+// 接続設定の Keyframe Interval の初期値 (frames)。framerate 30 の 10 秒ぶんで、
+// signal の初期値と一致していなければならない (既定値を変えるときは両方を直す)
+const CONNECTION_SETTINGS_KEYFRAME_INTERVAL_DEFAULT = 300;
 
 // テスト間で Authorization Token の signal を持ち越さないためのリセット
 function resetAuthorizationTokenSettings(): void {
@@ -584,6 +590,114 @@ test("initFromUrl: 選択肢に無い catalogSubscriptionTimeout は無視する
   assert.equal(catalogSubscriptionTimeout.value, 5000);
   initFromUrl("catalogSubscriptionTimeout=0");
   assert.equal(catalogSubscriptionTimeout.value, 5000);
+});
+
+// Keyframe Interval は ConnectionSettings の select と同じ許可リストで検証する。
+// 選択肢と URL が受理する値は KEYFRAME_INTERVAL_OPTIONS の 1 箇所で一致するため、
+// 画面で選べる値は Copy URL で往復できる
+test("initFromUrl / buildQueryString: keyframeInterval を全ての選択肢で往復できる", () => {
+  for (const interval of KEYFRAME_INTERVAL_OPTIONS) {
+    keyframeInterval.value = interval;
+    const query = buildQueryString();
+    assert.equal(
+      new URLSearchParams(query).get("keyframeInterval"),
+      String(interval),
+      `${interval} を URL に載せる`,
+    );
+
+    // 復元の検証では、いったん初期値へ戻してから URL を適用する
+    keyframeInterval.value = CONNECTION_SETTINGS_KEYFRAME_INTERVAL_DEFAULT;
+    initFromUrl(query);
+    assert.equal(keyframeInterval.value, interval, `${interval} を復元する`);
+  }
+  keyframeInterval.value = CONNECTION_SETTINGS_KEYFRAME_INTERVAL_DEFAULT;
+});
+
+// 0 / 負値 / 非整数 / 10 進表記でない値 / 選択肢に無い値 / 空文字の keyframeInterval は
+// 無視し、初期値のまま残す。0 を受理すると剰余が NaN になり、先頭フレームを含めて
+// キーフレームの要求が一度も出なくなる (購読側が復号を始められない)。選択肢に無い正の
+// 整数 (1 / 7 / 3601 / 12345) を受理すると、select の表示が空になって表示と実際の設定が
+// 食い違う
+test("initFromUrl: 無効な keyframeInterval は初期値のまま残す", () => {
+  const invalidValues = [
+    // 0 と負値 (剰余が NaN になる値)
+    "0",
+    "-5",
+    // 非整数と 10 進表記でない値 (Number.parseInt の結果だけを見ると通ってしまう値)。
+    // %2B は + そのもので、表記としての符号は受理しない
+    "1.5",
+    "30.0",
+    "30abc",
+    "abc",
+    "%2B30",
+    "0x1e",
+    "1e2",
+    // 空文字 (select の「未指定」)
+    "",
+    // 選択肢に無い正の整数
+    "1",
+    "7",
+    "3601",
+    "12345",
+  ];
+  for (const invalid of invalidValues) {
+    keyframeInterval.value = CONNECTION_SETTINGS_KEYFRAME_INTERVAL_DEFAULT;
+    initFromUrl(`keyframeInterval=${invalid}`);
+    assert.equal(
+      keyframeInterval.value,
+      CONNECTION_SETTINGS_KEYFRAME_INTERVAL_DEFAULT,
+      `${invalid} を無視する`,
+    );
+  }
+
+  // 既に選んでいる値も、不正な URL では上書きしない
+  keyframeInterval.value = 60;
+  initFromUrl("keyframeInterval=0");
+  assert.equal(keyframeInterval.value, 60);
+  initFromUrl("keyframeInterval=-5");
+  assert.equal(keyframeInterval.value, 60);
+
+  // パラメータを持たない URL でも現在の値のまま残る
+  initFromUrl("mode=both");
+  assert.equal(keyframeInterval.value, 60);
+
+  keyframeInterval.value = CONNECTION_SETTINGS_KEYFRAME_INTERVAL_DEFAULT;
+});
+
+// 許可リストの判定は targetLatency と同じく resolveOptionNumber に任せるため、整数の
+// 表記であれば先頭に 0 が付いた値も値として受理する (値は許可リストに一致するので
+// select の表示は空にならない)。前後の空白も取り除いてから検証する
+test("initFromUrl: 整数の表記として解釈できる keyframeInterval を受理する", () => {
+  // 先頭に 0 が付いた表記
+  keyframeInterval.value = CONNECTION_SETTINGS_KEYFRAME_INTERVAL_DEFAULT;
+  initFromUrl("keyframeInterval=030");
+  assert.equal(keyframeInterval.value, 30);
+
+  keyframeInterval.value = CONNECTION_SETTINGS_KEYFRAME_INTERVAL_DEFAULT;
+  initFromUrl("keyframeInterval=03600");
+  assert.equal(keyframeInterval.value, 3600);
+
+  // 前後の空白 (URL では %20) は resolveOptionNumber が取り除く
+  keyframeInterval.value = CONNECTION_SETTINGS_KEYFRAME_INTERVAL_DEFAULT;
+  initFromUrl("keyframeInterval=%2030");
+  assert.equal(keyframeInterval.value, 30);
+
+  keyframeInterval.value = CONNECTION_SETTINGS_KEYFRAME_INTERVAL_DEFAULT;
+  initFromUrl("keyframeInterval=30%20");
+  assert.equal(keyframeInterval.value, 30);
+
+  // URLSearchParams は + を空白として復号する。表記としての符号ではなく空白として
+  // 取り除かれるため受理する (%2B の + は符号であり、上の無効値のテストで拒否する)
+  keyframeInterval.value = CONNECTION_SETTINGS_KEYFRAME_INTERVAL_DEFAULT;
+  initFromUrl("keyframeInterval=+30");
+  assert.equal(keyframeInterval.value, 30);
+
+  // 空白だけの値は「未指定」として扱い、初期値のまま残す
+  keyframeInterval.value = CONNECTION_SETTINGS_KEYFRAME_INTERVAL_DEFAULT;
+  initFromUrl("keyframeInterval=%20");
+  assert.equal(keyframeInterval.value, CONNECTION_SETTINGS_KEYFRAME_INTERVAL_DEFAULT);
+
+  keyframeInterval.value = CONNECTION_SETTINGS_KEYFRAME_INTERVAL_DEFAULT;
 });
 
 // Dedicated Worker は既定で有効のため Copy URL に載せず、無効のときだけ載せる
