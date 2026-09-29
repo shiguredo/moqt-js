@@ -1,4 +1,5 @@
 import type { CatalogTrack } from "moqt-js";
+import { useId, useState } from "preact/hooks";
 import { formatFullTrackName } from "../../../src/fullTrackName.ts";
 import { formatBitrate } from "../utils/logFormatters";
 
@@ -144,8 +145,12 @@ function CatalogTrackGroup({ label, tracks, trackNamespace, cardClass }: Catalog
 /**
  * catalog の Track の一覧
  *
- * Track をメディア (`packaging: "loc"`) とデータ (それ以外) に分けて並べる
- * (§5.2.4)。グループの見出しには件数を出す。Track ごとに、1 行目へ namespace を
+ * 既定で折りたたみ、見出しを押したときだけ中身を描く (catalog は接続の確認に使う
+ * 補助の情報であり、常に開いていると画面が長くなる)。折りたたみ時は見出しだけの
+ * 最小表示にし、閉じている間は DOM に置かない。
+ *
+ * 開いたときは Track をメディア (`packaging: "loc"`) とデータ (それ以外) に分けて
+ * 並べる (§5.2.4)。グループの見出しには件数を出す。Track ごとに、1 行目へ namespace を
  * 含む Full Track Name を出し (draft-ietf-moq-transport-21 §8.8)、2 行目以降へ
  * 残りのキーと値を 1 組ずつ横に詰めて並べる。幅が足りない分だけ折り返す。高さは
  * Track の数と中身に合わせ、欄の中でスクロールさせない (映像と音声の Track を
@@ -156,13 +161,25 @@ function CatalogTrackGroup({ label, tracks, trackNamespace, cardClass }: Catalog
  */
 export function CatalogTracks({ tracks, trackNamespace, tone, testId }: CatalogTracksProps) {
   const classes = TONE_CLASSES[tone];
+  const [open, setOpen] = useState(false);
+  const contentId = useId();
   const mediaTracks = tracks.filter((track) => resolveTrackGroup(track) === "media");
   const dataTracks = tracks.filter((track) => resolveTrackGroup(track) === "data");
+  // 折りたたみ時に出す最小表示。catalog にあるトラックの Full Track Name
+  const trackLabels = tracks.map(
+    (track) => resolveTrackFullTrackName(track, trackNamespace) ?? track.name,
+  );
   return (
-    <div class={`rounded-lg px-3 py-2 mb-4 border ${classes.box}`} data-testid={testId}>
-      <h3
-        class={`text-xs font-semibold uppercase tracking-wide mb-1 flex items-center gap-1.5 ${classes.title}`}
+    <div class={`rounded-lg mb-4 border ${classes.box}`} data-testid={testId}>
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-controls={contentId}
+        onClick={() => setOpen(!open)}
+        data-testid={`${testId}-toggle`}
+        class={`w-full flex items-center gap-1.5 px-3 py-2 text-xs font-semibold uppercase tracking-wide rounded-lg transition-colors hover:bg-white/50 ${classes.title}`}
       >
+        <span aria-hidden="true">{open ? "\u25BE" : "\u25B8"}</span>
         <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path
             stroke-linecap="round"
@@ -171,28 +188,42 @@ export function CatalogTracks({ tracks, trackNamespace, tone, testId }: CatalogT
             d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
           />
         </svg>
-        Catalog
-      </h3>
-      <div class="space-y-1.5" data-testid={`${testId}-tracks`}>
-        {tracks.length === 0 ? (
-          <div class="text-xs text-slate-400">-</div>
-        ) : (
-          <>
-            <CatalogTrackGroup
-              label="Media"
-              tracks={mediaTracks}
-              trackNamespace={trackNamespace}
-              cardClass={classes.card}
-            />
-            <CatalogTrackGroup
-              label="Data"
-              tracks={dataTracks}
-              trackNamespace={trackNamespace}
-              cardClass={classes.card}
-            />
-          </>
+        <span class="shrink-0">Catalog</span>
+        {/* 折りたたみ時も、どのトラックがあるかを Full Track Name で最小限に出す */}
+        {!open && (
+          <span
+            class="min-w-0 flex-1 truncate text-left font-normal normal-case tracking-normal text-slate-500"
+            data-testid={`${testId}-summary`}
+            title={trackLabels.length === 0 ? undefined : trackLabels.join(", ")}
+          >
+            {trackLabels.length === 0 ? "-" : trackLabels.join(", ")}
+          </span>
         )}
-      </div>
+      </button>
+      {open && (
+        <div id={contentId} class="px-3 pb-2" data-testid={`${testId}-tracks`}>
+          <div class="space-y-1.5">
+            {tracks.length === 0 ? (
+              <div class="text-xs text-slate-400">-</div>
+            ) : (
+              <>
+                <CatalogTrackGroup
+                  label="Media"
+                  tracks={mediaTracks}
+                  trackNamespace={trackNamespace}
+                  cardClass={classes.card}
+                />
+                <CatalogTrackGroup
+                  label="Data"
+                  tracks={dataTracks}
+                  trackNamespace={trackNamespace}
+                  cardClass={classes.card}
+                />
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
