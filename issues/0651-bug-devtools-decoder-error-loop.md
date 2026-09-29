@@ -1,7 +1,7 @@
 # devtools の購読側で非対応 codec のときに Worker が再生成され続ける
 
 - Created: 2026-09-21
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-29
 - Branch: feature/fix-devtools-decoder-error-loop
 - Polished: 2026-09-23
 
@@ -59,4 +59,18 @@ devtools の購読側は Catalog が広告する codec をそのまま `VideoDec
 
 ## 解決方法
 
-{未着手}
+`devtools/src/utils/DecoderWrapper.ts` は、0677 が `src/codec/` に置いた共有モジュールを import して使うようにした。事前確認は `src/codec/configSupport.ts` の `isVideoDecoderConfigSupported()` (false と reject の両方を非対応として扱う)、復帰の予算は `src/codec/decoderResetBudget.ts` の `DecoderResetBudget` (上限 3、消費は再初期化の試行、復帰は参照の異なる config の configure と復号フレームの出力)、Worker の生成・公開・破棄と初期化の応答は `src/codec/workerConfigure.ts` の `configureWrapperWorker` / `runWorkerInit` / `workerErrorResponse`、後始末は `src/codec/codecLifecycle.ts` に委ねた。devtools 側に別実装と手書きの後始末は残っていない。
+
+`configure()` は対応確認の await の前に世代を採番し、await の明けに追い越しを判定する。待機中に `close()` / 別の `configure()` / 別の `reset()` が始まっていた場合は Worker も `VideoDecoder` も作らずに `decoder configure superseded by newer generation` で失敗する。`close()` は世代を無効化する終端であり、以降の `reset()` は作り直さず false を返す。これにより、解放のあとに作った Worker と `VideoDecoder` が誰にも破棄されない経路を塞いだ。旧 `VideoDecoder` は `replaceCodec` で閉じるため、再 configure での破棄漏れも消えた。
+
+非対応 codec は Worker も `VideoDecoder` も作らずに `Decoder codec not supported: <codec>` で失敗し、その config は `lastConfig` に代入しない (`reset()` が同じ config を再試行しない)。`reset()` は例外を投げない `Promise<boolean>` になり、予算切れでは Worker と `VideoDecoder` を破棄して false を返す。予算を戻すのは世代の判定を通った `configure()` と復号フレームの出力だけで、`reset()` の再入と追い越された `configure()` では戻さない。
+
+`devtools/src/hooks/useSubscriber.ts` は、`DecoderWrapper` を `configure()` の await より前に `instance.decoder` へ載せる (await 中にパネルが削除されても後始末が Worker を破棄できる)。error コールバックは `reset()` の前に購読の中断を確認し、再初期化できなかった場合は status を error にして `Failed: decoder restart failed: <message>` を表示して購読を後始末する。再初期化の処理は名前付きの `restartDecoderAfterError` に切り出した。
+
+`devtools/src/webcodecs-devtools/workers/decoder.worker.ts` の init は共有の `runWorkerInit()` で実行し、`configure` の同期 throw を error 応答にする (message を読めない例外でも空文字の応答を送らない)。`configured` より先に error を受け取った `configure` の Promise は Worker の破棄後に reject するため、未解決のまま残らない。別の経路でこの Worker を使う `devtools/src/webcodecs-devtools/signals.ts` の表示は後退しない (error 応答で `decoderError` / `decoderStatus` を更新する既存経路に入る)。
+
+実ブラウザの固定は `devtools/src/codec-test/devtoolsDecoder.ts` (新規。devtools の `DecoderWrapper` を import する専用のケース) と `tests/e2e/codec-wrappers.spec.ts` の 8 テストで行った。非対応 codec (`vp09.99.99.99` が false、`""` が reject) の構成の失敗と `state`、configure 中の close と並行 configure で作らないこと、予算の打ち切り (3 回で false) と復帰 (復号フレームの出力 / 参照の異なる config)、追い越された configure で予算が戻らないこと、未構成の警告が 1 回であることを固定した。
+
+自動テストで駆動できない 2 点はレビューで確認した。購読の error コールバックの配線 (status error / statusMessage / teardown) は実 relay と非対応 codec を広告する publisher が必要で、Worker の読み込み失敗の経路は事前確認により devtools の呼び出し元から到達しない (純粋部分は `src/codec/workerConfigure.test.ts` が固定している)。
+
+`CHANGES.md` の `## develop` の FIX 群先頭に `[FIX]` を追記した。`npx vp check` / `npx vp test --run` (3415 テスト) / `npx vp run e2e-test` (88 テスト) が通る。
