@@ -1,7 +1,7 @@
 # CAT で接続した配信が catalog の track に authInfo を書かず、視聴側がトークンを付けない
 
 - Created: 2026-09-30
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-30
 - Branch: feature/add-catalog-auth-info
 - Polished: {YYYY-MM-DD}
 
@@ -46,4 +46,16 @@ moqt-js の配信は、C4M のトークン (CAT) で接続しても catalog の 
 
 ## 解決方法
 
-{未着手}
+- `src/msf/authInfo.ts` (新規) に `catalogAuthInfoForSetupToken` を追加し、`src/msf.ts` と `src/index.ts` から公開した。SETUP の Authorization Token が CAT (`MOQT_AUTH_TOKEN_TYPE_CAT`) の USE_VALUE / REGISTER のときだけ `{"cat": "%c4m%"}` を返す
+- `src/createMediaPublisher.ts` の `createCatalogTracks` が、`authorizationToken` から決めた `authInfo` を音声と映像の track に載せる
+- `devtools/src/hooks/usePublisher.ts`
+  - `PublisherCatalogOptions` / `PublisherCatalogSettings` に `authInfo` を足し、`buildPublisherCatalog` が指定されたときだけ音声、映像、event timeline の track に載せる
+  - `buildPublisherCatalogOptionsFromSettings` が、接続の設定から組み立てる SETUP のトークン (`buildAuthorizationToken`) で `authInfo` を決める
+- テスト
+  - `src/msf.test.ts`: `catalogAuthInfoForSetupToken` の Alias Type と Token Type ごとの結果、書いた `authInfo` の読み戻しと `resolveCatalogVariables` による `c4m` (パディング無しの base64url) の置換
+  - `src/createMediaPublisher.test.ts`: CAT のときだけ音声と映像の track に載せる (送った catalog の読み戻し)、CAT 以外とトークン無しでは載せない
+  - `devtools/src/hooks/usePublisher.test.ts`: 指定した `authInfo` を 3 つの track に載せる、設定のトークンが CAT のときだけ載せる
+  - event timeline の track にだけ載せないように壊すと、テストが落ちることを確かめた
+- 文書: `docs/HIGH_LEVEL_API.md`、`docs/MSF.md`、`CHANGES.md`
+- `pnpm test` (3466 テスト)、`pnpm typecheck`、`pnpm lint`、prek が通った
+- catalog track 自身は catalog の中に Track Object を持たないため、`authInfo` では示せない。catalog の SUBSCRIBE / FETCH に付けるトークンは、catalog を指す URI の `c4m` (draft-ietf-moq-msf-01 §11.1 の "URL pointing at a catalog and supplying a token for the client") で決まり、本 issue の対象外とした
