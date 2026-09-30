@@ -43,7 +43,6 @@ function createTimeline(): PlaybackTimeline {
   return new PlaybackTimeline({
     timeOriginMs: EPOCH_MS,
     maxQueuedFrames: JITTER_BUFFER_MAX_QUEUED_FRAMES,
-    audioDelayFloorMs: 0,
   });
 }
 

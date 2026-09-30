@@ -189,7 +189,7 @@ export class PlayoutBuffer<T> {
 
   /** 現在の再生遅延 (ミリ秒)。壁時計の TIMESTAMP のフレームをまだ積んでいなければ null */
   playoutDelayMs(): number | null {
-    return this.timeline.playoutDelayMs;
+    return this.timeline.videoDelayMs;
   }
 
   /** 表示待ちのフレームをすべて取り出す (呼び出し側が閉じる) */
