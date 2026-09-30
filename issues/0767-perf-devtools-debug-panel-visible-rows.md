@@ -3,7 +3,7 @@
 - Created: 2026-09-26
 - Completed: {YYYY-MM-DD}
 - Branch: feature/perf-devtools-debug-panel-visible-rows
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-09-30
 
 ## 目的
 
@@ -14,7 +14,7 @@
 - `devtools/src/components/DebugLogList.tsx` は、行の vnode をログの連番で保持し、展開の状態・表示モード・コピーの表示が変わったときだけ作り直す。1 件追加で描画される `DebugLogRow` は 1 件である
 - それでも Preact は一覧の子 (表示中のすべての行の vnode) を走査する。実測 (Chromium、`preact.options.__r` で描画を数え、追加から描画までの中央値): 100 件 0.4 ms / 300 件 1.4 ms / 1000 件 7.2 ms。行の描画をやめる前は 1000 件で 18.4 ms だった
 - パネルを開いている間は 1000 行の DOM が残る
-- 同じリポジトリの WebTransport のメッセージ一覧は、表示を新しい 200 件に限ることで 1 件追加を 44.8 ms から 3.0 ms にした (`devtools/src/webtransport-devtools/messageLog.ts` の `MAX_STREAM_MESSAGES`)
+- 同じリポジトリの WebTransport のメッセージ一覧は、上限 200 件への制限などを含む対策で 1 件追加を 44.8 ms から 3.0 ms にした (`devtools/src/webtransport-devtools/messageLog.ts` の `MAX_STREAM_MESSAGES`)
 
 ## 設計方針
 
