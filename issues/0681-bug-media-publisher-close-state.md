@@ -1,7 +1,7 @@
 # MediaPublisher の自己起点 stop / close でも session の close 通知が届き onClose が誤発火する
 
 - Created: 2026-09-23
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-29
 - Branch: feature/fix-media-publisher-close-state
 - Polished: 2026-09-23
 
@@ -61,4 +61,16 @@
 
 ## 解決方法
 
-{未着手}
+`src/createMediaPublisher.ts` に session close 通知専用の世代番号 (`sessionGeneration`) を新設した。`start()` が接続の時点で現在値を捕捉し (`startGeneration`)、`connectToServer` が `onSessionClose` のクロージャへ渡す。世代番号を進めるのは `disposeAllResources()` の 1 箇所だけで、既存の `processingGeneration` は流用していない (`pause()` でも進むため、流用すると `pause()` のあとのピア起点の close 通知が世代不一致で捨てられる)。捕捉値と一致しない通知では state も `onClose` も動かさないため、自己起点の `stop` / `close` の解放で届く通知は捨てられ、ピア起点の close だけが通知される。
+
+ピア起点の close 通知 (世代が一致する通知) は、解放してから `"closed"` と `onClose` を通知するようにした。解放せずに終端にすると `close()` の早期 return で解放経路が消え、session、フレームリーダー、エンコーダー、`MediaStream` が残り、`stop()` も `start()` も state で拒否されて解放できなくなる。終端遷移は `try/finally` にして、`onStateChange` が throw しても `onClose` が失われないようにした。
+
+ピア起点の close の解放と利用者の `stop()` / `close()` が重なった場合は、進行中の解放を 1 つの Promise にまとめて共有する調停 (`runDisposal` / `userDisposalCount` / `closing`) を入れた。`stop()` は解放のあとに `"stopped"` を決め、あとから解放を終えたピア起点の経路は state も `onClose` も動かさない (共有しないと `stop()` が成功で返るのに最終 state が `"closed"` になり、再開可能性と `onClose` を通知しない契約が破れる)。`close()` は進行中の解放の成否をそのまま結果として受け取る。`close()` が解放と終端遷移を進めている間は `start()` / `stop()` を `cannot start while closing` / `cannot stop while closing` で拒否する。
+
+`start()` は各段階の await の直後に、解放が先行していないかを世代番号と終端の state で検査する。解放が `start()` の開始より前に始まっている場合は、`start()` の捕捉後に解放が終端へ進むため世代番号の比較だけでは検出できず、終端の state も見る必要がある (解放の完了後に呼び直すと捕捉値が現在値と一致してしまい、終端を跨いで `"publishing"` に進む)。あわせて、解放が進行中のままでは開始しない (進行中の解放が `start()` の完了後に終端へ進むと、開始した資源を解放する経路が残らない)。接続で受け取った session は採用する前に検査し、中止する場合はその場で閉じる。
+
+テストは `src/createMediaPublisher.test.ts` に 5 件追加した (自己起点 stop / close の通知、ピア起点 close の通知、`pause()` 後のピア起点 close が捨てられないこと、解放後に届く旧 session の通知と新 session 確立後の旧通知の無視、世代番号の加算位置、調停の各経路、start 実行中の解放検知、終端を跨ぐ呼び直し)。Node で駆動できない接続の閉包は `openSession` の差し替え口を切り出して固定した。
+
+`docs/HIGH_LEVEL_API.md` の状態遷移図に `paused ──stop()──► stopped` と `stopped ──start(stream)──► publishing` を足し、`close()` を終端として明記した。`src/codec/types.ts` の `MediaPublisher` に `start` / `stop` / `close` の JSDoc を追加し、`"stopped"` が再開可能で `close()` が終端であること、解放が重なったときの優先を書いた。`CHANGES.md` の `## develop` の FIX 群先頭に `[FIX]` を追記した。
+
+`npx vp check` と `npx vp test --run` (3458 テスト) が通る。
