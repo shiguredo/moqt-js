@@ -3050,12 +3050,11 @@ test("handleAudioDecodedData: 音声を観測していなくても再生の遅�
     performance.timeOrigin + performance.now(),
     wallClockTimestampMicrosFor(mapping),
   );
-  const observedDelayMs = control.playbackTimeline.playoutDelayMs;
-  assert.isNotNull(observedDelayMs, "映像を観測したため共有の再生遅延があること");
-  assert.isBelow(
-    observedDelayMs ?? Infinity,
-    AUDIO_PLAYOUT_DELAY_FLOOR_MS,
-    "音声を観測していないため下限が入らないこと",
+  // 音声を観測していないため、音声の jitter buffer の遅延は決まらない (映像の遅れは音声へ
+  // 影響しない。src/playbackTimeline.ts)
+  assert.isNull(
+    control.playbackTimeline.playoutDelayMs,
+    "音声を観測していないため音声の遅れは決まらないこと",
   );
 
   // 目標の表示時刻を使わない音 (Timescale のある TIMESTAMP) として鳴らす
