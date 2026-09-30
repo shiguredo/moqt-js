@@ -275,6 +275,10 @@
   - 上限で捨てたログの vnode はキャッシュから落とす。`data` と `payload` は追加後に書き換えない前提になる (行を描画し直さないため、書き換えても表示は古いまま)
   - 1 件追加のコストは表示中の件数に比例する分が残る (1000 件で約 3 ms のうち、表示中の子の走査が大半)。表示する行を画面に入る分だけにする対応は別に行う
   - @voluntas
+- [FIX] `createMediaSubscriber` の `start` がピア起点の close の解放中でも開始でき、開始した資源の解放経路が消えるのを修正する
+  - `start` の入口は `close` の進行 (`closing`) だけを見ており、ピア起点の close の解放 (`disposalInFlight`) が進行中でも開始を受け付けていた。解放が終端へ進む前に開始が完了すると、そのあと state が `"closed"` になり、開始した購読、デコーダー、出力、session を解放する経路が残らない (`close()` は早期 return し、`start()` と `stop()` は state で拒否される)
+  - 入口で `disposalInFlight` も見て、進行中なら `cannot start while closing` で拒否する (入口で reject し、`onError` は通知しない)。解放が完了したあとの呼び直しは、従来どおり終端の state で拒否される
+  - @voluntas
 - [FIX] `createMediaPublisher` の自己起点の `stop` / `close` で session の close 通知が `onClose` を誤発火し、`"stopped"` から再開できなくなるのを修正する
   - `stop` の解放で閉じた session の close 通知が `onClose` を呼び、`onStateChange` が `"closed"` を経由していた。通知が `setState("stopped")` より後に届く場合は state が `"closed"` のまま残り、`start()` が `cannot start in state` で拒否されて再開できなかった。`close` では通知が終端の遷移より先に届くと `onClose` が 2 回呼ばれ得た
   - session の close 通知専用の世代番号を新設し、`start` が接続の時点の値を捕捉して `connectToServer` が `onSessionClose` のクロージャへ渡す。世代番号を進めるのは解放 (`disposeAllResources`) の 1 箇所だけにし、捕捉値と一致しない通知では state も `onClose` も動かさない (解放のあとに届く旧 session の通知と、新しい session を確立したあとに届く旧 session の通知の両方を捨てる)

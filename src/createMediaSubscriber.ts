@@ -523,7 +523,8 @@ export class MediaSubscriberImpl implements MediaSubscriber {
    * 閉じて再接続する (再利用しない)。
    * "subscribing" (開始の途中) の停止は拒否されるため、開始を取り消すには close() を使う
    * (停止と再開の契約は docs/HIGH_LEVEL_API.md の MediaSubscriber を参照)。
-   * close() が解放と終端遷移を進めている間は cannot start while closing で拒否する。
+   * 解放 (close() とピア起点の close / 停止の解放) が進行している間は
+   * cannot start while closing で拒否する (入口の拒否は onError を通知しない)。
    * 失敗時は確保済みを解放して遷移前の state に戻すため再試行できる。解放自体の失敗でも
    * 巻き戻しの onStateChange が throw しても、元の失敗を隠さず onError を通知して元の
    * エラーを throw する。実行中にピア起点の close または利用者の close() が重なった場合は
@@ -538,6 +539,12 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     // close() が解放と終端遷移を進めている間は終端へ動く途中であり、開始を重ねても
     // 途中で "closed" になる。state だけを見た判定では "active" のままなので、ここで拒否する
     if (this.closing !== null) {
+      throw new Error("cannot start while closing");
+    }
+    // 解放 (ピア起点の close / stop) が進行中のときも同じである。解放が終端へ進む前に
+    // start が完了すると、そのあと state が "closed" になり、開始した資源を解放する経路が
+    // 残らない (close() は早期 return、start() / stop() は state で拒否される)
+    if (this.disposalInFlight !== null) {
       throw new Error("cannot start while closing");
     }
     if (this.currentState !== "created" && this.currentState !== "stopped") {

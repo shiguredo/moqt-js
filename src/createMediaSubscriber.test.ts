@@ -20,6 +20,7 @@ import type { Subscriber, RequestUpdateOptions } from "./subscriber";
 import type {
   AudioReceiverStats,
   MediaReceiverStats,
+  MediaSubscriberCallbacks,
   MediaSubscriberState,
   VideoReceiverStats,
 } from "./codec/types";
@@ -4371,6 +4372,332 @@ test("start: 解放が進行中でも失敗時の巻き戻しで遷移前の sta
   );
   assert.equal(subscriber.state, "closed");
   assert.equal(closeCount, 1);
+});
+
+/**
+ * 接続 1 回分の観測口
+ */
+interface OpenedSubscriberConnection {
+  // 実装が onSessionClose に渡した閉包 (接続時点の世代番号を捕捉している)
+  notifyClose: () => void;
+  // 保留している購読要求 (session.subscribe) が呼ばれた時点で解決する
+  subscribing: () => Promise<void>;
+  // 保留している購読要求の await を解放する (保留していない場合は何もしない)
+  resolveSubscribe: () => void;
+  // 保留している session の close が呼ばれた時点で解決する (解放がそこで止まったことの観測)
+  sessionClosing: () => Promise<void>;
+  // 保留している session の close の await を解放する (保留していない場合は何もしない)
+  resolveSessionClose: () => void;
+  // この接続の session の close が呼ばれた回数 (解放が session を閉じたか)
+  sessionCloseCalls: () => number;
+  // 確立した購読の unsubscribe が呼ばれた回数 (start の巻き戻しが解放したか)
+  unsubscribeCalls: () => number;
+}
+
+/**
+ * 接続を差し替えて start() を段階ごとに駆動するための制御口
+ *
+ * connectToServer は WebTransport を要する接続を openSession 越しに行う。node 環境には
+ * WebTransport が無いため、この境界だけを置き換えて接続と購読の完了をテストが決められる
+ * ようにする (モジュール置換は行わない)。接続ごとに実装が作る onSessionClose の閉包を
+ * そのまま捕捉し、ピア起点の close の解放も駆動できるようにする。カタログの購読は
+ * 確立した記録付きの Subscriber を返す。
+ *
+ * @param callbacks 検証に使うコールバック (onError は呼び出しの記録に使う)
+ * @param options holdSubscribe を立てるとカタログの購読 (session.subscribe) の await を
+ *   テストが解放するまで保留する (解放が start の await に重なる窓を作る)。
+ *   holdSessionClose を立てると session の close の await もテストが解放するまで保留する
+ *   (解放が session の close で止まる窓を作る。解放は参照を切り離してから close するため、
+ *   止めている間も state は遷移前のままである)。connectFailure を渡すと 2 回目以降の接続を
+ *   そのエラーで失敗させる (入口の拒否が外れたときにテストが接続の待ちで止まらないようにする)
+ */
+function createStartConnectHarness(
+  callbacks: MediaSubscriberCallbacks = {},
+  options: {
+    holdSubscribe?: boolean;
+    holdSessionClose?: boolean;
+    connectFailure?: Error;
+  } = {},
+): {
+  subscriber: MediaSubscriberImpl;
+  control: SubscriberLifecycleControl & SubscriberConnectControl;
+  errors: Error[];
+  opened: OpenedSubscriberConnection[];
+  connectAttempts: () => number;
+} {
+  const errors: Error[] = [];
+  const subscriber = new MediaSubscriberImpl(
+    "moqt://example.com/live",
+    { namespace: ["live"], video: {} },
+    {
+      ...callbacks,
+      onError: (error) => {
+        errors.push(error);
+      },
+    },
+  );
+  const control = subscriber as unknown as SubscriberLifecycleControl & SubscriberConnectControl;
+  const opened: OpenedSubscriberConnection[] = [];
+  let connectAttempts = 0;
+  control.openSession = (settings: MediaConnectSettings) => {
+    connectAttempts++;
+    // 2 回目以降の接続はテストが決めたエラーで失敗させる (入口の拒否を外したときの観測)
+    if (options.connectFailure !== undefined && opened.length > 0) {
+      return Promise.reject(options.connectFailure);
+    }
+    let notifySubscribing: () => void = () => {};
+    const subscribing = new Promise<void>((resolve) => {
+      notifySubscribing = resolve;
+    });
+    let releaseSubscribe: () => void = () => {};
+    const subscribeGate = options.holdSubscribe
+      ? new Promise<void>((resolve) => {
+          releaseSubscribe = resolve;
+        })
+      : null;
+    // session の close の保留。解放は session の参照を切り離してから close を await するため、
+    // 止めている間も解放は進行中のまま (state は遷移前のまま) になる
+    let notifySessionClosing: () => void = () => {};
+    const sessionClosing = new Promise<void>((resolve) => {
+      notifySessionClosing = resolve;
+    });
+    let releaseSessionClose: () => void = () => {};
+    const sessionCloseGate = options.holdSessionClose
+      ? new Promise<void>((resolve) => {
+          releaseSessionClose = resolve;
+        })
+      : null;
+    let sessionCloseCalls = 0;
+    let unsubscribeCalls = 0;
+    const session = {
+      subscribe: async (): Promise<Subscriber> => {
+        // 保留する購読だけテストが完了を決める
+        if (subscribeGate !== null) {
+          notifySubscribing();
+          await subscribeGate;
+        }
+        return createRecordingSubscriber(() => {
+          unsubscribeCalls++;
+        });
+      },
+      fetch: () => {
+        // 解放の検査を通らずに FETCH へ進んだ場合に、黙って進まないよう失敗させる
+        throw new Error("must not fetch");
+      },
+      close: async () => {
+        sessionCloseCalls++;
+        notifySessionClosing();
+        if (sessionCloseGate !== null) {
+          await sessionCloseGate;
+        }
+      },
+    } as unknown as Session;
+    opened.push({
+      notifyClose: () => settings.onSessionClose(),
+      subscribing: () => subscribing,
+      resolveSubscribe: () => releaseSubscribe(),
+      sessionClosing: () => sessionClosing,
+      resolveSessionClose: () => releaseSessionClose(),
+      sessionCloseCalls: () => sessionCloseCalls,
+      unsubscribeCalls: () => unsubscribeCalls,
+    });
+    return Promise.resolve(session);
+  };
+  return { subscriber, control, errors, opened, connectAttempts: () => connectAttempts };
+}
+
+/**
+ * 完了条件: ピア起点の close の解放が進行中のまま利用者が start() を呼び直すと、
+ * 入口で cannot start while closing により拒否される。
+ *
+ * 解放 (disposeAllResources) は世代番号を進める。解放が終端 ("closed") へ進む前に開始を
+ * 許すと、開始が捕捉する世代番号は解放が進めた現在値と一致するため段階の検査をすべて通過し、
+ * "active" になったあとの解放の終端遷移で state が "closed" になり、開始した購読 / デコーダ /
+ * 出力 / session を解放する経路が消える (close() は早期 return、start() / stop() は state で
+ * 拒否される)。入口で解放の進行を見て拒否することを固定する。
+ *
+ * 駆動する順序は次のとおりである。
+ * 1. start #1 がカタログの購読 (session.subscribe) の await で止まっている間にピア起点の
+ *    close が届き、解放 D1 が session の close で止まる (世代番号は解放の先頭で進む)
+ * 2. start #1 は段階の検査で中止し、失敗時の巻き戻し D2 が D1 を待たずに終わって失敗が
+ *    確定する (state は開始前の "created" に戻る)
+ * 3. 利用者は start #1 の失敗を待ってから直列に start #2 を呼ぶ。state は "created" で
+ *    あるため state ガードを通過し、捕捉する世代番号は D1 が進めた現在値と一致する
+ * 4. D1 を終わらせると state は "closed" になり onClose が 1 回通知される
+ * 5. そのあとに呼び直した start は終端の state により拒否される
+ */
+test("start: ピア起点の close の解放が進行中のまま呼び直すと入口で拒否される", async () => {
+  const states: MediaSubscriberState[] = [];
+  let closeCount = 0;
+  const { subscriber, control, errors, opened, connectAttempts } = createStartConnectHarness(
+    {
+      onStateChange: (state) => {
+        states.push(state);
+      },
+      onClose: () => {
+        closeCount++;
+      },
+    },
+    // カタログの購読と session の close の両方をテストが解放する (2 つの窓を作る)。
+    // 入口の拒否が外れたときに接続の待ちで止まらないよう、2 回目の接続は失敗させる
+    { holdSubscribe: true, holdSessionClose: true, connectFailure: new Error("connect failed") },
+  );
+
+  await withUnhandledRejectionWatch(async (unhandled) => {
+    // 1. start #1 をカタログの購読の await で止める
+    const firstStart = subscriber.start().then(
+      () => null,
+      (error: unknown) => error,
+    );
+    await opened[0].subscribing();
+    assert.equal(subscriber.state, "subscribing");
+    assert.isNotNull(control.session);
+
+    // ピア起点の close の解放 D1 を始め、session の close で止める
+    opened[0].notifyClose();
+    await opened[0].sessionClosing();
+    // D1 は session の参照を切り離してから close を待つ (解放はまだ進行中である)
+    assert.isNull(control.session);
+    assert.equal(opened[0].sessionCloseCalls(), 1);
+    assert.equal(subscriber.state, "subscribing");
+    assert.equal(closeCount, 0);
+
+    // 2. start #1 を再開させると段階の検査が中止し、巻き戻し D2 が先に終わって失敗が確定する
+    opened[0].resolveSubscribe();
+    const firstFailure = await firstStart;
+    assert.instanceOf(firstFailure, Error);
+    assert.equal(
+      (firstFailure as Error).message,
+      "start aborted: resources were disposed during start",
+    );
+    // D2 は切り離し済みの session を触らない (close は D1 の 1 回だけ)
+    assert.equal(opened[0].sessionCloseCalls(), 1);
+    // D2 は中止までに確立した購読を解除する
+    assert.equal(opened[0].unsubscribeCalls(), 1);
+    // 解放はまだ終端へ進んでおらず、state のガードは通過できる状態である
+    assert.equal(subscriber.state, "created");
+    assert.deepEqual(states, ["subscribing", "created"]);
+    assert.equal(closeCount, 0);
+    assert.equal(errors.length, 1);
+    assert.strictEqual(errors[0], firstFailure);
+
+    // 3. 直列に start #2 を呼ぶ。解放 (D1) が進行中であるため、開始の入口で拒否される
+    // (解放が終端へ進む前に開始を許すと、開始した資源を解放する経路が残らない)
+    const secondFailure = await subscriber.start().then(
+      () => null,
+      (error: unknown) => error,
+    );
+    assert.instanceOf(secondFailure, Error);
+    assert.equal((secondFailure as Error).message, "cannot start while closing");
+    // 接続も購読も試みないこと (入口で止まる)
+    assert.equal(connectAttempts(), 1);
+    assert.equal(subscriber.state, "created");
+    assert.deepEqual(states, ["subscribing", "created"]);
+
+    // 4. D1 を終わらせると終端 ("closed") と onClose が 1 回だけ通知される
+    opened[0].resolveSessionClose();
+    await sleep(0);
+    assert.equal(subscriber.state, "closed");
+    assert.equal(closeCount, 1);
+    assert.deepEqual(states, ["subscribing", "created", "closed"]);
+
+    // 5. 解放が終わったあとに呼び直しても、終端 ("closed") を跨ぐため拒否されること
+    const thirdFailure = await subscriber.start().then(
+      () => null,
+      (error: unknown) => error,
+    );
+    assert.instanceOf(thirdFailure, Error);
+    assert.equal((thirdFailure as Error).message, "cannot start in state: closed");
+    assert.equal(connectAttempts(), 1);
+    // "active" へ進んでいないこと (onClose のあとに state が動かない)
+    assert.equal(subscriber.state, "closed");
+    assert.equal(closeCount, 1);
+    assert.deepEqual(states, ["subscribing", "created", "closed"]);
+    // 入口の拒否は start の catch を通らないため onError は増えない (通知は start #1 の 1 回だけ)
+    assert.equal(errors.length, 1);
+
+    // 解放と中止が重なっても未処理の rejection を残さないこと
+    await waitForUnhandledRejectionDetection();
+    assert.equal(unhandled.length, 0);
+  });
+});
+
+/**
+ * 完了条件: 解放が進行していない正規の start() (stop のあとの再開) は入口で拒否されない。
+ *
+ * 入口の検査は解放の進行 (disposalInFlight) だけを見る。stop() の解放が終われば解放の
+ * Promise は外れるため、"stopped" からの再開は通常どおり開始できなければならない
+ * (拒否すると停止した購読を再開する経路が消える)。stop は注入した資源の解放まで実際に
+ * 走らせ、接続の境界だけを置き換えて再開が "subscribing" へ進むことを固定する。
+ */
+test("start: stop の解放が終わったあとの再開は入口の拒否を受けない", async () => {
+  const states: MediaSubscriberState[] = [];
+  const errors: Error[] = [];
+  const subscriber = new MediaSubscriberImpl(
+    "moqt://example.com/live",
+    { namespace: ["live"], video: {} },
+    {
+      onStateChange: (state) => {
+        states.push(state);
+      },
+      onError: (error) => {
+        errors.push(error);
+      },
+    },
+  );
+  const control = subscriber as unknown as SubscriberLifecycleControl & SubscriberConnectControl;
+  // stop は "active" からのみ呼べる
+  control.currentState = "active";
+  injectLifecycleResources(control);
+
+  // stop で解放が実際に走り、進行中の解放が残らないこと
+  await subscriber.stop();
+  assert.equal(subscriber.state, "stopped");
+  assert.isNull(control.session);
+
+  // 接続の完了をテストが決める (解決するまで connectToServer は await のまま)
+  let connectCalls = 0;
+  let completeConnect: (session: Session) => void = () => {};
+  control.openSession = () => {
+    connectCalls++;
+    return new Promise<Session>((resolve) => {
+      completeConnect = resolve;
+    });
+  };
+
+  const startResult = subscriber.start().then(
+    () => null,
+    (error: unknown) => error,
+  );
+  // 入口の拒否 (cannot start while closing) を通過して "subscribing" へ進むこと
+  assert.equal(subscriber.state, "subscribing");
+  assert.equal(connectCalls, 1);
+
+  // 接続待ちの間に close を完了させ、開始は解放の検査で中止させる
+  await subscriber.close();
+  assert.equal(subscriber.state, "closed");
+  const sessionCalls: string[] = [];
+  completeConnect({
+    subscribe: async () => {
+      sessionCalls.push("subscribe");
+      throw new Error("must not subscribe");
+    },
+    close: async () => {
+      sessionCalls.push("session.close()");
+    },
+  } as unknown as Session);
+
+  const startFailure = await startResult;
+  assert.instanceOf(startFailure, Error);
+  assert.equal(
+    (startFailure as Error).message,
+    "start aborted: resources were disposed during start",
+  );
+  // 解放の検査で中止し、接続で受け取った session はその場で閉じること
+  assert.deepEqual(sessionCalls, ["session.close()"]);
+  assert.equal(errors.length, 1);
+  assert.strictEqual(errors[0], startFailure);
+  assert.deepEqual(states, ["stopped", "subscribing", "closed"]);
 });
 
 /**
