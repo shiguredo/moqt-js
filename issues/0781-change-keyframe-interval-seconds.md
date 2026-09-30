@@ -1,7 +1,7 @@
 # keyframeInterval の単位を frames から秒に変更する
 
 - Created: 2026-09-30
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-30
 - Branch: feature/change-keyframe-interval-seconds
 - Polished: {YYYY-MM-DD}
 - Reporter: @voluntas
@@ -34,3 +34,15 @@
 - `keyframeInterval` が秒として扱われ、framerate を変えても指定した秒数の間隔でキーフレームが送られること
 - moqt-devtools の Keyframe Interval の選択肢とラベルが秒で一致し、Frame Rate 60 fps でも「10 sec」が約 10 秒になること
 - `vp check` / `tsc --noEmit` / `vp test run` / Playwright の e2e が通ること
+
+## 解決方法
+
+- `src/createMediaPublisher.ts` の `resolveKeyframeInterval` を秒の解決に変え、既定値を `src/codec/config.ts` の `DEFAULT_KEYFRAME_INTERVAL_SECONDS` (2 秒) にした。0 以下の有限数と非有限数は `keyframeInterval must be a finite number of seconds > 0` で reject する
+- 同じファイルの `shouldSendKeyFrame` を、直前のキーフレームの timestamp (マイクロ秒) と判定するフレームの timestamp の差で判定する形に変えた。先頭フレームと timestamp が巻き戻ったフレームもキーフレームにする。`MediaPublisherImpl` の `videoFrameCount` を `lastKeyFrameTimestampUs` に置き換え、`start()` と `requestKeyframe()` で null に戻す。破棄したフレームでは更新しない
+- `devtools/src/utils/keyframeInterval.ts` の `shouldRequestKeyFrame` を時間ベースに変え、`DEFAULT_KEYFRAME_INTERVAL` を 2 秒、`KEYFRAME_INTERVAL_OPTIONS` を秒 (1 / 2 / 4 / 8 / 10 / 30 / 60 / 90 / 120 / 240) にした
+- `devtools/src/hooks/usePublisher.ts` の `decideKeyFrame` はフレームの timestamp を受け取り、`lastKeyFrameTimestampUs` を返す形にした。`devtools/src/signals/publisher.ts` の `keyframeInterval` は 2 秒、`devtools/src/signals/connectionSettings.ts` は 10 秒にした
+- `devtools/src/components/ConnectionSettings.tsx` の select は値もラベルも秒にした。`devtools/src/signals/connectionSettingsSnapshot.ts` の `keyframeIntervalFrames` を `keyframeIntervalSeconds` に改名した
+- `devtools/src/webcodecs-devtools/signals.ts` の判定を時間ベースにし、`lastKeyFrameRequestTimestampUs` を持つようにした。ConfigPanel の選択肢を 1 / 2 / 3 / 4 秒にし、既定値が選択肢に含まれるようにした
+- テストは `src/createMediaPublisher.test.ts` / `devtools/src/utils/keyframeInterval.test.ts` / `devtools/src/hooks/usePublisher.test.ts` / `devtools/src/signals/connectionSettings.test.ts` / `devtools/src/signals/keyframeIntervalDefaults.test.ts` / `devtools/src/signals/connectionSettingsSnapshot.test.ts` / `devtools/src/signals/snapshotCoverage.test.ts` / `tests/e2e/devtools-keyframe-interval.spec.ts` を秒の指定に更新した
+- 実測 (2026-09-30、ローカルの sora-moq-local と moqt-devtools、ダミー映像 1280x720、VP9、keyframeInterval 10 秒): 60 fps で 9929 / 9938 / 10139 ms、30 fps で 9936 / 9938 ms、15 fps で 9994 / 9961 ms になり、framerate によらず指定した 10 秒の間隔になった
+- `vp check` / `tsc --noEmit` / `vp test run` (3512 件) / Playwright の e2e (92 件) が通った
