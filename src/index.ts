@@ -96,6 +96,7 @@ export {
   applyCatalogDelta,
   createCatalog,
   createCompleteCatalog,
+  catalogAuthInfoForSetupToken,
   // Timeline
   encodeMediaTimeline,
   decodeMediaTimeline,

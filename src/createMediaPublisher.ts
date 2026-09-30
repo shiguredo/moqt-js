@@ -11,6 +11,7 @@ import * as LOC from "./loc";
 import { WallClockMapper } from "./mediaClock";
 import {
   CATALOG_TRACK_NAME,
+  catalogAuthInfoForSetupToken,
   createCatalog,
   createInitialGroupId,
   encodeCatalog,
@@ -1081,6 +1082,10 @@ export class MediaPublisherImpl implements MediaPublisher {
    * 遅延を選んでよい MAY のため、載せないことが購読側のフォールバックの経路になる)。
    * 指定した値は有限数であること (renderGroup はさらに整数であること) を検証し、
    * そうでなければ throw する。非有限値は JSON で null になり、購読側が復号できなくなる。
+   *
+   * SETUP の Authorization Token が C4M のトークン (CAT) のときは、音声と映像の track に
+   * authInfo を載せ、視聴側に同じ方式のトークンの提示を求める (draft-ietf-moq-msf-01
+   * §5.2.42 / §11.4.1。catalogAuthInfoForSetupToken を参照)。
    */
   private createCatalogTracks(): CatalogTrack[] {
     const tracks: CatalogTrack[] = [];
@@ -1097,6 +1102,10 @@ export class MediaPublisherImpl implements MediaPublisher {
         : {}),
       ...(this.options.renderGroup !== undefined ? { renderGroup: this.options.renderGroup } : {}),
     };
+    // authInfo も同じく、載せるときだけキーを持たせる
+    const authInfo = catalogAuthInfoForSetupToken(this.options.authorizationToken);
+    const authInfoFields: Pick<CatalogTrack, "authInfo"> =
+      authInfo !== undefined ? { authInfo } : {};
 
     // Audio トラック
     const audio = this.resolvedAudio;
@@ -1111,6 +1120,7 @@ export class MediaPublisherImpl implements MediaPublisher {
         samplerate: audio.sampleRate,
         channelConfig: String(audio.channels),
         ...latencyFields,
+        ...authInfoFields,
       });
     }
 
@@ -1128,6 +1138,7 @@ export class MediaPublisherImpl implements MediaPublisher {
         height: video.height,
         framerate: video.framerate,
         ...latencyFields,
+        ...authInfoFields,
       });
     }
 

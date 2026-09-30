@@ -76,6 +76,8 @@ interface MediaPublisherOptions {
   serverCertificateHashes?: ArrayBuffer[]; // 自己署名証明書のハッシュ
   // SETUP Option (0x03) として送出する Authorization Token
   // SETUP では DELETE / USE_ALIAS は禁止 (§9.1.4)
+  // C4M のトークン (CAT、Token Type 0x01) なら、catalog の音声と映像の track に
+  // authInfo を載せる (draft-ietf-moq-msf-01 §5.2.42)
   authorizationToken?: AuthorizationToken;
   // Pending Subgroup Stream の buffer 設定 (§11.3.1)。
   // 未指定のフィールドは既定値で補完される
@@ -553,6 +555,17 @@ const subscriber = await createMediaSubscriber(url, {
   getAuthorizationToken: (authInfo) => fetchTokenFor(authInfo),
 });
 ```
+
+`authorizationToken` が C4M のトークン (CAT、Token Type 0x01) のとき、配信側は catalog の
+音声と映像の track に `"authInfo": {"cat": "%c4m%"}` を載せる。draft-ietf-moq-msf-01
+§5.2.42 / §11.4.1 は、視聴側が catalog の `authInfo` を見て、その track の認可にトークンが
+要るかを決めるとしている。載せないと、視聴側はトークンを付けずに SUBSCRIBE を送る。
+
+- `cat` は §5.2.42 Table 7 の CAT のスキーム名である
+- `%c4m%` は §11.1.1 の予約パラメータ `c4m` を指す変数参照 (§5.4 / §5.2.43) であり、
+  視聴側は catalog を得た URI の fragment の `c4m` で置換できる
+  (`resolveCatalogVariables`)。トークンそのものは catalog に載せない
+- CAT 以外のトークンや、トークンが無いときは載せない
 
 ---
 

@@ -2,12 +2,14 @@ import {
   connect,
   LOC,
   CATALOG_TRACK_NAME,
+  catalogAuthInfoForSetupToken,
   createCatalog,
   encodeCatalog,
   encodeEventTimeline,
   createCompleteCatalog,
   createVideoFrameSource,
   isMediaStreamTrackProcessorAvailable,
+  type AuthInfo,
   type Catalog,
   type CatalogTrack,
   type DebugMessage,
@@ -136,6 +138,13 @@ export interface PublisherCatalogOptions {
    * 描画する SHOULD)。0 は有効値である。
    */
   renderGroup?: number;
+  /**
+   * 認可が必要なことを視聴側に示す Authorization Info
+   *
+   * draft-ietf-moq-msf-01 §5.2.42 (authInfo)。
+   * 指定すると音声、映像、event timeline のすべての track に載せる。未指定のときは載せない。
+   */
+  authInfo?: AuthInfo;
 }
 
 /** 配信する映像トラックの Catalog を組み立てるための入力 */
@@ -167,6 +176,8 @@ export interface PublisherCatalogSettings {
   targetLatency: number | null;
   /** 同時レンダリンググループ。未指定は null (catalog に載せない。§5.2.11) */
   renderGroup: number | null;
+  /** 認可が必要なことを示す authInfo。載せないときは null (§5.2.42) */
+  authInfo: AuthInfo | null;
 }
 
 /**
@@ -186,6 +197,7 @@ export function buildPublisherCatalogOptions(
     ...(options.audio !== null ? { audio: options.audio } : {}),
     ...(options.targetLatency !== null ? { targetLatency: options.targetLatency } : {}),
     ...(options.renderGroup !== null ? { renderGroup: options.renderGroup } : {}),
+    ...(options.authInfo !== null ? { authInfo: options.authInfo } : {}),
   };
 }
 
@@ -198,6 +210,9 @@ export function buildPublisherCatalogOptions(
  *
  * 音声のサンプルレートとチャンネル数だけは設定ではなく、実際に取れた音の形式を使う
  * (マイクではデバイスが決めるため、Catalog と AudioEncoder を同じ値にそろえる)。
+ *
+ * authInfo は、接続の設定から組み立てる SETUP の Authorization Token が C4M のトークン
+ * (CAT) のときだけ載せる (catalogAuthInfoForSetupToken)。
  *
  * @param audioFormat - 実際に取れた音の形式。音声を配信しないときは null
  */
@@ -235,6 +250,8 @@ export function buildPublisherCatalogOptionsFromSettings(
     // 0 ms と renderGroup の 0 はどちらも有効値のため、0 かどうかでは判定しない
     targetLatency: settings.targetLatency.value,
     renderGroup: settings.renderGroup.value,
+    // CAT で接続した配信の track は、視聴側にも同じ方式のトークンの提示を求める
+    authInfo: catalogAuthInfoForSetupToken(settings.buildAuthorizationToken()) ?? null,
   });
 }
 
@@ -271,6 +288,10 @@ export function buildPublisherCatalogOptionsFromSettings(
  * 配列の順序に仕様上の意味は無い。
  * トラック名は空でなく、互いに異なることを検証する (§5.2.3)。
  *
+ * authInfo は指定したときだけ、音声、映像、event timeline のすべての track に載せる
+ * (§5.2.42)。視聴側は authInfo のある track の SUBSCRIBE にトークンを付ける (§11.4.1 /
+ * §11.4.3)。
+ *
  * ブラウザ API に依存しないため、送信した Catalog の内容はここで検証できる。
  */
 export function buildPublisherCatalog(options: PublisherCatalogOptions): Catalog {
@@ -289,6 +310,9 @@ export function buildPublisherCatalog(options: PublisherCatalogOptions): Catalog
     ...(options.targetLatency !== undefined ? { targetLatency: options.targetLatency } : {}),
     ...(options.renderGroup !== undefined ? { renderGroup: options.renderGroup } : {}),
   };
+  // authInfo も同じく、指定があるときだけキーを持たせる
+  const authInfoFields: Pick<CatalogTrack, "authInfo"> =
+    options.authInfo !== undefined ? { authInfo: options.authInfo } : {};
 
   if (options.audio) {
     const audio = options.audio;
@@ -303,6 +327,7 @@ export function buildPublisherCatalog(options: PublisherCatalogOptions): Catalog
       samplerate: audio.sampleRate,
       channelConfig: String(audio.channels),
       ...latencyFields,
+      ...authInfoFields,
     });
   }
 
@@ -319,6 +344,7 @@ export function buildPublisherCatalog(options: PublisherCatalogOptions): Catalog
       framerate: video.framerate,
       bitrate: video.bitrate,
       ...latencyFields,
+      ...authInfoFields,
     });
   }
 
@@ -337,6 +363,7 @@ export function buildPublisherCatalog(options: PublisherCatalogOptions): Catalog
     eventType: MESSAGES_EVENT_TYPE,
     mimeType: "application/json",
     depends,
+    ...authInfoFields,
   });
 
   // 空名と同名は購読側の catalog の検証 (decodeCatalogMessage) で初めて分かる。
