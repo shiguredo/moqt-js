@@ -212,7 +212,10 @@ export interface MediaPublisher {
    * 実行中にピア起点の close または利用者の `close()` が重なった場合は "closed" を
    * 優先するため `start()` は失敗する (`onError` と `onClose` が続けて呼ばれ得る)。
    * 解放が先行した場合はそれ以上リソースを作らず、接続で受け取った session も閉じる。
-   * `close()` が解放と終端遷移を進めている間は `cannot start while closing` で拒否する。
+   * 解放 (`close()` とピア起点の close / `stop()` の解放) が進行している間は
+   * `cannot start while closing` で拒否する (解放の進行中は一律に開始しない。進行中の
+   * 解放が `start()` の完了後に終端へ進むと、開始した資源を解放する経路が残らないため)。
+   * 入口の拒否は `onError` を通知しない。
    * 並行呼び出しは未対応であり直列に呼ぶこと。
    */
   start(stream: MediaStream): Promise<void>;
@@ -270,8 +273,10 @@ export interface MediaSubscriber {
    * 作り直して再接続するため、`mediaStream` と `catalog` は再 start 後の新しい値を
    * 読むこと。開始を取り消すには close() を使う (状態遷移と停止 / 再開の契約は
    * docs/HIGH_LEVEL_API.md の MediaSubscriber を参照)。
-   * "subscribing" (開始の途中) の stop() は拒否され、close() が解放と終端遷移を
-   * 進めている間は cannot start while closing で拒否する。
+   * "subscribing" (開始の途中) の stop() は拒否される。解放 (close() とピア起点の close /
+   * stop() の解放) が進行している間は cannot start while closing で拒否し、入口の拒否は
+   * onError を通知しない (進行中の解放が start の完了後に終端へ進むと、開始した資源を
+   * 解放する経路が残らないため)。
    * 失敗した場合は確保済みを解放して遷移前の state に戻るため再試行できる。解放が
    * 先行した場合はそれ以上購読も通知もリソース作成も行わず、接続で受け取った session も
    * 閉じる。ピア起点の close または利用者の close() が実行中に重なった場合は "closed" を
