@@ -42,8 +42,8 @@ export interface ConnectionSettingsSnapshot {
   framerateFps: number;
   /** ビットレート (bps) */
   bitrateBps: number;
-  /** キーフレーム間隔 (frames) */
-  keyframeIntervalFrames: number;
+  /** キーフレーム間隔 (秒) */
+  keyframeIntervalSeconds: number;
   /** リレーへ要求するキャッシュ時間 (ms) */
   maxCacheDurationMs: number;
   audioSource: AudioSourceType;
@@ -103,7 +103,7 @@ export function buildConnectionSettingsSnapshot(): ConnectionSettingsSnapshot {
     resolution: settings.resolution.value,
     framerateFps: settings.framerate.value,
     bitrateBps: settings.bitrate.value,
-    keyframeIntervalFrames: settings.keyframeInterval.value,
+    keyframeIntervalSeconds: settings.keyframeInterval.value,
     maxCacheDurationMs: settings.maxCacheDuration.value,
     audioSource: settings.audioSource.value,
     audioDelivery: settings.audioDelivery.value,

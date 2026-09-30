@@ -98,7 +98,7 @@ function resetVideoPublishState(): void {
   pub.publishTimingStats.value = new PublishTimingStats();
   pub.publishTiming.value = EMPTY_PUBLISH_TIMING;
   pub.publishTimingUpdatedAtMs.value = 0;
-  pub.framesSinceKeyFrame.value = 0;
+  pub.lastKeyFrameTimestampUs.value = null;
   pub.newGroupRequested.value = false;
   pub.newGroupRequestsReceived.value = 0;
 }
@@ -506,7 +506,7 @@ export function buildObjectSendPlan(
 /**
  * 次に符号化するフレームをキーフレームにするかを決める
  *
- * keyframeInterval ごとのキーフレームに加えて、新しい Group の要求 (NEW_GROUP_REQUEST) を
+ * keyframeInterval 秒ごとのキーフレームに加えて、新しい Group の要求 (NEW_GROUP_REQUEST) を
  * 受けていれば次のフレームをキーフレームにして新しい Group を始める
  * (draft-ietf-moq-transport-21 Section 9.20.20: dynamic Groups に対応する publisher は、現在の
  * Group を終えて新しい Group をできるだけ早く始める SHOULD)。キーフレームにしたフレームから
@@ -515,18 +515,28 @@ export function buildObjectSendPlan(
  * 間隔ごとの判定は共有モジュール (utils/keyframeInterval.ts) の `shouldRequestKeyFrame` に
  * 任せる。無効な間隔は既定値として扱われるため、この関数は throw しない
  *
- * @param framesSinceKeyFrame - 直前のキーフレームから符号化したフレーム数 (最初は 0)
+ * @param lastKeyFrameTimestampUs - 直前のキーフレームの timestamp (マイクロ秒)。まだ
+ *   キーフレームにしていない場合は null
+ * @param frameTimestampUs - 判定するフレームの timestamp (マイクロ秒)
+ * @param keyframeInterval - キーフレームにする間隔 (秒)
  * @param newGroupRequested - 新しい Group の要求を受けて、まだキーフレームにしていないか
- * @returns キーフレームにするかと、このフレームを符号化した後のフレーム数
+ * @returns キーフレームにするかと、このフレームを符号化した後の直前のキーフレームの timestamp
  */
 export function decideKeyFrame(
-  framesSinceKeyFrame: number,
+  lastKeyFrameTimestampUs: number | null,
+  frameTimestampUs: number,
   keyframeInterval: number,
   newGroupRequested: boolean,
-): { keyFrame: boolean; nextFramesSinceKeyFrame: number } {
+): { keyFrame: boolean; nextLastKeyFrameTimestampUs: number | null } {
   const keyFrame =
-    newGroupRequested || shouldRequestKeyFrame(framesSinceKeyFrame, keyframeInterval);
-  return { keyFrame, nextFramesSinceKeyFrame: (keyFrame ? 0 : framesSinceKeyFrame) + 1 };
+    newGroupRequested ||
+    shouldRequestKeyFrame(lastKeyFrameTimestampUs, frameTimestampUs, keyframeInterval);
+  // キーフレームにしない場合は直前の記録を据え置く。直前の記録が無いフレームは必ず
+  // キーフレームになるため、据え置く側で null にはならない
+  return {
+    keyFrame,
+    nextLastKeyFrameTimestampUs: keyFrame ? frameTimestampUs : lastKeyFrameTimestampUs,
+  };
 }
 
 interface VideoStreamResult {
@@ -965,12 +975,13 @@ export function usePublisher() {
         } else {
           // 新しい Group の要求は、符号化するフレームで消費する (捨てたフレームでは消費しない)
           const decision = decideKeyFrame(
-            pub.framesSinceKeyFrame.value,
+            pub.lastKeyFrameTimestampUs.value,
+            frame.timestamp,
             pub.keyframeInterval.value,
             pub.newGroupRequested.value,
           );
           encoderInstance.encode(frame, { keyFrame: decision.keyFrame });
-          pub.framesSinceKeyFrame.value = decision.nextFramesSinceKeyFrame;
+          pub.lastKeyFrameTimestampUs.value = decision.nextLastKeyFrameTimestampUs;
           if (decision.keyFrame) {
             pub.newGroupRequested.value = false;
           }

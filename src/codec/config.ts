@@ -9,6 +9,10 @@ export const DEFAULT_AUDIO_SAMPLE_RATE = 48000;
 export const DEFAULT_AUDIO_CHANNELS = 2;
 export const DEFAULT_VIDEO_FRAMERATE = 30;
 
+// キーフレームを送る間隔の既定値 (秒)。フレーム数ではなく時間で指定するため、
+// framerate を変えても実際の間隔は変わらない
+export const DEFAULT_KEYFRAME_INTERVAL_SECONDS = 2;
+
 /**
  * ビデオエンコーダー設定を取得する
  */

@@ -17,7 +17,7 @@ function resetSettingSignals(): void {
   settings.resolution.value = "1280x720";
   settings.framerate.value = 30;
   settings.bitrate.value = 2000000;
-  settings.keyframeInterval.value = 60;
+  settings.keyframeInterval.value = 10;
   settings.maxCacheDuration.value = 600000;
   settings.audioSource.value = "dummy";
   settings.audioDelivery.value = "subgroup";
@@ -91,7 +91,7 @@ test("buildConnectionSettingsSnapshot: 接続に使う設定をそのまま写�
     assert.equal(snapshot.resolution, "1920x1080");
     assert.equal(snapshot.framerateFps, 60);
     assert.equal(snapshot.bitrateBps, 8000000);
-    assert.equal(snapshot.keyframeIntervalFrames, 120);
+    assert.equal(snapshot.keyframeIntervalSeconds, 120);
     assert.equal(snapshot.maxCacheDurationMs, 30000);
     assert.equal(snapshot.audioSource, "microphone");
     assert.equal(snapshot.audioDelivery, "datagram");

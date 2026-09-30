@@ -58,6 +58,7 @@ import {
 } from "./createMediaPublisher";
 import type { AudioEncoderWrapper } from "./codec/AudioEncoder";
 import type { VideoEncoderWrapper } from "./codec/VideoEncoder";
+import { DEFAULT_KEYFRAME_INTERVAL_SECONDS } from "./codec/config";
 import type { MediaPublisherState } from "./codec/types";
 import type { MediaConnectSettings } from "./createMedia/connect";
 import { resolveAudioPublishSettings, resolveVideoPublishSettings } from "./createMedia/settings";
@@ -339,14 +340,14 @@ test("processVideoFrames: encode キューの閾値以内なら破棄せず enco
   assert.equal(publisher.getStats().video?.droppedFrames, 0);
 });
 
-// 破棄するフレームではキーフレームの判定も通し番号の加算も行わない。行うと、
-// requestKeyframe() が通し番号を 0 に戻した直後にキューが閾値を超えていた場合、
-// 破棄した分だけ番号が進んで要求が消費され、キーフレームは次の間隔まで現れない。
+// 破棄するフレームではキーフレームの判定も直前のキーフレームの更新も行わない。行うと、
+// requestKeyframe() が記録を消した直後にキューが閾値を超えていた場合、破棄した分だけ
+// 記録が進んで要求が消費され、キーフレームは次の間隔まで現れない。
 // 記録用エンコーダーの encodeQueueSize を変えて閾値超過と回復を作り、
 // encode の options (keyFrame) の記録で要求が次の encode するフレームへ移ることを固定する
 test("processVideoFrames: キュー超過で破棄したフレームはキーフレームの要求を消費しない", async () => {
   const { publisher, control, errors } = createLoopTestContext({
-    video: { codec: "vp8", bitrate: 1000, keyframeInterval: 60 },
+    video: { codec: "vp8", bitrate: 1000, keyframeInterval: 10 },
   });
   const { encoded, keyFrames, setEncodeQueueSize, controller } = injectVideoLoop(control);
   const loop = control.processVideoFrames();
@@ -377,7 +378,7 @@ test("processVideoFrames: キュー超過で破棄したフレームはキーフ
   await loop;
 
   // 破棄した 3 枚は encode されず、要求は次に encode するフレームが引き継ぐ。
-  // 破棄したフレームで通し番号を進めると 2 枚目は keyFrame: false になる
+  // 破棄したフレームで記録を進めると、2 枚目の経過時間が間隔に届かず keyFrame: false になる
   assert.equal(encoded.length, 2);
   assert.strictEqual(encoded[0], first);
   assert.strictEqual(encoded[1], second);
@@ -390,64 +391,65 @@ test("processVideoFrames: キュー超過で破棄したフレームはキーフ
   assert.equal(errors.length, 0);
 });
 
-// shouldSendKeyFrame に渡す通し番号は「requestKeyframe() のリセット以後に実際に
-// encode したフレームの数」になる。破棄したフレームを数えると、間隔の境界が
-// 破棄のたびに後ろへずれ、周期のキーフレームが現れなくなる
-test("processVideoFrames: キーフレームの通し番号は実際に encode したフレームの数だけ進む", async () => {
+// キーフレームの判定に使う記録は「実際に encode したフレームの timestamp」で更新する。
+// 破棄したフレームで更新すると、間隔の境界が破棄のたびに後ろへずれ、周期のキーフレームが
+// 現れなくなる。フレームの timestamp は 50 ms 刻み、間隔は 250 ms とし、破棄した 2 枚を
+// 数えなければ 4 枚目の encode (250 ms) が境界に届くことを固定する
+test("processVideoFrames: キーフレームの記録は実際に encode したフレームだけで進む", async () => {
   const { publisher, control, errors } = createLoopTestContext({
-    video: { codec: "vp8", bitrate: 1000, keyframeInterval: 3 },
+    video: { codec: "vp8", bitrate: 1000, keyframeInterval: 0.25 },
   });
   const { encoded, keyFrames, setEncodeQueueSize, controller } = injectVideoLoop(control);
   const loop = control.processVideoFrames();
 
-  // 間隔 (3 枚) の境界に届かない 2 枚を encode する
+  // 間隔 (250 ms) の境界に届かない 2 枚 (0 ms / 50 ms) を encode する
   for (let index = 0; index < 2; index++) {
-    controller.enqueue(createTestFrame(index));
+    controller.enqueue(createTestFrame(index * 50_000));
     await settle();
   }
 
-  // キューが閾値を超えている間の 2 枚は破棄される
+  // キューが閾値を超えている間の 2 枚 (100 ms / 150 ms) は破棄される
   setEncodeQueueSize(3);
   for (let index = 2; index < 4; index++) {
-    controller.enqueue(createTestFrame(index));
+    controller.enqueue(createTestFrame(index * 50_000));
     await settle();
   }
 
-  // キューが空いた後は 3 枚目と 4 枚目が encode される
+  // キューが空いた後は 3 枚目と 4 枚目 (200 ms / 250 ms) が encode される
   setEncodeQueueSize(0);
   for (let index = 4; index < 6; index++) {
-    controller.enqueue(createTestFrame(index));
+    controller.enqueue(createTestFrame(index * 50_000));
     await settle();
   }
   controller.close();
   await loop;
 
-  // encode したのは 4 枚であり、3 枚ごとのキーフレームは 4 枚目に現れる。
-  // 破棄した 2 枚を数えると通し番号が 6 になり、キーフレームは現れない
+  // encode したのは 4 枚であり、間隔の境界 (250 ms) は 4 枚目に現れる。
+  // 破棄した 2 枚で記録を更新すると 150 ms が基準になり、キーフレームは現れない
   assert.equal(encoded.length, 4);
   assert.deepEqual(keyFrames, [true, false, false, true]);
   assert.equal(publisher.getStats().video?.droppedFrames, 2);
   assert.equal(errors.length, 0);
 });
 
-// encode が同期 throw しても、フレームは必ず 1 回閉じられ、通し番号は進まない。
+// encode が同期 throw しても、フレームは必ず 1 回閉じられ、記録は進まない。
 // VideoEncoderWrapper.encode は try/catch を持たず encoder.encode と worker.postMessage の
-// 例外をそのまま伝えるため、この経路は実際に起こり得る。加算を encode より前に置くと
-// encode していないフレームで番号が進み、キーフレームの要求を消費する。
+// 例外をそのまま伝えるため、この経路は実際に起こり得る。記録の更新を encode より前に置くと
+// encode していないフレームで進み、キーフレームの要求を消費する。
 // close() を分岐の外に置くと throw の経路で閉じ忘れる
-test("processVideoFrames: encode が同期 throw するとフレームを閉じ、通し番号を進めない", async () => {
+test("processVideoFrames: encode が同期 throw するとフレームを閉じ、記録を進めない", async () => {
   const { publisher, control, errors } = createLoopTestContext({
-    video: { codec: "vp8", bitrate: 1000, keyframeInterval: 60 },
+    video: { codec: "vp8", bitrate: 1000, keyframeInterval: 10 },
   });
   const { encoded, keyFrames, failNextEncode, controller } = injectVideoLoop(control);
 
   // キーフレームを要求した直後のフレームで encode が同期 throw する。
-  // 通し番号が進むと要求が消費され、次に encode するフレームがキーフレームにならない
+  // 記録が進むと要求が消費され、次に encode するフレームがキーフレームにならない
   control.requestKeyframe();
   const failed = createTestFrame();
   failNextEncode(new Error("VideoEncoder.encode failed"));
   // encode の同期 throw はループ全体の catch を抜けて終了するため、
-  // 次のフレームは新しいループで処理する (通し番号はインスタンスに残る)
+  // 次のフレームは新しいループで処理する (記録はインスタンスに残る)
   const firstLoop = control.processVideoFrames();
   controller.enqueue(failed);
   await settle();
@@ -460,7 +462,7 @@ test("processVideoFrames: encode が同期 throw するとフレームを閉じ�
   controller.close();
   await secondLoop;
 
-  // throw したフレームは encode されず、通し番号も据え置かれる (要求は next が引き継ぐ)
+  // throw したフレームは encode されず、記録も据え置かれる (要求は next が引き継ぐ)
   assert.equal(encoded.length, 1);
   assert.strictEqual(encoded[0], next);
   assert.deepEqual(keyFrames, [true]);
@@ -485,23 +487,24 @@ test("VIDEO_PUBLISH_OPTIONS: 映像トラックは DYNAMIC_GROUPS を広告す�
  * draft-ietf-moq-transport-21 §9.20.20: NEW_GROUP_REQUEST を受けた publisher は、現在の Group を
  * 終えて新しい Group をできるだけ早く始める SHOULD。映像は onNewGroupRequest から
  * requestKeyframe() を呼び、次に符号化するフレームをキーフレーム (新しい Group の先頭) にする。
- * キーフレームの間隔 60 の途中 (3 枚目) で要求を受けると、4 枚目がキーフレームになり、
+ * 間隔 10 秒の途中 (3 枚目、timestamp 2 秒) で要求を受けると、4 枚目がキーフレームになり、
  * 以降は要求の後から数えた間隔に戻る
  */
 test("processVideoFrames: 新しい Group の要求を受けると次のフレームをキーフレームにする", async () => {
   const { control, errors } = createLoopTestContext({
-    video: { codec: "vp8", bitrate: 1000, keyframeInterval: 60 },
+    video: { codec: "vp8", bitrate: 1000, keyframeInterval: 10 },
   });
   const { keyFrames, controller } = injectVideoLoop(control);
   const loop = control.processVideoFrames();
+  // フレームの timestamp は 1 秒刻みにする (間隔 10 秒には届かない)
   for (let index = 0; index < 3; index++) {
-    controller.enqueue(createTestFrame(index));
+    controller.enqueue(createTestFrame(index * 1_000_000));
     await settle();
   }
   // PublishCallbacks.onNewGroupRequest と同じく requestKeyframe() を呼ぶ
   control.requestKeyframe();
   for (let index = 3; index < 6; index++) {
-    controller.enqueue(createTestFrame(index));
+    controller.enqueue(createTestFrame(index * 1_000_000));
     await settle();
   }
   controller.close();
@@ -3504,40 +3507,39 @@ test("resolveAudioConfigToSend: 送り直し要求より新しい description �
   assert.isFalse(resent.resendNext);
 });
 
-test("resolveKeyframeInterval: 映像オプションが無ければ既定 framerate の 2 倍になる", () => {
-  // framerate の既定値 30 から 60 を導出することの検証 (映像を配信しない場合も同じ値)
-  assert.equal(resolveKeyframeInterval(undefined), 60);
-  assert.equal(resolveKeyframeInterval({ codec: "vp8", bitrate: 1000000 }), 60);
+test("resolveKeyframeInterval: 映像オプションが無ければ既定の 2 秒になる", () => {
+  // 間隔は秒で持つため、framerate から導出しない (映像を配信しない場合も同じ値)
+  assert.equal(resolveKeyframeInterval(undefined), DEFAULT_KEYFRAME_INTERVAL_SECONDS);
+  assert.equal(resolveKeyframeInterval({ codec: "vp8", bitrate: 1000000 }), 2);
 });
 
-test("resolveKeyframeInterval: framerate 指定時はその 2 倍になる", () => {
-  // 既定値ではなく指定した framerate から間隔を導出することの検証
-  assert.equal(resolveKeyframeInterval({ codec: "vp8", bitrate: 1000000, framerate: 25 }), 50);
+test("resolveKeyframeInterval: framerate を変えても既定値は変わらない", () => {
+  // フレーム数ではなく時間で指定するため、実際の間隔は framerate に依存しない
+  assert.equal(resolveKeyframeInterval({ codec: "vp8", bitrate: 1000000, framerate: 25 }), 2);
+  assert.equal(resolveKeyframeInterval({ codec: "vp8", bitrate: 1000000, framerate: 60 }), 2);
 });
 
-test("resolveKeyframeInterval: keyframeInterval 指定時は framerate より優先する", () => {
-  // 明示指定が framerate 由来の既定を上書きすることの検証
+test("resolveKeyframeInterval: keyframeInterval 指定時はその値になる", () => {
+  // 明示指定が既定を上書きすることの検証
   assert.equal(
-    resolveKeyframeInterval({
-      codec: "vp8",
-      bitrate: 1000000,
-      framerate: 25,
-      keyframeInterval: 15,
-    }),
-    15,
+    resolveKeyframeInterval({ codec: "vp8", bitrate: 1000000, keyframeInterval: 10 }),
+    10,
   );
-  // framerate 未指定でも明示指定を尊重すること
-  assert.equal(resolveKeyframeInterval({ codec: "vp8", bitrate: 1000000, keyframeInterval: 1 }), 1);
+  // 時間の指定なので、1 秒未満の値も受理する
+  assert.equal(
+    resolveKeyframeInterval({ codec: "vp8", bitrate: 1000000, keyframeInterval: 0.5 }),
+    0.5,
+  );
 });
 
-test("resolveKeyframeInterval: 1 以上の整数でない keyframeInterval は値域エラーで reject する", () => {
-  // 0 は「毎フレームキーフレーム」と解釈すると帯域を浪費し、非整数は剰余の判定で
-  // 値によっては周期要求が先頭の 1 回で止まるため、1 以上の整数だけを受理する。
+test("resolveKeyframeInterval: 0 以下と非有限数の keyframeInterval は値域エラーで reject する", () => {
+  // 0 は「毎フレームキーフレーム」と解釈すると帯域を浪費し、負値と非有限数は経過時間の
+  // 比較が成立しないため、0 より大きい有限数だけを受理する。
   // エラーメッセージに受け取った値を含めること
   const invalidValues = [
     0,
     -5,
-    1.5,
+    -0.5,
     Number.NaN,
     Number.POSITIVE_INFINITY,
     Number.NEGATIVE_INFINITY,
@@ -3545,42 +3547,9 @@ test("resolveKeyframeInterval: 1 以上の整数でない keyframeInterval は�
   for (const value of invalidValues) {
     assert.throws(
       () => resolveKeyframeInterval({ codec: "vp8", bitrate: 1000000, keyframeInterval: value }),
-      new RegExp(`keyframeInterval must be an integer >= 1, got ${value}$`),
+      new RegExp(`keyframeInterval must be a finite number of seconds > 0, got ${value}$`),
     );
   }
-});
-
-test("resolveKeyframeInterval: 60 は受理する", () => {
-  // 1 の受理は「keyframeInterval 指定時は framerate より優先する」テストが固定している
-  assert.equal(
-    resolveKeyframeInterval({ codec: "vp8", bitrate: 1000000, keyframeInterval: 60 }),
-    60,
-  );
-});
-
-test("resolveKeyframeInterval: framerate から既定値を導出できない場合は reject する", () => {
-  // framerate が 0 / 負値 / 非有限なら解決後の値が 1 未満または非有限になる。
-  // 丸め由来の拒否 (2 倍が 0.5 未満の正値) は次のテストが固定する
-  const invalidFramerates = [0, -5, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY];
-  for (const framerate of invalidFramerates) {
-    assert.throws(
-      () => resolveKeyframeInterval({ codec: "vp8", bitrate: 1000000, framerate }),
-      new RegExp(
-        `framerate must be a number >= 0\\.25 \\(Math\\.round\\(framerate \\* 2\\) >= 1\\), got ${framerate}$`,
-      ),
-    );
-  }
-});
-
-test("resolveKeyframeInterval: framerate 由来の既定値は整数に丸める", () => {
-  // 29.97 の 2 倍 59.94 は剰余の判定で周期要求が先頭の 1 回で止まるため丸める。
-  // 導出できる下限は 2 倍が 0.5 以上になる 0.25 である
-  assert.equal(resolveKeyframeInterval({ codec: "vp8", bitrate: 1000000, framerate: 29.97 }), 60);
-  assert.equal(resolveKeyframeInterval({ codec: "vp8", bitrate: 1000000, framerate: 0.25 }), 1);
-  assert.throws(
-    () => resolveKeyframeInterval({ codec: "vp8", bitrate: 1000000, framerate: 0.24 }),
-    /framerate must be a number >= 0\.25/,
-  );
 });
 
 test("createMediaPublisher: 不正な keyframeInterval は公開 API で reject する", async () => {
@@ -3595,29 +3564,32 @@ test("createMediaPublisher: 不正な keyframeInterval は公開 API で reject 
     rejected = error;
   }
   assert.instanceOf(rejected, Error);
-  assert.include((rejected as Error).message, "keyframeInterval must be an integer >= 1, got 0");
+  assert.include(
+    (rejected as Error).message,
+    "keyframeInterval must be a finite number of seconds > 0, got 0",
+  );
 });
 
-test("shouldSendKeyFrame: 間隔 1 では frameCount 1 でもキーフレームになる", () => {
-  // フレーム番号 0 の判定は既存テストが固定しているため、1 との差だけを見る
-  assert.isTrue(shouldSendKeyFrame(1, 1));
-  assert.isFalse(shouldSendKeyFrame(1, 60));
-});
-
-test("shouldSendKeyFrame: フレーム番号 0 はキーフレームになる", () => {
-  // 初回フレームと requestKeyframe() 直後 (フレーム番号を 0 に戻す) が
+test("shouldSendKeyFrame: 直前のキーフレームが無ければキーフレームになる", () => {
+  // 初回フレームと requestKeyframe() 直後 (直前のキーフレームの記録を null に戻す) が
   // キーフレームになることの検証
-  assert.isTrue(shouldSendKeyFrame(0, 60));
-  assert.isTrue(shouldSendKeyFrame(0, 1));
+  assert.isTrue(shouldSendKeyFrame(null, 0, 60));
+  assert.isTrue(shouldSendKeyFrame(null, 1_000_000, 1));
 });
 
-test("shouldSendKeyFrame: 間隔の倍数の前後でキーフレーム判定が切り替わる", () => {
-  // 間隔 60 の境界 (59 / 60 / 61) と 2 周期目 (120) を固定する
-  assert.isFalse(shouldSendKeyFrame(59, 60));
-  assert.isTrue(shouldSendKeyFrame(60, 60));
-  assert.isFalse(shouldSendKeyFrame(61, 60));
-  assert.isFalse(shouldSendKeyFrame(119, 60));
-  assert.isTrue(shouldSendKeyFrame(120, 60));
+test("shouldSendKeyFrame: 経過時間が間隔に届くまでキーフレームにしない", () => {
+  // 間隔 60 秒の境界をマイクロ秒で固定する (直前のキーフレームから
+  // 59.999999 秒 / 60 秒 / 60.000001 秒)
+  assert.isFalse(shouldSendKeyFrame(0, 59_999_999, 60));
+  assert.isTrue(shouldSendKeyFrame(0, 60_000_000, 60));
+  assert.isFalse(shouldSendKeyFrame(1_000_000, 60_999_999, 60));
+  assert.isTrue(shouldSendKeyFrame(1_000_000, 61_000_000, 60));
+});
+
+test("shouldSendKeyFrame: timestamp が巻き戻ったらキーフレームになる", () => {
+  // 映像の入力が差し替わって timestamp が前のキーフレームより戻った場合も、
+  // 復号を始められるよう先頭としてキーフレームにする
+  assert.isTrue(shouldSendKeyFrame(5_000_000, 0, 60));
 });
 
 test("allocateAudioObject: 初回フレームは割当済みの初期 Group の Object ID 0 になる", () => {

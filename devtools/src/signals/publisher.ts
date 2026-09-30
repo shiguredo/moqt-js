@@ -79,16 +79,17 @@ export const publishTimingStats = signal(new PublishTimingStats());
 export const publishTiming = signal<PublishTimingSnapshot>(EMPTY_PUBLISH_TIMING);
 // 最後に publishTiming へ反映した時刻 (`performance.now()`)。画面の表示には使わない
 export const publishTimingUpdatedAtMs = signal(0);
-// 直前のキーフレームから符号化したフレーム数 (キーフレームの間隔を数える)
-export const framesSinceKeyFrame = signal(0);
+// 直前のキーフレームの timestamp (マイクロ秒。キーフレームの間隔を時間で数える)。
+// まだキーフレームを符号化していない場合は null
+export const lastKeyFrameTimestampUs = signal<number | null>(null);
 // 新しい Group の要求 (NEW_GROUP_REQUEST) を受けて、まだキーフレームにしていないか
 export const newGroupRequested = signal(false);
 // 受けた新しい Group の要求の数 (配信の開始からの累積)
 export const newGroupRequestsReceived = signal(0);
 export const videoStreamCleanup = signal<(() => void) | null>(null);
-// キーフレーム間隔 (frames)。既定は framerate 30 の 2 秒ぶん。配信の開始時に接続設定
+// キーフレーム間隔 (秒)。既定は 2 秒。配信の開始時に接続設定
 // (signals/connectionSettings.ts) の値で上書きするため、ここは配信を始める前の値になる
-export const keyframeInterval = signal(60);
+export const keyframeInterval = signal(2);
 export const pubCurrentObjectId = signal(0);
 
 // 音声トラックの状態

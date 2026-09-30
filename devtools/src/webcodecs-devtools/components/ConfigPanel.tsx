@@ -208,10 +208,10 @@ export function ConfigPanel() {
               disabled={store.settingsDisabled.value}
               class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors disabled:bg-slate-100 disabled:cursor-not-allowed"
             >
-              <option value="30">30 frames</option>
-              <option value="60">60 frames</option>
-              <option value="90">90 frames</option>
-              <option value="120">120 frames</option>
+              <option value="1">1 sec</option>
+              <option value="2">2 sec</option>
+              <option value="3">3 sec</option>
+              <option value="4">4 sec</option>
             </select>
           </div>
         </div>
