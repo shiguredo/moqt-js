@@ -89,7 +89,7 @@ function resetPublisherSignals(): void {
   pub.videoStreamCleanup.value = null;
   // 配信側の signal の初期値 (signals/publisher.ts)。配信の開始時に接続設定の値で
   // 上書きされるため、テストでも配信を始める前の値へ戻す
-  pub.keyframeInterval.value = 60;
+  pub.keyframeInterval.value = 2;
   pub.pubCurrentObjectId.value = 0;
   // 音声の signal も初期化する (テスト間で状態を持ち越さない)
   pub.audioPublisher.value = null;
@@ -341,7 +341,7 @@ test("buildObjectSendPlan: payload は chunk の data をそのまま使う", ()
 // キーフレーム要求の間隔
 // ============================================================================
 
-// 先頭フレームと keyframeInterval フレームごとにキーフレームを要求する。
+// 先頭フレームと keyframeInterval 秒ごとにキーフレームを要求する。
 // 間隔を無視して全フレームをキーフレームにすると帯域を浪費し、
 // 要求が一度も出ないと購読開始時に復号を始められない。
 // 間隔そのものの判定 (境界値と無効値) は utils/keyframeInterval.test.ts が固定する。
@@ -349,36 +349,57 @@ test("buildObjectSendPlan: payload は chunk の data をそのまま使う", ()
 // キーフレームにして新しい Group を始め、そこから keyframeInterval を数え直す。
 // 次のフレームまでに複数の要求が届いても、キーフレームは 1 枚にまとまる
 test("decideKeyFrame: 要求を受けると次のフレームをキーフレームにし、そこから間隔を数え直す", () => {
-  const interval = 5;
+  // フレームの timestamp は 1 秒刻み、間隔は 5 秒
+  const intervalSeconds = 5;
   // 3 枚目の符号化の前に要求を受けたとする (要求は次のキーフレームで消える)
   const requestedBefore = new Set([3]);
   const keyFrames: boolean[] = [];
-  let framesSinceKeyFrame = 0;
+  let lastKeyFrameTimestampUs: number | null = null;
   let requested = false;
   for (let frame = 0; frame < 12; frame++) {
     if (requestedBefore.has(frame)) {
       requested = true;
     }
-    const decision = decideKeyFrame(framesSinceKeyFrame, interval, requested);
+    const decision = decideKeyFrame(
+      lastKeyFrameTimestampUs,
+      frame * 1_000_000,
+      intervalSeconds,
+      requested,
+    );
     keyFrames.push(decision.keyFrame);
-    framesSinceKeyFrame = decision.nextFramesSinceKeyFrame;
+    lastKeyFrameTimestampUs = decision.nextLastKeyFrameTimestampUs;
     if (decision.keyFrame) {
       requested = false;
     }
   }
-  // 0 枚目 (先頭)、3 枚目 (要求)、そこから 5 枚ごと (8 枚目) がキーフレーム
+  // 0 枚目 (先頭)、3 枚目 (要求)、そこから 5 秒後 (8 枚目) がキーフレーム
   assert.deepEqual(
     keyFrames.map((keyFrame, frame) => (keyFrame ? frame : -1)).filter((frame) => frame >= 0),
     [0, 3, 8],
   );
 });
 
-test("decideKeyFrame: 要求が無ければ keyframeInterval ごとにキーフレームにする", () => {
-  assert.deepEqual(decideKeyFrame(0, 60, false), { keyFrame: true, nextFramesSinceKeyFrame: 1 });
-  assert.deepEqual(decideKeyFrame(1, 60, false), { keyFrame: false, nextFramesSinceKeyFrame: 2 });
-  assert.deepEqual(decideKeyFrame(60, 60, false), { keyFrame: true, nextFramesSinceKeyFrame: 1 });
+test("decideKeyFrame: 要求が無ければ keyframeInterval 秒ごとにキーフレームにする", () => {
+  // 先頭フレーム (直前のキーフレームが無い) はキーフレームになる
+  assert.deepEqual(decideKeyFrame(null, 0, 10, false), {
+    keyFrame: true,
+    nextLastKeyFrameTimestampUs: 0,
+  });
+  // 間隔 (10 秒) に届く前はキーフレームにならない
+  assert.deepEqual(decideKeyFrame(0, 1_000_000, 10, false), {
+    keyFrame: false,
+    nextLastKeyFrameTimestampUs: 0,
+  });
+  // 間隔ちょうどでキーフレームになり、記録がそのフレームに移る
+  assert.deepEqual(decideKeyFrame(0, 10_000_000, 10, false), {
+    keyFrame: true,
+    nextLastKeyFrameTimestampUs: 10_000_000,
+  });
   // 要求があれば間隔の途中でもキーフレームにする
-  assert.deepEqual(decideKeyFrame(7, 60, true), { keyFrame: true, nextFramesSinceKeyFrame: 1 });
+  assert.deepEqual(decideKeyFrame(0, 3_000_000, 10, true), {
+    keyFrame: true,
+    nextLastKeyFrameTimestampUs: 3_000_000,
+  });
 });
 
 // ============================================================================

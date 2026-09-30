@@ -25,12 +25,14 @@ export const videoCodec = signal("vp09.00.10.08");
 export const resolution = signal("960x540");
 export const framerate = signal(30);
 export const bitrate = signal(2_000_000);
-// キーフレーム間隔 (frames)。既定は共有モジュール (utils/keyframeInterval.ts) の
-// DEFAULT_KEYFRAME_INTERVAL (無効な間隔を正規化するときの既定値でもある。30 fps で
-// 120 秒ぶん)。判定は同じモジュールの shouldRequestKeyFrame に任せる。ConfigPanel の
-// 選択肢 (30 / 60 / 90 / 120) はこの既定値 3600 を含まないため、開いた直後は select が
-// 空表示になる (既知の不一致。挙動は変えず、ここに記録だけ残す)
+// キーフレーム間隔 (秒)。既定は共有モジュール (utils/keyframeInterval.ts) の
+// DEFAULT_KEYFRAME_INTERVAL (無効な間隔を正規化するときの既定値でもある)。判定は同じ
+// モジュールの shouldRequestKeyFrame に任せる。ConfigPanel の選択肢 (1 / 2 / 3 / 4 秒) は
+// この既定値 2 秒を含むため、開いた直後の select は既定値を表示する
 export const keyframeInterval = signal(DEFAULT_KEYFRAME_INTERVAL);
+// 直前のキーフレームに要求した timestamp (マイクロ秒)。まだ要求していない場合は null。
+// 要求の間隔はフレーム数ではなく時間で数えるため、framerate を変えても実際の間隔は変わらない
+export const lastKeyFrameRequestTimestampUs = signal<number | null>(null);
 
 // Worker モード
 export type WorkerMode = "none" | "dedicated";
@@ -562,9 +564,13 @@ export async function startCapture(): Promise<void> {
 
           if (encoderStatus.value === "configured") {
             const keyFrame = shouldRequestKeyFrame(
-              encoderStats.value.frameCount,
+              lastKeyFrameRequestTimestampUs.value,
+              frame.timestamp,
               keyframeInterval.value,
             );
+            if (keyFrame) {
+              lastKeyFrameRequestTimestampUs.value = frame.timestamp;
+            }
             const mode = encoderWorkerMode.value;
 
             if (mode === "none" && videoEncoder) {
@@ -667,6 +673,9 @@ export function resetEncoder(): void {
 
   encodedFrames.value = [];
   decodedFrames.value = [];
+
+  // 新しいキャプチャの先頭フレームが必ずキーフレームになるよう、直前の記録を消す
+  lastKeyFrameRequestTimestampUs.value = null;
 
   // Decoded Output のキャンバスをクリア
   const canvas = document.getElementById("decoded-canvas") as HTMLCanvasElement | null;

@@ -21,7 +21,7 @@ import {
 import { AudioEncoderWrapper } from "./codec/AudioEncoder";
 import type { AudioEncodedChunkData } from "./codec/types";
 import { VideoEncoderWrapper } from "./codec/VideoEncoder";
-import { DEFAULT_VIDEO_FRAMERATE } from "./codec/config";
+import { DEFAULT_KEYFRAME_INTERVAL_SECONDS } from "./codec/config";
 import {
   resolveAudioPublishSettings,
   resolveVideoPublishSettings,
@@ -187,40 +187,36 @@ export function allocateVideoObject(
 }
 
 /**
- * 映像のキーフレーム間隔を解決する純関数
+ * 映像のキーフレーム間隔 (秒) を解決する純関数
  *
- * `keyframeInterval` は 1 以上の整数のみ受理する。0 に特別な意味を持たせる根拠が
- * MSF / LOC / WebCodecs に無い (draft-ietf-moq-msf-01 §5.2.24 の `maxGopDuration` は
- * ミリ秒指定の別概念であり、WebCodecs の `keyFrame: false` はキーフレームにするかを
- * UA に委ねる意味である) ため、0 を「毎フレームキーフレーム」と解釈すると帯域を
- * 大きく浪費する。剰余で判定する `shouldSendKeyFrame` は非整数の間隔だと値によって
- * 周期要求が先頭の 1 回で止まる (例: `framerate: 29.97` の 59.94)。
+ * `keyframeInterval` は秒で指定する。0 より大きい有限数のみ受理する。フレーム数では
+ * なく時間で指定するのは、フレーム数の間隔が framerate に依存するためである
+ * (30 fps の 300 フレームは 10 秒だが、60 fps では 5 秒になる)。判定はフレームの
+ * timestamp の差で行うため、実際のフレームレートが設定とずれても指定した秒数を守る。
  *
- * `keyframeInterval` 未指定時は `Math.round(framerate * 2)` を使う (既定 framerate は
- * 30 なので 60)。この値が 1 未満または非有限なら reject する (framerate が 0 / 負値 /
- * 非有限の場合と、正の有限値でも 2 倍が 0.5 未満の場合が含まれる)。節番号は
- * draft-ietf-moq-msf-01 由来であり、将来の draft 改版で変わる可能性がある。
+ * 0 に特別な意味を持たせる根拠が MSF / LOC / WebCodecs に無い (draft-ietf-moq-msf-01
+ * §5.2.24 の `maxGopDuration` はミリ秒指定の別概念であり、WebCodecs の `keyFrame: false`
+ * はキーフレームにするかを UA に委ねる意味である) ため、0 を「毎フレームキーフレーム」と
+ * 解釈すると帯域を大きく浪費する。
+ *
+ * `keyframeInterval` 未指定時は `DEFAULT_KEYFRAME_INTERVAL_SECONDS` (2 秒) を使う。
+ * 節番号は draft-ietf-moq-msf-01 由来であり、将来の draft 改版で変わる可能性がある。
  *
  * @param video - 映像配信オプション (映像を配信しない場合は undefined)
- * @returns キーフレームを送るフレーム間隔 (1 以上の整数)
+ * @returns キーフレームを送る間隔 (秒。0 より大きい有限数)
  */
 export function resolveKeyframeInterval(video: VideoPublishOptions | undefined): number {
   const specifiedInterval = video?.keyframeInterval;
   if (specifiedInterval !== undefined) {
-    if (!Number.isInteger(specifiedInterval) || specifiedInterval < 1) {
-      throw new Error(`keyframeInterval must be an integer >= 1, got ${specifiedInterval}`);
+    if (!Number.isFinite(specifiedInterval) || specifiedInterval <= 0) {
+      throw new Error(
+        `keyframeInterval must be a finite number of seconds > 0, got ${specifiedInterval}`,
+      );
     }
     return specifiedInterval;
   }
 
-  const framerate = video?.framerate ?? DEFAULT_VIDEO_FRAMERATE;
-  const interval = Math.round(framerate * 2);
-  if (!Number.isFinite(interval) || interval < 1) {
-    throw new Error(
-      `framerate must be a number >= 0.25 (Math.round(framerate * 2) >= 1), got ${framerate}`,
-    );
-  }
-  return interval;
+  return DEFAULT_KEYFRAME_INTERVAL_SECONDS;
 }
 
 /**
@@ -237,19 +233,29 @@ export const VIDEO_PUBLISH_OPTIONS: Readonly<PublishOptions> = { dynamicGroups: 
 /**
  * 映像フレームがキーフレームのタイミングかを判定する純関数
  *
- * フレーム番号が間隔の倍数ならキーフレームにする。`requestKeyframe()` はフレーム
- * 番号を 0 に戻すため、要求の後に次に encode するフレームは必ずキーフレームになる
- * (encode せず破棄したフレームは番号を進めないため、要求は消費されず次の
- * encode するフレームへ移る)。
+ * 直前のキーフレームからの経過時間が間隔以上ならキーフレームにする。先頭のフレーム
+ * (直前のキーフレームが無い) と、timestamp が巻き戻ったフレーム (映像の入力が
+ * 差し替わった) もキーフレームにする。`requestKeyframe()` は直前のキーフレームの
+ * timestamp を消すため、要求の後に次に encode するフレームは必ずキーフレームになる
+ * (encode せず破棄したフレームは判定しないため、要求は消費されず次の encode する
+ * フレームへ移る)。
  *
- * @param frameCount - キーフレーム判定に使うフレーム番号 (`requestKeyframe()` の
- *   リセット以後に実際に encode したフレームの数)
- * @param keyframeInterval - キーフレームを送るフレーム間隔 (1 以上の整数。値域は
+ * @param lastKeyFrameTimestampUs - 直前のキーフレームの timestamp (マイクロ秒)。
+ *   まだキーフレームを送っていない場合は null
+ * @param frameTimestampUs - 判定するフレームの timestamp (マイクロ秒)
+ * @param keyframeInterval - キーフレームを送る間隔 (秒。0 より大きい有限数。値域は
  *   `resolveKeyframeInterval` が検証する)
  * @returns キーフレームのタイミングなら true
  */
-export function shouldSendKeyFrame(frameCount: number, keyframeInterval: number): boolean {
-  return frameCount % keyframeInterval === 0;
+export function shouldSendKeyFrame(
+  lastKeyFrameTimestampUs: number | null,
+  frameTimestampUs: number,
+  keyframeInterval: number,
+): boolean {
+  if (lastKeyFrameTimestampUs === null || frameTimestampUs < lastKeyFrameTimestampUs) {
+    return true;
+  }
+  return frameTimestampUs - lastKeyFrameTimestampUs >= keyframeInterval * 1_000_000;
 }
 
 // codec description の送出判断
@@ -460,9 +466,10 @@ export class MediaPublisherImpl implements MediaPublisher {
   private audioGroupId: number;
   private videoGroupId: number;
   private videoObjectId = 0;
-  // キーフレーム判定に使う通し番号。encode したフレームだけを数え、
-  // 破棄したフレームは数えない (requestKeyframe() で 0 に戻す)
-  private videoFrameCount = 0;
+  // 直前のキーフレームの timestamp (マイクロ秒)。まだキーフレームを送っていない場合は
+  // null。encode したフレームだけで更新し、破棄したフレームでは更新しない
+  // (requestKeyframe() で null に戻す)
+  private lastKeyFrameTimestampUs: number | null = null;
   // 音声・映像の初回オブジェクト送信済みか (初回は加算せず初期値を送る)
   private audioGroupStarted = false;
   private videoGroupStarted = false;
@@ -573,6 +580,9 @@ export class MediaPublisherImpl implements MediaPublisher {
 
       // 処理ループを開始
       this.processingActive = true;
+      // 直前のキーフレームの記録は配信ごとに作り直す。再 start で映像の入力が
+      // 差し替わっても、最初のフレームが必ずキーフレームになる
+      this.lastKeyFrameTimestampUs = null;
       this.startProcessingLoops();
 
       this.setState("publishing");
@@ -683,7 +693,7 @@ export class MediaPublisherImpl implements MediaPublisher {
   /**
    * 次に encode するフレームをキーフレームにするよう要求する
    *
-   * 判定に使う通し番号を 0 に戻す。破棄したフレームは番号を進めないため、
+   * 直前のキーフレームの記録を消す。破棄したフレームは記録を更新しないため、
    * 要求は次に encode するフレームまで消費されない。
    */
   requestKeyframe(): void {
@@ -692,7 +702,7 @@ export class MediaPublisherImpl implements MediaPublisher {
     }
 
     // 次に encode するフレームでキーフレームを強制する
-    this.videoFrameCount = 0;
+    this.lastKeyFrameTimestampUs = null;
   }
 
   /**
@@ -1290,17 +1300,23 @@ export class MediaPublisherImpl implements MediaPublisher {
 
         try {
           if (encoder.encodeQueueSize <= 2) {
-            // キーフレーム判定と通し番号の加算は、実際に encode するフレームだけで行う。
-            // 破棄するフレームでも判定と加算を行うと、requestKeyframe() が 0 に戻した
-            // 通し番号を破棄した分だけ進めてしまい、キーフレームの要求を消費する。
-            // 要求は次の間隔 (keyframeInterval フレーム後) まで現れなくなる。
-            // 据え置いた通し番号で次のフレームが判定を受けるため、繰り越し状態を持たずに
-            // 要求は次に encode するフレームへ移る
-            const isKeyFrame = shouldSendKeyFrame(this.videoFrameCount, this.keyframeInterval);
+            // キーフレームの判定と直前のキーフレームの更新は、実際に encode する
+            // フレームだけで行う。破棄するフレームでも判定と更新を行うと、
+            // requestKeyframe() が消した記録を破棄した分だけ進めてしまい、キーフレームの
+            // 要求を消費する。要求は次の間隔まで現れなくなる。据え置いた記録で次の
+            // フレームが判定を受けるため、繰り越し状態を持たずに要求は次に encode する
+            // フレームへ移る
+            const isKeyFrame = shouldSendKeyFrame(
+              this.lastKeyFrameTimestampUs,
+              frame.timestamp,
+              this.keyframeInterval,
+            );
             encoder.encode(frame, { keyFrame: isKeyFrame });
-            // 加算は encode の後ろに置く。encode が同期 throw した場合は encode して
-            // いないため通し番号を進めず、次のフレームが同じ番号で判定を受ける
-            this.videoFrameCount++;
+            // 記録の更新は encode の後ろに置く。encode が同期 throw した場合は encode して
+            // いないため記録を進めず、次のフレームが同じ記録で判定を受ける
+            if (isKeyFrame) {
+              this.lastKeyFrameTimestampUs = frame.timestamp;
+            }
           } else {
             // エンコード能力を超えた入力はエンコードせず破棄する (待たない)。
             // 破棄した数を統計に残す

@@ -1,5 +1,4 @@
 import { test, assert } from "vite-plus/test";
-import { DEFAULT_VIDEO_FRAMERATE } from "../../../src/codec/config.ts";
 import {
   DEFAULT_KEYFRAME_INTERVAL,
   KEYFRAME_INTERVAL_OPTIONS,
@@ -10,90 +9,81 @@ import {
 // 既定値と選択肢
 // ============================================================================
 
-// 無効な間隔を正規化するときのフォールバックは 3600 フレーム (30 fps で 120 秒ぶん)。
-// webcodecs-devtools の signal の初期値もこの定数を参照する。moqt-devtools の 2 つの
-// signal の初期値は画面ごとの値 (300 / 60) であり、この定数ではない
+// 無効な間隔を正規化するときのフォールバックは 2 秒。webcodecs-devtools の signal の
+// 初期値もこの定数を参照する。moqt-devtools の 2 つの signal の初期値は画面ごとの値
+// (接続設定は 10 秒、配信側は 2 秒) であり、この定数ではない
 // (signal の初期値は signals/keyframeIntervalDefaults.test.ts が固定する)
-test("DEFAULT_KEYFRAME_INTERVAL: 3600 のまま変わらない", () => {
-  assert.equal(DEFAULT_KEYFRAME_INTERVAL, 3600);
+test("DEFAULT_KEYFRAME_INTERVAL: 2 秒のまま変わらない", () => {
+  assert.equal(DEFAULT_KEYFRAME_INTERVAL, 2);
 });
 
-// 選択肢は全て 1 以上の整数である。判定に渡す値の規則 (1 以上の整数) を満たさない値が
-// select から入ると、そのままではキーフレームの要求が出ない
-test("KEYFRAME_INTERVAL_OPTIONS: 選択肢は 1 以上の整数だけ", () => {
+// 選択肢は全て 0 より大きい有限数である。判定に渡す値の規則 (0 より大きい有限数) を
+// 満たさない値が select から入ると、キーフレームの要求が意図した周期で出ない
+test("KEYFRAME_INTERVAL_OPTIONS: 選択肢は 0 より大きい有限数だけ", () => {
   for (const interval of KEYFRAME_INTERVAL_OPTIONS) {
-    assert.isTrue(Number.isInteger(interval) && interval >= 1, `${interval} は 1 以上の整数`);
+    assert.isTrue(Number.isFinite(interval) && interval > 0, `${interval} は 0 より大きい有限数`);
   }
 });
 
-// ConnectionSettings は選択肢の値を既定 framerate で割った秒数をラベルにする。
-// 倍数でない選択肢があるとラベルが整数秒にならず、画面の表示が崩れる
-test("KEYFRAME_INTERVAL_OPTIONS: 選択肢は既定 framerate の倍数だけ", () => {
-  for (const interval of KEYFRAME_INTERVAL_OPTIONS) {
-    assert.equal(
-      interval % DEFAULT_VIDEO_FRAMERATE,
-      0,
-      `${interval} は ${DEFAULT_VIDEO_FRAMERATE} の倍数`,
-    );
-  }
+// 選択肢は昇順で重複が無い。ConnectionSettings はこの順に option を並べるため、
+// 順序が崩れると select が設定を探しにくい並びになる
+test("KEYFRAME_INTERVAL_OPTIONS: 選択肢は昇順で重複しない", () => {
+  const sorted = [...KEYFRAME_INTERVAL_OPTIONS].sort((left, right) => left - right);
+  assert.deepEqual([...KEYFRAME_INTERVAL_OPTIONS], sorted);
+  assert.equal(new Set(KEYFRAME_INTERVAL_OPTIONS).size, KEYFRAME_INTERVAL_OPTIONS.length);
 });
 
 // ============================================================================
 // キーフレーム要求の判定
 // ============================================================================
 
-// 先頭フレームと keyframeInterval フレームごとにキーフレームを要求する。
-// 間隔を無視して全フレームをキーフレームにすると帯域を浪費し、
-// 要求が一度も出ないと購読開始時に復号を始められない。
-// 境界 (先頭フレーム、間隔、2 * 間隔、間隔 ± 1、2 * 間隔 - 1) を固定する
-test("shouldRequestKeyFrame: 先頭フレームと keyframeInterval ごとに true になる", () => {
-  assert.isTrue(shouldRequestKeyFrame(0, DEFAULT_KEYFRAME_INTERVAL));
-  assert.isTrue(shouldRequestKeyFrame(DEFAULT_KEYFRAME_INTERVAL, DEFAULT_KEYFRAME_INTERVAL));
-  assert.isTrue(shouldRequestKeyFrame(DEFAULT_KEYFRAME_INTERVAL * 2, DEFAULT_KEYFRAME_INTERVAL));
+// 先頭フレーム (直前のキーフレームが無い) と、直前のキーフレームから間隔だけ経過した
+// フレームにキーフレームを要求する。間隔を無視して全フレームをキーフレームにすると
+// 帯域を浪費し、要求が一度も出ないと購読開始時に復号を始められない。境界 (先頭、
+// 間隔 - 1 μs、間隔、間隔 + 1 μs、2 * 間隔 - 1 μs、2 * 間隔) を固定する
+test("shouldRequestKeyFrame: 先頭フレームと間隔の経過で true になる", () => {
+  const intervalSeconds = 10;
+  const intervalUs = intervalSeconds * 1_000_000;
+  assert.isTrue(shouldRequestKeyFrame(null, 0, intervalSeconds));
+  assert.isTrue(shouldRequestKeyFrame(0, intervalUs, intervalSeconds));
+  assert.isTrue(shouldRequestKeyFrame(0, intervalUs * 2, intervalSeconds));
 
-  // 間隔の途中はキーフレームを要求しない
-  assert.isFalse(shouldRequestKeyFrame(1, DEFAULT_KEYFRAME_INTERVAL));
-  assert.isFalse(shouldRequestKeyFrame(2, DEFAULT_KEYFRAME_INTERVAL));
-  assert.isFalse(shouldRequestKeyFrame(DEFAULT_KEYFRAME_INTERVAL - 1, DEFAULT_KEYFRAME_INTERVAL));
-  assert.isFalse(shouldRequestKeyFrame(DEFAULT_KEYFRAME_INTERVAL + 1, DEFAULT_KEYFRAME_INTERVAL));
-  assert.isFalse(
-    shouldRequestKeyFrame(DEFAULT_KEYFRAME_INTERVAL * 2 - 1, DEFAULT_KEYFRAME_INTERVAL),
-  );
+  // 間隔に届く前はキーフレームを要求しない
+  assert.isFalse(shouldRequestKeyFrame(0, 1, intervalSeconds));
+  assert.isFalse(shouldRequestKeyFrame(0, intervalUs - 1, intervalSeconds));
+  // 間隔に届いたフレームでは要求する (直前のキーフレームが 0 のままであれば、
+  // 間隔を過ぎたどのフレームでも要求する)
+  assert.isTrue(shouldRequestKeyFrame(0, intervalUs + 1, intervalSeconds));
+  assert.isTrue(shouldRequestKeyFrame(0, intervalUs * 2 - 1, intervalSeconds));
 });
 
-// 値域の下限 (1) は有効な間隔であり、0 と区別する。間隔 1 では間隔 - 1 が先頭フレーム、
-// 間隔 + 1 が 2 * 間隔、2 * 間隔 - 1 が間隔と重なり、いずれもキーフレームになる
-test("shouldRequestKeyFrame: 間隔 1 では境界を含む全てのフレームで true になる", () => {
-  for (const framesEncoded of [0, 1, 2]) {
-    assert.isTrue(shouldRequestKeyFrame(framesEncoded, 1), `${framesEncoded} フレーム目で要求する`);
-  }
+// 直前のキーフレームが 0 でない場合も、経過時間だけで判定する
+test("shouldRequestKeyFrame: 直前のキーフレームが 0 でなくても経過時間で判定する", () => {
+  const baseUs = 5_000_000;
+  assert.isFalse(shouldRequestKeyFrame(baseUs, baseUs + 9_999_999, 10));
+  assert.isTrue(shouldRequestKeyFrame(baseUs, baseUs + 10_000_000, 10));
 });
 
-// 0 を渡すと framesEncoded % 0 が NaN になり、先頭フレームを含めてキーフレームの要求が
-// 一度も出なくなる (購読側が復号を始められない)。0 / 負値 / 非整数 / NaN / ±Infinity は
-// 既定値の間隔として判定し、呼び出し側の配信ループを抜けないよう throw はしない
+// timestamp が巻き戻ったフレーム (映像の入力が差し替わった) は先頭として扱う。
+// 巻き戻りを無視すると、差し替え後にキーフレームが現れず購読側が復号を始められない
+test("shouldRequestKeyFrame: timestamp が巻き戻ったら true になる", () => {
+  assert.isTrue(shouldRequestKeyFrame(5_000_000, 0, 10));
+});
+
+// 0 を渡すと経過時間の比較が成立せず、キーフレームの要求が意図した周期で出ない。
+// 0 / 負値 / NaN / ±Infinity は既定値の間隔として判定し、呼び出し側の配信ループを
+// 抜けないよう throw はしない
 test("shouldRequestKeyFrame: 無効な間隔は既定値の間隔として判定する", () => {
-  for (const invalid of [0, -1, -3600, 0.5, 1.5, Number.NaN, Infinity, -Infinity]) {
-    assert.isTrue(shouldRequestKeyFrame(0, invalid), `${invalid} の先頭フレームで要求する`);
+  const defaultIntervalUs = DEFAULT_KEYFRAME_INTERVAL * 1_000_000;
+  for (const invalid of [0, -1, -10, Number.NaN, Infinity, -Infinity]) {
+    assert.isTrue(shouldRequestKeyFrame(null, 0, invalid), `${invalid} の先頭フレームで要求する`);
     assert.isTrue(
-      shouldRequestKeyFrame(DEFAULT_KEYFRAME_INTERVAL, invalid),
+      shouldRequestKeyFrame(0, defaultIntervalUs, invalid),
       `${invalid} の間隔で要求する`,
     );
-    assert.isTrue(
-      shouldRequestKeyFrame(DEFAULT_KEYFRAME_INTERVAL * 2, invalid),
-      `${invalid} の 2 * 間隔で要求する`,
-    );
     assert.isFalse(
-      shouldRequestKeyFrame(DEFAULT_KEYFRAME_INTERVAL - 1, invalid),
+      shouldRequestKeyFrame(0, defaultIntervalUs - 1, invalid),
       `${invalid} の間隔 - 1 では要求しない`,
-    );
-    assert.isFalse(
-      shouldRequestKeyFrame(DEFAULT_KEYFRAME_INTERVAL + 1, invalid),
-      `${invalid} の間隔 + 1 では要求しない`,
-    );
-    assert.isFalse(
-      shouldRequestKeyFrame(DEFAULT_KEYFRAME_INTERVAL * 2 - 1, invalid),
-      `${invalid} の 2 * 間隔 - 1 では要求しない`,
     );
   }
 });

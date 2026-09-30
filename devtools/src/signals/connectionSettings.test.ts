@@ -55,9 +55,9 @@ import {
 } from "../utils/c4mTestSupport";
 import { KEYFRAME_INTERVAL_OPTIONS } from "../utils/keyframeInterval";
 
-// 接続設定の Keyframe Interval の初期値 (frames)。framerate 30 の 10 秒ぶんで、
-// signal の初期値と一致していなければならない (既定値を変えるときは両方を直す)
-const CONNECTION_SETTINGS_KEYFRAME_INTERVAL_DEFAULT = 300;
+// 接続設定の Keyframe Interval の初期値 (秒)。signal の初期値と一致していなければ
+// ならない (既定値を変えるときは両方を直す)
+const CONNECTION_SETTINGS_KEYFRAME_INTERVAL_DEFAULT = 10;
 
 // テスト間で Authorization Token の signal を持ち越さないためのリセット
 function resetAuthorizationTokenSettings(): void {
@@ -616,13 +616,12 @@ test("initFromUrl / buildQueryString: keyframeInterval を全ての選択肢で�
 });
 
 // 0 / 負値 / 非整数 / 10 進表記でない値 / 選択肢に無い値 / 空文字の keyframeInterval は
-// 無視し、初期値のまま残す。0 を受理すると剰余が NaN になり、先頭フレームを含めて
-// キーフレームの要求が一度も出なくなる (購読側が復号を始められない)。選択肢に無い正の
-// 整数 (1 / 7 / 3601 / 12345) を受理すると、select の表示が空になって表示と実際の設定が
-// 食い違う
+// 無視し、初期値のまま残す。0 以下を受理すると経過時間の比較が成立せず、キーフレームの
+// 要求が意図した周期で出ない。選択肢に無い正の整数 (3 / 7 / 121 / 3601 / 12345) を
+// 受理すると、select の表示が空になって表示と実際の設定が食い違う
 test("initFromUrl: 無効な keyframeInterval は初期値のまま残す", () => {
   const invalidValues = [
-    // 0 と負値 (剰余が NaN になる値)
+    // 0 と負値 (経過時間の比較が成立しない値)
     "0",
     "-5",
     // 非整数と 10 進表記でない値 (Number.parseInt の結果だけを見ると通ってしまう値)。
@@ -637,8 +636,9 @@ test("initFromUrl: 無効な keyframeInterval は初期値のまま残す", () =
     // 空文字 (select の「未指定」)
     "",
     // 選択肢に無い正の整数
-    "1",
+    "3",
     "7",
+    "121",
     "3601",
     "12345",
   ];
@@ -676,8 +676,8 @@ test("initFromUrl: 整数の表記として解釈できる keyframeInterval を�
   assert.equal(keyframeInterval.value, 30);
 
   keyframeInterval.value = CONNECTION_SETTINGS_KEYFRAME_INTERVAL_DEFAULT;
-  initFromUrl("keyframeInterval=03600");
-  assert.equal(keyframeInterval.value, 3600);
+  initFromUrl("keyframeInterval=0240");
+  assert.equal(keyframeInterval.value, 240);
 
   // 前後の空白 (URL では %20) は resolveOptionNumber が取り除く
   keyframeInterval.value = CONNECTION_SETTINGS_KEYFRAME_INTERVAL_DEFAULT;

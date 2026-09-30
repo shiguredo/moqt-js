@@ -114,12 +114,12 @@ export const selectedCameraDeviceId = signal<string>("");
 export const resolution = signal("1280x720");
 export const framerate = signal(30);
 export const bitrate = signal(2000000);
-// キーフレーム間隔 (frames)。既定は framerate 30 の 10 秒ぶん。長い間隔にすると、
-// 後から購読した相手が次のキーフレームまで復号を始められず、relay の cache 上限も
-// 超えやすい。共有モジュール (utils/keyframeInterval.ts) の DEFAULT_KEYFRAME_INTERVAL は
-// 無効な間隔を正規化するときの既定値 (120 秒ぶん) で、moqt-devtools のこの signal の
-// 既定には使わない (webcodecs-devtools は同定数を画面の既定にしている)
-export const keyframeInterval = signal(300);
+// キーフレーム間隔 (秒)。既定は 10 秒。長い間隔にすると、後から購読した相手が次の
+// キーフレームまで復号を始められず、relay の cache 上限も超えやすい。単位は秒であり、
+// framerate を変えても実際の間隔は変わらない。共有モジュール (utils/keyframeInterval.ts) の
+// DEFAULT_KEYFRAME_INTERVAL は無効な間隔を正規化するときの既定値 (2 秒) で、moqt-devtools の
+// この signal の既定には使わない (webcodecs-devtools は同定数を画面の既定にしている)
+export const keyframeInterval = signal(10);
 
 // 音声設定
 //

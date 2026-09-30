@@ -11,6 +11,11 @@
 
 ## develop
 
+- [CHANGE] `keyframeInterval` の単位を frames から秒に変更する
+  - フレーム数で指定すると framerate を変えたときに実際の間隔が変わる (30 fps の 300 フレームは 10 秒だが、60 fps では 5 秒になる)。キーフレームの判定をフレームの timestamp の差で行い、指定した秒数を守るようにする。既定は 2 秒 (従来の framerate 30 の 2 秒ぶんと同じ)
+  - `keyframeInterval` は公開オプションのため、フレーム数を渡しているコードは秒に読み替える必要がある (後方互換なし)
+  - moqt-devtools の Keyframe Interval の選択肢とラベルも秒になり、URL の `keyframeInterval` も秒になる
+  - @voluntas
 - [CHANGE] `C4M.moqtActionName` が ClientSetup / ServerSetup に `SETUP` を返すようにする
   - draft-ietf-moq-transport-21 で CLIENT_SETUP と SERVER_SETUP が 1 つの SETUP メッセージに統合されたため。Authorization Context (Table 2) と同じ名前になる
   - @voluntas
