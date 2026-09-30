@@ -979,6 +979,14 @@ export class MediaPublisherImpl implements MediaPublisher {
     }
 
     const namespace = this.options.namespace;
+    // draft-ietf-moq-msf-01 §11.4.3: publisher は track に紐づくトークンを PUBLISH に MUST 付与する。
+    // SETUP に載せたトークン (MOQT URI の msf fragment の c4m を含む) をそのまま使う。
+    // exactOptionalPropertyTypes では optional なフィールドに undefined を渡せないため、
+    // 値がある場合だけ載せる
+    const authorizationTokenOptions: PublishOptions =
+      this.session.setupAuthorizationToken === undefined
+        ? {}
+        : { authorizationToken: this.session.setupAuthorizationToken };
 
     // Catalog パブリッシャー
     // maxCacheDuration を指定してサーバーにキャッシュさせる
@@ -990,24 +998,30 @@ export class MediaPublisherImpl implements MediaPublisher {
       },
       {
         maxCacheDuration: 3600000n,
+        ...authorizationTokenOptions,
       },
     );
 
     // 音声パブリッシャー
     const audio = this.resolvedAudio;
     if (audio) {
-      this.audioPublisher = await this.session.publish(namespace, audio.trackName, {
-        error: (error) => this.callbacks.onError?.(error),
-        // 音声にはキーフレームが無く Audio Config は最初の chunk にしか現れないため、
-        // 同じ値の再送を抑止したままだと後から接続した購読者が AAC を復号できない。
-        // Forward State が 1 になった時点で保持値の送り直しを要求する
-        // (判断の詳細は resolveAudioConfigToSend の JSDoc を参照)
-        onForwardStateChange: (forward) => {
-          if (forward) {
-            this.audioConfigResendRequested = true;
-          }
+      this.audioPublisher = await this.session.publish(
+        namespace,
+        audio.trackName,
+        {
+          error: (error) => this.callbacks.onError?.(error),
+          // 音声にはキーフレームが無く Audio Config は最初の chunk にしか現れないため、
+          // 同じ値の再送を抑止したままだと後から接続した購読者が AAC を復号できない。
+          // Forward State が 1 になった時点で保持値の送り直しを要求する
+          // (判断の詳細は resolveAudioConfigToSend の JSDoc を参照)
+          onForwardStateChange: (forward) => {
+            if (forward) {
+              this.audioConfigResendRequested = true;
+            }
+          },
         },
-      });
+        authorizationTokenOptions,
+      );
     }
 
     // 映像パブリッシャー
@@ -1023,7 +1037,7 @@ export class MediaPublisherImpl implements MediaPublisher {
           // 複数の要求は、フレーム番号を 0 に戻すだけなので 1 つの Group にまとまる
           onNewGroupRequest: () => this.requestKeyframe(),
         },
-        { ...VIDEO_PUBLISH_OPTIONS },
+        { ...VIDEO_PUBLISH_OPTIONS, ...authorizationTokenOptions },
       );
     }
 

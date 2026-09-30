@@ -17,6 +17,7 @@ import {
   type Subscriber,
   type Property,
   type Location,
+  type AuthorizationToken,
 } from "moqt-js";
 import { addLog } from "../signals/debugLog";
 import { logDebugMessage } from "./debugMessageLog";
@@ -53,6 +54,7 @@ import { effectiveTargetLatencyMs, resolveSharedTargetLatencyMs } from "../../..
 import { applyAudioOutputSink } from "../utils/audioOutput";
 import { browserIsChromium, resolvePanelHttpVersion } from "../utils/httpVersion";
 import { formatFullTrackName } from "../../../src/fullTrackName.ts";
+import { subscribeAuthorizationTokenOptions } from "../utils/trackAuthorization";
 import * as settings from "../signals/connectionSettings";
 import * as sub from "../signals/subscriber";
 import * as pub from "../signals/publisher";
@@ -994,6 +996,9 @@ export function useSubscriber(
         // Catalog が広告する event timeline トラックは、Catalog の到着直後にはまだ
         // publish されていないことがある。relay に購読を保持させる
         rendezvousTimeout: BigInt(settings.catalogSubscriptionTimeout.value),
+        // draft-ietf-moq-msf-01 §11.4.3: authInfo を持つ track には SETUP に載せたトークンを
+        // SUBSCRIBE にも MUST 付与する (SETUP に載せていても免除されない)
+        ...subscribeAuthorizationTokenOptions(eventTrack, session.setupAuthorizationToken),
       },
     );
 
@@ -1227,6 +1232,9 @@ export function useSubscriber(
         // draft-ietf-moq-transport-21 §9.20.7 (RENDEZVOUS TIMEOUT):
         // 映像と同じく、publisher が現れるまで relay に購読を保持させる
         rendezvousTimeout: BigInt(settings.catalogSubscriptionTimeout.value),
+        // draft-ietf-moq-msf-01 §11.4.3: authInfo を持つ track には SETUP に載せたトークンを
+        // SUBSCRIBE にも MUST 付与する (SETUP に載せていても免除されない)
+        ...subscribeAuthorizationTokenOptions(audioTrack, session.setupAuthorizationToken),
       },
     );
 
@@ -2069,7 +2077,15 @@ export function useSubscriber(
               .fetch(
                 namespaceArray,
                 CATALOG_TRACK_NAME,
-                fetchFilter === undefined ? {} : { filter: fetchFilter },
+                {
+                  ...(fetchFilter === undefined ? {} : { filter: fetchFilter }),
+                  // draft-ietf-moq-msf-01 §11.4.3: catalog に紐づくトークンは FETCH にも
+                  // MUST 付与する。catalog の authInfo は catalog を受信するまで分からない
+                  // ため、SETUP に載せたトークン (MOQT URI の c4m を含む) をそのまま使う
+                  ...(session.setupAuthorizationToken === undefined
+                    ? {}
+                    : { authorizationToken: session.setupAuthorizationToken }),
+                },
                 {
                   object: (obj: MoqtObject) => {
                     // FETCH から受信した Catalog オブジェクト
@@ -2117,6 +2133,12 @@ export function useSubscriber(
                 // publisher が現れたら SUBSCRIBE_OK を返す。配信開始前に視聴を
                 // 始められるようにするため、Catalog Timeout と同じ値を使う
                 rendezvousTimeout: BigInt(settings.catalogSubscriptionTimeout.value),
+                // draft-ietf-moq-msf-01 §11.4.3: catalog に紐づくトークンは SUBSCRIBE にも
+                // MUST 付与する。catalog の authInfo は catalog を受信するまで分からないため、
+                // SETUP に載せたトークン (MOQT URI の msf fragment の c4m を含む) をそのまま使う
+                ...(session.setupAuthorizationToken === undefined
+                  ? {}
+                  : { authorizationToken: session.setupAuthorizationToken }),
               },
             )
             .then(handleCatalogSubscribed)
@@ -2268,11 +2290,18 @@ export function useSubscriber(
       const subscribeOptions: {
         newGroupRequest?: bigint;
         rendezvousTimeout?: bigint;
+        authorizationToken?: AuthorizationToken;
       } = {
         // draft-ietf-moq-transport-21 §9.20.7 (RENDEZVOUS TIMEOUT):
         // Catalog が広告する映像トラックは Catalog の到着直後にはまだ publish
         // されていないことがある。relay に購読を保持させる
         rendezvousTimeout: BigInt(settings.catalogSubscriptionTimeout.value),
+        // draft-ietf-moq-msf-01 §11.4.3: authInfo を持つ track には SETUP に載せたトークンを
+        // SUBSCRIBE にも MUST 付与する (SETUP に載せていても免除されない)
+        ...subscribeAuthorizationTokenOptions(
+          videoTrackFromCatalog,
+          session.setupAuthorizationToken,
+        ),
       };
 
       // NEW_GROUP_REQUEST: 0 = グループ情報なし、新規開始を要求

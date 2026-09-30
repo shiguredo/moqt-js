@@ -15,7 +15,7 @@
 import { test, assert } from "vite-plus/test";
 import { MediaSubscriberImpl } from "./createMediaSubscriber";
 import type { MediaConnectSettings } from "./createMedia/connect";
-import type { FetchOptions, Session } from "./session";
+import type { FetchOptions, Session, SubscribeOptions } from "./session";
 import type { Subscriber, RequestUpdateOptions } from "./subscriber";
 import type {
   AudioReceiverStats,
@@ -306,6 +306,41 @@ test("resolveAuthorizationToken: 非同期コールバックにも対応する",
   assert.equal(resolved, token);
 });
 
+// draft-ietf-moq-msf-01 §11.4.3: コールバックが無い場合は、SETUP Option (0x03) として
+// 送ったトークン (MOQT URI の msf fragment の c4m など) を既定のトークンとして使う
+test("resolveAuthorizationToken: コールバックが無ければ SETUP のトークンを使う", async () => {
+  const token = useValueToken();
+  const resolved = await resolveAuthorizationToken({ cat: {} }, undefined, token);
+  assert.equal(resolved, token);
+});
+
+// 明示のコールバックは SETUP のトークンより優先する (§11.4.2: 取得方法は呼び出し側が決める)
+test("resolveAuthorizationToken: コールバックは SETUP のトークンより優先する", async () => {
+  const callbackToken = useValueToken();
+  const setupToken = useValueToken();
+  const resolved = await resolveAuthorizationToken({ cat: {} }, () => callbackToken, setupToken);
+  assert.equal(resolved, callbackToken);
+});
+
+// コールバックが undefined を返した場合は、SETUP のトークンがあってもエラーにする
+// (§11.4.4: トークンを取得できない場合の失敗を握らない)
+test("resolveAuthorizationToken: コールバックが undefined を返したら SETUP のトークンでも throw", async () => {
+  let error: unknown;
+  try {
+    await resolveAuthorizationToken({ cat: {} }, () => undefined, useValueToken());
+  } catch (e) {
+    error = e;
+  }
+  assert.ok(error instanceof Error);
+  assert.ok(error.message.includes("getAuthorizationToken returned no token"));
+});
+
+// authInfo が無ければ認可は不要であり、SETUP のトークンも付与しない (§5.2.42)
+test("resolveAuthorizationToken: authInfo が無ければ SETUP のトークンを使わない", async () => {
+  assert.equal(await resolveAuthorizationToken(undefined, undefined, useValueToken()), undefined);
+  assert.equal(await resolveAuthorizationToken({}, undefined, useValueToken()), undefined);
+});
+
 /**
  * 初期 configure (Track Property の config) の検証用の制御口
  *
@@ -538,6 +573,101 @@ test("subscribeMediaTracks: 音声も SUBSCRIBE_OK の Track Property を購読�
   assert.deepEqual(Array.from(configured[0] ?? []), [6, 6]);
   assert.deepEqual(decoded, [0x88]);
   assert.isFalse(control.audioInitialConfigPending);
+});
+
+/**
+ * subscribeMediaTracks の購読オプションを捕捉する制御口
+ *
+ * 音声トラックを 1 本だけ購読し、`session.subscribe` に渡された options を記録する。
+ * `authInfo` を渡すと認可が必要な track になる (§5.2.42)。
+ */
+function createMediaTrackSubscribeCapture(authInfo?: CatalogTrack["authInfo"]): {
+  control: SubscriberInitialConfigControl & {
+    session: Session | null;
+    audioTrackInfo: CatalogTrack | null;
+    sessionGeneration: number;
+    subscribeMediaTracks(startGeneration: number): Promise<void>;
+  };
+  captured: Array<SubscribeOptions | undefined>;
+} {
+  const subscriber = new MediaSubscriberImpl("moqt://example.com/live", {
+    namespace: ["live"],
+    audio: { codec: "opus" },
+  });
+  const control = subscriber as unknown as SubscriberInitialConfigControl & {
+    session: Session | null;
+    audioTrackInfo: CatalogTrack | null;
+    sessionGeneration: number;
+    subscribeMediaTracks(startGeneration: number): Promise<void>;
+  };
+  control.audioDecoder = {
+    configure: async () => {},
+    decode: () => {},
+  };
+  control.audioDecoderConfigured = true;
+  control.audioTrackInfo = {
+    name: "audio",
+    packaging: "loc",
+    isLive: true,
+    codec: "opus",
+    samplerate: 48000,
+    channelConfig: "2",
+    ...(authInfo === undefined ? {} : { authInfo }),
+  };
+  const captured: Array<SubscribeOptions | undefined> = [];
+  control.session = {
+    subscribe: async (...args: Parameters<Session["subscribe"]>): Promise<Subscriber> => {
+      captured.push(args[3]);
+      return { trackProperties: [] } as unknown as Subscriber;
+    },
+  } as unknown as Session;
+  return { control, captured };
+}
+
+/**
+ * draft-ietf-moq-msf-01 §5.2.42 / §11.4.3:
+ * authInfo を持つ track の SUBSCRIBE には、SETUP Option (0x03) として送ったトークンを付与する。
+ * getAuthorizationToken コールバックが無い場合の既定のトークンになる。
+ */
+test("subscribeMediaTracks: authInfo を持つ track に SETUP のトークンを付与する", async () => {
+  const { control, captured } = createMediaTrackSubscribeCapture({ cat: {} });
+  const token = useValueToken();
+  (
+    control.session as unknown as { setupAuthorizationToken: AuthorizationToken | undefined }
+  ).setupAuthorizationToken = token;
+
+  await control.subscribeMediaTracks(control.sessionGeneration);
+
+  assert.equal(captured.length, 1);
+  assert.equal(captured[0]?.authorizationToken, token);
+});
+
+// authInfo を持たない track は認可が不要なため、SETUP のトークンを付与しない (§5.2.42)
+test("subscribeMediaTracks: authInfo を持たない track には SETUP のトークンを付与しない", async () => {
+  const { control, captured } = createMediaTrackSubscribeCapture();
+  (
+    control.session as unknown as { setupAuthorizationToken: AuthorizationToken | undefined }
+  ).setupAuthorizationToken = useValueToken();
+
+  await control.subscribeMediaTracks(control.sessionGeneration);
+
+  assert.equal(captured.length, 1);
+  assert.isUndefined(captured[0]?.authorizationToken);
+});
+
+// authInfo があり SETUP にもトークンが無い場合は、購読前にエラーにする (§11.4.4)
+test("subscribeMediaTracks: authInfo があり SETUP にもトークンが無ければ throw する", async () => {
+  const { control } = createMediaTrackSubscribeCapture({ cat: {} });
+
+  let error: unknown;
+  try {
+    await control.subscribeMediaTracks(control.sessionGeneration);
+  } catch (e) {
+    error = e;
+  }
+
+  assert.ok(error instanceof Error);
+  assert.ok(error.message.includes("no getAuthorizationToken callback was provided"));
 });
 
 /**
@@ -1515,7 +1645,8 @@ interface SubscriberCatalogControl {
  * live / FETCH の object コールバックを捕捉し、遅延オブジェクトを注入できる。
  * subscribe / fetch の引数は実シグネチャで拘束し、返値のみ最小形状にする。
  * SUBSCRIBE_OK の LARGEST_OBJECT は `subscribeLargestLocation` で与え、
- * FETCH に載った options は `fetchOptions` で取り出す。
+ * SUBSCRIBE に載った options は `subscribeOptions`、FETCH に載った options は
+ * `fetchOptions` で取り出す。
  */
 function createCatalogTestSession(
   hooks: { subscribeError?: Error; subscribeLargestLocation?: Location } = {},
@@ -1524,6 +1655,7 @@ function createCatalogTestSession(
   liveObject: (obj: MoqtObject) => void;
   fetchObject: (obj: MoqtObject) => void;
   fetchEnd: () => void;
+  subscribeOptions: () => SubscribeOptions | undefined;
   fetchOptions: () => FetchOptions | undefined;
   calls: string[];
 } {
@@ -1531,6 +1663,7 @@ function createCatalogTestSession(
   let liveObject: (obj: MoqtObject) => void = () => {};
   let fetchObject: (obj: MoqtObject) => void = () => {};
   let fetchEnd: () => void = () => {};
+  let subscribeOptions: SubscribeOptions | undefined;
   let fetchOptions: FetchOptions | undefined;
   const session = {
     subscribe: async (...args: Parameters<Session["subscribe"]>): Promise<Subscriber> => {
@@ -1538,6 +1671,7 @@ function createCatalogTestSession(
       if (hooks.subscribeError) {
         throw hooks.subscribeError;
       }
+      subscribeOptions = args[3];
       liveObject = args[2].object;
       // SUBSCRIBE_OK の LARGEST_OBJECT だけを持つ最小の Subscriber を返す
       return {
@@ -1561,6 +1695,7 @@ function createCatalogTestSession(
     liveObject: (obj) => liveObject(obj),
     fetchObject: (obj) => fetchObject(obj),
     fetchEnd: () => fetchEnd(),
+    subscribeOptions: () => subscribeOptions,
     fetchOptions: () => fetchOptions,
     calls,
   };
@@ -1759,6 +1894,65 @@ test("subscribeCatalog: LARGEST_OBJECT が無ければフィルタ無しで FETC
   }
 
   assert.isUndefined(fetchOptions()?.filter);
+
+  liveObject({
+    ...makeCatalogObject(0n, 0n),
+    payload: encodeCatalog(makeVideoCatalog()),
+  });
+  fetchEnd();
+  await pending;
+});
+
+/**
+ * draft-ietf-moq-msf-01 §11.4.3: track に紐づくトークンは、そのトラックに関係する
+ * AUTHORIZATION TOKEN パラメータを受け付けるすべての制御メッセージへ MUST 付与する。
+ * catalog の authInfo (§5.2.42) は catalog を受信するまで分からないため、SETUP Option (0x03)
+ * として送ったトークン (MOQT URI の msf fragment の c4m を含む) を catalog の
+ * SUBSCRIBE と FETCH にも付与する。
+ */
+test("subscribeCatalog: SETUP に載せたトークンを SUBSCRIBE と FETCH に付与する", async () => {
+  const subscriber = new MediaSubscriberImpl("moqt://example.com/live", { namespace: ["live"] });
+  const control = subscriber as unknown as SubscriberCatalogControl;
+  const { session, liveObject, fetchEnd, subscribeOptions, fetchOptions } =
+    createCatalogTestSession({});
+  const token = useValueToken();
+  // 実セッションは initialize() で SETUP のトークンを保持する
+  (
+    session as unknown as { setupAuthorizationToken: AuthorizationToken | undefined }
+  ).setupAuthorizationToken = token;
+  control.session = session;
+
+  const pending = control.subscribeCatalog(control.sessionGeneration, 1000);
+  for (let index = 0; index < 10; index++) {
+    await Promise.resolve();
+  }
+
+  assert.equal(subscribeOptions()?.authorizationToken, token);
+  assert.equal(fetchOptions()?.authorizationToken, token);
+
+  liveObject({
+    ...makeCatalogObject(0n, 0n),
+    payload: encodeCatalog(makeVideoCatalog()),
+  });
+  fetchEnd();
+  await pending;
+});
+
+// SETUP にトークンを送っていない場合は、catalog にもトークンを付与しない
+test("subscribeCatalog: SETUP にトークンが無ければ SUBSCRIBE と FETCH に付与しない", async () => {
+  const subscriber = new MediaSubscriberImpl("moqt://example.com/live", { namespace: ["live"] });
+  const control = subscriber as unknown as SubscriberCatalogControl;
+  const { session, liveObject, fetchEnd, subscribeOptions, fetchOptions } =
+    createCatalogTestSession({});
+  control.session = session;
+
+  const pending = control.subscribeCatalog(control.sessionGeneration, 1000);
+  for (let index = 0; index < 10; index++) {
+    await Promise.resolve();
+  }
+
+  assert.isUndefined(subscribeOptions()?.authorizationToken);
+  assert.isUndefined(fetchOptions()?.authorizationToken);
 
   liveObject({
     ...makeCatalogObject(0n, 0n),

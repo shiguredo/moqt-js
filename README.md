@@ -197,6 +197,13 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
 - Media Timeline
 - Event Timeline
 
+#### URI / 認可
+
+- MOQT URI の msf fragment の `c4m` (Base64 でエンコードされた C4M トークン) を復号し、`SETUP` の `AUTHORIZATION TOKEN` (Token Type `0x01` = CAT、Alias Type `USE_VALUE`) として送る
+  - `options.authorizationToken` を指定した場合はそちらを優先する
+- `SETUP` に載せたトークンを、catalog の `SUBSCRIBE` / `FETCH` と、catalog の `authInfo` を持つトラックの `SUBSCRIBE` / `REQUEST_UPDATE` にも付与する (draft-ietf-moq-msf-01 §11.4.3)
+- `SETUP` に載せたトークンを `PUBLISH` / `PUBLISH_NAMESPACE` にも付与する (draft-ietf-moq-msf-01 §11.4.3)
+
 ## インストール
 
 ```bash
@@ -399,6 +406,7 @@ moqt-js を利用した MOQT の動作確認ツールです。
 - Authorization Token の指定 (MSF URL の c4m パラメータ対応)
 - MOQT URI の `#msf:` fragment を URI Fragment 欄へ映して表示し、namespace の固定と c4m の track name の反映を行う
 - c4m のトークンのデコード結果 (クレームと moqt スコープ) を Authorization Token の欄に表示する
+- c4m の取り込みを解除したときは、moqt-js が SETUP に載せる MOQT URI の c4m も取り除く
 - WebCodecs Dedicated Worker 対応
 - 音声レベルメーター (peak / RMS / 波形)
 - 音声と映像の同期再生

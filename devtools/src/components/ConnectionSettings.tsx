@@ -588,15 +588,6 @@ export function ConnectionSettings() {
     ...(audioAdvertisement.advertised ? [settings.audioTrackName.value] : []),
     ...(videoAdvertisement.advertised ? [settings.videoTrackName.value] : []),
   ]);
-  // c4m から読み込んだトークンを解除し、Token Type を既定の 0 に戻す。
-  // c4m の取り込みで Token Type は CAT (0x01) になっているため、手入力の UTF-8
-  // トークンを CAT として送らないようにする
-  // (draft-ietf-moq-c4m-01 §7.1.1: 0x01 の Payload は CBOR エンコードされた CWT)。
-  // c4m を取り込んでいない場合は呼ばない (手入力した Token Type を保持する)
-  const clearImportedC4mToken = (): void => {
-    settings.authorizationTokenBase64.value = "";
-    settings.authorizationTokenType.value = "0";
-  };
   // Save / Forget は URL と fragment を合わせた接続 URL で扱う。画面では fragment を
   // 別の欄に分けて表示するが、覚える値は接続に使う 1 つの URL にする
   const relayUriMemory = relayUriMemoryButtons(
@@ -910,8 +901,10 @@ export function ConnectionSettings() {
                   settings.authorizationTokenType.value = e.currentTarget.value;
                   // 手入力した場合は c4m から読み込んだ Base64 トークンを解除する
                   // (解除しないと送信内容と UI の表示が食い違う)。
-                  // 入力した Token Type はそのまま使う
-                  settings.authorizationTokenBase64.value = "";
+                  // 入力した Token Type はそのまま使う。
+                  // moqt-js の connect() が URL の c4m を SETUP に載せるため、
+                  // URL からも c4m を取り除く
+                  settings.discardImportedC4mToken();
                 }}
                 disabled={settings.settingsDisabled.value}
                 placeholder="0"
@@ -932,9 +925,11 @@ export function ConnectionSettings() {
                 onInput={(e) => {
                   settings.authorizationTokenValue.value = e.currentTarget.value;
                   // c4m から読み込んだトークンがある場合だけ解除する
-                  // (取り込んでいないときに手入力した Token Type を壊さない)
+                  // (取り込んでいないときに手入力した Token Type を壊さない)。
+                  // moqt-js の connect() が URL の c4m を SETUP に載せるため、
+                  // URL からも c4m を取り除く
                   if (settings.authorizationTokenBase64.value) {
-                    clearImportedC4mToken();
+                    settings.clearImportedC4mToken();
                   }
                 }}
                 disabled={settings.settingsDisabled.value}
@@ -965,7 +960,8 @@ export function ConnectionSettings() {
                 )}
                 <button
                   type="button"
-                  onClick={() => clearImportedC4mToken()}
+                  data-testid="authorization-token-c4m-clear"
+                  onClick={() => settings.clearImportedC4mToken()}
                   class="text-slate-500 hover:text-slate-700 underline"
                 >
                   Clear

@@ -183,6 +183,15 @@ export interface Session {
    * fragment が指定されなかった場合は `null`
    */
   readonly fragment: MoqtFragment | null;
+  /**
+   * SETUP Option (0x03) として送った Authorization Token (送っていない場合は undefined)
+   *
+   * draft-ietf-moq-msf-01 §11.4.3: track に紐づくトークンは、そのトラックに関係する
+   * AUTHORIZATION TOKEN パラメータを受け付けるすべての制御メッセージ (SUBSCRIBE /
+   * FETCH / REQUEST_UPDATE など) へ MUST 付与する。SETUP に載せていても免除されない。
+   * `connect()` が MOQT URI の msf fragment の c4m から解決したトークンもここに含まれる。
+   */
+  readonly setupAuthorizationToken: AuthorizationToken | undefined;
   publish(
     namespace: string[],
     trackName: string,
@@ -283,6 +292,15 @@ export class SessionImpl implements Session {
   private readonly callbacks: ConnectCallbacks;
   // draft-ietf-moq-transport-21 §6.1.1 (Fragment Identifiers)
   private readonly sessionFragment: MoqtFragment | null;
+  /**
+   * SETUP Option (0x03) として送った Authorization Token
+   *
+   * draft-ietf-moq-msf-01 §11.4.3: track に紐づくトークンは、そのトラックに関係する
+   * AUTHORIZATION TOKEN パラメータを受け付けるすべての制御メッセージへ MUST 付与する
+   * (SETUP に載せたかどうかは無関係)。高レベル API とアプリが、SETUP に載せたトークンを
+   * SUBSCRIBE / FETCH などへ再利用できるように保持する。
+   */
+  private setupAuthToken: AuthorizationToken | undefined;
   /**
    * draft-ietf-moq-transport-21 Section 1.5 (Extensibility):
    * 制御ストリームは単方向ストリームのペアに変更された。
@@ -656,6 +674,12 @@ export class SessionImpl implements Session {
   // draft-ietf-moq-transport-21 §6.1.1 (Fragment Identifiers)
   get fragment(): MoqtFragment | null {
     return this.sessionFragment;
+  }
+
+  // draft-ietf-moq-msf-01 §11.4.3: SETUP に載せたトークンも、track に関係する
+  // 制御メッセージへ付与するために参照できるようにする
+  get setupAuthorizationToken(): AuthorizationToken | undefined {
+    return this.setupAuthToken;
   }
 
   /**

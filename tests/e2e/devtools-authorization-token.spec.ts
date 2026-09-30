@@ -46,10 +46,39 @@ test("c4m の取り込みで表示が出て Token Type が 1 (CAT) になり、T
   // c4m の取り込みでは Token Value をクリアする
   await expect(page.getByTestId("authorization-token-value")).toHaveValue("");
 
-  // Token Type を手入力すると c4m の取り込みが解除される (入力した値はそのまま使う)
+  // Token Type を手入力すると c4m の取り込みが解除される (入力した値はそのまま使う)。
+  // moqt-js の connect() は URL の c4m を SETUP に載せるため、URL からも c4m が消える
   await page.getByTestId("authorization-token-type").fill("0");
   await expect(page.getByTestId("authorization-token-c4m")).toHaveCount(0);
   await expect(page.getByTestId("authorization-token-type")).toHaveValue("0");
+  await expect(page.getByTestId("moqt-uri")).toHaveValue(
+    "moqt://example.com/moqt#msf:room-123--catalog",
+  );
+});
+
+// Clear は取り込みの解除と Token Type のリセットに加え、MOQT URI からも c4m を取り除く。
+// moqt-js の connect() が URI の c4m を SETUP の Authorization Token として送るため、
+// URL に値が残っていると解除したつもりでも送信され続ける
+// (draft-ietf-moq-msf-01 §11.1.1 / §11.4.3)。
+test("c4m の Clear で取り込みが解除され MOQT URI からも c4m が消える", async ({ page }) => {
+  const params = new URLSearchParams();
+  params.set(
+    "url",
+    `moqt://example.com/moqt#msf:room-123--catalog&connection=wt&c4m=${C4M_BASE64}`,
+  );
+
+  await page.goto(`${DEVTOOLS_URL}?${params.toString()}`);
+  await expect(page.getByTestId("authorization-token-c4m")).toHaveCount(1);
+
+  await page.getByTestId("authorization-token-c4m-clear").click();
+
+  await expect(page.getByTestId("authorization-token-c4m")).toHaveCount(0);
+  await expect(page.getByTestId("authorization-token-type")).toHaveValue("0");
+  // c4m 以外の parameter と track-identifier は残す
+  await expect(page.getByTestId("moqt-uri")).toHaveValue(
+    "moqt://example.com/moqt#msf:room-123--catalog&connection=wt",
+  );
+  await expect(page.getByTestId("uri-fragment")).toHaveValue("msf:room-123--catalog&connection=wt");
 });
 
 test("Token Value の編集で c4m が解除され Token Type が 0 に戻る", async ({ page }) => {
@@ -64,6 +93,10 @@ test("Token Value の編集で c4m が解除され Token Type が 0 に戻る", 
   await expect(page.getByTestId("authorization-token-c4m")).toHaveCount(0);
   await expect(page.getByTestId("authorization-token-type")).toHaveValue("0");
   await expect(page.getByTestId("authorization-token-value")).toHaveValue("manual-token");
+  // 手入力のトークンへ置き換えたため、URL の c4m も取り除く
+  await expect(page.getByTestId("moqt-uri")).toHaveValue(
+    "moqt://example.com/moqt#msf:room-123--catalog",
+  );
 });
 
 test("c4m が無い URL では既定の Token Type 0 のままで c4m の表示も出ない", async ({ page }) => {

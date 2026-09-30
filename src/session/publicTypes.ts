@@ -131,6 +131,11 @@ export interface ConnectOptions {
    *
    * SETUP では Alias Type DELETE (0x0) / USE_ALIAS (0x2) は仕様上禁止 (Section 9.1.4)。
    * REGISTER (0x1) または USE_VALUE (0x3) のみ指定できる。
+   *
+   * 省略した場合、MOQT URI の msf fragment に c4m があれば、その値を復号した
+   * C4M のトークンを Token Type 0x01 (CAT) / USE_VALUE として送る
+   * (draft-ietf-moq-msf-01 §11.1.1 / §11.4.3, draft-ietf-moq-c4m-01 §7.1 Table 4)。
+   * 指定した場合は URI の c4m より優先する。
    */
   authorizationToken?: AuthorizationToken;
 
@@ -381,6 +386,21 @@ export interface PublishOptions {
    * AudioDecoderConfig の description。Track 初期化時に Track Property として広告する。
    */
   locAudioConfig?: Uint8Array;
+
+  /**
+   * PUBLISH に付与する認可トークン
+   * draft-ietf-moq-transport-21 Section 9.20.3 (AUTHORIZATION TOKEN Parameter)
+   *
+   * "It MAY appear in a PUBLISH, SUBSCRIBE, REQUEST_UPDATE, SUBSCRIBE_NAMESPACE,
+   *  SUBSCRIBE_TRACKS, PUBLISH_NAMESPACE, TRACK_STATUS or FETCH message."
+   * 省略時は送らない。
+   *
+   * draft-ietf-moq-msf-01 §11.4.3: track に紐づくトークンは、そのトラックに関係する
+   * AUTHORIZATION TOKEN パラメータを受け付けるすべての制御メッセージへ MUST 付与する
+   * (publisher は PUBLISH と PUBLISH_NAMESPACE)。高レベル API は SETUP に載せた
+   * トークンを既定で付与する (`Session.setupAuthorizationToken`)。
+   */
+  authorizationToken?: AuthorizationToken;
 }
 
 /**

@@ -68,16 +68,18 @@ import type {
 import type { VideoFrameSource } from "./frameSource";
 import { CATALOG_TRACK_NAME, decodeCatalogMessage } from "./msf";
 import { PublisherImpl, isErrorNotifiedByPublisher, type Publisher } from "./publisher";
-import type { PublishCallbacks, Session } from "./session";
+import type { PublishCallbacks, PublishOptions, Session } from "./session";
 import { ProtocolViolationError } from "./error";
 import { ObjectStatus } from "./message/types";
 import { AuthorizationTokenAliasType } from "./message/authorizationToken";
 import * as LOC from "./loc";
 import { WallClockMapper } from "./mediaClock";
 import {
+  useValueToken,
   waitForUnhandledRejectionDetection,
   withUnhandledRejectionWatch,
 } from "./testSupport/helpers";
+import type { AuthorizationToken } from "./message/authorizationToken";
 
 /**
  * 破棄検出付きのテスト用フレーム
@@ -3262,15 +3264,19 @@ interface PublisherForwardControl extends PublisherLifecycleControl {
 function createPublishRecordingSession(publishers: Map<string, Publisher>): {
   session: Session;
   callbacksByTrack: Map<string, PublishCallbacks>;
+  optionsByTrack: Map<string, PublishOptions | undefined>;
 } {
   const callbacksByTrack = new Map<string, PublishCallbacks>();
+  const optionsByTrack = new Map<string, PublishOptions | undefined>();
   const session = {
     publish: async (
       _namespace: string[],
       trackName: string,
       callbacks?: PublishCallbacks,
+      options?: PublishOptions,
     ): Promise<Publisher> => {
       callbacksByTrack.set(trackName, callbacks ?? {});
+      optionsByTrack.set(trackName, options);
       const publisher = publishers.get(trackName);
       if (!publisher) {
         throw new Error(`unexpected track: ${trackName}`);
@@ -3278,7 +3284,7 @@ function createPublishRecordingSession(publishers: Map<string, Publisher>): {
       return publisher;
     },
   } as unknown as Session;
-  return { session, callbacksByTrack };
+  return { session, callbacksByTrack, optionsByTrack };
 }
 
 test("createPublishers: Forward State が 1 になると Audio Config の送り直しを要求する", async () => {
@@ -4153,4 +4159,63 @@ test("Publisher Priority は数値が小さいほど高優先になる順に並�
   assert.isTrue(PRIORITY_CATALOG <= PRIORITY_VIDEO_KEY);
   assert.isTrue(PRIORITY_VIDEO_KEY < PRIORITY_AUDIO);
   assert.isTrue(PRIORITY_AUDIO < PRIORITY_VIDEO_DELTA);
+});
+
+/**
+ * draft-ietf-moq-msf-01 §11.4.3: publisher は track に紐づくトークンを PUBLISH へ MUST 付与する
+ * (SETUP に載せていても免除されない)。createPublishers() は SETUP Option (0x03) として送った
+ * トークン (`Session.setupAuthorizationToken`) を catalog と音声の PUBLISH にそのまま載せる。
+ */
+test("createPublishers: SETUP に載せたトークンを PUBLISH に付与する", async () => {
+  const { control: loopControl } = createLoopTestContext();
+  const control = loopControl as unknown as PublisherForwardControl;
+  const audioSettings = resolveAudioPublishSettings({
+    codec: "aac",
+    bitrate: 64000,
+    trackName: "audio",
+  });
+  control.resolvedAudio = audioSettings;
+  const { publisher: catalogPublisher } = createRecordingSendPublisher();
+  const { publisher: audioPublisher } = createCapturingPublisher();
+  const publishers = new Map<string, Publisher>([
+    [CATALOG_TRACK_NAME, catalogPublisher],
+    [audioSettings.trackName, audioPublisher],
+  ]);
+  const { session, optionsByTrack } = createPublishRecordingSession(publishers);
+  const token = useValueToken();
+  // 実セッションは initialize() で SETUP のトークンを保持する
+  (
+    session as unknown as { setupAuthorizationToken: AuthorizationToken | undefined }
+  ).setupAuthorizationToken = token;
+  control.session = session;
+
+  await control.createPublishers();
+
+  assert.equal(optionsByTrack.get(CATALOG_TRACK_NAME)?.authorizationToken, token);
+  assert.equal(optionsByTrack.get(audioSettings.trackName)?.authorizationToken, token);
+});
+
+// SETUP にトークンを送っていない場合は、PUBLISH にも AUTHORIZATION TOKEN を載せない
+test("createPublishers: SETUP にトークンが無ければ PUBLISH に付与しない", async () => {
+  const { control: loopControl } = createLoopTestContext();
+  const control = loopControl as unknown as PublisherForwardControl;
+  const audioSettings = resolveAudioPublishSettings({
+    codec: "aac",
+    bitrate: 64000,
+    trackName: "audio",
+  });
+  control.resolvedAudio = audioSettings;
+  const { publisher: catalogPublisher } = createRecordingSendPublisher();
+  const { publisher: audioPublisher } = createCapturingPublisher();
+  const publishers = new Map<string, Publisher>([
+    [CATALOG_TRACK_NAME, catalogPublisher],
+    [audioSettings.trackName, audioPublisher],
+  ]);
+  const { session, optionsByTrack } = createPublishRecordingSession(publishers);
+  control.session = session;
+
+  await control.createPublishers();
+
+  assert.isUndefined(optionsByTrack.get(CATALOG_TRACK_NAME)?.authorizationToken);
+  assert.isUndefined(optionsByTrack.get(audioSettings.trackName)?.authorizationToken);
 });

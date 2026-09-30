@@ -108,6 +108,9 @@ export interface ConnectionSessionInternal {
 
   // draft-ietf-moq-transport-21 §13 (Grease): Track / Object Properties への注入
   grease: boolean;
+  // draft-ietf-moq-msf-01 §11.4.3: SETUP に載せたトークン。
+  // track に紐づくトークンは SUBSCRIBE / FETCH などへも MUST 付与するため保持する
+  setupAuthToken: AuthorizationToken | undefined;
   // draft-ietf-moq-transport-21 §9.1.6 / §9.1.7 / §9.1.3: SETUP で広告する上限
   localMaxFilterRanges: number;
   localMaxRequestUpdates: number;
@@ -254,6 +257,10 @@ export async function connectionInitialize(
   // grease は SETUP 送信だけでなく、Track / Object Properties への注入にも使うため
   // セッション状態として保持する。
   session.grease = options?.grease === true;
+  // draft-ietf-moq-msf-01 §11.4.3: SETUP に載せたトークンは、そのトラックに関係する
+  // AUTHORIZATION TOKEN パラメータを受け付ける制御メッセージ (SUBSCRIBE / FETCH など)
+  // へも MUST 付与する。高レベル API とアプリが再利用できるようセッションに保持する。
+  session.setupAuthToken = options?.authorizationToken;
   // draft-ietf-moq-transport-21 §9.1.6 (MAX FILTER RANGES):
   // 自 endpoint が広告する上限を保持し、受信 Range Filter の検証に使う。
   // 未広告 (undefined) の既定値は 0（Range Filter 受信拒否）。

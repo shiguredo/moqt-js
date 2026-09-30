@@ -70,6 +70,40 @@ export function decodeC4mBase64(value: string): Uint8Array | undefined {
 }
 
 /**
+ * MSF URL または MSF URI Fragment から c4m パラメータを取り除く
+ *
+ * moqt-js の `connect()` は MOQT URI の msf fragment の c4m を復号して SETUP の
+ * Authorization Token として送る (draft-ietf-moq-msf-01 §11.1.1 / §11.4.3)。
+ * そのため画面で c4m の取り込みを解除しても、URL に値が残っていれば送信が止まらない。
+ * 解除するときは URL からも取り除く。
+ *
+ * `c4m=` の出現をすべて取り除き、track-identifier と他のパラメータは元の順序で残す。
+ * msf fragment を持たない入力、c4m を持たない入力はそのまま返す
+ * (入力途中の値を渡しても壊さない)。
+ */
+export function removeC4mParameter(input: string): string {
+  // `#` 以降を fragment として扱う。`#` が無い場合は入力全体を fragment とみなす
+  const hashIndex = input.indexOf("#");
+  const uriPrefix = hashIndex === -1 ? "" : input.slice(0, hashIndex + 1);
+  const fragment = hashIndex === -1 ? input : input.slice(hashIndex + 1);
+  if (!fragment.startsWith("msf:")) {
+    return input;
+  }
+
+  // `msf:` の後は track-identifier *( "&" parameter ) のため、parameter は 2 番目以降
+  const segments = fragment.slice("msf:".length).split("&");
+  const trackIdentifier = segments[0] ?? "";
+  const keptParameters = segments.slice(1).filter((segment) => {
+    const equalsIndex = segment.indexOf("=");
+    return equalsIndex === -1 || segment.slice(0, equalsIndex) !== "c4m";
+  });
+  if (keptParameters.length === segments.length - 1) {
+    return input;
+  }
+  return `${uriPrefix}msf:${[trackIdentifier, ...keptParameters].join("&")}`;
+}
+
+/**
  * 文字列が Base64 (標準 / base64url) として復号可能か検証する
  */
 function isBase64(value: string): boolean {

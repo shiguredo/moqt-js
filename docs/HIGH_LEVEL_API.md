@@ -258,6 +258,20 @@ interface MediaSubscriberOptions {
 MediaPublisherOptions も `audio` / `video` / `useWorker` / `serverCertificateHashes` に加えて
 `authorizationToken` と `pendingSubgroup` を持つ (購読側と同じ形)。
 
+`authorizationToken` を省略した場合、接続先の MOQT URI の msf fragment に `c4m` があれば、
+`connect()` がその値を復号して `SETUP` の `AUTHORIZATION TOKEN` (`0x03`) として送る
+(draft-ietf-moq-msf-01 §11.1.1 / §11.4.3)。詳細は
+[低レベル API](LOW_LEVEL_API.md) の「MSF URI Fragment の `c4m`」を参照すること。
+
+`SETUP` に載せたトークンは、draft-ietf-moq-msf-01 §11.4.3 に従い次の制御メッセージへも付与する
+(`SETUP` に載せていても免除されない)。
+
+- `createMediaSubscriber` は catalog の `SUBSCRIBE` と `FETCH` に付与する
+- catalog の `authInfo` (§5.2.42) を持つトラックの `SUBSCRIBE` に付与する。
+  `getAuthorizationToken` を指定した場合はそちらが優先される
+- `REQUEST_UPDATE` は `SUBSCRIBE` と同じトークンを `Subscriber` が保持して送る
+- `createMediaPublisher` は catalog / 音声 / 映像の `PUBLISH` に付与する
+
 ### コールバック
 
 ```typescript

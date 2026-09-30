@@ -66,6 +66,17 @@ const locationFilterArb: fc.Arbitrary<LocationFilter> = fc.oneof(
 );
 
 /**
+ * Authorization Token の任意構築（USE_VALUE。Message Parameter では 4 種全て許可されるが、
+ * round-trip 検証には値を持つ USE_VALUE が代表的）
+ * draft-ietf-moq-transport-21 Section 9.20.3
+ */
+const authorizationTokenArb: fc.Arbitrary<AuthorizationToken> = fc.record({
+  aliasType: fc.constant(AuthorizationTokenAliasType.USE_VALUE),
+  tokenType: fc.bigInt({ min: 0n, max: 1000n }),
+  tokenValue: fc.uint8Array({ maxLength: 64 }).map((arr) => new Uint8Array(arr)),
+});
+
+/**
  * PublishOptions の任意構築
  */
 const publishOptionsArb: fc.Arbitrary<PublishOptions> = fc.record({
@@ -78,17 +89,8 @@ const publishOptionsArb: fc.Arbitrary<PublishOptions> = fc.record({
   }),
   dynamicGroups: fc.option(fc.boolean(), { nil: undefined }),
   forward: fc.option(fc.boolean(), { nil: undefined }),
-});
-
-/**
- * Authorization Token の任意構築（USE_VALUE。Message Parameter では 4 種全て許可されるが、
- * round-trip 検証には値を持つ USE_VALUE が代表的）
- * draft-ietf-moq-transport-21 Section 9.20.3
- */
-const authorizationTokenArb: fc.Arbitrary<AuthorizationToken> = fc.record({
-  aliasType: fc.constant(AuthorizationTokenAliasType.USE_VALUE),
-  tokenType: fc.bigInt({ min: 0n, max: 1000n }),
-  tokenValue: fc.uint8Array({ maxLength: 64 }).map((arr) => new Uint8Array(arr)),
+  // draft-ietf-moq-msf-01 §11.4.3: PUBLISH に付与する認可トークン
+  authorizationToken: fc.option(authorizationTokenArb, { nil: undefined }),
 });
 
 /**
