@@ -16,7 +16,12 @@ import type {
 } from "../types";
 import { toAudioOutputDevices, type AudioOutputDevice } from "../utils/audioOutput";
 import { base64ToArrayBuffer } from "../utils/base64";
-import { decodeC4mBase64, decodeC4mTokenInfo, extractC4mBase64 } from "../utils/c4m";
+import {
+  decodeC4mBase64,
+  decodeC4mTokenInfo,
+  extractC4mBase64,
+  removeC4mParameter,
+} from "../utils/c4m";
 import { isResolution } from "../utils/codec";
 import { KEYFRAME_INTERVAL_OPTIONS } from "../utils/keyframeInterval";
 import { parseMsfFragmentFromInput } from "../utils/msfFragment";
@@ -314,6 +319,35 @@ export function applyC4mFromUrl(input: string): boolean {
   authorizationTokenType.value = "1";
   applyTrackNamesFromC4m();
   return true;
+}
+
+/**
+ * c4m から取り込んだトークンを解除する (Token Type は呼び出し側が決める)
+ *
+ * moqt-js の `connect()` は MOQT URI の msf fragment の c4m を復号して SETUP の
+ * Authorization Token として送る (draft-ietf-moq-msf-01 §11.1.1 / §11.4.3)。
+ * 画面で取り込みを解除しても URL に c4m が残っていると送信が止まらないため、
+ * MOQT URI と URI Fragment の両方から c4m パラメータを取り除く。
+ *
+ * Token Type は触らない。手入力した Token Type を残す経路 (Token Type の編集) があるため、
+ * 呼び出し側が決める。
+ */
+export function discardImportedC4mToken(): void {
+  authorizationTokenBase64.value = "";
+  url.value = removeC4mParameter(url.value);
+  fragment.value = removeC4mParameter(fragment.value);
+}
+
+/**
+ * c4m から取り込んだトークンを解除し、Token Type を既定の 0 に戻す
+ *
+ * 取り込んだ c4m の Token Type は CAT (0x01) であり、手入力の UTF-8 トークンを
+ * CAT として送らないようにする (draft-ietf-moq-c4m-01 §7.1.1: 0x01 の Payload は
+ * CBOR エンコードされた CWT)。
+ */
+export function clearImportedC4mToken(): void {
+  discardImportedC4mToken();
+  authorizationTokenType.value = "0";
 }
 
 /**

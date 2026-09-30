@@ -1,6 +1,12 @@
 import { test, assert } from "vite-plus/test";
 import { C4M } from "moqt-js";
-import { decodeC4mTokenInfo, extractC4mBase64, extractC4mTrackNames, maskC4mValue } from "./c4m";
+import {
+  decodeC4mTokenInfo,
+  extractC4mBase64,
+  extractC4mTrackNames,
+  maskC4mValue,
+  removeC4mParameter,
+} from "./c4m";
 import {
   buildCat,
   buildCatWithClaims,
@@ -264,4 +270,66 @@ test("decodeC4mTokenInfo: 復号できない値では undefined を返す", () =
   assert.isUndefined(decodeC4mTokenInfo("not base64!!"));
   assert.isUndefined(decodeC4mTokenInfo("QUFB"));
   assert.isUndefined(decodeC4mTokenInfo(""));
+});
+
+// --- removeC4mParameter ---
+// moqt-js の connect() は MOQT URI の msf fragment の c4m を SETUP の Authorization Token として
+// 送るため、画面で取り込みを解除したら URL からも c4m を取り除く必要がある。
+
+// URL 全体から c4m を取り除き、track-identifier と他の parameter は残す。
+test("removeC4mParameter: URL 全体から c4m を取り除く", () => {
+  const url = `moqt://example.com/moqt#msf:room-123--catalog&connection=wt&c4m=${C4M_EXAMPLE}&location-range=1.0`;
+
+  assert.equal(
+    removeC4mParameter(url),
+    "moqt://example.com/moqt#msf:room-123--catalog&connection=wt&location-range=1.0",
+  );
+});
+
+// URI Fragment 欄へ貼り付けた fragment 単体でも同じように取り除ける。
+test("removeC4mParameter: msf fragment 単体から c4m を取り除く", () => {
+  assert.equal(
+    removeC4mParameter(`msf:room-123--catalog&c4m=${C4M_EXAMPLE}`),
+    "msf:room-123--catalog",
+  );
+});
+
+// 同じ parameter が複数ある場合もすべて取り除く (1 つでも残ると URL から送信されてしまう)。
+test("removeC4mParameter: 複数の c4m をすべて取り除く", () => {
+  assert.equal(
+    removeC4mParameter(`msf:room-123--catalog&c4m=${C4M_EXAMPLE}&c4m=QUFB`),
+    "msf:room-123--catalog",
+  );
+});
+
+// c4m を持たない入力は変更しない。fragment の無い URL、msf 以外の fragment、c4m の無い msf fragment。
+test("removeC4mParameter: c4m を持たない入力はそのまま返す", () => {
+  assert.equal(removeC4mParameter("moqt://example.com/moqt"), "moqt://example.com/moqt");
+  assert.equal(
+    removeC4mParameter(`moqt://example.com/moqt#track:video&c4m=${C4M_EXAMPLE}`),
+    `moqt://example.com/moqt#track:video&c4m=${C4M_EXAMPLE}`,
+  );
+  assert.equal(
+    removeC4mParameter("msf:room-123--catalog&connection=wt"),
+    "msf:room-123--catalog&connection=wt",
+  );
+  assert.equal(removeC4mParameter(""), "");
+});
+
+// c4m は parameter 部にのみ現れる。track-identifier 内の `c4m=` は取り除かない。
+test("removeC4mParameter: track-identifier 内の c4m= は取り除かない", () => {
+  assert.equal(
+    removeC4mParameter("msf:c4m=abc--catalog&connection=wt"),
+    "msf:c4m=abc--catalog&connection=wt",
+  );
+});
+
+// 取り除いた結果からも c4m を取り出せないことを確かめる (解除の往復)。
+test("removeC4mParameter: 取り除いた結果から c4m を取り出せない", () => {
+  const removed = removeC4mParameter(
+    `moqt://example.com/moqt#msf:room-123--catalog&c4m=${C4M_EXAMPLE}`,
+  );
+
+  assert.equal(removed, "moqt://example.com/moqt#msf:room-123--catalog");
+  assert.equal(extractC4mBase64(removed), undefined);
 });

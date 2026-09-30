@@ -58,29 +58,71 @@ const session = await connect(url, callbacks?, options?)
 | 名前                       | 説明                                                                                                                                           |
 | -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
 | `serverCertificateHashes`  | 自己署名証明書用の `WebTransportOptions.serverCertificateHashes`                                                                               |
-| `authorizationToken`       | `SETUP` Option `0x03` として送る認証トークン                                                                                                   |
+| `authorizationToken`       | `SETUP` Option `0x03` として送る認証トークン。省略時は MOQT URI の msf fragment の `c4m` を使う                                                |
 | `pendingSubgroup`          | `PendingSubgroupBuffer` のオプション (上限バイト数 / タイムアウト)                                                                             |
 | `moqtImplementation`       | `SETUP` Option `0x0A` (MOQT_IMPLEMENTATION) として送る実装名                                                                                   |
 | `grease`                   | 送受信に GREASE 拡張を注入するか                                                                                                               |
 | `dataStreamMaxBufferBytes` | 受信データストリーム 1 本が保持してよいバッファの上限。超過時はそのストリームを打ち切り (セッションは閉じない)、0 以下で上限なし (既定 32 MiB) |
 
+#### MSF URI Fragment の `c4m`
+
+MOQT URI が `msf` fragment を持ち、その parameter に `c4m` がある場合、`connect()` は
+`c4m` の値を復号して `SETUP` の `AUTHORIZATION TOKEN` Setup Option (`0x03`) として送る。
+
+- `c4m` は Base64 でエンコードされた C4M トークンである。標準 Base64 (RFC 4648 Section 4) と
+  base64url (Section 5)、パディングの有無の両方を受け入れる
+- 復号は `WebTransport` を生成する前に済ませる。復号できない場合は `Error` を throw する
+  (認可トークンの値はエラーメッセージに含めない)
+- Token Type は `0x01` (CAT)、Alias Type は Alias を持たない `USE_VALUE` (`0x3`) を使う。
+  `SETUP` で `DELETE` (`0x0`) / `USE_ALIAS` (`0x2`) を送ってはならない
+- `options.authorizationToken` を指定した場合はそちらを優先し、URI の `c4m` は使わない
+- fragment はサーバーへ送信されないため、`c4m` がそのまま URL として送られることはない
+
+根拠は draft-ietf-moq-msf-01 §11.1.1 / §11.4.2 / §11.4.3、draft-ietf-moq-c4m-01 §2 / §7.1 Table 4 /
+§7.1.1、draft-ietf-moq-transport-21 §6.1.1 / §9.1.4 / §8.9。いずれも draft 版であり、
+将来の改版で変わる可能性がある。
+
+#### SETUP に載せたトークンの制御メッセージへの付与
+
+`SETUP` に載せたトークン (`ConnectOptions.authorizationToken`、または MOQT URI の `c4m` から
+解決したもの) は `Session.setupAuthorizationToken` から参照できる。
+
+draft-ietf-moq-msf-01 §11.4.3: track に紐づくトークンは、そのトラックに関係する
+`AUTHORIZATION TOKEN` パラメータを受け付けるすべての制御メッセージへ MUST 付与する
+(`SETUP` に載せていても免除されない)。高レベル API はこれを使って次を送る。
+
+- `createMediaSubscriber` は catalog の `SUBSCRIBE` と `FETCH` にこのトークンを付与する
+  (catalog 自身の `authInfo` は catalog を受信するまで分からないため、常に付与する)
+- `createMediaSubscriber` は catalog が `authInfo` を持つと示したトラックの `SUBSCRIBE` に
+  このトークンを付与する。`MediaSubscriberOptions.getAuthorizationToken` を指定した場合は
+  そちらが優先される
+- `REQUEST_UPDATE` は `SUBSCRIBE` と同じトークンを `Subscriber` が保持して送る
+- `createMediaPublisher` は catalog / 音声 / 映像の `PUBLISH` にこのトークンを付与する
+  (`PublishOptions.authorizationToken`)。`publishNamespace` は
+  `PublishNamespaceOptions.authorizationToken` に渡せば同じになる
+
+低レベル API では、`Session.subscribe(options.authorizationToken)` /
+`Session.fetch(options.authorizationToken)` / `Session.publish(options.authorizationToken)` などに
+`Session.setupAuthorizationToken` をそのまま渡せば同じ挙動になる。
+
 ### `Session`
 
-| API                                                        | 役割                                                                            |
-| ---------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| `state`                                                    | `"connected"` / `"closed"`                                                      |
-| `goawayReceived`                                           | peer から `GOAWAY` を受信済みかどうか                                           |
-| `fragment`                                                 | 接続時に渡した `moqt` URI の Fragment Identifier (`MoqtFragment` または `null`) |
-| `publish(namespace, trackName, callbacks?, options?)`      | 新しい双方向ストリームで `PUBLISH` を送る                                       |
-| `subscribe(namespace, trackName, callbacks, options?)`     | 新しい双方向ストリームで `SUBSCRIBE` を送る                                     |
-| `fetch(namespace, trackName, options, callbacks)`          | 新しい双方向ストリームで `FETCH` を送る                                         |
-| `trackStatus(namespace, trackName)`                        | `TRACK_STATUS` を送り `REQUEST_OK` を待つ                                       |
-| `subscribeNamespace(namespacePrefix, callbacks, options?)` | 専用双方向ストリームで Namespace 発見を行う                                     |
-| `subscribeTracks(namespacePrefix, callbacks, options?)`    | 専用双方向ストリームで `SUBSCRIBE_TRACKS` を送る                                |
-| `publishNamespace(namespace, callbacks?, options?)`        | 専用双方向ストリームで `PUBLISH_NAMESPACE` を送る                               |
-| `goaway(newSessionUri?, timeout?)`                         | 制御ストリームで `GOAWAY` を送る                                                |
-| `close()`                                                  | セッション内部状態と保留中 Promise をクリーンアップする                         |
-| `getStatistics()`                                          | セッション統計を取得する                                                        |
+| API                                                        | 役割                                                                                    |
+| ---------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `state`                                                    | `"connected"` / `"closed"`                                                              |
+| `goawayReceived`                                           | peer から `GOAWAY` を受信済みかどうか                                                   |
+| `fragment`                                                 | 接続時に渡した `moqt` URI の Fragment Identifier (`MoqtFragment` または `null`)         |
+| `setupAuthorizationToken`                                  | `SETUP` Option `0x03` として送った Authorization Token (送っていない場合は `undefined`) |
+| `publish(namespace, trackName, callbacks?, options?)`      | 新しい双方向ストリームで `PUBLISH` を送る                                               |
+| `subscribe(namespace, trackName, callbacks, options?)`     | 新しい双方向ストリームで `SUBSCRIBE` を送る                                             |
+| `fetch(namespace, trackName, options, callbacks)`          | 新しい双方向ストリームで `FETCH` を送る                                                 |
+| `trackStatus(namespace, trackName)`                        | `TRACK_STATUS` を送り `REQUEST_OK` を待つ                                               |
+| `subscribeNamespace(namespacePrefix, callbacks, options?)` | 専用双方向ストリームで Namespace 発見を行う                                             |
+| `subscribeTracks(namespacePrefix, callbacks, options?)`    | 専用双方向ストリームで `SUBSCRIBE_TRACKS` を送る                                        |
+| `publishNamespace(namespace, callbacks?, options?)`        | 専用双方向ストリームで `PUBLISH_NAMESPACE` を送る                                       |
+| `goaway(newSessionUri?, timeout?)`                         | 制御ストリームで `GOAWAY` を送る                                                        |
+| `close()`                                                  | セッション内部状態と保留中 Promise をクリーンアップする                                 |
+| `getStatistics()`                                          | セッション統計を取得する                                                                |
 
 `fragment` は draft-ietf-moq-transport-21 §6.1.1 の Fragment Identifier である。
 
@@ -169,12 +211,15 @@ interface MoqtObject {
 
 `src/index.ts` の `connect()` は以下を行う。
 
-1. `new WebTransport(url, transportOptions)` を生成する
-2. `transport.ready` を待つ
-3. `SessionImpl` を作る
-4. `session.initialize()` を呼ぶ
+1. MOQT URI を `https` URL と fragment に分解する
+2. fragment を検証する (`connection` の transport 指定と `c4m` の復号)
+3. `new WebTransport(url, transportOptions)` を生成する
+4. `transport.ready` を待つ
+5. `SessionImpl` を作る
+6. `session.initialize()` を呼ぶ
 
-`serverCertificateHashes` はそのまま `WebTransport` に渡し、`authorizationToken` は `initialize()` 内で `SETUP` Option に変換される。
+`serverCertificateHashes` はそのまま `WebTransport` に渡し、`authorizationToken` (URI の `c4m` から
+解決したものを含む) は `initialize()` 内で `SETUP` Option に変換される。
 
 ### 2. `SessionImpl.initialize()`
 

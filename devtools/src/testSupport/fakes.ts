@@ -134,6 +134,10 @@ export class FakeSession implements Session {
 
   readonly fragment: Session["fragment"] = null;
 
+  // 後始末の検証では参照されないが、Session の契約として SETUP にトークンを送っていない
+  // 状態 (undefined) を返す
+  readonly setupAuthorizationToken: Session["setupAuthorizationToken"] = undefined;
+
   publish: Session["publish"] = async () => unsupportedInFake("FakeSession.publish");
 
   subscribe: Session["subscribe"] = async () => unsupportedInFake("FakeSession.subscribe");

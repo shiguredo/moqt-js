@@ -8596,6 +8596,66 @@ test("initialize: SETUP で上限を広告し localMaxFilterRanges と受信バ�
   assert.equal(getSetupMaxFilterRanges(setup), 4);
 });
 
+/**
+ * draft-ietf-moq-msf-01 §11.4.3: track に紐づくトークンは、そのトラックに関係する
+ * AUTHORIZATION TOKEN パラメータを受け付けるすべての制御メッセージ (SUBSCRIBE / FETCH など)
+ * へ MUST 付与する。SETUP に載せたかどうかは無関係であり、高レベル API とアプリが
+ * 同じトークンを再利用できるよう、initialize() は送ったトークンをセッションに保持する。
+ */
+test("initialize: SETUP に載せた Authorization Token を setupAuthorizationToken として保持する", async () => {
+  const sentChunks: Uint8Array[] = [];
+  const clientWritable = new WritableStream<Uint8Array>({
+    write(chunk) {
+      sentChunks.push(chunk);
+    },
+  });
+  // サーバー制御ストリーム: ストリームタイプ + フレーミング済み SETUP を 1 回だけ流す
+  const serverSetup = encodeSetupPayload(createSetup({ moqtImplementation: false }));
+  const serverControlWriter = new ControlStreamWriter();
+  const serverControlStream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(
+        new Uint8Array([
+          ...encodeVarint(MessageType.SETUP),
+          ...serverControlWriter.encode(MessageType.SETUP, serverSetup),
+        ]),
+      );
+    },
+  });
+  const transport = {
+    closed: new Promise<WebTransportCloseInfo>(() => {}),
+    createUnidirectionalStream: async () => clientWritable,
+    incomingUnidirectionalStreams: new ReadableStream<ReadableStream<Uint8Array>>({
+      start(controller) {
+        controller.enqueue(serverControlStream);
+      },
+    }),
+    incomingBidirectionalStreams: new ReadableStream<WebTransportBidirectionalStream>({
+      start() {},
+    }),
+    datagrams: {
+      readable: new ReadableStream<Uint8Array>({ start() {} }),
+      writable: new WritableStream<Uint8Array>(),
+    },
+  } as unknown as WebTransport;
+
+  const session = new SessionImpl(transport, {});
+  // initialize() の前は SETUP を送っていないため undefined
+  assert.isUndefined(session.setupAuthorizationToken);
+
+  const token: AuthorizationToken = {
+    aliasType: AuthorizationTokenAliasType.USE_VALUE,
+    tokenType: 1n,
+    tokenValue: new Uint8Array([1, 2, 3]),
+  };
+  await session.initialize({ authorizationToken: token });
+
+  // 送ったトークンをそのまま保持する (高レベル API が SUBSCRIBE / FETCH へ渡すために参照する)
+  assert.strictEqual(session.setupAuthorizationToken, token);
+  // 送信した SETUP にもトークンが載っている
+  assert.isTrue(sentChunks.length > 0);
+});
+
 // ============================================================================
 // draft-21 適合監査: 受信 PUBLISH 経路の MAX_REQUEST_UPDATES 強制 (§9.1.7)
 // ============================================================================

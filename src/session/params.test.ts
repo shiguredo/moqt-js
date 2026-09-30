@@ -7,6 +7,7 @@ import {
   buildSubscribeParameters,
   buildSubscribeTracksParameters,
   buildFetchParameters,
+  buildPublishParameters,
   buildTrackStatusParameters,
   buildPublishTrackProperties,
   encodeAuthorizationTokenParameter,
@@ -39,6 +40,24 @@ test("encodeAuthorizationTokenParameter: 0x03 パラメータを構築し round-
   if (decoded.aliasType === AuthorizationTokenAliasType.USE_VALUE) {
     assert.equal(new TextDecoder().decode(decoded.tokenValue), "scheme-token");
   }
+});
+
+// draft-ietf-moq-msf-01 §11.4.3: publisher は track に紐づくトークンを PUBLISH へ MUST 付与する。
+// draft-ietf-moq-transport-21 §9.20.3: AUTHORIZATION TOKEN は PUBLISH に出現できる。
+test("buildPublishParameters: authorizationToken が AUTHORIZATION_TOKEN パラメータになる", () => {
+  const token = useValueToken();
+  const parameters = buildPublishParameters({ authorizationToken: token });
+
+  const param = parameters.find((p) => p.type === MessageParameterType.AUTHORIZATION_TOKEN);
+  assert.isDefined(param);
+  assert.deepEqual(decodeAuthorizationToken(param?.value ?? new Uint8Array()), token);
+});
+
+// トークンを渡していない場合は AUTHORIZATION TOKEN パラメータを送らない
+test("buildPublishParameters: authorizationToken 省略時は AUTHORIZATION_TOKEN を送らない", () => {
+  const parameters = buildPublishParameters({});
+
+  assert.isUndefined(parameters.find((p) => p.type === MessageParameterType.AUTHORIZATION_TOKEN));
 });
 
 // ============================================================================

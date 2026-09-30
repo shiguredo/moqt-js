@@ -150,6 +150,9 @@ export interface MediaPublisherOptions {
   // SETUP Option (Option Type 0x03) として送出する Authorization Token
   // draft-ietf-moq-transport-21 Section 9.1.4 (AUTHORIZATION TOKEN Setup Option)
   // SETUP では Alias Type DELETE (0x0) / USE_ALIAS (0x2) は仕様上禁止 (Section 9.1.4)
+  // draft-ietf-moq-msf-01 §11.4.3: track に紐づくトークンは PUBLISH へも MUST 付与する。
+  // 省略した場合、MOQT URI の msf fragment の c4m を SETUP に載せ、同じトークンを
+  // catalog / 音声 / 映像の PUBLISH にも付与する。
   authorizationToken?: import("../message").AuthorizationToken;
   // Pending Subgroup Stream の buffer 設定 (低レベル API の ConnectOptions.pendingSubgroup)
   // draft-ietf-moq-transport-21 §11.3.1
@@ -174,10 +177,15 @@ export interface MediaSubscriberOptions {
   // SETUP Option (Option Type 0x03) として送出する Authorization Token
   // draft-ietf-moq-transport-21 Section 9.1.4 (AUTHORIZATION TOKEN Setup Option)
   // SETUP では Alias Type DELETE (0x0) / USE_ALIAS (0x2) は仕様上禁止 (Section 9.1.4)
+  // draft-ietf-moq-msf-01 §11.4.3: track に紐づくトークンは SUBSCRIBE / FETCH へも
+  // MUST 付与する。省略した場合、MOQT URI の msf fragment の c4m を SETUP に載せ、
+  // catalog の SUBSCRIBE / FETCH と authInfo を持つ track の SUBSCRIBE にも付与する。
+  // getAuthorizationToken を指定した場合はそちらが優先される。
   authorizationToken?: import("../message").AuthorizationToken;
   // draft-ietf-moq-msf-01 §11.4.2: トークン取得は仕様の対象外のためコールバックで注入する。
   // §5.2.42 authInfo を持つ track の subscribe 時に呼ばれ、AUTHORIZATION_TOKEN を返す。
   // authInfo があるのにトークンを返せない（undefined）場合、subscribe はエラーになる（§11.4.4）。
+  // 未指定の場合は authorizationToken (SETUP に載せたトークン) を既定のトークンとして使う。
   getAuthorizationToken?: (
     authInfo: import("../msf").AuthInfo,
   ) =>

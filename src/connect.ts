@@ -7,6 +7,7 @@
 import { type ConnectCallbacks, type ConnectOptions, type Session, SessionImpl } from "./session";
 import { normalizeMoqtUri } from "./moqtUri";
 import { assertMsfConnectionSupported } from "./msf";
+import { resolveMsfAuthorizationToken } from "./msf/c4mAuthorization";
 
 /**
  * Connect to a MOQT server
@@ -52,6 +53,13 @@ export async function connect(
   // msf fragment の connection パラメータを接続開始前に解釈・適用する。
   assertMsfConnectionSupported(fragment);
 
+  // draft-ietf-moq-msf-01 §11.1.1 / §11.4.2 / §11.4.3:
+  // msf fragment の c4m は SETUP で提示する C4M のトークン (AUTHORIZATION TOKEN Setup Option)。
+  // fragment はサーバーへ送信されないため、クライアントが取り出して SETUP に載せる。
+  // 呼び出し元が options.authorizationToken を明示した場合はそちらを優先する
+  // (?? は左辺が undefined のときだけ右辺を評価するため、明示時は c4m を読まない)。
+  const authorizationToken = options?.authorizationToken ?? resolveMsfAuthorizationToken(fragment);
+
   // Create WebTransport connection
   const transportOptions: WebTransportOptions = {};
 
@@ -88,9 +96,7 @@ export async function connect(
   // exactOptionalPropertyTypes では optional なフィールドに undefined を渡せないため、
   // 値がある場合だけ載せる
   await session.initialize({
-    ...(options?.authorizationToken !== undefined
-      ? { authorizationToken: options.authorizationToken }
-      : {}),
+    ...(authorizationToken !== undefined ? { authorizationToken } : {}),
     ...(options?.moqtImplementation !== undefined
       ? { moqtImplementation: options.moqtImplementation }
       : {}),

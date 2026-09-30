@@ -70,6 +70,7 @@ import {
   resolveVideoAdvertisement,
 } from "../utils/publishTracks";
 import { browserIsChromium, resolvePanelHttpVersion } from "../utils/httpVersion";
+import { publishAuthorizationTokenOptions } from "../utils/trackAuthorization";
 import * as settings from "../signals/connectionSettings";
 import * as pub from "../signals/publisher";
 import * as sub from "../signals/subscriber";
@@ -1127,6 +1128,8 @@ export function usePublisher() {
         // draft-ietf-moq-transport-21 Section 10.6: DYNAMIC_GROUPS=1 を広告し、後から視聴を
         // 始めた購読者が NEW_GROUP_REQUEST でキーフレームを要求できるようにする
         dynamicGroups: true,
+        // draft-ietf-moq-msf-01 §11.4.3: track に紐づくトークンは PUBLISH にも MUST 付与する
+        ...publishAuthorizationTokenOptions(session.setupAuthorizationToken),
       },
     );
     markVideoPublisherEstablished(publisherInstance);
@@ -1227,6 +1230,8 @@ export function usePublisher() {
       },
       {
         maxCacheDuration: BigInt(options.maxCacheDuration),
+        // draft-ietf-moq-msf-01 §11.4.3: track に紐づくトークンは PUBLISH にも MUST 付与する
+        ...publishAuthorizationTokenOptions(session.setupAuthorizationToken),
       },
     );
     pub.audioPublisher.value = audioPublisherInstance;
@@ -1407,6 +1412,8 @@ export function usePublisher() {
       },
       {
         maxCacheDuration: BigInt(maxCacheDuration),
+        // draft-ietf-moq-msf-01 §11.4.3: track に紐づくトークンは PUBLISH にも MUST 付与する
+        ...publishAuthorizationTokenOptions(session.setupAuthorizationToken),
       },
     );
     pub.eventPublisher.value = eventPublisherInstance;
@@ -1555,6 +1562,8 @@ export function usePublisher() {
         },
         {
           maxCacheDuration: BigInt(maxCacheDurationValue),
+          // draft-ietf-moq-msf-01 §11.4.3: track に紐づくトークンは PUBLISH にも MUST 付与する
+          ...publishAuthorizationTokenOptions(session.setupAuthorizationToken),
         },
       );
       pub.catalogPublisher.value = catalogPublisherInstance;

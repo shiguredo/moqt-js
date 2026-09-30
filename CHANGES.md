@@ -11,12 +11,6 @@
 
 ## develop
 
-- [ADD] C4M のトークン (CAT) で接続した配信が、catalog の track に `authInfo` を載せる
-  - draft-ietf-moq-msf-01 §5.2.42 / §11.4.1: 視聴側は catalog の `authInfo` を見て、track の認可にトークンが要るかを決める。載せないと、視聴側はトークンを付けずに SUBSCRIBE を送る
-  - `catalogAuthInfoForSetupToken` を追加する。SETUP の Authorization Token が CAT (Token Type 0x01) の USE_VALUE / REGISTER のときだけ `{"cat": "%c4m%"}` を返す。`%c4m%` は §11.1.1 の予約パラメータ `c4m` を指す変数参照 (§5.4 / §5.2.43) で、トークンそのものは載せない
-  - `createMediaPublisher` は `authorizationToken` が CAT のとき、音声と映像の track に載せる
-  - moqt-devtools の配信は、接続の設定のトークンが CAT のとき、音声、映像、event timeline の track に載せる
-  - @voluntas
 - [CHANGE] `C4M.moqtActionName` が ClientSetup / ServerSetup に `SETUP` を返すようにする
   - draft-ietf-moq-transport-21 で CLIENT_SETUP と SERVER_SETUP が 1 つの SETUP メッセージに統合されたため。Authorization Context (Table 2) と同じ名前になる
   - @voluntas
@@ -43,6 +37,25 @@
   - @voluntas
 - [CHANGE] moqt-devtools の `window.moqtDevTools` が返す Subscriber の統計で、音声の項目を `audio` の下へまとめる
   - `audioObjectsReceived` / `audioChunksDecoded` / `audioPeakDbfs` / `audioRmsDbfs` / `audioLastLevel` / `audioLastVoiceActivity` / `audioPlayoutRebases` / `audioPlayoutDrops` を `audio.objectsReceived` などの入れ子にする。E2E が読む名前が変わるため後方互換はない
+  - @voluntas
+- [ADD] C4M のトークン (CAT) で接続した配信が、catalog の track に `authInfo` を載せる
+  - draft-ietf-moq-msf-01 §5.2.42 / §11.4.1: 視聴側は catalog の `authInfo` を見て、track の認可にトークンが要るかを決める。載せないと、視聴側はトークンを付けずに SUBSCRIBE を送る
+  - `catalogAuthInfoForSetupToken` を追加する。SETUP の Authorization Token が CAT (Token Type 0x01) の USE_VALUE / REGISTER のときだけ `{"cat": "%c4m%"}` を返す。`%c4m%` は §11.1.1 の予約パラメータ `c4m` を指す変数参照 (§5.4 / §5.2.43) で、トークンそのものは載せない
+  - `createMediaPublisher` は `authorizationToken` が CAT のとき、音声と映像の track に載せる
+  - moqt-devtools の配信は、接続の設定のトークンが CAT のとき、音声、映像、event timeline の track に載せる
+  - @voluntas
+- [ADD] `connect()` が MOQT URI の msf fragment の c4m を SETUP の Authorization Token として送る
+  - `c4m` は Base64 でエンコードされた C4M トークンである。標準 Base64 と base64url、パディングの有無の両方を受け入れ、復号した生バイト列を Token Value にする。復号できない場合は WebTransport を作る前に Error を throw する (draft-ietf-moq-msf-01 §11.1.1 / §11.4.2 / §11.4.3)
+  - SETUP では Alias Type DELETE (0x0) / USE_ALIAS (0x2) を送ってはならないため、Token Type 0x01 (CAT) の USE_VALUE (0x3) として送る (draft-ietf-moq-c4m-01 §7.1 Table 4 / §7.1.1、draft-ietf-moq-transport-21 §9.1.4 / §8.9)
+  - `ConnectOptions.authorizationToken` を指定した場合はそちらを優先し、URI の c4m は使わない。fragment はサーバーへ送信されないため、c4m が URL のまま送られることはない
+  - moqt-devtools は c4m の取り込みを解除したとき (Clear / Token Type の編集 / Token Value の編集) に MOQT URI と URI Fragment からも c4m を取り除く。moqt-js が URI の c4m を送るようになったため、画面で解除しただけでは送信が止まらない
+  - @voluntas
+- [ADD] SETUP に載せた Authorization Token を、トラックの制御メッセージ (SUBSCRIBE / FETCH / REQUEST_UPDATE / PUBLISH) にも付与する
+  - `Session.setupAuthorizationToken` を追加する。`initialize()` が SETUP Option (0x03) として送ったトークンを保持し、アプリと高レベル API が同じトークンを再利用できるようにする
+  - `createMediaSubscriber` は catalog の SUBSCRIBE と FETCH にこのトークンを付与する。catalog 自身の authInfo は catalog を受信するまで分からないため、SETUP に載せたトークンをそのまま使う
+  - `createMediaSubscriber` は catalog が authInfo を持つと示したトラックの SUBSCRIBE にこのトークンを付与する (`MediaSubscriberOptions.getAuthorizationToken` を指定した場合はそちらが優先される)。REQUEST_UPDATE は SUBSCRIBE と同じトークンを Subscriber が保持して送る
+  - `PublishOptions` に `authorizationToken` を追加し、`buildPublishParameters` が AUTHORIZATION TOKEN (0x03) を送出する。`createMediaPublisher` は catalog / 音声 / 映像の PUBLISH に SETUP に載せたトークンを付与する。PUBLISH_NAMESPACE は既存の `PublishNamespaceOptions.authorizationToken` で送れる
+  - moqt-devtools は catalog の SUBSCRIBE / FETCH と、catalog が authInfo を持つと示した audio / video / events の SUBSCRIBE、および catalog / video / audio / events の PUBLISH に、SETUP に載せたトークンを付与する (draft-ietf-moq-msf-01 §5.2.42 / §11.4.1 / §11.4.3)
   - @voluntas
 - [ADD] moqt-devtools が MOQT URI / URI Fragment の msf fragment から namespace と track name を取り込む
   - MOQT URI は fragment を含めたまま保持し、fragment を URI Fragment 欄へ映して読み取り専用にする (貼り付けた URL から fragment が消えない)。msf fragment が接続先の namespace と適用する c4m を決めるため、画面から変えられないようにする。Copy URL と Save は MOQT URI をそのまま 1 つの URL として扱う

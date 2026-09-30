@@ -370,6 +370,12 @@ export function buildPublishParameters(options?: PublishOptions): Parameter[] {
     });
   }
 
+  // AUTHORIZATION TOKEN (0x03) - draft-ietf-moq-transport-21 Section 9.20.3
+  // draft-ietf-moq-msf-01 §11.4.3: publisher は track に紐づくトークンを PUBLISH に MUST 付与
+  if (options?.authorizationToken !== undefined) {
+    parameters.push(encodeAuthorizationTokenParameter(options.authorizationToken));
+  }
+
   return parameters;
 }
 

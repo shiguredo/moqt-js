@@ -60,34 +60,48 @@ const TIMESTAMP_KIND_MAX_TRACKED = 256;
  * authInfo に応じて Authorization Token を解決する純粋関数
  *
  * draft-ietf-moq-msf-01 §5.2.42: authInfo の存在は subscribe 時に認可トークンが必要であるシグナル。
+ * §11.4.3: track に紐づくトークンは、そのトラックに関係する AUTHORIZATION TOKEN パラメータを
+ * 受け付けるすべての制御メッセージへ MUST 付与する (SETUP に載せていても免除されない)。
  * §11.4.2: トークン取得は仕様の対象外のため、getAuthorizationToken コールバックで注入する。
  * §11.4.4: トークンを取得できない場合はエラーを呼び出し元に伝播する。
  *
+ * トークンの優先順位は次のとおり。
+ *
+ * 1. getAuthorizationToken コールバック (指定時は必ず使う。undefined を返したらエラー)
+ * 2. SETUP Option (0x03) として送ったトークン (`ConnectOptions.authorizationToken`、または
+ *    MOQT URI の msf fragment の c4m から解決したもの)
+ *
  * @param authInfo track の authInfo（§5.2.42）。空または未指定なら認可不要。
  * @param getAuthorizationToken トークン取得コールバック（§11.4.2、呼び出し側注入）
+ * @param setupAuthorizationToken SETUP に載せたトークン（§11.4.3、既定のトークン）
  * @returns 解決したトークン。認可不要なら undefined。
- * @throws authInfo があるのにコールバック未提供、またはトークンを取得できない場合
+ * @throws authInfo があるのにトークンを得られない場合
  */
 export async function resolveAuthorizationToken(
   authInfo: AuthInfo | undefined,
   getAuthorizationToken?: (
     authInfo: AuthInfo,
   ) => AuthorizationToken | undefined | Promise<AuthorizationToken | undefined>,
+  setupAuthorizationToken?: AuthorizationToken,
 ): Promise<AuthorizationToken | undefined> {
   if (!authInfo || Object.keys(authInfo).length === 0) {
     // 認可不要
     return undefined;
   }
-  if (!getAuthorizationToken) {
-    throw new Error(
-      "track requires authorization (authInfo present) but no getAuthorizationToken callback was provided",
-    );
+  if (getAuthorizationToken) {
+    const token = await getAuthorizationToken(authInfo);
+    if (!token) {
+      throw new Error("track requires authorization but getAuthorizationToken returned no token");
+    }
+    return token;
   }
-  const token = await getAuthorizationToken(authInfo);
-  if (!token) {
-    throw new Error("track requires authorization but getAuthorizationToken returned no token");
+  if (setupAuthorizationToken) {
+    // SETUP に載せたトークンをそのまま使う (§11.4.3)
+    return setupAuthorizationToken;
   }
-  return token;
+  throw new Error(
+    "track requires authorization (authInfo present) but no getAuthorizationToken callback was provided",
+  );
 }
 
 // デフォルト設定
@@ -1116,6 +1130,19 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   }
 
   /**
+   * catalog トラックの制御メッセージ (SUBSCRIBE / FETCH) に付与する Authorization Token
+   *
+   * draft-ietf-moq-msf-01 §11.4.3: track に紐づくトークンは、そのトラックに関係する
+   * AUTHORIZATION TOKEN パラメータを受け付けるすべての制御メッセージへ MUST 付与する。
+   * catalog の authInfo (§5.2.42) は catalog を受信するまで分からないため、SETUP に載せた
+   * トークン (MOQT URI の msf fragment の c4m、または `authorizationToken` オプション) を
+   * catalog の SUBSCRIBE / FETCH にも付与する。
+   */
+  private catalogAuthorizationToken(): AuthorizationToken | undefined {
+    return this.session?.setupAuthorizationToken;
+  }
+
+  /**
    * Catalog を subscribe して受信を待つ
    *
    * 既存の catalog と live の catalog 更新をまとめて受信する。draft-21 で
@@ -1152,6 +1179,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     }
 
     const namespace = this.options.namespace;
+    const catalogAuthorizationToken = this.catalogAuthorizationToken();
 
     // Catalog 受信を待つ Promise を作成
     // タイムアウトは「未 resolve」で reject する。FETCH フェーズ中にフルが来ても
@@ -1205,6 +1233,10 @@ export class MediaSubscriberImpl implements MediaSubscriber {
         {
           // Next Object 形式: live は現在の最新 catalog の次から受信する
           filter: { startGroup: 0n, startObject: 0n },
+          // draft-ietf-moq-msf-01 §11.4.3: catalog に紐づくトークンは SUBSCRIBE にも MUST 付与
+          ...(catalogAuthorizationToken === undefined
+            ? {}
+            : { authorizationToken: catalogAuthorizationToken }),
         },
       );
     } catch (error) {
@@ -1233,7 +1265,13 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       .fetch(
         namespace,
         CATALOG_TRACK_NAME,
-        fetchFilter === undefined ? {} : { filter: fetchFilter },
+        {
+          ...(fetchFilter === undefined ? {} : { filter: fetchFilter }),
+          // draft-ietf-moq-msf-01 §11.4.3: catalog に紐づくトークンは FETCH にも MUST 付与
+          ...(catalogAuthorizationToken === undefined
+            ? {}
+            : { authorizationToken: catalogAuthorizationToken }),
+        },
         {
           // FETCH 経由は即時適用。live は object コールバック側でバッファする
           object: (obj: MoqtObject) => {
@@ -1538,13 +1576,22 @@ export class MediaSubscriberImpl implements MediaSubscriber {
    * track の authInfo に応じて Authorization Token を解決する
    *
    * draft-ietf-moq-msf-01 §5.2.42: authInfo の存在は subscribe 時に認可トークンが必要であるシグナル。
+   * §11.4.3: track に紐づくトークンは、そのトラックに関係する AUTHORIZATION TOKEN パラメータを
+   * 受け付けるすべての制御メッセージ (SUBSCRIBE / FETCH / REQUEST_UPDATE) へ MUST 付与する。
    * §11.4.2: トークン取得は仕様の対象外のため、getAuthorizationToken コールバックで注入する。
    * §11.4.4: トークンを取得できない場合はエラーを呼び出し元に伝播する。
+   *
+   * コールバックが無い場合は、SETUP に載せたトークン (`Session.setupAuthorizationToken`) を
+   * 既定のトークンとして使う。
    */
   private resolveTrackAuthorizationToken(
     track: CatalogTrack | null,
   ): Promise<AuthorizationToken | undefined> {
-    return resolveAuthorizationToken(track?.authInfo, this.options.getAuthorizationToken);
+    return resolveAuthorizationToken(
+      track?.authInfo,
+      this.options.getAuthorizationToken,
+      this.session?.setupAuthorizationToken,
+    );
   }
 
   /**

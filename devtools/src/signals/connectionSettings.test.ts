@@ -16,6 +16,8 @@ import {
   c4mTrackNames,
   catalogSubscriptionTimeout,
   CATALOG_SUBSCRIPTION_TIMEOUTS,
+  clearImportedC4mToken,
+  discardImportedC4mToken,
   fragment,
   initFromUrl,
   isAudioSourceType,
@@ -1158,4 +1160,71 @@ test("buildAuthorizationToken: base64url の c4m を復号して CAT として�
     assert.equal(token.tokenValue[0], 0xd8);
     assert.equal(token.tokenValue[1], 0x3d);
   }
+});
+
+// --- clearImportedC4mToken / discardImportedC4mToken ---
+// moqt-js の connect() は MOQT URI の msf fragment の c4m を SETUP の Authorization Token として
+// 送る (draft-ietf-moq-msf-01 §11.1.1 / §11.4.3)。画面で取り込みを解除しただけでは URL に
+// c4m が残って送信が止まらないため、解除では URL からも c4m を取り除く。
+
+// Clear (clearImportedC4mToken) で、取り込みの状態と Token Type が戻り、
+// MOQT URI からも c4m が消える。接続 URL に c4m が残らないことを固定する。
+test("clearImportedC4mToken: MOQT URI からも c4m を取り除き Token Type を 0 に戻す", () => {
+  resetAuthorizationTokenSettings();
+  resetMsfFragmentSettings();
+  applyRelayUriInput("moqt://example.com/moqt#msf:room-123--catalog&c4m=QUFB&connection=wt");
+
+  clearImportedC4mToken();
+
+  assert.equal(authorizationTokenBase64.value, "");
+  assert.equal(authorizationTokenType.value, "0");
+  // c4m 以外の parameter と track-identifier は残す
+  assert.equal(url.value, "moqt://example.com/moqt#msf:room-123--catalog&connection=wt");
+  assert.equal(fragment.value, "msf:room-123--catalog&connection=wt");
+  assert.equal(buildConnectUrl(), "moqt://example.com/moqt#msf:room-123--catalog&connection=wt");
+  resetMsfFragmentSettings();
+});
+
+// URI Fragment 欄へ手入力した c4m も同じように取り除く (MOQT URI に fragment が無い場合)
+test("clearImportedC4mToken: URI Fragment 欄の c4m も取り除く", () => {
+  resetAuthorizationTokenSettings();
+  resetMsfFragmentSettings();
+  url.value = "moqt://example.com/moqt";
+  fragment.value = "msf:room-123--catalog&c4m=QUFB";
+  applyC4mFromUrl(fragment.value);
+
+  clearImportedC4mToken();
+
+  assert.equal(url.value, "moqt://example.com/moqt");
+  assert.equal(fragment.value, "msf:room-123--catalog");
+  resetMsfFragmentSettings();
+});
+
+// Token Type の編集では、入力した Token Type を残したまま c4m の取り込みだけを解除する。
+// URL に c4m が残っていると moqt-js が SETUP に載せてしまうため、取り除くことも固定する。
+test("discardImportedC4mToken: Token Type を残して c4m を取り除く", () => {
+  resetAuthorizationTokenSettings();
+  resetMsfFragmentSettings();
+  applyRelayUriInput("moqt://example.com/moqt#msf:room-123--catalog&c4m=QUFB");
+  authorizationTokenType.value = "2";
+
+  discardImportedC4mToken();
+
+  assert.equal(authorizationTokenBase64.value, "");
+  assert.equal(authorizationTokenType.value, "2");
+  assert.equal(url.value, "moqt://example.com/moqt#msf:room-123--catalog");
+  assert.equal(fragment.value, "msf:room-123--catalog");
+  resetMsfFragmentSettings();
+});
+
+// c4m を持たない URL では何も変えない (取り込みを解除する経路で URL を壊さない)
+test("discardImportedC4mToken: c4m を持たない URL は変えない", () => {
+  resetAuthorizationTokenSettings();
+  resetMsfFragmentSettings();
+  url.value = "moqt://example.com/moqt#msf:room-123--catalog&connection=wt";
+
+  discardImportedC4mToken();
+
+  assert.equal(url.value, "moqt://example.com/moqt#msf:room-123--catalog&connection=wt");
+  resetMsfFragmentSettings();
 });

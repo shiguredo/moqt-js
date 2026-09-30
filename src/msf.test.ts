@@ -41,13 +41,15 @@ import {
   getMediatimeRanges,
   getLocationRanges,
   getC4mParameter,
+  createC4mAuthorizationToken,
+  resolveMsfAuthorizationToken,
   validateCatalog,
   validateCatalogTrack,
   catalogAuthInfoForSetupToken,
 } from "./msf";
+import { AuthorizationTokenAliasType } from "./message/authorizationToken";
 import { effectiveTargetLatencyMs, resolveSharedTargetLatencyMs } from "./msf/tracks";
 import { MsfCompressionAlgorithm } from "./properties";
-import { AuthorizationTokenAliasType } from "./message/authorizationToken";
 
 // =============================================================================
 // テスト用ヘルパー
@@ -2342,4 +2344,126 @@ test("catalogAuthInfoForSetupToken: 書いた authInfo が読め、fragment の 
   const c4m = "0oRD-_ab";
   const resolved = resolveCatalogVariables(decoded, { c4m });
   assert.deepEqual(resolved.tracks[0].authInfo, { cat: c4m });
+});
+
+// --- createC4mAuthorizationToken / resolveMsfAuthorizationToken ---
+// draft-ietf-moq-msf-01 §11.1.1 (c4m) / §11.4.3 (Presenting Authorization)
+// draft-ietf-moq-c4m-01 §7.1 Table 4 (Token Type 0x01 = CAT)
+// draft-ietf-moq-transport-21 §9.1.4 (AUTHORIZATION TOKEN Setup Option) / §8.9 (Token 構造)
+
+test("createC4mAuthorizationToken: 標準 Base64 を USE_VALUE / Token Type 1 (CAT) にする", () => {
+  // "AQID" は [0x01, 0x02, 0x03] の標準 Base64 (パディング不要)
+  const token = createC4mAuthorizationToken("AQID");
+
+  assert.isDefined(token);
+  // draft-ietf-moq-transport-21 §8.9: SETUP では DELETE / USE_ALIAS を送れないため USE_VALUE
+  assert.strictEqual(token?.aliasType, AuthorizationTokenAliasType.USE_VALUE);
+  // draft-ietf-moq-c4m-01 §7.1 Table 4: 0x01 は CAT
+  assert.strictEqual(token?.tokenType, 1n);
+  assert.deepEqual(token?.tokenValue, new Uint8Array([0x01, 0x02, 0x03]));
+});
+
+test("createC4mAuthorizationToken: base64url (パディング無し) を復号する", () => {
+  // "3q2-7w" は [0xde, 0xad, 0xbe, 0xef] の base64url (c4m-01 付録 A と同じ形式)
+  const token = createC4mAuthorizationToken("3q2-7w");
+
+  assert.isDefined(token);
+  assert.deepEqual(token?.tokenValue, new Uint8Array([0xde, 0xad, 0xbe, 0xef]));
+});
+
+test("createC4mAuthorizationToken: base64url の - と _ を復号する", () => {
+  // "----" は [0xfb, 0xef, 0xbe]、"__8" は [0xff, 0xff] の base64url
+  assert.deepEqual(
+    createC4mAuthorizationToken("----")?.tokenValue,
+    new Uint8Array([0xfb, 0xef, 0xbe]),
+  );
+  assert.deepEqual(createC4mAuthorizationToken("__8")?.tokenValue, new Uint8Array([0xff, 0xff]));
+});
+
+test("createC4mAuthorizationToken: 標準 Base64 の + / とパディングを復号する", () => {
+  // "//8=" は [0xff, 0xff] の標準 Base64 (パディング付き)
+  assert.deepEqual(createC4mAuthorizationToken("//8=")?.tokenValue, new Uint8Array([0xff, 0xff]));
+});
+
+test("createC4mAuthorizationToken: Base64 として復号できない値は undefined", () => {
+  // 値が空の c4m= はトークンを運んでいない
+  assert.isUndefined(createC4mAuthorizationToken(""));
+  assert.isUndefined(createC4mAuthorizationToken("not base64!!"));
+  // 端数のビットが 0 でない非正規な Base64 も拒否する (RFC 4648 Section 3.5)
+  assert.isUndefined(createC4mAuthorizationToken("QUF="));
+});
+
+test("resolveMsfAuthorizationToken: msf fragment の c4m を Authorization Token にする", () => {
+  const token = resolveMsfAuthorizationToken({
+    type: "msf",
+    value: "room-123--catalog&c4m=AQID",
+  });
+
+  assert.isDefined(token);
+  assert.strictEqual(token?.aliasType, AuthorizationTokenAliasType.USE_VALUE);
+  assert.strictEqual(token?.tokenType, 1n);
+  assert.deepEqual(token?.tokenValue, new Uint8Array([0x01, 0x02, 0x03]));
+});
+
+test("resolveMsfAuthorizationToken: c4m 以外のパラメータが並んでいても c4m を使う", () => {
+  // connection=wt は transport 選択、location-range は subclip の指定であり、c4m と共存する
+  const token = resolveMsfAuthorizationToken({
+    type: "msf",
+    value: "room-123--catalog&connection=wt&c4m=AQID&location-range=34-64",
+  });
+
+  assert.deepEqual(token?.tokenValue, new Uint8Array([0x01, 0x02, 0x03]));
+});
+
+test("resolveMsfAuthorizationToken: 複数の c4m は最初の値を使う", () => {
+  // msf は c4m の複数指定を規定していないため、既存の getC4mParameter と同じく最初の値を使う
+  const token = resolveMsfAuthorizationToken({
+    type: "msf",
+    value: "room-123--catalog&c4m=AQID&c4m=BAUG",
+  });
+
+  assert.deepEqual(token?.tokenValue, new Uint8Array([0x01, 0x02, 0x03]));
+});
+
+test("resolveMsfAuthorizationToken: fragment なし / msf 以外 / c4m なしは undefined", () => {
+  assert.isUndefined(resolveMsfAuthorizationToken(null));
+  // fragment type identifier が msf でない場合は c4m を探さない
+  assert.isUndefined(resolveMsfAuthorizationToken({ type: "loc", value: "room--video&c4m=AQID" }));
+  assert.isUndefined(resolveMsfAuthorizationToken({ type: "msf", value: "room-123--catalog" }));
+  assert.isUndefined(
+    resolveMsfAuthorizationToken({ type: "msf", value: "room-123--catalog&connection=wt" }),
+  );
+});
+
+test("resolveMsfAuthorizationToken: 復号できない c4m は throw し、値とメッセージに残さない", () => {
+  let thrown: Error | undefined;
+  try {
+    // 空白と ! を含む値は Base64 として復号できない
+    resolveMsfAuthorizationToken({
+      type: "msf",
+      value: "room-123--catalog&c4m=not base64!!",
+    });
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.isDefined(thrown);
+  assert.strictEqual(
+    thrown?.message,
+    "msf fragment c4m must be a Base64 encoded C4M token (draft-ietf-moq-msf-01 Section 11.1.1)",
+  );
+  // 認可トークンの値はエラーメッセージへ出さない
+  assert.isFalse(thrown?.message.includes("not base64!!"));
+});
+
+test("resolveMsfAuthorizationToken: 値が空の c4m= は throw する", () => {
+  // c4m= はトークンを運んでいないため、空の Token Value を送らずに接続前でエラーにする
+  let thrown: Error | undefined;
+  try {
+    resolveMsfAuthorizationToken({ type: "msf", value: "room-123--catalog&c4m=" });
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.isDefined(thrown);
 });
