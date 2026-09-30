@@ -4,7 +4,7 @@
  * MediaStream を使用した簡単なメディア配信機能を提供する
  */
 
-import { connectMediaSession } from "./createMedia/connect";
+import { connectMediaSession, type MediaConnectSettings } from "./createMedia/connect";
 import type { PublishOptions, Session } from "./session";
 import { isErrorNotifiedByPublisher, type Publisher, type SendObjectParams } from "./publisher";
 import * as LOC from "./loc";
@@ -372,6 +372,14 @@ export function assertCatalogLatencyOptions(options: {
 }
 
 /**
+ * 解放が先行した start を中止するときのエラー文言
+ *
+ * 接続で受け取った session を閉じてから throw する経路 (connectToServer) と、
+ * 各段階の await の直後の検査 (assertStartNotDisposed) で同じ文言を使う。
+ */
+const START_ABORTED_DISPOSED = "start aborted: resources were disposed during start";
+
+/**
  * MediaPublisher の実装クラス
  *
  * 単体テストから処理ループを駆動するため export する
@@ -379,6 +387,19 @@ export function assertCatalogLatencyOptions(options: {
  */
 export class MediaPublisherImpl implements MediaPublisher {
   private currentState: MediaPublisherState = "created";
+  // 進行中の close() の解放と終端遷移。同時に呼ばれた close() はこれを共有し、解放と
+  // 終端通知を 1 回に保つ。解放は await を挟むため、state だけを見た単発性の判定では
+  // 2 回目の close() が早期 return を通過してしまう
+  private closing: Promise<void> | null = null;
+  // 進行中の解放 (disposeAllResources)。利用者起点 (stop / close) とピア起点
+  // (handleSessionClose) で共有し、相乗りした呼び出しにも解放の成否を伝える。解放は
+  // 破棄の前に参照を切り離すため、相乗りした側が自分で解放をやり直すと「破棄するものが
+  // 無い成功」になり、進行中の失敗を検知できない
+  private disposalInFlight: Promise<void> | null = null;
+  // 利用者起点の解放 (stop / close) の回数。ピア起点の close の解放 (handleSessionClose) が
+  // 進行中に利用者が stop / close を呼んだかを、解放の前後で比較して判定する
+  // (解放中は state が "publishing" などのままであるため、state では判定できない)
+  private userDisposalCount = 0;
   private readonly url: string;
   private readonly options: MediaPublisherOptions;
   // Catalog とエンコーダーで同じ値を使うための解決済み設定 (start() で 1 度だけ解決する)
@@ -388,6 +409,10 @@ export class MediaPublisherImpl implements MediaPublisher {
 
   // 接続関連
   private session: Session | null = null;
+  // session close 通知の世代番号。解放 (disposeAllResources) のたびに進み、接続時に捕捉した
+  // 値と一致しない通知は自己起点の解放によるものとして捨てる。処理ループの世代とは独立で
+  // あり、pause() では進まない (進めると pause のあとのピア起点の close 通知が捨てられる)
+  private sessionGeneration = 0;
   private catalogPublisher: Publisher | null = null;
   // 直前に VIDEO_CONFIG として送信した description。
   // draft-ietf-moq-loc-04 §2.3.2.1: description は keyframe でのみ encoder から渡るため、
@@ -487,13 +512,35 @@ export class MediaPublisherImpl implements MediaPublisher {
 
   /**
    * 配信を開始する
+   *
+   * 接続・Publisher の作成・エンコーダーの設定・処理ループの起動を行い "publishing" に
+   * する。各段階の await の直後に解放が先行していないかを検査し、先行していれば
+   * それ以上リソースを作らずに失敗する。
+   * 開始の契約 (受け付ける state・失敗時の扱い・解放が先行した場合の優先) は
+   * src/codec/types.ts の MediaPublisher を参照。
    */
   async start(stream: MediaStream): Promise<void> {
+    // close() が解放と終端遷移を進めている間は終端へ動く途中であり、開始を重ねても
+    // 途中で "closed" になる。state だけを見た判定では "created" / "stopped" のままなので
+    // ここで拒否する
+    if (this.closing !== null) {
+      throw new Error("cannot start while closing");
+    }
+    // ピア起点の close の解放が進行中のときも同じである。解放が終端へ進む前に start が
+    // 完了すると、そのあと state が "closed" になり、新しい start の資源を解放する経路が
+    // 残らない (close() は早期 return、start() / stop() は state で拒否される)
+    if (this.disposalInFlight !== null) {
+      throw new Error("cannot start while closing");
+    }
     if (this.currentState !== "created" && this.currentState !== "stopped") {
       throw new Error(`cannot start in state: ${this.currentState}`);
     }
 
     this.mediaStream = stream;
+
+    // 実行中に解放が先行したか (ピア起点の close / 利用者の close) を判定するために
+    // 捕捉する。各段階の await の直後の検査 (assertStartNotDisposed) がこの値を基準にする
+    const startGeneration = this.sessionGeneration;
 
     // Catalog とエンコーダーが同じ設定を使うように、ここで 1 度だけ解決する
     // (トラック設定を 2 回読むと、その間に変わった値が Catalog とエンコーダーで
@@ -507,13 +554,21 @@ export class MediaPublisherImpl implements MediaPublisher {
 
     try {
       // サーバーに接続
-      await this.connectToServer();
+      await this.connectToServer(startGeneration);
 
       // Publisher を作成
       await this.createPublishers();
+      // 解放が先行していれば、これ以上リソースを作らずに失敗する。解放は mediaStream を
+      // 切り離すため setupEncoders は素通りするが、解放が進行中 (切り離しの前) でも
+      // ここで止める。進めると、作ったエンコーダーとフレームリーダーが巻き戻しまで残る
+      this.assertStartNotDisposed(startGeneration);
 
       // エンコーダーを設定
       await this.setupEncoders();
+      // 解放が先行していれば、ここで確保したエンコーダーを残さずに "publishing" に
+      // 進まない (setupEncoders の await 中に解放された場合もここで止まる。以降に await は
+      // 無く、この検査の後に state を決めるだけである)
+      this.assertStartNotDisposed(startGeneration);
 
       // 処理ループを開始
       this.processingActive = true;
@@ -521,16 +576,18 @@ export class MediaPublisherImpl implements MediaPublisher {
 
       this.setState("publishing");
     } catch (error) {
-      // 確保済みを逆順に巻き戻す。 state は変えず再 start 可能にする。
+      // 確保済みを逆順に巻き戻す。state は変えず再 start 可能にする。
+      // 解放が先行していても、参照は既に切り離し済みでこの呼び出しは no-op になり、
+      // 進行中の解放があればそちらが引き続き後始末するため、無条件に呼ぶ。
       // 巻き戻し自体の失敗で元の失敗を隠さないよう握り潰す。
       try {
         await this.disposeAllResources();
       } catch {
         // 元のエラーを優先する
       }
-      // この呼び出し 1 行は Node のテストで固定できない (start() は WebTransport の
-      // 接続から始まり、connectToServer に注入点が無い)。配線を変えるときは、
-      // catalog 送信の reject を catch まで運ぶテストを先に用意すること。
+      // 通知の抑止 (二重通知の防止) は notifyStartFailure が担う。start() の catch まで
+      // 失敗を運ぶ配線は接続の境界 (openSession) を置き換えれば node でも駆動できるため、
+      // 配線を変えるときは catalog 送信の reject を catch まで運ぶテストを先に用意すること。
       this.notifyStartFailure(error);
       throw error;
     }
@@ -581,13 +638,23 @@ export class MediaPublisherImpl implements MediaPublisher {
   /**
    * 配信を停止する
    *
-   * 再 start 可能な完全停止であり、確保済みを残さない。
-   * session は閉じて再 start 時に再接続する (再利用しない)。
-   * 破棄の段階失敗は後続を止めず、最後に最初の失敗を throw する。
-   * 失敗時は旧 state のまま残るが参照は切り離し済みのため再試行できる。
-   * 並行呼び出しは未対応であり直列に呼ぶこと。
+   * 処理ループの世代を進めて旧ループの encode と onError 通知を抑止し、解放は
+   * disposeAllResources() が行う。ピア起点の close の解放が進行中なら runDisposal() で
+   * それを共有して完了を待ち、解放のあとに "stopped" にする。解放で閉じる session の
+   * close 通知は session の世代番号が一致しないため捨てられる (onClose は通知せず
+   * "closed" も経由しない)。
+   * 破棄の段階失敗は後続を止めず最後に最初の失敗を throw し、失敗時は旧 state のまま
+   * 残るが参照は切り離し済みのため再試行できる。
+   * 停止 / 再開の契約は src/codec/types.ts の MediaPublisher を参照。
+   * 並行呼び出しは未対応であり直列に呼ぶこと (close() が解放と終端遷移を進めている間は
+   * cannot stop while closing で拒否する)。
    */
   async stop(): Promise<void> {
+    // close() が解放と終端遷移を進めている間は終端へ動く途中である。state だけを見た
+    // 判定では "publishing" / "paused" のままなので、停止を重ねず終端を close() に任せる
+    if (this.closing !== null) {
+      throw new Error("cannot stop while closing");
+    }
     if (this.currentState !== "publishing" && this.currentState !== "paused") {
       throw new Error(`cannot stop in state: ${this.currentState}`);
     }
@@ -596,9 +663,20 @@ export class MediaPublisherImpl implements MediaPublisher {
     // 同一世代を共有しないようにする (旧ループ失敗の誤通知防止)
     this.processingGeneration++;
 
-    await this.disposeAllResources();
+    // 利用者起点の解放として数える (ピア起点の close の解放と重なった場合はこちらが
+    // 停止を決める)
+    this.userDisposalCount++;
+    // ピア起点の close の解放が進行中ならそれを共有し、その成否を受ける
+    await this.runDisposal();
 
-    this.setState("stopped");
+    // 解放中に close() が終端まで進んでいれば "stopped" に戻さない。戻すと close() の
+    // 終端性が崩れ、state が "closed" でなくなるため次の close() が早期 return を通過して
+    // onClose が 2 回呼ばれる。通常は closing のガード (close() が解放と終端遷移を進めて
+    // いる間は cannot stop while closing) で抑えられており、この検査はそれを通過する経路が
+    // 将来増えたときの保険である。await のあとに現在値を読み直すため getter の state を使う
+    if (this.state !== "closed") {
+      this.setState("stopped");
+    }
   }
 
   /**
@@ -617,15 +695,30 @@ export class MediaPublisherImpl implements MediaPublisher {
   }
 
   /**
-   * リソースを解放する
+   * リソースを解放する (終端)
    *
-   * stop と同一破棄を内包し、以後 start 不可の終端とする。
-   * 破棄の段階失敗は後続を止めず、最後に最初の失敗を throw する。
-   * 失敗時は旧 state のまま残るが参照は切り離し済みのため再試行できる。
+   * stop と同じ解放を行い、以後 start 不可の終端とする。解放のあとに
+   * "closed" にして onClose を通知する。解放が失敗した場合は state を変えず
+   * onClose も呼ばず、元のエラーを throw する (破棄の前に参照を切り離しているため、
+   * 失敗した段階はやり直されず、呼び直しが進めるのは残りの段階と終端遷移である)。
+   * 進行中の解放 (stop() またはピア起点の close が始めた解放) があればそれを共有して
+   * 完了を待つため、その成否がこの close() にも伝わる (解放が失敗すれば終端へ進まず、
+   * 同じエラーを throw する)。
+   * 同時に呼ばれた close() はこの解放と終端遷移を共有するため、解放も終端の通知
+   * (onStateChange の "closed" と onClose) も 1 回だけになる。終端の遷移は冪等であり、
+   * 解放をまたいで終端へ進む経路が重なっても 2 回通知しない。close() が解放と終端遷移を
+   * 進めている間は start() と stop() を cannot start while closing /
+   * cannot stop while closing で拒否する。
+   * 終端の契約は src/codec/types.ts の MediaPublisher を参照。
    * 並行呼び出しは未対応であり直列に呼ぶこと。
-   * (直列の二重 close は成功時に限り早期 return で単発性を保つ)。
    */
   async close(): Promise<void> {
+    // 進行中の解放 (close 自身 / stop / ピア起点の close) があればそれを共有する。解放は
+    // await を挟むため、state だけを見た単発性の判定では同時に呼ばれた 2 回目が早期 return を
+    // 通過してしまう
+    if (this.closing !== null) {
+      return this.closing;
+    }
     if (this.currentState === "closed") {
       return;
     }
@@ -634,10 +727,42 @@ export class MediaPublisherImpl implements MediaPublisher {
     // 同一世代を共有しないようにする (旧ループ失敗の誤通知防止)
     this.processingGeneration++;
 
-    await this.disposeAllResources();
+    // 利用者起点の解放として数える (ピア起点の close の解放と重なった場合はこちらが終端を
+    // 決める)
+    this.userDisposalCount++;
+    // 解放 (進行中ならそれを共有する) と終端遷移を 1 つの Promise にまとめ、同時に呼ばれた
+    // close() と共有する。解放が成功したときだけ終端へ進む
+    const closing = this.runDisposal().then(() => {
+      this.transitionToClosed();
+    });
+    this.closing = closing;
+    try {
+      await closing;
+    } finally {
+      // 参照を残さない。解放が失敗した場合も、呼び直しが残りの段階と終端遷移を進める
+      // (失敗した段階は切り離し済みのためやり直されない)
+      this.closing = null;
+    }
+  }
 
-    this.setState("closed");
-    this.callbacks.onClose?.();
+  /**
+   * 進行中の解放を共有して実行する
+   *
+   * stop / close / ピア起点の close 通知 (handleSessionClose) の解放を 1 つの Promise に
+   * まとめる。解放は await を挟み、破棄の前に参照を切り離すため、相乗りした呼び出しが
+   * 自分で解放をやり直すと「破棄するものが無い成功」に見え、進行中の解放が失敗しても
+   * 検知できない。実行中の Promise を共有することで、相乗りした呼び出しにも成否 (throw) が
+   * 伝わる。
+   * 解放が終わったら参照を外し、次の呼び出しは新しい解放を始める (失敗した段階は
+   * 切り離し済みであり、呼び直しが進めるのは残りの段階と終端遷移である)。
+   *
+   * @returns 進行中の解放、または新しく始めた解放の完了
+   */
+  private runDisposal(): Promise<void> {
+    this.disposalInFlight ??= this.disposeAllResources().finally(() => {
+      this.disposalInFlight = null;
+    });
+    return this.disposalInFlight;
   }
 
   /**
@@ -677,10 +802,17 @@ export class MediaPublisherImpl implements MediaPublisher {
     this.callbacks.onError?.(error instanceof Error ? error : new Error(String(error)));
   }
 
-  private async connectToServer(): Promise<void> {
+  /**
+   * サーバーに接続して session を確保する
+   *
+   * @param startGeneration start の開始時に捕捉した世代番号 (この session の close 通知を
+   *   扱うかの判定にも使う)
+   * @throws 解放が先行した場合 (受け取った session をその場で閉じてから)
+   */
+  private async connectToServer(startGeneration: number): Promise<void> {
     // exactOptionalPropertyTypes では optional なフィールドに undefined を渡せないため、
     // 値がある場合だけ載せる
-    this.session = await connectMediaSession({
+    const session = await this.openSession({
       url: this.url,
       ...(this.options.serverCertificateHashes !== undefined
         ? { serverCertificateHashes: this.options.serverCertificateHashes }
@@ -692,16 +824,152 @@ export class MediaPublisherImpl implements MediaPublisher {
         ? { pendingSubgroup: this.options.pendingSubgroup }
         : {}),
       onSessionClose: () => {
-        if (this.currentState !== "closed") {
-          this.setState("closed");
-          this.callbacks.onClose?.();
-        }
+        // void の同期コールバックであり、解放の完了は待たずに進める。handleSessionClose は
+        // 解放の失敗を内部で onError に流すため、ここで回収するのは通知経路 (onError /
+        // onStateChange / onClose) が throw した分である。未処理の rejection にしないため
+        // 握る
+        void this.handleSessionClose(startGeneration).catch((error: unknown) => {
+          try {
+            this.callbacks.onError?.(error instanceof Error ? error : new Error(String(error)));
+          } catch {
+            // 通知の失敗を伝える経路がこれ以上無い
+          }
+        });
       },
       // onSessionError は void を返す必要があるため、block body で undefined を返さないようにする
       onSessionError: (error) => {
         this.callbacks.onError?.(error);
       },
     });
+
+    // 接続の await 中に解放 (ピア起点の close / 利用者の close) が先行していれば、受け取った
+    // session をその場で閉じて採用しない。採用すると state は既に "closed" で close() も
+    // 早期 return するため、閉じる経路が残らない
+    if (this.sessionGeneration !== startGeneration) {
+      try {
+        await session.close();
+      } catch (error) {
+        // 中止の理由を伝える妨げにしない。session の参照はここで捨てるため再試行できない
+        this.callbacks.onError?.(error instanceof Error ? error : new Error(String(error)));
+      }
+      throw new Error(START_ABORTED_DISPOSED);
+    }
+
+    this.session = session;
+  }
+
+  /**
+   * 接続して Session を確保する
+   *
+   * WebTransport を要する唯一の境界であり、単体テストはここを置き換えて接続の完了
+   * (await の解決) を制御する (モジュール置換は行わない)。
+   */
+  private openSession(settings: MediaConnectSettings): Promise<Session> {
+    return connectMediaSession(settings);
+  }
+
+  /**
+   * 実行中に解放が先行していないことを確かめる
+   *
+   * start は各段階の await の直後にこれを呼ぶ。解放 (disposeAllResources) は世代番号を
+   * 進めるが、解放が start の開始より前に始まっている場合は、start が世代番号を捕捉した
+   * あとに終端 ("closed") へ進むため、世代番号の比較だけでは検出できない。解放の完了後に
+   * start を呼び直すと捕捉値は現在値と一致してしまい、終端を跨いで "publishing" に進む。
+   * そのため state が "closed" の場合も中止する。
+   * 解放が先行していれば、これ以上リソースを作らず "publishing" にもしない (close() は
+   * "created" からでも呼べるため、接続の await 中に解放された session を採用すると
+   * state が "closed" のまま "publishing" に進み、解放されないリソースが残る)。
+   * 検査までに確保した資源は start の失敗時の巻き戻し (disposeAllResources) が解放する。
+   * 接続で受け取った session だけは採用すると閉じる経路が state の終端判定に隠れるため、
+   * connectToServer がその場で閉じる。
+   *
+   * @param startGeneration start の開始時に捕捉した世代番号
+   * @throws 解放が先行した場合 (start aborted: resources were disposed during start)
+   */
+  private assertStartNotDisposed(startGeneration: number): void {
+    if (this.sessionGeneration !== startGeneration || this.currentState === "closed") {
+      throw new Error(START_ABORTED_DISPOSED);
+    }
+  }
+
+  /**
+   * 終端 ("closed") へ遷移して onClose を通知する (解放の完了後に呼ぶ)
+   *
+   * 遷移と通知を対にして行う。setState は state を代入してから onStateChange を呼ぶため、
+   * 利用者の onStateChange が throw しても state は "closed" になり、その場合も onClose を
+   * 通知する (通知の回収経路が close() の早期 return だけであるため)。setState の失敗は
+   * 呼び出し元へ伝播する。
+   * すでに "closed" なら何もしない。終端の遷移と onClose は 1 回だけでなければならず、
+   * 通常は呼び出し元 (close() と handleSessionClose) の単発性の判定で抑えられている。
+   * この検査はそれらを通過した経路が将来増えたときの保険である。
+   */
+  private transitionToClosed(): void {
+    if (this.currentState === "closed") {
+      return;
+    }
+    try {
+      this.setState("closed");
+    } finally {
+      this.callbacks.onClose?.();
+    }
+  }
+
+  /**
+   * session の close 通知を処理する
+   *
+   * 世代番号が現在値と一致する通知だけをピア起点の close として扱う。解放
+   * (disposeAllResources) は世代番号を進めるため、stop / close / start 失敗の巻き戻しで
+   * 解放した後に届く旧 session の通知はここで捨てる (state も onClose も動かさない。
+   * 新しい session を確立した後に旧 session の通知が届く場合も同じ)。
+   * 一致する通知では解放してから "closed" にして onClose を通知する (解放せずに終端に
+   * すると close() の早期 return で解放経路が消え、session・フレームリーダー・
+   * エンコーダー・MediaStream が残ったまま再開も停止もできなくなる)。
+   * 解放は runDisposal で進行中のものと共有する。解放を共有する通知が重なった場合は、
+   * 終端の判定 (state が "closed" か) で 2 回目の遷移と onClose の通知を防ぐ。
+   * 解放の間に利用者起点の解放 (stop / close) が始まった場合は、state と onClose は
+   * そちらの経路に任せ、ここでは終端遷移も onClose も行わない (解放中は state が
+   * "publishing" などのままであるため、利用者起点の解放の回数で判定する。重なった stop の
+   * あとに "closed" へ動かすと stop の事後条件が崩れ、重なった close では onClose が
+   * 2 回呼ばれる)。
+   * 解放が失敗した場合は state を変えず onError で通知する。この onError が throw しても
+   * この経路は reject しない (呼び出し元 (connectToServer) の回収が同じ失敗をもう一度
+   * onError へ流し、二重に通知するため)。onSessionClose は void の同期コールバックであり
+   * 同じ通知は再送されないため、呼び出し側が close() を呼べば残りの解放を回収できる
+   * (解放は失敗した段階より後を回収し、参照は切り離し済みのため同じ段階はやり直されない)。
+   * 終端遷移の経路 (onStateChange / onClose) が throw した場合はこの Promise が reject する。
+   * 呼び出し元 (connectToServer) が回収し、未処理の rejection にしない。
+   *
+   * @param generation 通知を受け取った session の世代番号 (start が捕捉し、connectToServer
+   *   がクロージャへ渡す値)
+   */
+  private async handleSessionClose(generation: number): Promise<void> {
+    if (generation !== this.sessionGeneration) {
+      return;
+    }
+
+    // 解放の前後で利用者起点の解放の回数を比較し、重なったかを判定する
+    const userDisposalCount = this.userDisposalCount;
+    try {
+      await this.runDisposal();
+    } catch (error) {
+      // 解放の失敗を通知する。通知の失敗でこの経路を reject させない
+      // (呼び出し元が同じ失敗をもう一度 onError へ流すと二重通知になる)
+      try {
+        this.callbacks.onError?.(error instanceof Error ? error : new Error(String(error)));
+      } catch {
+        // 通知の失敗を伝える経路がこれ以上無い
+      }
+      return;
+    }
+    // 解放を共有する通知が重なった場合、先に終端へ進んだ側が state と onClose を決める。
+    // 同一世代の通知が 2 つ通る経路は今は無く (解放が世代番号を進めるため 2 つ目は
+    // handleSessionClose の先頭で捨てられる)、この判定はそれを通過する経路が将来増えた
+    // ときの保険である
+    if (this.userDisposalCount !== userDisposalCount || this.currentState === "closed") {
+      return;
+    }
+
+    this.transitionToClosed();
   }
 
   private async createPublishers(): Promise<void> {
@@ -1194,7 +1462,10 @@ export class MediaPublisherImpl implements MediaPublisher {
   /**
    * 確保済みリソースを逆順に巻き戻す
    *
-   * stop / close / start 失敗時で共用する。取得の逆順
+   * stop / close / ピア起点の close 通知 (handleSessionClose) と start 失敗時の巻き戻しで
+   * 共用する。stop / close / 通知の経路は runDisposal を通して進行中の解放を共有し、
+   * start 失敗時の巻き戻しだけは、参照を切り離し済みの呼び出しから直接呼ばれる。
+   * 取得の逆順
    * (reader → source・processor・encoder → Publisher → session) で
    * 破棄し参照を null 化する。reader の cancel は握り潰し内蔵のため
    * guard の外で先行する。それ以外の各段階は参照の切り離しを
@@ -1210,9 +1481,13 @@ export class MediaPublisherImpl implements MediaPublisher {
    * encoder の最初の description を初出として送り直す必要がある)。
    * 映像の config 再送は音声とは別に扱うため、直前に送った Video Config は
    * 破棄せず再 start 後も同じ値の送出を抑止する。
+   * 解放のたびに session の世代番号を進める (この 1 箇所だけ)。これ以降に届く旧
+   * session の close 通知は handleSessionClose が世代不一致で捨てる (stop / close /
+   * start 失敗の全経路)。
    */
   private async disposeAllResources(): Promise<void> {
     this.processingActive = false;
+    this.sessionGeneration++;
 
     // フレームリーダーをキャンセル
     await this.cancelFrameReaders();

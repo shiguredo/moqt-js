@@ -111,16 +111,16 @@ interface MediaPublisherCallbacks {
 
 ### メソッド
 
-| メソッド                                    | 説明                           |
-| ------------------------------------------- | ------------------------------ |
-| `start(stream: MediaStream): Promise<void>` | MediaStream を渡して配信開始   |
-| `pause()`                                   | 配信一時停止（エンコード停止） |
-| `resume()`                                  | 配信再開                       |
-| `stop(): Promise<void>`                     | 配信停止                       |
-| `requestKeyframe()`                         | キーフレームを即座に送信       |
-| `close(): Promise<void>`                    | リソース解放                   |
-| `getStats(): MediaStats`                    | 送信側の統計情報取得           |
-| `getCatalog(): Catalog \| null`             | 配信中に生成したカタログ取得   |
+| メソッド                                    | 説明                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `start(stream: MediaStream): Promise<void>` | MediaStream を渡して配信開始（`"created"` と `"stopped"` から呼べる。`"stopped"` は `stop()` 後の再開であり、解放した資源を作り直して再接続する。失敗時は確保済みを解放し、state は変えずに再試行できる。`"closed"` からは `cannot start in state` で拒否される。実行中に `close()` またはピア起点の close が重なった場合は `"closed"` を優先して失敗する。`close()` が解放と終端遷移を進めている間は `cannot start while closing`） |
+| `pause()`                                   | 配信一時停止（エンコード停止）                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `resume()`                                  | 配信再開                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `stop(): Promise<void>`                     | 配信停止（`"publishing"` と `"paused"` からのみ。`close()` と同じ解放を行い、`"stopped"` は再開可能であり終端ではない。`"stopped"` からの再 `stop()` は `cannot stop in state` で throw する。ピア起点の close の解放中は進行中の解放を共有して完了を待つ。解放の失敗時は state を変えず元のエラーを throw。`onClose` は通知しない。`close()` が解放と終端遷移を進めている間は `cannot stop while closing`）                         |
+| `requestKeyframe()`                         | キーフレームを即座に送信                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `close(): Promise<void>`                    | リソース解放（終端。どの状態からでも可能。解放してから `"closed"` にして `onClose` を通知する。`"closed"` での再 `close()` は早期 return するため `onClose` は 1 回だけ。進行中の解放（`stop()` / ピア起点の close）は共有して完了を待ち、その成否が結果になる。解放の失敗時は state と `onClose` を変えず元のエラーを throw する。ピア起点の close の通知も解放してから通知する）                                                   |
+| `getStats(): MediaStats`                    | 送信側の統計情報取得                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `getCatalog(): Catalog \| null`             | 配信中に生成したカタログ取得                                                                                                                                                                                                                                                                                                                                                                                                         |
 
 ### プロパティ
 
@@ -142,20 +142,51 @@ type MediaPublisherState =
 ### 状態遷移
 
 ```
-created ──start(stream)──► publishing
-                              │ │
-                              │ │
-                              │ └────stop()──────┐
-                              │                  │
-              pause()◄────────┘                  │
-                 │                               │
-                 ▼                               │
-              paused ──resume()──► publishing    │
-                                                 ▼
-                                             stopped
+                         start(stream)
+created / stopped ───────────────┬────────► publishing ───pause()───► paused
+         ▲                       │          │       ▲                   │
+         │  start() の失敗       │          │       └───resume()────────┘
+         │                       │          │                           │
+         └───────────────────────┘          │                           │
+         └──── stop() ──────────────────────┴───────────────────────────┘
 
-* → close() → closed (どの状態からでも可能)
+* ──close()──► closed (どの状態からでも可能。終端であり、以後の start() は拒否される)
 ```
+
+`created` と `stopped` は同じ辺 (`start()`) を持つため 1 つにまとめている。`created / stopped`
+の柱へ向かう辺は `start()` の失敗 (遷移前の state に戻る) と `stop()` の成功 (`"stopped"` に
+なる) の 2 つであり、図では別の線で描いている。
+
+`stop()` は `close()` と同じ解放を行い、state を `"stopped"` にする (`"paused"` からの
+`stop()` も同じである)。`"stopped"` は終端ではなく再開可能であり、`start(stream)` で再び
+配信を始められる。`"stopped"` からの `stop()` は `cannot stop in state` で拒否される。
+`stop()` の成功時に `onClose` は通知しない (停止であり終端ではない)。
+
+`close()` は終端であり、どの状態からでも呼べる。解放してから `"closed"` にして
+`onClose` を通知する。`"closed"` での再 `close()` は早期 return するため、`onClose` は
+1 回だけ通知される。解放の失敗時は state と `onClose` を変えず元のエラーを throw する。
+
+ピア起点の close の通知では、解放してから `"closed"` と `onClose` を通知する (解放せずに
+終端にすると `close()` の早期 return で解放経路が消え、session、フレームリーダー、
+エンコーダー、`MediaStream` が残り、`stop()` も `start()` も拒否されて解放できなくなる)。
+この経路で解放が失敗した場合は state を変えず `onError` で通知し、`close()` を呼べば
+残りの解放を進められる。解放のあとに届く旧 session の close 通知 (新しい session を
+確立したあとに届く旧 session の通知を含む) では state も `onClose` も変わらない。
+
+解放は共有される。`stop()` またはピア起点の close の解放が進行中に `close()` を呼ぶと、
+`close()` はその完了を待ってから `"closed"` へ進む。進行中の解放が失敗した場合は
+`"closed"` にならず、`close()` も同じエラーを throw する (解放に相乗りした呼び出しも
+失敗を検知できる)。逆に、進行中の解放に `stop()` が相乗りした場合は、解放のあとに
+`stop()` が state を `"stopped"` にする。あとから解放を終えたピア起点の経路は state も
+`onClose` も動かさない。`close()` を await せずに重ねて呼んだ場合も解放は 1 回であり、
+`onStateChange` の `"closed"` と `onClose` は 1 回だけ通知される。`close()` が解放と
+終端遷移を進めている間は `start()` / `stop()` を `cannot start while closing` /
+`cannot stop while closing` で拒否する (解放中は state がまだ `"created"` などのため、
+state だけでは重なりを判定できない)。
+
+`start()` の実行中にピア起点の close または `close()` が重なった場合は `"closed"` が
+優先され、`start()` は失敗する (`onError` と `onClose` が続けて呼ばれ得る)。解放が
+先行した場合はそれ以上リソースを作らず、接続で受け取った session も閉じる。
 
 ### 統計情報
 

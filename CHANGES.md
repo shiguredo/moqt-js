@@ -275,6 +275,13 @@
   - 上限で捨てたログの vnode はキャッシュから落とす。`data` と `payload` は追加後に書き換えない前提になる (行を描画し直さないため、書き換えても表示は古いまま)
   - 1 件追加のコストは表示中の件数に比例する分が残る (1000 件で約 3 ms のうち、表示中の子の走査が大半)。表示する行を画面に入る分だけにする対応は別に行う
   - @voluntas
+- [FIX] `createMediaPublisher` の自己起点の `stop` / `close` で session の close 通知が `onClose` を誤発火し、`"stopped"` から再開できなくなるのを修正する
+  - `stop` の解放で閉じた session の close 通知が `onClose` を呼び、`onStateChange` が `"closed"` を経由していた。通知が `setState("stopped")` より後に届く場合は state が `"closed"` のまま残り、`start()` が `cannot start in state` で拒否されて再開できなかった。`close` では通知が終端の遷移より先に届くと `onClose` が 2 回呼ばれ得た
+  - session の close 通知専用の世代番号を新設し、`start` が接続の時点の値を捕捉して `connectToServer` が `onSessionClose` のクロージャへ渡す。世代番号を進めるのは解放 (`disposeAllResources`) の 1 箇所だけにし、捕捉値と一致しない通知では state も `onClose` も動かさない (解放のあとに届く旧 session の通知と、新しい session を確立したあとに届く旧 session の通知の両方を捨てる)
+  - 処理ループの世代 (`processingGeneration`) は流用しない。`pause()` でも進むため、流用すると `pause()` のあとのピア起点の close 通知が世代不一致で捨てられる。ピア起点の close 通知 (世代番号が一致する通知) は解放してから `"closed"` と `onClose` を通知する (解放せずに終端にすると `close()` の早期 return で解放経路が消え、session とフレームリーダーとエンコーダーと `MediaStream` が残り、`stop()` も `start()` も拒否されて解放できなくなる)。解放の失敗時は state を変えず `onError` で通知し、`close()` で残りの解放を進められる
+  - `start()` の実行中に解放が先行した場合は世代番号と終端の state で検知し、それ以上リソースを作らず、接続で受け取った session も閉じて失敗する (`close()` はどの状態からでも呼べるため、着地した session を採用すると state が `"closed"` のまま `"publishing"` へ進み得た。解放が `start()` の開始より前に始まっている場合、`start()` の捕捉後に解放が終端へ進むため世代番号の比較だけでは検出できず、終端の state も見る)。解放が進行中のままでは開始しない (進行中の解放が `start()` の完了後に終端へ進むと、開始した資源を解放する経路が残らない)。検査は各段階の await の直後に行い、確保したリソースは失敗時の巻き戻しで解放する
+  - ピア起点の close の解放と利用者の `stop()` / `close()` が重なった場合は、進行中の解放を 1 つの Promise にまとめて共有する調停を入れる。`stop()` は解放のあとに `"stopped"` を決め、あとから解放を終えたピア起点の経路は state も `onClose` も動かさない (共有しないと `stop()` が成功で返るのに最終 state が `"closed"` になり、再開可能性と `onClose` を通知しない契約が破れた)。`close()` は進行中の解放の成否をそのまま結果として受け取る (共有しないと、解放段階が失敗しても参照が切り離し済みのため `close()` は成功で返った)。`close()` が解放と終端遷移を進めている間は `start()` / `stop()` を `cannot start while closing` / `cannot stop while closing` で拒否する
+  - @voluntas
 - [FIX] `createMediaPublisher` の映像配信で、キュー超過で破棄したフレームがキーフレームの要求を消費し、要求したキーフレームが現れないのを修正する
   - `createMediaPublisher` の `processVideoFrames` は、キーフレームの判定と通し番号の加算をエンコードキューの閾値判定より先に行っていた。閾値を超えて破棄したフレームでも番号が進むため、`requestKeyframe()` が番号を 0 に戻した直後にキューが閾値を超えていると要求が消費され、キーフレームは次の間隔 (`keyframeInterval` フレーム後) まで現れなかった
   - 判定と加算を encode する分岐の中へ移し、破棄したフレームでは番号を据え置く。繰り越し状態は持たず、次に encode するフレームが同じ番号で判定を受けて要求を引き継ぐ (直接モードに加え、Worker モードでも `encodeQueueSize` が送信中のフレーム数を返すため到達する)

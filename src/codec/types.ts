@@ -201,11 +201,58 @@ export interface MediaSubscriberCallbacks {
 // MediaPublisher インターフェース
 export interface MediaPublisher {
   readonly state: MediaPublisherState;
+  /**
+   * 配信を開始する
+   *
+   * "created" と "stopped" から呼べる。"stopped" は停止 (`stop()`) で解放した資源を
+   * 作り直して再接続する再開であり、"created" と同じく `start()` を受け付ける
+   * (状態遷移と停止 / 再開の契約は docs/HIGH_LEVEL_API.md の MediaPublisher を参照)。
+   * 失敗した場合は確保済みを解放し、state は変えずに再試行できる。
+   * `close()` のあとは終端であり `cannot start in state` で拒否される。
+   * 実行中にピア起点の close または利用者の `close()` が重なった場合は "closed" を
+   * 優先するため `start()` は失敗する (`onError` と `onClose` が続けて呼ばれ得る)。
+   * 解放が先行した場合はそれ以上リソースを作らず、接続で受け取った session も閉じる。
+   * `close()` が解放と終端遷移を進めている間は `cannot start while closing` で拒否する。
+   * 並行呼び出しは未対応であり直列に呼ぶこと。
+   */
   start(stream: MediaStream): Promise<void>;
   pause(): void;
   resume(): void;
+  /**
+   * 配信を停止する
+   *
+   * "publishing" と "paused" からのみ呼べる。それ以外 ("stopped" での再 stop を含む) は
+   * `cannot stop in state` で throw し、解放もしない。
+   * `close()` と同じ解放を行い、state は再 start 可能な "stopped" になる ("stopped" は
+   * 終端ではなく、`start()` で再開できる)。session は閉じて再 start 時に再接続する。
+   * ピア起点の close と違い `onClose` は通知せず、state が "closed" を経由することもない
+   * (解放で閉じる session の close 通知は自己起点であり、世代不一致で捨てる)。
+   * ピア起点の close の解放が進行中なら進行中の解放を共有して完了を待ち、解放のあとに
+   * "stopped" にする (あとから解放を終えたピア起点の経路は state も `onClose` も動かさない)。
+   * 解放が失敗した場合は state を変えず元のエラーを throw する (詳細は `close()` を参照)。
+   * `close()` が解放と終端遷移を進めている間は `cannot stop while closing` で拒否する。
+   */
   stop(): Promise<void>;
   requestKeyframe(): void;
+  /**
+   * リソースを解放する (終端)
+   *
+   * `stop()` と同じ解放を行い、以後 start 不可の終端 ("closed") とする。
+   * 解放のあとに "closed" にして `onClose` を通知する。"closed" での再 close は早期
+   * return するため `onClose` は 1 回だけ通知される。
+   * 解放が失敗した場合は state を変えず `onClose` も呼ばず、元のエラーを throw する
+   * (破棄の前に参照を切り離しているため、失敗した段階はやり直されず、呼び直しが進める
+   * のは失敗した段階より後の解放である)。
+   * ピア起点の close の通知も同じく解放してから "closed" と `onClose` を通知する (解放せずに
+   * 終端にすると `close()` の早期 return で解放経路が消える)。解放のあとに届く旧 session の
+   * close 通知では state も `onClose` も変わらない。
+   * 進行中の解放 (`stop()` またはピア起点の close が始めた解放) は共有して完了を待つため、
+   * その成否がこの `close()` の結果になる (解放が失敗した場合は state を変えず同じエラーを
+   * throw し、呼び直しが残りの解放を進める)。解放を共有する通知が重なっても終端の遷移と
+   * `onClose` は 1 回だけであり、同時に呼ばれた `close()` も同じ解放と終端遷移を共有する。
+   * `close()` が解放と終端遷移を進めている間は `start()` と `stop()` を
+   * `cannot start while closing` / `cannot stop while closing` で拒否する。
+   */
   close(): Promise<void>;
   getStats(): MediaStats;
   getCatalog(): import("../msf").Catalog | null;
