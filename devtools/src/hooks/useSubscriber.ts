@@ -49,6 +49,7 @@ import { JITTER_BUFFER_MAX_QUEUED_FRAMES, PlayoutBuffer } from "../../../src/pla
 import { AUDIO_PLAYOUT_DELAY_FLOOR_MS, PlaybackTimeline } from "../../../src/playbackTimeline.ts";
 import { GroupSwitchGate } from "../../../src/groupSwitchGate.ts";
 import { AudioClockBridge, AudioPlayoutScheduler } from "../../../src/audioPlayout.ts";
+import { compressSamples, type AudioSamples } from "../../../src/audioTimeStretch.ts";
 // targetLatency の解決規則はライブラリと共有する純関数が持つ (規則を 2 か所に書かない)
 import { effectiveTargetLatencyMs, resolveSharedTargetLatencyMs } from "../../../src/msf/tracks.ts";
 import { applyAudioOutputSink } from "../utils/audioOutput";
@@ -1494,17 +1495,32 @@ export function useSubscriber(
         return;
       }
 
-      const audioBuffer = playback.context.createBuffer(
-        numberOfChannels,
-        numberOfFrames,
-        audioData.sampleRate,
-      );
+      // 目標を過ぎて届いた分は、波形の周期を使って詰める (NetEq の accelerate)。遅れて
+      // 届いた音を捨てると音が途切れるため、鳴らす時刻をずらした分だけ詰めて目標へ戻す
+      const channels: AudioSamples[] = [];
       for (let channel = 0; channel < numberOfChannels; channel++) {
         const channelData = new Float32Array(numberOfFrames);
         audioData.copyTo(channelData, {
           planeIndex: channel,
           format: "f32-planar",
         });
+        channels.push(channelData);
+      }
+      const stretched =
+        decision.compressSeconds > 0
+          ? compressSamples(channels, audioData.sampleRate)
+          : { channels, lengthChangeSamples: 0 };
+      // 実際に詰められた長さを返す (詰められなかった分は遅れとして残る)
+      playback.playout.confirmStretch(-stretched.lengthChangeSamples / audioData.sampleRate);
+
+      const frames = stretched.channels[0]?.length ?? numberOfFrames;
+      const audioBuffer = playback.context.createBuffer(
+        numberOfChannels,
+        frames,
+        audioData.sampleRate,
+      );
+      for (let channel = 0; channel < numberOfChannels; channel++) {
+        const channelData = stretched.channels[channel] ?? new Float32Array(frames);
         audioBuffer.copyToChannel(channelData, channel);
       }
 

@@ -50,16 +50,15 @@ function epochOf(localMs: number): number {
 /**
  * 表示時刻を決める時間軸を作る
  *
- * `audioDelayFloorMs: 0` を渡したときは音声の下限を外す。映像だけの遅れを確かめたい
- * テストで使う
+ * 映像の表示の遅れは映像の揺らぎだけで決まる (音声の jitter buffer の遅延は同期の制御を
+ * 通してだけ効く)。音声を観測しないこの時間軸は、映像だけの遅れを確かめるテストで使う
  */
-function createTimeline(audioDelayFloorMs = AUDIO_PLAYOUT_DELAY_FLOOR_MS): PlaybackTimeline {
+function createTimeline(): PlaybackTimeline {
   return new PlaybackTimeline({
     // 受信側の壁時計は `EPOCH_MS + 経過`、観測の軸 (`performance.now()`) は経過そのものである。
     // `presentationTimeMs` は「メディア時刻 + 表示の遅れ」を返す
     timeOriginMs: EPOCH_MS,
     maxQueuedFrames: JITTER_BUFFER_MAX_QUEUED_FRAMES,
-    audioDelayFloorMs,
   });
 }
 
@@ -83,11 +82,10 @@ function observeFrame(
 }
 
 /**
- * 音声の下限を効かせた時間軸を作る
+ * 音声と映像の両方を観測する時間軸を作る
  *
- * 共有の再生遅延の下限 (80 ms) は音声を購読しているときにだけ入る。映像だけを扱うテスト
- * でも本番と同じ下限にするため、映像と同じメディア時刻の音声を揺らぎ無しで観測しておく
- * (音声の基準の遅れも映像と同じ `LOCAL_ORIGIN_MS` になるため、基準の差は生じない)
+ * 音声を購読している購読と同じ構成にする (同期の制御が働き得る状態にする)。映像の表示の
+ * 遅れは映像の揺らぎだけで決まり、音声の jitter buffer の遅延には引きずられない
  */
 function createSharedTimeline(): PlaybackTimeline {
   const timeline = createTimeline();
@@ -367,17 +365,17 @@ test("select: 時間軸がそのトラックの TIMESTAMP を使わないとき�
   assert.isNotNull(video.presentationTimeMs(timestampOf(0)));
 });
 
-// 表示時刻は共有の時間軸が決める。時間軸は音声の下限 (80 ms) を再生遅延に入れるため、
-// 映像のキューもその値で選ぶ
-test("presentationTimeMs: 表示時刻は共有の時間軸が決める", () => {
+// 表示時刻は時間軸が決める。映像の表示の遅れは映像の揺らぎだけで決まる (音声の jitter
+// buffer の遅延には引きずられない) ため、揺らぎ 0 のフレームは到着の順に描く
+test("presentationTimeMs: 表示時刻は時間軸が決める", () => {
   const timeline = createSharedTimeline();
   const buffer = new PlayoutBuffer<number>(JITTER_BUFFER_MAX_QUEUED_FRAMES, timeline);
   const delayMs = timeline.presentationDelayMs ?? 0;
-  assert.closeTo(delayMs, AUDIO_PLAYOUT_DELAY_FLOOR_MS + LOCAL_ORIGIN_MS, TOLERANCE_MS);
+  assert.closeTo(delayMs, LOCAL_ORIGIN_MS, TOLERANCE_MS, "映像は自分の揺らぎ (0 ms) だけ遅れる");
   buffer.enqueue(0, timestampOf(0));
   const presentationMs = buffer.presentationTimeMs(timestampOf(0)) ?? 0;
-  // 表示時刻は performance.now() の軸で返る (基準の遅れは 0 ms、再生遅延は下限の 80 ms)
-  assert.closeTo(presentationMs, LOCAL_ORIGIN_MS + AUDIO_PLAYOUT_DELAY_FLOOR_MS, TOLERANCE_MS);
+  // 表示時刻は performance.now() の軸で返る (基準の遅れは 0 ms、表示の遅れは 0 ms)
+  assert.closeTo(presentationMs, LOCAL_ORIGIN_MS, TOLERANCE_MS);
   // 共有の時間軸が決めた表示時刻 (performance.now() の軸) の前は描かず、過ぎたら描く
   assert.deepEqual(buffer.select(presentationMs - 1), {
     draw: null,
@@ -418,7 +416,7 @@ test("playoutDelayMs: 揺らぎが増えたら直ちに上げる", () => {
     observeFrame(timeline, index * FRAME_MS, 0);
     buffer.clear();
   }
-  assert.closeTo(buffer.playoutDelayMs() ?? -1, AUDIO_PLAYOUT_DELAY_FLOOR_MS, TOLERANCE_MS);
+  assert.closeTo(buffer.playoutDelayMs() ?? -1, 0, TOLERANCE_MS);
   // 100 ms 遅れたフレームが 2 枚 (窓の p95 に入る) 届くと直ちに 100 ms にする
   observeFrame(timeline, 30 * FRAME_MS, 100);
   observeFrame(timeline, 31 * FRAME_MS, 100);
@@ -431,7 +429,7 @@ test("playoutDelayMs: 揺らぎが増えたら直ちに上げる", () => {
 // 上げず、120 fps (1 秒に 2.4 枚) は遅れを吸収する。音声の下限は外して映像の遅れだけを見る
 test("playoutDelayMs: 配信 fps から百分位を決める", () => {
   for (const frameMs of [1_000 / 30, 1_000 / 120]) {
-    const timeline = createTimeline(0);
+    const timeline = createTimeline();
     const buffer = new PlayoutBuffer<number>(JITTER_BUFFER_MAX_QUEUED_FRAMES, timeline);
     let jitterMs = 0;
     for (let index = 0; index < 1_000; index++) {
@@ -450,7 +448,7 @@ test("playoutDelayMs: 配信 fps から百分位を決める", () => {
 // 上限 (500 ms) を超える揺らぎは再生遅延では吸収できないため、再生遅延の目標に使わない。
 // 使うと再生遅延が上限に張り付き、常に大きく遅れて表示することになる
 test("playoutDelayMs: 上限を超える揺らぎは再生遅延に使わない", () => {
-  const timeline = createTimeline(0);
+  const timeline = createTimeline();
   const buffer = new PlayoutBuffer<number>(JITTER_BUFFER_MAX_QUEUED_FRAMES, timeline);
   let jitterMs = 0;
   for (let index = 0; index < 60; index++) {
@@ -467,7 +465,7 @@ test("playoutDelayMs: 上限を超える揺らぎは再生遅延に使わない"
 // 再生遅延は (上限 - 余裕) 枚分のフレーム間隔までに抑える
 test("playoutDelayMs: キューの上限を超えない長さに抑える", () => {
   const frameMs = 1_000 / 120;
-  const timeline = createTimeline(0);
+  const timeline = createTimeline();
   const buffer = new PlayoutBuffer<number>(JITTER_BUFFER_MAX_QUEUED_FRAMES, timeline);
   for (let index = 0; index < 240; index++) {
     // 2 枚に 1 枚が 100 ms 遅れる。窓の p95 が 100 ms になるが、キューが吸収できる長さは
@@ -481,7 +479,7 @@ test("playoutDelayMs: キューの上限を超えない長さに抑える", () =
 // 購読の開始では relay の cache から古いフレームが実時間より速く届いて live に追いつく。
 // これは経路の揺らぎではないため、再生遅延の目標に使わない
 test("playoutDelayMs: 購読の開始にまとめて届いた古いフレームを再生遅延に使わない", () => {
-  const timeline = createTimeline(0);
+  const timeline = createTimeline();
   const buffer = new PlayoutBuffer<number>(JITTER_BUFFER_MAX_QUEUED_FRAMES, timeline);
   // Group の先頭から 20 枚 (約 0.67 秒前から現在まで) が、同じ時刻にまとめて届く
   const burstJitterMs = 20 * FRAME_MS;
@@ -632,7 +630,7 @@ function enqueueJoinCatchUp(
 // (フレーム間隔の半分以上) で届くものも、再生遅延の目標に使わない。使うと再生遅延が
 // 数百ミリ秒になり、窓 (10 秒) から抜けた後も毎秒 20 ms でしか下がらない
 test("playoutDelayMs: 購読の開始に cache から追いつく途中のフレームの遅れを再生遅延に使わない", () => {
-  const timeline = createTimeline(0);
+  const timeline = createTimeline();
   const buffer = new PlayoutBuffer<number>(JITTER_BUFFER_MAX_QUEUED_FRAMES, timeline);
   enqueueJoinCatchUp(buffer, timeline);
   // live の揺らぎ (約 20 ms) 程度に収まる。追いつく途中の遅れを学習すると 400 ms を超える
@@ -642,7 +640,7 @@ test("playoutDelayMs: 購読の開始に cache から追いつく途中のフレ
 // 別の publisher への切り替えなどで TIMESTAMP が飛ぶと基準を取り直す。取り直した後も、
 // cache から追いつく途中のフレームの遅れは再生遅延に使わない
 test("playoutDelayMs: 基準を取り直した後も cache から追いつく途中のフレームの遅れを使わない", () => {
-  const timeline = createTimeline(0);
+  const timeline = createTimeline();
   const buffer = new PlayoutBuffer<number>(JITTER_BUFFER_MAX_QUEUED_FRAMES, timeline);
   // 1 時間前の TIMESTAMP のフレームが、実時間より速く届いて live に追いつく (cache の再生)
   const hourMs = 3_600_000;
@@ -666,7 +664,7 @@ test("playoutDelayMs: 基準を取り直した後も cache から追いつく途
 
 // 追いついた後の経路の遅延の跳ねは、従来どおり再生遅延に使う
 test("playoutDelayMs: cache から追いついた後の経路の遅延の跳ねは再生遅延に使う", () => {
-  const timeline = createTimeline(0);
+  const timeline = createTimeline();
   const buffer = new PlayoutBuffer<number>(JITTER_BUFFER_MAX_QUEUED_FRAMES, timeline);
   const last = enqueueJoinCatchUp(buffer, timeline);
   const lastMediaMs = JOIN_CATCH_UP_ARRIVALS[JOIN_CATCH_UP_ARRIVALS.length - 1]?.[1] ?? 0;
@@ -689,7 +687,7 @@ test("playoutDelayMs: cache から追いついた後の経路の遅延の跳ね�
 // フレームがすべて遅れて見え、再生遅延が上限に張り付く。時間軸が基準を取り直し、積んで
 // いたフレームは届いた順に描く
 test("enqueue: TIMESTAMP が大きく戻ったら基準を取り直す", () => {
-  const timeline = createTimeline(0);
+  const timeline = createTimeline();
   const buffer = new PlayoutBuffer<number>(JITTER_BUFFER_MAX_QUEUED_FRAMES, timeline);
   observeFrame(timeline, 0, 0);
   observeFrame(timeline, FRAME_MS, 0);
@@ -721,7 +719,7 @@ test("enqueue: TIMESTAMP が大きく戻ったら基準を取り直す", () => {
 
 // TIMESTAMP が大きく進むと、フレームが先の時刻で待ち続ける。基準を取り直す
 test("enqueue: TIMESTAMP が大きく進んだら基準を取り直す", () => {
-  const timeline = createTimeline(0);
+  const timeline = createTimeline();
   const buffer = new PlayoutBuffer<number>(JITTER_BUFFER_MAX_QUEUED_FRAMES, timeline);
   observeFrame(timeline, 0, 0);
   buffer.enqueue(0, timestampOf(0));
@@ -748,7 +746,7 @@ test("enqueue: TIMESTAMP が大きく進んだら基準を取り直す", () => {
 // 揺れるが、再生遅延 40 ms で TIMESTAMP の間隔どおりに描く (1 ms の選択の刻みの誤差のみ)
 test("select: 揺らぎのある到着を TIMESTAMP の間隔どおりに描く", () => {
   // 音声の下限を外し、映像の揺らぎ (40 ms) がそのまま再生遅延になるようにする
-  const timeline = createTimeline(0);
+  const timeline = createTimeline();
   const buffer = new PlayoutBuffer<number>(JITTER_BUFFER_MAX_QUEUED_FRAMES, timeline);
   const frames = 30 * 5;
   const arrivals: { localMs: number; index: number }[] = [];

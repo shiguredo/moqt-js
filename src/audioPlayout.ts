@@ -52,6 +52,24 @@ export const AUDIO_PLAYOUT_BACKLOG_SECONDS =
 export const AUDIO_PLAYOUT_MIN_LEAD_SECONDS = 0.01;
 
 /**
+ * 目標から離れすぎた音を捨てる境目 (秒)
+ *
+ * 経路の停止などで目標から大きく離れた音を鳴らすと、その分だけ音が遅れたままになる。
+ * 表示の遅れの上限 (`MAX_PLAYOUT_DELAY_MS` = 500 ms) を超えたら、一度捨てて目標へ戻す
+ */
+export const AUDIO_PLAYOUT_MAX_LATENESS_SECONDS = 0.5;
+
+/**
+ * 前の音と重なってよい上限 (秒)
+ *
+ * 目標の間隔が音の長さと同じとき (Opus の 20 ms を 20 ms ごとに並べるとき)、目標の開始
+ * 時刻は浮動小数点の誤差 (10^-13 秒程度) で前の音の終わりよりわずかに前に出る。これを
+ * 重なりとみなして捨てると、目標の間隔と音の長さが一致する通常の場合に音が 1 つおきに
+ * 欠ける。誤差の分は前の音の終わりに繋げて鳴らし、本当に重なるときだけ捨てる
+ */
+export const AUDIO_PLAYOUT_MAX_OVERLAP_SECONDS = 0.005;
+
+/**
  * 時計の対応付けをやり直す最小の差 (ミリ秒)
  *
  * `AudioContext.getOutputTimestamp()` はデバイスの位置の推定であり、読み取りごとに数 ms
@@ -98,8 +116,18 @@ export interface AudioPlayoutTarget {
   presentationDelaySeconds: number;
 }
 
-/** 音を鳴らす時刻 (`AudioContext.currentTime` の秒)、または捨てる */
-export type AudioPlayoutDecision = { kind: "play"; startAt: number } | { kind: "drop" };
+/** 音を鳴らす時刻 (`AudioContext.currentTime` の秒) と、詰める長さ、または捨てる */
+export type AudioPlayoutDecision =
+  | {
+      kind: "play";
+      startAt: number;
+      /**
+       * 波形の周期を使って詰める長さ (秒)。目標を過ぎて届いた分を目標へ戻すために要求する。
+       * 実際に詰められるかは波形しだいであり、適用した結果を `confirmStretch` で返す
+       */
+      compressSeconds: number;
+    }
+  | { kind: "drop" };
 
 /** 基準: この timestamp の音をこの時刻に鳴らす */
 interface PlayoutAnchor {
@@ -116,6 +144,12 @@ export class AudioPlayoutScheduler {
   private lastTimestampMicroseconds: number | null = null;
   private rebaseCount = 0;
   private dropCount = 0;
+  // 目標に対して今どれだけ遅れているか (秒)。遅れて鳴らした分を足し、詰めた分を引く
+  private latenessSeconds = 0;
+  // 直前の音に要求した詰める量 (秒)。`confirmStretch` で実際の値に置き換える
+  private requestedSeconds = 0;
+  // 詰めた合計 (秒)。統計に出す
+  private compressedSeconds = 0;
 
   constructor(options: AudioPlayoutOptions = {}) {
     this.backlogSeconds = options.backlogSeconds ?? AUDIO_PLAYOUT_BACKLOG_SECONDS;
@@ -127,9 +161,19 @@ export class AudioPlayoutScheduler {
     return this.rebaseCount;
   }
 
-  /** 捨てた音の数 (目標を過ぎた音、並べすぎの音、基準の取り直しで溢れた音) */
+  /** 捨てた音の数 (並べすぎの音、目標から離れすぎた音) */
   get drops(): number {
     return this.dropCount;
+  }
+
+  /** 波形の周期を使って詰めた合計 (秒) */
+  get compressed(): number {
+    return this.compressedSeconds;
+  }
+
+  /** 目標に対して今どれだけ遅れているか (秒) */
+  get lateness(): number {
+    return this.latenessSeconds;
   }
 
   /**
@@ -149,27 +193,60 @@ export class AudioPlayoutScheduler {
     if (target.targetStartSeconds === null || !target.enforceTarget) {
       return this.scheduleByArrival(nowSeconds, timestampMicroseconds, durationSeconds, target);
     }
-    const startAt = target.targetStartSeconds;
-    if (startAt < nowSeconds + this.minLeadSeconds) {
-      // 目標の時刻を過ぎて届いた。取り直さずに捨て、次の音から目標へ戻る
-      this.dropCount += 1;
-      return { kind: "drop" };
-    }
+    // 前の音に要求した詰める量が返ってきていなければ、適用されなかったものとして扱う
+    this.confirmStretch(0);
+
+    const targetStartSeconds = target.targetStartSeconds;
     const limit =
       Math.max(target.delaySeconds, target.presentationDelaySeconds) + this.backlogSeconds;
-    if (startAt > nowSeconds + limit) {
+    if (targetStartSeconds > nowSeconds + limit) {
       // 並べる音が溜まりすぎている
       this.dropCount += 1;
       return { kind: "drop" };
     }
-    if (this.lastEnd !== null && startAt < this.lastEnd) {
-      // 前の音と重なる (目標が前の音の終わりより前)。重ねるとノイズになる
+    // 目標を過ぎて届いた音も、前の音と重なる音も捨てない。今から鳴らせる最も早い時刻へ
+    // ずらして鳴らし、ずらした分を波形の周期を使って詰めることで目標へ戻す
+    // (libwebrtc の NetEq は遅れて届いたパケットを捨てず、accelerate で目標へ戻す)
+    const earliestSeconds = Math.max(nowSeconds + this.minLeadSeconds, this.lastEnd ?? -Infinity);
+    const startAt = Math.max(targetStartSeconds, earliestSeconds);
+    const latenessSeconds = startAt - targetStartSeconds;
+    if (latenessSeconds > AUDIO_PLAYOUT_MAX_LATENESS_SECONDS) {
+      // 目標から離れすぎている (経路の停止など)。一度捨てて目標へ戻す
       this.dropCount += 1;
+      this.latenessSeconds = 0;
       return { kind: "drop" };
     }
-    this.lastEnd = startAt + durationSeconds;
+    // 遅れは前の音から引き継いだ分も含めた「今の音のずれ」である (積み上げない)。
+    // 詰めた分は前の音の終わりが早くなることで次の音へ引き継がれる
+    this.latenessSeconds = latenessSeconds;
+    // 詰める量は、遅れの分と音の長さの半分の小さい方にする (1 つの音で詰めすぎない)
+    const compressSeconds = Math.min(this.latenessSeconds, durationSeconds / 2);
+    this.requestedSeconds = compressSeconds;
+    this.lastEnd = startAt + durationSeconds - compressSeconds;
     this.lastTimestampMicroseconds = timestampMicroseconds;
-    return { kind: "play", startAt };
+    return { kind: "play", startAt, compressSeconds };
+  }
+
+  /**
+   * 実際に詰めた長さを記録する (呼び出し側が時間圧縮を適用した後に呼ぶ)
+   *
+   * 要求した量より少なくしか詰められなかったとき (波形が繰り返していないとき) は、
+   * 詰められなかった分だけ音が後ろへ伸び、遅れとして残る
+   *
+   * @param appliedSeconds - 実際に詰めた長さ (秒)
+   */
+  confirmStretch(appliedSeconds: number): void {
+    const requestedSeconds = this.requestedSeconds;
+    this.requestedSeconds = 0;
+    if (requestedSeconds === 0) {
+      return;
+    }
+    const applied = Math.max(0, Math.min(appliedSeconds, requestedSeconds));
+    this.compressedSeconds += applied;
+    if (applied < requestedSeconds && this.lastEnd !== null) {
+      // 詰められなかった分は音が後ろへ伸びる
+      this.lastEnd += requestedSeconds - applied;
+    }
   }
 
   /** 基準を消す。次の音で作り直す (購読のやり直し、AudioContext の作り直し) */
@@ -177,6 +254,8 @@ export class AudioPlayoutScheduler {
     this.anchor = null;
     this.lastEnd = null;
     this.lastTimestampMicroseconds = null;
+    this.latenessSeconds = 0;
+    this.requestedSeconds = 0;
   }
 
   /**
@@ -211,7 +290,7 @@ export class AudioPlayoutScheduler {
     }
     this.lastEnd = startAt + durationSeconds;
     this.lastTimestampMicroseconds = timestampMicroseconds;
-    return { kind: "play", startAt };
+    return { kind: "play", startAt, compressSeconds: 0 };
   }
 
   /** 基準と前の音から、この音を鳴らす時刻を求める (前の音の終わりより前にしない) */

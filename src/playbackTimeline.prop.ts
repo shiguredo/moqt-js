@@ -124,6 +124,7 @@ function runObservations(
     offsetMs: number;
     presentationDelayMs: number | null;
     playoutDelayMs: number | null;
+    videoDelayMs: number | null;
     presentationWallClockMicros: bigint | null;
   }[];
 } {
@@ -138,6 +139,7 @@ function runObservations(
     offsetMs: number;
     presentationDelayMs: number | null;
     playoutDelayMs: number | null;
+    videoDelayMs: number | null;
     presentationWallClockMicros: bigint | null;
   }[] = [];
   const pending: { stream: PlaybackStream; mediaMs: number; localMs: number }[] = [];
@@ -175,6 +177,7 @@ function runObservations(
         offsetMs: epochOf(next.localMs) - timestampMicros / 1_000,
         presentationDelayMs: timeline.presentationDelayMs,
         playoutDelayMs: timeline.playoutDelayMs,
+        videoDelayMs: timeline.videoDelayMs,
         presentationWallClockMicros: timeline.presentationWallClockMicros(
           next.stream,
           timestampMicros,
@@ -194,6 +197,7 @@ function runObservations(
       offsetMs: epochOf(next.localMs) - timestampMicros / 1_000,
       presentationDelayMs: timeline.presentationDelayMs,
       playoutDelayMs: timeline.playoutDelayMs,
+      videoDelayMs: timeline.videoDelayMs,
       presentationWallClockMicros: timeline.presentationWallClockMicros(
         next.stream,
         timestampMicros,
@@ -203,7 +207,7 @@ function runObservations(
   return { timeline, records };
 }
 
-test("PlaybackTimeline: 表示時刻は TIMESTAMP + 基準の遅れ + max(targetLatency, 再生遅延) になる", () => {
+test("PlaybackTimeline: 表示時刻は TIMESTAMP + 基準の遅れ + 表示の遅れ になる", () => {
   fc.assert(
     fc.property(
       operationsArbitrary(),
@@ -217,9 +221,10 @@ test("PlaybackTimeline: 表示時刻は TIMESTAMP + 基準の遅れ + max(target
         if (last === undefined) {
           return;
         }
-        const presentationDelayMs = timeline.presentationDelayMs;
-        const playoutDelayMs = timeline.playoutDelayMs;
-        assert.isNotNull(playoutDelayMs, "最後の観測で再生遅延が決まること");
+        const stream = last.stream;
+        const presentationDelayMs = timeline.presentationDelayFor(stream);
+        assert.isNotNull(timeline.audioDelayMs, "最後の観測で音声の遅れが決まること");
+        assert.isNotNull(timeline.videoDelayMs, "最後の観測で映像の遅れが決まること");
 
         // トラックごとの基準の遅れは「観測の時刻 - メディア時刻」の最小値である
         // (観測の軸は performance.now() であり、壁時計から原点を引いた値で観測する)
@@ -229,58 +234,66 @@ test("PlaybackTimeline: 表示時刻は TIMESTAMP + 基準の遅れ + max(target
             .map((record) => record.offsetMs);
         const audioOffsets = offsetsOf("audio");
         const videoOffsets = offsetsOf("video");
-        const bases = [audioOffsets, videoOffsets]
-          .filter((offsets) => offsets.length > 0)
-          .map((offsets) => Math.min(...offsets));
-        const sharedBaseMs = Math.max(...bases);
-        // 2 つの基準の差が閾値を超えると基準を共有しない。閾値はキューが吸収できる長さから
-        // max(targetLatency, 再生遅延) を引いた値で、下限は
-        // PLAYOUT_BASE_MAX_DIFFERENCE_MIN_MS である
+        const ownerBaseMs =
+          stream === "audio" ? Math.min(...audioOffsets) : Math.min(...videoOffsets);
+        // キューが吸収できる表示の遅れ (表示の遅れの上限)
         const queueCapMs = Math.min(
           MAX_PLAYOUT_DELAY_MS,
           (MAX_QUEUED_FRAMES - PLAYOUT_QUEUE_HEADROOM_FRAMES) * frameMs,
         );
+        // 2 つの基準の差が閾値を超えると、大きい側は TIMESTAMP を使わない
         const differenceMs =
           audioOffsets.length === 0 || videoOffsets.length === 0
             ? 0
             : Math.abs(Math.min(...audioOffsets) - Math.min(...videoOffsets));
+        const delayOfStream = stream === "audio" ? timeline.audioDelayMs : timeline.videoDelayMs;
+        const delayBiggestMs = Math.max(timeline.audioDelayMs ?? 0, timeline.videoDelayMs ?? 0);
         const sharingBases =
-          differenceMs <= Math.max(PLAYOUT_BASE_MAX_DIFFERENCE_MIN_MS, queueCapMs - 500);
+          differenceMs <= Math.max(PLAYOUT_BASE_MAX_DIFFERENCE_MIN_MS, queueCapMs - delayBiggestMs);
 
-        // 表示時刻 = TIMESTAMP + 表示の遅れ。同じ式を時間軸の外でも計算して一致を確かめる
+        // 表示時刻 = TIMESTAMP + 基準の遅れ + 表示の遅れ。同じ式を時間軸の外でも計算して
+        // 一致を確かめる
         const wallClockMicros = timeline.presentationWallClockMicros(
-          last.stream,
+          stream,
           timestampOf(last.mediaMs),
         );
         if (wallClockMicros === null) {
-          // 基準を共有していないときは、基準の差が大きい側だけが表示時刻を返さない
+          // 基準がずれているときは、大きい側だけが表示時刻を返さない
           assert.isFalse(sharingBases, "表示時刻が null なら基準を共有していないこと");
           return;
         }
-        assert.isNotNull(presentationDelayMs, "ずれていない側の表示の遅れが決まること");
-        const expectedMicros = Math.round(timestampOf(last.mediaMs) + presentationDelayMs * 1_000);
+        assert.isNotNull(presentationDelayMs, "表示の遅れが決まること");
+        const expectedMicros = Math.round(
+          timestampOf(last.mediaMs) + (presentationDelayMs ?? 0) * 1_000,
+        );
         assert.closeTo(Number(wallClockMicros), expectedMicros, 1);
+        // 表示の遅れ = 自分の基準の遅れ + 自分の jitter buffer の遅延
+        assert.closeTo((presentationDelayMs ?? 0) - ownerBaseMs, delayOfStream ?? 0, TOLERANCE_MS);
 
-        // 表示の遅れ - 基準の遅れ = 追加分であり、上限を超えない
-        const extraDelayMs = presentationDelayMs - sharedBaseMs;
-        assert.isAtLeast(extraDelayMs, 0);
-        assert.isAtMost(extraDelayMs, queueCapMs + TOLERANCE_MS);
+        // jitter buffer の遅延は 0 以上、上限以下
+        assert.isAtLeast(delayOfStream ?? -1, 0);
+        assert.isAtMost(delayOfStream ?? Infinity, queueCapMs + TOLERANCE_MS);
 
-        // 共有の再生遅延は 0 以上、上限以下
-        assert.isAtLeast(playoutDelayMs ?? -1, 0);
-        assert.isAtMost(playoutDelayMs ?? Infinity, MAX_PLAYOUT_DELAY_MS + TOLERANCE_MS);
-
-        // 再生遅延が下がった 1 枚では、下げ幅が経過時間 × 毎秒の速さを超えない
+        // 映像の再生遅延が下がった 1 枚では、下げ幅が経過時間 × 毎秒の速さを超えない
+        // (音声は NetEq の規則でヒストグラムの更新ごとに動く)
         const previous = observations[observations.length - 2];
-        if (previous !== undefined && previous.playoutDelayMs !== null) {
-          if (playoutDelayMs < previous.playoutDelayMs) {
+        if (stream === "video" && previous !== undefined && previous.videoDelayMs !== null) {
+          if (delayOfStream !== null && delayOfStream < previous.videoDelayMs) {
+            // 上限 (キューが吸収できる長さ) まで下がったときは、フレーム間隔が短くなった分を
+            // 直ちに反映するため、毎秒の速さを超えて下がる
+            const capMs = Math.min(
+              MAX_PLAYOUT_DELAY_MS,
+              (MAX_QUEUED_FRAMES - PLAYOUT_QUEUE_HEADROOM_FRAMES) * frameMs,
+            );
             const elapsedMs = last.wallClockMs - previous.wallClockMs;
             const allowedMs = (PLAYBACK_DELAY_DECAY_MS_PER_SECOND * elapsedMs) / 1_000;
             // フレーム間隔をマイクロ秒に丸めた差から上限を求めるため、上限の切り替わりでは
             // 1 マイクロ秒 × 枚数だけ動く。その分は許す
-            assert.isAtMost(
-              previous.playoutDelayMs - playoutDelayMs,
-              allowedMs + MAX_QUEUED_FRAMES / 1_000 + TOLERANCE_MS,
+            assert.isTrue(
+              previous.videoDelayMs - delayOfStream <=
+                allowedMs + MAX_QUEUED_FRAMES / 1_000 + TOLERANCE_MS ||
+                delayOfStream <= capMs + TOLERANCE_MS,
+              "下げ幅が毎秒の速さ以下か、上限まで下がっていること",
             );
           }
         }
@@ -290,7 +303,7 @@ test("PlaybackTimeline: 表示時刻は TIMESTAMP + 基準の遅れ + max(target
   );
 }, 10_000);
 
-test("PlaybackTimeline: 同じ TIMESTAMP の音声と映像は同じ表示時刻になる", () => {
+test("PlaybackTimeline: 同時刻の表示時刻の差は上限に収まり、null は基準がずれた側だけになる", () => {
   fc.assert(
     fc.property(
       operationsArbitrary(),
@@ -314,14 +327,25 @@ test("PlaybackTimeline: 同じ TIMESTAMP の音声と映像は同じ表示時刻
           timestampMicros,
         );
         if (lastWallClockMicros === null || otherWallClockMicros === null) {
-          // 長い停止の後に基準の差が閾値を超えると、ずれた側は表示時刻を返さない
+          // 長い停止の後に基準の差が閾値を超えると、ずれた側は表示時刻を返さない。
+          // どちらも返さないのは、まだ基準が無いときだけである
+          if (lastWallClockMicros === null && otherWallClockMicros === null) {
+            assert.isNull(
+              timeline.presentationDelayFor(last.stream) ??
+                timeline.presentationDelayFor(otherStream),
+            );
+            return;
+          }
+          const missing = lastWallClockMicros === null ? last.stream : otherStream;
+          assert.isNull(timeline.presentationDelayFor(missing), "返さない側は基準がずれている");
+          assert.isFalse(timeline.sharingBases, "基準を共有していないこと");
           return;
         }
-        assert.equal(
-          lastWallClockMicros,
-          otherWallClockMicros,
-          "同じ TIMESTAMP の表示時刻が一致すること",
-        );
+        // 音声と映像はそれぞれ自分の jitter buffer の遅延を使うため一致はしない。
+        // 差は表示の遅れの上限 (キューが吸収できる長さと MAX_PLAYOUT_DELAY_MS の小さい方)
+        // を超えない
+        const differenceMs = Math.abs(Number(lastWallClockMicros) - Number(otherWallClockMicros));
+        assert.isAtMost(differenceMs / 1_000, MAX_PLAYOUT_DELAY_MS, "ずれが上限を超えないこと");
       },
     ),
     { numRuns: 50 },

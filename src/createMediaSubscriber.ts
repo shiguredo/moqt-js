@@ -31,6 +31,7 @@ import { VideoDecoderWrapper } from "./codec/VideoDecoder";
 import { VideoDecodeOrder, priorObjectIdGapOf } from "./videoDecodeOrder";
 import { GroupSwitchGate } from "./groupSwitchGate";
 import { AudioClockBridge, AudioPlayoutScheduler } from "./audioPlayout";
+import { compressSamples, type AudioSamples } from "./audioTimeStretch";
 import { JITTER_BUFFER_MAX_QUEUED_FRAMES, PlayoutBuffer } from "./playoutBuffer";
 import { AUDIO_PLAYOUT_DELAY_FLOOR_MS, PlaybackTimeline } from "./playbackTimeline";
 import { DEFAULT_AUDIO_SAMPLE_RATE, resolveAudioChannelCount } from "./codec/config";
@@ -2154,16 +2155,27 @@ export class MediaSubscriberImpl implements MediaSubscriber {
         return;
       }
 
-      const audioBuffer = this.audioContext.createBuffer(
-        numberOfChannels,
-        numberOfFrames,
-        sampleRate,
-      );
-
-      // 各チャンネルのデータをコピー
+      // 目標を過ぎて届いた分は、波形の周期を使って詰める (NetEq の accelerate)。遅れて
+      // 届いた音を捨てると音が途切れるため、鳴らす時刻をずらした分だけ詰めて目標へ戻す
+      const channels: AudioSamples[] = [];
       for (let channel = 0; channel < numberOfChannels; channel++) {
         const channelData = new Float32Array(numberOfFrames);
         audioData.copyTo(channelData, { planeIndex: channel, format: "f32-planar" });
+        channels.push(channelData);
+      }
+      const stretched =
+        decision.compressSeconds > 0
+          ? compressSamples(channels, sampleRate)
+          : { channels, lengthChangeSamples: 0 };
+      // 実際に詰められた長さを返す (詰められなかった分は遅れとして残る)
+      this.audioPlayout.confirmStretch(-stretched.lengthChangeSamples / sampleRate);
+
+      const frames = stretched.channels[0]?.length ?? numberOfFrames;
+      const audioBuffer = this.audioContext.createBuffer(numberOfChannels, frames, sampleRate);
+
+      // 各チャンネルのデータをコピー
+      for (let channel = 0; channel < numberOfChannels; channel++) {
+        const channelData = stretched.channels[channel] ?? new Float32Array(frames);
         audioBuffer.copyToChannel(channelData, channel);
       }
 

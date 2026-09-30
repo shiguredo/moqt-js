@@ -7,9 +7,9 @@
  * - 目標を使わないとき (壁時計の TIMESTAMP を持たない音、音声だけを購読しているとき) は、
  *   鳴らすと決めた音が重ならず (前の音の終わりより前に鳴らさない)、鳴らす時刻は今 + 余裕
  *   以上、遅れ (鳴らす時刻 - 今) は「再生の遅れ + 余裕」以下
- * - 目標を守るときの判断は目標の時刻の上下限だけで決まる。早すぎても遅すぎても捨て、
- *   間なら目標の時刻そのもので鳴らす。外側の目標はさらに外側でも捨てる (単調)
- * - 目標を守るときは、窓の中かつ前の音の終わりより後ろの音を捨てない (捨てが連鎖しない)
+ * - 目標を守るときに捨てるのは並べすぎの音だけである。目標を過ぎて届いた音は今 + 余裕で
+ *   鳴らし、ずらした分を波形の周期で詰める。外側の目標はさらに外側でも捨てる (単調)
+ * - 目標を守るときに鳴らす音は、今 + 余裕以降で、目標より前ではなく、前の音と重ならない
  * - 時計の対応付けは、不感帯 (30 ms) 未満の差では動かず、1 回の変更は上限 (80 ms) まで。
  *   対応からの換算は往復し、reset の直後の update は前の対応に依存せず観測値そのものを採る
  *
@@ -24,6 +24,7 @@ import {
   AUDIO_PLAYOUT_BACKLOG_SECONDS,
   AUDIO_PLAYOUT_DELAY_SECONDS,
   AUDIO_PLAYOUT_MAX_DELAY_SECONDS,
+  AUDIO_PLAYOUT_MAX_LATENESS_SECONDS,
   AUDIO_PLAYOUT_MIN_LEAD_SECONDS,
   AudioClockBridge,
   AudioPlayoutScheduler,
@@ -144,7 +145,7 @@ test("目標を使わないとき: 鳴らす音は重ならず、今 + 余裕以
   );
 });
 
-test("目標を守るとき: 鳴らすか捨てるかは目標の時刻の上下限だけで決まる", () => {
+test("目標を守るとき: 並べすぎだけを捨て、目標を過ぎた音は今 + 余裕で鳴らす", () => {
   fc.assert(
     fc.property(enforcedScenarioArbitrary, (scenario) => {
       const limit = scenario.delaySeconds + scenario.backlogSeconds;
@@ -161,19 +162,29 @@ test("目標を守るとき: 鳴らすか捨てるかは目標の時刻の上下
           delaySeconds: scenario.delaySeconds,
           presentationDelaySeconds: scenario.delaySeconds,
         });
-      const tooLate = targetStartSeconds < scenario.nowSeconds + scenario.minLeadSeconds;
       const tooFar = targetStartSeconds - scenario.nowSeconds > limit;
+      const tooLate = targetStartSeconds < scenario.nowSeconds + scenario.minLeadSeconds;
+      // 目標を過ぎて届いた音を今 + 余裕で鳴らしたときの遅れ
+      const latenessSeconds = tooLate
+        ? scenario.nowSeconds + scenario.minLeadSeconds - targetStartSeconds
+        : 0;
+      const tooLateToPlay = latenessSeconds > AUDIO_PLAYOUT_MAX_LATENESS_SECONDS;
       const decision = schedule(makeScheduler(), targetStartSeconds);
-      // 早すぎる (今 + 余裕より前) か、遅すぎる (今 + 再生の遅れ + 余裕より先) なら捨てる
-      assert.equal(decision.kind, tooLate || tooFar ? "drop" : "play");
+      // 並べすぎ (今 + 再生の遅れ + 余裕より先) と、目標から離れすぎた音だけを捨てる
+      assert.equal(decision.kind, tooFar || tooLateToPlay ? "drop" : "play");
       if (decision.kind === "play") {
-        // 鳴らすときは目標の時刻をそのまま使う (前後させると映像とずれる)
-        assert.equal(decision.startAt, targetStartSeconds);
+        if (tooLate) {
+          // 目標を過ぎて届いた音は、今から鳴らせる最も早い時刻へずらし、その分を詰める
+          assert.closeTo(decision.startAt, scenario.nowSeconds + scenario.minLeadSeconds, EPSILON);
+          assert.isAbove(decision.compressSeconds, 0);
+        } else {
+          // 目標の時刻をそのまま使う (前後させると映像とずれる)
+          assert.equal(decision.startAt, targetStartSeconds);
+          assert.equal(decision.compressSeconds, 0);
+        }
       }
       // 外側の目標は、さらに外側でも捨てる (捨てる判断は外側へ単調)
-      if (tooLate) {
-        assert.equal(schedule(makeScheduler(), targetStartSeconds - FURTHER_SECONDS).kind, "drop");
-      } else if (tooFar) {
+      if (tooFar) {
         assert.equal(schedule(makeScheduler(), targetStartSeconds + FURTHER_SECONDS).kind, "drop");
       }
     }),
@@ -197,19 +208,36 @@ test("目標を守るとき: 鳴らす音は目標どおりで重ならず、窓
           delaySeconds,
           presentationDelaySeconds: delaySeconds,
         });
-        const tooLate = targetStartSeconds < now + AUDIO_PLAYOUT_MIN_LEAD_SECONDS;
         const tooFar = targetStartSeconds - now > limit;
-        const overlaps = previousEnd !== null && targetStartSeconds < previousEnd;
         if (decision.kind === "play") {
-          // 鳴らすと決めた音は目標の時刻そのもので、窓の中にあり、前の音と重ならない
-          assert.equal(decision.startAt, targetStartSeconds);
-          assert.isFalse(tooLate);
+          // 鳴らすと決めた音は、今 + 余裕以降で、前の音と重ならず、目標より前に鳴らない
           assert.isFalse(tooFar);
-          assert.isFalse(overlaps);
-          previousEnd = decision.startAt + frame.durationSeconds;
+          assert.isAtLeast(decision.startAt, now + AUDIO_PLAYOUT_MIN_LEAD_SECONDS - EPSILON);
+          assert.isAtLeast(decision.startAt, targetStartSeconds - EPSILON);
+          if (previousEnd !== null) {
+            assert.isAtLeast(decision.startAt, previousEnd - EPSILON, "重ならないこと");
+          }
+          // 詰める量は遅れの分までである
+          assert.isAtLeast(decision.compressSeconds, 0);
+          assert.isAtMost(
+            decision.compressSeconds,
+            Math.min(decision.startAt - targetStartSeconds, frame.durationSeconds / 2) + EPSILON,
+          );
+          // 実際に詰めたものとして次へ渡す (詰めた分だけ前の音の終わりが早くなる)
+          scheduler.confirmStretch(decision.compressSeconds);
+          previousEnd = decision.startAt + frame.durationSeconds - decision.compressSeconds;
         } else {
-          // 窓の中かつ前の音の終わりより後ろの音は捨てない (捨てが連鎖しない)
-          assert.isTrue(tooLate || tooFar || overlaps);
+          // 並べすぎの音と、目標から離れすぎた音だけを捨てる。鳴らせたときの遅れは
+          // 「今 + 余裕」と前の音の終わりの遅い方から目標を引いた値である
+          const earliestSeconds = Math.max(
+            now + AUDIO_PLAYOUT_MIN_LEAD_SECONDS,
+            previousEnd ?? -Infinity,
+          );
+          const latenessSeconds = Math.max(0, earliestSeconds - targetStartSeconds);
+          assert.isTrue(
+            tooFar || latenessSeconds > AUDIO_PLAYOUT_MAX_LATENESS_SECONDS,
+            "捨てる理由があること",
+          );
         }
       }
     }),

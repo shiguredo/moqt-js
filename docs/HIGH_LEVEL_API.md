@@ -89,8 +89,8 @@ interface MediaPublisherOptions {
 ときに意味を持つ (片方だけ配信するときは、同時に描画する相手が居ない)。`targetLatency` は
 音声と映像で同じ値にするための宣言 (draft-ietf-moq-msf-01 §5.2.8 の MUST) であり、片方だけ
 配信するときも購読側の表示の遅れの下限として使われる。0 ms を宣言しても、購読側は
-`max(targetLatency, 揺らぎから求めた再生遅延)` を使うため、音声には 80 ms
-(`AUDIO_PLAYOUT_DELAY_FLOOR_MS`) の下限がある。publisher は `targetLatency` が有限数で
+`max(targetLatency, 揺らぎから求めた再生遅延)` を使うため、音声には NetEq と同じ規則で
+求めた遅延 (観測が無い間は 80 ms) の下限がある。publisher は `targetLatency` が有限数で
 あることと `renderGroup` が有限の整数であることを検証する (非有限値は JSON で null になり
 購読側が復号できなくなる)。それ以外の範囲は呼び出し側の責任になる。節番号は
 draft-ietf-moq-msf-01 由来であり、将来の draft 改版で変わる可能性がある。
@@ -422,11 +422,15 @@ interface AvSyncStats {
 
 音声と映像の表示時刻は 1 つの式で決める。`LOC Timestamp` (Timescale が無ければ Unix epoch
 マイクロ秒の壁時計) に、基準の遅れ (送受信の時計のずれと、経路と復号の最小遅延) と
-`max(catalog の targetLatency, 揺らぎから求めた再生遅延)` を足した時刻が目標になる
-(draft-ietf-moq-msf-01 Section 5.2.8 / Section 5.2.11)。同じ render group の track は
-同じ `targetLatency` を持つため、同じ式を使えば音声と映像が揃う。`isLive` が false の
-track の `targetLatency` は無視する (Section 5.2.8 の MUST)。`targetLatency` が無いときは
-揺らぎから求めた遅れだけを使い、その場合も音声と映像で同じ値を使う。
+jitter buffer の遅れ (`catalog の targetLatency` を下限とする) を足した時刻が目標になる
+(draft-ietf-moq-msf-01 Section 5.2.8 / Section 5.2.11)。`isLive` が false の track の
+`targetLatency` は無視する (Section 5.2.8 の MUST)。
+
+jitter buffer の遅れは音声と映像で別々に求める。音声は NetEq と同じ規則 (到着の遅れの
+0.95 分位)、映像は揺らぎの百分位である。2 つの遅れの差 (A/V のずれ) は libwebrtc の
+`StreamSynchronization` と同じ相対制御で抑える。ずれが 30 ms 未満の間は遅延を変えず、
+超えたときだけ片側を 1 秒に 1 回、最大 80 ms 動かす。このため映像の遅延は音声の jitter
+buffer の遅延に引きずられず、A/V のずれは最大で 30 ms 程度になる。
 
 `AudioStats` / `VideoStats` は送信側 (`MediaStats`) の型である。受信側は
 `AudioReceiverStats` / `VideoReceiverStats` を使う。

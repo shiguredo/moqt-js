@@ -123,15 +123,73 @@ test("schedule: 目標の時刻が今 + 余裕ちょうどなら鳴らす", () =
   );
 });
 
-// 目標を守るとき: 目標の時刻を過ぎて届いた音は捨てる。基準を取り直すと音声だけが後ろへ
-// ずれて共有の時間軸を使う映像とずれるため、取り直さない (捨てた分は 1 フレームで戻る)
-test("schedule: 目標の時刻を過ぎて届いた音は捨て、基準を取り直さない", () => {
+// 目標を守るとき: 目標の時刻を過ぎて届いた音は捨てず、今から鳴らせる最も早い時刻へ
+// ずらして鳴らし、ずらした分を波形の周期を使って詰める (NetEq の accelerate と同じ)。
+// 取り直すと音声だけが後ろへずれて共有の時間軸を使う映像とずれるため、取り直さない
+test("schedule: 目標の時刻を過ぎて届いた音は捨てずに詰めて目標へ戻す", () => {
   const scheduler = new AudioPlayoutScheduler();
   // 目標 10.04 の音が 10.05 に届く (今 + 余裕より前)
   const decision = scheduler.schedule(10.05, 0, FRAME_SECONDS, enforcedTarget(10.04));
-  assert.equal(decision.kind, "drop");
-  assert.equal(scheduler.drops, 1);
+  assert.equal(decision.kind, "play", "捨てないこと");
+  if (decision.kind !== "play") {
+    return;
+  }
+  const expectedStart = 10.05 + AUDIO_PLAYOUT_MIN_LEAD_SECONDS;
+  assert.closeTo(decision.startAt, expectedStart, EPSILON);
+  // ずらした分 (今 + 余裕 - 目標 = 20 ms) のうち、音の長さの半分 (10 ms) までを詰める
+  const latenessSeconds = expectedStart - 10.04;
+  assert.closeTo(scheduler.lateness, latenessSeconds, EPSILON);
+  assert.closeTo(decision.compressSeconds, FRAME_SECONDS / 2, EPSILON);
+  assert.equal(scheduler.drops, 0);
   assert.equal(scheduler.rebases, 0);
+  // 波形しだいで詰められないときは、詰められなかった分が遅れとして残る
+  scheduler.confirmStretch(0);
+  assert.equal(scheduler.compressed, 0);
+  assert.closeTo(scheduler.lateness, latenessSeconds, EPSILON);
+});
+
+// 目標を守るとき: 詰めた分だけ遅れが減り、数フレームで目標へ戻る。詰められる量は
+// 音の長さの半分までである (1 つの音で詰めすぎない)
+test("schedule: 詰めた分だけ遅れが減り、目標へ戻る", () => {
+  const scheduler = new AudioPlayoutScheduler();
+  // 1 つ目の音は目標を 20 ms 過ぎて届く
+  let target = 10.04;
+  const first = scheduler.schedule(10.05, 0, FRAME_SECONDS, enforcedTarget(target));
+  assert.equal(first.kind, "play");
+  if (first.kind !== "play") {
+    return;
+  }
+  assert.closeTo(scheduler.lateness, 0.02, EPSILON);
+  scheduler.confirmStretch(first.compressSeconds);
+  assert.closeTo(scheduler.compressed, FRAME_SECONDS / 2, EPSILON);
+  // 2 つ目は 10 ms の遅れが残る
+  target += FRAME_SECONDS;
+  const second = scheduler.schedule(
+    target - 0.05,
+    FRAME_MICROSECONDS,
+    FRAME_SECONDS,
+    enforcedTarget(target),
+  );
+  assert.equal(second.kind, "play");
+  if (second.kind !== "play") {
+    return;
+  }
+  assert.closeTo(scheduler.lateness, 0.01, EPSILON, "詰めた分だけ遅れが減ること");
+  scheduler.confirmStretch(second.compressSeconds);
+  // 3 つ目は目標どおりに鳴る
+  target += FRAME_SECONDS;
+  const third = scheduler.schedule(
+    target - 0.05,
+    2 * FRAME_MICROSECONDS,
+    FRAME_SECONDS,
+    enforcedTarget(target),
+  );
+  assert.equal(third.kind, "play");
+  if (third.kind !== "play") {
+    return;
+  }
+  assert.closeTo(scheduler.lateness, 0, EPSILON, "目標へ戻ること");
+  assert.closeTo(third.startAt, target, EPSILON);
 });
 
 // 目標を守るとき: 並べすぎ (目標 - 今 > 再生の遅れ + 余裕) の音は捨てる。上限の 1 フレーム
@@ -153,47 +211,108 @@ test("schedule: 並べすぎの音は捨てる", () => {
   assert.equal(beyond.rebases, 0);
 });
 
-// 目標を守るとき: 前の音と重なる (目標が前の音の終わりより前) 音は捨てる。前の音の終わり
-// ちょうどは鳴らす (重ねると音が足されてノイズになる)
-test("schedule: 前の音と重なる音は捨てる", () => {
+// 目標を守るとき: 前の音と重なる音は捨てず、前の音の終わりに繋げて鳴らす (重ねない)。
+// 繋げた分は遅れとして数え、波形の周期を使って詰めることで目標へ戻す
+test("schedule: 前の音と重なる音は前の音の終わりに繋げて鳴らす", () => {
   const scheduler = new AudioPlayoutScheduler();
   const first = startAtOf(scheduler.schedule(10, 0, FRAME_SECONDS, enforcedTarget(10.08)));
   const endOfFirst = first + FRAME_SECONDS;
-  // 前の音の終わり (10.10) の 1 ms 前の目標
+  // 前の音の終わり (10.10) の 1 フレーム前の目標
   const overlapped = scheduler.schedule(
     10.05,
     FRAME_MICROSECONDS,
     FRAME_SECONDS,
-    enforcedTarget(endOfFirst - 0.001),
+    enforcedTarget(endOfFirst - FRAME_SECONDS),
   );
-  assert.equal(overlapped.kind, "drop");
-  assert.equal(scheduler.drops, 1);
+  assert.equal(overlapped.kind, "play", "捨てないこと");
+  if (overlapped.kind !== "play") {
+    return;
+  }
+  assert.closeTo(overlapped.startAt, endOfFirst, EPSILON, "前の音の終わりに繋げること");
+  assert.closeTo(scheduler.lateness, FRAME_SECONDS, EPSILON, "繋げた分が遅れになること");
+  assert.closeTo(
+    overlapped.compressSeconds,
+    FRAME_SECONDS / 2,
+    EPSILON,
+    "遅れの半分まで詰めること",
+  );
+  assert.equal(scheduler.drops, 0);
   assert.equal(scheduler.rebases, 0);
-  assert.equal(
-    startAtOf(
-      scheduler.schedule(10.05, 2 * FRAME_MICROSECONDS, FRAME_SECONDS, enforcedTarget(endOfFirst)),
-    ),
-    endOfFirst,
+  // 3 つ目も鳴る。前の音は詰められているため、その終わり以降に繋がる
+  const third = startAtOf(
+    scheduler.schedule(10.05, 2 * FRAME_MICROSECONDS, FRAME_SECONDS, enforcedTarget(endOfFirst)),
   );
+  assert.isAtLeast(third, endOfFirst);
+  assert.equal(scheduler.drops, 0);
 });
 
-// 目標を守るとき: 捨てた後も次の音は目標どおりに鳴る (捨てが連鎖しない)。目標は timestamp の
-// 間隔で進むため、1 つ捨てても次の音の目標は今より先にある
-test("schedule: 捨てた後も次の音は目標どおりに鳴る", () => {
+// 目標を守るとき: 目標の間隔と音の長さが同じとき (Opus の 20 ms を 20 ms ごとに並べるとき)、
+// 目標の開始時刻は浮動小数点の誤差 (10^-13 秒程度) で前の音の終わりよりわずかに前に出る。
+// これを重なりとみなして捨てると、音が 1 つおきに欠けるため、前の音の終わりに繋げて鳴らす
+test("schedule: 浮動小数点の誤差の分の重なりは捨てずに繋げて鳴らす", () => {
+  const scheduler = new AudioPlayoutScheduler();
+  // 実測と同じ形の値 (目標の間隔が 20 ms ちょうどになる)。値は実測から取り、倍精度で
+  // 表せる範囲に丸める (丸めは目標の間隔には影響しない)
+  const timeOrigin = 1_790_779_578_123;
+  const offsetMs = -8_029.1;
+  const delayMs = 117.2;
+  let played = 0;
+  for (let index = 0; index < 10; index++) {
+    const timestampMicroseconds = 1_790_779_753_000_700 + 20_000 * index;
+    const wallClockMicros = BigInt(Math.round(timestampMicroseconds + delayMs * 1_000));
+    const presentationMs = Number(wallClockMicros) / 1_000 - timeOrigin;
+    const targetSeconds = (presentationMs + offsetMs) / 1_000;
+    const decision = scheduler.schedule(
+      // 復号の出力は目標の 50 ms 前 (余裕 10 ms より後、並べすぎの上限より前)
+      targetSeconds - 0.05,
+      timestampMicroseconds,
+      FRAME_SECONDS,
+      enforcedTarget(targetSeconds),
+    );
+    assert.equal(decision.kind, "play", `${index} 番目の音を捨てないこと`);
+    played += 1;
+  }
+  assert.equal(played, 10);
+  assert.equal(scheduler.drops, 0);
+});
+
+// 目標を守るとき: 基準がわずかに前に動いた分の重なりは、前の音の終わりに繋げて鳴らす
+test("schedule: わずかな重なりは前の音の終わりに繋げる", () => {
+  const scheduler = new AudioPlayoutScheduler();
+  const first = startAtOf(scheduler.schedule(10, 0, FRAME_SECONDS, enforcedTarget(10.08)));
+  const endOfFirst = first + FRAME_SECONDS;
+  const decision = scheduler.schedule(
+    10.05,
+    FRAME_MICROSECONDS,
+    FRAME_SECONDS,
+    enforcedTarget(endOfFirst - 0.003),
+  );
+  assert.equal(decision.kind, "play");
+  assert.closeTo(startAtOf(decision), endOfFirst, EPSILON);
+  assert.equal(scheduler.drops, 0);
+});
+
+// 目標を守るとき: 遅れて届いた音も鳴り、詰めた分だけ次の音が目標へ戻る (遅れが連鎖しない)
+test("schedule: 遅れて届いた音も鳴り、次の音は目標へ戻る", () => {
   const scheduler = new AudioPlayoutScheduler();
   startAtOf(scheduler.schedule(10, 0, FRAME_SECONDS, enforcedTarget(10.08)));
-  // 目標 10.10 の音が 10.10 に届く (今 + 余裕より前)
-  assert.equal(
-    scheduler.schedule(10.1, FRAME_MICROSECONDS, FRAME_SECONDS, enforcedTarget(10.1)).kind,
-    "drop",
-  );
-  assert.equal(
+  // 目標 10.10 の音が 10.10 に届く (今 + 余裕より前 = 目標を過ぎている)
+  const late = scheduler.schedule(10.1, FRAME_MICROSECONDS, FRAME_SECONDS, enforcedTarget(10.1));
+  assert.equal(late.kind, "play", "捨てないこと");
+  if (late.kind !== "play") {
+    return;
+  }
+  assert.closeTo(late.startAt, 10.11, EPSILON);
+  scheduler.confirmStretch(late.compressSeconds);
+  // 次の音は詰めた分だけ前の音の終わりが早くなり、目標どおりに鳴る
+  assert.closeTo(
     startAtOf(
       scheduler.schedule(10.1, 2 * FRAME_MICROSECONDS, FRAME_SECONDS, enforcedTarget(10.12)),
     ),
     10.12,
+    EPSILON,
   );
-  assert.equal(scheduler.drops, 1);
+  assert.equal(scheduler.drops, 0);
   assert.equal(scheduler.rebases, 0);
 });
 
@@ -376,7 +495,7 @@ test("schedule: 目標が 500 ms 先でも鳴らす", () => {
     presentationDelaySeconds: AUDIO_PLAYOUT_MAX_DELAY_SECONDS + 0.2,
   };
   const decision = scheduler.schedule(10, 0, FRAME_SECONDS, target);
-  assert.deepEqual(decision, { kind: "play", startAt: 10.5 });
+  assert.deepEqual(decision, { kind: "play", startAt: 10.5, compressSeconds: 0 });
   assert.equal(scheduler.drops, 0);
 });
 
@@ -420,11 +539,20 @@ test("reset: 目標を守るときも前の音の重なりの判定を消す", (
   const scheduler = new AudioPlayoutScheduler();
   const first = startAtOf(scheduler.schedule(10, 0, FRAME_SECONDS, enforcedTarget(10.08)));
   const overlapped = first + FRAME_SECONDS / 2;
-  assert.equal(
-    scheduler.schedule(10.05, FRAME_MICROSECONDS, FRAME_SECONDS, enforcedTarget(overlapped)).kind,
-    "drop",
+  // 前の音と重なる音は、前の音の終わりに繋げて鳴らす (遅れとして詰める)
+  const played = scheduler.schedule(
+    10.05,
+    FRAME_MICROSECONDS,
+    FRAME_SECONDS,
+    enforcedTarget(overlapped),
   );
+  assert.equal(played.kind, "play");
+  if (played.kind !== "play") {
+    return;
+  }
+  assert.isAbove(scheduler.lateness, 0, "重なった分が遅れになること");
   scheduler.reset();
+  assert.equal(scheduler.lateness, 0, "遅れも消えること");
   assert.equal(
     startAtOf(
       scheduler.schedule(10.05, 2 * FRAME_MICROSECONDS, FRAME_SECONDS, enforcedTarget(overlapped)),
@@ -458,12 +586,18 @@ test("constructor: 並べすぎの余裕と鳴らす時刻の下限を指定で�
     startAtOf(atMinLead.schedule(10, 0, FRAME_SECONDS, enforcedTarget(10 + minLeadSeconds))),
     10 + minLeadSeconds,
   );
-  // 同じ目標でも、既定の下限なら捨てる (下限の指定が効いていること)
+  // 同じ目標でも、既定の下限 (10 ms) なら目標を過ぎているため、遅れとして詰める
   const defaultMinLead = new AudioPlayoutScheduler();
-  assert.equal(
-    defaultMinLead.schedule(10, 0, FRAME_SECONDS, enforcedTarget(10 + minLeadSeconds)).kind,
-    "drop",
+  const lateDecision = defaultMinLead.schedule(
+    10,
+    0,
+    FRAME_SECONDS,
+    enforcedTarget(10 + minLeadSeconds),
   );
+  assert.equal(lateDecision.kind, "play");
+  if (lateDecision.kind === "play") {
+    assert.isAbove(lateDecision.compressSeconds, 0, "遅れを詰めること");
+  }
 });
 
 // AudioClockBridge: update をまだ呼んでいなければ、対応が無いため換算できない
