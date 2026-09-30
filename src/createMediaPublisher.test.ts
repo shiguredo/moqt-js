@@ -9,7 +9,10 @@
  * 再 throw、終端後の再 start 拒否を検証する。
  * エンコーダーは WebCodecs が node にないため encode 呼び出し記録用の
  * 最小オブジェクトを注入する (モジュール置換は行わず、実ストリームの
- * 並行分配は実物で検証する)。
+ * 並行分配は実物で検証する)。setupEncoders が自分で作る映像エンコーダーだけは
+ * 注入できないため、WebCodecs の境界 (VideoEncoder / MediaStreamTrackProcessor) を
+ * テストの前後で置き換え、解放が configure の await に重なる窓を作る
+ * (実ブラウザの WebCodecs を駆動する経路は e2e で確認する)。
  * 駆動は公開 pause() / resume() を使い、ループ起動・状態設定・フラグ設定・
  * reader / encoder 注入は start() が接続を要するため private 経由で行う。
  *
@@ -22,10 +25,21 @@
  * 注入して結合で検証する。
  * encode キューの閾値超過による破棄と droppedFrames の加算、破棄したフレームの
  * キーフレーム要求が次に encode するフレームへ移ることも検証する。
+ * session の close 通知は private の通知処理 (handleSessionClose) を世代番号を与えて
+ * 直接駆動し、自己起点の解放で届く通知と解放のあとに届く旧 session の通知が捨てられ、
+ * 世代番号が一致する通知 (ピア起点の close) だけが解放してから "closed" と onClose を
+ * 通知することを検証する。ピア起点の close の解放と利用者の stop() / close() が重なった
+ * 場合は進行中の解放を共有し、終端をどちらの経路が決めるかを固定する。
+ * connectToServer が実際に作る onSessionClose の閉包は、接続の境界 (openSession) を
+ * 置き換えて start() を駆動し、接続時点の世代番号を捕捉することと、閉包の回収経路が
+ * 通知の失敗を onError へ流すことを検証する。start の実行中に解放が先行した場合は、
+ * それ以上リソースを作らず "closed" を優先して失敗することも同じ駆動で検証する。
+ * 解放の完了を待って呼び直した start は、解放が終端 ("closed") へ進んだあとだと世代番号が
+ * 一致していても中止すること (終端の state も中止の条件であること) も検証する。
  */
 
 import { test, assert } from "vite-plus/test";
-import type { MediaPublisherOptions } from "./createMediaPublisher";
+import type { MediaPublisherCallbacks, MediaPublisherOptions } from "./createMediaPublisher";
 import {
   MediaPublisherImpl,
   createMediaPublisher,
@@ -45,6 +59,7 @@ import {
 import type { AudioEncoderWrapper } from "./codec/AudioEncoder";
 import type { VideoEncoderWrapper } from "./codec/VideoEncoder";
 import type { MediaPublisherState } from "./codec/types";
+import type { MediaConnectSettings } from "./createMedia/connect";
 import { resolveAudioPublishSettings, resolveVideoPublishSettings } from "./createMedia/settings";
 import type {
   ResolvedAudioPublishSettings,
@@ -154,11 +169,7 @@ function createRecordingEncoder(encodeQueueSize = 0): {
 }
 
 /**
- * 処理ループ駆動用の最小コンテキスト
- *
- * 実 ReadableStream の reader と記録用エンコーダーを注入する。
- * currentState の設定のみ private への直接代入であり、
- * start() の接続なしに publishing 状態を作るためである。
+ * 処理ループの駆動と private 状態の直接操作のための制御口
  */
 interface PublisherLoopControl {
   audioFrameReader: ReadableStreamDefaultReader<AudioData> | null;
@@ -175,7 +186,19 @@ interface PublisherLoopControl {
   videoWallClock: WallClockMapper;
 }
 
-function createLoopTestContext(options?: { video?: NonNullable<MediaPublisherOptions["video"]> }): {
+/**
+ * 処理ループ駆動用の最小コンテキスト
+ *
+ * 実 ReadableStream の reader と記録用エンコーダーを注入する。
+ * currentState の設定のみ private への直接代入であり、
+ * start() の接続なしに publishing 状態を作るためである。
+ * onError は呼び出しを記録するために常に付ける。onStateChange / onClose など残りの
+ * コールバックは呼び出し側が足せる (state の遷移と終端の通知を記録するテストのため)。
+ */
+function createLoopTestContext(
+  options?: { video?: NonNullable<MediaPublisherOptions["video"]> },
+  callbacks: Omit<MediaPublisherCallbacks, "onError"> = {},
+): {
   publisher: MediaPublisherImpl;
   control: PublisherLoopControl;
   errors: Error[];
@@ -185,6 +208,7 @@ function createLoopTestContext(options?: { video?: NonNullable<MediaPublisherOpt
     "moqt://example.com/live",
     { namespace: ["live"], ...(options?.video === undefined ? {} : { video: options.video }) },
     {
+      ...callbacks,
       onError: (error) => {
         errors.push(error);
       },
@@ -727,8 +751,13 @@ function createRecordingPublisher(): {
 
 /**
  * 破棄記録付きの最小セッション
+ *
+ * `onSessionClose` を渡すと、解放 (close) のときに実 session (src/session.ts) と同じく
+ * 通知する。実 session は transport の切断を待って通知するが、単体テストでは
+ * WebTransport を用意できないため、解放の途中 (await の内側) で通知する最も早い場合を
+ * 作る。通知に使う世代番号は実装と同じく接続時点の値を呼び出し側が渡す。
  */
-function createRecordingSession(): {
+function createRecordingSession(onSessionClose?: () => void): {
   session: Session;
   isClosed: () => boolean;
 } {
@@ -736,6 +765,7 @@ function createRecordingSession(): {
   const session = {
     close: async () => {
       closed = true;
+      onSessionClose?.();
     },
   } as unknown as Session;
   return { session, isClosed: () => closed };
@@ -894,9 +924,9 @@ test("start 失敗時は巻き戻し・通知・再 throw を行い state を変
  * start 失敗の通知の検証用の制御口
  *
  * start() は接続を要するため、通知の抑止の判断を切り出した private メソッドを直接
- * 駆動する。start() の catch が通知を伴わない失敗で onError を 1 回呼ぶことは、
- * 実物の接続失敗を使う前のテストが検証している。印付きの失敗を catch まで運ぶ経路は
- * node に WebTransport が無く接続できないため、ここでは駆動しない。
+ * 駆動する。start() の catch が通知を伴わない失敗で onError を 1 回呼ぶことは実物の接続
+ * 失敗を使うテストが、印付きの失敗を通知しないことは接続の境界 (openSession) を置き換えて
+ * catalog 送信の reject を catch まで運ぶテストが検証している。
  */
 interface PublisherStartFailureControl extends PublisherLifecycleControl {
   notifyStartFailure(error: unknown): void;
@@ -1017,6 +1047,1516 @@ test("直列の二重 close は単発で終わり onClose は 1 回だけ発火�
 });
 
 /**
+ * session close 通知の検証用の制御口
+ *
+ * 通知の処理 (handleSessionClose) は private のため世代番号を与えて直接駆動する。
+ * 接続時の世代番号の捕捉 (connectToServer が作る onSessionClose の閉包) は、
+ * 接続の境界 (openSession) を置き換えて別のテストで駆動する。
+ * state の遷移と onClose の回数を記録し、通知の有無を固定する。
+ */
+interface PublisherSessionCloseControl extends PublisherLifecycleControl {
+  sessionGeneration: number;
+  handleSessionClose(generation: number): Promise<void>;
+}
+
+/**
+ * 接続の完了を制御するための制御口
+ *
+ * connectToServer は WebTransport を要する接続を openSession 越しに行う。node 環境には
+ * WebTransport が無いため、この境界だけを置き換えて接続の完了 (await の解決) をテストが
+ * 決められるようにする。接続後の Publisher の作成 / 解放の扱いは実装のまま駆動する。
+ */
+interface PublisherConnectControl {
+  openSession(settings: MediaConnectSettings): Promise<Session>;
+}
+
+function createSessionCloseTestContext(): {
+  publisher: MediaPublisherImpl;
+  control: PublisherSessionCloseControl;
+  states: MediaPublisherState[];
+  errors: Error[];
+  closeCount: () => number;
+  sessionAtClose: (Session | null)[];
+} {
+  const states: MediaPublisherState[] = [];
+  // onClose を通知した時点の session の参照 (解放が先行していることの確認)
+  const sessionAtClose: (Session | null)[] = [];
+  let closeCount = 0;
+  // 生成は createLoopTestContext に委譲する (接続先と publishing 状態の作り方を共有する)
+  const context = createLoopTestContext(undefined, {
+    onStateChange: (state) => {
+      states.push(state);
+    },
+    onClose: () => {
+      closeCount++;
+      // onClose の時点の参照をその場で読み直す
+      const inside = context.control as unknown as PublisherSessionCloseControl;
+      sessionAtClose.push(inside.session);
+    },
+  });
+  return {
+    publisher: context.publisher,
+    control: context.control as unknown as PublisherSessionCloseControl,
+    states,
+    errors: context.errors,
+    closeCount: () => closeCount,
+    sessionAtClose,
+  };
+}
+
+/**
+ * 非同期の通知処理 (解放と終端の遷移) を待つ
+ *
+ * handleSessionClose は解放 (複数の await) を挟んでから state を変えるため、microtask の
+ * 段数に依存しないよう macrotask で待つ。
+ */
+function sleep(ms: number): Promise<void> {
+  return new Promise<void>((resolve) => {
+    setTimeout(() => resolve(), ms);
+  });
+}
+
+/**
+ * 完了条件: 自己起点の stop で onClose が呼ばれず、onStateChange に "closed" が現れず、
+ * "stopped" のまま残って start() に cannot start in state で拒否されない。
+ *
+ * 解放の途中に届く通知 (最も早い場合) と、stop() が返ったあとに届く通知の両方を通す。
+ * どちらも解放が世代番号を進めるため捨てられる。
+ */
+test("stop: 解放で閉じた session の close 通知では onClose を通知せず stopped のまま残る", async () => {
+  const { publisher, control, states, closeCount } = createSessionCloseTestContext();
+  // 接続時に session の閉包へ渡される世代番号 (解放の前の現在値)
+  const connectedGeneration = control.sessionGeneration;
+  const { session, isClosed } = createRecordingSession(() => {
+    // 実 session と同じく、解放で閉じたときに close 通知を送る
+    void control.handleSessionClose(connectedGeneration);
+  });
+  control.session = session;
+
+  await publisher.stop();
+
+  // 自己起点の停止であるため onClose は通知せず "closed" も経由しないこと
+  assert.equal(publisher.state, "stopped");
+  assert.deepEqual(states, ["stopped"]);
+  assert.equal(closeCount(), 0);
+  // 解放自体は行われていること
+  assert.isTrue(isClosed());
+  assert.isNull(control.session);
+
+  // setState("stopped") より後に届いた通知でも state と onClose は変わらないこと
+  await control.handleSessionClose(connectedGeneration);
+  assert.equal(publisher.state, "stopped");
+  assert.deepEqual(states, ["stopped"]);
+  assert.equal(closeCount(), 0);
+
+  // "stopped" のまま残るため start() は state のガードで拒否されないこと。
+  // 接続は node に WebTransport が無いため失敗するが、それは state の拒否ではない
+  let startError: unknown = null;
+  try {
+    await publisher.start({} as MediaStream);
+  } catch (error) {
+    startError = error;
+  }
+  assert.instanceOf(startError, Error);
+  assert.isFalse((startError as Error).message.includes("cannot start in state"));
+});
+
+/**
+ * 完了条件: 自己起点の close で onClose が 1 回だけ、onStateChange の "closed" も
+ * 1 回だけ通知される。
+ *
+ * 解放で閉じた session の通知は終端の遷移より先に届く (解放の await の内側である)。
+ * 世代番号が解放で進むため捨てられ、通知は close 自身の 1 回だけになる。
+ */
+test("close: 解放で閉じた session の close 通知が重なっても closed と onClose は 1 回だけ", async () => {
+  const { publisher, control, states, closeCount, sessionAtClose } =
+    createSessionCloseTestContext();
+  // 接続時に session の閉包へ渡される世代番号 (解放の前の現在値)
+  const connectedGeneration = control.sessionGeneration;
+  const { session, isClosed } = createRecordingSession(() => {
+    // 実 session と同じく、解放で閉じたときに close 通知を送る
+    void control.handleSessionClose(connectedGeneration);
+  });
+  control.session = session;
+
+  await publisher.close();
+
+  // 終端の遷移と onClose が 1 回ずつであること
+  assert.equal(publisher.state, "closed");
+  assert.deepEqual(states, ["closed"]);
+  assert.equal(closeCount(), 1);
+  // 解放が先行していること (onClose の時点で session を切り離し済み)
+  assert.deepEqual(sessionAtClose, [null]);
+  assert.isTrue(isClosed());
+  assert.isNull(control.session);
+
+  // 解放のあとに届いた旧 session の通知でも通知は増えないこと
+  await control.handleSessionClose(connectedGeneration);
+  assert.deepEqual(states, ["closed"]);
+  assert.equal(closeCount(), 1);
+
+  // 直列の二重 close も早期 return し、解放と通知は 1 回のままであること
+  await publisher.close();
+  assert.deepEqual(states, ["closed"]);
+  assert.equal(closeCount(), 1);
+});
+
+/**
+ * 完了条件: ピア起点の close 通知 (世代番号が一致する通知) は解放してから "closed" と
+ * onClose を通知する。
+ *
+ * 解放せずに終端へ進めると close() の早期 return で解放経路が消え、session と
+ * フレームリーダーとエンコーダーと MediaStream が残ったまま再開も停止もできなくなる。
+ * 解放の対象 (session / リーダー / エンコーダー) と処理ループのフラグが残らないことを
+ * 固定する。
+ */
+test("handleSessionClose: 世代が一致する通知では解放してから closed と onClose を通知する", async () => {
+  const { publisher, control, states, closeCount, sessionAtClose } =
+    createSessionCloseTestContext();
+  // ピア起点の close の時点で確保されている資源を注入する
+  const { isEncoderClosed: isAudioEncoderClosed } = injectAudioLoop(control);
+  const { isEncoderClosed: isVideoEncoderClosed } = injectVideoLoop(control);
+  const { session, isClosed } = createRecordingSession();
+  control.session = session;
+  control.mediaStream = {} as MediaStream;
+  assert.isTrue(control.processingActive);
+  // 通知を受け取った session の世代番号 (接続時に閉包へ渡る値)
+  const generation = control.sessionGeneration;
+
+  await control.handleSessionClose(generation);
+
+  // 解放してから終端へ進むこと
+  assert.equal(publisher.state, "closed");
+  assert.deepEqual(states, ["closed"]);
+  assert.equal(closeCount(), 1);
+  assert.deepEqual(sessionAtClose, [null]);
+  assert.isTrue(isClosed());
+  // 参照が残らないこと
+  assert.isNull(control.session);
+  assert.isNull(control.audioEncoder);
+  assert.isNull(control.videoEncoder);
+  assert.isNull(control.audioFrameReader);
+  assert.isNull(control.videoFrameReader);
+  assert.isNull(control.mediaStream);
+  // 破棄が呼ばれ、処理ループが止まっていること
+  assert.isTrue(isAudioEncoderClosed());
+  assert.isTrue(isVideoEncoderClosed());
+  assert.isFalse(control.processingActive);
+  // 世代番号は解放で進むため、次の通知は世代不一致で捨てられる
+  assert.equal(control.sessionGeneration, generation + 1);
+
+  // 同じ通知が重なっても終端の遷移と onClose は 1 回だけであること
+  await control.handleSessionClose(generation);
+  assert.deepEqual(states, ["closed"]);
+  assert.equal(closeCount(), 1);
+});
+
+/**
+ * 完了条件: ピア起点の close の解放が失敗した場合は state を変えず onError で通知し、
+ * close() を呼べば残りの解放を進められる。
+ */
+test("handleSessionClose: 解放が失敗したら state を変えずエラーを通知し close で回収できる", async () => {
+  const failure = new Error("session close failure");
+  const errors: Error[] = [];
+  let closeCount = 0;
+  const publisher = new MediaPublisherImpl(
+    "moqt://example.com/live",
+    { namespace: ["live"] },
+    {
+      onError: (error) => {
+        errors.push(error);
+      },
+      onClose: () => {
+        closeCount++;
+      },
+    },
+  );
+  const control = publisher as unknown as PublisherSessionCloseControl;
+  control.currentState = "publishing";
+  // session の close だけを失敗させる (参照は切り離し済みで残りの段階は進む)
+  control.session = {
+    close: async () => {
+      throw failure;
+    },
+  } as unknown as Session;
+
+  await control.handleSessionClose(control.sessionGeneration);
+
+  // 終端へ進まず、失敗が 1 回だけ通知されること
+  assert.equal(publisher.state, "publishing");
+  assert.equal(closeCount, 0);
+  assert.equal(errors.length, 1);
+  assert.strictEqual(errors[0], failure);
+  assert.isNull(control.session);
+
+  // close() が残りの解放 (切り離し済みのため session 以外) と終端遷移を進めること
+  await publisher.close();
+  assert.equal(publisher.state, "closed");
+  assert.equal(closeCount, 1);
+});
+
+/**
+ * 終端の通知が throw する最小の publisher
+ *
+ * "closed" への onStateChange を throw させ、onClose の回数を数える。終端の通知の失敗が
+ * close() とピア起点の close のどちらの経路でも onClose を失わせないことを、同じ前提で
+ * 検証するために共通化する。
+ */
+function createClosedNotificationTestContext(): {
+  publisher: MediaPublisherImpl;
+  control: PublisherSessionCloseControl;
+  notificationFailure: Error;
+  closeCount: () => number;
+} {
+  const notificationFailure = new Error("onStateChange failure");
+  let closeCount = 0;
+  const publisher = new MediaPublisherImpl(
+    "moqt://example.com/live",
+    { namespace: ["live"] },
+    {
+      onStateChange: (state) => {
+        if (state === "closed") {
+          throw notificationFailure;
+        }
+      },
+      onClose: () => {
+        closeCount++;
+      },
+    },
+  );
+  return {
+    publisher,
+    control: publisher as unknown as PublisherSessionCloseControl,
+    notificationFailure,
+    closeCount: () => closeCount,
+  };
+}
+
+/**
+ * 完了条件: 世代番号を一致させた通知でも onStateChange が throw すれば onClose は
+ * 失われない。終端に固定された以上、早期 return する close() 以外に通知の回収経路が
+ * 無いためである。
+ */
+test("handleSessionClose: onStateChange が throw しても onClose を通知する", async () => {
+  const { publisher, control, notificationFailure, closeCount } =
+    createClosedNotificationTestContext();
+  control.currentState = "publishing";
+
+  let thrown: unknown = null;
+  try {
+    await control.handleSessionClose(control.sessionGeneration);
+  } catch (error) {
+    thrown = error;
+  }
+
+  // 遷移の失敗はこの経路の結果として伝わるが、終端に固定された以上 onClose は失われない
+  assert.strictEqual(thrown, notificationFailure);
+  assert.equal(publisher.state, "closed");
+  assert.equal(closeCount(), 1);
+});
+
+/**
+ * 完了条件: 世代番号を一致させた通知でも onStateChange が throw すれば onClose は
+ * 失われない (close() の経路)。
+ */
+test("close: onStateChange が throw しても onClose を通知する", async () => {
+  const { publisher, notificationFailure, closeCount } = createClosedNotificationTestContext();
+
+  let thrown: unknown = null;
+  try {
+    await publisher.close();
+  } catch (error) {
+    thrown = error;
+  }
+
+  assert.strictEqual(thrown, notificationFailure);
+  assert.equal(publisher.state, "closed");
+  assert.equal(closeCount(), 1);
+
+  // "closed" での再 close は早期 return するため、通知の回収経路はここだけであること
+  await publisher.close();
+  assert.equal(closeCount(), 1);
+});
+
+/**
+ * 一時停止して世代番号の変化を確かめる
+ *
+ * pause() は処理ループの世代だけを進め、session の close 通知の世代番号は動かさない。
+ * pause の前後を必要とする 2 つのテストで共有する。
+ *
+ * @returns pause() の前の世代番号 (session の close 通知の世代番号を含む)
+ */
+function pauseAndCaptureGenerations(
+  publisher: MediaPublisherImpl,
+  control: PublisherSessionCloseControl,
+): { sessionGeneration: number; processingGeneration: number } {
+  const snapshot = {
+    sessionGeneration: control.sessionGeneration,
+    processingGeneration: control.processingGeneration,
+  };
+  publisher.pause();
+  assert.equal(publisher.state, "paused");
+  assert.equal(control.processingGeneration, snapshot.processingGeneration + 1);
+  assert.equal(control.sessionGeneration, snapshot.sessionGeneration);
+  return snapshot;
+}
+
+/**
+ * 完了条件: pause() のあとのピア起点 close 通知が世代不一致で捨てられない
+ * (session の close 通知の世代番号に処理ループの世代を流用していない)。
+ *
+ * 世代番号は pause() の前に捕捉した値を使う。pause() のあとに読み直すと、pause で
+ * 世代が進む実装でも通ってしまう。
+ */
+test("handleSessionClose: pause のあとのピア起点 close 通知は捨てられない", async () => {
+  const { publisher, control, states, closeCount } = createSessionCloseTestContext();
+  // pause() の前に session の閉包へ渡された世代番号
+  const connectedGeneration = pauseAndCaptureGenerations(publisher, control).sessionGeneration;
+
+  await control.handleSessionClose(connectedGeneration);
+
+  assert.equal(publisher.state, "closed");
+  assert.deepEqual(states, ["paused", "closed"]);
+  assert.equal(closeCount(), 1);
+});
+
+/**
+ * 完了条件: 世代番号を進めるのは disposeAllResources() の 1 箇所だけで、既存の
+ * processingGeneration の加算位置と回数が変わらない。
+ */
+test("session の世代番号は解放の 1 箇所だけで進み pause では進まない", async () => {
+  const { publisher, control, states } = createSessionCloseTestContext();
+  // pause / resume は処理ループの世代だけを進める
+  const snapshot = pauseAndCaptureGenerations(publisher, control);
+  publisher.resume();
+
+  // 解放の直接駆動は 1 回で 1 だけ進める
+  await control.disposeAllResources();
+  assert.equal(control.sessionGeneration, snapshot.sessionGeneration + 1);
+
+  // stop も解放 1 回分だけ進める (stop 本体では進めない)
+  const beforeStop = control.sessionGeneration;
+  const processingBeforeStop = control.processingGeneration;
+  await publisher.stop();
+  assert.equal(control.sessionGeneration, beforeStop + 1);
+  assert.equal(control.processingGeneration, processingBeforeStop + 1);
+  assert.equal(publisher.state, "stopped");
+
+  // close も解放 1 回分だけ進める (close 本体では進めない)
+  const beforeClose = control.sessionGeneration;
+  const processingBeforeClose = control.processingGeneration;
+  await publisher.close();
+  assert.equal(control.sessionGeneration, beforeClose + 1);
+  assert.equal(control.processingGeneration, processingBeforeClose + 1);
+  assert.equal(publisher.state, "closed");
+  // stop が "closed" を経由せず、終端の "closed" を 1 回だけ通ること
+  assert.deepEqual(states, ["paused", "publishing", "stopped", "closed"]);
+});
+
+/**
+ * 完了条件: 解放のあとに届いた session close 通知では state と onClose が変わらない。
+ * 新しい session を確立したあとに旧 session の通知が届いた場合も無視される。
+ *
+ * 新しい session の確立は資源の注入と stop で再現し、世代番号は実装と同じ経路 (解放)
+ * で進める (connectToServer が作る閉包そのものは接続を差し替えるテストで駆動する)。
+ */
+test("handleSessionClose: 解放のあとに届いた旧 session の通知では state と onClose が変わらない", async () => {
+  const { publisher, control, states, closeCount } = createSessionCloseTestContext();
+  // 旧 session が接続時に閉包へ渡された世代番号
+  const oldGeneration = control.sessionGeneration;
+  const { session: firstSession, isClosed: isFirstSessionClosed } = createRecordingSession();
+  control.session = firstSession;
+
+  await publisher.stop();
+  assert.equal(publisher.state, "stopped");
+  assert.equal(control.sessionGeneration, oldGeneration + 1);
+  assert.isTrue(isFirstSessionClosed());
+
+  // 解放のあとに届いた旧 session の通知は捨てられること
+  await control.handleSessionClose(oldGeneration);
+  assert.equal(publisher.state, "stopped");
+  assert.deepEqual(states, ["stopped"]);
+  assert.equal(closeCount(), 0);
+
+  // 新しい session を確立したあとに旧 session の通知が届く場合も同じこと。新しい session は
+  // 接続時に現在の世代番号を捕捉するため、旧 session の捕捉値とは一致しない。ここでは新しい
+  // session の資源を注入して再度 stop し、世代番号をもう 1 つ進める
+  control.currentState = "publishing";
+  const { session: secondSession, isClosed: isSecondSessionClosed } = createRecordingSession();
+  control.session = secondSession;
+  await publisher.stop();
+  assert.equal(publisher.state, "stopped");
+  assert.equal(control.sessionGeneration, oldGeneration + 2);
+  assert.isTrue(isSecondSessionClosed());
+  assert.deepEqual(states, ["stopped", "stopped"]);
+
+  // 旧 session (2 世代前) の遅延通知は捨てられること
+  await control.handleSessionClose(oldGeneration);
+  assert.equal(publisher.state, "stopped");
+  assert.deepEqual(states, ["stopped", "stopped"]);
+  assert.equal(closeCount(), 0);
+
+  // 現世代の通知 (新しい session のピア起点の close) は扱われること
+  await control.handleSessionClose(control.sessionGeneration);
+  assert.equal(publisher.state, "closed");
+  assert.deepEqual(states, ["stopped", "stopped", "closed"]);
+  assert.equal(closeCount(), 1);
+});
+
+/**
+ * ピア起点の close の解放を session の close で止め、解放が進行中の窓を作る
+ *
+ * 解放は session を切り離してから close を await するため、止めている間も state は
+ * "publishing" などのままである (利用者の stop() / close() が入り込める窓になる)。
+ *
+ * @param control 駆動する MediaPublisher
+ * @param hooks sessionCloseError を渡すと、止めていた解放を再開したときに session の
+ *   close をそのエラーで失敗させる (解放の成否が相乗りした呼び出しへ伝わることの検証に使う)
+ * @returns 解放を再開する関数と呼び出し回数、解放の開始を待つ Promise
+ */
+function startBlockedSessionClose(
+  control: PublisherLifecycleControl,
+  hooks: { sessionCloseError?: Error } = {},
+): {
+  release: () => void;
+  closeCalls: () => number;
+  started: Promise<void>;
+} {
+  // 解放を再開させる関数を null 許容の let で持つと型の絞り込みで呼べなくなるため、
+  // 呼び出し可能な初期値 (何もしない) を持たせる
+  let release: () => void = () => {};
+  let notifyStarted: () => void = () => {};
+  const started = new Promise<void>((resolve) => {
+    notifyStarted = resolve;
+  });
+  let closeCalls = 0;
+  control.session = {
+    close: () => {
+      closeCalls++;
+      notifyStarted();
+      return new Promise<void>((resolve, reject) => {
+        release = () => {
+          if (hooks.sessionCloseError) {
+            reject(hooks.sessionCloseError);
+            return;
+          }
+          resolve();
+        };
+      });
+    },
+  } as unknown as Session;
+  return { release: () => release(), closeCalls: () => closeCalls, started };
+}
+
+/**
+ * 完了条件: ピア起点の close の解放中に stop() が重なった場合、state は "stopped" のままで
+ * onClose は通知されない。
+ *
+ * 解放中は state が "publishing" のままであるため stop() は state ガードを通過する。
+ * 進行中の解放を共有して完了を待ち、あとから解放を終えたピア起点の経路が state と onClose を
+ * 動かすと、stop() の事後条件 (再 start 可能な "stopped" / onClose を通知しない) が崩れる。
+ */
+test("stop: ピア起点の close の解放中に呼ぶと stopped のままで onClose を通知しない", async () => {
+  const { publisher, control, states, closeCount } = createSessionCloseTestContext();
+  const blocked = startBlockedSessionClose(control);
+  // この session の close 通知が捕捉する世代番号
+  const generation = control.sessionGeneration;
+
+  // ピア起点の close の解放を開始する (解放が止まっている間も state は "publishing")
+  const closing = control.handleSessionClose(generation);
+  await blocked.started;
+  assert.equal(publisher.state, "publishing");
+
+  // 解放中の窓で利用者が stop() を呼ぶ ("stopped" を決めるのはこちら)。
+  // stop() は進行中の解放を共有するため、解放が終わるまで戻らない
+  const stopping = publisher.stop();
+  await sleep(0);
+  assert.equal(publisher.state, "publishing");
+  // session の close が stop からやり直されていないこと (参照は切り離し済み)
+  assert.equal(blocked.closeCalls(), 1);
+
+  // 解放を終えると stop が "stopped" にし、ピア起点の経路は state も onClose も動かさない
+  blocked.release();
+  await Promise.all([stopping, closing]);
+  assert.equal(publisher.state, "stopped");
+  assert.equal(closeCount(), 0);
+  assert.deepEqual(states, ["stopped"]);
+});
+
+/**
+ * 完了条件: ピア起点の close の解放中に close() が重なっても、解放は 1 回で終端の通知も
+ * 1 回だけになる。
+ *
+ * 解放中は state が "publishing" のままであるため、state を見た単発性の判定では両方の経路が
+ * 終端通知に到達してしまう。close() は進行中の解放を共有して完了を待つ。
+ */
+test("close: ピア起点の close の解放中に呼んでも解放と通知は 1 回だけ", async () => {
+  const { publisher, control, states, closeCount } = createSessionCloseTestContext();
+  const blocked = startBlockedSessionClose(control);
+  const generation = control.sessionGeneration;
+
+  const closing = control.handleSessionClose(generation);
+  await blocked.started;
+  assert.equal(publisher.state, "publishing");
+
+  // 解放中の窓で利用者が close() を呼ぶ (終端の通知はこちらが行う)。解放が終わるまで
+  // 終端へは進まない
+  const closingByUser = publisher.close();
+  await sleep(0);
+  assert.equal(publisher.state, "publishing");
+  assert.equal(closeCount(), 0);
+  assert.equal(blocked.closeCalls(), 1);
+
+  // 解放を終えると close() が終端まで進み、ピア起点の経路は state も onClose も動かさない
+  blocked.release();
+  await Promise.all([closingByUser, closing]);
+  assert.equal(publisher.state, "closed");
+  assert.equal(closeCount(), 1);
+  assert.deepEqual(states, ["closed"]);
+});
+
+/**
+ * 完了条件: ピア起点の close の解放に相乗りした close() は、その解放の失敗を結果として
+ * 受け取る。
+ *
+ * ピア起点の経路は解放の失敗を onError で通知して戻るため、close() が相乗りしていなければ
+ * 利用者は同じ失敗を close() の結果からは受け取れない。
+ */
+test("close: ピア起点の close の解放に相乗りしたら解放の失敗が close に伝わる", async () => {
+  const failure = new Error("session close failure");
+  const { publisher, control, states, errors, closeCount } = createSessionCloseTestContext();
+  const blocked = startBlockedSessionClose(control, { sessionCloseError: failure });
+
+  // ピア起点の close の解放を開始し、session の close で止める
+  const peer = control.handleSessionClose(control.sessionGeneration);
+  await blocked.started;
+  assert.equal(publisher.state, "publishing");
+
+  // 止めている間に close() を呼ぶ (進行中の解放を共有して完了を待つ)
+  const closeResult = publisher.close().then(
+    () => null,
+    (error: unknown) => error,
+  );
+
+  // 解放を失敗させるとピア起点の経路は onError で通知し、close() は同じ失敗を throw する
+  blocked.release();
+  await peer;
+  const closeFailure = await closeResult;
+  assert.strictEqual(closeFailure, failure);
+  assert.deepEqual(errors, [failure]);
+  // 解放が失敗したため終端へは進まず、onClose も呼ばないこと
+  assert.equal(publisher.state, "publishing");
+  assert.equal(closeCount(), 0);
+  assert.deepEqual(states, []);
+  assert.equal(blocked.closeCalls(), 1);
+});
+
+/**
+ * 完了条件: close() が解放と終端遷移を進めている間は stop() を呼べない。
+ *
+ * 解放中は state がまだ "publishing" のため、state だけを見た判定では停止が通過してしまう。
+ * closing (進行中の close) を見た専用のエラーで fail fast にする。
+ */
+test("stop: close の解放中は cannot stop while closing で拒否する", async () => {
+  const { publisher, control, states, closeCount } = createSessionCloseTestContext();
+  const blocked = startBlockedSessionClose(control);
+
+  const closing = publisher.close();
+  await blocked.started;
+  assert.equal(publisher.state, "publishing");
+
+  // 解放中の stop() は state ガードではなく closing のガードで拒否されること
+  let stopThrown: unknown = null;
+  try {
+    await publisher.stop();
+  } catch (error) {
+    stopThrown = error;
+  }
+  assert.instanceOf(stopThrown, Error);
+  assert.equal((stopThrown as Error).message, "cannot stop while closing");
+
+  // 拒否は解放をやり直さないこと
+  assert.equal(blocked.closeCalls(), 1);
+  blocked.release();
+  await closing;
+  assert.equal(publisher.state, "closed");
+  assert.equal(closeCount(), 1);
+  assert.deepEqual(states, ["closed"]);
+});
+
+/**
+ * 完了条件: close() が解放と終端遷移を進めている間は start() を呼べない。
+ *
+ * "created" からの close() では解放中も state が "created" のままであり、state だけを
+ * 見た判定では開始が通過してしまう。
+ */
+test("start: close の解放中は cannot start while closing で拒否する", async () => {
+  const states: MediaPublisherState[] = [];
+  const errors: Error[] = [];
+  let closeCount = 0;
+  const publisher = new MediaPublisherImpl(
+    "moqt://example.com/live",
+    { namespace: ["live"] },
+    {
+      onStateChange: (state) => {
+        states.push(state);
+      },
+      onError: (error) => {
+        errors.push(error);
+      },
+      onClose: () => {
+        closeCount++;
+      },
+    },
+  );
+  const control = publisher as unknown as PublisherLifecycleControl;
+  const blocked = startBlockedSessionClose(control);
+
+  const closing = publisher.close();
+  await blocked.started;
+  assert.equal(publisher.state, "created");
+
+  // 解放中の start() は state ガードではなく closing のガードで拒否されること
+  let startThrown: unknown = null;
+  try {
+    await publisher.start({} as MediaStream);
+  } catch (error) {
+    startThrown = error;
+  }
+  assert.instanceOf(startThrown, Error);
+  assert.equal((startThrown as Error).message, "cannot start while closing");
+  // 拒否は接続も解放もやり直さないこと
+  assert.equal(blocked.closeCalls(), 1);
+
+  blocked.release();
+  await closing;
+  assert.equal(publisher.state, "closed");
+  assert.equal(closeCount, 1);
+  assert.deepEqual(states, ["closed"]);
+  assert.deepEqual(errors, []);
+});
+
+/**
+ * 完了条件: await せずに重ねて呼んだ close() は進行中の解放と終端遷移を共有する。
+ *
+ * 2 回目の close() が自分で解放をやり直すと、解放が session の close で止まっている間に
+ * no-op の解放が先に終わり、1 回目の終端遷移を待たずに返ってしまう。世代の加算は 1 回に
+ * 留まることでも、2 回目が新しい解放を始めていないことを固定する。
+ */
+test("close: await せずに重ねて呼んでも解放の完了を待って通知は 1 回だけ", async () => {
+  const { publisher, control, states, closeCount } = createSessionCloseTestContext();
+  const blocked = startBlockedSessionClose(control);
+  const processingGeneration = control.processingGeneration;
+
+  const first = publisher.close();
+  await blocked.started;
+  const second = publisher.close();
+  // 解放が止まっている間は 2 回目も終端へ進まないこと (進行中の close を共有している)
+  let secondSettled = false;
+  void second.then(() => {
+    secondSettled = true;
+  });
+  await sleep(0);
+  assert.isFalse(secondSettled);
+  assert.equal(publisher.state, "publishing");
+  assert.equal(blocked.closeCalls(), 1);
+  // 2 回目は自分で解放を始めないこと (世代の加算は 1 回だけ)
+  assert.equal(control.processingGeneration, processingGeneration + 1);
+
+  // 解放を終えると両方が終端になり、通知は 1 回だけになること
+  blocked.release();
+  await Promise.all([first, second]);
+  assert.isTrue(secondSettled);
+  assert.equal(publisher.state, "closed");
+  assert.equal(closeCount(), 1);
+  assert.deepEqual(states, ["closed"]);
+  assert.equal(control.processingGeneration, processingGeneration + 1);
+});
+
+/**
+ * 完了条件: "paused" からの stop() も解放して "stopped" へ遷移し、onClose を通知しない
+ * ("stopped" は終端ではなく、再 start できる停止である)。
+ */
+test("stop: paused から停止しても stopped になり onClose は通知しない", async () => {
+  const { publisher, control, states, closeCount } = createSessionCloseTestContext();
+  const { session, isClosed } = createRecordingSession();
+  control.session = session;
+
+  publisher.pause();
+  await publisher.stop();
+
+  // 解放して "stopped" になること
+  assert.equal(publisher.state, "stopped");
+  assert.deepEqual(states, ["paused", "stopped"]);
+  assert.equal(closeCount(), 0);
+  assert.isTrue(isClosed());
+  assert.isNull(control.session);
+
+  // "stopped" からの再 stop は停止の事後条件どおり拒否されること
+  let thrown: unknown = null;
+  try {
+    await publisher.stop();
+  } catch (error) {
+    thrown = error;
+  }
+  assert.instanceOf(thrown, Error);
+  assert.equal((thrown as Error).message, "cannot stop in state: stopped");
+});
+
+/**
+ * 接続 1 回分の観測口
+ */
+interface OpenedPublisherConnection {
+  // 実装が onSessionClose に渡した閉包 (接続時点の世代番号を捕捉している)
+  notifyClose: () => void;
+  // 保留している publish が await に入るまで待つ
+  publishing: () => Promise<void>;
+  // 保留している publish の await を解放する (保留していない場合は何もしない)
+  resolvePublish: () => void;
+  // 保留している session の close が呼ばれた時点で解決する (解放がそこで止まったことの観測)
+  sessionClosing: () => Promise<void>;
+  // 保留している session の close の await を解放する (保留していない場合は何もしない)
+  resolveSessionClose: () => void;
+  // この接続の session の close が呼ばれた回数 (解放が session を閉じたか)
+  sessionCloseCalls: () => number;
+  isSessionClosed: () => boolean;
+  // この接続が作った catalog Publisher の done の呼び出し回数 (解放で破棄されたか)
+  catalogDoneCount: () => number;
+}
+
+/**
+ * 接続を差し替えて start() を最後まで駆動するための制御口
+ *
+ * connectToServer は WebTransport を要する接続を openSession 越しに行う。node 環境には
+ * WebTransport が無いため、この境界だけを置き換えて接続と publish の完了をテストが
+ * 決められるようにする (モジュール置換は行わない)。接続ごとに実装が作る
+ * onSessionClose の閉包をそのまま捕捉し、閉包の回収経路も駆動できるようにする。
+ * catalog の publish は常に受け付け、音声 / 映像の publish も最小の Publisher を返す。
+ *
+ * @param callbacks 検証に使うコールバック (onError は呼び出しの記録に使う)
+ * @param options holdPublish を立てると publish の await をテストが解放するまで保留する
+ *   (解放が start の await に重なる窓を作る)。保留するのは holdPublishTrack (既定は
+ *   catalog) の publish である。createCatalogPublisher を渡すと catalog の Publisher を
+ *   作り分ける (送信の失敗を start の catch まで運ぶ)。publisherOptions を渡すと publisher の
+ *   オプションを差し替える (映像の setupEncoders を駆動するテスト用)。
+ *   holdSessionClose を立てると session の close の await もテストが解放するまで保留する
+ *   (解放が session の close で止まる窓を作る。解放は参照を切り離してから close するため、
+ *   止めている間も state は遷移前のままである)
+ */
+function createStartConnectHarness(
+  callbacks: MediaPublisherCallbacks = {},
+  options: {
+    holdPublish?: boolean;
+    holdPublishTrack?: string;
+    holdSessionClose?: boolean;
+    createCatalogPublisher?: () => { publisher: Publisher; doneCount: () => number };
+    publisherOptions?: MediaPublisherOptions;
+  } = {},
+): {
+  publisher: MediaPublisherImpl;
+  control: PublisherConnectControl & PublisherLifecycleControl & PublisherSessionCloseControl;
+  errors: Error[];
+  opened: OpenedPublisherConnection[];
+} {
+  const errors: Error[] = [];
+  const publisher = new MediaPublisherImpl(
+    "moqt://example.com/live",
+    options.publisherOptions ?? { namespace: ["live"] },
+    {
+      ...callbacks,
+      onError: (error) => {
+        errors.push(error);
+      },
+    },
+  );
+  const control = publisher as unknown as PublisherConnectControl &
+    PublisherLifecycleControl &
+    PublisherSessionCloseControl;
+  const opened: OpenedPublisherConnection[] = [];
+  control.openSession = (settings: MediaConnectSettings) => {
+    const catalog = options.createCatalogPublisher?.() ?? createRecordingSendPublisher();
+    let closed = false;
+    let notifyPublishing: () => void = () => {};
+    const publishing = new Promise<void>((resolve) => {
+      notifyPublishing = resolve;
+    });
+    let releasePublish: () => void = () => {};
+    const publishGate = options.holdPublish
+      ? new Promise<void>((resolve) => {
+          releasePublish = resolve;
+        })
+      : null;
+    // session の close の保留。解放は session の参照を切り離してから close を await するため、
+    // 止めている間も解放は進行中のまま (state は遷移前のまま) になる
+    let notifySessionClosing: () => void = () => {};
+    const sessionClosing = new Promise<void>((resolve) => {
+      notifySessionClosing = resolve;
+    });
+    let releaseSessionClose: () => void = () => {};
+    const sessionCloseGate = options.holdSessionClose
+      ? new Promise<void>((resolve) => {
+          releaseSessionClose = resolve;
+        })
+      : null;
+    let sessionCloseCalls = 0;
+    const holdPublishTrack = options.holdPublishTrack ?? CATALOG_TRACK_NAME;
+    const session = {
+      publish: async (
+        _namespace: string[],
+        trackName: string,
+        _callbacks?: PublishCallbacks,
+      ): Promise<Publisher> => {
+        // 保留する publish だけテストが完了を決める
+        if (publishGate !== null && trackName === holdPublishTrack) {
+          notifyPublishing();
+          await publishGate;
+        }
+        if (trackName === CATALOG_TRACK_NAME) {
+          return catalog.publisher;
+        }
+        // 音声 / 映像の Publisher も最小の Publisher を返す (映像の設定を持つ harness で
+        // createPublishers を通すため)
+        return createRecordingSendPublisher().publisher;
+      },
+      close: async () => {
+        closed = true;
+        sessionCloseCalls++;
+        notifySessionClosing();
+        if (sessionCloseGate !== null) {
+          await sessionCloseGate;
+        }
+      },
+    } as unknown as Session;
+    opened.push({
+      notifyClose: () => settings.onSessionClose(),
+      publishing: () => publishing,
+      resolvePublish: () => releasePublish(),
+      sessionClosing: () => sessionClosing,
+      resolveSessionClose: () => releaseSessionClose(),
+      sessionCloseCalls: () => sessionCloseCalls,
+      isSessionClosed: () => closed,
+      catalogDoneCount: catalog.doneCount,
+    });
+    return Promise.resolve(session);
+  };
+  return { publisher, control, errors, opened };
+}
+
+/**
+ * 完了条件: connectToServer が作る onSessionClose の閉包は接続時点の世代番号を捕捉し、
+ * 解放のあとに叩いても state も onClose も動かさない。新しい session の閉包は再接続時の
+ * 現在値を捕捉する。
+ *
+ * 接続の境界 (openSession) だけを置き換えて start() を最後まで駆動し、実装が実際に作る
+ * 閉包を捕捉して叩く。閉包が捕捉値ではなく通知時の this.sessionGeneration を読む実装に
+ * 戻すと、stop() のあとに叩いた旧 session の通知がピア起点の close として扱われ、
+ * state が "closed" になって onClose が呼ばれるため、このテストは落ちる。
+ */
+test("start: 接続の世代番号は接続時に捕捉され 解放後の閉包は通知しない", async () => {
+  const states: MediaPublisherState[] = [];
+  let closeCount = 0;
+  const { publisher, opened } = createStartConnectHarness({
+    onStateChange: (state) => {
+      states.push(state);
+    },
+    onClose: () => {
+      closeCount++;
+    },
+  });
+
+  // 1 回目の start は接続が成功し "publishing" まで進む
+  const stream = {} as MediaStream;
+  await publisher.start(stream);
+  assert.equal(publisher.state, "publishing");
+  assert.equal(opened.length, 1);
+
+  // stop は解放して "stopped" にし、session を閉じる (世代番号が 1 つ進む)
+  await publisher.stop();
+  assert.equal(publisher.state, "stopped");
+  assert.isTrue(opened[0].isSessionClosed());
+
+  // 解放のあとに叩いた旧 session の閉包は世代不一致で捨てられること
+  opened[0].notifyClose();
+  await sleep(0);
+  assert.equal(publisher.state, "stopped");
+  assert.deepEqual(states, ["publishing", "stopped"]);
+  assert.equal(closeCount, 0);
+
+  // 再 start の接続は現在の世代番号を捕捉すること
+  await publisher.start(stream);
+  assert.equal(publisher.state, "publishing");
+  assert.equal(opened.length, 2);
+
+  // 新しい session を確立したあとに届いた旧 session の通知も捨てられること
+  opened[0].notifyClose();
+  await sleep(0);
+  assert.equal(publisher.state, "publishing");
+  assert.deepEqual(states, ["publishing", "stopped", "publishing"]);
+  assert.equal(closeCount, 0);
+
+  // 現世代の閉包 (新しい session のピア起点の close) は解放してから "closed" を通知すること
+  opened[1].notifyClose();
+  await sleep(0);
+  assert.equal(publisher.state, "closed");
+  assert.deepEqual(states, ["publishing", "stopped", "publishing", "closed"]);
+  assert.equal(closeCount, 1);
+  assert.isTrue(opened[1].isSessionClosed());
+});
+
+/**
+ * WebCodecs の映像エンコーダーの境界を置き換えて setupEncoders を駆動する
+ *
+ * node には VideoEncoder と MediaStreamTrackProcessor が無いため、この境界だけを置き換えて
+ * 映像エンコーダーの作成と configure まで到達させる (useWorker: false の直接実行にする。
+ * 実ブラウザの WebCodecs を駆動する経路は e2e で確認する)。作成 / configure / 破棄の回数を
+ * 数え、解放のあとに作られていないことと、解放で破棄されたことを固定できるようにする。
+ *
+ * @param hooks onConfigure を渡すと configure の呼び出しからテスト側の処理 (close() など) を
+ *   挟める (解放を configure の await の窓に重ねる)
+ * @returns 回数の取得と、置き換えを元に戻す関数 (テストの finally で必ず呼ぶ)
+ */
+function replaceVideoCodecBoundary(hooks: { onConfigure?: () => void } = {}): {
+  createdCount: () => number;
+  configureCount: () => number;
+  closeCount: () => number;
+  restore: () => void;
+} {
+  const target = globalThis as unknown as {
+    VideoEncoder: unknown;
+    MediaStreamTrackProcessor: unknown;
+  };
+  const originalVideoEncoder = target.VideoEncoder;
+  const originalTrackProcessor = target.MediaStreamTrackProcessor;
+  let createdCount = 0;
+  let configureCount = 0;
+  let closeCount = 0;
+  target.VideoEncoder = class {
+    readonly state = "configured";
+    constructor() {
+      createdCount++;
+    }
+    configure(): void {
+      configureCount++;
+      hooks.onConfigure?.();
+    }
+    encode(): void {}
+    close(): void {
+      closeCount++;
+    }
+  };
+  // setupEncoders のあとに続く VideoFrameSource の作成経路を通す (実 ReadableStream を返す)
+  target.MediaStreamTrackProcessor = class {
+    readonly readable = new ReadableStream<VideoFrame>();
+  };
+  return {
+    createdCount: () => createdCount,
+    configureCount: () => configureCount,
+    closeCount: () => closeCount,
+    restore: () => {
+      target.VideoEncoder = originalVideoEncoder;
+      target.MediaStreamTrackProcessor = originalTrackProcessor;
+    },
+  };
+}
+
+/**
+ * 映像の設定を持つ媒体ストリーム
+ *
+ * setupEncoders は映像トラックの設定を読むため、getSettings を持つ最小のトラックを返す。
+ */
+function createVideoMediaStream(): MediaStream {
+  return {
+    getAudioTracks: () => [],
+    getVideoTracks: () => [{ getSettings: () => ({ width: 640, height: 480 }) }],
+  } as unknown as MediaStream;
+}
+
+/**
+ * 完了条件: start の実行中 (createPublishers の await) に利用者の close() が先行した場合、
+ * state は "closed" のままで "publishing" に戻らない。
+ *
+ * 各段階の await の直後の検査 (assertStartNotDisposed) が無いと、解放のあとに
+ * createPublishers が戻って処理ループを起動し、"closed" のあとに "publishing" へ進んで
+ * しまう (終端が破れ、解放されないリソースも残る)。catalog の publish の完了をテストが
+ * 握り、解放が先に終端へ進んだ状態で start を再開させる。
+ */
+test("start: createPublishers の await 中に close したら closed のままで publishing に戻らない", async () => {
+  const states: MediaPublisherState[] = [];
+  let closeCount = 0;
+  const { publisher, errors, opened } = createStartConnectHarness(
+    {
+      onStateChange: (state) => {
+        states.push(state);
+      },
+      onClose: () => {
+        closeCount++;
+      },
+    },
+    { holdPublish: true },
+  );
+
+  const startResult = publisher.start({} as MediaStream).then(
+    () => null,
+    (error: unknown) => error,
+  );
+  // createPublishers が catalog の publish を await したところで止める
+  await opened[0].publishing();
+  assert.equal(publisher.state, "created");
+
+  // 解放が先行して終端へ進む
+  await publisher.close();
+  assert.equal(publisher.state, "closed");
+  assert.isTrue(opened[0].isSessionClosed());
+
+  // publish を解放して createPublishers を戻すと、検査が解放の先行を検知して中止する
+  opened[0].resolvePublish();
+  const startFailure = await startResult;
+
+  assert.instanceOf(startFailure, Error);
+  assert.isTrue((startFailure as Error).message.includes("start aborted"));
+  // "publishing" へ進まず、"closed" のままであること
+  assert.equal(publisher.state, "closed");
+  assert.deepEqual(states, ["closed"]);
+  assert.equal(closeCount, 1);
+  // 中止までに確保した catalog の Publisher が巻き戻しで破棄されること
+  assert.equal(opened[0].catalogDoneCount(), 1);
+  // 中止は通知を伴う失敗であるため onError は 1 回だけ
+  assert.equal(errors.length, 1);
+  assert.strictEqual(errors[0], startFailure);
+});
+
+/**
+ * 完了条件: 解放が進行中のまま createPublishers が戻った場合、解放のあとに続く段階へ進まず、
+ * エンコーダーを作らない ("これ以上リソースを作らない")。
+ *
+ * 解放は mediaStream を切り離すため、解放が完了していれば setupEncoders は素通りし、state
+ * だけでは検査の有無の差が出ない。解放の最初の段階 (フレームリーダーの cancel) を実
+ * ReadableStream の cancel で保留し、mediaStream がまだ切り離されていない状態で
+ * createPublishers を戻す。WebCodecs の境界を置き換えて、映像エンコーダーの作成と configure
+ * が呼ばれないことを数える。
+ */
+test("start: 解放が進行中のまま createPublishers が戻ったらエンコーダーを作らない", async () => {
+  const boundary = replaceVideoCodecBoundary();
+  let releaseCancel: () => void = () => {};
+  try {
+    const { publisher, control, opened } = createStartConnectHarness(
+      {},
+      {
+        holdPublish: true,
+        holdPublishTrack: "video",
+        publisherOptions: {
+          namespace: ["live"],
+          useWorker: false,
+          video: { trackName: "video", codec: "vp8", bitrate: 1_000_000 },
+        },
+      },
+    );
+    // 解放の最初の段階 (reader の cancel) を保留する。解放はここで止まり、mediaStream は
+    // まだ切り離されていない
+    const cancelGate = new Promise<void>((resolve) => {
+      releaseCancel = resolve;
+    });
+    control.audioFrameReader = new ReadableStream<AudioData>({
+      cancel: () => cancelGate,
+    }).getReader();
+
+    const startResult = publisher.start(createVideoMediaStream()).then(
+      () => null,
+      (error: unknown) => error,
+    );
+    // 映像の publish を await したところで止める
+    await opened[0].publishing();
+
+    // 解放を開始する (最初の段階で止まるため、解放は進行中のままになる)
+    const closing = publisher.close();
+    assert.equal(boundary.createdCount(), 0);
+
+    // 解放が進行中のまま createPublishers を戻す
+    opened[0].resolvePublish();
+    await sleep(0);
+
+    // 解放が進行中でも次の段階へ進まず、エンコーダーを作らないこと
+    assert.equal(boundary.createdCount(), 0);
+    assert.equal(boundary.configureCount(), 0);
+
+    releaseCancel();
+    await closing;
+    const startFailure = await startResult;
+
+    assert.instanceOf(startFailure, Error);
+    assert.isTrue((startFailure as Error).message.includes("start aborted"));
+    assert.equal(publisher.state, "closed");
+  } finally {
+    // 解放が保留のままだとテストが終われないため、必ず解除する
+    releaseCancel();
+    boundary.restore();
+  }
+});
+
+/**
+ * 完了条件: ピア起点の close の解放が start の実行中に終端へ進んだ場合も "closed" を優先し、
+ * start は失敗する。
+ *
+ * 解放は世代番号を進めるため、start が捕捉した値との比較で解放の先行が分かる
+ * (終端へ至る経路はすべて解放を経るため、state が "closed" であることもこの比較に含まれる)。
+ */
+test("start: createPublishers の await 中にピア起点の close が終端へ進んだら closed を優先する", async () => {
+  const states: MediaPublisherState[] = [];
+  let closeCount = 0;
+  const { publisher, control, errors, opened } = createStartConnectHarness(
+    {
+      onStateChange: (state) => {
+        states.push(state);
+      },
+      onClose: () => {
+        closeCount++;
+      },
+    },
+    { holdPublish: true },
+  );
+
+  const startResult = publisher.start({} as MediaStream).then(
+    () => null,
+    (error: unknown) => error,
+  );
+  await opened[0].publishing();
+
+  // 接続で受け取った session の close 通知 (ピア起点の close) を叩き、解放を終端まで進める
+  opened[0].notifyClose();
+  await sleep(0);
+  assert.equal(publisher.state, "closed");
+  assert.equal(closeCount, 1);
+  assert.isNull(control.session);
+
+  // 解放のあとに createPublishers が戻っても "publishing" へは進まない
+  opened[0].resolvePublish();
+  const startFailure = await startResult;
+
+  assert.instanceOf(startFailure, Error);
+  assert.isTrue((startFailure as Error).message.includes("start aborted"));
+  assert.equal(publisher.state, "closed");
+  assert.deepEqual(states, ["closed"]);
+  assert.equal(closeCount, 1);
+  assert.equal(errors.length, 1);
+  assert.strictEqual(errors[0], startFailure);
+});
+
+/**
+ * 完了条件: 解放の完了後に利用者が呼び直した start は、解放が終端 ("closed") へ進んだあと
+ * なら世代番号が一致していても失敗し、"publishing" に戻らない。
+ *
+ * 解放 (disposeAllResources) は世代番号を進める。解放が終わってから始まる start はその値を
+ * 捕捉するため、世代番号の比較だけでは終端を跨いだことを判定できない。state が "closed" で
+ * あることも中止の条件に入れないと、start は最後まで進んで "publishing" になり、解放済みの
+ * リソースの上で処理ループを起動する (onClose のあとに state が "closed" でなくなるため、
+ * close() の早期 return も通過する)。
+ *
+ * 駆動する順序は次のとおりである。
+ * 1. start #1 が createPublishers の catalog の publish で止まっている間にピア起点の close が
+ *    届き、解放 D1 が session の close で止まる (世代番号は解放の先頭で進む)
+ * 2. start #1 は段階の検査で中止し、失敗時の巻き戻し D2 が先に終わって失敗が確定する
+ *    (D1 が参照を切り離し済みの session を D2 は触らない)
+ * 3. 利用者は start #1 の失敗を待ってから直列に start #2 を呼ぶ。state はまだ "created" で
+ *    あるため state のガードを通過し、捕捉する世代番号は D1 が進めた現在値と一致する
+ * 4. D1 を終わらせると state は "closed" になり onClose が 1 回通知される
+ * 5. start #2 の検査は世代番号が一致するため、state の比較が無ければ通過して start が成功する
+ */
+test("start: 解放の完了後に呼び直した start は世代一致でも closed を跨いで publishing にしない", async () => {
+  const states: MediaPublisherState[] = [];
+  let closeCount = 0;
+  const { publisher, control, errors, opened } = createStartConnectHarness(
+    {
+      onStateChange: (state) => {
+        states.push(state);
+      },
+      onClose: () => {
+        closeCount++;
+      },
+    },
+    // catalog の publish と session の close の両方をテストが解放する (2 つの窓を作る)
+    { holdPublish: true, holdSessionClose: true },
+  );
+
+  await withUnhandledRejectionWatch(async (unhandled) => {
+    // 1. start #1 を catalog の publish の await で止める
+    const firstStart = publisher.start({} as MediaStream).then(
+      () => null,
+      (error: unknown) => error,
+    );
+    await opened[0].publishing();
+    assert.equal(publisher.state, "created");
+
+    // ピア起点の close の解放 D1 を始め、session の close で止める
+    opened[0].notifyClose();
+    await opened[0].sessionClosing();
+    // D1 は session の参照を切り離してから close を待つ (解放はまだ進行中である)
+    assert.isNull(control.session);
+    assert.equal(opened[0].sessionCloseCalls(), 1);
+    assert.equal(publisher.state, "created");
+    assert.equal(closeCount, 0);
+
+    // 2. start #1 を再開させると段階の検査が中止し、巻き戻し D2 が先に終わって失敗が確定する
+    opened[0].resolvePublish();
+    const firstFailure = await firstStart;
+    assert.instanceOf(firstFailure, Error);
+    assert.equal(
+      (firstFailure as Error).message,
+      "start aborted: resources were disposed during start",
+    );
+    // D2 は切り離し済みの session を触らない (close は D1 の 1 回だけ)
+    assert.equal(opened[0].sessionCloseCalls(), 1);
+    // 解放はまだ終端へ進んでおらず、state のガードは通過できる状態である
+    assert.equal(publisher.state, "created");
+    assert.equal(closeCount, 0);
+    assert.equal(errors.length, 1);
+    assert.strictEqual(errors[0], firstFailure);
+
+    // 3. 直列に start #2 を呼ぶ。解放 (D1) が進行中であるため、開始の入口で拒否される
+    // (解放が終端へ進む前に開始を許すと、開始した資源を解放する経路が残らない)
+    const secondFailure = await publisher.start({} as MediaStream).then(
+      () => null,
+      (error: unknown) => error,
+    );
+    assert.instanceOf(secondFailure, Error);
+    assert.equal((secondFailure as Error).message, "cannot start while closing");
+    assert.equal(publisher.state, "created");
+    assert.equal(opened[1], undefined);
+
+    // 4. D1 を終わらせると終端 ("closed") と onClose が 1 回だけ通知される
+    opened[0].resolveSessionClose();
+    await sleep(0);
+    assert.equal(publisher.state, "closed");
+    assert.equal(closeCount, 1);
+    assert.deepEqual(states, ["closed"]);
+
+    // 5. 解放が終わったあとに呼び直しても、終端 ("closed") を跨ぐため中止すること
+    const thirdStart = publisher.start({} as MediaStream).then(
+      () => null,
+      (error: unknown) => error,
+    );
+    const thirdFailure = await thirdStart;
+    assert.instanceOf(thirdFailure, Error);
+    assert.equal((thirdFailure as Error).message, `cannot start in state: closed`);
+    // "publishing" へ進んでいないこと (onClose のあとに state が動かない)
+    assert.equal(publisher.state, "closed");
+    assert.deepEqual(states, ["closed"]);
+    assert.equal(closeCount, 1);
+    // 入口の拒否は start の catch を通らないため onError は増えない (通知は start #1 の 1 回だけ)
+    assert.equal(errors.length, 1);
+
+    // 解放と中止が重なっても未処理の rejection を残さないこと
+    await waitForUnhandledRejectionDetection();
+    assert.equal(unhandled.length, 0);
+  });
+});
+
+/**
+ * 完了条件: setupEncoders の configure の await 中に利用者の close() が先行した場合も、
+ * state は "closed" のままで "publishing" に戻らない。
+ *
+ * WebCodecs の境界を置き換えて configure の await の窓で close() を先行させる。close() は
+ * 同期部分で世代番号を進めるため、解放のあとに setupEncoders が続いても最後の検査が中止する。
+ */
+test("start: setupEncoders の configure の await 中に close したら publishing にしない", async () => {
+  const states: MediaPublisherState[] = [];
+  let closeCount = 0;
+  const { publisher, opened } = createStartConnectHarness(
+    {
+      onStateChange: (state) => {
+        states.push(state);
+      },
+      onClose: () => {
+        closeCount++;
+      },
+    },
+    {
+      publisherOptions: {
+        namespace: ["live"],
+        useWorker: false,
+        video: { codec: "vp8", bitrate: 1_000_000 },
+      },
+    },
+  );
+
+  // configure の await の窓で利用者の close() を先行させる
+  let userClose: Promise<void> = Promise.resolve();
+  const boundary = replaceVideoCodecBoundary({
+    onConfigure: () => {
+      userClose = publisher.close();
+    },
+  });
+
+  const startResult = publisher.start(createVideoMediaStream()).then(
+    () => null,
+    (error: unknown) => error,
+  );
+
+  let startFailure: unknown = null;
+  try {
+    startFailure = await startResult;
+  } finally {
+    boundary.restore();
+  }
+  await userClose;
+
+  // configure まで到達し、解放が先行したため中止されること
+  assert.equal(boundary.configureCount(), 1);
+  assert.instanceOf(startFailure, Error);
+  assert.isTrue((startFailure as Error).message.includes("start aborted"));
+  // "publishing" へ進まず "closed" のままであること ("closed" のあとに遷移しない)
+  assert.equal(publisher.state, "closed");
+  assert.deepEqual(states, ["closed"]);
+  assert.equal(closeCount, 1);
+  // 解放でエンコーダーが閉じられ、session も閉じられていること
+  assert.equal(boundary.closeCount(), 1);
+  assert.isTrue(opened[0].isSessionClosed());
+});
+
+/**
+ * 完了条件: 接続が作る onSessionClose の閉包は handleSessionClose の reject を回収し、
+ * 未処理の rejection にせず onError へ流す。
+ *
+ * ピア起点の close の終端遷移で onStateChange が throw すると handleSessionClose は
+ * reject する。閉包の catch を削ると onError に届かないため、このテストは落ちる。
+ */
+test("start: ピア起点 close の終端通知が throw しても閉包が回収して onError へ届く", async () => {
+  const notificationFailure = new Error("onStateChange failure");
+  let closeCount = 0;
+  const { publisher, errors, opened } = createStartConnectHarness({
+    onStateChange: (state) => {
+      if (state === "closed") {
+        throw notificationFailure;
+      }
+    },
+    onClose: () => {
+      closeCount++;
+    },
+  });
+
+  await publisher.start({} as MediaStream);
+  assert.equal(publisher.state, "publishing");
+
+  // 実装が作った閉包 (onSessionClose) をそのまま叩く
+  opened[0].notifyClose();
+  await sleep(0);
+
+  // 遷移が失敗しても state は "closed" になり onClose は通知されること
+  assert.equal(publisher.state, "closed");
+  assert.equal(closeCount, 1);
+  // 閉包の回収経路が同じ失敗を onError へ流すこと
+  assert.equal(errors.length, 1);
+  assert.strictEqual(errors[0], notificationFailure);
+});
+
+/**
+ * 完了条件: catalog 送信が publisher 層の通知を伴って reject した場合、start() の catch は
+ * 通知し直さない (1 件の失敗で onError が 2 回呼ばれない)。
+ *
+ * 印付きの失敗を catch まで運ぶ経路も、接続の境界 (openSession) の差し替えで駆動できる
+ * (node に WebTransport は要らない)。送信の reject は createPublishers の await を通って
+ * start() の catch に届く。
+ */
+test("start: catalog 送信の印付き reject は catch を経ても通知しない", async () => {
+  const notified = createNotifiedError("catalog send rejected after notify");
+  let catalogDoneCount = 0;
+  const { publisher, errors, opened } = createStartConnectHarness(
+    {},
+    {
+      createCatalogPublisher: () => ({
+        publisher: {
+          state: "active",
+          sendObject: async () => {
+            throw notified;
+          },
+          done: async () => {
+            catalogDoneCount++;
+          },
+        } as unknown as Publisher,
+        doneCount: () => catalogDoneCount,
+      }),
+    },
+  );
+
+  let thrown: unknown = null;
+  try {
+    await publisher.start({} as MediaStream);
+  } catch (error) {
+    thrown = error;
+  }
+
+  assert.strictEqual(thrown, notified);
+  // 印付きの失敗は publisher 層が通知済みであるため、start() の catch では通知しない
+  assert.deepEqual(errors, []);
+  // state は変えず再 start でき、確保済みは巻き戻しで破棄されること
+  assert.equal(publisher.state, "created");
+  assert.equal(opened[0].catalogDoneCount(), 1);
+  assert.isTrue(opened[0].isSessionClosed());
+});
+
+/**
+ * 完了条件: 接続の await 中に close() が先行した場合、接続で受け取った session をその場で
+ * 閉じて this.session に代入しない。代入すると state は既に "closed" で close() も早期
+ * return するため、閉じる経路が残らない。あわせて "publishing" へ進まない。
+ *
+ * WebTransport は node に無いため、接続の境界 (openSession) だけを置き換えて完了を
+ * 制御する。接続要求を保留したまま close() を完了させ、そのあとで接続を解決させる。
+ */
+test("start: 接続の await 中に close したら受け取った session を閉じて採用しない", async () => {
+  const states: MediaPublisherState[] = [];
+  const errors: Error[] = [];
+  let closeCount = 0;
+  const publisher = new MediaPublisherImpl(
+    "moqt://example.com/live",
+    { namespace: ["live"] },
+    {
+      onStateChange: (state) => {
+        states.push(state);
+      },
+      onError: (error) => {
+        errors.push(error);
+      },
+      onClose: () => {
+        closeCount++;
+      },
+    },
+  );
+  const control = publisher as unknown as PublisherConnectControl & PublisherSessionCloseControl;
+  // 接続の完了をテストが決める (解決するまで connectToServer は await のまま)
+  let completeConnect: (session: Session) => void = () => {};
+  control.openSession = () =>
+    new Promise<Session>((resolve) => {
+      completeConnect = resolve;
+    });
+
+  const startResult = publisher.start({} as MediaStream).then(
+    () => null,
+    (error: unknown) => error,
+  );
+
+  // 接続待ちの間に close() を完了させる (解放は session 未代入のまま "closed" へ固定する)
+  await publisher.close();
+  assert.equal(publisher.state, "closed");
+
+  // 接続を解決する。受け取った session は採用せずその場で閉じる
+  const { session, isClosed } = createRecordingSession();
+  completeConnect(session);
+  const startFailure = await startResult;
+
+  assert.instanceOf(startFailure, Error);
+  assert.isTrue((startFailure as Error).message.includes("start aborted"));
+  assert.isTrue(isClosed());
+  assert.isNull(control.session);
+  // "publishing" へ進まず、Publisher の作成 (publish) も行わないこと。
+  // publish を持たない session を渡しているため、採用していれば throw する
+  assert.equal(publisher.state, "closed");
+  assert.deepEqual(states, ["closed"]);
+  // 中止は通知を伴わない失敗であるため onError は 1 回だけ
+  assert.equal(errors.length, 1);
+  assert.strictEqual(errors[0], startFailure);
+  assert.equal(closeCount, 1);
+});
+
+/**
  * Group ID 初期値の検証用の制御口
  */
 interface PublisherGroupControl {
@@ -1042,12 +2582,16 @@ interface PublisherGroupControl {
 
 /**
  * 送信 Group / Object ID と Priority の記録用の最小 Publisher
+ *
+ * `done` は解放 (disposeAllResources) からも呼ばれるため、呼び出し回数を記録して成功する。
  */
 function createRecordingSendPublisher(): {
   publisher: Publisher;
   sent: { groupId: number; objectId: number; priority?: number }[];
+  doneCount: () => number;
 } {
   const sent: { groupId: number; objectId: number; priority?: number }[] = [];
+  let done = 0;
   const publisher = {
     state: "active",
     sendObject: async (params: { groupId: number; objectId: number; priority?: number }) => {
@@ -1057,8 +2601,11 @@ function createRecordingSendPublisher(): {
         priority: params.priority,
       });
     },
+    done: async () => {
+      done++;
+    },
   } as unknown as Publisher;
-  return { publisher, sent };
+  return { publisher, sent, doneCount: () => done };
 }
 
 test("初期 Group ID 生成は前回値を下回らない", () => {
