@@ -15,6 +15,7 @@ moqt-js からの入口のみを示す。
 
 - 高レベル: [`createMediaPublisher`](HIGH_LEVEL_API.md) / [`createMediaSubscriber`](HIGH_LEVEL_API.md)
 - Catalog（主要エントリポイント）: `encodeCatalog` / `encodeCatalogDelta` / `decodeCatalogMessage` / `applyCatalogDelta` / `createCatalog` / `createCompleteCatalog` / `MSF_VERSION` / `CATALOG_TRACK_NAME`（`src/msf/`）
+- Authorization Info（§5.2.42）: `catalogAuthInfoForSetupToken` が、SETUP の Authorization Token が C4M のトークン (CAT) のときに track に載せる `authInfo` (`{"cat": "%c4m%"}`) を返す（`src/msf/authInfo.ts`）
 - Timeline（いずれも同期関数）: `encodeMediaTimeline` / `decodeMediaTimeline` / `encodeEventTimeline` / `decodeEventTimeline`（`src/msf/`）
 - 現行 Timeline encode/decode は無圧縮 JSON のみ。ペイロード圧縮のシグナリングは仕様の MSF_COMPRESSION（未実装）
 - draft-00 の Catalog wire 形式および Timeline 圧縮オプションとは非互換

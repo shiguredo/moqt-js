@@ -43,9 +43,11 @@ import {
   getC4mParameter,
   validateCatalog,
   validateCatalogTrack,
+  catalogAuthInfoForSetupToken,
 } from "./msf";
 import { effectiveTargetLatencyMs, resolveSharedTargetLatencyMs } from "./msf/tracks";
 import { MsfCompressionAlgorithm } from "./properties";
+import { AuthorizationTokenAliasType } from "./message/authorizationToken";
 
 // =============================================================================
 // テスト用ヘルパー
@@ -2248,4 +2250,96 @@ test("getC4mParameter: 該当なしは undefined", () => {
 test("getC4mParameter: 空文字列もそのまま返す（検証しない）", () => {
   const params: Array<readonly [string, string]> = [["c4m", ""]];
   assert.strictEqual(getC4mParameter(params), "");
+});
+
+// =============================================================================
+// catalog の track に載せる Authorization Info (draft-ietf-moq-msf-01 §5.2.42)
+// =============================================================================
+
+// CAT の Token Type (draft-ietf-moq-c4m-01 §7.1 Table 4)
+const CAT_TOKEN_TYPE = 1n;
+const TOKEN_VALUE = new Uint8Array([0xd2, 0x84, 0x43]);
+
+/**
+ * §5.2.42: authInfo は track の認可が必要なことを視聴側に示す。SETUP の Authorization Token が
+ * C4M のトークン (CAT) のときだけ、CAT のスキーム名 `cat` と、§11.1.1 の予約パラメータ `c4m` を
+ * 指す変数参照を返す。トークンそのものは返さない (catalog はすべての視聴者に届くため)
+ */
+test("catalogAuthInfoForSetupToken: CAT の USE_VALUE と REGISTER だけが authInfo を持つ", () => {
+  const useValue = catalogAuthInfoForSetupToken({
+    aliasType: AuthorizationTokenAliasType.USE_VALUE,
+    tokenType: CAT_TOKEN_TYPE,
+    tokenValue: TOKEN_VALUE,
+  });
+  assert.deepEqual(useValue, { cat: "%c4m%" });
+
+  const register = catalogAuthInfoForSetupToken({
+    aliasType: AuthorizationTokenAliasType.REGISTER,
+    tokenAlias: 0n,
+    tokenType: CAT_TOKEN_TYPE,
+    tokenValue: TOKEN_VALUE,
+  });
+  assert.deepEqual(register, { cat: "%c4m%" });
+
+  // CAT 以外の Token Type (0 は out-of-band) は authInfo を持たない
+  assert.isUndefined(
+    catalogAuthInfoForSetupToken({
+      aliasType: AuthorizationTokenAliasType.USE_VALUE,
+      tokenType: 0n,
+      tokenValue: TOKEN_VALUE,
+    }),
+  );
+  // DELETE / USE_ALIAS は Token Type を持たないため判定できない
+  assert.isUndefined(
+    catalogAuthInfoForSetupToken({ aliasType: AuthorizationTokenAliasType.DELETE, tokenAlias: 0n }),
+  );
+  assert.isUndefined(
+    catalogAuthInfoForSetupToken({
+      aliasType: AuthorizationTokenAliasType.USE_ALIAS,
+      tokenAlias: 0n,
+    }),
+  );
+  // トークンが無ければ authInfo を持たない
+  assert.isUndefined(catalogAuthInfoForSetupToken(undefined));
+});
+
+/**
+ * 配信が書いた authInfo が視聴側で読め、fragment の `c4m` で置換できることを確かめる。
+ *
+ * - §5.2.42: authInfo は Track Object の Object であり、decodeCatalogMessage が保持する
+ * - §5.4 / §5.2.43: 変数参照 `%c4m%` は、catalog を得た URI の fragment の `c4m` の値で
+ *   置換できる。§5.4.1 は変数の値に英数字 / `-` / `_` / `@` しか許さないため、`-` と `_` を
+ *   含むパディング無しの base64url の値でも置換できる
+ */
+test("catalogAuthInfoForSetupToken: 書いた authInfo が読め、fragment の c4m で置換できる", () => {
+  const authInfo = catalogAuthInfoForSetupToken({
+    aliasType: AuthorizationTokenAliasType.USE_VALUE,
+    tokenType: CAT_TOKEN_TYPE,
+    tokenValue: TOKEN_VALUE,
+  });
+  if (authInfo === undefined) {
+    throw new Error("expected authInfo for a CAT");
+  }
+  const catalog = createCatalog([
+    {
+      name: "video",
+      packaging: "loc",
+      isLive: true,
+      role: "video",
+      codec: "vp8",
+      bitrate: 1000,
+      authInfo,
+    },
+  ]);
+
+  const decoded = decodeCatalogMessage(encodeCatalog(catalog));
+  if (!("version" in decoded)) {
+    throw new Error("expected a full catalog, got a delta update");
+  }
+  assert.deepEqual(decoded.tracks[0].authInfo, { cat: "%c4m%" });
+
+  // パディング無しの base64url は - と _ を含みうる
+  const c4m = "0oRD-_ab";
+  const resolved = resolveCatalogVariables(decoded, { c4m });
+  assert.deepEqual(resolved.tracks[0].authInfo, { cat: c4m });
 });

@@ -62,6 +62,9 @@ export {
 // Variable Substitution (draft-ietf-moq-msf-01 §5.4)
 export { resolveCatalogVariables } from "./msf/variables";
 
+// catalog の track に載せる Authorization Info (draft-ietf-moq-msf-01 §5.2.42)
+export { catalogAuthInfoForSetupToken } from "./msf/authInfo";
+
 // MSF URI fragment 解析 (draft-ietf-moq-msf-01 §11.1)
 export {
   assertMsfConnectionSupported,

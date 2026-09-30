@@ -11,6 +11,12 @@
 
 ## develop
 
+- [ADD] C4M のトークン (CAT) で接続した配信が、catalog の track に `authInfo` を載せる
+  - draft-ietf-moq-msf-01 §5.2.42 / §11.4.1: 視聴側は catalog の `authInfo` を見て、track の認可にトークンが要るかを決める。載せないと、視聴側はトークンを付けずに SUBSCRIBE を送る
+  - `catalogAuthInfoForSetupToken` を追加する。SETUP の Authorization Token が CAT (Token Type 0x01) の USE_VALUE / REGISTER のときだけ `{"cat": "%c4m%"}` を返す。`%c4m%` は §11.1.1 の予約パラメータ `c4m` を指す変数参照 (§5.4 / §5.2.43) で、トークンそのものは載せない
+  - `createMediaPublisher` は `authorizationToken` が CAT のとき、音声と映像の track に載せる
+  - moqt-devtools の配信は、接続の設定のトークンが CAT のとき、音声、映像、event timeline の track に載せる
+  - @voluntas
 - [CHANGE] `C4M.moqtActionName` が ClientSetup / ServerSetup に `SETUP` を返すようにする
   - draft-ietf-moq-transport-21 で CLIENT_SETUP と SERVER_SETUP が 1 つの SETUP メッセージに統合されたため。Authorization Context (Table 2) と同じ名前になる
   - @voluntas

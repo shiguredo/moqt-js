@@ -71,6 +71,7 @@ import { PublisherImpl, isErrorNotifiedByPublisher, type Publisher } from "./pub
 import type { PublishCallbacks, Session } from "./session";
 import { ProtocolViolationError } from "./error";
 import { ObjectStatus } from "./message/types";
+import { AuthorizationTokenAliasType } from "./message/authorizationToken";
 import * as LOC from "./loc";
 import { WallClockMapper } from "./mediaClock";
 import {
@@ -3902,6 +3903,76 @@ test("publishCatalog: 指定しないときは catalog にキーを載せない"
   for (const track of trackObjects) {
     assert.isFalse("targetLatency" in track);
     assert.isFalse("renderGroup" in track);
+  }
+});
+
+/**
+ * draft-ietf-moq-msf-01 §5.2.42 / §11.4.1: 視聴側は catalog の track の authInfo を見て、
+ * SUBSCRIBE にトークンを付けるかを決める。C4M のトークン (CAT、Token Type 0x01) で接続した
+ * 配信は、音声と映像の両方の track に authInfo を載せ、視聴側に同じ方式のトークンを求める
+ */
+test("publishCatalog: SETUP のトークンが CAT なら音声と映像の track に authInfo を載せる", async () => {
+  const { control, sent } = createCatalogPublishContext({
+    namespace: ["live"],
+    audio: { codec: "aac", bitrate: 64000 },
+    video: { codec: "vp8", bitrate: 1000000 },
+    authorizationToken: {
+      aliasType: AuthorizationTokenAliasType.USE_VALUE,
+      tokenType: 1n,
+      tokenValue: new Uint8Array([0xd2, 0x84, 0x43]),
+    },
+  });
+
+  await control.publishCatalog();
+
+  const decoded = decodeCatalogMessage(sent[0].payload);
+  if (!("version" in decoded)) {
+    throw new Error("expected a full catalog, got a delta update");
+  }
+  assert.deepEqual(
+    decoded.tracks.map((track) => track.role),
+    ["audio", "video"],
+  );
+  for (const track of decoded.tracks) {
+    // トークンそのものではなく、fragment の c4m を指す変数参照を載せる
+    assert.deepEqual(track.authInfo, { cat: "%c4m%" });
+  }
+});
+
+/**
+ * CAT 以外のトークンや、トークンが無い配信は authInfo を載せない。authInfo があると、
+ * 視聴側はトークンを用意できないときに subscribe を失敗させる (§11.4.4)。
+ * 符号化は undefined の値を落とすため、キーの有無は payload の JSON で確かめる
+ */
+test("publishCatalog: SETUP のトークンが CAT でなければ authInfo を載せない", async () => {
+  const cases: MediaPublisherOptions[] = [
+    {
+      namespace: ["live"],
+      audio: { codec: "aac", bitrate: 64000 },
+      video: { codec: "vp8", bitrate: 1000000 },
+    },
+    {
+      namespace: ["live"],
+      audio: { codec: "aac", bitrate: 64000 },
+      video: { codec: "vp8", bitrate: 1000000 },
+      // Token Type 0 は out-of-band のトークン
+      authorizationToken: {
+        aliasType: AuthorizationTokenAliasType.USE_VALUE,
+        tokenType: 0n,
+        tokenValue: new TextEncoder().encode("token"),
+      },
+    },
+  ];
+  for (const options of cases) {
+    const { control, sent } = createCatalogPublishContext(options);
+
+    await control.publishCatalog();
+
+    const trackObjects = parseCatalogTrackObjects(sent[0].payload);
+    assert.equal(trackObjects.length, 2);
+    for (const track of trackObjects) {
+      assert.isFalse("authInfo" in track);
+    }
   }
 });
 

@@ -961,6 +961,7 @@ test("buildPublisherCatalogOptions: 未指定 (null) の項目はキーを落と
       audio: null,
       targetLatency: null,
       renderGroup: null,
+      authInfo: null,
     }),
     {},
   );
@@ -972,10 +973,12 @@ test("buildPublisherCatalogOptions: 未指定 (null) の項目はキーを落と
     audio: null,
     targetLatency: null,
     renderGroup: null,
+    authInfo: null,
   });
   assert.isFalse("audio" in videoOnly);
   assert.isFalse("targetLatency" in videoOnly);
   assert.isFalse("renderGroup" in videoOnly);
+  assert.isFalse("authInfo" in videoOnly);
   assert.deepEqual(videoOnly.video, makeVideoCatalogOptions());
 });
 
@@ -986,6 +989,7 @@ test("buildPublisherCatalogOptions: targetLatency と renderGroup の 0 は未�
     audio: makeAudioCatalogOptions(),
     targetLatency: 0,
     renderGroup: 0,
+    authInfo: null,
   });
 
   assert.equal(options.targetLatency, 0);
@@ -999,6 +1003,35 @@ test("buildPublisherCatalogOptions: targetLatency と renderGroup の 0 は未�
   }
 });
 
+// draft-ietf-moq-msf-01 §5.2.42: authInfo は track の認可が必要なことを視聴側に示す。
+// 指定した authInfo は音声、映像、event timeline のすべての track に載る。視聴側は
+// authInfo のある track の SUBSCRIBE にトークンを付けるため (§11.4.1 / §11.4.3)、
+// event timeline だけ載せ忘れると、その SUBSCRIBE だけがトークン無しになる
+test("buildPublisherCatalog: 指定した authInfo を音声、映像、event timeline の track に載せる", () => {
+  const catalog = buildPublisherCatalog({
+    video: makeVideoCatalogOptions(),
+    audio: makeAudioCatalogOptions(),
+    authInfo: { cat: "%c4m%" },
+  });
+
+  assert.deepEqual(
+    catalog.tracks.map((track) => track.role),
+    ["audio", "video", "eventtimeline"],
+  );
+  for (const track of catalog.tracks) {
+    assert.deepEqual(track.authInfo, { cat: "%c4m%" });
+  }
+
+  // 指定しないときはどの track にもキーを作らない
+  const withoutAuthInfo = buildPublisherCatalog({
+    video: makeVideoCatalogOptions(),
+    audio: makeAudioCatalogOptions(),
+  });
+  for (const track of withoutAuthInfo.tracks) {
+    assert.isFalse("authInfo" in track);
+  }
+});
+
 // トラックを 1 つも配信しない設定でも、この純関数はトラックを増やさない。
 // targetLatency / renderGroup は宣言であり、載せる相手の track を勝手に作らない
 // (トラックが無い catalog を buildPublisherCatalog が throw する既存の挙動は
@@ -1009,6 +1042,7 @@ test("buildPublisherCatalogOptions: トラックの無い設定ではトラッ�
     audio: null,
     targetLatency: 100,
     renderGroup: 1,
+    authInfo: null,
   });
 
   assert.isFalse("video" in options);
@@ -1042,6 +1076,11 @@ function resetCatalogSettings(): void {
   settings.audioChannels.value = 2;
   settings.targetLatency.value = null;
   settings.renderGroup.value = null;
+  settings.authorizationTokenType.value = "0";
+  settings.authorizationTokenValue.value = "";
+  settings.authorizationTokenBase64.value = "";
+  settings.authorizationTokenAliasType.value = "useValue";
+  settings.authorizationTokenAlias.value = "0";
 }
 
 // draft-ietf-moq-msf-01 §5.2.8: 宣言が無く isLive が true のときは購読側が表示の遅れを
@@ -1229,4 +1268,33 @@ test("resolveAudioPublishable: 非対応環境と無効設定では false を返
   assert.equal(resolveAudioPublishable("none"), false);
   assert.equal(resolveAudioPublishable("dummy"), false);
   assert.equal(resolveAudioPublishable("microphone"), false);
+});
+
+// 接続の設定から組み立てる SETUP のトークンが C4M のトークン (CAT、Token Type 1) のときだけ
+// authInfo を載せる (catalogAuthInfoForSetupToken)。トークンそのものではなく、fragment の
+// c4m を指す変数参照を載せる。CAT 以外の Token Type と、トークンが無い設定では載せない
+test("buildPublisherCatalogOptionsFromSettings: SETUP のトークンが CAT のときだけ authInfo を載せる", () => {
+  resetCatalogSettings();
+  try {
+    settings.authorizationTokenType.value = "1";
+    settings.authorizationTokenValue.value = "token";
+    const withCat = buildPublisherCatalogOptionsFromSettings({ sampleRate: 48000, channels: 2 });
+    assert.deepEqual(withCat.authInfo, { cat: "%c4m%" });
+
+    // Token Type 0 (out-of-band) は CAT ではない
+    settings.authorizationTokenType.value = "0";
+    const withOther = buildPublisherCatalogOptionsFromSettings({ sampleRate: 48000, channels: 2 });
+    assert.isFalse("authInfo" in withOther);
+
+    // Token Value が空なら SETUP にトークンを載せないため、authInfo も載せない
+    settings.authorizationTokenType.value = "1";
+    settings.authorizationTokenValue.value = "";
+    const withoutToken = buildPublisherCatalogOptionsFromSettings({
+      sampleRate: 48000,
+      channels: 2,
+    });
+    assert.isFalse("authInfo" in withoutToken);
+  } finally {
+    resetCatalogSettings();
+  }
 });
