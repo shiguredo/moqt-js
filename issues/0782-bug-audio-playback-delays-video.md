@@ -1,7 +1,7 @@
 # 音声を再生すると映像の表示が遅れるのを、音声と映像の遅延を別々に決めて修正する
 
 - Created: 2026-10-01
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-10-01
 - Branch: feature/fix-av-sync-video-delay
 - Polished: {YYYY-MM-DD}
 - Reporter: @voluntas
@@ -96,3 +96,27 @@ moqt-devtools で音声の再生を有効にすると映像の表示が遅れる
 - `vp check` / `tsc --noEmit` / `vp test run` が通ること
 
 ## 解決方法
+
+- `src/streamSynchronization.ts` (新規): 2 つのトラックの遅延を相対的に制御する。ずれは
+  「映像の遅延 - 音声の遅延 + 経路の相対遅延」で求め、30 ms 未満の間は動かさず、超えたときだけ
+  片側を 1 秒に 1 回 80 ms まで動かす (平均は 4 サンプル、動かしたら 0 に戻す)。定数と計算は
+  libwebrtc の `video/stream_synchronization.cc` の `ComputeDelays` と同じにした
+- `src/audioDelayManager.ts` (新規): 音声の jitter buffer の目標遅延を到着の遅れの分布から
+  求める。直近 2 秒の窓で最も早く届いた観測を基準にした相対遅延を、500 ms ごとの最大値だけ
+  20 ms バケット (100 個) のヒストグラムへ入れ、0.95 分位から `(1 + バケット) × 20 ms` を
+  目標にする。忘れ係数 0.983、最初の数回は重み 2 で速く収束させ、観測が無い間は 80 ms にする
+- `src/playbackTimeline.ts`: 表示の遅れをトラックごとに決めるようにした。音声は
+  `AudioDelayManager`、映像は従来の百分位である。同期は `SYNC_INTERVAL_MS` (1 秒) ごとに
+  両方のトラックへ新しい観測があるときだけ行う。`targetLatency` は `setTargetBufferingDelay`
+  に渡して両方のトラックの遅れの下限にした。2 つのトラックの基準の差が閾値を超えたときは
+  同期せず、大きい側の表示時刻を返さない (従来のフォールバックをそのまま残した)
+- テスト: `src/playbackTimeline.test.ts` / `.prop.ts` を新しい規則に合わせ、不感帯・片側だけの
+  変更・`targetLatency` の下限・一定の遅れでは目標が上がらないこと (到着の遅れの分布から
+  決まること) を固定した。`src/playoutBuffer.test.ts` / `.prop.ts` と
+  `src/createMediaSubscriber.test.ts` も新しい API に合わせた
+- 実測 (配備 relay、購読を 2 つ繋いで片方だけ音声を再生し、同じ経路・同じ時間帯で比べた):
+  経路が良いときは、音声を再生したときに増える映像の表示の遅延が 49.8 ms から 0.2 ms に
+  なった。経路が悪いときは音声の遅延が到着の揺らぎに応じて上がり (約 120 ms)、映像はその
+  30 ms 以内に収まる。これは表示時刻を揃えるために必要な遅れである (音を捨てれば映像を
+  早くできるが、毎秒 8 個の音が欠ける)
+- `vp check` と全 3525 テストが通った
