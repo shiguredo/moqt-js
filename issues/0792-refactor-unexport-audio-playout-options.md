@@ -3,7 +3,7 @@
 - Created: 2026-10-01
 - Completed: {YYYY-MM-DD}
 - Branch: feature/refactor-unexport-audio-playout-options
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-10-01
 
 ## 目的
 
@@ -23,7 +23,7 @@
 
 ## 完了条件
 
-- `rg -w AudioPlayoutOptions src devtools tests` の一致が定義 1 件だけになること
+- `rg -w AudioPlayoutOptions src devtools tests` の一致が、`src/audioPlayout.ts` のインターフェース定義と `AudioPlayoutScheduler` のコンストラクタ引数の 2 件だけになること (外部からの参照が無いこと)
 - `CHANGES.md` の `### misc` に [CHANGE] エントリがあること
 - `vp check` / `tsc --noEmit` / `vp test run` が通ること
 
