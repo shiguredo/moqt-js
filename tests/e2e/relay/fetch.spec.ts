@@ -17,6 +17,10 @@ import {
 // FIN と End of Range の作り方、payload の境界の扱いはそこで再現できない。受信側の
 // 終端判定を厳格化する変更では、実装差が誤検出と見逃しに直結するため、実ワイヤの門が要る。
 // 映像トラックは Publisher が配信中のものを対象にする (過去のデータが確実に存在する)。
+//
+// LOCATION FILTER を省略した FETCH (全オブジェクトの要求) も仕様上は有効だが
+// (draft-ietf-moq-transport-21 Section 9.20.10)、検証に使うリレーは FETCH_OK を返さない。
+// 受信経路の検証には使えないため、フィルタを明示した 2 本で範囲の指定方法を変えて覆う。
 
 /** 映像トラックの名前。createMediaPublisher の既定値 */
 const VIDEO_TRACK_NAME = "video";
@@ -66,7 +70,7 @@ async function startPublisherAndWaitForFrames(
   return { publisherId, currentGroupId: status.currentGroupId };
 }
 
-test("実リレーに対して Location Filter 無しで FETCH し、全オブジェクトの end が通知される", async ({
+test("実リレーに対して相対指定の Location Filter 付きで FETCH し、直近の Group を取得できる", async ({
   browser,
 }) => {
   test.setTimeout(RELAY_TEST_TIMEOUT_MS);
@@ -89,9 +93,11 @@ test("実リレーに対して Location Filter 無しで FETCH し、全オブ�
       url: moqtUri,
       namespace,
       trackName: VIDEO_TRACK_NAME,
-      // フィルタ無しの範囲は {0, 0} から始まるため、リレーは存在しない Group の fill を
-      // 待とうとする。0 を指定して「即座に利用可能な Object だけ」を要求する
-      // (draft-ietf-moq-transport-21 Section 9.20.6)
+      // 1 フィールドの LOCATION FILTER は相対指定であり、開始位置は
+      // Largest Object の Group + 1 - 2 になる (draft-ietf-moq-transport-21 Section 9.20.10)。
+      // 開始位置より前の Object を fill で待たせないよう、即座に利用可能な Object だけを
+      // 要求する (Section 9.20.6)
+      filter: { startGroup: 2 },
       fillTimeout: 0,
     });
     const activeFetchId = fetchId;
@@ -115,6 +121,7 @@ test("実リレーに対して Location Filter 無しで FETCH し、全オブ�
     expect(fetchStatus.errors).toEqual([]);
     expect(fetchStatus.objectCount).toBeGreaterThan(0);
     expect(fetchStatus.bytesReceived).toBeGreaterThan(0);
+    expect(fetchStatus.groupIds.length).toBeGreaterThan(0);
 
     // 取得できた Object 数は、その時点までに publish されたフレーム数を超えない
     // (超えていればリレーが publish されていない Object を返している)
@@ -136,7 +143,7 @@ test("実リレーに対して Location Filter 無しで FETCH し、全オブ�
   }
 });
 
-test("実リレーに対して Location Filter 付きで FETCH し、指定した Group 以降だけを取得できる", async ({
+test("実リレーに対して絶対開始の Location Filter 付きで FETCH し、指定した Group 以降だけを取得できる", async ({
   browser,
 }) => {
   test.setTimeout(RELAY_TEST_TIMEOUT_MS);

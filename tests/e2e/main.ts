@@ -19,6 +19,7 @@ import {
   createMediaSubscriber,
   type Fetcher,
   type FetchOptions,
+  type LocationFilter,
   type MediaPublisher,
   type MediaSubscriber,
   type Session,
@@ -101,17 +102,34 @@ export interface SubscriberStatus {
 }
 
 /**
- * FETCH で取得する範囲の指定 (絶対開始)
+ * FETCH の取得範囲 (相対指定)
+ *
+ * draft-ietf-moq-transport-21 Section 9.20.10:
+ * `{ startGroup }` の 1 フィールドは相対指定であり、
+ * Start Group = Largest Object の Group + 1 - startGroup になる。
+ */
+export interface FetchRelativeFilterOptions {
+  startGroup: number;
+}
+
+/**
+ * FETCH の取得範囲 (絶対開始)
  *
  * draft-ietf-moq-transport-21 Section 9.20.10:
  * `{ startGroup, startObject }` の 2 フィールドは絶対開始として解釈される。
- * bigint は page.evaluate の引数として運べないため number で受け取り、テストページ側で
- * bigint へ変換する。
  */
-export interface FetchFilterOptions {
+export interface FetchAbsoluteFilterOptions {
   startGroup: number;
   startObject: number;
 }
+
+/**
+ * FETCH の取得範囲
+ *
+ * bigint は page.evaluate の引数として運べないため number で受け取り、テストページ側で
+ * bigint へ変換する。指定しない場合は {0, 0} から Largest Object までを要求する。
+ */
+export type FetchFilterOptions = FetchRelativeFilterOptions | FetchAbsoluteFilterOptions;
 
 /** FETCH を開始する操作の入力 */
 export interface StartFetchOptions {
@@ -506,6 +524,22 @@ async function stopSubscriber(id: HandleId): Promise<SubscriberStatus> {
 }
 
 /**
+ * テストページが受け取った範囲の指定を moqt-js の Location Filter へ変換する
+ *
+ * draft-ietf-moq-transport-21 Section 9.20.10: フィールド数で意味が変わるため、
+ * `startObject` の有無で 1 フィールド (相対指定) と 2 フィールド (絶対開始) を切り替える。
+ */
+function toLocationFilter(options: FetchFilterOptions): LocationFilter {
+  if ("startObject" in options) {
+    return {
+      startGroup: BigInt(options.startGroup),
+      startObject: BigInt(options.startObject),
+    };
+  }
+  return { startGroup: BigInt(options.startGroup) };
+}
+
+/**
  * 低レベル API の FETCH を開始する
  *
  * draft-ietf-moq-transport-21 Section 9.11 (FETCH) — Section 9.12 (FETCH_OK)
@@ -524,14 +558,7 @@ async function startFetch(options: StartFetchOptions): Promise<HandleId> {
   const filterOptions = options.filter;
   // フィルタ無しは「{0, 0} から Largest Object まで」を意味するため、filter は載せない
   const fetchOptions: FetchOptions = {
-    ...(filterOptions === undefined
-      ? {}
-      : {
-          filter: {
-            startGroup: BigInt(filterOptions.startGroup),
-            startObject: BigInt(filterOptions.startObject),
-          },
-        }),
+    ...(filterOptions === undefined ? {} : { filter: toLocationFilter(filterOptions) }),
     ...(options.fillTimeout === undefined ? {} : { fillTimeout: BigInt(options.fillTimeout) }),
   };
 

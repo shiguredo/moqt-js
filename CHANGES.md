@@ -2310,7 +2310,7 @@
   - テストの内容は変えず、既定のタイムアウトを 30 秒にし、120 秒の到着列のテストは 60 秒にする
   - @voluntas
 - [ADD] 実リレーへ接続する E2E テストを追加する
-  - `secrets.TEST_MOQT_URI` が指す MOQT リレーへ実ブラウザ (Chromium) から接続し、SETUP の交換と正常な切断、Canvas のダミー映像の publish / subscribe、FETCH (Location Filter 無し / 絶対開始の指定あり) を検証する
+  - `secrets.TEST_MOQT_URI` が指す MOQT リレーへ実ブラウザ (Chromium) から接続し、SETUP の交換と正常な切断、Canvas のダミー映像の publish / subscribe、FETCH (相対指定と絶対開始の Location Filter) を検証する
   - 接続先は環境変数 `TEST_MOQT_URI` で渡す。未設定の環境 (fork からの PR、secret を持たないローカル) ではテストを skip として記録し、暗黙の成功扱いにしない
   - `.github/workflows/e2e-test.yml` を追加し、`secrets.TEST_MOQT_URI` を環境変数として渡す。secret が未設定の場合はテストを実行せずジョブを成功させる。公開ログに接続先を残さないよう、接続先の host / authority と fragment をマスクする
   - `playwright.config.ts` に `relay` project と実リレー接続用テストページの webServer (port 5180) を追加し、`.env` があれば読み込むようにする。雛形として `.env.example` を追加する
