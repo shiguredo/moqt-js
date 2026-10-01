@@ -30,8 +30,8 @@ import { AudioDecoderWrapper } from "./codec/AudioDecoder";
 import { VideoDecoderWrapper } from "./codec/VideoDecoder";
 import { VideoDecodeOrder, priorObjectIdGapOf } from "./videoDecodeOrder";
 import { GroupSwitchGate } from "./groupSwitchGate";
-import { AudioClockBridge, AudioPlayoutScheduler } from "./audioPlayout";
-import { compressSamples, type AudioSamples } from "./audioTimeStretch";
+import { AudioClockBridge, AudioPlayoutScheduler, concealmentEndGain } from "./audioPlayout";
+import { compressSamples, concealSamples, type AudioSamples } from "./audioTimeStretch";
 import { JITTER_BUFFER_MAX_QUEUED_FRAMES, PlayoutBuffer } from "./playoutBuffer";
 import { AUDIO_PLAYOUT_DELAY_FLOOR_MS, PlaybackTimeline } from "./playbackTimeline";
 import { DEFAULT_AUDIO_SAMPLE_RATE, resolveAudioChannelCount } from "./codec/config";
@@ -387,6 +387,9 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   private audioDestination: MediaStreamAudioDestinationNode | null = null;
   // 復号した音声を鳴らす時刻を決める。AudioContext を作るたびに基準を作り直す
   private readonly audioPlayout = new AudioPlayoutScheduler();
+  // 直前に鳴らした音のサンプルとサンプルレート。欠落した区間の補間を作るために保持する
+  private previousAudioChannels: AudioSamples[] | null = null;
+  private previousAudioSampleRate = 0;
   // AudioContext の時計と performance.now() の対応。予約のたびに取り直す
   private readonly audioClockBridge = new AudioClockBridge();
   // 音声と映像で共有する表示時刻の時間軸。同じ targetLatency と同じ遅れを使う
@@ -978,6 +981,9 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     // 共有の時間軸と、AudioContext ごとの時計の対応も作り直す (AudioClockBridge.reset の JSDoc を参照)
     this.playbackTimeline.reset();
     this.audioClockBridge.reset();
+    // 直前の音の保持も消す (AudioContext を閉じた後に補間を作らない)
+    this.previousAudioChannels = null;
+    this.previousAudioSampleRate = 0;
     this.audioTimestampKinds.clear();
     this.audioWallClockSeen = false;
     this.videoWallClockSeen = false;
@@ -1469,6 +1475,8 @@ export class MediaSubscriberImpl implements MediaSubscriber {
         sampleRate,
       });
       this.audioPlayout.reset();
+      this.previousAudioChannels = null;
+      this.previousAudioSampleRate = 0;
       // AudioContext を作り直したため、再生の基準もすべて作り直す (時計の対応は AudioClockBridge.reset の JSDoc を参照)
       this.playbackTimeline.reset();
       this.audioClockBridge.reset();
@@ -2170,6 +2178,40 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       // 実際に詰められた長さを返す (詰められなかった分は遅れとして残る)
       this.audioPlayout.confirmStretch(-stretched.lengthChangeSamples / sampleRate);
 
+      // 欠落した区間を、直前に鳴らした音の末尾を伸ばして埋める (src/audioTimeStretch.ts)。
+      // 実際に補間した長さだけを統計へ返す
+      let concealedSeconds = 0;
+      if (decision.gapSeconds > 0 && this.previousAudioChannels !== null) {
+        // 長い補間ほど末尾の振幅を下げる (繰り返しの音を目立たなくする)
+        const endGain = concealmentEndGain(decision.gapSeconds);
+        const concealed = concealSamples(
+          this.previousAudioChannels,
+          this.previousAudioSampleRate,
+          decision.gapSeconds,
+          endGain,
+        );
+        const concealedFrames = concealed.channels[0]?.length ?? 0;
+        if (concealedFrames > 0) {
+          const concealedBuffer = this.audioContext.createBuffer(
+            concealed.channels.length,
+            concealedFrames,
+            this.previousAudioSampleRate,
+          );
+          for (let channel = 0; channel < concealed.channels.length; channel++) {
+            concealedBuffer.copyToChannel(
+              concealed.channels[channel] ?? new Float32Array(concealedFrames),
+              channel,
+            );
+          }
+          const concealedSource = this.audioContext.createBufferSource();
+          concealedSource.buffer = concealedBuffer;
+          concealedSource.connect(this.audioDestination);
+          concealedSource.start(decision.gapStartSeconds);
+          concealedSeconds = concealed.generatedSamples / this.previousAudioSampleRate;
+        }
+      }
+      this.audioPlayout.confirmConcealment(concealedSeconds);
+
       const frames = stretched.channels[0]?.length ?? numberOfFrames;
       const audioBuffer = this.audioContext.createBuffer(numberOfChannels, frames, sampleRate);
 
@@ -2184,6 +2226,10 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       source.buffer = audioBuffer;
       source.connect(this.audioDestination);
       source.start(decision.startAt);
+
+      // 次の音の補間のために、実際に鳴らしたサンプルを保持する
+      this.previousAudioChannels = stretched.channels;
+      this.previousAudioSampleRate = sampleRate;
 
       // 実際に鳴らす時刻を実績として記録する (同期ずれの推定に使う)
       if (isWallClock) {

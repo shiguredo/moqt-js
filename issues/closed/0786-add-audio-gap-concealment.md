@@ -1,7 +1,7 @@
 # 音声の欠落で空いた隙間を直前の音の時間伸長で補間する
 
 - Created: 2026-10-01
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-10-01
 - Branch: feature/add-audio-gap-concealment
 - Polished: 2026-10-01
 
@@ -44,4 +44,8 @@
 
 ## 解決方法
 
-{未着手}
+- `src/audioTimeStretch.ts` に `concealSamples` を追加した。末尾の 2 周期分の正規化相関から末尾で繰り返している周期を探し (`findTailLag`)、末尾の周期を必要な長さまで繰り返して補間する。相関が `TIME_STRETCH_CORRELATION_THRESHOLD` 未満の音と、継ぎ目の段差が末尾の周期内の最大段差の `TIME_STRETCH_MAX_SEAM_STEP_RATIO` (2) 倍を超える音では補間しない。無音は補間し、生成した音の末尾は `endGain` まで徐々に振幅を下げる
+- `src/audioPlayout.ts` は、前の音の終わりと今回の開始の間の隙間を `gapStartSeconds` / `gapSeconds` として返す。5 ms 以下と、開始が今 + 余裕より前の隙間は返さず、上限 100 ms で切る。`confirmConcealment` が実際に補間した長さだけを数え、`concealments` / `concealed` で読める。`lastEnd` は変えない。長い補間ほど末尾の振幅を下げる規則は `concealmentEndGain` に集約した
+- `src/createMediaSubscriber.ts` は直前に鳴らした音を保持し、隙間があれば別の `AudioBufferSourceNode` として隙間の開始時刻に予約して補間した長さを返す。停止と AudioContext の作り直しで保持を消す。`devtools/src/hooks/useSubscriber.ts` も同じ配線にした
+- テスト: `src/audioTimeStretch.test.ts` に周期的な音・無音・位相反転・ランプ・周期変化・16 kHz・境界を、`src/audioPlayout.test.ts` に隙間の検出・下限と上限の境界・今 + 余裕の境界・捨てた後の隙間・統計のクランプとリセット・減衰を、`src/audioPlayout.prop.ts` に隙間の不変条件を、`src/createMediaSubscriber.test.ts` に補間の予約を追加した
+- `vp check` / `tsc --noEmit` / 全 3550 テストが通った

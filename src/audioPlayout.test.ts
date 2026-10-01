@@ -17,11 +17,15 @@ import {
   AUDIO_CLOCK_DEADBAND_MS,
   AUDIO_CLOCK_MAX_CHANGE_MS,
   AUDIO_PLAYOUT_BACKLOG_SECONDS,
+  AUDIO_PLAYOUT_CONCEAL_END_GAIN,
   AUDIO_PLAYOUT_DELAY_SECONDS,
+  AUDIO_PLAYOUT_MAX_CONCEAL_SECONDS,
   AUDIO_PLAYOUT_MAX_DELAY_SECONDS,
+  AUDIO_PLAYOUT_MIN_CONCEAL_SECONDS,
   AUDIO_PLAYOUT_MIN_LEAD_SECONDS,
   AudioClockBridge,
   AudioPlayoutScheduler,
+  concealmentEndGain,
   type AudioPlayoutDecision,
   type AudioPlayoutTarget,
 } from "./audioPlayout";
@@ -35,10 +39,31 @@ const EPSILON = 1e-9;
 
 /** 鳴らすと決めた時刻を取り出す (捨てると決めたときは失敗にする) */
 function startAtOf(decision: AudioPlayoutDecision): number {
+  return playDecisionOf(decision).startAt;
+}
+
+/** 鳴らすと決めた決定を取り出す (捨てると決めたときは失敗にする) */
+function playDecisionOf(
+  decision: AudioPlayoutDecision,
+): Extract<AudioPlayoutDecision, { kind: "play" }> {
   if (decision.kind !== "play") {
     throw new Error(`expected play, got ${decision.kind}`);
   }
-  return decision.startAt;
+  return decision;
+}
+
+/**
+ * 最初の音 (目標 10 秒) を鳴らし、詰めた分を確定する
+ *
+ * 隙間を測るテストの下ごしらえ。呼び出し側は実際の再生と同じ順で `confirmStretch` を
+ * 呼ぶため、次に並べる音の `lastEnd` が確定する
+ */
+function playFirst(
+  scheduler: AudioPlayoutScheduler,
+): Extract<AudioPlayoutDecision, { kind: "play" }> {
+  const first = playDecisionOf(scheduler.schedule(10, 0, FRAME_SECONDS, enforcedTarget(10)));
+  scheduler.confirmStretch(first.compressSeconds);
+  return first;
 }
 
 /** 換算した値を取り出す (対応が無くて null のときは失敗にする) */
@@ -91,13 +116,15 @@ const arrivalTargets: {
 ];
 
 // 既定の値: 再生の遅れ 80 ms、合計の上限 300 ms、並べすぎの余裕 220 ms (300 - 80)、
-// 鳴らす時刻の下限 10 ms (描画の 1 単位 128 フレームより大きい)、時計の不感帯 30 ms、
-// 時計の変更の上限 80 ms
-test("既定の値: 再生の遅れ、上限、余裕、時計の不感帯と変更の上限", () => {
+// 鳴らす時刻の下限 10 ms (描画の 1 単位 128 フレームより大きい)、補間の下限 5 ms と
+// 上限 100 ms、時計の不感帯 30 ms、時計の変更の上限 80 ms
+test("既定の値: 再生の遅れ、上限、余裕、補間の下限と上限、時計の不感帯と変更の上限", () => {
   assert.equal(AUDIO_PLAYOUT_DELAY_SECONDS, 0.08);
   assert.equal(AUDIO_PLAYOUT_MAX_DELAY_SECONDS, 0.3);
   assert.equal(AUDIO_PLAYOUT_MIN_LEAD_SECONDS, 0.01);
   assert.closeTo(AUDIO_PLAYOUT_BACKLOG_SECONDS, 0.22, EPSILON);
+  assert.equal(AUDIO_PLAYOUT_MIN_CONCEAL_SECONDS, 0.005);
+  assert.equal(AUDIO_PLAYOUT_MAX_CONCEAL_SECONDS, 0.1);
   assert.equal(AUDIO_CLOCK_DEADBAND_MS, 30);
   assert.equal(AUDIO_CLOCK_MAX_CHANGE_MS, 80);
 });
@@ -370,17 +397,231 @@ test("schedule: 目標を使わないときは timestamp の間隔どおりに�
   }
 });
 
-// 目標を使わないとき: 音が抜けたときは、その分の無音を残して後の音の時刻を保つ
-test("schedule: 目標を使わないときは音が抜けた分の無音を残す", () => {
+// 目標を使わないとき: 音が抜けたときは、その分の隙間を補間の対象として返し、後の音の
+// 時刻は timestamp の間隔どおりに保つ
+test("schedule: 目標を使わないときは音が抜けた分の隙間を返す", () => {
   for (const { label, make } of arrivalTargets) {
     const scheduler = new AudioPlayoutScheduler();
-    const first = startAtOf(scheduler.schedule(10, 0, FRAME_SECONDS, make(10)));
+    const first = playDecisionOf(scheduler.schedule(10, 0, FRAME_SECONDS, make(10)));
     // 20 ms の音が 1 つ抜けて、40 ms 後の音が届く
-    const third = startAtOf(
+    const third = playDecisionOf(
       scheduler.schedule(10.04, 2 * FRAME_MICROSECONDS, FRAME_SECONDS, make(10.04)),
     );
-    assert.closeTo(third - first, 2 * FRAME_SECONDS, EPSILON, label);
+    assert.closeTo(third.startAt - first.startAt, 2 * FRAME_SECONDS, EPSILON, label);
+    assert.closeTo(third.gapStartSeconds, first.startAt + FRAME_SECONDS, EPSILON, label);
+    assert.closeTo(third.gapSeconds, FRAME_SECONDS, EPSILON, label);
+    scheduler.confirmConcealment(third.gapSeconds);
+    assert.equal(scheduler.concealments, 1, label);
+    assert.closeTo(scheduler.concealed, FRAME_SECONDS, EPSILON, label);
   }
+});
+
+// 目標を守るとき: 前の音の終わりと次の音の開始の間に空いた分を補間の対象として返す
+test("schedule: 目標を守るときは空いた隙間を補間の対象として返す", () => {
+  const scheduler = new AudioPlayoutScheduler();
+  const first = playFirst(scheduler);
+  assert.equal(first.gapSeconds, 0, "最初の音には隙間が無い");
+  // 40 ms 後の timestamp の音が、前の音の終わりより 40 ms 先の目標で届く
+  const second = playDecisionOf(
+    scheduler.schedule(10, 2 * FRAME_MICROSECONDS, FRAME_SECONDS, enforcedTarget(10.06)),
+  );
+  assert.closeTo(
+    second.gapStartSeconds,
+    first.startAt + FRAME_SECONDS - first.compressSeconds,
+    EPSILON,
+  );
+  assert.closeTo(second.gapSeconds, 2 * FRAME_SECONDS, EPSILON);
+  scheduler.confirmConcealment(second.gapSeconds);
+  assert.equal(scheduler.concealments, 1);
+  assert.closeTo(scheduler.concealed, 2 * FRAME_SECONDS, EPSILON);
+});
+
+// 補間する長さは上限 (100 ms) で切る。超えた分は無音のまま残す
+test("schedule: 補間する隙間は上限で切る", () => {
+  const scheduler = new AudioPlayoutScheduler();
+  const first = playFirst(scheduler);
+  const second = playDecisionOf(
+    scheduler.schedule(10, FRAME_MICROSECONDS, FRAME_SECONDS, enforcedTarget(first.startAt + 0.2)),
+  );
+  assert.closeTo(
+    second.gapStartSeconds,
+    first.startAt + FRAME_SECONDS - first.compressSeconds,
+    EPSILON,
+  );
+  assert.equal(second.gapSeconds, AUDIO_PLAYOUT_MAX_CONCEAL_SECONDS);
+});
+
+// 5 ms 以下の隙間は補間しない (継ぎ目が耳につく)。隙間の情報も返さない
+test("schedule: 5 ms 以下の隙間は補間しない", () => {
+  const scheduler = new AudioPlayoutScheduler();
+  const first = playFirst(scheduler);
+  const second = playDecisionOf(
+    scheduler.schedule(
+      10,
+      FRAME_MICROSECONDS,
+      FRAME_SECONDS,
+      enforcedTarget(first.startAt + FRAME_SECONDS - first.compressSeconds + 0.004),
+    ),
+  );
+  assert.equal(second.gapSeconds, 0);
+  assert.equal(second.gapStartSeconds, 0);
+  assert.equal(scheduler.concealments, 0);
+});
+
+// 隙間がちょうど下限 (5 ms) なら補間しない (境界)。前の音の終わりを 0 にするため
+// duration 0 の音を使い、計算誤差の無い引き算で下限ちょうどを作る
+test("schedule: 隙間がちょうど下限なら補間しない", () => {
+  const scheduler = new AudioPlayoutScheduler({ minLeadSeconds: 0 });
+  assert.equal(scheduler.schedule(0, 0, 0, enforcedTarget(0)).kind, "play");
+  const second = playDecisionOf(
+    scheduler.schedule(
+      0,
+      FRAME_MICROSECONDS,
+      FRAME_SECONDS,
+      enforcedTarget(AUDIO_PLAYOUT_MIN_CONCEAL_SECONDS),
+    ),
+  );
+  assert.equal(second.gapSeconds, 0);
+  assert.equal(second.gapStartSeconds, 0);
+});
+
+// 下限のすぐ上 (6 ms) の隙間は補間する
+test("schedule: 下限のすぐ上の隙間は補間する", () => {
+  const scheduler = new AudioPlayoutScheduler();
+  const first = playFirst(scheduler);
+  const previousEnd = first.startAt + FRAME_SECONDS - first.compressSeconds;
+  const second = playDecisionOf(
+    scheduler.schedule(10, FRAME_MICROSECONDS, FRAME_SECONDS, enforcedTarget(previousEnd + 0.006)),
+  );
+  assert.closeTo(second.gapSeconds, 0.006, EPSILON);
+  assert.closeTo(second.gapStartSeconds, previousEnd, EPSILON);
+});
+
+// 隙間の開始が今 + 余裕より前なら予約できないため補間しない
+test("schedule: 隙間の開始が今 + 余裕より前なら補間しない", () => {
+  const scheduler = new AudioPlayoutScheduler();
+  playFirst(scheduler);
+  // 前の音の終わり (10.02) が今 + 余裕 (10.015 + 0.01 = 10.025) より前になる
+  const second = playDecisionOf(
+    scheduler.schedule(10.015, FRAME_MICROSECONDS, FRAME_SECONDS, enforcedTarget(10.05)),
+  );
+  assert.equal(second.gapSeconds, 0);
+  assert.equal(second.gapStartSeconds, 0);
+  assert.isAtLeast(second.startAt - 10.015, AUDIO_PLAYOUT_MIN_LEAD_SECONDS - EPSILON);
+});
+
+// 補間の統計: 実際に補間できた長さだけを数える。要求より多ければ要求までに切る
+test("confirmConcealment: 実際に補間した長さだけを数える", () => {
+  const scheduler = new AudioPlayoutScheduler();
+  playFirst(scheduler);
+  const second = playDecisionOf(
+    scheduler.schedule(10, FRAME_MICROSECONDS, FRAME_SECONDS, enforcedTarget(10.06)),
+  );
+  // 要求より少なくしか補間できなかった
+  scheduler.confirmConcealment(second.gapSeconds / 2);
+  assert.equal(scheduler.concealments, 1);
+  assert.closeTo(scheduler.concealed, second.gapSeconds / 2, EPSILON);
+  // 要求より多く返しても要求までに切る
+  const third = playDecisionOf(
+    scheduler.schedule(10.02, 2 * FRAME_MICROSECONDS, FRAME_SECONDS, enforcedTarget(10.12)),
+  );
+  scheduler.confirmConcealment(third.gapSeconds * 2);
+  assert.equal(scheduler.concealments, 2);
+  assert.closeTo(scheduler.concealed, second.gapSeconds / 2 + third.gapSeconds, EPSILON);
+});
+
+// 補間の統計: 要求が無いときは数えない
+test("confirmConcealment: 要求が無いときは数えない", () => {
+  const scheduler = new AudioPlayoutScheduler();
+  scheduler.confirmConcealment(0.05);
+  assert.equal(scheduler.concealments, 0);
+  assert.equal(scheduler.concealed, 0);
+  // 隙間が無い音のあとに確認しても数えない
+  playFirst(scheduler);
+  playDecisionOf(
+    scheduler.schedule(10.01, FRAME_MICROSECONDS, FRAME_SECONDS, enforcedTarget(10.02)),
+  );
+  scheduler.confirmConcealment(0.05);
+  assert.equal(scheduler.concealments, 0);
+});
+
+// 補間の統計: 確認せずに次の音へ進むと、前の要求は適用されなかったものとして消える
+test("confirmConcealment: 確認しなかった要求は次で消える", () => {
+  const scheduler = new AudioPlayoutScheduler();
+  playFirst(scheduler);
+  const second = playDecisionOf(
+    scheduler.schedule(10, FRAME_MICROSECONDS, FRAME_SECONDS, enforcedTarget(10.06)),
+  );
+  assert.isAbove(second.gapSeconds, 0);
+  // 確認せずに、隙間の無い次の音を並べる
+  playDecisionOf(scheduler.schedule(10.03, 0, FRAME_SECONDS, enforcedTarget(10.08)));
+  scheduler.confirmConcealment(second.gapSeconds);
+  assert.equal(scheduler.concealments, 0);
+});
+
+// 隙間の開始が今 + 余裕ちょうどなら補間する (境界)
+test("schedule: 隙間の開始が今 + 余裕ちょうどなら補間する", () => {
+  const scheduler = new AudioPlayoutScheduler();
+  const first = playFirst(scheduler);
+  // 前の音の終わり (10.02) が今 + 余裕 (10.01 + 0.01) と同じになる
+  const second = playDecisionOf(
+    scheduler.schedule(10.01, FRAME_MICROSECONDS, FRAME_SECONDS, enforcedTarget(10.06)),
+  );
+  assert.closeTo(
+    second.gapStartSeconds,
+    first.startAt + FRAME_SECONDS - first.compressSeconds,
+    1e-9,
+  );
+  assert.closeTo(second.gapSeconds, 2 * FRAME_SECONDS, 1e-9);
+});
+
+// 隙間がちょうど上限 (100 ms) なら切らずに補間する (境界)
+test("schedule: 隙間がちょうど上限なら切らずに補間する", () => {
+  const scheduler = new AudioPlayoutScheduler();
+  const first = playFirst(scheduler);
+  const previousEnd = first.startAt + FRAME_SECONDS - first.compressSeconds;
+  const second = playDecisionOf(
+    scheduler.schedule(10, FRAME_MICROSECONDS, FRAME_SECONDS, enforcedTarget(previousEnd + 0.1)),
+  );
+  // 浮動小数点の誤差はあるが上限で切られていない
+  assert.closeTo(second.gapSeconds, AUDIO_PLAYOUT_MAX_CONCEAL_SECONDS, EPSILON);
+  assert.isAbove(second.gapSeconds, AUDIO_PLAYOUT_MAX_CONCEAL_SECONDS - EPSILON);
+});
+
+// 捨てた音の後は、最後に鳴った音の終わりから次の音までの隙間を補間する
+test("schedule: 捨てた音の後も最後に鳴った音から隙間を測る", () => {
+  const scheduler = new AudioPlayoutScheduler();
+  const first = playFirst(scheduler);
+  // 並べすぎの音は捨てる (lastEnd は据え置き)
+  assert.equal(
+    scheduler.schedule(10, FRAME_MICROSECONDS, FRAME_SECONDS, enforcedTarget(10.5)).kind,
+    "drop",
+  );
+  const third = playDecisionOf(
+    scheduler.schedule(10.01, 2 * FRAME_MICROSECONDS, FRAME_SECONDS, enforcedTarget(10.06)),
+  );
+  assert.closeTo(
+    third.gapStartSeconds,
+    first.startAt + FRAME_SECONDS - first.compressSeconds,
+    1e-9,
+  );
+  assert.closeTo(third.gapSeconds, 2 * FRAME_SECONDS, 1e-9);
+});
+
+// 補間の減衰: 隙間が長いほど末尾の振幅を下げ、上限で `AUDIO_PLAYOUT_CONCEAL_END_GAIN` になる
+test("concealmentEndGain: 隙間が長いほど末尾の振幅を下げる", () => {
+  assert.equal(concealmentEndGain(0), 1);
+  assert.closeTo(
+    concealmentEndGain(AUDIO_PLAYOUT_MAX_CONCEAL_SECONDS / 2),
+    (1 + AUDIO_PLAYOUT_CONCEAL_END_GAIN) / 2,
+    EPSILON,
+  );
+  assert.equal(
+    concealmentEndGain(AUDIO_PLAYOUT_MAX_CONCEAL_SECONDS),
+    AUDIO_PLAYOUT_CONCEAL_END_GAIN,
+  );
+  // 上限を超えても下げすぎない
+  assert.equal(concealmentEndGain(1), AUDIO_PLAYOUT_CONCEAL_END_GAIN);
 });
 
 // 目標を使わないとき: 過ぎてから届いた音は捨てずに基準を取り直して鳴らす。揃える相手が
@@ -495,7 +736,13 @@ test("schedule: 目標が 500 ms 先でも鳴らす", () => {
     presentationDelaySeconds: AUDIO_PLAYOUT_MAX_DELAY_SECONDS + 0.2,
   };
   const decision = scheduler.schedule(10, 0, FRAME_SECONDS, target);
-  assert.deepEqual(decision, { kind: "play", startAt: 10.5, compressSeconds: 0 });
+  assert.deepEqual(decision, {
+    kind: "play",
+    startAt: 10.5,
+    compressSeconds: 0,
+    gapStartSeconds: 0,
+    gapSeconds: 0,
+  });
   assert.equal(scheduler.drops, 0);
 });
 

@@ -48,8 +48,16 @@ import {
 import { JITTER_BUFFER_MAX_QUEUED_FRAMES, PlayoutBuffer } from "../../../src/playoutBuffer.ts";
 import { AUDIO_PLAYOUT_DELAY_FLOOR_MS, PlaybackTimeline } from "../../../src/playbackTimeline.ts";
 import { GroupSwitchGate } from "../../../src/groupSwitchGate.ts";
-import { AudioClockBridge, AudioPlayoutScheduler } from "../../../src/audioPlayout.ts";
-import { compressSamples, type AudioSamples } from "../../../src/audioTimeStretch.ts";
+import {
+  AudioClockBridge,
+  AudioPlayoutScheduler,
+  concealmentEndGain,
+} from "../../../src/audioPlayout.ts";
+import {
+  compressSamples,
+  concealSamples,
+  type AudioSamples,
+} from "../../../src/audioTimeStretch.ts";
 // targetLatency の解決規則はライブラリと共有する純関数が持つ (規則を 2 か所に書かない)
 import { effectiveTargetLatencyMs, resolveSharedTargetLatencyMs } from "../../../src/msf/tracks.ts";
 import { applyAudioOutputSink } from "../utils/audioOutput";
@@ -130,6 +138,53 @@ interface AudioPlayback {
   playout: AudioPlayoutScheduler;
   // AudioContext の時計と performance.now() の対応。予約のたびに取り直す
   clock: AudioClockBridge;
+  // 直前に鳴らした音のサンプルとサンプルレート。欠落した区間の補間を作るために保持する
+  previousChannels: AudioSamples[] | null;
+  previousSampleRate: number;
+}
+
+/**
+ * 欠落した区間を、直前に鳴らした音の末尾を伸ばして埋める
+ *
+ * 実際に補間した長さ (秒) を返す。直前の音が無い、相関が足りないなど補間できなかった
+ * ときは 0 を返す (src/audioTimeStretch.ts)。長い補間ほど末尾の振幅を下げる。
+ */
+function scheduleConcealment(
+  playback: AudioPlayback,
+  gapStartSeconds: number,
+  gapSeconds: number,
+): number {
+  const previousChannels = playback.previousChannels;
+  if (previousChannels === null) {
+    return 0;
+  }
+  const endGain = concealmentEndGain(gapSeconds);
+  const concealed = concealSamples(
+    previousChannels,
+    playback.previousSampleRate,
+    gapSeconds,
+    endGain,
+  );
+  const concealedFrames = concealed.channels[0]?.length ?? 0;
+  if (concealedFrames === 0) {
+    return 0;
+  }
+  const concealedBuffer = playback.context.createBuffer(
+    concealed.channels.length,
+    concealedFrames,
+    playback.previousSampleRate,
+  );
+  for (let channel = 0; channel < concealed.channels.length; channel++) {
+    concealedBuffer.copyToChannel(
+      concealed.channels[channel] ?? new Float32Array(concealedFrames),
+      channel,
+    );
+  }
+  const concealedSource = playback.context.createBufferSource();
+  concealedSource.buffer = concealedBuffer;
+  concealedSource.connect(playback.destination);
+  concealedSource.start(gapStartSeconds);
+  return concealed.generatedSamples / playback.previousSampleRate;
 }
 
 /**
@@ -878,6 +933,8 @@ export function useSubscriber(
         destination: context.createMediaStreamDestination(),
         playout: new AudioPlayoutScheduler(),
         clock: new AudioClockBridge(),
+        previousChannels: null,
+        previousSampleRate: 0,
       };
       audioPlaybackRef.current = playback;
     }
@@ -1513,6 +1570,14 @@ export function useSubscriber(
       // 実際に詰められた長さを返す (詰められなかった分は遅れとして残る)
       playback.playout.confirmStretch(-stretched.lengthChangeSamples / audioData.sampleRate);
 
+      // 欠落した区間を、直前に鳴らした音の末尾を伸ばして埋める (src/audioTimeStretch.ts)。
+      // 実際に補間した長さだけを統計へ返す
+      const concealedSeconds =
+        decision.gapSeconds > 0
+          ? scheduleConcealment(playback, decision.gapStartSeconds, decision.gapSeconds)
+          : 0;
+      playback.playout.confirmConcealment(concealedSeconds);
+
       const frames = stretched.channels[0]?.length ?? numberOfFrames;
       const audioBuffer = playback.context.createBuffer(
         numberOfChannels,
@@ -1528,6 +1593,10 @@ export function useSubscriber(
       source.buffer = audioBuffer;
       source.connect(playback.destination);
       source.start(decision.startAt);
+
+      // 次の音の補間のために、実際に鳴らしたサンプルを保持する
+      playback.previousChannels = stretched.channels;
+      playback.previousSampleRate = audioData.sampleRate;
 
       // 実際に鳴らす時刻を実績として記録する (同期ずれの推定に使う)。捨てた音は
       // 鳴らないため記録しない。第 3 引数は Unix epoch マイクロ秒
