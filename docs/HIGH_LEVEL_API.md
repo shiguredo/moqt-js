@@ -390,6 +390,20 @@ interface MediaReceiverStats {
 interface AudioReceiverStats {
   framesReceived: number;
   bytesReceived: number;
+  // 再生の統計。値は購読をやり直しても消えない (今の遅れだけが 0 に戻る)
+  // 目標を使わない並べ方で、基準を取り直した回数
+  // (鳴らす時刻を過ぎて届いた音、timestamp が大きく飛んだ音)
+  playoutRebases: number;
+  // 並べすぎの音と、目標から離れすぎた音として捨てた数
+  playoutDrops: number;
+  // 欠落した区間や、時間軸の目標の遅延が増えたときに補間した回数
+  playoutConcealments: number;
+  // 波形の周期を使って詰めた合計 (ms)
+  playoutCompressedMs: number;
+  // 補間した合計 (ms)
+  playoutConcealedMs: number;
+  // 目標を守る並べ方で最後に並べた音の遅れ (ms)。基準を消すと 0 に戻る
+  playoutLatenessMs: number;
 }
 
 interface VideoReceiverStats {

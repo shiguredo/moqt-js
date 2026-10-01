@@ -57,6 +57,7 @@ import {
   AUDIO_PLAYOUT_DELAY_SECONDS,
   AudioClockBridge,
   type AudioClockMapping,
+  type AudioPlayoutScheduler,
 } from "./audioPlayout";
 import {
   AUDIO_PLAYOUT_DELAY_FLOOR_MS,
@@ -2158,6 +2159,8 @@ interface SubscriberAvSyncControl {
   videoWallClockSeen: boolean;
   // トラックを解決できているかを検証するため、extractTrackInfo が読む入力も制御口に含める
   receivedCatalog: Catalog | null;
+  // 再生の統計を駆動するための制御口 (実装は readonly の 1 インスタンス)
+  readonly audioPlayout: AudioPlayoutScheduler;
   extractTrackInfo(): void;
   createOutputStream(): void;
   handleAudioObject(obj: MoqtObject): void;
@@ -2788,6 +2791,67 @@ test("handleAudioDecodedData: 音が抜けた分の隙間を補間して予約�
   assert.closeTo(second.startedAtSeconds[0] ?? 0, 10.1, 1e-9);
   assert.closeTo(second.startedAtSeconds[1] ?? 0, 10.12, 1e-9);
   assert.equal(errors.length, 0);
+});
+
+// 完了条件: 音声の再生の統計が getStats から読める。時間はミリ秒で返る
+test("getStats: 音声の再生の統計を返す", () => {
+  const { control } = createAvSyncSubscriber();
+  // 最初の音と、40 ms 後の音 (20 ms の音が 1 つ抜けている) を鳴らす
+  playAudioFrame(control, 0, null, 10);
+  const second = playAudioFrame(control, 40_000, null, 10.02);
+  assert.equal(second.startedAtSeconds.length, 2);
+  const stats = (control as unknown as { getStats(): MediaReceiverStats }).getStats().audio;
+  assert.isNotNull(stats);
+  // 補間を 1 回 (20 ms) 行い、取り直しも捨てもしていない
+  assert.equal(stats?.playoutRebases, 0);
+  assert.equal(stats?.playoutDrops, 0);
+  assert.equal(stats?.playoutConcealments, 1);
+  assert.closeTo(stats?.playoutConcealedMs ?? 0, 20, 1e-6);
+  assert.closeTo(stats?.playoutCompressedMs ?? 0, 0, 1e-6);
+  // 到着基準の並べ方では遅れ (詰めの対象) を持たない
+  assert.equal(stats?.playoutLatenessMs, 0);
+});
+
+// 完了条件: 詰めと遅れの統計もミリ秒換算で返る (非 0 の値で固定する)
+test("getStats: 詰めと遅れの統計をミリ秒で返す", () => {
+  const { control } = createAvSyncSubscriber();
+  // 目標ちょうどに届き、今 + 余裕からしか鳴らせない音を作る (遅れ 10 ms を詰める)
+  const decision = control.audioPlayout.schedule(10, 0, 0.02, {
+    targetStartSeconds: 10,
+    enforceTarget: true,
+    delaySeconds: AUDIO_PLAYOUT_DELAY_SECONDS,
+    presentationDelaySeconds: AUDIO_PLAYOUT_DELAY_SECONDS,
+  });
+  assert.equal(decision.kind, "play");
+  if (decision.kind !== "play") {
+    return;
+  }
+  control.audioPlayout.confirmStretch(decision.compressSeconds);
+  assert.isAbove(decision.compressSeconds, 0);
+  assert.isAbove(control.audioPlayout.lateness, 0);
+  const stats = (control as unknown as { getStats(): MediaReceiverStats }).getStats().audio;
+  assert.closeTo(stats?.playoutCompressedMs ?? 0, decision.compressSeconds * 1_000, 1e-6);
+  assert.closeTo(stats?.playoutLatenessMs ?? 0, control.audioPlayout.lateness * 1_000, 1e-6);
+  // 基準の取り直しと捨てを 1 回ずつ作り、写像も非 0 で固定する
+  const arrival = {
+    targetStartSeconds: null,
+    enforceTarget: false,
+    delaySeconds: AUDIO_PLAYOUT_DELAY_SECONDS,
+    presentationDelaySeconds: AUDIO_PLAYOUT_DELAY_SECONDS,
+  };
+  control.audioPlayout.schedule(100, 0, 0.02, arrival);
+  control.audioPlayout.schedule(200, 20_000, 0.02, arrival);
+  control.audioPlayout.schedule(300, 0, 0.02, {
+    targetStartSeconds: 300.5,
+    enforceTarget: true,
+    delaySeconds: AUDIO_PLAYOUT_DELAY_SECONDS,
+    presentationDelaySeconds: AUDIO_PLAYOUT_DELAY_SECONDS,
+  });
+  const updated = (control as unknown as { getStats(): MediaReceiverStats }).getStats().audio;
+  assert.isAbove(updated?.playoutRebases ?? 0, 0);
+  assert.equal(updated?.playoutRebases, control.audioPlayout.rebases);
+  assert.isAbove(updated?.playoutDrops ?? 0, 0);
+  assert.equal(updated?.playoutDrops, control.audioPlayout.drops);
 });
 
 /**
@@ -3473,7 +3537,7 @@ interface SubscriberLifecycleControl {
   videoDecodeOrder: VideoDecodeOrder;
   // AudioContext の時計と performance.now() の対応 (解放で消す)
   audioClockBridge: AudioClockBridge;
-  audioStats: AudioReceiverStats;
+  audioStats: Pick<AudioReceiverStats, "framesReceived" | "bytesReceived">;
   videoStats: VideoReceiverStats;
   handleSessionClose(generation: number): Promise<void>;
 }
@@ -3730,6 +3794,71 @@ test("createOutputStream: AudioContext を作り直すと時計の対応を初�
   assert.isNull(control.audioClockBridge.currentOffsetMs);
   assert.isFalse(control.audioClockBridge.usingFallback);
   assert.isNull(control.audioClockBridge.toAudioSeconds(5_000));
+});
+
+// 完了条件: 購読をやり直す (AudioContext を作り直す) と、今の遅れは 0 に戻り、
+// 詰めの統計は消えない
+test("createOutputStream: 再生の基準を消し、統計は残す", () => {
+  const subscriber = new MediaSubscriberImpl("moqt://example.com/live", {
+    namespace: ["live"],
+    audio: {},
+  });
+  const control = subscriber as unknown as SubscriberLifecycleControl & {
+    createOutputStream(): void;
+    getStats(): MediaReceiverStats;
+    audioPlayout: AudioPlayoutScheduler;
+  };
+  // 音声の track が解決できている状態にする (AudioContext を作る分岐に入る)
+  control.audioTrackInfo = {
+    name: "audio",
+    packaging: "loc",
+    isLive: true,
+    codec: "opus",
+    samplerate: 48_000,
+  };
+  // 目標を過ぎて届いた音で今の遅れと詰めを作る
+  const decision = control.audioPlayout.schedule(10, 0, 0.02, {
+    targetStartSeconds: 10,
+    enforceTarget: true,
+    delaySeconds: AUDIO_PLAYOUT_DELAY_SECONDS,
+    presentationDelaySeconds: AUDIO_PLAYOUT_DELAY_SECONDS,
+  });
+  assert.equal(decision.kind, "play");
+  if (decision.kind !== "play") {
+    return;
+  }
+  control.audioPlayout.confirmStretch(decision.compressSeconds);
+  assert.isAbove(control.audioPlayout.lateness, 0);
+  const compressedSeconds = control.audioPlayout.compressed;
+  assert.isAbove(compressedSeconds, 0);
+
+  // AudioContext の生成だけを差し替える (モジュール置換は行わない)
+  const target = globalThis as unknown as { AudioContext: unknown; MediaStream: unknown };
+  const originalAudioContext = target.AudioContext;
+  const originalMediaStream = target.MediaStream;
+  target.AudioContext = class {
+    readonly state = "running";
+    createMediaStreamDestination(): MediaStreamAudioDestinationNode {
+      return {
+        stream: { getAudioTracks: () => [] },
+      } as unknown as MediaStreamAudioDestinationNode;
+    }
+  };
+  target.MediaStream = class {
+    addTrack(): void {}
+  };
+  try {
+    control.createOutputStream();
+  } finally {
+    target.AudioContext = originalAudioContext;
+    target.MediaStream = originalMediaStream;
+  }
+
+  // 基準が消えて今の遅れは 0 になり、統計は残る
+  const stats = control.getStats().audio;
+  assert.equal(stats?.playoutLatenessMs, 0);
+  assert.closeTo(stats?.playoutCompressedMs ?? 0, compressedSeconds * 1_000, 1e-6);
+  assert.closeTo(control.audioPlayout.compressed, compressedSeconds, 1e-9);
 });
 
 /**
