@@ -28,7 +28,7 @@
 - `.github/workflows/e2e-test.yml` を新設し、`secrets.TEST_MOQT_URI` を環境変数として渡す。secret が未設定の場合はテストを実行せずジョブを成功させる。接続先の host / authority と fragment は `::add-mask::` でマスクする
 - エラーメッセージに接続先が混ざることを防ぐため、テストページ側でも接続先を伏せ字にしてから spec へ返す
 - `.env.example` を追加し、ローカルでは `.env` から `TEST_MOQT_URI` を読めるようにする。CI の環境変数を `.env` が上書きしないようにする
-- 検証する経路は、SETUP の交換と正常な切断、Canvas のダミー映像の publish / subscribe、FETCH (Location Filter 無し / 絶対開始の指定あり) とする
+- 検証する経路は、SETUP の交換と正常な切断、Canvas のダミー映像の publish / subscribe、FETCH (絶対開始の Location Filter) とする。LOCATION FILTER を省略した FETCH と相対指定 (1 フィールド) は検証に使うリレーが応答を返さないため対象から外し、別の issue で扱う
 
 ## 完了条件
 
