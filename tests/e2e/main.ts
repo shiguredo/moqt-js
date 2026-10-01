@@ -33,6 +33,15 @@ import {
  */
 const CLOSE_NOTIFICATION_TIMEOUT_MS = 10_000;
 
+/**
+ * FETCH の応答 (FETCH_OK) を待つ上限 (ミリ秒)
+ *
+ * relay が取得範囲の欠損 Object の fill を待つと、FETCH_OK がいつまでも返らない。
+ * 待ち続けるとテストのタイムアウト (90 秒) まで原因が分からないため、上限で打ち切って
+ * 何を待っていたかをメッセージに残す。
+ */
+const FETCH_RESPONSE_TIMEOUT_MS = 30_000;
+
 /** 実リレーへ接続して切断する操作の入力 */
 export interface ConnectRelayOptions {
   /** 接続先の MOQT URI (`moqt://...`) */
@@ -115,6 +124,14 @@ export interface StartFetchOptions {
    * draft-ietf-moq-transport-21 Section 9.20.10 (LOCATION FILTER Parameter)
    */
   filter?: FetchFilterOptions;
+  /**
+   * FILL TIMEOUT (ミリ秒)
+   * draft-ietf-moq-transport-21 Section 9.20.6 (FILL TIMEOUT Parameter)
+   *
+   * relay が欠損 Object の fill を待つ最大時間。0 は即座に利用可能な Object だけを要求する。
+   * 省略するとパラメータを送らず、fill を待つ時間は relay の既定に委ねられる。
+   */
+  fillTimeout?: number;
 }
 
 /** FETCH の観測結果 */
@@ -505,20 +522,22 @@ async function startFetch(options: StartFetchOptions): Promise<HandleId> {
   };
 
   const filterOptions = options.filter;
-  // フィルタ無しは「{0, 0} から Largest Object まで」を意味するため、options を空にする
-  const fetchOptions: FetchOptions =
-    filterOptions === undefined
+  // フィルタ無しは「{0, 0} から Largest Object まで」を意味するため、filter は載せない
+  const fetchOptions: FetchOptions = {
+    ...(filterOptions === undefined
       ? {}
       : {
           filter: {
             startGroup: BigInt(filterOptions.startGroup),
             startObject: BigInt(filterOptions.startObject),
           },
-        };
+        }),
+    ...(options.fillTimeout === undefined ? {} : { fillTimeout: BigInt(options.fillTimeout) }),
+  };
 
   let fetcher: Fetcher;
   try {
-    fetcher = await session.fetch(options.namespace, options.trackName, fetchOptions, {
+    const fetchPromise = session.fetch(options.namespace, options.trackName, fetchOptions, {
       object: (object) => {
         observation.objectCount += 1;
         observation.bytesReceived += object.payload.byteLength;
@@ -534,6 +553,21 @@ async function startFetch(options: StartFetchOptions): Promise<HandleId> {
         observation.errors.push(toErrorMessage(error));
       },
     });
+    // 応答待ちで打ち切ったときに未処理の rejection を残さないための受け皿。
+    // 元の Promise は reject したままなので Promise.race には影響しない
+    fetchPromise.catch(() => {});
+    fetcher = await Promise.race([
+      fetchPromise,
+      new Promise<never>((_resolve, reject) => {
+        window.setTimeout(() => {
+          reject(
+            new Error(
+              `FETCH did not respond within ${FETCH_RESPONSE_TIMEOUT_MS} ms (relay may be waiting for fill)`,
+            ),
+          );
+        }, FETCH_RESPONSE_TIMEOUT_MS);
+      }),
+    ]);
   } catch (error) {
     await session.close();
     throw new Error(toErrorMessage(error), { cause: error });

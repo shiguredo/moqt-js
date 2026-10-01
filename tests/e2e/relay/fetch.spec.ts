@@ -89,6 +89,10 @@ test("実リレーに対して Location Filter 無しで FETCH し、全オブ�
       url: moqtUri,
       namespace,
       trackName: VIDEO_TRACK_NAME,
+      // フィルタ無しの範囲は {0, 0} から始まるため、リレーは存在しない Group の fill を
+      // 待とうとする。0 を指定して「即座に利用可能な Object だけ」を要求する
+      // (draft-ietf-moq-transport-21 Section 9.20.6)
+      fillTimeout: 0,
     });
     const activeFetchId = fetchId;
 
