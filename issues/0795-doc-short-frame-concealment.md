@@ -3,7 +3,7 @@
 - Created: 2026-10-01
 - Completed: {YYYY-MM-DD}
 - Branch: feature/update-short-frame-concealment-doc
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-10-01
 
 ## 目的
 
@@ -11,14 +11,14 @@
 
 ## 現状
 
-- `src/audioTimeStretch.ts` の `concealSamples` の JSDoc は「2 周期分の末尾が取れない (音が短すぎる) ときは lag 0」とだけ書いている
+- `src/audioTimeStretch.ts` の `concealSamples` の JSDoc は、相関が足りない音では補間しないことだけを書いている。`findTailLag` の JSDoc も「2 周期分の末尾が取れない (音が短すぎる) ときは lag 0 を返す」とだけ書いており、どちらもフレーム長で決まる探索範囲を説明していない
 - フレーム長ごとの範囲を固定するテストが無い。補間のテストは 20 ms フレームの周期 5 ms と 16 kHz の 20 ms フレームだけである
 - `findTailLag` は `2 * lag <= ダウンサンプル後の長さ` の範囲でしか周期を探さない
 
 ## 設計方針
 
-- `findTailLag` の条件から、フレーム長ごとに補間できる周期の範囲を計算し、`concealSamples` の JSDoc に書く
-- 10 ms フレームのテストで、範囲の下限より低い周期 (例: 5 ms フレームでは補間しない、10 ms フレームでは 5 ms より長い周期で補間しない) を固定する。範囲内の周期では生成することをあわせて固定する
+- `findTailLag` の条件から、フレーム長ごとに補間できる周期の上限を計算し、`concealSamples` の JSDoc に書く。下限 (`TIME_STRETCH_MIN_LAG`) は探索の開始位置であり、周期が下限より短い音もその倍数の lag で見つかるため、書くのは上限側であること。5 ms フレームでは上限が下限未満になり、一切補間されないことも書く
+- 10 ms フレームのテストで、探索範囲の上限を超える周期では補間しないことを固定する (例: 10 ms フレームで 5 ms より長い周期、5 ms フレームは 2.5 ms の 2 周期分すら取れずどの周期でも補間しない)。上限以内の周期では生成することをあわせて固定する
 - CHANGES.md への追記は不要 (内部挙動で利用者向けの変更は無い)
 
 ## 完了条件
