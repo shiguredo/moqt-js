@@ -8,15 +8,22 @@
  *
  * - 目標の時刻は `AudioContext.currentTime` と同じ秒で受け取る。壁時計の TIMESTAMP を
  *   持たない音は目標を持たず、現在の基準の決め方 (最初の音の到着 + 再生の遅れ) を使う
- * - 目標の時刻を過ぎて届いた音、並べすぎの音、前の音と重なる音は捨てる。基準を取り直すと
- *   音声だけが後ろへずれ、共有の時間軸を使う映像とずれるため、取り直さない
- * - 音声だけを購読していて目標を守らないとき (`enforceTarget` が false) は、揃える相手が
- *   いないため、届かなかった音は捨てずに基準を取り直す (最初の実装の挙動)
+ * - 目標の時刻を過ぎて届いた音も、前の音と重なる音も捨てない。今から鳴らせる最も早い
+ *   時刻へずらして鳴らし、ずらした分を、音の長さの半分まで波形の周期で詰める (詰められ
+ *   なかった分は遅れとして残る)。捨てるのは並べすぎの音と、目標から
+ *   `AUDIO_PLAYOUT_MAX_LATENESS_SECONDS` を超えて離れた音だけである
+ * - 目標を守るときは基準を取り直さない。取り直すと音声だけが後ろへずれ、共有の時間軸を
+ *   使う映像とずれるためである
+ * - 目標を守らないとき (`enforceTarget` が false) や、目標を作れないとき (壁時計の
+ *   TIMESTAMP を持たない音など) は、揃える相手がいない、または目標を作れないため、
+ *   鳴らす時刻を過ぎて届いた音は捨てずに基準を取り直す (最初の実装の挙動)
  * - どの音も前の音の終わりより前には鳴らさない (重ねない)。前の音の終わりと今回の開始の
  *   間に空いた分は `gapStartSeconds` / `gapSeconds` として返し、呼び出し側が上限
  *   (`AUDIO_PLAYOUT_MAX_CONCEAL_SECONDS`) まで補間できる (5 ms 以下と、開始が今 + 余裕より
  *   前の隙間は補間しない)
- * - 並べすぎの上限は「再生の遅れ + 余裕 (`AUDIO_PLAYOUT_BACKLOG_SECONDS`)」である
+ * - 並べすぎの上限は、目標を守るときは「表示の遅れ (`presentationDelaySeconds`) と再生の
+ *   遅れ (`delaySeconds`) の大きい方 + 余裕 (`AUDIO_PLAYOUT_BACKLOG_SECONDS`)」、目標を
+ *   使わないときは「再生の遅れ + 余裕」である
  *
  * 時刻は `AudioContext.currentTime` と同じ秒、timestamp は `AudioData.timestamp` と同じ
  * マイクロ秒で扱う。ブラウザ API に依存しない。
@@ -126,8 +133,8 @@ export interface AudioPlayoutTarget {
   /**
    * 目標を守るか
    *
-   * false のとき (音声だけを購読していて揃える相手がいないとき) は、目標に届かなければ
-   * 基準を取り直して鳴らす
+   * false のとき (音声だけを購読していて揃える相手がいないとき) は、鳴らす時刻を過ぎて
+   * 届いた音は基準を取り直して鳴らす
    */
   enforceTarget: boolean;
   /** 目標を使わないときと取り直すときに使う再生の遅れ (秒) */
@@ -195,7 +202,7 @@ export class AudioPlayoutScheduler {
     this.minLeadSeconds = options.minLeadSeconds ?? AUDIO_PLAYOUT_MIN_LEAD_SECONDS;
   }
 
-  /** 基準を取り直した回数 (目標を使わないときの、過ぎてから届いた音) */
+  /** 基準を取り直した回数 (目標を使わないときの、過ぎてから届いた音と timestamp が大きく飛んだ音) */
   get rebases(): number {
     return this.rebaseCount;
   }
@@ -366,7 +373,8 @@ export class AudioPlayoutScheduler {
    * 目標を使わないときの決め方
    *
    * 最初の音で基準を決め、timestamp の間隔どおりに並べる。過ぎてから届いた音は基準を
-   * 取り直し、並べすぎの音は捨てる
+   * 取り直し、timestamp が大きく飛んだ音は前の音のすぐ後ろと今 + 再生の遅れの遅い方から
+   * 並べ直し、並べすぎの音は捨てる
    */
   private scheduleByArrival(
     nowSeconds: number,
