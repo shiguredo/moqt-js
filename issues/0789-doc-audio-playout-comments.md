@@ -1,7 +1,7 @@
 # audioPlayout の古いコメントを実装に合わせる
 
 - Created: 2026-10-01
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-10-01
 - Branch: feature/update-audio-playout-comments
 - Polished: 2026-10-01
 
@@ -36,4 +36,8 @@
 
 ## 解決方法
 
-{未着手}
+- `src/audioPlayout.ts` の冒頭 JSDoc を現行の実装に合わせた。目標を過ぎた音と重なる音は捨てずに今から鳴らせる最も早い時刻へずらし、音の長さの半分まで周期で詰めること、捨てるのは並べすぎの音と目標から離れすぎた音だけであることを書いた
+- 並べすぎの上限を経路ごと (目標を守るときは表示の遅れと再生の遅れの大きい方 + 余裕、目標を使わないときは再生の遅れ + 余裕) に書き分け、目標を使わないときの timestamp が大きく飛んだ音の扱い、基準を取り直した回数の説明も実装に合わせた
+- `src/audioPlayout.test.ts` の冒頭と到着基準のテストのコメント、`src/audioPlayout.prop.ts` の冒頭とテスト名の「並べすぎだけを捨てる」を実装に合わせた
+- `CHANGES.md` の `## develop` の `### misc` に [UPDATE] エントリを追加した
+- `vp check` / `tsc --noEmit` / 全 3554 テストが通った (挙動の変更なし)
