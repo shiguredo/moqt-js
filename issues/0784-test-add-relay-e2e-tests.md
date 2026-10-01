@@ -1,7 +1,7 @@
 # 実リレーへ接続する E2E テストを追加する
 
 - Created: 2026-09-30
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-10-01
 - Branch: feature/add-relay-e2e-tests
 - Polished: {YYYY-MM-DD}
 
@@ -40,4 +40,30 @@
 
 ## 解決方法
 
-{未着手}
+`secrets.TEST_MOQT_URI` を渡して実リレーへ接続する E2E テストを追加した。
+
+変更内容:
+
+- `tests/e2e/` に実接続用のテストページ (専用 Vite アプリ) を再作成した。`main.ts` が `window.__moqtE2E` として `connectRelay` / `startPublisher` / `getPublisher` / `stopPublisher` / `startSubscriber` / `getSubscriber` / `stopSubscriber` / `startFetch` / `getFetch` / `stopFetch` を公開する。Publisher と Subscriber は開始と観測を分けたハンドル API にし、spec は `expect.poll` で状態を待つ (固定の sleep に依存しない)
+- テストページは接続先の URI と host を保持し、エラーメッセージは伏せ字にしてから spec へ返す。FETCH の応答には 30 秒の上限を設け、届かない場合は何を待っていたかをメッセージに残す
+- `tests/e2e/relay/` に 3 本の spec を追加した:
+  - `connect.spec.ts`: SETUP の交換が完了して `state` が `connected` になり、`close()` で close code 0 の通知が届く
+  - `pubsub.spec.ts`: Canvas のダミー映像を VP8 で publish し、同じ namespace を subscribe してカタログ、映像トラック、キーフレームの受信までを確認する
+  - `fetch.spec.ts`: 絶対開始の Location Filter (`{ startGroup, startObject }`) を指定した FETCH で end が通知され、error が 0 で、指定した Group より前の Object が混ざらないことを確認する
+- 接続先は環境変数 `TEST_MOQT_URI` で渡す。未設定の環境では `requireRelayUri()` が `test.skip` を呼び、skip として記録する。`describe.skip` は使わない
+- `playwright.config.ts` に `relay` project (spec は `tests/e2e/relay/`) と実リレー接続用テストページの webServer (port 5180) を追加し、`.env` があれば `process.loadEnvFile` で読み込むようにした。`process.loadEnvFile` は既存の環境変数を上書きしないため、CI の secret が優先される
+- `package.json` に `e2e-test:relay` を追加した。`e2e-test` は従来どおり実リレーを必要としないテストだけを実行する
+- `.github/workflows/e2e-test.yml` を追加した。`push` (develop / feature/**) と `pull_request`、`workflow_dispatch` で起動し、`secrets.TEST_MOQT_URI` を環境変数として渡す。secret が未設定の場合はテストを実行せずジョブを成功させる。接続先の host / authority と fragment を `::add-mask::` でマスクする
+- `.env.example` を追加した
+
+検証:
+
+- `vp check` と `vp test run` (197 ファイル / 3525 テスト) が通る
+- `vp run e2e-test` (実リレーを必要としない 92 本) が通る
+- `TEST_MOQT_URI` が未設定の環境で `vp run e2e-test:relay` の 3 本が skip として記録される
+- `e2e-test` workflow で 3 本が実リレーに対して成功する (connect 2.4 秒 / fetch 5.3 秒 / pubsub 5.7 秒、合計 25.2 秒)
+
+残した課題:
+
+- LOCATION FILTER を省略した FETCH と 1 フィールドの相対指定の FETCH は、検証に使うリレーが FETCH_OK を返さないため CI の対象から外した。別の issue で扱う
+- `TEST_MOQT_AUTH_TOKEN` は org の secret に存在しないため、Authorization Token を伴う接続の e2e は対象外とした
