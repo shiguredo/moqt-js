@@ -18,9 +18,10 @@ import {
 // 終端判定を厳格化する変更では、実装差が誤検出と見逃しに直結するため、実ワイヤの門が要る。
 // 映像トラックは Publisher が配信中のものを対象にする (過去のデータが確実に存在する)。
 //
-// LOCATION FILTER を省略した FETCH (全オブジェクトの要求) も仕様上は有効だが
-// (draft-ietf-moq-transport-21 Section 9.20.10)、検証に使うリレーは FETCH_OK を返さない。
-// 受信経路の検証には使えないため、フィルタを明示した 2 本で範囲の指定方法を変えて覆う。
+// LOCATION FILTER を省略した FETCH (全オブジェクトの要求) と相対指定 (1 フィールド) も
+// 仕様上は有効だが (draft-ietf-moq-transport-21 Section 9.20.10)、検証に使うリレーは
+// どちらにも FETCH_OK を返さないため受信経路の検証には使えない。応答が確認できている
+// 絶対開始の 2 フィールド (`{ startGroup, startObject }`) だけを使う。
 
 /** 映像トラックの名前。createMediaPublisher の既定値 */
 const VIDEO_TRACK_NAME = "video";
@@ -69,79 +70,6 @@ async function startPublisherAndWaitForFrames(
   expect(status.currentGroupId).toBeGreaterThan(0);
   return { publisherId, currentGroupId: status.currentGroupId };
 }
-
-test("実リレーに対して相対指定の Location Filter 付きで FETCH し、直近の Group を取得できる", async ({
-  browser,
-}) => {
-  test.setTimeout(RELAY_TEST_TIMEOUT_MS);
-  const moqtUri = requireRelayUri();
-  if (moqtUri === null) {
-    return;
-  }
-
-  const namespace = createTestNamespace();
-  const publisherPage = await openRelayPage(browser);
-  const fetchPage = await openRelayPage(browser);
-  let publisherId: string | undefined;
-  let fetchId: string | undefined;
-
-  try {
-    const started = await startPublisherAndWaitForFrames(publisherPage, moqtUri, namespace);
-    publisherId = started.publisherId;
-
-    fetchId = await fetchPage.evaluate((options) => window.__moqtE2E.startFetch(options), {
-      url: moqtUri,
-      namespace,
-      trackName: VIDEO_TRACK_NAME,
-      // 1 フィールドの LOCATION FILTER は相対指定であり、開始位置は
-      // Largest Object の Group + 1 - 2 になる (draft-ietf-moq-transport-21 Section 9.20.10)。
-      // 開始位置より前の Object を fill で待たせないよう、即座に利用可能な Object だけを
-      // 要求する (Section 9.20.6)
-      filter: { startGroup: 2 },
-      fillTimeout: 0,
-    });
-    const activeFetchId = fetchId;
-
-    // 取得範囲の終端まで到達すると end が通知される。end が来ない場合は
-    // リレーが範囲を閉じていない (または終端判定が実装差で落ちている) ことになる
-    await expect
-      .poll(
-        () => fetchPage.evaluate((id) => window.__moqtE2E.getFetch(id).endNotified, activeFetchId),
-        {
-          message: "FETCH の end が通知されるのを待つ",
-          timeout: 30_000,
-        },
-      )
-      .toBe(true);
-
-    const fetchStatus = await fetchPage.evaluate(
-      (id) => window.__moqtE2E.getFetch(id),
-      activeFetchId,
-    );
-    expect(fetchStatus.errors).toEqual([]);
-    expect(fetchStatus.objectCount).toBeGreaterThan(0);
-    expect(fetchStatus.bytesReceived).toBeGreaterThan(0);
-    expect(fetchStatus.groupIds.length).toBeGreaterThan(0);
-
-    // 取得できた Object 数は、その時点までに publish されたフレーム数を超えない
-    // (超えていればリレーが publish されていない Object を返している)
-    const publisherStatus = await publisherPage.evaluate(
-      (id) => window.__moqtE2E.getPublisher(id),
-      started.publisherId,
-    );
-    expect(publisherStatus.errors).toEqual([]);
-    expect(fetchStatus.objectCount).toBeLessThanOrEqual(publisherStatus.framesSent);
-  } finally {
-    if (fetchId !== undefined) {
-      await fetchPage.evaluate((id) => window.__moqtE2E.stopFetch(id), fetchId);
-    }
-    if (publisherId !== undefined) {
-      await publisherPage.evaluate((id) => window.__moqtE2E.stopPublisher(id), publisherId);
-    }
-    await closeRelayPage(fetchPage);
-    await closeRelayPage(publisherPage);
-  }
-});
 
 test("実リレーに対して絶対開始の Location Filter 付きで FETCH し、指定した Group 以降だけを取得できる", async ({
   browser,
