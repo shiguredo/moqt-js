@@ -2645,6 +2645,8 @@ interface AudioReservation {
   currentTimeSeconds: number;
   /** `start(when)` に渡った値 (秒)。目標を過ぎて捨てられた音では空になる */
   startedAtSeconds: number[];
+  /** `createBuffer` へ渡った長さ (サンプル数)。隙間の補間を含む */
+  bufferFrames: number[];
   /** 音声の出力遅延 (ミリ秒)。`getOutputTimestamp()` の対応から求める */
   deviceDelayMs: number;
 }
@@ -2710,6 +2712,7 @@ function playAudioFrame(
     // 明示されないときは下で対応から組み立てる
     currentTimeSeconds: currentTimeSeconds ?? 0,
     startedAtSeconds: [],
+    bufferFrames: [],
     // 対応が無い (未開始) ときは音声の出力遅延も無い
     deviceDelayMs:
       mapping === null
@@ -2725,7 +2728,10 @@ function playAudioFrame(
         control.playbackTimeline.presentationPerformanceMs("audio", timestampMicros) ?? 0;
       return effectiveMapping;
     },
-    createBuffer: () => ({ copyToChannel: () => {} }),
+    createBuffer: (_channels: number, frames: number) => {
+      reservation.bufferFrames.push(frames);
+      return { copyToChannel: () => {} };
+    },
     createBufferSource: () => ({
       buffer: null,
       connect: () => {},
@@ -2763,6 +2769,26 @@ function playAudioFrame(
   });
   return reservation;
 }
+
+// 完了条件: 音が 1 つ抜けたときは、前の音の終わりから次の音の開始までの隙間を
+// 直前の音の時間伸長で埋めて予約する (無音のまま残さない)
+test("handleAudioDecodedData: 音が抜けた分の隙間を補間して予約する", () => {
+  const { control, errors } = createAvSyncSubscriber();
+  // 目標を使わない (壁時計の TIMESTAMP を持たない) 到着基準の並べ方にする
+  const first = playAudioFrame(control, 0, null, 10);
+  assert.equal(first.bufferFrames.length, 1, "最初の音だけを予約すること");
+  // 40 ms 後の timestamp の音が届く (20 ms の音が 1 つ抜けている)
+  const second = playAudioFrame(control, 40_000, null, 10.02);
+  // 1 つ目は隙間の補間、2 つ目は届いた音である
+  assert.equal(second.bufferFrames.length, 2, "補間と音の 2 つを予約すること");
+  assert.equal(second.startedAtSeconds.length, 2);
+  // 補間は 20 ms 分 (48 kHz で 960 サンプル) を作る
+  assert.equal(second.bufferFrames[0], 960, "補間の長さが隙間と同じであること");
+  // 補間は前の音の終わり (10.10) から、届いた音の開始 (10.12) までを埋める
+  assert.closeTo(second.startedAtSeconds[0] ?? 0, 10.1, 1e-9);
+  assert.closeTo(second.startedAtSeconds[1] ?? 0, 10.12, 1e-9);
+  assert.equal(errors.length, 0);
+});
 
 /**
  * 完了条件: 音声の予約時刻は、共有の時間軸が決めた目標の表示時刻

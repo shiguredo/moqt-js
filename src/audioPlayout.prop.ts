@@ -10,6 +10,8 @@
  * - 目標を守るときに捨てるのは並べすぎの音だけである。目標を過ぎて届いた音は今 + 余裕で
  *   鳴らし、ずらした分を波形の周期で詰める。外側の目標はさらに外側でも捨てる (単調)
  * - 目標を守るときに鳴らす音は、今 + 余裕以降で、目標より前ではなく、前の音と重ならない
+ * - 補間の隙間の情報は、下限 (5 ms) を超え上限 (100 ms) 以下で、前の音の終わりに一致し、
+ *   今 + 余裕以降から次の音の開始までに収まる
  * - 時計の対応付けは、不感帯 (30 ms) 未満の差では動かず、1 回の変更は上限 (80 ms) まで。
  *   対応からの換算は往復し、reset の直後の update は前の対応に依存せず観測値そのものを採る
  *
@@ -23,11 +25,14 @@ import {
   AUDIO_CLOCK_MAX_CHANGE_MS,
   AUDIO_PLAYOUT_BACKLOG_SECONDS,
   AUDIO_PLAYOUT_DELAY_SECONDS,
+  AUDIO_PLAYOUT_MAX_CONCEAL_SECONDS,
   AUDIO_PLAYOUT_MAX_DELAY_SECONDS,
   AUDIO_PLAYOUT_MAX_LATENESS_SECONDS,
+  AUDIO_PLAYOUT_MIN_CONCEAL_SECONDS,
   AUDIO_PLAYOUT_MIN_LEAD_SECONDS,
   AudioClockBridge,
   AudioPlayoutScheduler,
+  type AudioPlayoutDecision,
   type AudioPlayoutTarget,
 } from "./audioPlayout";
 
@@ -46,6 +51,28 @@ function valueOf(value: number | null): number {
     throw new Error("expected a value, got null");
   }
   return value;
+}
+
+/** 補間の隙間が下限と上限に収まり、前の音の終わりに一致し、今 + 余裕以降から次の音の開始までに収まることを確かめる */
+function assertConcealmentWithinBounds(
+  decision: Extract<AudioPlayoutDecision, { kind: "play" }>,
+  now: number,
+  previousEnd: number | null,
+): void {
+  if (decision.gapSeconds === 0) {
+    assert.equal(decision.gapStartSeconds, 0);
+    return;
+  }
+  assert.isAbove(decision.gapSeconds, AUDIO_PLAYOUT_MIN_CONCEAL_SECONDS - EPSILON);
+  assert.closeTo(
+    decision.gapSeconds,
+    Math.min(decision.startAt - decision.gapStartSeconds, AUDIO_PLAYOUT_MAX_CONCEAL_SECONDS),
+    EPSILON,
+  );
+  assert.isNotNull(previousEnd);
+  assert.closeTo(decision.gapStartSeconds, previousEnd ?? 0, EPSILON);
+  assert.isAtLeast(decision.gapStartSeconds, now + AUDIO_PLAYOUT_MIN_LEAD_SECONDS - EPSILON);
+  assert.isAtMost(decision.gapStartSeconds + decision.gapSeconds, decision.startAt + EPSILON);
 }
 
 /** 目標を使わないときに受け取る再生の遅れ (秒)。共有の時間軸が決めた値 */
@@ -132,6 +159,8 @@ test("目標を使わないとき: 鳴らす音は重ならず、今 + 余裕以
           const { startAt } = decision;
           // 過ぎた時刻や、描画に間に合わない時刻を指定しない
           assert.isAtLeast(startAt, now + AUDIO_PLAYOUT_MIN_LEAD_SECONDS - EPSILON);
+          // 補間の隙間は上限に収まり、前の音の終わりに一致し、次の音の開始までに収まる
+          assertConcealmentWithinBounds(decision, now, previousEnd);
           // 並べすぎの上限は「再生の遅れ + 余裕」である
           assert.isAtMost(startAt - now, delaySeconds + AUDIO_PLAYOUT_BACKLOG_SECONDS + EPSILON);
           // 重ねると音が足されてノイズになる
@@ -223,6 +252,8 @@ test("目標を守るとき: 鳴らす音は目標どおりで重ならず、窓
             decision.compressSeconds,
             Math.min(decision.startAt - targetStartSeconds, frame.durationSeconds / 2) + EPSILON,
           );
+          // 補間の隙間は上限に収まり、前の音の終わりに一致し、次の音の開始までに収まる
+          assertConcealmentWithinBounds(decision, now, previousEnd);
           // 実際に詰めたものとして次へ渡す (詰めた分だけ前の音の終わりが早くなる)
           scheduler.confirmStretch(decision.compressSeconds);
           previousEnd = decision.startAt + frame.durationSeconds - decision.compressSeconds;

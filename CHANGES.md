@@ -43,6 +43,10 @@
 - [CHANGE] moqt-devtools の `window.moqtDevTools` が返す Subscriber の統計で、音声の項目を `audio` の下へまとめる
   - `audioObjectsReceived` / `audioChunksDecoded` / `audioPeakDbfs` / `audioRmsDbfs` / `audioLastLevel` / `audioLastVoiceActivity` / `audioPlayoutRebases` / `audioPlayoutDrops` を `audio.objectsReceived` などの入れ子にする。E2E が読む名前が変わるため後方互換はない
   - @voluntas
+- [ADD] 音声の欠落で空いた隙間を、直前の音の時間伸長で補間する
+  - 音声の Object が欠落したときや、時間軸の目標の遅延が増えたときにできる無音の隙間を、直前の音の末尾のピッチ周期を繰り返して埋める。5 ms 以下の隙間と、開始が今から 10 ms 未満の隙間は補間せず、100 ms を超える分も無音のまま残す
+  - 相関が足りない音や継ぎ目の段差が大きい音では補間せず、補間が長くなるほど末尾の振幅を下げる
+  - @voluntas
 - [ADD] C4M のトークン (CAT) で接続した配信が、catalog の track に `authInfo` を載せる
   - draft-ietf-moq-msf-01 §5.2.42 / §11.4.1: 視聴側は catalog の `authInfo` を見て、track の認可にトークンが要るかを決める。載せないと、視聴側はトークンを付けずに SUBSCRIBE を送る
   - `catalogAuthInfoForSetupToken` を追加する。SETUP の Authorization Token が CAT (Token Type 0x01) の USE_VALUE / REGISTER のときだけ `{"cat": "%c4m%"}` を返す。`%c4m%` は §11.1.1 の予約パラメータ `c4m` を指す変数参照 (§5.4 / §5.2.43) で、トークンそのものは載せない

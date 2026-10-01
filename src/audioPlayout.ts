@@ -12,8 +12,10 @@
  *   音声だけが後ろへずれ、共有の時間軸を使う映像とずれるため、取り直さない
  * - 音声だけを購読していて目標を守らないとき (`enforceTarget` が false) は、揃える相手が
  *   いないため、届かなかった音は捨てずに基準を取り直す (最初の実装の挙動)
- * - どの音も前の音の終わりより前には鳴らさない (重ねない)。前の音の終わりより後ろに
- *   空いた分は無音として残す
+ * - どの音も前の音の終わりより前には鳴らさない (重ねない)。前の音の終わりと今回の開始の
+ *   間に空いた分は `gapStartSeconds` / `gapSeconds` として返し、呼び出し側が上限
+ *   (`AUDIO_PLAYOUT_MAX_CONCEAL_SECONDS`) まで補間できる (5 ms 以下と、開始が今 + 余裕より
+ *   前の隙間は補間しない)
  * - 並べすぎの上限は「再生の遅れ + 余裕 (`AUDIO_PLAYOUT_BACKLOG_SECONDS`)」である
  *
  * 時刻は `AudioContext.currentTime` と同じ秒、timestamp は `AudioData.timestamp` と同じ
@@ -58,6 +60,38 @@ export const AUDIO_PLAYOUT_MIN_LEAD_SECONDS = 0.01;
  * 表示の遅れの上限 (`MAX_PLAYOUT_DELAY_MS` = 500 ms) を超えたら、一度捨てて目標へ戻す
  */
 export const AUDIO_PLAYOUT_MAX_LATENESS_SECONDS = 0.5;
+
+/**
+ * 補間する隙間の下限 (秒)
+ *
+ * これ以下の隙間は補間の継ぎ目が耳につくため補間せず、無音のまま残す
+ */
+export const AUDIO_PLAYOUT_MIN_CONCEAL_SECONDS = 0.005;
+
+/**
+ * 補間する隙間の上限 (秒)
+ *
+ * これより長い欠落は補間で埋めきらず、超えた分は無音のまま残す
+ */
+export const AUDIO_PLAYOUT_MAX_CONCEAL_SECONDS = 0.1;
+
+/**
+ * 補間した音の末尾の振幅
+ *
+ * 長い補間ほど末尾の振幅をこの値まで徐々に下げる (繰り返しの音を目立たなくする)
+ */
+export const AUDIO_PLAYOUT_CONCEAL_END_GAIN = 0.5;
+
+/**
+ * 補間した音の末尾の振幅を、隙間の長さから求める
+ *
+ * 長い補間ほど末尾の振幅を `AUDIO_PLAYOUT_CONCEAL_END_GAIN` まで下げる。呼び出し側は
+ * `concealSamples` の `endGain` に渡す (規則を呼び出し側ごとに書かない)
+ */
+export function concealmentEndGain(gapSeconds: number): number {
+  const ratio = Math.min(1, Math.max(0, gapSeconds / AUDIO_PLAYOUT_MAX_CONCEAL_SECONDS));
+  return 1 - (1 - AUDIO_PLAYOUT_CONCEAL_END_GAIN) * ratio;
+}
 
 /**
  * 前の音と重なってよい上限 (秒)
@@ -126,6 +160,16 @@ export type AudioPlayoutDecision =
        * 実際に詰められるかは波形しだいであり、適用した結果を `confirmStretch` で返す
        */
       compressSeconds: number;
+      /**
+       * 補間する隙間の開始時刻 (`AudioContext.currentTime` の秒)。
+       * 補間しないときは `gapSeconds` が 0 であり、この値は使わない
+       */
+      gapStartSeconds: number;
+      /**
+       * 補間する長さ (秒)。上限で切った値であり、適用した結果を `confirmConcealment` で
+       * 返す。補間しないときは 0
+       */
+      gapSeconds: number;
     }
   | { kind: "drop" };
 
@@ -150,6 +194,11 @@ export class AudioPlayoutScheduler {
   private requestedSeconds = 0;
   // 詰めた合計 (秒)。統計に出す
   private compressedSeconds = 0;
+  // 補間した合計 (秒) と回数。統計に出す
+  private concealedSeconds = 0;
+  private concealCount = 0;
+  // 直前の音に要求した補間の長さ (秒)。`confirmConcealment` で実際の値に置き換える
+  private requestedConcealSeconds = 0;
 
   constructor(options: AudioPlayoutOptions = {}) {
     this.backlogSeconds = options.backlogSeconds ?? AUDIO_PLAYOUT_BACKLOG_SECONDS;
@@ -176,6 +225,16 @@ export class AudioPlayoutScheduler {
     return this.latenessSeconds;
   }
 
+  /** 補間した合計 (秒) */
+  get concealed(): number {
+    return this.concealedSeconds;
+  }
+
+  /** 補間した回数 (実際に補間できた音の数) */
+  get concealments(): number {
+    return this.concealCount;
+  }
+
   /**
    * 音を鳴らす時刻を決める
    *
@@ -190,6 +249,8 @@ export class AudioPlayoutScheduler {
     durationSeconds: number,
     target: AudioPlayoutTarget,
   ): AudioPlayoutDecision {
+    // 前の音に要求した補間の長さが返ってきていなければ、適用されなかったものとして扱う
+    this.requestedConcealSeconds = 0;
     if (target.targetStartSeconds === null || !target.enforceTarget) {
       return this.scheduleByArrival(nowSeconds, timestampMicroseconds, durationSeconds, target);
     }
@@ -207,7 +268,8 @@ export class AudioPlayoutScheduler {
     // 目標を過ぎて届いた音も、前の音と重なる音も捨てない。今から鳴らせる最も早い時刻へ
     // ずらして鳴らし、ずらした分を波形の周期を使って詰めることで目標へ戻す
     // (libwebrtc の NetEq は遅れて届いたパケットを捨てず、accelerate で目標へ戻す)
-    const earliestSeconds = Math.max(nowSeconds + this.minLeadSeconds, this.lastEnd ?? -Infinity);
+    const previousEnd = this.lastEnd;
+    const earliestSeconds = Math.max(nowSeconds + this.minLeadSeconds, previousEnd ?? -Infinity);
     const startAt = Math.max(targetStartSeconds, earliestSeconds);
     const latenessSeconds = startAt - targetStartSeconds;
     if (latenessSeconds > AUDIO_PLAYOUT_MAX_LATENESS_SECONDS) {
@@ -224,7 +286,8 @@ export class AudioPlayoutScheduler {
     this.requestedSeconds = compressSeconds;
     this.lastEnd = startAt + durationSeconds - compressSeconds;
     this.lastTimestampMicroseconds = timestampMicroseconds;
-    return { kind: "play", startAt, compressSeconds };
+    const concealment = this.concealmentOf(nowSeconds, previousEnd, startAt);
+    return { kind: "play", startAt, compressSeconds, ...concealment };
   }
 
   /**
@@ -249,6 +312,56 @@ export class AudioPlayoutScheduler {
     }
   }
 
+  /**
+   * 実際に補間した長さを記録する (呼び出し側が補間を予約した後に呼ぶ)
+   *
+   * 要求した長さより長い分は要求までに切り、0 のときは数えない (相関が足りない、
+   * 上限を超えた、予約できない場合に数えないため)
+   *
+   * @param appliedSeconds - 実際に補間した長さ (秒)
+   */
+  confirmConcealment(appliedSeconds: number): void {
+    const requestedSeconds = this.requestedConcealSeconds;
+    this.requestedConcealSeconds = 0;
+    if (requestedSeconds === 0) {
+      return;
+    }
+    const applied = Math.max(0, Math.min(appliedSeconds, requestedSeconds));
+    if (applied === 0) {
+      return;
+    }
+    this.concealCount += 1;
+    this.concealedSeconds += applied;
+  }
+
+  /**
+   * 前の音の終わりと今回の開始時刻の間から、補間する隙間を求める
+   *
+   * 下限 (`AUDIO_PLAYOUT_MIN_CONCEAL_SECONDS`) 以下の隙間と、開始が今 + 余裕より前の
+   * 隙間 (予約できない。過去も含む) は補間しない。上限 (`AUDIO_PLAYOUT_MAX_CONCEAL_SECONDS`)
+   * を超える分は切り、残りは無音のまま残す。見つかった隙間は `confirmConcealment` で
+   * 実際に補間した長さを返す要求として記録する
+   */
+  private concealmentOf(
+    nowSeconds: number,
+    previousEnd: number | null,
+    startAt: number,
+  ): { gapStartSeconds: number; gapSeconds: number } {
+    if (previousEnd === null) {
+      return { gapStartSeconds: 0, gapSeconds: 0 };
+    }
+    const gapSeconds = startAt - previousEnd;
+    if (gapSeconds <= AUDIO_PLAYOUT_MIN_CONCEAL_SECONDS) {
+      return { gapStartSeconds: 0, gapSeconds: 0 };
+    }
+    if (previousEnd < nowSeconds + this.minLeadSeconds) {
+      return { gapStartSeconds: 0, gapSeconds: 0 };
+    }
+    const cappedSeconds = Math.min(gapSeconds, AUDIO_PLAYOUT_MAX_CONCEAL_SECONDS);
+    this.requestedConcealSeconds = cappedSeconds;
+    return { gapStartSeconds: previousEnd, gapSeconds: cappedSeconds };
+  }
+
   /** 基準を消す。次の音で作り直す (購読のやり直し、AudioContext の作り直し) */
   reset(): void {
     this.anchor = null;
@@ -256,6 +369,7 @@ export class AudioPlayoutScheduler {
     this.lastTimestampMicroseconds = null;
     this.latenessSeconds = 0;
     this.requestedSeconds = 0;
+    this.requestedConcealSeconds = 0;
   }
 
   /**
@@ -272,6 +386,7 @@ export class AudioPlayoutScheduler {
   ): AudioPlayoutDecision {
     const delaySeconds = target.delaySeconds;
     const limitSeconds = delaySeconds + this.backlogSeconds;
+    const previousEnd = this.lastEnd;
     let startAt = this.expectedStartAt(timestampMicroseconds, nowSeconds, delaySeconds);
     if (startAt < nowSeconds + this.minLeadSeconds) {
       // 過ぎてから届いた。前の音はすべて今より前に終わっているため、重ならない
@@ -290,7 +405,8 @@ export class AudioPlayoutScheduler {
     }
     this.lastEnd = startAt + durationSeconds;
     this.lastTimestampMicroseconds = timestampMicroseconds;
-    return { kind: "play", startAt, compressSeconds: 0 };
+    const concealment = this.concealmentOf(nowSeconds, previousEnd, startAt);
+    return { kind: "play", startAt, compressSeconds: 0, ...concealment };
   }
 
   /** 基準と前の音から、この音を鳴らす時刻を求める (前の音の終わりより前にしない) */

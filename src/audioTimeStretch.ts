@@ -1,5 +1,5 @@
 /**
- * 復号した音声を、波形の周期性を使って時間圧縮・時間伸長する
+ * 復号した音声を、波形の周期性を使って時間圧縮・時間伸長・補間する
  *
  * NetEq (`modules/audio_coding/neteq/time_stretch.cc` と `accelerate.cc` /
  * `preemptive_expand.cc`) の時間伸縮を移植したものである。遅れて届いた音を捨てると
@@ -17,6 +17,9 @@
  *   ピッチ周期 1 つ分を削り、時間伸長は 1 つ分を挿す
  * - 操作する位置は音の中央にする (NetEq は 30 ms の入力の 15 ms の位置 = 中央で行う。
  *   ここへ渡す音は Opus の 1 フレーム = 20 ms であるため、中央は 10 ms になる)
+ * - 欠落した区間の補間 (`concealSamples`) は末尾の 2 周期分の相関から周期を求め、末尾の
+ *   周期を繰り返す。相関が足りない音と、繰り返しの継ぎ目の段差が大きい音では操作しない
+ *   (無音は操作する。先頭の窓で周期を求める時間圧縮・時間伸長とは解析の向きが異なる)
  *
  * 単位はサンプル数、時刻は呼び出し側が引数で渡す。ブラウザ API に依存しない。
  */
@@ -319,4 +322,148 @@ export function expandSamples(
     output.push(expanded);
   }
   return { channels: output, lengthChangeSamples: added };
+}
+
+/**
+ * 継ぎ目の段差を許す、末尾の周期の自然な段差に対する倍率
+ *
+ * 周期どおりに繰り返せていれば、繰り返しの先頭は末尾の続きになるため段差は自然な段差と
+ * 同程度になる。周期がずれている音では段差が大きくなる (クリックとして聞こえる) ため、
+ * この倍率を超える音では補間しない
+ */
+export const TIME_STRETCH_MAX_SEAM_STEP_RATIO = 2;
+
+/** 末尾で繰り返しているピッチ周期の探索の結果 */
+interface TailPeriod {
+  /** 末尾で繰り返している長さ (4 kHz のサンプル数)。見つからなければ 0 */
+  readonly lag: number;
+  /** 末尾の 2 周期分の相関 (0 から 1) */
+  readonly correlation: number;
+}
+
+/** 補間した音 (直前の音の末尾を伸ばした分だけ) */
+export interface ConcealResult {
+  /** 生成した音 (チャンネルごと)。補間できなかったときは長さ 0 */
+  readonly channels: AudioSamples[];
+  /** 生成した長さ (サンプル数)。0 のときは補間なし */
+  readonly generatedSamples: number;
+}
+
+/**
+ * 直前の音の末尾を、ピッチ周期を繰り返して伸ばす (欠落した区間の補間)
+ *
+ * 周期は末尾の 2 周期分の相関から求める (先頭の相関窓で求める `findLag` とは別。
+ * 繰り返しの継ぎ目は末尾にあるため、末尾の周期を直接評価する)。相関が
+ * `TIME_STRETCH_CORRELATION_THRESHOLD` より低い音 (繰り返していない音) と、継ぎ目の
+ * 段差が `TIME_STRETCH_MAX_SEAM_STEP_RATIO` を超える音では補間しない (無音のまま残す)。
+ * 無音は聞こえないため、相関が足りなくても補間する (時間圧縮・時間伸長と同じ扱い)。
+ * 周期どおりに繰り返せているときは、繰り返しの先頭が末尾の続きになるため継ぎ目は
+ * 波形が連続する。
+ *
+ * 生成した音の末尾の振幅は `endGain` まで徐々に下げる (長い欠落を無音へ近づける)。
+ *
+ * @param channels - 直前の音のチャンネルごとのサンプル (すべて同じ長さ)
+ * @param sampleRate - サンプルレート (Hz)
+ * @param seconds - 伸ばす長さ (秒)
+ * @param endGain - 生成した音の末尾の振幅 (1 で減衰なし。省略時は 1)
+ * @returns 生成した音と、生成した長さ。補間できないときは長さ 0
+ */
+export function concealSamples(
+  channels: readonly AudioSamples[],
+  sampleRate: number,
+  seconds: number,
+  endGain = 1,
+): ConcealResult {
+  const reference = channels[0];
+  const length = reference?.length ?? 0;
+  const target = Math.max(0, Math.round(seconds * sampleRate));
+  if (reference === undefined || length === 0 || !Number.isFinite(target) || target <= 0) {
+    return { channels: [], generatedSamples: 0 };
+  }
+  // 末尾の 2 周期分の相関から、末尾で繰り返している周期を直接求める
+  const samplesPer4kHzSample = Math.round(sampleRate / 4_000);
+  const downsampled = downsampleTo4kHz(reference, samplesPer4kHzSample);
+  const tail = findTailLag(downsampled);
+  if (tail.lag === 0) {
+    // 末尾に周期が無い (音が短すぎる、対応していないサンプルレート)
+    return { channels: [], generatedSamples: 0 };
+  }
+  if (tail.correlation < TIME_STRETCH_CORRELATION_THRESHOLD && !isSilent(channels)) {
+    return { channels: [], generatedSamples: 0 };
+  }
+  const period = tail.lag * samplesPer4kHzSample;
+  if (!isSeamSmooth(reference, period)) {
+    return { channels: [], generatedSamples: 0 };
+  }
+  const clampedEndGain = Math.min(1, Math.max(0, endGain));
+  const output: AudioSamples[] = [];
+  for (const channel of channels) {
+    // 末尾のピッチ周期 1 つ分を、必要な長さまで位相を保ったまま繰り返す
+    const source = channel.subarray(length - period, length);
+    const generated = new Float32Array(target);
+    for (let index = 0; index < target; index++) {
+      generated[index] = source[index % period] ?? 0;
+    }
+    if (clampedEndGain < 1) {
+      // 長い補間ほど末尾の振幅を下げる (繰り返しの音を目立たなくする)
+      for (let index = 0; index < target; index++) {
+        const gain = 1 - (1 - clampedEndGain) * ((index + 1) / target);
+        generated[index] = (generated[index] ?? 0) * gain;
+      }
+    }
+    output.push(generated);
+  }
+  return { channels: output, generatedSamples: target };
+}
+
+/**
+ * 末尾で繰り返している長さ (4 kHz のサンプル数) を探す
+ *
+ * 末尾の 2 周期分どうしを比べ、正規化した相関が最も高いずらし幅を返す。先頭の相関窓で
+ * 探す `findLag` と違い、繰り返しの継ぎ目になる末尾を直接評価する。2 周期分の末尾が
+ * 取れない (音が短すぎる) ときは lag 0 を返す
+ */
+function findTailLag(downsampled: AudioSamples): TailPeriod {
+  const end = downsampled.length;
+  let bestLag = 0;
+  let bestCorrelation = -1;
+  for (let lag = TIME_STRETCH_MIN_LAG; lag <= TIME_STRETCH_MAX_LAG && lag * 2 <= end; lag++) {
+    let dot = 0;
+    let energyBefore = 0;
+    let energyAfter = 0;
+    for (let index = 0; index < lag; index++) {
+      const before = downsampled[end - 2 * lag + index] ?? 0;
+      const after = downsampled[end - lag + index] ?? 0;
+      dot += before * after;
+      energyBefore += before * before;
+      energyAfter += after * after;
+    }
+    const denominator = Math.sqrt(energyBefore * energyAfter);
+    const correlation = denominator === 0 ? 0 : dot / denominator;
+    if (correlation > bestCorrelation) {
+      bestCorrelation = correlation;
+      bestLag = lag;
+    }
+  }
+  return { lag: bestLag, correlation: bestCorrelation };
+}
+
+/**
+ * 繰り返しの継ぎ目の段差が、末尾の周期の自然な段差と比べて大きすぎないかを確かめる
+ *
+ * 段差は、末尾の最後のサンプルと、繰り返しの先頭になる 1 周期前のサンプルの差である。
+ * 周期がずれている音ではここが大きくなり、クリックとして聞こえる
+ */
+function isSeamSmooth(reference: AudioSamples, period: number): boolean {
+  let naturalStep = 0;
+  for (let index = reference.length - period + 1; index < reference.length; index++) {
+    naturalStep = Math.max(
+      naturalStep,
+      Math.abs((reference[index] ?? 0) - (reference[index - 1] ?? 0)),
+    );
+  }
+  const seamStep = Math.abs(
+    (reference[reference.length - period] ?? 0) - (reference[reference.length - 1] ?? 0),
+  );
+  return seamStep <= naturalStep * TIME_STRETCH_MAX_SEAM_STEP_RATIO;
 }
