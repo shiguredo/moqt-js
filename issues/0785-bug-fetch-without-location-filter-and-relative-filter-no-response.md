@@ -3,11 +3,11 @@
 - Created: 2026-10-01
 - Completed: {YYYY-MM-DD}
 - Branch: feature/fix-fetch-without-location-filter
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-10-01
 
 ## 目的
 
-LOCATION FILTER には、省略 (「{0, 0} から Largest Object まで」の要求) と 1 フィールドの相対指定の 2 つの形がある (draft-ietf-moq-transport-21 Section 9.20.10)。しかし実リレーに対してこの 2 つの形の FETCH は完了せず、`session.fetch()` が解決しない。実リレーへ接続する E2E テストを追加した際に判明した。
+FETCH の LOCATION FILTER は省略でき、省略時は「{0, 0} から Largest Object まで」の要求になる (draft-ietf-moq-transport-21 Section 3.3.1 / Section 9.20.10)。また 1 フィールドの相対指定 (StartGroup のみ、draft-ietf-moq-transport-21 Section 9.20.10) も仕様上有効な形である。しかし実リレーに対してこの 2 つの形の FETCH は完了せず、`session.fetch()` が解決しない。実リレーへ接続する E2E テストを追加した際に判明した。
 
 省略形が使えないと、過去の Object を取得する経路の一部が実ワイヤで検証できない。加えて `createMediaSubscriber` のカタログ FETCH は、LARGEST_OBJECT が不明なときに `catalogFetchFilter` が `undefined` を返してこの形を送るため、カタログの過去 Object を取りこぼす原因になり得る。
 
@@ -37,6 +37,7 @@ LOCATION FILTER には、省略 (「{0, 0} から Largest Object まで」の要
 
 ## 参照
 
+- draft-ietf-moq-transport-21 Section 3.3.1 (Location Filters)
 - draft-ietf-moq-transport-21 Section 9.11 (FETCH)
 - draft-ietf-moq-transport-21 Section 9.12 (FETCH_OK)
 - draft-ietf-moq-transport-21 Section 9.20.6 (FILL TIMEOUT Parameter)
