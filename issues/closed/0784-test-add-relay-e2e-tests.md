@@ -3,7 +3,7 @@
 - Created: 2026-09-30
 - Completed: 2026-10-01
 - Branch: feature/add-relay-e2e-tests
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-10-01
 
 ## 目的
 
@@ -17,13 +17,13 @@
 - 同じ secret を使う姉妹リポジトリには先行例がある。`moqt-rs` は `e2e-test.yml` で `secrets.TEST_MOQT_URI` のリレーへ moq-pub を接続し、develop / feature の push と PR で実行して未設定なら skip する。`moqt-py` は `tests/test_connect.py` を `pytest.mark.skipif` で gate している
 - `moqt-rs` の E2E は develop で success しており、リレーは CI の runner から到達できる
 - `secrets.TEST_MOQT_URI` の値は `moqt://` の URI である。`moqt-rs` は公開ログにリレーのホストやトークンを残さないため、接続先 (authority) と fragment を `::add-mask::` でマスクしている
-- 関連する pending の `0443-test-add-e2e-fetch-coverage.md` は「実サーバーを CI で安定して用意できるようになった時点で再開する」として、ハーネスの再作成を待っている
+- 関連する pending の `0443-test-add-e2e-fetch-coverage.md` は「実サーバーを CI で安定して用意できるようになった時点で再開する」として、ハーネスの再作成を待っている。0443 の FETCH 実ワイヤ検証 (filter 省略 / Location Filter 指定) は本 issue の FETCH 検証が包含するため、本 issue の完了時に 0443 は重複として closed にする (ハーネスの再作成と実リレーの用意は本 issue が行う)
 
 ## 設計方針
 
-- `tests/e2e/` に実接続用のテストページ (専用 Vite アプリ) を再作成する。`window.__moqtE2E` に接続 / publish / subscribe / fetch の操作を露出し、spec は `page.evaluate` 経由で呼ぶ。モックやスタブは使わない
+- `tests/e2e/` に実接続用のテストページ (専用 Vite アプリ) を再作成する。`window.__moqtE2E` に接続 / publish / subscribe / fetch の操作を露出し、spec は `page.evaluate` 経由で呼ぶ。モックやスタブは使わない。テストページは専用 Vite アプリの dev サーバーで配信し、`pnpm-workspace.yaml` の `packages` と `playwright.config.ts` の `webServer` へ再登録する (0599 で削除した moqt-js-e2e と同じ構成)
 - Publisher と Subscriber は開始と観測を分けたハンドル API にする。spec は `expect.poll` で状態を待ち、固定の sleep に依存しない
-- spec は `tests/e2e/relay/` に置き、`playwright.config.ts` に `relay` project を追加する。実リレーを必要としないテストとは要求が異なるため project を分ける
+- spec は `tests/e2e/relay/` に置き、`playwright.config.ts` に `relay` project を追加する。実リレーを必要としないテストとは要求が異なるため project を分ける。既定の `chromium` project は `testIgnore` で `tests/e2e/relay/` を除外し、`relay` project は `testMatch` で `tests/e2e/relay/` に限定する (`testDir` / `testMatch` の継承では 92 テストの完了条件を満たせない)。`package.json` に `e2e-test:relay`(`vp exec playwright test --project='relay'`) を追加し、既存の `e2e-test`(`vp exec playwright test --project='chromium'`) は実リレーを必要としないテストだけを実行したままにする
 - 接続先は環境変数 `TEST_MOQT_URI` で渡す。未設定の環境 (fork からの PR、secret を持たないローカル) では `test.skip` で skip として記録し、暗黙の成功扱いにしない。`describe.skip` は使わない
 - `.github/workflows/e2e-test.yml` を新設し、`secrets.TEST_MOQT_URI` を環境変数として渡す。secret が未設定の場合はテストを実行せずジョブを成功させる。接続先の host / authority と fragment は `::add-mask::` でマスクする
 - エラーメッセージに接続先が混ざることを防ぐため、テストページ側でも接続先を伏せ字にしてから spec へ返す
