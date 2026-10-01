@@ -1,7 +1,7 @@
 # 音声再生の統計を MediaReceiverStats に公開する
 
 - Created: 2026-10-01
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-10-01
 - Branch: feature/change-audio-playout-stats
 - Polished: 2026-10-01
 
@@ -34,4 +34,9 @@
 
 ## 解決方法
 
-{未着手}
+- `src/codec/types.ts` の `AudioReceiverStats` に `playoutRebases` / `playoutDrops` / `playoutConcealments` / `playoutCompressedMs` / `playoutConcealedMs` / `playoutLatenessMs` を追加した。時間はミリ秒で返す
+- `src/createMediaSubscriber.ts` は `getStats()` で `AudioPlayoutScheduler` の getter を読み、秒をミリ秒へ換算して返す (`audioReceiverStats`)。受信の統計 (`audioStats`) は `Pick<AudioReceiverStats, "framesReceived" | "bytesReceived">` に絞り、再生の分は getStats のたびに読む
+- 基準の取り直し / 捨てた音 / 補間の回数 / 詰めた合計 / 補間した合計は購読をやり直しても消えず、今の遅れだけが購読のやり直し (AudioContext の作り直し) で 0 に戻る。この扱いを型・docs・JSDoc に書いた
+- `docs/HIGH_LEVEL_API.md` と `CHANGES.md` ([CHANGE]、6 つのフィールドの追加で後方互換なし) を更新した
+- テスト: 到着基準の並べ方で補間の回数と長さを、目標を守る並べ方で詰めと遅れのミリ秒換算 (非 0) を、基準の取り直しと捨ての写像を、購読のやり直しで今の遅れだけが 0 に戻ることを固定した。`AudioPlayoutScheduler.reset()` 単体でも統計の残存を固定した
+- `vp check` / `tsc --noEmit` / 全 3554 テストが通った
