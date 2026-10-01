@@ -3,7 +3,7 @@
 - Created: 2026-10-01
 - Completed: {YYYY-MM-DD}
 - Branch: feature/update-remove-implementation-names
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-10-01
 
 ## 目的
 
@@ -19,7 +19,7 @@
   - `src/audioPlayout.ts` / `src/audioPlayout.test.ts`
   - `src/createMediaSubscriber.ts`
   - `devtools/src/hooks/useSubscriber.ts`
-- 直近の変更で新規に追加したコメントは外部実装名を使っていない。古いコメントに残っている
+- 外部実装名への言及は、A/V 同期を追加した変更 (2026-09-26 の 0635) と、音声と映像の遅延を別々に決めた変更 (2026-10-01 の 0782) で追加されたコメントにある。その後の変更 (0786 / 0789) で追加したコメントには無い
 - `refs/` に該当実装の一次資料は無く、引用の正しさをこのリポジトリで確認する手段は無い
 
 ## 設計方針
