@@ -2,7 +2,7 @@
 
 - Created: 2026-08-29
 - Updated: 2026-09-05
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-10-01
 - Branch: feature/add-e2e-fetch-coverage
 - Polished: {YYYY-MM-DD}
 
@@ -51,3 +51,24 @@ FETCH (draft-20 §10.13 の単一 FETCH。範囲は LOCATION_FILTER パラメー
 3. そのうえで本 issue の `fetch.spec.ts` を追加する
 
 サーバーを用意できない限り FETCH の実ワイヤ検証はできないため、pending とする。
+
+## 解決方法
+
+実リレーへ接続する E2E のハーネスを再作成し、FETCH の実ワイヤ検証を `tests/e2e/relay/fetch.spec.ts` に追加した。本 issue が前提にしていた `tests/e2e/fetch.spec.ts` の新設は、0599 で削除したハーネスの復活 (実リレー接続用テストページと `TEST_MOQT_URI` の env-gate) と同時に行い、0599 が pending の理由に挙げた 3 点をすべて満たす形にした。
+
+- 実 MOQT サーバーを CI で安定して用意する手段: `secrets.TEST_MOQT_URI` を `.github/workflows/e2e-test.yml` から環境変数として渡す。secret が未設定の環境ではテストを実行せずジョブを成功させる
+- 接続用ハーネスの再作成: `tests/e2e/` の専用 Vite アプリが `window.__moqtE2E` を公開する。moqt-devtools の UI テストとは別の Playwright project (`relay`) として CI で実際に走る
+- FETCH の最小シナリオの追加: `tests/e2e/relay/fetch.spec.ts`
+
+完了条件との対応:
+
+- FETCH の最小シナリオが実サーバー設定環境で走り、end 通知と error ゼロを検証する: 絶対開始の Location Filter (`{ startGroup, startObject }`。draft-ietf-moq-transport-21 Section 9.20.10 の 2 フィールド) を指定した単一 FETCH で、end が通知されること、error コールバックが呼ばれないこと、取得 Object 数が publish 済みフレーム数を超えないこと、指定した Group より前の Object が混ざらないことを検証する
+- 環境変数未設定時は skip として記録されること: `requireRelayUri()` が `test.skip` を呼び、暗黙の成功扱いにしない
+- `vp check` / `tsc --noEmit` / `vp test run` が通ること
+
+`TEST_MOQT_AUTH_TOKEN` は org の secret に存在しないため、接続は Authorization Token なしで行う。Authorization Token を伴う FETCH の e2e は本 issue の対象外とする。
+
+残した課題:
+
+- LOCATION FILTER を省略した FETCH (全オブジェクトの要求) と 1 フィールドの相対指定の FETCH は、検証に使うリレーが FETCH_OK を返さないため対象から外した。別の issue で扱う
+- fill fetch ストリーム (draft-ietf-moq-transport-21 Section 10.2.15) の e2e は当初の予定どおり対象外とする
