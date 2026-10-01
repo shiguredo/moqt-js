@@ -1,7 +1,7 @@
 # 未使用の AUDIO_PLAYOUT_MAX_OVERLAP_SECONDS を削除する
 
 - Created: 2026-10-01
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-10-01
 - Branch: feature/refactor-remove-overlap-constant
 - Polished: 2026-10-01
 
@@ -28,4 +28,7 @@
 
 ## 解決方法
 
-{未着手}
+- `src/audioPlayout.ts` から `AUDIO_PLAYOUT_MAX_OVERLAP_SECONDS` とその JSDoc を削除した。参照はコード・テスト・docs に残っていない (ripgrep で確認)
+- `CHANGES.md` の `## develop` の `### misc` に [CHANGE] エントリを追加した。削除の理由 (重なりの判定が無くなって参照されず、定義だけが残っていた) と、公開 API に変更がないことを書いた
+- 浮動小数点の誤差の説明は `src/audioPlayout.test.ts` のコメントとテスト、`CHANGES.md` の既存エントリに残っており、失われていない
+- `vp check` / `tsc --noEmit` / 全 3554 テストが通った。ビルド (`vp run build`) の成果物 (dist/index.d.ts / index.js) は削除の前後で一致し、公開 API への影響が無いことも確認した
