@@ -3,6 +3,8 @@ minimumReleaseAge: 2880
 packages:
   - devtools
   - examples
+  # 実リレーへ接続する Playwright E2E のテストページ (tests/e2e/vite.config.ts)
+  - tests/e2e
 
 overrides:
   # vite-plus が同梱する core / vitest と同じ版に揃える。

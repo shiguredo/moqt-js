@@ -351,6 +351,23 @@ vp run build
 vp test
 ```
 
+### E2E テスト
+
+Playwright による E2E テストは 2 つに分かれています。
+
+```bash
+# 実リレーを必要としないテスト (moqt-devtools の UI、codec wrapper)
+vp run e2e-test
+
+# 実リレーへ接続するテスト (SETUP の交換、publish / subscribe、FETCH)
+vp run e2e-test:relay
+```
+
+`vp run e2e-test:relay` は `.env` があれば読み込みます。接続先の `TEST_MOQT_URI`
+(`moqt://...`) が設定されていない場合は skip します。設定方法は
+[.env.example](.env.example) を参照してください。CI では `secrets.TEST_MOQT_URI`
+を環境変数として渡します。
+
 ## サンプル
 
 [examples/](examples/) ディレクトリにサンプルコードがあります。

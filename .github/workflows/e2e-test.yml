@@ -1,0 +1,75 @@
+# GitHub Actions による実リレーへの接続テスト
+#
+# - secrets.TEST_MOQT_URI が指す MOQT リレーへ実ブラウザ (Chromium) から接続し、
+#   SETUP の交換、publish / subscribe、FETCH を検証する
+# - secrets.TEST_MOQT_URI には moqt:// の URI を指定する
+# - secret が未設定の場合 (fork からの PR など) はテストを実行せず、ジョブは成功させる。
+#   テスト側も TEST_MOQT_URI が未設定なら skip する (二重の防御)
+# - 公開ログにリレーのホストやトークンを残さないよう、接続先 (host / authority) と
+#   fragment を ::add-mask:: でマスクする
+
+name: e2e-test
+
+on:
+  push:
+    branches:
+      - develop
+      - "feature/**"
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  relay:
+    runs-on: ubuntu-slim
+    # Chromium の install と、実リレーを相手にしたテストを見込んで余裕を持たせる
+    timeout-minutes: 20
+    env:
+      TEST_MOQT_URI: ${{ secrets.TEST_MOQT_URI }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1
+        with:
+          node-version: "22"
+          cache: true
+
+      - name: TEST_MOQT_URI が未設定の場合はスキップする
+        if: env.TEST_MOQT_URI == ''
+        run: echo "TEST_MOQT_URI is not set; skipping the relay e2e test"
+
+      # secrets 全体は GitHub が自動でマスクするが、ログには host や authority が
+      # 単体で現れることがある (Playwright のエラー出力、Chromium のログなど)
+      - name: 接続先の host と fragment をマスクする
+        if: env.TEST_MOQT_URI != ''
+        run: |
+          set -euo pipefail
+
+          authority="${TEST_MOQT_URI#*://}"
+          authority="${authority%%/*}"
+          authority="${authority%%[?#]*}"
+          if [ "${authority#\[}" != "$authority" ]; then
+            # IPv6 リテラルは `[...]` の中身を host とする
+            host="${authority#[}"
+            host="${host%%]*}"
+          else
+            host="${authority%%:*}"
+          fi
+          echo "::add-mask::$host"
+          echo "::add-mask::$authority"
+          if [ "${TEST_MOQT_URI#*#}" != "$TEST_MOQT_URI" ]; then
+            echo "::add-mask::${TEST_MOQT_URI#*#}"
+          fi
+
+      - name: 依存関係をインストールする
+        if: env.TEST_MOQT_URI != ''
+        run: vp install
+
+      - name: Chromium をインストールする
+        if: env.TEST_MOQT_URI != ''
+        run: vp exec playwright install --with-deps chromium
+
+      - name: 実リレーへ接続する E2E テストを実行する
+        if: env.TEST_MOQT_URI != ''
+        run: vp run e2e-test:relay
