@@ -780,6 +780,44 @@ test("reset: 目標を使わないときは次の音で基準を作り直す", (
   }
 });
 
+// reset: 再生の統計 (取り直し / 捨て / 補間 / 詰め) は消えず、今の遅れだけ 0 に戻る
+test("reset: 再生の統計は消えず、今の遅れだけ 0 に戻る", () => {
+  const scheduler = new AudioPlayoutScheduler();
+  const first = playFirst(scheduler);
+  // 40 ms 空けた音で補間を作る
+  const second = playDecisionOf(
+    scheduler.schedule(10, FRAME_MICROSECONDS, FRAME_SECONDS, enforcedTarget(10.06)),
+  );
+  scheduler.confirmConcealment(second.gapSeconds);
+  // 目標を使わない並べ方で、過ぎてから届いた音の基準を取り直す
+  const arrivalTarget: AudioPlayoutTarget = {
+    targetStartSeconds: null,
+    enforceTarget: false,
+    delaySeconds: AUDIO_PLAYOUT_DELAY_SECONDS,
+    presentationDelaySeconds: AUDIO_PLAYOUT_DELAY_SECONDS,
+  };
+  scheduler.schedule(100, 0, FRAME_SECONDS, arrivalTarget);
+  scheduler.schedule(200, FRAME_MICROSECONDS, FRAME_SECONDS, arrivalTarget);
+  // 並べすぎの音を捨てる
+  scheduler.schedule(300, 0, FRAME_SECONDS, enforcedTarget(300.5));
+  // 目標を過ぎて届いた音で今の遅れと詰めを作る
+  const late = playDecisionOf(
+    scheduler.schedule(300.6, 2 * FRAME_MICROSECONDS, FRAME_SECONDS, enforcedTarget(300.5)),
+  );
+  assert.isAbove(late.compressSeconds, 0);
+  assert.isAbove(scheduler.lateness, 0);
+  scheduler.confirmStretch(late.compressSeconds);
+  assert.equal(scheduler.rebases, 1);
+  assert.equal(scheduler.drops, 1);
+  scheduler.reset();
+  assert.equal(scheduler.lateness, 0);
+  assert.equal(scheduler.rebases, 1);
+  assert.equal(scheduler.drops, 1);
+  assert.equal(scheduler.concealments, 1);
+  assert.closeTo(scheduler.concealed, second.gapSeconds, EPSILON);
+  assert.closeTo(scheduler.compressed, first.compressSeconds + late.compressSeconds, EPSILON);
+});
+
 // reset: 目標を守るときも、前の音の重なりの判定を消す (購読のやり直しで前の音の記録が
 // 消えるため、消した後に届いた音は重ならない)
 test("reset: 目標を守るときも前の音の重なりの判定を消す", () => {

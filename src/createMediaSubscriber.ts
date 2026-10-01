@@ -443,8 +443,8 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   private pendingAudioObjects: MoqtObject[] = [];
   private pendingVideoObjects: MoqtObject[] = [];
 
-  // 統計情報
-  private audioStats: AudioReceiverStats = {
+  // 統計情報 (受信の分。再生の分は getStats のたびに scheduler から読む)
+  private audioStats: Pick<AudioReceiverStats, "framesReceived" | "bytesReceived"> = {
     framesReceived: 0,
     bytesReceived: 0,
   };
@@ -765,9 +765,29 @@ export class MediaSubscriberImpl implements MediaSubscriber {
    */
   getStats(): MediaReceiverStats {
     return {
-      audio: this.options.audio ? { ...this.audioStats } : null,
+      audio: this.options.audio ? this.audioReceiverStats() : null,
       video: this.options.video ? { ...this.videoStats } : null,
       avSync: this.avSyncStats(),
+    };
+  }
+
+  /**
+   * 音声の統計
+   *
+   * 受信の統計 (`audioStats`) に、再生の実測 (`AudioPlayoutScheduler`) を足す。基準の
+   * 取り直し / 捨てた音 / 補間の回数 / 詰めた合計 / 補間した合計は購読をやり直しても
+   * 消えず、今の遅れ (`playoutLatenessMs`) は基準を消すと (購読のやり直し、AudioContext
+   * の作り直し) 0 に戻る。時間はミリ秒で返す
+   */
+  private audioReceiverStats(): AudioReceiverStats {
+    return {
+      ...this.audioStats,
+      playoutRebases: this.audioPlayout.rebases,
+      playoutDrops: this.audioPlayout.drops,
+      playoutConcealments: this.audioPlayout.concealments,
+      playoutCompressedMs: this.audioPlayout.compressed * 1_000,
+      playoutConcealedMs: this.audioPlayout.concealed * 1_000,
+      playoutLatenessMs: this.audioPlayout.lateness * 1_000,
     };
   }
 
