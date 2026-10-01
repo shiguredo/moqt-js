@@ -94,16 +94,6 @@ export function concealmentEndGain(gapSeconds: number): number {
 }
 
 /**
- * 前の音と重なってよい上限 (秒)
- *
- * 目標の間隔が音の長さと同じとき (Opus の 20 ms を 20 ms ごとに並べるとき)、目標の開始
- * 時刻は浮動小数点の誤差 (10^-13 秒程度) で前の音の終わりよりわずかに前に出る。これを
- * 重なりとみなして捨てると、目標の間隔と音の長さが一致する通常の場合に音が 1 つおきに
- * 欠ける。誤差の分は前の音の終わりに繋げて鳴らし、本当に重なるときだけ捨てる
- */
-export const AUDIO_PLAYOUT_MAX_OVERLAP_SECONDS = 0.005;
-
-/**
  * 時計の対応付けをやり直す最小の差 (ミリ秒)
  *
  * `AudioContext.getOutputTimestamp()` はデバイスの位置の推定であり、読み取りごとに数 ms

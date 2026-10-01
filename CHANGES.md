@@ -2310,6 +2310,10 @@
 
 ### misc
 
+- [CHANGE] 未使用の `AUDIO_PLAYOUT_MAX_OVERLAP_SECONDS` を削除する
+  - 目標の間隔と音の長さが同じときに生じる浮動小数点の誤差を「重なり」とみなして捨てないための閾値として定義されていたが、前の音の終わりに繋げて鳴らす実装では参照されず、定義だけが残っていた
+  - 公開 API に変更なし (内部定数の削除のみ)
+  - @voluntas
 - [UPDATE] pnpm-workspace.yaml の overrides を vite-plus 1.0.0-rc.1 に揃える
   - `vp up` で `package.json` の `vite-plus` を 1.0.0-rc.1 に上げた際、`pnpm-workspace.yaml` の `overrides` が 0.3.3 のままだったため、vite-plus 1.0.0-rc.1 が解決する `vite` が 0.3.3 になり `vp run build` が失敗していた
   - `vite` と `@voidzero-dev/vite-plus-core` の override を 1.0.0-rc.1 に揃え、`pnpm-lock.yaml` を再生成する。ライブラリの挙動に変更はない
