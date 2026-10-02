@@ -1,7 +1,7 @@
 # Subscription と Fetch の定義・用語・節番号に追随する
 
 - Created: 2026-10-02
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-10-03
 - Branch: feature/update-subscription-fetch-definitions
 - Polished: 2026-10-02
 
@@ -82,4 +82,28 @@ v21 の節番号のまま参照している箇所は v22 では指し先が変�
 
 ## 解決方法
 
-{未着手}
+### 1. subscription-delivered / fill-delivered の根拠
+
+- `src/dataStream/common.ts` の `MoqtObject.fillDelivered` の JSDoc に、v22 §3.1 の「An object published or received in a subgroup or datagram is *subscription-delivered*.」と §3.4 の「An object delivered on the fill fetch stream is *fill-delivered*.」を根拠として書いた
+- `src/subscriber.ts` の `handleFillObject` / `handleObject`、`src/session/statistics.ts`、`src/session/incoming.ts` の §3.4 参照を v22 に更新した (§3.4 の節番号は不変)
+- `src/publisher.ts` / `src/publisher.test.ts` が引用していた v21 §3.3.1 の逐語「A publisher MUST NOT send subscription-delivered objects from outside the requested range.」を、v22 §3.3.1 の「A publisher MUST NOT send objects from outside the requested range.」に差し替えた (v22 では subscription-delivered が外れ、定義は §3.1 にあるため併記した)
+
+### 2. §3.1 の再番号付け
+
+- v21 §3.1.1 (Subscription State Management) → v22 §3.1.2、v21 §3.1.2 (Track Alias) → v22 §3.1.3 の参照を更新した (§3.1.2 系は 0800 の作業で先に直っており、残っていた `src/session/incomingPublish.ts` / `src/session/bidi.ts` / `src/session/bidiResponseCrossCancel.test.ts` / `src/session.test.ts` を本 issue で直した)
+- `src/pendingSubgroupBuffer.ts` と `src/session.ts` / `src/session/dataStreamIncoming.ts` が引用していた v21 §11.3.1 の unknown Track Alias の文を、v22 §3.1.3.1 の文言 (「When an endpoint receives a datagram or a new stream with a Track Alias that is not yet associated with an Established subscription, it MAY drop the data or buffer it briefly ...」) に差し替えた。同ファイル内に残っていた "brief period" も "buffer it briefly" に揃えた
+
+### 3. §3.2 冒頭の Fetch の既定範囲
+
+- `src/session/publicTypes.ts` の `FetchOptions.filter` の JSDoc に、v22 §3.2 の「A FETCH requests pre-existing Objects from a Track between a Start Location and an End Location, inclusive. This range is specified by a Location Filter (see Section 3.3.1) when present, or defaults to {0, 0} and Largest Object (Section 3.1.4) respectively.」を根拠として書いた
+- `src/session/params.ts` の `resolveFetchStartLocation` は develop 側で既に v22 §3.3.1 / §3.2 を参照していたため変更していない
+
+### 4. 挙動
+
+差分はコメントのみで、型・API・実行されるコードは変更していない (`vp test run` で従来の挙動が保たれることを確認)。
+
+### 5. 検証
+
+`vp check` (1284 files 整形 / 475 files lint・型エラーなし) / `tsc --noEmit` / `vp test run` (198 files / 3569 tests) が通る。`/review-diff-code` を 3 周回し、指摘 (逐語の強調記法、FILL PARAMETERS の節番号、省略の示し方、折り返し) はすべて反映した。CHANGES.md の `## develop` の `### misc` に [UPDATE] エントリを追加した。
+
+なお §3.4 を引く参照は本 issue の対象ファイル以外 (`src/session/params.ts` / `src/session/dataStreamIncoming.ts` / `src/session/bidiResponseScopeViolation.test.ts` など) にも v21 の版表記が残っている。§3.4 の節番号は v22 でも同じであり、一括の版表記更新は別途行う。
