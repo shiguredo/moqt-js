@@ -2340,6 +2340,11 @@
   - §11.4.1 / §11.4.1.1 / §11.4.1.2 の表と図は v22 で番号が繰り下がっているため、参照を Table 8 / 9 / 10 と Figure 29 に合わせる (§3.2.3 の relay の FETCH 処理はクライアント専用の本ライブラリには関係しない)
   - 挙動は変えず、コメントのみの変更
   - @voluntas
+- [UPDATE] コメントの用語と仕様参照を Delivery Mode に更新する
+  - draft-ietf-moq-transport-22 で Object Forwarding Preference が Delivery Mode に改名され、意味も「Original Publisher が最初の送信方法で確立し、確立後は同じ Object をそれに従って送る」に整理されたため、コメントと JSDoc の用語と参照を更新する
+  - 参照は §2.1.1 (Delivery Mode) / §3.2.1 (Fetch では Delivery Mode が適用されない) / §11.4.1.1 (Flags) / §2.1 (Group や Track の中で Subgroup と Datagram を併用できる) に合わせ、DATAGRAM ビット (0x40) の意味も書き直す
+  - シンボルとワイヤ形式は変えず、挙動に変更はない (コメントのみの変更)
+  - @voluntas
 - [ADD] 実リレーへ接続する E2E テストを追加する
   - `secrets.TEST_MOQT_URI` が指す MOQT リレーへ実ブラウザ (Chromium) から接続し、SETUP の交換と正常な切断、Canvas のダミー映像の publish / subscribe、FETCH (絶対開始の Location Filter) を検証する
   - 接続先は環境変数 `TEST_MOQT_URI` で渡す。未設定の環境 (fork からの PR、secret を持たないローカル) ではテストを skip として記録し、暗黙の成功扱いにしない

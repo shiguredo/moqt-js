@@ -119,7 +119,7 @@ export interface SubscriberInstance {
   // なる (映像の objectsReceived / chunksDecoded と同じ関係)
   audioObjectsReceived: Signal<number>;
   // 受信した音声 Object のうち datagram で届いた数。audioObjectsReceived との差が
-  // Subgroup (stream) で届いた数になる。draft-ietf-moq-transport-21 §11 は同じ Track での
+  // Subgroup (stream) で届いた数になる。draft-ietf-moq-transport-22 §2.1 は同じ Track での
   // Subgroup と Datagram の併用を許すため、publisher が datagram を選べたか (relay や
   // 経路の都合で subgroup に落ちていないか) をここで確認する
   audioDatagramObjectsReceived: Signal<number>;
