@@ -276,7 +276,7 @@ async function readPublishOkWithParameters(
  * PUBLISH_OK に出現できるのは EXPIRES のみであり、空の PUBLISH_OK は
  * 何も反映せず初期値のまま解決されることを検証する。
  */
-test("bidiReadPublishResponse: FORWARD 省略の PUBLISH_OK で Forward State が true になる", async () => {
+test("bidiReadPublishResponse: FORWARD 省略の PUBLISH_OK で forwardState が true になる", async () => {
   const { publisher, resolved } = await readPublishOkWithParameters([]);
 
   // 解決された Publisher は保留中のものと同一であり、状態は true になる

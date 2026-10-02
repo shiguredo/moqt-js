@@ -332,7 +332,7 @@ export function processSubgroupObjects(
       stats.incrementObjectsReceived(true);
       stats.incrementBytesReceived(true, payload.byteLength);
 
-      // draft-ietf-moq-transport-21 §3.1: 同一 alias の全 subscription に配送
+      // draft-ietf-moq-transport-22 §3.1: 同一 alias の全 subscription に配送
       // (filter 再適用は各 handleObject 内)。
       // アプリ例外は当該 subscriber の error コールバックへ通知し、
       // 残りの配送と同一ストリームの後続処理を継続する。セッションは閉じない。

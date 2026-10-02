@@ -193,7 +193,7 @@ export function SubscriberPanel({
           {instance.statusMessage.value}
         </div>
 
-        {/* Subscribe Options。Publisher の Forward State の行と同じ高さの枠で描き、
+        {/* Subscribe Options。Publisher の paused 状態の行と同じ高さの枠で描き、
             映像の上端をそろえる */}
         <div class={PANEL_OPTION_ROW_CLASS}>
           <label class="flex items-center gap-2 cursor-pointer">

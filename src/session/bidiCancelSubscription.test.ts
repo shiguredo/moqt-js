@@ -98,7 +98,7 @@ test("bidiCancelSubscription: 応答待ちの更新が無い状態の unsubscrib
 
 // ============================================================================
 // bidiCancelSubscription の STOP_SENDING 到達テスト
-// draft-ietf-moq-transport-21 §3.1:
+// draft-ietf-moq-transport-22 §3.1:
 // "The subscriber terminates a subscription ... by sending STOP_SENDING."
 // 読み取りループ生存中の解除でも、ロック保持者経由で cancel が到達すること
 // ============================================================================
@@ -198,7 +198,7 @@ function createLiveReadCancelContext(options?: { abortThrows?: boolean }): {
 }
 
 /**
- * draft-ietf-moq-transport-21 §3.1:
+ * draft-ietf-moq-transport-22 §3.1:
  * 読み取りループ生存中に unsubscribe() すると、ロック保持者経由で cancel
  * (STOP_SENDING 相当) が到達し、後続の writer.abort() も実行されることを検証する。
  * 従来は stream.cancel() が TypeError で失敗し abort に到達しなかった。
@@ -240,7 +240,7 @@ test("bidiCancelSubscription: 読み取りループ生存中の解除で STOP_SE
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.1:
+ * draft-ietf-moq-transport-22 §3.1:
  * writer.abort() が失敗しても解除は完遂し Map が掃除されることを検証する
  * (GOAWAY 済みで abort が reject するケースの握り潰し維持の回帰ガード)。
  */

@@ -1,6 +1,6 @@
 /**
  * MOQT Subscriber
- * draft-ietf-moq-transport-21 Section 3.1 (Subscriptions)
+ * draft-ietf-moq-transport-22 §3.1 (Subscriptions) / §3.1.1 (Pausing Subscriptions)
  */
 
 import type { Parameter } from "./message/parameter";
@@ -39,11 +39,11 @@ export interface RequestUpdateOptions {
   parameters?: Parameter[];
 
   /**
-   * Forward State を変更する
-   * draft-ietf-moq-transport-21 Section 9.20.19 (FORWARD Parameter)
+   * forwardState を変更する
+   * draft-ietf-moq-transport-22 Section 9.20.18 (FORWARD Parameter)
    *
-   * - true: オブジェクトの転送を開始する（Subscriber がいることを通知）
-   * - false: オブジェクトの転送を停止する
+   * - true: paused を解除する (オブジェクトの送信を再開する)
+   * - false: paused にする (オブジェクトの送信を止める)
    * - undefined: 変更しない（REQUEST_UPDATE に FORWARD を含めない）
    */
   forward?: boolean;
@@ -101,8 +101,8 @@ export interface Subscriber {
    */
   readonly trackProperties: ReadonlyArray<Property>;
   /**
-   * Forward State
-   * draft-ietf-moq-transport-21 Section 9.20.19 (FORWARD Parameter)
+   * forwardState
+   * draft-ietf-moq-transport-22 Section 9.20.18 (FORWARD Parameter)
    *
    * - SUBSCRIBE 送信時の options.forward の宣言値 (省略時は 1)
    * - 自 subscriber.update({ forward }) の REQUEST_OK 確認値
@@ -110,7 +110,7 @@ export interface Subscriber {
    * を反映したものであり、PUBLISH 送信時初期値と REQUEST_UPDATE 受信値を
    * 反映する Publisher.forwardState とは更新経路が異なる点に注意。
    * 受信 PUBLISH から生成される SubscriberImpl には、ピアが PUBLISH /
-   * REQUEST_UPDATE で宣言した Forward State が設定される。
+   * REQUEST_UPDATE で宣言した forwardState が設定される。
    */
   readonly forwardState: boolean;
   /**
@@ -143,8 +143,8 @@ export class SubscriberImpl implements Subscriber {
   // 購読の既定 Publisher Priority。Track Properties 未受信時は 128。
   // setTrackProperties で再解決する。
   private subscriberDefaultPublisherPriority = 128;
-  // draft-ietf-moq-transport-21 §9.20.19 (FORWARD Parameter):
-  // Forward State。SUBSCRIBE 送信時の宣言値・受信 PUBLISH / ケース 1 の
+  // draft-ietf-moq-transport-22 §9.20.18 (FORWARD Parameter):
+  // forwardState。SUBSCRIBE 送信時の宣言値・受信 PUBLISH / ケース 1 の
   // REQUEST_UPDATE / 自 update() の REQUEST_OK で更新される。
   private subscriberForwardState = true;
   // draft-ietf-moq-transport-21 §9.20.9 (GROUP ORDER Parameter):
@@ -210,17 +210,17 @@ export class SubscriberImpl implements Subscriber {
   }
 
   /**
-   * Forward State
-   * draft-ietf-moq-transport-21 Section 9.20.19 (FORWARD Parameter)
+   * forwardState
+   * draft-ietf-moq-transport-22 Section 9.20.18 (FORWARD Parameter)
    */
   get forwardState(): boolean {
     return this.subscriberForwardState;
   }
 
   /**
-   * Forward State を設定する (セッション内部コールバック)
+   * forwardState を設定する (セッション内部コールバック)
    *
-   * draft-ietf-moq-transport-21 §9.20.19:
+   * draft-ietf-moq-transport-22 §9.20.18:
    * SUBSCRIBE 送信時 (options.forward) / 受信 PUBLISH / ケース 1 の
    * REQUEST_UPDATE / 自 update() の REQUEST_OK の各経路から設定される。
    * アプリケーションへの変化通知コールバックは持たない (Publisher の
@@ -405,7 +405,7 @@ export class SubscriberImpl implements Subscriber {
   /**
    * Handle incoming object from data stream
    *
-   * draft-ietf-moq-transport-21 Section 3.1:
+   * draft-ietf-moq-transport-22 §3.1:
    * 同一 Track の複数 subscription に対して、各 subscription の filter を再適用する。
    *
    * 1 Group = 1 Subgroup = 1 Stream のため、QUIC がストリーム内の順序を保証する。
@@ -567,8 +567,9 @@ export class SubscriberImpl implements Subscriber {
   /**
    * Handle track end (from PUBLISH_DONE)
    *
-   * draft-ietf-moq-transport-21 Section 3.1 (Subscriptions):
-   * "the publisher terminates a subscription using PUBLISH_DONE"
+   * draft-ietf-moq-transport-22 §3.1 (Subscriptions):
+   * "The publisher terminates a subscription in the Pending (Publisher) or Established
+   *  states by sending PUBLISH_DONE and closing the stream."
    *
    * draft-ietf-moq-transport-21 Section 9.9 (PUBLISH_DONE):
    * PUBLISH_DONE Status Code がエラーを示す場合（INTERNAL_ERROR, UPDATE_FAILED 等）、
@@ -656,7 +657,7 @@ export class SubscriberImpl implements Subscriber {
   /**
    * Unsubscribe from the track
    *
-   * draft-ietf-moq-transport-21 Section 3.1 (Subscriptions):
+   * draft-ietf-moq-transport-22 §3.1 (Subscriptions):
    * "The subscriber terminates a subscription in the Pending (Subscriber) or Established states
    * by sending STOP_SENDING."
    *

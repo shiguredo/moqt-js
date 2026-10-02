@@ -38,7 +38,7 @@ export const varintParameterArb = fc
   })
   .map(({ type, varintValue }) => ({ type, value: encodeVarint(varintValue) }));
 
-// draft-ietf-moq-transport-21 §9.20.9 / §9.20.19: 値域制約に従う arbitrary
+// draft-ietf-moq-transport-22 §9.20.8 / §9.20.18: 値域制約に従う arbitrary
 //   - FORWARD (0x10): 0 / 1
 //   - SUBSCRIBER_PRIORITY (0x20): 0-255
 //   - GROUP_ORDER (0x22): 0x1 / 0x2

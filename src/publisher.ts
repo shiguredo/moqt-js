@@ -149,13 +149,13 @@ export interface SendDatagramParams {
  */
 export interface PublishStateNotifyOptions {
   /**
-   * 通知する Forward State
-   * draft-ietf-moq-transport-21 Section 9.20.19 (FORWARD Parameter)
+   * 通知する FORWARD パラメータの値 (購読が paused かどうか)
+   * draft-ietf-moq-transport-22 §9.20.18 (FORWARD Parameter)
    *
-   * 「When sent in PUBLISH_STATE_NOTIFY, it reports the Forwarding State now in
-   *  effect at the publisher.」現在値と同じ値では通知しない。送信できた場合は
-   * この値を publisher の Forward State として反映する (購読者が受け取る値と
-   * publisher が実際に転送する状態を一致させるため)。
+   * 「When sent in PUBLISH_STATE_NOTIFY, it reports whether the subscription is
+   *  paused at the publisher.」現在値と同じ値では通知しない。送信できた場合は
+   * この値を publisher の forwardState として反映する (購読者が受け取る値と
+   * publisher が実際に配信する状態を一致させるため)。
    */
   forward?: boolean;
 
@@ -182,13 +182,13 @@ export interface PublishStateNotifyOptions {
 export interface Publisher {
   readonly state: PublisherState;
   /**
-   * Forward State
-   * draft-ietf-moq-transport-21 Section 9.20.19 (FORWARD Parameter)
+   * forwardState
+   * draft-ietf-moq-transport-22 Section 9.20.18 (FORWARD Parameter)
    *
    * PUBLISH 送信時の options.forward (省略時は true) を初期値として返す。
-   * PUBLISH_OK は EXPIRES のみを運び Forward State を変更しない。
-   * - true (1): オブジェクトを転送する（Subscriber がいる）
-   * - false (0): オブジェクトを転送しない（Subscriber がいない）
+   * PUBLISH_OK は EXPIRES のみを運び forwardState を変更しない。
+   * - true (1): paused でない。オブジェクトを送る
+   * - false (0): paused。オブジェクトを送らない
    *
    * REQUEST_UPDATE で状態が変更された場合、onForwardStateChange が呼ばれる。
    * PUBLISH 送信時の初期設定と REQUEST_UPDATE 受信時による変化でも呼ばれる。
@@ -266,7 +266,7 @@ export interface Publisher {
    * MUST により必須) / FORWARD / LOCATION_FILTER のみであり、現在値から
    * 変化していないパラメータは載せない。載せるパラメータが無い場合は
    * 送信せず resolve する (重複送信の抑止)。
-   * 送信できた変更のみ Forward State / Location Filter として反映する。
+   * 送信できた変更のみ forwardState / Location Filter として反映する。
    *
    * 購読が既に終了している場合 (done() 済み・ピアのキャンセル後・セッション
    * 終了後) は送信せず resolve する。送信できない場合 (ストリーム終了等) は
@@ -274,7 +274,7 @@ export interface Publisher {
    *
    * forward: false を通知した場合、購読者が REQUEST_UPDATE で FORWARD=1 を送る
    * まで Object を送信しない (Section 9.8 の PUBLISH 時の FORWARD=0 と同じ扱い。
-   * 送信の抑止は Forward State を参照する sendObject / sendDatagram が行う)。
+   * 送信の抑止は forwardState を参照する sendObject / sendDatagram が行う)。
    */
   notifyStateChange(options?: PublishStateNotifyOptions): Promise<void>;
   /**
@@ -382,15 +382,15 @@ export class PublisherImpl implements Publisher {
   dynamicGroups = false;
   onSendObject?: (params: SendObjectParams) => Promise<void>;
   /**
-   * Forward State 0 または Location Filter の範囲外で Object の送信を見送ったときに呼ばれる
+   * forwardState が 0 または Location Filter の範囲外で Object の送信を見送ったときに呼ばれる
    *
-   * draft-ietf-moq-transport-21 §11.3.2 (Closing Subgroup Streams):
+   * draft-ietf-moq-transport-22 §11.3.2 (Closing Subgroup Streams):
    * "If a sender closes the stream before delivering all such objects to the QUIC
    *  stream, it MUST reset the stream.  This includes, but is not limited to:
-   *  ... Omitting a Subgroup Object due to the subscriber's Forward State"
-   * Forward State 0 の見送り (§3.1 の Forward State) も Location Filter の
-   * 範囲外の見送り (同 §3.3.1 の "A publisher MUST NOT send subscription-delivered
-   *  objects from outside the requested range") も、届かない Object を残したまま
+   *  ... Omitting a Subgroup Object because the subscription is paused"
+   * subscription が paused のための見送り (§3.1.1) も Location Filter の
+   * 範囲外の見送り (同 §3.3.1 の "A publisher MUST NOT send objects from outside the
+   *  requested range") も、届かない Object を残したまま
    * 閉じることになるため reset の対象である。見送りの事実を Session 側の
    * ストリーム状態へ記録するために使う。
    * `guardSend` は `sendDatagram` とも共有しており Datagram の見送りは Subgroup の
@@ -596,17 +596,18 @@ export class PublisherImpl implements Publisher {
   /**
    * Object / Datagram の送信前ガード
    *
-   * draft-ietf-moq-transport-21 §3.1:
-   * "The publisher does not send Objects if the Forward State is 0, and does
-   *  send them if the Forward State is 1. ... Control messages, such as
-   *  PUBLISH_DONE (Section 9.9) are sent regardless of the forward state."
-   * Forward State = 0 の間は送信せず、LARGEST_OBJECT の記録や END_OF_TRACK の
+   * draft-ietf-moq-transport-22 §3.1.1 (Pausing Subscriptions):
+   * "An Established subscription is either paused or not paused.  The publisher
+   *  does not send Objects on a paused subscription, and does send them when it
+   *  is not paused.  Control messages, such as PUBLISH_DONE (Section 9.9), are
+   *  sent regardless of whether the subscription is paused."
+   * subscription が paused の間は送信せず、LARGEST_OBJECT の記録や END_OF_TRACK の
    * 記録も行わない (送信していない Object を記録しない)。
    * END_OF_TRACK 送信後の後続送信は禁止する。ライフサイクル状態の検証を
    * パラメータ形状より先に行う。
    *
    * @param kind - エラーメッセージに使う送信種別
-   * @returns 送信してよければ null、Forward State = 0 で送信しない場合は "skip"、
+   * @returns 送信してよければ null、paused で送信しない場合は "skip"、
    *          違反の場合は ProtocolViolationError (error コールバック通知済み)
    */
   private guardSend(
@@ -664,7 +665,7 @@ export class PublisherImpl implements Publisher {
     // 戻り値は通常経路と同じ Promise<void> とし、呼び出し側の await を壊さない。
     const guard = this.guardSend("object", params.groupId);
     if (guard === "skip") {
-      // draft-ietf-moq-transport-21 §11.3.2: Forward State 0 で見送った Object が
+      // draft-ietf-moq-transport-22 §11.3.2: forwardState が 0 で見送った Object が
       // ある Subgroup は、閉じる時に FIN ではなく RESET が必要になる。
       this.onSendObjectSkipped?.(params.groupId);
       return Promise.resolve();
@@ -683,10 +684,10 @@ export class PublisherImpl implements Publisher {
     }
 
     // draft-ietf-moq-transport-21 §3.3.1:
-    // 購読の Location Filter の範囲外 Object は送信しない (Forward State = 0 と
+    // 購読の Location Filter の範囲外 Object は送信しない (paused と
     // 同様に送信も LARGEST_OBJECT の記録もしない。範囲外は正常なフィルタ動作であり
     // error 通知は行わない)。
-    // draft-ietf-moq-transport-21 §11.3.2: 範囲外で見送った Object も Forward State 0 の
+    // draft-ietf-moq-transport-22 §11.3.2: 範囲外で見送った Object も forwardState が 0 の
     // 見送りと同じく「届かない Object を残したまま閉じる」ため、閉じる時は RESET が必要。
     // 見送りの事実をここで記録する (閉じる時点では検出できない)。
     if (this.isOutsideLocationFilter(params.groupId, params.objectId)) {
@@ -694,7 +695,7 @@ export class PublisherImpl implements Publisher {
       return Promise.resolve();
     }
 
-    // draft-ietf-moq-transport-21 §9.20.18:
+    // draft-ietf-moq-transport-22 §9.20.17:
     // 送信を受け付けた Location で最大 Location を更新する。
     this.recordLargestLocation(params.groupId, params.objectId);
 
@@ -770,7 +771,8 @@ export class PublisherImpl implements Publisher {
    * (§11.1.2 の EOT / END_OF_GROUP の各定義による解釈。END_OF_GROUP 済みの判定は
    * sendObject が END_OF_GROUP を受理した Group による。Datagram 自身の
    * endOfGroup は記録しないため、後続の送信は妨げない)。
-   * Forward State 0 の間は送信せず、通知もなく return する (§3.1)。
+   * forwardState が 0 (subscription が paused) の間は送信せず、通知もなく return する
+   * (§3.1.1)。
    * Publisher が closed の場合は検証の前に同期 throw する (この経路は通知を伴わない)。
    * 委譲先 (onSendDatagram) の ID / priority 検証も自分で error 通知してから throw する。
    * 購読の Location Filter の範囲外 Datagram は送信しない (§3.3.1)。
@@ -790,7 +792,7 @@ export class PublisherImpl implements Publisher {
       return;
     }
 
-    // draft-ietf-moq-transport-21 §9.20.18:
+    // draft-ietf-moq-transport-22 §9.20.17:
     // 送信を受け付けた Location で最大 Location を更新する。
     this.recordLargestLocation(params.groupId, params.objectId);
 
@@ -806,7 +808,7 @@ export class PublisherImpl implements Publisher {
    * 「A publisher sends PUBLISH_STATE_NOTIFY on a subscription's bidirectional
    *  stream to notify the subscriber that the state of the subscription has
    *  changed for a reason other than a subscriber sent REQUEST_UPDATE.」
-   * moqt-js は購読状態を自力で変化させない (Forward State は PUBLISH 送信時の
+   * moqt-js は購読状態を自力で変化させない (forwardState は PUBLISH 送信時の
    * 指定と REQUEST_UPDATE 受信、Location Filter は REQUEST_UPDATE 受信で
    * 変わる) ため、アプリが変化後の値を指定して呼ぶ明示 API とする。
    *
@@ -854,8 +856,8 @@ export class PublisherImpl implements Publisher {
   }
 
   /**
-   * Internal: Set forward state (called by session)
-   * draft-ietf-moq-transport-21 Section 9.20.19 (FORWARD Parameter)
+   * Internal: Set the FORWARD parameter value (called by session)
+   * draft-ietf-moq-transport-22 Section 9.20.18 (FORWARD Parameter)
    *
    * REQUEST_UPDATE で受信した FORWARD パラメータを反映する。
    * PUBLISH 送信時の options.forward による初期設定でも呼ぶ。

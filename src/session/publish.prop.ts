@@ -1,9 +1,9 @@
 /**
  * session/publish.ts の Property-Based Tests
  *
- * draft-ietf-moq-transport-21 Section 11.2 (Object Datagrams) /
+ * draft-ietf-moq-transport-22 Section 11.2 (Object Datagrams) /
  * Section 11.3 (Subgroup Streams) / Section 11.3.2 (Closing Subgroup Streams) /
- * Section 3.1 (Forward State) を対象に、Publisher 送信系 free function の
+ * Section 3.1.1 (Pausing Subscriptions) を対象に、Publisher 送信系 free function の
  * 不変条件を検証する。
  *
  * 検証する性質:
@@ -21,7 +21,7 @@
  *   状態だけを掃除し、二重呼び出しや対象外 track に対して安全である
  * - publishSendDatagram が書き出した datagram が Object ID / payload / priority /
  *   END_OF_GROUP ビットでラウンドトリップする
- * - publishSendObject の公開経路が、任意の Forward State 切替と Group 送信の列に
+ * - publishSendObject の公開経路が、任意の forwardState 切替と Group 送信の列に
  *   対して省略の有無どおりに FIN / RESET を選ぶ
  *
  * 対応する単体テスト (src/session/publish.test.ts /
@@ -853,10 +853,10 @@ test("publishSendObjectInternal: 先頭 Object の delivery timeout がラウン
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-21 §11.3.2 (Closing Subgroup Streams):
+ * draft-ietf-moq-transport-22 §11.3.2 (Closing Subgroup Streams):
  * "If a sender closes the stream before delivering all such objects to the QUIC
  *  stream, it MUST reset the stream.  This includes, but is not limited to: ...
- *  Omitting a Subgroup Object due to the subscriber's Forward State"
+ *  Omitting a Subgroup Object because the subscription is paused"
  * omittedObjects が真の Subgroup は RESET、偽の Subgroup は FIN で閉じ、
  * ストリームが無い場合は何もせず "fin" を返すことを検証する。二重呼び出しは
  * 対象が無いため追加の終端操作を行わない。
@@ -1057,7 +1057,7 @@ test("publishClosePublisherStream: 対象 track の登録だけを掃除し二�
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.1.1:
+ * draft-ietf-moq-transport-22 §3.1.2 (Subscription State Management):
  * "The Publisher ... MUST reset any open streams associated with the SUBSCRIBE."
  * publishResetPublisherStream が対象 track のストリームを RESET し、送信キューと
  * closedSubgroups を破棄し、対象外 track の状態を変えないことを検証する。
@@ -1178,13 +1178,13 @@ test("publishSendDatagram: 書き出した datagram がラウンドトリップ�
 });
 
 // ============================================================================
-// PBT 11: 公開経路の FIN / RESET 選択 (Forward State と Group 送信の任意列)
+// PBT 11: 公開経路の FIN / RESET 選択 (forwardState と Group 送信の任意列)
 // ============================================================================
 
 /**
  * 公開経路 (publishSendObject) の操作の任意構築
  *
- * forward は購読の Forward State 切替、send は次の Object の送信である。
+ * forward は購読の forwardState 切替、send は次の Object の送信である。
  * advanceGroup が真のときは Group ID を進めるため、Group の再訪
  * (Closed Subgroup のエラーパス) は生成しない。
  */
@@ -1194,9 +1194,9 @@ const publisherOperationArb = fc.oneof(
 );
 
 /**
- * draft-ietf-moq-transport-21 §3.1 / §11.3.2:
- * 任意の Forward State 切替と Group 送信の列に対して、閉じる Subgroup が
- * 「Forward State 0 による見送り (省略) が同じ Group の Subgroup に記録されているなら
+ * draft-ietf-moq-transport-22 §3.1.1 / §11.3.2:
+ * 任意の forwardState 切替と Group 送信の列に対して、閉じる Subgroup が
+ * 「forwardState が 0 (paused) による見送り (省略) が同じ Group の Subgroup に記録されているなら
  * RESET、なければ FIN」に従うことを検証する。見送りは見送った Object と同じ Group の
  * 開いている Subgroup に記録されるため、省略の有無は送信順序から決まる。done() も同じ
  * 判定で開いている Subgroup を閉じ、当該 track の closedSubgroups を掃除する。
@@ -1209,7 +1209,7 @@ test("publishSendObject: 任意の操作列で省略の有無に応じて FIN / 
         const { session, publisher, streams, errors } = createPublisherHarness();
         const trackAlias = publisher.getTrackAlias();
 
-        // 期待する Subgroup ストリームのモデル。omitted は Forward State 0 の
+        // 期待する Subgroup ストリームのモデル。omitted は forwardState が 0 の
         // 見送りが「同じ Group の開いているストリーム」へ記録された事実を表し、
         // closed は後続の Group 送信で閉じられた事実を表す。
         const expected: { groupId: number; omitted: boolean; closed: boolean }[] = [];

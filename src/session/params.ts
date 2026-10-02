@@ -362,7 +362,7 @@ export function buildPublishParameters(options?: PublishOptions): Parameter[] {
     });
   }
 
-  // FORWARD (0x10) - draft-ietf-moq-transport-21 Section 9.20.19 (FORWARD Parameter)
+  // FORWARD (0x10) - draft-ietf-moq-transport-22 Section 9.20.18 (FORWARD Parameter)
   // デフォルトは 1 なので、明示的に false (0) が指定された場合のみ送信
   if (options?.forward === false) {
     parameters.push({
@@ -698,7 +698,7 @@ export function buildSubscribeParameters(options?: SubscribeOptions): Parameter[
     });
   }
 
-  // FORWARD (0x10) - draft-ietf-moq-transport-21 Section 9.20.19 (uint8)
+  // FORWARD (0x10) - draft-ietf-moq-transport-22 Section 9.20.18 (uint8)
   // デフォルトは 1 なので、明示的に false (0) が指定された場合のみ送信
   if (options?.forward === false) {
     parameters.push({
@@ -887,7 +887,7 @@ export function buildSubscribeTracksParameters(options?: SubscribeTracksOptions)
     });
   }
 
-  // FORWARD (0x10) - draft-ietf-moq-transport-21 Section 9.20.19 (uint8)
+  // FORWARD (0x10) - draft-ietf-moq-transport-22 Section 9.20.18 (uint8)
   // デフォルトは 1 なので、明示的に false (0) が指定された場合のみ送信
   if (options?.forward === false) {
     parameters.push({
@@ -966,7 +966,7 @@ export function extractLargestLocation(parameters: Parameter[]): Location | unde
 /**
  * 純粋関数: パラメータから FORWARD 状態を抽出する
  *
- * draft-ietf-moq-transport-21 Section 9.20.19 (FORWARD Parameter)
+ * draft-ietf-moq-transport-22 Section 9.20.18 (FORWARD Parameter)
  * FORWARD がない場合はデフォルト値 true を返す。
  */
 export function extractForwardState(parameters: Parameter[]): boolean {

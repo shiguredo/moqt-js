@@ -54,12 +54,12 @@ export function publishSendObject(
   publisher: PublisherImpl,
   params: SendObjectParams,
 ): Promise<void> {
-  // draft-ietf-moq-transport-21 §3.1:
-  // "The publisher does not send Objects if the Forward State is 0"
+  // draft-ietf-moq-transport-22 §3.1.1:
+  // "The publisher does not send Objects on a paused subscription"
   // PublisherImpl 側でも同じガードを持つが、内部送信関数を直接呼ぶ経路の
   // 防御としてここでも参照する。
   if (!publisher.forwardState) {
-    // draft-ietf-moq-transport-21 §11.3.2 (Closing Subgroup Streams):
+    // draft-ietf-moq-transport-22 §11.3.2 (Closing Subgroup Streams):
     // 送信を見送った Object がある Subgroup は、閉じる時に FIN ではなく RESET が
     // 必要になる。公開経路 (PublisherImpl.sendObject) は guardSend で止まるため
     // ここへは到達しないが、内部送信関数を直接呼ぶ経路の防御として記録する。
@@ -90,7 +90,7 @@ export function publishSendObject(
     .catch(() => {})
     .then(() => {
       // 閉じた Subgroup への送信を拒否する
-      // draft-ietf-moq-transport-21 §11.3.2
+      // draft-ietf-moq-transport-22 §11.3.2
       if (session.closedSubgroups.has(`${trackAlias}:${groupId}`)) {
         throw new ClosedSubgroupError(
           `subgroup is closed: trackAlias=${trackAlias} groupId=${groupId}`,
@@ -150,18 +150,18 @@ export async function publishSendObjectInternal(
   publisher: PublisherImpl,
   params: SendObjectParams,
 ): Promise<void> {
-  // draft-ietf-moq-transport-21 §3.1.1:
+  // draft-ietf-moq-transport-22 §3.1.2 (Subscription State Management):
   // peer のキャンセル後は新しい Subgroup ストリームを開かない。キュー済みの
   // 送信は handlePublishPeerCancel の markClosed 後に実行され得るため、
   // 副作用 (ストリーム生成・統計加算) の前に closed を確認する。
   if (isPublisherClosed(publisher)) {
     return;
   }
-  // draft-ietf-moq-transport-21 §3.1 (Subscriptions):
-  // "The publisher does not send Objects if the Forward State is 0"
-  // キュー投入時には Forward State 1 でも、待機中に 0 へ変わることがある。
+  // draft-ietf-moq-transport-22 §3.1.1 (Pausing Subscriptions):
+  // "The publisher does not send Objects on a paused subscription"
+  // キュー投入時には forwardState が 1 でも、待機中に 0 へ変わることがある。
   // その場合は送信せず、§11.3.2 の省略として記録する (新しい Subgroup のストリームを
-  // Forward State 0 で開かない点でも §3.1 と整合する)。
+  // forwardState が 0 で開かない点でも §3.1.1 と整合する)。
   if (!publisher.forwardState) {
     publishMarkStreamOmitted(session, publisher.getTrackAlias(), params.groupId);
     return;
@@ -200,7 +200,7 @@ export async function publishSendObjectInternal(
 
     // 新しいストリームを開く
     const stream = await session.transport.createUnidirectionalStream();
-    // draft-ietf-moq-transport-21 §3.1.1:
+    // draft-ietf-moq-transport-22 §3.1.2 (Subscription State Management):
     // createUnidirectionalStream の await 中に peer キャンセルで closed に
     // なり得る。その場合は統計・登録を行わず、開いたストリームを reset する。
     if (isPublisherClosed(publisher)) {
@@ -323,7 +323,7 @@ export async function publishSendObjectInternal(
 
   // draft-ietf-moq-transport-21 §11.1.2 (Object Status) / §11.3.2 (Closing Subgroup Streams):
   // END_OF_GROUP は Group の最終 Object を宣言する status であり、Subgroup の終端は
-  // FIN で通知する。省略 (Forward State 0 または Location Filter の範囲外の見送り) がある
+  // FIN で通知する。省略 (forwardState が 0 または Location Filter の範囲外の見送り) がある
   // 場合は FIN ではなく RESET で
   // 閉じる (§11.3.2 の MUST)。
   if ((params.status ?? ObjectStatus.NORMAL) === ObjectStatus.END_OF_GROUP) {
@@ -399,7 +399,7 @@ export function publishClosePublisherStream(
 /**
  * Publisher のストリームを reset (abort) で閉じる (peer キャンセル時の後始末)
  *
- * draft-ietf-moq-transport-21 §3.1.1:
+ * draft-ietf-moq-transport-22 §3.1.2:
  * 「The Publisher can remove subscription state as soon as it has received
  *  STOP_SENDING.  It MUST reset any open streams associated with the
  *  SUBSCRIBE.」
@@ -470,10 +470,10 @@ async function publishClosePublisherStreamInternal(
 /**
  * 見送った Object を Subgroup の省略として記録する
  *
- * draft-ietf-moq-transport-21 §11.3.2 (Closing Subgroup Streams):
+ * draft-ietf-moq-transport-22 §11.3.2 (Closing Subgroup Streams):
  * "If a sender closes the stream before delivering all such objects to the QUIC
  *  stream, it MUST reset the stream."
- * 省略 (Forward State 0、または購読の Location Filter の範囲外による見送り) がある
+ * 省略 (forwardState が 0、または購読の Location Filter の範囲外による見送り) がある
  * Subgroup は FIN ではなく RESET で閉じる。
  *
  * 記録先は見送った Object と同じ Group の Subgroup に限る。別 Group の Object を
@@ -492,7 +492,7 @@ export function publishMarkStreamOmitted(
 ): void {
   // number の Group ID は Group ID として解釈できない値 (非整数・負値・非有限) を
   // ここで弾く。公開経路では fail-fast で拒否されるが、この関数は Group ID の検証より
-  // 前に呼ばれる経路 (Forward State 0 の防御分岐) もあるため、throw しない。
+  // 前に呼ばれる経路 (forwardState が 0 の防御分岐) もあるため、throw しない。
   // bigint は検証済みの値を渡す前提 (bidi.ts の PublisherStreamState.groupId)。
   const target = typeof groupId === "bigint" ? groupId : convertGroupIdNumber(groupId);
   if (target === undefined) {
@@ -518,11 +518,11 @@ function convertGroupIdNumber(groupId: number): bigint | undefined {
 /**
  * Subgroup ストリームを §11.3.2 の判定で閉じる
  *
- * draft-ietf-moq-transport-21 §11.3.2 (Closing Subgroup Streams):
+ * draft-ietf-moq-transport-22 §11.3.2 (Closing Subgroup Streams):
  * "If a sender closes the stream before delivering all such objects to the QUIC
  *  stream, it MUST reset the stream.  This includes, but is not limited to:
- *  ... Omitting a Subgroup Object due to the subscriber's Forward State"
- * `PublisherStreamState::omittedObjects` が真 (Forward State 0 または Location Filter の
+ *  ... Omitting a Subgroup Object because the subscription is paused"
+ * `PublisherStreamState::omittedObjects` が真 (forwardState が 0 または Location Filter の
  * 範囲外による見送りがあった) なら RESET、偽なら FIN で閉じる。FIN の打ち切り (timeoutMs)
  * が発生した場合は graceful な FIN を諦めて RESET で後始末する (この場合は省略の有無に
  * よらず reset)。
@@ -592,8 +592,8 @@ export function publishSendDatagram(
     return;
   }
 
-  // draft-ietf-moq-transport-21 §3.1:
-  // "The publisher does not send Objects if the Forward State is 0"
+  // draft-ietf-moq-transport-22 §3.1.1:
+  // "The publisher does not send Objects on a paused subscription"
   // PublisherImpl 側でも同じガードを持つが、内部送信関数を直接呼ぶ経路の
   // 防御としてここでも参照する。
   if (!publisher.forwardState) {

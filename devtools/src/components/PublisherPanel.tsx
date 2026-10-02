@@ -17,7 +17,7 @@ import { type PublisherStats, buildPublisherStats } from "../signals/statsSnapsh
 import { createStatsSignal, startStatsTick } from "../signals/statsTick";
 import * as pub from "../signals/publisher";
 
-/** Forward State を表示用にする。配信していない間 (null) は「-」 */
+/** FORWARD パラメータの値 (購読が paused かどうか) を表示用にする。配信していない間 (null) は「-」 */
 function formatForwardState(forwardState: boolean | null): string {
   if (forwardState === null) {
     return "-";
@@ -111,11 +111,11 @@ export function PublisherPanel() {
           {pub.pubStatusMessage.value}
         </div>
 
-        {/* Forward State。配信していない間も描き、値を「-」にする (配信の開始で行が
+        {/* paused 状態 (FORWARD パラメータ)。配信していない間も描き、値を「-」にする (配信の開始で行が
             現れると映像の位置が動く) */}
         <div class={PANEL_OPTION_ROW_CLASS} data-testid="publisher-forward-state">
           <span>
-            Forward State:{" "}
+            FORWARD:{" "}
             <span
               class={
                 pub.forwardState.value === true ? "text-green-700 font-medium" : "text-slate-500"

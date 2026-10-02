@@ -31,7 +31,7 @@ function isSameBytes(left: Uint8Array | null, right: Uint8Array | null): boolean
  * 1 chunk 分の入力
  *
  * description は encoder の metadata が持つ Audio Config であり、undefined は
- * description を持たない chunk (opus) を表す。resendRequested は Forward State が
+ * description を持たない chunk (opus) を表す。resendRequested は forwardState が
  * 0 から 1 になった時点で立つ送り直し要求である。
  */
 interface AudioConfigStep {
@@ -70,7 +70,7 @@ interface AudioConfigStepResolution {
 /**
  * chunk 列を順に駆動する
  *
- * 送り直し要求は Forward State の 0 から 1 の変化で立つため、前の chunk で
+ * 送り直し要求は forwardState の 0 から 1 の変化で立つため、前の chunk で
  * 残った要求を次の chunk へ引き継ぐ (実装と同じく、載せた時点で解消する)。
  */
 function driveAudioConfigResolution(steps: AudioConfigStep[]): AudioConfigStepResolution[] {
@@ -134,7 +134,7 @@ test("resolveAudioConfigToSend: 初出と変更の description は必ず載る",
 });
 
 test("resolveAudioConfigToSend: 送り直し要求が立っている Object では保持値がある限り必ず載る", () => {
-  // 購読者の出現 (Forward State の 0 から 1) を知ったのに載せないと、
+  // 購読者の出現 (forwardState の 0 から 1) を知ったのに載せないと、
   // 後着の購読者が AAC を復号できない。要求が立っている限り必ず載ることを検証する
   fc.assert(
     fc.property(fc.array(stepArbitrary, { maxLength: 30 }), (steps) => {

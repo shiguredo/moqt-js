@@ -101,7 +101,7 @@ test("bidiSendNamespaceRequestUpdate: TRACK_NAMESPACE_PREFIX が REQUEST_UPDATE 
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.19:
+ * draft-ietf-moq-transport-22 §9.20.18:
  * SUBSCRIBE_TRACKS の REQUEST_UPDATE で FORWARD=0 / FORWARD=1 の両方が
  * ワイヤに載ることを検証する。将来の購読向けであり既存購読には影響しない。
  */
@@ -140,7 +140,7 @@ test("bidiSendNamespaceRequestUpdate: Tracks 更新の FORWARD がワイヤに�
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.19:
+ * draft-ietf-moq-transport-22 §9.20.18:
  * FORWARD 省略時は不変のため送らないことを検証する。
  */
 test("bidiSendNamespaceRequestUpdate: Tracks 更新の FORWARD 省略時は送らない", async () => {
@@ -165,7 +165,7 @@ test("bidiSendNamespaceRequestUpdate: Tracks 更新の FORWARD 省略時は送�
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.19:
+ * draft-ietf-moq-transport-22 §9.20.18:
  * SUBSCRIBE_NAMESPACE 向け REQUEST_UPDATE では FORWARD が許可されないため、
  * Namespace 更新では実行時に混入しても送らないことを検証する。
  */

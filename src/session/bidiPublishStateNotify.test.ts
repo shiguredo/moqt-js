@@ -198,10 +198,10 @@ test("bidiReadRequestStreamMessages: 変化した LOCATION_FILTER の PUBLISH_ST
 
 /**
  * draft-ietf-moq-transport-21 §9.10:
- * FORWARD を省略した PUBLISH_STATE_NOTIFY では Forward State が不変であることを
+ * FORWARD を省略した PUBLISH_STATE_NOTIFY では forwardState が不変であることを
  * 検証する (省略時は不変)。
  */
-test("bidiReadRequestStreamMessages: FORWARD 省略の PUBLISH_STATE_NOTIFY では Forward State は不変", async () => {
+test("bidiReadRequestStreamMessages: FORWARD 省略の PUBLISH_STATE_NOTIFY では forwardState は不変", async () => {
   const ctx = createPublishReadTestContext({});
   const subscriber = new SubscriberImpl(["test"], "track", ctx.requestId, 1n, () => {});
   subscriber.setForwardState(false);
@@ -230,7 +230,7 @@ test("bidiReadRequestStreamMessages: FORWARD 省略の PUBLISH_STATE_NOTIFY で�
   ctx.readableController.close();
   await readPromise;
 
-  // LARGEST_OBJECT は反映され、FORWARD 省略で Forward State は不変
+  // LARGEST_OBJECT は反映され、FORWARD 省略で forwardState は不変
   assert.deepEqual(subscriber.largestLocation, { group: 7n, object: 2n });
   assert.isFalse(subscriber.forwardState);
   assert.isUndefined(ctx.closedWithError);
@@ -351,7 +351,7 @@ test("bidiReadRequestStreamMessages: PUBLISH_STATE_NOTIFY (publish ロール) �
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.19:
+ * draft-ietf-moq-transport-22 §9.20.18:
  * FORWARD の値域外 (0/1 以外) を含む PUBLISH_STATE_NOTIFY を受信した場合、
  * PROTOCOL_VIOLATION でセッションを閉じることを検証する。
  */

@@ -2,7 +2,7 @@
  * session/bidi.ts の単体テスト: bidiHandleRequestUpdateOk と PUBLISH_OK の Track Properties 検証
  *
  * REQUEST_OK / PUBLISH_OK の Track Properties が空であることの検証と、
- * REQUEST_OK による Forward State / Range Filters の反映を検証する。
+ * REQUEST_OK による forwardState / Range Filters の反映を検証する。
  * 実ストリームと実 Map でセッションを構築し、モックやスタブは使わない。
  */
 
@@ -289,13 +289,13 @@ test("bidiHandleRequestUpdateOk: 2 通目の REQUEST_OK で PROTOCOL_VIOLATION �
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.19:
- * "If the parameter is omitted from REQUEST_UPDATE, the value for the
+ * draft-ietf-moq-transport-22 §9.20.18:
+ * "If the parameter is omitted from REQUEST_UPDATE or PUBLISH_STATE_NOTIFY, the
  *  subscription remains unchanged."
  * 自 update({ forward: false }) の REQUEST_OK 受信時に、送信時の FORWARD 値が
- * SubscriberImpl の Forward State に反映されることを検証する。
+ * SubscriberImpl の forwardState に反映されることを検証する。
  */
-test("bidiHandleRequestUpdateOk: 自 update({ forward }) の REQUEST_OK で Forward State が反映される", () => {
+test("bidiHandleRequestUpdateOk: 自 update({ forward }) の REQUEST_OK で forwardState が反映される", () => {
   const subscriber = new SubscriberImpl(["test"], "track", 0n, 1n, () => {});
   const session = {
     closeWithError: () => {},
@@ -321,11 +321,11 @@ test("bidiHandleRequestUpdateOk: 自 update({ forward }) の REQUEST_OK で Forw
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.19:
+ * draft-ietf-moq-transport-22 §9.20.18:
  * 自 update({ forward: true }) の REQUEST_OK 受信時に、送信時の FORWARD 値が
- * SubscriberImpl の Forward State に true として反映されることを検証する。
+ * SubscriberImpl の forwardState に true として反映されることを検証する。
  */
-test("bidiHandleRequestUpdateOk: 自 update({ forward: true }) の REQUEST_OK で Forward State が true に反映される", () => {
+test("bidiHandleRequestUpdateOk: 自 update({ forward: true }) の REQUEST_OK で forwardState が true に反映される", () => {
   const subscriber = new SubscriberImpl(["test"], "track", 0n, 1n, () => {});
   subscriber.setForwardState(false);
   const session = {
@@ -351,11 +351,11 @@ test("bidiHandleRequestUpdateOk: 自 update({ forward: true }) の REQUEST_OK �
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.19:
+ * draft-ietf-moq-transport-22 §9.20.18:
  * 自 update() で FORWARD を省略した場合 (undefined)、REQUEST_OK 受信時に
- * Forward State は変化しないことを検証する。
+ * forwardState は変化しないことを検証する。
  */
-test("bidiHandleRequestUpdateOk: FORWARD 省略の update の REQUEST_OK で Forward State は不変", () => {
+test("bidiHandleRequestUpdateOk: FORWARD 省略の update の REQUEST_OK で forwardState は不変", () => {
   const subscriber = new SubscriberImpl(["test"], "track", 0n, 1n, () => {});
   subscriber.setForwardState(false);
   const session = {
@@ -376,7 +376,7 @@ test("bidiHandleRequestUpdateOk: FORWARD 省略の update の REQUEST_OK で For
 
   bidiHandleRequestUpdateOk(session, payload, 0n);
 
-  // FORWARD 省略時は不変 (§9.20.19)
+  // FORWARD 省略時は不変 (§9.20.18)
   assert.equal(subscriber.forwardState, false);
   assert.equal(session.pendingRequestUpdate.size, 0);
 });

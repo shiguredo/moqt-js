@@ -1,6 +1,6 @@
 /**
  * Subscriber Unit Tests
- * draft-ietf-moq-transport-21 Section 3.1 (Subscriptions)
+ * draft-ietf-moq-transport-22 §3.1 (Subscriptions)
  */
 
 import { test, assert } from "vite-plus/test";
@@ -372,9 +372,9 @@ test("goawayCallback が設定できる", () => {
   assert.equal(calledUri, "moqt://new.example.com");
 });
 
-// draft-ietf-moq-transport-21 §9.20.19 (FORWARD Parameter):
-// setForwardState で Forward State が更新され、forwardState で取得できることを検証する。
-test("setForwardState で Forward State が更新される", () => {
+// draft-ietf-moq-transport-22 §9.20.18 (FORWARD Parameter):
+// setForwardState で forwardState が更新され、forwardState で取得できることを検証する。
+test("setForwardState で forwardState が更新される", () => {
   const subscriber = new SubscriberImpl(["namespace"], "track", 0n, 0n, () => {});
 
   // 初期値はデフォルト 1 (§10.2.18)

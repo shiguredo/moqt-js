@@ -143,7 +143,7 @@ export interface PublisherStats {
   serverUrl: string;
   /** 確立した WebTransport が HTTP/2 か HTTP/3 か。未接続、または判別できないときは null */
   httpVersion: PanelHttpVersion | null;
-  /** Forward State。未確立のときは null (draft-ietf-moq-transport-21 Section 3.1) */
+  /** 購読が paused かどうか。未確立のときは null (draft-ietf-moq-transport-22 §3.1.1) */
   forwardState: boolean | null;
   codec: string;
   encoderState: string;

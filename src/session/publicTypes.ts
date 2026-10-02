@@ -246,13 +246,13 @@ export interface ConnectOptions {
 export interface PublishCallbacks {
   error?: (error: Error) => void;
   /**
-   * Forward State が変更された時のコールバック
-   * draft-ietf-moq-transport-21 Section 9.20.19 (FORWARD Parameter)
+   * forwardState が変更された時のコールバック
+   * draft-ietf-moq-transport-22 Section 9.20.18 (FORWARD Parameter)
    *
-   * REQUEST_UPDATE で Forward State が変更された時に呼ばれる。
+   * REQUEST_UPDATE で forwardState が変更された時に呼ばれる。
    * PUBLISH 送信時の options.forward による初期設定で変化した場合も呼ばれる。
-   * - true (1): Subscriber がいる（オブジェクトを送信すべき）
-   * - false (0): Subscriber がいない（オブジェクト送信を止めても良い）
+   * - true (1): paused でない（オブジェクトを送る）
+   * - false (0): paused（オブジェクトを送らない）
    */
   onForwardStateChange?: (forward: boolean) => void;
   /**
@@ -354,15 +354,14 @@ export interface PublishOptions {
   expires?: bigint;
 
   /**
-   * Forward State
-   * draft-ietf-moq-transport-21 Section 9.20.19 (FORWARD Parameter)
+   * subscription が paused かどうか (FORWARD パラメータ)
+   * draft-ietf-moq-transport-22 §9.20.18 (FORWARD Parameter) / §3.1.1 (Pausing Subscriptions)
    *
-   * オブジェクトの転送状態を指定する。
-   * - true (1): オブジェクトを転送する（デフォルト）
-   * - false (0): オブジェクトを転送しない
+   * - true (1): paused でない。オブジェクトを送る（デフォルト）
+   * - false (0): paused。オブジェクトを送らず、PUBLISH_DONE などの制御メッセージは送る
    *
-   * 省略した場合は 1（転送する）がデフォルト。
-   * 初期値は PUBLISH 送信時に宣言し、以後は REQUEST_UPDATE で更新する。
+   * 省略した場合は 1（paused でない）がデフォルト。subscription の初期状態は
+   * initiator が PUBLISH で設定し、以後は REQUEST_UPDATE の FORWARD で更新する。
    */
   forward?: boolean;
 
@@ -561,14 +560,15 @@ export interface SubscribeOptions {
   newGroupRequest?: bigint;
 
   /**
-   * Forward State
-   * draft-ietf-moq-transport-21 Section 9.20.19 (FORWARD Parameter)
+   * subscription が paused かどうか (FORWARD パラメータ)
+   * draft-ietf-moq-transport-22 §9.20.18 (FORWARD Parameter) / §3.1.1 (Pausing Subscriptions)
    *
-   * オブジェクトの転送状態を指定する。
-   * - true (1): オブジェクトを転送する（デフォルト）
-   * - false (0): オブジェクトを転送しない
+   * - true (1): paused でない。オブジェクトが届く（デフォルト）
+   * - false (0): paused。オブジェクトが届かず、PUBLISH_DONE などの制御メッセージは届く
    *
-   * 省略した場合は 1（転送する）がデフォルト。
+   * 省略した場合は 1（paused でない）がデフォルト。subscription の初期状態は
+   * initiator が SUBSCRIBE で設定し、以後は update({ forward }) の REQUEST_UPDATE で
+   * 更新する。
    */
   forward?: boolean;
 
@@ -641,11 +641,13 @@ export interface SubscribeTracksOptions {
   groupOrder?: "Ascending" | "Descending";
 
   /**
-   * Forward State
-   * draft-ietf-moq-transport-21 Section 9.20.19 (FORWARD Parameter)
+   * 将来の subscription が paused かどうか (FORWARD パラメータ)
+   * draft-ietf-moq-transport-22 §9.20.18 (FORWARD Parameter) / §3.1.1 (Pausing Subscriptions)
    *
-   * 省略した場合は 1（転送する）がデフォルト。
+   * 省略した場合は 1（paused でない）がデフォルト。
    * 明示的に false のときだけワイヤに FORWARD=0 を載せる。
+   * SUBSCRIBE_TRACKS の REQUEST_UPDATE では、prefix に一致する将来の subscription に
+   * だけ作用し、既存の subscription は変わらない。
    */
   forward?: boolean;
 
@@ -899,15 +901,15 @@ export interface NamespaceUpdateOptions {
 
 /**
  * Tracks 更新のオプション
- * draft-ietf-moq-transport-21 §9.20.19 (FORWARD Parameter):
+ * draft-ietf-moq-transport-22 §9.20.18 (FORWARD Parameter):
  * SUBSCRIBE_TRACKS の REQUEST_UPDATE に FORWARD が許可された。
- * FORWARD は prefix に一致する将来の購読の Forwarding State を指定し、
+ * FORWARD は prefix に一致する将来の subscription が paused かどうかを指定し、
  * 既存購読には影響しない。省略時は不変。
  */
 export interface TracksUpdateOptions extends NamespaceUpdateOptions {
   /**
-   * 将来の購読の Forward State
-   * draft-ietf-moq-transport-21 §9.20.19 (FORWARD Parameter)
+   * 将来の subscription が paused かどうか (FORWARD パラメータ)
+   * draft-ietf-moq-transport-22 §9.20.18 (FORWARD Parameter)
    *
    * true (1) / false (0) を明示送信する。省略時は不変。
    * SUBSCRIBE_NAMESPACE 向け REQUEST_UPDATE では許可されないため、
@@ -1006,14 +1008,14 @@ export interface TracksSubscription {
    */
   unsubscribe(): Promise<void>;
   /**
-   * Track Namespace Prefix と Forward State を更新する (REQUEST_UPDATE を送信)
+   * Track Namespace Prefix と forwardState を更新する (REQUEST_UPDATE を送信)
    *
-   * draft-ietf-moq-transport-21 §9.5.2 (Updating Namespace Subscriptions):
+   * draft-ietf-moq-transport-22 §9.5.2 (Updating Namespace Subscriptions):
    * "Updating the prefix of a SUBSCRIBE_TRACKS has no effect on existing
    *  subscriptions." (既存の確立済み SubscriberImpl には影響しない)
-   * draft-ietf-moq-transport-21 §9.20.19 (FORWARD Parameter):
+   * draft-ietf-moq-transport-22 §9.20.18 (FORWARD Parameter):
    * SUBSCRIBE_TRACKS の REQUEST_UPDATE に FORWARD が許可された。
-   * 将来の購読の Forwarding State を指定し、既存購読には影響しない。
+   * 将来の subscription が paused かどうか (FORWARD パラメータ) を指定し、既存購読には影響しない。
    *
    * REQUEST_OK 受信で resolve、REQUEST_ERROR (PREFIX_OVERLAP 等) / ストリーム
    * クローズで reject する。

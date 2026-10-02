@@ -947,8 +947,8 @@ export function incomingPublishCleanupIncomingPublish(
 /**
  * 受信 PUBLISH の初期パラメータを購読に反映する
  *
- * draft-ietf-moq-transport-21 §9.8 (PUBLISH) / §9.20.19:
- * FORWARD (省略時はデフォルト 1) を Forward State として保持する。
+ * draft-ietf-moq-transport-22 §9.8 (PUBLISH) / §9.20.18:
+ * FORWARD (省略時はデフォルト 1) を forwardState として保持する。
  * 値域外は PROTOCOL_VIOLATION でセッションを閉じる。
  * OBJECT_DELIVERY_TIMEOUT / SUBGROUP_DELIVERY_TIMEOUT /
  * SUBSCRIBER_PRIORITY / GROUP_ORDER は publisher の初期値の通知であり
@@ -958,7 +958,7 @@ export function incomingPublishCleanupIncomingPublish(
  * draft-ietf-moq-transport-22 §9.8 / §9.20.9 / §3.6.2:
  * LOCATION_FILTER は購読の初期フィルタとして反映する
  * (省略時は既定値 = 無制限)。End Group 超過は PROTOCOL_VIOLATION で閉じる。
- * draft-ietf-moq-transport-21 §9.20.18 / §3.3.1:
+ * draft-ietf-moq-transport-22 §9.20.17 / §3.3.1:
  * LARGEST_OBJECT は LOCATION_FILTER より先に設定する。相対 Location Filter は
  * 「フィルタ適用時点の LARGEST_OBJECT」で解決されるため、この順序で
  * 受信 PUBLISH が運ぶ LARGEST_OBJECT 基準の開始位置に一度だけ確定する。

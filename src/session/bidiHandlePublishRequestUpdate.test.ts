@@ -504,11 +504,11 @@ test("bidiHandlePublishRequestUpdate: SUBSCRIBER_PRIORITY を含む REQUEST_UPDA
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.5 / §9.20.19:
+ * draft-ietf-moq-transport-22 §9.5 / §9.20.18:
  * ケース 1 の REQUEST_UPDATE で FORWARD=1 が含まれる場合も REQUEST_OK で
- * 受理され、Forward State に true が反映されることを検証する。
+ * 受理され、forwardState に true が反映されることを検証する。
  */
-test("bidiHandlePublishRequestUpdate: FORWARD=1 を含む REQUEST_UPDATE で Forward State が true に反映される", async () => {
+test("bidiHandlePublishRequestUpdate: FORWARD=1 を含む REQUEST_UPDATE で forwardState が true に反映される", async () => {
   const ctx = createPublishReadTestContext({});
   const subscriber = new SubscriberImpl(["test"], "track", ctx.requestId, 1n, () => {});
   subscriber.setForwardState(false);
@@ -663,14 +663,14 @@ test("bidiHandlePublishRequestUpdate: 上限超過 REGISTER は AUTH_TOKEN_CACHE
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.5 / §9.20.19:
+ * draft-ietf-moq-transport-22 §9.5 / §9.20.18:
  * ケース 1 (受信 PUBLISH の publisher による REQUEST_UPDATE) で FORWARD
  * パラメータが含まれる場合、REQUEST_OK で受理され、受信 PUBLISH から生成
- * された SubscriberImpl の Forward State に反映されることを検証する。
+ * された SubscriberImpl の forwardState に反映されることを検証する。
  */
-test("bidiHandlePublishRequestUpdate: FORWARD を含む REQUEST_UPDATE で REQUEST_OK が応答され Forward State に反映される", async () => {
+test("bidiHandlePublishRequestUpdate: FORWARD を含む REQUEST_UPDATE で REQUEST_OK が応答され forwardState に反映される", async () => {
   const ctx = createPublishReadTestContext({});
-  // 受信 PUBLISH から生成された SubscriberImpl を登録する (初期 Forward State 1)
+  // 受信 PUBLISH から生成された SubscriberImpl を登録する (初期 forwardState が 1)
   const subscriber = new SubscriberImpl(["test"], "track", ctx.requestId, 1n, () => {});
   ctx.session.subscribers.set(ctx.requestId, subscriber);
 
@@ -687,18 +687,18 @@ test("bidiHandlePublishRequestUpdate: FORWARD を含む REQUEST_UPDATE で REQUE
   assert.equal(messages.length, 1);
   assert.equal(messages[0].type, MessageType.REQUEST_OK);
   assert.isUndefined(ctx.closedWithError);
-  // FORWARD=0 が SubscriberImpl の Forward State に反映される
+  // FORWARD=0 が SubscriberImpl の forwardState に反映される
   assert.equal(subscriber.forwardState, false);
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.19:
- * "If the parameter is omitted from REQUEST_UPDATE, the value for the
+ * draft-ietf-moq-transport-22 §9.20.18:
+ * "If the parameter is omitted from REQUEST_UPDATE or PUBLISH_STATE_NOTIFY, the
  *  subscription remains unchanged."
  * FORWARD を含まないケース 1 の REQUEST_UPDATE は REQUEST_OK で受理されるが、
- * Forward State は変化しないことを検証する。
+ * forwardState は変化しないことを検証する。
  */
-test("bidiHandlePublishRequestUpdate: FORWARD 省略の REQUEST_UPDATE で Forward State は不変", async () => {
+test("bidiHandlePublishRequestUpdate: FORWARD 省略の REQUEST_UPDATE で forwardState は不変", async () => {
   const ctx = createPublishReadTestContext({});
   const subscriber = new SubscriberImpl(["test"], "track", ctx.requestId, 1n, () => {});
   subscriber.setForwardState(false);
@@ -715,14 +715,14 @@ test("bidiHandlePublishRequestUpdate: FORWARD 省略の REQUEST_UPDATE で Forwa
   assert.equal(messages.length, 1);
   assert.equal(messages[0].type, MessageType.REQUEST_OK);
   assert.isUndefined(ctx.closedWithError);
-  // FORWARD 省略時は不変 (§9.20.19)
+  // FORWARD 省略時は不変 (§9.20.18)
   assert.equal(subscriber.forwardState, false);
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.1 / §9.20.19:
+ * draft-ietf-moq-transport-22 §9.20.1 / §9.20.18:
  * FORWARD と他の許可パラメータ (例: SUBSCRIBER_PRIORITY) の混合
- * REQUEST_UPDATE もメッセージ単位で受理され、FORWARD が Forward State に
+ * REQUEST_UPDATE もメッセージ単位で受理され、FORWARD が forwardState に
  * 反映されることを検証する。
  */
 test("bidiHandlePublishRequestUpdate: FORWARD + 他の許可パラメータの混合で REQUEST_OK が応答され FORWARD が反映される", async () => {

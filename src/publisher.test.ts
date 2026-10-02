@@ -518,7 +518,7 @@ test("getLargestLocation: 未送信は null", () => {
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.18:
+ * draft-ietf-moq-transport-22 §9.20.17:
  * sendObject で送信した最大 Location を保持することを検証する。
  * Group が大きい方、同一 Group では Object が大きい方を最大とする。
  */
@@ -543,7 +543,7 @@ test("getLargestLocation: sendObject で最大 Location を更新する", async 
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.18:
+ * draft-ietf-moq-transport-22 §9.20.17:
  * sendDatagram でも最大 Location を更新することを検証する。
  */
 test("getLargestLocation: sendDatagram で最大 Location を更新する", () => {
@@ -555,7 +555,7 @@ test("getLargestLocation: sendDatagram で最大 Location を更新する", () =
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.18:
+ * draft-ietf-moq-transport-22 §9.20.17:
  * 非整数の Group / Object ID は送信経路で fail-fast 拒否されるため、
  * 最大 Location には記録しないことを検証する。
  */
@@ -568,16 +568,17 @@ test("getLargestLocation: 非整数 ID は記録しない", async () => {
 });
 
 // ============================================================================
-// draft-21 適合監査 D-10: Forward State = 0 では Object を送信しない
-// draft-ietf-moq-transport-21 §3.1
+// draft-21 適合監査 D-10: forwardState が 0 では Object を送信しない
+// draft-ietf-moq-transport-22 §3.1.1 (Pausing Subscriptions)
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-21 §3.1:
- * "The publisher does not send Objects if the Forward State is 0, and does
- *  send them if the Forward State is 1. ... Control messages, such as
- *  PUBLISH_DONE (Section 9.9) are sent regardless of the forward state."
- * Forward State = 0 のとき sendObject は委譲先を呼ばず resolve する。
+ * draft-ietf-moq-transport-22 §3.1.1:
+ * "An Established subscription is either paused or not paused.  The publisher
+ *  does not send Objects on a paused subscription, and does send them when it
+ *  is not paused.  Control messages, such as PUBLISH_DONE (Section 9.9), are
+ *  sent regardless of whether the subscription is paused."
+ * forwardState が 0 のとき sendObject は委譲先を呼ばず resolve する。
  */
 test("forwardState=false の sendObject は送信しない", async () => {
   const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n);
@@ -595,7 +596,7 @@ test("forwardState=false の sendObject は送信しない", async () => {
 });
 
 /**
- * Forward State を 1 に戻すと再び送信されることを検証する。
+ * forwardState を 1 に戻すと再び送信されることを検証する。
  */
 test("forwardState=false から true に戻すと sendObject は送信する", async () => {
   const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n);
@@ -613,8 +614,8 @@ test("forwardState=false から true に戻すと sendObject は送信する", a
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.1:
- * Datagram も Object であるため、Forward State = 0 では送信しない。
+ * draft-ietf-moq-transport-22 §3.1.1:
+ * Datagram も Object であるため、forwardState が 0 では送信しない。
  */
 test("forwardState=false の sendDatagram は送信しない", () => {
   const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n);
@@ -631,10 +632,10 @@ test("forwardState=false の sendDatagram は送信しない", () => {
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.1:
- * "Control messages, such as PUBLISH_DONE ... are sent regardless of the
- *  forward state."
- * Forward State = 0 でも done() は onDoneInternal を呼ぶ。
+ * draft-ietf-moq-transport-22 §3.1.1:
+ * "Control messages, such as PUBLISH_DONE (Section 9.9), are sent regardless
+ *  of whether the subscription is paused."
+ * forwardState が 0 (paused) でも done() は onDoneInternal を呼ぶ。
  */
 test("forwardState=false でも done は onDoneInternal を呼ぶ", async () => {
   const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n);
