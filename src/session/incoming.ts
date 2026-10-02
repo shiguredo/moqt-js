@@ -88,8 +88,8 @@ export function incomingClassifyFirstBidiMessage(
  * draft-ietf-moq-transport-21 §6.4.2.3 (Request Cancellation and Rejection):
  * 「When an endpoint rejects a request without performing any application
  * processing, it SHOULD send a REQUEST_ERROR and FIN the stream.」
- * draft-ietf-moq-transport-21 §9.18 (SUBSCRIBE_TRACKS):
- * 「If it is an error, the stream will be closed via FIN after REQUEST_ERROR
+ * draft-ietf-moq-transport-22 §3.6 (Subscribing to Tracks by Prefix):
+ * 「If it is an error, the stream will be closed via FIN after SUBSCRIBE_TRACKS_ERROR
  * is sent.」
  *
  * FIN (writer.close()) は writer.releaseLock() の前に実行する。
@@ -250,7 +250,7 @@ export async function incomingHandleFirstBidiMessage(
       session.closeWithError(requestIdError);
       return true;
     }
-    // draft-ietf-moq-transport-21 §2.4.2 (Reserved Namespaces) / §6.5
+    // draft-ietf-moq-transport-22 §2.4.3 (Reserved Namespaces) / §6.5
     // (Session-Level Tracks and Namespaces):
     // "An endpoint that receives a request for an unrecognized session-level track
     //  or namespace MUST reject it with REQUEST_ERROR using error code DOES_NOT_EXIST
@@ -291,7 +291,7 @@ export async function incomingHandleFirstBidiMessage(
 /**
  * 未対応リクエストの先頭 Track Namespace が予約名前空間かを判定する
  *
- * draft-ietf-moq-transport-21 §2.4.2 (Reserved Namespaces) / §6.5 (Session-Level
+ * draft-ietf-moq-transport-22 §2.4.3 (Reserved Namespaces) / §6.5 (Session-Level
  * Tracks and Namespaces) は、未認識の session-level track / namespace への要求を
  * DOES_NOT_EXIST で拒否することを MUST とする。未対応 6 種のメッセージはいずれも
  * Request ID の直後に Track Namespace を置くため、offset から Track Namespace を
@@ -307,7 +307,7 @@ export async function incomingHandleFirstBidiMessage(
  * 構造違反を閉じないのは、未対応リクエストの本文を本実装が解釈しないためである。
  * §1.5 (Extensibility) は未対応メッセージへの NOT_SUPPORTED 応答を求めており、
  * 本文の解釈結果でセッションを閉じると、将来のメッセージ定義が本実装の想定と
- * 異なる場合に相互運用を壊す。予約名前空間の MUST 拒否 (§2.4.2 / §6.5) は
+ * 異なる場合に相互運用を壊す。予約名前空間の MUST 拒否 (§2.4.3 / §6.5) は
  * Namespace が読めた場合に成立する。
  *
  * @param payload - 未対応リクエストのメッセージ本文

@@ -1346,7 +1346,7 @@ test("encodeRangeFilter: 空の ranges で InvalidFilterError", () => {
 
 /**
  * isRejectedReceiveNamespace のテスト
- * draft-ietf-moq-transport-21 Section 2.4.2 (Reserved Namespaces):
+ * draft-ietf-moq-transport-22 Section 2.4.3 (Reserved Namespaces):
  * "A Track Namespace whose first field is exactly . (a single period,
  *  0x2e) is reserved and MUST NOT be used for any purpose; endpoints
  *  MUST NOT publish tracks or namespaces under it and MUST reject
@@ -1367,13 +1367,13 @@ test("isRejectedReceiveNamespace: 先頭フィールドが .session で複数フ
 });
 
 test("isRejectedReceiveNamespace: 先頭フィールドが . 単体なら拒否対象", () => {
-  // §2.4.2: 先頭フィールドが "." (0x2e) 単体の名前空間は DOES_NOT_EXIST で拒否する
+  // §2.4.3: 先頭フィールドが "." (0x2e) 単体の名前空間は DOES_NOT_EXIST で拒否する
   assert.equal(isRejectedReceiveNamespace(createTrackNamespace(["."]).tuple), true);
   assert.equal(isRejectedReceiveNamespace(createTrackNamespace([".", "sub"]).tuple), true);
 });
 
 test("isRejectedReceiveNamespace: その他の予約名前空間 (.foo) は拒否しない", () => {
-  // §2.4.2: 認識されない予約名前空間はアプリへ渡す (将来の拡張を壊さないため)
+  // §2.4.3: 認識されない予約名前空間はアプリへ渡す (将来の拡張を壊さないため)
   assert.equal(isRejectedReceiveNamespace(createTrackNamespace([".foo"]).tuple), false);
   assert.equal(isRejectedReceiveNamespace(createTrackNamespace([".session2"]).tuple), false);
 });
@@ -1384,7 +1384,7 @@ test("isRejectedReceiveNamespace: 通常の名前空間は拒否しない", () =
 });
 
 test("isRejectedReceiveNamespace: 空の名前空間は拒否しない", () => {
-  // 先頭フィールドが存在しないため §2.4.2 / §6.5 の対象外
+  // 先頭フィールドが存在しないため §2.4.3 / §6.5 の対象外
   assert.equal(isRejectedReceiveNamespace([]), false);
 });
 
@@ -1394,7 +1394,7 @@ test("isRejectedReceiveNamespace: 先頭フィールドが空バイト列なら�
 });
 
 test("isRejectedReceiveNamespace: . 単体をバイト列リテラルで判定する", () => {
-  // §2.4.2 は 0x2e をバイト値で定義しているため、エンコーダに依存しない
+  // §2.4.3 は 0x2e をバイト値で定義しているため、エンコーダに依存しない
   // バイト列直接の検証。0x2e を含む他のバイト列 (. 単体以外) は拒否しない
   assert.equal(isRejectedReceiveNamespace([new Uint8Array([0x2e])]), true);
   assert.equal(isRejectedReceiveNamespace([new Uint8Array([0x2e, 0x2e])]), false);

@@ -3754,7 +3754,7 @@ export async function bidiSendRequestUpdate(
  * - ピアの MAX_REQUEST_UPDATES を超える outstanding REQUEST_UPDATE を送信しない
  * - 更新が in-flight (REQUEST_OK 未受信) のうちの 2 件目は送信しない
  *   (単一スロット pendingPrefix による prefix 反映の競合を防ぐ)
- * - 予約 namespace の送信拒否 (§2.4.2 / §6.5)
+ * - 予約 namespace の送信拒否 (§2.4.3 / §6.5)
  * - §9.5.2 の per-type 独立 overlap 制約 (更新対象自身を除く)
  *
  * @param session - セッション内部状態
@@ -3797,7 +3797,7 @@ export async function bidiSendNamespaceRequestUpdate(
     }
   }
 
-  // draft-ietf-moq-transport-21 §2.4.2 / §6.5: 予約 namespace / .session の送信拒否
+  // draft-ietf-moq-transport-22 §2.4.3 / §6.5: 予約 namespace / .session の送信拒否
   validateTrackNamespaceForSend(options.trackNamespacePrefix);
 
   // draft-ietf-moq-transport-21 §9.5.2:

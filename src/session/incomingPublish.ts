@@ -8,7 +8,7 @@
  * matchPublishToSubscription / cleanupIncomingPublish を free function として
  * 抽出する。
  *
- * draft-ietf-moq-transport-21 §9.18 (SUBSCRIBE_TRACKS) のとおり、購読側が
+ * draft-ietf-moq-transport-22 §3.6 (Subscribing to Tracks by Prefix) のとおり、購読側が
  * PUBLISH を新規双方向ストリームで受信し、REQUEST_UPDATE の応答
  * (REQUEST_OK / REQUEST_ERROR) と PUBLISH_DONE を同じストリームで受信する
  * 経路をまとめる。受信データストリームは dataStreamIncoming.ts が担当する。
@@ -649,11 +649,11 @@ export async function incomingPublishHandleBidirectionalStream(
     return;
   }
 
-  // draft-ietf-moq-transport-21 §2.4.2 / §6.5:
+  // draft-ietf-moq-transport-22 §2.4.3 / §6.5:
   // 受信 PUBLISH の Track Namespace 先頭フィールドが "." 単体または
   // ".session" の場合、REQUEST_ERROR (DOES_NOT_EXIST) で拒否してアプリへ
-  // 渡さない (§2.4.2 / §6.5 の MUST)。それ以外の予約名前空間
-  // (例: ".foo") は §2.4.2 によりアプリへ渡す。
+  // 渡さない (§2.4.3 / §6.5 の MUST)。それ以外の予約名前空間
+  // (例: ".foo") は §2.4.3 によりアプリへ渡す。
   // 拒否時は §6.4.2.3 の SHOULD に従い REQUEST_ERROR 送信後に送信方向を
   // FIN で閉じ、受信方向を cancel する。パラメータスコープ検証より
   // 先に判定し、両方違反の場合は DOES_NOT_EXIST 拒否を優先する。
@@ -955,7 +955,7 @@ export function incomingPublishCleanupIncomingPublish(
  * 受理のみで状態反映はしない。この関数では再検証しない
  * (FORWARD / GROUP_ORDER の uint8 値域は decode 時に検証済み。
  * varint 系 timeouts / PRIORITY は範囲外で閉じる規定がないため検証しない)。
- * draft-ietf-moq-transport-21 §9.8 / §9.20.10 / §9.18.1:
+ * draft-ietf-moq-transport-22 §9.8 / §9.20.9 / §3.6.2:
  * LOCATION_FILTER は購読の初期フィルタとして反映する
  * (省略時は既定値 = 無制限)。End Group 超過は PROTOCOL_VIOLATION で閉じる。
  * draft-ietf-moq-transport-21 §9.20.18 / §3.3.1:

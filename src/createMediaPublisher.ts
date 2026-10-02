@@ -307,7 +307,7 @@ export interface AudioConfigResolution {
  * 接続した購読者へ届けるには送り直しが要る。
  *
  * 送り直しは Forward State が 0 から 1 になった時点 (購読者の出現を
- * draft-ietf-moq-transport-21 §7.5 の REQUEST_UPDATE の FORWARD パラメータで
+ * draft-ietf-moq-transport-22 §7.6 の REQUEST_UPDATE の FORWARD パラメータで
  * 知った時点) に要求され、保持している値を次の Object に 1 度だけ載せ直す。
  * 載せた時点で要求は解消し、保持値は消さない (消すと次の要求に応えられない)。
  * Forward State が 1 のまま購読者が接続した場合は変化が起きないため送り直されない

@@ -1247,7 +1247,7 @@ test("namespaceStartTracksStreamLoop: 先頭の想定外メッセージで rejec
 
 // 先頭メッセージガードは PUBLISH_SKIPPED のような「そのループが処理する
 // メッセージ」でも、確立前は REQUEST_OK / REQUEST_ERROR / GOAWAY 以外を許さない
-// (§9.18 MUST)。エラー文言に許可される 3 種とループ種別が入ることを固定する。
+// (§3.6 MUST)。エラー文言に許可される 3 種とループ種別が入ることを固定する。
 test("namespaceStartTracksStreamLoop: 先頭に想定外メッセージ (PUBLISH_SKIPPED) は PROTOCOL_VIOLATION で閉じ、エラー文言に GOAWAY を含む", async () => {
   const ctx = createNamespaceLoopTestContext("tracks");
 
@@ -1685,7 +1685,8 @@ SUBSCRIPTION_LOOP_CASES.forEach(({ kind, loop }) => {
 
 // ============================================================================
 // 確立前の検証失敗で Promise が reject される
-// draft-ietf-moq-transport-21 §9.14 / §9.15 / §9.18:
+// draft-ietf-moq-transport-22 §9.14 / §9.15 / §9.18 (メッセージ定義) と
+// §4.1 / §4.2 / §3.6 (先頭メッセージ MUST):
 // ピアの初期応答が仕様違反でも呼び出し元の Promise を永久ハングさせず、
 // closeWithError に渡す SessionError と同一オブジェクトで reject する
 // (PUBLISH 応答経路と同一パターン)。3 ループの検証内容は同一のため

@@ -151,7 +151,7 @@ export const NAMESPACE_REQUEST_UPDATE_ALLOWED_PARAMS = new Set<number>([
  * draft-ietf-moq-transport-21 §9.8 (PUBLISH):
  * FORWARD / GROUP_ORDER / SUBSCRIBER_PRIORITY / SUBGROUP_DELIVERY_TIMEOUT /
  * OBJECT_DELIVERY_TIMEOUT / LOCATION_FILTER を初期 Subscription Parameters
- * として運べる。§9.18.1 により SUBSCRIBE_TRACKS 由来の PUBLISH でも明示される。
+ * として運べる。§3.6.2 により SUBSCRIBE_TRACKS 由来の PUBLISH でも明示される。
  * NEW_GROUP_REQUEST / Range Filters / FILL_PARAMETERS は PUBLISH に出現できない。
  */
 export const PUBLISH_ALLOWED_PARAMS = new Set<number>([

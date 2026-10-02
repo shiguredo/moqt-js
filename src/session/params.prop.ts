@@ -937,7 +937,7 @@ test("resolveFetchStartLocation: filter 未指定は {0, 0} を返す", () => {
 
 // ============================================================================
 // PBT 6: Track Namespace の前方一致
-// draft-ietf-moq-transport-21 §9.18 (SUBSCRIBE_TRACKS) / §9.5.2
+// draft-ietf-moq-transport-22 §2.4.2 / §3.6 (SUBSCRIBE_TRACKS) / §9.5.2
 // ============================================================================
 
 test("matchNamespacePrefix: 一致した場合は prefix と suffix の連結が元に戻る", () => {
@@ -1019,7 +1019,7 @@ test("validateNamespacePrefixUpdate: 共通 prefix を持つ既存 prefix があ
 
 // ============================================================================
 // PBT 7: validateTrackNamespaceForSend
-// draft-ietf-moq-transport-21 §2.4.2 / §6.5 / §8.7
+// draft-ietf-moq-transport-22 §2.4.3 / §6.5 / §8.7
 // ============================================================================
 
 test("validateTrackNamespaceForSend: 予約 prefix でもフィールド数超過でもない場合は throw しない", () => {

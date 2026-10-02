@@ -227,7 +227,7 @@ test("incomingHandleFirstBidiMessage: 未対応リクエストに NOT_SUPPORTED 
 });
 
 /**
- * draft-ietf-moq-transport-21 §2.4.2 (Reserved Namespaces) / §6.5
+ * draft-ietf-moq-transport-22 §2.4.3 (Reserved Namespaces) / §6.5
  * (Session-Level Tracks and Namespaces):
  * "An endpoint that receives a request for an unrecognized session-level track or
  *  namespace MUST reject it with REQUEST_ERROR using error code DOES_NOT_EXIST
@@ -275,7 +275,7 @@ test("incomingHandleFirstBidiMessage: 未対応リクエストの .session names
 });
 
 /**
- * draft-ietf-moq-transport-21 §2.4.2:
+ * draft-ietf-moq-transport-22 §2.4.3:
  * "." 単体の namespace も同じく DOES_NOT_EXIST で拒否する。
  */
 test("incomingHandleFirstBidiMessage: 未対応リクエストの単一ピリオド namespace は DOES_NOT_EXIST", async () => {
@@ -316,7 +316,7 @@ test("incomingHandleFirstBidiMessage: 未対応リクエストの単一ピリオ
 });
 
 /**
- * draft-ietf-moq-transport-21 §2.4.2 (Reserved Namespaces) / §6.5
+ * draft-ietf-moq-transport-22 §2.4.3 (Reserved Namespaces) / §6.5
  * (Session-Level Tracks and Namespaces):
  * 未対応 6 種はいずれも Request ID の直後に Track Namespace (SUBSCRIBE_NAMESPACE /
  * SUBSCRIBE_TRACKS は Track Namespace Prefix) を置く。種類によらず先頭の

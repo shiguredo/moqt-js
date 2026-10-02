@@ -3591,7 +3591,7 @@ test("受信 PUBLISH と連結されていない FIN は PUBLISH_DONE 無しの�
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.5.2 / §4.1:
+ * draft-ietf-moq-transport-22 §9.5.2 / §4.2:
  * in-flight (REQUEST_OK 未受信) の更新がある状態で namespace の
  * unsubscribe() を呼ぶと、update() の Promise が reject され、pending エントリと
  * pendingPrefix が掃除されることを検証する。
@@ -3651,7 +3651,7 @@ test("namespace の unsubscribe() で in-flight の update() が reject され p
   assert.equal(rejected!.message, REQUEST_UPDATE_STREAM_CLOSED_MESSAGE);
   assert.equal(sessionInternal.pendingRequestUpdate.size, 0);
   assert.isUndefined(entry.pendingPrefix);
-  // draft-ietf-moq-transport-21 §4.1 / §6.4.2.3:
+  // draft-ietf-moq-transport-22 §4.2 / §6.4.2.3:
   // ストリームが RESET (writer.abort()) で解除され、エントリが削除される
   assert.equal(entry.state, "closed");
   assert.isTrue(abortCalled);
@@ -3659,7 +3659,7 @@ test("namespace の unsubscribe() で in-flight の update() が reject され p
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.5.2 / §4.1:
+ * draft-ietf-moq-transport-22 §9.5.2 / §3.6:
  * tracks 側の unsubscribe() でも namespace 側と同様に、in-flight の update() の
  * Promise が reject され、pending エントリと pendingPrefix が掃除されることを
  * 検証する。
@@ -8915,7 +8915,7 @@ function createCancelObservingStream(): {
 }
 
 /**
- * draft-ietf-moq-transport-21 §4.1 / §6.4.2.3:
+ * draft-ietf-moq-transport-22 §4.2 / §6.4.2.3:
  * SUBSCRIBE_NAMESPACE の解除は送信方向 RESET (writer.abort()) と
  * 受信方向 STOP_SENDING (reader.cancel()) で行う (FIN ではない)。
  */
@@ -8952,7 +8952,7 @@ test("namespace の unsubscribe() は送信方向 abort と受信方向 cancel �
 });
 
 /**
- * draft-ietf-moq-transport-21 §4.1 / §6.4.2.3:
+ * draft-ietf-moq-transport-22 §3.6 / §6.4.2.3:
  * SUBSCRIBE_TRACKS の解除も namespace と同様に RESET / STOP_SENDING で行う。
  */
 test("tracks の unsubscribe() は送信方向 abort と受信方向 cancel で解除する", async () => {
@@ -8988,7 +8988,7 @@ test("tracks の unsubscribe() は送信方向 abort と受信方向 cancel で�
 });
 
 /**
- * draft-ietf-moq-transport-21 §4.2 / §6.4.2.3:
+ * draft-ietf-moq-transport-22 §4.1 / §6.4.2.3:
  * PUBLISH_NAMESPACE の撤回も RESET / STOP_SENDING で行う。
  */
 test("publishNamespace の done() は送信方向 abort と受信方向 cancel で撤回する", async () => {

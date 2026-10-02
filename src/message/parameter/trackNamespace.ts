@@ -251,7 +251,7 @@ function isSessionLevelNamespace(tuple: Uint8Array[]): boolean {
 /**
  * 受信した Track Namespace を DOES_NOT_EXIST で拒否すべきかを判定する
  *
- * draft-ietf-moq-transport-21 §2.4.2 (Reserved Namespaces):
+ * draft-ietf-moq-transport-22 §2.4.3 (Reserved Namespaces):
  * "A Track Namespace whose first field is exactly . (a single period,
  *  0x2e) is reserved and MUST NOT be used for any purpose; endpoints
  *  MUST NOT publish tracks or namespaces under it and MUST reject
@@ -262,7 +262,7 @@ function isSessionLevelNamespace(tuple: Uint8Array[]): boolean {
  *  DOES_NOT_EXIST rather than passing it to the Application."
  *
  * 拒否対象は "." 単体と ".session" のみに限定する。それ以外の予約
- * 名前空間 (例: ".foo") は §2.4.2 の "an endpoint that receives a
+ * 名前空間 (例: ".foo") は §2.4.3 の "an endpoint that receives a
  * request for an unrecognized reserved namespace MUST pass it to the
  * Application" により拒否せずアプリへ渡す (送信側の ". で始まる
  * すべてを拒否する方針 (validateTrackNamespaceForSend) は受信側には
@@ -276,7 +276,7 @@ function isSessionLevelNamespace(tuple: Uint8Array[]): boolean {
 export function isRejectedReceiveNamespace(tuple: Uint8Array[]): boolean {
   const [firstField] = tuple;
   if (firstField === undefined) return false;
-  // "." 単体 (0x2e 1 バイトのみ) は §2.4.2 により MUST 拒否
+  // "." 単体 (0x2e 1 バイトのみ) は §2.4.3 により MUST 拒否
   const [firstByte] = firstField;
   if (firstField.length === 1 && firstByte === 0x2e) return true;
   // 先頭フィールドが .session なら §6.5 により MUST 拒否。

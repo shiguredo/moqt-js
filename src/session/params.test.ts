@@ -16,6 +16,8 @@ import {
   resolveFetchStartLocation,
   resolveFillGroupOrder,
   extractNewGroupRequest,
+  matchNamespacePrefix,
+  namespacePrefixesOverlap,
 } from "./params";
 import { InvalidFilterError, ProtocolViolationError } from "../error";
 import { MAX_VARINT, encodeVarint } from "../varint";
@@ -98,11 +100,13 @@ test("buildFetchParameters: 不正な groupOrder で throw する", () => {
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.18.1:
+ * draft-ietf-moq-transport-22 §3.6.2:
  * "Any Parameter that can be specified on a Subscription (ie: in SUBSCRIBE) is
  *  valid in SUBSCRIBE_TRACKS, unless otherwise specified."
  * "To join Tracks initiated via the resulting PUBLISHes, the subscriber can
- *  specify a Location Filter and optionally include FILL_PARAMETERS"
+ *  specify a Location Filter and optionally include FILL_PARAMETERS in the
+ *  SUBSCRIBE_TRACKS, or in a REQUEST_UPDATE following PUBLISH_OK, as
+ *  described in Section 3.5."
  */
 test("buildSubscribeTracksParameters: subscriberPriority が SUBSCRIBER_PRIORITY パラメータになる", () => {
   const parameters = buildSubscribeTracksParameters({ subscriberPriority: 7 });
@@ -152,7 +156,7 @@ test("buildPublishTrackProperties: grease: true でも他の Track Property は�
 
 // ============================================================================
 // buildSubscribeTracksParameters (Range Filters)
-// draft-ietf-moq-transport-21 §9.18.1 / §4.3 / §3.3.2
+// draft-ietf-moq-transport-22 §3.6.2 / §3.6.1 / §3.3.2
 // ============================================================================
 
 /**
@@ -491,4 +495,50 @@ test("buildFillParameters: reset (0x00) と Next Object (0x05) を内側に載�
     [MessageParameterType.LOCATION_FILTER],
   );
   assert.deepEqual(nextObjectInner[0]!.value, new Uint8Array([0x05]));
+});
+
+// ============================================================================
+// matchNamespacePrefix / namespacePrefixesOverlap
+// draft-ietf-moq-transport-22 §2.4.2 (Namespace Prefix Matching) / §3.6 (PREFIX_OVERLAP)
+// / §9.5.2 (Updating Namespace Subscriptions)
+// ============================================================================
+
+// §2.4.2 の例をそのまま固定する。直列化した名前は §8.8 の形式であり、
+// "foo-bar--x" は名前空間 (foo, bar) と Track 名 x、"example.2ecom-123" は
+// 名前空間 (example.com, 123) を表す (.2e は "." の 16 進表記)
+test("matchNamespacePrefix: §2.4.2 の例どおりフィールド単位で前方一致する", () => {
+  // Full Track Name foo-bar--x の名前空間 (foo, bar) は prefix (foo) と (foo, bar) に一致する
+  assert.deepEqual(matchNamespacePrefix(["foo", "bar"], ["foo"]), ["bar"]);
+  assert.deepEqual(matchNamespacePrefix(["foo", "bar"], ["foo", "bar"]), []);
+  // フィールド単位の完全一致であるため、文字列の前方一致ではない。foobar には一致しない
+  assert.isNull(matchNamespacePrefix(["foo", "bar"], ["foobar"]));
+  // prefix (example.com, 123) は (example.com, 123, 100) と (example.com, 123, 200) に一致する
+  assert.deepEqual(matchNamespacePrefix(["example.com", "123", "100"], ["example.com", "123"]), [
+    "100",
+  ]);
+  assert.deepEqual(matchNamespacePrefix(["example.com", "123", "200"], ["example.com", "123"]), [
+    "200",
+  ]);
+  // 先頭フィールドが異なれば一致しない
+  assert.isNull(matchNamespacePrefix(["example.com", "123", "100"], ["example.net", "123"]));
+  // prefix の方が長ければ一致しない
+  assert.isNull(matchNamespacePrefix(["foo", "bar"], ["foo", "bar", "x"]));
+  // 空の prefix はすべての名前空間に一致する (§3.6: 0 フィールドの prefix は全 Track)
+  assert.deepEqual(matchNamespacePrefix(["foo", "bar"], []), ["foo", "bar"]);
+});
+
+// 共通 prefix を持つとは、一方が他方の sub-prefix であることである (§9.5.2)。
+// SUBSCRIBE_TRACKS では §3.6 が PREFIX_OVERLAP の応答を MUST とする
+test("namespacePrefixesOverlap: §2.4.2 の例で sub-prefix の関係を判定する", () => {
+  // (foo) と (foo, bar) は共通 prefix を持つ
+  assert.isTrue(namespacePrefixesOverlap(["foo"], ["foo", "bar"]));
+  assert.isTrue(namespacePrefixesOverlap(["foo", "bar"], ["foo"]));
+  // 同じ prefix は共通 prefix を持つ
+  assert.isTrue(namespacePrefixesOverlap(["foo", "bar"], ["foo", "bar"]));
+  // foobar は (foo, bar) と sub-prefix の関係にない (フィールド単位の一致)
+  assert.isFalse(namespacePrefixesOverlap(["foo", "bar"], ["foobar"]));
+  // 先頭フィールドが異なれば共通 prefix を持たない
+  assert.isFalse(namespacePrefixesOverlap(["example.com", "123"], ["example.net", "123"]));
+  // 空の prefix はすべての名前空間と共通 prefix を持つ
+  assert.isTrue(namespacePrefixesOverlap([], ["foo", "bar"]));
 });

@@ -102,7 +102,7 @@ export async function namespacesSubscribeNamespace(
 
   const trackNamespacePrefix = createTrackNamespace(namespacePrefix);
 
-  // draft-ietf-moq-transport-21 §2.4.2 / §6.5: 予約 namespace / .session の送信拒否
+  // draft-ietf-moq-transport-22 §2.4.3 / §6.5: 予約 namespace / .session の送信拒否
   validateTrackNamespaceForSend(namespacePrefix);
 
   // 専用の双方向ストリームを作成
@@ -187,12 +187,12 @@ export async function namespacesSubscribeTracks(
 
   const trackNamespacePrefix = createTrackNamespace(namespacePrefix);
 
-  // draft-ietf-moq-transport-21 §2.4.2 / §6.5: 予約 namespace / .session の送信拒否
+  // draft-ietf-moq-transport-22 §2.4.3 / §6.5: 予約 namespace / .session の送信拒否
   validateTrackNamespaceForSend(namespacePrefix);
 
   // draft-ietf-moq-transport-21 §9.1.6: ピアの MAX_FILTER_RANGES が 0 のとき、および
   // 購読単位の Ranges 合計が上限を超えるときは Range Filter を送信できない
-  // draft-ietf-moq-transport-21 §4.3: SUBSCRIBE_TRACKS で Range Filter を送信できる
+  // draft-ietf-moq-transport-22 §3.6.1: SUBSCRIBE_TRACKS で Range Filter を送信できる
   // fill 内側の Range Filter も購読単位で数える (collectSubscriptionRangeFilters)。
   // 上限の解釈は SUBSCRIBE 経路と共通であり、検証はストリーム生成より前に行う
   validateRangeFilterLimits(
@@ -209,7 +209,7 @@ export async function namespacesSubscribeTracks(
 
   try {
     // SUBSCRIBE_TRACKS メッセージを構築
-    // draft-ietf-moq-transport-21 §9.18.1: GROUP_ORDER / FORWARD / Range Filters を送信可能
+    // draft-ietf-moq-transport-22 §3.6.2: GROUP_ORDER / FORWARD / Range Filters を送信可能
     const subscribeTracksMsg = {
       type: MessageType.SUBSCRIBE_TRACKS,
       requestId,
@@ -286,7 +286,7 @@ export async function namespacesPublishNamespace(
 
   const trackNamespace = createTrackNamespace(namespace);
 
-  // draft-ietf-moq-transport-21 §2.4.2 / §6.5: 予約 namespace / .session の送信拒否
+  // draft-ietf-moq-transport-22 §2.4.3 / §6.5: 予約 namespace / .session の送信拒否
   validateTrackNamespaceForSend(namespace);
 
   // 専用の双方向ストリームを作成
@@ -451,9 +451,9 @@ export function namespacesCreateNamespacePublication(
 /**
  * Namespace サブスクリプションを閉じる
  *
- * draft-ietf-moq-transport-21 §4.1:
- * SUBSCRIBE_NAMESPACE は FIN または RESET_STREAM でストリームを閉じることで
- * キャンセルできる。
+ * draft-ietf-moq-transport-22 §4.2 / §6.4.2.3 (FIN はキャンセルではない点は §6.4.2.2):
+ * SUBSCRIBE_NAMESPACE のキャンセルは、まだ開いている方向を RESET_STREAM と
+ * STOP_SENDING で切ることで行う (FIN はキャンセルではない)。
  */
 export async function namespacesCloseNamespaceSubscription(
   session: NamespacesSessionInternal,
@@ -477,7 +477,7 @@ export async function namespacesCloseNamespaceSubscription(
     new Error(REQUEST_UPDATE_STREAM_CLOSED_MESSAGE),
   );
 
-  // draft-ietf-moq-transport-21 §4.1 / §6.4.2.3:
+  // draft-ietf-moq-transport-22 §4.2 / §6.4.2.3:
   // SUBSCRIBE_NAMESPACE の解除は RESET_STREAM (writer.abort()) と
   // STOP_SENDING (reader.cancel()) で行う。
   await namespacesCancelStream(
@@ -492,9 +492,9 @@ export async function namespacesCloseNamespaceSubscription(
 /**
  * Tracks サブスクリプションを閉じる
  *
- * draft-ietf-moq-transport-21 §4.1:
- * SUBSCRIBE_TRACKS は FIN または RESET_STREAM でストリームを閉じることで
- * キャンセルできる。
+ * draft-ietf-moq-transport-22 §3.6 / §6.4.2.3 (FIN はキャンセルではない点は §6.4.2.2):
+ * SUBSCRIBE_TRACKS のキャンセルは、まだ開いている方向を RESET_STREAM と
+ * STOP_SENDING で切ることで行う (FIN はキャンセルではない)。
  */
 export async function namespacesCloseTracksSubscription(
   session: NamespacesSessionInternal,
@@ -516,7 +516,7 @@ export async function namespacesCloseTracksSubscription(
     new Error(REQUEST_UPDATE_STREAM_CLOSED_MESSAGE),
   );
 
-  // draft-ietf-moq-transport-21 §4.1 / §6.4.2.3:
+  // draft-ietf-moq-transport-22 §3.6 / §6.4.2.3:
   // SUBSCRIBE_TRACKS の解除は RESET_STREAM (writer.abort()) と
   // STOP_SENDING (reader.cancel()) で行う。
   await namespacesCancelStream(
@@ -531,10 +531,10 @@ export async function namespacesCloseTracksSubscription(
 /**
  * Namespace 公開を終了する
  *
- * draft-ietf-moq-transport-21 §4.2:
- * PUBLISH_NAMESPACE_DONE / PUBLISH_NAMESPACE_CANCEL は廃止され、
- * 公開の終了は双方向ストリームを FIN または RESET_STREAM で閉じることで通知する。
- * https://www.ietf.org/archive/id/draft-ietf-moq-transport-21.html#section-4.2
+ * draft-ietf-moq-transport-22 §4.1 / §6.4.2.3:
+ * PUBLISH_NAMESPACE_DONE / PUBLISH_NAMESPACE_CANCEL は廃止され、公開の撤回は
+ * request のキャンセル (RESET_STREAM と STOP_SENDING) で行う。
+ * https://www.ietf.org/archive/id/draft-ietf-moq-transport-22.html#section-4.1
  */
 export async function namespacesCloseNamespacePublication(
   session: NamespacesSessionInternal,
@@ -547,7 +547,7 @@ export async function namespacesCloseNamespacePublication(
 
   publication.state = "closed";
 
-  // draft-ietf-moq-transport-21 §4.2 / §6.4.2.3:
+  // draft-ietf-moq-transport-22 §4.1 / §6.4.2.3:
   // PUBLISH_NAMESPACE の撤回は RESET_STREAM (writer.abort()) と
   // STOP_SENDING (reader.cancel()) で行う。
   await namespacesCancelStream(
