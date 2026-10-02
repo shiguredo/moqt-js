@@ -688,9 +688,9 @@ export async function incomingPublishHandleBidirectionalStream(
     return;
   }
 
-  // draft-ietf-moq-transport-21 §3.1.2 (Track Alias):
+  // draft-ietf-moq-transport-22 §3.1.3 (Track Alias):
   // 同一 Track Alias が異なる Track に使われている場合は DUPLICATE_TRACK_ALIAS でセッション終了。
-  // 同一 Track への複数 PUBLISH は draft-21 §3.1 で許可される。
+  // 同一 Track への複数 PUBLISH は draft-ietf-moq-transport-22 §3.1 で許可される。
   // TRACK_PROPERTY_FILTER 評価より先に検証する (フィルタ不通過で UNINTERESTED 応答すると
   // alias 重複というセッション違反が検出されず隠れるため)。
   const existingSubscribers = session.subscribersByAlias.get(publishTrackAlias);
@@ -826,7 +826,7 @@ export async function incomingPublishHandleBidirectionalStream(
 
   session.pendingSubgroupBuffer.notifyAlias(publishTrackAlias, "subscriber");
 
-  // PUBLISH_OK を送信 (draft-ietf-moq-transport-21 §3.1 MUST) して
+  // PUBLISH_OK を送信 (draft-ietf-moq-transport-22 §3.1 MUST) して
   // 後続メッセージのサブループを回す。
   // 登録以後の一連の処理は try/finally で守り、PUBLISH_OK 書き込み失敗・
   // サブループ脱出のいずれの exit 経路でも後始末 (3 マップの削除 + fill

@@ -399,7 +399,7 @@ export async function requestsSubscribe(
     parameters,
   };
 
-  // draft-ietf-moq-transport-21 §3.4 (Fill Semantics):
+  // draft-ietf-moq-transport-22 §3.4 (Fill Semantics):
   // fill を要求した SUBSCRIBE の Request ID を購読に関連付ける。
   // SUBSCRIBE_OK 受理で pending は消えるが、fill ストリーム到着まで保持する。
   if (options?.fill !== undefined) {

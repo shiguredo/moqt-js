@@ -855,10 +855,11 @@ export async function dataStreamHandleMalformedSubgroupTrack(
 /**
  * Subgroup ストリームを処理する
  *
- * draft-ietf-moq-transport-21 §11.3.1:
- * "If an endpoint receives a subgroup with an unknown Track Alias, it MAY abandon
- *  the stream, or choose to buffer it for a brief period to handle reordering with
- *  the control message that establishes the Track Alias."
+ * draft-ietf-moq-transport-22 §3.1.3.1 (Unknown Track Alias):
+ * "When an endpoint receives a datagram or a new stream with a Track Alias that is
+ *  not yet associated with an Established subscription, it MAY drop the data or
+ *  buffer it briefly to handle reordering with the control message that
+ *  establishes the Track Alias."
  *
  * subscriber が登録済みであれば即座に通常 mode で読み出す。
  * 未登録なら pending mode に入り、Promise.race で chunk 受信と subscriber 通知を並走させる。

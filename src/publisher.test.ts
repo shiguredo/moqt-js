@@ -652,8 +652,8 @@ test("forwardState=false でも done は onDoneInternal を呼ぶ", async () => 
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.3.1:
- * 「A publisher MUST NOT send subscription-delivered objects from outside the
+ * draft-ietf-moq-transport-22 §3.3.1 (Location Filters):
+ * 「A publisher MUST NOT send objects from outside the
  *  requested range.」
  * 購読の Location Filter の範囲外 Object は送信せず、Largest Object も更新しない。
  * 範囲外に大きい Location を先に送ることで、フィルタ判定より前に
@@ -684,7 +684,7 @@ test("sendObject: 購読の Location Filter の範囲外は送信せず Largest 
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.3.1:
+ * draft-ietf-moq-transport-22 §3.3.1:
  * 範囲外の END_OF_TRACK は送信も記録もされないため、後続の送信が可能なままになる。
  */
 test("sendObject: 範囲外の END_OF_TRACK は記録せず後続送信を許可する", async () => {
@@ -709,7 +709,7 @@ test("sendObject: 範囲外の END_OF_TRACK は記録せず後続送信を許可
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.3.1:
+ * draft-ietf-moq-transport-22 §3.3.1:
  * 購読の Location Filter の範囲外 Datagram は送信せず、Largest Object も更新しない。
  */
 test("sendDatagram: 購読の Location Filter の範囲外は送信せず Largest Object も更新しない", () => {

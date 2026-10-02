@@ -90,10 +90,12 @@ export interface MoqtObject {
   subgroupDeliveryTimeout?: bigint;
   /**
    * fill fetch ストリーム経由で届いたかどうか
-   * draft-ietf-moq-transport-21 §3.3.1 / §3.4 (Fill Semantics)
+   * draft-ietf-moq-transport-22 §3.1 (Subscriptions) / §3.4 (Fill Semantics)
    *
-   * 購読の object コールバック文脈では、true は fill-delivered (fill fetch
-   * ストリーム経由)、未設定は subscription-delivered (subgroup / datagram
+   * §3.1 が「An object published or received in a subgroup or datagram is
+   * *subscription-delivered*.」、§3.4 が「An object delivered on the fill fetch
+   * stream is *fill-delivered*.」と定める。購読の object コールバック文脈では、true は
+   * fill-delivered (fill fetch ストリーム経由)、未設定は subscription-delivered (subgroup / datagram
    * 経由) を示す。fill 範囲と subscription の Location Filter が重なると
    * 同一 Location が両経路で届き得るため、アプリはこの値で区別する。
    * FETCH (Session.fetch) 経由では設定されない。

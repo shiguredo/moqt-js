@@ -58,8 +58,8 @@ export interface RequestUpdateOptions {
 
   /**
    * fill fetch の要求
-   * draft-ietf-moq-transport-21 Section 3.4 (Fill Semantics) /
-   * Section 9.20.16 (FILL PARAMETERS Parameter)
+   * draft-ietf-moq-transport-22 §3.4 (Fill Semantics) /
+   * §9.20.15 (FILL PARAMETERS Parameter)
    *
    * FILL_PARAMETERS (0x23) として送信し、fill fetch ストリームを要求する。
    * FILL_PARAMETERS は subscription 状態として保持されず、載せたメッセージに
@@ -153,7 +153,7 @@ export class SubscriberImpl implements Subscriber {
   private subscriberGroupOrder: "Ascending" | "Descending" | undefined;
   // draft-ietf-moq-msf-01 §11.4.3: track に関連するトークンは REQUEST_UPDATE にも MUST 付与。
   private subscriberAuthorizationToken: AuthorizationToken | undefined;
-  // draft-ietf-moq-transport-21 Section 3.3.1: Location Filter の再適用に使用
+  // draft-ietf-moq-transport-22 Section 3.3.1: Location Filter の再適用に使用
   private locationFilter: LocationFilter | undefined;
   private resolvedFilterCache: ResolvedFilter | undefined;
   // draft-ietf-moq-transport-21 Section 3.3.2: Range Filter の再適用に使用
@@ -272,7 +272,7 @@ export class SubscriberImpl implements Subscriber {
   /**
    * 保持済みの Location Filter を最新の LARGEST_OBJECT で再解決する
    *
-   * draft-ietf-moq-transport-21 §3.3.1:
+   * draft-ietf-moq-transport-22 §3.3.1:
    * SUBSCRIBE 送信時の setLocationFilter では LARGEST_OBJECT が未受信のため、
    * SUBSCRIBE_OK で LARGEST_OBJECT を設定した直後に一度だけ呼ぶ。
    * REQUEST_UPDATE_OK / PUBLISH_STATE_NOTIFY の LARGEST_OBJECT 更新では呼ばない
@@ -321,7 +321,7 @@ export class SubscriberImpl implements Subscriber {
   /**
    * Location Filter を設定する
    *
-   * draft-ietf-moq-transport-21 Section 3.3.1:
+   * draft-ietf-moq-transport-22 Section 3.3.1:
    * SUBSCRIBE 送信時の options.filter または REQUEST_UPDATE 成功後の更新で設定される。
    * 設定時点の LARGEST_OBJECT で解決した結果を保持するため、呼び出し側は
    * 同じ内容のフィルタで再設定しないこと (同じ内容でも再解決で開始位置が
@@ -424,7 +424,7 @@ export class SubscriberImpl implements Subscriber {
   /**
    * 受信 Object に購読のフィルタを再適用し、配送してよいかを判定する
    *
-   * draft-ietf-moq-transport-21 Section 3.3.1 / Section 3.3.2:
+   * draft-ietf-moq-transport-22 Section 3.3.1 / Section 3.3.2:
    * Subgroup 経路と Datagram 経路で同じ規則を適用する。判定の副作用として
    * Priority 省略時の継承値を object へ設定するため、配送前に必ず通す。
    *
@@ -435,7 +435,7 @@ export class SubscriberImpl implements Subscriber {
     // draft-ietf-moq-transport-21 §10.4 / §11.3.1 / §11.2.1:
     // Priority 省略時は購読の DEFAULT_PUBLISHER_PRIORITY を継承する
     this.applyDefaultPublisherPriority(object);
-    // draft-ietf-moq-transport-21 Section 3.3.1: Location Filter 再適用
+    // draft-ietf-moq-transport-22 Section 3.3.1: Location Filter 再適用
     if (
       !objectMatchesFilter(
         { group: object.groupId, object: object.objectId },
@@ -487,7 +487,7 @@ export class SubscriberImpl implements Subscriber {
   /**
    * fill fetch ストリームから届いたオブジェクトを受け取る
    *
-   * draft-ietf-moq-transport-21 §3.3.1 / §3.4 (Fill Semantics):
+   * draft-ietf-moq-transport-22 §3.1 (Subscriptions) / §3.4 (Fill Semantics):
    * fill-delivered のオブジェクトは fill 範囲 (FILL_PARAMETERS 内のフィルタ)
    * に従属するため、subscription の Location Filter / Range Filter 再適用
    * (handleObject) を通さず、fillDelivered を true にして object
@@ -509,7 +509,7 @@ export class SubscriberImpl implements Subscriber {
   /**
    * fill fetch ストリームの失敗をアプリへ通知する
    *
-   * draft-ietf-moq-transport-21 §3.4.1 (Opening and Closing Fill Fetch Streams):
+   * draft-ietf-moq-transport-22 §3.4.1 (Opening and Closing Fill Fetch Streams):
    * "Because there is no REQUEST_ERROR associated with a fill fetch stream, the
    *  publisher signals a fill failure by resetting the stream" および
    * "Resetting or cancelling a fill fetch stream, by either endpoint, does not
@@ -571,7 +571,7 @@ export class SubscriberImpl implements Subscriber {
    * "The publisher terminates a subscription in the Pending (Publisher) or Established
    *  states by sending PUBLISH_DONE and closing the stream."
    *
-   * draft-ietf-moq-transport-21 Section 9.9 (PUBLISH_DONE):
+   * draft-ietf-moq-transport-22 §9.9 (PUBLISH_DONE):
    * PUBLISH_DONE Status Code がエラーを示す場合（INTERNAL_ERROR, UPDATE_FAILED 等）、
    * errorCallback で通知する。
    */

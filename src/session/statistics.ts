@@ -18,7 +18,7 @@ export interface SessionStatistics {
    * 通常 FETCH のデータストリーム経由で受信したオブジェクト数
    *
    * fill fetch ストリーム経由のオブジェクトは含まない (objectsReceivedViaFill を参照)。
-   * draft-ietf-moq-transport-21 §3.4 (Fill Semantics) の fill-delivered と
+   * draft-ietf-moq-transport-22 §3.4 (Fill Semantics) の fill-delivered と
    * 通常 FETCH は別経路のため、配送経路の区別 (MoqtObject.fillDelivered) と
    * 統計区分を一致させている。
    */

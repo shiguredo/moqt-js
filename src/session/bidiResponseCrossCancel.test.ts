@@ -23,7 +23,7 @@ import {
 } from "../testSupport/bidi";
 
 /**
- * draft-ietf-moq-transport-21 §3.1.2 / §2.4.1:
+ * draft-ietf-moq-transport-22 §3.1.3 (Track Alias) / §2.4.1:
  * Track Alias の重複判定は Full Track Name の比較キーで行う。namespace ["a"] +
  * trackName "b/c" と namespace ["a","b"] + trackName "c" は "/" 連結では同じ
  * "a/b/c" になるため、区切り文字の曖昧さで別 Track を同一とみなすと
@@ -72,7 +72,7 @@ test("bidiReadSubscribeResponse: 区切り文字が衝突する別 Track の同�
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.1.2:
+ * draft-ietf-moq-transport-22 §3.1.3 (Track Alias):
  * DUPLICATE_TRACK_ALIAS 経路で pendingSubscribe + requestStreams +
  * fillFetchTargets が掃除されることを検証する。
  */

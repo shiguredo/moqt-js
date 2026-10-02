@@ -255,7 +255,7 @@ interface PendingRequestUpdateValues {
 /**
  * fill fetch ストリームと購読の関連付け
  *
- * draft-ietf-moq-transport-21 §3.4 (Fill Semantics):
+ * draft-ietf-moq-transport-22 §3.4 (Fill Semantics):
  * fill fetch ストリームの FETCH_HEADER が運ぶ Request ID (初期 fill は
  * SUBSCRIBE、後続 fill は REQUEST_UPDATE のもの) から購読を引くための記録。
  */
@@ -339,7 +339,7 @@ export interface BidiSessionInternal {
   /**
    * fill 要求元の Request ID から購読への関連付け
    *
-   * draft-ietf-moq-transport-21 §3.4:
+   * draft-ietf-moq-transport-22 §3.4:
    * fill fetch ストリームの FETCH_HEADER が運ぶ Request ID で引く。
    * REQUEST_OK 受理で pending が消えても、fill ストリーム到着まで保持する
    * (応答と fill ストリームの順序は保証されない)。
@@ -1099,7 +1099,8 @@ export async function bidiReadSubscribeResponse(
 
       const existingSubscribers = session.subscribersByAlias.get(decoded.trackAlias);
       if (existingSubscribers && existingSubscribers.length > 0) {
-        // draft-ietf-moq-transport-21 §3.1.2: 同一 Track Alias が異なる Track に使われている場合のみ DUPLICATE_TRACK_ALIAS
+        // draft-ietf-moq-transport-22 §3.1.3 (Track Alias):
+        // 同一 Track Alias が異なる Track に使われている場合のみ DUPLICATE_TRACK_ALIAS
         const trackKey = pending.impl.getFullTrackNameKey();
         const firstSubscriber = existingSubscribers[0];
         if (firstSubscriber === undefined) {
@@ -1126,7 +1127,7 @@ export async function bidiReadSubscribeResponse(
       if (largestLocation) {
         pending.impl.setLargestLocation(largestLocation);
       }
-      // draft-ietf-moq-transport-21 §3.3.1:
+      // draft-ietf-moq-transport-22 §3.3.1:
       // SUBSCRIBE 送信時は LARGEST_OBJECT 未受信のため、SUBSCRIBE_OK で
       // LARGEST_OBJECT を設定した直後に相対 Location Filter を一度だけ再解決する。
       pending.impl.resolveLocationFilter();
@@ -3137,8 +3138,8 @@ function markOmittedNextObject(session: BidiSessionInternal, publisher: Publishe
 /**
  * FILL_PARAMETERS の fill 範囲を解決する
  *
- * draft-ietf-moq-transport-21 §3.4 (Fill Semantics):
- * 「The fill range is the range of Locations selected by the Location filter
+ * draft-ietf-moq-transport-22 §3.4 (Fill Semantics):
+ * 「The *fill range* is the range of Locations selected by the Location filter
  *  inside FILL_PARAMETERS, or the subscription's Location filter if it is
  *  omitted.」
  * 内側の LOCATION_FILTER は fill 要求時点の Largest Object で解決し、省略時は
@@ -3163,7 +3164,7 @@ function resolveFillRangeFilter(
 /**
  * fill 範囲が空かどうかを判定する
  *
- * draft-ietf-moq-transport-21 §3.4 (Fill Semantics):
+ * draft-ietf-moq-transport-22 §3.4 (Fill Semantics):
  * 「If the fill range is empty, or starts after Largest Object, the publisher
  *  does not open a fill fetch stream.」
  * fill 範囲は Largest Object を超えられないため、Largest Object 未受信
@@ -3340,7 +3341,7 @@ function inFlightFillRangeFilters(
 /**
  * 単一の raw FILL_PARAMETERS の fill 要求を購読に関連付ける
  *
- * draft-ietf-moq-transport-21 §3.4 (Fill Semantics) / §9.20.16:
+ * draft-ietf-moq-transport-22 §3.4 (Fill Semantics) / §9.20.16:
  * キーは新規採番の updateRequestId とし、型付き経路と同形にする。
  * 内側の GROUP_ORDER (uint8 値) がなければ購読の指定を継承する
  * (resolveFillGroupOrder と同規則。§9.20.16 の省略時継承)。
@@ -3690,7 +3691,7 @@ export async function bidiSendRequestUpdate(
   // ここでの catch は無観測 reject の抑制のみを担う。
   promise.catch(() => {});
 
-  // draft-ietf-moq-transport-21 §3.4 (Fill Semantics):
+  // draft-ietf-moq-transport-22 §3.4 (Fill Semantics):
   // fill を要求した更新の Request ID を購読に関連付ける。REQUEST_OK 受理で
   // pending エントリが消えても、fill ストリーム到着まで保持する (応答と fill
   // ストリームの順序は保証されない)。write 失敗時は pending と同様に削除する。
@@ -3700,7 +3701,7 @@ export async function bidiSendRequestUpdate(
       groupOrder: resolveFillGroupOrder(options.fill.groupOrder, subscriber.getGroupOrder()),
     });
   } else {
-    // draft-ietf-moq-transport-21 §3.4 (Fill Semantics):
+    // draft-ietf-moq-transport-22 §3.4 (Fill Semantics):
     // 単一の raw FILL_PARAMETERS の fill 要求も同一キーで関連付ける。
     // 複数件・型付き併用時は重複検査が先に拒否するため、
     // ここには単一のみ到達する。内側は検証済みのため再デコードしない。
@@ -4185,7 +4186,7 @@ export function bidiHandlePublishDone(
       subscriber.handleEnd(BigInt(normalizedCode), msg.reasonPhrase);
       // subscriber/subscribersByAlias の削除はストリーム close 時
       // (bidiReadRequestStreamMessages の finally) に委譲する
-      // draft-ietf-moq-transport-21 §3.1
+      // draft-ietf-moq-transport-22 §3.1
     }
   }
 

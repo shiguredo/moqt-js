@@ -411,7 +411,7 @@ export function incomingHandleDatagram(session: SessionInternal, data: Uint8Arra
     return;
   }
 
-  // Track Alias で Subscriber を検索（draft-21 §3.1: 同一 alias に複数 subscription あり得る）
+  // Track Alias で Subscriber を検索（draft-ietf-moq-transport-22 §3.1: 同一 alias に複数 subscription あり得る）
   const subscribers = session.subscribersByAlias.get(datagram.trackAlias);
   if (!subscribers || subscribers.length === 0) {
     return;
@@ -587,7 +587,7 @@ export function incomingWaitForFetcher(
  * SessionImpl.handleIncomingStream から呼ばれる。
  *
  * 計上先は受信経路で分ける。fill fetch ストリームのオブジェクトは
- * fill-delivered (§3.4)、通常 FETCH のオブジェクトは fetch 側であり、
+ * fill-delivered (draft-ietf-moq-transport-22 §3.4)、通常 FETCH のオブジェクトは fetch 側であり、
  * 配送経路の区別 (MoqtObject.fillDelivered) と統計区分を一致させる。
  * 購読側 (subscribe) へは合算しない。購読の Location Filter と fill 範囲が
  * 重なる Object は publisher が両経路で別々に送るため、受信したストリームの
