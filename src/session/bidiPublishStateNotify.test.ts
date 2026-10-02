@@ -13,9 +13,12 @@ import { encodePublishStateNotifyPayload } from "../message/session";
 import { MessageType, MessageParameterType } from "../message/types";
 import { encodeLocationFilterParameter } from "../message/parameter";
 import { SessionErrorCode } from "../error";
-import { encodeVarint, MAX_VARINT } from "../varint";
 import { bidiReadRequestStreamMessages } from "./bidi";
-import { waitForMacrotask, createPublishReadTestContext } from "../testSupport/bidi";
+import {
+  waitForMacrotask,
+  createPublishReadTestContext,
+  buildOverflowingLocationFilterParameter,
+} from "../testSupport/bidi";
 
 // ============================================================================
 // bidiHandlePublishStateNotify のテスト
@@ -275,7 +278,7 @@ test("bidiReadRequestStreamMessages: 許可外パラメータの PUBLISH_STATE_N
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.10:
+ * draft-ietf-moq-transport-22 §9.20.9:
  * End Group 超過の LOCATION_FILTER を含む PUBLISH_STATE_NOTIFY を受信した場合、
  * PROTOCOL_VIOLATION でセッションを閉じることを検証する。
  */
@@ -292,16 +295,11 @@ test("bidiReadRequestStreamMessages: End Group 超過の LOCATION_FILTER の PUB
     ctx.controlReader,
     "subscribe",
   );
-  // StartGroup=MAX_VARINT + StartObject=0 + EndGroupDelta=1 で超過
-  const fields = new Uint8Array([
-    ...encodeVarint(MAX_VARINT),
-    ...encodeVarint(0n),
-    ...encodeVarint(1n),
-  ]);
-  const overflowValue = new Uint8Array([...encodeVarint(BigInt(fields.length)), ...fields]);
+  // StartGroup=MAX_VARINT + StartObject=0 + EndGroupDelta=1 で超過する
+  // Location Filter Type 0x03 を手組みする
   const notifyPayload = encodePublishStateNotifyPayload({
     type: MessageType.PUBLISH_STATE_NOTIFY,
-    parameters: [{ type: MessageParameterType.LOCATION_FILTER, value: overflowValue }],
+    parameters: [buildOverflowingLocationFilterParameter()],
   });
   const message = ctx.session.controlWriter!.encode(
     MessageType.PUBLISH_STATE_NOTIFY,
@@ -311,8 +309,11 @@ test("bidiReadRequestStreamMessages: End Group 超過の LOCATION_FILTER の PUB
   ctx.readableController.close();
   await readPromise;
 
+  // End Group 超過の MUST で落ちていることをメッセージまで固定する
+  // (未知の Location Filter Type でも PROTOCOL_VIOLATION になるため)
   assert.isDefined(ctx.closedWithError);
   assert.equal(ctx.closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.isTrue(ctx.closedWithError!.message.includes("absolute range end group exceeds maximum"));
 });
 
 /**

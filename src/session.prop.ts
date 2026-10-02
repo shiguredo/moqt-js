@@ -22,13 +22,15 @@ import {
   encodeLocation,
   encodeUint8ParameterValue,
   type Parameter,
-  type LocationFilter,
 } from "./message/parameter";
 import { MessageParameterType, type Location } from "./message/types";
 import { AuthorizationTokenAliasType, type AuthorizationToken } from "./message/authorizationToken";
 import { encodeVarint } from "./varint";
 import { encodeProperties, decodeProperties } from "./properties";
 import { ProtocolViolationError } from "./error";
+// LocationFilter の arbitrary は message/parameterArb.ts を共有する
+// (型と値域が同一の定義を 2 箇所に持つと、Type 追加時に片方だけが更新される)
+import { locationFilterArb } from "./message/parameterArb";
 
 // ============================================================================
 // Arbitrary 定義
@@ -41,29 +43,6 @@ const locationArb: fc.Arbitrary<Location> = fc.record({
   group: fc.bigInt({ min: 0n, max: 1000000n }),
   object: fc.bigInt({ min: 0n, max: 1000000n }),
 });
-
-/**
- * LocationFilter の任意構築
- */
-const locationFilterArb: fc.Arbitrary<LocationFilter> = fc.oneof(
-  fc.constant({ reset: true } as const),
-  fc.bigInt({ min: 0n, max: 1000000n }).map((startGroup) => ({ startGroup })),
-  fc.record({
-    startGroup: fc.bigInt({ min: 0n, max: 1000000n }),
-    startObject: fc.bigInt({ min: 0n, max: 1000000n }),
-  }),
-  fc.record({
-    startGroup: fc.bigInt({ min: 0n, max: 1000000n }),
-    startObject: fc.bigInt({ min: 0n, max: 1000000n }),
-    endGroupDelta: fc.bigInt({ min: 0n, max: 1000000n }),
-  }),
-  fc.record({
-    startGroup: fc.bigInt({ min: 0n, max: 1000000n }),
-    startObject: fc.bigInt({ min: 0n, max: 1000000n }),
-    endGroupDelta: fc.bigInt({ min: 0n, max: 1000000n }),
-    endObject: fc.bigInt({ min: 0n, max: 1000000n }),
-  }),
-);
 
 /**
  * Authorization Token の任意構築（USE_VALUE。Message Parameter では 4 種全て許可されるが、

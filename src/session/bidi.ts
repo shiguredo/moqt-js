@@ -230,7 +230,7 @@ interface PendingRequestUpdate {
   fillRangeFilters?: RangeFilterSpec[] | undefined;
   /**
    * REQUEST_UPDATE 送信時に指定された LOCATION_FILTER 値。
-   * draft-ietf-moq-transport-21 §9.20.10:
+   * draft-ietf-moq-transport-22 §9.20.9:
    * "If omitted from REQUEST_UPDATE or PUBLISH_STATE_NOTIFY,
    *  the value is unchanged."
    * 省略時 (undefined) は REQUEST_OK 受信時に Location Filter を更新しない。
@@ -2981,7 +2981,7 @@ interface DecodedLocationAndFill {
 /**
  * 受信パラメータ群に含まれる LOCATION_FILTER / FILL_PARAMETERS の値を検証する
  *
- * draft-ietf-moq-transport-21 §9.20.10 (LOCATION FILTER Parameter):
+ * draft-ietf-moq-transport-22 §9.20.9 (LOCATION FILTER Parameter):
  * "If StartGroup + EndGroupDelta exceeds 2^64 - 1, the endpoint MUST
  *  close the session with a PROTOCOL_VIOLATION."
  * draft-ietf-moq-transport-21 §9.20.16 (FILL PARAMETERS Parameter):
@@ -3525,7 +3525,7 @@ export async function bidiSendRequestUpdate(
     allowTrackProperty: false,
   });
 
-  // draft-ietf-moq-transport-21 §9.20.10:
+  // draft-ietf-moq-transport-22 §9.20.9:
   // raw パラメータ経路の LOCATION_FILTER も型付き経路と同じデコード検証
   // (End Group 超過を含む) の対象にする。対象はトップレベルの
   // LOCATION_FILTER 全件とする
@@ -3671,7 +3671,7 @@ export async function bidiSendRequestUpdate(
       // REQUEST_OK 受信時に Range Filters へ反映するため、送信時の値を保持する
       // (省略時は undefined = 不変)。
       rangeFilters: options.rangeFilters,
-      // draft-ietf-moq-transport-21 §9.20.10:
+      // draft-ietf-moq-transport-22 §9.20.9:
       // REQUEST_OK 受信時に Location Filter へ反映するため、送信時の値を保持する
       // (省略時は undefined = 不変)。
       locationFilter: sendLocationFilter,
@@ -4267,7 +4267,7 @@ export function bidiHandlePublishStateNotify(
   const locationParam = msg.parameters.find(
     (param) => param.type === MessageParameterType.LOCATION_FILTER,
   );
-  // §9.20.10 の値検証 (End Group 超過は PROTOCOL_VIOLATION) も兼ねる。
+  // §9.20.9 の値検証 (End Group 超過は PROTOCOL_VIOLATION) も兼ねる。
   // 失敗は呼び出し元の catch でセッションを閉じる。
   const locationFilter =
     locationParam !== undefined ? decodeLocationFilterParameter(locationParam) : undefined;
@@ -4321,7 +4321,8 @@ export function bidiHandlePublishStateNotify(
  *   parameter ..., if known, in PUBLISH_STATE_NOTIFY so the subscriber can
  *   determine the point in the Track at which the change took effect.」に従い、
  *   送信済み Object がある場合は必ず載せる。
- * - FORWARD (§9.20.19) / LOCATION_FILTER (§9.20.10): 「A PUBLISH_STATE_NOTIFY
+ * - FORWARD (§9.20.19) / LOCATION_FILTER (draft-ietf-moq-transport-22 §9.20.9):
+ *   「A PUBLISH_STATE_NOTIFY
  *   carries the parameters whose values have changed.」に従い、現在値から
  *   変化した場合のみ載せる。変化が無ければ送信しない (重複送信の抑止)。
  *
@@ -4370,7 +4371,7 @@ export async function bidiSendPublishStateNotify(
   const filter = options.filter;
   let changedFilter: LocationFilter | undefined;
   if (filter !== undefined && !isSameLocationFilter(publisher.getLocationFilter(), filter)) {
-    // draft-ietf-moq-transport-21 §9.20.10:
+    // draft-ietf-moq-transport-22 §9.20.9:
     // End Group の値域 (2^64-1 超過) は encodeLocationFilterParameter が
     // 送信前に検証する。相対指定の解決は反映時 (setLocationFilter) に行う。
     parameters.push(encodeLocationFilterParameter(filter));
@@ -4653,7 +4654,7 @@ export function bidiHandleRequestUpdateOk(
   // draft-ietf-moq-transport-21 §9.20.19:
   // "If the parameter is omitted from REQUEST_UPDATE, the value for the
   //  subscription remains unchanged."
-  // (§9.20.10 / §3.3.2 も同趣旨の規定を持つ。文言は各反映箇所のコメントを参照。)
+  // (§9.20.9 / §3.3.2 も同趣旨の規定を持つ。文言は各反映箇所のコメントを参照。)
   // 自 update() の REQUEST_OK 受信時に、送信時の FORWARD / LOCATION_FILTER /
   // Range Filters 値 (pendingRequestUpdate エントリに保持) を反映する。
   // 省略時 (undefined) は反映しない。
@@ -4661,7 +4662,7 @@ export function bidiHandleRequestUpdateOk(
   if (resolved !== undefined) {
     const subscriber = session.subscribers.get(streamRequestId);
     if (subscriber) {
-      // draft-ietf-moq-transport-21 §9.20.10:
+      // draft-ietf-moq-transport-22 §9.20.9:
       // 自 update() の REQUEST_OK 受信時に、送信時の LOCATION_FILTER 値を反映する
       // (省略時は不変)。LARGEST_OBJECT 反映の後に行い、相対指定フィルタが
       // Largest 依存で解決されるようにする。

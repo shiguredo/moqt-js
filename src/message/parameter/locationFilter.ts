@@ -1,67 +1,125 @@
 /**
  * MOQT Location Filter
- * draft-ietf-moq-transport-21 Section 3.3.1 / Section 9.20.10
+ * draft-ietf-moq-transport-22 Section 3.3.1 / Section 9.20.9
  *
- * LOCATION_FILTER Parameter の Value (Length (vi64) + optional な vi64 フィールド)
- * のエンコードとデコードを扱う。Value 自体が Length を含む 1 Length 構造のため、
- * Message Parameter 側では外側 Length を付加しない (§9.20.10)。
+ * LOCATION_FILTER Parameter (Type 0x21) の Value は Location Filter Type (vi64) と
+ * その型が定める optional な vi64 フィールドで構成される。v21 の Length (vi64)
+ * プレフィックス方式は廃止され、Value の長さは Type とフィールド数で決まるため、
+ * Message Parameter 側では外側 Length を付加しない (§9.20.9)。
  */
 
-import { IncompleteDataError, InvalidFilterError, ProtocolViolationError } from "../../error";
+import { InvalidFilterError, ProtocolViolationError } from "../../error";
 import { decodeVarint, encodeVarint, MAX_VARINT } from "../../varint";
 import { concatUint8Arrays } from "../../bytes";
 import { type Parameter } from "./common";
 
 /**
- * Location Filter (Section 3.3.1, Section 9.20.10)
+ * Location Filter (Section 3.3.1, Section 9.20.9)
  *
- * draft-ietf-moq-transport-21:
- * LOCATION_FILTER Parameter は Length (バイト長) と optional な vi64 フィールド
- * で構成され、Length がフィールド数を決める。
- * フィールド数 0 (Length 0) はフィルタなし (REQUEST_UPDATE での除去など)。
+ * draft-ietf-moq-transport-22 §9.20.9 の構造:
  *
  *   LOCATION_FILTER Parameter {
  *     Parameter Type (vi64) = 0x21,
- *     Length (vi64),
+ *     Location Filter Type (vi64),
  *     [StartGroup (vi64),]
  *     [StartObject (vi64),]
  *     [EndGroupDelta (vi64),]
  *     [EndObject (vi64),]
  *   }
  *
- * フィールドの有無による意味論:
- * - 1 フィールド (startGroup): 相対指定。Next Group 基準
- * - 2 フィールド (startGroup + startObject): 両方 0 は Next Object、
- *   それ以外は絶対開始 (終端なし)
- * - 3 フィールド (startGroup + startObject + endGroupDelta): 絶対開始 +
- *   End Group Delta
- * - 4 フィールド (+ endObject): 絶対開始 + End Group Delta + End Object
+ * Location Filter Type が後続フィールドの有無と意味を決める (Table 6):
+ * - 0x00 (None): フィールドなし。フィルタなし
+ * - 0x01 (Relative Start): StartGroup のみ。開始は
+ *   {Largest Object.Group + 1 - StartGroup, 0} (0 未満は 0、2^64-1 超は 2^64-1)
+ * - 0x02 (Absolute Start): StartGroup + StartObject。開始のみ (終端なし)
+ * - 0x03 (Absolute Start, Group End): + EndGroupDelta。End Group は
+ *   StartGroup + EndGroupDelta で、その Group の全 Object が対象
+ * - 0x04 (Absolute Range): + EndObject。End Group 内の EndObject までが対象
+ * - 0x05 (Next Object): フィールドなし。開始は Largest Object の次の Object
+ * - 上記以外の Type は PROTOCOL_VIOLATION
+ *
+ * 0:0 の特例 (v21 の「2 フィールドで StartGroup = StartObject = 0 は Next Object」)
+ * は廃止された。0x02 の 0:0 は絶対位置 {0, 0} を表し、Next Object は 0x05 が表す。
  *
  * EndGroupDelta は StartGroup からの差分であり、End Group = StartGroup +
  * EndGroupDelta。End Group が 2^64-1 を超える場合は PROTOCOL_VIOLATION
- * (§9.20.10 の MUST)。送信側は encodeLocationFilter が送信前に
+ * (§9.20.9 の MUST)。送信側は encodeLocationFilter が送信前に
  * InvalidFilterError で、受信デコード時は decodeLocationFilter が
  * ProtocolViolationError で超過を拒否する。
- *
- * 公開表現はフィールドの有無で場合分けし、draft-19 の Filter Type
- * (NextGroupStart / LargestObject / AbsoluteStart / AbsoluteRange) は
- * 以下の等価表現で置き換えた:
- * - NextGroupStart → { startGroup: 0n }
- * - LargestObject → { startGroup: 0n, startObject: 0n }
- * - AbsoluteStart → { startGroup, startObject }
- * - AbsoluteRange → { startGroup, startObject, endGroupDelta }
  */
 export type LocationFilter =
-  // Length 0: フィルタなし (REQUEST_UPDATE での除去など)
+  // 0x00 (None): フィルタなし (REQUEST_UPDATE での除去など)
   | { reset: true }
-  // 1 フィールド: StartGroup のみ。相対指定 (Next Group 基準)
+  // 0x01 (Relative Start): StartGroup のみ。Largest Object 基準の相対指定
   | { startGroup: bigint }
-  // 2 フィールド: StartGroup + StartObject
+  // 0x02 (Absolute Start): StartGroup + StartObject
   | { startGroup: bigint; startObject: bigint }
-  // 3 フィールド: StartGroup + StartObject + EndGroupDelta
+  // 0x03 (Absolute Start, Group End): StartGroup + StartObject + EndGroupDelta
   | { startGroup: bigint; startObject: bigint; endGroupDelta: bigint }
-  // 4 フィールド: StartGroup + StartObject + EndGroupDelta + EndObject
-  | { startGroup: bigint; startObject: bigint; endGroupDelta: bigint; endObject: bigint };
+  // 0x04 (Absolute Range): StartGroup + StartObject + EndGroupDelta + EndObject
+  | { startGroup: bigint; startObject: bigint; endGroupDelta: bigint; endObject: bigint }
+  // 0x05 (Next Object): Largest Object の次の Object から
+  | { nextObject: true };
+
+/** 0x00 (None): フィルタなし (draft-ietf-moq-transport-22 §9.20.9 Table 6) */
+const LOCATION_FILTER_TYPE_NONE = 0x00n;
+/** 0x01 (Relative Start): Largest Object 基準の相対開始 */
+const LOCATION_FILTER_TYPE_RELATIVE_START = 0x01n;
+/** 0x02 (Absolute Start): 絶対開始 */
+const LOCATION_FILTER_TYPE_ABSOLUTE_START = 0x02n;
+/** 0x03 (Absolute Start, Group End): 絶対開始 + End Group */
+const LOCATION_FILTER_TYPE_ABSOLUTE_GROUP_END = 0x03n;
+/** 0x04 (Absolute Range): 絶対開始 + End Group + End Object */
+const LOCATION_FILTER_TYPE_ABSOLUTE_RANGE = 0x04n;
+/** 0x05 (Next Object): Largest Object の次の Object */
+const LOCATION_FILTER_TYPE_NEXT_OBJECT = 0x05n;
+
+/**
+ * Location Filter のワイヤ形式 (Type と Type に続く vi64 フィールド列)
+ */
+interface LocationFilterForm {
+  /** Location Filter Type (vi64) */
+  type: bigint;
+  /** Type に続く vi64 フィールド列 (Type が個数を決める) */
+  fields: bigint[];
+}
+
+/**
+ * 公開型をワイヤ形式 (Type とフィールド列) に写す
+ *
+ * 公開型の場合分けとワイヤの Type・フィールド列を 1 箇所で対応させる。
+ * encode は Type を先頭に書いてフィールドを続け、isSameLocationFilter は Type と
+ * フィールド列を比較するため、判別を共有して両者がずれないようにする。
+ * 0x00 (reset) と 0x05 (nextObject) はどちらもフィールド列が空になるため、
+ * 等価判定は必ず Type を先に比較すること。
+ */
+function locationFilterFormOf(filter: LocationFilter): LocationFilterForm {
+  if ("reset" in filter) {
+    return { type: LOCATION_FILTER_TYPE_NONE, fields: [] };
+  }
+  if ("nextObject" in filter) {
+    return { type: LOCATION_FILTER_TYPE_NEXT_OBJECT, fields: [] };
+  }
+  if (!("startObject" in filter)) {
+    return { type: LOCATION_FILTER_TYPE_RELATIVE_START, fields: [filter.startGroup] };
+  }
+  if (!("endGroupDelta" in filter)) {
+    return {
+      type: LOCATION_FILTER_TYPE_ABSOLUTE_START,
+      fields: [filter.startGroup, filter.startObject],
+    };
+  }
+  if (!("endObject" in filter)) {
+    return {
+      type: LOCATION_FILTER_TYPE_ABSOLUTE_GROUP_END,
+      fields: [filter.startGroup, filter.startObject, filter.endGroupDelta],
+    };
+  }
+  return {
+    type: LOCATION_FILTER_TYPE_ABSOLUTE_RANGE,
+    fields: [filter.startGroup, filter.startObject, filter.endGroupDelta, filter.endObject],
+  };
+}
 
 /** Location Filter の 3 / 4 フィールド表現の End Group 超過を検証する */
 function validateLocationFilterEndGroup(startGroup: bigint, endGroupDelta: bigint): void {
@@ -73,51 +131,21 @@ function validateLocationFilterEndGroup(startGroup: bigint, endGroupDelta: bigin
 }
 
 /**
- * Next Object 形式の Location Filter かどうかを判定する
+ * Next Object 形式 (0x05) の Location Filter かどうかを判定する
  *
- * draft-ietf-moq-transport-21 §9.20.10: 2 フィールドで StartGroup = StartObject = 0
- * の場合は Start Location が Next Object (旧 LargestObject 相当) になる。
- * endGroupDelta を持つ 3 / 4 フィールド表現は endGroupDelta による絶対指定の
- * ため対象外。
+ * draft-ietf-moq-transport-22 §9.20.9 Table 6: Next Object は専用の
+ * Location Filter Type 0x05 が表す。v21 の「2 フィールドで
+ * StartGroup = StartObject = 0」という特例は廃止されたため、絶対位置 {0, 0} の
+ * 指定 (0x02) は Next Object と判定しない。
  */
-export function isNextObjectLocationFilter(filter: LocationFilter): boolean {
-  return (
-    "startObject" in filter &&
-    !("endGroupDelta" in filter) &&
-    filter.startGroup === 0n &&
-    filter.startObject === 0n
-  );
-}
-
-/**
- * Location Filter を比較用の正規形 (フィールド列) に変換する
- *
- * 公開型はフィールドの有無で表現が変わる (Length 0〜4) ため、
- * フィールドの有無をそのまま列の長さと値に写す。写像は単射であり、
- * 同じワイヤ表現になる Location Filter は必ず同じ列になる。
- * `{ reset: true }` (Length 0) は空列になる。
- */
-function locationFilterToFields(filter: LocationFilter): bigint[] {
-  if ("reset" in filter) {
-    return [];
-  }
-  const fields = [filter.startGroup];
-  if ("startObject" in filter) {
-    fields.push(filter.startObject);
-    if ("endGroupDelta" in filter) {
-      fields.push(filter.endGroupDelta);
-      if ("endObject" in filter) {
-        fields.push(filter.endObject);
-      }
-    }
-  }
-  return fields;
+export function isNextObjectLocationFilter(filter: LocationFilter): filter is { nextObject: true } {
+  return "nextObject" in filter;
 }
 
 /**
  * Location Filter の構造等価を判定する
  *
- * draft-ietf-moq-transport-21 §9.10 (PUBLISH_STATE_NOTIFY):
+ * draft-ietf-moq-transport-22 §9.10 (PUBLISH_STATE_NOTIFY):
  * "If a parameter is not present, its value is unchanged."
  * 値の変化したパラメータのみを運ぶため、同じ内容の LOCATION_FILTER が
  * 再報告されることはない。しかし再報告された場合に再解決すると、
@@ -125,6 +153,12 @@ function locationFilterToFields(filter: LocationFilter): bigint[] {
  * 呼び出し側が再解決の要否を判断できるよう、等価判定をここに置く。
  *
  * 未設定 (undefined) 同士は等価、undefined と設定済みは非等価とする。
+ * 0x00 (reset) と 0x05 (nextObject) はフィールド列がどちらも空になるため、
+ * Type の比較を先に行わないと別の種別を等価と誤判定する。
+ *
+ * undefined と { reset: true } は、どちらも resolveFilter ではフィルタなしに
+ * 解決されるが、ここでは非等価とする。フィルタを明示的に除去する指定を
+ * 「未設定のまま」と同一視すると、除去の通知が送られなくなるためである。
  */
 export function isSameLocationFilter(
   a: LocationFilter | undefined,
@@ -133,77 +167,63 @@ export function isSameLocationFilter(
   if (a === undefined || b === undefined) {
     return a === b;
   }
-  const aFields = locationFilterToFields(a);
-  const bFields = locationFilterToFields(b);
-  return aFields.length === bFields.length && aFields.every((value, i) => value === bFields[i]);
+  const aForm = locationFilterFormOf(a);
+  const bForm = locationFilterFormOf(b);
+  if (aForm.type !== bForm.type) {
+    return false;
+  }
+  return (
+    aForm.fields.length === bForm.fields.length &&
+    aForm.fields.every((value, i) => value === bForm.fields[i])
+  );
 }
 
 /**
  * Location Filter をエンコードする
- * draft-ietf-moq-transport-21 §9.20.10 (LOCATION FILTER Parameter)
+ * draft-ietf-moq-transport-22 §9.20.9 (LOCATION FILTER Parameter)
  *
- * バイト Length プレフィックス付きでエンコードする。フィールド数は公開型の
- * 場合分けで 0〜4 に静的に制約される (送信側で 4 超にはなり得ない)。
- * フィールド数 0 (reset) は Length 0 のみで表現する (REQUEST_UPDATE での除去)。
+ * 先頭に Location Filter Type (vi64) を書き、型が定める個数の vi64 を続ける。
+ * フィールド数は型で決まるため、Value の長さは自己区切りになる。
  *
  * 3 / 4 フィールド表現は End Group (StartGroup + EndGroupDelta) の 2^64-1 超過を
- * 送信前に検証し、InvalidFilterError で拒否する (§9.20.10)。負値 (startGroup /
+ * 送信前に検証し、InvalidFilterError で拒否する (§9.20.9 の MUST)。負値 (startGroup /
  * startObject / endGroupDelta / endObject のいずれ) と、和の検証に捕捉されない
- * startObject / EndObject の単体超過は encodeVarint 由来の Error として throw
+ * startObject / endObject の単体超過は encodeVarint 由来の Error として throw
  * される。節番号は仕様将来版で変わる可能性がある。
  */
 export function encodeLocationFilter(filter: LocationFilter): Uint8Array {
-  // Length 0 (フィルタなし) は Length フィールドのみで表現する
-  if ("reset" in filter) {
-    return encodeVarint(0n);
+  const { type, fields } = locationFilterFormOf(filter);
+  const typeBytes = encodeVarint(type);
+  if (fields.length === 0) {
+    // 0x00 (None) / 0x05 (Next Object) は Type のみ
+    return typeBytes;
   }
 
-  const parts: Uint8Array[] = [];
-
-  if ("startObject" in filter) {
-    if ("endGroupDelta" in filter) {
-      // draft-ietf-moq-transport-21 §9.20.10 (LOCATION FILTER Parameter):
-      // "If StartGroup + EndGroupDelta exceeds 2^64 - 1, the endpoint MUST
-      //  close the session with a PROTOCOL_VIOLATION."
-      // 超過ワイヤを受信した endpoint はこの MUST でセッションを閉じる
-      // ため、送信前に InvalidFilterError でローカル拒否する
-      validateLocationFilterEndGroup(filter.startGroup, filter.endGroupDelta);
-      parts.push(encodeVarint(filter.startGroup));
-      parts.push(encodeVarint(filter.startObject));
-      parts.push(encodeVarint(filter.endGroupDelta));
-      if ("endObject" in filter) {
-        parts.push(encodeVarint(filter.endObject));
-      }
-    } else {
-      parts.push(encodeVarint(filter.startGroup));
-      parts.push(encodeVarint(filter.startObject));
-    }
-  } else {
-    // 1 フィールド: StartGroup のみ
-    parts.push(encodeVarint(filter.startGroup));
+  // draft-ietf-moq-transport-22 §9.20.9 (LOCATION FILTER Parameter):
+  // "If StartGroup + EndGroupDelta exceeds 2^64 - 1, the endpoint MUST
+  //  close the session with a PROTOCOL_VIOLATION."
+  // 超過ワイヤを受信した endpoint はこの MUST でセッションを閉じる
+  // ため、送信前に InvalidFilterError でローカル拒否する
+  if ("endGroupDelta" in filter) {
+    validateLocationFilterEndGroup(filter.startGroup, filter.endGroupDelta);
   }
 
-  // Length フィールド (vi64) を先頭に付けてフィールド列を連結する
-  const totalLength = parts.reduce((sum, p) => sum + p.length, 0);
-  const lengthBytes = encodeVarint(BigInt(totalLength));
-  return concatUint8Arrays([lengthBytes, ...parts]);
+  return concatUint8Arrays([typeBytes, ...fields.map((field) => encodeVarint(field))]);
 }
 
 /**
  * Location Filter をデコードする
+ * draft-ietf-moq-transport-22 §9.20.9 (LOCATION FILTER Parameter)
  *
- * Length (バイト) が示す範囲内の vi64 フィールド数を数えて 0〜4 の場合分けに
- * 解決する。Length のバイト値はフィールド数と直接対応しない (Length=2 を
- * 「2 フィールド」と解釈しない)。
+ * 先頭の Location Filter Type (vi64) を読み、型が定める個数の vi64 を読む。
+ * Type 0x00 / 0x05 はフィールドを持たないため Type のみを消費する。
  *
- * 以下の場合は PROTOCOL_VIOLATION (ProtocolViolationError) を throw する
- * (§3.3.1 / §9.20.10。受信経路に載った場合は PROTOCOL_VIOLATION のセッション
- * 終了変換規則に乗る):
- * - Length が示す範囲に vi64 フィールドが 4 つより多く含まれる
- * - vi64 フィールドが Length 境界を跨ぐ、または Length と消費バイト数が不一致
+ * 未知の Location Filter Type は PROTOCOL_VIOLATION (ProtocolViolationError) を
+ * throw する (§9.20.9。受信経路に載った場合は PROTOCOL_VIOLATION のセッション
+ * 終了変換規則に乗る)。
  *
  * 3 / 4 フィールド表現は End Group (StartGroup + EndGroupDelta) の 2^64-1 超過を
- * ProtocolViolationError で throw する (§9.20.10 の MUST。この MUST は超過に対して
+ * ProtocolViolationError で throw する (§9.20.9 の MUST。この MUST は超過に対して
  * PROTOCOL_VIOLATION を一択としており、§3.3.1 が Location Filter に対して定める
  * REQUEST_ERROR は充足不能範囲の INVALID_RANGE であるため、デコード段階では
  * ProtocolViolationError で検出する)。
@@ -211,109 +231,143 @@ export function encodeLocationFilter(filter: LocationFilter): Uint8Array {
  * @returns [filter, consumed bytes]
  */
 export function decodeLocationFilter(data: Uint8Array, offset = 0): [LocationFilter, number] {
-  const [length, lengthConsumed] = decodeVarint(data, offset);
-  const start = offset + lengthConsumed;
-  const end = start + Number(length);
+  const { type, fields, consumed: totalConsumed } = scanLocationFilter(data, offset);
 
-  // Length が示す範囲が data の末尾を超える場合は不完全データとして扱う
-  // (varint デコードと同じく、呼び出し側が全バイトを渡していない)。
-  // 宣言時点拒否 (ProtocolViolationError) に変えない。直接呼び出しでは
-  // ストリーミング待ちの意味を保ち、制御メッセージ経路では
-  // decodeMessageParameter の self-length ガードが先に遮断するためである。
-  if (end > data.length) {
-    throw new IncompleteDataError(
-      `incomplete location filter: length ${length} exceeds available data`,
-    );
-  }
+  switch (type) {
+    case LOCATION_FILTER_TYPE_NONE:
+      // 0x00 (None): フィルタなし (REQUEST_UPDATE での除去など)
+      return [{ reset: true }, totalConsumed];
 
-  // Length が示す範囲内の vi64 フィールドを読み取る (最大 4 個)
-  const fields: bigint[] = [];
-  let current = start;
-  while (current < end && fields.length < 4) {
-    let value: bigint;
-    let consumed: number;
-    try {
-      [value, consumed] = decodeVarint(data, current);
-    } catch (error) {
-      // end <= data.length は検証済みであり、Length 境界内の varint が
-      // IncompleteDataError になるのは「境界内に収まらない vi64」の時のみ
-      // (次のフィールドが Length を跨ぎ、data 末尾側へはみ出す)。
-      // 構造不正として PROTOCOL_VIOLATION にする (decodeVarint の
-      // 不完全データ待ちではなく、宣言 Length との不一致)
-      if (error instanceof IncompleteDataError) {
-        throw new ProtocolViolationError(
-          `malformed location filter: field crosses length boundary: ${length}`,
-        );
-      }
-      throw error;
-    }
-    fields.push(value);
-    current += consumed;
-  }
+    case LOCATION_FILTER_TYPE_RELATIVE_START:
+      // 0x01 (Relative Start): StartGroup のみ
+      return [{ startGroup: requireLocationField(fields[0], "start group") }, totalConsumed];
 
-  // Length 境界を跨ぐ vi64 / 4 超のフィールド (Length が示す範囲に余りが残る)
-  // は構造不正として PROTOCOL_VIOLATION にする
-  if (current !== end) {
-    throw new ProtocolViolationError(
-      `malformed location filter: length ${length} does not match field boundaries`,
-    );
-  }
-
-  // fields の要素は fields.length による分岐後は必ず存在するが、
-  // noUncheckedIndexedAccess により型上は undefined を含むため、
-  // 各 case で使う要素だけを helper で取り出す
-  switch (fields.length) {
-    case 0:
-      // Length 0: フィルタなし (REQUEST_UPDATE での除去など)
-      return [{ reset: true }, lengthConsumed];
-
-    case 1:
-      // 1 フィールド: StartGroup のみ (相対指定)
-      return [{ startGroup: requireLocationField(fields[0], "start group") }, end - offset];
-
-    case 2:
+    case LOCATION_FILTER_TYPE_ABSOLUTE_START:
+      // 0x02 (Absolute Start): StartGroup + StartObject。0:0 も絶対位置 {0, 0} を表す
       return [
         {
           startGroup: requireLocationField(fields[0], "start group"),
           startObject: requireLocationField(fields[1], "start object"),
         },
-        end - offset,
+        totalConsumed,
       ];
 
-    case 3: {
-      // draft-ietf-moq-transport-21 §9.20.10 (LOCATION FILTER Parameter):
+    case LOCATION_FILTER_TYPE_ABSOLUTE_GROUP_END: {
+      // draft-ietf-moq-transport-22 §9.20.9 (LOCATION FILTER Parameter):
       // "If StartGroup + EndGroupDelta exceeds 2^64 - 1, the endpoint MUST
       //  close the session with a PROTOCOL_VIOLATION."
       const startGroup = requireLocationField(fields[0], "start group");
       const startObject = requireLocationField(fields[1], "start object");
       const endGroupDelta = requireLocationField(fields[2], "end group delta");
       assertEndGroupWithinMaximum(startGroup, endGroupDelta);
-      return [{ startGroup, startObject, endGroupDelta }, end - offset];
+      return [{ startGroup, startObject, endGroupDelta }, totalConsumed];
     }
 
-    case 4: {
+    case LOCATION_FILTER_TYPE_ABSOLUTE_RANGE: {
       const startGroup = requireLocationField(fields[0], "start group");
       const startObject = requireLocationField(fields[1], "start object");
       const endGroupDelta = requireLocationField(fields[2], "end group delta");
       const endObject = requireLocationField(fields[3], "end object");
       assertEndGroupWithinMaximum(startGroup, endGroupDelta);
-      return [{ startGroup, startObject, endGroupDelta, endObject }, end - offset];
+      return [{ startGroup, startObject, endGroupDelta, endObject }, totalConsumed];
     }
 
+    case LOCATION_FILTER_TYPE_NEXT_OBJECT:
+      // 0x05 (Next Object): フィールドなし
+      return [{ nextObject: true }, totalConsumed];
+
     default:
-      // ループの境界 (fields.length < 4) と current !== end の検証により
-      // 到達しない (フィールド数 5 以上は上で PROTOCOL_VIOLATION 済み)。
-      // 防御的に構造不正として PROTOCOL_VIOLATION にする
-      throw new ProtocolViolationError(
-        `malformed location filter: unexpected number of fields: ${fields.length}`,
-      );
+      // locationFilterFieldCount が 0x00〜0x05 以外を拒否するため到達しない。
+      // 将来 Type を追加したときに無言で Next Object と解釈しないための防御
+      // (§9.20.9「Any other Location Filter Type is a PROTOCOL_VIOLATION.」)
+      throw new ProtocolViolationError(`unknown location filter type: 0x${type.toString(16)}`);
+  }
+}
+
+/**
+ * Location Filter のフレーミング (Type と Type が定める個数の vi64) を読み取る
+ *
+ * framing の走査を decodeLocationFilter と locationFilterEncodedLength で共有する。
+ * 両者は同じ入力に対して必ず同じ消費バイト数を返さなければならず (次の
+ * パラメータの位置がこれで決まる)、走査を 2 本持つと片方の変更で静かに
+ * フレーミングが壊れるためである。
+ *
+ * 値の意味論 (End Group の超過検証など) は検証しない。未知の Location Filter
+ * Type はフィールド数を確定できず後続の位置も決まらないため、framing の時点で
+ * PROTOCOL_VIOLATION とする (§9.20.9)。data が途中で尽きた場合は decodeVarint の
+ * IncompleteDataError がそのまま伝播する。
+ *
+ * @returns 読み取った Type・フィールド列と消費バイト数
+ */
+function scanLocationFilter(
+  data: Uint8Array,
+  offset: number,
+): { type: bigint; fields: bigint[]; consumed: number } {
+  const [type, typeConsumed] = decodeVarint(data, offset);
+  const fieldCount = locationFilterFieldCount(type);
+
+  const fields: bigint[] = [];
+  let current = offset + typeConsumed;
+  for (let i = 0; i < fieldCount; i++) {
+    const [value, consumed] = decodeVarint(data, current);
+    fields.push(value);
+    current += consumed;
+  }
+  return { type, fields, consumed: current - offset };
+}
+
+/**
+ * Location Filter のフレーミングが占めるバイト数を返す
+ *
+ * draft-ietf-moq-transport-22 §9.20.9: Location Filter は Length を持たず、
+ * Location Filter Type (vi64) と型が定める個数の vi64 で自己区切りになる。
+ * Message Parameter の層で次のパラメータの位置を確定するために、値の意味論
+ * (End Group の超過検証など) は行わずバイト数だけを求める。意味論の検証は
+ * decodeLocationFilter / decodeLocationFilterParameter が担う。
+ *
+ * 注意: Type が宣言する個数より実際のフィールドが少ない不正ワイヤでは、続く
+ * パラメータのバイトを自分のフィールドとして吸収し得る。Length を廃止した v22 では
+ * 原理的に検出できず、吸収後にパラメータ個数と Body 長がともに一致するワイヤ
+ * (例: フィールド不足の LOCATION_FILTER + 別パラメータ) はそのまま解釈される。
+ *
+ * @returns 消費バイト数
+ */
+export function locationFilterEncodedLength(data: Uint8Array, offset = 0): number {
+  return scanLocationFilter(data, offset).consumed;
+}
+
+/**
+ * Location Filter Type が定める後続フィールド数を返す
+ *
+ * draft-ietf-moq-transport-22 §9.20.9 (LOCATION FILTER Parameter):
+ * 0x00 / 0x05 は 0、0x01 は 1、0x02 は 2、0x03 は 3、0x04 は 4。
+ * 未知の Type は PROTOCOL_VIOLATION
+ * ("Any other Location Filter Type is a PROTOCOL_VIOLATION.")。
+ *
+ * @param type - Location Filter Type
+ */
+function locationFilterFieldCount(type: bigint): number {
+  switch (type) {
+    case LOCATION_FILTER_TYPE_NONE:
+    case LOCATION_FILTER_TYPE_NEXT_OBJECT:
+      return 0;
+    case LOCATION_FILTER_TYPE_RELATIVE_START:
+      return 1;
+    case LOCATION_FILTER_TYPE_ABSOLUTE_START:
+      return 2;
+    case LOCATION_FILTER_TYPE_ABSOLUTE_GROUP_END:
+      return 3;
+    case LOCATION_FILTER_TYPE_ABSOLUTE_RANGE:
+      return 4;
+    default:
+      throw new ProtocolViolationError(`unknown location filter type: 0x${type.toString(16)}`);
   }
 }
 
 /**
  * StartGroup + EndGroupDelta が vi64 の上限を超えないことを検証する
  *
- * draft-ietf-moq-transport-21 §9.20.10 (LOCATION FILTER Parameter):
+ * draft-ietf-moq-transport-22 §9.20.9 (LOCATION FILTER Parameter):
  * "If StartGroup + EndGroupDelta exceeds 2^64 - 1, the endpoint MUST close the
  *  session with a PROTOCOL_VIOLATION."
  *
@@ -331,8 +385,9 @@ function assertEndGroupWithinMaximum(startGroup: bigint, endGroupDelta: bigint):
 /**
  * 解析済みフィールドを 1 つ取り出す
  *
- * `fields.length` による分岐後は必ず存在するが、`noUncheckedIndexedAccess` により
- * 型上は `undefined` を含む。到達しない防御として構造不正 (PROTOCOL_VIOLATION) にする。
+ * Type ごとのフィールド数だけ読み取った後は必ず存在するが、
+ * `noUncheckedIndexedAccess` により型上 `undefined` を含む。到達しない防御として
+ * 構造不正 (PROTOCOL_VIOLATION) にする。
  *
  * @param field - 取り出すフィールド
  * @param label - エラー文言に使うフィールド名
@@ -347,11 +402,10 @@ function requireLocationField(field: bigint | undefined, label: string): bigint 
 /**
  * Location Filter を LOCATION_FILTER パラメータとしてエンコードする
  *
- * draft-ietf-moq-transport-21 §9.20.10 (LOCATION FILTER Parameter):
- * "A Location filter parameter has the following length-prefixed structure:"
- * Parameter Type 0x21 の値が Length プレフィックス付き構造を持つのは、§9.20.10 が
- * 値の構造として定めているためである (§8.3 (Key-Value-Pair Structure) の
- * 偶数 / 奇数規則は Message Parameter には適用されない)。
+ * draft-ietf-moq-transport-22 §9.20.9 (LOCATION FILTER Parameter):
+ * Parameter Type 0x21 の値は Location Filter Type (vi64) で始まる自己区切り構造で、
+ * Length フィールドを持たない。外側 Length を付けるとピアが Type を Length と
+ * 誤読するため、encodeLocationFilter の出力をそのまま value にする。
  */
 export function encodeLocationFilterParameter(filter: LocationFilter): Parameter {
   const value = encodeLocationFilter(filter);
@@ -364,10 +418,10 @@ export function encodeLocationFilterParameter(filter: LocationFilter): Parameter
 /**
  * LOCATION_FILTER パラメータをデコードする
  *
- * 構造の消費バイト数が宣言 Length (param.value.length) と一致しない場合は
- * 構造不正として PROTOCOL_VIOLATION (ProtocolViolationError) を throw する。
- * 仕様は Length 内余剰バイトの扱いを規定しないが、制御メッセージの Body 長と
- * 消費バイト数の不一致検出と同方針の堅牢性検証として拒否する
+ * 構造の消費バイト数が value 長と一致しない場合は構造不正として
+ * PROTOCOL_VIOLATION (ProtocolViolationError) を throw する。
+ * 仕様は Length を持たないため余剰バイトの扱いを規定しないが、制御メッセージの
+ * Body 長と消費バイト数の不一致検出と同方針の堅牢性検証として拒否する
  * (decodeFillParameters の内側 Parameters 列の検証と同形)。
  * 送信側生成 (encodeLocationFilter() 経由) では encode 出力そのままが
  * param.value になるため発火しない。raw 手組みの value では発火し得て、
@@ -375,7 +429,7 @@ export function encodeLocationFilterParameter(filter: LocationFilter): Parameter
  */
 export function decodeLocationFilterParameter(param: Parameter): LocationFilter {
   if (param.type !== 0x21) {
-    throw new Error(`Invalid parameter type: expected 0x21, got ${param.type}`);
+    throw new Error(`Invalid parameter type: expected 0x21, got 0x${param.type.toString(16)}`);
   }
   const [filter, consumed] = decodeLocationFilter(param.value, 0);
   if (consumed !== param.value.length) {

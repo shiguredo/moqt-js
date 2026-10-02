@@ -36,6 +36,7 @@ import {
   MAX_FULL_TRACK_NAME_SIZE,
   isRejectedReceiveNamespace,
   isSameLocationFilter,
+  isNextObjectLocationFilter,
 } from "./parameter";
 import { IncompleteDataError, InvalidFilterError, ProtocolViolationError } from "../error";
 import { MessageParameterType } from "./types";
@@ -48,10 +49,10 @@ test("無効なパラメータタイプでエラー", () => {
 });
 
 /**
- * フィールド数 0 を表す Length 0 (バイト列 [0x00]) は reset としてデコードされ、
- * エンコードも Length 0 に戻る (REQUEST_UPDATE でのフィルタ除去のワイヤ)。
+ * Location Filter Type 0x00 (None) はフィルタなしを表し、reset として
+ * round-trip する (REQUEST_UPDATE でのフィルタ除去のワイヤ)。
  */
-test("decodeLocationFilter: Length 0 は reset として round-trip する", () => {
+test("decodeLocationFilter: Type 0x00 (None) は reset として round-trip する", () => {
   const encoded = encodeLocationFilter({ reset: true });
   assert.deepEqual(encoded, new Uint8Array([0x00]));
   const [filter, consumed] = decodeLocationFilter(encoded);
@@ -60,45 +61,75 @@ test("decodeLocationFilter: Length 0 は reset として round-trip する", () 
 });
 
 /**
- * 1 フィールド (StartGroup のみ) は相対指定。Length は StartGroup のバイト長。
+ * Location Filter Type 0x05 (Next Object) はフィールドを持たず、Type のみで
+ * round-trip する。v21 の「2 フィールド 0:0」という表現は廃止された。
+ */
+test("decodeLocationFilter: Type 0x05 (Next Object) が round-trip する", () => {
+  const filter: LocationFilter = { nextObject: true };
+  const encoded = encodeLocationFilter(filter);
+  assert.deepEqual(encoded, new Uint8Array([0x05]));
+  const [decoded, consumed] = decodeLocationFilter(encoded);
+  assert.deepEqual(decoded, filter);
+  assert.equal(consumed, encoded.length);
+  assert.isTrue(isNextObjectLocationFilter(decoded));
+  // reset (0x00) と絶対位置 {0, 0} (0x02) は Next Object ではない
+  assert.isFalse(isNextObjectLocationFilter({ reset: true }));
+  assert.isFalse(isNextObjectLocationFilter({ startGroup: 0n, startObject: 0n }));
+});
+
+/**
+ * Location Filter Type 0x01 (Relative Start) は StartGroup を 1 つ持つ。
  */
 test("decodeLocationFilter: 1 フィールド (StartGroup) が round-trip する", () => {
   const filter: LocationFilter = { startGroup: 3n };
   const encoded = encodeLocationFilter(filter);
-  // 先頭バイトが Length = 1 (StartGroup は 1 バイトで表現可能)
-  assert.equal(encoded[0], 1);
+  // Type 0x01 + StartGroup 3
+  assert.deepEqual(encoded, new Uint8Array([0x01, 0x03]));
   const [decoded, consumed] = decodeLocationFilter(encoded);
   assert.deepEqual(decoded, filter);
   assert.equal(consumed, encoded.length);
 });
 
 /**
- * 2 フィールド (StartGroup + StartObject) は絶対開始または Next Object。
- * Length は 2 つの vi64 の合計バイト長であり、フィールド数そのものではない
- * (Length=2 を「2 フィールド」と解釈しない)。
+ * Location Filter Type 0x02 (Absolute Start) は StartGroup + StartObject を持つ。
+ * 0:0 も絶対位置 {0, 0} の指定であり Next Object ではない (Type 0x05 が表す)。
+ * フィールド数は Type が決めるため、バイト長からフィールド数を推論しない。
  */
 test("decodeLocationFilter: 2 フィールド (StartGroup + StartObject) が round-trip する", () => {
   const filter: LocationFilter = { startGroup: 5n, startObject: 7n };
   const encoded = encodeLocationFilter(filter);
+  assert.deepEqual(encoded, new Uint8Array([0x02, 0x05, 0x07]));
   const [decoded, consumed] = decodeLocationFilter(encoded);
   assert.deepEqual(decoded, filter);
   assert.equal(consumed, encoded.length);
 });
 
 /**
- * 3 フィールド (StartGroup + StartObject + EndGroupDelta) が round-trip する。
+ * Location Filter Type 0x02 の 0:0 は絶対位置 {0, 0} としてデコードされ、
+ * Next Object と判定されない (v21 の特例の廃止)。
+ */
+test("decodeLocationFilter: 2 フィールド 0:0 は絶対位置 {0, 0} になる", () => {
+  const encoded = encodeLocationFilter({ startGroup: 0n, startObject: 0n });
+  assert.deepEqual(encoded, new Uint8Array([0x02, 0x00, 0x00]));
+  const [decoded] = decodeLocationFilter(encoded);
+  assert.deepEqual(decoded, { startGroup: 0n, startObject: 0n });
+  assert.isFalse(isNextObjectLocationFilter(decoded));
+});
+
+/**
+ * Location Filter Type 0x03 (Absolute Start, Group End) が round-trip する。
  */
 test("decodeLocationFilter: 3 フィールド (EndGroupDelta あり) が round-trip する", () => {
   const filter: LocationFilter = { startGroup: 5n, startObject: 7n, endGroupDelta: 3n };
   const encoded = encodeLocationFilter(filter);
+  assert.deepEqual(encoded, new Uint8Array([0x03, 0x05, 0x07, 0x03]));
   const [decoded, consumed] = decodeLocationFilter(encoded);
   assert.deepEqual(decoded, filter);
   assert.equal(consumed, encoded.length);
 });
 
 /**
- * 4 フィールド (StartGroup + StartObject + EndGroupDelta + EndObject) が
- * round-trip する。
+ * Location Filter Type 0x04 (Absolute Range) が round-trip する。
  */
 test("decodeLocationFilter: 4 フィールド (EndObject あり) が round-trip する", () => {
   const filter: LocationFilter = {
@@ -108,6 +139,7 @@ test("decodeLocationFilter: 4 フィールド (EndObject あり) が round-trip 
     endObject: 9n,
   };
   const encoded = encodeLocationFilter(filter);
+  assert.deepEqual(encoded, new Uint8Array([0x04, 0x05, 0x07, 0x03, 0x09]));
   const [decoded, consumed] = decodeLocationFilter(encoded);
   assert.deepEqual(decoded, filter);
   assert.equal(consumed, encoded.length);
@@ -115,16 +147,16 @@ test("decodeLocationFilter: 4 フィールド (EndObject あり) が round-trip 
 
 /**
  * 3/4 フィールドで End Group (StartGroup + EndGroupDelta) が 2^64-1 を超える
- * 受信データは draft-ietf-moq-transport-21 §9.20.10 の MUST
+ * 受信データは draft-ietf-moq-transport-22 §9.20.9 の MUST
  * 「If StartGroup + EndGroupDelta exceeds 2^64 - 1, the endpoint MUST close
  *  the session with a PROTOCOL_VIOLATION.」に従い ProtocolViolationError で
  * 拒否される。
  */
 test("decodeLocationFilter: End Group が 2^64-1 を超えると ProtocolViolationError", () => {
-  // StartGroup=MAX_VARINT + StartObject=0 + EndGroupDelta=1
+  // Type 0x03 + StartGroup=MAX_VARINT + StartObject=0 + EndGroupDelta=1
   // End Group = MAX_VARINT + 1 で 2^64-1 超過
   const fields = [...encodeVarint(MAX_VARINT), ...encodeVarint(0n), ...encodeVarint(1n)];
-  const data = new Uint8Array([...encodeVarint(BigInt(fields.length)), ...fields]);
+  const data = new Uint8Array([...encodeVarint(0x03n), ...fields]);
   assert.throws(() => decodeLocationFilter(data), ProtocolViolationError);
 });
 
@@ -168,17 +200,17 @@ test("decodeLocationFilter: End Group Delta 単体が最大値でも Group が 0
  * なく和であること (「End Group Delta だけを見る」実装誤りへのガード) を検証する。
  */
 test("decodeLocationFilter: Group が 1 以上で End Group Delta が単体最大なら ProtocolViolationError", () => {
-  // StartGroup=1 + StartObject=0 + EndGroupDelta=MAX_VARINT
+  // Type 0x03 + StartGroup=1 + StartObject=0 + EndGroupDelta=MAX_VARINT
   // End Group = 1 + MAX_VARINT で 2^64-1 超過
   const fields = [...encodeVarint(1n), ...encodeVarint(0n), ...encodeVarint(MAX_VARINT)];
-  const data = new Uint8Array([...encodeVarint(BigInt(fields.length)), ...fields]);
+  const data = new Uint8Array([...encodeVarint(0x03n), ...fields]);
   assert.throws(() => decodeLocationFilter(data), ProtocolViolationError);
 });
 
 /**
  * 送信側でも同一規則を適用する。End Group が 2^64-1 を超える 3/4 フィールド
  * 表現は受信した endpoint を PROTOCOL_VIOLATION でセッション終了させるため、
- * encodeLocationFilter が InvalidFilterError で送信前に throw する (§9.20.10)。
+ * encodeLocationFilter が InvalidFilterError で送信前に throw する (§9.20.9)。
  */
 test("encodeLocationFilter: End Group が 2^64-1 を超えると InvalidFilterError", () => {
   // End Group = MAX_VARINT + 1 で 2^64-1 超過
@@ -205,61 +237,57 @@ test("encodeLocationFilterParameter: End Group が 2^64-1 を超えると Invali
 });
 
 /**
- * Length が示す範囲に 4 つより多くの vi64 フィールドが含まれる場合
- * (Length が 4 フィールドの消費バイト数を超えて余りが残る) は
- * PROTOCOL_VIOLATION で拒否される。
- * 例: Length=5 に 1 バイト varint を 5 個詰めたワイヤ (フィールド数 5)。
+ * draft-ietf-moq-transport-22 §9.20.9:
+ * "Any other Location Filter Type is a PROTOCOL_VIOLATION."
+ * 0x00〜0x05 以外の Type は PROTOCOL_VIOLATION で拒否される。
+ * Type は vi64 のため、大きな値も同じ扱いになる。
  */
-test("decodeLocationFilter: フィールド数 4 超の Length は ProtocolViolationError", () => {
-  // Length=5 + 1 バイト varint × 5 = フィールド 5 個
-  const data = new Uint8Array([5, 0, 0, 0, 0, 0]);
-  assert.throws(() => decodeLocationFilter(data), ProtocolViolationError);
+test("decodeLocationFilter: 未知の Location Filter Type は ProtocolViolationError", () => {
+  // Type 0x06 (未定義) のみ
+  assert.throws(() => decodeLocationFilter(new Uint8Array([0x06])), ProtocolViolationError);
+  // Type 0x06 + 余分なフィールド (Type 判定が先に効く)
+  assert.throws(
+    () => decodeLocationFilter(new Uint8Array([0x06, 0x00, 0x00])),
+    ProtocolViolationError,
+  );
+  // 大きな Type (vi64 の 2 バイト表現 = 0x100)
+  assert.throws(
+    () => decodeLocationFilter(new Uint8Array(encodeVarint(0x100n))),
+    ProtocolViolationError,
+  );
 });
 
 /**
- * vi64 フィールドが Length 境界を跨ぐ場合 (Length が示すバイト数と実際の
- * フィールド消費バイト数が不一致) は PROTOCOL_VIOLATION で拒否される。
- * 例: Length=1 に対して 2 バイト必要な varint (0x80 0x00) を 1 個置いたワイヤ。
+ * Type が定めるフィールド数に足りないワイヤ (次のチャンク待ち) は
+ * 不完全データとして IncompleteDataError になる。
+ * 例: Type 0x02 は StartGroup + StartObject を要求するが StartGroup しか無い。
  */
-test("decodeLocationFilter: Length と消費バイト数の不一致は ProtocolViolationError", () => {
-  // Length=1 + 2 バイト varint (0x80 0x00)。Length 境界を跨ぐ
-  const data = new Uint8Array([1, 0x80, 0x00]);
-  assert.throws(() => decodeLocationFilter(data), ProtocolViolationError);
+test("decodeLocationFilter: フィールドが data 末尾で切れると IncompleteDataError", () => {
+  // Type 0x02 + StartGroup のみ (StartObject が無い)
+  const data = new Uint8Array([0x02, 0x03]);
+  assert.throws(() => decodeLocationFilter(data), IncompleteDataError);
 });
 
 /**
- * Length が data の末尾を超える場合は不完全データとして扱う。
- * (IncompleteDataError。decodeVarint と同じ「次のチャンクを待つ」意味論)
+ * フィールドの vi64 が data 末尾で切れるケースも同様に IncompleteDataError で
+ * 「次のチャンクを待つ」意味論を保つ (Type の読み取りは成功している)。
  */
-test("decodeLocationFilter: Length が data の末尾を超えると IncompleteDataError", () => {
-  // Length=2 に対して StartGroup のみ (1 バイト) しか無い
-  const data = new Uint8Array([2, 0]);
-  assert.throws(() => decodeLocationFilter(data), "incomplete location filter");
+test("decodeLocationFilter: フィールドの vi64 が data 末尾で切れると IncompleteDataError", () => {
+  // Type 0x01 + 2 バイト必要な varint (0x80) が data 末尾で切れる
+  const data = new Uint8Array([0x01, 0x80]);
+  assert.throws(() => decodeLocationFilter(data), IncompleteDataError);
 });
 
 /**
- * Length 境界内の vi64 が data 末尾で切れるケース (Length は data 末尾まで
- * 一致するが、varint が 2 バイト目を要求して足りない) は「次のチャンク待ち」
- * ではなく Length との不一致による構造不正であり、ProtocolViolationError で
- * 拒否される (IncompleteDataError をそのまま漏らさない)。
+ * draft-ietf-moq-transport-22 §9.20.9: LOCATION_FILTER のワイヤは
+ * [Type Delta=0x21][Location Filter Type][fields...] であり Length フィールドを
+ * 持たない。値の長さは Type とフィールド数で決まる。外側 Length を付加して
+ * いないことをパラメータ全体のバイト列で固定する。
  */
-test("decodeLocationFilter: Length 境界内の varint が data 末尾で切れると ProtocolViolationError", () => {
-  // Length=1 + 2 バイト必要な varint (0x80) が data 末尾で切れる
-  const data = new Uint8Array([1, 0x80]);
-  assert.throws(() => decodeLocationFilter(data), ProtocolViolationError);
-});
-
-/**
- * draft-ietf-moq-transport-21 §9.20.10: LOCATION_FILTER のワイヤは
- * [Type Delta=0x21][Length][fields...] の単一 Length 構造。
- * Appendix A.2 (#1809) で「match the other filter parameters」と再構成されて
- * おり、Range Filter (0x25-0x29) と同じ 1 Length 形式である。外側に Length を
- * 付加して二重 Length にならないことをパラメータ全体のバイト列で固定する。
- */
-test("LOCATION_FILTER パラメータはワイヤ上 1 Length 構造で round-trip する", () => {
+test("LOCATION_FILTER パラメータはワイヤ上 Length 無しで round-trip する", () => {
   const params = [encodeLocationFilterParameter({ startGroup: 3n })];
   const encoded = encodeParameters(params);
-  // count=1, Type Delta=0x21, Length=1, StartGroup=3
+  // count=1, Type Delta=0x21, Location Filter Type=0x01 (Relative Start), StartGroup=3
   assert.deepEqual(encoded, new Uint8Array([1, 0x21, 0x01, 0x03]));
   const [decoded, consumed] = decodeParameters(encoded);
   assert.equal(consumed, encoded.length);
@@ -268,13 +296,28 @@ test("LOCATION_FILTER パラメータはワイヤ上 1 Length 構造で round-tr
 });
 
 /**
- * reset (Length 0) も同様に単一 Length 構造でワイヤ化される。
- * [Type Delta=0x21][Length=0] (REQUEST_UPDATE でのフィルタ除去のワイヤ)。
+ * Next Object も同様に [Type Delta=0x21][Location Filter Type=0x05] の 2 バイトで
+ * ワイヤ化される (フィールドを持たない)。
  */
-test("LOCATION_FILTER reset はワイヤ上 Length=0 で round-trip する", () => {
+test("LOCATION_FILTER の Next Object はワイヤ上 Type 0x05 のみで round-trip する", () => {
+  const params = [encodeLocationFilterParameter({ nextObject: true })];
+  const encoded = encodeParameters(params);
+  // count=1, Type Delta=0x21, Location Filter Type=0x05 (Next Object)
+  assert.deepEqual(encoded, new Uint8Array([1, 0x21, 0x05]));
+  const [decoded, consumed] = decodeParameters(encoded);
+  assert.equal(consumed, encoded.length);
+  assert.equal(decoded.length, 1);
+  assert.deepEqual(decodeLocationFilterParameter(decoded[0]), { nextObject: true });
+});
+
+/**
+ * reset (Type 0x00 = None) も同様に [Type Delta=0x21][Location Filter Type=0x00] で
+ * ワイヤ化される (REQUEST_UPDATE でのフィルタ除去のワイヤ)。
+ */
+test("LOCATION_FILTER reset はワイヤ上 Type 0x00 で round-trip する", () => {
   const params = [encodeLocationFilterParameter({ reset: true })];
   const encoded = encodeParameters(params);
-  // count=1, Type Delta=0x21, Length=0
+  // count=1, Type Delta=0x21, Location Filter Type=0x00 (None)
   assert.deepEqual(encoded, new Uint8Array([1, 0x21, 0x00]));
   const [decoded, consumed] = decodeParameters(encoded);
   assert.equal(consumed, encoded.length);
@@ -283,9 +326,32 @@ test("LOCATION_FILTER reset はワイヤ上 Length=0 で round-trip する", () 
 });
 
 /**
- * 宣言 Length (param.value.length) に対して Location Filter 構造の消費バイト数が
+ * draft-ietf-moq-transport-22 §9.20.9: 先頭の vi64 は Location Filter Type であり、
+ * v21 の Length (フィールド総バイト数) ではない。単一バイト varint のフィルタでは
+ * 両形式のバイト列が一致するため、多バイト値で形式の違いを固定する。
+ * 例: { startGroup: 1000n } (vi64 は 2 バイト) は v22 では [Type 0x01][1000]、
+ * v21 なら [Length 2][1000] になる。
+ */
+test("LOCATION_FILTER の先頭 vi64 は Length ではなく Location Filter Type である", () => {
+  const encoded = encodeLocationFilter({ startGroup: 1000n });
+  assert.deepEqual(encoded, new Uint8Array([0x01, 0x83, 0xe8]));
+  const [decoded, consumed] = decodeLocationFilter(encoded);
+  assert.deepEqual(decoded, { startGroup: 1000n });
+  assert.equal(consumed, encoded.length);
+
+  // v21 の Length 前置き形式のバイト列は v22 のデコーダでは Type 0x02 (Absolute
+  // Start) として読まれ、StartObject が無いため不完全データになる
+  assert.throws(
+    () => decodeLocationFilter(new Uint8Array([0x02, 0x83, 0xe8])),
+    IncompleteDataError,
+  );
+});
+
+/**
+ * value 長 (param.value.length) に対して Location Filter 構造の消費バイト数が
  * 短い (末尾残余バイトあり) 場合は構造不正として ProtocolViolationError で拒否する。
- * 仕様に明示規定はないが、制御メッセージの Body 長と消費バイト数の不一致検出と
+ * draft-ietf-moq-transport-22 §9.20.9 の LOCATION_FILTER は Length を持たず、
+ * 残余バイトは仕様上現れない。制御メッセージの Body 長と消費バイト数の不一致検出と
  * 同方針の堅牢性検証である (decodeFillParameters の内側検証と同形)。
  */
 test("decodeLocationFilterParameter: 末尾残余バイトありは ProtocolViolationError", () => {
@@ -302,7 +368,7 @@ test("decodeLocationFilterParameter: 末尾残余バイトありは ProtocolViol
 });
 
 /**
- * reset (Length 0) に残余バイトが付いた場合も同様に拒否する。
+ * reset (Type 0x00 = None) に残余バイトが付いた場合も同様に拒否する。
  */
 test("decodeLocationFilterParameter: reset の末尾残余バイトありは ProtocolViolationError", () => {
   const param = encodeLocationFilterParameter({ reset: true });
@@ -319,19 +385,20 @@ test("decodeLocationFilterParameter: reset の末尾残余バイトありは Pro
 /**
  * ちょうど一致する通常ケースは従来どおり受理される (回帰ガード)。
  */
-test("decodeLocationFilterParameter: 宣言 Length と一致する場合は受理される", () => {
+test("decodeLocationFilterParameter: value 長と一致する場合は受理される", () => {
   const param = encodeLocationFilterParameter({ startGroup: 3n, startObject: 4n });
   assert.deepEqual(decodeLocationFilterParameter(param), { startGroup: 3n, startObject: 4n });
 });
 
 /**
- * 内側 Length に対して value が短い (truncated) 場合は、従来どおり
+ * Type が定めるフィールド数に対して value が短い (truncated) 場合は、
  * IncompleteDataError のまま伝搬し、ProtocolViolationError には変換しない。
  * 受信経路では外側の変換規則で PROTOCOL_VIOLATION になる。
  */
 test("decodeLocationFilterParameter: 短い value は IncompleteDataError のまま", () => {
+  // Location Filter Type 0x02 (Absolute Start) だが StartGroup しか無い
   assert.throws(
-    () => decodeLocationFilterParameter({ type: 0x21, value: new Uint8Array([2, 0]) }),
+    () => decodeLocationFilterParameter({ type: 0x21, value: new Uint8Array([0x02, 0x00]) }),
     IncompleteDataError,
   );
 });
@@ -1517,12 +1584,47 @@ test("decodeMessageParameter: length-prefixed 分岐の Length 宣言超過で P
 });
 
 test("decodeMessageParameter: self-length-prefixed 分岐の Length 宣言超過で ProtocolViolationError", () => {
-  // LOCATION_FILTER (0x21) + Length 5 宣言 + 2 バイトの切り詰め
-  const truncated = new Uint8Array([0x21, 0x05, 0xaa, 0xbb]);
+  // SUBGROUP_FILTER (0x25) + Length 5 宣言 + 2 バイトの切り詰め
+  // (LOCATION_FILTER は v22 で Length を持たないため、Length を持つ Range Filter で
+  //  self-length-prefixed 分岐の残量検証を固定する)
+  const truncated = new Uint8Array([0x25, 0x05, 0xaa, 0xbb]);
   assert.throws(
     () => decodeMessageParameter(truncated, 0, 0n),
     /filter value length exceeds remaining data/,
   );
+});
+
+test("decodeMessageParameter: location-filter 分岐の不正 Type で ProtocolViolationError", () => {
+  // LOCATION_FILTER (0x21) + Location Filter Type 0x06 (未定義)
+  const invalid = new Uint8Array([0x21, 0x06]);
+  assert.throws(() => decodeMessageParameter(invalid, 0, 0n), ProtocolViolationError);
+});
+
+test("decodeMessageParameter: location-filter 分岐の値は Type とフィールドで確定する", () => {
+  // LOCATION_FILTER (0x21) + Type 0x03 (Absolute Start, Group End) +
+  // StartGroup 1 + StartObject 2 + EndGroupDelta 3 + 続く GROUP_ORDER (delta 1 /
+  // 値 0x01)。続くパラメータを置くことで、次の Type Delta の位置が Type と
+  // フィールド数だけで決まること (Length フィールドを読んでいないこと) を固定する
+  const data = new Uint8Array([0x21, 0x03, 0x01, 0x02, 0x03, 0x01, 0x01]);
+  const [param, consumed] = decodeMessageParameter(data, 0, 0n);
+  assert.equal(param.type, 0x21);
+  // LOCATION_FILTER 分 (5 バイト) だけを消費し、GROUP_ORDER の分は残す
+  assert.equal(consumed, 5);
+  assert.deepEqual(param.value, new Uint8Array([0x03, 0x01, 0x02, 0x03]));
+  assert.deepEqual(decodeLocationFilterParameter(param), {
+    startGroup: 1n,
+    startObject: 2n,
+    endGroupDelta: 3n,
+  });
+  const [next, nextConsumed] = decodeMessageParameter(data, consumed, 0x21n);
+  assert.equal(next.type, 0x22);
+  assert.equal(nextConsumed, 2);
+});
+
+test("decodeMessageParameter: location-filter 分岐のフィールド切り詰めは IncompleteDataError", () => {
+  // LOCATION_FILTER (0x21) + Type 0x02 (Absolute Start) + StartGroup のみ
+  const truncated = new Uint8Array([0x21, 0x02, 0x01]);
+  assert.throws(() => decodeMessageParameter(truncated, 0, 0n), IncompleteDataError);
 });
 
 test("decodeMessageParameter: track-namespace 分岐の Field Length 宣言超過で ProtocolViolationError", () => {
@@ -1560,15 +1662,20 @@ test("isSameLocationFilter: 同じフィールド構成と値なら等価", () =
       { startGroup: 1n, startObject: 2n, endGroupDelta: 3n, endObject: 4n },
     ),
   );
+  assert.isTrue(isSameLocationFilter({ nextObject: true }, { nextObject: true }));
 });
 
 test("isSameLocationFilter: フィールドの有無または値が違えば非等価", () => {
   // 未設定と設定済みは非等価
   assert.isFalse(isSameLocationFilter(undefined, { startGroup: 1n }));
   assert.isFalse(isSameLocationFilter({ startGroup: 1n }, undefined));
-  // reset (Length 0) とフィールドありは非等価
+  // reset (Type 0x00) とフィールドありは非等価
   assert.isFalse(isSameLocationFilter({ reset: true }, { startGroup: 0n }));
   assert.isFalse(isSameLocationFilter({ startGroup: 0n }, { reset: true }));
+  // Next Object は絶対位置 {0, 0} (Type 0x02) と非等価
+  assert.isFalse(isSameLocationFilter({ nextObject: true }, { startGroup: 0n, startObject: 0n }));
+  assert.isFalse(isSameLocationFilter({ startGroup: 0n, startObject: 0n }, { nextObject: true }));
+  assert.isFalse(isSameLocationFilter({ nextObject: true }, { reset: true }));
   // 値の差
   assert.isFalse(isSameLocationFilter({ startGroup: 1n }, { startGroup: 2n }));
   // フィールド数の差 (2 フィールドと 3 フィールド)

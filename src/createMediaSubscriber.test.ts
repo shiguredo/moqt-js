@@ -1843,9 +1843,9 @@ test("catalogFetchFilter: LARGEST_OBJECT の Group の先頭 Object から要求
 });
 
 test("catalogFetchFilter: Group 0 ではフィルタを付けない", () => {
-  // 2 フィールドで StartGroup = StartObject = 0 は Next Object を意味するため
-  // (draft-ietf-moq-transport-21 §9.20.10)、Group 0 では絶対開始にならない。
-  // Group 0 はフィルタ無しの要求範囲 {0, 0} から Largest Object までと一致する
+  // 2 フィールドの 0:0 (Location Filter Type 0x02) は絶対位置 {0, 0} の指定であり
+  // (draft-ietf-moq-transport-22 §9.20.9)、フィルタ無しの要求範囲 {0, 0} から
+  // Largest Object までと一致する。同じ範囲を明示する意味がないため付けない
   assert.isUndefined(catalogFetchFilter({ group: 0n, object: 5n }));
 });
 
@@ -1861,9 +1861,10 @@ test("subscribeCatalog: LARGEST_OBJECT の Group を FETCH の開始位置にす
   // ミリ秒から始まることが多く、{0, 0} 起点の要求は cache で覆えない
   const subscriber = new MediaSubscriberImpl("moqt://example.com/live", { namespace: ["live"] });
   const control = subscriber as unknown as SubscriberCatalogControl;
-  const { session, liveObject, fetchEnd, fetchOptions } = createCatalogTestSession({
-    subscribeLargestLocation: { group: 7n, object: 3n },
-  });
+  const { session, liveObject, fetchEnd, subscribeOptions, fetchOptions } =
+    createCatalogTestSession({
+      subscribeLargestLocation: { group: 7n, object: 3n },
+    });
   control.session = session;
 
   const pending = control.subscribeCatalog(control.sessionGeneration, 1000);
@@ -1873,6 +1874,10 @@ test("subscribeCatalog: LARGEST_OBJECT の Group を FETCH の開始位置にす
   }
 
   assert.deepEqual(fetchOptions()?.filter, { startGroup: 7n, startObject: 0n });
+  // live の catalog 購読は Next Object (Location Filter Type 0x05) で開始する。
+  // 0:0 の 2 フィールドに戻すと絶対位置 {0, 0} の指定になり、トラック先頭から
+  // 全 Object を受信してしまう
+  assert.deepEqual(subscribeOptions()?.filter, { nextObject: true });
 
   // 解決させて timer を残さない
   liveObject({

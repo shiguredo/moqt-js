@@ -607,11 +607,11 @@ test("setRangeFilters: 異なる Property Type は共存する", () => {
 
 /**
  * 実フローと同じ順序 (SUBSCRIBE 送信時の setLocationFilter → SUBSCRIBE_OK 受信時の
- * setLargestLocation + resolveLocationFilter) で、Next Object 形式
- * ({ startGroup: 0n, startObject: 0n }) フィルタの Start が
+ * setLargestLocation + resolveLocationFilter) で、Next Object
+ * (Location Filter Type 0x05) フィルタの Start が
  * {Largest Object.Group, Largest Object.Object + 1} になることを検証する。
  * LARGEST_OBJECT と同一 Location のオブジェクトがフィルタを通過して配信される
- * のは誤り (§9.20.10)。
+ * のは誤り (§9.20.9)。
  */
 test("Location Filter 再適用: setLargestLocation 後に LARGEST_OBJECT と同一 Location は配信しない", () => {
   const delivered: MoqtObject[] = [];
@@ -620,8 +620,8 @@ test("Location Filter 再適用: setLargestLocation 後に LARGEST_OBJECT と同
   );
 
   // SUBSCRIBE 送信時に Location Filter を設定
-  subscriber.setLocationFilter({ startGroup: 0n, startObject: 0n });
-  // SUBSCRIBE_OK 受信時に LARGEST_OBJECT = {7, 2} を設定し、相対フィルタを再解決
+  subscriber.setLocationFilter({ nextObject: true });
+  // SUBSCRIBE_OK 受信時に LARGEST_OBJECT = {7, 2} を設定し、Next Object を再解決
   subscriber.setLargestLocation({ group: 7n, object: 2n });
   subscriber.resolveLocationFilter();
 
@@ -655,7 +655,7 @@ test("Location Filter 再適用: setLocationFilter 再適用後も LARGEST_OBJEC
 
   // setLargestLocation を先に設定してから、setLocationFilter を再適用する
   subscriber.setLargestLocation({ group: 7n, object: 2n });
-  subscriber.setLocationFilter({ startGroup: 0n, startObject: 0n });
+  subscriber.setLocationFilter({ nextObject: true });
 
   subscriber.handleObject(createObject(7n, 2n));
   assert.equal(delivered.length, 0);
@@ -698,17 +698,17 @@ test("Location Filter 再適用: startGroup=0 は LARGEST_OBJECT の次のグル
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.3.1:
- * setLargestLocation だけでは相対 Location Filter の開始位置を前進させない。
+ * draft-ietf-moq-transport-22 §3.3.1:
+ * setLargestLocation だけでは Next Object (0x05) の開始位置を前進させない。
  * 開始位置は SUBSCRIBE_OK 相当の resolveLocationFilter で一度だけ確定する。
  */
-test("Location Filter 再適用: setLargestLocation だけでは相対フィルタの開始位置を前進させない", () => {
+test("Location Filter 再適用: setLargestLocation だけでは Next Object の開始位置を前進させない", () => {
   const delivered: MoqtObject[] = [];
   const subscriber = new SubscriberImpl(["namespace"], "track", 0n, 0n, (obj) =>
     delivered.push(obj),
   );
 
-  subscriber.setLocationFilter({ startGroup: 0n, startObject: 0n });
+  subscriber.setLocationFilter({ nextObject: true });
   // setLargestLocation のみでは再解決しない
   subscriber.setLargestLocation({ group: 7n, object: 2n });
 
@@ -718,9 +718,9 @@ test("Location Filter 再適用: setLargestLocation だけでは相対フィル�
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.3.1:
- * Next Object フィルタの開始位置は SUBSCRIBE_OK で確定し、その後の
- * LARGEST_OBJECT 更新 (PUBLISH_STATE_NOTIFY) では前進しない。
+ * draft-ietf-moq-transport-22 §3.3.1:
+ * Next Object (Location Filter Type 0x05) の開始位置は SUBSCRIBE_OK で確定し、
+ * その後の LARGEST_OBJECT 更新 (PUBLISH_STATE_NOTIFY) では前進しない。
  */
 test("Location Filter 再適用: SUBSCRIBE_OK 後の LARGEST_OBJECT 更新で Next Object の開始位置が前進しない", () => {
   const delivered: MoqtObject[] = [];
@@ -729,7 +729,7 @@ test("Location Filter 再適用: SUBSCRIBE_OK 後の LARGEST_OBJECT 更新で Ne
   );
 
   // SUBSCRIBE 送信時
-  subscriber.setLocationFilter({ startGroup: 0n, startObject: 0n });
+  subscriber.setLocationFilter({ nextObject: true });
   // SUBSCRIBE_OK 受信時
   subscriber.setLargestLocation({ group: 7n, object: 2n });
   subscriber.resolveLocationFilter();

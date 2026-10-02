@@ -382,7 +382,7 @@ test("bidiHandleRequestUpdateOk: FORWARD 省略の update の REQUEST_OK で For
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.10:
+ * draft-ietf-moq-transport-22 §9.20.9:
  * "If omitted from REQUEST_UPDATE or PUBLISH_STATE_NOTIFY,
  *  the value is unchanged."
  * 自 update() で送信した LOCATION_FILTER が REQUEST_OK 受信時に
@@ -467,7 +467,7 @@ test("bidiHandleRequestUpdateOk: 送信時の LOCATION_FILTER が反映され新
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.10:
+ * draft-ietf-moq-transport-22 §9.20.9:
  * LOCATION_FILTER を送らなかった update() の REQUEST_OK では
  * フィルタが不変であることを検証する。
  */
@@ -493,7 +493,7 @@ test("bidiHandleRequestUpdateOk: LOCATION_FILTER 省略の update の REQUEST_OK
 
   bidiHandleRequestUpdateOk(session, payload, 0n);
 
-  // 省略時は不変 (§9.20.10) のため group 1 以降が従来どおり届く
+  // 省略時は不変 (§9.20.9) のため group 1 以降が従来どおり届く
   subscriber.handleObject({
     groupId: 0n,
     subgroupId: 0n,
@@ -514,15 +514,15 @@ test("bidiHandleRequestUpdateOk: LOCATION_FILTER 省略の update の REQUEST_OK
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.3.1:
- * LARGEST_OBJECT のみを含む REQUEST_UPDATE_OK では相対 Location Filter の
+ * draft-ietf-moq-transport-22 §3.3.1:
+ * LARGEST_OBJECT のみを含む REQUEST_UPDATE_OK では Next Object (0x05) の
  * 開始位置を再解決しないことを検証する。
  */
-test("bidiHandleRequestUpdateOk: LARGEST_OBJECT のみの REQUEST_OK では相対フィルタの開始位置が前進しない", () => {
+test("bidiHandleRequestUpdateOk: LARGEST_OBJECT のみの REQUEST_OK では Next Object の開始位置が前進しない", () => {
   const delivered: MoqtObject[] = [];
   const subscriber = new SubscriberImpl(["test"], "track", 0n, 1n, (obj) => delivered.push(obj));
   // SUBSCRIBE 送信時 + SUBSCRIBE_OK 相当で開始位置を {7, 3} に確定する
-  subscriber.setLocationFilter({ startGroup: 0n, startObject: 0n });
+  subscriber.setLocationFilter({ nextObject: true });
   subscriber.setLargestLocation({ group: 7n, object: 2n });
   subscriber.resolveLocationFilter();
 
@@ -562,10 +562,11 @@ test("bidiHandleRequestUpdateOk: LARGEST_OBJECT のみの REQUEST_OK では相�
 
 /**
  * draft-ietf-moq-transport-21 §3.3.1:
- * REQUEST_UPDATE_OK が LARGEST_OBJECT と相対 LOCATION_FILTER を同時に運ぶ場合、
- * 更新後の LARGEST_OBJECT でフィルタを解決することを検証する。
+ * LARGEST_OBJECT を運ぶ REQUEST_UPDATE_OK を受信したとき、送信時に指定した
+ * Next Object (Location Filter Type 0x05) が更新後の LARGEST_OBJECT で
+ * 解決されることを検証する。
  */
-test("bidiHandleRequestUpdateOk: 相対 LOCATION_FILTER が更新後の LARGEST_OBJECT で解決される", () => {
+test("bidiHandleRequestUpdateOk: Next Object が更新後の LARGEST_OBJECT で解決される", () => {
   const delivered: MoqtObject[] = [];
   const subscriber = new SubscriberImpl(["test"], "track", 0n, 1n, (obj) => delivered.push(obj));
   subscriber.setLocationFilter({ startGroup: 10n, startObject: 0n });
@@ -579,7 +580,7 @@ test("bidiHandleRequestUpdateOk: 相対 LOCATION_FILTER が更新後の LARGEST_
           resolve: () => {},
           reject: () => {},
           targetRequestId: 0n,
-          locationFilter: { startGroup: 0n, startObject: 0n },
+          locationFilter: { nextObject: true },
         },
       ],
     ]),
@@ -616,11 +617,11 @@ test("bidiHandleRequestUpdateOk: 相対 LOCATION_FILTER が更新後の LARGEST_
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.10 / §3.3.1:
- * { reset: true } (Length 0) は除去として反映され、
+ * draft-ietf-moq-transport-22 §9.20.9 / §3.3.1:
+ * { reset: true } (Location Filter Type 0x00 = None) は除去として反映され、
  * 反映後はフィルタなしで全オブジェクトが通過することを検証する。
- * (§9.20.10: "A length of 0 indicates no filter, for example to remove
- *  the filter in REQUEST_UPDATE.")
+ * (§9.20.9: Location Filter Type 0x00 は "no fields follow and there is no
+ *  Location Filter" であり、REQUEST_UPDATE でのフィルタ除去に使う)
  */
 test("bidiHandleRequestUpdateOk: reset フィルタが反映され全オブジェクトが通過する", () => {
   const delivered: MoqtObject[] = [];

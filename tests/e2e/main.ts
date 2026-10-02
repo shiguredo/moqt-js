@@ -104,8 +104,8 @@ export interface SubscriberStatus {
 /**
  * FETCH の取得範囲 (相対指定)
  *
- * draft-ietf-moq-transport-21 Section 9.20.10:
- * `{ startGroup }` の 1 フィールドは相対指定であり、
+ * draft-ietf-moq-transport-22 Section 9.20.9:
+ * `{ startGroup }` の 1 フィールド (Location Filter Type 0x01) は相対指定であり、
  * Start Group = Largest Object の Group + 1 - startGroup になる。
  */
 export interface FetchRelativeFilterOptions {
@@ -115,8 +115,8 @@ export interface FetchRelativeFilterOptions {
 /**
  * FETCH の取得範囲 (絶対開始)
  *
- * draft-ietf-moq-transport-21 Section 9.20.10:
- * `{ startGroup, startObject }` の 2 フィールドは絶対開始として解釈される。
+ * draft-ietf-moq-transport-22 Section 9.20.9:
+ * `{ startGroup, startObject }` の 2 フィールド (Location Filter Type 0x02) は絶対開始として解釈される。
  */
 export interface FetchAbsoluteFilterOptions {
   startGroup: number;
@@ -139,7 +139,7 @@ export interface StartFetchOptions {
   trackName: string;
   /**
    * 取得する範囲。省略すると全オブジェクト ({0, 0} から Largest Object まで) を要求する。
-   * draft-ietf-moq-transport-21 Section 9.20.10 (LOCATION FILTER Parameter)
+   * draft-ietf-moq-transport-22 Section 9.20.9 (LOCATION FILTER Parameter)
    */
   filter?: FetchFilterOptions;
   /**
@@ -526,8 +526,8 @@ async function stopSubscriber(id: HandleId): Promise<SubscriberStatus> {
 /**
  * テストページが受け取った範囲の指定を moqt-js の Location Filter へ変換する
  *
- * draft-ietf-moq-transport-21 Section 9.20.10: フィールド数で意味が変わるため、
- * `startObject` の有無で 1 フィールド (相対指定) と 2 フィールド (絶対開始) を切り替える。
+ * draft-ietf-moq-transport-22 Section 9.20.9: Location Filter Type で意味が変わるため、
+ * `startObject` の有無で 0x01 (相対指定) と 0x02 (絶対開始) を切り替える。
  */
 function toLocationFilter(options: FetchFilterOptions): LocationFilter {
   if ("startObject" in options) {

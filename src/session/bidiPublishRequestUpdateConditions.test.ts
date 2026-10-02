@@ -82,7 +82,7 @@ test("bidiReadRequestStreamMessages: 不正な Range Filter を含む REQUEST_UP
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.10 / §9.20.16:
+ * draft-ietf-moq-transport-22 §9.20.9 / §9.20.15:
  * role=publish の受信 REQUEST_UPDATE の FILL_PARAMETERS 内側 LOCATION_FILTER が
  * End Group 超過の場合、PROTOCOL_VIOLATION でセッションを閉じることを検証する。
  */
@@ -96,28 +96,24 @@ test("bidiReadRequestStreamMessages: FILL 内側の LOCATION_FILTER 超過の RE
     ctx.controlReader,
     "publish",
   );
-  // 内側の End Group = MAX_VARINT + 1 超過を手組みする
-  const fields = new Uint8Array([
-    ...encodeVarint(MAX_VARINT),
-    ...encodeVarint(0n),
-    ...encodeVarint(1n),
-  ]);
-  const overflowValue = new Uint8Array([...encodeVarint(BigInt(fields.length)), ...fields]);
+  // 内側に End Group 超過 (StartGroup=MAX_VARINT + EndGroupDelta=1) の
+  // Location Filter Type 0x03 を手組みして包む
   const updatePayload = encodeRequestUpdatePayload({
     type: MessageType.REQUEST_UPDATE,
     requestId: 101n,
-    parameters: [
-      encodeFillParameters([{ type: MessageParameterType.LOCATION_FILTER, value: overflowValue }]),
-    ],
+    parameters: [encodeFillParameters([buildOverflowingLocationFilterParameter()])],
   });
   const message = ctx.session.controlWriter!.encode(MessageType.REQUEST_UPDATE, updatePayload);
   ctx.readableController.enqueue(message);
   ctx.readableController.close();
   await readPromise;
 
-  // PROTOCOL_VIOLATION でセッションが閉じ、REQUEST_OK は応答されない
+  // PROTOCOL_VIOLATION でセッションが閉じ、REQUEST_OK は応答されない。
+  // End Group 超過の MUST で落ちていることをメッセージまで固定する
+  // (未知の Location Filter Type でも PROTOCOL_VIOLATION になるため)
   assert.isDefined(ctx.closedWithError);
   assert.equal(ctx.closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.isTrue(ctx.closedWithError!.message.includes("absolute range end group exceeds maximum"));
   assert.equal(ctx.written.length, 0);
 });
 
@@ -204,7 +200,7 @@ test("bidiReadRequestStreamMessages: FILL 内側の除去を含む REQUEST_UPDAT
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.10:
+ * draft-ietf-moq-transport-22 §9.20.9:
  * role=publish の受信 REQUEST_UPDATE に End Group 超過の LOCATION_FILTER が
  * 含まれる場合、PROTOCOL_VIOLATION でセッションを閉じることを検証する。
  * REQUEST_OK は応答されない。
@@ -243,7 +239,7 @@ test("bidiReadRequestStreamMessages: End Group 超過の LOCATION_FILTER を含�
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.10:
+ * draft-ietf-moq-transport-22 §9.20.9:
  * role=publish の受信 REQUEST_UPDATE に正常な LOCATION_FILTER が含まれる場合、
  * 従来どおり REQUEST_OK が応答されセッションが閉じないことを検証する
  * (回帰ガード)。
@@ -258,10 +254,11 @@ test("bidiReadRequestStreamMessages: 正常な LOCATION_FILTER を含む REQUEST
     ctx.controlReader,
     "publish",
   );
-  // 除去 (Length 0) / 1 フィールド相対 / AbsoluteStart / 域内 AbsoluteRange /
-  // End Group = 2^64-1 ちょうどの境界値の 5 種はいずれも有効
+  // 0x00 (除去) / 0x05 (Next Object) / 0x01 (相対) / 0x02 (絶対開始) /
+  // 0x03 (絶対範囲) / End Group = 2^64-1 ちょうどの境界値はいずれも有効
   const validFilters = [
     encodeLocationFilterParameter({ reset: true }),
+    encodeLocationFilterParameter({ nextObject: true }),
     encodeLocationFilterParameter({ startGroup: 3n }),
     encodeLocationFilterParameter({ startGroup: 10n, startObject: 2n }),
     encodeLocationFilterParameter({ startGroup: 10n, startObject: 2n, endGroupDelta: 5n }),
@@ -283,9 +280,9 @@ test("bidiReadRequestStreamMessages: 正常な LOCATION_FILTER を含む REQUEST
   ctx.readableController.close();
   await readPromise;
 
-  // 5 通とも REQUEST_OK が応答され、セッションは閉じない
+  // 送ったすべてのフィルタに REQUEST_OK が応答され、セッションは閉じない
   const messages = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
-  assert.equal(messages.length, 5);
+  assert.equal(messages.length, validFilters.length);
   for (const response of messages) {
     assert.equal(response.type, MessageType.REQUEST_OK);
   }
@@ -706,7 +703,7 @@ test("bidiReadRequestStreamMessages: フィルタ指定なしの FILL_PARAMETERS
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.4 / §9.20.10:
+ * draft-ietf-moq-transport-22 §3.4 / §9.20.9:
  * 4 フィールド指定で End Object が Start Object より小さい場合、フィルタ自身が
  * 空になり配信できる Object が無い。fill fetch ストリームは開かれないため
  * REQUEST_OK で受理される。
@@ -842,11 +839,12 @@ test("bidiReadRequestStreamMessages: FORWARD=0 から FORWARD=1 に更新しつ�
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.4:
+ * draft-ietf-moq-transport-22 §3.4:
  * 「When the subscription has no Location filter, or the LOCATION_FILTER inside
  *  FILL_PARAMETERS is zero-length, the fill range is the entire track up to
- *  Largest Object.」内側 LOCATION_FILTER の reset (Length 0) はトラック全体を
- * 指し、Largest Object があるため空でなく拒否される。
+ *  Largest Object.」v22 の LOCATION_FILTER は Length を持たないため、ここでの
+ * 「zero-length」はフィールドを持たない Location Filter Type 0x00 (None) を指す。
+ * 内側の reset はトラック全体を指し、Largest Object があるため空でなく拒否される。
  */
 test("bidiReadRequestStreamMessages: FILL_PARAMETERS 内側 LOCATION_FILTER が reset の REQUEST_UPDATE (publish ロール) で REQUEST_ERROR (NOT_SUPPORTED) が応答される", async () => {
   const ctx = createPublishReadTestContext({});
@@ -922,8 +920,8 @@ test("bidiReadRequestStreamMessages: 同一更新の LOCATION_FILTER を内側�
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.3.1 / §3.4:
- * Next Object フィルタ (StartGroup = StartObject = 0) は
+ * draft-ietf-moq-transport-22 §3.3.1 / §3.4:
+ * Next Object フィルタ (Location Filter Type 0x05) は
  * {Largest Object.Group, Largest Object.Object + 1} に解決される。Largest
  * Object {5, 0} に対して {5, 1} は後方のため fill 範囲が空になり REQUEST_OK。
  */
@@ -942,9 +940,7 @@ test("bidiReadRequestStreamMessages: Next Object の FILL_PARAMETERS の REQUEST
   const updatePayload = encodeRequestUpdatePayload({
     type: MessageType.REQUEST_UPDATE,
     requestId: 101n,
-    parameters: [
-      encodeFillParameters([encodeLocationFilterParameter({ startGroup: 0n, startObject: 0n })]),
-    ],
+    parameters: [encodeFillParameters([encodeLocationFilterParameter({ nextObject: true })])],
   });
   const message = ctx.session.controlWriter!.encode(MessageType.REQUEST_UPDATE, updatePayload);
   ctx.readableController.enqueue(message);

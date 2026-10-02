@@ -2057,8 +2057,9 @@ export function useSubscriber(
       let tracksFromCatalog: CatalogMediaTracks;
 
       try {
-        // draft-ietf-moq-transport-21 に準拠した Catalog 購読:
-        // 1. Next Object 形式の Location Filter で SUBSCRIBE し、live の Catalog 更新を受信
+        // draft-ietf-moq-transport-22 に準拠した Catalog 購読:
+        // 1. Next Object (Location Filter Type 0x05) の Location Filter で SUBSCRIBE し、
+        //    live の Catalog 更新を受信
         // 2. 独立した FETCH (フィルタなし) で過去の Catalog を取得
         // FETCH が INVALID_RANGE で失敗する場合 (Catalog 未 publish) は
         // live の SUBSCRIBE 経由で Catalog が届くのを待つ
@@ -2209,10 +2210,10 @@ export function useSubscriber(
                 },
               },
               {
-                // Next Object 形式 ({ startGroup: 0n, startObject: 0n }) の
+                // Next Object (Location Filter Type 0x05) の
                 // Location Filter で SUBSCRIBE する。live の Catalog 更新は
                 // この SUBSCRIBE で受信し、過去の Catalog は FETCH で取得する
-                filter: { startGroup: 0n, startObject: 0n },
+                filter: { nextObject: true },
                 // draft-ietf-moq-transport-21 §9.20.7 (RENDEZVOUS TIMEOUT):
                 // publisher がまだ居ない場合は relay がこの時間だけ購読を保持し、
                 // publisher が現れたら SUBSCRIBE_OK を返す。配信開始前に視聴を

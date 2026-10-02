@@ -129,10 +129,12 @@ const locationArb: fc.Arbitrary<Location> = fc.record({
  * Location Filter
  *
  * End Group を含む 3 / 4 フィールド表現は StartGroup + EndGroupDelta の上限超過で
- * decode が PROTOCOL_VIOLATION になるため、値域が常に妥当な 0 / 1 / 2 フィールドに限る。
+ * decode が PROTOCOL_VIOLATION になるため、値域が常に妥当な 0 フィールド
+ * (0x00 / 0x05) と 1 / 2 フィールドに限る。
  */
 const locationFilterArb: fc.Arbitrary<LocationFilter> = fc.oneof(
   fc.constant({ reset: true } as const),
+  fc.constant({ nextObject: true } as const),
   fc.bigInt({ min: 0n, max: 10000n }).map((startGroup) => ({ startGroup })),
   fc.record({
     startGroup: fc.bigInt({ min: 0n, max: 10000n }),

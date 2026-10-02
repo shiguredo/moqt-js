@@ -32,6 +32,7 @@ import {
   encodeUint8ParameterValue,
   validateForwardValue,
   getParameterLocationValue,
+  isNextObjectLocationFilter,
 } from "../message";
 import { decodeVarint, encodeVarint } from "../varint";
 import { TrackPropertyId, generateGreaseProperty, type Property } from "../properties";
@@ -527,8 +528,10 @@ export function buildRangeFilterParameters(rangeFilters: RangeFilterSpec[]): Par
  * draft-ietf-moq-transport-21 §9.20.16 Table 6:
  * 内側に載せられるのは FILL_TIMEOUT / SUBSCRIBER_PRIORITY / LOCATION_FILTER /
  * GROUP_ORDER / Range Filters (0x25-0x28) のみ。TRACK_PROPERTY_FILTER は
- * SUBSCRIBE_TRACKS 専用のため fill では許可しない。除去 (Length=0) は
- * 一回限りの fill 要求に意味を持たないため許可しない。
+ * SUBSCRIBE_TRACKS 専用のため fill では許可しない。Range Filter の除去
+ * (Length=0) は一回限りの fill 要求に意味を持たないため許可しない
+ * (内側 LOCATION_FILTER は Type 0x00 も送信でき、fill 範囲の解釈は
+ * 受信側の規則に従う)。
  *
  * @param fill - fill 要求内容
  * @param context - 外側メッセージ種別 (検証メッセージ用)
@@ -556,7 +559,7 @@ export function buildFillParameters(
     });
   }
 
-  // LOCATION_FILTER (0x21) - draft-ietf-moq-transport-21 Section 9.20.10
+  // LOCATION_FILTER (0x21) - draft-ietf-moq-transport-22 Section 9.20.9
   // End Group 超過は encodeLocationFilterParameter が InvalidFilterError で拒否する
   if (fill.filter !== undefined) {
     inner.push(encodeLocationFilterParameter(fill.filter));
@@ -632,7 +635,7 @@ export function buildIncludePropertiesParameter(includeProperties?: boolean): Pa
 export function buildSubscribeParameters(options?: SubscribeOptions): Parameter[] {
   const parameters: Parameter[] = [];
 
-  // LOCATION_FILTER (0x21) - draft-ietf-moq-transport-21 Section 9.20.10
+  // LOCATION_FILTER (0x21) - draft-ietf-moq-transport-22 Section 9.20.9
   if (options?.filter !== undefined) {
     parameters.push(encodeLocationFilterParameter(options.filter));
   }
@@ -750,13 +753,13 @@ export function encodeAuthorizationTokenParameter(token: AuthorizationToken): Pa
  * 純粋関数: FETCH の Message Parameters を構築する
  *
  * draft-ietf-moq-transport-21 Section 9.11 (FETCH):
- * 取得範囲は LOCATION_FILTER パラメータで指定する (§9.20.10)。省略時は
+ * 取得範囲は LOCATION_FILTER パラメータで指定する (§9.20.9)。省略時は
  * フィルタなし ({0, 0} から Largest Object まで) を要求する。
  */
 export function buildFetchParameters(options?: FetchOptions): Parameter[] {
   const parameters: Parameter[] = [];
 
-  // LOCATION_FILTER (0x21) - draft-ietf-moq-transport-21 Section 9.20.10
+  // LOCATION_FILTER (0x21) - draft-ietf-moq-transport-22 Section 9.20.9
   if (options?.filter !== undefined) {
     parameters.push(encodeLocationFilterParameter(options.filter));
   }
@@ -856,8 +859,8 @@ export function buildSubscribeNamespaceParameters(options?: {
 export function buildSubscribeTracksParameters(options?: SubscribeTracksOptions): Parameter[] {
   const parameters: Parameter[] = [];
 
-  // LOCATION_FILTER (0x21) - draft-ietf-moq-transport-21 Section 9.20.10
-  // §9.18.1: 結果 PUBLISH で開始する Track に join するためのフィルタ
+  // LOCATION_FILTER (0x21) - draft-ietf-moq-transport-22 Section 9.20.9
+  // §3.6.2: 結果 PUBLISH で開始する Track に join するためのフィルタ
   if (options?.filter !== undefined) {
     parameters.push(encodeLocationFilterParameter(options.filter));
   }
@@ -1063,19 +1066,19 @@ export function validateFetchOkEndLocation(
 /**
  * 純粋関数: FETCH の Start Location を確定する
  *
- * draft-ietf-moq-transport-21 §3.3.1 (Location Filters):
+ * draft-ietf-moq-transport-22 §3.3.1 (Location Filters):
  * FETCH_OK の End Location 検証 (§9.12) には対応する FETCH の Start
  * Location が必要だが、次の形式は Largest Object 依存でクライアント側では
  * 確定できないため undefined を返す:
- * - 1 フィールド (相対指定): Start = {Largest.Object.Group + 1 - StartGroup, 0}
- * - 2 フィールド両方 0 (Next Object): Start = {Largest.Group, Largest.Object + 1}
+ * - 0x01 (相対指定): Start = {Largest.Object.Group + 1 - StartGroup, 0}
+ * - 0x05 (Next Object): Start = {Largest.Group, Largest.Object + 1}
  *
  * 確定できる形式:
- * - フィルタなし (undefined / reset): {0, 0} (§3.3.1「Fetch requests without
- *   a filter include all Locations from {0, 0} up to Largest Object」)
- * - 2 フィールド (両方 0 以外) / 3・4 フィールドの絶対開始:
- *   {startGroup, startObject}。3・4 フィールドも両方 0 なら {0, 0} 開始の
- *   絶対範囲 (§9.20.10「Otherwise, all fields are absolute.」)
+ * - フィルタなし (undefined / reset (0x00)): {0, 0} (§3.2「This range is specified
+ *   by a Location Filter (see Section 3.3.1) when present, or defaults to {0, 0}
+ *   and Largest Object (Section 3.1.4) respectively.」)
+ * - 0x02 / 0x03 / 0x04 (絶対開始): {startGroup, startObject}。0:0 も絶対位置
+ *   {0, 0} の指定として確定できる (§9.20.9「Otherwise, all fields are absolute.」)
  *
  * @returns 確定できた Start Location。確定できない場合は undefined。
  */
@@ -1085,15 +1088,17 @@ export function resolveFetchStartLocation(
   if (filter === undefined || "reset" in filter) {
     return { group: 0n, object: 0n };
   }
+  // 0x05 (Next Object) は Largest Object 依存のため確定できない
+  if (isNextObjectLocationFilter(filter)) {
+    return undefined;
+  }
   if ("startObject" in filter) {
-    // Next Object 形式 (両方 0) はフィールド数 2 のときだけ (§9.20.10)。
-    // 3 / 4 フィールドは絶対表現のため Largest Object 非依存で確定できる。
-    if (!("endGroupDelta" in filter) && filter.startGroup === 0n && filter.startObject === 0n) {
-      return undefined;
-    }
+    // 0x02 / 0x03 / 0x04 は絶対表現のため Largest Object 非依存で確定できる。
+    // 0:0 も絶対位置 {0, 0} の指定である (v21 の「2 フィールド両方 0 は
+    // Next Object」という特例は廃止された)
     return { group: filter.startGroup, object: filter.startObject };
   }
-  // 1 フィールド (相対指定) は Largest Object 依存
+  // 0x01 (相対指定) は Largest Object 依存
   return undefined;
 }
 

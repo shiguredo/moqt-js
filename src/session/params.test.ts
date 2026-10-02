@@ -7,11 +7,13 @@ import {
   buildSubscribeParameters,
   buildSubscribeTracksParameters,
   buildFetchParameters,
+  buildFillParameters,
   buildPublishParameters,
   buildTrackStatusParameters,
   buildPublishTrackProperties,
   encodeAuthorizationTokenParameter,
   validateFetchOkEndLocation,
+  resolveFetchStartLocation,
   resolveFillGroupOrder,
   extractNewGroupRequest,
 } from "./params";
@@ -193,7 +195,7 @@ test("buildSubscribeParameters: TRACK_PROPERTY_FILTER で throw する", () => {
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.10 (LOCATION FILTER Parameter):
+ * draft-ietf-moq-transport-22 §9.20.9 (LOCATION FILTER Parameter):
  * SUBSCRIBE 送信経路 (buildSubscribeParameters → encodeLocationFilterParameter)
  * でも End Group の 2^64-1 超過検証が効き、InvalidFilterError が throw される
  * ことを検証する。境界値 (ちょうど 2^64-1) は過剰拒否せず LOCATION_FILTER
@@ -453,4 +455,40 @@ test("extractNewGroupRequest: varint の値を返し、無ければ undefined、
       extractNewGroupRequest([{ type: MessageParameterType.NEW_GROUP_REQUEST, value: trailing }]),
     ProtocolViolationError,
   );
+});
+
+/**
+ * draft-ietf-moq-transport-22 §9.20.9:
+ * 2 フィールドの 0:0 (Location Filter Type 0x02) は絶対位置 {0, 0} の指定であり、
+ * Largest Object に依存せず Start Location を確定できる (v21 の「2 フィールド 0:0 は
+ * Next Object」という特例は廃止された)。
+ */
+test("resolveFetchStartLocation: 2 フィールド 0:0 は絶対位置 {0, 0} として確定する", () => {
+  assert.deepEqual(resolveFetchStartLocation({ startGroup: 0n, startObject: 0n }), {
+    group: 0n,
+    object: 0n,
+  });
+  // Next Object (0x05) は Largest Object 依存のため確定できない
+  assert.isUndefined(resolveFetchStartLocation({ nextObject: true }));
+});
+
+/**
+ * draft-ietf-moq-transport-22 §9.20.9 / §3.4:
+ * FILL_PARAMETERS の内側には Type 0x00 (None) と Type 0x05 (Next Object) の
+ * どちらも載せられる。ワイヤ上は Type のみの 1 バイトになる。
+ */
+test("buildFillParameters: reset (0x00) と Next Object (0x05) を内側に載せる", () => {
+  const resetInner = buildFillParameters({ filter: { reset: true } }, "SUBSCRIBE");
+  assert.deepEqual(
+    resetInner.map((param) => param.type),
+    [MessageParameterType.LOCATION_FILTER],
+  );
+  assert.deepEqual(resetInner[0]!.value, new Uint8Array([0x00]));
+
+  const nextObjectInner = buildFillParameters({ filter: { nextObject: true } }, "SUBSCRIBE");
+  assert.deepEqual(
+    nextObjectInner.map((param) => param.type),
+    [MessageParameterType.LOCATION_FILTER],
+  );
+  assert.deepEqual(nextObjectInner[0]!.value, new Uint8Array([0x05]));
 });

@@ -161,7 +161,7 @@ export interface PublishStateNotifyOptions {
 
   /**
    * 通知する Location Filter
-   * draft-ietf-moq-transport-21 Section 9.20.10 (LOCATION FILTER Parameter)
+   * draft-ietf-moq-transport-22 Section 9.20.9 (LOCATION FILTER Parameter)
    *
    * 「When sent in PUBLISH_STATE_NOTIFY, it reports the Location Filter now in
    *  effect at the publisher.」現在値と等価な値では通知しない。送信できた場合は
@@ -348,7 +348,7 @@ export class PublisherImpl implements Publisher {
   // objects from outside the requested range.」に従い範囲外を送信しない。
   // 未受信時は undefined (フィルタなし = トラック全体)。
   private subscriptionLocationFilter: ResolvedFilter | undefined;
-  // draft-ietf-moq-transport-21 §3.3.1 / §9.20.10:
+  // draft-ietf-moq-transport-22 §3.3.1 / §9.20.9:
   // 解決前の生の Location Filter。subscriptionLocationFilter は解決時点の
   // LARGEST_OBJECT に依存するため、同じ内容の再設定を避ける等価判定
   // (isSameLocationFilter) には生の値が要る。未受信時は undefined。

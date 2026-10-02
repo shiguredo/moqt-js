@@ -242,7 +242,7 @@ test("bidiReadSubscribeResponse: SUBSCRIBE_OK と同一チャンクの PUBLISH_D
 test("bidiReadSubscribeResponse: SUBSCRIBE_OK と同一チャンクの PUBLISH_STATE_NOTIFY も処理される", async () => {
   const ctx = createPublishReadTestContext({});
   const subscriber = new SubscriberImpl(["test"], "track", ctx.requestId, 1n, () => {});
-  subscriber.setLocationFilter({ startGroup: 0n, startObject: 0n });
+  subscriber.setLocationFilter({ nextObject: true });
   ctx.session.pendingSubscribe.set(ctx.requestId, {
     resolve: () => {},
     reject: () => {},

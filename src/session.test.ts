@@ -57,7 +57,7 @@ import {
   priorGroupIdGapProperties,
   priorObjectIdGapProperties,
 } from "./testSupport/helpers";
-import { waitForMacrotask } from "./testSupport/bidi";
+import { waitForMacrotask, buildOverflowingLocationFilterParameter } from "./testSupport/bidi";
 import { MAX_VARINT, decodeVarint, encodeVarint } from "./varint";
 import {
   createSetup,
@@ -7924,8 +7924,8 @@ test("受信 PUBLISH の LOCATION_FILTER が subscriber に反映される", asy
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.18 / §3.3.1 / §9.20.10:
- * 受信 PUBLISH が LARGEST_OBJECT と Next Object 形式の相対 LOCATION_FILTER を
+ * draft-ietf-moq-transport-22 §9.20.17 / §3.3.1 / §9.20.9:
+ * 受信 PUBLISH が LARGEST_OBJECT と Next Object (Location Filter Type 0x05) を
  * 同時に運ぶ場合、フィルタは PUBLISH の LARGEST_OBJECT 基準で一度だけ解決される。
  * LARGEST_OBJECT {7, 2} のとき開始位置は {7, 3} になる。
  */
@@ -7941,7 +7941,7 @@ test("受信 PUBLISH の Next Object フィルタが PUBLISH の LARGEST_OBJECT 
   // 購読が active の間に handleObject を検証するため、PUBLISH 後の終端を保持する
   let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
   const parameters = [
-    encodeLocationFilterParameter({ startGroup: 0n, startObject: 0n }),
+    encodeLocationFilterParameter({ nextObject: true }),
     { type: MessageParameterType.LARGEST_OBJECT, value: encodeLocation({ group: 7n, object: 2n }) },
   ];
   const handlePromise = internal.handleIncomingBidirectionalStream(
@@ -7982,7 +7982,7 @@ test("受信 PUBLISH の Next Object フィルタが PUBLISH の LARGEST_OBJECT 
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.18 / §3.3.1 / §9.20.10:
+ * draft-ietf-moq-transport-22 §9.20.17 / §3.3.1 / §9.20.9:
  * 1 フィールドの相対 LOCATION_FILTER も PUBLISH の LARGEST_OBJECT 基準で解決される。
  * LARGEST_OBJECT {7, 2} のとき開始位置は {8, 0} になる。
  */
@@ -8145,27 +8145,47 @@ test("受信 PUBLISH の許可外パラメータでセッションが閉じる",
  * PROTOCOL_VIOLATION でセッションを閉じることを検証する。
  * FORWARD / GROUP_ORDER / LARGEST_OBJECT はデコード層で先に検出され、
  * LOCATION_FILTER 超過は初期パラメータ反映時に検出される。
+ * いずれも PROTOCOL_VIOLATION で閉じ、どの検証で落ちたかをメッセージで固定する。
  */
 test("受信 PUBLISH の不正なパラメータでセッションが閉じる", async () => {
-  // StartGroup=MAX_VARINT + StartObject=0 + EndGroupDelta=1 で End Group 超過
-  const overflowFields = new Uint8Array([
-    ...encodeVarint(MAX_VARINT),
-    ...encodeVarint(0n),
-    ...encodeVarint(1n),
-  ]);
-  const overflowValue = new Uint8Array([
-    ...encodeVarint(BigInt(overflowFields.length)),
-    ...overflowFields,
-  ]);
-  const invalidCases = [
-    [{ type: MessageParameterType.FORWARD, value: new Uint8Array([2]) }],
-    [{ type: MessageParameterType.GROUP_ORDER, value: new Uint8Array([0x03]) }],
-    [{ type: MessageParameterType.LOCATION_FILTER, value: overflowValue }],
+  // 不正値ごとに、assert の説明に使う日本語の名前と、期待メッセージの断片
+  // (ライブラリ側の英語メッセージ) を固定する
+  const invalidCases: Array<{
+    name: string;
+    parameters: { type: number; value: Uint8Array }[];
+    message: string;
+  }> = [
+    {
+      name: "FORWARD の値域外",
+      parameters: [{ type: MessageParameterType.FORWARD, value: new Uint8Array([2]) }],
+      message: "invalid FORWARD value",
+    },
+    {
+      name: "GROUP_ORDER の値域外",
+      parameters: [{ type: MessageParameterType.GROUP_ORDER, value: new Uint8Array([0x03]) }],
+      message: "invalid GROUP_ORDER value",
+    },
+    // StartGroup=MAX_VARINT + StartObject=0 + EndGroupDelta=1 で End Group 超過
+    // (Location Filter Type 0x03)
+    {
+      name: "LOCATION_FILTER の End Group 超過",
+      parameters: [buildOverflowingLocationFilterParameter()],
+      message: "absolute range end group exceeds maximum",
+    },
     // Location の 2 つ目の varint (Object) が欠落した LARGEST_OBJECT
-    [{ type: MessageParameterType.LARGEST_OBJECT, value: new Uint8Array([0x07]) }],
+    {
+      name: "LARGEST_OBJECT の Object 欠落",
+      parameters: [{ type: MessageParameterType.LARGEST_OBJECT, value: new Uint8Array([0x07]) }],
+      message: "insufficient data",
+    },
   ];
-  for (const parameters of invalidCases) {
-    const session = createSessionImpl();
+  for (const { name, parameters, message } of invalidCases) {
+    const errors: Error[] = [];
+    const session = createSessionImpl({
+      error: (error) => {
+        errors.push(error);
+      },
+    });
     const sessionInternal = session as unknown as {
       sessionState: SessionState;
     };
@@ -8183,7 +8203,11 @@ test("受信 PUBLISH の不正なパラメータでセッションが閉じる",
       ),
     );
 
-    assert.equal(sessionInternal.sessionState, "closed");
+    assert.equal(sessionInternal.sessionState, "closed", name);
+    assert.equal(errors.length, 1, name);
+    assert.instanceOf(errors[0], SessionError);
+    assert.equal(errors[0].code, SessionErrorCode.PROTOCOL_VIOLATION);
+    assert.isTrue(errors[0].message.includes(message));
   }
 });
 

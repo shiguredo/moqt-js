@@ -35,9 +35,9 @@ import { type Location, MessageType } from "./types";
  *   Parameters (..) ...
  * }
  *
- * 取得する範囲は LOCATION_FILTER パラメータ (0x21) で指定する (§9.20.10)。
+ * 取得する範囲は LOCATION_FILTER パラメータ (0x21) で指定する (§9.20.9)。
  * パラメータを省略した場合、フィルタなしとして {0, 0} から Largest Object
- * までの全オブジェクトを要求する (§3.3.1)。
+ * までの全オブジェクトを要求する (§3.2)。
  */
 export interface Fetch {
   type: typeof MessageType.FETCH;

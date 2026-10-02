@@ -99,20 +99,6 @@ export function createBidiSession(): {
 }
 
 /**
- * draft-ietf-moq-transport-21 §9.20.10:
- * End Group が 2^64-1 を超える 3 フィールド表現の LOCATION_FILTER 値を手組みする。
- * 先頭 varint はバイト Length のため、フィールド部の実バイト長を指定する。
- */
-export function buildExceedingLocationFilterValue(): Uint8Array {
-  const exceedingFields = new Uint8Array([
-    ...encodeVarint(1n),
-    ...encodeVarint(0n),
-    ...encodeVarint(MAX_VARINT),
-  ]);
-  return new Uint8Array([...encodeVarint(BigInt(exceedingFields.length)), ...exceedingFields]);
-}
-
-/**
  * マクロタスク 1 回分待ち、ストリーム読み取りループを進行させる
  *
  * enqueue したメッセージをループが処理し終えるまで待つために使う。
@@ -313,23 +299,27 @@ export function forceSessionClosed(session: BidiSessionInternal): void {
 /**
  * End Group が 2^64-1 を超える LOCATION_FILTER パラメータを組み立てる
  *
- * draft-ietf-moq-transport-21 §9.20.10 の Length ベース表現で、StartGroup +
- * EndGroupDelta が超過する値を手組みする。encodeLocationFilterParameter
- * は送信前に throw するためエンコーダでは組み立てられない。
- * 4 フィールド表現 (EndObject 付き) も対象にする。
+ * draft-ietf-moq-transport-22 §9.20.9 の Location Filter Type ベース表現で、
+ * StartGroup + EndGroupDelta が超過する値を手組みする。
+ * encodeLocationFilterParameter は送信前に throw するためエンコーダでは
+ * 組み立てられない。4 フィールド表現 (EndObject 付き) も対象にする。
  */
 export function buildOverflowingLocationFilterParameter(withEndObject = false): {
   type: number;
   value: Uint8Array;
 } {
-  // StartGroup=MAX_VARINT + StartObject=0 + EndGroupDelta=1
+  // Type 0x03 (または 0x04) + StartGroup=MAX_VARINT + StartObject=0 + EndGroupDelta=1
   // End Group = MAX_VARINT + 1 で 2^64-1 超過
-  const rawFields = [encodeVarint(MAX_VARINT), encodeVarint(0n), encodeVarint(1n)];
+  const rawFields = [
+    encodeVarint(withEndObject ? 0x04n : 0x03n),
+    encodeVarint(MAX_VARINT),
+    encodeVarint(0n),
+    encodeVarint(1n),
+  ];
   if (withEndObject) {
     rawFields.push(encodeVarint(0n));
   }
-  const fields = new Uint8Array(rawFields.flatMap((part) => [...part]));
-  const value = new Uint8Array([...encodeVarint(BigInt(fields.length)), ...fields]);
+  const value = new Uint8Array(rawFields.flatMap((part) => [...part]));
   return { type: MessageParameterType.LOCATION_FILTER, value };
 }
 

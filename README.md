@@ -93,7 +93,7 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
 - FETCH メッセージ
 - FETCH_OK メッセージ
 - Fetch Group Order (Ascending / Descending)
-- Location Filter (相対 startGroup / 絶対 startGroup+startObject / 絶対範囲 3・4 フィールド / Length 0 の除去)
+- Location Filter (0x05 Next Object / 0x01 相対 startGroup / 0x02 絶対開始 / 0x03・0x04 絶対範囲 / 0x00 除去)
 - Range Filters (subscribe() / subscribeTracks() / fetch() / update() で送信可能)
   - Subgroup Filter
   - Object ID Filter

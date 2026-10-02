@@ -10,7 +10,7 @@ import {
 // 実リレーに対する FETCH の受信経路を検証する
 //
 // draft-ietf-moq-transport-21 Section 9.11 (FETCH) — Section 9.12 (FETCH_OK)
-// draft-ietf-moq-transport-21 Section 9.20.10 (LOCATION FILTER Parameter)
+// draft-ietf-moq-transport-22 Section 9.20.9 (LOCATION FILTER Parameter)
 // draft-ietf-moq-transport-21 Section 11.4 (Fetch ストリームの終端)
 //
 // FETCH の受信経路は合成ストリームを注入する単体テストでしか覆われておらず、実リレーの
@@ -19,7 +19,7 @@ import {
 // 映像トラックは Publisher が配信中のものを対象にする (過去のデータが確実に存在する)。
 //
 // LOCATION FILTER を省略した FETCH (全オブジェクトの要求) と相対指定 (1 フィールド) も
-// 仕様上は有効だが (draft-ietf-moq-transport-21 Section 9.20.10)、検証に使うリレーは
+// 仕様上は有効だが (draft-ietf-moq-transport-22 Section 9.20.9)、検証に使うリレーは
 // どちらにも FETCH_OK を返さないため受信経路の検証には使えない。応答が確認できている
 // 絶対開始の 2 フィールド (`{ startGroup, startObject }`) だけを使う。
 

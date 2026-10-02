@@ -20,7 +20,7 @@
  * Key-Value-Pair を扱う ./parameter/kvp の encodeKeyValuePair / decodeKeyValuePair /
  * encodeKeyValuePairs / decodeKeyValuePairs が従う。
  *
- * Key-Value-Pair (§8.3) / Message Parameter (§9.20) / Location Filter (§9.20.10) /
+ * Key-Value-Pair (§8.3) / Message Parameter (§9.20) / Location Filter (§9.20.9) /
  * Range Filter (§3.3.2) / Track Namespace (§8.7) が 1 モジュールに同居して
  * 見通しが悪かったため、機能単位のモジュールに分割した。本モジュールは既存の
  * import パス (`./parameter`) を維持するための再輸出のみを行う (公開 API は
@@ -29,7 +29,7 @@
  * - ./parameter/common: Parameter 表現と共通の上限値
  * - ./parameter/kvp: Key-Value-Pair (§8.3)
  * - ./parameter/messageParameter: Message Parameter (§9.20)
- * - ./parameter/locationFilter: Location Filter (§9.20.10)
+ * - ./parameter/locationFilter: Location Filter (§9.20.9)
  * - ./parameter/rangeFilter: Range Filter (§3.3.2 / §8.6)
  * - ./parameter/trackNamespace: Track Namespace / Track Name (§8.7)
  */
@@ -77,7 +77,7 @@ export {
   decodeFillParameters,
 } from "./parameter/messageParameter";
 
-// Location Filter (§9.20.10)
+// Location Filter (§9.20.9)
 export {
   type LocationFilter,
   isNextObjectLocationFilter,
