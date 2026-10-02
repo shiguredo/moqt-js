@@ -78,7 +78,7 @@ export function encodeRangeFilter(spec: RangeFilterSpec): Uint8Array {
     throw new InvalidFilterError("range filter must have at least one range");
   }
 
-  // draft-ietf-moq-transport-21 §9.20.11–§9.20.15:
+  // draft-ietf-moq-transport-22 §9.20.10–§9.20.14:
   // SetID は 8 bit (0-255) のため、範囲外の値は送信できない
   if (!Number.isInteger(param.setId) || param.setId < 0 || param.setId > 255) {
     throw new InvalidFilterError(`set id out of range: ${param.setId}, expected 0-255`);
@@ -92,7 +92,7 @@ export function encodeRangeFilter(spec: RangeFilterSpec): Uint8Array {
     if (param.propertyType === undefined) {
       throw new Error("propertyType is required for objectProperty/trackProperty filter");
     }
-    // draft-ietf-moq-transport-21 §9.20.14 / §9.20.15:
+    // draft-ietf-moq-transport-22 §9.20.13 / §9.20.14:
     // Property Type は偶数でなければならない
     if (param.propertyType % 2n !== 0n) {
       throw new InvalidFilterError(`property type must be even: ${param.propertyType}`);
@@ -133,7 +133,7 @@ export function encodeRangeFilter(spec: RangeFilterSpec): Uint8Array {
     }
   }
 
-  // draft-ietf-moq-transport-21 §9.20.13:
+  // draft-ietf-moq-transport-22 §9.20.12:
   // Publisher Priority は 8 bit のため、PRIORITY_FILTER の値は 255 以下でなければならない
   if (param.type === "priority") {
     for (const range of param.ranges) {
@@ -199,7 +199,7 @@ export function decodeRangeFilter(
       throw new InvalidFilterError("range filter is missing property type");
     }
     const [pt, ptSize] = decodeRangeFilterVarint(data, pos);
-    // draft-ietf-moq-transport-21 §9.20.14 / §9.20.15:
+    // draft-ietf-moq-transport-22 §9.20.13 / §9.20.14:
     // Property Type は偶数でなければならない
     if (pt % 2n !== 0n) {
       throw new InvalidFilterError(`property type must be even: ${pt}`);
@@ -244,7 +244,7 @@ export function decodeRangeFilter(
     throw new InvalidFilterError("range filter has no ranges");
   }
 
-  // draft-ietf-moq-transport-21 §9.20.13:
+  // draft-ietf-moq-transport-22 §9.20.12:
   // Publisher Priority は 8 bit のため、PRIORITY_FILTER の値は 255 以下でなければならない
   if (type === "priority") {
     for (const range of ranges) {

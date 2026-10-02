@@ -342,7 +342,7 @@ export class MalformedTrackError extends Error {
  * 不正な Range Filter および Location Filter (値域・Property Type 偶数・
  * 組み合わせ重複・構造不正・End Group の 2^64-1 超過) を検出したときに投げるエラー
  *
- * draft-ietf-moq-transport-21 §3.3.1 / §3.3.2 / §9.20.13-14:
+ * draft-ietf-moq-transport-22 §3.3.1 / §3.3.2 / §9.20.12-14:
  * 受信側ではフィルタ不正は REQUEST_ERROR (INVALID_FILTER) で応答するか、応答不能な
  * 経路 (PUBLISH_OK 受信等) では PROTOCOL_VIOLATION でセッションを閉じる。
  * 送信側 (encodeRangeFilter) ではローカル API 誤用 (SetID 範囲外・奇数 Property

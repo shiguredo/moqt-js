@@ -41,7 +41,7 @@ import {
 } from "./bidi";
 
 /**
- * draft-ietf-moq-transport-21 §9.20.17 / §9.20.1:
+ * draft-ietf-moq-transport-22 §9.20.16 / §9.20.1:
  * Range Filters は PUBLISH_OK に出現できない。許可外パラメータを含む
  * PUBLISH_OK を受信した場合、PROTOCOL_VIOLATION でセッションが閉じることを検証する。
  */
@@ -204,7 +204,7 @@ test("bidiReadPublishResponse: 破損 PUBLISH_OK で PROTOCOL_VIOLATION でセ�
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.17 / §9.20.1:
+ * draft-ietf-moq-transport-22 §9.20.16 / §9.20.1:
  * LOCATION_FILTER は PUBLISH_OK に出現できない。値の正否に関わらず
  * スコープ違反として PROTOCOL_VIOLATION でセッションを閉じることを検証する。
  * pendingPublish と requestStreams の該当エントリは残らない。
@@ -242,7 +242,7 @@ test("bidiReadPublishResponse: End Group 超過の LOCATION_FILTER を含む PUB
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.17 / §9.20.1:
+ * draft-ietf-moq-transport-22 §9.20.16 / §9.20.1:
  * 正常な値の LOCATION_FILTER であっても PUBLISH_OK ではスコープ違反になる。
  * Subscription Parameters の更新は REQUEST_UPDATE 経路で扱う。
  */
@@ -459,7 +459,7 @@ test("bidiHandlePublishRequestUpdate: 未広告 (0 = 無制限) では未応答�
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.1 (Parameter Scope):
+ * draft-ietf-moq-transport-22 §9.20.1 (Parameter Scope):
  * REQUEST_UPDATE に出現できないパラメータ (スコープ違反) を含む
  * REQUEST_UPDATE を受信した場合、§9.20.1 の MUST に従い REQUEST_ERROR で
  * 応答せず PROTOCOL_VIOLATION でセッションが閉じることを検証する。
@@ -482,7 +482,7 @@ test("bidiHandlePublishRequestUpdate: スコープ違反のパラメータで PR
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.1 / §9.20.8:
+ * draft-ietf-moq-transport-22 §9.20.1 / §9.20.7:
  * SUBSCRIBER_PRIORITY は REQUEST_UPDATE (for a subscription) に出現できるため、
  * 受信 PUBLISH ストリーム上の REQUEST_UPDATE で受理され REQUEST_OK が応答される
  * ことを検証する (accept-then-ignore。NOT_SUPPORTED で拒否しない)。
@@ -529,7 +529,7 @@ test("bidiHandlePublishRequestUpdate: FORWARD=1 を含む REQUEST_UPDATE で for
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.1 / §9.20.3 / §9.20.8:
+ * draft-ietf-moq-transport-22 §9.20.1 / §9.20.2 / §9.20.7:
  * REQUEST_UPDATE に出現可能な複数パラメータ (AUTHORIZATION_TOKEN +
  * SUBSCRIBER_PRIORITY) の混合はメッセージ単位で受理され、REQUEST_OK が
  * 応答されることを検証する。
@@ -564,7 +564,7 @@ test("bidiHandlePublishRequestUpdate: 許可パラメータの混合 REQUEST_UPD
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.3 / §8.9:
+ * draft-ietf-moq-transport-22 §9.20.2 / §8.9:
  * 受信 REQUEST_UPDATE の AUTHORIZATION TOKEN の REGISTER がトークンキャッシュへ
  * 登録され、REQUEST_OK が応答されることを検証する。
  */
@@ -776,7 +776,7 @@ test("bidiHandlePublishRequestUpdate: GOAWAY 受信後の REQUEST_UPDATE に REQ
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.2 / §9.20.1 / §9.5:
+ * draft-ietf-moq-transport-22 §9.2 / §9.20.1 / §9.5:
  * GOAWAY 受信後 + パラメータスコープ違反が同時に発生した REQUEST_UPDATE は、
  * GOING_AWAY 応答が優先され (PROTOCOL_VIOLATION で閉じずに)、セッションが
  * 閉じないことを検証する。

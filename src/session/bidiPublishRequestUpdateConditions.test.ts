@@ -118,7 +118,7 @@ test("bidiReadRequestStreamMessages: FILL 内側の LOCATION_FILTER 超過の RE
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.3.2 / §9.20.16:
+ * draft-ietf-moq-transport-22 §3.3.2 / §9.20.15:
  * role=publish の受信 REQUEST_UPDATE の FILL_PARAMETERS 内側 Range Filter が
  * 値違反の場合、外側と同様に REQUEST_ERROR (INVALID_FILTER) で応答されることを
  * 検証する。
@@ -160,7 +160,7 @@ test("bidiReadRequestStreamMessages: FILL 内側の Range Filter 値違反の RE
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.16:
+ * draft-ietf-moq-transport-22 §9.20.15:
  * role=publish の受信 REQUEST_UPDATE の FILL_PARAMETERS 内側に除去が含まれる
  * 場合、一回限りの fill に意味を持たないため REQUEST_ERROR (INVALID_FILTER)
  * で応答されることを検証する。
@@ -290,7 +290,7 @@ test("bidiReadRequestStreamMessages: 正常な LOCATION_FILTER を含む REQUEST
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.16:
+ * draft-ietf-moq-transport-22 §9.20.15:
  * role=publish の受信 REQUEST_UPDATE に一覧外のパラメータを含む
  * FILL_PARAMETERS が含まれる場合、PROTOCOL_VIOLATION でセッションを閉じることを
  * 検証する。REQUEST_OK は応答されない。
@@ -305,7 +305,7 @@ test("bidiReadRequestStreamMessages: 一覧外を含む FILL_PARAMETERS の REQU
     ctx.controlReader,
     "publish",
   );
-  // FORWARD (0x10) は Table 6 の一覧に無いため、内側に含めると違反になる
+  // FORWARD (0x10) は Table 7 の一覧に無いため、内側に含めると違反になる
   const inner = encodeParameters([
     { type: MessageParameterType.FORWARD, value: new Uint8Array([1]) },
   ]);
@@ -879,7 +879,7 @@ test("bidiReadRequestStreamMessages: FILL_PARAMETERS 内側 LOCATION_FILTER が 
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.16:
+ * draft-ietf-moq-transport-22 §9.20.15:
  * 「A parameter that is omitted from FILL_PARAMETERS takes the value it has for
  *  the subscription」ため、内側 LOCATION_FILTER 省略時は同一 REQUEST_UPDATE の
  * top-level LOCATION_FILTER (更新後の購読値) を使って fill 範囲を評価する。

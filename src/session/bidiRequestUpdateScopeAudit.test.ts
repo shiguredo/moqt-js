@@ -42,7 +42,7 @@ import { fullTrackNameKey } from "../fullTrackName";
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-21 §9.20.21 / §9.20.1:
+ * draft-ietf-moq-transport-22 §9.20.20 / §9.20.1:
  * TRACK_NAMESPACE_PREFIX は namespace 系 (SUBSCRIBE_NAMESPACE /
  * SUBSCRIBE_TRACKS) の REQUEST_UPDATE にのみ出現できる。受信 PUBLISH
  * ストリーム上の通常 REQUEST_UPDATE で受信した場合は NOT_SUPPORTED ではなく
@@ -65,7 +65,7 @@ test("bidiHandlePublishRequestUpdate: TRACK_NAMESPACE_PREFIX で PROTOCOL_VIOLAT
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.1 / §9.20.9:
+ * draft-ietf-moq-transport-22 §9.20.1 / §9.20.8:
  * GROUP_ORDER は REQUEST_UPDATE に出現できない (FILL_PARAMETERS 内側を除く)。
  * 受信 PUBLISH ストリーム上の REQUEST_UPDATE で受信した場合は
  * PROTOCOL_VIOLATION でセッションを閉じることを検証する。
@@ -85,7 +85,7 @@ test("bidiHandlePublishRequestUpdate: GROUP_ORDER で PROTOCOL_VIOLATION でセ�
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.1 / §9.20.20:
+ * draft-ietf-moq-transport-22 §9.20.1 / §9.20.19:
  * NEW_GROUP_REQUEST は REQUEST_UPDATE (for a subscription) に出現できる。
  * 受信 PUBLISH ストリーム上の REQUEST_UPDATE で受理され REQUEST_OK が
  * 応答されることを検証する。
@@ -204,7 +204,7 @@ test("bidiHandlePublishRequestUpdate: localMaxFilterRanges 以内の Range Filte
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20 (Control Message Parameters) / §9.20.1:
+ * draft-ietf-moq-transport-22 §9.20 (Control Message Parameters) / §9.20.1:
  * 送信 REQUEST_UPDATE の raw parameters に、その文脈で許可されない型
  * (GROUP_ORDER / EXPIRES) が混ざった場合は送信前に拒否することを検証する。
  */
@@ -231,7 +231,7 @@ test("bidiSendRequestUpdate: raw の GROUP_ORDER / EXPIRES は送信前に拒否
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.21 / §9.20.1:
+ * draft-ietf-moq-transport-22 §9.20.20 / §9.20.1:
  * TRACK_NAMESPACE_PREFIX は namespace 系 REQUEST_UPDATE 専用のため、
  * subscription 系 REQUEST_UPDATE の raw parameters では送信前に拒否する
  * ことを検証する。
@@ -255,7 +255,7 @@ test("bidiSendRequestUpdate: raw の TRACK_NAMESPACE_PREFIX は送信前に拒�
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.8:
+ * draft-ietf-moq-transport-22 §9.20.7:
  * SUBSCRIBER_PRIORITY は REQUEST_UPDATE に出現できるため、raw parameters でも
  * 送信できることを検証する。
  */
@@ -282,7 +282,7 @@ test("bidiSendRequestUpdate: raw の SUBSCRIBER_PRIORITY は送信できる", as
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.18 (LARGEST OBJECT Parameter) / §9.5.1:
+ * draft-ietf-moq-transport-22 §9.20.17 (LARGEST OBJECT Parameter) / §9.5.1:
  * 自 endpoint が Publisher として REQUEST_UPDATE を受理し REQUEST_OK を返す
  * 場合、Object を publish 済みなら LARGEST_OBJECT を必ず含めることを検証する。
  */
@@ -359,7 +359,7 @@ test("bidiReadRequestStreamMessages: 未 publish の REQUEST_OK に LARGEST_OBJE
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.21 / §9.20.1:
+ * draft-ietf-moq-transport-22 §9.20.20 / §9.20.1:
  * role=publish の受信 REQUEST_UPDATE に TRACK_NAMESPACE_PREFIX が含まれる場合、
  * namespace 系 REQUEST_UPDATE 専用のため PROTOCOL_VIOLATION でセッションを
  * 閉じることを検証する。

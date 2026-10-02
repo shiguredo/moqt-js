@@ -242,7 +242,7 @@ export const videoTrackNameLocked = computed(() =>
  * - 無ければ Token Value を UTF-8 として使う。空の場合は `undefined` を返し SETUP Option を送出しない。
  * - Token Alias / Token Type は 10 進文字列をパースする。パース失敗時は `undefined` を返す。
  *
- * draft-ietf-moq-transport-21 §9.20.3 / §9.1.4
+ * draft-ietf-moq-transport-22 §9.20.2 / §9.1.4
  */
 export function buildAuthorizationToken(): AuthorizationToken | undefined {
   const base64Value = authorizationTokenBase64.value.trim();

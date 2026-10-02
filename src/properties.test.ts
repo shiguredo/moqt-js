@@ -931,7 +931,7 @@ test("parseProperties: Object 内に PRIOR_OBJECT_ID_GAP が 2 回現れると M
   assert.throws(() => parseProperties(encoded), MalformedTrackError);
 });
 
-// draft-ietf-moq-transport-21 §9.20.20 / §10.6
+// draft-ietf-moq-transport-22 §9.20.19 / §10.6
 test("supportsDynamicGroups: DYNAMIC_GROUPS=1 が mutable 側にあれば true", () => {
   const properties: Property[] = [{ id: TrackPropertyId.DYNAMIC_GROUPS, value: 1n }];
   assert.equal(supportsDynamicGroups(properties), true);

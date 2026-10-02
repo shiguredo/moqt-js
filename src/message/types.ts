@@ -21,7 +21,7 @@ export const MessageType = {
   /**
    * PUBLISH_STATE_NOTIFY (Section 9.10 PUBLISH_STATE_NOTIFY)
    *
-   * draft-ietf-moq-transport-21:
+   * draft-ietf-moq-transport-22:
    * publisher が subscription の bidi ストリーム上で送る片方向の状態通知。
    * 応答なし。購読以外の文脈・subscriber 発での受信は PROTOCOL_VIOLATION。
    */
@@ -58,7 +58,7 @@ export const MessageType = {
   /**
    * SUBSCRIBE_NAMESPACE (Section 9.15 SUBSCRIBE_NAMESPACE)
    *
-   * draft-ietf-moq-transport-21:
+   * draft-ietf-moq-transport-22:
    * namespace discovery (NAMESPACE / NAMESPACE_DONE 受信) を担当する。
    * draft-ietf-moq-transport-21 Section 9.15
    */
@@ -90,7 +90,7 @@ export const SetupOptionType = {
   /**
    * AUTHORIZATION_TOKEN (Section 9.1.4 AUTHORIZATION TOKEN Setup Option)
    *
-   * draft-ietf-moq-transport-21:
+   * draft-ietf-moq-transport-22:
    * SETUP で送出する認証トークン。値は Section 8.9 の Token 構造。
    * SETUP では Alias Type DELETE / USE_ALIAS は禁止（Section 9.1.4）。
    */
@@ -101,7 +101,7 @@ export const SetupOptionType = {
   /**
    * MAX_REQUEST_UPDATES (Section 9.1.7)
    *
-   * draft-ietf-moq-transport-21:
+   * draft-ietf-moq-transport-22:
    * リクエストストリームごとの未応答 REQUEST_UPDATE の最大数。
    * 0 は無制限。欠落時のデフォルトも 0。
    */
@@ -109,7 +109,7 @@ export const SetupOptionType = {
   /**
    * MAX_FILTER_RANGES (Section 9.1.6)
    *
-   * draft-ietf-moq-transport-21:
+   * draft-ietf-moq-transport-22:
    * ピアが送信可能な Range Filter の最大数。デフォルト 0（送信禁止）。
    */
   MAX_FILTER_RANGES: 0x06,
@@ -120,7 +120,7 @@ export type SetupOptionType = (typeof SetupOptionType)[keyof typeof SetupOptionT
 /**
  * Message Parameter Types (Section 9.20 Message Parameters)
  *
- * draft-ietf-moq-transport-21:
+ * draft-ietf-moq-transport-22:
  * - Message Parameters は単一ホップにスコープされる
  * - 全ての Message Parameters は理解されなければならない（未知のものはエラー）
  * - MAX_CACHE_DURATION / DEFAULT_PUBLISHER_PRIORITY / DEFAULT_PUBLISHER_GROUP_ORDER /
@@ -128,7 +128,7 @@ export type SetupOptionType = (typeof SetupOptionType)[keyof typeof SetupOptionT
  * - OBJECT_DELIVERY_TIMEOUT / SUBGROUP_DELIVERY_TIMEOUT は Track Properties と
  *   Message Parameters の両方に出現する (§5.2: publisher は Track Property として、
  *   subscriber は Message Parameter として同じタイムアウトを伝える)
- * draft-ietf-moq-transport-21 Section 9.20 (Message Parameters)
+ * draft-ietf-moq-transport-22 Section 9.20 (Message Parameters)
  *
  * 注意: SUBSCRIBE / PUBLISH / REQUEST_UPDATE では OBJECT_DELIVERY_TIMEOUT と
  * SUBGROUP_DELIVERY_TIMEOUT が Message Parameter として出現する (Subscriber の希望値)。
@@ -137,48 +137,48 @@ export type SetupOptionType = (typeof SetupOptionType)[keyof typeof SetupOptionT
  */
 export const MessageParameterType = {
   /**
-   * OBJECT_DELIVERY_TIMEOUT (Section 9.20.5 OBJECT_DELIVERY_TIMEOUT Parameter)
+   * OBJECT_DELIVERY_TIMEOUT (Section 9.20.4 OBJECT_DELIVERY_TIMEOUT Parameter)
    *
-   * draft-ietf-moq-transport-21 §9.20.5:
+   * draft-ietf-moq-transport-22 §9.20.4:
    * SUBSCRIBE / PUBLISH / REQUEST_UPDATE に出現可能。
    * Subscriber の希望値として Message Parameter で伝え、publisher は
    * Track Property として同じタイムアウトを伝える (§5.2)。
    */
   OBJECT_DELIVERY_TIMEOUT: 0x02,
   /**
-   * AUTHORIZATION TOKEN (Section 9.20.3 AUTHORIZATION TOKEN Parameter)
+   * AUTHORIZATION TOKEN (Section 9.20.2 AUTHORIZATION TOKEN Parameter)
    */
   AUTHORIZATION_TOKEN: 0x03,
   /**
-   * RENDEZVOUS_TIMEOUT (Section 9.20.7 RENDEZVOUS TIMEOUT Parameter)
+   * RENDEZVOUS_TIMEOUT (Section 9.20.6 RENDEZVOUS TIMEOUT Parameter)
    *
-   * draft-ietf-moq-transport-21:
+   * draft-ietf-moq-transport-22:
    * SUBSCRIBE メッセージで使用。
    * リレーが Publisher を待つ時間（ミリ秒）。
    * 0 は即時応答を要求。不在の場合のデフォルト値は 0。
-   * draft-ietf-moq-transport-21 Section 9.20.7
+   * draft-ietf-moq-transport-22 Section 9.20.6
    */
   RENDEZVOUS_TIMEOUT: 0x04,
   /**
-   * SUBGROUP_DELIVERY_TIMEOUT (Section 9.20.4 SUBGROUP_DELIVERY_TIMEOUT Parameter)
+   * SUBGROUP_DELIVERY_TIMEOUT (Section 9.20.3 SUBGROUP_DELIVERY_TIMEOUT Parameter)
    *
-   * draft-ietf-moq-transport-21:
+   * draft-ietf-moq-transport-22:
    * SUBGROUP_DELIVERY_TIMEOUT パラメータは varint。
    * SUBSCRIBE / PUBLISH / REQUEST_UPDATE に出現可能。
    * 単位はミリ秒。0 はタイムアウトなしを意味する。
-   * draft-ietf-moq-transport-21 Section 9.20.4
+   * draft-ietf-moq-transport-22 Section 9.20.3
    */
   SUBGROUP_DELIVERY_TIMEOUT: 0x06,
   /**
-   * EXPIRES (Section 9.20.17 EXPIRES Parameter)
+   * EXPIRES (Section 9.20.16 EXPIRES Parameter)
    */
   EXPIRES: 0x08,
   /**
-   * LARGEST_OBJECT (Section 9.20.18 LARGEST OBJECT Parameter)
+   * LARGEST_OBJECT (Section 9.20.17 LARGEST OBJECT Parameter)
    */
   LARGEST_OBJECT: 0x09,
   /**
-   * FILL_TIMEOUT (Section 9.20.6 FILL TIMEOUT Parameter)
+   * FILL_TIMEOUT (Section 9.20.5 FILL TIMEOUT Parameter)
    *
    * FETCH メッセージで使用。
    * relay が欠損 object の fill 待機に費やす最大時間（ミリ秒）。
@@ -186,11 +186,11 @@ export const MessageParameterType = {
    */
   FILL_TIMEOUT: 0x0a,
   /**
-   * FORWARD (Section 9.20.19 FORWARD Parameter)
+   * FORWARD (Section 9.20.18 FORWARD Parameter)
    */
   FORWARD: 0x10,
   /**
-   * SUBSCRIBER_PRIORITY (Section 9.20.8 SUBSCRIBER PRIORITY Parameter)
+   * SUBSCRIBER_PRIORITY (Section 9.20.7 SUBSCRIBER PRIORITY Parameter)
    */
   SUBSCRIBER_PRIORITY: 0x20,
   /**
@@ -198,7 +198,7 @@ export const MessageParameterType = {
    */
   LOCATION_FILTER: 0x21,
   /**
-   * GROUP_ORDER (Section 9.20.9 GROUP ORDER Parameter)
+   * GROUP_ORDER (Section 9.20.8 GROUP ORDER Parameter)
    *
    * SUBSCRIBE では Subscriber の希望値として Message Parameter で使用。
    * Publisher の DEFAULT_PUBLISHER_GROUP_ORDER は Track Property として使用。
@@ -206,58 +206,58 @@ export const MessageParameterType = {
    */
   GROUP_ORDER: 0x22,
   /**
-   * FILL_PARAMETERS (Section 9.20.16 FILL PARAMETERS Parameter)
+   * FILL_PARAMETERS (Section 9.20.15 FILL PARAMETERS Parameter)
    *
    * SUBSCRIBE / REQUEST_UPDATE (for a subscription) で fill fetch ストリームを
    * 要求する。値は fill fetch ストリームに適用する Parameters 列を
    * length-prefixed で格納する。
-   * draft-ietf-moq-transport-21 Section 9.20.16 (FILL PARAMETERS Parameter)
+   * draft-ietf-moq-transport-22 Section 9.20.15 (FILL PARAMETERS Parameter)
    */
   FILL_PARAMETERS: 0x23,
   /**
-   * NEW_GROUP_REQUEST (Section 9.20.20 NEW GROUP REQUEST Parameter)
+   * NEW_GROUP_REQUEST (Section 9.20.19 NEW GROUP REQUEST Parameter)
    */
   NEW_GROUP_REQUEST: 0x32,
   /**
-   * TRACK_NAMESPACE_PREFIX (Section 9.20.21 TRACK_NAMESPACE_PREFIX Parameter)
+   * TRACK_NAMESPACE_PREFIX (Section 9.20.20 TRACK_NAMESPACE_PREFIX Parameter)
    *
-   * draft-ietf-moq-transport-21:
+   * draft-ietf-moq-transport-22:
    * REQUEST_UPDATE で SUBSCRIBE_NAMESPACE または SUBSCRIBE_TRACKS の
    * Track Namespace Prefix を更新するために使用する。
    * 値は §8.7 の Track Namespace エンコーディング (自己区切り) そのもので、
    * 外側 Length は付加しない。
-   * draft-ietf-moq-transport-21 Section 9.20.21
+   * draft-ietf-moq-transport-22 Section 9.20.20
    */
   TRACK_NAMESPACE_PREFIX: 0x34,
   /**
-   * SUBGROUP_FILTER (Section 9.20.11 SUBGROUP FILTER Parameter)
-   * draft-ietf-moq-transport-21: Range Filter の一種
+   * SUBGROUP_FILTER (Section 9.20.10 SUBGROUP FILTER Parameter)
+   * draft-ietf-moq-transport-22: Range Filter の一種
    */
   SUBGROUP_FILTER: 0x25,
   /**
-   * OBJECTID_FILTER (Section 9.20.12 OBJECTID FILTER Parameter)
-   * draft-ietf-moq-transport-21: Range Filter の一種
+   * OBJECTID_FILTER (Section 9.20.11 OBJECTID FILTER Parameter)
+   * draft-ietf-moq-transport-22: Range Filter の一種
    */
   OBJECTID_FILTER: 0x26,
   /**
-   * PRIORITY_FILTER (Section 9.20.13 PRIORITY FILTER Parameter)
-   * draft-ietf-moq-transport-21: Range Filter の一種
+   * PRIORITY_FILTER (Section 9.20.12 PRIORITY FILTER Parameter)
+   * draft-ietf-moq-transport-22: Range Filter の一種
    */
   PRIORITY_FILTER: 0x27,
   /**
-   * OBJECT_PROPERTY_FILTER (Section 9.20.14 OBJECT PROPERTY FILTER Parameter)
-   * draft-ietf-moq-transport-21: Range Filter の一種。Property Type 付き
+   * OBJECT_PROPERTY_FILTER (Section 9.20.13 OBJECT PROPERTY FILTER Parameter)
+   * draft-ietf-moq-transport-22: Range Filter の一種。Property Type 付き
    */
   OBJECT_PROPERTY_FILTER: 0x28,
   /**
-   * TRACK_PROPERTY_FILTER (Section 9.20.15 TRACK PROPERTY FILTER Parameter)
-   * draft-ietf-moq-transport-21: Range Filter の一種。Property Type 付き。SUBSCRIBE_TRACKS 専用
+   * TRACK_PROPERTY_FILTER (Section 9.20.14 TRACK PROPERTY FILTER Parameter)
+   * draft-ietf-moq-transport-22: Range Filter の一種。Property Type 付き。SUBSCRIBE_TRACKS 専用
    */
   TRACK_PROPERTY_FILTER: 0x29,
   /**
-   * INCLUDE_PROPERTIES (Section 9.20.22 INCLUDE_PROPERTIES Parameter)
+   * INCLUDE_PROPERTIES (Section 9.20.21 INCLUDE_PROPERTIES Parameter)
    *
-   * draft-ietf-moq-transport-21:
+   * draft-ietf-moq-transport-22:
    * 応答 / PUBLISH に Track Properties を載せるかを要求する uint8。
    * 0 (送らない) または 1 (送る)。デフォルト 1。
    * SUBSCRIBE / TRACK_STATUS / FETCH / SUBSCRIBE_TRACKS に出現可能。
@@ -268,7 +268,7 @@ export const MessageParameterType = {
 export type MessageParameterType = (typeof MessageParameterType)[keyof typeof MessageParameterType];
 
 /**
- * Group Order (Section 9.20.9 GROUP ORDER Parameter)
+ * Group Order (Section 9.20.8 GROUP ORDER Parameter)
  */
 export const GroupOrder = {
   ASCENDING: 0x01,
@@ -280,7 +280,7 @@ export type GroupOrder = (typeof GroupOrder)[keyof typeof GroupOrder];
 /**
  * Object Status (Section 11.1.2 Object Status)
  *
- * draft-ietf-moq-transport-21:
+ * draft-ietf-moq-transport-22:
  * - 0x0: Normal object
  * - 0x3: End of Group (EOG)
  *   Indicates that no objects with the specified Group ID and the Object ID
@@ -302,7 +302,7 @@ export type ObjectStatus = (typeof ObjectStatus)[keyof typeof ObjectStatus];
 /**
  * PUBLISH_DONE Status Codes (Section 12.4 Publish Done Codes)
  *
- * draft-ietf-moq-transport-21:
+ * draft-ietf-moq-transport-22:
  * - 0x0: INTERNAL_ERROR
  * - 0x1: UNAUTHORIZED
  * - 0x2: TRACK_ENDED

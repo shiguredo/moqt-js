@@ -362,7 +362,7 @@ function namespaceShouldSkipAfterMigration(requestMigrated: boolean, messageType
 /**
  * 初期 SUBSCRIBE_NAMESPACE_OK / SUBSCRIBE_TRACKS_OK を検証する
  *
- * draft-ietf-moq-transport-21 §9.20.1 (Parameter Scope):
+ * draft-ietf-moq-transport-22 §9.20.1 (Parameter Scope):
  * 許可外パラメータは PROTOCOL_VIOLATION でセッションを閉じる。
  * §9.3 (REQUEST_OK): Track Properties が空であることが求められるのは
  * PUBLISH_OK / REQUEST_UPDATE_OK / SUBSCRIBE_NAMESPACE_OK / PUBLISH_NAMESPACE_OK
@@ -601,7 +601,7 @@ function namespaceHandleRequestOkMessage(
     return "continue";
   }
   // 初期 OK のパラメータスコープ / Track Properties 検証
-  // (draft-ietf-moq-transport-21 §9.20.1 / §9.3)。SUBSCRIBE_TRACKS_OK は §9.3 の
+  // (draft-ietf-moq-transport-22 §9.20.1 / §9.3)。SUBSCRIBE_TRACKS_OK は §9.3 の
   // 空必須一覧に含まれないため Track Properties を検証しない。
   const contextName = streamKind === "namespace" ? "SUBSCRIBE_NAMESPACE_OK" : "SUBSCRIBE_TRACKS_OK";
   if (
@@ -701,7 +701,7 @@ function handleNamespaceRequestUpdateOk(
     "REQUEST_UPDATE_OK",
   );
   if (scopeError !== null) {
-    // draft-ietf-moq-transport-21 §9.20.1 (Parameter Scope):
+    // draft-ietf-moq-transport-22 §9.20.1 (Parameter Scope):
     // 許可外パラメータは PROTOCOL_VIOLATION で接続を閉じる MUST。
     // 先に closeWithError すると close 側の汎用 reject で違反エラーが
     // 上書きされ update() が汎用エラーで失敗するため、reject を先に行い、
@@ -1454,7 +1454,7 @@ function createPublicationStreamHandlers(
         );
         return "return";
       }
-      // draft-ietf-moq-transport-21 §9.20.1 (Parameter Scope):
+      // draft-ietf-moq-transport-22 §9.20.1 (Parameter Scope):
       // 初期 PUBLISH_NAMESPACE_OK に出現できるパラメータ以外は
       // PROTOCOL_VIOLATION でセッションを閉じる。確立前の検証失敗は
       // 呼び出し元の Promise を reject してから閉じる

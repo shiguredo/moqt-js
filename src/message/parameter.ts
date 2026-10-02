@@ -1,6 +1,6 @@
 /**
  * MOQT Parameter encoding/decoding
- * draft-ietf-moq-transport-21 Section 9.20 (Message Parameter)
+ * draft-ietf-moq-transport-22 Section 9.20 (Message Parameter)
  *
  * https://datatracker.ietf.org/doc/draft-ietf-moq-transport/
  *
@@ -9,7 +9,7 @@
  *   Value (..)
  * }
  *
- * draft-ietf-moq-transport-21 §9.20 (Control Message Parameters):
+ * draft-ietf-moq-transport-22 §9.20 (Control Message Parameters):
  * Type Delta は前のパラメータの Type との差分で、パラメータは Type の昇順に
  * 並べる。Value のエンコーディングは各パラメータの定義が個別に定める
  * ("The encoding is specified by each parameter definition.")。MESSAGE_PARAMETER_VALUE_ENCODING

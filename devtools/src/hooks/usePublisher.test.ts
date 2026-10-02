@@ -345,7 +345,7 @@ test("buildObjectSendPlan: payload は chunk の data をそのまま使う", ()
 // 間隔を無視して全フレームをキーフレームにすると帯域を浪費し、
 // 要求が一度も出ないと購読開始時に復号を始められない。
 // 間隔そのものの判定 (境界値と無効値) は utils/keyframeInterval.test.ts が固定する。
-// NEW_GROUP_REQUEST (draft-ietf-moq-transport-21 §9.20.20) を受けたら、次に符号化するフレームを
+// NEW_GROUP_REQUEST (draft-ietf-moq-transport-22 §9.20.19) を受けたら、次に符号化するフレームを
 // キーフレームにして新しい Group を始め、そこから keyframeInterval を数え直す。
 // 次のフレームまでに複数の要求が届いても、キーフレームは 1 枚にまとまる
 test("decideKeyFrame: 要求を受けると次のフレームをキーフレームにし、そこから間隔を数え直す", () => {

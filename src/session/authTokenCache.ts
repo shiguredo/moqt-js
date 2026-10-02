@@ -3,7 +3,7 @@
  *
  * draft-ietf-moq-transport-21 §8.9 (Authorization Token Compression) /
  * §9.1.3 (MAX_AUTH_TOKEN_CACHE_SIZE) / §9.1.4 (AUTHORIZATION TOKEN) /
- * §9.20.3 (AUTHORIZATION TOKEN Parameter)
+ * §9.20.2 (AUTHORIZATION TOKEN Parameter)
  *
  * ピアが REGISTER した Token Alias を保持し、USE_ALIAS を解決し、
  * DELETE で退役させる。Alias 空間は送信元ごとに独立するため、

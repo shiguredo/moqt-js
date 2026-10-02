@@ -84,7 +84,7 @@ export {
   getSetupPath,
 } from "./setup";
 
-// Authorization Token (Section 9.20.3)
+// Authorization Token (Section 9.20.2)
 export {
   type AuthorizationToken,
   type AuthorizationTokenDelete,

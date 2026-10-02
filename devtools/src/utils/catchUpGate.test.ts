@@ -3,7 +3,7 @@ import { CatchUpGate } from "./catchUpGate";
 
 // cache から追いつく途中かどうかの判定 (CatchUpGate) の境界値
 //
-// 境界は SUBSCRIBE_OK の LARGEST_OBJECT (draft-ietf-moq-transport-21 Section 9.20.18) である。
+// 境界は SUBSCRIBE_OK の LARGEST_OBJECT (draft-ietf-moq-transport-22 Section 9.20.17) である。
 // 境界と同じ位置の Object も cache から配られた分であり、再生しない。辞書順の一般則
 // (Group ID と Object ID の比較) は catchUpGate.prop.ts が確かめる。
 

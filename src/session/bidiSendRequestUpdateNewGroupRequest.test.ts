@@ -1,7 +1,7 @@
 /**
  * session/bidi.ts の単体テスト: REQUEST_UPDATE の NEW_GROUP_REQUEST と DYNAMIC_GROUPS
  *
- * draft-ietf-moq-transport-21 §9.20.20 (NEW GROUP REQUEST Parameter):
+ * draft-ietf-moq-transport-22 §9.20.19 (NEW GROUP REQUEST Parameter):
  * "A subscriber MUST NOT send this parameter in REQUEST_UPDATE if the Track did
  *  not include the DYNAMIC_GROUPS Property with value 1.  A subscriber MAY include
  *  this parameter in SUBSCRIBE without foreknowledge of support."
@@ -16,7 +16,7 @@ import { MOQTPropertyId, TrackPropertyId, encodeProperties } from "../properties
 import { bidiSendRequestUpdate } from "./bidi";
 import { createPublishReadTestContext } from "../testSupport/bidi";
 
-/** 検証対象のエラーメッセージ (§9.20.20 の MUST NOT 違反) */
+/** 検証対象のエラーメッセージ (§9.20.19 の MUST NOT 違反) */
 const ERROR_MESSAGE =
   "cannot send NEW_GROUP_REQUEST in REQUEST_UPDATE: track did not include DYNAMIC_GROUPS property with value 1";
 

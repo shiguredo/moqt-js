@@ -358,7 +358,7 @@ export function buildVideoChunkPlan(
 /**
  * REQUEST_UPDATE に載せる NEW_GROUP_REQUEST の値を解決する
  *
- * draft-ietf-moq-transport-21 §9.20.20: 送信時点で知る最大 Group ID + 1 を送る。
+ * draft-ietf-moq-transport-22 §9.20.19: 送信時点で知る最大 Group ID + 1 を送る。
  * 最大 Location が未知 (SUBSCRIBE_OK 未受信) のときは 0 を送り、Group 情報なしで
  * 新規 Group の開始を要求する。SUBSCRIBE 直後の snapshot ではなく
  * `Subscriber.largestLocation` の現在値を渡す。
@@ -1050,7 +1050,7 @@ export function useSubscriber(
         },
       },
       {
-        // draft-ietf-moq-transport-21 §9.20.7 (RENDEZVOUS TIMEOUT):
+        // draft-ietf-moq-transport-22 §9.20.6 (RENDEZVOUS TIMEOUT):
         // Catalog が広告する event timeline トラックは、Catalog の到着直後にはまだ
         // publish されていないことがある。relay に購読を保持させる
         rendezvousTimeout: BigInt(settings.catalogSubscriptionTimeout.value),
@@ -1287,7 +1287,7 @@ export function useSubscriber(
         },
       },
       {
-        // draft-ietf-moq-transport-21 §9.20.7 (RENDEZVOUS TIMEOUT):
+        // draft-ietf-moq-transport-22 §9.20.6 (RENDEZVOUS TIMEOUT):
         // 映像と同じく、publisher が現れるまで relay に購読を保持させる
         rendezvousTimeout: BigInt(settings.catalogSubscriptionTimeout.value),
         // draft-ietf-moq-msf-01 §11.4.3: authInfo を持つ track には SETUP に載せたトークンを
@@ -2214,7 +2214,7 @@ export function useSubscriber(
                 // Location Filter で SUBSCRIBE する。live の Catalog 更新は
                 // この SUBSCRIBE で受信し、過去の Catalog は FETCH で取得する
                 filter: { nextObject: true },
-                // draft-ietf-moq-transport-21 §9.20.7 (RENDEZVOUS TIMEOUT):
+                // draft-ietf-moq-transport-22 §9.20.6 (RENDEZVOUS TIMEOUT):
                 // publisher がまだ居ない場合は relay がこの時間だけ購読を保持し、
                 // publisher が現れたら SUBSCRIBE_OK を返す。配信開始前に視聴を
                 // 始められるようにするため、Catalog Timeout と同じ値を使う
@@ -2378,7 +2378,7 @@ export function useSubscriber(
         rendezvousTimeout?: bigint;
         authorizationToken?: AuthorizationToken;
       } = {
-        // draft-ietf-moq-transport-21 §9.20.7 (RENDEZVOUS TIMEOUT):
+        // draft-ietf-moq-transport-22 §9.20.6 (RENDEZVOUS TIMEOUT):
         // Catalog が広告する映像トラックは Catalog の到着直後にはまだ publish
         // されていないことがある。relay に購読を保持させる
         rendezvousTimeout: BigInt(settings.catalogSubscriptionTimeout.value),
@@ -2391,7 +2391,7 @@ export function useSubscriber(
       };
 
       // NEW_GROUP_REQUEST: 0 = グループ情報なし、新規開始を要求
-      // draft-ietf-moq-transport-21 §9.20.20: SUBSCRIBE では MAY (foreknowledge 不要、
+      // draft-ietf-moq-transport-22 §9.20.19: SUBSCRIBE では MAY (foreknowledge 不要、
       // サポート外なら publisher が無視する) ため、DYNAMIC_GROUPS 確認は不要。
       // REQUEST_UPDATE 経路の requestKeyframe では DYNAMIC_GROUPS=1 を確認する。
       if (newGroupRequestEnabled) {
@@ -2607,7 +2607,7 @@ export function useSubscriber(
       return;
     }
 
-    // draft-ietf-moq-transport-21 §9.20.20:
+    // draft-ietf-moq-transport-22 §9.20.19:
     // "A subscriber MUST NOT send this parameter in
     //  REQUEST_UPDATE if the Track did not include the DYNAMIC_GROUPS
     //  Property with value 1."
@@ -2622,7 +2622,7 @@ export function useSubscriber(
 
     try {
       // NEW_GROUP_REQUEST パラメータを含む REQUEST_UPDATE を送信
-      // draft-ietf-moq-transport-21 §9.20.20
+      // draft-ietf-moq-transport-22 §9.20.19
       // NEW_GROUP_REQUEST = 0x32。値は送信時点の最新 Group ID + 1
       // (情報なし時は 0) とし、SUBSCRIBE 直後の snapshot は使わない。
       const largestLocation = subscriberInstance.largestLocation;

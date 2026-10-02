@@ -1,16 +1,16 @@
 /**
  * MOQT Parameter モジュール群の共通定義
- * draft-ietf-moq-transport-21 Section 9.20 (Message Parameter)
+ * draft-ietf-moq-transport-22 Section 9.20 (Message Parameter)
  *
  * Key-Value-Pair (Section 8.3) / Message Parameter (Section 9.20) /
- * Location Filter (§9.20.10) / Range Filter (§3.3.2, §9.20.11-9.20.15) /
+ * Location Filter (§9.20.9) / Range Filter (§3.3.2, §9.20.10-§9.20.14) /
  * Track Namespace (§8.7) の各モジュールが共有する型と上限値を置く。
  */
 
 /**
  * MOQT Parameter (Message Parameter)
  *
- * draft-ietf-moq-transport-21 §9.20:
+ * draft-ietf-moq-transport-22 §9.20:
  * Value のエンコーディングはパラメータ型ごとの定義で決まる
  * (MESSAGE_PARAMETER_VALUE_ENCODING を参照)。偶数型 / 奇数型で一律には決まらない。
  * 例えば 0x09 (location) / 0x21 (location-filter) / 0x34 (track-namespace) は

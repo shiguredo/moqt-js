@@ -70,7 +70,7 @@ export interface RequestUpdateOptions {
 
   /**
    * 新規 Group 開始の要求値
-   * draft-ietf-moq-transport-21 Section 9.20.20 (NEW_GROUP_REQUEST Parameter)
+   * draft-ietf-moq-transport-22 Section 9.20.19 (NEW_GROUP_REQUEST Parameter)
    *
    * subscriber が知る最大 Group ID + 1 (情報なし時は 0) を送る。
    * NEW_GROUP_REQUEST (0x32) として送信する。
@@ -86,7 +86,7 @@ export interface Subscriber {
   /**
    * SUBSCRIBE_OK / PUBLISH / REQUEST_UPDATE_OK / PUBLISH_STATE_NOTIFY で
    * 受信した LARGEST_OBJECT パラメータ
-   * draft-ietf-moq-transport-21 Section 9.20.18 (LARGEST OBJECT Parameter)
+   * draft-ietf-moq-transport-22 Section 9.20.17 (LARGEST OBJECT Parameter)
    *
    * Publisher/Relay が知っている最大の Location を示す。
    * 相対指定 (Location Filter Type 0x01) の Location Filter と Next Object (0x05) の
@@ -147,7 +147,7 @@ export class SubscriberImpl implements Subscriber {
   // forwardState。SUBSCRIBE 送信時の宣言値・受信 PUBLISH / ケース 1 の
   // REQUEST_UPDATE / 自 update() の REQUEST_OK で更新される。
   private subscriberForwardState = true;
-  // draft-ietf-moq-transport-21 §9.20.9 (GROUP ORDER Parameter):
+  // draft-ietf-moq-transport-22 §9.20.8 (GROUP ORDER Parameter):
   // SUBSCRIBE 送信時の宣言値。fill 要求時の Group Order 解決
   // (FILL_PARAMETERS 内の指定が無ければ subscription の値) に使う。
   private subscriberGroupOrder: "Ascending" | "Descending" | undefined;
@@ -233,7 +233,7 @@ export class SubscriberImpl implements Subscriber {
   /**
    * SUBSCRIBE 送信時の Group Order を設定する (セッション内部コールバック)
    *
-   * draft-ietf-moq-transport-21 §9.20.9 (GROUP ORDER Parameter):
+   * draft-ietf-moq-transport-22 §9.20.8 (GROUP ORDER Parameter):
    * fill 要求時の Group Order 解決に使う。
    */
   setGroupOrder(groupOrder: "Ascending" | "Descending" | undefined): void {
@@ -258,7 +258,7 @@ export class SubscriberImpl implements Subscriber {
   /**
    * SUBSCRIBE_OK / PUBLISH / REQUEST_UPDATE_OK / PUBLISH_STATE_NOTIFY から
    * LARGEST_OBJECT パラメータを設定
-   * draft-ietf-moq-transport-21 Section 9.20.18 (LARGEST OBJECT Parameter)
+   * draft-ietf-moq-transport-22 Section 9.20.17 (LARGEST OBJECT Parameter)
    *
    * LARGEST_OBJECT の更新だけでは解決済み Location Filter を再計算しない。
    * 初回購読の相対フィルタ開始位置は購読確立時に固定する (§3.3.1)。

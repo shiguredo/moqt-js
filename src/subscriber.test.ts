@@ -340,7 +340,7 @@ test("setTrackProperties で Track Properties が設定される", () => {
   assert.equal(subscriber.trackProperties[1].id, 0x04n);
 });
 
-// draft-ietf-moq-transport-21 Section 9.20.18 (LARGEST OBJECT Parameter):
+// draft-ietf-moq-transport-22 Section 9.20.17 (LARGEST OBJECT Parameter):
 // setLargestLocation で largestLocation が更新される
 test("setLargestLocation で largestLocation が更新される", () => {
   const subscriber = new SubscriberImpl(["namespace"], "track", 0n, 0n, () => {});
@@ -776,7 +776,7 @@ test("Location Filter 再適用: SUBSCRIBE_OK 後の LARGEST_OBJECT 更新で Ne
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.9:
+ * draft-ietf-moq-transport-22 §9.20.8:
  * SUBSCRIBE 送信時の Group Order の保持と取得を検証する
  * (fill 要求時の Group Order 解決に使う)。
  */

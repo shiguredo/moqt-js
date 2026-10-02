@@ -262,7 +262,7 @@ export interface Publisher {
    * subscriber 発の REQUEST_UPDATE への応答ではなく、publisher 側の理由で
    * 購読状態が変化したことを片方向で通知する。購読者は REQUEST_OK /
    * REQUEST_ERROR を返さないため、返値は送信の完了のみを表す。
-   * 通知に載せるパラメータは許可された LARGEST_OBJECT (既知時は §9.20.18 の
+   * 通知に載せるパラメータは許可された LARGEST_OBJECT (既知時は §9.20.17 の
    * MUST により必須) / FORWARD / LOCATION_FILTER のみであり、現在値から
    * 変化していないパラメータは載せない。載せるパラメータが無い場合は
    * 送信せず resolve する (重複送信の抑止)。
@@ -341,7 +341,7 @@ export class PublisherImpl implements Publisher {
   // 公開 API の groupId は number (安全整数) のため number で保持する。
   private endOfGroupSentGroupId: number | null = null;
 
-  // draft-ietf-moq-transport-21 §9.20.18 (LARGEST OBJECT Parameter):
+  // draft-ietf-moq-transport-22 §9.20.17 (LARGEST OBJECT Parameter):
   // この Publisher が送信した最大 Location。
   // "If Objects have been published on this Track the Publisher MUST include
   //  this parameter." を満たすため、REQUEST_UPDATE 受理時の REQUEST_OK に
@@ -460,7 +460,7 @@ export class PublisherImpl implements Publisher {
   /**
    * この Publisher が送信した最大 Location を返す
    *
-   * draft-ietf-moq-transport-21 §9.20.18 (LARGEST OBJECT Parameter):
+   * draft-ietf-moq-transport-22 §9.20.17 (LARGEST OBJECT Parameter):
    * "If Objects have been published on this Track the Publisher MUST include
    *  this parameter." 未送信時は null を返し、呼び出し側は LARGEST_OBJECT を
    * 含めない ("If omitted from a message, the sending endpoint has not
@@ -499,7 +499,7 @@ export class PublisherImpl implements Publisher {
   /**
    * Internal: 受信した NEW_GROUP_REQUEST をアプリへ知らせる (セッションからのみ呼ぶ)
    *
-   * draft-ietf-moq-transport-21 §9.20.20 (NEW GROUP REQUEST Parameter):
+   * draft-ietf-moq-transport-22 §9.20.19 (NEW GROUP REQUEST Parameter):
    * "When an Original Publisher that supports dynamic Groups receives a NEW_GROUP_REQUEST
    *  with a value of 0 or a value larger than the current Group, it SHOULD end the current
    *  Group and begin a new Group as soon as practical."

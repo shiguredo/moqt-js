@@ -485,7 +485,7 @@ export async function incomingPublishRunStreamSubLoop(
 /**
  * 受信 PUBLISH の AUTHORIZATION TOKEN パラメータを処理する
  *
- * draft-ietf-moq-transport-21 §9.20.3 / §8.9:
+ * draft-ietf-moq-transport-22 §9.20.2 / §8.9:
  * §8.9 の MUST により REGISTER はメッセージが他の理由 (UNINTERESTED 等) で
  * 失敗しても登録を維持するため、購読マッチング判定より前に処理する。
  * デコード不能 (KEY_VALUE_FORMATTING_ERROR)・登録済み Alias の再 REGISTER
@@ -638,7 +638,7 @@ export async function incomingPublishHandleBidirectionalStream(
     return;
   }
 
-  // draft-ietf-moq-transport-21 §9.20.3 / §8.9:
+  // draft-ietf-moq-transport-22 §9.20.2 / §8.9:
   // PUBLISH の AUTHORIZATION TOKEN パラメータを処理する。§8.9 の MUST は
   // 「セッションエラーにならない限り REGISTER した Alias をキャッシュへ登録する」
   // であるため、セッションエラーにならない拒否 (予約 namespace による
@@ -668,7 +668,7 @@ export async function incomingPublishHandleBidirectionalStream(
     return;
   }
 
-  // draft-ietf-moq-transport-21 §9.20.1 (Parameter Scope):
+  // draft-ietf-moq-transport-22 §9.20.1 (Parameter Scope):
   // PUBLISH に許可されていないパラメータは PROTOCOL_VIOLATION
   const scopeError = validateParameterScope(
     decodedPublish.parameters,

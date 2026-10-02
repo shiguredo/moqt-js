@@ -1,7 +1,7 @@
 /**
  * MOQT Authorization Token
- * draft-ietf-moq-transport-21 Section 9.20.3 (AUTHORIZATION TOKEN Parameter)
- * https://datatracker.ietf.org/doc/html/draft-ietf-moq-transport-21#section-9.20.3
+ * draft-ietf-moq-transport-22 Section 9.20.2 (AUTHORIZATION TOKEN Parameter)
+ * https://datatracker.ietf.org/doc/html/draft-ietf-moq-transport-22#section-9.20.2
  *
  * Token {
  *   Alias Type (vi64),
@@ -16,7 +16,7 @@ import { decodeVarint, encodeVarint } from "../varint";
 
 /**
  * Authorization Token Alias Type
- * draft-ietf-moq-transport-21 Section 9.20.3 (Figure 3 / Section 16.5)
+ * draft-ietf-moq-transport-22 Section 9.20.2 (Figure 4 / Section 16.5)
  *
  * - DELETE: There is an Alias but no Type or Value.
  * - REGISTER: There is an Alias, a Type and a Value.
@@ -74,7 +74,7 @@ export interface AuthorizationTokenUseValue {
 
 /**
  * Authorization Token の discriminated union
- * draft-ietf-moq-transport-21 Section 9.20.3
+ * draft-ietf-moq-transport-22 Section 9.20.2
  */
 export type AuthorizationToken =
   | AuthorizationTokenDelete
@@ -84,7 +84,7 @@ export type AuthorizationToken =
 
 /**
  * Authorization Token をエンコードする
- * draft-ietf-moq-transport-21 Section 9.20.3
+ * draft-ietf-moq-transport-22 Section 9.20.2
  */
 export function encodeAuthorizationToken(token: AuthorizationToken): Uint8Array {
   const parts: Uint8Array[] = [];
@@ -127,7 +127,7 @@ export function encodeAuthorizationToken(token: AuthorizationToken): Uint8Array 
 
 /**
  * Authorization Token をデコードする
- * draft-ietf-moq-transport-21 Section 9.20.3
+ * draft-ietf-moq-transport-22 Section 9.20.2
  *
  * Token 構造がデコードできない場合は
  * KEY_VALUE_FORMATTING_ERROR の SessionError を throw する。

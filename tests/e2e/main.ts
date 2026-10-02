@@ -144,7 +144,7 @@ export interface StartFetchOptions {
   filter?: FetchFilterOptions;
   /**
    * FILL TIMEOUT (ミリ秒)
-   * draft-ietf-moq-transport-21 Section 9.20.6 (FILL TIMEOUT Parameter)
+   * draft-ietf-moq-transport-21 Section 9.20.5 (FILL TIMEOUT Parameter)
    *
    * relay が欠損 Object の fill を待つ最大時間。0 は即座に利用可能な Object だけを要求する。
    * 省略するとパラメータを送らず、fill を待つ時間は relay の既定に委ねられる。

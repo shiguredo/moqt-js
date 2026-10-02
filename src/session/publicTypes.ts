@@ -20,7 +20,7 @@ import type { PendingSubgroupBufferOptions } from "../pendingSubgroupBuffer";
  * SUBSCRIBE / subscription の REQUEST_UPDATE に FILL_PARAMETERS (0x23) として
  * 載せ、live 手前の範囲を fill fetch ストリームで取得する。内側に載せられる
  * のは FILL_TIMEOUT / SUBSCRIBER_PRIORITY / LOCATION_FILTER / GROUP_ORDER /
- * Range Filters (0x25-0x28) のみ (§9.20.16 Table 6)。
+ * Range Filters (0x25-0x28) のみ (§9.20.15 Table 7)。
  */
 export interface FillRequestOptions {
   /**
@@ -35,17 +35,17 @@ export interface FillRequestOptions {
   filter?: LocationFilter;
   /**
    * Fill Timeout（ミリ秒）
-   * draft-ietf-moq-transport-21 Section 9.20.6 (FILL TIMEOUT Parameter)
+   * draft-ietf-moq-transport-22 Section 9.20.5 (FILL TIMEOUT Parameter)
    */
   fillTimeout?: bigint;
   /**
    * Subscriber Priority（0-255）
-   * draft-ietf-moq-transport-21 Section 9.20.8 (SUBSCRIBER PRIORITY Parameter)
+   * draft-ietf-moq-transport-22 Section 9.20.7 (SUBSCRIBER PRIORITY Parameter)
    */
   subscriberPriority?: number;
   /**
    * Group Order
-   * draft-ietf-moq-transport-21 Section 9.20.9 (GROUP ORDER Parameter。
+   * draft-ietf-moq-transport-22 Section 9.20.8 (GROUP ORDER Parameter。
    * v22 では §9.20.8)
    */
   groupOrder?: "Ascending" | "Descending";
@@ -263,7 +263,7 @@ export interface PublishCallbacks {
   goaway?: (newSessionUri: string) => void;
   /**
    * 新しい Group の要求 (NEW_GROUP_REQUEST) を受けた時のコールバック
-   * draft-ietf-moq-transport-21 Section 9.20.20 (NEW GROUP REQUEST Parameter)
+   * draft-ietf-moq-transport-22 Section 9.20.19 (NEW GROUP REQUEST Parameter)
    *
    * 購読者が SUBSCRIBE / REQUEST_UPDATE に載せた NEW_GROUP_REQUEST を、relay は
    * REQUEST_UPDATE で publisher へ伝える。`PublishOptions.dynamicGroups` を true にした
@@ -294,7 +294,7 @@ export interface PublishOptions {
    * Delivery Timeout（ミリ秒）
    * draft-ietf-moq-transport-21 Section 10.2 (OBJECT_DELIVERY_TIMEOUT)
    *
-   * PUBLISH の Track Properties として送信される OBJECT_DELIVERY_TIMEOUT（Message Parameter の定義は Section 9.20.5）。
+   * PUBLISH の Track Properties として送信される OBJECT_DELIVERY_TIMEOUT（Message Parameter の定義は Section 9.20.4）。
    *
    * オブジェクトを受信してから配信を試みる最大時間。
    * moqt-js はこの値の強制は行わない。比較と強制は Publisher 値と Subscriber 値の両方を持つ
@@ -307,7 +307,7 @@ export interface PublishOptions {
    * Subgroup Delivery Timeout（ミリ秒）
    * draft-ietf-moq-transport-21 Section 10.1 (SUBGROUP_DELIVERY_TIMEOUT)
    *
-   * PUBLISH の Track Properties として送信される SUBGROUP_DELIVERY_TIMEOUT（Message Parameter の定義は Section 9.20.4）。
+   * PUBLISH の Track Properties として送信される SUBGROUP_DELIVERY_TIMEOUT（Message Parameter の定義は Section 9.20.3）。
    *
    * Subgroup 内のオブジェクトを配信する最大時間。0 はタイムアウトなしを意味する。
    * moqt-js はこの値の強制は行わない。比較と強制は Publisher 値と Subscriber 値の両方を持つ
@@ -346,7 +346,7 @@ export interface PublishOptions {
 
   /**
    * Expires（ミリ秒）
-   * draft-ietf-moq-transport-21 Section 9.20.17 (EXPIRES Parameter)
+   * draft-ietf-moq-transport-22 Section 9.20.16 (EXPIRES Parameter)
    *
    * パブリッシュが自動終了するまでの時間（ミリ秒）。
    * 0 または未指定の場合は期限なし。
@@ -392,7 +392,7 @@ export interface PublishOptions {
 
   /**
    * PUBLISH に付与する認可トークン
-   * draft-ietf-moq-transport-21 Section 9.20.3 (AUTHORIZATION TOKEN Parameter)
+   * draft-ietf-moq-transport-22 Section 9.20.2 (AUTHORIZATION TOKEN Parameter)
    *
    * "It MAY appear in a PUBLISH, SUBSCRIBE, REQUEST_UPDATE, SUBSCRIBE_NAMESPACE,
    *  SUBSCRIBE_TRACKS, PUBLISH_NAMESPACE, TRACK_STATUS or FETCH message."
@@ -509,7 +509,7 @@ export interface SubscribeOptions {
 
   /**
    * Delivery Timeout（ミリ秒）
-   * draft-ietf-moq-transport-21 Section 9.20.5 (OBJECT_DELIVERY_TIMEOUT Parameter)
+   * draft-ietf-moq-transport-22 Section 9.20.4 (OBJECT_DELIVERY_TIMEOUT Parameter)
    *
    * オブジェクトを受信してから配信を試みる最大時間。
    * moqt-js はこの値を SUBSCRIBE の Message Parameter として送信するが、この値の強制は行わない。
@@ -520,7 +520,7 @@ export interface SubscribeOptions {
 
   /**
    * Subgroup Delivery Timeout（ミリ秒）
-   * draft-ietf-moq-transport-21 Section 9.20.4 (SUBGROUP_DELIVERY_TIMEOUT Parameter)
+   * draft-ietf-moq-transport-22 Section 9.20.3 (SUBGROUP_DELIVERY_TIMEOUT Parameter)
    *
    * Subgroup 内のオブジェクトを配信する最大時間。0 はタイムアウトなしを意味する。
    * moqt-js はこの値を SUBSCRIBE の Message Parameter として送信するが、この値の強制は行わない。
@@ -531,7 +531,7 @@ export interface SubscribeOptions {
 
   /**
    * Subscriber Priority（0-255）
-   * draft-ietf-moq-transport-21 Section 9.20.8 (SUBSCRIBER PRIORITY Parameter)
+   * draft-ietf-moq-transport-22 Section 9.20.7 (SUBSCRIBER PRIORITY Parameter)
    *
    * サブスクリプションの優先度。小さい値ほど高優先度。
    * 指定しない場合は 128（デフォルト）
@@ -540,7 +540,7 @@ export interface SubscribeOptions {
 
   /**
    * Group Order
-   * draft-ietf-moq-transport-21 Section 9.20.9 (GROUP ORDER Parameter)
+   * draft-ietf-moq-transport-22 Section 9.20.8 (GROUP ORDER Parameter)
    *
    * グループの配信順序の希望。
    * - "Ascending": 古いグループから順に配信
@@ -552,7 +552,7 @@ export interface SubscribeOptions {
 
   /**
    * 新しいグループ（キーフレーム）を要求する
-   * draft-ietf-moq-transport-21 Section 9.20.20 (NEW GROUP REQUEST Parameter)
+   * draft-ietf-moq-transport-22 Section 9.20.19 (NEW GROUP REQUEST Parameter)
    *
    * 0 を指定すると、Publisher は新しい Group を開始する
    * Publisher が DYNAMIC_GROUPS をサポートしていない場合は無視される
@@ -574,17 +574,17 @@ export interface SubscribeOptions {
 
   /**
    * Rendezvous Timeout（ミリ秒）
-   * draft-ietf-moq-transport-21 Section 9.20.7 (RENDEZVOUS TIMEOUT Parameter)
+   * draft-ietf-moq-transport-22 Section 9.20.6 (RENDEZVOUS TIMEOUT Parameter)
    *
    * リレーが Publisher を待つ時間。
    * 0 は即時応答を要求。指定しない場合のデフォルトは 0。
-   * draft-ietf-moq-transport-21 Section 9.20.7
+   * draft-ietf-moq-transport-22 Section 9.20.6
    */
   rendezvousTimeout?: bigint;
 
   /**
    * Range Filters
-   * draft-ietf-moq-transport-21 Section 3.3.2 (Range Filters)
+   * draft-ietf-moq-transport-22 Section 3.3.2 (Range Filters)
    *
    * ピアの MAX_FILTER_RANGES が 0（未広告含む）の場合、および購読単位の Ranges
    * 合計（この rangeFilters と fill 内側の合計）が上限を超える場合に指定すると
@@ -594,7 +594,7 @@ export interface SubscribeOptions {
 
   /**
    * AUTHORIZATION_TOKEN Message Parameter (0x03) として送信する Authorization Token
-   * draft-ietf-moq-transport-21 Section 9.20.3 (AUTHORIZATION TOKEN Parameter)
+   * draft-ietf-moq-transport-22 Section 9.20.2 (AUTHORIZATION TOKEN Parameter)
    *
    * draft-ietf-moq-msf-01 §11.4.3: track に関連するトークンは SUBSCRIBE に MUST 付与。
    * SETUP にトークンを載せていても免除されない。
@@ -618,7 +618,7 @@ export interface SubscribeOptions {
 
   /**
    * Track Properties の受信要求
-   * draft-ietf-moq-transport-21 Section 9.20.22 (INCLUDE_PROPERTIES Parameter)
+   * draft-ietf-moq-transport-22 Section 9.20.21 (INCLUDE_PROPERTIES Parameter)
    *
    * true (1) は応答に Track Properties を載せるよう要求し、
    * false (0) は空にするよう要求する。省略時はパラメータ自体を送らず、
@@ -633,10 +633,26 @@ export interface SubscribeOptions {
  *
  * SUBSCRIBE のパラメータのうち SUBSCRIBE_TRACKS で有効なもののサブセット。
  */
+/**
+ * SUBSCRIBE_TRACKS のオプション
+ *
+ * draft-ietf-moq-transport-22 §9.18 (SUBSCRIBE_TRACKS) が列挙する許可パラメータ
+ * (AUTHORIZATION_TOKEN / FORWARD / GROUP_ORDER / SUBGROUP_FILTER /
+ *  OBJECTID_FILTER / PRIORITY_FILTER / OBJECT_PROPERTY_FILTER /
+ *  TRACK_PROPERTY_FILTER / INCLUDE_PROPERTIES) のみを扱う。
+ *
+ * v22 §3.6.2 には「SUBSCRIBE に指定できるパラメータは SUBSCRIBE_TRACKS でも
+ * 有効」と Location Filter / FILL_PARAMETERS に触れる記述が残るが、§9.18 の
+ * 列挙と §9.20.1 (許可外メッセージへの出現は受信側で PROTOCOL_VIOLATION) を
+ * 正とし、SUBSCRIBER_PRIORITY / LOCATION_FILTER / FILL_PARAMETERS は送らない。
+ *
+ * この 2 つの記述の矛盾は draft-ietf-moq-transport-22 の仕様内部の問題であり、
+ * 将来のドラフトで解消された場合は本インターフェースを見直す。
+ */
 export interface SubscribeTracksOptions {
   /**
    * Group Order
-   * draft-ietf-moq-transport-21 Section 9.20.9 (GROUP ORDER Parameter)
+   * draft-ietf-moq-transport-22 Section 9.20.8 (GROUP ORDER Parameter)
    */
   groupOrder?: "Ascending" | "Descending";
 
@@ -653,17 +669,17 @@ export interface SubscribeTracksOptions {
 
   /**
    * Range Filters
-   * draft-ietf-moq-transport-21 Section 3.3.2 (Range Filters)
+   * draft-ietf-moq-transport-22 Section 3.3.2 (Range Filters)
    *
    * ピアの MAX_FILTER_RANGES が 0（未広告含む）の場合、および購読単位の Ranges
-   * 合計（この rangeFilters と fill 内側の合計）が上限を超える場合に指定すると
-   * throw する。
+   * 合計が上限を超える場合に指定すると throw する。SUBSCRIBE_TRACKS は
+   * FILL_PARAMETERS を運ばないため、数えるのはここで指定した Ranges のみである。
    */
   rangeFilters?: RangeFilterSpec[];
 
   /**
    * Track Properties の受信要求
-   * draft-ietf-moq-transport-21 Section 9.20.22 (INCLUDE_PROPERTIES Parameter)
+   * draft-ietf-moq-transport-22 Section 9.20.21 (INCLUDE_PROPERTIES Parameter)
    *
    * true (1) は結果 PUBLISH に Track Properties を載せるよう要求し、
    * false (0) は空にするよう要求する。省略時は送らない (デフォルト 1 と同等)。
@@ -671,37 +687,8 @@ export interface SubscribeTracksOptions {
   includeProperties?: boolean;
 
   /**
-   * Subscriber Priority
-   * draft-ietf-moq-transport-21 Section 9.20.8 (SUBSCRIBER PRIORITY Parameter)
-   *
-   * 結果 PUBLISH の初期 Subscription Parameter になる (0-255、小さいほど高優先)。
-   * 省略時は送らない。
-   */
-  subscriberPriority?: number;
-
-  /**
-   * Location Filter
-   * draft-ietf-moq-transport-22 Section 3.6.2 (Parameters on SUBSCRIBE_TRACKS):
-   * "To join Tracks initiated via the resulting PUBLISHes, the subscriber can
-   *  specify a Location Filter and optionally include FILL_PARAMETERS in the
-   *  SUBSCRIBE_TRACKS, or in a REQUEST_UPDATE following PUBLISH_OK, as
-   *  described in Section 3.5."
-   *
-   * 結果 PUBLISH の初期 Location Filter になる。
-   */
-  filter?: LocationFilter;
-
-  /**
-   * Fill Parameters
-   * draft-ietf-moq-transport-21 Section 9.20.16 (FILL_PARAMETERS Parameter)
-   *
-   * 結果 PUBLISH の購読で fill fetch を要求する。省略時は送らない。
-   */
-  fill?: FillRequestOptions;
-
-  /**
    * 認可トークン
-   * draft-ietf-moq-transport-21 Section 9.20.3 (AUTHORIZATION TOKEN Parameter)
+   * draft-ietf-moq-transport-22 Section 9.20.2 (AUTHORIZATION TOKEN Parameter)
    *
    * 省略時は送らない。
    */
@@ -729,7 +716,7 @@ export interface FetchCallbacks {
 export interface FetchOptions {
   /**
    * Fill Timeout（ミリ秒）
-   * draft-ietf-moq-transport-21 Section 9.20.6 (FILL TIMEOUT Parameter)
+   * draft-ietf-moq-transport-22 Section 9.20.5 (FILL TIMEOUT Parameter)
    *
    * relay が欠損 object の fill 待機に費やす最大時間。
    * 0 は即座に利用可能な object のみを要求。
@@ -738,7 +725,7 @@ export interface FetchOptions {
 
   /**
    * Subscriber Priority
-   * draft-ietf-moq-transport-21 Section 9.20.9 (SUBSCRIBER PRIORITY Parameter)
+   * draft-ietf-moq-transport-22 Section 9.20.7 (SUBSCRIBER PRIORITY Parameter)
    *
    * FETCH 応答の優先度 (0-255、小さいほど高優先)。
    * "It MAY appear in a SUBSCRIBE, PUBLISH, FETCH, or REQUEST_UPDATE"。
@@ -748,7 +735,7 @@ export interface FetchOptions {
 
   /**
    * Group Order
-   * draft-ietf-moq-transport-21 Section 9.20.9 (GROUP ORDER Parameter)
+   * draft-ietf-moq-transport-22 Section 9.20.8 (GROUP ORDER Parameter)
    *
    * FETCH 応答で Object を Group 順に並べる順序を要求する。
    * "It MAY appear in a SUBSCRIBE, PUBLISH, SUBSCRIBE_TRACKS, or FETCH"。
@@ -797,7 +784,7 @@ export interface FetchOptions {
 
   /**
    * AUTHORIZATION_TOKEN Message Parameter (0x03) として送信する Authorization Token
-   * draft-ietf-moq-transport-21 Section 9.20.3 (AUTHORIZATION TOKEN Parameter)
+   * draft-ietf-moq-transport-22 Section 9.20.2 (AUTHORIZATION TOKEN Parameter)
    *
    * draft-ietf-moq-msf-01 §11.4.3: track に関連するトークンは FETCH に MUST 付与。
    */
@@ -805,7 +792,7 @@ export interface FetchOptions {
 
   /**
    * Track Properties の受信要求
-   * draft-ietf-moq-transport-21 Section 9.20.22 (INCLUDE_PROPERTIES Parameter)
+   * draft-ietf-moq-transport-22 Section 9.20.21 (INCLUDE_PROPERTIES Parameter)
    *
    * true (1) は応答に Track Properties を載せるよう要求し、
    * false (0) は空にするよう要求する。省略時は送らない (デフォルト 1 と同等)。
@@ -815,12 +802,12 @@ export interface FetchOptions {
 
 /**
  * TRACK_STATUS のオプション
- * draft-ietf-moq-transport-21 Section 9.20.22 (INCLUDE_PROPERTIES Parameter)
+ * draft-ietf-moq-transport-22 Section 9.20.21 (INCLUDE_PROPERTIES Parameter)
  */
 export interface TrackStatusOptions {
   /**
    * Track Properties の受信要求
-   * draft-ietf-moq-transport-21 Section 9.20.22 (INCLUDE_PROPERTIES Parameter)
+   * draft-ietf-moq-transport-22 Section 9.20.21 (INCLUDE_PROPERTIES Parameter)
    *
    * true (1) は応答に Track Properties を載せるよう要求し、
    * false (0) は空にするよう要求する。省略時は送らない (デフォルト 1 と同等)。
@@ -829,7 +816,7 @@ export interface TrackStatusOptions {
 
   /**
    * 認可トークン
-   * draft-ietf-moq-transport-21 Section 9.20.3 (AUTHORIZATION TOKEN Parameter)
+   * draft-ietf-moq-transport-22 Section 9.20.2 (AUTHORIZATION TOKEN Parameter)
    *
    * "It MAY appear in a PUBLISH, SUBSCRIBE, REQUEST_UPDATE, SUBSCRIBE_NAMESPACE,
    *  SUBSCRIBE_TRACKS, PUBLISH_NAMESPACE, TRACK_STATUS or FETCH message."
@@ -898,7 +885,7 @@ export interface NamespaceSubscriptionCallbacks {
 export interface NamespaceUpdateOptions {
   /**
    * 更新後の Track Namespace Prefix
-   * draft-ietf-moq-transport-21 §9.20.21 (TRACK_NAMESPACE_PREFIX Parameter)
+   * draft-ietf-moq-transport-22 §9.20.20 (TRACK_NAMESPACE_PREFIX Parameter)
    */
   trackNamespacePrefix: string[];
 }
@@ -1066,7 +1053,7 @@ export interface NamespacePublicationCallbacks {
 export interface PublishNamespaceOptions {
   /**
    * 認可トークン
-   * draft-ietf-moq-transport-21 Section 9.20.3 (AUTHORIZATION TOKEN Parameter)
+   * draft-ietf-moq-transport-22 Section 9.20.2 (AUTHORIZATION TOKEN Parameter)
    *
    * "It MAY appear in a PUBLISH, SUBSCRIBE, REQUEST_UPDATE, SUBSCRIBE_NAMESPACE,
    *  SUBSCRIBE_TRACKS, PUBLISH_NAMESPACE, TRACK_STATUS or FETCH message."

@@ -319,7 +319,7 @@ test("bidiReadTrackStatusResponse: 非違反失敗で削除集合が掃除され
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.1 / §9.5.1:
+ * draft-ietf-moq-transport-22 §9.20.1 / §9.5.1:
  * REQUEST_UPDATE_OK のパラメータスコープ違反で、当該購読の保留分全件が
  * 違反 SessionError 自体で reject され、fill 関連付けも掃除されることを検証する。
  */

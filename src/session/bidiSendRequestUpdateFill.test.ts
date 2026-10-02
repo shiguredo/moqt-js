@@ -27,11 +27,11 @@ import {
 
 // ============================================================================
 // bidiSendRequestUpdate の FILL_PARAMETERS テスト
-// draft-ietf-moq-transport-21 §3.4 / §9.20.16
+// draft-ietf-moq-transport-22 §3.4 / §9.20.15
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-21 §9.20.16:
+ * draft-ietf-moq-transport-22 §9.20.15:
  * update({ fill }) で FILL_PARAMETERS (0x23) が REQUEST_UPDATE に載り、
  * 内側に指定内容が入ることを検証する。fill 要求元の Request ID は購読に
  * 関連付けられる。
@@ -190,7 +190,7 @@ test("bidiSendRequestUpdate: in-flight の fill と合計で上限超過の場�
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.16:
+ * draft-ietf-moq-transport-22 §9.20.15:
  * update の fill で GROUP_ORDER を省略した場合、subscription の指定を継承して
  * 関連付けられることを検証する。
  */
@@ -479,7 +479,7 @@ test("bidiSendRequestUpdate: raw FILL_PARAMETERS 内側の 4 フィールド超�
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.16:
+ * draft-ietf-moq-transport-22 §9.20.15:
  * 正常な raw FILL_PARAMETERS は従来どおり送信でき、
  * ワイヤ上の parameters に FILL_PARAMETERS が残る (回帰ガード)。
  */

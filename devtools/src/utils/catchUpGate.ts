@@ -1,7 +1,7 @@
 /**
  * relay の cache から追いつく途中の Object を、SUBSCRIBE_OK の LARGEST_OBJECT を境界に選別する
  *
- * draft-ietf-moq-transport-21 Section 9.20.18 の LARGEST_OBJECT は、購読した時点で publisher
+ * draft-ietf-moq-transport-22 Section 9.20.17 の LARGEST_OBJECT は、購読した時点で publisher
  * (relay) が持っていた最新の Location である (Object が publish されていれば必須)。この
  * Location 以前の Object は購読より前に publish された分であり、relay は cache から実時間より
  * 速く配る。この Location より後の Object は購読より後に publish された分、つまり live である。

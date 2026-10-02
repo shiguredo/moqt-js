@@ -1,7 +1,7 @@
 /**
  * session/authTokenCache.ts のテスト
  *
- * draft-ietf-moq-transport-21 §8.9 / §9.1.3 / §9.1.4 / §9.20.3 が定める
+ * draft-ietf-moq-transport-22 §8.9 / §9.1.3 / §9.1.4 / §9.20.2 が定める
  * 受信 Authorization Token キャッシュの登録・解決・退役と、SETUP 経路 /
  * メッセージパラメータ経路で異なる上限超過の扱いを検証する。
  */

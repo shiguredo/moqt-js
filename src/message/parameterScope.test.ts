@@ -1,6 +1,6 @@
 /**
  * Parameter Scope 検証の単体テスト
- * draft-ietf-moq-transport-21 §9.20.1 (Parameter Scope) / §9.20.17 (EXPIRES Parameter)
+ * draft-ietf-moq-transport-22 §9.20.1 (Parameter Scope) / §9.20.16 (EXPIRES Parameter)
  */
 
 import { test, assert } from "vite-plus/test";
@@ -37,7 +37,7 @@ function assertProtocolViolation(error: SessionError | null, expectedMessage?: s
 }
 
 /**
- * draft-ietf-moq-transport-21 §9.20.17:
+ * draft-ietf-moq-transport-22 §9.20.16:
  * EXPIRES は SUBSCRIBE_NAMESPACE_OK / SUBSCRIBE_TRACKS_OK / PUBLISH_NAMESPACE_OK で許可される。
  * NAMESPACE_OK_ALLOWED_PARAMS が EXPIRES のみを含むことを検証する。
  */
@@ -47,7 +47,7 @@ test("NAMESPACE_OK_ALLOWED_PARAMS は EXPIRES のみを含む", () => {
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.1:
+ * draft-ietf-moq-transport-22 §9.20.1:
  * 許可パラメータ集合に含まれるパラメータは検証を通過する。
  * EXPIRES のみを含むパラメータ配列が NAMESPACE_OK_ALLOWED_PARAMS で通過することを検証する。
  */
@@ -69,10 +69,12 @@ test("空パラメータ配列は NAMESPACE_OK_ALLOWED_PARAMS で検証を通過
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.1:
- * "Each Message Parameter definition indicates the message types in which
- *  it can appear. If it appears in some other type of message, the receiving
- *  endpoint MUST close the connection with a PROTOCOL_VIOLATION."
+ * draft-ietf-moq-transport-22 §9.20.1:
+ * "Each Message Parameter definition indicates the message types in
+ *  which it can appear, and each control message definition lists the
+ *  parameters it allows.  If a parameter appears in some other type of
+ *  message, the receiving endpoint MUST close the connection with a
+ *  PROTOCOL_VIOLATION."
  * 許可外パラメータが PROTOCOL_VIOLATION の SessionError を返すことを検証する。
  */
 test("許可外パラメータは PROTOCOL_VIOLATION のエラーを返す", () => {
@@ -101,7 +103,7 @@ test("EXPIRES + 許可外パラメータの混合は PROTOCOL_VIOLATION のエ�
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-21 §9.20.17:
+ * draft-ietf-moq-transport-22 §9.20.16:
  * EXPIRES のみが PUBLISH_OK に出現できる。
  * PUBLISH_OK_ALLOWED_PARAMS が EXPIRES のみを含むことを検証する。
  */
@@ -111,7 +113,7 @@ test("PUBLISH_OK_ALLOWED_PARAMS は EXPIRES のみを含む", () => {
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.17 / §9.20.1:
+ * draft-ietf-moq-transport-22 §9.20.16 / §9.20.1:
  * Subscription Parameters は PUBLISH_OK に出現できない。
  * GROUP_ORDER / FORWARD / LOCATION_FILTER 等がスコープ検証で拒否されることを検証する。
  */
@@ -132,7 +134,7 @@ test("GROUP_ORDER 付き PUBLISH_OK は PROTOCOL_VIOLATION のエラーを返す
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.17 / §9.20.1:
+ * draft-ietf-moq-transport-22 §9.20.16 / §9.20.1:
  * FORWARD / LOCATION_FILTER 等の Subscription Parameters は PUBLISH_OK に
  * 出現できない。代表として FORWARD / LOCATION_FILTER と Range Filter
  * (SUBGROUP_FILTER) がスコープ検証で拒否されることを検証する。
@@ -153,7 +155,7 @@ test("Subscription Parameters 付き PUBLISH_OK は PROTOCOL_VIOLATION のエラ
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.17:
+ * draft-ietf-moq-transport-22 §9.20.16:
  * EXPIRES 付き PUBLISH_OK はスコープ検証を通過する。
  */
 test("EXPIRES 付き PUBLISH_OK は検証を通過する", () => {
@@ -240,7 +242,7 @@ test("PUBLISH に許可されないパラメータは PROTOCOL_VIOLATION のエ�
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.22 / §9.20.1:
+ * draft-ietf-moq-transport-22 §9.20.21 / §9.20.1:
  * INCLUDE_PROPERTIES (0x35) は SUBSCRIBE / TRACK_STATUS / FETCH /
  * SUBSCRIBE_TRACKS にのみ出現でき、応答側の許可集合には含まれない。
  * 応答文脈への混入は PROTOCOL_VIOLATION で拒否されることを検証する。
@@ -265,11 +267,11 @@ test("INCLUDE_PROPERTIES の応答への混入は PROTOCOL_VIOLATION のエラ�
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.13 (TRACK_STATUS) / §9.20.17 (EXPIRES Parameter):
+ * draft-ietf-moq-transport-22 §9.13 (TRACK_STATUS) / §9.20.16 (EXPIRES Parameter):
  * §9.13 は TRACK_STATUS_OK を「SUBSCRIBE_OK で設定したのと同じ parameters と
- * Track Properties を返す」と定め、§9.20.17 は EXPIRES を SUBSCRIBE_OK の
+ * Track Properties を返す」と定め、§9.20.16 は EXPIRES を SUBSCRIBE_OK の
  * 出現先に挙げるため、字義通りなら EXPIRES を受理すべきに見える。本実装は
- * §9.20.17 の出現先一覧に TRACK_STATUS_OK が無いことを根拠に拒否する
+ * §9.20.16 の出現先一覧に TRACK_STATUS_OK が無いことを根拠に拒否する
  * (判断の詳細は parameterScope.ts の TRACK_STATUS_OK_ALLOWED_PARAMS の doc を参照)。
  * この解釈がコードに固定されていることを検証する。
  */
@@ -289,7 +291,7 @@ test("TRACK_STATUS_OK の EXPIRES は PROTOCOL_VIOLATION のエラーを返す",
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-21 §9.20.21 / §9.20.1:
+ * draft-ietf-moq-transport-22 §9.20.20 / §9.20.1:
  * TRACK_NAMESPACE_PREFIX は namespace 系 (SUBSCRIBE_NAMESPACE /
  * SUBSCRIBE_TRACKS) の REQUEST_UPDATE にのみ出現できる。
  * subscription 系 REQUEST_UPDATE の許可集合には含まれないことを検証する。
@@ -299,7 +301,7 @@ test("REQUEST_UPDATE_ALLOWED_PARAMS は TRACK_NAMESPACE_PREFIX を含まない",
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.9 / §9.20.17:
+ * draft-ietf-moq-transport-22 §9.20.8 / §9.20.16:
  * GROUP_ORDER と EXPIRES は REQUEST_UPDATE に出現できない。
  */
 test("REQUEST_UPDATE_ALLOWED_PARAMS は GROUP_ORDER / EXPIRES を含まない", () => {
@@ -317,7 +319,7 @@ test("REQUEST_UPDATE_ALLOWED_PARAMS は TRACK_PROPERTY_FILTER を含まない", 
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.8 / §9.20.10 / §9.20.20 / §9.20.16 / §3.3.2:
+ * draft-ietf-moq-transport-22 §9.20.7 / §9.20.9 / §9.20.19 / §9.20.15 / §3.3.2:
  * SUBSCRIBER_PRIORITY / LOCATION_FILTER / NEW_GROUP_REQUEST / FILL_PARAMETERS /
  * Range Filters (0x25-0x28) は subscription 系 REQUEST_UPDATE に出現できる。
  */
@@ -341,7 +343,7 @@ test("REQUEST_UPDATE_ALLOWED_PARAMS は subscription 系の許可パラメータ
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.21 / §9.20.1:
+ * draft-ietf-moq-transport-22 §9.20.20 / §9.20.1:
  * TRACK_NAMESPACE_PREFIX を subscription 系 REQUEST_UPDATE のスコープ検証に
  * かけると PROTOCOL_VIOLATION の SessionError が返ることを検証する。
  */
@@ -355,13 +357,22 @@ test("TRACK_NAMESPACE_PREFIX 付き subscription 系 REQUEST_UPDATE は PROTOCOL
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.21:
- * NAMESPACE_REQUEST_UPDATE_ALLOWED_PARAMS は TRACK_NAMESPACE_PREFIX を含む。
+ * draft-ietf-moq-transport-22 §9.5 (REQUEST_UPDATE) の SUBSCRIBE_TRACKS 向け一覧:
+ * "AUTHORIZATION_TOKEN / FORWARD / TRACK_PROPERTY_FILTER / TRACK_NAMESPACE_PREFIX"
+ * に対応する 4 型が NAMESPACE_REQUEST_UPDATE_ALLOWED_PARAMS に含まれる。
  */
-test("NAMESPACE_REQUEST_UPDATE_ALLOWED_PARAMS は TRACK_NAMESPACE_PREFIX を含む", () => {
+test("NAMESPACE_REQUEST_UPDATE_ALLOWED_PARAMS は §9.5 の 4 型を含む", () => {
   assert.isTrue(
     NAMESPACE_REQUEST_UPDATE_ALLOWED_PARAMS.has(MessageParameterType.TRACK_NAMESPACE_PREFIX),
   );
+  assert.isTrue(
+    NAMESPACE_REQUEST_UPDATE_ALLOWED_PARAMS.has(MessageParameterType.AUTHORIZATION_TOKEN),
+  );
+  assert.isTrue(NAMESPACE_REQUEST_UPDATE_ALLOWED_PARAMS.has(MessageParameterType.FORWARD));
+  assert.isTrue(
+    NAMESPACE_REQUEST_UPDATE_ALLOWED_PARAMS.has(MessageParameterType.TRACK_PROPERTY_FILTER),
+  );
+  assert.equal(NAMESPACE_REQUEST_UPDATE_ALLOWED_PARAMS.size, 4);
 });
 
 /**

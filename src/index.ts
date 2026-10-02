@@ -49,7 +49,7 @@ export {
 // メッセージ型の再エクスポート
 export type { LocationFilter, Location, Parameter } from "./message";
 
-// Authorization Token の再エクスポート (draft-ietf-moq-transport-21 Section 9.20.3)
+// Authorization Token の再エクスポート (draft-ietf-moq-transport-22 Section 9.20.2)
 export {
   type AuthorizationToken,
   type AuthorizationTokenDelete,

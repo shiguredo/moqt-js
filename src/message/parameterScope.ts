@@ -1,7 +1,7 @@
 /**
  * Parameter Scope 検証
  *
- * draft-ietf-moq-transport-21 §9.20.1 (Parameter Scope) に基づき、
+ * draft-ietf-moq-transport-22 §9.20.1 (Parameter Scope) に基づき、
  * 各メッセージ種別ごとに許可パラメータ集合を定義し、
  * 受信時にパラメータ型をチェックする。
  */
@@ -22,7 +22,7 @@ export const SUBSCRIBE_OK_ALLOWED_PARAMS = new Set<number>([
 /**
  * REQUEST_OK (PUBLISH_OK) の許可パラメータ
  *
- * draft-ietf-moq-transport-21 §9.20.17 (EXPIRES Parameter):
+ * draft-ietf-moq-transport-22 §9.20.16 (EXPIRES Parameter):
  * EXPIRES のみが PUBLISH_OK に出現できる。Subscription Parameters
  * (LOCATION_FILTER / FORWARD / timeouts / SUBSCRIBER_PRIORITY /
  * NEW_GROUP_REQUEST / Range Filters 等) は REQUEST_UPDATE 側で扱い、
@@ -56,14 +56,14 @@ export const PUBLISH_STATE_NOTIFY_ALLOWED_PARAMS = new Set<number>([
  *
  * draft-ietf-moq-transport-21 §9.13 (TRACK_STATUS) は TRACK_STATUS への応答を
  * 「SUBSCRIBE_OK で設定したのと同じ parameters と Track Properties を返す」と定め、
- * §9.20.17 (EXPIRES Parameter) は EXPIRES が SUBSCRIBE_OK に出現できるとするため、
+ * §9.20.16 (EXPIRES Parameter) は EXPIRES が SUBSCRIBE_OK に出現できるとするため、
  * 字義通りに読むと EXPIRES を TRACK_STATUS_OK でも受理すべきに見える。
  *
- * 本実装は §9.20.17 の出現先一覧 (SUBSCRIBE_OK / PUBLISH / PUBLISH_OK /
+ * 本実装は §9.20.16 の出現先一覧 (SUBSCRIBE_OK / PUBLISH / PUBLISH_OK /
  * SUBSCRIBE_NAMESPACE_OK / SUBSCRIBE_TRACKS_OK / PUBLISH_NAMESPACE_OK /
  * REQUEST_UPDATE_OK) に TRACK_STATUS_OK が無いことを根拠に、EXPIRES を
  * スコープ違反 (§9.20.1 の MUST により PROTOCOL_VIOLATION) として扱う。
- * 一覧を優先するのは、パラメータごとの出現先を列挙している §9.20.17 の方が
+ * 一覧を優先するのは、パラメータごとの出現先を列挙している §9.20.16 の方が
  * 応答の内容を述べる §9.13 より具体的であり、また TRACK_STATUS は購読を
  * 確立しないため EXPIRES (購読の有効期限) の意味が定まらないためである。
  * 相互運用を優先して EXPIRES を許容する判断に変える場合は、本集合に
@@ -76,7 +76,7 @@ export const TRACK_STATUS_OK_ALLOWED_PARAMS = new Set<number>([
 /**
  * REQUEST_OK (SUBSCRIBE_NAMESPACE_OK / SUBSCRIBE_TRACKS_OK / PUBLISH_NAMESPACE_OK) の許可パラメータ
  *
- * draft-ietf-moq-transport-21 §9.20.17 (EXPIRES Parameter):
+ * draft-ietf-moq-transport-22 §9.20.16 (EXPIRES Parameter):
  * "It MAY appear in SUBSCRIBE_OK, PUBLISH, PUBLISH_OK, SUBSCRIBE_NAMESPACE_OK,
  *  SUBSCRIBE_TRACKS_OK, PUBLISH_NAMESPACE_OK, or REQUEST_UPDATE_OK."
  */
@@ -89,20 +89,20 @@ export const NAMESPACE_OK_ALLOWED_PARAMS = new Set<number>([MessageParameterType
  * subscription (SUBSCRIBE / PUBLISH / FETCH) を対象とする REQUEST_UPDATE で
  * 出現を許可する型の集合である。
  *
- * - AUTHORIZATION_TOKEN (§9.20.3): REQUEST_UPDATE に出現可能。
+ * - AUTHORIZATION_TOKEN (§9.20.2): REQUEST_UPDATE に出現可能。
  * - OBJECT_DELIVERY_TIMEOUT (§9.20.4) / SUBGROUP_DELIVERY_TIMEOUT (§9.20.3):
  *   REQUEST_UPDATE に出現可能。
  * - SUBSCRIBER_PRIORITY (§9.20.7): REQUEST_UPDATE (for a subscription or FETCH)。
  * - FORWARD (§9.20.18): REQUEST_UPDATE (for a subscription or a
  *   SUBSCRIBE_TRACKS request)。
  * - LOCATION_FILTER (§9.20.9): REQUEST_UPDATE (for a subscription)。
- * - NEW_GROUP_REQUEST (§9.20.20): REQUEST_UPDATE for a subscription。
- * - FILL_PARAMETERS (§9.20.16): REQUEST_UPDATE (for a subscription)。
+ * - NEW_GROUP_REQUEST (§9.20.19): REQUEST_UPDATE for a subscription。
+ * - FILL_PARAMETERS (§9.20.15): REQUEST_UPDATE (for a subscription)。
  * - Range Filters (§3.3.2): SUBGROUP_FILTER / OBJECTID_FILTER /
  *   PRIORITY_FILTER / OBJECT_PROPERTY_FILTER は REQUEST_UPDATE (on a
  *   subscription, from the subscriber only)。
  *
- * TRACK_NAMESPACE_PREFIX (§9.20.21) は namespace 系
+ * TRACK_NAMESPACE_PREFIX (§9.20.20) は namespace 系
  * (SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS) の REQUEST_UPDATE にのみ出現可能な
  * ため、本集合には含めない。通常の PUBLISH / SUBSCRIBE 系 REQUEST_UPDATE で
  * 受信した場合は §9.20.1 の MUST により PROTOCOL_VIOLATION でセッションを
@@ -119,7 +119,7 @@ export const REQUEST_UPDATE_ALLOWED_PARAMS = new Set<number>([
   MessageParameterType.FORWARD,
   MessageParameterType.LOCATION_FILTER,
   MessageParameterType.NEW_GROUP_REQUEST,
-  // draft-ietf-moq-transport-21 §9.20.16: FILL_PARAMETERS (subscription の REQUEST_UPDATE)
+  // draft-ietf-moq-transport-22 §9.20.15: FILL_PARAMETERS (subscription の REQUEST_UPDATE)
   MessageParameterType.FILL_PARAMETERS,
   // draft-ietf-moq-transport-21 §3.3.2: Range Filters (subscription の REQUEST_UPDATE)
   MessageParameterType.SUBGROUP_FILTER,
@@ -131,18 +131,22 @@ export const REQUEST_UPDATE_ALLOWED_PARAMS = new Set<number>([
 /**
  * namespace 系 REQUEST_UPDATE の許可パラメータ
  *
- * draft-ietf-moq-transport-22 §9.20.20 (TRACK_NAMESPACE_PREFIX Parameter):
- * "It MAY appear in REQUEST_UPDATE for a SUBSCRIBE_NAMESPACE or
- *  SUBSCRIBE_TRACKS request."
- * 併せて §9.20.3 (AUTHORIZATION_TOKEN) は REQUEST_UPDATE に出現可能であり、
- * §9.20.18 (FORWARD) は REQUEST_UPDATE (for a SUBSCRIBE_TRACKS request) で
- * 出現可能である。moqt-js は SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS を送信
- * するため、送信経路 (bidiSendNamespaceRequestUpdate) の防御的検証に使う。
+ * draft-ietf-moq-transport-22 §9.5 (REQUEST_UPDATE) の SUBSCRIBE_NAMESPACE /
+ * SUBSCRIBE_TRACKS 向け一覧に対応する。
+ * - SUBSCRIBE_NAMESPACE: AUTHORIZATION_TOKEN (§9.20.2) / TRACK_NAMESPACE_PREFIX (§9.20.20)
+ * - SUBSCRIBE_TRACKS: AUTHORIZATION_TOKEN / FORWARD (§9.20.18) /
+ *   TRACK_PROPERTY_FILTER (§9.20.14) / TRACK_NAMESPACE_PREFIX
+ *
+ * moqt-js は SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS を送信するため、送信経路
+ * (bidiSendNamespaceRequestUpdate) の防御的検証に使う。TRACK_PROPERTY_FILTER は
+ * 現時点で送信 API を持たないが、§9.5 の一覧に合わせておき、将来 API を足した
+ * ときに検証が漏れないようにする。
  */
 export const NAMESPACE_REQUEST_UPDATE_ALLOWED_PARAMS = new Set<number>([
   MessageParameterType.TRACK_NAMESPACE_PREFIX,
   MessageParameterType.AUTHORIZATION_TOKEN,
   MessageParameterType.FORWARD,
+  MessageParameterType.TRACK_PROPERTY_FILTER,
 ]);
 
 /**
@@ -176,10 +180,12 @@ export const FETCH_OK_ALLOWED_PARAMS = new Set<number>();
 /**
  * パラメータスコープを検証する
  *
- * draft-ietf-moq-transport-21 §9.20.1:
- * "Each Message Parameter definition indicates the message types in which
- *  it can appear. If it appears in some other type of message, the receiving
- *  endpoint MUST close the connection with a PROTOCOL_VIOLATION."
+ * draft-ietf-moq-transport-22 §9.20.1:
+ * "Each Message Parameter definition indicates the message types in
+ *  which it can appear, and each control message definition lists the
+ *  parameters it allows.  If a parameter appears in some other type of
+ *  message, the receiving endpoint MUST close the connection with a
+ *  PROTOCOL_VIOLATION."
  *
  * @param params - 検証するパラメータ配列
  * @param allowed - 許可パラメータ集合
@@ -207,7 +213,7 @@ export function validateParameterScope(
 /**
  * 送信パラメータがメッセージ種別で許可されていることを検証する
  *
- * draft-ietf-moq-transport-21 §9.20 の各パラメータ定義が示す出現可能
+ * draft-ietf-moq-transport-22 §9.20 の各パラメータ定義が示す出現可能
  * メッセージに反する型を送信前に拒否する。受信側では §9.20.1 の MUST により
  * PROTOCOL_VIOLATION でセッションが閉じられるため、送信側のローカル API 誤用
  * としてセッションを閉じず throw で呼び出し元へ返す。
