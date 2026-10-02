@@ -2,6 +2,7 @@
 
 - **現時点ではブラウザでの利用のみを想定しているため、クライアントでのみ利用すること** (MOQT の publisher / subscriber として接続する用途だけを対象とする)
 - **クライアント以外での用途の実装は不要であること** (サーバー / リレーとしての動作は実装しない)
+  - Relay 間の相互接続 (relay to relay) は draft-ietf-moq-transport-22 §7 (Relays) が、coordinated set of relays を単一の MOQT relay として扱い「How relays within such a set interconnect, and use cases built on relay to relay communication, are out of scope.」と定めているため、本仕様の対象外として実装しない
 - **Node.js が WebTransport に正式対応したら、テスト用としてサーバー対応も行うこと**
 - より良い設計のためには破壊的変更を恐れないこと
 - 最新ドラフトに準拠すること
