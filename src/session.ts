@@ -403,8 +403,8 @@ export class SessionImpl implements Session {
   readonly pendingSubgroupBuffer: PendingSubgroupBuffer;
 
   // Fetcher 登録待ちの Promise を管理
-  // draft-ietf-moq-transport-21 Section 9.12 (FETCH_OK):
-  // "A publisher MAY send Objects in response to a FETCH before the
+  // draft-ietf-moq-transport-22 §3.2 (Fetch):
+  // "The publisher MAY send Objects in response to a FETCH before the
   //  FETCH_OK message is sent."
   // FETCH_OK より先にデータストリームが到着する可能性がある
   fetcherReadyCallbacks = new Map<bigint, Array<() => void>>();
@@ -1179,8 +1179,8 @@ export class SessionImpl implements Session {
   /**
    * Fetcher の登録を待つ
    *
-   * draft-ietf-moq-transport-21 Section 9.12 (FETCH_OK):
-   * "A publisher MAY send Objects in response to a FETCH before the
+   * draft-ietf-moq-transport-22 §3.2 (Fetch):
+   * "The publisher MAY send Objects in response to a FETCH before the
    *  FETCH_OK message is sent."
    * FETCH_OK より先にデータストリームが到着した場合に使用。
    */

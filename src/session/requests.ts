@@ -499,8 +499,8 @@ export async function requestsFetch(
     options.groupOrder === "Descending" ? GroupOrder.DESCENDING : GroupOrder.ASCENDING,
   );
 
-  // draft-ietf-moq-transport-21 Section 3.2.1:
-  // キャンセルはストリームを閉じることで行う。
+  // draft-ietf-moq-transport-22 Section 3.2.4:
+  // キャンセルは bidi リクエストストリームへ STOP_SENDING を送ることで行う (MUST)。
   impl.onCancel = async () => {
     await requestsCancelFetch(session, impl);
   };
@@ -765,7 +765,7 @@ export function requestsCancelSubscription(
 /**
  * Fetch をキャンセルする
  *
- * draft-ietf-moq-transport-21 Section 3.2.1:
+ * draft-ietf-moq-transport-22 Section 3.2.4:
  * "It MUST send STOP_SENDING for the bidi request stream."
  */
 export function requestsCancelFetch(

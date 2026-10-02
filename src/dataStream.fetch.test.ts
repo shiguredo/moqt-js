@@ -1,6 +1,6 @@
 /**
  * MOQT データストリーム Fetch テスト
- * draft-ietf-moq-transport-21 Section 11.4.1 (Fetch Header and Objects)
+ * draft-ietf-moq-transport-22 Section 11.4.1 (Fetch Header)
  */
 
 import { test, assert } from "vite-plus/test";
@@ -188,7 +188,7 @@ test("FetchObjectFields: 2番目のオブジェクトをデコード (差分エ�
 });
 
 /**
- * draft-ietf-moq-transport-21 Section 11.4.1:
+ * draft-ietf-moq-transport-22 Section 11.4.1:
  * 0x40 は Datagram フラグとして定義された。
  * 不正な Serialization Flags 値はプロトコル違反。
  */
@@ -217,7 +217,7 @@ test("FetchObjectFields: 最初のオブジェクトで GROUP_ID_PRESENT なし�
 });
 
 /**
- * draft-ietf-moq-transport-21 §11.4.1.1:
+ * draft-ietf-moq-transport-22 §11.4.1.1:
  * Publisher Priority は 8 bit (0〜255) であり、範囲外・非整数は
  * Uint8Array 化で黙って丸められるため、変換前に throw することを検証する。
  */
@@ -277,7 +277,7 @@ test("FetchObjectFields: 範囲外・非整数の publisherPriority は throw �
 });
 
 /**
- * draft-ietf-moq-transport-21 §11.4.1.1:
+ * draft-ietf-moq-transport-22 §11.4.1.1:
  * PRIORITY_PRESENT なしの encode では priority を検証しないことを確認する。
  */
 test("FetchObjectFields: PRIORITY_PRESENT なしの encode は priority を検証しない", () => {
@@ -297,7 +297,7 @@ test("FetchObjectFields: PRIORITY_PRESENT なしの encode は priority を検�
 });
 
 /**
- * draft-ietf-moq-transport-21 §11.4.1.1 Table 9:
+ * draft-ietf-moq-transport-22 §11.4.1.1 Table 10:
  * 0x10 未設定は prior Object の Priority を参照することを意味する。先頭 Object
  * には prior Object が無いため、仕様の MUST により PROTOCOL_VIOLATION となる。
  */
@@ -344,7 +344,7 @@ test("FetchObjectFields: 最初のオブジェクトの roundtrip", () => {
 });
 
 /**
- * draft-ietf-moq-transport-21 Section 11.4.1.1:
+ * draft-ietf-moq-transport-22 Section 11.4.1.1:
  * Properties Length が宣言するバイト数にバッファが満たない場合、
  * 切り詰めた Properties を返して後続フィールドを誤読せず、
  * IncompleteDataError を throw して次のチャンクを待つ。
@@ -599,7 +599,7 @@ test("FetchObjectFields: Descending で Group が変わる場合の同一 Subgro
 /**
  * Priority バイトでバッファが切れている場合のテスト
  *
- * draft-ietf-moq-transport-21 §11.4.1.1:
+ * draft-ietf-moq-transport-22 §11.4.1.1:
  * Publisher Priority は 8 bit 固定。チャンク境界が Priority バイトの直前と
  * 一致した場合、範囲外アクセス (undefined 取得) で Priority 不一致を誤検出せず、
  * IncompleteDataError を throw して次のチャンクを待つことを検証する。
@@ -733,7 +733,7 @@ test("FetchObjectFields: Datagram を挟んだ同一 Subgroup の真の Priority
 });
 
 /**
- * draft-ietf-moq-transport-21 §12.1 / §11.4.1.2:
+ * draft-ietf-moq-transport-22 §12.1 / §11.4.1.2:
  * End of Range で Group が変わった後の同一 Subgroup ID のオブジェクトは、
  * 旧 Group の Priority (前オブジェクトの値) と比較されないことを検証する
  * (Subgroup ID のスコープは Group 内であり、Group 跨ぎは無関係)。
@@ -782,7 +782,7 @@ test("FetchObjectFields: End of Range で Group が変わった後の同一 Subg
 });
 
 /**
- * draft-ietf-moq-transport-21 §12.1 / §11.4.1.2:
+ * draft-ietf-moq-transport-22 §12.1 / §11.4.1.2:
  * 同一 Group 内の End of Range を挟んだ後は、先行する Subgroup オブジェクトの
  * 存在が引き継がれるため、真の Priority 不一致が検出されることを検証する。
  */
@@ -828,7 +828,7 @@ test("FetchObjectFields: 同一 Group 内の End of Range 後の真の Priority 
 });
 
 /**
- * draft-ietf-moq-transport-21 §11.4.1.1 Table 9:
+ * draft-ietf-moq-transport-22 §11.4.1.1 Table 10:
  * Priority 省略 (0x10 未設定) のオブジェクトは直近の実オブジェクト (Datagram
  * を含む) の Priority を継承することを検証する (§2.4.2 比較用の値とは別に
  * 継承値は全オブジェクトで更新される)。
@@ -1137,7 +1137,7 @@ test("FetchObjectFields: 交互に出現しても同一 Subgroup の Priority �
 
 /**
  * 同一 Group 内の End of Range を挟んだ交互出現のテスト
- * draft-ietf-moq-transport-21 §12.1 / §11.4.1.2:
+ * draft-ietf-moq-transport-22 §12.1 / §11.4.1.2:
  * 同一 Group 内の End of Range では Subgroup ごとの追跡が維持されるため、
  * 交互出現後の同一 Subgroup の不一致も検出される。
  */
@@ -1392,7 +1392,7 @@ test("FetchObjectFields: Subgroup ID 0 の交互出現の不一致は検出さ�
 
 /**
  * Priority 省略を挟んだ同一 Subgroup の不一致検出テスト
- * draft-ietf-moq-transport-21 §11.4.1.1 Table 9 / §12.1:
+ * draft-ietf-moq-transport-22 §11.4.1.1 Table 10 / §12.1:
  * Priority 省略のオブジェクト自体は比較対象外 (寛容解釈) とするが、
  * 追跡は解決後の継承値で更新される。後続の明示値は更新後の基準と比較される。
  */
@@ -1447,9 +1447,9 @@ test("FetchObjectFields: Priority 省略を挟んだ同一 Subgroup の不一致
 });
 
 /**
- * draft-ietf-moq-transport-21 §11.4.1.1 Table 9:
- * "If the Group Order is Ascending (default), the Group ID is the prior
- *  Object's Group ID plus the Group ID Delta + 1."
+ * draft-ietf-moq-transport-22 §11.4.1.1 Table 10:
+ * "If the Group Order is Ascending, the Group ID is the prior Object's
+ *  Group ID plus the Group ID Delta + 1."
  *
  * 非先頭オブジェクトで GROUP_ID_PRESENT がセットされている場合、
  * delta から正しい Group ID (prior + delta + 1) を計算することを検証する。
@@ -1501,7 +1501,7 @@ test("FetchObjectFields: 非先頭オブジェクトの Group ID Delta を正し
 });
 
 /**
- * draft-ietf-moq-transport-21 §11.4.1.1 Table 9:
+ * draft-ietf-moq-transport-22 §11.4.1.1 Table 10:
  * "When the Group ID Delta field is not present, the Object ID is the
  *  prior Object's ID plus the Object ID Delta if present."
  *
@@ -1542,7 +1542,7 @@ test("FetchObjectFields: 非先頭オブジェクトの Object ID Delta (Group �
 });
 
 /**
- * draft-ietf-moq-transport-21 §11.4.1.1:
+ * draft-ietf-moq-transport-22 §11.4.1.1:
  * encode → decode で複数オブジェクトの delta encoding が正しく roundtrip することを検証する。
  * オブジェクト 1: group=10, object=0  (先頭)
  * オブジェクト 2: group=10, object=3  (Group 不変, OBJECT_ID_PRESENT, delta エンコード)
@@ -1609,7 +1609,7 @@ test("FetchObjectFields: encode→decode roundtrip で delta encoding が正し�
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-21 §11.4.1.1 Table 9:
+ * draft-ietf-moq-transport-22 §11.4.1.1 Table 10:
  * "If the Group Order is Descending, the Group ID is the prior Object's
  *  Group ID minus the (Group ID Delta + 1)."
  *
@@ -1666,7 +1666,7 @@ test("FetchObjectFields: Descending Group Order で Group ID を正しくデコ�
 });
 
 /**
- * draft-ietf-moq-transport-21 §11.4.1.1 Table 9:
+ * draft-ietf-moq-transport-22 §11.4.1.1 Table 10:
  * "If the Group Order is Descending, the Group ID is the prior Object's
  *  Group ID minus the (Group ID Delta + 1)."
  *
@@ -1875,7 +1875,7 @@ test("FetchObjectFields: Descending で prior=0,delta=0 の場合は Group ID �
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-21 §11.4.1.1:
+ * draft-ietf-moq-transport-22 §11.4.1.1:
  * "the object has no Subgroup ID. The publisher MUST SET bit 0x40 to '1'."
  * "the subscriber MUST ignore the bits."
  *
@@ -1931,7 +1931,7 @@ test("FetchObjectFields: DATAGRAM+SUBGROUP_PRESENT で Subgroup ID を消費せ�
 });
 
 /**
- * draft-ietf-moq-transport-21 §11.4.1.1:
+ * draft-ietf-moq-transport-22 §11.4.1.1:
  * "the object has no Subgroup ID" は先頭・非先頭を問わない。DATAGRAM ビットが立つ
  * 非先頭オブジェクトでも Subgroup ID vi64 を消費せず、後続の Object ID /
  * Publisher Priority / payload length が正しく復元されることを検証する。
@@ -1979,7 +1979,7 @@ test("FetchObjectFields: 非先頭 DATAGRAM+SUBGROUP_PRESENT でも Subgroup ID 
 });
 
 /**
- * draft-ietf-moq-transport-21 §11.4.1.1:
+ * draft-ietf-moq-transport-22 §11.4.1.1:
  * DATAGRAM ビットが立つオブジェクトは Subgroup ID を運ばないため、
  * decodeFetchObjectFields は newContext.subgroupId に直前の実 Object の
  * Subgroup ID を保持する。非先頭ケースでこれが保たれることを検証する
@@ -2164,7 +2164,7 @@ test("FetchObjectFields: createFirstFetchObjectFlags で Datagram 用 flags を�
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-21 §11.4.1.1 Table 9:
+ * draft-ietf-moq-transport-22 §11.4.1.1 Table 10:
  * "If the computed Object ID would be greater than 2^64-1, the
  *  Subscriber MUST close the Session with error 'PROTOCOL_VIOLATION'."
  *
@@ -2221,12 +2221,12 @@ test("FetchObjectFields: Group 不変時の Object ID Delta で 2^64-1 を超過
 });
 
 /**
- * draft-ietf-moq-transport-21 §11.4.1 Table 7 / §11.4.1.2:
+ * draft-ietf-moq-transport-22 §11.4.1 Table 8 / §11.4.1.2:
  * End of Timed-Out Range (0x20C) が encode / decode で round-trip し、
  * アプリ向け status 種別が "timed_out" になることを検証する。
  */
 test("FetchObjectFields: End of Timed-Out Range (0x20C) の round-trip で status 種別が timed_out になる", () => {
-  // ワイヤ値の確認 (Table 7)
+  // ワイヤ値の確認 (Table 8)
   assert.equal(FetchSerializationFlags.END_OF_TIMED_OUT_RANGE, 0x20c);
 
   const timedOut: FetchObjectFields = {
@@ -2255,7 +2255,7 @@ const endOfRangeCases = [
 
 for (const { name, flags } of endOfRangeCases) {
   /**
-   * draft-ietf-moq-transport-21 §11.4.1.2:
+   * draft-ietf-moq-transport-22 §11.4.1.2:
    * End of Range indicator の wire は Serialization Flags + Group ID + Object ID のみ。
    * Object Payload Length は通常 Object のフィールドであり、EOR では読み書きしない。
    */
@@ -2287,7 +2287,7 @@ for (const { name, flags } of endOfRangeCases) {
 }
 
 /**
- * draft-ietf-moq-transport-21 §11.4.1.2:
+ * draft-ietf-moq-transport-22 §11.4.1.2:
  * End of Range indicator の直後に通常 Object が続く場合、EOR の 3 フィールドを
  * 消費した残りバッファから次の Serialization Flags を読み始められることを確認する。
  */
@@ -2341,7 +2341,7 @@ test("FetchObjectFields: End of Range の直後の通常 Object を続けてデ�
 });
 
 /**
- * draft-ietf-moq-transport-21 §11.4.1 Table 7:
+ * draft-ietf-moq-transport-22 §11.4.1 Table 8:
  * End of Range (0x8C / 0x10C / 0x20C) 以外の 128 以上の値は
  * PROTOCOL_VIOLATION として拒否されることを検証する
  * (0x20C 追加後も不正値の検証が残っていることの回帰確認)。
@@ -2371,7 +2371,7 @@ test("FetchObjectFields: End of Range 以外の 128 以上の flags は拒否さ
 
 // ============================================================================
 // draft-21 適合監査 D-13: End of Range が先頭レコードのときの prior 参照
-// draft-ietf-moq-transport-21 §11.4.1.2
+// draft-ietf-moq-transport-22 §11.4.1.2
 // ============================================================================
 
 /**
@@ -2390,7 +2390,7 @@ function firstRecordEndOfRangeContext(): FetchObjectContext {
 }
 
 /**
- * draft-ietf-moq-transport-21 §11.4.1.2:
+ * draft-ietf-moq-transport-22 §11.4.1.2:
  * "Prior Subgroup ID: The Subgroup ID from the last actual Object before the
  *  End of Range indicator. If there was no prior Object, using a flag that
  *  references the prior Subgroup ID is a PROTOCOL_VIOLATION."
@@ -2436,7 +2436,7 @@ test("FetchObjectFields: 先頭レコードが End of Range の後の SUBGROUP_P
 });
 
 /**
- * draft-ietf-moq-transport-21 §11.4.1.2:
+ * draft-ietf-moq-transport-22 §11.4.1.2:
  * "Prior Priority: The Priority from the last actual Object before the End of
  *  Range indicator. If there was no prior Object, using a flag that references
  *  the prior Priority is a PROTOCOL_VIOLATION."

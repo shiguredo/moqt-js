@@ -216,7 +216,7 @@ export async function dataStreamHandleIncomingStream(
             session.statsFetchHeadersReceived++;
 
             // Fetcher を検索
-            // draft-ietf-moq-transport-21 Section 9.12 (FETCH_OK):
+            // draft-ietf-moq-transport-22 §3.2 (Fetch):
             // FETCH_OK より先にデータストリームが到着する可能性がある
             fetcher = session.fetchers.get(header.requestId) ?? null;
             if (!fetcher) {
@@ -240,7 +240,7 @@ export async function dataStreamHandleIncomingStream(
               if (!fetcher) {
                 // タイムアウトで Fetcher が登録されなかった場合は、
                 // peer に STOP_SENDING (cancel) を送って受信を打ち切る。
-                // draft-ietf-moq-transport-21 Section 3.2.1 (Fetch State Management) に倣ってストリームを reset する。
+                // draft-ietf-moq-transport-22 Section 3.2.4 (Fetch State Management) に倣ってストリームを reset する。
                 void reader.cancel(`unknown fetcher: requestId=${header.requestId}`);
                 break;
               }
@@ -593,7 +593,7 @@ export async function dataStreamHandleFillFetchStream(
  * まず受信データストリームを STOP_SENDING 相当 (cancelStreamQuiet) で打ち切る。
  * fetcher が存在する場合 (FETCH データストリーム)、fetcher の error コールバックで
  * アプリへ通知し (§12.1 SHOULD)、FetcherImpl.cancel() 経由で
- * draft-ietf-moq-transport-21 §3.2.1 の MUST「It MUST send STOP_SENDING for
+ * draft-ietf-moq-transport-22 §3.2.4 の MUST「It MUST send STOP_SENDING for
  * the bidi request stream.」に従い bidi リクエストストリームへ STOP_SENDING
  * を送り、fetchers Map から削除する。
  *
@@ -657,7 +657,7 @@ export async function dataStreamHandleIncomingStreamError(
     return;
   }
   if (fetchHeader !== null && isPeerStreamError(err)) {
-    // draft-ietf-moq-transport-21 §3.2.1:
+    // draft-ietf-moq-transport-22 §3.2.4:
     // FETCH データストリームの reset で subscriber は FETCH state を破棄する。
     // fetchHeader が無い場合 (FETCH_HEADER 読取前の reset) は fetcher を
     // 特定できないため何もしない。
@@ -672,10 +672,12 @@ export async function dataStreamHandleIncomingStreamError(
  * fetchers から削除、Prior ID Gap 追跡の掃除、onRequestDrained まで行う (正常終了の
  * handleEnd は通知しない)。セッションは閉じない。
  *
- * draft-ietf-moq-transport-21 §3.2.1:
+ * draft-ietf-moq-transport-22 §3.2.4:
  * 「If the data stream is already open, the subscriber wishing to cancel the FETCH
  *  MAY send STOP_SENDING for the data stream as well as the bidi request stream.
  *  It MUST send STOP_SENDING for the bidi request stream.」
+ * データストリームへの STOP_SENDING は MAY であり、この経路は cancelStreamQuiet で
+ * 既にデータストリームを打ち切っているため、重ねて送らない。
  * ローカル判断で FETCH state を破棄する本経路は cancel に当たるため、fetcher.cancel()
  * で bidi リクエストストリームへ STOP_SENDING を送る (markClosed だけでは state が
  * 先に closed になり、アプリからの cancel() が no-op になって MUST を満たせない)。
@@ -719,9 +721,9 @@ async function dataStreamAbortFetchOnBufferOverflow(
 /**
  * peer の RESET_STREAM で FETCH データストリームが終了したときの後始末
  *
- * draft-ietf-moq-transport-21 §3.2.1:
+ * draft-ietf-moq-transport-22 §3.2.4:
  * 「A subscriber keeps FETCH state until it cancels the request (see
- *  Section 6.4.2.3), receives REQUEST_ERROR, or the FETCH data stream
+ *  Section 6.4.2.3), receives FETCH_ERROR, or the FETCH data stream
  *  receives a FIN or is reset.」
  * アプリへ error を通知してから fetcher を closed にし、fetchers から削除する
  * (handleMalformedFetchTrack と同じ順序。handleError を markClosed より先に

@@ -678,7 +678,7 @@ interface FetchStreamSpec {
  * Fetch ストリームの任意構築
  *
  * Group Order が Ascending なら Group ID 昇順、Descending なら降順に並べる
- * (§11.4.1.1 Table 9 の delta はこの順序で初めて非負になる)。
+ * (§11.4.1.1 Table 10 の delta はこの順序で初めて非負になる)。
  */
 const fetchStreamArb: fc.Arbitrary<FetchStreamSpec> = fc
   .tuple(

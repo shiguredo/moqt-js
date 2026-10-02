@@ -3850,7 +3850,7 @@ interface FetchPriorityMismatchContext {
  * draft-ietf-moq-transport-21 §12.1 (Malformed Tracks):
  * Malformed Track 検出時は「cancel any corresponding subscription or fetches
  * for that Track from that publisher」であり、セッションを閉じない。
- * draft-ietf-moq-transport-21 §3.2.1 (Fetch State Management):
+ * draft-ietf-moq-transport-22 §3.2.4 (Fetch State Management):
  * キャンセル時は「It MUST send STOP_SENDING for the bidi request stream.」
  *
  * fetchers / requestStreams は FETCH 確立後の状態 (bidiSendRequestOnBidiStream が
@@ -3997,7 +3997,7 @@ function assertFetchCancelledOnPriorityMismatch(ctx: FetchPriorityMismatchContex
   // 受信データストリームは STOP_SENDING 相当で打ち切られる
   assert.isDefined(ctx.dataCancelledReason.current);
   assert.isTrue(ctx.dataCancelledReason.current!.includes("malformed track"));
-  // §5.2 の MUST に従い bidi リクエストストリームへ STOP_SENDING が送られる
+  // §3.2.4 の MUST に従い bidi リクエストストリームへ STOP_SENDING が送られる
   assert.equal(ctx.bidiCancelledReason.current, "fetch cancelled");
   // fetchers / requestStreams から削除される
   assert.equal(ctx.internal.fetchers.size, 0);
@@ -4012,9 +4012,9 @@ function assertFetchCancelledOnPriorityMismatch(ctx: FetchPriorityMismatchContex
 }
 
 /**
- * draft-ietf-moq-transport-21 §3.2.1:
+ * draft-ietf-moq-transport-22 §3.2.4:
  * 「A subscriber keeps FETCH state until it cancels the request (see
- *  Section 6.4.2.3), receives REQUEST_ERROR, or the FETCH data stream
+ *  Section 6.4.2.3), receives FETCH_ERROR, or the FETCH data stream
  *  receives a FIN or is reset.」
  * FETCH データストリームの peer RESET_STREAM で、アプリの error コールバックが
  * 1 回だけ呼ばれ、正規化済み streamErrorCode が載り、fetcher が closed になって
@@ -4510,16 +4510,16 @@ test("startControlMessageLoop: アプリコールバックの throw ではセッ
  * セッションが閉じず、対象 FETCH がキャンセルされることを検証する。
  *
  * - 受信データストリームは STOP_SENDING 相当 (cancelStreamQuiet) で打ち切られる
- * - draft-ietf-moq-transport-21 §3.2.1 の MUST に従い、bidi リクエストストリームへ
+ * - draft-ietf-moq-transport-22 §3.2.4 の MUST に従い、bidi リクエストストリームへ
  *   STOP_SENDING (readable.cancel) が送られる
  * - fetchers / requestStreams から削除される
  * - error コールバックが MalformedTrackError で呼ばれる
  *
  * この検証は fetch() で登録された FETCH に適用される。fetch() は
  * bidiSendRequestOnBidiStream で新規 bidi ストリームを開いて requestStreams に
- * 登録するため (§10.13「A subscriber sends FETCH as the first message on a new
+ * 登録するため (§9.11「A subscriber sends FETCH as the first message on a new
  * bidi stream」)、FETCH のデータストリームで検出した場合は
- * §5.2 の MUST どおり bidi リクエストストリームへ STOP_SENDING が送られる
+ * §3.2.4 の MUST どおり bidi リクエストストリームへ STOP_SENDING が送られる
  * (この判断を本テストで固定する)。
  */
 test("FETCH 応答の Priority 不一致でセッションは閉じず FETCH がキャンセルされ error コールバックが呼ばれる", async () => {
@@ -4587,7 +4587,7 @@ test("FETCH データストリーム: Mandatory Track Property で FETCH を can
   // 受信データストリームは STOP_SENDING 相当で打ち切られる
   assert.isDefined(ctx.dataCancelledReason.current);
   assert.isTrue(ctx.dataCancelledReason.current!.includes("malformed track"));
-  // draft-ietf-moq-transport-21 §3.2.1 の MUST に従い bidi リクエストストリームへ
+  // draft-ietf-moq-transport-22 §3.2.4 の MUST に従い bidi リクエストストリームへ
   // STOP_SENDING が送られる
   assert.equal(ctx.bidiCancelledReason.current, "fetch cancelled");
   // fetchers / requestStreams から削除される
@@ -6672,7 +6672,7 @@ test("Subgroup データストリーム: バッファ上限超過で同一 alias
 });
 
 /**
- * draft-ietf-moq-transport-21 §12.5 (EXCESSIVE_LOAD 0x9) / §3.2.1:
+ * draft-ietf-moq-transport-22 §12.5 (EXCESSIVE_LOAD 0x9) / §3.2.4:
  * FETCH データストリームでバッファ上限を超えたら打ち切り、ピアの
  * RESET_STREAM と同じ後始末 (error 通知・fetchers からの削除) を行う。
  * 正常終了 (handleEnd) は通知しない。
@@ -6743,7 +6743,7 @@ test("Fetch データストリーム: バッファ上限を超えると打ち切
     DataStreamErrorCode.EXCESSIVE_LOAD,
   );
   assert.equal(fetcher.state, "closed");
-  // draft-ietf-moq-transport-21 §3.2.1:
+  // draft-ietf-moq-transport-22 §3.2.4:
   // ローカル判断で FETCH state を破棄する場合は bidi リクエストストリームへ
   // STOP_SENDING を送る MUST であり、cancel() 経由で実行される
   assert.equal(bidiCancels.length, 1);

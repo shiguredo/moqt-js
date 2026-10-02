@@ -2334,6 +2334,12 @@
   - GitHub Actions の runner が遅いとき、`src/playbackTimeline.prop.ts` の 120 秒の到着列のテストが 20 秒、`src/playbackTimeline.test.ts` と `src/playoutBuffer.prop.ts` のテストが Vitest の既定の 5 秒を超えて fail していた
   - テストの内容は変えず、既定のタイムアウトを 30 秒にし、120 秒の到着列のテストは 60 秒にする
   - @voluntas
+- [UPDATE] Fetch の仕様参照を draft-22 の節に更新する
+  - v21 §3.2.1 (Fetch State Management) は v22 §3.2.4 へ移動したため、コメントとテストの節番号を直す (cancel は bidi リクエストストリームへの STOP_SENDING が MUST、データストリームへは MAY)
+  - §3.2.2 のギャップの意味論 (ギャップの 3 原因、Range Filter の有無による未マークギャップの解釈、End of Range indicator の 3 種、ストリーム末尾は FIN でのみ検出できること) をコメントに残し、アプリへのギャップ通知と cancel 以外でのデータストリームへの STOP_SENDING を行わない判断を記録する
+  - §11.4.1 / §11.4.1.1 / §11.4.1.2 の表と図は v22 で番号が繰り下がっているため、参照を Table 8 / 9 / 10 と Figure 29 に合わせる (§3.2.3 の relay の FETCH 処理はクライアント専用の本ライブラリには関係しない)
+  - 挙動は変えず、コメントのみの変更
+  - @voluntas
 - [ADD] 実リレーへ接続する E2E テストを追加する
   - `secrets.TEST_MOQT_URI` が指す MOQT リレーへ実ブラウザ (Chromium) から接続し、SETUP の交換と正常な切断、Canvas のダミー映像の publish / subscribe、FETCH (絶対開始の Location Filter) を検証する
   - 接続先は環境変数 `TEST_MOQT_URI` で渡す。未設定の環境 (fork からの PR、secret を持たないローカル) ではテストを skip として記録し、暗黙の成功扱いにしない

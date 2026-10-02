@@ -449,7 +449,7 @@ test("bidiHandleRequestUpdateOk: Track Properties 違反で保留中の更新が
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.2.1 / §9.11:
+ * draft-ietf-moq-transport-22 §3.2.4 / §9.11:
  * 失敗確定時に待機中の fetcher 取得が即時解決することを検証する。
  * 待機の解決値は fetchers 不在のため null になる。
  */
