@@ -1,7 +1,7 @@
 # 制御メッセージごとの許可パラメータ一覧を監査する
 
 - Created: 2026-10-02
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-10-03
 - Branch: feature/update-allowed-parameters-audit
 - Polished: 2026-10-02
 
@@ -91,4 +91,43 @@ FILL_PARAMETERS 内側 (§9.20.15 Table 7): FILL_TIMEOUT / SUBSCRIBER_PRIORITY /
 
 ## 解決方法
 
-{未着手}
+draft-ietf-moq-transport-22 §9.5〜§9.19 / §9.20.1〜§9.20.21 と `refs/moq/draft-ietf-moq-transport-22.txt` を正として、§9.20 の節番号と制御メッセージごとの許可パラメータを監査した。
+
+### 1. メッセージ別の許可パラメータの照合結果
+
+| メッセージ | v22 の許可パラメータ | 実装 | 判断 |
+| --- | --- | --- | --- |
+| SUBSCRIBE (§9.6) | 15 種 (OBJECT_DELIVERY_TIMEOUT / AUTHORIZATION_TOKEN / RENDEZVOUS_TIMEOUT / SUBGROUP_DELIVERY_TIMEOUT / FORWARD / SUBSCRIBER_PRIORITY / LOCATION_FILTER / GROUP_ORDER / FILL_PARAMETERS / SUBGROUP_FILTER / OBJECTID_FILTER / PRIORITY_FILTER / OBJECT_PROPERTY_FILTER / NEW_GROUP_REQUEST / INCLUDE_PROPERTIES) | `buildSubscribeParameters` / `SUBSCRIBE_ALLOWED_PARAMS` | 一致 |
+| SUBSCRIBE_OK (§9.7) | EXPIRES / LARGEST_OBJECT | `SUBSCRIBE_OK_ALLOWED_PARAMS` | 一致 |
+| PUBLISH (§9.8) | 9 種 | `PUBLISH_ALLOWED_PARAMS` / `buildPublishParameters` | 一致 |
+| PUBLISH_STATE_NOTIFY (§9.10) | LARGEST_OBJECT / FORWARD / LOCATION_FILTER | `PUBLISH_STATE_NOTIFY_ALLOWED_PARAMS` | 一致 |
+| FETCH (§9.11) | 10 種 | `buildFetchParameters` / `FETCH_ALLOWED_PARAMS` | 一致 |
+| FETCH_OK (§9.12) | パラメータ無し | `FETCH_OK_ALLOWED_PARAMS` (空) | 一致 |
+| TRACK_STATUS (§9.13) | AUTHORIZATION_TOKEN / INCLUDE_PROPERTIES | `buildTrackStatusParameters` | 一致 |
+| PUBLISH_NAMESPACE (§9.14) / SUBSCRIBE_NAMESPACE (§9.15) | AUTHORIZATION_TOKEN のみ | 各 build 関数 | 一致 |
+| SUBSCRIBE_TRACKS (§9.18) | 9 種 (AUTHORIZATION_TOKEN / FORWARD / GROUP_ORDER / SUBGROUP_FILTER / OBJECTID_FILTER / PRIORITY_FILTER / OBJECT_PROPERTY_FILTER / TRACK_PROPERTY_FILTER / INCLUDE_PROPERTIES) | `buildSubscribeTracksParameters` | **3 種を削除して一致させた** |
+| REQUEST_UPDATE (§9.5) | 対象ごとの一覧 | `REQUEST_UPDATE_ALLOWED_PARAMS` / `NAMESPACE_REQUEST_UPDATE_ALLOWED_PARAMS` | **TRACK_PROPERTY_FILTER を追加して一致させた** |
+| FILL_PARAMETERS 内側 (§9.20.15 Table 7) | 8 種 (TRACK_PROPERTY_FILTER を含まない) | `FILL_PARAMETERS_ALLOWED_TYPES` | 一致 (変更なし) |
+
+### 2. 挙動の変更 (SUBSCRIBE_TRACKS の許可パラメータ)
+
+- §9.18 の列挙を正とし、`buildSubscribeTracksParameters` と `SubscribeTracksOptions` から LOCATION_FILTER / SUBSCRIBER_PRIORITY / FILL_PARAMETERS を削除した (§9.20.1 の MUST と各パラメータ定義 (§9.20.7 / §9.20.9 / §9.20.15) が SUBSCRIBE_TRACKS を挙げないため)
+- §3.6.2 の「SUBSCRIBE に指定できるパラメータは SUBSCRIBE_TRACKS でも有効」と「Location Filter / FILL_PARAMETERS を指定できる」という記述との矛盾は仕様内部の問題であり、判断と根拠を `SubscribeTracksOptions` と `buildSubscribeTracksParameters` の JSDoc に記録した
+- fill 内側の Range Filter を購読単位の上限合算から外した (`namespaces.ts`)。SUBSCRIBE_TRACKS は FILL_PARAMETERS を運ばないため
+- 公開 API の変更 (`SubscribeTracksOptions` の 3 フィールド削除) は CHANGES.md の `[CHANGE]` に記録した
+
+### 3. 参照の更新
+
+- §9.20.2 (Allowed Parameters By Control Message) の廃止に伴い、パラメータ節の番号を 1 つ繰り下げた (v21 §9.20.3〜§9.20.22 → v22 §9.20.2〜§9.20.21)。FILL_PARAMETERS の内側の一覧は Table 6 → Table 7、§9.20.1 の逐語は v22 に合わせた
+- 機械置換で混入した誤り (OBJECT_DELIVERY_TIMEOUT / LARGEST_OBJECT / FORWARD / LOCATION_FILTER / SUBSCRIBER_PRIORITY / NEW_GROUP_REQUEST / Range Filter の範囲 / Figure 番号) は `/review-diff-code` の 3 周で検出して修正した
+- LOCATION_FILTER / FORWARD / LARGEST_OBJECT の参照は各担当 issue (0796 / 0800 / 0804) の前提を壊さないよう確認し、本 issue の範囲では §9.20.18 → §9.20.17 (LARGEST OBJECT) の更新も行った (0804 の作業と重複する場合は 0804 側で本ブランチの結果を前提にする)
+
+### 4. テスト
+
+- `src/message/parameterScope.test.ts`: `NAMESPACE_REQUEST_UPDATE_ALLOWED_PARAMS` が §9.5 の 4 型 (AUTHORIZATION_TOKEN / FORWARD / TRACK_PROPERTY_FILTER / TRACK_NAMESPACE_PREFIX) ちょうどであることを固定
+- `src/session/params.test.ts` / `src/session/params.prop.ts`: SUBSCRIBE_TRACKS が §9.18 の一覧に無い型を送らないことを固定 (旧 subscriberPriority のテストを置き換え)
+- `src/session.test.ts`: SUBSCRIBE_TRACKS の外側 Range Filter が上限を超えるとストリームを開かずに throw することを固定。fill 内側を前提とした 5 テストは機能削除に伴い削除した (fill 経路の検証は SUBSCRIBE 側に残る)
+
+### 5. 検証
+
+`vp check` (1284 files 整形 / 475 files lint・型エラーなし) / `tsc --noEmit` / `vp test run` (198 files / 3565 tests) が通る。
