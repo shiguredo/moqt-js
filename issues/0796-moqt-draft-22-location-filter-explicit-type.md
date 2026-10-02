@@ -3,7 +3,7 @@
 - Created: 2026-10-02
 - Completed: {YYYY-MM-DD}
 - Branch: feature/change-location-filter-encoding
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-10-02
 
 ## 目的
 
@@ -26,6 +26,8 @@ v21 の「2 フィールドで StartGroup = StartObject = 0 は Next Object」�
 - `src/message/parameter/messageParameter.ts` の `MESSAGE_PARAMETER_VALUE_ENCODING` は 0x21 を "self-length-prefixed" として扱い、外側 Length なしで内側 Length を読む。`decodeFillParameters` も同じ前提で FILL_PARAMETERS 内側の LOCATION_FILTER を処理する
 - `src/filter.ts` の `resolveFilter` と `src/session/params.ts` の `resolveFetchStartLocation` は 2 フィールド 0:0 を Next Object として解決する
 - `src/message/parameter.test.ts` は Length 形式のワイヤ (例: `[0x01, 0x21, 0x01, 0x03]`、reset は `[0x01, 0x21, 0x00]`) を固定している。`src/message/parameterArb.ts` の `locationFilterArb` / `locationFilterParameterArb` も Length 形式を前提にしている
+- 0:0 を Next Object として送る内部呼び出しがある。`src/createMediaSubscriber.ts` (catalog の live SUBSCRIBE) と `devtools/src/hooks/useSubscriber.ts` (catalog の live SUBSCRIBE) が `filter: { startGroup: 0n, startObject: 0n }` を Next Object として使う
+- 公開 API ドキュメントも旧表現のまま。`src/session/publicTypes.ts` の `SubscribeOptions.filter` / `FetchOptions.filter` / `FillRequestOptions.filter` と fill の説明、`src/subscriber.ts` の `largestLocation`、`src/session/requests.ts` のコメントに「Length ベース」「両方 0 は Next Object」が残る
 - コメントの節番号は v21 の §9.20.10 のまま
 
 ## 設計方針
@@ -34,7 +36,8 @@ v21 の「2 フィールドで StartGroup = StartObject = 0 は Next Object」�
 - `encodeLocationFilter` は先頭に Location Filter Type (vi64) を書き、型に応じた個数の vi64 を続ける。`decodeLocationFilter` は Type を読み、型ごとの個数を読む。未知の Type は PROTOCOL_VIOLATION とする。End Group の 2^64-1 超過検証は維持する
 - `messageParameter.ts` の 0x21 を Length なしの専用エンコーディングに変更する。値の終端は Type とフィールド数で決まるため、`decodeMessageParameter` はストリームから Type とフィールドを読み、消費バイト数を確定してから値を保持する。FILL_PARAMETERS 内側の `decodeFillParameters` も同じ方式に合わせる
 - `isNextObjectLocationFilter` は 0x05 表現を判定する。`resolveFilter` の Next Object と相対指定 (0x01) の解決、`resolveFetchStartLocation` の確定可否、`isSameLocationFilter` の比較を新しい表現に合わせる。0x02 の 0:0 は絶対位置 {0, 0} の指定として扱う (Next Object にはしない)
-- コメントの §9.20.10 を §9.20.9 に更新する
+- `{ startGroup: 0n, startObject: 0n }` を Next Object として送っていた内部呼び出し (`src/createMediaSubscriber.ts` / `devtools/src/hooks/useSubscriber.ts` の catalog の live SUBSCRIBE) を `{ nextObject: true }` に移行する。0:0 のまま残すと 0x02 の絶対 {0, 0} 指定として解釈され、トラック先頭から全 Object を受信してしまう
+- LOCATION_FILTER 関連のコメントを v22 に更新する (節番号 §9.20.10 → §9.20.9 に加えて、「Length ベース」「両方 0 は Next Object」の旧意味論が残る `src/session/publicTypes.ts` / `src/subscriber.ts` / `src/session/requests.ts` の記述を新表現に合わせる)
 - テストを更新する。新ワイヤ形式の固定、6 形式すべての round-trip、FILL_PARAMETERS 内側、未知 Type の拒否、2 フィールド 0:0 が絶対 {0,0} として解決されること、相対指定と Next Object (0x05) の解決を固定する
 
 ## 完了条件
@@ -51,6 +54,8 @@ v21 の「2 フィールドで StartGroup = StartObject = 0 は Next Object」�
 - `src/message/parameter/messageParameter.ts` の `MESSAGE_PARAMETER_VALUE_ENCODING` / `decodeFillParameters`
 - `src/filter.ts` の `resolveFilter`
 - `src/session/params.ts` の `resolveFetchStartLocation` / `buildFetchParameters` / `buildSubscribeParameters` / `buildSubscribeTracksParameters`
+- `src/session/publicTypes.ts` / `src/subscriber.ts` / `src/session/requests.ts`
+- `src/createMediaSubscriber.ts` / `devtools/src/hooks/useSubscriber.ts`
 - `src/message/parameter.prop.ts` / `src/message/parameter.test.ts` / `src/filter.prop.ts` / `src/session/params.prop.ts`
 
 ## 解決方法
