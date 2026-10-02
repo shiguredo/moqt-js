@@ -3160,7 +3160,7 @@ function markOmittedNextObject(session: BidiSessionInternal, publisher: Publishe
  *
  * @param innerLocationFilter - FILL_PARAMETERS 内側の LOCATION_FILTER (未指定時 undefined)
  * @param subscriptionResolvedFilter - 購読の解決済み Location Filter
- * @param largestLocation - publisher が送信済みの最大 Location (未送信時 null)
+ * @param largestLocation - publisher が記録した最大 Location (受け付け時に更新され、1 件も記録していない場合は null)
  */
 function resolveFillRangeFilter(
   innerLocationFilter: LocationFilter | undefined,
@@ -3186,7 +3186,7 @@ function resolveFillRangeFilter(
  * 配信できる Object が無いため空とする。
  *
  * @param filter - resolveFilter で解決済みの fill 範囲
- * @param largestLocation - publisher が送信済みの最大 Location (未送信時 null)
+ * @param largestLocation - publisher が記録した最大 Location (受け付け時に更新され、1 件も記録していない場合は null)
  */
 function isFillRangeEmpty(
   filter: ResolvedFilter | undefined,

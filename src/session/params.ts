@@ -936,7 +936,11 @@ export function buildTrackStatusParameters(options?: TrackStatusOptions): Parame
 /**
  * 純粋関数: SUBSCRIBE_OK / PUBLISH のパラメータから LARGEST_OBJECT を抽出する
  *
- * draft-ietf-moq-transport-22 Section 9.20.17 (LARGEST OBJECT Parameter)
+ * draft-ietf-moq-transport-22 §9.20.17 (LARGEST OBJECT Parameter) / §3.1.4
+ * (Largest Object):
+ * "Largest Object therefore identifies an Object that can still be arriving."
+ * 抽出した値は確定値ではなく、後続のメッセージ (REQUEST_UPDATE_OK /
+ * PUBLISH_STATE_NOTIFY / 受信 PUBLISH) でさらに進み得る。
  */
 export function extractLargestLocation(parameters: Parameter[]): Location | undefined {
   for (const param of parameters) {
