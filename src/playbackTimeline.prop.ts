@@ -6,7 +6,7 @@
  *
  * - 表示時刻は µs に丸めた TIMESTAMP + 表示の遅れに一致し、表示の遅れから基準の遅れを
  *   引いた追加分は上限 (MAX_PLAYOUT_DELAY_MS とキューが吸収できる長さの小さい方) を超えない
- * - 同じ TIMESTAMP の音声と映像は同じ表示時刻になる (基準も再生遅延も共有する)
+ * - 同じ TIMESTAMP の音声と映像の表示時刻は、不感帯 (SYNC_MIN_DELTA_MS) の範囲で揃う
  * - 共有の再生遅延は 0 以上で、下げる速さは毎秒 PLAYBACK_DELAY_DECAY_MS_PER_SECOND を
  *   超えない
  * - 120 秒の到着列でも同時刻の音声と映像の表示時刻の差と skewMs は ±50 ms 以内に収まる
@@ -23,6 +23,7 @@ import {
   PLAYBACK_DELAY_DECAY_MS_PER_SECOND,
   PLAYOUT_BASE_MAX_DIFFERENCE_MIN_MS,
   PLAYOUT_QUEUE_HEADROOM_FRAMES,
+  SYNC_MIN_DELTA_MS,
   PlaybackTimeline,
   type PlaybackStream,
 } from "./playbackTimeline";
@@ -247,6 +248,9 @@ test("PlaybackTimeline: 表示時刻は TIMESTAMP + 基準の遅れ + 表示の�
             ? 0
             : Math.abs(Math.min(...audioOffsets) - Math.min(...videoOffsets));
         const delayOfStream = stream === "audio" ? timeline.audioDelayMs : timeline.videoDelayMs;
+        // 実装は同期が足した分を含まない遅延で閾値を計算する。ここでは実効値 (足した分を
+        // 含む) を使うため、閾値は実装より小さくなる (共有しない側に倒れる)。表示時刻が
+        // null になる条件の確認にしか使わないため、この向きで問題ない
         const delayBiggestMs = Math.max(timeline.audioDelayMs ?? 0, timeline.videoDelayMs ?? 0);
         const sharingBases =
           differenceMs <= Math.max(PLAYOUT_BASE_MAX_DIFFERENCE_MIN_MS, queueCapMs - delayBiggestMs);
@@ -396,37 +400,49 @@ function buildArrivals(seed: number): { stream: PlaybackStream; atMs: number; me
   return arrivals;
 }
 
+/**
+ * 120 秒の到着列を時間軸へ与え、最後の 10 秒の同時刻の表示時刻の差の最大値を求める
+ *
+ * @returns 時間軸 (skewMs の検算に使う) と、差の最大値 (ミリ秒)
+ */
+function runArrivals(seed: number): { timeline: PlaybackTimeline; maxDifferenceMs: number } {
+  const timeline = new PlaybackTimeline({
+    timeOriginMs: EPOCH_MS,
+    maxQueuedFrames: MAX_QUEUED_FRAMES,
+  });
+  const durationMs = 120_000;
+  const videoFrameMs = 1_000 / 30;
+  for (const arrival of buildArrivals(seed)) {
+    timeline.observe(arrival.stream, arrival.atMs, timestampOf(arrival.mediaMs));
+  }
+
+  let maxDifferenceMs = 0;
+  for (let mediaMs = durationMs - 10_000; mediaMs < durationMs; mediaMs += videoFrameMs) {
+    const audioWallClockMicros = timeline.presentationWallClockMicros(
+      "audio",
+      timestampOf(mediaMs),
+    );
+    const videoWallClockMicros = timeline.presentationWallClockMicros(
+      "video",
+      timestampOf(mediaMs),
+    );
+    assert.isNotNull(audioWallClockMicros, "音声の表示時刻が決まること");
+    assert.isNotNull(videoWallClockMicros, "映像の表示時刻が決まること");
+    maxDifferenceMs = Math.max(
+      maxDifferenceMs,
+      Math.abs(Number(audioWallClockMicros) - Number(videoWallClockMicros)) / 1_000,
+    );
+  }
+  return { timeline, maxDifferenceMs };
+}
+
 test("PlaybackTimeline: 120 秒の到着列でも同時刻の表示時刻の差と skewMs が ±50 ms 以内になる", () => {
   fc.assert(
     fc.property(fc.integer({ min: 1, max: 1_000_000 }), (seed) => {
-      const timeline = new PlaybackTimeline({
-        timeOriginMs: EPOCH_MS,
-        maxQueuedFrames: MAX_QUEUED_FRAMES,
-      });
       const durationMs = 120_000;
-      const videoFrameMs = 1_000 / 30;
-      for (const arrival of buildArrivals(seed)) {
-        timeline.observe(arrival.stream, arrival.atMs, timestampOf(arrival.mediaMs));
-      }
-
-      // 最後の 10 秒の同時刻の表示時刻の差を見る
-      let maxDifferenceMs = 0;
-      for (let mediaMs = durationMs - 10_000; mediaMs < durationMs; mediaMs += videoFrameMs) {
-        const audioWallClockMicros = timeline.presentationWallClockMicros(
-          "audio",
-          timestampOf(mediaMs),
-        );
-        const videoWallClockMicros = timeline.presentationWallClockMicros(
-          "video",
-          timestampOf(mediaMs),
-        );
-        assert.isNotNull(audioWallClockMicros, "音声の表示時刻が決まること");
-        assert.isNotNull(videoWallClockMicros, "映像の表示時刻が決まること");
-        maxDifferenceMs = Math.max(
-          maxDifferenceMs,
-          Math.abs(Number(audioWallClockMicros) - Number(videoWallClockMicros)) / 1_000,
-        );
-      }
+      const { timeline, maxDifferenceMs } = runArrivals(seed);
+      // 50 ms はこの性質に求めた許容である (制御は不感帯の 30 ms に収めるが、上限に
+      // 達している間は広がり得るため、余裕を残す)
       assert.isAtMost(maxDifferenceMs, 50, "同時刻の表示時刻の差が 50 ms 以内であること");
 
       // 実績から求める同期ずれも、同じ式で決めた音声と映像なら ±50 ms 以内になる
@@ -448,3 +464,21 @@ test("PlaybackTimeline: 120 秒の到着列でも同時刻の表示時刻の差�
   // ローカルでは数秒で終わるが、CI の遅い runner では 20 秒を超えることがあったため、
   // 実行時間で fail しないよう余裕を持たせる (vite.config.ts の testTimeout は 30 秒)
 }, 60_000);
+
+/**
+ * 特定した seed の到着列でも、同時刻の表示時刻の差が不感帯に収まる
+ *
+ * 失敗を観測した入力を固定する。同期の制御が相手の目標遅延の段差に追いつかず、差が
+ * 最大 112 ms まで開いていた (制御が「経路の相対遅延」を見ており、また 1 秒ごとに
+ * 平均の半分しか動かせなかったため)。不感帯まで締めるのは、実際に 30 ms ちょうどで
+ * 収まっており、ここが緩むと制御の分解能が落ちたことを見逃すためである
+ */
+test("PlaybackTimeline: 差が開いていた到着列でも同時刻の表示時刻の差が不感帯に収まる", () => {
+  for (const seed of [50, 139, 194]) {
+    assert.isAtMost(
+      runArrivals(seed).maxDifferenceMs,
+      SYNC_MIN_DELTA_MS + 0.01,
+      `seed=${seed} の同時刻の表示時刻の差が不感帯に収まること`,
+    );
+  }
+}, 30_000);
