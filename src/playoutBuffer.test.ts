@@ -259,10 +259,9 @@ test("select: 上限を超えて遅れたフレームを捨てて最新を描く
 // 繰り返されても、フレームを捨てずに全周期で 1 枚ずつ描く
 test("select: 配信 fps と表示周期が同じで位相が揺れてもフレームを捨てない", () => {
   const frameMs = 1_000 / 120;
-  // 再生遅延は音声の下限 (80 ms) になる。表示時刻は「基準の遅れ 0 ms + 再生遅延」から
-  // 始まるため、選択の時刻も基準の遅れの分だけずらす
+  // 音声は観測しない。同期の制御が映像の遅延を動かすと、選択の時刻 (表示時刻の前後
+  // 0.3 ms) と表示時刻の進み方がずれるためである
   const timeline = createTimeline();
-  observeAudioWithVideo(timeline, 0, 0);
   observeFrame(timeline, 0, 0);
   const buffer = new PlayoutBuffer<number>(JITTER_BUFFER_MAX_QUEUED_FRAMES, timeline);
   const baseMs = buffer.presentationTimeMs(timestampOf(0)) ?? 0;
@@ -275,7 +274,6 @@ test("select: 配信 fps と表示周期が同じで位相が揺れてもフレ�
     const tickMs = baseMs + tick * frameMs + (tick % 2 === 0 ? 0.3 : -0.3);
     while (enqueued < frames && baseMs + enqueued * frameMs <= tickMs) {
       // 2 枚に 1 枚が 0.6 ms 遅れて届く (基準の遅れが 0.6 ms 動く)
-      observeAudioWithVideo(timeline, enqueued * frameMs, enqueued % 2 === 1 ? 0.6 : 0);
       observeFrame(timeline, enqueued * frameMs, enqueued % 2 === 1 ? 0.6 : 0);
       buffer.enqueue(enqueued, timestampOf(enqueued * frameMs));
       enqueued++;
@@ -368,7 +366,9 @@ test("select: 時間軸がそのトラックの TIMESTAMP を使わないとき�
 // 表示時刻は時間軸が決める。映像の表示の遅れは映像の揺らぎだけで決まる (音声の jitter
 // buffer の遅延には引きずられない) ため、揺らぎ 0 のフレームは到着の順に描く
 test("presentationTimeMs: 表示時刻は時間軸が決める", () => {
-  const timeline = createSharedTimeline();
+  // 音声は観測しない (同期の制御を働かせない)。基準の遅れは観測の時刻 (LOCAL_ORIGIN_MS) になる
+  const timeline = createTimeline();
+  observeFrame(timeline, 0, 0);
   const buffer = new PlayoutBuffer<number>(JITTER_BUFFER_MAX_QUEUED_FRAMES, timeline);
   const delayMs = timeline.presentationDelayMs ?? 0;
   assert.closeTo(delayMs, LOCAL_ORIGIN_MS, TOLERANCE_MS, "映像は自分の揺らぎ (0 ms) だけ遅れる");
@@ -376,7 +376,7 @@ test("presentationTimeMs: 表示時刻は時間軸が決める", () => {
   const presentationMs = buffer.presentationTimeMs(timestampOf(0)) ?? 0;
   // 表示時刻は performance.now() の軸で返る (基準の遅れは 0 ms、表示の遅れは 0 ms)
   assert.closeTo(presentationMs, LOCAL_ORIGIN_MS, TOLERANCE_MS);
-  // 共有の時間軸が決めた表示時刻 (performance.now() の軸) の前は描かず、過ぎたら描く
+  // 時間軸が決めた表示時刻 (performance.now() の軸) の前は描かず、過ぎたら描く
   assert.deepEqual(buffer.select(presentationMs - 1), {
     draw: null,
     late: [],
@@ -409,7 +409,8 @@ test("enqueue: キューの上限を超えたら古い方から返す", () => {
 
 // 揺らぎが増えたら直ちに追従する (共有の時間軸の再生遅延を返す)
 test("playoutDelayMs: 揺らぎが増えたら直ちに上げる", () => {
-  const timeline = createSharedTimeline();
+  // 音声は観測しない (同期の制御を働かせない)
+  const timeline = createTimeline();
   const buffer = new PlayoutBuffer<number>(JITTER_BUFFER_MAX_QUEUED_FRAMES, timeline);
   // 揺らぎ 0 のフレームを 1 秒分観測し、キューは空にする
   for (let index = 0; index < 30; index++) {
