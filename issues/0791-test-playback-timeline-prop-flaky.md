@@ -1,7 +1,7 @@
 # playbackTimeline の表示時刻の差のプロパティテストがまれに失敗する
 
 - Created: 2026-10-01
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-10-02
 - Branch: feature/fix-playback-timeline-prop-flaky
 - Polished: 2026-10-01
 
@@ -32,4 +32,13 @@
 
 ## 解決方法
 
-{未着手}
+切り分けの結果、テストの前提ではなく実装 (A/V 同期の制御) が意図を満たしていないことが分かったため、実装を直した。
+
+- 失敗の再現: seed 50 は 58.0 ms、seed 139 は 80.1 ms、seed 194 は 69.9 ms で失敗する (実測)。120 秒の到着列では 109〜112 ms まで開く場合があった
+- 原因は 2 つ。1 つ目は制御量が「表示時刻の差」ではなく「経路の相対遅延 (直近の観測の offset)」だったこと。2 つ目は libwebrtc の `StreamSynchronization` の移植が、1 秒ごとに 4 サンプル平均の半分 (上限 80 ms) しか動かせず、音声の目標遅延 (NetEq の 0.95 分位) が 80 ms から 220 ms へ段差で動くと追いつけないこと。相対遅延を基準 (10 秒窓の最小値) ベースに替える実験でも改善せず、律速はレート制限であることを確認した
+- 対策として `updateSyncDelays` を「2 つのトラックの表示時刻 (基準の遅れ + 表示の遅れ) の差が `SYNC_MIN_DELTA_MS` (30 ms) を超えたら、先行する側の表示の遅れを『後行側 - 30 ms』まで即座に上げ、上げた分は毎秒 `PLAYBACK_DELAY_DECAY_MS_PER_SECOND` (20 ms) までで戻す」方式に変更した。足すのは遅らせる向きであり、既に積んだフレームの並べ替えは起きない。観測のたびに行うのは、相手の目標遅延が段差で動いたときに次の観測まで差が開くのを防ぐためである。戻す量は自分の遅延の下限が下がった分だけ減らし、映像の遅延を下げる速さを毎秒 20 ms に保つ
+- 基準の差の閾値 (`baseDifferenceLimitMs`) は、キューが吸収できる長さではなく表示の遅れの上限 (`presentationDelayCapMs`) から引くようにした。上限で切られる分は合わせられないためである。`setTargetLatencyMs` は下限が変わった時点で合わせ直し、`resetStream` は同期が足した分を戻す
+- 未使用になった `src/streamSynchronization.ts` を削除した (`computeRelativeDelay` / `StreamSynchronization` / `reduceAudioDelay` / `reduceVideoDelay` / 使用されていない定数)。`SYNC_MIN_DELTA_MS` は `playbackTimeline.ts` へ移し、使われなくなった `SYNC_INTERVAL_MS` は削除した
+- テスト: seed 50 / 139 / 194 を回帰テストとして固定し (修正前は 58.0 / 80.1 / 69.9 ms、修正後は 30.0 ms)、締められる assert は不感帯まで締めた。既存テストのうち音声を観測して同期を働かせていたものは、本来の対象 (映像の jitter buffer の遅延など) だけを見るよう音声の観測を外した
+- 検証: `vp check` / `tsc --noEmit` / `vp test run` (197 files / 3557 tests) が通る。`vp test run src/playbackTimeline.prop.ts` は 50 回連続で成功し、seed 1〜2000 の走査でも差は 30.0 ms を超えなかった。`/review-diff-code` を 3 周回し、致命的・重要 0 件
+- 残る制約: 2 つの遅延が表示の遅れの上限 (500 ms、またはキューが吸収できる長さ) に達しているときは合わせられず、ずれは基準の差の閾値 (下限 100 ms) まで広がり得る。`docs/HIGH_LEVEL_API.md` と `src/playbackTimeline.ts` のコメントに明記した
