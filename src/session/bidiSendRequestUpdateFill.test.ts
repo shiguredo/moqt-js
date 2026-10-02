@@ -15,9 +15,9 @@ import { encodeParameters, decodeFillParameters } from "../message";
 import { decodeRequestUpdatePayload } from "../message/subscribe";
 import { encodeLocationFilterParameter } from "../message/parameter";
 import { InvalidFilterError } from "../error";
-import { createBidiSession, buildExceedingLocationFilterValue } from "../testSupport/bidi";
+import { createBidiSession, buildOverflowingLocationFilterParameter } from "../testSupport/bidi";
 import { concatUint8Arrays } from "../testSupport/helpers";
-import { encodeVarint, MAX_VARINT } from "../varint";
+import { MAX_VARINT } from "../varint";
 import { ControlStreamReader } from "../controlStream";
 import {
   bidiSendRequestUpdate,
@@ -77,7 +77,7 @@ test("bidiSendRequestUpdate: fill が FILL_PARAMETERS として REQUEST_UPDATE �
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.10 / §9.20.16:
+ * draft-ietf-moq-transport-22 §9.20.9 / §9.20.15:
  * fill 内の LOCATION_FILTER が End Group 超過の場合は送信前に throw する。
  */
 test("bidiSendRequestUpdate: fill 内の LOCATION_FILTER が End Group 超過の場合は throw する", async () => {
@@ -315,7 +315,7 @@ test("bidiSendRequestUpdate: 既存フィルタとマージすると MAX_FILTER_
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.10:
+ * draft-ietf-moq-transport-22 §9.20.9:
  * raw パラメータ経路の LOCATION_FILTER (0x21) も型付き経路と同じ
  * End Group 検証の対象にする。超過時は InvalidFilterError で送信前に
  * 拒否し、pending エントリを残さない。
@@ -323,13 +323,13 @@ test("bidiSendRequestUpdate: 既存フィルタとマージすると MAX_FILTER_
 test("bidiSendRequestUpdate: raw LOCATION_FILTER の End Group 超過で InvalidFilterError", async () => {
   const { session } = createBidiSession();
   const subscriber = new SubscriberImpl(["test"], "track", 0n, 0n, () => {});
-  // StartGroup(1) + EndGroupDelta(2^64-1) が 2^64-1 を超える 3 フィールド表現を手組みする
-  const exceeding = buildExceedingLocationFilterValue();
+  // StartGroup(2^64-1) + EndGroupDelta(1) が 2^64-1 を超える 3 フィールド表現
+  const exceeding = buildOverflowingLocationFilterParameter();
 
   let thrown: Error | undefined;
   try {
     await bidiSendRequestUpdate(session, subscriber, {
-      parameters: [{ type: MessageParameterType.LOCATION_FILTER, value: exceeding }],
+      parameters: [exceeding],
     });
   } catch (error) {
     thrown = error instanceof Error ? error : new Error(String(error));
@@ -342,22 +342,19 @@ test("bidiSendRequestUpdate: raw LOCATION_FILTER の End Group 超過で Invalid
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.10:
+ * draft-ietf-moq-transport-22 §9.20.9:
  * トップレベルの LOCATION_FILTER が複数ある場合も全件検証し、
  * 2 件目以降の超過を見逃さない。
  */
 test("bidiSendRequestUpdate: 2 件目の raw LOCATION_FILTER 超過も InvalidFilterError", async () => {
   const { session } = createBidiSession();
   const subscriber = new SubscriberImpl(["test"], "track", 0n, 0n, () => {});
-  const exceeding = buildExceedingLocationFilterValue();
+  const exceeding = buildOverflowingLocationFilterParameter();
 
   let thrown: Error | undefined;
   try {
     await bidiSendRequestUpdate(session, subscriber, {
-      parameters: [
-        encodeLocationFilterParameter({ startGroup: 1n, startObject: 2n }),
-        { type: MessageParameterType.LOCATION_FILTER, value: exceeding },
-      ],
+      parameters: [encodeLocationFilterParameter({ startGroup: 1n, startObject: 2n }), exceeding],
     });
   } catch (error) {
     thrown = error instanceof Error ? error : new Error(String(error));
@@ -369,7 +366,7 @@ test("bidiSendRequestUpdate: 2 件目の raw LOCATION_FILTER 超過も InvalidFi
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.10:
+ * draft-ietf-moq-transport-22 §9.20.9:
  * 正常な raw LOCATION_FILTER は従来どおり送信でき、
  * LOCATION_FILTER 以外の raw パラメータは検証対象にしない。
  */
@@ -399,7 +396,7 @@ test("bidiSendRequestUpdate: 正常な raw LOCATION_FILTER は送信できる", 
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.10 / §9.20.16:
+ * draft-ietf-moq-transport-22 §9.20.9 / §9.20.15:
  * 手組みの raw FILL_PARAMETERS 内側の LOCATION_FILTER が End Group 超過の
  * 場合は送信前に InvalidFilterError で拒否し、pending エントリを残さない。
  */
@@ -407,10 +404,7 @@ test("bidiSendRequestUpdate: raw FILL_PARAMETERS 内側の End Group 超過で I
   // 内側 LOCATION_FILTER が超過する raw FILL_PARAMETERS を手組みする
   const { session, written } = createBidiSession();
   const subscriber = new SubscriberImpl(["test"], "track", 0n, 0n, () => {});
-  const exceeding = buildExceedingLocationFilterValue();
-  const inner = encodeParameters([
-    { type: MessageParameterType.LOCATION_FILTER, value: exceeding },
-  ]);
+  const inner = encodeParameters([buildOverflowingLocationFilterParameter()]);
 
   let thrown: Error | undefined;
   try {
@@ -430,7 +424,7 @@ test("bidiSendRequestUpdate: raw FILL_PARAMETERS 内側の End Group 超過で I
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.10 / §9.20.16:
+ * draft-ietf-moq-transport-22 §9.20.9 / §9.20.15:
  * 単一の raw FILL_PARAMETERS の内側超過を InvalidFilterError で拒否する。
  * 複数件の場合は重複検査が先に拒否するため、内側検証は単一の場合に到達する。
  */
@@ -438,10 +432,7 @@ test("bidiSendRequestUpdate: 単一の raw FILL_PARAMETERS 内側超過も Inval
   // 内側が超過する単一の組み合わせを手組みする
   const { session, written } = createBidiSession();
   const subscriber = new SubscriberImpl(["test"], "track", 0n, 0n, () => {});
-  const exceeding = buildExceedingLocationFilterValue();
-  const exceedingInner = encodeParameters([
-    { type: MessageParameterType.LOCATION_FILTER, value: exceeding },
-  ]);
+  const exceedingInner = encodeParameters([buildOverflowingLocationFilterParameter()]);
 
   let thrown: Error | undefined;
   try {
@@ -460,27 +451,16 @@ test("bidiSendRequestUpdate: 単一の raw FILL_PARAMETERS 内側超過も Inval
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.10 / §9.20.16:
+ * draft-ietf-moq-transport-22 §9.20.9 / §9.20.15:
  * 4 フィールド表現 (EndObject 付き) の内側超過も送信前に拒否する。
  * 3 フィールドとは別分岐のため到達を確認する。
  */
 test("bidiSendRequestUpdate: raw FILL_PARAMETERS 内側の 4 フィールド超過も InvalidFilterError", async () => {
-  // StartGroup(1) + EndGroupDelta(2^64-1) が超過する 4 フィールド表現を手組みする
+  // StartGroup(2^64-1) + EndGroupDelta(1) が超過する 4 フィールド表現
+  // (Type 0x04 + EndObject) を共有ヘルパで手組みする
   const { session, written } = createBidiSession();
   const subscriber = new SubscriberImpl(["test"], "track", 0n, 0n, () => {});
-  const exceedingFields = new Uint8Array([
-    ...encodeVarint(1n),
-    ...encodeVarint(0n),
-    ...encodeVarint(MAX_VARINT),
-    ...encodeVarint(0n),
-  ]);
-  const exceedingValue = new Uint8Array([
-    ...encodeVarint(BigInt(exceedingFields.length)),
-    ...exceedingFields,
-  ]);
-  const inner = encodeParameters([
-    { type: MessageParameterType.LOCATION_FILTER, value: exceedingValue },
-  ]);
+  const inner = encodeParameters([buildOverflowingLocationFilterParameter(true)]);
 
   let thrown: Error | undefined;
   try {
@@ -531,7 +511,7 @@ test("bidiSendRequestUpdate: 正常な raw FILL_PARAMETERS は送信できる", 
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.10:
+ * draft-ietf-moq-transport-22 §9.20.9:
  * bidiSendRequestUpdate は送信時の LOCATION_FILTER (先頭 1 件のデコード値) を
  * pending に保持し、REQUEST_OK 受信時の反映に使うことを検証する。
  */

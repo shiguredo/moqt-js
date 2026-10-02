@@ -133,7 +133,8 @@ type ProcessCatalogPayloadResult =
 /**
  * FETCH フェーズ終了時に live バッファから適用すべきオブジェクトを抽出する
  *
- * SUBSCRIBE (Next Object 形式) と FETCH (フィルタなし) は独立して評価されるため、
+ * SUBSCRIBE (Next Object (Location Filter Type 0x05)) と FETCH (フィルタなし) は
+ * 独立して評価されるため、
  * 両リクエストの処理時刻の間に publish された Catalog オブジェクトは live と
  * FETCH の両方で届く (draft-ietf-moq-transport-21 §3.3.1。Fetch は「{0, 0} から
  * Largest Object まで」、Next Object 購読は Largest の次から始まるため、処理時刻の
@@ -164,7 +165,7 @@ export function filterPendingCatalogObjects(
  * (draft-ietf-moq-msf-01 §5)。したがって最新 Group の先頭から要求すれば完全な
  * catalog が得られる。
  *
- * draft-ietf-moq-transport-21 §9.20.10: フィルタ無しの FETCH は {0, 0} から
+ * draft-ietf-moq-transport-22 §3.2: フィルタ無しの FETCH は {0, 0} から
  * Largest Object までを要求する。catalog track の Group ID は publisher の再起動を
  * 跨いだ単調増加 MUST (draft-ietf-moq-msf-01 §6.1) を満たすため Unix epoch
  * ミリ秒から始まることが多く、その場合 {0, 0} 起点の要求範囲は relay の object
@@ -182,9 +183,10 @@ export function catalogFetchFilter(largestLocation: Location | null): LocationFi
   if (largestLocation === null) {
     return undefined;
   }
-  // 2 フィールドで StartGroup = StartObject = 0 は Next Object を意味するため
-  // (§9.20.10)、Group 0 では絶対指定にならない。Group 0 は先頭 Group であり
-  // フィルタ無しの要求範囲と一致するので、そのままフィルタ無しにする
+  // 2 フィールドの 0:0 (Location Filter Type 0x02) は絶対位置 {0, 0} の指定であり、
+  // フィルタ無しの FETCH の要求範囲 ({0, 0} から Largest Object まで) と一致する。
+  // 同じ範囲を明示する意味がないため、そのままフィルタ無しにする
+  // (§9.20.9。Next Object は 0x05 であり 0:0 ではない)。
   if (largestLocation.group === 0n) {
     return undefined;
   }
@@ -1176,7 +1178,8 @@ export class MediaSubscriberImpl implements MediaSubscriber {
    * Joining FETCH は削除された (draft-ietf-moq-transport-21 §9.11) ため、
    * 本実装では以下の 2 リクエストで代替する (仕様上の正式な置換は
    * FILL_PARAMETERS (§3.4) であり、実装は別途):
-   * 1. SUBSCRIBE (Next Object 形式の Location Filter) で live の catalog 更新を受信する
+   * 1. SUBSCRIBE (Next Object (Location Filter Type 0x05) の Location Filter) で
+   *    live の catalog 更新を受信する
    * 2. 独立した FETCH で既存の catalog を取得する。要求範囲は SUBSCRIBE_OK の
    *    LARGEST_OBJECT が示す Group の先頭 Object から Largest Object までとする
    *    (catalogFetchFilter を参照)。LARGEST_OBJECT が不明な場合だけフィルタ無し
@@ -1258,8 +1261,8 @@ export class MediaSubscriberImpl implements MediaSubscriber {
           error: (error) => this.callbacks.onError?.(error),
         },
         {
-          // Next Object 形式: live は現在の最新 catalog の次から受信する
-          filter: { startGroup: 0n, startObject: 0n },
+          // Next Object (Location Filter Type 0x05): live は現在の最新 catalog の次から受信する
+          filter: { nextObject: true },
           // draft-ietf-moq-msf-01 §11.4.3: catalog に紐づくトークンは SUBSCRIBE にも MUST 付与
           ...(catalogAuthorizationToken === undefined
             ? {}

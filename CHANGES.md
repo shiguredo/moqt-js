@@ -48,6 +48,13 @@
 - [CHANGE] moqt-devtools の `window.moqtDevTools` が返す Subscriber の統計で、音声の項目を `audio` の下へまとめる
   - `audioObjectsReceived` / `audioChunksDecoded` / `audioPeakDbfs` / `audioRmsDbfs` / `audioLastLevel` / `audioLastVoiceActivity` / `audioPlayoutRebases` / `audioPlayoutDrops` を `audio.objectsReceived` などの入れ子にする。E2E が読む名前が変わるため後方互換はない
   - @voluntas
+- [CHANGE] Location Filter のワイヤ形式を draft-22 の Location Filter Type ベースに変更する
+  - draft-ietf-moq-transport-22 §9.20.9 に基づき、先頭の Length (vi64) とその範囲内の vi64 個数でフィールド構成を推論する v21 形式を廃止し、Location Filter Type (vi64) が形式を明示する方式にする。0x00 (None) / 0x01 (Relative Start) / 0x02 (Absolute Start) / 0x03 (Absolute Start, Group End) / 0x04 (Absolute Range) / 0x05 (Next Object) の 6 形式で、未知の Type は PROTOCOL_VIOLATION になる
+  - 公開型 `LocationFilter` に `{ nextObject: true }` (0x05) を追加し、v21 の「2 フィールドで StartGroup = StartObject = 0 は Next Object」という特例を削除する。`{ startGroup: 0n, startObject: 0n }` は絶対位置 {0, 0} の指定になるため、Next Object として送っていたコードは `{ nextObject: true }` に置き換える必要がある (後方互換なし)
+  - catalog 取得の live SUBSCRIBE は `{ nextObject: true }` を送る。0:0 のまま送ると絶対位置 {0, 0} の指定になり、トラック先頭から全 Object を受信する
+  - End Group (StartGroup + EndGroupDelta) が 2^64-1 を超える場合は、送信側が InvalidFilterError、受信側が PROTOCOL_VIOLATION で拒否する (従来どおり)
+  - 旧 v21 のワイヤ形式で送受信していた moqt-js とは相互運用できない
+  - @voluntas
 - [ADD] 音声の欠落で空いた隙間を、直前の音の時間伸長で補間する
   - 音声の Object が欠落したときや、時間軸の目標の遅延が増えたときにできる無音の隙間を、直前の音の末尾のピッチ周期を繰り返して埋める。5 ms 以下の隙間と、開始が今から 10 ms 未満の隙間は補間せず、100 ms を超える分も無音のまま残す
   - 相関が足りない音や継ぎ目の段差が大きい音では補間せず、補間が長くなるほど末尾の振幅を下げる
@@ -2186,7 +2193,7 @@
   - @voluntas
 - [UPDATE] resolveFilter の解決結果を Property-Based Testing で検証する
   - `src/filter.prop.ts` を新設し、Filter 種別 (未指定 / reset / 1〜4 フィールド) × LARGEST_OBJECT の有無 × 任意の Location に対して不変条件を検証する
-  - 未配信時の {0, 0} (1 フィールドと 2 フィールド 0:0)、Next Object の `Largest Object + 1`、1 フィールドの Next Group 基準と上下端クランプ、絶対系の LARGEST_OBJECT 非依存、3 / 4 フィールドの End Group / End Object を固定する
+  - 未配信時の {0, 0} (1 フィールドと Next Object)、Next Object の `Largest Object + 1`、2 フィールド 0:0 の絶対位置 {0, 0} 解決、1 フィールドの Next Group 基準と上下端クランプ、絶対系の LARGEST_OBJECT 非依存、3 / 4 フィールドの End Group / End Object を固定する
   - 一様乱数では 2^64-1 や {0, 0} が生成されないため、クランプと未配信判定の境界値を定数で混ぜた arbitrary を使う
   - PBT で網羅できるようになった `resolveFilter` の固定値単体テスト 14 件を `src/filter.test.ts` から削除する (`objectMatchesFilter` / `rangeFiltersMatch` / `trackPropertyFiltersMatch` のテストは残す)
   - 未配信時の {0, 1} / Next Object の +1 漏れ / 1 フィールドの未配信判定漏れの 3 退行を PBT が検出することを実測した

@@ -249,6 +249,7 @@ test("bidiReadPublishResponse: End Group 超過の LOCATION_FILTER を含む PUB
 test("bidiReadPublishResponse: 正常な LOCATION_FILTER を含む PUBLISH_OK でセッションが閉じる", async () => {
   const validFilters = [
     encodeLocationFilterParameter({ reset: true }),
+    encodeLocationFilterParameter({ nextObject: true }),
     encodeLocationFilterParameter({ startGroup: 3n }),
     encodeLocationFilterParameter({ startGroup: 10n, startObject: 2n }),
     encodeLocationFilterParameter({ startGroup: 10n, startObject: 2n, endGroupDelta: 5n }),

@@ -194,7 +194,7 @@ export const MessageParameterType = {
    */
   SUBSCRIBER_PRIORITY: 0x20,
   /**
-   * LOCATION_FILTER (Section 9.20.10 LOCATION FILTER Parameter)
+   * LOCATION_FILTER (draft-ietf-moq-transport-22 Section 9.20.9 LOCATION FILTER Parameter)
    */
   LOCATION_FILTER: 0x21,
   /**

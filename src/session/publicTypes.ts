@@ -26,8 +26,11 @@ export interface FillRequestOptions {
   /**
    * fill 範囲の Location Filter
    *
-   * 省略時は subscription の Location Filter、zero-length (reset) はトラック
-   * 全体 (Largest Object まで) が fill 範囲になる (§3.4)。
+   * 省略時は subscription の Location Filter を使う。Location Filter Type 0x00
+   * (None) を指定するとトラック全体 (Largest Object まで) が fill 範囲になる
+   * (§3.4 は Length を持たない 0x00 を "zero-length" と表現している)。
+   * Next Object (0x05) は Next Object として解決されるため、トラック全体には
+   * ならない。
    */
   filter?: LocationFilter;
   /**
@@ -42,7 +45,8 @@ export interface FillRequestOptions {
   subscriberPriority?: number;
   /**
    * Group Order
-   * draft-ietf-moq-transport-21 Section 9.20.9 (GROUP ORDER Parameter)
+   * draft-ietf-moq-transport-21 Section 9.20.9 (GROUP ORDER Parameter。
+   * v22 では §9.20.8)
    */
   groupOrder?: "Ascending" | "Descending";
   /**
@@ -482,20 +486,23 @@ export interface SubscribeCallbacks {
 export interface SubscribeOptions {
   /**
    * Location Filter
-   * draft-ietf-moq-transport-21 Section 3.3.1, Section 9.20.10
+   * draft-ietf-moq-transport-22 Section 3.3.1, Section 9.20.9
    *
-   * どのオブジェクトを受信するかを指定するフィルタ。フィールドの有無で意味が
-   * 変わる (Length ベースのワイヤに対応、§9.20.10):
-   * - { startGroup }: 相対指定。Start Group = LARGEST_OBJECT の Group + 1 - startGroup
-   *   (startGroup = 0 は Next Group)。未配信時は {0, 0} から開始
-   * - { startGroup, startObject }: 絶対開始（終了なし）。両方 0 は Next Object
-   *   (LARGEST_OBJECT の次、未配信時は {0, 0})
-   * - { startGroup, startObject, endGroupDelta }: 絶対範囲。End Group =
+   * どのオブジェクトを受信するかを指定するフィルタ。Location Filter Type
+   * (vi64) が形式を決める (§9.20.9 Table 6):
+   * - { startGroup }: 0x01 (相対指定)。Start Location =
+   *   {LARGEST_OBJECT の Group + 1 - startGroup, 0} (startGroup = 0 は Next Group)。
+   *   負値は 0、2^64-1 超は 2^64-1 にクランプし、未配信時は {0, 0} から開始
+   * - { startGroup, startObject }: 0x02 (絶対開始、終了なし)。0:0 は絶対位置
+   *   {0, 0} の指定であり Next Object ではない
+   * - { startGroup, startObject, endGroupDelta }: 0x03 (絶対範囲)。End Group =
    *   StartGroup + endGroupDelta が 2^64-1 を超えると送信前に
-   *   InvalidFilterError で throw する（§9.20.10）
-   * - { startGroup, startObject, endGroupDelta, endObject }: 絶対範囲 +
-   *   End Object
-   * - { reset: true }: Length 0 (REQUEST_UPDATE でのフィルタ除去)
+   *   InvalidFilterError で throw する（§9.20.9）
+   * - { startGroup, startObject, endGroupDelta, endObject }: 0x04 (絶対範囲 +
+   *   End Object)
+   * - { nextObject: true }: 0x05 (Next Object)。LARGEST_OBJECT の次の Object から。
+   *   未配信時は {0, 0} から開始
+   * - { reset: true }: 0x00 (None)。REQUEST_UPDATE でのフィルタ除去
    *
    * 指定しない場合、フィルタなし（全オブジェクト）
    */
@@ -603,7 +610,7 @@ export interface SubscribeOptions {
    * ストリームで取得する。対向が開いた fill fetch ストリームは購読に紐付けて
    * 受信する。fill 経由のオブジェクトは fillDelivered を true にして渡すため、
    * subscription 経由と区別できる。各 Object を一度だけ受け取りたい場合は、
-   * Next Object の subscription (StartGroup = 0 かつ StartObject = 0) と
+   * Next Object の subscription ({ nextObject: true }、Location Filter Type 0x05) と
    * open-ended な fill を組み合わせる (publisher が fill を Largest Object で
    * 終えるため重複なくつながる。§3.4 の exactly-once パターン)。
    */
@@ -749,22 +756,25 @@ export interface FetchOptions {
 
   /**
    * Location Filter
-   * draft-ietf-moq-transport-21 Section 3.3.1 / Section 9.20.10
+   * draft-ietf-moq-transport-22 Section 3.3.1 / Section 9.20.9
    *
-   * 取得する範囲を指定する。フィールドの有無で意味が変わる (Length
-   * ベースのワイヤに対応、§9.20.10):
-   * - { startGroup }: 相対指定。Start Group = LARGEST_OBJECT の Group + 1 - startGroup
-   * - { startGroup, startObject }: 絶対開始。両方 0 は Next Object
-   * - { startGroup, startObject, endGroupDelta }: 絶対範囲。End Group =
+   * 取得する範囲を指定する。Location Filter Type (vi64) が形式を決める
+   * (§9.20.9 Table 6):
+   * - { startGroup }: 0x01 (相対指定)。Start Location =
+   *   {LARGEST_OBJECT の Group + 1 - startGroup, 0}
+   * - { startGroup, startObject }: 0x02 (絶対開始)。0:0 は絶対位置 {0, 0} の
+   *   指定であり Next Object ではない
+   * - { startGroup, startObject, endGroupDelta }: 0x03 (絶対範囲)。End Group =
    *   StartGroup + endGroupDelta が 2^64-1 を超えると送信前に
-   *   InvalidFilterError で throw する（§9.20.10 は超過時に PROTOCOL_VIOLATION
+   *   InvalidFilterError で throw する（§9.20.9 は超過時に PROTOCOL_VIOLATION
    *   を要求するため、ワイヤに載せる前にローカルで拒否する）
-   * - { startGroup, startObject, endGroupDelta, endObject }: 絶対範囲 +
-   *   End Object
-   * - { reset: true }: Length 0 (フィルタなし。FETCH では省略と等価)
+   * - { startGroup, startObject, endGroupDelta, endObject }: 0x04 (絶対範囲 +
+   *   End Object)
+   * - { nextObject: true }: 0x05 (Next Object)。LARGEST_OBJECT の次の Object から
+   * - { reset: true }: 0x00 (None。フィルタなし。FETCH では省略と等価)
    *
    * 指定しない場合、フィルタなしとして {0, 0} から Largest Object までの
-   * 全オブジェクトを要求する (§9.20.10。Fetch では End Group / End Object を
+   * 全オブジェクトを要求する (§9.20.9。Fetch では End Group / End Object を
    * 省略した場合の終端が Largest Object になる)。
    */
   filter?: LocationFilter;

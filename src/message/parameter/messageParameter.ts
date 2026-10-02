@@ -28,7 +28,7 @@ import { MessageParameterType, type Location } from "../types";
 import { concatUint8Arrays } from "../../bytes";
 import { MAX_KVP_VALUE_LENGTH, type Parameter } from "./common";
 import { decodeTrackNamespace } from "./trackNamespace";
-import { decodeLocationFilterParameter } from "./locationFilter";
+import { decodeLocationFilterParameter, locationFilterEncodedLength } from "./locationFilter";
 import {
   decodeRangeFilter,
   rangeFilterTypeOf,
@@ -137,8 +137,11 @@ export function decodeLocation(data: Uint8Array, offset = 0): [Location, number]
  * - location: 2 つの連続した varint (Group, Object)
  * - length-prefixed: varint 長 + バイト列 (外側に Length を付加する)
  * - self-length-prefixed: 値が自ら Length (vi64) を内包する 1 Length 構造
- *   (外側 Length は付加しない。draft-ietf-moq-transport-21 §9.20.10 / §8.6
- *   の Range Filter と LOCATION_FILTER が該当)
+ *   (外側 Length は付加しない。draft-ietf-moq-transport-22 §8.6 の Range Filter
+ *   が該当)
+ * - location-filter: 値が Location Filter Type (vi64) と型ごとの vi64 フィールドで
+ *   自己区切りになる構造 (外側 Length は付加しない。
+ *   draft-ietf-moq-transport-22 §9.20.9 の LOCATION_FILTER が該当)
  * - track-namespace: Track Namespace (Number of Track Namespace Fields + 各
  *   フィールドの Length + Value) の自己区切り構造 (外側 Length は付加しない。
  *   draft-ietf-moq-transport-21 §9.20.21 が参照する §8.7 のエンコーディング)
@@ -149,6 +152,7 @@ type MessageParameterValueEncoding =
   | "location"
   | "length-prefixed"
   | "self-length-prefixed"
+  | "location-filter"
   | "track-namespace";
 
 /**
@@ -177,13 +181,12 @@ const MESSAGE_PARAMETER_VALUE_ENCODING: Record<number, MessageParameterValueEnco
   0x10: "uint8",
   // SUBSCRIBER_PRIORITY (Section 9.20.8)
   0x20: "uint8",
-  // LOCATION_FILTER (Section 9.20.10)
-  // draft-ietf-moq-transport-21 §9.20.10: Value は Length (vi64) + optional
-  // vi64 フィールド (0〜4) の 1 Length 構造。外側 Length は付加しない
-  // (Range Filter と同一形式。Appendix A.2 #1809 で「match the other filter
-  //  parameters」と再構成された)
-  0x21: "self-length-prefixed",
-  // GROUP_ORDER (Section 9.20.9)
+  // LOCATION_FILTER (draft-ietf-moq-transport-22 Section 9.20.9)
+  // draft-ietf-moq-transport-22 §9.20.9: Value は Location Filter Type (vi64) で
+  // 始まり、型ごとの vi64 フィールドが続く自己区切り構造。Length フィールドを
+  // 持たないため外側 Length は付加しない (Range Filter とは形式が異なる)
+  0x21: "location-filter",
+  // GROUP_ORDER (draft-ietf-moq-transport-21 Section 9.20.9。v22 は §9.20.8)
   0x22: "uint8",
   // FILL_PARAMETERS (Section 9.20.16)
   // Value は Parameters 列 (count-prefixed) を格納する length-prefixed 構造。
@@ -251,11 +254,12 @@ function encodeMessageParameter(param: Parameter, previousType: number): Uint8Ar
     return concatUint8Arrays([deltaBytes, lengthBytes, param.value]);
   }
 
-  // uint8, varint, location, self-length-prefixed, track-namespace:
-  // Value をそのまま書き込む。self-length-prefixed の Value は self エンコードの
-  // 出力 (自ら Length を含む 1 Length 構造)、track-namespace の Value は
-  // §8.7 の自己区切り構造のため、いずれも外側 Length は付加しない
-  // (draft-ietf-moq-transport-21 §9.20.10 / §8.6 / §9.20.21)
+  // uint8, varint, location, self-length-prefixed, location-filter,
+  // track-namespace: Value をそのまま書き込む。self-length-prefixed の Value は
+  // self エンコードの出力 (自ら Length を含む 1 Length 構造)、location-filter の
+  // Value は Location Filter Type と型ごとのフィールドで自己区切り、
+  // track-namespace の Value は §8.7 の自己区切り構造のため、いずれも外側 Length は
+  // 付加しない (draft-ietf-moq-transport-22 §8.6 / §9.20.9。track-namespace は §8.7)
   return concatUint8Arrays([deltaBytes, param.value]);
 }
 
@@ -359,12 +363,11 @@ export function decodeMessageParameter(
       break;
     }
     case "self-length-prefixed": {
-      // draft-ietf-moq-transport-21 Section 8.6 / 9.20.10:
-      // Range Filter / LOCATION_FILTER の Value は Length (vi64) で始まり、
+      // draft-ietf-moq-transport-22 Section 8.6:
+      // Range Filter の Value は Length (vi64) で始まり、
       // その後にペイロードが続く 1 Length 構造。
-      // 内側 Length を読んで全体を value として保持する (decodeLocationFilter /
-      // decodeRangeFilter の入力形式に合わせる。Length を剥がすと先頭フィールド
-      // を Length と誤読する)。
+      // 内側 Length を読んで全体を value として保持する (decodeRangeFilter の
+      // 入力形式に合わせる。Length を剥がすと先頭フィールドを Length と誤読する)。
       const [length, lengthConsumed] = decodeVarint(data, offset + totalConsumed);
       totalConsumed += lengthConsumed;
       // 既存 length-prefixed 分岐と同じ上限を維持する (防御的制限。
@@ -383,6 +386,18 @@ export function decodeMessageParameter(
         offset + totalConsumed + Number(length),
       );
       totalConsumed += Number(length);
+      break;
+    }
+    case "location-filter": {
+      // draft-ietf-moq-transport-22 §9.20.9:
+      // LOCATION_FILTER の Value は Location Filter Type (vi64) と型ごとの vi64
+      // フィールドで自己区切りになる。Length が無いため、Type とフィールド数から
+      // 消費バイト数を確定して次の Type Delta の位置を決める (Length を読むと
+      // Type を Length と誤読する)。値の意味論の検証 (End Group の超過など) は
+      // パラメータ層の decodeLocationFilterParameter が担う。
+      const valueLength = locationFilterEncodedLength(data, offset + totalConsumed);
+      value = data.slice(offset + totalConsumed, offset + totalConsumed + valueLength);
+      totalConsumed += valueLength;
       break;
     }
     case "track-namespace": {
@@ -579,12 +594,14 @@ export function decodeFillParameters(param: Parameter): Parameter[] {
       `malformed fill parameters: declared length does not match parameters: ${consumed} !== ${param.value.length}`,
     );
   }
-  // 内側 LOCATION_FILTER の値検証 (§9.20.10 MUST は内側にも適用される)。
+  // 内側 LOCATION_FILTER の値検証 (§9.20.9 MUST は内側にも適用される)。
   // 内側 Range Filter の値・重複検証は外側と同一規則で行い、違反は
   // InvalidFilterError として呼び出し側の経路別処理に委ねる
   // (PUBLISH_OK では PROTOCOL_VIOLATION、REQUEST_UPDATE では
   // REQUEST_ERROR (INVALID_FILTER))。
-  // 内側の除去 (Length=0) は一回限りの fill に意味を持たないため拒否する。
+  // 内側 Range Filter の除去 (Length=0) は一回限りの fill に意味を持たないため
+  // 拒否する (内側 LOCATION_FILTER は Type 0x00 を検証するのみで、fill 範囲の
+  // 解釈は呼び出し側が行う)。
   const innerRanges: Parameter[] = [];
   for (const inner of innerParameters) {
     if (!FILL_PARAMETERS_ALLOWED_TYPES.has(inner.type)) {

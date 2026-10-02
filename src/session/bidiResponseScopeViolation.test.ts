@@ -24,7 +24,7 @@ import { encodeLocationFilterParameter } from "../message/parameter";
 import { SessionError, SessionErrorCode, RequestErrorCode, InvalidFilterError } from "../error";
 import {
   createBidiSession,
-  buildExceedingLocationFilterValue,
+  buildOverflowingLocationFilterParameter,
   createOkResponseReadTestContext,
   waitForMacrotask,
 } from "../testSupport/bidi";
@@ -268,14 +268,14 @@ test("bidiReadSubscribeResponse: SUBSCRIBE_OK のスコープ違反で具体エ�
   assert.isFalse(ctx.session.fillFetchTargets.has(ctx.requestId));
 });
 
-test("bidiReadSubscribeResponse: SUBSCRIBE_OK の LARGEST_OBJECT で相対 Location Filter が一度だけ確定する", async () => {
+test("bidiReadSubscribeResponse: SUBSCRIBE_OK の LARGEST_OBJECT で Next Object が一度だけ確定する", async () => {
   const ctx = createOkResponseReadTestContext();
   const delivered: MoqtObject[] = [];
   const subscriber = new SubscriberImpl(["test"], "track", ctx.requestId, 1n, (object) => {
     delivered.push(object);
   });
   // SUBSCRIBE 送信時: Next Object フィルタ (LARGEST_OBJECT 未受信)
-  subscriber.setLocationFilter({ startGroup: 0n, startObject: 0n });
+  subscriber.setLocationFilter({ nextObject: true });
   ctx.session.pendingSubscribe.set(ctx.requestId, {
     resolve: () => {},
     reject: () => {},
@@ -662,10 +662,7 @@ test("bidiSendRequestUpdate: 型付き fill と raw FILL_PARAMETERS の併用は
 test("bidiSendRequestUpdate: 重複と内側不正の二重不正では重複エラーが優先される", async () => {
   const { session, written } = createBidiSession();
   const subscriber = new SubscriberImpl(["test"], "track", 0n, 0n, () => {});
-  const exceeding = buildExceedingLocationFilterValue();
-  const exceedingInner = encodeParameters([
-    { type: MessageParameterType.LOCATION_FILTER, value: exceeding },
-  ]);
+  const exceedingInner = encodeParameters([buildOverflowingLocationFilterParameter()]);
 
   let thrown: unknown = null;
   try {

@@ -116,7 +116,7 @@ test("bidiSendPublishStateNotify: 値の変化が無い通知は送信しない"
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.10 / §9.20.10:
+ * draft-ietf-moq-transport-22 §9.10 / §9.20.9:
  * LOCATION_FILTER の変化を通知し (「When sent in PUBLISH_STATE_NOTIFY, it
  * reports the Location Filter now in effect at the publisher.」)、等価な値の
  * 再通知は送信しないことを検証する。送信できたフィルタは publisher の

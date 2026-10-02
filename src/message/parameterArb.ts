@@ -106,11 +106,12 @@ export const trackNamespaceParameterArb = namespacePartsArb.map((parts) =>
 /**
  * LocationFilter の任意構築
  *
- * draft-ietf-moq-transport-21 §9.20.10: Length ベースの optional フィールド
- * (フィールド数 0〜4) の union。
+ * draft-ietf-moq-transport-22 §9.20.9: Location Filter Type 0x00〜0x05 の union。
+ * 0x05 (Next Object) はフィールドを持たない。
  */
 export const locationFilterArb: fc.Arbitrary<LocationFilter> = fc.oneof(
   fc.constant({ reset: true } as const),
+  fc.constant({ nextObject: true } as const),
   fc.bigInt({ min: 0n, max: 1000000n }).map((startGroup) => ({ startGroup })),
   fc.record({
     startGroup: fc.bigInt({ min: 0n, max: 1000000n }),
@@ -132,9 +133,9 @@ export const locationFilterArb: fc.Arbitrary<LocationFilter> = fc.oneof(
 /**
  * LOCATION_FILTER (0x21) パラメータの arbitrary
  *
- * draft-ietf-moq-transport-21 §9.20.10: Value は「Length + optional vi64 フィールド」の
- * 1 Length 構造。encodeLocationFilter の出力 (内部 Length と整合したバイト列) で
- * 構築する (生バイト列の任意生成は内部 Length 検証と衝突する)。
+ * draft-ietf-moq-transport-22 §9.20.9: Value は Location Filter Type (vi64) と
+ * 型ごとの vi64 フィールドで自己区切りになる。encodeLocationFilter の出力
+ * (Type とフィールドが整合したバイト列) で構築する。
  */
 export const locationFilterParameterArb = locationFilterArb.map((filter) =>
   encodeLocationFilterParameter(filter),

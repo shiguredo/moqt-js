@@ -13,7 +13,7 @@
  * draft-ietf-moq-transport-21 §9.20:
  * Value のエンコーディングはパラメータ型ごとの定義で決まる
  * (MESSAGE_PARAMETER_VALUE_ENCODING を参照)。偶数型 / 奇数型で一律には決まらない。
- * 例えば 0x09 (location) / 0x21 (self-length-prefixed) / 0x34 (track-namespace) は
+ * 例えば 0x09 (location) / 0x21 (location-filter) / 0x34 (track-namespace) は
  * 偶数・奇数規則に当てはまらない。
  */
 export interface Parameter {

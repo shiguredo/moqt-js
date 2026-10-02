@@ -20,9 +20,9 @@
  *   アクティブな既存 prefix なし
  * - compareLocations: 同一 Location / Group 比較 / Object 比較
  * - validateFetchOkEndLocation: End >= Start のとき undefined を返す判定
- * - resolveFetchStartLocation: フィルタなし / reset / 2 フィールド /
- *   3 フィールド (両方 0 を含む) / 4 フィールド (両方 0 を含む) / 相対指定 /
- *   Next Object 形式
+ * - resolveFetchStartLocation: フィルタなし / reset (0x00) / 2 フィールド (0:0 を
+ *   含む絶対開始) / 3 フィールド / 4 フィールド / 相対指定 (0x01) /
+ *   Next Object (0x05)
  * - buildSubscribeParameters: authorizationToken と includeProperties の有無 /
  *   fill の有無 / 正常な rangeFilters
  * - buildFetchParameters: authorizationToken / subscriberPriority / groupOrder /
@@ -124,12 +124,13 @@ function optionalArbitrary<T>(arbitrary: fc.Arbitrary<T>): fc.Arbitrary<T | unde
 /**
  * Location Filter の任意構築
  *
- * draft-ietf-moq-transport-21 §9.20.10 のフィールド数 0〜4 を網羅する。
+ * draft-ietf-moq-transport-22 §9.20.9 の Location Filter Type 0x00〜0x05 を網羅する。
  * 3 / 4 フィールドの End Group 超過は送信前に拒否される仕様のため、
  * 値は小さく抑えて常にエンコード可能にする。
  */
 const locationFilterArb: fc.Arbitrary<LocationFilter> = fc.oneof(
   fc.constant({ reset: true } as const),
+  fc.constant({ nextObject: true } as const),
   fc.record({ startGroup: varintValueArb }),
   fc.record({ startGroup: varintValueArb, startObject: varintValueArb }),
   fc.record({
@@ -914,16 +915,17 @@ test("resolveFetchStartLocation: 絶対開始を持つフィルタだけが Loca
         assert.deepEqual(result, { group: 0n, object: 0n });
         return;
       }
-      // 1 フィールド (相対指定) は Largest Object 依存のため確定できない
+      // Next Object (0x05) は Largest Object 依存のため確定できない
+      if ("nextObject" in filter) {
+        assert.isUndefined(result);
+        return;
+      }
+      // 相対指定 (0x01) は Largest Object 依存のため確定できない
       if (!("startObject" in filter)) {
         assert.isUndefined(result);
         return;
       }
-      // 2 フィールドの Next Object 形式も Largest Object 依存
-      if (!("endGroupDelta" in filter) && filter.startGroup === 0n && filter.startObject === 0n) {
-        assert.isUndefined(result);
-        return;
-      }
+      // 0x02 / 0x03 / 0x04 は絶対開始であり、0:0 も絶対位置 {0, 0} として確定する
       assert.deepEqual(result, { group: filter.startGroup, object: filter.startObject });
     }),
   );

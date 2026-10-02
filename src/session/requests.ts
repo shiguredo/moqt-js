@@ -24,6 +24,7 @@ import {
   encodeSubscribePayload,
   encodeTrackStatusPayload,
   validateFullTrackName,
+  isNextObjectLocationFilter,
   type Location,
   type LocationFilter,
 } from "../message";
@@ -526,7 +527,7 @@ export async function requestsFetch(
 
   // FETCH_OK を待つ Promise。
   // startLocation は FETCH_OK の End Location 検証 (§9.12) に使う。
-  // 相対指定 (1 フィールド) と Next Object 形式は Largest Object 依存のため
+  // 相対指定 (0x01) と Next Object (0x05) は Largest Object 依存のため
   // クライアント側では確定できず undefined になる。
   const startLocation = resolveFetchStartLocation(options.filter);
   const promise = new Promise<Fetcher>((resolve, reject) => {
@@ -886,6 +887,9 @@ export function requestsReadTrackStatusResponse(
 
 /**
  * Location Filter をデバッグログ用の文字列に要約する
+ *
+ * Location Filter Type ごとの表現 (draft-ietf-moq-transport-22 §9.20.9 Table 6) を
+ * そのまま書き出す。Next Object (0x05) はフィールドを持たないため種別名だけを返す。
  */
 export function requestsDescribeLocationFilter(
   filter: LocationFilter | undefined,
@@ -895,6 +899,9 @@ export function requestsDescribeLocationFilter(
   }
   if ("reset" in filter) {
     return "reset";
+  }
+  if (isNextObjectLocationFilter(filter)) {
+    return "nextObject";
   }
   const entries: string[] = [`startGroup=${filter.startGroup}`];
   if ("startObject" in filter) {

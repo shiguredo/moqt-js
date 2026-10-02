@@ -390,7 +390,7 @@ Safari 系の `WebTransport` では `writer.close()` が resolve しない場合
 
 `Fetcher.cancel()` も subscription と同様に双方向ストリームを close して終了する。
 
-draft-21 で Joining FETCH は削除された。過去データの取得と live 購読の組み合わせは、`subscribe()` (Next Object 形式の Location Filter) + `fetch()` (フィルタなし) の 2 リクエストで実現する (`createMediaSubscriber` の catalog 取得が該当)。仕様上の正式な置換は `FILL_PARAMETERS` (§3.4) である。
+draft-21 で Joining FETCH は削除された。過去データの取得と live 購読の組み合わせは、`subscribe()` (Next Object (`{ nextObject: true }`、Location Filter Type 0x05) の Location Filter) + `fetch()` (フィルタなし) の 2 リクエストで実現する (`createMediaSubscriber` の catalog 取得が該当)。仕様上の正式な置換は `FILL_PARAMETERS` (§3.4) である。
 
 `FETCH_OK` が返る前にデータストリームが先着する可能性があるため、受信側は `waitForFetcher()` で待機する。
 

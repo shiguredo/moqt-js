@@ -89,8 +89,8 @@ export interface Subscriber {
    * draft-ietf-moq-transport-21 Section 9.20.18 (LARGEST OBJECT Parameter)
    *
    * Publisher/Relay が知っている最大の Location を示す。
-   * 相対指定 (1 フィールド) の Location Filter と Next Object 形式の
-   * 解決に使用する (draft-ietf-moq-transport-21 §3.3.1)。
+   * 相対指定 (Location Filter Type 0x01) の Location Filter と Next Object (0x05) の
+   * 解決に使用する (draft-ietf-moq-transport-22 §3.3.1)。
    */
   readonly largestLocation: Location | null;
   /**
@@ -498,7 +498,7 @@ export class SubscriberImpl implements Subscriber {
    * fillDelivered の値で区別できる。同一 Location が両経路で届いた場合の
    * 二重処理の回避はアプリの責務であり、自動の重複排除は行わない。
    * 各 Object を一度だけ受け取りたい場合は、Next Object の subscription
-   * (StartGroup = 0 かつ StartObject = 0) と open-ended な fill を組み合わせる
+   * ({ nextObject: true }、Location Filter Type 0x05) と open-ended な fill を組み合わせる
    * (publisher が fill を Largest Object で終えるため重複なくつながる。
    * §3.4 の exactly-once パターン)。state が closed の場合は受け取らない。
    */

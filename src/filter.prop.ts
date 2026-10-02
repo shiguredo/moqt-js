@@ -1,8 +1,8 @@
 /**
  * Location Filter 解決の Property-Based Tests
  *
- * draft-ietf-moq-transport-21 Section 3.3.1 (Location Filters) /
- * Section 9.20.10 (LOCATION FILTER Parameter)
+ * draft-ietf-moq-transport-22 Section 3.3.1 (Location Filters) /
+ * Section 9.20.9 (LOCATION FILTER Parameter)
  *
  * resolveFilter は「LocationFilter の種別 × LARGEST_OBJECT の有無 × Location 値」の
  * 有限な離散パターンを扱う純粋関数であるため、任意の Location に対して
@@ -78,18 +78,18 @@ interface AbsoluteRangeWithEndObjectFilter extends AbsoluteRangeFilter {
   endObject: bigint;
 }
 
-/** 2 フィールド (絶対開始) のうち 0:0 (Next Object) 以外 */
-const absoluteStartArb: fc.Arbitrary<AbsoluteStartFilter> = fc
-  .record({
-    startGroup: fc.bigInt({ min: 0n, max: 1_000_000n }),
-    startObject: fc.bigInt({ min: 0n, max: 1_000_000n }),
-  })
-  .filter((filter) => filter.startGroup !== 0n || filter.startObject !== 0n);
+/**
+ * 2 フィールド (絶対開始)。0:0 も絶対位置 {0, 0} の指定として含める
+ * (Next Object は 0x05 専用であり、0x02 の 0:0 は Next Object ではない)。
+ */
+const absoluteStartArb: fc.Arbitrary<AbsoluteStartFilter> = fc.record({
+  startGroup: fc.bigInt({ min: 0n, max: 1_000_000n }),
+  startObject: fc.bigInt({ min: 0n, max: 1_000_000n }),
+});
 
-/** 2 フィールド 0:0 (Next Object) */
-const nextObjectFilterArb: fc.Arbitrary<AbsoluteStartFilter> = fc.constant({
-  startGroup: 0n,
-  startObject: 0n,
+/** Next Object (Location Filter Type 0x05)。フィールドを持たない */
+const nextObjectFilterArb: fc.Arbitrary<{ nextObject: true }> = fc.constant({
+  nextObject: true,
 });
 
 /** 1 フィールド (相対指定) の型 */
@@ -103,13 +103,11 @@ const relativeGroupFilterArb: fc.Arbitrary<RelativeGroupFilter> = fc
   .map((startGroup) => ({ startGroup }));
 
 /** 3 フィールド (絶対開始 + End Group Delta) */
-const absoluteRangeArb: fc.Arbitrary<AbsoluteRangeFilter> = fc
-  .record({
-    startGroup: fc.bigInt({ min: 0n, max: 1_000_000n }),
-    startObject: fc.bigInt({ min: 0n, max: 1_000_000n }),
-    endGroupDelta: fc.bigInt({ min: 0n, max: 1_000_000n }),
-  })
-  .filter((filter) => filter.startGroup !== 0n || filter.startObject !== 0n);
+const absoluteRangeArb: fc.Arbitrary<AbsoluteRangeFilter> = fc.record({
+  startGroup: fc.bigInt({ min: 0n, max: 1_000_000n }),
+  startObject: fc.bigInt({ min: 0n, max: 1_000_000n }),
+  endGroupDelta: fc.bigInt({ min: 0n, max: 1_000_000n }),
+});
 
 /** 4 フィールド (絶対開始 + End Group Delta + End Object) */
 const absoluteRangeWithEndObjectArb: fc.Arbitrary<AbsoluteRangeWithEndObjectFilter> = fc
@@ -121,19 +119,15 @@ const absoluteRangeWithEndObjectArb: fc.Arbitrary<AbsoluteRangeWithEndObjectFilt
   })
   // 空の範囲 (End Object < Start Object) を作らない。空範囲では Start 自身が
   // 不通過になり、「Start は通過する」という不変条件を検証できないため
-  .filter(
-    (filter) =>
-      (filter.startGroup !== 0n || filter.startObject !== 0n) &&
-      filter.endObject >= filter.startObject,
-  );
+  .filter((filter) => filter.endObject >= filter.startObject);
 
 // ============================================================================
 // フィルタなしに解決される種別
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-21 §9.20.10:
- * フィルタ未指定と Length 0 (reset) はどちらも「フィルタなし = 全 Object 通過」
+ * draft-ietf-moq-transport-22 §9.20.9:
+ * フィルタ未指定と Type 0x00 (None / reset) はどちらも「フィルタなし = 全 Object 通過」
  * (undefined) に解決される。LARGEST_OBJECT の有無に依存しない。
  */
 test("resolveFilter: 未指定と reset は LARGEST_OBJECT に依存せず undefined になる (PBT)", () => {
@@ -150,8 +144,8 @@ test("resolveFilter: 未指定と reset は LARGEST_OBJECT に依存せず undef
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-21 §9.20.10:
- * startObject を持つ表現は絶対指定であり、LARGEST_OBJECT に依存しない。
+ * draft-ietf-moq-transport-22 §9.20.9:
+ * startObject を持つ表現 (0x02 / 0x03 / 0x04) は絶対指定であり、LARGEST_OBJECT に依存しない。
  * 同じフィルタを未配信 (null) と配信済みで解決した結果が一致することを固定する。
  */
 test("resolveFilter: 絶対系は LARGEST_OBJECT に依存しない (PBT)", () => {
@@ -170,8 +164,8 @@ test("resolveFilter: 絶対系は LARGEST_OBJECT に依存しない (PBT)", () =
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.10:
- * 2 フィールド (startObject あり / endGroupDelta なし) は指定された絶対 Location を
+ * draft-ietf-moq-transport-22 §9.20.9:
+ * 2 フィールド (0x02 / startObject あり / endGroupDelta なし) は指定された絶対 Location を
  * そのまま start にし、終端を持たない。
  */
 test("resolveFilter: 2 フィールドは絶対 Location を start にし終端を持たない (PBT)", () => {
@@ -188,8 +182,8 @@ test("resolveFilter: 2 フィールドは絶対 Location を start にし終端�
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.10:
- * 3 フィールドの End Group は StartGroup + EndGroupDelta であり、End Object を持たない
+ * draft-ietf-moq-transport-22 §9.20.9:
+ * 3 フィールド (0x03) の End Group は StartGroup + EndGroupDelta であり、End Object を持たない
  * (End Group 全件が対象)。
  */
 test("resolveFilter: 3 フィールドの End Group は StartGroup + Delta (PBT)", () => {
@@ -206,8 +200,27 @@ test("resolveFilter: 3 フィールドの End Group は StartGroup + Delta (PBT)
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.10:
- * 4 フィールドは 3 フィールドの解決結果に End Object を加えたものである。
+ * draft-ietf-moq-transport-22 §9.20.9:
+ * 2 フィールドの 0:0 は絶対位置 {0, 0} の指定 (Type 0x02) であり、Next Object
+ * (0x05) ではない。LARGEST_OBJECT の値に関わらず {0, 0} から開始する。
+ * v21 の「2 フィールド 0:0 は Next Object」という特例の復活 (退行) を検出する。
+ */
+test("resolveFilter: 2 フィールド 0:0 は絶対位置 {0, 0} のまま解決される (PBT)", () => {
+  fc.assert(
+    fc.property(boundaryLocationArb, (largestLocation) => {
+      const resolved = resolveFilter({ startGroup: 0n, startObject: 0n }, largestLocation);
+      assert.isDefined(resolved);
+      assert.equal(resolved!.start.group, 0n);
+      assert.equal(resolved!.start.object, 0n);
+      assert.isUndefined(resolved!.endGroup);
+      assert.isUndefined(resolved!.endObject);
+    }),
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-22 §9.20.9:
+ * 4 フィールド (0x04) は 3 フィールドの解決結果に End Object を加えたものである。
  */
 test("resolveFilter: 4 フィールドは End Object を保持する (PBT)", () => {
   fc.assert(
@@ -223,12 +236,12 @@ test("resolveFilter: 4 フィールドは End Object を保持する (PBT)", () 
 });
 
 // ============================================================================
-// 相対系 (1 フィールド / 2 フィールド 0:0)
+// 相対系 (1 フィールド / Next Object (0x05))
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-21 §9.20.10:
- * 1 フィールドは Next Group 基準の相対指定であり、Start Location は
+ * draft-ietf-moq-transport-22 §9.20.9:
+ * 1 フィールド (0x01) は Next Group 基準の相対指定であり、Start Location は
  * {Largest Object.Group + 1 - StartGroup, 0}。Object は常に 0 から始まる。
  *
  * 未配信 (LARGEST_OBJECT 未受信) は仕様どおり {0, 0} から開始する。
@@ -257,7 +270,7 @@ test("resolveFilter: 1 フィールドは Next Group 基準で Object 0 から�
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.10:
+ * draft-ietf-moq-transport-22 §9.20.9:
  * 1 フィールドで LARGEST_OBJECT 未受信のときは {0, 0} から開始する。
  * フォールバック値に +1 を適用する退行 (未配信時に {0, 1}) を検出する。
  */
@@ -274,11 +287,12 @@ test("resolveFilter: 1 フィールドで未配信時は {0, 0} になる (PBT)"
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.10:
- * 2 フィールド 0:0 は Next Object ({Largest Object.Group, Largest Object.Object + 1})。
+ * draft-ietf-moq-transport-22 §9.20.9:
+ * Location Filter Type 0x05 (Next Object) は
+ * {Largest Object.Group, Largest Object.Object + 1} から開始する。
  * LARGEST_OBJECT の +1 漏れ (Largest Object 自身から開始する退行) を検出する。
  */
-test("resolveFilter: 2 フィールド 0:0 は LARGEST_OBJECT の次 Object から開始する (PBT)", () => {
+test("resolveFilter: Next Object (0x05) は LARGEST_OBJECT の次 Object から開始する (PBT)", () => {
   fc.assert(
     fc.property(nextObjectFilterArb, boundaryLocationArb, (filter, largestLocation) => {
       const resolved = resolveFilter(filter, largestLocation);
@@ -292,11 +306,11 @@ test("resolveFilter: 2 フィールド 0:0 は LARGEST_OBJECT の次 Object か�
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.10:
- * 2 フィールド 0:0 で LARGEST_OBJECT 未受信のときは {0, 0} から開始する
- * (Next GroupStart と同じ扱い)。+1 を適用する退行 (未配信時に {0, 1}) を検出する。
+ * draft-ietf-moq-transport-22 §9.20.9:
+ * Next Object (0x05) で LARGEST_OBJECT 未受信のときは {0, 0} から開始する
+ * (相対指定と同じ扱い)。+1 を適用する退行 (未配信時に {0, 1}) を検出する。
  */
-test("resolveFilter: 2 フィールド 0:0 で未配信時は {0, 0} になる (PBT)", () => {
+test("resolveFilter: Next Object (0x05) で未配信時は {0, 0} になる (PBT)", () => {
   fc.assert(
     fc.property(nextObjectFilterArb, (filter) => {
       const resolved = resolveFilter(filter, null);
@@ -315,9 +329,13 @@ test("resolveFilter: 2 フィールド 0:0 で未配信時は {0, 0} になる (
 /**
  * 「フィルタなしに解決される種別」以外は必ず ResolvedFilter を返し、その Start は
  * Location として妥当 (Group / Object が 0〜2^64-1) である。
+ * ただし Next Object (0x05) は §3.1.4 が {Largest Object.Group,
+ * Largest Object.Object + 1} と定めるため、Largest Object の Object が 2^64-1 の
+ * ときだけ Object が 2^64 になり得る (仕様はこの場合を定義しない。この境界は
+ * 「Next Object は Largest Object の次 Object から開始する」PBT で固定する)。
  * 併せて、解決結果が入力フィルタの種別と対応する終端を持つことを確認する。
  */
-test("resolveFilter: 任意のフィルタで解決結果の Start が 0〜2^64-1 に収まる (PBT)", () => {
+test("resolveFilter: 任意のフィルタで解決結果の Start が妥当な範囲に収まる (PBT)", () => {
   fc.assert(
     fc.property(locationFilterArb, fullRangeLocationArb, (filter, largestLocation) => {
       const resolved = resolveFilter(filter, largestLocation);
@@ -327,7 +345,8 @@ test("resolveFilter: 任意のフィルタで解決結果の Start が 0〜2^64-
       }
       assert.isDefined(resolved);
       assert.isTrue(resolved!.start.group >= 0n && resolved!.start.group <= MAX_VARINT);
-      assert.isTrue(resolved!.start.object >= 0n && resolved!.start.object <= MAX_VARINT);
+      const objectLimit = "nextObject" in filter ? MAX_VARINT + 1n : MAX_VARINT;
+      assert.isTrue(resolved!.start.object >= 0n && resolved!.start.object <= objectLimit);
       // End Group を持つ種別では End Object は End Group を持つ場合のみ現れる
       if (!("endGroupDelta" in filter)) {
         assert.isUndefined(resolved!.endGroup);
@@ -496,7 +515,7 @@ test("objectMatchesFilter: Start Group より大きい Group は通過する (PB
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.10:
+ * draft-ietf-moq-transport-22 §9.20.9:
  * "When EndObject is omitted, the filter includes all objects in the End Group."
  * End Object は End Group 内でのみ上限として働き、End Group より前の Group は
  * Object の値に関わらず通過する。

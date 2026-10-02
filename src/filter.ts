@@ -1,7 +1,7 @@
 /**
  * Location Filter マッチング
  *
- * draft-ietf-moq-transport-21 Section 3.3.1 (Location Filter):
+ * draft-ietf-moq-transport-22 Section 3.3.1 (Location Filters):
  * Object の Location が Subscription の Location Filter にマッチするかどうかを判定する。
  *
  * 通過条件: Object Location >= Start Location。
@@ -23,11 +23,10 @@ import { MAX_VARINT } from "./varint";
 /**
  * 解決済み Location Filter
  *
- * 相対指定 (1 フィールドの StartGroup、および 2 フィールドで StartGroup =
- * StartObject = 0 の Next Object) は Largest Object から具体的な Start
- * Location に解決される（詳細は resolveFilter を参照）。
+ * 相対指定 (0x01 の StartGroup、および 0x05 の Next Object) は Largest Object から
+ * 具体的な Start Location に解決される（詳細は resolveFilter を参照）。
  * Largest Object 未確定（コンテンツ未配信）時は {0, 0} から開始する
- * (draft-ietf-moq-transport-21 Section 3.3.1)。
+ * (draft-ietf-moq-transport-22 Section 3.3.1)。
  */
 export interface ResolvedFilter {
   /** 開始 Location（この Location 以上の Object が通過） */
@@ -41,16 +40,18 @@ export interface ResolvedFilter {
 /**
  * LocationFilter を具体的な ResolvedFilter に解決する
  *
- * draft-ietf-moq-transport-21 Section 9.20.10:
- * - 1 フィールド (startGroup): 相対指定。Start Group = LARGEST_OBJECT の Group + 1 - StartGroup。
- *   未配信時は {0, 0} から開始。負値は 0 にクランプ
- * - 2 フィールドで startGroup = startObject = 0: Next Object
+ * draft-ietf-moq-transport-22 Section 9.20.9 (Table 6):
+ * - 0x01 (startGroup): 相対指定。Start Location =
+ *   {LARGEST_OBJECT の Group + 1 - startGroup, 0}。未配信時は {0, 0} から開始。
+ *   計算結果は 0 未満なら 0、2^64-1 超なら 2^64-1 にクランプする
+ * - 0x05 (nextObject): Next Object
  *   ({LARGEST_OBJECT の Group, LARGEST_OBJECT の Object + 1}、未配信時 {0, 0})
- * - 2 フィールド (それ以外): 指定された絶対 Location から開始（終了なし）
- * - 3 フィールド: 絶対開始。End Group = StartGroup + EndGroupDelta
- * - 4 フィールド: 絶対開始。End Group = StartGroup + EndGroupDelta、End Object 指定
+ * - 0x02 (startGroup + startObject): 指定された絶対 Location から開始（終了なし）。
+ *   0:0 は絶対位置 {0, 0} の指定であり Next Object ではない
+ * - 0x03: 絶対開始。End Group = StartGroup + EndGroupDelta
+ * - 0x04: 絶対開始。End Group = StartGroup + EndGroupDelta、End Object 指定
  *
- * reset (Length 0) はフィルタなし扱い (undefined) に解決する
+ * reset (Type 0x00) はフィルタなし扱い (undefined) に解決する
  * (REQUEST_UPDATE でのフィルタ除去)。
  *
  * @param filter - LocationFilter（undefined は全 Object 通過）
@@ -63,25 +64,27 @@ export function resolveFilter(
   largestLocation: Location | null,
 ): ResolvedFilter | undefined {
   if (filter === undefined || "reset" in filter) {
-    // reset (Length 0) はフィルタを除去した状態と同じくフィルタなし扱い
+    // reset (Type 0x00) はフィルタを除去した状態と同じくフィルタなし扱い
     return undefined;
   }
 
-  // 2 フィールド限定で StartGroup = StartObject = 0 の場合は Next Object
-  // ({Largest Object.Group, Largest Object.Object + 1}) を意味する (§9.20.10)
+  // 0x05 (Next Object) は {Largest Object.Group, Largest Object.Object + 1} を意味する
+  // (§9.20.9 Table 6 / §3.1.4)。§3.1.4 は Largest Object の Object が 2^64-1 の
+  // 場合を定義しないため、その場合だけ Object が 2^64 になり得る (Group 内で
+  // これ以上 Object が無いため、比較上は次の Group の先頭から開始するのと同じ)。
+  // クランプの規定は相対指定 (0x01) の Start Group にのみある (§9.20.9)
   if (isNextObjectLocationFilter(filter)) {
-    // Next GroupStart (旧) と同様に、未配信時は {0, 0} から開始する
+    // 相対指定と同様に、未配信時は {0, 0} から開始する
     if (largestLocation === null) {
       return { start: { group: 0n, object: 0n }, endGroup: undefined };
     }
-    // Section 9.20.10: {Largest Object.Group, Largest Object.Object + 1}
     return {
       start: { group: largestLocation.group, object: largestLocation.object + 1n },
       endGroup: undefined,
     };
   }
 
-  // 1 フィールド: StartGroup のみ。相対指定 (Next Group 基準)
+  // 0x01 (Relative Start): StartGroup のみ。Largest Object 基準の相対指定
   if (!("startObject" in filter)) {
     // 未配信時 (LARGEST_OBJECT 省略) は仕様どおり {0, 0} から開始する。
     // フォールバック値に +1 を適用すると未配信時に {0, 1} になる罠があるため、
@@ -89,8 +92,8 @@ export function resolveFilter(
     if (largestLocation === null) {
       return { start: { group: 0n, object: 0n }, endGroup: undefined };
     }
-    // draft-ietf-moq-transport-21 Section 9.20.10:
-    // start Location = {Largest Object.Group + 1 - StartGroup, 0}。
+    // draft-ietf-moq-transport-22 Section 9.20.9:
+    // "the start Location is {Largest Object.Group + 1 - StartGroup, 0}"。
     // 相対の計算結果が負値になる group は 0、2^64-1 を超える group は 2^64-1
     // にクランプする
     let group = largestLocation.group + 1n - filter.startGroup;
@@ -103,10 +106,10 @@ export function resolveFilter(
     return { start: { group, object: 0n }, endGroup: undefined };
   }
 
-  // 2 フィールド (絶対開始) または 3 / 4 フィールド
+  // 0x02 (絶対開始) または 0x03 / 0x04 フィールド
   const start: Location = { group: filter.startGroup, object: filter.startObject };
   if (!("endGroupDelta" in filter)) {
-    // 2 フィールド: 絶対開始 (終端なし)
+    // 0x02: 絶対開始 (終端なし)
     return { start, endGroup: undefined };
   }
 
@@ -154,7 +157,7 @@ export function objectMatchesFilter(
   if (filter.endGroup !== undefined && objectLocation.group > filter.endGroup) {
     return false;
   }
-  // End Object があるときは、End Group 内で Object <= End Object のみ通過 (§9.20.10
+  // End Object があるときは、End Group 内で Object <= End Object のみ通過 (§9.20.9
   // "When EndObject is omitted, the filter includes all objects in the End Group.")
   // endGroup が無いのに endObject だけ指定された ResolvedFilter に対しては
   // 適用しない (endObject は endGroup に従属する設計。不変条件の防御)
