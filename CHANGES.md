@@ -2382,6 +2382,13 @@
   - 併せて `trackProperties` の FETCH_OK の参照を v22 §9.12 に更新する
   - 挙動は変えず、コメントとテストのみの変更
   - @voluntas
+- [UPDATE] SETUP の拡張宣言の仕組みと参照を draft-22 に合わせる
+  - draft-ietf-moq-transport-22 §6.3.2 (Extension Negotiation) は拡張のサポートを SETUP の Setup Option で宣言し、汎用の宣言形式は無く各拡張仕様が Option の型・値・交渉規則を定めると明確化した。Setup Option は §16.4 の IANA レジストリで管理され、Message Parameter とは別の名前空間である (§9.20.1)。moqt-js が送る Option の一覧と、将来の拡張で汎用形式を仮定しないことを `setup.ts` に書く
+  - "§1.5 (Extensibility)" の参照を正しい節に直す (NOT_SUPPORTED の SHOULD は §1.6 (Modularity)、制御ストリームの単方向ペア化は §6.3 (Session initialization))
+  - Key-Value-Pairs の Figure 番号を v22 の Figure 3 に直す (`setup.ts` / `parameter/kvp.ts` / `setup.test.ts` / `parameter/messageParameter.ts`)
+  - 未知の Setup Option を ignore して保持する現行挙動をテストで固定する
+  - 挙動は変えず、コメントとテストのみの変更
+  - @voluntas
 - [ADD] 実リレーへ接続する E2E テストを追加する
   - `secrets.TEST_MOQT_URI` が指す MOQT リレーへ実ブラウザ (Chromium) から接続し、SETUP の交換と正常な切断、Canvas のダミー映像の publish / subscribe、FETCH (絶対開始の Location Filter) を検証する
   - 接続先は環境変数 `TEST_MOQT_URI` で渡す。未設定の環境 (fork からの PR、secret を持たないローカル) ではテストを skip として記録し、暗黙の成功扱いにしない

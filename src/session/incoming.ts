@@ -49,17 +49,17 @@ import type { SessionInternal } from "./types";
 /**
  * 受信 bidi ストリームの先頭メッセージを 3 分類する
  *
- * draft-ietf-moq-transport-21 §6.3 (Session initialization):
+ * draft-ietf-moq-transport-22 §6.3 (Session initialization):
  * リクエストストリームの先頭として許可されるメッセージは 7 種
  * (TRACK_STATUS / SUBSCRIBE / PUBLISH / FETCH / PUBLISH_NAMESPACE /
  * SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS)。
  * - "publish": 対応済み (moqt-js はクライアントのため受信 PUBLISH のみ処理する)
  * - "unsupported-request": 7 種のうち未対応の 6 種。
- *   draft-ietf-moq-transport-21 §1.5 (Extensibility):
+ *   draft-ietf-moq-transport-22 §1.6 (Modularity):
  *   「Limited endpoints SHOULD respond to any unsupported messages with the
  *   appropriate NOT_SUPPORTED error code, rather than ignoring them.」
  * - "protocol-violation": 7 種以外 (未知タイプ等)。
- *   draft-ietf-moq-transport-21 §6.3:
+ *   draft-ietf-moq-transport-22 §6.3:
  *   「Bidirectional streams MUST NOT begin with any other message type unless
  *   negotiated. If they do, the peer MUST close the Session with a
  *   PROTOCOL_VIOLATION.」
@@ -202,7 +202,7 @@ export function incomingValidateRequestId(
  * - 分類 2 (unsupported-request): 先頭 varint を Request ID として検証し、
  *   REQUEST_ERROR (NOT_SUPPORTED) を応答して FIN で閉じ、true を返す。
  *   検証失敗は INVALID_REQUEST_ID、先頭欠落は PROTOCOL_VIOLATION で閉じる。
- *   検証通過時はセッションを閉じない (§1.5 SHOULD)。
+ *   検証通過時はセッションを閉じない (§1.6 (Modularity) SHOULD)。
  * - 分類 3 (protocol-violation): PROTOCOL_VIOLATION でセッションを閉じ、
  *   true を返す (§6.3 MUST)。
  *
@@ -267,7 +267,7 @@ export async function incomingHandleFirstBidiMessage(
       );
       return true;
     }
-    // draft-ietf-moq-transport-21 §1.5 (Extensibility):
+    // draft-ietf-moq-transport-22 §1.6 (Modularity):
     // 未対応メッセージには NOT_SUPPORTED を応答する (SHOULD。引用は
     // incomingClassifyFirstBidiMessage の docstring 参照)。
     await incomingSendRequestErrorAndClose(
@@ -278,7 +278,7 @@ export async function incomingHandleFirstBidiMessage(
     return true;
   }
   // 7 種以外のメッセージタイプで始まる双方向ストリームは PROTOCOL_VIOLATION
-  // draft-ietf-moq-transport-21 §6.3
+  // draft-ietf-moq-transport-22 §6.3
   session.closeWithError(
     new SessionError(
       `expected a request message as first message on incoming bidirectional stream, got 0x${firstMsg.type.toString(16)}`,
@@ -305,7 +305,7 @@ export async function incomingHandleFirstBidiMessage(
  *   4,096 バイト超。§2.4.1 / §8.7 は受信時に PROTOCOL_VIOLATION で閉じる MUST)
  *
  * 構造違反を閉じないのは、未対応リクエストの本文を本実装が解釈しないためである。
- * §1.5 (Extensibility) は未対応メッセージへの NOT_SUPPORTED 応答を求めており、
+ * §1.6 (Modularity) は未対応メッセージへの NOT_SUPPORTED 応答を求めており、
  * 本文の解釈結果でセッションを閉じると、将来のメッセージ定義が本実装の想定と
  * 異なる場合に相互運用を壊す。予約名前空間の MUST 拒否 (§2.4.3 / §6.5) は
  * Namespace が読めた場合に成立する。
