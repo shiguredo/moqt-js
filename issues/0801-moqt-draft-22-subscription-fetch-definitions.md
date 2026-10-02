@@ -12,11 +12,11 @@ draft-ietf-moq-transport-22 で Subscription と Fetch に関連する定義が�
 v21 からの差分 (いずれも `refs/moq/draft-ietf-moq-transport-22.txt` で確認済み):
 
 - §1.3 (Terms and Definitions) に Subscription の定義が入った: "Subscription: An ongoing relationship in which a publisher delivers newly published objects from a track to a subscriber. See (Section 3.1)." v21 §1.3 には無かった
-- §3.1 (Subscriptions) に subscription-delivered の定義が入った: "An object published or received in a subgroup or datagram is *subscription-delivered*." v21 では語句自体は §3.3.1 / §3.4 に出現していたが、定義文は無かった
+- §3.1 (Subscriptions) に subscription-delivered の定義が入った: "An object published or received in a subgroup or datagram is _subscription-delivered_." v21 では語句自体は §3.3.1 / §3.4 に出現していたが、定義文は無かった
 - §3.1 の節構成が変わった。v21 の §3.1.1 (Subscription State Management) / §3.1.2 (Track Alias) / §3.1.3 (Largest Object) は、v22 では §3.1.2 / §3.1.3 / §3.1.4 に対応し、§3.1.1 には新設の Pausing Subscriptions が入る。unknown Track Alias の取り扱いも v22 では §3.1.3.1 (Unknown Track Alias) として独立し、文言が変更された
 - §3.2 (Fetch) の冒頭に Fetch の定義が入った: "A FETCH requests pre-existing Objects from a Track between a Start Location and an End Location, inclusive. This range is specified by a Location Filter (see Section 3.3.1) when present, or defaults to {0, 0} and Largest Object (Section 3.1.4) respectively." v21 の §3.2 は §3.2.1 Fetch State Management のみで導入定義が無かった
 - §3.3.1 (Location Filters) の publisher MUST から "subscription-delivered" が外れた: v21 は "A publisher MUST NOT send subscription-delivered objects from outside the requested range."、v22 は "A publisher MUST NOT send objects from outside the requested range." となっている
-- §3.4 (Fill Semantics) の節番号は v21 から不変で、fill-delivered と subscription-delivered の双方を定義する文 ("An object delivered on the fill fetch stream is *fill-delivered*." / "When the fill range overlaps the subscription's Location filter, an object can be both fill-delivered and subscription-delivered.") も v21 と同一である。節内のパラメータ参照 (§9.20.16 → §9.20.15 など) は各パラメータ担当 issue (0796 等) の対象
+- §3.4 (Fill Semantics) の節番号は v21 から不変で、fill-delivered と subscription-delivered の双方を定義する文 ("An object delivered on the fill fetch stream is _fill-delivered_." / "When the fill range overlaps the subscription's Location filter, an object can be both fill-delivered and subscription-delivered.") も v21 と同一である。節内のパラメータ参照 (§9.20.16 → §9.20.15 など) は各パラメータ担当 issue (0796 等) の対象
 
 ## 現状
 
@@ -30,7 +30,7 @@ v21 からの差分 (いずれも `refs/moq/draft-ietf-moq-transport-22.txt` で
 - `src/subscriber.ts` の `handleFillObject` の JSDoc: "fill-delivered のオブジェクトは fill 範囲に従属するため..." で fillDelivered と subscription-delivered の区別を説明し、`draft-ietf-moq-transport-21 §3.3.1 / §3.4 (Fill Semantics)` を参照している
 - `src/publisher.ts` の `subscriptionLocationFilter` のコメント、`onSendObjectSkipped` の JSDoc、`isOutsideLocationFilter` の JSDoc (計 3 箇所) が v21 §3.3.1 の逐語 "A publisher MUST NOT send subscription-delivered objects from outside the requested range." を引用している
 - `src/publisher.test.ts` のコメントにも同じ逐語の引用がある
-- `src/session.test.ts` に fill-delivered / subscription-delivered の逐語引用がある (§3.4 由来。詳細はテストコメントの "An object delivered on the fill fetch stream is *fill-delivered*." / "can be both fill-delivered and subscription-delivered.")
+- `src/session.test.ts` に fill-delivered / subscription-delivered の逐語引用がある (§3.4 由来。詳細はテストコメントの "An object delivered on the fill fetch stream is _fill-delivered_." / "can be both fill-delivered and subscription-delivered.")
 - `src/session/statistics.ts` の `objectsReceivedViaFetch` の JSDoc と `src/session/incoming.ts` の `incomingProcessFetchObjects` の JSDoc が v21 §3.4 を参照するのみ (fill-delivered と通常 FETCH の経路区別)
 
 ### §3.1 内の再番号付け (v21 §3.1.x → v22 §3.1.x+1)
