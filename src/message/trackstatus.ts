@@ -10,7 +10,8 @@
  *  (Section 9.6), but subscriber parameters related to Track delivery
  *  (e.g. SUBSCRIBER_PRIORITY) are not included."
  *
- * 応答は REQUEST_OK であり、§9.3 (REQUEST_OK) の shorthand で TRACK_STATUS_OK と呼ぶ。
+ * 応答は REQUEST_OK であり、draft-ietf-moq-transport-22 §1.5 (Response Message Naming)
+ * の shorthand で TRACK_STATUS_OK と呼ぶ (v21 は §9.3 に併記していた)。
  * "This document uses the shorthand PUBLISH_OK, REQUEST_UPDATE_OK, TRACK_STATUS_OK,
  *  SUBSCRIBE_NAMESPACE_OK, SUBSCRIBE_TRACKS_OK and PUBLISH_NAMESPACE_OK to refer to a
  *  REQUEST_OK sent in response to the corresponding request type."

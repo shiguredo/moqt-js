@@ -2356,6 +2356,11 @@
   - v22 §3.3.1 の publisher MUST から subscription-delivered が外れ、"A publisher MUST NOT send objects from outside the requested range." になったため引用を直す
   - 挙動は変えず、コメントのみの変更
   - @voluntas
+- [UPDATE] 応答メッセージの別名 (§1.5) と実装の対応をコメントに記録する
+  - draft-ietf-moq-transport-22 §1.5 は REQUEST_OK (Type 0x07) と REQUEST_ERROR (Type 0x05) のリクエスト種別ごとの別名 (PUBLISH_OK / SUBSCRIBE_ERROR / FETCH_ERROR など) を定める。別名は仕様文書中の呼称でありワイヤ上の Message Type は変わらないため、デバッグ表示はワイヤ名のままにし、エラー文言には別名を使わず requestLabel で種別を示す判断をコメントに残す (OK 側はリクエスト種別が判明している検証のコンテキスト名で別名を使う)
+  - SUBSCRIBE_OK (§9.7、0x04) と FETCH_OK (§9.12、0x18) は独立したワイヤメッセージであり REQUEST_OK の別名ではないことも明記する
+  - 挙動は変えず、コメントのみの変更
+  - @voluntas
 - [ADD] 実リレーへ接続する E2E テストを追加する
   - `secrets.TEST_MOQT_URI` が指す MOQT リレーへ実ブラウザ (Chromium) から接続し、SETUP の交換と正常な切断、Canvas のダミー映像の publish / subscribe、FETCH (絶対開始の Location Filter) を検証する
   - 接続先は環境変数 `TEST_MOQT_URI` で渡す。未設定の環境 (fork からの PR、secret を持たないローカル) ではテストを skip として記録し、暗黙の成功扱いにしない
