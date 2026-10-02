@@ -79,9 +79,9 @@ export type MessageType = (typeof MessageType)[keyof typeof MessageType];
 /**
  * Setup Option Types (Section 9.1 Setup Options)
  *
- * draft-ietf-moq-transport-21 Section 9.1, Section 16.4 (IANA registry)
+ * draft-ietf-moq-transport-22 §9.1, §16.4 (IANA registry)
  *
- * draft-ietf-moq-transport-21 Section 13 (Grease):
+ * draft-ietf-moq-transport-22 §13 (Grease):
  * "Setup Options with reserved identifiers have no semantics and can
  *  carry arbitrary values. Endpoints MUST ignore unknown Setup Options."
  */

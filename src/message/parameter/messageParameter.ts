@@ -159,7 +159,7 @@ type MessageParameterValueEncoding =
  * パラメータ型ごとの Value エンコーディング定義
  *
  * draft-ietf-moq-transport-22 Section 9.20:
- * Message Parameters は Key-Value-Pair (Figure 2) とは異なり、
+ * Message Parameters は Key-Value-Pair (Figure 3) とは異なり、
  * 各パラメータ型が独自の Value エンコーディングを定義する。
  */
 const MESSAGE_PARAMETER_VALUE_ENCODING: Record<number, MessageParameterValueEncoding> = {
@@ -217,7 +217,7 @@ const MESSAGE_PARAMETER_VALUE_ENCODING: Record<number, MessageParameterValueEnco
  * draft-ietf-moq-transport-22 Section 9.20:
  * "An endpoint that receives an unknown Message Parameter MUST close
  *  the session with PROTOCOL_VIOLATION."
- * https://www.ietf.org/archive/id/draft-ietf-moq-transport-21.html#section-9.20
+ * https://www.ietf.org/archive/id/draft-ietf-moq-transport-22.html#section-9.20
  *
  * 未知のパラメータ型の場合はエラーをスローする。
  */

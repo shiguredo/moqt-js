@@ -302,10 +302,9 @@ export class SessionImpl implements Session {
    */
   private setupAuthToken: AuthorizationToken | undefined;
   /**
-   * draft-ietf-moq-transport-21 Section 1.5 (Extensibility):
+   * draft-ietf-moq-transport-22 §6.3 (Session initialization):
    * 制御ストリームは単方向ストリームのペアに変更された。
    * クライアントとサーバーがそれぞれ 1 本ずつ単方向ストリームを開く。
-   * draft-ietf-moq-transport-21 Section 1.5
    */
   controlSendStream?: WritableStream<Uint8Array>;
   controlReceiveStream?: ReadableStream<Uint8Array>;

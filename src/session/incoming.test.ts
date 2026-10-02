@@ -177,7 +177,7 @@ function createUnsupportedRequestTestContext(receivedRequestIds = new Set<bigint
 }
 
 /**
- * draft-ietf-moq-transport-21 §1.5 (Extensibility):
+ * draft-ietf-moq-transport-22 §1.6 (Modularity):
  * 「Limited endpoints SHOULD respond to any unsupported messages with the
  * appropriate NOT_SUPPORTED error code, rather than ignoring them.」
  * 未対応リクエストに REQUEST_ERROR (NOT_SUPPORTED) を応答して FIN で閉じ、

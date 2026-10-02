@@ -1,7 +1,7 @@
 /**
  * session/incoming.ts の Property-Based Tests
  *
- * draft-ietf-moq-transport-21 §6.3 (Session initialization) / §6.4.2.1 (Request ID) /
+ * draft-ietf-moq-transport-22 §6.3 (Session initialization) / §6.4.2.1 (Request ID) /
  * §9.12 (FETCH_OK) / §10.8 (Prior Group ID Gap) / §10.9 (Prior Object ID Gap) /
  * §11.2.1 (Object Datagram) / §11.3 (Subgroup Streams) / §11.4.1 (Fetch Streams) /
  * §11.5.2 (Padding Datagrams) / §12.1 (Malformed Track)
@@ -121,18 +121,18 @@ function copyBytes(bytes: Uint8Array): Uint8Array {
 
 // ============================================================================
 // 受信 bidi ストリーム先頭メッセージの 3 分類
-// draft-ietf-moq-transport-21 §6.3 (Session initialization) / §1.5 (Extensibility)
+// draft-ietf-moq-transport-22 §6.3 (Session initialization)
 // ============================================================================
 
 /**
  * 仕様が受信 bidi ストリームの先頭として許可する 7 種と分類の対応表
  *
- * draft-ietf-moq-transport-21 §6.3:
+ * draft-ietf-moq-transport-22 §6.3:
  * 「Bidirectional streams MUST NOT begin with any other message type unless
  *  negotiated. If they do, the peer MUST close the Session with a
  *  PROTOCOL_VIOLATION.」
  * 7 種のうち moqt-js (クライアント) が処理するのは受信 PUBLISH だけであり、
- * 残る 6 種は §1.5 (Extensibility) の NOT_SUPPORTED 応答対象になる。
+ * 残る 6 種は §1.6 (Modularity) の NOT_SUPPORTED 応答対象になる。
  */
 const firstBidiMessageClassification = new Map<number, "publish" | "unsupported-request">([
   [MessageType.PUBLISH, "publish"],

@@ -584,7 +584,7 @@ export async function incomingPublishHandleBidirectionalStream(
   // 先頭メッセージを 3 分類して処理する
   // draft-ietf-moq-transport-21 §6.3 (Session initialization):
   // 先頭が 7 種以外のメッセージタイプの場合は PROTOCOL_VIOLATION でセッションを閉じる。
-  // 7 種のうち未対応のリクエストには NOT_SUPPORTED を応答する (§1.5 SHOULD)。
+  // 7 種のうち未対応のリクエストには NOT_SUPPORTED を応答する (§1.6 (Modularity) SHOULD)。
   // true が返れば先頭メッセージの処理が完了しているため return する。
   if (
     await incomingHandleFirstBidiMessage(session as unknown as SessionInternal, stream, firstMsg)
