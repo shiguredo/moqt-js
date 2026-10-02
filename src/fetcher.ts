@@ -132,6 +132,20 @@ export class FetcherImpl implements Fetcher {
 
   /**
    * FETCH_OK から情報を設定
+   *
+   * draft-ietf-moq-transport-22 §9.12 (FETCH_OK): "End Location: The end of the
+   *  range covered by the FETCH response, inclusive.  This is the End Location
+   *  from the FETCH request Location Filter parameter unless the requested range
+   *  extends beyond Largest Object at the time the request was processed, or the
+   *  last Object in the Track." 要求範囲が Largest Object を超える場合や Track の
+   * 最後の Object の場合は要求値より小さくなるため、要求した範囲の終端と同一とは
+   * 限らない。
+   *
+   * Largest Object を含む範囲の FETCH で「その Object を完全に配送し、残りは
+   * 利用可能になり次第届ける」ことは publisher / relay の責務であり (§3.2)、
+   * クライアントは返された End Location を信頼する。Largest Object でクランプし直さ
+   * ないのは、§3.1.4 の Largest Object が到着中の Object を指し得るためである
+   * (クライアント側で再計算すると配送済みの Object を取りこぼす)。
    */
   setFetchOkInfo(
     endOfTrack: boolean,

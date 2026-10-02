@@ -176,6 +176,13 @@ export function filterPendingCatalogObjects(
  * LARGEST_OBJECT が不明な場合は undefined を返し、呼び出し側はフィルタ無し
  * (従来どおり {0, 0} から Largest Object まで) を要求する。
  *
+ * draft-ietf-moq-transport-22 §3.1.4 (Largest Object) のとおり Largest Object は
+ * 到着中の Object を指し得る。フィルタ無しの FETCH は §3.2 のとおり開始位置が
+ * {0, 0}、終端が Largest Object となり、実際の終端は FETCH_OK の End Location (§9.12)
+ * で示される。
+ * ここでは受信した Largest Object の Group の先頭を開始位置に置くだけで、終端は
+ * 再計算しない (Group 0 のときは {0, 0} 起点と同じ範囲になるためフィルタを省略する)。
+ *
  * @param largestLocation SUBSCRIBE_OK で受信した LARGEST_OBJECT (不明なら null)
  * @returns FETCH に載せる Location Filter。undefined はフィルタ無し
  */

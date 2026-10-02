@@ -1,7 +1,7 @@
 # Largest Object が到着中であり得る前提で実装を確認する
 
 - Created: 2026-10-02
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-10-03
 - Branch: feature/update-largest-object-arriving
 - Polished: 2026-10-02
 
@@ -44,4 +44,26 @@ draft-ietf-moq-transport-22 §3.1.4 は「Largest Object は到着中の Object 
 
 ## 解決方法
 
-{未着手}
+draft-ietf-moq-transport-22 §3.1.4 / §3.2 / §9.12 / §9.20.17 を正として、Largest Object を「確定済みの最終値」として扱っている箇所が無いことを確認し、前提をコメントに記録した。挙動の変更はない。
+
+### 1. 確認結果
+
+- Largest Object を最終値と仮定している箇所は無かった。`extractLargestLocation` (抽出) / `setLargestLocation` (保持) / `getLargestLocation` (報告) はいずれも値をそのまま扱い、確定値として比較・クランプする処理は無い
+- `resolveLocationFilter` は SUBSCRIBE_OK の受信時に 1 回だけ呼ばれ、REQUEST_UPDATE_OK / PUBLISH_STATE_NOTIFY / 受信 PUBLISH の LARGEST_OBJECT 更新では `setLargestLocation` のみを呼ぶ。LOCATION_FILTER が新たに設定・更新されたときだけ `setLocationFilter` がその時点の LARGEST_OBJECT で解決する。§3.1.4 / §3.3.1 は「相対指定をどの時点の Largest Object で解決するか」を定めないため、この規則が仕様の解釈として妥当であることをコメントに記録した
+- `src/fetcher.ts` は Largest Object を保持せず、FETCH_OK の End Location をそのまま採用する。終端を Largest Object でクランプし直す処理は無いままでよい (クランプすると、到着中の Object を指し得る値で配送済みの Object を取りこぼす)。§3.2 の「Largest Object を含む範囲を完全に配送し、残りは利用可能になり次第届ける」は publisher / relay の責務である
+- `src/createMediaSubscriber.ts` の `catalogFetchFilter` は、LARGEST_OBJECT が不明な場合にフィルタを省略して publisher 側の既定 (開始位置 {0, 0}、終端 Largest Object) に委ねる現状のままでよいことを記録した
+
+### 2. コメントの追加
+
+- `extractLargestLocation` / `setLargestLocation` / `resolveLocationFilter` (subscriber) / `recordLargestLocation` / `getLargestLocation` (publisher) / `setFetchOkInfo` (fetcher) / `catalogFetchFilter` に、§3.1.4 の「以前より大きい Location の Object の最初のバイトを送受信した時点で進み、到着中の Object を指し得る」という前提と、参照 (§3.1.4 / §9.12 / §9.20.17) を書いた
+- publisher は送信の受け付け時に記録するため、記録時点が「最初のバイト」より早いこと、待機中に paused / 購読のクローズ / Subgroup のクローズが起きると書き込みが行われず記録だけが残ることを明記した (受信側は「到着中」と同じ前提で扱い、配送の有無はデータストリーム側で判断する)
+- `src/session/bidi.ts` の fill 範囲判定の `@param` を「publisher が記録した最大 Location」に統一した
+
+### 3. 参照とテスト
+
+- `rg "9\.20\.18"` で src/ とテストを確認し、LARGEST OBJECT Parameter を v21 §9.20.18 として引く参照は残っていない (残る §9.20.18 はすべて v22 の FORWARD Parameter)。LARGEST OBJECT の参照は §9.20.17 に更新済みである (前の変更で反映済み)
+- LARGEST_OBJECT の更新が購読開始後に到着するケースのテストは維持されている (`bidiRequestUpdateOk.test.ts` の Next Object 前進抑止、`bidiPublishStateNotify.test.ts` の同一フィルタ抑止と変化時反映、`subscriber.test.ts` の SUBSCRIBE_OK 後更新)。§3.1.4 の前提を踏まえてもテストの追加・修正は不要だった
+
+### 4. 検証
+
+`vp check` (1284 files 整形 / 475 files lint・型エラーなし) / `tsc --noEmit` / `vp test run` (198 files / 3565 tests) が通る。`/review-diff-code` を 3 周回し、指摘 (§3.2 の帰属、FETCH_OK End Location は §9.12、記録時点が「最初のバイト」より早いこと、§3.1.4 の引用の条件) はすべて反映した。CHANGES.md の `## develop` の `### misc` に [UPDATE] エントリを追加した。

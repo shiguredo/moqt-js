@@ -258,7 +258,12 @@ export class SubscriberImpl implements Subscriber {
   /**
    * SUBSCRIBE_OK / PUBLISH / REQUEST_UPDATE_OK / PUBLISH_STATE_NOTIFY から
    * LARGEST_OBJECT パラメータを設定
-   * draft-ietf-moq-transport-22 Section 9.20.17 (LARGEST OBJECT Parameter)
+   * draft-ietf-moq-transport-22 §9.20.17 (LARGEST OBJECT Parameter) / §3.1.4
+   * (Largest Object)
+   *
+   * §3.1.4 は「以前より大きい Location の Object の最初のバイトを送受信した時点で
+   * Largest Object が進み、到着中の Object を指し得る」と定める。したがってここで保持する値も確定値ではなく、
+   * 同じ購読のうちに何度でも上書きされ得る。
    *
    * LARGEST_OBJECT の更新だけでは解決済み Location Filter を再計算しない。
    * 初回購読の相対フィルタ開始位置は購読確立時に固定する (§3.3.1)。
@@ -271,6 +276,12 @@ export class SubscriberImpl implements Subscriber {
 
   /**
    * 保持済みの Location Filter を最新の LARGEST_OBJECT で再解決する
+   *
+   * 解決に使う LARGEST_OBJECT は到着中の Object を指し得る (§3.1.4)。
+   * §3.1.4 / §3.3.1 は「相対指定 (§9.20.9 の 0x01 / 0x05) をどの時点の
+   * Largest Object で解決するか」を定めないため、moqt-js は SUBSCRIBE_OK の
+   * 受信時の 1 回に固定する (LARGEST_OBJECT を省略した SUBSCRIBE_OK でも呼ぶ。
+   * 以降の LARGEST_OBJECT 更新では解釈を変えない)。
    *
    * draft-ietf-moq-transport-22 §3.3.1:
    * SUBSCRIBE 送信時の setLocationFilter では LARGEST_OBJECT が未受信のため、

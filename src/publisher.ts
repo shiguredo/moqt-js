@@ -458,13 +458,18 @@ export class PublisherImpl implements Publisher {
   }
 
   /**
-   * この Publisher が送信した最大 Location を返す
+   * この Publisher が記録した最大 Location を返す
+   *
+   * 送信の受け付け時に更新するため、到着中または今後送らない Object を指し得る
+   * (recordLargestLocation を参照)。
    *
    * draft-ietf-moq-transport-22 §9.20.17 (LARGEST OBJECT Parameter):
    * "If Objects have been published on this Track the Publisher MUST include
-   *  this parameter." 未送信時は null を返し、呼び出し側は LARGEST_OBJECT を
+   *  this parameter." 1 件も記録していない場合は null を返し、呼び出し側は LARGEST_OBJECT を
    * 含めない ("If omitted from a message, the sending endpoint has not
    *  published or received any Objects in the Track.")。
+   *
+   * §3.1.4 (Largest Object) のとおり、返す値は確定した最終値ではない。
    */
   getLargestLocation(): Location | null {
     return this.largestLocation;
@@ -535,10 +540,22 @@ export class PublisherImpl implements Publisher {
   }
 
   /**
-   * 送信した Location で最大 Location を更新する
+   * 送信を受け付けた Location で最大 Location を更新する
    *
    * sendObject / sendDatagram の受け付け時に呼ぶ。Group が大きい方、同一
    * Group では Object が大きい方を最大とする (§8.2 の Location 比較)。
+   *
+   * draft-ietf-moq-transport-22 §3.1.4 (Largest Object): "Largest Object updates
+   *  when the first byte of an Object with a Location larger than the previous
+   *  value is published or received through a subscription.  Largest Object
+   *  therefore identifies an Object that can still be arriving."
+   *
+   * moqt-js は sendObject / sendDatagram の受け付け時に記録する。書き込みは送信
+   * キューを経て走るため、記録時点は「最初のバイト」より早い。待機中に paused
+   * (FORWARD=0)・購読のクローズ・Subgroup のクローズが起きると書き込みは行われず、
+   * 記録だけが残る。したがって報告する LARGEST_OBJECT は、到着中の Object だけで
+   * なく今後送らない Location を指し得る (受信側は §3.1.4 の「到着中」と同じ前提で
+   * 扱い、配送の有無はデータストリーム側で判断する)。
    */
   private recordLargestLocation(groupId: number, objectId: number): void {
     // 非整数・負値は publishSendObject / publishSendDatagram 側で fail-fast

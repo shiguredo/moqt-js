@@ -2371,6 +2371,11 @@
   - SUBSCRIBE_OK (§9.7、0x04) と FETCH_OK (§9.12、0x18) は独立したワイヤメッセージであり REQUEST_OK の別名ではないことも明記する
   - 挙動は変えず、コメントのみの変更
   - @voluntas
+- [UPDATE] Largest Object が到着中であり得る前提をコメントに記録する
+  - draft-ietf-moq-transport-22 §3.1.4 は「以前より大きい Location の Object の最初のバイトを送受信した時点で Largest Object が進み、到着中の Object を指し得る」と定める。LARGEST_OBJECT を保持・抽出・更新・報告する箇所 (`extractLargestLocation` / `setLargestLocation` / `resolveLocationFilter` / `recordLargestLocation` / `getLargestLocation`) と `catalogFetchFilter`、`src/session/bidi.ts` の fill 範囲判定の `@param` にこの前提を明記する
+  - Fetch の「Largest Object を含む範囲は完全に配送する」規定は publisher / relay の責務であり、クライアントは FETCH_OK の End Location (§9.12) を信頼する (再クランプしない) ことを `setFetchOkInfo` の JSDoc に記録する
+  - 挙動は変えず、コメントのみの変更
+  - @voluntas
 - [ADD] 実リレーへ接続する E2E テストを追加する
   - `secrets.TEST_MOQT_URI` が指す MOQT リレーへ実ブラウザ (Chromium) から接続し、SETUP の交換と正常な切断、Canvas のダミー映像の publish / subscribe、FETCH (絶対開始の Location Filter) を検証する
   - 接続先は環境変数 `TEST_MOQT_URI` で渡す。未設定の環境 (fork からの PR、secret を持たないローカル) ではテストを skip として記録し、暗黙の成功扱いにしない
