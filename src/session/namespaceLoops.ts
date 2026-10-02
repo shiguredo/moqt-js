@@ -371,6 +371,9 @@ function namespaceShouldSkipAfterMigration(requestMigrated: boolean, messageType
  * 確立前の検証失敗は呼び出し元 Promise を reject してから閉じる
  * (PUBLISH 応答経路と同一パターン)。
  *
+ * @param contextName - 検証コンテキスト名。draft-ietf-moq-transport-22 §1.5 の
+ *   REQUEST_OK の別名 (SUBSCRIBE_NAMESPACE_OK / SUBSCRIBE_TRACKS_OK) をそのまま
+ *   使う。ワイヤ上はどちらも REQUEST_OK (Type 0x07) である
  * @returns 継続可なら true、違反で閉じたなら false (呼び出し側は return する)
  */
 function namespaceValidateInitialOk(

@@ -699,7 +699,19 @@ interface BidiResponseHandlers<TPending extends BidiPendingRejectable> {
    * Map.delete が冪等なため問題にならない。
    */
   cleanup: (session: BidiSessionInternal, requestId: bigint) => void;
-  /** エラーメッセージに使うリクエスト種別名 (例: "PUBLISH") */
+  /**
+   * エラーメッセージに使うリクエスト種別名 (例: "PUBLISH")
+   *
+   * draft-ietf-moq-transport-22 §1.5 (Response Message Naming) の REQUEST_ERROR の
+   * 別名 (SUBSCRIBE_ERROR / FETCH_ERROR / PUBLISH_ERROR など) は仕様文書中の呼称で
+   * あり、ワイヤ名は REQUEST_ERROR (Type 0x05) のままである。エラー文言には別名を
+   * 使わず、この `requestLabel` でリクエスト種別を示す。理由は 2 つある。
+   * - `RequestError` はリクエスト種別を持たず、応答を受け取る経路が決める名前である
+   *   以上、種別ごとの別名を文言に混ぜても情報が増えない
+   * - OK 側は検証のコンテキスト名 (`contextName`) に §1.5 の別名を使うが、それは
+   *   「どの要求への応答か」を検証する対象が明確なためであり、エラー文言はコード
+   *   (`errorCode`) と `requestLabel` で十分に特定できる
+   */
   requestLabel: string;
   handleOk: (context: BidiResponseContext<TPending>, payload: Uint8Array) => void | Promise<void>;
   handleRequestError: (
