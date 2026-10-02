@@ -1,7 +1,7 @@
 # relay-to-relay 通信がスコープ外であることを確認する
 
 - Created: 2026-10-02
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-10-03
 - Branch: feature/update-relay-relay-scope
 - Polished: 2026-10-02
 
@@ -37,4 +37,26 @@ draft-ietf-moq-transport-22 §7 (Relays) は「For the purposes of this specific
 
 ## 解決方法
 
-{未着手}
+draft-ietf-moq-transport-22 §7 (Relays) を正として、relay 間接続がスコープ外であることと実装変更が不要であることを確認し、`CODEBASE.md` に記録した。実装コードの変更はない。
+
+### 1. 確認結果 (relay 間接続のコード・設定・API は存在しない)
+
+- `src/index.ts` の公開 API はクライアント接続と publish / subscribe のみで、relay / サーバー実装の export は無い
+- `src/` の "relay" の言及はコメント (relay の挙動説明) のみである
+- `src/dataStream/fetch.ts` の `encodeFetchHeader` / `encodeFetchObjectFields` は「リレーサーバー実装用。moqt-js はクライアント専用のため、ランタイムでは使用しない。PBT でのラウンドトリップテストで使用。」というコメント付きで、`src/index.ts` から非 export であり relay 間接続の実装ではない
+- `devtools/` の relay は接続先 URL の設定 (`serverUrlStore` / `ConnectionSettings`) のみである
+- `package.json` の `e2e-test:relay` / `playwright.config.ts` の relay project / `tests/e2e/relay/*` / `.env.example` の `TEST_MOQT_URI` はクライアントから実リレーへの接続テストであり、relay 間接続ではない
+- `rg "relay.to.relay|relay to relay|リレー間|相互接続"` のヒットは `CODEBASE.md` と本 issue のみである
+- 受信 bidi ストリームの先頭が relay 専用メッセージになる経路は無い (`incomingClassifyFirstBidiMessage` の 3 分類で、relay 間接続に相当する分類は無い)
+
+### 2. 記録
+
+`CODEBASE.md` の「クライアント以外での用途の実装は不要であること」の項目に、§7 の逐語 (coordinated set of relays を単一の MOQT relay として扱い、その内部の接続方法と relay to relay のユースケースは out of scope) を根拠として、relay 間の相互接続は本仕様の対象外として実装しない旨を 1 文追記した。
+
+`CODEBASE.md` の変更は shiguredo-git の特別ルール (AGENTS.md / CODEBASE.md は「整備」の 1 語でコミットし、develop に直接コミットする) に従って develop に直接コミットした。そのため本 issue は PR を作成していない。
+
+CHANGES.md への追記は行っていない。shiguredo-changelog のとおり `.md` ファイルの変更は変更履歴に反映せず、ライブラリの利用者に見える変更も無いためである。
+
+### 3. 検証
+
+`vp check` (1284 files 整形 / 475 files lint・型エラーなし) / `tsc --noEmit` / `vp test run` (198 files / 3568 tests) が通る。`/review-diff-code` で引用の逐語一致と、リポジトリ横断での relay 間接続の不在を確認した。
