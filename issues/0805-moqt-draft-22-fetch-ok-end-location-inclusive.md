@@ -3,7 +3,7 @@
 - Created: 2026-10-02
 - Completed: {YYYY-MM-DD}
 - Branch: feature/update-fetch-ok-end-location-semantics
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-10-02
 
 ## 目的
 
@@ -14,7 +14,7 @@ moqt-js の検証とコメントが inclusive の解釈と一致することを�
 ## 現状
 
 - `src/session/params.ts` の `validateFetchOkEndLocation` は `compareLocations(endLocation, startLocation) < 0` のときだけエラーを返し、End == Start を許容している。inclusive の解釈と整合する
-- `src/fetcher.ts` の `endLocation` の JSDoc/コメントは「FETCH_OK で受信した値」以上の説明が無く、inclusive の意味が書かれていない
+- `src/fetcher.ts` の `endLocation` (Fetcher インターフェースのプロパティと `FetcherImpl` の getter) には JSDoc/コメントが無く、inclusive の意味が書かれていない
 - `src/session/publicTypes.ts` の `FetchOptions.filter` のコメントに終了側の既定 (Largest Object) の説明がある
 - コメントの参照は v21 §9.12
 
