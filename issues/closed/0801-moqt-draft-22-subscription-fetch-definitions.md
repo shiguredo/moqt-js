@@ -84,7 +84,7 @@ v21 の節番号のまま参照している箇所は v22 では指し先が変�
 
 ### 1. subscription-delivered / fill-delivered の根拠
 
-- `src/dataStream/common.ts` の `MoqtObject.fillDelivered` の JSDoc に、v22 §3.1 の「An object published or received in a subgroup or datagram is *subscription-delivered*.」と §3.4 の「An object delivered on the fill fetch stream is *fill-delivered*.」を根拠として書いた
+- `src/dataStream/common.ts` の `MoqtObject.fillDelivered` の JSDoc に、v22 §3.1 の「An object published or received in a subgroup or datagram is _subscription-delivered_.」と §3.4 の「An object delivered on the fill fetch stream is _fill-delivered_.」を根拠として書いた
 - `src/subscriber.ts` の `handleFillObject` / `handleObject`、`src/session/statistics.ts`、`src/session/incoming.ts` の §3.4 参照を v22 に更新した (§3.4 の節番号は不変)
 - `src/publisher.ts` / `src/publisher.test.ts` が引用していた v21 §3.3.1 の逐語「A publisher MUST NOT send subscription-delivered objects from outside the requested range.」を、v22 §3.3.1 の「A publisher MUST NOT send objects from outside the requested range.」に差し替えた (v22 では subscription-delivered が外れ、定義は §3.1 にあるため併記した)
 
