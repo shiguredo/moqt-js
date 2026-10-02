@@ -7,7 +7,7 @@
  * createMediaPublisher.test.ts の単体テストが固定する。
  *
  * draft-ietf-moq-loc-04 §2.3.3.1 (Audio Config) /
- * draft-ietf-moq-transport-21 §7.5 (Publisher Interactions)
+ * draft-ietf-moq-transport-22 §7.6 (Publisher Interactions)
  */
 
 import { test, assert } from "vite-plus/test";

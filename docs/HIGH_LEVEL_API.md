@@ -664,7 +664,7 @@ LOC モジュール (`LOC` 名前空間) は次にも対応するが、高レベ
 音声にはキーフレームが無く、Chromium の `AudioEncoder` では description が configure 後の
 最初の出力にしか現れない (実装依存であり将来変わり得る)。後着の購読者へ届けるために、
 音声 Publisher の Forward State が 0 から 1 になった時点
-(draft-ietf-moq-transport-21 §7.5) で保持している `AUDIO_CONFIG` を次の Object に
+(draft-ietf-moq-transport-22 §7.6) で保持している `AUDIO_CONFIG` を次の Object に
 1 度だけ載せ直す。
 
 Forward State が 1 のまま購読者が接続した場合は変化が起きないため送り直されず、

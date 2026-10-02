@@ -242,7 +242,7 @@ export interface Session {
   /**
    * Track をサブスクライブする（track subscription 用）
    *
-   * draft-ietf-moq-transport-21 §9.18 (SUBSCRIBE_TRACKS):
+   * draft-ietf-moq-transport-22 §3.6 / §9.18 (SUBSCRIBE_TRACKS):
    * SUBSCRIBE_TRACKS は新しい双方向ストリームで送信される。
    * Publisher はマッチするネームスペース内のトラックに対して PUBLISH メッセージを
    * 別の新規双方向ストリームで送信する。応答ストリーム上では PUBLISH_SKIPPED が
@@ -317,7 +317,7 @@ export class SessionImpl implements Session {
   datagramWriter?: WritableStreamDefaultWriter<Uint8Array> | undefined;
 
   // 受信双方向ストリームの reader。
-  // draft-ietf-moq-transport-21 §9.18: SUBSCRIBE_TRACKS への応答として
+  // draft-ietf-moq-transport-22 §3.6: SUBSCRIBE_TRACKS への応答として
   // サーバーが新規双方向ストリームを開き PUBLISH を送信する。
   // この reader で incomingBidirectionalStreams を監視する。
   // close() 時に明示的に undefined を代入して解放するため `| undefined` を付ける
@@ -487,7 +487,7 @@ export class SessionImpl implements Session {
   /**
    * SUBSCRIBE_TRACKS の状態管理
    *
-   * draft-ietf-moq-transport-21 §9.18 (SUBSCRIBE_TRACKS):
+   * draft-ietf-moq-transport-22 §3.6 / §9.18 (SUBSCRIBE_TRACKS):
    * SUBSCRIBE_TRACKS は SUBSCRIBE_NAMESPACE とは別の専用の双方向ストリームで
    * 送受信される。応答ストリーム上では PUBLISH_SKIPPED が送られる。PUBLISH は
    * 別の新規双方向ストリームで到着する。
@@ -787,8 +787,9 @@ export class SessionImpl implements Session {
    * draft-18 で旧 SUBSCRIBE_NAMESPACE (0x11) が 0x50 と SUBSCRIBE_TRACKS (0x51)
    * に分割され、Subscribe Options フィールドは廃止された。
    *
-   * draft-ietf-moq-transport-21 §4.1:
-   * キャンセルはストリームを FIN または RESET_STREAM で閉じることで行う。
+   * draft-ietf-moq-transport-22 §4.2 / §6.4.2.3 (FIN はキャンセルではない点は §6.4.2.2):
+   * キャンセルはまだ開いている方向を RESET_STREAM と STOP_SENDING で切ることで行う
+   * (FIN はキャンセルではない)。
    */
   async subscribeNamespace(
     namespacePrefix: string[],
@@ -806,14 +807,15 @@ export class SessionImpl implements Session {
   /**
    * Track をサブスクライブする（track subscription 用）
    *
-   * draft-ietf-moq-transport-21 §9.18 (SUBSCRIBE_TRACKS):
+   * draft-ietf-moq-transport-22 §3.6 / §9.18 (SUBSCRIBE_TRACKS):
    * SUBSCRIBE_TRACKS (0x51) は新しい双方向ストリームで送信される。
    * REQUEST_OK または REQUEST_ERROR が最初のレスポンスとして返され、
    * 以降は PUBLISH_SKIPPED のみが応答ストリーム上で送られる。
    * PUBLISH メッセージは別の新規双方向ストリームで非同期に到着する。
    *
-   * draft-ietf-moq-transport-21 §4.1:
-   * キャンセルはストリームを FIN または RESET_STREAM で閉じることで行う。
+   * draft-ietf-moq-transport-22 §3.6 / §6.4.2.3 (FIN はキャンセルではない点は §6.4.2.2):
+   * キャンセルはまだ開いている方向を RESET_STREAM と STOP_SENDING で切ることで行う
+   * (FIN はキャンセルではない)。
    */
   async subscribeTracks(
     namespacePrefix: string[],
@@ -836,9 +838,9 @@ export class SessionImpl implements Session {
    * REQUEST_OK / REQUEST_ERROR が同じ双方向ストリームで応答される。
    * https://www.ietf.org/archive/id/draft-ietf-moq-transport-21.html#section-9.14
    *
-   * draft-ietf-moq-transport-21 §4.2:
-   * 公開のキャンセルはストリームを FIN または RESET_STREAM で閉じることで行う。
-   * https://www.ietf.org/archive/id/draft-ietf-moq-transport-21.html#section-4.2
+   * draft-ietf-moq-transport-22 §4.1 / §6.4.2.3:
+   * 公開の撤回は request のキャンセル (RESET_STREAM と STOP_SENDING) で行う。
+   * https://www.ietf.org/archive/id/draft-ietf-moq-transport-22.html#section-4.1
    */
   async publishNamespace(
     namespace: string[],
@@ -1108,7 +1110,7 @@ export class SessionImpl implements Session {
   /**
    * 受信双方向ストリームの監視ループを開始する
    *
-   * draft-ietf-moq-transport-21 §9.18 (SUBSCRIBE_TRACKS):
+   * draft-ietf-moq-transport-22 §3.6:
    * SUBSCRIBE_TRACKS への応答として、サーバーは新規双方向ストリームを開き
    * PUBLISH メッセージを送信する。このループで incomingBidirectionalStreams を
    * 監視し、到着した双方向ストリームを処理する。
@@ -1123,7 +1125,7 @@ export class SessionImpl implements Session {
   /**
    * 受信した双方向ストリームを処理する
    *
-   * draft-ietf-moq-transport-21 §9.18 (SUBSCRIBE_TRACKS):
+   * draft-ietf-moq-transport-22 §3.6:
    * SUBSCRIBE_TRACKS への応答としてサーバーが開く双方向ストリームでは、
    * 先頭メッセージとして PUBLISH が送信される。
    *

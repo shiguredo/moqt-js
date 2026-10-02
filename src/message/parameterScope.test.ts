@@ -170,7 +170,7 @@ test("EXPIRES 付き PUBLISH_OK は検証を通過する", () => {
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-21 §9.18.1:
+ * draft-ietf-moq-transport-22 §3.6.2:
  * SUBSCRIBE_TRACKS の結果 PUBLISH に GROUP_ORDER が載るため許可する。
  */
 test("PUBLISH_ALLOWED_PARAMS は GROUP_ORDER を含む", () => {

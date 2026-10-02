@@ -440,10 +440,12 @@ async function namespaceHandleNamespaceStreamDone(
 /**
  * namespace / tracks ストリームの先頭メッセージガード。
  *
- * draft-ietf-moq-transport-21:
- * - §9.15 / §9.18「If the subscriber receives any message other than a REQUEST_OK
- *   or a REQUEST_ERROR as the first message on the response half of the stream, then
- *   it MUST close the session with a PROTOCOL_VIOLATION.」
+ * draft-ietf-moq-transport-22:
+ * - §3.6「If the subscriber receives any message other than a SUBSCRIBE_TRACKS_OK
+ *   or a SUBSCRIBE_TRACKS_ERROR as the first message on the response half of the
+ *   stream, then it MUST close the session with a PROTOCOL_VIOLATION.」
+ * - §4.2 も同じく、応答側の先頭メッセージが SUBSCRIBE_NAMESPACE_OK /
+ *   SUBSCRIBE_NAMESPACE_ERROR 以外であれば PROTOCOL_VIOLATION で閉じると MUST する
  * - §9.2「A GOAWAY MAY also be sent on a request stream to initiate migration of
  *   that individual request.」
  *
@@ -455,8 +457,8 @@ async function namespaceHandleNamespaceStreamDone(
  * (要求側の先頭メッセージは Table 5 の "First" と §6.3 が MUST で定める。publication
  *  ループでは default ケースが unknown message type として PROTOCOL_VIOLATION で閉じる)。
  *
- * 仕様衝突の注記: §9.15 / §9.18 は「REQUEST_OK / REQUEST_ERROR 以外の先頭メッセージは
- * PROTOCOL_VIOLATION」と MUST する一方、§9.2 は「GOAWAY をリクエストストリームに送って
+ * 仕様衝突の注記: §3.6 / §4.2 は「OK / ERROR 以外の先頭メッセージは PROTOCOL_VIOLATION」
+ * と MUST する一方、§9.2 は「GOAWAY をリクエストストリームに送って
  * 個別リクエストをマイグレーションしてよい」と定める。両者を同時に満たす解釈は存在しない
  * ため、本実装は GOAWAY を例外として許可する現状維持の判断を採る (確立前 GOAWAY の後は
  * 読み取りを継続して 2 通目を検出し、それ以外のメッセージは無視する)。
@@ -1368,7 +1370,7 @@ function createTracksStreamHandlers(
 /**
  * SUBSCRIBE_TRACKS 専用ストリームの受信ループ
  *
- * draft-ietf-moq-transport-21 §9.18 (SUBSCRIBE_TRACKS):
+ * draft-ietf-moq-transport-22 §3.6 / §9.18 (SUBSCRIBE_TRACKS):
  * REQUEST_OK / REQUEST_ERROR、PUBLISH_SKIPPED のみを処理する。
  */
 export async function namespaceStartTracksStreamLoop(

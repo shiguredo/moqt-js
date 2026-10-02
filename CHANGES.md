@@ -2342,6 +2342,12 @@
   - 実リレーを必要としないテストは従来どおり `vp run e2e-test`、実リレーへ接続するテストは `vp run e2e-test:relay` で実行する
   - ライブラリの挙動に変更なし
   - @voluntas
+- [UPDATE] 名前空間と SUBSCRIBE_TRACKS の仕様参照を draft-22 の節に更新する
+  - draft-ietf-moq-transport-22 で節が移動したため、コメントとテストの節番号を直す (Reserved Namespaces は §2.4.2 → §2.4.3、Subscribing to Namespaces は §4.1 → §4.2、Publishing Namespaces は §4.2 → §4.1、Filtering SUBSCRIBE_TRACKS は §4.3 → §3.6.1、Parameters on SUBSCRIBE_TRACKS は §9.18.1 → §3.6.2、Publisher Interactions は §7.5 → §7.6)
+  - 番号が変わらない §9.18 / §9.19 でも、v22 で §3.6 / §3.6.3 へ移った意味論 (PUBLISH を新規双方向ストリームで送る、先頭メッセージの MUST、PUBLISH_SKIPPED の理由) を根拠にしている箇所は §3.6 系を指すようにする
+  - §2.4.2 の例 (foo-bar--x の名前空間 (foo, bar) は prefix (foo) と (foo, bar) に一致し foobar には一致しない、prefix (example.com, 123) は (example.com, 123, 100 / 200) に一致する) を `matchNamespacePrefix` / `namespacePrefixesOverlap` のテストで固定する
+  - 挙動は変えず、コメントとテストのみの変更
+  - @voluntas
 
 ## 2026.2.0
 

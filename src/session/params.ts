@@ -283,7 +283,7 @@ const DEFAULT_PUBLISHER_PRIORITY_MAX = 255;
 /**
  * 送信前に Track Namespace が予約 namespace に該当しないことを検証する
  *
- * draft-ietf-moq-transport-21 §2.4.2 (Reserved Namespaces):
+ * draft-ietf-moq-transport-22 §2.4.3 (Reserved Namespaces):
  * "MOQT reserves all Track Namespace values whose first tuple field
  *  begins with a period (0x2e, .). These namespaces MUST NOT be used
  *  unless their meaning is defined through IANA registration."
@@ -848,11 +848,11 @@ export function buildSubscribeNamespaceParameters(options?: {
 /**
  * 純粋関数: SUBSCRIBE_TRACKS のパラメータを構築する
  *
- * draft-ietf-moq-transport-21 Section 9.18.1 (Parameters on SUBSCRIBE_TRACKS):
+ * draft-ietf-moq-transport-22 Section 3.6.2 (Parameters on SUBSCRIBE_TRACKS):
  * "Any Parameter that can be specified on a Subscription (ie: in SUBSCRIBE) is
  *  valid in SUBSCRIBE_TRACKS, unless otherwise specified."
  *
- * draft-ietf-moq-transport-21 Section 4.3 (Filtering SUBSCRIBE_TRACKS):
+ * draft-ietf-moq-transport-22 Section 3.6.1 (Filtering SUBSCRIBE_TRACKS):
  * "Range Filters Section 3.3.2 can be used in SUBSCRIBE_TRACKS to filter
  *  Tracks in a namespace using the Track Property Filter."
  */
@@ -914,7 +914,7 @@ export function buildSubscribeTracksParameters(options?: SubscribeTracksOptions)
   }
 
   // FILL_PARAMETERS (0x23) - draft-ietf-moq-transport-21 Section 9.20.16
-  // §9.18.1: 結果 PUBLISH の購読で fill fetch を要求する
+  // §3.6.2: 結果 PUBLISH の購読で fill fetch を要求する
   if (options?.fill !== undefined) {
     parameters.push(encodeFillParameters(buildFillParameters(options.fill, "SUBSCRIBE_TRACKS")));
   }
@@ -1187,7 +1187,7 @@ export function clampTimeoutMs(timeout: bigint): number {
 /**
  * Track Namespace が namespacePrefix に前方一致するか判定する
  *
- * draft-ietf-moq-transport-21 §9.18 (SUBSCRIBE_TRACKS):
+ * draft-ietf-moq-transport-22 §2.4.2 (Namespace Prefix Matching) / §3.6:
  * PUBLISH の trackNamespace が tracksSubscriptions の namespacePrefix に
  * 前方一致する場合、当該 subscription が PUBLISH を受信する対象となる。
  *

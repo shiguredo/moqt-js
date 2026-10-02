@@ -400,7 +400,7 @@ export function decodeSubscribeTracksPayload(data: Uint8Array, offset = 0): Subs
  *   Track Name (..),
  * }
  *
- * draft-ietf-moq-transport-21 Section 4.1:
+ * draft-ietf-moq-transport-22 Section 3.6.3:
  * "or any other reason" — 理由はストリーム不足に限定されない。
  * MUST NOT send a PUBLISH for a Track after PUBLISH_SKIPPED, scoped to a single PUBLISH.
  */

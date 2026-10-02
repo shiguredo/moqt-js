@@ -52,7 +52,7 @@ export const MessageType = {
    * draft-ietf-moq-transport-21 Section 9.19 (PUBLISH_SKIPPED):
    * Publisher が Track に対する PUBLISH を送信しないことを示す。
    * SUBSCRIBE_TRACKS の応答ストリーム上で送信される。
-   * draft-ietf-moq-transport-21 Section 4.1: "or any other reason"
+   * draft-ietf-moq-transport-22 Section 3.6.3: "or any other reason"
    */
   PUBLISH_SKIPPED: 0x0f,
   /**
@@ -66,10 +66,10 @@ export const MessageType = {
   /**
    * SUBSCRIBE_TRACKS (Section 9.18 SUBSCRIBE_TRACKS)
    *
-   * draft-ietf-moq-transport-21:
+   * draft-ietf-moq-transport-22 §3.6:
    * track subscription (PUBLISH メッセージは新規 bidi で到着、
    * PUBLISH_SKIPPED は応答ストリーム上で到着) を担当する。
-   * draft-ietf-moq-transport-21 Section 9.18
+   * メッセージの定義は §9.18 である。
    */
   SUBSCRIBE_TRACKS: 0x51,
 } as const;

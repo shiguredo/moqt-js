@@ -354,7 +354,7 @@ export async function sessionClose(
   session.namespaceSubscriptions.clear();
 
   // SUBSCRIBE_TRACKS 用の双方向ストリーム
-  // draft-ietf-moq-transport-21 §9.18 (SUBSCRIBE_TRACKS)
+  // draft-ietf-moq-transport-22 §3.6 / §9.18 (SUBSCRIBE_TRACKS)
   // (state の closed 化は markRequestObjectsClosed() 済み)
   for (const subscription of session.tracksSubscriptions.values()) {
     if (subscription.writer) {

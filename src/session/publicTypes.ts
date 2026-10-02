@@ -629,7 +629,7 @@ export interface SubscribeOptions {
 
 /**
  * SUBSCRIBE_TRACKS のオプション
- * draft-ietf-moq-transport-21 Section 9.18.1 (Parameters on SUBSCRIBE_TRACKS)
+ * draft-ietf-moq-transport-22 Section 3.6.2 (Parameters on SUBSCRIBE_TRACKS)
  *
  * SUBSCRIBE のパラメータのうち SUBSCRIBE_TRACKS で有効なもののサブセット。
  */
@@ -679,9 +679,10 @@ export interface SubscribeTracksOptions {
 
   /**
    * Location Filter
-   * draft-ietf-moq-transport-21 Section 9.18.1 (Parameters on SUBSCRIBE_TRACKS):
+   * draft-ietf-moq-transport-22 Section 3.6.2 (Parameters on SUBSCRIBE_TRACKS):
    * "To join Tracks initiated via the resulting PUBLISHes, the subscriber can
-   *  specify a Location Filter and optionally include FILL_PARAMETERS, as
+   *  specify a Location Filter and optionally include FILL_PARAMETERS in the
+   *  SUBSCRIBE_TRACKS, or in a REQUEST_UPDATE following PUBLISH_OK, as
    *  described in Section 3.5."
    *
    * 結果 PUBLISH の初期 Location Filter になる。
@@ -949,14 +950,14 @@ export interface NamespaceSubscription {
 /**
  * Tracks サブスクリプションのコールバック
  *
- * draft-ietf-moq-transport-21 §9.18 (SUBSCRIBE_TRACKS):
+ * draft-ietf-moq-transport-22 §3.6 (Subscribing to Tracks by Prefix):
  * SUBSCRIBE_TRACKS への応答として PUBLISH メッセージが新規双方向ストリームで
  * 送信される。応答ストリームでは PUBLISH_SKIPPED が送られる。
  */
 export interface TracksSubscriptionCallbacks {
   /**
    * サーバーから PUBLISH メッセージを受信したときに呼ばれる
-   * draft-ietf-moq-transport-21 §9.18 / §9.8
+   * draft-ietf-moq-transport-22 §3.6 / §9.18 / §9.8
    *
    * @param namespaceSuffix - Track Namespace Prefix を除いた Suffix
    * @param trackName - PUBLISH に含まれる Track Name
@@ -968,10 +969,10 @@ export interface TracksSubscriptionCallbacks {
   ) => SubscribeCallbacks | Promise<SubscribeCallbacks>;
   /**
    * PUBLISH_SKIPPED を受信したときに呼ばれる
-   * draft-ietf-moq-transport-21 §9.19 (PUBLISH_SKIPPED):
+   * draft-ietf-moq-transport-22 §9.19 (PUBLISH_SKIPPED) / §3.6.3 (Skipped Tracks):
    *
    * > The publisher sends the PUBLISH_SKIPPED control message to indicate
-   * > it cannot send a PUBLISH message to initiate a new Subscription for a
+   * > it will not send a PUBLISH message to initiate a new Subscription for a
    * > Track in the SUBSCRIBE_TRACKS's Track Namespace.
    *
    * @param namespaceSuffix - Track Namespace Prefix を除いた Suffix
@@ -996,7 +997,7 @@ export interface TracksSubscriptionCallbacks {
 /**
  * Tracks サブスクリプション
  *
- * draft-ietf-moq-transport-21 §9.18 (SUBSCRIBE_TRACKS)
+ * draft-ietf-moq-transport-22 §3.6 / §9.18 (SUBSCRIBE_TRACKS)
  */
 export interface TracksSubscription {
   readonly state: "active" | "closed";

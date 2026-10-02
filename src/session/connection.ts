@@ -580,7 +580,7 @@ export function connectionStartPostSetupLoops(
   session.startDatagramLoop();
 
   // 受信双方向ストリームの監視を開始
-  // draft-ietf-moq-transport-21 §9.18: SUBSCRIBE_TRACKS への応答として
+  // draft-ietf-moq-transport-22 §3.6: SUBSCRIBE_TRACKS への応答として
   // サーバーが新規双方向ストリームを開き PUBLISH を送信する
   session.startIncomingBidirectionalStreamLoop();
 }

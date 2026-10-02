@@ -147,7 +147,7 @@ export async function requestsPublish(
   const trackNameBytes = encodeTrackName(trackName);
   // draft-ietf-moq-transport-21 §8.7: Full Track Name 合計長検証
   validateFullTrackName(trackNamespace, trackName);
-  // draft-ietf-moq-transport-21 §2.4.2 / §6.5: 予約 namespace / .session の送信拒否
+  // draft-ietf-moq-transport-22 §2.4.3 / §6.5: 予約 namespace / .session の送信拒否
   validateTrackNamespaceForSend(namespace, trackName);
 
   // パブリッシャー実装を作成
@@ -300,7 +300,7 @@ export async function requestsSubscribe(
   const trackNameBytes = encodeTrackName(trackName);
   // draft-ietf-moq-transport-21 §8.7: Full Track Name 合計長検証
   validateFullTrackName(trackNamespace, trackName);
-  // draft-ietf-moq-transport-21 §2.4.2 / §6.5: 予約 namespace / .session の送信拒否
+  // draft-ietf-moq-transport-22 §2.4.3 / §6.5: 予約 namespace / .session の送信拒否
   validateTrackNamespaceForSend(namespace, trackName);
 
   // サブスクライバー実装を作成
@@ -470,7 +470,7 @@ export async function requestsFetch(
   const trackNameBytes = encodeTrackName(trackName);
   // draft-ietf-moq-transport-21 §8.7: Full Track Name 合計長検証
   validateFullTrackName(trackNamespace, trackName);
-  // draft-ietf-moq-transport-21 §2.4.2 / §6.5: 予約 namespace / .session の送信拒否
+  // draft-ietf-moq-transport-22 §2.4.3 / §6.5: 予約 namespace / .session の送信拒否
   validateTrackNamespaceForSend(namespace, trackName);
 
   // draft-ietf-moq-transport-21 §9.1.6: ピアの MAX_FILTER_RANGES を超える Range Filter 送信をガード
@@ -595,7 +595,7 @@ export async function requestsTrackStatus(
   const trackNameBytes = encodeTrackName(trackName);
   // draft-ietf-moq-transport-21 §8.7: Full Track Name 合計長検証
   validateFullTrackName(trackNamespace, trackName);
-  // draft-ietf-moq-transport-21 §2.4.2 / §6.5: 予約 namespace / .session の送信拒否
+  // draft-ietf-moq-transport-22 §2.4.3 / §6.5: 予約 namespace / .session の送信拒否
   validateTrackNamespaceForSend(namespace, trackName);
 
   // REQUEST_OK を待つ Promise
