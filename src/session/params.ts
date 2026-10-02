@@ -1034,10 +1034,18 @@ export function compareLocations(a: Location, b: Location): number {
 /**
  * 純粋関数: FETCH_OK の End Location 検証
  *
- * draft-ietf-moq-transport-21 Section 9.12 (FETCH_OK):
+ * draft-ietf-moq-transport-22 §9.12 (FETCH_OK):
+ * "End Location: The end of the range covered by the FETCH response,
+ *  inclusive."
+ * ...
  * "If End Location is smaller than the Start Location in the
  *  corresponding FETCH the receiver MUST close the session with
  *  a PROTOCOL_VIOLATION."
+ *
+ * inclusive なので End == Start は幅 1 の範囲として有効であり、エラーにしない。
+ * エラーにするのは End < Start のときだけである。なお開始位置が相対指定
+ * (§9.20.9 の 0x01) や Next Object (0x05) の FETCH では Start Location を
+ * クライアント側で確定できないため、この検証は行わない。
  *
  * @returns 検証エラーメッセージ。問題なければ undefined。
  */

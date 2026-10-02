@@ -22,7 +22,7 @@ moqt-js の検証とコメントが inclusive の解釈と一致することを�
 
 - `Fetcher.endLocation` の JSDoc に「範囲の最後の Object を含む (inclusive)」ことと「End < Start は PROTOCOL_VIOLATION」であることを明記し、参照を v22 §3.2 / §9.12 に更新する
 - `validateFetchOkEndLocation` のコメントに End == Start が有効であることを明記する
-- `params.test.ts` / `session.prop.ts` の既存テストを確認し、End == Start を許容し End < Start を拒否するテストがあることを固定する
+- `params.test.ts` / `src/session/params.prop.ts` の既存テストを確認し、End == Start を許容し End < Start を拒否するテストがあることを固定する
 
 ## 完了条件
 

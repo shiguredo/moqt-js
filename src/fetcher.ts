@@ -26,10 +26,21 @@ export type FetcherState = "active" | "closed";
 export interface Fetcher {
   readonly state: FetcherState;
   readonly endOfTrack: boolean;
+  /**
+   * FETCH_OK の End Location
+   *
+   * draft-ietf-moq-transport-22 §3.2 (Fetch): "A FETCH requests pre-existing
+   *  Objects from a Track between a Start Location and an End Location,
+   *  inclusive." 範囲の終端を意味し、End == Start は幅 1 の範囲として有効である。
+   * End < Start のときは §9.12 (FETCH_OK) の MUST により、FETCH_OK を受け取った
+   * 側が PROTOCOL_VIOLATION でセッションを閉じる (`src/session/params.ts` の
+   * `validateFetchOkEndLocation` が Start Location を確定できる場合にエラーを
+   * 返し、`src/session/bidi.ts` の `bidiReadFetchResponse` が閉じる)。
+   */
   readonly endLocation: Location;
   /**
    * FETCH_OK で受信した Track Properties
-   * draft-ietf-moq-transport-21 Section 9.12 (FETCH_OK)
+   * draft-ietf-moq-transport-22 §9.12 (FETCH_OK)
    */
   readonly trackProperties: ReadonlyArray<Property>;
   /**
@@ -118,6 +129,7 @@ export class FetcherImpl implements Fetcher {
     return this.fetchEndOfTrack;
   }
 
+  /** FETCH_OK の End Location (範囲の最後の Object を含む。inclusive) */
   get endLocation(): Location {
     return this.fetchEndLocation;
   }
