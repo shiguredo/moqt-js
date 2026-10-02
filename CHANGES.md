@@ -11,6 +11,11 @@
 
 ## develop
 
+- [CHANGE] SUBSCRIBE_TRACKS が運べるパラメータを draft-22 §9.18 の列挙に限定する
+  - draft-ietf-moq-transport-22 §9.18 (SUBSCRIBE_TRACKS) は許可パラメータを 9 種 (AUTHORIZATION_TOKEN / FORWARD / GROUP_ORDER / SUBGROUP_FILTER / OBJECTID_FILTER / PRIORITY_FILTER / OBJECT_PROPERTY_FILTER / TRACK_PROPERTY_FILTER / INCLUDE_PROPERTIES) に限定し、§9.20.1 は許可外メッセージへの出現を受信側で PROTOCOL_VIOLATION とする。§3.6.2 の「SUBSCRIBE に指定できるパラメータは SUBSCRIBE_TRACKS でも有効」という記述とは矛盾するが、§9.18 の列挙を正として LOCATION_FILTER / SUBSCRIBER_PRIORITY / FILL_PARAMETERS を送らないようにする
+  - `SubscribeTracksOptions` から `filter` / `subscriberPriority` / `fill` を削除する (後方互換なし)。§3.6.2 が示すとおり、結果 PUBLISH の購読に Location Filter / FILL_PARAMETERS を載せるには SUBSCRIBE か、PUBLISH_OK 後の REQUEST_UPDATE を使う。SUBSCRIBE の `fill` は変更しない
+  - SUBSCRIBE_TRACKS の REQUEST_UPDATE の許可集合に TRACK_PROPERTY_FILTER (0x29、§9.20.14) を加える
+  - @voluntas
 - [CHANGE] `AudioReceiverStats` に音声の再生の統計を追加する
   - 鳴らす時刻を過ぎて届いた音や timestamp が大きく飛んだ音の基準の取り直し、捨てた音、欠落した区間の補間、詰めた長さ、目標からの遅れを `getStats()` で確認できるようにする。時間はミリ秒で返す
   - 基準の取り直し / 捨てた音 / 補間の回数 / 詰めた合計 / 補間した合計は購読をやり直しても消えず、今の遅れだけが購読のやり直しで 0 に戻る
@@ -54,6 +59,11 @@
   - catalog 取得の live SUBSCRIBE は `{ nextObject: true }` を送る。0:0 のまま送ると絶対位置 {0, 0} の指定になり、トラック先頭から全 Object を受信する
   - End Group (StartGroup + EndGroupDelta) が 2^64-1 を超える場合は、送信側が InvalidFilterError、受信側が PROTOCOL_VIOLATION で拒否する (従来どおり)
   - 旧 v21 のワイヤ形式で送受信していた moqt-js とは相互運用できない
+  - @voluntas
+- [UPDATE] 制御メッセージの許可パラメータの節番号を draft-22 §9.20 に合わせる
+  - §9.20.2 (Allowed Parameters By Control Message) が廃止され、各制御メッセージ節が許可パラメータを列挙するようになったため、パラメータ節の番号が 1 つ繰り下がった (v21 §9.20.3〜§9.20.22 → v22 §9.20.2〜§9.20.21)
+  - FILL_PARAMETERS の内側の一覧は Table 6 から Table 7 になった
+  - コメントのみの変更で、挙動は変えない
   - @voluntas
 - [ADD] 音声の欠落で空いた隙間を、直前の音の時間伸長で補間する
   - 音声の Object が欠落したときや、時間軸の目標の遅延が増えたときにできる無音の隙間を、直前の音の末尾のピッチ周期を繰り返して埋める。5 ms 以下の隙間と、開始が今から 10 ms 未満の隙間は補間せず、100 ms を超える分も無音のまま残す

@@ -72,7 +72,7 @@ export class FetcherImpl implements Fetcher {
 
   /**
    * Fetch リクエストの Group Order
-   * draft-ietf-moq-transport-21 Section 9.20.9 (GROUP ORDER Parameter)
+   * draft-ietf-moq-transport-22 Section 9.20.8 (GROUP ORDER Parameter)
    * 省略時は Ascending (0x1)。
    */
   private fetchGroupOrder: GroupOrder = GroupOrder.ASCENDING;

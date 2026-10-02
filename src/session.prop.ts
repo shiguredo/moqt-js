@@ -1,6 +1,6 @@
 /**
  * MOQT Session 純粋関数の Property-Based Tests
- * draft-ietf-moq-transport-21 Section 9.20, Section 11.3, Section 10
+ * draft-ietf-moq-transport-22 Section 9.20, Section 11.3, Section 10
  */
 
 import { test, assert } from "vite-plus/test";
@@ -47,7 +47,7 @@ const locationArb: fc.Arbitrary<Location> = fc.record({
 /**
  * Authorization Token の任意構築（USE_VALUE。Message Parameter では 4 種全て許可されるが、
  * round-trip 検証には値を持つ USE_VALUE が代表的）
- * draft-ietf-moq-transport-21 Section 9.20.3
+ * draft-ietf-moq-transport-22 Section 9.20.2
  */
 const authorizationTokenArb: fc.Arbitrary<AuthorizationToken> = fc.record({
   aliasType: fc.constant(AuthorizationTokenAliasType.USE_VALUE),

@@ -688,7 +688,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       return;
     }
 
-    // draft-ietf-moq-transport-21 §9.20.20 (NEW GROUP REQUEST Parameter):
+    // draft-ietf-moq-transport-22 §9.20.19 (NEW GROUP REQUEST Parameter):
     // "A subscriber MUST NOT send this parameter in REQUEST_UPDATE if the Track
     //  did not include the DYNAMIC_GROUPS Property with value 1.  A subscriber MAY
     //  include this parameter in SUBSCRIBE without foreknowledge of support."
@@ -701,7 +701,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     }
 
     // REQUEST_UPDATE で NEW_GROUP_REQUEST を送信
-    // draft-ietf-moq-transport-21 §9.20.20 (NEW_GROUP_REQUEST = 0x32)。
+    // draft-ietf-moq-transport-22 §9.20.19 (NEW_GROUP_REQUEST = 0x32)。
     // 値は送信時点の最新 Group ID + 1 (情報なし時は 0) とする。
     // SUBSCRIBE 直後の snapshot は stale のため使わない。
     const largestLocation = this.videoSubscriber.largestLocation;
@@ -2064,7 +2064,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     // 次の Group 先頭まで VideoDecoderWrapper がキーフレームを待つ。
     // DYNAMIC_GROUPS=1 の Track では requestKeyframe() が NEW_GROUP_REQUEST を送り、
     // publisher が新しい Group を開始すれば先頭から受け取れる
-    // (draft-ietf-moq-transport-21 §9.20.20 の SHOULD。DYNAMIC_GROUPS=1 でない
+    // (draft-ietf-moq-transport-22 §9.20.19 の SHOULD。DYNAMIC_GROUPS=1 でない
     //  Track では送れず throw する)
     const isKeyFrame = isVideoKeyFrameObject(obj.objectId, locProperties.frameMarking);
 

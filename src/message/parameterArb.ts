@@ -1,7 +1,7 @@
 /**
  * MOQT Message Parameter の PBT 用 arbitrary
  *
- * draft-ietf-moq-transport-21 Section 9.20
+ * draft-ietf-moq-transport-22 Section 9.20
  *
  * `src/message/*.prop.ts` の各ファイルが同じ arbitrary を再定義していたため、
  * ここに集約する。このファイルは vitest の `test.include`
@@ -28,7 +28,7 @@ import { type Property, MOQTPropertyId, TrackPropertyId } from "../properties";
 /**
  * Message Parameter の arbitrary
  *
- * draft-ietf-moq-transport-21 Section 9.20:
+ * draft-ietf-moq-transport-22 Section 9.20:
  * 各パラメータ型が独自の Value エンコーディングを定義する。
  */
 export const varintParameterArb = fc
@@ -38,7 +38,7 @@ export const varintParameterArb = fc
   })
   .map(({ type, varintValue }) => ({ type, value: encodeVarint(varintValue) }));
 
-// draft-ietf-moq-transport-22 §9.20.8 / §9.20.18: 値域制約に従う arbitrary
+// draft-ietf-moq-transport-22 §9.20.7 / §9.20.18: 値域制約に従う arbitrary
 //   - FORWARD (0x10): 0 / 1
 //   - SUBSCRIBER_PRIORITY (0x20): 0-255
 //   - GROUP_ORDER (0x22): 0x1 / 0x2
@@ -94,7 +94,7 @@ export const namespacePartsArb = fc.array(fc.string({ minLength: 1, maxLength: 2
 /**
  * TRACK_NAMESPACE_PREFIX (0x34) パラメータの arbitrary
  *
- * draft-ietf-moq-transport-21 §9.20.21:
+ * draft-ietf-moq-transport-22 §9.20.20:
  * Value は §8.7 の Track Namespace エンコーディング (自己区切り)。
  * encodeParameterTrackNamespace の出力で構築する
  * (生バイト列の任意生成はフィールド数・Length の検証と衝突する)。
@@ -194,7 +194,7 @@ export const rangeFilterParameterArb = fc
       // OBJECT_PROPERTY_FILTER / TRACK_PROPERTY_FILTER は propertyType 必須
       ((filter.filterType !== "objectProperty" && filter.filterType !== "trackProperty") ||
         propertyType !== undefined) &&
-      // PRIORITY_FILTER は 255 以下の値のみ (§9.20.13)
+      // PRIORITY_FILTER は 255 以下の値のみ (§9.20.12)
       (filter.filterType !== "priority" ||
         ranges.every((r) => r.start <= 255n && (r.end === undefined || r.end <= 255n))),
   )

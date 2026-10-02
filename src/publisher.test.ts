@@ -509,7 +509,7 @@ test("未 await の連続 sendObject も 2 件目が塞がれる", async () => {
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-21 §9.20.18 (LARGEST OBJECT Parameter):
+ * draft-ietf-moq-transport-22 §9.20.17 (LARGEST OBJECT Parameter):
  * 未送信の Publisher の最大 Location は null であることを検証する。
  */
 test("getLargestLocation: 未送信は null", () => {
@@ -780,7 +780,7 @@ test("terminate: 拒否経路が先なら UPDATE_FAILED を 1 回だけ送る", 
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.20 (NEW GROUP REQUEST Parameter):
+ * draft-ietf-moq-transport-22 §9.20.19 (NEW GROUP REQUEST Parameter):
  * "When an Original Publisher that supports dynamic Groups receives a NEW_GROUP_REQUEST
  *  with a value of 0 or a value larger than the current Group, it SHOULD end the current
  *  Group and begin a new Group as soon as practical."

@@ -1324,7 +1324,7 @@ test("bidiHandlePublishDone: 購読が無い requestId では通知せず記録�
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-21 §9.10 (PUBLISH_STATE_NOTIFY) / §9.20.1:
+ * draft-ietf-moq-transport-22 §9.10 (PUBLISH_STATE_NOTIFY) / §9.20.1:
  * subscribe ロールで受信した許可パラメータは検証通過後にまとめて反映する。
  * 省略されたパラメータは不変であり (「If a parameter is not present, its value is
  * unchanged.」)、応答は送信しない (返り値 true / セッションを閉じない)。
@@ -1513,7 +1513,7 @@ test("bidiHandlePublishStateNotify: subscribe ロール以外では状態を変�
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.1 (Parameter Scope):
+ * draft-ietf-moq-transport-22 §9.20.1 (Parameter Scope):
  * 許可外パラメータを含む PUBLISH_STATE_NOTIFY は PROTOCOL_VIOLATION で閉じる。
  * 反映は検証通過後にまとめて行うため、同時に正当な LARGEST_OBJECT が載っていても
  * 部分反映は起きない。購読が無い場合も検証は行い、不正ワイヤを見逃さない。

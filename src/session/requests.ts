@@ -162,7 +162,7 @@ export async function requestsPublish(
 
   // GOAWAY コールバックを設定（セッション内部コールバック）
   impl.goawayCallback = callbacks?.goaway;
-  // draft-ietf-moq-transport-21 §9.20.20 / §10.6: DYNAMIC_GROUPS を広告した PUBLISH だけが
+  // draft-ietf-moq-transport-22 §9.20.19 / §10.6: DYNAMIC_GROUPS を広告した PUBLISH だけが
   // 受信した NEW_GROUP_REQUEST をアプリへ知らせる
   impl.dynamicGroups = options?.dynamicGroups === true;
   impl.newGroupRequestCallback = callbacks?.onNewGroupRequest;
@@ -328,7 +328,7 @@ export async function requestsSubscribe(
   // を forwardState として保持する。
   impl.setForwardState(options?.forward ?? true);
 
-  // draft-ietf-moq-transport-21 §9.20.9 / §9.20.16:
+  // draft-ietf-moq-transport-22 §9.20.8 / §9.20.15:
   // SUBSCRIBE 送信時の options.groupOrder を保持する。fill 要求時の
   // Group Order 解決 (FILL 内の指定が無ければ subscription の値) に使う。
   impl.setGroupOrder(options?.groupOrder);
@@ -490,10 +490,10 @@ export async function requestsFetch(
   // GOAWAY コールバックを設定（セッション内部コールバック）
   impl.goawayCallback = callbacks.goaway;
 
-  // draft-ietf-moq-transport-21 §9.20.9 / §11.4.1.1:
+  // draft-ietf-moq-transport-22 §9.20.8 / §11.4.1.1:
   // FETCH 送信時の options.groupOrder を保持し、FETCH 応答の Group ID 復号に
   // 使う。GROUP_ORDER は FETCH_OK に出現しないため、復号の根拠は要求時の値
-  // だけにする。省略時は Ascending (§9.20.9 の既定値であり、fill fetch の
+  // だけにする。省略時は Ascending (§9.20.8 の既定値であり、fill fetch の
   // resolveFillGroupOrder と同じ扱い)。
   impl.setGroupOrder(
     options.groupOrder === "Descending" ? GroupOrder.DESCENDING : GroupOrder.ASCENDING,
@@ -613,7 +613,7 @@ export async function requestsTrackStatus(
   // draft-ietf-moq-transport-21 Section 9.13 (TRACK_STATUS):
   // TRACK_STATUS は新しい双方向ストリームで送信される。
   // draft-ietf-moq-transport-21 Section 6.3
-  // draft-ietf-moq-transport-21 Section 9.20.22:
+  // draft-ietf-moq-transport-22 Section 9.20.21:
   // INCLUDE_PROPERTIES は buildTrackStatusParameters で載せる (省略時は送らない)。
   const trackStatusMsg = {
     type: MessageType.TRACK_STATUS,

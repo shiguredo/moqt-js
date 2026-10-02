@@ -476,7 +476,7 @@ test("processVideoFrames: encode が同期 throw するとフレームを閉じ�
 });
 
 /**
- * draft-ietf-moq-transport-21 §10.6 / §9.20.20: 映像トラックは DYNAMIC_GROUPS=1 を広告し、
+ * draft-ietf-moq-transport-22 §10.6 / §9.20.19: 映像トラックは DYNAMIC_GROUPS=1 を広告し、
  * 購読者が NEW_GROUP_REQUEST で新しい Group を要求できるようにする
  */
 test("VIDEO_PUBLISH_OPTIONS: 映像トラックは DYNAMIC_GROUPS を広告する", () => {
@@ -484,7 +484,7 @@ test("VIDEO_PUBLISH_OPTIONS: 映像トラックは DYNAMIC_GROUPS を広告す�
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.20: NEW_GROUP_REQUEST を受けた publisher は、現在の Group を
+ * draft-ietf-moq-transport-22 §9.20.19: NEW_GROUP_REQUEST を受けた publisher は、現在の Group を
  * 終えて新しい Group をできるだけ早く始める SHOULD。映像は onNewGroupRequest から
  * requestKeyframe() を呼び、次に符号化するフレームをキーフレーム (新しい Group の先頭) にする。
  * 間隔 10 秒の途中 (3 枚目、timestamp 2 秒) で要求を受けると、4 枚目がキーフレームになり、

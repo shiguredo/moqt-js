@@ -193,10 +193,11 @@ export async function namespacesSubscribeTracks(
   // draft-ietf-moq-transport-21 §9.1.6: ピアの MAX_FILTER_RANGES が 0 のとき、および
   // 購読単位の Ranges 合計が上限を超えるときは Range Filter を送信できない
   // draft-ietf-moq-transport-22 §3.6.1: SUBSCRIBE_TRACKS で Range Filter を送信できる
-  // fill 内側の Range Filter も購読単位で数える (collectSubscriptionRangeFilters)。
+  // §9.18 の一覧に FILL_PARAMETERS は無いため fill 内側は数えない
+  // (collectSubscriptionRangeFilters の第 2 引数は SUBSCRIBE 経路のみ)。
   // 上限の解釈は SUBSCRIBE 経路と共通であり、検証はストリーム生成より前に行う
   validateRangeFilterLimits(
-    collectSubscriptionRangeFilters(options?.rangeFilters, options?.fill),
+    collectSubscriptionRangeFilters(options?.rangeFilters, undefined),
     session.peerMaxFilterRanges,
     "SUBSCRIBE_TRACKS",
   );
@@ -301,7 +302,7 @@ export async function namespacesPublishNamespace(
       type: MessageType.PUBLISH_NAMESPACE,
       requestId,
       trackNamespace,
-      // AUTHORIZATION_TOKEN (0x03) - draft-ietf-moq-transport-21 Section 9.20.3
+      // AUTHORIZATION_TOKEN (0x03) - draft-ietf-moq-transport-22 Section 9.20.2
       parameters:
         options?.authorizationToken !== undefined
           ? [encodeAuthorizationTokenParameter(options.authorizationToken)]

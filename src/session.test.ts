@@ -1079,7 +1079,7 @@ test("publish: forward false で開始後に FORWARD 省略の PUBLISH_OK で fo
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.17 / §9.20.1:
+ * draft-ietf-moq-transport-22 §9.20.16 / §9.20.1:
  * FORWARD は PUBLISH_OK に出現できない。FORWARD=0 の PUBLISH_OK を受信した場合、
  * スコープ違反として PROTOCOL_VIOLATION でセッションが閉じ、発行が
  * 失敗することを検証する。
@@ -1132,7 +1132,7 @@ test("publish: forward false で開始後に FORWARD=0 の PUBLISH_OK でセッ�
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.10 (PUBLISH_STATE_NOTIFY) / §9.20.18:
+ * draft-ietf-moq-transport-22 §9.10 (PUBLISH_STATE_NOTIFY) / §9.20.17:
  * Session.publish() が返す Publisher の notifyStateChange() が、確立した購読の
  * 双方向ストリームへ PUBLISH_STATE_NOTIFY を送信し、送信済み Object がある
  * 場合は LARGEST_OBJECT を必ず伴うことを検証する (公開 API から送信経路までの配線)。
@@ -1213,61 +1213,6 @@ test("subscribe: fill 内側の Range Filters があると peer 未広告では 
 });
 
 /**
- * createBidirectionalStream の呼び出し回数を数える transport
- *
- * 送信前の検証で throw する場合にストリームを開かないことを検証する。
- * readable は即座に閉じる。検証をすり抜けてストリームが開かれた場合に、
- * 受信ループが応答を待ち続けず「stream closed before receiving response」で
- * 即座に失敗するようにするためである。
- */
-function createCountingBidirectionalStreamTransport(): {
-  transport: WebTransport;
-  getCreatedCount: () => number;
-} {
-  let created = 0;
-  const transport = {
-    closed: new Promise<WebTransportCloseInfo>(() => {}),
-    createBidirectionalStream: async (): Promise<WebTransportBidirectionalStream> => {
-      created += 1;
-      // 検証をすり抜けた場合はストリームが開かれるため、読み取りを閉じておき
-      // 受信ループを待たせずに失敗させる (timeout ではなく原因が読めるエラーにする)
-      return {
-        readable: new ReadableStream<Uint8Array>({
-          start(controller) {
-            controller.close();
-          },
-        }),
-        writable: new WritableStream<Uint8Array>({}),
-      } as unknown as WebTransportBidirectionalStream;
-    },
-  } as unknown as WebTransport;
-  return { transport, getCreatedCount: () => created };
-}
-
-/**
- * draft-ietf-moq-transport-21 §9.1.6:
- * 禁止されるのは filter parameter の送信であり、fill 内側に Range Filter が無ければ
- * ピア未広告でも送信できる (ストリームは開かれる)。
- */
-test("subscribeTracks: fill 内側に Range Filter が無ければ peer 未広告でも送信する", async () => {
-  const { transport, getCreatedCount } = createCountingBidirectionalStreamTransport();
-  const session = new SessionImpl(transport, {});
-
-  let thrown: Error | undefined;
-  try {
-    await session.subscribeTracks(["live"], {}, { fill: { fillTimeout: 1n } });
-  } catch (error) {
-    thrown = error instanceof Error ? error : new Error(String(error));
-  }
-
-  // MAX_FILTER_RANGES の検証には掛からず、ストリームが 1 本開かれる
-  // (閉じた readable のため受信ループは応答を待たずに失敗する)
-  assert.isDefined(thrown);
-  assert.isFalse(thrown!.message.includes("MAX_FILTER_RANGES"), thrown!.message);
-  assert.equal(getCreatedCount(), 1);
-});
-
-/**
  * draft-ietf-moq-transport-21 §9.1.6:
  * SUBSCRIBE でも購読単位の Ranges 合計 (外側と fill 内側) がピアの上限を超える場合は
  * 送信前に throw する (SUBSCRIBE_TRACKS と同じ合算であることを固定する)。
@@ -1311,124 +1256,15 @@ test("subscribe: 外側と fill 内側を合算した Ranges が上限を超え�
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.1.6 / §3.3.2:
- * SUBSCRIBE_TRACKS の fill 内側に Range Filters を指定した場合も、ピア未広告では
- * 送信前に throw することを検証する (購読単位の上限に含める)。
+ * draft-ietf-moq-transport-22 §3.6.1:
+ * SUBSCRIBE_TRACKS でも購読単位の Ranges 合計がピアの上限を超える場合は
+ * ストリームを開かずに送信前 throw する (§9.18 の一覧に FILL_PARAMETERS は
+ * 無いため、数えるのは外側の Range Filter のみ)。
  */
-test("subscribeTracks: fill 内側の Range Filters があると peer 未広告では throw する", async () => {
+test("subscribeTracks: 外側の Ranges が上限を超えるとストリームを開かずに throw する", async () => {
   const { transport, getCreatedCount } = createCountingBidirectionalStreamTransport();
   const session = new SessionImpl(transport, {});
-  // peerMaxFilterRanges は既定 0 (未広告) のため、Range 指定があると送信前に throw する
-
-  let thrown: Error | undefined;
-  try {
-    await session.subscribeTracks(
-      ["live"],
-      {},
-      {
-        fill: {
-          rangeFilters: [{ type: "subgroup", setId: 0, ranges: [{ start: 0n, end: 1n }] }],
-        },
-      },
-    );
-  } catch (error) {
-    thrown = error instanceof Error ? error : new Error(String(error));
-  }
-
-  assert.isDefined(thrown);
-  assert.isTrue(thrown!.message.includes("MAX_FILTER_RANGES is 0"), thrown!.message);
-  // 検証はストリーム生成より前に行われる (検証を外すとストリームを開き、閉じた
-  // readable により受信ループが即座にエラーになってこの assert まで到達しない)
-  assert.equal(getCreatedCount(), 0);
-});
-
-/**
- * draft-ietf-moq-transport-21 §9.1.6:
- * 購読単位の Ranges 合計 (外側と fill 内側の合計) がピアの MAX_FILTER_RANGES を
- * 超える場合は送信前に throw し、双方向ストリームを開かない。
- */
-test("subscribeTracks: fill 内側の Range Filters が上限を超えるとストリームを開かずに throw する", async () => {
-  const { transport, getCreatedCount } = createCountingBidirectionalStreamTransport();
-  const session = new SessionImpl(transport, {});
-  // ピアが 1 まで広告した状態にする
-  session.peerMaxFilterRanges = 1;
-
-  let thrown: Error | undefined;
-  try {
-    await session.subscribeTracks(
-      ["live"],
-      {},
-      {
-        fill: {
-          rangeFilters: [
-            {
-              type: "subgroup",
-              setId: 0,
-              ranges: [
-                { start: 0n, end: 1n },
-                { start: 2n, end: 3n },
-              ],
-            },
-          ],
-        },
-      },
-    );
-  } catch (error) {
-    thrown = error instanceof Error ? error : new Error(String(error));
-  }
-
-  assert.isDefined(thrown);
-  assert.isTrue(
-    thrown!.message.includes("total ranges 2 exceeds peer MAX_FILTER_RANGES 1"),
-    thrown!.message,
-  );
-  // 検証はストリーム生成より前に行われる
-  assert.equal(getCreatedCount(), 0);
-});
-
-/**
- * draft-ietf-moq-transport-21 §9.1.6:
- * 上限は購読単位の合計であるため、外側と fill 内側にまたがる場合も合算して判定する。
- * 外側と fill 内側の Range Filter を区別しやすくするため SetID は分けている。
- */
-test("subscribeTracks: 外側と fill 内側を合算した Ranges が上限を超えるとストリームを開かずに throw する", async () => {
-  const { transport, getCreatedCount } = createCountingBidirectionalStreamTransport();
-  const session = new SessionImpl(transport, {});
-  session.peerMaxFilterRanges = 1;
-
-  let thrown: Error | undefined;
-  try {
-    await session.subscribeTracks(
-      ["live"],
-      {},
-      {
-        rangeFilters: [{ type: "subgroup", setId: 0, ranges: [{ start: 0n, end: 1n }] }],
-        fill: {
-          rangeFilters: [{ type: "subgroup", setId: 1, ranges: [{ start: 0n, end: 1n }] }],
-        },
-      },
-    );
-  } catch (error) {
-    thrown = error instanceof Error ? error : new Error(String(error));
-  }
-
-  assert.isDefined(thrown);
-  assert.isTrue(
-    thrown!.message.includes("total ranges 2 exceeds peer MAX_FILTER_RANGES 1"),
-    thrown!.message,
-  );
-  assert.equal(getCreatedCount(), 0);
-});
-
-/**
- * draft-ietf-moq-transport-21 §9.1.6 / §9.20.16:
- * 外側と fill 内側は別の parameter scope であるため、同じ (Type, SetID) が
- * 現れても別のパラメータとして Ranges を合算する (重複排除しない)。
- */
-test("subscribeTracks: 外側と fill 内側で同じ SetID でも Ranges を合算する", async () => {
-  const { transport, getCreatedCount } = createCountingBidirectionalStreamTransport();
-  const session = new SessionImpl(transport, {});
-  // ピアが 2 まで広告した状態で、外側 2 Ranges + fill 内側 1 Range を同じ SetID で送る
+  // ピアが 2 まで広告した状態で外側 3 Ranges を送る
   session.peerMaxFilterRanges = 2;
 
   let thrown: Error | undefined;
@@ -1444,12 +1280,10 @@ test("subscribeTracks: 外側と fill 内側で同じ SetID でも Ranges を合
             ranges: [
               { start: 0n, end: 1n },
               { start: 2n, end: 3n },
+              { start: 4n, end: 5n },
             ],
           },
         ],
-        fill: {
-          rangeFilters: [{ type: "subgroup", setId: 0, ranges: [{ start: 4n, end: 5n }] }],
-        },
       },
     );
   } catch (error) {
@@ -1457,12 +1291,49 @@ test("subscribeTracks: 外側と fill 内側で同じ SetID でも Ranges を合
   }
 
   assert.isDefined(thrown);
-  assert.isTrue(
-    thrown!.message.includes("total ranges 3 exceeds peer MAX_FILTER_RANGES 2"),
-    thrown!.message,
-  );
+  assert.isTrue(thrown!.message.includes("MAX_FILTER_RANGES"), thrown!.message);
+  // 検証はストリーム生成より前に行われる
   assert.equal(getCreatedCount(), 0);
 });
+
+/**
+ * createBidirectionalStream の呼び出し回数を数える transport
+ *
+ * 送信前の検証で throw する場合にストリームを開かないことを検証する。
+ * readable は即座に閉じる。検証をすり抜けてストリームが開かれた場合に、
+ * 受信ループが応答を待ち続けず「stream closed before receiving response」で
+ * 即座に失敗するようにするためである。
+ */
+function createCountingBidirectionalStreamTransport(): {
+  transport: WebTransport;
+  getCreatedCount: () => number;
+} {
+  let created = 0;
+  const transport = {
+    createBidirectionalStream: async () => {
+      created += 1;
+      return {
+        readable: new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.close();
+          },
+        }),
+        writable: new WritableStream<Uint8Array>(),
+      };
+    },
+    createUnidirectionalStream: async () => ({
+      readable: new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.close();
+        },
+      }),
+      writable: new WritableStream<Uint8Array>(),
+    }),
+    close: () => {},
+    closed: new Promise<never>(() => {}),
+  } as unknown as WebTransport;
+  return { transport, getCreatedCount: () => created };
+}
 
 /**
  * draft-ietf-moq-transport-22 §3.4:
@@ -4089,7 +3960,7 @@ interface FetchGroupOrderContext {
 /**
  * session.fetch() の Group Order 配線を検証するセッションを構築する
  *
- * draft-ietf-moq-transport-21 §9.20.9 (GROUP ORDER Parameter) / §11.4.1.1 (Flags):
+ * draft-ietf-moq-transport-22 §9.20.8 (GROUP ORDER Parameter) / §11.4.1.1 (Flags):
  * FETCH 応答の Group ID は要求時に指定した Group Order で解釈する。GROUP_ORDER は
  * FETCH_OK に出現しないため、要求時の値が復号まで届いているかを実ストリームで
  * 確かめられるようにする。
@@ -4268,7 +4139,7 @@ test("fetch: groupOrder Descending が FETCH 応答の Group ID 復号に反映�
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.9 (GROUP ORDER Parameter):
+ * draft-ietf-moq-transport-22 §9.20.8 (GROUP ORDER Parameter):
  * GROUP_ORDER を省略した FETCH は Ascending として復号する。
  * Descending の検証と同一のワイヤを流し、2 件目以降の Group ID が
  * Ascending の式 (prior + delta + 1) で復号されることを検証する。
@@ -7696,7 +7567,7 @@ test("受信 PUBLISH ストリーム上の PUBLISH_STATE_NOTIFY で subscriber �
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.10 / §9.20.1:
+ * draft-ietf-moq-transport-22 §9.10 / §9.20.1:
  * 受信 PUBLISH ストリーム上で許可外パラメータを含む PUBLISH_STATE_NOTIFY を
  * 受信した場合、PROTOCOL_VIOLATION でセッションを閉じることを検証する。
  */
@@ -8094,7 +7965,7 @@ test("受信 PUBLISH の LARGEST_OBJECT のみが購読に反映される", asyn
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.8 / §9.20.1:
+ * draft-ietf-moq-transport-22 §9.8 / §9.20.1:
  * 受信 PUBLISH に許可外パラメータ (NEW_GROUP_REQUEST / Range Filters /
  * FILL_PARAMETERS) が含まれる場合、PROTOCOL_VIOLATION でセッションを
  * 閉じることを検証する。
@@ -9559,7 +9430,7 @@ test("initialize: 受信 SETUP のデコード不能 Token は KEY_VALUE_FORMATT
 });
 
 // ============================================================================
-// draft-ietf-moq-transport-21 §8.9 / §9.20.3: 受信 PUBLISH の Authorization Token
+// draft-ietf-moq-transport-22 §8.9 / §9.20.2: 受信 PUBLISH の Authorization Token
 // ============================================================================
 
 /**
@@ -9643,7 +9514,7 @@ function createPublishAuthTokenContext(authTokenCacheSize: number): {
 }
 
 /**
- * draft-ietf-moq-transport-21 §9.20.3 / §8.9:
+ * draft-ietf-moq-transport-22 §9.20.2 / §8.9:
  * 受信 PUBLISH の AUTHORIZATION TOKEN パラメータの REGISTER が
  * トークンキャッシュへ登録されることを検証する。
  */
@@ -9674,7 +9545,7 @@ test("受信 PUBLISH: AUTHORIZATION TOKEN の REGISTER がトークンキャッ�
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.3 / §8.9:
+ * draft-ietf-moq-transport-22 §9.20.2 / §8.9:
  * 受信 PUBLISH の USE_ALIAS が登録済みの Token Type / Value を解決し、
  * セッションを閉じないことを検証する。
  */

@@ -47,7 +47,7 @@ test("encodeAuthorizationTokenParameter: 0x03 パラメータを構築し round-
 });
 
 // draft-ietf-moq-msf-01 §11.4.3: publisher は track に紐づくトークンを PUBLISH へ MUST 付与する。
-// draft-ietf-moq-transport-21 §9.20.3: AUTHORIZATION TOKEN は PUBLISH に出現できる。
+// draft-ietf-moq-transport-22 §9.20.2: AUTHORIZATION TOKEN は PUBLISH に出現できる。
 test("buildPublishParameters: authorizationToken が AUTHORIZATION_TOKEN パラメータになる", () => {
   const token = useValueToken();
   const parameters = buildPublishParameters({ authorizationToken: token });
@@ -69,12 +69,12 @@ test("buildPublishParameters: authorizationToken 省略時は AUTHORIZATION_TOKE
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-21 §9.20.9 (SUBSCRIBER PRIORITY Parameter):
+ * draft-ietf-moq-transport-22 §9.20.7 (SUBSCRIBER PRIORITY Parameter):
  * "It MAY appear in a SUBSCRIBE, PUBLISH, FETCH, or REQUEST_UPDATE"。
  * FETCH でも送信できることを検証する。
  */
 /**
- * draft-ietf-moq-transport-21 §9.20.9 (GROUP ORDER Parameter):
+ * draft-ietf-moq-transport-22 §9.20.8 (GROUP ORDER Parameter):
  * "It MAY appear in a SUBSCRIBE, PUBLISH, SUBSCRIBE_TRACKS, or FETCH"。
  * FETCH の応答順序を要求できることを検証する。
  */
@@ -100,20 +100,32 @@ test("buildFetchParameters: 不正な groupOrder で throw する", () => {
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.6.2:
- * "Any Parameter that can be specified on a Subscription (ie: in SUBSCRIBE) is
- *  valid in SUBSCRIBE_TRACKS, unless otherwise specified."
- * "To join Tracks initiated via the resulting PUBLISHes, the subscriber can
- *  specify a Location Filter and optionally include FILL_PARAMETERS in the
- *  SUBSCRIBE_TRACKS, or in a REQUEST_UPDATE following PUBLISH_OK, as
- *  described in Section 3.5."
+ * draft-ietf-moq-transport-22 §9.18 (SUBSCRIBE_TRACKS) / §9.20.1 (Parameter Scope):
+ * SUBSCRIBE_TRACKS が運べるパラメータは §9.18 の列挙が正であり、
+ * SUBSCRIBER_PRIORITY / LOCATION_FILTER / FILL_PARAMETERS は送らない。
+ *
+ * §3.6.2 には「SUBSCRIBE に指定できるパラメータは SUBSCRIBE_TRACKS でも有効」と
+ * Location Filter / FILL_PARAMETERS に触れる記述が残り矛盾するが、§9.18 の列挙と
+ * §9.20.1 の MUST (許可外メッセージへの出現は受信側で PROTOCOL_VIOLATION) を正とする。
  */
-test("buildSubscribeTracksParameters: subscriberPriority が SUBSCRIBER_PRIORITY パラメータになる", () => {
-  const parameters = buildSubscribeTracksParameters({ subscriberPriority: 7 });
-  const priority = parameters.find((p) => p.type === MessageParameterType.SUBSCRIBER_PRIORITY);
+test("buildSubscribeTracksParameters: §9.18 の一覧に無いパラメータを送らない", () => {
+  const parameters = buildSubscribeTracksParameters({
+    groupOrder: "Ascending",
+    forward: false,
+    includeProperties: true,
+  });
 
-  assert.isDefined(priority);
-  assert.deepEqual(priority?.value, new Uint8Array([7]));
+  // 一覧にある型だけが現れる
+  assert.deepEqual(
+    parameters.map((p) => p.type).sort((a, b) => a - b),
+    [
+      MessageParameterType.FORWARD,
+      MessageParameterType.GROUP_ORDER,
+      MessageParameterType.INCLUDE_PROPERTIES,
+    ].sort((a, b) => a - b),
+  );
+  // §9.18 の一覧に無い 3 つは、型の上でも指定できない (空オブジェクトで確認)
+  assert.deepEqual(buildSubscribeTracksParameters({}), []);
 });
 
 // ============================================================================
@@ -278,11 +290,11 @@ test("validateFetchOkEndLocation: End が Start 未満ならエラーメッセ�
 
 // ============================================================================
 // buildFillParameters / FILL_PARAMETERS
-// draft-ietf-moq-transport-21 §3.4 / §9.20.16
+// draft-ietf-moq-transport-22 §3.4 / §9.20.15
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-21 §9.20.10 / §9.20.16:
+ * draft-ietf-moq-transport-22 §9.20.9 / §9.20.15:
  * fill 内の LOCATION_FILTER が End Group 超過の場合は送信前に throw する。
  */
 test("buildSubscribeParameters: fill 内の LOCATION_FILTER が End Group 超過の場合は throw する", () => {
@@ -302,7 +314,7 @@ test("buildSubscribeParameters: fill 内の LOCATION_FILTER が End Group 超過
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.9:
+ * draft-ietf-moq-transport-22 §9.20.8:
  * fill 内の GROUP_ORDER が不正値の場合は送信前に throw する。
  */
 test("buildSubscribeParameters: fill 内の GROUP_ORDER が不正値の場合は throw する", () => {
@@ -322,7 +334,7 @@ test("buildSubscribeParameters: fill 内の GROUP_ORDER が不正値の場合は
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.4 / §9.20.16:
+ * draft-ietf-moq-transport-22 §3.4 / §9.20.15:
  * fill の Group Order 解決は FILL 内の指定を優先し、無ければ subscription の
  * 値を継承し、どちらも無ければ Ascending になることを検証する。
  */
@@ -338,7 +350,7 @@ test("resolveFillGroupOrder: fill・subscription・既定値の優先順位で�
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.22:
+ * draft-ietf-moq-transport-22 §9.20.21:
  * SUBSCRIBE / TRACK_STATUS / FETCH / SUBSCRIBE_TRACKS から
  * INCLUDE_PROPERTIES を送れることを検証する。true は 1、false は 0 になる。
  */
@@ -355,7 +367,7 @@ test("buildSubscribeParameters: includeProperties が INCLUDE_PROPERTIES にな�
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.22:
+ * draft-ietf-moq-transport-22 §9.20.21:
  * FETCH から INCLUDE_PROPERTIES を送れることを検証する。
  * true / false / 省略の 3 状態を網羅する。
  */
@@ -381,7 +393,7 @@ test("buildFetchParameters: includeProperties が INCLUDE_PROPERTIES になる",
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.22:
+ * draft-ietf-moq-transport-22 §9.20.21:
  * SUBSCRIBE_TRACKS から INCLUDE_PROPERTIES を送れることを検証する。
  * true / false / 省略の 3 状態を網羅する。
  */
@@ -401,7 +413,7 @@ test("buildSubscribeTracksParameters: includeProperties が INCLUDE_PROPERTIES �
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.22:
+ * draft-ietf-moq-transport-22 §9.20.21:
  * TRACK_STATUS から INCLUDE_PROPERTIES を送れることを検証する。
  * true / false / 省略の 3 状態を網羅する。
  */
@@ -421,7 +433,7 @@ test("buildTrackStatusParameters: includeProperties が INCLUDE_PROPERTIES に�
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.20 (NEW GROUP REQUEST Parameter):
+ * draft-ietf-moq-transport-22 §9.20.19 (NEW GROUP REQUEST Parameter):
  * "The NEW_GROUP_REQUEST parameter (Parameter Type 0x32) is a varint."
  * 値は varint 1 つである。パラメータが無ければ undefined、値 0 はそのまま 0 を返す。
  * 読み切れない値と、varint の後ろに余りのある値は PROTOCOL_VIOLATION にする。

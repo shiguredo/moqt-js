@@ -1,6 +1,6 @@
 /**
  * MOQT Parameter Unit Tests
- * draft-ietf-moq-transport-21 Section 9.20 (Message Parameter)
+ * draft-ietf-moq-transport-22 Section 9.20 (Message Parameter)
  */
 
 import { test, assert } from "vite-plus/test";
@@ -457,7 +457,7 @@ test("Parameters の delta encoding で type が昇順でない場合もソー�
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20 (Control Message Parameters):
+ * draft-ietf-moq-transport-22 §9.20 (Control Message Parameters):
  * "Senders MUST NOT repeat the same Parameter Type in a message unless the
  *  parameter definition explicitly allows multiple instances of that type to be
  *  sent in a single message."
@@ -567,7 +567,7 @@ test("uint8 Message Parameter Value は範囲外を拒否する", () => {
  * Track Namespace / Full Track Name のサイズ制限テスト
  * draft-ietf-moq-transport-21:
  * Track Namespace と Full Track Name は最大 4,096 バイト。
- * draft-ietf-moq-transport-21 Section 9.20
+ * draft-ietf-moq-transport-22 Section 9.20
  */
 test("Track Namespace のサイズ制限定数が 4,096", () => {
   assert.equal(MAX_TRACK_NAMESPACE_SIZE, 4096);
@@ -776,7 +776,7 @@ test("validateFullTrackNameBytes: 不正 UTF-8 バイト列がバイト長で計
 
 /**
  * 未知 Message Parameter 受信時の PROTOCOL_VIOLATION テスト
- * draft-ietf-moq-transport-21 Section 9.20:
+ * draft-ietf-moq-transport-22 Section 9.20:
  * "An endpoint that receives an unknown Message Parameter MUST close
  *  the session with PROTOCOL_VIOLATION."
  */
@@ -795,7 +795,7 @@ test("未知のパラメータタイプで ProtocolViolationError", () => {
 
 /**
  * 重複 Message Parameter 検出の SHOULD テスト
- * draft-ietf-moq-transport-21 Section 9.20:
+ * draft-ietf-moq-transport-22 Section 9.20:
  * "Receivers SHOULD check that there are no unexpected duplicate parameters
  *  and close the session with PROTOCOL_VIOLATION if found."
  */
@@ -995,7 +995,7 @@ test("decodeTrackNamespace: 33 フィールドは PROTOCOL_VIOLATION で拒否�
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.21:
+ * draft-ietf-moq-transport-22 §9.20.20:
  * TRACK_NAMESPACE_PREFIX (0x34) としての 32 / 33 フィールドも同じ境界で判定する
  * (decodeTrackNamespace へ委譲されるため、パラメータ経路でも境界が保たれる)。
  */
@@ -1037,7 +1037,7 @@ function buildTrackNamespaceWire(fieldCount: number): Uint8Array {
 }
 
 /**
- * draft-ietf-moq-transport-21 §9.20.21 / §8.7:
+ * draft-ietf-moq-transport-22 §9.20.20 / §8.7:
  * TRACK_NAMESPACE_PREFIX (0x34) の Value は Track Namespace エンコーディング
  * (Number of Track Namespace Fields + 各フィールドの Length + Value) そのものであり、
  * 外側 Length を付加しない。固定バイト列で確認する。
@@ -1072,7 +1072,7 @@ test("encodeParameters: TRACK_NAMESPACE_PREFIX は外側 Length なしでエン�
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.21 / §8.7:
+ * draft-ietf-moq-transport-22 §9.20.20 / §8.7:
  * 外側 Length を持たない TRACK_NAMESPACE_PREFIX のワイヤをデコードし、
  * 消費バイト数がワイヤ長と一致することを検証する (外側 Length を要求しない)。
  */
@@ -1103,7 +1103,7 @@ test("decodeMessageParameter: TRACK_NAMESPACE_PREFIX を外側 Length なしで�
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.13 (PRIORITY FILTER Parameter):
+ * draft-ietf-moq-transport-22 §9.20.12 (PRIORITY FILTER Parameter):
  * "If a decoded value exceeds 255, the endpoint MUST reject this with
  *  REQUEST_ERROR with error code INVALID_FILTER since Publisher Priority
  *  is an 8-bit field."
@@ -1117,7 +1117,7 @@ test("decodeRangeFilter: PRIORITY_FILTER の 255 超の値で InvalidFilterError
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.13:
+ * draft-ietf-moq-transport-22 §9.20.12:
  * PRIORITY_FILTER の境界値 255 ちょうどは違反にならないことを検証する。
  */
 test("decodeRangeFilter: PRIORITY_FILTER の 255 ちょうどは違反にならない", () => {
@@ -1131,7 +1131,7 @@ test("decodeRangeFilter: PRIORITY_FILTER の 255 ちょうどは違反になら�
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.14 (OBJECT PROPERTY FILTER Parameter):
+ * draft-ietf-moq-transport-22 §9.20.13 (OBJECT PROPERTY FILTER Parameter):
  * Property Type は偶数でなければならず、奇数の場合は InvalidFilterError。
  */
 test("decodeRangeFilter: OBJECT_PROPERTY_FILTER の奇数 Property Type で InvalidFilterError", () => {
@@ -1260,7 +1260,7 @@ test("validateRangeFilterCombination: 削除エントリは重複判定の対象
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.14 / §9.20.15:
+ * draft-ietf-moq-transport-22 §9.20.13 / §9.20.14:
  * encodeRangeFilter は奇数 Property Type を送信前に拒否することを検証する。
  */
 test("encodeRangeFilter: 奇数 Property Type で InvalidFilterError", () => {
@@ -1277,7 +1277,7 @@ test("encodeRangeFilter: 奇数 Property Type で InvalidFilterError", () => {
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.13:
+ * draft-ietf-moq-transport-22 §9.20.12:
  * encodeRangeFilter は PRIORITY_FILTER の 255 超の値を送信前に拒否することを
  * 検証する。
  */
@@ -1294,7 +1294,7 @@ test("encodeRangeFilter: PRIORITY_FILTER の 255 超の値で InvalidFilterError
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.11–§9.20.15:
+ * draft-ietf-moq-transport-22 §9.20.10–§9.20.14:
  * encodeRangeFilter は SetID 255 超を送信前に拒否することを検証する。
  */
 test("encodeRangeFilter: SetID 255 超で InvalidFilterError", () => {
@@ -1428,7 +1428,7 @@ test("isRejectedReceiveNamespace: .session の類似バイト列は拒否しな�
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.16:
+ * draft-ietf-moq-transport-22 §9.20.15:
  * FILL_PARAMETERS の encode / decode ラウンドトリップを検証する。
  * 内側は別メッセージの Parameters 列 (count-prefixed) として扱う。
  */
@@ -1455,8 +1455,8 @@ test("encodeFillParameters / decodeFillParameters: ラウンドトリップす�
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.16:
- * Table 6 の一覧に無いパラメータを内側に含む FILL_PARAMETERS は
+ * draft-ietf-moq-transport-22 §9.20.15:
+ * Table 7 の一覧に無いパラメータを内側に含む FILL_PARAMETERS は
  * PROTOCOL_VIOLATION で拒否される。
  */
 test("decodeFillParameters: 一覧外のパラメータを含むと ProtocolViolationError", () => {
@@ -1466,7 +1466,7 @@ test("decodeFillParameters: 一覧外のパラメータを含むと ProtocolViol
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.16:
+ * draft-ietf-moq-transport-22 §9.20.15:
  * TRACK_PROPERTY_FILTER (0x29) は SUBSCRIBE_TRACKS 専用のため、fill の内側には
  * 載せられず PROTOCOL_VIOLATION で拒否される。
  */
@@ -1486,7 +1486,7 @@ test("decodeFillParameters: 型不一致は Error", () => {
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.16:
+ * draft-ietf-moq-transport-22 §9.20.15:
  * 内側の除去 (Length=0) は一回限りの fill に意味を持たないため
  * InvalidFilterError で拒否される。
  */
@@ -1497,7 +1497,7 @@ test("decodeFillParameters: 内側の除去を含むと InvalidFilterError", () 
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.22:
+ * draft-ietf-moq-transport-22 §9.20.21:
  * INCLUDE_PROPERTIES (0x35) は uint8 で 0/1 のみ有効であり、
  * encode / decode のラウンドトリップができることを検証する。
  */
@@ -1514,7 +1514,7 @@ test("INCLUDE_PROPERTIES: 0/1 の encode / decode がラウンドトリップす
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.22:
+ * draft-ietf-moq-transport-22 §9.20.21:
  * "If an endpoint receives a value outside this range, it MUST close
  *  the session with PROTOCOL_VIOLATION."
  * 値 0/1 以外の INCLUDE_PROPERTIES を受信した場合、
@@ -1528,7 +1528,7 @@ test("INCLUDE_PROPERTIES: 2 の decode で ProtocolViolationError", () => {
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.22:
+ * draft-ietf-moq-transport-22 §9.20.21:
  * validateIncludePropertiesValue が 0/1 を受理し、範囲外を拒否することを検証する。
  */
 test("validateIncludePropertiesValue: 0/1 は通過し 2/255 は ProtocolViolationError", () => {
@@ -1541,7 +1541,7 @@ test("validateIncludePropertiesValue: 0/1 は通過し 2/255 は ProtocolViolati
 /**
  * Length 宣言 slice の境界検証 (切り詰め入力の宣言時点拒否)。
  *
- * draft-ietf-moq-transport-21 §9.20:
+ * draft-ietf-moq-transport-22 §9.20:
  * 制御ストリームは外側でフレーミング済みのため、Length 宣言が
  * 残りバイトを超える内側の不足は破損であり、短い slice を返さず
  * 宣言時点で ProtocolViolationError とする。

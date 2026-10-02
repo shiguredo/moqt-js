@@ -222,7 +222,7 @@ export function resolveKeyframeInterval(video: VideoPublishOptions | undefined):
 /**
  * 映像トラックの PUBLISH の設定
  *
- * draft-ietf-moq-transport-21 §10.6 (DYNAMIC GROUPS) / §9.20.20 (NEW GROUP REQUEST Parameter):
+ * draft-ietf-moq-transport-22 §10.6 (DYNAMIC GROUPS) / §9.20.19 (NEW GROUP REQUEST Parameter):
  * DYNAMIC_GROUPS=1 を広告し、購読者が NEW_GROUP_REQUEST で新しい Group を要求できるように
  * する。後から視聴を始めた購読者は Group の先頭 (キーフレーム) を受け取るまで映像を出せない
  * ため、要求を受けたら次に encode するフレームをキーフレームにして新しい Group を始める
@@ -1042,7 +1042,7 @@ export class MediaPublisherImpl implements MediaPublisher {
         video.trackName,
         {
           error: (error) => this.callbacks.onError?.(error),
-          // draft-ietf-moq-transport-21 §9.20.20: 新しい Group の要求には、次のフレームを
+          // draft-ietf-moq-transport-22 §9.20.19: 新しい Group の要求には、次のフレームを
           // キーフレームにして新しい Group を始めることで応える。次のフレームまでに届いた
           // 複数の要求は、フレーム番号を 0 に戻すだけなので 1 つの Group にまとまる
           onNewGroupRequest: () => this.requestKeyframe(),

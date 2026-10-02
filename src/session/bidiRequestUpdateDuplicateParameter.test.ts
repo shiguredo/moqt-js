@@ -1,7 +1,7 @@
 /**
  * session/bidi.ts の単体テスト: REQUEST_UPDATE の同一 Parameter Type 重複拒否
  *
- * draft-ietf-moq-transport-21 §9.20 (Control Message Parameters):
+ * draft-ietf-moq-transport-22 §9.20 (Control Message Parameters):
  * "Senders MUST NOT repeat the same Parameter Type in a message unless the
  *  parameter definition explicitly allows multiple instances of that type to be
  *  sent in a single message."

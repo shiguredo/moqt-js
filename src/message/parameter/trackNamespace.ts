@@ -4,7 +4,7 @@
  *
  * Track Namespace (Section 2.4.1 / §8.7) と Track Name のエンコード・デコード、
  * およびサイズ・予約名前空間の検証を扱う。
- * TRACK_NAMESPACE_PREFIX Parameter (§9.20.21) の Value もここで組み立てる。
+ * TRACK_NAMESPACE_PREFIX Parameter (§9.20.20) の Value もここで組み立てる。
  */
 
 import { ProtocolViolationError } from "../../error";
@@ -306,7 +306,7 @@ export function encodeTrackName(trackName: string): Uint8Array {
 /**
  * TRACK_NAMESPACE_PREFIX パラメータをエンコードする
  *
- * draft-ietf-moq-transport-21 §9.20.21:
+ * draft-ietf-moq-transport-22 §9.20.20:
  * "The TRACK_NAMESPACE_PREFIX parameter (Parameter Type 0x34) uses the
  *  Track Namespace encoding described in Section 8.7."
  * Track Namespace は自己区切りのため、外側 Length は付加しない。

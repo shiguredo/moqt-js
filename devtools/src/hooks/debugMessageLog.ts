@@ -15,8 +15,8 @@ const MAX_LOGGED_PAYLOAD_BYTES = 4096;
 /**
  * payload に認可トークンを載せうるメッセージの型
  *
- * draft-ietf-moq-transport-21 §9.1.4 (SETUP の AUTHORIZATION TOKEN Setup Option) と
- * §9.20.3 (AUTHORIZATION TOKEN Parameter) により、次のメッセージの payload には認可
+ * draft-ietf-moq-transport-22 §9.1.4 (SETUP の AUTHORIZATION TOKEN Setup Option) と
+ * §9.20.2 (AUTHORIZATION TOKEN Parameter) により、次のメッセージの payload には認可
  * トークンの値が入りうる。判定はメッセージ型の数値で行う (表示名は変わりうるため)。
  *
  * 根拠にしている仕様はドラフトであり、将来の版で対象のメッセージが増えうる。

@@ -46,7 +46,7 @@ import { fullTrackNameKey } from "../fullTrackName";
 
 // ============================================================================
 // 応答スコープ違反で具体エラーが reject される
-// draft-ietf-moq-transport-21 §9.20.1 (Parameter Scope)
+// draft-ietf-moq-transport-22 §9.20.1 (Parameter Scope)
 // PUBLISH 応答経路と同一パターン (削除・reject・close の順序と同一オブジェクト)
 // ============================================================================
 
@@ -475,14 +475,14 @@ test("bidiReadFetchResponse: FETCH_OK で複数の待機者が全員解決する
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.20:
+ * draft-ietf-moq-transport-22 §9.20.19:
  * update({ newGroupRequest }) で NEW_GROUP_REQUEST (0x32) が REQUEST_UPDATE に
  * varint 符号化で載ることを検証する。
  */
 test("bidiSendRequestUpdate: newGroupRequest が NEW_GROUP_REQUEST としてエンコードされる", async () => {
   const { session, written } = createBidiSession();
   const subscriber = new SubscriberImpl(["test"], "track", 0n, 0n, () => {});
-  // §9.20.20 の MUST NOT により DYNAMIC_GROUPS=1 を受けている購読だけが送信できる
+  // §9.20.19 の MUST NOT により DYNAMIC_GROUPS=1 を受けている購読だけが送信できる
   subscriber.setTrackProperties([{ id: TrackPropertyId.DYNAMIC_GROUPS, value: 1n }]);
 
   const updatePromise = bidiSendRequestUpdate(session, subscriber, {
@@ -502,13 +502,13 @@ test("bidiSendRequestUpdate: newGroupRequest が NEW_GROUP_REQUEST としてエ�
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.20:
+ * draft-ietf-moq-transport-22 §9.20.19:
  * 規定値 0 の NEW_GROUP_REQUEST が varint 単一バイトで載ることを検証する。
  */
 test("bidiSendRequestUpdate: newGroupRequest の 0 がエンコードされる", async () => {
   const { session, written } = createBidiSession();
   const subscriber = new SubscriberImpl(["test"], "track", 0n, 0n, () => {});
-  // §9.20.20 の MUST NOT により DYNAMIC_GROUPS=1 を受けている購読だけが送信できる
+  // §9.20.19 の MUST NOT により DYNAMIC_GROUPS=1 を受けている購読だけが送信できる
   subscriber.setTrackProperties([{ id: TrackPropertyId.DYNAMIC_GROUPS, value: 1n }]);
 
   const updatePromise = bidiSendRequestUpdate(session, subscriber, {
@@ -529,7 +529,7 @@ test("bidiSendRequestUpdate: newGroupRequest の 0 がエンコードされる",
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20:
+ * draft-ietf-moq-transport-22 §9.20:
  * raw NEW_GROUP_REQUEST と型付きの併用は送信前に拒否されることを検証する。
  */
 test("bidiSendRequestUpdate: raw と型付きの NEW_GROUP_REQUEST 重複は拒否される", async () => {
@@ -552,7 +552,7 @@ test("bidiSendRequestUpdate: raw と型付きの NEW_GROUP_REQUEST 重複は拒�
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20:
+ * draft-ietf-moq-transport-22 §9.20:
  * raw NEW_GROUP_REQUEST 同士の重複も送信前に拒否されることを検証する。
  */
 test("bidiSendRequestUpdate: raw の NEW_GROUP_REQUEST 重複は拒否される", async () => {
@@ -577,7 +577,7 @@ test("bidiSendRequestUpdate: raw の NEW_GROUP_REQUEST 重複は拒否される"
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.20:
+ * draft-ietf-moq-transport-22 §9.20.19:
  * 負の newGroupRequest は送信前に拒否されることを検証する。
  */
 test("bidiSendRequestUpdate: 負の newGroupRequest は送信前に拒否される", async () => {
@@ -599,7 +599,7 @@ test("bidiSendRequestUpdate: 負の newGroupRequest は送信前に拒否され�
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20 / §9.20.16:
+ * draft-ietf-moq-transport-22 §9.20 / §9.20.15:
  * raw FILL_PARAMETERS が 2 件の update() は送信前に拒否され、
  * pendingRequestUpdate に entry が残らないことを検証する。
  */
@@ -628,7 +628,7 @@ test("bidiSendRequestUpdate: raw FILL_PARAMETERS の重複は送信前に拒否�
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20 / §9.20.16:
+ * draft-ietf-moq-transport-22 §9.20 / §9.20.15:
  * 型付き fill と raw FILL_PARAMETERS の併用は送信前に拒否されることを検証する。
  */
 test("bidiSendRequestUpdate: 型付き fill と raw FILL_PARAMETERS の併用は送信前に拒否される", async () => {
@@ -655,7 +655,7 @@ test("bidiSendRequestUpdate: 型付き fill と raw FILL_PARAMETERS の併用は
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20 / §9.20.16:
+ * draft-ietf-moq-transport-22 §9.20 / §9.20.15:
  * 重複検査は内側デコード検証より先に行われ、二重不正入力では
  * 重複エラーが優先されることを検証する。
  */
@@ -682,7 +682,7 @@ test("bidiSendRequestUpdate: 重複と内側不正の二重不正では重複エ
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.4 / §9.20.16:
+ * draft-ietf-moq-transport-22 §3.4 / §9.20.15:
  * 単一の raw FILL_PARAMETERS の fill 要求が updateRequestId で購読に
  * 関連付けられることを検証する。内側に GROUP_ORDER がなければ
  * 購読の指定を継承する。
@@ -718,7 +718,7 @@ test("bidiSendRequestUpdate: 単一 raw FILL は購読に関連付けられる",
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.4 / §9.20.16:
+ * draft-ietf-moq-transport-22 §3.4 / §9.20.15:
  * raw FILL 内側の GROUP_ORDER が登録に使われることを検証する。
  */
 test("bidiSendRequestUpdate: raw FILL 内側の GROUP_ORDER が登録される", async () => {
@@ -745,7 +745,7 @@ test("bidiSendRequestUpdate: raw FILL 内側の GROUP_ORDER が登録される",
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.4 / §9.20.16:
+ * draft-ietf-moq-transport-22 §3.4 / §9.20.15:
  * raw FILL 内側の GROUP_ORDER 0x01 は Ascending として登録され、
  * 内側指定が購読指定より優先されることを検証する。
  */
@@ -774,7 +774,7 @@ test("bidiSendRequestUpdate: raw FILL 内側の GROUP_ORDER 0x01 は Ascending �
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.4 / §9.20.16:
+ * draft-ietf-moq-transport-22 §3.4 / §9.20.15:
  * 内側と購読の両方に GROUP_ORDER がなければ Ascending になることを検証する。
  */
 test("bidiSendRequestUpdate: GROUP_ORDER 両省略時は Ascending になる", async () => {

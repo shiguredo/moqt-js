@@ -46,7 +46,7 @@ function firstEntry() {
   return entry;
 }
 
-// draft-ietf-moq-transport-21 §9.1.4 (SETUP の Setup Option) と §9.20.3
+// draft-ietf-moq-transport-22 §9.1.4 (SETUP の Setup Option) と §9.20.2
 // (AUTHORIZATION TOKEN Parameter) でトークンを載せうる型。仕様から書き出した期待値で、
 // 実装の一覧 (CREDENTIAL_MESSAGE_TYPES) と一致することをテストで確かめる
 const EXPECTED_CREDENTIAL_MESSAGE_TYPES: readonly number[] = [
@@ -71,19 +71,19 @@ const EXPECTED_CREDENTIAL_MESSAGE_TYPES: readonly number[] = [
  */
 const NON_CREDENTIAL_MESSAGE_TYPE_REASONS: Record<string, string> = {
   GOAWAY: "セッションの終了通知で、payload に credential を載せる枠が無い",
-  REQUEST_OK: "応答。draft-ietf-moq-transport-21 §9.20.3 の対象は要求側の 8 型と SETUP",
+  REQUEST_OK: "応答。draft-ietf-moq-transport-22 §9.20.2 の対象は要求側の 8 型と SETUP",
   REQUEST_ERROR: "応答。エラーコードと理由のみ",
-  SUBSCRIBE_OK: "応答。draft-ietf-moq-transport-21 §9.20.3 の対象は要求側の 8 型と SETUP",
-  PUBLISH_DONE: "配信の終了通知 (応答)。draft-ietf-moq-transport-21 §9.20.3 の対象外",
+  SUBSCRIBE_OK: "応答。draft-ietf-moq-transport-22 §9.20.2 の対象は要求側の 8 型と SETUP",
+  PUBLISH_DONE: "配信の終了通知 (応答)。draft-ietf-moq-transport-22 §9.20.2 の対象外",
   PUBLISH_STATE_NOTIFY: "購読の状態通知 (片方向)",
-  FETCH_OK: "応答。draft-ietf-moq-transport-21 §9.20.3 の対象は要求側の 8 型と SETUP",
+  FETCH_OK: "応答。draft-ietf-moq-transport-22 §9.20.2 の対象は要求側の 8 型と SETUP",
   PUBLISH_SKIPPED: "PUBLISH を送らないことの通知 (応答)",
   NAMESPACE: "namespace discovery の通知",
   NAMESPACE_DONE: "namespace discovery の終了通知",
 };
 
 test("CREDENTIAL_MESSAGE_TYPES: 仕様から書き出した型の一覧と一致する", () => {
-  // 実装の一覧は仕様 (draft-ietf-moq-transport-21 §9.1.4 / §9.20.3) と一致していること。
+  // 実装の一覧は仕様 (draft-ietf-moq-transport-22 §9.1.4 / §9.20.2) と一致していること。
   // 型を足した・消した・取り違えたらここで落ちる
   const sortNumbers = (values: Iterable<number>): number[] =>
     [...values].sort((left, right) => left - right);

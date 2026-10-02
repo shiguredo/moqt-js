@@ -508,7 +508,7 @@ export function buildObjectSendPlan(
  *
  * keyframeInterval 秒ごとのキーフレームに加えて、新しい Group の要求 (NEW_GROUP_REQUEST) を
  * 受けていれば次のフレームをキーフレームにして新しい Group を始める
- * (draft-ietf-moq-transport-21 Section 9.20.20: dynamic Groups に対応する publisher は、現在の
+ * (draft-ietf-moq-transport-22 Section 9.20.19: dynamic Groups に対応する publisher は、現在の
  * Group を終えて新しい Group をできるだけ早く始める SHOULD)。キーフレームにしたフレームから
  * 間隔を数え直す。次のフレームまでに届いた複数の要求は 1 枚のキーフレームにまとまる
  *
@@ -1124,7 +1124,7 @@ export function usePublisher() {
         onForwardStateChange: (forward) => {
           pub.forwardState.value = forward;
         },
-        // draft-ietf-moq-transport-21 Section 9.20.20:
+        // draft-ietf-moq-transport-22 Section 9.20.19:
         // 新しい Group の要求を受けたら、次に符号化するフレームをキーフレームにする
         onNewGroupRequest: (newGroupRequest) => {
           pub.newGroupRequestsReceived.value++;

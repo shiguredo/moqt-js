@@ -27,7 +27,7 @@
  *   fill の有無 / 正常な rangeFilters
  * - buildFetchParameters: authorizationToken / subscriberPriority / groupOrder /
  *   filter / includeProperties の有無 / rangeFilters
- * - buildSubscribeTracksParameters: subscriberPriority / filter / fill /
+ * - buildSubscribeTracksParameters:
  *   authorizationToken / includeProperties / rangeFilters の有無
  * - buildSubscribeNamespaceParameters: authorizationToken の有無
  * - buildTrackStatusParameters: authorizationToken と includeProperties の有無
@@ -210,7 +210,7 @@ const rangeFilterParamArb: fc.Arbitrary<RangeFilterParam> = fc.oneof(
   fc.record({
     type: fc.constantFrom("objectProperty" as const, "trackProperty" as const),
     setId: uint8Arb,
-    // Property Type は偶数でなければならない (§9.20.14 / §9.20.15)
+    // Property Type は偶数でなければならない (§9.20.13 / §9.20.14)
     propertyType: fc.bigInt({ min: 0n, max: 500000n }).map((value) => value * 2n),
     ranges: filterRangesArbitrary(1000n, 5),
   }),
@@ -256,7 +256,7 @@ function filterKeyOf(spec: RangeFilterSpec): string {
 
 /**
  * Range Filter の種別を Message Parameter Type に対応させる
- * draft-ietf-moq-transport-21 §9.20.11〜§9.20.15
+ * draft-ietf-moq-transport-22 §9.20.10〜§9.20.14
  */
 function rangeFilterParameterTypeOf(
   type: "subgroup" | "objectId" | "priority" | "objectProperty" | "trackProperty",
@@ -335,13 +335,11 @@ const fetchOptionsArb: fc.Arbitrary<FetchOptions> = fc.record({
 
 /** SUBSCRIBE_TRACKS の任意構築（0x29 を含む Range Filter を許す） */
 const subscribeTracksOptionsArb: fc.Arbitrary<SubscribeTracksOptions> = fc.record({
-  filter: optionalArbitrary(locationFilterArb),
-  subscriberPriority: optionalArbitrary(uint8Arb),
+  // §9.18 の一覧に対応する (filter / subscriberPriority / fill は送らない)
   groupOrder: optionalArbitrary(groupOrderArb),
   forward: optionalArbitrary(fc.boolean()),
   rangeFilters: optionalArbitrary(uniqueRangeFilterParamsArb),
   authorizationToken: optionalArbitrary(authorizationTokenArb),
-  fill: optionalArbitrary(fillRequestOptionsArb),
   includeProperties: optionalArbitrary(fc.boolean()),
 });
 
@@ -647,7 +645,7 @@ test("validateRangeFilterSpecs: Property Type が違えば重複にならない"
 
 // ============================================================================
 // PBT 4: buildRangeFilterParameters / build*Parameters の round-trip
-// draft-ietf-moq-transport-21 §3.3.2 / §9.20
+// draft-ietf-moq-transport-22 §3.3.2 / §9.20
 // ============================================================================
 
 test("buildRangeFilterParameters: 各パラメータが decodeRangeFilter で元の指定に戻る", () => {
@@ -755,11 +753,12 @@ test("buildSubscribeTracksParameters: 全フィールドの指定が round-trip 
     fc.property(subscribeTracksOptionsArb, (options) => {
       const decoded = assertParameterRoundTrip(buildSubscribeTracksParameters(options));
       const types = parameterTypesOf(decoded);
-      assert.equal(types.has(MessageParameterType.LOCATION_FILTER), options.filter !== undefined);
-      assert.equal(
-        types.has(MessageParameterType.SUBSCRIBER_PRIORITY),
-        options.subscriberPriority !== undefined,
-      );
+      // §9.18 の一覧に無い LOCATION_FILTER / SUBSCRIBER_PRIORITY / FILL_PARAMETERS は
+      // 指定できず、常に現れない (§3.6.2 の記述との矛盾は SubscribeTracksOptions の
+      // JSDoc を参照)
+      assert.isFalse(types.has(MessageParameterType.LOCATION_FILTER));
+      assert.isFalse(types.has(MessageParameterType.SUBSCRIBER_PRIORITY));
+      assert.isFalse(types.has(MessageParameterType.FILL_PARAMETERS));
       assert.equal(types.has(MessageParameterType.GROUP_ORDER), options.groupOrder !== undefined);
       assert.equal(types.has(MessageParameterType.FORWARD), options.forward === false);
       // TRACK_PROPERTY_FILTER (0x29) は SUBSCRIBE_TRACKS でのみ許可される (§3.3.2)
@@ -772,7 +771,6 @@ test("buildSubscribeTracksParameters: 全フィールドの指定が round-trip 
         types.has(MessageParameterType.AUTHORIZATION_TOKEN),
         options.authorizationToken !== undefined,
       );
-      assert.equal(types.has(MessageParameterType.FILL_PARAMETERS), options.fill !== undefined);
       assert.equal(
         types.has(MessageParameterType.INCLUDE_PROPERTIES),
         options.includeProperties !== undefined,
@@ -1097,7 +1095,7 @@ test("clampTimeoutMs: 2^31 - 1 を超える値だけが上限に張り付く", (
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.20: NEW_GROUP_REQUEST の値は varint である。
+ * draft-ietf-moq-transport-22 §9.20.19: NEW_GROUP_REQUEST の値は varint である。
  * 任意の値 (0 から 2^62 - 1) を varint にしたパラメータから同じ値を読み取る
  */
 test("extractNewGroupRequest: 任意の varint の値を往復で読み取る", () => {

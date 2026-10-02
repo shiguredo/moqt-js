@@ -19,7 +19,7 @@
  * draft-ietf-moq-transport-21 §9.13 (TRACK_STATUS):
  * "If successful, the publisher responds with a TRACK_STATUS_OK with the same
  *  parameters and Track Properties it would have set in a SUBSCRIBE_OK."
- * 応答に載りうる LARGEST_OBJECT は §9.20.18 (LARGEST OBJECT Parameter) が
+ * 応答に載りうる LARGEST_OBJECT は §9.20.17 (LARGEST OBJECT Parameter) が
  * "It MAY appear in SUBSCRIBE_OK, PUBLISH, REQUEST_UPDATE_OK, TRACK_STATUS_OK, or
  *  PUBLISH_STATE_NOTIFY." と定める。
  */

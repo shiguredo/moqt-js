@@ -1,7 +1,7 @@
 /**
  * session/bidi.ts の単体テスト: publish ロールで受信した REQUEST_UPDATE の NEW_GROUP_REQUEST
  *
- * draft-ietf-moq-transport-21 §9.20.20 (NEW GROUP REQUEST Parameter):
+ * draft-ietf-moq-transport-22 §9.20.19 (NEW GROUP REQUEST Parameter):
  * relay は下流の NEW_GROUP_REQUEST を REQUEST_UPDATE で publisher へ伝える。dynamic Groups に
  * 対応する publisher は、値が 0 か現在の Group より大きければ新しい Group を始める SHOULD。
  * moqt-js はアプリへ PublishCallbacks.onNewGroupRequest で知らせる。
@@ -62,7 +62,7 @@ test("bidiReadRequestStreamMessages: DYNAMIC_GROUPS を広告した publisher �
   assert.isUndefined(result.closedCode);
 });
 
-// 広告していない publisher は NEW_GROUP_REQUEST を無視する (§9.20.20 "If the original
+// 広告していない publisher は NEW_GROUP_REQUEST を無視する (§9.20.19 "If the original
 // publisher does not support dynamic Groups, it ignores the parameter")。更新は受理する
 test("bidiReadRequestStreamMessages: DYNAMIC_GROUPS を広告していない publisher は NEW_GROUP_REQUEST を知らせない (publish ロール)", async () => {
   const result = await receiveNewGroupRequest(false, encodeVarint(7n));

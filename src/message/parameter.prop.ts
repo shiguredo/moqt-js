@@ -1,6 +1,6 @@
 /**
  * MOQT Parameter Property-Based Tests
- * draft-ietf-moq-transport-21 Section 9.20
+ * draft-ietf-moq-transport-22 Section 9.20
  */
 
 import { test, assert } from "vite-plus/test";
@@ -64,7 +64,7 @@ test("Location のエンコード・デコードがラウンドトリップす�
 /**
  * Parameters リストのエンコード・デコードがラウンドトリップする
  *
- * draft-ietf-moq-transport-21 Section 9.20:
+ * draft-ietf-moq-transport-22 Section 9.20:
  * delta encoding を使用するため、type は昇順である必要がある。
  * テストでは生成されたパラメータを type でソートしてから使用する。
  */

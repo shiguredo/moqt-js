@@ -479,7 +479,7 @@ test("recordVideoReceived: TIMESTAMP の無い Object は到着を記録せず�
 // REQUEST_UPDATE の NEW_GROUP_REQUEST の値
 // ============================================================================
 
-// draft-ietf-moq-transport-21 §9.20.20: 送信時点で知る最大 Group ID + 1 を送る。
+// draft-ietf-moq-transport-22 §9.20.19: 送信時点で知る最大 Group ID + 1 を送る。
 // SUBSCRIBE 直後の snapshot ではなく現在の largestLocation を使う。
 test("resolveNewGroupRequestValue: 最大 Location の次の Group を要求する", () => {
   assert.equal(resolveNewGroupRequestValue({ group: 41n, object: 7n }), 42n);

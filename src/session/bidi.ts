@@ -377,7 +377,7 @@ export interface BidiSessionInternal {
   /**
    * ピアが REGISTER した Authorization Token のキャッシュ
    *
-   * draft-ietf-moq-transport-21 §8.9 / §9.20.3:
+   * draft-ietf-moq-transport-22 §8.9 / §9.20.2:
    * 受信 REQUEST_UPDATE の AUTHORIZATION TOKEN パラメータを解決・登録するために使う。
    */
   readonly receivedAuthTokens: AuthTokenCache;
@@ -966,7 +966,7 @@ export async function bidiReadPublishResponse(
     handleOk: (context, payload) => {
       const { session, requestId, pending } = context;
       const decoded = decodeRequestOkPayload(payload);
-      // draft-ietf-moq-transport-21 §9.20.1 (Parameter Scope) / §9.20.17:
+      // draft-ietf-moq-transport-22 §9.20.1 (Parameter Scope) / §9.20.16:
       // PUBLISH_OK に出現できるのは EXPIRES のみ。許可外パラメータを
       // 受信した場合は PROTOCOL_VIOLATION でセッションを閉じる。
       // Subscription Parameters の更新は REQUEST_UPDATE 経路で扱う。
@@ -1003,7 +1003,7 @@ export async function bidiReadPublishResponse(
       session.pendingPublish.delete(requestId);
       session.publishers.set(requestId, pending.impl);
 
-      // draft-ietf-moq-transport-21 §9.20.17:
+      // draft-ietf-moq-transport-22 §9.20.16:
       // PUBLISH_OK に出現できるのは EXPIRES のみであり、FORWARD 等の
       // Subscription Parameters は運ばれない。Publisher の forwardState は
       // PUBLISH 送信時の指定値のままにし、更新は REQUEST_UPDATE 経路で扱う。
@@ -1087,7 +1087,7 @@ export async function bidiReadSubscribeResponse(
     handleOk: (context, payload) => {
       const { session, requestId, pending } = context;
       const decoded = decodeSubscribeOkPayload(payload);
-      // draft-ietf-moq-transport-21 §9.20.1 (Parameter Scope):
+      // draft-ietf-moq-transport-22 §9.20.1 (Parameter Scope):
       // スコープ違反は PROTOCOL_VIOLATION でセッションを閉じる。
       // 具体エラーを呼び出し元へ reject してから閉じる
       // (PUBLISH 応答経路と同一パターン。順序固定)。
@@ -1272,7 +1272,7 @@ export async function bidiReadFetchResponse(
     handleOk: (context, payload) => {
       const { session, requestId, pending } = context;
       const decoded = decodeFetchOkPayload(payload);
-      // draft-ietf-moq-transport-21 §9.20.1 (Parameter Scope):
+      // draft-ietf-moq-transport-22 §9.20.1 (Parameter Scope):
       // スコープ違反は PROTOCOL_VIOLATION でセッションを閉じる。
       // 具体エラーを呼び出し元へ reject してから閉じる
       // (PUBLISH 応答経路と同一パターン。順序固定)。
@@ -1303,7 +1303,7 @@ export async function bidiReadFetchResponse(
         }
       }
 
-      // draft-ietf-moq-transport-21 §9.20.9: GROUP_ORDER は FETCH_OK に許可されない。
+      // draft-ietf-moq-transport-22 §9.20.8: GROUP_ORDER は FETCH_OK に許可されない。
       // FETCH リクエスト側から groupOrder を設定できるようフィールドは FetcherImpl に残す。
       session.pendingFetch.delete(requestId);
       pending.impl.setFetchOkInfo(decoded.endOfTrack, decoded.endLocation, decoded.trackProperties);
@@ -1409,7 +1409,7 @@ export async function bidiReadTrackStatusResponse(
       const { session, requestId, pending } = context;
       const decoded = decodeRequestOkPayload(payload);
 
-      // draft-ietf-moq-transport-21 §9.20.1 (Parameter Scope):
+      // draft-ietf-moq-transport-22 §9.20.1 (Parameter Scope):
       // スコープ違反は PROTOCOL_VIOLATION でセッションを閉じる。
       // 具体エラーを呼び出し元へ reject してから閉じる
       // (PUBLISH 応答経路と同一パターン。順序固定)。
@@ -1645,7 +1645,7 @@ async function bidiSendRequestOk(session: BidiSessionInternal, requestId: bigint
 /**
  * 受信 REQUEST_UPDATE の AUTHORIZATION TOKEN パラメータを処理する
  *
- * draft-ietf-moq-transport-21 §9.20.3 / §8.9:
+ * draft-ietf-moq-transport-22 §9.20.2 / §8.9:
  * §8.9 の MUST により REGISTER はメッセージが他の理由で失敗しても登録を維持する
  * ため、後続の検証より前に処理する。デコード不能 (KEY_VALUE_FORMATTING_ERROR)・
  * 登録済み Alias の再 REGISTER (DUPLICATE_AUTH_TOKEN_ALIAS)・上限超過
@@ -1786,7 +1786,7 @@ export function restoreIncomingRequestUpdateCount(
 /**
  * 受信 REQUEST_UPDATE の前置検証を行う
  *
- * draft-ietf-moq-transport-21 §9.5 / §9.2 / §9.20.3 / §8.9:
+ * draft-ietf-moq-transport-22 §9.5 / §9.2 / §9.20.2 / §8.9:
  * - fetch ロールと subscribe ロールの想定外 REQUEST_UPDATE はセッションエラー
  *   (PROTOCOL_VIOLATION) であるため、§8.9 の登録 MUST の対象外として最初に判定する。
  * - AUTHORIZATION TOKEN は §8.9 の MUST「セッションエラーにならない限り REGISTER を
@@ -1848,7 +1848,7 @@ async function bidiPreflightRequestUpdate(
     return "return";
   }
 
-  // draft-ietf-moq-transport-21 §9.20.3 / §8.9:
+  // draft-ietf-moq-transport-22 §9.20.2 / §8.9:
   // REQUEST_UPDATE の AUTHORIZATION TOKEN パラメータを処理する。
   const authResult = await processIncomingRequestUpdateAuthorizationTokens(
     session,
@@ -1931,12 +1931,12 @@ async function bidiPreflightRequestUpdate(
  *     (1) で return するため到達しない)。
  * (3) パラメータスコープ検証。違反は §9.20.1 の MUST により
  *     PROTOCOL_VIOLATION でセッションを閉じる。REQUEST_UPDATE_ALLOWED_PARAMS
- *     は TRACK_NAMESPACE_PREFIX (§9.20.21、namespace 系 REQUEST_UPDATE 専用)
+ *     は TRACK_NAMESPACE_PREFIX (§9.20.20、namespace 系 REQUEST_UPDATE 専用)
  *     と TRACK_PROPERTY_FILTER (§3.3.2、SUBSCRIBE_TRACKS 専用) を含まないため、
  *     通常の PUBLISH / SUBSCRIBE 系 REQUEST_UPDATE で受信したこれらは
  *     NOT_SUPPORTED ではなく PROTOCOL_VIOLATION で閉じる。
  * (4) Range Filter / LOCATION_FILTER / FILL_PARAMETERS の値検証。不正は
- *     REQUEST_ERROR (INVALID_FILTER) で応答する (§3.3.2 / §9.20.13-15)。
+ *     REQUEST_ERROR (INVALID_FILTER) で応答する (§3.3.2 / §9.20.12-14)。
  *     自 endpoint が広告した MAX_FILTER_RANGES (未広告時 0) を超える
  *     Range Filter も同じく INVALID_FILTER で拒否する (§9.1.6)。
  *     許可パラメータ (SUBSCRIBER_PRIORITY / LOCATION_FILTER /
@@ -2019,7 +2019,7 @@ export async function bidiHandlePublishRequestUpdate(
     return;
   }
 
-  // draft-ietf-moq-transport-21 §9.20.3 / §8.9:
+  // draft-ietf-moq-transport-22 §9.20.2 / §8.9:
   // REQUEST_UPDATE の AUTHORIZATION TOKEN パラメータを処理する。§8.9 の MUST は
   // 「セッションエラーにならない限り REGISTER した Alias をキャッシュへ登録する」
   // であるため、セッションエラーにならない拒否 (GOAWAY による GOING_AWAY 応答) より
@@ -2044,11 +2044,11 @@ export async function bidiHandlePublishRequestUpdate(
   }
 
   // 判定順序 (3): パラメータスコープ検証
-  // draft-ietf-moq-transport-21 §9.20.1 (Parameter Scope):
+  // draft-ietf-moq-transport-22 §9.20.1 (Parameter Scope):
   // "If it appears in some other type of message, the receiving endpoint
   //  MUST close the connection with a PROTOCOL_VIOLATION."
   // REQUEST_UPDATE_ALLOWED_PARAMS は subscription 系 REQUEST_UPDATE に
-  // 出現し得る型の集合であり、TRACK_NAMESPACE_PREFIX (§9.20.21、
+  // 出現し得る型の集合であり、TRACK_NAMESPACE_PREFIX (§9.20.20、
   // namespace 系 REQUEST_UPDATE 専用) と TRACK_PROPERTY_FILTER (§3.3.2、
   // SUBSCRIBE_TRACKS 専用) を含まない。これらを受信した場合は
   // NOT_SUPPORTED ではなく §9.20.1 の MUST に従い PROTOCOL_VIOLATION で閉じる。
@@ -2064,10 +2064,10 @@ export async function bidiHandlePublishRequestUpdate(
 
   // 判定順序 (4): Range Filter / LOCATION_FILTER / FILL_PARAMETERS の値検証と
   // 自 endpoint の MAX_FILTER_RANGES (未広告時 0) の上限検証。
-  // draft-ietf-moq-transport-21 §3.3.2 / §9.20.13-15 / §9.1.6:
+  // draft-ietf-moq-transport-22 §3.3.2 / §9.20.12-14 / §9.1.6:
   // 不正なフィルタ・上限超過は REQUEST_ERROR (INVALID_FILTER) で応答する。
   // LOCATION_FILTER / FILL_PARAMETERS 内側の一覧外・値違反
-  // (ProtocolViolationError) は §9.20.1 / §9.20.16 の MUST に従い
+  // (ProtocolViolationError) は §9.20.1 / §9.20.15 の MUST に従い
   // PROTOCOL_VIOLATION でセッションを閉じる。検証は状態変更
   // (setForwardState) より前に配置し、拒否時に forwardState が反映される
   // 不整合を防ぐ。
@@ -2757,7 +2757,7 @@ async function bidiHandleRequestUpdateMessage(
     return "return";
   }
 
-  // draft-ietf-moq-transport-21 §9.5 / §9.20.3 / §8.9:
+  // draft-ietf-moq-transport-22 §9.5 / §9.20.2 / §8.9:
   // fetch / subscribe ロールの想定外 REQUEST_UPDATE、AUTHORIZATION TOKEN、
   // GOAWAY の判定を順に行う (詳細は bidiPreflightRequestUpdate を参照)。
   const preflight = await bidiPreflightRequestUpdate(session, requestId, decoded, role);
@@ -2769,7 +2769,7 @@ async function bidiHandleRequestUpdateMessage(
   }
 
   // パラメータスコープ検証
-  // draft-ietf-moq-transport-21 §9.20.1 (Parameter Scope)
+  // draft-ietf-moq-transport-22 §9.20.1 (Parameter Scope)
   const scopeError = validateParameterScope(
     decoded.parameters,
     REQUEST_UPDATE_ALLOWED_PARAMS,
@@ -2781,7 +2781,7 @@ async function bidiHandleRequestUpdateMessage(
   }
 
   // Range Filter の値域・構造・組み合わせ重複検証
-  // draft-ietf-moq-transport-21 §3.3.2 / §9.20.13-15:
+  // draft-ietf-moq-transport-22 §3.3.2 / §9.20.12-14:
   // 不正な Range Filter は REQUEST_ERROR (INVALID_FILTER) で応答する。
   // 検証は状態変更 (setForwardState) より前に配置し、違反で
   // REQUEST_ERROR を応答したにも関わらず forwardState が反映される
@@ -2899,7 +2899,7 @@ async function bidiHandleRequestStreamGoaway(
  *   applyPublishRequestUpdate を参照)。拒否時は §9.5.1 の PUBLISH_DONE
  *   (UPDATE_FAILED) で購読を終了する。
  * - 受理時は REQUEST_OK を送信する (§9.5 MUST)。publish 済み Object がある場合は
- *   LARGEST_OBJECT を必ず含める (§9.20.18 MUST)。
+ *   LARGEST_OBJECT を必ず含める (§9.20.17 MUST)。
  * - publisher が存在しない場合は REQUEST_ERROR (INTERNAL_ERROR) で拒否する。
  *   書き込み失敗は黙殺し、後続の PUBLISH_DONE 送信に進む (GOING_AWAY /
  *   INVALID_FILTER 経路と同一の回復力にする)。
@@ -2948,7 +2948,7 @@ async function respondToPublishRequestUpdate(
   }
 
   // REQUEST_OK を送信 (draft-ietf-moq-transport-21 §9.5 MUST)
-  // draft-ietf-moq-transport-21 §9.20.18 (LARGEST OBJECT Parameter):
+  // draft-ietf-moq-transport-22 §9.20.17 (LARGEST OBJECT Parameter):
   // "If Objects have been published on this Track the Publisher MUST
   //  include this parameter." 自 endpoint が Publisher として
   // 受理する REQUEST_UPDATE の REQUEST_OK には、publish 済みの
@@ -2998,7 +2998,7 @@ interface DecodedLocationAndFill {
  * draft-ietf-moq-transport-22 §9.20.9 (LOCATION FILTER Parameter):
  * "If StartGroup + EndGroupDelta exceeds 2^64 - 1, the endpoint MUST
  *  close the session with a PROTOCOL_VIOLATION."
- * draft-ietf-moq-transport-21 §9.20.16 (FILL PARAMETERS Parameter):
+ * draft-ietf-moq-transport-22 §9.20.15 (FILL PARAMETERS Parameter):
  * 内側の一覧に無いパラメータを受信した endpoint は PROTOCOL_VIOLATION で
  * セッションを閉じる。
  * decode の失敗 (ProtocolViolationError / IncompleteDataError) は呼び出し元の
@@ -3054,7 +3054,7 @@ function applyPublishRequestUpdate(
 ): boolean {
   const forwardParam = parameters.find((param) => param.type === MessageParameterType.FORWARD);
   const fillParam = parameters.find((param) => param.type === MessageParameterType.FILL_PARAMETERS);
-  // draft-ietf-moq-transport-21 §9.20.20: NEW_GROUP_REQUEST は状態を変える前に読む
+  // draft-ietf-moq-transport-22 §9.20.19: NEW_GROUP_REQUEST は状態を変える前に読む
   // (読めない値は PROTOCOL_VIOLATION)
   const newGroupRequest = extractNewGroupRequest(parameters);
 
@@ -3097,7 +3097,7 @@ function applyPublishRequestUpdate(
   if (forwardParam !== undefined) {
     publisher.setForwardState(effectiveForwardState);
   }
-  // draft-ietf-moq-transport-21 §9.20.20: 受理した更新の NEW_GROUP_REQUEST をアプリへ知らせる
+  // draft-ietf-moq-transport-22 §9.20.19: 受理した更新の NEW_GROUP_REQUEST をアプリへ知らせる
   // (DYNAMIC_GROUPS の広告と値の条件は handleNewGroupRequest が見る)
   if (newGroupRequest !== undefined) {
     publisher.handleNewGroupRequest(newGroupRequest);
@@ -3219,7 +3219,7 @@ function isFillRangeEmpty(
  *  concurrently in all Range filter Section 3.3.2 parameters for a given
  *  subscription or fetch」
  * トップレベルの Range Filter (0x25-0x29) に加え、FILL_PARAMETERS (0x23)
- * 内側の Range Filter (0x25-0x28) も購読単位の合計に含める (§9.20.16 は
+ * 内側の Range Filter (0x25-0x28) も購読単位の合計に含める (§9.20.15 は
  * 内側を独立した parameter scope とするが、購読単位の上限は fill を含む)。
  * 除去 (Length=0) は Ranges を消費しないため数えない。
  * FILL_PARAMETERS 内側の Parameter[] は validateLocationAndFillParameters の
@@ -3353,7 +3353,7 @@ function inFlightFillRangeFilters(
 /**
  * 単一の raw FILL_PARAMETERS の fill 要求を購読に関連付ける
  *
- * draft-ietf-moq-transport-22 §3.4 (Fill Semantics) / §9.20.16:
+ * draft-ietf-moq-transport-22 §3.4 (Fill Semantics) / §9.20.15:
  * キーは新規採番の updateRequestId とし、型付き経路と同形にする。
  * 内側の GROUP_ORDER (uint8 値) がなければ購読の指定を継承する
  * (resolveFillGroupOrder と同規則。§9.20.16 の省略時継承)。
@@ -3385,8 +3385,8 @@ function registerRawFillFetchTarget(
 /**
  * raw FILL_PARAMETERS の送信前検証と合算用データの準備
  *
- * - 重複検査: draft-ietf-moq-transport-21 §9.20 / §9.20.16
- * - 内側デコード検証: §9.20.10 / §9.20.16
+ * - 重複検査: draft-ietf-moq-transport-22 §9.20 / §9.20.15
+ * - 内側デコード検証: §9.20.10 / §9.20.15
  * - 上限合算用の内側 Range 取り出し: §9.1.6 / §8.6
  * いずれも pendingRequestUpdate.set / fillFetchTargets.set より前で失敗させる
  * (登録後の throw はエントリ残留を生むため)。重複検査を内側検証より前に置き、
@@ -3426,7 +3426,7 @@ function prepareRawFillForUpdate(options: RequestUpdateOptions): {
   // draft-ietf-moq-transport-21 §9.1.6:
   // raw FILL 内側の Range Filters (0x25-0x28) を上限合算用に取り出す。
   // 範囲は decodeFillParameters 側と一致させること
-  // (§9.20.16 の Table 6 に Range 系の型が追加された場合は両方を更新する)。
+  // (§9.20.15 の Table 7 に Range 系の型が追加された場合は両方を更新する)。
   // 内側の除去は decodeFillParameters が拒否済みのため、ここでは数え上げのみ行う
   const rawFillInnerRanges: RangeFilterSpec[] = [];
   for (const inner of decodedRawFillInners) {
@@ -3478,7 +3478,7 @@ export async function bidiSendRequestUpdate(
     }
   }
 
-  // draft-ietf-moq-transport-21 §9.20 (Control Message Parameters):
+  // draft-ietf-moq-transport-22 §9.20 (Control Message Parameters):
   // 各パラメータ定義が示す出現可能メッセージに反する型を raw parameters に
   // 混入させたまま送信すると、受信側は §9.20.1 の MUST により
   // PROTOCOL_VIOLATION でセッションを閉じる。ローカル API 誤用として
@@ -3565,8 +3565,8 @@ export async function bidiSendRequestUpdate(
     }
   }
 
-  // draft-ietf-moq-transport-21 §9.20 / §9.20.16 の重複検査と
-  // §9.20.10 / §9.20.16 の内側デコード検証は、上限検証より前の配置で
+  // draft-ietf-moq-transport-22 §9.20 / §9.20.15 の重複検査と
+  // §9.20.10 / §9.20.15 の内側デコード検証は、上限検証より前の配置で
   // 実行済みである (戻り値の decodedRawFillInners 等を再利用する)。
 
   const parameters: Parameter[] = options.parameters ? [...options.parameters] : [];
@@ -3587,15 +3587,15 @@ export async function bidiSendRequestUpdate(
     });
   }
 
-  // FILL_PARAMETERS (0x23) - draft-ietf-moq-transport-21 Section 9.20.16:
+  // FILL_PARAMETERS (0x23) - draft-ietf-moq-transport-22 Section 9.20.15:
   // fill fetch ストリームを要求する。FILL_PARAMETERS は保持されないため、
   // 載せた更新にのみ適用される。
   if (options.fill !== undefined) {
     parameters.push(encodeFillParameters(buildFillParameters(options.fill, "REQUEST_UPDATE")));
   }
 
-  // NEW_GROUP_REQUEST (0x32) - draft-ietf-moq-transport-21 Section 9.20.20 (varint)
-  // draft-ietf-moq-transport-21 §9.20:
+  // NEW_GROUP_REQUEST (0x32) - draft-ietf-moq-transport-22 Section 9.20.19 (varint)
+  // draft-ietf-moq-transport-22 §9.20:
   // Senders MUST NOT repeat the same Parameter Type のため、raw と型付きの
   // 合算で 2 件以上になる重複は送信前に拒否する。重複組み合わせの先例
   // (validateRangeFilterSpecs) と同様に汎用 Error を使う。
@@ -3615,7 +3615,7 @@ export async function bidiSendRequestUpdate(
       value: encodeVarint(options.newGroupRequest),
     });
   }
-  // draft-ietf-moq-transport-21 §9.20.20 (NEW GROUP REQUEST Parameter):
+  // draft-ietf-moq-transport-22 §9.20.19 (NEW GROUP REQUEST Parameter):
   // "A subscriber MUST NOT send this parameter in REQUEST_UPDATE if the Track did
   //  not include the DYNAMIC_GROUPS Property with value 1.  A subscriber MAY include
   //  this parameter in SUBSCRIBE without foreknowledge of support."
@@ -3644,7 +3644,7 @@ export async function bidiSendRequestUpdate(
     });
   }
 
-  // draft-ietf-moq-transport-21 §9.20 (Control Message Parameters):
+  // draft-ietf-moq-transport-22 §9.20 (Control Message Parameters):
   // "Senders MUST NOT repeat the same Parameter Type in a message unless the parameter
   //  definition explicitly allows multiple instances of that type to be sent in a single
   //  message."
@@ -3756,7 +3756,7 @@ export async function bidiSendRequestUpdate(
  * draft-ietf-moq-transport-21 §9.5.2 (Updating Namespace Subscriptions):
  * "A subscriber can update the Track Namespace Prefix of an established
  *  SUBSCRIBE_NAMESPACE or SUBSCRIBE_TRACKS by including the
- *  TRACK_NAMESPACE_PREFIX parameter (Section 9.20.21) in a REQUEST_UPDATE."
+ *  TRACK_NAMESPACE_PREFIX parameter (Section 9.20.20) in a REQUEST_UPDATE."
  *
  * SubscriberImpl 非依存の free function であり、namespaceSubscriptions /
  * tracksSubscriptions が保持する writer を経由して送信する。
@@ -3863,7 +3863,7 @@ export async function bidiSendNamespaceRequestUpdate(
   subscription.pendingPrefix = options.trackNamespacePrefix;
 
   const parameters: Parameter[] = [
-    // TRACK_NAMESPACE_PREFIX (0x34) - draft-ietf-moq-transport-21 Section 9.20.21
+    // TRACK_NAMESPACE_PREFIX (0x34) - draft-ietf-moq-transport-22 Section 9.20.20
     encodeParameterTrackNamespace(createTrackNamespace(options.trackNamespacePrefix)),
   ];
 
@@ -3882,7 +3882,7 @@ export async function bidiSendNamespaceRequestUpdate(
     });
   }
 
-  // draft-ietf-moq-transport-21 §9.20.21 / §9.20.1:
+  // draft-ietf-moq-transport-22 §9.20.20 / §9.20.1:
   // namespace 系 REQUEST_UPDATE に出現できる型だけであることを送信前に検証する
   // (TRACK_NAMESPACE_PREFIX は namespace 系 REQUEST_UPDATE 専用)。
   assertParametersAllowedForSend(
@@ -4256,7 +4256,7 @@ export function bidiHandlePublishStateNotify(
 
   const msg = decodePublishStateNotifyPayload(payload);
 
-  // draft-ietf-moq-transport-21 §9.20.1 (Parameter Scope)
+  // draft-ietf-moq-transport-22 §9.20.1 (Parameter Scope)
   // 違反時はセッションを閉じ、呼び出し元は後続メッセージの処理を打ち切る。
   const scopeError = validateParameterScope(
     msg.parameters,
@@ -4331,7 +4331,7 @@ export function bidiHandlePublishStateNotify(
  * §9.10 により MAX_REQUEST_UPDATES (§9.1.7) の対象外である。
  *
  * 載せるパラメータは §9.20.1 が本メッセージに許可する 3 種のみとする。
- * - LARGEST_OBJECT (§9.20.18): 「The publisher MUST include the LARGEST_OBJECT
+ * - LARGEST_OBJECT (§9.20.17): 「The publisher MUST include the LARGEST_OBJECT
  *   parameter ..., if known, in PUBLISH_STATE_NOTIFY so the subscriber can
  *   determine the point in the Track at which the change took effect.」に従い、
  *   送信済み Object がある場合は必ず載せる。
@@ -4356,7 +4356,7 @@ export async function bidiSendPublishStateNotify(
   const requestId = publisher.getRequestId();
 
   // 変化したパラメータだけを集める。LARGEST_OBJECT は「変化したか」に依らず
-  // 既知なら必ず載せる (§9.20.18 の MUST) ため、変化の有無の判定には数えない。
+  // 既知なら必ず載せる (§9.20.17 の MUST) ため、変化の有無の判定には数えない。
   const parameters: Parameter[] = [];
   const largestLocation = publisher.getLargestLocation();
   if (largestLocation !== null) {
@@ -4398,7 +4398,7 @@ export async function bidiSendPublishStateNotify(
     return;
   }
 
-  // draft-ietf-moq-transport-21 §9.20.1 (Parameter Scope):
+  // draft-ietf-moq-transport-22 §9.20.1 (Parameter Scope):
   // 許可外パラメータを載せたまま送信すると受信側は PROTOCOL_VIOLATION で
   // セッションを閉じるため、送信前に拒否する
   // (bidiSendRequestUpdate の assertParametersAllowedForSend と同じ方針)。
@@ -4623,7 +4623,7 @@ export function bidiHandleRequestUpdateOk(
     }
   }
 
-  // draft-ietf-moq-transport-21 §9.20.1 (Parameter Scope):
+  // draft-ietf-moq-transport-22 §9.20.1 (Parameter Scope):
   // 違反時は当該購読の保留分全件を違反 SessionError 自体で reject してから閉じる
   // (初期応答 4 経路 = PUBLISH / SUBSCRIBE / FETCH / TRACK_STATUS と同一パターン)。
   // 先に閉じると close 側の汎用 reject で特定エラーが上書きされるため、

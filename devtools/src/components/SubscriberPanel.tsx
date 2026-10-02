@@ -262,7 +262,7 @@ export function SubscriberPanel({
             title={
               instance.dynamicGroupsSupported.value
                 ? "Send NEW_GROUP_REQUEST to request a new keyframe"
-                : "Track did not include DYNAMIC_GROUPS=1 (draft-ietf-moq-transport-21 §9.20.20)"
+                : "Track did not include DYNAMIC_GROUPS=1 (draft-ietf-moq-transport-22 §9.20.19)"
             }
           >
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">

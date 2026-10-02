@@ -237,7 +237,7 @@ test("bidiReadRequestStreamMessages: FORWARD 省略の PUBLISH_STATE_NOTIFY で�
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.10 / §9.20.1:
+ * draft-ietf-moq-transport-22 §9.10 / §9.20.1:
  * 許可外パラメータを含む PUBLISH_STATE_NOTIFY を受信した場合、
  * PROTOCOL_VIOLATION でセッションを閉じることを検証する。
  */

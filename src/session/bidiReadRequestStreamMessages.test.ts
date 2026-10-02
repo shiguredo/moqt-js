@@ -272,7 +272,7 @@ async function readPublishOkWithParameters(
 }
 
 /**
- * draft-ietf-moq-transport-21 §9.20.17:
+ * draft-ietf-moq-transport-22 §9.20.16:
  * PUBLISH_OK に出現できるのは EXPIRES のみであり、空の PUBLISH_OK は
  * 何も反映せず初期値のまま解決されることを検証する。
  */
@@ -285,7 +285,7 @@ test("bidiReadPublishResponse: FORWARD 省略の PUBLISH_OK で forwardState が
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.17:
+ * draft-ietf-moq-transport-22 §9.20.16:
  * EXPIRES のみが PUBLISH_OK に出現できる。EXPIRES を含む PUBLISH_OK を
  * 受信した場合、正常に解決されることを検証する。
  */
@@ -299,7 +299,7 @@ test("bidiReadPublishResponse: EXPIRES の PUBLISH_OK は解決される", async
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.17 / §9.20.1:
+ * draft-ietf-moq-transport-22 §9.20.16 / §9.20.1:
  * FORWARD は PUBLISH_OK に出現できない。FORWARD=1 を含む PUBLISH_OK を
  * 受信した場合、PROTOCOL_VIOLATION でセッションを閉じ、保留中の発行を
  * 残さないことを検証する。
@@ -324,7 +324,7 @@ test("bidiReadPublishResponse: FORWARD=1 の PUBLISH_OK で PROTOCOL_VIOLATION",
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.17 / §9.20.1:
+ * draft-ietf-moq-transport-22 §9.20.16 / §9.20.1:
  * FORWARD=0 を含む PUBLISH_OK を受信した場合も、スコープ違反として
  * PROTOCOL_VIOLATION でセッションを閉じることを検証する。
  */
