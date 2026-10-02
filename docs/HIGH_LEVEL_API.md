@@ -441,10 +441,12 @@ jitter buffer の遅れ (`catalog の targetLatency` を下限とする) を足�
 `targetLatency` は無視する (Section 5.2.8 の MUST)。
 
 jitter buffer の遅れは音声と映像で別々に求める。音声は NetEq と同じ規則 (到着の遅れの
-0.95 分位)、映像は揺らぎの百分位である。2 つの遅れの差 (A/V のずれ) は libwebrtc の
-`StreamSynchronization` と同じ相対制御で抑える。ずれが 30 ms 未満の間は遅延を変えず、
-超えたときだけ片側を 1 秒に 1 回、最大 80 ms 動かす。このため映像の遅延は音声の jitter
-buffer の遅延に引きずられず、A/V のずれは最大で 30 ms 程度になる。
+0.95 分位)、映像は揺らぎの百分位である。2 つの表示時刻の差 (A/V のずれ) は、差が 30 ms
+未満の間はそのままにし、超えたときだけ先行する側の表示の遅れを「後行側 - 30 ms」まで
+即座に上げて抑える。上げた分は毎秒 20 ms までで戻す。このため不感帯の中では映像の遅延は
+音声の jitter buffer の遅延に引きずられず、A/V のずれは 30 ms 程度に収まる。ただし 2 つの
+遅延が表示の遅れの上限 (500 ms、またはキューが吸収できる長さ) に達しているときは
+合わせられないため、ずれは基準の遅れの差 (閾値まで) に広がり得る。
 
 `AudioStats` / `VideoStats` は送信側 (`MediaStats`) の型である。受信側は
 `AudioReceiverStats` / `VideoReceiverStats` を使う。
