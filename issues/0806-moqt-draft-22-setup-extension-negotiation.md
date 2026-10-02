@@ -1,7 +1,7 @@
 # SETUP での拡張機能宣言の明確化に追随する
 
 - Created: 2026-10-02
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-10-03
 - Branch: feature/update-setup-extension-negotiation
 - Polished: 2026-10-02
 
@@ -58,4 +58,29 @@ draft-ietf-moq-transport-22 §6.3.2 (Extension Negotiation) は、拡張機能�
 
 ## 解決方法
 
-{未着手}
+draft-ietf-moq-transport-22 §1.6 / §6.3 / §6.3.2 / §9.1 / §9.20.1 / §16.4 を正として、SETUP の拡張宣言の仕組みをコメントに整理し、参照を v22 に直した。挙動の変更はない。
+
+### 1. 拡張宣言の仕組みの記録
+
+`src/message/setup.ts` のモジュールヘッダーに次を書いた。
+
+- §6.3.2 (Extension Negotiation): 拡張機能のサポートは SETUP の Setup Option で宣言し、汎用の宣言形式は無く各拡張仕様が Option の型・値・交渉規則を定める。将来の拡張を足すときも汎用形式を仮定せず、その拡張仕様が定める Option を定義する
+- Setup Option は §16.4 (Setup Options) の IANA レジストリで管理され、Message Parameter (§9.20) とは別の名前空間である (§9.20.1: SETUP に Message Parameter は出現しない)
+- moqt-js が送る Option の一覧 (0x03 AUTHORIZATION_TOKEN / 0x04 MAX_AUTH_TOKEN_CACHE_SIZE / 0x06 MAX_FILTER_RANGES / 0x07 MOQT_IMPLEMENTATION / 0x08 MAX_REQUEST_UPDATES / GREASE) と、AUTHORITY (0x05) / PATH (0x01) は WebTransport 利用時の MUST NOT (§9.1.1 / §9.1.2) のため送る手段を持たないこと。§16.4 のレジストリと突き合わせて確認した
+- 未知の Option は §9.1 の MUST に従い ignore し、未知の Option の重複も許容する
+- `decodeSetupPayload` の JSDoc に、未知の Option を解釈せずそのまま保持し、既知の Option だけを呼び出し側が参照することを書いた (§6.3.2 のとおり未知の Option を汎用の宣言として解釈しない)
+
+### 2. 参照の更新
+
+- "§1.5 (Extensibility)" の参照を無くした。NOT_SUPPORTED の SHOULD は §1.6 (Modularity)、制御ストリームの単方向ペア化は §6.3 (Session initialization) を指す (`incoming.ts` / `incomingPublish.ts` / `incoming.prop.ts` / `incoming.test.ts` / `connection.ts` / `session.ts`)。v21 に "Extensibility" という節名は無く、draft-18〜20 の §4 の名残だった
+- Key-Value-Pairs の Figure 番号を v22 の Figure 3 に直した (`setup.ts` / `parameter/kvp.ts` / `setup.test.ts` / `parameter/messageParameter.ts`)。Figure 3 の構造 (`Delta Type (vi64)` / `[Length (vi64),]` / `Value (..)`) も v22 に合わせた
+- SETUP 関連の節番号・版表記を v22 に揃えた (`setup.ts` / `setup.test.ts` / `setup.prop.ts` / `parameter/kvp.ts` / `parameter/messageParameter.ts` / `types.ts` / `connection.ts` / `session.ts`)
+- CLIENT_SETUP と SERVER_SETUP が単一の SETUP に統合されたのは §6.3 の記述ではなく v21 からの変更 (付録 A.6 の変更履歴) であるため、帰属を直した
+
+### 3. テスト
+
+未知の Setup Option の挙動を固定するテストを 2 件追加した (`src/message/setup.test.ts`)。未知の Option は例外にならずパラメータ配列に保持され、既知の取得関数には現れないこと、未知の Option が重複していても許容されること (§9.1 の MUST) を確認する。既存の `setup.test.ts` / `setup.prop.ts` は維持している。
+
+### 4. 検証
+
+`vp check` (1284 files 整形 / 475 files lint・型エラーなし) / `tsc --noEmit` / `vp test run` (198 files / 3568 tests) が通る。`/review-diff-code` を 3 周回し、指摘 (残っていた §1.5 SHOULD、SETUP 関連の v21 表記、Figure 3 の構造引用、未知 Option の重複許容の記録漏れ) はすべて反映した。CHANGES.md の `## develop` の `### misc` に [UPDATE] エントリを追加した。
