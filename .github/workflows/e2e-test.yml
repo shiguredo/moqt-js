@@ -7,15 +7,14 @@
 #   テスト側も TEST_MOQT_URI が未設定なら skip する (二重の防御)
 # - 公開ログにリレーのホストやトークンを残さないよう、接続先 (host / authority) と
 #   fragment を ::add-mask:: でマスクする
+# - draft-22 対応中は接続先のリレーが draft-21 のため、Location Filter のワイヤ形式が
+#   一致せず FETCH / subscribe のテストが失敗する。リレーが draft-22 に対応するまで
+#   自動実行を止め、手動実行 (workflow_dispatch) だけを残す。
+#   再開するときは push (develop / feature/**) と pull_request トリガーを戻す。
 
 name: e2e-test
 
 on:
-  push:
-    branches:
-      - develop
-      - "feature/**"
-  pull_request:
   workflow_dispatch:
 
 permissions:
