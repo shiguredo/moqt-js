@@ -177,7 +177,7 @@ export interface SubscriberAudioStats {
   /**
    * 受信した音声 Object のうち datagram で届いた数
    *
-   * draft-ietf-moq-transport-21 §11 は同じ Track での Subgroup と Datagram の併用を許す。
+   * draft-ietf-moq-transport-22 §2.1 は同じ Track での Subgroup と Datagram の併用を許す。
    * objectsReceived との差が Subgroup (stream) で届いた数になり、publisher が datagram を
    * 選べたかどうかを確かめられる
    */

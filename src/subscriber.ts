@@ -463,12 +463,9 @@ export class SubscriberImpl implements Subscriber {
 
   /**
    * Handle incoming datagram
-   * draft-ietf-moq-transport-21 Section 11.2 (Datagrams)
-   *
-   * draft-ietf-moq-transport-21:
-   * 同一トラック内で Datagram と Subgroup (Stream) の混在が許可される。
+   * draft-ietf-moq-transport-22 Section 11.2 (Datagrams) / §2.1:
+   * Group または Track の中で Subgroup と Datagram の両方を使える。
    * Subscriber は両方のコールバックを設定することで混在配信を受け取れる。
-   * draft-ietf-moq-transport-21 Section 2.2, Section 11.2
    */
   handleDatagram(object: MoqtObject): void {
     if (this.subscriberState === "closed") {

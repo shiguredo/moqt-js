@@ -1,13 +1,12 @@
 /**
  * MOQT Data Stream
- * draft-ietf-moq-transport-21 Section 11 (Data Streams and Datagrams)
+ * draft-ietf-moq-transport-22 Section 11 (Data Streams and Datagrams)
  *
  * Data streams carry Objects via Subgroups or Datagrams.
  *
- * draft-ietf-moq-transport-21:
- * 同一トラック内で Datagram と Subgroup (Stream) の混在が許可される。
- * Publisher は同じトラックのオブジェクトを Datagram と Stream の両方で送信できる。
- * draft-ietf-moq-transport-21 Section 11
+ * draft-ietf-moq-transport-22 §2.1:
+ * Group または Track の中で Subgroup と Datagram の両方を使える。混在できるのは
+ * Object 単位であり、同じ Object を両方の方式で送ることはできない。
  *
  * Subgroup / Datagram / Fetch が 1 モジュールに同居して見通しが悪かったため、
  * 機能単位のモジュールに分割した。本モジュールは既存の import パス

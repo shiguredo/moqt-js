@@ -158,7 +158,7 @@ test("FetchObjectFields: Ascending 先頭オブジェクトの encode→decode �
 });
 
 /**
- * draft-ietf-moq-transport-21 §11.4.1.1:
+ * draft-ietf-moq-transport-22 §11.4.1.1:
  * DATAGRAM ビットが立つ先頭オブジェクトの encode→decode がラウンドトリップし、
  * Subgroup ID フィールドを消費しない (subgroupId = 0n) ことを検証する。
  */

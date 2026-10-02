@@ -109,7 +109,7 @@ export interface SendObjectParams {
 
 /**
  * Parameters for sending a datagram
- * draft-ietf-moq-transport-21 Section 11.2 (Datagrams)
+ * draft-ietf-moq-transport-22 Section 11.2 (Datagrams)
  */
 export interface SendDatagramParams {
   /**
@@ -223,19 +223,29 @@ export interface Publisher {
    *
    * 購読の Location Filter の範囲外 Object は送信せず、error 通知もなく
    * 解決済みの Promise<void> を返す (draft-ietf-moq-transport-21 §3.3.1)。
+   *
+   * sendObject() で最初に送った Object の Delivery Mode は Subgroup になる
+   * (draft-ietf-moq-transport-22 §2.1.1: Original Publisher が最初の送信方法で
+   * 決める)。送信していない Object の Delivery Mode は確立しない。
    */
   sendObject(params: SendObjectParams): Promise<void>;
   /**
    * Datagram でオブジェクトを送信する
-   * draft-ietf-moq-transport-21 Section 11.2 (Datagrams)
+   * draft-ietf-moq-transport-22 Section 11.2 (Datagrams)
    *
    * 注意: Datagram は信頼性がなく、順序も保証されない
    *
-   * draft-ietf-moq-transport-21:
-   * 同一トラック内で Datagram と Subgroup (Stream) の混在が許可される。
-   * Publisher は sendObject() と sendDatagram() を同じトラックで併用できる。
-   * draft-ietf-moq-transport-21 Section 2.2, Section 11.2
+   * draft-ietf-moq-transport-22 §2.1.1 (Delivery Mode):
+   * Object の Delivery Mode (Subgroup か Datagram か) は Original Publisher が
+   * 最初の送信方法で決める。Datagram で送る Object は Delivery Mode が Datagram に
+   * なる。subscription では、Object をその Delivery Mode に従って送らなければ
+   * ならない (MUST)。
+   * 確立後と異なる Delivery Mode で受け取った Object は malformed track として
+   * 扱われる (§12.1)。Fetch では Delivery Mode が適用されない (§3.2.1)。
    *
+   * draft-ietf-moq-transport-22 §2.1:
+   * Group または Track の中で Subgroup と Datagram の両方を使える。混在できるのは
+   * Object 単位であり、同じ Object を両方の方式で送ることはできない。
    * 範囲外の Group / Object ID は error 通知 + throw する
    * (セッションは閉じない)。Publisher が closed の場合は検証の前に同期 throw する。
    * 範囲外・非整数の priority も error 通知 + throw になる。

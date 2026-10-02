@@ -6,6 +6,11 @@
  * エンコードとデコードを扱う。Fetch Object は Subgroup / Datagram と異なり
  * 前オブジェクトからの delta でフィールドを省略する (§11.4.1.1 Table 9 / 10)
  * ため、直前の値を持つ FetchObjectContext を引き回す。
+ *
+ * Object の Delivery Mode (Subgroup か Datagram か) は Original Publisher が最初の
+ * 送信方法で決める (draft-ietf-moq-transport-22 §2.1.1)。Fetch では Delivery Mode が
+ * 適用されない (§3.2.1) ため、Fetch Object の DATAGRAM ビット (0x40) は Delivery Mode
+ * ではなく「Subgroup ID フィールドを持たない」ことだけを示す。
  */
 
 import { decodeVarint, encodeVarint, MAX_VARINT } from "../varint";
@@ -114,7 +119,11 @@ export const FetchSerializationFlags = {
   PROPERTIES_PRESENT: 0x20,
   /**
    * Datagram フラグ (0x40)
-   * Subgroup ID フィールドが存在しないため、下位 2 ビットを無視する
+   *
+   * draft-ietf-moq-transport-22 §11.4.1.1 (Flags) / §2.1.1 (Delivery Mode):
+   * Datagram として送る Object は Subgroup ID を持たないため、送信側はこのビットを
+   * 立てなければならず (MUST)、立てるときは下位 2 ビットを 0 にするのが望ましい
+   * (SHOULD)。受信側は下位 2 ビットを無視しなければならない (MUST)。
    */
   DATAGRAM: 0x40,
 
@@ -499,11 +508,15 @@ function decodeEndOfRange(
 /**
  * Fetch Object の Subgroup ID をデコードする
  *
- * draft-ietf-moq-transport-21 §11.4.1.1:
- * "When encoding an Object with a Forwarding Preference of 'Datagram' ... the
- *  object has no Subgroup ID. The publisher MUST SET bit 0x40 to '1'. When
- *  0x40 is set, it SHOULD set the two least significant bits to zero and the
- *  subscriber MUST ignore the bits."
+ * draft-ietf-moq-transport-22 §11.4.1.1 (Flags):
+ * "When encoding an Object with a Delivery Mode of "Datagram" ... the object
+ *  has no Subgroup ID. The publisher MUST SET bit 0x40 to '1'. When 0x40 is
+ *  set, it SHOULD set the two least significant bits to zero and the subscriber
+ *  MUST ignore the bits."
+ *
+ * Fetch Object には Delivery Mode が適用されない (§3.2.1)。DATAGRAM ビットは符号化の
+ * 指示であり、「Subgroup ID フィールドを持たない」ことだけを表す。Delivery Mode の
+ * 定義は §2.1.1 にある。
  *
  * @returns subgroupId, isDatagram, and extra bytes consumed
  */
@@ -787,10 +800,6 @@ export function decodeFetchObjectFields(
   }
 
   // Subgroup ID をデコード（DATAGRAM フラグの処理を含む）
-  // draft-ietf-moq-transport-21 §11.4.1.1:
-  // "When encoding an Object with a Forwarding Preference of 'Datagram' ... the
-  //  object has no Subgroup ID. ... When 0x40 is set, it SHOULD set the two
-  //  least significant bits to zero and the subscriber MUST ignore the bits."
   const {
     subgroupId,
     isDatagram,
@@ -947,7 +956,7 @@ export function decodeFetchObjectFields(
  * First object must have all fields present
  *
  * @param hasExtensions - Whether the object has extension properties
- * @param isDatagram - Whether the object uses Datagram forwarding preference
+ * @param isDatagram - Whether the DATAGRAM bit (0x40) is set (no Subgroup ID)
  */
 export function createFirstFetchObjectFlags(hasExtensions = false, isDatagram = false): number {
   let flags =
