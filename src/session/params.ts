@@ -742,6 +742,14 @@ export function buildSubscribeParameters(options?: SubscribeOptions): Parameter[
  * Parameter Type 0x03、Length-prefixed encoding。値は Token 構造。
  * SETUP とは異なり Message Parameter では Alias Type DELETE / USE_ALIAS も許可される。
  */
+/**
+ * Authorization Token の Message Parameter を構築する
+ *
+ * draft-ietf-moq-transport-22 §8.9 / §9.1.3 / §9.1.4: 呼び出し側は
+ * `SessionImpl.normalizeAuthorizationTokenForSend` (送信経路の正規化) を通した
+ * トークンを渡す。SETUP の REGISTER の登録成否に応じて USE_ALIAS / USE_VALUE に
+ * 変換済みであり、ここでは変換しない。
+ */
 export function encodeAuthorizationTokenParameter(token: AuthorizationToken): Parameter {
   return {
     type: MessageParameterType.AUTHORIZATION_TOKEN,

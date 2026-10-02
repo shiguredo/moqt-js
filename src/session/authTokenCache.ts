@@ -1,7 +1,7 @@
 /**
  * 受信 Authorization Token キャッシュ
  *
- * draft-ietf-moq-transport-21 §8.9 (Authorization Token Compression) /
+ * draft-ietf-moq-transport-22 §8.9 (Authorization Token Compression) /
  * §9.1.3 (MAX_AUTH_TOKEN_CACHE_SIZE) / §9.1.4 (AUTHORIZATION TOKEN) /
  * §9.20.2 (AUTHORIZATION TOKEN Parameter)
  *
@@ -21,10 +21,21 @@ import { MessageParameterType, SetupOptionType } from "../message/types";
 /**
  * キャッシュエントリ 1 件あたりの固定オーバーヘッド
  *
- * draft-ietf-moq-transport-21 §9.1.3:
+ * draft-ietf-moq-transport-22 §9.1.3:
  * "The token size is calculated as 16 bytes + the size of the Token Value field"
  */
 const AUTH_TOKEN_CACHE_ENTRY_OVERHEAD = 16;
+
+/**
+ * Token Value 長からキャッシュエントリ 1 件のサイズを求める
+ *
+ * draft-ietf-moq-transport-22 §9.1.3: 1 件のサイズは
+ * "16 bytes + the size of the Token Value field" である。
+ * 送信側がピアの MAX_AUTH_TOKEN_CACHE_SIZE と比較するときにも使う。
+ */
+export function authTokenRegisterEntrySize(tokenValue: Uint8Array): bigint {
+  return BigInt(AUTH_TOKEN_CACHE_ENTRY_OVERHEAD + tokenValue.length);
+}
 
 /**
  * キャッシュに登録済みの Token Type / Token Value
@@ -97,7 +108,7 @@ export class AuthTokenCache {
   /**
    * Token Alias を登録する
    *
-   * draft-ietf-moq-transport-21 §8.9:
+   * draft-ietf-moq-transport-22 §8.9:
    * "Once a Token Alias has been registered, it cannot be re-registered by the
    *  same endpoint in the Session without first being deleted."
    * §9.1.3 の上限判定は「REGISTER のトークンサイズの総和 − DELETE の総和」で行う。
@@ -107,7 +118,7 @@ export class AuthTokenCache {
       return { status: "duplicate-alias" };
     }
 
-    const entrySize = AUTH_TOKEN_CACHE_ENTRY_OVERHEAD + tokenValue.length;
+    const entrySize = Number(authTokenRegisterEntrySize(tokenValue));
     const attemptedSize = this.registeredSize + entrySize;
     if (attemptedSize > this.maxSize) {
       return { status: "cache-overflow", attemptedSize };
@@ -121,7 +132,7 @@ export class AuthTokenCache {
   /**
    * Token Alias を解決する
    *
-   * draft-ietf-moq-transport-21 §8.9:
+   * draft-ietf-moq-transport-22 §8.9:
    * "The receiver of a message referencing an Alias that is not currently
    *  registered MUST reject the message with UNKNOWN_AUTH_TOKEN_ALIAS."
    *
@@ -139,7 +150,7 @@ export class AuthTokenCache {
   /**
    * Token Alias を退役させる
    *
-   * draft-ietf-moq-transport-21 §8.9 (DELETE):
+   * draft-ietf-moq-transport-22 §8.9 (DELETE):
    * "This Alias and the Token Value it was previously associated with MUST be
    *  retired." 未登録 Alias への DELETE は減算対象が無いため何もしない。
    */
@@ -167,7 +178,7 @@ export class AuthTokenCache {
 /**
  * 受信 SETUP オプションの Authorization Token を 1 件処理する
  *
- * draft-ietf-moq-transport-21 §9.1.4:
+ * draft-ietf-moq-transport-22 §9.1.4:
  * "If a server receives Alias Type DELETE (0x0) or USE_ALIAS (0x2) in a SETUP
  *  message, it MUST close the session with a PROTOCOL_VIOLATION."
  * "If an endpoint receives an AUTHORIZATION TOKEN option in SETUP with Alias
@@ -211,7 +222,7 @@ function processSetupAuthorizationToken(cache: AuthTokenCache, token: Authorizat
 /**
  * 受信 SETUP の AUTHORIZATION TOKEN オプションをすべて処理する
  *
- * draft-ietf-moq-transport-21 §9.1.4: オプション値は §8.9 の Token 構造。
+ * draft-ietf-moq-transport-22 §9.1.4: オプション値は §8.9 の Token 構造。
  *
  * @throws SessionError Token 構造がデコード不能 (KEY_VALUE_FORMATTING_ERROR)、
  *   DELETE / USE_ALIAS (PROTOCOL_VIOLATION)、登録済み Alias の再 REGISTER
@@ -235,11 +246,13 @@ export function processSetupAuthorizationTokens(
 /**
  * 受信メッセージパラメータの Authorization Token を 1 件処理する
  *
- * draft-ietf-moq-transport-21 §8.9:
+ * draft-ietf-moq-transport-22 §8.9:
  * "The receiver of a message attempting to register an Alias which is already
  *  registered MUST close the Session with DUPLICATE_AUTH_TOKEN_ALIAS."
- * "If a registration is attempted which would cause this limit to be exceeded,
- *  the receiver MUST terminate the Session with a AUTH_TOKEN_CACHE_OVERFLOW error."
+ * "If a registration outside of SETUP is attempted that would cause this limit
+ *  to be exceeded, the receiver MUST terminate the Session with an
+ *  AUTH_TOKEN_CACHE_OVERFLOW error.  Registrations in SETUP are handled as
+ *  described in Section 9.1.4."
  *
  * 未登録 Alias の参照は Session Termination になる。セッションを閉じるのは
  * 呼び出し元であり、本関数はセッションを閉じずに戻り値で unknown-alias を伝える。
@@ -296,7 +309,7 @@ function processMessageAuthorizationToken(
 /**
  * 受信メッセージの AUTHORIZATION TOKEN パラメータをすべて処理する
  *
- * draft-ietf-moq-transport-21 §8.9:
+ * draft-ietf-moq-transport-22 §8.9:
  * "An Authorization Token MAY be repeated within a message as long as the
  *  combination of Token Type and Token Value are unique after resolving any
  *  aliases." 複数出現し得るため、順に処理する。
@@ -337,4 +350,97 @@ export function processMessageAuthorizationTokens(
     }
   }
   return { status: "ok" };
+}
+
+/**
+ * SETUP の REGISTER がピアの上限に収まるかを判定する
+ *
+ * draft-ietf-moq-transport-22 §9.1.3 (MAX_AUTH_TOKEN_CACHE_SIZE):
+ * "16 bytes + the size of the Token Value field" が 1 エントリのサイズである。
+ * §8.9 (Authorization Token Compression) は「SETUP 以外での登録が上限を超えると
+ * AUTH_TOKEN_CACHE_OVERFLOW でセッションを終了する」と定めるが、SETUP の登録は
+ * §9.1.4 のとおり失敗させず USE_VALUE として扱う。
+ *
+ * 送信側は、ピアの SETUP を受信して上限が判明した時点で、自 SETUP の REGISTER が
+ * 登録に成功したか (registered) を確定する。後続メッセージへ同じトークンを付与
+ * するときの正規化 (normalizeAuthorizationTokenForSend) に使う。
+ *
+ * @param token - SETUP に載せた Authorization Token (REGISTER 以外は対象外)
+ * @param peerMaxAuthTokenCacheSize - ピアの MAX_AUTH_TOKEN_CACHE_SIZE (未受信時は 0)
+ * @returns 登録成否。SETUP トークンが REGISTER でなければ undefined
+ */
+export function setupTokenRegistration(
+  token: AuthorizationToken | undefined,
+  peerMaxAuthTokenCacheSize: bigint,
+): { tokenAlias: bigint; registered: boolean } | undefined {
+  if (token === undefined || token.aliasType !== AuthorizationTokenAliasType.REGISTER) {
+    return undefined;
+  }
+  const entrySize = AUTH_TOKEN_CACHE_ENTRY_OVERHEAD + token.tokenValue.length;
+  return {
+    tokenAlias: token.tokenAlias,
+    registered: BigInt(entrySize) <= peerMaxAuthTokenCacheSize,
+  };
+}
+
+/**
+ * 後続メッセージへ付与する Authorization Token を正規化する
+ *
+ * draft-ietf-moq-transport-22 §8.9 / §9.1.4:
+ * - 自 SETUP の REGISTER で登録に成功した Alias を REGISTER のまま再送すると、
+ *   ピアは登録済み Alias の再 REGISTER として DUPLICATE_AUTH_TOKEN_ALIAS で
+ *   セッションを閉じる (§8.9)。同じ Alias を参照する USE_ALIAS に変換する
+ * - 登録に失敗した (ピアに登録されていない) Alias を REGISTER / USE_ALIAS で
+ *   参照すると、ピアは未知の Alias として扱う。値が手元にあるため USE_VALUE に
+ *   変換する (§9.1.4 の purge)
+ * - 上記以外 (USE_VALUE、ユーザーが明示的に指定した別 Alias の REGISTER /
+ *   USE_ALIAS) はそのまま送る
+ *
+ * 値を持たない Alias を参照する場合は呼び出し側でローカルエラーにする。ここでは
+ * 自 SETUP の REGISTER の値を使える場合だけ変換し、使えない場合は入力をそのまま
+ * 返す (判断は呼び出し側の責務)。
+ */
+export function normalizeAuthorizationTokenForSend(
+  token: AuthorizationToken,
+  registration: { tokenAlias: bigint; registered: boolean } | undefined,
+  setupToken: AuthorizationToken | undefined,
+): AuthorizationToken {
+  if (
+    registration === undefined ||
+    setupToken === undefined ||
+    setupToken.aliasType !== AuthorizationTokenAliasType.REGISTER
+  ) {
+    return token;
+  }
+  if (token.aliasType === AuthorizationTokenAliasType.USE_VALUE) {
+    return token;
+  }
+  // REGISTER は Alias だけでなく Token Type / Value も SETUP と一致する場合だけ
+  // 正規化する。同じ Alias で別の値を指定するのはアプリの誤用であり、黙って
+  // SETUP の値に置き換えると呼び出し側が指定した値が送られないままになる。
+  const refersToSetupAlias =
+    token.aliasType === AuthorizationTokenAliasType.REGISTER
+      ? token.tokenAlias === registration.tokenAlias &&
+        token.tokenType === setupToken.tokenType &&
+        token.tokenValue.length === setupToken.tokenValue.length &&
+        token.tokenValue.every((byte, index) => byte === setupToken.tokenValue[index])
+      : token.aliasType === AuthorizationTokenAliasType.USE_ALIAS
+        ? token.tokenAlias === registration.tokenAlias
+        : false;
+  if (!refersToSetupAlias) {
+    return token;
+  }
+  if (registration.registered) {
+    // 登録済み Alias の再 REGISTER は禁止のため USE_ALIAS に変換する
+    return {
+      aliasType: AuthorizationTokenAliasType.USE_ALIAS,
+      tokenAlias: registration.tokenAlias,
+    };
+  }
+  // 登録に失敗した Alias は USE_VALUE に変換する (値は自 SETUP のトークンにある)
+  return {
+    aliasType: AuthorizationTokenAliasType.USE_VALUE,
+    tokenType: setupToken.tokenType,
+    tokenValue: setupToken.tokenValue,
+  };
 }

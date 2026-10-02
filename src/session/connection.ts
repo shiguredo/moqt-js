@@ -26,7 +26,11 @@ import {
   type AuthorizationToken,
 } from "../message";
 import { decodeVarint, encodeVarint } from "../varint";
-import { AuthTokenCache, processSetupAuthorizationTokens } from "./authTokenCache";
+import {
+  AuthTokenCache,
+  processSetupAuthorizationTokens,
+  setupTokenRegistration,
+} from "./authTokenCache";
 import { toSessionCloseError } from "./errors";
 import { concatChunks } from "./stream";
 import type { SessionState } from "./publicTypes";
@@ -115,9 +119,14 @@ export interface ConnectionSessionInternal {
   localMaxFilterRanges: number;
   localMaxRequestUpdates: number;
   localMaxAuthTokenCacheSize: number;
-  // draft-ietf-moq-transport-22 §9.1.6 / §9.1.7: ピアが広告した上限
+  // draft-ietf-moq-transport-22 §9.1.6 / §9.1.7 / §9.1.3: ピアが広告した上限
   peerMaxFilterRanges: number;
   peerMaxRequestUpdates: number;
+  peerMaxAuthTokenCacheSize: bigint;
+  // draft-ietf-moq-transport-22 §8.9 / §9.1.4: 自 SETUP の REGISTER の登録成否
+  setupTokenRegistration: { tokenAlias: bigint; registered: boolean } | undefined;
+  // SETUP に載せたトークン (登録失敗時に USE_VALUE へ戻す値の出典)
+  readonly setupAuthorizationToken: AuthorizationToken | undefined;
   receivedAuthTokens: AuthTokenCache;
 
   // draft-ietf-moq-transport-22 §12.2: 受信タイムアウト
@@ -401,6 +410,16 @@ export async function connectionInitialize(
   // draft-ietf-moq-transport-22 §9.1.3:
   // ピアの MAX_AUTH_TOKEN_CACHE_SIZE を取得（デフォルト 0 = Alias 使用禁止）
   const peerMaxAuthTokenCacheSize = getSetupMaxAuthTokenCacheSize(decodedSetup);
+  session.peerMaxAuthTokenCacheSize = BigInt(peerMaxAuthTokenCacheSize);
+  // draft-ietf-moq-transport-22 §8.9 / §9.1.4:
+  // §8.9 の AUTH_TOKEN_CACHE_OVERFLOW は SETUP 以外の登録が対象であり、SETUP の
+  // 登録は §9.1.4 のとおり失敗させず USE_VALUE として扱う。送信側はピアの上限が
+  // 判明したここで、自 SETUP の REGISTER が登録されたかを確定し、後続メッセージ
+  // への付与時に USE_ALIAS / USE_VALUE へ正規化する。
+  session.setupTokenRegistration = setupTokenRegistration(
+    session.setupAuthorizationToken,
+    BigInt(peerMaxAuthTokenCacheSize),
+  );
 
   // draft-ietf-moq-transport-22 §9.1.7:
   // ピアの MAX_REQUEST_UPDATES を取得（デフォルト 0 = 無制限）

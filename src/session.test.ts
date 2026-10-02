@@ -8498,6 +8498,75 @@ test("initialize: SETUP で上限を広告し localMaxFilterRanges と受信バ�
  * へ MUST 付与する。SETUP に載せたかどうかは無関係であり、高レベル API とアプリが
  * 同じトークンを再利用できるよう、initialize() は送ったトークンをセッションに保持する。
  */
+/**
+ * draft-ietf-moq-transport-22 §8.9 / §9.1.3 / §9.1.4:
+ * ピアの SETUP を受信して MAX_AUTH_TOKEN_CACHE_SIZE が判明した時点で、自 SETUP の
+ * REGISTER が登録されたかを確定する。上限に収まれば登録成功、収まらなければ
+ * 登録失敗 (以降は USE_VALUE へ purge する) として保持する。
+ */
+test("initialize: ピアの MAX_AUTH_TOKEN_CACHE_SIZE から SETUP の登録成否を確定する", async () => {
+  const setupToken: AuthorizationToken = {
+    aliasType: AuthorizationTokenAliasType.REGISTER,
+    tokenAlias: 7n,
+    tokenType: 1n,
+    tokenValue: new Uint8Array([0x01, 0x02]),
+  };
+
+  const createSession = async (peerMaxAuthTokenCacheSize: bigint) => {
+    const serverSetup = encodeSetupPayload(
+      createSetup({
+        maxAuthTokenCacheSize: Number(peerMaxAuthTokenCacheSize),
+        moqtImplementation: false,
+      }),
+    );
+    const serverControlWriter = new ControlStreamWriter();
+    const transport = {
+      closed: new Promise<WebTransportCloseInfo>(() => {}),
+      createUnidirectionalStream: async () => new WritableStream<Uint8Array>(),
+      incomingUnidirectionalStreams: new ReadableStream<ReadableStream<Uint8Array>>({
+        start(controller) {
+          controller.enqueue(
+            new ReadableStream<Uint8Array>({
+              start(c) {
+                c.enqueue(
+                  new Uint8Array([
+                    ...encodeVarint(MessageType.SETUP),
+                    ...serverControlWriter.encode(MessageType.SETUP, serverSetup),
+                  ]),
+                );
+              },
+            }),
+          );
+        },
+      }),
+      incomingBidirectionalStreams: new ReadableStream<WebTransportBidirectionalStream>({
+        start() {},
+      }),
+      datagrams: {
+        readable: new ReadableStream<Uint8Array>({ start() {} }),
+        writable: new WritableStream<Uint8Array>(),
+      },
+    } as unknown as WebTransport;
+
+    const session = new SessionImpl(transport, {});
+    await session.initialize({ maxAuthTokenCacheSize: 1024, authorizationToken: setupToken });
+    return session;
+  };
+
+  // 16 + 2 = 18 バイト。上限 18 は登録成功
+  const registered = await createSession(18n);
+  assert.equal(registered.peerMaxAuthTokenCacheSize, 18n);
+  assert.deepEqual(registered.setupTokenRegistration, { tokenAlias: 7n, registered: true });
+
+  // 上限 17 と未広告 (既定 0) は登録失敗
+  const failed = await createSession(17n);
+  assert.deepEqual(failed.setupTokenRegistration, { tokenAlias: 7n, registered: false });
+
+  const unadvertised = await createSession(0n);
+  assert.equal(unadvertised.peerMaxAuthTokenCacheSize, 0n);
+  assert.deepEqual(unadvertised.setupTokenRegistration, { tokenAlias: 7n, registered: false });
+});
+
 test("initialize: SETUP に載せた Authorization Token を setupAuthorizationToken として保持する", async () => {
   const sentChunks: Uint8Array[] = [];
   const clientWritable = new WritableStream<Uint8Array>({
@@ -9705,4 +9774,95 @@ test("受信 PUBLISH: デコード不能な Token は KEY_VALUE_FORMATTING_ERROR
   assert.equal(ctx.errors.length, 1);
   assert.instanceOf(ctx.errors[0], SessionError);
   assert.equal((ctx.errors[0] as SessionError).code, SessionErrorCode.KEY_VALUE_FORMATTING_ERROR);
+});
+
+// ============================================================================
+// 送信側の Authorization Token の正規化
+// draft-ietf-moq-transport-22 §8.9 / §9.1.3 / §9.1.4
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-22 §8.9 / §9.1.4: 自 SETUP の REGISTER で登録に成功した
+ * Alias は USE_ALIAS に、登録に失敗した Alias は USE_VALUE に変換される。
+ */
+test("normalizeAuthorizationTokenForSend: SETUP の登録成否で USE_ALIAS / USE_VALUE に正規化する", () => {
+  const session = createSessionImpl();
+  const setupToken: AuthorizationToken = {
+    aliasType: AuthorizationTokenAliasType.REGISTER,
+    tokenAlias: 3n,
+    tokenType: 1n,
+    tokenValue: new Uint8Array([0x01, 0x02]),
+  };
+  // SETUP のトークンは connectionInitialize が設定する内部状態のため、ここでは直接設定する
+  (session as unknown as { setupAuthToken: AuthorizationToken }).setupAuthToken = setupToken;
+  session.peerMaxAuthTokenCacheSize = 18n;
+
+  // 登録成功 (18 バイト = 上限)
+  session.setupTokenRegistration = { tokenAlias: 3n, registered: true };
+  assert.deepEqual(session.normalizeAuthorizationTokenForSend(setupToken), {
+    aliasType: AuthorizationTokenAliasType.USE_ALIAS,
+    tokenAlias: 3n,
+  });
+
+  // 登録失敗
+  session.setupTokenRegistration = { tokenAlias: 3n, registered: false };
+  assert.deepEqual(session.normalizeAuthorizationTokenForSend(setupToken), {
+    aliasType: AuthorizationTokenAliasType.USE_VALUE,
+    tokenType: 1n,
+    tokenValue: new Uint8Array([0x01, 0x02]),
+  });
+});
+
+/**
+ * draft-ietf-moq-transport-22 §9.1.4:
+ * "the sender MUST handle registration failures of this kind by purging any Token
+ *  Aliases that failed to register based on the peer's MAX_AUTH_TOKEN_CACHE_SIZE
+ *  option in SETUP (or the default value of 0)."
+ * 登録に失敗した SETUP の REGISTER を後続メッセージへ再付与してもエラーにせず、
+ * USE_VALUE に変換して送る (ローカルエラーの対象は SETUP 以外の REGISTER だけ)。
+ */
+test("normalizeAuthorizationTokenForSend: 登録失敗した SETUP の REGISTER は再付与してもエラーにしない", () => {
+  const session = createSessionImpl();
+  const setupToken: AuthorizationToken = {
+    aliasType: AuthorizationTokenAliasType.REGISTER,
+    tokenAlias: 3n,
+    tokenType: 1n,
+    tokenValue: new Uint8Array([0x01, 0x02]),
+  };
+  (session as unknown as { setupAuthToken: AuthorizationToken }).setupAuthToken = setupToken;
+  // ピアが MAX_AUTH_TOKEN_CACHE_SIZE を広告しない (既定 0) ため登録に失敗する
+  session.peerMaxAuthTokenCacheSize = 0n;
+  session.setupTokenRegistration = { tokenAlias: 3n, registered: false };
+
+  assert.deepEqual(session.normalizeAuthorizationTokenForSend(setupToken), {
+    aliasType: AuthorizationTokenAliasType.USE_VALUE,
+    tokenType: 1n,
+    tokenValue: new Uint8Array([0x01, 0x02]),
+  });
+});
+
+/**
+ * draft-ietf-moq-transport-22 §8.9 / §9.1.3: SETUP 以外の REGISTER がピアの
+ * MAX_AUTH_TOKEN_CACHE_SIZE を 1 件で超えると、ピアは
+ * AUTH_TOKEN_CACHE_OVERFLOW でセッションを閉じる。送信前にローカルエラーにする。
+ */
+test("normalizeAuthorizationTokenForSend: ピアの上限を超える REGISTER はローカルエラー", () => {
+  const session = createSessionImpl();
+  const token = {
+    aliasType: AuthorizationTokenAliasType.REGISTER,
+    tokenAlias: 3n,
+    tokenType: 1n,
+    tokenValue: new Uint8Array([0x01, 0x02]),
+  } as const;
+
+  // 16 + 2 = 18 バイト。上限 17 では超過
+  session.peerMaxAuthTokenCacheSize = 17n;
+  assert.throws(
+    () => session.normalizeAuthorizationTokenForSend(token),
+    /exceeds peer MAX_AUTH_TOKEN_CACHE_SIZE 17/,
+  );
+
+  // 上限ちょうどは送れる
+  session.peerMaxAuthTokenCacheSize = 18n;
+  assert.deepEqual(session.normalizeAuthorizationTokenForSend(token), token);
 });

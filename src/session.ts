@@ -84,7 +84,12 @@ import {
   type SessionLifecycleInternal,
 } from "./session/lifecycle";
 import { sessionGetStatistics, type SessionStatistics } from "./session/statistics";
-import { AuthTokenCache } from "./session/authTokenCache";
+import { AuthorizationTokenAliasType } from "./message/authorizationToken";
+import {
+  AuthTokenCache,
+  authTokenRegisterEntrySize,
+  normalizeAuthorizationTokenForSend,
+} from "./session/authTokenCache";
 
 export type { MoqtObject } from "./dataStream";
 export type { SessionStatistics } from "./session/statistics";
@@ -360,6 +365,12 @@ export class SessionImpl implements Session {
   receivedRequestUpdateCounts = new Map<bigint, number>();
   sentGoaway = false;
   goawayTimeoutId: ReturnType<typeof setTimeout> | null = null;
+  // draft-ietf-moq-transport-22 §9.1.3: ピアの MAX_AUTH_TOKEN_CACHE_SIZE
+  // （未受信時は 0 = Alias 使用禁止）
+  peerMaxAuthTokenCacheSize = 0n;
+  // draft-ietf-moq-transport-22 §8.9 / §9.1.3 / §9.1.4: 自 SETUP の REGISTER が
+  // ピアに登録されたか。ピアの SETUP を受信して上限が判明した時点で確定する
+  setupTokenRegistration: { tokenAlias: bigint; registered: boolean } | undefined = undefined;
   // draft-ietf-moq-transport-21 §9.1.7: ピアの MAX_REQUEST_UPDATES（0 = 無制限）
   peerMaxRequestUpdates = 0;
   // draft-ietf-moq-transport-21 §9.1.6: ピアの MAX_FILTER_RANGES（0 = Range Filter 送信禁止）
@@ -681,6 +692,44 @@ export class SessionImpl implements Session {
   // 制御メッセージへ付与するために参照できるようにする
   get setupAuthorizationToken(): AuthorizationToken | undefined {
     return this.setupAuthToken;
+  }
+
+  /**
+   * 後続メッセージへ付与する Authorization Token を正規化する
+   *
+   * draft-ietf-moq-transport-22 §8.9 / §9.1.4: 自 SETUP の REGISTER で登録に
+   * 成功した Alias は USE_ALIAS に、登録に失敗した Alias は USE_VALUE に変換する
+   * (詳細は normalizeAuthorizationTokenForSend の JSDoc)。
+   *
+   * §8.9 の AUTH_TOKEN_CACHE_OVERFLOW は SETUP 以外の登録も対象であり、1 件の
+   * REGISTER だけでピアの MAX_AUTH_TOKEN_CACHE_SIZE (§9.1.3: 16 バイト +
+   * Token Value 長を上限と比較する) を超える場合はピアがセッションを閉じるため、
+   * 送信前にローカルエラーにする。
+   *
+   * @throws Error ピアの上限を 1 件で超える REGISTER を送ろうとした場合
+   */
+  normalizeAuthorizationTokenForSend(token: AuthorizationToken): AuthorizationToken {
+    // §9.1.4 の purge MUST: SETUP の登録に失敗した Alias は USE_VALUE に変換して
+    // 送るため、上限判定より先に正規化する (失敗した SETUP の REGISTER を
+    // そのまま再送すると、ピアが AUTH_TOKEN_CACHE_OVERFLOW で閉じてしまう)。
+    const normalized = normalizeAuthorizationTokenForSend(
+      token,
+      this.setupTokenRegistration,
+      this.setupAuthToken,
+    );
+    if (normalized.aliasType !== AuthorizationTokenAliasType.REGISTER) {
+      // USE_ALIAS / USE_VALUE は登録を伴わないため上限判定は不要
+      return normalized;
+    }
+    // §8.9 / §9.1.3: 登録を伴う REGISTER が 1 件でピアの上限を超えると、ピアは
+    // AUTH_TOKEN_CACHE_OVERFLOW でセッションを閉じるため送信前にローカルエラーにする
+    const entrySize = authTokenRegisterEntrySize(normalized.tokenValue);
+    if (entrySize > this.peerMaxAuthTokenCacheSize) {
+      throw new Error(
+        `AUTHORIZATION_TOKEN registration size ${entrySize} exceeds peer MAX_AUTH_TOKEN_CACHE_SIZE ${this.peerMaxAuthTokenCacheSize}`,
+      );
+    }
+    return normalized;
   }
 
   /**
