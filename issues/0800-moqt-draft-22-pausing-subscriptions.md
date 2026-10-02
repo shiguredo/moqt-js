@@ -1,7 +1,7 @@
 # Forward State を paused subscription として扱う
 
 - Created: 2026-10-02
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-10-03
 - Branch: feature/update-paused-subscription-terminology
 - Polished: 2026-10-02
 
@@ -52,4 +52,26 @@ moqt-js は "Forward State" の語で実装・コメントしており、用語�
 
 ## 解決方法
 
-{未着手}
+### 1. 用語の統一
+
+概念用語 "Forward State" / "Forwarding State" (小文字の "forward state" を含む) を `src/` `devtools/` `docs/HIGH_LEVEL_API.md` `README.md` から無くし、「subscription が paused かどうか」の表現に統一した。値の対応は true (1) = paused でない / false (0) = paused である。
+
+- 内部名 (`forwardState` / `setForwardState` / `onForwardStateChange`) と公開オプション (`forward`)、パラメータ名 (FORWARD) は v22 でも同じため維持した (シンボル名としての出現は残る)
+- `devtools` の表示ラベルは "Forward State:" から "FORWARD:" に変えた (値は `1 (forwarding)` / `0 (not forwarding)` のまま。paused の真偽と値の向きが逆になるため、"Paused:" というラベルにはしなかった)
+- `PublishOptions.forward` / `SubscribeOptions.forward` / `TracksUpdateOptions.forward` / `UpdateOptions.forward` の JSDoc を paused の表現に書き換え、「paused でも PUBLISH_DONE などの制御メッセージは送る」「初期状態は subscription の initiator が設定する」「SUBSCRIBE_TRACKS の REQUEST_UPDATE の FORWARD は prefix に一致する将来の subscription にのみ作用し、既存の subscription は変わらない」を明記した
+
+### 2. 参照の更新
+
+- 観点の節を v22 §3.1.1 (Pausing Subscriptions) / §9.20.18 (FORWARD Parameter) / §11.3.2 (Closing Subgroup Streams) に更新した
+- 一時停止と関係しない記述 (STOP_SENDING による終了、PUBLISH_DONE、SUBSCRIBE_OK の応答規則、state の破棄) は §3.1 (Subscriptions) のままにするか、v22 の §3.1.2 (Subscription State Management) に直した (§3.1 を §3.1.1 に一括で寄せると誤帰属になるため)
+- FORWARD が v21 §9.20.19 から v22 §9.20.18 に繰り上がったことに伴い、同じ行が引いている LARGEST OBJECT (§9.20.18 → §9.20.17) / GROUP ORDER (§9.20.9 → §9.20.8) / LOCATION FILTER (§9.20.10 → §9.20.9) / FILL_PARAMETERS (§9.20.16 → §9.20.15) / INCLUDE_PROPERTIES (§9.20.22 → §9.20.21) / TRACK_NAMESPACE_PREFIX (§9.20.21 → §9.20.20) / EXPIRES (§9.20.17 → §9.20.16) も v22 の番号に直した (同じ行で v21 と v22 の番号が混ざらないようにするため。§9.20 全体の棚卸しは 0803 の担当)
+- 逐語引用は v22 の原文に合わせて直した (「The publisher does not send Objects on a paused subscription」「FILL_PARAMETERS carried while the subscription is paused opens no fill fetch stream.」「Omitting a Subgroup Object because the subscription is paused」「reports whether the subscription is paused at the publisher」など)。v21 の文面をそのまま残した箇所は版表記も v21 のままにした (呼称の更新は 0802 の担当)
+- `c4m` の RFC 8392 / draft-ietf-moq-c4m-01 §3.1.1 参照は本 issue と無関係のため触れていない (誤って変更しないよう確認した)
+
+### 3. 挙動
+
+差分はコメント・devtools の表示・ドキュメントのみで、実行されるコードは変更していない。paused 中に Object / Datagram を送らず PUBLISH_DONE を送ること、FORWARD 省略時は不変であること、値域外は PROTOCOL_VIOLATION になることは既存テストで固定されている (`vp test run` で不変を確認)。
+
+### 4. 検証
+
+`vp check` (1284 files 整形 / 475 files lint・型エラーなし) / `tsc --noEmit` / `vp test run` (198 files / 3569 tests) が通る。`/review-diff-code` を 3 周回し、指摘はすべて反映した。CHANGES.md の `## develop` の `### misc` に [UPDATE] エントリを追加した。
