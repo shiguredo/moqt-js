@@ -9745,6 +9745,34 @@ test("normalizeAuthorizationTokenForSend: SETUP の登録成否で USE_ALIAS / U
 });
 
 /**
+ * draft-ietf-moq-transport-22 §9.1.4:
+ * "the sender MUST handle registration failures of this kind by purging any Token
+ *  Aliases that failed to register based on the peer's MAX_AUTH_TOKEN_CACHE_SIZE
+ *  option in SETUP (or the default value of 0)."
+ * 登録に失敗した SETUP の REGISTER を後続メッセージへ再付与してもエラーにせず、
+ * USE_VALUE に変換して送る (ローカルエラーの対象は SETUP 以外の REGISTER だけ)。
+ */
+test("normalizeAuthorizationTokenForSend: 登録失敗した SETUP の REGISTER は再付与してもエラーにしない", () => {
+  const session = createSessionImpl();
+  const setupToken: AuthorizationToken = {
+    aliasType: AuthorizationTokenAliasType.REGISTER,
+    tokenAlias: 3n,
+    tokenType: 1n,
+    tokenValue: new Uint8Array([0x01, 0x02]),
+  };
+  (session as unknown as { setupAuthToken: AuthorizationToken }).setupAuthToken = setupToken;
+  // ピアが MAX_AUTH_TOKEN_CACHE_SIZE を広告しない (既定 0) ため登録に失敗する
+  session.peerMaxAuthTokenCacheSize = 0n;
+  session.setupTokenRegistration = { tokenAlias: 3n, registered: false };
+
+  assert.deepEqual(session.normalizeAuthorizationTokenForSend(setupToken), {
+    aliasType: AuthorizationTokenAliasType.USE_VALUE,
+    tokenType: 1n,
+    tokenValue: new Uint8Array([0x01, 0x02]),
+  });
+});
+
+/**
  * draft-ietf-moq-transport-22 §8.9 / §9.1.3: SETUP 以外の REGISTER がピアの
  * MAX_AUTH_TOKEN_CACHE_SIZE を 1 件で超えると、ピアは
  * AUTH_TOKEN_CACHE_OVERFLOW でセッションを閉じる。送信前にローカルエラーにする。

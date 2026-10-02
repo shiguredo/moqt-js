@@ -709,19 +709,27 @@ export class SessionImpl implements Session {
    * @throws Error ピアの上限を 1 件で超える REGISTER を送ろうとした場合
    */
   normalizeAuthorizationTokenForSend(token: AuthorizationToken): AuthorizationToken {
-    if (token.aliasType === AuthorizationTokenAliasType.REGISTER) {
-      const entrySize = authTokenRegisterEntrySize(token.tokenValue);
-      if (entrySize > this.peerMaxAuthTokenCacheSize) {
-        throw new Error(
-          `AUTHORIZATION_TOKEN registration size ${entrySize} exceeds peer MAX_AUTH_TOKEN_CACHE_SIZE ${this.peerMaxAuthTokenCacheSize}`,
-        );
-      }
-    }
-    return normalizeAuthorizationTokenForSend(
+    // §9.1.4 の purge MUST: SETUP の登録に失敗した Alias は USE_VALUE に変換して
+    // 送るため、上限判定より先に正規化する (失敗した SETUP の REGISTER を
+    // そのまま再送すると、ピアが AUTH_TOKEN_CACHE_OVERFLOW で閉じてしまう)。
+    const normalized = normalizeAuthorizationTokenForSend(
       token,
       this.setupTokenRegistration,
       this.setupAuthToken,
     );
+    if (normalized.aliasType !== AuthorizationTokenAliasType.REGISTER) {
+      // USE_ALIAS / USE_VALUE は登録を伴わないため上限判定は不要
+      return normalized;
+    }
+    // §8.9 / §9.1.3: 登録を伴う REGISTER が 1 件でピアの上限を超えると、ピアは
+    // AUTH_TOKEN_CACHE_OVERFLOW でセッションを閉じるため送信前にローカルエラーにする
+    const entrySize = authTokenRegisterEntrySize(normalized.tokenValue);
+    if (entrySize > this.peerMaxAuthTokenCacheSize) {
+      throw new Error(
+        `AUTHORIZATION_TOKEN registration size ${entrySize} exceeds peer MAX_AUTH_TOKEN_CACHE_SIZE ${this.peerMaxAuthTokenCacheSize}`,
+      );
+    }
+    return normalized;
   }
 
   /**

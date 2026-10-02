@@ -118,7 +118,7 @@ export class AuthTokenCache {
       return { status: "duplicate-alias" };
     }
 
-    const entrySize = AUTH_TOKEN_CACHE_ENTRY_OVERHEAD + tokenValue.length;
+    const entrySize = Number(authTokenRegisterEntrySize(tokenValue));
     const attemptedSize = this.registeredSize + entrySize;
     if (attemptedSize > this.maxSize) {
       return { status: "cache-overflow", attemptedSize };
@@ -415,9 +415,15 @@ export function normalizeAuthorizationTokenForSend(
   if (token.aliasType === AuthorizationTokenAliasType.USE_VALUE) {
     return token;
   }
+  // REGISTER は Alias だけでなく Token Type / Value も SETUP と一致する場合だけ
+  // 正規化する。同じ Alias で別の値を指定するのはアプリの誤用であり、黙って
+  // SETUP の値に置き換えると呼び出し側が指定した値が送られないままになる。
   const refersToSetupAlias =
     token.aliasType === AuthorizationTokenAliasType.REGISTER
-      ? token.tokenAlias === registration.tokenAlias
+      ? token.tokenAlias === registration.tokenAlias &&
+        token.tokenType === setupToken.tokenType &&
+        token.tokenValue.length === setupToken.tokenValue.length &&
+        token.tokenValue.every((byte, index) => byte === setupToken.tokenValue[index])
       : token.aliasType === AuthorizationTokenAliasType.USE_ALIAS
         ? token.tokenAlias === registration.tokenAlias
         : false;
