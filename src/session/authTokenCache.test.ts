@@ -16,8 +16,10 @@ import { MessageParameterType, SetupOptionType } from "../message/types";
 import { SessionError, SessionErrorCode } from "../error";
 import {
   AuthTokenCache,
+  normalizeAuthorizationTokenForSend,
   processMessageAuthorizationTokens,
   processSetupAuthorizationTokens,
+  setupTokenRegistration,
 } from "./authTokenCache";
 
 /** REGISTER 形式の Token を組み立てる */
@@ -574,4 +576,140 @@ test("processMessageAuthorizationTokens: 未登録 Alias の参照を検出し�
   // 最初の違反である未登録 Alias が報告される。後続を処理すると
   // DUPLICATE_AUTH_TOKEN_ALIAS が送出されて診断コードがパラメータ順に依存する
   assert.deepEqual(result, { status: "unknown-alias", tokenAlias: 99n });
+});
+
+// ============================================================================
+// 送信側の正規化
+// draft-ietf-moq-transport-22 §8.9 (Authorization Token Compression) /
+// §9.1.3 (MAX_AUTH_TOKEN_CACHE_SIZE) / §9.1.4 (AUTHORIZATION TOKEN)
+// ============================================================================
+
+const setupRegister: AuthorizationToken = {
+  aliasType: AuthorizationTokenAliasType.REGISTER,
+  tokenAlias: 5n,
+  tokenType: 1n,
+  tokenValue: new Uint8Array([0x01, 0x02]),
+};
+
+/**
+ * draft-ietf-moq-transport-22 §9.1.3 / §9.1.4:
+ * SETUP の登録は上限を超えてもセッションを失敗させない (§8.9 の
+ * AUTH_TOKEN_CACHE_OVERFLOW は SETUP 以外が対象)。送信側は 16 バイト +
+ * Token Value 長がピアの上限に収まるかで登録成否を判定する。
+ */
+test("setupTokenRegistration: ピアの上限とエントリサイズで登録成否を判定する", () => {
+  // 16 + 2 = 18 バイト。上限 18 は成功、17 は失敗
+  assert.deepEqual(setupTokenRegistration(setupRegister, 18n), {
+    tokenAlias: 5n,
+    registered: true,
+  });
+  assert.deepEqual(setupTokenRegistration(setupRegister, 17n), {
+    tokenAlias: 5n,
+    registered: false,
+  });
+  // 未受信 (既定 0) は常に失敗
+  assert.deepEqual(setupTokenRegistration(setupRegister, 0n), {
+    tokenAlias: 5n,
+    registered: false,
+  });
+  // REGISTER 以外と未指定は対象外
+  assert.isUndefined(
+    setupTokenRegistration(
+      {
+        aliasType: AuthorizationTokenAliasType.USE_VALUE,
+        tokenType: 1n,
+        tokenValue: new Uint8Array(),
+      },
+      100n,
+    ),
+  );
+  assert.isUndefined(setupTokenRegistration(undefined, 100n));
+});
+
+/**
+ * draft-ietf-moq-transport-22 §8.9:
+ * "Once a Token Alias has been registered, it cannot be re-registered by the
+ *  same endpoint in the Session without first being deleted." 登録に成功した
+ * エイリアスの再 REGISTER は DUPLICATE_AUTH_TOKEN_ALIAS になるため USE_ALIAS に
+ * 変換する。
+ */
+test("normalizeAuthorizationTokenForSend: 登録成功した Alias の再 REGISTER は USE_ALIAS になる", () => {
+  const registration = { tokenAlias: 5n, registered: true };
+  const normalized = normalizeAuthorizationTokenForSend(setupRegister, registration, setupRegister);
+
+  assert.deepEqual(normalized, {
+    aliasType: AuthorizationTokenAliasType.USE_ALIAS,
+    tokenAlias: 5n,
+  });
+  // 同じ Alias の USE_ALIAS はそのまま
+  const useAlias: AuthorizationToken = {
+    aliasType: AuthorizationTokenAliasType.USE_ALIAS,
+    tokenAlias: 5n,
+  };
+  assert.deepEqual(
+    normalizeAuthorizationTokenForSend(useAlias, registration, setupRegister),
+    useAlias,
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-22 §9.1.4:
+ * SETUP の登録に失敗した Alias はピアに登録されていないため、値を手元に持つ
+ * 送信側は USE_VALUE に変換する (purge)。
+ */
+test("normalizeAuthorizationTokenForSend: 登録失敗した Alias は USE_VALUE になる", () => {
+  const registration = { tokenAlias: 5n, registered: false };
+  const expected: AuthorizationToken = {
+    aliasType: AuthorizationTokenAliasType.USE_VALUE,
+    tokenType: 1n,
+    tokenValue: new Uint8Array([0x01, 0x02]),
+  };
+
+  assert.deepEqual(
+    normalizeAuthorizationTokenForSend(setupRegister, registration, setupRegister),
+    expected,
+  );
+  assert.deepEqual(
+    normalizeAuthorizationTokenForSend(
+      { aliasType: AuthorizationTokenAliasType.USE_ALIAS, tokenAlias: 5n },
+      registration,
+      setupRegister,
+    ),
+    expected,
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-22 §8.9 / §9.1.4:
+ * 正規化の対象は自 SETUP の Alias だけである。USE_VALUE と別 Alias の
+ * REGISTER / USE_ALIAS はそのまま送る。
+ */
+test("normalizeAuthorizationTokenForSend: 対象外のトークンはそのまま返す", () => {
+  const registration = { tokenAlias: 5n, registered: true };
+  const useValue: AuthorizationToken = {
+    aliasType: AuthorizationTokenAliasType.USE_VALUE,
+    tokenType: 1n,
+    tokenValue: new Uint8Array([0x01]),
+  };
+  const otherRegister: AuthorizationToken = {
+    aliasType: AuthorizationTokenAliasType.REGISTER,
+    tokenAlias: 9n,
+    tokenType: 1n,
+    tokenValue: new Uint8Array([0x01]),
+  };
+
+  assert.deepEqual(
+    normalizeAuthorizationTokenForSend(useValue, registration, setupRegister),
+    useValue,
+  );
+  assert.deepEqual(
+    normalizeAuthorizationTokenForSend(otherRegister, registration, setupRegister),
+    otherRegister,
+  );
+  // SETUP のトークンが REGISTER でない (または未指定) 場合は正規化しない
+  assert.deepEqual(
+    normalizeAuthorizationTokenForSend(setupRegister, undefined, setupRegister),
+    setupRegister,
+  );
+  assert.deepEqual(normalizeAuthorizationTokenForSend(useValue, registration, undefined), useValue);
 });

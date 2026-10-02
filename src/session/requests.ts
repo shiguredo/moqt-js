@@ -60,6 +60,7 @@ import {
   validateRangeFilterSpecs,
   validateTrackNamespaceForSend,
 } from "./params";
+import type { AuthorizationToken } from "../message/authorizationToken";
 import type { PublisherStreamState, SessionInternal } from "./types";
 import type {
   FetchCallbacks,
@@ -79,6 +80,12 @@ import type {
  * SessionImpl は `as unknown as RequestsSessionInternal` で渡す。
  */
 export interface RequestsSessionInternal {
+  /**
+   * 後続メッセージへ付与する Authorization Token を正規化する
+   * (draft-ietf-moq-transport-22 §8.9 / §9.1.4)
+   */
+  normalizeAuthorizationTokenForSend(token: AuthorizationToken): AuthorizationToken;
+
   sessionState: SessionState;
   readonly transport: WebTransport;
 
@@ -208,7 +215,11 @@ export async function requestsPublish(
   // が throw する場合、pendingPublish.set より前で失敗させるため、
   // 構築・encode は Promise 作成より前に行う (subscribe() の
   // buildSubscribeParameters / fetch() の buildFetchParameters と同じ手順)。
-  const parameters = buildPublishParameters(options);
+  // draft-ietf-moq-transport-22 §8.9 / §9.1.4: SETUP の REGISTER の登録成否に応じて
+  // 後続メッセージへ付与するトークンを正規化する (登録成功 → USE_ALIAS、
+  // 登録失敗 → USE_VALUE)。詳細は normalizeAuthorizationTokenForSend の JSDoc。
+  const normalizedOptions = requestsNormalizeAuthorizationToken(session, options);
+  const parameters = buildPublishParameters(normalizedOptions);
   const trackProperties = buildPublishTrackProperties(options, session.grease);
 
   // PUBLISH メッセージを双方向ストリームで送信
@@ -375,7 +386,11 @@ export async function requestsSubscribe(
   // buildSubscribeParameters (LOCATION_FILTER の End Group 2^64-1 超過検証を
   // 含む) が throw する場合、pendingSubscribe.set より前で失敗させるため、
   // 構築は Promise 作成より前に行う (fetch の buildFetchParameters と同じ手順)。
-  const parameters = buildSubscribeParameters(options);
+  // draft-ietf-moq-transport-22 §8.9 / §9.1.4: SETUP の REGISTER の登録成否に応じて
+  // 後続メッセージへ付与するトークンを正規化する (登録成功 → USE_ALIAS、
+  // 登録失敗 → USE_VALUE)。詳細は normalizeAuthorizationTokenForSend の JSDoc。
+  const normalizedOptions = requestsNormalizeAuthorizationToken(session, options);
+  const parameters = buildSubscribeParameters(normalizedOptions);
 
   // SUBSCRIBE_OK の Promise を作成
   const promise = new Promise<Subscriber>((resolve, reject) => {
@@ -512,12 +527,13 @@ export async function requestsFetch(
   // buildFetchParameters (buildRangeFilterParameters / encodeLocationFilter を含む)
   // が throw する場合、pendingFetch.set より前で失敗させるため、
   // 構築は Promise 作成より前に行う。
+  const normalizedOptions = requestsNormalizeAuthorizationToken(session, options);
   const fetchMsg = {
     type: MessageType.FETCH,
     requestId,
     trackNamespace,
     trackName: trackNameBytes,
-    parameters: buildFetchParameters(options),
+    parameters: buildFetchParameters(normalizedOptions),
   };
 
   // FETCH メッセージのペイロードを構築する。
@@ -615,12 +631,13 @@ export async function requestsTrackStatus(
   // draft-ietf-moq-transport-21 Section 6.3
   // draft-ietf-moq-transport-22 Section 9.20.21:
   // INCLUDE_PROPERTIES は buildTrackStatusParameters で載せる (省略時は送らない)。
+  const normalizedOptions = requestsNormalizeAuthorizationToken(session, options);
   const trackStatusMsg = {
     type: MessageType.TRACK_STATUS,
     requestId,
     trackNamespace,
     trackName: trackNameBytes,
-    parameters: buildTrackStatusParameters(options),
+    parameters: buildTrackStatusParameters(normalizedOptions),
   };
 
   let streamInfo: Awaited<ReturnType<typeof requestsSendRequestOnBidiStream>>;
@@ -914,4 +931,24 @@ export function requestsDescribeLocationFilter(
     entries.push(`endObject=${filter.endObject}`);
   }
   return entries.join(", ");
+}
+
+/**
+ * options の Authorization Token を送信用に正規化する
+ *
+ * draft-ietf-moq-transport-22 §8.9 / §9.1.4: SETUP の REGISTER の登録成否に応じて、
+ * 後続メッセージへ付与するトークンを USE_ALIAS (登録成功) / USE_VALUE (登録失敗) に
+ * 正規化する。Authorization Token を運ばない options はそのまま返す。
+ */
+function requestsNormalizeAuthorizationToken<T extends { authorizationToken?: AuthorizationToken }>(
+  session: RequestsSessionInternal,
+  options: T | undefined,
+): T | undefined {
+  if (options?.authorizationToken === undefined) {
+    return options;
+  }
+  return {
+    ...options,
+    authorizationToken: session.normalizeAuthorizationTokenForSend(options.authorizationToken),
+  };
 }

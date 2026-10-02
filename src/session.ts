@@ -84,7 +84,7 @@ import {
   type SessionLifecycleInternal,
 } from "./session/lifecycle";
 import { sessionGetStatistics, type SessionStatistics } from "./session/statistics";
-import { AuthTokenCache } from "./session/authTokenCache";
+import { AuthTokenCache, normalizeAuthorizationTokenForSend } from "./session/authTokenCache";
 
 export type { MoqtObject } from "./dataStream";
 export type { SessionStatistics } from "./session/statistics";
@@ -360,6 +360,12 @@ export class SessionImpl implements Session {
   receivedRequestUpdateCounts = new Map<bigint, number>();
   sentGoaway = false;
   goawayTimeoutId: ReturnType<typeof setTimeout> | null = null;
+  // draft-ietf-moq-transport-22 §9.1.3: ピアの MAX_AUTH_TOKEN_CACHE_SIZE
+  // （未受信時は 0 = Alias 使用禁止）
+  peerMaxAuthTokenCacheSize = 0n;
+  // draft-ietf-moq-transport-22 §8.9 / §9.1.3 / §9.1.4: 自 SETUP の REGISTER が
+  // ピアに登録されたか。ピアの SETUP を受信して上限が判明した時点で確定する
+  setupTokenRegistration: { tokenAlias: bigint; registered: boolean } | undefined = undefined;
   // draft-ietf-moq-transport-21 §9.1.7: ピアの MAX_REQUEST_UPDATES（0 = 無制限）
   peerMaxRequestUpdates = 0;
   // draft-ietf-moq-transport-21 §9.1.6: ピアの MAX_FILTER_RANGES（0 = Range Filter 送信禁止）
@@ -681,6 +687,21 @@ export class SessionImpl implements Session {
   // 制御メッセージへ付与するために参照できるようにする
   get setupAuthorizationToken(): AuthorizationToken | undefined {
     return this.setupAuthToken;
+  }
+
+  /**
+   * 後続メッセージへ付与する Authorization Token を正規化する
+   *
+   * draft-ietf-moq-transport-22 §8.9 / §9.1.4: 自 SETUP の REGISTER で登録に
+   * 成功した Alias は USE_ALIAS に、登録に失敗した Alias は USE_VALUE に変換する
+   * (詳細は normalizeAuthorizationTokenForSend の JSDoc)。
+   */
+  normalizeAuthorizationTokenForSend(token: AuthorizationToken): AuthorizationToken {
+    return normalizeAuthorizationTokenForSend(
+      token,
+      this.setupTokenRegistration,
+      this.setupAuthToken,
+    );
   }
 
   /**

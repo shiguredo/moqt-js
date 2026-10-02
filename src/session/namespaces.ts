@@ -68,6 +68,12 @@ import type {
  * SessionImpl は `as unknown as NamespacesSessionInternal` で渡す。
  */
 export interface NamespacesSessionInternal {
+  /**
+   * 後続メッセージへ付与する Authorization Token を正規化する
+   * (draft-ietf-moq-transport-22 §8.9 / §9.1.4)
+   */
+  normalizeAuthorizationTokenForSend(token: AuthorizationToken): AuthorizationToken;
+
   sessionState: SessionState;
   readonly transport: WebTransport;
   readonly callbacks: {
@@ -211,11 +217,23 @@ export async function namespacesSubscribeTracks(
   try {
     // SUBSCRIBE_TRACKS メッセージを構築
     // draft-ietf-moq-transport-22 §3.6.2: GROUP_ORDER / FORWARD / Range Filters を送信可能
+    // draft-ietf-moq-transport-22 §8.9 / §9.1.4: SETUP の REGISTER の登録成否に
+    // 応じて付与するトークンを正規化する (登録成功 → USE_ALIAS、登録失敗 →
+    // USE_VALUE。詳細は normalizeAuthorizationTokenForSend の JSDoc)
+    const normalizedOptions =
+      options?.authorizationToken !== undefined
+        ? {
+            ...options,
+            authorizationToken: session.normalizeAuthorizationTokenForSend(
+              options.authorizationToken,
+            ),
+          }
+        : options;
     const subscribeTracksMsg = {
       type: MessageType.SUBSCRIBE_TRACKS,
       requestId,
       trackNamespacePrefix,
-      parameters: buildSubscribeTracksParameters(options),
+      parameters: buildSubscribeTracksParameters(normalizedOptions),
     };
 
     // メッセージをエンコードして送信
