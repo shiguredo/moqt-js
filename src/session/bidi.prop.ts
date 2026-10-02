@@ -2,7 +2,7 @@
  * session/bidi.ts の Property-Based Tests
  *
  * draft-ietf-moq-transport-22 §3.1 / §3.2.4 / §3.3.1 / §3.3.2 / §3.4.1 / §6.4.2.2 /
- * §9.1.7 / §9.2 / §9.3 / §9.5 / §9.5.1 / §9.9 / §9.10 / §9.20.1 / §9.20.19 / §10.8 /
+ * §9.1.7 / §9.2 / §9.3 / §9.5 / §9.5.1 / §9.9 / §9.10 / §9.20.1 / §9.20.18 / §10.8 /
  * §10.9 / §12.1 / §12.5 / §13 を対象に、bidi 層の純粋関数と準純粋関数が持つ不変条件を
  * 検証する。
  *
@@ -1372,9 +1372,9 @@ test("bidiHandlePublishStateNotify: subscribe ロールでは許可パラメー�
 /**
  * draft-ietf-moq-transport-21 §9.10:
  * "If a parameter is not present, its value is unchanged."
- * LARGEST_OBJECT だけを運ぶ通知では Forward State と Location Filter を変更しない。
+ * LARGEST_OBJECT だけを運ぶ通知では forwardState と Location Filter を変更しない。
  */
-test("bidiHandlePublishStateNotify: LARGEST_OBJECT だけの通知では Forward State と Location Filter を変えない", () => {
+test("bidiHandlePublishStateNotify: LARGEST_OBJECT だけの通知では forwardState と Location Filter を変えない", () => {
   const initialStateArb = fc.record({
     forward: fc.boolean(),
     filter: fc.option(locationFilterArb, { nil: undefined }),
@@ -1561,7 +1561,7 @@ test("bidiHandlePublishStateNotify: 許可外パラメータでは部分反映�
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.19 (FORWARD Parameter):
+ * draft-ietf-moq-transport-22 §9.20.18 (FORWARD Parameter):
  * 値域は 0 / 1 であり、範囲外は PROTOCOL_VIOLATION になる。検証は購読への書き込みより
  * 前に全パラメータで行うため、同時に載った LARGEST_OBJECT も反映されない。
  * 呼び出し元 (受信ループ) がセッション終了へ変換するため、ここでは throw を確認する。

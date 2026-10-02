@@ -38,7 +38,7 @@ import { bidiReadRequestStreamMessages, FILL_NOT_SUPPORTED_REASON } from "./bidi
  * draft-ietf-moq-transport-21 §3.3.2:
  * role=publish の受信 REQUEST_UPDATE に不正な Range Filter (値域違反) が
  * 含まれる場合、REQUEST_ERROR (INVALID_FILTER) で応答されることを検証する。
- * 検証は forward state 反映より前に配置されるため、状態は変更されない。
+ * 検証は forwardState の反映より前に配置されるため、状態は変更されない。
  */
 test("bidiReadRequestStreamMessages: 不正な Range Filter を含む REQUEST_UPDATE に REQUEST_ERROR (INVALID_FILTER) が応答される (publish ロール)", async () => {
   const ctx = createPublishReadTestContext({});
@@ -66,7 +66,7 @@ test("bidiReadRequestStreamMessages: 不正な Range Filter を含む REQUEST_UP
   ctx.readableController.close();
   await readPromise;
 
-  // REQUEST_ERROR (INVALID_FILTER) が書き込まれ、forward state は変更されない
+  // REQUEST_ERROR (INVALID_FILTER) が書き込まれ、forwardState は変更されない
   const messages = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
   assert.equal(messages.length, 2);
   assert.equal(messages[0].type, MessageType.REQUEST_ERROR);
@@ -77,7 +77,7 @@ test("bidiReadRequestStreamMessages: 不正な Range Filter を含む REQUEST_UP
   assert.equal(publishDone.statusCode, BigInt(PublishDoneStatusCode.UPDATE_FAILED));
   assert.equal(publishDone.streamCount, 0n);
   assert.isUndefined(ctx.closedWithError);
-  // 検証は forward state 反映より前に配置されるため、状態は初期値 (true) のまま
+  // 検証は forwardState の反映より前に配置されるため、状態は初期値 (true) のまま
   assert.isTrue(ctx.publisher.forwardState);
 });
 
@@ -328,8 +328,8 @@ test("bidiReadRequestStreamMessages: 一覧外を含む FILL_PARAMETERS の REQU
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.4.1 / §9.5.1:
- * role=publish の受信 REQUEST_UPDATE に Forward State=1 で fill 範囲が空でない
+ * draft-ietf-moq-transport-22 §3.4.1 / §9.5.1:
+ * role=publish の受信 REQUEST_UPDATE に forwardState が 1 で fill 範囲が空でない
  * FILL_PARAMETERS が含まれる場合、moqt-js は fill fetch ストリームを開けない
  * ため黙殺せず REQUEST_ERROR (NOT_SUPPORTED) で拒否し、PUBLISH_DONE
  * (UPDATE_FAILED) で購読を終了する。
@@ -426,17 +426,17 @@ test("bidiReadRequestStreamMessages: Largest Object 未受信の FILL_PARAMETERS
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.4.1:
- * 「FILL_PARAMETERS carried while Forward State is 0 opens no fill fetch
- *  stream.」Forward State=0 の FILL_PARAMETERS は fill ストリームを開かない
+ * draft-ietf-moq-transport-22 §3.4.1:
+ * 「FILL_PARAMETERS carried while the subscription is paused opens no fill fetch
+ *  stream.」paused (FORWARD=0) の FILL_PARAMETERS は fill ストリームを開かない
  * ため、従来どおり REQUEST_OK で受理される。
  */
-test("bidiReadRequestStreamMessages: Forward State=0 の FILL_PARAMETERS の REQUEST_UPDATE (publish ロール) で REQUEST_OK が応答される", async () => {
+test("bidiReadRequestStreamMessages: forwardState が 0 の FILL_PARAMETERS の REQUEST_UPDATE (publish ロール) で REQUEST_OK が応答される", async () => {
   const ctx = createPublishReadTestContext({});
   // Largest Object を {groupId: 5, objectId: 0} にして fill 範囲を確定させる
-  // (null のままだと範囲が空になり Forward State 分岐を判別できない)
+  // (null のままだと範囲が空になり forwardState 分岐を判別できない)
   await ctx.publisher.sendObject({ groupId: 5, objectId: 0, payload: new Uint8Array() });
-  // Forward State 0 を直接設定する (setForwardState はセッション内部 API)
+  // forwardState を直接 0 にする (setForwardState はセッション内部 API)
   ctx.publisher.setForwardState(false);
 
   const readPromise = bidiReadRequestStreamMessages(
@@ -749,10 +749,10 @@ test("bidiReadRequestStreamMessages: フィルタ自身が空の FILL_PARAMETERS
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.19 / §3.4.1:
+ * draft-ietf-moq-transport-22 §9.20.18 / §3.4.1:
  * 同一 REQUEST_UPDATE で FORWARD=0 と FILL_PARAMETERS を送る場合、更新適用後の
- * Forward State は 0 であり fill fetch ストリームは開かれない。REQUEST_OK で
- * 受理され、Forward State も 0 に反映される。
+ * forwardState は 0 であり fill fetch ストリームは開かれない。REQUEST_OK で
+ * 受理され、forwardState も 0 に反映される。
  */
 test("bidiReadRequestStreamMessages: 同一更新の FORWARD=0 と FILL_PARAMETERS の REQUEST_UPDATE (publish ロール) で REQUEST_OK が応答される", async () => {
   const ctx = createPublishReadTestContext({});
@@ -790,9 +790,9 @@ test("bidiReadRequestStreamMessages: 同一更新の FORWARD=0 と FILL_PARAMETE
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.19 / §3.4.1:
- * 現在 Forward State=0 でも、同一 REQUEST_UPDATE で FORWARD=1 に変えつつ
- * 範囲内の FILL_PARAMETERS を載せた場合は更新適用後の Forward State が 1 に
+ * draft-ietf-moq-transport-22 §9.20.18 / §3.4.1:
+ * 現在 forwardState が 0 でも、同一 REQUEST_UPDATE で FORWARD=1 に変えつつ
+ * 範囲内の FILL_PARAMETERS を載せた場合は更新適用後の forwardState が 1 に
  * なるため fill fetch ストリームが必要になり、REQUEST_ERROR (NOT_SUPPORTED) で
  * 拒否される。
  */
@@ -825,7 +825,7 @@ test("bidiReadRequestStreamMessages: FORWARD=0 から FORWARD=1 に更新しつ�
   ctx.readableController.close();
   await readPromise;
 
-  // 更新後の Forward State は 1 のため拒否される
+  // 更新後の forwardState は 1 のため拒否される
   const messages = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
   assert.equal(messages.length, 2);
   assert.equal(messages[0].type, MessageType.REQUEST_ERROR);
@@ -1026,9 +1026,9 @@ test("bidiReadRequestStreamMessages: 破損 REQUEST_UPDATE (publish ロール) �
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.5 / §9.20.19:
+ * draft-ietf-moq-transport-22 §9.5 / §9.20.18:
  * role=publish の受信 REQUEST_UPDATE が正常な場合、FORWARD が publisher の
- * Forward State に反映され REQUEST_OK が応答されることを検証する (回帰
+ * forwardState に反映され REQUEST_OK が応答されることを検証する (回帰
  * ガード)。IncompleteDataError の変換対象追加で既存処理が変わらないことを
  * 担保する。
  */
@@ -1052,7 +1052,7 @@ test("bidiReadRequestStreamMessages: 正常な REQUEST_UPDATE (publish ロール
   ctx.readableController.close();
   await readPromise;
 
-  // FORWARD=0 が publisher の Forward State に反映され、REQUEST_OK が応答される
+  // FORWARD=0 が publisher の forwardState に反映され、REQUEST_OK が応答される
   assert.equal(ctx.publisher.forwardState, false);
   const messages = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
   assert.equal(messages.length, 1);
@@ -1061,13 +1061,13 @@ test("bidiReadRequestStreamMessages: 正常な REQUEST_UPDATE (publish ロール
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.5 / §9.20.19:
+ * draft-ietf-moq-transport-22 §9.5 / §9.20.18:
  * role=publish の受信 REQUEST_UPDATE で FORWARD が省略された場合、Forward
  * State は変化しないことを検証する (extractForwardState のデフォルト true に
  * よる上書きを防ぐ)。FORWARD=0 を受けて送信を止めたアプリが、パラメータ無し
  * の REQUEST_UPDATE で送信を再開してしまうケースの回帰ガード。
  */
-test("bidiReadRequestStreamMessages: FORWARD 省略の REQUEST_UPDATE (publish ロール) で Forward State は不変", async () => {
+test("bidiReadRequestStreamMessages: FORWARD 省略の REQUEST_UPDATE (publish ロール) で forwardState は不変", async () => {
   const ctx = createPublishReadTestContext({});
   // FORWARD=0 を受けて送信を止めた状態を作る (アプリ側の反映)
   ctx.publisher.setForwardState(false);
@@ -1089,7 +1089,7 @@ test("bidiReadRequestStreamMessages: FORWARD 省略の REQUEST_UPDATE (publish �
   ctx.readableController.close();
   await readPromise;
 
-  // Forward State は false のまま、REQUEST_OK が応答される
+  // forwardState は false のまま、REQUEST_OK が応答される
   assert.equal(ctx.publisher.forwardState, false);
   const messages = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
   assert.equal(messages.length, 1);
@@ -1098,12 +1098,12 @@ test("bidiReadRequestStreamMessages: FORWARD 省略の REQUEST_UPDATE (publish �
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.5 / §9.20.19:
+ * draft-ietf-moq-transport-22 §9.5 / §9.20.18:
  * role=publish の受信 REQUEST_UPDATE で FORWARD=1 が明示された場合、Forward
  * State が true に反映されることを検証する (FORWARD 省略時は不変ではなく
  * 省略以外の本分岐が従来どおり動作することの回帰ガード)。
  */
-test("bidiReadRequestStreamMessages: FORWARD=1 の REQUEST_UPDATE (publish ロール) で Forward State が true に反映される", async () => {
+test("bidiReadRequestStreamMessages: FORWARD=1 の REQUEST_UPDATE (publish ロール) で forwardState が true に反映される", async () => {
   const ctx = createPublishReadTestContext({});
   // FORWARD=0 に変更した状態から、FORWARD=1 の明示で戻ることも検証する
   ctx.publisher.setForwardState(false);
@@ -1125,7 +1125,7 @@ test("bidiReadRequestStreamMessages: FORWARD=1 の REQUEST_UPDATE (publish ロ�
   ctx.readableController.close();
   await readPromise;
 
-  // Forward State が true に反映され、REQUEST_OK が応答される
+  // forwardState が true に反映され、REQUEST_OK が応答される
   assert.equal(ctx.publisher.forwardState, true);
   const messages = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
   assert.equal(messages.length, 1);

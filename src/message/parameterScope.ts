@@ -39,8 +39,8 @@ export const REQUEST_UPDATE_OK_ALLOWED_PARAMS = new Set<number>([
 /**
  * PUBLISH_STATE_NOTIFY の許可パラメータ
  *
- * draft-ietf-moq-transport-21 §9.10 (§9.20.18 LARGEST_OBJECT /
- * §9.20.19 FORWARD / §9.20.10 LOCATION_FILTER の各定義):
+ * draft-ietf-moq-transport-22 §9.10 (§9.20.17 LARGEST_OBJECT /
+ * §9.20.18 FORWARD / §9.20.9 LOCATION_FILTER の各定義):
  * LARGEST_OBJECT (0x09) / FORWARD (0x10) / LOCATION_FILTER (0x21) のみ。
  * 上記以外を受信した場合は §9.20.1 の MUST に従い PROTOCOL_VIOLATION で
  * セッションを閉じる。
@@ -85,17 +85,17 @@ export const NAMESPACE_OK_ALLOWED_PARAMS = new Set<number>([MessageParameterType
 /**
  * subscription 系 REQUEST_UPDATE の許可パラメータ
  *
- * draft-ietf-moq-transport-21 §9.20 の各パラメータ定義が、通常の
+ * draft-ietf-moq-transport-22 §9.20 の各パラメータ定義が、通常の
  * subscription (SUBSCRIBE / PUBLISH / FETCH) を対象とする REQUEST_UPDATE で
  * 出現を許可する型の集合である。
  *
  * - AUTHORIZATION_TOKEN (§9.20.3): REQUEST_UPDATE に出現可能。
- * - OBJECT_DELIVERY_TIMEOUT (§9.20.5) / SUBGROUP_DELIVERY_TIMEOUT (§9.20.4):
+ * - OBJECT_DELIVERY_TIMEOUT (§9.20.4) / SUBGROUP_DELIVERY_TIMEOUT (§9.20.3):
  *   REQUEST_UPDATE に出現可能。
- * - SUBSCRIBER_PRIORITY (§9.20.8): REQUEST_UPDATE (for a subscription or FETCH)。
- * - FORWARD (§9.20.19): REQUEST_UPDATE (for a subscription or a
+ * - SUBSCRIBER_PRIORITY (§9.20.7): REQUEST_UPDATE (for a subscription or FETCH)。
+ * - FORWARD (§9.20.18): REQUEST_UPDATE (for a subscription or a
  *   SUBSCRIBE_TRACKS request)。
- * - LOCATION_FILTER (§9.20.10): REQUEST_UPDATE (for a subscription)。
+ * - LOCATION_FILTER (§9.20.9): REQUEST_UPDATE (for a subscription)。
  * - NEW_GROUP_REQUEST (§9.20.20): REQUEST_UPDATE for a subscription。
  * - FILL_PARAMETERS (§9.20.16): REQUEST_UPDATE (for a subscription)。
  * - Range Filters (§3.3.2): SUBGROUP_FILTER / OBJECTID_FILTER /
@@ -131,11 +131,11 @@ export const REQUEST_UPDATE_ALLOWED_PARAMS = new Set<number>([
 /**
  * namespace 系 REQUEST_UPDATE の許可パラメータ
  *
- * draft-ietf-moq-transport-21 §9.20.21 (TRACK_NAMESPACE_PREFIX Parameter):
+ * draft-ietf-moq-transport-22 §9.20.20 (TRACK_NAMESPACE_PREFIX Parameter):
  * "It MAY appear in REQUEST_UPDATE for a SUBSCRIBE_NAMESPACE or
  *  SUBSCRIBE_TRACKS request."
  * 併せて §9.20.3 (AUTHORIZATION_TOKEN) は REQUEST_UPDATE に出現可能であり、
- * §9.20.19 (FORWARD) は REQUEST_UPDATE (for a SUBSCRIBE_TRACKS request) で
+ * §9.20.18 (FORWARD) は REQUEST_UPDATE (for a SUBSCRIBE_TRACKS request) で
  * 出現可能である。moqt-js は SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS を送信
  * するため、送信経路 (bidiSendNamespaceRequestUpdate) の防御的検証に使う。
  */

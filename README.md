@@ -71,7 +71,7 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
 - Object Datagram 送信
 - Datagram と Subgroup の混在送信
 - Publisher Priority
-- Forward State
+- FORWARD パラメータ (購読の pause / resume)
 - Track Properties
   - OBJECT_DELIVERY_TIMEOUT
   - SUBGROUP_DELIVERY_TIMEOUT
@@ -432,7 +432,7 @@ moqt-js を利用した MOQT の動作確認ツールです。
 - 統計情報の表示 (音声 / 映像 / メッセージ / A/V 同期 / セッション)
 - カタログ情報の表示
 - HTTP/2 / HTTP/3 接続判別表示
-- Forward State の表示
+- FORWARD パラメータ (paused 状態) の表示
 - キーフレームリクエスト (NEW_GROUP_REQUEST)
 - 表示モード (Publisher のみ / Subscriber のみ)
 - 設定を URL クエリパラメータで共有

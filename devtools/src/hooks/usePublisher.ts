@@ -1119,8 +1119,8 @@ export function usePublisher() {
           pub.pubStatus.value = "error";
           pub.pubStatusMessage.value = `Publish error: ${error.message}`;
         },
-        // draft-ietf-moq-transport-21 Section 3.1:
-        // Forward State の変化を追跡する
+        // draft-ietf-moq-transport-22 §3.1.1:
+        // 購読の paused 状態 (FORWARD パラメータ) の変化を追跡する
         onForwardStateChange: (forward) => {
           pub.forwardState.value = forward;
         },
@@ -1213,7 +1213,7 @@ export function usePublisher() {
       channels: number;
       maxCacheDuration: number;
       // 映像を送らず音声だけを配信するか。このときは音声トラックの PUBLISH の確立で
-      // 配信を始めている途中を終え、Forward State の行に音声トラックの値を出す
+      // 配信を始めている途中を終え、paused 状態の行に音声トラックの値を出す
       audioOnly: boolean;
     },
   ): Promise<void> {
@@ -1228,7 +1228,7 @@ export function usePublisher() {
         },
         // 音声には keyframe が無く Audio Config は最初の chunk にしか現れないため、
         // 同じ値を再送しない方針のままだと後から接続した購読者が AAC を復号できない。
-        // Catalog の送り直しと同じく、Forward State が 1 になった時点で
+        // Catalog の送り直しと同じく、購読が paused でなくなった時点で
         // 保持している Audio Config を次の Object に載せ直す
         onForwardStateChange: (forward) => {
           if (options.audioOnly) {
@@ -1363,7 +1363,7 @@ export function usePublisher() {
 
   // Catalog を新しい Group で送り直す
   //
-  // Forward State が 1 に変わったときと、catalog が relay の cache から落ちる前
+  // 購読が paused でなくなったときと、catalog が relay の cache から落ちる前
   // (scheduleCatalogRepublish の予約) に呼ぶ。
   // 同じ Location を 2 度送ると購読側で重複として扱われるため、送り直しは Group を
   // 進めて行う (draft-ietf-moq-msf-01 §6.1)。Object ID は Group の先頭 Object の
@@ -1558,13 +1558,13 @@ export function usePublisher() {
           error: (error) => {
             console.error("Catalog publisher error:", error);
           },
-          // 購読者が付いて Catalog の Forward State が 1 になったら送り直す。
+          // 購読者が付いて Catalog の購読が paused でなくなったら送り直す。
           //
-          // draft-ietf-moq-transport-21 Section 3.1: publisher は Forward State が 0 の
-          // 間 Object を送らない。relay は購読者が居ない間 FORWARD=0 を伝えるため、配信
-          // 開始時に送った Catalog は送信が見送られるか、購読者へ届く前に捨てられる。
-          // 後から視聴を始めた相手にもトラック構成を知らせるため、Catalog の Forward
-          // State が 1 になった時点で新しい Group として送り直す
+          // draft-ietf-moq-transport-22 §3.1.1: publisher は購読が paused の間 Object を
+          // 送らない。relay は購読者が居ない間 FORWARD=0 を伝えるため、配信開始時に送った
+          // Catalog は送信が見送られるか、購読者へ届く前に捨てられる。後から視聴を始めた
+          // 相手にもトラック構成を知らせるため、paused でなくなった時点で新しい Group と
+          // して送り直す
           onForwardStateChange: (forward) => {
             if (forward) {
               void sendCatalogUpdate();
@@ -1606,7 +1606,7 @@ export function usePublisher() {
       // 以前に publish したどの Group ID よりも大きい値から始めなければならない。
       // 映像トラックと同じく Unix epoch ミリ秒を開始値にする。
       pub.catalogGroup.value = Date.now();
-      // Forward State が 1 に変わった時点で送り直すため、送信前に保持値を確定させる
+      // 購読が paused でなくなった時点で送り直すため、送信前に保持値を確定させる
       pub.catalog.value = createdCatalog;
       // Catalog の送信完了は待たず、stopPublishing の done() で待ち合わせる
       void catalogPublisherInstance.sendObject({
@@ -1666,7 +1666,7 @@ export function usePublisher() {
           sampleRate: audioFormat.sampleRate,
           channels: audioFormat.channels,
           maxCacheDuration: maxCacheDurationValue,
-          // 映像を送らないときは、音声トラックが配信の確立と Forward State を表す
+          // 映像を送らないときは、音声トラックが配信の確立と paused 状態を表す
           audioOnly: videoInput === null,
         });
       }

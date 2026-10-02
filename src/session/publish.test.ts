@@ -123,7 +123,7 @@ test("publishSendObjectInternal: 正常範囲の groupId はストリームを�
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.1.1:
+ * draft-ietf-moq-transport-22 §3.1.2 (Subscription State Management):
  * peer のキャンセル (STOP_SENDING / RESET_STREAM) で closed になった publisher は、
  * キャンセル後に実行されたキュー済みの送信で新しい Subgroup ストリームを開かない。
  */
@@ -144,7 +144,7 @@ test("publishSendObjectInternal: closed の publisher は新しいストリー�
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.1.1:
+ * draft-ietf-moq-transport-22 §3.1.2 (Subscription State Management):
  * createUnidirectionalStream の await 中に peer キャンセルで closed になった場合、
  * 開いたストリームを reset し、統計・publisherStreams に登録しない。
  */
@@ -958,14 +958,14 @@ test("publishClosePublisherStream: 詰まった close は短い timeout で打�
 });
 
 // ============================================================================
-// draft-21 適合監査 D-10: 送信関数の forward state 参照
-// draft-ietf-moq-transport-21 §3.1
+// draft-21 適合監査 D-10: 送信関数の forwardState 参照
+// draft-ietf-moq-transport-22 §3.1.1 (Pausing Subscriptions)
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-21 §3.1:
- * "The publisher does not send Objects if the Forward State is 0"
- * 内部送信関数を直接呼んでも Forward State = 0 ではストリームを生成しない。
+ * draft-ietf-moq-transport-22 §3.1.1:
+ * "The publisher does not send Objects on a paused subscription"
+ * 内部送信関数を直接呼んでも forwardState が 0 ではストリームを生成しない。
  */
 test("publishSendObject: forwardState=false ではストリームを生成しない", async () => {
   const { session, unidirectionalStreamCreated } = createSessionForPublish();
@@ -983,8 +983,8 @@ test("publishSendObject: forwardState=false ではストリームを生成しな
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.1:
- * Datagram も Object であるため、Forward State = 0 では送信経路に入らない。
+ * draft-ietf-moq-transport-22 §3.1.1:
+ * Datagram も Object であるため、forwardState が 0 では送信経路に入らない。
  */
 test("publishSendDatagram: forwardState=false では datagram writer を取得しない", () => {
   const { session } = createSessionForPublish();

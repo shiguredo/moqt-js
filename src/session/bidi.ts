@@ -198,10 +198,10 @@ interface PendingRequestUpdate {
   targetRequestId: bigint;
   /**
    * REQUEST_UPDATE 送信時に指定された FORWARD 値。
-   * draft-ietf-moq-transport-21 §9.20.19:
-   * "If the parameter is omitted from REQUEST_UPDATE, the value for the
+   * draft-ietf-moq-transport-22 §9.20.18:
+   * "If the parameter is omitted from REQUEST_UPDATE or PUBLISH_STATE_NOTIFY, the
    *  subscription remains unchanged."
-   * 省略時 (undefined) は REQUEST_OK 受信時に Forward State を更新しない。
+   * 省略時 (undefined) は REQUEST_OK 受信時に forwardState を更新しない。
    *
    * 内部の pending 状態オブジェクトで、省略を明示的に undefined として保持するため
    * `| undefined` を付ける
@@ -993,7 +993,7 @@ export async function bidiReadPublishResponse(
 
       // draft-ietf-moq-transport-21 §9.20.17:
       // PUBLISH_OK に出現できるのは EXPIRES のみであり、FORWARD 等の
-      // Subscription Parameters は運ばれない。Publisher の Forward State は
+      // Subscription Parameters は運ばれない。Publisher の forwardState は
       // PUBLISH 送信時の指定値のままにし、更新は REQUEST_UPDATE 経路で扱う。
       pending.resolve(pending.impl);
 
@@ -1580,7 +1580,7 @@ async function bidiTerminatePublishSubscriptionWithUpdateFailed(
  * publish ロールで peer のキャンセル (STOP_SENDING / RESET_STREAM) を検出した
  * ときの後始末
  *
- * draft-ietf-moq-transport-21 §3.1.1:
+ * draft-ietf-moq-transport-22 §3.1.2:
  * 「The Publisher can remove subscription state as soon as it has received
  *  STOP_SENDING.  It MUST reset any open streams associated with the
  *  SUBSCRIBE.」
@@ -1929,7 +1929,7 @@ async function bidiPreflightRequestUpdate(
  *     許可パラメータ (SUBSCRIBER_PRIORITY / LOCATION_FILTER /
  *     NEW_GROUP_REQUEST / FILL_PARAMETERS / Range Filters 等) は受理する。
  * (5) 受理した FORWARD を受信 PUBLISH から生成された SubscriberImpl の
- *     Forward State に反映し (FORWARD 省略時は不変)、REQUEST_OK を応答する
+ *     forwardState に反映し (FORWARD 省略時は不変)、REQUEST_OK を応答する
  *     (ペイロードは空 parameters / 空 trackProperties)。
  *
  * 応答の書き込み失敗 (writer が閉じている等) は黙殺する。
@@ -2056,7 +2056,7 @@ export async function bidiHandlePublishRequestUpdate(
   // LOCATION_FILTER / FILL_PARAMETERS 内側の一覧外・値違反
   // (ProtocolViolationError) は §9.20.1 / §9.20.16 の MUST に従い
   // PROTOCOL_VIOLATION でセッションを閉じる。検証は状態変更
-  // (setForwardState) より前に配置し、拒否時に Forward State が反映される
+  // (setForwardState) より前に配置し、拒否時に forwardState が反映される
   // 不整合を防ぐ。
   try {
     validateRangeFilterCombination(decoded.parameters);
@@ -2084,11 +2084,11 @@ export async function bidiHandlePublishRequestUpdate(
     throw error;
   }
 
-  // draft-ietf-moq-transport-21 §9.5 / §9.20.19:
-  // "If the parameter is omitted from REQUEST_UPDATE, the value for the
+  // draft-ietf-moq-transport-22 §9.5 / §9.20.18:
+  // "If the parameter is omitted from REQUEST_UPDATE or PUBLISH_STATE_NOTIFY, the
   //  subscription remains unchanged."
   // FORWARD パラメータが存在する場合のみ、受信 PUBLISH から生成された
-  // SubscriberImpl の Forward State に反映する (省略時は不変)。
+  // SubscriberImpl の forwardState に反映する (省略時は不変)。
   const forwardParam = decoded.parameters.find(
     (param) => param.type === MessageParameterType.FORWARD,
   );
@@ -2099,9 +2099,10 @@ export async function bidiHandlePublishRequestUpdate(
     }
   }
 
-  // draft-ietf-moq-transport-21 §3.4.1 (Opening and Closing Fill Fetch Streams):
+  // draft-ietf-moq-transport-22 §3.4.1 (Opening and Closing Fill Fetch Streams):
   // 「A publisher opens a fill fetch stream when it processes a SUBSCRIBE or
-  //  REQUEST_UPDATE that carries FILL_PARAMETERS while Forward State is 1.」
+  //  REQUEST_UPDATE that carries FILL_PARAMETERS while the subscription is not
+  //  paused (see Section 3.1.1).」
   // 受信 PUBLISH 経路で REQUEST_UPDATE を処理するのは moqt-js (subscriber) で
   // あり、fill fetch ストリームを開く主体 (publisher) ではない。この方向では
   // fill ストリームは開かれないため、FILL_PARAMETERS は検証後に受理して
@@ -2335,7 +2336,7 @@ function handleRequestStreamReadError(
     return;
   }
   if (role === "publish") {
-    // draft-ietf-moq-transport-21 §3.1.1:
+    // draft-ietf-moq-transport-22 §3.1.2 (Subscription State Management):
     // ピアの RESET_STREAM で readable がエラー終了した場合、開いている
     // Subgroup データストリームを reset し、購読状態を削除する。
     handlePublishPeerCancel(session, requestId);
@@ -2434,7 +2435,7 @@ export async function bidiReadRequestStreamMessages(
   if (registeredEntry !== undefined) {
     registeredEntry.reader = reader;
   }
-  // draft-ietf-moq-transport-21 §3.1.1:
+  // draft-ietf-moq-transport-22 §3.1.2 (Subscription State Management):
   // publish ロールでピアが STOP_SENDING を送ると当方の送信方向が reset され、
   // writer.closed が reject する。reader.read() では検出できないため、送信方向
   // の終了を監視して開いている Subgroup データストリームを reset する。
@@ -2770,7 +2771,7 @@ async function bidiHandleRequestUpdateMessage(
   // draft-ietf-moq-transport-21 §3.3.2 / §9.20.13-15:
   // 不正な Range Filter は REQUEST_ERROR (INVALID_FILTER) で応答する。
   // 検証は状態変更 (setForwardState) より前に配置し、違反で
-  // REQUEST_ERROR を応答したにも関わらず forward state が反映される
+  // REQUEST_ERROR を応答したにも関わらず forwardState が反映される
   // 不整合を防ぐ。
   // LOCATION_FILTER / FILL_PARAMETERS 内側の値違反
   // (InvalidFilterError) も同一経路で REQUEST_ERROR にする。
@@ -2877,7 +2878,7 @@ async function bidiHandleRequestStreamGoaway(
 /**
  * 受理した REQUEST_UPDATE に REQUEST_OK / REQUEST_ERROR を応答する
  *
- * draft-ietf-moq-transport-21 §9.5 / §9.5.1 / §9.20.18:
+ * draft-ietf-moq-transport-22 §9.5 / §9.5.1 / §9.20.18:
  * 検証を通過した REQUEST_UPDATE について、購読状態への反映と応答送信を行う。
  * - LOCATION_FILTER / FORWARD を購読状態へ反映し、FILL_PARAMETERS が fill fetch
  *   ストリームを必要とする場合は REQUEST_ERROR (NOT_SUPPORTED) で拒否する。
@@ -2915,7 +2916,7 @@ async function respondToPublishRequestUpdate(
     return;
   }
 
-  // draft-ietf-moq-transport-21 §3.4 / §3.4.1 / §9.5 / §9.20.19:
+  // draft-ietf-moq-transport-22 §3.4 / §3.4.1 / §9.5 / §9.20.18:
   // LOCATION_FILTER / FORWARD を購読状態へ反映し、FILL_PARAMETERS が
   // fill fetch ストリームを必要とするかを判定する。moqt-js は
   // fill fetch ストリームを開けないため、必要な場合は
@@ -3024,9 +3025,9 @@ function validateLocationAndFillParameters(parameters: Parameter[]): DecodedLoca
  * - LOCATION_FILTER が存在する場合のみ購読の Location Filter を更新する。
  *   更新後は送信中の Subgroup の次の Object が範囲外になるかを省略として記録する
  *   (markOmittedNextObject)。
- * - FORWARD が存在する場合のみ Forward State を更新する (省略時に
+ * - FORWARD が存在する場合のみ forwardState を更新する (省略時に
  *   extractForwardState がデフォルト true を返すため無条件反映はしない)。
- * - FILL_PARAMETERS を含み Forward State が 1 で fill 範囲が空でない場合、
+ * - FILL_PARAMETERS を含み forwardState が 1 で fill 範囲が空でない場合、
  *   publisher は fill fetch ストリームを開く必要がある。moqt-js は開けない
  *   ため拒否対象として true を返す。
  *
@@ -3094,10 +3095,10 @@ function applyPublishRequestUpdate(
 /**
  * 送信中の Subgroup の次の Object がフィルタ範囲外かを省略として記録する
  *
- * draft-ietf-moq-transport-21 §11.3.2 (Closing Subgroup Streams):
+ * draft-ietf-moq-transport-22 §11.3.2 (Closing Subgroup Streams):
  * "If a sender closes the stream before delivering all such objects to the QUIC
  *  stream, it MUST reset the stream.  This includes, but is not limited to:
- *  ... Omitting a Subgroup Object due to the subscriber's Forward State"
+ *  ... Omitting a Subgroup Object because the subscription is paused"
  * REQUEST_UPDATE / PUBLISH_STATE_NOTIFY で Location Filter を狭めると、送信中の
  * Subgroup で次に送るはずだった Object が範囲外になることがある。アプリが範囲外の
  * Object を送らなければ sendObject の見送りが起きないため、この時点で記録する
@@ -3663,8 +3664,8 @@ export async function bidiSendRequestUpdate(
       resolve,
       reject,
       targetRequestId,
-      // draft-ietf-moq-transport-21 §9.20.19:
-      // REQUEST_OK 受信時に Forward State へ反映するため、送信時の FORWARD
+      // draft-ietf-moq-transport-22 §9.20.18:
+      // REQUEST_OK 受信時に forwardState へ反映するため、送信時の FORWARD
       // 値を保持する (省略時は undefined = 不変)。
       forward: options.forward,
       // draft-ietf-moq-transport-21 §3.3.2:
@@ -3853,9 +3854,9 @@ export async function bidiSendNamespaceRequestUpdate(
     encodeParameterTrackNamespace(createTrackNamespace(options.trackNamespacePrefix)),
   ];
 
-  // FORWARD (0x10) - draft-ietf-moq-transport-21 Section 9.20.19:
+  // FORWARD (0x10) - draft-ietf-moq-transport-22 Section 9.20.18:
   // SUBSCRIBE_TRACKS の REQUEST_UPDATE にのみ許可され、 prefix に一致する
-  // 将来の購読の Forwarding State を指定する (既存購読には影響しない)。
+  // 将来の subscription が paused かどうか (FORWARD パラメータ) を指定する (既存購読には影響しない)。
   // SUBSCRIBE_NAMESPACE 向け REQUEST_UPDATE では許可されないため送らない。
   // 型上は TracksUpdateOptions のみが forward を持つが、実行時に
   // namespace 系へ混入しても黙って落とす (誤送信による仕様違反を防ぐ)。
@@ -3954,7 +3955,7 @@ export async function bidiCancelSubscription(
   rejectPendingRequestUpdates(session, requestId, new Error(REQUEST_UPDATE_STREAM_CLOSED_MESSAGE));
 
   // 購読の終了に伴い fill 関連付けも不要になるため掃除する
-  // (draft-ietf-moq-transport-21 §3.4.1: 購読キャンセル時は fill も終わる)。
+  // (draft-ietf-moq-transport-22 §3.4.1: 購読キャンセル時は fill も終わる)。
   deleteFillTargetsForSubscriber(session, subscriber);
 
   const streamInfo = session.requestStreams.get(requestId);
@@ -3992,7 +3993,7 @@ export async function bidiCancelSubscription(
       // reject する (閉じた writer への操作)。unhandled rejection を避けるため
       // catch で握り潰す。
       void streamInfo.writer.abort("subscription cancelled").catch(() => {});
-      // draft-ietf-moq-transport-21 §3.1:
+      // draft-ietf-moq-transport-22 §3.1:
       // 「The subscriber terminates a subscription ... by sending STOP_SENDING.」
       // WebTransport では readable.cancel() が STOP_SENDING 相当。
       // 読み取りループがロックを保持しているため、保持中の reader 経由で
@@ -4272,7 +4273,7 @@ export function bidiHandlePublishStateNotify(
   const locationFilter =
     locationParam !== undefined ? decodeLocationFilterParameter(locationParam) : undefined;
   const forwardParam = msg.parameters.find((param) => param.type === MessageParameterType.FORWARD);
-  // draft-ietf-moq-transport-21 §9.20.19:
+  // draft-ietf-moq-transport-22 §9.20.18:
   // PUBLISH_STATE_NOTIFY では報告値をそのまま反映する (省略時は不変)。
   // extractForwardState は省略時にデフォルト true を返すため、存在時のみ呼ぶ。
   // 値域検証は内部で行い、範囲外は ProtocolViolationError になる。
@@ -4321,12 +4322,12 @@ export function bidiHandlePublishStateNotify(
  *   parameter ..., if known, in PUBLISH_STATE_NOTIFY so the subscriber can
  *   determine the point in the Track at which the change took effect.」に従い、
  *   送信済み Object がある場合は必ず載せる。
- * - FORWARD (§9.20.19) / LOCATION_FILTER (draft-ietf-moq-transport-22 §9.20.9):
+ * - FORWARD (§9.20.18) / LOCATION_FILTER (draft-ietf-moq-transport-22 §9.20.9):
  *   「A PUBLISH_STATE_NOTIFY
  *   carries the parameters whose values have changed.」に従い、現在値から
  *   変化した場合のみ載せる。変化が無ければ送信しない (重複送信の抑止)。
  *
- * 購読状態 (Forward State / Location Filter) の反映は write 成功後に行う。
+ * 購読状態 (forwardState / Location Filter) の反映は write 成功後に行う。
  * 送信できなかった変更を反映すると、購読者が受け取った値と publisher が
  * 実際に使う値が食い違うためである。
  *
@@ -4354,9 +4355,9 @@ export async function bidiSendPublishStateNotify(
 
   const forward = options.forward;
   let changedForward: boolean | undefined;
-  // draft-ietf-moq-transport-21 §9.20.19:
-  // PUBLISH_STATE_NOTIFY の FORWARD は「reports the Forwarding State now in
-  //  effect at the publisher」であり、省略時は不変である。現在値と同じ値は
+  // draft-ietf-moq-transport-22 §9.20.18:
+  // PUBLISH_STATE_NOTIFY の FORWARD は「reports whether the subscription is
+  //  paused at the publisher」であり、省略時は不変である。現在値と同じ値は
   // 変化していないため載せない。
   if (forward !== undefined && forward !== publisher.forwardState) {
     // 値域は 0 (転送しない) / 1 (転送する) のみであり、範囲外は受信側が
@@ -4651,8 +4652,8 @@ export function bidiHandleRequestUpdateOk(
     }
   }
 
-  // draft-ietf-moq-transport-21 §9.20.19:
-  // "If the parameter is omitted from REQUEST_UPDATE, the value for the
+  // draft-ietf-moq-transport-22 §9.20.18:
+  // "If the parameter is omitted from REQUEST_UPDATE or PUBLISH_STATE_NOTIFY, the
   //  subscription remains unchanged."
   // (§9.20.9 / §3.3.2 も同趣旨の規定を持つ。文言は各反映箇所のコメントを参照。)
   // 自 update() の REQUEST_OK 受信時に、送信時の FORWARD / LOCATION_FILTER /
@@ -4819,7 +4820,7 @@ export function consumeUnmatchedRequestOk(
 /**
  * 購読の fill 関連付けをすべて削除する
  *
- * draft-ietf-moq-transport-21 §3.4.1:
+ * draft-ietf-moq-transport-22 §3.4.1:
  * 購読自体が終わる (unsubscribe / FIN / RESET / セッション終了) と fill fetch
  * ストリームも終わるため、関連付けは不要になる。購読が生きている間の
  * REQUEST_ERROR / GOAWAY では、まだ応答待ちの更新分のみを

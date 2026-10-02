@@ -29,8 +29,8 @@ function decodeWrittenMessages(written: Uint8Array[]): ControlMessage[] {
 }
 
 /**
- * draft-ietf-moq-transport-21 §9.10 / §9.20.18:
- * 購読状態 (Forward State) の変化を通知すると、送信済み Object があるため
+ * draft-ietf-moq-transport-22 §9.10 / §9.20.17:
+ * 購読状態 (forwardState) の変化を通知すると、送信済み Object があるため
  * LARGEST_OBJECT を必ず伴い、変化した FORWARD が載ることを検証する。
  * 通知は購読の双方向ストリーム上に片方向で送られ、応答を待たない。
  */
@@ -48,21 +48,21 @@ test("bidiSendPublishStateNotify: FORWARD の変化を LARGEST_OBJECT 付きで�
   assert.equal(messages[0].type, MessageType.PUBLISH_STATE_NOTIFY);
   const decoded = decodePublishStateNotifyPayload(messages[0].payload);
 
-  // §9.20.18: 既知なら LARGEST_OBJECT を必ず含める
+  // §9.20.17: 既知なら LARGEST_OBJECT を必ず含める
   const largestParam = decoded.parameters.find(
     (param) => param.type === MessageParameterType.LARGEST_OBJECT,
   );
   assert.isDefined(largestParam);
   assert.deepEqual(getParameterLocationValue(largestParam!), { group: 5n, object: 2n });
 
-  // §9.20.19: FORWARD は変化後の値 (0 = 転送しない) を報告する
+  // §9.20.18: FORWARD は変化後の値を報告する (0 は paused、1 は paused でない)
   const forwardParam = decoded.parameters.find(
     (param) => param.type === MessageParameterType.FORWARD,
   );
   assert.isDefined(forwardParam);
   assert.deepEqual([...forwardParam!.value], [0]);
 
-  // 送信できた変更は publisher の Forward State へ反映される
+  // 送信できた変更は publisher の forwardState へ反映される
   assert.isFalse(ctx.publisher.forwardState);
   // 購読者は応答しないため、応答待ちの登録は行わない
   assert.equal(ctx.session.pendingRequestUpdate.size, 0);
@@ -70,7 +70,7 @@ test("bidiSendPublishStateNotify: FORWARD の変化を LARGEST_OBJECT 付きで�
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.18:
+ * draft-ietf-moq-transport-22 §9.20.17:
  * Object を 1 つも送信していない場合、LARGEST_OBJECT は未知であるため
  * 通知に含めない ("If omitted from a message, the sending endpoint has not
  * published or received any Objects in the Track.") ことを検証する。
@@ -168,7 +168,7 @@ test("bidiSendPublishStateNotify: 送信に失敗したら購読状態を反映�
 
   assert.isDefined(rejected);
   assert.isTrue(rejected!.message.includes("write failed"));
-  // 購読者へ届いていない変更は反映しない (Forward State は初期値のまま)
+  // 購読者へ届いていない変更は反映しない (forwardState は初期値のまま)
   assert.isTrue(ctx.publisher.forwardState);
 });
 

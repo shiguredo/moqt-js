@@ -207,7 +207,7 @@ test("SubscriberImpl.update: fire-and-forget 後の RESET_STREAM で unhandled r
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.1:
+ * draft-ietf-moq-transport-22 §3.1:
  * fire-and-forget の update() 後に unsubscribe() しても unhandled rejection に
  * ならず、保留中の更新が掃除されることを検証する。
  */

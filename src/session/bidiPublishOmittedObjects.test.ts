@@ -1,10 +1,10 @@
 /**
  * session/bidi.ts の単体テスト: Location Filter による省略 Object の記録
  *
- * draft-ietf-moq-transport-21 §11.3.2 (Closing Subgroup Streams):
+ * draft-ietf-moq-transport-22 §11.3.2 (Closing Subgroup Streams):
  * "If a sender closes the stream before delivering all such objects to the QUIC
  *  stream, it MUST reset the stream.  This includes, but is not limited to:
- *  ... Omitting a Subgroup Object due to the subscriber's Forward State"
+ *  ... Omitting a Subgroup Object because the subscription is paused"
  * REQUEST_UPDATE (購読者からの範囲変更) と PUBLISH_STATE_NOTIFY (アプリ起点の範囲変更)
  * で Location Filter を狭めたときに、送信中の Subgroup の次の Object が範囲外になるなら、
  * アプリがその Object を送らなくても省略として記録され、その Subgroup は FIN ではなく
@@ -87,7 +87,7 @@ test("bidiReadRequestStreamMessages: 範囲を狭めた REQUEST_UPDATE で Subgr
 });
 
 /**
- * draft-ietf-moq-transport-21 §11.3.2:
+ * draft-ietf-moq-transport-22 §11.3.2:
  * REQUEST_UPDATE で範囲を狭めた後、アプリが範囲外の Object を送ろうとした場合は
  * sendObject の見送りで省略が記録され、その Subgroup は RESET で閉じる
  * (更新時点では次の Object が範囲内だったため、更新時の記録は発生しない)。
@@ -244,7 +244,7 @@ test("bidiSendPublishStateNotify: 次の Object が範囲内なら省略とし�
 });
 
 /**
- * draft-ietf-moq-transport-21 §11.3.2 の RESET の例:
+ * draft-ietf-moq-transport-22 §11.3.2 の RESET の例:
  * Start Location を大きい Location へ動かす REQUEST_UPDATE では、次の Object が
  * Start Location より前になり、省略として記録される。
  */
@@ -261,7 +261,7 @@ test("bidiReadRequestStreamMessages: Start Location を進めると Subgroup の
 });
 
 /**
- * draft-ietf-moq-transport-21 §11.3.2 の RESET の例:
+ * draft-ietf-moq-transport-22 §11.3.2 の RESET の例:
  * End Group を送信中の Subgroup より小さい Group へ動かす REQUEST_UPDATE では、
  * 次の Object が End Group を超え、省略として記録される。
  */

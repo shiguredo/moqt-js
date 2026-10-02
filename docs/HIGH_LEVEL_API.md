@@ -663,13 +663,14 @@ LOC モジュール (`LOC` 名前空間) は次にも対応するが、高レベ
 
 音声にはキーフレームが無く、Chromium の `AudioEncoder` では description が configure 後の
 最初の出力にしか現れない (実装依存であり将来変わり得る)。後着の購読者へ届けるために、
-音声 Publisher の Forward State が 0 から 1 になった時点
+音声 Publisher の購読が paused でなくなった時点
 (draft-ietf-moq-transport-22 §7.6) で保持している `AUDIO_CONFIG` を次の Object に
 1 度だけ載せ直す。
 
-Forward State が 1 のまま購読者が接続した場合は変化が起きないため送り直されず、
-Relay のキャッシュに依存する。購読者がいない間に Relay が Forward State を
-0 に戻すかは裁量である (draft-ietf-moq-transport-21 §7.2)。stop 後に再開した場合は新しい
+paused でないまま購読者が接続した場合は変化が起きないため送り直されず、
+Relay のキャッシュに依存する。購読者がいない間に Relay が購読を paused にするかは
+裁量である (draft-ietf-moq-transport-22 §7.2 Paused Subscription Handling)。
+stop 後に再開した場合は新しい
 セッションとエンコーダになるため、保持していた `AUDIO_CONFIG` は破棄し、新しい
 エンコーダの description を改めて送る。
 
@@ -702,7 +703,7 @@ Publisher Priority は Subgroup 単位で 1 つに決まる
 Group の続きとして同じ Subgroup に載るため、実際に送信される値はキーフレームの
 0 になる。デルタフレームの 128 が載るのは、送信する Subgroup の先頭 Object が
 デルタフレームになるときだけである (キーフレームより先にデルタフレームが届いた
-場合や、Forward State が 0 の間にキーフレームを送らなかった場合)。
+場合や、paused の間にキーフレームを送らなかった場合)。
 
 帯域不足時の動作:
 

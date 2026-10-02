@@ -937,11 +937,11 @@ function getPendingPublisher(session: SessionImpl): PublisherImpl {
 }
 
 /**
- * draft-ietf-moq-transport-21 §3.1 (Subscriptions):
- * "The initiator of the subscription sets the initial Forward State in
- *  either PUBLISH or SUBSCRIBE."
+ * draft-ietf-moq-transport-22 §3.1.1 (Pausing Subscriptions):
+ * "The initiator of the subscription sets the initial state by including the
+ *  FORWARD parameter (Section 9.20.18) in PUBLISH or SUBSCRIBE."
  * publish({ forward: false }) の場合、PUBLISH_OK 受信前の時点で
- * Publisher の Forward State が false になることを検証する。
+ * Publisher の forwardState が false になることを検証する。
  */
 test("publish: forward false 指定時は PUBLISH_OK 受信前の forwardState が false になる", async () => {
   const { session, readableController } = createPublishSession();
@@ -972,9 +972,9 @@ test("publish: forward false 指定時は PUBLISH_OK 受信前の forwardState �
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.1 (Subscriptions):
+ * draft-ietf-moq-transport-22 §3.1.1 (Pausing Subscriptions):
  * publish({ forward: true }) の場合、PUBLISH_OK 受信前の時点で
- * Publisher の Forward State が true になることを検証する (回帰ガード)。
+ * Publisher の forwardState が true になることを検証する (回帰ガード)。
  */
 test("publish: forward true 指定時は PUBLISH_OK 受信前の forwardState が true になる", async () => {
   const { session, readableController } = createPublishSession();
@@ -1005,11 +1005,11 @@ test("publish: forward true 指定時は PUBLISH_OK 受信前の forwardState �
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.19 (FORWARD Parameter):
+ * draft-ietf-moq-transport-22 §9.20.18 (FORWARD Parameter):
  * "If the parameter is omitted from any other message, the default
  *  value is 1."
  * forward を省略した publish() の場合、PUBLISH_OK 受信前の時点で
- * Publisher の Forward State が true になることを検証する (回帰ガード)。
+ * Publisher の forwardState が true になることを検証する (回帰ガード)。
  */
 test("publish: forward 省略時は PUBLISH_OK 受信前の forwardState が true になる", async () => {
   const { session, readableController } = createPublishSession();
@@ -1035,7 +1035,7 @@ test("publish: forward 省略時は PUBLISH_OK 受信前の forwardState が tru
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.17 / §9.20.19 (FORWARD Parameter):
+ * draft-ietf-moq-transport-22 §9.20.16 (EXPIRES) / §9.20.18 (FORWARD Parameter):
  * PUBLISH_OK に出現できるのは EXPIRES のみであり、FORWARD は運ばれない。
  * publish({ forward: false }) の後に FORWARD 省略の PUBLISH_OK を受信した場合、
  * 初期値 false のまま維持され、更新は REQUEST_UPDATE 経路で扱うことを検証する。
@@ -1069,7 +1069,7 @@ test("publish: forward false で開始後に FORWARD 省略の PUBLISH_OK で fo
   readableController.enqueue(writer.encode(MessageType.REQUEST_OK, okPayload));
   readableController.close();
 
-  // PUBLISH_OK では Forward State を上書きせず、初期値 false のまま解決される
+  // PUBLISH_OK では forwardState を上書きせず、初期値 false のまま解決される
   const publisher = await promise;
   assert.isFalse(publisher.forwardState);
   // 発火は初期設定の 1 回のみになる
@@ -1132,7 +1132,7 @@ test("publish: forward false で開始後に FORWARD=0 の PUBLISH_OK でセッ�
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.10 (PUBLISH_STATE_NOTIFY) / §9.20.18:
+ * draft-ietf-moq-transport-22 §9.10 (PUBLISH_STATE_NOTIFY) / §9.20.18:
  * Session.publish() が返す Publisher の notifyStateChange() が、確立した購読の
  * 双方向ストリームへ PUBLISH_STATE_NOTIFY を送信し、送信済み Object がある
  * 場合は LARGEST_OBJECT を必ず伴うことを検証する (公開 API から送信経路までの配線)。
@@ -1154,7 +1154,7 @@ test("publish: notifyStateChange が LARGEST_OBJECT 付きの PUBLISH_STATE_NOTI
 
   // Object を送信して LARGEST_OBJECT を既知にする
   await publisher.sendObject({ groupId: 3, objectId: 4, payload: new Uint8Array([1, 2, 3]) });
-  // 変化した Forward State を購読者へ通知する
+  // 変化した forwardState を購読者へ通知する
   await publisher.notifyStateChange({ forward: false });
 
   // リクエストストリームへ write されたメッセージ列から PUBLISH_STATE_NOTIFY を取り出す
@@ -1175,7 +1175,7 @@ test("publish: notifyStateChange が LARGEST_OBJECT 付きの PUBLISH_STATE_NOTI
   );
   assert.isDefined(forwardParam);
   assert.deepEqual([...forwardParam!.value], [0]);
-  // 送信できた変更は publisher の Forward State へ反映される
+  // 送信できた変更は publisher の forwardState へ反映される
   assert.isFalse(publisher.forwardState);
 
   readableController.close();
@@ -2553,7 +2553,7 @@ test("区切り文字が衝突する別 Track への同一 alias PUBLISH で DUP
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-21 §3.1:
+ * draft-ietf-moq-transport-22 §3.1:
  * 受信 PUBLISH 由来の subscriber について、読み取りループ生存中に
  * unsubscribe() を呼んだ場合、ロック保持者経由で cancel (STOP_SENDING 相当)
  * が到達し、後続の writer.abort() も実行されることを検証する。
@@ -8037,7 +8037,7 @@ test("受信 PUBLISH の相対 LOCATION_FILTER が PUBLISH の LARGEST_OBJECT �
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.18:
+ * draft-ietf-moq-transport-22 §9.20.17:
  * 受信 PUBLISH が LARGEST_OBJECT のみを運ぶ場合 (LOCATION_FILTER なし)、
  * 購読の largestLocation に反映され、フィルタ未指定のため全 Object が配信される。
  */
@@ -8139,7 +8139,8 @@ test("受信 PUBLISH の許可外パラメータでセッションが閉じる",
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.19 / §9.20.9 / §9.20.18 / §3.3.1:
+ * draft-ietf-moq-transport-22 §9.20.17 (LARGEST OBJECT) / §9.20.8 (GROUP ORDER) /
+ * §9.20.18 (FORWARD) / §3.3.1:
  * 受信 PUBLISH に値域外の FORWARD / GROUP_ORDER、End Group 超過の
  * LOCATION_FILTER、Location 構造が不正な LARGEST_OBJECT が含まれる場合、
  * PROTOCOL_VIOLATION でセッションを閉じることを検証する。

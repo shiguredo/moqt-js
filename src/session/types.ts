@@ -83,11 +83,11 @@ export interface PublisherStreamState {
   /**
    * 送信見送り (省略) が発生したか
    *
-   * draft-ietf-moq-transport-21 §11.3.2 (Closing Subgroup Streams):
+   * draft-ietf-moq-transport-22 §11.3.2 (Closing Subgroup Streams):
    * "If a sender closes the stream before delivering all such objects to the QUIC
    *  stream, it MUST reset the stream.  This includes, but is not limited to: ...
-   *  Omitting a Subgroup Object due to the subscriber's Forward State"
-   * 見送りの要因は Forward State 0 と購読の Location Filter の範囲外 (§3.3.1) の 2 つであり、
+   *  Omitting a Subgroup Object because the subscription is paused"
+   * 見送りの要因は subscription が paused であることと購読の Location Filter の範囲外 (§3.3.1) の 2 つであり、
    * どちらも届かない Object を残したまま閉じることになる。範囲を狭める REQUEST_UPDATE /
    * PUBLISH_STATE_NOTIFY を適用した時点で次の Object が範囲外になる場合も記録する。
    * 閉じる時点ではなく、見送りまたは範囲変更が確定した時点で記録する。閉じる時点だけの

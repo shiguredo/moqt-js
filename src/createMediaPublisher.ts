@@ -306,12 +306,12 @@ export interface AudioConfigResolution {
  * (実装依存であり将来変わり得る)、音声にはキーフレームが無いため、配信開始後に
  * 接続した購読者へ届けるには送り直しが要る。
  *
- * 送り直しは Forward State が 0 から 1 になった時点 (購読者の出現を
+ * 送り直しは forwardState が 0 から 1 になった時点 (購読者の出現を
  * draft-ietf-moq-transport-22 §7.6 の REQUEST_UPDATE の FORWARD パラメータで
  * 知った時点) に要求され、保持している値を次の Object に 1 度だけ載せ直す。
  * 載せた時点で要求は解消し、保持値は消さない (消すと次の要求に応えられない)。
- * Forward State が 1 のまま購読者が接続した場合は変化が起きないため送り直されない
- * (購読者が居ない間に relay が Forward State を 0 にするかは §7.2 により relay の
+ * forwardState が 1 のまま購読者が接続した場合は変化が起きないため送り直されない
+ * (購読者が居ない間に relay が forwardState を 0 にするかは §7.2 により relay の
  * 裁量であり、1 のまま維持する relay では 1 人目の購読者でも送り直されない)。
  * 本リポジトリの購読実装 (`createMediaSubscriber`) は同じ description では decoder を
  * 再構成しないため、この再送は自前の購読経路に対して冪等である。
@@ -426,9 +426,9 @@ export class MediaPublisherImpl implements MediaPublisher {
   // 変化したときだけ載せて全 keyframe への重複送出を避ける。
   private lastSentVideoConfig: Uint8Array | null = null;
   // 直前に AUDIO_CONFIG として送った description。同じ値の重複送出を避けつつ、
-  // Forward State が 1 になった時点の送り直しの材料にもする
+  // forwardState が 1 になった時点の送り直しの材料にもする
   private lastSentAudioConfig: Uint8Array | null = null;
-  // Forward State が 0 から 1 になった時点で立てる Audio Config の送り直し要求。
+  // forwardState が 0 から 1 になった時点で立てる Audio Config の送り直し要求。
   // 次の Object に保持値を 1 度だけ載せ直し、載せた時点で解消する
   private audioConfigResendRequested = false;
   private audioPublisher: Publisher | null = null;
@@ -1022,7 +1022,7 @@ export class MediaPublisherImpl implements MediaPublisher {
           error: (error) => this.callbacks.onError?.(error),
           // 音声にはキーフレームが無く Audio Config は最初の chunk にしか現れないため、
           // 同じ値の再送を抑止したままだと後から接続した購読者が AAC を復号できない。
-          // Forward State が 1 になった時点で保持値の送り直しを要求する
+          // forwardState が 1 になった時点で保持値の送り直しを要求する
           // (判断の詳細は resolveAudioConfigToSend の JSDoc を参照)
           onForwardStateChange: (forward) => {
             if (forward) {

@@ -562,9 +562,9 @@ export async function namespacesCloseNamespacePublication(
 /**
  * Namespace / Tracks サブスクリプションの Track Namespace Prefix を更新する
  *
- * draft-ietf-moq-transport-21 §9.5.2 (Updating Namespace Subscriptions):
+ * draft-ietf-moq-transport-22 §9.5.2 (Updating Namespace Subscriptions):
  * REQUEST_UPDATE に TRACK_NAMESPACE_PREFIX パラメータを含めて送信する。
- * Tracks 系では draft-ietf-moq-transport-21 §9.20.19 の FORWARD も送り得る。
+ * Tracks 系では draft-ietf-moq-transport-22 §9.20.18 の FORWARD も送り得る。
  * 送信と応答待ちは bidi.bidiSendNamespaceRequestUpdate が行う。
  * kind が namespace の場合、forward が混入しても送らない。
  */

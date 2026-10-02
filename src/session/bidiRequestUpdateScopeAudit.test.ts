@@ -322,7 +322,7 @@ test("bidiReadRequestStreamMessages: publish 済み Object がある REQUEST_OK 
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.18:
+ * draft-ietf-moq-transport-22 §9.20.17 (LARGEST OBJECT Parameter):
  * "If omitted from a message, the sending endpoint has not published or
  *  received any Objects in the Track."
  * Object 未 publish の Publisher が返す REQUEST_OK には LARGEST_OBJECT を

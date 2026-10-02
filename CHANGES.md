@@ -2345,6 +2345,11 @@
   - 参照は §2.1.1 (Delivery Mode) / §3.2.1 (Fetch では Delivery Mode が適用されない) / §11.4.1.1 (Flags) / §2.1 (Group や Track の中で Subgroup と Datagram を併用できる) に合わせ、DATAGRAM ビット (0x40) の意味も書き直す
   - シンボルとワイヤ形式は変えず、挙動に変更はない (コメントのみの変更)
   - @voluntas
+- [UPDATE] 購読の一時停止の用語を paused subscription に合わせる
+  - draft-ietf-moq-transport-22 §3.1.1 は Forward State という用語を使わず「Established subscription が paused かそうでないか」として記述するため、コメント・devtools の表示・ドキュメントの用語を paused に統一する (内部名 forwardState とパラメータ名 FORWARD は維持)
+  - 参照を v22 §3.1.1 (Pausing Subscriptions) / §9.20.18 (FORWARD Parameter) / §11.3.2 (Closing Subgroup Streams) に更新し、制御メッセージは paused でも送ること、初期状態は subscription の initiator が設定すること、SUBSCRIBE_TRACKS の REQUEST_UPDATE は将来の subscription にのみ作用することを明記する
+  - devtools の表示は Forward State から FORWARD (パラメータ名) に変わる。ライブラリの挙動に変更はない (コメントと表示のみの変更)
+  - @voluntas
 - [ADD] 実リレーへ接続する E2E テストを追加する
   - `secrets.TEST_MOQT_URI` が指す MOQT リレーへ実ブラウザ (Chromium) から接続し、SETUP の交換と正常な切断、Canvas のダミー映像の publish / subscribe、FETCH (絶対開始の Location Filter) を検証する
   - 接続先は環境変数 `TEST_MOQT_URI` で渡す。未設定の環境 (fork からの PR、secret を持たないローカル) ではテストを skip として記録し、暗黙の成功扱いにしない

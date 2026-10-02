@@ -1,11 +1,11 @@
 /**
  * session/publish.ts の単体テスト: Subgroup ストリームの閉じ方 (FIN / RESET)
  *
- * draft-ietf-moq-transport-21 §11.3.2 (Closing Subgroup Streams):
+ * draft-ietf-moq-transport-22 §11.3.2 (Closing Subgroup Streams):
  * "If a sender closes the stream before delivering all such objects to the QUIC
  *  stream, it MUST reset the stream.  This includes, but is not limited to:
- *  ... Omitting a Subgroup Object due to the subscriber's Forward State"
- * 省略 (Forward State 0、または購読の Location Filter の範囲外による見送り) がある
+ *  ... Omitting a Subgroup Object because the subscription is paused"
+ * 省略 (forwardState が 0、または購読の Location Filter の範囲外による見送り) がある
  * Subgroup は RESET、無い Subgroup は FIN で閉じることを、実ストリームの sink で
  * close / abort を区別して検証する。
  * モックは使わず、実 WritableStream と実 Map で検証する。
@@ -116,7 +116,7 @@ test("publishSendObject: 省略した Subgroup は done() で RESET される", 
 /**
  * draft-ietf-moq-transport-21 §3.3.1 / §11.3.2:
  * 購読の Location Filter の範囲外として送らなかった Object がある Subgroup は、
- * Forward State 0 の見送りと同じく省略として記録され、閉じる時に RESET される。
+ * forwardState が 0 の見送りと同じく省略として記録され、閉じる時に RESET される。
  */
 test("publishSendObject: Location Filter の範囲外で見送った Object がある Subgroup は RESET される", async () => {
   const { publisher, records } = createHarness();
@@ -165,7 +165,7 @@ test("publishSendObject: フィルタの範囲内だけを送った Subgroup は
 
 /**
  * Group ID として解釈できない値 (非整数・負値・非有限) では省略を記録しない。
- * Forward State 0 の防御分岐は Group ID の検証より前にこの関数を呼ぶため、
+ * forwardState が 0 の防御分岐は Group ID の検証より前にこの関数を呼ぶため、
  * BigInt 変換で throw しないことが必要になる。
  */
 test("publishMarkStreamOmitted: 非整数・負値の Group ID では記録しない", async () => {
@@ -190,10 +190,10 @@ test("publishMarkStreamOmitted: 非整数・負値の Group ID では記録し�
 });
 
 /**
- * Forward State 0 の見送りは Group ID の検証より前に記録経路へ入るため、
+ * forwardState が 0 の見送りは Group ID の検証より前に記録経路へ入るため、
  * 非整数の Group ID でも throw しない (公開経路から到達する)。
  */
-test("publishSendObject: Forward State 0 で非整数の Group ID を送っても throw しない", async () => {
+test("publishSendObject: forwardState が 0 で非整数の Group ID を送っても throw しない", async () => {
   const { publisher, records, errors } = createHarness();
   await publisher.sendObject({ groupId: 0, objectId: 0, payload: new Uint8Array([1]) });
 

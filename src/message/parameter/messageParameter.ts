@@ -65,7 +65,7 @@ export function validateGroupOrderValue(value: number): void {
 /**
  * FORWARD パラメータの値を検証する
  *
- * draft-ietf-moq-transport-21 Section 9.20.19:
+ * draft-ietf-moq-transport-22 Section 9.20.18:
  * "The allowed values are 0 (don't forward) or 1 (forward).
  *  If an endpoint receives a value outside this range, it MUST close
  *  the session with PROTOCOL_VIOLATION."
@@ -316,9 +316,9 @@ export function decodeMessageParameter(
           `uint8 parameter value is missing: type 0x${paramTypeNumber.toString(16)}`,
         );
       }
-      // draft-ietf-moq-transport-21 §9.20.9 / §9.20.19:
+      // draft-ietf-moq-transport-22 §9.20.18 (FORWARD) / §9.20.8 (GROUP_ORDER):
       // FORWARD (0x10) / GROUP_ORDER (0x22) は受信時に値域 MUST 検証
-      // draft-ietf-moq-transport-21 §9.20.22:
+      // draft-ietf-moq-transport-22 §9.20.21:
       // INCLUDE_PROPERTIES (0x35) も 0/1 以外は PROTOCOL_VIOLATION
       if (paramTypeNumber === 0x10) {
         validateForwardValue(valueByte);

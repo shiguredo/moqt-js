@@ -20,7 +20,7 @@
  * (resolveKeyframeInterval / shouldSendKeyFrame)、Publisher Priority の定数と送信値、
  * Audio Config の再送判断 (resolveAudioConfigToSend) は純関数として切り出しており、
  * 固定値で直接駆動する。
- * Audio Config の再送は Forward State 変化のコールバック登録から
+ * Audio Config の再送は forwardState 変化のコールバック登録から
  * handleAudioEncodedChunk までを、publish 呼び出しを記録する最小セッションを
  * 注入して結合で検証する。
  * encode キューの閾値超過による破棄と droppedFrames の加算、破棄したフレームの
@@ -725,7 +725,7 @@ interface PublisherLifecycleControl extends PublisherLoopControl {
   catalogPublisher: Publisher | null;
   audioPublisher: Publisher | null;
   videoPublisher: Publisher | null;
-  // Forward State が 0 から 1 になった時点で立つ Audio Config の送り直し要求
+  // forwardState が 0 から 1 になった時点で立つ Audio Config の送り直し要求
   audioConfigResendRequested: boolean;
   // 直前に AUDIO_CONFIG として送った description (session を跨いで保持しない)
   lastSentAudioConfig: Uint8Array | null;
@@ -2880,7 +2880,7 @@ test("handleVideoEncodedChunk: description が無い chunk は VIDEO_CONFIG を�
 /**
  * draft-ietf-moq-loc-04 §2.3.3.1 (Audio Config):
  * encoder が返す description (AAC の AudioSpecificConfig) が AUDIO_CONFIG として
- * 送られることを検証する。同じ値の重複送出は避けるが、Forward State が 0 から 1 に
+ * 送られることを検証する。同じ値の重複送出は避けるが、forwardState が 0 から 1 に
  * なった時点の送り直し要求には同じ値でも 1 度だけ応じる。
  */
 function sendAudioChunk(control: PublisherLifecycleControl, description?: Uint8Array): void {
@@ -2967,7 +2967,7 @@ test("handleAudioEncodedChunk: description が無い chunk は AUDIO_CONFIG を�
 
 /**
  * draft-ietf-moq-loc-04 §2.3.3.1 (Audio Config):
- * 後から接続した購読者 (Forward State が 0 から 1 になった時点) のために、
+ * 後から接続した購読者 (forwardState が 0 から 1 になった時点) のために、
  * 保持している Audio Config を次の Object に載せ直す契約を検証する。
  * 音声にはキーフレームが無いため、description の再出現では送り直せない。
  */
@@ -2981,7 +2981,7 @@ test("handleAudioEncodedChunk: 送り直し要求で保持している Audio Con
   const description = new Uint8Array([0x11, 0x90]);
   sendAudioChunk(control, description);
 
-  // Forward State が 1 になった時点で立つ要求を再現する
+  // forwardState が 1 になった時点で立つ要求を再現する
   control.audioConfigResendRequested = true;
   sendAudioChunk(control);
 
@@ -3002,7 +3002,7 @@ test("handleAudioEncodedChunk: 送り直し要求で保持している Audio Con
 });
 
 test("handleAudioEncodedChunk: 保持値が無いまま要求されても次の description で載せる", () => {
-  // Forward State が 1 になった時点で Audio Config をまだ持っていない場合でも、
+  // forwardState が 1 になった時点で Audio Config をまだ持っていない場合でも、
   // 要求を捨てずに次の description で載せられることの検証
   const { control: loopControl } = createLoopTestContext();
   const control = loopControl as unknown as PublisherLifecycleControl;
@@ -3247,7 +3247,7 @@ test("handleVideoEncodedChunk: 送信の同期 throw は onError に 1 回届く
 });
 
 /**
- * Forward State 変化の登録を検証するための制御口
+ * forwardState 変化の登録を検証するための制御口
  *
  * createPublishers() は接続を要する start() からしか呼べないため、publish 呼び出しを
  * 記録する最小セッションを注入して駆動する (モジュール置換は行わない)。
@@ -3261,7 +3261,7 @@ interface PublisherForwardControl extends PublisherLifecycleControl {
  * publish 呼び出しを記録する最小セッション
  *
  * track 名で引く Publisher を返し、渡されたコールバックを記録する。
- * createPublishers() が Forward State 変化のコールバックを音声 Publisher に
+ * createPublishers() が forwardState 変化のコールバックを音声 Publisher に
  * 登録しているかを、実装の内部状態を経由せずに検証できるようにする。
  */
 function createPublishRecordingSession(publishers: Map<string, Publisher>): {
@@ -3290,7 +3290,7 @@ function createPublishRecordingSession(publishers: Map<string, Publisher>): {
   return { session, callbacksByTrack, optionsByTrack };
 }
 
-test("createPublishers: Forward State が 1 になると Audio Config の送り直しを要求する", async () => {
+test("createPublishers: forwardState が 1 になると Audio Config の送り直しを要求する", async () => {
   // 購読者が居ない状態から購読者が接続した場合の結合の検証。
   // createPublishers() が音声 Publisher に onForwardStateChange を登録し、
   // それが handleAudioEncodedChunk の載せ直しに繋がることを確認する
@@ -3317,16 +3317,16 @@ test("createPublishers: Forward State が 1 になると Audio Config の送り�
   assert.equal(catalogSent.length, 1);
   assert.equal(catalogSent[0].objectId, 0);
 
-  // 音声 Publisher に Forward State 変化のコールバックが登録されていること
+  // 音声 Publisher に forwardState 変化のコールバックが登録されていること
   const audioCallbacks = callbacksByTrack.get(audioSettings.trackName);
   assert.isDefined(audioCallbacks);
   assert.isDefined(audioCallbacks?.onForwardStateChange);
 
-  // Forward State 0 (購読者なし) では要求が立たない
+  // forwardState が 0 (購読者なし) では要求が立たない
   audioCallbacks?.onForwardStateChange?.(false);
   assert.isFalse(control.audioConfigResendRequested);
 
-  // Audio Config を送って保持したあと、Forward State 1 で要求が立つ
+  // Audio Config を送って保持したあと、forwardState が 1 で要求が立つ
   const description = new Uint8Array([0x11, 0x90]);
   sendAudioChunk(control, description);
   audioCallbacks?.onForwardStateChange?.(true);
@@ -3340,7 +3340,7 @@ test("createPublishers: Forward State が 1 になると Audio Config の送り�
   );
   assert.isFalse(control.audioConfigResendRequested);
 
-  // 要求の寿命は送信で決まる。Forward State が 0 に戻っても保留中の要求は消さない
+  // 要求の寿命は送信で決まる。forwardState が 0 に戻っても保留中の要求は消さない
   // (消すと、次に 1 になったときの送り直しを取りこぼす)
   audioCallbacks?.onForwardStateChange?.(true);
   audioCallbacks?.onForwardStateChange?.(false);
@@ -3456,7 +3456,7 @@ test("resolveAudioConfigToSend: 空の description は値なしとして扱う",
 });
 
 test("resolveAudioConfigToSend: 送り直し要求で保持している Audio Config を載せ直す", () => {
-  // Forward State が 0 から 1 になった時点 (後着購読者の出現) の要求に、
+  // forwardState が 0 から 1 になった時点 (後着購読者の出現) の要求に、
   // 保持値を 1 Object だけ載せ直して応える
   const description = new Uint8Array([0x11, 0x90]);
   const sent = resolveAudioConfigToSend(null, description, false);
@@ -3479,7 +3479,7 @@ test("resolveAudioConfigToSend: 送り直し要求で保持している Audio Co
 });
 
 test("resolveAudioConfigToSend: 保持値が無いまま要求されたら要求を残す", () => {
-  // 初回の description が現れる前に Forward State が 1 になった場合は載せる値が無いため、
+  // 初回の description が現れる前に forwardState が 1 になった場合は載せる値が無いため、
   // 要求だけを残す (要求を消すと、次に description が現れても送り直しの意図が失われる)
   const pending = resolveAudioConfigToSend(null, undefined, true);
 

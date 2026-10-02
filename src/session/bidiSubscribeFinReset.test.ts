@@ -745,7 +745,7 @@ function setOpenPublisherStream(ctx: ReturnType<typeof createPublishReadTestCont
 }
 
 /**
- * draft-ietf-moq-transport-21 §3.1.1:
+ * draft-ietf-moq-transport-22 §3.1.2:
  * 「The Publisher can remove subscription state as soon as it has received
  *  STOP_SENDING.  It MUST reset any open streams associated with the
  *  SUBSCRIBE.」
@@ -787,7 +787,7 @@ test("bidiReadRequestStreamMessages: publish ロールで STOP_SENDING を検出
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.1.1:
+ * draft-ietf-moq-transport-22 §3.1.2 (Subscription State Management):
  * publish ロールでピアの RESET_STREAM (reader.read() の reject) を検出した
  * ときも、開いている Subgroup データストリームを reset (abort) し、購読状態を
  * 削除して PublisherImpl を closed にする。
@@ -998,7 +998,7 @@ test("bidiReadRequestStreamMessages: GOAWAY 受信後の FIN (subscribe ロー�
  * GOAWAY 受信時点で旧ストリーム上の未応答 REQUEST_UPDATE は失敗として扱い、
  * update() の Promise を reject してエントリを削除することを検証する。
  * GOAWAY 後の読み取り継続中に REQUEST_OK が届いても、エントリ削除済みのため
- * 二重解決しない (Forward State の誤反映も起きない)。
+ * 二重解決しない (forwardState の誤反映も起きない)。
  */
 test("bidiReadRequestStreamMessages: GOAWAY 受信時に応答待ちの REQUEST_UPDATE が reject され二重解決しない", async () => {
   const ctx = createPublishReadTestContext({});
@@ -1006,8 +1006,8 @@ test("bidiReadRequestStreamMessages: GOAWAY 受信時に応答待ちの REQUEST_
   ctx.session.subscribers.set(ctx.requestId, subscriber);
   ctx.session.subscribersByAlias.set(1n, [subscriber]);
 
-  // 遅延 REQUEST_OK による Forward State の誤反映を検出するため、
-  // Forward State を false にしておく (エントリの forward は true)
+  // 遅延 REQUEST_OK による forwardState の誤反映を検出するため、
+  // forwardState を false にしておく (エントリの forward は true)
   subscriber.setForwardState(false);
 
   // GOAWAY 前に送信済みで応答待ちの REQUEST_UPDATE を注入する
@@ -1062,7 +1062,7 @@ test("bidiReadRequestStreamMessages: GOAWAY 受信時に応答待ちの REQUEST_
   assert.equal(ctx.session.pendingRequestUpdate.size, 0);
   // GOAWAY 後の REQUEST_OK はエントリ削除済みのため二重解決しない
   assert.isFalse(resolved);
-  // 遅延 REQUEST_OK による Forward State の誤反映も起きない (false のまま)
+  // 遅延 REQUEST_OK による forwardState の誤反映も起きない (false のまま)
   assert.isFalse(subscriber.forwardState);
   // 遅延 REQUEST_OK は「2 通目の応答」ではないため PROTOCOL_VIOLATION で閉じない
   // (GOAWAY 受信済みの request stream では違反判定を行わない)

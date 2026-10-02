@@ -698,7 +698,7 @@ test("buildSubscribeParameters: 全フィールドの指定が round-trip し、
       if (options.rendezvousTimeout !== undefined) {
         assert.isTrue(types.has(MessageParameterType.RENDEZVOUS_TIMEOUT));
       }
-      // FORWARD は既定値 1 のため false のときだけ送る (§9.20.19)
+      // FORWARD は既定値 1 のため false のときだけ送る (§9.20.18)
       assert.equal(types.has(MessageParameterType.FORWARD), options.forward === false);
       if (options.rangeFilters !== undefined) {
         for (const spec of options.rangeFilters) {
