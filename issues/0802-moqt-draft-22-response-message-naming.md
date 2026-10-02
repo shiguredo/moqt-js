@@ -1,7 +1,7 @@
 # REQUEST_ERROR のリクエスト別別名に追随する
 
 - Created: 2026-10-02
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-10-03
 - Branch: feature/update-response-message-naming
 - Polished: 2026-10-02
 
@@ -40,4 +40,25 @@ draft-ietf-moq-transport-22 §1.5 は REQUEST_OK の別名に加えて、REQUEST
 
 ## 解決方法
 
-{未着手}
+draft-ietf-moq-transport-22 §1.5 の別名と実装の対応を確認し、結果をコードコメントに記録した。挙動の変更はない。
+
+### 1. §1.5 の別名一覧と実装の対応
+
+- `src/message/debug.ts` の冒頭に、§1.5 の別名を列挙した (REQUEST_OK の別名 6 種 / REQUEST_ERROR の別名 8 種)。別名は仕様文書中の呼称であり、ワイヤ上の Message Type は REQUEST_OK (§9.3、0x07) / REQUEST_ERROR (§9.4、0x05) のままである
+- 実装で別名を使うのは、リクエスト種別が判明している検証のコンテキスト名だけである (`src/session/bidi.ts` の PUBLISH_OK / REQUEST_UPDATE_OK / TRACK_STATUS_OK と `src/session/namespaceLoops.ts` の REQUEST_UPDATE_OK / SUBSCRIBE_NAMESPACE_OK / SUBSCRIBE_TRACKS_OK / PUBLISH_NAMESPACE_OK)。応答の種別判定に使う `okType` はワイヤ型 (MessageType) であり、別名ではないことも併記した
+- SUBSCRIBE_OK (§9.7、Type 0x04) と FETCH_OK (§9.12、Type 0x18) は独立したワイヤメッセージであり、REQUEST_OK の別名ではないことを書き分けた
+
+### 2. 表示とエラー文言での扱い
+
+- `src/message/debug.ts` の `getMessageTypeName` はワイヤ名 (MessageType のキー) を返す現状を維持する。別名を使うと同じ Type が経路によって別の名前で表示され、デバッグ表示とワイヤの対応が読み取りにくくなるためである (関数の JSDoc に明記した)
+- REQUEST_ERROR の別名は実行時のエラー文言・表示には使わない。理由は 2 つあり、`RequestError` がリクエスト種別を持たず応答を受け取る経路が名前を決める以上、種別ごとの別名を文言に混ぜても情報が増えないこと、エラーは `errorCode` と `requestLabel` で十分に特定できることである (`src/session/bidi.ts` の `requestLabel` の JSDoc に記録した)
+- `src/session/namespaceLoops.ts` の `namespaceValidateInitialOk` の `contextName` が §1.5 の別名そのものであり、ワイヤ上は REQUEST_OK (Type 0x07) であることを `@param` に書いた
+- `src/message/trackstatus.ts` の TRACK_STATUS_OK の参照を v21 §9.3 から v22 §1.5 に更新した (v21 は §9.3 に併記していた)
+
+### 3. テスト
+
+別名はワイヤ形式に影響しないため、テストの変更は行っていない (issue の設計方針どおり)。
+
+### 4. 検証
+
+`vp check` (1284 files 整形 / 475 files lint・型エラーなし) / `tsc --noEmit` / `vp test run` (198 files / 3569 tests) が通る。`/review-diff-code` を 3 周回し、指摘 (`okType` の混同、別名の所在、実行時の文言に限定する記述) はすべて反映した。CHANGES.md の `## develop` の `### misc` に [UPDATE] エントリを追加した。
