@@ -2376,6 +2376,12 @@
   - Fetch の「Largest Object を含む範囲は完全に配送する」規定は publisher / relay の責務であり、クライアントは FETCH_OK の End Location (§9.12) を信頼する (再クランプしない) ことを `setFetchOkInfo` の JSDoc に記録する
   - 挙動は変えず、コメントのみの変更
   - @voluntas
+- [UPDATE] FETCH_OK の End Location が inclusive であることを明記する
+  - draft-ietf-moq-transport-22 §9.12 は End Location を "The end of the range covered by the FETCH response, inclusive." と定める。`Fetcher.endLocation` と `FetcherImpl` の getter、`validateFetchOkEndLocation` に inclusive の意味 (End == Start は幅 1 の範囲として有効、End < Start は PROTOCOL_VIOLATION) を書く
+  - End == Start が有効であることを固定する単体テストを追加する (End < Start の単体テストと PBT は既存のものを維持)
+  - 併せて `trackProperties` の FETCH_OK の参照を v22 §9.12 に更新する
+  - 挙動は変えず、コメントとテストのみの変更
+  - @voluntas
 - [ADD] 実リレーへ接続する E2E テストを追加する
   - `secrets.TEST_MOQT_URI` が指す MOQT リレーへ実ブラウザ (Chromium) から接続し、SETUP の交換と正常な切断、Canvas のダミー映像の publish / subscribe、FETCH (絶対開始の Location Filter) を検証する
   - 接続先は環境変数 `TEST_MOQT_URI` で渡す。未設定の環境 (fork からの PR、secret を持たないローカル) ではテストを skip として記録し、暗黙の成功扱いにしない

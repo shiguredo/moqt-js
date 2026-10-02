@@ -282,6 +282,21 @@ test("buildFetchParameters: TRACK_PROPERTY_FILTER で throw する", () => {
 // validateFetchOkEndLocation
 // ============================================================================
 
+/**
+ * draft-ietf-moq-transport-22 §9.12 (FETCH_OK):
+ * "The end of the range covered by the FETCH response, inclusive." であるため、
+ * End == Start は幅 1 の範囲として有効である (その Location に Object が無くても
+ * FETCH_OK は正常で、Object が無ければ FETCH_HEADER の後に FIN で閉じる)。
+ */
+test("validateFetchOkEndLocation: End == Start は有効", () => {
+  assert.isUndefined(
+    validateFetchOkEndLocation({ group: 0n, object: 0n }, { group: 0n, object: 0n }),
+  );
+  assert.isUndefined(
+    validateFetchOkEndLocation({ group: 5n, object: 3n }, { group: 5n, object: 3n }),
+  );
+});
+
 test("validateFetchOkEndLocation: End が Start 未満ならエラーメッセージを返す", () => {
   const message = validateFetchOkEndLocation({ group: 2n, object: 0n }, { group: 1n, object: 0n });
   assert.isDefined(message);
