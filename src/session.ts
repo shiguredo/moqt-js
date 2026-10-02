@@ -394,9 +394,11 @@ export class SessionImpl implements Session {
   fetchers = new Map<bigint, FetcherImpl>();
 
   // Subscriber 登録前に到着した Subgroup ストリームをバッファリング
-  // draft-ietf-moq-transport-21 §11.3.1:
-  // "MAY ... choose to buffer it for a brief period to handle reordering with the
-  //  control message that establishes the Track Alias."
+  // draft-ietf-moq-transport-22 §3.1.3.1 (Unknown Track Alias):
+  // "When an endpoint receives a datagram or a new stream with a Track Alias that is
+  //  not yet associated with an Established subscription, it MAY drop the data or
+  //  buffer it briefly to handle reordering with the control message that establishes
+  //  the Track Alias."
   // QUIC ではストリーム間の順序が保証されないため、SUBSCRIBE_OK より先にデータストリームが
   // 到着する可能性があり、それを buffer して reordering を吸収する
   // 上限・タイムアウトは ConnectOptions.pendingSubgroup でユーザーから指定可能
@@ -410,7 +412,7 @@ export class SessionImpl implements Session {
   fetcherReadyCallbacks = new Map<bigint, Array<() => void>>();
 
   // fill 要求元の Request ID から購読への関連付け
-  // draft-ietf-moq-transport-21 §3.4 (Fill Semantics):
+  // draft-ietf-moq-transport-22 §3.4 (Fill Semantics):
   // fill fetch ストリームの FETCH_HEADER が運ぶ Request ID で引く。
   fillFetchTargets = new Map<bigint, bidi.FillFetchTarget>();
 

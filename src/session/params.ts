@@ -594,7 +594,7 @@ export function buildFillParameters(
 /**
  * fill fetch ストリームのデコードに使う Group Order を解決する
  *
- * draft-ietf-moq-transport-21 §3.4 / §9.20.16:
+ * draft-ietf-moq-transport-22 §3.4 / §9.20.16:
  * FILL_PARAMETERS 内の GROUP_ORDER が無ければ subscription の指定、
  * どちらも無ければ Ascending。両省略時に publisher preference を使う規定は
  * あるが、クライアント側は対向の既定値を知り得ないため Ascending に倒す

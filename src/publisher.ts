@@ -222,7 +222,7 @@ export interface Publisher {
    * 返値は Promise だが reject ではなく throw になる)。
    *
    * 購読の Location Filter の範囲外 Object は送信せず、error 通知もなく
-   * 解決済みの Promise<void> を返す (draft-ietf-moq-transport-21 §3.3.1)。
+   * 解決済みの Promise<void> を返す (draft-ietf-moq-transport-22 §3.3.1)。
    *
    * sendObject() で最初に送った Object の Delivery Mode は Subgroup になる
    * (draft-ietf-moq-transport-22 §2.1.1: Original Publisher が最初の送信方法で
@@ -252,7 +252,7 @@ export interface Publisher {
    * END_OF_TRACK / END_OF_GROUP 送信後の呼び出しも error 通知 + throw になる
    * (§11.1.2 の EOT / END_OF_GROUP の定義による解釈)。
    * 購読の Location Filter の範囲外 Datagram は送信せず、何もせず return する
-   * (draft-ietf-moq-transport-21 §3.3.1)。
+   * (draft-ietf-moq-transport-22 §3.3.1)。
    */
   sendDatagram(params: SendDatagramParams): void;
   /**
@@ -348,14 +348,14 @@ export class PublisherImpl implements Publisher {
   // LARGEST_OBJECT として含める。未送信時は null。
   private largestLocation: Location | null = null;
 
-  // draft-ietf-moq-transport-21 §3.3.1 (Location Filters) / §3.4 (Fill Semantics):
+  // draft-ietf-moq-transport-22 §3.3.1 (Location Filters) / §3.4 (Fill Semantics):
   // REQUEST_UPDATE で受信した購読の Location Filter を、受理時点の
   // LARGEST_OBJECT で解決した状態で保持する (相対指定を後から再解決しない。
   // SubscriberImpl.resolveLocationFilter と同じ規則)。
   // 用途は 2 つ。fill 範囲は「FILL_PARAMETERS 内の LOCATION_FILTER、省略時は
   // 購読の Location Filter」で決まるためその評価に使い、送信 Object は
-  // §3.3.1 の publisher MUST「A publisher MUST NOT send subscription-delivered
-  // objects from outside the requested range.」に従い範囲外を送信しない。
+  // §3.3.1 の publisher MUST「A publisher MUST NOT send objects from outside the
+  // requested range.」に従い範囲外を送信しない (subscription-delivered の定義は §3.1)。
   // 未受信時は undefined (フィルタなし = トラック全体)。
   private subscriptionLocationFilter: ResolvedFilter | undefined;
   // draft-ietf-moq-transport-22 §3.3.1 / §9.20.9:
@@ -563,9 +563,10 @@ export class PublisherImpl implements Publisher {
   /**
    * 送信対象の Location が購読の Location Filter の範囲外かどうかを返す
    *
-   * draft-ietf-moq-transport-21 §3.3.1:
-   * 「A publisher MUST NOT send subscription-delivered objects from outside
-   *  the requested range.」
+   * draft-ietf-moq-transport-22 §3.3.1 (Location Filters):
+   * 「A publisher MUST NOT send objects from outside the
+   *  requested range.」
+   * subscription-delivered の定義は §3.1 (Subscriptions) にある。
    * フィルタ未保持 (undefined) は全 Object 通過。groupId / objectId は number の
    * ため、recordLargestLocation と同じ「非整数・負値は対象外」ガードの後で
    * bigint 化する。非整数・負値は既存の送信経路の fail-fast に委ね、
@@ -683,7 +684,7 @@ export class PublisherImpl implements Publisher {
       return Promise.reject(statusViolation);
     }
 
-    // draft-ietf-moq-transport-21 §3.3.1:
+    // draft-ietf-moq-transport-22 §3.3.1:
     // 購読の Location Filter の範囲外 Object は送信しない (paused と
     // 同様に送信も LARGEST_OBJECT の記録もしない。範囲外は正常なフィルタ動作であり
     // error 通知は行わない)。
@@ -786,7 +787,7 @@ export class PublisherImpl implements Publisher {
       throw guard;
     }
 
-    // draft-ietf-moq-transport-21 §3.3.1:
+    // draft-ietf-moq-transport-22 §3.3.1:
     // 購読の Location Filter の範囲外 Datagram は送信しない。
     if (this.isOutsideLocationFilter(params.groupId, params.objectId)) {
       return;

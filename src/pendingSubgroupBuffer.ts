@@ -1,18 +1,21 @@
 /**
  * Pending Subgroup Stream Buffer
  *
- * draft-ietf-moq-transport-21 Section 11.3.1 (Subgroup Header):
+ * draft-ietf-moq-transport-22 §3.1.3.1 (Unknown Track Alias):
  *
- * > If an endpoint receives a subgroup with an unknown Track Alias, it
- * > MAY abandon the stream, or choose to buffer it for a brief period to
- * > handle reordering with the control message that establishes the Track
- * > Alias.  The endpoint MAY withhold stream flow control beyond the
- * > SUBGROUP_HEADER until the Track Alias has been established.  To
- * > prevent deadlocks, endpoints MUST allocate connection flow control to
- * > the control streams before allocating it to any data streams.
+ * > When an endpoint receives a datagram or a new stream with a Track
+ * > Alias that is not yet associated with an Established subscription, it
+ * > MAY drop the data or buffer it briefly to handle reordering with the
+ * > control message that establishes the Track Alias.  For streams, the
+ * > endpoint MAY withhold stream flow control beyond the stream header
+ * > until the Track Alias has been established.  To prevent deadlocks,
+ * > endpoints MUST allocate connection flow control to control streams
+ * > before allocating it to any data streams; otherwise a receiver might
+ * > wait for a control message containing a Track Alias to release flow
+ * > control, while the sender waits for flow control to send the message.
  *
  * Track Alias 未確立の Subgroup ストリームを一時保持するバッファ。
- * "brief period" の上限管理のため per-stream / per-session のバイト上限と
+ * "buffer it briefly" の上限管理のため per-stream / per-session のバイト上限と
  * タイムアウトを備える。各 entry は `notified` Promise を持ち、subscriber 登録 /
  * timeout / overflow / session-close / end-of-stream のいずれかで resolve する。
  */
@@ -30,7 +33,7 @@ export interface PendingSubgroupBufferOptions {
   perStreamMaxBytes: number;
   /** per-session の合計バイト上限。これを超えた最後の entry が overflow-per-session で abandon する */
   perSessionMaxBytes: number;
-  /** "brief period" の上限ミリ秒。経過したら timeout で abandon する */
+  /** "buffer it briefly" の上限ミリ秒。経過したら timeout で abandon する */
   timeoutMs: number;
 }
 
@@ -39,7 +42,7 @@ export interface PendingSubgroupBufferOptions {
  *
  * - perStreamMaxBytes: 1 MiB
  * - perSessionMaxBytes: 16 MiB
- * - timeoutMs: 5000 (draft-ietf-moq-transport-21 §11.3.1 "brief period")
+ * - timeoutMs: 5000 (draft-ietf-moq-transport-22 §3.1.3.1 "buffer it briefly")
  */
 export const DEFAULT_PENDING_SUBGROUP_BUFFER_OPTIONS: PendingSubgroupBufferOptions = {
   perStreamMaxBytes: 1 << 20,
@@ -109,7 +112,7 @@ export class PendingSubgroupBuffer {
 
   /**
    * 新しい pending entry を作成して Map に追加し、timeout を起動する
-   * draft-ietf-moq-transport-21 §11.3.1 "brief period" の上限を timeoutMs で表現する
+   * draft-ietf-moq-transport-22 §3.1.3.1 "buffer it briefly" の上限を timeoutMs で表現する
    */
   add(trackAlias: bigint): PendingSubgroupEntry {
     const entry = new PendingSubgroupEntry(trackAlias);

@@ -2350,6 +2350,12 @@
   - 参照を v22 §3.1.1 (Pausing Subscriptions) / §9.20.18 (FORWARD Parameter) / §11.3.2 (Closing Subgroup Streams) に更新し、制御メッセージは paused でも送ること、初期状態は subscription の initiator が設定すること、SUBSCRIBE_TRACKS の REQUEST_UPDATE は将来の subscription にのみ作用することを明記する
   - devtools の表示は Forward State から FORWARD (パラメータ名) に変わる。ライブラリの挙動に変更はない (コメントと表示のみの変更)
   - @voluntas
+- [UPDATE] Subscription と Fetch の定義・節番号を draft-22 に合わせる
+  - v22 §3.1 で subscription-delivered、§3.2 冒頭で Fetch の既定範囲 (Start Location は {0, 0}、End Location は Largest Object) が定義されたため、コメントと引用の根拠を合わせる
+  - §3.1 の節構成が変わり、v21 §3.1.1 (Subscription State Management) は §3.1.2、v21 §3.1.2 (Track Alias) は §3.1.3 になったため、残っていた参照を直す。unknown Track Alias の引用は新設の §3.1.3.1 の文言に更新する
+  - v22 §3.3.1 の publisher MUST から subscription-delivered が外れ、"A publisher MUST NOT send objects from outside the requested range." になったため引用を直す
+  - 挙動は変えず、コメントのみの変更
+  - @voluntas
 - [ADD] 実リレーへ接続する E2E テストを追加する
   - `secrets.TEST_MOQT_URI` が指す MOQT リレーへ実ブラウザ (Chromium) から接続し、SETUP の交換と正常な切断、Canvas のダミー映像の publish / subscribe、FETCH (絶対開始の Location Filter) を検証する
   - 接続先は環境変数 `TEST_MOQT_URI` で渡す。未設定の環境 (fork からの PR、secret を持たないローカル) ではテストを skip として記録し、暗黙の成功扱いにしない

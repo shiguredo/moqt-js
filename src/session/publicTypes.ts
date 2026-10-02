@@ -14,8 +14,8 @@ import type { PendingSubgroupBufferOptions } from "../pendingSubgroupBuffer";
 
 /**
  * fill fetch の要求内容
- * draft-ietf-moq-transport-21 Section 3.4 (Fill Semantics) /
- * Section 9.20.16 (FILL PARAMETERS Parameter)
+ * draft-ietf-moq-transport-22 Section 3.4 (Fill Semantics) /
+ * Section 9.20.15 (FILL PARAMETERS Parameter)
  *
  * SUBSCRIBE / subscription の REQUEST_UPDATE に FILL_PARAMETERS (0x23) として
  * 載せ、live 手前の範囲を fill fetch ストリームで取得する。内側に載せられる
@@ -450,7 +450,7 @@ export interface SubscribeCallbacks {
   /**
    * fill fetch ストリームが失敗した時のコールバック
    *
-   * draft-ietf-moq-transport-21 §3.4.1 (Opening and Closing Fill Fetch Streams):
+   * draft-ietf-moq-transport-22 §3.4.1 (Opening and Closing Fill Fetch Streams):
    * "Because there is no REQUEST_ERROR associated with a fill fetch stream, the
    *  publisher signals a fill failure by resetting the stream" および
    * "Resetting or cancelling a fill fetch stream, by either endpoint, does not
@@ -603,8 +603,8 @@ export interface SubscribeOptions {
 
   /**
    * fill fetch の要求
-   * draft-ietf-moq-transport-21 Section 3.4 (Fill Semantics) /
-   * Section 9.20.16 (FILL PARAMETERS Parameter)
+   * draft-ietf-moq-transport-22 Section 3.4 (Fill Semantics) /
+   * Section 9.20.15 (FILL PARAMETERS Parameter)
    *
    * FILL_PARAMETERS (0x23) として送信し、live 手前の範囲を fill fetch
    * ストリームで取得する。対向が開いた fill fetch ストリームは購読に紐付けて
@@ -777,8 +777,12 @@ export interface FetchOptions {
    * - { reset: true }: 0x00 (None。フィルタなし。FETCH では省略と等価)
    *
    * 指定しない場合、フィルタなしとして {0, 0} から Largest Object までの
-   * 全オブジェクトを要求する (§9.20.9。Fetch では End Group / End Object を
-   * 省略した場合の終端が Largest Object になる)。
+   * 全オブジェクトを要求する。これは draft-ietf-moq-transport-22 §3.2 (Fetch) の「A FETCH requests
+   * pre-existing Objects from a Track between a Start Location and an End
+   * Location, inclusive.  This range is specified by a Location Filter (see
+   * Section 3.3.1) when present, or defaults to {0, 0} and Largest Object
+   * (Section 3.1.4) respectively.」に対応する (Fetch では End Group /
+   * End Object を省略した場合の終端が Largest Object になる)。
    */
   filter?: LocationFilter;
 

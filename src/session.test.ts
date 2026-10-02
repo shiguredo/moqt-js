@@ -142,7 +142,7 @@ interface TracksWriterSubscriptionEntryView {
 }
 
 /**
- * draft-ietf-moq-transport-21 §3.3.1 (Location Filters):
+ * draft-ietf-moq-transport-22 §3.3.1 (Location Filters):
  * FetchOptions.filter に 3 フィールド (startGroup + startObject + endGroupDelta) の
  * End Group (StartGroup + EndGroupDelta) が 2^64-1 を超える filter を渡すと、
  * 送信前に InvalidFilterError で reject される。パラメータ構築は
@@ -234,7 +234,7 @@ test("fetch: 削除指定の rangeFilters で throw する", async () => {
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.3.1 (Location Filters):
+ * draft-ietf-moq-transport-22 §3.3.1 (Location Filters):
  * 3 フィールド (startGroup + startObject + endGroupDelta) の End Group
  * (StartGroup + EndGroupDelta) が 2^64-1 を超える filter を subscribe() に
  * 渡すと、送信前に InvalidFilterError で reject される。Message Parameters
@@ -1465,7 +1465,7 @@ test("subscribeTracks: 外側と fill 内側で同じ SetID でも Ranges を合
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.4:
+ * draft-ietf-moq-transport-22 §3.4:
  * SUBSCRIBE 送信に失敗した場合は fill 関連付けと保留中の SUBSCRIBE が残らない
  * ことを検証する (送信失敗時の掃除)。
  */
@@ -2392,7 +2392,7 @@ test("受信 PUBLISH の PUBLISH_OK 書き込み失敗 (session) で通知なく
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.1.2:
+ * draft-ietf-moq-transport-22 §3.1.3 (Track Alias):
  * PUBLISH_OK 失敗で掃除された後は、別 Track への同一 Track Alias の後続
  * PUBLISH が DUPLICATE_TRACK_ALIAS で誤検出されないことを検証する。
  */
@@ -2455,11 +2455,11 @@ test("PUBLISH_OK 失敗後の同一 alias 再利用で DUPLICATE_TRACK_ALIAS に
 
 // ============================================================================
 // 受信 PUBLISH の Track Alias 重複判定 (Full Track Name の比較キー)
-// draft-ietf-moq-transport-21 §2.4.1 / §3.1.2
+// draft-ietf-moq-transport-22 §2.4.1 / §3.1.3 (Track Alias)
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-21 §3.1 / §3.1.2:
+ * draft-ietf-moq-transport-22 §3.1 / §3.1.3 (Track Alias):
  * 同一 Track への複数 PUBLISH は許容されるため、同一 Track に同一 Track Alias を
  * 使う 2 件目の PUBLISH を DUPLICATE_TRACK_ALIAS として拒否しない。
  * 受信 PUBLISH の重複判定と SubscriberImpl.getFullTrackNameKey が同じ比較キーを
@@ -2501,7 +2501,7 @@ test("同一 Track への複数 PUBLISH で DUPLICATE_TRACK_ALIAS にならな�
 });
 
 /**
- * draft-ietf-moq-transport-21 §2.4.1 / §3.1.2:
+ * draft-ietf-moq-transport-22 §2.4.1 / §3.1.3 (Track Alias):
  * namespace ["live"] + trackName "track/x" と namespace ["live","track"] +
  * trackName "x" は "/" 連結では同じ "live/track/x" になっていた別 Track である。
  * 別 Track に同一 Track Alias が使われた場合は DUPLICATE_TRACK_ALIAS で閉じる。
@@ -3229,7 +3229,7 @@ test("受信 PUBLISH ストリーム上の GOAWAY 受信後の source なしエ�
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.9 / §3.1:
+ * draft-ietf-moq-transport-22 §9.9 / §3.1:
  * 正常な PUBLISH_DONE (TRACK_ENDED) の処理が変わらないことを検証する回帰
  * ガード。handleEnd が state を closed にした時点でループ条件 (while の state
  * ガード) が偽になり、後続の読み取り (= ピア FIN 経路) 自体に入らない。よって
@@ -6327,7 +6327,7 @@ test("Fetch データストリーム: Object 完成後の FIN は正常終了し
 
 // ============================================================================
 // fill fetch ストリームの受信テスト
-// draft-ietf-moq-transport-21 §3.4 (Fill Semantics)
+// draft-ietf-moq-transport-22 §3.4 (Fill Semantics)
 // ============================================================================
 
 /**
@@ -6354,7 +6354,7 @@ function createFillFetchStreamContext(options: { dataStreamMaxBufferBytes?: numb
 }
 
 /**
- * draft-ietf-moq-transport-21 §3.4:
+ * draft-ietf-moq-transport-22 §3.4:
  * SUBSCRIBE の Request ID を運ぶ fill fetch ストリーム (初期 fill) が、
  * 購読に紐付けて受信できることを検証する。FIN は fill 完了であり、
  * 関連付けが消え、購読自体は継続する。
@@ -6407,7 +6407,7 @@ test("fill fetch ストリーム: 初期 fill (SUBSCRIBE Request ID) が購読�
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.4:
+ * draft-ietf-moq-transport-22 §3.4:
  * REQUEST_UPDATE の Request ID を運ぶ fill fetch ストリーム (後続 fill) が、
  * 応答済み (pending なし) でも購読に紐付けて受信できることを検証する。
  */
@@ -7026,11 +7026,11 @@ test("データストリーム: 完成した Object の処理後にタイムア�
 
 // ============================================================================
 // 統計の受信経路別区分のテスト
-// draft-ietf-moq-transport-21 §3.4 (Fill Semantics)
+// draft-ietf-moq-transport-22 §3.4 (Fill Semantics)
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-21 §3.4 (Fill Semantics):
+ * draft-ietf-moq-transport-22 §3.4 (Fill Semantics):
  * "An object delivered on the fill fetch stream is *fill-delivered*."
  * fill-delivered は通常 FETCH とも subscription-delivered とも別経路であるため、
  * 統計も fill 側の区分に計上し、fetch 側 / subscribe 側には計上しない。
@@ -7094,7 +7094,7 @@ test("統計: 通常 FETCH のオブジェクトは fetch 側に計上し fill �
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.4 (Fill Semantics):
+ * draft-ietf-moq-transport-22 §3.4 (Fill Semantics):
  * "When the fill range overlaps the subscription's Location filter, an object
  *  can be both fill-delivered and subscription-delivered."
  * 重なった範囲のオブジェクトは publisher が fill fetch ストリームと
@@ -7151,7 +7151,7 @@ test("統計: fill と subscription の両経路で届いたオブジェクト�
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.4.1 (Opening and Closing Fill Fetch Streams):
+ * draft-ietf-moq-transport-22 §3.4.1 (Opening and Closing Fill Fetch Streams):
  * "Because there is no REQUEST_ERROR associated with a fill fetch stream, the
  *  publisher signals a fill failure by resetting the stream" および
  * "Resetting or cancelling a fill fetch stream, by either endpoint, does not
@@ -7217,7 +7217,7 @@ test("fill fetch ストリーム: reset で fillError に通知し購読は継�
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.4.1:
+ * draft-ietf-moq-transport-22 §3.4.1:
  * "The publisher signals that the fill is complete by closing the stream with
  *  a FIN once all objects in the fill range have been delivered."
  * FIN は fill の正常完了であるため fillError を通知しない。
