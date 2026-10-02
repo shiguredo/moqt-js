@@ -4060,7 +4060,7 @@ export async function bidiCancelFetch(
   const streamInfo = session.requestStreams.get(requestId);
   if (streamInfo) {
     try {
-      // draft-ietf-moq-transport-21 §3.2.1:
+      // draft-ietf-moq-transport-22 §3.2.4:
       // 「It MUST send STOP_SENDING for the bidi request stream.」
       // WebTransport では readable.cancel() が STOP_SENDING 相当。
       // 読み取りループがロックを保持している場合は保持中の reader 経由で
@@ -4483,7 +4483,7 @@ export function createResetStreamError(rawError: unknown): Error {
  *
  * bidi リクエストストリーム用の `createResetStreamError` と正規化・
  * メッセージ組み立てを共有し、対象が FETCH データストリームであることが
- * 分かる文言にする (§3.2.1)。
+ * 分かる文言にする (§3.2.4)。
  */
 export function createFetchDataStreamResetError(rawError: unknown): Error {
   return createResetStreamErrorWithMessage(rawError, RESET_FETCH_DATA_STREAM_MESSAGE);

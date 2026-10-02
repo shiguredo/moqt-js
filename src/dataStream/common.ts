@@ -65,7 +65,7 @@ export interface MoqtObject {
    * ビットが 1) は、購読を確立した control message の DEFAULT_PUBLISHER_PRIORITY
    * Track Property (省略時 128) を継承する。受信経路 (SubscriberImpl) が配送前に
    * 解決して設定するため、フィルタ評価とアプリのコールバックでは継承値が見える。
-   * FETCH オブジェクトは §11.4.1.1 Table 9 の継承規則 (直近オブジェクトの
+   * FETCH オブジェクトは §11.4.1.1 Table 10 の継承規則 (直近オブジェクトの
    * Priority) で解決される。
    */
   publisherPriority?: number;

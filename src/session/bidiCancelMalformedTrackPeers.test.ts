@@ -13,16 +13,16 @@ import { fullTrackNameKey } from "../fullTrackName";
 
 // ============================================================================
 // cancelMalformedTrackPeers の二重通知防止
-// draft-ietf-moq-transport-21 §12.1 (Malformed Tracks) / §3.2.1 (Fetch State Management)
+// draft-ietf-moq-transport-22 §12.1 (Malformed Tracks) / §3.2.4 (Fetch State Management)
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-21 §12.1 / §3.2.1:
+ * draft-ietf-moq-transport-22 §12.1 / §3.2.4:
  * 最初の malformed 検出のキャンセルが await で保留されている間に同一 Track の
  * 2 回目の検出が届いても、error コールバックは 1 回だけ呼ばれる。state を
  * キャンセル開始と同期に closed にするため、bidiCancelFetch の完了を待たずに
  * 二重通知が止まる。
- * §3.2.1 の MUST (bidi リクエストストリームへの STOP_SENDING) は維持され、
+ * §3.2.4 の MUST (bidi リクエストストリームへの STOP_SENDING) は維持され、
  * キャンセルも重複して送らない。
  */
 test("cancelMalformedTrackPeers: キャンセル中の重複検出で error コールバックが 1 回だけ呼ばれる", async () => {
@@ -93,7 +93,7 @@ test("cancelMalformedTrackPeers: キャンセル中の重複検出で error コ�
   await new Promise((resolve) => {
     setTimeout(resolve, 0);
   });
-  // §3.2.1 の STOP_SENDING 相当 (readable.cancel) と RESET_STREAM 相当 (writer.abort)
+  // §3.2.4 の STOP_SENDING 相当 (readable.cancel) と RESET_STREAM 相当 (writer.abort)
   assert.deepEqual(cancelReasons, ["fetch cancelled"]);
   assert.deepEqual(abortReasons, ["fetch cancelled"]);
   assert.isFalse(session.requestStreams.has(3n));

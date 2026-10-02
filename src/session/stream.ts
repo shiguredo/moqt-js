@@ -39,7 +39,7 @@ export interface FetchObjectSink {
 
 /**
  * @param groupOrder - Group Order (GroupOrder.ASCENDING or GroupOrder.DESCENDING)
- *   draft-ietf-moq-transport-21 §11.4.1.1 / §9.20.9
+ *   draft-ietf-moq-transport-22 §11.4.1.1 / §9.20.8
  * @param priorGap - Track 単位の Prior ID Gap 追跡の対象。FETCH は Fetcher が
  *   持つ比較キー、fill fetch は購読が持つ比較キーで解決した結果を渡す。
  *   Track を特定できない場合は省略し、追跡検証を行わない。
@@ -86,10 +86,18 @@ export function processFetchObjects(
       currentContext = newContext;
       currentIsFirst = false;
 
-      // draft-ietf-moq-transport-21 Section 11.4.1.2:
+      // draft-ietf-moq-transport-22 §3.2.2 / Section 11.4.1.2:
       // End of Range レコードは実際のオブジェクトデータを含まないためスキップする。
       // コンテキスト (Group ID, Object ID 等) は既に newContext で更新済み。
       // End of Range は Object ではないため、Track 横断の追跡検証も通さない。
+      //
+      // §3.2.2 のギャップの意味論: ギャップは「Object が存在しない」「subscriber の
+      // フィルタで除外された」「状態を判定できない」で起こり、Range Filter を送っていなければ
+      // マークされていないギャップは存在しない Object を、送っていれば状態が不明な Object を
+      // 示す。デフォルトと異なる原因の範囲は End of Range indicator でマークされる
+      // (種別の意味は dataStream/fetch.ts の EndOfRangeType)。ストリーム末尾のギャップは
+      // FIN でのみ検出できる。アプリへのギャップの通知は仕様が求めていないため行わない
+      // (要求されたら別途対応する)。
       if (fields.endOfRange) {
         continue;
       }

@@ -1,12 +1,12 @@
 /**
  * MOQT Fetcher
- * draft-ietf-moq-transport-21 Section 9.11 (FETCH) — Section 9.12 (FETCH_OK)
+ * draft-ietf-moq-transport-22 Section 9.11 (FETCH) — Section 9.12 (FETCH_OK)
  *
- * draft-ietf-moq-transport-21:
+ * draft-ietf-moq-transport-22:
  * FETCH レスポンスで不明な範囲を許可する。
  * Publisher がまだシリアライズしていないオブジェクトの範囲を
- * "unknown range" として返すことができる (Section 11.4.1.2, Table 7)。
- * draft-ietf-moq-transport-21 Section 9.11, Section 11.4.1
+ * "unknown range" として返すことができる (Section 11.4.1.2, Table 8)。
+ * draft-ietf-moq-transport-22 Section 9.11, Section 11.4.1
  */
 
 import type { MoqtObject } from "./dataStream";
@@ -34,9 +34,16 @@ export interface Fetcher {
   readonly trackProperties: ReadonlyArray<Property>;
   /**
    * Fetch をキャンセルする
-   * draft-ietf-moq-transport-21 Section 3.2.1 (Fetch State Management)
+   * draft-ietf-moq-transport-22 §3.2.4 (Fetch State Management)
    *
    * 「It MUST send STOP_SENDING for the bidi request stream.」
+   * データストリームへの STOP_SENDING は MAY であり、この cancel() では送らない
+   * (bidi リクエストストリームへの STOP_SENDING だけで MUST を満たす)。
+   * データストリームを打ち切る経路 (malformed track の検出、バッファ上限) は
+   * 別途 cancelStreamQuiet で送っている。
+   *
+   * subscriber は cancel するか FETCH_ERROR を受信するか、FETCH データストリームが
+   * FIN または reset されるまで FETCH state を保持する。
    * キャンセル開始と同時に state は closed になり、Object の配信と end / error の
    * 通知は止まる。ストリームの後始末 (STOP_SENDING 相当の cancel と RESET_STREAM) は
    * 返り値の Promise が完了するまで継続する。
@@ -143,7 +150,7 @@ export class FetcherImpl implements Fetcher {
   /**
    * Fetch リクエストの Group Order を設定する (セッション内部コールバック)
    *
-   * draft-ietf-moq-transport-21 §11.4.1.1 (Flags): FETCH 応答の Group ID の
+   * draft-ietf-moq-transport-22 §11.4.1.1 (Flags): FETCH 応答の Group ID の
    * 計算式は Group Order で変わるため、要求時に確定した値を保持する。
    */
   setGroupOrder(groupOrder: GroupOrder): void {
@@ -212,9 +219,10 @@ export class FetcherImpl implements Fetcher {
   /**
    * Fetch をキャンセル
    *
-   * draft-ietf-moq-transport-21 Section 3.2.1 (Fetch State Management):
+   * draft-ietf-moq-transport-22 Section 3.2.4 (Fetch State Management):
    * "It MUST send STOP_SENDING for the bidi request stream."
-   * FETCH_CANCEL は削除された。キャンセルはストリームを閉じることで行う。
+   * FETCH_CANCEL は削除され、キャンセルは bidi リクエストストリームへの
+   * STOP_SENDING (WebTransport では readable の cancel) で行う。
    */
   async cancel(): Promise<void> {
     if (this.isClosed) {

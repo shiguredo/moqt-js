@@ -387,11 +387,11 @@ test("bidiReadFetchResponse: 確立後の GOAWAY で goawayCallback が呼ばれ
 });
 
 // ----------------------------------------------------------------------------
-// cancel (§3.2.1 MUST)
+// cancel (§3.2.4 MUST)
 // ----------------------------------------------------------------------------
 
 /**
- * draft-ietf-moq-transport-21 §3.2.1 (Fetch State Management):
+ * draft-ietf-moq-transport-22 §3.2.4 (Fetch State Management):
  * 「It MUST send STOP_SENDING for the bidi request stream.」
  * 確立後の FETCH では読み取りループが readable のロックを保持するため、
  * bidiCancelFetch は保持中の reader 経由で cancel する分岐を使う。
@@ -446,10 +446,10 @@ test("bidiCancelFetch: 二重 cancel でも後始末が 1 回だけ実行され�
 // ----------------------------------------------------------------------------
 
 /**
- * draft-ietf-moq-transport-21 §9.11 (FETCH):
- * 「The publisher creates a new unidirectional stream that is used to send the
- *  Objects. The FETCH_OK or REQUEST_ERROR can come at any time relative to
- *  object delivery.」
+ * draft-ietf-moq-transport-22 §3.2.1 (Fetch Object Delivery) / §3.2 (Fetch):
+ * 「The publisher creates a single unidirectional stream (see Section 11.4) that
+ *  is used to send the Objects.」「The FETCH_OK or FETCH_ERROR can come at any
+ *  time relative to object delivery.」
  * FETCH の正常系は「FETCH_OK は双方向ストリーム、Fetch Object とその終端 FIN は
  * 単方向データストリーム」である。データストリーム側の登録と削除は SessionImpl が
  * 担い、双方向ストリームの読み取りループを起動しても影響しないことを検証する。

@@ -1,10 +1,10 @@
 /**
  * MOQT Fetch Stream
- * draft-ietf-moq-transport-21 Section 11.4 (Fetch Streams)
+ * draft-ietf-moq-transport-22 Section 11.4 (Fetch Streams)
  *
- * Fetch Header (Section 11.4.1) と Fetch Object fields (Figure 28) の
+ * Fetch Header (Section 11.4.1) と Fetch Object fields (Figure 29) の
  * エンコードとデコードを扱う。Fetch Object は Subgroup / Datagram と異なり
- * 前オブジェクトからの delta でフィールドを省略する (§11.4.1.1 Table 8 / 9)
+ * 前オブジェクトからの delta でフィールドを省略する (§11.4.1.1 Table 9 / 10)
  * ため、直前の値を持つ FetchObjectContext を引き回す。
  */
 
@@ -79,14 +79,14 @@ export function decodeFetchHeader(data: Uint8Array, offset = 0): [FetchHeader, n
 /**
  * Serialization Flags for Fetch Object (Section 11.4.1)
  *
- * Section 11.4.1.1 Table 8: Subgroup ID encoding (bits 0-1)
+ * Section 11.4.1.1 Table 9: Subgroup ID encoding (bits 0-1)
  * | Bitmask (flags & 0x03) | Meaning |
  * | 0x00 | Subgroup ID is zero |
  * | 0x01 | Subgroup ID is prior Object's Subgroup ID |
  * | 0x02 | Subgroup ID is prior Object's Subgroup ID + 1 |
  * | 0x03 | Subgroup ID field is present |
  *
- * Section 11.4.1.1 Table 9: Additional flags
+ * Section 11.4.1.1 Table 10: Flags (independent flag bits)
  * | Bitmask | Condition if set |
  * | 0x04 | Object ID Delta is present (else prior + 1) |
  * | 0x08 | Group ID Delta is present (else prior Group ID) |
@@ -121,37 +121,37 @@ export const FetchSerializationFlags = {
   /**
    * End of Non-Existent Range (Section 11.4.1.2)
    *
-   * draft-ietf-moq-transport-21:
+   * draft-ietf-moq-transport-22 Section 11.4.1.2:
    * 指定した Location までの Object が存在しないことを示す。
    * Group ID と Object ID フィールドが存在する。
    * Subgroup ID, Priority, Properties は存在しない。
-   * draft-ietf-moq-transport-21 Section 11.4.1.2
+   *
+   * publisher は Object を直列化しない範囲を分割する目的以外で End of Non-Existent
+   * Range を使うべきではない (§3.2.2 の SHOULD NOT)。
    */
   END_OF_NON_EXISTENT_RANGE: 0x8c,
   /**
    * End of Unknown Range (Section 11.4.1.2)
    *
-   * draft-ietf-moq-transport-21:
+   * draft-ietf-moq-transport-22 Section 11.4.1.2:
    * 指定した Location までの Object のステータスが不明であることを示す。
    * Group ID と Object ID フィールドが存在する。
    * Subgroup ID, Priority, Properties は存在しない。
-   * draft-ietf-moq-transport-21 Section 11.4.1.2
    */
   END_OF_UNKNOWN_RANGE: 0x10c,
   /**
    * End of Timed-Out Range (Section 11.4.1.2)
    *
-   * draft-ietf-moq-transport-21:
+   * draft-ietf-moq-transport-22 Section 11.4.1.2:
    * Fill Timeout の失効により放棄された Object の範囲を示す。
    * Group ID と Object ID フィールドが存在する。
    * Subgroup ID, Priority, Properties は存在しない。
-   * draft-ietf-moq-transport-21 Section 11.4.1.2
    */
   END_OF_TIMED_OUT_RANGE: 0x20c,
 } as const;
 
 /**
- * Fetch Object Fields (Figure 28 in Section 11.4.1)
+ * Fetch Object Fields (Figure 29 in Section 11.4.1)
  */
 // draft-ietf-moq-transport-21 Section 11.1.2:
 // "The Object Status is a field that is only present in objects that are
@@ -166,7 +166,7 @@ export interface FetchObjectFields {
   /**
    * Object Payload Length。
    *
-   * draft-ietf-moq-transport-21 §11.4.1:
+   * draft-ietf-moq-transport-22 §11.4.1:
    * 通常 Object のフィールドであり、End of Range indicator の wire には存在しない。
    * End of Range では無視される。
    */
@@ -177,8 +177,14 @@ export interface FetchObjectFields {
 /**
  * End of Range の種別
  *
- * draft-ietf-moq-transport-21 Section 11.4.1.2:
+ * draft-ietf-moq-transport-22 §3.2.2 (Gaps in a Fetch Stream) / Section 11.4.1.2:
  * FETCH レスポンス内で Object が存在しない/不明/タイムアウト失効した範囲を示す。
+ * ギャップは「Object が存在しない」「subscriber のフィルタで除外された」「状態を判定
+ * できない (リレーが一時的に Original Publisher と遮断された場合など)」で起こり、
+ * デフォルトと異なる原因の範囲が End of Range indicator でマークされる。unknown の
+ * Object を含む FETCH を受けた publisher は、UNKNOWN_OBJECT_STATUS (0x6、§12.5) で
+ * データストリームをリセットするか、End of Unknown Range で示して既知の Object の
+ * 配送を継続する (relay も §3.2.3 のとおり同じ手段を使う)。
  */
 export type EndOfRangeType = "non_existent" | "unknown" | "timed_out";
 
@@ -194,7 +200,7 @@ export interface DecodedFetchObject {
   /**
    * Object Payload Length。
    *
-   * draft-ietf-moq-transport-21 §11.4.1:
+   * draft-ietf-moq-transport-22 §11.4.1:
    * End of Range indicator は Object Payload Length を持たないため、EOR の場合は 0n。
    */
   payloadLength: bigint;
@@ -217,7 +223,7 @@ export interface FetchObjectContext {
   objectId: bigint;
   /**
    * 直近の実オブジェクト (Datagram を含む) の Publisher Priority。
-   * draft-ietf-moq-transport-21 §11.4.1.1 Table 9 の「Priority is the prior
+   * draft-ietf-moq-transport-22 §11.4.1.1 Table 10 の「Priority is the prior
    * Object's Priority」の規定に従い、0x10 省略時の継承値に使う (prior Object
    * には Datagram も含まれる)。
    */
@@ -243,7 +249,7 @@ export interface FetchObjectContext {
   /**
    * 直前 (End of Range indicator を含む) までに実 Object が 1 つ以上あるか。
    *
-   * draft-ietf-moq-transport-21 §11.4.1.2 (End of Range):
+   * draft-ietf-moq-transport-22 §11.4.1.2 (End of Range):
    * "Prior Subgroup ID: The Subgroup ID from the last actual Object before the
    *  End of Range indicator. If there was no prior Object, using a flag that
    *  references the prior Subgroup ID is a PROTOCOL_VIOLATION."
@@ -278,7 +284,7 @@ export interface FetchObjectContext {
 /**
  * Serialization Flags が End of Range (Section 11.4.1.2) かを判定する
  *
- * draft-ietf-moq-transport-21 §11.4.1 Table 7:
+ * draft-ietf-moq-transport-22 §11.4.1 Table 8:
  * 0x8C (End of Non-Existent Range) / 0x10C (End of Unknown Range) /
  * 0x20C (End of Timed-Out Range) が定義されている。
  */
@@ -292,7 +298,7 @@ function isEndOfRangeFlags(flags: number): boolean {
 
 /**
  * Encode Fetch Object Fields
- * draft-ietf-moq-transport-21 Section 11.4.1 Figure 28
+ * draft-ietf-moq-transport-22 Section 11.4.1 Figure 29
  *
  * リレーサーバー実装用。moqt-js はクライアント専用のため、ランタイムでは使用しない。
  * PBT（Property-Based Testing）でのラウンドトリップテストで使用。
@@ -310,7 +316,7 @@ export function encodeFetchObjectFields(
   parts.push(encodeVarint(fields.serializationFlags));
 
   // End of Range の場合は Group ID と Object ID のみ
-  // draft-ietf-moq-transport-21 §11.4.1.2: End of Range indicator は通常 Object と
+  // draft-ietf-moq-transport-22 §11.4.1.2: End of Range indicator は通常 Object と
   // 異なり Object Payload Length / Object Payload を持たない。
   // FetchObjectFields.payloadLength は通常 Object 用であり、ここでは wire に書かない。
   if (isEndOfRangeFlags(fields.serializationFlags)) {
@@ -324,9 +330,9 @@ export function encodeFetchObjectFields(
   }
 
   // Group ID (フラグ 0x08 がセットされている場合)
-  // draft-ietf-moq-transport-21 §11.4.1.1 Table 9:
-  // "If the Group Order is Ascending (default), the Group ID is the prior
-  //  Object's Group ID plus the Group ID Delta + 1."
+  // draft-ietf-moq-transport-22 §11.4.1.1 Table 10:
+  // "If the Group Order is Ascending, the Group ID is the prior Object's
+  //  Group ID plus the Group ID Delta + 1."
   // "If the Group Order is Descending, the Group ID is the prior
   //  Object's Group ID minus the (Group ID Delta + 1)."
   // エンコード時:
@@ -350,7 +356,7 @@ export function encodeFetchObjectFields(
 
   // Subgroup ID (flags & 0x03 == 0x03 の場合)
   // Datagram 時 (0x40) は Subgroup ID フィールドをエンコードしない
-  // draft-ietf-moq-transport-21 §11.4.1.1:
+  // draft-ietf-moq-transport-22 §11.4.1.1:
   // "the object has no Subgroup ID. The publisher MUST SET bit 0x40 to '1'."
   if (
     !(fields.serializationFlags & FetchSerializationFlags.DATAGRAM) &&
@@ -364,7 +370,7 @@ export function encodeFetchObjectFields(
   }
 
   // Object ID (フラグ 0x04 がセットされている場合)
-  // draft-ietf-moq-transport-21 §11.4.1.1 Table 9:
+  // draft-ietf-moq-transport-22 §11.4.1.1 Table 10:
   // "When the Group ID Delta field is not present, the Object ID is the
   //  prior Object's ID plus the Object ID Delta if present."
   // エンコード時:
@@ -422,7 +428,7 @@ export function encodeFetchObjectFields(
 /**
  * End of Range レコードをデコードする
  *
- * draft-ietf-moq-transport-21 §11.4.1.2: Group ID と Object ID のみが存在する。
+ * draft-ietf-moq-transport-22 §11.4.1.2: Group ID と Object ID のみが存在する。
  */
 function decodeEndOfRange(
   data: Uint8Array,
@@ -438,7 +444,7 @@ function decodeEndOfRange(
   const [objectId, oidConsumed] = decodeVarint(data, startOffset + consumed);
   consumed += oidConsumed;
 
-  // draft-ietf-moq-transport-21 §11.4.1.2:
+  // draft-ietf-moq-transport-22 §11.4.1.2:
   // End of Range indicator は Group ID と Object ID のみで、Object Payload Length を持たない。
   // 呼び出し側 (processFetchObjects) が payload 0 バイトとして扱えるように 0n を返す。
   const payloadLength = 0n;
@@ -466,7 +472,7 @@ function decodeEndOfRange(
     subgroupPublisherPriority:
       context?.subgroupPublisherPriority ?? context?.publisherPriority ?? 0,
     hasPriorSubgroup: sameGroup ? (context?.hasPriorSubgroup ?? true) : false,
-    // draft-ietf-moq-transport-21 §11.4.1.2:
+    // draft-ietf-moq-transport-22 §11.4.1.2:
     // End of Range indicator は実 Object ではないため、先行する実 Object の
     // 有無を引き継ぐ (先頭レコードが End of Range なら false)。
     hasPriorActualObject: context === null ? false : (context.hasPriorActualObject ?? true),
@@ -510,7 +516,7 @@ function decodeFetchSubgroupId(
 ): { subgroupId: bigint; isDatagram: boolean; consumed: number } {
   const isDatagram = (flags & FetchSerializationFlags.DATAGRAM) !== 0;
 
-  // draft-ietf-moq-transport-21 §11.4.1.1:
+  // draft-ietf-moq-transport-22 §11.4.1.1:
   // DATAGRAM ビットが立つ Object は Subgroup ID を持たない。下位 2 ビットの値に
   // 関わらず Subgroup ID フィールドは存在しないため、1 バイトも消費せず
   // subgroupId = 0 を返す。
@@ -526,7 +532,7 @@ function decodeFetchSubgroupId(
       if (isFirst || context === null) {
         throw new ProtocolViolationError("first object cannot use SUBGROUP_SAME");
       }
-      // draft-ietf-moq-transport-21 §11.4.1.2:
+      // draft-ietf-moq-transport-22 §11.4.1.2:
       // 先頭レコードが End of Range indicator の場合、参照できる prior Subgroup ID
       // (最後の実 Object の Subgroup ID) が存在しないため PROTOCOL_VIOLATION。
       if (context.hasPriorActualObject === false) {
@@ -539,7 +545,7 @@ function decodeFetchSubgroupId(
       if (isFirst || context === null) {
         throw new ProtocolViolationError("first object cannot use SUBGROUP_PLUS_ONE");
       }
-      // draft-ietf-moq-transport-21 §11.4.1.2: 同上 (prior Subgroup ID 参照)。
+      // draft-ietf-moq-transport-22 §11.4.1.2: 同上 (prior Subgroup ID 参照)。
       if (context.hasPriorActualObject === false) {
         throw new ProtocolViolationError(
           "cannot reference prior subgroup id before any actual object",
@@ -650,7 +656,7 @@ function updateSubgroupPriorities(
 /**
  * PRIORITY_PRESENT が設定された Fetch Object の Publisher Priority バイトを読む
  *
- * Priority は 8 bit 固定 (draft-ietf-moq-transport-21 §11.4.1.1) のため、
+ * Priority は 8 bit 固定 (draft-ietf-moq-transport-22 §11.4.1.1) のため、
  * バッファが Priority バイトで切れている場合は範囲外アクセス (undefined 取得)
  * による誤検出を避け、IncompleteDataError で次のチャンクを待つ。
  *
@@ -673,11 +679,11 @@ function readFetchObjectPublisherPriority(data: Uint8Array, priorityOffset: numb
 /**
  * PRIORITY_PRESENT が未設定の Fetch Object の Priority を解決する
  *
- * draft-ietf-moq-transport-21 §11.4.1.1 Table 9:
+ * draft-ietf-moq-transport-22 §11.4.1.1 Table 10:
  * 0x10 未設定は「直近の実オブジェクト (Datagram を含む) の Priority を
  * 継承する」ことを意味する。
  *
- * draft-ietf-moq-transport-21 §11.4.1.2 (End of Range):
+ * draft-ietf-moq-transport-22 §11.4.1.2 (End of Range):
  * "Prior Priority: The Priority from the last actual Object before the End of
  *  Range indicator. If there was no prior Object, using a flag that references
  *  the prior Priority is a PROTOCOL_VIOLATION."
@@ -697,7 +703,7 @@ function resolvePriorFetchPublisherPriority(context: FetchObjectContext | null):
 
 /**
  * Decode Fetch Object Fields
- * draft-ietf-moq-transport-21 Section 11.4.1 Figure 28
+ * draft-ietf-moq-transport-22 Section 11.4.1 Figure 29
  *
  * @param data - Data buffer
  * @param context - Context with prior object's values (required after first object)
@@ -731,11 +737,12 @@ export function decodeFetchObjectFields(
     return [result, totalConsumed + consumed, newContext];
   }
 
-  // draft-ietf-moq-transport-21 Section 11.4.1 Table 7:
-  // 「When less than 128, the bits represent flags described below.
-  //  The following additional values are defined: 0x8C (End of Non-Existent Range),
-  //  0x10C (End of Unknown Range), 0x20C (End of Timed-Out Range).
-  //  Any other value is a PROTOCOL_VIOLATION.」
+  // draft-ietf-moq-transport-22 Section 11.4.1 Table 8:
+  // 「When less than 128, the bits represent flags described in Section 11.4.1.1.
+  //  When 128 or greater, the value signals a range indicator; the defined values
+  //  are: 0x8C (End of Non-Existent Range), 0x10C (End of Unknown Range),
+  //  0x20C (End of Timed-Out Range). Any other value 128 or greater is a
+  //  PROTOCOL_VIOLATION.」
   // 0x8C / 0x10C / 0x20C は上の End of Range チェックで処理済み。
   // それ以外の 128 以上の値は不正。
   if (flags >= 128) {
@@ -745,7 +752,7 @@ export function decodeFetchObjectFields(
   }
 
   // Group ID
-  // draft-ietf-moq-transport-21 §11.4.1.1 Table 9:
+  // draft-ietf-moq-transport-22 §11.4.1.1 Table 10:
   // Ascending: "The Group ID is the prior Object's Group ID plus the Group ID Delta + 1."
   // Descending: "The Group ID is the prior Object's Group ID minus the (Group ID Delta + 1)."
   // "If the computed Group ID would be less than 0 or greater than 2^64-1, the Subscriber MUST close the Session with error 'PROTOCOL_VIOLATION'."
@@ -769,7 +776,7 @@ export function decodeFetchObjectFields(
   }
 
   // Group ID の範囲検証: 0 以上 2^64-1 以下
-  // draft-ietf-moq-transport-21 §11.4.1.1 Table 9:
+  // draft-ietf-moq-transport-22 §11.4.1.1 Table 10:
   // "If the computed Group ID would be less than 0 or greater than 2^64-1,
   //  the Subscriber MUST close the Session with error 'PROTOCOL_VIOLATION'."
   // 上限は varint の最大値と同一のため MAX_VARINT を使う。
@@ -792,7 +799,7 @@ export function decodeFetchObjectFields(
   totalConsumed += subgroupConsumed;
 
   // Object ID
-  // draft-ietf-moq-transport-21 §11.4.1.1 Table 9:
+  // draft-ietf-moq-transport-22 §11.4.1.1 Table 10:
   // "When the Group ID Delta field is not present, the Object ID is the
   //  prior Object's ID plus the Object ID Delta if present."
   // Group 不変時 (!GROUP_ID_PRESENT) かつ非先頭の場合、delta は prior + delta。
@@ -814,7 +821,7 @@ export function decodeFetchObjectFields(
   }
 
   // Object ID の範囲検証: 0 以上 2^64-1 以下
-  // draft-ietf-moq-transport-21 §11.4.1.1 Table 9:
+  // draft-ietf-moq-transport-22 §11.4.1.1 Table 10:
   // "If the computed Object ID would be greater than 2^64-1, the
   //  Subscriber MUST close the Session with error 'PROTOCOL_VIOLATION'."
   // 上限は varint の最大値と同一のため MAX_VARINT を使う。
@@ -832,7 +839,7 @@ export function decodeFetchObjectFields(
 
     checkSubgroupPriorityMismatch(context, isDatagram, groupId, subgroupId, publisherPriority);
   } else {
-    // draft-ietf-moq-transport-21 §11.4.1.1 Table 9:
+    // draft-ietf-moq-transport-22 §11.4.1.1 Table 10:
     // 0x10 未設定は「直近の実オブジェクト (Datagram を含む) の Priority を
     // 継承する」ことを意味する。
     publisherPriority = resolvePriorFetchPublisherPriority(context);
@@ -849,7 +856,7 @@ export function decodeFetchObjectFields(
       // IncompleteDataError で次のチャンクを待つ (decodeSubgroupHeader の
       // Priority バイト境界チェックと同方式。切り詰めると totalConsumed が
       // 実バイト数を超えて後続フィールドを誤読する)。
-      // draft-ietf-moq-transport-21 Section 11.4.1.1:
+      // draft-ietf-moq-transport-22 Section 11.4.1.1:
       // 節番号は仕様将来版で変わる可能性がある。
       const propertiesLength = Number(extLen);
       if (offset + totalConsumed + propertiesLength > data.length) {
@@ -886,7 +893,7 @@ export function decodeFetchObjectFields(
   // Datagram オブジェクトは Subgroup ID を持たないため、
   // コンテキストには Datagram 以前の実際の Subgroup ID を伝搬させる。
   // publisherPriority は直近の実オブジェクトの値として全オブジェクトで更新する
-  // (§11.4.1.1 Table 9 の 0x10 省略時の継承値)。§12.1 比較専用の
+  // (§11.4.1.1 Table 10 の 0x10 省略時の継承値)。§12.1 比較専用の
   // subgroupPublisherPriority は Subgroup オブジェクトでのみ更新する。
   const groupChanged = (flags & FetchSerializationFlags.GROUP_ID_PRESENT) !== 0 || context === null;
   const subgroupPriorities = updateSubgroupPriorities(
@@ -950,7 +957,7 @@ export function createFirstFetchObjectFlags(hasExtensions = false, isDatagram = 
 
   if (isDatagram) {
     // Datagram 時は Subgroup ID フィールドなし、DATAGRAM ビットを設定
-    // draft-ietf-moq-transport-21 §11.4.1.1:
+    // draft-ietf-moq-transport-22 §11.4.1.1:
     // "the publisher MUST SET bit 0x40 to '1'"
     // 下位 2 ビットは SUBGROUP_ZERO (0x00) が推奨
     flags |= FetchSerializationFlags.DATAGRAM;

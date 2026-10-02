@@ -1,7 +1,7 @@
 /**
  * session/bidi.ts の Property-Based Tests
  *
- * draft-ietf-moq-transport-21 §3.1 / §3.2.1 / §3.3.1 / §3.3.2 / §3.4.1 / §6.4.2.2 /
+ * draft-ietf-moq-transport-22 §3.1 / §3.2.4 / §3.3.1 / §3.3.2 / §3.4.1 / §6.4.2.2 /
  * §9.1.7 / §9.2 / §9.3 / §9.5 / §9.5.1 / §9.9 / §9.10 / §9.20.1 / §9.20.19 / §10.8 /
  * §10.9 / §12.1 / §12.5 / §13 を対象に、bidi 層の純粋関数と準純粋関数が持つ不変条件を
  * 検証する。
@@ -462,7 +462,7 @@ test("createResetStreamError: 数値の streamErrorCode は正規化したコー
 
 /**
  * createFetchDataStreamResetError は bidi リクエストストリーム用と同じ組み立てを共有し、
- * 対象が FETCH データストリームであることだけが異なる (§3.2.1)。
+ * 対象が FETCH データストリームであることだけが異なる (§3.2.4)。
  */
 test("createFetchDataStreamResetError: 同じ streamErrorCode から bidi 用と対になる固定文言の Error を作る", () => {
   fc.assert(
