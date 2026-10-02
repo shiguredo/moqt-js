@@ -303,6 +303,11 @@ export async function requestsSubscribe(
     throw new Error("Cannot subscribe after receiving GOAWAY");
   }
 
+  // draft-ietf-moq-transport-22 §8.9 / §9.1.4: SETUP の REGISTER の登録成否に応じて
+  // 後続メッセージへ付与するトークンを正規化する (登録成功 → USE_ALIAS、
+  // 登録失敗 → USE_VALUE)。詳細は normalizeAuthorizationTokenForSend の JSDoc。
+  const normalizedOptions = requestsNormalizeAuthorizationToken(session, options);
+
   const requestId = session.nextRequestId;
   // draft-ietf-moq-transport-21 Section 6.4.2.1: クライアントは偶数の Request ID を使うため 2 ずつ加算する
   session.nextRequestId += 2n;
@@ -351,7 +356,8 @@ export async function requestsSubscribe(
   impl.setRangeFilters(options?.rangeFilters);
 
   // draft-ietf-moq-msf-01 §11.4.3: 後続の REQUEST_UPDATE に同じトークンを付与するため保持
-  impl.setAuthorizationToken(options?.authorizationToken);
+  // 送信時と同じ正規化を通した値を保持する (REQUEST_UPDATE 経路に生の REGISTER を残さない)
+  impl.setAuthorizationToken(normalizedOptions?.authorizationToken);
 
   // サブスクリプションキャンセルのコールバック
   impl.onUnsubscribe = async () => {
@@ -386,10 +392,6 @@ export async function requestsSubscribe(
   // buildSubscribeParameters (LOCATION_FILTER の End Group 2^64-1 超過検証を
   // 含む) が throw する場合、pendingSubscribe.set より前で失敗させるため、
   // 構築は Promise 作成より前に行う (fetch の buildFetchParameters と同じ手順)。
-  // draft-ietf-moq-transport-22 §8.9 / §9.1.4: SETUP の REGISTER の登録成否に応じて
-  // 後続メッセージへ付与するトークンを正規化する (登録成功 → USE_ALIAS、
-  // 登録失敗 → USE_VALUE)。詳細は normalizeAuthorizationTokenForSend の JSDoc。
-  const normalizedOptions = requestsNormalizeAuthorizationToken(session, options);
   const parameters = buildSubscribeParameters(normalizedOptions);
 
   // SUBSCRIBE_OK の Promise を作成
@@ -940,8 +942,10 @@ export function requestsDescribeLocationFilter(
  * 後続メッセージへ付与するトークンを USE_ALIAS (登録成功) / USE_VALUE (登録失敗) に
  * 正規化する。Authorization Token を運ばない options はそのまま返す。
  */
-function requestsNormalizeAuthorizationToken<T extends { authorizationToken?: AuthorizationToken }>(
-  session: RequestsSessionInternal,
+export function requestsNormalizeAuthorizationToken<
+  T extends { authorizationToken?: AuthorizationToken },
+>(
+  session: { normalizeAuthorizationTokenForSend(token: AuthorizationToken): AuthorizationToken },
   options: T | undefined,
 ): T | undefined {
   if (options?.authorizationToken === undefined) {

@@ -27,6 +27,7 @@ import {
 } from "../message";
 import { ControlStreamReader, ControlStreamWriter } from "../controlStream";
 import * as bidi from "./bidi";
+import { requestsNormalizeAuthorizationToken } from "./requests";
 import {
   REQUEST_UPDATE_STREAM_CLOSED_MESSAGE,
   namespaceStartNamespaceStreamLoop,
@@ -124,7 +125,9 @@ export async function namespacesSubscribeNamespace(
       type: MessageType.SUBSCRIBE_NAMESPACE,
       requestId,
       trackNamespacePrefix,
-      parameters: buildSubscribeNamespaceParameters(options),
+      parameters: buildSubscribeNamespaceParameters(
+        requestsNormalizeAuthorizationToken(session, options),
+      ),
     };
 
     // メッセージをエンコードして送信
@@ -321,10 +324,14 @@ export async function namespacesPublishNamespace(
       requestId,
       trackNamespace,
       // AUTHORIZATION_TOKEN (0x03) - draft-ietf-moq-transport-22 Section 9.20.2
-      parameters:
-        options?.authorizationToken !== undefined
-          ? [encodeAuthorizationTokenParameter(options.authorizationToken)]
-          : [],
+      // draft-ietf-moq-transport-22 §8.9 / §9.1.4: SETUP の登録成否に応じて
+      // 正規化する (登録成功 → USE_ALIAS、登録失敗 → USE_VALUE)
+      parameters: (() => {
+        const normalized = requestsNormalizeAuthorizationToken(session, options);
+        return normalized?.authorizationToken !== undefined
+          ? [encodeAuthorizationTokenParameter(normalized.authorizationToken)]
+          : [];
+      })(),
     };
 
     // メッセージをエンコードして送信

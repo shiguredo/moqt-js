@@ -2389,6 +2389,11 @@
   - 未知の Setup Option を ignore して保持する現行挙動をテストで固定する
   - 挙動は変えず、コメントとテストのみの変更
   - @voluntas
+- [UPDATE] SETUP の Authorization Token の登録成否に応じて後続メッセージのトークンを正規化する
+  - draft-ietf-moq-transport-22 §8.9 は AUTH_TOKEN_CACHE_OVERFLOW を SETUP 以外の登録に限定し、SETUP の登録は §9.1.4 のとおり失敗させず USE_VALUE として扱う。送信側はピアの SETUP を受信して MAX_AUTH_TOKEN_CACHE_SIZE (§9.1.3、16 バイト + Token Value 長) が判明した時点で自 SETUP の REGISTER の登録成否を確定し、後続メッセージへ同じ Alias を付与するときに正規化する (登録成功 → USE_ALIAS、登録失敗 → USE_VALUE)
+  - SETUP 以外の REGISTER が 1 件でピアの上限を超える場合は、ピアが AUTH_TOKEN_CACHE_OVERFLOW でセッションを閉じるため送信前にローカルエラーにする
+  - 受信側の挙動 (SETUP は USE_VALUE 扱い、SETUP 以外は AUTH_TOKEN_CACHE_OVERFLOW) は変更しない
+  - @voluntas
 - [ADD] 実リレーへ接続する E2E テストを追加する
   - `secrets.TEST_MOQT_URI` が指す MOQT リレーへ実ブラウザ (Chromium) から接続し、SETUP の交換と正常な切断、Canvas のダミー映像の publish / subscribe、FETCH (絶対開始の Location Filter) を検証する
   - 接続先は環境変数 `TEST_MOQT_URI` で渡す。未設定の環境 (fork からの PR、secret を持たないローカル) ではテストを skip として記録し、暗黙の成功扱いにしない

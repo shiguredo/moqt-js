@@ -9706,3 +9706,66 @@ test("受信 PUBLISH: デコード不能な Token は KEY_VALUE_FORMATTING_ERROR
   assert.instanceOf(ctx.errors[0], SessionError);
   assert.equal((ctx.errors[0] as SessionError).code, SessionErrorCode.KEY_VALUE_FORMATTING_ERROR);
 });
+
+// ============================================================================
+// 送信側の Authorization Token の正規化
+// draft-ietf-moq-transport-22 §8.9 / §9.1.3 / §9.1.4
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-22 §8.9 / §9.1.4: 自 SETUP の REGISTER で登録に成功した
+ * Alias は USE_ALIAS に、登録に失敗した Alias は USE_VALUE に変換される。
+ */
+test("normalizeAuthorizationTokenForSend: SETUP の登録成否で USE_ALIAS / USE_VALUE に正規化する", () => {
+  const session = createSessionImpl();
+  const setupToken: AuthorizationToken = {
+    aliasType: AuthorizationTokenAliasType.REGISTER,
+    tokenAlias: 3n,
+    tokenType: 1n,
+    tokenValue: new Uint8Array([0x01, 0x02]),
+  };
+  // SETUP のトークンは connectionInitialize が設定する内部状態のため、ここでは直接設定する
+  (session as unknown as { setupAuthToken: AuthorizationToken }).setupAuthToken = setupToken;
+  session.peerMaxAuthTokenCacheSize = 18n;
+
+  // 登録成功 (18 バイト = 上限)
+  session.setupTokenRegistration = { tokenAlias: 3n, registered: true };
+  assert.deepEqual(session.normalizeAuthorizationTokenForSend(setupToken), {
+    aliasType: AuthorizationTokenAliasType.USE_ALIAS,
+    tokenAlias: 3n,
+  });
+
+  // 登録失敗
+  session.setupTokenRegistration = { tokenAlias: 3n, registered: false };
+  assert.deepEqual(session.normalizeAuthorizationTokenForSend(setupToken), {
+    aliasType: AuthorizationTokenAliasType.USE_VALUE,
+    tokenType: 1n,
+    tokenValue: new Uint8Array([0x01, 0x02]),
+  });
+});
+
+/**
+ * draft-ietf-moq-transport-22 §8.9 / §9.1.3: SETUP 以外の REGISTER がピアの
+ * MAX_AUTH_TOKEN_CACHE_SIZE を 1 件で超えると、ピアは
+ * AUTH_TOKEN_CACHE_OVERFLOW でセッションを閉じる。送信前にローカルエラーにする。
+ */
+test("normalizeAuthorizationTokenForSend: ピアの上限を超える REGISTER はローカルエラー", () => {
+  const session = createSessionImpl();
+  const token = {
+    aliasType: AuthorizationTokenAliasType.REGISTER,
+    tokenAlias: 3n,
+    tokenType: 1n,
+    tokenValue: new Uint8Array([0x01, 0x02]),
+  } as const;
+
+  // 16 + 2 = 18 バイト。上限 17 では超過
+  session.peerMaxAuthTokenCacheSize = 17n;
+  assert.throws(
+    () => session.normalizeAuthorizationTokenForSend(token),
+    /exceeds peer MAX_AUTH_TOKEN_CACHE_SIZE 17/,
+  );
+
+  // 上限ちょうどは送れる
+  session.peerMaxAuthTokenCacheSize = 18n;
+  assert.deepEqual(session.normalizeAuthorizationTokenForSend(token), token);
+});

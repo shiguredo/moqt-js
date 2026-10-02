@@ -27,6 +27,17 @@ import { MessageParameterType, SetupOptionType } from "../message/types";
 const AUTH_TOKEN_CACHE_ENTRY_OVERHEAD = 16;
 
 /**
+ * Token Value 長からキャッシュエントリ 1 件のサイズを求める
+ *
+ * draft-ietf-moq-transport-22 §9.1.3: 1 件のサイズは
+ * "16 bytes + the size of the Token Value field" である。
+ * 送信側がピアの MAX_AUTH_TOKEN_CACHE_SIZE と比較するときにも使う。
+ */
+export function authTokenRegisterEntrySize(tokenValue: Uint8Array): bigint {
+  return BigInt(AUTH_TOKEN_CACHE_ENTRY_OVERHEAD + tokenValue.length);
+}
+
+/**
  * キャッシュに登録済みの Token Type / Token Value
  */
 interface AuthTokenCacheEntry {
@@ -238,8 +249,10 @@ export function processSetupAuthorizationTokens(
  * draft-ietf-moq-transport-22 §8.9:
  * "The receiver of a message attempting to register an Alias which is already
  *  registered MUST close the Session with DUPLICATE_AUTH_TOKEN_ALIAS."
- * "If a registration is attempted which would cause this limit to be exceeded,
- *  the receiver MUST terminate the Session with a AUTH_TOKEN_CACHE_OVERFLOW error."
+ * "If a registration outside of SETUP is attempted that would cause this limit
+ *  to be exceeded, the receiver MUST terminate the Session with an
+ *  AUTH_TOKEN_CACHE_OVERFLOW error.  Registrations in SETUP are handled as
+ *  described in Section 9.1.4."
  *
  * 未登録 Alias の参照は Session Termination になる。セッションを閉じるのは
  * 呼び出し元であり、本関数はセッションを閉じずに戻り値で unknown-alias を伝える。
@@ -383,7 +396,9 @@ export function setupTokenRegistration(
  * - 上記以外 (USE_VALUE、ユーザーが明示的に指定した別 Alias の REGISTER /
  *   USE_ALIAS) はそのまま送る
  *
- * @throws SETUP の REGISTER の値を持たないまま登録失敗した Alias を参照した場合
+ * 値を持たない Alias を参照する場合は呼び出し側でローカルエラーにする。ここでは
+ * 自 SETUP の REGISTER の値を使える場合だけ変換し、使えない場合は入力をそのまま
+ * 返す (判断は呼び出し側の責務)。
  */
 export function normalizeAuthorizationTokenForSend(
   token: AuthorizationToken,
