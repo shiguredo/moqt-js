@@ -60,7 +60,10 @@ import {
   validateRangeFilterSpecs,
   validateTrackNamespaceForSend,
 } from "./params";
-import type { AuthorizationToken } from "../message/authorizationToken";
+import {
+  AuthorizationTokenAliasType,
+  type AuthorizationToken,
+} from "../message/authorizationToken";
 import type { PublisherStreamState, SessionInternal } from "./types";
 import type {
   FetchCallbacks,
@@ -356,8 +359,10 @@ export async function requestsSubscribe(
   impl.setRangeFilters(options?.rangeFilters);
 
   // draft-ietf-moq-msf-01 §11.4.3: 後続の REQUEST_UPDATE に同じトークンを付与するため保持
-  // 送信時と同じ正規化を通した値を保持する (REQUEST_UPDATE 経路に生の REGISTER を残さない)
-  impl.setAuthorizationToken(normalizedOptions?.authorizationToken);
+  // draft-ietf-moq-transport-22 §8.9: SUBSCRIBE で登録した Alias を REQUEST_UPDATE で
+  // 再 REGISTER すると、ピアは DUPLICATE_AUTH_TOKEN_ALIAS でセッションを閉じる。
+  // 保持する値は REQUEST_UPDATE 用に正規化する (登録済み Alias は USE_ALIAS で参照する)
+  impl.setAuthorizationToken(requestsTokenForRequestUpdate(normalizedOptions?.authorizationToken));
 
   // サブスクリプションキャンセルのコールバック
   impl.onUnsubscribe = async () => {
@@ -955,4 +960,21 @@ export function requestsNormalizeAuthorizationToken<
     ...options,
     authorizationToken: session.normalizeAuthorizationTokenForSend(options.authorizationToken),
   };
+}
+
+/**
+ * REQUEST_UPDATE に付与する Authorization Token を求める
+ *
+ * draft-ietf-moq-transport-22 §8.9: 既に登録した Alias を同じセッションで
+ * 再 REGISTER すると、ピアは DUPLICATE_AUTH_TOKEN_ALIAS でセッションを閉じる。
+ * SUBSCRIBE などの要求で REGISTER を送った Alias は、同じストリームの
+ * REQUEST_UPDATE では USE_ALIAS で参照する (§9.1.4 も Alias の再利用を前提とする)。
+ */
+export function requestsTokenForRequestUpdate(
+  token: AuthorizationToken | undefined,
+): AuthorizationToken | undefined {
+  if (token === undefined || token.aliasType !== AuthorizationTokenAliasType.REGISTER) {
+    return token;
+  }
+  return { aliasType: AuthorizationTokenAliasType.USE_ALIAS, tokenAlias: token.tokenAlias };
 }

@@ -131,10 +131,17 @@ export interface ConnectOptions {
 
   /**
    * SETUP Option (Option Type 0x03) として送信する Authorization Token
-   * draft-ietf-moq-transport-21 Section 9.1.4 (AUTHORIZATION TOKEN Setup Option)
+   * draft-ietf-moq-transport-22 §9.1.4 (AUTHORIZATION TOKEN)
    *
-   * SETUP では Alias Type DELETE (0x0) / USE_ALIAS (0x2) は仕様上禁止 (Section 9.1.4)。
+   * SETUP では Alias Type DELETE (0x0) / USE_ALIAS (0x2) は仕様上禁止 (§9.1.4)。
    * REGISTER (0x1) または USE_VALUE (0x3) のみ指定できる。
+   *
+   * REGISTER を指定した場合、ピアの SETUP を受信して MAX_AUTH_TOKEN_CACHE_SIZE
+   * (§9.1.3: 1 件 16 バイト + Token Value 長) が判明した時点で登録成否を確定し、
+   * 後続メッセージへ同じトークンを付与するときは自動で正規化する (§8.9 / §9.1.4)。
+   * - 登録に成功した Alias → USE_ALIAS (同じ Alias の再 REGISTER は
+   *   DUPLICATE_AUTH_TOKEN_ALIAS になるため)
+   * - 登録に失敗した Alias → USE_VALUE (値を持たないため §9.1.4 の purge MUST)
    *
    * 省略した場合、MOQT URI の msf fragment に c4m があれば、その値を復号した
    * C4M のトークンを Token Type 0x01 (CAT) / USE_VALUE として送る
