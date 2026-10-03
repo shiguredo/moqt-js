@@ -378,7 +378,9 @@ export class SessionImpl implements Session {
   // DELETE を送らない。渡された場合も減算はしないため、追跡値は実際より大きく
   // 固まる方向にのみずれる (差し引かない分だけ登録できる REGISTER をローカル
   // エラーにし得るが、ピアにセッションを閉じさせる方向にはならない)。
-  // DELETE の送信経路を整えるときに減算を実装する。
+  // DELETE の送信経路を整えるときに減算を実装する。なお減算しない間は、DELETE を
+  // 送った Alias も登録済みのまま扱われ、同じ Alias の再 REGISTER がローカルエラーに
+  // なる (§8.9 は retire 後の再登録を許すため、この点は仕様より厳しい)。
   peerRegisteredAuthTokenSize = 0n;
   // 予約済み (加算済み) の Alias。送信に至らなかった場合の取り消しに使う
   reservedAuthTokenSizes = new Map<bigint, bigint>();
@@ -744,7 +746,10 @@ export class SessionImpl implements Session {
     // Alias のどちらも登録済みとして扱う
     if (
       this.reservedAuthTokenSizes.has(token.tokenAlias) ||
-      this.setupTokenRegistration?.tokenAlias === token.tokenAlias
+      // SETUP の登録に失敗した Alias はピアに登録されていない (§9.1.4 のとおり
+      // USE_VALUE として扱われる) ため、登録済みとして拒否しない
+      (this.setupTokenRegistration?.registered === true &&
+        this.setupTokenRegistration.tokenAlias === token.tokenAlias)
     ) {
       throw new Error(
         `AUTHORIZATION_TOKEN alias ${token.tokenAlias} is already registered in this session`,

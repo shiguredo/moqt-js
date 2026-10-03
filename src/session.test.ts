@@ -10015,3 +10015,69 @@ test("publish: 送信失敗時に REGISTER の予約が取り消される", asyn
   // controlWriter 未初期化で送信に至らないため、予約は取り消される
   assert.equal(session.peerRegisteredAuthTokenSize, 0n);
 });
+
+/**
+ * draft-ietf-moq-transport-22 §9.1.3: 予約は送信直前に行い、送信が失敗した場合は
+ * 取り消す。実経路 (SUBSCRIBE の送信失敗) で登録サイズの総和が増えないことを検証する。
+ */
+test("subscribe: 送信失敗時に REGISTER の予約が取り消される", async () => {
+  const session = createSessionImpl();
+  session.peerMaxAuthTokenCacheSize = 1024n;
+  const token = {
+    aliasType: AuthorizationTokenAliasType.REGISTER,
+    tokenAlias: 1n,
+    tokenType: 1n,
+    tokenValue: new Uint8Array(2).fill(0x01),
+  } as const;
+
+  let thrown: Error | undefined;
+  try {
+    await session.subscribe(
+      ["live"],
+      "video",
+      { object: () => {} },
+      {
+        authorizationToken: token,
+      },
+    );
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.isDefined(thrown);
+  assert.equal(session.peerRegisteredAuthTokenSize, 0n);
+  // 予約が残っていないため、同じ Alias を再び登録できる
+  session.reserveAuthorizationTokenForSend(token);
+  assert.equal(session.peerRegisteredAuthTokenSize, 18n);
+});
+
+/**
+ * draft-ietf-moq-transport-22 §9.1.3: 同じく FETCH の送信失敗でも予約を取り消す。
+ */
+test("fetch: 送信失敗時に REGISTER の予約が取り消される", async () => {
+  const session = createSessionImpl();
+  session.peerMaxAuthTokenCacheSize = 1024n;
+  const token = {
+    aliasType: AuthorizationTokenAliasType.REGISTER,
+    tokenAlias: 2n,
+    tokenType: 1n,
+    tokenValue: new Uint8Array(2).fill(0x01),
+  } as const;
+
+  let thrown: Error | undefined;
+  try {
+    await session.fetch(
+      ["live"],
+      "video",
+      { filter: { startGroup: 0n, startObject: 0n }, authorizationToken: token },
+      { object: () => {} },
+    );
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.isDefined(thrown);
+  assert.equal(session.peerRegisteredAuthTokenSize, 0n);
+  session.reserveAuthorizationTokenForSend(token);
+  assert.equal(session.peerRegisteredAuthTokenSize, 18n);
+});
