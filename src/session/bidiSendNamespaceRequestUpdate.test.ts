@@ -8,6 +8,11 @@
 
 import { test, assert } from "vite-plus/test";
 import { SubscriberImpl } from "../subscriber";
+import {
+  AuthorizationTokenAliasType,
+  type AuthorizationToken,
+  decodeAuthorizationToken,
+} from "../message/authorizationToken";
 import { encodeGoawayPayload } from "../message/session";
 import { MessageType, MessageParameterType } from "../message/types";
 import { trackNamespaceToStrings } from "../message";
@@ -38,6 +43,7 @@ import {
 function createNamespaceUpdateSession(
   kind: "namespace" | "tracks",
   namespacePrefix: string[],
+  authorizationToken?: AuthorizationToken,
 ): {
   session: BidiSessionInternal;
   written: Uint8Array[];
@@ -45,6 +51,7 @@ function createNamespaceUpdateSession(
     state: "active" | "closed";
     namespacePrefix: string[];
     pendingPrefix?: string[];
+    authorizationToken?: AuthorizationToken | undefined;
   };
 } {
   const { session, written } = createBidiSession();
@@ -52,6 +59,7 @@ function createNamespaceUpdateSession(
     callbacks: {},
     state: "active" as const,
     namespacePrefix,
+    authorizationToken,
   };
   if (kind === "namespace") {
     session.namespaceSubscriptions.set(0n, subscription);
@@ -526,4 +534,70 @@ test("bidiReadRequestStreamMessages: goawayCallback が throw しても pendingR
   assert.isDefined(rejected);
   assert.equal(ctx.session.pendingRequestUpdate.size, 0);
   assert.deepEqual(ctx.events, ["close"]);
+});
+
+/**
+ * draft-ietf-moq-msf-01 §11.4.3:
+ * "When a token is associated with a track, it MUST be included in ALL control
+ *  messages that accept the AUTHORIZATION TOKEN parameter and are associated with
+ *  that track. For end subscribers, this includes SUBSCRIBE, SUBSCRIBE_NAMESPACE,
+ *  FETCH, and REQUEST_UPDATE messages."
+ * 初回要求で使ったトークンを namespace / tracks の REQUEST_UPDATE にも載せる。
+ */
+test("bidiSendNamespaceRequestUpdate: 購読の AUTHORIZATION_TOKEN が REQUEST_UPDATE に載る", async () => {
+  for (const kind of ["namespace", "tracks"] as const) {
+    // REGISTER は初回要求で送信済みのため USE_ALIAS に変換した値を保持している
+    const token = { aliasType: AuthorizationTokenAliasType.USE_ALIAS, tokenAlias: 7n } as const;
+    const { session, written } = createNamespaceUpdateSession(kind, ["live"], token);
+    const writer = {
+      write: async (data: Uint8Array): Promise<void> => {
+        written.push(data);
+      },
+    } as unknown as WritableStreamDefaultWriter<Uint8Array>;
+
+    const updatePromise = bidiSendNamespaceRequestUpdate(session, 0n, writer, {
+      trackNamespacePrefix: ["live", "sports"],
+    });
+    for (const [, pending] of session.pendingRequestUpdate) {
+      pending.resolve();
+    }
+    await updatePromise;
+
+    const messages = new ControlStreamReader().feed(concatUint8Arrays(written));
+    assert.equal(messages.length, 1, kind);
+    const decoded = decodeRequestUpdatePayload(messages[0]!.payload);
+    const tokenParam = decoded.parameters.find(
+      (p) => p.type === MessageParameterType.AUTHORIZATION_TOKEN,
+    );
+    assert.isDefined(tokenParam, kind);
+    assert.deepEqual(decodeAuthorizationToken(tokenParam!.value), token, kind);
+  }
+});
+
+/**
+ * トークンを伴わない購読では AUTHORIZATION_TOKEN を載せない
+ * (draft-ietf-moq-msf-01 §11.4.3 の MUST はトークンが紐づく場合だけ適用される)。
+ */
+test("bidiSendNamespaceRequestUpdate: トークンの無い購読では AUTHORIZATION_TOKEN を載せない", async () => {
+  const { session, written } = createNamespaceUpdateSession("namespace", ["live"]);
+  const writer = {
+    write: async (data: Uint8Array): Promise<void> => {
+      written.push(data);
+    },
+  } as unknown as WritableStreamDefaultWriter<Uint8Array>;
+
+  const updatePromise = bidiSendNamespaceRequestUpdate(session, 0n, writer, {
+    trackNamespacePrefix: ["live", "sports"],
+  });
+  for (const [, pending] of session.pendingRequestUpdate) {
+    pending.resolve();
+  }
+  await updatePromise;
+
+  const messages = new ControlStreamReader().feed(concatUint8Arrays(written));
+  const decoded = decodeRequestUpdatePayload(messages[0]!.payload);
+  assert.equal(
+    decoded.parameters.some((p) => p.type === MessageParameterType.AUTHORIZATION_TOKEN),
+    false,
+  );
 });

@@ -993,6 +993,23 @@ export function requestsNormalizeAuthorizationToken<
 }
 
 /**
+ * DELETE (Alias Type 0x00) の Authorization Token を落とす
+ *
+ * draft-ietf-moq-transport-22 §8.9:
+ * DELETE は Alias の退役を指示するものであり、後続の制御メッセージで繰り返すと
+ * UNKNOWN_AUTH_TOKEN_ALIAS と解され得る。購読状態に保持して REQUEST_UPDATE へ
+ * 引き継ぐ対象からは外す。
+ */
+export function requestsTokenUnlessDelete(
+  token: AuthorizationToken | undefined,
+): AuthorizationToken | undefined {
+  if (token === undefined || token.aliasType !== AuthorizationTokenAliasType.DELETE) {
+    return token;
+  }
+  return undefined;
+}
+
+/**
  * REQUEST_UPDATE に付与する Authorization Token を求める
  *
  * draft-ietf-moq-transport-22 §8.9: 既に登録した Alias を同じセッションで

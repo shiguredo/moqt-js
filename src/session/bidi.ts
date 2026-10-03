@@ -3771,6 +3771,19 @@ export async function bidiSendRequestUpdate(
  * - 予約 namespace の送信拒否 (§2.4.3 / §6.5)
  * - §9.5.2 の per-type 独立 overlap 制約 (更新対象自身を除く)
  *
+ * draft-ietf-moq-msf-01 §11.4.3:
+ * "When a token is associated with a track, it MUST be included in ALL control
+ *  messages that accept the AUTHORIZATION TOKEN parameter and are associated with
+ *  that track. For end subscribers, this includes SUBSCRIBE, SUBSCRIBE_NAMESPACE,
+ *  FETCH, and REQUEST_UPDATE messages."
+ * 列挙には namespace 単位の SUBSCRIBE_NAMESPACE (original publisher 側は
+ * PUBLISH_NAMESPACE) が含まれ、「track に紐づく」を track 単位のメッセージに限る
+ * 読み方は成立しない。draft-ietf-moq-transport-22 §9.5 も namespace 系
+ * REQUEST_UPDATE に AUTHORIZATION_TOKEN を許可しており (§9.20.1 の許可外出現に
+ * 当たらない)、付与しないと認可済みの購読でも更新が拒否され得るため、初回要求
+ * (SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS) のトークンを引き継いで付与する
+ * (subscription 系の REQUEST_UPDATE と同じ扱い)。
+ *
  * @param session - セッション内部状態
  * @param requestId - 更新対象の SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS の Request ID
  * @param streamWriter - サブスクリプションの双方向ストリーム writer
@@ -3866,6 +3879,17 @@ export async function bidiSendNamespaceRequestUpdate(
     // TRACK_NAMESPACE_PREFIX (0x34) - draft-ietf-moq-transport-22 Section 9.20.20
     encodeParameterTrackNamespace(createTrackNamespace(options.trackNamespacePrefix)),
   ];
+
+  // AUTHORIZATION_TOKEN (0x03) - draft-ietf-moq-msf-01 §11.4.3 / §9.20.2:
+  // namespace / tracks の購読を認可したトークンを初回要求から引き継いで付与する
+  // (判断の根拠は JSDoc を参照)
+  const authorizationToken = subscription.authorizationToken;
+  if (authorizationToken !== undefined) {
+    parameters.push({
+      type: MessageParameterType.AUTHORIZATION_TOKEN,
+      value: encodeAuthorizationToken(authorizationToken),
+    });
+  }
 
   // FORWARD (0x10) - draft-ietf-moq-transport-22 Section 9.20.18:
   // SUBSCRIBE_TRACKS の REQUEST_UPDATE にのみ許可され、 prefix に一致する

@@ -329,6 +329,10 @@
   - 上限で捨てたログの vnode はキャッシュから落とす。`data` と `payload` は追加後に書き換えない前提になる (行を描画し直さないため、書き換えても表示は古いまま)
   - 1 件追加のコストは表示中の件数に比例する分が残る (1000 件で約 3 ms のうち、表示中の子の走査が大半)。表示する行を画面に入る分だけにする対応は別に行う
   - @voluntas
+- [FIX] namespace / tracks 購読の REQUEST_UPDATE に AUTHORIZATION TOKEN を付与する
+  - draft-ietf-moq-msf-01 §11.4.3 は「track に紐づくトークンは、AUTHORIZATION TOKEN パラメータを受け付け、かつその track に紐づく全ての制御メッセージに含めなければならない (MUST)」と定め、end subscriber の対象として SUBSCRIBE_NAMESPACE と REQUEST_UPDATE を挙げている。namespace / tracks 購読の REQUEST_UPDATE がトークンを運んでいなかったため、初回要求のトークンを引き継いで付与するようにした
+  - REGISTER は初回要求で送信済みのため、USE_ALIAS に変換した値を保持して付与する (再 REGISTER は DUPLICATE_AUTH_TOKEN_ALIAS でセッションを閉じるため)。DELETE で退役させたトークンは引き継がない
+  - @voluntas
 - [FIX] 音声を再生すると映像の表示が遅れるのを修正する
   - 音声と映像の表示の遅れを 1 つ共有していたため、音声の jitter buffer の遅れ (下限 80 ms) が映像にも乗り、映像の表示が約 50 ms 遅れていた。表示の遅れをトラックごとに決め (音声は到着の遅れの 0.95 分位、映像は揺らぎの百分位)、2 つのずれが 30 ms を超えたときだけ片側の遅延を動かす
   - 2 つの遅延が独立になるため、A/V のずれは最大 30 ms 程度になる (従来は 0 ms)。経路が良いときは映像の表示の遅延が音声を再生しても増えない。経路が悪いときは音声の遅延が揺らぎに応じて上がり、映像がその 30 ms 以内に収まる
