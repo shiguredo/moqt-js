@@ -378,7 +378,7 @@ const trackAliasArb = fc.bigInt({ min: 0n, max: MAX_VARINT });
  * Group ID / Object ID の任意構築
  *
  * 公開 API は number のため、精度を保証できる安全整数の範囲で生成する
- * (draft-ietf-moq-transport-21 §11.3.1 の varint 全域は number では表現できない)。
+ * (draft-ietf-moq-transport-22 §11.3.1 の varint 全域は number では表現できない)。
  */
 const objectIdArb = fc.integer({ min: 0, max: Number.MAX_SAFE_INTEGER });
 
@@ -459,7 +459,7 @@ function expandSubgroupObjects(objects: SubgroupObjectInput[]): ExpandedSubgroup
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-21 §11.3.1:
+ * draft-ietf-moq-transport-22 §11.3.1:
  * publisher が書き出した Subgroup Header と Object 列を、受信側の実装
  * (decodeSubgroupHeader + processSubgroupObjects) で読み戻すと、Object ID /
  * payload / status / publisherPriority / Subgroup ID が入力と一致することを
@@ -533,7 +533,7 @@ test("publishSendObjectInternal: 書き出した Subgroup が受信側の実装�
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-21 §11.3.1:
+ * draft-ietf-moq-transport-22 §11.3.1:
  * Object ID Delta は先頭 Object では絶対値、2 件目以降では
  * 「現在の Object ID - 前の Object ID - 1」であることを wire の値で検証する。
  */
@@ -574,7 +574,7 @@ test("publishSendObjectInternal: Object ID Delta が前 Object との差分 - 1 
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-21 §11.3 / §11.3.2:
+ * draft-ietf-moq-transport-22 §11.3 / §11.3.2:
  * Object Fields と payload は 1 回の write で送られる (宣言 payloadLength 未達の
  * FIN を送出し得る 2 回の write の窓を作らない)。チャンク数が
  * 「Subgroup Header 1 + Object 数」と一致し、各チャンクが fields と payload の
@@ -630,7 +630,7 @@ const groupSequenceArb = fc.array(
 );
 
 /**
- * draft-ietf-moq-transport-21 §11.3.1:
+ * draft-ietf-moq-transport-22 §11.3.1:
  * Group を切り替えると新しい Subgroup ストリームが開き、Object ID Delta の基準が
  * リセットされる (新しい Subgroup の先頭 Object は絶対値) ことを検証する。
  * 省略のない Subgroup は FIN で閉じられ、closedSubgroups に登録される。
@@ -714,7 +714,7 @@ test("publishSendObjectInternal: Group 切替で新しいストリームが開�
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-21 §11.1.2 / §11.3.2:
+ * draft-ietf-moq-transport-22 §11.1.1 / §11.3.2:
  * Object Status が END_OF_GROUP の Object はラウンドトリップし (空 payload 必須)、
  * 送信後に Subgroup が FIN で確定して closedSubgroups に登録されることを検証する。
  */
@@ -782,7 +782,7 @@ const deliveryTimeoutArb = fc
   );
 
 /**
- * draft-ietf-moq-transport-21 §5.2 (Object Delivery Timeout) / §11.3.1:
+ * draft-ietf-moq-transport-22 §5.2 (Object Delivery Timeout) / §11.3.1:
  * delivery timeout は Subgroup 先頭 Object の Object Property として送られ、
  * 受信側の読み取り (readDeliveryTimeoutObjectProperties) で同じ値に戻ることを
  * 検証する。2 件目以降の Object には載らない。
@@ -1111,7 +1111,7 @@ test("publishResetPublisherStream: 対象 track のストリームと送信キ�
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-21 §11.2.1 (Object Datagram):
+ * draft-ietf-moq-transport-22 §11.2.1 (Object Datagram):
  * publishSendDatagram が書き出した datagram を decodeObjectDatagram で読み戻すと、
  * Track Alias / Group ID / Object ID / payload / Publisher Priority が入力と一致し、
  * END_OF_GROUP ビットが endOfGroup と整合することを検証する。Priority 未指定時は

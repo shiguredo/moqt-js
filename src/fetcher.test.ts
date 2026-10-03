@@ -64,7 +64,7 @@ test("cancel は closed 状態では onCancel を呼ばない", async () => {
   assert.equal(cancelCallCount, 1);
 });
 
-// draft-ietf-moq-transport-21 Section 9.12:
+// draft-ietf-moq-transport-22 Section 9.12:
 // setFetchOkInfo で Track Properties が設定される
 test("setFetchOkInfo で Track Properties が設定される", () => {
   const fetcher = new FetcherImpl(["namespace"], "track", 0n, () => {});

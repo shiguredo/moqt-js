@@ -1,6 +1,6 @@
 /**
  * MOQT Full Track Name
- * draft-ietf-moq-transport-21 Section 2.4.1 (Track Naming)
+ * draft-ietf-moq-transport-22 Section 2.4.1 (Track Naming)
  */
 
 /**
@@ -16,7 +16,7 @@ export type FullTrackNameKey = string & { readonly __brand: "FullTrackNameKey" }
 /**
  * Full Track Name の比較キーを生成する
  *
- * draft-ietf-moq-transport-21 §2.4.1:
+ * draft-ietf-moq-transport-22 §2.4.1:
  * Track は Track Namespace (0〜32 個の Track Namespace Field) と Track Name の
  * 組で識別され、比較はバイト列の完全一致で行う。moqt-js は Track Namespace
  * Field と Track Name を JS 文字列で保持するため、`/` などの区切り文字で連結
@@ -50,7 +50,7 @@ const fullTrackNameEncoder = new TextEncoder();
 /**
  * Track Namespace Field / Track Name の 1 セグメントをエスケープする
  *
- * draft-ietf-moq-transport-21 §8.8:
+ * draft-ietf-moq-transport-22 §8.8:
  * バイト a-z / A-Z / 0-9 / _ (0x5f) はそのまま、それ以外のバイトは "." に続けて
  * 小文字 16 進 2 桁で表す。プロトコルは文字列をバイト列として扱うため、UTF-8 の
  * バイトごとにエスケープする。
@@ -75,7 +75,7 @@ function escapeFullTrackNameSegment(value: string): string {
 /**
  * Track Namespace の文字列表現を組み立てる
  *
- * draft-ietf-moq-transport-21 §8.8 (Representing Namespace and Track Names):
+ * draft-ietf-moq-transport-22 §8.8 (Representing Namespace and Track Names):
  * Full Track Name の文字列表現は、Track Namespace の各フィールドを "-" で並べ、
  * Track Name を "--" でつなぐ。この関数は前半 (Track Namespace まで) を
  * 組み立てる。namespace 単体をログ等へ出すときに使う。各フィールドのバイトは
@@ -91,7 +91,7 @@ export function formatTrackNamespace(trackNamespace: readonly string[]): string 
   for (const [index, field] of trackNamespace.entries()) {
     if (field.length === 0) {
       throw new Error(
-        `track namespace field at index ${index} must not be empty per draft-ietf-moq-transport-21 §8.7`,
+        `track namespace field at index ${index} must not be empty per draft-ietf-moq-transport-22 §8.7`,
       );
     }
     namespaceSegments.push(escapeFullTrackNameSegment(field));
@@ -102,7 +102,7 @@ export function formatTrackNamespace(trackNamespace: readonly string[]): string 
 /**
  * Full Track Name の文字列表現を組み立てる
  *
- * draft-ietf-moq-transport-21 §8.8 (Representing Namespace and Track Names):
+ * draft-ietf-moq-transport-22 §8.8 (Representing Namespace and Track Names):
  * ログ等の用途で推奨される形式として、Track Namespace の各フィールドを "-" で
  * 並べ、Track Name を "--" でつなぐ。Track Namespace の部分は
  * formatTrackNamespace が組み立て、Track Name のバイトは

@@ -1087,7 +1087,7 @@ test("handleVideoObject: Frame Marking が無ければ Group 先頭を key と�
 /**
  * Frame Marking がある場合はそれを優先し、Object ID 0 でもキーフレームとして扱わない。
  *
- * draft-ietf-moq-transport-21 Section 2.3: Group の Object は他の Group の Object に依存
+ * draft-ietf-moq-transport-22 Section 2.3: Group の Object は他の Group の Object に依存
  * しないことが求められる (SHOULD NOT)。Group の先頭が delta の場合、参照するフレームは
  * Group の外にあり、復号していないため decoder へ渡さない。キーフレームとして扱えば
  * 復号されるため、渡らないことで delta として扱ったことを確かめる。
@@ -1160,7 +1160,7 @@ function createVideoGateSubscriber(): {
 }
 
 /**
- * draft-ietf-moq-transport-21 Section 2.1: Object は順不同で届きうる。後から購読した直後
+ * draft-ietf-moq-transport-22 Section 2.1: Object は順不同で届きうる。後から購読した直後
  * などに、次の Group の先頭 (キーフレーム) が前の Group の最後の Object より先に届くことが
  * ある。前の Group の stream が終わるまで次の Group の Object を保留し、前の Group の末尾を
  * 先に復号する (保留しないと、前の Group の末尾を古い Group として捨てる)

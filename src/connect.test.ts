@@ -4,7 +4,7 @@
  * draft-ietf-moq-msf-01 §11.1.1 (c4m) / §11.4.2 / §11.4.3 (Presenting Authorization):
  * MOQT URI の msf fragment が持つ c4m は Base64 でエンコードされた C4M トークンであり、
  * クライアントが取り出して SETUP の AUTHORIZATION TOKEN として送る。
- * fragment はサーバーへ送信されない (draft-ietf-moq-transport-21 §6.1.1)。
+ * fragment はサーバーへ送信されない (draft-ietf-moq-transport-22 §6.1.1)。
  *
  * connect() は WebTransport の実体を必要とするため、connect() と initialize() が使う
  * API だけを持つ WebTransport の代役を globalThis に差し替えて最後まで駆動する
@@ -104,7 +104,7 @@ function installSetupHandshakeTransport(): {
  * クライアントが送った制御ストリームのバイト列から SETUP の Authorization Token を取り出す
  *
  * ストリームタイプ (0x2F00 = SETUP) とフレーミングを外し、Setup Options の
- * AUTHORIZATION TOKEN (0x03) をデコードする (draft-ietf-moq-transport-21 §9.1.4 / §8.9)。
+ * AUTHORIZATION TOKEN (0x03) をデコードする (draft-ietf-moq-transport-22 §9.1.4 / §8.9)。
  */
 function decodeSentAuthorizationTokens(sentChunks: Uint8Array[]): AuthorizationToken[] {
   const sent = concatUint8Arrays(sentChunks);
@@ -123,7 +123,7 @@ function decodeSentAuthorizationTokens(sentChunks: Uint8Array[]): AuthorizationT
 /**
  * USE_VALUE 形式の Authorization Token であることを確かめて中身を取り出す
  *
- * draft-ietf-moq-transport-21 §9.1.4: SETUP で送れるのは REGISTER (0x1) と USE_VALUE (0x3)。
+ * draft-ietf-moq-transport-22 §9.1.4: SETUP で送れるのは REGISTER (0x1) と USE_VALUE (0x3)。
  */
 function requireUseValueToken(token: AuthorizationToken | undefined): AuthorizationTokenUseValue {
   assert.isDefined(token);
@@ -159,7 +159,7 @@ test("connect: c4m を持つ URI でも WebTransport へ fragment を渡さな�
     fake.restore();
   }
 
-  // draft-ietf-moq-transport-21 §6.1.1: fragment はサーバーへ送信せず、クライアントが
+  // draft-ietf-moq-transport-22 §6.1.1: fragment はサーバーへ送信せず、クライアントが
   // ローカルで処理する。認可トークンが fragment のままサーバーへ漏れないこと
   assert.strictEqual(fake.createdUrls.length, 1);
   const [createdUrl] = fake.createdUrls;

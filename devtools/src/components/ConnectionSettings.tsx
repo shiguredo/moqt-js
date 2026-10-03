@@ -82,12 +82,12 @@ function MoqtHelpModal() {
           </div>
           <div class="pt-2 border-t border-slate-200">
             <a
-              href="https://datatracker.ietf.org/doc/html/draft-ietf-moq-transport-21"
+              href="https://datatracker.ietf.org/doc/html/draft-ietf-moq-transport-22"
               target="_blank"
               rel="noopener noreferrer"
               class="text-blue-600 hover:text-blue-800 hover:underline"
             >
-              draft-ietf-moq-transport-21
+              draft-ietf-moq-transport-22
             </a>
           </div>
         </div>
@@ -843,7 +843,7 @@ export function ConnectionSettings() {
         </div>
 
         {/* Authorization Token Settings */}
-        {/* draft-ietf-moq-transport-21 §9.1.4 (AUTHORIZATION TOKEN Setup Option) */}
+        {/* draft-ietf-moq-transport-22 §9.1.4 (AUTHORIZATION TOKEN Setup Option) */}
         <div class="mt-4 pt-4 border-t border-slate-200">
           <h3 class="text-sm font-medium text-slate-600 mb-3">
             Authorization Token

@@ -240,7 +240,7 @@ test("decodeC4mTokenInfo: クレームが無いトークンでも形式だけを
 });
 
 // track の無いスコープは "any"、namespace の無いスコープは "-" として出す。
-// ClientSetup の表示名は draft-ietf-moq-transport-21 の 1 つの SETUP メッセージに合わせる
+// ClientSetup の表示名は draft-ietf-moq-transport-22 の 1 つの SETUP メッセージに合わせる
 test("decodeC4mTokenInfo: track と namespace の無いスコープを any / - で出す", async () => {
   const scope = C4M.createMoqtScope(["ClientSetup"]);
   const base64 = await buildCat([scope]);

@@ -5,7 +5,7 @@
  * 配列へ積み、最後に 1 つの Uint8Array へ連結する」パターンを繰り返す。
  * 連結処理 (合計長の算出 → 1 回の領域確保 → 順次 set) をここに集約する。
  *
- * draft-ietf-moq-transport-21: 各メッセージのエンコーディングは
+ * draft-ietf-moq-transport-22: 各メッセージのエンコーディングは
  * Section 9 (Control Messages) / Section 11 (Data Streams and Datagrams) が
  * 個別に定義する。本モジュールはバイト列の連結のみを担い、値の解釈はしない。
  * 節番号は仕様将来版で変わる可能性がある。

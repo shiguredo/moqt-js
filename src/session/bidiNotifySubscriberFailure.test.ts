@@ -13,11 +13,11 @@ import { createPublishReadTestContext } from "../testSupport/bidi";
 
 // ============================================================================
 // notifySubscriberFailure のテスト
-// draft-ietf-moq-transport-21 §6.4.2.2 (FIN without PUBLISH_DONE は失敗扱い)
+// draft-ietf-moq-transport-22 §6.4.2.2 (FIN without PUBLISH_DONE は失敗扱い)
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-21 §6.4.2.2:
+ * draft-ietf-moq-transport-22 §6.4.2.2:
  * active な subscriber に対して error 通知が行われ、state が closed になる
  * ことを検証する。
  */
@@ -46,7 +46,7 @@ test("notifySubscriberFailure: active な subscriber に error 通知し state �
 });
 
 /**
- * draft-ietf-moq-transport-21 §6.4.2.2:
+ * draft-ietf-moq-transport-22 §6.4.2.2:
  * error コールバックが throw した場合でも、finally で state が closed に
  * なることを検証する (error コールバックの例外で状態遷移が失われない)。
  */
@@ -84,7 +84,7 @@ test("notifySubscriberFailure: error コールバックが throw しても state
 });
 
 /**
- * draft-ietf-moq-transport-21 §6.4.2.2:
+ * draft-ietf-moq-transport-22 §6.4.2.2:
  * subscribers に存在しない requestId (unsubscribe 済み等) では何もしない
  * ことを検証する。
  */
@@ -99,7 +99,7 @@ test("notifySubscriberFailure: subscribers に存在しない requestId では�
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.2:
+ * draft-ietf-moq-transport-22 §9.2:
  * GOAWAY 受信済みの requestId (マイグレーション通知) では何もしないことを
  * 検証する (GOAWAY は subscription state に影響しない)。
  */
@@ -130,7 +130,7 @@ test("notifySubscriberFailure: GOAWAY 受信済みの requestId では何もし�
 });
 
 /**
- * draft-ietf-moq-transport-21 §6.4.2.2:
+ * draft-ietf-moq-transport-22 §6.4.2.2:
  * state が active でない subscriber (正常な PUBLISH_DONE 済み等) では何も
  * しないことを検証する。
  */

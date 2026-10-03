@@ -2,13 +2,13 @@
  * moqt-js
  *
  * MOQT (Media over QUIC Transport) client library
- * draft-ietf-moq-transport-21
+ * draft-ietf-moq-transport-22
  */
 
-// 接続 (draft-ietf-moq-transport-21 Section 6.2)
+// 接続 (draft-ietf-moq-transport-22 Section 6.2)
 export { connect } from "./connect";
 
-// MOQT URI / Fragment Identifier (draft-ietf-moq-transport-21 §6.1 / §6.1.1)
+// MOQT URI / Fragment Identifier (draft-ietf-moq-transport-22 §6.1 / §6.1.1)
 export { parseFragment, type MoqtFragment, type NormalizedMoqtUri } from "./moqtUri";
 
 // 公開型の再エクスポート
@@ -40,7 +40,7 @@ export type {
 } from "./session";
 export { toHttpVersionLabel, type HttpVersionLabel } from "./httpVersion";
 
-// Pending Subgroup Buffer オプションの再エクスポート (draft-ietf-moq-transport-21 §11.3.1)
+// Pending Subgroup Buffer オプションの再エクスポート (draft-ietf-moq-transport-22 §11.3.1)
 export {
   type PendingSubgroupBufferOptions,
   DEFAULT_PENDING_SUBGROUP_BUFFER_OPTIONS,
@@ -193,7 +193,7 @@ export {
   type VideoFrameSource,
 } from "./frameSource";
 
-// MOQT 拡張の再エクスポート (draft-ietf-moq-transport-21 Section 10 (MOQT Properties))
+// MOQT 拡張の再エクスポート (draft-ietf-moq-transport-22 Section 10 (MOQT Properties))
 export {
   MOQTPropertyId,
   TrackPropertyId,

@@ -10,8 +10,8 @@
  * - draft-ietf-moq-c4m-01 §2 (Token format): URL に載せるときは Base64 (RFC 4648)
  * - draft-ietf-moq-c4m-01 §7.1 Table 4 / §7.1.1: Token Type 0x01 は CAT で、Token Payload
  *   は CBOR エンコードされた CWT として直列化した CAT
- * - draft-ietf-moq-transport-21 §9.1.4 (AUTHORIZATION TOKEN Setup Option)
- * - draft-ietf-moq-transport-21 §8.9 (Authorization Token Compression): Token 構造
+ * - draft-ietf-moq-transport-22 §9.1.4 (AUTHORIZATION TOKEN Setup Option)
+ * - draft-ietf-moq-transport-22 §8.9 (Authorization Token Compression): Token 構造
  *
  * draft 版を追従しているため、将来変更される可能性がある。
  */
@@ -29,7 +29,7 @@ import { parseMsfFragmentValue } from "./fragment";
  * c4m が運ぶ C4M のトークンタイプ
  *
  * draft-ietf-moq-c4m-01 §7.1 Table 4: MOQT Auth Token Type の 0x01 が CAT。
- * draft-ietf-moq-transport-21 §8.9: Type 0 は表に定義が無く out-of-band で交渉する
+ * draft-ietf-moq-transport-22 §8.9: Type 0 は表に定義が無く out-of-band で交渉する
  * 予約値のため、CAT には 0 ではなく 0x01 を送る。
  */
 const C4M_TOKEN_TYPE = 1n;
@@ -42,7 +42,7 @@ const C4M_TOKEN_TYPE = 1n;
  * c4m の付録 A のテストベクタはパディング無しの base64url のため、標準 Base64
  * (RFC 4648 Section 4) と base64url (Section 5)、パディングの有無の両方を受ける。
  *
- * draft-ietf-moq-transport-21 §9.1.4: SETUP で Alias Type DELETE (0x0) / USE_ALIAS (0x2) を
+ * draft-ietf-moq-transport-22 §9.1.4: SETUP で Alias Type DELETE (0x0) / USE_ALIAS (0x2) を
  * 受信したサーバーは PROTOCOL_VIOLATION でセッションを閉じる MUST。Alias を持たず
  * トークン値をそのまま使う USE_VALUE (0x3) で返す。
  *

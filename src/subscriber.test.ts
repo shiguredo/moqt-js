@@ -104,7 +104,7 @@ test("update は closed 状態ではエラーになる", async () => {
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.5:
+ * draft-ietf-moq-transport-22 §9.5:
  * 非 async 化に伴い、closed 状態の update() が同期 throw に化けず rejected な
  * Promise を返すことを検証する。fire-and-forget 呼び出しの観測挙動を変えない
  * ための振る舞いであり、await する呼び出しには reject が伝播する。
@@ -128,7 +128,7 @@ test("update は closed 状態でも同期 throw せず rejected な Promise を
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.5:
+ * draft-ietf-moq-transport-22 §9.5:
  * closed 状態の update() を fire-and-forget で呼んでも unhandled rejection に
  * ならないことを検証する (同一インスタンスに catch ハンドラを登録するため)。
  */
@@ -157,7 +157,7 @@ test("update は closed 状態の fire-and-forget でも unhandled rejection に
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.5:
+ * draft-ietf-moq-transport-22 §9.5:
  * onUpdate 未設定の update() は解決済み Promise を返すことを検証する
  * (現行の暗黙 resolve 挙動の維持)。
  */
@@ -170,7 +170,7 @@ test("update は onUpdate 未設定時は解決済み Promise を返す", async 
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.5:
+ * draft-ietf-moq-transport-22 §9.5:
  * onUpdate が同期 throw しても update() は同期 throw せず rejected な
  * Promise を返すことを検証する (旧 async 実装と等価に吸収する)。
  */
@@ -192,7 +192,7 @@ test("update は onUpdate の同期 throw を rejected な Promise に変換す�
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.5:
+ * draft-ietf-moq-transport-22 §9.5:
  * onUpdate の同期 throw を fire-and-forget で呼んでも unhandled rejection に
  * ならないことを検証する。
  */
@@ -220,7 +220,7 @@ test("update は onUpdate の同期 throw の fire-and-forget でも unhandled r
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.5:
+ * draft-ietf-moq-transport-22 §9.5:
  * update() が onUpdate の返り値と同一インスタンスを返すことを検証する。
  * 別インスタンス (catch 派生) を返すと await 側に reject が伝播しなくなるため、
  * 同一性が抑制と伝播の両立の核になる。
@@ -243,7 +243,7 @@ test("update は onUpdate の返り値と同一インスタンスを返す", asy
   }
 });
 
-// draft-ietf-moq-transport-21 Section 9.9 (PUBLISH_DONE):
+// draft-ietf-moq-transport-22 Section 9.9 (PUBLISH_DONE):
 // UPDATE_FAILED (0x8) 等のエラー・ステータスでは errorCallback を呼ぶ
 test("handleEnd は statusCode がエラーの場合 errorCallback を呼ぶ", () => {
   let endCalled = false;
@@ -271,7 +271,7 @@ test("handleEnd は statusCode がエラーの場合 errorCallback を呼ぶ", (
   assert.equal(subscriber.state, "closed");
 });
 
-// draft-ietf-moq-transport-21 Section 9.9 (PUBLISH_DONE):
+// draft-ietf-moq-transport-22 Section 9.9 (PUBLISH_DONE):
 // TRACK_ENDED (0x2) は正常終了。errorCallback は呼ばない
 test("handleEnd は statusCode が TRACK_ENDED の場合 errorCallback を呼ばない", () => {
   let endCalled = false;
@@ -296,7 +296,7 @@ test("handleEnd は statusCode が TRACK_ENDED の場合 errorCallback を呼ば
   assert.isFalse(errorCalled);
 });
 
-// draft-ietf-moq-transport-21 Section 9.9 (PUBLISH_DONE):
+// draft-ietf-moq-transport-22 Section 9.9 (PUBLISH_DONE):
 // INTERNAL_ERROR (0x0) はエラー。errorCallback を呼ぶ
 test("handleEnd は statusCode が INTERNAL_ERROR の場合 errorCallback を呼ぶ", () => {
   let endCalled = false;
@@ -322,7 +322,7 @@ test("handleEnd は statusCode が INTERNAL_ERROR の場合 errorCallback を呼
   assert.equal(subscriber.state, "closed");
 });
 
-// draft-ietf-moq-transport-21 Section 9.7 (SUBSCRIBE_OK):
+// draft-ietf-moq-transport-22 Section 9.7 (SUBSCRIBE_OK):
 // SUBSCRIBE_OK の Track Properties が Subscriber に設定される
 test("setTrackProperties で Track Properties が設定される", () => {
   const subscriber = new SubscriberImpl(["namespace"], "track", 0n, 0n, () => {});
@@ -355,7 +355,7 @@ test("setLargestLocation で largestLocation が更新される", () => {
   assert.deepEqual(subscriber.largestLocation, { group: 10n, object: 7n });
 });
 
-// draft-ietf-moq-transport-21 §9.2 (GOAWAY):
+// draft-ietf-moq-transport-22 §9.2 (GOAWAY):
 // "A GOAWAY MAY also be sent on a request stream to initiate migration
 //  of that individual request."
 // goawayCallback が設定され、GOAWAY 受信時に呼び出されることを検証する。
@@ -389,7 +389,7 @@ test("setForwardState で forwardState が更新される", () => {
 
 // ============================================================================
 // Range Filters の再適用テスト
-// draft-ietf-moq-transport-21 Section 3.3.2 (Range Filters)
+// draft-ietf-moq-transport-22 Section 3.3.2 (Range Filters)
 // ============================================================================
 
 /**
@@ -430,7 +430,7 @@ test("handleObject: SUBGROUP_FILTER で subgroupId 未指定は配信しない",
 });
 
 /**
- * draft-ietf-moq-transport-21 §10.4 (DEFAULT PUBLISHER_PRIORITY) / §11.2.1:
+ * draft-ietf-moq-transport-22 §10.4 (DEFAULT PUBLISHER_PRIORITY) / §11.2.1:
  * Priority 省略時は購読の DEFAULT_PUBLISHER_PRIORITY (省略時 128) を継承し、
  * PRIORITY_FILTER の評価とコールバックの publisherPriority に反映される。
  */
@@ -468,7 +468,7 @@ test("handleDatagram: publisherPriority 未指定は購読の DEFAULT_PUBLISHER_
 });
 
 /**
- * draft-ietf-moq-transport-21 §10.4 / §11.3.1:
+ * draft-ietf-moq-transport-22 §10.4 / §11.3.1:
  * Subgroup 経由 (handleObject) でも Priority 省略時は購読の既定値を継承する。
  */
 test("handleObject: publisherPriority 未指定は購読の DEFAULT_PUBLISHER_PRIORITY を継承する", () => {
@@ -487,7 +487,7 @@ test("handleObject: publisherPriority 未指定は購読の DEFAULT_PUBLISHER_PR
 });
 
 /**
- * draft-ietf-moq-transport-21 §10.4:
+ * draft-ietf-moq-transport-22 §10.4:
  * Track Properties が未受信の場合の既定値は 128 である。
  */
 test("handleObject: Track Properties 未設定時は既定 128 を継承する", () => {
@@ -602,7 +602,7 @@ test("setRangeFilters: 異なる Property Type は共存する", () => {
 
 // ============================================================================
 // Location Filter 再適用のテスト
-// draft-ietf-moq-transport-21 Section 3.3.1 (Location Filters)
+// draft-ietf-moq-transport-22 Section 3.3.1 (Location Filters)
 // ============================================================================
 
 /**
@@ -749,7 +749,7 @@ test("Location Filter 再適用: SUBSCRIBE_OK 後の LARGEST_OBJECT 更新で Ne
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.3.1:
+ * draft-ietf-moq-transport-22 §3.3.1:
  * 1 フィールド相対フィルタ (Next Group) の開始位置も SUBSCRIBE_OK で確定し、
  * その後の LARGEST_OBJECT 更新では前進しない。
  */
@@ -791,7 +791,7 @@ test("setGroupOrder / getGroupOrder: SUBSCRIBE 送信時の Group Order を保�
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.3.1 / §3.4:
+ * draft-ietf-moq-transport-22 §3.3.1 / §3.4:
  * 同一 Location が fill 経由と subscription 経由の両方で届く場合に、
  * アプリが両者を区別して受け取れることを検証する。
  * fill 経由は subscription の Location Filter 再適用を通さないため、

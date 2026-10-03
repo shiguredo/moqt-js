@@ -27,11 +27,11 @@ import { createPublishReadTestContext } from "../testSupport/bidi";
 
 // ============================================================================
 // bidiReadRequestStreamMessages の FIN / RESET_STREAM 検出 (subscribe ロール) テスト
-// draft-ietf-moq-transport-21 §6.4.2.2 (FIN) / §6.4.2.3 (RESET_STREAM)
+// draft-ietf-moq-transport-22 §6.4.2.2 (FIN) / §6.4.2.3 (RESET_STREAM)
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-21 §6.4.2.2:
+ * draft-ietf-moq-transport-22 §6.4.2.2:
  * subscribe ロールでピア (publisher) が PUBLISH_DONE なしに FIN した場合、
  * error コールバックが呼ばれ state が closed になることを検証する。
  */
@@ -75,7 +75,7 @@ test("bidiReadRequestStreamMessages: ピアの FIN (subscribe ロール) で err
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.5.1 / §6.4.2.2:
+ * draft-ietf-moq-transport-22 §9.5.1 / §6.4.2.2:
  * subscribe ロールでピアが FIN した場合、応答待ちの REQUEST_UPDATE
  * (update() の Promise) が reject され、エントリが削除されることを検証する。
  * 未解決のまま残すとアプリは FIN 後に update() の結果を待ち続ける。
@@ -113,7 +113,7 @@ test("bidiReadRequestStreamMessages: ピアの FIN (subscribe ロール) で応�
 });
 
 /**
- * draft-ietf-moq-transport-21 §6.4.2.3:
+ * draft-ietf-moq-transport-22 §6.4.2.3:
  * subscribe ロールでピアが RESET_STREAM でストリームをエラー終了させた場合、
  * error コールバックが呼ばれ state が closed になることを検証する。プロトコル
  * 違反ではないためセッションは閉じない。エラーメッセージは FIN 経路
@@ -162,7 +162,7 @@ test("bidiReadRequestStreamMessages: ピアの RESET_STREAM (subscribe ロール
 });
 
 /**
- * draft-ietf-moq-transport-21 §6.4.2.2 / §6.4.2.3 / §9.5.1:
+ * draft-ietf-moq-transport-22 §6.4.2.2 / §6.4.2.3 / §9.5.1:
  * subscribe ロールでピアが RESET_STREAM でストリームをエラー終了させた場合、
  * 応答待ちの REQUEST_UPDATE (update() の Promise) が reject され、エントリが
  * 削除されることを検証する。FIN 経路と同じ文言で失敗として扱う。
@@ -219,7 +219,7 @@ test("bidiReadRequestStreamMessages: ピアの RESET_STREAM (subscribe ロール
 });
 
 /**
- * draft-ietf-moq-transport-21 §6.4.2.2 / §6.4.2.3:
+ * draft-ietf-moq-transport-22 §6.4.2.2 / §6.4.2.3:
  * RESET_STREAM 通知でアプリの error コールバックが throw しても、
  * 応答待ちの REQUEST_UPDATE の reject が先に実行済みであることを検証する。
  * 通知より reject を先に置く順序の根拠を固定する。
@@ -272,7 +272,7 @@ test("bidiReadRequestStreamMessages: RESET_STREAM 通知で error コールバ�
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.2:
+ * draft-ietf-moq-transport-22 §9.2:
  * GOAWAY 受信済みの subscribe ロールで RESET_STREAM が起きても、
  * 保留中の REQUEST_UPDATE には触れないことを検証する (GOAWAY 掃除に委ねる)。
  * 呼び出し自体が起きないため、注入したエントリが残る。
@@ -327,7 +327,7 @@ test("bidiReadRequestStreamMessages: GOAWAY 受信後の RESET_STREAM では応�
 });
 
 /**
- * draft-ietf-moq-transport-21 §6.4.2.3 / §6.6:
+ * draft-ietf-moq-transport-22 §6.4.2.3 / §6.6:
  * セッション終了起因 (source: "session") の読み取り失敗では、
  * 保留中の REQUEST_UPDATE に触れないことを検証する。
  */
@@ -378,7 +378,7 @@ test("bidiReadRequestStreamMessages: セッション終了の読み取り失敗�
 });
 
 /**
- * draft-ietf-moq-transport-21 §12.5:
+ * draft-ietf-moq-transport-22 §12.5:
  * ピアが RESET_STREAM にエラーコードを付けて終了した場合、通知される
  * エラーのメッセージにコード名が付加され、構造化されたコード値でも
  * 参照できることを検証する。アプリが終了理由を区別できるようにする
@@ -427,7 +427,7 @@ test("bidiReadRequestStreamMessages: ピアの RESET_STREAM のエラーコー�
 });
 
 /**
- * draft-ietf-moq-transport-21 §12.5:
+ * draft-ietf-moq-transport-22 §12.5:
  * ピアの実装がエラーコードを提供しない場合 (undefined) は、従来の固定文言
  * のみで通知し、コード値のプロパティを付けないことを検証する。
  * 仕様外の組み合わせに対する後方互換の振る舞いである。
@@ -475,7 +475,7 @@ test("bidiReadRequestStreamMessages: RESET_STREAM のエラーコードが無い
 });
 
 /**
- * draft-ietf-moq-transport-21 §12.5:
+ * draft-ietf-moq-transport-22 §12.5:
  * 仕様の列挙に無いエラーコードでリセットされた場合は内部エラーに正規化
  * されることを検証する。未知値の扱いはデータストリーム系エラーコードの
  * 共通規則に従う。
@@ -523,7 +523,7 @@ test("bidiReadRequestStreamMessages: 未知の RESET_STREAM エラーコード�
 });
 
 /**
- * draft-ietf-moq-transport-21 §12.5:
+ * draft-ietf-moq-transport-22 §12.5:
  * エラーコードが数値以外 (他実装の型差異など) の場合は固定文言のみで
  * 通知することを検証する。文字列比較に依存せず構造化値の有無で判断
  * できるようにするため、プロパティ自体を付けない。
@@ -571,7 +571,7 @@ test("bidiReadRequestStreamMessages: 数値でない RESET_STREAM エラーコ�
 });
 
 /**
- * draft-ietf-moq-transport-21 §12.5:
+ * draft-ietf-moq-transport-22 §12.5:
  * 通知用エラー組み立ての単体検証。
  * 読み取り失敗値の取り出し・正規化・文言付加の対応を、ストリーム駆動を
  * 介さず直接確認する。受信 PUBLISH 経路も同じ組み立てを共用するため、
@@ -635,7 +635,7 @@ test("createResetStreamError: エラーコードの有無と未知値の扱い�
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.2 / §6.4.2.3:
+ * draft-ietf-moq-transport-22 §9.2 / §6.4.2.3:
  * GOAWAY 受信済みの subscribe ロールの RESET_STREAM では error 通知されない
  * ことを検証する (GOAWAY 後の旧ストリームの破壊は migration の完了であり、
  * GOAWAY 後の FIN と同じ扱い)。修正前の実装でも通る回帰ガードである
@@ -679,7 +679,7 @@ test("bidiReadRequestStreamMessages: GOAWAY 受信後の RESET_STREAM (subscribe
 });
 
 /**
- * draft-ietf-moq-transport-21 §6.4.2.3:
+ * draft-ietf-moq-transport-22 §6.4.2.3:
  * publish ロールのピア (requester) の RESET_STREAM では error 通知されない
  * ことを検証する (対象ロール限定の回帰ガード。修正前の実装でも通る)。
  */
@@ -821,7 +821,7 @@ test("bidiReadRequestStreamMessages: publish ロールで RESET_STREAM を検出
 });
 
 /**
- * draft-ietf-moq-transport-21 §6.4.2.3:
+ * draft-ietf-moq-transport-22 §6.4.2.3:
  * error コールバックが throw しても、notification 経路で吸収され unhandled
  * rejection にならず、state が closed になることを検証する。
  */
@@ -860,7 +860,7 @@ test("bidiReadRequestStreamMessages: RESET_STREAM 通知で error コールバ�
 });
 
 /**
- * draft-ietf-moq-transport-21 §6.4.2.3 / §6.6:
+ * draft-ietf-moq-transport-22 §6.4.2.3 / §6.6:
  * ピア起因のセッション終了 (source: "session") および source を持たない
  * 内部エラーでは error コールバックが呼ばれないことを検証する
  * (isPeerStreamError ガードの回帰ガード。修正前の実装でも通る)。
@@ -904,7 +904,7 @@ test("bidiReadRequestStreamMessages: セッション終了や source なしエ�
 });
 
 /**
- * draft-ietf-moq-transport-21 §6.4.2.2:
+ * draft-ietf-moq-transport-22 §6.4.2.2:
  * publish ロールではピア (requester) の FIN は正常完了シグナルであり、
  * error 通知されず state も変更されないことを検証する (対象ロール限定の
  * 回帰ガード)。
@@ -943,7 +943,7 @@ test("bidiReadRequestStreamMessages: ピアの FIN (publish ロール) では er
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.2 / §6.4.2.2:
+ * draft-ietf-moq-transport-22 §9.2 / §6.4.2.2:
  * GOAWAY 受信後の FIN (subscribe ロール) では error 通知されないことを
  * 検証する (GOAWAY は migration 通知であり失敗ではない)。
  */
@@ -994,7 +994,7 @@ test("bidiReadRequestStreamMessages: GOAWAY 受信後の FIN (subscribe ロー�
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.2:
+ * draft-ietf-moq-transport-22 §9.2:
  * GOAWAY 受信時点で旧ストリーム上の未応答 REQUEST_UPDATE は失敗として扱い、
  * update() の Promise を reject してエントリを削除することを検証する。
  * GOAWAY 後の読み取り継続中に REQUEST_OK が届いても、エントリ削除済みのため
@@ -1070,7 +1070,7 @@ test("bidiReadRequestStreamMessages: GOAWAY 受信時に応答待ちの REQUEST_
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.5.1 (Updating Subscriptions):
+ * draft-ietf-moq-transport-22 §9.5.1 (Updating Subscriptions):
  * "If the coalesced REQUEST_UPDATE results in REQUEST_ERROR, only a single
  *  REQUEST_ERROR will be sent and the sender of the REQUEST_UPDATEs will not
  *  always be able to determine which caused an error."
@@ -1184,7 +1184,7 @@ test("bidiReadRequestStreamMessages: coalescing 後の許容枠を超えた REQU
 });
 
 /**
- * draft-ietf-moq-transport-21 §6.4.2.2:
+ * draft-ietf-moq-transport-22 §6.4.2.2:
  * 正常な PUBLISH_DONE → FIN の経路では end コールバックのみが呼ばれ、
  * error コールバックは呼ばれないことを検証する (正常経路の温存ガード)。
  */
@@ -1235,7 +1235,7 @@ test("bidiReadRequestStreamMessages: PUBLISH_DONE 後の FIN (subscribe ロー�
 });
 
 /**
- * draft-ietf-moq-transport-21 §6.4.2.2 / §9.9:
+ * draft-ietf-moq-transport-22 §6.4.2.2 / §9.9:
  * エラー statusCode の PUBLISH_DONE 後に FIN した場合、error 通知は
  * PUBLISH_DONE 由来の 1 回のみであり、FIN 検出で追加の error 通知が
  * 発生しないことを検証する (spurious 二重通知の回帰ガード)。
@@ -1289,7 +1289,7 @@ test("bidiReadRequestStreamMessages: エラー statusCode の PUBLISH_DONE 後�
 });
 
 /**
- * draft-ietf-moq-transport-21 §6.4.2.2:
+ * draft-ietf-moq-transport-22 §6.4.2.2:
  * subscribers に未登録の requestId で FIN した場合、通知は発生せず
  * セッションも閉じないことを検証する (統合レベル。free function 単体の
  * no-op ガードと対になる)。
@@ -1314,7 +1314,7 @@ test("bidiReadRequestStreamMessages: subscribers 未登録の requestId の FIN 
 });
 
 /**
- * draft-ietf-moq-transport-21 §6.4.2.2:
+ * draft-ietf-moq-transport-22 §6.4.2.2:
  * error コールバックが throw しても、セッションは閉じず state が closed に
  * なることを統合レベルで検証する (free function 単体の throw 伝播検証と
  * 対になる。本番経路の catch は throw を黙殺し、markClosed は finally で

@@ -1136,7 +1136,7 @@ export function usePublisher() {
       },
       {
         maxCacheDuration: BigInt(options.maxCacheDuration),
-        // draft-ietf-moq-transport-21 Section 10.6: DYNAMIC_GROUPS=1 を広告し、後から視聴を
+        // draft-ietf-moq-transport-22 Section 10.6: DYNAMIC_GROUPS=1 を広告し、後から視聴を
         // 始めた購読者が NEW_GROUP_REQUEST でキーフレームを要求できるようにする
         dynamicGroups: true,
         // draft-ietf-moq-msf-01 §11.4.3: track に紐づくトークンは PUBLISH にも MUST 付与する
@@ -1326,7 +1326,7 @@ export function usePublisher() {
     });
 
     // Object を送信する (送信完了は待たない。完了待ちは stopPublishing の done() で行う)。
-    // Datagram は draft-ietf-moq-transport-21 §11.2。WT-H2 は datagram を運べない
+    // Datagram は draft-ietf-moq-transport-22 §11.2。WT-H2 は datagram を運べない
     const sendParams = {
       groupId: allocation.groupId,
       objectId: allocation.objectId,

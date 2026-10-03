@@ -1,6 +1,6 @@
 /**
  * Publisher Property-Based Tests
- * draft-ietf-moq-transport-21 Section 3.2.1
+ * draft-ietf-moq-transport-22 Section 3 (Publishing and Retrieving Tracks)
  */
 
 import { test, assert } from "vite-plus/test";

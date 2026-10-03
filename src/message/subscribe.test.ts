@@ -1,7 +1,7 @@
 /**
  * SUBSCRIBE / REQUEST_UPDATE の異常系・境界値テスト
  *
- * draft-ietf-moq-transport-21 §9 (Control Messages):
+ * draft-ietf-moq-transport-22 §9 (Control Messages):
  * "If the length does not match the length of the Message Body, the receiver
  *  MUST close the session with a PROTOCOL_VIOLATION."
  * Parameters は両メッセージの最後のフィールドであり、その後ろに後続データが

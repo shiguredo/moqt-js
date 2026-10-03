@@ -56,7 +56,7 @@ test("CatchUpGate: 境界より後は再生し、境界を越えたことを最�
 });
 
 test("CatchUpGate: 境界を越えた後に遅着した境界以前の位置は再生しない", () => {
-  // draft-ietf-moq-transport-21 Section 2.1 により Object は順不同で届きうる。
+  // draft-ietf-moq-transport-22 Section 2.1 により Object は順不同で届きうる。
   // 一度 live になった後でも、cache から届いた分は再生しない
   const gate = new CatchUpGate();
   gate.setBoundary({ group: 5n, object: 3n });

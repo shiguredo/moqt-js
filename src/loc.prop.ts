@@ -941,7 +941,7 @@ test("encodeVideoProperties → encodeLocObjectPayload → framed decode → dec
 // draft-ietf-moq-loc-04 §2.3.3.2:
 // Audio Level の Value は "vi64 (1-2 bytes to encode values 0x00-0xFF)" であり、
 // 0xFF を超える値は 0x100 から MAX_VARINT までの全域で拒否する
-// (draft-ietf-moq-transport-21 §8.3 の serialization 不一致)。
+// (draft-ietf-moq-transport-22 §8.3 の serialization 不一致)。
 const outOfRangeAudioLevelArb = fc.bigInt({ min: 0x100n, max: MAX_VARINT });
 
 test("Audio Level の値域外の値は全域で KEY_VALUE_FORMATTING_ERROR になる", () => {

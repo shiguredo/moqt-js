@@ -1,6 +1,6 @@
 /**
  * MOQT Fetch Messages Unit Tests
- * draft-ietf-moq-transport-21 Section 9.11 (FETCH)
+ * draft-ietf-moq-transport-22 Section 9.11 (FETCH)
  *
  * ワイヤ形式を固定バイト列でピン留めする。ラウンドトリップは PBT
  * (fetch.prop.ts) が担い、ここではエンコーダとデコーダが同時に
@@ -35,7 +35,7 @@ function createFetch(): Fetch {
 }
 
 /**
- * draft-ietf-moq-transport-21 Section 9.11 (FETCH):
+ * draft-ietf-moq-transport-22 Section 9.11 (FETCH):
  * FETCH Message {
  *   Type (vi64) = 0x16,
  *   Length (16),
@@ -79,7 +79,7 @@ test("encodeFetchPayload: draft-21 の固定バイト列を生成する", () => 
 });
 
 /**
- * draft-ietf-moq-transport-21 Section 9.11 (FETCH):
+ * draft-ietf-moq-transport-22 Section 9.11 (FETCH):
  * 固定バイト列をデコードすると Request ID / Track Namespace / Track Name /
  * Parameters に復元されることを検証する。
  */
@@ -110,7 +110,7 @@ test("decodeFetchPayload: draft-21 の固定バイト列をデコードする", 
 });
 
 /**
- * draft-ietf-moq-transport-21 Section 9:
+ * draft-ietf-moq-transport-22 Section 9:
  * "If the length does not match the length of the Message Body, the receiver
  *  MUST close the session with a PROTOCOL_VIOLATION."
  * Parameters は FETCH ペイロードの最後のフィールドであり、その後ろに後続
@@ -126,7 +126,7 @@ test("decodeFetchPayload: 末尾に後続データがあると ProtocolViolation
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.11:
+ * draft-ietf-moq-transport-22 §9.11:
  * Track Name Length 宣言が残りバイトを超える切り詰めは破損であり、
  * 短い slice を返さず宣言時点で ProtocolViolationError とする。
  */
@@ -163,7 +163,7 @@ function createFetchOk(endOfTrack: boolean): FetchOk {
 }
 
 /**
- * draft-ietf-moq-transport-21 Section 9.12 (FETCH_OK):
+ * draft-ietf-moq-transport-22 Section 9.12 (FETCH_OK):
  * End Of Track は 0 / 1 のみが定義される。0 / 1 は復元され、
  * 2 以上の値は PROTOCOL_VIOLATION となることを検証する。
  */

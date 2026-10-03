@@ -1,7 +1,7 @@
 /**
  * Track Alias 単位の END_OF_GROUP 最終 Object ID 追跡
  *
- * draft-ietf-moq-transport-21 §12.1 (Malformed Track) の条件 4:
+ * draft-ietf-moq-transport-22 §12.1 (Malformed Track) の条件 4:
  * "An Object is received in a Group whose Object ID is larger than the final
  *  Object in the Group. The final Object in a Group is the Object with Status
  *  END_OF_GROUP, or the last Object before a FIN in a Subgroup which has the

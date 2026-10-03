@@ -176,7 +176,7 @@ test("fetch: filter の End Group が 2^64-1 を超えると throw し pendingFe
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.1.6 (MAX FILTER RANGES):
+ * draft-ietf-moq-transport-22 §9.1.6 (MAX FILTER RANGES):
  * ピアの MAX_FILTER_RANGES が 0 (未広告) の状態で FETCH の rangeFilters を
  * 指定すると throw することを検証する。
  * ガードは pendingFetch.set より前に配置されるため、pending エントリが残らない。
@@ -205,7 +205,7 @@ test("fetch: peer MAX_FILTER_RANGES が 0 のとき rangeFilters 指定で throw
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.3.2:
+ * draft-ietf-moq-transport-22 §3.3.2:
  * FETCH で削除 (Length=0) を指定すると throw することを検証する。
  * ガードは pendingFetch.set より前に配置されるため、pending エントリが残らない。
  */
@@ -570,7 +570,7 @@ test("trackStatus: write 失敗時に pendingTrackStatus が残らず requestStr
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.3.2:
+ * draft-ietf-moq-transport-22 §3.3.2:
  * 受信 PUBLISH の Track Properties が TRACK_PROPERTY_FILTER に合致しない場合、
  * onPublish が呼ばれず REQUEST_ERROR (UNINTERESTED) で応答されることを検証する。
  *
@@ -651,7 +651,7 @@ test("受信 PUBLISH で TRACK_PROPERTY_FILTER 不通過なら onPublish が呼�
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.3.2:
+ * draft-ietf-moq-transport-22 §3.3.2:
  * 受信 PUBLISH の Track Properties が TRACK_PROPERTY_FILTER に合致する場合、
  * onPublish が呼ばれることを検証する。
  */
@@ -717,7 +717,7 @@ test("受信 PUBLISH で TRACK_PROPERTY_FILTER 通過なら onPublish が呼ば�
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.5.1 / §6.4.2.2:
+ * draft-ietf-moq-transport-22 §9.5.1 / §6.4.2.2:
  * 受信 PUBLISH ストリーム (runPublishStreamSubLoop) でピアが GOAWAY を送らずに
  * FIN した場合、応答待ちの REQUEST_UPDATE の update() の Promise が reject
  * され、エントリが削除されることを検証する。
@@ -794,7 +794,7 @@ test("受信 PUBLISH ストリーム上のピア FIN で応答待ちの REQUEST_
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.2:
+ * draft-ietf-moq-transport-22 §9.2:
  * 受信 PUBLISH ストリーム (runPublishStreamSubLoop) で GOAWAY を受信した場合、
  * 旧ストリーム上の未応答 REQUEST_UPDATE の update() の Promise が reject され、
  * エントリが削除されることを検証する。
@@ -1183,7 +1183,7 @@ test("publish: notifyStateChange が LARGEST_OBJECT 付きの PUBLISH_STATE_NOTI
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.1.6:
+ * draft-ietf-moq-transport-22 §9.1.6:
  * SUBSCRIBE の fill 内側に Range Filters を指定した場合も、ピア未広告では
  * 送信前に throw することを検証する (購読単位の上限に含める)。
  */
@@ -1213,7 +1213,7 @@ test("subscribe: fill 内側の Range Filters があると peer 未広告では 
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.1.6:
+ * draft-ietf-moq-transport-22 §9.1.6:
  * SUBSCRIBE でも購読単位の Ranges 合計 (外側と fill 内側) がピアの上限を超える場合は
  * 送信前に throw する (SUBSCRIBE_TRACKS と同じ合算であることを固定する)。
  */
@@ -1446,7 +1446,7 @@ async function waitForIncomingPublishSubscriber(
 }
 
 // 既知偶数 Type (OBJECT_DELIVERY_TIMEOUT 0x02) の Value が varint として
-// 完結しない malformed Track Properties。draft-ietf-moq-transport-21 §8.3 の
+// 完結しない malformed Track Properties。draft-ietf-moq-transport-22 §8.3 の
 // KEY_VALUE_FORMATTING_ERROR 対象である。
 const MALFORMED_TRACK_PROPERTIES = new Uint8Array([0x02, 0x80]);
 
@@ -1605,7 +1605,7 @@ function createIncomingPublishStream(
 /**
  * 応答方向の終端操作 (FIN の close / RESET の abort) を区別して記録する WritableStream
  *
- * draft-ietf-moq-transport-21 §6.4.2.2 の応答方向の FIN を、RESET と取り違えずに
+ * draft-ietf-moq-transport-22 §6.4.2.2 の応答方向の FIN を、RESET と取り違えずに
  * 検証するために使う。
  */
 function createRecordingResponderStream(): {
@@ -1647,7 +1647,7 @@ async function waitForResponderTermination(responder: {
 }
 
 /**
- * draft-ietf-moq-transport-21 §6.4.2.3:
+ * draft-ietf-moq-transport-22 §6.4.2.3:
  * 受信 PUBLISH から生成された subscriber に対してピアが RESET_STREAM でストリームを
  * エラー終了させた場合、error コールバックが呼ばれ state が closed になることを検証する。
  * bidiReadRequestStreamMessages の subscribe ロールと同じ扱いに揃える対応であり、
@@ -1687,7 +1687,7 @@ test("受信 PUBLISH ストリーム上のピア RESET_STREAM で error 通知�
 });
 
 /**
- * draft-ietf-moq-transport-21 §6.4.2.2 / §9.9:
+ * draft-ietf-moq-transport-22 §6.4.2.2 / §9.9:
  * "An endpoint SHOULD send a FIN promptly after a message when it has nothing
  *  further to send on that direction and will not need to respond to a future
  *  REQUEST_UPDATE."
@@ -1724,7 +1724,7 @@ test("受信 PUBLISH ストリームで PUBLISH_DONE を受信すると応答方
 });
 
 /**
- * draft-ietf-moq-transport-21 §6.4.2.2:
+ * draft-ietf-moq-transport-22 §6.4.2.2:
  * PUBLISH_DONE の処理中にアプリの end コールバックが throw しても、応答方向を開いたまま
  * 残さない (購読は closed になるがセッションは開いたままのため、FIN を送らないと peer が
  * request の完了を判定できない)。GOAWAY 分岐と同じく、アプリのコールバック例外を理由に
@@ -1758,7 +1758,7 @@ test("受信 PUBLISH ストリームで end コールバックが throw して�
 });
 
 /**
- * draft-ietf-moq-transport-21 §6.4.2.2:
+ * draft-ietf-moq-transport-22 §6.4.2.2:
  * close() が解決しない環境 (Safari 系の WebTransport) でも、応答方向の FIN は発行され、
  * 受信 PUBLISH の処理は FIN の完了を待たずに終わる (closeRequestStreamWriter を await
  * しない理由)。
@@ -1835,7 +1835,7 @@ test("受信 PUBLISH ストリームでピア FIN を受信すると応答方向
 });
 
 /**
- * draft-ietf-moq-transport-21 §6.4.2.2:
+ * draft-ietf-moq-transport-22 §6.4.2.2:
  * セッション終了 (source: "session") で購読と応答方向の後始末が走る経路では、
  * 応答方向へ FIN を送らない。
  */
@@ -1864,7 +1864,7 @@ test("受信 PUBLISH ストリームでセッション終了のときは応答�
 });
 
 /**
- * draft-ietf-moq-transport-21 §9 (Message Length) / §6.4.2.2:
+ * draft-ietf-moq-transport-22 §9 (Message Length) / §6.4.2.2:
  * Length が揃った後のメッセージ構造の破損は PROTOCOL_VIOLATION でセッションを閉じる。
  * セッション終了の経路は応答方向を abort するため、FIN は送らない。
  */
@@ -1902,7 +1902,7 @@ test("受信 PUBLISH ストリームで PUBLISH_DONE が不正なときは応答
 });
 
 /**
- * draft-ietf-moq-transport-21 §6.4.2.2:
+ * draft-ietf-moq-transport-22 §6.4.2.2:
  * ピア FIN の分岐でアプリの error コールバックが throw しても、応答方向は FIN で
  * 閉じられる (close は sink ごとに 1 回である。通知より先に FIN を呼ぶこの経路と、
  * 通知の例外を受ける catch 節の FIN のどちらで閉じても同じ結果になる)。
@@ -1935,7 +1935,7 @@ test("受信 PUBLISH ストリームで error コールバックが throw して
 });
 
 /**
- * draft-ietf-moq-transport-21 §6.4.2.3 は RESET_STREAM を受けた側の残りの方向を
+ * draft-ietf-moq-transport-22 §6.4.2.3 は RESET_STREAM を受けた側の残りの方向を
  * 定めていない。§6.4.2.2 の FIN の条件 (送るものが無く将来の REQUEST_UPDATE に応答する
  * 必要も無い) は満たすが、ピアが RESET で購読を打ち切った後に自方向だけを FIN で閉じる
  * 実装上の意味が無いため、応答方向は開いたまま残す (後始末は releaseLock のみ)。
@@ -1968,11 +1968,11 @@ test("受信 PUBLISH ストリームでピア RESET_STREAM のときは応答方
 
 // ============================================================================
 // 既知 Type の serialization 不一致 (KEY_VALUE_FORMATTING_ERROR) で閉じる
-// draft-ietf-moq-transport-21 §8.3 (Key-Value-Pair Structure)
+// draft-ietf-moq-transport-22 §8.3 (Key-Value-Pair Structure)
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-21 §8.3:
+ * draft-ietf-moq-transport-22 §8.3:
  * "If a receiver understands a Type, and the following Value or Length/Value
  *  does not match the serialization defined by that Type, the receiver MUST
  *  close the session with error code KEY_VALUE_FORMATTING_ERROR."
@@ -2011,7 +2011,7 @@ test("受信 PUBLISH の malformed Track Properties で KEY_VALUE_FORMATTING_ERR
 });
 
 /**
- * draft-ietf-moq-transport-21 §8.3 / §9.3:
+ * draft-ietf-moq-transport-22 §8.3 / §9.3:
  * 受信 PUBLISH ストリーム上で malformed な Track Properties を含む
  * REQUEST_UPDATE_OK を受信したら KEY_VALUE_FORMATTING_ERROR でセッションを
  * 閉じる (runPublishStreamSubLoop の catch 経由)。
@@ -2068,7 +2068,7 @@ function createFailingWritable(reason: unknown): WritableStream<Uint8Array> {
 }
 
 /**
- * draft-ietf-moq-transport-21 §6.4.2.3:
+ * draft-ietf-moq-transport-22 §6.4.2.3:
  * PUBLISH_OK の書き込みがピア起因 (source: "stream") で失敗した場合、
  * subscriber に error 通知が入り state が closed になることを検証する。
  * (§5.1 MUST の PUBLISH_OK を送れていないため subscription を残さない)
@@ -2127,7 +2127,7 @@ test("受信 PUBLISH の PUBLISH_OK 書き込み失敗 (stream) で通知され�
 });
 
 /**
- * draft-ietf-moq-transport-21 §6.4.2.3:
+ * draft-ietf-moq-transport-22 §6.4.2.3:
  * PUBLISH_OK の書き込み失敗値に source が無い場合も、通知 + closed になることを検証する。
  * (Node 環境では WebTransportError が無いため message fallback で分類される)
  */
@@ -2177,7 +2177,7 @@ test("受信 PUBLISH の PUBLISH_OK 書き込み失敗 (source なし) で通知
 });
 
 /**
- * draft-ietf-moq-transport-21 §6.4.2.3:
+ * draft-ietf-moq-transport-22 §6.4.2.3:
  * PUBLISH_OK の書き込み失敗値が Error でない場合 (文字列 throw) も、
  * 通知 + closed になり掃除されることを検証する。
  */
@@ -2218,7 +2218,7 @@ test("受信 PUBLISH の PUBLISH_OK 書き込み失敗 (非 Error) で通知さ�
 });
 
 /**
- * draft-ietf-moq-transport-21 §6.6:
+ * draft-ietf-moq-transport-22 §6.6:
  * PUBLISH_OK の書き込み失敗がセッション終了起因 (source: "session") の場合、
  * 通知はせず state だけ closed にすることを検証する。
  * (通知なしのため subscriber 参照は取れず、session 分岐の実行は
@@ -2508,7 +2508,7 @@ test("受信 PUBLISH の購読解除で STOP_SENDING が到達し abort も実�
 });
 
 /**
- * draft-ietf-moq-transport-21 §6.4.2.2 / §6.4.2.3 / §9.5.1:
+ * draft-ietf-moq-transport-22 §6.4.2.2 / §6.4.2.3 / §9.5.1:
  * 受信 PUBLISH ストリームでピアが RESET_STREAM でストリームをエラー終了させた
  * 場合、応答待ちの REQUEST_UPDATE が reject されエントリが削除されることを
  * 検証する。FIN 経路と同じ文言で失敗として扱う。
@@ -2562,7 +2562,7 @@ test("受信 PUBLISH ストリーム上の RESET_STREAM で応答待ちの REQUE
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.4 / §9.4.2 / §9.5:
+ * draft-ietf-moq-transport-22 §9.4 / §9.4.2 / §9.5:
  * 受信 PUBLISH の後続ループで確立後の REQUEST_ERROR (REQUEST_UPDATE の失敗) を
  * 受けた場合も、Retry Interval と Redirect を reject する RequestError に載せる。
  */
@@ -2588,7 +2588,7 @@ test("受信 PUBLISH ストリームの確立後の REQUEST_ERROR の retryInter
     });
   }
 
-  // draft-ietf-moq-transport-21 §9.4.2: Redirect は Error Code が REDIRECT のときだけ載る
+  // draft-ietf-moq-transport-22 §9.4.2: Redirect は Error Code が REDIRECT のときだけ載る
   const errorPayload = encodeRequestErrorPayload({
     type: MessageType.REQUEST_ERROR,
     errorCode: BigInt(RequestErrorCode.REDIRECT),
@@ -2627,7 +2627,7 @@ test("受信 PUBLISH ストリームの確立後の REQUEST_ERROR の retryInter
 });
 
 /**
- * draft-ietf-moq-transport-21 §6.4.2.2 / §6.4.2.3:
+ * draft-ietf-moq-transport-22 §6.4.2.2 / §6.4.2.3:
  * 受信 PUBLISH ストリームの RESET_STREAM 通知でアプリの error コールバックが
  * throw しても、応答待ちの REQUEST_UPDATE の reject が先に実行済みであることを
  * 検証する。通知より reject を先に置く順序の根拠を固定する。
@@ -2676,7 +2676,7 @@ test("受信 PUBLISH ストリーム上の RESET_STREAM 通知で error コー�
 });
 
 /**
- * draft-ietf-moq-transport-21 §12.5:
+ * draft-ietf-moq-transport-22 §12.5:
  * 受信 PUBLISH 経路でもピアの RESET_STREAM に付いたエラーコードが通知内容に
  * 反映されることを検証する。組み立ては subscribe ロール側と共用のため、
  * 配線 (生の失敗値を渡していること) ごと検証する。
@@ -2718,7 +2718,7 @@ test("受信 PUBLISH ストリーム上の RESET_STREAM のエラーコードが
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.2:
+ * draft-ietf-moq-transport-22 §9.2:
  * 受信 PUBLISH ストリームで GOAWAY 受信後に RESET_STREAM が起きても、
  * 保留中の REQUEST_UPDATE には触れないことを検証する (GOAWAY 掃除に委ねる)。
  * GOAWAY 掃除の reject が上書きされないことで呼び出し自体の不在を固定する。
@@ -2783,7 +2783,7 @@ test("受信 PUBLISH ストリーム上の GOAWAY 受信後の RESET_STREAM で�
 });
 
 /**
- * draft-ietf-moq-transport-21 §6.4.2.3 / §6.6 / §9.5.1:
+ * draft-ietf-moq-transport-22 §6.4.2.3 / §6.6 / §9.5.1:
  * 受信 PUBLISH ストリームでセッション終了起因 (source: "session") の読み取り
  * 失敗が起きても、通知はせず、state は closed にし、保留中の REQUEST_UPDATE は
  * 失敗として reject することを検証する (兄弟分岐・namespace ループと同順)。
@@ -2829,7 +2829,7 @@ test("受信 PUBLISH ストリーム上のセッション終了の読み取り�
 });
 
 /**
- * draft-ietf-moq-transport-21 §6.4.2.3:
+ * draft-ietf-moq-transport-22 §6.4.2.3:
  * RESET_STREAM 通知でアプリの error コールバックが throw しても、例外がループ外へ
  * 伝播せず state が closed になることを検証する。伝播すると呼び出し元の
  * requestStreams / subscribers / subscribersByAlias のクリーンアップがスキップされる。
@@ -2863,7 +2863,7 @@ test("受信 PUBLISH ストリーム上の RESET_STREAM 通知で error コー�
 });
 
 /**
- * draft-ietf-moq-transport-21 §6.4.2.3:
+ * draft-ietf-moq-transport-22 §6.4.2.3:
  * source を持たない内部エラーでは、生のエラーが error コールバックへ
  * 通知され、state も closed になることを検証する (namespace ループと同規則)。
  */
@@ -2914,7 +2914,7 @@ test("受信 PUBLISH ストリーム上の source なしエラーでは error �
 });
 
 /**
- * draft-ietf-moq-transport-21 §6.4.2.3:
+ * draft-ietf-moq-transport-22 §6.4.2.3:
  * source を持たない内部エラーでアプリの error コールバックが throw しても、例外が
  * ループ外へ伝播せず state が closed になり後始末が走ることを検証する
  * (RESET 経路と同じ理由で吸収する)。
@@ -2945,7 +2945,7 @@ test("受信 PUBLISH ストリーム上の source なしエラーで error コ�
 });
 
 /**
- * draft-ietf-moq-transport-21 §6.6:
+ * draft-ietf-moq-transport-22 §6.6:
  * WebTransport セッション終了起因 (source: "session") のエラーでは
  * error コールバックが呼ばれず、state が closed になることを検証する。
  * エラー投入をゲートで遅延させ、subloop 待機中の subscriber 参照を確保して
@@ -3009,7 +3009,7 @@ test("受信 PUBLISH ストリーム上のセッション終了 (source: session
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.2 / §6.4.2.3:
+ * draft-ietf-moq-transport-22 §9.2 / §6.4.2.3:
  * GOAWAY 受信済みの受信 PUBLISH ストリームで RESET_STREAM が起きても、error
  * コールバックが呼ばれず state も変わらないことを検証する (GOAWAY は migration
  * 通知であり失敗ではなく、subscription state に影響しない。通知経路の拡大を
@@ -3059,7 +3059,7 @@ test("受信 PUBLISH ストリーム上の GOAWAY 受信後の RESET_STREAM で�
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.2:
+ * draft-ietf-moq-transport-22 §9.2:
  * GOAWAY 受信済みの受信 PUBLISH ストリームで source を持たない内部エラーが起きても、
  * error コールバックが呼ばれないことを検証する。この抑止は外側の !goawayReceived に
  * しかなく (notifySubscriberFailure 内の goawayReceivedOnRequestStreams ガードは
@@ -3145,7 +3145,7 @@ test("受信 PUBLISH ストリーム上の正常な PUBLISH_DONE では end の�
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.9 / §13:
+ * draft-ietf-moq-transport-22 §9.9 / §13:
  * 削除された 0x3 SUBSCRIPTION_ENDED を受信した場合、未知コードとして
  * INTERNAL_ERROR に正規化され、エラーとして通知されることを検証する。
  * 旧版が送る 0x3 はエラー扱いになる。
@@ -3195,7 +3195,7 @@ test("受信 PUBLISH_DONE の削除された 0x3 は end と error の両方が�
 
 /**
  * QUIC のストリームに書き込み境界は無いため、ピアは PUBLISH と PUBLISH_DONE を
- * 同一チャンクに連結して送れる (draft-ietf-moq-transport-21 §9.9 は PUBLISH_DONE を
+ * 同一チャンクに連結して送れる (draft-ietf-moq-transport-22 §9.9 は PUBLISH_DONE を
  * 購読の bidi ストリームを閉じる最終メッセージと定める)。連結された PUBLISH_DONE を
  * 取りこぼすと、誰も処理しないまま FIN に到達して購読が end ではなく error で終わる。
  */
@@ -3285,7 +3285,7 @@ test("受信 PUBLISH と同一チャンクに連結された PUBLISH_DONE がメ
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.5 / §9.9:
+ * draft-ietf-moq-transport-22 §9.5 / §9.9:
  * 連結チャンクに 2 通以上が載る場合も、すべて順に処理されることを検証する。
  * REQUEST_UPDATE には REQUEST_OK を 1 通応答し (§9.5 MUST)、後続の PUBLISH_DONE で
  * end を通知する。
@@ -3342,7 +3342,7 @@ test("受信 PUBLISH と同一チャンクに連結された REQUEST_UPDATE と 
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.1.7 (MAX_REQUEST_UPDATES):
+ * draft-ietf-moq-transport-22 §9.1.7 (MAX_REQUEST_UPDATES):
  * 上限判定は 1 チャンクに含まれる通数で行うため、連結チャンクに載った
  * REQUEST_UPDATE も 1 通ずつ数える。上限 + 1 通目を検出できることを検証する。
  */
@@ -3384,7 +3384,7 @@ test("受信 PUBLISH と同一チャンクに連結された複数の REQUEST_UP
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.1.7 (MAX_REQUEST_UPDATES):
+ * draft-ietf-moq-transport-22 §9.1.7 (MAX_REQUEST_UPDATES):
  * 未応答数の減算はチャンク単位で行うため、前のチャンクの REQUEST_UPDATE が次の
  * チャンクの判定に持ち越されてはならない。持ち越すと、上限内の 1 通でも
  * TOO_MANY_REQUEST_UPDATES で閉じてしまう。連結チャンク (先頭の PUBLISH に
@@ -3429,7 +3429,7 @@ test("受信 PUBLISH の連結チャンクを跨いでも REQUEST_UPDATE の未�
 });
 
 /**
- * draft-ietf-moq-transport-21 §6.4.2.2:
+ * draft-ietf-moq-transport-22 §6.4.2.2:
  * 連結が無い場合の既存挙動 (PUBLISH_DONE を送らない FIN は失敗扱い) が
  * 変わらないことを検証する回帰ガード。
  */
@@ -3580,7 +3580,7 @@ test("tracks の unsubscribe() で in-flight の update() が reject され pend
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.5.2:
+ * draft-ietf-moq-transport-22 §9.5.2:
  * update() を fire-and-forget (返り値を観測しない) で呼び、その後に
  * unsubscribe() した場合、update() の reject が unhandled rejection に
  * ならないことを検証する。
@@ -3643,7 +3643,7 @@ test("namespace の update() を fire-and-forget で呼び出しても unsubscri
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.5.2:
+ * draft-ietf-moq-transport-22 §9.5.2:
  * tracks 側の update() も namespace 側と同様に、fire-and-forget で呼び出して
  * も unsubscribe() の reject が unhandled rejection にならないことを検証する。
  */
@@ -3718,7 +3718,7 @@ interface FetchPriorityMismatchContext {
  * FETCH 応答で同一 Group・同一 Subgroup の Publisher Priority 不一致を検出した
  * 場合の処理を検証するためのコンテキストを構築する。
  *
- * draft-ietf-moq-transport-21 §12.1 (Malformed Tracks):
+ * draft-ietf-moq-transport-22 §12.1 (Malformed Tracks):
  * Malformed Track 検出時は「cancel any corresponding subscription or fetches
  * for that Track from that publisher」であり、セッションを閉じない。
  * draft-ietf-moq-transport-22 §3.2.4 (Fetch State Management):
@@ -3814,7 +3814,7 @@ function createFetchPriorityMismatchContext(requestId: bigint): FetchPriorityMis
  * 同一 Group・同一 Subgroup で Publisher Priority 不一致を含む FETCH データ
  * ストリームのチャンク列を構築する。
  *
- * draft-ietf-moq-transport-21 §12.1:
+ * draft-ietf-moq-transport-22 §12.1:
  * 先頭オブジェクト (Priority 100) の後に、同一 Group・同一 Subgroup で異なる
  * Priority (200) のオブジェクトを続ける。
  *
@@ -4109,7 +4109,7 @@ function buildGroupOrderProbeFetchStream(requestId: bigint): Uint8Array {
 }
 
 /**
- * draft-ietf-moq-transport-21 §11.4.1.1 (Flags):
+ * draft-ietf-moq-transport-22 §11.4.1.1 (Flags):
  * FETCH 応答の Group ID は要求時の Group Order で解釈する。
  * session.fetch() に Descending を指定した場合、同じワイヤでも 2 件目以降の
  * Group ID が Descending の式 (prior - (delta + 1)) で復号されることを検証する。
@@ -4220,7 +4220,7 @@ function createControlLoopContext(controlMessageTimeoutMs = 10_000): {
 }
 
 /**
- * draft-ietf-moq-transport-21 §12.2:
+ * draft-ietf-moq-transport-22 §12.2:
  * CONTROL_MESSAGE_TIMEOUT (0x11) は「ピアが制御メッセージへの応答に時間を
  * かけすぎた」ことを示す。制御メッセージの Length が宣言されたまま本体が
  * 揃わない状態を保持し続けるピアを、期限で打ち切る。
@@ -4244,7 +4244,7 @@ test("startControlMessageLoop: 半端な制御メッセージは CONTROL_MESSAGE
 });
 
 /**
- * draft-ietf-moq-transport-21 §12.2:
+ * draft-ietf-moq-transport-22 §12.2:
  * 半端なメッセージが解消したら期限を解除する。後続で完結したメッセージは
  * 通常どおり処理され、タイムアウトで閉じない。
  */
@@ -4271,7 +4271,7 @@ test("startControlMessageLoop: 分割到着した制御メッセージはタイ�
 });
 
 /**
- * draft-ietf-moq-transport-21 §6.3:
+ * draft-ietf-moq-transport-22 §6.3:
  * 「A control stream MUST NOT be closed at the underlying transport layer
  *  during the session's lifetime.  Doing so results in the session being
  *  closed as a PROTOCOL_VIOLATION.」
@@ -4293,7 +4293,7 @@ test("startControlMessageLoop: 制御ストリームの RESET_STREAM で PROTOCO
 });
 
 /**
- * draft-ietf-moq-transport-21 §6.3:
+ * draft-ietf-moq-transport-22 §6.3:
  * 既に閉じたセッションで制御ストリームの read が reject しても誤って
  * callbacks.error を呼ばない。
  */
@@ -4310,7 +4310,7 @@ test("startControlMessageLoop: 既に閉じたセッションでは RESET_STREAM
 });
 
 /**
- * draft-ietf-moq-transport-21 §6.3 / §6.6:
+ * draft-ietf-moq-transport-22 §6.3 / §6.6:
  * セッション終了起源 (source: "session") の read 失敗は PROTOCOL_VIOLATION に
  * 昇格せず、callbacks.error も呼ばない。
  */
@@ -4326,7 +4326,7 @@ test('startControlMessageLoop: source: "session" の read 失敗では昇格も�
 });
 
 /**
- * draft-ietf-moq-transport-21 §6.3:
+ * draft-ietf-moq-transport-22 §6.3:
  * アプリコールバック (callbacks.goaway 等) の throw ではセッションを閉じない。
  * 制御メッセージ処理は読み取りループの try 内にあるため throw は catch に
  * 到達するが、ピア起因ではないため PROTOCOL_VIOLATION に昇格させない。
@@ -4376,7 +4376,7 @@ test("startControlMessageLoop: アプリコールバックの throw ではセッ
 });
 
 /**
- * draft-ietf-moq-transport-21 §12.1:
+ * draft-ietf-moq-transport-22 §12.1:
  * FETCH 応答で同一 Group・同一 Subgroup の Publisher Priority 不一致を検出しても
  * セッションが閉じず、対象 FETCH がキャンセルされることを検証する。
  *
@@ -4407,7 +4407,7 @@ test("FETCH 応答の Priority 不一致でセッションは閉じず FETCH が
 });
 
 /**
- * draft-ietf-moq-transport-21 §12.1:
+ * draft-ietf-moq-transport-22 §12.1:
  * Priority 不一致のオブジェクトが 2 チャンク目 (fetchContext を永続化してから)
  * で検出される場合も、セッションは閉じず FETCH がキャンセルされることを検証する。
  *
@@ -4431,7 +4431,7 @@ test("FETCH 応答の Priority 不一致 (2 チャンク分割) でも FETCH が
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.6 / §12.1:
+ * draft-ietf-moq-transport-22 §3.7 / §12.1:
  * Mandatory Track Property (0x4000-0x7FFF) を含む Object Property を持つ FETCH
  * Object の受信は malformed Track の検出に当たる。decodeFetchObjectFields の
  * 単体テストは存在するが、session レベルの handleMalformedFetchTrack 経路
@@ -4494,11 +4494,11 @@ interface DataStreamFinContext extends DataStreamHandle {
     // malformed 検出時の cross-cancel (STOP_SENDING 相当) を検証するテストが
     // 登録する。登録が無いテストでは空 Map のまま使われない。
     requestStreams: Map<bigint, RequestStreamEntry>;
-    // draft-ietf-moq-transport-21 §10.8 / §10.9 の Track 単位追跡
+    // draft-ietf-moq-transport-22 §10.8 / §10.9 の Track 単位追跡
     priorGapTrackingByTrack: Map<FullTrackNameKey, PriorGapTracking>;
-    // draft-ietf-moq-transport-21 §12.1 条件 4 の Group 単位の最終 Object ID 追跡
+    // draft-ietf-moq-transport-22 §12.1 条件 4 の Group 単位の最終 Object ID 追跡
     receivedEndOfGroupFinalObjectIds: EndOfGroupTracking;
-    // draft-ietf-moq-transport-21 §12.2 (タイムアウト) / §12.5 (バッファ上限)
+    // draft-ietf-moq-transport-22 §12.2 (タイムアウト) / §12.5 (バッファ上限)
     dataStreamTimeoutMs: number;
     dataStreamMaxBufferBytes: number;
     handleIncomingStream(stream: ReadableStream<Uint8Array>): Promise<void>;
@@ -4511,7 +4511,7 @@ interface DataStreamFinContext extends DataStreamHandle {
   /**
    * 同じセッションに 2 本目以降の受信データストリームを開く
    *
-   * セッションに載る追跡 (draft-ietf-moq-transport-21 §12.1 条件 4 の Group 単位の
+   * セッションに載る追跡 (draft-ietf-moq-transport-22 §12.1 条件 4 の Group 単位の
    * 最終 Object ID など) は Subgroup ストリームをまたいで共有されるため、SessionImpl
    * を共有したまま複数のデータストリームを別々に駆動できるようにする。
    */
@@ -4552,11 +4552,11 @@ function createDataStreamFinContext(
     fetchers: Map<bigint, FetcherImpl>;
     subscribersByAlias: Map<bigint, SubscriberImpl[]>;
     requestStreams: Map<bigint, RequestStreamEntry>;
-    // draft-ietf-moq-transport-21 §10.8 / §10.9 の Track 単位追跡
+    // draft-ietf-moq-transport-22 §10.8 / §10.9 の Track 単位追跡
     priorGapTrackingByTrack: Map<FullTrackNameKey, PriorGapTracking>;
-    // draft-ietf-moq-transport-21 §12.1 条件 4 の Group 単位の最終 Object ID 追跡
+    // draft-ietf-moq-transport-22 §12.1 条件 4 の Group 単位の最終 Object ID 追跡
     receivedEndOfGroupFinalObjectIds: EndOfGroupTracking;
-    // draft-ietf-moq-transport-21 §12.2 (タイムアウト) / §12.5 (バッファ上限)
+    // draft-ietf-moq-transport-22 §12.2 (タイムアウト) / §12.5 (バッファ上限)
     dataStreamTimeoutMs: number;
     dataStreamMaxBufferBytes: number;
     handleIncomingStream(stream: ReadableStream<Uint8Array>): Promise<void>;
@@ -4711,7 +4711,7 @@ async function yieldToMacrotask(): Promise<void> {
 }
 
 /**
- * draft-ietf-moq-transport-21 §11.3.1:
+ * draft-ietf-moq-transport-22 §11.3.1:
  * SUBGROUP_HEADER と Object が同じ chunk で届いても、FIN を待たずに Object を
  * 配信することを検証する。
  *
@@ -4747,7 +4747,7 @@ test("Subgroup データストリーム: header と同じ chunk の Object を F
 });
 
 /**
- * draft-ietf-moq-transport-21 §11.3.1:
+ * draft-ietf-moq-transport-22 §11.3.1:
  * header と Object が別の chunk で届く場合も従来どおり配信すること。
  * 同一 chunk の経路だけを直して分割到着を壊していないことを確かめる。
  */
@@ -4777,7 +4777,7 @@ test("Subgroup データストリーム: header と Object が別の chunk で�
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.6 / §12.1:
+ * draft-ietf-moq-transport-22 §3.7 / §12.1:
  * Object Property に Mandatory Track Property (0x4000-0x7FFF) を含む subgroup
  * ストリームは malformed であり、当該購読を cancel してセッションは閉じないことを
  * 検証する。
@@ -4856,7 +4856,7 @@ test("Subgroup データストリーム: Mandatory Track Property で購読を c
   // 購読は closed になる
   assert.equal(subscriber.state, "closed");
   // bidi リクエストストリームの両方向が cancel される
-  // (draft-ietf-moq-transport-21 §12.1 の MUST cancel / §3.1 の STOP_SENDING 相当)
+  // (draft-ietf-moq-transport-22 §12.1 の MUST cancel / §3.1 の STOP_SENDING 相当)
   assert.deepEqual(bidiCancelReasons, ["subscription cancelled"]);
   assert.deepEqual(bidiAbortReasons, ["subscription cancelled"]);
   assert.isFalse(ctx.internal.requestStreams.has(1n));
@@ -4867,7 +4867,7 @@ test("Subgroup データストリーム: Mandatory Track Property で購読を c
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-21 §10.9 / §12.1:
+ * draft-ietf-moq-transport-22 §10.9 / §12.1:
  * 同一 Group の受信済み Object を Prior Object ID Gap が覆う場合、malformed track
  * として同一 Track の購読と FETCH を cancel する。セッションは閉じない。
  * 追跡は Track 単位であり、購読も FETCH も尽きた時点で破棄される。
@@ -4984,7 +4984,7 @@ test("Subgroup データストリーム: Prior Object ID Gap が受信済み Obj
 });
 
 /**
- * draft-ietf-moq-transport-21 §10.8 / §12.1:
+ * draft-ietf-moq-transport-22 §10.8 / §12.1:
  * FETCH データストリームでも Track 横断の Prior ID Gap 条件を検出し、同一 Track の
  * 購読と FETCH を cancel する。セッションは閉じない。
  */
@@ -5079,7 +5079,7 @@ test("Fetch データストリーム: Prior Group ID Gap が受信済み Group �
 });
 
 /**
- * draft-ietf-moq-transport-21 §10.8 / §12.1:
+ * draft-ietf-moq-transport-22 §10.8 / §12.1:
  * fill fetch ストリームでも Track 横断の Prior ID Gap 条件を検出し、同一 Track の
  * 購読を cancel する。セッションは閉じない。
  */
@@ -5159,7 +5159,7 @@ test("fill fetch ストリーム: Prior Group ID Gap が受信済み Group を�
 });
 
 /**
- * draft-ietf-moq-transport-21 §10.8 / §10.9:
+ * draft-ietf-moq-transport-22 §10.8 / §10.9:
  * 追跡状態を破棄できるのは、その Track の購読と FETCH が 1 つも残っていない時点
  * だけである。FETCH は Track Alias を持たないため、購読の消滅だけでは Track の
  * 生存を判定できない。
@@ -5192,7 +5192,7 @@ test("Prior ID Gap 追跡: 同一 Track の FETCH が残っている間は購読
 });
 
 /**
- * draft-ietf-moq-transport-21 §8.3:
+ * draft-ietf-moq-transport-22 §8.3:
  * "If a receiver understands a Type, and the following Value or Length/Value
  *  does not match the serialization defined by that Type, the receiver MUST
  *  close the session with error code KEY_VALUE_FORMATTING_ERROR."
@@ -5219,7 +5219,7 @@ test("Subgroup データストリーム: 既知 Type の Length 宣言超過で 
 });
 
 /**
- * draft-ietf-moq-transport-21 §11.3 (Streams):
+ * draft-ietf-moq-transport-22 §11.3 (Streams):
  * "If a stream ends gracefully (i.e., the stream terminates with a FIN) in
  *  the middle of a serialized Object, the session SHOULD be closed with a
  *  PROTOCOL_VIOLATION."
@@ -5259,7 +5259,7 @@ test("Subgroup データストリーム: 未完成 Object の途中でピア FIN
 });
 
 /**
- * draft-ietf-moq-transport-21 §6.6 (Termination):
+ * draft-ietf-moq-transport-22 §6.6 (Termination):
  * closeWithError() はアプリ登録の error コールバックが throw しても
  * close() を必ず実行し、セッションを閉じることを検証する。
  * Subgroup 未完成 FIN の PROTOCOL_VIOLATION 経路で駆動する。
@@ -5341,7 +5341,7 @@ test("closeWithError: error コールバックが throw してもセッション
 });
 
 /**
- * draft-ietf-moq-transport-21 §6.6 (Termination):
+ * draft-ietf-moq-transport-22 §6.6 (Termination):
  * error コールバックと debug コールバックの両方が throw しても、close() は
  * 実行され、例外は呼び出し元へ伝播しないことを検証する。
  */
@@ -5388,7 +5388,7 @@ test("closeWithError: error と debug の両方が throw しても閉じて伝�
 });
 
 /**
- * draft-ietf-moq-transport-21 §6.6 (Termination):
+ * draft-ietf-moq-transport-22 §6.6 (Termination):
  * 正常系 (コールバックが throw しない) では先に callbacks.error、
  * 後に close の順で実行されることを検証する (回帰ガード)。
  */
@@ -5463,7 +5463,7 @@ function createPeerCloseSession(): {
 }
 
 /**
- * draft-ietf-moq-transport-21 §6.6 (Termination):
+ * draft-ietf-moq-transport-22 §6.6 (Termination):
  * ピア起点で transport.closed が resolve した場合、登録済みの Publisher /
  * Subscriber / Fetcher の state が closed になることを検証する。
  * Namespace 系の state も closed になる。ConnectCallbacks.close は 1 回だけ
@@ -5528,7 +5528,7 @@ test("ピア起点の終了で Publisher / Subscriber / Fetcher の state が cl
 });
 
 /**
- * draft-ietf-moq-transport-21 §13 (Grease):
+ * draft-ietf-moq-transport-22 §13 (Grease):
  * 未知の Session Termination コードは INTERNAL_ERROR として通知する。
  */
 test("ピア起点の終了で未知の closeCode は INTERNAL_ERROR に正規化される", async () => {
@@ -5543,7 +5543,7 @@ test("ピア起点の終了で未知の closeCode は INTERNAL_ERROR に正規�
 });
 
 /**
- * draft-ietf-moq-transport-21 §6.6 (Termination):
+ * draft-ietf-moq-transport-22 §6.6 (Termination):
  * transport.closed が reject した場合も同様に state が閉じることを検証する。
  */
 test("ピア起点の終了 (reject) でも request 系の state が closed になる", async () => {
@@ -5565,7 +5565,7 @@ test("ピア起点の終了 (reject) でも request 系の state が closed に�
 });
 
 /**
- * draft-ietf-moq-transport-21 §6.6 (Termination):
+ * draft-ietf-moq-transport-22 §6.6 (Termination):
  * ピア起点の終了後は Subscriber.update() が "Subscriber is closed" で
  * reject すること (state ガードが効くこと) を検証する。
  */
@@ -5661,7 +5661,7 @@ test("Subgroup データストリーム: チャンク分割中は閉じず Objec
 });
 
 /**
- * draft-ietf-moq-transport-21 §11.3.2 (Closing Subgroup Streams):
+ * draft-ietf-moq-transport-22 §11.3.2 (Closing Subgroup Streams):
  * "If a sender has delivered all objects in a Subgroup ... it MUST close
  *  the stream with a FIN."
  * Object 0 個 (empty Subgroup) を含む全ストリームが対象であり、
@@ -5684,7 +5684,7 @@ test("Subgroup データストリーム: ヘッダーのみの FIN はセッシ�
 });
 
 /**
- * draft-ietf-moq-transport-21 §11.3.2 (Closing Subgroup Streams):
+ * draft-ietf-moq-transport-22 §11.3.2 (Closing Subgroup Streams):
  * 送信側は Subgroup の残りを配らずに閉じるとき MUST で RESET_STREAM する。
  * 受信側は配信済みの Object を保ち、セッションを閉じずにこの stream だけを
  * 終えること (続きは別の Subgroup / Group の stream で届く)。
@@ -5719,7 +5719,7 @@ test("Subgroup データストリーム: ピアの RESET_STREAM ではセッシ�
  * Subgroup の stream の終わり (FIN) を、その stream の最後の Object を渡した後に
  * subgroupEnd でアプリへ知らせる。
  *
- * draft-ietf-moq-transport-21 Section 2.1: Object は順不同で届きうる。Group ごとに別の
+ * draft-ietf-moq-transport-22 Section 2.1: Object は順不同で届きうる。Group ごとに別の
  * stream で届くため、前の Group の末尾が次の Group の先頭より後にアプリへ渡ることがある。
  * アプリは前の Group の stream が終わったことを知れば、それ以上前の Group の Object が
  * 届かないと判断できる (GroupSwitchGate)。
@@ -5754,7 +5754,7 @@ test("Subgroup データストリーム: FIN で終わると最後の Object の
 });
 
 /**
- * draft-ietf-moq-transport-21 §11.3.2: ピアの RESET_STREAM で終わった場合も、subgroupEnd を
+ * draft-ietf-moq-transport-22 §11.3.2: ピアの RESET_STREAM で終わった場合も、subgroupEnd を
  * reset で知らせる (以降その stream の Object は届かない)。
  */
 test("Subgroup データストリーム: RESET_STREAM で終わると subgroupEnd を reset で知らせる", async () => {
@@ -5785,7 +5785,7 @@ test("Subgroup データストリーム: RESET_STREAM で終わると subgroupEn
 });
 
 /**
- * draft-ietf-moq-transport-21 Section 12.5: RESET_STREAM の error code は reset の理由を表す
+ * draft-ietf-moq-transport-22 Section 12.5: RESET_STREAM の error code は reset の理由を表す
  * (期限切れは DELIVERY_TIMEOUT、停滞の打ち切りは TOO_FAR_BEHIND など)。subgroupEnd の
  * errorCode で知らせれば、アプリは Object の欠落の経路を絞れる。未知の code は
  * INTERNAL_ERROR として扱う (Section 13)。
@@ -5827,7 +5827,7 @@ test("Subgroup データストリーム: RESET_STREAM の error code を subgrou
 });
 
 /**
- * draft-ietf-moq-transport-21 §11.3.2:
+ * draft-ietf-moq-transport-22 §11.3.2:
  * Object の途中で RESET_STREAM された場合も、その Object は配らずに残りバイトを
  * 捨て、セッションは閉じない (未完成 Object の途中で FIN されたときの
  * PROTOCOL_VIOLATION とは異なる)。
@@ -5859,7 +5859,7 @@ test("Subgroup データストリーム: Object 途中の RESET_STREAM は残り
 });
 
 /**
- * draft-ietf-moq-transport-21 §11.3.2:
+ * draft-ietf-moq-transport-22 §11.3.2:
  * 購読が未登録 (pending mode) の Subgroup ストリームが RESET_STREAM されても
  * abandon し、セッションは閉じない。
  */
@@ -5884,7 +5884,7 @@ test("Subgroup pending mode: RESET_STREAM で abandon しセッションを閉�
 });
 
 /**
- * draft-ietf-moq-transport-21 §11.3.1 / §11.3.2:
+ * draft-ietf-moq-transport-22 §11.3.1 / §11.3.2:
  * pending mode (subscribers 未登録) でヘッダーのみの Subgroup ストリームが
  * FIN すると、その場で abandon して handleIncomingStream が解決する。
  * FIN 済み read() は以後も即解決の done を返すため、race を再登録すると
@@ -5921,7 +5921,7 @@ test("Subgroup pending mode: ヘッダーのみの FIN で abandon しハング�
 });
 
 /**
- * draft-ietf-moq-transport-21 §11.3.1 / §11.3.2:
+ * draft-ietf-moq-transport-22 §11.3.1 / §11.3.2:
  * pending mode でヘッダー + 完全 Object 1 件 + FIN の場合も end-of-stream で
  * abandon し、pending entry が残らずハングしないことを検証する。
  * (pending mode は payload を decode しないため残バッファ判定は行わない)
@@ -5954,7 +5954,7 @@ test("Subgroup pending mode: 完全 Object 付き FIN で abandon しハング�
 });
 
 /**
- * draft-ietf-moq-transport-21 §11.3.1:
+ * draft-ietf-moq-transport-22 §11.3.1:
  * pending mode は payload を decode しないため、未完成 Object の途中での FIN
  * でも §11.3 の SHOULD 判定 (PROTOCOL_VIOLATION) を行わず abandon する。
  * subscriber mode の未完成 FIN 検出とは意図的な非対称である。
@@ -5987,7 +5987,7 @@ test("Subgroup pending mode: 未完成 Object の途中の FIN でも閉じず a
 });
 
 /**
- * draft-ietf-moq-transport-21 §11.3.1:
+ * draft-ietf-moq-transport-22 §11.3.1:
  * pending 中に subscriber が登録された場合は pending chunks を結合して
  * subscriber mode へ合流し、後続 Object が配信されることを検証する。
  * 本テストは逐次登録の合流を検証する。同時解決時の合流優先は
@@ -6079,7 +6079,7 @@ test("Fetch データストリーム: ヘッダー途中切れの FIN は黙殺�
 });
 
 /**
- * draft-ietf-moq-transport-21 §11.3 (Streams):
+ * draft-ietf-moq-transport-22 §11.3 (Streams):
  * Fetch データストリームでも未完成 Object の途中のピア FIN は
  * PROTOCOL_VIOLATION でセッションを閉じることを検証する。
  * 加えて fetcher.handleEnd() が呼ばれない (正常終了として扱われない) ことを
@@ -6123,7 +6123,7 @@ test("Fetch データストリーム: 未完成 Object の途中でピア FIN �
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.11 (FETCH):
+ * draft-ietf-moq-transport-22 §9.11 (FETCH):
  * Object 0 件の FETCH 応答は FETCH_HEADER + FIN が正当な形
  * ("If no Objects exist in the requested range, the publisher opens the
  *  unidirectional stream, sends the FETCH_HEADER (see Section 11.4.1)
@@ -6315,7 +6315,7 @@ test("fill fetch ストリーム: 後続 fill (REQUEST_UPDATE Request ID、応�
 });
 
 /**
- * draft-ietf-moq-transport-21 §11.3 (Streams):
+ * draft-ietf-moq-transport-22 §11.3 (Streams):
  * fill fetch ストリームでも未完成 Object の途中の FIN は PROTOCOL_VIOLATION で
  * セッションを閉じることを検証する (FETCH と同一の完全性規則)。
  */
@@ -6344,7 +6344,7 @@ test("fill fetch ストリーム: 未完成 Object の途中で FIN されると
 });
 
 /**
- * draft-ietf-moq-transport-21 §8.3:
+ * draft-ietf-moq-transport-22 §8.3:
  * "If a receiver understands a Type, and the following Value or Length/Value
  *  does not match the serialization defined by that Type, the receiver MUST
  *  close the session with error code KEY_VALUE_FORMATTING_ERROR."
@@ -6378,11 +6378,11 @@ test("fill fetch ストリーム: 既知 Type の Length 宣言超過で KEY_VAL
 
 // ============================================================================
 // データストリームの受信タイムアウト
-// draft-ietf-moq-transport-21 §12.2 (DATA_STREAM_TIMEOUT)
+// draft-ietf-moq-transport-22 §12.2 (DATA_STREAM_TIMEOUT)
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-21 §12.2:
+ * draft-ietf-moq-transport-22 §12.2:
  * DATA_STREAM_TIMEOUT (0x12) は「ピアが開いたデータストリームで送るべき
  * データを送るのに時間をかけすぎた」ことを示す。Object の途中バイトを保持した
  * ままピアが送信を止めた場合、期限でセッションを閉じる。
@@ -6412,11 +6412,11 @@ test("データストリーム: 途中バイトを保持したままタイムア
 });
 
 // ============================================================================
-// draft-ietf-moq-transport-21 §12.5 (EXCESSIVE_LOAD): 受信バッファの上限
+// draft-ietf-moq-transport-22 §12.5 (EXCESSIVE_LOAD): 受信バッファの上限
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-21 §12.5 (EXCESSIVE_LOAD 0x9):
+ * draft-ietf-moq-transport-22 §12.5 (EXCESSIVE_LOAD 0x9):
  * 確立後の受信データストリームのバッファが上限を超えたら当該ストリームを
  * 打ち切り、セッションは閉じない (Track 単位の失敗として購読へ通知する)。
  */
@@ -6491,7 +6491,7 @@ test("Subgroup データストリーム: バッファ上限を超えると打ち
 });
 
 /**
- * draft-ietf-moq-transport-21 §12.5 (EXCESSIVE_LOAD 0x9):
+ * draft-ietf-moq-transport-22 §12.5 (EXCESSIVE_LOAD 0x9):
  * 同一 Track Alias に複数の購読がある場合、上限超過では全購読へ失敗を通知する
  * (1 件目の通知中に unsubscribe されても取りこぼさない)。
  */
@@ -6573,7 +6573,7 @@ test("Fetch データストリーム: バッファ上限を超えると打ち切
   };
   ctx.internal.fetchers.set(requestId, fetcher);
 
-  // draft-ietf-moq-transport-21 §10.8 / §10.9:
+  // draft-ietf-moq-transport-22 §10.8 / §10.9:
   // FETCH の終了で購読も尽きた Track の Prior ID Gap 追跡が捨てられることを検証する
   const trackKey = fetcher.getFullTrackNameKey();
   ctx.internal.priorGapTrackingByTrack.set(trackKey, {
@@ -6633,7 +6633,7 @@ test("Fetch データストリーム: バッファ上限を超えると打ち切
 });
 
 /**
- * draft-ietf-moq-transport-21 §12.5 (EXCESSIVE_LOAD 0x9) / §3.4.1:
+ * draft-ietf-moq-transport-22 §12.5 (EXCESSIVE_LOAD 0x9) / §3.4.1:
  * fill fetch ストリームでバッファ上限を超えたら打ち切り、関連付けを消して
  * アプリへ fillError で伝える。購読は継続する (終了通知は出さない)。
  */
@@ -6694,7 +6694,7 @@ test("fill fetch ストリーム: バッファ上限を超えると打ち切ら�
 });
 
 /**
- * draft-ietf-moq-transport-21 §12.5 (EXCESSIVE_LOAD 0x9):
+ * draft-ietf-moq-transport-22 §12.5 (EXCESSIVE_LOAD 0x9):
  * バッファ長が上限と等しい場合は打ち切らない (超過のみが対象)。
  */
 test("Subgroup データストリーム: バッファ長が上限ちょうどなら打ち切らない", async () => {
@@ -6733,7 +6733,7 @@ test("Subgroup データストリーム: バッファ長が上限ちょうどな
 });
 
 /**
- * draft-ietf-moq-transport-21 §12.5 (EXCESSIVE_LOAD 0x9):
+ * draft-ietf-moq-transport-22 §12.5 (EXCESSIVE_LOAD 0x9):
  * 上限に 0 以下を指定すると上限判定を無効にする (打ち切らない)。
  */
 test("Subgroup データストリーム: 上限 0 以下なら打ち切らない", async () => {
@@ -6770,7 +6770,7 @@ test("Subgroup データストリーム: 上限 0 以下なら打ち切らない
 });
 
 /**
- * draft-ietf-moq-transport-21 §12.5 (EXCESSIVE_LOAD 0x9):
+ * draft-ietf-moq-transport-22 §12.5 (EXCESSIVE_LOAD 0x9):
  * fill fetch ストリームでも、チャンクを追記した直後の検査で上限超過を検出する
  * (初回チャンクがヘッダーのみで、次のチャンクで上限を超える場合)。
  */
@@ -6814,7 +6814,7 @@ test("fill fetch ストリーム: 追記直後に上限を超えると打ち切�
 });
 
 /**
- * draft-ietf-moq-transport-21 §12.5 (EXCESSIVE_LOAD 0x9):
+ * draft-ietf-moq-transport-22 §12.5 (EXCESSIVE_LOAD 0x9):
  * 上限以下の受信は従来どおり配信される (打ち切らない)。
  */
 test("Subgroup データストリーム: バッファ上限以下なら従来どおり配信される", async () => {
@@ -6856,7 +6856,7 @@ test("Subgroup データストリーム: バッファ上限以下なら従来ど
 });
 
 /**
- * draft-ietf-moq-transport-21 §12.2:
+ * draft-ietf-moq-transport-22 §12.2:
  * Object が完成してバッファが空になったら期限を解除する。FIN を待つ間も
  * タイムアウトしない (ストリームは正常に開いたまま次の Object を待てる)。
  */
@@ -7119,7 +7119,7 @@ test("fill fetch ストリーム: FIN 正常完了では fillError を通知し�
 });
 
 /**
- * draft-ietf-moq-transport-21 §12.1 (Malformed Tracks):
+ * draft-ietf-moq-transport-22 §12.1 (Malformed Tracks):
  * Malformed Track の検出は購読自体の cancel を伴うため、アプリへの通知は
  * 購読の error コールバックが担う。fill の失敗通知 (fillError) は購読の継続を
  * 前提とするため呼ばない (二重通知を防ぐ)。
@@ -7241,7 +7241,7 @@ test("fill fetch ストリーム: object コールバックの throw でも受�
 });
 
 /**
- * draft-ietf-moq-transport-21 §11.1.2 (Object Status):
+ * draft-ietf-moq-transport-22 §11.1.1 (Object Status):
  * Subgroup の終わりは status ではなく FIN で通知される
  * ("The end of a Subgroup is signaled by closing its stream with a FIN
  *  (see Section 11.3.2).")。
@@ -7325,7 +7325,7 @@ test("Subgroup データストリーム: END_OF_GROUP status 途中切れの FIN
 });
 
 /**
- * draft-ietf-moq-transport-21 §12.1 条件 4:
+ * draft-ietf-moq-transport-22 §12.1 条件 4:
  * "An Object is received in a Group whose Object ID is larger than the final
  *  Object in the Group. The final Object in a Group is the Object with Status
  *  END_OF_GROUP, or the last Object before a FIN in a Subgroup which has the
@@ -7515,7 +7515,7 @@ test("Fetch データストリーム: セッション close 済み経路でも�
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.10:
+ * draft-ietf-moq-transport-22 §9.10:
  * 受信 PUBLISH で確立した購読のストリーム上で publisher 発の
  * PUBLISH_STATE_NOTIFY を受信した場合、subscriber 状態に反映されることを
  * 検証する。応答は送信しない。
@@ -7614,7 +7614,7 @@ test("受信 PUBLISH ストリーム上の許可外パラメータの PUBLISH_ST
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.5 (REQUEST_UPDATE):
+ * draft-ietf-moq-transport-22 §9.5 (REQUEST_UPDATE):
  * "The receiver of a REQUEST_UPDATE MUST respond with exactly one REQUEST_OK
  *  or REQUEST_ERROR message ..."
  * 受信 PUBLISH ストリーム上の REQUEST_OK は自 endpoint が送った REQUEST_UPDATE への
@@ -7714,7 +7714,7 @@ test("受信 PUBLISH ストリーム上の REQUEST_OK で閉じた後は同一�
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.8:
+ * draft-ietf-moq-transport-22 §9.8:
  * 受信 PUBLISH に Subscription Parameters (FORWARD / timeouts /
  * SUBSCRIBER_PRIORITY / LOCATION_FILTER) が含まれても、スコープ検証を通過し
  * セッションが閉じないことを検証する。
@@ -7756,7 +7756,7 @@ test("受信 PUBLISH の Subscription Parameters は PROTOCOL_VIOLATION にな�
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.8 / §3.3.1:
+ * draft-ietf-moq-transport-22 §9.8 / §3.3.1:
  * 受信 PUBLISH の LOCATION_FILTER が subscriber の初期フィルタとして
  * 反映されることを検証する。
  */
@@ -8340,7 +8340,7 @@ test("publishNamespace: 送信前の throw でもストリームリソースを�
 });
 
 /**
- * draft-ietf-moq-transport-21 §6.4.2.1 (Request ID):
+ * draft-ietf-moq-transport-22 §6.4.2.1 (Request ID):
  * 実 SessionImpl で validateIncomingRequestId 消費後に未対応リクエストを処理すると、
  * 同一 receivedRequestIds の共有により重複検出して INVALID_REQUEST_ID で
  * 閉じることを検証する (validate 委譲と未対応経路の同一 Set 共有の配線ガード。
@@ -8389,7 +8389,7 @@ test("SessionImpl の validateIncomingRequestId 消費後に未対応リクエ�
 
 /**
  * SessionImpl の localMaxFilterRanges の既定値は 0 (未広告 = Range Filter
- * 受信拒否) であることを検証する (draft-ietf-moq-transport-21 §9.1.6)。
+ * 受信拒否) であることを検証する (draft-ietf-moq-transport-22 §9.1.6)。
  */
 test("SessionImpl: localMaxFilterRanges の既定値は 0", () => {
   const session = createSessionImpl();
@@ -8398,7 +8398,7 @@ test("SessionImpl: localMaxFilterRanges の既定値は 0", () => {
 
 /**
  * SessionImpl の localMaxRequestUpdates の既定値は 0 (未広告 = 無制限) である
- * ことを検証する (draft-ietf-moq-transport-21 §9.1.7)。
+ * ことを検証する (draft-ietf-moq-transport-22 §9.1.7)。
  * §9.1.6 の MAX_FILTER_RANGES の 0 が「受信拒否」なのとは意味が逆である。
  */
 test("SessionImpl: localMaxRequestUpdates の既定値は 0", () => {
@@ -8408,7 +8408,7 @@ test("SessionImpl: localMaxRequestUpdates の既定値は 0", () => {
 
 /**
  * SessionImpl の dataStreamMaxBufferBytes の既定値は 32 MiB であることを検証する
- * (draft-ietf-moq-transport-21 §12.5 EXCESSIVE_LOAD 0x9)。
+ * (draft-ietf-moq-transport-22 §12.5 EXCESSIVE_LOAD 0x9)。
  * 媒体フレームは通常 1 MiB 未満であり、16 MiB の Object を受ける余裕を持たせた値。
  */
 test("SessionImpl: dataStreamMaxBufferBytes の既定値は 32 MiB", () => {
@@ -8420,7 +8420,7 @@ test("SessionImpl: dataStreamMaxBufferBytes の既定値は 32 MiB", () => {
  * initialize() が MAX_AUTH_TOKEN_CACHE_SIZE / MAX_REQUEST_UPDATES /
  * MAX_FILTER_RANGES を SETUP で広告し、自 endpoint の MAX_FILTER_RANGES を
  * localMaxFilterRanges に保持することを検証する
- * (draft-ietf-moq-transport-21 §9.1.3 / §9.1.6 / §9.1.7)。
+ * (draft-ietf-moq-transport-22 §9.1.3 / §9.1.6 / §9.1.7)。
  */
 test("initialize: SETUP で上限を広告し localMaxFilterRanges と受信バッファ上限を保持する", async () => {
   const sentChunks: Uint8Array[] = [];
@@ -8469,7 +8469,7 @@ test("initialize: SETUP で上限を広告し localMaxFilterRanges と受信バ�
     maxAuthTokenCacheSize: 1024,
     maxRequestUpdates: 8,
     maxFilterRanges: 4,
-    // draft-ietf-moq-transport-21 §12.5: 受信データストリームのバッファ上限
+    // draft-ietf-moq-transport-22 §12.5: 受信データストリームのバッファ上限
     dataStreamMaxBufferBytes: 1024,
   });
 
@@ -8628,7 +8628,7 @@ test("initialize: SETUP に載せた Authorization Token を setupAuthorizationT
 /**
  * 受信 PUBLISH の REQUEST_UPDATE を連結した 1 チャンクを作る
  *
- * draft-ietf-moq-transport-21 §9.1.7 の上限超過は 1 回の read に上限 + 1 通が
+ * draft-ietf-moq-transport-22 §9.1.7 の上限超過は 1 回の read に上限 + 1 通が
  * 含まれる場合に検出するため、テストでは複数通を 1 チャンクに連結して届ける。
  */
 function encodeIncomingRequestUpdateChunk(requestIds: bigint[]): Uint8Array {
@@ -8644,7 +8644,7 @@ function encodeIncomingRequestUpdateChunk(requestIds: bigint[]): Uint8Array {
 }
 
 /**
- * draft-ietf-moq-transport-21 §9.1.7 (MAX_REQUEST_UPDATES):
+ * draft-ietf-moq-transport-22 §9.1.7 (MAX_REQUEST_UPDATES):
  * 受信 PUBLISH ストリームのサブループ (SessionImpl.runPublishStreamSubLoop) で、
  * 自 endpoint が広告した上限 N を超える N+1 通の REQUEST_UPDATE を 1 チャンクで
  * 受信した場合、N+1 通目の処理で TOO_MANY_REQUEST_UPDATES によりセッションが
@@ -8685,7 +8685,7 @@ test("受信 PUBLISH ストリーム上の MAX_REQUEST_UPDATES 超過で TOO_MAN
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.1.7 (MAX_REQUEST_UPDATES):
+ * draft-ietf-moq-transport-22 §9.1.7 (MAX_REQUEST_UPDATES):
  * 「A value of 0 means the endpoint does not limit REQUEST_UPDATE concurrency.」
  * 未広告 (既定値 0) では上限 + 1 通のチャンクを届けてもセッションは閉じず、
  * すべての REQUEST_UPDATE が処理されることを検証する。§9.1.6 の
@@ -8724,7 +8724,7 @@ test("受信 PUBLISH ストリーム上の REQUEST_UPDATE は未広告 (0 = 無�
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-21 §6.3 (Session initialization):
+ * draft-ietf-moq-transport-22 §6.3 (Session initialization):
  * データストリーム (Object) が制御ストリームより先に到着しても
  * PROTOCOL_VIOLATION で閉じず、SETUP 完了後にバッファリングして処理する。
  */
@@ -8802,7 +8802,7 @@ test("initialize: 制御ストリームより先にデータストリームが�
 });
 
 /**
- * draft-ietf-moq-transport-21 §6.2 / §6.2.1:
+ * draft-ietf-moq-transport-22 §6.2 / §6.2.1:
  * WebTransport では WT-Available-Protocols に MOQT プロトコル識別子を提示する。
  * draft-21 は "moqt-21"。
  */
@@ -8967,7 +8967,7 @@ test("publishNamespace の done() は送信方向 abort と受信方向 cancel �
 });
 
 /**
- * draft-ietf-moq-transport-21 §6.6.1:
+ * draft-ietf-moq-transport-22 §6.6.1:
  * GOAWAY_TIMEOUT は未完了の購読・fetch がある場合のみ張る。
  */
 test("goaway: 未完了の購読・fetch が無い場合は GOAWAY_TIMEOUT タイマーを張らない", async () => {
@@ -8986,7 +8986,7 @@ test("goaway: 未完了の購読・fetch が無い場合は GOAWAY_TIMEOUT タ�
 });
 
 /**
- * draft-ietf-moq-transport-21 §6.6.1:
+ * draft-ietf-moq-transport-22 §6.6.1:
  * 未完了の購読がある場合は GOAWAY_TIMEOUT タイマーを張る。
  */
 test("goaway: 未完了の購読がある場合は GOAWAY_TIMEOUT タイマーを張る", async () => {
@@ -9010,7 +9010,7 @@ test("goaway: 未完了の購読がある場合は GOAWAY_TIMEOUT タイマー�
 });
 
 /**
- * draft-ietf-moq-transport-21 §6.6.1:
+ * draft-ietf-moq-transport-22 §6.6.1:
  * GOAWAY 受信後は Established 購読が無くなるまで NO_ERROR クローズを待つ。
  */
 test("handleGoaway: Established 購読が残っている間は閉じず、購読終了後に閉じる", async () => {
@@ -9047,7 +9047,7 @@ test("handleGoaway: Established 購読が残っている間は閉じず、購読
 });
 
 /**
- * draft-ietf-moq-transport-21 §6.6 (Termination):
+ * draft-ietf-moq-transport-22 §6.6 (Termination):
  * ピア起点で transport.closed が解決した場合も、保留中のリクエスト Promise を
  * reject してアプリを待たせ続けない。
  */
@@ -9092,7 +9092,7 @@ test("transport.closed で保留中のリクエスト Promise を reject する"
  * テスト用に Uint8Array チャンクを連結する
  */
 // ============================================================================
-// draft-ietf-moq-transport-21 §8.9 / §9.1.4: 受信 SETUP の Authorization Token
+// draft-ietf-moq-transport-22 §8.9 / §9.1.4: 受信 SETUP の Authorization Token
 // ============================================================================
 
 /**
@@ -9217,7 +9217,7 @@ function buildControlStreamBytes(
 /**
  * SETUP の AUTHORIZATION TOKEN Setup Option を組み立てる
  *
- * draft-ietf-moq-transport-21 §9.1.4: オプション値は §8.9 の Token 構造。
+ * draft-ietf-moq-transport-22 §9.1.4: オプション値は §8.9 の Token 構造。
  */
 function authTokenSetupOption(token: AuthorizationToken): {
   type: number;
@@ -9250,7 +9250,7 @@ async function assertInitializeFailsWith(
 }
 
 /**
- * draft-ietf-moq-transport-21 §9.1.1 (AUTHORITY):
+ * draft-ietf-moq-transport-22 §9.1.1 (AUTHORITY):
  * "When an AUTHORITY option is received from a server, or when an AUTHORITY option
  *  is received while WebTransport is used, ... the session MUST be closed with
  *  INVALID_AUTHORITY."
@@ -9279,7 +9279,7 @@ test("initialize: 受信 SETUP の AUTHORITY で INVALID_AUTHORITY で閉じる"
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.1.2 (PATH):
+ * draft-ietf-moq-transport-22 §9.1.2 (PATH):
  * "When a PATH setup option is received from a server, or when a PATH parameter is
  *  received while WebTransport is used, ... the session MUST be closed with INVALID_PATH."
  */
@@ -9302,7 +9302,7 @@ test("initialize: 受信 SETUP の PATH で INVALID_PATH で閉じる", async ()
 });
 
 /**
- * draft-ietf-moq-transport-21 §9 (Control Messages):
+ * draft-ietf-moq-transport-22 §9 (Control Messages):
  * メッセージ Length と Body 長の不一致は PROTOCOL_VIOLATION でセッションを閉じる MUST。
  * KVP の宣言 Length が残りデータを超える SETUP でも、initialize() の失敗と同時に
  * セッションが閉じられることを検証する。
@@ -9333,7 +9333,7 @@ test("initialize: 受信 SETUP のデコード失敗で PROTOCOL_VIOLATION で�
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.1 (SETUP):
+ * draft-ietf-moq-transport-22 §9.1 (SETUP):
  * 制御ストリームの先頭メッセージが SETUP でない場合は PROTOCOL_VIOLATION で閉じる。
  */
 test("initialize: 先頭メッセージが SETUP でない場合も PROTOCOL_VIOLATION で閉じる", async () => {
@@ -9379,7 +9379,7 @@ test("initialize: 同一 Alias 再 REGISTER でトランスポートも 1 回だ
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.1.4 / §8.9:
+ * draft-ietf-moq-transport-22 §9.1.4 / §8.9:
  * 受信 SETUP の REGISTER が自 endpoint のトークンキャッシュへ登録されることを
  * 検証する。上限は広告した MAX_AUTH_TOKEN_CACHE_SIZE (§9.1.3)。
  */
@@ -9408,7 +9408,7 @@ test("initialize: 受信 SETUP の REGISTER がトークンキャッシュへ登
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.1.4 / §8.9:
+ * draft-ietf-moq-transport-22 §9.1.4 / §8.9:
  * 受信 SETUP で登録済み Alias を再 REGISTER した場合は
  * DUPLICATE_AUTH_TOKEN_ALIAS でセッションを閉じる MUST を検証する。
  */
@@ -9428,7 +9428,7 @@ test("initialize: 受信 SETUP の同一 Alias 再 REGISTER は DUPLICATE_AUTH_T
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.1.4:
+ * draft-ietf-moq-transport-22 §9.1.4:
  * SETUP の DELETE は server 宛の MUST だが、client である moqt-js も
  * 防御的検査として PROTOCOL_VIOLATION でセッションを閉じることを検証する。
  */
@@ -9441,7 +9441,7 @@ test("initialize: 受信 SETUP の DELETE は PROTOCOL_VIOLATION で閉じる", 
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.1.4:
+ * draft-ietf-moq-transport-22 §9.1.4:
  * SETUP の USE_ALIAS も同様に PROTOCOL_VIOLATION でセッションを閉じることを検証する。
  * SETUP 時点で解決できる Alias は存在しないため、登録済みでも拒否する。
  */
@@ -9460,7 +9460,7 @@ test("initialize: 受信 SETUP の USE_ALIAS は PROTOCOL_VIOLATION で閉じる
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.1.4:
+ * draft-ietf-moq-transport-22 §9.1.4:
  * 受信 SETUP の REGISTER が MAX_AUTH_TOKEN_CACHE_SIZE を超える場合、
  * AUTH_TOKEN_CACHE_OVERFLOW でセッションを失敗させず USE_VALUE として扱う MUST を
  * 検証する。MAX_AUTH_TOKEN_CACHE_SIZE を広告しない既定 (0) が上限になる。
@@ -9486,7 +9486,7 @@ test("initialize: 受信 SETUP の上限超過 REGISTER は USE_VALUE 扱いで�
 });
 
 /**
- * draft-ietf-moq-transport-21 §8.9:
+ * draft-ietf-moq-transport-22 §8.9:
  * Token 構造がデコードできない場合は KEY_VALUE_FORMATTING_ERROR で
  * セッションを閉じる MUST を検証する。0x04 は未定義の Alias Type。
  */
@@ -9650,7 +9650,7 @@ test("受信 PUBLISH: 登録済み Alias の USE_ALIAS は解決されセッシ�
 });
 
 /**
- * draft-ietf-moq-transport-21 §8.9 / §6.6 / §12.2:
+ * draft-ietf-moq-transport-22 §8.9 / §6.6 / §12.2:
  * 未登録 Alias を参照する USE_ALIAS は Session Termination の
  * UNKNOWN_AUTH_TOKEN_ALIAS (0x17) でセッションを閉じることを検証する。
  * 0x17 は §16.11.2 (REQUEST_ERROR Codes) に収載されていないため、
@@ -9679,7 +9679,7 @@ test("受信 PUBLISH: 未登録 Alias の USE_ALIAS は UNKNOWN_AUTH_TOKEN_ALIAS
 });
 
 /**
- * draft-ietf-moq-transport-21 §8.9 / §9.1.3:
+ * draft-ietf-moq-transport-22 §8.9 / §9.1.3:
  * Message Parameter の REGISTER が MAX_AUTH_TOKEN_CACHE_SIZE を超える場合は
  * AUTH_TOKEN_CACHE_OVERFLOW でセッションを終了する MUST を検証する。
  * SETUP 経路 (§9.1.4) と異なり USE_VALUE へ降格しない。
@@ -9707,7 +9707,7 @@ test("受信 PUBLISH: 上限超過 REGISTER は AUTH_TOKEN_CACHE_OVERFLOW でセ
 });
 
 /**
- * draft-ietf-moq-transport-21 §8.9 / §6.6 / §12.2:
+ * draft-ietf-moq-transport-22 §8.9 / §6.6 / §12.2:
  * 1 通の PUBLISH 内で REGISTER → DELETE → USE_ALIAS の順に現れる場合、
  * DELETE まで適用されたうえで USE_ALIAS が未登録として扱われ、
  * UNKNOWN_AUTH_TOKEN_ALIAS (0x17) の Session Termination でセッションが
@@ -9758,7 +9758,7 @@ test("受信 PUBLISH: 同一メッセージ内の DELETE で退役した Alias �
 });
 
 /**
- * draft-ietf-moq-transport-21 §8.9:
+ * draft-ietf-moq-transport-22 §8.9:
  * Token 構造がデコードできない AUTHORIZATION TOKEN パラメータは
  * KEY_VALUE_FORMATTING_ERROR でセッションを閉じる MUST を検証する。
  */

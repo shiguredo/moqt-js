@@ -1,7 +1,7 @@
 /**
  * 受信した映像 Object を復号してよいかを、Group の順序と欠落から決める
  *
- * draft-ietf-moq-transport-21 Section 2.1: "Objects can be delivered out of order"。
+ * draft-ietf-moq-transport-22 Section 2.1: "Objects can be delivered out of order"。
  * Group ごとに別の stream で届くため、前の Group の末尾が次の Group の先頭より後に
  * 届くことがある。次の Group のキーフレームを復号した後に前の Group の delta を
  * 復号すると、参照フレームが壊れて映像が崩れる。Group 内で Object が欠けた後の
@@ -61,7 +61,7 @@ const DECODE: VideoObjectAdmission = { decode: true };
 /**
  * Object Properties から Prior Object ID Gap の値を取り出す。Property が無ければ 0
  *
- * draft-ietf-moq-transport-21 Section 10.9: Prior Object ID Gap は、この Object の直前に
+ * draft-ietf-moq-transport-22 Section 10.9: Prior Object ID Gap は、この Object の直前に
  * ある存在しない Object の数を示す。Properties の malformed 判定 (同じ Property の重複など)
  * は受信時に済んでいるため、ここでは値だけを読む。
  */

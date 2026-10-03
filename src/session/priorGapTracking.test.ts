@@ -1,7 +1,7 @@
 /**
  * session/priorGapTracking.ts の単体テスト
  *
- * draft-ietf-moq-transport-21 §10.8 (Prior Group ID Gap) / §10.9 (Prior Object
+ * draft-ietf-moq-transport-22 §10.8 (Prior Group ID Gap) / §10.9 (Prior Object
  * ID Gap) の malformed Track 条件のうち、同一 Track の複数 Object と過去の受信
  * 状態を必要とする 5 条件の判定と、追跡状態の上限を検証する。
  *
@@ -49,7 +49,7 @@ function receive(
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-21 §10.8:
+ * draft-ietf-moq-transport-22 §10.8:
  * "A Group contains more than one Object with different values for
  *  Prior Group ID Gap."
  * 同じ Group の 2 件目が異なる Prior Group ID Gap を持つ場合は malformed。
@@ -64,7 +64,7 @@ test("assertNoPriorIdGapTrackViolation: 同一 Group 内で異なる Prior Group
 });
 
 /**
- * draft-ietf-moq-transport-21 §10.8:
+ * draft-ietf-moq-transport-22 §10.8:
  * 最初の観測値として記録するのは 5 条件すべてを通った Object の gap 値だけである。
  * malformed と判定した Object の値まで記録すると、以降の正当な Object を同じ
  * 条件で誤検出する。
@@ -82,7 +82,7 @@ test("assertNoPriorIdGapTrackViolation: malformed と判定した Object の gap
 });
 
 /**
- * draft-ietf-moq-transport-21 §10.8:
+ * draft-ietf-moq-transport-22 §10.8:
  * "An endpoint receives an Object with a Prior Group ID Gap covering
  *  an Object it previously received."
  * Prior Group ID Gap = 2 の Group 10 の Object は Group 8 と 9 が存在しないことを
@@ -102,7 +102,7 @@ test("assertNoPriorIdGapTrackViolation: Prior Group ID Gap が受信済み Group
 });
 
 /**
- * draft-ietf-moq-transport-21 §10.9:
+ * draft-ietf-moq-transport-22 §10.9:
  * "An endpoint receives an Object with a Prior Object ID Gap covering
  *  an Object it previously received."
  * Object ID の範囲は現在の Group の中でだけ意味を持つため、同じ Group の
@@ -122,7 +122,7 @@ test("assertNoPriorIdGapTrackViolation: Prior Object ID Gap が同じ Group の�
 });
 
 /**
- * draft-ietf-moq-transport-21 §10.8:
+ * draft-ietf-moq-transport-22 §10.8:
  * "An endpoint receives an Object with a Group ID within a previously
  *  communicated gap."
  */
@@ -140,7 +140,7 @@ test("assertNoPriorIdGapTrackViolation: 通知済み Prior Group ID Gap 内の G
 });
 
 /**
- * draft-ietf-moq-transport-21 §10.9:
+ * draft-ietf-moq-transport-22 §10.9:
  * "An endpoint receives an Object with an Object ID within a
  *  previously communicated gap."
  */
@@ -158,7 +158,7 @@ test("assertNoPriorIdGapTrackViolation: 通知済み Prior Object ID Gap 内の 
 });
 
 /**
- * draft-ietf-moq-transport-21 §10.7 (Immutable Properties):
+ * draft-ietf-moq-transport-22 §10.7 (Immutable Properties):
  * "When looking for the value of a property, processors MUST search both the
  *  mutable properties and the contents of Immutable Properties."
  * gap の値は mutable list と IMMUTABLE_PROPERTIES 配下の双方から取り出す。
@@ -179,7 +179,7 @@ test("assertNoPriorIdGapTrackViolation: IMMUTABLE_PROPERTIES 配下の Prior Gro
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-21 §10.9:
+ * draft-ietf-moq-transport-22 §10.9:
  * Object ID の範囲は通知元の Group の中でだけ意味を持つ。Group が異なれば同じ
  * Prior Object ID Gap 値でも、受信済み Object ID との比較も通知済み範囲との
  * 比較も行わない。
@@ -199,7 +199,7 @@ test("assertNoPriorIdGapTrackViolation: Group をまたいで Object ID を比�
 });
 
 /**
- * draft-ietf-moq-transport-21 §10.8 / §10.9:
+ * draft-ietf-moq-transport-22 §10.8 / §10.9:
  * "An Object has a Prior Group ID Gap larger than the Group ID." /
  * "An Object has a Prior Object ID Gap larger than the Object ID."
  * 単一 Object 検証の境界 (gap = Group ID / gap = Object ID) と gap = 0 では、
@@ -227,7 +227,7 @@ test("assertNoPriorIdGapTrackViolation: gap = Group ID / gap = Object ID の境�
 });
 
 /**
- * draft-ietf-moq-transport-21 §10.8:
+ * draft-ietf-moq-transport-22 §10.8:
  * gap を持たない Object は最初の観測値の比較対象にも記録対象にもならない。
  * 途中に挟まっても、以降の同じ gap 値を持つ Object を誤検出しない。
  */
@@ -241,7 +241,7 @@ test("assertNoPriorIdGapTrackViolation: gap を持たない Object が挟まっ�
 });
 
 /**
- * draft-ietf-moq-transport-21 §10.8:
+ * draft-ietf-moq-transport-22 §10.8:
  * 同じ gap 値の反復は同一 Group 内で矛盾しない。通知済み範囲も同一の範囲を
  * 重複して保持しない (同じ gap の反復で上限を消費しない)。
  */
@@ -273,7 +273,7 @@ test("assertNoPriorIdGapTrackViolation: 別 Track とは追跡状態を共有し
 
 // ============================================================================
 // 追跡状態の上限
-// draft-ietf-moq-transport-21 §10.8 / §10.9 の判定は過去の受信状態を必要とする
+// draft-ietf-moq-transport-22 §10.8 / §10.9 の判定は過去の受信状態を必要とする
 // ため、上限を超えた場合は最古のエントリを破棄する (破棄した範囲では判定できない)。
 // ============================================================================
 

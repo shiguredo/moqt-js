@@ -1,6 +1,6 @@
 /**
  * MOQT Properties Unit Tests
- * draft-ietf-moq-transport-21 Section 10 (MOQT Properties)
+ * draft-ietf-moq-transport-22 Section 10 (MOQT Properties)
  */
 
 import { test, assert } from "vite-plus/test";
@@ -68,7 +68,7 @@ test("encodeProperty: 奇数 ID で data がない場合はエラー", () => {
 });
 
 /**
- * draft-ietf-moq-transport-21:
+ * draft-ietf-moq-transport-22:
  * delta encoding を使用するため、ID は前の ID からの差分としてエンコードされる。
  */
 test("encodeProperties: 複数の拡張を delta encoding でエンコードして結合", () => {
@@ -238,7 +238,7 @@ test("parseProperties: Immutable Properties を正しくパース", () => {
 });
 
 /**
- * draft-ietf-moq-transport-21:
+ * draft-ietf-moq-transport-22:
  * delta encoding を使用するため、複数の拡張は encodeProperties でエンコードする。
  */
 test("parseProperties: Immutable Properties と他の拡張の組み合わせ", () => {
@@ -278,7 +278,7 @@ test("parseProperties: Immutable Properties が unknownProperties に含まれ�
 });
 
 /**
- * draft-ietf-moq-transport-21:
+ * draft-ietf-moq-transport-22:
  * delta encoding を使用するため、複数の拡張は encodeProperties でエンコードする。
  */
 test("parseProperties: 全ての MOQT Core Properties を正しくパース", () => {
@@ -320,7 +320,7 @@ test("parseProperties: 全ての MOQT Core Properties を正しくパース", ()
   assert.isUndefined(parsed.unknownProperties);
 });
 
-// draft-ietf-moq-transport-21 §10.4 / §10.5 / §10.6
+// draft-ietf-moq-transport-22 §10.4 / §10.5 / §10.6
 // Track Property の値域 (MUST) を送受信とも検証する
 test("validateTrackPropertyValue: DEFAULT_PUBLISHER_PRIORITY は 0-255 を許容する", () => {
   validateTrackPropertyValue(TrackPropertyId.DEFAULT_PUBLISHER_PRIORITY, 0n);
@@ -380,7 +380,7 @@ test("decodeProperties: 不正な DYNAMIC_GROUPS を含むデータで ProtocolV
   assert.throws(() => decodeProperties(data), ProtocolViolationError);
 });
 
-// draft-ietf-moq-transport-21 §3.6: 未知の Mandatory Track Property (0x4000-0x7FFF)
+// draft-ietf-moq-transport-22 §3.7: 未知の Mandatory Track Property (0x4000-0x7FFF)
 test("decodeProperties: 未知の Mandatory Track Property (0x4000) で MalformedTrackError", () => {
   const data = encodeProperties([{ id: 0x4000n, value: 0n }]);
   assert.throws(() => decodeProperties(data), MalformedTrackError);
@@ -392,7 +392,7 @@ test("decodeProperties: 未知の Mandatory Track Property (0x7FFF) で Malforme
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.6 / §10.7:
+ * draft-ietf-moq-transport-22 §3.7 / §10.7:
  * IMMUTABLE_PROPERTIES (0x0B) 配下の Key-Value-Pair も Track Property であるため、
  * 未知の Mandatory Track Property (0x4000-0x7FFF) を検出したら malformed とする。
  * PUBLISH / SUBSCRIBE_OK / FETCH_OK の Track Properties は decodeProperties で
@@ -411,7 +411,7 @@ test("decodeProperties: IMMUTABLE_PROPERTIES 内の Mandatory Track Property (0x
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.6 / §10.7:
+ * draft-ietf-moq-transport-22 §3.7 / §10.7:
  * decodeImmutableProperties (ID + length + body の完全ワイヤ形式) でも
  * 内部の未知 Mandatory Track Property を malformed とする。
  */
@@ -421,7 +421,7 @@ test("decodeImmutableProperties: 内部に Mandatory Track Property (0x4000) を
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.6:
+ * draft-ietf-moq-transport-22 §3.7:
  * Object Property に Mandatory Track Property (0x4000-0x7FFF) が含まれる場合、
  * assertNoMandatoryTrackPropertyInObjectProperties が MalformedTrackError を
  * 送出することを検証する。
@@ -437,7 +437,7 @@ test("assertNoMandatoryTrackPropertyInObjectProperties: 0x7FFF で MalformedTrac
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.6:
+ * draft-ietf-moq-transport-22 §3.7:
  * delta 連鎖の 2 個目以降に Mandatory Track Property が現れる場合も検出することを
  * 検証する (previousId の加算を経た ID で判定する)。
  */
@@ -450,7 +450,7 @@ test("assertNoMandatoryTrackPropertyInObjectProperties: delta 連鎖の途中の
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.6 / §10.7:
+ * draft-ietf-moq-transport-22 §3.7 / §10.7:
  * IMMUTABLE_PROPERTIES (0x0B) の内容も Object Property として扱うため、
  * ネストした Mandatory Track Property も検出することを検証する。
  */
@@ -461,7 +461,7 @@ test("assertNoMandatoryTrackPropertyInObjectProperties: IMMUTABLE_PROPERTIES 内
 });
 
 /**
- * draft-ietf-moq-transport-21 §10.7:
+ * draft-ietf-moq-transport-22 §10.7:
  * IMMUTABLE_PROPERTIES が別の IMMUTABLE_PROPERTIES を内包する再帰ネストは
  * malformed である。1 段のネストでも MalformedTrackError とする。
  */
@@ -477,7 +477,7 @@ test("assertNoMandatoryTrackPropertyInObjectProperties: IMMUTABLE_PROPERTIES の
 });
 
 /**
- * draft-ietf-moq-transport-21 §10.7:
+ * draft-ietf-moq-transport-22 §10.7:
  * "An Object MUST NOT contain more than one instance of this property."
  * IMMUTABLE_PROPERTIES が Object Property に 2 回現れる場合は malformed とする。
  */
@@ -492,7 +492,7 @@ test("assertNoMandatoryTrackPropertyInObjectProperties: IMMUTABLE_PROPERTIES の
 });
 
 /**
- * draft-ietf-moq-transport-21 §10.8:
+ * draft-ietf-moq-transport-22 §10.8:
  * "An Object MUST NOT contain more than one instance of this property."
  * PRIOR_GROUP_ID_GAP が Object Property に 2 回現れる場合は malformed とする。
  */
@@ -509,7 +509,7 @@ test("assertNoMandatoryTrackPropertyInObjectProperties: PRIOR_GROUP_ID_GAP の�
 });
 
 /**
- * draft-ietf-moq-transport-21 §10.9:
+ * draft-ietf-moq-transport-22 §10.9:
  * "An Object MUST NOT contain more than one instance of this property."
  * PRIOR_OBJECT_ID_GAP が Object Property に 2 回現れる場合は malformed とする。
  */
@@ -526,7 +526,7 @@ test("assertNoMandatoryTrackPropertyInObjectProperties: PRIOR_OBJECT_ID_GAP の�
 });
 
 /**
- * draft-ietf-moq-transport-21 §10.7 (Immutable Properties) / §10.8:
+ * draft-ietf-moq-transport-22 §10.7 (Immutable Properties) / §10.8:
  * "When looking for the value of a property, processors MUST search both the
  *  mutable properties and the contents of Immutable Properties."
  * mutable list と IMMUTABLE_PROPERTIES 配下を合わせて 2 回現れる場合も malformed とする。
@@ -545,7 +545,7 @@ test("assertNoMandatoryTrackPropertyInObjectProperties: mutable と IMMUTABLE_PR
 });
 
 /**
- * draft-ietf-moq-transport-21 §10.8 / §10.9:
+ * draft-ietf-moq-transport-22 §10.8 / §10.9:
  * それぞれ 1 回ずつの出現は malformed ではない (誤検出しない)。
  */
 test("assertNoMandatoryTrackPropertyInObjectProperties: Prior Gap が各 1 回なら throw しない", () => {
@@ -557,7 +557,7 @@ test("assertNoMandatoryTrackPropertyInObjectProperties: Prior Gap が各 1 回�
 });
 
 /**
- * draft-ietf-moq-transport-21 §10.7 / §10.9:
+ * draft-ietf-moq-transport-22 §10.7 / §10.9:
  * IMMUTABLE_PROPERTIES 配下に同じ Prior Object ID Gap が 2 回現れる場合も
  * 再帰呼び出しを跨いだ合算で検出する。
  */
@@ -575,7 +575,7 @@ test("assertNoMandatoryTrackPropertyInObjectProperties: IMMUTABLE_PROPERTIES 内
 });
 
 /**
- * draft-ietf-moq-transport-21 §8.3:
+ * draft-ietf-moq-transport-22 §8.3:
  * "If a receiver understands a Type, and the following Value or Length/Value
  *  does not match the serialization defined by that Type, the receiver MUST
  *  close the session with error code KEY_VALUE_FORMATTING_ERROR."
@@ -589,7 +589,7 @@ test("assertKnownPropertyValueInObjectProperties: 既知 Type の Value 不一�
 });
 
 /**
- * draft-ietf-moq-transport-21 §8.3:
+ * draft-ietf-moq-transport-22 §8.3:
  * 受信者が理解しない未知 Type は serialization の一致を要求できないため、
  * 未知 Type の不完全 Value では throw しない (寛容契約)。
  */
@@ -600,7 +600,7 @@ test("assertKnownPropertyValueInObjectProperties: 未知 Type の不完全 Value
 });
 
 /**
- * draft-ietf-moq-transport-21 §8.3:
+ * draft-ietf-moq-transport-22 §8.3:
  * 既知 odd Type の Length が varint として完結しない場合も
  * KEY_VALUE_FORMATTING_ERROR とする。
  */
@@ -611,7 +611,7 @@ test("assertKnownPropertyValueInObjectProperties: 既知 Type の Length 不一�
 });
 
 /**
- * draft-ietf-moq-transport-21 §8.3:
+ * draft-ietf-moq-transport-22 §8.3:
  * 既知 odd Type の Length 宣言が残りバイトを超える場合も serialization 不一致
  * として KEY_VALUE_FORMATTING_ERROR とする。
  */
@@ -622,7 +622,7 @@ test("assertKnownPropertyValueInObjectProperties: 既知 Type の Length 宣言�
 });
 
 /**
- * draft-ietf-moq-transport-21 §8.3:
+ * draft-ietf-moq-transport-22 §8.3:
  * 受信者が理解しない未知 Type の Length 宣言超過は serialization の一致を
  * 要求できないため、寛容契約どおり打ち切って throw しない。
  */
@@ -633,7 +633,7 @@ test("assertKnownPropertyValueInObjectProperties: 未知 Type の Length 宣言�
 });
 
 /**
- * draft-ietf-moq-transport-21 §8.3:
+ * draft-ietf-moq-transport-22 §8.3:
  * "The previous Type value plus the Delta Type MUST NOT be greater than 2^64 - 1.
  *  If a Delta Type is received that would be too large, the Session MUST be closed
  *  with a PROTOCOL_VIOLATION."
@@ -654,7 +654,7 @@ test("assertKnownPropertyValueInObjectProperties: delta の累積が 2^64-1 を�
 });
 
 /**
- * draft-ietf-moq-transport-21 §8.3:
+ * draft-ietf-moq-transport-22 §8.3:
  * "The maximum length of a value is 2^16-1 bytes. If an endpoint receives a length
  *  larger than the maximum, it MUST close the session with a PROTOCOL_VIOLATION."
  * 上限超過は Type の既知 / 未知を問わず PROTOCOL_VIOLATION であり、宣言 Length が
@@ -670,7 +670,7 @@ test("assertKnownPropertyValueInObjectProperties: 既知 odd Type の Length が
 });
 
 /**
- * draft-ietf-moq-transport-21 §8.3:
+ * draft-ietf-moq-transport-22 §8.3:
  * Length の上限超過の MUST は Type の既知 / 未知に依存しない。
  */
 test("assertKnownPropertyValueInObjectProperties: 未知 odd Type の Length が 2^16-1 を超えると ProtocolViolationError", () => {
@@ -693,7 +693,7 @@ test("assertKnownPropertyValueInObjectProperties: Length が残りバイトち�
 });
 
 /**
- * draft-ietf-moq-transport-21 §8.3:
+ * draft-ietf-moq-transport-22 §8.3:
  * serialization に一致する Object Properties では throw しない (誤検出防止)。
  */
 test("assertKnownPropertyValueInObjectProperties: 正常な Object Properties では throw しない", () => {
@@ -705,7 +705,7 @@ test("assertKnownPropertyValueInObjectProperties: 正常な Object Properties �
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.6:
+ * draft-ietf-moq-transport-22 §3.7:
  * Mandatory Track Property を含まない通常の Object Property では throw しないことを検証する。
  */
 test("assertNoMandatoryTrackPropertyInObjectProperties: 通常の Object Property では throw しない", () => {
@@ -717,7 +717,7 @@ test("assertNoMandatoryTrackPropertyInObjectProperties: 通常の Object Propert
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.6:
+ * draft-ietf-moq-transport-22 §3.7:
  * 不完全な Object Property では検出を打ち切り、PROTOCOL_VIOLATION を送出しない
  * (寛容契約の維持) ことを検証する。
  */
@@ -735,7 +735,7 @@ test("decodeProperties: 非 Mandatory 範囲の上限 (0x3FFF) は通過", () =>
 });
 
 /**
- * draft-ietf-moq-transport-21 Section 8.3:
+ * draft-ietf-moq-transport-22 Section 8.3:
  * "The previous Type value plus the Delta Type MUST NOT be greater than
  *  2^64 - 1. If a Delta Type is received that would be too large, the
  *  Session MUST be closed with a PROTOCOL_VIOLATION."
@@ -755,7 +755,7 @@ test("decodeProperties: delta 加算結果が 2^64-1 を超えると ProtocolVio
 });
 
 /**
- * draft-ietf-moq-transport-21 Section 8.3:
+ * draft-ietf-moq-transport-22 Section 8.3:
  * deltaId 単体が 2^64-1 (previousId=0) は違反にならないことを検証する。
  * 2^64-1 は奇数 ID のため length-prefixed 形式で、length (0) + 空バイト列を付加する。
  */
@@ -770,7 +770,7 @@ test("decodeProperties: deltaId 単体が 2^64-1 は違反にならない", () =
 });
 
 /**
- * draft-ietf-moq-transport-21 Section 8.3:
+ * draft-ietf-moq-transport-22 Section 8.3:
  * 非自明な加算 (previousId=0x02 + deltaId=2^64-3) の結果が 2^64-1 ちょうどは
  * 違反にならないことを検証する。
  */
@@ -792,7 +792,7 @@ test("decodeProperties: 加算結果が 2^64-1 ちょうどは違反にならな
 });
 
 /**
- * draft-ietf-moq-transport-21 Section 8.3:
+ * draft-ietf-moq-transport-22 Section 8.3:
  * parseProperties の delta 加算でも 2^64-1 超過は ProtocolViolationError
  * になることを検証する。
  */
@@ -807,7 +807,7 @@ test("parseProperties: delta 加算結果が 2^64-1 を超えると ProtocolViol
 });
 
 /**
- * draft-ietf-moq-transport-21 Section 8.3:
+ * draft-ietf-moq-transport-22 Section 8.3:
  * decodeImmutableProperties の delta 加算でも 2^64-1 超過は
  * ProtocolViolationError になることを検証する。
  * IMMUTABLE_PROPERTIES は奇数 ID の length-prefixed 形式のため、
@@ -830,7 +830,7 @@ test("decodeImmutableProperties: delta 加算結果が 2^64-1 を超えると Pr
 });
 
 /**
- * draft-ietf-moq-transport-21 Section 8.3:
+ * draft-ietf-moq-transport-22 Section 8.3:
  * parseProperties の IMMUTABLE_PROPERTIES 内側 KVP でも 2^64-1 超過は
  * ProtocolViolationError になることを検証する。
  */
@@ -851,7 +851,7 @@ test("parseProperties: IMMUTABLE_PROPERTIES 内側の delta 加算超過で Prot
 });
 
 /**
- * draft-ietf-moq-transport-21 Section 8.3:
+ * draft-ietf-moq-transport-22 Section 8.3:
  * decodeProperties の IMMUTABLE_PROPERTIES 内側 KVP 再帰走査でも
  * 2^64-1 超過は ProtocolViolationError になることを検証する。
  */
@@ -891,7 +891,7 @@ test("decodeImmutableProperties: 内部に不正な Track Property を含むと 
   assert.throws(() => decodeImmutableProperties(immutable), ProtocolViolationError);
 });
 
-// draft-ietf-moq-transport-21 §10.7 / §10.8 / §10.9
+// draft-ietf-moq-transport-22 §10.7 / §10.8 / §10.9
 // IMMUTABLE_PROPERTIES の再帰禁止・複数出現禁止と PRIOR_GROUP_ID_GAP / PRIOR_OBJECT_ID_GAP の
 // 「Object 当たり 1 つだけ」MUST を検証する
 test("decodeImmutableProperties: 内部に IMMUTABLE_PROPERTIES を含むと MalformedTrackError", () => {
@@ -979,11 +979,11 @@ test("supportsDynamicGroups: mutable=0 / Immutable=1 混在で true", () => {
 
 // ============================================================================
 // resolveDefaultPublisherPriority
-// draft-ietf-moq-transport-21 §10.4 (DEFAULT PUBLISHER PRIORITY)
+// draft-ietf-moq-transport-22 §10.4 (DEFAULT PUBLISHER PRIORITY)
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-21 §10.4:
+ * draft-ietf-moq-transport-22 §10.4:
  * mutable list の DEFAULT_PUBLISHER_PRIORITY を解決する。
  */
 test("resolveDefaultPublisherPriority: mutable の値を返す", () => {
@@ -996,7 +996,7 @@ test("resolveDefaultPublisherPriority: mutable の値を返す", () => {
 });
 
 /**
- * draft-ietf-moq-transport-21 §10.4 / §10.7:
+ * draft-ietf-moq-transport-22 §10.4 / §10.7:
  * IMMUTABLE_PROPERTIES 配下の DEFAULT_PUBLISHER_PRIORITY も検索対象である。
  */
 test("resolveDefaultPublisherPriority: Immutable Properties 内の値を返す", () => {
@@ -1007,7 +1007,7 @@ test("resolveDefaultPublisherPriority: Immutable Properties 内の値を返す",
 });
 
 /**
- * draft-ietf-moq-transport-21 §10.4:
+ * draft-ietf-moq-transport-22 §10.4:
  * "If omitted, the Default Publisher Priority is 128."
  */
 test("resolveDefaultPublisherPriority: 未指定は 128", () => {
@@ -1023,7 +1023,7 @@ test("resolveDefaultPublisherPriority: 未指定は 128", () => {
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-21 §10.7 (Immutable Properties):
+ * draft-ietf-moq-transport-22 §10.7 (Immutable Properties):
  * IMMUTABLE_PROPERTIES MUST NOT recursively contain an IMMUTABLE_PROPERTIES property.
  * 再帰的な IMMUTABLE_PROPERTIES を含むバイト列を decodeProperties に渡し、
  * MalformedTrackError が throw されることを検証する。
@@ -1068,7 +1068,7 @@ test("decodeProperties: 不完全な内側 KVP データで IncompleteDataError 
 
 // ============================================================================
 // GREASE Property
-// draft-ietf-moq-transport-21 §13 (Grease) / §3.6 (Mandatory Track Properties)
+// draft-ietf-moq-transport-22 §13 (Grease) / §3.7 (Mandatory Track Properties)
 // ============================================================================
 
 // Object Properties の Key-Value-Pairs（Figure 2、delta encoding）から
@@ -1116,7 +1116,7 @@ test("appendGreaseObjectProperty: 既存 Properties を保持して GREASE Prope
 
 // ============================================================================
 // Object Properties の delta encoding ワイヤ形式検証
-// draft-ietf-moq-transport-21 §8.3 (Key-Value-Pair Structure) / §11.1.3
+// draft-ietf-moq-transport-22 §8.3 (Key-Value-Pair Structure) / §11.1.3
 // ============================================================================
 
 test("mergeDeliveryTimeoutObjectProperties: 単一の偶数 ID Property は [Type][Value] の 2 フィールドになる", () => {
@@ -1182,7 +1182,7 @@ test("readDeliveryTimeoutObjectProperties: delta encoding の delivery timeout �
 });
 
 /**
- * draft-ietf-moq-transport-21 §10.7:
+ * draft-ietf-moq-transport-22 §10.7:
  * "Unless specified by a particular Property specification, Properties MAY appear
  *  either in the mutable property list or inside Immutable Properties. When looking
  *  for the value of a property, processors MUST search both the mutable properties
@@ -1201,7 +1201,7 @@ test("readDeliveryTimeoutObjectProperties: Immutable Properties 配下の delive
 });
 
 /**
- * draft-ietf-moq-transport-21 §10.7:
+ * draft-ietf-moq-transport-22 §10.7:
  * mutable list を先に検索し、そちらに値がある場合は mutable 側の値を使う。
  */
 test("readDeliveryTimeoutObjectProperties: mutable 側の値が Immutable Properties 配下より優先される", () => {
@@ -1215,7 +1215,7 @@ test("readDeliveryTimeoutObjectProperties: mutable 側の値が Immutable Proper
 });
 
 /**
- * draft-ietf-moq-transport-21 §10.7:
+ * draft-ietf-moq-transport-22 §10.7:
  * "An Object contains an Immutable Properties property that contains another
  *  Immutable Properties key." は malformed であるため、内側の 0x0B は辿らない
  * (探索は 1 段だけ)。
@@ -1231,7 +1231,7 @@ test("readDeliveryTimeoutObjectProperties: Immutable Properties の内側の 0x0
 });
 
 /**
- * draft-ietf-moq-transport-21 §8.3:
+ * draft-ietf-moq-transport-22 §8.3:
  * 内側の KVP が不完全でも decodeObjectPropertiesTolerant の寛容契約どおり
  * 例外を送出せず、読めた分の値だけを保持する。
  */
@@ -1283,7 +1283,7 @@ test("parseProperties: GREASE Property は未知 Property として保持され�
 /**
  * Length 宣言 slice の境界検証 (切り詰め入力の宣言時点拒否)。
  *
- * draft-ietf-moq-transport-21 §8.3:
+ * draft-ietf-moq-transport-22 §8.3:
  * "The maximum length of a value is 2^16-1 bytes. If an endpoint receives a
  *  length larger than the maximum, it MUST close the session with a
  *  PROTOCOL_VIOLATION."
@@ -1303,7 +1303,7 @@ test("decodeImmutableProperties: 既知 Type の Length 宣言超過で KEY_VALU
 });
 
 /**
- * draft-ietf-moq-transport-21 §8.3:
+ * draft-ietf-moq-transport-22 §8.3:
  * Length が最大値 (2^16-1) を超える場合は、既知 Type でも最大値超過の MUST を
  * 優先して PROTOCOL_VIOLATION とする (既存の上限検査が残量検査より先に発火する
  * ことの回帰テスト)。
@@ -1319,7 +1319,7 @@ test("decodeImmutableProperties: Length が最大値超過なら既知 Type で�
 });
 
 /**
- * draft-ietf-moq-transport-21 §8.3:
+ * draft-ietf-moq-transport-22 §8.3:
  * 厳密デコーダ (decodeProperties) でも既知 Type の Length 宣言超過は
  * KEY_VALUE_FORMATTING_ERROR とする。
  */
@@ -1330,7 +1330,7 @@ test("decodeProperties: 既知 Type の Length 宣言超過で KEY_VALUE_FORMATT
 });
 
 /**
- * draft-ietf-moq-transport-21 §8.3:
+ * draft-ietf-moq-transport-22 §8.3:
  * Length が最大値 (2^16-1) を超える場合は未知 Type でも最大値超過の MUST に
  * 従い PROTOCOL_VIOLATION とする (既存の上限検査が残量検査より先に発火することの
  * 回帰テスト)。
@@ -1409,11 +1409,11 @@ test("parseProperties: IMMUTABLE 内側奇数型の Length 宣言超過で Proto
 
 // ============================================================================
 // draft-21 適合監査 改善-1: 既知 Type の Value / Length 不一致
-// draft-ietf-moq-transport-21 §8.3
+// draft-ietf-moq-transport-22 §8.3
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-21 §8.3:
+ * draft-ietf-moq-transport-22 §8.3:
  * "If a receiver understands a Type, and the following Value or Length/Value
  *  does not match the serialization defined by that Type, the receiver MUST
  *  close the session with error code KEY_VALUE_FORMATTING_ERROR."
@@ -1451,11 +1451,11 @@ test("decodeProperties: 未知偶数 Type の Value 欠落は IncompleteDataErro
 
 // ============================================================================
 // draft-21 適合監査 D-7: assertPriorIdGapInObjectProperties
-// draft-ietf-moq-transport-21 §10.8 / §10.9
+// draft-ietf-moq-transport-22 §10.8 / §10.9
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-21 §10.8:
+ * draft-ietf-moq-transport-22 §10.8:
  * "An Object has a Prior Group ID Gap larger than the Group ID."
  */
 test("assertPriorIdGapInObjectProperties: Prior Group ID Gap が Group ID 超過で MalformedTrackError", () => {
@@ -1468,7 +1468,7 @@ test("assertPriorIdGapInObjectProperties: Prior Group ID Gap が Group ID 超過
 });
 
 /**
- * draft-ietf-moq-transport-21 §10.9:
+ * draft-ietf-moq-transport-22 §10.9:
  * "An Object has a Prior Object ID Gap larger than the Object ID."
  */
 test("assertPriorIdGapInObjectProperties: Prior Object ID Gap が Object ID 超過で MalformedTrackError", () => {
@@ -1492,7 +1492,7 @@ test("assertPriorIdGapInObjectProperties: gap が ID 以下なら throw しな�
 });
 
 /**
- * draft-ietf-moq-transport-21 §10.7:
+ * draft-ietf-moq-transport-22 §10.7:
  * IMMUTABLE_PROPERTIES 配下の Prior Group ID Gap も検索対象である。
  */
 test("assertPriorIdGapInObjectProperties: IMMUTABLE_PROPERTIES 内の gap も検出する", () => {

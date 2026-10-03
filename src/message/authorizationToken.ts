@@ -202,7 +202,7 @@ export function decodeAuthorizationToken(data: Uint8Array): AuthorizationToken {
 
 /**
  * SETUP メッセージ用の Authorization Token Alias Type を検証する
- * draft-ietf-moq-transport-21 Section 9.1.4:
+ * draft-ietf-moq-transport-22 Section 9.1.4:
  * "If a server receives Alias Type DELETE (0x0) or USE_ALIAS (0x2)
  *  in a SETUP message, it MUST close the session with a PROTOCOL_VIOLATION."
  *

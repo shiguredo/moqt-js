@@ -2,7 +2,7 @@
  * catalogRepublishIntervalMs の単体テスト: 境界の値
  *
  * draft-ietf-moq-msf-01 Section 5.1: catalog は配信網の cache から落ちうる時間が過ぎたら
- * publish し直す (SHOULD)。draft-ietf-moq-transport-21 Section 10.3: relay は
+ * publish し直す (SHOULD)。draft-ietf-moq-transport-22 Section 10.3: relay は
  * MAX_CACHE_DURATION を過ぎた Object を cache から配ってはならない (MUST NOT)。
  * 一般の値の性質は catalogRepublish.prop.ts で確かめる。
  */

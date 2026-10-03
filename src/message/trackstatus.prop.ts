@@ -1,6 +1,6 @@
 /**
  * MOQT TrackStatus Messages Property-Based Tests
- * draft-ietf-moq-transport-21 Section 9.13
+ * draft-ietf-moq-transport-22 Section 9.13
  */
 
 import { test, assert } from "vite-plus/test";
@@ -49,7 +49,7 @@ test("TrackStatus のエンコード・デコードがラウンドトリップ�
 });
 
 /**
- * draft-ietf-moq-transport-21 Section 9:
+ * draft-ietf-moq-transport-22 Section 9:
  * "If the length does not match the length of the Message Body,
  *  the receiver MUST close the session with a PROTOCOL_VIOLATION."
  * Parameters は TRACK_STATUS ペイロードの最後のフィールドであり、

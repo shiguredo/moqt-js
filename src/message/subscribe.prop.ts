@@ -1,6 +1,6 @@
 /**
  * MOQT Subscribe Messages Property-Based Tests
- * draft-ietf-moq-transport-21 Section 9.5-9.7
+ * draft-ietf-moq-transport-22 Section 9.5-9.7
  */
 
 import { test, assert } from "vite-plus/test";
@@ -57,9 +57,9 @@ test("Subscribe のエンコード・デコードがラウンドトリップす�
 });
 
 /**
- * draft-ietf-moq-transport-21:
+ * draft-ietf-moq-transport-22:
  * SUBSCRIBE_OK に Track Properties が追加された。
- * draft-ietf-moq-transport-21 Section 9 (Control Messages)
+ * draft-ietf-moq-transport-22 Section 9 (Control Messages)
  */
 test("SubscribeOk のエンコード・デコードがラウンドトリップする", () => {
   fc.assert(
@@ -105,7 +105,7 @@ test("SubscribeOk のエンコード・デコードがラウンドトリップ�
 });
 
 /**
- * draft-ietf-moq-transport-21 Section 9:
+ * draft-ietf-moq-transport-22 Section 9:
  * "If the length does not match the length of the Message Body,
  *  the receiver MUST close the session with a PROTOCOL_VIOLATION."
  * Parameters は SUBSCRIBE ペイロードの最後のフィールドであり、
@@ -143,7 +143,7 @@ test("SUBSCRIBE の末尾に後続データがあると ProtocolViolationError �
 });
 
 /**
- * draft-ietf-moq-transport-21 Section 9.5:
+ * draft-ietf-moq-transport-22 Section 9.5:
  * REQUEST_UPDATE は既存のリクエスト（SUBSCRIBE, PUBLISH, FETCH など）の
  * パラメータを後から変更するために使用する。
  * 更新対象のリクエストは同じ bidi stream で特定される。
@@ -172,7 +172,7 @@ test("RequestUpdate のエンコード・デコードがラウンドトリップ
 });
 
 /**
- * draft-ietf-moq-transport-21 Section 9:
+ * draft-ietf-moq-transport-22 Section 9:
  * "If the length does not match the length of the Message Body,
  *  the receiver MUST close the session with a PROTOCOL_VIOLATION."
  * Parameters は REQUEST_UPDATE ペイロードの最後のフィールドであり、

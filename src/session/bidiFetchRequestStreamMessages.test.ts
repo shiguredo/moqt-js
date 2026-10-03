@@ -1,7 +1,7 @@
 /**
  * session/bidi.ts の単体テスト: fetch ロールの bidiReadRequestStreamMessages
  *
- * draft-ietf-moq-transport-21 §9.5 / §9.10 / §9.11 / §9.12 / §9.2 / §6.4.2.2:
+ * draft-ietf-moq-transport-22 §9.5 / §9.10 / §9.11 / §9.12 / §9.2 / §6.4.2.2:
  * FETCH_OK 受理後も双方向ストリームの読み取りを継続し、逸脱したピアの
  * REQUEST_UPDATE / PUBLISH_STATE_NOTIFY を PROTOCOL_VIOLATION として検出すること、
  * ピア FIN の後始末、2 通目 GOAWAY の検出、GOAWAY の goawayCallback、
@@ -28,7 +28,7 @@ import { bidiCancelFetch, bidiReadFetchResponse } from "./bidi";
 
 // ============================================================================
 // fetch ロールの読み取りループ
-// draft-ietf-moq-transport-21 §9.5 / §9.10 / §9.11 / §9.12 / §9.2 / §6.4.2.2
+// draft-ietf-moq-transport-22 §9.5 / §9.10 / §9.11 / §9.12 / §9.2 / §6.4.2.2
 // ============================================================================
 
 /**
@@ -84,7 +84,7 @@ function buildPublishStateNotifyMessage(encoder: MessageEncoder): Uint8Array {
 /**
  * REQUEST_OK メッセージを組み立てる
  *
- * draft-ietf-moq-transport-21 §9.3 (REQUEST_OK):
+ * draft-ietf-moq-transport-22 §9.3 (REQUEST_OK):
  * 確立後の REQUEST_OK (REQUEST_UPDATE_OK) は Track Properties が空必須である。
  */
 function buildRequestOkMessage(encoder: MessageEncoder): Uint8Array {
@@ -121,7 +121,7 @@ async function acceptFetchOk(
 // ----------------------------------------------------------------------------
 
 /**
- * draft-ietf-moq-transport-21 §9.5 (REQUEST_UPDATE):
+ * draft-ietf-moq-transport-22 §9.5 (REQUEST_UPDATE):
  * 「The sender of a request (SUBSCRIBE, PUBLISH, FETCH, ...) can later send a
  *  REQUEST_UPDATE on the same bidi stream as the request to modify it. A
  *  subscriber can also send REQUEST_UPDATE to modify parameters of a
@@ -153,7 +153,7 @@ test("bidiReadFetchResponse: FETCH 応答ストリーム上の REQUEST_UPDATE �
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.5:
+ * draft-ietf-moq-transport-22 §9.5:
  * FETCH_OK と同一チャンクに REQUEST_UPDATE が連結されている場合も取りこぼさず
  * 検出することを検証する。bidiDispatchResponse は最初の応答で読んだ 2 通目以降を
  * context.remainingMessages に保持し、ControlStreamReader は取り出したメッセージを
@@ -179,7 +179,7 @@ test("bidiReadFetchResponse: FETCH_OK と同一チャンクの REQUEST_UPDATE �
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.5 / §9.2:
+ * draft-ietf-moq-transport-22 §9.5 / §9.2:
  * GOAWAY を受信済みの FETCH 応答ストリームでも REQUEST_UPDATE は
  * PROTOCOL_VIOLATION になることを検証する。fetch ロールの判定は
  * bidiPreflightRequestUpdate の中で GOAWAY 分岐より前に置かれており、subscribe
@@ -208,7 +208,7 @@ test("bidiReadFetchResponse: GOAWAY 受信済みでも REQUEST_UPDATE で PROTOC
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.1.7 (MAX_REQUEST_UPDATES) / §9.5:
+ * draft-ietf-moq-transport-22 §9.1.7 (MAX_REQUEST_UPDATES) / §9.5:
  * fetch ロールは §9.5 の MUST により PROTOCOL_VIOLATION で即座に閉じるため、
  * 受信 REQUEST_UPDATE を未応答数として数えないことを検証する。
  */
@@ -228,7 +228,7 @@ test("bidiReadFetchResponse: FETCH 応答ストリームの REQUEST_UPDATE は�
 // ----------------------------------------------------------------------------
 
 /**
- * draft-ietf-moq-transport-21 §9.10 (PUBLISH_STATE_NOTIFY):
+ * draft-ietf-moq-transport-22 §9.10 (PUBLISH_STATE_NOTIFY):
  * 「PUBLISH_STATE_NOTIFY applies only to subscriptions, and is sent only by the
  *  publisher. An endpoint that receives a PUBLISH_STATE_NOTIFY for any other
  *  request type, or from the subscriber, MUST close the session with a
@@ -258,7 +258,7 @@ test("bidiReadFetchResponse: FETCH 応答ストリーム上の PUBLISH_STATE_NOT
 // ----------------------------------------------------------------------------
 
 /**
- * draft-ietf-moq-transport-21 §6.4.2.2 (Graceful Request Stream Closure):
+ * draft-ietf-moq-transport-22 §6.4.2.2 (Graceful Request Stream Closure):
  * 「A FIN sent by the responder after its response and any subsequent messages
  *  for the request signals that the request is complete; if it has not already
  *  done so, the requester SHOULD then send a FIN on its direction, gracefully
@@ -296,7 +296,7 @@ test("bidiReadFetchResponse: ピア FIN で自方向を FIN で閉じて request
 });
 
 /**
- * draft-ietf-moq-transport-21 §6.4.2.2:
+ * draft-ietf-moq-transport-22 §6.4.2.2:
  * 応答以外にメッセージを送らない FETCH (FETCH_OK のみで完結する応答) でも、
  * ピア FIN に対する自方向 FIN の SHOULD は成立する。書き込みを伴わず close だけが
  * 実行されることを検証する。
@@ -322,7 +322,7 @@ test("bidiReadFetchResponse: 追加メッセージなしのピア FIN でも自�
 // ----------------------------------------------------------------------------
 
 /**
- * draft-ietf-moq-transport-21 §9.2 (GOAWAY):
+ * draft-ietf-moq-transport-22 §9.2 (GOAWAY):
  * 「The endpoint MUST close the session with a PROTOCOL_VIOLATION (Section 12.2)
  *  if it receives more than one GOAWAY on the control stream or on a single
  *  request stream.」
@@ -348,7 +348,7 @@ test("bidiReadFetchResponse: 2 通目 GOAWAY で PROTOCOL_VIOLATION になる", 
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.2:
+ * draft-ietf-moq-transport-22 §9.2:
  * 「Upon receiving a GOAWAY on a request stream, the endpoint SHOULD re-issue
  *  that specific request ... and close the old request stream using the
  *  appropriate mechanism (e.g. FIN, stream reset, or PUBLISH_DONE).」
@@ -478,7 +478,7 @@ test("bidiReadFetchResponse: 正常系で fetchers の登録と削除の挙動�
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.12 (FETCH_OK):
+ * draft-ietf-moq-transport-22 §9.12 (FETCH_OK):
  * End of Track / End Location / Track Properties が Fetcher へ反映されることを
  * 検証する。読み取りループを起動しても FETCH_OK の解釈は変わらない。
  */
@@ -510,7 +510,7 @@ test("bidiReadFetchResponse: FETCH_OK の内容が Fetcher に反映される", 
 // ----------------------------------------------------------------------------
 
 /**
- * draft-ietf-moq-transport-21 §9.5 (REQUEST_UPDATE) / §3.1:
+ * draft-ietf-moq-transport-22 §9.5 (REQUEST_UPDATE) / §3.1:
  * 確立後の REQUEST_OK は REQUEST_UPDATE_OK であり、自 endpoint が送った
  * REQUEST_UPDATE に 1 対 1 で対応する。moqt-js は FETCH の REQUEST_UPDATE を
  * 送らないため、FETCH 応答ストリーム上の REQUEST_OK は対応する更新を持たない。
@@ -536,7 +536,7 @@ test("bidiReadFetchResponse: FETCH 応答ストリーム上の REQUEST_OK は保
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.11 (FETCH):
+ * draft-ietf-moq-transport-22 §9.11 (FETCH):
  * FETCH に PUBLISH_DONE は定義されていない。既存の switch の扱いどおり
  * デコードだけを行い、subscribers にエントリが無いため状態を変えずに読み取りを
  * 継続することを検証する。
@@ -577,7 +577,7 @@ test("bidiReadFetchResponse: FETCH 応答ストリーム上の未知メッセー
 });
 
 /**
- * draft-ietf-moq-transport-21 §6.4.2.3 / §12.5:
+ * draft-ietf-moq-transport-22 §6.4.2.3 / §12.5:
  * ピアの RESET_STREAM による読み取り失敗は handleRequestStreamReadError を通す。
  * fetch ロールは「publish 以外」の分岐に落ちるが、購読も保留中の更新も無いため
  * 通知は発生せず、セッションも閉じないことを検証する。

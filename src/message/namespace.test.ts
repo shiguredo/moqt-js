@@ -1,7 +1,7 @@
 /**
  * namespace 系 6 メッセージの異常系・境界値テスト
  *
- * draft-ietf-moq-transport-21 §9 (Control Messages):
+ * draft-ietf-moq-transport-22 §9 (Control Messages):
  * "If the length does not match the length of the Message Body, the receiver
  *  MUST close the session with a PROTOCOL_VIOLATION."
  * 各メッセージの最後のフィールドの後ろに後続データがあると、消費バイト数が
@@ -118,7 +118,7 @@ test("decodePublishSkippedPayload: 末尾に後続データがあると PROTOCOL
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.16 (NAMESPACE):
+ * draft-ietf-moq-transport-22 §9.16 (NAMESPACE):
  * Track Namespace Suffix は空 (フィールド数 0) を許す。空 Suffix は
  * プレフィックス全体を指すため、境界値として固定する。
  */

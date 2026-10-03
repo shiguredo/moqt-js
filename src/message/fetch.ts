@@ -1,6 +1,6 @@
 /**
  * MOQT Fetch Messages
- * draft-ietf-moq-transport-21 Section 9.11 (FETCH) — 9.12 (FETCH_OK)
+ * draft-ietf-moq-transport-22 Section 9.11 (FETCH) — 9.12 (FETCH_OK)
  */
 
 import { decodeVarint, encodeVarint } from "../varint";
@@ -23,7 +23,7 @@ import { type Location, MessageType } from "./types";
 /**
  * FETCH メッセージ (Section 9.11 FETCH)
  *
- * draft-ietf-moq-transport-21:
+ * draft-ietf-moq-transport-22:
  * FETCH Message {
  *   Type (vi64) = 0x16,
  *   Length (16),
@@ -50,7 +50,7 @@ export interface Fetch {
 /**
  * FETCH_OK メッセージ (Section 9.12 FETCH_OK)
  *
- * draft-ietf-moq-transport-21:
+ * draft-ietf-moq-transport-22:
  * - 双方向ストリーム上で送信されるため Request ID は不要。
  * - Track Properties が追加された。
  */
@@ -65,7 +65,7 @@ export interface FetchOk {
 /**
  * Fetch のペイロードをエンコード
  *
- * draft-ietf-moq-transport-21 Section 9.11 (FETCH):
+ * draft-ietf-moq-transport-22 Section 9.11 (FETCH):
  * FETCH は Track Namespace / Track Name + Parameters のみを持つ
  * (draft-19 の Fetch Type / Start / End Location フィールドは削除された)。
  */
@@ -113,7 +113,7 @@ export function decodeFetchPayload(data: Uint8Array, offset = 0): Fetch {
   );
   totalConsumed += Number(trackNameLen);
 
-  // draft-ietf-moq-transport-21 §8.7:
+  // draft-ietf-moq-transport-22 §8.7:
   // Full Track Name (Namespace + Track Name 合計) が 4096 バイト超過は
   // PROTOCOL_VIOLATION。ワイヤバイト長で計測する (不正 UTF-8 の置換による
   // 誤計測を防ぐ)
@@ -122,7 +122,7 @@ export function decodeFetchPayload(data: Uint8Array, offset = 0): Fetch {
   const [parameters, parametersConsumed] = decodeParameters(data, offset + totalConsumed);
   totalConsumed += parametersConsumed;
 
-  // draft-ietf-moq-transport-21 Section 9:
+  // draft-ietf-moq-transport-22 Section 9:
   // "If the length does not match the length of the Message Body,
   //  the receiver MUST close the session with a PROTOCOL_VIOLATION."
   // Parameters は FETCH ペイロードの最後のフィールドであり、
@@ -148,7 +148,7 @@ export function decodeFetchPayload(data: Uint8Array, offset = 0): Fetch {
  * リレーサーバー実装用。moqt-js はクライアント専用のため、ランタイムでは使用しない。
  * PBT（Property-Based Testing）でのラウンドトリップテストで使用。
  *
- * draft-ietf-moq-transport-21 Section 9.12 (FETCH_OK):
+ * draft-ietf-moq-transport-22 Section 9.12 (FETCH_OK):
  * FETCH_OK Message {
  *   Type (i) = 0x18,
  *   Length (16),
@@ -166,7 +166,7 @@ export function encodeFetchOkPayload(msg: FetchOk): Uint8Array {
   parts.push(encodeLocation(msg.endLocation));
   parts.push(encodeParameters(msg.parameters));
 
-  // draft-ietf-moq-transport-21 Section 9.12 (FETCH_OK):
+  // draft-ietf-moq-transport-22 Section 9.12 (FETCH_OK):
   // Track Properties は length プレフィックスなしでシリアライズされる。
   parts.push(encodeProperties(msg.trackProperties));
 
@@ -186,7 +186,7 @@ export function encodeFetchOkPayload(msg: FetchOk): Uint8Array {
 export function decodeFetchOkPayload(data: Uint8Array, offset = 0): FetchOk {
   let totalConsumed = 0;
 
-  // draft-ietf-moq-transport-21 Section 9.12 (FETCH_OK):
+  // draft-ietf-moq-transport-22 Section 9.12 (FETCH_OK):
   // "End Of Track: 1 if all Objects have been published on this Track ...
   //  0 if not."
   // 0 / 1 以外の値はワイヤ上に存在し得ないため PROTOCOL_VIOLATION とする。
@@ -207,7 +207,7 @@ export function decodeFetchOkPayload(data: Uint8Array, offset = 0): FetchOk {
   const [parameters, parametersConsumed] = decodeParameters(data, offset + totalConsumed);
   totalConsumed += parametersConsumed;
 
-  // draft-ietf-moq-transport-21 Section 9.12 (FETCH_OK):
+  // draft-ietf-moq-transport-22 Section 9.12 (FETCH_OK):
   // Track Properties は残りバイトすべて
   const propertiesData = data.slice(offset + totalConsumed);
   const trackProperties = decodeProperties(propertiesData);

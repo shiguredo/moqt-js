@@ -26,11 +26,11 @@ export type SubscriberState = "active" | "closed";
 
 /**
  * REQUEST_UPDATE のオプション
- * draft-ietf-moq-transport-21 Section 9.5 (REQUEST_UPDATE)
+ * draft-ietf-moq-transport-22 Section 9.5 (REQUEST_UPDATE)
  *
- * draft-ietf-moq-transport-21:
+ * draft-ietf-moq-transport-22:
  * Start Location は任意の値に減少可能（以前は増加のみ許可されていた）。
- * draft-ietf-moq-transport-21 Section 9.5
+ * draft-ietf-moq-transport-22 Section 9.5
  */
 export interface RequestUpdateOptions {
   /**
@@ -50,7 +50,7 @@ export interface RequestUpdateOptions {
 
   /**
    * Range Filters
-   * draft-ietf-moq-transport-21 Section 3.3.2 (Range Filters)
+   * draft-ietf-moq-transport-22 Section 3.3.2 (Range Filters)
    *
    * Length=0 で削除、省略で不変。
    */
@@ -95,7 +95,7 @@ export interface Subscriber {
   readonly largestLocation: Location | null;
   /**
    * SUBSCRIBE_OK で受信した Track Properties
-   * draft-ietf-moq-transport-21 Section 9.7 (SUBSCRIBE_OK):
+   * draft-ietf-moq-transport-22 Section 9.7 (SUBSCRIBE_OK):
    * OBJECT_DELIVERY_TIMEOUT, MAX_CACHE_DURATION, DEFAULT_PUBLISHER_PRIORITY,
    * DEFAULT_PUBLISHER_GROUP_ORDER, DYNAMIC_GROUPS 等。
    */
@@ -115,7 +115,7 @@ export interface Subscriber {
   readonly forwardState: boolean;
   /**
    * サブスクリプションを更新する（REQUEST_UPDATE を送信）
-   * draft-ietf-moq-transport-21 Section 9.5 (REQUEST_UPDATE)
+   * draft-ietf-moq-transport-22 Section 9.5 (REQUEST_UPDATE)
    */
   update(options?: RequestUpdateOptions): Promise<void>;
   unsubscribe(): Promise<void>;
@@ -138,7 +138,7 @@ export class SubscriberImpl implements Subscriber {
   private trackAlias: bigint;
   private subscriberLargestLocation: Location | null = null;
   private subscriberTrackProperties: Property[] = [];
-  // draft-ietf-moq-transport-21 §10.4 (DEFAULT PUBLISHER_PRIORITY):
+  // draft-ietf-moq-transport-22 §10.4 (DEFAULT PUBLISHER_PRIORITY):
   // Subgroup Header / Object Datagram で Priority が省略された場合に継承する
   // 購読の既定 Publisher Priority。Track Properties 未受信時は 128。
   // setTrackProperties で再解決する。
@@ -156,7 +156,7 @@ export class SubscriberImpl implements Subscriber {
   // draft-ietf-moq-transport-22 Section 3.3.1: Location Filter の再適用に使用
   private locationFilter: LocationFilter | undefined;
   private resolvedFilterCache: ResolvedFilter | undefined;
-  // draft-ietf-moq-transport-21 Section 3.3.2: Range Filter の再適用に使用
+  // draft-ietf-moq-transport-22 Section 3.3.2: Range Filter の再適用に使用
   private rangeFilters: RangeFilterSpec[] = [];
 
   // セッションが利用する内部コールバック
@@ -295,11 +295,11 @@ export class SubscriberImpl implements Subscriber {
 
   /**
    * SUBSCRIBE_OK から Track Properties を設定
-   * draft-ietf-moq-transport-21 Section 9.7 (SUBSCRIBE_OK)
+   * draft-ietf-moq-transport-22 Section 9.7 (SUBSCRIBE_OK)
    */
   setTrackProperties(properties: Property[]): void {
     this.subscriberTrackProperties = properties;
-    // draft-ietf-moq-transport-21 §10.4:
+    // draft-ietf-moq-transport-22 §10.4:
     // Priority 省略時の継承値を Track Properties から再解決する
     this.subscriberDefaultPublisherPriority = resolveDefaultPublisherPriority(properties);
   }
@@ -322,7 +322,7 @@ export class SubscriberImpl implements Subscriber {
   /**
    * Set track alias (called when SUBSCRIBE_OK is received)
    *
-   * draft-ietf-moq-transport-21 Section 9.7 (SUBSCRIBE_OK):
+   * draft-ietf-moq-transport-22 Section 9.7 (SUBSCRIBE_OK):
    * Track Alias is returned by the publisher in SUBSCRIBE_OK.
    */
   setTrackAlias(alias: bigint): void {
@@ -385,7 +385,7 @@ export class SubscriberImpl implements Subscriber {
   /**
    * Full Track Name の比較キーを取得する（Track 同一性判定用）
    *
-   * draft-ietf-moq-transport-21 Section 2.4.1: Track の同一性は Full Track Name
+   * draft-ietf-moq-transport-22 Section 2.4.1: Track の同一性は Full Track Name
    * (Track Namespace + Track Name) で判定する。
    * 戻り値は fullTrackNameKey が生成する長さ付きキーであり、Full Track Name
    * そのものではない。Track の同一性判定は完全一致でのみ行う。
@@ -397,11 +397,11 @@ export class SubscriberImpl implements Subscriber {
   /**
    * Priority 省略時の Publisher Priority を解決して Object に設定する
    *
-   * draft-ietf-moq-transport-21 §10.4 (DEFAULT PUBLISHER PRIORITY):
+   * draft-ietf-moq-transport-22 §10.4 (DEFAULT PUBLISHER PRIORITY):
    * "Subgroups and Datagrams for this subscription inherit this priority, unless
    *  they specifically override it." / "If omitted, the Default Publisher Priority
    *  is 128."
-   * draft-ietf-moq-transport-21 §11.3.1 / §11.2.1:
+   * draft-ietf-moq-transport-22 §11.3.1 / §11.2.1:
    * DEFAULT_PRIORITY ビットが 1 のとき Priority フィールドは省略され、購読を
    * 確立した control message の Publisher Priority を継承する。
    *
@@ -443,7 +443,7 @@ export class SubscriberImpl implements Subscriber {
    * @returns 配送してよければ true
    */
   private passesObjectFilters(object: MoqtObject): boolean {
-    // draft-ietf-moq-transport-21 §10.4 / §11.3.1 / §11.2.1:
+    // draft-ietf-moq-transport-22 §10.4 / §11.3.1 / §11.2.1:
     // Priority 省略時は購読の DEFAULT_PUBLISHER_PRIORITY を継承する
     this.applyDefaultPublisherPriority(object);
     // draft-ietf-moq-transport-22 Section 3.3.1: Location Filter 再適用
@@ -455,7 +455,7 @@ export class SubscriberImpl implements Subscriber {
     ) {
       return false;
     }
-    // draft-ietf-moq-transport-21 Section 3.3.2: Range Filter 再適用
+    // draft-ietf-moq-transport-22 Section 3.3.2: Range Filter 再適用
     // datagram 経路では subgroupId は常に undefined であり、SUBGROUP_FILTER は
     // 不通過になる。Priority が明示されていない datagram は PRIORITY_FILTER で
     // 不通過になる (publisherPriority = 0 は評価値として使わない)
@@ -530,7 +530,7 @@ export class SubscriberImpl implements Subscriber {
    * ではなく fill 専用の fillErrorCallback へ通知する。アプリはこれで fill が
    * 欠けたことを検知し、再取得を判断できる。
    *
-   * draft-ietf-moq-transport-21 §12.1 (Malformed Tracks) の
+   * draft-ietf-moq-transport-22 §12.1 (Malformed Tracks) の
    * "SHOULD deliver an error to the application" は Malformed Track 検出が
    * 購読自体の cancel を伴うため handleError 側で満たす。ここでは通知しない
    * (cancelMalformedTrackPeers と二重にならないようにする)。
@@ -564,7 +564,7 @@ export class SubscriberImpl implements Subscriber {
   /**
    * 購読の Subgroup の stream の終わりをアプリへ通知する
    *
-   * draft-ietf-moq-transport-21 Section 2.1: Object は順不同で届きうる。アプリは stream の
+   * draft-ietf-moq-transport-22 Section 2.1: Object は順不同で届きうる。アプリは stream の
    * 終わりで、それ以上その Subgroup の Object が届かないと判断できる。
    * state が closed の場合は通知しない (object コールバックと同じ)。
    */
@@ -592,7 +592,7 @@ export class SubscriberImpl implements Subscriber {
     }
     this.subscriberState = "closed";
 
-    // draft-ietf-moq-transport-21 Section 9.9 (PUBLISH_DONE):
+    // draft-ietf-moq-transport-22 Section 9.9 (PUBLISH_DONE):
     // INTERNAL_ERROR (0x0) 等はエラー。TRACK_ENDED (0x2) 等はエラーとみなさない。
     if (statusCode !== undefined && isPublishDoneErrorStatus(statusCode)) {
       this.errorCallback?.(
@@ -615,7 +615,7 @@ export class SubscriberImpl implements Subscriber {
   /**
    * Mark as closed (called by session on session close)
    *
-   * draft-ietf-moq-transport-21 Section 6.6:
+   * draft-ietf-moq-transport-22 Section 6.6:
    * "The Transport Session can be terminated at any point."
    *
    * Note: endCallback is NOT called here because session close is
@@ -629,7 +629,7 @@ export class SubscriberImpl implements Subscriber {
   /**
    * サブスクリプションを更新する
    *
-   * draft-ietf-moq-transport-21 Section 9.5 (REQUEST_UPDATE):
+   * draft-ietf-moq-transport-22 Section 9.5 (REQUEST_UPDATE):
    * "A subscriber sends a REQUEST_UPDATE to a publisher to modify an existing subscription."
    *
    * fire-and-forget で呼び出しても、GOAWAY / REQUEST_ERROR / FIN / RESET 等に

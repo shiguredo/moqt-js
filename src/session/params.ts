@@ -57,7 +57,7 @@ export function validateNonNegative(value: bigint, name: string): void {
  * Range Filter を区別するキーを生成する
  *
  * 同一型 (0x25–0x29) で SetID / Property Type が異なるエントリは
- * draft-ietf-moq-transport-21 §3.3.2 の「MAY appear multiple times」に従い
+ * draft-ietf-moq-transport-22 §3.3.2 の「MAY appear multiple times」に従い
  * 別エントリとして扱う。マージ・反映・検証の各経路で同一のキーを使い、
  * 結果の一致を構造的に保証する。
  */
@@ -73,7 +73,7 @@ export function rangeFilterKey(spec: RangeFilterSpec): string {
 /**
  * Range Filter パラメータの「削除・置換・不変」マージ
  *
- * draft-ietf-moq-transport-21 §3.3.2 (Range Filters):
+ * draft-ietf-moq-transport-22 §3.3.2 (Range Filters):
  * "In REQUEST_UPDATE, Length of 0 removes the filter; non-zero replaces
  *  it entirely. If a filter parameter is omitted from REQUEST_UPDATE,
  *  it is unchanged." に従う:
@@ -205,7 +205,7 @@ export function validateRangeFilterLimits(
 /**
  * Range Filter 送信ガードを検証する
  *
- * draft-ietf-moq-transport-21 §3.3.2 (Range Filters):
+ * draft-ietf-moq-transport-22 §3.3.2 (Range Filters):
  * - 削除 (Length=0) は REQUEST_UPDATE のみに定義される (§3.3.2「In REQUEST_UPDATE,
  *   Length can be 0 to remove a filter parameter」)。他メッセージでの指定は
  *   仕様未定義のため送信前に throw する
@@ -269,7 +269,7 @@ export function validateRangeFilterSpecs(
 
 /**
  * DEFAULT PUBLISHER PRIORITY の値域 (0-255) を検証する
- * draft-ietf-moq-transport-21 §10.4:
+ * draft-ietf-moq-transport-22 §10.4:
  * 「The value is from 0 to 255 and lower numbers get higher priority.
  *  Priorities above 255 are invalid.」
  */
@@ -289,7 +289,7 @@ const DEFAULT_PUBLISHER_PRIORITY_MAX = 255;
  *  unless their meaning is defined through IANA registration."
  * また先頭フィールドが "." 単体の namespace は "MUST NOT be used for any purpose"。
  *
- * draft-ietf-moq-transport-21 §6.5 (Session-Level Tracks and Namespaces):
+ * draft-ietf-moq-transport-22 §6.5 (Session-Level Tracks and Namespaces):
  * "The Application MUST NOT publish tracks or namespaces whose first field
  *  is .session."
  * "A request with a Track Namespace whose first field is .session and an
@@ -306,7 +306,7 @@ const DEFAULT_PUBLISHER_PRIORITY_MAX = 255;
  * @throws Error 予約 namespace / session-level namespace / 33 フィールド以上の場合
  */
 export function validateTrackNamespaceForSend(namespace: string[], trackName?: string): void {
-  // draft-ietf-moq-transport-21 §8.7 (Track Namespace Structure) / §2.4.1:
+  // draft-ietf-moq-transport-22 §8.7 (Track Namespace Structure) / §2.4.1:
   // Track Namespace は 0〜32 フィールド。33 フィールド以上は仕様準拠のピアが
   // セッションを閉じるため、送信側で fail-fast で拒否する (受信したワイヤの
   // 違反ではないため ProtocolViolationError は使わない)。
@@ -383,7 +383,7 @@ export function buildPublishParameters(options?: PublishOptions): Parameter[] {
 /**
  * 純粋関数: PUBLISH の Track Properties を構築する
  *
- * draft-ietf-moq-transport-21 Section 10.1-10.6
+ * draft-ietf-moq-transport-22 Section 10.1-10.6
  *
  * @param options - PUBLISH オプション
  * @param grease - true のとき GREASE Property（§13）を 1 つ追加する。既定（未指定 / false）では追加しない。
@@ -394,7 +394,7 @@ export function buildPublishTrackProperties(
 ): Property[] {
   const trackProperties: Property[] = [];
 
-  // OBJECT_DELIVERY_TIMEOUT (0x02) - draft-ietf-moq-transport-21 Section 10.2 (OBJECT_DELIVERY_TIMEOUT)
+  // OBJECT_DELIVERY_TIMEOUT (0x02) - draft-ietf-moq-transport-22 Section 10.2 (OBJECT_DELIVERY_TIMEOUT)
   if (options?.deliveryTimeout !== undefined) {
     validateNonNegative(options.deliveryTimeout, "OBJECT_DELIVERY_TIMEOUT");
     trackProperties.push({
@@ -403,7 +403,7 @@ export function buildPublishTrackProperties(
     });
   }
 
-  // SUBGROUP_DELIVERY_TIMEOUT (0x06) - draft-ietf-moq-transport-21 Section 10.1 (SUBGROUP_DELIVERY_TIMEOUT)
+  // SUBGROUP_DELIVERY_TIMEOUT (0x06) - draft-ietf-moq-transport-22 Section 10.1 (SUBGROUP_DELIVERY_TIMEOUT)
   if (options?.subgroupDeliveryTimeout !== undefined) {
     validateNonNegative(options.subgroupDeliveryTimeout, "SUBGROUP_DELIVERY_TIMEOUT");
     trackProperties.push({
@@ -412,7 +412,7 @@ export function buildPublishTrackProperties(
     });
   }
 
-  // MAX_CACHE_DURATION (0x04) - draft-ietf-moq-transport-21 Section 10.3 (MAX CACHE DURATION)
+  // MAX_CACHE_DURATION (0x04) - draft-ietf-moq-transport-22 Section 10.3 (MAX CACHE DURATION)
   if (options?.maxCacheDuration !== undefined) {
     validateNonNegative(options.maxCacheDuration, "MAX_CACHE_DURATION");
     trackProperties.push({
@@ -421,7 +421,7 @@ export function buildPublishTrackProperties(
     });
   }
 
-  // DEFAULT_PUBLISHER_PRIORITY (0x0e) - draft-ietf-moq-transport-21 Section 10.4 (DEFAULT PUBLISHER PRIORITY)
+  // DEFAULT_PUBLISHER_PRIORITY (0x0e) - draft-ietf-moq-transport-22 Section 10.4 (DEFAULT PUBLISHER PRIORITY)
   if (options?.publisherPriority !== undefined) {
     if (
       options.publisherPriority < DEFAULT_PUBLISHER_PRIORITY_MIN ||
@@ -437,7 +437,7 @@ export function buildPublishTrackProperties(
     });
   }
 
-  // DEFAULT_PUBLISHER_GROUP_ORDER (0x22) - draft-ietf-moq-transport-21 Section 10.5 (DEFAULT PUBLISHER GROUP ORDER)
+  // DEFAULT_PUBLISHER_GROUP_ORDER (0x22) - draft-ietf-moq-transport-22 Section 10.5 (DEFAULT PUBLISHER GROUP ORDER)
   if (options?.groupOrder !== undefined) {
     if (options.groupOrder !== "Ascending" && options.groupOrder !== "Descending") {
       throw new Error(
@@ -451,7 +451,7 @@ export function buildPublishTrackProperties(
     });
   }
 
-  // DYNAMIC_GROUPS (0x30) - draft-ietf-moq-transport-21 Section 10.6 (DYNAMIC GROUPS)
+  // DYNAMIC_GROUPS (0x30) - draft-ietf-moq-transport-22 Section 10.6 (DYNAMIC GROUPS)
   if (options?.dynamicGroups === true) {
     trackProperties.push({
       id: TrackPropertyId.DYNAMIC_GROUPS,
@@ -487,7 +487,7 @@ export function buildPublishTrackProperties(
     });
   }
 
-  // GREASE Property - draft-ietf-moq-transport-21 §13 (Grease)
+  // GREASE Property - draft-ietf-moq-transport-22 §13 (Grease)
   // opt-in 時、0x7f * N + 0x9D パターンの予約値を 1 つ追加する。対向が未知の Property を
   // gracefully に扱えることを保証する。encodeProperties の delta encoding / 昇順ソートは
   // GREASE Property も他 Property と同様に扱うだけで壊れない。
@@ -505,7 +505,7 @@ export function buildPublishTrackProperties(
 /**
  * 純粋関数: Range Filter 指定を Message Parameter 配列に変換する
  *
- * draft-ietf-moq-transport-21 Section 8.6 (Range Filter Structure):
+ * draft-ietf-moq-transport-22 Section 8.6 (Range Filter Structure):
  * SUBSCRIBE / SUBSCRIBE_TRACKS / REQUEST_UPDATE で共通のワイヤ形式。
  *
  * @param rangeFilters - Range Filter 指定（追加または削除）
@@ -579,7 +579,7 @@ export function buildFillParameters(
     });
   }
 
-  // Range Filters (0x25–0x28) - draft-ietf-moq-transport-21 Section 3.3.2
+  // Range Filters (0x25–0x28) - draft-ietf-moq-transport-22 Section 3.3.2
   if (fill.rangeFilters !== undefined) {
     validateRangeFilterSpecs(fill.rangeFilters, context, {
       allowRemove: false,
@@ -760,7 +760,7 @@ export function encodeAuthorizationTokenParameter(token: AuthorizationToken): Pa
 /**
  * 純粋関数: FETCH の Message Parameters を構築する
  *
- * draft-ietf-moq-transport-21 Section 9.11 (FETCH):
+ * draft-ietf-moq-transport-22 Section 9.11 (FETCH):
  * 取得範囲は LOCATION_FILTER パラメータで指定する (§9.20.9)。省略時は
  * フィルタなし ({0, 0} から Largest Object まで) を要求する。
  */
@@ -812,7 +812,7 @@ export function buildFetchParameters(options?: FetchOptions): Parameter[] {
     });
   }
 
-  // Range Filters (0x25–0x28) - draft-ietf-moq-transport-21 Section 3.3.2
+  // Range Filters (0x25–0x28) - draft-ietf-moq-transport-22 Section 3.3.2
   // 削除は REQUEST_UPDATE のみ・TRACK_PROPERTY_FILTER は SUBSCRIBE_TRACKS のみ
   if (options?.rangeFilters !== undefined) {
     validateRangeFilterSpecs(options.rangeFilters, "FETCH", {
@@ -837,7 +837,7 @@ export function buildFetchParameters(options?: FetchOptions): Parameter[] {
 /**
  * 純粋関数: SUBSCRIBE_NAMESPACE の Message Parameters を構築する
  *
- * draft-ietf-moq-transport-21 Section 9.15 (SUBSCRIBE_NAMESPACE)
+ * draft-ietf-moq-transport-22 Section 9.15 (SUBSCRIBE_NAMESPACE)
  */
 export function buildSubscribeNamespaceParameters(options?: {
   authorizationToken?: AuthorizationToken;
@@ -894,7 +894,7 @@ export function buildSubscribeTracksParameters(options?: SubscribeTracksOptions)
     });
   }
 
-  // Range Filters (0x25–0x29) - draft-ietf-moq-transport-21 Section 3.3.2 / 4.3
+  // Range Filters (0x25–0x29) - draft-ietf-moq-transport-22 Section 3.3.2 / 4.3
   // TRACK_PROPERTY_FILTER は SUBSCRIBE_TRACKS で許可される (§3.3.2)。削除は REQUEST_UPDATE のみ
   if (options?.rangeFilters !== undefined) {
     validateRangeFilterSpecs(options.rangeFilters, "SUBSCRIBE_TRACKS", {
@@ -1023,7 +1023,7 @@ export function extractNewGroupRequest(parameters: Parameter[]): bigint | undefi
 /**
  * 純粋関数: Location の大小比較
  *
- * draft-ietf-moq-transport-21 §8.2 (Location Structure):
+ * draft-ietf-moq-transport-22 §8.2 (Location Structure):
  * "Location A < Location B if:
  *  A.Group < B.Group || (A.Group == B.Group && A.Object < B.Object)"
  *
@@ -1118,11 +1118,11 @@ export type IncomingStreamKind = "subgroup" | "fetch" | "unknown";
 /**
  * 純粋関数: 単方向ストリームの先頭バイトから種別を判定する
  *
- * draft-ietf-moq-transport-21 Section 6.4.1, Section 11.3.1
+ * draft-ietf-moq-transport-22 Section 6.4.1, Section 11.3.1
  *
  * SUBGROUP_HEADER の type 値範囲: 0x10..0x1F, 0x30..0x3F, 0x50..0x5F, 0x70..0x7F
  *
- * draft-ietf-moq-transport-21 Section 6.4.1:
+ * draft-ietf-moq-transport-22 Section 6.4.1:
  * 0b0XX1XXXX のパターンに一致する全範囲を subgroup として判定する。
  * 0x50..0x5F / 0x70..0x7F は FIRST_OBJECT ビット (0x40) が設定された
  * SUBGROUP_HEADER であり、relay 経由でクライアントに配送される場合もある。
@@ -1153,7 +1153,7 @@ export function classifyIncomingStreamType(firstByte: bigint): IncomingStreamKin
 /**
  * 純粋関数: Object ID Delta を計算する
  *
- * draft-ietf-moq-transport-21 Section 11.3.1:
+ * draft-ietf-moq-transport-22 Section 11.3.1:
  * "The Object ID Delta + 1 is added to the previous Object ID ...
  *  The Object ID is the Object ID Delta if it's the first Object"
  *
@@ -1217,7 +1217,7 @@ export function matchNamespacePrefix(
 /**
  * 2 つの Track Namespace Prefix が共通の prefix を持つか判定する
  *
- * draft-ietf-moq-transport-21 §9.5.2 (Updating Namespace Subscriptions):
+ * draft-ietf-moq-transport-22 §9.5.2 (Updating Namespace Subscriptions):
  * "the new prefix MUST NOT share a common prefix with any other active
  *  SUBSCRIBE_NAMESPACE (for a SUBSCRIBE_NAMESPACE update) or SUBSCRIBE_TRACKS
  *  (for a SUBSCRIBE_TRACKS update) in the same session."
@@ -1240,7 +1240,7 @@ export function namespacePrefixesOverlap(a: string[], b: string[]): boolean {
  * 更新後の Track Namespace Prefix が既存のアクティブなサブスクリプションと
  * 共通 prefix を持たないことを検証する
  *
- * draft-ietf-moq-transport-21 §9.5.2 (Updating Namespace Subscriptions):
+ * draft-ietf-moq-transport-22 §9.5.2 (Updating Namespace Subscriptions):
  * "The overlap restriction applies independently per type: the new prefix
  *  MUST NOT share a common prefix with any other active SUBSCRIBE_NAMESPACE
  *  (for a SUBSCRIBE_NAMESPACE update) or SUBSCRIBE_TRACKS (for a

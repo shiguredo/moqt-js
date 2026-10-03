@@ -12,7 +12,7 @@ import * as sub from "./signals/subscriber";
 
 // 対応している MOQT の draft の文書。見出しとフッターからリンクする
 const MOQT_TRANSPORT_DRAFT_URL =
-  "https://datatracker.ietf.org/doc/html/draft-ietf-moq-transport-21";
+  "https://datatracker.ietf.org/doc/html/draft-ietf-moq-transport-22";
 
 function handleAddSubscriber(): void {
   sub.addSubscriber();
@@ -85,7 +85,7 @@ export function App() {
                 href={MOQT_TRANSPORT_DRAFT_URL}
                 target="_blank"
                 rel="noopener noreferrer"
-                title="draft-ietf-moq-transport-21"
+                title="draft-ietf-moq-transport-22"
                 data-testid="moqt-draft-link"
                 class="text-blue-500 hover:text-blue-600 underline"
               >
@@ -172,7 +172,7 @@ export function App() {
                 rel="noopener noreferrer"
                 class="hover:text-slate-600 underline"
               >
-                draft-ietf-moq-transport-21
+                draft-ietf-moq-transport-22
               </a>
               {" / "}
               <a

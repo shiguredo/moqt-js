@@ -1,6 +1,6 @@
 /**
  * MOQT Control Stream
- * draft-ietf-moq-transport-21 Section 9 (Control Messages)
+ * draft-ietf-moq-transport-22 Section 9 (Control Messages)
  *
  * Control Message Format: Type (varint) + Length (16-bit) + Payload
  */
@@ -46,7 +46,7 @@ export class ControlStreamReader {
   /**
    * 半端なメッセージのバイトが残っているか
    *
-   * draft-ietf-moq-transport-21 §12.2 (CONTROL_MESSAGE_TIMEOUT):
+   * draft-ietf-moq-transport-22 §12.2 (CONTROL_MESSAGE_TIMEOUT):
    * 受信側が半端なメッセージを保持したまま待ち続ける状態を検出するために使う。
    */
   get hasBufferedBytes(): boolean {

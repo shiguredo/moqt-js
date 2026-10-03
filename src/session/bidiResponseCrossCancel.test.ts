@@ -125,7 +125,7 @@ test("bidiReadSubscribeResponse: DUPLICATE_TRACK_ALIAS で削除集合が掃除�
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.12:
+ * draft-ietf-moq-transport-22 §9.12:
  * End Location 検証経路で pendingFetch + requestStreams が掃除されることを検証する。
  */
 test("bidiReadFetchResponse: End Location 検証失敗で削除集合が掃除される", async () => {
@@ -236,7 +236,7 @@ test("bidiReadFetchResponse: 非違反失敗で削除集合が掃除される", 
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.6 (Mandatory Track Properties) / §6.4.2.3:
+ * draft-ietf-moq-transport-22 §3.7 (Mandatory Track Properties) / §6.4.2.3:
  * 未知の Mandatory Track Property を含む SUBSCRIBE_OK を受信した subscriber は
  * 購読を cancel する MUST。bidi リクエストストリームが RESET_STREAM (abort) /
  * STOP_SENDING (cancel) で終了し、state が残留しないことを検証する。
@@ -292,7 +292,7 @@ test("bidiReadSubscribeResponse: 未知 Mandatory Track Property で購読が ca
 });
 
 /**
- * draft-ietf-moq-transport-21 §12.1 (Malformed Tracks):
+ * draft-ietf-moq-transport-22 §12.1 (Malformed Tracks):
  * 未知の Mandatory Track Property を含む SUBSCRIBE_OK で malformed Track を
  * 検出したとき、pending の購読だけでなく同一 Full Track Name の既存購読 /
  * FETCH も cancel する。別 Track の購読 / FETCH は触らない。
@@ -438,7 +438,7 @@ test("bidiReadSubscribeResponse: malformed 検出で同一 Track の既存購読
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.6 (Mandatory Track Properties) / §6.4.2.3:
+ * draft-ietf-moq-transport-22 §3.7 (Mandatory Track Properties) / §6.4.2.3:
  * 未知の Mandatory Track Property を含む FETCH_OK を受信した subscriber は
  * fetch を cancel する MUST。bidi リクエストストリームが RESET_STREAM (abort) /
  * STOP_SENDING (cancel) で終了し、state が残留しないことを検証する。
@@ -498,7 +498,7 @@ test("bidiReadFetchResponse: 未知 Mandatory Track Property で fetch が cance
 });
 
 /**
- * draft-ietf-moq-transport-21 §12.1 / §2.4.1:
+ * draft-ietf-moq-transport-22 §12.1 / §2.4.1:
  * FETCH_OK の malformed 検出による cross-cancel は Full Track Name の比較キーで
  * 対象を決める。namespace ["a"] + trackName "b/c" と namespace ["a","b"] +
  * trackName "c" は "/" 連結では同じ "a/b/c" になるため、区切り文字の曖昧さで
@@ -560,7 +560,7 @@ test("bidiReadFetchResponse: 区切り文字が衝突する別 Track を cross-c
 });
 
 /**
- * draft-ietf-moq-transport-21 §12.1 (Malformed Tracks):
+ * draft-ietf-moq-transport-22 §12.1 (Malformed Tracks):
  * 未知の Mandatory Track Property を含む FETCH_OK で malformed Track を
  * 検出したとき、pending の FETCH だけでなく同一 Full Track Name の既存購読 /
  * FETCH も cancel する。別 Track の購読 / FETCH は触らない。

@@ -27,7 +27,7 @@ import { publishCloseSubgroupStream } from "./publish";
  * publish ロールの REQUEST_UPDATE を read loop 経由で処理し、読み取りを終える
  *
  * REQUEST_UPDATE 自身の Request ID (101n) は更新ごとに新規 ID を消費するため任意でよく、
- * 対象の購読はストリーム (ctx.requestId) で特定される (draft-ietf-moq-transport-21 §6.4.2.1)。
+ * 対象の購読はストリーム (ctx.requestId) で特定される (draft-ietf-moq-transport-22 §6.4.2.1)。
  */
 async function drivePublishRequestUpdate(
   ctx: ReturnType<typeof createPublishReadTestContext>,

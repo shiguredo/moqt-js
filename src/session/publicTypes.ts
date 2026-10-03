@@ -51,7 +51,7 @@ export interface FillRequestOptions {
   groupOrder?: "Ascending" | "Descending";
   /**
    * Range Filters
-   * draft-ietf-moq-transport-21 Section 3.3.2 (Range Filters)
+   * draft-ietf-moq-transport-22 Section 3.3.2 (Range Filters)
    *
    * ピアの MAX_FILTER_RANGES が 0（未広告含む）の場合、および購読単位の Ranges
    * 合計が上限を超える場合に指定すると throw する。合計にはこの fill 内側の
@@ -102,7 +102,7 @@ export interface ConnectCallbacks {
   debug?: (message: DebugMessage) => void;
   /**
    * GOAWAY 受信時のコールバック
-   * draft-ietf-moq-transport-21 Section 9.2 (GOAWAY)
+   * draft-ietf-moq-transport-22 Section 9.2 (GOAWAY)
    * @param newSessionUri - 新しいセッション URI（セッションマイグレーション用）
    */
   goaway?: (newSessionUri: string) => void;
@@ -152,7 +152,7 @@ export interface ConnectOptions {
 
   /**
    * SETUP Option (Option Type 0x04) として広告する MAX_AUTH_TOKEN_CACHE_SIZE
-   * draft-ietf-moq-transport-21 §9.1.3 (MAX_AUTH_TOKEN_CACHE_SIZE)
+   * draft-ietf-moq-transport-22 §9.1.3 (MAX_AUTH_TOKEN_CACHE_SIZE)
    *
    * ピアが保持してよい Authorization Token Alias の最大バイト数。
    * 省略時は SETUP Option を送信せず、既定値 0（Alias 使用禁止）となる。
@@ -161,7 +161,7 @@ export interface ConnectOptions {
 
   /**
    * SETUP Option (Option Type 0x08) として広告する MAX_REQUEST_UPDATES
-   * draft-ietf-moq-transport-21 §9.1.7 (MAX_REQUEST_UPDATES)
+   * draft-ietf-moq-transport-22 §9.1.7 (MAX_REQUEST_UPDATES)
    *
    * リクエストストリームごとに未応答で許可する REQUEST_UPDATE の最大数。
    * 0 は無制限。省略時は SETUP Option を送信せず、既定値 0（無制限）となる。
@@ -170,7 +170,7 @@ export interface ConnectOptions {
 
   /**
    * SETUP Option (Option Type 0x06) として広告する MAX_FILTER_RANGES
-   * draft-ietf-moq-transport-21 §9.1.6 (MAX FILTER RANGES)
+   * draft-ietf-moq-transport-22 §9.1.6 (MAX FILTER RANGES)
    *
    * ピアが購読・FETCH ごとに送信できる Range Filter の合計 Ranges 数。
    * 省略時は SETUP Option を送信せず、既定値 0（Range Filter 受信拒否）となり、
@@ -181,7 +181,7 @@ export interface ConnectOptions {
 
   /**
    * Pending Subgroup Stream の buffer 設定
-   * draft-ietf-moq-transport-21 §11.3.1 の "MAY ... choose to buffer it for a brief
+   * draft-ietf-moq-transport-22 §11.3.1 の "MAY ... choose to buffer it for a brief
    * period to handle reordering with the control message that establishes the Track
    * Alias" を実現する buffer の上限を制御する。
    *
@@ -192,7 +192,7 @@ export interface ConnectOptions {
   /**
    * 制御メッセージの受信タイムアウト (ミリ秒)
    *
-   * draft-ietf-moq-transport-21 §12.2 の CONTROL_MESSAGE_TIMEOUT (0x11) に対応する。
+   * draft-ietf-moq-transport-22 §12.2 の CONTROL_MESSAGE_TIMEOUT (0x11) に対応する。
    * 制御ストリームで半端なメッセージを保持したままこの時間が経過したら、
    * CONTROL_MESSAGE_TIMEOUT でセッションを閉じ、ストリームを打ち切る。
    * 0 以下を指定するとタイムアウトしない (既定は 10,000)。
@@ -202,7 +202,7 @@ export interface ConnectOptions {
   /**
    * データストリームの受信タイムアウト (ミリ秒)
    *
-   * draft-ietf-moq-transport-21 §12.2 の DATA_STREAM_TIMEOUT (0x12) に対応する。
+   * draft-ietf-moq-transport-22 §12.2 の DATA_STREAM_TIMEOUT (0x12) に対応する。
    * Subgroup / Fetch のヘッダーまたは Object の途中バイトを保持したままこの
    * 時間が経過したら、DATA_STREAM_TIMEOUT でセッションを閉じ、当該ストリームを
    * 打ち切る。0 以下を指定するとタイムアウトしない (既定は 30,000)。
@@ -212,7 +212,7 @@ export interface ConnectOptions {
   /**
    * 確立後の受信データストリームが保持してよいバッファの上限 (バイト)
    *
-   * draft-ietf-moq-transport-21 §12.5 (EXCESSIVE_LOAD 0x9):
+   * draft-ietf-moq-transport-22 §12.5 (EXCESSIVE_LOAD 0x9):
    * 完成前の Object の payload 全長を受けられる値を指定する。上限を超えた
    * データストリームは EXCESSIVE_LOAD として打ち切り、セッションは閉じない
    * (アプリへは失敗として通知する)。0 以下を指定すると上限を設けない
@@ -222,7 +222,7 @@ export interface ConnectOptions {
 
   /**
    * MOQT_IMPLEMENTATION Setup Option (Option Type 0x07) の送信制御
-   * draft-ietf-moq-transport-21 §9.1.5 (MOQT IMPLEMENTATION) /
+   * draft-ietf-moq-transport-22 §9.1.5 (MOQT IMPLEMENTATION) /
    * §15.8 (Implementation Identification Fingerprinting)
    *
    * - 未指定（既定）: `moqt-js/${version}` を送信する。
@@ -234,7 +234,7 @@ export interface ConnectOptions {
 
   /**
    * GREASE Setup Option の送信（opt-in）
-   * draft-ietf-moq-transport-21 §13 (Grease)
+   * draft-ietf-moq-transport-22 §13 (Grease)
    *
    * true のとき、SETUP に GREASE Setup Option（0x7f * N + 0x9D パターンの予約値）を
    * 1 つ追加する。対向が未知の Option を gracefully に扱えることを保証する。
@@ -264,7 +264,7 @@ export interface PublishCallbacks {
   onForwardStateChange?: (forward: boolean) => void;
   /**
    * リクエストストリーム上で GOAWAY を受信した時のコールバック
-   * draft-ietf-moq-transport-21 Section 9.2 (GOAWAY):
+   * draft-ietf-moq-transport-22 Section 9.2 (GOAWAY):
    * 当該リクエストのマイグレーション先 URI を通知する。
    */
   goaway?: (newSessionUri: string) => void;
@@ -290,7 +290,7 @@ export interface PublishCallbacks {
 export interface PublishOptions {
   /**
    * キャッシュの最大保持時間（ミリ秒）
-   * draft-ietf-moq-transport-21 Section 10.3 (MAX CACHE DURATION)
+   * draft-ietf-moq-transport-22 Section 10.3 (MAX CACHE DURATION)
    *
    * Relay がオブジェクトをキャッシュして良い最大時間を指定する。
    * 0 を指定するとキャッシュを無効にする。
@@ -299,7 +299,7 @@ export interface PublishOptions {
 
   /**
    * Delivery Timeout（ミリ秒）
-   * draft-ietf-moq-transport-21 Section 10.2 (OBJECT_DELIVERY_TIMEOUT)
+   * draft-ietf-moq-transport-22 Section 10.2 (OBJECT_DELIVERY_TIMEOUT)
    *
    * PUBLISH の Track Properties として送信される OBJECT_DELIVERY_TIMEOUT（Message Parameter の定義は Section 9.20.4）。
    *
@@ -312,7 +312,7 @@ export interface PublishOptions {
 
   /**
    * Subgroup Delivery Timeout（ミリ秒）
-   * draft-ietf-moq-transport-21 Section 10.1 (SUBGROUP_DELIVERY_TIMEOUT)
+   * draft-ietf-moq-transport-22 Section 10.1 (SUBGROUP_DELIVERY_TIMEOUT)
    *
    * PUBLISH の Track Properties として送信される SUBGROUP_DELIVERY_TIMEOUT（Message Parameter の定義は Section 9.20.3）。
    *
@@ -325,7 +325,7 @@ export interface PublishOptions {
 
   /**
    * Publisher Priority（0-255）
-   * draft-ietf-moq-transport-21 Section 10.4 (DEFAULT PUBLISHER PRIORITY)
+   * draft-ietf-moq-transport-22 Section 10.4 (DEFAULT PUBLISHER PRIORITY)
    *
    * パブリッシュの優先度。小さい値ほど高優先度。
    * 指定しない場合は 128（デフォルト）
@@ -334,7 +334,7 @@ export interface PublishOptions {
 
   /**
    * Group Order
-   * draft-ietf-moq-transport-21 Section 10.5 (DEFAULT PUBLISHER GROUP ORDER)
+   * draft-ietf-moq-transport-22 Section 10.5 (DEFAULT PUBLISHER GROUP ORDER)
    *
    * グループの配信順序。
    * - "Ascending": 古いグループから順に配信
@@ -344,7 +344,7 @@ export interface PublishOptions {
 
   /**
    * Dynamic Groups サポートの通知
-   * draft-ietf-moq-transport-21 Section 10.6 (DYNAMIC GROUPS)
+   * draft-ietf-moq-transport-22 Section 10.6 (DYNAMIC GROUPS)
    *
    * true を設定すると、Subscriber が NEW_GROUP_REQUEST パラメータで
    * 新しいグループの生成を要求できることを通知する。
@@ -419,7 +419,7 @@ export interface PublishOptions {
 /**
  * Subgroup の stream の終わり
  *
- * draft-ietf-moq-transport-21 Section 2.1 ("Objects can be delivered out of order"):
+ * draft-ietf-moq-transport-22 Section 2.1 ("Objects can be delivered out of order"):
  * Group ごとに別の stream で届くため、前の Group の Object が次の Group の Object より後に
  * 届くことがある。stream が終わったことを知れば、アプリはそれ以上その Subgroup の Object が
  * 届かないと判断できる。
@@ -435,7 +435,7 @@ export interface SubgroupStreamEnd {
   /** FIN で終わったら `"fin"`、ピアの RESET_STREAM で終わったら `"reset"` */
   reason: "fin" | "reset";
   /**
-   * RESET_STREAM の error code (draft-ietf-moq-transport-21 Section 12.5)。reset の理由を
+   * RESET_STREAM の error code (draft-ietf-moq-transport-22 Section 12.5)。reset の理由を
    * 表す (期限切れは DELIVERY_TIMEOUT、停滞の打ち切りは TOO_FAR_BEHIND など)。未知の code は
    * INTERNAL_ERROR として扱う (Section 13)。FIN で終わったときと、WebTransport が code を
    * 渡さなかったときは未設定
@@ -447,7 +447,7 @@ export interface SubscribeCallbacks {
   object: (object: MoqtObject) => void;
   /**
    * Datagram で受信したオブジェクトのコールバック
-   * draft-ietf-moq-transport-21 Section 11.2 (Datagrams)
+   * draft-ietf-moq-transport-22 Section 11.2 (Datagrams)
    *
    * 注意: Datagram は信頼性がなく、順序も保証されない
    */
@@ -470,7 +470,7 @@ export interface SubscribeCallbacks {
   fillError?: (error: Error) => void;
   /**
    * リクエストストリーム上で GOAWAY を受信した時のコールバック
-   * draft-ietf-moq-transport-21 Section 9.2 (GOAWAY):
+   * draft-ietf-moq-transport-22 Section 9.2 (GOAWAY):
    * 当該リクエストのマイグレーション先 URI を通知する。
    */
   goaway?: (newSessionUri: string) => void;
@@ -479,7 +479,7 @@ export interface SubscribeCallbacks {
    *
    * その stream で届いた最後の Object を object コールバックへ渡した後に呼ぶ。
    * FIN (§11.3.2) とピアの RESET_STREAM で呼び、購読の終了や打ち切り (Malformed Track、
-   * バッファ上限) では呼ばない。draft-ietf-moq-transport-21 Section 2.1 のとおり Object は
+   * バッファ上限) では呼ばない。draft-ietf-moq-transport-22 Section 2.1 のとおり Object は
    * 順不同で届きうるため、前の Group の stream が終わるまで次の Group の Object を保留する
    * アプリ (映像の復号順を守る受信側など) が使う。
    */
@@ -711,7 +711,7 @@ export interface FetchCallbacks {
   error?: (error: Error) => void;
   /**
    * リクエストストリーム上で GOAWAY を受信した時のコールバック
-   * draft-ietf-moq-transport-21 Section 9.2 (GOAWAY):
+   * draft-ietf-moq-transport-22 Section 9.2 (GOAWAY):
    * 当該リクエストのマイグレーション先 URI を通知する。
    */
   goaway?: (newSessionUri: string) => void;
@@ -782,7 +782,7 @@ export interface FetchOptions {
 
   /**
    * Range Filters
-   * draft-ietf-moq-transport-21 Section 3.3.2 (Range Filters)
+   * draft-ietf-moq-transport-22 Section 3.3.2 (Range Filters)
    *
    * ピアの MAX_FILTER_RANGES が 0（未広告含む）の場合、および Ranges の合計が
    * 上限を超える場合に指定すると throw する。
@@ -834,7 +834,7 @@ export interface TrackStatusOptions {
 
 /**
  * TRACK_STATUS の結果
- * draft-ietf-moq-transport-21 Section 9.13 (TRACK_STATUS)
+ * draft-ietf-moq-transport-22 Section 9.13 (TRACK_STATUS)
  */
 export interface TrackStatusResult {
   /**
@@ -846,7 +846,7 @@ export interface TrackStatusResult {
 /**
  * Namespace サブスクリプションのコールバック
  *
- * draft-ietf-moq-transport-21 §9.15 (SUBSCRIBE_NAMESPACE):
+ * draft-ietf-moq-transport-22 §9.15 (SUBSCRIBE_NAMESPACE):
  * SUBSCRIBE_NAMESPACE への応答として、NAMESPACE / NAMESPACE_DONE が送信される。
  * draft-18 で旧 SUBSCRIBE_NAMESPACE (0x11) が SUBSCRIBE_NAMESPACE (0x50) と
  * SUBSCRIBE_TRACKS (0x51) に分割され、PUBLISH_SKIPPED は SUBSCRIBE_TRACKS 応答に移動した。
@@ -854,14 +854,14 @@ export interface TrackStatusResult {
 export interface NamespaceSubscriptionCallbacks {
   /**
    * NAMESPACE を受信したときに呼ばれる
-   * draft-ietf-moq-transport-21 §9.16 (NAMESPACE)
+   * draft-ietf-moq-transport-22 §9.16 (NAMESPACE)
    *
    * @param namespaceSuffix - Track Namespace Prefix を除いた Suffix
    */
   onNamespace?: (namespaceSuffix: string[]) => void;
   /**
    * NAMESPACE_DONE を受信したときに呼ばれる
-   * draft-ietf-moq-transport-21 §9.17 (NAMESPACE_DONE)
+   * draft-ietf-moq-transport-22 §9.17 (NAMESPACE_DONE)
    *
    * @param namespaceSuffix - Track Namespace Prefix を除いた Suffix
    */
@@ -872,7 +872,7 @@ export interface NamespaceSubscriptionCallbacks {
   error?: (error: Error) => void;
   /**
    * GOAWAY 受信時に呼ばれる
-   * draft-ietf-moq-transport-21 §9.2 (GOAWAY):
+   * draft-ietf-moq-transport-22 §9.2 (GOAWAY):
    * リクエストストリーム上の GOAWAY は当該リクエストの
    * マイグレーションのみを目的とする。
    *
@@ -884,7 +884,7 @@ export interface NamespaceSubscriptionCallbacks {
 /**
  * Namespace サブスクリプションの更新オプション
  *
- * draft-ietf-moq-transport-21 §9.5.2 (Updating Namespace Subscriptions):
+ * draft-ietf-moq-transport-22 §9.5.2 (Updating Namespace Subscriptions):
  * REQUEST_UPDATE に TRACK_NAMESPACE_PREFIX パラメータ (0x34) を含めて
  * 確立済みの SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS の Track Namespace Prefix を
  * 更新する。
@@ -928,7 +928,7 @@ export interface NamespaceSubscription {
   /**
    * Track Namespace Prefix を更新する (REQUEST_UPDATE を送信)
    *
-   * draft-ietf-moq-transport-21 §9.5.2 (Updating Namespace Subscriptions):
+   * draft-ietf-moq-transport-22 §9.5.2 (Updating Namespace Subscriptions):
    * REQUEST_OK 受信で resolve、REQUEST_ERROR (PREFIX_OVERLAP 等) / ストリーム
    * クローズで reject する。
    *
@@ -985,7 +985,7 @@ export interface TracksSubscriptionCallbacks {
   error?: (error: Error) => void;
   /**
    * GOAWAY 受信時に呼ばれる
-   * draft-ietf-moq-transport-21 §9.2 (GOAWAY):
+   * draft-ietf-moq-transport-22 §9.2 (GOAWAY):
    * リクエストストリーム上の GOAWAY は当該リクエストの
    * マイグレーションのみを目的とする。
    *
@@ -1035,7 +1035,7 @@ export interface TracksSubscription {
 
 /**
  * Namespace 公開のコールバック
- * draft-ietf-moq-transport-21 Section 9.14 (PUBLISH_NAMESPACE)
+ * draft-ietf-moq-transport-22 Section 9.14 (PUBLISH_NAMESPACE)
  */
 export interface NamespacePublicationCallbacks {
   /**
@@ -1044,7 +1044,7 @@ export interface NamespacePublicationCallbacks {
   error?: (error: Error) => void;
   /**
    * GOAWAY 受信時に呼ばれる
-   * draft-ietf-moq-transport-21 §9.2 (GOAWAY):
+   * draft-ietf-moq-transport-22 §9.2 (GOAWAY):
    * リクエストストリーム上の GOAWAY は当該リクエストの
    * マイグレーションのみを目的とする。
    *
@@ -1055,7 +1055,7 @@ export interface NamespacePublicationCallbacks {
 
 /**
  * Namespace 公開のオプション
- * draft-ietf-moq-transport-21 Section 9.14 (PUBLISH_NAMESPACE)
+ * draft-ietf-moq-transport-22 Section 9.14 (PUBLISH_NAMESPACE)
  */
 export interface PublishNamespaceOptions {
   /**
@@ -1071,7 +1071,7 @@ export interface PublishNamespaceOptions {
 
 /**
  * Namespace 公開
- * draft-ietf-moq-transport-21 Section 9.14 (PUBLISH_NAMESPACE)
+ * draft-ietf-moq-transport-22 Section 9.14 (PUBLISH_NAMESPACE)
  */
 export interface NamespacePublication {
   readonly state: "active" | "closed";
@@ -1081,7 +1081,7 @@ export interface NamespacePublication {
   readonly namespace: string[];
   /**
    * 公開を終了する
-   * draft-ietf-moq-transport-21: ストリームの close で終了を通知する。
+   * draft-ietf-moq-transport-22: ストリームの close で終了を通知する。
    */
   done(): Promise<void>;
 }

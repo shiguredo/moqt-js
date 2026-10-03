@@ -67,7 +67,7 @@ export interface StreamResetEvent {
   /** stream の Group ID と Subgroup ID (10 進の文字列)。Subgroup ID が未確定なら null */
   readonly groupId: string;
   readonly subgroupId: string | null;
-  /** RESET_STREAM の error code (draft-ietf-moq-transport-21 Section 12.5)。無ければ null */
+  /** RESET_STREAM の error code (draft-ietf-moq-transport-22 Section 12.5)。無ければ null */
   readonly errorCode: number | null;
 }
 
@@ -236,7 +236,7 @@ export function formatStallEvent(stall: StallEvent): string {
 /**
  * RESET_STREAM の error code を「名前 (16 進の値)」にする
  *
- * 名前は draft-ietf-moq-transport-21 Section 12.5 の code の名前である。未知の値は名前を
+ * 名前は draft-ietf-moq-transport-22 Section 12.5 の code の名前である。未知の値は名前を
  * 付けず 16 進の値だけにし、code が無ければ "no code" にする
  */
 export function formatStreamResetCode(errorCode: number | null): string {

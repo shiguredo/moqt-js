@@ -1,6 +1,6 @@
 /**
  * MOQT エラー型テスト
- * draft-ietf-moq-transport-21 Section 16.11 (Error Codes)
+ * draft-ietf-moq-transport-22 Section 16.11 (Error Codes)
  */
 
 import { test, assert } from "vite-plus/test";
@@ -65,7 +65,7 @@ test("draft-18 の代表的なエラーコード値を保持する", () => {
 });
 
 test("UNKNOWN_AUTH_TOKEN_ALIAS (0x17) は Session Termination のコードとして保持する", () => {
-  // draft-ietf-moq-transport-21 §16.11.1: 0x17 は Session Termination Error Codes に
+  // draft-ietf-moq-transport-22 §16.11.1: 0x17 は Session Termination Error Codes に
   // 収載されている。未登録 Alias の参照はこのコードの Session Termination で扱う。
   assert.equal(SessionErrorCode.UNKNOWN_AUTH_TOKEN_ALIAS, 0x17);
 });
@@ -79,13 +79,13 @@ test("normalizeRequestErrorCode: 既知のコードはそのまま通す", () =>
 test("normalizeRequestErrorCode: 未知のコードは INTERNAL_ERROR に正規化", () => {
   assert.equal(normalizeRequestErrorCode(0x99), RequestErrorCode.INTERNAL_ERROR);
   assert.equal(normalizeRequestErrorCode(0xff), RequestErrorCode.INTERNAL_ERROR);
-  // draft-ietf-moq-transport-21 §13: Grease REQUEST_ERROR codes
+  // draft-ietf-moq-transport-22 §13: Grease REQUEST_ERROR codes
   assert.equal(normalizeRequestErrorCode(0x9d), RequestErrorCode.INTERNAL_ERROR);
   assert.equal(normalizeRequestErrorCode(0x7f * 1 + 0x9d), RequestErrorCode.INTERNAL_ERROR);
 });
 
 test("normalizeRequestErrorCode: UNKNOWN_AUTH_TOKEN_ALIAS (0x17) は INTERNAL_ERROR に正規化", () => {
-  // draft-ietf-moq-transport-21 §16.11.1 / §16.11.2:
+  // draft-ietf-moq-transport-22 §16.11.1 / §16.11.2:
   // 0x17 UNKNOWN_AUTH_TOKEN_ALIAS は Session Termination Error Codes にのみ収載され、
   // REQUEST_ERROR Codes には収載されていない。REQUEST_ERROR 文脈で受信した場合は
   // §13 の MUST により INTERNAL_ERROR と等価に扱う。
@@ -101,7 +101,7 @@ test("normalizePublishDoneCode: 既知のコードはそのまま通す", () => 
 
 test("normalizePublishDoneCode: 未知のコードは INTERNAL_ERROR に正規化", () => {
   assert.equal(normalizePublishDoneCode(0x99), PublishDoneStatusCode.INTERNAL_ERROR);
-  // draft-ietf-moq-transport-21 §13: Grease PUBLISH_DONE codes
+  // draft-ietf-moq-transport-22 §13: Grease PUBLISH_DONE codes
   assert.equal(normalizePublishDoneCode(0x9d), PublishDoneStatusCode.INTERNAL_ERROR);
   assert.equal(normalizePublishDoneCode(0x7f * 1 + 0x9d), PublishDoneStatusCode.INTERNAL_ERROR);
 });
@@ -123,7 +123,7 @@ test("normalizeSessionErrorCode: 既知のコードはそのまま通す", () =>
 });
 
 test("normalizeSessionErrorCode: UNKNOWN_AUTH_TOKEN_ALIAS (0x17) は Session Termination のコードとして通す", () => {
-  // draft-ietf-moq-transport-21 §16.11.1: 0x17 は Session Termination Error Codes に
+  // draft-ietf-moq-transport-22 §16.11.1: 0x17 は Session Termination Error Codes に
   // 収載されているため、Session Termination 文脈では未知コードにならない。
   assert.equal(normalizeSessionErrorCode(0x17), SessionErrorCode.UNKNOWN_AUTH_TOKEN_ALIAS);
 });
@@ -134,7 +134,7 @@ test("normalizeSessionErrorCode: 未知のコードは INTERNAL_ERROR に正規�
 });
 
 /**
- * draft-ietf-moq-transport-21 §16.11.1 / §13 / Appendix A.2:
+ * draft-ietf-moq-transport-22 §16.11.1 / §13 / Appendix A.2:
  * 削除された 0x15 VERSION_NEGOTIATION_FAILED は未知コードとして
  * INTERNAL_ERROR に正規化されることを検証する。
  */
@@ -157,7 +157,7 @@ test("normalizeDataStreamErrorCode: 未知のコードは INTERNAL_ERROR に正�
  * ピアの RESET_STREAM で失敗した read / write の失敗値 (WebTransportError) から、
  * Data Stream Reset の error code を取り出す。
  *
- * draft-ietf-moq-transport-21 Section 12.5: 理由ごとに code が決まっている。
+ * draft-ietf-moq-transport-22 Section 12.5: 理由ごとに code が決まっている。
  * Section 13: 未知の code は INTERNAL_ERROR として扱う。数値の code を持たない失敗値
  * (code を渡さない実装、stream 以外の失敗) からは取り出さない。
  */

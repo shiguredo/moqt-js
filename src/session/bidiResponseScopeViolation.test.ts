@@ -51,7 +51,7 @@ import { fullTrackNameKey } from "../fullTrackName";
 // ============================================================================
 
 test("bidiReadTrackStatusResponse: REQUEST_OK 受信後に自方向を FIN する", async () => {
-  // draft-ietf-moq-transport-21 §9.13 / §6.4.2.2:
+  // draft-ietf-moq-transport-22 §9.13 / §6.4.2.2:
   // TRACK_STATUS_OK / REQUEST_ERROR の送受信後に bidi ストリームは FIN で閉じる。
   const ctx = createOkResponseReadTestContext();
   let resolved = false;
@@ -89,7 +89,7 @@ test("bidiReadTrackStatusResponse: REQUEST_OK 受信後に自方向を FIN す�
 });
 
 test("bidiReadTrackStatusResponse: REQUEST_ERROR 受信後に自方向を FIN する", async () => {
-  // draft-ietf-moq-transport-21 §9.13 / §6.4.2.2: 失敗応答後も FIN で閉じる。
+  // draft-ietf-moq-transport-22 §9.13 / §6.4.2.2: 失敗応答後も FIN で閉じる。
   const ctx = createOkResponseReadTestContext();
   let rejected: Error | undefined;
   ctx.session.pendingTrackStatus.set(ctx.requestId, {
@@ -126,7 +126,7 @@ test("bidiReadTrackStatusResponse: REQUEST_ERROR 受信後に自方向を FIN �
 });
 
 /**
- * draft-ietf-moq-transport-21 §9 (Message Length) / §8.5 (Reason Phrase):
+ * draft-ietf-moq-transport-22 §9 (Message Length) / §8.5 (Reason Phrase):
  * Reason Phrase Length が残りバイトを超える不完全な REQUEST_ERROR を受信した
  * 場合、共通リーダの catch が PROTOCOL_VIOLATION の SessionError に変換し、
  * pending を reject してからセッションを閉じる。TRACK_STATUS の
@@ -179,7 +179,7 @@ test("bidiReadTrackStatusResponse: 不完全な REQUEST_ERROR で PROTOCOL_VIOLA
 });
 
 test("bidiReadPublishResponse: 確立前 GOAWAY 後の 2 通目 GOAWAY で PROTOCOL_VIOLATION で閉じる", async () => {
-  // draft-ietf-moq-transport-21 §9.2:
+  // draft-ietf-moq-transport-22 §9.2:
   // 確立前 GOAWAY 後も読み取りを継続し、同一ストリームの 2 通目を検出する。
   const ctx = createOkResponseReadTestContext();
   const publisher = new PublisherImpl(["test"], "track", ctx.requestId, 1n, () => {});
@@ -299,7 +299,7 @@ test("bidiReadSubscribeResponse: SUBSCRIBE_OK の LARGEST_OBJECT で Next Object
     trackProperties: [],
   });
   ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.SUBSCRIBE_OK, okPayload));
-  // ストリームは閉じない。draft-ietf-moq-transport-21 §6.4.2.2 (MUST) により、
+  // ストリームは閉じない。draft-ietf-moq-transport-22 §6.4.2.2 (MUST) により、
   // publisher は PUBLISH_DONE を送る前に FIN を送ってはならない。ここで閉じると
   // 読み取りループが FIN を「PUBLISH_DONE 無しの終了」として検出し
   // notifySubscriberFailure で購読が closed になるため、以降の handleObject が
@@ -800,7 +800,7 @@ test("bidiSendRequestUpdate: GROUP_ORDER 両省略時は Ascending になる", a
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.4:
+ * draft-ietf-moq-transport-22 §3.4:
  * FILL なしの update() では関連付けが登録されないことを検証する。
  */
 test("bidiSendRequestUpdate: FILL なしでは関連付けを登録しない", async () => {
@@ -830,7 +830,7 @@ function buildRawFillWithRanges(ranges: { start: bigint; end: bigint }[]): Param
 }
 
 /**
- * draft-ietf-moq-transport-21 §9.1.6:
+ * draft-ietf-moq-transport-22 §9.1.6:
  * raw FILL 内側 Range が上限検証に含まれ、超過時は送信前に
  * throw することを検証する。
  */
@@ -862,7 +862,7 @@ test("bidiSendRequestUpdate: raw FILL 内側 Range の上限超過は throw す�
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.1.6:
+ * draft-ietf-moq-transport-22 §9.1.6:
  * in-flight 中の raw FILL 内側 Range も上限合算に含めることを検証する。
  */
 test("bidiSendRequestUpdate: in-flight の raw FILL と合計で上限超過の場合は throw する", async () => {
@@ -907,7 +907,7 @@ test("bidiSendRequestUpdate: in-flight の raw FILL と合計で上限超過の�
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.1.6:
+ * draft-ietf-moq-transport-22 §9.1.6:
  * 上限以内の raw FILL 内側 Range は送信できることを検証する。
  */
 test("bidiSendRequestUpdate: 上限以内の raw FILL 内側 Range は送信できる", async () => {
@@ -927,7 +927,7 @@ test("bidiSendRequestUpdate: 上限以内の raw FILL 内側 Range は送信で�
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.1.6:
+ * draft-ietf-moq-transport-22 §9.1.6:
  * 複数種別の内側 Range Filter も合算されることを検証する。
  */
 test("bidiSendRequestUpdate: 複数種別の raw FILL 内側 Range も合算される", async () => {
@@ -969,7 +969,7 @@ test("bidiSendRequestUpdate: 複数種別の raw FILL 内側 Range も合算さ�
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.1.6:
+ * draft-ietf-moq-transport-22 §9.1.6:
  * 外側 Range と raw FILL 内側 Range の同一メッセージ合算で
  * 上限超過の場合は throw することを検証する。
  */
@@ -1001,7 +1001,7 @@ test("bidiSendRequestUpdate: 外側と raw FILL 内側の合算で上限超過�
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.1.6:
+ * draft-ietf-moq-transport-22 §9.1.6:
  * in-flight 中の型付き fill と新規 raw FILL の合計で上限超過の場合は
  * throw することを検証する (逆方向の合算)。
  */

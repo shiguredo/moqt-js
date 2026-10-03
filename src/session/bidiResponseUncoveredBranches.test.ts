@@ -25,11 +25,11 @@ import { createOkResponseReadTestContext } from "../testSupport/bidi";
 
 // ============================================================================
 // 応答読み取りの未カバー分岐 (REQUEST_ERROR / GOAWAY)
-// draft-ietf-moq-transport-21 §9.4 (REQUEST_ERROR) / §9.2 (GOAWAY)
+// draft-ietf-moq-transport-22 §9.4 (REQUEST_ERROR) / §9.2 (GOAWAY)
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-21 §9.4:
+ * draft-ietf-moq-transport-22 §9.4:
  * REQUEST_ERROR の Retry Interval と Redirect は RequestError に保持して
  * アプリへ渡す。pending と requestStreams のエントリは残さず、セッションは
  * 閉じない (リクエスト単位の失敗である)。
@@ -54,7 +54,7 @@ test("bidiReadPublishResponse: REQUEST_ERROR の retryInterval と redirect が 
   );
   const errorPayload = encodeRequestErrorPayload({
     type: MessageType.REQUEST_ERROR,
-    // draft-ietf-moq-transport-21 §9.4.2: Redirect は Error Code が REDIRECT のときだけ載る
+    // draft-ietf-moq-transport-22 §9.4.2: Redirect は Error Code が REDIRECT のときだけ載る
     errorCode: BigInt(RequestErrorCode.REDIRECT),
     reasonPhrase: "try later",
     retryInterval: 5n,
@@ -88,7 +88,7 @@ test("bidiReadPublishResponse: REQUEST_ERROR の retryInterval と redirect が 
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.4 / §9.4.2 / §12.3:
+ * draft-ietf-moq-transport-22 §9.4 / §9.4.2 / §12.3:
  * SUBSCRIBE の REQUEST_ERROR でも Retry Interval と Redirect をアプリへ渡す
  * (応答経路ごとに付け忘れないことを固定する)。
  */
@@ -113,7 +113,7 @@ test("bidiReadSubscribeResponse: REQUEST_ERROR の retryInterval と redirect �
   );
   const errorPayload = encodeRequestErrorPayload({
     type: MessageType.REQUEST_ERROR,
-    // draft-ietf-moq-transport-21 §9.4.2: Redirect は Error Code が REDIRECT のときだけ載る
+    // draft-ietf-moq-transport-22 §9.4.2: Redirect は Error Code が REDIRECT のときだけ載る
     errorCode: BigInt(RequestErrorCode.REDIRECT),
     reasonPhrase: "subscribe redirect",
     retryInterval: 3n,
@@ -142,7 +142,7 @@ test("bidiReadSubscribeResponse: REQUEST_ERROR の retryInterval と redirect �
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.4 / §9.4.2 / §12.3:
+ * draft-ietf-moq-transport-22 §9.4 / §9.4.2 / §12.3:
  * FETCH の REQUEST_ERROR でも Retry Interval と Redirect をアプリへ渡す。
  */
 test("bidiReadFetchResponse: REQUEST_ERROR の retryInterval と redirect が RequestError に載る", async () => {
@@ -165,7 +165,7 @@ test("bidiReadFetchResponse: REQUEST_ERROR の retryInterval と redirect が Re
   );
   const errorPayload = encodeRequestErrorPayload({
     type: MessageType.REQUEST_ERROR,
-    // draft-ietf-moq-transport-21 §9.4.2: Redirect は Error Code が REDIRECT のときだけ載る
+    // draft-ietf-moq-transport-22 §9.4.2: Redirect は Error Code が REDIRECT のときだけ載る
     errorCode: BigInt(RequestErrorCode.REDIRECT),
     reasonPhrase: "fetch redirect",
     retryInterval: 7n,
@@ -194,7 +194,7 @@ test("bidiReadFetchResponse: REQUEST_ERROR の retryInterval と redirect が Re
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.4 / §9.4.2 / §12.3:
+ * draft-ietf-moq-transport-22 §9.4 / §9.4.2 / §12.3:
  * TRACK_STATUS の REQUEST_ERROR でも Retry Interval と Redirect をアプリへ渡す。
  */
 test("bidiReadTrackStatusResponse: REQUEST_ERROR の retryInterval と redirect が RequestError に載る", async () => {
@@ -217,7 +217,7 @@ test("bidiReadTrackStatusResponse: REQUEST_ERROR の retryInterval と redirect 
   );
   const errorPayload = encodeRequestErrorPayload({
     type: MessageType.REQUEST_ERROR,
-    // draft-ietf-moq-transport-21 §9.4.2: Redirect は Error Code が REDIRECT のときだけ載る
+    // draft-ietf-moq-transport-22 §9.4.2: Redirect は Error Code が REDIRECT のときだけ載る
     errorCode: BigInt(RequestErrorCode.REDIRECT),
     reasonPhrase: "track status redirect",
     retryInterval: 11n,
@@ -246,7 +246,7 @@ test("bidiReadTrackStatusResponse: REQUEST_ERROR の retryInterval と redirect 
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.4:
+ * draft-ietf-moq-transport-22 §9.4:
  * SUBSCRIBE の REQUEST_ERROR では pending と requestStreams に加えて、
  * 初回 fill の関連付け (fillFetchTargets) も残さない。
  */
@@ -297,7 +297,7 @@ test("bidiReadSubscribeResponse: REQUEST_ERROR で fillFetchTargets も削除さ
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.2:
+ * draft-ietf-moq-transport-22 §9.2:
  * 確立前の GOAWAY は当該リクエストのマイグレーションであり、購読の
  * goawayCallback へ新しい URI を通知する。pending と requestStreams に加えて
  * 初回 fill の関連付けも削除し、同一ストリームの 2 通目検出のために
@@ -353,7 +353,7 @@ test("bidiReadSubscribeResponse: 確立前 GOAWAY で goawayCallback と削除�
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.2:
+ * draft-ietf-moq-transport-22 §9.2:
  * TRACK_STATUS は単発リクエストであり ongoing loop を持たないため、
  * 確立前 GOAWAY で goawayCallback は呼ばない。新しい URI は reject する
  * Error のメッセージに含めて通知する。セッションは閉じない。

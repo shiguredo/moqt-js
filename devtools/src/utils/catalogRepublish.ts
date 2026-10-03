@@ -5,7 +5,7 @@
  * availability of tracks changes, or after a period of time has passed such that the
  * catalog object might fall out of cache in a delivery network."
  *
- * draft-ietf-moq-transport-21 Section 10.3: relay は MAX_CACHE_DURATION を過ぎた Object を
+ * draft-ietf-moq-transport-22 Section 10.3: relay は MAX_CACHE_DURATION を過ぎた Object を
  * cache から配ってはならない (MUST NOT)。MAX_CACHE_DURATION が無くても、実装の制約で
  * 捨てうる ("until implementation constraints cause them to be evicted")。
  *

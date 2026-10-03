@@ -31,11 +31,11 @@ import { bidiReadRequestStreamMessages, FILL_NOT_SUPPORTED_REASON } from "./bidi
 
 // ============================================================================
 // bidiHandlePublishRequestUpdate のテスト
-// draft-ietf-moq-transport-21 §9.5 ケース 1 (受信 PUBLISH 上の REQUEST_UPDATE)
+// draft-ietf-moq-transport-22 §9.5 ケース 1 (受信 PUBLISH 上の REQUEST_UPDATE)
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-21 §3.3.2:
+ * draft-ietf-moq-transport-22 §3.3.2:
  * role=publish の受信 REQUEST_UPDATE に不正な Range Filter (値域違反) が
  * 含まれる場合、REQUEST_ERROR (INVALID_FILTER) で応答されることを検証する。
  * 検証は forwardState の反映より前に配置されるため、状態は変更されない。
@@ -388,7 +388,7 @@ test("bidiReadRequestStreamMessages: fill 範囲が空でない FILL_PARAMETERS 
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.4:
+ * draft-ietf-moq-transport-22 §3.4:
  * 「the fill range never extends beyond Largest Object」ため、Largest Object を
  * まだ送信していない (null) 場合は fill 範囲が常に空になり、fill fetch
  * ストリームは開かれない。REQUEST_OK で受理される。
@@ -472,7 +472,7 @@ test("bidiReadRequestStreamMessages: forwardState が 0 の FILL_PARAMETERS の 
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.4:
+ * draft-ietf-moq-transport-22 §3.4:
  * 「If the fill range is empty, or starts after Largest Object, the publisher
  *  does not open a fill fetch stream.」fill 範囲の開始が Largest Object より
  * 後を指す場合は fill ストリームを開かないため REQUEST_OK で受理される。
@@ -511,7 +511,7 @@ test("bidiReadRequestStreamMessages: Largest Object より後の FILL_PARAMETERS
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.4:
+ * draft-ietf-moq-transport-22 §3.4:
  * fill 範囲は「FILL_PARAMETERS 内の LOCATION_FILTER、省略時は購読の
  * Location Filter」で決まる。内側の LOCATION_FILTER が購読の Location Filter
  * より優先されることを検証する (内側のみ範囲内 -> 拒否)。
@@ -557,7 +557,7 @@ test("bidiReadRequestStreamMessages: FILL_PARAMETERS 内側の LOCATION_FILTER �
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.4:
+ * draft-ietf-moq-transport-22 §3.4:
  * FILL_PARAMETERS 内に LOCATION_FILTER が無い場合、購読の Location Filter を
  * 使って fill 範囲を評価する。購読の Location Filter は REQUEST_UPDATE 間で
  * 保持される (§9.5「If a parameter ... is not present in REQUEST_UPDATE, its
@@ -610,7 +610,7 @@ test("bidiReadRequestStreamMessages: 内側 LOCATION_FILTER 省略時は保持�
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.3.1:
+ * draft-ietf-moq-transport-22 §3.3.1:
  * 相対指定の Location Filter は設定時点の LARGEST_OBJECT で解決して固定する。
  * 設定後に Largest Object が進んでも保持した解決済みフィルタを再解決しない
  * ことを検証する (再解決すると fill 範囲が空に化けて REQUEST_OK になる)。
@@ -662,7 +662,7 @@ test("bidiReadRequestStreamMessages: 保持した相対 Location Filter を Larg
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.4:
+ * draft-ietf-moq-transport-22 §3.4:
  * 購読の Location Filter も FILL_PARAMETERS 内の LOCATION_FILTER も無い場合、
  * fill 範囲はトラック全体 (Largest Object まで) になる。Largest Object が
  * あるため空でなく、REQUEST_ERROR (NOT_SUPPORTED) で拒否される。
@@ -954,7 +954,7 @@ test("bidiReadRequestStreamMessages: Next Object の FILL_PARAMETERS の REQUEST
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.3.2:
+ * draft-ietf-moq-transport-22 §3.3.2:
  * role=publish の受信 REQUEST_UPDATE に同一組み合わせの重複 Range Filter が
  * 含まれる場合、REQUEST_ERROR (INVALID_FILTER) で応答されることを検証する。
  */
@@ -995,7 +995,7 @@ test("bidiReadRequestStreamMessages: 重複組み合わせの Range Filter を�
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.5 / §9:
+ * draft-ietf-moq-transport-22 §9.5 / §9:
  * role=publish の受信 REQUEST_UPDATE のペイロードが不完全 (メッセージ構造の
  * 破損) な場合、黙殺せず PROTOCOL_VIOLATION でセッションが閉じることを
  * 検証する。ControlStreamReader が Length 分の完全なメッセージのみ渡す
@@ -1134,7 +1134,7 @@ test("bidiReadRequestStreamMessages: FORWARD=1 の REQUEST_UPDATE (publish ロ�
 });
 
 /**
- * draft-ietf-moq-transport-21 §8.9 / §6.6 / §12.2 / §9.5.1:
+ * draft-ietf-moq-transport-22 §8.9 / §6.6 / §12.2 / §9.5.1:
  * role=publish の受信 REQUEST_UPDATE が未登録 Alias を参照する場合、
  * Session Termination の UNKNOWN_AUTH_TOKEN_ALIAS (0x17) でセッションを閉じることを
  * 検証する。セッションが閉じるため §9.5 の REQUEST_OK / REQUEST_ERROR と
@@ -1176,7 +1176,7 @@ test("bidiReadRequestStreamMessages: 未登録 Alias の REQUEST_UPDATE (publish
 });
 
 /**
- * draft-ietf-moq-transport-21 §8.9 / §6.6 / §12.2:
+ * draft-ietf-moq-transport-22 §8.9 / §6.6 / §12.2:
  * 同一チャンクに REQUEST_UPDATE が 2 通連結され先頭が未登録 Alias を参照する場合、
  * セッション終了後に残りのメッセージを処理しないことを検証する。処理を続けると
  * 再びセッション終了を検出して error コールバックが二重に通知される。

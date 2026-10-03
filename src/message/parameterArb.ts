@@ -78,7 +78,7 @@ export const lengthPrefixedParameterArb = fc
 /**
  * Track Namespace のフィールド列を生成する共通 arbitrary
  *
- * draft-ietf-moq-transport-21 §2.3:
+ * draft-ietf-moq-transport-22 §2.3:
  * "Each Track Namespace Field Value MUST contain at least one byte."
  * 各フィールドは 1 バイト以上必要なため minLength: 1 とする。
  *
@@ -321,7 +321,7 @@ export const trackNameArb = fc
 /**
  * Track Namespace の arbitrary
  *
- * フィールドは 1 バイト以上 (draft-ietf-moq-transport-21 §2.3) のため minLength: 1。
+ * フィールドは 1 バイト以上 (draft-ietf-moq-transport-22 §2.3) のため minLength: 1。
  */
 export const namespaceArb = fc
   .array(fc.string({ minLength: 1, maxLength: 20 }), { minLength: 0, maxLength: 5 })

@@ -303,7 +303,7 @@ function buildStateNotifyPayload(state: StateNotifyCase): Uint8Array {
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-21 §9.2 (GOAWAY):
+ * draft-ietf-moq-transport-22 §9.2 (GOAWAY):
  * "The endpoint MUST close the session with a PROTOCOL_VIOLATION if it receives
  *  more than one GOAWAY on the control stream or on a single request stream."
  * Request ID ごとに初回だけ null を返し、2 回目以降は必ず PROTOCOL_VIOLATION を返す。
@@ -347,7 +347,7 @@ test("validateNoDuplicateGoawayOnRequestStream: 初回だけ null を返し、�
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-21 §9.3 (REQUEST_OK):
+ * draft-ietf-moq-transport-22 §9.3 (REQUEST_OK):
  * "Track Properties are populated in TRACK_STATUS_OK; they are empty in PUBLISH_OK,
  *  REQUEST_UPDATE_OK, SUBSCRIBE_NAMESPACE_OK and PUBLISH_NAMESPACE_OK. If an endpoint
  *  receives Track Properties in one of these messages it MUST close the session with a
@@ -382,7 +382,7 @@ test("validateRequestOkNoTrackProperties: 空配列のときだけ null を返�
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-21 §12.5:
+ * draft-ietf-moq-transport-22 §12.5:
  * ピアの RESET_STREAM 由来の値はどんな型でも届き得るため、変換は必ず Error を返し、
  * 通知文言が空になってはならない。同じ入力に対しては常に同じメッセージを返す。
  */
@@ -402,7 +402,7 @@ test("createResetStreamError と createFetchDataStreamResetError: 任意の unkn
 });
 
 /**
- * draft-ietf-moq-transport-21 §12.5 / §13:
+ * draft-ietf-moq-transport-22 §12.5 / §13:
  * 数値の streamErrorCode は名前付き列挙へ正規化し、コード名と値をメッセージへ載せて
  * streamErrorCode プロパティにも正規化値を設定する。未知値・非整数・非有限は
  * INTERNAL_ERROR へ倒れる。数値以外は固定文言のみを返し、プロパティを付けない。
@@ -488,7 +488,7 @@ test("createFetchDataStreamResetError: 同じ streamErrorCode から bidi 用と
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-21 §9.1.7 (MAX_REQUEST_UPDATES):
+ * draft-ietf-moq-transport-22 §9.1.7 (MAX_REQUEST_UPDATES):
  * 未応答数の減算は 1 回の read の先頭で記録した値へ戻す形で行う。記録値 0 のときは
  * エントリを作らず、正の値のときは記録値そのものへ戻す (過小・過大にならない)。
  * 対象外の Request ID の記録は変化せず、同じ記録値での再実行は冪等である。
@@ -533,7 +533,7 @@ test("restoreIncomingRequestUpdateCount: 記録値 0 ではエントリを作ら
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.1.7:
+ * draft-ietf-moq-transport-22 §9.1.7:
  * read をまたいで復元を繰り返しても、対象 Request ID の値は最後の記録値と一致する。
  * 加算 (recordIncomingRequestUpdate) と対になる減算が、記録値 0 でエントリを残さない
  * ことを連鎖で確認する。
@@ -579,7 +579,7 @@ test("restoreIncomingRequestUpdateCount: 復元を繰り返しても対象の値
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-21 §10.8 / §10.9:
+ * draft-ietf-moq-transport-22 §10.8 / §10.9:
  * Track 単位の Prior ID Gap 追跡は、その Track の購読と FETCH が 1 つも残っていない
  * ときだけ破棄できる。購読だけでは Track の生存を判定できない (FETCH は Track Alias を
  * 持たない) ため fetchers も見る。他の Track の追跡エントリは影響を受けない。
@@ -672,7 +672,7 @@ test("clearPriorGapTrackingIfUnused: 対象 Track の購読と FETCH が尽き�
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-21 §3.4.1:
+ * draft-ietf-moq-transport-22 §3.4.1:
  * 購読自体が終わると fill fetch ストリームも終わるため、その購読の関連付けだけを
  * 削除する。別の購読に紐づく関連付けは残る。
  */
@@ -726,7 +726,7 @@ test("deleteFillTargetsForSubscriber: 対象購読に紐づく fill 関連付け
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.5.1 / §3.4:
+ * draft-ietf-moq-transport-22 §9.5.1 / §3.4:
  * REQUEST_ERROR / GOAWAY で失敗が確定した更新の fill 関連付けだけを削除する。
  * 応答待ちでない更新の fill はまだ到着し得るため残す。
  */
@@ -775,7 +775,7 @@ test("deleteFillTargetsForPendingUpdates: 応答待ちの更新に紐づく fill
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-21 §9.5:
+ * draft-ietf-moq-transport-22 §9.5:
  * REQUEST_OK / REQUEST_ERROR が応答待ちの REQUEST_UPDATE への応答なのか、
  * 2 通目以降の不正な応答なのかを、対象 Request ID の pending の有無で判定する。
  */
@@ -796,7 +796,7 @@ test("hasPendingRequestUpdate: 対象 Request ID の pending の有無と一致�
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.5.1:
+ * draft-ietf-moq-transport-22 §9.5.1:
  * "The receiver MUST still send a REQUEST_OK for each successful update"
  * 1 通の REQUEST_OK は 1 件だけを解決する。解決では pending から消え、送信時の
  * FORWARD / Range Filters / LOCATION_FILTER のうち値があるものだけが返る。
@@ -850,7 +850,7 @@ test("resolvePendingRequestUpdate: 対象の先頭 1 件だけを解決して送
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.5.1:
+ * draft-ietf-moq-transport-22 §9.5.1:
  * coalescing された REQUEST_ERROR は複数の REQUEST_UPDATE を失敗させるため、
  * 対象の pending を全件 reject して件数を返す。呼び出し側はその件数を
  * 遅延 REQUEST_OK の許容枠に使う。他の Request ID の pending は影響を受けない。
@@ -895,7 +895,7 @@ test("rejectPendingRequestUpdates: 対象の pending を全件 reject して件�
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-21 §9.5.1:
+ * draft-ietf-moq-transport-22 §9.5.1:
  * coalescing で pending を消した件数分だけ「pending の無い REQUEST_OK」を許容する。
  * 許可枠は正の加算だけで増え、0 以下の加算では枠もエントリも作らない。
  */
@@ -934,7 +934,7 @@ test("allowUnmatchedRequestOks: 正の加算だけが許可枠を増やし、0 �
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.5.1:
+ * draft-ietf-moq-transport-22 §9.5.1:
  * 許可枠は 1 通の REQUEST_OK ごとに 1 つだけ減り、尽きたら false を返す。
  * 消費は単調で、負の枠や 0 のエントリを残さない。
  */
@@ -977,7 +977,7 @@ test("consumeUnmatchedRequestOk: 許可枠を 1 つずつ消費し、尽きた�
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-21 §12.1 (Malformed Tracks):
+ * draft-ietf-moq-transport-22 §12.1 (Malformed Tracks):
  * "it MUST cancel any corresponding subscription or fetches for that Track from that
  *  publisher and SHOULD deliver an error to the application."
  * 対象 Track の購読と FETCH だけが error 通知付きで closed になり、他 Track のピアは
@@ -1109,7 +1109,7 @@ test("cancelMalformedTrackPeers: 対象 Track の購読と FETCH だけを cance
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-21 §6.4.2.2 (Graceful Request Stream Closure):
+ * draft-ietf-moq-transport-22 §6.4.2.2 (Graceful Request Stream Closure):
  * "An endpoint that receives a FIN before all required messages have arrived treats
  *  the request as failed."
  * 失敗を通知するのは、購読が存在し、GOAWAY 未受信で、state が active のときだけである。
@@ -1210,7 +1210,7 @@ const reasonPhraseArb: fc.Arbitrary<string> = fc
   .map((codes) => String.fromCharCode(...codes));
 
 /**
- * draft-ietf-moq-transport-21 §9.9 (PUBLISH_DONE) / §13 (Grease):
+ * draft-ietf-moq-transport-22 §9.9 (PUBLISH_DONE) / §13 (Grease):
  * 受信した状態コードは既知の列挙へ正規化して購読へ通知する。未知値は INTERNAL_ERROR
  * として扱われる。エラーを示す状態コードのときだけ error コールバックが呼ばれ、
  * 成功を示す状態コードでは end コールバックだけが呼ばれる。返り値は記録用の情報であり、
@@ -1284,7 +1284,7 @@ test("bidiHandlePublishDone: 状態コードを正規化して購読へ通知し
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.9:
+ * draft-ietf-moq-transport-22 §9.9:
  * 購読が特定できない場合は状態を変えず、記録用の情報だけを返す。Request ID が
  * 渡されない経路でも例外にならない。
  */
@@ -1370,7 +1370,7 @@ test("bidiHandlePublishStateNotify: subscribe ロールでは許可パラメー�
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.10:
+ * draft-ietf-moq-transport-22 §9.10:
  * "If a parameter is not present, its value is unchanged."
  * LARGEST_OBJECT だけを運ぶ通知では forwardState と Location Filter を変更しない。
  */
@@ -1418,7 +1418,7 @@ test("bidiHandlePublishStateNotify: LARGEST_OBJECT だけの通知では forward
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.10 / §3.3.1:
+ * draft-ietf-moq-transport-22 §9.10 / §3.3.1:
  * 保持値と等価な LOCATION_FILTER が再報告されても再適用しない。相対指定の再解決で
  * 開始位置が前進し、受信済み範囲の Object を破棄することを防ぐ。
  * 相対フィルタ { startGroup: 1 } は largest = {g0, 0} で開始 Group g0 に解決されるため、
@@ -1473,7 +1473,7 @@ test("bidiHandlePublishStateNotify: 同じ LOCATION_FILTER の再報告では相
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.10:
+ * draft-ietf-moq-transport-22 §9.10:
  * "An endpoint that receives a PUBLISH_STATE_NOTIFY for any other request type, or from
  *  the subscriber, MUST close the session with a PROTOCOL_VIOLATION."
  * subscribe ロール以外では、購読の状態を一切変更せずにセッションを閉じる。
@@ -1601,7 +1601,7 @@ test("bidiHandlePublishStateNotify: FORWARD の値域外では部分反映せず
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.10:
+ * draft-ietf-moq-transport-22 §9.10:
  * 購読が存在しない場合でも受理判定 (true) を返し、状態遷移は行わない。
  * ペイロードの検証自体は購読の有無に依存しない。
  */

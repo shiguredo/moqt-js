@@ -1,6 +1,6 @@
 /**
  * MOQT データストリーム Datagram テスト
- * draft-ietf-moq-transport-21 Section 11.2 (Datagrams)
+ * draft-ietf-moq-transport-22 Section 11.2 (Datagrams)
  */
 
 import { test, assert } from "vite-plus/test";
@@ -116,7 +116,7 @@ test("ObjectDatagram: PAYLOAD_OBJ タイプをデコード", () => {
 });
 
 /**
- * draft-ietf-moq-transport-21 §11.2.1:
+ * draft-ietf-moq-transport-22 §11.2.1:
  * Type Flags と Track Alias は Datagram の先頭に固定配置される。この配置知識は
  * decodeObjectDatagram と decodeDatagramTrackAlias が共有しており、両者が同じ
  * 結果を返すことを検証する。片方だけが配置を変わると、デコード失敗時に誤った
@@ -133,7 +133,7 @@ test("ObjectDatagram: 先頭固定フィールドの共通ヘルパーが type �
 });
 
 /**
- * draft-ietf-moq-transport-21 §11.2.1:
+ * draft-ietf-moq-transport-22 §11.2.1:
  * 先頭フィールドの検証は共通ヘルパーが担う。不正な Type Flags では
  * decodeObjectDatagram と同じく ProtocolViolationError を throw し、
  * Track Alias を取り出せない (デコード失敗として扱える) ことを検証する。
@@ -165,7 +165,7 @@ test("ObjectDatagram: STATUS_OBJ タイプをデコード", () => {
 });
 
 /**
- * draft-ietf-moq-transport-21 §11.2.1:
+ * draft-ietf-moq-transport-22 §11.2.1:
  * Priority Present の型で Priority バイトがバッファの最後で切れている場合、
  * 範囲外アクセス (undefined 取得) による誤配信を避け、IncompleteDataError を
  * throw することを検証する (受信側では PROTOCOL_VIOLATION に変換されて
@@ -179,7 +179,7 @@ test("ObjectDatagram: Priority バイトでバッファが切れていると Inc
 });
 
 /**
- * draft-ietf-moq-transport-21 Section 11.2.1:
+ * draft-ietf-moq-transport-22 Section 11.2.1:
  * Properties Length が宣言するバイト数に datagram が満たない場合、
  * 切り詰めた Properties と空ペイロードの不正 datagram を配信せず、
  * IncompleteDataError を throw する (受信側では PROTOCOL_VIOLATION に
@@ -193,7 +193,7 @@ test("ObjectDatagram: Properties バイト列途中でバッファが切れて�
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.6:
+ * draft-ietf-moq-transport-22 §3.7:
  * Object Property に Mandatory Track Property (0x4000-0x7FFF) を含む Object は
  * malformed であり、decodeObjectDatagram が MalformedTrackError を throw する。
  */
@@ -212,7 +212,7 @@ test("ObjectDatagram: Mandatory Track Property を含む Object Property で Mal
 });
 
 /**
- * draft-ietf-moq-transport-21 §10.7:
+ * draft-ietf-moq-transport-22 §10.7:
  * "An Object MUST NOT contain more than one instance of this property."
  * Object Property に IMMUTABLE_PROPERTIES (0x0B) が 2 回現れる datagram は
  * malformed であり、decodeObjectDatagram が MalformedTrackError を throw する。
@@ -281,7 +281,7 @@ const objectDatagramTestCases: Array<{ name: string; datagram: ObjectDatagram }>
       payload: new Uint8Array([0xaa]),
     },
   },
-  // draft-ietf-moq-transport-21 Section 11.2.1:
+  // draft-ietf-moq-transport-22 Section 11.2.1:
   // 0x2C = STATUS(0x20) + DEFAULT_PRIORITY(0x08) + ZERO_OBJECT_ID(0x04)
   // Priority Present なし (0x08-0x0F, 0x28-0x2D は Priority なし)。END_OF_TRACK status
   {
@@ -330,7 +330,7 @@ for (const tc of objectDatagramTestCases) {
 
 // Object Properties の Key-Value-Pairs（Figure 2、delta encoding）から
 // Property ID の一覧を抽出する。
-// draft-ietf-moq-transport-21 §13 (Grease):
+// draft-ietf-moq-transport-22 §13 (Grease):
 // grease opt-in 時、Object Properties に GREASE Property を 1 つ注入する。
 // 元々 properties がない datagram でも Properties Present ビット（Datagram Type bit 0）が
 // 立った EXT 型となり、GREASE Property がラウンドトリップすることを検証する。
@@ -363,7 +363,7 @@ test("ObjectDatagram: GREASE Object Properties が EXT 型でラウンドトリ�
 });
 
 /**
- * draft-ietf-moq-transport-21 §11.2:
+ * draft-ietf-moq-transport-22 §11.2:
  * Publisher Priority は 8 bit (0〜255) であり、範囲外・非整数は
  * Uint8Array 化で黙って丸められるため、変換前に throw することを検証する。
  */
@@ -413,7 +413,7 @@ test("ObjectDatagram: 範囲外・非整数の publisherPriority は throw す�
 });
 
 /**
- * draft-ietf-moq-transport-21 §11.2:
+ * draft-ietf-moq-transport-22 §11.2:
  * Priority なし型では不正値が渡されても検証せず throw しないことを検証する。
  * (検証は Priority Present 分岐内でのみ行う)
  */
@@ -431,11 +431,11 @@ test("ObjectDatagram: Priority なし型では範囲外 priority でも throw �
 
 // ============================================================================
 // draft-21 適合監査 D-7: Prior Group ID Gap / Prior Object ID Gap
-// draft-ietf-moq-transport-21 §10.8 / §10.9
+// draft-ietf-moq-transport-22 §10.8 / §10.9
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-21 §10.8:
+ * draft-ietf-moq-transport-22 §10.8:
  * "An Object has a Prior Group ID Gap larger than the Group ID."
  * Group 0 の datagram に Prior Group ID Gap = 1 を付けると malformed。
  */
@@ -459,7 +459,7 @@ test("ObjectDatagram: Prior Group ID Gap が Group ID より大きいと Malform
 });
 
 /**
- * draft-ietf-moq-transport-21 §10.9:
+ * draft-ietf-moq-transport-22 §10.9:
  * "An Object has a Prior Object ID Gap larger than the Object ID."
  * Object 0 の datagram に Prior Object ID Gap = 1 を付けると malformed。
  */
@@ -483,7 +483,7 @@ test("ObjectDatagram: Prior Object ID Gap が Object ID より大きいと Malfo
 });
 
 /**
- * draft-ietf-moq-transport-21 §10.8 / §10.9:
+ * draft-ietf-moq-transport-22 §10.8 / §10.9:
  * gap が Group ID / Object ID 以下なら malformed ではない (誤検出しない)。
  */
 test("ObjectDatagram: gap が Group ID / Object ID 以下ならデコードできる", () => {
@@ -507,7 +507,7 @@ test("ObjectDatagram: gap が Group ID / Object ID 以下ならデコードで�
 });
 
 /**
- * draft-ietf-moq-transport-21 §10.8 / §10.9:
+ * draft-ietf-moq-transport-22 §10.8 / §10.9:
  * "An Object contains more than one instance of Prior Group ID Gap." /
  * "An Object contains more than one instance of Prior Object ID Gap." → malformed
  * 同一 datagram に 2 回現れる場合も検出する。
@@ -535,7 +535,7 @@ test("ObjectDatagram: PRIOR_GROUP_ID_GAP の複数出現で MalformedTrackError"
 });
 
 /**
- * draft-ietf-moq-transport-21 §10.9:
+ * draft-ietf-moq-transport-22 §10.9:
  * 同一 datagram に PRIOR_OBJECT_ID_GAP が 2 回現れる場合も検出する。
  */
 test("ObjectDatagram: PRIOR_OBJECT_ID_GAP の複数出現で MalformedTrackError", () => {
@@ -561,7 +561,7 @@ test("ObjectDatagram: PRIOR_OBJECT_ID_GAP の複数出現で MalformedTrackError
 });
 
 /**
- * draft-ietf-moq-transport-21 §8.3:
+ * draft-ietf-moq-transport-22 §8.3:
  * "If a receiver understands a Type, and the following Value or Length/Value
  *  does not match the serialization defined by that Type, the receiver MUST
  *  close the session with error code KEY_VALUE_FORMATTING_ERROR."
@@ -588,7 +588,7 @@ test("ObjectDatagram: 既知 Type の Value 不一致で KEY_VALUE_FORMATTING_ER
 });
 
 /**
- * draft-ietf-moq-transport-21 §8.3:
+ * draft-ietf-moq-transport-22 §8.3:
  * "If a receiver understands a Type, and the following Value or Length/Value
  *  does not match the serialization defined by that Type, the receiver MUST
  *  close the session with error code KEY_VALUE_FORMATTING_ERROR."
@@ -615,7 +615,7 @@ test("ObjectDatagram: 既知 Type の Length 宣言超過で KEY_VALUE_FORMATTIN
 });
 
 /**
- * draft-ietf-moq-transport-21 §8.3:
+ * draft-ietf-moq-transport-22 §8.3:
  * "The maximum length of a value is 2^16-1 bytes. If an endpoint receives a length
  *  larger than the maximum, it MUST close the session with a PROTOCOL_VIOLATION."
  * 奇数 Type の Length が上限を超える Object Properties を含む datagram は
@@ -637,7 +637,7 @@ test("ObjectDatagram: Object Property の Length が 2^16-1 を超えると Prot
 });
 
 /**
- * draft-ietf-moq-transport-21 §8.3:
+ * draft-ietf-moq-transport-22 §8.3:
  * "The previous Type value plus the Delta Type MUST NOT be greater than 2^64 - 1.
  *  If a Delta Type is received that would be too large, the Session MUST be closed
  *  with a PROTOCOL_VIOLATION."
@@ -665,7 +665,7 @@ test("ObjectDatagram: Object Property の delta 累積が 2^64-1 を超えると
 
 // ============================================================================
 // エンコーダ入口の Type Flags / Properties Length 検証
-// draft-ietf-moq-transport-21 §11.2.1 (Object Datagram)
+// draft-ietf-moq-transport-22 §11.2.1 (Object Datagram)
 //
 // 受信側が PROTOCOL_VIOLATION でセッションを閉じるワイヤを生成しないよう、
 // デコーダと同じ判定をエンコーダでも行う (ローカル API の誤用は汎用 Error)。

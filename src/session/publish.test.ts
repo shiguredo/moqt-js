@@ -66,7 +66,7 @@ function createSessionForPublish(): {
 }
 
 /**
- * draft-ietf-moq-transport-21 Section 11.3.1 (Subgroup Header):
+ * draft-ietf-moq-transport-22 Section 11.3.1 (Subgroup Header):
  * Subgroup Header の trackAlias / groupId は varint (最大 2^64-1) でエンコードされる。
  * 2^64 以上の値はエンコードできないため、ストリーム生成前に throw し、
  * ストリームが生成されないことを検証する。
@@ -98,7 +98,7 @@ test("publishSendObjectInternal: groupId が 2^64 以上の場合はストリー
 });
 
 /**
- * draft-ietf-moq-transport-21 Section 11.3.1 (Subgroup Header):
+ * draft-ietf-moq-transport-22 Section 11.3.1 (Subgroup Header):
  * 正常範囲の groupId は従来どおりストリームを生成してヘッダを書き込むことを検証する。
  */
 test("publishSendObjectInternal: 正常範囲の groupId はストリームを生成する", async () => {
@@ -188,7 +188,7 @@ test("publishSendObjectInternal: createUnidirectionalStream の await 中に clo
 });
 
 /**
- * draft-ietf-moq-transport-21 §11.3.1:
+ * draft-ietf-moq-transport-22 §11.3.1:
  * Object ID が 2^64 以上の場合、ストリーム生成前に throw し、
  * ストリームが生成されないことを検証する (groupId 検証と同位置)。
  */
@@ -216,7 +216,7 @@ test("publishSendObjectInternal: objectId が 2^64 以上の場合はストリ�
 });
 
 /**
- * draft-ietf-moq-transport-21 §11.3.1:
+ * draft-ietf-moq-transport-22 §11.3.1:
  * Object ID が負の場合もストリーム生成前に throw することを検証する。
  */
 test("publishSendObjectInternal: objectId が負の場合はストリーム未生成で throw する", async () => {
@@ -242,7 +242,7 @@ test("publishSendObjectInternal: objectId が負の場合はストリーム未�
 });
 
 /**
- * draft-ietf-moq-transport-21 §11.3.1:
+ * draft-ietf-moq-transport-22 §11.3.1:
  * 公開 sendObject に不正 objectId を渡すと、返値 Promise が reject し、
  * セッションを閉じないことを検証する。通知契約のため error 通知も行う。
  */
@@ -282,7 +282,7 @@ test("publishSendObject: 不正 objectId (-1) で reject しセッションを�
 });
 
 /**
- * draft-ietf-moq-transport-21 §11.3.1:
+ * draft-ietf-moq-transport-22 §11.3.1:
  * 公開 sendObject に 2^64 以上の objectId を渡すと、返値 Promise が reject し、
  * セッションを閉じないことを検証する。
  */
@@ -317,7 +317,7 @@ test("publishSendObject: objectId が 2^64 以上の場合に reject しセッ�
 });
 
 /**
- * draft-ietf-moq-transport-21 §11.3.1:
+ * draft-ietf-moq-transport-22 §11.3.1:
  * 公開 sendObject に 2^64 以上の groupId を渡すと、返値 Promise が reject し、
  * セッションを閉じないことを検証する (objectId と同一契約)。
  */
@@ -354,7 +354,7 @@ test("publishSendObject: groupId が 2^64 以上の場合に reject しセッシ
 });
 
 /**
- * draft-ietf-moq-transport-21 §11.3.1:
+ * draft-ietf-moq-transport-22 §11.3.1:
  * 公開 sendObject に範囲外 priority を渡すと、返値 Promise が reject し、
  * FIN 等の副作用なしに失敗することを検証する。
  */
@@ -392,7 +392,7 @@ test("publishSendObject: 範囲外 priority (300) で reject し副作用を残�
 });
 
 /**
- * draft-ietf-moq-transport-21 §11.3.1:
+ * draft-ietf-moq-transport-22 §11.3.1:
  * 内部実装に直接不正 priority を渡すと、既存ストリームの FIN なしに
  * throw することを検証する (ID 検証と同位置のため副作用なし)。
  */
@@ -436,7 +436,7 @@ test("publishSendObjectInternal: 不正 priority で既存ストリームを FIN
 });
 
 /**
- * draft-ietf-moq-transport-21 §11.3.1:
+ * draft-ietf-moq-transport-22 §11.3.1:
  * 公開 sendObject の境界値 0 / 255 は従来どおり送信できることを検証する。
  */
 test("publishSendObject: 境界値 0 / 255 の priority は送信できる", async () => {
@@ -461,7 +461,7 @@ test("publishSendObject: 境界値 0 / 255 の priority は送信できる", asy
 });
 
 /**
- * draft-ietf-moq-transport-21 §11.3.1:
+ * draft-ietf-moq-transport-22 §11.3.1:
  * 公開 sendObject に -1 / 非整数の priority を渡すと reject することを検証する。
  */
 test("publishSendObject: -1 / 非整数の priority で reject する", async () => {
@@ -494,7 +494,7 @@ test("publishSendObject: -1 / 非整数の priority で reject する", async ()
 });
 
 /**
- * draft-ietf-moq-transport-21 §11.2:
+ * draft-ietf-moq-transport-22 §11.2:
  * datagram 送信に不正 objectId を渡すと、通知して throw することを検証する
  * (戻り値が void のため throw 維持。sendObject の通知 + reject と対称)。
  */
@@ -525,7 +525,7 @@ test("publishSendDatagram: 不正 objectId で通知して throw する", () => 
 });
 
 /**
- * draft-ietf-moq-transport-21 §11.2:
+ * draft-ietf-moq-transport-22 §11.2:
  * datagram 送信に範囲外 priority を渡すと、通知して throw することを検証する。
  */
 test("publishSendDatagram: 範囲外 priority (300) で通知して throw する", () => {
@@ -558,7 +558,7 @@ test("publishSendDatagram: 範囲外 priority (300) で通知して throw する
 });
 
 /**
- * draft-ietf-moq-transport-21 §11.2:
+ * draft-ietf-moq-transport-22 §11.2:
  * datagram 送信の境界値 0 / 255 は従来どおり送信できることを検証する。
  */
 test("publishSendDatagram: 境界値 0 / 255 の priority は送信できる", () => {
@@ -584,7 +584,7 @@ test("publishSendDatagram: 境界値 0 / 255 の priority は送信できる", (
 });
 
 /**
- * draft-ietf-moq-transport-21 §11.2:
+ * draft-ietf-moq-transport-22 §11.2:
  * datagram 送信に -1 / 非整数の priority を渡すと通知して throw することを検証する。
  */
 test("publishSendDatagram: -1 / 非整数の priority で通知して throw する", () => {
@@ -617,7 +617,7 @@ test("publishSendDatagram: -1 / 非整数の priority で通知して throw す�
 });
 
 /**
- * draft-ietf-moq-transport-21 §11.3.1:
+ * draft-ietf-moq-transport-22 §11.3.1:
  * 公開 sendObject に負の groupId を渡すと、返値 Promise が reject することを検証する。
  */
 test("publishSendObject: groupId が負の場合に reject しセッションを閉じない", async () => {
@@ -650,7 +650,7 @@ test("publishSendObject: groupId が負の場合に reject しセッションを
 });
 
 /**
- * draft-ietf-moq-transport-21 §11.3.1:
+ * draft-ietf-moq-transport-22 §11.3.1:
  * 公開 sendObject に非整数の objectId を渡すと、返値 Promise が reject することを検証する。
  */
 test("publishSendObject: 非整数の objectId で reject しセッションを閉じない", async () => {
@@ -683,7 +683,7 @@ test("publishSendObject: 非整数の objectId で reject しセッションを�
 });
 
 /**
- * draft-ietf-moq-transport-21 §11.3.1:
+ * draft-ietf-moq-transport-22 §11.3.1:
  * 公開 sendObject に非整数の groupId を渡すと、返値 Promise が reject することを検証する。
  */
 test("publishSendObject: 非整数の groupId で reject しセッションを閉じない", async () => {
@@ -716,7 +716,7 @@ test("publishSendObject: 非整数の groupId で reject しセッションを�
 });
 
 /**
- * draft-ietf-moq-transport-21 §11.2:
+ * draft-ietf-moq-transport-22 §11.2:
  * datagram 送信に不正 groupId を渡すと、通知して throw することを検証する。
  */
 test("publishSendDatagram: 不正 groupId で通知して throw する", () => {
@@ -842,7 +842,7 @@ function createCloseInterleavingSession(): {
 }
 
 /**
- * draft-ietf-moq-transport-21 §11.3 / §11.3.2:
+ * draft-ietf-moq-transport-22 §11.3 / §11.3.2:
  * オブジェクトバイト列の write 待ちに close (FIN) が割り込んでも、宣言
  * payloadLength 未達の partial ワイヤが生成されず、完全なバイト列の後に FIN
  * が出ることを検証する。実 WritableStream 注入で確定的に駆動し、モックは

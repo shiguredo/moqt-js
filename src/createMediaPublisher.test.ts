@@ -3675,7 +3675,7 @@ test("allocateVideoObject: 差分フレームが先行した場合の初回キ�
 });
 
 /**
- * draft-ietf-moq-transport-21 §5.1.1:
+ * draft-ietf-moq-transport-22 §5.1.1:
  * `sendObject` に渡す Priority が定数どおりであることを固定する (大小関係は
  * 並び順テストが固定する)。Publisher Priority は Subgroup 単位で 1 つに決まるため、
  * 実際に送信される値はキーフレームで開いた Subgroup の 0 になる (デルタフレームの
@@ -4093,7 +4093,7 @@ test("publishCatalog: targetLatency と renderGroup の 0 は検証を通り cat
 });
 
 /**
- * draft-ietf-moq-transport-21 §5.1.1 / draft-ietf-moq-msf-01 §5:
+ * draft-ietf-moq-transport-22 §5.1.1 / draft-ietf-moq-msf-01 §5:
  * カタログはトラック構成を知らせる制御情報であり、届かないと購読が始まらないため
  * 最高優先 (0) で送ることを固定する。
  */
@@ -4125,9 +4125,9 @@ test("Publisher Priority の定数はドキュメントの値である", () => {
 });
 
 test("Publisher Priority は数値が小さいほど高優先になる順に並ぶ", () => {
-  // draft-ietf-moq-transport-21 §5.1.1: 0-255 の符号無し整数で数値が小さいほど
+  // draft-ietf-moq-transport-22 §5.1.1: 0-255 の符号無し整数で数値が小さいほど
   // 高優先である。キーフレーム < 音声 < デルタフレームの順になることを固定する
-  // (デルタフレームは draft-ietf-moq-transport-21 §10.4 の既定 128 のまま据え置く)
+  // (デルタフレームは draft-ietf-moq-transport-22 §10.4 の既定 128 のまま据え置く)
   assert.isTrue(PRIORITY_CATALOG <= PRIORITY_VIDEO_KEY);
   assert.isTrue(PRIORITY_VIDEO_KEY < PRIORITY_AUDIO);
   assert.isTrue(PRIORITY_AUDIO < PRIORITY_VIDEO_DELTA);

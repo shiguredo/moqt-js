@@ -102,7 +102,7 @@ test("bidiSendRequestUpdate: fill 内の LOCATION_FILTER が End Group 超過の
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.1.6:
+ * draft-ietf-moq-transport-22 §9.1.6:
  * fill 内側の Range Filters も購読単位の上限に含め、上限超過では送信前に
  * throw することを検証する。
  */
@@ -139,7 +139,7 @@ test("bidiSendRequestUpdate: fill 内側の Range Filters が上限超過の場�
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.1.6:
+ * draft-ietf-moq-transport-22 §9.1.6:
  * in-flight 中の fill 内側 Range Filters も上限合算に含め、合計超過では
  * 送信前に throw することを検証する。
  */
@@ -272,7 +272,7 @@ test("bidiSendRequestUpdate: Range Filters が MAX_FILTER_RANGES 以内なら th
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.1.6 / §3.3.2:
+ * draft-ietf-moq-transport-22 §9.1.6 / §3.3.2:
  * MAX_FILTER_RANGES は「マージ後のフィルタ状態」に対して適用される。
  * 既存フィルタ (2 Range) と update (1 Range) のマージ後 (3 Range) が
  * 上限 2 を超える場合、update 単体では合法でも送信前に throw することを
@@ -531,7 +531,7 @@ test("bidiSendRequestUpdate: 送信時の LOCATION_FILTER が pending に保持�
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.5.1:
+ * draft-ietf-moq-transport-22 §9.5.1:
  * REQUEST_ERROR (coalescing による reject) では送信時の LOCATION_FILTER が
  * 反映されないことを検証する。
  */
@@ -600,7 +600,7 @@ test("bidiSendRequestUpdate: マージ後の状態が上限以内なら throw �
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.5.1:
+ * draft-ietf-moq-transport-22 §9.5.1:
  * 「Parameter values from later REQUEST_UPDATE messages override values from
  *  earlier ones.」により、in-flight の update (送信順) もマージに含めて
  * 検証する。in-flight の削除 update が反映されない場合は
@@ -645,7 +645,7 @@ test("bidiSendRequestUpdate: in-flight の削除 update がマージに反映さ
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.5.1:
+ * draft-ietf-moq-transport-22 §9.5.1:
  * in-flight の update は送信順 (挿入順) で適用され、後からの値が前の値を
  * 上書きする。同じ型を 3 → 2 に置換する 2 件の in-flight を登録し、
  * 最後の値 (2 Range) でマージされることを検証する (先発が勝つ順序なら
@@ -752,7 +752,7 @@ test("bidiSendRequestUpdate: in-flight の update でマージ後が上限超過
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.1.6:
+ * draft-ietf-moq-transport-22 §9.1.6:
  * ピアの MAX_FILTER_RANGES = 0 (未広告) の場合は §9.1.6 により送信禁止。
  * マージ後が空になる削除のみの update でも throw することを検証する
  * (既存ガードの維持)。
@@ -777,7 +777,7 @@ test("bidiSendRequestUpdate: MAX_FILTER_RANGES が 0 のとき削除のみの up
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.1.6:
+ * draft-ietf-moq-transport-22 §9.1.6:
  * 空配列の rangeFilters (フィルタ指定なしの no-op メッセージ) は、ピアの
  * MAX_FILTER_RANGES が 0 (未広告) でも送信できる (フィルタパラメータ自体が
  * 送信されないため。旧実装でも送信可能だった挙動の維持)。
@@ -809,7 +809,7 @@ test("bidiSendRequestUpdate: 空配列の rangeFilters は MAX_FILTER_RANGES が
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.3.2:
+ * draft-ietf-moq-transport-22 §3.3.2:
  * 削除を含む update は削除後の状態で検証される (既存の同型フィルタは
  * マージで取り除かれ、Ranges 数に数えられない)。本テストが検出するのは
  * 「update をマージせず連結する」誤実装のみである (削除後の Ranges 数と

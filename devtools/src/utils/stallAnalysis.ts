@@ -37,7 +37,7 @@
  * stream) を数える。
  *
  * 時刻は呼び出し側が引数で渡す (`performance.now()`)。ブラウザ API に依存しない。
- * Object の位置の規則は draft-ietf-moq-transport-21 に従う。ドラフトのため、将来変更される
+ * Object の位置の規則は draft-ietf-moq-transport-22 に従う。ドラフトのため、将来変更される
  * 可能性がある。
  */
 
@@ -72,7 +72,7 @@ export interface ObjectPosition {
   readonly groupId: bigint;
   readonly objectId: bigint;
   /**
-   * publisher が Prior Object ID Gap (draft-ietf-moq-transport-21 Section 10.9) で示した、
+   * publisher が Prior Object ID Gap (draft-ietf-moq-transport-22 Section 10.9) で示した、
    * この Object の直前の存在しない Object の数。無ければ 0
    */
   readonly priorObjectIdGap: bigint;
