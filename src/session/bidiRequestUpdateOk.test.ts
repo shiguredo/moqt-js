@@ -20,7 +20,7 @@ import { bidiHandleRequestUpdateOk, type BidiSessionInternal } from "./bidi";
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-21 Section 9.3 (REQUEST_OK):
+ * draft-ietf-moq-transport-22 Section 9.3 (REQUEST_OK):
  * "Track Properties are populated in TRACK_STATUS_OK; they are empty in
  *  PUBLISH_OK, REQUEST_UPDATE_OK, SUBSCRIBE_NAMESPACE_OK and PUBLISH_NAMESPACE_OK.
  *  If an endpoint receives Track Properties in one of these messages it MUST
@@ -64,7 +64,7 @@ test("bidiHandleRequestUpdateOk: 非空 Track Properties で closeWithError が�
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.3.2:
+ * draft-ietf-moq-transport-22 §3.3.2:
  * 自 update({ rangeFilters }) の REQUEST_OK 受信時に、送信時の Range Filters が
  * SubscriberImpl に反映されることを検証する。
  * REQUEST_UPDATE で省略された型は不変 (「If a filter parameter is omitted from
@@ -164,7 +164,7 @@ test("bidiHandleRequestUpdateOk: 空 Track Properties では closeWithError が�
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.1 (Subscriptions):
+ * draft-ietf-moq-transport-22 §3.1 (Subscriptions):
  * "A publisher MUST send exactly one SUBSCRIBE_OK or REQUEST_ERROR in response
  *  to a SUBSCRIBE. ... The peer SHOULD close the session with a protocol error
  *  if it receives more than one."
@@ -204,7 +204,7 @@ test("bidiHandleRequestUpdateOk: 未応答の REQUEST_UPDATE が無い REQUEST_O
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.2 (GOAWAY):
+ * draft-ietf-moq-transport-22 §9.2 (GOAWAY):
  * GOAWAY 受信時点で未応答の REQUEST_UPDATE は失敗として reject され
  * pendingRequestUpdate から削除される。その後に届く REQUEST_OK は削除済みの
  * 更新への正当な応答でありうるため、違反としてセッションを閉じない
@@ -561,7 +561,7 @@ test("bidiHandleRequestUpdateOk: LARGEST_OBJECT のみの REQUEST_OK では Next
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.3.1:
+ * draft-ietf-moq-transport-22 §3.3.1:
  * LARGEST_OBJECT を運ぶ REQUEST_UPDATE_OK を受信したとき、送信時に指定した
  * Next Object (Location Filter Type 0x05) が更新後の LARGEST_OBJECT で
  * 解決されることを検証する。
@@ -670,7 +670,7 @@ test("bidiHandleRequestUpdateOk: reset フィルタが反映され全オブジ�
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-21 §9.3 (REQUEST_OK):
+ * draft-ietf-moq-transport-22 §9.3 (REQUEST_OK):
  * PUBLISH_OK で非空 Track Properties を含む REQUEST_OK を受信した場合、
  * PROTOCOL_VIOLATION でセッションが閉じられることを検証する。
  */

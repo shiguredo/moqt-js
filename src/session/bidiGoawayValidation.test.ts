@@ -15,7 +15,7 @@ import { validateNoDuplicateGoawayOnRequestStream } from "./bidi";
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-21 Section 9.2 (GOAWAY):
+ * draft-ietf-moq-transport-22 Section 9.2 (GOAWAY):
  * リクエストストリーム上の重複 GOAWAY は PROTOCOL_VIOLATION。
  * 2 回目の同一 Request ID は重複として PROTOCOL_VIOLATION の SessionError を返す。
  * 初回に null を返して seenSet へ追加される受理側の性質は、任意の Request ID に対して

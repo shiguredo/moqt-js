@@ -19,7 +19,7 @@
  * そのまま流用しないこと。
  *
  * 注意: 本モジュールの encode*Properties / decode*Properties は Object Properties が
- * 要求する Key-Value-Pair delta 符号化 (draft-ietf-moq-transport-21 §8.3 / §11.1.3)
+ * 要求する Key-Value-Pair delta 符号化 (draft-ietf-moq-transport-22 §8.3 / §11.1.2)
  * に追従している。単体エンコーダ / デコーダは単一 Property 前提の絶対 Type ワイヤであり、
  * 複数 Property の連結・分解には使わないこと。
  */
@@ -41,7 +41,7 @@ import {
  * ID が偶数の場合: Length 省略、Value は vi64
  * ID が奇数の場合: length (varint) + bytes
  *
- * 注意: draft-ietf-moq-transport-21 Table 15 の provisional 値は採用しない。
+ * 注意: draft-ietf-moq-transport-22 Table 16 の provisional 値は採用しない。
  * LOC Property ID は loc-04 Table 1 に従う。
  */
 export const LOCPropertyId = {
@@ -457,7 +457,7 @@ function decodeAudioLevelValue(value: bigint): AudioLevel | null {
  * @throws ProtocolViolationError ID / Value の varint が不完全な場合
  * @throws SessionError KEY_VALUE_FORMATTING_ERROR Value が 0x00-0xFF の範囲外の場合
  *   (draft-ietf-moq-loc-04 §2.3.3.2 の serialization 不一致。
- *   draft-ietf-moq-transport-21 §8.3 の MUST)
+ *   draft-ietf-moq-transport-22 §8.3 の MUST)
  */
 export function decodeAudioLevel(data: Uint8Array): AudioLevel {
   const [id, idLen] = decodeLeadingVarint(data, 0, "AUDIO_LEVEL id");
@@ -565,8 +565,8 @@ export function decodeAudioConfig(data: Uint8Array): Uint8Array {
 /**
  * Video Properties をエンコードする
  *
- * draft-ietf-moq-transport-21 §11.1.3 (Object Properties) は Key-Value-Pairs
- * (Figure 2、delta encoding) でシリアライズされる。LOC Property を Property[] として
+ * draft-ietf-moq-transport-22 §11.1.2 (Object Properties) は Key-Value-Pairs
+ * (Figure 3、delta encoding) でシリアライズされる。LOC Property を Property[] として
  * 組み立て、encodeProperties() に委譲する。encodeProperties() は ID 昇順ソートするため、
  * ワイヤ上の並びは Property 入力順ではなく ID 昇順になる (例: timestamp (0x10) +
  * frameMarking (0x09) は frameMarking が先頭になり、Delta Type は 0x09, 0x07 になる)。
@@ -599,7 +599,7 @@ export function encodeVideoProperties(properties: VideoProperties): Uint8Array {
 /**
  * Video Properties をデコードする
  *
- * draft-ietf-moq-transport-21 §11.1.3 / §8.3 の Key-Value-Pairs (delta encoding) を
+ * draft-ietf-moq-transport-22 §11.1.2 / §8.3 の Key-Value-Pairs (delta encoding) を
  * 寛容にデコードする。不正な delta / Length で PROTOCOL_VIOLATION を送出せず、
  * 抽出できたフィールドのみを設定して配信を継続する。delta 形式は Type が前 Property との
  * 差分で連鎖するため、途中で壊れた場合は後続 Property の抽出が全滅し、先行値のみが
@@ -753,10 +753,10 @@ function extractLocProperties(
 /**
  * Video の LOC Properties を Track Property と Object Property の両方から解決する。
  *
- * draft-ietf-moq-transport-21 §10.1 の SUBGROUP_DELIVERY_TIMEOUT 先例に倣い、
+ * draft-ietf-moq-transport-22 §10.1 の SUBGROUP_DELIVERY_TIMEOUT 先例に倣い、
  * 同一 Property が両方に存在する場合は Object Property を優先する。
  * trackProperties は decodeProperties() で delta 復元済みの Property[]、
- * objectProperties は delta encoding (Figure 2) の Object Properties バイト列。
+ * objectProperties は delta encoding (Figure 3) の Object Properties バイト列。
  * timestamp / frameMarking は Object スコープのみのため Object から取得する。
  * timescale / config は Track, Object 両スコープを持つため、Object が持たなければ
  * Track でフォールバックする。
@@ -809,7 +809,7 @@ export function resolveAudioProperties(
  * 非空のときは暫定ワイヤ `varint(len) + Private Properties + LOC Payload` を返す。
  * 空のカノニカル形は prefix 無しのみであり、`varint(0) + LOC Payload` は出さない。
  *
- * @param privateProperties LOC Private Properties のバイト列（delta encoding (Figure 2) の
+ * @param privateProperties LOC Private Properties のバイト列（delta encoding (Figure 3) の
  *   Key-Value-Pairs でエンコードされたバイト列）
  * @param locPayload Encoded*Chunk の internal data
  * @returns Object Payload バイト列（入力との参照同一性は保証しない）

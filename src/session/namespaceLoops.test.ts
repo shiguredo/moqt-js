@@ -8,7 +8,7 @@
  * および長さ検証後メッセージデコード破損 (IncompleteDataError) 時の
  * PROTOCOL_VIOLATION でセッションが閉じる挙動。
  *
- * draft-ietf-moq-transport-21 §9.2 (GOAWAY) / §9.3 (REQUEST_OK) /
+ * draft-ietf-moq-transport-22 §9.2 (GOAWAY) / §9.3 (REQUEST_OK) /
  * §9.5.2 (Updating Namespace Subscriptions) / §9.14 (PUBLISH_NAMESPACE) /
  * §9.16 (NAMESPACE) / §9.17 (NAMESPACE_DONE) / §9.18 (SUBSCRIBE_TRACKS) /
  * §9.19 (PUBLISH_SKIPPED)
@@ -354,7 +354,7 @@ function firstUnexpectedMessage(kind: LoopKind, controlWriter: ControlStreamWrit
 }
 
 /**
- * draft-ietf-moq-transport-21 §9.4.1:
+ * draft-ietf-moq-transport-22 §9.4.1:
  * namespace 系リクエスト (SUBSCRIBE_NAMESPACE / PUBLISH_NAMESPACE /
  * SUBSCRIBE_TRACKS) への Redirect で Track Name が非空なら
  * PROTOCOL_VIOLATION でセッションを閉じる。
@@ -387,7 +387,7 @@ test("namespaceStartNamespaceStreamLoop: 非空 Track Name の Redirect は PROT
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.4.1:
+ * draft-ietf-moq-transport-22 §9.4.1:
  * PUBLISH_NAMESPACE (publication ループ) の初回応答 REQUEST_ERROR でも、Redirect の
  * Track Name が非空なら PROTOCOL_VIOLATION でセッションを閉じる
  * (namespace 系リクエストは Track Name を空にする MUST)。
@@ -421,7 +421,7 @@ test("namespaceStartPublicationStreamLoop: 非空 Track Name の Redirect は PR
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.4.1 / §9.4.2 / §12.3:
+ * draft-ietf-moq-transport-22 §9.4.1 / §9.4.2 / §12.3:
  * namespace 系の応答でも Retry Interval と Redirect (Track Name は空) を保持してアプリへ
  * 渡す。Reason Phrase が空のときは Error Code を含む固定文言にする。
  */
@@ -471,7 +471,7 @@ test("namespaceStartPublicationStreamLoop: Redirect の retryInterval と redire
 
 // ============================================================================
 // 自側が要求した namespace / tracks ストリームで受信する REQUEST_UPDATE
-// draft-ietf-moq-transport-21 §9.5 (REQUEST_UPDATE) / §9.5.2
+// draft-ietf-moq-transport-22 §9.5 (REQUEST_UPDATE) / §9.5.2
 // (Updating Namespace Subscriptions)
 //
 // REQUEST_UPDATE を送れるのは要求の送信者 (自側) であり、ピアからの受信は
@@ -515,7 +515,7 @@ SUBSCRIPTION_LOOP_CASES.forEach(({ kind, loop }) => {
 
 // ============================================================================
 // 3 ループ共通: REQUEST_UPDATE 応答の処理
-// draft-ietf-moq-transport-21 §9.3 (REQUEST_OK) / §9.5.2
+// draft-ietf-moq-transport-22 §9.3 (REQUEST_OK) / §9.5.2
 // (Updating Namespace Subscriptions) / §9.5.1 (応答前にストリームが閉じた場合)
 //
 // namespace / tracks の subscription 系 2 ループは、初期応答と更新応答で
@@ -672,7 +672,7 @@ SUBSCRIPTION_LOOP_CASES.forEach(({ kind, loop }) => {
 // 確立前 GOAWAY 後も読み取りは継続し、2 通目 GOAWAY は PROTOCOL_VIOLATION で閉じる
 LOOP_CASES.forEach(({ kind, loop }) => {
   test(`確立前 GOAWAY 後の 2 通目 GOAWAY で PROTOCOL_VIOLATION で閉じる: ${kind} ループ`, async () => {
-    // draft-ietf-moq-transport-21 §9.2:
+    // draft-ietf-moq-transport-22 §9.2:
     // "The endpoint MUST close the session with a PROTOCOL_VIOLATION ... if it
     //  receives more than one GOAWAY ... on a single request stream."
     // 確立前 GOAWAY 後も読み取りを継続し、同一チャンクの 2 通目を検出する。
@@ -709,7 +709,7 @@ LOOP_CASES.forEach(({ kind, loop }) => {
 // ピア FIN で自方向も FIN し、graceful closure を完了する
 LOOP_CASES.forEach(({ kind, loop }) => {
   test(`ピア FIN で自方向を FIN する: ${kind} ループ`, async () => {
-    // draft-ietf-moq-transport-21 §6.4.2.2:
+    // draft-ietf-moq-transport-22 §6.4.2.2:
     // ピアの FIN 後、requester は自方向も FIN で閉じる (SHOULD)。
     const ctx = createNamespaceLoopTestContext(loop);
 
@@ -737,7 +737,7 @@ SUBSCRIPTION_LOOP_CASES.forEach(({ kind, loop }) => {
    * ループ冒頭の state ガードで無視され PROTOCOL_VIOLATION にならない。
    * 確立応答を feed して resolved にしてから state を閉じる実運用の流れを再現する。
    *
-   * draft-ietf-moq-transport-21 §9.5.1:
+   * draft-ietf-moq-transport-22 §9.5.1:
    * ピアは応答を返しただけであり、購読解除後の遅延応答を仕様違反として
    * 閉じてはならない。
    */
@@ -1102,7 +1102,7 @@ test("namespaceStartNamespaceStreamLoop: 対応する NAMESPACE に先立つ NAM
 });
 
 test("namespaceStartNamespaceStreamLoop: 先頭 GOAWAY で New Session URI が空文字の場合は fallback 文言で reject", async () => {
-  // draft-ietf-moq-transport-21 §9.2: "If the URI is zero bytes long, the current URI is reused instead"
+  // draft-ietf-moq-transport-22 §9.2: "If the URI is zero bytes long, the current URI is reused instead"
   // クライアントからサーバへの GOAWAY は必ず空 URI (「A client MUST send a zero-length New Session URI」)
   const ctx = createNamespaceLoopTestContext("namespace");
   const notifiedUris: string[] = [];
@@ -1169,7 +1169,7 @@ test("namespaceStartNamespaceStreamLoop: 先頭に想定外メッセージ (NAME
 // 任意の NAMESPACE / NAMESPACE_DONE 列を扱う PBT (namespaceLoops.prop.ts) へ移した。
 
 test("namespaceStartNamespaceStreamLoop: RESET_STREAM でも active namespace に NAMESPACE_DONE を補完する", async () => {
-  // draft-ietf-moq-transport-21 §9.15: stream reset も FIN と同様に扱う。
+  // draft-ietf-moq-transport-22 §9.15: stream reset も FIN と同様に扱う。
   const ctx = createNamespaceLoopTestContext("namespace");
   const doneSuffixes: string[][] = [];
   Object.assign(ctx.target.callbacks, {
@@ -1349,7 +1349,7 @@ test("namespaceStartTracksStreamLoop: onPublishSkipped の throw で購読が終
 });
 
 test("namespaceStartTracksStreamLoop: 確立後 (resolved=true) の GOAWAY で送信方向が FIN (writer.close()) され、読み取り継続が維持される", async () => {
-  // draft-ietf-moq-transport-21 §9.2:
+  // draft-ietf-moq-transport-22 §9.2:
   // 送信方向は FIN で閉じる。受信方向は読み取り継続して 2 通目 GOAWAY を検出する。
   const ctx = createNamespaceLoopTestContext("tracks");
   const notifiedUris: string[] = [];
@@ -1504,7 +1504,7 @@ test("namespaceStartTracksStreamLoop: unsubscribe 後の遅延 PUBLISH_SKIPPED �
 
 // ============================================================================
 // 3 ループ共通: 確立前 GOAWAY / 確立後 GOAWAY / FIN (publication を含む)
-// draft-ietf-moq-transport-21 §9.2 (GOAWAY) / §6.4.2.2 (FIN)
+// draft-ietf-moq-transport-22 §9.2 (GOAWAY) / §6.4.2.2 (FIN)
 // ============================================================================
 
 /**
@@ -1544,7 +1544,7 @@ LOOP_CASES.forEach(({ kind, loop }) => {
       timeout: 0n,
     });
     ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.GOAWAY, goawayPayload));
-    // draft-ietf-moq-transport-21 §9.2:
+    // draft-ietf-moq-transport-22 §9.2:
     // 確立前 GOAWAY 後も読み取りを継続する (2 通目 GOAWAY 検出のため)。
     // ピアの FIN でループが終了する。
     ctx.readableController.close();
@@ -1572,7 +1572,7 @@ LOOP_CASES.forEach(({ kind, loop }) => {
  */
 LOOP_CASES.forEach(({ kind, loop }) => {
   test(`確立後 (resolved=true) の GOAWAY で送信方向が FIN (writer.close()) され、読み取り継続が維持される: ${kind} ループ`, async () => {
-    // draft-ietf-moq-transport-21 §9.2:
+    // draft-ietf-moq-transport-22 §9.2:
     // 「the endpoint SHOULD ... close the old request stream using the appropriate
     //  mechanism (e.g. FIN, stream reset, or PUBLISH_DONE)」に従い、送信方向を FIN
     // で閉じる。受信方向は読み取り継続し 2 通目 GOAWAY は PROTOCOL_VIOLATION として
@@ -1773,7 +1773,7 @@ INITIAL_SCOPE_VIOLATION_CASES.forEach(({ loop, okTypeName }) => {
 /**
  * 初期 REQUEST_OK の Track Properties 非空で reject し同一オブジェクトで閉じるケース
  *
- * draft-ietf-moq-transport-21 §9.3 の空必須違反も呼び出し元へ reject する。
+ * draft-ietf-moq-transport-22 §9.3 の空必須違反も呼び出し元へ reject する。
  * tracks (SUBSCRIBE_TRACKS_OK) は空必須の列挙に含まれないためこのシナリオを
  * 持たず、namespace / publication の 2 ループを回す。
  */
@@ -1814,7 +1814,7 @@ INITIAL_TRACK_PROPERTIES_CASES.forEach(({ loop, okTypeName }) => {
 /**
  * REQUEST_UPDATE_OK の未知 Mandatory Track Property で PROTOCOL_VIOLATION で閉じるケース
  *
- * draft-ietf-moq-transport-21 §9.3:
+ * draft-ietf-moq-transport-22 §9.3:
  * 確立後の REQUEST_UPDATE_OK は Track Properties が空必須であり、未知 Mandatory
  * Track Property を含めた場合は PROTOCOL_VIOLATION で閉じ、保留中の更新を違反
  * SessionError 自体で reject する (update() のハング防止)。prefix は反映しない。
@@ -1980,11 +1980,11 @@ test("namespaceStartPublicationStreamLoop: 確立後の 2 通目 REQUEST_OK の�
 
 // ============================================================================
 // 既知 Type の serialization 不一致 (KEY_VALUE_FORMATTING_ERROR) で閉じる
-// draft-ietf-moq-transport-21 §8.3 (Key-Value-Pair Structure) / §9.3
+// draft-ietf-moq-transport-22 §8.3 (Key-Value-Pair Structure) / §9.3
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-21 §9 / §9.3:
+ * draft-ietf-moq-transport-22 §9 / §9.3:
  * ループ内のメッセージデコードが IncompleteDataError (Length が揃った後の
  * フィールド構造の破損) の場合、黙殺されず PROTOCOL_VIOLATION でセッションが
  * 閉じることを検証する。変換は toSessionCloseError
@@ -2077,13 +2077,13 @@ MALFORMED_REQUEST_OK_CASES.forEach(({ loop, rejectsBeforeClose }) => {
 
 // ============================================================================
 // 空必須メッセージの未知 Mandatory Track Property
-// draft-ietf-moq-transport-21 §9.3 (REQUEST_OK) / §3.6 (Mandatory Track Properties)
+// draft-ietf-moq-transport-22 §9.3 (REQUEST_OK) / §3.7 (Mandatory to Understand Track Properties)
 // ============================================================================
 
 /**
  * 初期 *_OK の未知 Mandatory Track Property で PROTOCOL_VIOLATION で閉じるケース
  *
- * draft-ietf-moq-transport-21 §9.3:
+ * draft-ietf-moq-transport-22 §9.3:
  * 「they are empty in PUBLISH_OK, REQUEST_UPDATE_OK, SUBSCRIBE_NAMESPACE_OK and
  *  PUBLISH_NAMESPACE_OK.  If an endpoint receives Track Properties in one of
  *  these messages it MUST close the session with a PROTOCOL_VIOLATION.」
@@ -2126,7 +2126,7 @@ INITIAL_UNKNOWN_MANDATORY_CASES.forEach((loop) => {
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.3:
+ * draft-ietf-moq-transport-22 §9.3:
  * SUBSCRIBE_TRACKS_OK は空必須の列挙に含まれず Track Properties を運べるため、
  * 未知 Mandatory Track Property を含んでいてもセッションは閉じない (非退行)。
  * 読み取り失敗として購読の Promise が reject される既存挙動を維持する。
@@ -2161,7 +2161,7 @@ test("namespaceStartTracksStreamLoop: 初期 SUBSCRIBE_TRACKS_OK の未知 Manda
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-21 §8.3 / §9.3:
+ * draft-ietf-moq-transport-22 §8.3 / §9.3:
  * error コールバックが throw しても、malformed な Track Properties の通知後に
  * 確立前 Promise の reject とセッションクローズが実行されることを検証する。
  * 通知は 1 回だけで、二重通知にならない。
@@ -2220,7 +2220,7 @@ LOOP_CASES.forEach(({ kind, loop }) => {
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.5.1:
+ * draft-ietf-moq-transport-22 §9.5.1:
  * resolved 後の read 失敗 (RESET_STREAM 相当) でも、error コールバックの throw に
  * かかわらず保留中 REQUEST_UPDATE が reject されることを検証する。
  * publication ループは REQUEST_UPDATE を扱わないため subscription 系 2 ループだけを回す。
@@ -2274,7 +2274,7 @@ SUBSCRIPTION_LOOP_CASES.forEach(({ kind, loop }) => {
 });
 
 /**
- * draft-ietf-moq-transport-21 §8.3 / §9.3:
+ * draft-ietf-moq-transport-22 §8.3 / §9.3:
  * error コールバックが throw しても、デコード破損 (IncompleteDataError) の通知後に
  * 確立前 Promise の reject とセッションクローズが実行されることを検証する。
  * reject は受信した IncompleteDataError のまま、close は PROTOCOL_VIOLATION へ変換される。
@@ -2370,7 +2370,7 @@ LOOP_CASES.forEach(({ kind, loop }) => {
 });
 
 /**
- * draft-ietf-moq-transport-21 §6.4.2.2 / §6.4.2.3:
+ * draft-ietf-moq-transport-22 §6.4.2.2 / §6.4.2.3:
  * 確立前に REQUEST_ERROR を受信したら、送信方向を FIN し、受信方向を cancel
  * (STOP_SENDING 相当) してストリームをライブラリの管理外に残さない。
  */

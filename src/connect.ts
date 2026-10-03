@@ -1,7 +1,7 @@
 /**
  * MOQT サーバーへの接続
  *
- * draft-ietf-moq-transport-21 Section 6.2 (Session establishment)
+ * draft-ietf-moq-transport-22 Section 6.2 (Session establishment)
  */
 
 import { type ConnectCallbacks, type ConnectOptions, type Session, SessionImpl } from "./session";
@@ -67,7 +67,7 @@ export async function connect(
     transportOptions.serverCertificateHashes = options.serverCertificateHashes;
   }
 
-  // draft-ietf-moq-transport-21 §6.2 / §6.2.1:
+  // draft-ietf-moq-transport-22 §6.2 / §6.2.1:
   // "MOQT uses ALPN in QUIC and "WT-Available-Protocols" in WebTransport to
   //  perform version negotiation." / "The client includes MOQT protocol
   //  identifiers in the WT-Available-Protocols header."
@@ -89,9 +89,9 @@ export async function connect(
 
   // MOQT セッションを初期化する (SETUP メッセージの交換)
   // authorizationToken は SETUP Option (0x03) として送出する
-  // draft-ietf-moq-transport-21 Section 9.1.4 (AUTHORIZATION TOKEN Setup Option)
+  // draft-ietf-moq-transport-22 Section 9.1.4 (AUTHORIZATION TOKEN Setup Option)
   // moqtImplementation は SETUP Option (0x07) の送信を制御する
-  // draft-ietf-moq-transport-21 §9.1.5 / §15.8
+  // draft-ietf-moq-transport-22 §9.1.5 / §15.8
   // grease: true は GREASE Setup Option (§13) を追加する
   // exactOptionalPropertyTypes では optional なフィールドに undefined を渡せないため、
   // 値がある場合だけ載せる

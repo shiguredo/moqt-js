@@ -426,7 +426,7 @@ test("VideoFrameMarking: Length=3 (Long Extension + TL0PICIDX) は先頭 2 バ�
   assert.strictEqual(decoded.spatialLayerId, 0x20);
 
   // 余剰バイトを消費したうえで後続 TIMESTAMP が読めること。
-  // Object Properties は delta encoding (Figure 2) のため、後続 TIMESTAMP (0x10) は
+  // Object Properties は delta encoding (Figure 3) のため、後続 TIMESTAMP (0x10) は
   // 前 Property VIDEO_FRAME_MARKING (0x09) との差分 Delta Type 0x07 で書く。
   const trailing = encodeVarint(42n);
   const combined = new Uint8Array(wire.length + 1 + trailing.length);
@@ -707,7 +707,7 @@ test("VideoFrameMarking: encodeVideoProperties 経由でも値域外は同じマ
 // =============================================================================
 
 test("未知の偶数 ID は vi64 としてスキップされる", () => {
-  // Object Properties は delta encoding (Figure 2) のため ID は昇順連鎖する。
+  // Object Properties は delta encoding (Figure 3) のため ID は昇順連鎖する。
   // 未知偶数 ID 0x0E + value 99、その後 TIMESTAMP (0x10, delta 0x02)
   const data = new Uint8Array([0x0e, 0x63, 0x02, 0x7b]);
 
@@ -941,7 +941,7 @@ test("encodeVideoProperties → encodeLocObjectPayload → framed decode → dec
 // draft-ietf-moq-loc-04 §2.3.3.2:
 // Audio Level の Value は "vi64 (1-2 bytes to encode values 0x00-0xFF)" であり、
 // 0xFF を超える値は 0x100 から MAX_VARINT までの全域で拒否する
-// (draft-ietf-moq-transport-21 §8.3 の serialization 不一致)。
+// (draft-ietf-moq-transport-22 §8.3 の serialization 不一致)。
 const outOfRangeAudioLevelArb = fc.bigInt({ min: 0x100n, max: MAX_VARINT });
 
 test("Audio Level の値域外の値は全域で KEY_VALUE_FORMATTING_ERROR になる", () => {

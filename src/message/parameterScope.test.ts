@@ -192,7 +192,7 @@ test("GROUP_ORDER 付き PUBLISH は検証を通過する", () => {
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.8:
+ * draft-ietf-moq-transport-22 §9.8:
  * PUBLISH は初期 Subscription Parameters として FORWARD / GROUP_ORDER /
  * SUBSCRIBER_PRIORITY / SUBGROUP_DELIVERY_TIMEOUT / OBJECT_DELIVERY_TIMEOUT /
  * LOCATION_FILTER を運べる。既存 5 種に加えた 4 種が許可されることを検証する。
@@ -206,7 +206,7 @@ test("PUBLISH_ALLOWED_PARAMS は Subscription Parameters 4 種を含む", () => 
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.8:
+ * draft-ietf-moq-transport-22 §9.8:
  * 新規 4 種付き PUBLISH はいずれもスコープ検証を通過する。
  */
 test("Subscription Parameters 付き PUBLISH は検証を通過する", () => {
@@ -222,7 +222,7 @@ test("Subscription Parameters 付き PUBLISH は検証を通過する", () => {
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.8:
+ * draft-ietf-moq-transport-22 §9.8:
  * NEW_GROUP_REQUEST / Range Filters / FILL_PARAMETERS は PUBLISH に
  * 出現できない。スコープ検証で拒否されることを検証する。
  */
@@ -310,7 +310,7 @@ test("REQUEST_UPDATE_ALLOWED_PARAMS は GROUP_ORDER / EXPIRES を含まない", 
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.3.2:
+ * draft-ietf-moq-transport-22 §3.3.2:
  * TRACK_PROPERTY_FILTER は SUBSCRIBE_TRACKS とその REQUEST_UPDATE にのみ
  * 出現できる。subscription 系 REQUEST_UPDATE の許可集合には含まれない。
  */

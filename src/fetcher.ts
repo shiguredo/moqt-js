@@ -116,7 +116,7 @@ export class FetcherImpl implements Fetcher {
   /**
    * Full Track Name の比較キーを取得する（Track 同一性判定用）
    *
-   * draft-ietf-moq-transport-21 §2.4.1: Track の同一性は Full Track Name
+   * draft-ietf-moq-transport-22 §2.4.1: Track の同一性は Full Track Name
    * (Track Namespace + Track Name) で判定する。
    * 戻り値は fullTrackNameKey が生成する長さ付きキーであり、Full Track Name
    * そのものではない。Track の同一性判定は完全一致でのみ行う。

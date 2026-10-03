@@ -38,13 +38,13 @@ import { appendMalformedTrackProperties } from "../testSupport/helpers";
 
 // ============================================================================
 // 既知 Type の serialization 不一致 (KEY_VALUE_FORMATTING_ERROR) で閉じる
-// draft-ietf-moq-transport-21 §8.3 (Key-Value-Pair Structure)
+// draft-ietf-moq-transport-22 §8.3 (Key-Value-Pair Structure)
 // ============================================================================
 
 /**
  * payload 末尾に malformed な Track Properties を連結する
  *
- * draft-ietf-moq-transport-21 §8.3:
+ * draft-ietf-moq-transport-22 §8.3:
  * "If a receiver understands a Type, and the following Value or Length/Value
  *  does not match the serialization defined by that Type, the receiver MUST
  *  close the session with error code KEY_VALUE_FORMATTING_ERROR."
@@ -54,7 +54,7 @@ import { appendMalformedTrackProperties } from "../testSupport/helpers";
  * エンコード結果への連結で malformed な受信メッセージを再現できる。
  */
 /**
- * draft-ietf-moq-transport-21 §8.3 / §9.3:
+ * draft-ietf-moq-transport-22 §8.3 / §9.3:
  * malformed な Track Properties を含む PUBLISH_OK を受信したら
  * KEY_VALUE_FORMATTING_ERROR でセッションを閉じる。pending には close と同一の
  * SessionError オブジェクトが reject され、削除集合 (pendingPublish +
@@ -101,7 +101,7 @@ test("bidiReadPublishResponse: malformed Track Properties で KEY_VALUE_FORMATTI
 });
 
 /**
- * draft-ietf-moq-transport-21 §8.3 / §9.7:
+ * draft-ietf-moq-transport-22 §8.3 / §9.7:
  * malformed な Track Properties を含む SUBSCRIBE_OK を受信したら
  * KEY_VALUE_FORMATTING_ERROR でセッションを閉じる。削除集合 (pendingSubscribe +
  * requestStreams + fillFetchTargets) が掃除される。
@@ -152,7 +152,7 @@ test("bidiReadSubscribeResponse: malformed Track Properties で KEY_VALUE_FORMAT
 });
 
 /**
- * draft-ietf-moq-transport-21 §8.3 / §9.12:
+ * draft-ietf-moq-transport-22 §8.3 / §9.12:
  * malformed な Track Properties を含む FETCH_OK を受信したら
  * KEY_VALUE_FORMATTING_ERROR でセッションを閉じる。待機中の fetcher 取得も
  * 起こし、削除集合 (pendingFetch + requestStreams) が掃除される。
@@ -207,7 +207,7 @@ test("bidiReadFetchResponse: malformed Track Properties で KEY_VALUE_FORMATTING
 });
 
 /**
- * draft-ietf-moq-transport-21 §8.3 / §9.13:
+ * draft-ietf-moq-transport-22 §8.3 / §9.13:
  * malformed な Track Properties を含む TRACK_STATUS_OK を受信したら
  * KEY_VALUE_FORMATTING_ERROR でセッションを閉じる。削除集合
  * (pendingTrackStatus + requestStreams) が掃除される。
@@ -251,7 +251,7 @@ test("bidiReadTrackStatusResponse: malformed Track Properties で KEY_VALUE_FORM
 });
 
 /**
- * draft-ietf-moq-transport-21 §8.3 / §9.3:
+ * draft-ietf-moq-transport-22 §8.3 / §9.3:
  * subscribe ロールのリクエストストリームで malformed な Track Properties を
  * 含む REQUEST_UPDATE_OK を受信したら KEY_VALUE_FORMATTING_ERROR でセッションを
  * 閉じる (bidiReadRequestStreamMessages の catch 経由。handleRequestStreamReadError
@@ -391,7 +391,7 @@ test("bidiHandleRequestUpdateOk: スコープ違反で保留中の更新が違�
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.3 / §9.5.1:
+ * draft-ietf-moq-transport-22 §9.3 / §9.5.1:
  * REQUEST_UPDATE_OK の Track Properties 空検証違反でも同様に
  * 違反 SessionError 自体で reject されることを検証する。
  */
@@ -647,7 +647,7 @@ function useRealRequestIdValidation(ctx: { session: BidiSessionInternal }): Set<
 }
 
 /**
- * draft-ietf-moq-transport-21 §6.4.2.1:
+ * draft-ietf-moq-transport-22 §6.4.2.1:
  * 受信 PUBLISH 上の REQUEST_UPDATE で偶数 Request ID を受けると
  * INVALID_REQUEST_ID で閉じることを検証する。
  */
@@ -668,7 +668,7 @@ test("bidiHandlePublishRequestUpdate: 偶数 Request ID で INVALID_REQUEST_ID �
 });
 
 /**
- * draft-ietf-moq-transport-21 §6.4.2.1:
+ * draft-ietf-moq-transport-22 §6.4.2.1:
  * 受信 PUBLISH 上の REQUEST_UPDATE で重複 Request ID を受けると
  * INVALID_REQUEST_ID で閉じることを検証する。
  */
@@ -690,7 +690,7 @@ test("bidiHandlePublishRequestUpdate: 重複 Request ID で INVALID_REQUEST_ID �
 });
 
 /**
- * draft-ietf-moq-transport-21 §6.4.2.1:
+ * draft-ietf-moq-transport-22 §6.4.2.1:
  * 新規の奇数 Request ID は検証を通過して REQUEST_OK が応答され、
  * 同一 ID の 2 回目は重複として閉じることを検証する。
  * 検証通過時の ID 消費 (received への記録) の裏付けになる。
@@ -722,7 +722,7 @@ test("bidiHandlePublishRequestUpdate: 新規奇数 Request ID は受理し再送
 });
 
 /**
- * draft-ietf-moq-transport-21 §6.4.2.1:
+ * draft-ietf-moq-transport-22 §6.4.2.1:
  * 送信 PUBLISH ストリーム上のピア更新受信で偶数 Request ID を受けると
  * INVALID_REQUEST_ID で閉じることを検証する。
  */
@@ -753,7 +753,7 @@ test("bidiReadRequestStreamMessages: ピア更新の偶数 Request ID で INVALI
 });
 
 /**
- * draft-ietf-moq-transport-21 §6.4.2.1:
+ * draft-ietf-moq-transport-22 §6.4.2.1:
  * 送信 PUBLISH ストリーム上のピア更新受信で重複 Request ID を受けると
  * INVALID_REQUEST_ID で閉じることを検証する。
  */
@@ -785,7 +785,7 @@ test("bidiReadRequestStreamMessages: ピア更新の重複 Request ID で INVALI
 });
 
 /**
- * draft-ietf-moq-transport-21 §6.4.2.1 / §9.4:
+ * draft-ietf-moq-transport-22 §6.4.2.1 / §9.4:
  * GOAWAY 受信済みでも不正 ID は INVALID_REQUEST_ID で閉じることを検証する。
  * §6.4.2.1 MUST が §9.4 MAY 適用より優先する。
  */
@@ -807,7 +807,7 @@ test("bidiHandlePublishRequestUpdate: GOAWAY 下の偶数 ID は INVALID_REQUEST
 });
 
 /**
- * draft-ietf-moq-transport-21 §6.4.2.1 / §9.5:
+ * draft-ietf-moq-transport-22 §6.4.2.1 / §9.5:
  * subscribe ロールでも不正 ID は INVALID_REQUEST_ID で閉じることを検証する。
  * §6.4.2.1 MUST が想定外更新の PROTOCOL_VIOLATION より優先する。
  */

@@ -114,7 +114,7 @@ test("publishSendObject: 省略した Subgroup は done() で RESET される", 
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.3.1 / §11.3.2:
+ * draft-ietf-moq-transport-22 §3.3.1 / §11.3.2:
  * 購読の Location Filter の範囲外として送らなかった Object がある Subgroup は、
  * forwardState が 0 の見送りと同じく省略として記録され、閉じる時に RESET される。
  */

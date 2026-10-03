@@ -1,6 +1,6 @@
 /**
  * session/params.ts の純粋関数の Property-Based Tests
- * draft-ietf-moq-transport-21 Section 3.3.2 (Range Filters) / Section 8.2 (Location) /
+ * draft-ietf-moq-transport-22 Section 3.3.2 (Range Filters) / Section 8.2 (Location) /
  * Section 8.7 (Track Namespace) / Section 9.20 (Message Parameter)
  *
  * 対象は Range Filter のマージ・送信前検証、Message Parameter 構築の round-trip、
@@ -156,7 +156,7 @@ const authorizationTokenArb: fc.Arbitrary<AuthorizationToken> = fc.record({
 /**
  * Range Filter の 1 Range 列を生成する arbitrary を作る
  *
- * draft-ietf-moq-transport-21 §8.6 の delta エンコーディングが成立するよう、
+ * draft-ietf-moq-transport-22 §8.6 の delta エンコーディングが成立するよう、
  * 前の Range の End 以降から次の Start を積み上げる。末尾 Range だけは
  * End 省略 (open-ended) を許す。
  *
@@ -241,7 +241,7 @@ const rangeFilterSpecArb: fc.Arbitrary<RangeFilterSpec> = fc.oneof(
 /**
  * Range Filter の同一性キー (Parameter Type, SetID, Property Type)
  *
- * draft-ietf-moq-transport-21 §3.3.2:
+ * draft-ietf-moq-transport-22 §3.3.2:
  * "the same combination of Parameter Type, SetID, and Property Type
  *  (only in the Track and Object Property Filters) repeat in any message"
  * の組み合わせを表す。削除エントリは SetID / Property Type を持たない。
@@ -394,7 +394,7 @@ function isRangeFilterParameterType(type: number): boolean {
 
 // ============================================================================
 // PBT 1: mergeRangeFilters
-// draft-ietf-moq-transport-21 §3.3.2 (Range Filters)
+// draft-ietf-moq-transport-22 §3.3.2 (Range Filters)
 // ============================================================================
 
 test("mergeRangeFilters: 残存する現在のエントリの後ろに update の追加エントリが並ぶ", () => {
@@ -478,7 +478,7 @@ test("mergeRangeFilters: 同一 update に remove と追加が混在すると追
 
 // ============================================================================
 // PBT 2: validateRangeFilterLimits
-// draft-ietf-moq-transport-21 §9.1.6 (MAX FILTER RANGES)
+// draft-ietf-moq-transport-22 §9.1.6 (MAX FILTER RANGES)
 // ============================================================================
 
 test("validateRangeFilterLimits: undefined と空配列は常に throw しない", () => {
@@ -537,7 +537,7 @@ test("validateRangeFilterLimits: 削除エントリは Ranges 総数に数えな
 
 // ============================================================================
 // PBT 3: validateRangeFilterSpecs
-// draft-ietf-moq-transport-21 §3.3.2 (Range Filters)
+// draft-ietf-moq-transport-22 §3.3.2 (Range Filters)
 // ============================================================================
 
 test("validateRangeFilterSpecs: undefined と空配列は常に throw しない", () => {
@@ -849,7 +849,7 @@ test("buildTrackStatusParameters: authorizationToken と includeProperties の�
 
 // ============================================================================
 // PBT 5: Location の順序と FETCH の Start Location 確定
-// draft-ietf-moq-transport-21 §8.2 / §9.12 / §3.3.1
+// draft-ietf-moq-transport-22 §8.2 / §9.12 / §3.3.1
 // ============================================================================
 
 test("compareLocations: 反射律と反対称律を満たす", () => {
@@ -878,7 +878,7 @@ test("compareLocations: 推移律を満たす", () => {
 test("compareLocations: 仕様の辞書式順序と一致する", () => {
   fc.assert(
     fc.property(locationArb, locationArb, (a, b) => {
-      // draft-ietf-moq-transport-21 §8.2:
+      // draft-ietf-moq-transport-22 §8.2:
       // "Location A < Location B if: A.Group < B.Group ||
       //  (A.Group == B.Group && A.Object < B.Object)"
       let expected = 0;

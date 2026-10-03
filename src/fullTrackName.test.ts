@@ -1,6 +1,6 @@
 /**
  * Full Track Name の比較キーと文字列表現の単体テスト
- * draft-ietf-moq-transport-21 Section 2.4.1 (Track Naming) / Section 8.8
+ * draft-ietf-moq-transport-22 Section 2.4.1 (Track Naming) / Section 8.8
  * (Representing Namespace and Track Names)
  */
 
@@ -8,7 +8,7 @@ import { test, assert } from "vite-plus/test";
 import { formatFullTrackName, formatTrackNamespace, fullTrackNameKey } from "./fullTrackName";
 
 /**
- * draft-ietf-moq-transport-21 §2.4.1:
+ * draft-ietf-moq-transport-22 §2.4.1:
  * 区切り文字の曖昧さで異なる Full Track Name が同じキーにならないことを、
  * 旧実装 ("/" 連結) が衝突していた具体例で検証する。
  */
@@ -25,7 +25,7 @@ test("fullTrackNameKey: 区切り文字の曖昧さで衝突する Full Track Na
 });
 
 /**
- * draft-ietf-moq-transport-21 §2.4.1:
+ * draft-ietf-moq-transport-22 §2.4.1:
  * Track Namespace は 0 フィールド、Track Name は空を許す。境界が消えないよう
  * 空フィールドにも長さ ("0:") を付ける (空の Track Namespace Field は §8.7 が
  * 1 バイト以上を MUST とするため wire 上は現れないが、キー生成は任意の入力で
@@ -41,7 +41,7 @@ test("fullTrackNameKey: 空の Track Namespace / Track Name でも境界が残�
 });
 
 /**
- * draft-ietf-moq-transport-21 §8.8:
+ * draft-ietf-moq-transport-22 §8.8:
  * Track Namespace のフィールドを "-" で並べ、Track Name を "--" でつなぐ。
  * 仕様の例 (draft-ietf-moq-msf-01 §11.1.3) をそのまま検証する。
  */
@@ -54,7 +54,7 @@ test("formatFullTrackName: 仕様の例を組み立てる", () => {
 });
 
 /**
- * draft-ietf-moq-transport-21 §8.8:
+ * draft-ietf-moq-transport-22 §8.8:
  * a-z / A-Z / 0-9 / _ 以外のバイトは "." + 小文字 16 進 2 桁にする。構造の
  * 区切り ("-" / "--") と紛らわしい文字、非 ASCII の UTF-8 バイトを検証する。
  */
@@ -68,7 +68,7 @@ test("formatFullTrackName: 予約文字と非 ASCII をエスケープする", (
 });
 
 /**
- * draft-ietf-moq-transport-21 §2.4.1:
+ * draft-ietf-moq-transport-22 §2.4.1:
  * "/" 連結では namespace ["a"] + track "b/c" と namespace ["a","b"] + track "c" が
  * 同じ "a/b/c" になっていた。§8.8 の表現ではエスケープが両者を区別する。
  */
@@ -79,7 +79,7 @@ test("formatFullTrackName: 区切り文字の曖昧さで異なる Full Track Na
 });
 
 /**
- * draft-ietf-moq-transport-21 §8.7:
+ * draft-ietf-moq-transport-22 §8.7:
  * Track Namespace は 0 フィールドを許す。空のときは "--" の左側だけが空になる。
  * Track Namespace Field は 1 バイト以上を MUST とするため、空のフィールドは
  * 区切りと区別できず拒否する。
@@ -95,7 +95,7 @@ test("formatFullTrackName: 空の Track Namespace と空の Track Name を扱う
 });
 
 /**
- * draft-ietf-moq-transport-21 §8.8:
+ * draft-ietf-moq-transport-22 §8.8:
  * namespace 単体の表記は track name を除いた部分であり、`--` の左側がそのまま残る。
  * ログ等で namespace だけを出すときに使う。
  */

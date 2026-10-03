@@ -17,7 +17,7 @@ function formatCatalogValue(key: string, value: unknown): string {
  * draft-ietf-moq-msf-01 §5.2.2: track object の `namespace` は省略可能で、省略時は
  * catalog track の namespace を継承する。指定されている場合は catalog の例と同じ
  * "/" 区切りとして Track Namespace のフィールドに分解する。Full Track Name の表記は
- * draft-ietf-moq-transport-21 §8.8 に従う
+ * draft-ietf-moq-transport-22 §8.8 に従う
  */
 function resolveTrackFullTrackName(
   track: CatalogTrack,
@@ -152,7 +152,7 @@ function CatalogTrackGroup({ label, tracks, trackNamespace, cardClass }: Catalog
  *
  * 開いたときは Track をメディア (`packaging: "loc"`) とデータ (それ以外) に分けて
  * 並べる (§5.2.4)。グループの見出しには件数を出す。Track ごとに、1 行目へ namespace を
- * 含む Full Track Name を出し (draft-ietf-moq-transport-21 §8.8)、2 行目以降へ
+ * 含む Full Track Name を出し (draft-ietf-moq-transport-22 §8.8)、2 行目以降へ
  * 残りのキーと値を 1 組ずつ横に詰めて並べる。幅が足りない分だけ折り返す。高さは
  * Track の数と中身に合わせ、欄の中でスクロールさせない (映像と音声の Track を
  * 一目で読める)。長い値 (initRef など) は 1 組の幅に収めて省き、全文はマウスを

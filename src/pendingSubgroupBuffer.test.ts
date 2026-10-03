@@ -1,6 +1,6 @@
 /**
  * Pending Subgroup Buffer Unit Tests
- * draft-ietf-moq-transport-21 §11.3.1
+ * draft-ietf-moq-transport-22 §11.3.1
  */
 
 import { test, assert } from "vite-plus/test";
@@ -98,7 +98,7 @@ test("per-session 上限超過で overflow-per-session が通知される", asyn
 });
 
 /**
- * draft-ietf-moq-transport-21 §11.3.1:
+ * draft-ietf-moq-transport-22 §11.3.1:
  * 上限超過で破棄した entry に以後のチャンクを加算しない。加算を続けると
  * 破棄したバイトが per-session の集計に残り、無関係な他ストリームを
  * 巻き添えで overflow させる。
@@ -121,7 +121,7 @@ test("per-stream 上限超過で破棄した entry は以後のチャンクを�
 });
 
 /**
- * draft-ietf-moq-transport-21 §11.3.1:
+ * draft-ietf-moq-transport-22 §11.3.1:
  * 破棄した entry が加算を続けないため、健在な他ストリームが巻き添えで
  * per-session 上限を超えることはない。
  */

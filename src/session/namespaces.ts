@@ -10,7 +10,7 @@
  * (startNamespaceStreamLoop / startTracksStreamLoop /
  * startNamespacePublicationStreamLoop) を free function として抽出する。
  *
- * draft-ietf-moq-transport-21 §9.15 (SUBSCRIBE_NAMESPACE) /
+ * draft-ietf-moq-transport-22 §9.15 (SUBSCRIBE_NAMESPACE) /
  * §9.18 (SUBSCRIBE_TRACKS) / §9.14 (PUBLISH_NAMESPACE) は、いずれも専用の
  * 双方向ストリームを開く namespace 系の要求である。ストリーム上のメッセージ処理は
  * namespaceLoops.ts が担当する。
@@ -131,7 +131,7 @@ export async function namespacesSubscribeNamespace(
     };
 
     // メッセージをエンコードして送信
-    // draft-ietf-moq-transport-21 §9.15 (SUBSCRIBE_NAMESPACE):
+    // draft-ietf-moq-transport-22 §9.15 (SUBSCRIBE_NAMESPACE):
     // Type (vi64) + Length (16-bit big-endian) + Payload のフレーミングを
     // ControlStreamWriter に委譲する。
     const payload = encodeSubscribeNamespacePayload(subscribeNamespaceMsg);
@@ -199,7 +199,7 @@ export async function namespacesSubscribeTracks(
   // draft-ietf-moq-transport-22 §2.4.3 / §6.5: 予約 namespace / .session の送信拒否
   validateTrackNamespaceForSend(namespacePrefix);
 
-  // draft-ietf-moq-transport-21 §9.1.6: ピアの MAX_FILTER_RANGES が 0 のとき、および
+  // draft-ietf-moq-transport-22 §9.1.6: ピアの MAX_FILTER_RANGES が 0 のとき、および
   // 購読単位の Ranges 合計が上限を超えるときは Range Filter を送信できない
   // draft-ietf-moq-transport-22 §3.6.1: SUBSCRIBE_TRACKS で Range Filter を送信できる
   // §9.18 の一覧に FILL_PARAMETERS は無いため fill 内側は数えない
@@ -240,7 +240,7 @@ export async function namespacesSubscribeTracks(
     };
 
     // メッセージをエンコードして送信
-    // draft-ietf-moq-transport-21 §9.18 (SUBSCRIBE_TRACKS):
+    // draft-ietf-moq-transport-22 §9.18 (SUBSCRIBE_TRACKS):
     // Type (vi64) + Length (16-bit big-endian) + Payload のフレーミングを
     // ControlStreamWriter に委譲する。
     const payload = encodeSubscribeTracksPayload(subscribeTracksMsg);
@@ -274,7 +274,7 @@ export async function namespacesSubscribeTracks(
       callbacks,
       state: "active",
       namespacePrefix,
-      // draft-ietf-moq-transport-21 §3.3.2:
+      // draft-ietf-moq-transport-22 §3.3.2:
       // TRACK_PROPERTY_FILTER は受信 PUBLISH の評価に使用するため保持する
       rangeFilters: options?.rangeFilters,
       stream,
@@ -335,10 +335,10 @@ export async function namespacesPublishNamespace(
     };
 
     // メッセージをエンコードして送信
-    // draft-ietf-moq-transport-21 Section 9.14 (PUBLISH_NAMESPACE):
+    // draft-ietf-moq-transport-22 Section 9.14 (PUBLISH_NAMESPACE):
     // Type (vi64) + Length (16-bit big-endian) + Payload のフレーミングを
     // ControlStreamWriter に委譲する。
-    // https://www.ietf.org/archive/id/draft-ietf-moq-transport-21.html#section-9.14
+    // https://www.ietf.org/archive/id/draft-ietf-moq-transport-22.html#section-9.14
     const payload = encodePublishNamespacePayload(publishNamespaceMsg);
     const controlWriter = new ControlStreamWriter();
     const framed = controlWriter.encode(MessageType.PUBLISH_NAMESPACE, payload);

@@ -49,7 +49,7 @@ test("AuthTokenCache: REGISTER で登録され、サイズは 16 バイト + Tok
   const result = cache.register(1n, 7n, new Uint8Array([1, 2, 3]));
 
   assert.deepEqual(result, { status: "registered" });
-  // draft-ietf-moq-transport-21 §9.1.3: token size = 16 + Token Value 長
+  // draft-ietf-moq-transport-22 §9.1.3: token size = 16 + Token Value 長
   assert.equal(cache.size, 16 + 3);
 });
 
@@ -67,7 +67,7 @@ test("AuthTokenCache: 同一 Alias の再 REGISTER は duplicate-alias になり
   cache.register(5n, 1n, new Uint8Array([9]));
   const before = cache.size;
 
-  // draft-ietf-moq-transport-21 §8.9: 一度登録した Alias は delete されるまで再登録できない
+  // draft-ietf-moq-transport-22 §8.9: 一度登録した Alias は delete されるまで再登録できない
   const result = cache.register(5n, 2n, new Uint8Array([7, 7]));
 
   assert.deepEqual(result, { status: "duplicate-alias" });

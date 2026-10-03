@@ -1,7 +1,7 @@
 /**
  * PUBLISH / PUBLISH_DONE の異常系・境界値テスト
  *
- * draft-ietf-moq-transport-21 §8.5 (Reason Phrase) / §9.9 (PUBLISH_DONE):
+ * draft-ietf-moq-transport-22 §8.5 (Reason Phrase) / §9.9 (PUBLISH_DONE):
  * Reason Phrase の最大長は 1,024 バイトであり、超過は PROTOCOL_VIOLATION。
  * Error Reason は PUBLISH_DONE の最後のフィールドであり、後続データがあると
  * 消費バイト数が Message Body 長と一致しないため違反となる。
@@ -67,7 +67,7 @@ test("decodePublishDonePayload: 末尾に後続データがあると PROTOCOL_VI
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.8 (PUBLISH):
+ * draft-ietf-moq-transport-22 §9.8 (PUBLISH):
  * Track Properties は length プレフィックスを持たず、Message の Length フィールド
  * で終端が決まる。したがって PUBLISH には「末尾の後続データ」という不正が無く、
  * 残りバイトはすべて Track Properties として解釈される。

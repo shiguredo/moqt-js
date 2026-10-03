@@ -136,7 +136,7 @@ type ProcessCatalogPayloadResult =
  * SUBSCRIBE (Next Object (Location Filter Type 0x05)) と FETCH (フィルタなし) は
  * 独立して評価されるため、
  * 両リクエストの処理時刻の間に publish された Catalog オブジェクトは live と
- * FETCH の両方で届く (draft-ietf-moq-transport-21 §3.3.1。Fetch は「{0, 0} から
+ * FETCH の両方で届く (draft-ietf-moq-transport-22 §3.3.1。Fetch は「{0, 0} から
  * Largest Object まで」、Next Object 購読は Largest の次から始まるため、処理時刻の
  * ずれだけ範囲が重なる)。FETCH で配信済みの最大 Location 以下のオブジェクトは
  * 適用済みのため除去する (delta の再適用は非冪等であり、add の二重適用は
@@ -1182,7 +1182,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
    * Catalog を subscribe して受信を待つ
    *
    * 既存の catalog と live の catalog 更新をまとめて受信する。draft-21 で
-   * Joining FETCH は削除された (draft-ietf-moq-transport-21 §9.11) ため、
+   * Joining FETCH は削除された (draft-ietf-moq-transport-22 §9.11) ため、
    * 本実装では以下の 2 リクエストで代替する (仕様上の正式な置換は
    * FILL_PARAMETERS (§3.4) であり、実装は別途):
    * 1. SUBSCRIBE (Next Object (Location Filter Type 0x05) の Location Filter) で
@@ -2011,7 +2011,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   /**
    * 受信した映像 Object を、Group の切り替えの保留 (videoGroupGate) を通して処理する
    *
-   * draft-ietf-moq-transport-21 Section 2.1: Object は順不同で届きうる。前の Group の
+   * draft-ietf-moq-transport-22 Section 2.1: Object は順不同で届きうる。前の Group の
    * stream が開いている間に次の Group の Object が届いたら保留し、前の Group の Object を
    * 先に処理する
    */
@@ -2101,7 +2101,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       this.videoStats.keyFramesReceived++;
     }
 
-    // draft-ietf-moq-transport-21 Section 2.1: Object は順不同で届きうる。Group ごとに
+    // draft-ietf-moq-transport-22 Section 2.1: Object は順不同で届きうる。Group ごとに
     // 別の stream で届くため、前の Group の末尾が次の Group の先頭より後に届くことがある。
     // 参照するフレームを復号していない Object は decoder へ渡さない
     const admission = this.videoDecodeOrder.admit({

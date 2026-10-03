@@ -162,7 +162,7 @@ export const FetchSerializationFlags = {
 /**
  * Fetch Object Fields (Figure 29 in Section 11.4.1)
  */
-// draft-ietf-moq-transport-21 Section 11.1.2:
+// draft-ietf-moq-transport-22 Section 11.1.1:
 // "The Object Status is a field that is only present in objects that are
 // delivered via a SUBSCRIPTION, and is absent in Objects delivered via a FETCH."
 export interface FetchObjectFields {
@@ -216,7 +216,7 @@ export interface DecodedFetchObject {
   /**
    * End of Range indicator (Section 11.4.1.2)
    *
-   * draft-ietf-moq-transport-21:
+   * draft-ietf-moq-transport-22:
    * 設定されている場合、この Object は実際のデータではなく
    * 指定した Location までの範囲を示す End of Range indicator。
    */
@@ -239,7 +239,7 @@ export interface FetchObjectContext {
   publisherPriority: number;
   /**
    * 直近の Subgroup オブジェクトの Publisher Priority。
-   * draft-ietf-moq-transport-21 §12.1 の比較対象
+   * draft-ietf-moq-transport-22 §12.1 の比較対象
    * ("the previous Object with the same Subgroup ID") に使う値であり、
    * Subgroup オブジェクトでのみ更新される (Datagram / End of Range では
    * 保持する。Subgroup を持たないオブジェクトは比較対象外のため)。
@@ -274,7 +274,7 @@ export interface FetchObjectContext {
   hasPriorActualObject?: boolean;
   /**
    * 現在の Group 内の Subgroup ID ごとの直近の Publisher Priority。
-   * draft-ietf-moq-transport-21 §12.1 の比較対象
+   * draft-ietf-moq-transport-22 §12.1 の比較対象
    * ("the previous Object with the same Subgroup ID") を Subgroup が
    * 交互に出現する場合も追跡するために使う。Subgroup オブジェクトを
    * デコードするたびに解決後の Priority で更新し、Datagram では更新しない
@@ -321,7 +321,7 @@ export function encodeFetchObjectFields(
   const parts: Uint8Array[] = [];
 
   // Serialization Flags (varint)
-  // draft-ietf-moq-transport-21: vi64 としてエンコード
+  // draft-ietf-moq-transport-22: vi64 としてエンコード
   parts.push(encodeVarint(fields.serializationFlags));
 
   // End of Range の場合は Group ID と Object ID のみ
@@ -421,7 +421,7 @@ export function encodeFetchObjectFields(
   // Object Payload Length
   parts.push(encodeVarint(fields.payloadLength));
 
-  // draft-ietf-moq-transport-21 Section 11.1.2:
+  // draft-ietf-moq-transport-22 Section 11.1.1:
   // "The Object Status is a field that is only present in objects that are
   // delivered via a SUBSCRIPTION, and is absent in Objects delivered via a FETCH."
   // Fetch Object には Object Status を含めない
@@ -578,7 +578,7 @@ function decodeFetchSubgroupId(
  * 同一 Group・同一 Subgroup の直近の Subgroup オブジェクトとの Publisher
  * Priority の一致を検証する
  *
- * draft-ietf-moq-transport-21 §12.1 (Malformed Tracks):
+ * draft-ietf-moq-transport-22 §12.1 (Malformed Tracks):
  * "An Object with a particular Subgroup ID is received, but its Publisher
  *  Priority is different from that of the previous Object with the same
  *  Subgroup ID."
@@ -587,7 +587,7 @@ function decodeFetchSubgroupId(
  * throw する。上位ハンドラはこれを FETCH キャンセル (セッション終了ではない)
  * に変換する。
  *
- * 検出は Group スコープで行う。draft-ietf-moq-transport-21 §2.2:
+ * 検出は Group スコープで行う。draft-ietf-moq-transport-22 §2.2:
  * "The scope of a Subgroup ID is a Group, so Subgroups from different Groups
  *  MAY share a Subgroup ID without implying any relationship between them."
  * 異なる Group の同一 Subgroup ID は無関係であり、Priority が異なっても合法。
@@ -634,7 +634,7 @@ function checkSubgroupPriorityMismatch(
 /**
  * §12.1 条件 1 用に Subgroup ID ごとの直近 Priority の追跡を更新する
  *
- * draft-ietf-moq-transport-21 §12.1 (Malformed Tracks):
+ * draft-ietf-moq-transport-22 §12.1 (Malformed Tracks):
  * "An Object with a particular Subgroup ID is received, but its Publisher
  *  Priority is different from that of the previous Object with the same
  *  Subgroup ID."
@@ -734,7 +734,7 @@ export function decodeFetchObjectFields(
   let totalConsumed = 0;
 
   // Serialization Flags (varint)
-  // draft-ietf-moq-transport-21: vi64 としてエンコードされる
+  // draft-ietf-moq-transport-22: vi64 としてエンコードされる
   const [flagsRaw, flagsConsumed] = decodeVarint(data, offset + totalConsumed);
   const flags = Number(flagsRaw);
   totalConsumed += flagsConsumed;
@@ -874,15 +874,15 @@ export function decodeFetchObjectFields(
       properties = data.slice(offset + totalConsumed, offset + totalConsumed + propertiesLength);
       totalConsumed += propertiesLength;
 
-      // draft-ietf-moq-transport-21 §3.6:
+      // draft-ietf-moq-transport-22 §3.7:
       // Mandatory Track Property を Object Property として含む Object は malformed
       assertNoMandatoryTrackPropertyInObjectProperties(properties);
-      // draft-ietf-moq-transport-21 §8.3:
+      // draft-ietf-moq-transport-22 §8.3:
       // 既知 Type の Value が serialization に一致しない場合は
       // KEY_VALUE_FORMATTING_ERROR でセッションを閉じる
       assertKnownPropertyValueInObjectProperties(properties);
 
-      // draft-ietf-moq-transport-21 §10.8 / §10.9:
+      // draft-ietf-moq-transport-22 §10.8 / §10.9:
       // Prior Group ID Gap / Prior Object ID Gap のうち単一 Object で判定できる
       // malformed 条件 (gap が Group ID / Object ID より大きい) を検証する。
       assertPriorIdGapInObjectProperties(groupId, objectId, properties);
@@ -893,7 +893,7 @@ export function decodeFetchObjectFields(
   const [payloadLength, payloadLenConsumed] = decodeVarint(data, offset + totalConsumed);
   totalConsumed += payloadLenConsumed;
 
-  // draft-ietf-moq-transport-21 Section 11.1.2:
+  // draft-ietf-moq-transport-22 Section 11.1.1:
   // "The Object Status is a field that is only present in objects that are
   // delivered via a SUBSCRIPTION, and is absent in Objects delivered via a FETCH."
   // Fetch Object には Object Status は存在しない

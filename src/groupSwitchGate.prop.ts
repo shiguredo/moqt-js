@@ -3,7 +3,7 @@
  *
  * 各 Group を 1 本の Subgroup の stream で送る publisher の Object 列を生成し、
  * stream ごとの順序だけを保って stream をまたいだ到着順を任意に入れ替えて通す
- * (draft-ietf-moq-transport-21 Section 2.1: Object は順不同で届きうる)。各 stream の
+ * (draft-ietf-moq-transport-22 Section 2.1: Object は順不同で届きうる)。各 stream の
  * 終わりは、その stream の最後の Object の後の任意の位置で通知する。
  *
  * - 各 Object はちょうど 1 回渡される (reset まで含めて失われず、重複しない)

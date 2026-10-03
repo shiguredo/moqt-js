@@ -1,7 +1,7 @@
 /**
  * MOQT Error Codes
- * draft-ietf-moq-transport-21 Section 16.11 (Error Codes)
- * https://www.ietf.org/archive/id/draft-ietf-moq-transport-21.html#section-16.11
+ * draft-ietf-moq-transport-22 Section 16.11 (Error Codes)
+ * https://www.ietf.org/archive/id/draft-ietf-moq-transport-22.html#section-16.11
  */
 
 import { PublishDoneStatusCode } from "./message/types";
@@ -12,7 +12,7 @@ export { PublishDoneStatusCode };
 /**
  * Session Termination Error Codes (Section 12.2 Session Termination Codes)
  *
- * draft-ietf-moq-transport-21 Section 6.6 (Termination)
+ * draft-ietf-moq-transport-22 Section 6.6 (Termination)
  *
  * draft-ietf-moq-transport-21 Appendix A.2 で 0x15
  * VERSION_NEGOTIATION_FAILED は削除された。
@@ -40,7 +40,7 @@ export const SessionErrorCode = {
   /**
    * TOO_MANY_REQUEST_UPDATES (Section 12.2)
    *
-   * draft-ietf-moq-transport-21:
+   * draft-ietf-moq-transport-22:
    * MAX_REQUEST_UPDATES で広告した上限を超える REQUEST_UPDATE を受信した。
    */
   TOO_MANY_REQUEST_UPDATES: 0x1b,
@@ -51,7 +51,7 @@ export type SessionErrorCode = (typeof SessionErrorCode)[keyof typeof SessionErr
 /**
  * REQUEST_ERROR Codes (Section 12.3 Request Error Codes)
  *
- * draft-ietf-moq-transport-21:
+ * draft-ietf-moq-transport-22:
  * - GOING_AWAY (0x6) を追加
  * - EXCESSIVE_LOAD (0x9) を追加
  * - DUPLICATE_SUBSCRIPTION を削除（draft-21 §3.1 で同一 Track への複数サブスクリプションが許可）
@@ -78,12 +78,12 @@ export const RequestErrorCode = {
   REDIRECT: 0x34,
   /**
    * CONFLICTING_FILTERS (Section 12.3)
-   * draft-ietf-moq-transport-21: SUBSCRIBE_TRACKS 応答専用
+   * draft-ietf-moq-transport-22: SUBSCRIBE_TRACKS 応答専用
    */
   CONFLICTING_FILTERS: 0x35,
   /**
    * INVALID_FILTER (Section 12.3)
-   * draft-ietf-moq-transport-21: フィルタ不正・上限超過
+   * draft-ietf-moq-transport-22: フィルタ不正・上限超過
    */
   INVALID_FILTER: 0x36,
 } as const;
@@ -91,12 +91,12 @@ export const RequestErrorCode = {
 export type RequestErrorCode = (typeof RequestErrorCode)[keyof typeof RequestErrorCode];
 
 /**
- * draft-ietf-moq-transport-21 §13 (Grease):
+ * draft-ietf-moq-transport-22 §13 (Grease):
  * 未知のエラーコードは INTERNAL_ERROR として扱う。
  * Receipt of an unknown error code MUST be treated as equivalent to
  * INTERNAL_ERROR for that context.
  *
- * draft-ietf-moq-transport-21 §16.11.2 (REQUEST_ERROR Codes) に 0x17 は
+ * draft-ietf-moq-transport-22 §16.11.2 (REQUEST_ERROR Codes) に 0x17 は
  * 収載されていない。UNKNOWN_AUTH_TOKEN_ALIAS (0x17) は §16.11.1 (Session
  * Termination Error Codes) にのみ収載されるコードであり、§8.9 が未登録
  * Alias の参照に指名するコードでもある。本実装はそのコードを Session
@@ -114,7 +114,7 @@ export function normalizeRequestErrorCode(code: number): RequestErrorCode {
 }
 
 /**
- * draft-ietf-moq-transport-21 §13 (Grease):
+ * draft-ietf-moq-transport-22 §13 (Grease):
  * 未知の PUBLISH_DONE コードは INTERNAL_ERROR として扱う。
  * 削除された 0x3 SUBSCRIPTION_ENDED も未知扱いで正規化される。
  */
@@ -128,7 +128,7 @@ export function normalizePublishDoneCode(code: number): PublishDoneStatusCode {
 }
 
 /**
- * draft-ietf-moq-transport-21 §13 (Grease):
+ * draft-ietf-moq-transport-22 §13 (Grease):
  * 未知の Session Termination エラーコードは INTERNAL_ERROR として扱う。
  * 削除された 0x15 VERSION_NEGOTIATION_FAILED も未知扱いで正規化される。
  */
@@ -144,7 +144,7 @@ export function normalizeSessionErrorCode(code: number): SessionErrorCode {
 /**
  * Stream Reset Error Codes (Section 16.11.4)
  *
- * draft-ietf-moq-transport-21 Section 16.11.4 (Stream Reset Error Codes):
+ * draft-ietf-moq-transport-22 Section 16.11.4 (Stream Reset Error Codes):
  * - GOING_AWAY (0x4) を追加
  * - UNKNOWN_OBJECT_STATUS (0x6) を追加
  * - EXPIRED_AUTH_TOKEN (0x7) を追加
@@ -167,7 +167,7 @@ export const DataStreamErrorCode = {
 export type DataStreamErrorCode = (typeof DataStreamErrorCode)[keyof typeof DataStreamErrorCode];
 
 /**
- * draft-ietf-moq-transport-21 §13 (Grease):
+ * draft-ietf-moq-transport-22 §13 (Grease):
  * 未知の Data Stream Reset エラーコードは INTERNAL_ERROR として扱う。
  */
 const DATA_STREAM_ERROR_CODE_SET = new Set(Object.values(DataStreamErrorCode));
@@ -184,7 +184,7 @@ export function normalizeDataStreamErrorCode(code: number): DataStreamErrorCode 
  * 取り出す
  *
  * WebTransport は失敗値 (WebTransportError) の `streamErrorCode` に code を載せる。
- * draft-ietf-moq-transport-21 Section 12.5 の code に正規化し、未知の code は
+ * draft-ietf-moq-transport-22 Section 12.5 の code に正規化し、未知の code は
  * INTERNAL_ERROR として扱う (Section 13)。数値の code を持たない失敗値からは取り出さない。
  *
  * @param rawError - read / write の失敗値
@@ -227,7 +227,7 @@ export class SessionError extends MoqtError {
 /**
  * Redirect 情報 (Section 9.4.1)
  *
- * draft-ietf-moq-transport-21 Section 9.4.1 (Redirect Structure):
+ * draft-ietf-moq-transport-22 Section 9.4.1 (Redirect Structure):
  * サーバーがクライアントに対して別の接続先への再接続を指示する。
  * Track Namespace は tuple 形式で保持する。
  */
@@ -235,7 +235,7 @@ export interface RedirectInfo {
   /**
    * 新しいセッションの URI
    *
-   * draft-ietf-moq-transport-21 Section 9.4.1: 空のときは要求側が現在のセッション URI を
+   * draft-ietf-moq-transport-22 Section 9.4.1: 空のときは要求側が現在のセッション URI を
    * 使う SHOULD。
    */
   connectUri: string;
@@ -261,7 +261,7 @@ export class RequestError extends MoqtError {
   /**
    * 再試行までの最小時間
    *
-   * draft-ietf-moq-transport-21 Section 9.4.2: 「ミリ秒 + 1」の生値であり、0 は
+   * draft-ietf-moq-transport-22 Section 9.4.2: 「ミリ秒 + 1」の生値であり、0 は
    * 「そのままでは再試行しない」を意味する (Section 12.3 により、0 であっても
    * Redirect の追従は妨げられない)。受信した REQUEST_ERROR ではこのフィールドは必須の
    * ため、undefined になるのはライブラリがローカルに生成したエラー (GOAWAY による
@@ -271,7 +271,7 @@ export class RequestError extends MoqtError {
   /**
    * Redirect 情報
    *
-   * draft-ietf-moq-transport-21 Section 9.4.2: Error Code が REDIRECT のときだけ存在する。
+   * draft-ietf-moq-transport-22 Section 9.4.2: Error Code が REDIRECT のときだけ存在する。
    * ライブラリは値の保持とアプリへの通知のみを行い、再試行や追従は自動では行わない
    * (Section 12.3 の SHOULD は要求側が新しいセッションを張って再試行することを求めるが、
    * 再試行の判断はアプリに委ねる)。
@@ -294,7 +294,7 @@ export class RequestError extends MoqtError {
 /**
  * decode 関数がバッファ不足を検出したときに投げるエラー
  *
- * draft-ietf-moq-transport-21 のデータストリーム / 制御メッセージ decode は、
+ * draft-ietf-moq-transport-22 のデータストリーム / 制御メッセージ decode は、
  * バッファに必要なバイト数が揃っていない時点で例外を投げる。
  * 受信ループはこのエラーを受けて次のチャンクを待つ。
  */
@@ -308,7 +308,7 @@ export class IncompleteDataError extends Error {
 /**
  * プロトコル違反 (仕様で定められた値・形式に違反した受信データ) を検出したときに投げるエラー
  *
- * draft-ietf-moq-transport-21 で MUST 要件として定められた受信データの妥当性検証
+ * draft-ietf-moq-transport-22 で MUST 要件として定められた受信データの妥当性検証
  * (ストリームヘッダーの予約値、Object Status の不正値、Properties Length の不整合等) で
  * 違反を検出した場合に投げる。受信ループはこのエラーを受けて
  * PROTOCOL_VIOLATION でセッションを閉じる。
@@ -323,7 +323,7 @@ export class ProtocolViolationError extends Error {
 /**
  * Malformed Track を検出したときに投げるエラー
  *
- * draft-ietf-moq-transport-21 §12.1 / §10.7 / §10.8 / §10.9:
+ * draft-ietf-moq-transport-22 §12.1 / §10.7 / §10.8 / §10.9:
  * Object 内で MUST 規定 (IMMUTABLE_PROPERTIES の再帰禁止、各 Property の Object 当たり
  * 1 つだけ、同一 Subgroup 内の Publisher Priority 不一致等) が違反された場合、
  * Track は malformed として扱われる。セッションは閉じず、データストリーム単位で
@@ -365,7 +365,7 @@ export class InvalidFilterError extends Error {
 /**
  * 閉じた Subgroup への送信を拒否するときに投げるエラー
  *
- * draft-ietf-moq-transport-21 §11.3.2 (Closing Subgroup Streams):
+ * draft-ietf-moq-transport-22 §11.3.2 (Closing Subgroup Streams):
  * "A publisher that receives a STOP_SENDING on a Subgroup stream SHOULD NOT
  *  attempt to open a new stream to deliver additional Objects in that Subgroup."
  *

@@ -2,7 +2,7 @@
  * CatchUpGate の Property-Based Tests
  *
  * SUBSCRIBE_OK の LARGEST_OBJECT を境界にした判定が、Location の辞書順
- * (draft-ietf-moq-transport-21 Section 8.2 の Group ID と Object ID の比較) と一致することを
+ * (draft-ietf-moq-transport-22 Section 8.2 の Group ID と Object ID の比較) と一致することを
  * 確かめる。境界そのもの (同じ位置、Group をまたぐ場合) の境界値と、reset の振る舞いは
  * catchUpGate.test.ts の単体テストが固定する。
  *

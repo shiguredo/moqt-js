@@ -13,7 +13,7 @@ export type VideoSourceType = "none" | "dummy" | "camera";
 export type AudioSourceType = "none" | "dummy" | "microphone";
 
 // 音声 Object の送り方。既定は subgroup (ストリーム)。datagram は
-// draft-ietf-moq-transport-21 §11.2。reliable-only (WT-H2) では使えない
+// draft-ietf-moq-transport-22 §11.2。reliable-only (WT-H2) では使えない
 export type AudioDelivery = "subgroup" | "datagram";
 
 export type AudioCodecType = "opus" | "aac";

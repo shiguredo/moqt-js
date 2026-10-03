@@ -1,7 +1,7 @@
 /**
  * session/bidi.ts の単体テスト: 応答と同一チャンクに連結されたメッセージの処理
  *
- * draft-ietf-moq-transport-21 §6.4.2 (Request Streams) / §9.3 / §9.5 / §9.10:
+ * draft-ietf-moq-transport-22 §6.4.2 (Request Streams) / §9.3 / §9.5 / §9.10:
  * 制御メッセージは単一の QUIC ストリーム上で Length プレフィックスにより連続して
  * 運ばれるため、最初の応答 (PUBLISH_OK / SUBSCRIBE_OK / FETCH_OK) と後続メッセージが
  * 同一チャンクに同居し得る。ControlStreamReader.feed は取り出したメッセージを
@@ -25,7 +25,7 @@ import { bidiReadPublishResponse, bidiReadSubscribeResponse } from "./bidi";
 
 // ============================================================================
 // 同一チャンクの連結メッセージ
-// draft-ietf-moq-transport-21 §6.4.2 / §9.3 / §9.5 / §9.10
+// draft-ietf-moq-transport-22 §6.4.2 / §9.3 / §9.5 / §9.10
 // ============================================================================
 
 /**
@@ -46,7 +46,7 @@ function enqueueCoalesced(
 /**
  * 空の Track Properties を持つ PUBLISH_OK を組み立てる
  *
- * draft-ietf-moq-transport-21 §9.3 (REQUEST_OK):
+ * draft-ietf-moq-transport-22 §9.3 (REQUEST_OK):
  * PUBLISH_OK の Track Properties は空が必須であり、載せると
  * PROTOCOL_VIOLATION になる。
  */
@@ -171,7 +171,7 @@ test("bidiReadPublishResponse: PUBLISH_OK と同一チャンクの REQUEST_UPDAT
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.3 / §9.10:
+ * draft-ietf-moq-transport-22 §9.3 / §9.10:
  * 送信 SUBSCRIBE の SUBSCRIBE_OK と同一チャンクに PUBLISH_DONE が連結されている
  * 場合も取りこぼさず処理することを検証する。
  *
@@ -231,7 +231,7 @@ test("bidiReadSubscribeResponse: SUBSCRIBE_OK と同一チャンクの PUBLISH_D
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.3 / §9.10:
+ * draft-ietf-moq-transport-22 §9.3 / §9.10:
  * 送信 SUBSCRIBE の SUBSCRIBE_OK と同一チャンクに PUBLISH_STATE_NOTIFY が
  * 連結されている場合も取りこぼさず処理することを検証する。
  *

@@ -24,7 +24,7 @@ export interface Parameter {
 /**
  * Key-Value-Pair の Value 最大長（バイト）
  *
- * draft-ietf-moq-transport-21 §8.3:
+ * draft-ietf-moq-transport-22 §8.3:
  * 「The maximum length of a value is 2^16-1 bytes. If an endpoint receives
  *  a length larger than the maximum, it MUST close the session with a
  *  PROTOCOL_VIOLATION.」
@@ -34,7 +34,7 @@ export const MAX_KVP_VALUE_LENGTH = 65535;
 /**
  * Reason Phrase の最大長 (バイト)
  *
- * draft-ietf-moq-transport-21 Section 8.5:
+ * draft-ietf-moq-transport-22 Section 8.5:
  * "The reason phrase length has a maximum value of 1024 bytes.
  *  If an endpoint receives a length exceeding the maximum,
  *  it MUST close the session with a PROTOCOL_VIOLATION"

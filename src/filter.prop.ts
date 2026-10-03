@@ -376,7 +376,7 @@ const noEndGroupFilterArb: fc.Arbitrary<{
 );
 
 /**
- * draft-ietf-moq-transport-21 §3.3.1:
+ * draft-ietf-moq-transport-22 §3.3.1:
  * フィルタ未指定は全 Object 通過。任意の Location で成り立つ。
  */
 test("objectMatchesFilter: filter 未指定は任意の Location を通過する (PBT)", () => {
@@ -388,7 +388,7 @@ test("objectMatchesFilter: filter 未指定は任意の Location を通過する
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.3.1:
+ * draft-ietf-moq-transport-22 §3.3.1:
  * "Start Location 以上" が通過条件である。Start より小さい Location は
  * 終端の内側でも不通過になる。
  */
@@ -423,7 +423,7 @@ test("objectMatchesFilter: Start より小さい Location は不通過 (PBT)", (
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.3.1:
+ * draft-ietf-moq-transport-22 §3.3.1:
  * End Group を持つフィルタは End Group より大きい Group を不通過にする。
  * End Object を持つ場合は End Group 内で End Object より大きい Object も不通過。
  */
@@ -459,7 +459,7 @@ test("objectMatchesFilter: End Group / End Object の外側は不通過 (PBT)", 
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.3.1:
+ * draft-ietf-moq-transport-22 §3.3.1:
  * 終端を持たないフィルタは Start 以降で単調である。通過した Location より
  * 大きい Location も必ず通過する (上限が無いため)。
  */
@@ -486,7 +486,7 @@ test("objectMatchesFilter: 終端なしフィルタは Start 以降で単調 (PB
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.3.1:
+ * draft-ietf-moq-transport-22 §3.3.1:
  * Group が Start Group より大きければ、Object の値に関わらず通過する
  * (End Group がある場合は End Group まで)。
  */
@@ -593,7 +593,7 @@ const rangeFilterValuesArb: fc.Arbitrary<RangeFilterValues> = fc.record({
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.3.2:
+ * draft-ietf-moq-transport-22 §3.3.2:
  * フィルタなし (空配列) と削除エントリのみは全通過。
  */
 test("rangeFiltersMatch: フィルタなしと削除のみは全通過 (PBT)", () => {
@@ -615,7 +615,7 @@ test("rangeFiltersMatch: フィルタなしと削除のみは全通過 (PBT)", (
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.3.2:
+ * draft-ietf-moq-transport-22 §3.3.2:
  * SetID ごとの AND / 異なる SetID 間の OR は順序に依存しない。
  */
 test("rangeFiltersMatch: 指定の並び順を変えても結果が変わらない (PBT)", () => {
@@ -632,7 +632,7 @@ test("rangeFiltersMatch: 指定の並び順を変えても結果が変わらな�
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.3.2:
+ * draft-ietf-moq-transport-22 §3.3.2:
  * Length=0 の削除エントリは評価対象から除外されるため、加えても結果が変わらない。
  */
 test("rangeFiltersMatch: 削除エントリを加えても結果が変わらない (PBT)", () => {
@@ -650,7 +650,7 @@ test("rangeFiltersMatch: 削除エントリを加えても結果が変わらな�
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.3.2:
+ * draft-ietf-moq-transport-22 §3.3.2:
  * 同一 SetID は AND で結合するため、同じ SetID の指定を足しても
  * 不通過が通過に変わることはない (単調)。
  */
@@ -687,7 +687,7 @@ test("rangeFiltersMatch: 同一 SetID の追加で通過に変わらない (PBT)
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.3.2:
+ * draft-ietf-moq-transport-22 §3.3.2:
  * 異なる SetID 間は OR で結合するため、新しい SetID の指定を足しても
  * 通過が不通過に変わることはない (単調)。
  */

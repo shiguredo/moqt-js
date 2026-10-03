@@ -22,11 +22,11 @@ import {
 
 // ============================================================================
 // bidiHandlePublishStateNotify のテスト
-// draft-ietf-moq-transport-21 §9.10 (PUBLISH_STATE_NOTIFY)
+// draft-ietf-moq-transport-22 §9.10 (PUBLISH_STATE_NOTIFY)
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-21 §9.10:
+ * draft-ietf-moq-transport-22 §9.10:
  * subscribe ロールで publisher 発の PUBLISH_STATE_NOTIFY を受信した場合、
  * presence のパラメータが subscriber 状態に反映され、応答は送信しないことを
  * 検証する。
@@ -70,7 +70,7 @@ test("bidiReadRequestStreamMessages: PUBLISH_STATE_NOTIFY (subscribe ロール) 
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.10:
+ * draft-ietf-moq-transport-22 §9.10:
  * 同じ内容の LOCATION_FILTER を含む PUBLISH_STATE_NOTIFY が届いても、
  * 直前で反映した LARGEST_OBJECT による再解決で開始位置が前進しないことを
  * 検証する。仕様は値の変化したパラメータのみを運ぶと定めるため、再報告は
@@ -134,7 +134,7 @@ test("bidiReadRequestStreamMessages: 同じ LOCATION_FILTER の PUBLISH_STATE_NO
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.10:
+ * draft-ietf-moq-transport-22 §9.10:
  * 値の変化した LOCATION_FILTER は従来どおり反映されることを検証する。
  * 等価判定で再解決を避ける対象は「同じ内容の再報告」だけであり、
  * 変化したフィルタの適用を止めてはならない。
@@ -197,7 +197,7 @@ test("bidiReadRequestStreamMessages: 変化した LOCATION_FILTER の PUBLISH_ST
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.10:
+ * draft-ietf-moq-transport-22 §9.10:
  * FORWARD を省略した PUBLISH_STATE_NOTIFY では forwardState が不変であることを
  * 検証する (省略時は不変)。
  */
@@ -317,7 +317,7 @@ test("bidiReadRequestStreamMessages: End Group 超過の LOCATION_FILTER の PUB
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.10:
+ * draft-ietf-moq-transport-22 §9.10:
  * publish ロール (対向 subscriber 発) で PUBLISH_STATE_NOTIFY を受信した場合、
  * PROTOCOL_VIOLATION でセッションを閉じることを検証する。
  */

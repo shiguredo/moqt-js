@@ -34,7 +34,7 @@ import { useValueToken } from "../testSupport/helpers";
 // AUTHORIZATION_TOKEN 付与（draft-ietf-moq-msf-01 §11.4.3）
 // ============================================================================
 
-// USE_VALUE スキームのトークン（draft-ietf-moq-transport-21 §8.9 Alias Type 0x3）
+// USE_VALUE スキームのトークン（draft-ietf-moq-transport-22 §8.9 Alias Type 0x3）
 test("encodeAuthorizationTokenParameter: 0x03 パラメータを構築し round-trip する", () => {
   const param = encodeAuthorizationTokenParameter(useValueToken());
   assert.equal(param.type, MessageParameterType.AUTHORIZATION_TOKEN);
@@ -130,7 +130,7 @@ test("buildSubscribeTracksParameters: §9.18 の一覧に無いパラメータ�
 
 // ============================================================================
 // buildPublishTrackProperties (GREASE)
-// draft-ietf-moq-transport-21 §13 (Grease) / §3.6 (Mandatory Track Properties)
+// draft-ietf-moq-transport-22 §13 (Grease) / §3.7 (Mandatory to Understand Track Properties)
 // ============================================================================
 
 test("buildPublishTrackProperties: grease 未指定は GREASE Property を含まない", () => {
@@ -172,7 +172,7 @@ test("buildPublishTrackProperties: grease: true でも他の Track Property は�
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-21 §3.3.2:
+ * draft-ietf-moq-transport-22 §3.3.2:
  * 削除 (Length=0) は REQUEST_UPDATE のみに定義されるため、
  * SUBSCRIBE_TRACKS で削除を指定すると throw することを検証する。
  */
@@ -188,7 +188,7 @@ test("buildSubscribeTracksParameters: 削除指定 (remove: true) で throw す�
 
 // ============================================================================
 // buildSubscribeParameters / buildFetchParameters (送信ガード)
-// draft-ietf-moq-transport-21 §3.3.1 / §3.3.2
+// draft-ietf-moq-transport-22 §3.3.1 / §3.3.2
 // ============================================================================
 
 test("buildSubscribeParameters: 削除指定で throw する", () => {

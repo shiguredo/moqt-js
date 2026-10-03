@@ -1,6 +1,6 @@
 /**
  * Publisher Unit Tests
- * draft-ietf-moq-transport-21 Section 3.2.1
+ * draft-ietf-moq-transport-22 Section 3 (Publishing and Receiving Tracks)
  */
 
 import { test, assert } from "vite-plus/test";
@@ -55,7 +55,7 @@ test("done は closed 状態では onDoneInternal を呼ばない", async () => 
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.9:
+ * draft-ietf-moq-transport-22 §9.9:
  * 並行 done() 呼び出しで二重 PUBLISH_DONE 送信が起きないよう、
  * 進行中の done() を再利用して onDoneInternal を 1 回だけ実行することを検証する。
  */
@@ -178,7 +178,7 @@ test("done 実行中に markClosed されても onDoneInternal は 1 回だけ�
   assert.equal(publisher.state, "closed");
 });
 
-// draft-ietf-moq-transport-21 §9.2 (GOAWAY):
+// draft-ietf-moq-transport-22 §9.2 (GOAWAY):
 // "A GOAWAY MAY also be sent on a request stream to initiate migration
 //  of that individual request."
 // goawayCallback が設定され、GOAWAY 受信時に呼び出されることを検証する。
@@ -196,7 +196,7 @@ test("goawayCallback が設定できる", () => {
 });
 
 /**
- * draft-ietf-moq-transport-21 §11.1.2 / §11.1.3:
+ * draft-ietf-moq-transport-22 §11.1.1 / §11.1.2:
  * status / payload 整合と END_OF_TRACK 後送信の検証。
  * 違反は委譲前に検出し、通知と返値の reject (sendObject) または
  * 通知と同期 throw (sendDatagram) で呼び出し側へ返す。
@@ -407,7 +407,7 @@ test("明示 NORMAL の非空 payload と空 payload の END_OF_GROUP は送信�
 });
 
 test("END_OF_GROUP 送信後の同一 Group への sendObject は失敗する", async () => {
-  // draft-ietf-moq-transport-21 §11.1.2 (Object Status):
+  // draft-ietf-moq-transport-22 §11.1.1 (Object Status):
   // END_OF_GROUP は Group の最終 Object を宣言するため、同じ Group への後続送信は
   // guard で拒否され、通知してから返値の reject になることを単体層で固定する。
   // 委譲先へ渡さないことと、別の Group への送信は妨げないことも合わせて確認する
@@ -734,7 +734,7 @@ test("sendDatagram: 購読の Location Filter の範囲外は送信せず Larges
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.9 / §9.5.1:
+ * draft-ietf-moq-transport-22 §9.9 / §9.5.1:
  * done() (TRACK_ENDED) と REQUEST_UPDATE 拒否経路 (UPDATE_FAILED) が並行しても、
  * 同じ donePromise 排他を通るため PUBLISH_DONE は 1 回だけ送られる。
  * 先に排他を取得した done() の TRACK_ENDED が勝つ。
@@ -761,7 +761,7 @@ test("terminate: done() が先なら TRACK_ENDED を 1 回だけ送る", async (
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.9 / §9.5.1:
+ * draft-ietf-moq-transport-22 §9.9 / §9.5.1:
  * 拒否経路が排他を先に取得した場合は UPDATE_FAILED を 1 回だけ送り、
  * 並行する done() は何も送らない。
  */

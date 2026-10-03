@@ -9,7 +9,7 @@
  * - 各 Group の先頭 (Object ID 0) はキーフレームであり、以降は直前の Object を参照する
  *   delta である
  * - publisher は Object ID を飛ばすことがあり、飛ばした数は次の Object の Prior Object
- *   ID Gap (draft-ietf-moq-transport-21 Section 10.9) で示す
+ *   ID Gap (draft-ietf-moq-transport-22 Section 10.9) で示す
  * - 経路では任意の Object が失われ、到着順は任意に入れ替わる (Section 2.1)
  *
  * 境界値 (前の Group の遅着、Prior Object ID Gap の範囲外の欠けなど) は

@@ -174,7 +174,7 @@ test("formatMessageData は underscore なしの大文字キーを Parameters �
   assert.ok(result.indexOf("FOO: 1") < result.indexOf("Parameters:"));
 });
 
-// trackNamespace + trackName は仕様の Full Track Name 形式 (draft-ietf-moq-transport-21
+// trackNamespace + trackName は仕様の Full Track Name 形式 (draft-ietf-moq-transport-22
 // §8.8) の 1 行にまとめ、生の配列とトラック名を別々に出さない。
 test("formatMessageData は trackNamespace と trackName を Full Track Name 1 行にまとめる", () => {
   const result = formatMessageData({ trackNamespace: ["room", "123"], trackName: "video" });

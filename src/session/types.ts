@@ -31,7 +31,7 @@ export interface NamespaceSubscriptionState {
   namespacePrefix: string[];
   /**
    * REQUEST_UPDATE で送信中 (REQUEST_OK 未受信) の新 Track Namespace Prefix。
-   * draft-ietf-moq-transport-21 §9.5.2:
+   * draft-ietf-moq-transport-22 §9.5.2:
    * REQUEST_OK 受信時に namespacePrefix へ反映し、REQUEST_ERROR 時は反映せずクリアする。
    */
   // セッション内部の状態オブジェクトで、解放時に明示的に undefined を代入するため `| undefined` を付ける
@@ -48,14 +48,14 @@ export interface TracksSubscriptionState {
   namespacePrefix: string[];
   /**
    * SUBSCRIBE_TRACKS 送信時に指定された Range Filters。
-   * draft-ietf-moq-transport-21 §3.3.2:
+   * draft-ietf-moq-transport-22 §3.3.2:
    * TRACK_PROPERTY_FILTER は受信 PUBLISH の評価に使用する。
    */
   // セッション内部の状態オブジェクトで、解放時に明示的に undefined を代入するため `| undefined` を付ける
   rangeFilters?: RangeFilterSpec[] | undefined;
   /**
    * REQUEST_UPDATE で送信中 (REQUEST_OK 未受信) の新 Track Namespace Prefix。
-   * draft-ietf-moq-transport-21 §9.5.2:
+   * draft-ietf-moq-transport-22 §9.5.2:
    * REQUEST_OK 受信時に namespacePrefix へ反映し、REQUEST_ERROR 時は反映せずクリアする。
    */
   pendingPrefix?: string[] | undefined;
@@ -137,7 +137,7 @@ export interface SessionInternal extends BidiSessionInternal {
   // ============================================================
   // その他 (incoming.ts / namespaceLoops.ts / publish.ts / session.ts)
   // ============================================================
-  // draft-ietf-moq-transport-21 §13 (Grease): true のとき Track / Object Properties に
+  // draft-ietf-moq-transport-22 §13 (Grease): true のとき Track / Object Properties に
   // GREASE Property を 1 つ注入する。ConnectOptions.grease を initialize() で受け渡す。
   readonly grease: boolean;
 

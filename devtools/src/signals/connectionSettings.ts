@@ -48,7 +48,7 @@ function randomNamespaceSuffix(): string {
 export const url = signal("");
 // Save を押した MOQT URI。Forget するまで OPFS に残す。null は覚えていない
 export const savedServerUrl = signal<string | null>(null);
-// MOQT URI の Fragment Identifier (draft-ietf-moq-transport-21 §6.1.1)
+// MOQT URI の Fragment Identifier (draft-ietf-moq-transport-22 §6.1.1)
 // MOQT URI 欄に `#` 以降があれば、その値を映す (先頭の `#` は付けない)。
 // 画面では読み取り専用で、変更するときは MOQT URI 欄を編集する。
 export const fragment = signal("");
@@ -146,7 +146,7 @@ export const audioAutoGainControl = signal(true);
 
 // 配信設定
 // MAX_CACHE_DURATION: Relay がオブジェクトをキャッシュして良い最大時間（ミリ秒）
-// draft-ietf-moq-transport-21 Section 10.3 (MAX CACHE DURATION)
+// draft-ietf-moq-transport-22 Section 10.3 (MAX CACHE DURATION)
 // デフォルト: 600000ms (10分)
 export const maxCacheDuration = signal(600000);
 
@@ -185,7 +185,7 @@ export const settingsDisabled = signal(false);
 export const mode = signal<DevtoolsMode>("both");
 
 // Authorization Token (SETUP オプション 0x03)
-// draft-ietf-moq-transport-21 §9.1.4 (AUTHORIZATION TOKEN Setup Option)
+// draft-ietf-moq-transport-22 §9.1.4 (AUTHORIZATION TOKEN Setup Option)
 // SETUP では DELETE / USE_ALIAS は仕様上禁止 (§9.1.4)。
 // REGISTER (0x1) または USE_VALUE (0x3) のみ。
 export type AuthorizationTokenAliasTypeUi = "useValue" | "register";
@@ -296,7 +296,7 @@ export function buildAuthorizationToken(): AuthorizationToken | undefined {
  * draft-ietf-moq-msf-01 §11.1.1: c4m は Base64 encoded C4M token。
  * draft-ietf-moq-c4m-01 §7.1 Table 4: Token Type 0x01 は CAT。
  * §7.1.1: 0x01 の Token Payload は CBOR エンコードされた CWT として直列化した CAT。
- * draft-ietf-moq-transport-21 §8.9: Token Type 0 は表に無い型であり out-of-band で
+ * draft-ietf-moq-transport-22 §8.9: Token Type 0 は表に無い型であり out-of-band で
  * 交渉するもので、CAT として扱われない。そのため 0x01 を設定する。
  * SETUP の AUTHORIZATION_TOKEN (0x03) では USE_VALUE (0x3) で送るため、Alias Type は
  * useValue のままとする (§9.1.4: SETUP で DELETE / USE_ALIAS を受けたら PROTOCOL_VIOLATION)。
@@ -522,7 +522,7 @@ export async function fetchAudioOutputDevices(): Promise<void> {
 
 /**
  * `connect()` に渡す MOQT URI を現在の設定から構築する。
- * draft-ietf-moq-transport-21 §6.1.1 (Fragment Identifiers) に従い
+ * draft-ietf-moq-transport-22 §6.1.1 (Fragment Identifiers) に従い
  * `fragment` が空でなければ `#type:value` を連結する。
  */
 export function buildConnectUrl(): string {
@@ -538,7 +538,7 @@ export function buildConnectUrl(): string {
 }
 
 /**
- * MOQT URI の入力から fragment を取り出す (draft-ietf-moq-transport-21 §6.1.1)
+ * MOQT URI の入力から fragment を取り出す (draft-ietf-moq-transport-22 §6.1.1)
  *
  * `#` 以降が `type:value` の形のときだけ fragment として返す。形になっていない `#` 以降は
  * fragment ではないため null を返す。
@@ -549,7 +549,7 @@ function extractRelayUriFragment(input: string): string | null {
     return null;
   }
   const fragmentValue = input.slice(hashIndex + 1);
-  // fragment type identifier は ASCII 小文字 / 数字 / ハイフン (draft-ietf-moq-transport-21 §6.1.1)
+  // fragment type identifier は ASCII 小文字 / 数字 / ハイフン (draft-ietf-moq-transport-22 §6.1.1)
   return /^[a-z0-9-]+:/.test(fragmentValue) ? fragmentValue : null;
 }
 

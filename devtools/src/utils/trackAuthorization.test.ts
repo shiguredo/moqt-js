@@ -5,7 +5,7 @@ import {
   subscribeAuthorizationTokenOptions,
 } from "./trackAuthorization";
 
-// テストで使う SETUP のトークン (draft-ietf-moq-transport-21 §8.9 の USE_VALUE)
+// テストで使う SETUP のトークン (draft-ietf-moq-transport-22 §8.9 の USE_VALUE)
 const SETUP_TOKEN: AuthorizationToken = {
   aliasType: AuthorizationTokenAliasType.USE_VALUE,
   tokenType: 1n,

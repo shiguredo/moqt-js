@@ -37,7 +37,7 @@
  * - 正常な PUBLISH_SKIPPED でセッションが閉じない (tracks ループ)
  * - 正常な REQUEST_OK で解決されセッションが閉じない (publication ループ)
  *
- * draft-ietf-moq-transport-21 §6.4.2.2 (Graceful Request Stream Closure) /
+ * draft-ietf-moq-transport-22 §6.4.2.2 (Graceful Request Stream Closure) /
  * §9.2 (GOAWAY) / §9.3 (REQUEST_OK) / §9.5.1 (応答前にストリームが閉じた場合) /
  * §9.5.2 (Updating Namespace Subscriptions) / §9.14 (PUBLISH_NAMESPACE) /
  * §9.15 (SUBSCRIBE_NAMESPACE) / §9.16 (NAMESPACE) / §9.17 (NAMESPACE_DONE) /
@@ -96,7 +96,7 @@ const DECOY_REQUEST_ID = 100n;
 /**
  * Track Namespace のフィールド
  *
- * draft-ietf-moq-transport-21 §8.7:
+ * draft-ietf-moq-transport-22 §8.7:
  * "Each Track Namespace Field Value MUST contain at least one byte."
  * 空フィールドは encode 時に弾かれるため生成しない。
  */

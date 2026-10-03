@@ -54,7 +54,7 @@ export const PUBLISH_STATE_NOTIFY_ALLOWED_PARAMS = new Set<number>([
 /**
  * REQUEST_OK (TRACK_STATUS_OK) の許可パラメータ
  *
- * draft-ietf-moq-transport-21 §9.13 (TRACK_STATUS) は TRACK_STATUS への応答を
+ * draft-ietf-moq-transport-22 §9.13 (TRACK_STATUS) は TRACK_STATUS への応答を
  * 「SUBSCRIBE_OK で設定したのと同じ parameters と Track Properties を返す」と定め、
  * §9.20.16 (EXPIRES Parameter) は EXPIRES が SUBSCRIBE_OK に出現できるとするため、
  * 字義通りに読むと EXPIRES を TRACK_STATUS_OK でも受理すべきに見える。
@@ -121,7 +121,7 @@ export const REQUEST_UPDATE_ALLOWED_PARAMS = new Set<number>([
   MessageParameterType.NEW_GROUP_REQUEST,
   // draft-ietf-moq-transport-22 §9.20.15: FILL_PARAMETERS (subscription の REQUEST_UPDATE)
   MessageParameterType.FILL_PARAMETERS,
-  // draft-ietf-moq-transport-21 §3.3.2: Range Filters (subscription の REQUEST_UPDATE)
+  // draft-ietf-moq-transport-22 §3.3.2: Range Filters (subscription の REQUEST_UPDATE)
   MessageParameterType.SUBGROUP_FILTER,
   MessageParameterType.OBJECTID_FILTER,
   MessageParameterType.PRIORITY_FILTER,
@@ -152,7 +152,7 @@ export const NAMESPACE_REQUEST_UPDATE_ALLOWED_PARAMS = new Set<number>([
 /**
  * PUBLISH メッセージの許可パラメータ
  *
- * draft-ietf-moq-transport-21 §9.8 (PUBLISH):
+ * draft-ietf-moq-transport-22 §9.8 (PUBLISH):
  * FORWARD / GROUP_ORDER / SUBSCRIBER_PRIORITY / SUBGROUP_DELIVERY_TIMEOUT /
  * OBJECT_DELIVERY_TIMEOUT / LOCATION_FILTER を初期 Subscription Parameters
  * として運べる。§3.6.2 により SUBSCRIBE_TRACKS 由来の PUBLISH でも明示される。

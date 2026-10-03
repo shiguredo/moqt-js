@@ -34,7 +34,7 @@ function delta(groupId: number, objectId: number, priorObjectIdGap = 0) {
 test("次の Group のキーフレームの後に届いた前の Group の delta は古いとして捨てる", () => {
   // Group ごとに別の stream で届くため、前の Group の末尾が次の Group の先頭より後に
   // 届く。前の Group の delta を復号すると、次の Group のキーフレームから始めた参照が
-  // 壊れる (draft-ietf-moq-transport-21 Section 2.1)
+  // 壊れる (draft-ietf-moq-transport-22 Section 2.1)
   const decodeOrder = new VideoDecodeOrder();
   assert.deepEqual(decodeOrder.admit(key(0)), DECODE);
   assert.deepEqual(decodeOrder.admit(delta(0, 1)), DECODE);
@@ -60,7 +60,7 @@ test("Group 内で Object が欠けたら、次のキーフレームまで delta
 });
 
 test("Prior Object ID Gap が示す非存在の範囲に収まる欠けは連続とみなす", () => {
-  // draft-ietf-moq-transport-21 Section 10.9: Object 3 の Prior Object ID Gap が 2 なら
+  // draft-ietf-moq-transport-22 Section 10.9: Object 3 の Prior Object ID Gap が 2 なら
   // Object 1 と 2 は存在しない。Object 3 は Object 0 の次に存在する Object である
   const decodeOrder = new VideoDecodeOrder();
   assert.deepEqual(decodeOrder.admit(key(0)), DECODE);

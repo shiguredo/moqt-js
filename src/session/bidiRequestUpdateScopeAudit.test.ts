@@ -106,7 +106,7 @@ test("bidiHandlePublishRequestUpdate: NEW_GROUP_REQUEST を含む REQUEST_UPDATE
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.1.6 (MAX FILTER RANGES):
+ * draft-ietf-moq-transport-22 §9.1.6 (MAX FILTER RANGES):
  * 自 endpoint が MAX_FILTER_RANGES を広告していない (既定値 0) 場合、
  * ピアから REQUEST_UPDATE で Range Filter を受信したら
  * REQUEST_ERROR (INVALID_FILTER) で拒否することを検証する。
@@ -140,7 +140,7 @@ test("bidiHandlePublishRequestUpdate: localMaxFilterRanges 0 の Range Filter �
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.1.6 (MAX FILTER RANGES):
+ * draft-ietf-moq-transport-22 §9.1.6 (MAX FILTER RANGES):
  * 自 endpoint の上限以内の Range Filter は受理し、超過は
  * REQUEST_ERROR (INVALID_FILTER) で拒否することを検証する。
  */
@@ -390,7 +390,7 @@ test("bidiReadRequestStreamMessages: TRACK_NAMESPACE_PREFIX の REQUEST_UPDATE �
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.1.6 (MAX FILTER RANGES):
+ * draft-ietf-moq-transport-22 §9.1.6 (MAX FILTER RANGES):
  * role=publish の受信 REQUEST_UPDATE で、自 endpoint が MAX_FILTER_RANGES を
  * 広告していない (既定値 0) 場合に Range Filter を受信したら
  * REQUEST_ERROR (INVALID_FILTER) と PUBLISH_DONE (UPDATE_FAILED) で拒否する
@@ -437,7 +437,7 @@ test("bidiReadRequestStreamMessages: localMaxFilterRanges 0 の Range Filter で
 });
 
 /**
- * draft-ietf-moq-transport-21 §12.1:
+ * draft-ietf-moq-transport-22 §12.1:
  * 「it MUST cancel any corresponding subscription or fetches for that Track」
  * 同一 Full Track Name の全購読と全 FETCH を cancel し、別 Track は触らない。
  */
@@ -512,7 +512,7 @@ test("cancelMalformedTrackPeers: 同一 Full Track Name の購読と FETCH を c
 });
 
 /**
- * draft-ietf-moq-transport-21 §12.1 / §3.1:
+ * draft-ietf-moq-transport-22 §12.1 / §3.1:
  * 応答待ちの pending 購読 / FETCH も同一 Track の比較キーで cancel され、
  * reject される。pending 中の SubscriberImpl.state は active のため、
  * error コールバックは呼ばれない (reject との二重通知なし)。
@@ -623,7 +623,7 @@ test("cancelMalformedTrackPeers: 同一 Track の pending 購読と FETCH も ca
 });
 
 /**
- * draft-ietf-moq-transport-21 §2.4.1 / §12.1:
+ * draft-ietf-moq-transport-22 §2.4.1 / §12.1:
  * Full Track Name の比較キーはフィールド境界が一意なため、区切り文字の曖昧さで
  * 無関係な Track が cross-cancel されない。namespace ["a"] + trackName "b/c" と
  * namespace ["a","b"] + trackName "c" は "/" 連結では同じ "a/b/c" になっていた。
@@ -682,7 +682,7 @@ test("cancelMalformedTrackPeers: 区切り文字が衝突する別 Track を can
 });
 
 /**
- * draft-ietf-moq-transport-21 §12.1 / §3.1:
+ * draft-ietf-moq-transport-22 §12.1 / §3.1:
  * 応答待ちの読み取りループが保持する reader は RequestStreamInfo に登録され、
  * malformed track の cross-cancel はロック保持者経由の STOP_SENDING
  * (reader.cancel) として届く。
@@ -727,7 +727,7 @@ test("bidiReadSubscribeResponse: 応答待ちの cross-cancel がロック保持
 });
 
 /**
- * draft-ietf-moq-transport-21 §12.1:
+ * draft-ietf-moq-transport-22 §12.1:
  * cancel 済みの pending に遅延して well-formed な応答が届いても購読を
  * 確立しない。送信準備中に cross-cancel され requestStreams が未登録の
  * まま読み取りループが動き続ける状況でも、応答受信時に pending の在否を
@@ -785,7 +785,7 @@ test("bidiReadSubscribeResponse: cancel 済み pending への遅延応答で購�
 });
 
 /**
- * draft-ietf-moq-transport-21 §12.1:
+ * draft-ietf-moq-transport-22 §12.1:
  * pending 登録から送信完了までの間に cross-cancel された場合でも、
  * 登録済みストリームを STOP_SENDING / RESET_STREAM で後始末し、
  * requestStreams にエントリを残さない。
@@ -811,7 +811,7 @@ test("bidiReadSubscribeResponse: 送信準備中の cross-cancel でストリー
 /**
  * REQUEST_UPDATE を通し番号付きで連結し、1 回の read に含まれる 1 チャンクを作る
  *
- * draft-ietf-moq-transport-21 §9.1.7 の上限超過は「1 回の read に上限 + 1 通が
+ * draft-ietf-moq-transport-22 §9.1.7 の上限超過は「1 回の read に上限 + 1 通が
  * 含まれる」場合にだけ検出できる (応答 1 通ごとに減算する実装では未応答数が
  * 常に 0 か 1 になり検出できない)。そのためテストでは複数通を 1 チャンクに
  * 連結して届ける。
@@ -829,7 +829,7 @@ function encodeRequestUpdateChunk(requestIds: bigint[]): Uint8Array {
 }
 
 /**
- * draft-ietf-moq-transport-21 §9.1.7 (MAX_REQUEST_UPDATES):
+ * draft-ietf-moq-transport-22 §9.1.7 (MAX_REQUEST_UPDATES):
  * 自 endpoint が上限 N を広告した状態で、1 回の read に N+1 通の
  * REQUEST_UPDATE を含むチャンクを届けた場合、N 通目までは REQUEST_OK を応答し
  * N+1 通目の処理で TOO_MANY_REQUEST_UPDATES によりセッションを閉じる MUST を
@@ -866,7 +866,7 @@ test("bidiReadRequestStreamMessages: 上限 + 1 通の 1 チャンクで TOO_MAN
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.1.7 (MAX_REQUEST_UPDATES):
+ * draft-ietf-moq-transport-22 §9.1.7 (MAX_REQUEST_UPDATES):
  * 上限以内のチャンクを応答ごとに繰り返し届ける限り閉じないことを検証する。
  * 1 回の read のメッセージ列を処理し終えると、その read で加算した件数分が
  * 未応答数から戻るため、チャンクをまたいで未応答数が積み上がらない。
@@ -900,7 +900,7 @@ test("bidiReadRequestStreamMessages: 上限以内のチャンクを繰り返し�
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.1.7 (MAX_REQUEST_UPDATES):
+ * draft-ietf-moq-transport-22 §9.1.7 (MAX_REQUEST_UPDATES):
  * 「A value of 0 means the endpoint does not limit REQUEST_UPDATE concurrency.」
  * 未広告 (既定値 0) では上限 + 1 通のチャンクを届けても閉じず、すべての
  * REQUEST_UPDATE に応答することを検証する。§9.1.6 の MAX_FILTER_RANGES の 0 が
@@ -931,7 +931,7 @@ test("bidiReadRequestStreamMessages: 未広告 (0 = 無制限) では上限 + 1 
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.1.7 / §9.2 / §6.4.2.2:
+ * draft-ietf-moq-transport-22 §9.1.7 / §9.2 / §6.4.2.2:
  * 応答を送らずに無視する分岐 (subscribe ロールで GOAWAY 受信済み) でも
  * 未応答数が残留しないことを検証する。減算は応答の有無に依存せず、1 回の read の
  * メッセージ列の処理を終えた時点の finally が担う。

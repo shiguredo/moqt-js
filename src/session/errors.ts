@@ -24,7 +24,7 @@ import {
 /**
  * WebTransport セッション終了に伴って発生した read エラーかどうかを判定する
  *
- * draft-ietf-moq-transport-21 Section 6.6:
+ * draft-ietf-moq-transport-22 Section 6.6:
  * peer 起点で WebTransport セッションが閉じた場合、各ストリームの read() は
  * reject するが、これは正常な終了通知であり onError には流さない。
  *
@@ -48,7 +48,7 @@ export function isSessionClosedError(error: Error): boolean {
 /**
  * ピア起因のストリームエラーかどうかを判定する
  *
- * draft-ietf-moq-transport-21 Section 6.4.2.3 (Request Cancellation and Rejection):
+ * draft-ietf-moq-transport-22 Section 6.4.2.3 (Request Cancellation and Rejection):
  * ピアは STOP_SENDING / RESET_STREAM で当方の送信方向をキャンセルできる。
  * キャンセルされた writable の write / close は WebTransportError
  * (source: "stream") で reject する (W3C WebTransport の実装挙動)。
@@ -78,7 +78,7 @@ export function isPeerStreamError(error: unknown): boolean {
  * ProtocolViolationError / IncompleteDataError を PROTOCOL_VIOLATION の
  * SessionError に変換する
  *
- * draft-ietf-moq-transport-21 Section 12.2 (Session Termination Codes):
+ * draft-ietf-moq-transport-22 Section 12.2 (Session Termination Codes):
  * "PROTOCOL_VIOLATION (0x3): The remote endpoint performed an action that was
  *  disallowed by the specification."
  * 受信メッセージの妥当性検証で違反を検出した場合、各 decode 関数は
@@ -112,7 +112,7 @@ export function isPeerStreamError(error: unknown): boolean {
  * SessionError を送出し得るデコードを持ち込む場合は toSessionCloseError への
  * 切り替えが必要になる。
  *
- * https://www.ietf.org/archive/id/draft-ietf-moq-transport-21.html#section-12.2
+ * https://www.ietf.org/archive/id/draft-ietf-moq-transport-22.html#section-12.2
  */
 export function toProtocolViolationSessionError(error: unknown): SessionError | null {
   if (error instanceof ProtocolViolationError || error instanceof IncompleteDataError) {
@@ -127,7 +127,7 @@ export function toProtocolViolationSessionError(error: unknown): SessionError | 
  * SessionError はエラーコードを保持したまま同一オブジェクトをそのまま返す。
  * 既知 Type の Value / Length が仕様の serialization に一致しない場合、
  * decode 関数は KEY_VALUE_FORMATTING_ERROR の SessionError を throw する
- * (draft-ietf-moq-transport-21 §8.3)。受信経路の catch は本関数でそれを
+ * (draft-ietf-moq-transport-22 §8.3)。受信経路の catch は本関数でそれを
  * 取り出し、そのコードでセッションを閉じる。
  *
  * ProtocolViolationError / IncompleteDataError は toProtocolViolationSessionError
@@ -149,7 +149,7 @@ export function toSessionCloseError(error: unknown): SessionError | null {
 /**
  * 空必須メッセージの Track Properties 違反を PROTOCOL_VIOLATION の SessionError に変換する
  *
- * draft-ietf-moq-transport-21 §9.3 (REQUEST_OK):
+ * draft-ietf-moq-transport-22 §9.3 (REQUEST_OK):
  * 「Track Properties are populated in TRACK_STATUS_OK; they are empty in PUBLISH_OK,
  *  REQUEST_UPDATE_OK, SUBSCRIBE_NAMESPACE_OK and PUBLISH_NAMESPACE_OK.  If an endpoint
  *  receives Track Properties in one of these messages it MUST close the session with a
@@ -171,7 +171,7 @@ export function toTrackPropertiesViolationSessionError(error: MalformedTrackErro
  * ストリームクローズ / RESET_STREAM 時に保留中の更新を失敗させるときの
  * エラー文言
  *
- * draft-ietf-moq-transport-21 §9.5.1 / §6.4.2.2:
+ * draft-ietf-moq-transport-22 §9.5.1 / §6.4.2.2:
  * 応答を待たずにストリームが閉じた場合、保留中の更新は失敗として reject
  * する。FIN 経路と RESET_STREAM 経路で共通の文言を使う。GOAWAY 掃除の
  * RequestError (GOING_AWAY) とは失敗種別が異なるため使い分ける。

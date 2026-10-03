@@ -1,7 +1,7 @@
 /**
  * 前の Group の stream が開いている間、次の Group の Object を保留する
  *
- * draft-ietf-moq-transport-21 Section 2.1: "Objects can be delivered out of order"。
+ * draft-ietf-moq-transport-22 Section 2.1: "Objects can be delivered out of order"。
  * Group ごとに別の Subgroup の stream で届くため、前の Group の末尾が次の Group の先頭より
  * 後にアプリへ渡ることがある。経路での並び替えや再送のほか、ブラウザ上でも起きる
  * (stream ごとの読み取りは非同期であり、複数の stream のデータが同時に読める状態に

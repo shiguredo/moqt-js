@@ -74,7 +74,7 @@ export function observabilityTrackName(level: number, label: string): Uint8Array
 /**
  * Track Namespace の 2 タプル（prefix, resourceID）を組み立てる
  *
- * resourceID は非空であること。draft-ietf-moq-transport-21 §2.4.1 は各 namespace
+ * resourceID は非空であること。draft-ietf-moq-transport-22 §2.4.1 は各 namespace
  * 要素に 1 バイト以上を MUST とし、空要素は下流の Track Namespace エンコードで
  * 拒否される。
  *

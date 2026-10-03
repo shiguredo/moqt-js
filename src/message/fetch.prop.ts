@@ -1,6 +1,6 @@
 /**
  * MOQT Fetch Messages Property-Based Tests
- * draft-ietf-moq-transport-21 Section 9.11-9.12
+ * draft-ietf-moq-transport-22 Section 9.11-9.12
  */
 
 import { test, assert } from "vite-plus/test";
@@ -19,9 +19,9 @@ import { ProtocolViolationError } from "../error";
 import { parametersArb, trackPropertiesArb, namespaceArb, trackNameArb } from "./parameterArb";
 
 /**
- * draft-ietf-moq-transport-21 Section 2.3:
+ * draft-ietf-moq-transport-22 Section 2.3:
  * ゼロ要素 (空) のネームスペースを許可する。
- * draft-ietf-moq-transport-21 Section 9 (Control Messages)
+ * draft-ietf-moq-transport-22 Section 9 (Control Messages)
  */
 const locationArb = fc.record({
   group: fc.bigInt({ min: 0n, max: 1000000n }),
@@ -65,7 +65,7 @@ test("Fetch のエンコード・デコードがラウンドトリップする",
 });
 
 /**
- * draft-ietf-moq-transport-21 Section 9:
+ * draft-ietf-moq-transport-22 Section 9:
  * "If the length does not match the length of the Message Body,
  *  the receiver MUST close the session with a PROTOCOL_VIOLATION."
  * Parameters は FETCH ペイロードの最後のフィールドであり、
@@ -103,7 +103,7 @@ test("FETCH の末尾に後続データがあると ProtocolViolationError を t
 });
 
 /**
- * draft-ietf-moq-transport-21:
+ * draft-ietf-moq-transport-22:
  * FETCH_OK に Track Properties が追加された。
  */
 test("FetchOk のエンコード・デコードがラウンドトリップする", () => {

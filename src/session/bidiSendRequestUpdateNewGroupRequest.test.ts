@@ -112,7 +112,7 @@ test("bidiSendRequestUpdate: DYNAMIC_GROUPS=1 の購読では newGroupRequest �
 
 /**
  * DYNAMIC_GROUPS=1 が Immutable Properties (0x0B) 配下にあっても送信できる
- * (draft-ietf-moq-transport-21 §10.7 の二重検索)。
+ * (draft-ietf-moq-transport-22 §10.7 の二重検索)。
  */
 test("bidiSendRequestUpdate: Immutable Properties 配下の DYNAMIC_GROUPS=1 でも送信できる", async () => {
   const inner = encodeProperties([{ id: TrackPropertyId.DYNAMIC_GROUPS, value: 1n }]);

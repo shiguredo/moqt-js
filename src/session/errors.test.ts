@@ -129,11 +129,11 @@ test("toProtocolViolationSessionError: Error を継承しないオブジェク�
 
 // ============================================================================
 // toSessionCloseError のテスト
-// draft-ietf-moq-transport-21 §8.3 (Key-Value-Pair Structure)
+// draft-ietf-moq-transport-22 §8.3 (Key-Value-Pair Structure)
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-21 §8.3:
+ * draft-ietf-moq-transport-22 §8.3:
  * "If a receiver understands a Type, and the following Value or Length/Value
  *  does not match the serialization defined by that Type, the receiver MUST
  *  close the session with error code KEY_VALUE_FORMATTING_ERROR."
@@ -183,7 +183,7 @@ test("toSessionCloseError: undefined / null / Error を継承しないオブジ�
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-21 §6.4.2.3:
+ * draft-ietf-moq-transport-22 §6.4.2.3:
  * ピアは STOP_SENDING / RESET_STREAM で当方の送信方向をキャンセルできる。
  * キャンセルされた writable の write / close は WebTransportError
  * (source: "stream") で reject する (W3C WebTransport の実装挙動)。

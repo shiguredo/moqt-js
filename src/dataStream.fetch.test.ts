@@ -125,7 +125,7 @@ test("FetchObjectFields: 最初のオブジェクトをエンコード", () => {
   assert.equal(encoded[5], 50);
 });
 
-// draft-ietf-moq-transport-21 Section 11.1.2:
+// draft-ietf-moq-transport-22 Section 11.1.1:
 // "The Object Status is a field that is only present in objects that are
 // delivered via a SUBSCRIPTION, and is absent in Objects delivered via a FETCH."
 test("FetchObjectFields: payload length = 0 でも Object Status を含めない", () => {
@@ -457,7 +457,7 @@ test("FetchObjectFields: groupId が異なる場合 GROUP_ID_PRESENT を設定",
 
 /**
  * 同一 Group・同一 Subgroup の Priority 一貫性検証テスト
- * draft-ietf-moq-transport-21 §12.1 (Malformed Tracks):
+ * draft-ietf-moq-transport-22 §12.1 (Malformed Tracks):
  * "An Object with a particular Subgroup ID is received, but its Publisher
  *  Priority is different from that of the previous Object with the same
  *  Subgroup ID." を malformed track と定義している。
@@ -505,7 +505,7 @@ test("FetchObjectFields: 同一 Subgroup で異なる Priority はエラー", ()
 
 /**
  * 異なる Group の同一 Subgroup ID は比較対象にならないテスト
- * draft-ietf-moq-transport-21 §2.2:
+ * draft-ietf-moq-transport-22 §2.2:
  * "The scope of a Subgroup ID is a Group, so Subgroups from different Groups
  *  MAY share a Subgroup ID without implying any relationship between them."
  * Group 跨ぎでは Subgroup ID が同じでも Priority が異なってよい。
@@ -549,7 +549,7 @@ test("FetchObjectFields: 異なる Group の同一 Subgroup ID で異なる Prio
 /**
  * Descending Group Order での Group スコープ比較テスト
  *
- * draft-ietf-moq-transport-21 §2.2:
+ * draft-ietf-moq-transport-22 §2.2:
  * Subgroup ID のスコープは Group 内のため、Group 跨ぎでは同一 Subgroup ID でも
  * Priority が異なってよい。Descending で Group ID が減少する場合も
  * Group スコープ比較により誤検出しないことを検証する。
@@ -627,7 +627,7 @@ test("FetchObjectFields: Priority バイトでバッファが切れていると 
  * Datagram 混在ケースの挙動テスト
  *
  * 前オブジェクトが Datagram の場合、Datagram は Subgroup に属さないため
- * 比較対象にしない (draft-ietf-moq-transport-21 §12.1 の比較対象は
+ * 比較対象にしない (draft-ietf-moq-transport-22 §12.1 の比較対象は
  * "the previous Object with the same Subgroup ID" である)。コンテキストの
  * publisherPriority は Datagram では更新されず、直近の Subgroup オブジェクト
  * の値が保持される。
@@ -683,7 +683,7 @@ test("FetchObjectFields: Datagram 直後の同一 Group・同一 Subgroup は直
 });
 
 /**
- * draft-ietf-moq-transport-21 §12.1:
+ * draft-ietf-moq-transport-22 §12.1:
  * Datagram を挟んだ場合でも、真の Priority 不一致 (直近の Subgroup オブジェクト
  * との比較) は従来どおり検出されることを検証する。
  */
@@ -874,7 +874,7 @@ test("FetchObjectFields: Priority 省略は直近の実オブジェクト (Datag
 });
 
 /**
- * draft-ietf-moq-transport-21 §12.1:
+ * draft-ietf-moq-transport-22 §12.1:
  * hasPriorSubgroup 未指定 (undefined = 直近の Subgroup オブジェクトあり) の
  * ハードコードされたコンテキストでも、Datagram を挟んだ後の真の Priority
  * 不一致が検出されることを検証する (undefined の解釈の一貫性)。
@@ -926,7 +926,7 @@ test("FetchObjectFields: hasPriorSubgroup 未指定のコンテキストでも D
 });
 
 /**
- * draft-ietf-moq-transport-21 §12.1:
+ * draft-ietf-moq-transport-22 §12.1:
  * Datagram が自前の Group ID で Group を変更した後の同一 Subgroup ID の
  * オブジェクトは、旧 Group の Priority と比較されないことを検証する
  * (Group 変更で比較対象の存在がリセットされる)。
@@ -1017,7 +1017,7 @@ test("FetchObjectFields: 異なる Subgroup で異なる Priority は許可", ()
 
 /**
  * Subgroup が交互に出現する場合の Priority 不一致検出テスト
- * draft-ietf-moq-transport-21 §12.1:
+ * draft-ietf-moq-transport-22 §12.1:
  * "An Object with a particular Subgroup ID is received, but its Publisher
  *  Priority is different from that of the previous Object with the same
  *  Subgroup ID."
@@ -1083,7 +1083,7 @@ test("FetchObjectFields: 交互に出現する Subgroup の Priority 不一致�
 
 /**
  * Subgroup が交互に出現しても Priority が一致すれば検出されないテスト
- * draft-ietf-moq-transport-21 §12.1:
+ * draft-ietf-moq-transport-22 §12.1:
  * 同一 Subgroup ID の直近オブジェクトと Priority が一致する場合は合法であり、
  * 直前オブジェクトと Subgroup ID が異なっても誤検出しない。
  */
@@ -1201,7 +1201,7 @@ test("FetchObjectFields: 同一 Group の End of Range を挟んだ交互出現�
 
 /**
  * Datagram を挟んだ交互出現のテスト
- * draft-ietf-moq-transport-21 §12.1:
+ * draft-ietf-moq-transport-22 §12.1:
  * Datagram は Subgroup に属さないため追跡を更新しない。Datagram を挟んだ
  * 交互出現後の同一 Subgroup の不一致も、同一 Subgroup ID の直近オブジェクト
  * との比較で検出される。
@@ -1272,7 +1272,7 @@ test("FetchObjectFields: Datagram を挟んだ交互出現の不一致は検出�
 
 /**
  * Descending Group Order での交互出現テスト
- * draft-ietf-moq-transport-21 §12.1:
+ * draft-ietf-moq-transport-22 §12.1:
  * 追跡更新は Group Order に依存しないため、Descending でも同一 Subgroup ID の
  * 直近オブジェクトとの比較で不一致を検出する。
  */
@@ -1338,7 +1338,7 @@ test("FetchObjectFields: Descending でも交互に出現する Subgroup の不�
 
 /**
  * Subgroup ID 0 の交互出現テスト
- * draft-ietf-moq-transport-21 §12.1:
+ * draft-ietf-moq-transport-22 §12.1:
  * Subgroup ID 0 も Map のキーとして区別され、未登録 (undefined) と混同されずに
  * 追跡される。S0 → S1 → S0 の交互でも同一 Subgroup ID の直近値と比較する。
  */
@@ -2023,7 +2023,7 @@ test("FetchObjectFields: 非先頭 DATAGRAM は直前の実 Subgroup ID を cont
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.6:
+ * draft-ietf-moq-transport-22 §3.7:
  * Object Property に Mandatory Track Property (0x4000-0x7FFF) を含む FETCH Object は
  * malformed であり、decodeFetchObjectFields が MalformedTrackError を throw する。
  */
@@ -2487,11 +2487,11 @@ test("FetchObjectFields: 先頭レコードが End of Range でも明示指定�
 
 // ============================================================================
 // draft-21 適合監査 D-7: Prior Group ID Gap / Prior Object ID Gap
-// draft-ietf-moq-transport-21 §10.8 / §10.9
+// draft-ietf-moq-transport-22 §10.8 / §10.9
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-21 §10.8:
+ * draft-ietf-moq-transport-22 §10.8:
  * "An Object has a Prior Group ID Gap larger than the Group ID."
  * Fetch Object でも単一 Object で判定できる malformed 条件を検出する。
  */
@@ -2515,7 +2515,7 @@ test("FetchObjectFields: Prior Group ID Gap が Group ID より大きいと Malf
 });
 
 /**
- * draft-ietf-moq-transport-21 §10.9:
+ * draft-ietf-moq-transport-22 §10.9:
  * "An Object has a Prior Object ID Gap larger than the Object ID."
  */
 test("FetchObjectFields: Prior Object ID Gap が Object ID より大きいと MalformedTrackError", () => {
@@ -2538,7 +2538,7 @@ test("FetchObjectFields: Prior Object ID Gap が Object ID より大きいと Ma
 });
 
 /**
- * draft-ietf-moq-transport-21 §10.8 / §10.9:
+ * draft-ietf-moq-transport-22 §10.8 / §10.9:
  * "An Object contains more than one instance of Prior Group ID Gap." /
  * "An Object contains more than one instance of Prior Object ID Gap." → malformed
  * Fetch Object でも同一 Object 内の複数出現を検出する。
@@ -2566,11 +2566,11 @@ test("FetchObjectFields: PRIOR_GROUP_ID_GAP の複数出現で MalformedTrackErr
 });
 
 /**
- * draft-ietf-moq-transport-21 §10.7 / §10.9:
+ * draft-ietf-moq-transport-22 §10.7 / §10.9:
  * mutable list と IMMUTABLE_PROPERTIES 配下を合わせて 2 回現れる場合も malformed とする。
  */
 /**
- * draft-ietf-moq-transport-21 §8.3:
+ * draft-ietf-moq-transport-22 §8.3:
  * "If a receiver understands a Type, and the following Value or Length/Value
  *  does not match the serialization defined by that Type, the receiver MUST
  *  close the session with error code KEY_VALUE_FORMATTING_ERROR."
@@ -2597,7 +2597,7 @@ test("FetchObjectFields: 既知 Type の Value 不一致で KEY_VALUE_FORMATTING
 });
 
 /**
- * draft-ietf-moq-transport-21 §8.3:
+ * draft-ietf-moq-transport-22 §8.3:
  * 既知 Type の Length 宣言が残りバイトを超える Fetch Object を検出する。
  */
 test("FetchObjectFields: 既知 Type の Length 宣言超過で KEY_VALUE_FORMATTING_ERROR", () => {
@@ -2644,7 +2644,7 @@ test("FetchObjectFields: mutable と IMMUTABLE_PROPERTIES の合算 2 回の PRI
 });
 
 /**
- * draft-ietf-moq-transport-21 §8.3:
+ * draft-ietf-moq-transport-22 §8.3:
  * "The maximum length of a value is 2^16-1 bytes. If an endpoint receives a length
  *  larger than the maximum, it MUST close the session with a PROTOCOL_VIOLATION."
  * Fetch Object の Object Properties でも同じ MUST が適用される。
@@ -2666,7 +2666,7 @@ test("FetchObjectFields: Object Property の Length が 2^16-1 を超えると P
 });
 
 /**
- * draft-ietf-moq-transport-21 §8.3:
+ * draft-ietf-moq-transport-22 §8.3:
  * delta の累積が 2^64-1 を超える Object Properties は ProtocolViolationError になる。
  * Fetch Object でも同じ MUST が適用される。
  */

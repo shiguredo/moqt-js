@@ -20,11 +20,11 @@ import { createPublishReadTestContext } from "../testSupport/bidi";
 
 // ============================================================================
 // bidiCancelSubscription の保留中 REQUEST_UPDATE 掃除テスト
-// draft-ietf-moq-transport-21 §9.5 / §9.5.1
+// draft-ietf-moq-transport-22 §9.5 / §9.5.1
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-21 §9.5 / §9.5.1:
+ * draft-ietf-moq-transport-22 §9.5 / §9.5.1:
  * in-flight の REQUEST_UPDATE がある状態で unsubscribe() すると、update() の
  * Promise が共通文言で reject され、エントリが削除されることを検証する。
  * 既存のストリーム破棄 (readable.cancel / writer.abort) と Map 削除も維持される。
@@ -76,7 +76,7 @@ test("bidiCancelSubscription: 応答待ちの REQUEST_UPDATE がある状態で 
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.5 / §9.5.1:
+ * draft-ietf-moq-transport-22 §9.5 / §9.5.1:
  * 保留中の更新が無い状態の unsubscribe では何も起きないことを検証する
  * (回帰ガード。掃除対象が無い場合の no-op)。
  */
@@ -168,7 +168,7 @@ function createLiveReadCancelContext(options?: { abortThrows?: boolean }): {
     unmatchedRequestOkAllowances: new Map(),
     peerMaxRequestUpdates: 0,
     peerMaxFilterRanges: 0,
-    // draft-ietf-moq-transport-21 §9.1.7 (MAX_REQUEST_UPDATES):
+    // draft-ietf-moq-transport-22 §9.1.7 (MAX_REQUEST_UPDATES):
     // 既定は未広告 (0 = 無制限) と未応答数なし
     localMaxRequestUpdates: 0,
     receivedRequestUpdateCounts: new Map(),
@@ -269,7 +269,7 @@ test("bidiCancelSubscription: abort 失敗時も解除は完遂し Map が掃除
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.5.1:
+ * draft-ietf-moq-transport-22 §9.5.1:
  * REQUEST_UPDATE 送信の write 待ちに解除競合で保留エントリが掃除されていた場合、
  * update() の結果は既に settle 済みの内側 Promise に委ね、送信エラーを上書き
  * しないことを検証する (原因のエラーを呼び出し元へ伝えるため)。
@@ -308,7 +308,7 @@ test("bidiSendRequestUpdate: 解除競合で保留が無い場合の write 失�
     unmatchedRequestOkAllowances: new Map(),
     peerMaxRequestUpdates: 0,
     peerMaxFilterRanges: 2,
-    // draft-ietf-moq-transport-21 §9.1.7 (MAX_REQUEST_UPDATES):
+    // draft-ietf-moq-transport-22 §9.1.7 (MAX_REQUEST_UPDATES):
     // 既定は未広告 (0 = 無制限) と未応答数なし
     localMaxRequestUpdates: 0,
     receivedRequestUpdateCounts: new Map(),

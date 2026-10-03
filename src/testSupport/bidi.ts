@@ -17,7 +17,7 @@ import { FetcherImpl } from "../fetcher";
 import { encodeVarint, MAX_VARINT } from "../varint";
 import { ControlStreamReader, ControlStreamWriter } from "../controlStream";
 import { PublisherImpl } from "../publisher";
-// draft-ietf-moq-transport-21 §11.3.1:
+// draft-ietf-moq-transport-22 §11.3.1:
 // SUBSCRIBE_OK 受理経路は pendingSubgroupBuffer.notifyAlias() を必ず呼ぶ。
 // 実物を渡さないと TypeError になり、defaultBidiHandleError に握り潰されて
 // pending.resolve と読み取りループ起動に到達しないままテストが通ってしまう。
@@ -79,7 +79,7 @@ export function createBidiSession(): {
     unmatchedRequestOkAllowances: new Map(),
     peerMaxRequestUpdates: 0,
     peerMaxFilterRanges: 2,
-    // draft-ietf-moq-transport-21 §9.1.7 (MAX_REQUEST_UPDATES):
+    // draft-ietf-moq-transport-22 §9.1.7 (MAX_REQUEST_UPDATES):
     // 既定は未広告 (0 = 無制限) と未応答数なし
     localMaxRequestUpdates: 0,
     receivedRequestUpdateCounts: new Map(),
@@ -241,11 +241,11 @@ export function createPublishReadTestContext(
     unmatchedRequestOkAllowances: new Map(),
     peerMaxRequestUpdates: 0,
     peerMaxFilterRanges: 0,
-    // draft-ietf-moq-transport-21 §9.1.7 (MAX_REQUEST_UPDATES):
+    // draft-ietf-moq-transport-22 §9.1.7 (MAX_REQUEST_UPDATES):
     // 既定は未広告 (0 = 無制限) と未応答数なし
     localMaxRequestUpdates: 0,
     receivedRequestUpdateCounts: new Map(),
-    // draft-ietf-moq-transport-21 §8.9 / §9.1.3:
+    // draft-ietf-moq-transport-22 §8.9 / §9.1.3:
     // 受信 AUTHORIZATION TOKEN のキャッシュ。既定は上限 0 (未広告 = Alias 使用禁止) で、
     // Alias を使うテストは authTokenCacheSize を指定する。
     receivedAuthTokens: new AuthTokenCache(authTokenCacheSize),
@@ -395,7 +395,7 @@ export function createPublishOkValidationContext(
     unmatchedRequestOkAllowances: new Map(),
     peerMaxRequestUpdates: 0,
     peerMaxFilterRanges: 0,
-    // draft-ietf-moq-transport-21 §9.1.7 (MAX_REQUEST_UPDATES):
+    // draft-ietf-moq-transport-22 §9.1.7 (MAX_REQUEST_UPDATES):
     // 既定は未広告 (0 = 無制限) と未応答数なし
     localMaxRequestUpdates: 0,
     receivedRequestUpdateCounts: new Map(),
@@ -475,7 +475,7 @@ export function createOkResponseReadTestContext(): {
     unmatchedRequestOkAllowances: new Map(),
     peerMaxRequestUpdates: 0,
     peerMaxFilterRanges: 0,
-    // draft-ietf-moq-transport-21 §9.1.7 (MAX_REQUEST_UPDATES):
+    // draft-ietf-moq-transport-22 §9.1.7 (MAX_REQUEST_UPDATES):
     // 既定は未広告 (0 = 無制限) と未応答数なし
     localMaxRequestUpdates: 0,
     receivedRequestUpdateCounts: new Map(),
@@ -568,7 +568,7 @@ export function createCancelObservableResponseContext(): {
     unmatchedRequestOkAllowances: new Map(),
     peerMaxRequestUpdates: 0,
     peerMaxFilterRanges: 0,
-    // draft-ietf-moq-transport-21 §9.1.7 (MAX_REQUEST_UPDATES):
+    // draft-ietf-moq-transport-22 §9.1.7 (MAX_REQUEST_UPDATES):
     // 既定は未広告 (0 = 無制限) と未応答数なし
     localMaxRequestUpdates: 0,
     receivedRequestUpdateCounts: new Map(),
@@ -600,7 +600,7 @@ export function createCancelObservableResponseContext(): {
 /**
  * 確立後の FETCH 応答ストリーム読み取りを検証するための session を構築する
  *
- * draft-ietf-moq-transport-21 §9.11 / §9.12 / §9.5 / §9.10:
+ * draft-ietf-moq-transport-22 §9.11 / §9.12 / §9.5 / §9.10:
  * FETCH_OK を最初の応答として与え、pendingFetch を解決して fetchers に登録する。
  * fetch ロールの読み取りループ (bidiReadRequestStreamMessages) が当該双方向
  * ストリームを読み続けることを、実 W3C ストリームと実 Map で検証するために使う。
@@ -689,11 +689,11 @@ export function createFetchReadTestContext(additionalMessages: Uint8Array[] = []
     unmatchedRequestOkAllowances: new Map(),
     peerMaxRequestUpdates: 0,
     peerMaxFilterRanges: 0,
-    // draft-ietf-moq-transport-21 §9.1.7 (MAX_REQUEST_UPDATES):
+    // draft-ietf-moq-transport-22 §9.1.7 (MAX_REQUEST_UPDATES):
     // 既定は未広告 (0 = 無制限) と未応答数なし
     localMaxRequestUpdates: 0,
     receivedRequestUpdateCounts: new Map(),
-    // draft-ietf-moq-transport-21 §8.9 / §9.1.3:
+    // draft-ietf-moq-transport-22 §8.9 / §9.1.3:
     // 受信 AUTHORIZATION TOKEN のキャッシュ。既定は上限 0 (未広告 = Alias 使用禁止)。
     receivedAuthTokens: new AuthTokenCache(0),
     namespaceSubscriptions: new Map(),

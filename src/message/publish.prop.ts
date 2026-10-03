@@ -1,6 +1,6 @@
 /**
  * MOQT Publish Messages Property-Based Tests
- * draft-ietf-moq-transport-21 Section 9.8-9.9
+ * draft-ietf-moq-transport-22 Section 9.8-9.9
  */
 
 import { test, assert } from "vite-plus/test";
@@ -25,9 +25,9 @@ import {
 } from "./parameterArb";
 
 /**
- * draft-ietf-moq-transport-21:
+ * draft-ietf-moq-transport-22:
  * PUBLISH に Track Properties が追加された。
- * draft-ietf-moq-transport-21 Section 9 (Control Messages)
+ * draft-ietf-moq-transport-22 Section 9 (Control Messages)
  */
 test("Publish のエンコード・デコードがラウンドトリップする", () => {
   fc.assert(
@@ -105,7 +105,7 @@ test("PublishOk のエンコード・デコードがラウンドトリップす�
 });
 
 /**
- * draft-ietf-moq-transport-21 Section 9.9:
+ * draft-ietf-moq-transport-22 Section 9.9:
  * PUBLISH_DONE は双方向ストリーム上で送信されるため Request ID フィールドはない。
  */
 test("PublishDone のエンコード・デコードがラウンドトリップする", () => {
@@ -135,7 +135,7 @@ test("PublishDone のエンコード・デコードがラウンドトリップ�
 });
 
 /**
- * draft-ietf-moq-transport-21 Section 9:
+ * draft-ietf-moq-transport-22 Section 9:
  * "If the length does not match the length of the Message Body,
  *  the receiver MUST close the session with a PROTOCOL_VIOLATION."
  * Error Reason は PUBLISH_DONE ペイロードの最後のフィールドであり、
@@ -171,7 +171,7 @@ test("PUBLISH_DONE の末尾に後続データがあると ProtocolViolationErro
 });
 
 /**
- * draft-ietf-moq-transport-21 Section 8.5:
+ * draft-ietf-moq-transport-22 Section 8.5:
  * "If an endpoint receives a length exceeding the maximum, it MUST close
  *  the session with a PROTOCOL_VIOLATION"
  * Reason Phrase Length が上限 (1024) を超える PUBLISH_DONE を受信すると

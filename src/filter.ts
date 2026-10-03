@@ -126,7 +126,7 @@ export function resolveFilter(
 /**
  * Object の Location が ResolvedFilter にマッチするかどうかを判定する
  *
- * draft-ietf-moq-transport-21 Section 3.3.1:
+ * draft-ietf-moq-transport-22 Section 3.3.1:
  * 通過条件: Object Location >= Start。End Group があるときは Group <= End Group、
  * End Object があるときは End Group 内で Object <= EndObject。
  *
@@ -175,7 +175,7 @@ export function objectMatchesFilter(
 
 // ============================================================================
 // Range Filter マッチング
-// draft-ietf-moq-transport-21 Section 3.3.2
+// draft-ietf-moq-transport-22 Section 3.3.2
 // ============================================================================
 
 /**
@@ -199,7 +199,7 @@ export interface RangeFilterValues {
 /**
  * Range Filter の評価 (マッチング) を行う
  *
- * draft-ietf-moq-transport-21 Section 3.3.2:
+ * draft-ietf-moq-transport-22 Section 3.3.2:
  * - 同一 SetID のフィルタは AND、異なる SetID の結果は OR で結合する
  * - Range の包含判定は両端含む (inclusive)
  * - 終端省略 (End なし) は open-ended (上限なし)
@@ -312,7 +312,7 @@ function rangeContainsValue(ranges: FilterRange[], value: bigint): boolean {
 /**
  * Object Properties バイト列から対象 Property Type の値を寛容デコードで抽出する
  *
- * draft-ietf-moq-transport-21 §10.7:
+ * draft-ietf-moq-transport-22 §10.7:
  * 「When looking for the value of a property, processors MUST search both the
  *  mutable properties and the contents of Immutable Properties.」
  * IMMUTABLE_PROPERTIES (0x0B) のネスト内も検索する。
@@ -333,7 +333,7 @@ function extractObjectPropertyValue(
 /**
  * Property 列から対象 Type の varint 値を検索する (IMMUTABLE_PROPERTIES ネスト内も含む)
  *
- * draft-ietf-moq-transport-21 §10.7:
+ * draft-ietf-moq-transport-22 §10.7:
  * 「When looking for the value of a property, processors MUST search both the
  *  mutable properties and the contents of Immutable Properties.」
  * IMMUTABLE_PROPERTIES (0x0B) のネスト内も検索する。
@@ -369,7 +369,7 @@ function findPropertyValueRecursive(
       }
       return undefined;
     }
-    // draft-ietf-moq-transport-21 §10.7: IMMUTABLE_PROPERTIES のネスト内も検索する
+    // draft-ietf-moq-transport-22 §10.7: IMMUTABLE_PROPERTIES のネスト内も検索する
     if (property.id === 0x0bn && property.data !== undefined) {
       const inner = decodeObjectPropertiesTolerant(property.data);
       const innerValue = findPropertyValueRecursive(inner.properties, targetType, depth + 1);
@@ -387,7 +387,7 @@ const MAX_PROPERTY_NESTING_DEPTH = 8;
 /**
  * TRACK_PROPERTY_FILTER の評価 (受信 PUBLISH の Track Properties に対する検索)
  *
- * draft-ietf-moq-transport-21 §3.3.2:
+ * draft-ietf-moq-transport-22 §3.3.2:
  * 「The Track Property Filter can be used in SUBSCRIBE_TRACKS to filter
  *  PUBLISH messages with required Track Property types and values. PUBLISH
  *  messages which pass the filter will be forwarded」
@@ -458,7 +458,7 @@ function trackPropertyFilterParamMatches(
 /**
  * Track Properties から対象 Type の varint 値を検索する
  *
- * draft-ietf-moq-transport-21 §10.7:
+ * draft-ietf-moq-transport-22 §10.7:
  * IMMUTABLE_PROPERTIES のネスト内も検索する (共通ヘルパ findPropertyValueInList を使用)。
  */
 function findTrackPropertyValue(properties: Property[], targetType: bigint): bigint | undefined {

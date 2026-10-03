@@ -1,6 +1,6 @@
 /**
  * MOQT Publish Messages
- * draft-ietf-moq-transport-21 Section 9.8 (PUBLISH) — 9.3 (REQUEST_OK / PUBLISH_OK) — 9.9 (PUBLISH_DONE)
+ * draft-ietf-moq-transport-22 Section 9.8 (PUBLISH) — 9.3 (REQUEST_OK / PUBLISH_OK) — 9.9 (PUBLISH_DONE)
  */
 
 import { decodeVarint, encodeVarint } from "../varint";
@@ -22,9 +22,9 @@ import { MessageType } from "./types";
 /**
  * PUBLISH メッセージ (Section 9.8 PUBLISH)
  *
- * draft-ietf-moq-transport-21:
+ * draft-ietf-moq-transport-22:
  * Track Properties が追加された。
- * draft-ietf-moq-transport-21 Section 9 (Control Messages)
+ * draft-ietf-moq-transport-22 Section 9 (Control Messages)
  */
 export interface Publish {
   type: typeof MessageType.PUBLISH;
@@ -39,7 +39,7 @@ export interface Publish {
 /**
  * PUBLISH_DONE メッセージ (Section 9.9 PUBLISH_DONE)
  *
- * draft-ietf-moq-transport-21:
+ * draft-ietf-moq-transport-22:
  * 双方向ストリーム上で送信されるため Request ID フィールドはない。
  */
 export interface PublishDone {
@@ -52,7 +52,7 @@ export interface PublishDone {
 /**
  * Publish のペイロードをエンコード
  *
- * draft-ietf-moq-transport-21 Section 9.8 (PUBLISH):
+ * draft-ietf-moq-transport-22 Section 9.8 (PUBLISH):
  * PUBLISH Message {
  *   Type (i) = 0x1D,
  *   Length (16),
@@ -76,7 +76,7 @@ export function encodePublishPayload(msg: Publish): Uint8Array {
   parts.push(encodeVarint(msg.trackAlias));
   parts.push(encodeParameters(msg.parameters));
 
-  // draft-ietf-moq-transport-21 Section 9.8 (PUBLISH):
+  // draft-ietf-moq-transport-22 Section 9.8 (PUBLISH):
   // Track Properties は length プレフィックスなしでシリアライズされる。
   // Message の Length フィールドで終端が決まる。
   parts.push(encodeProperties(msg.trackProperties));
@@ -94,7 +94,7 @@ export function encodePublishPayload(msg: Publish): Uint8Array {
 /**
  * Publish のペイロードをデコード
  *
- * draft-ietf-moq-transport-21 Section 9.8 (PUBLISH)
+ * draft-ietf-moq-transport-22 Section 9.8 (PUBLISH)
  */
 export function decodePublishPayload(data: Uint8Array, offset = 0): Publish {
   let totalConsumed = 0;
@@ -111,7 +111,7 @@ export function decodePublishPayload(data: Uint8Array, offset = 0): Publish {
   const trackName = data.slice(offset + totalConsumed, offset + totalConsumed + Number(nameLen));
   totalConsumed += Number(nameLen);
 
-  // draft-ietf-moq-transport-21 §8.7:
+  // draft-ietf-moq-transport-22 §8.7:
   // Full Track Name (Namespace + Track Name 合計) が 4096 バイト超過は PROTOCOL_VIOLATION
   // ワイヤバイト長で計測する (不正 UTF-8 の置換による誤計測を防ぐ)
   validateFullTrackNameBytes(trackNamespace, trackName);
@@ -122,7 +122,7 @@ export function decodePublishPayload(data: Uint8Array, offset = 0): Publish {
   const [parameters, parametersConsumed] = decodeParameters(data, offset + totalConsumed);
   totalConsumed += parametersConsumed;
 
-  // draft-ietf-moq-transport-21 Section 9.8 (PUBLISH):
+  // draft-ietf-moq-transport-22 Section 9.8 (PUBLISH):
   // Track Properties は残りバイトすべて
   const propertiesData = data.slice(offset + totalConsumed);
   const trackProperties = decodeProperties(propertiesData);
@@ -144,7 +144,7 @@ export function decodePublishPayload(data: Uint8Array, offset = 0): Publish {
  * Session では個別にエンコードしているため、ランタイムでは使用しない。
  * PBT（Property-Based Testing）でのラウンドトリップテストで使用。
  *
- * draft-ietf-moq-transport-21 Section 9.9 (PUBLISH_DONE):
+ * draft-ietf-moq-transport-22 Section 9.9 (PUBLISH_DONE):
  * PUBLISH_DONE Message {
  *   Type (vi64) = 0xB,
  *   Length (16),
@@ -188,7 +188,7 @@ export function decodePublishDonePayload(data: Uint8Array, offset = 0): PublishD
   const [reasonLen, reasonLenConsumed] = decodeVarint(data, offset + totalConsumed);
   totalConsumed += reasonLenConsumed;
 
-  // draft-ietf-moq-transport-21 Section 8.5:
+  // draft-ietf-moq-transport-22 Section 8.5:
   // Reason Phrase の最大長は 1,024 バイト。
   // "If an endpoint receives a length exceeding the maximum, it MUST close
   //  the session with a PROTOCOL_VIOLATION"
@@ -206,7 +206,7 @@ export function decodePublishDonePayload(data: Uint8Array, offset = 0): PublishD
   const reasonPhrase = new TextDecoder().decode(reasonBytes);
   totalConsumed += Number(reasonLen);
 
-  // draft-ietf-moq-transport-21 Section 9:
+  // draft-ietf-moq-transport-22 Section 9:
   // "If the length does not match the length of the Message Body,
   //  the receiver MUST close the session with a PROTOCOL_VIOLATION."
   // Error Reason は PUBLISH_DONE ペイロードの最後のフィールドであり、

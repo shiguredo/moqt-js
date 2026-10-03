@@ -16,7 +16,7 @@ import { decodeVarint, encodeVarint } from "../varint";
 
 /**
  * Authorization Token Alias Type
- * draft-ietf-moq-transport-22 Section 9.20.2 (Figure 4 / Section 16.5)
+ * draft-ietf-moq-transport-22 Section 9.20.2 / Section 8.9 (Figure 4) / Section 16.5
  *
  * - DELETE: There is an Alias but no Type or Value.
  * - REGISTER: There is an Alias, a Type and a Value.
@@ -202,7 +202,7 @@ export function decodeAuthorizationToken(data: Uint8Array): AuthorizationToken {
 
 /**
  * SETUP メッセージ用の Authorization Token Alias Type を検証する
- * draft-ietf-moq-transport-21 Section 9.1.4:
+ * draft-ietf-moq-transport-22 Section 9.1.4:
  * "If a server receives Alias Type DELETE (0x0) or USE_ALIAS (0x2)
  *  in a SETUP message, it MUST close the session with a PROTOCOL_VIOLATION."
  *

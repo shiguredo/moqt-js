@@ -1,7 +1,7 @@
 /**
  * session/endOfGroupTracking.ts の単体テスト
  *
- * draft-ietf-moq-transport-21 §12.1 (Malformed Track) の条件 4:
+ * draft-ietf-moq-transport-22 §12.1 (Malformed Track) の条件 4:
  * "An Object is received in a Group whose Object ID is larger than the final
  *  Object in the Group."
  * の判定に使う Group 単位の最終 Object ID 追跡について、記録・取得・上書き・

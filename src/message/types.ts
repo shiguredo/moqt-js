@@ -1,13 +1,13 @@
 /**
  * MOQT Message Types
- * draft-ietf-moq-transport-21 Section 9 (Control Messages)
+ * draft-ietf-moq-transport-22 Section 9 (Control Messages)
  */
 
 /**
  * Message Types (Section 9 Control Messages)
  */
 export const MessageType = {
-  // draft-ietf-moq-transport-21 Section 9.1
+  // draft-ietf-moq-transport-22 Section 9.1
   SETUP: 0x2f00,
 
   // セッション
@@ -49,7 +49,7 @@ export const MessageType = {
   /**
    * PUBLISH_SKIPPED (Section 9.19 PUBLISH_SKIPPED)
    *
-   * draft-ietf-moq-transport-21 Section 9.19 (PUBLISH_SKIPPED):
+   * draft-ietf-moq-transport-22 Section 9.19 (PUBLISH_SKIPPED):
    * Publisher が Track に対する PUBLISH を送信しないことを示す。
    * SUBSCRIBE_TRACKS の応答ストリーム上で送信される。
    * draft-ietf-moq-transport-22 Section 3.6.3: "or any other reason"
@@ -60,7 +60,7 @@ export const MessageType = {
    *
    * draft-ietf-moq-transport-22:
    * namespace discovery (NAMESPACE / NAMESPACE_DONE 受信) を担当する。
-   * draft-ietf-moq-transport-21 Section 9.15
+   * draft-ietf-moq-transport-22 Section 9.15
    */
   SUBSCRIBE_NAMESPACE: 0x50,
   /**
@@ -202,7 +202,7 @@ export const MessageParameterType = {
    *
    * SUBSCRIBE では Subscriber の希望値として Message Parameter で使用。
    * Publisher の DEFAULT_PUBLISHER_GROUP_ORDER は Track Property として使用。
-   * draft-ietf-moq-transport-21 Section 10.5 (DEFAULT PUBLISHER GROUP ORDER)
+   * draft-ietf-moq-transport-22 Section 10.5 (DEFAULT PUBLISHER GROUP ORDER)
    */
   GROUP_ORDER: 0x22,
   /**
@@ -278,7 +278,7 @@ export const GroupOrder = {
 export type GroupOrder = (typeof GroupOrder)[keyof typeof GroupOrder];
 
 /**
- * Object Status (Section 11.1.2 Object Status)
+ * Object Status (§11.1.1 Object Status)
  *
  * draft-ietf-moq-transport-22:
  * - 0x0: Normal object
@@ -289,7 +289,7 @@ export type GroupOrder = (typeof GroupOrder)[keyof typeof GroupOrder];
  *   Indicates that no objects with the location that is equal to or greater
  *   than the one specified exist.
  *
- * draft-ietf-moq-transport-21 Section 11.1.2
+ * draft-ietf-moq-transport-22 §11.1.1
  */
 export const ObjectStatus = {
   NORMAL: 0x0,
@@ -335,7 +335,7 @@ export type PublishDoneStatusCode =
 /**
  * PUBLISH_DONE の Status Code がエラー（アプリに Error として通知すべき）かどうか
  *
- * draft-ietf-moq-transport-21 Section 9.9 (PUBLISH_DONE):
+ * draft-ietf-moq-transport-22 Section 9.9 (PUBLISH_DONE):
  * INTERNAL_ERROR (0x0), UNAUTHORIZED (0x1), TOO_FAR_BEHIND (0x5), UPDATE_FAILED (0x8),
  * EXCESSIVE_LOAD (0x9), MALFORMED_TRACK (0x12) をエラーとみなす。
  * TRACK_ENDED (0x2) 等はエラーとみなさない。

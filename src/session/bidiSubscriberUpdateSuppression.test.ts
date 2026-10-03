@@ -23,7 +23,7 @@ import { createPublishReadTestContext } from "../testSupport/bidi";
 
 // ============================================================================
 // SubscriberImpl.update() の fire-and-forget 抑制テスト
-// draft-ietf-moq-transport-21 §9.5 / §9.5.1:
+// draft-ietf-moq-transport-22 §9.5 / §9.5.1:
 // SubscriberImpl.update を非 async 化し catch 付き Promise を直接返すことで、
 // 各 reject 経路でも unhandled rejection にならないことを検証する。
 // ============================================================================
@@ -87,7 +87,7 @@ async function assertNoUnhandledRejection(callback: () => Promise<void>): Promis
 }
 
 /**
- * draft-ietf-moq-transport-21 §9.5:
+ * draft-ietf-moq-transport-22 §9.5:
  * fire-and-forget の update() 後に REQUEST_ERROR が届いても unhandled
  * rejection にならず、保留中の更新が掃除されることを検証する。
  */
@@ -122,7 +122,7 @@ test("SubscriberImpl.update: fire-and-forget 後の REQUEST_ERROR で unhandled 
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.2:
+ * draft-ietf-moq-transport-22 §9.2:
  * fire-and-forget の update() 後に GOAWAY が届いても unhandled rejection に
  * ならず、保留中の更新が掃除されることを検証する。
  */
@@ -153,7 +153,7 @@ test("SubscriberImpl.update: fire-and-forget 後の GOAWAY で unhandled rejecti
 });
 
 /**
- * draft-ietf-moq-transport-21 §6.4.2.2:
+ * draft-ietf-moq-transport-22 §6.4.2.2:
  * fire-and-forget の update() 後に FIN が届いても unhandled rejection に
  * ならず、保留中の更新が掃除されることを検証する。
  */
@@ -179,7 +179,7 @@ test("SubscriberImpl.update: fire-and-forget 後の FIN で unhandled rejection 
 });
 
 /**
- * draft-ietf-moq-transport-21 §6.4.2.3:
+ * draft-ietf-moq-transport-22 §6.4.2.3:
  * fire-and-forget の update() 後に RESET_STREAM が起きても unhandled
  * rejection にならず、保留中の更新が掃除されることを検証する。
  */

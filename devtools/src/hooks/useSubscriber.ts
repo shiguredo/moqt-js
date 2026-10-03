@@ -1252,7 +1252,7 @@ export function useSubscriber(
 
     // 到着順にデコードする。映像とは独立したチェーンにすることで、映像のデコード待ちが
     // 音声の到着を遅らせないようにする。datagram で届いた Object も同じチェーンへ流す
-    // (同じ Track の音声は 1 本の順序で扱う。draft-ietf-moq-transport-21 §11)
+    // (同じ Track の音声は 1 本の順序で扱う。draft-ietf-moq-transport-22 §11)
     const queueAudioObject = (obj: MoqtObject, viaDatagram: boolean): void => {
       audioChainRef.current = audioChainRef.current
         .then(() => handleAudioObject(obj, viaDatagram))
@@ -1888,7 +1888,7 @@ export function useSubscriber(
         return;
       }
 
-      // draft-ietf-moq-transport-21 Section 2.1: Object は順不同で届きうる。Group ごとに
+      // draft-ietf-moq-transport-22 Section 2.1: Object は順不同で届きうる。Group ごとに
       // 別の stream で届くため、前の Group の末尾が次の Group の先頭より後に届くことが
       // ある。参照するフレームを復号していない Object は decoder へ渡さない
       const admission = videoDecodeOrderRef.current.admit({
@@ -2403,7 +2403,7 @@ export function useSubscriber(
         actualTrackName,
         {
           object: (obj: MoqtObject) => {
-            // stream の間の到着順は保証されない (draft-ietf-moq-transport-21 Section 2.1)。
+            // stream の間の到着順は保証されない (draft-ietf-moq-transport-22 Section 2.1)。
             // 前の Group の stream が開いている間は次の Group の Object を保留し
             // (videoGroupGateRef)、前の Group の Object を先に Promise チェーンへ積む。
             // handleObject は Group の順序と欠落を見て、復号してよい Object だけを decoder へ

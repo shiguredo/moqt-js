@@ -18,7 +18,7 @@ import { bidiReadRequestStreamMessages } from "./bidi";
 
 // ============================================================================
 // bidiSendPublishStateNotify のテスト
-// draft-ietf-moq-transport-21 §9.10 (PUBLISH_STATE_NOTIFY)
+// draft-ietf-moq-transport-22 §9.10 (PUBLISH_STATE_NOTIFY)
 // ============================================================================
 
 /**
@@ -89,7 +89,7 @@ test("bidiSendPublishStateNotify: LARGEST_OBJECT が未知なら FORWARD のみ�
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.10:
+ * draft-ietf-moq-transport-22 §9.10:
  * 通知は「値の変化したパラメータ」のみを運ぶため、現在値と同じ値の通知と
  * 変化を指定しない通知は送信しない (重複送信の抑止) ことを検証する。
  * 変化した値を指定すれば送信する。
@@ -146,7 +146,7 @@ test("bidiSendPublishStateNotify: LOCATION_FILTER の変化を通知し、等価
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.10:
+ * draft-ietf-moq-transport-22 §9.10:
  * 送信できなかった変更を購読状態へ反映しないことを検証する。反映してしまうと、
  * 購読者が受け取っていない値で publisher が Object の送信を止める等、両者の
  * 状態が食い違う。write 失敗は返値の reject として呼び出し元へ伝える。
@@ -173,7 +173,7 @@ test("bidiSendPublishStateNotify: 送信に失敗したら購読状態を反映�
 });
 
 /**
- * draft-ietf-moq-transport-21 §6.4.2.2 / §9.9:
+ * draft-ietf-moq-transport-22 §6.4.2.2 / §9.9:
  * 購読が既に終了している場合 (PUBLISH_DONE 送信後・ピアのキャンセル後) は
  * 通知先の双方向ストリームが無いため、送信も状態変更も行わないことを検証する。
  */
@@ -208,7 +208,7 @@ test("bidiSendPublishStateNotify: request stream が無い場合は reject す�
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.10:
+ * draft-ietf-moq-transport-22 §9.10:
  * 送信側が組み立てた PUBLISH_STATE_NOTIFY が、購読側 (subscribe ロール) の
  * 読み取りループに受理され購読状態へ反映されることを、送信バイト列を実際に
  * 受信側セッションへ流して検証する (エンコードとデコードの突き合わせ)。

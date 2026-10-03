@@ -66,7 +66,7 @@ function tryFormatTrackNamespace(value: unknown): string | null {
 }
 
 /**
- * MOQT Parameter 名 (draft-ietf-moq-transport-21) は ALL_CAPS_WITH_UNDERSCORES。
+ * MOQT Parameter 名 (draft-ietf-moq-transport-22) は ALL_CAPS_WITH_UNDERSCORES。
  * formatMessageData では Parameters セクションへ振り分けるために本関数で判定する。
  */
 export function isParameter(key: string): boolean {

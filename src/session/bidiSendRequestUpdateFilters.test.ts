@@ -17,11 +17,11 @@ import { bidiSendRequestUpdate } from "./bidi";
 
 // ============================================================================
 // bidiSendRequestUpdate の Range Filters テスト
-// draft-ietf-moq-transport-21 §3.3.2 / §9.1.6
+// draft-ietf-moq-transport-22 §3.3.2 / §9.1.6
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-21 §3.3.2:
+ * draft-ietf-moq-transport-22 §3.3.2:
  * REQUEST_UPDATE では TRACK_PROPERTY_FILTER (0x29) は一律 throw する。
  * moqt-js が送信する REQUEST_UPDATE はすべて per-subscription の更新 (§9.5) であり、
  * 0x29 が許可される SUBSCRIBE_TRACKS リクエスト自身のストリーム上の REQUEST_UPDATE
@@ -48,7 +48,7 @@ test("bidiSendRequestUpdate: TRACK_PROPERTY_FILTER を含む rangeFilters で th
 });
 
 /**
- * draft-ietf-moq-transport-21 §3.3.2:
+ * draft-ietf-moq-transport-22 §3.3.2:
  * REQUEST_UPDATE の rangeFilters (0x29 以外) が REQUEST_UPDATE にエンコードされ、
  * 削除 (Length=0) も許可されることを検証する。
  */

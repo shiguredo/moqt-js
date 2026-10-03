@@ -229,7 +229,7 @@ test("snapshot: 受信の欠けと保留の期限切れを出す", () => {
 });
 
 // RESET_STREAM を error code ごとに数える。code は reset の理由を表す
-// (draft-ietf-moq-transport-21 Section 12.5)。WebTransport が code を渡さなかった reset は
+// (draft-ietf-moq-transport-22 Section 12.5)。WebTransport が code を渡さなかった reset は
 // code 無しとして数え、FIN は数えない
 test("recordSubgroupEnd: reset を error code ごとに数え、FIN は数えない", () => {
   const stats = new PlaybackTimingStats();
