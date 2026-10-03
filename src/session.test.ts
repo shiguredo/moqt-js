@@ -8558,14 +8558,18 @@ test("initialize: ピアの MAX_AUTH_TOKEN_CACHE_SIZE から SETUP の登録成�
   const registered = await createSession(18n);
   assert.equal(registered.peerMaxAuthTokenCacheSize, 18n);
   assert.deepEqual(registered.setupTokenRegistration, { tokenAlias: 7n, registered: true });
+  // §9.1.3: 登録に成功した SETUP の REGISTER は総和の初期値になる
+  assert.equal(registered.peerRegisteredAuthTokenSize, 18n);
 
-  // 上限 17 と未広告 (既定 0) は登録失敗
+  // 上限 17 と未広告 (既定 0) は登録失敗 (総和は 0 のまま)
   const failed = await createSession(17n);
   assert.deepEqual(failed.setupTokenRegistration, { tokenAlias: 7n, registered: false });
+  assert.equal(failed.peerRegisteredAuthTokenSize, 0n);
 
   const unadvertised = await createSession(0n);
   assert.equal(unadvertised.peerMaxAuthTokenCacheSize, 0n);
   assert.deepEqual(unadvertised.setupTokenRegistration, { tokenAlias: 7n, registered: false });
+  assert.equal(unadvertised.peerRegisteredAuthTokenSize, 0n);
 });
 
 test("initialize: SETUP に載せた Authorization Token を setupAuthorizationToken として保持する", async () => {
@@ -9866,4 +9870,80 @@ test("normalizeAuthorizationTokenForSend: ピアの上限を超える REGISTER �
   // 上限ちょうどは送れる
   session.peerMaxAuthTokenCacheSize = 18n;
   assert.deepEqual(session.normalizeAuthorizationTokenForSend(token), token);
+});
+
+/**
+ * draft-ietf-moq-transport-22 §9.1.3:
+ * "The total size as restricted by the MAX_AUTH_TOKEN_CACHE_SIZE option is
+ *  calculated as the sum of the token sizes for all registered tokens ... minus
+ *  the sum of the token sizes for all deregistered tokens ..., since Session
+ *  initiation."
+ * 送信側の判定は 1 件単位ではなく、登録済みサイズの総和で行う。
+ */
+test("normalizeAuthorizationTokenForSend: 登録サイズの総和で上限を判定する", () => {
+  const session = createSessionImpl();
+  const register = (alias: bigint, size: number) => ({
+    aliasType: AuthorizationTokenAliasType.REGISTER,
+    tokenAlias: alias,
+    tokenType: 1n,
+    tokenValue: new Uint8Array(size).fill(0x01),
+  });
+  // 1 件 18 バイト (16 + 2)。上限 30 では 1 件目は通り、2 件目 (合計 36) で超過
+  session.peerMaxAuthTokenCacheSize = 30n;
+
+  assert.deepEqual(session.normalizeAuthorizationTokenForSend(register(1n, 2)), register(1n, 2));
+  assert.throws(
+    () => session.normalizeAuthorizationTokenForSend(register(2n, 2)),
+    /registration total size 36 exceeds peer MAX_AUTH_TOKEN_CACHE_SIZE 30/,
+  );
+
+  // 単発で超える場合もローカルエラー
+  assert.throws(
+    () => session.normalizeAuthorizationTokenForSend(register(3n, 15)),
+    /registration total size 49 exceeds peer MAX_AUTH_TOKEN_CACHE_SIZE 30/,
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-22 §9.1.3: 上限ちょうどは登録できる。
+ */
+test("normalizeAuthorizationTokenForSend: 総和が上限ちょうどなら送れる", () => {
+  const session = createSessionImpl();
+  session.peerMaxAuthTokenCacheSize = 36n;
+  const register = (alias: bigint) => ({
+    aliasType: AuthorizationTokenAliasType.REGISTER,
+    tokenAlias: alias,
+    tokenType: 1n,
+    tokenValue: new Uint8Array(2).fill(0x01),
+  });
+
+  session.normalizeAuthorizationTokenForSend(register(1n));
+  assert.deepEqual(session.normalizeAuthorizationTokenForSend(register(2n)), register(2n));
+  assert.equal(session.peerRegisteredAuthTokenSize, 36n);
+});
+
+/**
+ * 送信に至らなかった REGISTER の予約は取り消され、後続の REGISTER が送れる。
+ */
+test("releaseAuthorizationTokenForSend: 送信しなかった予約を取り消す", () => {
+  const session = createSessionImpl();
+  session.peerMaxAuthTokenCacheSize = 30n;
+  const register = (alias: bigint) => ({
+    aliasType: AuthorizationTokenAliasType.REGISTER,
+    tokenAlias: alias,
+    tokenType: 1n,
+    tokenValue: new Uint8Array(2).fill(0x01),
+  });
+
+  const first = session.normalizeAuthorizationTokenForSend(register(1n));
+  // 予約済みのため 2 件目は超過する
+  assert.throws(() => session.normalizeAuthorizationTokenForSend(register(2n)));
+  // 1 件目を送らなかったため取り消すと、2 件目が送れる
+  session.releaseAuthorizationTokenForSend(first);
+  assert.equal(session.peerRegisteredAuthTokenSize, 0n);
+  assert.deepEqual(session.normalizeAuthorizationTokenForSend(register(2n)), register(2n));
+
+  // 予約していないトークンの取り消しは何もしない
+  session.releaseAuthorizationTokenForSend(register(9n));
+  assert.equal(session.peerRegisteredAuthTokenSize, 18n);
 });

@@ -25,9 +25,11 @@ import {
   getSetupPath,
   type AuthorizationToken,
 } from "../message";
+import { AuthorizationTokenAliasType } from "../message/authorizationToken";
 import { decodeVarint, encodeVarint } from "../varint";
 import {
   AuthTokenCache,
+  authTokenRegisterEntrySize,
   processSetupAuthorizationTokens,
   setupTokenRegistration,
 } from "./authTokenCache";
@@ -127,6 +129,8 @@ export interface ConnectionSessionInternal {
   setupTokenRegistration: { tokenAlias: bigint; registered: boolean } | undefined;
   // SETUP に載せたトークン (登録失敗時に USE_VALUE へ戻す値の出典)
   readonly setupAuthorizationToken: AuthorizationToken | undefined;
+  // draft-ietf-moq-transport-22 §9.1.3: ピアに登録済みのトークンサイズの総和
+  peerRegisteredAuthTokenSize: bigint;
   receivedAuthTokens: AuthTokenCache;
 
   // draft-ietf-moq-transport-22 §12.2: 受信タイムアウト
@@ -420,6 +424,16 @@ export async function connectionInitialize(
     session.setupAuthorizationToken,
     BigInt(peerMaxAuthTokenCacheSize),
   );
+  // draft-ietf-moq-transport-22 §9.1.3: 登録に成功した SETUP の REGISTER は
+  // 「Session initiation 以降に登録したサイズ」として総和の初期値にする。
+  // 登録に失敗した場合はピアに登録されていないため 0 のままにする (§9.1.4)。
+  const setupAuthorizationToken = session.setupAuthorizationToken;
+  session.peerRegisteredAuthTokenSize =
+    session.setupTokenRegistration?.registered === true &&
+    setupAuthorizationToken !== undefined &&
+    setupAuthorizationToken.aliasType === AuthorizationTokenAliasType.REGISTER
+      ? authTokenRegisterEntrySize(setupAuthorizationToken.tokenValue)
+      : 0n;
 
   // draft-ietf-moq-transport-22 §9.1.7:
   // ピアの MAX_REQUEST_UPDATES を取得（デフォルト 0 = 無制限）

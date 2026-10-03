@@ -2394,6 +2394,12 @@
   - SETUP 以外の REGISTER が 1 件でピアの上限を超える場合は、ピアが AUTH_TOKEN_CACHE_OVERFLOW でセッションを閉じるため送信前にローカルエラーにする
   - 受信側の挙動 (SETUP は USE_VALUE 扱い、SETUP 以外は AUTH_TOKEN_CACHE_OVERFLOW) は変更しない
   - @voluntas
+- [UPDATE] 送信側の Authorization Token の登録サイズ判定を総和にする
+  - draft-ietf-moq-transport-22 §9.1.3 は MAX_AUTH_TOKEN_CACHE_SIZE で制限されるサイズを「登録したトークンサイズの総和 − 解除したトークンサイズの総和」と定める。送信側は SETUP の登録成功分を初期値として、送信する REGISTER のエントリサイズ (16 バイト + Token Value 長) を加算した総和がピアの上限を超える場合に送信前のローカルエラーにする
+  - 正規化時に同期して予約し、検証エラーや送信失敗で送信に至らなかった場合は予約を取り消す
+  - DELETE による減算は、moqt-js が DELETE を生成しないため実装しない (追跡値が実際より大きく固まる方向にのみ働く)
+  - 挙動変更: 複数の REGISTER の合計がピアの上限を超える場合に、送信前のローカルエラーになる
+  - @voluntas
 - [ADD] 実リレーへ接続する E2E テストを追加する
   - `secrets.TEST_MOQT_URI` が指す MOQT リレーへ実ブラウザ (Chromium) から接続し、SETUP の交換と正常な切断、Canvas のダミー映像の publish / subscribe、FETCH (絶対開始の Location Filter) を検証する
   - 接続先は環境変数 `TEST_MOQT_URI` で渡す。未設定の環境 (fork からの PR、secret を持たないローカル) ではテストを skip として記録し、暗黙の成功扱いにしない

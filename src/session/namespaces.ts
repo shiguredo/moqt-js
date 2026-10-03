@@ -27,7 +27,7 @@ import {
 } from "../message";
 import { ControlStreamReader, ControlStreamWriter } from "../controlStream";
 import * as bidi from "./bidi";
-import { requestsNormalizeAuthorizationToken } from "./requests";
+import { requestsNormalizeAuthorizationToken, requestsReleaseAuthorizationToken } from "./requests";
 import {
   REQUEST_UPDATE_STREAM_CLOSED_MESSAGE,
   namespaceStartNamespaceStreamLoop,
@@ -74,6 +74,11 @@ export interface NamespacesSessionInternal {
    * (draft-ietf-moq-transport-22 §8.9 / §9.1.4)
    */
   normalizeAuthorizationTokenForSend(token: AuthorizationToken): AuthorizationToken;
+  /**
+   * 送信に至らなかった REGISTER の予約を取り消す
+   * (draft-ietf-moq-transport-22 §9.1.3 の登録サイズの総和)
+   */
+  releaseAuthorizationTokenForSend(token: AuthorizationToken | undefined): void;
 
   sessionState: SessionState;
   readonly transport: WebTransport;
@@ -112,6 +117,10 @@ export async function namespacesSubscribeNamespace(
   // draft-ietf-moq-transport-22 §2.4.3 / §6.5: 予約 namespace / .session の送信拒否
   validateTrackNamespaceForSend(namespacePrefix);
 
+  // draft-ietf-moq-transport-22 §8.9 / §9.1.4: SETUP の登録成否に応じて正規化する。
+  // 検証や送信に失敗した場合は予約を取り消す (catch を参照)
+  const normalizedOptions = requestsNormalizeAuthorizationToken(session, options);
+
   // 専用の双方向ストリームを作成
   const stream = await session.transport.createBidirectionalStream();
   const streamReader = stream.readable.getReader();
@@ -125,9 +134,7 @@ export async function namespacesSubscribeNamespace(
       type: MessageType.SUBSCRIBE_NAMESPACE,
       requestId,
       trackNamespacePrefix,
-      parameters: buildSubscribeNamespaceParameters(
-        requestsNormalizeAuthorizationToken(session, options),
-      ),
+      parameters: buildSubscribeNamespaceParameters(normalizedOptions),
     };
 
     // メッセージをエンコードして送信
@@ -153,7 +160,8 @@ export async function namespacesSubscribeNamespace(
 
     await writer.write(framed);
   } catch (error) {
-    // 送信失敗時は取得済みリソースを掃除して throw する
+    // 送信失敗時は取得済みリソースを掃除して予約を取り消して throw する
+    requestsReleaseAuthorizationToken(session, normalizedOptions);
     await namespacesCleanupSendFailure(streamReader, writer);
     throw error;
   }
@@ -223,15 +231,7 @@ export async function namespacesSubscribeTracks(
     // draft-ietf-moq-transport-22 §8.9 / §9.1.4: SETUP の REGISTER の登録成否に
     // 応じて付与するトークンを正規化する (登録成功 → USE_ALIAS、登録失敗 →
     // USE_VALUE。詳細は normalizeAuthorizationTokenForSend の JSDoc)
-    const normalizedOptions =
-      options?.authorizationToken !== undefined
-        ? {
-            ...options,
-            authorizationToken: session.normalizeAuthorizationTokenForSend(
-              options.authorizationToken,
-            ),
-          }
-        : options;
+    const normalizedOptions = requestsNormalizeAuthorizationToken(session, options);
     const subscribeTracksMsg = {
       type: MessageType.SUBSCRIBE_TRACKS,
       requestId,
@@ -319,6 +319,8 @@ export async function namespacesPublishNamespace(
 
   try {
     // PUBLISH_NAMESPACE メッセージを構築
+    // draft-ietf-moq-transport-22 §8.9 / §9.1.4: SETUP の登録成否に応じて正規化する
+    const normalizedOptions = requestsNormalizeAuthorizationToken(session, options);
     const publishNamespaceMsg = {
       type: MessageType.PUBLISH_NAMESPACE,
       requestId,
@@ -326,12 +328,10 @@ export async function namespacesPublishNamespace(
       // AUTHORIZATION_TOKEN (0x03) - draft-ietf-moq-transport-22 Section 9.20.2
       // draft-ietf-moq-transport-22 §8.9 / §9.1.4: SETUP の登録成否に応じて
       // 正規化する (登録成功 → USE_ALIAS、登録失敗 → USE_VALUE)
-      parameters: (() => {
-        const normalized = requestsNormalizeAuthorizationToken(session, options);
-        return normalized?.authorizationToken !== undefined
-          ? [encodeAuthorizationTokenParameter(normalized.authorizationToken)]
-          : [];
-      })(),
+      parameters:
+        normalizedOptions?.authorizationToken !== undefined
+          ? [encodeAuthorizationTokenParameter(normalizedOptions.authorizationToken)]
+          : [],
     };
 
     // メッセージをエンコードして送信
