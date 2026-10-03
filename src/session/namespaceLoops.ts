@@ -410,7 +410,11 @@ function namespaceValidateInitialOk(
  *
  * - 確立前: 応答未達の reject (確立前 GOAWAY 済みなら上書きしない)
  * - 確立後: 保留中の REQUEST_UPDATE を失敗させる
- * - active namespace への NAMESPACE_DONE 補完 (§9.15)
+ * - active namespace への NAMESPACE_DONE 補完
+ *   (draft-ietf-moq-transport-22 §4.2.2 (Namespace Subscription State Management):
+ *   "When a subscriber receives a stream reset or FIN on a SUBSCRIBE_NAMESPACE response
+ *    stream, it SHOULD treat this as though each active namespace received a
+ *    NAMESPACE_DONE." / §9.15 (NAMESPACE_DONE))
  * - 自方向の FIN (§6.4.2.2)
  */
 async function namespaceHandleNamespaceStreamDone(

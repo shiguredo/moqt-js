@@ -69,6 +69,13 @@ draft-ietf-moq-transport-22 §6.2 (Session establishment) は、MOQT のバー�
 
 `vp check` (1290 files 整形 / 475 files lint・型エラーなし) / `tsc --noEmit` / `vp test run` (198 files / 3583 tests) が通る。識別子を提示する経路は `src/connect.ts` の 1 箇所だけで、devtools / examples / tests/e2e はすべて `connect()` 経由のため指定漏れは無い。`moqt-21` を期待するテスト・表示文字列も残っていないことを確認した。`/review-diff-code` を 1 周回し、引用した節名の誤り (§6.2 は Session establishment) と CHANGES の記述を修正した。
 
-### 4. 検証できないこと
+### 4. 実リレーでの検証 (完了)
 
-実リレーが draft-22 に未対応のため、接続の成功は確認できない。リレー対応後に e2e-test ワークフロー (停止中) で確認する必要がある。
+`sora-moq` が draft-22 の ALPN に対応したため、実リレーへ接続して確認した。
+
+- `relay/connect.spec.ts`: `moqt://` の URI で接続し、SETUP の交換が完了して正常に切断できる (closeCode 0)
+- `relay/fetch.spec.ts`: 絶対開始の Location Filter 付き FETCH で指定 Group 以降を取得できる
+- `relay/pubsub.spec.ts`: 実リレー経由で Canvas の映像を publish し、同じ namespace の subscribe で受信できる
+- devtools を含む E2E 92 件も pass
+
+これにより、`moqt-22` を提示する実装が実リレーと相互接続できることを確認した。あわせて `e2e-test` ワークフローの自動実行 (push / pull_request) を再開している。
