@@ -51,7 +51,7 @@ function createNamespaceUpdateSession(
     state: "active" | "closed";
     namespacePrefix: string[];
     pendingPrefix?: string[];
-    authorizationToken?: AuthorizationToken;
+    authorizationToken?: AuthorizationToken | undefined;
   };
 } {
   const { session, written } = createBidiSession();
@@ -565,7 +565,7 @@ test("bidiSendNamespaceRequestUpdate: 購読の AUTHORIZATION_TOKEN が REQUEST_
 
     const messages = new ControlStreamReader().feed(concatUint8Arrays(written));
     assert.equal(messages.length, 1, kind);
-    const decoded = decodeRequestUpdatePayload(messages[0].payload);
+    const decoded = decodeRequestUpdatePayload(messages[0]!.payload);
     const tokenParam = decoded.parameters.find(
       (p) => p.type === MessageParameterType.AUTHORIZATION_TOKEN,
     );
@@ -595,7 +595,7 @@ test("bidiSendNamespaceRequestUpdate: トークンの無い購読では AUTHORIZ
   await updatePromise;
 
   const messages = new ControlStreamReader().feed(concatUint8Arrays(written));
-  const decoded = decodeRequestUpdatePayload(messages[0].payload);
+  const decoded = decodeRequestUpdatePayload(messages[0]!.payload);
   assert.equal(
     decoded.parameters.some((p) => p.type === MessageParameterType.AUTHORIZATION_TOKEN),
     false,

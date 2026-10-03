@@ -993,14 +993,6 @@ export function requestsNormalizeAuthorizationToken<
 }
 
 /**
- * REQUEST_UPDATE に付与する Authorization Token を求める
- *
- * draft-ietf-moq-transport-22 §8.9: 既に登録した Alias を同じセッションで
- * 再 REGISTER すると、ピアは DUPLICATE_AUTH_TOKEN_ALIAS でセッションを閉じる。
- * SUBSCRIBE などの要求で REGISTER を送った Alias は、同じストリームの
- * REQUEST_UPDATE では USE_ALIAS で参照する (§9.1.4 も Alias の再利用を前提とする)。
- */
-/**
  * DELETE (Alias Type 0x00) の Authorization Token を落とす
  *
  * draft-ietf-moq-transport-22 §8.9:
@@ -1017,6 +1009,14 @@ export function requestsTokenUnlessDelete(
   return undefined;
 }
 
+/**
+ * REQUEST_UPDATE に付与する Authorization Token を求める
+ *
+ * draft-ietf-moq-transport-22 §8.9: 既に登録した Alias を同じセッションで
+ * 再 REGISTER すると、ピアは DUPLICATE_AUTH_TOKEN_ALIAS でセッションを閉じる。
+ * SUBSCRIBE などの要求で REGISTER を送った Alias は、同じストリームの
+ * REQUEST_UPDATE では USE_ALIAS で参照する (§9.1.4 も Alias の再利用を前提とする)。
+ */
 export function requestsTokenForRequestUpdate(
   token: AuthorizationToken | undefined,
 ): AuthorizationToken | undefined {

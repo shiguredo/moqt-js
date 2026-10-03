@@ -8261,6 +8261,39 @@ test("subscribeTracks: REGISTER のトークンは USE_ALIAS に変換して購�
   await writable.abort().catch(() => {});
 });
 
+/**
+ * draft-ietf-moq-transport-22 §8.9:
+ * DELETE は Alias の退役を指示するものであり、購読状態に保持して REQUEST_UPDATE へ
+ * 引き継ぐと UNKNOWN_AUTH_TOKEN_ALIAS と解され得るため、引き継がない。
+ */
+test("subscribeNamespace: DELETE のトークンは購読状態に保持しない", async () => {
+  const { transport, readable, writable } = createNamespaceSendFailureTransport(false);
+  const session = new SessionImpl(transport, {});
+
+  void session
+    .subscribeNamespace(
+      ["live"],
+      {},
+      {
+        authorizationToken: {
+          aliasType: AuthorizationTokenAliasType.DELETE,
+          tokenAlias: 4n,
+        },
+      },
+    )
+    .catch(() => {});
+
+  for (let i = 0; i < 20 && session.namespaceSubscriptions.size === 0; i++) {
+    await waitForMacrotask();
+  }
+  const subscription = session.namespaceSubscriptions.get(0n);
+  assert.isDefined(subscription);
+  assert.isUndefined(subscription!.authorizationToken);
+
+  await readable.cancel().catch(() => {});
+  await writable.abort().catch(() => {});
+});
+
 test("subscribeTracks: write 失敗時にストリームリソースを掃除して Map に登録しない", async () => {
   // 送信失敗時は reader / writer のロックを残さず、登録も行わない
   const { transport, readable, writable, cancelled, aborted, closed } =

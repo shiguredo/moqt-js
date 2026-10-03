@@ -1,7 +1,7 @@
 # namespace 系 REQUEST_UPDATE に Authorization Token を付与するかを決める
 
 - Created: 2026-10-03
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-10-03
 - Branch: feature/fix-namespace-request-update-auth-token
 - Polished: 2026-10-03
 
@@ -45,4 +45,33 @@ moqt-js の高レベル API (`createMediaSubscriber` / `createMediaPublisher` / 
 
 ## 解決方法
 
-{未着手}
+MSF §11.4.3 の MUST を満たすため、namespace / tracks 購読の REQUEST_UPDATE に AUTHORIZATION TOKEN を付与する実装にした。
+
+### 1. 判断と根拠
+
+MSF §11.4.3 は「track に紐づくトークンは、AUTHORIZATION TOKEN パラメータを受け付け、かつその track に紐づく全ての制御メッセージに含めなければならない (MUST)」と定め、end subscriber の対象として SUBSCRIBE / SUBSCRIBE_NAMESPACE / FETCH / REQUEST_UPDATE を挙げる (original publisher 側は PUBLISH_NAMESPACE)。
+
+- 列挙には namespace 単位の SUBSCRIBE_NAMESPACE (および PUBLISH_NAMESPACE) が含まれるため、「track に紐づく」を track 単位のメッセージに限る読み方は成立しない
+- MOQT §9.5 は SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS の REQUEST_UPDATE に AUTHORIZATION_TOKEN を許可しており、§9.20.1 の許可外出現に当たらない
+- 付与しないと、認可済みの購読でも更新が拒否され得る
+- 以上から**付与する**と判断した。判断の根拠は `bidiSendNamespaceRequestUpdate` の JSDoc と購読状態の JSDoc に記録し、利用者向けには `docs/LOW_LEVEL_API.md` に追記した
+
+### 2. 実装
+
+- `NamespaceSubscriptionState` / `TracksSubscriptionState` に `authorizationToken` を追加し、初回要求 (SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS) のトークンを保持する
+- 保持時に `requestsTokenForRequestUpdate` で REGISTER → USE_ALIAS に変換する (初回要求で REGISTER を送信済みのため。再 REGISTER は §8.9 の DUPLICATE_AUTH_TOKEN_ALIAS でセッションを閉じる)
+- DELETE (Alias Type 0x00) は退役の指示であり、更新で繰り返すと UNKNOWN_AUTH_TOKEN_ALIAS と解され得るため `requestsTokenUnlessDelete` で落とす
+- `bidiSendNamespaceRequestUpdate` が購読状態のトークンを AUTHORIZATION_TOKEN (0x03) として積む
+- 更新でトークンを差し替えるオプションは設けない。subscription 系の REQUEST_UPDATE が `Subscriber` の保持値を送るのと同じ扱いに揃えた (設計方針の主文はオプション追加だったが、既存 API との一貫性を優先した。この選択は `NamespaceUpdateOptions` のコメントにも記録した)
+- `session.ts` の `namespaceSubscriptions` / `tracksSubscriptions` のインライン型を `types.ts` の共有型に置き換え、フィールド追加が片側に漏れないようにした
+
+### 3. テスト
+
+- 初回要求の REGISTER が USE_ALIAS に変換されて購読状態に保持されること (namespace / tracks)
+- DELETE は保持されないこと (call site の配線を含む)
+- REQUEST_UPDATE のワイヤに AUTHORIZATION_TOKEN が載ること (namespace / tracks) と、トークンの無い購読では載らないこと
+- `requestsTokenUnlessDelete` / `requestsTokenForRequestUpdate` の変換
+
+### 4. 検証
+
+`vp check` (1292 files 整形 / 475 files lint・型エラーなし) / `tsc --noEmit` / `vp test run` (198 files / 3590 tests) が通る。`/review-diff-code` を 2 周回し、1 周目でテストが購読状態の変換経路を通っていないこと・DELETE の引き継ぎ・コメントの事実誤りを検出して修正し、2 周目で致命的・重要 0 件を確認した (変異を入れてテストが落ちることも確認済み)。
