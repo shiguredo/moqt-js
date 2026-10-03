@@ -50,18 +50,18 @@
 
 v21 と v22 で同じ番号の節の題名が変わるもの (番号が繰り下がった節) を洗い出し、その対応で修正した。
 
-| v21 | v21 の題名 | v22 |
-| --- | --- | --- |
-| §1.5 | Modularity | §1.6 |
-| §2.1.1 | Canonical Object Fields | §2.1.2 |
-| §2.4.2 | Reserved Namespaces | §2.4.3 |
-| §3.1.1 / §3.1.2 / §3.1.3 | Subscription State Management / Track Alias / Largest Object | §3.1.2 / §3.1.3 / §3.1.4 |
-| §3.2.1 | Fetch State Management | §3.2.4 |
-| §3.6 | Mandatory Track Properties | §3.7 |
-| §4.1 / §4.2 / §4.3 | Subscribing to Namespaces / Publishing Namespaces / Filtering SUBSCRIBE_TRACKS | §4.2 / §4.1 / §3.6.1 |
-| §7.5 / §7.6 / §7.7 | Publisher Interactions / Relay Track Handling / Relay Object Handling | §7.6 / §7.7 / §7.8 |
-| §9.20.2〜§9.20.22 | (Allowed Parameters の廃止と各パラメータの繰り下がり) | §9.20.2〜§9.20.21 |
-| §11.1.1 / §11.1.2 / §11.1.3 | Object Header / Object Status / Object Properties | (廃止) / §11.1.1 / §11.1.2 |
+| v21                         | v21 の題名                                                                     | v22                        |
+| --------------------------- | ------------------------------------------------------------------------------ | -------------------------- |
+| §1.5                        | Modularity                                                                     | §1.6                       |
+| §2.1.1                      | Canonical Object Fields                                                        | §2.1.2                     |
+| §2.4.2                      | Reserved Namespaces                                                            | §2.4.3                     |
+| §3.1.1 / §3.1.2 / §3.1.3    | Subscription State Management / Track Alias / Largest Object                   | §3.1.2 / §3.1.3 / §3.1.4   |
+| §3.2.1                      | Fetch State Management                                                         | §3.2.4                     |
+| §3.6                        | Mandatory Track Properties                                                     | §3.7                       |
+| §4.1 / §4.2 / §4.3          | Subscribing to Namespaces / Publishing Namespaces / Filtering SUBSCRIBE_TRACKS | §4.2 / §4.1 / §3.6.1       |
+| §7.5 / §7.6 / §7.7          | Publisher Interactions / Relay Track Handling / Relay Object Handling          | §7.6 / §7.7 / §7.8         |
+| §9.20.2〜§9.20.22           | (Allowed Parameters の廃止と各パラメータの繰り下がり)                          | §9.20.2〜§9.20.21          |
+| §11.1.1 / §11.1.2 / §11.1.3 | Object Header / Object Status / Object Properties                              | (廃止) / §11.1.1 / §11.1.2 |
 
 - 番号が変わらない節 (§8.3 / §9.1〜§9.19 / §11.3.1 / §12.1 など) は版表記のみ v22 に更新した (1683 行)
 - 図番号も v22 のキャプションに合わせた (OBJECT_DATAGRAM 24 → 25、SUBGROUP_HEADER 25 → 26、Subgroup Object Fields 26 → 27、FETCH Message 15 → 16、Key-Value-Pair 2 → 3、FETCH_HEADER / Fetch Object Fields は 0798 で更新済み)
