@@ -79,7 +79,7 @@ MOQT URI が `msf` fragment を持ち、その parameter に `c4m` がある場�
 - fragment はサーバーへ送信されないため、`c4m` がそのまま URL として送られることはない
 
 根拠は draft-ietf-moq-msf-01 §11.1.1 / §11.4.2 / §11.4.3、draft-ietf-moq-c4m-01 §2 / §7.1 Table 4 /
-§7.1.1、draft-ietf-moq-transport-21 §6.1.1 / §9.1.4 / §8.9。いずれも draft 版であり、
+§7.1.1、draft-ietf-moq-transport-22 §6.1.1 / §9.1.4 / §8.9。いずれも draft 版であり、
 将来の改版で変わる可能性がある。
 
 #### SETUP に載せたトークンの制御メッセージへの付与
@@ -124,7 +124,7 @@ draft-ietf-moq-msf-01 §11.4.3: track に紐づくトークンは、そのトラ
 | `close()`                                                  | セッション内部状態と保留中 Promise をクリーンアップする                                 |
 | `getStatistics()`                                          | セッション統計を取得する                                                                |
 
-`fragment` は draft-ietf-moq-transport-21 §6.1.1 の Fragment Identifier である。
+`fragment` は draft-ietf-moq-transport-22 §6.1.1 の Fragment Identifier である。
 
 > Fragment identifiers MAY be used with moqt URIs. The fragment is not
 > transmitted to the server; it is processed locally by the client
@@ -424,7 +424,7 @@ MOQT / QUIC ではレスポンスとデータストリームの順序が保証�
 
 #### Graceful 終了 (FIN) と未完成 Object
 
-FIN (ピアの graceful 終了) 検出時点で残バッファが非空、つまりシリアライズされた Object の途中なら、draft-ietf-moq-transport-21 §11.3 に従い `PROTOCOL_VIOLATION` でセッションを閉じる。
+FIN (ピアの graceful 終了) 検出時点で残バッファが非空、つまりシリアライズされた Object の途中なら、draft-ietf-moq-transport-22 §11.3 に従い `PROTOCOL_VIOLATION` でセッションを閉じる。
 失効範囲は Object 1 個ではなくセッション全体 (全 Track・全 Fetch) であり、アプリは再接続が必要になる。
 早期終了が RESET_STREAM で行われた場合は read が reject されるだけで本判定には該当しない (§11.3.2 は配信途中での終了を reset と規定している)。
 
@@ -472,7 +472,7 @@ Datagram 受信時は `decodeObjectDatagram()` で decode し、`trackAlias` か
 
 `startControlMessageLoop()` はセッション期間中ずっと制御ストリームを読み続ける。制御ストリームが途中で閉じた場合は `PROTOCOL_VIOLATION` とする。
 
-制御ストリームで処理するメッセージは `GOAWAY` のみである (draft-ietf-moq-transport-21 §6.3 でリクエスト / レスポンスは双方向ストリームに移動した)。
+制御ストリームで処理するメッセージは `GOAWAY` のみである (draft-ietf-moq-transport-22 §6.3 でリクエスト / レスポンスは双方向ストリームに移動した)。
 
 - `PUBLISH_DONE` を制御ストリームで受け取った場合は仕様違反としてセッションを閉じる。`PUBLISH_DONE` は request 双方向ストリーム側でのみ処理する。
 - `PUBLISH_NAMESPACE` / `REQUEST_OK` / `REQUEST_ERROR` は制御ストリーム上で受け取った場合も仕様違反としてセッションを閉じる。これらは専用の双方向ストリームで送受信される。

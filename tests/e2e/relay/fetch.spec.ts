@@ -9,9 +9,9 @@ import {
 
 // 実リレーに対する FETCH の受信経路を検証する
 //
-// draft-ietf-moq-transport-21 Section 9.11 (FETCH) — Section 9.12 (FETCH_OK)
+// draft-ietf-moq-transport-22 §9.11 (FETCH) — §9.12 (FETCH_OK)
 // draft-ietf-moq-transport-22 Section 9.20.9 (LOCATION FILTER Parameter)
-// draft-ietf-moq-transport-21 Section 11.4 (Fetch ストリームの終端)
+// draft-ietf-moq-transport-22 §11.4 (Fetch Streams)
 //
 // FETCH の受信経路は合成ストリームを注入する単体テストでしか覆われておらず、実リレーの
 // FIN と End of Range の作り方、payload の境界の扱いはそこで再現できない。受信側の

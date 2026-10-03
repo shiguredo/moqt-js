@@ -452,7 +452,7 @@ jitter buffer の遅れは音声と映像で別々に求める。音声は NetEq
 `AudioReceiverStats` / `VideoReceiverStats` を使う。
 
 受信した映像は Group の順序と欠落を見て、参照するフレームを復号済みの Object だけを
-復号する。Object は順不同で届きうる (draft-ietf-moq-transport-21 Section 2.1) ため、
+復号する。Object は順不同で届きうる (draft-ietf-moq-transport-22 Section 2.1) ため、
 次の Group のキーフレームを復号した後に届いた前の Group の Object は復号せず
 `staleFramesDropped` に数える。Group 内で Object ID が欠けた場合は、Prior Object ID Gap
 (Section 10.9) が非存在を示す分を除き欠落として扱い、次のキーフレームまでの Object を
@@ -683,7 +683,7 @@ stop 後に再開した場合は新しい
 
 MOQT の Publisher Priority を使用して、Relay での優先度制御を行う。
 値が小さいほど優先度が高く、帯域不足時に優先的に送信される。0-255 の符号無し
-整数で、最高優先は 0 である (draft-ietf-moq-transport-21 §5.1.1)。高レベル API は
+整数で、最高優先は 0 である (draft-ietf-moq-transport-22 §5.1.1)。高レベル API は
 Subscriber Priority を指定しないため、Relay は Publisher Priority の順に
 スケジューリングする (§5.1.2)。ただし §5.1.2 の選択アルゴリズムは SHOULD であり、
 実際のスケジューリングは Relay の裁量である。
@@ -696,10 +696,10 @@ Subscriber Priority を指定しないため、Relay は Publisher Priority の�
 | Video デルタフレーム | 128      | 破棄されても次のキーフレームで回復可能       |
 
 Video デルタフレームの 128 は DEFAULT PUBLISHER PRIORITY の既定値
-(draft-ietf-moq-transport-21 §10.4) と同じ値である。
+(draft-ietf-moq-transport-22 §10.4) と同じ値である。
 
 Publisher Priority は Subgroup 単位で 1 つに決まる
-(draft-ietf-moq-transport-21 §5.1.1)。映像のデルタフレームはキーフレームで開いた
+(draft-ietf-moq-transport-22 §5.1.1)。映像のデルタフレームはキーフレームで開いた
 Group の続きとして同じ Subgroup に載るため、実際に送信される値はキーフレームの
 0 になる。デルタフレームの 128 が載るのは、送信する Subgroup の先頭 Object が
 デルタフレームになるときだけである (キーフレームより先にデルタフレームが届いた

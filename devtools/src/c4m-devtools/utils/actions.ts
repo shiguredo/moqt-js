@@ -8,7 +8,7 @@
 
 import { C4M } from "moqt-js";
 
-/** 画面で扱うアクション (draft-21 のメッセージ名でまとめたもの) */
+/** 画面で扱うアクション (draft-22 のメッセージ名でまとめたもの) */
 export interface ActionGroup {
   /** 表示名 (例: "SETUP") */
   name: string;
