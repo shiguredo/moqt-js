@@ -8807,10 +8807,10 @@ test("initialize: 制御ストリームより先にデータストリームが�
 });
 
 /**
- * draft-ietf-moq-transport-22 §6.2 / §6.2.1:
+ * draft-ietf-moq-transport-22 §6.2 (Session establishment) / §6.2.1 (WebTransport):
  * WebTransport では WT-Available-Protocols に MOQT プロトコル識別子を提示する。
- * "ALPNs used to identify IETF drafts are created by appending the draft number
- *  to "moqt-"" であるため、draft-22 の実装は "moqt-22" を提示する。
+ * ドラフト版の識別子は "moqt-" + ドラフト番号であるため、draft-22 の実装は
+ * "moqt-22" を提示する。
  */
 test("connect: WebTransport に protocols ['moqt-22'] を渡す", async () => {
   const originalWebTransport = (globalThis as { WebTransport?: unknown }).WebTransport;
