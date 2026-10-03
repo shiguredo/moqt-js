@@ -64,6 +64,9 @@
   - End Group (StartGroup + EndGroupDelta) が 2^64-1 を超える場合は、送信側が InvalidFilterError、受信側が PROTOCOL_VIOLATION で拒否する (従来どおり)
   - 旧 v21 のワイヤ形式で送受信していた moqt-js とは相互運用できない
   - @voluntas
+- [UPDATE] 実リレーへ接続する E2E テスト (e2e-test ワークフロー) の自動実行を再開する
+  - 接続先のリレー (sora-moq) が draft-22 の ALPN (moqt-22) に対応し、実リレーに対して connect / fetch / pubsub のテストが通ることを確認したため、一時的に外していた push (develop / feature/**) と pull_request トリガーを戻す
+  - @voluntas
 - [UPDATE] 制御メッセージの許可パラメータの節番号を draft-22 §9.20 に合わせる
   - §9.20.2 (Allowed Parameters By Control Message) が廃止され、各制御メッセージ節が許可パラメータを列挙するようになったため、パラメータ節の番号が 1 つ繰り下がった (v21 §9.20.3〜§9.20.22 → v22 §9.20.2〜§9.20.21)
   - FILL_PARAMETERS の内側の一覧は Table 6 から Table 7 になった
