@@ -1,7 +1,7 @@
 /**
  * C4M DevTools のアクションの表示
  *
- * draft-ietf-moq-transport-21 は CLIENT_SETUP と SERVER_SETUP を 1 つの SETUP メッセージに
+ * draft-17 は CLIENT_SETUP と SERVER_SETUP を 1 つの SETUP メッセージに
  * 統合した。claim (draft-ietf-moq-c4m-01 Table 1) は 0 と 1 を別のアクションとして持つため、
  * 画面では 1 つの `SETUP` にまとめて表示し、認可判定もどちらかが許可されていれば許可とする。
  */

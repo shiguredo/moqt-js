@@ -1,7 +1,7 @@
 /**
  * C4M DevTools のアクション表示のテスト
  *
- * draft-ietf-moq-transport-21 で CLIENT_SETUP と SERVER_SETUP が 1 つの SETUP に統合された
+ * draft-17 で CLIENT_SETUP と SERVER_SETUP が 1 つの SETUP に統合された
  * ため、画面の表示名と認可判定がその規則に従うことを固定する。
  */
 

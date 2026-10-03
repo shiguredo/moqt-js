@@ -390,7 +390,7 @@ Safari 系の `WebTransport` では `writer.close()` が resolve しない場合
 
 `Fetcher.cancel()` も subscription と同様に双方向ストリームを close して終了する。
 
-draft-21 で Joining FETCH は削除された。過去データの取得と live 購読の組み合わせは、`subscribe()` (Next Object (`{ nextObject: true }`、Location Filter Type 0x05) の Location Filter) + `fetch()` (フィルタなし) の 2 リクエストで実現する (`createMediaSubscriber` の catalog 取得が該当)。仕様上の正式な置換は `FILL_PARAMETERS` (§3.4) である。
+draft-20 で Joining FETCH は削除された (draft-ietf-moq-transport-22 §A.1)。過去データの取得と live 購読の組み合わせは、`subscribe()` (Next Object (`{ nextObject: true }`、Location Filter Type 0x05) の Location Filter) + `fetch()` (フィルタなし) の 2 リクエストで実現する (`createMediaSubscriber` の catalog 取得が該当)。仕様上の正式な置換は `FILL_PARAMETERS` (§3.4) である。
 
 `FETCH_OK` が返る前にデータストリームが先着する可能性があるため、受信側は `waitForFetcher()` で待機する。
 
@@ -472,7 +472,7 @@ Datagram 受信時は `decodeObjectDatagram()` で decode し、`trackAlias` か
 
 `startControlMessageLoop()` はセッション期間中ずっと制御ストリームを読み続ける。制御ストリームが途中で閉じた場合は `PROTOCOL_VIOLATION` とする。
 
-制御ストリームで処理するメッセージは `GOAWAY` のみである (draft-ietf-moq-transport-22 §6.3 でリクエスト / レスポンスは双方向ストリームに移動した)。
+制御ストリームで処理するメッセージは `GOAWAY` のみである (リクエスト / レスポンスは draft-17 で双方向ストリームへ移動し、現在の規定は draft-ietf-moq-transport-22 §6.3 にある)。
 
 - `PUBLISH_DONE` を制御ストリームで受け取った場合は仕様違反としてセッションを閉じる。`PUBLISH_DONE` は request 双方向ストリーム側でのみ処理する。
 - `PUBLISH_NAMESPACE` / `REQUEST_OK` / `REQUEST_ERROR` は制御ストリーム上で受け取った場合も仕様違反としてセッションを閉じる。これらは専用の双方向ストリームで送受信される。

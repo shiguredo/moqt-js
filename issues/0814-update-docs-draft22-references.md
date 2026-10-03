@@ -1,7 +1,7 @@
 # README とドキュメント・E2E テストに残る draft-21 の参照を draft-22 に合わせる
 
 - Created: 2026-10-03
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-10-03
 - Branch: feature/update-docs-draft22-references
 - Polished: 2026-10-03
 
@@ -48,4 +48,32 @@
 
 ## 解決方法
 
-{未着手}
+`README.md` / `docs/*.md` / `tests/e2e/*` に残っていた draft-21 の参照を draft-22 に更新した。ドキュメントとコメントのみの変更で、テストの挙動は変えていない。
+
+### 1. 更新した参照
+
+- `README.md`: 対応ドラフトの表記と IETF のリンクを draft-22 にした。Key-Value-Pairs の図番号を Figure 3 に直した
+- `docs/LOW_LEVEL_API.md` / `docs/HIGH_LEVEL_API.md`: §6.1.1 / §6.2 / §6.3 / §8.9 / §9.1.4 / §10.4 / §11.3 / §2.1 / §5.1.1 の版表記を draft-22 にした (いずれも節番号は v21 と v22 で同じ)
+- `tests/e2e/main.ts` / `tests/e2e/relay/*.spec.ts` / `tests/e2e/devtools-audio-meter.spec.ts`: 版表記を draft-22 にした。FILL TIMEOUT は v21 §9.20.6 → v22 §9.20.5 に繰り下がっているため番号も直した
+- `.env.example`: §6.1 の版表記を draft-22 にした
+- `devtools/src/c4m-devtools/utils/actions.ts`: 画面で扱うアクションの説明を現行仕様のメッセージ名に合わせた
+
+### 2. 番号の誤りの修正
+
+- `tests/e2e/relay/pubsub.spec.ts` の「§9.7 (SUBSCRIBE) — §9.8 (SUBSCRIBE_OK)」は v21 / v22 のどちらでも誤り (正: §9.6 / §9.7) のため直した
+
+### 3. 版表記を残した記述 (過去のドラフトでの変更)
+
+レビューで、過去の変更を述べる記述の版が 1 つずれていることが分かったため、事実に合わせて直した。
+
+- リクエスト / レスポンスの双方向ストリームへの移動は draft-17 (v22 §A.6 の "Since draft-16")。`docs/LOW_LEVEL_API.md` の記述を v22 §6.3 の規定として書き直した
+- Joining FETCH の削除は draft-20 (v22 §A.1)。「draft-21 で削除された」を「draft-20 で削除された」に直した
+- CLIENT_SETUP と SERVER_SETUP の SETUP への統合は draft-17 (v22 §A.6 の "Since draft-16")。devtools の記述を直した
+
+### 4. 現行リレーとの疎通
+
+0813 で接続時のプロトコル識別子を `moqt-22` にしたため、現行の Sora MoQ (draft-21) へは接続できない。この現状を README の対応ドラフトの記述に補足した (リレーが対応すれば疎通確認できる)。
+
+### 5. 検証
+
+`vp check` (1290 files 整形 / 475 files lint・型エラーなし) / `tsc --noEmit` / `vp test run` (198 files / 3583 tests) が通る。`rg "moq-transport-21|draft-21"` の残りは、現行リレーが draft-21 であることを述べる README の補足と、過去のドラフトでの変更を述べる記述だけである。`/review-diff-code` を 1 周回し、引用した節番号・版表記・図番号の誤りを修正した。

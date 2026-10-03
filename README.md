@@ -35,7 +35,7 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
   - 音声と映像の同期再生
 - Media over QUIC Transport (MOQT) 対応
   - [Media over QUIC Transport](https://datatracker.ietf.org/doc/html/draft-ietf-moq-transport-22)
-  - `draft-22` 対応
+  - `draft-22` 対応 (接続時のプロトコル識別子は `moqt-22`。現行の Sora MoQ は draft-21 のため、対応するまで疎通確認はできない)
 - Low Overhead Media Container (LOC) 対応
   - [Low Overhead Media Container](https://datatracker.ietf.org/doc/html/draft-ietf-moq-loc-04)
   - `draft-04` 対応
@@ -142,7 +142,7 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
 - Object Properties
   - Prior Group ID Gap / Prior Object ID Gap / Immutable Properties
   - OBJECT_DELIVERY_TIMEOUT / SUBGROUP_DELIVERY_TIMEOUT
-  - Key-Value-Pairs (Figure 2) の delta encoding
+  - Key-Value-Pairs (Figure 3) の delta encoding
 - GREASE
 
 ### Low Overhead Media Container
