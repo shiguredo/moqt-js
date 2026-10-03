@@ -463,7 +463,7 @@ test("window.moqtDevTools から音声の統計が読める", async ({ page }) =
   }
 });
 
-// 音声は Subgroup (stream) と Datagram の両方で届きうる (draft-ietf-moq-transport-21 §11)。
+// 音声は Subgroup (stream) と Datagram の両方で届きうる (draft-ietf-moq-transport-22 §11)。
 // どちらの経路で届いたかを画面で確かめられるように、統計に経路別の数を出す
 test("subscriber の画面に音声の経路別の受信数を出す", async ({ page }) => {
   await page.goto(DEVTOOLS_URL);

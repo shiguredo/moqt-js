@@ -3,8 +3,8 @@ import { RELAY_TEST_TIMEOUT_MS, closeRelayPage, openRelayPage, requireRelayUri }
 
 // 実リレーとのセッション確立 (SETUP の交換) と正常な切断を検証する
 //
-// draft-ietf-moq-transport-21 Section 6.2 (Session establishment)
-// draft-ietf-moq-transport-21 Section 9.1 (SETUP)
+// draft-ietf-moq-transport-22 §6.2 (Session establishment)
+// draft-ietf-moq-transport-22 §9.1 (SETUP)
 //
 // ここが通らないと他の実リレーのテストはすべて意味を持たないため、最初に確認する
 // 最小のシナリオにする。接続先は環境変数 TEST_MOQT_URI で渡す。

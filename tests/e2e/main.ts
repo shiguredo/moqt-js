@@ -144,7 +144,7 @@ export interface StartFetchOptions {
   filter?: FetchFilterOptions;
   /**
    * FILL TIMEOUT (ミリ秒)
-   * draft-ietf-moq-transport-21 Section 9.20.5 (FILL TIMEOUT Parameter)
+   * draft-ietf-moq-transport-22 §9.20.5 (FILL TIMEOUT Parameter)
    *
    * relay が欠損 Object の fill を待つ最大時間。0 は即座に利用可能な Object だけを要求する。
    * 省略するとパラメータを送らず、fill を待つ時間は relay の既定に委ねられる。
@@ -343,7 +343,7 @@ function readFetchStatus(handle: FetchHandle): FetchStatus {
 /**
  * 実リレーへ接続し、SETUP の交換が完了したことを確認してから閉じる
  *
- * draft-ietf-moq-transport-21 Section 6.2 (Session establishment)
+ * draft-ietf-moq-transport-22 §6.2 (Session establishment)
  */
 async function connectRelay(options: ConnectRelayOptions): Promise<ConnectRelayResult> {
   rememberRelayUri(options.url);
@@ -542,7 +542,7 @@ function toLocationFilter(options: FetchFilterOptions): LocationFilter {
 /**
  * 低レベル API の FETCH を開始する
  *
- * draft-ietf-moq-transport-21 Section 9.11 (FETCH) — Section 9.12 (FETCH_OK)
+ * draft-ietf-moq-transport-22 §9.11 (FETCH) — §9.12 (FETCH_OK)
  */
 async function startFetch(options: StartFetchOptions): Promise<HandleId> {
   rememberRelayUri(options.url);

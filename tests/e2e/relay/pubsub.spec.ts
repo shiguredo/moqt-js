@@ -10,8 +10,8 @@ import {
 // 実リレー経由で Canvas のダミー映像を publish し、同じ namespace を subscribe して
 // 映像トラックが届くところまでを検証する
 //
-// draft-ietf-moq-transport-21 Section 9.1 (SETUP)
-// draft-ietf-moq-transport-21 Section 9.7 (SUBSCRIBE) — Section 9.8 (SUBSCRIBE_OK)
+// draft-ietf-moq-transport-22 §9.1 (SETUP)
+// draft-ietf-moq-transport-22 §9.6 (SUBSCRIBE) — §9.7 (SUBSCRIBE_OK)
 // draft-ietf-moq-msf-01 Section 5 (Catalog)
 //
 // 高レベル API (WebCodecs / MediaStream) を使うため、接続、カタログの publish と FETCH、
