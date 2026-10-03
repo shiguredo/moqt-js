@@ -2077,7 +2077,7 @@ MALFORMED_REQUEST_OK_CASES.forEach(({ loop, rejectsBeforeClose }) => {
 
 // ============================================================================
 // 空必須メッセージの未知 Mandatory Track Property
-// draft-ietf-moq-transport-22 §9.3 (REQUEST_OK) / §3.7 (Mandatory Track Properties)
+// draft-ietf-moq-transport-22 §9.3 (REQUEST_OK) / §3.7 (Mandatory to Understand Track Properties)
 // ============================================================================
 
 /**

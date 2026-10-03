@@ -283,7 +283,7 @@ interface SubgroupFeed {
  * draft-ietf-moq-transport-22 §10.1 / §10.2 / §5.2:
  * subgroup 先頭 Object の Object Property としてのみ意味を持つ値。
  * Properties Present を持たない Type と非 NORMAL ステータスでは wire に載せない
- * (§11.1.3 は非 Normal ステータスの properties を禁止する)。
+ * (§11.1.2 は非 Normal ステータスの properties を禁止する)。
  */
 function buildTimeoutProperties(shape: SubgroupShape, spec: SubgroupObjectSpec): Uint8Array {
   if (!shape.hasProperties || spec.status !== ObjectStatus.NORMAL) {

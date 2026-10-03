@@ -244,7 +244,7 @@ export function encodeObjectDatagram(datagram: ObjectDatagram): Uint8Array {
     // "If an endpoint receives a datagram with the PROPERTIES bit set and an
     //  Properties Length of 0, it MUST close the session with a PROTOCOL_VIOLATION."
     // 受信側が閉じるワイヤを生成しないよう、PROPERTIES ビットが立っている場合は
-    // 空でない Properties を要求する (§11.1.3 は Properties を持たない Object に
+    // 空でない Properties を要求する (§11.1.2 は Properties を持たない Object に
     // PROPERTIES ビットを立てないことを求める)。
     if (extLen === 0) {
       throw new Error(

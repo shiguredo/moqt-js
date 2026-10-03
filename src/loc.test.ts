@@ -5,7 +5,7 @@
  *
  * LOC Properties を Track Property と Object Property の両方で扱う経路、および
  * Object Properties の Key-Value-Pair delta 符号化（draft-ietf-moq-transport-22
- * §8.3 / §11.1.3）のワイヤ形式・寛容デコード・合成経路を検証する。
+ * §8.3 / §11.1.2）のワイヤ形式・寛容デコード・合成経路を検証する。
  * 単体エンコーダ / デコーダ（encodeTimestamp 等）は単一 Property 用の絶対 Type ワイヤであり、
  * 複数 Property のワイヤは encode*Properties / decode*Properties が担う。
  */
@@ -194,7 +194,7 @@ test("resolveVideoProperties: Object と Track の両方が config を持つ場�
 });
 
 // ==========================================================================
-// 固定バイト列によるワイヤ形式検証 (draft-ietf-moq-transport-22 §8.3 / §11.1.3)
+// 固定バイト列によるワイヤ形式検証 (draft-ietf-moq-transport-22 §8.3 / §11.1.2)
 // ==========================================================================
 
 // 単一 Property のワイヤは「先頭の Delta Type = 0 からの絶対値」と同一であり、

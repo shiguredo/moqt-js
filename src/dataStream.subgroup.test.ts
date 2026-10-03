@@ -540,7 +540,7 @@ test("ObjectFields: mutable と IMMUTABLE_PROPERTIES の合算 2 回の PRIOR_GR
 });
 
 /**
- * draft-ietf-moq-transport-22 §11.1.3 / §3.7:
+ * draft-ietf-moq-transport-22 §11.1.2 / §3.7:
  * non-Normal status の Object に properties がある場合は PROTOCOL_VIOLATION で
  * セッションを閉じる MUST を優先し、Mandatory Track Property の検出より先に
  * 検証することを検証する。

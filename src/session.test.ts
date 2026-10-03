@@ -7614,7 +7614,8 @@ test("受信 PUBLISH ストリーム上の許可外パラメータの PUBLISH_ST
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.5 (REQUEST_UPDATE):
+ * draft-ietf-moq-transport-21 §9.5 (REQUEST_UPDATE) (v22 は REQUEST_UPDATE_OK /
+ * REQUEST_UPDATE_ERROR):
  * "The receiver of a REQUEST_UPDATE MUST respond with exactly one REQUEST_OK
  *  or REQUEST_ERROR message ..."
  * 受信 PUBLISH ストリーム上の REQUEST_OK は自 endpoint が送った REQUEST_UPDATE への

@@ -201,7 +201,7 @@ const MESSAGE_PARAMETER_VALUE_ENCODING: Record<number, MessageParameterValueEnco
   0x34: "track-namespace",
   // INCLUDE_PROPERTIES (Section 9.20.21)
   0x35: "uint8",
-  // Range Filters (draft-ietf-moq-transport-22 Section 3.3.2 / §9.20.9–§9.20.13)
+  // Range Filters (draft-ietf-moq-transport-22 Section 3.3.2 / §9.20.10–§9.20.14)
   // Value は Length (vi64) + [SetID + [Property Type] + Range 列] の 1 Length 構造。
   // 外側に Length を付加しない (length-prefixed から分離した専用種別)。
   0x25: "self-length-prefixed", // SUBGROUP_FILTER

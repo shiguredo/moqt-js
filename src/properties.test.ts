@@ -1068,10 +1068,10 @@ test("decodeProperties: 不完全な内側 KVP データで IncompleteDataError 
 
 // ============================================================================
 // GREASE Property
-// draft-ietf-moq-transport-22 §13 (Grease) / §3.7 (Mandatory Track Properties)
+// draft-ietf-moq-transport-22 §13 (Grease) / §3.7 (Mandatory to Understand Track Properties)
 // ============================================================================
 
-// Object Properties の Key-Value-Pairs（Figure 2、delta encoding）から
+// Object Properties の Key-Value-Pairs（Figure 3、delta encoding）から
 // Property ID の一覧を抽出する。
 // mergeDeliveryTimeoutObjectProperties / readDeliveryTimeoutObjectProperties と同じ規約。
 test("generateGreaseProperty: GREASE 予約値の奇数 ID で空バイト列を返す", () => {
@@ -1116,7 +1116,7 @@ test("appendGreaseObjectProperty: 既存 Properties を保持して GREASE Prope
 
 // ============================================================================
 // Object Properties の delta encoding ワイヤ形式検証
-// draft-ietf-moq-transport-22 §8.3 (Key-Value-Pair Structure) / §11.1.3
+// draft-ietf-moq-transport-22 §8.3 (Key-Value-Pair Structure) / §11.1.2
 // ============================================================================
 
 test("mergeDeliveryTimeoutObjectProperties: 単一の偶数 ID Property は [Type][Value] の 2 フィールドになる", () => {

@@ -236,7 +236,7 @@ test("bidiReadFetchResponse: 非違反失敗で削除集合が掃除される", 
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.7 (Mandatory Track Properties) / §6.4.2.3:
+ * draft-ietf-moq-transport-22 §3.7 (Mandatory to Understand Track Properties) / §6.4.2.3:
  * 未知の Mandatory Track Property を含む SUBSCRIBE_OK を受信した subscriber は
  * 購読を cancel する MUST。bidi リクエストストリームが RESET_STREAM (abort) /
  * STOP_SENDING (cancel) で終了し、state が残留しないことを検証する。
@@ -438,7 +438,7 @@ test("bidiReadSubscribeResponse: malformed 検出で同一 Track の既存購読
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.7 (Mandatory Track Properties) / §6.4.2.3:
+ * draft-ietf-moq-transport-22 §3.7 (Mandatory to Understand Track Properties) / §6.4.2.3:
  * 未知の Mandatory Track Property を含む FETCH_OK を受信した subscriber は
  * fetch を cancel する MUST。bidi リクエストストリームが RESET_STREAM (abort) /
  * STOP_SENDING (cancel) で終了し、state が残留しないことを検証する。

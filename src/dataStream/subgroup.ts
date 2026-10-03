@@ -369,9 +369,10 @@ export function hasReservedSubgroupIdMode(type: number): boolean {
 /**
  * Subgroup Header の Type Flags が形式 0b0XX1XXXX に一致するか判定する
  *
- * draft-ietf-moq-transport-22 §11.3.1: "Bit 4 MUST be set to 1.  Bit 7 MUST be set
- * to 0." に加え、"Values of 128 or greater ... MUST close the session with a
- * PROTOCOL_VIOLATION" のため 128 以上も拒否する。
+ * draft-ietf-moq-transport-22 §11.3.1: "Values where bit 4 is not set.  Bit 4 MUST
+ * be 1 for SUBGROUP_HEADER." に加え、"Values of 128 or greater (i.e., any value that
+ * requires more than a one-byte variable-length integer encoding)." は
+ * PROTOCOL_VIOLATION となるため 128 以上も拒否する。
  */
 export function isValidSubgroupHeaderTypeForm(type: number): boolean {
   return (type & 0x10) !== 0 && type <= 0x7f;

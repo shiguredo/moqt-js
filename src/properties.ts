@@ -172,7 +172,7 @@ export const TrackPropertyId = {
 /**
  * Mandatory Track Property の ID 範囲
  *
- * draft-ietf-moq-transport-22 §3.7 (Mandatory Track Properties):
+ * draft-ietf-moq-transport-22 §3.7 (Mandatory to Understand Track Properties):
  * 0x4000-0x7FFF は Mandatory Track Properties 用に予約され、Track scope でのみ意味を持つ。
  * 受信側が未知の Mandatory Track Property を含む Track を受け取った場合、Track Properties
  * では track を拒否し (REQUEST_ERROR UNSUPPORTED_EXTENSION)、Object Properties では
@@ -553,12 +553,12 @@ const GREASE_PROPERTY_N_CHOICES = 64;
  * GREASE Property を生成する
  *
  * draft-ietf-moq-transport-22 §13 (Grease): GREASE 値は 0x7f * N + 0x9D（N は非負整数）。
- * Properties は §8.4 / §11.1.3 の Key-Value-Pairs（Figure 2）に従い、奇数 ID は
+ * Properties は §8.4 / §11.1.2 の Key-Value-Pairs（Figure 3）に従い、奇数 ID は
  * Length プレフィックス付きバイト列、偶数 ID は varint 値としてエンコードされる。
  * 任意のバイト列を安全に送信するため、N を偶数に固定して Property ID を奇数にする
  * （0x9D は奇数、0x7f * 偶数は偶数、合計は奇数）。値は空バイト列とする。
  *
- * draft-ietf-moq-transport-22 §3.7 (Mandatory Track Properties): 0x4000-0x7FFF は
+ * draft-ietf-moq-transport-22 §3.7 (Mandatory to Understand Track Properties): 0x4000-0x7FFF は
  * Mandatory Track Property 範囲。0x7f * N + 0x9D は N ∈ [128, 256] でこの範囲に落入し、
  * 受信側は未知の Mandatory Track Property として Track Properties では track を拒否
  * （REQUEST_ERROR UNSUPPORTED_EXTENSION）、Object Properties では malformed と判定する。
@@ -575,8 +575,8 @@ export function generateGreaseProperty(): Property {
 /**
  * 既存の Object Properties バイト列に GREASE Property を 1 つ追加する
  *
- * draft-ietf-moq-transport-22 §11.1.3 (Object Properties): Object Properties は
- * "length in bytes followed by Key-Value-Pairs (see Figure 2)" であり、§8.3 の
+ * draft-ietf-moq-transport-22 §11.1.2 (Object Properties): Object Properties は
+ * "length in bytes followed by Key-Value-Pairs (see Figure 3)" であり、§8.3 の
  * Key-Value-Pairs（delta encoding）に従う。delta は前 Property との差分で Type を
  * エンコードするため末尾追記ができず、既存バイト列をデコードして Property[] に
  * 分解し、GREASE Property を合成して ID 昇順で再エンコードする（再構成方式）。
@@ -1293,7 +1293,7 @@ export function calculateSkippedObjects(currentObjectId: bigint, gap: PriorObjec
 // ============================================================================
 
 /**
- * Object Properties バイト列を Key-Value-Pairs（Figure 2、delta encoding）で
+ * Object Properties バイト列を Key-Value-Pairs（Figure 3、delta encoding）で
  * 寛容にデコードする
  *
  * draft-ietf-moq-transport-22 §8.3:

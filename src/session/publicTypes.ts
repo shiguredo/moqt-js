@@ -181,9 +181,9 @@ export interface ConnectOptions {
 
   /**
    * Pending Subgroup Stream の buffer 設定
-   * draft-ietf-moq-transport-22 §11.3.1 の "MAY ... choose to buffer it for a brief
-   * period to handle reordering with the control message that establishes the Track
-   * Alias" を実現する buffer の上限を制御する。
+   * draft-ietf-moq-transport-22 §3.1.3.1 (Unknown Track Alias) の "MAY drop the data
+   * or buffer it briefly to handle reordering with the control message that
+   * establishes the Track Alias" を実現する buffer の上限を制御する。
    *
    * 指定しなかった field は `DEFAULT_PENDING_SUBGROUP_BUFFER_OPTIONS` の値が使われる。
    */

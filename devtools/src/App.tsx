@@ -89,7 +89,7 @@ export function App() {
                 data-testid="moqt-draft-link"
                 class="text-blue-500 hover:text-blue-600 underline"
               >
-                draft-21
+                draft-22
               </a>
               )
             </h1>

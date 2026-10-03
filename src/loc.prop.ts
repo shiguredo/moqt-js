@@ -426,7 +426,7 @@ test("VideoFrameMarking: Length=3 (Long Extension + TL0PICIDX) は先頭 2 バ�
   assert.strictEqual(decoded.spatialLayerId, 0x20);
 
   // 余剰バイトを消費したうえで後続 TIMESTAMP が読めること。
-  // Object Properties は delta encoding (Figure 2) のため、後続 TIMESTAMP (0x10) は
+  // Object Properties は delta encoding (Figure 3) のため、後続 TIMESTAMP (0x10) は
   // 前 Property VIDEO_FRAME_MARKING (0x09) との差分 Delta Type 0x07 で書く。
   const trailing = encodeVarint(42n);
   const combined = new Uint8Array(wire.length + 1 + trailing.length);
@@ -707,7 +707,7 @@ test("VideoFrameMarking: encodeVideoProperties 経由でも値域外は同じマ
 // =============================================================================
 
 test("未知の偶数 ID は vi64 としてスキップされる", () => {
-  // Object Properties は delta encoding (Figure 2) のため ID は昇順連鎖する。
+  // Object Properties は delta encoding (Figure 3) のため ID は昇順連鎖する。
   // 未知偶数 ID 0x0E + value 99、その後 TIMESTAMP (0x10, delta 0x02)
   const data = new Uint8Array([0x0e, 0x63, 0x02, 0x7b]);
 

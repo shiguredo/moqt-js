@@ -471,7 +471,7 @@ export function decodeRequestErrorPayload(data: Uint8Array, offset = 0): Request
     // "Redirect: Present only when Error Code is REDIRECT."
     // REDIRECT (0x34) は Redirect 構造を必ず伴うため、欠落はメッセージ構造の
     // 違反として PROTOCOL_VIOLATION でセッションを閉じる
-    // (draft-21 §9「If the length does not match the length of the Message
+    // (draft-ietf-moq-transport-22 §9「If the length does not match the length of the Message
     //  Body, the receiver MUST close the session with a PROTOCOL_VIOLATION.」
     // と同じく、構造不正はセッション終了で扱う)。
     throw new ProtocolViolationError(

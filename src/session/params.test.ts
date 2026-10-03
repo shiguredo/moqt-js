@@ -130,7 +130,7 @@ test("buildSubscribeTracksParameters: §9.18 の一覧に無いパラメータ�
 
 // ============================================================================
 // buildPublishTrackProperties (GREASE)
-// draft-ietf-moq-transport-22 §13 (Grease) / §3.7 (Mandatory Track Properties)
+// draft-ietf-moq-transport-22 §13 (Grease) / §3.7 (Mandatory to Understand Track Properties)
 // ============================================================================
 
 test("buildPublishTrackProperties: grease 未指定は GREASE Property を含まない", () => {

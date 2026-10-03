@@ -326,7 +326,8 @@ export interface BidiSessionInternal {
    * coalescing された REQUEST_ERROR で pending を消した件数の残り
    * (pending の無い REQUEST_OK を許容する枠)
    *
-   * draft-ietf-moq-transport-22 §9.5.1 (Updating Subscriptions):
+   * draft-ietf-moq-transport-21 §9.5.1 (Updating Subscriptions)
+   * (v22 は REQUEST_UPDATE_ERROR):
    * "If the coalesced REQUEST_UPDATE results in REQUEST_ERROR, only a single
    *  REQUEST_ERROR will be sent and the sender of the REQUEST_UPDATEs will not
    *  always be able to determine which caused an error."
@@ -1202,7 +1203,7 @@ export async function bidiReadSubscribeResponse(
     },
     handleMalformedTrack: async (context, error) => {
       const { session, requestId, pending } = context;
-      // draft-ietf-moq-transport-22 §3.7 (Mandatory Track Properties):
+      // draft-ietf-moq-transport-22 §3.7 (Mandatory to Understand Track Properties):
       // 未知の Mandatory Track Property を含む SUBSCRIBE_OK を受信した
       // subscriber は購読を cancel する MUST (cancel は §6.4.2.3 の
       // RESET_STREAM / STOP_SENDING で行う)。
@@ -1368,7 +1369,7 @@ export async function bidiReadFetchResponse(
     },
     handleMalformedTrack: async (context, error) => {
       const { session, requestId, pending } = context;
-      // draft-ietf-moq-transport-22 §3.7 (Mandatory Track Properties):
+      // draft-ietf-moq-transport-22 §3.7 (Mandatory to Understand Track Properties):
       // 未知の Mandatory Track Property を含む FETCH_OK を受信した subscriber は
       // fetch を cancel する MUST (cancel は §6.4.2.3 の RESET_STREAM /
       // STOP_SENDING で行う)。requestStreams は手動削除せず bidiCancelFetch に
@@ -1428,7 +1429,7 @@ export async function bidiReadTrackStatusResponse(
 
       session.pendingTrackStatus.delete(requestId);
       pending.resolve({ parameters: decoded.parameters });
-      // draft-ietf-moq-transport-22 §9.13 / §6.4.2.2:
+      // draft-ietf-moq-transport-21 §9.13 / §6.4.2.2 (v22 は TRACK_STATUS_ERROR):
       // "The bidi stream is closed with a FIN after TRACK_STATUS_OK or
       //  REQUEST_ERROR are sent." レスポンスを受けた requester も自方向を
       // FIN で閉じ、ストリームを graceful に完了させる。requestStreams の
@@ -4584,7 +4585,8 @@ export function bidiHandleRequestUpdateOk(
 ): void {
   const msg = decodeRequestOkPayload(payload);
 
-  // draft-ietf-moq-transport-22 §9.5 (REQUEST_UPDATE):
+  // draft-ietf-moq-transport-21 §9.5 (REQUEST_UPDATE) (v22 は REQUEST_UPDATE_OK /
+  // REQUEST_UPDATE_ERROR):
   // "The receiver of a REQUEST_UPDATE MUST respond with exactly one REQUEST_OK
   //  or REQUEST_ERROR message indicating if the update was successful, unless it
   //  is coalescing failed updates to produce just one REQUEST_ERROR for multiple

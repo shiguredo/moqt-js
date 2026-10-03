@@ -278,7 +278,7 @@ export const GroupOrder = {
 export type GroupOrder = (typeof GroupOrder)[keyof typeof GroupOrder];
 
 /**
- * Object Status (Section 11.1.2 Object Status)
+ * Object Status (§11.1.1 Object Status)
  *
  * draft-ietf-moq-transport-22:
  * - 0x0: Normal object

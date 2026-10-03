@@ -5,7 +5,7 @@
  * ワイヤ形式を固定バイト列でピン留めする。ラウンドトリップは PBT
  * (fetch.prop.ts) が担い、ここではエンコーダとデコーダが同時に
  * 誤った形式へ移行しても気づけない「相互に一致しただけ」の状態を
- * 防ぐため、仕様の Figure 15 (FETCH Message) と突き合わせる。
+ * 防ぐため、仕様の Figure 16 (FETCH Message) と突き合わせる。
  */
 
 import { test, assert } from "vite-plus/test";

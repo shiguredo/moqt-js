@@ -268,7 +268,7 @@ export async function publishSendObjectInternal(
   }
 
   // GREASE Object Property - draft-ietf-moq-transport-22 §13 (Grease)
-  // opt-in 時、各オブジェクトに 1 つ追加する。§11.1.3 により Object Properties は
+  // opt-in 時、各オブジェクトに 1 つ追加する。§11.1.2 により Object Properties は
   // status Normal のオブジェクトにのみ許容される（非 Normal は PROTOCOL_VIOLATION）ため、
   // Normal のときだけ注入する。
   const status = params.status ?? ObjectStatus.NORMAL;

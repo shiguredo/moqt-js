@@ -293,7 +293,7 @@ export interface Publisher {
  *
  * draft-ietf-moq-transport-22 §11.1.1:
  * 非 NORMAL ステータスは空 payload でなければならない。
- * draft-ietf-moq-transport-22 §11.1.3:
+ * draft-ietf-moq-transport-22 §11.1.2:
  * 非 NORMAL ステータスの Object に properties があってはならない。
  * `status` 省略は NORMAL とみなす。
  *

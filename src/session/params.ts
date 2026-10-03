@@ -894,7 +894,7 @@ export function buildSubscribeTracksParameters(options?: SubscribeTracksOptions)
     });
   }
 
-  // Range Filters (0x25–0x29) - draft-ietf-moq-transport-22 Section 3.3.2 / 4.3
+  // Range Filters (0x25–0x29) - draft-ietf-moq-transport-22 Section 3.3.2 / §3.6.1
   // TRACK_PROPERTY_FILTER は SUBSCRIBE_TRACKS で許可される (§3.3.2)。削除は REQUEST_UPDATE のみ
   if (options?.rangeFilters !== undefined) {
     validateRangeFilterSpecs(options.rangeFilters, "SUBSCRIBE_TRACKS", {
