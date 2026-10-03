@@ -210,8 +210,7 @@ interface PendingRequestUpdate {
   /**
    * REQUEST_UPDATE 送信時に指定された Range Filters。
    * draft-ietf-moq-transport-22 §3.3.2:
-   * "If a filter parameter is omitted from REQUEST_UPDATE, the value is
-   *  unchanged."
+   * "If a filter parameter is omitted from REQUEST_UPDATE, it is unchanged."
    * 省略時 (undefined) は REQUEST_OK 受信時に Range Filters を更新しない。
    *
    * 内部の pending 状態オブジェクトで、省略を明示的に undefined として保持するため
@@ -2046,7 +2045,7 @@ export async function bidiHandlePublishRequestUpdate(
 
   // 判定順序 (3): パラメータスコープ検証
   // draft-ietf-moq-transport-22 §9.20.1 (Parameter Scope):
-  // "If it appears in some other type of message, the receiving endpoint
+  // "If a parameter appears in some other type of message, the receiving endpoint
   //  MUST close the connection with a PROTOCOL_VIOLATION."
   // REQUEST_UPDATE_ALLOWED_PARAMS は subscription 系 REQUEST_UPDATE に
   // 出現し得る型の集合であり、TRACK_NAMESPACE_PREFIX (§9.20.20、
@@ -4724,7 +4723,7 @@ export function hasPendingRequestUpdate(
 /**
  * 指定の targetRequestId を対象とする保留中の REQUEST_UPDATE を 1 件解決する
  *
- * draft-ietf-moq-transport-22 §9.5.1:
+ * draft-ietf-moq-transport-21 §9.5.1 (v22 は REQUEST_UPDATE_OK):
  * "The receiver MUST still send a REQUEST_OK for each successful update"
  * REQUEST_OK は各更新につき 1 通送られるため、1 件のみ解決する。
  *

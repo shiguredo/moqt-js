@@ -520,7 +520,7 @@ export function encodeObjectFields(
   if (hasPropertiesPresent(headerType)) {
     const extLen = properties?.length ?? 0;
 
-    // draft-ietf-moq-transport-22 Section 11.1.3:
+    // draft-ietf-moq-transport-22 Section 11.1.2:
     // "If an endpoint receives properties on an Object with status
     // that is not Normal, it MUST close the session with a PROTOCOL_VIOLATION."
     if (status !== ObjectStatus.NORMAL && extLen > 0) {
@@ -619,7 +619,7 @@ export function decodeObjectFields(
     validateObjectStatus(status);
     totalConsumed += statusConsumed;
 
-    // draft-ietf-moq-transport-22 Section 11.1.3:
+    // draft-ietf-moq-transport-22 Section 11.1.2:
     // "Any Object with status Normal can have properties (Section 8.4).
     // If an endpoint receives properties on an Object with status
     // that is not Normal, it MUST close the session with a PROTOCOL_VIOLATION."

@@ -108,8 +108,8 @@ export function encodeRangeFilter(spec: RangeFilterSpec): Uint8Array {
       throw new Error("range start must be >= previous end");
     }
     // draft-ietf-moq-transport-22 §8.6:
-    // "Any delta encoding that results in a value that exceeds 2^64-1
-    //  MUST be rejected with REQUEST_ERROR with error code INVALID_FILTER."
+    // "If adding the delta would exceed 2^64-1, the request MUST be rejected
+    //  with INVALID_FILTER."
     if (range.start > MAX_VARINT) {
       throw new InvalidFilterError(`range start exceeds maximum: ${range.start} > ${MAX_VARINT}`);
     }
@@ -217,8 +217,8 @@ export function decodeRangeFilter(
     const start = prevEnd + startDelta;
 
     // draft-ietf-moq-transport-22 §8.6:
-    // "Any delta encoding that results in a value that exceeds 2^64-1
-    //  MUST be rejected with REQUEST_ERROR with error code INVALID_FILTER."
+    // "If adding the delta would exceed 2^64-1, the request MUST be rejected
+    //  with INVALID_FILTER."
     if (start > MAX_VARINT) {
       throw new InvalidFilterError(`range start exceeds maximum: ${start} > ${MAX_VARINT}`);
     }

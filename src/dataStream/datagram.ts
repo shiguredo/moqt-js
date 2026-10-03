@@ -230,7 +230,7 @@ export function encodeObjectDatagram(datagram: ObjectDatagram): Uint8Array {
     const properties = datagram.properties;
     const extLen = properties?.length ?? 0;
 
-    // draft-ietf-moq-transport-22 Section 11.1.3:
+    // draft-ietf-moq-transport-22 Section 11.1.2:
     // Non-Normal status objects must not have properties
     if (
       datagramIsStatusType(datagram.type) &&
@@ -413,7 +413,7 @@ export function decodeObjectDatagram(data: Uint8Array, offset = 0): [ObjectDatag
     validateObjectStatus(status);
     totalConsumed += statusConsumed;
 
-    // draft-ietf-moq-transport-22 Section 11.1.3:
+    // draft-ietf-moq-transport-22 Section 11.1.2:
     // "Any Object with status Normal can have properties (Section 8.4).
     // If an endpoint receives properties on an Object with status
     // that is not Normal, it MUST close the session with a PROTOCOL_VIOLATION."
