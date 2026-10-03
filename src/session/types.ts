@@ -41,8 +41,9 @@ export interface NamespaceSubscriptionState {
    * 更新対象の prefix に紐づく購読を認可したトークンであるため、REQUEST_UPDATE にも
    * 同じ値を付与する。REGISTER は初回要求で送信済みのため USE_ALIAS に変換した値を
    * 保持する (再 REGISTER は DUPLICATE_AUTH_TOKEN_ALIAS でセッションを閉じるため)。
+   * DELETE で退役させたトークンは引き継がない。
    */
-  // セッション内部の状態オブジェクトで、解放時に明示的に undefined を代入するため `| undefined` を付ける
+  // exactOptionalPropertyTypes の下で AuthorizationToken | undefined を代入するため `| undefined` を付ける
   authorizationToken?: AuthorizationToken | undefined;
   /**
    * REQUEST_UPDATE で送信中 (REQUEST_OK 未受信) の新 Track Namespace Prefix。
@@ -66,9 +67,9 @@ export interface TracksSubscriptionState {
    *
    * draft-ietf-moq-msf-01 §11.4.3 の MUST (SUBSCRIBE_NAMESPACE / REQUEST_UPDATE を
    * 含む列挙) に従い、更新時も同じ値を付与する。REGISTER は初回要求で送信済みの
-   * ため USE_ALIAS に変換した値を保持する。
+   * ため USE_ALIAS に変換した値を保持する。DELETE で退役させたトークンは引き継がない。
    */
-  // セッション内部の状態オブジェクトで、解放時に明示的に undefined を代入するため `| undefined` を付ける
+  // exactOptionalPropertyTypes の下で AuthorizationToken | undefined を代入するため `| undefined` を付ける
   authorizationToken?: AuthorizationToken | undefined;
   /**
    * SUBSCRIBE_TRACKS 送信時に指定された Range Filters。

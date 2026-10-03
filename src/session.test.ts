@@ -8178,6 +8178,89 @@ test("subscribeNamespace: write 失敗時にストリームリソースを掃除
   );
 });
 
+/**
+ * draft-ietf-moq-msf-01 §11.4.3:
+ * 購読に紐づくトークンは REQUEST_UPDATE にも付与する MUST のため、初回要求の
+ * REGISTER を USE_ALIAS に変換した値を購読状態に保持する
+ * (再 REGISTER は DUPLICATE_AUTH_TOKEN_ALIAS でセッションを閉じるため)。
+ */
+test("subscribeNamespace: REGISTER のトークンは USE_ALIAS に変換して購読状態に保持する", async () => {
+  const { transport, readable, writable } = createNamespaceSendFailureTransport(false);
+  const session = new SessionImpl(transport, {});
+  session.peerMaxAuthTokenCacheSize = 1024n;
+
+  // REQUEST_OK が届かないため Promise は解決しない。購読状態の検証だけを行う
+  void session
+    .subscribeNamespace(
+      ["live"],
+      {},
+      {
+        authorizationToken: {
+          aliasType: AuthorizationTokenAliasType.REGISTER,
+          tokenAlias: 3n,
+          tokenType: 1n,
+          tokenValue: new Uint8Array(2).fill(0x01),
+        },
+      },
+    )
+    .catch(() => {});
+
+  // 送信と登録が終わるまで待つ
+  for (let i = 0; i < 20 && session.namespaceSubscriptions.size === 0; i++) {
+    await waitForMacrotask();
+  }
+  const subscription = session.namespaceSubscriptions.get(0n);
+  assert.isDefined(subscription);
+  // 初回要求で送信済みの Alias を再利用する (REGISTER を再送しない)
+  assert.deepEqual(subscription!.authorizationToken, {
+    aliasType: AuthorizationTokenAliasType.USE_ALIAS,
+    tokenAlias: 3n,
+  });
+
+  // ストリームのロックを解放して後始末する
+  // ストリームを閉じて受信ループを終わらせる
+  await readable.cancel().catch(() => {});
+  await writable.abort().catch(() => {});
+});
+
+/**
+ * SUBSCRIBE_TRACKS でも同じく USE_ALIAS に変換して保持する。
+ */
+test("subscribeTracks: REGISTER のトークンは USE_ALIAS に変換して購読状態に保持する", async () => {
+  const { transport, readable, writable } = createNamespaceSendFailureTransport(false);
+  const session = new SessionImpl(transport, {});
+  session.peerMaxAuthTokenCacheSize = 1024n;
+
+  void session
+    .subscribeTracks(
+      ["live"],
+      {},
+      {
+        authorizationToken: {
+          aliasType: AuthorizationTokenAliasType.REGISTER,
+          tokenAlias: 5n,
+          tokenType: 1n,
+          tokenValue: new Uint8Array(2).fill(0x01),
+        },
+      },
+    )
+    .catch(() => {});
+
+  for (let i = 0; i < 20 && session.tracksSubscriptions.size === 0; i++) {
+    await waitForMacrotask();
+  }
+  const subscription = session.tracksSubscriptions.get(0n);
+  assert.isDefined(subscription);
+  assert.deepEqual(subscription!.authorizationToken, {
+    aliasType: AuthorizationTokenAliasType.USE_ALIAS,
+    tokenAlias: 5n,
+  });
+
+  // ストリームを閉じて受信ループを終わらせる
+  await readable.cancel().catch(() => {});
+  await writable.abort().catch(() => {});
+});
+
 test("subscribeTracks: write 失敗時にストリームリソースを掃除して Map に登録しない", async () => {
   // 送信失敗時は reader / writer のロックを残さず、登録も行わない
   const { transport, readable, writable, cancelled, aborted, closed } =

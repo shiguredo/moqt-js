@@ -5,7 +5,7 @@
 
 import { type MoqtObject } from "./dataStream";
 import { SessionError, SessionErrorCode, normalizeSessionErrorCode } from "./error";
-import { type AuthorizationToken, type Location, type RangeFilterSpec } from "./message";
+import { type AuthorizationToken, type Location } from "./message";
 import {
   type Publisher,
   PublisherImpl,
@@ -60,7 +60,12 @@ import {
 import type { PriorGapTracking } from "./session/priorGapTracking";
 import type { EndOfGroupTracking } from "./session/endOfGroupTracking";
 import type { FullTrackNameKey } from "./fullTrackName";
-import type { PublisherStreamState, SessionInternal } from "./session/types";
+import type {
+  NamespaceSubscriptionState,
+  PublisherStreamState,
+  SessionInternal,
+  TracksSubscriptionState,
+} from "./session/types";
 import {
   incomingHandleDatagram,
   incomingWaitForFetcher,
@@ -237,6 +242,10 @@ export interface Session {
    *
    * @param namespacePrefix - Track Namespace Prefix
    * @param callbacks - コールバック関数
+   * Authorization Token を渡した場合、draft-ietf-moq-msf-01 §11.4.3 の MUST に従い、
+   * この購読の REQUEST_UPDATE (`NamespaceSubscription.update`) にも同じトークンを
+   * 付与する (REGISTER は初回要求で送信済みのため USE_ALIAS に変換する)。
+   *
    * @param options - オプション（authorizationToken: draft-ietf-moq-msf-01 §11.4.3 により SUBSCRIBE_NAMESPACE に MUST 付与）
    */
   subscribeNamespace(
@@ -252,6 +261,10 @@ export interface Session {
    * Publisher はマッチするネームスペース内のトラックに対して PUBLISH メッセージを
    * 別の新規双方向ストリームで送信する。応答ストリーム上では PUBLISH_SKIPPED が
    * 送られる場合がある。
+   *
+   * Authorization Token を渡した場合、draft-ietf-moq-msf-01 §11.4.3 の MUST に従い、
+   * この購読の REQUEST_UPDATE (`TracksSubscription.update`) にも同じトークンを付与する
+   * (REGISTER は初回要求で送信済みのため USE_ALIAS に変換する)。
    *
    * @param namespacePrefix - Track Namespace Prefix
    * @param callbacks - コールバック関数
@@ -495,20 +508,7 @@ export class SessionImpl implements Session {
    * SUBSCRIBE_NAMESPACE は専用の双方向ストリームで送受信される。
    * 応答として NAMESPACE / NAMESPACE_DONE のみが送られる。
    */
-  namespaceSubscriptions = new Map<
-    bigint,
-    {
-      callbacks: NamespaceSubscriptionCallbacks;
-      state: "active" | "closed";
-      namespacePrefix: string[];
-      // セッション内部の状態オブジェクトで、解放時に明示的に undefined を代入するため `| undefined` を付ける
-      pendingPrefix?: string[] | undefined;
-      stream?: WebTransportBidirectionalStream | undefined;
-      streamReader?: ReadableStreamDefaultReader<Uint8Array> | undefined;
-      controlReader?: ControlStreamReader | undefined;
-      writer?: WritableStreamDefaultWriter<Uint8Array> | undefined;
-    }
-  >();
+  namespaceSubscriptions = new Map<bigint, NamespaceSubscriptionState>();
   /**
    * SUBSCRIBE_TRACKS の状態管理
    *
@@ -517,21 +517,7 @@ export class SessionImpl implements Session {
    * 送受信される。応答ストリーム上では PUBLISH_SKIPPED が送られる。PUBLISH は
    * 別の新規双方向ストリームで到着する。
    */
-  tracksSubscriptions = new Map<
-    bigint,
-    {
-      callbacks: TracksSubscriptionCallbacks;
-      state: "active" | "closed";
-      namespacePrefix: string[];
-      // セッション内部の状態オブジェクトで、解放時に明示的に undefined を代入するため `| undefined` を付ける
-      rangeFilters?: RangeFilterSpec[] | undefined;
-      pendingPrefix?: string[] | undefined;
-      stream?: WebTransportBidirectionalStream | undefined;
-      streamReader?: ReadableStreamDefaultReader<Uint8Array> | undefined;
-      controlReader?: ControlStreamReader | undefined;
-      writer?: WritableStreamDefaultWriter<Uint8Array> | undefined;
-    }
-  >();
+  tracksSubscriptions = new Map<bigint, TracksSubscriptionState>();
   /**
    * PUBLISH_NAMESPACE の状態管理
    *

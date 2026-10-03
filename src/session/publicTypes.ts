@@ -895,6 +895,10 @@ export interface NamespaceUpdateOptions {
    * draft-ietf-moq-transport-22 §9.20.20 (TRACK_NAMESPACE_PREFIX Parameter)
    */
   trackNamespacePrefix: string[];
+  // Authorization Token は公開オプションに持たせない。draft-ietf-moq-msf-01 §11.4.3 の
+  // MUST に従い、初回要求 (SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS) のトークンを
+  // RequestStream 側で保持して REQUEST_UPDATE に引き継ぐ (subscription 系の
+  // REQUEST_UPDATE が Subscriber のトークンを使うのと同じ扱い)。
 }
 
 /**

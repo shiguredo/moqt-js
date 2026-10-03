@@ -32,6 +32,7 @@ import {
   requestsReleaseAuthorizationToken,
   requestsReserveAuthorizationToken,
   requestsTokenForRequestUpdate,
+  requestsTokenUnlessDelete,
 } from "./requests";
 import {
   REQUEST_UPDATE_STREAM_CLOSED_MESSAGE,
@@ -190,8 +191,10 @@ export async function namespacesSubscribeNamespace(
       // draft-ietf-moq-msf-01 §11.4.3: 購読に紐づくトークンは REQUEST_UPDATE にも
       // 付与する MUST のため、初回要求の値を保持する。REGISTER は初回要求で送信済み
       // のため USE_ALIAS に変換して保持する (再 REGISTER は DUPLICATE_AUTH_TOKEN_ALIAS
-      // でセッションを閉じる)。
-      authorizationToken: requestsTokenForRequestUpdate(normalizedOptions?.authorizationToken),
+      // でセッションを閉じる)。DELETE は退役の指示であり更新で繰り返さない
+      authorizationToken: requestsTokenForRequestUpdate(
+        requestsTokenUnlessDelete(normalizedOptions?.authorizationToken),
+      ),
       stream,
       streamReader,
       controlReader,
@@ -302,8 +305,11 @@ export async function namespacesSubscribeTracks(
       state: "active",
       namespacePrefix,
       // draft-ietf-moq-msf-01 §11.4.3: 購読に紐づくトークンは REQUEST_UPDATE にも
-      // 付与する MUST のため、初回要求の値を保持する (USE_ALIAS へ変換)
-      authorizationToken: requestsTokenForRequestUpdate(normalizedOptions?.authorizationToken),
+      // 付与する MUST のため、初回要求の値を保持する (USE_ALIAS へ変換)。
+      // DELETE は退役の指示であり更新で繰り返さない
+      authorizationToken: requestsTokenForRequestUpdate(
+        requestsTokenUnlessDelete(normalizedOptions?.authorizationToken),
+      ),
       // draft-ietf-moq-transport-22 §3.3.2:
       // TRACK_PROPERTY_FILTER は受信 PUBLISH の評価に使用するため保持する
       rangeFilters: options?.rangeFilters,

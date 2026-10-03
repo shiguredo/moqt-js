@@ -11,10 +11,6 @@
 
 ## develop
 
-- [FIX] namespace / tracks 購読の REQUEST_UPDATE に AUTHORIZATION TOKEN を付与する
-  - draft-ietf-moq-msf-01 §11.4.3 は「track に紐づくトークンは、AUTHORIZATION TOKEN パラメータを受け付ける全ての制御メッセージに含めなければならない (MUST)」と定め、end subscriber の対象として SUBSCRIBE_NAMESPACE と REQUEST_UPDATE を挙げている。SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS の REQUEST_UPDATE がトークンを運んでいなかったため、初回要求のトークンを引き継いで付与するようにした
-  - REGISTER は初回要求で送信済みのため、USE_ALIAS に変換した値を保持して付与する (再 REGISTER は DUPLICATE_AUTH_TOKEN_ALIAS でセッションを閉じるため)
-  - @voluntas
 - [CHANGE] 接続時に提示するプロトコル識別子を moqt-22 にする
   - draft-ietf-moq-transport-22 §6.2 (Session establishment) は、ドラフト版の識別子を「"moqt-" にドラフト番号を付けたもの」と定める。実装が準拠するドラフトは draft-22 であるため、WebTransport の WT-Available-Protocols に `moqt-22` を提示する (従来は `moqt-21`)
   - 現行の実リレー (sora-moq) は draft-22 の識別子に未対応のため、この変更後は接続できない。リレーが対応した時点で接続できるようになる (後方互換なし)。複数の draft を優先順で提示する運用が必要になった場合は追加する
@@ -332,6 +328,10 @@
   - 行の vnode をログの連番で保持し、展開の状態・表示モード・コピーの表示が変わったときだけ作り直す。Preact は同じ vnode を再び受け取ると部分木の差分を省略するため、1000 件表示でも 1 件追加で描画される行は 1 件になる (実測: 同じ計測方法で 1 件追加の中央値 23.0 ms → 7.6 ms、描画される行 1000 件 → 1 件)
   - 上限で捨てたログの vnode はキャッシュから落とす。`data` と `payload` は追加後に書き換えない前提になる (行を描画し直さないため、書き換えても表示は古いまま)
   - 1 件追加のコストは表示中の件数に比例する分が残る (1000 件で約 3 ms のうち、表示中の子の走査が大半)。表示する行を画面に入る分だけにする対応は別に行う
+  - @voluntas
+- [FIX] namespace / tracks 購読の REQUEST_UPDATE に AUTHORIZATION TOKEN を付与する
+  - draft-ietf-moq-msf-01 §11.4.3 は「track に紐づくトークンは、AUTHORIZATION TOKEN パラメータを受け付け、かつその track に紐づく全ての制御メッセージに含めなければならない (MUST)」と定め、end subscriber の対象として SUBSCRIBE_NAMESPACE と REQUEST_UPDATE を挙げている。namespace / tracks 購読の REQUEST_UPDATE がトークンを運んでいなかったため、初回要求のトークンを引き継いで付与するようにした
+  - REGISTER は初回要求で送信済みのため、USE_ALIAS に変換した値を保持して付与する (再 REGISTER は DUPLICATE_AUTH_TOKEN_ALIAS でセッションを閉じるため)。DELETE で退役させたトークンは引き継がない
   - @voluntas
 - [FIX] 音声を再生すると映像の表示が遅れるのを修正する
   - 音声と映像の表示の遅れを 1 つ共有していたため、音声の jitter buffer の遅れ (下限 80 ms) が映像にも乗り、映像の表示が約 50 ms 遅れていた。表示の遅れをトラックごとに決め (音声は到着の遅れの 0.95 分位、映像は揺らぎの百分位)、2 つのずれが 30 ms を超えたときだけ片側の遅延を動かす
