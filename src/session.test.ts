@@ -9983,3 +9983,35 @@ test("subscribe: 送信前の検証エラーで REGISTER の登録サイズが�
   // 予約していないため総和は 0 のまま (後続の REGISTER が送れる)
   assert.equal(session.peerRegisteredAuthTokenSize, 0n);
 });
+
+/**
+ * draft-ietf-moq-transport-22 §9.1.3: 予約は送信直前に行い、送信が失敗した場合は
+ * 取り消す。実経路 (publish の write 失敗) で登録サイズの総和が増えないことを検証する。
+ */
+test("publish: 送信失敗時に REGISTER の予約が取り消される", async () => {
+  const session = createSessionImpl();
+  session.peerMaxAuthTokenCacheSize = 1024n;
+
+  let thrown: Error | undefined;
+  try {
+    await session.publish(
+      ["live"],
+      "track",
+      {},
+      {
+        authorizationToken: {
+          aliasType: AuthorizationTokenAliasType.REGISTER,
+          tokenAlias: 1n,
+          tokenType: 1n,
+          tokenValue: new Uint8Array(2).fill(0x01),
+        },
+      },
+    );
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.isDefined(thrown);
+  // controlWriter 未初期化で送信に至らないため、予約は取り消される
+  assert.equal(session.peerRegisteredAuthTokenSize, 0n);
+});

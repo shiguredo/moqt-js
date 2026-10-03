@@ -92,7 +92,7 @@ export interface RequestsSessionInternal {
    * 送信直前の登録サイズを判定して予約する
    * (draft-ietf-moq-transport-22 §9.1.3 の登録サイズの総和)
    */
-  reserveAuthorizationTokenForSend(token: AuthorizationToken | undefined): void;
+  reserveAuthorizationTokenForSend(token: AuthorizationToken | undefined): boolean;
   /**
    * 送信に至らなかった REGISTER の予約を取り消す
    * (draft-ietf-moq-transport-22 §9.1.3 の登録サイズの総和)
@@ -262,8 +262,9 @@ export async function requestsPublish(
   });
 
   let streamInfo: Awaited<ReturnType<typeof requestsSendRequestOnBidiStream>>;
+  let reservedAuthToken = false;
   try {
-    requestsReserveAuthorizationToken(session, normalizedOptions);
+    reservedAuthToken = requestsReserveAuthorizationToken(session, normalizedOptions);
     streamInfo = await requestsSendRequestOnBidiStream(
       session,
       requestId,
@@ -283,7 +284,9 @@ export async function requestsPublish(
       },
     );
   } catch (error) {
-    requestsReleaseAuthorizationToken(session, normalizedOptions);
+    if (reservedAuthToken) {
+      requestsReleaseAuthorizationToken(session, normalizedOptions);
+    }
     // 送信失敗時は保留中の PUBLISH を削除して残留を防ぐ
     // (subscribe() の sendRequestOnBidiStream 失敗時と同パターン)。
     session.pendingPublish.delete(requestId);
@@ -445,8 +448,9 @@ export async function requestsSubscribe(
 
   const payload = encodeSubscribePayload(subscribeMsg);
   let streamInfo: Awaited<ReturnType<typeof requestsSendRequestOnBidiStream>>;
+  let reservedAuthToken = false;
   try {
-    requestsReserveAuthorizationToken(session, normalizedOptions);
+    reservedAuthToken = requestsReserveAuthorizationToken(session, normalizedOptions);
     streamInfo = await requestsSendRequestOnBidiStream(
       session,
       requestId,
@@ -464,7 +468,9 @@ export async function requestsSubscribe(
       },
     );
   } catch (error) {
-    requestsReleaseAuthorizationToken(session, normalizedOptions);
+    if (reservedAuthToken) {
+      requestsReleaseAuthorizationToken(session, normalizedOptions);
+    }
     // 送信失敗時は fill 関連付けと保留中の SUBSCRIBE を削除して残留を防ぐ
     // (bidiSendRequestUpdate の write 失敗時と同パターン)。
     session.fillFetchTargets.delete(requestId);
@@ -579,8 +585,9 @@ export async function requestsFetch(
   });
 
   let streamInfo: Awaited<ReturnType<typeof requestsSendRequestOnBidiStream>>;
+  let reservedAuthToken = false;
   try {
-    requestsReserveAuthorizationToken(session, normalizedOptions);
+    reservedAuthToken = requestsReserveAuthorizationToken(session, normalizedOptions);
     streamInfo = await requestsSendRequestOnBidiStream(
       session,
       requestId,
@@ -594,7 +601,9 @@ export async function requestsFetch(
       },
     );
   } catch (error) {
-    requestsReleaseAuthorizationToken(session, normalizedOptions);
+    if (reservedAuthToken) {
+      requestsReleaseAuthorizationToken(session, normalizedOptions);
+    }
     // 送信失敗時は保留中の FETCH を削除して残留を防ぐ
     // (subscribe() の sendRequestOnBidiStream 失敗時と同パターン)。
     session.pendingFetch.delete(requestId);
@@ -664,11 +673,12 @@ export async function requestsTrackStatus(
   };
 
   let streamInfo: Awaited<ReturnType<typeof requestsSendRequestOnBidiStream>>;
+  let reservedAuthToken = false;
   try {
     // buildTrackStatusParameters は throw しないが、encode 以降は共通化のため
     // 同一 try 範囲に含める (publish() / fetch() と同じ手順)。
     const payload = encodeTrackStatusPayload(trackStatusMsg);
-    requestsReserveAuthorizationToken(session, normalizedOptions);
+    reservedAuthToken = requestsReserveAuthorizationToken(session, normalizedOptions);
     streamInfo = await requestsSendRequestOnBidiStream(
       session,
       requestId,
@@ -681,7 +691,9 @@ export async function requestsTrackStatus(
       },
     );
   } catch (error) {
-    requestsReleaseAuthorizationToken(session, normalizedOptions);
+    if (reservedAuthToken) {
+      requestsReleaseAuthorizationToken(session, normalizedOptions);
+    }
     // 送信失敗時は保留中の TRACK_STATUS を削除して残留を防ぐ
     // (subscribe() の sendRequestOnBidiStream 失敗時と同パターン)。
     session.pendingTrackStatus.delete(requestId);
@@ -1005,10 +1017,10 @@ export function requestsTokenForRequestUpdate(
  * 並行する REGISTER が互いの加算を見落とさないようにする。
  */
 export function requestsReserveAuthorizationToken(
-  session: { reserveAuthorizationTokenForSend(token: AuthorizationToken | undefined): void },
+  session: { reserveAuthorizationTokenForSend(token: AuthorizationToken | undefined): boolean },
   options: { authorizationToken?: AuthorizationToken } | undefined,
-): void {
-  session.reserveAuthorizationTokenForSend(options?.authorizationToken);
+): boolean {
+  return session.reserveAuthorizationTokenForSend(options?.authorizationToken);
 }
 
 /**

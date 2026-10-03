@@ -705,26 +705,6 @@ export class SessionImpl implements Session {
     return this.setupAuthToken;
   }
 
-  /**
-   * 後続メッセージへ付与する Authorization Token を正規化する
-   *
-   * draft-ietf-moq-transport-22 §8.9 / §9.1.4: 自 SETUP の REGISTER で登録に
-   * 成功した Alias は USE_ALIAS に、登録に失敗した Alias は USE_VALUE に変換する
-   * (詳細は normalizeAuthorizationTokenForSend の JSDoc)。
-   *
-   * §8.9 の AUTH_TOKEN_CACHE_OVERFLOW は SETUP 以外の登録も対象であり、1 件の
-   * REGISTER だけでピアの MAX_AUTH_TOKEN_CACHE_SIZE (§9.1.3: 16 バイト +
-   * Token Value 長を上限と比較する) を超える場合はピアがセッションを閉じるため、
-   * 送信前にローカルエラーにする。
-   *
-   * @throws Error ピアの上限を 1 件で超える REGISTER を送ろうとした場合
-   */
-  /**
-   * 送信に至らなかった REGISTER の予約を取り消す
-   *
-   * 正規化時に加算したエントリサイズを減算する。ローカルエラー、検証エラー、
-   * ストリーム生成や書き込みの失敗で送信しなかった場合に呼ぶ。
-   */
   releaseAuthorizationTokenForSend(token: AuthorizationToken | undefined): void {
     if (token === undefined || token.aliasType !== AuthorizationTokenAliasType.REGISTER) {
       return;
@@ -751,14 +731,21 @@ export class SessionImpl implements Session {
    * 別の REGISTER が互いの加算を見落として合計超過のまま送信してしまう。
    * 送信に至らなかった場合は releaseAuthorizationTokenForSend で取り消す。
    *
-   * @throws Error 登録済みの総和がピアの上限を超える場合、または同じ Alias を
-   *   二重に登録しようとした場合 (§8.9 の再 REGISTER 禁止)
+   * @returns 予約した場合は true。REGISTER 以外のトークンは予約せず false を返す
+   * @throws Error 登録済みの総和がピアの上限を超える場合、または登録済みの
+   *   Alias を再登録しようとした場合 (§8.9 の再 REGISTER 禁止)
    */
-  reserveAuthorizationTokenForSend(token: AuthorizationToken | undefined): void {
+  reserveAuthorizationTokenForSend(token: AuthorizationToken | undefined): boolean {
     if (token === undefined || token.aliasType !== AuthorizationTokenAliasType.REGISTER) {
-      return;
+      return false;
     }
-    if (this.reservedAuthTokenSizes.has(token.tokenAlias)) {
+    // §8.9: 登録済みの Alias を再 REGISTER するとピアは DUPLICATE_AUTH_TOKEN_ALIAS で
+    // セッションを閉じる。SETUP で登録した Alias と、このセッションで送信済みの
+    // Alias のどちらも登録済みとして扱う
+    if (
+      this.reservedAuthTokenSizes.has(token.tokenAlias) ||
+      this.setupTokenRegistration?.tokenAlias === token.tokenAlias
+    ) {
       throw new Error(
         `AUTHORIZATION_TOKEN alias ${token.tokenAlias} is already registered in this session`,
       );
@@ -772,6 +759,7 @@ export class SessionImpl implements Session {
     }
     this.peerRegisteredAuthTokenSize = attemptedSize;
     this.reservedAuthTokenSizes.set(token.tokenAlias, entrySize);
+    return true;
   }
 
   normalizeAuthorizationTokenForSend(token: AuthorizationToken): AuthorizationToken {
