@@ -3,11 +3,11 @@
 - Created: 2026-10-03
 - Completed: {YYYY-MM-DD}
 - Branch: feature/add-relay-tests
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-10-03
 
 ## 目的
 
-実リレー (sora-moq) へ接続する E2E テストは 3 本しかなく、draft-22 で新設・再構成された経路の多くが実機で検証されていない。接続先は環境変数 `TEST_MOQT_URI` で渡す (リポジトリに URI やホストを書かない)。
+実リレー (sora-moq) へ接続する E2E テストは 3 本しかなく、namespace discovery や SUBSCRIBE_TRACKS、REQUEST_UPDATE、TRACK_STATUS、Object Datagram などの多くの経路が実機で検証されていない。接続先は環境変数 `TEST_MOQT_URI` で渡す (リポジトリに URI やホストを書かない)。
 
 ## 現状
 
@@ -31,17 +31,17 @@ namespace discovery のテストを試作して実リレーに対して実行し
 
 - 実リレーに対して**通ることを確認できたテストだけ**を追加する。リレーが未対応の経路を、スキップや緩い条件で追加しない (失敗を隠すため)
 - namespace discovery は、リレーが `SUBSCRIBE_NAMESPACE` に対応してから追加する。それまでは本 issue にリレー側の要件として記録する
-- 追加する経路の優先順は次のとおり。いずれも draft-22 で新設・再構成された節であり、ユニットテストでは相互接続を確認できない
+- 追加する経路の優先順は次のとおり。いずれもユニットテストでは相互接続 (クライアントとリレーの間の実ワイヤ) を確認できない経路である。draft-22 で再構成されたのは namespace discovery (§4.2 / §9.15〜9.17) と SUBSCRIBE_TRACKS の意味論 (§3.6) であり、その他は draft-22 以前から存在するが実リレーで未検証のまま残っている経路である
   1. namespace discovery (`SUBSCRIBE_NAMESPACE` / `NAMESPACE` / `NAMESPACE_DONE`、§4.2 / §9.15〜9.17): **リレー未対応のため保留**
-  2. `SUBSCRIBE_TRACKS` と `PUBLISH_SKIPPED` (§3.6 / §9.18)
-  3. namespace 系 `REQUEST_UPDATE` (prefix / FORWARD、§9.5.2)。`update()` の経路は本リポジトリで最も新しい実装である
+  2. `SUBSCRIBE_TRACKS` と `PUBLISH_SKIPPED` (意味論は §3.6 / §3.6.3、メッセージは §9.18 / §9.19)
+  3. namespace 系 `REQUEST_UPDATE` (prefix 更新は §9.5.2、`SUBSCRIBE_TRACKS` では FORWARD も §9.5 / §9.20.18)。`update()` の経路は最近になって実装・改修された (namespace / tracks 購読へのトークン付与、closed 0810)
   4. `FETCH` の fill (`FILL_PARAMETERS`)、Joining FETCH 廃止後の置換経路 (§3.4)
-  5. `TRACK_STATUS` (§9.12 / §9.13)
+  5. `TRACK_STATUS` (§9.13)
   6. Object Datagram 配送 (§11.2)。現在の pubsub テストは subgroup のみを通る
   7. `SUBSCRIBE` の `REQUEST_UPDATE` (forward / delivery timeout、§9.5)
 - `tests/e2e/main.ts` に、検証したい経路の操作を追加する (connect 済みのセッションをハンドルとして保持し、コールバックで観測値を集める現在の作りに合わせる)
 - 追加したテストは実リレーに対して実行して通ることを確認してからコミットする。確認できない場合はコミットせず、本 issue に結果を記録する
-- テストの本数が増えると relay ジョブの所要時間も増える。1 本あたり 20〜40 秒程度を目安にし、増えすぎる場合は 1 本に複数の経路をまとめる (現在は 3 本で 2〜5 分)
+- テストの本数が増えると relay ジョブの所要時間も増える。ジョブ全体は現状 2〜5 分程度であり、うち既存 3 本のテスト時間は CI 実測で合計約 25 秒である (closed 0784: connect 2.4 秒 / fetch 5.3 秒 / pubsub 5.7 秒)。追加分は 1 本につき 1 経路を基本とし、テスト時間が `timeout-minutes` (20 分) に収まらなくなる場合は 1 本に複数の経路をまとめる
 
 ## 完了条件
 
