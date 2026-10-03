@@ -82,9 +82,13 @@ jobs:
 
   e2e:
     runs-on: ubuntu-slim
-    # 遅い runner では 66 テストが 10 分を超えることがある (実際に 10m33s で
-    # キャンセルされた)。テストの内容と並列度は変えず、余裕を持たせる
-    timeout-minutes: 15
+    # 92 テストの実行 (vp run e2e-test) はランナーの性能に強く依存する。
+    # ローカル (Apple Silicon) では 92 テストが 45 秒 (最長のテストでも 2.3 秒) で
+    # 終わるのに対し、CI の 2 vCPU ランナーでは 6 分 54 秒かかる (1 テストあたり
+    # 約 4.5 秒)。特定のテストが遅いのではなく、テスト全体の合計がランナー性能に
+    # 比例して伸びるため、遅いランナーでは 15 分を超えてキャンセルされることがあった。
+    # テストの内容と並列度は変えず、実測の 2 倍以上の余裕を取る
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1
