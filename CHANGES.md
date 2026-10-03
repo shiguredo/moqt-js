@@ -11,6 +11,10 @@
 
 ## develop
 
+- [CHANGE] 接続時に提示するプロトコル識別子を moqt-22 にする
+  - draft-ietf-moq-transport-22 §6.2 (Version Negotiation) は「IETF ドラフトを識別する ALPN は "moqt-" にドラフト番号を付けたもの」と定める。実装が準拠するドラフトは draft-22 であるため、WebTransport の WT-Available-Protocols に `moqt-22` を提示する (従来は `moqt-21`)
+  - 接続先のリレーが draft-22 の識別子に対応していない場合は接続できない (後方互換なし)。複数の draft を併記する運用が必要になった場合は優先順で提示する
+  - @voluntas
 - [CHANGE] SUBSCRIBE_TRACKS が運べるパラメータを draft-22 §9.18 の列挙に限定する
   - draft-ietf-moq-transport-22 §9.18 (SUBSCRIBE_TRACKS) は許可パラメータを 9 種 (AUTHORIZATION_TOKEN / FORWARD / GROUP_ORDER / SUBGROUP_FILTER / OBJECTID_FILTER / PRIORITY_FILTER / OBJECT_PROPERTY_FILTER / TRACK_PROPERTY_FILTER / INCLUDE_PROPERTIES) に限定し、§9.20.1 は許可外メッセージへの出現を受信側で PROTOCOL_VIOLATION とする。§3.6.2 の「SUBSCRIBE に指定できるパラメータは SUBSCRIBE_TRACKS でも有効」という記述とは矛盾するが、§9.18 の列挙を正として LOCATION_FILTER / SUBSCRIBER_PRIORITY / FILL_PARAMETERS を送らないようにする
   - `SubscribeTracksOptions` から `filter` / `subscriberPriority` / `fill` を削除する (後方互換なし)。§3.6.2 が示すとおり、結果 PUBLISH の購読に Location Filter / FILL_PARAMETERS を載せるには SUBSCRIBE か、PUBLISH_OK 後の REQUEST_UPDATE を使う。SUBSCRIBE の `fill` は変更しない
