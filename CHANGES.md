@@ -11,6 +11,10 @@
 
 ## develop
 
+- [FIX] namespace / tracks 購読の REQUEST_UPDATE に AUTHORIZATION TOKEN を付与する
+  - draft-ietf-moq-msf-01 §11.4.3 は「track に紐づくトークンは、AUTHORIZATION TOKEN パラメータを受け付ける全ての制御メッセージに含めなければならない (MUST)」と定め、end subscriber の対象として SUBSCRIBE_NAMESPACE と REQUEST_UPDATE を挙げている。SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS の REQUEST_UPDATE がトークンを運んでいなかったため、初回要求のトークンを引き継いで付与するようにした
+  - REGISTER は初回要求で送信済みのため、USE_ALIAS に変換した値を保持して付与する (再 REGISTER は DUPLICATE_AUTH_TOKEN_ALIAS でセッションを閉じるため)
+  - @voluntas
 - [CHANGE] 接続時に提示するプロトコル識別子を moqt-22 にする
   - draft-ietf-moq-transport-22 §6.2 (Session establishment) は、ドラフト版の識別子を「"moqt-" にドラフト番号を付けたもの」と定める。実装が準拠するドラフトは draft-22 であるため、WebTransport の WT-Available-Protocols に `moqt-22` を提示する (従来は `moqt-21`)
   - 現行の実リレー (sora-moq) は draft-22 の識別子に未対応のため、この変更後は接続できない。リレーが対応した時点で接続できるようになる (後方互換なし)。複数の draft を優先順で提示する運用が必要になった場合は追加する

@@ -12,6 +12,7 @@
 
 import type { BidiSessionInternal } from "./bidi";
 import type { ControlStreamReader } from "../controlStream";
+import type { AuthorizationToken } from "../message/authorizationToken";
 import type { RangeFilterSpec } from "../message/parameter";
 import type {
   ConnectCallbacks,
@@ -30,6 +31,20 @@ export interface NamespaceSubscriptionState {
   state: "active" | "closed";
   namespacePrefix: string[];
   /**
+   * SUBSCRIBE_NAMESPACE 送信時の Authorization Token (REQUEST_UPDATE への再利用)
+   *
+   * draft-ietf-moq-msf-01 §11.4.3:
+   * "When a token is associated with a track, it MUST be included in ALL control
+   *  messages that accept the AUTHORIZATION TOKEN parameter and are associated with
+   *  that track. For end subscribers, this includes SUBSCRIBE, SUBSCRIBE_NAMESPACE,
+   *  FETCH, and REQUEST_UPDATE messages."
+   * 更新対象の prefix に紐づく購読を認可したトークンであるため、REQUEST_UPDATE にも
+   * 同じ値を付与する。REGISTER は初回要求で送信済みのため USE_ALIAS に変換した値を
+   * 保持する (再 REGISTER は DUPLICATE_AUTH_TOKEN_ALIAS でセッションを閉じるため)。
+   */
+  // セッション内部の状態オブジェクトで、解放時に明示的に undefined を代入するため `| undefined` を付ける
+  authorizationToken?: AuthorizationToken | undefined;
+  /**
    * REQUEST_UPDATE で送信中 (REQUEST_OK 未受信) の新 Track Namespace Prefix。
    * draft-ietf-moq-transport-22 §9.5.2:
    * REQUEST_OK 受信時に namespacePrefix へ反映し、REQUEST_ERROR 時は反映せずクリアする。
@@ -46,6 +61,15 @@ export interface TracksSubscriptionState {
   callbacks: TracksSubscriptionCallbacks;
   state: "active" | "closed";
   namespacePrefix: string[];
+  /**
+   * SUBSCRIBE_TRACKS 送信時の Authorization Token (REQUEST_UPDATE への再利用)
+   *
+   * draft-ietf-moq-msf-01 §11.4.3 の MUST (SUBSCRIBE_NAMESPACE / REQUEST_UPDATE を
+   * 含む列挙) に従い、更新時も同じ値を付与する。REGISTER は初回要求で送信済みの
+   * ため USE_ALIAS に変換した値を保持する。
+   */
+  // セッション内部の状態オブジェクトで、解放時に明示的に undefined を代入するため `| undefined` を付ける
+  authorizationToken?: AuthorizationToken | undefined;
   /**
    * SUBSCRIBE_TRACKS 送信時に指定された Range Filters。
    * draft-ietf-moq-transport-22 §3.3.2:

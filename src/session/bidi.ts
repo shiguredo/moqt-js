@@ -3867,6 +3867,22 @@ export async function bidiSendNamespaceRequestUpdate(
     encodeParameterTrackNamespace(createTrackNamespace(options.trackNamespacePrefix)),
   ];
 
+  // AUTHORIZATION_TOKEN (0x03) - draft-ietf-moq-msf-01 §11.4.3:
+  // "When a token is associated with a track, it MUST be included in ALL control
+  //  messages that accept the AUTHORIZATION TOKEN parameter and are associated with
+  //  that track. For end subscribers, this includes SUBSCRIBE, SUBSCRIBE_NAMESPACE,
+  //  FETCH, and REQUEST_UPDATE messages."
+  // namespace / tracks の購読を認可したトークンを初回要求から引き継いで付与する
+  // (subscription 系の REQUEST_UPDATE と同じ扱い)。
+  // draft-ietf-moq-transport-22 §9.20.2 (AUTHORIZATION TOKEN Parameter)
+  const authorizationToken = subscription.authorizationToken;
+  if (authorizationToken !== undefined) {
+    parameters.push({
+      type: MessageParameterType.AUTHORIZATION_TOKEN,
+      value: encodeAuthorizationToken(authorizationToken),
+    });
+  }
+
   // FORWARD (0x10) - draft-ietf-moq-transport-22 Section 9.20.18:
   // SUBSCRIBE_TRACKS の REQUEST_UPDATE にのみ許可され、 prefix に一致する
   // 将来の subscription が paused かどうか (FORWARD パラメータ) を指定する (既存購読には影響しない)。
