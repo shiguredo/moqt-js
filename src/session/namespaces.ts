@@ -27,7 +27,11 @@ import {
 } from "../message";
 import { ControlStreamReader, ControlStreamWriter } from "../controlStream";
 import * as bidi from "./bidi";
-import { requestsNormalizeAuthorizationToken, requestsReleaseAuthorizationToken } from "./requests";
+import {
+  requestsNormalizeAuthorizationToken,
+  requestsReleaseAuthorizationToken,
+  requestsReserveAuthorizationToken,
+} from "./requests";
 import {
   REQUEST_UPDATE_STREAM_CLOSED_MESSAGE,
   namespaceStartNamespaceStreamLoop,
@@ -74,6 +78,11 @@ export interface NamespacesSessionInternal {
    * (draft-ietf-moq-transport-22 §8.9 / §9.1.4)
    */
   normalizeAuthorizationTokenForSend(token: AuthorizationToken): AuthorizationToken;
+  /**
+   * 送信直前の登録サイズを判定して予約する
+   * (draft-ietf-moq-transport-22 §9.1.3 の登録サイズの総和)
+   */
+  reserveAuthorizationTokenForSend(token: AuthorizationToken | undefined): void;
   /**
    * 送信に至らなかった REGISTER の予約を取り消す
    * (draft-ietf-moq-transport-22 §9.1.3 の登録サイズの総和)
@@ -158,6 +167,7 @@ export async function namespacesSubscribeNamespace(
       timestamp: Date.now(),
     });
 
+    requestsReserveAuthorizationToken(session, normalizedOptions);
     await writer.write(framed);
   } catch (error) {
     // 送信失敗時は取得済みリソースを掃除して予約を取り消して throw する
@@ -260,6 +270,7 @@ export async function namespacesSubscribeTracks(
       timestamp: Date.now(),
     });
 
+    requestsReserveAuthorizationToken(session, normalizedOptions);
     await writer.write(framed);
   } catch (error) {
     // 送信失敗時は取得済みリソースを掃除して throw する
@@ -356,6 +367,7 @@ export async function namespacesPublishNamespace(
       timestamp: Date.now(),
     });
 
+    requestsReserveAuthorizationToken(session, normalizedOptions);
     await writer.write(framed);
   } catch (error) {
     // 送信失敗時は取得済みリソースを掃除して throw する

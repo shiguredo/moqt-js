@@ -9851,7 +9851,7 @@ test("normalizeAuthorizationTokenForSend: 登録失敗した SETUP の REGISTER 
  * MAX_AUTH_TOKEN_CACHE_SIZE を 1 件で超えると、ピアは
  * AUTH_TOKEN_CACHE_OVERFLOW でセッションを閉じる。送信前にローカルエラーにする。
  */
-test("normalizeAuthorizationTokenForSend: ピアの上限を超える REGISTER はローカルエラー", () => {
+test("reserveAuthorizationTokenForSend: ピアの上限を超える REGISTER はローカルエラー", () => {
   const session = createSessionImpl();
   const token = {
     aliasType: AuthorizationTokenAliasType.REGISTER,
@@ -9863,13 +9863,13 @@ test("normalizeAuthorizationTokenForSend: ピアの上限を超える REGISTER �
   // 16 + 2 = 18 バイト。上限 17 では超過
   session.peerMaxAuthTokenCacheSize = 17n;
   assert.throws(
-    () => session.normalizeAuthorizationTokenForSend(token),
+    () => session.reserveAuthorizationTokenForSend(token),
     /exceeds peer MAX_AUTH_TOKEN_CACHE_SIZE 17/,
   );
 
   // 上限ちょうどは送れる
   session.peerMaxAuthTokenCacheSize = 18n;
-  assert.deepEqual(session.normalizeAuthorizationTokenForSend(token), token);
+  session.reserveAuthorizationTokenForSend(token);
 });
 
 /**
@@ -9880,7 +9880,7 @@ test("normalizeAuthorizationTokenForSend: ピアの上限を超える REGISTER �
  *  initiation."
  * 送信側の判定は 1 件単位ではなく、登録済みサイズの総和で行う。
  */
-test("normalizeAuthorizationTokenForSend: 登録サイズの総和で上限を判定する", () => {
+test("reserveAuthorizationTokenForSend: 登録サイズの総和で上限を判定する", () => {
   const session = createSessionImpl();
   const register = (alias: bigint, size: number) => ({
     aliasType: AuthorizationTokenAliasType.REGISTER,
@@ -9891,15 +9891,15 @@ test("normalizeAuthorizationTokenForSend: 登録サイズの総和で上限を�
   // 1 件 18 バイト (16 + 2)。上限 30 では 1 件目は通り、2 件目 (合計 36) で超過
   session.peerMaxAuthTokenCacheSize = 30n;
 
-  assert.deepEqual(session.normalizeAuthorizationTokenForSend(register(1n, 2)), register(1n, 2));
+  session.reserveAuthorizationTokenForSend(register(1n, 2));
   assert.throws(
-    () => session.normalizeAuthorizationTokenForSend(register(2n, 2)),
+    () => session.reserveAuthorizationTokenForSend(register(2n, 2)),
     /registration total size 36 exceeds peer MAX_AUTH_TOKEN_CACHE_SIZE 30/,
   );
 
   // 単発で超える場合もローカルエラー
   assert.throws(
-    () => session.normalizeAuthorizationTokenForSend(register(3n, 15)),
+    () => session.reserveAuthorizationTokenForSend(register(3n, 15)),
     /registration total size 49 exceeds peer MAX_AUTH_TOKEN_CACHE_SIZE 30/,
   );
 });
@@ -9907,7 +9907,7 @@ test("normalizeAuthorizationTokenForSend: 登録サイズの総和で上限を�
 /**
  * draft-ietf-moq-transport-22 §9.1.3: 上限ちょうどは登録できる。
  */
-test("normalizeAuthorizationTokenForSend: 総和が上限ちょうどなら送れる", () => {
+test("reserveAuthorizationTokenForSend: 総和が上限ちょうどなら送れる", () => {
   const session = createSessionImpl();
   session.peerMaxAuthTokenCacheSize = 36n;
   const register = (alias: bigint) => ({
@@ -9917,8 +9917,8 @@ test("normalizeAuthorizationTokenForSend: 総和が上限ちょうどなら送�
     tokenValue: new Uint8Array(2).fill(0x01),
   });
 
-  session.normalizeAuthorizationTokenForSend(register(1n));
-  assert.deepEqual(session.normalizeAuthorizationTokenForSend(register(2n)), register(2n));
+  session.reserveAuthorizationTokenForSend(register(1n));
+  session.reserveAuthorizationTokenForSend(register(2n));
   assert.equal(session.peerRegisteredAuthTokenSize, 36n);
 });
 
@@ -9935,15 +9935,51 @@ test("releaseAuthorizationTokenForSend: 送信しなかった予約を取り消�
     tokenValue: new Uint8Array(2).fill(0x01),
   });
 
-  const first = session.normalizeAuthorizationTokenForSend(register(1n));
+  const first = register(1n);
+  session.reserveAuthorizationTokenForSend(first);
   // 予約済みのため 2 件目は超過する
-  assert.throws(() => session.normalizeAuthorizationTokenForSend(register(2n)));
+  assert.throws(() => session.reserveAuthorizationTokenForSend(register(2n)));
   // 1 件目を送らなかったため取り消すと、2 件目が送れる
   session.releaseAuthorizationTokenForSend(first);
   assert.equal(session.peerRegisteredAuthTokenSize, 0n);
-  assert.deepEqual(session.normalizeAuthorizationTokenForSend(register(2n)), register(2n));
+  session.reserveAuthorizationTokenForSend(register(2n));
 
   // 予約していないトークンの取り消しは何もしない
   session.releaseAuthorizationTokenForSend(register(9n));
   assert.equal(session.peerRegisteredAuthTokenSize, 18n);
+});
+
+/**
+ * draft-ietf-moq-transport-22 §9.1.3: 予約は送信直前に行うため、送信前の検証で
+ * throw した場合は登録サイズの総和が増えない (予約が残らない)。
+ */
+test("subscribe: 送信前の検証エラーで REGISTER の登録サイズが増えない", async () => {
+  const session = createSessionImpl();
+  session.peerMaxAuthTokenCacheSize = 1024n;
+  // ピアが MAX_FILTER_RANGES を広告していないため、Range Filter 付きの SUBSCRIBE は throw する
+  session.peerMaxFilterRanges = 0;
+
+  let thrown: Error | undefined;
+  try {
+    await session.subscribe(
+      ["live"],
+      "video",
+      { object: () => {} },
+      {
+        rangeFilters: [{ type: "subgroup", setId: 0, ranges: [{ start: 0n, end: 1n }] }],
+        authorizationToken: {
+          aliasType: AuthorizationTokenAliasType.REGISTER,
+          tokenAlias: 1n,
+          tokenType: 1n,
+          tokenValue: new Uint8Array(2).fill(0x01),
+        },
+      },
+    );
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.isDefined(thrown);
+  // 予約していないため総和は 0 のまま (後続の REGISTER が送れる)
+  assert.equal(session.peerRegisteredAuthTokenSize, 0n);
 });

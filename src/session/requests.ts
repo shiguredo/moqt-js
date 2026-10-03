@@ -89,6 +89,11 @@ export interface RequestsSessionInternal {
    */
   normalizeAuthorizationTokenForSend(token: AuthorizationToken): AuthorizationToken;
   /**
+   * 送信直前の登録サイズを判定して予約する
+   * (draft-ietf-moq-transport-22 §9.1.3 の登録サイズの総和)
+   */
+  reserveAuthorizationTokenForSend(token: AuthorizationToken | undefined): void;
+  /**
    * 送信に至らなかった REGISTER の予約を取り消す
    * (draft-ietf-moq-transport-22 §9.1.3 の登録サイズの総和)
    */
@@ -227,9 +232,7 @@ export async function requestsPublish(
   // 後続メッセージへ付与するトークンを正規化する (登録成功 → USE_ALIAS、
   // 登録失敗 → USE_VALUE)。詳細は normalizeAuthorizationTokenForSend の JSDoc。
   const normalizedOptions = requestsNormalizeAuthorizationToken(session, options);
-  const parameters = requestsBuildWithAuthorizationToken(session, normalizedOptions, () =>
-    buildPublishParameters(normalizedOptions),
-  );
+  const parameters = buildPublishParameters(normalizedOptions);
   const trackProperties = buildPublishTrackProperties(options, session.grease);
 
   // PUBLISH メッセージを双方向ストリームで送信
@@ -260,6 +263,7 @@ export async function requestsPublish(
 
   let streamInfo: Awaited<ReturnType<typeof requestsSendRequestOnBidiStream>>;
   try {
+    requestsReserveAuthorizationToken(session, normalizedOptions);
     streamInfo = await requestsSendRequestOnBidiStream(
       session,
       requestId,
@@ -405,9 +409,7 @@ export async function requestsSubscribe(
   // buildSubscribeParameters (LOCATION_FILTER の End Group 2^64-1 超過検証を
   // 含む) が throw する場合、pendingSubscribe.set より前で失敗させるため、
   // 構築は Promise 作成より前に行う (fetch の buildFetchParameters と同じ手順)。
-  const parameters = requestsBuildWithAuthorizationToken(session, normalizedOptions, () =>
-    buildSubscribeParameters(normalizedOptions),
-  );
+  const parameters = buildSubscribeParameters(normalizedOptions);
 
   // SUBSCRIBE_OK の Promise を作成
   const promise = new Promise<Subscriber>((resolve, reject) => {
@@ -444,6 +446,7 @@ export async function requestsSubscribe(
   const payload = encodeSubscribePayload(subscribeMsg);
   let streamInfo: Awaited<ReturnType<typeof requestsSendRequestOnBidiStream>>;
   try {
+    requestsReserveAuthorizationToken(session, normalizedOptions);
     streamInfo = await requestsSendRequestOnBidiStream(
       session,
       requestId,
@@ -551,9 +554,7 @@ export async function requestsFetch(
     requestId,
     trackNamespace,
     trackName: trackNameBytes,
-    parameters: requestsBuildWithAuthorizationToken(session, normalizedOptions, () =>
-      buildFetchParameters(normalizedOptions),
-    ),
+    parameters: buildFetchParameters(normalizedOptions),
   };
 
   // FETCH メッセージのペイロードを構築する。
@@ -579,6 +580,7 @@ export async function requestsFetch(
 
   let streamInfo: Awaited<ReturnType<typeof requestsSendRequestOnBidiStream>>;
   try {
+    requestsReserveAuthorizationToken(session, normalizedOptions);
     streamInfo = await requestsSendRequestOnBidiStream(
       session,
       requestId,
@@ -658,9 +660,7 @@ export async function requestsTrackStatus(
     requestId,
     trackNamespace,
     trackName: trackNameBytes,
-    parameters: requestsBuildWithAuthorizationToken(session, normalizedOptions, () =>
-      buildTrackStatusParameters(normalizedOptions),
-    ),
+    parameters: buildTrackStatusParameters(normalizedOptions),
   };
 
   let streamInfo: Awaited<ReturnType<typeof requestsSendRequestOnBidiStream>>;
@@ -668,6 +668,7 @@ export async function requestsTrackStatus(
     // buildTrackStatusParameters は throw しないが、encode 以降は共通化のため
     // 同一 try 範囲に含める (publish() / fetch() と同じ手順)。
     const payload = encodeTrackStatusPayload(trackStatusMsg);
+    requestsReserveAuthorizationToken(session, normalizedOptions);
     streamInfo = await requestsSendRequestOnBidiStream(
       session,
       requestId,
@@ -997,32 +998,27 @@ export function requestsTokenForRequestUpdate(
 }
 
 /**
+ * 送信直前の Authorization Token の登録サイズを判定して予約する
+ *
+ * draft-ietf-moq-transport-22 §9.1.3: 登録サイズの総和がピアの上限を超える場合は
+ * 送信前にローカルエラーにする。判定と予約は送信の直前 (await の手前) で行い、
+ * 並行する REGISTER が互いの加算を見落とさないようにする。
+ */
+export function requestsReserveAuthorizationToken(
+  session: { reserveAuthorizationTokenForSend(token: AuthorizationToken | undefined): void },
+  options: { authorizationToken?: AuthorizationToken } | undefined,
+): void {
+  session.reserveAuthorizationTokenForSend(options?.authorizationToken);
+}
+
+/**
  * 送信に至らなかった Authorization Token の予約を取り消す
  *
- * draft-ietf-moq-transport-22 §9.1.3: REGISTER は正規化時に登録サイズの総和へ
- * 加算 (予約) するため、検証エラーや送信失敗で送らなかった場合は減算する。
+ * draft-ietf-moq-transport-22 §9.1.3: 予約したまま送信しなかった場合は減算する。
  */
 export function requestsReleaseAuthorizationToken(
   session: { releaseAuthorizationTokenForSend(token: AuthorizationToken | undefined): void },
   options: { authorizationToken?: AuthorizationToken } | undefined,
 ): void {
   session.releaseAuthorizationTokenForSend(options?.authorizationToken);
-}
-
-/**
- * 検証・構築を予約の取り消し付きで実行する
- *
- * パラメータ構築は検証エラーで throw し得るため、失敗時は予約を取り消す。
- */
-function requestsBuildWithAuthorizationToken<T>(
-  session: { releaseAuthorizationTokenForSend(token: AuthorizationToken | undefined): void },
-  options: { authorizationToken?: AuthorizationToken } | undefined,
-  build: () => T,
-): T {
-  try {
-    return build();
-  } catch (error) {
-    requestsReleaseAuthorizationToken(session, options);
-    throw error;
-  }
 }
