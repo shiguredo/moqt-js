@@ -1,7 +1,7 @@
 # 送信側の AUTH_TOKEN_CACHE_OVERFLOW 判定を登録サイズの総和にする
 
 - Created: 2026-10-03
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-10-03
 - Branch: feature/fix-auth-token-cache-total-size
 - Polished: 2026-10-03
 
@@ -49,4 +49,35 @@ draft-ietf-moq-transport-22 §9.1.3 は、MAX_AUTH_TOKEN_CACHE_SIZE で制限さ
 
 ## 解決方法
 
-{未着手}
+send 側の AUTH_TOKEN_CACHE_OVERFLOW 判定を、1 件単位から登録サイズの総和に変えた。挙動変更を伴う。
+
+### 1. 総和による判定
+
+- `SessionImpl` に「ピアに登録済みとみなせるトークンサイズの総和」(`peerRegisteredAuthTokenSize`) と、予約済み Alias のサイズ表 (`reservedAuthTokenSizes`) を持たせた
+- `reserveAuthorizationTokenForSend` (§9.1.3 の 16 バイト + Token Value 長を加算) を送信の直前に同期で呼ぶ。登録済みの総和に自分のエントリサイズを足した値がピアの MAX_AUTH_TOKEN_CACHE_SIZE を超える場合は、§8.9 の MUST によりピアがセッションを閉じるため送信前のローカルエラーにする
+- 同期で行うのは、判定と書き込みの間に await を挟むと並行する REGISTER が互いの加算を見落とし、合計超過のまま両方送信してしまうためである
+- 登録済み Alias の再登録 (SETUP で登録に成功した Alias、および送信済みの Alias) は §8.9 の再 REGISTER 禁止に従いローカルエラーにする。SETUP の登録に失敗した Alias は §9.1.4 のとおり USE_VALUE として扱われピアには登録されていないため、対象外とした
+
+### 2. 予約の取り消し
+
+- 予約は送信の直前にだけ行い、送信に至らなかった場合は `releaseAuthorizationTokenForSend` で取り消す。`requests.ts` の PUBLISH / SUBSCRIBE / FETCH / TRACK_STATUS と `namespaces.ts` の SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS / PUBLISH_NAMESPACE の 7 経路すべてで、catch で「予約できた場合だけ」取り消す
+- SETUP の登録に成功した REGISTER は §9.1.3 の「Session initiation 以降に登録したサイズ」として `connectionInitialize` で総和の初期値にする (登録に失敗した場合は 0 のまま)
+
+### 3. DELETE の扱い
+
+- §9.1.3 の総和は「登録したサイズの総和 − 解除したサイズの総和」だが、DELETE の送信経路を整えていないため減算は実装しない。追跡値が実際より大きく固まる方向にのみ働き、ピアにセッションを閉じさせる方向にはならない。ただし DELETE を送った Alias も登録済みのまま扱われるため、同じ Alias の再 REGISTER がローカルエラーになる (§8.9 は retire 後の再登録を許すため、この点は仕様より厳しい)。この帰結を JSDoc と CHANGES.md に記録した
+
+### 4. テスト
+
+- 総和での超過・単発での超過・上限ちょうど・予約の取り消しを固定した
+- 実経路での取り消しとして、publish / subscribe / fetch の送信失敗で総和が増えないことを固定した (送信前の検証エラーで予約されないことも確認)
+- SETUP の登録成功分が初期値になること (成功 18 / 失敗 0 / 未広告 0) を固定した
+
+### 5. 検証
+
+`vp check` (1290 files 整形 / 475 files lint・型エラーなし) / `tsc --noEmit` / `vp test run` (198 files / 3583 tests) が通る。`/review-diff-code` を 3 周回し、1 周目で予約の取り消し漏れ (検証エラー・ストリーム生成失敗・write 失敗)、2 周目で条件付き取り消しと namespace 2 経路の漏れ、3 周目で SETUP 登録失敗 Alias の扱いを検出して修正した。
+
+### 6. 残課題
+
+- DELETE を送った Alias の減算と Alias 解放 (上記 3)
+- 並行送信で 2 件目がローカルエラーになることを固定するテストは未追加 (予約が await の手前にある設計が前提)

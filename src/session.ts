@@ -371,6 +371,19 @@ export class SessionImpl implements Session {
   // draft-ietf-moq-transport-22 §8.9 / §9.1.3 / §9.1.4: 自 SETUP の REGISTER が
   // ピアに登録されたか。ピアの SETUP を受信して上限が判明した時点で確定する
   setupTokenRegistration: { tokenAlias: bigint; registered: boolean } | undefined = undefined;
+  // draft-ietf-moq-transport-22 §9.1.3: ピアに登録済みとみなせるトークンサイズの総和
+  // (SETUP の登録成功分 + 送信した REGISTER のエントリサイズ)。
+  // §9.1.3 の総和は「登録したサイズの総和 − 解除したサイズの総和」だが、moqt-js は
+  // authorizationToken オプションに DELETE (Alias Type 0x00) を渡された場合を除いて
+  // DELETE を送らない。渡された場合も減算はしないため、追跡値は実際より大きく
+  // 固まる方向にのみずれる (差し引かない分だけ登録できる REGISTER をローカル
+  // エラーにし得るが、ピアにセッションを閉じさせる方向にはならない)。
+  // DELETE の送信経路を整えるときに減算を実装する。なお減算しない間は、DELETE を
+  // 送った Alias も登録済みのまま扱われ、同じ Alias の再 REGISTER がローカルエラーに
+  // なる (§8.9 は retire 後の再登録を許すため、この点は仕様より厳しい)。
+  peerRegisteredAuthTokenSize = 0n;
+  // 予約済み (加算済み) の Alias。送信に至らなかった場合の取り消しに使う
+  reservedAuthTokenSizes = new Map<bigint, bigint>();
   // draft-ietf-moq-transport-22 §9.1.7: ピアの MAX_REQUEST_UPDATES（0 = 無制限）
   peerMaxRequestUpdates = 0;
   // draft-ietf-moq-transport-22 §9.1.6: ピアの MAX_FILTER_RANGES（0 = Range Filter 送信禁止）
@@ -694,20 +707,66 @@ export class SessionImpl implements Session {
     return this.setupAuthToken;
   }
 
+  releaseAuthorizationTokenForSend(token: AuthorizationToken | undefined): void {
+    if (token === undefined || token.aliasType !== AuthorizationTokenAliasType.REGISTER) {
+      return;
+    }
+    const reserved = this.reservedAuthTokenSizes.get(token.tokenAlias);
+    if (reserved === undefined) {
+      return;
+    }
+    this.reservedAuthTokenSizes.delete(token.tokenAlias);
+    this.peerRegisteredAuthTokenSize -= reserved;
+  }
+
   /**
-   * 後続メッセージへ付与する Authorization Token を正規化する
+   * 送信直前の Authorization Token の登録サイズを判定して予約する
    *
-   * draft-ietf-moq-transport-22 §8.9 / §9.1.4: 自 SETUP の REGISTER で登録に
-   * 成功した Alias は USE_ALIAS に、登録に失敗した Alias は USE_VALUE に変換する
-   * (詳細は normalizeAuthorizationTokenForSend の JSDoc)。
-   *
-   * §8.9 の AUTH_TOKEN_CACHE_OVERFLOW は SETUP 以外の登録も対象であり、1 件の
-   * REGISTER だけでピアの MAX_AUTH_TOKEN_CACHE_SIZE (§9.1.3: 16 バイト +
-   * Token Value 長を上限と比較する) を超える場合はピアがセッションを閉じるため、
+   * draft-ietf-moq-transport-22 §9.1.3: MAX_AUTH_TOKEN_CACHE_SIZE で制限される
+   * サイズは「登録したトークンサイズの総和 − 解除したトークンサイズの総和」で
+   * あり、1 件単位ではない。登録済みの総和に自分のエントリサイズ
+   * (16 バイト + Token Value 長) を足した値がピアの上限を超える場合は、ピアが
+   * §8.9 の MUST により AUTH_TOKEN_CACHE_OVERFLOW でセッションを閉じるため、
    * 送信前にローカルエラーにする。
    *
-   * @throws Error ピアの上限を 1 件で超える REGISTER を送ろうとした場合
+   * 判定と加算 (予約) は同期で行う。await を挟むと、同じセッションで並行する
+   * 別の REGISTER が互いの加算を見落として合計超過のまま送信してしまう。
+   * 送信に至らなかった場合は releaseAuthorizationTokenForSend で取り消す。
+   *
+   * @returns 予約した場合は true。REGISTER 以外のトークンは予約せず false を返す
+   * @throws Error 登録済みの総和がピアの上限を超える場合、または登録済みの
+   *   Alias を再登録しようとした場合 (§8.9 の再 REGISTER 禁止)
    */
+  reserveAuthorizationTokenForSend(token: AuthorizationToken | undefined): boolean {
+    if (token === undefined || token.aliasType !== AuthorizationTokenAliasType.REGISTER) {
+      return false;
+    }
+    // §8.9: 登録済みの Alias を再 REGISTER するとピアは DUPLICATE_AUTH_TOKEN_ALIAS で
+    // セッションを閉じる。SETUP で登録した Alias と、このセッションで送信済みの
+    // Alias のどちらも登録済みとして扱う
+    if (
+      this.reservedAuthTokenSizes.has(token.tokenAlias) ||
+      // SETUP の登録に失敗した Alias はピアに登録されていない (§9.1.4 のとおり
+      // USE_VALUE として扱われる) ため、登録済みとして拒否しない
+      (this.setupTokenRegistration?.registered === true &&
+        this.setupTokenRegistration.tokenAlias === token.tokenAlias)
+    ) {
+      throw new Error(
+        `AUTHORIZATION_TOKEN alias ${token.tokenAlias} is already registered in this session`,
+      );
+    }
+    const entrySize = authTokenRegisterEntrySize(token.tokenValue);
+    const attemptedSize = this.peerRegisteredAuthTokenSize + entrySize;
+    if (attemptedSize > this.peerMaxAuthTokenCacheSize) {
+      throw new Error(
+        `AUTHORIZATION_TOKEN registration total size ${attemptedSize} exceeds peer MAX_AUTH_TOKEN_CACHE_SIZE ${this.peerMaxAuthTokenCacheSize}`,
+      );
+    }
+    this.peerRegisteredAuthTokenSize = attemptedSize;
+    this.reservedAuthTokenSizes.set(token.tokenAlias, entrySize);
+    return true;
+  }
+
   normalizeAuthorizationTokenForSend(token: AuthorizationToken): AuthorizationToken {
     // §9.1.4 の purge MUST: SETUP の登録に失敗した Alias は USE_VALUE に変換して
     // 送るため、上限判定より先に正規化する (失敗した SETUP の REGISTER を
@@ -721,14 +780,9 @@ export class SessionImpl implements Session {
       // USE_ALIAS / USE_VALUE は登録を伴わないため上限判定は不要
       return normalized;
     }
-    // §8.9 / §9.1.3: 登録を伴う REGISTER が 1 件でピアの上限を超えると、ピアは
-    // AUTH_TOKEN_CACHE_OVERFLOW でセッションを閉じるため送信前にローカルエラーにする
-    const entrySize = authTokenRegisterEntrySize(normalized.tokenValue);
-    if (entrySize > this.peerMaxAuthTokenCacheSize) {
-      throw new Error(
-        `AUTHORIZATION_TOKEN registration size ${entrySize} exceeds peer MAX_AUTH_TOKEN_CACHE_SIZE ${this.peerMaxAuthTokenCacheSize}`,
-      );
-    }
+    // 登録サイズの総和の判定と予約は送信直前に行う
+    // (reserveAuthorizationTokenForSend を参照。正規化の時点では予約しないため、
+    //  正規化後に検証エラーで throw しても予約は残らない)
     return normalized;
   }
 
