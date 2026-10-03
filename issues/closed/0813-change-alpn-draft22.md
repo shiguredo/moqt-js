@@ -1,7 +1,7 @@
 # 接続時に広告するプロトコル識別子を draft-22 に合わせるかを決める
 
 - Created: 2026-10-03
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-10-03
 - Branch: feature/change-alpn-draft22
 - Polished: 2026-10-03
 
@@ -50,4 +50,25 @@ draft-ietf-moq-transport-22 §6.2 (Session establishment) は、MOQT のバー�
 
 ## 解決方法
 
-{未着手}
+方針 (a)「draft-22 に準拠する」を採用し、WebTransport の WT-Available-Protocols に `moqt-22` を提示するようにした。挙動変更を伴う。
+
+### 1. 判断と根拠
+
+- draft-ietf-moq-transport-22 §6.2 (Session establishment) / §6.2.1 (WebTransport) を確認した。ドラフト版の識別子は「`moqt-` にドラフト番号を付けたもの」(最終版の ALPN は `moqt`) であり、draft-22 の識別子は `moqt-22` になる
+- moqt-js は draft-22 に準拠する方針であるため、提示する識別子も実装のドラフトに合わせて `moqt-22` とした (従来は `moqt-21`)
+- 単一の識別子を提示する。§6.2 は複数の識別子を優先順で提示することを許すが、moqt-js は 1 つのドラフトに準拠する実装であり、draft-21 の識別子を併記すると実装が draft-21 のワイヤで動くかのように見えるためである。複数 draft の併記が必要になった場合はここに追加する
+- 現行の実リレー (sora-moq) は draft-22 に未対応のため、この変更後は実リレーへ接続できない。リレーが対応した時点で、追加の変更なしに接続できる。devtools はデプロイしない方針 (未対応のリレーへ接続できないため) とした
+
+### 2. 変更
+
+- `src/connect.ts`: `protocols` の値を `["moqt-22"]` にし、§6.2 / §6.2.1 の根拠と判断 (単一提示、リレー未対応の間は接続できないこと、複数提示の余地) をコメントに記録した
+- `src/session.test.ts`: `connect: WebTransport に protocols ['moqt-22'] を渡す` に更新した
+- `CHANGES.md` に [CHANGE] を追加した (後方互換なし: 現行のリレーには接続できない)
+
+### 3. 検証
+
+`vp check` (1290 files 整形 / 475 files lint・型エラーなし) / `tsc --noEmit` / `vp test run` (198 files / 3583 tests) が通る。識別子を提示する経路は `src/connect.ts` の 1 箇所だけで、devtools / examples / tests/e2e はすべて `connect()` 経由のため指定漏れは無い。`moqt-21` を期待するテスト・表示文字列も残っていないことを確認した。`/review-diff-code` を 1 周回し、引用した節名の誤り (§6.2 は Session establishment) と CHANGES の記述を修正した。
+
+### 4. 検証できないこと
+
+実リレーが draft-22 に未対応のため、接続の成功は確認できない。リレー対応後に e2e-test ワークフロー (停止中) で確認する必要がある。

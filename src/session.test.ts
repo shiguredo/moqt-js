@@ -8807,11 +8807,12 @@ test("initialize: 制御ストリームより先にデータストリームが�
 });
 
 /**
- * draft-ietf-moq-transport-22 §6.2 / §6.2.1:
+ * draft-ietf-moq-transport-22 §6.2 (Session establishment) / §6.2.1 (WebTransport):
  * WebTransport では WT-Available-Protocols に MOQT プロトコル識別子を提示する。
- * draft-21 は "moqt-21"。
+ * ドラフト版の識別子は "moqt-" + ドラフト番号であるため、draft-22 の実装は
+ * "moqt-22" を提示する。
  */
-test("connect: WebTransport に protocols ['moqt-21'] を渡す", async () => {
+test("connect: WebTransport に protocols ['moqt-22'] を渡す", async () => {
   const originalWebTransport = (globalThis as { WebTransport?: unknown }).WebTransport;
   const recordedOptions: WebTransportOptions[] = [];
   class RecordingWebTransport {
@@ -8835,7 +8836,7 @@ test("connect: WebTransport に protocols ['moqt-21'] を渡す", async () => {
   assert.isDefined(thrown);
   assert.isTrue(thrown!.message.includes("stop before initialize"));
   assert.equal(recordedOptions.length, 1);
-  assert.deepEqual(recordedOptions[0].protocols, ["moqt-21"]);
+  assert.deepEqual(recordedOptions[0].protocols, ["moqt-22"]);
 });
 
 /** namespace 系解除テスト用のストリームを構築する (cancel / abort を観測する) */
