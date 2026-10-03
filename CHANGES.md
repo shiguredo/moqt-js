@@ -72,6 +72,9 @@
   - FILL_PARAMETERS の内側の一覧は Table 6 から Table 7 になった
   - コメントのみの変更で、挙動は変えない
   - @voluntas
+- [ADD] `publishNamespace()` が返す型と引数の型を公開する
+  - `NamespacePublication` / `NamespacePublicationCallbacks` / `PublishNamespaceOptions` が `moqt-js` からエクスポートされておらず、`publishNamespace()` の戻り値と引数の型を利用者が名指しできなかった
+  - @voluntas
 - [ADD] 音声の欠落で空いた隙間を、直前の音の時間伸長で補間する
   - 音声の Object が欠落したときや、時間軸の目標の遅延が増えたときにできる無音の隙間を、直前の音の末尾のピッチ周期を繰り返して埋める。5 ms 以下の隙間と、開始が今から 10 ms 未満の隙間は補間せず、100 ms を超える分も無音のまま残す
   - 相関が足りない音や継ぎ目の段差が大きい音では補間せず、補間が長くなるほど末尾の振幅を下げる
