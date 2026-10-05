@@ -1,0 +1,784 @@
+
+
+
+
+MOQ                                                        S. Nandakumar
+Internet-Draft                                               C. Jennings
+Intended status: Standards Track                                   Cisco
+Expires: 7 January 2027                                      6 July 2026
+
+
+    TEMPO: Timing Extension for Media Playout Orchestration over MoQ
+                     draft-nandakumar-moq-tempo-00
+
+Abstract
+
+   This document defines TEMPO (Timing Extension for Media Playout
+   Orchestration), a synchronized playout mechanism for media tracks
+   delivered over the Media over QUIC Transport (MoQT) protocol.  The
+   Original Publisher stamps each object with when it should be played
+   out and when it was sent.  Relays replace the send-time stamp with
+   their own clock as they forward, giving each subscriber a fresh
+   timing reference from its nearest relay.  Subscribers use these
+   timestamps to decide when to render each object, and report their
+   sync state directly to a coordination server (PlaySyncServer) that
+   can tell the media publisher to adjust timing when subscribers fall
+   behind.
+
+Status of This Memo
+
+   This Internet-Draft is submitted in full conformance with the
+   provisions of BCP 78 and BCP 79.
+
+   Internet-Drafts are working documents of the Internet Engineering
+   Task Force (IETF).  Note that other groups may also distribute
+   working documents as Internet-Drafts.  The list of current Internet-
+   Drafts is at https://datatracker.ietf.org/drafts/current/.
+
+   Internet-Drafts are draft documents valid for a maximum of six months
+   and may be updated, replaced, or obsoleted by other documents at any
+   time.  It is inappropriate to use Internet-Drafts as reference
+   material or to cite them other than as "work in progress."
+
+   This Internet-Draft will expire on 7 January 2027.
+
+Copyright Notice
+
+   Copyright (c) 2026 IETF Trust and the persons identified as the
+   document authors.  All rights reserved.
+
+   This document is subject to BCP 78 and the IETF Trust's Legal
+   Provisions Relating to IETF Documents (https://trustee.ietf.org/
+   license-info) in effect on the date of publication of this document.
+
+
+
+Nandakumar & Jennings    Expires 7 January 2027                 [Page 1]
+
+Internet-Draft  TEMPO: Timing Extension for Media Playou       July 2026
+
+
+   Please review these documents carefully, as they describe your rights
+   and restrictions with respect to this document.  Code Components
+   extracted from this document must include Revised BSD License text as
+   described in Section 4.e of the Trust Legal Provisions and are
+   provided without warranty as described in the Revised BSD License.
+
+Table of Contents
+
+   1.  Introduction  . . . . . . . . . . . . . . . . . . . . . . . .   3
+     1.1.  Motivation and Use Cases  . . . . . . . . . . . . . . . .   3
+       1.1.1.  Live Sports Event Synchronization . . . . . . . . . .   3
+       1.1.2.  Interactive Streaming Synchronization . . . . . . . .   3
+       1.1.3.  Multi-Room Audio System . . . . . . . . . . . . . . .   4
+       1.1.4.  Emergency Broadcasting  . . . . . . . . . . . . . . .   4
+       1.1.5.  Collaborative Viewing . . . . . . . . . . . . . . . .   4
+     1.2.  Solution Overview . . . . . . . . . . . . . . . . . . . .   4
+   2.  TEMPO Object Extension Properties . . . . . . . . . . . . . .   5
+     2.1.  CaptureTimestamp  . . . . . . . . . . . . . . . . . . . .   5
+     2.2.  PlayoutDelay  . . . . . . . . . . . . . . . . . . . . . .   5
+     2.3.  HopTime . . . . . . . . . . . . . . . . . . . . . . . . .   6
+     2.4.  Sync Support Parameter  . . . . . . . . . . . . . . . . .   6
+   3.  Architecture  . . . . . . . . . . . . . . . . . . . . . . . .   7
+     3.1.  Topology  . . . . . . . . . . . . . . . . . . . . . . . .   7
+     3.2.  Scope . . . . . . . . . . . . . . . . . . . . . . . . . .   8
+     3.3.  NTP Capability Scenarios  . . . . . . . . . . . . . . . .   8
+     3.4.  Original Publisher (OrigPub)  . . . . . . . . . . . . . .   8
+       3.4.1.  Steady-State Timing . . . . . . . . . . . . . . . . .   9
+       3.4.2.  PlayoutDelay updates from PlaySyncServer  . . . . . .   9
+     3.5.  Relays  . . . . . . . . . . . . . . . . . . . . . . . . .   9
+     3.6.  PlaySyncServer  . . . . . . . . . . . . . . . . . . . . .  10
+   4.  Optimized Forms . . . . . . . . . . . . . . . . . . . . . . .  10
+     4.1.  Short Timestamps  . . . . . . . . . . . . . . . . . . . .  10
+     4.2.  Periodic Marking  . . . . . . . . . . . . . . . . . . . .  10
+     4.3.  Time Aligned Groups . . . . . . . . . . . . . . . . . . .  11
+     4.4.  Catalog Based Playout Delay . . . . . . . . . . . . . . .  12
+   5.  End Subscribers . . . . . . . . . . . . . . . . . . . . . . .  12
+     5.1.  Computing Playout Target  . . . . . . . . . . . . . . . .  12
+     5.2.  Sync Feedback . . . . . . . . . . . . . . . . . . . . . .  12
+     5.3.  Drift and Jump Handling . . . . . . . . . . . . . . . . .  13
+   6.  Security Considerations . . . . . . . . . . . . . . . . . . .  13
+   7.  IANA Considerations . . . . . . . . . . . . . . . . . . . . .  13
+   8.  References  . . . . . . . . . . . . . . . . . . . . . . . . .  13
+     8.1.  Normative References  . . . . . . . . . . . . . . . . . .  13
+     8.2.  Informative References  . . . . . . . . . . . . . . . . .  14
+   Authors' Addresses  . . . . . . . . . . . . . . . . . . . . . . .  14
+
+
+
+
+
+
+Nandakumar & Jennings    Expires 7 January 2027                 [Page 2]
+
+Internet-Draft  TEMPO: Timing Extension for Media Playou       July 2026
+
+
+1.  Introduction
+
+   This document specifies TEMPO (Timing Extension for Media Playout
+   Orchestration), a synchronization mechanism for the Media over QUIC
+   Transport (MoQT) protocol [MOQ-TRANSPORT].  MoQT enables distribution
+   of media content through relay networks.  When multiple subscribers
+   receive the same track objects through different network paths,
+   achieving synchronized playback is challenging due to:
+
+   1.  Clock skew between subscriber devices: Even with NTP
+       synchronization, consumer devices can drift by 10-100ms from
+       reference time.
+
+   2.  Variable network delays through different relay paths: Network
+       jitter and routing differences introduce additional delay
+       variance in delivery times.
+
+   3.  Lack of shared timing reference across the distribution network:
+       Publishers and relays operate on different clock domains without
+       coordination.
+
+1.1.  Motivation and Use Cases
+
+1.1.1.  Live Sports Event Synchronization
+
+   Multiple viewers watching the same live sports event should see
+   goals, touchdowns, or key moments simultaneously to maintain the
+   shared experience and prevent spoilers through social media.
+
+   Challenge: Viewers connected through different CDN nodes experience
+   50-300ms delivery variance, causing spoilers when some viewers see
+   goals before others.
+
+1.1.2.  Interactive Streaming Synchronization
+
+   Streamers conducting live Q&A sessions or interactive games require
+   synchronized playback so that viewer reactions and comments align
+   temporally with the content.  For example, Twitch-style interactive
+   streams with real-time polls and reactions.
+
+   Challenge: Streamer asks question at T=0, but viewers see it at
+   T+100ms to T+400ms due to network variance, causing response timing
+   issues.
+
+
+
+
+
+
+
+
+Nandakumar & Jennings    Expires 7 January 2027                 [Page 3]
+
+Internet-Draft  TEMPO: Timing Extension for Media Playou       July 2026
+
+
+1.1.3.  Multi-Room Audio System
+
+   Distributed audio systems playing the same audio across multiple
+   speakers in the same room or adjacent rooms need precise
+   synchronization to avoid audio artifacts and maintain coherent sound.
+
+   Challenge: Different network paths to each room cause echo effects.
+
+1.1.4.  Emergency Broadcasting
+
+   Natural disaster alerts can play out on many devices at the same
+   locations and if they are not synchronized, it can make it harder to
+   understand the alert.
+
+   Challenge: Multiple unsynchronized playouts in the same room make it
+   harder to understand audio.
+
+1.1.5.  Collaborative Viewing
+
+   Watch parties, online classrooms, and virtual meetings benefit from
+   synchronized playback to enable meaningful real-time discussion.
+
+   Challenge: When participants can discuss what they are seeing in real
+   time, even small timing differences become noticeable and disruptive.
+
+1.2.  Solution Overview
+
+   TEMPO addresses these challenges by adding timing metadata to each
+   MoQT object.  The Original Publisher (OrigPub) attaches two kinds of
+   information: a capture timestamp indicating when the media was
+   captured, paired with a playout delay that tells the subscriber how
+   long after capture time to present the object, and a hop timestamp
+   indicating when the object was last forwarded.  As relays forward the
+   object through the network, each relay that has accurate time
+   overwrites the hop timestamp with its own current clock value.  This
+   means the subscriber always receives a fresh timestamp from its
+   closest relay, which it can compare against its own local receive
+   time and transport delay to estimate if its clock is accurate or use
+   for determining playout time.
+
+
+
+
+
+
+
+
+
+
+
+
+Nandakumar & Jennings    Expires 7 January 2027                 [Page 4]
+
+Internet-Draft  TEMPO: Timing Extension for Media Playou       July 2026
+
+
+   Subscribers use the capture timestamp, playout delay, and hop
+   timestamp to compute exactly when to render each object.  If a
+   subscriber finds itself consistently falling behind the target, it
+   reports this directly to a PlaySyncServer — a coordination entity
+   that receives feedback from all subscribers and decides whether the
+   playout delay needs to be adjusted.  If most subscribers are
+   struggling, the PlaySyncServer tells the OrigPub to increase the
+   delay on future objects, giving everyone more time to buffer and
+   catch up.
+
+   The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT",
+   "SHOULD", "SHOULD NOT", "RECOMMENDED", "MAY", and "OPTIONAL" in this
+   document are to be interpreted as described in RFC 2119.
+
+2.  TEMPO Object Extension Properties
+
+   This section defines three TEMPO Object Extension properties that
+   carry timing information on each object as it flows through the relay
+   network.  Together, they give end subscribers enough information to
+   determine when to present each object and to detect when they are
+   falling out of sync.
+
+2.1.  CaptureTimestamp
+
+   CaptureTimestamp {
+     Extension Type (i) = TBD2,
+     Length (i),
+     Timestamp (vi64)      // ms since unix epoch
+   }
+
+   The CaptureTimestamp tells the end subscriber the time at which the
+   start of the media in the object was captured.  If the object
+   contains 20 ms of audio, this time indicates the time of the first
+   sample.
+
+   The Original Publisher sets this value when it creates the object.
+   It is an immutable object property.  This property is more accurate
+   when NTP support is available at the original publisher.
+
+2.2.  PlayoutDelay
+
+   PlayoutDelay {
+     Extension Type (i) = TBD1,
+     Length (i),
+     Delay (32)              // milliseconds, unsigned
+   }
+
+
+
+
+
+Nandakumar & Jennings    Expires 7 January 2027                 [Page 5]
+
+Internet-Draft  TEMPO: Timing Extension for Media Playou       July 2026
+
+
+   The PlayoutDelay tells the end subscriber how long to wait after the
+   capture time of an object before presenting it.  For example, if the
+   PlayoutDelay is 200ms, the subscriber should buffer the object until
+   the current time is 200 ms greater than the capture time.
+
+   The Original Publisher sets this value when it creates the object.
+   It is an immutable object property.  If it is omitted, the value is
+   assumed to be the same as the previous object on the same track.
+
+2.3.  HopTime
+
+   HopTime {
+     Extension Type (i) = TBD3,
+     Length (i),
+     Timestamp (vi64)      // ms since unix epoch
+   }
+
+   The HopTime records when the object was last forwarded.  The Original
+   Publisher initially sets it to its own current time when creating the
+   object.  As the object passes through each relay, that relay
+   overwrites the HopTime with its own current clock value before
+   forwarding.  This means the end subscriber always sees the timestamp
+   of its closest relay — the last node that touched the object before
+   it arrived.
+
+   By comparing the HopTime to its own local receive time, an end
+   subscriber can estimate the one-way network delay on the final hop.
+   This is valuable because it isolates the most variable part of the
+   path (the last mile to the subscriber) from the rest of the relay
+   chain.  Comparing this to the QUIC RTT estimate can often allow a
+   subscriber to detect if its local clock is wrong.
+
+   Unlike CaptureTimestamp and PlayoutDelay, HopTime is mutable.  Every
+   relay that supports this extension MUST overwrite it with its own
+   current timestamp of approximately when it started sending the
+   object.
+
+2.4.  Sync Support Parameter
+
+   Subscribers indicate their sync capabilities when they subscribe to a
+   track.  This allows relays to know whether they need to perform
+   HopTime stamping.
+
+   Sync Support Parameter {
+     Parameter Type (i) = TBD6,
+     Parameter Length (i) = 0,
+   }
+
+
+
+
+Nandakumar & Jennings    Expires 7 January 2027                 [Page 6]
+
+Internet-Draft  TEMPO: Timing Extension for Media Playou       July 2026
+
+
+3.  Architecture
+
+3.1.  Topology
+
+   The system consists of an Original Publisher, a tree of relays, end
+   subscribers, and an optional application-defined PlaySyncServer.
+   Media objects flow from the OrigPub down through relays to
+   subscribers.  Subscribers report their sync state directly to the
+   PlaySyncServer (not through the relay network).  The PlaySyncServer
+   communicates delay adjustments to the OrigPub which it uses to update
+   the PlayoutDelay.
+
+               ┌──────────────────┐
+       ┌- ─ ──▶│  PlaySyncServer  │◀─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┐
+       │       └──────────────────┘                         │
+                  ▲ ▲ ▲   feedback (direct)                 │
+       │          │ │ │                                     │
+                  │ │ │                                     │
+   ┌───┴────┐     │ │ │                                     │
+   │OrigPub │     │ │ │                                     │
+   └───┬────┘     │ │ │                                     │
+       │          │ │ │                                     │
+       │ MOQ      │ │ │                                     │
+       ▼          │ │ │                                     │
+   ┌────────┐     │ │ │                                     │
+   │Relay A │     │ │ │                                     │
+   └┬──┬──┬─┘     │ │ │                                     │
+    │  │  │       │ │ │                                     │
+    │  │  └───────┼─┼─┼──────────-────────┐                 │
+    │  │          │ │ │                   │                 │
+    ▼  ▼          │ │ │                   ▼                 │
+   ┌───────┐  ┌───────┐              ┌─────────┐            │
+   │Relay B│  │Relay C│              │  End    │─ ─ ─ ─ ─ ─ ┘
+   └───┬───┘  └───┬───┘              │  Sub-3  │
+       │          │                  └─────────┘
+       ▼          ▼
+   ┌─────────┐ ┌─────────┐
+   │  End    │ │  End    │
+   │  Sub-2  │ │  Sub-1  │
+   └─────────┘ └─────────┘
+
+   ─── Solid lines: media flow (OrigPub → Relays → Subscribers) via MOQ
+   ─ ─ Dashed lines: subscriber feedback directly to PlaySyncServer ─ ─
+   PlaySyncServer → OrigPub: timing adjustments (signaling)
+
+
+
+
+
+
+
+Nandakumar & Jennings    Expires 7 January 2027                 [Page 7]
+
+Internet-Draft  TEMPO: Timing Extension for Media Playou       July 2026
+
+
+3.2.  Scope
+
+   The mechanism by which end subscribers discover the PlaySyncServer is
+   out of scope for this specification.  The signaling protocol used by
+   subscribers to report feedback directly to the PlaySyncServer (e.g.,
+   MoQ Metrics, HTTP, or other mechanism) is also out of scope.
+   Similarly, the specific signaling protocol between the PlaySyncServer
+   and the OrigPub is also out of scope.
+
+3.3.  NTP Capability Scenarios
+
+   Not all deployments have NTP available on every node.  This
+   specification supports three scenarios depending on which nodes have
+   synchronized clocks:
+
+   Scenario 1: OrigPub, Relays, and End Subscribers are all NTP capable.
+   This is the ideal case.  The OrigPub sets a CaptureTimestamp and
+   PlayoutDelay on each object, and subscribers simply present the
+   object at the playout time which is the capture time plus the playout
+   delay.  HopTime is still useful for monitoring delay and detecting
+   that the end subscriber has NTP synchronized time but is not strictly
+   needed for playout decisions.
+
+   Scenario 2: OrigPub and Relays are NTP capable, but End Subscribers
+   are not.  The OrigPub still sets CaptureTimestamp and PlayoutDelay to
+   compute a playout time.  The end subscriber estimates NTP time using
+   the HopTime and adding half of the RTT estimate from the QUIC
+   transport that provided the HopTime.  These values can be smoothed
+   and, along with an unsynchronized local clock, can be used to get a
+   close estimate of NTP time.
+
+   Scenario 3: Only Relays are NTP capable.  The OrigPub itself has no
+   synchronized clock but it can subscribe to its own media to estimate
+   NTP time in the same way the end subscriber does in Scenario 2.
+
+3.4.  Original Publisher (OrigPub)
+
+   The Original Publisher is responsible for creating media objects and
+   attaching the timing metadata that drives synchronization.  When it
+   creates each object, it sets the CaptureTimestamp and PlayoutDelay to
+   indicate when the object should be presented.  It also sets the
+   initial HopTime to its own current time.
+
+
+
+
+
+
+
+
+
+Nandakumar & Jennings    Expires 7 January 2027                 [Page 8]
+
+Internet-Draft  TEMPO: Timing Extension for Media Playou       July 2026
+
+
+3.4.1.  Steady-State Timing
+
+   During normal operation, the OrigPub increments CaptureTimestamp on
+   each successive object by the media frame duration.  For example, if
+   the track carries 20ms audio frames, each object's CaptureTimestamp
+   is 20ms later than the previous one.  The PlayoutDelay remains
+   constant unless adjusted by the PlaySyncServer.  This produces a
+   continuous, evenly spaced playout schedule that subscribers follow.
+
+3.4.2.  PlayoutDelay updates from PlaySyncServer
+
+   The OrigPub receives timing adjustment instructions from the
+   PlaySyncServer.  When the PlaySyncServer decides (based on subscriber
+   feedback it receives directly) that the playout target needs to
+   change — for example, increasing delay by 100ms — the OrigPub applies
+   that correction to the next object it produces and continues
+   incrementing by the media frame duration from the new baseline
+   onward.  The effect is a one-time shift in the playout schedule; all
+   subsequent objects maintain the same spacing relative to the
+   corrected point.
+
+     Frame duration = 20ms, correction = +100ms at object N
+
+     Object:   N-2      N-1       N        N+1      N+2
+     Target:   T+40     T+60    T+180     T+200    T+220
+                                 ▲
+                                 │ correction applied here
+                                 │ (+100ms added to baseline)
+
+3.5.  Relays
+
+   When forwarding an object, a relay MUST replace the HopTime value
+   with its own current timestamp of approximately when it started
+   sending the object.
+
+   Relays MUST use NTP-synchronized clocks when generating HopTime
+   values.
+
+   Relays SHOULD only perform HopTime stamping when at least one
+   downstream subscriber has indicated sync support in its SUBSCRIBE
+   parameters, to avoid unnecessary processing overhead.
+
+
+
+
+
+
+
+
+
+
+Nandakumar & Jennings    Expires 7 January 2027                 [Page 9]
+
+Internet-Draft  TEMPO: Timing Extension for Media Playou       July 2026
+
+
+3.6.  PlaySyncServer
+
+   The PlaySyncServer is a logical service defined by the application
+   that receives feedback directly from all subscribers and communicates
+   with the OrigPub to issue timing adjustments.  It is responsible for
+   observing the health of synchronization across all subscribers and
+   making decisions about whether timing needs to change.
+
+   The PlaySyncServer MUST implement the following decision logic based
+   on aggregated subscriber feedback:
+
+   *  If all subscribers report sync state within acceptable bounds, the
+      PlaySyncServer MUST NOT issue any timing adjustments.
+
+   *  If a majority of subscribers report falling behind by a consistent
+      amount, the PlaySyncServer SHOULD instruct the OrigPub to increase
+      the PlayoutDelay on subsequent objects by the reported deficit.
+
+   The PlaySyncServer SHOULD implement hysteresis to avoid oscillation.
+
+4.  Optimized Forms
+
+4.1.  Short Timestamps
+
+   The timestamps will typically encode to about a 6 byte integer in
+   MoQ.  In many applications, there is no requirement to sync media
+   that is delivered more than a few seconds outside of the desired
+   playout time.  These applications can send just the low order 14 bits
+   of the timestamps which are referred to as short timestamps.
+
+   If the application receives a timestamp less than 16384, it is
+   assumed to be a short timestamp.  The receiver computes the full
+   timestamp by taking its current time, replacing the lower 14 bits
+   with the received short timestamp, then if that result is greater
+   than the current time, subtracting 16384.
+
+4.2.  Periodic Marking
+
+   There is no need to send markings with every object for applications
+   that send objects at a constant rate.  Receivers can look at two
+   existing timestamps and extrapolate the timestamps of other objects
+   that are near the same time.  Typically these applications also know
+   the rate of the objects.
+
+   An original publisher that uses periodic marking needs to consider:
+
+   *  If the objects are over datagrams, consider sending information in
+      multiple objects in case one is lost.
+
+
+
+Nandakumar & Jennings    Expires 7 January 2027                [Page 10]
+
+Internet-Draft  TEMPO: Timing Extension for Media Playou       July 2026
+
+
+   *  If subscribers join mid track, how quickly will they discover the
+      synchronization information.
+
+   A typical strategy might be to send the timestamp and playout delay
+   information once every 200ms.
+
+4.3.  Time Aligned Groups
+
+   Many applications can have a direct linear function between the MoQ
+   group ID and the capture timestamps.  The relationship is defined by
+   an object rate per 720 seconds and the time offset of the first
+   object in the first group.
+
+   CaptureTimestamp = GroupID * 720000 / objectsPer720s + startTime
+
+   Where:
+
+   *  objectsPer720s is the number of objects produced in 720 seconds
+      (e.g., for 30 fps video: 30 × 720 = 21600).
+
+   *  startTime is the capture timestamp of the first object in group 0,
+      expressed in milliseconds since the NTP epoch.
+
+   *  CaptureTimestamp is the resulting capture time in the same units
+      as startTime.
+
+   The constant 720000 (= 2^7 × 3^2 × 5^4) was chosen to allow a wide
+   range of common frame rates to be exactly represented as integer
+   divisors.  RTP often uses 90000 but high frame rates for slow motion
+   video such as 480 fps do not evenly divide into 90000, whereas they
+   do divide evenly into 720000.
+
+   The objectsPer720s and startTime can be communicated out of band, for
+   example, in the catalog.
+
+   If the publisher uses Time Aligned Groups, it MUST choose the group
+   number to correctly represent the capture time of the first object in
+   the group based on the out of band rate and start time.  End
+   Subscribers can use the group ID to recreate the capture time of the
+   first object in the group.  The capture times for subsequent objects
+   within a group can be derived by adding 720000 / objectsPer720s for
+   each object offset.
+
+   If end subscribers are aware that groups are time-aligned, there is
+   no need to include the CaptureTimestamp property.
+
+   TODO - add extension to catalog to carry this information
+
+
+
+
+Nandakumar & Jennings    Expires 7 January 2027                [Page 11]
+
+Internet-Draft  TEMPO: Timing Extension for Media Playou       July 2026
+
+
+4.4.  Catalog Based Playout Delay
+
+   For many applications the Catalog can be used to deliver the
+   PlayoutDelay for a track.  If the logical PlaySyncServer wants to
+   update the PlayoutDelay, a new version of the catalog can be pushed
+   with delta encoding on a catalog track that all the clients subscribe
+   to.
+
+   TODO - define extension to catalog to carry PlayoutDelay.
+
+5.  End Subscribers
+
+   End subscribers compute playout times from the timing metadata and
+   report sync state to the PlaySyncServer.
+
+5.1.  Computing Playout Target
+
+   The subscriber estimates one-way delay from its closest relay:
+
+     D_oneway = ReceiveTime - HopTime
+     D_baseline = min(D_oneway) over recent observations
+
+   The playout target depends on the NTP scenario (see Section 3.3):
+
+   Scenario 1 (all nodes have NTP):
+
+     T_playout = CaptureTimestamp + PlayoutDelay
+
+   Scenario 2 (subscribers lack NTP):
+
+     T_playout = ReceiveTime + PlayoutDelay - (D_oneway - D_baseline)
+
+   Scenario 3 (only relays have NTP):
+
+     T_playout = HopTime + PlayoutDelay + D_baseline
+
+5.2.  Sync Feedback
+
+   Subscribers SHOULD periodically report their sync state to the
+   PlaySyncServer.  The PlaySyncServer uses these reports to determine
+   whether a systemic issue exists and, if so, instructs the OrigPub to
+   adjust PlayoutDelay on future objects.
+
+
+
+
+
+
+
+
+
+Nandakumar & Jennings    Expires 7 January 2027                [Page 12]
+
+Internet-Draft  TEMPO: Timing Extension for Media Playou       July 2026
+
+
+5.3.  Drift and Jump Handling
+
+   End subscribers MUST be prepared to handle clock drift (gradual
+   divergence between local and relay clocks) and delay jumps (sudden
+   shifts from route changes or congestion events).  Implementations
+   SHOULD apply local compensation to maintain playout continuity and
+   report persistent drift or jumps to the PlaySyncServer.
+
+6.  Security Considerations
+
+   Subscribers MAY implement reasonableness checks — for example,
+   verifying that HopTime values are monotonically increasing and that
+   the delta between consecutive objects' HopTime values is bounded.
+
+   The connection between the OrigPub and PlaySyncServer MUST be
+   authenticated and integrity-protected to prevent injection of false
+   playout targets.
+
+   Malicious subscribers could send fabricated feedback reports claiming
+   to be far behind, tricking the PlaySyncServer into unnecessarily
+   increasing playout delay for everyone.  The PlaySyncServer SHOULD
+   implement rate limiting on reports and outlier detection to identify
+   and filter anomalous feedback.
+
+7.  IANA Considerations
+
+   This document requests the following IANA registrations:
+
+   *  TBD1: PlayoutDelay Object Extension Type
+
+   *  TBD2: CaptureTimestamp Object Extension Type
+
+   *  TBD3: HopTime Object Extension Type
+
+   *  TBD6: Sync Support Subscribe Parameter Type
+
+8.  References
+
+8.1.  Normative References
+
+   [MOQ-TRANSPORT]
+              Nandakumar, S., Vasiliev, V., Swett, I., and A. Frindell,
+              "Media over QUIC Transport", Work in Progress, Internet-
+              Draft, draft-ietf-moq-transport-18, 12 May 2026,
+              <https://datatracker.ietf.org/doc/html/draft-ietf-moq-
+              transport-18>.
+
+
+
+
+
+Nandakumar & Jennings    Expires 7 January 2027                [Page 13]
+
+Internet-Draft  TEMPO: Timing Extension for Media Playou       July 2026
+
+
+   [RFC2119]  Bradner, S., "Key words for use in RFCs to Indicate
+              Requirement Levels", 1997,
+              <https://tools.ietf.org/rfc/rfc2119.txt>.
+
+8.2.  Informative References
+
+   [NTP]      Mills, D., "Network Time Protocol Version 4: Protocol and
+              Algorithms Specification", 2010,
+              <https://tools.ietf.org/rfc/rfc5905.txt>.
+
+   [PTP]      IEEE, "IEEE Standard for a Precision Clock Synchronization
+              Protocol for Networked Measurement and Control Systems",
+              2020,
+              <https://standards.ieee.org/standard/1588-2019.html>.
+
+Authors' Addresses
+
+   Suhas Nandakumar
+   Cisco
+   Email: snandaku@cisco.com
+
+
+   Cullen Jennings
+   Cisco
+   Email: fluffy@iii.ca
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Nandakumar & Jennings    Expires 7 January 2027                [Page 14]
