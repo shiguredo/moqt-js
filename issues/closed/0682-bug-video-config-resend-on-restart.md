@@ -1,7 +1,7 @@
 # 映像の VIDEO_CONFIG が Forward State 変化と stop → start で送り直されない
 
 - Created: 2026-09-24
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-10-05
 - Branch: feature/fix-video-config-resend-on-restart
 - Polished: 2026-09-24
 
@@ -65,4 +65,17 @@ draft-ietf-moq-loc-04 §2.3.2.1 の Video Config (0x0D) は codec の extradata 
 
 ## 解決方法
 
-{未着手}
+- `src/createMediaPublisher.ts` の `MediaPublisherImpl` に `videoConfigResendRequested` を追加し、映像 Publisher の `onForwardStateChange` が forwardState 0 から 1 の変化で送り直し要求を立てるようにした
+- 送出する Video Config の判断を純関数 `resolveVideoConfigToSend` に切り出した。新しい description が現れたときはそれを載せ、送り直し要求があるときは次のキーフレームの Object に保持値を 1 度だけ載せ直し、要求が立っていても保持値が無ければ要求だけを残す。載せた時点で要求は解消し、保持値は消さない
+- 当初の設計方針は「description を持つ chunk が現れるまで要求を保留する」だったが、Chromium の `VideoEncoder` を確認したところ description は configure 後の最初の出力と構成変更時にしか現れず、キーフレームごとには再出現しないため、実環境では送り直しが発火しないことが分かった。要求への応答境界を**キーフレーム**に変更した (description を持たないキーフレームにも保持値を載せる。設計方針と完了条件の該当項目はこの変更で置き換わる)
+- `stop()` / `close()` / `start()` 失敗の資源破棄で Video Config の保持値と要求を破棄するようにした。再 start では新しい session と encoder になり購読者は誰も前の Object を受け取っていないため、最初の description を初出として送り直す
+- `src/createMediaPublisher.test.ts` に、キーフレームでの送り直し (1 Object に限る)、キーフレーム以外での保留、保持値が無いまま要求された場合、stop 後の再開で同じ description でも載ること、`createPublishers` が映像 Publisher に `onForwardStateChange` を登録することを `createPublishRecordingSession` の `callbacksByTrack` で検証するテストを追加した
+- `src/createMediaPublisher.prop.ts` に映像側の不変条件 (送出値は保持値と一致する / 初出と変更の description は必ず載る / キーフレームでは要求が立っている限り必ず載って解消される / キーフレーム以外では載らず要求が残る / 要求が無ければ同じ値を連続で載せない / 送り直しは 1 Object に限り保持値は複製する) を追加した
+- `docs/HIGH_LEVEL_API.md` の VIDEO_CONFIG の記述を、キーフレームでの送り直しの契約に合わせた。高レベル API の既定設定 (H.264 / H.265 は annexb、VP8 / VP9 / AV1 は description なし) では Chromium が description を返さないためこの送り直しは現状では働かないことと、canonical 形式 (avc / hev1) の description が届く設定・実装で働くことも記録した
+- `CHANGES.md` の `## develop` の `[FIX]` 群の先頭に追記した
+
+### 補足
+
+- 音声と映像で共有する戻り値の型名を `AudioConfigResolution` から `CodecConfigResolution` に改名した (パッケージ公開 API には含めない)
+- 送り直しの応答をキーフレームにした理由: 映像の description は configure 後の最初の出力と構成変更時にしか現れない (Chromium の実装。実装依存) ため、キーフレームごとに再出現することを前提にできない。キーフレーム以外の Object に保持値を載せると購読側が GOP の途中で復号器を再構成することになる
+- 現状の高レベル API の映像設定では encoder が description を返さないため、この送り直しは発火しない (annexb の parameter sets は bitstream に含まれる)。canonical 形式 (avc / hev1) への切り替えを行う場合は、この送り直しがそのまま必要になる

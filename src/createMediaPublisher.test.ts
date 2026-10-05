@@ -18,11 +18,11 @@
  *
  * グループ管理 (allocateAudioObject / allocateVideoObject) とキーフレーム判定
  * (resolveKeyframeInterval / shouldSendKeyFrame)、Publisher Priority の定数と送信値、
- * Audio Config の再送判断 (resolveAudioConfigToSend) は純関数として切り出しており、
- * 固定値で直接駆動する。
- * Audio Config の再送は forwardState 変化のコールバック登録から
- * handleAudioEncodedChunk までを、publish 呼び出しを記録する最小セッションを
- * 注入して結合で検証する。
+ * Audio Config / Video Config の再送判断 (resolveAudioConfigToSend /
+ * resolveVideoConfigToSend) は純関数として切り出しており、固定値で直接駆動する。
+ * Audio Config / Video Config の再送は forwardState 変化のコールバック登録から
+ * handleAudioEncodedChunk / handleVideoEncodedChunk までを、publish 呼び出しを記録する
+ * 最小セッションを注入して結合で検証する。
  * encode キューの閾値超過による破棄と droppedFrames の加算、破棄したフレームの
  * キーフレーム要求が次に encode するフレームへ移ることも検証する。
  * session の close 通知は private の通知処理 (handleSessionClose) を世代番号を与えて
@@ -52,6 +52,7 @@ import {
   allocateVideoObject,
   resolveAudioConfigToSend,
   resolveKeyframeInterval,
+  resolveVideoConfigToSend,
   shouldSendKeyFrame,
   VIDEO_PUBLISH_OPTIONS,
   type VideoGroupState,
@@ -729,7 +730,9 @@ interface PublisherLifecycleControl extends PublisherLoopControl {
   audioConfigResendRequested: boolean;
   // 直前に AUDIO_CONFIG として送った description (session を跨いで保持しない)
   lastSentAudioConfig: Uint8Array | null;
-  // 直前に VIDEO_CONFIG として送った description
+  // forwardState が 0 から 1 になった時点で立つ Video Config の送り直し要求
+  videoConfigResendRequested: boolean;
+  // 直前に VIDEO_CONFIG として送った description (session を跨いで保持しない)
   lastSentVideoConfig: Uint8Array | null;
   // {} 代入のための緩和であり検証対象外である (実装型はプロセッサ型)
   audioTrackProcessor: unknown;
@@ -1005,10 +1008,12 @@ test("破棄段階の失敗は後続を止めず最初の失敗を throw し旧 
   lifecycle.catalogPublisher = rejectingCatalog;
   lifecycle.audioPublisher = audioPublisher;
   lifecycle.session = session;
-  // 破棄では session に紐づく Audio Config の保持値と要求を必ず忘れる。
+  // 破棄では session に紐づく Audio Config / Video Config の保持値と要求を必ず忘れる。
   // 段階破棄が失敗しても忘れ漏らさないことを確認する
   lifecycle.lastSentAudioConfig = new Uint8Array([0x11, 0x90]);
   lifecycle.audioConfigResendRequested = true;
+  lifecycle.lastSentVideoConfig = new Uint8Array([0x01, 0x42, 0xc0, 0x1f]);
+  lifecycle.videoConfigResendRequested = true;
 
   let thrown: unknown = null;
   try {
@@ -1026,6 +1031,8 @@ test("破棄段階の失敗は後続を止めず最初の失敗を throw し旧 
   assert.isNull(lifecycle.session);
   assert.isNull(lifecycle.lastSentAudioConfig);
   assert.isFalse(lifecycle.audioConfigResendRequested);
+  assert.isNull(lifecycle.lastSentVideoConfig);
+  assert.isFalse(lifecycle.videoConfigResendRequested);
   // 旧 state のまま残るため再試行できること
   assert.equal(publisher.state, "publishing");
   await publisher.stop();
@@ -2753,8 +2760,9 @@ test("未使用 track は Group ID を採番しない", () => {
 /**
  * draft-ietf-moq-loc-04 §2.3.2.1 (Video Config):
  * encoder が返す description (avcC / hvcC などの extradata) が VIDEO_CONFIG として
- * 送られることを検証する。description は keyframe の metadata にのみ現れるため、
- * 同じ値は再送せず、変化したときだけ載せる。
+ * 送られることを検証する。description は configure 後の最初の出力と構成変更時にしか
+ * 現れないため、要求が無い限り同じ値は再送せず、変化したときだけ載せる。要求がある
+ * ときは次のキーフレームで 1 度だけ載せ直す。
  */
 function createCapturingPublisher(): {
   publisher: Publisher;
@@ -2774,7 +2782,11 @@ function createCapturingPublisher(): {
 }
 
 /** Video Config の description を含む chunk を handleVideoEncodedChunk に流す */
-function sendVideoChunk(control: PublisherLifecycleControl, description?: Uint8Array): void {
+function sendVideoChunk(
+  control: PublisherLifecycleControl,
+  description?: Uint8Array,
+  type: "key" | "delta" = "key",
+): void {
   const handler = (
     control as unknown as {
       handleVideoEncodedChunk(chunk: {
@@ -2788,7 +2800,7 @@ function sendVideoChunk(control: PublisherLifecycleControl, description?: Uint8A
   ).handleVideoEncodedChunk.bind(control);
   handler({
     data: new Uint8Array([0xaa]),
-    type: "key",
+    type,
     timestamp: 1000,
     duration: null,
     description,
@@ -2875,6 +2887,131 @@ test("handleVideoEncodedChunk: description が無い chunk は VIDEO_CONFIG を�
   sendVideoChunk(control);
 
   assert.isUndefined(LOC.decodeVideoProperties(sent[0].properties ?? new Uint8Array(0)).config);
+});
+
+/**
+ * draft-ietf-moq-loc-04 §2.3.2.1 (Video Config):
+ * 後から接続した購読者 (forwardState が 0 から 1 になった時点) のために、
+ * 保持している Video Config を次のキーフレームの Object に載せ直す契約を検証する。
+ * Chromium の VideoEncoder は description を configure 後の最初の出力と構成変更時に
+ * しか付けないため、キーフレームごとに再出現することを前提にできない。GOP の途中の
+ * Object に載せると購読側が GOP の途中で復号器を再構成することになるため、要求は
+ * キーフレームまで保留する。
+ */
+test("handleVideoEncodedChunk: 送り直し要求は次のキーフレームで保持している Video Config を 1 Object 載せ直す", () => {
+  const { control: loopControl } = createLoopTestContext();
+  const control = loopControl as unknown as PublisherLifecycleControl;
+  const { publisher: videoPublisher, sent } = createCapturingPublisher();
+  control.videoPublisher = videoPublisher;
+
+  // 最初の chunk (description 付きのキーフレーム) で Video Config を送って保持する
+  const description = new Uint8Array([0x01, 0x42, 0xc0, 0x1f]);
+  sendVideoChunk(control, description);
+
+  // forwardState が 1 になった時点で立つ要求を再現する。
+  // 以降のキーフレームに description は再出現しない (Chromium の実挙動)
+  control.videoConfigResendRequested = true;
+  sendVideoChunk(control);
+
+  // 載せ直しは 1 Object に限る (要求は載せた時点で解消する)
+  sendVideoChunk(control);
+
+  assert.equal(sent.length, 3);
+  assert.deepEqual(
+    LOC.decodeVideoProperties(sent[0].properties ?? new Uint8Array(0)).config,
+    description,
+  );
+  assert.deepEqual(
+    LOC.decodeVideoProperties(sent[1].properties ?? new Uint8Array(0)).config,
+    description,
+  );
+  assert.isUndefined(LOC.decodeVideoProperties(sent[2].properties ?? new Uint8Array(0)).config);
+  assert.isFalse(control.videoConfigResendRequested);
+});
+
+test("handleVideoEncodedChunk: キーフレーム以外の chunk では要求を保留し、載せない", () => {
+  const { control: loopControl } = createLoopTestContext();
+  const control = loopControl as unknown as PublisherLifecycleControl;
+  const { publisher: videoPublisher, sent } = createCapturingPublisher();
+  control.videoPublisher = videoPublisher;
+
+  const description = new Uint8Array([0x01, 0x42, 0xc0, 0x1f]);
+  sendVideoChunk(control, description);
+  control.videoConfigResendRequested = true;
+
+  // デルタフレームに載せると購読側が GOP の途中で復号器を再構成することになるため、
+  // 載せずに要求を残す (同じ description を持つ場合も載せない)
+  sendVideoChunk(control, new Uint8Array(description), "delta");
+  assert.isUndefined(LOC.decodeVideoProperties(sent[1].properties ?? new Uint8Array(0)).config);
+  assert.isTrue(control.videoConfigResendRequested);
+
+  // 次のキーフレームで載り、要求は解消する
+  sendVideoChunk(control);
+  assert.deepEqual(
+    LOC.decodeVideoProperties(sent[2].properties ?? new Uint8Array(0)).config,
+    description,
+  );
+  assert.isFalse(control.videoConfigResendRequested);
+});
+
+test("handleVideoEncodedChunk: 保持値が無いまま要求されたら、次の description 付きキーフレームで載せる", () => {
+  // forwardState が 1 になった時点で Video Config をまだ持っていない場合でも、
+  // 要求を捨てずに次の description で載せられることの検証
+  const { control: loopControl } = createLoopTestContext();
+  const control = loopControl as unknown as PublisherLifecycleControl;
+  const { publisher: videoPublisher, sent } = createCapturingPublisher();
+  control.videoPublisher = videoPublisher;
+
+  control.videoConfigResendRequested = true;
+  // 保持値が無いため、description の無いキーフレームでも載せられず要求は残る
+  sendVideoChunk(control);
+  assert.isTrue(control.videoConfigResendRequested);
+  assert.isUndefined(LOC.decodeVideoProperties(sent[0].properties ?? new Uint8Array(0)).config);
+
+  // 次の description が現れた時点で載り、要求は解消する
+  const description = new Uint8Array([0x01, 0x42, 0xc0, 0x1f]);
+  sendVideoChunk(control, description);
+  assert.deepEqual(
+    LOC.decodeVideoProperties(sent[1].properties ?? new Uint8Array(0)).config,
+    description,
+  );
+  assert.isFalse(control.videoConfigResendRequested);
+});
+
+test("handleVideoEncodedChunk: stop 後の再開では同じ description でも VIDEO_CONFIG を載せる", async () => {
+  // stop → start は新しい session と encoder を作るため、購読者は誰も前の
+  // VIDEO_CONFIG を受け取っていない。保持値を破棄していないと新しい encoder の
+  // description が同じ値として抑止され、再開後の購読者が映像を復号できない。
+  // 公開 stop() で破棄を駆動し (start() 自体は接続を要する)、
+  // 再開後に同じ description が載ることを確認する
+  const { publisher, control: loopControl } = createLoopTestContext();
+  const control = loopControl as unknown as PublisherLifecycleControl;
+  const { publisher: firstPublisher, sent: firstSent } = createCapturingPublisher();
+  control.videoPublisher = firstPublisher;
+
+  const description = new Uint8Array([0x01, 0x42, 0xc0, 0x1f]);
+  sendVideoChunk(control, description);
+  assert.deepEqual(
+    LOC.decodeVideoProperties(firstSent[0].properties ?? new Uint8Array(0)).config,
+    description,
+  );
+
+  // stop では session に紐づく Video Config の保持値と要求を忘れる
+  await publisher.stop();
+  assert.equal(publisher.state, "stopped");
+  assert.isNull(control.lastSentVideoConfig);
+  assert.isFalse(control.videoConfigResendRequested);
+
+  // 再開後 (新しい publisher) に同じ description が届いたら初出として載る
+  const { publisher: resumedPublisher, sent: resumedSent } = createCapturingPublisher();
+  control.videoPublisher = resumedPublisher;
+  sendVideoChunk(control, new Uint8Array(description));
+
+  assert.equal(resumedSent.length, 1);
+  assert.deepEqual(
+    LOC.decodeVideoProperties(resumedSent[0].properties ?? new Uint8Array(0)).config,
+    description,
+  );
 });
 
 /**
@@ -3082,9 +3219,9 @@ test("handleAudioEncodedChunk: publisher が active でない間は保持値も�
   assert.deepEqual(control.lastSentAudioConfig, retained);
 });
 
-test("handleVideoEncodedChunk: publisher が active でない間は保持値を変えない", () => {
+test("handleVideoEncodedChunk: publisher が active でない間は保持値も要求も変えない", () => {
   // 音声側と同じ入口ガードを映像側も持つことの検証。送信できない間に届いた chunk で
-  // 保持値を書き換えると、以降の VIDEO_CONFIG の送出が抑止されて映像を復号できなくなる
+  // 保持値や要求を書き換えると、購読者が接続したのに VIDEO_CONFIG を送り直せなくなる
   const { control: loopControl } = createLoopTestContext();
   const control = loopControl as unknown as PublisherLifecycleControl;
   const { publisher: videoPublisher, sent } = createCapturingPublisher();
@@ -3093,10 +3230,12 @@ test("handleVideoEncodedChunk: publisher が active でない間は保持値を�
   control.videoPublisher = videoPublisher;
   const retained = new Uint8Array([0x01, 0x42, 0xc0, 0x1f]);
   control.lastSentVideoConfig = new Uint8Array(retained);
+  control.videoConfigResendRequested = true;
 
   sendVideoChunk(control, new Uint8Array([0x01, 0x42, 0xc0, 0x2a]));
 
   assert.equal(sent.length, 0);
+  assert.isTrue(control.videoConfigResendRequested);
   assert.deepEqual(control.lastSentVideoConfig, retained);
 });
 
@@ -3254,6 +3393,7 @@ test("handleVideoEncodedChunk: 送信の同期 throw は onError に 1 回届く
  */
 interface PublisherForwardControl extends PublisherLifecycleControl {
   resolvedAudio: ResolvedAudioPublishSettings | null;
+  resolvedVideo: ResolvedVideoPublishSettings | null;
   createPublishers(): Promise<void>;
 }
 
@@ -3261,7 +3401,7 @@ interface PublisherForwardControl extends PublisherLifecycleControl {
  * publish 呼び出しを記録する最小セッション
  *
  * track 名で引く Publisher を返し、渡されたコールバックを記録する。
- * createPublishers() が forwardState 変化のコールバックを音声 Publisher に
+ * createPublishers() が forwardState 変化のコールバックを音声 / 映像 Publisher に
  * 登録しているかを、実装の内部状態を経由せずに検証できるようにする。
  */
 function createPublishRecordingSession(publishers: Map<string, Publisher>): {
@@ -3347,6 +3487,63 @@ test("createPublishers: forwardState が 1 になると Audio Config の送り�
   assert.isTrue(control.audioConfigResendRequested);
 });
 
+test("createPublishers: forwardState が 1 になると Video Config の送り直しを要求する", async () => {
+  // 購読者が居ない状態から購読者が接続した場合の結合の検証。
+  // createPublishers() が映像 Publisher に onForwardStateChange を登録し、
+  // それが handleVideoEncodedChunk の載せ直しに繋がることを確認する
+  const { control: loopControl } = createLoopTestContext();
+  const control = loopControl as unknown as PublisherForwardControl;
+  const videoSettings = resolveVideoPublishSettings(
+    { codec: "vp8", bitrate: 1_000_000, trackName: "video" },
+    undefined,
+  );
+  control.resolvedVideo = videoSettings;
+  const { publisher: catalogPublisher, sent: catalogSent } = createRecordingSendPublisher();
+  const { publisher: videoPublisher, sent: videoSent } = createCapturingPublisher();
+  const publishers = new Map<string, Publisher>([
+    [CATALOG_TRACK_NAME, catalogPublisher],
+    [videoSettings.trackName, videoPublisher],
+  ]);
+  const { session, callbacksByTrack } = createPublishRecordingSession(publishers);
+  control.session = session;
+
+  await control.createPublishers();
+
+  // Catalog が Object ID 0 で 1 件だけ publish されること
+  assert.equal(catalogSent.length, 1);
+  assert.equal(catalogSent[0].objectId, 0);
+
+  // 映像 Publisher に forwardState 変化のコールバックが登録されていること
+  const videoCallbacks = callbacksByTrack.get(videoSettings.trackName);
+  assert.isDefined(videoCallbacks);
+  assert.isDefined(videoCallbacks?.onForwardStateChange);
+
+  // forwardState が 0 (購読者なし) では要求が立たない
+  videoCallbacks?.onForwardStateChange?.(false);
+  assert.isFalse(control.videoConfigResendRequested);
+
+  // Video Config を送って保持したあと、forwardState が 1 で要求が立つ
+  const description = new Uint8Array([0x01, 0x42, 0xc0, 0x1f]);
+  sendVideoChunk(control, description);
+  videoCallbacks?.onForwardStateChange?.(true);
+  assert.isTrue(control.videoConfigResendRequested);
+
+  // 要求に従って次のキーフレームの Object に保持値が載る
+  // (キーフレームに description は再出現しない)
+  sendVideoChunk(control);
+  assert.deepEqual(
+    LOC.decodeVideoProperties(videoSent[1].properties ?? new Uint8Array(0)).config,
+    description,
+  );
+  assert.isFalse(control.videoConfigResendRequested);
+
+  // 要求の寿命は送信で決まる。forwardState が 0 に戻っても保留中の要求は消さない
+  // (消すと、次に 1 になったときの送り直しを取りこぼす)
+  videoCallbacks?.onForwardStateChange?.(true);
+  videoCallbacks?.onForwardStateChange?.(false);
+  assert.isTrue(control.videoConfigResendRequested);
+});
+
 test("createPublishers: catalog 送信の事前検証 reject は印付きで 1 回だけ通知される", async () => {
   // start() は createPublishers() を await し、その中で publishCatalog() が catalog 送信を
   // await する。事前検証の違反は publisher 層が通知してから返値を reject するため、
@@ -3394,7 +3591,7 @@ test("createPublishers: catalog 送信の事前検証 reject は印付きで 1 �
  *
  * MediaPublisherImpl から切り出した払い出しロジックと判定ロジックを、実装クラスや
  * 構造の注入を介さず固定値で直接駆動する。Group ID が進む条件と Object ID が
- * 0 に戻る条件、キーフレーム間隔の解決と境界、Audio Config の再送判断、
+ * 0 に戻る条件、キーフレーム間隔の解決と境界、Audio Config / Video Config の再送判断、
  * Publisher Priority の定数を固定する。
  * Publisher Priority の送信値 (定数が送信に使われること) は、この節の後ろで
  * handleAudioEncodedChunk / handleVideoEncodedChunk と publishCatalog を private
@@ -3504,6 +3701,146 @@ test("resolveAudioConfigToSend: 送り直し要求より新しい description �
 
   assert.deepEqual(resent.config, new Uint8Array([0x12, 0x08]));
   assert.deepEqual(resent.next, new Uint8Array([0x12, 0x08]));
+  assert.isFalse(resent.resendNext);
+});
+
+test("resolveVideoConfigToSend: 初回と変化時だけ Video Config を載せる", () => {
+  // draft-ietf-moq-loc-04 §2.3.2.1 (Video Config): description が現れた最初の chunk と、
+  // 値が変わった chunk だけ載せる。同じ値を毎 Object 送らない
+  const description = new Uint8Array([0x01, 0x42, 0xc0, 0x1f]);
+
+  // 未送信の状態で description が現れたら載せ、保持する
+  const first = resolveVideoConfigToSend(null, description, true, false);
+  assert.deepEqual(first.config, description);
+  assert.deepEqual(first.next, description);
+  assert.isFalse(first.resendNext);
+
+  // 保持値は複製する (呼び出し側が元の配列を書き換えても送出値が変わらない)
+  const original = new Uint8Array([0x01, 0x42, 0xc0, 0x1f]);
+  const mutable = new Uint8Array([0x01, 0x42, 0xc0, 0x1f]);
+  const held = resolveVideoConfigToSend(null, mutable, true, false);
+  assert.notStrictEqual(held.next, mutable);
+  mutable.fill(0xff);
+  assert.deepEqual(held.next, original);
+
+  // 同じ値は載せず、保持値も変えない
+  const same = resolveVideoConfigToSend(
+    first.next,
+    new Uint8Array([0x01, 0x42, 0xc0, 0x1f]),
+    true,
+    false,
+  );
+  assert.isUndefined(same.config);
+  assert.deepEqual(same.next, first.next);
+  assert.isFalse(same.resendNext);
+
+  // 値が変わったら載せて保持値を更新する (キーフレーム以外でも新しい値は載せる)
+  const changed = resolveVideoConfigToSend(
+    first.next,
+    new Uint8Array([0x01, 0x42, 0xc0, 0x2a]),
+    false,
+    false,
+  );
+  assert.deepEqual(changed.config, new Uint8Array([0x01, 0x42, 0xc0, 0x2a]));
+  assert.deepEqual(changed.next, new Uint8Array([0x01, 0x42, 0xc0, 0x2a]));
+  assert.isFalse(changed.resendNext);
+
+  // description が無い chunk (初回出力と構成変更時以外や VP8) では載せず、
+  // 保持値もそのままにする
+  const withoutDescription = resolveVideoConfigToSend(first.next, undefined, true, false);
+  assert.isUndefined(withoutDescription.config);
+  assert.deepEqual(withoutDescription.next, first.next);
+  assert.isFalse(withoutDescription.resendNext);
+});
+
+test("resolveVideoConfigToSend: 空の description は値なしとして扱う", () => {
+  // 長さ 0 の description は extradata として意味を持たないため、長さ 0 の
+  // VIDEO_CONFIG を送らず、description の無い chunk と同じ扱いにする
+  const previous = new Uint8Array([0x01, 0x42, 0xc0, 0x1f]);
+  const empty = resolveVideoConfigToSend(previous, new Uint8Array(0), true, false);
+
+  assert.isUndefined(empty.config);
+  assert.deepEqual(empty.next, previous);
+  assert.isFalse(empty.resendNext);
+
+  // 保持値が無い状態でも空は載せない
+  const firstEmpty = resolveVideoConfigToSend(null, new Uint8Array(0), true, false);
+  assert.isUndefined(firstEmpty.config);
+  assert.isNull(firstEmpty.next);
+
+  // 値なしとして扱うため、キーフレーム以外では要求が残る
+  const pending = resolveVideoConfigToSend(previous, new Uint8Array(0), false, true);
+  assert.isUndefined(pending.config);
+  assert.isTrue(pending.resendNext);
+});
+
+test("resolveVideoConfigToSend: 送り直し要求はキーフレームで保持している Video Config を 1 Object 載せ直す", () => {
+  // forwardState が 0 から 1 になった時点 (後着購読者の出現) の要求に、
+  // 次のキーフレームで保持値を 1 Object だけ載せ直して応える。キーフレーム以外では
+  // 要求を残す (GOP の途中で購読側に復号器を再構成させない)
+  const description = new Uint8Array([0x01, 0x42, 0xc0, 0x1f]);
+  const sent = resolveVideoConfigToSend(null, description, true, false);
+
+  // 要求が無い chunk では載らない
+  const normal = resolveVideoConfigToSend(sent.next, undefined, true, false);
+  assert.isUndefined(normal.config);
+  assert.deepEqual(normal.next, sent.next);
+
+  // キーフレーム以外では応えず、要求を残す
+  const deferred = resolveVideoConfigToSend(normal.next, undefined, false, true);
+  assert.isUndefined(deferred.config);
+  assert.deepEqual(deferred.next, sent.next);
+  assert.isTrue(deferred.resendNext);
+
+  // キーフレームで保持値を載せ直し、要求は解消する
+  const resent = resolveVideoConfigToSend(deferred.next, undefined, true, true);
+  assert.deepEqual(resent.config, description);
+  assert.deepEqual(resent.next, description);
+  assert.isFalse(resent.resendNext);
+
+  // 保持値は消さない (2 人目以降の購読者にも同じ要求で応えられる)
+  const secondResend = resolveVideoConfigToSend(resent.next, undefined, true, true);
+  assert.deepEqual(secondResend.config, description);
+  assert.deepEqual(secondResend.next, description);
+});
+
+test("resolveVideoConfigToSend: 保持値が無いまま要求されたら要求を残す", () => {
+  // 初回の description が現れる前に forwardState が 1 になった場合は載せる値が無いため、
+  // 要求だけを残す (要求を消すと、次に description が現れても送り直しの意図が失われる)。
+  // 保持値が無い間はキーフレームでも載せられない
+  const onDelta = resolveVideoConfigToSend(null, undefined, false, true);
+  assert.isUndefined(onDelta.config);
+  assert.isNull(onDelta.next);
+  assert.isTrue(onDelta.resendNext);
+
+  const onKeyFrame = resolveVideoConfigToSend(onDelta.next, undefined, true, true);
+  assert.isUndefined(onKeyFrame.config);
+  assert.isNull(onKeyFrame.next);
+  assert.isTrue(onKeyFrame.resendNext);
+
+  // 要求が残ったまま次の description が現れたら、それを載せて要求は解消する
+  const resolved = resolveVideoConfigToSend(
+    onKeyFrame.next,
+    new Uint8Array([0x01, 0x42, 0xc0, 0x1f]),
+    true,
+    true,
+  );
+  assert.deepEqual(resolved.config, new Uint8Array([0x01, 0x42, 0xc0, 0x1f]));
+  assert.isFalse(resolved.resendNext);
+});
+
+test("resolveVideoConfigToSend: 送り直し要求より新しい description を優先する", () => {
+  // 要求が立っている間に encoder の値が変わった場合は、保持値の再送ではなく
+  // 新しい値を載せる (古い値を送ると購読側の復号設定と食い違う)
+  const resent = resolveVideoConfigToSend(
+    new Uint8Array([0x01, 0x42, 0xc0, 0x1f]),
+    new Uint8Array([0x01, 0x42, 0xc0, 0x2a]),
+    true,
+    true,
+  );
+
+  assert.deepEqual(resent.config, new Uint8Array([0x01, 0x42, 0xc0, 0x2a]));
+  assert.deepEqual(resent.next, new Uint8Array([0x01, 0x42, 0xc0, 0x2a]));
   assert.isFalse(resent.resendNext);
 });
 
