@@ -1,18 +1,18 @@
 /**
  * MediaPublisher Property-Based Tests
  *
- * Audio Config の送出判断 (resolveAudioConfigToSend) は「直前に送った値」と
- * 「送り直し要求」を持ち回る小さな状態機械である。任意の chunk 列に対して
- * 成立すべき不変条件を検証する。個々の分岐の境界値は
- * createMediaPublisher.test.ts の単体テストが固定する。
+ * Audio Config / Video Config の送出判断 (resolveAudioConfigToSend /
+ * resolveVideoConfigToSend) は「直前に送った値」と「送り直し要求」を持ち回る
+ * 小さな状態機械である。任意の chunk 列に対して成立すべき不変条件を検証する。
+ * 個々の分岐の境界値は createMediaPublisher.test.ts の単体テストが固定する。
  *
- * draft-ietf-moq-loc-04 §2.3.3.1 (Audio Config) /
+ * draft-ietf-moq-loc-04 §2.3.3.1 (Audio Config) / §2.3.2.1 (Video Config) /
  * draft-ietf-moq-transport-22 §7.6 (Publisher Interactions)
  */
 
 import { test, assert } from "vite-plus/test";
 import * as fc from "fast-check";
-import { resolveAudioConfigToSend } from "./createMediaPublisher";
+import { resolveAudioConfigToSend, resolveVideoConfigToSend } from "./createMediaPublisher";
 
 /**
  * 2 つの description が同じバイト列かを判定する
@@ -195,6 +195,210 @@ test("resolveAudioConfigToSend: 送り直しは 1 Object に限り、保持値�
       const original = new Uint8Array(description);
       const mutable = new Uint8Array(description);
       const held = resolveAudioConfigToSend(null, mutable, false);
+      mutable.fill(0xff);
+      assert.isTrue(isSameBytes(held.next, original));
+    }),
+  );
+});
+
+/**
+ * Video Config の 1 chunk 分の入力
+ *
+ * description は encoder の metadata が持つ Video Config であり、undefined は
+ * description を持たない chunk (初回出力と構成変更時以外や VP8) を表す。isKeyFrame は
+ * 送り直し要求に応える境界であり、resendRequested は forwardState が 0 から 1 になった
+ * 時点で立つ送り直し要求である。映像の description はキーフレームごとに再出現しない
+ * (Chromium は configure 後の最初の出力と構成変更時にしか付けない) ため、要求は
+ * キーフレームまで保留される。
+ */
+interface VideoConfigStep {
+  description: Uint8Array | undefined;
+  isKeyFrame: boolean;
+  resendRequested: boolean;
+}
+
+const videoStepArbitrary: fc.Arbitrary<VideoConfigStep> = fc.record({
+  description: fc.option(descriptionArbitrary, { nil: undefined }),
+  isKeyFrame: fc.boolean(),
+  resendRequested: fc.boolean(),
+});
+
+/** chunk 列を 1 度駆動したときの、各 chunk の入力と結果 (Video Config) */
+interface VideoConfigStepResolution {
+  description: Uint8Array | undefined;
+  isKeyFrame: boolean;
+  config: Uint8Array | undefined;
+  next: Uint8Array | null;
+  previous: Uint8Array | null;
+  resendRequested: boolean;
+  resendNext: boolean;
+}
+
+/**
+ * chunk 列を順に駆動する (Video Config)
+ *
+ * 送り直し要求は forwardState の 0 から 1 の変化で立つため、前の chunk で
+ * 残った要求を次の chunk へ引き継ぐ (実装と同じく、キーフレームで載せた時点で解消する)。
+ */
+function driveVideoConfigResolution(steps: VideoConfigStep[]): VideoConfigStepResolution[] {
+  const results: VideoConfigStepResolution[] = [];
+  let current: Uint8Array | null = null;
+  let pendingRequest = false;
+
+  for (const step of steps) {
+    const resendRequested = step.resendRequested || pendingRequest;
+    const resolution = resolveVideoConfigToSend(
+      current,
+      step.description,
+      step.isKeyFrame,
+      resendRequested,
+    );
+    results.push({
+      description: step.description,
+      isKeyFrame: step.isKeyFrame,
+      config: resolution.config,
+      next: resolution.next,
+      previous: current,
+      resendRequested,
+      resendNext: resolution.resendNext,
+    });
+    current = resolution.next;
+    pendingRequest = resolution.resendNext;
+  }
+  return results;
+}
+
+test("resolveVideoConfigToSend: 送出する config は保持値と一致し、保持値は直前の値か今回の description に限る", () => {
+  // 実装が保持していない値を送らないこと、独自の値を保持しないことの検証
+  fc.assert(
+    fc.property(fc.array(videoStepArbitrary, { maxLength: 30 }), (steps) => {
+      for (const result of driveVideoConfigResolution(steps)) {
+        if (result.config !== undefined) {
+          assert.isNotNull(result.next);
+          assert.isTrue(isSameBytes(result.config, result.next));
+        }
+        if (result.next !== null) {
+          const matchesCurrent =
+            result.description !== undefined && isSameBytes(result.next, result.description);
+          assert.isTrue(matchesCurrent || isSameBytes(result.next, result.previous));
+        }
+      }
+    }),
+  );
+});
+
+test("resolveVideoConfigToSend: 初出と変更の description は必ず載る", () => {
+  // avcC / hvcC の extradata は取りこぼすと復号できない。直前の保持値と異なる
+  // description が現れた chunk では、要求の有無にかかわらず必ず載る
+  // (空の description は設定として意味を持たないため対象外)
+  fc.assert(
+    fc.property(fc.array(videoStepArbitrary, { maxLength: 30 }), (steps) => {
+      for (const result of driveVideoConfigResolution(steps)) {
+        const description = result.description;
+        const mustCarry =
+          description !== undefined &&
+          description.length > 0 &&
+          !isSameBytes(result.previous, description);
+        if (mustCarry) {
+          assert.isTrue(isSameBytes(result.config ?? null, description));
+        }
+      }
+    }),
+  );
+});
+
+test("resolveVideoConfigToSend: キーフレームで要求が立っているときは保持値がある限り必ず載り、載せた要求は解消する", () => {
+  // 購読者の出現 (forwardState の 0 から 1) を知ったのに載せないと、後着の購読者が
+  // 映像を復号できない。キーフレームでは要求が立っている限り必ず載る。
+  // また、要求が解消された (resendNext=false) なら、そのステップで載せている
+  // (要求を載せずに捨てる実装の誤りを検出する)
+  fc.assert(
+    fc.property(fc.array(videoStepArbitrary, { maxLength: 30 }), (steps) => {
+      for (const result of driveVideoConfigResolution(steps)) {
+        if (result.resendRequested && !result.resendNext) {
+          assert.isDefined(result.config);
+        }
+        if (result.resendRequested && result.previous !== null && result.isKeyFrame) {
+          assert.isDefined(result.config);
+          assert.isFalse(result.resendNext);
+        }
+      }
+    }),
+  );
+});
+
+test("resolveVideoConfigToSend: キーフレーム以外では新しい description が現れない限り載らず、要求は残る", () => {
+  // 映像の description はキーフレームごとには再出現しない。キーフレーム以外の Object に
+  // 保持値を載せると購読側が GOP の途中で復号器を再構成することになるため、
+  // 要求はキーフレームまで保留する
+  fc.assert(
+    fc.property(fc.array(videoStepArbitrary, { maxLength: 30 }), (steps) => {
+      for (const result of driveVideoConfigResolution(steps)) {
+        const changed =
+          result.description !== undefined &&
+          result.description.length > 0 &&
+          !isSameBytes(result.previous, result.description);
+        if (!result.isKeyFrame && !changed) {
+          assert.isUndefined(result.config);
+          assert.isTrue(isSameBytes(result.next, result.previous));
+          if (result.resendRequested) {
+            assert.isTrue(result.resendNext);
+          }
+        }
+      }
+    }),
+  );
+});
+
+test("resolveVideoConfigToSend: 要求が無い限り同じ値の config を連続で載せない", () => {
+  // 完了条件「要求が無い限り同じ値の VIDEO_CONFIG を連続で載せない」の検証。
+  // 送り直し要求が立たない列では、直前の送出と同一の config が再び載ってはならない
+  fc.assert(
+    fc.property(fc.array(videoStepArbitrary, { maxLength: 30 }), (steps) => {
+      const results = driveVideoConfigResolution(
+        steps.map((step) => ({ ...step, resendRequested: false })),
+      );
+      let lastEmitted: Uint8Array | null = null;
+
+      for (const result of results) {
+        if (result.config !== undefined) {
+          if (lastEmitted !== null) {
+            assert.isFalse(isSameBytes(result.config, lastEmitted));
+          }
+          lastEmitted = result.config;
+        }
+      }
+    }),
+  );
+});
+
+test("resolveVideoConfigToSend: 送り直しは 1 Object に限り、キーフレームでのみ応え、保持値は複製して持つ", () => {
+  // 送り直し要求にはキーフレームで 1 度だけ応え、その次の Object では載らないこと、
+  // キーフレーム以外では要求を残すこと、渡した配列の書き換えが保持値に影響しないことを
+  // 任意の description で検証する
+  fc.assert(
+    fc.property(nonEmptyDescriptionArbitrary, (description) => {
+      // 1 度目の送出で保持し、同じ値をもう一度渡しても載らない
+      const first = resolveVideoConfigToSend(null, description, true, false);
+      assert.isTrue(isSameBytes(first.next, description));
+      const again = resolveVideoConfigToSend(first.next, new Uint8Array(description), true, false);
+      assert.isUndefined(again.config);
+
+      // キーフレーム以外では応えず、要求を残す
+      const pending = resolveVideoConfigToSend(again.next, undefined, false, true);
+      assert.isUndefined(pending.config);
+      assert.isTrue(pending.resendNext);
+
+      // キーフレームで 1 度だけ応える
+      const resent = resolveVideoConfigToSend(pending.next, undefined, true, true);
+      assert.isTrue(isSameBytes(resent.config ?? null, description));
+      assert.isFalse(resent.resendNext);
+      assert.isUndefined(resolveVideoConfigToSend(resent.next, undefined, true, false).config);
+
+      // 保持値は複製するため、渡した配列の書き換えに影響されない
+      const original = new Uint8Array(description);
+      const mutable = new Uint8Array(description);
+      const held = resolveVideoConfigToSend(null, mutable, true, false);
       mutable.fill(0xff);
       assert.isTrue(isSameBytes(held.next, original));
     }),

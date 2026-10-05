@@ -335,6 +335,11 @@
   - 上限で捨てたログの vnode はキャッシュから落とす。`data` と `payload` は追加後に書き換えない前提になる (行を描画し直さないため、書き換えても表示は古いまま)
   - 1 件追加のコストは表示中の件数に比例する分が残る (1000 件で約 3 ms のうち、表示中の子の走査が大半)。表示する行を画面に入る分だけにする対応は別に行う
   - @voluntas
+- [FIX] 映像の `VIDEO_CONFIG` を後着の購読者と stop 後の再開でも送る
+  - 映像の description は configure 後の最初の出力と構成変更時にしか現れず、キーフレームごとには再出現しない。そのため、購読が paused でなくなった時点で保持値の送り直しを要求し、次に届くキーフレームの Object に 1 度だけ載せ直す (GOP の途中の Object には載せない)
+  - `stop()` で保持値と送り直し要求を破棄し、再開後の最初の description を初出として送る
+  - 高レベル API の既定の映像設定 (H.264 / H.265 は annexb、VP8 / VP9 / AV1 は description なし) では Chromium が description を返さないため、この送り直しは現状の設定では働かない。canonical 形式 (avc / hev1) の description が届く場合に働く
+  - @voluntas
 - [FIX] namespace / tracks 購読の REQUEST_UPDATE に AUTHORIZATION TOKEN を付与する
   - draft-ietf-moq-msf-01 §11.4.3 は「track に紐づくトークンは、AUTHORIZATION TOKEN パラメータを受け付け、かつその track に紐づく全ての制御メッセージに含めなければならない (MUST)」と定め、end subscriber の対象として SUBSCRIBE_NAMESPACE と REQUEST_UPDATE を挙げている。namespace / tracks 購読の REQUEST_UPDATE がトークンを運んでいなかったため、初回要求のトークンを引き継いで付与するようにした
   - REGISTER は初回要求で送信済みのため、USE_ALIAS に変換した値を保持して付与する (再 REGISTER は DUPLICATE_AUTH_TOKEN_ALIAS でセッションを閉じるため)。DELETE で退役させたトークンは引き継がない
@@ -2096,7 +2101,7 @@
   - `README.md` に「ドキュメント」節を追加し、`docs/` の 3 仕様書へリンクする (README から一度もリンクされていなかった)
   - @voluntas
 - [ADD] 高レベル API で Video Config を送受信する
-  - 送信側: `handleVideoEncodedChunk` が encoder の `description` (avcC / hvcC などの extradata) を LOC の `VIDEO_CONFIG` として送る (draft-ietf-moq-loc-04 §2.3.2.1)。`description` は keyframe の metadata にのみ現れるため、変化したときだけ載せる
+  - 送信側: `handleVideoEncodedChunk` が encoder の `description` (avcC / hvcC などの extradata) を LOC の `VIDEO_CONFIG` として送る (draft-ietf-moq-loc-04 §2.3.2.1)。`description` は configure 後の最初の出力と構成変更時に現れる (実装依存) ため、変化したときだけ載せる
   - 受信側: `setupDecoders` が SUBSCRIBE_OK の Track Property の `VIDEO_CONFIG` を `VideoDecoderConfig.description` として渡し、Object Property の config が変化したらデコーダを再構成する
   - これにより canonical 形式 (avc1 / hvc1) の解像度変更時の再構成が成立する
   - @voluntas

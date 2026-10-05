@@ -659,7 +659,7 @@ LOC モジュール (`LOC` 名前空間) は次にも対応するが、高レベ
 - `TIMESCALE`: Timestamp の単位
 
 `VIDEO_CONFIG` / `AUDIO_CONFIG` は、同じ値を毎 Object 送らず変化したときだけ載せる。
-音声だけは後着の購読者のために同じ値も載せ直す (次項)。
+後着の購読者のために同じ値も載せ直す (次項)。
 
 音声にはキーフレームが無く、Chromium の `AudioEncoder` では description が configure 後の
 最初の出力にしか現れない (実装依存であり将来変わり得る)。後着の購読者へ届けるために、
@@ -667,12 +667,25 @@ LOC モジュール (`LOC` 名前空間) は次にも対応するが、高レベ
 (draft-ietf-moq-transport-22 §7.6) で保持している `AUDIO_CONFIG` を次の Object に
 1 度だけ載せ直す。
 
+映像の description も configure 後の最初の出力と構成変更時にしか現れない (実装依存であり
+将来変わり得る)。後着の購読者へ届けるために、映像 Publisher の購読が paused でなく
+なった時点 (§7.6) で保持している `VIDEO_CONFIG` の送り直しを要求し、次に届く
+キーフレームの Object に 1 度だけ載せ直す。キーフレーム以外の Object に載せると購読側が
+GOP の途中で復号器を再構成することになり、参照フレームも揃わないため載せない。
+購読側 (`createMediaSubscriber`) は config の変化を検知した Object を復号せず、
+再構成が完了した後のキーフレームから復号を始める。
+
+高レベル API は H.264 / H.265 を annexb 形式で設定するため、Chromium のエンコーダは
+description を返さない (parameter sets は bitstream に含まれる)。VP8 / VP9 / AV1 は
+description を使わないため、この送り直しは canonical 形式 (avc / hev1) の description が
+届く設定・実装で働く。
+
 paused でないまま購読者が接続した場合は変化が起きないため送り直されず、
 Relay のキャッシュに依存する。購読者がいない間に Relay が購読を paused にするかは
 裁量である (draft-ietf-moq-transport-22 §7.2 Paused Subscription Handling)。
-stop 後に再開した場合は新しい
-セッションとエンコーダになるため、保持していた `AUDIO_CONFIG` は破棄し、新しい
-エンコーダの description を改めて送る。
+stop 後に再開した場合は新しいセッションとエンコーダになるため、保持していた
+`VIDEO_CONFIG` / `AUDIO_CONFIG` と送り直し要求は破棄し、新しいエンコーダの
+description を改めて送る。
 
 ### groupId / objectId 管理
 

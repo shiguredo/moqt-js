@@ -267,9 +267,9 @@ export function shouldSendKeyFrame(
  * 2 つの codec description が同じ値かを判定する純関数
  *
  * WebCodecs の `EncodedVideoChunkMetadata` / `EncodedAudioChunkMetadata` の
- * `decoderConfig.description` (LOC の Video Config / Audio Config の元になる
- * extradata) は、configure 直後を除いて同じ値が繰り返し渡る。変化したときだけ
- * 載せるかの判断に使う。
+ * `decoderConfig.description` (LOC の Video Config / Audio Config の元になる extradata) は、
+ * configure 後の最初の出力と構成変更時に渡る (実装依存。同じ値が繰り返し渡る実装もある)。
+ * 変化したときだけ載せるかの判断に使う。
  *
  * @param previous - 直前に送った description (未送信なら null)
  * @param description - 今回の description
@@ -287,8 +287,8 @@ function isSameCodecDescription(previous: Uint8Array | null, description: Uint8A
   return true;
 }
 
-/** Audio Config の送出判断の結果 */
-export interface AudioConfigResolution {
+/** codec description (Video Config / Audio Config) の送出判断の結果 */
+export interface CodecConfigResolution {
   /** 今回の Object に載せる config (載せない場合は undefined) */
   config: Uint8Array | undefined;
   /** 次回のために保持する値 */
@@ -328,7 +328,7 @@ export function resolveAudioConfigToSend(
   previous: Uint8Array | null,
   description: Uint8Array | undefined,
   resendRequested: boolean,
-): AudioConfigResolution {
+): CodecConfigResolution {
   // 新しい値が現れたときは、送り直し要求の有無にかかわらずそれを載せる
   if (
     description !== undefined &&
@@ -342,6 +342,64 @@ export function resolveAudioConfigToSend(
     return { config: previous, next: previous, resendNext: false };
   }
   // 保持値が無いまま要求された場合は、要求だけを残す (載せる値が無い)
+  return { config: undefined, next: previous, resendNext: resendRequested };
+}
+
+/**
+ * 送信する Video Config を解決する純関数
+ *
+ * draft-ietf-moq-loc-04 §2.3.2.1 (Video Config): avcC / hvcC などの extradata は
+ * `VideoDecoderConfig.description` に対応する。WebCodecs の `EncodedVideoChunkMetadata`
+ * が description を付けるのは、configure 後の最初の出力と構成が変わったときだけである
+ * (Chromium の実装。実装依存であり将来変わり得る)。キーフレームごとに再出現しないため、
+ * description の再出現を待つと後着の購読者へ送り直せない。
+ *
+ * 送り直しは forwardState が 0 から 1 になった時点 (購読者の出現を
+ * draft-ietf-moq-transport-22 §7.6 の REQUEST_UPDATE の FORWARD パラメータで
+ * 知った時点) に要求され、次に届くキーフレームの Object に保持している値を 1 度だけ
+ * 載せ直す。キーフレーム以外の Object に保持値を載せると、購読側が GOP の途中で
+ * 復号器を再構成することになり、参照フレームも揃わないため、要求はキーフレームまで
+ * 保留する。載せた時点で要求は解消し、保持値は消さない (消すと次の要求に応えられない)。
+ * forwardState が 1 のまま購読者が接続した場合は変化が起きないため送り直されない
+ * (購読者が居ない間に relay が forwardState を 0 にするかは §7.2 により relay の
+ * 裁量であり、1 のまま維持する relay では 1 人目の購読者でも送り直されない)。
+ * 本リポジトリの購読実装 (`createMediaSubscriber`) は同じ description では decoder を
+ * 再構成しないため、この再送は自前の購読経路に対して冪等である。
+ *
+ * 現状の高レベル API は H.264 / H.265 を annexb 形式で configure するため、Chromium の
+ * encoder は description を返さない (parameter sets は bitstream に含まれる)。VP8 / VP9 /
+ * AV1 は description を使わないため、この送り直しは canonical 形式 (avc / hev1) の
+ * description が届く設定・実装で働く。
+ *
+ * 単体テストから固定値で駆動するため export する (パッケージ公開 API には含めない)。
+ *
+ * @param previous - 直前に送った Video Config (未送信なら null)
+ * @param description - 今回の chunk が持つ Video Config (VP8 などでは undefined。
+ *   空の description は設定として意味を持たないため値なしとして扱う)
+ * @param isKeyFrame - 今回の chunk がキーフレームか (送り直しに応える境界)
+ * @param resendRequested - 保持している Video Config の送り直しを要求されているか
+ * @returns 今回載せる config、次回のために保持する値、送り直し要求を残すか
+ */
+export function resolveVideoConfigToSend(
+  previous: Uint8Array | null,
+  description: Uint8Array | undefined,
+  isKeyFrame: boolean,
+  resendRequested: boolean,
+): CodecConfigResolution {
+  // 新しい値が現れたときは、送り直し要求の有無にかかわらずそれを載せる
+  if (
+    description !== undefined &&
+    description.length > 0 &&
+    !isSameCodecDescription(previous, description)
+  ) {
+    return { config: description, next: new Uint8Array(description), resendNext: false };
+  }
+  // 送り直し要求にはキーフレームで応える (同じ値でも 1 度だけ載せ直す)
+  if (isKeyFrame && resendRequested && previous !== null) {
+    return { config: previous, next: previous, resendNext: false };
+  }
+  // 載せる値が無い (キーフレーム以外、または保持値が無い) 場合は何も載せず、
+  // 要求だけを次の Object へ残す
   return { config: undefined, next: previous, resendNext: resendRequested };
 }
 
@@ -421,10 +479,13 @@ export class MediaPublisherImpl implements MediaPublisher {
   // あり、pause() では進まない (進めると pause のあとのピア起点の close 通知が捨てられる)
   private sessionGeneration = 0;
   private catalogPublisher: Publisher | null = null;
-  // 直前に VIDEO_CONFIG として送信した description。
-  // draft-ietf-moq-loc-04 §2.3.2.1: description は keyframe でのみ encoder から渡るため、
-  // 変化したときだけ載せて全 keyframe への重複送出を避ける。
+  // 直前に VIDEO_CONFIG として送信した description。同じ値の重複送出を避けつつ、
+  // forwardState が 1 になった時点の送り直しの材料にもする
   private lastSentVideoConfig: Uint8Array | null = null;
+  // forwardState が 0 から 1 になった時点で立てる Video Config の送り直し要求。
+  // 映像の description はキーフレームごとには再出現しないため、次のキーフレームの
+  // Object に保持値を 1 度だけ載せ直し、載せた時点で解消する
+  private videoConfigResendRequested = false;
   // 直前に AUDIO_CONFIG として送った description。同じ値の重複送出を避けつつ、
   // forwardState が 1 になった時点の送り直しの材料にもする
   private lastSentAudioConfig: Uint8Array | null = null;
@@ -1046,6 +1107,15 @@ export class MediaPublisherImpl implements MediaPublisher {
           // キーフレームにして新しい Group を始めることで応える。次のフレームまでに届いた
           // 複数の要求は、フレーム番号を 0 に戻すだけなので 1 つの Group にまとまる
           onNewGroupRequest: () => this.requestKeyframe(),
+          // 映像の description は configure 後の最初の出力と構成変更時にしか現れない
+          // ため、forwardState が 1 になった時点で保持値の送り直しを要求し、
+          // handleVideoEncodedChunk が次のキーフレームの Object に載せ直す
+          // (判断の詳細は resolveVideoConfigToSend の JSDoc を参照)
+          onForwardStateChange: (forward) => {
+            if (forward) {
+              this.videoConfigResendRequested = true;
+            }
+          },
         },
         { ...VIDEO_PUBLISH_OPTIONS, ...authorizationTokenOptions },
       );
@@ -1435,16 +1505,21 @@ export class MediaPublisherImpl implements MediaPublisher {
     // draft-ietf-moq-loc-04 §2.3.2.1 (Video Config):
     // encoder が返す description (avcC / hvcC などの extradata) を VIDEO_CONFIG として送る。
     // 受信側は VideoDecoderConfig.description に渡して canonical 形式 (avc1 / hvc1) を
-    // 復元できる。description は keyframe の metadata にのみ現れるため、
-    // 変化したときだけ載せる。
-    let videoConfig: Uint8Array | undefined;
-    if (
-      chunk.description !== undefined &&
-      !isSameCodecDescription(this.lastSentVideoConfig, chunk.description)
-    ) {
-      videoConfig = chunk.description;
-      this.lastSentVideoConfig = new Uint8Array(chunk.description);
-    }
+    // 復元できる。description は configure 後の最初の出力と構成変更時にしか現れないため、
+    // 同じ値の重複送出を避けつつ後着の購読者へキーフレームで送り直す判断は
+    // resolveVideoConfigToSend が持つ
+    const {
+      config: videoConfig,
+      next: nextVideoConfig,
+      resendNext: resendVideoConfigNext,
+    } = resolveVideoConfigToSend(
+      this.lastSentVideoConfig,
+      chunk.description,
+      chunk.type === "key",
+      this.videoConfigResendRequested,
+    );
+    this.lastSentVideoConfig = nextVideoConfig;
+    this.videoConfigResendRequested = resendVideoConfigNext;
 
     // フレームを読んだ時点で記録するため、ここで記録が無いことは無い。念のため、無ければ
     // この chunk を読んだ時点とみなす
@@ -1515,13 +1590,10 @@ export class MediaPublisherImpl implements MediaPublisher {
    * 二重破棄は冪等操作のみで行う
    * (Publisher の active ガード付き done、encoder・source・session の
    * null 安全な close に依存する)。再 start に引き継ぐのは Catalog・統計・
-   * Group ID・オブジェクト ID・フレーム数・Group 開始済みフラグ (音声 / 映像) と、
-   * 直前に送った Video Config である。
-   * 直前に送った Audio Config と送り直し要求は session に紐づくため破棄する
-   * (再 start では購読者が誰も前の Object を受け取っていないため、新しい
-   * encoder の最初の description を初出として送り直す必要がある)。
-   * 映像の config 再送は音声とは別に扱うため、直前に送った Video Config は
-   * 破棄せず再 start 後も同じ値の送出を抑止する。
+   * Group ID・オブジェクト ID・フレーム数・Group 開始済みフラグ (音声 / 映像) である。
+   * 直前に送った Video Config / Audio Config とそれらの送り直し要求は session に
+   * 紐づくため破棄する (再 start では購読者が誰も前の Object を受け取っていないため、
+   * 新しい encoder の最初の description を初出として送り直す必要がある)。
    * 解放のたびに session の世代番号を進める (この 1 箇所だけ)。これ以降に届く旧
    * session の close 通知は handleSessionClose が世代不一致で捨てる (stop / close /
    * start 失敗の全経路)。
@@ -1585,6 +1657,10 @@ export class MediaPublisherImpl implements MediaPublisher {
         await videoPublisher.done();
       }
     });
+    // encoder と Publisher を切り離した後に Video Config の保持値と送り直し要求を
+    // 破棄する (破棄中に届いた出力で再充填されないようにする)
+    this.lastSentVideoConfig = null;
+    this.videoConfigResendRequested = false;
 
     // セッションを閉じる
     const session = this.session;
