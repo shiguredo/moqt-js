@@ -1,0 +1,728 @@
+
+
+
+
+Media Over QUIC                                              A. Frindell
+Internet-Draft                                                      Meta
+Intended status: Standards Track                                I. Swett
+Expires: 8 April 2027                                             Google
+                                                          5 October 2026
+
+
+                     Timestamp Properties for MOQT
+                    draft-frindell-moq-timestamp-00
+
+Abstract
+
+   This document defines a set of MOQT Properties for carrying per-
+   Object timestamps efficiently.  The encoded timestamp is intended for
+   use in MOQT, but can be referenced for application specific purposes.
+
+About This Document
+
+   This note is to be removed before publishing as an RFC.
+
+   The latest revision of this draft can be found at
+   https://afrind.github.io/draft-frindell-moq-timestamp/draft-frindell-
+   moq-timestamp.html.  Status information for this document may be
+   found at https://datatracker.ietf.org/doc/draft-frindell-moq-
+   timestamp/.
+
+   Discussion of this document takes place on the Media Over QUIC
+   Working Group mailing list (mailto:moq@ietf.org), which is archived
+   at https://mailarchive.ietf.org/arch/browse/moq/.  Subscribe at
+   https://www.ietf.org/mailman/listinfo/moq/.
+
+   Source for this draft and an issue tracker can be found at
+   https://github.com/afrind/draft-frindell-moq-timestamp.
+
+Status of This Memo
+
+   This Internet-Draft is submitted in full conformance with the
+   provisions of BCP 78 and BCP 79.
+
+   Internet-Drafts are working documents of the Internet Engineering
+   Task Force (IETF).  Note that other groups may also distribute
+   working documents as Internet-Drafts.  The list of current Internet-
+   Drafts is at https://datatracker.ietf.org/drafts/current/.
+
+   Internet-Drafts are draft documents valid for a maximum of six months
+   and may be updated, replaced, or obsoleted by other documents at any
+   time.  It is inappropriate to use Internet-Drafts as reference
+   material or to cite them other than as "work in progress."
+
+
+
+Frindell & Swett          Expires 8 April 2027                  [Page 1]
+
+Internet-Draft                moq-timestamp                 October 2026
+
+
+   This Internet-Draft will expire on 8 April 2027.
+
+Copyright Notice
+
+   Copyright (c) 2026 IETF Trust and the persons identified as the
+   document authors.  All rights reserved.
+
+   This document is subject to BCP 78 and the IETF Trust's Legal
+   Provisions Relating to IETF Documents (https://trustee.ietf.org/
+   license-info) in effect on the date of publication of this document.
+   Please review these documents carefully, as they describe your rights
+   and restrictions with respect to this document.  Code Components
+   extracted from this document must include Revised BSD License text as
+   described in Section 4.e of the Trust Legal Provisions and are
+   provided without warranty as described in the Revised BSD License.
+
+Table of Contents
+
+   1.  Introduction  . . . . . . . . . . . . . . . . . . . . . . . .   3
+     1.1.  Relationship to Other Specifications  . . . . . . . . . .   3
+   2.  Conventions and Definitions . . . . . . . . . . . . . . . . .   3
+     2.1.  Signed Integer Zig-Zag Encoding . . . . . . . . . . . . .   4
+   3.  Property Handling and Encoding  . . . . . . . . . . . . . . .   4
+   4.  Track Properties  . . . . . . . . . . . . . . . . . . . . . .   5
+     4.1.  Timescale . . . . . . . . . . . . . . . . . . . . . . . .   5
+     4.2.  Clock ID  . . . . . . . . . . . . . . . . . . . . . . . .   5
+     4.3.  Timestamp Origin  . . . . . . . . . . . . . . . . . . . .   6
+     4.4.  Timestamp Mapping . . . . . . . . . . . . . . . . . . . .   6
+   5.  Object Timestamp  . . . . . . . . . . . . . . . . . . . . . .   7
+   6.  Locating Objects by Time  . . . . . . . . . . . . . . . . . .   7
+   7.  Publisher Restarts  . . . . . . . . . . . . . . . . . . . . .   8
+   8.  Defining Additional Timestamps  . . . . . . . . . . . . . . .   8
+   9.  IANA Considerations . . . . . . . . . . . . . . . . . . . . .   8
+     9.1.  TIMESCALE Property  . . . . . . . . . . . . . . . . . . .   8
+     9.2.  CLOCK_ID Property . . . . . . . . . . . . . . . . . . . .   9
+     9.3.  TIMESTAMP_ORIGIN Property . . . . . . . . . . . . . . . .   9
+     9.4.  TIMESTAMP_MAPPING Property  . . . . . . . . . . . . . . .   9
+     9.5.  OBJECT_TIMESTAMP Property . . . . . . . . . . . . . . . .  10
+   10. Security Considerations . . . . . . . . . . . . . . . . . . .  10
+   11. References  . . . . . . . . . . . . . . . . . . . . . . . . .  10
+     11.1.  Normative References . . . . . . . . . . . . . . . . . .  10
+     11.2.  Informative References . . . . . . . . . . . . . . . . .  11
+   Appendix A.  Examples . . . . . . . . . . . . . . . . . . . . . .  11
+     A.1.  Fixed Cadence . . . . . . . . . . . . . . . . . . . . . .  11
+     A.2.  Explicit Timestamps . . . . . . . . . . . . . . . . . . .  12
+     A.3.  Group IDs as Timestamps . . . . . . . . . . . . . . . . .  12
+     A.4.  Timeline Template . . . . . . . . . . . . . . . . . . . .  12
+     A.5.  Shared Clock Without Wall-Clock Time  . . . . . . . . . .  13
+
+
+
+Frindell & Swett          Expires 8 April 2027                  [Page 2]
+
+Internet-Draft                moq-timestamp                 October 2026
+
+
+   Acknowledgments . . . . . . . . . . . . . . . . . . . . . . . . .  13
+   Authors' Addresses  . . . . . . . . . . . . . . . . . . . . . . .  13
+
+1.  Introduction
+
+   Media over QUIC Transport (MOQT) [MOQT] delivers Tracks that contain
+   a sequence of Objects.  Though the transport layer does not need to
+   know media-oriented or application level timestamps, timing
+   information can help it make optimal scheduling decisions.
+   Additionally, they provide visibility into latency and offer a
+   Property applications can extend.
+
+   This document defines how a MOQT timestamp is encoded.  The design
+   has three features:
+
+   *  *Initial time*: A Track declares its start time once, so Objects
+      can delta encode their timestamps from the Initial time.
+
+   *  *Default Inter-Group/Object timing*: A Track can define a mapping
+      from Group ID and Object ID to a timestamp, conveying timing with
+      no per-Object bytes at all.
+
+   *  *Compact encoding*: Per-Object timestamps are integers, expressing
+      either a delta value from the initial time or a correction to the
+      default value.
+
+1.1.  Relationship to Other Specifications
+
+   Several specifications already carry timing for MOQT Objects.  The
+   Low Overhead Media Container [LOC] defines Timestamp and Timescale
+   Properties for media carried in LOC.  [TIMESTAMP-LCURLEY] specifies
+   transport-level use of those same LOC Properties so that Relays can
+   make age-based decisions.  The MOQT Streaming Format [MSF] relates
+   media time, wall-clock time, and Location through catalog fields and
+   timeline tracks, including a template for regular cadences, and
+   numbers Groups by capture time in its log and metrics tracks.
+
+   This document aims to provide a single, general representation that
+   these and other specifications can reference.
+
+2.  Conventions and Definitions
+
+   The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT",
+   "SHOULD", "SHOULD NOT", "RECOMMENDED", "NOT RECOMMENDED", "MAY", and
+   "OPTIONAL" in this document are to be interpreted as described in
+   BCP 14 [RFC2119] [RFC8174] when, and only when, they appear in all
+   capitals, as shown here.
+
+
+
+
+Frindell & Swett          Expires 8 April 2027                  [Page 3]
+
+Internet-Draft                moq-timestamp                 October 2026
+
+
+   This document uses the terms Track, Object, Group, and Subgroup as
+   defined in [MOQT].  A "tick" is one unit of the Track's Timescale
+   (see Section 4.1).
+
+   All Property values in this document are encoded as variable-length
+   integers ([MOQT]) unless otherwise noted.
+
+2.1.  Signed Integer Zig-Zag Encoding
+
+   Signed values, such as the timestamp correction (Section 5), are
+   carried in a variable-length integer using a zig-zag mapping that
+   keeps small-magnitude values short: non-negative and negative values
+   are interleaved so that the encoded value grows with the magnitude,
+   in the order 0, -1, 1, -2, 2, ...
+
+   To encode a signed value v as the variable-length integer u, and to
+   decode it back (both using an arithmetic, sign-extending right
+   shift):
+
+     u = (v << 1) ^ (v >> (WIDTH - 1))     ; encode
+     v = (u >> 1) ^ -(u & 1)               ; decode
+
+   WIDTH is the bit width of the two's-complement representation of v
+   (for example, 64).  Values outside the range -2^63 to 2^63-1 cannot
+   be represented.
+
+3.  Property Handling and Encoding
+
+   The Properties defined in this document are serialized as Key-Value-
+   Pairs [MOQT].
+
+   Each Property defined here MUST appear at most once on a given Track
+   or Object, counting both the mutable list and Immutable Properties
+   ([MOQT]), and MUST appear only in its defined scope: OBJECT_TIMESTAMP
+   MUST NOT appear as a Track Property, and the Track Properties
+   (TIMESCALE, CLOCK_ID, TIMESTAMP_ORIGIN, TIMESTAMP_MAPPING) MUST NOT
+   appear as Object Properties.  A subscriber that receives a Track or
+   Object that violates these rules treats the track as malformed, as
+   specified in [MOQT].
+
+   These Properties are set by the Original Publisher.  Relays MUST NOT
+   add, modify, or remove them.  A publisher MAY carry them in Immutable
+   Properties ([MOQT]), for example to enable end-to-end authentication
+   of timing.
+
+   Because the Properties defined here are interdependent, an endpoint
+   that interprets any of them MUST implement all of them.
+
+
+
+
+Frindell & Swett          Expires 8 April 2027                  [Page 4]
+
+Internet-Draft                moq-timestamp                 October 2026
+
+
+4.  Track Properties
+
+   A Track that uses the timestamps defined in this document declares a
+   Timescale (Section 4.1) and, optionally, a Clock ID (Section 4.2) and
+   Timestamp Origin (Section 4.3) that place its timeline on a clock.
+   All Object timestamps in the Track are interpreted against this
+   clock.
+
+4.1.  Timescale
+
+   TIMESCALE is a Track Property giving the number of ticks per second
+   used by all timestamps in the Track.  Common values are 1000 for
+   millisecond resolution and 1000000 for microsecond resolution, but
+   any positive value MAY be used (for example, a media Track might use
+   its codec sample rate).
+
+   There is no default Timescale, to avoid silent unit errors such as
+   confusing milliseconds with microseconds.  A subscriber that receives
+   a Track with other Properties defined in this document but no
+   TIMESCALE, or a TIMESCALE value of 0, treats the Track as malformed.
+
+4.2.  Clock ID
+
+   CLOCK_ID is a Track Property identifying the clock on which the
+   Track's timeline is placed:
+
+   *  If no CLOCK_ID Property is specified, but other Properties in this
+      extension are, the time is measured from POSIX time (in TIMESCALE
+      ticks since 1970-01-01T00:00:00Z, excluding leap seconds).
+
+   *  A present CLOCK_ID identifies a clock with no defined relationship
+      to wall-clock time.  Tracks that carry the same non-zero CLOCK_ID
+      share that clock, so their timestamps can be compared -- for
+      example, the audio and video Tracks of an on-demand asset.
+
+   A non-zero CLOCK_ID identifies the same clock wherever it appears, so
+   values chosen independently by different publishers can collide.  A
+   publisher SHOULD choose values from a large space (at least 62 bits)
+   in a way that makes accidental collisions negligible without
+   coordination.  A value can be random, or derived deterministically --
+   for example, by hashing a stable identifier for the content -- so
+   that separate encoders, or a publisher that restarts, use the same
+   value for the same clock.
+
+
+
+
+
+
+
+
+Frindell & Swett          Expires 8 April 2027                  [Page 5]
+
+Internet-Draft                moq-timestamp                 October 2026
+
+
+4.3.  Timestamp Origin
+
+   TIMESTAMP_ORIGIN is a Track Property giving the position, in ticks on
+   the Track's clock (Section 4.2), that corresponds to a timestamp of
+   0.  An Object's time on that clock (in TIMESCALE ticks) is:
+
+     clock_time = timestamp_origin + object_timestamp
+
+   Because each Track's origin and timestamps are counted in its own
+   ticks, Tracks with different Timescales are compared by converting
+   clock_time to seconds.
+
+   If TIMESTAMP_ORIGIN is absent, the default value is 0.  A Track that
+   carries TIMESTAMP_ORIGIN without CLOCK_ID is malformed.
+
+4.4.  Timestamp Mapping
+
+   TIMESTAMP_MAPPING is a Track Property that defines how to compute an
+   Object's timestamp from its Group ID and Object ID, with no per-
+   Object Property.  Drift can be expressed with a property on any
+   Object (Section 5).
+
+   The property value is four variable-length integers: a Base Group ID,
+   a Base Timestamp, a Group Multiplier, and an Object Multiplier.  A
+   value that does not parse as exactly four variable-length integers is
+   malformed.  An Object's mapped timestamp is a linear function of its
+   Group ID and Object ID:
+
+     mapped_timestamp = base_timestamp
+                      + (group_id - base_group) * group_multiplier
+                      + object_id * object_multiplier
+
+   The computation uses signed arithmetic, so it applies to every Group,
+   including Groups before the Base Group.  A negative mapped_timestamp
+   is valid only if a correction brings the Object's timestamp to a non-
+   negative value.
+
+   The publisher chooses the values from the meaning it gives its Group
+   and Object identifiers:
+
+   *  The *Group Multiplier* converts a Group ID into the Group's start
+      time.  Set it to 1 when Group IDs are themselves timestamps in
+      ticks, so each Group is placed directly by its ID; or to the
+      number of ticks per Group when Group IDs are sequential indices
+      and Groups have a fixed duration.
+
+
+
+
+
+
+Frindell & Swett          Expires 8 April 2027                  [Page 6]
+
+Internet-Draft                moq-timestamp                 October 2026
+
+
+   *  The *Object Multiplier* converts an Object ID into an offset
+      within its Group, giving the per-Object cadence, or 0 when every
+      Object in a Group shares the Group's time.
+
+   *  The *Base Group* and *Base Timestamp* anchor the mapping, so that
+      a publisher whose Group IDs do not start at 0 -- for example, one
+      that begins numbering at a wall-clock value and increments by one
+      -- can still use a fixed Group Multiplier.  Both are 0 when Group
+      0 starts at timestamp 0.
+
+   A publisher can thus rely on the mapping for the regular majority of
+   Objects and spend per-Object bytes only where an Object's timestamp
+   differs from the schedule.
+
+5.  Object Timestamp
+
+   OBJECT_TIMESTAMP is an Object Property that conveys the Object's
+   timestamp, in ticks of the Track's Timescale.  How its value is
+   interpreted depends on whether the Track has a Timestamp Mapping
+   (Section 4.4):
+
+   *  On a Track without a Timestamp Mapping, the value is the Object's
+      timestamp, encoded as an unsigned variable-length integer.  An
+      Object that does not carry OBJECT_TIMESTAMP has no timestamp.
+
+   *  On a Track with a Timestamp Mapping, the value is a signed
+      correction to the Object's mapped timestamp, encoded using the
+      zig-zag mapping in Section 2.1.  An Object that does not carry
+      OBJECT_TIMESTAMP takes its mapped timestamp:
+
+        object_timestamp = mapped_timestamp + correction
+
+   Because a Track's Properties are known before any of its Objects, a
+   receiver always knows which rule applies.
+
+   The timestamp of an Object is computed only from Track Properties and
+   properties on the Object itself, and not any other Object.  This
+   allows for correct computation even when Objects are filtered or
+   arrive out of order.
+
+   If a subscriber computes an Object's timestamp that is less than 0 or
+   greater than 2^64-1, it treats the Track as malformed.
+
+6.  Locating Objects by Time
+
+   When a Track has a Timestamp Mapping with a non-zero Group
+   Multiplier, a receiver can estimate the Location of the Object with a
+   given timestamp t without receiving any Object:
+
+
+
+Frindell & Swett          Expires 8 April 2027                  [Page 7]
+
+Internet-Draft                moq-timestamp                 October 2026
+
+
+     group_id  = base_group
+               + floor((t - base_timestamp) / group_multiplier)
+     object_id = floor((t - base_timestamp
+                        - (group_id - base_group) * group_multiplier)
+                       / object_multiplier)
+
+   If the Object Multiplier is 0, only the Group is estimated.  For a
+   time c on the Track's clock (Section 4.2), t is c - timestamp_origin.
+
+   The result is an estimate: it does not indicate whether the Location
+   exists, and Objects that carry a correction might not be close to the
+   estimate.
+
+7.  Publisher Restarts
+
+   Because Track Properties cannot change, a publisher that restarts and
+   resumes publishing the same Track cannot revise its origin or re-
+   anchor its mapping; it MUST reuse already established Track
+   Properties.  A publisher that might restart SHOULD choose Properties
+   that remain valid and compress well across a restart.
+
+8.  Defining Additional Timestamps
+
+   Some applications might require more than one timestamp per Object.
+   Such applications can use the properties in this document to convey
+   transport relevant timestamps, and define additional timestamps
+   properties as an offset.
+
+9.  IANA Considerations
+
+   This document registers the following entries in the "MOQ Properties"
+   registry established by [MOQT].  The code points below are
+   provisional values for interoperability testing; final values are to
+   be assigned by IANA.  The Object Property uses a short (two-byte)
+   code point because it is sent per Object.
+
+9.1.  TIMESCALE Property
+
+      +============+===========+=======+============================+
+      |       Type | Name      | Scope | Specification              |
+      +============+===========+=======+============================+
+      | 0x2C7A51E0 | TIMESCALE | Track | This document, Section 4.1 |
+      +------------+-----------+-------+----------------------------+
+
+                                  Table 1
+
+   The value is a variable-length integer giving ticks per second.
+
+
+
+
+Frindell & Swett          Expires 8 April 2027                  [Page 8]
+
+Internet-Draft                moq-timestamp                 October 2026
+
+
+9.2.  CLOCK_ID Property
+
+      +============+==========+=======+============================+
+      |       Type | Name     | Scope | Specification              |
+      +============+==========+=======+============================+
+      | 0x3E8D2B70 | CLOCK_ID | Track | This document, Section 4.2 |
+      +------------+----------+-------+----------------------------+
+
+                                 Table 2
+
+   The value is a variable-length integer identifying the Track's clock;
+   0 identifies wall-clock time, and other values identify shared
+   clocks.
+
+9.3.  TIMESTAMP_ORIGIN Property
+
+        +============+==================+=======+================+
+        |       Type | Name             | Scope | Specification  |
+        +============+==================+=======+================+
+        | 0x31B49A6E | TIMESTAMP_ORIGIN | Track | This document, |
+        |            |                  |       | Section 4.3    |
+        +------------+------------------+-------+----------------+
+
+                                 Table 3
+
+   The value is a variable-length integer giving the position, in ticks
+   on the Track's clock, that corresponds to a timestamp of 0.
+
+9.4.  TIMESTAMP_MAPPING Property
+
+        +============+===================+=======+================+
+        |       Type | Name              | Scope | Specification  |
+        +============+===================+=======+================+
+        | 0x27F308C5 | TIMESTAMP_MAPPING | Track | This document, |
+        |            |                   |       | Section 4.4    |
+        +------------+-------------------+-------+----------------+
+
+                                  Table 4
+
+   The value is four variable-length integers: a Base Group, and a Base
+   Timestamp, Group Multiplier, and Object Multiplier, each in ticks.
+
+
+
+
+
+
+
+
+
+
+Frindell & Swett          Expires 8 April 2027                  [Page 9]
+
+Internet-Draft                moq-timestamp                 October 2026
+
+
+9.5.  OBJECT_TIMESTAMP Property
+
+     +========+==================+========+==========================+
+     |   Type | Name             | Scope  | Specification            |
+     +========+==================+========+==========================+
+     | 0x2D1A | OBJECT_TIMESTAMP | Object | This document, Section 5 |
+     +--------+------------------+--------+--------------------------+
+
+                                  Table 5
+
+   The value is a variable-length integer giving the Object's timestamp
+   in ticks or, on a Track with a Timestamp Mapping, a zig-zag encoded
+   correction to the Object's mapped timestamp.
+
+10.  Security Considerations
+
+   Timestamps are supplied by the publisher and are not authenticated by
+   the transport.  An endpoint that acts on timestamps (for buffering,
+   ordering, or expiry) SHOULD treat them as hints and apply its own
+   sanity checks, since a misbehaving publisher can send misleading
+   values.
+
+   Timestamps and the Timestamp Origin can reveal information about the
+   publisher's clock and the temporal structure of its content.  Where
+   this is sensitive, a publisher MAY omit CLOCK_ID (and hence the
+   origin), use a coarser Timescale, or omit these Properties.  An end-
+   to-end encrypted payload can carry timing that is hidden from Relays,
+   but when a Timestamp Mapping is in use, Group IDs and Object IDs
+   reveal timing regardless.  See [MOQT] for general considerations on
+   logging untrusted Property values.
+
+11.  References
+
+11.1.  Normative References
+
+   [MOQT]     Nandakumar, S., Vasiliev, V., Swett, I., and A. Frindell,
+              "Media over QUIC Transport", Work in Progress, Internet-
+              Draft, draft-ietf-moq-transport-22, 1 October 2026,
+              <https://datatracker.ietf.org/doc/html/draft-ietf-moq-
+              transport-22>.
+
+   [RFC2119]  Bradner, S., "Key words for use in RFCs to Indicate
+              Requirement Levels", BCP 14, RFC 2119,
+              DOI 10.17487/RFC2119, March 1997,
+              <https://www.rfc-editor.org/rfc/rfc2119>.
+
+
+
+
+
+
+Frindell & Swett          Expires 8 April 2027                 [Page 10]
+
+Internet-Draft                moq-timestamp                 October 2026
+
+
+   [RFC8174]  Leiba, B., "Ambiguity of Uppercase vs Lowercase in RFC
+              2119 Key Words", BCP 14, RFC 8174, DOI 10.17487/RFC8174,
+              May 2017, <https://www.rfc-editor.org/rfc/rfc8174>.
+
+11.2.  Informative References
+
+   [LOC]      Zanaty, M., Nandakumar, S., and P. Thatcher, "Low Overhead
+              Media Container", Work in Progress, Internet-Draft, draft-
+              ietf-moq-loc-04, 20 July 2026,
+              <https://datatracker.ietf.org/doc/html/draft-ietf-moq-loc-
+              04>.
+
+   [MSF]      Law, W. and S. Nandakumar, "MOQT Streaming Format", Work
+              in Progress, Internet-Draft, draft-ietf-moq-msf-01, 2 June
+              2026, <https://datatracker.ietf.org/doc/html/draft-ietf-
+              moq-msf-01>.
+
+   [TIMESTAMP-LCURLEY]
+              Curley, L., "MoQ Object Timestamp Extension", Work in
+              Progress, Internet-Draft, draft-lcurley-moq-timestamp-01,
+              3 August 2026, <https://datatracker.ietf.org/doc/html/
+              draft-lcurley-moq-timestamp-01>.
+
+Appendix A.  Examples
+
+   The following examples show how common timing arrangements, including
+   those of the specifications in Section 1.1, are expressed with the
+   Properties in this document.
+
+A.1.  Fixed Cadence
+
+   A Track sends 30000/1001 Objects per second in Groups of 60 Objects,
+   with sequential Group IDs starting at 0, and the publisher knows the
+   wall-clock time W (in ticks since the Unix epoch) at which Group 0
+   starts:
+
+     TIMESCALE         = 30000
+     CLOCK_ID          = 0
+     TIMESTAMP_ORIGIN  = W
+     TIMESTAMP_MAPPING = (0, 0, 60060, 1001)
+
+   Objects on cadence carry no timestamp Property; an Object that
+   deviates from the cadence carries a small correction in
+   OBJECT_TIMESTAMP.
+
+
+
+
+
+
+
+Frindell & Swett          Expires 8 April 2027                 [Page 11]
+
+Internet-Draft                moq-timestamp                 October 2026
+
+
+A.2.  Explicit Timestamps
+
+   A Track whose Objects each carry a wall-clock timestamp in
+   microseconds, with its origin at 2026-01-01T00:00:00Z:
+
+     TIMESCALE         = 1000000
+     CLOCK_ID          = 0
+     TIMESTAMP_ORIGIN  = 1767225600000000
+
+   Each Object carries OBJECT_TIMESTAMP, counted in microseconds since
+   the origin.  Omitting TIMESTAMP_ORIGIN instead gives microseconds
+   since the Unix epoch, as LOC does when no Timescale is present [LOC],
+   at the cost of larger values.
+
+A.3.  Group IDs as Timestamps
+
+   A Track whose Group IDs are microseconds since the Unix epoch and
+   whose Objects share their Group's time, such as an MSF log track
+   [MSF]:
+
+     TIMESCALE         = 1000000
+     CLOCK_ID          = 0
+     TIMESTAMP_MAPPING = (0, 0, 1, 0)
+
+   Every Object's timestamp is its Group ID, with no per-Object bytes.
+
+A.4.  Timeline Template
+
+   An MSF timeline template [MSF] with a start media time M, start
+   Location (G, 0), Location delta (1, 0), and start wall-clock time W,
+   in which the media time and wall-clock deltas are both D, all in
+   milliseconds, is expressed as:
+
+     TIMESCALE         = 1000
+     CLOCK_ID          = 0
+     TIMESTAMP_ORIGIN  = W - M
+     TIMESTAMP_MAPPING = (G, M, D, 0)
+
+   This requires a known wall-clock time with W at least M.  For on-
+   demand content, where MSF sets the wall-clock values to 0, the
+   publisher omits CLOCK_ID and TIMESTAMP_ORIGIN, or uses a shared Clock
+   ID as in Appendix A.5.  The template describes only Group start
+   times; a publisher that also knows its per-Object cadence sets the
+   Object Multiplier accordingly.
+
+
+
+
+
+
+
+Frindell & Swett          Expires 8 April 2027                 [Page 12]
+
+Internet-Draft                moq-timestamp                 October 2026
+
+
+A.5.  Shared Clock Without Wall-Clock Time
+
+   The audio and video Tracks of an on-demand asset have no meaningful
+   wall-clock time but need to be aligned.  The publisher derives a
+   Clock ID for the asset, for example from a hash of its identifier;
+   both Tracks carry it and start at time 0 on that clock:
+
+     Video:  TIMESCALE = 90000, CLOCK_ID = 0x1A3F5C9E07B2D461
+     Audio:  TIMESCALE = 48000, CLOCK_ID = 0x1A3F5C9E07B2D461
+
+   A receiver aligns an audio Object and a video Object by comparing
+   their timestamps in seconds.
+
+Acknowledgments
+
+   The authors thank the authors of [LOC], [MSF], and
+   [TIMESTAMP-LCURLEY], whose timestamp work (Section 1.1) this document
+   builds on, and the participants in the MOQ working group discussions
+   that shaped it.
+
+   Portions of this document were drafted with the assistance of Claude
+   (Claude Code, Anthropic).
+
+Authors' Addresses
+
+   Alan Frindell
+   Meta
+   Email: afrind@meta.com
+
+
+   Ian Swett
+   Google
+   Email: ianswett@google.com
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Frindell & Swett          Expires 8 April 2027                 [Page 13]
