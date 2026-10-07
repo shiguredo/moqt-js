@@ -50,6 +50,9 @@ function moqtWorkerPlugin(): {
 export default defineConfig({
   define: {
     __MOQT_JS_VERSION__: JSON.stringify(packageJson.version),
+    // devtools のビルド元表記。devtools 配下のテストが devtools のモジュールを
+    // 評価するときに必要になる (テストはビルドしないため version にする)
+    __MOQT_DEVTOOLS_BUILD__: JSON.stringify(packageJson.version),
   },
   resolve: {
     alias: {

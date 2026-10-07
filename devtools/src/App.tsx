@@ -1,4 +1,4 @@
-import { version } from "moqt-js";
+import { buildLabel } from "./buildInfo";
 import { ConnectionSettings } from "./components/ConnectionSettings";
 import { ModeSubtitle } from "./components/ModeSubtitle";
 import { PublisherPanel } from "./components/PublisherPanel";
@@ -163,7 +163,7 @@ export function App() {
                 rel="noopener noreferrer"
                 class="hover:text-slate-600 underline"
               >
-                moqt-js {version}
+                moqt-js {buildLabel}
               </a>{" "}
               -{" "}
               <a
