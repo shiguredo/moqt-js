@@ -3,7 +3,7 @@
 - Created: 2026-10-07
 - Completed: {YYYY-MM-DD}
 - Branch: feature/fix-msf-empty-track-name
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-10-07
 
 ## 目的
 
@@ -12,7 +12,7 @@ draft-ietf-moq-transport-22 §2.4.1 は Track Name を "a sequence of bytes, pos
 ## 現状
 
 - `src/msf/fragment.ts` の `parseMsfFragmentValue` は `ns--` を `invalid msf fragment value: track name is empty per §11.1.2` で throw する。一方で `--t` は namespace `[]` として受理し、空の namespace と空の Track Name で扱いが非対称である
-- `src/fullTrackName.ts` の `formatFullTrackName` は「Track Name は §8.7 が空を許すため、空でも描画する」として `formatFullTrackName(["room"], "")` が `"room--"` を返し、`parseMsfFragmentValue` を parse 側とする往復関係を宣言している。実際は `parseMsfFragmentValue("room--")` が throw するため往復しない
+- `src/fullTrackName.ts` の `formatFullTrackName` は「Track Name は §8.7 が空を許すため、空でも描画する」として `formatFullTrackName(["room"], "")` が `"room--"` を返し、`parseMsfFragmentValue` を parse 側とする往復関係を宣言している。実際は `parseMsfFragmentValue("room--")` が throw するため往復しない。なお、このコメントの §8.7 は誤った参照であり、空の Track Name を許すのは §2.4.1 である (Track Namespace Field の非空を定めるのが §8.7)
 - `src/fullTrackName.prop.ts` の `displayFieldArb` は「Track Name も MSF fragment (§11.1.2) が空を許さないため 1 文字以上にする」と、裏付けの無い前提で入力を絞っている
 - `devtools/src/utils/msfFragment.test.ts` は `msf:room-123--` を undefined とする前提のテストを持つ
 - `parseMsfFragmentValue` の `@throws` にも「空の track name」を挙げている
@@ -20,7 +20,7 @@ draft-ietf-moq-transport-22 §2.4.1 は Track Name を "a sequence of bytes, pos
 ## 設計方針
 
 - 拒否を外し、`ns--` を `{ trackNamespace: ["ns"], trackName: "", parameters: [] }` として受理する。`--` が 1 つだけの `--` は namespace `[]` + Track Name `""` になり、区切りは一意に読める
-- `src/fullTrackName.prop.ts` の arbitrary から「空を許さない」前提を外し、空の Track Name を含む round-trip を検証する
+- `src/fullTrackName.prop.ts` の round-trip の arbitrary に空の Track Name を生成させ、空の Track Name でも round-trip が通ることを検証する。`displayFieldArb` は namespace フィールドと Track Name の両方で使われているため単純に空を許すと、namespace フィールドの空 (§8.7 が 1 バイト以上を MUST とし `formatTrackNamespace` が throw) まで生成されて round-trip が壊れる。Track Name の位置だけ空を許す arbitrary (例: `fc.constantFrom("")` を足した別 arbitrary) に分け、namespace フィールド側は従来どおり非空を維持する
 - `devtools/src/utils/msfFragment.test.ts` の拒否前提のテストを、受理する期待値に更新する (`parseMsfFragmentFromInput` は undefined を返さなくなる)
 - `parseMsfFragmentValue` の `@throws` から「空の track name」を外す
 - 空の Track Name を拒否する既存の利用者がいるかは `parseMsfFragmentValue` / `parseMsfFragmentFromInput` の呼び出し元で確認する
@@ -29,6 +29,7 @@ draft-ietf-moq-transport-22 §2.4.1 は Track Name を "a sequence of bytes, pos
 ## 完了条件
 
 - `parseMsfFragmentValue("ns--")` が `{ trackNamespace: ["ns"], trackName: "", parameters: [] }` を返す
+- `parseMsfFragmentValue("--")` が `{ trackNamespace: [], trackName: "", parameters: [] }` を返す (空 namespace と空 Track Name の両方。`--` の区切りとしての一意な解釈を固定する)
 - `parseMsfFragmentValue(formatFullTrackName(["room"], ""))` が `["room"]` と `""` に往復する
 - `src/fullTrackName.prop.ts` の round-trip が空の Track Name を含む入力で通る
 - `devtools/src/utils/msfFragment.test.ts` の期待値が更新されている
