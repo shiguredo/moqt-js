@@ -89,8 +89,8 @@ export {
 export * as LOC from "./loc";
 
 // MSF の再エクスポート (draft-ietf-moq-msf)
-// 公開するのは Catalog / Timeline と関連する型・定数のみ。
-// 検証・fragment・range などの内部ヘルパーはモジュール内に留める。
+// 公開するのは Catalog / Timeline / msf fragment の解析 / トラック検索と関連する型・定数のみ。
+// 検証・range・Group ID などの内部ヘルパーはモジュール内に留める。
 export {
   // Catalog
   encodeCatalog,
@@ -105,6 +105,8 @@ export {
   decodeMediaTimeline,
   encodeEventTimeline,
   decodeEventTimeline,
+  // msf fragment の解析
+  parseMsfFragmentValue,
   // トラック検索
   resolveInitData,
   getVideoTracks,
@@ -139,6 +141,7 @@ export {
   type CatalogMessage,
   type MediaTimelineEntry,
   type EventTimelineEntry,
+  type MsfFragmentValue,
 } from "./msf";
 
 // MOQ Log の再エクスポート (draft-jennings-moq-log / draft-ietf-moq-msf §9)
