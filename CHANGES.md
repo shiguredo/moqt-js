@@ -2466,6 +2466,12 @@
   - §2.4.2 の例 (foo-bar--x の名前空間 (foo, bar) は prefix (foo) と (foo, bar) に一致し foobar には一致しない、prefix (example.com, 123) は (example.com, 123, 100 / 200) に一致する) を `matchNamespacePrefix` / `namespacePrefixesOverlap` のテストで固定する
   - 挙動は変えず、コメントとテストのみの変更
   - @voluntas
+- [FIX] moqt-devtools のダミー映像がタブを裏に回すと 1 fps になるのを修正する
+  - タブが hidden のときブラウザは main thread のタイマーを 1 秒間隔に絞るため、1 コールバック = 1 フレームの `createDummyVideoStream` のフレーム供給が 1 fps になっていた。フレーム間隔を刻む時計を Dedicated Worker へ移し、main thread は届いた tick で描いて `requestFrame()` する (Chromium の Dedicated Worker のタイマーはこの絞り込みの対象外である)
+  - worker は予定した時刻を絶対時刻 (`performance.timeOrigin + performance.now()`) で送る。`performance.timeOrigin` は window と worker で同じ値ではないため、main thread が予定と実際を比べられるようにする
+  - main thread は予定から 1 フレーム間隔以上過ぎた tick を描かずに捨てる。main thread が塞がれている間も worker は tick を送り続けるため、復帰後に溜まった tick をまとめて描かないようにする。判定は `isDummyFrameTickDue` として切り出し、境界を単体テストで固定する
+  - 実測 (Chromium 153 / macOS / 30 fps 設定 / `Target.createTarget` の `background: true` で作った hidden タブ): 修正前は 0.8 fps、修正後は 30.1 fps。main thread を 400 ms 塞いだ場合も、復帰直後に描くのは 2 枚までで、以後は通常の間隔に戻る
+  - @voluntas
 
 ## 2026.2.0
 
