@@ -1,7 +1,7 @@
 # moqt-js を git 依存で取り込めるようにする
 
 - Created: 2026-10-07
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-10-07
 - Branch: feature/add-git-dependency-support
 - Polished: 2026-10-07
 
@@ -74,4 +74,16 @@
 
 ## 解決方法
 
-{未着手}
+- `package.json` の `scripts` に `"prepare": "vp pack"` を追加した。git から取得したツリーでも `exports` が指す `dist/index.js` と `dist/index.d.ts` が生成される
+- `.github/workflows/npm-publish.yml` の `npm publish` に `--ignore-scripts` を付けた (canary と通常の両方)。公開する `dist/` は build job の artifact から展開済みで、公開時にスクリプトを走らせる必要が無い
+- 併せて、公開 job がタグ push で実行されない状態を直した
+  - `npm publish` の `--no-git-checks` は pnpm のフラグで npm には無く、npm 12 では `EUNKNOWNCONFIG` になるため削除した
+  - 公開 job の `node-version` を 20 から 22 に上げた。Node 20 は npm 12 の engines (`^22.22.2 || ^24.15.0 || >=26.0.0`) と `package.json` の engines (`>=22.22.2`) を満たさず、`npm install -g npm@latest` が `EBADENGINE` で失敗していた (直近のタグ push もこの step で失敗していた)
+- `prepare` の追加で install のたびに `vp pack` が走るようになり、nightly の TypeScript では d.ts 生成が失敗して `typecheck` matrix が落ちるため、`.github/workflows/ci.yml` の matrix から `next` を外し (コメントアウト)、復帰条件をコメントに残した
+- 検証
+  - 実装ブランチをクリーンチェックアウトして `vp install` を実行し、`dist/index.js` と `dist/index.d.ts` が生成されることを確認した
+  - 空のプロジェクトで `vp add -E "github:shiguredo/moqt-js#<実装ブランチ>"` を実行した。1 回目は `ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED` で失敗し、エラーが示す解決済み depPath のキーを `allowBuilds` に書いて再実行すると、入れ子の install から `prepare` 経由で `vp pack` が走り `node_modules/moqt-js/dist/index.js` と `dist/index.d.ts` が生成された
+  - `npm publish --dry-run --ignore-scripts` が `prepare` / `prepack` / `prepublishOnly` を実行しないことを npm 11 と npm 12 の両方で確認した
+  - `vp check` / `vp test run` (198 ファイル / 3606 テスト) / `vp run build:devtools` / `vp run e2e-test` (92 テスト) が通ることを確認した
+  - `typescript` の 5.7 / 5.8 / 5.9 / 6.0 / 7.0.2 で `vp install` (= `prepare` → `vp pack`) が成功し `dist/` が生成されることを確認した
+- `CHANGES.md` の `## develop` に `[ADD]` を追加し、CI の変更を `### misc` に `[UPDATE]` / `[FIX]` として記載した
