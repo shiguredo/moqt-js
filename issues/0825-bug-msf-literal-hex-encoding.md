@@ -3,7 +3,7 @@
 - Created: 2026-10-07
 - Completed: {YYYY-MM-DD}
 - Branch: feature/fix-msf-literal-hex-encoding
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-10-07
 
 ## 目的
 
