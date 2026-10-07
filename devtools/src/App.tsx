@@ -10,7 +10,7 @@ import { buildQueryString, mode } from "./signals/connectionSettings";
 import { useCopyUrlButton } from "./hooks/useCopyUrlButton";
 import * as sub from "./signals/subscriber";
 
-// 対応している MOQT の draft の文書。見出しとフッターからリンクする
+// 対応している MOQT の draft の文書。見出しからリンクする
 const MOQT_TRANSPORT_DRAFT_URL =
   "https://datatracker.ietf.org/doc/html/draft-ietf-moq-transport-22";
 
@@ -167,21 +167,21 @@ export function App() {
               </a>{" "}
               -{" "}
               <a
-                href={MOQT_TRANSPORT_DRAFT_URL}
-                target="_blank"
-                rel="noopener noreferrer"
-                class="hover:text-slate-600 underline"
-              >
-                draft-ietf-moq-transport-22
-              </a>
-              {" / "}
-              <a
                 href="https://datatracker.ietf.org/doc/html/draft-ietf-webtrans-http3-16"
                 target="_blank"
                 rel="noopener noreferrer"
                 class="hover:text-slate-600 underline"
               >
                 draft-ietf-webtrans-http3-16
+              </a>
+              {" / "}
+              <a
+                href="https://datatracker.ietf.org/doc/html/draft-ietf-webtrans-http2-15"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="hover:text-slate-600 underline"
+              >
+                draft-ietf-webtrans-http2-15
               </a>
             </p>
             <p class="mt-1">Copyright © 2026 Shiguredo Inc. All rights reserved.</p>

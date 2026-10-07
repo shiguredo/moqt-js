@@ -68,6 +68,9 @@
   - フッターは moqt-js の version (直近にリリースした版) を出していたため、develop のビルドでもリリース済みの版を名乗っていた。タグのビルドはタグ名、それ以外のビルドはブランチ名と短縮 SHA (例: `develop (fd3e318)`) を出す
   - moqt-js が SETUP に載せる MOQT_IMPLEMENTATION の値は変えない
   - @voluntas
+- [UPDATE] moqt-devtools のフッターの draft のリンクを WebTransport の h3 と h2 にする
+  - draft-ietf-moq-transport-22 のリンクを外し (見出しの draft-22 のリンクは残す)、draft-ietf-webtrans-http2-15 を追加する
+  - @voluntas
 - [UPDATE] 実リレーへ接続する E2E テスト (e2e-test ワークフロー) の自動実行を再開する
   - 接続先のリレー (sora-moq) が draft-22 の ALPN (moqt-22) に対応し、実リレーに対して connect / fetch / pubsub のテストが通ることを確認したため、一時的に外していた push (develop / feature/**) と pull_request トリガーを戻す
   - @voluntas
