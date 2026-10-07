@@ -79,6 +79,14 @@
   - FILL_PARAMETERS の内側の一覧は Table 6 から Table 7 になった
   - コメントのみの変更で、挙動は変えない
   - @voluntas
+- [ADD] `github:` の git 依存として取り込んだときに `dist/` をビルドして使えるようにする
+  - `files` は `dist` のみで `dist/` は git 管理外のため、git から取得したツリーには `exports` が指す `dist/index.js` が無く import できなかった。`prepare` で `vp pack` を実行し、npm の公開版では追えない `develop` の変更を `github:shiguredo/moqt-js#develop` の形で取り込めるようにする
+  - `npm publish` は `prepare` を実行するため、`vp` の無い公開 job では `--ignore-scripts` を付けてスクリプトを止める。公開する `dist/` は artifact から展開済み
+  - `vp install` も `prepare` を実行するため、ローカルの install と CI の各 job でも `vp pack` が走る (`vp install --ignore-scripts` で避けられる)
+  - 消費側は pnpm の `allowBuilds` の許可が必要になる。キーは pnpm がエラーで示す解決済みの depPath で、pnpm の版によっては commit を含むため `develop` が進むと更新が要る。未許可だと `ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED` で install が失敗する
+  - npm 12 は `allow-git` の既定が `none` で git 依存の取得を拒否する (`EALLOWGIT`)。npm で取り込む場合は `--allow-git=root` か `.npmrc` の `allow-git` が要る
+  - 消費側の install は moqt-js の devDependencies を取得してから `vp pack` を実行するため、インストールは重くなる
+  - @voluntas
 - [ADD] `publishNamespace()` が返す型と引数の型を公開する
   - `NamespacePublication` / `NamespacePublicationCallbacks` / `PublishNamespaceOptions` が `moqt-js` からエクスポートされておらず、`publishNamespace()` の戻り値と引数の型を利用者が名指しできなかった
   - @voluntas
@@ -1723,6 +1731,10 @@
 
 ### misc
 
+- [UPDATE] CI の typecheck job の matrix から TypeScript の `next` を外す
+  - install 時に `prepare` が `vp pack` を実行するようになり、nightly (7.1.0-dev) では d.ts 生成が失敗して install ごと落ちるため。この job は型検査が目的で、nightly での pack は検証対象ではない
+  - @voluntas
+
 - CI の e2e ジョブのタイムアウトを 20 分に引き上げる
   - 92 テストの実行時間がランナーの性能に比例して伸び (ローカル 45 秒 / CI 414 秒)、遅いランナーで 15 分を超えてキャンセルされていた。テストごとの計測で突出して遅いテストは無く、テストの内容と並列度は変えずに余裕を取る
   - @voluntas
@@ -1871,6 +1883,10 @@
   - メソッドシグネチャ `close(): void` を一貫して使うため `typescript/method-signature-style` を無効化する
   - 内部使用と再エクスポートを兼ねる import + re-export パターンを許容するため `unicorn/prefer-export-from` を無効化する
   - 単一使用箇所の正規表現は位置引数のほうが読みやすいという既存方針に合わせ `eslint/prefer-named-capture-group` を無効化する
+  - @voluntas
+- [FIX] npm-publish ワークフローで、タグ push での公開が実行されない状態を直す
+  - `npm publish` の `--no-git-checks` は pnpm のフラグであり npm には無い。npm 12 は未知のフラグを `EUNKNOWNCONFIG` で拒否する
+  - 公開 job の Node 20 は npm 12 の engines (`^22.22.2 || ^24.15.0 || >=26.0.0`) と `package.json` の engines (`>=22.22.2`) を満たさず、`npm install -g npm@latest` が `EBADENGINE` で失敗していた。Node を 22 にする
   - @voluntas
 - [FIX] examples のページが `__MOQT_JS_VERSION__` の未定義で読み込みの時点で止まるのを修正する
   - `examples/vite.config.ts` に、devtools と同じくバージョン定数の `define` を足す

@@ -39,7 +39,7 @@ jobs:
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 20
+          node-version: "22"
           registry-url: https://registry.npmjs.org
 
       - name: Download Artifact
@@ -51,7 +51,10 @@ jobs:
       # pnpm publish は CI では正常に動作しない
       # https://github.com/pnpm/pnpm/issues/4937
       - run: npm install -g npm@latest
-      - run: npm publish --no-git-checks --tag canary
+      # prepare は vp pack を実行するため、--ignore-scripts が無いと vp の無い
+      # この job で publish が止まる。dist/ は artifact から展開済みで、
+      # 公開時にスクリプトを走らせる必要は無い
+      - run: npm publish --tag canary --ignore-scripts
 
   npm-publish:
     runs-on: ubuntu-slim
@@ -65,7 +68,7 @@ jobs:
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 20
+          node-version: "22"
           registry-url: https://registry.npmjs.org
 
       - name: Download Artifact
@@ -77,7 +80,10 @@ jobs:
       # pnpm publish は CI では正常に動作しない
       # https://github.com/pnpm/pnpm/issues/4937
       - run: npm install -g npm@latest
-      - run: npm publish --no-git-checks
+      # prepare は vp pack を実行するため、--ignore-scripts が無いと vp の無い
+      # この job で publish が止まる。dist/ は artifact から展開済みで、
+      # 公開時にスクリプトを走らせる必要は無い
+      - run: npm publish --ignore-scripts
 
   slack-notify:
     needs: [npm-publish-canary, npm-publish]

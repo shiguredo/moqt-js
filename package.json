@@ -29,6 +29,7 @@
     "dev": "vp dev devtools",
     "dev:examples": "vp dev examples",
     "build": "vp pack",
+    "prepare": "vp pack",
     "build:devtools": "vp build devtools",
     "build:examples": "vp build examples",
     "fmt": "vp fmt --write .",

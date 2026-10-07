@@ -57,7 +57,10 @@ jobs:
           # - "@typescript/native-preview@beta"
           # 出荷標準 (package.json の devDependencies.typescript) を先頭に置く
           - "7.0.2"
-          - "next"
+          # next (nightly) では、install 時の prepare が実行する vp pack の d.ts 生成が
+          # 失敗し、型検査の前に install ごと落ちるため外している。nightly で通るように
+          # なったら戻す
+          # - "next"
           - "6.0"
           - "5.9"
           - "5.8"
