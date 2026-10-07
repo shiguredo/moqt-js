@@ -1,7 +1,7 @@
 # msf fragment の解析結果を公開 API に追加する
 
 - Created: 2026-10-07
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-10-07
 - Branch: feature/add-msf-fragment-api
 - Polished: 2026-10-07
 
@@ -65,4 +65,16 @@ MOQT URI の msf fragment (`#msf:<track-identifier>&c4m=<base64 encoded token>`)
 
 ## 解決方法
 
-{未着手}
+- `src/index.ts` の MSF の再エクスポートに `parseMsfFragmentValue` と `type MsfFragmentValue` を追加した。方針コメントも「Catalog / Timeline / msf fragment の解析 / トラック検索と関連する型・定数のみ」に直した。`getConnectionParameter` / `assertMsfConnectionSupported` などの残りのヘルパーは公開していない
+- `devtools/src/utils/msfFragment.ts` の相対 import を `moqt-js` からの import に置き換えた。devtools がリポジトリ内で公開 API を使う利用者になったことを `devtools/src/utils/msfFragment.test.ts` の 1 テストで固定した
+- `parseMsfFragmentValue` に `@throws` を追加し、到達可能な例外条件を列挙した
+- `docs/MSF.md` の「moqt-js での公開 API」と `README.md` の「実装状況 > MOQT Streaming Format > URI / 認可」に公開 API を追記した。README には `Session.fragment` が `type === "msf"` のときの `value` (`msf:` を除いた値) を渡すことと、解析できない値では `Error` を投げることも書いた
+- `CHANGES.md` の `## develop` を整理した
+  - `parseMsfFragmentValue` を helper として追加した `[ADD]` を、解析結果を公開 API として提供する 1 エントリに書き換えた
+  - `[CHANGE] MSF の公開 API を明示的な export リストにする` の列挙に msf fragment の解析を加え、内部ヘルパーの列挙から fragment を外した
+  - `[UPDATE] moqt-devtools の msf fragment の解析を公開 API の import に置き換える` を `### misc` に追加した
+- 検証
+  - `vp check` / `vp test run` (198 ファイル / 3607 テスト) / `vp run build:devtools` / `vp run e2e-test` (92 テスト) が通ることを確認した
+  - `vp run build` で生成した `dist/index.d.ts` に `parseMsfFragmentValue` と `MsfFragmentValue` が現れ、内部ヘルパーが現れないことを確認した
+  - `node_modules/moqt-js` をこのリポジトリへ向けた検証用プロジェクトで `import { parseMsfFragmentValue, type MsfFragmentValue } from "moqt-js"` を型検査し、実行時にも取り出せることを確認した
+- レビューで見つかった範囲外の内容 (空の Track Name の拒否に仕様の裏付けが無い点、msf fragment 解析の error path テストの不足、literal で書ける byte の hex 表現の受理、並列の中黒の統一) は、ユーザーの判断により本 issue では扱わず別 issue とする
