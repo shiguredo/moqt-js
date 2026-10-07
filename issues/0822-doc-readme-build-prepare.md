@@ -3,7 +3,7 @@
 - Created: 2026-10-07
 - Completed: {YYYY-MM-DD}
 - Branch: feature/update-readme-build-prepare
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-10-08
 
 ## 目的
 
@@ -19,7 +19,7 @@
 ## 設計方針
 
 - 「ビルド」節に、`vp install` が `prepare` 経由で `vp pack` を実行して `dist/` を生成することを書く。`vp run build` はソースを変更した後に明示的にビルドし直すときに使うことを書く
-- git 依存として取り込むときに必要な設定は、「インストール」節と重複しない位置に書く。README に書かないと判断する場合は、利用者向けの正を `CHANGES.md` とする理由を issue に残す
+- git 依存として取り込むときに必要な設定 (pnpm の `allowBuilds` / npm 12 の `allow-git`) は、`## インストール` の既存の内容 (`pnpm add -E moqt-js`) と重複しない位置に書く。内容は closed 0819 の検証結果と `CHANGES.md` の `## develop` の対応する `[ADD]` に基づく
 - `README.md` のみを変更する。実装・ワークフローは変更しない
 - ドキュメントを扱うため `shiguredo-doc` スキルに従う
 
