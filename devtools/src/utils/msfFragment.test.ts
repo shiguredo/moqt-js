@@ -4,10 +4,25 @@
  * MOQT URI / URI Fragment の入力欄から msf fragment を取り出し、
  * draft-ietf-moq-msf-01 §11.1 の namespace / track name / parameter を取り出せることを
  * 固定する。入力途中の値では undefined を返し、例外を投げないことも確かめる。
+ * 公開 API の `parseMsfFragmentValue` を `src/index.ts` の公開リストから取り出せることも固定する。
  */
 
 import { test, assert } from "vite-plus/test";
+import { parseMsfFragmentValue } from "moqt-js";
 import { parseMsfFragmentFromInput } from "./msfFragment";
+
+test("公開 API の parseMsfFragmentValue で track-identifier を解析できる", () => {
+  // devtools はリポジトリ内で公開 API を使う利用者である。実行時の import が動くことを
+  // 固定する (dist を読むのは e2e の spec の経路で、このテストは `src/index.ts` を見る)。
+  // 解析の意味論 (代表的な error path と round-trip) は src/msf.test.ts と src/msf.prop.ts が担う。
+  // track-identifier は §11.1.3 の第 1 例、connection=wt は §11.1.1 の例。
+  const parsed = parseMsfFragmentValue("customer-livestream-123--catalog&connection=wt");
+  assert.deepEqual(parsed, {
+    trackNamespace: ["customer", "livestream", "123"],
+    trackName: "catalog",
+    parameters: [["connection", "wt"]],
+  });
+});
 
 test("URL 全体から msf fragment の namespace と track name を取り出す", () => {
   const parsed = parseMsfFragmentFromInput(

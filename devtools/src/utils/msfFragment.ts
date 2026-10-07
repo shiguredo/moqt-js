@@ -5,7 +5,7 @@
  * 形式で解析する。c4m の取り出し (`utils/c4m.ts`) と同じく、入力途中の値でも例外を投げない。
  */
 
-import { parseMsfFragmentValue, type MsfFragmentValue } from "../../../src/msf/fragment.ts";
+import { parseMsfFragmentValue, type MsfFragmentValue } from "moqt-js";
 
 /**
  * 入力から msf fragment の値を解析する

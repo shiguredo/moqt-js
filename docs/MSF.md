@@ -15,6 +15,7 @@ moqt-js からの入口のみを示す。
 
 - 高レベル: [`createMediaPublisher`](HIGH_LEVEL_API.md) / [`createMediaSubscriber`](HIGH_LEVEL_API.md)
 - URI fragment の `c4m`（Base64 でエンコードされた C4M トークン）を `SETUP` の `AUTHORIZATION TOKEN` として送る: [`connect()`](LOW_LEVEL_API.md)（`src/msf/c4mAuthorization.ts`）
+- msf fragment の track-identifier（MSF namespace-name）を解析して Track Namespace、Track Name、parameter を取り出す（draft-ietf-moq-msf-01 §11.1）: `parseMsfFragmentValue` / `MsfFragmentValue`（`src/msf/fragment.ts`）
 - `SETUP` に載せたトークンを、catalog の `SUBSCRIBE` / `FETCH` と `authInfo` を持つトラックの `SUBSCRIBE` / `REQUEST_UPDATE` へ付与する（draft-ietf-moq-msf-01 §11.4.3）: [`createMediaSubscriber`](HIGH_LEVEL_API.md)
 - `SETUP` に載せたトークンを `PUBLISH` / `PUBLISH_NAMESPACE` へ付与する（draft-ietf-moq-msf-01 §11.4.3）: [`createMediaPublisher`](HIGH_LEVEL_API.md) / [`connect()`](LOW_LEVEL_API.md)
 - Catalog（主要エントリポイント）: `encodeCatalog` / `encodeCatalogDelta` / `decodeCatalogMessage` / `applyCatalogDelta` / `createCatalog` / `createCompleteCatalog` / `MSF_VERSION` / `CATALOG_TRACK_NAME`（`src/msf/`）

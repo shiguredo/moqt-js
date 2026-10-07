@@ -1377,7 +1377,9 @@
   - @voluntas
 - [ADD] MSF Variable Substitution (§5.4) の解析 helper resolveCatalogVariables を追加する (#0316)
   - @voluntas
-- [ADD] MSF URI Fragment Type "msf" (§11.1) の解析 helper parseMsfFragmentValue を追加する (#0316)
+- [ADD] msf fragment の解析結果 `parseMsfFragmentValue` と `MsfFragmentValue` を公開する
+  - draft-ietf-moq-msf-01 §11.1 の msf fragment の値は特定の Track を識別し、track-identifier は §11.1.2 の MSF namespace-name 文字列として符号化される。Track は MOQT の Full Track Name (Track Namespace と Track Name の組。draft-ietf-moq-transport-22 §2.4.1) で識別されるため、解析結果から SUBSCRIBE や FETCH を起こせるようにする
+  - fragment はサーバーへ送信されずクライアントがローカルで解釈するため (draft-ietf-moq-transport-22 §6.1.1)、`Session.fragment` の生の値から Track Namespace、Track Name、parameter を取り出せるようにする
   - @voluntas
 - [ADD] MSF Compression Algorithm 値定数 MsfCompressionAlgorithm (NONE=0n, GZIP=1n) を properties.ts に追加する (#0316)
   - MSF_COMPRESSION Property ID は draft-ietf-moq-msf-01 §14.3 で IANA 未割当のため別 issue で対応する準備段階の定数
@@ -1730,6 +1732,10 @@
   - @voluntas
 
 ### misc
+
+- [UPDATE] moqt-devtools の msf fragment の解析を公開 API の import に置き換える
+  - 公開 API に `parseMsfFragmentValue` を加えたため、リポジトリ相対の import を `moqt-js` からの import にする。devtools の挙動は変わらない
+  - @voluntas
 
 - [UPDATE] CI の typecheck job の matrix から TypeScript の `next` を外す
   - install 時に `prepare` が `vp pack` を実行するようになり、nightly (7.1.0-dev) では d.ts 生成が失敗して install ごと落ちるため。この job は型検査が目的で、nightly での pack は検証対象ではない
@@ -2206,8 +2212,8 @@
   - 不要な async を除去し、connect を src/connect.ts に分離して循環 import を解消する
   - @voluntas
 - [CHANGE] MSF の公開 API を明示的な export リストにする
-  - index.ts の export * from "./msf" を Catalog / Timeline / トラック検索と関連する型・定数のみに絞る
-  - 検証・fragment・range・Group ID などの内部ヘルパーを非公開にする
+  - index.ts の export * from "./msf" を Catalog / Timeline / msf fragment の解析 / トラック検索と関連する型・定数のみに絞る
+  - 検証・range・Group ID などの内部ヘルパーを非公開にする
   - @voluntas
 - [CHANGE] 未使用の devtools/main.ts を削除する
   - どの HTML / ビルド入力からも参照されず、存在しない LOC.packVideo / LOC.unpackVideo を呼んでいた

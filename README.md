@@ -201,6 +201,8 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
 
 - MOQT URI の msf fragment の `c4m` (Base64 でエンコードされた C4M トークン) を復号し、`SETUP` の `AUTHORIZATION TOKEN` (Token Type `0x01` = CAT、Alias Type `USE_VALUE`) として送る
   - `options.authorizationToken` を指定した場合はそちらを優先する
+- MOQT URI の msf fragment の track-identifier を解析し、Track Namespace、Track Name、parameter を取り出す `parseMsfFragmentValue` と `MsfFragmentValue` を公開する (draft-ietf-moq-msf-01 §11.1)
+  - `Session.fragment` が `type === "msf"` のときの `value` (`msf:` を除いた値) を渡す。解析できない値では `Error` を投げる
 - `SETUP` に載せたトークンを、catalog の `SUBSCRIBE` / `FETCH` と、catalog の `authInfo` を持つトラックの `SUBSCRIBE` / `REQUEST_UPDATE` にも付与する (draft-ietf-moq-msf-01 §11.4.3)
 - `SETUP` に載せたトークンを `PUBLISH` / `PUBLISH_NAMESPACE` にも付与する (draft-ietf-moq-msf-01 §11.4.3)
 

@@ -35,6 +35,10 @@ export interface MsfFragmentValue {
  * - 名前空間 tuple は `-` で要素分解
  * - 各 byte の percent-encoding は `.HH` (lowercase 2 hex digits)
  * - literal 文字は `[A-Za-z0-9_]` のみ (§11.1.2)
+ *
+ * @throws Error 空文字列 / 空の track-identifier / 空の track name / `?` の混入 / `--` 区切りの欠落 /
+ *   key=value 形式でない parameter / 空の parameter key / MSF namespace-name 文字列の違反 (§11.1.2 の
+ *   文字集合、小文字 hex の percent-encoding、不完全な `.HH`) / percent-encoded byte が UTF-8 でないとき
  */
 export function parseMsfFragmentValue(value: string): MsfFragmentValue {
   if (value.length === 0) {
