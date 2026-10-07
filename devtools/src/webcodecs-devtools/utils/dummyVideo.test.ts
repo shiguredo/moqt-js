@@ -9,6 +9,7 @@
 import { test, assert } from "vite-plus/test";
 import {
   nextDummyFrame,
+  isDummyFrameTickDue,
   formatDummyElapsed,
   formatDummyStartDateTime,
   dummyCenterFontSize,
@@ -45,6 +46,27 @@ test("nextDummyFrame: 最初のフレームを描いた時刻からの経過で�
     frameIndex: 10,
     delayMs: 10,
   });
+});
+
+// Worker から届いた tick は、予定どおりなら描く。予定より前 (負の遅れ) も描く
+test("isDummyFrameTickDue: 予定どおりの tick は描く", () => {
+  assert.equal(isDummyFrameTickDue(1_000, 1_000, FRAME_INTERVAL_MS), true);
+  assert.equal(isDummyFrameTickDue(1_000, 990, FRAME_INTERVAL_MS), true);
+});
+
+// 1 周期未満の遅れは描いて追いつく (nextDummyFrame が 1 周期未満の遅れを待たずに
+// 描くのと同じ規則)
+test("isDummyFrameTickDue: 1 周期未満の遅れは描く", () => {
+  assert.equal(isDummyFrameTickDue(1_000, 1_039, FRAME_INTERVAL_MS), true);
+});
+
+// main thread が塞がれている間に溜まった tick は描かない。描くと復帰後に何枚も
+// requestFrame することになり、フレームがバーストする。境界のちょうど 1 周期は
+// nextDummyFrame と同じく飛ばす
+test("isDummyFrameTickDue: 1 周期以上過ぎた tick は描かない", () => {
+  assert.equal(isDummyFrameTickDue(1_000, 1_040, FRAME_INTERVAL_MS), false);
+  assert.equal(isDummyFrameTickDue(1_000, 1_041, FRAME_INTERVAL_MS), false);
+  assert.equal(isDummyFrameTickDue(1_000, 1_500, FRAME_INTERVAL_MS), false);
 });
 
 // Sora-DevTools のフェイク映像と同じ、中央の経過時間

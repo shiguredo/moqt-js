@@ -1,7 +1,7 @@
 # moqt-devtools のダミー映像がタブを裏に回すと 1 fps になる
 
 - Created: 2026-10-07
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-10-07
 - Branch: feature/fix-devtools-dummy-video-fps-in-background
 - Polished: {YYYY-MM-DD}
 - Reporter: @voluntas
@@ -56,4 +56,16 @@ moqt-devtools の publisher で映像入力をダミー映像にすると、タ�
 
 ## 解決方法
 
-{未着手}
+- `devtools/src/webcodecs-devtools/workers/dummyVideoTicker.worker.ts` を追加し、フレーム間隔を刻む時計を Dedicated Worker へ移した。worker は `nextDummyFrame` で次に描くフレームと待ち時間を決め、予定した絶対時刻 (`performance.timeOrigin + performance.now()`) を載せた tick を `postMessage` する。`performance.timeOrigin` は window と worker で同じ値ではないため、絶対時刻で渡す
+- `createDummyVideoStream` は tick を受けて描画と `requestFrame()` を行う (描画は main thread のまま)。描画と `captureStream` の作り方は変えず、`stop()` は `terminate()` で worker を止める
+- 予定から 1 フレーム間隔以上過ぎた tick は描かずに捨てる。判定は `isDummyFrameTickDue` として切り出し、`nextDummyFrame` の「1 周期以上過ぎたら飛ばす」と同じ規則にした。main thread が塞がれている間に溜まった tick を、復帰後にまとめて描かないため
+- `nextDummyFrame` は純関数のまま変えず、worker もそれを import する (規則を 2 か所に書かない)
+- 単体テスト (`devtools/src/webcodecs-devtools/utils/dummyVideo.test.ts`) に `isDummyFrameTickDue` の境界 (予定どおり、予定より前、1 周期未満の遅れ、ちょうど 1 周期、それ以上) を追加した
+- E2E (`tests/e2e/devtools-dummy-video.spec.ts`) を追加し、dev サーバーの実モジュールで 30 fps 設定のときに 20 から 40 fps でフレームが供給されることを固定した
+- 実測 (Chromium 153 / macOS / 30 fps 設定 / CDP の `Target.createTarget` に `background: true` を渡して作った hidden タブ / dev サーバーの実モジュール)
+  - 前面のタブ: 30.0 fps
+  - 裏のタブ: 30.0 fps (修正前は同じ条件で 0.8 fps)
+  - main thread を 400 ms 塞いだ場合: 復帰直後に描くのは 2 枚までで、以後は約 33 ms の通常の間隔に戻る (worker は 400 ms で 12 回 tick するため、捨てなければ 12 枚を一瞬で描くことになる)
+- `vp check` / `vp exec tsc --noEmit` / `vp exec tsc -p devtools --noEmit` / `vp test run` (3610 件) / `vp run e2e-test` (93 件) が通る
+- `CHANGES.md` の `## develop` に `[FIX]` を追記した
+- 残る制約: タブが freeze された場合は worker のタイマーも止まる (HTML の "worker is not suspended" 条件)。hidden の絞り込みは回避できるが freeze は対象外である

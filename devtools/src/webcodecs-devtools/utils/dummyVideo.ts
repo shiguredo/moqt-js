@@ -12,6 +12,18 @@ export interface NextDummyFrame {
   readonly delayMs: number;
 }
 
+/** dummy の映像のフレーム間隔を刻む Worker への要求 */
+export type DummyVideoTickerRequest =
+  | { readonly type: "start"; readonly frameIntervalMs: number }
+  | { readonly type: "stop" };
+
+/** dummy の映像のフレーム間隔を刻む Worker からの応答 */
+export interface DummyVideoTickerTick {
+  readonly type: "tick";
+  /** 描く予定だった時刻 (Unix epoch ミリ秒) */
+  readonly scheduledAbsoluteMs: number;
+}
+
 /**
  * 次に描くフレームの番号と、描くまで待つ時間を決める
  *
@@ -44,6 +56,26 @@ export function nextDummyFrame(
     frameIndex,
     delayMs: Math.max(0, startMs + frameIndex * frameIntervalMs - nowMs),
   };
+}
+
+/**
+ * 届いた tick でフレームを描くかを決める
+ *
+ * 間隔を刻む Worker は、main thread が塞がれている間も tick を送り続ける。復帰すると
+ * tick がまとめて届き、そのまま描くと一瞬で何枚も `requestFrame()` することになるため、
+ * 予定の時刻から 1 フレーム間隔以上過ぎた tick は描かずに捨てる。1 周期未満の遅れは
+ * 描いて追いつく (`nextDummyFrame` の「1 周期以上過ぎたら飛ばす」と同じ規則)。
+ *
+ * @param scheduledAbsoluteMs - Worker が予定した時刻 (Unix epoch ミリ秒)
+ * @param nowAbsoluteMs - 今の時刻 (Unix epoch ミリ秒)
+ * @param frameIntervalMs - フレーム間隔 (ミリ秒)
+ */
+export function isDummyFrameTickDue(
+  scheduledAbsoluteMs: number,
+  nowAbsoluteMs: number,
+  frameIntervalMs: number,
+): boolean {
+  return nowAbsoluteMs - scheduledAbsoluteMs < frameIntervalMs;
 }
 
 /**
@@ -109,7 +141,6 @@ export function createDummyVideoStream(
     throw new Error("Failed to get 2D context");
   }
 
-  let timerId: number | null = null;
   let stopped = false;
   const startedAtMs = Date.now();
   const startDateTime = formatDummyStartDateTime(new Date(startedAtMs));
@@ -178,34 +209,40 @@ export function createDummyVideoStream(
   };
 
   // 描く時刻は最初のフレームからの経過で決め、平均の周期を framerate に合わせる
-  // (nextDummyFrame)
+  // (nextDummyFrame)。時計は Dedicated Worker が持つ。タブが hidden のときブラウザは
+  // main thread のタイマーを 1 秒間隔に絞るため、main thread のタイマーで刻むと
+  // 1 コールバック = 1 フレームのこの生成器の fps が 1 になる。Dedicated Worker の
+  // タイマーは絞られない
   const frameIntervalMs = 1000 / framerate;
-  const startMs = performance.now();
-  let frameIndex = 0;
-  const scheduleNextFrame = (): void => {
-    const next = nextDummyFrame(startMs, frameIntervalMs, frameIndex, performance.now());
-    frameIndex = next.frameIndex;
-    timerId = window.setTimeout(() => {
-      timerId = null;
-      if (stopped) {
-        return;
-      }
-      drawAndCapture();
-      scheduleNextFrame();
-    }, next.delayMs);
+  const ticker = new Worker(new URL("../workers/dummyVideoTicker.worker.ts", import.meta.url), {
+    type: "module",
+  });
+  ticker.onmessage = (event: MessageEvent<DummyVideoTickerTick>) => {
+    if (stopped) {
+      // stop の後に届いた tick では描かない
+      return;
+    }
+    // main thread が塞がれていた分の tick は捨てる (復帰後にまとめて描かない)
+    const nowAbsoluteMs = performance.timeOrigin + performance.now();
+    if (!isDummyFrameTickDue(event.data.scheduledAbsoluteMs, nowAbsoluteMs, frameIntervalMs)) {
+      return;
+    }
+    drawAndCapture();
   };
+
+  const startRequest: DummyVideoTickerRequest = { type: "start", frameIntervalMs };
+  ticker.postMessage(startRequest);
+
+  // 最初の 1 枚はすぐに描く (Worker はこの時刻を基準に次のフレームを決める)
   drawAndCapture();
-  scheduleNextFrame();
 
   return {
     stream,
     canvas,
     stop: (): void => {
       stopped = true;
-      if (timerId !== null) {
-        clearTimeout(timerId);
-        timerId = null;
-      }
+      // 予約した tick を止める。以後の onmessage は stopped で弾く
+      ticker.terminate();
     },
   };
 }
