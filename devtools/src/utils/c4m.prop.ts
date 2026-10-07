@@ -11,10 +11,12 @@ import { extractC4mBase64, maskC4mValue } from "./c4m";
 
 // 伏せ字にすると値が `<redacted>` になるため、c4m の値として妥当な Base64 を生成する
 const base64Arbitrary = fc.stringMatching(/^[A-Za-z0-9+/]{4,24}$/);
-// parameter 名は c4m 以外 (伏せ字の対象外であることを確かめる)
+// parameter 名は c4m (`c4m` で終わる名前) 以外とする。伏せ字は `c4m=` の部分一致で潰すため
+// (`maskC4mValue` の JSDoc)、`ac4m=` のような別の parameter も伏せ字になる。これは
+// トークンを出さない側へ倒した意図した挙動であり、「c4m 以外は変えない」性質の前提から外す
 const parameterNameArbitrary = fc
   .stringMatching(/^[a-z][a-z0-9-]{0,9}$/)
-  .filter((name) => name !== "c4m");
+  .filter((name) => !name.endsWith("c4m"));
 const parameterValueArbitrary = fc.stringMatching(/^[A-Za-z0-9._-]{1,12}$/);
 
 /** `msf:track-identifier&key=value&...` の形の fragment を生成する */

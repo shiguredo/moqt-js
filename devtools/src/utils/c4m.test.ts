@@ -112,6 +112,16 @@ test("maskC4mValue: 他の parameter は残す", () => {
   );
 });
 
+// 伏せ字は `c4m=` の部分一致で潰すため、`c4m` で終わる名前の parameter も伏せ字になる
+// (トークンを出さない側へ倒す意図した挙動)。prop テストの parameter 名の生成はこの前提に
+// 合わせ、`c4m` で終わる名前を作らない。
+test("maskC4mValue: c4m で終わる名前の parameter も伏せ字にする", () => {
+  assert.equal(
+    maskC4mValue(`msf:room-123--catalog&ac4m=${C4M_EXAMPLE}&c4m=${C4M_EXAMPLE}`),
+    "msf:room-123--catalog&ac4m=<redacted>&c4m=<redacted>",
+  );
+});
+
 // extractC4mBase64 は最初の c4m しか見ないが、伏せ字は出現をすべて潰す。
 test("maskC4mValue: c4m が複数あってもすべて伏せ字にする", () => {
   assert.equal(
