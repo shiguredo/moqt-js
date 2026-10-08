@@ -152,6 +152,8 @@ test("getFullTrackNameKey は fullTrackNameKey と同じ比較キーを返す", 
  * Track Name も MSF fragment (§11.1.2) が空を許さないため 1 文字以上にする。
  * エスケープ対象の構造文字 (`-` / `--` / `&` / `.` / `?` など) と、非 ASCII を
  * 含む valid な Unicode (`unit: "grapheme"` は孤立サロゲートを生成しない) を混ぜる。
+ * 孤立サロゲートは TextEncoder が U+FFFD に置換する (§8.8 の形式はバイト列に対する
+ * 規則で、プロトコルのワイヤ表現でも置換される) ため、往復の対象にしない。
  */
 const displayFieldArb = fc.oneof(
   fc.constantFrom("-", "--", "&", ".", "|", "/", "?", "a-b", "a.2db", ".2d", "_", "0"),
@@ -207,6 +209,32 @@ test("formatTrackNamespace: parseTrackNamespace と round-trip する", () => {
     fc.property(fc.array(displayFieldArb, { maxLength: 3 }), (trackNamespace) => {
       assert.deepEqual(parseTrackNamespace(formatTrackNamespace(trackNamespace)), trackNamespace);
     }),
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-22 §8.8:
+ * 「Because this format produces exactly one rendering of any given binary value, it is
+ * bijective」であり、解析が受理する文字列は正規形でなければならない (受理した入力を
+ * 組み立て直すと元の文字列に戻る)。任意の文字列を入力に、受理と拒否の境界を突く。
+ * 拒否する入力 (literal で書けない文字、大文字 hex、literal で書ける byte の hex 表現、
+ * UTF-8 として読めない byte 列など) は throw するため、受理側だけで比較する。
+ */
+test("parseTrackNamespace: 受理する文字列は正規形である", () => {
+  fc.assert(
+    fc.property(
+      fc.oneof(fc.string({ maxLength: 8 }), fc.string({ unit: "binary", maxLength: 8 })),
+      (value) => {
+        let parsed: string[];
+        try {
+          parsed = parseTrackNamespace(value);
+        } catch {
+          // 拒否は §8.8 の MUST reject であり、受理側の正規形だけを検証する
+          return;
+        }
+        assert.equal(formatTrackNamespace(parsed), value);
+      },
+    ),
   );
 });
 

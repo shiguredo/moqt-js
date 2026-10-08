@@ -136,7 +136,7 @@ test("parseTrackNamespace: 仕様の例とエスケープを復号する", () =>
   assert.deepEqual(parseTrackNamespace(".e3.81.82"), ["あ"]);
   // literal で書ける byte はそのまま復号する
   assert.deepEqual(parseTrackNamespace("AZaz09_"), ["AZaz09_"]);
-  // 0 フィールドの Track Namespace は §8.7 が許す
+  // 0 フィールドの Track Namespace は §2.4.1 が許す
   assert.deepEqual(parseTrackNamespace(""), []);
 });
 
@@ -166,7 +166,7 @@ test("parseTrackNamespace: §8.8 の規則に合わない文字列を拒否す�
   // 大文字 hex と、16 進 2 桁に満たない "."
   assert.throws(
     () => parseTrackNamespace("a.2D"),
-    /percent-encoding must use two lowercase hexadecimal digits in track namespace field at index 0, got "\.2D"/,
+    /"\." must be followed by two lowercase hexadecimal digits in track namespace field at index 0, got "\.2D"/,
   );
   assert.throws(
     () => parseTrackNamespace("a."),
@@ -177,9 +177,10 @@ test("parseTrackNamespace: §8.8 の規則に合わない文字列を拒否す�
     () => parseTrackNamespace("a/b"),
     /character "\/" in track namespace field at index 0 is not in \[A-Za-z0-9_\]/,
   );
-  // UTF-8 として読めない byte 列
+  // UTF-8 として読めない byte 列。§8.8 は binary 値も許すため、拒否の根拠は
+  // moqt-js が名前を JS 文字列で保持すること (§2.4.1 がバイト列の解釈を各仕様に委ねる)
   assert.throws(
     () => parseTrackNamespace(".ff"),
-    /percent-encoded bytes in track namespace field at index 0 are not valid UTF-8/,
+    /bytes in track namespace field at index 0 are not valid UTF-8/,
   );
 });
