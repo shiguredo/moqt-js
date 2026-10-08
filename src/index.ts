@@ -11,6 +11,13 @@ export { connect } from "./connect";
 // MOQT URI / Fragment Identifier (draft-ietf-moq-transport-22 §6.1 / §6.1.1)
 export { parseFragment, type MoqtFragment, type NormalizedMoqtUri } from "./moqtUri";
 
+// Track Namespace の送信前の検証 (draft-ietf-moq-transport-22 §8.7 / §2.4.3 / §6.5)
+// 接続の前に、Track Namespace の構造の制約 (32 フィールド上限 / 各フィールド 1 バイト以上 /
+// 4,096 バイト上限) と予約 namespace を検証できるよう、Request を送るときに使う検証を
+// 公開する。Full Track Name の 4,096 バイト上限は Track Name と合わせた長さで決まるため、
+// Request の送信時に検証する。
+export { validateTrackNamespaceForSend } from "./session/params";
+
 // 公開型の再エクスポート
 export type {
   Session,

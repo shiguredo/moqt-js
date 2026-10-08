@@ -134,7 +134,7 @@ const CONNECTION_SETTINGS_COVERAGE: CoverageExpectation = {
     namespaceArray:
       "namespace を Track Namespace のフィールドへ分解した computed。値は namespace に出す",
     namespaceProblem:
-      "namespace を §8.8 の namespace-name 文字列として読めない理由を示す入力の状態で、設定の値ではない",
+      "namespace を接続に使えない理由 (解析失敗・§8.7 の構造の制約・予約 namespace) を示す入力の状態で、設定の値ではない",
   },
 };
 

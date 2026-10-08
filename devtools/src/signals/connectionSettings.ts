@@ -3,6 +3,7 @@ import {
   type AuthorizationToken,
   AuthorizationTokenAliasType,
   type CertificateHash,
+  validateTrackNamespaceForSend,
 } from "moqt-js";
 import { formatTrackNamespace, parseTrackNamespace } from "../../../src/fullTrackName.ts";
 import type {
@@ -82,37 +83,61 @@ const msfNamespaceFields = signal<string[] | null>(null);
  * true の間は Connection Settings の Namespace 欄を読み取り専用にする
  */
 export const namespaceLocked = computed(() => msfNamespaceFields.value !== null);
-// Namespace の欄の値を Track Namespace のフィールドへ分解したもの (画面表示用)。
-// 欄は §8.8 の namespace-name 文字列 (`-` 区切り、literal で書けない byte は `.HH`) で、
-// 表示 (Full Track Name の組み立て) は解析できない値でも壊さないよう空列にする。
-// 接続に使うフィールド列は解析の失敗を投げる requireConnectNamespace が返す。
-// msf fragment があるときは、その fragment を解析したフィールド列をそのまま使う (欄は
-// 読み取り専用であり、表示から復元する必要が無い)
-export const namespaceArray = computed(() => {
+/**
+ * Namespace の欄の値を Track Namespace のフィールド列へ分解する
+ *
+ * msf fragment が namespace を決めている間はその fragment を解析したフィールド列
+ * (msfNamespaceFields)、それ以外は欄の文字列 (§8.8 の namespace-name 文字列) を解析する。
+ * 解析できない値では Error を投げる (表示用の namespaceArray が握り潰す)
+ */
+function resolveNamespaceFields(): string[] {
   const msfFields = msfNamespaceFields.value;
   if (msfFields !== null) {
     return msfFields;
   }
+  return parseTrackNamespace(namespace.value);
+}
+// Namespace の欄の値を Track Namespace のフィールドへ分解したもの (画面表示用)。
+// 欄は §8.8 の namespace-name 文字列 (`-` 区切り、literal で書けない byte は `.HH`) で、
+// 表示 (Full Track Name の組み立て) は解析できない値でも壊さないよう空列にする。
+// 接続に使うフィールド列は解析と送信の検証を行う requireConnectNamespace が返す
+export const namespaceArray = computed(() => {
   try {
-    return parseTrackNamespace(namespace.value);
+    return resolveNamespaceFields();
   } catch {
     return [];
   }
 });
 /**
- * Namespace の欄の値が §8.8 の namespace-name 文字列として読めない理由 (読めるときは null)
+ * Track Namespace が送信できない値かどうかを確かめ、理由を返す (送信できるときは null)
+ *
+ * draft-ietf-moq-transport-22 §8.7 (構造の制約) と §2.4.3 / §6.5 (予約 namespace) の検証は、
+ * ライブラリが送信時に使う `validateTrackNamespaceForSend` をそのまま呼ぶ。規則を devtools に
+ * 写すとライブラリとずれるため、判定は 1 か所に保つ。
+ *
+ * Full Track Name (Track Namespace と Track Name の合計) の 4,096 バイト上限は Track Name を
+ * 含めて判定し、購読では catalog から届くまで Track Name が分からないため、ここでは見ない
+ * (ライブラリの送信時検証に任せる)。
+ */
+function resolveNamespaceSendProblem(fields: readonly string[]): string | null {
+  try {
+    validateTrackNamespaceForSend(fields);
+    return null;
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+}
+/**
+ * Namespace の欄の値が接続に使えない理由 (接続に使えるときは null)
  *
  * 読めない間は接続に使うフィールド列が無いため、欄の警告に出す。理由は解析のエラー
- * メッセージ (どの位置のどの文字が規則に合わないか) をそのまま使い、開始時の拒否
+ * メッセージ (どの位置のどの文字が規則に合わないか) と、送信できない値の理由
+ * (§8.7 の構造の制約 / §2.4.3 と §6.5 の予約 namespace) をそのまま使い、開始時の拒否
  * (requireConnectNamespace) と同じ文言にする
  */
 export const namespaceProblem = computed<string | null>(() => {
-  if (namespaceLocked.value) {
-    return null;
-  }
   try {
-    parseTrackNamespace(namespace.value);
-    return null;
+    return resolveNamespaceSendProblem(resolveNamespaceFields());
   } catch (error) {
     return error instanceof Error ? error.message : String(error);
   }
@@ -120,20 +145,20 @@ export const namespaceProblem = computed<string | null>(() => {
 /**
  * 配信 / 購読の接続に使う Track Namespace のフィールド列を返す
  *
- * 配信と購読の開始時に呼ぶ。Namespace の欄が §8.8 の namespace-name 文字列として
- * 読めないときは解析の失敗をそのまま投げ、接続させない (解析できない値のまま接続すると、
- * ユーザーが入力した namespace ではなく空の namespace へ繋ぐことになる)。解析の失敗理由
- * (位置と文字) はそのまま画面とログへ出す
+ * 配信と購読の開始時に呼ぶ。Namespace の欄の値が接続に使えないときは理由をそのまま投げ、
+ * 接続させない (解析できない値や送信できない値のまま接続すると、ユーザーが入力した
+ * namespace ではなく別の namespace へ繋いだり、接続の直後に送信で失敗したりする)。
+ * 理由 (位置と文字、予約 namespace、構造の制約) はそのまま画面とログへ出す
  *
- * @throws Error Namespace の欄の値が §8.8 の namespace-name 文字列として読めないとき
+ * @throws Error Namespace の欄の値が §8.8 の namespace-name 文字列として読めないとき /
+ *   送信できない値 (§8.7 の構造の制約、§2.4.3 / §6.5 の予約 namespace) のとき
  */
 export function requireConnectNamespace(): string[] {
-  if (namespaceLocked.value) {
-    // msf fragment が決めたフィールド列をそのまま使う (欄の文字列は編集できない)
-    return namespaceArray.value;
-  }
-  // 解析できない値では、解析の失敗理由 (位置と文字) をそのまま投げて接続させない
-  return parseTrackNamespace(namespace.value);
+  const fields = resolveNamespaceFields();
+  // 送信できない値は、接続した後の送信で失敗するため先に拒否する
+  // (検証はライブラリの送信時のものをそのまま使う)
+  validateTrackNamespaceForSend(fields);
+  return fields;
 }
 /**
  * 音声トラックの役割を表す既定のトラック名

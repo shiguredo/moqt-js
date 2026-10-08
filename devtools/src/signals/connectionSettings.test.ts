@@ -1,5 +1,5 @@
 import { test, assert } from "vite-plus/test";
-import { AuthorizationTokenAliasType, C4M } from "moqt-js";
+import { AuthorizationTokenAliasType, C4M, validateTrackNamespaceForSend } from "moqt-js";
 import {
   applyC4mFromUrl,
   applyRelayUriInput,
@@ -964,6 +964,50 @@ test("namespaceProblem: 空のフィールドを含む Namespace では理由を
   resetMsfFragmentSettings();
 });
 
+// §2.4.3 の予約 namespace (先頭フィールドが "." で始まる) は、§8.8 の表記としては読めても
+// 送信できない。接続の前に理由を出して拒否する (検証はライブラリの送信時のものを共有する)
+test("namespaceProblem: 予約 namespace では理由を出して接続を拒否する", () => {
+  resetMsfFragmentSettings();
+  // "." は literal で書けないため、§8.8 では .2e と書く
+  namespace.value = ".2esession";
+
+  assert.match(namespaceProblem.value ?? "", /session-level namespace \.session is reserved/);
+  assert.deepEqual(namespaceArray.value, [".session"]);
+  assert.throws(() => requireConnectNamespace(), /reserved/);
+
+  resetMsfFragmentSettings();
+});
+
+// §8.7 の 32 フィールド上限も接続の前に見る (33 フィールドは送信時に拒否される)
+test("namespaceProblem: 33 フィールドの Namespace では理由を出して接続を拒否する", () => {
+  resetMsfFragmentSettings();
+  namespace.value = Array.from({ length: 33 }, (_value, index) => `n${index}`).join("-");
+
+  assert.match(namespaceProblem.value ?? "", /track namespace fields exceeds maximum: 33 > 32/);
+  assert.throws(() => requireConnectNamespace(), /track namespace fields exceeds maximum: 33 > 32/);
+
+  resetMsfFragmentSettings();
+});
+
+// 32 フィールド (上限ちょうど) は接続に使える。devtools の配線が上限を過剰に拒否しないことを固定する
+test("namespaceProblem: 32 フィールドの Namespace は接続に使える", () => {
+  resetMsfFragmentSettings();
+  namespace.value = Array.from({ length: 32 }, (_value, index) => `n${index}`).join("-");
+
+  assert.equal(namespaceProblem.value, null);
+  assert.equal(requireConnectNamespace().length, 32);
+
+  resetMsfFragmentSettings();
+});
+
+// devtools はリポジトリ内で公開 API を使う利用者である。`src/index.ts` の公開リストから検証関数を
+// 取り出して実行できることを固定する (境界値・error path・メッセージの意味論は src/session/params.test.ts
+// と src/session/params.prop.ts が担う)
+test("公開 API の validateTrackNamespaceForSend を実行できる", () => {
+  assert.doesNotThrow(() => validateTrackNamespaceForSend(["15551", "spam"]));
+  assert.throws(() => validateTrackNamespaceForSend([".session"]), /reserved/);
+});
+
 // --- msf fragment の namespace ---
 
 // MOQT URI に msf fragment があるときは、その namespace を Namespace 欄へ反映して固定する。
@@ -1061,6 +1105,20 @@ test("refreshMsfFragmentSettings: 空のフィールドを含む msf fragment �
     "devtools",
     INITIAL_NAMESPACE.replace("moqt-devtools-", ""),
   ]);
+  resetMsfFragmentSettings();
+});
+
+// msf fragment が予約 namespace を指定した場合も、欄 (読み取り専用) に理由を出して接続を拒否する
+test("refreshMsfFragmentSettings: 予約 namespace を指定する msf fragment では理由を出して接続を拒否する", () => {
+  resetMsfFragmentSettings();
+  url.value = "moqt://sora-moq.example/#msf:.2esession--catalog";
+
+  refreshMsfFragmentSettings();
+
+  assert.isTrue(namespaceLocked.value);
+  assert.deepEqual(namespaceArray.value, [".session"]);
+  assert.match(namespaceProblem.value ?? "", /session-level namespace \.session is reserved/);
+  assert.throws(() => requireConnectNamespace(), /reserved/);
   resetMsfFragmentSettings();
 });
 

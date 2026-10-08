@@ -22,7 +22,7 @@ import type {
   TrackStatusOptions,
 } from "./publicTypes";
 import {
-  MAX_TRACK_NAMESPACE_FIELDS,
+  createTrackNamespace,
   MessageParameterType,
   GroupOrder,
   encodeAuthorizationToken,
@@ -281,7 +281,12 @@ const DEFAULT_PUBLISHER_PRIORITY_MAX = 255;
 // ============================================================================
 
 /**
- * 送信前に Track Namespace が予約 namespace に該当しないことを検証する
+ * 送信前に Track Namespace が送信できる値かを検証する
+ *
+ * draft-ietf-moq-transport-22 §8.7 (Track Namespace Structure) / §2.4.1:
+ * Track Namespace は 0〜32 フィールドで、各フィールドは 1 バイト以上、合計は 4,096 バイト
+ * 以下 (違反した値を受信したピアは PROTOCOL_VIOLATION でセッションを閉じる)。判定は送信時の
+ * エンコードと同じ createTrackNamespace に任せ、規則を 2 か所に持たない。
  *
  * draft-ietf-moq-transport-22 §2.4.3 (Reserved Namespaces):
  * "MOQT reserves all Track Namespace values whose first tuple field
@@ -300,21 +305,25 @@ const DEFAULT_PUBLISHER_PRIORITY_MAX = 255;
  * 拒否する。拒否は送信前の同期 throw であり、アプリケーションの入力ミスとして
  * セッションは閉じない (プロトコル違反ではない)。
  *
- * @param namespace - 送信対象の Track Namespace (string[])
+ * Full Track Name (Track Namespace と Track Name の合計) の 4,096 バイト上限は Track Name を
+ * 含めて判定するため、Request の送信時に validateFullTrackName が検証する。
+ *
+ * @param namespace - 送信対象の Track Namespace
  * @param trackName - Track Name。namespace スコープ外のリクエスト (SUBSCRIBE_NAMESPACE /
  *                    SUBSCRIBE_TRACKS / PUBLISH_NAMESPACE) では省略する
- * @throws Error 予約 namespace / session-level namespace / 33 フィールド以上の場合
+ * @throws Error §8.7 の構造の制約 (33 フィールド以上 / 空のフィールド / 4,096 バイト超) /
+ *   予約 namespace / session-level namespace (§6.5) の場合
  */
-export function validateTrackNamespaceForSend(namespace: string[], trackName?: string): void {
+export function validateTrackNamespaceForSend(
+  namespace: readonly string[],
+  trackName?: string,
+): void {
   // draft-ietf-moq-transport-22 §8.7 (Track Namespace Structure) / §2.4.1:
-  // Track Namespace は 0〜32 フィールド。33 フィールド以上は仕様準拠のピアが
-  // セッションを閉じるため、送信側で fail-fast で拒否する (受信したワイヤの
-  // 違反ではないため ProtocolViolationError は使わない)。
-  if (namespace.length > MAX_TRACK_NAMESPACE_FIELDS) {
-    throw new Error(
-      `track namespace fields exceeds maximum: ${namespace.length} > ${MAX_TRACK_NAMESPACE_FIELDS}`,
-    );
-  }
+  // Track Namespace は 0〜32 フィールドで、各フィールドは 1 バイト以上、合計は 4,096 バイト
+  // 以下。違反した値は仕様準拠のピアがセッションを閉じるため、送信側で fail-fast で拒否する
+  // (受信したワイヤの違反ではないため ProtocolViolationError は使わない)。判定は送信時の
+  // エンコード (createTrackNamespace → assertTrackNamespaceTuple) と同じ実装を使う。
+  createTrackNamespace(namespace);
   if (namespace.length === 0) {
     return;
   }
@@ -325,6 +334,11 @@ export function validateTrackNamespaceForSend(namespace: string[], trackName?: s
   }
   if (!first.startsWith(".")) {
     return;
+  }
+  if (first === ".") {
+    // §2.4.3: 先頭フィールドが "." 単体の namespace は IANA 登録でも使えず
+    // "MUST NOT be used for any purpose" (先頭が "." で始まる他の値とは扱いが異なる)
+    throw new Error('track namespace "." must not be used for any purpose (DOES_NOT_EXIST)');
   }
   if (first === ".session") {
     if (trackName === "") {
