@@ -5,14 +5,20 @@ import {
   buildPublisherCatalog,
   buildPublisherCatalogOptions,
   buildPublisherCatalogOptionsFromSettings,
+  buildPublisherTrackDeclarations,
   resolveAudioConfigToSend,
   resolveAudioPublishable,
   decideKeyFrame,
   usePublisher,
 } from "./usePublisher";
-import type { PublisherAudioCatalogOptions, PublisherVideoCatalogOptions } from "./usePublisher";
+import type {
+  PublisherAudioCatalogOptions,
+  PublisherCatalogOptions,
+  PublisherVideoCatalogOptions,
+} from "./usePublisher";
 import { getAudioEncoderConfig } from "../../../src/codec/config";
 import { getEncoderConfig } from "../utils/codec";
+import { resolveDeclarationAudioFormat } from "../utils/publishTracks";
 import { MESSAGES_EVENT_TYPE, EVENT_TRACK_NAME } from "../utils/eventTimeline";
 import type { EncodedChunkData } from "../utils/EncoderWrapper";
 import type { CodecType } from "../types";
@@ -97,6 +103,8 @@ function resetPublisherSignals(): void {
   pub.audioStream.value = null;
   pub.audioStreamCleanup.value = null;
   pub.audioFrameReader.value = null;
+  // 実際に取れた音の形式。まだ取れていない状態を初期値にする
+  pub.audioFormat.value = null;
   pub.pubCurrentAudioGroup.value = 0;
   pub.pubAudioGroupStarted.value = false;
   pub.lastSentAudioConfig.value = null;
@@ -1315,6 +1323,127 @@ test("buildPublisherCatalogOptionsFromSettings: SETUP のトークンが CAT の
       channels: 2,
     });
     assert.isFalse("authInfo" in withoutToken);
+  } finally {
+    resetCatalogSettings();
+  }
+});
+
+// ============================================================================
+// Tracks カードに出す catalog の宣言 (buildPublisherTrackDeclarations)
+// ============================================================================
+
+// 接続設定の Tracks カードは、配信で送る catalog の値をそのまま出す。宣言の組み立てを
+// 画面と配信で別々に書くと、画面で見た値と実際に送る値がずれる。同じ関数を使い、
+// buildPublisherCatalog が送る tracks が宣言と同じ並び (音声 → 映像 → event timeline) で
+// あることを固定する
+test("buildPublisherTrackDeclarations: 宣言は buildPublisherCatalog が送る catalog と一致する", () => {
+  const options: PublisherCatalogOptions = {
+    video: makeVideoCatalogOptions(),
+    audio: makeAudioCatalogOptions(),
+    targetLatency: 100,
+    renderGroup: 1,
+    authInfo: { cat: "%c4m%" },
+  };
+
+  const declarations = buildPublisherTrackDeclarations(options);
+
+  assert.deepEqual(buildPublisherCatalog(options).tracks, [
+    declarations.audio,
+    declarations.video,
+    declarations.event,
+  ]);
+});
+
+// Tracks カードはトラック名が空でも、警告と並べて宣言を出し続ける。名前の検証
+// (draft-ietf-moq-msf-01 §5.2.3) は配信の直前 (buildPublisherCatalog) だけが行う
+test("buildPublisherTrackDeclarations: トラック名を検証せず、宣言だけを組み立てる", () => {
+  // 空名でも宣言は組み立てる。画面は「空です」の警告を出し、配信は開始しない
+  const emptyVideoName: PublisherCatalogOptions = {
+    video: { ...makeVideoCatalogOptions(), trackName: "" },
+    audio: makeAudioCatalogOptions(),
+  };
+  assert.equal(buildPublisherTrackDeclarations(emptyVideoName).video?.name, "");
+  assert.throws(
+    () => buildPublisherCatalog(emptyVideoName),
+    /track name must not be empty per draft-ietf-moq-msf-01 §5\.2\.3/,
+  );
+
+  // 同名でも宣言は組み立てる。depends には同じ名前が 2 つ載る
+  const duplicateNames: PublisherCatalogOptions = {
+    video: { ...makeVideoCatalogOptions(), trackName: "same" },
+    audio: { ...makeAudioCatalogOptions(), trackName: "same" },
+  };
+  assert.deepEqual(buildPublisherTrackDeclarations(duplicateNames).event.depends, ["same", "same"]);
+  assert.throws(
+    () => buildPublisherCatalog(duplicateNames),
+    /track names must be unique per namespace per draft-ietf-moq-msf-01 §5\.2\.3/,
+  );
+});
+
+// 広告しないトラックは catalog に載らないため、宣言も無い (null)。Tracks カードは行を
+// 描かず、上の Advertised の行が理由を出す。event timeline は常に載せるが、depends には
+// 実際に広告するメディアトラックの名前だけが残る
+test("buildPublisherTrackDeclarations: 配信しないトラックは null になり、depends から消える", () => {
+  const videoOnly = buildPublisherTrackDeclarations({ video: makeVideoCatalogOptions() });
+  assert.isNull(videoOnly.audio);
+  assert.deepEqual(videoOnly.event.depends, ["video"]);
+
+  const audioOnly = buildPublisherTrackDeclarations({ audio: makeAudioCatalogOptions() });
+  assert.isNull(audioOnly.video);
+  assert.deepEqual(audioOnly.event.depends, ["audio"]);
+
+  // どちらも配信しないときはメディアトラックの名前が無い (buildPublisherCatalog は throw する)
+  const none = buildPublisherTrackDeclarations({});
+  assert.isNull(none.audio);
+  assert.isNull(none.video);
+  assert.deepEqual(none.event.depends, []);
+});
+
+// Tracks カードの宣言は、下の Audio / Video / Catalog カードの設定から組み立てる。
+// 音声の samplerate / channelConfig だけは、実際に取れた形式が分かっていればそちらを使う
+// (utils/publishTracks.ts の resolveDeclarationAudioFormat)。マイクはデバイスが決めた形式を
+// 返すため、設定の Sample Rate / Channels と異なることがある
+test("buildPublisherTrackDeclarations: 画面の設定と実際に取れた音の形式を宣言に反映する", () => {
+  resetCatalogSettings();
+  try {
+    settings.resolution.value = "640x360";
+    settings.framerate.value = 15;
+    settings.bitrate.value = 1_000_000;
+    settings.audioBitrate.value = 96_000;
+    settings.targetLatency.value = 100;
+    settings.renderGroup.value = 1;
+    // Audio カードの Sample Rate / Channels (要求値)
+    const requested = {
+      sampleRate: settings.audioSampleRate.value,
+      channels: settings.audioChannels.value,
+    };
+
+    // まだ音声を取れていないときは要求値で出す
+    const beforeCapture = buildPublisherTrackDeclarations(
+      buildPublisherCatalogOptionsFromSettings(resolveDeclarationAudioFormat(null, requested)),
+    );
+    assert.equal(beforeCapture.audio?.samplerate, 48_000);
+    assert.equal(beforeCapture.audio?.channelConfig, "2");
+    assert.equal(beforeCapture.audio?.bitrate, 96_000);
+    // targetLatency / renderGroup は音声と映像の両方の宣言に載る (§5.2.8 / §5.2.11)
+    assert.equal(beforeCapture.audio?.targetLatency, 100);
+    assert.equal(beforeCapture.audio?.renderGroup, 1);
+    assert.equal(beforeCapture.video?.targetLatency, 100);
+    assert.equal(beforeCapture.video?.renderGroup, 1);
+    // 映像は Video カードの設定がそのまま載る
+    assert.equal(beforeCapture.video?.width, 640);
+    assert.equal(beforeCapture.video?.height, 360);
+    assert.equal(beforeCapture.video?.framerate, 15);
+    assert.equal(beforeCapture.video?.bitrate, 1_000_000);
+
+    // 実際に取れた形式が分かっているときはそちらを出す
+    const afterCapture = buildPublisherTrackDeclarations(
+      buildPublisherCatalogOptionsFromSettings(
+        resolveDeclarationAudioFormat({ sampleRate: 16_000, channels: 1 }, requested),
+      ),
+    );
+    assert.equal(afterCapture.audio?.samplerate, 16_000);
+    assert.equal(afterCapture.audio?.channelConfig, "1");
   } finally {
     resetCatalogSettings();
   }

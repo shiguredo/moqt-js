@@ -257,11 +257,24 @@ export function buildPublisherCatalogOptionsFromSettings(
 }
 
 /**
- * 配信する映像トラックと音声トラック、event timeline トラックの Catalog を組み立てる
+ * catalog に載せるトラックの宣言
  *
- * draft-ietf-moq-msf-01 §5.1 の full catalog を生成する。映像トラックと音声トラックは
- * どちらか一方だけでもよい (catalog は映像トラックを必須としない)。どちらも無い catalog は
- * 購読できる対象が無いため作らずに throw する。
+ * 配信で送る catalog の値そのもの。Tracks カード (接続設定) が「送る catalog の値」を
+ * 出すためにも使う。画面の表示と配信で送る内容がずれないよう、宣言の組み立ては
+ * `buildPublisherTrackDeclarations` の 1 か所に置く。
+ */
+export interface PublisherTrackDeclarations {
+  /** 音声トラックの宣言。音声を配信しないときは null */
+  audio: CatalogTrack | null;
+  /** 映像トラックの宣言。映像を配信しないときは null */
+  video: CatalogTrack | null;
+  /** event timeline トラックの宣言。audio / video 以外のデータを流す例として常に載せる */
+  event: CatalogTrack;
+}
+
+/**
+ * 配信する映像トラックと音声トラック、event timeline トラックの宣言を組み立てる
+ *
  * codec 文字列は映像が `getCatalogCodec`、音声が `getAudioEncoderConfig` を通し、
  * Encoder に渡す設定と同一の対応表を使う (Catalog の codec 誤記は購読側の Decoder
  * 設定を壊すため、対応表の二重管理を避ける)。
@@ -276,34 +289,27 @@ export function buildPublisherCatalogOptionsFromSettings(
  * targetLatency でなければならない MUST。§5.2.11: 同じ renderGroup の track は同時に
  * 描画する SHOULD。未指定のときはキーを載せない (§5.2.8: 宣言が無く isLive が true の
  * ときは購読側が遅延を選んでよい MAY のため、載せないことが購読側のフォールバックになる)。
- * 指定した値は有限数であること (renderGroup はさらに整数であること) を検証し、
- * そうでなければ throw する。非有限値は JSON で null になり、購読側が復号できなくなる。
+ * 指定した値が有限数であること (renderGroup はさらに整数であること) の検証は
+ * `buildPublisherCatalog` が行う。非有限値は JSON で null になり、購読側が復号できなくなる。
  *
  * event timeline トラックは audio / video 以外のデータを流す例として常に 1 本載せる。
  * packaging / role / mimeType / eventType は §5.2.5 / §8.2 の MUST を満たし、depends には
  * 同時に配信するメディアトラック名をすべて載せる。targetLatency / renderGroup は
  * メディアを描画するトラックではないため載せない。
  *
- * トラックは音声 → 映像 → event timeline の順に積む。画面 (Tracks カード) が音声と
- * 映像をこの順に並べるため、catalog をそのまま表示する Catalog パネルと並びを揃える。
- * 配列の順序に仕様上の意味は無い。
- * トラック名は空でなく、互いに異なることを検証する (§5.2.3)。
- *
  * authInfo は指定したときだけ、音声、映像、event timeline のすべての track に載せる
  * (§5.2.42)。視聴側は authInfo のある track の SUBSCRIBE にトークンを付ける (§11.4.1 /
  * §11.4.3)。
  *
- * ブラウザ API に依存しないため、送信した Catalog の内容はここで検証できる。
+ * 検証は行わない。トラック名が空でなく互いに異なること (§5.2.3) と、メディアトラックが
+ * 1 つも無い catalog を作らないことは `buildPublisherCatalog` が受け持つ。Tracks カードは
+ * 名前が不正な間も警告と並べて宣言を出し続けるため、ここで throw してはならない。
+ *
+ * ブラウザ API に依存しないため、送信する Catalog の内容はここで検証できる。
  */
-export function buildPublisherCatalog(options: PublisherCatalogOptions): Catalog {
-  const tracks: CatalogTrack[] = [];
-
-  // 非有限値は JSON.stringify が null に落とし、購読側の検証
-  // (src/msf/catalogTrackValidation.ts) で例外になる。画面と URL の設定は許可リストで
-  // 到達しないが、この純関数は直接呼べるため、符号化の前に拒否する。
-  // 検証は core と同じ関数を使い、メッセージと境界が 2 か所でずれないようにする
-  assertCatalogLatencyOptions(options);
-
+export function buildPublisherTrackDeclarations(
+  options: PublisherCatalogOptions,
+): PublisherTrackDeclarations {
   // exactOptionalPropertyTypes では optional なフィールドに undefined を渡せないため、
   // 指定がある項目だけを載せる。targetLatency の 0 ms と renderGroup の 0 は有効値である
   // ため、0 かどうかではなく指定の有無で判定する
@@ -315,48 +321,52 @@ export function buildPublisherCatalog(options: PublisherCatalogOptions): Catalog
   const authInfoFields: Pick<CatalogTrack, "authInfo"> =
     options.authInfo !== undefined ? { authInfo: options.authInfo } : {};
 
+  let audio: CatalogTrack | null = null;
   if (options.audio) {
-    const audio = options.audio;
-    tracks.push({
-      name: audio.trackName,
+    const audioOptions = options.audio;
+    audio = {
+      name: audioOptions.trackName,
       packaging: "loc",
       isLive: true,
       role: "audio",
-      codec: getAudioEncoderConfig(audio.codec, audio.bitrate, audio.sampleRate, audio.channels)
-        .codec,
-      bitrate: audio.bitrate,
-      samplerate: audio.sampleRate,
-      channelConfig: String(audio.channels),
+      codec: getAudioEncoderConfig(
+        audioOptions.codec,
+        audioOptions.bitrate,
+        audioOptions.sampleRate,
+        audioOptions.channels,
+      ).codec,
+      bitrate: audioOptions.bitrate,
+      samplerate: audioOptions.sampleRate,
+      channelConfig: String(audioOptions.channels),
       ...latencyFields,
       ...authInfoFields,
-    });
+    };
   }
 
+  let video: CatalogTrack | null = null;
   if (options.video) {
-    const video = options.video;
-    tracks.push({
-      name: video.trackName,
+    const videoOptions = options.video;
+    video = {
+      name: videoOptions.trackName,
       packaging: "loc",
       isLive: true,
       role: "video",
-      codec: getCatalogCodec(video.codec),
-      width: video.width,
-      height: video.height,
-      framerate: video.framerate,
-      bitrate: video.bitrate,
+      codec: getCatalogCodec(videoOptions.codec),
+      width: videoOptions.width,
+      height: videoOptions.height,
+      framerate: videoOptions.framerate,
+      bitrate: videoOptions.bitrate,
       ...latencyFields,
       ...authInfoFields,
-    });
-  }
-
-  if (tracks.length === 0) {
-    throw new Error("no track to publish: both video and audio are absent");
+    };
   }
 
   // event timeline トラック (§5.2.5 / §8.2)。depends は event timeline が対応する
-  // メディアトラック名で、ここでは上で積んだ audio / video の名前をそのまま使う
-  const depends = tracks.map((track) => track.name);
-  tracks.push({
+  // メディアトラック名で、ここでは上で組み立てた audio / video の名前をそのまま使う
+  const depends = [audio, video]
+    .filter((track): track is CatalogTrack => track !== null)
+    .map((track) => track.name);
+  const event: CatalogTrack = {
     name: EVENT_TRACK_NAME,
     packaging: "eventtimeline",
     isLive: true,
@@ -365,7 +375,40 @@ export function buildPublisherCatalog(options: PublisherCatalogOptions): Catalog
     mimeType: "application/json",
     depends,
     ...authInfoFields,
-  });
+  };
+  return { audio, video, event };
+}
+
+/**
+ * 配信する映像トラックと音声トラック、event timeline トラックの Catalog を組み立てる
+ *
+ * draft-ietf-moq-msf-01 §5.1 の full catalog を生成する。映像トラックと音声トラックは
+ * どちらか一方だけでもよい (catalog は映像トラックを必須としない)。どちらも無い catalog は
+ * 購読できる対象が無いため作らずに throw する。
+ *
+ * トラックは音声 → 映像 → event timeline の順に積む。画面 (Tracks カード) が音声と
+ * 映像をこの順に並べるため、catalog をそのまま表示する Catalog パネルと並びを揃える。
+ * 配列の順序に仕様上の意味は無い。
+ * トラック名は空でなく、互いに異なることを検証する (§5.2.3)。
+ *
+ * ブラウザ API に依存しないため、送信した Catalog の内容はここで検証できる。
+ */
+export function buildPublisherCatalog(options: PublisherCatalogOptions): Catalog {
+  // 非有限値は JSON.stringify が null に落とし、購読側の検証
+  // (src/msf/catalogTrackValidation.ts) で例外になる。画面と URL の設定は許可リストで
+  // 到達しないが、この純関数は直接呼べるため、符号化の前に拒否する。
+  // 検証は core と同じ関数を使い、メッセージと境界が 2 か所でずれないようにする
+  assertCatalogLatencyOptions(options);
+
+  const { audio, video, event } = buildPublisherTrackDeclarations(options);
+
+  // メディアトラック (映像 / 音声) が 1 つも無いときは catalog を作らない。event timeline の
+  // 宣言は常に組み立てるが、単独では購読できる対象が無い
+  if (audio === null && video === null) {
+    throw new Error("no track to publish: both video and audio are absent");
+  }
+
+  const tracks = [audio, video, event].filter((track): track is CatalogTrack => track !== null);
 
   // 空名と同名は購読側の catalog の検証 (decodeCatalogMessage) で初めて分かる。
   // 自分の catalog を自分で復号できなくなるため、送る前に拒否する
@@ -723,6 +766,8 @@ export function usePublisher() {
         }
       };
       startPublisherAudioMeter(generator.stream);
+      // ダミー音声は要求した形式で作るため、取れた形式は要求した値そのものになる
+      pub.audioFormat.value = requested;
       return requested;
     }
     if (source === "microphone") {
@@ -750,7 +795,10 @@ export function usePublisher() {
       pub.audioStream.value = stream;
       pub.audioStreamCleanup.value = cleanup;
       startPublisherAudioMeter(stream);
-      return resolveCapturedAudioFormat(track.getSettings(), requested);
+      // マイクはサンプルレートとチャンネル数をデバイスが決めるため、実際に取れた値を持つ
+      const captured = resolveCapturedAudioFormat(track.getSettings(), requested);
+      pub.audioFormat.value = captured;
+      return captured;
     }
     return null;
   }
@@ -889,6 +937,8 @@ export function usePublisher() {
     // メーターも止め、送った LOC Audio Level の表示も消す
     stopPublisherAudioMeter();
     pub.audioMeterLevel.value = null;
+    // 手放したストリームの形式を残さない。Tracks カードは接続設定の値で宣言を出す
+    pub.audioFormat.value = null;
     if (pub.audioStreamCleanup.value) {
       pub.audioStreamCleanup.value();
       pub.audioStreamCleanup.value = null;

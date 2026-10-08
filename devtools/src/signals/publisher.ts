@@ -11,6 +11,7 @@ import {
 } from "../utils/publishTimingStats";
 import type { AudioEncoderWrapper } from "../../../src/codec/AudioEncoder.ts";
 import { AudioLevelTimeline } from "../utils/audioLevelTimeline";
+import type { AudioFormat } from "../utils/microphone";
 
 // Publisher の状態
 export const pubSession = signal<Session | null>(null);
@@ -109,6 +110,12 @@ export const isPublishing = computed(
 );
 export const audioEncoder = signal<AudioEncoderWrapper | null>(null);
 export const audioStream = signal<MediaStream | null>(null);
+// 実際に取れた音声の形式 (サンプルレートとチャンネル数)。catalog の samplerate /
+// channelConfig と AudioEncoder の設定にはこの値を使う (マイクではデバイスが決めるため、
+// 接続設定の Sample Rate / Channels と異なることがある)。Tracks カードが宣言を出すときも
+// 同じ値を使い、まだ取れていない間 (null) は接続設定の値で代用する。音声のストリームを
+// 手放したら null に戻す
+export const audioFormat = signal<AudioFormat | null>(null);
 export const audioStreamCleanup = signal<(() => void) | null>(null);
 export const audioFrameReader = signal<ReadableStreamDefaultReader<AudioData> | null>(null);
 // 符号化へ渡した音声のサンプルの記録。送る Object の LOC Audio Level を求める

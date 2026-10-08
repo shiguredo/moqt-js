@@ -1,4 +1,5 @@
 import type { AudioSourceType, VideoSourceType } from "../types";
+import type { AudioFormat } from "./microphone";
 
 /**
  * 配信するトラックの名前と、catalog に載るかどうかの判定
@@ -83,4 +84,22 @@ export function resolveAudioAdvertisement(
     return { advertised: false, reason: "browser-unsupported" };
   }
   return { advertised: true };
+}
+
+/**
+ * Tracks カードに出す宣言に使う音声の形式を選ぶ
+ *
+ * catalog の `samplerate` / `channelConfig` には実際に取れた音の形式を使うため
+ * (utils/microphone.ts の `resolveCapturedAudioFormat`)、まだ音声を取れていない間は
+ * Audio カードの Sample Rate / Channels を要求値として出す。取れた形式が分かっている
+ * ときはそちらを優先し、宣言と実際に catalog へ載る値がずれないようにする。
+ *
+ * @param actual - 実際に取れた音の形式。まだ取れていないとき (音声を止めている間も含む) は null
+ * @param requested - Audio カードの Sample Rate / Channels から作った要求値
+ */
+export function resolveDeclarationAudioFormat(
+  actual: AudioFormat | null,
+  requested: AudioFormat,
+): AudioFormat {
+  return actual ?? requested;
 }

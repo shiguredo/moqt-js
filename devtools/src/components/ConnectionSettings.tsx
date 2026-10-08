@@ -3,10 +3,17 @@ import { signal } from "@preact/signals";
 import { useId } from "preact/hooks";
 import { isMediaStreamTrackProcessorAvailable } from "moqt-js";
 import * as settings from "../signals/connectionSettings";
+import * as pub from "../signals/publisher";
+import {
+  buildPublisherCatalogOptionsFromSettings,
+  buildPublisherTrackDeclarations,
+} from "../hooks/usePublisher";
 import { persistServerUrl, relayUriMemoryButtons } from "../utils/serverUrlStore";
 import { isConnectionSettingsOpen, toggleConnectionSettings } from "../signals/layout";
+import { TrackDeclaration } from "./TrackDeclaration";
 import {
   resolveAudioAdvertisement,
+  resolveDeclarationAudioFormat,
   resolveTrackNameProblem,
   resolveVideoAdvertisement,
   type TrackAdvertisement,
@@ -348,6 +355,15 @@ function formatTrackAdvertisement(advertisement: TrackAdvertisement): string {
     : "No (not available in this browser)";
 }
 
+// Tracks カードの宣言 (components/TrackDeclaration.tsx) で行にしないキー。上の Track Name の
+// 入力欄と Codec の選択欄が既に値を見せているため、同じキーを 2 度出さない。
+// catalog の codec 文字列 ("opus" / "vp09.00.10.08" など) は選択した codec と 1 対 1 で、
+// 符号化の設定と同一の対応表 (utils/codec.ts) が変換する
+const MEDIA_TRACK_CONTROL_KEYS = ["name", "role", "codec"] as const;
+
+// event timeline には codec が無く、代わりに Event Type の入力欄が eventType を見せる
+const EVENT_TRACK_CONTROL_KEYS = ["name", "role", "eventType"] as const;
+
 /**
  * c4m から取り込んだトークンのデコード結果
  *
@@ -581,6 +597,19 @@ export function ConnectionSettings() {
   );
   const videoAdvertisementText = formatTrackAdvertisement(videoAdvertisement);
   const audioAdvertisementText = formatTrackAdvertisement(audioAdvertisement);
+  // Tracks カードに出す catalog の宣言。下の Audio / Video / Catalog カードの設定から、
+  // 配信で送る catalog と同じ関数 (buildPublisherTrackDeclarations) で組み立てる。
+  // 音声の形式だけは、実際に取れた値が分かっていればそちらを使う
+  // (utils/publishTracks.ts の resolveDeclarationAudioFormat)
+  const declaredAudioFormat = audioAdvertisement.advertised
+    ? resolveDeclarationAudioFormat(pub.audioFormat.value, {
+        sampleRate: settings.audioSampleRate.value,
+        channels: settings.audioChannels.value,
+      })
+    : null;
+  const trackDeclarations = buildPublisherTrackDeclarations(
+    buildPublisherCatalogOptionsFromSettings(declaredAudioFormat),
+  );
   // 広告するトラックの名前だけを検証する。配信しないトラックの名前は catalog に出ないため、
   // 空でも同名でも配信の内容は変わらない (配信前の検証と同じ規則。utils/publishTracks.ts)
   const trackNameProblem = resolveTrackNameProblem([
@@ -998,7 +1027,10 @@ export function ConnectionSettings() {
                 <SettingsSubsection title="Tracks" />
                 {/* 配信するトラックの一覧。トラック名とコーデックは catalog のトラックの宣言で
                     あり、符号化の設定 (Video / Audio カード) とは分ける。Advertised は catalog に
-                    載せる予定を出し、配信を始めるまで確定しない要素は含めない */}
+                    載せる予定を出し、配信を始めるまで確定しない要素は含めない。
+                    各トラックの宣言の値 (packaging / isLive / bitrate / samplerate /
+                    channelConfig など) は下の Audio / Video / Catalog カードの設定から決まる
+                    ため、選択欄の下に行で出す (components/TrackDeclaration.tsx) */}
                 <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
                   {/* 音声トラック。画面の並びは Audio → Video で揃える */}
                   <div class="rounded border border-slate-200 px-3 py-3">
@@ -1055,6 +1087,13 @@ export function ConnectionSettings() {
                         </option>
                       ))}
                     </select>
+                    {/* 下の Audio カードの Bitrate / Sample Rate / Channels から決まる
+                        catalog の値。設定を変えるとここが追随する */}
+                    <TrackDeclaration
+                      track={trackDeclarations.audio}
+                      controlKeys={MEDIA_TRACK_CONTROL_KEYS}
+                      testIdPrefix="audio-track"
+                    />
                   </div>
                   {/* 映像トラック */}
                   <div class="rounded border border-slate-200 px-3 py-3">
@@ -1106,6 +1145,13 @@ export function ConnectionSettings() {
                       <option value="h264">H.264</option>
                       <option value="h265">H.265</option>
                     </select>
+                    {/* 下の Video カードの Resolution / Frame Rate / Bitrate から決まる
+                        catalog の値。設定を変えるとここが追随する */}
+                    <TrackDeclaration
+                      track={trackDeclarations.video}
+                      controlKeys={MEDIA_TRACK_CONTROL_KEYS}
+                      testIdPrefix="video-track"
+                    />
                   </div>
                   {/* event timeline トラック。audio / video 以外のデータを流す例で、
                       トラック名と eventType は devtools の取り決めで固定 */}
@@ -1136,6 +1182,13 @@ export function ConnectionSettings() {
                       value={MESSAGES_EVENT_TYPE}
                       readOnly
                       class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-slate-100 text-slate-500"
+                    />
+                    {/* 常に広告するトラック。depends は上の audio / video のトラック名で、
+                        映像や音声を広告しないときはその名前が消える */}
+                    <TrackDeclaration
+                      track={trackDeclarations.event}
+                      controlKeys={EVENT_TRACK_CONTROL_KEYS}
+                      testIdPrefix="event-track"
                     />
                   </div>
                 </div>
@@ -1390,6 +1443,7 @@ export function ConnectionSettings() {
                     </label>
                     <select
                       id="resolution"
+                      data-testid="resolution"
                       value={settings.resolution.value}
                       onChange={(e) => (settings.resolution.value = e.currentTarget.value)}
                       disabled={settings.settingsDisabled.value}
@@ -1408,6 +1462,7 @@ export function ConnectionSettings() {
                     </label>
                     <select
                       id="framerate"
+                      data-testid="framerate"
                       value={settings.framerate.value}
                       onChange={(e) => (settings.framerate.value = Number(e.currentTarget.value))}
                       disabled={settings.settingsDisabled.value}
@@ -1424,6 +1479,7 @@ export function ConnectionSettings() {
                     </label>
                     <select
                       id="bitrate"
+                      data-testid="video-bitrate"
                       value={settings.bitrate.value}
                       onChange={(e) => (settings.bitrate.value = Number(e.currentTarget.value))}
                       disabled={settings.settingsDisabled.value}

@@ -64,6 +64,12 @@
   - End Group (StartGroup + EndGroupDelta) が 2^64-1 を超える場合は、送信側が InvalidFilterError、受信側が PROTOCOL_VIOLATION で拒否する (従来どおり)
   - 旧 v21 のワイヤ形式で送受信していた moqt-js とは相互運用できない
   - @voluntas
+- [UPDATE] moqt-devtools の Tracks カードに、catalog に載せるトラックの宣言を全て出す
+  - 配信する音声 / 映像 / event timeline の各トラックに、catalog の値 (packaging / isLive / bitrate / samplerate / channelConfig / width / height / framerate / mimeType / depends / targetLatency / renderGroup / authInfo) を下の Audio / Video / Catalog カードの設定に追随して行で出す。宣言は配信で送る catalog と同じ関数 (`buildPublisherTrackDeclarations`) で組み立て、画面で見た値と実際に送る値がずれないようにする
+  - 音声の samplerate / channelConfig は、実際に取れた音の形式が分かっているとき (Preview / 配信中) はその値を出す。マイクはデバイスが決めた形式を返すため、Audio カードの Sample Rate / Channels と異なることがある
+  - 広告しないトラック (入力が None、音声を取り出せないブラウザ) は宣言を出さず、event timeline の depends からも消す
+  - Catalog パネルの depends / authInfo は JSON の表記で出し、Tracks カードの宣言の行と書式を揃える
+  - @voluntas
 - [UPDATE] moqt-devtools のフッターのバージョン表記を、実際にビルドした版が分かる表記にする
   - フッターは moqt-js の version (直近にリリースした版) を出していたため、develop のビルドでもリリース済みの版を名乗っていた。タグのビルドはタグ名、それ以外のビルドはブランチ名と短縮 SHA (例: `develop (fd3e318)`) を出す
   - moqt-js が SETUP に載せる MOQT_IMPLEMENTATION の値は変えない

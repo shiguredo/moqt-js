@@ -183,6 +183,8 @@ const PUBLISHER_COVERAGE: CoverageExpectation = {
     pubCurrentObjectId: "Object ID の採番の途中の値",
     audioEncoder: "音声のエンコーダの実体。音声の送信状態は audio に出す",
     audioStream: "音声の MediaStream の実体 (統計ではない)",
+    audioFormat:
+      "実際に取れた音の形式。要求値は audioSampleRateHz / audioChannels に、送った catalog の値は catalog に出る",
     audioStreamCleanup: "音声の後始末の実体 (統計ではない)",
     audioFrameReader: "音声の読み取りの実体 (統計ではない)",
     audioLevelTimeline: "LOC Audio Level の算出の実体。直近の値は audio.lastSentLevel に出す",

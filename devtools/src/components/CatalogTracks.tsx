@@ -1,15 +1,7 @@
 import type { CatalogTrack } from "moqt-js";
 import { useId, useState } from "preact/hooks";
 import { formatFullTrackName } from "../../../src/fullTrackName.ts";
-import { formatBitrate } from "../utils/logFormatters";
-
-/** catalog の値を表示用にする。bitrate は単位を付ける */
-function formatCatalogValue(key: string, value: unknown): string {
-  if (key === "bitrate" && typeof value === "number") {
-    return formatBitrate(value);
-  }
-  return String(value);
-}
+import { formatCatalogValue } from "../utils/catalogValue";
 
 /**
  * Track の Full Track Name を組み立てる (表示できないときは null)

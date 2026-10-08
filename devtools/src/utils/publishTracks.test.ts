@@ -2,6 +2,7 @@ import { test, assert } from "vite-plus/test";
 import {
   assertTrackNames,
   resolveAudioAdvertisement,
+  resolveDeclarationAudioFormat,
   resolveTrackNameProblem,
   resolveVideoAdvertisement,
 } from "./publishTracks";
@@ -81,4 +82,18 @@ test("resolveAudioAdvertisement: 入力が None と未対応ブラウザを区�
   // Chromium で入力があれば広告する
   assert.deepEqual(resolveAudioAdvertisement("dummy", true), { advertised: true });
   assert.deepEqual(resolveAudioAdvertisement("microphone", true), { advertised: true });
+});
+
+// catalog の samplerate / channelConfig には実際に取れた音の形式を使うため、Tracks カードも
+// 実際の値が分かっていればそちらを出す。まだ取れていない間 (null) は Audio カードの
+// Sample Rate / Channels を要求値として出す。画面の宣言と実際に載る値を一致させる規則
+test("resolveDeclarationAudioFormat: 実際に取れた形式を優先し、無ければ要求値を使う", () => {
+  const requested = { sampleRate: 48_000, channels: 2 };
+
+  // 音声をまだ取れていないときは要求値 (Audio カードの Sample Rate / Channels) をそのまま使う
+  assert.strictEqual(resolveDeclarationAudioFormat(null, requested), requested);
+
+  // マイクが決めた形式が要求値と異なるときは、実際に取れた値をそのまま使う
+  const captured = { sampleRate: 16_000, channels: 1 };
+  assert.strictEqual(resolveDeclarationAudioFormat(captured, requested), captured);
 });
