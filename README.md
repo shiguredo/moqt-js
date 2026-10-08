@@ -61,8 +61,8 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
 - 予約 namespace の送信拒否
   - 先頭フィールドが `.` で始まる Track Namespace (`.session` 含む) は publish / subscribe / fetch / trackStatus / subscribeNamespace / subscribeTracks / publishNamespace で送信前に拒否される
   - `.session` namespace と空 Track Name の組み合わせは DOES_NOT_EXIST 相当で拒否される
-- 接続の前に送信できる namespace かを検証する `validateTrackNamespaceForSend` を公開する (draft-ietf-moq-transport-22 §8.7 の 32 フィールド上限と §2.4.3 の予約 namespace)
-  - Full Track Name の 4,096 バイト上限は Track Name と合わせた長さで決まるため、Request の送信時に検証する
+- 接続の前に送信できる Track Namespace かを検証する `validateTrackNamespaceForSend` を公開する (draft-ietf-moq-transport-22 §8.7 の 32 フィールド上限・各フィールド 1 バイト以上・4,096 バイト上限と、§2.4.3 / §6.5 の予約 namespace)
+  - Full Track Name (Track Namespace と Track Name の合計) の 4,096 バイト上限は Track Name を含めて決まるため、Request の送信時に検証する
 
 #### Publisher
 

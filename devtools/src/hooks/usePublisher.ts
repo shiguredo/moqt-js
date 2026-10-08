@@ -1523,8 +1523,9 @@ export function usePublisher() {
       pub.httpVersion.value = null;
       settings.settingsDisabled.value = true;
 
-      // Namespace の欄は §8.8 の namespace-name 文字列で、解析できない値では接続に使う
-      // フィールド列が無い。入力した namespace と違う値へ繋がないよう、先に拒否する
+      // Namespace の欄は §8.8 の namespace-name 文字列で、解析できない値と送信できない値
+      // (§8.7 の構造の制約 / 予約 namespace) では接続に使うフィールド列が無い。入力した
+      // namespace と違う値へ繋がないよう、先に拒否する
       const namespaceArray = settings.requireConnectNamespace();
       const videoTrackNameValue = settings.videoTrackName.value;
       const codecValue = settings.codec.value;

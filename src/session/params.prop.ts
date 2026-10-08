@@ -363,6 +363,9 @@ const namespaceFieldArb: fc.Arbitrary<string> = fc.constantFrom(
 /** 予約 prefix を含まない Track Namespace のフィールド */
 const normalNamespaceFieldArb: fc.Arbitrary<string> = fc.constantFrom("a", "b", "ab", "");
 
+/** §8.7 の構造の制約を満たす (空でない) Track Namespace のフィールド */
+const nonEmptyNamespaceFieldArb: fc.Arbitrary<string> = fc.constantFrom("a", "b", "ab");
+
 /**
  * Message Parameter を encode / decode して round-trip させる
  *
@@ -1020,15 +1023,34 @@ test("validateNamespacePrefixUpdate: 共通 prefix を持つ既存 prefix があ
 // draft-ietf-moq-transport-22 §2.4.3 / §6.5 / §8.7
 // ============================================================================
 
-test("validateTrackNamespaceForSend: 予約 prefix でもフィールド数超過でもない場合は throw しない", () => {
+test("validateTrackNamespaceForSend: 構造の制約を満たし予約 prefix でもない場合は throw しない", () => {
   fc.assert(
     fc.property(
-      fc.array(normalNamespaceFieldArb, { maxLength: MAX_TRACK_NAMESPACE_FIELDS }),
+      fc.array(nonEmptyNamespaceFieldArb, { maxLength: MAX_TRACK_NAMESPACE_FIELDS }),
       optionalArbitrary(fc.string({ maxLength: 8 })),
       (namespace, trackName) => {
         validateTrackNamespaceForSend(namespace, trackName);
       },
     ),
+  );
+});
+
+test("validateTrackNamespaceForSend: 空のフィールドと 4,096 バイト超は常に throw する", () => {
+  // §8.7: "Each Track Namespace Field Value MUST contain at least one byte."
+  fc.assert(
+    fc.property(
+      fc.array(nonEmptyNamespaceFieldArb, { maxLength: MAX_TRACK_NAMESPACE_FIELDS - 1 }),
+      (fields) => {
+        assert.throws(() => validateTrackNamespaceForSend([...fields, ""]));
+        assert.throws(() => validateTrackNamespaceForSend(["", ...fields]));
+      },
+    ),
+  );
+  // §8.7: Track Namespace の合計 4,096 バイト上限
+  fc.assert(
+    fc.property(fc.integer({ min: 1, max: 64 }), (extra) => {
+      assert.throws(() => validateTrackNamespaceForSend(["a".repeat(4096 + extra)]));
+    }),
   );
 });
 
@@ -1059,7 +1081,7 @@ test("validateTrackNamespaceForSend: 32 フィールドは throw せず 33 フ�
 test("validateTrackNamespaceForSend: 予約 prefix の判定は先頭フィールドのみを見る", () => {
   fc.assert(
     fc.property(
-      fc.array(normalNamespaceFieldArb, { maxLength: MAX_TRACK_NAMESPACE_FIELDS - 2 }),
+      fc.array(nonEmptyNamespaceFieldArb, { maxLength: MAX_TRACK_NAMESPACE_FIELDS - 2 }),
       fc.constantFrom(".", ".session", ".foo"),
       (rest, reserved) => {
         // 2 番目以降に予約 prefix があっても先頭が通常なら送信できる

@@ -215,8 +215,10 @@ export function decodeTrackNamespace(data: Uint8Array, offset = 0): [TrackNamesp
  * draft-ietf-moq-transport-22 §8.7 (Track Namespace Structure):
  * Track Namespace は最大 32 フィールド・最大 4,096 バイト。
  * 各フィールドは 1 バイト以上。
+ *
+ * 配列は読むだけなので readonly で受ける (送信前の検証からも呼ばれる)。
  */
-export function createTrackNamespace(parts: string[]): TrackNamespace {
+export function createTrackNamespace(parts: readonly string[]): TrackNamespace {
   const encoder = new TextEncoder();
   const tuple = parts.map((p) => encoder.encode(p));
   assertTrackNamespaceTuple(tuple);

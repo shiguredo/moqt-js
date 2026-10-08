@@ -18,6 +18,7 @@ import {
   extractNewGroupRequest,
   matchNamespacePrefix,
   namespacePrefixesOverlap,
+  validateTrackNamespaceForSend,
 } from "./params";
 import { InvalidFilterError, ProtocolViolationError } from "../error";
 import { MAX_VARINT, encodeVarint } from "../varint";
@@ -568,4 +569,61 @@ test("namespacePrefixesOverlap: §2.4.2 の例で sub-prefix の関係を判定�
   assert.isFalse(namespacePrefixesOverlap(["example.com", "123"], ["example.net", "123"]));
   // 空の prefix はすべての名前空間と共通 prefix を持つ
   assert.isTrue(namespacePrefixesOverlap([], ["foo", "bar"]));
+});
+
+// ============================================================================
+// Track Namespace 送信検証（draft-ietf-moq-transport-22 §8.7 / §2.4.3 / §6.5）
+// ============================================================================
+
+// §8.7 の構造の制約は送信時のエンコードと同じ実装で判定する。境界値 (32/33 フィールド、
+// 4,096/4,097 バイト) の throw する / しないは PBT (params.prop.ts) が担うため、ここでは
+// メッセージまで固定する error path と、公開 API の契約を確かめる
+test("validateTrackNamespaceForSend: §8.7 の構造の制約を送信前のメッセージで拒否する", () => {
+  // 0 フィールドと 32 フィールドは §2.4.1 が許す
+  validateTrackNamespaceForSend([]);
+  validateTrackNamespaceForSend(Array.from({ length: 32 }, () => "n"));
+
+  // 33 フィールド以上
+  assert.throws(
+    () => validateTrackNamespaceForSend(Array.from({ length: 33 }, () => "n")),
+    /track namespace fields exceeds maximum: 33 > 32/,
+  );
+  // 空のフィールド ("Each Track Namespace Field Value MUST contain at least one byte")
+  assert.throws(
+    () => validateTrackNamespaceForSend(["live", ""]),
+    /track namespace field length is zero/,
+  );
+  // 合計 4,096 バイト超 (namespace 単体の上限)
+  assert.throws(
+    () => validateTrackNamespaceForSend(["a".repeat(4097)]),
+    /track namespace exceeds maximum size: 4097 > 4096/,
+  );
+  // 4,096 バイトちょうどは許容される
+  validateTrackNamespaceForSend(["a".repeat(4096)]);
+});
+
+// §2.4.3 / §6.5 の予約 namespace は、先頭フィールドだけを見て拒否する。判定は
+// 先頭フィールドが "." で始まる値、"." 単体、".session" で分かれる
+test("validateTrackNamespaceForSend: 予約 namespace を理由ごとのメッセージで拒否する", () => {
+  assert.throws(
+    () => validateTrackNamespaceForSend([".session"]),
+    /session-level namespace \.session is reserved for the MOQT implementation/,
+  );
+  // §6.5: .session と空 Track Name の組み合わせは DOES_NOT_EXIST
+  assert.throws(
+    () => validateTrackNamespaceForSend([".session"], ""),
+    /track with \.session namespace and empty track name does not exist \(DOES_NOT_EXIST\)/,
+  );
+  // §2.4.3: 先頭フィールドが "." 単体の namespace は IANA 登録でも使えない
+  assert.throws(
+    () => validateTrackNamespaceForSend(["."]),
+    /track namespace "\." must not be used for any purpose \(DOES_NOT_EXIST\)/,
+  );
+  // 先頭フィールドが "." で始まる他の値は IANA 登録がない限り使えない
+  assert.throws(
+    () => validateTrackNamespaceForSend([".other"]),
+    /reserved namespace prefix \.other is not allowed \(MUST NOT be used without IANA registration\)/,
+  );
+  // 予約の判定は先頭フィールドだけを見る (§2.4.3)
+  validateTrackNamespaceForSend(["live", ".session"]);
 });

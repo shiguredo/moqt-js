@@ -989,25 +989,23 @@ test("namespaceProblem: 33 フィールドの Namespace では理由を出して
   resetMsfFragmentSettings();
 });
 
-// devtools はリポジトリ内で公開 API を使う利用者である。予約 namespace と 32 フィールド上限の
-// 検証を `src/index.ts` の公開リストから取り出して実行できることを固定する (境界値と error path
-// の意味論は src/session/params.prop.ts が担う)
-test("公開 API の validateTrackNamespaceForSend で送信できない namespace を検証できる", () => {
+// 32 フィールド (上限ちょうど) は接続に使える。devtools の配線が上限を過剰に拒否しないことを固定する
+test("namespaceProblem: 32 フィールドの Namespace は接続に使える", () => {
+  resetMsfFragmentSettings();
+  namespace.value = Array.from({ length: 32 }, (_value, index) => `n${index}`).join("-");
+
+  assert.equal(namespaceProblem.value, null);
+  assert.equal(requireConnectNamespace().length, 32);
+
+  resetMsfFragmentSettings();
+});
+
+// devtools はリポジトリ内で公開 API を使う利用者である。`src/index.ts` の公開リストから検証関数を
+// 取り出して実行できることを固定する (境界値・error path・メッセージの意味論は src/session/params.test.ts
+// と src/session/params.prop.ts が担う)
+test("公開 API の validateTrackNamespaceForSend を実行できる", () => {
   assert.doesNotThrow(() => validateTrackNamespaceForSend(["15551", "spam"]));
-  // 0 フィールドの Track Namespace は §2.4.1 が許す
-  assert.doesNotThrow(() => validateTrackNamespaceForSend([]));
-  assert.throws(
-    () => validateTrackNamespaceForSend([".session"]),
-    /session-level namespace \.session is reserved/,
-  );
-  assert.throws(
-    () => validateTrackNamespaceForSend([".other"]),
-    /reserved namespace prefix \.other is not allowed/,
-  );
-  assert.throws(
-    () => validateTrackNamespaceForSend(Array.from({ length: 33 }, () => "n")),
-    /track namespace fields exceeds maximum: 33 > 32/,
-  );
+  assert.throws(() => validateTrackNamespaceForSend([".session"]), /reserved/);
 });
 
 // --- msf fragment の namespace ---
