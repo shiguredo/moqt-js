@@ -14,7 +14,7 @@
 - [CHANGE] moqt-devtools の Namespace の表記を draft-ietf-moq-transport-22 §8.8 の namespace-name 文字列に揃える
   - 欄は Track Namespace のフィールドを `-` で並べ、literal で書けない byte を `.` + 小文字 16 進 2 桁で書く (例: `moqt-devtools-a1B2c3D4e5F6g7H8`)。`/` 区切りは廃止する (後方互換なし)。`/` を含む旧 URL の `namespace` クエリは §8.8 の表記として読めない値になり、接続に使わない。`/` を含まない旧 URL でも `-` はフィールドの区切りとして読むため、`-` を含む値は別の namespace になる (区切りが変わったことは検出できない)
   - msf fragment の namespace を欄へ反映するときも同じ表記で組み立て直す。フィールド自身に `-` や `/` を含む namespace でも、欄の文字列からフィールド列を復元できるようになる
-  - 欄が §8.8 の表記として読めない間は、解析の失敗理由を欄に出して配信 / 購読の開始を拒否する (入力した namespace と違う namespace へ繋がない)。Copy URL は namespace を常に載せ、空 (0 フィールド) も指定として復元する
+  - 欄が §8.8 の表記として読めない間は、解析の失敗理由を欄に出して配信 / 購読の開始を拒否する (入力した namespace と違う namespace へ繋がない)。§8.7 の 32 フィールド上限と §2.4.3 の予約 namespace も、ライブラリの送信時の検証を共有して接続の前に同じように拒否する。Full Track Name の 4,096 バイト上限は Track Name と合わせた長さで決まり、購読では catalog から届くまで Track Name が分からないため、ライブラリの送信時検証のままにする。Copy URL は namespace を常に載せ、空 (0 フィールド) も指定として復元する
   - @voluntas
 - [CHANGE] 接続時に提示するプロトコル識別子を moqt-22 にする
   - draft-ietf-moq-transport-22 §6.2 (Session establishment) は、ドラフト版の識別子を「"moqt-" にドラフト番号を付けたもの」と定める。実装が準拠するドラフトは draft-22 であるため、WebTransport の WT-Available-Protocols に `moqt-22` を提示する (従来は `moqt-21`)
@@ -89,6 +89,11 @@
   - §9.20.2 (Allowed Parameters By Control Message) が廃止され、各制御メッセージ節が許可パラメータを列挙するようになったため、パラメータ節の番号が 1 つ繰り下がった (v21 §9.20.3〜§9.20.22 → v22 §9.20.2〜§9.20.21)
   - FILL_PARAMETERS の内側の一覧は Table 6 から Table 7 になった
   - コメントのみの変更で、挙動は変えない
+  - @voluntas
+- [ADD] `validateTrackNamespaceForSend` を公開し、接続の前に送信できる namespace を検証できるようにする
+  - draft-ietf-moq-transport-22 §8.7 の 32 フィールド上限と §2.4.3 の予約 namespace (先頭フィールドが `.` で始まる値、`.session` を含む) を、Request を送る前に検証できる。判定は Request の送信時に走る検証と同じ関数で、規則が 2 か所に分かれない
+  - 失敗は同期の `Error` になる (アプリケーションの入力ミスとして扱い、セッションは閉じない)。Full Track Name の 4,096 バイト上限は Track Name と合わせた長さで決まるため、送信時の検証のままにする
+  - moqt-devtools はこの公開 API を接続前の検証に使い、Namespace の欄に理由を出して配信 / 購読の開始を拒否する
   - @voluntas
 - [ADD] `github:` の git 依存として取り込んだときに `dist/` をビルドして使えるようにする
   - `files` は `dist` のみで `dist/` は git 管理外のため、git から取得したツリーには `exports` が指す `dist/index.js` が無く import できなかった。`prepare` で `vp pack` を実行し、npm の公開版では追えない `develop` の変更を `github:shiguredo/moqt-js#develop` の形で取り込めるようにする

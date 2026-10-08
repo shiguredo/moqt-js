@@ -287,6 +287,8 @@ interface MoqtObject {
 - `subscribeNamespace()` は専用双方向ストリームを別実装で開き、`REQUEST_OK` の後も `NAMESPACE` / `NAMESPACE_DONE` を受け続ける
 - `subscribeTracks()` も専用双方向ストリームを別実装で開き、`REQUEST_OK` の後は prefix に一致する `PUBLISH` / `PUBLISH_SKIPPED` を受け続ける
 - `PUBLISH_NAMESPACE_DONE` は draft-17 で削除されたため、公開終了はローカル状態の cleanup のみで表現している
+- 接続の前に `validateTrackNamespaceForSend(namespace, trackName?)` で送信できない namespace を検証できる。33 フィールド以上 (§8.7 の上限は 32)、先頭フィールドが `.` で始まる予約 namespace (§2.4.3)、`.session` と空 Track Name の組み合わせ (§2.4.3 の DOES_NOT_EXIST 相当) を拒否する
+  - Request の送信時にも同じ検証が走り、失敗は同期の `Error` になる (アプリケーションの入力ミスとして扱い、セッションは閉じない)。Full Track Name の 4,096 バイト上限は Track Name と合わせた長さで決まるため、送信時に検証する
 
 ---
 

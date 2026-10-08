@@ -852,9 +852,8 @@ export function ConnectionSettings() {
                 settings.namespaceLocked.value ? "bg-slate-100 text-slate-500" : ""
               }`}
             />
-            {/* §8.8 の namespace-name 文字列として読めない値は、接続に使うフィールド列へ
-                分解できない。理由 (どの位置のどの文字が規則に合わないか) をそのまま出し、
-                配信 / 購読の開始は requireConnectNamespace が同じ理由で拒否する */}
+            {/* 接続に使えない値は、理由 (読めない位置と文字、予約 namespace、フィールド数) を
+                そのまま出す。配信 / 購読の開始は requireConnectNamespace が同じ理由で拒否する */}
             {settings.namespaceProblem.value !== null && (
               <p class="mt-1 text-xs text-red-600" data-testid="namespace-warning">
                 {settings.namespaceProblem.value}

@@ -61,6 +61,8 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
 - 予約 namespace の送信拒否
   - 先頭フィールドが `.` で始まる Track Namespace (`.session` 含む) は publish / subscribe / fetch / trackStatus / subscribeNamespace / subscribeTracks / publishNamespace で送信前に拒否される
   - `.session` namespace と空 Track Name の組み合わせは DOES_NOT_EXIST 相当で拒否される
+- 接続の前に送信できる namespace かを検証する `validateTrackNamespaceForSend` を公開する (draft-ietf-moq-transport-22 §8.7 の 32 フィールド上限と §2.4.3 の予約 namespace)
+  - Full Track Name の 4,096 バイト上限は Track Name と合わせた長さで決まるため、Request の送信時に検証する
 
 #### Publisher
 
@@ -424,7 +426,7 @@ moqt-js を利用した MOQT の動作確認ツールです。
 - 自己署名証明書のハッシュ指定
 - Authorization Token の指定 (MSF URL の c4m パラメータ対応)
 - MOQT URI の `#msf:` fragment を URI Fragment 欄へ映して表示し、namespace の固定と c4m の track name の反映を行う
-- Namespace の指定 (draft-ietf-moq-transport-22 §8.8 の namespace-name 文字列。フィールドを `-` で並べ、literal で書けない byte は `.HH`。読めない値では理由を出して配信 / 購読を拒否する)
+- Namespace の指定 (draft-ietf-moq-transport-22 §8.8 の namespace-name 文字列。フィールドを `-` で並べ、literal で書けない byte は `.HH`。読めない値・予約 namespace・32 フィールド超では理由を出して配信 / 購読を拒否する)
 - c4m のトークンのデコード結果 (クレームと moqt スコープ) を Authorization Token の欄に表示する
 - c4m の取り込みを解除したときは、moqt-js が SETUP に載せる MOQT URI の c4m も取り除く
 - WebCodecs Dedicated Worker 対応
