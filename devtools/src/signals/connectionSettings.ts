@@ -60,9 +60,10 @@ const fragmentFromRelayUri = signal(false);
  * Namespace の初期値
  *
  * draft-ietf-moq-transport-22 §8.8 がログ等の用途で RECOMMENDED とする namespace-name
- * 文字列 (`-` 区切り) で持つ。複数の devtools が同じ relay に繋がっても namespace が
- * 衝突しないよう、ページごとにランダムな接尾辞を付ける。共有するときは Copy URL や
- * Save で持ち出す
+ * 文字列 (`-` 区切り、literal で書けない byte は `.HH`。§8.8 は draft のため改版で
+ * 規則と節番号が変わる可能性がある) で持つ。複数の devtools が同じ relay に繋がっても
+ * namespace が衝突しないよう、ページごとにランダムな接尾辞を付ける。共有するときは
+ * Copy URL で持ち出す (Save が覚えるのは MOQT URI と fragment だけ)
  */
 export const namespace = signal(`moqt-devtools-${randomNamespaceSuffix()}`);
 /**
@@ -71,7 +72,8 @@ export const namespace = signal(`moqt-devtools-${randomNamespaceSuffix()}`);
  * MOQT URI / URI Fragment の入力の中の msf fragment から導出する (refreshMsfFragmentSettings)。
  * null は msf fragment が無い状態を表す。値がある間は Namespace の欄を編集できず、接続には
  * このフィールド列をそのまま使う (msf fragment の namespace をユーザーの編集で変えて、
- * 認可された namespace から外れないようにする)。
+ * 認可された namespace から外れないようにする)。各フィールドは §8.7 が 1 バイト以上を
+ * MUST とするため、空のフィールドを含む fragment は解析できない値として扱う。
  */
 const msfNamespaceFields = signal<string[] | null>(null);
 /**
@@ -80,47 +82,39 @@ const msfNamespaceFields = signal<string[] | null>(null);
  * true の間は Connection Settings の Namespace 欄を読み取り専用にする
  */
 export const namespaceLocked = computed(() => msfNamespaceFields.value !== null);
-// Namespace の欄の値を Track Namespace のフィールドへ分解したもの。
-// 欄は draft-ietf-moq-transport-22 §8.8 の namespace-name 文字列 (`-` 区切り、literal で
-// 書けない byte は `.HH`) であり、接続処理と画面表示 (Full Track Name の組み立て) が
-// 同じ分解を使う。msf fragment があるときはそのフィールド列をそのまま使う (欄を編集
-// できないため、表示から復元する必要が無い)。
+// Namespace の欄の値を Track Namespace のフィールドへ分解したもの (画面表示用)。
+// 欄は §8.8 の namespace-name 文字列 (`-` 区切り、literal で書けない byte は `.HH`) で、
+// 表示 (Full Track Name の組み立て) は解析できない値でも壊さないよう空列にする。
+// 接続に使うフィールド列は解析の失敗を投げる requireConnectNamespace が返す。
+// msf fragment があるときは、その fragment を解析したフィールド列をそのまま使う (欄は
+// 読み取り専用であり、表示から復元する必要が無い)
 export const namespaceArray = computed(() => {
   const msfFields = msfNamespaceFields.value;
   if (msfFields !== null) {
-    // msf fragment が空のフィールドを含むときは落とす (接続へ空のフィールドを渡さない)
-    return msfFields.filter((field) => field.length > 0);
+    return msfFields;
   }
   try {
     return parseTrackNamespace(namespace.value);
   } catch {
-    // 解析できない値では接続に使えるフィールド列が無い。画面の警告 (namespaceProblem) が
-    // 入力を示し、接続に使う値 (resolveConnectNamespace) の要求が開始を拒否する
     return [];
   }
 });
 /**
- * Namespace の欄の問題
+ * Namespace の欄の値が §8.8 の namespace-name 文字列として読めない理由 (読めるときは null)
  *
- * 現状は §8.8 の namespace-name 文字列として解析できない場合だけを表す
+ * 読めない間は接続に使うフィールド列が無いため、欄の警告に出す。理由は解析のエラー
+ * メッセージ (どの位置のどの文字が規則に合わないか) をそのまま使い、開始時の拒否
+ * (requireConnectNamespace) と同じ文言にする
  */
-export type NamespaceProblem = "invalid";
-/**
- * Namespace の欄の値が §8.8 の namespace-name 文字列として読めないかどうか
- *
- * 読めない間は namespaceArray が空になり接続に使うフィールドが無いため、欄の警告に出す。
- * msf fragment が namespace を決めている間は欄を編集できず、接続には parse 済みの
- * フィールド列を使うため問題にしない
- */
-export const namespaceProblem = computed<NamespaceProblem | null>(() => {
+export const namespaceProblem = computed<string | null>(() => {
   if (namespaceLocked.value) {
     return null;
   }
   try {
     parseTrackNamespace(namespace.value);
     return null;
-  } catch {
-    return "invalid";
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
   }
 });
 /**
@@ -133,7 +127,7 @@ export const namespaceProblem = computed<NamespaceProblem | null>(() => {
  *
  * @throws Error Namespace の欄の値が §8.8 の namespace-name 文字列として読めないとき
  */
-export function resolveConnectNamespace(): string[] {
+export function requireConnectNamespace(): string[] {
   if (namespaceLocked.value) {
     // msf fragment が決めたフィールド列をそのまま使う (欄の文字列は編集できない)
     return namespaceArray.value;
@@ -452,22 +446,8 @@ export function refreshMsfFragmentSettings(): void {
   msfNamespaceFields.value = parsed.trackNamespace;
   // Namespace の欄と Copy for LLM / Copy URL の表示にも msf fragment の値を出す。
   // 欄は §8.8 の namespace-name 文字列なので、parse 済みのフィールド列から組み立て直す
-  namespace.value = formatNamespaceInput(parsed.trackNamespace);
-}
-
-/**
- * Track Namespace のフィールド列を Namespace の欄の文字列へ組み立てる
- *
- * 空のフィールド (§8.7 が 1 バイト以上を MUST とする値) を含む msf fragment では
- * §8.8 の表記にできないため、"-" で並べただけの文字列にする。この場合も接続には
- * parse 済みのフィールド列を使う (欄は固定され、ユーザーは編集できない)
- */
-function formatNamespaceInput(fields: readonly string[]): string {
-  try {
-    return formatTrackNamespace(fields);
-  } catch {
-    return fields.join("-");
-  }
+  // (parseMsfFragmentFromInput は空のフィールドを拒否するため、ここで失敗しない)
+  namespace.value = formatTrackNamespace(parsed.trackNamespace);
 }
 
 /**
@@ -724,9 +704,10 @@ function buildQueryParams(targetMode: DevtoolsMode): URLSearchParams {
   if (fragment.value) {
     params.set("fragment", fragment.value);
   }
-  if (namespace.value) {
-    params.set("namespace", namespace.value);
-  }
+  // namespace は空 (0 フィールド) も値として書き出す。初期値がページごとのランダム値で、
+  // 空にした状態は §2.4.1 が許す 0 フィールドの指定であるため、省くと共有 URL を開いた
+  // 相手が別の namespace へ繋ぐことになる
+  params.set("namespace", namespace.value);
   // トラック名は映像と音声で別のキーにする。旧 URL の trackName は映像トラック名として
   // 読むだけにし (initFromUrl)、書き出しは videoTrackName / audioTrackName にする
   if (videoTrackName.value) {
@@ -1091,9 +1072,11 @@ export function initFromUrl(search: string): void {
   const fragmentParam = params.get("fragment");
   splitRelayUriParams(urlParam, fragmentParam);
 
+  // namespace は空文字列 (0 フィールド) も指定として反映する (buildQueryParams が常に
+  // 書き出すため、値の有無ではなく key の有無で判定する)
   const namespaceParam = params.get("namespace");
-  if (namespaceParam) {
-    namespace.value = namespaceParam;
+  if (params.has("namespace")) {
+    namespace.value = namespaceParam ?? "";
   }
 
   // msf fragment の namespace は namespace クエリより優先する (URL の msf fragment が

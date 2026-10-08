@@ -31,7 +31,7 @@ import {
   namespaceProblem,
   refreshMsfFragmentSettings,
   renderGroup,
-  resolveConnectNamespace,
+  requireConnectNamespace,
   RENDER_GROUP_OPTIONS,
   resolveOptionNumber,
   targetLatency,
@@ -918,16 +918,20 @@ test("namespaceArray: 空の Namespace は 0 フィールドにする", () => {
 });
 
 // §8.8 の namespace-name 文字列として読めない値では接続に使うフィールド列が無いことを、
-// 画面の警告 (namespaceProblem) と接続に使う値の要求 (resolveConnectNamespace) で示す
-test("namespaceProblem: 解析できない Namespace では invalid になり接続を拒否する", () => {
+// 画面の警告 (namespaceProblem) と接続に使う値の要求 (requireConnectNamespace) で示す。
+// 警告の文言は解析の失敗理由 (位置と文字) をそのまま使う
+test("namespaceProblem: 解析できない Namespace では理由を出して接続を拒否する", () => {
   resetMsfFragmentSettings();
-  // 旧表記の "/" は literal でも percent-encoding でもない
+  // 旧表記の "/" は literal でもエスケープでもない
   namespace.value = "moqt/devtools/a1B2c3D4e5F6g7H8";
 
-  assert.equal(namespaceProblem.value, "invalid");
+  assert.match(
+    namespaceProblem.value ?? "",
+    /character "\/" in track namespace field at index 0 is not in \[A-Za-z0-9_\]/,
+  );
   assert.deepEqual(namespaceArray.value, []);
   assert.throws(
-    () => resolveConnectNamespace(),
+    () => requireConnectNamespace(),
     /character "\/" in track namespace field at index 0 is not in \[A-Za-z0-9_\]/,
   );
 
@@ -935,12 +939,27 @@ test("namespaceProblem: 解析できない Namespace では invalid になり接
 });
 
 // 解析できる値では namespaceProblem が null になり、接続に使うフィールド列が返る
-test("resolveConnectNamespace: 解析できる Namespace ではフィールド列を返す", () => {
+test("requireConnectNamespace: 解析できる Namespace ではフィールド列を返す", () => {
   resetMsfFragmentSettings();
   namespace.value = "15551-spam";
 
   assert.equal(namespaceProblem.value, null);
-  assert.deepEqual(resolveConnectNamespace(), ["15551", "spam"]);
+  assert.deepEqual(requireConnectNamespace(), ["15551", "spam"]);
+
+  resetMsfFragmentSettings();
+});
+
+// 空のフィールド (§8.7 違反) は末尾の区切りとしても表せない
+test("namespaceProblem: 空のフィールドを含む Namespace では理由を出して接続を拒否する", () => {
+  resetMsfFragmentSettings();
+  namespace.value = "15551--spam";
+
+  assert.match(namespaceProblem.value ?? "", /track namespace field at index 1 must not be empty/);
+  assert.deepEqual(namespaceArray.value, []);
+  assert.throws(
+    () => requireConnectNamespace(),
+    /track namespace field at index 1 must not be empty/,
+  );
 
   resetMsfFragmentSettings();
 });
@@ -991,8 +1010,8 @@ test("refreshMsfFragmentSettings: msf fragment が無くなると固定を解除
   resetMsfFragmentSettings();
 });
 
-// namespace フィールドの percent-encoding (%11.1.2 の `.HH`) を decode し、欄へは §8.8 の
-// 表記 (`-` 区切り、literal で書けない byte は `.HH`) で組み立て直して反映する
+// namespace フィールドの percent-encoding (msf fragment の §11.1.2 の `.HH`) を decode し、
+// 欄へは §8.8 の表記 (`-` 区切り、literal で書けない byte は `.HH`) で組み立て直して反映する
 test("refreshMsfFragmentSettings: percent-encoded な namespace フィールドを decode する", () => {
   resetMsfFragmentSettings();
   url.value = "moqt://sora-moq.example/#msf:a.2db-c--video";
@@ -1025,20 +1044,23 @@ test("refreshMsfFragmentSettings: フィールドに / を含む namespace で�
   resetMsfFragmentSettings();
 });
 
-// §8.7 に反する空のフィールドを含む msf fragment は §8.8 の表記にできない。接続には
-// parse 済みのフィールド列を使い、欄には "-" で並べた値を出す (欄は固定され編集できない)
-test("refreshMsfFragmentSettings: 空のフィールドを含む msf fragment でも接続のフィールド列を保つ", () => {
+// §8.7 に反する空のフィールドを含む msf fragment は §8.8 の表記にできないため、解析できない
+// 値として扱う (固定しない)。欄は直前の値を保ち、ユーザーが編集できる状態のままにする
+test("refreshMsfFragmentSettings: 空のフィールドを含む msf fragment では固定しない", () => {
   resetMsfFragmentSettings();
   url.value = "moqt://sora-moq.example/#msf:-x--catalog";
 
   refreshMsfFragmentSettings();
 
-  assert.isTrue(namespaceLocked.value);
-  assert.equal(namespace.value, "-x");
+  assert.isFalse(namespaceLocked.value);
+  assert.equal(namespace.value, INITIAL_NAMESPACE);
   assert.equal(namespaceProblem.value, null);
-  assert.deepEqual(namespaceArray.value, ["x"]);
-  // 欄の文字列は §8.8 の表記として読めないが、接続には parse 済みのフィールド列を使う
-  assert.deepEqual(resolveConnectNamespace(), ["x"]);
+  // 欄の初期値 (moqt-devtools-{16 文字}) はそのまま 3 フィールドとして読める
+  assert.deepEqual(namespaceArray.value, [
+    "moqt",
+    "devtools",
+    INITIAL_NAMESPACE.replace("moqt-devtools-", ""),
+  ]);
   resetMsfFragmentSettings();
 });
 
@@ -1082,8 +1104,49 @@ test("initFromUrl: / 区切りの namespace クエリは警告を出して接続
   initFromUrl(params.toString());
 
   assert.equal(namespace.value, "moqt/devtools/a1B2c3D4e5F6g7H8");
-  assert.equal(namespaceProblem.value, "invalid");
+  assert.match(namespaceProblem.value ?? "", /character "\/" in track namespace field at index 0/);
   assert.deepEqual(namespaceArray.value, []);
+  resetMsfFragmentSettings();
+});
+
+// 旧 URL ( "/" 区切り) の値でも "/" を含まなければ §8.8 の表記として読めるため、`-` が
+// フィールドの区切りとして読まれる。区切りが変わったことは検出できない (後方互換なし)
+test("initFromUrl: - を含む旧 URL の namespace は - 区切りとして読む", () => {
+  resetMsfFragmentSettings();
+  const params = new URLSearchParams();
+  params.set("namespace", "spam-egg");
+
+  initFromUrl(params.toString());
+
+  assert.equal(namespaceProblem.value, null);
+  assert.deepEqual(namespaceArray.value, ["spam", "egg"]);
+  resetMsfFragmentSettings();
+});
+
+// namespace は Copy URL のクエリへ常に書き出し、開いた URL から同じ値へ戻す。空 (0 フィールド) も
+// §2.4.1 が許す指定であるため、初期値のランダム値へ戻さず指定どおりに復元する
+test("buildQueryString / initFromUrl: namespace を URL で往復できる", () => {
+  resetMsfFragmentSettings();
+  namespace.value = "15551-spam";
+  const query = buildQueryString();
+  assert.equal(new URLSearchParams(query).get("namespace"), "15551-spam");
+
+  namespace.value = "moqt-devtools-a1B2c3D4e5F6g7H8";
+  initFromUrl(query);
+  assert.equal(namespace.value, "15551-spam");
+  assert.deepEqual(namespaceArray.value, ["15551", "spam"]);
+
+  // 0 フィールドの namespace も key ごと書き出す
+  namespace.value = "";
+  const emptyQuery = buildQueryString();
+  assert.isTrue(new URLSearchParams(emptyQuery).has("namespace"));
+  assert.equal(new URLSearchParams(emptyQuery).get("namespace"), "");
+
+  namespace.value = "15551-spam";
+  initFromUrl(emptyQuery);
+  assert.equal(namespace.value, "");
+  assert.deepEqual(namespaceArray.value, []);
+
   resetMsfFragmentSettings();
 });
 

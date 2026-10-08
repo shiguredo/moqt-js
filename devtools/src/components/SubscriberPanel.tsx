@@ -236,6 +236,7 @@ export function SubscriberPanel({
           <button
             onClick={() => void startSubscribing()}
             disabled={subscribeBtnDisabled}
+            data-testid="subscriber-subscribe-button"
             class="flex-1 px-4 py-2.5 bg-blue-500 hover:bg-blue-600 disabled:bg-slate-300 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors flex items-center justify-center gap-2"
           >
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">

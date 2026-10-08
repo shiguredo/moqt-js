@@ -424,6 +424,7 @@ moqt-js を利用した MOQT の動作確認ツールです。
 - 自己署名証明書のハッシュ指定
 - Authorization Token の指定 (MSF URL の c4m パラメータ対応)
 - MOQT URI の `#msf:` fragment を URI Fragment 欄へ映して表示し、namespace の固定と c4m の track name の反映を行う
+- Namespace の指定 (draft-ietf-moq-transport-22 §8.8 の namespace-name 文字列。フィールドを `-` で並べ、literal で書けない byte は `.HH`。読めない値では理由を出して配信 / 購読を拒否する)
 - c4m のトークンのデコード結果 (クレームと moqt スコープ) を Authorization Token の欄に表示する
 - c4m の取り込みを解除したときは、moqt-js が SETUP に載せる MOQT URI の c4m も取り除く
 - WebCodecs Dedicated Worker 対応

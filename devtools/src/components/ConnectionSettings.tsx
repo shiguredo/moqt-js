@@ -450,13 +450,6 @@ const TRACK_NAME_PROBLEM_LABELS: Record<TrackNameProblem, string> = {
   duplicate: "Audio and video track names must differ (draft-ietf-moq-msf-01 §5.2.3)",
 };
 
-// Namespace の欄の問題の表示。draft-ietf-moq-transport-22 §8.8: namespace は各フィールドを
-// "-" で並べ、literal で書けない byte は "." + 小文字 16 進 2 桁で書く
-const NAMESPACE_PROBLEM_LABELS: Record<settings.NamespaceProblem, string> = {
-  invalid:
-    "Namespace must be the namespace-name string: fields joined by `-`, other bytes as `.HH` (draft-ietf-moq-transport-22 §8.8)",
-};
-
 /** 閉じている接続設定の欄に出す要約の 1 項目 */
 interface ConnectionSummaryItem {
   label: string;
@@ -860,10 +853,11 @@ export function ConnectionSettings() {
               }`}
             />
             {/* §8.8 の namespace-name 文字列として読めない値は、接続に使うフィールド列へ
-                分解できない。配信 / 購読の開始は resolveConnectNamespace が拒否する */}
+                分解できない。理由 (どの位置のどの文字が規則に合わないか) をそのまま出し、
+                配信 / 購読の開始は requireConnectNamespace が同じ理由で拒否する */}
             {settings.namespaceProblem.value !== null && (
               <p class="mt-1 text-xs text-red-600" data-testid="namespace-warning">
-                {NAMESPACE_PROBLEM_LABELS[settings.namespaceProblem.value]}
+                {settings.namespaceProblem.value}
               </p>
             )}
           </div>
