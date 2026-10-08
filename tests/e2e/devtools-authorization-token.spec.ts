@@ -132,9 +132,9 @@ test("msf fragment の namespace を固定し、c4m の track name を反映す�
   await expect(fragmentInput).toHaveValue(msfFragment);
   await expect(fragmentInput).toHaveAttribute("readonly", "");
 
-  // Namespace は msf fragment の値になり、読み取り専用になる
+  // Namespace は msf fragment の値 (§8.8 の namespace-name 文字列) になり、読み取り専用になる
   const namespaceInput = page.getByTestId("namespace");
-  await expect(namespaceInput).toHaveValue("15551/spam");
+  await expect(namespaceInput).toHaveValue("15551-spam");
   await expect(namespaceInput).toHaveAttribute("readonly", "");
 
   // c4m の取り込みは従来どおり (Token Type は CAT を表す 1)

@@ -8,7 +8,7 @@ function resetSettingSignals(): void {
   settings.url.value = "moqt://127.0.0.1:4443/";
   settings.fragment.value = "";
   settings.mode.value = "both";
-  settings.namespace.value = "room/123";
+  settings.namespace.value = "room-123";
   settings.videoTrackName.value = "video";
   settings.audioTrackName.value = "audio";
   settings.codec.value = "vp8";
@@ -48,7 +48,7 @@ test("buildConnectionSettingsSnapshot: 接続に使う設定をそのまま写�
   settings.url.value = "moqt://relay.example:4443/";
   settings.fragment.value = "msf:room--video";
   settings.mode.value = "subscriber";
-  settings.namespace.value = "room/456";
+  settings.namespace.value = "room-456";
   settings.videoTrackName.value = "main";
   settings.audioTrackName.value = "mic";
   settings.codec.value = "h265";
@@ -82,7 +82,7 @@ test("buildConnectionSettingsSnapshot: 接続に使う設定をそのまま写�
     assert.equal(snapshot.url, "moqt://relay.example:4443/");
     assert.equal(snapshot.fragment, "msf:room--video");
     assert.equal(snapshot.mode, "subscriber");
-    assert.equal(snapshot.namespace, "room/456");
+    assert.equal(snapshot.namespace, "room-456");
     assert.equal(snapshot.videoTrackName, "main");
     assert.equal(snapshot.audioTrackName, "mic");
     assert.equal(snapshot.codec, "h265");

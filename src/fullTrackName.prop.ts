@@ -6,7 +6,12 @@
 
 import { test, assert } from "vite-plus/test";
 import * as fc from "fast-check";
-import { formatFullTrackName, formatTrackNamespace, fullTrackNameKey } from "./fullTrackName";
+import {
+  formatFullTrackName,
+  formatTrackNamespace,
+  fullTrackNameKey,
+  parseTrackNamespace,
+} from "./fullTrackName";
 import { SubscriberImpl } from "./subscriber";
 import { FetcherImpl } from "./fetcher";
 import { parseMsfFragmentValue } from "./msf/fragment";
@@ -188,6 +193,19 @@ test("formatTrackNamespace: parseMsfFragmentValue と round-trip する", () => 
       const formatted = `${formatTrackNamespace(trackNamespace)}--x`;
       const parsed = parseMsfFragmentValue(formatted);
       assert.deepEqual(parsed.trackNamespace, trackNamespace);
+    }),
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-22 §8.8:
+ * namespace 単体の文字列表現も、組み立てと解析でフィールド列が変わらなければならない。
+ * "/" 連結では復元できなかった "-" を含むフィールドも、エスケープにより往復できる。
+ */
+test("formatTrackNamespace: parseTrackNamespace と round-trip する", () => {
+  fc.assert(
+    fc.property(fc.array(displayFieldArb, { maxLength: 3 }), (trackNamespace) => {
+      assert.deepEqual(parseTrackNamespace(formatTrackNamespace(trackNamespace)), trackNamespace);
     }),
   );
 });

@@ -450,6 +450,13 @@ const TRACK_NAME_PROBLEM_LABELS: Record<TrackNameProblem, string> = {
   duplicate: "Audio and video track names must differ (draft-ietf-moq-msf-01 §5.2.3)",
 };
 
+// Namespace の欄の問題の表示。draft-ietf-moq-transport-22 §8.8: namespace は各フィールドを
+// "-" で並べ、literal で書けない byte は "." + 小文字 16 進 2 桁で書く
+const NAMESPACE_PROBLEM_LABELS: Record<settings.NamespaceProblem, string> = {
+  invalid:
+    "Namespace must be the namespace-name string: fields joined by `-`, other bytes as `.HH` (draft-ietf-moq-transport-22 §8.8)",
+};
+
 /** 閉じている接続設定の欄に出す要約の 1 項目 */
 interface ConnectionSummaryItem {
   label: string;
@@ -834,7 +841,7 @@ export function ConnectionSettings() {
               <span class="text-xs text-slate-400 ml-1">
                 {settings.namespaceLocked.value
                   ? "(fixed by the msf fragment)"
-                  : "(split into a tuple by /)"}
+                  : "(fields joined by -)"}
               </span>
             </label>
             {/* msf fragment が namespace を指定している間は編集できない (認可された
@@ -843,7 +850,7 @@ export function ConnectionSettings() {
               type="text"
               id="namespace"
               data-testid="namespace"
-              placeholder="e.g. moqt/devtools/a1B2c3D4e5F6g7H8"
+              placeholder="e.g. moqt-devtools-a1B2c3D4e5F6g7H8"
               value={settings.namespace.value}
               onInput={(e) => (settings.namespace.value = e.currentTarget.value)}
               readOnly={settings.namespaceLocked.value}
@@ -852,6 +859,13 @@ export function ConnectionSettings() {
                 settings.namespaceLocked.value ? "bg-slate-100 text-slate-500" : ""
               }`}
             />
+            {/* §8.8 の namespace-name 文字列として読めない値は、接続に使うフィールド列へ
+                分解できない。配信 / 購読の開始は resolveConnectNamespace が拒否する */}
+            {settings.namespaceProblem.value !== null && (
+              <p class="mt-1 text-xs text-red-600" data-testid="namespace-warning">
+                {NAMESPACE_PROBLEM_LABELS[settings.namespaceProblem.value]}
+              </p>
+            )}
           </div>
           <div class="lg:col-span-3">
             <label for="fragment" class="block text-sm font-medium text-slate-600 mb-1">

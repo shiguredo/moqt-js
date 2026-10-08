@@ -48,6 +48,21 @@ export function fullTrackNameKey(
 const fullTrackNameEncoder = new TextEncoder();
 
 /**
+ * §8.8 の文字列表現でそのまま書ける byte かどうか
+ *
+ * draft-ietf-moq-transport-22 §8.8: a-z / A-Z / 0-9 / _ (0x5f) は literal で表し、
+ * それ以外の byte は "." に続けて小文字 16 進 2 桁で表す。
+ */
+function isLiteralByte(byte: number): boolean {
+  return (
+    (byte >= 0x30 && byte <= 0x39) ||
+    (byte >= 0x41 && byte <= 0x5a) ||
+    (byte >= 0x61 && byte <= 0x7a) ||
+    byte === 0x5f
+  );
+}
+
+/**
  * Track Namespace Field / Track Name の 1 セグメントをエスケープする
  *
  * draft-ietf-moq-transport-22 §8.8:
@@ -58,12 +73,7 @@ const fullTrackNameEncoder = new TextEncoder();
 function escapeFullTrackNameSegment(value: string): string {
   let escaped = "";
   for (const byte of fullTrackNameEncoder.encode(value)) {
-    const isUnreserved =
-      (byte >= 0x30 && byte <= 0x39) ||
-      (byte >= 0x41 && byte <= 0x5a) ||
-      (byte >= 0x61 && byte <= 0x7a) ||
-      byte === 0x5f;
-    if (isUnreserved) {
+    if (isLiteralByte(byte)) {
       escaped += String.fromCharCode(byte);
     } else {
       escaped += `.${byte.toString(16).padStart(2, "0")}`;
@@ -120,4 +130,96 @@ export function formatTrackNamespace(trackNamespace: readonly string[]): string 
  */
 export function formatFullTrackName(trackNamespace: readonly string[], trackName: string): string {
   return `${formatTrackNamespace(trackNamespace)}--${escapeFullTrackNameSegment(trackName)}`;
+}
+
+/**
+ * Track Namespace Field / Track Name の 1 セグメントを解析する
+ *
+ * draft-ietf-moq-transport-22 §8.8: literal は a-z / A-Z / 0-9 / _ (0x5f) に限られ、
+ * それ以外の byte は "." に続けて小文字 16 進 2 桁で書く。literal で書ける byte を
+ * hex で書いた場合 (".61" など) も拒否する (§8.8 は規則どおりでない名前の解析を
+ * MUST reject とする)。復号した byte 列は UTF-8 として解釈する。
+ *
+ * @param position - エラーメッセージに出す位置 (例: "track namespace field at index 0")
+ * @throws Error 予約外の literal 文字 / 小文字 16 進 2 桁でない percent-encoding /
+ *   literal で書ける byte の hex 表現 / UTF-8 として読めない byte 列
+ */
+function parseFullTrackNameSegment(segment: string, position: string): string {
+  // literal は 1 byte、"." + 16 進 2 桁は 1 byte として積み、最後にまとめて UTF-8 化する
+  const bytes: number[] = [];
+  let index = 0;
+  while (index < segment.length) {
+    const character = segment[index];
+    if (character === undefined) {
+      // index < segment.length のループ条件により到達しない (型を絞るためのガード)
+      throw new Error(`unexpected end of ${position} per draft-ietf-moq-transport-22 §8.8`);
+    }
+    if (character === ".") {
+      if (index + 2 >= segment.length) {
+        throw new Error(
+          `"." must be followed by two lowercase hexadecimal digits in ${position} per draft-ietf-moq-transport-22 §8.8`,
+        );
+      }
+      const hex = segment.slice(index + 1, index + 3);
+      if (!/^[0-9a-f]{2}$/.test(hex)) {
+        throw new Error(
+          `percent-encoding must use two lowercase hexadecimal digits in ${position}, got ".${hex}" per draft-ietf-moq-transport-22 §8.8`,
+        );
+      }
+      const byte = Number.parseInt(hex, 16);
+      if (isLiteralByte(byte)) {
+        throw new Error(
+          `byte ".${hex}" must be written literally in ${position} because it is in [A-Za-z0-9_] per draft-ietf-moq-transport-22 §8.8`,
+        );
+      }
+      bytes.push(byte);
+      index += 3;
+    } else if (/[A-Za-z0-9_]/.test(character)) {
+      bytes.push(character.charCodeAt(0));
+      index += 1;
+    } else {
+      throw new Error(
+        `character "${character}" in ${position} is not in [A-Za-z0-9_] and must be percent-encoded as "." followed by two lowercase hexadecimal digits per draft-ietf-moq-transport-22 §8.8`,
+      );
+    }
+  }
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(new Uint8Array(bytes));
+  } catch {
+    throw new Error(
+      `percent-encoded bytes in ${position} are not valid UTF-8 per draft-ietf-moq-transport-22 §8.8`,
+    );
+  }
+}
+
+/**
+ * Track Namespace の文字列表現を解析する
+ *
+ * draft-ietf-moq-transport-22 §8.8 (Representing Namespace and Track Names) が
+ * ログ等の用途で RECOMMENDED とする表現 (各フィールドを "-" で並べ、literal で
+ * 書けない byte を "." + 小文字 16 進 2 桁で書く) を Track Namespace のフィールド列へ
+ * 戻す。formatTrackNamespace の逆変換であり、draft-ietf-moq-msf-01 §11.1.2 の
+ * namespace-name 文字列と同じ規則を使う。
+ *
+ * "/" で連結した文字列と違い、フィールド自身が "-" や "/" を含んでもエスケープで
+ * 区別できるため、組み立てと解析でフィールド列が変わらない。
+ *
+ * 空文字列は 0 フィールドの Track Namespace として解析する (formatTrackNamespace([])
+ * と同じ)。Track Namespace Field は §8.7 が 1 バイト以上を MUST とするため、空の
+ * フィールドは区切りと区別できず Error にする。
+ *
+ * @throws Error 空の Track Namespace Field / §8.8 の規則に合わない文字列
+ */
+export function parseTrackNamespace(value: string): string[] {
+  if (value.length === 0) {
+    return [];
+  }
+  return value.split("-").map((field, index) => {
+    if (field.length === 0) {
+      throw new Error(
+        `track namespace field at index ${index} must not be empty per draft-ietf-moq-transport-22 §8.7`,
+      );
+    }
+    return parseFullTrackNameSegment(field, `track namespace field at index ${index}`);
+  });
 }

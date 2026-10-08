@@ -36,7 +36,7 @@
 - [CHANGE] moqt-devtools の event timeline の eventType を `app.shiguredo.moqt-devtools.messages` にする
   - 逆ドメイン名の取り方を見直し、画面の呼び名 (Messages) に揃える。catalog の eventType が変わる (購読側は packaging でトラックを探すため、購読の動作は変わらない)
   - @voluntas
-- [CHANGE] moqt-devtools の Namespace の初期値を `moqt/devtools/{ランダムな 16 文字}` にする
+- [CHANGE] moqt-devtools の Namespace の初期値を `moqt-devtools-{ランダムな 16 文字}` にする
   - 複数の devtools が同じ relay に繋がっても namespace が衝突しないようにする。共有するときは Copy URL や Save で持ち出す。Namespace は接続先の特定に使うため、URI Fragment の左に置く
   - @voluntas
 - [CHANGE] `MediaReceiverStats.avSync` を追加する
@@ -63,6 +63,11 @@
   - catalog 取得の live SUBSCRIBE は `{ nextObject: true }` を送る。0:0 のまま送ると絶対位置 {0, 0} の指定になり、トラック先頭から全 Object を受信する
   - End Group (StartGroup + EndGroupDelta) が 2^64-1 を超える場合は、送信側が InvalidFilterError、受信側が PROTOCOL_VIOLATION で拒否する (従来どおり)
   - 旧 v21 のワイヤ形式で送受信していた moqt-js とは相互運用できない
+  - @voluntas
+- [CHANGE] moqt-devtools の Namespace の表記を draft-ietf-moq-transport-22 §8.8 の namespace-name 文字列に揃える
+  - 欄は Track Namespace のフィールドを `-` で並べ、literal で書けない byte を `.` + 小文字 16 進 2 桁で書く (例: `moqt-devtools-a1B2c3D4e5F6g7H8`)。`/` 区切りは廃止する (後方互換なし)。`/` 区切りの旧 URL の `namespace` クエリは §8.8 の表記として読めない値になり、接続に使わない
+  - msf fragment の namespace を欄へ反映するときも同じ表記で組み立て直す。フィールド自身に `-` や `/` を含む namespace でも、欄の文字列からフィールド列を復元できるようになる
+  - 欄が §8.8 の表記として読めない間は警告を出し、配信 / 購読の開始を拒否する (入力した namespace と違う namespace へ繋がない)
   - @voluntas
 - [UPDATE] moqt-devtools の Tracks カードに、catalog に載せるトラックの宣言を全て出す
   - 配信する音声 / 映像 / event timeline の各トラックに、catalog の値 (packaging / isLive / bitrate / samplerate / channelConfig / width / height / framerate / mimeType / depends / targetLatency / renderGroup / authInfo) を下の Audio / Video / Catalog カードの設定に追随して行で出す。宣言は配信で送る catalog と同じ関数 (`buildPublisherTrackDeclarations`) で組み立て、画面で見た値と実際に送る値がずれないようにする

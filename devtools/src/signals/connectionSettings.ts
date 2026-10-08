@@ -4,6 +4,7 @@ import {
   AuthorizationTokenAliasType,
   type CertificateHash,
 } from "moqt-js";
+import { formatTrackNamespace, parseTrackNamespace } from "../../../src/fullTrackName.ts";
 import type {
   AudioCodecType,
   AudioDelivery,
@@ -58,10 +59,12 @@ const fragmentFromRelayUri = signal(false);
 /**
  * Namespace の初期値
  *
- * 複数の devtools が同じ relay に繋がっても namespace が衝突しないよう、ページごとに
- * ランダムな接尾辞を付ける。共有するときは Copy URL や Save で持ち出す
+ * draft-ietf-moq-transport-22 §8.8 がログ等の用途で RECOMMENDED とする namespace-name
+ * 文字列 (`-` 区切り) で持つ。複数の devtools が同じ relay に繋がっても namespace が
+ * 衝突しないよう、ページごとにランダムな接尾辞を付ける。共有するときは Copy URL や
+ * Save で持ち出す
  */
-export const namespace = signal(`moqt/devtools/${randomNamespaceSuffix()}`);
+export const namespace = signal(`moqt-devtools-${randomNamespaceSuffix()}`);
 /**
  * msf fragment が指定する Track Namespace のフィールド列
  *
@@ -77,14 +80,67 @@ const msfNamespaceFields = signal<string[] | null>(null);
  * true の間は Connection Settings の Namespace 欄を読み取り専用にする
  */
 export const namespaceLocked = computed(() => msfNamespaceFields.value !== null);
-// namespace 設定を Track Namespace のフィールドへ分解したもの。空のフィールドは落とす。
-// 接続処理と画面表示 (Full Track Name の組み立て) が同じ分解を使う。
-// msf fragment があるときはそのフィールド列をそのまま使う (Namespace の欄は `/` 区切りの
-// 文字列であり、フィールド自身に `/` を含む namespace を往復できないため)
+// Namespace の欄の値を Track Namespace のフィールドへ分解したもの。
+// 欄は draft-ietf-moq-transport-22 §8.8 の namespace-name 文字列 (`-` 区切り、literal で
+// 書けない byte は `.HH`) であり、接続処理と画面表示 (Full Track Name の組み立て) が
+// 同じ分解を使う。msf fragment があるときはそのフィールド列をそのまま使う (欄を編集
+// できないため、表示から復元する必要が無い)。
 export const namespaceArray = computed(() => {
-  const fields = msfNamespaceFields.value ?? namespace.value.split("/");
-  return fields.filter((field) => field.length > 0);
+  const msfFields = msfNamespaceFields.value;
+  if (msfFields !== null) {
+    // msf fragment が空のフィールドを含むときは落とす (接続へ空のフィールドを渡さない)
+    return msfFields.filter((field) => field.length > 0);
+  }
+  try {
+    return parseTrackNamespace(namespace.value);
+  } catch {
+    // 解析できない値では接続に使えるフィールド列が無い。画面の警告 (namespaceProblem) が
+    // 入力を示し、接続に使う値 (resolveConnectNamespace) の要求が開始を拒否する
+    return [];
+  }
 });
+/**
+ * Namespace の欄の問題
+ *
+ * 現状は §8.8 の namespace-name 文字列として解析できない場合だけを表す
+ */
+export type NamespaceProblem = "invalid";
+/**
+ * Namespace の欄の値が §8.8 の namespace-name 文字列として読めないかどうか
+ *
+ * 読めない間は namespaceArray が空になり接続に使うフィールドが無いため、欄の警告に出す。
+ * msf fragment が namespace を決めている間は欄を編集できず、接続には parse 済みの
+ * フィールド列を使うため問題にしない
+ */
+export const namespaceProblem = computed<NamespaceProblem | null>(() => {
+  if (namespaceLocked.value) {
+    return null;
+  }
+  try {
+    parseTrackNamespace(namespace.value);
+    return null;
+  } catch {
+    return "invalid";
+  }
+});
+/**
+ * 配信 / 購読の接続に使う Track Namespace のフィールド列を返す
+ *
+ * 配信と購読の開始時に呼ぶ。Namespace の欄が §8.8 の namespace-name 文字列として
+ * 読めないときは解析の失敗をそのまま投げ、接続させない (解析できない値のまま接続すると、
+ * ユーザーが入力した namespace ではなく空の namespace へ繋ぐことになる)。解析の失敗理由
+ * (位置と文字) はそのまま画面とログへ出す
+ *
+ * @throws Error Namespace の欄の値が §8.8 の namespace-name 文字列として読めないとき
+ */
+export function resolveConnectNamespace(): string[] {
+  if (namespaceLocked.value) {
+    // msf fragment が決めたフィールド列をそのまま使う (欄の文字列は編集できない)
+    return namespaceArray.value;
+  }
+  // 解析できない値では、解析の失敗理由 (位置と文字) をそのまま投げて接続させない
+  return parseTrackNamespace(namespace.value);
+}
 /**
  * 音声トラックの役割を表す既定のトラック名
  *
@@ -394,8 +450,24 @@ export function refreshMsfFragmentSettings(): void {
     return;
   }
   msfNamespaceFields.value = parsed.trackNamespace;
-  // Namespace の欄と Copy for LLM / Copy URL の表示にも msf fragment の値を出す
-  namespace.value = parsed.trackNamespace.join("/");
+  // Namespace の欄と Copy for LLM / Copy URL の表示にも msf fragment の値を出す。
+  // 欄は §8.8 の namespace-name 文字列なので、parse 済みのフィールド列から組み立て直す
+  namespace.value = formatNamespaceInput(parsed.trackNamespace);
+}
+
+/**
+ * Track Namespace のフィールド列を Namespace の欄の文字列へ組み立てる
+ *
+ * 空のフィールド (§8.7 が 1 バイト以上を MUST とする値) を含む msf fragment では
+ * §8.8 の表記にできないため、"-" で並べただけの文字列にする。この場合も接続には
+ * parse 済みのフィールド列を使う (欄は固定され、ユーザーは編集できない)
+ */
+function formatNamespaceInput(fields: readonly string[]): string {
+  try {
+    return formatTrackNamespace(fields);
+  } catch {
+    return fields.join("-");
+  }
 }
 
 /**

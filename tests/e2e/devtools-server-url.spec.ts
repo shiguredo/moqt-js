@@ -117,7 +117,7 @@ test("覚えた MOQT URI の msf fragment と c4m を次に開いたときも取
   await expect(input).toHaveValue(saved);
   await expect(page.getByTestId("uri-fragment")).toHaveValue("msf:15551-spam--catalog&c4m=QUFB");
   const namespaceInput = page.getByTestId("namespace");
-  await expect(namespaceInput).toHaveValue("15551/spam");
+  await expect(namespaceInput).toHaveValue("15551-spam");
   await expect(namespaceInput).toHaveAttribute("readonly", "");
   await expect(page.getByTestId("authorization-token-type")).toHaveValue("1");
   await expect(page.getByTestId("authorization-token-c4m")).toHaveCount(1);

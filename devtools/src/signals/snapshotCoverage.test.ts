@@ -133,6 +133,8 @@ const CONNECTION_SETTINGS_COVERAGE: CoverageExpectation = {
       "c4m の取り込みを画面に出すための導出値で、設定の値ではない (値は authorizationTokenFromC4m で分かる)",
     namespaceArray:
       "namespace を Track Namespace のフィールドへ分解した computed。値は namespace に出す",
+    namespaceProblem:
+      "namespace を §8.8 の namespace-name 文字列として読めるかどうかの入力の状態で、設定の値ではない",
   },
 };
 
