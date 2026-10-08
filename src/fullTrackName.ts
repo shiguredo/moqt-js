@@ -48,6 +48,38 @@ export function fullTrackNameKey(
 const fullTrackNameEncoder = new TextEncoder();
 
 /**
+ * §8.8 の文字列表現でそのまま書ける byte かどうか
+ *
+ * draft-ietf-moq-transport-22 §8.8: a-z / A-Z / 0-9 / _ (0x5f) は literal で表し、
+ * それ以外の byte は "." に続けて小文字 16 進 2 桁で表す。
+ */
+function isLiteralByte(byte: number): boolean {
+  return (
+    (byte >= 0x30 && byte <= 0x39) ||
+    (byte >= 0x41 && byte <= 0x5a) ||
+    (byte >= 0x61 && byte <= 0x7a) ||
+    byte === 0x5f
+  );
+}
+
+/**
+ * Track Namespace Field が空でないことを確かめる
+ *
+ * draft-ietf-moq-transport-22 §8.7: Each Track Namespace Field Value MUST contain at
+ * least one byte. 空のフィールドは区切りと区別できないため、組み立てと解析の両方で
+ * 同じ判定を使う。
+ *
+ * @throws Error 空の Track Namespace Field を渡したとき
+ */
+function assertNamespaceFieldNotEmpty(field: string, index: number): void {
+  if (field.length === 0) {
+    throw new Error(
+      `track namespace field at index ${index} must not be empty per draft-ietf-moq-transport-22 §8.7`,
+    );
+  }
+}
+
+/**
  * Track Namespace Field / Track Name の 1 セグメントをエスケープする
  *
  * draft-ietf-moq-transport-22 §8.8:
@@ -58,12 +90,7 @@ const fullTrackNameEncoder = new TextEncoder();
 function escapeFullTrackNameSegment(value: string): string {
   let escaped = "";
   for (const byte of fullTrackNameEncoder.encode(value)) {
-    const isUnreserved =
-      (byte >= 0x30 && byte <= 0x39) ||
-      (byte >= 0x41 && byte <= 0x5a) ||
-      (byte >= 0x61 && byte <= 0x7a) ||
-      byte === 0x5f;
-    if (isUnreserved) {
+    if (isLiteralByte(byte)) {
       escaped += String.fromCharCode(byte);
     } else {
       escaped += `.${byte.toString(16).padStart(2, "0")}`;
@@ -89,11 +116,7 @@ function escapeFullTrackNameSegment(value: string): string {
 export function formatTrackNamespace(trackNamespace: readonly string[]): string {
   const namespaceSegments: string[] = [];
   for (const [index, field] of trackNamespace.entries()) {
-    if (field.length === 0) {
-      throw new Error(
-        `track namespace field at index ${index} must not be empty per draft-ietf-moq-transport-22 §8.7`,
-      );
-    }
+    assertNamespaceFieldNotEmpty(field, index);
     namespaceSegments.push(escapeFullTrackNameSegment(field));
   }
   return namespaceSegments.join("-");
@@ -120,4 +143,102 @@ export function formatTrackNamespace(trackNamespace: readonly string[]): string 
  */
 export function formatFullTrackName(trackNamespace: readonly string[], trackName: string): string {
   return `${formatTrackNamespace(trackNamespace)}--${escapeFullTrackNameSegment(trackName)}`;
+}
+
+/**
+ * Track Namespace Field / Track Name の 1 セグメントを解析する
+ *
+ * draft-ietf-moq-transport-22 §8.8 (Representing Namespace and Track Names):
+ * literal は a-z / A-Z / 0-9 / _ (0x5f) に限られ、それ以外の byte は "." に続けて
+ * 小文字 16 進 2 桁で書く。literal で書ける byte を hex で書いた場合 (".61" など) も
+ * 拒否する (§8.8 は「規則どおりでない名前」の解析を MUST reject とする)。復号した
+ * byte 列は UTF-8 として解釈する。§8.8 は draft-ietf-moq-transport-22 の
+ * RECOMMENDED であり、改版で節番号と規則が変わる可能性がある。
+ *
+ * §8.8 の規則は draft-ietf-moq-msf-01 §11.1.2 が MSF fragment の namespace-name
+ * 文字列として normatively 採用しているため、MSF fragment の解析
+ * (`parseMsfFragmentValue`) もこの関数を使う (同じ表記を 2 実装で解析しない)。
+ *
+ * @param position - エラーメッセージに出す位置 (例: "track namespace field at index 0")
+ * @throws Error 予約外の literal 文字 / 小文字 16 進 2 桁でない byte 表現 /
+ *   literal で書ける byte の hex 表現 / UTF-8 として読めない byte 列
+ */
+export function parseFullTrackNameSegment(segment: string, position: string): string {
+  // literal は 1 byte、"." + 16 進 2 桁は 1 byte として積み、最後にまとめて UTF-8 化する
+  const bytes: number[] = [];
+  let index = 0;
+  while (index < segment.length) {
+    const character = segment[index];
+    if (character === undefined) {
+      // index < segment.length のループ条件により到達しない (型を絞るためのガード)
+      throw new Error(`unexpected end of ${position} per draft-ietf-moq-transport-22 §8.8`);
+    }
+    if (character === ".") {
+      if (index + 2 >= segment.length) {
+        throw new Error(
+          `"." must be followed by two lowercase hexadecimal digits in ${position} per draft-ietf-moq-transport-22 §8.8`,
+        );
+      }
+      const hex = segment.slice(index + 1, index + 3);
+      if (!/^[0-9a-f]{2}$/.test(hex)) {
+        throw new Error(
+          `"." must be followed by two lowercase hexadecimal digits in ${position}, got ".${hex}" per draft-ietf-moq-transport-22 §8.8`,
+        );
+      }
+      const byte = Number.parseInt(hex, 16);
+      if (isLiteralByte(byte)) {
+        throw new Error(
+          `byte ".${hex}" must be written literally in ${position} because it is in [A-Za-z0-9_] per draft-ietf-moq-transport-22 §8.8`,
+        );
+      }
+      bytes.push(byte);
+      index += 3;
+    } else if (/[A-Za-z0-9_]/.test(character)) {
+      bytes.push(character.charCodeAt(0));
+      index += 1;
+    } else {
+      throw new Error(
+        `character "${character}" in ${position} is not in [A-Za-z0-9_] and must be encoded as "." followed by two lowercase hexadecimal digits per draft-ietf-moq-transport-22 §8.8`,
+      );
+    }
+  }
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(new Uint8Array(bytes));
+  } catch {
+    throw new Error(
+      `bytes in ${position} are not valid UTF-8: moqt-js keeps Track Namespace Fields and Track Names as strings per draft-ietf-moq-transport-22 §2.4.1`,
+    );
+  }
+}
+
+/**
+ * Track Namespace の文字列表現を解析する
+ *
+ * draft-ietf-moq-transport-22 §8.8 (Representing Namespace and Track Names) が
+ * ログ等の用途で RECOMMENDED とする表現 (各フィールドを "-" で並べ、literal で
+ * 書けない byte を "." + 小文字 16 進 2 桁で書く) を Track Namespace のフィールド列へ
+ * 戻す。formatTrackNamespace の逆変換であり、draft-ietf-moq-msf-01 §11.1.2 の
+ * namespace-name 文字列 (MSF fragment の track-identifier の `--` より左) と同じ規則を
+ * 使う。§8.8 は draft であり、改版で節番号と規則が変わる可能性がある。
+ *
+ * "/" で連結した文字列と違い、フィールド自身が "-" や "/" を含んでもエスケープで
+ * 区別できるため、組み立てと解析でフィールド列が変わらない。ただし孤立サロゲートは
+ * TextEncoder が U+FFFD に置換する (プロトコルのワイヤ表現と同じ) ため、その 1 文字を
+ * 含むフィールドは往復しない。
+ *
+ * 空文字列は 0 フィールドの Track Namespace として解析する (§2.4.1 が
+ * between 0 and 32 Track Namespace Fields とする。formatTrackNamespace([]) と同じ)。
+ * Track Namespace Field は §8.7 が 1 バイト以上を MUST とするため、空のフィールドは
+ * 区切りと区別できず Error にする。
+ *
+ * @throws Error 空の Track Namespace Field / §8.8 の規則に合わない文字列
+ */
+export function parseTrackNamespace(value: string): string[] {
+  if (value.length === 0) {
+    return [];
+  }
+  return value.split("-").map((field, index) => {
+    assertNamespaceFieldNotEmpty(field, index);
+    return parseFullTrackNameSegment(field, `track namespace field at index ${index}`);
+  });
 }

@@ -5,7 +5,12 @@
  */
 
 import { test, assert } from "vite-plus/test";
-import { formatFullTrackName, formatTrackNamespace, fullTrackNameKey } from "./fullTrackName";
+import {
+  formatFullTrackName,
+  formatTrackNamespace,
+  fullTrackNameKey,
+  parseTrackNamespace,
+} from "./fullTrackName";
 
 /**
  * draft-ietf-moq-transport-22 §2.4.1:
@@ -110,5 +115,72 @@ test("formatTrackNamespace: Track Namespace だけを組み立てる", () => {
   assert.throws(
     () => formatTrackNamespace(["room", "", "123"]),
     /track namespace field at index 1 must not be empty/,
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-22 §8.8:
+ * Track Namespace の文字列表現をフィールド列へ戻す。仕様の例 (§11.1.3 の MSF URL が
+ * 使う `customer-livestream-123`) と、literal で書けない byte の復号を検証する。
+ */
+test("parseTrackNamespace: 仕様の例とエスケープを復号する", () => {
+  assert.deepEqual(parseTrackNamespace("customer-livestream-123"), [
+    "customer",
+    "livestream",
+    "123",
+  ]);
+  assert.deepEqual(parseTrackNamespace("room-123"), ["room", "123"]);
+  // "-" / "." / "/" は .2d / .2e / .2f として復号する
+  assert.deepEqual(parseTrackNamespace("a.2db.2ec.2fd"), ["a-b.c/d"]);
+  // 非 ASCII は UTF-8 のバイト列から復号する ("あ" = E3 81 82)
+  assert.deepEqual(parseTrackNamespace(".e3.81.82"), ["あ"]);
+  // literal で書ける byte はそのまま復号する
+  assert.deepEqual(parseTrackNamespace("AZaz09_"), ["AZaz09_"]);
+  // 0 フィールドの Track Namespace は §2.4.1 が許す
+  assert.deepEqual(parseTrackNamespace(""), []);
+});
+
+/**
+ * draft-ietf-moq-transport-22 §8.8:
+ * 「a period not followed by exactly two lowercase hexadecimal digits」と
+ * 「a byte that could have been represented literally but was hex-encoded」は
+ * MUST reject である。空の Track Namespace Field は §8.7 が 1 バイト以上を MUST と
+ * するため、区切りと区別できない入力として拒否する。
+ */
+test("parseTrackNamespace: §8.8 の規則に合わない文字列を拒否する", () => {
+  // 空のフィールド (連続する区切りと末尾の区切り)
+  assert.throws(
+    () => parseTrackNamespace("a--b"),
+    /track namespace field at index 1 must not be empty/,
+  );
+  assert.throws(
+    () => parseTrackNamespace("a-"),
+    /track namespace field at index 1 must not be empty/,
+  );
+  // literal で書ける byte の hex 表現
+  assert.throws(
+    () => parseTrackNamespace("na.61"),
+    /byte "\.61" must be written literally in track namespace field at index 0/,
+  );
+  assert.throws(() => parseTrackNamespace("n.5f"), /byte "\.5f" must be written literally/);
+  // 大文字 hex と、16 進 2 桁に満たない "."
+  assert.throws(
+    () => parseTrackNamespace("a.2D"),
+    /"\." must be followed by two lowercase hexadecimal digits in track namespace field at index 0, got "\.2D"/,
+  );
+  assert.throws(
+    () => parseTrackNamespace("a."),
+    /"." must be followed by two lowercase hexadecimal digits in track namespace field at index 0/,
+  );
+  // literal で書けない文字 (区切りの "-" も含めてエスケープが要る)
+  assert.throws(
+    () => parseTrackNamespace("a/b"),
+    /character "\/" in track namespace field at index 0 is not in \[A-Za-z0-9_\]/,
+  );
+  // UTF-8 として読めない byte 列。§8.8 は binary 値も許すため、拒否の根拠は
+  // moqt-js が名前を JS 文字列で保持すること (§2.4.1 がバイト列の解釈を各仕様に委ねる)
+  assert.throws(
+    () => parseTrackNamespace(".ff"),
+    /bytes in track namespace field at index 0 are not valid UTF-8/,
   );
 });

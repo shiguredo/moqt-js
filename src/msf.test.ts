@@ -1792,15 +1792,47 @@ test("parseMsfFragmentValue: 複数 wallclock-range を順序保持で返す (§
 });
 
 test("parseMsfFragmentValue: 大文字 hex (.2D) は reject (§11.1.2)", () => {
-  assert.throws(() => parseMsfFragmentValue("ns.2D--track"), /lowercase hex digits/);
+  assert.throws(
+    () => parseMsfFragmentValue("ns.2D--track"),
+    /"\." must be followed by two lowercase hexadecimal digits in msf fragment namespace field at index 0, got "\.2D"/,
+  );
 });
 
 test("parseMsfFragmentValue: ~ リテラルは reject (§11.1.2 unreserved 文字集合違反)", () => {
   // §11.1.2: literal は [A-Za-z0-9_] のみ。`~` は MUST 非 literal なので一般 reject 経路で弾かれる。
   assert.throws(
     () => parseMsfFragmentValue("ns~name--track"),
-    /unreserved character set in namespace is \[A-Za-z0-9_\]/,
+    /character "~" in msf fragment namespace field at index 0 is not in \[A-Za-z0-9_\]/,
   );
+});
+
+test("parseMsfFragmentValue: literal で書ける byte の hex 表現は reject (§8.8 MUST reject)", () => {
+  // §8.8 は「a byte that could have been represented literally but was hex-encoded」を
+  // MUST reject とする。§11.1.2 はこの規則を normatively 採用する
+  assert.throws(
+    () => parseMsfFragmentValue("n.61--track"),
+    /byte "\.61" must be written literally in msf fragment namespace field at index 0/,
+  );
+  assert.throws(
+    () => parseMsfFragmentValue("ns--tr.61ck"),
+    /byte "\.61" must be written literally in msf fragment track name/,
+  );
+});
+
+test("parseMsfFragmentValue: 空の Track Namespace Field は reject (§8.7 MUST 1 バイト以上)", () => {
+  // 区切りと区別できないため、§8.8 の表記にも書く方法が無い
+  assert.throws(
+    () => parseMsfFragmentValue("-x--track"),
+    /invalid msf fragment value: track namespace field at index 0 must not be empty/,
+  );
+  // 先頭以外に空のフィールドは表記できない (先頭の `--` が区切りとして読まれる)。
+  // 末尾の区切りは track name の literal 違反として拒否される
+  assert.throws(
+    () => parseMsfFragmentValue("x---track"),
+    /character "-" in msf fragment track name is not in \[A-Za-z0-9_\]/,
+  );
+  // namespace 部が空 (0 フィールド) の `--track` は §2.4.1 が許すため受理する
+  assert.deepStrictEqual(parseMsfFragmentValue("--track").trackNamespace, []);
 });
 
 test("parseMsfFragmentValue: ? 含有は reject (§11.1)", () => {

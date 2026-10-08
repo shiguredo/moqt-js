@@ -2,7 +2,12 @@
  * MSF URI fragment 解析 (draft-ietf-moq-msf-01 §11.1)
  *
  * 参照: draft-ietf-moq-msf-01
+ *
+ * track-identifier の namespace-name 文字列 (§11.1.2) の復号規則は §8.8 が normatively
+ * 定めるため、セグメントの解析は fullTrackName.ts の parseFullTrackNameSegment を使う。
  */
+
+import { parseFullTrackNameSegment } from "../fullTrackName";
 
 // =============================================================================
 // MSF URI fragment 解析 (draft-ietf-moq-msf-01 §11.1)
@@ -36,9 +41,13 @@ export interface MsfFragmentValue {
  * - 各 byte の percent-encoding は `.HH` (lowercase 2 hex digits)
  * - literal 文字は `[A-Za-z0-9_]` のみ (§11.1.2)
  *
+ * 各セグメントの復号は §11.1.2 が normatively 採用する §8.8 の規則を実装した
+ * `parseFullTrackNameSegment` に任せる (literal で書ける byte の hex 表現は拒否する)。
+ *
  * @throws Error 空文字列 / 空の track-identifier / 空の track name / `?` の混入 / `--` 区切りの欠落 /
  *   key=value 形式でない parameter / 空の parameter key / MSF namespace-name 文字列の違反 (§11.1.2 の
- *   文字集合、小文字 hex の percent-encoding、不完全な `.HH`) / percent-encoded byte が UTF-8 でないとき
+ *   文字集合、小文字 hex の percent-encoding、不完全な `.HH`、literal で書ける byte の hex 表現) /
+ *   空の Track Namespace Field (§8.7 違反) / percent-encoded byte が UTF-8 でないとき
  */
 export function parseMsfFragmentValue(value: string): MsfFragmentValue {
   if (value.length === 0) {
@@ -79,12 +88,21 @@ export function parseMsfFragmentValue(value: string): MsfFragmentValue {
   }
 
   // namespace tuple を `-` で分解。namespace 部が空でも tuple は空配列で許容する
-  // (catalog track はトップレベル namespace 無しでも parseable)。
+  // (catalog track はトップレベル namespace 無しでも parseable)。空のフィールドは
+  // §8.7 が 1 バイト以上を MUST とするため、区切りと区別できず拒否する (§8.8 の表記にも
+  // 空のフィールドを書く方法が無い)。
   const trackNamespace =
     namespacePart.length === 0
       ? []
-      : namespacePart.split("-").map((s) => decodeMsfSegment(s, "namespace"));
-  const trackName = decodeMsfSegment(trackNamePart, "track name");
+      : namespacePart.split("-").map((field, index) => {
+          if (field.length === 0) {
+            throw new Error(
+              `invalid msf fragment value: track namespace field at index ${index} must not be empty per draft-ietf-moq-transport-22 §8.7`,
+            );
+          }
+          return parseFullTrackNameSegment(field, `msf fragment namespace field at index ${index}`);
+        });
+  const trackName = parseFullTrackNameSegment(trackNamePart, "msf fragment track name");
 
   // parameters の `key=value` 列を順序保持でパース
   const parameters: Array<readonly [string, string]> = [];
@@ -104,62 +122,6 @@ export function parseMsfFragmentValue(value: string): MsfFragmentValue {
   }
 
   return { trackNamespace, trackName, parameters };
-}
-
-/**
- * MSF namespace-name 文字列の 1 セグメントを decode する。
- *
- * - 大文字 hex (`.HH` の H が大文字) は受信 MUST 拒否 (§11.1.2)
- * - literal 文字集合は `[A-Za-z0-9_]` のみ (§11.1.2)
- *   それ以外 (`-` / `.` / `~` や 非 ASCII byte 等) は literal として禁止、
- *   `.HH` percent-encoded sequence でのみ表現可能。
- * - 既知 `.HH` は percent-decode する。連続する `.HH` byte は UTF-8 シーケンス
- *   として一旦バッファし、最後に TextDecoder で UTF-8 文字列化する (§11.1.2:
- *   「All other byte values ... MUST be percent-encoded」は byte values への
- *   制約であり、復元側はバイト列を UTF-8 として解釈する責務がある)。
- */
-function decodeMsfSegment(segment: string, role: "namespace" | "track name"): string {
-  // バイト列ベースで decode する: literal ASCII は code point < 128 で 1 byte、
-  // `.HH` percent-encoded は対応する byte 値 を Uint8Array に積み、最後にまとめて UTF-8 化する。
-  const bytes: number[] = [];
-  let i = 0;
-  while (i < segment.length) {
-    const ch = segment[i];
-    if (ch === undefined) {
-      // i < segment.length のループ条件により到達しない (型を絞るためのガード)
-      throw new Error(`invalid msf fragment value: unexpected end of ${role} per §11.1.2`);
-    }
-    if (ch === ".") {
-      // .HH percent-encoding
-      if (i + 2 >= segment.length) {
-        throw new Error(
-          `invalid msf fragment value: incomplete percent-encoded sequence in ${role} per §11.1.2`,
-        );
-      }
-      const hex = segment.slice(i + 1, i + 3);
-      if (!/^[0-9a-f]{2}$/.test(hex)) {
-        throw new Error(
-          `invalid msf fragment value: percent-encoding must use lowercase hex digits in ${role} per §11.1.2, got '.${hex}'`,
-        );
-      }
-      bytes.push(Number.parseInt(hex, 16));
-      i += 3;
-    } else if (/[A-Za-z0-9_]/.test(ch)) {
-      bytes.push(ch.charCodeAt(0));
-      i += 1;
-    } else {
-      throw new Error(
-        `invalid msf fragment value: unreserved character set in ${role} is [A-Za-z0-9_] per §11.1.2, got '${ch}'`,
-      );
-    }
-  }
-  try {
-    return new TextDecoder("utf-8", { fatal: true }).decode(new Uint8Array(bytes));
-  } catch {
-    throw new Error(
-      `invalid msf fragment value: percent-encoded bytes in ${role} are not valid UTF-8 per §11.1.2`,
-    );
-  }
 }
 
 /**

@@ -834,7 +834,7 @@ export function ConnectionSettings() {
               <span class="text-xs text-slate-400 ml-1">
                 {settings.namespaceLocked.value
                   ? "(fixed by the msf fragment)"
-                  : "(split into a tuple by /)"}
+                  : "(fields joined by -)"}
               </span>
             </label>
             {/* msf fragment が namespace を指定している間は編集できない (認可された
@@ -843,7 +843,7 @@ export function ConnectionSettings() {
               type="text"
               id="namespace"
               data-testid="namespace"
-              placeholder="e.g. moqt/devtools/a1B2c3D4e5F6g7H8"
+              placeholder="e.g. moqt-devtools-a1B2c3D4e5F6g7H8"
               value={settings.namespace.value}
               onInput={(e) => (settings.namespace.value = e.currentTarget.value)}
               readOnly={settings.namespaceLocked.value}
@@ -852,6 +852,14 @@ export function ConnectionSettings() {
                 settings.namespaceLocked.value ? "bg-slate-100 text-slate-500" : ""
               }`}
             />
+            {/* §8.8 の namespace-name 文字列として読めない値は、接続に使うフィールド列へ
+                分解できない。理由 (どの位置のどの文字が規則に合わないか) をそのまま出し、
+                配信 / 購読の開始は requireConnectNamespace が同じ理由で拒否する */}
+            {settings.namespaceProblem.value !== null && (
+              <p class="mt-1 text-xs text-red-600" data-testid="namespace-warning">
+                {settings.namespaceProblem.value}
+              </p>
+            )}
           </div>
           <div class="lg:col-span-3">
             <label for="fragment" class="block text-sm font-medium text-slate-600 mb-1">

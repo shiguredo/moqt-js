@@ -161,8 +161,8 @@ test("buildDebugExportText: 接続設定・統計・ログの順に節を並べ�
   // 節の順は接続設定、統計、ログ。設定は実際のスナップショットのキーを出す
   // (MOQT URI の初期値は空のため、値ではなくキーの有無を確かめる)
   assert.isTrue(text.startsWith("=== Connection Settings ===\nurl:"));
-  // namespace の初期値はページごとのランダム (moqt/devtools/...) のため、接頭辞だけを確かめる
-  assert.include(text, "namespace: moqt/devtools/");
+  // namespace の初期値はページごとのランダム (moqt-devtools-...) のため、接頭辞だけを確かめる
+  assert.include(text, "namespace: moqt-devtools-");
   assert.isTrue(text.endsWith("=== Debug Logs ===\n12:34:56.789 only log"));
 });
 

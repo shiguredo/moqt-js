@@ -11,6 +11,11 @@
 
 ## develop
 
+- [CHANGE] moqt-devtools の Namespace の表記を draft-ietf-moq-transport-22 §8.8 の namespace-name 文字列に揃える
+  - 欄は Track Namespace のフィールドを `-` で並べ、literal で書けない byte を `.` + 小文字 16 進 2 桁で書く (例: `moqt-devtools-a1B2c3D4e5F6g7H8`)。`/` 区切りは廃止する (後方互換なし)。`/` を含む旧 URL の `namespace` クエリは §8.8 の表記として読めない値になり、接続に使わない。`/` を含まない旧 URL でも `-` はフィールドの区切りとして読むため、`-` を含む値は別の namespace になる (区切りが変わったことは検出できない)
+  - msf fragment の namespace を欄へ反映するときも同じ表記で組み立て直す。フィールド自身に `-` や `/` を含む namespace でも、欄の文字列からフィールド列を復元できるようになる
+  - 欄が §8.8 の表記として読めない間は、解析の失敗理由を欄に出して配信 / 購読の開始を拒否する (入力した namespace と違う namespace へ繋がない)。Copy URL は namespace を常に載せ、空 (0 フィールド) も指定として復元する
+  - @voluntas
 - [CHANGE] 接続時に提示するプロトコル識別子を moqt-22 にする
   - draft-ietf-moq-transport-22 §6.2 (Session establishment) は、ドラフト版の識別子を「"moqt-" にドラフト番号を付けたもの」と定める。実装が準拠するドラフトは draft-22 であるため、WebTransport の WT-Available-Protocols に `moqt-22` を提示する (従来は `moqt-21`)
   - 現行の実リレー (sora-moq) は draft-22 の識別子に未対応のため、この変更後は接続できない。リレーが対応した時点で接続できるようになる (後方互換なし)。複数の draft を優先順で提示する運用が必要になった場合は追加する
@@ -36,8 +41,8 @@
 - [CHANGE] moqt-devtools の event timeline の eventType を `app.shiguredo.moqt-devtools.messages` にする
   - 逆ドメイン名の取り方を見直し、画面の呼び名 (Messages) に揃える。catalog の eventType が変わる (購読側は packaging でトラックを探すため、購読の動作は変わらない)
   - @voluntas
-- [CHANGE] moqt-devtools の Namespace の初期値を `moqt/devtools/{ランダムな 16 文字}` にする
-  - 複数の devtools が同じ relay に繋がっても namespace が衝突しないようにする。共有するときは Copy URL や Save で持ち出す。Namespace は接続先の特定に使うため、URI Fragment の左に置く
+- [CHANGE] moqt-devtools の Namespace の初期値を `moqt-devtools-{ランダムな 16 文字}` にする
+  - 複数の devtools が同じ relay に繋がっても namespace が衝突しないようにする。共有するときは Copy URL で持ち出す (Save が覚えるのは MOQT URI と fragment だけ)。Namespace は接続先の特定に使うため、URI Fragment の左に置く
   - @voluntas
 - [CHANGE] `MediaReceiverStats.avSync` を追加する
   - 音声と映像の同期の推定値 (同期ずれ、表示の遅れ、使っている目標遅延、切り下げた分、時計の代用の有無) を統計で確認できるようにする
@@ -355,6 +360,11 @@
   - 行の vnode をログの連番で保持し、展開の状態・表示モード・コピーの表示が変わったときだけ作り直す。Preact は同じ vnode を再び受け取ると部分木の差分を省略するため、1000 件表示でも 1 件追加で描画される行は 1 件になる (実測: 同じ計測方法で 1 件追加の中央値 23.0 ms → 7.6 ms、描画される行 1000 件 → 1 件)
   - 上限で捨てたログの vnode はキャッシュから落とす。`data` と `payload` は追加後に書き換えない前提になる (行を描画し直さないため、書き換えても表示は古いまま)
   - 1 件追加のコストは表示中の件数に比例する分が残る (1000 件で約 3 ms のうち、表示中の子の走査が大半)。表示する行を画面に入る分だけにする対応は別に行う
+  - @voluntas
+- [FIX] msf fragment の解析を draft-ietf-moq-transport-22 §8.8 の namespace-name 文字列の規則に揃える
+  - §8.8 は「a byte that could have been represented literally but was hex-encoded」を MUST reject とするが、`parseMsfFragmentValue` は literal で書ける byte の hex 表現 (`.61` など) を受理していた。§11.1.2 がこの規則を normatively 採用しているため拒否する
+  - Track Namespace Field は §8.7 が 1 バイト以上を MUST とするため、空のフィールド (例: `#msf:-x--catalog`) を拒否する。§8.8 の表記にも空のフィールドを書く方法が無い
+  - 受理していた入力が拒否されるため後方互換はない。セグメントの復号は `src/fullTrackName.ts` の `parseFullTrackNameSegment` と共有し、同じ表記を 2 実装で解析しないようにする
   - @voluntas
 - [FIX] 映像の `VIDEO_CONFIG` を後着の購読者と stop 後の再開でも送る
   - 映像の description は configure 後の最初の出力と構成変更時にしか現れず、キーフレームごとには再出現しない。そのため、購読が paused でなくなった時点で保持値の送り直しを要求し、次に届くキーフレームの Object に 1 度だけ載せ直す (GOP の途中の Object には載せない)
