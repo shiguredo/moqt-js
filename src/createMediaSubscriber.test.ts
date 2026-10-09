@@ -14,6 +14,7 @@
 
 import { test, assert } from "vite-plus/test";
 import { MediaSubscriberImpl } from "./createMediaSubscriber";
+import type { VideoDecodeInputs } from "./videoPlayoutSession";
 import type { MediaConnectSettings } from "./createMedia/connect";
 import type { FetchOptions, Session, SubscribeOptions } from "./session";
 import type { Subscriber, RequestUpdateOptions } from "./subscriber";
@@ -2720,7 +2721,8 @@ interface SubscriberAvSyncControl {
   } | null;
   audioDecoderConfigured: boolean;
   audioTimestampKinds: Map<number, "wallClock" | "mediaTime">;
-  videoTimestampKinds: Map<number, "wallClock" | "mediaTime">;
+  // 復号へ渡した映像フレームの情報の対応表 (共有実装が持つ)
+  videoDecodeInputs: VideoDecodeInputs;
   audioWallClockSeen: boolean;
   videoWallClockSeen: boolean;
   // トラックを解決できているかを検証するため、extractTrackInfo が読む入力も制御口に含める
@@ -3987,7 +3989,10 @@ function driveVideoTimeline(
     codec: "av01.0.04M.08",
   };
   control.videoWriter = videoWriter;
-  control.videoTimestampKinds.set(timestampMicros, "wallClock");
+  control.videoDecodeInputs.remember(timestampMicros, {
+    timestampKind: "wallClock",
+    location: { group: 0n, object: 0n },
+  });
   const frame = createTimestampedRecordingFrame(timestampMicros);
   control.handleVideoDecodedData({ frame: frame.frame });
 }

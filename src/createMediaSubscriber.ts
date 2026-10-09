@@ -35,8 +35,12 @@ import { AudioPlayoutTimingStats, AUDIO_PLAYOUT_TIMING_WINDOW_MS } from "./audio
 // 復号した音声の再生の組み立ては devtools と共有する (到着基準の遅れ・閉ループ・計器を
 // 1 か所に置くため、src/audioPlayoutSession.ts が持つ)
 import { AudioPlayoutSession, type AudioPlayoutTimestampKind } from "./audioPlayoutSession";
-import { JITTER_BUFFER_MAX_QUEUED_FRAMES, PlayoutBuffer } from "./playoutBuffer";
+import { JITTER_BUFFER_MAX_QUEUED_FRAMES } from "./playoutBuffer";
 import { PlaybackTimeline } from "./playbackTimeline";
+// 復号した映像フレームの表示の組み立て (対応表・時間軸への記録・表示の選択・計器への記録) は
+// devtools と共有する (src/videoPlayoutSession.ts)。組み立てを 2 か所へ置くと、表示の遅れ・
+// あふれの扱い・計器の修正のたびに両方を直すことになり、片方だけ直すと挙動がずれる
+import { VideoDecodeInputs, VideoPlayoutSession } from "./videoPlayoutSession";
 import { DEFAULT_AUDIO_SAMPLE_RATE, resolveAudioChannelCount } from "./codec/config";
 import type {
   AudioCodecType,
@@ -479,19 +483,34 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     timeOriginMs: performance.timeOrigin,
     maxQueuedFrames: JITTER_BUFFER_MAX_QUEUED_FRAMES,
   });
-  // 復号した映像を LOC TIMESTAMP の間隔で出す。表示周期ごとに select する
-  private readonly videoPlayout = new PlayoutBuffer<VideoFrame>(
-    JITTER_BUFFER_MAX_QUEUED_FRAMES,
-    this.playbackTimeline,
-  );
-  // 復号出力の timestamp から、壁時計かメディア時刻かを引く。decode に渡した値をキーにする
-  private readonly videoTimestampKinds = new Map<number, "wallClock" | "mediaTime">();
+  // 復号した映像の表示の組み立て (対応表・時間軸への記録・表示の選択・計器への記録) は
+  // devtools と共有する (src/videoPlayoutSession.ts)。表示すると決めたフレームは
+  // MediaStreamTrackGenerator へ書き、表示の間隔はブラウザが TIMESTAMP から決める
+  private readonly videoDecodeInputs = new VideoDecodeInputs({
+    maxTracked: TIMESTAMP_KIND_MAX_TRACKED,
+    // ライブラリは位置を使わない (種類だけで表示時刻を決められるかを見る) ため、同じ
+    // TIMESTAMP の Object が重なったら後から来た種類で上書きする
+    forgetOnDuplicate: false,
+  });
+  private readonly videoPlayoutSession = new VideoPlayoutSession({
+    timeline: this.playbackTimeline,
+    output: {
+      isAvailable: () => this.videoWriter !== null && !this.videoPlayoutStopped,
+      present: (frame) => this.presentVideoFrame(frame),
+    },
+    decodeInputs: this.videoDecodeInputs,
+    pacing: {
+      // 書いた時点では表示されず、表示の間隔はブラウザが TIMESTAMP から決める。表示時刻を
+      // 既に過ぎているフレームは、表示周期を待たずにすべて書く
+      drainImmediately: true,
+      framesPerDrain: Number.POSITIVE_INFINITY,
+    },
+  });
   // 音声も同じ対応表を持つ (Timescale がある TIMESTAMP は壁時計ではない)
   private readonly audioTimestampKinds = new Map<number, "wallClock" | "mediaTime">();
   // 音声と映像の両方で壁時計の TIMESTAMP を観測したか (同期の推定を出せるか)
   private audioWallClockSeen = false;
   private videoWallClockSeen = false;
-  private videoFrameDrain: number | null = null;
   private videoPlayoutStopped = false;
 
   // ビデオ出力用
@@ -983,9 +1002,10 @@ export class MediaSubscriberImpl implements MediaSubscriber {
    * catalogReceiveFailed / audioDecoderConfigured / videoDecoderConfigured /
    * lastAppliedVideoConfig / lastAppliedAudioConfig / audioInitialConfigPending /
    * videoInitialConfigPending / videoGroupGateTimer / videoDecodeOrder /
-   * videoPlayoutStopped / videoFrameDrain / audioWallClockSeen / videoWallClockSeen /
-   * audioTimestampKinds / videoTimestampKinds / 保留中の Object (音声 / 映像 / Group の
-   * 切り替え) と上限超過の通知済みフラグ / 表示待ちの映像フレーム (videoPlayout) /
+   * videoPlayoutStopped / audioWallClockSeen / videoWallClockSeen /
+   * audioTimestampKinds / 復号へ渡した映像フレームの対応表 (videoDecodeInputs) / 保留中の
+   * Object (音声 / 映像 / Group の切り替え) と上限超過の通知済みフラグ / 表示待ちの
+   * 映像フレームと予約した表示 (videoPlayoutSession) /
    * 共有の時間軸 (playbackTimeline) と、音声の再生の時計の対応と直前の音
    * (audioPlayoutSession の releaseAudioContext) である。
    * 統計 (audioStats / videoStats) は publisher と同じく再 start へ引き継ぐ。
@@ -2301,7 +2321,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       obj.properties,
     );
     const timestamp = decoderTimestampOf(locProperties);
-    this.rememberVideoTimestampKind(timestamp, locProperties);
+    this.rememberVideoTimestampKind(timestamp, locProperties, obj);
     // VIDEO_FRAME_MARKING が無い publisher の映像も復号できるようにする
     // (Group 先頭をキーフレームとして扱う)。購読が Group の途中から始まった場合は
     // 次の Group 先頭まで VideoDecoderWrapper がキーフレームを待つ。
@@ -2409,33 +2429,31 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     }
   }
 
+  /**
+   * 復号した映像フレームを表示待ちへ渡す
+   *
+   * 表示の組み立て (対応表・時間軸への記録・表示の選択・計器への記録) は devtools と共有する
+   * `VideoPlayoutSession` が持つ (src/videoPlayoutSession.ts)。ここは、購読ごとの状態
+   * (復号の出力の timestamp の種類) を共有実装へ渡すだけにする。
+   *
+   * 出し先が無いとき (映像を表示しない購読、writer を閉じた後) は共有実装がフレームを閉じる。
+   */
   private handleVideoDecodedData(data: { frame: VideoFrame }): void {
-    if (!this.videoWriter || this.videoPlayoutStopped) {
-      data.frame.close();
-      return;
-    }
-
-    // 壁時計の TIMESTAMP だけ表示時刻に使う。write した時点でトラックへ出るため、
-    // select が描くと決めるまで書かない (src/playoutBuffer.ts)
     const frame = data.frame;
-    const kind = this.videoTimestampKinds.get(frame.timestamp);
-    this.videoTimestampKinds.delete(frame.timestamp);
-    const wallClockTimestamp = kind === "wallClock" ? frame.timestamp : null;
-    // 直近のフレームが壁時計の TIMESTAMP を持つか (同期の推定を出せるかの判定に使う)
-    this.videoWallClockSeen = wallClockTimestamp !== null;
-    if (wallClockTimestamp !== null) {
-      // 映像も共有の時間軸へ記録する。音声と同じ式で表示時刻を決める
-      this.playbackTimeline.observe(
-        "video",
-        performance.timeOrigin + performance.now(),
-        wallClockTimestamp,
-      );
+    // 復号へ渡した timestamp の種類を引く。Timescale がある TIMESTAMP は壁時計ではない
+    // (draft-ietf-moq-loc-04 §2.3.1.1 / §2.3.1.2)
+    const input = this.videoDecodeInputs.take(frame.timestamp);
+    const result = this.videoPlayoutSession.handleDecodedFrame({
+      frame,
+      timestampKind: input?.timestampKind ?? "none",
+      // ライブラリは jitter buffer を常に有効として扱う
+      useTimeline: true,
+    });
+    // 直近のフレームが壁時計の TIMESTAMP を持つか (同期の推定を出せるかの判定に使う)。
+    // 表示しなかった (出し先が無い) ときは、最後に表示したフレームの状態を残す
+    if (result.status === "queued") {
+      this.videoWallClockSeen = result.wallClockTimestamp !== null;
     }
-    const overflow = this.videoPlayout.enqueue(frame, wallClockTimestamp);
-    for (const dropped of overflow) {
-      dropped.close();
-    }
-    this.scheduleVideoFrameDrain();
   }
 
   /**
@@ -2462,81 +2480,35 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   }
 
   /**
-   * 表示時刻を過ぎたフレームを書き、残っていれば次の表示周期でも選ぶ
+   * 表示すると決めたフレームを MediaStreamTrackGenerator に書く
    *
-   * 復号の出力のときだけ選ぶと、次のフレームが届くまで期限を過ぎたフレームが残る。
-   * すでに表示時刻を過ぎているフレームは、その場で書く。
-   */
-  private scheduleVideoFrameDrain(): void {
-    this.writeDueVideoFrames();
-    if (this.videoPlayout.size === 0 || this.videoFrameDrain !== null || this.videoPlayoutStopped) {
-      return;
-    }
-    this.videoFrameDrain = requestAnimationFrame(() => {
-      this.videoFrameDrain = null;
-      if (!this.videoWriter || this.videoPlayoutStopped) {
-        this.clearVideoPlayout();
-        return;
-      }
-      this.scheduleVideoFrameDrain();
-    });
-  }
-
-  /** 今の時刻で描けるフレームを順に書く。表示時刻前のフレームはキューに残す */
-  private writeDueVideoFrames(): void {
-    if (!this.videoWriter || this.videoPlayoutStopped) {
-      return;
-    }
-    for (;;) {
-      const selection = this.videoPlayout.select(performance.now());
-      for (const late of selection.late) {
-        late.close();
-      }
-      if (selection.draw === null) {
-        return;
-      }
-      this.writeVideoFrame(selection.draw);
-      // 実際に書く時刻 (表示時刻) を実績として記録する (同期ずれの推定に使う)
-      if (selection.drawPresentationMs !== null) {
-        this.playbackTimeline.recordPresentation(
-          "video",
-          selection.draw.timestamp,
-          BigInt(Math.round((performance.timeOrigin + performance.now()) * 1_000)),
-        );
-      }
-    }
-  }
-
-  /**
-   * MediaStreamTrackGenerator にフレームを書く
+   * 成功時は Generator 所有のため閉じない。失敗時はここで閉じる。書けたかどうかは
+   * `writer.write` の Promise で決まり、ここでは待たない (元の実装と同じく、表示の実績は
+   * 共有実装が書いた時点で記録する)。
    *
-   * 成功時は Generator 所有のため閉じない。失敗時はここで閉じる。
+   * @param frame - 書くフレーム
+   * @returns 常に true (書く先があれば書いたものとして扱う)
    */
-  private writeVideoFrame(frame: VideoFrame): void {
-    if (!this.videoWriter) {
+  private presentVideoFrame(frame: VideoFrame): boolean {
+    const writer = this.videoWriter;
+    if (writer === null) {
       frame.close();
-      return;
+      return false;
     }
     try {
-      this.videoWriter.write(frame).catch(() => {
+      writer.write(frame).catch(() => {
         frame.close();
       });
     } catch {
       frame.close();
     }
+    return true;
   }
 
-  /** 表示待ちの映像を破棄し、予約した選択を取り消す */
+  /** 表示待ちの映像を破棄し、予約した表示を取り消す */
   private clearVideoPlayout(): void {
+    this.videoPlayoutSession.clear();
     this.videoPlayoutStopped = true;
-    if (this.videoFrameDrain !== null) {
-      cancelAnimationFrame(this.videoFrameDrain);
-      this.videoFrameDrain = null;
-    }
-    for (const frame of this.videoPlayout.clear()) {
-      frame.close();
-    }
-    this.videoTimestampKinds.clear();
   }
 
   /**
@@ -2545,19 +2517,18 @@ export class MediaSubscriberImpl implements MediaSubscriber {
    * Timescale が無い TIMESTAMP だけ壁時計である (draft-ietf-moq-loc-04 §2.3.1.1)。
    * 無い TIMESTAMP は decoder に 0 を渡すため、種類は覚えず壁時計にしない。
    */
-  private rememberVideoTimestampKind(timestamp: number, source: TimestampSource): void {
+  private rememberVideoTimestampKind(
+    timestamp: number,
+    source: TimestampSource,
+    obj: MoqtObject,
+  ): void {
     if (source.timestamp === undefined) {
       return;
     }
-    const kinds = this.videoTimestampKinds;
-    kinds.delete(timestamp);
-    kinds.set(timestamp, source.timescale === undefined ? "wallClock" : "mediaTime");
-    for (const oldest of kinds.keys()) {
-      if (kinds.size <= TIMESTAMP_KIND_MAX_TRACKED) {
-        break;
-      }
-      kinds.delete(oldest);
-    }
+    this.videoDecodeInputs.remember(timestamp, {
+      timestampKind: source.timescale === undefined ? "wallClock" : "mediaTime",
+      location: { group: obj.groupId, object: obj.objectId },
+    });
   }
 }
 
