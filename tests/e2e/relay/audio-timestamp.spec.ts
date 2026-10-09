@@ -229,6 +229,13 @@ test("実リレー経由で同じブラウザから音声を配信し、受信�
   expect(text).toContain("slope10sMsPerSecond:");
   expect(text).toContain("slope60sMsPerSecond:");
 
+  // Debug パネルを閉じる。パネルは画面の右側 (幅 640 px、全高) を覆う固定表示であり、
+  // 開いたままにすると停止ボタンがパネルの下に隠れる。隠れた要素は Playwright が
+  // 「押せるようになるまで」待ち続けるため、後始末のクリックがテストのタイムアウトを
+  // 使い切っていた。押せる状態へ戻してから止める (タイムアウトは伸ばさない)
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("heading", { name: "Debug Logs" })).toBeHidden();
+
   // 後始末 (統計を読んでから止める)。リレー側から先に切れていることがあるため、
   // 押せる (まだ配信 / 購読中の) ときだけ止める
   const publisherStop = page.getByTestId("publisher-stop-button");
