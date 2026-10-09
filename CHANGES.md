@@ -366,6 +366,10 @@
   - 上限で捨てたログの vnode はキャッシュから落とす。`data` と `payload` は追加後に書き換えない前提になる (行を描画し直さないため、書き換えても表示は古いまま)
   - 1 件追加のコストは表示中の件数に比例する分が残る (1000 件で約 3 ms のうち、表示中の子の走査が大半)。表示する行を画面に入る分だけにする対応は別に行う
   - @voluntas
+- [FIX] `createMediaSubscriber` の初期 configure を待つ保留キューに件数とバイト数の上限を設ける
+  - 購読要求から初期 configure 完了までの Object を保留するキューに上限が無く、`session.subscribe` が解決しない、または初期 configure がハングする場合に Object を保持し続けていた。上限を超えた Object は保持せず破棄し、超過は `onError` で通知する (キューごとに購読期間あたり 1 回。音声と映像が同時に溢れれば最大 2 回)。破棄した Object は受信統計に数えない
+  - 上限は `MediaSubscriberOptions.pendingObjectQueue` (`maxObjects` / `maxBytes`) で変更できる。バイト数は payload と properties の長さの合計で数える (受信統計の `bytesReceived` と同じ基準)。0 以下で上限なし。既定は 512 件 / 1 MiB で、上限の型 `PendingObjectQueueOptions` と既定値 `DEFAULT_PENDING_OBJECT_QUEUE_OPTIONS` を公開する。音声と映像は別々のキューと上限を持ち、上限内の Object は従来どおり初期 configure 完了後に到着順で処理する
+  - @voluntas
 - [FIX] `createMediaSubscriber` の `close()` の後に in-flight の再構成が完了すると、閉じた購読が復号を再開するのを修正する
   - `close()` は解放の await を挟むため、その間は state がまだ `"closed"` にならず、復号器の構成済み状態 (`videoDecoderConfigured` / `audioDecoderConfigured`) と適用済みの config (`lastAppliedVideoConfig` / `lastAppliedAudioConfig`) が残っていた。`VIDEO_CONFIG` / `AUDIO_CONFIG` の変化による再構成 (configure) の完了が解放より後になると、構成済みが true に戻り適用済み config も新しい値で更新され、以降に届いた Object が統計に数えられてから復号されずに捨てられていた
   - 購読側に閉状態のフラグを持ち、`close()` の同期部分で立てる。再構成は configure の発行前と完了後に閉状態を判定し、閉じた後は configure を発行せず、完了した configure の結果も捨てる。初期 configure の適用も閉じた後は configure を発行せず保留分の解放だけを行う

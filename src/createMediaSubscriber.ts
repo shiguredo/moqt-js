@@ -117,6 +117,51 @@ const CATALOG_RECEIVE_TIMEOUT = 5000;
 const START_ABORTED_DISPOSED = "start aborted: resources were disposed during start";
 
 /**
+ * 初期 configure の完了まで保留する Object の上限
+ *
+ * draft-ietf-moq-loc-04 Table 1: VIDEO_CONFIG / AUDIO_CONFIG は Track Property でも届く。
+ * SUBSCRIBE_OK の Track Property を初期 configure に反映するまでの間、届いた Object を
+ * 到着順に保留するが、購読が確立しない、または初期 configure がハングする異常時は
+ * 保留の区間が伸びる。バイト数は保留する payload と properties の長さの合計を数え、
+ * 件数は Object 1 件あたりの固定費 (MoqtObject / Uint8Array / 配列の要素) を抑えるため、
+ * 両方に上限を設ける。
+ */
+export interface PendingObjectQueueOptions {
+  /** 保留する Object の件数上限。0 以下で上限なし */
+  maxObjects: number;
+  /** 保留する Object の payload と properties の長さの合計の上限。0 以下で上限なし */
+  maxBytes: number;
+}
+
+/**
+ * PendingObjectQueueOptions のデフォルト値
+ *
+ * - maxObjects: 512 件
+ * - maxBytes: 1 MiB (`PendingSubgroupBufferOptions.perStreamMaxBytes` と同じ値)
+ *
+ * 音声と映像は別々のキューを持ち、上限もキューごとに判定する (合計は最大でこの 2 倍)。
+ * `MediaSubscriberOptions.pendingObjectQueue` の未指定フィールドはこの値で補完される。
+ * 上限の型とあわせてパッケージ公開 API (`src/index.ts`) から参照できる。
+ */
+export const DEFAULT_PENDING_OBJECT_QUEUE_OPTIONS: PendingObjectQueueOptions = {
+  maxObjects: 512,
+  maxBytes: 1 << 20,
+};
+
+/**
+ * 保留キューの可変な状態
+ *
+ * 件数はキュー (MoqtObject[]) の長さで見る。バイト数と通知済みフラグは配列からは
+ * 決まらないためここで持つ。
+ */
+interface PendingObjectQueueState {
+  /** 保留中の Object の payload と properties の長さの合計バイト数 */
+  bytes: number;
+  /** 上限超過を通知済みか (キューごとに購読期間あたり 1 回だけ通知する) */
+  overflowNotified: boolean;
+}
+
+/**
  * Catalog Object payload を現在カタログへ適用した結果
  *
  * - `full`: 独立フルカタログで置換
@@ -359,6 +404,8 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   private readonly url: string;
   private readonly options: MediaSubscriberOptions;
   private readonly callbacks: MediaSubscriberCallbacks;
+  // 保留キューの上限。options.pendingObjectQueue の未指定フィールドは既定値で補完する
+  private readonly pendingObjectQueueOptions: PendingObjectQueueOptions;
 
   // 接続関連
   private session: Session | null = null;
@@ -446,17 +493,22 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   private lastAppliedAudioConfig: Uint8Array | null = null;
 
   // draft-ietf-moq-loc-04 Table 1: VIDEO_CONFIG / AUDIO_CONFIG は Track Property でも届く。
-  // SUBSCRIBE_OK の Track Property を初期 configure に反映するまでの間、届いた Object を
-  // 到着順に保留する (購読確立前にバッファから配送される Object も取りこぼさない)。
-  // 保留中は true。
-  // 保留は購読要求 (subscribeMediaTracks) の直前から初期 configure 完了までの短い区間に
-  // 限られ、上限は設けていない
-  // (close で破棄する。区間が伸びる異常時は Object を保持し続けるため、上限が必要に
-  //  なったら catalog 側の pendingCatalogObjects と同じ形で導入する)
+  // これを初期 configure に反映するまでの間、届いた Object を到着順に保留する (保留中は
+  // true)。上限の判定と破棄は holdPendingObject、通常の解放は releasePendingAudioObjects /
+  // releasePendingVideoObjects、close などの経路での破棄は disposeAllResources が行う
   private audioInitialConfigPending = false;
   private videoInitialConfigPending = false;
   private pendingAudioObjects: MoqtObject[] = [];
   private pendingVideoObjects: MoqtObject[] = [];
+  // 保留キューの計数 (payload と properties の合計バイト数と、上限超過の通知済みフラグ)
+  private readonly pendingAudioQueueState: PendingObjectQueueState = {
+    bytes: 0,
+    overflowNotified: false,
+  };
+  private readonly pendingVideoQueueState: PendingObjectQueueState = {
+    bytes: 0,
+    overflowNotified: false,
+  };
 
   // 統計情報 (受信の分。再生の分は getStats のたびに scheduler から読む)
   private audioStats: Pick<AudioReceiverStats, "framesReceived" | "bytesReceived"> = {
@@ -488,6 +540,10 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     this.url = url;
     this.options = options;
     this.callbacks = callbacks;
+    this.pendingObjectQueueOptions = {
+      ...DEFAULT_PENDING_OBJECT_QUEUE_OPTIONS,
+      ...options.pendingObjectQueue,
+    };
   }
 
   get state(): MediaSubscriberState {
@@ -906,8 +962,8 @@ export class MediaSubscriberImpl implements MediaSubscriber {
    * videoInitialConfigPending / videoGroupGateTimer / videoDecodeOrder /
    * videoPlayoutStopped / videoFrameDrain / audioWallClockSeen / videoWallClockSeen /
    * audioTimestampKinds / videoTimestampKinds / 保留中の Object (音声 / 映像 / Group の
-   * 切り替え) と表示待ちの映像フレーム (videoPlayout) / 共有の時間軸 (playbackTimeline) /
-   * 時計の対応 (audioClockBridge) である。
+   * 切り替え) と上限超過の通知済みフラグ / 表示待ちの映像フレーム (videoPlayout) /
+   * 共有の時間軸 (playbackTimeline) / 時計の対応 (audioClockBridge) である。
    * 統計 (audioStats / videoStats) は publisher と同じく再 start へ引き継ぐ。
    * 音声の再生スケジューラ (audioPlayout) は AudioContext と対で作り直すため、
    * ここではなく createOutputStream が初期化する。
@@ -1012,11 +1068,11 @@ export class MediaSubscriberImpl implements MediaSubscriber {
 
     // 実行時状態を初期値に戻す (統計 (audioStats / videoStats) は引き継ぐ)
 
-    // 保留分は破棄し、以後は保留せずハンドラの configured ガードで decode しない
+    // 保留分と上限超過の通知済みフラグを破棄し、以後は保留せずハンドラの configured
+    // ガードで decode しない
     this.audioInitialConfigPending = false;
     this.videoInitialConfigPending = false;
-    this.pendingAudioObjects = [];
-    this.pendingVideoObjects = [];
+    this.resetPendingObjectQueues();
     // Group の切り替えで保留していた映像 Object も破棄する
     if (this.videoGroupGateTimer !== null) {
       clearTimeout(this.videoGroupGateTimer);
@@ -1671,8 +1727,10 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     if (this.audioTrackInfo) {
       const trackName = this.audioTrackInfo.name;
       // 購読要求より前に保留を有効化し、購読確立前後に届く Object を落とさない
-      // (初期 configure は購読確立直後に適用する)
+      // (初期 configure は購読確立直後に適用する)。上限超過の通知はキューごとに
+      // 購読期間あたり 1 回だけにするため、前の購読期間の通知済みフラグをここで解除する
       this.audioInitialConfigPending = true;
+      this.pendingAudioQueueState.overflowNotified = false;
       // draft-ietf-moq-msf-01 §11.4.3: authInfo を持つ track にはトークンを MUST 付与
       const authorizationToken = await this.resolveTrackAuthorizationToken(this.audioTrackInfo);
       // 解放が先行していれば、購読要求も出さない (解放で session は切り離し済み)
@@ -1706,8 +1764,10 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     if (this.videoTrackInfo) {
       const trackName = this.videoTrackInfo.name;
       // 購読要求より前に保留を有効化し、購読確立前後に届く Object を落とさない
-      // (初期 configure は購読確立直後に適用する)
+      // (初期 configure は購読確立直後に適用する)。上限超過の通知はキューごとに
+      // 購読期間あたり 1 回だけにするため、前の購読期間の通知済みフラグをここで解除する
       this.videoInitialConfigPending = true;
+      this.pendingVideoQueueState.overflowNotified = false;
 
       // draft-ietf-moq-msf-01 §11.4.3: authInfo を持つ track にはトークンを MUST 付与
       const videoAuthorizationToken = await this.resolveTrackAuthorizationToken(
@@ -1812,11 +1872,71 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     }
   }
 
+  /**
+   * 初期 configure の完了まで保留するキューへ Object を積む
+   *
+   * 上限の判定と破棄をこの 1 箇所に閉じる (呼び出し側は保留中かどうかだけを見る)。
+   * バイト数は受信統計の bytesReceived と同じ定義 (payload と properties の長さの合計) で
+   * 数える (MoqtObject 自体と Object 1 件あたりの固定費は件数の上限が抑える)。
+   * 上限を超えた Object は保持せず破棄し、受信統計にも数えない (保留中の Object を
+   * 数えていないのと同じ扱いにする)。超過は onError で通知するが、Object ごとに
+   * 通知すると呼び出し側のログとエラー処理を圧迫するため、キューごとに購読期間あたり
+   * 1 回だけ通知する。通知済みフラグの解除は resetPendingObjectQueues
+   * (disposeAllResources の破棄経路) と購読の開始が行う。
+   *
+   * @param kind どちらの media のキューか (通知の文言に使う)
+   * @param obj 保留するか破棄するかを判定する Object
+   */
+  private holdPendingObject(kind: "audio" | "video", obj: MoqtObject): void {
+    const isAudio = kind === "audio";
+    const objects = isAudio ? this.pendingAudioObjects : this.pendingVideoObjects;
+    const state = isAudio ? this.pendingAudioQueueState : this.pendingVideoQueueState;
+    const limit = this.pendingObjectQueueOptions;
+    // バイト数は受信統計の bytesReceived と同じ定義 (payload と properties の長さの合計) で
+    // 数える。properties を数えないと、payload 0 バイトで properties が大きい Object が
+    // バイト上限に触れずに保持され続ける
+    const bytes = state.bytes + obj.payload.byteLength + (obj.properties?.byteLength ?? 0);
+    // 上限 0 以下は無制限を意味する (ConnectOptions.dataStreamMaxBufferBytes と同じ規約)。
+    // 上限ちょうどの保持は許し、超える Object だけを破棄する
+    const objectsOver = limit.maxObjects > 0 && objects.length >= limit.maxObjects;
+    const bytesOver = limit.maxBytes > 0 && bytes > limit.maxBytes;
+    if (objectsOver || bytesOver) {
+      if (!state.overflowNotified) {
+        state.overflowNotified = true;
+        this.callbacks.onError?.(
+          new Error(
+            // 件数とバイト数は破棄するこの Object を含めた値にする (保持済みの分だけではない)
+            `${kind} pending object queue overflow: maxObjects=${limit.maxObjects}, maxBytes=${limit.maxBytes}, objects=${objects.length + 1}, bytes=${bytes}`,
+          ),
+        );
+      }
+      return;
+    }
+    objects.push(obj);
+    state.bytes = bytes;
+  }
+
+  /**
+   * 保留キューと上限超過の通知済みフラグを破棄する
+   *
+   * 解放 (disposeAllResources) から呼ぶ。購読開始では通知済みフラグだけを解除する
+   * (購読開始の時点でキューは空であり、前の購読期間の Object を持ち越さない)。
+   */
+  private resetPendingObjectQueues(): void {
+    this.pendingAudioObjects = [];
+    this.pendingVideoObjects = [];
+    this.pendingAudioQueueState.bytes = 0;
+    this.pendingVideoQueueState.bytes = 0;
+    this.pendingAudioQueueState.overflowNotified = false;
+    this.pendingVideoQueueState.overflowNotified = false;
+  }
+
   /** 保留中の Audio Object を到着順に処理する */
   private releasePendingAudioObjects(): void {
     this.audioInitialConfigPending = false;
     const pending = this.pendingAudioObjects;
     this.pendingAudioObjects = [];
+    this.pendingAudioQueueState.bytes = 0;
     for (const obj of pending) {
       this.handleAudioObject(obj);
     }
@@ -1827,6 +1947,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     this.videoInitialConfigPending = false;
     const pending = this.pendingVideoObjects;
     this.pendingVideoObjects = [];
+    this.pendingVideoQueueState.bytes = 0;
     for (const obj of pending) {
       this.handleVideoObject(obj);
     }
@@ -1866,8 +1987,9 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     // 解放の途中 (decoder の参照を切る前) に届いた Object を判定できない
     if (this.closed) return;
     // 初期 configure (Track Property の AUDIO_CONFIG) の完了まで保留する
+    // (上限を超えた Object は holdPendingObject が保持せず破棄する)
     if (this.audioInitialConfigPending) {
-      this.pendingAudioObjects.push(obj);
+      this.holdPendingObject("audio", obj);
       return;
     }
     if (!this.audioDecoder || !this.audioDecoderConfigured) return;
@@ -2140,8 +2262,9 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     // 解放の途中 (decoder の参照を切る前) に届いた Object を判定できない
     if (this.closed) return;
     // 初期 configure (Track Property の VIDEO_CONFIG) の完了まで保留する
+    // (上限を超えた Object は holdPendingObject が保持せず破棄する)
     if (this.videoInitialConfigPending) {
-      this.pendingVideoObjects.push(obj);
+      this.holdPendingObject("video", obj);
       return;
     }
     if (!this.videoDecoder || !this.videoDecoderConfigured) return;

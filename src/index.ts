@@ -194,6 +194,9 @@ export {
   type AvSyncStats,
   type AudioSubscribeOptions,
   type VideoSubscribeOptions,
+  // 保留キューの上限の再エクスポート (初期 configure の完了まで保留する Object)
+  type PendingObjectQueueOptions,
+  DEFAULT_PENDING_OBJECT_QUEUE_OPTIONS,
 } from "./createMediaSubscriber";
 
 // コーデック型
