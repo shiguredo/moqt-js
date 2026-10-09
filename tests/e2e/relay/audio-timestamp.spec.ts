@@ -19,8 +19,20 @@ import { RELAY_TEST_TIMEOUT_MS, requireRelayUri } from "./support";
 
 // 偽のマイクは完全な Chromium (新しい headless) でだけ使える。Playwright の既定の
 // headless shell は getUserMedia を NotSupportedError にする
+//
+// `channel: "chromium"` は getUserMedia を「使えるようにする」だけで、マイクの実体は
+// 用意しない。CI の runner (ubuntu-slim) には音声の入力デバイスが無いため、
+// getUserMedia は NotFoundError になり、publisher は音声を諦めて (devtools の
+// `prepareAudioForPublishing` が warn を残す) Object を 1 つも送らない。手元では実機の
+// マイクがあるため、この違いが表面化していなかった。
+// `--use-fake-device-for-media-stream` で Chromium の偽デバイスを用意し、手元と CI を
+// 同じ条件にする (偽デバイスも音を 20 ms ごとに渡すため、配信と購読の経路はそのまま
+// 検証できる)
 test.use({
-  launchOptions: { channel: "chromium" },
+  launchOptions: {
+    channel: "chromium",
+    args: ["--use-fake-device-for-media-stream"],
+  },
   // 偽のマイクの使用と、Copy for LLM の本文を読むためのクリップボード
   permissions: ["microphone", "clipboard-read", "clipboard-write"],
 });
