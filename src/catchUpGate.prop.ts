@@ -11,7 +11,7 @@
 
 import { test, assert } from "vite-plus/test";
 import * as fc from "fast-check";
-import type { Location } from "moqt-js";
+import type { Location } from "./message";
 import { CatchUpGate } from "./catchUpGate";
 
 /** 判定に使う Location。Group ID と Object ID が重複する場合も作る */
