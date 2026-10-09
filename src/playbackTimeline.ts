@@ -132,6 +132,28 @@ export const PLAYOUT_BASE_DRIFT_MS = 50;
 /** 基準の差の動きを見る窓 (ミリ秒) */
 export const PLAYOUT_BASE_DRIFT_WINDOW_MS = 5_000;
 
+/**
+ * A/V 同期で合わせる、2 つのトラックの基準の差の上限 (ミリ秒)
+ *
+ * 同じ publisher・同じ経路の 2 つのトラックで、経路と復号の「最小」遅延がこれ以上違う
+ * ことはない。これを超える差は TIMESTAMP の時計のずれであり、合わせても実際のずれは
+ * 減らないまま、相手側の表示の遅れだけが伸びる (実測では音声の基準が 313 ms・映像が
+ * 13 ms のとき、映像へ 378 ms を足して表示の遅延が 483 ms になっていた)。合わせるのは
+ * この分までにし、残りは A/V のずれとして受け入れる
+ */
+export const PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS = 100;
+
+/**
+ * いったん基準を共有しないと決めた後、判定を戻さない時間 (ミリ秒)
+ *
+ * 閾値は「表示の遅れの上限 - そのトラックの遅延」で決まるため、jitter buffer の目標遅延が
+ * 段差で動くたびに閾値も動く。実測では差が 300 ms でほぼ動かないまま、音声の目標遅延が
+ * 380 ms と 100 ms を行き来して閾値が 120 ms と 400 ms を行き来し、13 秒間に 5 回
+ * 共有と解除を往復した。往復のたびに、足した分を戻して (間に合わないフレームを捨てる)
+ * すぐ足し直す (表示が待って止まる) ことになるため、しばらくは戻さない
+ */
+export const PLAYOUT_BASE_UNSHARED_HOLD_MS = 30_000;
+
 /** 基準の差を記録する間隔 (ミリ秒) */
 const BASE_DIFFERENCE_SAMPLE_INTERVAL_MS = 250;
 
@@ -171,7 +193,9 @@ export type PlaybackUnsharedReason =
   // 基準の差が表示の遅れの上限を超えている (上限では合わせられない)
   | "difference"
   // 基準の差が動き続けている (TIMESTAMP が壁時計からずれている)
-  | "drift";
+  | "drift"
+  // 直前にやめた判定を保持している (閾値が動いても往復させない)
+  | "hold";
 
 /**
  * トラックごとの表示時刻の内訳 (遅延の解析に使う)
@@ -300,6 +324,12 @@ export class PlaybackTimeline {
   private syncExtraMs: Record<PlaybackStream, number> = { audio: 0, video: 0 };
   // 直前に同期の制御を行った時刻 (ミリ秒)。まだ行っていなければ null
   private lastSyncMs: number | null = null;
+  // 2 つのトラックの TIMESTAMP の時計がそろっていない証拠を見たか。差が経路差として
+  // 説明できる上限を超えても、これを見るまでは合わせる (経路が本当に違う場合があるため)
+  private clockSuspectValue = false;
+  // 基準を共有しないと決めた直近の時刻と、そのときの側 (ミリ秒、トラック)。往復を防ぐ
+  private lastUnsharedAtMs: number | null = null;
+  private lastUnsharedStream: PlaybackStream | null = null;
   // 直前に同期の制御に使った「自分の遅延の下限」(ミリ秒)。下げる速さの残りを求めるために持つ
   private lastOwnFloorMs: Record<PlaybackStream, number> | null = null;
   // 2 つのトラックの基準の差の直近の履歴 (ミリ秒)。差が動き続けていれば時計のずれである
@@ -627,9 +657,11 @@ export class PlaybackTimeline {
     if (this.baseDifferenceDrifted()) {
       return "drift";
     }
-    return Math.abs(this.currentBaseDifferenceMs() ?? 0) > this.baseDifferenceLimitMs()
-      ? "difference"
-      : "none";
+    if (Math.abs(this.currentBaseDifferenceMs() ?? 0) > this.baseDifferenceLimitMs()) {
+      return "difference";
+    }
+    // 直前にやめた判定を保持している (閾値が動いても往復させない)
+    return this.heldUnsharedStream() === null ? "none" : "hold";
   }
 
   /** 直近の基準の差の動き (ミリ秒 / 秒)。まだ履歴が無ければ null */
@@ -838,8 +870,8 @@ export class PlaybackTimeline {
 
     // 2) 足した分を目標へ戻す (毎秒の速さまで。自分の下限が下がった分だけ減らす。
     //    観測の間隔で按分するため、観測が疎でも速さは変わらない)
-    const alignedNaturalMs = Math.max(naturalMs.audio, naturalMs.video) - SYNC_MIN_DELTA_MS;
-    this.decaySyncExtras(nowMs, (stream) => Math.max(0, alignedNaturalMs - naturalMs[stream]));
+    const targetExtraMs = this.targetExtraMsOf(naturalMs);
+    this.decaySyncExtras(nowMs, (stream) => targetExtraMs[stream]);
 
     // 3) 戻した後のずれをもう一度そろえる (片側だけ戻すと、その分だけずれが開く)
     this.alignSyncExtras(naturalMs);
@@ -887,12 +919,53 @@ export class PlaybackTimeline {
   private alignSyncExtras(naturalMs: Record<PlaybackStream, number>): void {
     const audioMs = naturalMs.audio + this.syncExtraMs.audio;
     const videoMs = naturalMs.video + this.syncExtraMs.video;
-    const alignedMs = Math.max(audioMs, videoMs) - SYNC_MIN_DELTA_MS;
-    if (audioMs < alignedMs) {
-      this.syncExtraMs.audio = alignedMs - naturalMs.audio;
-    } else if (videoMs < alignedMs) {
-      this.syncExtraMs.video = alignedMs - naturalMs.video;
+    // 目標の差は足した分を含まない素の値から決める
+    const targetMs = Math.max(audioMs, videoMs) - this.desiredDifferenceMs(naturalMs);
+    if (audioMs < targetMs) {
+      this.syncExtraMs.audio = targetMs - naturalMs.audio;
+    } else if (videoMs < targetMs) {
+      this.syncExtraMs.video = targetMs - naturalMs.video;
     }
+  }
+
+  /**
+   * 同期の制御で目指す、2 つのトラックの表示時刻の差 (ミリ秒)
+   *
+   * 不感帯 (`SYNC_MIN_DELTA_MS`) に収める。ただし合わせる量は
+   * `PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS` までにする。それを超える差は経路の遅れでは
+   * なく TIMESTAMP の時計のずれであり、合わせても実際のずれは減らないまま相手側の
+   * 表示の遅れだけが伸びるためである (時計のずれを見るまでは上限を掛けない)。
+   * 差は「足した分を含まない素の値」から決める。今の値から決めると、足すたびに目標が
+   * 上がり続けて上限まで届くまで足してしまう
+   */
+  private desiredDifferenceMs(naturalMs: Record<PlaybackStream, number>): number {
+    const differenceMs = Math.abs(naturalMs.audio - naturalMs.video);
+    const maximumMs = this.clockSuspectValue
+      ? PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS
+      : Number.POSITIVE_INFINITY;
+    return Math.max(SYNC_MIN_DELTA_MS, differenceMs - maximumMs);
+  }
+
+  /**
+   * 2 つのトラックの遅れが目標の差になるために、先行する側へ足す分 (ミリ秒)
+   *
+   * 素の値で先行する側 (小さい方) へ、後行側から `desiredDifferenceMs` だけ手前になるまで
+   * の分を足す。戻す向きは `updateSyncDelays` の減衰だけが行う
+   */
+  private targetExtraMsOf(
+    naturalMs: Record<PlaybackStream, number>,
+  ): Record<PlaybackStream, number> {
+    const desiredMs = this.desiredDifferenceMs(naturalMs);
+    if (naturalMs.audio <= naturalMs.video) {
+      return {
+        audio: Math.max(0, naturalMs.video - desiredMs - naturalMs.audio),
+        video: 0,
+      };
+    }
+    return {
+      audio: 0,
+      video: Math.max(0, naturalMs.audio - desiredMs - naturalMs.video),
+    };
   }
 
   /**
@@ -965,10 +1038,37 @@ export class PlaybackTimeline {
     if (difference === null) {
       return null;
     }
-    if (Math.abs(difference) <= this.baseDifferenceLimitMs() && !this.baseDifferenceDrifted()) {
+    const stream: PlaybackStream = difference > 0 ? "audio" : "video";
+    if (this.baseDifferenceDrifted()) {
+      // 差が動いた = 経路の遅れでは説明できない。以後は「経路差として説明できる上限」を
+      // 超える差を時計のずれとして扱い、相手側へ移さない
+      this.clockSuspectValue = true;
+    }
+    if (Math.abs(difference) > this.baseDifferenceLimitMs() || this.baseDifferenceDrifted()) {
+      this.lastUnsharedAtMs = this.lastBaseDifferenceAtMs;
+      this.lastUnsharedStream = stream;
+      return stream;
+    }
+    return this.heldUnsharedStream();
+  }
+
+  /**
+   * 直前に共有をやめた側。保持の時間 (`PLAYOUT_BASE_UNSHARED_HOLD_MS`) を過ぎていれば null
+   *
+   * 閾値は jitter buffer の目標遅延で動くため、差が変わらなくても共有と解除を往復し得る。
+   * 往復のたびに、足した分を戻して (フレームを捨てる) すぐ足し直す (表示が止まる) ため、
+   * 一度やめたらしばらくは戻さない
+   */
+  private heldUnsharedStream(): PlaybackStream | null {
+    if (
+      this.lastUnsharedStream === null ||
+      this.lastUnsharedAtMs === null ||
+      this.lastBaseDifferenceAtMs === null ||
+      this.lastBaseDifferenceAtMs - this.lastUnsharedAtMs >= PLAYOUT_BASE_UNSHARED_HOLD_MS
+    ) {
       return null;
     }
-    return difference > 0 ? "audio" : "video";
+    return this.lastUnsharedStream;
   }
 
   /**

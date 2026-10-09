@@ -23,6 +23,7 @@ import {
   PLAYBACK_DELAY_DECAY_MS_PER_SECOND,
   PLAYOUT_BASE_MAX_DIFFERENCE_MIN_MS,
   PLAYOUT_QUEUE_HEADROOM_FRAMES,
+  PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS,
   SYNC_MIN_DELTA_MS,
   PlaybackTimeline,
   type PlaybackStream,
@@ -475,10 +476,12 @@ test("PlaybackTimeline: 120 秒の到着列でも同時刻の表示時刻の差�
  */
 test("PlaybackTimeline: 差が開いていた到着列でも同時刻の表示時刻の差が不感帯に収まる", () => {
   for (const seed of [50, 139, 194]) {
+    // 差が開く到着列では、合わせる量を上限 (PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS) までに
+    // 抑えるため、不感帯を超えた分が残る。上限までの補正しかしないこと
     assert.isAtMost(
       runArrivals(seed).maxDifferenceMs,
-      SYNC_MIN_DELTA_MS + 0.01,
-      `seed=${seed} の同時刻の表示時刻の差が不感帯に収まること`,
+      SYNC_MIN_DELTA_MS + PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS + 0.01,
+      `seed=${seed} の同時刻の表示時刻の差が上限までの補正に収まること`,
     );
   }
 }, 30_000);

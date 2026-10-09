@@ -21,6 +21,7 @@ import {
   PLAYBACK_DISCONTINUITY_MS,
   PLAYOUT_BASE_DRIFT_MS,
   PLAYOUT_BASE_MAX_DIFFERENCE_MIN_MS,
+  PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS,
   PLAYOUT_QUEUE_HEADROOM_FRAMES,
   PlaybackTimeline,
   SYNC_MIN_DELTA_MS,
@@ -975,4 +976,48 @@ test("delayBreakdown: ドリフトでは理由と動きの速さを出し、ず�
   );
   assert.isNull(breakdown.audio.presentationDelayMs, "ずれた側 (音声) は到着基準へ落ちること");
   assert.isNotNull(breakdown.video.presentationDelayMs, "映像は自分の基準で表示できること");
+});
+
+// 完了条件: 基準の差が経路差として説明できる上限 (PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS) を
+// 超えたら、超えた分は合わせない。合わせても実際のずれは減らないまま相手側の表示の遅れが
+// 伸びるためである (実測では音声の基準 313 ms・映像 13 ms で映像へ 378 ms を足し、
+// 表示の遅延が 483 ms になっていた)
+test("observe: 基準の差が大きくても相手側へ足す分は上限までにする", () => {
+  const timeline = createTimeline();
+  // 音声だけが TIMESTAMP より 300 ms 遅れて届く (定常)。ただし最初の 5 秒で 150 ms の段差を
+  // 入れて、時計がそろっていない証拠を見せる (証拠を見るまでは上限を掛けない)
+  const offsetMs = 300;
+  for (let mediaMs = 0; mediaMs < 20_000; mediaMs += FRAME_MS) {
+    const stepMs = mediaMs < 5_000 ? 0 : 150;
+    timeline.observe("video", EPOCH_MS + mediaMs, timestampOf(mediaMs));
+    timeline.observe("audio", EPOCH_MS + mediaMs + offsetMs, timestampOf(mediaMs - stepMs));
+  }
+  assert.closeTo(timeline.delayBreakdown.baseDifferenceMs ?? 0, 450, 1, "差が開いていること");
+  // 映像へ足すのは上限まで。残りの差は A/V のずれとして残す
+  assert.isAtMost(
+    timeline.delayBreakdown.video.syncExtraDelayMs,
+    PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS,
+    "映像へ足す分が上限を超えないこと",
+  );
+  // 映像の表示の遅れは、上限までの分だけ (相手の 450 ms に引きずられない)
+  assert.isAtMost(
+    timeline.videoDelayMs ?? Infinity,
+    PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS + 1,
+    "映像の表示の遅れが上限を超えないこと",
+  );
+});
+
+// 完了条件: 閾値は jitter buffer の目標遅延で動くため、差が変わらなくても共有と解除を
+// 往復し得る。往復のたびに、足した分を戻して (フレームを捨てる) すぐ足し直す (表示が
+// 止まる) ことになるため、一度やめたら保持の間は戻さない
+test("observe: 一度共有をやめたら保持の間は戻さない", () => {
+  const timeline = createTimeline();
+  // 5 秒目に音声の TIMESTAMP が 150 ms 古くなる (段差)。以後は動かない
+  for (let mediaMs = 0; mediaMs < 15_000; mediaMs += FRAME_MS) {
+    const offsetMs = mediaMs < 5_000 ? 0 : 150;
+    timeline.observe("video", EPOCH_MS + mediaMs, timestampOf(mediaMs));
+    timeline.observe("audio", EPOCH_MS + mediaMs, timestampOf(mediaMs - offsetMs));
+  }
+  // 段差のあとは動きが無くなる (動きだけを見ていると判定が解ける) が、保持の間は戻さない
+  assert.isFalse(timeline.sharingBases, "保持の間は基準を共有しないこと");
 });
