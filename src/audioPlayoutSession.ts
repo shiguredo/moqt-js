@@ -442,10 +442,11 @@ export class AudioPlayoutSession {
   }
 
   /**
-   * 予約済みでまだ鳴り始めていない音を、鳴らなかった分として数える
+   * 予約した音のうち、まだ鳴っていない分を鳴らなかった音として数える
    *
    * `AudioContext` を閉じると、予約した音は鳴らないまま切り捨てられる。この分はどの統計にも
-   * 現れないため、閉じる直前に呼ぶ。
+   * 現れないため、閉じる直前に呼ぶ。既に鳴り始めている音は、残りの長さだけを数える
+   * (`AudioPlayoutTimingStats.recordStopped` を参照)。
    */
   recordStopped(): void {
     this.timing.recordStopped(performance.now());

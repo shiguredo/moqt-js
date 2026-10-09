@@ -895,8 +895,8 @@ type AudioPlayoutResult =
   統計の累積 (基準を取り直した回数・捨てた音・詰めた合計・補間した合計) は消さない
 - `releaseAudioContext()` — 時計の対応と直前の音だけを消す (`AudioContext` を閉じた後始末)。
   予約の基準は統計の `playoutLatenessMs` が読むため残す
-- `recordStopped()` — 予約済みでまだ鳴り始めていない音を、鳴らなかった分として計器へ記録する
-  (`AudioContext` を閉じる直前)
+- `recordStopped()` — 予約した音のうち、まだ鳴っていない分を鳴らなかった音として計器へ
+  記録する (`AudioContext` を閉じる直前。既に鳴り始めている音は残りの長さだけを数える)
 
 `playout` (予約。基準を取り直した回数と捨てた音の数) と `clock` (`AudioContext` の時計と
 `performance.now()` の対応。`usingFallback` を同期の推定に使う) は読み取り用に公開している。
