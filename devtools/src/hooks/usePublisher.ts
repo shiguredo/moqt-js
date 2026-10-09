@@ -73,7 +73,6 @@ import { browserIsChromium, resolvePanelHttpVersion } from "../utils/httpVersion
 import { publishAuthorizationTokenOptions } from "../utils/trackAuthorization";
 import * as settings from "../signals/connectionSettings";
 import * as pub from "../signals/publisher";
-import { AudioWallClockTimeline } from "../../../src/audioWallClock";
 import * as sub from "../signals/subscriber";
 
 export function handleDebugMessage(message: DebugMessage): void {
@@ -1123,13 +1122,6 @@ export function usePublisher() {
           audioData.duration,
           readAllAudioSamples(audioData),
         );
-        // 読み出した壁時計を記録し、LOC TIMESTAMP に使う (src/audioWallClock.ts)。
-        // マイクの `AudioData.timestamp` は壁時計ではないため、そのまま送ると受信側が
-        // 音声の遅れと解釈して映像を遅らせる (issues/0754)
-        pub.audioWallClockTimeline.value.record(
-          audioData.timestamp,
-          performance.timeOrigin + performance.now(),
-        );
         // 音声フレームは落としても後続の Object で上書きされるため、映像のような
         // encodeQueueSize による抑制はしない (src/createMediaPublisher.ts と同じ)
         encoder.encode(audioData);
@@ -1330,7 +1322,6 @@ export function usePublisher() {
 
     // 前の配信のサンプルの記録を持ち越さない
     pub.audioLevelTimeline.value = new AudioLevelTimeline();
-    pub.audioWallClockTimeline.value = new AudioWallClockTimeline();
     const audioTrackProcessor = new MediaStreamTrackProcessor<AudioData>({ track: audioTrack });
     pub.audioFrameReader.value = audioTrackProcessor.readable.getReader();
   }
@@ -1379,11 +1370,7 @@ export function usePublisher() {
 
     const properties = LOC.encodeAudioProperties({
       // TIMESTAMP は Unix epoch マイクロ秒 (壁時計) で送る (draft-ietf-moq-loc-04 §2.3.1.1)
-      // TIMESTAMP は読み出した壁時計から作る。記録が無い (符号化されなかった) ときだけ
-      // 従来の換算へ落とす
-      timestamp:
-        pub.audioWallClockTimeline.value.wallClockMicrosOf(chunk.timestamp) ??
-        LOC.toUnixEpochMicroseconds(BigInt(chunk.timestamp), performance.timeOrigin),
+      timestamp: LOC.toUnixEpochMicroseconds(BigInt(chunk.timestamp), performance.timeOrigin),
       audioLevel,
       config: audioConfig,
     });

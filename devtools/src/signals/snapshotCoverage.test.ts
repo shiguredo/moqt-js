@@ -190,8 +190,6 @@ const PUBLISHER_COVERAGE: CoverageExpectation = {
     audioStreamCleanup: "音声の後始末の実体 (統計ではない)",
     audioFrameReader: "音声の読み取りの実体 (統計ではない)",
     audioLevelTimeline: "LOC Audio Level の算出の実体。直近の値は audio.lastSentLevel に出す",
-    audioWallClockTimeline:
-      "音声の LOC TIMESTAMP を壁時計から作るための読み出し時刻の記録。統計には出さない",
     audioMeterWaveformLeft: "波形の配列は大きく、コピーする統計ではない",
     audioMeterWaveformRight: "波形の配列は大きく、コピーする統計ではない",
     pubCurrentAudioGroup: "音声の Group ID。時刻由来の値で、診断に使わない",
