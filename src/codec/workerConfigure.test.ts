@@ -3,7 +3,8 @@
  *
  * Wrapper と Worker はブラウザ依存 (Worker 生成・WebCodecs) のため、
  * ブラウザ非依存の純粋部分 (応答生成・完了管理・世代管理・Worker へ送信中の
- * フレーム数) を固定する。配線 (メッセージの送受信) はレビューで確認する。
+ * フレーム数) を固定する。ブラウザ依存の配線 (メッセージの送受信と、実行時エラーの
+ * 応答による凍結と configured の反映) の確認方法は SentFrameCounter の節に書く。
  */
 
 import { test, assert } from "vite-plus/test";
@@ -262,8 +263,13 @@ test("ConfigureGenerationTracker: currentGeneration は採番と無効化で進�
 // ============================================================================
 // SentFrameCounter
 // ============================================================================
-// 増減・0 未満防止・reset の純粋な挙動を固定する。VideoEncoderWrapper への配線
-// (encode / encoded 応答 / configure / close) はブラウザ依存のため e2e で確認する。
+// 増減・0 未満防止・reset・凍結の純粋な挙動を固定する。VideoEncoderWrapper への配線
+// (encode / encoded 応答 / configure / close による増減) はブラウザ依存のため実ブラウザで確認する。
+// 実行時エラーの応答による凍結と configured の反映は実ブラウザでも再現できない。devtools 側には
+// 実ブラウザで Worker の実行時エラー応答を駆動する手段 (UNSETTABLE_CODEC) があるが、
+// VideoEncoderWrapper.configure は getVideoEncoderConfig を通り未知の codec を既定 (vp8) に
+// 落とすため、公開 API からは設定できない codec を渡せず同じ手が使えない。
+// そのため、この配線はコードレビューで確認する。
 
 test("SentFrameCounter: increment と decrement で送信中のフレーム数を数える", () => {
   const counter = new SentFrameCounter();
@@ -315,4 +321,66 @@ test("SentFrameCounter: 増減を繰り返しても数がずれない", () => {
   }
   // 100 回増やし、i=0,3,...,99 の 34 回減らす
   assert.equal(counter.size, 66);
+});
+
+test("SentFrameCounter: freeze 後は increment しても増えない", () => {
+  // 凍結は値をエラー時点で固定する (理由は SentFrameCounter の JSDoc を正本とする)。
+  // 凍結後に増加を数えても値を動かさないことを固定する
+  const counter = new SentFrameCounter();
+  counter.increment();
+  counter.increment();
+  assert.equal(counter.size, 2);
+
+  counter.freeze();
+  counter.increment();
+  counter.increment();
+
+  assert.equal(counter.size, 2);
+});
+
+test("SentFrameCounter: freeze 後は decrement でも凍結時の値のまま", () => {
+  // エラーの前に encode できたフレームの遅延した encoded 応答が届いても値を動かさない。
+  // 凍結の解除は reset() だけが行う
+  const counter = new SentFrameCounter();
+  counter.increment();
+  counter.increment();
+  counter.increment();
+  counter.freeze();
+
+  counter.decrement();
+
+  assert.equal(counter.size, 3);
+});
+
+test("SentFrameCounter: reset で凍結が解除され数え直せる", () => {
+  // 再 configure (Worker の差し替え) と close は reset する。凍結が残ると
+  // 復帰後に encode しても数が増えず、閾値の判定が働かなくなる
+  const counter = new SentFrameCounter();
+  counter.increment();
+  counter.increment();
+  counter.freeze();
+
+  counter.reset();
+
+  assert.equal(counter.size, 0);
+  counter.increment();
+  assert.equal(counter.size, 1);
+});
+
+test("SentFrameCounter: 凍結は 0 未満防止と干渉しない", () => {
+  // 凍結前の 0 未満防止はそのまま働き、0 で凍結しても値は 0 のままである
+  const empty = new SentFrameCounter();
+  empty.decrement();
+  empty.freeze();
+  empty.decrement();
+  assert.equal(empty.size, 0);
+
+  // 凍結 → reset (解除) の後も減算は 0 で止まる (0 未満防止は変わらない)
+  const counter = new SentFrameCounter();
+  counter.increment();
+  counter.freeze();
+  counter.reset();
+  counter.decrement();
+  counter.decrement();
+  assert.equal(counter.size, 0);
 });

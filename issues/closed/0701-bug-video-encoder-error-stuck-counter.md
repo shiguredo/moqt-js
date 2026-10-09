@@ -1,7 +1,7 @@
 # Worker 内の encoder が error で閉じた後、送信カウンタが張り付いて全フレームが破棄される
 
 - Created: 2026-09-24
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-10-09
 - Branch: feature/fix-video-encoder-error-stuck-counter
 - Polished: 2026-09-24
 
@@ -60,4 +60,10 @@ Worker 内の `VideoEncoder` が error で閉じると、Worker は `{type: "err
 
 ## 解決方法
 
-{未着手}
+- `src/codec/workerConfigure.ts` の `SentFrameCounter` に `freeze()` を足した。凍結中は `increment` / `decrement` を無視して `size` を凍結時の値に固定し、解除は `reset()` だけが行う (再 configure と close)。エラー後は `configured` を false にするため送信は増えないが、エラーの前に送ったフレームの遅延した `encoded` 応答でエラー時点の値が動かないようにする。0 未満防止は凍結中も維持する
+- `src/codec/VideoEncoder.ts` の `configureWorker` に渡す `notifyError` を「送信カウンタを凍結する → `configured` を false にする → `callbacks.error` で通知する」の順にした。この経路へ来るのは初期化完了後の実行時エラーだけで、初期化失敗は `configure` の reject になる。`configured` が false になると `state` が `"configured"` でなくなり、`src/createMediaPublisher.ts` の `processVideoFrames` は次の周回で終了し、`encode` も Worker へ postMessage しなくなる。Worker の破棄はこの経路では行わず、`close()` と再 configure での差し替えに任せる
+- 統計は「エンコード能力を超えたため、または実行時エラーでエンコーダーが使えなくなったために破棄したフレーム数」とした。`processVideoFrames` の判定を `encoder.state === "configured" && encoder.encodeQueueSize <= 2` に変え、読み取り中にエンコーダーが使えなくなったフレームも `droppedFrames` に数える。ループ条件のエンコーダーの状態は `reader.read()` の前にしか評価されないため、この 1 枚が数え漏れていた。エラー後に読むのは最大 1 枚 (次の周回でループが終了する) であり、以後のフレームは読み取らず数えない。世代が変わった後に読んだフレームと `encode` が同期 throw したフレームは数えず、エラー時に Worker へ送信済みで応答が返らなかったフレームは `framesSent` と `droppedFrames` のどちらにも含めない
+- `docs/HIGH_LEVEL_API.md` の `VideoStats.droppedFrames` と `src/codec/types.ts` のコメントを上記の意味に揃えた
+- テスト: `src/codec/workerConfigure.test.ts` に凍結の純粋ロジック 4 件 (凍結後は増えない / 減らない / reset で解除される / 0 未満防止と干渉しない)、`src/createMediaPublisher.test.ts` に「実行時エラーで使えなくなったエンコーダーのフレームは破棄され `droppedFrames` に数える」(状態を落とした後の 2 枚目を読み取らないことも固定) と、pause の世代不一致で読んだフレームを数えないことの pin を足した
+- Worker 内のエンコーダーを実行時エラーで閉じさせる配線 (`error` 応答 → 凍結 → `configured = false`) は e2e で再現できない。devtools 側には実ブラウザで error 応答を駆動する手段があるが、ライブラリの `VideoEncoderWrapper.configure` は `getVideoEncoderConfig` を通り未知の codec を既定 (vp8) に落とすため、公開 API から同じ手が使えない。配線はコードレビューで確認した (初期化完了後の `error` は `gate.trySettle` が false になり `notifyError` へ落ちる)
+- `npx vp check` / `npx tsc --noEmit` / `npx vp test --run` / `npx vp run build` / `npx vp run e2e-test` が通ることを確認した (199 ファイル / 3676 テスト、e2e 103 件)

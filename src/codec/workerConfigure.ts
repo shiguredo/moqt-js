@@ -9,10 +9,11 @@ import type { WorkerErrorResponse, WorkerInitResponse } from "./workerMessages";
  * 初期化完了前の "error" は configure() の reject とし、
  * 完了後の "error" は従来どおり callbacks.error へ通知する。
  *
- * 併せて Worker モードのエンコーダが Worker へ送信中のフレーム数を数える
+ * 併せて Worker モードのエンコーダーが Worker へ送信中のフレーム数を数える
  * SentFrameCounter を置く (VideoEncoderWrapper.encodeQueueSize の Worker モードの値。
  * Worker 内のキュー長は取得できないため、送信してまだ encoded 応答が返っていない
- * フレーム数を上限側の近似として数える)。
+ * フレーム数を上限側の近似として数える)。初期化完了後の "error" では凍結する
+ * (凍結の理由は SentFrameCounter の JSDoc を正本とする)。
  *
  * ブラウザ非依存の契約 (純粋ロジック) と失敗時破棄手順を置く。
  * 純粋部分は契約テストで pin し、破棄手順の実行はブラウザ依存のため
@@ -170,7 +171,7 @@ export class ConfigureGenerationTracker {
 /**
  * Worker へ送信中のフレーム数を数える純粋カウンタ
  *
- * Worker モードのエンコーダは Worker 内の VideoEncoder.encodeQueueSize を取得できないため、
+ * Worker モードのエンコーダーは Worker 内の VideoEncoder.encodeQueueSize を取得できないため、
  * 「encode メッセージを送ってまだ encoded 応答が返っていないフレーム数」を数える。
  * Worker のメッセージ待ち行列と encoder のキューを合わせた上限側の近似であり、
  * 実際より多く見える安全側に倒れる。
@@ -178,25 +179,46 @@ export class ConfigureGenerationTracker {
  * 増加は postMessage の成功後、減算は応答の処理前に行う。0 未満にはならない。
  * configure による Worker の差し替え (旧 Worker は terminate されて応答が返らない) と
  * close では reset する。
+ *
+ * freeze() は Worker 内のエンコーダーが実行時エラーで閉じたときの凍結である。エラー後は
+ * VideoEncoderWrapper が configured を false にするため encode は Worker へ送られず、
+ * 値は増えない。動き得るのは、エラーの前に encode できたフレームの遅延した encoded 応答に
+ * よる減算だけであり、凍結はそれを無視して値をエラー時点のままに保つ (閉じた相手へ
+ * 送信中のフレーム数がいくつだったかを確定させる)。解除は reset() だけで行い、
+ * 復帰 (再 configure) では数え直す。
  */
 export class SentFrameCounter {
   private sentFrames = 0;
+  // 実行時エラーで応答が返らなくなった Worker への送信を数えないための凍結フラグ
+  private frozen = false;
 
-  /** 送信したフレームを数える (postMessage の成功後) */
+  /** 送信したフレームを数える (postMessage の成功後)。凍結中は数えない */
   increment(): void {
+    if (this.frozen) {
+      return;
+    }
     this.sentFrames++;
   }
 
-  /** 応答を受け取ったフレームを減らす (0 未満にはならない) */
+  /** 応答を受け取ったフレームを減らす (0 未満にはならない)。凍結中は変わらない */
   decrement(): void {
+    if (this.frozen) {
+      return;
+    }
     if (this.sentFrames > 0) {
       this.sentFrames--;
     }
   }
 
-  /** Worker の差し替え / close で 0 に戻す */
+  /** 応答が返らなくなった Worker への送信数を現在の値で凍結する (理由はクラスの JSDoc) */
+  freeze(): void {
+    this.frozen = true;
+  }
+
+  /** Worker の差し替え / close で 0 に戻し、凍結も解除する */
   reset(): void {
     this.sentFrames = 0;
+    this.frozen = false;
   }
 
   /** 送信中のフレーム数 */
