@@ -1,7 +1,7 @@
 # 受信データストリームのバッファ上限がストリーム単位でしか無い
 
 - Created: 2026-09-24
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-10-09
 - Branch: feature/fix-session-wide-data-stream-buffer-cap
 - Polished: 2026-09-24
 
@@ -58,4 +58,11 @@ closed の `0646-bug-data-stream-buffer-limit.md` で、確立後の受信デー
 
 ## 解決方法
 
-{未着手}
+- `src/session.ts` に、すべての受信データストリームが保持しているバイト数の合計 `dataStreamBufferedBytesTotal` と、その上限 `dataStreamMaxTotalBufferBytes` を足した。増減は `src/session/dataStreamIncoming.ts` の `dataStreamBufferBytesAdd` / `dataStreamBufferBytesRelease` の 2 関数に閉じ、`src/session/connection.ts` の `DEFAULT_DATA_STREAM_MAX_TOTAL_BUFFER_BYTES` (64 MiB) を既定にした
+- 受信ループ (FETCH / fill fetch / Subgroup) はそれぞれ `streamBufferedBytes` を持ち、`dataStreamAppendChunk` でチャンクを追記したバイト数を加算、ヘッダーの解析と Object の配信で消費したバイト数を減算し、ストリームの終了 (FIN / peer reset / cancel / 例外) の `finally` で残りを必ず解放する。fill fetch ストリームには `finally` を新設した。ハンドラ間の受け渡しは「ヘッダー分だけ解放し、残りは所有権ごと渡す」形にして二重計上を防いだ
+- Track Alias 未確立 (pending mode) の保持バイトは `pendingSubgroupBuffer` の per-session 上限が管理するため合計に載せず、subscriber mode へ合流した時点 (`dataStreamMergePendingSubgroupChunks`) で計上する。pending に溜めている間は合計 0 である
+- 上限の判定は、チャンクを追記した直後の await を挟まない同期区間で行う (FETCH は FETCH_OK を待つ前、pending は合流の直後、fill は追記の直後)。超過したら超過の原因になったストリームだけを既存の打ち切り手順 (FETCH は `handleError` と STOP_SENDING、fill は `fillError`、Subgroup は購読の cancel) で落とし、他のストリームとセッションは継続する。上限ちょうどは打ち切らない。アプリへ渡す error の `streamErrorCode` は `EXCESSIVE_LOAD` (0x9) のままで、診断の `limit=` / `totalLimit=` / `total=` は判定時の値を載せる
+- 打ち切りを決めたストリームの計上分は、打ち切りの await (cancel と Fetcher の cancel) の前に `dataStreamReleaseStreamBytesOnAbort` で解放する。解放を `finally` まで待つと、await 中も合計が上限超過のままになり、その間に追記した無関係なストリームが巻き添えで打ち切られて連鎖する (レビューで 3 つの窓を見つけて塞いだ)
+- `ConnectOptions.dataStreamMaxTotalBufferBytes` を `connect` → `ConnectionInitializeOptions` → `connectionApplyTimeoutOptions` の既存経路に載せた。0 以下で上限なし。高レベル API からは指定できない (ストリーム単位の上限と同じ扱い)。`docs/LOW_LEVEL_API.md` の `ConnectOptions` 表にも書いた
+- テスト: `src/session.test.ts` に、合計超過で超過の原因の 1 本だけが打ち切られ他は継続すること、上限ちょうどは打ち切らないこと、0 以下で上限なしになること、終了 (peer reset / 例外 / 未完成 Object の FIN) で合計が減ること、pending の二重計上が無いこと、fill fetch と FETCH の打ち切り、打ち切りの await 中・FETCH_OK 待ちの間・pending の合流の直後に追記した他のストリームが巻き添えにならないこと、FIN しない padding ストリームのバイトが合計に残らないこと、Fetcher が登録済みでも同じタスクの他ストリームが巻き添えにならないこと、`initialize` 経由の反映と既定値 64 MiB を足した
+- `npx vp check` / `npx tsc --noEmit` / `npx vp test --run` / `npx vp run build` が通ることを確認した (199 ファイル / 3671 テスト)
