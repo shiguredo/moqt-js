@@ -1,7 +1,7 @@
 # Catalog Publisher が Forward State 変化で catalog を送り直さない
 
 - Created: 2026-09-24
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-10-09
 - Branch: feature/fix-catalog-publisher-forward-state-resend
 - Polished: 2026-09-24
 
@@ -77,4 +77,13 @@ devtools の publisher で、Forward State の変化による送り直しだけ�
 
 ## 解決方法
 
-{未着手}
+- `src/createMediaPublisher.ts` の catalog Publisher に `onForwardStateChange` を登録し、FORWARD が 0 から 1 になった時点で catalog を新しい Group の先頭 Object として送り直すようにした。従来は `start()` のたびに 1 回だけ送っており、購読者が居ない間 upstream の購読を paused にする relay では、配信の開始後に購読を始めた相手に catalog が届かなかった
+- catalog の送信を「組み立てて保持する (`buildCatalog`)」「Group の先頭 Object として送る (`sendCatalogObject`)」「新しい Group で送り直す (`republishCatalog`)」「予約する (`scheduleCatalogRepublish`) / 取り消す (`clearCatalogRepublishTimer`)」に分けた。catalog の Group ID は `createPublishers` のたびに `allocateInitialGroupId` で払い出し、送り直しのたびに +1 する。送信済み最大を `lastAllocatedInitialGroupId` にも反映し、`stop()` → `start()` を跨いでも単調に増える
+- relay は `MAX_CACHE_DURATION` を過ぎた Object を cache から配れないため、catalog を送るたびに `MAX_CACHE_DURATION` (1 時間) の半分を上限 30 秒で頭打ちにした 30 秒後の送り直しを予約し、送信のたびに予約を数え直す。`stop()` / `close()` / ピア起点の close (いずれも `disposeAllResources`) で予約を取り消す
+- 送り直しの送信が失敗した場合は `onError` へ 1 回だけ通知する (publisher 層が通知済みの error では通知しない。利用者の `onError` が throw しても未処理の rejection にしない)。`FORWARD=0` の間は publisher が見送るため送らず Group ID も消費しない。ピアが catalog の `PUBLISH` を cancel して publisher が closed になった場合は送り直しを止め、予約も残さない
+- 前回の `start` の catalog が `currentCatalog` に残るため、初期 catalog を送る前に FORWARD 0→1 が届くと前回の catalog を新しい Group ID で送り、直後の初期送信と同じ Location に別の payload が載る (`draft-ietf-moq-transport-22` §2.1 / §7.1 の MUST 違反)。初期送信の完了までは送り直さない `catalogInitialSent` を追加して塞いだ
+- 送り直しの間隔の計算 (`catalogRepublishIntervalMs` と上下限の定数) を `devtools/src/utils/catalogRepublish.ts` から `src/catalogRepublish.ts` へ移し、devtools も同じ実装を使うようにした (devtools の挙動は変わらない)
+- テスト: `src/createMediaPublisher.test.ts` に、FORWARD 0→1 で新しい Group の先頭 Object として同じ payload (同じ catalog instance) を送り直すこと、1→0→1 では送り 0 だけでは送らないこと、Group ID が直前より大きく Object ID が 0 であること、Group ID の単調ガードへの反映、FORWARD=0 の見送りと解放中の送り直しを送らないこと、ピア cancel 後の 2 つの入口で止まること、送り直しの reject・通知済み reject・`onError` の throw の扱い、予約の入れ直しと解放での取り消し、pause / resume が送り直しを止めないこと、初期送信前の FORWARD を送らないこと、`start()` → `stop()` → `start()` で Group ID が前回を上回ることを足した。`src/catalogRepublish.test.ts` と `src/catalogRepublish.prop.ts` は移設先でも従来どおり
+- `docs/HIGH_LEVEL_API.md` に「カタログの送り直し」を足し、契機・Group ID と Object ID・`FORWARD=0` と cancel の扱い・`pause()` の扱い・`onCatalog` が送り直しのたびに呼ばれること・`generatedAt` が開始時のままであることを書いた。`git mv` した 2 箇所の旧パス参照も直した
+- `CHANGES.md` の `## develop` に `[FIX]` を追記した (規約の種別順に従い `[FIX]` の並びの先頭)。devtools の import 差し替えは `### misc` に `[UPDATE]` として分けた
+- `npx vp check` / `npx tsc --noEmit` / `npx vp test --run` / `npx vp run build` が通ることを確認した (199 ファイル / 3657 テスト)

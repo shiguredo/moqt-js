@@ -3,7 +3,7 @@
  *
  * 送り直しの間隔は常に下限以上、上限以下である。MAX_CACHE_DURATION が下限の 2 倍以上なら、
  * relay が catalog を配れなくなる前 (MAX_CACHE_DURATION より前) に送り直す
- * (draft-ietf-moq-transport-22 Section 10.3、draft-ietf-moq-msf-01 Section 5.1)。
+ * (draft-ietf-moq-transport-22 Section 10.3、draft-ietf-moq-msf-01 Section 5)。
  */
 
 import { test, assert } from "vite-plus/test";

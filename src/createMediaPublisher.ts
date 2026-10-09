@@ -9,6 +9,7 @@ import type { PublishOptions, Session } from "./session";
 import { isErrorNotifiedByPublisher, type Publisher, type SendObjectParams } from "./publisher";
 import * as LOC from "./loc";
 import { WallClockMapper } from "./mediaClock";
+import { catalogRepublishIntervalMs } from "./catalogRepublish";
 import {
   CATALOG_TRACK_NAME,
   catalogAuthInfoForSetupToken,
@@ -63,6 +64,27 @@ export const PRIORITY_AUDIO = 64;
 
 /** 映像デルタフレームの優先度 (破棄されても次のキーフレームで回復可能。draft-ietf-moq-transport-22 §10.4 の既定と同じ) */
 export const PRIORITY_VIDEO_DELTA = 128;
+
+/**
+ * catalog の MAX_CACHE_DURATION (ミリ秒)
+ *
+ * relay はこの時間を過ぎた Object を cache から配れない (MUST NOT。
+ * draft-ietf-moq-transport-22 §10.3)。1 時間とする。
+ * 送り直しの間隔の根拠は catalogRepublish.ts にまとめる。
+ * 単体テストから値を固定するため export する (パッケージ公開 API には含めない)。
+ */
+export const CATALOG_MAX_CACHE_DURATION_MS = 3_600_000;
+
+/**
+ * catalog を送り直す既定の間隔 (ミリ秒)
+ *
+ * MAX_CACHE_DURATION の半分を上下限に収めた値 (catalogRepublish.ts を参照)。
+ * MAX_CACHE_DURATION (1 時間) では実効値が上限の 30 秒になる。
+ * 単体テストから値を固定するため export する (パッケージ公開 API には含めない)。
+ */
+export const CATALOG_REPUBLISH_DEFAULT_INTERVAL_MS = catalogRepublishIntervalMs(
+  CATALOG_MAX_CACHE_DURATION_MS,
+);
 
 // 同一プロセス内で割り当てた初期 Group ID の最大値
 // (draft-ietf-moq-msf-01 §6.1: 再起動時の開始 Group ID は
@@ -479,6 +501,22 @@ export class MediaPublisherImpl implements MediaPublisher {
   // あり、pause() では進まない (進めると pause のあとのピア起点の close 通知が捨てられる)
   private sessionGeneration = 0;
   private catalogPublisher: Publisher | null = null;
+  // 送信済みの catalog の Group ID。初期送信は start のたびに払い出し、送り直しのたびに +1 する。
+  // catalog の更新は必ず新しい Group の先頭 Object (Object ID 0) に置き、同じ Location に
+  // 別の payload を載せない (draft-ietf-moq-transport-22 §2.1 / §7.1、draft-ietf-moq-msf-01 §5)。
+  // §6.1 の単調増加 MUST も満たす。FORWARD=0 で見送った送り直しでは消費しない (音声・映像が
+  // encode した分だけ Group を進めるのと同じ扱い)。送信の失敗では消費する
+  private catalogGroupId = 0;
+  // この start で初期の catalog を送り終えたか。前回 start の currentCatalog は解放で消さない
+  // ため、初期送信より前に FORWARD 0→1 が届くと前回の catalog を新しい Group ID で送ってしまい、
+  // 直後の初期送信と同じ Location に別の payload が載る。初期送信が済むまでは送り直さない
+  private catalogInitialSent = false;
+  // catalog を送り直す予約 (MAX_CACHE_DURATION に基づく間隔)。stop / close / ピア起点の
+  // close の解放で取り消す
+  private catalogRepublishTimer: ReturnType<typeof setTimeout> | null = null;
+  // catalog を送り直す間隔 (ミリ秒)。実時間を待つテストが短い間隔へ差し替えられるよう
+  // インスタンスフィールドにする (既定は MAX_CACHE_DURATION から導出した値)
+  private catalogRepublishInterval = CATALOG_REPUBLISH_DEFAULT_INTERVAL_MS;
   // 直前に VIDEO_CONFIG として送信した description。同じ値の重複送出を避けつつ、
   // forwardState が 1 になった時点の送り直しの材料にもする
   private lastSentVideoConfig: Uint8Array | null = null;
@@ -1060,15 +1098,31 @@ export class MediaPublisherImpl implements MediaPublisher {
         : { authorizationToken: this.session.setupAuthorizationToken };
 
     // Catalog パブリッシャー
-    // maxCacheDuration を指定してサーバーにキャッシュさせる
+    // maxCacheDuration を指定して relay の cache に残す
+    // draft-ietf-moq-msf-01 §6.1: 開始 Group ID は同一 track の過去の全 Group ID を
+    // 上回る。start() のたびに新しく払い出す (音声・映像と同じ規則であり、
+    // stop() → start() を跨いでも 0 に戻らない)
+    this.catalogGroupId = allocateInitialGroupId();
+    // この start の初期送信が済むまで送り直さない (理由は catalogInitialSent の宣言を参照)
+    this.catalogInitialSent = false;
     this.catalogPublisher = await this.session.publish(
       namespace,
       CATALOG_TRACK_NAME,
       {
         error: (error) => this.callbacks.onError?.(error),
+        // relay は購読者が居ない間 upstream の購読を pause してよい (MAY。
+        // draft-ietf-moq-transport-22 §7.6。pause するかは §7.2 の裁量)。paused の間は
+        // publisher が Object を送らないため (§3.1.1)、配信の開始時に送った catalog は
+        // 後から購読を始めた相手へ届かない。FORWARD が 1 になった時点で送り直す
+        // (送り直しの契約と残りの根拠は republishCatalog の JSDoc を参照)
+        onForwardStateChange: (forward) => {
+          if (forward) {
+            this.republishCatalog();
+          }
+        },
       },
       {
-        maxCacheDuration: 3600000n,
+        maxCacheDuration: BigInt(CATALOG_MAX_CACHE_DURATION_MS),
         ...authorizationTokenOptions,
       },
     );
@@ -1140,6 +1194,35 @@ export class MediaPublisherImpl implements MediaPublisher {
       return;
     }
 
+    const catalog = this.buildCatalog();
+
+    // Catalog object が WebTransport stream に書き込み完了するまで await する。
+    // draft-ietf-moq-transport-22 §3.2: FETCH は object が publish されていなければ
+    // INVALID_RANGE で FETCH_ERROR を返す MUST。fire-and-forget だと publisher.start() の
+    // return 後すぐに subscriber が join した場合に race を踏むため、catalog だけは確実に
+    // 書き込み完了してから return する。
+    // objectId=0 は draft-ietf-moq-msf-01 §5 で MUST 規定 (独立した catalog は Group の
+    // 先頭 Object)。Priority は購読開始の前提になるため最高優先で送る
+    await this.sendCatalogObject(catalog, this.catalogGroupId);
+
+    // 初期送信が済んだ。以後の FORWARD 0→1 は送り直しとして扱う
+    this.catalogInitialSent = true;
+
+    // 配信の開始から MAX_CACHE_DURATION を過ぎた後で購読を始めた相手にも catalog を
+    // 届けるため、cache から落ちる前に定期的に送り直す (間隔の根拠は catalogRepublish.ts)
+    this.scheduleCatalogRepublish();
+  }
+
+  /**
+   * Catalog を組み立てて保持する
+   *
+   * 送り直しでは組み立て直さず、ここで保持した catalog を使う (トラック構成が変わらない
+   * 限り payload は同じでよい。draft-ietf-moq-msf-01 §5 はトラック構成が変わったときと
+   * cache から落ちる程度の時間が経過したときに publish する SHOULD とする)。
+   * 送り直しでも同じ catalog instance を送るため、generatedAt (§5.1.2 の「この catalog
+   * instance を生成した時刻」) は配信の開始時に組み立てた時刻のままになる。
+   */
+  private buildCatalog(): Catalog {
     const tracks = this.createCatalogTracks();
     const catalog = createCatalog(tracks, {
       generatedAt: Date.now(),
@@ -1148,21 +1231,117 @@ export class MediaPublisherImpl implements MediaPublisher {
     // 作成した Catalog を保存
     this.currentCatalog = catalog;
 
-    const payload = encodeCatalog(catalog);
+    return catalog;
+  }
 
-    // Catalog object が WebTransport stream に書き込み完了するまで await する。
-    // draft-ietf-moq-transport-22 §9.11: FETCH は object が publish されていなければ
-    // INVALID_RANGE で REQUEST_ERROR を返す MUST。fire-and-forget だと publisher.start() の
-    // return 後すぐに subscriber が join した場合に race を踏むため、catalog だけは確実に
-    // 書き込み完了してから return する。
-    // groupId=0, objectId=0 は draft-ietf-moq-msf-01 §5 で MUST 規定 (independent catalog
-    // in subgroup 0)。Priority は購読開始の前提になるため最高優先で送る
+  /**
+   * Catalog を Group の先頭 Object として送る
+   *
+   * 送信は Group の先頭 Object (Object ID 0) に固定する (draft-ietf-moq-msf-01 §5)。
+   * 呼び出し元 (publishCatalog / republishCatalog) も catalog Publisher の状態を見るが、
+   * 送信点であるこの関数でも見る (この 1 箇所を通る全経路で「active でなければ送らない」を
+   * 保証するため)。
+   */
+  private async sendCatalogObject(catalog: Catalog, groupId: number): Promise<void> {
+    if (!this.catalogPublisher || this.catalogPublisher.state !== "active") {
+      return;
+    }
+
     await this.catalogPublisher.sendObject({
-      groupId: 0,
+      groupId,
       objectId: 0,
-      payload,
+      payload: encodeCatalog(catalog),
       priority: PRIORITY_CATALOG,
     });
+  }
+
+  /**
+   * 保持している Catalog を新しい Group で送り直す
+   *
+   * FORWARD が 0 から 1 になった時点 (forwardState 変化のコールバック) と、送り直しの
+   * 予約の満了時に呼ぶ。Group ID を +1 して Group の先頭 Object として送る
+   * (draft-ietf-moq-msf-01 §5 / §6.1。草案の改訂でこれらの規定が変わる可能性がある)。
+   * FORWARD が 1 のまま 2 人目以降の購読者が接続した場合は変化が起きないため送り直さない
+   * (音声・映像の config の送り直しと同じ制約)。
+   * forwardState 変化のコールバックは同期であり送信の完了を待てないため、送信は void で
+   * 起動する。実物の session 層の送信失敗は publisher の error コールバック経由で onError に
+   * 届き、事前検証の reject には publisher が通知済みの印を付けるため通知しない
+   * (start 失敗の通知と同じ扱いであり、1 件の失敗で onError が 2 回呼ばれるのを防ぐ)。
+   * ここで通知するのは、契約上あり得る印なしの reject に対する保険である。
+   * 通知が throw しても未処理の rejection にしない (handleSessionClose と同じ形)。
+   */
+  private republishCatalog(): void {
+    const catalog = this.currentCatalog;
+    const publisher = this.catalogPublisher;
+    // 解放が進行中なら送らない (解放は await を挟むため、その間に FORWARD 0→1 が届く窓がある)
+    if (catalog === null || publisher === null || this.disposalInFlight !== null) {
+      return;
+    }
+    // ピアが catalog の PUBLISH を cancel すると (STOP_SENDING。draft-ietf-moq-transport-22
+    // §3.1.2) publisher は closed になり、配送する相手が居なくなる。送り直しを止め、予約も残さない
+    // (docs/HIGH_LEVEL_API.md の「カタログの送り直し」を参照)
+    if (publisher.state !== "active") {
+      this.clearCatalogRepublishTimer();
+      return;
+    }
+    // この start の初期 catalog を送る前は送り直さない (理由は catalogInitialSent の宣言を参照)。
+    // 初期送信は createPublishers がこの直後に必ず行い、publisher が FORWARD=0 で見送った場合は
+    // 初期送信の完了として扱うため、次の FORWARD 0→1 で改めて送り直す
+    if (!this.catalogInitialSent) {
+      return;
+    }
+    // FORWARD=0 の間は publisher が見送るため、送らない場合は Group ID を消費しない
+    // (理由は catalogGroupId の宣言を参照)。予約は維持し、FORWARD が 1 になった時点の
+    // 送り直しに備える
+    if (!publisher.forwardState) {
+      this.scheduleCatalogRepublish();
+      return;
+    }
+
+    const groupId = this.catalogGroupId + 1;
+    this.catalogGroupId = groupId;
+    // draft-ietf-moq-msf-01 §6.1: 送信済み最大を追跡し、次インスタンスの開始 Group ID が
+    // 上回るようにする (音声・映像と同じ)
+    lastAllocatedInitialGroupId = Math.max(lastAllocatedInitialGroupId, groupId);
+    // 次の送り直しをこの送信から数え直す
+    this.scheduleCatalogRepublish();
+    void this.sendCatalogObject(catalog, groupId).catch((error: unknown) => {
+      if (isErrorNotifiedByPublisher(error)) {
+        return;
+      }
+      try {
+        this.callbacks.onError?.(error instanceof Error ? error : new Error(String(error)));
+      } catch {
+        // 通知の失敗を伝える経路がこれ以上無い
+      }
+    });
+  }
+
+  /**
+   * Catalog の送り直しを予約する
+   *
+   * 直前の予約があれば取り消して、この時点から数え直す。
+   */
+  private scheduleCatalogRepublish(): void {
+    this.clearCatalogRepublishTimer();
+    this.catalogRepublishTimer = setTimeout(() => {
+      this.catalogRepublishTimer = null;
+      this.republishCatalog();
+    }, this.catalogRepublishInterval);
+  }
+
+  /**
+   * Catalog の送り直しの予約を取り消す
+   *
+   * 予約を入れ直す前 (scheduleCatalogRepublish) と、解放の開始時、catalog Publisher の
+   * 切り離し直後に呼ぶ。切り離し直後の 2 回目は、解放の await 中に start() が await している
+   * publishCatalog の続きが走って予約を入れ直す窓を塞ぐ
+   */
+  private clearCatalogRepublishTimer(): void {
+    if (this.catalogRepublishTimer !== null) {
+      clearTimeout(this.catalogRepublishTimer);
+      this.catalogRepublishTimer = null;
+    }
   }
 
   /**
@@ -1602,6 +1781,11 @@ export class MediaPublisherImpl implements MediaPublisher {
     this.processingActive = false;
     this.sessionGeneration++;
 
+    // catalog の送り直しの予約を取り消す。解放の途中で満了すると、破棄中の
+    // catalog Publisher へ送ろうとする
+    this.clearCatalogRepublishTimer();
+    this.catalogInitialSent = false;
+
     // フレームリーダーをキャンセル
     await this.cancelFrameReaders();
 
@@ -1634,6 +1818,11 @@ export class MediaPublisherImpl implements MediaPublisher {
     // Publisher を終了
     const catalogPublisher = this.catalogPublisher;
     this.catalogPublisher = null;
+    // 解放の途中 (フレームリーダーの解放の await など) に start() が await している
+    // publishCatalog の続きが走ると予約が入り直す。参照を切り離した時点でもう一度取り消す
+    // (切り離し後に予約が入っても republishCatalog は publisher の null で送信も再予約もしないが、
+    // 使われない予約を残さない)
+    this.clearCatalogRepublishTimer();
     await guard(async () => {
       if (catalogPublisher && catalogPublisher.state === "active") {
         await catalogPublisher.done();

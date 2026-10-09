@@ -189,6 +189,38 @@ state だけでは重なりを判定できない)。
 優先され、`start()` は失敗する (`onError` と `onClose` が続けて呼ばれ得る)。解放が
 先行した場合はそれ以上リソースを作らず、接続で受け取った session も閉じる。
 
+### カタログの送り直し
+
+`MediaPublisher` は catalog を配信の開始時に 1 度だけ送るのではなく、次の 2 つの契機で
+新しい Group の先頭 Object として送り直す (draft-ietf-moq-msf-01 §5)。
+
+- `FORWARD` が 0 から 1 になった時点。Relay は購読者が居ない間、upstream の購読を paused
+  にしてよい (draft-ietf-moq-transport-22 §7.6 の MAY)。paused にするかは Relay の裁量で
+  ある (§7.2)。paused の間は Publisher が Object を送らないため (§3.1.1)、配信の開始時に
+  送った catalog は後から購読を始めた相手へ届かない
+- catalog を送るたびに予約する 30 秒後の送り直し。値は `MAX_CACHE_DURATION` (この実装では
+  1 時間) の半分を上限 30 秒で頭打ちにしたものであり、下限 1 秒と合わせて 1 秒以上 30 秒
+  以下になる。Relay は `MAX_CACHE_DURATION` を過ぎた Object をキャッシュから配れないため
+  (draft-ietf-moq-transport-22 §10.3)、配信の開始から時間が経った後に購読を始めた相手には
+  この予約が catalog を届ける (draft-ietf-moq-msf-01 §5)
+
+catalog の Group ID は送り直しのたびに +1 し、`stop()` → `start()` を跨いでも単調に
+増える (draft-ietf-moq-msf-01 §6.1)。Object ID は Group の先頭の 0 に固定する (§6.2)。
+送る payload はトラック構成が変わらない限り同じである。
+
+`FORWARD` が 1 のまま 2 人目以降の購読者が接続した場合は状態が変化しないため送り直さない
+(音声の `AUDIO_CONFIG` と映像の `VIDEO_CONFIG` の送り直しと同じ制約)。`pause()` は送り直しを
+止めない (catalog を Relay のキャッシュに保つことが目的のため)。`FORWARD` が 0 の間は送信が
+見送られるため Group ID を消費しない (予約は維持し、`FORWARD` が 1 になった時点で送り直す)。
+送り直しを送るのは catalog の `PUBLISH` が `"active"` の間だけである。ピアが cancel して
+`"closed"` になった場合は送り直しを止め、予約も残さない。送り直しの送信が失敗した場合は
+`onError` で通知する。`stop()` / `close()` / ピア起点の close は送り直しの予約を取り消す。
+
+送り直した catalog は購読側では新しい Group の完全な catalog として届くため、購読中の
+`onCatalog` は送り直しのたびに (既定では 30 秒ごとに) 呼ばれる。catalog の内容が変わらない
+間も同じである。送り直しでも同じ catalog instance を送るため、`generatedAt` (§5.1.2) は
+配信の開始時に組み立てた時刻のままである。
+
 ### 統計情報
 
 ```typescript
@@ -691,6 +723,7 @@ description を改めて送る。
 
 - Audio: フレームごとに新しい groupId を開始、objectId は常に 0 (draft-ietf-moq-loc-04 §4.1)
 - Video: キーフレームで新しい groupId を開始、objectId は Group 内でインクリメント (draft-ietf-moq-loc-04 §4.2)
+- Catalog: 開始時に初期 groupId を割り当て、送り直しのたびに +1、objectId は常に 0 (draft-ietf-moq-msf-01 §5 / §6.1 / §6.2)
 
 ### Priority
 

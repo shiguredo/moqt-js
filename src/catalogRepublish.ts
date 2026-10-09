@@ -1,7 +1,7 @@
 /**
  * catalog を送り直す間隔
  *
- * draft-ietf-moq-msf-01 Section 5.1: "A catalog object SHOULD be published only when the
+ * draft-ietf-moq-msf-01 Section 5: "A catalog object SHOULD be published only when the
  * availability of tracks changes, or after a period of time has passed such that the
  * catalog object might fall out of cache in a delivery network."
  *
@@ -10,16 +10,21 @@
  * 捨てうる ("until implementation constraints cause them to be evicted")。
  *
  * catalog を配信の開始時にしか送らないと、catalog が relay の cache から落ちた後に購読を
- * 始めた相手は catalog を得られない。catalog の MAX_CACHE_DURATION の半分ごとに送り直す。
- * 草案の改訂でこの規定が変わる可能性がある。
+ * 始めた相手は catalog を得られない。MAX_CACHE_DURATION の半分ごとに送り直す (下限 1 秒、
+ * 上限 30 秒に収める。catalogRepublishIntervalMs を参照)。草案の改訂でこの規定が変わる
+ * 可能性がある。
+ *
+ * このモジュールはライブラリ内部の共有用であり、パッケージ公開 API には含めない
+ * (moqt-devtools はリポジトリ相対の import で使う)。
  */
 
 /**
  * 送り直しの間隔の下限 (ミリ秒)
  *
  * MAX_CACHE_DURATION が 0 (no cache) か小さいとき、relay は catalog を cache から配れず、
- * 後から購読を始めた相手は live で届く catalog を待つ。devtools の subscriber の catalog の
- * 待ち (既定 5 秒) より十分短くし、0 ms の繰り返しで送り続けないようにする
+ * 後から購読を始めた相手は live で届く catalog を待つ。購読側の catalog の待ち
+ * (`src/createMediaSubscriber.ts` の `CATALOG_RECEIVE_TIMEOUT` は 5000 ms、moqt-devtools も
+ * 既定 5000 ms) より十分短くし、0 ms の繰り返しで送り続けないようにする
  */
 export const CATALOG_REPUBLISH_MIN_INTERVAL_MS = 1_000;
 
