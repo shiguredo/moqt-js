@@ -341,6 +341,12 @@ function decoderTimestampOf(resolved: TimestampSource): number {
  */
 export class MediaSubscriberImpl implements MediaSubscriber {
   private currentState: MediaSubscriberState = "created";
+  // 閉状態か。close() の同期部分で立てる。解放 (disposeAllResources) と終端遷移は await を
+  // 挟むため、state の "closed" では解放の await 中を判定できない。その間に完了する再構成の
+  // 結果と、その間に届く Object を捨てる判定にこのフラグを使う。
+  // 解放が失敗して終端 ("closed") へ進まなかった場合は state が "created" / "stopped" の
+  // まま残り start() で作り直せるため、start() の入口で戻す
+  private closed = false;
   // 進行中の close() の解放と終端遷移。同時に呼ばれた close() はこれを共有し、解放と
   // 終端通知を 1 回に保つ。解放は await を挟むため、state だけを見た単発性の判定では
   // 2 回目の close() が早期 return を通過してしまう
@@ -560,6 +566,8 @@ export class MediaSubscriberImpl implements MediaSubscriber {
    * 場合も同じ。ピア起点の close は解放のあとに "closed" にするため上書きされず、
    * 解放が途中で失敗した場合も "subscribing" のまま取り残さない)。解放が先行した場合は、
    * 接続で受け取った session を含めてそれ以上購読 / 通知 / リソース作成を進めずに失敗する。
+   * 前の close() の解放が失敗して終端 ("closed") へ進まなかった場合は閉状態を戻し、
+   * ここから作り直せる (state が "created" / "stopped" のままであるため)。
    * 並行呼び出しは未対応であり直列に呼ぶこと。
    */
   async start(): Promise<void> {
@@ -577,6 +585,12 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     if (this.currentState !== "created" && this.currentState !== "stopped") {
       throw new Error(`cannot start in state: ${this.currentState}`);
     }
+
+    // 前の close() が解放に失敗して終端 ("closed") へ進まなかった場合は、state が
+    // "created" / "stopped" のまま残りここから作り直せる (解放の失敗時は state を変えず、
+    // 呼び直しが残りの段階と終端遷移を進める契約である)。閉状態を残したまま作り直すと、
+    // 以降の Object と再構成をすべて捨てて復号できない購読になるため、ここで戻す
+    this.closed = false;
 
     // 失敗時に戻す遷移前の state
     const previousState = this.currentState;
@@ -740,6 +754,10 @@ export class MediaSubscriberImpl implements MediaSubscriber {
    * cannot stop while closing で拒否する。
    * stop() との並行呼び出しは未対応であり直列に呼ぶこと。
    * ピア起点の close 通知の経路で解放が失敗した場合も、この close() で回収する。
+   * 呼ぶと解放の完了を待たずに閉状態 (closed) になり、解放の await 中に届いた Object は
+   * 統計に数えず復号にも渡さず、in-flight の再構成が解放の後に完了しても
+   * `*DecoderConfigured` と `lastApplied*Config` を戻さない。解放が失敗して終端へ進まなかった
+   * 場合は閉状態を残したままにせず、start() の入口で戻す。
    */
   async close(): Promise<void> {
     // 進行中の解放 (close 自身 / stop / ピア起点の close) があればそれを共有する。解放は
@@ -754,6 +772,10 @@ export class MediaSubscriberImpl implements MediaSubscriber {
 
     // 利用者起点の解放として数える (ピア起点の close の解放と重なった場合はこちらが終端を決める)
     this.userDisposalCount++;
+    // 閉状態にする。解放 (disposeAllResources) は await を挟み、state の "closed" はその後に
+    // なるため、解放の await 中に完了する再構成の結果と、その間に届く Object を捨てる判定を
+    // このフラグで行う。解放の成否にかかわらず close() を呼んだ時点で閉じる
+    this.closed = true;
     // 解放 (進行中ならそれを共有する) と終端遷移を 1 つの Promise にまとめ、同時に呼ばれた
     // close() と共有する。解放が成功したときだけ終端へ進む
     const closing = this.runDisposal().then(() => {
@@ -1736,9 +1758,17 @@ export class MediaSubscriberImpl implements MediaSubscriber {
    * (audioDecoderConfigured は true のままにし、後続 Object の reconfigure 経路で再試行する)。
    * 成否にかかわらず保留中の Object は到着順に処理する (失敗時は保留していた最初の Object が
    * 再構成で捨てられ、その再構成が成功すれば以降の Object が復号される)。
+   * 閉じた購読 (close() の同期部分で立つ closed) では configure を発行せず、保留分の解放だけを
+   * 行う (解放は await を挟むため、購読の確立が close() の後に解決すると閉じた後にここへ来る)。
    */
   private async applyInitialAudioConfig(): Promise<void> {
     try {
+      // 閉じた後は configure を発行しない (閉じた後に復号器を作り直さない)。解放は await を
+      // 挟むため、購読の確立が close() の後に解決すると閉じた後にここへ来る。
+      // 保留分の解放は finally が行う (復号はハンドラの閉状態の判定が捨てる)
+      if (this.closed) {
+        return;
+      }
       const config = LOC.resolveAudioProperties(
         this.audioSubscriber?.trackProperties,
         undefined,
@@ -1759,9 +1789,17 @@ export class MediaSubscriberImpl implements MediaSubscriber {
    * (videoDecoderConfigured は true のままにし、後続 Object の reconfigure 経路で再試行する)。
    * 成否にかかわらず保留中の Object は到着順に処理する (失敗時は保留していた最初の Object が
    * 再構成で捨てられ、その再構成が成功すれば以降の Object が復号される)。
+   * 閉じた購読 (close() の同期部分で立つ closed) では configure を発行せず、保留分の解放だけを
+   * 行う (解放は await を挟むため、購読の確立が close() の後に解決すると閉じた後にここへ来る)。
    */
   private async applyInitialVideoConfig(): Promise<void> {
     try {
+      // 閉じた後は configure を発行しない (閉じた後に復号器を作り直さない)。解放は await を
+      // 挟むため、購読の確立が close() の後に解決すると閉じた後にここへ来る。
+      // 保留分の解放は finally が行う (復号はハンドラの閉状態の判定が捨てる)
+      if (this.closed) {
+        return;
+      }
       const config = LOC.resolveVideoProperties(
         this.videoSubscriber?.trackProperties,
         undefined,
@@ -1824,6 +1862,9 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   }
 
   private handleAudioObject(obj: MoqtObject): void {
+    // 閉じた後は統計も decode も進めない。解放は await を挟むため、state の "closed" だけでは
+    // 解放の途中 (decoder の参照を切る前) に届いた Object を判定できない
+    if (this.closed) return;
     // 初期 configure (Track Property の AUDIO_CONFIG) の完了まで保留する
     if (this.audioInitialConfigPending) {
       this.pendingAudioObjects.push(obj);
@@ -1924,6 +1965,15 @@ export class MediaSubscriberImpl implements MediaSubscriber {
    * draft-ietf-moq-loc-04 §2.3.3.1: description が変わったら新しい設定で構成し直す。
    * codec / sampleRate / channels はカタログの値を引き続き使う (config のみ更新する)。
    *
+   * 閉じた購読 (close() の同期部分で立つ closed) では configure を発行せず、configure の
+   * await の間に閉じた場合は成功した結果を捨てる (lastAppliedAudioConfig の更新と
+   * audioDecoderConfigured = true を行わない)。解放は await を挟むため、閉じた後に
+   * ここへ来る経路がある。
+   *
+   * 閉じた購読では configure の失敗を onError へ流さない (購読の終了に伴う中止は失敗では
+   * ない)。閉状態の判定は catch の先頭で行うため、configure の await の前に閉じた場合だけで
+   * なく、await の途中で閉じた場合も通知しない。
+   *
    * reject しない契約とする。codec / channels の解決は同期 throw し得るため、同期 throw
    * し得る解決処理を try の外に残さず、configure の失敗と同じく失敗を onError へ 1 回流す。
    * 呼び出し側は `void` で呼ぶため、関数の外へ reject を残すと未処理の rejection になる。
@@ -1932,6 +1982,9 @@ export class MediaSubscriberImpl implements MediaSubscriber {
    */
   private async reconfigureAudioDecoder(description: Uint8Array): Promise<void> {
     try {
+      // 閉じた後は configure を発行しない (閉じた後に復号器を作り直さない)。解放は await を
+      // 挟むため、state の "closed" だけでは解放の途中を判定できない
+      if (this.closed) return;
       if (!this.audioDecoder || !this.audioTrackInfo) return;
 
       let audioCodec: AudioCodecType;
@@ -1947,11 +2000,19 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       const channels = resolveAudioChannelCount(this.audioTrackInfo.channelConfig);
 
       await this.audioDecoder.configure(audioCodec, sampleRate, channels, description);
+      // configure の await の間に閉じていれば、成功した configure の結果を捨てる
+      // (解放の後に呼ばれると decoder の参照は切れているが、await の前後で閉じたかを
+      //  判定しないと閉じた購読が「構成済み」に戻る)
+      if (this.closed) return;
       // 成功して初めて「適用済み」とする。失敗時は未適用のまま残し、
       // 同じ config を持つ後続 Object で再試行できるようにする。
       this.lastAppliedAudioConfig = description;
       this.audioDecoderConfigured = true;
     } catch (error) {
+      // close() が復号器を破棄すると世代が無効化され、待機中の configure が中止 (reject)
+      // する。購読の終了に伴う中止を失敗として利用者に通知しない (利用者が終了を要求した
+      // 結果であり、この経路の configure は解放の後に結果を反映しないため対処も要らない)
+      if (this.closed) return;
       // 通知の失敗でこの経路を reject させない (呼び出し側は `void` で呼ぶため、
       // reject を残すと未処理の rejection になる)
       try {
@@ -1968,6 +2029,15 @@ export class MediaSubscriberImpl implements MediaSubscriber {
    * draft-ietf-moq-loc-04 §2.3.2.1: description が変わったら新しい設定で構成し直す。
    * codec / 解像度はカタログの値を引き続き使う (config のみ更新する)。
    *
+   * 閉じた購読 (close() の同期部分で立つ closed) では configure を発行せず、configure の
+   * await の間に閉じた場合は成功した結果を捨てる (lastAppliedVideoConfig の更新と
+   * videoDecoderConfigured = true を行わない)。解放は await を挟むため、閉じた後に
+   * ここへ来る経路がある。
+   *
+   * 閉じた購読では configure の失敗を onError へ流さない (購読の終了に伴う中止は失敗では
+   * ない)。閉状態の判定は catch の先頭で行うため、configure の await の前に閉じた場合だけで
+   * なく、await の途中で閉じた場合も通知しない。
+   *
    * reject しない契約とする。codec の解決は同期 throw し得るため、同期 throw し得る
    * 解決処理を try の外に残さず、configure の失敗と同じく失敗を onError へ 1 回流す。
    * 呼び出し側は `void` で呼ぶため、関数の外へ reject を残すと未処理の rejection になる。
@@ -1976,6 +2046,9 @@ export class MediaSubscriberImpl implements MediaSubscriber {
    */
   private async reconfigureVideoDecoder(description: Uint8Array): Promise<void> {
     try {
+      // 閉じた後は configure を発行しない (閉じた後に復号器を作り直さない)。解放は await を
+      // 挟むため、state の "closed" だけでは解放の途中を判定できない
+      if (this.closed) return;
       if (!this.videoDecoder || !this.videoTrackInfo) return;
 
       let videoCodec: VideoCodecType;
@@ -1991,6 +2064,10 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       const height = this.videoTrackInfo.height ?? 480;
 
       await this.videoDecoder.configure(videoCodec, width, height, description);
+      // configure の await の間に閉じていれば、成功した configure の結果を捨てる
+      // (解放の後に呼ばれると decoder の参照は切れているが、await の前後で閉じたかを
+      //  判定しないと閉じた購読が「構成済み」に戻る)
+      if (this.closed) return;
       // 構成し直した decoder はキーフレームから始める
       this.videoDecodeOrder.reset();
       // 成功して初めて「適用済み」とする。失敗時は未適用のまま残し、
@@ -1998,6 +2075,10 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       this.lastAppliedVideoConfig = description;
       this.videoDecoderConfigured = true;
     } catch (error) {
+      // close() が復号器を破棄すると世代が無効化され、待機中の configure が中止 (reject)
+      // する。購読の終了に伴う中止を失敗として利用者に通知しない (利用者が終了を要求した
+      // 結果であり、この経路の configure は解放の後に結果を反映しないため対処も要らない)
+      if (this.closed) return;
       // 通知の失敗でこの経路を reject させない (呼び出し側は `void` で呼ぶため、
       // reject を残すと未処理の rejection になる)
       try {
@@ -2016,6 +2097,10 @@ export class MediaSubscriberImpl implements MediaSubscriber {
    * 先に処理する
    */
   private receiveVideoObject(obj: MoqtObject): void {
+    // 閉じた後は Group の保留に入れず復号もしない。保留した Object は閉じた購読では
+    // 復号されず、保留の期限まで保持されるだけになる (解放は await を挟むため state では
+    // 判定できない)
+    if (this.closed) return;
     this.handleVideoObjects(
       this.videoGroupGate.push(obj, obj.groupId, obj.subgroupId, performance.now()),
     );
@@ -2051,6 +2136,9 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   }
 
   private handleVideoObject(obj: MoqtObject): void {
+    // 閉じた後は統計も decode も進めない。解放は await を挟むため、state の "closed" だけでは
+    // 解放の途中 (decoder の参照を切る前) に届いた Object を判定できない
+    if (this.closed) return;
     // 初期 configure (Track Property の VIDEO_CONFIG) の完了まで保留する
     if (this.videoInitialConfigPending) {
       this.pendingVideoObjects.push(obj);

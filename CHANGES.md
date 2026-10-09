@@ -366,6 +366,11 @@
   - 上限で捨てたログの vnode はキャッシュから落とす。`data` と `payload` は追加後に書き換えない前提になる (行を描画し直さないため、書き換えても表示は古いまま)
   - 1 件追加のコストは表示中の件数に比例する分が残る (1000 件で約 3 ms のうち、表示中の子の走査が大半)。表示する行を画面に入る分だけにする対応は別に行う
   - @voluntas
+- [FIX] `createMediaSubscriber` の `close()` の後に in-flight の再構成が完了すると、閉じた購読が復号を再開するのを修正する
+  - `close()` は解放の await を挟むため、その間は state がまだ `"closed"` にならず、復号器の構成済み状態 (`videoDecoderConfigured` / `audioDecoderConfigured`) と適用済みの config (`lastAppliedVideoConfig` / `lastAppliedAudioConfig`) が残っていた。`VIDEO_CONFIG` / `AUDIO_CONFIG` の変化による再構成 (configure) の完了が解放より後になると、構成済みが true に戻り適用済み config も新しい値で更新され、以降に届いた Object が統計に数えられてから復号されずに捨てられていた
+  - 購読側に閉状態のフラグを持ち、`close()` の同期部分で立てる。再構成は configure の発行前と完了後に閉状態を判定し、閉じた後は configure を発行せず、完了した configure の結果も捨てる。初期 configure の適用も閉じた後は configure を発行せず保留分の解放だけを行う
+  - `close()` の解放の await 中に届いた Object は統計 (`framesReceived` / `bytesReceived`) に数えず decode にも渡さず、映像は Group の保留にも入れない。解放が失敗して終端へ進まなかった場合は `start()` の入口で閉状態を戻す (`state` が `"active"` のままなら `stop()` を経由して作り直す)
+  - @voluntas
 - [FIX] Worker モードの映像エンコーダーが実行時エラーで閉じた後、以後のフレームがすべて破棄され続けるのを修正する
   - Worker 内のエンコーダーが実行時エラーで閉じると `encoded` 応答が返らなくなり、送信中のフレーム数を数えるカウンタが閾値を超えた値に張り付いていた。エンコーダーの状態も `configured` のままだったため、配信は動いているのにフレームが 1 枚も送られない状態が `droppedFrames` の増加でしか観測できなかった
   - 実行時エラーの通知でカウンタを凍結し、`configured` を `false` にしてから `onError` を通知する。映像の処理ループは次の周回で終了し、`encode` は Worker へ送らなくなる。エンコーダーが閉じたときに読み取っていたフレームは既存の `droppedFrames` に含める (閉じた後は処理ループが終了するため以後のフレームは読み取らず、原因別の内訳も持たない)

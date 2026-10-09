@@ -330,7 +330,10 @@ export interface MediaSubscriber {
   /**
    * リソースを解放する (終端)
    *
-   * stop と同じ解放を行い、以後 start 不可の終端 ("closed") とする。
+   * stop と同じ解放を行い、解放に成功した場合は以後 start 不可の終端 ("closed") とする。
+   * 呼ぶと解放の完了を待たずに閉じたものとして扱い、解放の await 中に届いた Object は
+   * 統計に数えず復号にも渡さない。解放が失敗した場合は "active" なら stop() を経由して
+   * start() で作り直す (詳細は docs/HIGH_LEVEL_API.md の MediaSubscriber を参照)。
    * "closed" での再 close は何もしない。解放が失敗した場合は state を変えず
    * onClose も呼ばず、元のエラーを throw する (失敗した段階はやり直されず、
    * 呼び直しが進めるのは残りの段階と終端遷移である)。解放のあとに届いた session の
