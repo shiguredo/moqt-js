@@ -44,7 +44,7 @@ import * as LOC from "./loc";
 import type { VideoFrameMarking } from "./loc";
 import { type MoqtObject } from "./dataStream";
 import type { SubgroupStreamEnd } from "./session";
-import { GROUP_SWITCH_HOLD_MS } from "./groupSwitchGate";
+import { GROUP_SWITCH_HOLD_MS, type GroupSwitchGate } from "./groupSwitchGate";
 import type { VideoDecodeOrder } from "./videoDecodeOrder";
 import type { AuthorizationToken, Location } from "./message";
 import {
@@ -3509,6 +3509,8 @@ test("handleAudioDecodedData と handleVideoDecodedData: 同じ TIMESTAMP は同
  */
 interface SubscriberLifecycleControl {
   currentState: MediaSubscriberState;
+  // 閉状態の専用フラグ (close() の同期部分で立ち、解放の await 中も閉状態を表す)
+  closed: boolean;
   // session close 通知の世代番号 (connectToServer が session を作るときに捕捉する値)
   sessionGeneration: number;
   session: Session | null;
@@ -3536,6 +3538,11 @@ interface SubscriberLifecycleControl {
   videoDecoderConfigured: boolean;
   lastAppliedVideoConfig: Uint8Array | null;
   lastAppliedAudioConfig: Uint8Array | null;
+  // 初期 configure の完了まで保留する Object (解放で破棄する)
+  pendingAudioObjects: MoqtObject[];
+  pendingVideoObjects: MoqtObject[];
+  // 前の Group の stream が開いている間に保留する映像 Object (解放で破棄する)
+  videoGroupGate: GroupSwitchGate<MoqtObject>;
   // 映像の表示を止めるフラグ。解放で初期値 (false) に戻る
   videoPlayoutStopped: boolean;
   // 復号順の判定 (解放で初期化する)
@@ -4151,6 +4158,709 @@ test("close: stop と同じ解放を行い以後の start を拒否する", asyn
   assert.equal(subscriber.state, "closed");
   assert.equal(closeCount, 1);
   assert.equal(counts.sessionCloses, 1);
+});
+
+/**
+ * 解放を catalog の購読解除で止める
+ *
+ * 解放 (disposeAllResources) は購読の解除から始まり await を挟む。解除の完了をテストが
+ * 決められるようにして、close() の同期部分より後で解放の完了より前の窓を作る。この窓は
+ * 「解放の途中に届いた Object」と「解放の途中に走った初期 configure の適用」を駆動する
+ * ために使う (どちらも解放が decoder の参照を切る前に起きる)。
+ *
+ * @param control 制御口
+ * @returns 解除を完了させて解放を先へ進める関数
+ */
+function holdDisposalAtCatalogUnsubscribe(control: SubscriberLifecycleControl): () => void {
+  let release: () => void = () => {};
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  // 購読が確立している ("active") 購読だけが解除の対象になる
+  control.catalogSubscriber = {
+    state: "active",
+    unsubscribe: () => held,
+  } as unknown as Subscriber;
+  return release;
+}
+
+/**
+ * Track Property だけを持つ購読者を作る (初期 configure の検証用)
+ *
+ * SubscriberLifecycleControl と SubscriberInitialConfigControl を交差させた制御口では、
+ * 購読者の trackProperties が Subscriber の ReadonlyArray と注入用の配列の両方として
+ * 要求される。記録用の最小オブジェクトをこの形に整えて渡す (モジュール置換は行わない)。
+ * trackProperties は getter にして読み取り回数を数える (閉じた後に初期 configure の適用が
+ * Track Property を読まないことを検証できるようにする)。
+ *
+ * @param trackProperties 購読確立で受け取った Track Property
+ * @returns subscriber は購読者、trackPropertyReads は trackProperties を読んだ回数
+ */
+function createTrackPropertySubscriber(trackProperties: { id: bigint; data?: Uint8Array }[]): {
+  subscriber: Subscriber & { trackProperties: { id: bigint; data?: Uint8Array }[] };
+  trackPropertyReads: () => number;
+} {
+  let reads = 0;
+  const subscriber = {
+    get trackProperties() {
+      reads++;
+      return trackProperties;
+    },
+  } as unknown as Subscriber & { trackProperties: { id: bigint; data?: Uint8Array }[] };
+  return { subscriber, trackPropertyReads: () => reads };
+}
+
+/**
+ * 完了条件: 映像の再構成 (VIDEO_CONFIG の変化) の完了前に close() した場合、
+ * videoDecoderConfigured が true に戻らず lastAppliedVideoConfig も更新されない。
+ *
+ * 再構成は configure の await を挟む。解放も購読の解除などで await を挟むため、close() の
+ * 同期部分で閉状態になった後に configure が成功し得る。configure の完了をテストが決め、
+ * 解放が終わった後に成功させる。閉じた後に configure の結果で状態を戻すと、閉じた購読が
+ * 「構成済み」に戻り、以降の Object が統計に数えられて復号へ渡る (復号は捨てられる)。
+ */
+test("close: 映像の再構成の完了が解放より後でも videoDecoderConfigured と lastAppliedVideoConfig を戻さない", async () => {
+  const subscriber = new MediaSubscriberImpl("moqt://example.com/live", {
+    namespace: ["live"],
+    video: {},
+  });
+  const control = subscriber as unknown as SubscriberLifecycleControl &
+    SubscriberInitialConfigControl;
+  control.currentState = "active";
+  control.videoTrackInfo = {
+    name: "video",
+    packaging: "loc",
+    isLive: true,
+    codec: "av01.0.04M.08",
+  };
+  // configure の完了をテストが決める (解放の完了より後に成功させる)
+  let completeConfigure: () => void = () => {};
+  const decoded: number[] = [];
+  control.videoDecoder = {
+    configure: () =>
+      new Promise<void>((resolve) => {
+        completeConfigure = resolve;
+      }),
+    decode: (payload) => {
+      decoded.push(payload[0] ?? -1);
+    },
+    close: () => {},
+  };
+  control.videoDecoderConfigured = true;
+  // close() が初期値に戻すことを見るため、適用済みの config を入れておく
+  control.lastAppliedVideoConfig = new Uint8Array([1, 1]);
+
+  // 直前と異なる VIDEO_CONFIG の Object で再構成を開始させる (draft-ietf-moq-loc-04 §2.3.2.1)
+  control.handleVideoObject({
+    groupId: 1n,
+    objectId: 0n,
+    status: 0,
+    payload: new Uint8Array([0x11]),
+    properties: LOC.encodeVideoProperties({ timestamp: 0n, config: new Uint8Array([9, 9]) }),
+  });
+  // 再構成中は decode に渡さない
+  assert.isFalse(control.videoDecoderConfigured);
+  assert.deepEqual(decoded, []);
+
+  // 同じタスクで close する (再構成は configure の await の途中)
+  const closing = subscriber.close();
+  // 閉状態は解放の await を待たず、close の同期部分で立つ
+  assert.isTrue(control.closed);
+
+  // 解放の完了後に configure が成功しても、構成済みと適用済み config は戻らない
+  await closing;
+  assert.isNull(control.lastAppliedVideoConfig);
+  completeConfigure();
+  await sleep(0);
+
+  assert.isFalse(control.videoDecoderConfigured);
+  assert.isNull(control.lastAppliedVideoConfig);
+  assert.deepEqual(decoded, []);
+  // 解放で decoder の参照も残らない
+  assert.isNull(control.videoDecoder);
+  assert.equal(subscriber.state, "closed");
+});
+
+/**
+ * 完了条件: 音声の再構成 (AUDIO_CONFIG の変化) の完了前に close() した場合、
+ * audioDecoderConfigured が true に戻らず lastAppliedAudioConfig も更新されない。
+ * 映像と同じ経路を音声でも固定する。
+ */
+test("close: 音声の再構成の完了が解放より後でも audioDecoderConfigured と lastAppliedAudioConfig を戻さない", async () => {
+  const subscriber = new MediaSubscriberImpl("moqt://example.com/live", {
+    namespace: ["live"],
+    audio: {},
+  });
+  const control = subscriber as unknown as SubscriberLifecycleControl &
+    SubscriberInitialConfigControl;
+  control.currentState = "active";
+  control.audioTrackInfo = {
+    name: "audio",
+    packaging: "loc",
+    isLive: true,
+    codec: "opus",
+    samplerate: 48_000,
+    channelConfig: "2",
+  };
+  // configure の完了をテストが決める (解放の完了より後に成功させる)
+  let completeConfigure: () => void = () => {};
+  const decoded: number[] = [];
+  control.audioDecoder = {
+    configure: () =>
+      new Promise<void>((resolve) => {
+        completeConfigure = resolve;
+      }),
+    decode: (payload) => {
+      decoded.push(payload[0] ?? -1);
+    },
+    close: () => {},
+  };
+  control.audioDecoderConfigured = true;
+  // close() が初期値に戻すことを見るため、適用済みの config を入れておく
+  control.lastAppliedAudioConfig = new Uint8Array([1, 1]);
+
+  // 直前と異なる AUDIO_CONFIG の Object で再構成を開始させる (draft-ietf-moq-loc-04 §2.3.3.1)
+  control.handleAudioObject({
+    groupId: 1n,
+    objectId: 0n,
+    status: 0,
+    payload: new Uint8Array([0x22]),
+    properties: LOC.encodeAudioProperties({ timestamp: 0n, config: new Uint8Array([8, 8]) }),
+  });
+  assert.isFalse(control.audioDecoderConfigured);
+  assert.deepEqual(decoded, []);
+
+  const closing = subscriber.close();
+  assert.isTrue(control.closed);
+
+  await closing;
+  assert.isNull(control.lastAppliedAudioConfig);
+  completeConfigure();
+  await sleep(0);
+
+  assert.isFalse(control.audioDecoderConfigured);
+  assert.isNull(control.lastAppliedAudioConfig);
+  assert.deepEqual(decoded, []);
+  assert.isNull(control.audioDecoder);
+  assert.equal(subscriber.state, "closed");
+});
+
+/**
+ * 完了条件: close() の解放の途中で待機中の configure が中止 (reject) しても onError を
+ * 通知しない。映像と音声の両方で固定し、閉じていない購読では従来どおり通知することも見る。
+ *
+ * 実物の復号器は close() で世代を無効化し、待機中の configure を中止する (遅延成功した
+ * 旧世代は破棄・reject される)。close() の解放は購読の解除から復号器の破棄まで await を
+ * 挟むため、解放の途中で中止が届く。利用者が要求した終了に伴う中止は失敗ではないため
+ * 通知しない。注入する復号器の close() が待機中の configure を reject させることで、
+ * 実物の世代の無効化による中止を再現する (モジュール置換は行わない)。
+ *
+ * 中止が実際に起きたこと (aborts) と復号器が破棄されたこと (decoderCloses) を併せて
+ * 確かめる。中止が起きなければ onError が 0 回でも通ってしまうためである。
+ */
+test("close: 解放の途中で configure が中止 (reject) しても onError を通知しない", async () => {
+  // 映像: 解放中の復号器の破棄による configure の中止は通知しない
+  {
+    const errors: Error[] = [];
+    const subscriber = new MediaSubscriberImpl(
+      "moqt://example.com/live",
+      { namespace: ["live"], video: {} },
+      {
+        onError: (error) => {
+          errors.push(error);
+        },
+      },
+    );
+    const control = subscriber as unknown as SubscriberLifecycleControl &
+      SubscriberInitialConfigControl;
+    control.currentState = "active";
+    control.videoTrackInfo = {
+      name: "video",
+      packaging: "loc",
+      isLive: true,
+      codec: "vp8",
+    };
+    // 待機中の configure を中止させる関数 (注入した復号器の close() が呼ぶ)。
+    // 実物の復号器は close() で世代を無効化し、待機中の configure を reject する
+    let configureCalls = 0;
+    let aborts = 0;
+    let decoderCloses = 0;
+    let abortConfigure: (error: Error) => void = () => {};
+    control.videoDecoder = {
+      configure: () => {
+        configureCalls++;
+        return new Promise<void>((_resolve, reject) => {
+          abortConfigure = (error) => {
+            aborts++;
+            reject(error);
+          };
+        });
+      },
+      decode: () => {},
+      close: () => {
+        decoderCloses++;
+        abortConfigure(new Error("video decoder configure aborted by close"));
+        abortConfigure = () => {};
+      },
+    };
+    control.videoDecoderConfigured = true;
+    control.lastAppliedVideoConfig = new Uint8Array([1, 1]);
+    // 解放を catalog の購読解除で止め、復号器の破棄 (中止) の時機をテストが決める
+    const releaseDisposal = holdDisposalAtCatalogUnsubscribe(control);
+
+    // 直前と異なる VIDEO_CONFIG の Object で再構成を開始させる (draft-ietf-moq-loc-04 §2.3.2.1)
+    control.handleVideoObject({
+      groupId: 1n,
+      objectId: 0n,
+      status: 0,
+      payload: new Uint8Array([0x11]),
+      properties: LOC.encodeVideoProperties({ timestamp: 0n, config: new Uint8Array([9, 9]) }),
+    });
+    // configure は待機中である (この後に close() して解放の途中で中止させる)
+    assert.equal(configureCalls, 1);
+    assert.isFalse(control.videoDecoderConfigured);
+
+    const closing = subscriber.close();
+    // 閉状態は解放の await を待たず close の同期部分で立つ
+    assert.isTrue(control.closed);
+    // 解放を進めると復号器が破棄され、待機中の configure が中止される
+    releaseDisposal();
+    await closing;
+    await sleep(0);
+
+    // 中止は起きており (中止が無ければこのテストは何も確かめていない)、復号器も破棄された
+    assert.equal(aborts, 1);
+    assert.equal(decoderCloses, 1);
+    // 購読の終了に伴う中止は失敗として通知しない
+    assert.equal(errors.length, 0);
+    assert.isFalse(control.videoDecoderConfigured);
+    assert.equal(subscriber.state, "closed");
+  }
+
+  // 音声: 同じ経路を音声でも固定する
+  {
+    const errors: Error[] = [];
+    const subscriber = new MediaSubscriberImpl(
+      "moqt://example.com/live",
+      { namespace: ["live"], audio: {} },
+      {
+        onError: (error) => {
+          errors.push(error);
+        },
+      },
+    );
+    const control = subscriber as unknown as SubscriberLifecycleControl &
+      SubscriberInitialConfigControl;
+    control.currentState = "active";
+    control.audioTrackInfo = {
+      name: "audio",
+      packaging: "loc",
+      isLive: true,
+      codec: "opus",
+      samplerate: 48_000,
+      channelConfig: "2",
+    };
+    let configureCalls = 0;
+    let aborts = 0;
+    let decoderCloses = 0;
+    let abortConfigure: (error: Error) => void = () => {};
+    control.audioDecoder = {
+      configure: () => {
+        configureCalls++;
+        return new Promise<void>((_resolve, reject) => {
+          abortConfigure = (error) => {
+            aborts++;
+            reject(error);
+          };
+        });
+      },
+      decode: () => {},
+      close: () => {
+        decoderCloses++;
+        abortConfigure(new Error("audio decoder configure aborted by close"));
+        abortConfigure = () => {};
+      },
+    };
+    control.audioDecoderConfigured = true;
+    control.lastAppliedAudioConfig = new Uint8Array([1, 1]);
+    const releaseDisposal = holdDisposalAtCatalogUnsubscribe(control);
+
+    // 直前と異なる AUDIO_CONFIG の Object で再構成を開始させる (draft-ietf-moq-loc-04 §2.3.3.1)
+    control.handleAudioObject({
+      groupId: 1n,
+      objectId: 0n,
+      status: 0,
+      payload: new Uint8Array([0x22]),
+      properties: LOC.encodeAudioProperties({ timestamp: 0n, config: new Uint8Array([8, 8]) }),
+    });
+    assert.equal(configureCalls, 1);
+    assert.isFalse(control.audioDecoderConfigured);
+
+    const closing = subscriber.close();
+    assert.isTrue(control.closed);
+    releaseDisposal();
+    await closing;
+    await sleep(0);
+
+    assert.equal(aborts, 1);
+    assert.equal(decoderCloses, 1);
+    assert.equal(errors.length, 0);
+    assert.isFalse(control.audioDecoderConfigured);
+    assert.equal(subscriber.state, "closed");
+  }
+
+  // 対照: 閉じていない購読では同じ configure の中止 (失敗) が従来どおり onError へ 1 回届く
+  {
+    const errors: Error[] = [];
+    const subscriber = new MediaSubscriberImpl(
+      "moqt://example.com/live",
+      { namespace: ["live"], video: {} },
+      {
+        onError: (error) => {
+          errors.push(error);
+        },
+      },
+    );
+    const control = subscriber as unknown as SubscriberLifecycleControl &
+      SubscriberInitialConfigControl;
+    control.videoTrackInfo = {
+      name: "video",
+      packaging: "loc",
+      isLive: true,
+      codec: "vp8",
+    };
+    let abortConfigure: (error: Error) => void = () => {};
+    control.videoDecoder = {
+      configure: () =>
+        new Promise<void>((_resolve, reject) => {
+          abortConfigure = reject;
+        }),
+      decode: () => {},
+      close: () => {},
+    };
+    control.videoDecoderConfigured = true;
+    control.lastAppliedVideoConfig = new Uint8Array([1, 1]);
+
+    control.handleVideoObject({
+      groupId: 1n,
+      objectId: 0n,
+      status: 0,
+      payload: new Uint8Array([0x33]),
+      properties: LOC.encodeVideoProperties({ timestamp: 0n, config: new Uint8Array([9, 9]) }),
+    });
+    // 閉じていないため、configure の失敗は onError へ 1 回届く
+    abortConfigure(new Error("video decoder configure failed"));
+    await sleep(0);
+
+    assert.equal(errors.length, 1);
+    assert.isTrue((errors[0]?.message ?? "").includes("video decoder configure failed"));
+    assert.isFalse(control.videoDecoderConfigured);
+    assert.equal(subscriber.state, "created");
+  }
+});
+
+/**
+ * 完了条件: close() の解放の途中に届いた映像 Object は統計に数えず decode にも渡さない。
+ *
+ * 解放は購読の解除などで await を挟む。decoder の参照を切る前の窓では復号器の構成済み
+ * フラグが true のままのため、閉状態の判定が無ければ先頭ガードを通り、統計を先に進めてから
+ * decode を呼ぶ (復号は捨てられる)。映像は Group の保留にも入れない (閉じた購読では
+ * 復号されず、保留の期限まで保持されるだけになる)。
+ */
+test("close: 解放の途中に届いた映像 Object は統計に数えず decode にも渡さない", async () => {
+  const subscriber = new MediaSubscriberImpl("moqt://example.com/live", {
+    namespace: ["live"],
+    video: {},
+  });
+  const control = subscriber as unknown as SubscriberLifecycleControl &
+    SubscriberInitialConfigControl & { receiveVideoObject(obj: MoqtObject): void };
+  control.currentState = "active";
+  control.videoTrackInfo = {
+    name: "video",
+    packaging: "loc",
+    isLive: true,
+    codec: "vp8",
+  };
+  const decoded: number[] = [];
+  control.videoDecoder = {
+    configure: async () => {},
+    decode: (payload) => {
+      decoded.push(payload[0] ?? -1);
+    },
+    close: () => {},
+  };
+  control.videoDecoderConfigured = true;
+  const releaseDisposal = holdDisposalAtCatalogUnsubscribe(control);
+
+  const closing = subscriber.close();
+  // 解放の await の中 (decoder の参照を切る前) に届いた Object は捨てる
+  control.receiveVideoObject(makeStreamVideoObject(1n, 0n));
+  // 次の Group の Object も Group の保留に入れない
+  control.receiveVideoObject(makeStreamVideoObject(2n, 0n));
+  // ハンドラを直接駆動した場合 (保留の解放経路) も統計に数えない
+  control.handleVideoObject(makeIdentifiedObject(1n, 0x66));
+
+  assert.equal(subscriber.getStats().video?.framesReceived, 0);
+  assert.equal(subscriber.getStats().video?.bytesReceived, 0);
+  assert.deepEqual(decoded, []);
+  assert.isNull(control.videoGroupGate.holdDeadlineMs);
+
+  releaseDisposal();
+  await closing;
+  assert.equal(subscriber.getStats().video?.framesReceived, 0);
+  assert.deepEqual(decoded, []);
+  assert.equal(subscriber.state, "closed");
+});
+
+/**
+ * 完了条件: close() の解放の途中に届いた音声 Object も統計に数えず decode にも渡さない。
+ * 音声は Group の保留が無いため、ハンドラ先頭の閉状態の判定だけで捨てる。
+ */
+test("close: 解放の途中に届いた音声 Object は統計に数えず decode にも渡さない", async () => {
+  const subscriber = new MediaSubscriberImpl("moqt://example.com/live", {
+    namespace: ["live"],
+    audio: {},
+  });
+  const control = subscriber as unknown as SubscriberLifecycleControl &
+    SubscriberInitialConfigControl;
+  control.currentState = "active";
+  control.audioTrackInfo = {
+    name: "audio",
+    packaging: "loc",
+    isLive: true,
+    codec: "opus",
+    samplerate: 48_000,
+    channelConfig: "2",
+  };
+  const decoded: number[] = [];
+  control.audioDecoder = {
+    configure: async () => {},
+    decode: (payload) => {
+      decoded.push(payload[0] ?? -1);
+    },
+    close: () => {},
+  };
+  control.audioDecoderConfigured = true;
+  const releaseDisposal = holdDisposalAtCatalogUnsubscribe(control);
+
+  const closing = subscriber.close();
+  control.handleAudioObject(makeIdentifiedObject(0n, 0x33));
+
+  assert.equal(subscriber.getStats().audio?.framesReceived, 0);
+  assert.equal(subscriber.getStats().audio?.bytesReceived, 0);
+  assert.deepEqual(decoded, []);
+
+  releaseDisposal();
+  await closing;
+  assert.equal(subscriber.getStats().audio?.framesReceived, 0);
+  assert.deepEqual(decoded, []);
+  assert.equal(subscriber.state, "closed");
+});
+
+/**
+ * 完了条件: close() の後に applyInitialVideoConfig が走っても configure を発行しない。
+ *
+ * 解放は await を挟むため、購読の確立 (session.subscribe) が close() の後に解決すると
+ * 初期 configure の適用が閉じた後に走り得る。閉状態の判定が無ければ、decoder の参照が
+ * まだ切れていない窓では configure を発行して復号器を作り直してしまう。保留分の解放は
+ * 行い、復号はしない (閉じた後に decoder を作らない)。
+ */
+test("close: 閉じた後に applyInitialVideoConfig が走っても configure を発行しない", async () => {
+  const subscriber = new MediaSubscriberImpl("moqt://example.com/live", {
+    namespace: ["live"],
+    video: {},
+  });
+  const control = subscriber as unknown as SubscriberLifecycleControl &
+    SubscriberInitialConfigControl & {
+      reconfigureVideoDecoder(description: Uint8Array): Promise<void>;
+    };
+  control.currentState = "active";
+  control.videoTrackInfo = {
+    name: "video",
+    packaging: "loc",
+    isLive: true,
+    codec: "vp8",
+  };
+  let configureCount = 0;
+  const decoded: number[] = [];
+  control.videoDecoder = {
+    configure: async () => {
+      configureCount++;
+    },
+    decode: (payload) => {
+      decoded.push(payload[0] ?? -1);
+    },
+    close: () => {},
+  };
+  control.videoDecoderConfigured = true;
+  const releaseDisposal = holdDisposalAtCatalogUnsubscribe(control);
+
+  const closing = subscriber.close();
+
+  // 解放の途中 (decoder の参照がまだ切れていない) に購読確立後の初期 configure が走る
+  const trackProperties = [{ id: LOC.LOCPropertyId.VIDEO_CONFIG, data: new Uint8Array([1, 2, 3]) }];
+  const { subscriber: trackSubscriber, trackPropertyReads } =
+    createTrackPropertySubscriber(trackProperties);
+  control.videoInitialConfigPending = true;
+  control.videoSubscriber = trackSubscriber;
+  // 保留中に届いた Object は解放で捨てる
+  control.handleVideoObject(makeIdentifiedObject(0n, 0x44));
+  await control.applyInitialVideoConfig();
+
+  // Track Property を読まず configure も発行せず、保留分だけ解放する
+  assert.equal(trackPropertyReads(), 0);
+  assert.equal(configureCount, 0);
+  assert.isFalse(control.videoInitialConfigPending);
+  assert.equal(control.pendingVideoObjects.length, 0);
+  assert.deepEqual(decoded, []);
+
+  // 閉じた後に再構成そのものを呼んでも configure を発行しない (解放の途中で decoder の
+  // 参照がまだ切れていないため、閉状態の判定だけが configure を止める)
+  await control.reconfigureVideoDecoder(new Uint8Array([7, 7, 7]));
+  assert.equal(configureCount, 0);
+  assert.isNull(control.lastAppliedVideoConfig);
+
+  releaseDisposal();
+  await closing;
+
+  // 解放の完了後に走った場合も Track Property を読まず configure を発行しない
+  control.videoInitialConfigPending = true;
+  control.videoSubscriber = trackSubscriber;
+  await control.applyInitialVideoConfig();
+  assert.equal(trackPropertyReads(), 0);
+  assert.equal(configureCount, 0);
+  assert.isFalse(control.videoInitialConfigPending);
+  assert.equal(control.pendingVideoObjects.length, 0);
+  assert.equal(subscriber.state, "closed");
+});
+
+/**
+ * 完了条件: close() の後に applyInitialAudioConfig が走っても configure を発行しない。
+ * 映像と同じ経路を音声でも固定する。
+ */
+test("close: 閉じた後に applyInitialAudioConfig が走っても configure を発行しない", async () => {
+  const subscriber = new MediaSubscriberImpl("moqt://example.com/live", {
+    namespace: ["live"],
+    audio: {},
+  });
+  const control = subscriber as unknown as SubscriberLifecycleControl &
+    SubscriberInitialConfigControl & {
+      reconfigureAudioDecoder(description: Uint8Array): Promise<void>;
+    };
+  control.currentState = "active";
+  control.audioTrackInfo = {
+    name: "audio",
+    packaging: "loc",
+    isLive: true,
+    codec: "opus",
+    samplerate: 48_000,
+    channelConfig: "2",
+  };
+  let configureCount = 0;
+  const decoded: number[] = [];
+  control.audioDecoder = {
+    configure: async () => {
+      configureCount++;
+    },
+    decode: (payload) => {
+      decoded.push(payload[0] ?? -1);
+    },
+    close: () => {},
+  };
+  control.audioDecoderConfigured = true;
+  const releaseDisposal = holdDisposalAtCatalogUnsubscribe(control);
+
+  const closing = subscriber.close();
+
+  // 解放の途中 (decoder の参照がまだ切れていない) に購読確立後の初期 configure が走る
+  const trackProperties = [{ id: LOC.LOCPropertyId.AUDIO_CONFIG, data: new Uint8Array([4, 5, 6]) }];
+  const { subscriber: trackSubscriber, trackPropertyReads } =
+    createTrackPropertySubscriber(trackProperties);
+  control.audioInitialConfigPending = true;
+  control.audioSubscriber = trackSubscriber;
+  control.handleAudioObject(makeIdentifiedObject(0n, 0x55));
+  await control.applyInitialAudioConfig();
+
+  // Track Property を読まず configure も発行せず、保留分だけ解放する
+  assert.equal(trackPropertyReads(), 0);
+  assert.equal(configureCount, 0);
+  assert.isFalse(control.audioInitialConfigPending);
+  assert.equal(control.pendingAudioObjects.length, 0);
+  assert.deepEqual(decoded, []);
+
+  // 閉じた後に再構成そのものを呼んでも configure を発行しない (解放の途中で decoder の
+  // 参照がまだ切れていないため、閉状態の判定だけが configure を止める)
+  await control.reconfigureAudioDecoder(new Uint8Array([7, 7, 7]));
+  assert.equal(configureCount, 0);
+  assert.isNull(control.lastAppliedAudioConfig);
+
+  releaseDisposal();
+  await closing;
+
+  // 解放の完了後に走った場合も Track Property を読まず configure を発行しない
+  control.audioInitialConfigPending = true;
+  control.audioSubscriber = trackSubscriber;
+  await control.applyInitialAudioConfig();
+  assert.equal(trackPropertyReads(), 0);
+  assert.equal(configureCount, 0);
+  assert.isFalse(control.audioInitialConfigPending);
+  assert.equal(control.pendingAudioObjects.length, 0);
+  assert.equal(subscriber.state, "closed");
+});
+
+/**
+ * 完了条件: close() の解放が失敗して終端 ("closed") へ進まなかった場合、閉状態は
+ * 復旧の手順 (state が "active" なら stop() を呼んでから start()) の start() の入口で戻る。
+ *
+ * 解放が失敗したときは state を変えないため、解放の最後の段階 (session の close) で
+ * 失敗すると state は "active" のまま残る。この state では start() が cannot start in
+ * state で拒否されるため、まず stop() を呼んで "stopped" にしてから再開する。参照は
+ * 破棄の前に切り離しているため、stop() の解放は失敗した段階をやり直さず残りの段階だけで
+ * 成功する。閉状態を残すと再開した購読がすべての Object と再構成を捨てて復号できなく
+ * なるため、start() の入口で戻す。
+ */
+test("start: close の解放が失敗した後に stop を経て再開したら閉状態を戻す", async () => {
+  const failure = new Error("session close failure");
+  const subscriber = new MediaSubscriberImpl("moqt://example.com/live", {
+    namespace: ["live"],
+    video: {},
+  });
+  const control = subscriber as unknown as SubscriberLifecycleControl & SubscriberConnectControl;
+  control.currentState = "active";
+  // 解放の最後の段階 (session の close) で失敗させ、終端へ進めない
+  injectLifecycleResources(control, { sessionCloseError: failure });
+
+  let thrown: unknown = null;
+  try {
+    await subscriber.close();
+  } catch (error) {
+    thrown = error;
+  }
+  assert.strictEqual(thrown, failure);
+  // 解放が失敗したため終端へは進んでおらず state は "active" のままである (失敗時は
+  // state を変えない) が、閉状態は立っている
+  assert.equal(subscriber.state, "active");
+  assert.isTrue(control.closed);
+
+  // 復旧の手順: state が "active" のままなので、まず stop() で "stopped" にする。
+  // 参照は破棄の前に切り離し済みであり、解放は失敗した段階をやり直さず成功する
+  await subscriber.stop();
+  assert.equal(subscriber.state, "stopped");
+  // stop() は閉状態を戻さない (戻すのは再開の入口である start())
+  assert.isTrue(control.closed);
+
+  // 再開の入口で閉状態を戻す (接続は node 環境に WebTransport が無いため失敗させる)
+  control.openSession = () => Promise.reject(new Error("connect failed"));
+  let startThrown: unknown = null;
+  try {
+    await subscriber.start();
+  } catch (error) {
+    startThrown = error;
+  }
+  assert.instanceOf(startThrown, Error);
+  assert.notMatch((startThrown as Error).message, /cannot start in state/);
+  assert.equal(subscriber.state, "stopped");
+  assert.isFalse(control.closed);
 });
 
 /**
