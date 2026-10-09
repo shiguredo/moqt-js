@@ -272,6 +272,19 @@ export type {
   AudioPlayoutTimingSnapshot,
 } from "./audioPlayoutTimingStats";
 
+// 復号した音声の再生の組み立て (時間軸への記録・目標の決定・予約・計器への記録)。
+// ライブラリ (createMediaSubscriber) と moqt-devtools が同じ実装を使う。Web Audio は
+// AudioPlayoutOutput として注入する
+export {
+  AudioPlayoutSession,
+  type AudioPlayoutContext,
+  type AudioPlayoutOutput,
+  type AudioPlayoutRequest,
+  type AudioPlayoutResult,
+  type AudioPlayoutSessionOptions,
+  type AudioPlayoutTimestampKind,
+} from "./audioPlayoutSession";
+
 // 分布の要約 (p50 / p95 / max)。映像と音声の時間の統計で共通に使う
 export type { TimingSummary } from "./timingSummary";
 
