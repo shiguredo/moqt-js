@@ -65,9 +65,11 @@ import {
 } from "./audioPlayout";
 import { AUDIO_DELAY_FEEDBACK_START_MS } from "./audioDelayFeedback";
 import {
+  AUDIO_PLAYOUT_ARRIVAL_DELAY_MS,
   AUDIO_PLAYOUT_DELAY_FLOOR_MS,
   MAX_PLAYOUT_DELAY_MS,
   PlaybackTimeline,
+  audioArrivalPlayoutDelayMs,
 } from "./playbackTimeline";
 
 /** テスト用の最小フルカタログ */
@@ -3702,6 +3704,11 @@ test("handleAudioDecodedData: getOutputTimestamp が 0/0 でもエラーにせ�
  * draft-ietf-moq-loc-04 §2.3.1.2:
  * TIMESCALE がある TIMESTAMP はメディア時刻であり壁時計ではないため、目標の表示時刻を
  * 使わず到着基準の並べ方にフォールバックする (`start(when)` は今 + 再生の遅れになる)。
+ *
+ * 到着の時刻は実装が音を受け取った時点で測るため、テストが測った時刻より必ず後になる。
+ * その差は負荷に依存し、CI の遅いランナーでは音声 1 つ分 (20 ms) を超える。したがって
+ * 絶対時刻を許容幅で比べず、実装が保証する関係 (どの値からどう決まるか、順序、下限・上限)
+ * を確かめる。到着の測定の前後で挟むと、環境に依存しない下限と上限になる。
  */
 test("handleAudioDecodedData: TIMESCALE がある TIMESTAMP は到着基準になる", () => {
   const { subscriber, control, errors } = createAvSyncSubscriber();
@@ -3739,21 +3746,38 @@ test("handleAudioDecodedData: TIMESCALE がある TIMESTAMP は到着基準に�
   const decodedTimestamp = Number(LOC.toDecoderMicroseconds(mediaTimestamp, timescale));
   assert.deepEqual(decodedTimestamps, [decodedTimestamp]);
 
+  // 到着基準で鳴らすときの再生の遅れは、共有の時間軸が学習した値 (この予約ではまだ音を
+  // 鳴らしていないため下限 80 ms) を下限と上限で切った値である (src/playbackTimeline.ts の
+  // `audioArrivalPlayoutDelayMs`)。鳴らした後は閉ループ (observeAudioPlayout) が動かす
+  // ため、予約の前に読む
+  const arrivalDelayMs = audioArrivalPlayoutDelayMs(
+    control.playbackTimeline.playoutDelayMs ?? AUDIO_PLAYOUT_DELAY_FLOOR_MS,
+  );
   const reservation = playAudioFrame(control, decodedTimestamp, mapping);
+  // 実装が到着を測る時刻は、テストが測った `readAtMs` と、呼び出しが戻った時刻の間にある
+  const returnedAtMs = performance.now();
 
   // 目標を使わないため、基準は「到着した音がまだ鳴っていない位置 + 再生の遅れ」になる
   assert.equal(reservation.startedAtSeconds.length, 1);
+  // 到着基準の再生の遅れは下限 (80 ms) と上限 (100 ms) の間にある
+  assert.isAtLeast(arrivalDelayMs, AUDIO_PLAYOUT_DELAY_FLOOR_MS);
+  assert.isAtMost(arrivalDelayMs, AUDIO_PLAYOUT_ARRIVAL_DELAY_MS);
   // 予約時刻は「到着の位置 + 到着基準の遅れ」と「今 + 余裕」の遅い方になる。到着の位置は、
   // 予約のときに測った時刻を getOutputTimestamp の対応で AudioContext の秒へ換算した値
   // (予約のたびに AudioClockBridge が取り直す)
-  const arrivalSeconds = (reservation.readAtMs + reservation.deviceDelayMs) / 1_000;
-  assert.closeTo(
-    (reservation.startedAtSeconds[0] ?? 0) * 1_000,
-    Math.max(
-      (arrivalSeconds + AUDIO_PLAYOUT_ARRIVAL_DELAY_SECONDS) * 1_000,
-      (reservation.currentTimeSeconds + AUDIO_PLAYOUT_MIN_LEAD_SECONDS) * 1_000,
-    ),
-    AV_SYNC_TOLERANCE_MS,
+  const startMs = (reservation.startedAtSeconds[0] ?? 0) * 1_000;
+  const earliestMs = (reservation.currentTimeSeconds + AUDIO_PLAYOUT_MIN_LEAD_SECONDS) * 1_000;
+  const arrivalLowerMs = reservation.readAtMs + reservation.deviceDelayMs;
+  const arrivalUpperMs = returnedAtMs + reservation.deviceDelayMs;
+  assert.isAtLeast(
+    startMs,
+    Math.max(arrivalLowerMs + arrivalDelayMs, earliestMs),
+    "予約時刻が「到着の下限 + 到着基準の遅れ」と「今 + 余裕」の遅い方より前にならない",
+  );
+  assert.isAtMost(
+    startMs,
+    Math.max(arrivalUpperMs + arrivalDelayMs, earliestMs),
+    "予約時刻が「到着の上限 + 到着基準の遅れ」と「今 + 余裕」の遅い方より後にならない",
   );
   // 壁時計の TIMESTAMP を観測していないため同期の推定は出さない
   assert.isNull(subscriber.getStats().avSync);
