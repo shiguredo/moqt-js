@@ -136,6 +136,18 @@ test("buildSubscriberStats: 記録した同期の 5 項目をそのまま返す"
       baseDriftMsPerSecond: 0.5,
       baseDriftLimitMs: 50,
       presentationDelayCapMs: 500,
+      audioDelayFeedback: {
+        targetMs: 110,
+        jitterTargetMs: 40,
+        appliedMs: 110,
+        reason: "lateness",
+        ceilingMs: 200,
+        lastChangeMs: 30,
+        adjustments: 4,
+        latenessP50Ms: 8.5,
+        startDelayP50Ms: 118.25,
+        slackP50Ms: 12,
+      },
     },
   };
   assert.deepEqual(buildSubscriberStats(instance).avSync, instance.avSync.value);

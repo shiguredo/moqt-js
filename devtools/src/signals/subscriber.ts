@@ -9,6 +9,11 @@ import {
   type AudioPlayoutTimingSnapshot,
 } from "../../../src/audioPlayoutTimingStats.ts";
 import { EMPTY_PLAYBACK_TIMING, type PlaybackTimingSnapshot } from "../utils/playbackTimingStats";
+import {
+  AUDIO_DELAY_FEEDBACK_START_MS,
+  type AudioDelayFeedbackSnapshot,
+} from "../../../src/audioDelayFeedback.ts";
+import { AUDIO_DELAY_START_MS } from "../../../src/audioDelayManager.ts";
 
 /**
  * 音声と映像の同期の推定値 (表示とテスト用 API へ出す snapshot)
@@ -22,6 +27,26 @@ import { EMPTY_PLAYBACK_TIMING, type PlaybackTimingSnapshot } from "../utils/pla
  * 遅れがどこで生じているかを分けて見るためにある。
  */
 export type AvSyncSnapshot = AvSyncStats;
+
+/**
+ * 音声の目標遅延の閉ループがまだ動いていないときの値
+ *
+ * 観測が無い間は、実際に使う値 (`appliedMs`) に揺らぎだけから求めた目標 (NetEq の初期値)
+ * をそのまま使う (`src/audioDelayFeedback.ts` の `targetDelayMs`)。閉ループの目標
+ * (`targetMs`) は初期値のままである
+ */
+const EMPTY_AUDIO_DELAY_FEEDBACK: AudioDelayFeedbackSnapshot = {
+  targetMs: AUDIO_DELAY_FEEDBACK_START_MS,
+  jitterTargetMs: AUDIO_DELAY_START_MS,
+  appliedMs: AUDIO_DELAY_START_MS,
+  reason: "initial",
+  ceilingMs: null,
+  lastChangeMs: 0,
+  adjustments: 0,
+  latenessP50Ms: null,
+  startDelayP50Ms: null,
+  slackP50Ms: null,
+};
 
 /** 同期の推定が無いときの値 (未購読、jitter buffer が無効、音声だけの購読) */
 export const EMPTY_AV_SYNC: AvSyncSnapshot = {
@@ -39,6 +64,7 @@ export const EMPTY_AV_SYNC: AvSyncSnapshot = {
     baseDriftMsPerSecond: null,
     baseDriftLimitMs: 0,
     presentationDelayCapMs: 0,
+    audioDelayFeedback: EMPTY_AUDIO_DELAY_FEEDBACK,
   },
 };
 

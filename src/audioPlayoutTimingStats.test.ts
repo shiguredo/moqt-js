@@ -166,6 +166,39 @@ test("snapshot: 窓より古い記録は分布から落ち、累積は残る", (
   assert.equal(snapshot.lastTargetMs, 510, "直近の値は窓に関係なく残ること");
 });
 
+// 完了条件: 目標遅延を閉ループで決めるための観測は、表示用の 10 秒の窓ではなく短い窓
+// (既定 1 秒) の分布を返す。目標を増やした結果が 10 秒の窓へ現れるまでには数秒かかるため、
+// 制御には短い窓を使う。捨てた量は累積のまま返し、差を取るのは使う側の仕事にする
+test("audioDelayFeedback: 短い窓の分布と、累積の捨てた量を返す", () => {
+  const stats = new AudioPlayoutTimingStats(AUDIO_PLAYOUT_TIMING_WINDOW_MS, 0);
+  // 窓 (1 秒) より古い音。余裕 100 / 鳴るまで 110 / 遅れ 10。分布へ入れない
+  stats.recordPlay(1_000, 1_100, 1_110, 20, "timestamp");
+  // 直近 (時刻 5,000〜6,000) の音。余裕 30 / 鳴るまで 40 / 遅れ 10
+  stats.recordPlay(5_100, 5_130, 5_140, 20, "timestamp");
+  // 余裕 10 / 鳴るまで 20 / 遅れ 10
+  stats.recordPlay(5_500, 5_510, 5_520, 20, "timestamp");
+  stats.recordMiss({
+    atMs: 5_600,
+    reason: "backlog",
+    durationMs: 20,
+    targetMs: 5_700,
+    arrivalMs: 5_500,
+  });
+
+  const feedback = stats.audioDelayFeedback(6_000);
+  assert.equal(feedback.atMs, 6_000, "観測した時刻を返すこと");
+  assert.deepEqual(feedback.latenessMs, { p50: 10, p95: 10, max: 10 }, "短い窓の遅れを返すこと");
+  assert.deepEqual(feedback.startDelayMs, { p50: 20, p95: 40, max: 40 });
+  assert.deepEqual(feedback.slackMs, { p50: 10, p95: 30, max: 30 });
+  assert.equal(feedback.backlogMisses, 1, "累積の捨てた数を返すこと");
+  assert.equal(feedback.backlogMs, 20, "累積の捨てた長さを返すこと");
+
+  // 表示用の窓 (10 秒) より外に出れば null になる
+  const later = stats.audioDelayFeedback(20_000);
+  assert.isNull(later.latenessMs, "窓の外の値だけになれば null になること");
+  assert.equal(later.backlogMisses, 1, "累積は窓に関係なく残ること");
+});
+
 // 完了条件: reset で、すべての記録を捨てて初期状態へ戻す。購読をやり直すときに使う
 test("reset: すべての記録を捨てて初期状態へ戻す", () => {
   const stats = new AudioPlayoutTimingStats(AUDIO_PLAYOUT_TIMING_WINDOW_MS, 0);

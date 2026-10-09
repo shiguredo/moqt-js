@@ -17,6 +17,10 @@ const AV_SYNC_ITEMS = {
   videoBase: "subscriber-av-sync-video-base",
   videoExtra: "subscriber-av-sync-video-extra",
   videoPresentation: "subscriber-av-sync-video-presentation",
+  audioTargetApplied: "subscriber-av-sync-audio-target-applied",
+  audioTarget: "subscriber-av-sync-audio-target",
+  audioTargetReason: "subscriber-av-sync-audio-target-reason",
+  audioTargetLateness: "subscriber-av-sync-audio-target-lateness",
   baseDifference: "subscriber-av-sync-base-difference",
   sharing: "subscriber-av-sync-sharing",
   unsharedReason: "subscriber-av-sync-unshared-reason",
@@ -45,6 +49,20 @@ const EMPTY_DELAYS = {
   baseDriftMsPerSecond: null,
   baseDriftLimitMs: 0,
   presentationDelayCapMs: 0,
+  // 音声の目標遅延の閉ループはまだ動いていない。実際に使う値は揺らぎだけから求めた目標
+  // (NetEq の初期値) のままである (`devtools/src/signals/subscriber.ts`)
+  audioDelayFeedback: {
+    targetMs: 100,
+    jitterTargetMs: 80,
+    appliedMs: 80,
+    reason: "initial",
+    ceilingMs: null,
+    lastChangeMs: 0,
+    adjustments: 0,
+    latenessP50Ms: null,
+    startDelayP50Ms: null,
+    slackP50Ms: null,
+  },
 } as const;
 
 test("window.moqtDevTools から同期の推定と遅延の内訳が読め、未購読では既定値になる", async ({
@@ -104,6 +122,11 @@ test("subscriber の画面に同期の推定と遅延の内訳を既定値で出
   await expect(page.getByTestId(AV_SYNC_ITEMS.videoBase)).toHaveText("-");
   await expect(page.getByTestId(AV_SYNC_ITEMS.videoExtra)).toHaveText("0.0");
   await expect(page.getByTestId(AV_SYNC_ITEMS.videoPresentation)).toHaveText("-");
+  // 音声の目標遅延の閉ループ (まだ動いていないため、揺らぎだけの目標と初期値のまま)
+  await expect(page.getByTestId(AV_SYNC_ITEMS.audioTargetApplied)).toHaveText("80.0");
+  await expect(page.getByTestId(AV_SYNC_ITEMS.audioTarget)).toHaveText("100.0");
+  await expect(page.getByTestId(AV_SYNC_ITEMS.audioTargetReason)).toHaveText("initial");
+  await expect(page.getByTestId(AV_SYNC_ITEMS.audioTargetLateness)).toHaveText("-");
   // 基準を共有できているかと、できていない理由
   await expect(page.getByTestId(AV_SYNC_ITEMS.baseDifference)).toHaveText("-");
   await expect(page.getByTestId(AV_SYNC_ITEMS.sharing)).toHaveText("false");

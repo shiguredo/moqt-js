@@ -22,6 +22,10 @@
  */
 
 import type { AudioPlayoutBasis } from "./audioPlayout";
+import {
+  AUDIO_DELAY_FEEDBACK_WINDOW_MS,
+  type AudioDelayFeedbackObservation,
+} from "./audioDelayFeedback";
 import { TimedValues } from "./timedValues";
 import { summarizeTimings, type TimingSummary } from "./timingSummary";
 
@@ -297,6 +301,33 @@ export class AudioPlayoutTimingStats {
       });
     }
     this.pending = [];
+  }
+
+  /**
+   * 目標遅延を閉ループで決めるための観測を求める
+   *
+   * 表示用の分布 (`snapshot`) は直近 10 秒の窓である。目標を増やした結果がそこへ現れる
+   * までには数秒かかるため、制御には短い窓 (`AUDIO_DELAY_FEEDBACK_WINDOW_MS`) の値を使う。
+   * 捨てた量は購読の開始からの累積であり、差を取るのは呼び出し側 (`AudioDelayFeedback`) の
+   * 仕事である (`src/audioDelayFeedback.ts`)
+   *
+   * @param nowMs - 求める時刻 (ミリ秒)
+   */
+  audioDelayFeedback(nowMs: number): AudioDelayFeedbackObservation {
+    // 表示用の分布と同じ長さまでを残し、制御にはその中でも短い窓を使う
+    const minAtMs = nowMs - this.windowMs;
+    for (const series of [this.slacks, this.startDelays, this.latenesses]) {
+      series.prune(minAtMs);
+    }
+    const controlMinAtMs = nowMs - AUDIO_DELAY_FEEDBACK_WINDOW_MS;
+    return {
+      atMs: nowMs,
+      latenessMs: summarizeTimings(this.latenesses.since(controlMinAtMs)),
+      startDelayMs: summarizeTimings(this.startDelays.since(controlMinAtMs)),
+      slackMs: summarizeTimings(this.slacks.since(controlMinAtMs)),
+      backlogMisses: this.missedTotals.backlog.count,
+      backlogMs: this.missedTotals.backlog.ms,
+    };
   }
 
   /**

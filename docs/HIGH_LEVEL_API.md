@@ -90,7 +90,9 @@ interface MediaPublisherOptions {
 音声と映像で同じ値にするための宣言 (draft-ietf-moq-msf-01 §5.2.8 の MUST) であり、片方だけ
 配信するときも購読側の表示の遅れの下限として使われる。0 ms を宣言しても、購読側は
 `max(targetLatency, 揺らぎから求めた再生遅延)` を使うため、音声には NetEq と同じ規則で
-求めた遅延 (観測が無い間は 80 ms) の下限がある。publisher は `targetLatency` が有限数で
+求めた遅延 (観測が無い間は 80 ms) の下限がある。受信側で実際に観測した遅れから目標を
+増やすとき (閉ループ) は、宣言した `targetLatency` を上限にするため、指定より遅らせる
+ことはない。publisher は `targetLatency` が有限数で
 あることと `renderGroup` が有限の整数であることを検証する (非有限値は JSON で null になり
 購読側が復号できなくなる)。それ以外の範囲は呼び出し側の責任になる。節番号は
 draft-ietf-moq-msf-01 由来であり、将来の draft 改版で変わる可能性がある。
@@ -618,6 +620,32 @@ interface PlaybackDelayBreakdown {
   baseDriftMsPerSecond: number | null;
   baseDriftLimitMs: number;
   presentationDelayCapMs: number;
+  // 音声の目標遅延を閉ループで決めた状態。目標が収束しているかと、その理由を読む
+  audioDelayFeedback: AudioDelayFeedbackSnapshot;
+}
+
+interface AudioDelayFeedbackSnapshot {
+  // 閉ループが決めた目標遅延 (ms)。実際に使う値は jitterTargetMs との大きい方
+  targetMs: number;
+  // 揺らぎだけから求めた目標遅延 (NetEq、ms)
+  jitterTargetMs: number;
+  // 実際に使っている目標遅延 (ms)。鳴らした結果をまだ観測していない間は jitterTargetMs
+  appliedMs: number;
+  // 直前に目標を動かした理由。"initial" (初期値)、"backlog" (並べすぎで捨てた)、
+  // "lateness" (予定を過ぎて鳴った)、"settled" (遅れが許容の中に収まった)、
+  // "waiting" (動かす条件がそろっていない)
+  reason: AudioDelayFeedbackReason;
+  // 明示設定 (catalog の targetLatency) の上限 (ms)。無ければ null
+  ceilingMs: number | null;
+  // 直前の制御で動かした量 (ms)。0 なら動かしていない
+  lastChangeMs: number;
+  // 目標を動かした回数
+  adjustments: number;
+  // 直近 (1 秒) の、予定を過ぎて鳴った量・到着から鳴り始めるまでの時間・予定に対する
+  // 余裕の p50 (ms)。まだ鳴らしていなければ null
+  latenessP50Ms: number | null;
+  startDelayP50Ms: number | null;
+  slackP50Ms: number | null;
 }
 ```
 
@@ -628,7 +656,24 @@ jitter buffer の遅れ (`catalog の targetLatency` を下限とする) を足�
 `targetLatency` は無視する (Section 5.2.8 の MUST)。
 
 jitter buffer の遅れは音声と映像で別々に求める。音声は NetEq と同じ規則 (到着の遅れの
-0.95 分位)、映像は揺らぎの百分位である。2 つの表示時刻の差 (A/V のずれ) は、差が 30 ms
+0.95 分位) に加えて、**実際に鳴った結果から閉ループでも目標を決める**。NetEq の規則は
+「直近で最も早く届いた音との差」しか見ないため、到着から鳴り始めるまでの経路 (復号・
+予約・出力のバッファ・まとめて届いた山) の分だけストリーム全体が一様に遅れていることを
+見つけられない。その分を、予定をどれだけ過ぎて鳴ったか (`latenessMs`) と並べすぎで捨てた
+量 (`missedByReason.backlog`) から学ぶ。
+
+- 遅れが続くなら目標を増やし、並べすぎで捨てたなら捨てた長さぶん増やす
+- 遅れが許容 (10 ms) の中に収まり、捨てが無いなら目標を減らす (毎秒 10 ms)
+- 目標を動かすのは毎秒 1 回までであり、1 回の増加は 40 ms までにする。判断には直近 1 秒の
+  分布を使う (表示用の 10 秒の窓は、目標を増やした結果が現れるまでに数秒かかる)
+- 目標は 80 ms から 300 ms の間に収める。観測が無い間は増減せず、NetEq の値をそのまま使う
+- `catalog の targetLatency` を宣言したときは、その値を自動で決める目標の上限にする
+  (NetEq が求めた遅れには掛けない。既存の揺らぎの吸収を変えないため)
+- いま使っている目標とその理由は `AvSyncStats.delays.audioDelayFeedback` に出る。収束して
+  いれば `reason` が `settled` と `lateness` の間を行き来し、`latenessP50Ms` が許容の近くに
+  留まる
+
+映像の遅れは揺らぎの百分位である。2 つの表示時刻の差 (A/V のずれ) は、差が 30 ms
 未満の間はそのままにし、超えたときだけ先行する側の表示の遅れを「後行側 - 30 ms」まで
 即座に上げて抑える。上げた分は毎秒 20 ms までで戻す。このため不感帯の中では映像の遅延は
 音声の jitter buffer の遅延に引きずられず、A/V のずれは 30 ms 程度に収まる。
@@ -685,8 +730,14 @@ jitter buffer の遅れは音声と映像で別々に求める。音声は NetEq
 時刻」の観測値である。受信した音声の再生予定時刻は LOC の TIMESTAMP から `PlaybackTimeline`
 が決め、到着時刻は復号の出力を受け取った時刻、鳴り始める時刻は `AudioContext` の時計へ
 予約した時刻を `AudioClockBridge` で `performance.now()` の軸へ換算した値である
-(音声出力の遅延は含まない)。予定に対する余裕 (`slackMs` の分布) が負であれば、届いた時点で
-すでに予定を過ぎており、その音は間に合っていない。
+(音声の出力デバイスの遅延は含まない)。予定に対する余裕 (`slackMs` の分布) が負であれば、
+届いた時点ですでに予定を過ぎており、その音は間に合っていない。
+
+`latenessMs` / `startDelayMs` / `slackMs` の分布は、音声の目標遅延を決める閉ループにも
+使う (`AvSyncStats.delays.audioDelayFeedback`)。鳴らす時刻は
+`max(目標, 今 + 余裕, 直前の音の終わり)` で決まるため、目標が「今 + 余裕」(出力の
+バッファの分だけ先) に届いていないと、どの音も予定を過ぎて鳴る。この遅れを
+`latenessMs` が示し、閉ループが目標を増やす。詳細は上の jitter buffer の説明を参照。
 
 `arrivalPlannedFrames` は、時間軸の再生予定時刻を使えず、到着基準の計画で鳴らした音の数で
 ある。使えないのは壁時計の TIMESTAMP を持たない、jitter buffer が無効、トラックの基準が

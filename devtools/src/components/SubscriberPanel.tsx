@@ -896,6 +896,72 @@ function SubscriberStats({ statsSignal }: { statsSignal: ReadonlySignal<Subscrib
             ]}
           />
         </StatSection>
+        <StatSection title="Delay target (audio)">
+          <StatList
+            items={[
+              {
+                label: "appliedMs",
+                value: formatMs(stats.avSync.delays.audioDelayFeedback.appliedMs),
+                testId: "subscriber-av-sync-audio-target-applied",
+              },
+              {
+                label: "targetMs",
+                value: formatMs(stats.avSync.delays.audioDelayFeedback.targetMs),
+                testId: "subscriber-av-sync-audio-target",
+              },
+              {
+                label: "jitterTargetMs",
+                value: formatMs(stats.avSync.delays.audioDelayFeedback.jitterTargetMs),
+                testId: "subscriber-av-sync-audio-jitter-target",
+              },
+              {
+                label: "ceilingMs",
+                value:
+                  stats.avSync.delays.audioDelayFeedback.ceilingMs === null
+                    ? "-"
+                    : formatMs(stats.avSync.delays.audioDelayFeedback.ceilingMs),
+                // 明示された上限で自動の目標が止まっていると、遅れが残っていても増えない
+                tone:
+                  stats.avSync.delays.audioDelayFeedback.ceilingMs !== null &&
+                  stats.avSync.delays.audioDelayFeedback.appliedMs >=
+                    stats.avSync.delays.audioDelayFeedback.ceilingMs
+                    ? "warn"
+                    : undefined,
+                testId: "subscriber-av-sync-audio-target-ceiling",
+              },
+              {
+                label: "reason",
+                value: stats.avSync.delays.audioDelayFeedback.reason,
+                testId: "subscriber-av-sync-audio-target-reason",
+              },
+              {
+                label: "lastChangeMs",
+                value: formatMs(stats.avSync.delays.audioDelayFeedback.lastChangeMs),
+                testId: "subscriber-av-sync-audio-target-change",
+              },
+              {
+                label: "adjustments",
+                value: stats.avSync.delays.audioDelayFeedback.adjustments,
+                testId: "subscriber-av-sync-audio-target-adjustments",
+              },
+              {
+                label: "latenessP50Ms",
+                value: formatMs(stats.avSync.delays.audioDelayFeedback.latenessP50Ms),
+                testId: "subscriber-av-sync-audio-target-lateness",
+              },
+              {
+                label: "startDelayP50Ms",
+                value: formatMs(stats.avSync.delays.audioDelayFeedback.startDelayP50Ms),
+                testId: "subscriber-av-sync-audio-target-start-delay",
+              },
+              {
+                label: "slackP50Ms",
+                value: formatMs(stats.avSync.delays.audioDelayFeedback.slackP50Ms),
+                testId: "subscriber-av-sync-audio-target-slack",
+              },
+            ]}
+          />
+        </StatSection>
         <StatSection title="Delays (video)">
           <StatList
             items={[

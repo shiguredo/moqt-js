@@ -77,6 +77,12 @@
   - 時間軸の再生予定時刻を使えず、到着基準の計画で鳴らした音の数を `arrivalPlannedFrames` で読めるようにする。従来はこれを `unplannedFrames` に数えていたが、`unplannedFrames` は到着基準の計画も持たない音 (呼び出し側が計画を渡していない取りこぼし) の数になり、通常は 0 になる
   - `AudioPlayoutTimingSnapshot` は公開型のため、この型を自前で構築しているコードは `arrivalPlannedFrames` の追加が必要になる (後方互換なし)
   - @voluntas
+- [CHANGE] 音声の jitter buffer の目標を、実際に鳴った結果から閉ループで決める
+  - 目標が「到着から実際に鳴るまでの経路」(復号・予約・出力のバッファ・まとめて届いた山) を含んでいなかった。鳴らす時刻は `max(目標, 今 + 余裕, 直前の音の終わり)` で決まり、「今 + 余裕」は `AudioContext.currentTime` の位置 (出力のバッファの分だけ実際に鳴る位置より先) であるため、目標がそこへ届かないとどの音も予定を過ぎて鳴る。実測では目標 40 ms に対して到着から鳴り始めるまでが 298.5 ms (p50)、予定を過ぎて鳴る量が 156.15 ms (p50) になり、並べすぎで捨てた音が 5 件あった。NetEq の規則は「直近で最も早く届いた音との差」しか見ないため、ストリーム全体が一様に遅れている分を見つけられない
+  - 予定をどれだけ過ぎて鳴ったか (`latenessMs`) と、並べすぎで捨てた量 (`missedByReason.backlog`) を見て目標を増減する。遅れが続くなら増やし、遅れが許容 (10 ms) の中に収まり捨てが無いなら毎秒 10 ms 減らす。増減は毎秒 1 回まで、1 回の増加は 40 ms までとし、目標は 80 ms から 300 ms に収める。判断には直近 1 秒の分布を使う (表示用の 10 秒の窓は、増やした結果が現れるまでに数秒かかる)。実際に鳴った結果をまだ観測していない間は NetEq の値のままにする
+  - `catalog の targetLatency` を宣言したときは、その値を自動で決める目標の上限にする (ユーザーの指定を自動で超えない)。NetEq が求めた遅れには掛けない (既存の揺らぎの吸収を変えないため)
+  - いま使っている目標とその理由を `AvSyncStats.delays.audioDelayFeedback` に出す (閉ループの目標・NetEq の目標・実際に使う値・上限・直前に動かした理由と量・直近の遅れ)。moqt-devtools の Delays にも同じ値を出す。`PlaybackDelayBreakdown` は公開型のため、この型を自前で構築しているコードは `audioDelayFeedback` の追加が必要になる (後方互換なし)
+  - @voluntas
 - [UPDATE] moqt-devtools の Tracks カードに、catalog に載せるトラックの宣言を全て出す
   - 配信する音声 / 映像 / event timeline の各トラックに、catalog の値 (packaging / isLive / bitrate / samplerate / channelConfig / width / height / framerate / mimeType / depends / targetLatency / renderGroup / authInfo) を下の Audio / Video / Catalog カードの設定に追随して行で出す。宣言は配信で送る catalog と同じ関数 (`buildPublisherTrackDeclarations`) で組み立て、画面で見た値と実際に送る値がずれないようにする
   - 音声の samplerate / channelConfig は、実際に取れた音の形式が分かっているとき (Preview / 配信中) はその値を出す。マイクはデバイスが決めた形式を返すため、Audio カードの Sample Rate / Channels と異なることがある

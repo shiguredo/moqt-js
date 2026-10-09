@@ -260,6 +260,10 @@ export type {
   PlaybackUnsharedReason,
 } from "./playbackTimeline";
 
+// 音声の目標遅延を閉ループで決めた状態 (AvSyncStats.delays.audioDelayFeedback)。
+// 適用中の目標と、その理由
+export type { AudioDelayFeedbackReason, AudioDelayFeedbackSnapshot } from "./audioDelayFeedback";
+
 // 音声の再生の観測値 (AudioReceiverStats.playoutTiming)。鳴るはずの時刻と鳴らなかった量
 export type {
   AudioMissEvent,

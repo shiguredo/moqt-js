@@ -11,7 +11,11 @@
  *   最小値 (ミリ秒)。受信側と送信側の時計のずれと、経路と復号の最小遅延を含む。遅れは
  *   到着ではなく復号の出力の時刻で測る (表示できる時刻には復号の時間も含まれるため)
  * - 表示の遅れ: トラックごとの jitter buffer の遅延 (ミリ秒)。経路の揺らぎから求める
- *   - 音声は NetEq と同じ規則 (`src/audioDelayManager.ts`)。到着の遅れの 0.95 分位である
+ *   - 音声は NetEq と同じ規則 (`src/audioDelayManager.ts`)。到着の遅れの 0.95 分位である。
+ *     ただし、これだけでは**ストリーム全体が一様に遅れている分** (復号・予約・出力の
+ *     バッファ・まとめて届いた山) が見えないため、実際に鳴った結果 (予定をどれだけ過ぎた
+ *     か、並べすぎで捨てた量) からも目標を決め、大きい方を使う
+ *     (`src/audioDelayFeedback.ts`)。正常時 (遅れが無く、捨てが無い) は目標が下がる
  *   - 映像は「遅れ - 基準の遅れ」の百分位から求めた揺らぎ (`playoutDelayPercentile`)。
  *     表示時刻の後に届くフレームが 1 秒に `LATE_FRAMES_PER_SECOND` 枚までになる値である
  * - A/V 同期: 2 つのトラックの表示時刻の差が `SYNC_MIN_DELTA_MS` を超えたときだけ、先行する
@@ -48,6 +52,11 @@
  * `performance.timeOrigin` は呼び出し側が渡す)。
  */
 
+import {
+  AudioDelayFeedback,
+  type AudioDelayFeedbackObservation,
+  type AudioDelayFeedbackSnapshot,
+} from "./audioDelayFeedback";
 import { AudioDelayManager, type AudioDelayManagerOptions } from "./audioDelayManager";
 import { TimedValues } from "./timedValues";
 
@@ -281,6 +290,14 @@ export interface PlaybackDelayBreakdown {
   baseDriftLimitMs: number;
   /** jitter buffer の遅延を切り下げる上限 (ミリ秒。`MAX_PLAYOUT_DELAY_MS` とキューの小さい方) */
   presentationDelayCapMs: number;
+  /**
+   * 音声の目標遅延を閉ループで決めた状態 (計器用)
+   *
+   * 揺らぎだけから求めた目標 (NetEq) と、実際に鳴った結果から決めた目標、直前に動かした
+   * 理由と量、直近の観測 (予定を過ぎた量・到着から鳴るまでの時間・余裕) を出す。目標が
+   * 収束しているかと、その理由を読むために使う
+   */
+  audioDelayFeedback: AudioDelayFeedbackSnapshot;
 }
 
 /** 直近に表示すると決めた実績 */
@@ -360,6 +377,8 @@ export class PlaybackTimeline {
   private readonly streams: Record<PlaybackStream, StreamState>;
   // 音声の jitter buffer の目標遅延 (NetEq と同じ規則)
   private readonly audioDelayManager: AudioDelayManager;
+  // 実際に鳴った結果 (予定をどれだけ過ぎたか、並べすぎで捨てた量) から目標を決める閉ループ
+  private readonly audioDelayFeedback = new AudioDelayFeedback();
   // 同期の制御が各トラックへ足した遅延 (ミリ秒)。0 以上
   private syncExtraMs: Record<PlaybackStream, number> = { audio: 0, video: 0 };
   // 直前に同期の制御を行った時刻 (ミリ秒)。まだ行っていなければ null
@@ -442,9 +461,11 @@ export class PlaybackTimeline {
     this.recordBaseDifference(wallClockMs);
 
     if (stream === "audio") {
-      // 音声の表示の遅れは NetEq と同じ規則で求める (到着の遅れの 0.95 分位)
+      // 音声の表示の遅れは NetEq と同じ規則で求める (到着の遅れの 0.95 分位)。これだけでは
+      // ストリーム全体の一様な遅れが見えないため、実際に鳴った結果から決めた目標
+      // (`observeAudioPlayout`) との大きい方を使う
       this.audioDelayManager.observe(wallClockMs, timestampMs);
-      state.delayMs = this.audioDelayManager.targetDelayMs;
+      state.delayMs = this.audioDelayFeedback.targetDelayMs(this.audioDelayManager.targetDelayMs);
     } else {
       // 映像の表示の遅れは、遅れの揺らぎの百分位から求める
       // live に追いつくまでに届いたフレームの遅れは経路の揺らぎではない
@@ -481,14 +502,41 @@ export class PlaybackTimeline {
   }
 
   /**
+   * 音声を実際に鳴らした結果の観測を渡す (購読側が鳴らすたびに呼ぶ)
+   *
+   * 「予定をどれだけ過ぎて鳴ったか」「到着から鳴り始めるまで」「並べすぎで捨てた量」から、
+   * 音声の jitter buffer の目標遅延を閉ループで決める (`src/audioDelayFeedback.ts`)。
+   * 目標を動かすのは毎秒 1 回までであり、観測のたびに呼んでよい。動かした目標は次の
+   * 観測 (またはこの呼び出し) で表示の遅れへ反映する
+   *
+   * NetEq の学習 (`src/audioDelayManager.ts`) は「直近で最も早く届いた音との差」しか
+   * 見ないため、ストリーム全体が一様に遅れている分を見つけられない。この観測がその分を
+   * 補う。遅れが許容の中に収まっていれば目標を減らすため、正常時は遅延が増えない
+   *
+   * @param observation - 再生の観測 (`AudioPlayoutTimingStats.audioDelayFeedback`)
+   */
+  observeAudioPlayout(observation: AudioDelayFeedbackObservation): void {
+    this.audioDelayFeedback.update(observation);
+    const audio = this.streams.audio;
+    if (audio.delayMs !== null) {
+      // 次の音から新しい目標で並ぶように、その場で表示の遅れを取り直す
+      audio.delayMs = this.audioDelayFeedback.targetDelayMs(this.audioDelayManager.targetDelayMs);
+    }
+  }
+
+  /**
    * 使う `targetLatency` を決める (ミリ秒。使わないときは null)
    *
    * 同じ render group の track は同じ値でなければならない (draft-ietf-moq-msf-01 §5.2.8)
    * ため、音声と映像で 1 つの値を使う。解決の規則は呼び出し側が持ち、ここへは確定した
    * 値だけを渡す。値は同期の基準の遅延になり、2 つのトラックの表示の遅れの下限になる。
+   * 同時に、音声の jitter buffer の目標を閉ループで決めるときの上限にもなる (指定より
+   * 自動で大きくしない)
    */
   setTargetLatencyMs(value: number | null): void {
     this.targetLatencyValue = value;
+    // 明示された目標遅延は、閉ループが自動で超えない上限にする
+    this.audioDelayFeedback.setCeilingMs(value);
     // 基準の遅延は 2 つのトラックの表示の遅れの下限になる。片方だけがこの下限に当たる
     // ことがあるため、差が開いていればその場で合わせ直す (次の観測を待つと、その間だけ
     // 表示時刻の差が開いたままになる)。戻す向きは毎秒の速さに限るため、ここでは足す
@@ -669,6 +717,7 @@ export class PlaybackTimeline {
       baseDriftMsPerSecond: this.baseDriftMsPerSecond(),
       baseDriftLimitMs: PLAYOUT_BASE_DRIFT_MS,
       presentationDelayCapMs: this.presentationDelayCapMs(),
+      audioDelayFeedback: this.audioDelayFeedback.snapshot(this.audioDelayManager.targetDelayMs),
     };
   }
 

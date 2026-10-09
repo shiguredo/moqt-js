@@ -894,6 +894,23 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   }
 
   /**
+   * 音声の目標遅延を閉ループで決めるための観測を渡す
+   *
+   * 鳴らした (または並べすぎで捨てた) 直後に呼ぶ。「予定をどれだけ過ぎて鳴ったか」
+   * 「到着から鳴り始めるまで」「並べすぎで捨てた量」から、時間軸が目標を増減する。目標を
+   * 動かすのは毎秒 1 回までであり、呼ぶ側は間隔を気にしない (`src/audioDelayFeedback.ts`)
+   *
+   * NetEq の学習 (`src/audioDelayManager.ts`) は直近で最も早く届いた音との差しか見ないため、
+   * 到着から鳴るまでの経路 (復号・予約・出力のバッファ) の分を一様に遅れることを見つけられ
+   * ない。この観測がその分を補う
+   *
+   * @param atMs - 観測した時刻 (`performance.now()`、ミリ秒)
+   */
+  private observeAudioDelayFeedback(atMs: number): void {
+    this.playbackTimeline.observeAudioPlayout(this.audioPlayoutTiming.audioDelayFeedback(atMs));
+  }
+
+  /**
    * 音声と映像の同期の推定値
    *
    * 片方しか購読していない、トラックが解決できていない、またはどちらかが壁時計の
@@ -2444,13 +2461,16 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       if (decision.kind === "drop") {
         // 鳴らさなかった音を、理由と長さと一緒に数える。累積のカウンタ (`playoutDrops`) は
         // 件数しか持たず、何ミリ秒分の音が鳴らなかったかが分からない
+        const missedAtMs = performance.now();
         this.audioPlayoutTiming.recordMiss({
-          atMs: performance.now(),
+          atMs: missedAtMs,
           reason: decision.reason,
           durationMs: durationSeconds * 1_000,
           targetMs,
           arrivalMs,
         });
+        // 並べすぎで捨てた量は、目標を増やす判断にも使う
+        this.observeAudioDelayFeedback(missedAtMs);
         return;
       }
       // 鳴らすと決めたが、鳴らし始める前に失敗したら数える (catch 句)
@@ -2534,6 +2554,8 @@ export class MediaSubscriberImpl implements MediaSubscriber {
         (frames / sampleRate) * 1_000,
         decision.basis,
       );
+      // 実際に鳴った結果 (予定をどれだけ過ぎたか) を、目標を決める閉ループへ渡す
+      this.observeAudioDelayFeedback(performance.now());
 
       // 次の音の補間のために、実際に鳴らしたサンプルを保持する
       this.previousAudioChannels = stretched.channels;

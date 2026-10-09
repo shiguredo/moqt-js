@@ -64,6 +64,27 @@ export class TimedValues {
   }
 
   /**
+   * atMs が sinceMs より後の値。無ければ空の配列
+   *
+   * 窓 (prune) より短い区間の分布を取り直すために使う。窓全体の分布は、目標を変えた
+   * 結果が現れるまでに時間がかかるため、直近の観測だけを見たいことがある
+   */
+  since(sinceMs: number): number[] {
+    const values: number[] = [];
+    for (let index = this.times.length - 1; index >= this.head; index--) {
+      if ((this.times[index] ?? sinceMs) <= sinceMs) {
+        break;
+      }
+      const value = this.values[index];
+      if (value !== undefined) {
+        values.push(value);
+      }
+    }
+    values.reverse();
+    return values;
+  }
+
+  /**
    * atMs が sinceMs 以降の値の最小値。無ければ null
    *
    * 窓 (prune) より短い区間の最小値を取り直すために使う。窓全体の最小値は、値が

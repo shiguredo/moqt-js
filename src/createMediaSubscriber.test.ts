@@ -62,6 +62,7 @@ import {
   type AudioClockMapping,
   type AudioPlayoutScheduler,
 } from "./audioPlayout";
+import { AUDIO_DELAY_FEEDBACK_START_MS } from "./audioDelayFeedback";
 import {
   AUDIO_PLAYOUT_DELAY_FLOOR_MS,
   MAX_PLAYOUT_DELAY_MS,
@@ -3554,7 +3555,14 @@ test("handleAudioDecodedData: 目標の表示時刻を getOutputTimestamp で換
   );
   // 目標の表示時刻には共有の時間軸の式 (max(targetLatency, 再生遅延)) が効いていること
   assert.equal(control.playbackTimeline.targetLatencyMs, AV_SYNC_TARGET_LATENCY_MS);
-  assert.equal(control.playbackTimeline.playoutDelayMs, AUDIO_PLAYOUT_DELAY_FLOOR_MS);
+  // 実際に鳴らした結果を 1 つ観測した後は、揺らぎだけから求めた目標
+  // (AUDIO_PLAYOUT_DELAY_FLOOR_MS = 80 ms) ではなく、閉ループの初期値
+  // (AUDIO_DELAY_FEEDBACK_START_MS = 100 ms) と大きい方を使う
+  assert.equal(
+    control.playbackTimeline.playoutDelayMs,
+    AUDIO_DELAY_FEEDBACK_START_MS,
+    "閉ループの目標を使うこと",
+  );
   assert.equal(errors.length, 0);
 });
 
