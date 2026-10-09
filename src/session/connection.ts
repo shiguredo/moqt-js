@@ -55,6 +55,16 @@ export const DEFAULT_DATA_STREAM_TIMEOUT_MS = 30_000;
 export const DEFAULT_DATA_STREAM_MAX_BUFFER_BYTES = 32 << 20;
 
 /**
+ * draft-ietf-moq-transport-22 §12.5 (EXCESSIVE_LOAD 0x9):
+ * 確立後の受信データストリームがセッション全体で保持してよいバッファの合計の既定上限。
+ *
+ * ストリーム単位の既定 (32 MiB) を 2 本ぶん同時に受けられる値である。媒体フレームは
+ * 通常 1 MiB 未満であり、16 MiB の Object を複数本同時に受ける余裕もある。
+ * 0 以下を指定すると上限を設けない。
+ */
+export const DEFAULT_DATA_STREAM_MAX_TOTAL_BUFFER_BYTES = 64 << 20;
+
+/**
  * initialize() のオプション
  *
  * 公開 API ではないが、connect.ts から SessionImpl.initialize() に渡される。
@@ -96,6 +106,14 @@ export interface ConnectionInitializeOptions {
    * 詳細は ConnectOptions.dataStreamMaxBufferBytes を参照。
    */
   dataStreamMaxBufferBytes?: number;
+  /**
+   * 確立後の受信データストリームがセッション全体で保持してよいバッファの合計上限 (バイト)
+   *
+   * draft-ietf-moq-transport-22 §12.5 (EXCESSIVE_LOAD 0x9)。
+   * 既定は DEFAULT_DATA_STREAM_MAX_TOTAL_BUFFER_BYTES (64 MiB)。0 以下で上限なし。
+   * 詳細は ConnectOptions.dataStreamMaxTotalBufferBytes を参照。
+   */
+  dataStreamMaxTotalBufferBytes?: number;
 }
 
 /**
@@ -138,6 +156,8 @@ export interface ConnectionSessionInternal {
   dataStreamTimeoutMs: number;
   // draft-ietf-moq-transport-22 §12.5: データストリーム単位の受信バッファ上限
   dataStreamMaxBufferBytes: number;
+  // draft-ietf-moq-transport-22 §12.5: 受信データストリーム全体の合計バッファ上限
+  dataStreamMaxTotalBufferBytes: number;
   statsControlMessagesSent: number;
 
   closeWithError(error: SessionError): void;
@@ -244,6 +264,13 @@ export async function connectionInitialize(
      * 既定は DEFAULT_DATA_STREAM_MAX_BUFFER_BYTES (32 MiB)。0 以下で上限なし。
      */
     dataStreamMaxBufferBytes?: number;
+    /**
+     * 確立後の受信データストリームがセッション全体で保持してよいバッファの合計上限 (バイト)
+     *
+     * draft-ietf-moq-transport-22 §12.5 (EXCESSIVE_LOAD 0x9)。
+     * 既定は DEFAULT_DATA_STREAM_MAX_TOTAL_BUFFER_BYTES (64 MiB)。0 以下で上限なし。
+     */
+    dataStreamMaxTotalBufferBytes?: number;
   },
 ): Promise<void> {
   // draft-ietf-moq-transport-22 §6.3 (Session initialization):
@@ -628,7 +655,8 @@ export function connectionStartPostSetupLoops(
  * 0 以下を指定するとタイムアウトしない。
  *
  * draft-ietf-moq-transport-22 §12.5 (EXCESSIVE_LOAD 0x9):
- * あわせて受信データストリーム 1 本が保持してよいバッファの上限も反映する。
+ * あわせて受信データストリームが保持してよいバッファの上限も反映する。
+ * ストリーム単位 (1 本) と、セッション全体の合計の 2 つがある。
  * 0 以下を指定すると上限を設けない。
  */
 export function connectionApplyTimeoutOptions(
@@ -637,6 +665,7 @@ export function connectionApplyTimeoutOptions(
     controlMessageTimeoutMs?: number;
     dataStreamTimeoutMs?: number;
     dataStreamMaxBufferBytes?: number;
+    dataStreamMaxTotalBufferBytes?: number;
   },
 ): void {
   session.controlMessageTimeoutMs =
@@ -646,6 +675,10 @@ export function connectionApplyTimeoutOptions(
   // 確立後の受信データストリームが無制限にメモリを消費しないようにする上限。
   session.dataStreamMaxBufferBytes =
     options?.dataStreamMaxBufferBytes ?? DEFAULT_DATA_STREAM_MAX_BUFFER_BYTES;
+  // ストリームの本数はピアが決められるため、1 本ずつの上限だけでは合計が上限 × 本数まで
+  // 増える。セッション全体の合計にも上限を設ける。
+  session.dataStreamMaxTotalBufferBytes =
+    options?.dataStreamMaxTotalBufferBytes ?? DEFAULT_DATA_STREAM_MAX_TOTAL_BUFFER_BYTES;
 }
 
 export async function connectionSendControlMessage(

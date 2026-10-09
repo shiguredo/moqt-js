@@ -366,6 +366,12 @@
   - 上限で捨てたログの vnode はキャッシュから落とす。`data` と `payload` は追加後に書き換えない前提になる (行を描画し直さないため、書き換えても表示は古いまま)
   - 1 件追加のコストは表示中の件数に比例する分が残る (1000 件で約 3 ms のうち、表示中の子の走査が大半)。表示する行を画面に入る分だけにする対応は別に行う
   - @voluntas
+- [FIX] 受信データストリームのバッファにセッション全体の合計上限を設ける
+  - draft-ietf-moq-transport-22 §12.5 (EXCESSIVE_LOAD 0x9) に対応する。ストリーム単位の上限 (`dataStreamMaxBufferBytes`) だけでは、上限近くまで溜めたストリームを同時に何本も開かれると合計が上限 × 本数まで増える。ストリームの本数はピアが決められるため、すべての受信データストリームが保持するバイト数の合計が既定 64 MiB を超えたら、超過の原因になったストリームだけを打ち切り、他のストリームとセッションは継続する
+  - 打ち切りと後始末は経路ごとの既存手順 (FETCH の fetcher 失敗、fill の fillError、Subgroup の購読 cancel) のままとし、アプリへ渡す error の `streamErrorCode` も `EXCESSIVE_LOAD` (0x9) のままにする。上限ちょうどは打ち切らない
+  - Track Alias 未確立 (pending mode) の保持バイトは `pendingSubgroupBuffer` の per-session 上限が管理するため合計に含めず、subscriber mode へ合流した時点で合計へ載せる
+  - `ConnectOptions.dataStreamMaxTotalBufferBytes` で変更できる (0 以下で上限なし)
+  - @voluntas
 - [FIX] catalog を Forward State の変化と MAX_CACHE_DURATION に合わせて送り直す
   - 配信の開始時に 1 度だけ送っていたため、購読者が居ない間 upstream の購読を pause する relay では (pause するかは relay の裁量)、配信の開始後に購読を始めた相手に catalog が届かず、トラックの購読に進めなかった。`FORWARD` が 0 から 1 になった時点で新しい Group の先頭 Object として送り直す
   - relay は `MAX_CACHE_DURATION` を過ぎた Object を cache から配れないため、catalog を送るたびに 30 秒後 (`MAX_CACHE_DURATION` の半分を上限 30 秒で頭打ちにした値) の送り直しを予約する。`FORWARD` が 0 の間は送信を見送るため Group ID を消費せず、`stop()` / `close()` / ピア起点の close と、ピアが catalog の `PUBLISH` を cancel した場合は予約も残さない

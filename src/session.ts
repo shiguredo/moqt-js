@@ -22,6 +22,7 @@ import * as bidi from "./session/bidi";
 import {
   DEFAULT_CONTROL_MESSAGE_TIMEOUT_MS,
   DEFAULT_DATA_STREAM_MAX_BUFFER_BYTES,
+  DEFAULT_DATA_STREAM_MAX_TOTAL_BUFFER_BYTES,
   DEFAULT_DATA_STREAM_TIMEOUT_MS,
   connectionInitialize,
   connectionSendControlMessage,
@@ -601,6 +602,14 @@ export class SessionImpl implements Session {
   // 確立後の受信データストリームが保持してよいバッファの上限。
   // 0 以下は上限なし (既定は 32 MiB)。
   dataStreamMaxBufferBytes = DEFAULT_DATA_STREAM_MAX_BUFFER_BYTES;
+  // 同じく §12.5: すべての受信データストリームが保持するバイト数の合計の上限。
+  // 0 以下は上限なし (既定は 64 MiB)。ストリームの本数はピアが決められるため、
+  // 1 本ずつの上限だけでは合計が上限 × 本数まで増える。
+  dataStreamMaxTotalBufferBytes = DEFAULT_DATA_STREAM_MAX_TOTAL_BUFFER_BYTES;
+  // すべての受信データストリームが保持しているバイト数の合計。
+  // 増減は dataStreamIncoming.ts の dataStreamBufferBytesAdd /
+  // dataStreamBufferBytesRelease だけが行う。
+  dataStreamBufferedBytesTotal = 0;
 
   // 統計カウンター
   //

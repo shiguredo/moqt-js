@@ -4501,6 +4501,9 @@ interface DataStreamFinContext extends DataStreamHandle {
     // draft-ietf-moq-transport-22 §12.2 (タイムアウト) / §12.5 (バッファ上限)
     dataStreamTimeoutMs: number;
     dataStreamMaxBufferBytes: number;
+    dataStreamMaxTotalBufferBytes: number;
+    // 受信データストリーム全体が保持しているバイト数の合計 (§12.5)
+    dataStreamBufferedBytesTotal: number;
     handleIncomingStream(stream: ReadableStream<Uint8Array>): Promise<void>;
   };
   sessionError: { current: Error | undefined };
@@ -4531,7 +4534,14 @@ interface DataStreamFinContext extends DataStreamHandle {
  * openStream() で同じセッションに追加する。
  */
 function createDataStreamFinContext(
-  options: { dataStreamTimeoutMs?: number; dataStreamMaxBufferBytes?: number } = {},
+  options: {
+    dataStreamTimeoutMs?: number;
+    dataStreamMaxBufferBytes?: number;
+    dataStreamMaxTotalBufferBytes?: number;
+    // 打ち切り (readable の cancel) の完了を保留する。打ち切りの await 中に
+    // 他のストリームを進めるテストで使う
+    holdCancel?: Promise<void>;
+  } = {},
 ): DataStreamFinContext {
   const sessionError: { current: Error | undefined } = { current: undefined };
   let resolveClosed!: (info: WebTransportCloseInfo) => void;
@@ -4559,6 +4569,9 @@ function createDataStreamFinContext(
     // draft-ietf-moq-transport-22 §12.2 (タイムアウト) / §12.5 (バッファ上限)
     dataStreamTimeoutMs: number;
     dataStreamMaxBufferBytes: number;
+    dataStreamMaxTotalBufferBytes: number;
+    // 受信データストリーム全体が保持しているバイト数の合計 (§12.5)
+    dataStreamBufferedBytesTotal: number;
     handleIncomingStream(stream: ReadableStream<Uint8Array>): Promise<void>;
   };
   // initialize() を経由せずタイムアウト値とバッファ上限だけを差し替える
@@ -4567,6 +4580,9 @@ function createDataStreamFinContext(
   }
   if (options.dataStreamMaxBufferBytes !== undefined) {
     internal.dataStreamMaxBufferBytes = options.dataStreamMaxBufferBytes;
+  }
+  if (options.dataStreamMaxTotalBufferBytes !== undefined) {
+    internal.dataStreamMaxTotalBufferBytes = options.dataStreamMaxTotalBufferBytes;
   }
 
   const openStream = (): DataStreamHandle => {
@@ -4582,6 +4598,9 @@ function createDataStreamFinContext(
       cancel(reason) {
         cancelled = true;
         cancelReasons.push(reason);
+        // 打ち切りの await 中に他のストリームを進めるテストのために、
+        // 完了を保留できるようにする (未指定なら即座に完了する)
+        return options.holdCancel;
       },
     });
 
@@ -4649,6 +4668,31 @@ function buildSubgroupStreamParts(properties?: Uint8Array): StreamParts {
   const fieldsBytes = encodeObjectFields(0n, 10n, headerType, ObjectStatus.NORMAL, properties);
   const payload = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
   return { headerBytes, fieldsBytes, payload };
+}
+
+/**
+ * Track Alias と payload 長を指定して Subgroup データストリームの構成バイト列を構築する
+ *
+ * セッション全体のバッファ合計の上限 (draft-ietf-moq-transport-22 §12.5) は複数の
+ * ストリームを同時に開いて検証するため、Track Alias と、ストリームが保持するバイト数
+ * (Object の payload 長) を変えたストリームを組み立てられるようにする。Object は
+ * payload 宣言長が payloadLength の 1 つである。
+ */
+function buildSubgroupStreamPartsForAlias(trackAlias: bigint, payloadLength: number): StreamParts {
+  const headerBytes = encodeSubgroupHeader({
+    type: SubgroupHeaderType.BASE,
+    trackAlias,
+    groupId: 1n,
+    publisherPriority: 128,
+    firstObject: false,
+  });
+  const fieldsBytes = encodeObjectFields(
+    0n,
+    BigInt(payloadLength),
+    SubgroupHeaderType.BASE,
+    ObjectStatus.NORMAL,
+  );
+  return { headerBytes, fieldsBytes, payload: new Uint8Array(payloadLength).fill(1) };
 }
 
 /**
@@ -6207,7 +6251,9 @@ test("Fetch データストリーム: Object 完成後の FIN は正常終了し
  * 購読 (SubscriberImpl) と fill 関連付けを登録し、FETCH_HEADER 形式の
  * fill ストリームを handleIncomingStream で駆動できるようにする。
  */
-function createFillFetchStreamContext(options: { dataStreamMaxBufferBytes?: number } = {}): {
+function createFillFetchStreamContext(
+  options: { dataStreamMaxBufferBytes?: number; dataStreamMaxTotalBufferBytes?: number } = {},
+): {
   ctx: ReturnType<typeof createDataStreamFinContext>;
   internals: {
     subscribers: Map<bigint, SubscriberImpl>;
@@ -6853,6 +6899,1042 @@ test("Subgroup データストリーム: バッファ上限以下なら従来ど
   assert.equal(subscriber.state, "active");
   assert.equal(received.length, 1);
   assert.equal(received[0]!.payload.byteLength, 10);
+});
+
+// ============================================================================
+// draft-ietf-moq-transport-22 §12.5 (EXCESSIVE_LOAD): セッション全体の合計上限
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-22 §12.5 (EXCESSIVE_LOAD 0x9):
+ * ストリーム単位の上限に収まっていても、セッション全体の合計が上限を超えたら、
+ * 超過の原因になったストリームだけを打ち切り、他のストリームとセッションは継続する。
+ */
+test("データストリーム: 合計のバッファ上限を超えると超過の原因になった 1 本だけが打ち切られる", async () => {
+  // ヘッダー解析後は Object のフィールドと payload の先頭 4 バイトがバッファに残る
+  const firstParts = buildSubgroupStreamPartsForAlias(7n, 10);
+  const secondParts = buildSubgroupStreamPartsForAlias(8n, 10);
+  const heldBytes = firstParts.fieldsBytes.byteLength + 4;
+  // ストリーム単位の上限は十分大きく取り、合計の上限だけで打ち切る。
+  // 合計の上限は 2 本が保持する合計ちょうどにし、そこまでは打ち切らない
+  const ctx = createDataStreamFinContext({
+    dataStreamMaxBufferBytes: 1024,
+    dataStreamMaxTotalBufferBytes: heldBytes * 2,
+  });
+
+  const firstReceived: MoqtObject[] = [];
+  const firstErrors: Error[] = [];
+  const firstSubscriber = new SubscriberImpl(
+    ["live"],
+    "video",
+    1n,
+    7n,
+    (object) => {
+      firstReceived.push(object);
+    },
+    undefined,
+    undefined,
+    (error) => {
+      firstErrors.push(error);
+    },
+  );
+  ctx.internal.subscribersByAlias.set(7n, [firstSubscriber]);
+
+  const secondReceived: MoqtObject[] = [];
+  const secondErrors: Error[] = [];
+  const secondSubscriber = new SubscriberImpl(
+    ["live"],
+    "video",
+    2n,
+    8n,
+    (object) => {
+      secondReceived.push(object);
+    },
+    undefined,
+    undefined,
+    (error) => {
+      secondErrors.push(error);
+    },
+  );
+  ctx.internal.subscribersByAlias.set(8n, [secondSubscriber]);
+
+  // 1 本目が Object の途中まで保持する (合計は上限の半分)
+  const firstPromise = ctx.run();
+  ctx.enqueue(
+    concatUint8Arrays([
+      firstParts.headerBytes,
+      firstParts.fieldsBytes,
+      firstParts.payload.slice(0, 4),
+    ]),
+  );
+  await yieldToMacrotask();
+  assert.equal(ctx.internal.dataStreamBufferedBytesTotal, heldBytes);
+  assert.isFalse(ctx.isCancelled());
+
+  // 2 本目も Object の途中まで保持する (合計は上限ちょうど。ここでは打ち切らない)
+  const second = ctx.openStream();
+  const secondPromise = second.run();
+  second.enqueue(
+    concatUint8Arrays([
+      secondParts.headerBytes,
+      secondParts.fieldsBytes,
+      secondParts.payload.slice(0, 4),
+    ]),
+  );
+  await yieldToMacrotask();
+  assert.equal(ctx.internal.dataStreamBufferedBytesTotal, heldBytes * 2);
+  assert.isFalse(second.isCancelled());
+
+  // 2 本目が残りの payload を追記すると合計が上限を超える。超過の原因は追記した
+  // 2 本目であるため、2 本目だけが打ち切られる
+  second.enqueue(secondParts.payload.slice(4));
+  await secondPromise;
+
+  assert.isTrue(second.isCancelled());
+  assert.equal(second.cancelReasons.length, 1);
+  assert.isTrue(String(second.cancelReasons[0]).includes("code=9"));
+  assert.isTrue(String(second.cancelReasons[0]).includes("trackAlias=8"));
+  assert.isTrue(String(second.cancelReasons[0]).includes(`totalLimit=${heldBytes * 2}`));
+  // 2 本目の購読は EXCESSIVE_LOAD で失敗し、Object は配信されない
+  assert.equal(secondErrors.length, 1);
+  assert.equal(
+    (secondErrors[0] as Error & { streamErrorCode?: number }).streamErrorCode,
+    DataStreamErrorCode.EXCESSIVE_LOAD,
+  );
+  assert.equal(secondSubscriber.state, "closed");
+  assert.equal(secondReceived.length, 0);
+  // 打ち切られた 2 本目の保持バイトは合計から減り、1 本目の分だけが残る
+  assert.equal(ctx.internal.dataStreamBufferedBytesTotal, heldBytes);
+
+  // 1 本目は打ち切られず、残りの payload と FIN で Object が配信される
+  assert.isFalse(ctx.isCancelled());
+  assert.equal(firstErrors.length, 0);
+  ctx.enqueue(firstParts.payload.slice(4));
+  await yieldToMacrotask();
+  assert.equal(firstReceived.length, 1);
+  ctx.fin();
+  await firstPromise;
+
+  // セッションは閉じず、1 本目の終了で合計は 0 に戻る
+  assert.isUndefined(ctx.sessionError.current);
+  assert.equal(ctx.session.state, "connected");
+  assert.equal(firstSubscriber.state, "active");
+  assert.equal(ctx.internal.dataStreamBufferedBytesTotal, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-22 §12.5 (EXCESSIVE_LOAD 0x9):
+ * 打ち切りを決めたストリームの計上分は、打ち切りの await の前に解放される。
+ * 解放をストリーム終了の finally まで遅らせると、await 中も合計が上限超過のままに
+ * なり、その間に追記した無関係なストリームが巻き添えで打ち切られる。
+ */
+test("データストリーム: 打ち切りの await 中に追記した他のストリームは巻き添えで打ち切られない", async () => {
+  const firstParts = buildSubgroupStreamPartsForAlias(7n, 10);
+  const secondParts = buildSubgroupStreamPartsForAlias(8n, 10);
+  // ヘッダー解析後は Object のフィールドと payload の先頭 4 バイトがバッファに残る
+  const heldBytes = firstParts.fieldsBytes.byteLength + 4;
+  // 打ち切りの完了 (readable の cancel) をテストが解放するまで保留する
+  let releaseCancel: () => void = () => {};
+  const holdCancel = new Promise<void>((resolve) => {
+    releaseCancel = resolve;
+  });
+  const ctx = createDataStreamFinContext({
+    dataStreamMaxBufferBytes: 1024,
+    dataStreamMaxTotalBufferBytes: heldBytes,
+    holdCancel,
+  });
+
+  const firstErrors: Error[] = [];
+  ctx.internal.subscribersByAlias.set(7n, [
+    new SubscriberImpl(
+      ["live"],
+      "video",
+      1n,
+      7n,
+      () => {},
+      undefined,
+      undefined,
+      (error) => {
+        firstErrors.push(error);
+      },
+    ),
+  ]);
+  const secondReceived: MoqtObject[] = [];
+  ctx.internal.subscribersByAlias.set(8n, [
+    new SubscriberImpl(
+      ["live"],
+      "video",
+      2n,
+      8n,
+      (object) => {
+        secondReceived.push(object);
+      },
+      undefined,
+      undefined,
+      () => {},
+    ),
+  ]);
+
+  // 1 本目: 上限ちょうどまで保持する
+  const firstPromise = ctx.run();
+  ctx.enqueue(
+    concatUint8Arrays([
+      firstParts.headerBytes,
+      firstParts.fieldsBytes,
+      firstParts.payload.slice(0, 4),
+    ]),
+  );
+  await yieldToMacrotask();
+  assert.equal(ctx.internal.dataStreamBufferedBytesTotal, heldBytes);
+  assert.isFalse(ctx.isCancelled());
+
+  // 1 本目が 1 バイト追記して上限を超えると打ち切りが始まるが、cancel は保留中である
+  ctx.enqueue(firstParts.payload.slice(4, 5));
+  await yieldToMacrotask();
+  assert.isTrue(ctx.isCancelled());
+  // 打ち切りが終わる前に計上分が解放されていること (解放が遅れると合計が残る)
+  assert.isBelow(ctx.internal.dataStreamBufferedBytesTotal, heldBytes);
+
+  // 2 本目が同じだけ保持しても、合計は上限以下であり巻き添えで打ち切られない
+  const second = ctx.openStream();
+  const secondPromise = second.run();
+  second.enqueue(
+    concatUint8Arrays([
+      secondParts.headerBytes,
+      secondParts.fieldsBytes,
+      secondParts.payload.slice(0, 4),
+    ]),
+  );
+  await yieldToMacrotask();
+  assert.isFalse(second.isCancelled());
+  assert.equal(ctx.internal.dataStreamBufferedBytesTotal, heldBytes);
+
+  // 保留していた打ち切りを解放すると、超過の原因である 1 本目だけが EXCESSIVE_LOAD で終わる
+  releaseCancel();
+  await firstPromise;
+  assert.equal(firstErrors.length, 1);
+  assert.equal(
+    (firstErrors[0] as Error & { streamErrorCode?: number }).streamErrorCode,
+    DataStreamErrorCode.EXCESSIVE_LOAD,
+  );
+  assert.equal(ctx.internal.dataStreamBufferedBytesTotal, heldBytes);
+
+  // 後始末のため 2 本目をピアの RESET_STREAM で終える (終了で合計から減る)
+  second.reset(Object.assign(new Error("reset by publisher"), { source: "stream" }));
+  await secondPromise;
+  assert.isUndefined(ctx.sessionError.current);
+  assert.equal(ctx.session.state, "connected");
+  assert.equal(ctx.internal.dataStreamBufferedBytesTotal, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-22 §12.5 (EXCESSIVE_LOAD 0x9) / §11.5.1 (Padding Streams):
+ * padding ストリームのデータは読み捨てるため保持しない。計上を drain の終わりまで
+ * 残すと、FIN しない padding ストリームを開くだけで合計が上限超過のまま固定され、
+ * その間に追記した他のストリームが巻き添えで打ち切られる。
+ */
+test("データストリーム: FIN しない padding ストリームのバイトは合計に残らない", async () => {
+  const parts = buildSubgroupStreamPartsForAlias(7n, 10);
+  const heldBytes = parts.fieldsBytes.byteLength + 4;
+  // 1 本の Subgroup ストリームが保持する分を上限にする
+  const ctx = createDataStreamFinContext({
+    dataStreamMaxBufferBytes: 1024,
+    dataStreamMaxTotalBufferBytes: heldBytes,
+  });
+  ctx.internal.subscribersByAlias.set(7n, [
+    new SubscriberImpl(["live"], "video", 1n, 7n, () => {}),
+  ]);
+
+  // 1 本目: padding ストリームを開き、FIN せずに読み捨てさせる
+  const paddingPromise = ctx.run();
+  ctx.enqueue(encodeVarint(0x132b3e28));
+  await yieldToMacrotask();
+  // 読み捨てた分は合計に残らない
+  assert.equal(ctx.internal.dataStreamBufferedBytesTotal, 0);
+
+  // 2 本目が上限ちょうどまで保持しても、巻き添えで打ち切られない
+  const second = ctx.openStream();
+  const secondPromise = second.run();
+  second.enqueue(
+    concatUint8Arrays([parts.headerBytes, parts.fieldsBytes, parts.payload.slice(0, 4)]),
+  );
+  await yieldToMacrotask();
+  assert.isFalse(second.isCancelled());
+  assert.equal(ctx.internal.dataStreamBufferedBytesTotal, heldBytes);
+
+  // 後始末: FIN せずに読み捨てていた padding ストリームをピアの FIN で終える
+  ctx.fin();
+  await paddingPromise;
+  assert.isUndefined(ctx.sessionError.current);
+  assert.equal(ctx.session.state, "connected");
+
+  // 2 本目は上限ちょうどの保持のまま Object を完成させられないため、
+  // ピアの RESET_STREAM で終える (終了で合計から減る)
+  second.reset(Object.assign(new Error("reset by publisher"), { source: "stream" }));
+  await secondPromise;
+  assert.isUndefined(ctx.sessionError.current);
+  assert.equal(ctx.session.state, "connected");
+  assert.equal(ctx.internal.dataStreamBufferedBytesTotal, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-22 §12.5 (EXCESSIVE_LOAD 0x9):
+ * 合計が上限と等しい場合は打ち切らない (超過のみが対象)。2 本が同時に保持する合計が
+ * 上限ちょうどでも打ち切らず、上限ちょうどの Object も従来どおり配信される。
+ */
+test("データストリーム: 合計が上限ちょうどなら打ち切らない", async () => {
+  const firstParts = buildSubgroupStreamPartsForAlias(7n, 10);
+  const secondParts = buildSubgroupStreamPartsForAlias(8n, 10);
+  const heldBytes = firstParts.fieldsBytes.byteLength + 4;
+  // 2 本が保持する合計ちょうどを上限にする
+  const ctx = createDataStreamFinContext({
+    dataStreamMaxBufferBytes: 1024,
+    dataStreamMaxTotalBufferBytes: heldBytes * 2,
+  });
+
+  const firstReceived: MoqtObject[] = [];
+  const secondReceived: MoqtObject[] = [];
+  const firstSubscriber = new SubscriberImpl(["live"], "video", 1n, 7n, (object) => {
+    firstReceived.push(object);
+  });
+  const secondSubscriber = new SubscriberImpl(["live"], "video", 2n, 8n, (object) => {
+    secondReceived.push(object);
+  });
+  ctx.internal.subscribersByAlias.set(7n, [firstSubscriber]);
+  ctx.internal.subscribersByAlias.set(8n, [secondSubscriber]);
+
+  const firstPromise = ctx.run();
+  ctx.enqueue(
+    concatUint8Arrays([
+      firstParts.headerBytes,
+      firstParts.fieldsBytes,
+      firstParts.payload.slice(0, 4),
+    ]),
+  );
+  await yieldToMacrotask();
+  const second = ctx.openStream();
+  const secondPromise = second.run();
+  second.enqueue(
+    concatUint8Arrays([
+      secondParts.headerBytes,
+      secondParts.fieldsBytes,
+      secondParts.payload.slice(0, 4),
+    ]),
+  );
+  await yieldToMacrotask();
+
+  // 合計は上限ちょうどであり、どちらも打ち切られていない
+  assert.equal(ctx.internal.dataStreamBufferedBytesTotal, heldBytes * 2);
+  assert.isFalse(ctx.isCancelled());
+  assert.isFalse(second.isCancelled());
+  assert.equal(firstReceived.length, 0);
+  assert.equal(secondReceived.length, 0);
+
+  // 後始末のため両方をピアの RESET_STREAM で終える (終了で合計から減る)
+  ctx.reset(Object.assign(new Error("reset by publisher"), { source: "stream" }));
+  second.reset(Object.assign(new Error("reset by publisher"), { source: "stream" }));
+  await Promise.all([firstPromise, secondPromise]);
+  assert.isUndefined(ctx.sessionError.current);
+  assert.equal(ctx.session.state, "connected");
+  assert.equal(ctx.internal.dataStreamBufferedBytesTotal, 0);
+
+  // 1 本だけで送ると、追記直後 (ヘッダー解析後) の合計は上限ちょうどになり、
+  // 打ち切られずに Object が配信される
+  const third = ctx.openStream();
+  const thirdPromise = third.run();
+  third.enqueue(
+    concatUint8Arrays([firstParts.headerBytes, firstParts.fieldsBytes, firstParts.payload]),
+  );
+  await yieldToMacrotask();
+  assert.equal(firstReceived.length, 1);
+  assert.isFalse(third.isCancelled());
+  assert.equal(ctx.internal.dataStreamBufferedBytesTotal, 0);
+  third.fin();
+  await thirdPromise;
+  assert.isUndefined(ctx.sessionError.current);
+  assert.equal(ctx.session.state, "connected");
+});
+
+/**
+ * draft-ietf-moq-transport-22 §12.5 (EXCESSIVE_LOAD 0x9):
+ * ストリームがピアの RESET_STREAM で終わっても、ピア起因でない読み取りエラーで
+ * 終わっても、そのストリームが保持していたバイトは合計から減る (合計が単調増加しない)。
+ */
+test("データストリーム: peer reset と読み取り例外で保持バイトが合計から減る", async () => {
+  const parts = buildSubgroupStreamPartsForAlias(7n, 10);
+  const heldBytes = parts.fieldsBytes.byteLength + 4;
+  const ctx = createDataStreamFinContext({
+    dataStreamMaxBufferBytes: 1024,
+    dataStreamMaxTotalBufferBytes: 1024,
+  });
+  const subscriber = new SubscriberImpl(["live"], "video", 1n, 7n, () => {});
+  ctx.internal.subscribersByAlias.set(7n, [subscriber]);
+
+  // 1 本目: 未完成 Object を保持したままピアの RESET_STREAM で終わる
+  const firstPromise = ctx.run();
+  ctx.enqueue(concatUint8Arrays([parts.headerBytes, parts.fieldsBytes, parts.payload.slice(0, 4)]));
+  await yieldToMacrotask();
+  assert.equal(ctx.internal.dataStreamBufferedBytesTotal, heldBytes);
+  ctx.reset(Object.assign(new Error("reset by publisher"), { source: "stream" }));
+  await firstPromise;
+  assert.equal(ctx.internal.dataStreamBufferedBytesTotal, 0);
+
+  // 2 本目: 未完成 Object を保持したまま、ピア起因でない読み取りエラーで終わる。
+  // ヘッダー解析中の catch が INTERNAL_ERROR でセッションを閉じる既存の挙動だが、
+  // 閉じる前にストリームが保持していたバイトは合計から解放される
+  const second = ctx.openStream();
+  const secondPromise = second.run();
+  second.enqueue(
+    concatUint8Arrays([parts.headerBytes, parts.fieldsBytes, parts.payload.slice(0, 4)]),
+  );
+  await yieldToMacrotask();
+  assert.equal(ctx.internal.dataStreamBufferedBytesTotal, heldBytes);
+  second.reset(new Error("stream read failed"));
+  await secondPromise;
+  assert.equal(ctx.internal.dataStreamBufferedBytesTotal, 0);
+  assert.instanceOf(ctx.sessionError.current, SessionError);
+  assert.equal(ctx.sessionError.current.code, SessionErrorCode.INTERNAL_ERROR);
+  assert.equal(ctx.session.state, "closed");
+});
+
+/**
+ * draft-ietf-moq-transport-22 §12.5 (EXCESSIVE_LOAD 0x9) / §11.3 (Streams):
+ * 未完成 Object の途中の FIN は PROTOCOL_VIOLATION でセッションを閉じるが、
+ * その前にストリームが保持していたバイトは合計から減る (FIN でも単調増加しない)。
+ */
+test("データストリーム: 未完成 Object の FIN でも保持バイトが合計から減る", async () => {
+  const parts = buildSubgroupStreamPartsForAlias(7n, 10);
+  const heldBytes = parts.fieldsBytes.byteLength + 4;
+  const ctx = createDataStreamFinContext({
+    dataStreamMaxBufferBytes: 1024,
+    dataStreamMaxTotalBufferBytes: 1024,
+  });
+  const subscriber = new SubscriberImpl(["live"], "video", 1n, 7n, () => {});
+  ctx.internal.subscribersByAlias.set(7n, [subscriber]);
+
+  const handlePromise = ctx.run();
+  ctx.enqueue(concatUint8Arrays([parts.headerBytes, parts.fieldsBytes, parts.payload.slice(0, 4)]));
+  await yieldToMacrotask();
+  assert.equal(ctx.internal.dataStreamBufferedBytesTotal, heldBytes);
+
+  ctx.fin();
+  await handlePromise;
+
+  // 未完成 Object の FIN はセッションを閉じるが、保持していたバイトは解放される
+  assert.instanceOf(ctx.sessionError.current, SessionError);
+  assert.equal(ctx.sessionError.current.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.session.state, "closed");
+  assert.equal(ctx.internal.dataStreamBufferedBytesTotal, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-22 §12.5 (EXCESSIVE_LOAD 0x9) / §3.1.3.1:
+ * Track Alias 未確立 (pending mode) の保持バイトは pendingSubgroupBuffer の
+ * per-session 上限が管理するため、セッションの合計には二重計上しない。
+ * subscriber mode へ合流した時点で合計へ載せる。
+ */
+test("Subgroup pending mode: 保持バイトが合計へ二重計上されない", async () => {
+  const ctx = createDataStreamFinContext({
+    dataStreamMaxBufferBytes: 1024,
+    dataStreamMaxTotalBufferBytes: 1024,
+  });
+  const internals = ctx.session as unknown as {
+    pendingSubgroupBuffer: {
+      streamCount: number;
+      totalBytes: number;
+      notifyAlias: (trackAlias: bigint, reason: "subscriber") => void;
+    };
+  };
+
+  const parts = buildSubgroupStreamParts();
+  const handlePromise = ctx.run();
+  ctx.enqueue(concatUint8Arrays([parts.headerBytes, parts.fieldsBytes, parts.payload.slice(0, 4)]));
+  await yieldToMacrotask();
+
+  // pending entry が保持しているが、セッションの合計には載っていない
+  assert.equal(internals.pendingSubgroupBuffer.streamCount, 1);
+  const pendingHeldBytes = internals.pendingSubgroupBuffer.totalBytes;
+  assert.isTrue(pendingHeldBytes > 0);
+  assert.equal(ctx.internal.dataStreamBufferedBytesTotal, 0);
+
+  // subscriber を登録して合流すると、pending が保持していたバイトが合計へ載る
+  const received: MoqtObject[] = [];
+  const subscriber = new SubscriberImpl(["live"], "video", 1n, 7n, (object) => {
+    received.push(object);
+  });
+  ctx.internal.subscribersByAlias.set(7n, [subscriber]);
+  internals.pendingSubgroupBuffer.notifyAlias(7n, "subscriber");
+  await yieldToMacrotask();
+  assert.equal(internals.pendingSubgroupBuffer.streamCount, 0);
+  assert.equal(ctx.internal.dataStreamBufferedBytesTotal, pendingHeldBytes);
+
+  // 残りの payload と FIN で Object が配信され、終了で合計が 0 に戻る
+  ctx.enqueue(parts.payload.slice(4));
+  ctx.fin();
+  await handlePromise;
+
+  assert.equal(received.length, 1);
+  assert.isUndefined(ctx.sessionError.current);
+  assert.equal(ctx.session.state, "connected");
+  assert.equal(ctx.internal.dataStreamBufferedBytesTotal, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-22 §12.5 (EXCESSIVE_LOAD 0x9) / §3.1.3.1:
+ * pending mode から subscriber mode へ合流したストリームの計上を呼び出し元の Subgroup
+ * ループ先頭まで判定しないと、その間 (async 関数の解決を待つ間) に追記した別の
+ * ストリームが超過の原因と誤判定されて巻き添えで打ち切られる。合流の直後の同期区間で
+ * 判定し、超過の原因である合流したストリームだけを打ち切る。
+ */
+test("Subgroup pending mode: 合流で上限を超えても追記した他のストリームは巻き添えで打ち切られない", async () => {
+  const pendingParts = buildSubgroupStreamPartsForAlias(7n, 10);
+  const secondParts = buildSubgroupStreamPartsForAlias(8n, 10);
+  // pending と 2 本目が最初に保持する payload のバイト数と、合流の窓で 2 本目が
+  // 追記する payload のバイト数 (payload は 10 バイトで、この時点では Object が未完成)
+  const splitBytes = 6;
+  const windowBytes = 2;
+  const secondHeldBytes = secondParts.fieldsBytes.byteLength + splitBytes;
+  const secondPartialHeldBytes = secondHeldBytes + windowBytes;
+  // 2 本目が完成した Object まで保持しても上限に収まる値にする
+  const secondFullHeldBytes = secondParts.fieldsBytes.byteLength + secondParts.payload.byteLength;
+  const ctx = createDataStreamFinContext({
+    dataStreamMaxBufferBytes: 1024,
+    // 合流で載る pending のバイト (secondHeldBytes と同じ) と 2 本目の保持の合計は
+    // 上限を超え、2 本目が単独で保持する分 (secondFullHeldBytes) は超えない値
+    dataStreamMaxTotalBufferBytes: secondFullHeldBytes + 2,
+  });
+  const internals = ctx.session as unknown as {
+    pendingSubgroupBuffer: {
+      streamCount: number;
+      totalBytes: number;
+      notifyAlias: (trackAlias: bigint, reason: "subscriber") => void;
+    };
+  };
+
+  // 1 本目: 購読が未登録のまま Subgroup ストリームを開き、pending mode で保持させる
+  const pendingPromise = ctx.run();
+  ctx.enqueue(
+    concatUint8Arrays([
+      pendingParts.headerBytes,
+      pendingParts.fieldsBytes,
+      pendingParts.payload.slice(0, splitBytes),
+    ]),
+  );
+  await yieldToMacrotask();
+  assert.equal(internals.pendingSubgroupBuffer.streamCount, 1);
+  const pendingHeldBytes = internals.pendingSubgroupBuffer.totalBytes;
+  assert.equal(pendingHeldBytes, secondHeldBytes);
+  // pending mode のバイトはセッションの合計には載らない
+  assert.equal(ctx.internal.dataStreamBufferedBytesTotal, 0);
+
+  // 2 本目: subscriber mode で保持バイトを計上する
+  const secondReceived: MoqtObject[] = [];
+  const secondErrors: Error[] = [];
+  const secondSubscriber = new SubscriberImpl(
+    ["live"],
+    "video",
+    2n,
+    8n,
+    (object) => {
+      secondReceived.push(object);
+    },
+    undefined,
+    undefined,
+    (error) => {
+      secondErrors.push(error);
+    },
+  );
+  ctx.internal.subscribersByAlias.set(8n, [secondSubscriber]);
+  const second = ctx.openStream();
+  const secondPromise = second.run();
+  second.enqueue(
+    concatUint8Arrays([
+      secondParts.headerBytes,
+      secondParts.fieldsBytes,
+      secondParts.payload.slice(0, splitBytes),
+    ]),
+  );
+  await yieldToMacrotask();
+  assert.equal(ctx.internal.dataStreamBufferedBytesTotal, secondHeldBytes);
+  assert.isFalse(second.isCancelled());
+
+  // 1 本目に購読を登録して合流させる。合流の通知は Promise.race の解決を挟むため、
+  // その分のマイクロタスク (2 回) を先に進めてから 2 本目の追記を積む。こうすると
+  // 2 本目の追記は、合流で合計を押し上げた後に呼び出し元のループ先頭の判定へ到達
+  // するまでの窓 (async 関数の解決を待つ間) に処理される。判定を合流の直後に同期で
+  // 行わないと、この追記が超過の原因と誤判定されて 2 本目が巻き添えで打ち切られる。
+  // 窓に入ったことは下の reason の total= (合流の計上を含む値) で確認する
+  const pendingErrors: Error[] = [];
+  const pendingSubscriber = new SubscriberImpl(
+    ["live"],
+    "video",
+    1n,
+    7n,
+    () => {},
+    undefined,
+    undefined,
+    (error) => {
+      pendingErrors.push(error);
+    },
+  );
+  ctx.internal.subscribersByAlias.set(7n, [pendingSubscriber]);
+  internals.pendingSubgroupBuffer.notifyAlias(7n, "subscriber");
+  await Promise.resolve();
+  await Promise.resolve();
+  second.enqueue(secondParts.payload.slice(splitBytes, splitBytes + windowBytes));
+  await yieldToMacrotask();
+
+  // 2 本目は巻き添えで打ち切られず、追記したバイトを保持したまま受信を継続する。
+  // 判定が合流の直後でないと、合流で合計を押し上げた後に追記したこのストリームが
+  // 超過の原因と誤判定されて打ち切られる
+  assert.isFalse(second.isCancelled());
+  assert.equal(secondErrors.length, 0);
+  assert.equal(secondSubscriber.state, "active");
+  assert.equal(secondReceived.length, 0);
+  assert.equal(ctx.internal.dataStreamBufferedBytesTotal, secondPartialHeldBytes);
+
+  // 打ち切られたのは合流で合計を押し上げた 1 本目だけである。診断の total= は
+  // 解放後の値ではなく判定時の合計であり、この値が pending と 2 本目の保持の合計に
+  // なることが「合流の計上の後に 2 本目が追記した」順序の証明でもある
+  assert.isTrue(ctx.isCancelled());
+  assert.equal(ctx.cancelReasons.length, 1);
+  assert.isTrue(String(ctx.cancelReasons[0]).includes("code=9"));
+  assert.isTrue(String(ctx.cancelReasons[0]).includes("trackAlias=7"));
+  assert.isTrue(
+    String(ctx.cancelReasons[0]).includes(`total=${secondHeldBytes + pendingHeldBytes}`),
+  );
+  assert.equal(pendingErrors.length, 1);
+  assert.equal(
+    (pendingErrors[0] as Error & { streamErrorCode?: number }).streamErrorCode,
+    DataStreamErrorCode.EXCESSIVE_LOAD,
+  );
+  assert.equal(pendingSubscriber.state, "closed");
+  await pendingPromise;
+  // 合流した pending entry は取り除かれ、二重計上も残らない
+  assert.equal(internals.pendingSubgroupBuffer.streamCount, 0);
+  assert.equal(internals.pendingSubgroupBuffer.totalBytes, 0);
+
+  // 残りの payload と FIN で Object が配信され、終了で合計が 0 に戻る
+  second.enqueue(secondParts.payload.slice(splitBytes + windowBytes));
+  await yieldToMacrotask();
+  assert.equal(secondReceived.length, 1);
+  assert.equal(secondReceived[0]!.payload.byteLength, secondParts.payload.byteLength);
+  second.fin();
+  await secondPromise;
+  assert.isUndefined(ctx.sessionError.current);
+  assert.equal(ctx.session.state, "connected");
+  assert.equal(ctx.internal.dataStreamBufferedBytesTotal, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-22 §12.5 (EXCESSIVE_LOAD 0x9) / §3.4.1:
+ * fill fetch ストリームでも、セッション全体の合計が上限を超えたら、その時点で
+ * 追記した fill ストリームだけを打ち切り、他のストリームと購読は継続する。
+ */
+test("fill fetch ストリーム: 合計のバッファ上限を超えると打ち切られ購読は継続する", async () => {
+  const subgroupParts = buildSubgroupStreamPartsForAlias(7n, 10);
+  const subgroupHeldBytes = subgroupParts.fieldsBytes.byteLength + 4;
+  // 合計の上限は、Subgroup が保持する分と、その Object の残り (payload の後半) の
+  // 合計ちょうどにする。fill の Object はフィールドと payload をまとめて追記するため、
+  // この上限を超えるのは fill ストリームだけである
+  const { ctx, internals } = createFillFetchStreamContext({
+    dataStreamMaxBufferBytes: 1024,
+    dataStreamMaxTotalBufferBytes: subgroupHeldBytes + (subgroupParts.payload.byteLength - 4),
+  });
+
+  // Subgroup ストリームが subscriber mode で保持バイトを計上できるよう購読を登録する
+  const subgroupReceived: MoqtObject[] = [];
+  const subgroupSubscriber = new SubscriberImpl(["live"], "video", 3n, 7n, (object) => {
+    subgroupReceived.push(object);
+  });
+  ctx.internal.subscribersByAlias.set(7n, [subgroupSubscriber]);
+
+  const requestId = 2n;
+  const fillErrors: Error[] = [];
+  const subscriber = new SubscriberImpl(["live"], "video", requestId, 1n, () => {});
+  subscriber.fillErrorCallback = (error) => {
+    fillErrors.push(error);
+  };
+  internals.subscribers.set(requestId, subscriber);
+  internals.fillFetchTargets.set(requestId, {
+    subscriber,
+    groupOrder: GroupOrder.ASCENDING,
+  });
+
+  // fill ストリームは FETCH_HEADER だけを送り、ヘッダーの消費後は 0 バイトで待つ
+  const fillParts = buildFetchStreamParts(requestId);
+  const fillPromise = ctx.run();
+  ctx.enqueue(fillParts.headerBytes);
+  await yieldToMacrotask();
+  assert.equal(ctx.internal.dataStreamBufferedBytesTotal, 0);
+
+  // Subgroup ストリームが Object の途中まで保持する
+  const subgroup = ctx.openStream();
+  const subgroupPromise = subgroup.run();
+  subgroup.enqueue(
+    concatUint8Arrays([
+      subgroupParts.headerBytes,
+      subgroupParts.fieldsBytes,
+      subgroupParts.payload.slice(0, 4),
+    ]),
+  );
+  await yieldToMacrotask();
+  assert.equal(ctx.internal.dataStreamBufferedBytesTotal, subgroupHeldBytes);
+  assert.isFalse(subgroup.isCancelled());
+
+  // fill ストリームが Object のフィールドと payload を追記すると合計が上限を超える
+  ctx.enqueue(concatUint8Arrays([fillParts.fieldsBytes, fillParts.payload]));
+  await fillPromise;
+
+  // 打ち切られたのは fill ストリームだけである
+  assert.isTrue(ctx.isCancelled());
+  assert.equal(ctx.cancelReasons.length, 1);
+  assert.isTrue(String(ctx.cancelReasons[0]).includes("code=9"));
+  assert.isTrue(String(ctx.cancelReasons[0]).includes(`requestId=${requestId}`));
+  // アプリへは fillError で伝え、関連付けを消す。購読は継続する (§3.4.1)
+  assert.equal(fillErrors.length, 1);
+  assert.equal(
+    (fillErrors[0] as Error & { streamErrorCode?: number }).streamErrorCode,
+    DataStreamErrorCode.EXCESSIVE_LOAD,
+  );
+  assert.equal(subscriber.state, "active");
+  assert.isFalse(internals.fillFetchTargets.has(requestId));
+  // Subgroup ストリームは打ち切られず、その保持バイトだけが合計に残る
+  assert.isFalse(subgroup.isCancelled());
+  assert.equal(ctx.internal.dataStreamBufferedBytesTotal, subgroupHeldBytes);
+  assert.isUndefined(ctx.sessionError.current);
+  assert.equal(ctx.session.state, "connected");
+
+  // Subgroup ストリームは残りの payload と FIN で Object を配信できる
+  subgroup.enqueue(subgroupParts.payload.slice(4));
+  await yieldToMacrotask();
+  assert.equal(subgroupReceived.length, 1);
+  subgroup.fin();
+  await subgroupPromise;
+  assert.isUndefined(ctx.sessionError.current);
+  assert.equal(ctx.internal.dataStreamBufferedBytesTotal, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-22 §12.5 (EXCESSIVE_LOAD 0x9) / §3.2.4:
+ * FETCH データストリームでも、セッション全体の合計が上限を超えたら、その時点で
+ * 追記した FETCH ストリームだけを打ち切り、ピアの RESET_STREAM と同じ後始末
+ * (error 通知・fetchers からの削除・bidi リクエストストリームへの STOP_SENDING) をする。
+ */
+test("Fetch データストリーム: 合計のバッファ上限を超えると打ち切られ fetcher が失敗する", async () => {
+  const subgroupParts = buildSubgroupStreamPartsForAlias(7n, 10);
+  const subgroupHeldBytes = subgroupParts.fieldsBytes.byteLength + 4;
+  // 合計の上限は Subgroup が保持する分より少しだけ大きくし、FETCH が追記すると超える値にする
+  const ctx = createDataStreamFinContext({
+    dataStreamMaxBufferBytes: 1024,
+    dataStreamMaxTotalBufferBytes: subgroupHeldBytes + 1,
+  });
+  // Subgroup ストリームが subscriber mode で保持バイトを計上できるよう購読を登録する
+  const subgroupSubscriber = new SubscriberImpl(["live"], "video", 3n, 7n, () => {});
+  ctx.internal.subscribersByAlias.set(7n, [subgroupSubscriber]);
+
+  const requestId = 4n;
+  const errors: Error[] = [];
+  const fetcher = new FetcherImpl(
+    ["live"],
+    "video",
+    requestId,
+    () => {},
+    () => {},
+    (error) => {
+      errors.push(error);
+    },
+  );
+  // requestsFetch が設定する onCancel 相当。実経路と同じ後始末
+  // (bidi リクエストストリームへの STOP_SENDING、requestStreams / fetchers の削除)
+  // を通すため、bidiCancelFetch を注入する
+  fetcher.onCancel = async () => {
+    await bidiCancelFetch(ctx.session as unknown as BidiSessionInternal, fetcher);
+  };
+  ctx.internal.fetchers.set(requestId, fetcher);
+
+  // Subgroup ストリームが Object の途中まで保持する
+  const subgroupPromise = ctx.run();
+  ctx.enqueue(
+    concatUint8Arrays([
+      subgroupParts.headerBytes,
+      subgroupParts.fieldsBytes,
+      subgroupParts.payload.slice(0, 4),
+    ]),
+  );
+  await yieldToMacrotask();
+  assert.equal(ctx.internal.dataStreamBufferedBytesTotal, subgroupHeldBytes);
+
+  // FETCH ストリームが Object の途中まで追記すると合計が上限を超える
+  const fetchParts = buildFetchStreamParts(requestId);
+  const fetch = ctx.openStream();
+  const fetchPromise = fetch.run();
+  fetch.enqueue(
+    concatUint8Arrays([
+      fetchParts.headerBytes,
+      fetchParts.fieldsBytes,
+      fetchParts.payload.slice(0, 4),
+    ]),
+  );
+  await fetchPromise;
+
+  // 打ち切られたのは FETCH ストリームだけである
+  assert.isTrue(fetch.isCancelled());
+  assert.equal(fetch.cancelReasons.length, 1);
+  assert.isTrue(String(fetch.cancelReasons[0]).includes("code=9"));
+  assert.isTrue(String(fetch.cancelReasons[0]).includes(`requestId=${requestId}`));
+  assert.isTrue(String(fetch.cancelReasons[0]).includes(`totalLimit=${subgroupHeldBytes + 1}`));
+  // アプリへは error で伝え、fetcher は closed になり Map からも消える
+  assert.equal(errors.length, 1);
+  assert.equal(
+    (errors[0] as Error & { streamErrorCode?: number }).streamErrorCode,
+    DataStreamErrorCode.EXCESSIVE_LOAD,
+  );
+  assert.equal(fetcher.state, "closed");
+  assert.isFalse(ctx.internal.fetchers.has(requestId));
+  // Subgroup ストリームとセッションは継続する
+  assert.isFalse(ctx.isCancelled());
+  assert.isUndefined(ctx.sessionError.current);
+  assert.equal(ctx.session.state, "connected");
+  assert.equal(ctx.internal.dataStreamBufferedBytesTotal, subgroupHeldBytes);
+
+  // 後始末のため Subgroup ストリームをピアの RESET_STREAM で終える
+  ctx.reset(Object.assign(new Error("reset by publisher"), { source: "stream" }));
+  await subgroupPromise;
+  assert.equal(ctx.internal.dataStreamBufferedBytesTotal, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-22 §12.5 (EXCESSIVE_LOAD 0x9):
+ * 上限の判定は追記したチャンクの直後の同期区間で行う。FETCH ストリームは Fetcher が
+ * 登録済みでも、FETCH_OK の解決を含むどの await よりも前に判定する。判定が await を
+ * またぐと、同じタスクで届いた別のストリームの追記が先に判定され、そちらが超過の
+ * 原因と誤判定されて巻き添えで打ち切られる。
+ */
+test("Fetch データストリーム: Fetcher が登録済みでも同じタスクの他ストリームが巻き添えにならない", async () => {
+  const subgroupParts = buildSubgroupStreamPartsForAlias(7n, 10);
+  // Subgroup が保持する分 (フィールド + payload の先頭 4 バイト) を上限にする
+  const subgroupHeldBytes = subgroupParts.fieldsBytes.byteLength + 4;
+  const ctx = createDataStreamFinContext({
+    dataStreamMaxBufferBytes: 1024,
+    dataStreamMaxTotalBufferBytes: subgroupHeldBytes,
+  });
+  const subgroupSubscriber = new SubscriberImpl(["live"], "video", 3n, 7n, () => {});
+  ctx.internal.subscribersByAlias.set(7n, [subgroupSubscriber]);
+
+  const requestId = 4n;
+  const errors: Error[] = [];
+  const fetcher = new FetcherImpl(
+    ["live"],
+    "video",
+    requestId,
+    () => {},
+    () => {},
+    (error) => {
+      errors.push(error);
+    },
+  );
+  fetcher.onCancel = async () => {
+    await bidiCancelFetch(ctx.session as unknown as BidiSessionInternal, fetcher);
+  };
+  // Fetcher が登録済みの経路 (通常経路) を作る
+  ctx.internal.fetchers.set(requestId, fetcher);
+
+  // 同じタスクで FETCH と Subgroup のチャンクを積む。FETCH の保持 (フィールド + 6 バイト)
+  // は上限を超えるが、FETCH の判定が同期区間で行われるため Subgroup は巻き添えにならない
+  const fetchParts = buildFetchStreamParts(requestId);
+  const fetch = ctx.openStream();
+  const fetchPromise = fetch.run();
+  fetch.enqueue(
+    concatUint8Arrays([
+      fetchParts.headerBytes,
+      fetchParts.fieldsBytes,
+      fetchParts.payload.slice(0, 6),
+    ]),
+  );
+  const subgroupPromise = ctx.run();
+  ctx.enqueue(
+    concatUint8Arrays([
+      subgroupParts.headerBytes,
+      subgroupParts.fieldsBytes,
+      subgroupParts.payload.slice(0, 4),
+    ]),
+  );
+  await yieldToMacrotask();
+
+  // 超過の原因である FETCH ストリームだけが打ち切られる
+  assert.isTrue(fetch.isCancelled());
+  assert.isTrue(String(fetch.cancelReasons[0]).includes("code=9"));
+  assert.isTrue(String(fetch.cancelReasons[0]).includes(`requestId=${requestId}`));
+  assert.equal(errors.length, 1);
+  assert.equal(fetcher.state, "closed");
+
+  // Subgroup ストリームは打ち切られず、上限ちょうどまで受信を継続する
+  assert.isFalse(ctx.isCancelled());
+  assert.equal(subgroupSubscriber.state, "active");
+  assert.equal(ctx.internal.dataStreamBufferedBytesTotal, subgroupHeldBytes);
+  assert.isUndefined(ctx.sessionError.current);
+
+  // 後始末: Subgroup をピアの RESET_STREAM で終えると合計が 0 に戻る
+  ctx.reset(Object.assign(new Error("reset by publisher"), { source: "stream" }));
+  await subgroupPromise;
+  await fetchPromise;
+  assert.equal(ctx.internal.dataStreamBufferedBytesTotal, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-22 §12.5 (EXCESSIVE_LOAD 0x9) / §3.2 (Fetch):
+ * FETCH_OK を待っている FETCH ストリームの計上を await をまたいで残すと、待っている間に
+ * 追記した別のストリームが超過の原因と誤判定されて巻き添えで打ち切られる。上限判定は
+ * FETCH_OK 待ちの前に同期区間で行い、超過の原因である FETCH ストリームだけを打ち切る。
+ */
+test("Fetch データストリーム: FETCH_OK 待ちの間に上限を超えても他のストリームは巻き添えで打ち切られない", async () => {
+  const subgroupParts = buildSubgroupStreamPartsForAlias(8n, 10);
+  const subgroupHeldBytes = subgroupParts.fieldsBytes.byteLength + 4;
+  const requestId = 6n;
+  const fetchParts = buildFetchStreamParts(requestId);
+  const fetchHeldBytes = fetchParts.fieldsBytes.byteLength + 4;
+  // 打ち切りの完了 (readable の cancel) をテストが解放するまで保留する
+  let releaseCancel: () => void = () => {};
+  const holdCancel = new Promise<void>((resolve) => {
+    releaseCancel = resolve;
+  });
+  // FETCH ストリームが保持するバイト (fetchHeldBytes) が上限を超え、
+  // Subgroup ストリームが保持するバイト (subgroupHeldBytes) は上限以下になる値にする
+  const ctx = createDataStreamFinContext({
+    dataStreamMaxBufferBytes: 1024,
+    dataStreamMaxTotalBufferBytes: subgroupHeldBytes + 1,
+    holdCancel,
+  });
+  ctx.internal.subscribersByAlias.set(8n, [
+    new SubscriberImpl(["live"], "video", 2n, 8n, () => {}),
+  ]);
+  // FETCH_OK が未着であることを表す pendingFetch のエントリを登録する。
+  // エントリが無いと waitForFetcher はその場で null を返すため、FETCH_OK 待ちの
+  // 窓ができず、このテストが対象にしている await が存在しなくなる
+  const internals = ctx.session as unknown as {
+    pendingFetch: Map<
+      bigint,
+      { resolve: (fetcher: FetcherImpl) => void; reject: (err: Error) => void; impl: FetcherImpl }
+    >;
+  };
+  internals.pendingFetch.set(requestId, {
+    resolve: () => {},
+    reject: () => {},
+    impl: new FetcherImpl(["live"], "video", requestId, () => {}),
+  });
+
+  // 1 本目 (FETCH ストリーム) がヘッダー解析後の残バッファで上限を超える
+  const fetchPromise = ctx.run();
+  ctx.enqueue(
+    concatUint8Arrays([
+      fetchParts.headerBytes,
+      fetchParts.fieldsBytes,
+      fetchParts.payload.slice(0, 4),
+    ]),
+  );
+
+  // 2 本目: 上限以下しか保持しない Subgroup ストリーム。FETCH ストリームが上限判定に
+  // 到達しない実装では、この追記が巻き添えで打ち切られる
+  const second = ctx.openStream();
+  const secondPromise = second.run();
+  second.enqueue(
+    concatUint8Arrays([
+      subgroupParts.headerBytes,
+      subgroupParts.fieldsBytes,
+      subgroupParts.payload.slice(0, 4),
+    ]),
+  );
+  await yieldToMacrotask();
+
+  // 2 本目は巻き添えで打ち切られない
+  assert.isFalse(second.isCancelled());
+  assert.equal(ctx.internal.dataStreamBufferedBytesTotal, subgroupHeldBytes);
+
+  // 1 本目は FETCH_OK 待ちへ入る前に打ち切られ、計上分は解放されている。診断の
+  // total= は解放後の値ではなく判定時の合計である (超過を示す値が残る)
+  assert.isTrue(ctx.isCancelled());
+  assert.equal(ctx.cancelReasons.length, 1);
+  assert.isTrue(String(ctx.cancelReasons[0]).includes("code=9"));
+  assert.isTrue(String(ctx.cancelReasons[0]).includes(`requestId=${requestId}`));
+  assert.isTrue(String(ctx.cancelReasons[0]).includes(`total=${fetchHeldBytes}`));
+  assert.isTrue(String(ctx.cancelReasons[0]).includes(`buffered=${fetchHeldBytes}`));
+
+  // 保留していた打ち切りを解放し、超過の原因である 1 本目だけが終わる
+  releaseCancel();
+  await fetchPromise;
+  assert.isUndefined(ctx.sessionError.current);
+  assert.equal(ctx.session.state, "connected");
+  assert.equal(ctx.internal.dataStreamBufferedBytesTotal, subgroupHeldBytes);
+
+  // 後始末のため 2 本目をピアの RESET_STREAM で終える (終了で合計から減る)
+  second.reset(Object.assign(new Error("reset by publisher"), { source: "stream" }));
+  await secondPromise;
+  assert.isUndefined(ctx.sessionError.current);
+  assert.equal(ctx.session.state, "connected");
+  assert.equal(ctx.internal.dataStreamBufferedBytesTotal, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-22 §12.5 (EXCESSIVE_LOAD 0x9):
+ * 合計の上限に 0 以下を指定すると上限判定を無効にする (打ち切らない)。
+ */
+test("データストリーム: 合計の上限が 0 以下なら打ち切らない", async () => {
+  const firstParts = buildSubgroupStreamPartsForAlias(7n, 10);
+  const secondParts = buildSubgroupStreamPartsForAlias(8n, 10);
+  const ctx = createDataStreamFinContext({
+    dataStreamMaxBufferBytes: 1024,
+    dataStreamMaxTotalBufferBytes: 0,
+  });
+
+  const firstReceived: MoqtObject[] = [];
+  const secondReceived: MoqtObject[] = [];
+  const firstSubscriber = new SubscriberImpl(["live"], "video", 1n, 7n, (object) => {
+    firstReceived.push(object);
+  });
+  const secondSubscriber = new SubscriberImpl(["live"], "video", 2n, 8n, (object) => {
+    secondReceived.push(object);
+  });
+  ctx.internal.subscribersByAlias.set(7n, [firstSubscriber]);
+  ctx.internal.subscribersByAlias.set(8n, [secondSubscriber]);
+
+  const firstPromise = ctx.run();
+  ctx.enqueue(
+    concatUint8Arrays([
+      firstParts.headerBytes,
+      firstParts.fieldsBytes,
+      firstParts.payload.slice(0, 4),
+    ]),
+  );
+  await yieldToMacrotask();
+  const second = ctx.openStream();
+  const secondPromise = second.run();
+  second.enqueue(
+    concatUint8Arrays([
+      secondParts.headerBytes,
+      secondParts.fieldsBytes,
+      secondParts.payload.slice(0, 4),
+    ]),
+  );
+  await yieldToMacrotask();
+
+  // 合計が正の値になっても、上限 0 以下では打ち切らない
+  assert.isTrue(ctx.internal.dataStreamBufferedBytesTotal > 0);
+  assert.isFalse(ctx.isCancelled());
+  assert.isFalse(second.isCancelled());
+
+  ctx.enqueue(firstParts.payload.slice(4));
+  second.enqueue(secondParts.payload.slice(4));
+  await yieldToMacrotask();
+  assert.equal(firstReceived.length, 1);
+  assert.equal(secondReceived.length, 1);
+
+  ctx.fin();
+  second.fin();
+  await Promise.all([firstPromise, secondPromise]);
+  assert.isUndefined(ctx.sessionError.current);
+  assert.equal(ctx.session.state, "connected");
+  assert.equal(ctx.internal.dataStreamBufferedBytesTotal, 0);
 });
 
 /**
@@ -8534,6 +9616,18 @@ test("SessionImpl: dataStreamMaxBufferBytes の既定値は 32 MiB", () => {
 });
 
 /**
+ * SessionImpl の dataStreamMaxTotalBufferBytes の既定値は 64 MiB であることを検証する
+ * (draft-ietf-moq-transport-22 §12.5 EXCESSIVE_LOAD 0x9)。
+ * ストリーム単位の既定 32 MiB を 2 本ぶん同時に受けられる値である。
+ * 受信データストリームが 1 本も無い初期状態では合計は 0 である。
+ */
+test("SessionImpl: dataStreamMaxTotalBufferBytes の既定値は 64 MiB", () => {
+  const session = createSessionImpl();
+  assert.equal(session.dataStreamMaxTotalBufferBytes, 64 << 20);
+  assert.equal(session.dataStreamBufferedBytesTotal, 0);
+});
+
+/**
  * initialize() が MAX_AUTH_TOKEN_CACHE_SIZE / MAX_REQUEST_UPDATES /
  * MAX_FILTER_RANGES を SETUP で広告し、自 endpoint の MAX_FILTER_RANGES を
  * localMaxFilterRanges に保持することを検証する
@@ -8588,6 +9682,7 @@ test("initialize: SETUP で上限を広告し localMaxFilterRanges と受信バ�
     maxFilterRanges: 4,
     // draft-ietf-moq-transport-22 §12.5: 受信データストリームのバッファ上限
     dataStreamMaxBufferBytes: 1024,
+    dataStreamMaxTotalBufferBytes: 2048,
   });
 
   // 自 endpoint の上限を保持する
@@ -8595,6 +9690,7 @@ test("initialize: SETUP で上限を広告し localMaxFilterRanges と受信バ�
   assert.equal(session.localMaxRequestUpdates, 8);
   // initialize のオプションが受信バッファ上限として session に反映される
   assert.equal(session.dataStreamMaxBufferBytes, 1024);
+  assert.equal(session.dataStreamMaxTotalBufferBytes, 2048);
 
   // 送信した SETUP から広告値を取得する
   const sent = concatUint8Arrays(sentChunks);
