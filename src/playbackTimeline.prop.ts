@@ -14,8 +14,10 @@
  *   合わせた残り」に収まる (素の差が上限の中にあるときだけ不感帯に収まる)。時計のずれの
  *   証拠を見る前でも掛ける
  *
- * 個別の規則 (基準の差が閾値を超えたときのフォールバック、音声の下限、切り下げの統計、
- * TIMESTAMP の飛び) は playbackTimeline.test.ts の単体テストが固定する。
+ * 個別の規則 (基準の差が閾値を超えたときのフォールバック、基準の差の動き (時計のずれ)、
+ * やめた判定の保持、音声の下限、切り下げの統計、TIMESTAMP の飛び) は
+ * playbackTimeline.test.ts の単体テストが固定する。property テストは、テストが独立に
+ * 計算できる量 (差の大きさ) だけを突き合わせる。
  */
 
 import { test, assert } from "vite-plus/test";
@@ -24,6 +26,7 @@ import { JITTER_BUFFER_MAX_QUEUED_FRAMES } from "./playoutBuffer";
 import {
   MAX_PLAYOUT_DELAY_MS,
   PLAYBACK_DELAY_DECAY_MS_PER_SECOND,
+  PLAYBACK_WINDOW_MS,
   PLAYOUT_BASE_MAX_DIFFERENCE_MIN_MS,
   PLAYOUT_QUEUE_HEADROOM_FRAMES,
   PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS,
@@ -43,6 +46,20 @@ const LOCAL_ORIGIN_MS = 1_000;
 const MAX_QUEUED_FRAMES = JITTER_BUFFER_MAX_QUEUED_FRAMES;
 // TIMESTAMP (約 1.79e15 マイクロ秒) とミリ秒の変換で生じる誤差を許す幅 (ミリ秒)
 const TOLERANCE_MS = 0.01;
+
+/**
+ * キューの上限 (フレーム間隔 × 枚数) の検算で、1 枚あたりに許す丸めの幅 (ミリ秒)
+ *
+ * 実装はフレーム間隔を TIMESTAMP の差から測る。TIMESTAMP は µs に丸めた値であるため、
+ * テストが与えた `frameMs` が µs の整数でないとき、実装が測る間隔は丸めの分だけずれる。
+ * CI で落ちた入力では `frameMs = 14.851549421037959` に対して 14.85205078125 ms
+ * (+0.50136 µs) であり、その差がキューが吸収できる長さ (間隔 × 枚数) に枚数分だけ効いて
+ * いた (20 枚で 0.010027 ms)。ずれの元は µs への丸め (1 つの間隔あたり最大 1 µs) と、
+ * 約 1.79e15 µs の倍精度の間隔 (仮数部 0.25 µs) と、ms への変換の丸めであり、1 つの
+ * 間隔あたり 2 µs を超えない。この丸めは実装の性質ではなく TIMESTAMP の表現の限界で
+ * あるため、テストは丸めの分を枚数分だけ足して比べる
+ */
+const QUEUE_INTERVAL_ROUNDING_MS = 2 / 1_000;
 
 /** 到着列を作る長さ (ミリ秒) */
 const DURATION_MS = 120_000;
@@ -244,13 +261,19 @@ test("PlaybackTimeline: 表示時刻は TIMESTAMP + 基準の遅れ + 表示の�
         assert.isNotNull(timeline.videoDelayMs, "最後の観測で映像の遅れが決まること");
 
         // トラックごとの基準の遅れは「観測の時刻 - メディア時刻」の最小値である
-        // (観測の軸は performance.now() であり、壁時計から原点を引いた値で観測する)
-        const offsetsOf = (target: PlaybackStream): number[] =>
+        // (観測の軸は performance.now() であり、壁時計から原点を引いた値で観測する)。
+        // 実装は直近の窓 (`PLAYBACK_WINDOW_MS`) の最小値を基準にするため、テストも同じ窓で
+        // 求める (古い観測まで見ると、実装の基準と食い違って差の判定がずれる)
+        const baseOffsetsOf = (target: PlaybackStream): number[] =>
           observations
-            .filter((record) => record.stream === target)
+            .filter(
+              (record) =>
+                record.stream === target &&
+                record.wallClockMs >= last.wallClockMs - PLAYBACK_WINDOW_MS,
+            )
             .map((record) => record.offsetMs);
-        const audioOffsets = offsetsOf("audio");
-        const videoOffsets = offsetsOf("video");
+        const audioOffsets = baseOffsetsOf("audio");
+        const videoOffsets = baseOffsetsOf("video");
         const ownerBaseMs =
           stream === "audio" ? Math.min(...audioOffsets) : Math.min(...videoOffsets);
         // キューが吸収できる表示の遅れ (表示の遅れの上限)
@@ -258,6 +281,11 @@ test("PlaybackTimeline: 表示時刻は TIMESTAMP + 基準の遅れ + 表示の�
           MAX_PLAYOUT_DELAY_MS,
           (MAX_QUEUED_FRAMES - PLAYOUT_QUEUE_HEADROOM_FRAMES) * frameMs,
         );
+        // 実装の上限は、テストが与えた `frameMs` ではなく TIMESTAMP の差から測った間隔を
+        // 枚数分だけ掛けた値である。丸めの分 (1 枚あたり) を枚数分だけ足して比べる
+        const queueCapWithRoundingMs =
+          queueCapMs +
+          (MAX_QUEUED_FRAMES - PLAYOUT_QUEUE_HEADROOM_FRAMES) * QUEUE_INTERVAL_ROUNDING_MS;
         // 2 つの基準の差が閾値を超えると、大きい側は TIMESTAMP を使わない
         const differenceMs =
           audioOffsets.length === 0 || videoOffsets.length === 0
@@ -278,8 +306,16 @@ test("PlaybackTimeline: 表示時刻は TIMESTAMP + 基準の遅れ + 表示の�
           timestampOf(last.mediaMs),
         );
         if (wallClockMicros === null) {
-          // 基準がずれているときは、大きい側だけが表示時刻を返さない
-          assert.isFalse(sharingBases, "表示時刻が null なら基準を共有していないこと");
+          // 表示時刻を返さないのは、実装がそのトラックの TIMESTAMP を使わないと決めたときで
+          // ある。理由は「差が上限を超えている」「差が動き続けている (時計のずれ)」
+          // 「直前にやめた判定を保持している」の 3 つであり、それぞれの規則は単体テストが
+          // 固定する。テストが独立に計算できるのは差の大きさだけであるため、差が小さいときは、
+          // 動きか保持のどちらかだと実装が報告していることを確かめる
+          const unsharedReason = timeline.delayBreakdown.unsharedReason;
+          assert.isTrue(
+            !sharingBases || unsharedReason === "drift" || unsharedReason === "hold",
+            "表示時刻が null なら、基準の差が閾値を超えているか、差が動き続けていること",
+          );
           return;
         }
         assert.isNotNull(presentationDelayMs, "表示の遅れが決まること");
@@ -292,7 +328,11 @@ test("PlaybackTimeline: 表示時刻は TIMESTAMP + 基準の遅れ + 表示の�
 
         // jitter buffer の遅延は 0 以上、上限以下
         assert.isAtLeast(delayOfStream ?? -1, 0);
-        assert.isAtMost(delayOfStream ?? Infinity, queueCapMs + TOLERANCE_MS);
+        assert.isAtMost(
+          delayOfStream ?? Infinity,
+          queueCapWithRoundingMs,
+          "jitter buffer の遅延がキューの上限 (TIMESTAMP の丸めの分を含む) に収まること",
+        );
 
         // 映像の再生遅延が下がった 1 枚では、下げ幅が経過時間 × 毎秒の速さを超えない
         // (音声は NetEq の規則でヒストグラムの更新ごとに動く)
@@ -301,18 +341,14 @@ test("PlaybackTimeline: 表示時刻は TIMESTAMP + 基準の遅れ + 表示の�
           if (delayOfStream !== null && delayOfStream < previous.videoDelayMs) {
             // 上限 (キューが吸収できる長さ) まで下がったときは、フレーム間隔が短くなった分を
             // 直ちに反映するため、毎秒の速さを超えて下がる
-            const capMs = Math.min(
-              MAX_PLAYOUT_DELAY_MS,
-              (MAX_QUEUED_FRAMES - PLAYOUT_QUEUE_HEADROOM_FRAMES) * frameMs,
-            );
             const elapsedMs = last.wallClockMs - previous.wallClockMs;
             const allowedMs = (PLAYBACK_DELAY_DECAY_MS_PER_SECOND * elapsedMs) / 1_000;
-            // フレーム間隔をマイクロ秒に丸めた差から上限を求めるため、上限の切り替わりでは
-            // 1 マイクロ秒 × 枚数だけ動く。その分は許す
+            // 上限は実装が TIMESTAMP の差から測った間隔で決まるため、上限との比較には
+            // 丸めの分 (1 枚あたり `QUEUE_INTERVAL_ROUNDING_MS`) を枚数分だけ足した値を使う
             assert.isTrue(
               previous.videoDelayMs - delayOfStream <=
                 allowedMs + MAX_QUEUED_FRAMES / 1_000 + TOLERANCE_MS ||
-                delayOfStream <= capMs + TOLERANCE_MS,
+                delayOfStream <= queueCapWithRoundingMs,
               "下げ幅が毎秒の速さ以下か、上限まで下がっていること",
             );
           }
