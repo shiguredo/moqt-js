@@ -1548,7 +1548,11 @@ export class MediaPublisherImpl implements MediaPublisher {
         this.videoWallClock.observe(frame.timestamp, performance.timeOrigin + performance.now());
 
         try {
-          if (encoder.encodeQueueSize <= 2) {
+          // ループ条件のエンコーダーの状態は reader.read() の前にしか評価されないため、
+          // 読み取り中に実行時エラーで使えなくなったフレームはここで判定する。encode に渡しても
+          // Worker モードでは Worker へ送られず警告が出るだけであり、直接実行モードでは
+          // isCodecConfigured が false になって無言で破棄される。破棄として数える
+          if (encoder.state === "configured" && encoder.encodeQueueSize <= 2) {
             // キーフレームの判定と直前のキーフレームの更新は、実際に encode する
             // フレームだけで行う。破棄するフレームでも判定と更新を行うと、
             // requestKeyframe() が消した記録を破棄した分だけ進めてしまい、キーフレームの
@@ -1568,7 +1572,9 @@ export class MediaPublisherImpl implements MediaPublisher {
             }
           } else {
             // エンコード能力を超えた入力はエンコードせず破棄する (待たない)。
-            // 破棄した数を統計に残す
+            // 破棄した数を統計に残す。実行時エラーでエンコーダーが使えなくなったときに
+            // 読み取っていたフレームもここに含め、閉じた後は処理ループが終了するため
+            // 以後のフレームは読み取らず数えない
             this.videoStats.droppedFrames++;
           }
         } finally {

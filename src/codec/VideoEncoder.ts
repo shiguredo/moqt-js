@@ -34,7 +34,7 @@ export class VideoEncoderWrapper {
   // configure() 発行ごとの世代管理 (並行 configure の所有権分離用)
   private readonly generationTracker = new ConfigureGenerationTracker();
   // Worker モードで Worker へ送信してまだ encoded 応答が返っていないフレーム数
-  // (Worker 内の encodeQueueSize は取得できないため、上限側の近似として数える)
+  // (数え方と凍結の理由は SentFrameCounter の JSDoc を正本とする)
   private readonly sentFrames = new SentFrameCounter();
 
   constructor(useWorker: boolean, callbacks: VideoEncoderWrapperCallbacks) {
@@ -93,7 +93,16 @@ export class VideoEncoderWrapper {
           ...(description !== undefined ? { description } : {}),
         });
       },
-      notifyError: (error) => this.callbacks.error(error),
+      // 実行時エラーの通知は「送信カウンタの凍結 → configured = false → callbacks.error」の
+      // 順で行う (凍結の理由は SentFrameCounter の JSDoc)。通知先が stop() や再 configure() を
+      // 呼んでも、先に反映を終えているため新しい状態を壊さない。
+      // Worker の破棄はこの経路では行わない。失敗した Worker の参照を持たず、再 configure
+      // で新しい Worker が公開済みの場合にそれを壊すため、close と configure の差し替えに任せる
+      notifyError: (error) => {
+        this.sentFrames.freeze();
+        this.configured = false;
+        this.callbacks.error(error);
+      },
     });
   }
 
@@ -136,6 +145,8 @@ export class VideoEncoderWrapper {
 
   /**
    * ビデオフレームをエンコードする
+   *
+   * 未 configure / close 後 / 実行時エラー後 (configured が false) は Worker へ送らない。
    */
   encode(frame: VideoFrame, options?: VideoEncoderEncodeOptions): void {
     if (!this.configured) {
@@ -177,6 +188,8 @@ export class VideoEncoderWrapper {
    * encoded 応答が返っていないフレーム数を返す (Worker のメッセージ待ち行列と
    * encoder のキューを合わせた上限側の近似。実際より多く見える安全側に倒れる)。
    * configure による Worker の差し替えと close で 0 に戻る。
+   * Worker 内のエンコーダーが実行時エラーで閉じた後は凍結した値のままになる
+   * (再 configure か close で数え直す)。
    */
   get encodeQueueSize(): number {
     if (this.useWorker) {

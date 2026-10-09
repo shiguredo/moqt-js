@@ -237,7 +237,11 @@ interface AudioStats {
 
 interface VideoStats {
   framesSent: number;
-  // エンコードが追いつかないため待たずに破棄したフレーム数
+  // エンコード能力を超えたため、または実行時エラーでエンコーダーが使えなくなったために
+  // 破棄したフレーム数 (エンコーダーが閉じたときに読み取っていたフレームを含む。閉じた後は
+  // 処理ループが終了するため、以後のフレームは読み取らず数えない。世代が変わった後に
+  // 読んだフレームと encode が同期 throw したフレームは数えない。閉じたときに Worker へ
+  // 送信済みで応答が返らなかったフレームは、framesSent とこの値のどちらにも含めない)
   droppedFrames: number;
   keyFramesSent: number;
   bytesSent: number;
@@ -675,11 +679,11 @@ MOQT Subscriber (video) ─► VideoDecoder ─► MediaStreamTrackGenerator ─
 - `TIMESTAMP`: フレームのタイムスタンプ
 - `VIDEO_FRAME_MARKING`: キーフレーム判定（映像のみ）
   - 単一レイヤー前提のため `temporalLayerId` / `spatialLayerId` は 0 固定
-  - `isBaseLayerSync` はキーフレームで true を渡すが、`temporalLayerId=0` 固定のため RFC 9626 §3.1 の MUST に従いエンコーダがワイヤ上 B=0 に抑圧する
+  - `isBaseLayerSync` はキーフレームで true を渡すが、`temporalLayerId=0` 固定のため RFC 9626 §3.1 の MUST に従いエンコーダーがワイヤ上 B=0 に抑圧する
   - `isDiscardable` は WebCodecs が破棄可能性情報を提供しないため false 固定
   - 受信側は、この Property が無い Object では Group 先頭 (Object ID 0) をキーフレームとして扱う
   - Object ID 0 が Group 先頭であることは draft-ietf-moq-msf-01 §6.2、同一 GOP のサンプルが同一 Group に置かれることは同 §4.1 が MUST で定める。Group 先頭が IDR であることは draft-ietf-moq-loc-04 §4.2 (Examples) に依拠する
-- `VIDEO_CONFIG` / `AUDIO_CONFIG`: エンコーダの metadata が返す description (映像は SPS/PPS などの extradata、音声は AAC の AudioSpecificConfig)
+- `VIDEO_CONFIG` / `AUDIO_CONFIG`: エンコーダーの metadata が返す description (映像は SPS/PPS などの extradata、音声は AAC の AudioSpecificConfig)
   - 受信側はこれを `VideoDecoder.configure` / `AudioDecoder.configure` の `description` に使う (draft-ietf-moq-loc-04 §2.3.2.1 / §2.3.3.1)
 
 送信は `LOC.encodeAudioProperties` / `LOC.encodeVideoProperties` を通す。TIMESTAMP は
@@ -707,7 +711,7 @@ GOP の途中で復号器を再構成することになり、参照フレーム�
 購読側 (`createMediaSubscriber`) は config の変化を検知した Object を復号せず、
 再構成が完了した後のキーフレームから復号を始める。
 
-高レベル API は H.264 / H.265 を annexb 形式で設定するため、Chromium のエンコーダは
+高レベル API は H.264 / H.265 を annexb 形式で設定するため、Chromium のエンコーダーは
 description を返さない (parameter sets は bitstream に含まれる)。VP8 / VP9 / AV1 は
 description を使わないため、この送り直しは canonical 形式 (avc / hev1) の description が
 届く設定・実装で働く。
@@ -715,8 +719,8 @@ description を使わないため、この送り直しは canonical 形式 (avc 
 paused でないまま購読者が接続した場合は変化が起きないため送り直されず、
 Relay のキャッシュに依存する。購読者がいない間に Relay が購読を paused にするかは
 裁量である (draft-ietf-moq-transport-22 §7.2 Paused Subscription Handling)。
-stop 後に再開した場合は新しいセッションとエンコーダになるため、保持していた
-`VIDEO_CONFIG` / `AUDIO_CONFIG` と送り直し要求は破棄し、新しいエンコーダの
+stop 後に再開した場合は新しいセッションとエンコーダーになるため、保持していた
+`VIDEO_CONFIG` / `AUDIO_CONFIG` と送り直し要求は破棄し、新しいエンコーダーの
 description を改めて送る。
 
 ### groupId / objectId 管理

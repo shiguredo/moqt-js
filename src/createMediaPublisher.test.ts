@@ -119,6 +119,8 @@ function createTestFrame(timestamp = 0): TestFrame {
  * 両方を持つ (閾値超過で破棄した後にキューが空いて次のフレームが encode される経路を
  * 検証するため)。`keyFrames` は encode の options の `keyFrame` を記録し、破棄した
  * フレームのキーフレーム要求が次に encode するフレームへ移ったかを観測できるようにする。
+ * `setEncoderState` はループの途中で実行時エラー後の状態 (configured 以外) に変え、
+ * ループ条件の状態判定と読み取り中の状態判定の両方を検証できるようにする。
  * `failNextEncode` は次の encode を 1 回だけ同期 throw させ、実エンコーダー
  * (`VideoEncoderWrapper.encode` は `encoder.encode` / `worker.postMessage` の例外を
  * そのまま伝える) が失敗したときのフレームの close と通し番号の据え置きを
@@ -129,9 +131,10 @@ function createRecordingEncoder(encodeQueueSize = 0): {
   keyFrames: boolean[];
   isClosed: () => boolean;
   setEncodeQueueSize: (value: number) => void;
+  setEncoderState: (value: string) => void;
   failNextEncode: (error: Error) => void;
   encoder: {
-    state: string;
+    readonly state: string;
     readonly encodeQueueSize: number;
     encode: (frame: unknown, options?: { keyFrame?: boolean }) => void;
     close: () => void;
@@ -143,6 +146,8 @@ function createRecordingEncoder(encodeQueueSize = 0): {
   let closed = false;
   // ループの途中でキュー滞留を変えられるよう、読み出しは getter にする
   let queueSize = encodeQueueSize;
+  // ループの途中で実行時エラー後の状態に変えられるよう、読み出しは getter にする
+  let state = "configured";
   // 次の encode で同期 throw させるエラー (使い捨てであり、1 回投げたら消える)
   let nextEncodeError: Error | null = null;
   return {
@@ -152,11 +157,16 @@ function createRecordingEncoder(encodeQueueSize = 0): {
     setEncodeQueueSize: (value: number) => {
       queueSize = value;
     },
+    setEncoderState: (value: string) => {
+      state = value;
+    },
     failNextEncode: (error: Error) => {
       nextEncodeError = error;
     },
     encoder: {
-      state: "configured",
+      get state(): string {
+        return state;
+      },
       get encodeQueueSize(): number {
         return queueSize;
       },
@@ -273,13 +283,21 @@ function injectVideoLoop(
   encoded: unknown[];
   keyFrames: boolean[];
   setEncodeQueueSize: (value: number) => void;
+  setEncoderState: (value: string) => void;
   failNextEncode: (error: Error) => void;
   controller: ReadableStreamDefaultController<TestFrame>;
   isEncoderClosed: () => boolean;
 } {
   const { stream, controller } = createFrameStream();
-  const { encoder, encoded, keyFrames, setEncodeQueueSize, failNextEncode, isClosed } =
-    createRecordingEncoder(encodeQueueSize);
+  const {
+    encoder,
+    encoded,
+    keyFrames,
+    setEncodeQueueSize,
+    setEncoderState,
+    failNextEncode,
+    isClosed,
+  } = createRecordingEncoder(encodeQueueSize);
   control.videoFrameReader =
     stream.getReader() as unknown as ReadableStreamDefaultReader<VideoFrame>;
   control.videoEncoder = encoder as unknown as VideoEncoderWrapper;
@@ -288,6 +306,7 @@ function injectVideoLoop(
     encoded,
     keyFrames,
     setEncodeQueueSize,
+    setEncoderState,
     failNextEncode,
     controller,
     isEncoderClosed: isClosed,
@@ -343,6 +362,37 @@ test("processVideoFrames: encode キューの閾値以内なら破棄せず enco
   assert.equal(frame.closeCount, 1);
   assert.equal(errors.length, 0);
   assert.equal(publisher.getStats().video?.droppedFrames, 0);
+});
+
+test("processVideoFrames: 実行時エラーで使えなくなったエンコーダーのフレームは破棄され droppedFrames に数える", async () => {
+  // ループ条件のエンコーダーの状態は reader.read() の前にしか評価されないため、読み取り中に
+  // 実行時エラーで使えなくなったフレームはここで判定する。encode に渡しても Worker モードでは
+  // Worker へ送られず警告が出るだけ、直接実行モードでは無言で破棄されるため、破棄として統計に残す
+  const { publisher, control, errors } = createLoopTestContext({
+    video: { codec: "vp8", bitrate: 1000 },
+  });
+  const { encoded, controller, setEncoderState } = injectVideoLoop(control, 0);
+
+  const loop = control.processVideoFrames();
+  const frame = createTestFrame();
+  controller.enqueue(frame);
+  // read が解決する前に使えなくなる (実行時エラーの通知で configured が false になった状態)
+  setEncoderState("unconfigured");
+  await settle();
+  // 状態を落とした後に投入した 2 枚目は読み取らない (ループは次の周回の状態判定で終了している)。
+  // 読み取っていれば破棄として数えてしまい、統計が「閉じた後に読み続けた数」に汚れる
+  const second = createTestFrame();
+  controller.enqueue(second);
+  await settle();
+  controller.close();
+  await loop;
+
+  assert.equal(encoded.length, 0);
+  assert.equal(frame.closeCount, 1);
+  assert.equal(errors.length, 0);
+  // 2 枚目は読み取っていないため閉じられない。破棄の数も状態を落とした後は増えず 1 のままである
+  assert.equal(second.closeCount, 0);
+  assert.equal(publisher.getStats().video?.droppedFrames, 1);
 });
 
 // 破棄するフレームではキーフレームの判定も直前のキーフレームの更新も行わない。行うと、
@@ -566,8 +616,11 @@ test("processVideoFrames: 読んだフレームの timestamp とそのときの�
 });
 
 test("processVideoFrames: pause 後の旧ループは encode せず終了する", async () => {
-  // 公開 pause() で世代を進めた旧ループにフレームが届く場合を再現する
-  const { publisher, control, errors } = createLoopTestContext();
+  // 公開 pause() で世代を進めた旧ループにフレームが届く場合を再現する。
+  // 破棄の統計 (getStats) を検証するため video 付きで作る
+  const { publisher, control, errors } = createLoopTestContext({
+    video: { codec: "vp8", bitrate: 1000 },
+  });
   const { encoded, controller } = injectVideoLoop(control);
 
   const loop = control.processVideoFrames();
@@ -580,6 +633,8 @@ test("processVideoFrames: pause 後の旧ループは encode せず終了する"
   assert.equal(encoded.length, 0);
   assert.isTrue(frame.closed);
   assert.equal(errors.length, 0);
+  // 世代の判定は破棄の判定より先に break するため、破棄の統計は増えない
+  assert.equal(publisher.getStats().video?.droppedFrames, 0);
 });
 
 test("processAudioFrames: 現世代ループは encode して継続する", async () => {

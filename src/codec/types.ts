@@ -43,7 +43,11 @@ export interface AudioReceiverStats {
 // ビデオ統計
 export interface VideoStats {
   framesSent: number;
-  // エンコードが追いつかないため待たずに破棄したフレーム数 (閾値は createMediaPublisher の判定)
+  // エンコード能力を超えたため、または実行時エラーでエンコーダーが使えなくなったために
+  // 破棄したフレーム数 (エンコーダーが閉じたときに読み取っていたフレームを含む。閉じた後は
+  // 処理ループが終了するため、以後のフレームは読み取らず数えない。世代が変わった後に
+  // 読んだフレームと encode が同期 throw したフレームは数えない)。閾値は
+  // createMediaPublisher の判定
   droppedFrames: number;
   keyFramesSent: number;
   bytesSent: number;
