@@ -21,6 +21,7 @@ const AUDIO_PLAYBACK_ITEMS = {
   lastSlackMs: "subscriber-audio-playback-last-slack",
   playedFrames: "subscriber-audio-playback-played-frames",
   playedMs: "subscriber-audio-playback-played-ms",
+  arrivalPlannedFrames: "subscriber-audio-playback-arrival-planned-frames",
   unplannedFrames: "subscriber-audio-playback-unplanned-frames",
   // 鳴らさなかった量 (理由ごとの件数とミリ秒、および合計)
   missedLatenessCount: "subscriber-audio-playback-missed-lateness-count",
@@ -81,6 +82,7 @@ test("subscriber の画面に音声の再生の観測を既定値で出す", asy
   await expect(page.getByTestId(AUDIO_PLAYBACK_ITEMS.lastSlackMs)).toHaveText("-");
   await expect(page.getByTestId(AUDIO_PLAYBACK_ITEMS.playedFrames)).toHaveText("0");
   await expect(page.getByTestId(AUDIO_PLAYBACK_ITEMS.playedMs)).toHaveText("0");
+  await expect(page.getByTestId(AUDIO_PLAYBACK_ITEMS.arrivalPlannedFrames)).toHaveText("0");
   await expect(page.getByTestId(AUDIO_PLAYBACK_ITEMS.unplannedFrames)).toHaveText("0");
   // 鳴らさなかった量は、理由ごとと合計の両方を出す (audio → video の順に並ぶ)
   await expect(page.getByTestId(AUDIO_PLAYBACK_ITEMS.missedLatenessCount)).toHaveText("0");

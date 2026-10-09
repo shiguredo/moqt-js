@@ -3,20 +3,23 @@
  *
  * 復号した音声を鳴らす時刻 (AudioContext.currentTime の秒) を決める。目標の時刻 (映像と
  * 共有する時間軸が決めた開始時刻) を守るときは、目標を過ぎて届いた音も前の音と重なる音も
- * 捨てず、今から鳴らせる最も早い時刻へずらして詰める。捨てるのは並べすぎの音と、目標から
- * 離れすぎた音だけである。目標を使わないとき (壁時計の TIMESTAMP を持たない音、音声だけを
- * 購読しているとき) は到着基準で並べ、鳴らす時刻を過ぎて届いた音は基準を取り直す。
- * AudioClockBridge は AudioContext の時計と performance.now() の対応を保つ。
+ * 捨てず、今から鳴らせる最も早い時刻へずらして詰める。捨てるのは並べすぎの音と、経路が
+ * 止まって目標から離れすぎた音だけである。目標を使わないとき (壁時計の TIMESTAMP を
+ * 持たない音、音声だけを購読しているとき) と、目標から離れすぎたとき (到着は乱れていない
+ * のに予定だけが過去にあるとき) は、到着基準の小さな遅れ (`arrivalDelaySeconds`) で
+ * 並べ直す。AudioClockBridge は AudioContext の時計と performance.now() の対応を保つ。
  *
  * 個々の規則 (目標の上下限、捨てる理由、基準の取り直し、時計の不感帯と変更の上限) を
  * ここで固定する。鳴らす音が重ならない、今 + 余裕以上、遅れは再生の遅れ + 余裕以下という
- * 性質は audioPlayout.prop.ts が固定する。
+ * 性質は audioPlayout.prop.ts が固定する。実測のログ相当の入力 (TIMESTAMP の段差) での
+ * 受け入れ条件は audioPlayoutFallback.test.ts が固定する。
  */
 
 import { test, assert } from "vite-plus/test";
 import {
   AUDIO_CLOCK_DEADBAND_MS,
   AUDIO_CLOCK_MAX_CHANGE_MS,
+  AUDIO_PLAYOUT_ARRIVAL_DELAY_SECONDS,
   AUDIO_PLAYOUT_BACKLOG_SECONDS,
   AUDIO_PLAYOUT_CONCEAL_END_GAIN,
   AUDIO_PLAYOUT_DELAY_SECONDS,
@@ -24,6 +27,7 @@ import {
   AUDIO_PLAYOUT_MAX_DELAY_SECONDS,
   AUDIO_PLAYOUT_MIN_CONCEAL_SECONDS,
   AUDIO_PLAYOUT_MIN_LEAD_SECONDS,
+  arrivalPlayoutDelaySeconds,
   AudioClockBridge,
   AudioPlayoutScheduler,
   concealmentEndGain,
@@ -81,6 +85,7 @@ function enforcedTarget(targetStartSeconds: number): AudioPlayoutTarget {
     targetStartSeconds,
     enforceTarget: true,
     delaySeconds: AUDIO_PLAYOUT_DELAY_SECONDS,
+    arrivalDelaySeconds: AUDIO_PLAYOUT_DELAY_SECONDS,
     presentationDelaySeconds: AUDIO_PLAYOUT_DELAY_SECONDS,
   };
 }
@@ -102,6 +107,7 @@ const arrivalTargets: {
       targetStartSeconds: null,
       enforceTarget: true,
       delaySeconds: AUDIO_PLAYOUT_DELAY_SECONDS,
+      arrivalDelaySeconds: AUDIO_PLAYOUT_DELAY_SECONDS,
       presentationDelaySeconds: AUDIO_PLAYOUT_DELAY_SECONDS,
     }),
   },
@@ -111,6 +117,7 @@ const arrivalTargets: {
       targetStartSeconds,
       enforceTarget: false,
       delaySeconds: AUDIO_PLAYOUT_DELAY_SECONDS,
+      arrivalDelaySeconds: AUDIO_PLAYOUT_DELAY_SECONDS,
       presentationDelaySeconds: AUDIO_PLAYOUT_DELAY_SECONDS,
     }),
   },
@@ -244,25 +251,80 @@ test("schedule: 並べすぎの音は捨てる", () => {
   assert.equal(beyond.rebases, 0);
 });
 
-// 目標から離れすぎて届いた音 (経路の停止など) は lateness として捨てる。並べすぎとは
-// 別の理由であり、鳴らなかった音がどちらの理由で落ちたかを観測値で分ける
-test("schedule: 目標から離れすぎた音は lateness として捨てる", () => {
-  const nowSeconds = 10;
+// 目標から離れすぎて届いた音でも、到着が途切れていなければ捨てない。音は届き続けている
+// のに予定だけが過去にあるとき、ずれているのは予定の方 (TIMESTAMP が壁時計からずれている)
+// であり、鳴らしても遅れない。到着基準の小さな目標 (arrivalDelaySeconds) へ並べ直して鳴らす
+test("schedule: 目標から離れすぎて届いた音も、到着が途切れていなければ鳴らす", () => {
+  const scheduler = new AudioPlayoutScheduler();
+  // 到着基準へ並べ直すときに使う、小さな再生の遅れ
+  const target = (targetStartSeconds: number): AudioPlayoutTarget => ({
+    ...enforcedTarget(targetStartSeconds),
+    arrivalDelaySeconds: AUDIO_PLAYOUT_ARRIVAL_DELAY_SECONDS,
+  });
+  // 直前の音が 20 ms 前に届いている (到着は乱れていない) 状態にする
+  startAtOf(scheduler.schedule(10, 0, FRAME_SECONDS, target(10.05)));
   // 目標は 600 ms 前に過ぎている。今から鳴らせる最も早い時刻へずらしても
   // 上限 (AUDIO_PLAYOUT_MAX_LATENESS_SECONDS = 500 ms) を超える
-  const targetStartSeconds = nowSeconds - 0.6;
-  const scheduler = new AudioPlayoutScheduler();
-  const decision = scheduler.schedule(
-    nowSeconds,
-    0,
-    FRAME_SECONDS,
-    enforcedTarget(targetStartSeconds),
+  const decision = playDecisionOf(
+    scheduler.schedule(10.02, FRAME_MICROSECONDS, FRAME_SECONDS, target(9.42)),
   );
+  assert.equal(decision.basis, "arrival", "到着基準へ並べ直すこと");
+  assert.closeTo(
+    decision.startAt,
+    10.02 + AUDIO_PLAYOUT_ARRIVAL_DELAY_SECONDS,
+    EPSILON,
+    "到着から小さな目標だけ遅らせること",
+  );
+  assert.equal(decision.compressSeconds, 0, "予定がずれているだけなので詰めないこと");
+  assert.equal(scheduler.drops, 0, "捨てないこと");
+  assert.equal(scheduler.rebases, 1, "基準を取り直すこと");
+  // 次の音も到着基準で並ぶ (基準を取り直した先から続ける)
+  const next = playDecisionOf(
+    scheduler.schedule(10.04, 2 * FRAME_MICROSECONDS, FRAME_SECONDS, target(9.44)),
+  );
+  assert.equal(next.basis, "arrival");
+  assert.closeTo(next.startAt, decision.startAt + FRAME_SECONDS, EPSILON);
+  assert.equal(scheduler.drops, 0);
+});
+
+// 音が途切れているとき (経路の停止) は、鳴らしても遅れたままになるため捨てる。直前の音が
+// 上限 (AUDIO_PLAYOUT_MAX_LATENESS_SECONDS) より前に鳴り終わっていれば、予定のずれでは
+// なく音そのものが遅れているとみなす
+test("schedule: 目標から離れすぎて届き、音が途切れていた音は lateness として捨てる", () => {
+  const scheduler = new AudioPlayoutScheduler();
+  // 直前の音は 2 秒前に鳴り終わっている (経路が止まっていた)
+  startAtOf(scheduler.schedule(10, 0, FRAME_SECONDS, enforcedTarget(10.05)));
+  const decision = scheduler.schedule(12, FRAME_MICROSECONDS, FRAME_SECONDS, enforcedTarget(11.4));
   assert.equal(decision.kind, "drop");
   if (decision.kind === "drop") {
     assert.equal(decision.reason, "lateness");
   }
   assert.equal(scheduler.drops, 1);
+});
+
+// 経路の停止が終わって目標が今に戻ったら、鳴らす方へ戻る。捨て続けると音が永久に
+// 途切れるため、遅れて届いた音を捨てた後も、次の音から鳴らせることを確かめる
+test("schedule: 経路が止まって捨てた後も、目標が戻れば鳴らす", () => {
+  const scheduler = new AudioPlayoutScheduler();
+  startAtOf(scheduler.schedule(10, 0, FRAME_SECONDS, enforcedTarget(10.05)));
+  // 2 秒後に届いた、目標より 600 ms 遅れた音は捨てる (音が途切れていた)
+  const dropped = scheduler.schedule(12, FRAME_MICROSECONDS, FRAME_SECONDS, enforcedTarget(11.4));
+  assert.equal(dropped.kind, "drop");
+  // 続けて届く遅れた音も捨てる。鳴らすと遅れたままになる
+  const stillDropped = scheduler.schedule(
+    12.02,
+    2 * FRAME_MICROSECONDS,
+    FRAME_SECONDS,
+    enforcedTarget(11.42),
+  );
+  assert.equal(stillDropped.kind, "drop");
+  assert.equal(scheduler.drops, 2);
+  // 目標が今の近くに戻ったら鳴らす (取り直しの先は今 + 余裕)
+  const recovered = playDecisionOf(
+    scheduler.schedule(13, 3 * FRAME_MICROSECONDS, FRAME_SECONDS, enforcedTarget(13.1)),
+  );
+  assert.closeTo(recovered.startAt, 13.1, EPSILON);
+  assert.equal(recovered.basis, "timestamp");
 });
 
 // 目標を守るとき: 前の音と重なる音は捨てず、前の音の終わりに繋げて鳴らす (重ねない)。
@@ -761,12 +823,14 @@ test("schedule: 目標が 500 ms 先でも鳴らす", () => {
     targetStartSeconds: 10.5,
     enforceTarget: true,
     delaySeconds: AUDIO_PLAYOUT_DELAY_SECONDS,
+    arrivalDelaySeconds: AUDIO_PLAYOUT_DELAY_SECONDS,
     presentationDelaySeconds: AUDIO_PLAYOUT_MAX_DELAY_SECONDS + 0.2,
   };
   const decision = scheduler.schedule(10, 0, FRAME_SECONDS, target);
   assert.deepEqual(decision, {
     kind: "play",
     startAt: 10.5,
+    basis: "timestamp",
     compressSeconds: 0,
     gapStartSeconds: 0,
     gapSeconds: 0,
@@ -774,26 +838,47 @@ test("schedule: 目標が 500 ms 先でも鳴らす", () => {
   assert.equal(scheduler.drops, 0);
 });
 
-// 目標を使わないときの再生の遅れは目標から受け取る。共有の時間軸が再生遅延を決めるため、
-// 旧実装のような固定の 80 ms ではない
-test("schedule: 目標を使わないときの再生の遅れは目標から受け取る", () => {
+// 目標を使わないときの再生の遅れは arrivalDelaySeconds から受け取る。共有の時間軸が学習
+// した delaySeconds は TIMESTAMP のずれで大きく育つため、到着基準では使わない
+// (呼び出し側が arrivalPlayoutDelaySeconds で上限を掛けた値を渡す)
+test("schedule: 目標を使わないときの再生の遅れは arrivalDelaySeconds から受け取る", () => {
+  // 学習した再生の遅れは上限 (300 ms) まで育っているが、到着基準では小さな値を使う
   const delaySeconds = AUDIO_PLAYOUT_MAX_DELAY_SECONDS;
+  const arrivalDelaySeconds = AUDIO_PLAYOUT_ARRIVAL_DELAY_SECONDS;
   const target: AudioPlayoutTarget = {
     targetStartSeconds: null,
     enforceTarget: false,
     delaySeconds,
+    arrivalDelaySeconds,
     presentationDelaySeconds: delaySeconds,
   };
   const scheduler = new AudioPlayoutScheduler();
   assert.closeTo(
     startAtOf(scheduler.schedule(10, 0, FRAME_SECONDS, target)),
-    10 + delaySeconds,
+    10 + arrivalDelaySeconds,
     EPSILON,
+    "学習した遅れではなく到着基準の遅れで並べること",
   );
-  // 過ぎてから届いたときの取り直し先も、受け取った再生の遅れになる
+  // 過ぎてから届いたときの取り直し先も、到着基準の再生の遅れになる
   const late = startAtOf(scheduler.schedule(20, FRAME_MICROSECONDS, FRAME_SECONDS, target));
-  assert.closeTo(late, 20 + delaySeconds, EPSILON);
+  assert.closeTo(late, 20 + arrivalDelaySeconds, EPSILON);
   assert.equal(scheduler.rebases, 1);
+});
+
+// 到着基準の再生の遅れ: 学習した遅れを上限 (100 ms) で切り、下限 (80 ms) で持ち上げる。
+// ずれの分だけ育った学習値 (316〜500 ms) をそのまま使うと、その分だけ音が遅れて鳴る
+test("arrivalPlayoutDelaySeconds: 学習した遅れを小さな上限で切る", () => {
+  assert.equal(AUDIO_PLAYOUT_ARRIVAL_DELAY_SECONDS, 0.1);
+  // ずれの分だけ育った学習値でも、到着基準では上限まで
+  assert.equal(arrivalPlayoutDelaySeconds(AUDIO_PLAYOUT_MAX_DELAY_SECONDS), 0.1);
+  assert.equal(arrivalPlayoutDelaySeconds(0.316), 0.1);
+  assert.equal(arrivalPlayoutDelaySeconds(0.1), 0.1);
+  // 学習値が小さいときは、既存の下限 (80 ms) を使う
+  assert.equal(arrivalPlayoutDelaySeconds(0.02), AUDIO_PLAYOUT_DELAY_SECONDS);
+  assert.equal(
+    arrivalPlayoutDelaySeconds(AUDIO_PLAYOUT_DELAY_SECONDS),
+    AUDIO_PLAYOUT_DELAY_SECONDS,
+  );
 });
 
 // reset: 目標を使わないときは、次の音で基準を作り直す (購読のやり直し、AudioContext の
@@ -822,6 +907,7 @@ test("reset: 再生の統計は消えず、今の遅れだけ 0 に戻る", () =
     targetStartSeconds: null,
     enforceTarget: false,
     delaySeconds: AUDIO_PLAYOUT_DELAY_SECONDS,
+    arrivalDelaySeconds: AUDIO_PLAYOUT_DELAY_SECONDS,
     presentationDelaySeconds: AUDIO_PLAYOUT_DELAY_SECONDS,
   };
   scheduler.schedule(100, 0, FRAME_SECONDS, arrivalTarget);

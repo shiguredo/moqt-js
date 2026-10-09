@@ -31,7 +31,7 @@ export interface AudioReceiverStats {
   // 目標を使わない並べ方で、基準を取り直した回数
   // (鳴らす時刻を過ぎて届いた音、timestamp が大きく飛んだ音)
   playoutRebases: number;
-  // 並べすぎの音と、目標から離れすぎた音として捨てた数
+  // 並べすぎの音と、目標から離れすぎて到着も途切れていた音として捨てた数
   playoutDrops: number;
   // 欠落した区間や、時間軸の目標の遅延が増えたときに補間した回数
   playoutConcealments: number;

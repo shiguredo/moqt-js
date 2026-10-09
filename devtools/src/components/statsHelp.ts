@@ -241,7 +241,7 @@ export const PLAYBACK_TIMING_HELP: SectionHelp = {
 /** 鳴らさなかった理由ごとの説明 (src/audioPlayoutTimingStats.ts の理由の定義) */
 const AUDIO_MISS_REASON_DESCRIPTIONS: Record<AudioMissReason, string> = {
   lateness:
-    "The sound was dropped because it was more than the lateness limit (500 ms) from its playout time, for example while the path was stalled.",
+    "The sound was dropped because it was more than the lateness limit (500 ms) from its playout time and no sound had arrived for that long (the path stalled). While the sound keeps arriving, a playout time that far in the past is treated as a drifted TIMESTAMP and the sound is played by arrival instead.",
   backlog:
     "The sound was dropped because the playout was too far behind (the queued sounds exceeded the delay plus the backlog limit).",
   catchUp:
@@ -268,7 +268,7 @@ export const AUDIO_PLAYBACK_TIMING_HELP: SectionHelp = {
     {
       term: "lateness",
       description:
-        "start - target (ms). How much later than the playout time the sound starts; 0 means on time. The sound is never dropped for being late by less than the lateness limit, it is played late instead.",
+        "start - target (ms). How much later than the playout time the sound starts; 0 means on time. The sound is never dropped for being late, it is played late instead. Only a sound that arrives more than the lateness limit (500 ms) late while no sound has arrived for that long is dropped.",
     },
     {
       term: "lastTargetMs / lastArrivalMs / lastStartMs",
@@ -278,12 +278,17 @@ export const AUDIO_PLAYBACK_TIMING_HELP: SectionHelp = {
     {
       term: "playedFrames / playedMs",
       description:
-        "Sounds scheduled to play, and their total length after the stretch (cumulative). Includes the sounds without a playout time.",
+        "Sounds scheduled to play, and their total length after the stretch (cumulative). Includes the sounds played by arrival.",
+    },
+    {
+      term: "arrivalPlannedFrames",
+      description:
+        "Sounds played by arrival because their playout time could not be used (no wall-clock TIMESTAMP, the jitter buffer is off, or the track clock is not shared with the video). They are planned to start a small fixed delay after the arrival, so startDelay stays small. With slackMs / latenessMs showing -, the timeline is not deciding the playout time.",
     },
     {
       term: "unplannedFrames",
       description:
-        "Sounds played without a playout time (no wall-clock TIMESTAMP, or the jitter buffer is off). They are played by arrival and have no slack or lateness.",
+        "Sounds played without any plan (neither the playout time nor the arrival plan). Normally 0; a value above 0 means the caller did not pass a plan.",
     },
   ],
   notes: [

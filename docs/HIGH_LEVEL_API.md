@@ -462,7 +462,7 @@ interface AudioReceiverStats {
   // 目標を使わない並べ方で、基準を取り直した回数
   // (鳴らす時刻を過ぎて届いた音、timestamp が大きく飛んだ音)
   playoutRebases: number;
-  // 並べすぎの音と、目標から離れすぎた音として捨てた数
+  // 並べすぎの音と、目標から離れすぎて到着も途切れていた音として捨てた数
   playoutDrops: number;
   // 欠落した区間や、時間軸の目標の遅延が増えたときに補間した回数
   playoutConcealments: number;
@@ -495,18 +495,24 @@ interface AudioPlayoutTimingSnapshot {
   slackMs: TimingSummary | null;
   startDelayMs: TimingSummary | null;
   latenessMs: TimingSummary | null;
-  // 鳴らすと決めた音の数と長さの合計 (累積。unplannedFrames を内数に含み、長さは詰めた後)
+  // 鳴らすと決めた音の数と長さの合計 (累積。arrivalPlannedFrames を内数に含み、長さは詰めた後)
   playedFrames: number;
   playedMs: number;
-  // 再生予定時刻を決められないまま鳴らした音の数 (累積。壁時計の TIMESTAMP を持たない、
-  // jitter buffer が無効のとき)
+  // 時間軸の再生予定時刻を使えず、到着基準の計画で鳴らした音の数 (累積)。壁時計の
+  // TIMESTAMP を持たない、jitter buffer が無効、トラックの基準が共有されていない
+  // (TIMESTAMP が壁時計からずれている) ときに起きる。このとき startDelayMs は到着から
+  // 100 ms を超えない (316 ms のような遅れを作らない)
+  arrivalPlannedFrames: number;
+  // 到着基準の計画も持たないまま鳴らした音の数 (累積)。呼び出し側が計画を渡していない
+  // 取りこぼしであり、通常は 0
   unplannedFrames: number;
   // 鳴らさなかった音の数と長さの合計 (累積)。理由ごとの和に一致する
   missedFrames: number;
   missedMs: number;
-  // 理由ごとの数と長さ (累積)。lateness (目標から離れすぎて捨てた)、backlog (並べすぎて
-  // 捨てた)、catchUp (relay の cache から追いつく途中で鳴らさなかった)、error (鳴らす準備に
-  // 失敗した)、stopped (予約したまま再生を止めて切り捨てられた)
+  // 理由ごとの数と長さ (累積)。lateness (目標から離れすぎて届き、音も途切れていた音を
+  // 捨てた)、backlog (並べすぎて捨てた)、catchUp (relay の cache から追いつく途中で
+  // 鳴らさなかった)、error (鳴らす準備に失敗した)、stopped (予約したまま再生を止めて
+  // 切り捨てられた)
   missedByReason: Record<AudioMissReason, { count: number; ms: number }>;
   // 直近に鳴らさなかった音 (古い順、最大 30 件)
   recentMisses: AudioMissEvent[];
@@ -627,10 +633,24 @@ jitter buffer の遅れは音声と映像で別々に求める。音声は NetEq
 (音声出力の遅延は含まない)。予定に対する余裕 (`slackMs` の分布) が負であれば、届いた時点で
 すでに予定を過ぎており、その音は間に合っていない。
 
+`arrivalPlannedFrames` は、時間軸の再生予定時刻を使えず、到着基準の計画で鳴らした音の数で
+ある。使えないのは壁時計の TIMESTAMP を持たない、jitter buffer が無効、トラックの基準が
+共有されていない (TIMESTAMP が壁時計からずれている) ときである。このときの再生の遅れは
+到着から 100 ms 以下 (`AUDIO_PLAYOUT_ARRIVAL_DELAY_SECONDS`) に抑える。共有の時間軸が学習
+した再生の遅れは、ずれている TIMESTAMP を揺らぎとして学習した値 (実測で 316〜500 ms) に
+なるためである。`unplannedFrames` は、到着基準の計画も持たないまま鳴らした音であり、
+通常は 0 になる。
+
+予定から離れすぎて届いた音は捨てず、到着基準の計画へ並べ直して鳴らす。鳴らすと語尾が
+切れるためである。到着は乱れていないのに予定だけが過去にあるとき、ずれているのは予定の方
+(TIMESTAMP が壁時計からずれている) であり、音は遅れていない。捨てるのは、到着が上限
+(`AUDIO_PLAYOUT_MAX_LATENESS_SECONDS` = 500 ms) の間 1 つも届かず、音そのものが遅れて
+しまった音だけである。
+
 `missedFrames` / `missedMs` は、鳴らすと決めたのに鳴らなかった音の数と長さである。
 `playoutDrops` が件数だけを数えるのに対し、こちらは理由 (`missedByReason`) と長さ、
-直近の一覧 (`recentMisses`) を持つ。「遅れて届いたから鳴らなかった」のか「目標から
-離れすぎたから捨てた」のかを分けて見るために使う。
+直近の一覧 (`recentMisses`) を持つ。「並べすぎて鳴らなかった」のか「経路が止まって
+鳴らせなかった」のかを分けて見るために使う。
 
 `framesReceived` / `bytesReceived` は復号器へ渡す判定まで進んだ Object を数える
 (`bytesReceived` は payload と properties の長さの合計)。映像は統計の加算が復号順の判定より

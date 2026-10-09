@@ -55,6 +55,7 @@ import {
 } from "./testSupport/helpers";
 import {
   AUDIO_CLOCK_DEADBAND_MS,
+  AUDIO_PLAYOUT_ARRIVAL_DELAY_SECONDS,
   AUDIO_PLAYOUT_DELAY_SECONDS,
   AudioClockBridge,
   type AudioClockMapping,
@@ -3383,6 +3384,7 @@ test("getStats: 詰めと遅れの統計をミリ秒で返す", () => {
     targetStartSeconds: 10,
     enforceTarget: true,
     delaySeconds: AUDIO_PLAYOUT_DELAY_SECONDS,
+    arrivalDelaySeconds: AUDIO_PLAYOUT_ARRIVAL_DELAY_SECONDS,
     presentationDelaySeconds: AUDIO_PLAYOUT_DELAY_SECONDS,
   });
   assert.equal(decision.kind, "play");
@@ -3400,6 +3402,7 @@ test("getStats: 詰めと遅れの統計をミリ秒で返す", () => {
     targetStartSeconds: null,
     enforceTarget: false,
     delaySeconds: AUDIO_PLAYOUT_DELAY_SECONDS,
+    arrivalDelaySeconds: AUDIO_PLAYOUT_ARRIVAL_DELAY_SECONDS,
     presentationDelaySeconds: AUDIO_PLAYOUT_DELAY_SECONDS,
   };
   control.audioPlayout.schedule(100, 0, 0.02, arrival);
@@ -3408,6 +3411,7 @@ test("getStats: 詰めと遅れの統計をミリ秒で返す", () => {
     targetStartSeconds: 300.5,
     enforceTarget: true,
     delaySeconds: AUDIO_PLAYOUT_DELAY_SECONDS,
+    arrivalDelaySeconds: AUDIO_PLAYOUT_ARRIVAL_DELAY_SECONDS,
     presentationDelaySeconds: AUDIO_PLAYOUT_DELAY_SECONDS,
   });
   const updated = (control as unknown as { getStats(): MediaReceiverStats }).getStats().audio;
@@ -4447,6 +4451,7 @@ test("createOutputStream: 再生の基準を消し、統計は残す", () => {
     targetStartSeconds: 10,
     enforceTarget: true,
     delaySeconds: AUDIO_PLAYOUT_DELAY_SECONDS,
+    arrivalDelaySeconds: AUDIO_PLAYOUT_ARRIVAL_DELAY_SECONDS,
     presentationDelaySeconds: AUDIO_PLAYOUT_DELAY_SECONDS,
   });
   assert.equal(decision.kind, "play");

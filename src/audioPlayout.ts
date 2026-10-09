@@ -7,13 +7,19 @@
  * `src/playbackTimeline.ts` の時間軸が決めた目標の時刻に従う。
  *
  * - 目標の時刻は `AudioContext.currentTime` と同じ秒で受け取る。壁時計の TIMESTAMP を
- *   持たない音は目標を持たず、現在の基準の決め方 (最初の音の到着 + 再生の遅れ) を使う
+ *   持たない音は目標を持たず、到着基準の小さな目標 (`arrivalDelaySeconds`、
+ *   `AUDIO_PLAYOUT_ARRIVAL_DELAY_SECONDS` 以下) で鳴らす
  * - 目標の時刻を過ぎて届いた音も、前の音と重なる音も捨てない。今から鳴らせる最も早い
  *   時刻へずらして鳴らし、ずらした分を、音の長さの半分まで波形の周期で詰める (詰められ
- *   なかった分は遅れとして残る)。捨てるのは並べすぎの音と、目標から
- *   `AUDIO_PLAYOUT_MAX_LATENESS_SECONDS` を超えて離れた音だけである
- * - 目標を守るときは基準を取り直さない。取り直すと音声だけが後ろへずれ、共有の時間軸を
- *   使う映像とずれるためである
+ *   なかった分は遅れとして残る)
+ * - 目標から `AUDIO_PLAYOUT_MAX_LATENESS_SECONDS` を超えて離れた音も、捨てずに到着基準の
+ *   目標へ並べ直して鳴らす。音が届き続けているのに予定だけが過去にあるとき、ずれている
+ *   のは予定 (TIMESTAMP が壁時計からずれている) であり、鳴らしても遅れないためである。
+ *   音が途切れているとき (経路の停止) だけは、鳴らしても遅れたままになるため捨てる
+ * - 音が途切れているかは、直前の音が鳴り終わった時刻で見る (`AUDIO_PLAYOUT_MAX_LATENESS_SECONDS`
+ *   より前に鳴り終わっていれば、経路が止まっていたとみなす)
+ * - 目標を守るときは、目標から離れすぎていない限り基準を取り直さない。取り直すと音声だけが
+ *   後ろへずれ、共有の時間軸を使う映像とずれるためである
  * - 目標を守らないとき (`enforceTarget` が false) や、目標を作れないとき (壁時計の
  *   TIMESTAMP を持たない音など) は、揃える相手がいない、または目標を作れないため、
  *   鳴らす時刻を過ぎて届いた音は捨てずに基準を取り直す (最初の実装の挙動)
@@ -23,7 +29,7 @@
  *   前の隙間は補間しない)
  * - 並べすぎの上限は、目標を守るときは「表示の遅れ (`presentationDelaySeconds`) と再生の
  *   遅れ (`delaySeconds`) の大きい方 + 余裕 (`AUDIO_PLAYOUT_BACKLOG_SECONDS`)」、目標を
- *   使わないときは「再生の遅れ + 余裕」である
+ *   使わないときは「到着基準の再生の遅れ (`arrivalDelaySeconds`) + 余裕」である
  *
  * 時刻は `AudioContext.currentTime` と同じ秒、timestamp は `AudioData.timestamp` と同じ
  * マイクロ秒で扱う。ブラウザ API に依存しない。
@@ -32,11 +38,12 @@
 import { AUDIO_PLAYOUT_DELAY_FLOOR_MS } from "./playbackTimeline";
 
 /**
- * 再生の遅れ (秒)
+ * 再生の遅れの下限 (秒)
  *
- * 目標の時刻を使わないとき (壁時計の TIMESTAMP を持たない音、音声だけの購読) の基準に使う。
- * 共有の時間軸が使う下限 (`AUDIO_PLAYOUT_DELAY_FLOOR_MS`) と同じ値であり、定義は時間軸側に
- * 置く (揺らぎから求めた遅れをこの値で下限にするため)
+ * 目標を使えないとき (壁時計の TIMESTAMP を持たない音、音声だけの購読) の再生の遅れの
+ * 下限に使う (上限は `AUDIO_PLAYOUT_ARRIVAL_DELAY_SECONDS`)。共有の時間軸が使う下限
+ * (`AUDIO_PLAYOUT_DELAY_FLOOR_MS`) と同じ値であり、定義は時間軸側に置く (揺らぎから
+ * 求めた遅れをこの値で下限にするため)
  */
 export const AUDIO_PLAYOUT_DELAY_SECONDS = AUDIO_PLAYOUT_DELAY_FLOOR_MS / 1_000;
 
@@ -64,9 +71,40 @@ export const AUDIO_PLAYOUT_MIN_LEAD_SECONDS = 0.01;
  * 目標から離れすぎた音を捨てる境目 (秒)
  *
  * 経路の停止などで目標から大きく離れた音を鳴らすと、その分だけ音が遅れたままになる。
- * 表示の遅れの上限 (`MAX_PLAYOUT_DELAY_MS` = 500 ms) を超えたら、一度捨てて目標へ戻す
+ * 表示の遅れの上限 (`MAX_PLAYOUT_DELAY_MS` = 500 ms) を超えたら、一度捨てて目標へ戻す。
+ * ただし音が届き続けているときは、ずれているのは予定 (TIMESTAMP が壁時計からずれている)
+ * であり、鳴らしても遅れないため、この値は「到着基準の目標へ並べ直す」境目にもなる
  */
 export const AUDIO_PLAYOUT_MAX_LATENESS_SECONDS = 0.5;
+
+/**
+ * 到着基準で鳴らすときの再生の遅れの上限 (秒)
+ *
+ * 到着基準の並べ方 (壁時計の TIMESTAMP を持たない音、jitter buffer が無効、トラックの
+ * 基準が共有されていないとき) に使う。共有の時間軸が学習した再生の遅れ (`delaySeconds`)
+ * は、TIMESTAMP が壁時計からずれているトラックではそのずれの分だけ大きく育ち、実測では
+ * 316〜500 ms になって音がその分だけ遅れて鳴った。目標を使えないときは、ずれの影響を
+ * 受けない小さな値 (表示の遅れの下限 80 ms のすぐ上の 100 ms) を超えないようにする
+ */
+export const AUDIO_PLAYOUT_ARRIVAL_DELAY_SECONDS = 0.1;
+
+/**
+ * 到着基準で鳴らすときの再生の遅れを決める (秒)
+ *
+ * 学習した値 (`learnedDelaySeconds`) は経路の揺らぎを吸収するために必要である。ただし
+ * 上限 (`AUDIO_PLAYOUT_ARRIVAL_DELAY_SECONDS`) を超える分は使わない。TIMESTAMP が壁時計から
+ * ずれているトラックでは、ずれそのものを揺らぎとして学習してしまうためである。下限は
+ * 既存の `AUDIO_PLAYOUT_DELAY_SECONDS` にする。
+ *
+ * @param learnedDelaySeconds - 共有の時間軸が学習した再生の遅れ (秒)
+ * @returns 到着基準で鳴らすときの再生の遅れ (秒)
+ */
+export function arrivalPlayoutDelaySeconds(learnedDelaySeconds: number): number {
+  return Math.min(
+    Math.max(learnedDelaySeconds, AUDIO_PLAYOUT_DELAY_SECONDS),
+    AUDIO_PLAYOUT_ARRIVAL_DELAY_SECONDS,
+  );
+}
 
 /**
  * 補間する隙間の下限 (秒)
@@ -137,8 +175,23 @@ export interface AudioPlayoutTarget {
    * 届いた音は基準を取り直して鳴らす
    */
   enforceTarget: boolean;
-  /** 目標を使わないときと取り直すときに使う再生の遅れ (秒) */
+  /**
+   * 共有の時間軸が学習した再生の遅れ (秒)
+   *
+   * 並べすぎの上限 (`AUDIO_PLAYOUT_BACKLOG_SECONDS` を足す相手) に使う。到着基準で鳴らす
+   * ときの再生の遅れは `arrivalDelaySeconds` を使う
+   */
   delaySeconds: number;
+  /**
+   * 到着基準で鳴らすときの再生の遅れ (秒)
+   *
+   * 目標を使えないとき (壁時計の TIMESTAMP を持たない、jitter buffer が無効、トラックの
+   * 基準が共有されていない) と、目標から離れすぎて並べ直すときに使う。`delaySeconds` に
+   * 共有の時間軸が学習した値をそのまま渡すと、TIMESTAMP が壁時計からずれているトラックでは
+   * そのずれの分だけ大きく育った値で鳴ってしまうため、`arrivalPlayoutDelaySeconds` で
+   * 上限 (`AUDIO_PLAYOUT_ARRIVAL_DELAY_SECONDS`) を掛けた値を渡す
+   */
+  arrivalDelaySeconds: number;
   /**
    * 表示に使っている遅れ (秒)。`max(targetLatency, 再生遅延)` を上限で切った値
    *
@@ -147,11 +200,24 @@ export interface AudioPlayoutTarget {
   presentationDelaySeconds: number;
 }
 
+/**
+ * 鳴らす時刻を決めるのに使った計画
+ *
+ * - `timestamp`: 時間軸が TIMESTAMP から決めた目標の時刻に従う
+ * - `arrival`: 目標の時刻を使えない、または守れないため、到着から一定の遅れで鳴らす
+ */
+export type AudioPlayoutBasis = "timestamp" | "arrival";
+
 /** 音を鳴らす時刻 (`AudioContext.currentTime` の秒) と、詰める長さ、または捨てる */
 export type AudioPlayoutDecision =
   | {
       kind: "play";
       startAt: number;
+      /**
+       * 鳴らす時刻を決めるのに使った計画。到着基準 (`arrival`) のときは、時間軸の再生予定
+       * 時刻に従っていない (予定そのものは観測値として渡してよい)
+       */
+      basis: AudioPlayoutBasis;
       /**
        * 波形の周期を使って詰める長さ (秒)。目標を過ぎて届いた分を目標へ戻すために要求する。
        * 実際に詰められるかは波形しだいであり、適用した結果を `confirmStretch` で返す
@@ -174,7 +240,7 @@ export type AudioPlayoutDecision =
        * 捨てた理由。観測値としてどちらが起きているかを分けて数えるために返す
        *
        * - `backlog`: 並べる音が溜まりすぎている (再生が追いついていない)
-       * - `lateness`: 目標から離れすぎている (経路の停止など)
+       * - `lateness`: 目標から離れすぎて届き、到着も途切れていた (経路の停止など)
        */
       reason: "backlog" | "lateness";
     };
@@ -216,7 +282,7 @@ export class AudioPlayoutScheduler {
     return this.rebaseCount;
   }
 
-  /** 捨てた音の数 (並べすぎの音、目標から離れすぎた音) */
+  /** 捨てた音の数 (並べすぎの音、目標から離れすぎて到着も途切れていた音) */
   get drops(): number {
     return this.dropCount;
   }
@@ -258,7 +324,12 @@ export class AudioPlayoutScheduler {
     // 前の音に要求した補間の長さが返ってきていなければ、適用されなかったものとして扱う
     this.requestedConcealSeconds = 0;
     if (target.targetStartSeconds === null || !target.enforceTarget) {
-      return this.scheduleByArrival(nowSeconds, timestampMicroseconds, durationSeconds, target);
+      return this.scheduleByArrival(
+        nowSeconds,
+        timestampMicroseconds,
+        durationSeconds,
+        target.arrivalDelaySeconds,
+      );
     }
     // 前の音に要求した詰める量が返ってきていなければ、適用されなかったものとして扱う
     this.confirmStretch(0);
@@ -279,7 +350,22 @@ export class AudioPlayoutScheduler {
     const startAt = Math.max(targetStartSeconds, earliestSeconds);
     const latenessSeconds = startAt - targetStartSeconds;
     if (latenessSeconds > AUDIO_PLAYOUT_MAX_LATENESS_SECONDS) {
-      // 目標から離れすぎている (経路の停止など)。一度捨てて目標へ戻す
+      // 目標から離れすぎている。直前の音が上限の間より前に鳴り終わっていなければ、音は
+      // 途切れていない (到着は乱れていないのに予定だけが過去にある = TIMESTAMP が壁時計から
+      // ずれている)。捨てると語尾が切れるため、到着基準の小さな目標へ並べ直して鳴らす。
+      // まだ一度も鳴らしていないときも鳴らす方を選ぶ (遅れているかどうかを言えないため)
+      const stalled =
+        previousEnd !== null && previousEnd < nowSeconds - AUDIO_PLAYOUT_MAX_LATENESS_SECONDS;
+      if (!stalled) {
+        return this.rebaseByArrival(
+          nowSeconds,
+          timestampMicroseconds,
+          durationSeconds,
+          target.arrivalDelaySeconds,
+        );
+      }
+      // 音が途切れている (経路の停止など)。鳴らしても遅れたままになるため、一度捨てて
+      // 到着基準の目標へ戻す
       this.dropCount += 1;
       this.latenessSeconds = 0;
       return { kind: "drop", reason: "lateness" };
@@ -293,7 +379,7 @@ export class AudioPlayoutScheduler {
     this.lastEnd = startAt + durationSeconds - compressSeconds;
     this.lastTimestampMicroseconds = timestampMicroseconds;
     const concealment = this.concealmentOf(nowSeconds, previousEnd, startAt);
-    return { kind: "play", startAt, compressSeconds, ...concealment };
+    return { kind: "play", startAt, basis: "timestamp", compressSeconds, ...concealment };
   }
 
   /**
@@ -384,23 +470,24 @@ export class AudioPlayoutScheduler {
    * 最初の音で基準を決め、timestamp の間隔どおりに並べる。過ぎてから届いた音は基準を
    * 取り直し、timestamp が大きく飛んだ音は前の音のすぐ後ろと今 + 再生の遅れの遅い方から
    * 並べ直し、並べすぎの音は捨てる
+   *
+   * @param arrivalDelaySeconds - 到着基準で鳴らすときの再生の遅れ (秒)
    */
   private scheduleByArrival(
     nowSeconds: number,
     timestampMicroseconds: number,
     durationSeconds: number,
-    target: AudioPlayoutTarget,
+    arrivalDelaySeconds: number,
   ): AudioPlayoutDecision {
-    const delaySeconds = target.delaySeconds;
-    const limitSeconds = delaySeconds + this.backlogSeconds;
+    const limitSeconds = arrivalDelaySeconds + this.backlogSeconds;
     const previousEnd = this.lastEnd;
-    let startAt = this.expectedStartAt(timestampMicroseconds, nowSeconds, delaySeconds);
+    let startAt = this.expectedStartAt(timestampMicroseconds, nowSeconds, arrivalDelaySeconds);
     if (startAt < nowSeconds + this.minLeadSeconds) {
       // 過ぎてから届いた。前の音はすべて今より前に終わっているため、重ならない
-      startAt = nowSeconds + delaySeconds;
+      startAt = nowSeconds + arrivalDelaySeconds;
       this.rebase(startAt, timestampMicroseconds);
     } else if (startAt > nowSeconds + limitSeconds) {
-      const earliest = Math.max(nowSeconds + delaySeconds, this.lastEnd ?? -Infinity);
+      const earliest = Math.max(nowSeconds + arrivalDelaySeconds, this.lastEnd ?? -Infinity);
       if (earliest > nowSeconds + limitSeconds) {
         // 並べる音が溜まりすぎている。捨てて次の音を目標へ戻す
         this.dropCount += 1;
@@ -413,18 +500,49 @@ export class AudioPlayoutScheduler {
     this.lastEnd = startAt + durationSeconds;
     this.lastTimestampMicroseconds = timestampMicroseconds;
     const concealment = this.concealmentOf(nowSeconds, previousEnd, startAt);
-    return { kind: "play", startAt, compressSeconds: 0, ...concealment };
+    return { kind: "play", startAt, basis: "arrival", compressSeconds: 0, ...concealment };
+  }
+
+  /**
+   * 目標から離れすぎた音を、到着基準の小さな目標へ並べ直す
+   *
+   * 音は届き続けているのに目標だけが過去にあるとき、ずれているのは予定の方である
+   * (TIMESTAMP が壁時計からずれている)。詰めて目標へ戻すのではなく、基準そのものを
+   * 到着基準へ置き直し、以降の音も同じ遅れで並ぶようにする。
+   *
+   * 音は捨てない。捨てると語尾が切れるためである。並べ直しで空いた分は、前の音の終わりと
+   * 今回の開始の間の隙間として返す (呼び出し側が上限まで補間できる)
+   *
+   * @param arrivalDelaySeconds - 到着基準で鳴らすときの再生の遅れ (秒)
+   */
+  private rebaseByArrival(
+    nowSeconds: number,
+    timestampMicroseconds: number,
+    durationSeconds: number,
+    arrivalDelaySeconds: number,
+  ): AudioPlayoutDecision {
+    const previousEnd = this.lastEnd;
+    // 前の音の終わりより前には鳴らさない (重ねない)
+    const startAt = Math.max(nowSeconds + arrivalDelaySeconds, previousEnd ?? -Infinity);
+    this.rebase(startAt, timestampMicroseconds);
+    this.lastEnd = startAt + durationSeconds;
+    this.lastTimestampMicroseconds = timestampMicroseconds;
+    // 到着基準へ移ったため、目標に対する遅れは無い (詰めない)
+    this.latenessSeconds = 0;
+    this.requestedSeconds = 0;
+    const concealment = this.concealmentOf(nowSeconds, previousEnd, startAt);
+    return { kind: "play", startAt, basis: "arrival", compressSeconds: 0, ...concealment };
   }
 
   /** 基準と前の音から、この音を鳴らす時刻を求める (前の音の終わりより前にしない) */
   private expectedStartAt(
     timestampMicroseconds: number,
     nowSeconds: number,
-    delaySeconds: number,
+    arrivalDelaySeconds: number,
   ): number {
     if (this.anchor === null) {
       this.anchor = {
-        time: nowSeconds + delaySeconds,
+        time: nowSeconds + arrivalDelaySeconds,
         timestampMicroseconds,
       };
       return this.anchor.time;

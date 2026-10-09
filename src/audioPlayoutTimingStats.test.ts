@@ -13,11 +13,11 @@ import {
 test("recordPlay: 直近の値と、余裕・鳴るまでの時間・遅れの分布を返す", () => {
   const stats = new AudioPlayoutTimingStats(AUDIO_PLAYOUT_TIMING_WINDOW_MS, 1_000);
   // 余裕 80 ms (予定 180 - 到着 100)、鳴るまで 90 ms、予定から 10 ms 遅れ
-  stats.recordPlay(100, 180, 190, 20);
+  stats.recordPlay(100, 180, 190, 20, "timestamp");
   // 余裕 20 ms、鳴るまで 30 ms、予定から 10 ms 遅れ
-  stats.recordPlay(200, 220, 230, 20);
+  stats.recordPlay(200, 220, 230, 20, "timestamp");
   // 予定を過ぎて届いた音 (余裕 -20 ms)。鳴るまで 10 ms、予定から 30 ms 遅れ
-  stats.recordPlay(300, 280, 310, 20);
+  stats.recordPlay(300, 280, 310, 20, "timestamp");
 
   const snapshot = stats.snapshot(400);
   assert.equal(snapshot.lastTargetMs, 280, "直近の再生予定時刻を返すこと");
@@ -32,27 +32,42 @@ test("recordPlay: 直近の値と、余裕・鳴るまでの時間・遅れの�
   assert.deepEqual(snapshot.latenessMs, { p50: 10, p95: 30, max: 30 });
   assert.equal(snapshot.playedFrames, 3, "鳴らすと決めた音の数を数えること");
   assert.equal(snapshot.playedMs, 60, "鳴らすと決めた音の長さを足すこと");
+  assert.equal(snapshot.arrivalPlannedFrames, 0, "時間軸の予定で鳴らした音を数えないこと");
   assert.equal(snapshot.unplannedFrames, 0);
   assert.equal(snapshot.missedFrames, 0);
   assert.equal(snapshot.missedMs, 0);
 });
 
-// 完了条件: 再生予定時刻を決められない音 (壁時計の TIMESTAMP を持たない、jitter buffer が
-// 無効) は、余裕と遅れを持たないため分布へ入れず、鳴るまでの時間だけを数える
-test("recordPlay: 予定を持たない音は余裕を持たず、unplannedFrames に数える", () => {
+// 完了条件: 到着基準の計画で鳴らした音 (壁時計の TIMESTAMP を持たない、jitter buffer が
+// 無効、トラックの基準が共有されていない) は、余裕と遅れを持たないため分布へ入れず、
+// arrivalPlannedFrames に数える。計画には載っているため unplannedFrames には数えない
+test("recordPlay: 到着基準で鳴らした音は arrivalPlannedFrames に数える", () => {
   const stats = new AudioPlayoutTimingStats(AUDIO_PLAYOUT_TIMING_WINDOW_MS, 0);
-  stats.recordPlay(100, null, 110, 20);
+  stats.recordPlay(100, null, 110, 20, "arrival");
 
   const snapshot = stats.snapshot(200);
   assert.isNull(snapshot.lastTargetMs);
   assert.isNull(snapshot.lastSlackMs, "予定が無ければ余裕は null であること");
   assert.isNull(snapshot.lastLatenessMs, "予定が無ければ遅れは null であること");
   assert.deepEqual(snapshot.startDelayMs, { p50: 10, p95: 10, max: 10 });
-  assert.isNull(snapshot.slackMs, "予定を持たない音を分布へ入れないこと");
+  assert.isNull(snapshot.slackMs, "到着基準の計画の音を分布へ入れないこと");
   assert.isNull(snapshot.latenessMs);
-  assert.equal(snapshot.unplannedFrames, 1);
+  assert.equal(snapshot.arrivalPlannedFrames, 1);
+  assert.equal(snapshot.unplannedFrames, 0, "計画に載っているため数えないこと");
   assert.equal(snapshot.playedFrames, 1);
   assert.equal(snapshot.playedMs, 20);
+});
+
+// 完了条件: 到着基準の計画も持たないまま鳴らした音は unplannedFrames に数える。どちらの
+// 計画も渡さなかった呼び出し側の取りこぼしであり、通常は 0 になる
+test("recordPlay: 計画を持たない音は unplannedFrames に数える", () => {
+  const stats = new AudioPlayoutTimingStats(AUDIO_PLAYOUT_TIMING_WINDOW_MS, 0);
+  stats.recordPlay(100, null, 110, 20, "timestamp");
+
+  const snapshot = stats.snapshot(200);
+  assert.equal(snapshot.arrivalPlannedFrames, 0);
+  assert.equal(snapshot.unplannedFrames, 1);
+  assert.equal(snapshot.playedFrames, 1);
 });
 
 // 完了条件: 鳴らさなかった音を理由ごとに数え、長さも足す。理由ごとの和は合計に一致し、
@@ -116,8 +131,8 @@ test("recordMiss: 直近の一覧は上限を超えたら古い方から捨て�
 test("recordStopped: 鳴り終わった音は数えず、まだ鳴っていない音を長さ付きで数える", () => {
   const stats = new AudioPlayoutTimingStats(AUDIO_PLAYOUT_TIMING_WINDOW_MS, 0);
   // 100 から 120 まで鳴る音 (止めたときには鳴り終わっている) と、200 から 220 まで鳴る音
-  stats.recordPlay(0, null, 100, 20);
-  stats.recordPlay(0, null, 200, 20);
+  stats.recordPlay(0, null, 100, 20, "arrival");
+  stats.recordPlay(0, null, 200, 20, "arrival");
   // 130 で止める。既に鳴り終わった 1 つ目は数えず、2 つ目は 20 ms すべてが鳴らなかった
   stats.recordStopped(130);
 
@@ -134,7 +149,7 @@ test("recordStopped: 鳴り終わった音は数えず、まだ鳴っていな�
 // 鳴らなかったとはみなさない
 test("recordStopped: 鳴り始めている音は残りの長さだけを数える", () => {
   const stats = new AudioPlayoutTimingStats(AUDIO_PLAYOUT_TIMING_WINDOW_MS, 0);
-  stats.recordPlay(0, null, 250, 20);
+  stats.recordPlay(0, null, 250, 20, "arrival");
   stats.recordStopped(260);
   assert.equal(stats.snapshot(300).missedMs, 10, "残りの 10 ms だけを数えること");
 });
@@ -143,8 +158,8 @@ test("recordStopped: 鳴り始めている音は残りの長さだけを数え�
 // 累積の数と直近の値は残る
 test("snapshot: 窓より古い記録は分布から落ち、累積は残る", () => {
   const stats = new AudioPlayoutTimingStats(1_000, 0);
-  stats.recordPlay(0, 10, 20, 20);
-  stats.recordPlay(500, 510, 520, 20);
+  stats.recordPlay(0, 10, 20, 20, "timestamp");
+  stats.recordPlay(500, 510, 520, 20, "timestamp");
   const snapshot = stats.snapshot(2_000);
   assert.isNull(snapshot.slackMs, "窓の外の値だけになれば null になること");
   assert.isNull(snapshot.startDelayMs);
@@ -155,7 +170,7 @@ test("snapshot: 窓より古い記録は分布から落ち、累積は残る", (
 // 完了条件: reset で、すべての記録を捨てて初期状態へ戻す。購読をやり直すときに使う
 test("reset: すべての記録を捨てて初期状態へ戻す", () => {
   const stats = new AudioPlayoutTimingStats(AUDIO_PLAYOUT_TIMING_WINDOW_MS, 0);
-  stats.recordPlay(0, 10, 20, 20);
+  stats.recordPlay(0, 10, 20, 20, "timestamp");
   stats.recordMiss({
     atMs: 30,
     reason: "error",

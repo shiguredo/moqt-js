@@ -513,7 +513,13 @@ function SubscriberStats({ statsSignal }: { statsSignal: ReadonlySignal<Subscrib
                 testId: "subscriber-audio-playback-played-ms",
               },
               {
-                // 予定を決められないまま鳴らした音 (壁時計の TIMESTAMP を持たないなど)
+                // 時間軸の予定を使えず、到着基準の計画で鳴らした音 (TIMESTAMP がずれているなど)
+                label: "arrivalPlannedFrames",
+                value: stats.audio.playoutTiming.arrivalPlannedFrames,
+                testId: "subscriber-audio-playback-arrival-planned-frames",
+              },
+              {
+                // 到着基準の計画も持たないまま鳴らした音。通常は 0
                 label: "unplannedFrames",
                 value: stats.audio.playoutTiming.unplannedFrames,
                 testId: "subscriber-audio-playback-unplanned-frames",

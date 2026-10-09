@@ -217,6 +217,7 @@ test("buildSubscriberStats: 音声の再生の観測値を返す", () => {
     latenessMs: { p50: 10, p95: 10, max: 10 },
     playedFrames: 100,
     playedMs: 2_000,
+    arrivalPlannedFrames: 5,
     unplannedFrames: 3,
     missedFrames: 2,
     missedMs: 40,

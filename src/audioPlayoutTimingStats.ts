@@ -14,11 +14,14 @@
  *   (音声出力の遅延は含まない)
  * - 分布 (p50 / p95 / max) は直近の窓 (既定 10 秒) の値から求める
  * - 鳴らなかった量は購読の開始 (reset) からの累積である。理由ごとに数え、和は合計に一致する
- * - 予定を決められない音 (LOC TIMESTAMP が壁時計でない、jitter buffer が無効) は、
- *   「予定に対する余裕」を持たないため分布へ入れず、`unplannedFrames` に数える
+ * - 時間軸の再生予定時刻を使わずに鳴らした音 (LOC TIMESTAMP が壁時計でない、jitter buffer
+ *   が無効、トラックの基準が共有されていない) は、到着から一定の遅れで鳴らす計画に載せ、
+ *   `arrivalPlannedFrames` に数える。時間軸が予定を決めていれば、その予定との差 (余裕と
+ *   遅れ) は分布へ入れる (`unplannedFrames` は、どちらの計画も持たないまま鳴らした音の数)
  * - ブラウザ API に依存しない。時刻は呼び出し側が引数で渡す
  */
 
+import type { AudioPlayoutBasis } from "./audioPlayout";
 import { TimedValues } from "./timedValues";
 import { summarizeTimings, type TimingSummary } from "./timingSummary";
 
@@ -31,7 +34,7 @@ export const MAX_RECENT_AUDIO_MISSES = 30;
 /**
  * 鳴らさなかった理由
  *
- * - `lateness`: 再生予定から離れすぎて捨てた (経路の停止など)
+ * - `lateness`: 再生予定から離れすぎて届き、到着も途切れていたため捨てた (経路の停止など)
  * - `backlog`: 並べすぎて捨てた (再生が追いついていない)
  * - `catchUp`: relay の cache から追いつく途中で鳴らさなかった (意図的なもの)
  * - `error`: 鳴らす準備 (詰め・補間・予約) の途中で失敗した
@@ -96,11 +99,18 @@ export interface AudioPlayoutTimingSnapshot {
   readonly startDelayMs: TimingSummary | null;
   /** 予定からどれだけ過ぎて鳴るかの分布 (直近の窓、ミリ秒)。0 なら予定どおり */
   readonly latenessMs: TimingSummary | null;
-  /** 鳴らすと決めた音の数 (累積。予定を決められなかった音を含む) */
+  /** 鳴らすと決めた音の数 (累積。到着基準で鳴らした音を含む) */
   readonly playedFrames: number;
   /** 鳴らすと決めた音の長さの合計 (ミリ秒、累積。詰めた分を引いた後) */
   readonly playedMs: number;
-  /** 再生予定時刻を決められないまま鳴らした音の数 (累積) */
+  /**
+   * 時間軸の再生予定時刻を使えず、到着基準の計画で鳴らした音の数 (累積)
+   *
+   * 時間軸が目標を決められていない (TIMESTAMP が壁時計からずれているなど) ことを、
+   * この数と `unplannedFrames` 0 の組み合わせで読む
+   */
+  readonly arrivalPlannedFrames: number;
+  /** 到着基準の計画も持たないまま鳴らした音の数 (累積。通常は 0) */
   readonly unplannedFrames: number;
   /** 鳴らさなかった音の数 (累積) */
   readonly missedFrames: number;
@@ -134,6 +144,7 @@ export const EMPTY_AUDIO_PLAYOUT_TIMING: AudioPlayoutTimingSnapshot = {
   latenessMs: null,
   playedFrames: 0,
   playedMs: 0,
+  arrivalPlannedFrames: 0,
   unplannedFrames: 0,
   missedFrames: 0,
   missedMs: 0,
@@ -183,6 +194,7 @@ export class AudioPlayoutTimingStats {
   private pending: { startMs: number; endMs: number }[] = [];
   private playedFrames = 0;
   private playedMs = 0;
+  private arrivalPlannedFrames = 0;
   private unplannedFrames = 0;
   private missedFrames = 0;
   private missedMs = 0;
@@ -201,23 +213,40 @@ export class AudioPlayoutTimingStats {
   /**
    * 鳴らすと決めた音を記録する
    *
+   * 余裕と遅れは、時間軸が決めた再生予定時刻との差である。到着基準で鳴らした音でも、
+   * 時間軸が予定を決めていればその予定との差を記録する (音が予定よりどれだけ遅れて
+   * 鳴っているかを読むため)。
+   *
    * @param arrivalMs - 到着した時刻 (ミリ秒)
-   * @param targetMs - 再生予定時刻 (ミリ秒)。予定を決められないときは null
+   * @param targetMs - 時間軸が決めた再生予定時刻 (ミリ秒)。決められないときは null
    * @param startMs - 鳴り始める時刻 (ミリ秒)
    * @param playedMs - 鳴る長さ (ミリ秒。詰めた分を引いた後)
+   * @param basis - 鳴らす時刻を決めるのに使った計画。到着基準 (`arrival`) の音は
+   *   `arrivalPlannedFrames` に数える
    */
-  recordPlay(arrivalMs: number, targetMs: number | null, startMs: number, playedMs: number): void {
+  recordPlay(
+    arrivalMs: number,
+    targetMs: number | null,
+    startMs: number,
+    playedMs: number,
+    basis: AudioPlayoutBasis,
+  ): void {
     this.prunePending(arrivalMs);
     const startDelayMs = startMs - arrivalMs;
     const slackMs = targetMs === null ? null : targetMs - arrivalMs;
     const latenessMs = targetMs === null ? null : startMs - targetMs;
     this.startDelays.push(arrivalMs, startDelayMs);
+    if (basis === "arrival") {
+      // 到着基準の計画に載せた音である (時間軸が予定を決めていても使っていない)
+      this.arrivalPlannedFrames++;
+    } else if (targetMs === null) {
+      // 到着基準の計画も持たない音。呼び出し側が計画を渡していない取りこぼしであり、
+      // 通常は 0 になる
+      this.unplannedFrames++;
+    }
     if (slackMs !== null && latenessMs !== null) {
       this.slacks.push(arrivalMs, slackMs);
       this.latenesses.push(arrivalMs, latenessMs);
-    } else {
-      // 予定が無い音は「間に合ったか」を持たないため、分布へ入れずに数える
-      this.unplannedFrames++;
     }
     this.lastPlay = { targetMs, arrivalMs, startMs, slackMs, startDelayMs, latenessMs };
     this.playedFrames++;
@@ -296,6 +325,7 @@ export class AudioPlayoutTimingStats {
       latenessMs: summarizeTimings(this.latenesses.current()),
       playedFrames: this.playedFrames,
       playedMs: this.playedMs,
+      arrivalPlannedFrames: this.arrivalPlannedFrames,
       unplannedFrames: this.unplannedFrames,
       missedFrames: this.missedFrames,
       missedMs: this.missedMs,
@@ -313,6 +343,7 @@ export class AudioPlayoutTimingStats {
     this.pending = [];
     this.playedFrames = 0;
     this.playedMs = 0;
+    this.arrivalPlannedFrames = 0;
     this.unplannedFrames = 0;
     this.missedFrames = 0;
     this.missedMs = 0;

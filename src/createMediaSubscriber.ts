@@ -30,7 +30,12 @@ import { AudioDecoderWrapper } from "./codec/AudioDecoder";
 import { VideoDecoderWrapper } from "./codec/VideoDecoder";
 import { VideoDecodeOrder, priorObjectIdGapOf } from "./videoDecodeOrder";
 import { GroupSwitchGate } from "./groupSwitchGate";
-import { AudioClockBridge, AudioPlayoutScheduler, concealmentEndGain } from "./audioPlayout";
+import {
+  arrivalPlayoutDelaySeconds,
+  AudioClockBridge,
+  AudioPlayoutScheduler,
+  concealmentEndGain,
+} from "./audioPlayout";
 import { AudioPlayoutTimingStats, AUDIO_PLAYOUT_TIMING_WINDOW_MS } from "./audioPlayoutTimingStats";
 import { compressSamples, concealSamples, type AudioSamples } from "./audioTimeStretch";
 import { JITTER_BUFFER_MAX_QUEUED_FRAMES, PlayoutBuffer } from "./playoutBuffer";
@@ -2404,6 +2409,13 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       // 換算するときの基準にも使うため、1 回だけ読む
       const contextNowSeconds = this.audioContext.currentTime;
       const durationSeconds = numberOfFrames / sampleRate;
+      // 音声を観測していないとき (壁時計の TIMESTAMP を持たない / Track の TIMESCALE を
+      // 使う) は共有の再生遅延に下限が入らないため、ここで下限を必ず適用する
+      const playoutDelaySeconds =
+        Math.max(
+          this.playbackTimeline.playoutDelayMs ?? AUDIO_PLAYOUT_DELAY_FLOOR_MS,
+          AUDIO_PLAYOUT_DELAY_FLOOR_MS,
+        ) / 1_000;
       const decision = this.audioPlayout.schedule(
         contextNowSeconds,
         audioData.timestamp,
@@ -2412,13 +2424,11 @@ export class MediaSubscriberImpl implements MediaSubscriber {
           targetStartSeconds,
           // 映像も購読しているときだけ目標を守る。音声だけのときは取り直して連続を優先する
           enforceTarget: this.videoTrackInfo !== null,
-          // 音声を観測していないとき (壁時計の TIMESTAMP を持たない / Track の TIMESCALE を
-          // 使う) は共有の再生遅延に下限が入らないため、ここで下限を必ず適用する
-          delaySeconds:
-            Math.max(
-              this.playbackTimeline.playoutDelayMs ?? AUDIO_PLAYOUT_DELAY_FLOOR_MS,
-              AUDIO_PLAYOUT_DELAY_FLOOR_MS,
-            ) / 1_000,
+          delaySeconds: playoutDelaySeconds,
+          // 目標を使えないとき (到着基準) の再生の遅れ。共有の時間軸が学習した値は、
+          // TIMESTAMP が壁時計からずれているトラックではそのずれの分だけ大きく育つため、
+          // 上限で切った小さな値を使う
+          arrivalDelaySeconds: arrivalPlayoutDelaySeconds(playoutDelaySeconds),
           presentationDelaySeconds:
             (this.playbackTimeline.presentationExtraDelayMs ?? AUDIO_PLAYOUT_DELAY_FLOOR_MS) /
             1_000,
@@ -2515,6 +2525,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
         targetMs,
         startMs,
         (frames / sampleRate) * 1_000,
+        decision.basis,
       );
 
       // 次の音の補間のために、実際に鳴らしたサンプルを保持する

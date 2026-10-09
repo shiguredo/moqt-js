@@ -69,6 +69,10 @@
   - End Group (StartGroup + EndGroupDelta) が 2^64-1 を超える場合は、送信側が InvalidFilterError、受信側が PROTOCOL_VIOLATION で拒否する (従来どおり)
   - 旧 v21 のワイヤ形式で送受信していた moqt-js とは相互運用できない
   - @voluntas
+- [CHANGE] `AudioPlayoutTimingSnapshot` に `arrivalPlannedFrames` を追加し、`unplannedFrames` の意味を変える
+  - 時間軸の再生予定時刻を使えず、到着基準の計画で鳴らした音の数を `arrivalPlannedFrames` で読めるようにする。従来はこれを `unplannedFrames` に数えていたが、`unplannedFrames` は到着基準の計画も持たない音 (呼び出し側が計画を渡していない取りこぼし) の数になり、通常は 0 になる
+  - `AudioPlayoutTimingSnapshot` は公開型のため、この型を自前で構築しているコードは `arrivalPlannedFrames` の追加が必要になる (後方互換なし)
+  - @voluntas
 - [UPDATE] moqt-devtools の Tracks カードに、catalog に載せるトラックの宣言を全て出す
   - 配信する音声 / 映像 / event timeline の各トラックに、catalog の値 (packaging / isLive / bitrate / samplerate / channelConfig / width / height / framerate / mimeType / depends / targetLatency / renderGroup / authInfo) を下の Audio / Video / Catalog カードの設定に追随して行で出す。宣言は配信で送る catalog と同じ関数 (`buildPublisherTrackDeclarations`) で組み立て、画面で見た値と実際に送る値がずれないようにする
   - 音声の samplerate / channelConfig は、実際に取れた音の形式が分かっているとき (Preview / 配信中) はその値を出す。マイクはデバイスが決めた形式を返すため、Audio カードの Sample Rate / Channels と異なることがある
@@ -2521,6 +2525,12 @@
   - worker は予定した時刻を絶対時刻 (`performance.timeOrigin + performance.now()`) で送る。`performance.timeOrigin` は window と worker で同じ値ではないため、main thread が予定と実際を比べられるようにする
   - main thread は予定から 1 フレーム間隔以上過ぎた tick を描かずに捨てる。main thread が塞がれている間も worker は tick を送り続けるため、復帰後に溜まった tick をまとめて描かないようにする。判定は `isDummyFrameTickDue` として切り出し、境界を単体テストで固定する
   - 実測 (Chromium 153 / macOS / 30 fps 設定 / `Target.createTarget` の `background: true` で作った hidden タブ): 修正前は 0.8 fps、修正後は 30.1 fps。main thread を 400 ms 塞いだ場合も、復帰直後に描くのは 2 枚までで、以後は通常の間隔に戻る
+  - @voluntas
+
+- [FIX] 音声の再生が信用できない LOC TIMESTAMP に引きずられて遅れ、鳴り遅れで語尾が切れるのを直す
+  - 目標の時刻を使えないとき (壁時計の TIMESTAMP を持たない、jitter buffer が無効、トラックの基準が映像と共有されていない) の再生の遅れが、TIMESTAMP のずれを揺らぎとして学習した値 (実測で 316〜500 ms) になっていた。到着基準の再生の遅れを `AUDIO_PLAYOUT_ARRIVAL_DELAY_SECONDS` (100 ms) で切った値に揃え、到着から 100 ms 程度で鳴らす
+  - 予定から 500 ms を超えて離れた音を捨てていたため、送る側の TIMESTAMP がずれて予定だけが過去になると、鳴り遅れとして音 (語尾) が切れていた。音が途切れていない限り捨てず、到着基準の小さな目標へ並べ直して鳴らす。捨てるのは音が 500 ms の間途切れていたとき (経路の停止) だけにする
+  - 実測のログ相当の入力 (音声の TIMESTAMP が途中で 600 ms 段差でずれ、到着は乱れない) を模したテストで、到着から鳴り始めるまでの p50 が 500 ms → 100 ms、`missedByReason.lateness` が 5 件 → 0 件、`unplannedFrames` が 899 件 → 0 件になった
   - @voluntas
 
 ## 2026.2.0
