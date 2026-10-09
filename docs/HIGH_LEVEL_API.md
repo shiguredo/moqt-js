@@ -949,7 +949,7 @@ const session = new VideoPlayoutSession({
   output: {
     isAvailable: () => writer !== null,
     present: (frame, presentationMs) => {
-      // performanceMs に表示時刻が入る (表示時刻を決められないときは null)
+      // presentationMs に表示時刻が入る (表示時刻を決められないときは null)
       void writer?.write(frame);
       return true;
     },
