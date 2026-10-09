@@ -28,6 +28,7 @@ import { createDummyVideoStream } from "../webcodecs-devtools/utils/dummyVideo";
 import { createDummyAudioStream } from "../webcodecs-devtools/utils/dummyAudio";
 import { readAllAudioSamples } from "../utils/audioLevel";
 import { AudioLevelTimeline } from "../utils/audioLevelTimeline";
+import { AudioTimestampClock } from "../../../src/audioTimestampClock";
 import { startPublisherAudioMeter, stopPublisherAudioMeter } from "./publisherAudioMeter";
 import { AudioEncoderWrapper } from "../../../src/codec/AudioEncoder.ts";
 import type { AudioEncodedChunkData } from "../../../src/codec/types.ts";
@@ -1122,6 +1123,12 @@ export function usePublisher() {
           audioData.duration,
           readAllAudioSamples(audioData),
         );
+        // 読み出した壁時計と `AudioData.timestamp` の差を記録する。音声の LOC TIMESTAMP は
+        // この差の最小値へ原点を合わせて作る (src/audioTimestampClock.ts)
+        pub.audioTimestampClock.value.record(
+          BigInt(Math.round((performance.timeOrigin + performance.now()) * 1_000)),
+          audioData.timestamp,
+        );
         // 音声フレームは落としても後続の Object で上書きされるため、映像のような
         // encodeQueueSize による抑制はしない (src/createMediaPublisher.ts と同じ)
         encoder.encode(audioData);
@@ -1322,6 +1329,7 @@ export function usePublisher() {
 
     // 前の配信のサンプルの記録を持ち越さない
     pub.audioLevelTimeline.value = new AudioLevelTimeline();
+    pub.audioTimestampClock.value = new AudioTimestampClock();
     const audioTrackProcessor = new MediaStreamTrackProcessor<AudioData>({ track: audioTrack });
     pub.audioFrameReader.value = audioTrackProcessor.readable.getReader();
   }
@@ -1369,8 +1377,12 @@ export function usePublisher() {
     pub.audioConfigResendRequested.value = resendNext;
 
     const properties = LOC.encodeAudioProperties({
-      // TIMESTAMP は Unix epoch マイクロ秒 (壁時計) で送る (draft-ietf-moq-loc-04 §2.3.1.1)
-      timestamp: LOC.toUnixEpochMicroseconds(BigInt(chunk.timestamp), performance.timeOrigin),
+      // TIMESTAMP は Unix epoch マイクロ秒 (壁時計) で送る (draft-ietf-moq-loc-04 §2.3.1.1)。
+      // `AudioData.timestamp` は壁時計ではないため、読み出した壁時計との差の
+      // 最小値で原点を合わせる。まだ観測が無いときだけ従来の換算へ落とす
+      timestamp:
+        pub.audioTimestampClock.value.apply(chunk.timestamp) ??
+        LOC.toUnixEpochMicroseconds(BigInt(chunk.timestamp), performance.timeOrigin),
       audioLevel,
       config: audioConfig,
     });

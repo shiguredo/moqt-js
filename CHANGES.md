@@ -2551,6 +2551,12 @@
   - 段差の直後の 2 秒ほどは、時間軸がずれを検出するまで音声が予定を過ぎた時刻へ並ぶため、その間の A/V のずれ (最大 94.5 ms) は残る
   - @voluntas
 
+- [FIX] 送る音声の LOC TIMESTAMP を配信側の壁時計から作り、マイクの時計のずれに引きずられないようにする
+  - マイクや Web Audio の `AudioData.timestamp` は `performance.now()` と同じ時計ではなく、一定のずれのほかにドリフトや段差で動くが、配信側は `LOC.toUnixEpochMicroseconds` で壁時計へ換算して TIMESTAMP にしていた。実測では、受信側で測った「復号の出力 - TIMESTAMP」(音声の基準の遅れ) が 37〜40 ms から 485〜627 ms へ段差で動き、音声の jitter buffer の目標が段差を学習して 700 ms まで膨らみ、映像の表示まで遅れていた
+  - `AudioData.timestamp` の刻み (サンプルの間隔) はそのまま使い、原点だけを「読み出した壁時計 - `AudioData.timestamp`」の直近 2 秒の最小値へ合わせる (`src/audioTimestampClock.ts`)。最小値へ合わせるのは、音声の時計のドリフトにも補正が追従し、補正が実際より大きくなって TIMESTAMP が未来へずれるのを避けられるためである。音声の時計が飛んだとみなせる動き (直近 0.5 秒の最小値が適用中の補正より 200 ms 以上大きい状態が 0.5 秒続く) では、2 秒の窓が埋まるのを待たずに取り直す。一定のずれ・ドリフト・段差のいずれでも、送る TIMESTAMP の間隔は `AudioData.timestamp` の間隔のままになる
+  - 配信側の観測 (現在値・最小・最大・10 秒 / 60 秒の傾き・足している補正・観測数) を `AudioStats.timestampOffset` として公開し、moqt-devtools の Publisher 統計と「Copy for LLM」にも出す。一定なら傾きが 0、ドリフトなら 0 から離れ、段差なら最小と最大の差が開く
+  - @voluntas
+
 ## 2026.2.0
 
 **リリース日**: 2026-05-13

@@ -270,3 +270,7 @@ export type {
 
 // 分布の要約 (p50 / p95 / max)。映像と音声の時間の統計で共通に使う
 export type { TimingSummary } from "./timingSummary";
+
+// 音声の TIMESTAMP を壁時計へ合わせるための観測 (AudioStats.timestampOffset)。
+// 「読み出した壁時計 - AudioData.timestamp」の推移
+export type { AudioTimestampOffsetStats } from "./audioTimestampClock";

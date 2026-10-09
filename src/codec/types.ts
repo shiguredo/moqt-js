@@ -4,6 +4,7 @@
 
 import type { PlaybackDelayBreakdown } from "../playbackTimeline";
 import type { AudioPlayoutTimingSnapshot } from "../audioPlayoutTimingStats";
+import type { AudioTimestampOffsetStats } from "../audioTimestampClock";
 
 // オーディオコーデック
 export type AudioCodecType = "opus" | "aac";
@@ -22,6 +23,10 @@ export interface AudioStats {
   framesSent: number;
   bytesSent: number;
   currentGroupId: number;
+  // 音声の TIMESTAMP を壁時計へ合わせるための観測。
+  // 「読み出した壁時計 - AudioData.timestamp」の現在値・最小・最大と 10 秒 / 60 秒の傾き。
+  // まだ観測していないときは null
+  timestampOffset: AudioTimestampOffsetStats | null;
 }
 
 // 受信側オーディオ統計

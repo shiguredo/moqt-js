@@ -3,6 +3,7 @@ import type { PanelHttpVersion } from "../utils/httpVersion";
 import type { PlaybackTimingSnapshot } from "../utils/playbackTimingStats";
 import type { PublishTimingSnapshot } from "../utils/publishTimingStats";
 import type { AudioPlayoutTimingSnapshot } from "../../../src/audioPlayoutTimingStats.ts";
+import type { AudioTimestampOffsetStats } from "../../../src/audioTimestampClock.ts";
 import type { StatusType } from "../types";
 import {
   audioBytesSent,
@@ -16,6 +17,7 @@ import {
   audioMeterRmsDbfsRight,
   audioObjectsSent,
   audioPublisher,
+  audioTimestampClock,
   bytesSent,
   catalog,
   chunksEncoded,
@@ -126,6 +128,13 @@ export interface PublisherAudioStats {
   /** 直近に送った Object の LOC Audio Level (-dBov) と voice activity */
   lastSentLevel: number | null;
   lastSentVoiceActivity: boolean | null;
+  /**
+   * 音声の TIMESTAMP を壁時計へ合わせるための観測
+   *
+   * 「読み出した壁時計 - `AudioData.timestamp`」の現在値・最小・最大と 10 秒 / 60 秒の傾き。
+   * 一定なら傾きが 0、ドリフトなら傾きが 0 から離れ、段差なら最小と最大の差が開く
+   */
+  timestampOffset: AudioTimestampOffsetStats | null;
 }
 
 /** Publisher の event timeline の状態 */
@@ -335,6 +344,7 @@ export function buildPublisherStats(): PublisherStats {
       meterRmsDbfsRight: audioMeterRmsDbfsRight.value,
       lastSentLevel: audioLevel?.level ?? null,
       lastSentVoiceActivity: audioLevel?.voiceActivity ?? null,
+      timestampOffset: audioTimestampClock.value.snapshot(),
     },
     event: {
       publishing: eventPublisher.value !== null,

@@ -158,6 +158,7 @@ const PUBLISHER_COVERAGE: CoverageExpectation = {
     audioMeterPeakDbfsRight: "audio.meterPeakDbfsRight",
     audioMeterRmsDbfsRight: "audio.meterRmsDbfsRight",
     audioMeterLevel: "audio.lastSentLevel",
+    audioTimestampClock: "audio.timestampOffset",
     eventPublisher: "event.publishing",
     eventMessagesSent: "event.messagesSent",
   },

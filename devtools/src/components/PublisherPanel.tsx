@@ -17,6 +17,15 @@ import { type PublisherStats, buildPublisherStats } from "../signals/statsSnapsh
 import { createStatsSignal, startStatsTick } from "../signals/statsTick";
 import * as pub from "../signals/publisher";
 
+/**
+ * 音声の TIMESTAMP のずれを ms で出す (小数第 1 位)
+ *
+ * 未観測は "-"。桁を揃えるため、値が変わっても表示の位置は動かない
+ */
+function formatOffsetMs(value: number | null): string {
+  return value === null ? "-" : value.toFixed(1);
+}
+
 /** FORWARD パラメータの値 (購読が paused かどうか) を表示用にする。配信していない間 (null) は「-」 */
 function formatForwardState(forwardState: boolean | null): string {
   if (forwardState === null) {
@@ -297,6 +306,51 @@ function PublisherStats({ statsSignal }: { statsSignal: ReadonlySignal<Publisher
                   stats.audio.lastSentVoiceActivity === null
                     ? "-"
                     : String(stats.audio.lastSentVoiceActivity),
+              },
+            ]}
+          />
+        </StatSection>
+
+        {/* 音声の TIMESTAMP を壁時計へ合わせるための観測。
+            「読み出した壁時計 - AudioData.timestamp」の生の値であり、一定なら傾きが 0、
+            ドリフトなら傾きが 0 から離れ、段差なら最小と最大の差が開く */}
+        <StatSection title="Timestamp">
+          <StatList
+            items={[
+              {
+                label: "offsetCurrentMs",
+                value: formatOffsetMs(stats.audio.timestampOffset?.currentMs ?? null),
+                testId: "publisher-audio-offset-current",
+              },
+              {
+                label: "offsetMinMs",
+                value: formatOffsetMs(stats.audio.timestampOffset?.minMs ?? null),
+                testId: "publisher-audio-offset-min",
+              },
+              {
+                label: "offsetMaxMs",
+                value: formatOffsetMs(stats.audio.timestampOffset?.maxMs ?? null),
+                testId: "publisher-audio-offset-max",
+              },
+              {
+                label: "offsetSlope10s",
+                value: formatOffsetMs(stats.audio.timestampOffset?.slope10sMsPerSecond ?? null),
+                testId: "publisher-audio-offset-slope-10s",
+              },
+              {
+                label: "offsetSlope60s",
+                value: formatOffsetMs(stats.audio.timestampOffset?.slope60sMsPerSecond ?? null),
+                testId: "publisher-audio-offset-slope-60s",
+              },
+              {
+                label: "offsetAppliedMs",
+                value: formatOffsetMs(stats.audio.timestampOffset?.appliedMs ?? null),
+                testId: "publisher-audio-offset-applied",
+              },
+              {
+                label: "offsetSamples",
+                value: stats.audio.timestampOffset?.samples ?? "-",
+                testId: "publisher-audio-offset-samples",
               },
             ]}
           />

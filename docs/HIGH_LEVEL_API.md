@@ -233,6 +233,23 @@ interface AudioStats {
   framesSent: number;
   bytesSent: number;
   currentGroupId: number;
+  // 音声の TIMESTAMP を壁時計へ合わせるための観測。まだ音声を 1 つも読んでいなければ null
+  timestampOffset: AudioTimestampOffsetStats | null;
+}
+
+interface AudioTimestampOffsetStats {
+  // 直近に観測した「読み出した壁時計 - AudioData.timestamp」(ミリ秒)
+  currentMs: number;
+  // 観測した最小値と最大値 (ミリ秒)
+  minMs: number;
+  maxMs: number;
+  // 直近 10 秒 / 60 秒の傾き (ミリ秒 / 秒)。一定なら 0、ドリフトなら 0 から離れる
+  slope10sMsPerSecond: number | null;
+  slope60sMsPerSecond: number | null;
+  // TIMESTAMP に足している補正 (ミリ秒)
+  appliedMs: number | null;
+  // 観測した数
+  samples: number;
 }
 
 interface VideoStats {
@@ -248,6 +265,25 @@ interface VideoStats {
   currentGroupId: number;
 }
 ```
+
+#### 音声の TIMESTAMP
+
+音声の LOC TIMESTAMP (Timescale を載せない Unix epoch マイクロ秒) は、
+`AudioData.timestamp` の刻み (サンプルの間隔) をそのまま使い、原点だけを配信側の壁時計へ
+合わせて作る。マイクや Web Audio の `AudioData.timestamp` は `performance.now()` と同じ
+時計ではなく、一定のずれのほかにドリフトや段差で動く。そのまま壁時計として
+送ると、受信側は音声が数百 ms 遅れて届いたと解釈して音声の基準の遅れが動き、jitter buffer
+の目標と映像の表示がそれに引きずられる。
+
+原点は「読み出した壁時計 - `AudioData.timestamp`」である。この値は時計のずれと
+「撮ってから読むまでの遅れ (0 以上)」の和であり、その最小値が時計のずれに最小の遅れを
+足した推定になる。配信側は直近 2 秒の最小値を補正として TIMESTAMP に足し、音声の時計が
+飛んだとみなせる動き (直近 0.5 秒の最小値が適用中の補正より 200 ms 以上大きい状態が
+続く) では、古い観測を捨てて取り直す。
+
+補正の推移は `getStats().audio.timestampOffset` で読める。一定なら傾きが 0、ドリフトなら
+傾きが 0 から離れ、段差なら最小と最大の差が開く (devtools の Publisher 統計と
+「Copy for LLM」にも出る)。
 
 ---
 

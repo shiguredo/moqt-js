@@ -11,6 +11,7 @@ import {
 } from "../utils/publishTimingStats";
 import type { AudioEncoderWrapper } from "../../../src/codec/AudioEncoder.ts";
 import { AudioLevelTimeline } from "../utils/audioLevelTimeline";
+import { AudioTimestampClock } from "../../../src/audioTimestampClock.ts";
 import type { AudioFormat } from "../utils/microphone";
 
 // Publisher の状態
@@ -121,6 +122,11 @@ export const audioFrameReader = signal<ReadableStreamDefaultReader<AudioData> | 
 // 符号化へ渡した音声のサンプルの記録。送る Object の LOC Audio Level を求める
 // (utils/audioLevelTimeline.ts)。音声の配信を始めるたびに作り直す
 export const audioLevelTimeline = signal(new AudioLevelTimeline());
+// 音声の LOC TIMESTAMP を配信側の壁時計へ合わせるための観測。マイクや Web Audio の
+// `AudioData.timestamp` は壁時計と同じ時計ではないため、読み出した壁時計との
+// 差の最小値へ原点だけを合わせる (ライブラリの src/audioTimestampClock.ts)。
+// 音声の配信を始めるたびに作り直す
+export const audioTimestampClock = signal(new AudioTimestampClock());
 // 配信側の音声メーター。取っている音の peak / RMS (dBFS) と直近の波形は Preview 中から
 // 更新する (hooks/publisherAudioMeter.ts)。左右のチャンネルを別々に持ち、モノラルの
 // ときは右が null のままになる。LOC Audio Level は直近に送った Object の値
