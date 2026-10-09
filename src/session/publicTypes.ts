@@ -221,6 +221,20 @@ export interface ConnectOptions {
   dataStreamMaxBufferBytes?: number;
 
   /**
+   * 確立後の受信データストリームがセッション全体で保持してよいバッファの合計上限 (バイト)
+   *
+   * draft-ietf-moq-transport-22 §12.5 (EXCESSIVE_LOAD 0x9):
+   * ストリーム単位の `dataStreamMaxBufferBytes` だけでは、上限近くまで溜めた
+   * ストリームを同時に何本も開かれると合計が上限 × 本数まで増える。ストリームの
+   * 本数はピアが決められるため、すべての受信データストリームが保持するバイト数の
+   * 合計にも上限を設ける。合計がこの値を超えたら、超過の原因になったストリームを
+   * EXCESSIVE_LOAD として打ち切り、他のストリームとセッションは継続する
+   * (アプリへは失敗として通知する)。0 以下を指定すると上限を設けない
+   * (既定は 67,108,864 バイト = 64 MiB)。
+   */
+  dataStreamMaxTotalBufferBytes?: number;
+
+  /**
    * MOQT_IMPLEMENTATION Setup Option (Option Type 0x07) の送信制御
    * draft-ietf-moq-transport-22 §9.1.5 (MOQT IMPLEMENTATION) /
    * §15.8 (Implementation Identification Fingerprinting)

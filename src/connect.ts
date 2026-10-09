@@ -122,6 +122,9 @@ export async function connect(
     ...(options?.dataStreamMaxBufferBytes !== undefined
       ? { dataStreamMaxBufferBytes: options.dataStreamMaxBufferBytes }
       : {}),
+    ...(options?.dataStreamMaxTotalBufferBytes !== undefined
+      ? { dataStreamMaxTotalBufferBytes: options.dataStreamMaxTotalBufferBytes }
+      : {}),
   });
 
   return session;
