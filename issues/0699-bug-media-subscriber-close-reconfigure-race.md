@@ -1,7 +1,7 @@
 # close 後に in-flight の reconfigure が完了すると audioDecoderConfigured / videoDecoderConfigured が true に戻る
 
 - Created: 2026-09-24
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-10-09
 - Branch: feature/fix-media-subscriber-close-reconfigure-race
 - Polished: 2026-09-24
 
@@ -63,4 +63,12 @@ Node のテストで再現できる。`videoDecoderConfigured = true` と `video
 
 ## 解決方法
 
-{未着手}
+- `src/createMediaSubscriber.ts` の `MediaSubscriberImpl` に閉状態のフラグ (`closed`) を足し、`close()` の同期部分 (解放の await より前) で立てる。`state` が `"closed"` になるのは解放の完了後であり、解放の await 中を `state` では判定できないため
+- `handleAudioObject` / `handleVideoObject` / `receiveVideoObject` の先頭で閉状態を判定し、解放の await 中に届いた Object は統計 (`framesReceived` / `bytesReceived`) に数えず `decode` にも渡さず、映像は Group の保留にも入れない
+- `reconfigureAudioDecoder` / `reconfigureVideoDecoder` は configure の発行前と完了後の両方で閉状態を判定し、閉じた後は configure を発行せず、in-flight の configure が成功しても `lastApplied*Config` の更新と `*DecoderConfigured = true` を行わない。configure が中止 (reject) した場合も閉じた購読では `onError` に通知しない
+- `applyInitialAudioConfig` / `applyInitialVideoConfig` は閉じた後は configure を発行せず保留分の解放だけを行う
+- 解放が失敗して終端 (`"closed"`) へ進まなかった場合も閉じたままにする。`start()` の入口で閉状態を戻し、`state` が `"active"` のままであれば `stop()` を経て `start()` で作り直せる (`state` が元から `"created"` / `"stopped"` であれば `start()` だけでよい。`"subscribing"` のままの場合は `close()` を呼び直して残りの解放と終端遷移を進める)
+- `docs/HIGH_LEVEL_API.md` の MediaSubscriber の節とメソッド表、`src/codec/types.ts` の `MediaSubscriber.close()` の JSDoc に、閉状態の契約 (呼ぶと解放の完了を待たずに閉じたものとして扱う / 解放中の Object は統計に数えず復号にも渡さない / 解放に伴って中止された configure は通知しない / 解放失敗時の作り直し) を書いた
+- テスト: `src/createMediaSubscriber.test.ts` に、映像・音声の再構成の完了が解放より後でも状態を戻さないこと、解放の途中に届いた映像・音声 Object を数えず decode しないこと、閉じた後の `applyInitial*Config` が configure を発行しないこと、解放の途中で configure が中止しても `onError` を通知しないこと (閉じていない購読では通知される対照を含む)、解放の失敗後に `stop()` を経て `start()` したら閉状態を戻すことを足した (既存 144 件は不変)
+- ピア起点の close (`handleSessionClose`) と `stop()` の解放では閉状態を立てないため、その間に届いた Object は従来どおり数えて復号へ渡し、中止された configure は通知される (`stop()` とピア起点の close は購読を閉じないため)。これらの経路の同型の残りは本 issue の対象外とした
+- `npx vp check` / `npx tsc --noEmit` / `npx vp test --run` / `npx vp run build` が通ることを確認した (199 ファイル / 3684 テスト)
