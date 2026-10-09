@@ -48,6 +48,15 @@ const DEVTOOLS_URL = "http://localhost:5173/index.html";
  */
 const OBSERVE_SECONDS = 15;
 
+/**
+ * 配信側の TIMESTAMP の補正が落ち着いたとみなす、値が動かない時間 (ミリ秒)
+ *
+ * 補正は「読み出した壁時計 - `AudioData.timestamp`」の直近の窓 (2 秒、
+ * `AUDIO_TIMESTAMP_OFFSET_WINDOW_MS`) の最小値である。2 秒続けて同じ値なら、窓 1 つ分が
+ * 同じ値で埋まったことになり、最小値が定まったとみなせる
+ */
+const TIMESTAMP_OFFSET_STABLE_MS = 2_000;
+
 /** 受信側の音声の基準の遅れとして許す範囲 (ミリ秒) */
 const AUDIO_BASE_DELAY_MIN_MS = 10;
 const AUDIO_BASE_DELAY_MAX_MS = 30;
@@ -88,6 +97,47 @@ async function openDevtoolsPage(page: Page): Promise<void> {
   await page.waitForFunction(() =>
     Boolean((window as unknown as { moqtDevTools?: unknown }).moqtDevTools),
   );
+}
+
+/**
+ * 配信側の音声の TIMESTAMP の補正が落ち着くまで待つ
+ *
+ * 補正 (`publisher.audio.timestampOffset.appliedMs`) は音声フレームを読み出すたびに
+ * 見直され、実測では公開から 4 秒ほど数 µs から 100 µs ずつ動いてから落ち着いた。
+ *
+ * 購読側は、復号へ渡した TIMESTAMP と復号の出力の TIMESTAMP が完全に一致することを
+ * 前提に対応表を引く (devtools の useSubscriber)。復号の出力の TIMESTAMP は入力の
+ * TIMESTAMP からサンプル数で組み立て直されるため、購読の途中で補正が動くと両者が数 µs
+ * ずれて一致しなくなる。ずれたままだと音が共有の時間軸へ記録されず、基準の遅れが
+ * 観測されないまま 30 秒を待ち切ることになる (実測で 5 回に 1 回落ちていた)。
+ * 動かなくなってから購読する
+ */
+async function waitForTimestampOffsetStable(page: Page): Promise<void> {
+  let previousMs: number | null = null;
+  let unchangedSinceMs = 0;
+  await expect
+    .poll(
+      async () => {
+        const stats = await readStats(page);
+        const appliedMs = stats.publisher.audio.timestampOffset?.appliedMs ?? null;
+        if (appliedMs === null) {
+          return false;
+        }
+        const nowMs = performance.now();
+        if (appliedMs !== previousMs) {
+          previousMs = appliedMs;
+          unchangedSinceMs = nowMs;
+          return false;
+        }
+        return nowMs - unchangedSinceMs >= TIMESTAMP_OFFSET_STABLE_MS;
+      },
+      {
+        message: "配信側の TIMESTAMP の補正が落ち着くのを待つ",
+        timeout: 30_000,
+        intervals: [500],
+      },
+    )
+    .toBe(true);
 }
 
 /** 配信側と購読側の統計を読む */
@@ -137,6 +187,10 @@ test("実リレー経由で同じブラウザから音声を配信し、受信�
       },
     )
     .toBeGreaterThan(0);
+
+  // 配信側の補正が落ち着いてから購読する (補正が動いている間に購読すると、受信側が
+  // 音声を共有の時間軸へ記録できず、基準の遅れが観測されない)
+  await waitForTimestampOffsetStable(page);
 
   // 同じページで購読する
   await page.getByTestId("subscriber-subscribe-button").click();
