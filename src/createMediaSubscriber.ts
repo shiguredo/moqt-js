@@ -30,16 +30,13 @@ import { AudioDecoderWrapper } from "./codec/AudioDecoder";
 import { VideoDecoderWrapper } from "./codec/VideoDecoder";
 import { VideoDecodeOrder, priorObjectIdGapOf } from "./videoDecodeOrder";
 import { GroupSwitchGate } from "./groupSwitchGate";
-import {
-  arrivalPlayoutDelaySeconds,
-  AudioClockBridge,
-  AudioPlayoutScheduler,
-  concealmentEndGain,
-} from "./audioPlayout";
+import type { AudioClockBridge, AudioPlayoutScheduler } from "./audioPlayout";
 import { AudioPlayoutTimingStats, AUDIO_PLAYOUT_TIMING_WINDOW_MS } from "./audioPlayoutTimingStats";
-import { compressSamples, concealSamples, type AudioSamples } from "./audioTimeStretch";
+// 復号した音声の再生の組み立ては devtools と共有する (到着基準の遅れ・閉ループ・計器を
+// 1 か所に置くため、src/audioPlayoutSession.ts が持つ)
+import { AudioPlayoutSession, type AudioPlayoutTimestampKind } from "./audioPlayoutSession";
 import { JITTER_BUFFER_MAX_QUEUED_FRAMES, PlayoutBuffer } from "./playoutBuffer";
-import { AUDIO_PLAYOUT_DELAY_FLOOR_MS, PlaybackTimeline } from "./playbackTimeline";
+import { PlaybackTimeline } from "./playbackTimeline";
 import { DEFAULT_AUDIO_SAMPLE_RATE, resolveAudioChannelCount } from "./codec/config";
 import type {
   AudioCodecType,
@@ -453,13 +450,6 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   private outputStream: MediaStream | null = null;
   private audioContext: AudioContext | null = null;
   private audioDestination: MediaStreamAudioDestinationNode | null = null;
-  // 復号した音声を鳴らす時刻を決める。AudioContext を作るたびに基準を作り直す
-  private readonly audioPlayout = new AudioPlayoutScheduler();
-  // 直前に鳴らした音のサンプルとサンプルレート。欠落した区間の補間を作るために保持する
-  private previousAudioChannels: AudioSamples[] | null = null;
-  private previousAudioSampleRate = 0;
-  // AudioContext の時計と performance.now() の対応。予約のたびに取り直す
-  private readonly audioClockBridge = new AudioClockBridge();
   // 音声の再生の観測 (鳴るはずの時刻・届いた時刻・鳴り始める時刻と、鳴らなかった量)。
   // 鳴らなかった音がどこの段で落ちているかを数値で切り分けるために持つ
   // (src/audioPlayoutTimingStats.ts)。購読をやり直しても消えない
@@ -467,6 +457,23 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     AUDIO_PLAYOUT_TIMING_WINDOW_MS,
     performance.timeOrigin,
   );
+  // 復号した音声を鳴らす組み立て (時間軸への記録・目標の決定・予約・計器への記録) は
+  // devtools と共有する (src/audioPlayoutSession.ts)。組み立てを 2 か所へ置くと、到着基準の
+  // 遅れ・閉ループ・計器の修正のたびに両方を直すことになり、片方だけ直すと挙動がずれる。
+  // AudioContext を作るたびに reset() で基準を作り直す
+  private readonly audioPlayoutSession = new AudioPlayoutSession({
+    timing: this.audioPlayoutTiming,
+  });
+  // 予約 (鳴らす時刻の決定) と時計の対応は、統計 (getStats / avSync) と検証用の制御口
+  // (src/createMediaSubscriber.test.ts) が直接読む。組み立ては共有実装が持つ
+  /** 音声を鳴らす時刻の予約 (基準を取り直した回数と捨てた音の数を読む) */
+  private get audioPlayout(): AudioPlayoutScheduler {
+    return this.audioPlayoutSession.playout;
+  }
+  /** AudioContext の時計と performance.now() の対応 */
+  private get audioClockBridge(): AudioClockBridge {
+    return this.audioPlayoutSession.clock;
+  }
   // 音声と映像で共有する表示時刻の時間軸。同じ targetLatency と同じ遅れを使う
   private readonly playbackTimeline = new PlaybackTimeline({
     timeOriginMs: performance.timeOrigin,
@@ -894,23 +901,6 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   }
 
   /**
-   * 音声の目標遅延を閉ループで決めるための観測を渡す
-   *
-   * 鳴らした (または並べすぎで捨てた) 直後に呼ぶ。「予定をどれだけ過ぎて鳴ったか」
-   * 「到着から鳴り始めるまで」「並べすぎで捨てた量」から、時間軸が目標を増減する。目標を
-   * 動かすのは毎秒 1 回までであり、呼ぶ側は間隔を気にしない (`src/audioDelayFeedback.ts`)
-   *
-   * NetEq の学習 (`src/audioDelayManager.ts`) は直近で最も早く届いた音との差しか見ないため、
-   * 到着から鳴るまでの経路 (復号・予約・出力のバッファ) の分を一様に遅れることを見つけられ
-   * ない。この観測がその分を補う
-   *
-   * @param atMs - 観測した時刻 (`performance.now()`、ミリ秒)
-   */
-  private observeAudioDelayFeedback(atMs: number): void {
-    this.playbackTimeline.observeAudioPlayout(this.audioPlayoutTiming.audioDelayFeedback(atMs));
-  }
-
-  /**
    * 音声と映像の同期の推定値
    *
    * 片方しか購読していない、トラックが解決できていない、またはどちらかが壁時計の
@@ -996,10 +986,11 @@ export class MediaSubscriberImpl implements MediaSubscriber {
    * videoPlayoutStopped / videoFrameDrain / audioWallClockSeen / videoWallClockSeen /
    * audioTimestampKinds / videoTimestampKinds / 保留中の Object (音声 / 映像 / Group の
    * 切り替え) と上限超過の通知済みフラグ / 表示待ちの映像フレーム (videoPlayout) /
-   * 共有の時間軸 (playbackTimeline) / 時計の対応 (audioClockBridge) である。
+   * 共有の時間軸 (playbackTimeline) と、音声の再生の時計の対応と直前の音
+   * (audioPlayoutSession の releaseAudioContext) である。
    * 統計 (audioStats / videoStats) は publisher と同じく再 start へ引き継ぐ。
-   * 音声の再生スケジューラ (audioPlayout) は AudioContext と対で作り直すため、
-   * ここではなく createOutputStream が初期化する。
+   * 音声の再生の予約の基準 (audioPlayoutSession) は AudioContext と対で作り直すため、
+   * ここでは消さず (統計の playoutLatenessMs が読む)、createOutputStream が reset する。
    * 破棄の段階失敗は後続を止めず、最後に最初の失敗を throw する。
    * 解放のあとに届く旧 session の close 通知で state と onClose が動くことはない
    * (世代番号を進めるため)。
@@ -1088,7 +1079,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     // AudioContext を閉じる
     // 予約済みでまだ鳴り始めていない音は、閉じると鳴らないまま切り捨てられる。この分は
     // どの統計にも現れないため、閉じる直前に数える
-    this.audioPlayoutTiming.recordStopped(performance.now());
+    this.audioPlayoutSession.recordStopped();
     const audioContext = this.audioContext;
     this.audioContext = null;
     await guard(() => audioContext?.close());
@@ -1121,12 +1112,11 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     // 表示待ちの映像を破棄し、予約した選択を取り消す。次の購読で作り直す
     this.clearVideoPlayout();
     this.videoPlayoutStopped = false;
-    // 共有の時間軸と、AudioContext ごとの時計の対応も作り直す (AudioClockBridge.reset の JSDoc を参照)
+    // 共有の時間軸を作り直し、AudioContext を閉じた後始末をする (時計の対応と直前の音を
+    // 消す。予約の基準は統計 (playoutLatenessMs) が読むため残す。AudioClockBridge.reset の
+    // JSDoc を参照)
     this.playbackTimeline.reset();
-    this.audioClockBridge.reset();
-    // 直前の音の保持も消す (AudioContext を閉じた後に補間を作らない)
-    this.previousAudioChannels = null;
-    this.previousAudioSampleRate = 0;
+    this.audioPlayoutSession.releaseAudioContext();
     this.audioTimestampKinds.clear();
     this.audioWallClockSeen = false;
     this.videoWallClockSeen = false;
@@ -1618,12 +1608,11 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       this.audioContext = new AudioContext({
         sampleRate,
       });
-      this.audioPlayout.reset();
-      this.previousAudioChannels = null;
-      this.previousAudioSampleRate = 0;
-      // AudioContext を作り直したため、再生の基準もすべて作り直す (時計の対応は AudioClockBridge.reset の JSDoc を参照)
+      // AudioContext を作り直したため、音声の再生の基準 (予約・時計の対応・直前の音) と
+      // 共有の時間軸も作り直す (AudioPlayoutSession.reset と AudioClockBridge.reset の
+      // JSDoc を参照)
+      this.audioPlayoutSession.reset();
       this.playbackTimeline.reset();
-      this.audioClockBridge.reset();
       // ブラウザの自動再生ポリシー対応。resume() の失敗は他に通知先が無く、
       // 放置すると未処理の rejection になるため onError へ 1 回流す。
       // 通知の失敗でもこの経路を reject させない (返値の Promise を捨てるため、
@@ -2370,220 +2359,47 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     this.videoDecoder.decode(obj.payload, isKeyFrame ? "key" : "delta", timestamp, 0);
   }
 
+  /**
+   * 復号した音声を鳴らす
+   *
+   * 再生の組み立て (時間軸への記録・目標の決定・予約・計器への記録) は devtools と共有する
+   * `AudioPlayoutSession` が持つ (src/audioPlayoutSession.ts)。ここは、購読ごとの状態
+   * (復号の出力の timestamp の種類と、鳴らす先の取得) を共有実装へ渡すだけにする。
+   *
+   * 鳴らす先が無いとき (音声を再生しない購読、AudioContext を閉じた後) は何もせずに閉じる。
+   * 失敗は onError へ通知する (共有実装は throw しない)。
+   */
   private handleAudioDecodedData(data: { data: AudioData }): void {
-    if (!this.audioContext || !this.audioDestination) {
-      data.data.close();
+    const audioData = data.data;
+    const context = this.audioContext;
+    const destination = this.audioDestination;
+    if (!context || !destination) {
+      audioData.close();
       return;
     }
 
-    // AudioData を AudioBuffer に変換して再生
-    const audioData = data.data;
-    // 鳴らすと決めたが鳴らし始める前に失敗した音を数えるための状態。失敗はこれまで
-    // onError にしか現れず、鳴らなかった量として数えられていなかった
-    let planned: { arrivalMs: number; targetMs: number | null; durationMs: number } | null = null;
-    let played = false;
+    // 復号へ渡した timestamp の種類を引く。Timescale がある TIMESTAMP は壁時計ではない
+    // (draft-ietf-moq-loc-04 §2.3.1.1 / §2.3.1.2)
+    const kind = this.audioTimestampKinds.get(audioData.timestamp);
+    this.audioTimestampKinds.delete(audioData.timestamp);
+    const timestampKind: AudioPlayoutTimestampKind = kind ?? "none";
+    // 直近の音が壁時計の TIMESTAMP を持つか (同期の推定を出せるかの判定に使う)
+    this.audioWallClockSeen = timestampKind === "wallClock";
+
     try {
-      const numberOfChannels = audioData.numberOfChannels;
-      const sampleRate = audioData.sampleRate;
-      const numberOfFrames = audioData.numberOfFrames;
-      // 到着 (復号の出力を受け取った) 時刻。時間軸への記録と観測値の両方に同じ値を使う
-      const arrivalMs = performance.now();
-
-      // 復号の出力を共有の時間軸へ記録し、映像と同じ式で目標の時刻を求める
-      // (src/playbackTimeline.ts)。壁時計の TIMESTAMP を持たない音は目標を持たず、
-      // 到着基準の並べ方にフォールバックする
-      const kind = this.audioTimestampKinds.get(audioData.timestamp);
-      this.audioTimestampKinds.delete(audioData.timestamp);
-      const isWallClock = kind === "wallClock";
-      // 直近の音が壁時計の TIMESTAMP を持つか (同期の推定を出せるかの判定に使う)
-      this.audioWallClockSeen = isWallClock;
-      if (isWallClock) {
-        this.playbackTimeline.observe(
-          "audio",
-          performance.timeOrigin + arrivalMs,
-          audioData.timestamp,
-        );
+      const result = this.audioPlayoutSession.handleDecodedAudio({
+        data: audioData,
+        timestampKind,
+        timeline: this.playbackTimeline,
+        // ライブラリは jitter buffer を常に有効として扱う
+        useTimeline: true,
+        // 映像も購読しているときだけ目標の時刻を守る。音声だけのときは取り直して連続を優先する
+        enforceTarget: this.videoTrackInfo !== null,
+        output: { context, destination },
+      });
+      if (result.status === "error") {
+        this.callbacks.onError?.(result.error);
       }
-      // AudioContext の時計と performance.now() の対応を取り直す。まだ描画が始まって
-      // いない (currentTime が 0 で getOutputTimestamp も 0) ときは対応を作らない
-      const mapping = this.audioContext.getOutputTimestamp();
-      const contextTime = mapping.contextTime ?? 0;
-      const performanceTime = mapping.performanceTime ?? 0;
-      const hasMapping = contextTime !== 0 || performanceTime !== 0;
-      if (hasMapping || this.audioContext.currentTime > 0) {
-        this.audioClockBridge.update(
-          hasMapping ? { contextTime, performanceTime } : null,
-          this.audioContext.currentTime,
-          arrivalMs,
-        );
-      }
-      const targetMs = isWallClock
-        ? this.playbackTimeline.presentationPerformanceMs("audio", audioData.timestamp)
-        : null;
-      const targetStartSeconds =
-        targetMs === null ? null : this.audioClockBridge.toAudioSeconds(targetMs);
-      // 予約に使う今の時刻 (`AudioContext.currentTime`)。鳴り始める時刻を performance 軸へ
-      // 換算するときの基準にも使うため、1 回だけ読む
-      const contextNowSeconds = this.audioContext.currentTime;
-      // 到着した音が「まだ鳴っていない位置」(`AudioContext.currentTime` の秒)。AudioContext の
-      // 時計は、既に出力のバッファへ積まれた分だけ実際に鳴る位置より先に進む。到着基準の
-      // 遅れをこれではなく今 (currentTime) から数えると、実際に鳴るのは「到着 + 遅れ +
-      // バッファの分」になる (実測では 100 ms の目標に対して 195.5 ms 鳴っていた)
-      const arrivalSeconds = this.audioClockBridge.toAudioSeconds(arrivalMs) ?? contextNowSeconds;
-      const durationSeconds = numberOfFrames / sampleRate;
-      // 音声を観測していないとき (壁時計の TIMESTAMP を持たない / Track の TIMESCALE を
-      // 使う) は共有の再生遅延に下限が入らないため、ここで下限を必ず適用する
-      const playoutDelaySeconds =
-        Math.max(
-          this.playbackTimeline.playoutDelayMs ?? AUDIO_PLAYOUT_DELAY_FLOOR_MS,
-          AUDIO_PLAYOUT_DELAY_FLOOR_MS,
-        ) / 1_000;
-      const decision = this.audioPlayout.schedule(
-        contextNowSeconds,
-        audioData.timestamp,
-        durationSeconds,
-        {
-          targetStartSeconds,
-          // 到着した音がまだ鳴っていない位置。到着基準の遅れはここから数える
-          arrivalSeconds,
-          // 映像も購読しているときだけ目標を守る。音声だけのときは取り直して連続を優先する
-          enforceTarget: this.videoTrackInfo !== null,
-          delaySeconds: playoutDelaySeconds,
-          // 目標を使えないとき (到着基準) の再生の遅れ。共有の時間軸が学習した値は、
-          // TIMESTAMP が壁時計からずれているトラックではそのずれの分だけ大きく育つため、
-          // 上限で切った小さな値を使う
-          arrivalDelaySeconds: arrivalPlayoutDelaySeconds(playoutDelaySeconds),
-          presentationDelaySeconds:
-            (this.playbackTimeline.presentationExtraDelayMs ?? AUDIO_PLAYOUT_DELAY_FLOOR_MS) /
-            1_000,
-        },
-      );
-      if (decision.kind === "drop") {
-        // 鳴らさなかった音を、理由と長さと一緒に数える。累積のカウンタ (`playoutDrops`) は
-        // 件数しか持たず、何ミリ秒分の音が鳴らなかったかが分からない
-        const missedAtMs = performance.now();
-        this.audioPlayoutTiming.recordMiss({
-          atMs: missedAtMs,
-          reason: decision.reason,
-          durationMs: durationSeconds * 1_000,
-          targetMs,
-          arrivalMs,
-        });
-        // 並べすぎで捨てた量は、目標を増やす判断にも使う
-        this.observeAudioDelayFeedback(missedAtMs);
-        return;
-      }
-      // 鳴らすと決めたが、鳴らし始める前に失敗したら数える (catch 句)
-      planned = { arrivalMs, targetMs, durationMs: durationSeconds };
-      // 鳴り始める時刻 (performance 軸)。時計の対応がまだ無いときは、予約に使った
-      // (performance.now(), currentTime) の組で換算する (`AudioClockBridge` の代用と
-      // 同じ求め方)
-      const startMs =
-        this.audioClockBridge.toPerformanceMs(decision.startAt) ??
-        arrivalMs + (decision.startAt - contextNowSeconds) * 1_000;
-
-      // 目標を過ぎて届いた分は、波形の周期を使って詰める (NetEq の accelerate)。遅れて
-      // 届いた音を捨てると音が途切れるため、鳴らす時刻をずらした分だけ詰めて目標へ戻す
-      const channels: AudioSamples[] = [];
-      for (let channel = 0; channel < numberOfChannels; channel++) {
-        const channelData = new Float32Array(numberOfFrames);
-        audioData.copyTo(channelData, { planeIndex: channel, format: "f32-planar" });
-        channels.push(channelData);
-      }
-      const stretched =
-        decision.compressSeconds > 0
-          ? compressSamples(channels, sampleRate)
-          : { channels, lengthChangeSamples: 0 };
-      // 実際に詰められた長さを返す (詰められなかった分は遅れとして残る)
-      this.audioPlayout.confirmStretch(-stretched.lengthChangeSamples / sampleRate);
-
-      // 欠落した区間を、直前に鳴らした音の末尾を伸ばして埋める (src/audioTimeStretch.ts)。
-      // 実際に補間した長さだけを統計へ返す
-      let concealedSeconds = 0;
-      if (decision.gapSeconds > 0 && this.previousAudioChannels !== null) {
-        // 長い補間ほど末尾の振幅を下げる (繰り返しの音を目立たなくする)
-        const endGain = concealmentEndGain(decision.gapSeconds);
-        const concealed = concealSamples(
-          this.previousAudioChannels,
-          this.previousAudioSampleRate,
-          decision.gapSeconds,
-          endGain,
-        );
-        const concealedFrames = concealed.channels[0]?.length ?? 0;
-        if (concealedFrames > 0) {
-          const concealedBuffer = this.audioContext.createBuffer(
-            concealed.channels.length,
-            concealedFrames,
-            this.previousAudioSampleRate,
-          );
-          for (let channel = 0; channel < concealed.channels.length; channel++) {
-            concealedBuffer.copyToChannel(
-              concealed.channels[channel] ?? new Float32Array(concealedFrames),
-              channel,
-            );
-          }
-          const concealedSource = this.audioContext.createBufferSource();
-          concealedSource.buffer = concealedBuffer;
-          concealedSource.connect(this.audioDestination);
-          concealedSource.start(decision.gapStartSeconds);
-          concealedSeconds = concealed.generatedSamples / this.previousAudioSampleRate;
-        }
-      }
-      this.audioPlayout.confirmConcealment(concealedSeconds);
-
-      const frames = stretched.channels[0]?.length ?? numberOfFrames;
-      const audioBuffer = this.audioContext.createBuffer(numberOfChannels, frames, sampleRate);
-
-      // 各チャンネルのデータをコピー
-      for (let channel = 0; channel < numberOfChannels; channel++) {
-        const channelData = stretched.channels[channel] ?? new Float32Array(frames);
-        audioBuffer.copyToChannel(channelData, channel);
-      }
-
-      // AudioBufferSourceNode で、決めた時刻に再生
-      const source = this.audioContext.createBufferSource();
-      source.buffer = audioBuffer;
-      source.connect(this.audioDestination);
-      source.start(decision.startAt);
-      // 鳴らすと決めた音を記録する。長さは詰めた後 (実際に鳴る長さ) である
-      played = true;
-      this.audioPlayoutTiming.recordPlay(
-        arrivalMs,
-        targetMs,
-        startMs,
-        (frames / sampleRate) * 1_000,
-        decision.basis,
-      );
-      // 実際に鳴った結果 (予定をどれだけ過ぎたか) を、目標を決める閉ループへ渡す
-      this.observeAudioDelayFeedback(performance.now());
-
-      // 次の音の補間のために、実際に鳴らしたサンプルを保持する
-      this.previousAudioChannels = stretched.channels;
-      this.previousAudioSampleRate = sampleRate;
-
-      // 実際に鳴らす時刻を実績として記録する (同期ずれの推定に使う)
-      if (isWallClock) {
-        const presentedMs = this.audioClockBridge.toPerformanceMs(decision.startAt);
-        if (presentedMs !== null) {
-          this.playbackTimeline.recordPresentation(
-            "audio",
-            audioData.timestamp,
-            BigInt(Math.round((performance.timeOrigin + presentedMs) * 1_000)),
-          );
-        }
-      }
-    } catch (error) {
-      // 鳴らす準備の途中で失敗した音は、これまで onError にしか現れなかった
-      if (planned !== null && !played) {
-        this.audioPlayoutTiming.recordMiss({
-          atMs: performance.now(),
-          reason: "error",
-          durationMs: planned.durationMs * 1_000,
-          targetMs: planned.targetMs,
-          arrivalMs: planned.arrivalMs,
-        });
-      }
-      this.callbacks.onError?.(error instanceof Error ? error : new Error(String(error)));
     } finally {
       audioData.close();
     }
