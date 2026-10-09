@@ -1,7 +1,7 @@
 # Media Subscriber の保留キューに上限が無く Object を保持し続ける
 
 - Created: 2026-09-24
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-10-09
 - Branch: feature/fix-media-subscriber-pending-queue-cap
 - Polished: 2026-09-24
 
@@ -53,4 +53,12 @@ closed の `0649-bug-media-subscriber-track-property-config.md` で、Track Prop
 
 ## 解決方法
 
-{未着手}
+- `src/createMediaSubscriber.ts` に `PendingObjectQueueOptions` (export interface) と `DEFAULT_PENDING_OBJECT_QUEUE_OPTIONS` (export const、512 件 / 1 MiB) を足し、`MediaSubscriberOptions.pendingObjectQueue` から上書きできるようにした。型と既定値は `src/index.ts` からも参照できる (`pendingSubgroup` と同じ形)。0 以下で上限なしの規約は既存の `dataStreamMaxBufferBytes` と同じ
+- 保留キューへの追加を `holdPendingObject` 1 箇所に閉じ、件数 (`objects.length >= maxObjects`) とバイト数 (`state.bytes > maxBytes`。上限ちょうどは保持) の両方で判定する。件数上限は Object 1 件あたりの固定費 (MoqtObject / Uint8Array / 配列の要素) を抑えるために併用する
+- バイト数は payload と properties の長さの合計で数える (受信統計の `bytesReceived` と同じ定義)。payload だけを数えると、properties が大きい Object がバイト上限に触れずに保持され続けるため
+- 上限を超えた Object は保持せず破棄し、受信統計 (`framesReceived` / `bytesReceived`) には加算しない (保留中の Object も解放まで数えない)。超過は `onError` で通知するが、キューごとに購読期間あたり 1 回だけにする (音声と映像が同時に溢れれば 1 購読期間に最大 2 回)。通知済みフラグは購読の開始と `disposeAllResources` の破棄経路で解除する
+- 上限内の Object は従来どおり初期 configure の完了後に到着順で処理する。`close` の保留分破棄とキュー / バイト数のリセットも従来どおり
+- `docs/HIGH_LEVEL_API.md` に `pendingObjectQueue` と保留キューの上限・通知・統計の扱いを書いた
+- テスト: `src/createMediaSubscriber.test.ts` に、既定値の export、件数上限、バイト上限 (合計ちょうどの保持 / properties だけで超過する破棄)、負の上限で無制限、音声と映像の両方が溢れたときの通知 2 回、購読期間ごとの解除、close での破棄を足した
+- 本 issue の完了条件にある「同じ購読期間中に 2 回目以降の通知が出ない」は、実装・テスト・docs では「キューごとに 1 回 (音声と映像が同時に溢れれば最大 2 回)」としている (キューごとに独立したフラグを持つため)
+- `npx vp check` / `npx tsc --noEmit` / `npx vp test --run` / `npx vp run build` が通ることを確認した (199 ファイル / 3696 テスト)
