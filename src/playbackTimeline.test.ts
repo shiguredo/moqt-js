@@ -897,3 +897,82 @@ test("recordPresentation: 不感帯と write の遅れを含めても skewMs が
   );
   assert.isAtMost(maxSkewMs, MAX_PLAYOUT_DELAY_MS, "推移中のずれも上限を超えないこと");
 });
+
+// ============================================================================
+// 遅延の内訳 (解析)
+// ============================================================================
+
+// 内訳は「表示の遅れがどこで生じているか」を基準の遅れ・jitter buffer の遅延・同期の制御が
+// 足した分に分けて出す。音声と映像の遅れを比べて改善するための値であり、合計は表示の遅れと
+// 一致する (上限で切られていないとき)
+test("delayBreakdown: 表示の遅れを基準と jitter buffer と同期の制御に分けて出す", () => {
+  const timeline = createTimeline();
+  observeBothStreams(timeline, 20_000);
+  const breakdown = timeline.delayBreakdown;
+  assert.isTrue(breakdown.sharingBases, "基準を共有していること");
+  assert.equal(breakdown.unsharedReason, "none");
+  assert.equal(breakdown.baseDriftLimitMs, PLAYOUT_BASE_DRIFT_MS);
+  assert.equal(breakdown.presentationDelayCapMs, MAX_PLAYOUT_DELAY_MS);
+  for (const [name, track] of [
+    ["audio", breakdown.audio],
+    ["video", breakdown.video],
+  ] as const) {
+    const baseDelayMs = track.baseDelayMs;
+    const jitterDelayMs = track.jitterDelayMs;
+    assert.isNotNull(baseDelayMs, `${name}: 基準の遅れが決まること`);
+    assert.isNotNull(jitterDelayMs, `${name}: jitter buffer の遅延が決まること`);
+    // 表示の遅れ = 基準の遅れ + max(jitter buffer の遅延, targetLatency) + 同期の制御が足した分
+    assert.closeTo(
+      track.presentationDelayMs ?? 0,
+      (baseDelayMs ?? 0) +
+        Math.max(jitterDelayMs ?? 0, timeline.targetLatencyMs ?? 0) +
+        track.syncExtraDelayMs,
+      TOLERANCE_MS,
+      `${name}: 表示の遅れが内訳の合計と一致すること`,
+    );
+    assert.equal(
+      track.presentationDelayMs,
+      timeline.presentationDelayFor(name),
+      `${name}: presentationDelayFor と同じ値であること`,
+    );
+  }
+  // 2 つのトラックの基準の差は「音声 - 映像」である
+  assert.closeTo(
+    breakdown.baseDifferenceMs ?? 0,
+    (breakdown.audio.baseDelayMs ?? 0) - (breakdown.video.baseDelayMs ?? 0),
+    TOLERANCE_MS,
+  );
+});
+
+// まだ観測していないときは、差や動きの判定は基準がそろってから意味を持つため、
+// 理由を unobserved にする (差が 0 であるとも、動きが無いとも言えない)
+test("delayBreakdown: 未観測のときは理由を unobserved にする", () => {
+  const breakdown = createTimeline().delayBreakdown;
+  assert.isFalse(breakdown.sharingBases);
+  assert.equal(breakdown.unsharedReason, "unobserved");
+  assert.isNull(breakdown.baseDifferenceMs);
+  assert.isNull(breakdown.audio.baseDelayMs);
+  assert.isNull(breakdown.audio.jitterDelayMs);
+  assert.isNull(breakdown.audio.presentationDelayMs);
+  assert.isNull(breakdown.baseDriftMsPerSecond);
+});
+
+// 音声の TIMESTAMP がドリフトしているときは、理由を drift にして動きの速さを出す。
+// 時計のずれであることが分かれば、合わせるのをやめて到着基準へ落とす判断ができる
+// (ずれた側の表示時刻は決めないため presentationDelayMs は null になる)
+test("delayBreakdown: ドリフトでは理由と動きの速さを出し、ずれた側の表示時刻を決めない", () => {
+  const timeline = createTimeline();
+  observeDriftedStreams(timeline, 30, 20_000);
+  const breakdown = timeline.delayBreakdown;
+  assert.isFalse(breakdown.sharingBases);
+  assert.equal(breakdown.unsharedReason, "drift");
+  // 毎秒 48 ms で遅れる入力であるため、動きの速さもその値になる
+  assert.closeTo(
+    breakdown.baseDriftMsPerSecond ?? 0,
+    DRIFT_TEST_MS_PER_SECOND,
+    1,
+    "動きの速さが入力と同じであること",
+  );
+  assert.isNull(breakdown.audio.presentationDelayMs, "ずれた側 (音声) は到着基準へ落ちること");
+  assert.isNotNull(breakdown.video.presentationDelayMs, "映像は自分の基準で表示できること");
+});

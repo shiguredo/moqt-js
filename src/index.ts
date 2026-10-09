@@ -252,3 +252,10 @@ export {
   type FetchObjectContext,
   decodeFetchObjectFields,
 } from "./dataStream";
+
+// A/V 同期の遅延の内訳 (AvSyncStats.delays)。遅延の解析に使う
+export type {
+  PlaybackDelayBreakdown,
+  PlaybackTrackBreakdown,
+  PlaybackUnsharedReason,
+} from "./playbackTimeline";

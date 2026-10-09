@@ -15,6 +15,7 @@ import {
   TimingTable,
 } from "./StatsView";
 import {
+  AV_SYNC_HELP,
   DECODING_PIPELINE_HELP,
   LOSS_HELP,
   PLAYBACK_TIMING_CAPTION,
@@ -41,6 +42,11 @@ interface SubscriberPanelProps {
   subscriberId: string;
   onRemove?: () => void;
   canRemove?: boolean;
+}
+
+/** ミリ秒の値を表示用にする。まだ決まっていない値 (基準が未確立など) は "-" */
+function formatMs(value: number | null): string {
+  return value === null ? "-" : value.toFixed(1);
 }
 
 export function SubscriberPanel({
@@ -704,42 +710,118 @@ function SubscriberStats({ statsSignal }: { statsSignal: ReadonlySignal<Subscrib
         </StatSection>
       </StatGroup>
 
-      {/* 音声と映像の同期の推定。値の意味はライブラリの AvSyncStats と同じで、
-              未購読や jitter buffer が無効のときは既定値 (null / 0 / false) になる */}
+      {/* 音声と映像の同期の推定値と、遅延の内訳。値の意味はライブラリの AvSyncStats と
+              同じで、未購読や jitter buffer が無効のときは既定値 (null / 0 / false) になる。
+              内訳は、表示の遅れがどこで生じているか (基準の遅れ・jitter buffer の遅延・
+              同期の制御が足した分) と、2 つのトラックを同じ時計として扱えているかを
+              分けて出す。音声と映像の遅れを比べて改善するために要る */}
       <StatGroup title="A/V Sync">
-        <StatList
-          items={[
-            {
-              label: "skewMs",
-              value: stats.avSync.skewMs === null ? "-" : stats.avSync.skewMs.toFixed(1),
-              testId: "subscriber-av-sync-skew",
-            },
-            {
-              label: "presentationDelayMs",
-              value:
-                stats.avSync.presentationDelayMs === null
-                  ? "-"
-                  : stats.avSync.presentationDelayMs.toFixed(1),
-              testId: "subscriber-av-sync-presentation-delay",
-            },
-            {
-              label: "targetLatencyMs",
-              value: stats.avSync.targetLatencyMs ?? "-",
-              testId: "subscriber-av-sync-target-latency",
-            },
-            {
-              label: "targetLatencyLimitedMs",
-              value: stats.avSync.targetLatencyLimitedMs,
-              tone: stats.avSync.targetLatencyLimitedMs > 0 ? "warn" : undefined,
-              testId: "subscriber-av-sync-target-latency-limited",
-            },
-            {
-              label: "audioClockFallback",
-              value: String(stats.avSync.audioClockFallback),
-              testId: "subscriber-av-sync-audio-clock-fallback",
-            },
-          ]}
-        />
+        <StatSection title="Estimate" help={AV_SYNC_HELP} testId="subscriber-av-sync">
+          <StatList
+            items={[
+              {
+                label: "skewMs",
+                value: stats.avSync.skewMs === null ? "-" : stats.avSync.skewMs.toFixed(1),
+                testId: "subscriber-av-sync-skew",
+              },
+              {
+                label: "targetLatencyMs",
+                value: stats.avSync.targetLatencyMs ?? "-",
+                testId: "subscriber-av-sync-target-latency",
+              },
+              {
+                label: "targetLatencyLimitedMs",
+                value: stats.avSync.targetLatencyLimitedMs,
+                tone: stats.avSync.targetLatencyLimitedMs > 0 ? "warn" : undefined,
+                testId: "subscriber-av-sync-target-latency-limited",
+              },
+              {
+                label: "audioClockFallback",
+                value: String(stats.avSync.audioClockFallback),
+                testId: "subscriber-av-sync-audio-clock-fallback",
+              },
+            ]}
+          />
+        </StatSection>
+        <StatSection title="Delays (audio)">
+          <StatList
+            items={[
+              {
+                label: "baseDelayMs",
+                value: formatMs(stats.avSync.delays.audio.baseDelayMs),
+                testId: "subscriber-av-sync-audio-base",
+              },
+              {
+                label: "jitterDelayMs",
+                value: formatMs(stats.avSync.delays.audio.jitterDelayMs),
+                testId: "subscriber-av-sync-audio-jitter",
+              },
+              {
+                label: "syncExtraDelayMs",
+                value: formatMs(stats.avSync.delays.audio.syncExtraDelayMs),
+                testId: "subscriber-av-sync-audio-extra",
+              },
+              {
+                label: "presentationDelayMs",
+                value: formatMs(stats.avSync.delays.audio.presentationDelayMs),
+                testId: "subscriber-av-sync-audio-presentation",
+              },
+            ]}
+          />
+        </StatSection>
+        <StatSection title="Delays (video)">
+          <StatList
+            items={[
+              {
+                label: "baseDelayMs",
+                value: formatMs(stats.avSync.delays.video.baseDelayMs),
+                testId: "subscriber-av-sync-video-base",
+              },
+              {
+                label: "jitterDelayMs",
+                value: formatMs(stats.avSync.delays.video.jitterDelayMs),
+                testId: "subscriber-av-sync-video-jitter",
+              },
+              {
+                label: "syncExtraDelayMs",
+                value: formatMs(stats.avSync.delays.video.syncExtraDelayMs),
+                testId: "subscriber-av-sync-video-extra",
+              },
+              {
+                label: "presentationDelayMs",
+                value: formatMs(stats.avSync.delays.video.presentationDelayMs),
+                testId: "subscriber-av-sync-video-presentation",
+              },
+            ]}
+          />
+        </StatSection>
+        <StatSection title="Shared base">
+          <StatList
+            items={[
+              {
+                label: "baseDifferenceMs",
+                value: formatMs(stats.avSync.delays.baseDifferenceMs),
+                testId: "subscriber-av-sync-base-difference",
+              },
+              {
+                label: "sharingBases",
+                value: String(stats.avSync.delays.sharingBases),
+                tone: stats.avSync.delays.sharingBases ? undefined : "warn",
+                testId: "subscriber-av-sync-sharing",
+              },
+              {
+                label: "unsharedReason",
+                value: stats.avSync.delays.unsharedReason,
+                testId: "subscriber-av-sync-unshared-reason",
+              },
+              {
+                label: "baseDriftMsPerSecond",
+                value: formatMs(stats.avSync.delays.baseDriftMsPerSecond),
+                testId: "subscriber-av-sync-drift",
+              },
+            ]}
+          />
+        </StatSection>
       </StatGroup>
 
       <StatGroup title="Session">

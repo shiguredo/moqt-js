@@ -1,5 +1,5 @@
 import { signal, computed, type Signal, type ReadonlySignal } from "@preact/signals";
-import type { LOC, Session, Subscriber, Catalog, EventTimelineEntry } from "moqt-js";
+import type { LOC, Session, Subscriber, Catalog, EventTimelineEntry, AvSyncStats } from "moqt-js";
 import type { PanelHttpVersion } from "../utils/httpVersion";
 import type { StatusType } from "../types";
 import type { DecoderWrapper } from "../utils/DecoderWrapper";
@@ -12,19 +12,12 @@ import { EMPTY_PLAYBACK_TIMING, type PlaybackTimingSnapshot } from "../utils/pla
  * 値の意味はライブラリの `AvSyncStats` (src/codec/types.ts) と同じである。片方しか
  * 購読していない、jitter buffer が無効、またはまだ表示時刻を決められていないときは
  * 既定値 (`EMPTY_AV_SYNC`) のままにする。
+ *
+ * `delays` は遅延の内訳 (トラックごとの基準の遅れ・jitter buffer の遅延・同期の制御が
+ * 足した分・表示の遅れと、2 つのトラックで基準を共有できているか) であり、音声と映像の
+ * 遅れがどこで生じているかを分けて見るためにある。
  */
-export interface AvSyncSnapshot {
-  /** 同期ずれの推定値 (ms)。映像の表示が音声より遅れていれば正。実績が無ければ null */
-  skewMs: number | null;
-  /** 表示の遅れ (ms)。TIMESTAMP から表示時刻までの差。基準が未確立なら null */
-  presentationDelayMs: number | null;
-  /** catalog から解決した目標遅延 (ms)。無い、または使えないときは null */
-  targetLatencyMs: number | null;
-  /** 表示の遅れの上限に収まらず切り下げた分 (ms)。使っていないときは 0 */
-  targetLatencyLimitedMs: number;
-  /** AudioContext.getOutputTimestamp() を使えず currentTime で代用しているか */
-  audioClockFallback: boolean;
-}
+export type AvSyncSnapshot = AvSyncStats;
 
 /** 同期の推定が無いときの値 (未購読、jitter buffer が無効、音声だけの購読) */
 export const EMPTY_AV_SYNC: AvSyncSnapshot = {
@@ -33,7 +26,28 @@ export const EMPTY_AV_SYNC: AvSyncSnapshot = {
   targetLatencyMs: null,
   targetLatencyLimitedMs: 0,
   audioClockFallback: false,
+  delays: {
+    audio: emptyTrackBreakdown(),
+    video: emptyTrackBreakdown(),
+    baseDifferenceMs: null,
+    sharingBases: false,
+    unsharedReason: "unobserved",
+    baseDriftMsPerSecond: null,
+    baseDriftLimitMs: 0,
+    presentationDelayCapMs: 0,
+  },
 };
+
+/** 未観測のトラックの内訳 */
+function emptyTrackBreakdown(): AvSyncStats["delays"]["audio"] {
+  return {
+    baseDelayMs: null,
+    jitterDelayMs: null,
+    syncExtraDelayMs: 0,
+    presentationDelayMs: null,
+    presentationDelayCapMs: 0,
+  };
+}
 
 /**
  * 個々の Subscriber インスタンスの状態。

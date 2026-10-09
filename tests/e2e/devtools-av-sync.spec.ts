@@ -6,16 +6,50 @@ import type { SubscriberStats } from "../../devtools/src/testApi";
 // dev サーバーは playwright.config.ts の webServer で起動される (port 5173)
 const DEVTOOLS_URL = "http://localhost:5173/index.html";
 
-// 同期の 5 項目の data-testid (devtools/src/components/SubscriberPanel.tsx)
+// 同期の推定と遅延の内訳の data-testid (devtools/src/components/SubscriberPanel.tsx)
 const AV_SYNC_ITEMS = {
   skewMs: "subscriber-av-sync-skew",
-  presentationDelayMs: "subscriber-av-sync-presentation-delay",
   targetLatencyMs: "subscriber-av-sync-target-latency",
   targetLatencyLimitedMs: "subscriber-av-sync-target-latency-limited",
   audioClockFallback: "subscriber-av-sync-audio-clock-fallback",
+  audioBase: "subscriber-av-sync-audio-base",
+  audioPresentation: "subscriber-av-sync-audio-presentation",
+  videoBase: "subscriber-av-sync-video-base",
+  videoExtra: "subscriber-av-sync-video-extra",
+  videoPresentation: "subscriber-av-sync-video-presentation",
+  baseDifference: "subscriber-av-sync-base-difference",
+  sharing: "subscriber-av-sync-sharing",
+  unsharedReason: "subscriber-av-sync-unshared-reason",
+  drift: "subscriber-av-sync-drift",
 } as const;
 
-test("window.moqtDevTools から同期の 5 項目が読め、未購読では既定値になる", async ({ page }) => {
+// 遅延の内訳の未観測の値 (空の A/V Sync Snapshot と同じ)
+const EMPTY_DELAYS = {
+  audio: {
+    baseDelayMs: null,
+    jitterDelayMs: null,
+    syncExtraDelayMs: 0,
+    presentationDelayMs: null,
+    presentationDelayCapMs: 0,
+  },
+  video: {
+    baseDelayMs: null,
+    jitterDelayMs: null,
+    syncExtraDelayMs: 0,
+    presentationDelayMs: null,
+    presentationDelayCapMs: 0,
+  },
+  baseDifferenceMs: null,
+  sharingBases: false,
+  unsharedReason: "unobserved",
+  baseDriftMsPerSecond: null,
+  baseDriftLimitMs: 0,
+  presentationDelayCapMs: 0,
+} as const;
+
+test("window.moqtDevTools から同期の推定と遅延の内訳が読め、未購読では既定値になる", async ({
+  page,
+}) => {
   await page.goto(DEVTOOLS_URL);
 
   // 配信も購読もしていない状態でも、統計の項目が公開されていること
@@ -41,29 +75,40 @@ test("window.moqtDevTools から同期の 5 項目が読め、未購読では既
     return { list: first.avSync, single: single.avSync };
   });
 
-  // 同期の推定が無い状態の既定値 (null / null / null / 0 / false)
+  // 同期の推定が無い状態の既定値 (null / null / null / 0 / false と、未観測の内訳)
   const defaults = {
     skewMs: null,
     presentationDelayMs: null,
     targetLatencyMs: null,
     targetLatencyLimitedMs: 0,
     audioClockFallback: false,
+    delays: EMPTY_DELAYS,
   };
   expect(avSync.list).toEqual(defaults);
   expect(avSync.single).toEqual(defaults);
 });
 
-test("subscriber の画面に同期の 5 項目を既定値で出す", async ({ page }) => {
+test("subscriber の画面に同期の推定と遅延の内訳を既定値で出す", async ({ page }) => {
   await page.goto(DEVTOOLS_URL);
   // 統計の欄は既定で閉じているため、先に開く
   await page.getByTestId("subscriber-statistics-toggle").click();
 
-  // 未購読では、値の無い 3 項目を "-"、切り下げた分を 0、時計の代用を false にする
+  // 未購読では、値の無い項目を "-"、足した分を 0.0、状態を false / unobserved にする
   await expect(page.getByTestId(AV_SYNC_ITEMS.skewMs)).toHaveText("-");
-  await expect(page.getByTestId(AV_SYNC_ITEMS.presentationDelayMs)).toHaveText("-");
   await expect(page.getByTestId(AV_SYNC_ITEMS.targetLatencyMs)).toHaveText("-");
   await expect(page.getByTestId(AV_SYNC_ITEMS.targetLatencyLimitedMs)).toHaveText("0");
   await expect(page.getByTestId(AV_SYNC_ITEMS.audioClockFallback)).toHaveText("false");
+  // 遅延の内訳 (音声 → 映像の順)
+  await expect(page.getByTestId(AV_SYNC_ITEMS.audioBase)).toHaveText("-");
+  await expect(page.getByTestId(AV_SYNC_ITEMS.audioPresentation)).toHaveText("-");
+  await expect(page.getByTestId(AV_SYNC_ITEMS.videoBase)).toHaveText("-");
+  await expect(page.getByTestId(AV_SYNC_ITEMS.videoExtra)).toHaveText("0.0");
+  await expect(page.getByTestId(AV_SYNC_ITEMS.videoPresentation)).toHaveText("-");
+  // 基準を共有できているかと、できていない理由
+  await expect(page.getByTestId(AV_SYNC_ITEMS.baseDifference)).toHaveText("-");
+  await expect(page.getByTestId(AV_SYNC_ITEMS.sharing)).toHaveText("false");
+  await expect(page.getByTestId(AV_SYNC_ITEMS.unsharedReason)).toHaveText("unobserved");
+  await expect(page.getByTestId(AV_SYNC_ITEMS.drift)).toHaveText("-");
 });
 
 test("Target Latency と Render Group の選択が UI から URL へ反映され、生成された URL から復元される", async ({

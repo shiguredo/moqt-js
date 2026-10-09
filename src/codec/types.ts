@@ -2,6 +2,8 @@
  * コーデック関連の型定義
  */
 
+import type { PlaybackDelayBreakdown } from "../playbackTimeline";
+
 // オーディオコーデック
 export type AudioCodecType = "opus" | "aac";
 
@@ -91,6 +93,9 @@ export interface AvSyncStats {
   targetLatencyLimitedMs: number;
   // AudioContext.getOutputTimestamp() を使えず currentTime で代用しているか
   audioClockFallback: boolean;
+  // 遅延の内訳。トラックごとの基準の遅れ・jitter buffer の遅延・同期の制御が足した分・
+  // 表示の遅れと、2 つのトラックで基準を共有できているか (遅延の解析に使う)
+  delays: PlaybackDelayBreakdown;
 }
 
 // 受信側メディア統計

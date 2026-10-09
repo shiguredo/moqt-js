@@ -898,6 +898,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       targetLatencyMs: this.playbackTimeline.targetLatencyMs,
       targetLatencyLimitedMs: this.playbackTimeline.targetLatencyLimitedMs,
       audioClockFallback: this.audioClockBridge.usingFallback,
+      delays: this.playbackTimeline.delayBreakdown,
     };
   }
 

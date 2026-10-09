@@ -32,6 +32,8 @@
  *   ずれである)、大きさの閾値を待たずに同期しない。合わせると片側の表示の遅れが上限まで
  *   伸びて戻せなくなるためである。同期しない間は、その時点までに足した分を毎秒
  *   `PLAYBACK_DELAY_DECAY_MS_PER_SECOND` までで戻す
+ * - 遅延の内訳 (基準の遅れ・jitter buffer の遅延・足した分・共有できているかとその理由・
+ *   差の動き) は `delayBreakdown` が返す。音声と映像の遅れを比べて改善するために使う
  *
  * ブラウザ API に依存せず、時刻は引数で受ける (`performance.now()` と
  * `performance.timeOrigin` は呼び出し側が渡す)。
@@ -159,6 +161,63 @@ const SKEW_SAMPLE_WINDOW_MS = 1_000;
 
 /** 表示時刻を求める相手 (音声と映像) */
 export type PlaybackStream = "audio" | "video";
+
+/** 2 つのトラックで基準を共有できているか、できていない理由 */
+export type PlaybackUnsharedReason =
+  // 共有している (どちらも TIMESTAMP を使えている)
+  | "none"
+  // 基準がまだ足りない (どちらかを観測していない、表示の遅れがまだ決まっていない)
+  | "unobserved"
+  // 基準の差が表示の遅れの上限を超えている (上限では合わせられない)
+  | "difference"
+  // 基準の差が動き続けている (TIMESTAMP が壁時計からずれている)
+  | "drift";
+
+/**
+ * トラックごとの表示時刻の内訳 (遅延の解析に使う)
+ *
+ * 表示時刻 = TIMESTAMP + 基準の遅れ + 表示の遅れ であり、表示の遅れは jitter buffer の
+ * 遅延と `targetLatency` の大きい方に、同期の制御が足した分を加えて上限で切った値である。
+ * どこで遅れが生じているかを分けるために、この 3 つを別々に出す。
+ */
+export interface PlaybackTrackBreakdown {
+  /** 基準の遅れ (ミリ秒)。送受信の時計のずれと、経路と復号の最小遅延。未観測なら null */
+  baseDelayMs: number | null;
+  /** jitter buffer の遅延 (ミリ秒)。自分の揺らぎから求めた値。未観測なら null */
+  jitterDelayMs: number | null;
+  /** 同期の制御が足した分 (ミリ秒)。0 以上 */
+  syncExtraDelayMs: number;
+  /**
+   * 表示の遅れ (ミリ秒)。TIMESTAMP から表示時刻までの差そのものである。上限で切った後の
+   * 値であり、`presentationDelayMsOf` が null を返すとき (未観測、または基準がずれている) は
+   * null。この値が null のトラックは、TIMESTAMP を使わず到着基準で再生される
+   */
+  presentationDelayMs: number | null;
+  /** 表示の遅れの上限 (ミリ秒)。切り下げが起きているかはこの値との比較で分かる */
+  presentationDelayCapMs: number;
+}
+
+/** 音声と映像の遅延の内訳 (遅延の解析に使う) */
+export interface PlaybackDelayBreakdown {
+  audio: PlaybackTrackBreakdown;
+  video: PlaybackTrackBreakdown;
+  /** 基準の差「音声 - 映像」(ミリ秒)。どちらかを観測していなければ null */
+  baseDifferenceMs: number | null;
+  /** 2 つのトラックで基準を共有しているか */
+  sharingBases: boolean;
+  /** 共有できていない理由 */
+  unsharedReason: PlaybackUnsharedReason;
+  /**
+   * 直近の基準の差の動き (ミリ秒 / 秒)。まだ履歴が無ければ null
+   *
+   * `PLAYOUT_BASE_DRIFT_MS` を超えると、経路の遅れではなく時計のずれとみなして共有をやめる
+   */
+  baseDriftMsPerSecond: number | null;
+  /** 時計のずれとみなす、基準の差の動きの幅 (ミリ秒) */
+  baseDriftLimitMs: number;
+  /** jitter buffer の遅延を切り下げる上限 (ミリ秒。`MAX_PLAYOUT_DELAY_MS` とキューの小さい方) */
+  presentationDelayCapMs: number;
+}
 
 /** 直近に表示すると決めた実績 */
 interface PresentationRecord {
@@ -515,9 +574,82 @@ export class PlaybackTimeline {
     return videoOffsetMs - audioOffsetMs;
   }
 
-  /** 2 つのトラックで基準を共有しているか (どちらも TIMESTAMP を使えているか) */
+  /**
+   * 2 つのトラックで基準を共有しているか
+   *
+   * 共有できないのは、どちらかをまだ観測していないときと、基準の差が
+   * 「遅い側を待つ」ことで合わせられないときである (差が表示の遅れの上限を超えている、
+   * または差が動き続けている = TIMESTAMP が壁時計からずれている)。理由は
+   * `delayBreakdown` の `unsharedReason` に出る
+   */
   get sharingBases(): boolean {
-    return this.driftedStream() === null;
+    return this.unsharedReason() === "none";
+  }
+
+  /**
+   * 音声と映像の遅延の内訳 (遅延の解析に使う)
+   *
+   * 「表示の遅れがどこで生じているか」と「2 つのトラックを同じ時計として扱えているか」を
+   * 1 つの値にまとめる。表示時刻そのものは `presentationPerformanceMs` が返す。
+   */
+  get delayBreakdown(): PlaybackDelayBreakdown {
+    return {
+      audio: this.trackBreakdownOf("audio"),
+      video: this.trackBreakdownOf("video"),
+      baseDifferenceMs: this.currentBaseDifferenceMs(),
+      sharingBases: this.sharingBases,
+      unsharedReason: this.unsharedReason(),
+      baseDriftMsPerSecond: this.baseDriftMsPerSecond(),
+      baseDriftLimitMs: PLAYOUT_BASE_DRIFT_MS,
+      presentationDelayCapMs: this.presentationDelayCapMs(),
+    };
+  }
+
+  /**
+   * 基準を共有できていない理由
+   *
+   * 未観測 (どちらかの基準か表示の遅れがまだ無い) を先に見る。差と動きの判定は基準が
+   * そろってから意味を持つ (差が 0 であるとも、動きが無いとも言えない)。動きは差より
+   * 先に見る。動き続けている差は経路の遅れではなく時計のずれであり、合わせることを
+   * やめる原因そのものであるため、差の大きさより先に知りたい
+   */
+  private unsharedReason(): PlaybackUnsharedReason {
+    const audio = this.streams.audio;
+    const video = this.streams.video;
+    if (
+      audio.baseMs === null ||
+      video.baseMs === null ||
+      audio.delayMs === null ||
+      video.delayMs === null
+    ) {
+      return "unobserved";
+    }
+    if (this.baseDifferenceDrifted()) {
+      return "drift";
+    }
+    return Math.abs(this.currentBaseDifferenceMs() ?? 0) > this.baseDifferenceLimitMs()
+      ? "difference"
+      : "none";
+  }
+
+  /** 直近の基準の差の動き (ミリ秒 / 秒)。まだ履歴が無ければ null */
+  private baseDriftMsPerSecond(): number | null {
+    const history = this.baseDifferenceHistory();
+    if (history === null || history.spanMs <= 0) {
+      return null;
+    }
+    return (history.movementMs * 1_000) / history.spanMs;
+  }
+
+  /** トラックごとの表示時刻の内訳 */
+  private trackBreakdownOf(stream: PlaybackStream): PlaybackTrackBreakdown {
+    return {
+      baseDelayMs: this.streams[stream].baseMs,
+      jitterDelayMs: this.streams[stream].delayMs,
+      syncExtraDelayMs: this.syncExtraMs[stream],
+      presentationDelayMs: this.presentationDelayMsOf(stream),
+      presentationDelayCapMs: this.presentationDelayCapMs(),
+    };
   }
 
   /**
@@ -562,11 +694,30 @@ export class PlaybackTimeline {
    * 同期の制御で合わせられる差 (経路と復号の遅い側) を時計のずれと誤判定しない
    */
   private baseDifferenceDrifted(): boolean {
-    const oldest = this.baseDifferences.oldest();
-    if (oldest === null || this.lastBaseDifferenceValue === null) {
+    const history = this.baseDifferenceHistory();
+    if (history === null) {
       return false;
     }
-    return Math.abs(this.lastBaseDifferenceValue - oldest.value) > PLAYOUT_BASE_DRIFT_MS;
+    return Math.abs(history.movementMs) > PLAYOUT_BASE_DRIFT_MS;
+  }
+
+  /**
+   * 基準の差の履歴の、最も古い記録から今までの動き (遅延の解析に使う)
+   *
+   * 履歴の値と今の差は同じ求め方 (直近の窓の最小値の差) でなければ比べられない。
+   * 窓全体の最小値と比べると、TIMESTAMP が遅れていくときに符号が逆になる
+   *
+   * @returns 動いた幅 (ミリ秒) と、その幅を測った時間 (ミリ秒)。まだ記録が無ければ null
+   */
+  private baseDifferenceHistory(): { movementMs: number; spanMs: number } | null {
+    const oldest = this.baseDifferences.oldest();
+    if (oldest === null || this.lastBaseDifferenceValue === null) {
+      return null;
+    }
+    return {
+      movementMs: this.lastBaseDifferenceValue - oldest.value,
+      spanMs: this.lastBaseDifferenceAtMs === null ? 0 : this.lastBaseDifferenceAtMs - oldest.atMs,
+    };
   }
 
   /** 今の「音声の基準 - 映像の基準」(ミリ秒)。どちらかを観測していなければ null */

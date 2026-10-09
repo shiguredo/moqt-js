@@ -47,6 +47,7 @@ import {
 } from "../utils/playbackTimingStats";
 import { JITTER_BUFFER_MAX_QUEUED_FRAMES, PlayoutBuffer } from "../../../src/playoutBuffer.ts";
 import { AUDIO_PLAYOUT_DELAY_FLOOR_MS, PlaybackTimeline } from "../../../src/playbackTimeline.ts";
+import { detectAvSyncTransition, type AvSyncState } from "../utils/avSyncTransition.ts";
 import { GroupSwitchGate } from "../../../src/groupSwitchGate.ts";
 import {
   AudioClockBridge,
@@ -707,6 +708,8 @@ export function useSubscriber(
     new PlayoutBuffer<VideoFrame>(MAX_PENDING_FRAMES, playoutTimelineRef.current),
   );
   const jitterBufferEnabledRef = useRef(false);
+  // 直前の同期の状態 (基準を共有できているかとその理由)。変わったときだけログに残す
+  const avSyncStateRef = useRef<AvSyncState | null>(null);
   const frameAnimationRef = useRef<number | null>(null);
   // decoder に渡したフレームの情報 (chunk の timestamp で引く)。復号の出力で、壁時計の
   // TIMESTAMP のフレームだけを jitter buffer の表示時刻に使い、relay の cache から届いた
@@ -813,7 +816,23 @@ export function useSubscriber(
       targetLatencyLimitedMs: timeline.targetLatencyLimitedMs,
       // 音声を再生していない間は AudioContext が無く、時計の代用も起きていない
       audioClockFallback: audioPlaybackRef.current?.clock.usingFallback ?? false,
+      // 遅延の内訳。音声と映像の遅れがどこで生じているか (基準・jitter buffer・同期の制御)
+      delays: timeline.delayBreakdown,
     };
+  }
+
+  /**
+   * 基準を共有できているかが変わったら、内訳と一緒にログへ残す
+   *
+   * 2 つのトラックを別々の時計として扱い始めた (戻った) 時点が、A/V のずれが広がる
+   * 原因になる。判定と本文は純関数 (`utils/avSyncTransition.ts`) が持つ。
+   */
+  function logAvSyncTransition(snapshot: sub.AvSyncSnapshot): void {
+    const transition = detectAvSyncTransition(avSyncStateRef.current, snapshot, subscriberId);
+    avSyncStateRef.current = transition.state;
+    if (transition.log !== null) {
+      addLog(transition.log.level, transition.log.message, transition.log.data);
+    }
   }
 
   /**
@@ -853,8 +872,11 @@ export function useSubscriber(
       if (!instance) return;
       playbackTimingRef.current.recordPlayoutDelay(playoutBufferRef.current.playoutDelayMs());
       instance.playbackTiming.value = playbackTimingRef.current.snapshot(performance.now());
-      // 同期の推定も同じ周期で反映する (フレームごとに反映すると再描画が表示の負荷になる)
-      instance.avSync.value = currentAvSyncSnapshot();
+      // 同期の推定も同じ周期で反映する (フレームごとに反映すると再描画が表示の負荷になる)。
+      // 内訳の変化 (基準を共有できているか) はログへも残す
+      const avSync = currentAvSyncSnapshot();
+      instance.avSync.value = avSync;
+      logAvSyncTransition(avSync);
     }, PLAYBACK_TIMING_PUBLISH_INTERVAL_MS);
   }
 
@@ -872,6 +894,8 @@ export function useSubscriber(
     }
     playbackTimingRef.current.reset();
     jitterBufferEnabledRef.current = false;
+    // 次の購読では状態が変わったときとしてログを出し直す (前の購読の状態を持ち越さない)
+    avSyncStateRef.current = null;
   }
 
   /**

@@ -8,6 +8,7 @@
 
 import type { SectionHelp } from "./StatsView";
 import { LATENCY_SEGMENTS, type LatencySegment } from "../utils/latencyBreakdown";
+import { PLAYOUT_BASE_DRIFT_MS } from "../../../src/playbackTimeline";
 import {
   DISPLAY_FPS_WINDOW_MS,
   DISPLAY_STALL_FACTOR,
@@ -105,6 +106,85 @@ export const DECODING_PIPELINE_HELP: SectionHelp = {
         "Frames not decoded while waiting for a keyframe, because a frame they reference is missing.",
     },
     { term: "decodeErrors", description: "Errors from the video and audio decoders." },
+  ],
+};
+
+/**
+ * subscriber の A/V Sync
+ *
+ * 遅延の内訳は「表示の遅れがどこで生じているか」を分けて見るためのものである。
+ * 音声と映像で同じ項目を出し、比べて改善できるようにする。
+ */
+export const AV_SYNC_HELP: SectionHelp = {
+  summary:
+    "How the presentation time of each track is decided, and whether the two tracks are treated as one clock. The presentation time is TIMESTAMP + baseDelayMs + jitterDelayMs (at least targetLatencyMs), and the leading track is delayed further by syncExtraDelayMs to keep the two presentation times within the deadband.",
+  formula:
+    "presentationDelayMs = baseDelayMs + max(jitterDelayMs, targetLatencyMs) + syncExtraDelayMs",
+  items: [
+    {
+      term: "skewMs",
+      description:
+        "Measured A/V skew (ms). Positive when the video is presented later than the audio. Uses the recorded presentation times, so it does not include the output latency of the audio device nor the render cycle of the display.",
+    },
+    {
+      term: "baseDelayMs",
+      description:
+        "Minimum of (decoder output wall clock - TIMESTAMP) over the window, per track (ms). Includes the clock offset between the publisher and this machine, and the minimum path and decode delay.",
+    },
+    {
+      term: "jitterDelayMs",
+      description:
+        "Jitter buffer delay of the track (ms). The audio uses the NetEq rule (0.95 quantile of arrival delay), the video the percentile of the jitter that keeps late frames within the budget.",
+    },
+    {
+      term: "syncExtraDelayMs",
+      description:
+        "Extra delay the A/V sync added to this track (ms). The leading track gets the extra so that both presentation times stay within the deadband; it is released at the decay rate.",
+    },
+    {
+      term: "presentationDelayMs",
+      description:
+        "TIMESTAMP to presentation (ms). - while the track is not using its TIMESTAMP (not observed yet, or its clock is out of range), in which case it is played by arrival instead.",
+    },
+    {
+      term: "baseDifferenceMs",
+      description:
+        "baseDelayMs of the audio minus that of the video (ms). The A/V sync is driven by this difference, so it is the amount one track has to be delayed for the other.",
+    },
+    {
+      term: "sharingBases",
+      description:
+        "Whether both tracks are treated as one clock. false while one of them is not observed yet, when the difference cannot be compensated within the delay cap, or when the difference keeps moving.",
+    },
+    {
+      term: "unsharedReason",
+      description:
+        "unobserved: a base or a delay is not decided yet. difference: the base difference is larger than the delay cap. drift: the base difference keeps moving, which is a TIMESTAMP clock offset (e.g. the audio drift in issue 0754) rather than a path delay.",
+    },
+    {
+      term: "baseDriftMsPerSecond",
+      description: `Movement of baseDifferenceMs over the recent window (ms/s). The tracks are unshared when the movement exceeds the drift limit (${PLAYOUT_BASE_DRIFT_MS} ms).`,
+    },
+    {
+      term: "targetLatencyMs",
+      description:
+        "targetLatency resolved from the catalog (ms). Unset or unusable when -. The jitter buffer delay of both tracks never goes below it.",
+    },
+    {
+      term: "targetLatencyLimitedMs",
+      description:
+        "Amount of targetLatency that did not fit in the delay cap (ms). The effective lower bound is targetLatencyMs - targetLatencyLimitedMs.",
+    },
+    {
+      term: "audioClockFallback",
+      description:
+        "Whether the audio playout falls back to AudioContext.currentTime because getOutputTimestamp() is not available. The audio is then scheduled without the output latency, so it plays later than the target.",
+    },
+  ],
+  notes: [
+    `baseDelayMs: ${CLOCK_OFFSET_NOTE}`,
+    "The two tracks are delayed independently while sharingBases is true. Within the deadband neither track follows the jitter buffer delay of the other.",
+    "Both tracks are played by arrival while unsharedReason is drift or difference, which keeps the A/V skew at the difference of the two delays instead of the base difference.",
   ],
 };
 

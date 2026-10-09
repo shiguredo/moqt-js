@@ -499,6 +499,38 @@ interface AvSyncStats {
   targetLatencyLimitedMs: number;
   // AudioContext.getOutputTimestamp() を使えず currentTime で代用しているか
   audioClockFallback: boolean;
+  // 遅延の内訳。音声と映像の遅れがどこで生じているかを分けて見るために使う
+  delays: PlaybackDelayBreakdown;
+}
+
+interface PlaybackTrackBreakdown {
+  // 基準の遅れ (ms)。受信側と送信側の時計のずれと、経路と復号の最小遅延
+  baseDelayMs: number | null;
+  // jitter buffer の遅延 (ms)。自分の揺らぎから求めた値
+  jitterDelayMs: number | null;
+  // A/V 同期がこのトラックへ足した分 (ms)
+  syncExtraDelayMs: number;
+  // TIMESTAMP から表示時刻までの差 (ms)。このトラックが TIMESTAMP を使わない
+  // (未観測、または基準がずれている) ときは null で、そのときは到着基準で再生される
+  presentationDelayMs: number | null;
+  // 表示の遅れの上限 (ms)。切り下げが起きているかはこの値との比較で分かる
+  presentationDelayCapMs: number;
+}
+
+interface PlaybackDelayBreakdown {
+  audio: PlaybackTrackBreakdown;
+  video: PlaybackTrackBreakdown;
+  // 基準の差「音声 - 映像」(ms)。A/V 同期はこの差を合わせる
+  baseDifferenceMs: number | null;
+  // 2 つのトラックを同じ時計として扱えているか
+  sharingBases: boolean;
+  // 扱えない理由。"unobserved" (未観測)、"difference" (差が上限を超えている)、
+  // "drift" (差が動き続けている = TIMESTAMP が壁時計からずれている)、"none"
+  unsharedReason: PlaybackUnsharedReason;
+  // 基準の差の動き (ms/秒)。閾値 (baseDriftLimitMs) を超えるとずれとみなす
+  baseDriftMsPerSecond: number | null;
+  baseDriftLimitMs: number;
+  presentationDelayCapMs: number;
 }
 ```
 
@@ -512,9 +544,22 @@ jitter buffer の遅れは音声と映像で別々に求める。音声は NetEq
 0.95 分位)、映像は揺らぎの百分位である。2 つの表示時刻の差 (A/V のずれ) は、差が 30 ms
 未満の間はそのままにし、超えたときだけ先行する側の表示の遅れを「後行側 - 30 ms」まで
 即座に上げて抑える。上げた分は毎秒 20 ms までで戻す。このため不感帯の中では映像の遅延は
-音声の jitter buffer の遅延に引きずられず、A/V のずれは 30 ms 程度に収まる。ただし 2 つの
-遅延が表示の遅れの上限 (500 ms、またはキューが吸収できる長さ) に達しているときは
-合わせられないため、ずれは基準の遅れの差 (閾値まで) に広がり得る。
+音声の jitter buffer の遅延に引きずられず、A/V のずれは 30 ms 程度に収まる。
+
+基準の差は「遅い側を待つ」ことでしか合わせられないため、2 つのトラックの基準を共有しない
+場合がある。理由は `AvSyncStats.delays.unsharedReason` に出る。
+
+- `difference`: 基準の差が表示の遅れの上限 (500 ms、またはキューが吸収できる長さ) を
+  超えている。上限で切られる分は合わせられない
+- `drift`: 基準の差が動き続けている (10 秒で 50 ms の閾値)。これは経路の遅れではなく、
+  片方の TIMESTAMP が壁時計からずれていくこと (音声のドリフトなど) を意味する。合わせると
+  もう片方 (ここでは映像) の表示の遅れが上限まで伸びて戻せなくなるため、合わせるのを
+  やめ、既に足した分も戻す。ずれた側は TIMESTAMP を使わず到着基準で再生する
+
+どちらの場合も、2 つのトラックはそれぞれの到着と jitter buffer の遅れで並ぶ。A/V のずれは
+基準の差ではなく、2 つの遅れの差 (数十 ms) になる。`delays` はこの判断に使った内訳
+(基準の遅れ・jitter buffer の遅延・足した分・共有できているか・差の動き) をそのまま出す
+ため、音声と映像の遅れを比べて改善するときに使える。
 
 `AudioStats` / `VideoStats` は送信側 (`MediaStats`) の型である。受信側は
 `AudioReceiverStats` / `VideoReceiverStats` を使う。
