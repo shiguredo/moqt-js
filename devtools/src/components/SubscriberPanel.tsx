@@ -15,6 +15,8 @@ import {
   TimingTable,
 } from "./StatsView";
 import {
+  AUDIO_PLAYBACK_MISSED_HELP,
+  AUDIO_PLAYBACK_TIMING_HELP,
   AV_SYNC_HELP,
   DECODING_PIPELINE_HELP,
   LOSS_HELP,
@@ -30,6 +32,7 @@ import { CatalogTracks } from "./CatalogTracks";
 import { MessageList } from "./MessageList";
 import { PANEL_OPTION_ROW_CLASS } from "./panelLayout";
 import { formatLossEvent, formatStallEvent } from "../utils/playbackTimingStats";
+import { AUDIO_MISS_REASONS, formatAudioMissEvent } from "../../../src/audioPlayoutTimingStats.ts";
 import { LATENCY_SEGMENTS } from "../utils/latencyBreakdown";
 import { STALL_CAUSES } from "../utils/stallAnalysis";
 import { subscriberControlState } from "../utils/subscriberControls";
@@ -441,6 +444,123 @@ function SubscriberStats({ statsSignal }: { statsSignal: ReadonlySignal<Subscrib
                     : String(stats.audio.lastVoiceActivity),
               },
             ]}
+          />
+        </StatSection>
+      </StatGroup>
+
+      {/* 音声が鳴るはずの時刻と実際に鳴り始める時刻、鳴らなかった量。音声の語尾が
+          聞こえないとき、再生予定に間に合わなかったのか、それとも別の段なのかを
+          数値で切り分けるために出す。audio → video の順を守り、Video より前に置く */}
+      <StatGroup title="Audio Playback">
+        <StatSection
+          title="Timing"
+          help={AUDIO_PLAYBACK_TIMING_HELP}
+          testId="subscriber-audio-playback-timing"
+        >
+          <TimingTable
+            caption={PLAYBACK_TIMING_CAPTION}
+            testId="subscriber-audio-playback-timing"
+            rows={[
+              {
+                // 予定に対する余裕。負なら届いた時点で予定を過ぎている
+                label: "slack",
+                summary: stats.audio.playoutTiming.slackMs,
+                testId: "subscriber-audio-playback-slack",
+              },
+              {
+                label: "startDelay",
+                summary: stats.audio.playoutTiming.startDelayMs,
+                testId: "subscriber-audio-playback-start-delay",
+              },
+              {
+                // 予定からどれだけ遅れて鳴るか。0 なら予定どおり
+                label: "lateness",
+                summary: stats.audio.playoutTiming.latenessMs,
+                testId: "subscriber-audio-playback-lateness",
+              },
+            ]}
+          />
+          <StatList
+            items={[
+              {
+                label: "lastTargetMs",
+                value: formatMs(stats.audio.playoutTiming.lastTargetMs),
+                testId: "subscriber-audio-playback-last-target",
+              },
+              {
+                label: "lastArrivalMs",
+                value: formatMs(stats.audio.playoutTiming.lastArrivalMs),
+                testId: "subscriber-audio-playback-last-arrival",
+              },
+              {
+                label: "lastStartMs",
+                value: formatMs(stats.audio.playoutTiming.lastStartMs),
+                testId: "subscriber-audio-playback-last-start",
+              },
+              {
+                label: "lastSlackMs",
+                value: formatMs(stats.audio.playoutTiming.lastSlackMs),
+                testId: "subscriber-audio-playback-last-slack",
+              },
+              {
+                label: "playedFrames",
+                value: stats.audio.playoutTiming.playedFrames,
+                testId: "subscriber-audio-playback-played-frames",
+              },
+              {
+                label: "playedMs",
+                value: Math.round(stats.audio.playoutTiming.playedMs),
+                testId: "subscriber-audio-playback-played-ms",
+              },
+              {
+                // 予定を決められないまま鳴らした音 (壁時計の TIMESTAMP を持たないなど)
+                label: "unplannedFrames",
+                value: stats.audio.playoutTiming.unplannedFrames,
+                testId: "subscriber-audio-playback-unplanned-frames",
+              },
+            ]}
+          />
+        </StatSection>
+
+        <StatSection
+          title="Missed"
+          help={AUDIO_PLAYBACK_MISSED_HELP}
+          testId="subscriber-audio-playback-missed"
+        >
+          <StatTable
+            caption="since start"
+            columns={["count", "ms"]}
+            testId="subscriber-audio-playback-missed"
+            rows={[
+              ...AUDIO_MISS_REASONS.map((reason) => {
+                const total = stats.audio.playoutTiming.missedByReason[reason];
+                return {
+                  label: reason,
+                  values: [String(total.count), String(Math.round(total.ms))],
+                  testId: `subscriber-audio-playback-missed-${reason}`,
+                  // 起きた理由だけを目立たせる (catchUp は追いつき中の意図的なもの)
+                  tone: total.count > 0 ? ("warn" as const) : undefined,
+                };
+              }),
+              // 理由ごとの和は、鳴らさなかった音の数と長さの合計に一致する
+              {
+                label: "total",
+                values: [
+                  String(stats.audio.playoutTiming.missedFrames),
+                  String(Math.round(stats.audio.playoutTiming.missedMs)),
+                ],
+                testId: "subscriber-audio-playback-missed-total",
+                total: true,
+              },
+            ]}
+          />
+          <EventLog
+            label="recentMisses"
+            hint="UTC, newest first"
+            lines={[...stats.audio.playoutTiming.recentMisses]
+              .reverse()
+              .map((miss) => formatAudioMissEvent(miss))}
+            testId="subscriber-audio-playback-recent-misses"
           />
         </StatSection>
       </StatGroup>

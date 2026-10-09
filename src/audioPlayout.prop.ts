@@ -202,6 +202,11 @@ test("目標を守るとき: 並べすぎと離れすぎだけを捨て、目標
       const decision = schedule(makeScheduler(), targetStartSeconds);
       // 並べすぎ (今 + 再生の遅れ + 余裕より先) と、目標から離れすぎた音だけを捨てる
       assert.equal(decision.kind, tooFar || tooLateToPlay ? "drop" : "play");
+      if (decision.kind === "drop") {
+        // 捨てた理由も分けて返す。並べすぎ (backlog) と、目標から離れすぎ (lateness) は
+        // 起きていることの意味が違う (両方は成り立たない)
+        assert.equal(decision.reason, tooFar ? "backlog" : "lateness");
+      }
       if (decision.kind === "play") {
         if (tooLate) {
           // 目標を過ぎて届いた音は、今から鳴らせる最も早い時刻へずらし、その分を詰める

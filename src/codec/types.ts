@@ -3,6 +3,7 @@
  */
 
 import type { PlaybackDelayBreakdown } from "../playbackTimeline";
+import type { AudioPlayoutTimingSnapshot } from "../audioPlayoutTimingStats";
 
 // オーディオコーデック
 export type AudioCodecType = "opus" | "aac";
@@ -40,6 +41,11 @@ export interface AudioReceiverStats {
   playoutConcealedMs: number;
   // 目標を守る並べ方で最後に並べた音の遅れ (ms)。基準を消すと 0 に戻る
   playoutLatenessMs: number;
+  // 音声の再生の観測値。鳴るはずの時刻 (再生予定時刻)・届いた時刻・鳴り始める時刻と、
+  // 予定に対する余裕の分布 (直近 10 秒の p50 / p95 / max)、鳴らなかった量 (件数と ms) を
+  // 理由ごとに出す。時刻は performance.now() と同じ軸のミリ秒
+  // (src/audioPlayoutTimingStats.ts)
+  playoutTiming: AudioPlayoutTimingSnapshot;
 }
 
 // ビデオ統計

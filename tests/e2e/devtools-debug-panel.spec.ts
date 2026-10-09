@@ -142,6 +142,19 @@ test("Copy for LLM が設定と統計の項目とログを出す", async ({ page
   expect(text).toContain("audio:");
   expect(text).toContain("sessionStatistics: -");
 
+  // 音声の再生の観測値も出す。未購読のため時刻は "-"、累積は 0 になる
+  expect(text).toContain("playoutTiming:");
+  expect(text).toContain("lastTargetMs: -");
+  expect(text).toContain("lastArrivalMs: -");
+  expect(text).toContain("lastStartMs: -");
+  expect(text).toContain("slackMs: -");
+  expect(text).toContain("startDelayMs: -");
+  expect(text).toContain("latenessMs: -");
+  expect(text).toContain("playedFrames: 0");
+  expect(text).toContain("missedFrames: 0");
+  expect(text).toContain("missedMs: 0");
+  expect(text).toContain("recentMisses: []");
+
   // ログの節
   expect(text).toContain("=== Debug Logs ===");
   expect(text).toContain("copy-log");

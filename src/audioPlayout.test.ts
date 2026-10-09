@@ -234,9 +234,35 @@ test("schedule: 並べすぎの音は捨てる", () => {
   assert.equal(within.drops, 0);
   const beyond = new AudioPlayoutScheduler();
   const outside = nowSeconds + limit + FRAME_SECONDS;
-  assert.equal(beyond.schedule(nowSeconds, 0, FRAME_SECONDS, enforcedTarget(outside)).kind, "drop");
+  const dropped = beyond.schedule(nowSeconds, 0, FRAME_SECONDS, enforcedTarget(outside));
+  assert.equal(dropped.kind, "drop");
+  // 観測値でどちらの理由で捨てたかを分けて数えるため、並べすぎは backlog として返す
+  if (dropped.kind === "drop") {
+    assert.equal(dropped.reason, "backlog");
+  }
   assert.equal(beyond.drops, 1);
   assert.equal(beyond.rebases, 0);
+});
+
+// 目標から離れすぎて届いた音 (経路の停止など) は lateness として捨てる。並べすぎとは
+// 別の理由であり、鳴らなかった音がどちらの理由で落ちたかを観測値で分ける
+test("schedule: 目標から離れすぎた音は lateness として捨てる", () => {
+  const nowSeconds = 10;
+  // 目標は 600 ms 前に過ぎている。今から鳴らせる最も早い時刻へずらしても
+  // 上限 (AUDIO_PLAYOUT_MAX_LATENESS_SECONDS = 500 ms) を超える
+  const targetStartSeconds = nowSeconds - 0.6;
+  const scheduler = new AudioPlayoutScheduler();
+  const decision = scheduler.schedule(
+    nowSeconds,
+    0,
+    FRAME_SECONDS,
+    enforcedTarget(targetStartSeconds),
+  );
+  assert.equal(decision.kind, "drop");
+  if (decision.kind === "drop") {
+    assert.equal(decision.reason, "lateness");
+  }
+  assert.equal(scheduler.drops, 1);
 });
 
 // 目標を守るとき: 前の音と重なる音は捨てず、前の音の終わりに繋げて鳴らす (重ねない)。

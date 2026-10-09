@@ -9,29 +9,12 @@ import {
   formatLossEvent,
   formatStallEvent,
   formatStreamResetCode,
-  summarizeTimings,
   type LossEvent,
   type StallEvent,
 } from "./playbackTimingStats";
 
 // 30 fps のフレーム間隔 (マイクロ秒)
 const FRAME_MICROS = 33_333;
-
-// ============================================================================
-// 分布の要約
-// ============================================================================
-
-// 百分位は nearest-rank 法で求める (値を昇順に並べて ceil(p * n) 番目)。
-// 1 から 100 の 100 個なら p50 は 50、p95 は 95 になる
-test("summarizeTimings: nearest-rank 法で p50 / p95 / max を求める", () => {
-  const values = Array.from({ length: 100 }, (_, index) => 100 - index);
-  assert.deepEqual(summarizeTimings(values), { p50: 50, p95: 95, max: 100 });
-});
-
-test("summarizeTimings: 1 個なら p50 / p95 / max はその値、空なら null", () => {
-  assert.deepEqual(summarizeTimings([7]), { p50: 7, p95: 7, max: 7 });
-  assert.isNull(summarizeTimings([]));
-});
 
 // 止まりは UTC の時刻、原因、長さ、位置、TIMESTAMP の差を 1 行に並べる。位置の記録が
 // 無ければ position=- にする

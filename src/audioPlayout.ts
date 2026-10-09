@@ -168,7 +168,16 @@ export type AudioPlayoutDecision =
        */
       gapSeconds: number;
     }
-  | { kind: "drop" };
+  | {
+      kind: "drop";
+      /**
+       * 捨てた理由。観測値としてどちらが起きているかを分けて数えるために返す
+       *
+       * - `backlog`: 並べる音が溜まりすぎている (再生が追いついていない)
+       * - `lateness`: 目標から離れすぎている (経路の停止など)
+       */
+      reason: "backlog" | "lateness";
+    };
 
 /** 基準: この timestamp の音をこの時刻に鳴らす */
 interface PlayoutAnchor {
@@ -260,7 +269,7 @@ export class AudioPlayoutScheduler {
     if (targetStartSeconds > nowSeconds + limit) {
       // 並べる音が溜まりすぎている
       this.dropCount += 1;
-      return { kind: "drop" };
+      return { kind: "drop", reason: "backlog" };
     }
     // 目標を過ぎて届いた音も、前の音と重なる音も捨てない。今から鳴らせる最も早い時刻へ
     // ずらして鳴らし、ずらした分を波形の周期を使って詰めることで目標へ戻す
@@ -273,7 +282,7 @@ export class AudioPlayoutScheduler {
       // 目標から離れすぎている (経路の停止など)。一度捨てて目標へ戻す
       this.dropCount += 1;
       this.latenessSeconds = 0;
-      return { kind: "drop" };
+      return { kind: "drop", reason: "lateness" };
     }
     // 遅れは前の音から引き継いだ分も含めた「今の音のずれ」である (積み上げない)。
     // 詰めた分は前の音の終わりが早くなることで次の音へ引き継がれる
@@ -395,7 +404,7 @@ export class AudioPlayoutScheduler {
       if (earliest > nowSeconds + limitSeconds) {
         // 並べる音が溜まりすぎている。捨てて次の音を目標へ戻す
         this.dropCount += 1;
-        return { kind: "drop" };
+        return { kind: "drop", reason: "backlog" };
       }
       // timestamp が大きく飛んだ。前の音のすぐ後ろ (か今 + 再生の遅れ) から並べ直す
       startAt = earliest;

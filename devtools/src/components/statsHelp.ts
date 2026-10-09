@@ -10,6 +10,11 @@ import type { SectionHelp } from "./StatsView";
 import { LATENCY_SEGMENTS, type LatencySegment } from "../utils/latencyBreakdown";
 import { PLAYOUT_BASE_DRIFT_MS } from "../../../src/playbackTimeline";
 import {
+  AUDIO_MISS_REASONS,
+  MAX_RECENT_AUDIO_MISSES,
+  type AudioMissReason,
+} from "../../../src/audioPlayoutTimingStats.ts";
+import {
   DISPLAY_FPS_WINDOW_MS,
   DISPLAY_STALL_FACTOR,
   MAX_RECENT_LOSS_EVENTS,
@@ -231,6 +236,80 @@ export const PLAYBACK_TIMING_HELP: SectionHelp = {
     },
   ],
   notes: [`latency: ${CLOCK_OFFSET_NOTE}`],
+};
+
+/** 鳴らさなかった理由ごとの説明 (src/audioPlayoutTimingStats.ts の理由の定義) */
+const AUDIO_MISS_REASON_DESCRIPTIONS: Record<AudioMissReason, string> = {
+  lateness:
+    "The sound was dropped because it was more than the lateness limit (500 ms) from its playout time, for example while the path was stalled.",
+  backlog:
+    "The sound was dropped because the playout was too far behind (the queued sounds exceeded the delay plus the backlog limit).",
+  catchUp:
+    "The sound was not played because it was received from the relay cache before the subscription caught up. Decoded but skipped on purpose.",
+  error: "Playing the sound failed (stretch, concealment or scheduling threw).",
+  stopped:
+    "The sound was already scheduled but had not started when the playback stopped (toggle off, unsubscribe, panel removal). Closing the AudioContext cut it.",
+};
+
+/** subscriber の Audio Playback の Timing */
+export const AUDIO_PLAYBACK_TIMING_HELP: SectionHelp = {
+  summary: `Timing of received audio. The playout time comes from the LOC TIMESTAMP, the arrival is when the decoded AudioData reached the subscriber, and the start is when the sound was scheduled on the AudioContext clock. Distributions are p50 / p95 / max over the last ${PLAYBACK_WINDOW_SECONDS} s (ms).`,
+  formula: "lateness = start - target, slack = target - arrival, startDelay = start - arrival",
+  items: [
+    {
+      term: "slack",
+      description:
+        "target - arrival (ms). How much earlier the sound arrived than its playout time; negative means it arrived after its playout time (it could not make it).",
+    },
+    {
+      term: "startDelay",
+      description: "start - arrival (ms). How long after the arrival the sound starts.",
+    },
+    {
+      term: "lateness",
+      description:
+        "start - target (ms). How much later than the playout time the sound starts; 0 means on time. The sound is never dropped for being late by less than the lateness limit, it is played late instead.",
+    },
+    {
+      term: "lastTargetMs / lastArrivalMs / lastStartMs",
+      description:
+        "The three times of the last sound that was played, on the performance.now() axis (ms). lastTargetMs is - while the playout time cannot be decided.",
+    },
+    {
+      term: "playedFrames / playedMs",
+      description:
+        "Sounds scheduled to play, and their total length after the stretch (cumulative). Includes the sounds without a playout time.",
+    },
+    {
+      term: "unplannedFrames",
+      description:
+        "Sounds played without a playout time (no wall-clock TIMESTAMP, or the jitter buffer is off). They are played by arrival and have no slack or lateness.",
+    },
+  ],
+  notes: [
+    "The start is the time reserved on the AudioContext clock, so the output latency of the device is not included. Use the A/V Sync audioClockFallback to see whether the clock is mapped by getOutputTimestamp() or by currentTime.",
+    "Only the subscriber's own pipeline is measured. A sound that never arrives or never gets decoded does not appear here (compare audio.objectsReceived / chunksDecoded with audio.playoutTiming.playedFrames).",
+  ],
+};
+
+/** subscriber の Audio Playback の Missed */
+export const AUDIO_PLAYBACK_MISSED_HELP: SectionHelp = {
+  summary: `Sounds that should have been played but were not, with their total length. Cumulative since subscribing started. The counts and the ms add up to the total.`,
+  items: [
+    ...AUDIO_MISS_REASONS.map((reason) => ({
+      term: reason,
+      description: AUDIO_MISS_REASON_DESCRIPTIONS[reason],
+    })),
+    {
+      term: "recentMisses",
+      description: `Last ${MAX_RECENT_AUDIO_MISSES} missed sounds, newest first: time (UTC), reason, length and the slack at that time.`,
+    },
+  ],
+  notes: [
+    "While playback is off (playbackEnabled false) no sound is expected, so nothing is counted.",
+    "lateness and backlog are the sounds that could not make their playout time. catchUp and stopped are sounds that were dropped on purpose or by stopping.",
+    "lateness + backlog equals the playoutDrops counter above; this one also carries the length in ms and the reason.",
+  ],
 };
 
 // 止まりの原因ごとの説明 (stallAnalysis.ts の判定)

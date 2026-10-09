@@ -216,6 +216,7 @@ const SUBSCRIBER_COVERAGE: CoverageExpectation = {
     audioRmsDbfsRight: "audio.rmsDbfsRight",
     audioPlayoutRebases: "audio.playoutRebases",
     audioPlayoutDrops: "audio.playoutDrops",
+    audioPlayoutTiming: "audio.playoutTiming",
     eventObjectsReceived: "event.objectsReceived",
   },
   excluded: {

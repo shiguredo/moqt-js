@@ -2,6 +2,7 @@ import { test, assert } from "vite-plus/test";
 import { createSubscriberInstance, EMPTY_AV_SYNC } from "./subscriber";
 import { EMPTY_PLAYBACK_TIMING } from "../utils/playbackTimingStats";
 import { EMPTY_PUBLISH_TIMING } from "../utils/publishTimingStats";
+import { EMPTY_AUDIO_PLAYOUT_TIMING } from "../../../src/audioPlayoutTimingStats.ts";
 import { buildPublisherStats, buildSubscriberStats } from "./statsSnapshot";
 import * as pub from "./publisher";
 
@@ -197,6 +198,41 @@ test("buildSubscriberStats: 音声の受信とデコード、再生の状態を�
   assert.equal(stats.audio.catchUpObjectsSkipped, 6);
   assert.equal(stats.audio.decoderConfigured, true);
   assert.equal(stats.audio.playbackEnabled, true);
+});
+
+test("buildSubscriberStats: 音声の再生の観測値を返す", () => {
+  // 鳴るはずの時刻と鳴らなかった量は、音声の語尾が聞こえない症状を数値で確定させるために
+  // 読む。E2E と実測スクリプトはこの値で、予定に間に合っていたかを切り分ける
+  const instance = createSubscriberInstance("audio-playout-timing");
+  const timing = {
+    ...EMPTY_AUDIO_PLAYOUT_TIMING,
+    lastTargetMs: 1_000,
+    lastArrivalMs: 920,
+    lastStartMs: 1_010,
+    lastSlackMs: 80,
+    lastStartDelayMs: 90,
+    lastLatenessMs: 10,
+    slackMs: { p50: 80, p95: 120, max: 400 },
+    startDelayMs: { p50: 90, p95: 130, max: 410 },
+    latenessMs: { p50: 10, p95: 10, max: 10 },
+    playedFrames: 100,
+    playedMs: 2_000,
+    unplannedFrames: 3,
+    missedFrames: 2,
+    missedMs: 40,
+    missedByReason: {
+      ...EMPTY_AUDIO_PLAYOUT_TIMING.missedByReason,
+      lateness: { count: 2, ms: 40 },
+    },
+  };
+  instance.audioPlayoutTiming.value = timing;
+  assert.deepEqual(buildSubscriberStats(instance).audio.playoutTiming, timing);
+  // 購読前は何も記録していない値を返す
+  assert.deepEqual(
+    buildSubscriberStats(createSubscriberInstance("audio-playout-timing-empty")).audio
+      .playoutTiming,
+    EMPTY_AUDIO_PLAYOUT_TIMING,
+  );
 });
 
 test("buildSubscriberStats: Largest Location の bigint を文字列にする", () => {

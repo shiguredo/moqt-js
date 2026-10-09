@@ -23,6 +23,12 @@ import { DataStreamErrorCode } from "moqt-js";
 import { LATENCY_SEGMENTS, LatencyBreakdown, type LatencySegment } from "./latencyBreakdown";
 import { STALL_CAUSES, StallAnalyzer, type ObjectPosition, type StallCause } from "./stallAnalysis";
 import { TimedValues } from "../../../src/timedValues.ts";
+import { summarizeTimings, type TimingSummary } from "../../../src/timingSummary.ts";
+
+// 分布の要約 (p50 / p95 / max) は、音声の再生の観測 (src/audioPlayoutTimingStats.ts) と
+// 同じ求め方を使うためライブラリ側に置く。映像側の利用側は従来どおりこのモジュールから
+// 読めるように再エクスポートする
+export { summarizeTimings, type TimingSummary };
 
 /** 分布を求める直近の窓 (ミリ秒) */
 export const PLAYBACK_TIMING_WINDOW_MS = 10_000;
@@ -78,13 +84,6 @@ export interface StreamResetEvent {
 export type LossEvent =
   | { readonly kind: "streamReset"; readonly event: StreamResetEvent }
   | { readonly kind: "lossStall"; readonly event: StallEvent };
-
-/** 分布の要約 (ミリ秒) */
-export interface TimingSummary {
-  readonly p50: number;
-  readonly p95: number;
-  readonly max: number;
-}
 
 /** 統計の値 */
 export interface PlaybackTimingSnapshot {
@@ -190,28 +189,6 @@ export const EMPTY_PLAYBACK_TIMING: PlaybackTimingSnapshot = {
   latencyBreakdown: emptyLatencyBreakdown(),
   groupSwitchHoldExpirations: 0,
 };
-
-/**
- * 値の分布を p50 / p95 / max に要約する
- *
- * 百分位は nearest-rank 法 (昇順に並べて ceil(p * n) 番目) で求める。値が無ければ null。
- */
-export function summarizeTimings(values: readonly number[]): TimingSummary | null {
-  if (values.length === 0) {
-    return null;
-  }
-  const sorted = [...values].sort((a, b) => a - b);
-  return {
-    p50: nearestRank(sorted, 0.5),
-    p95: nearestRank(sorted, 0.95),
-    max: nearestRank(sorted, 1),
-  };
-}
-
-function nearestRank(sorted: readonly number[], ratio: number): number {
-  const index = Math.max(0, Math.ceil(ratio * sorted.length) - 1);
-  return sorted[index] ?? Number.NaN;
-}
 
 /**
  * 1 回の止まりを 1 行の文字列にする

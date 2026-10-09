@@ -55,6 +55,11 @@ import {
   concealmentEndGain,
 } from "../../../src/audioPlayout.ts";
 import {
+  AUDIO_PLAYOUT_TIMING_WINDOW_MS,
+  AudioPlayoutTimingStats,
+  EMPTY_AUDIO_PLAYOUT_TIMING,
+} from "../../../src/audioPlayoutTimingStats.ts";
+import {
   compressSamples,
   concealSamples,
   type AudioSamples,
@@ -298,6 +303,7 @@ export function resetSubscriberStats(instance: sub.SubscriberInstance): void {
   instance.audioWaveformRight.value = null;
   instance.audioPlayoutRebases.value = 0;
   instance.audioPlayoutDrops.value = 0;
+  instance.audioPlayoutTiming.value = EMPTY_AUDIO_PLAYOUT_TIMING;
 }
 
 /**
@@ -732,6 +738,13 @@ export function useSubscriber(
     new PlaybackTimingStats(PLAYBACK_TIMING_WINDOW_MS, performance.timeOrigin),
   );
   const playbackTimingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // 音声の再生の観測 (鳴るはずの時刻・届いた時刻・鳴り始める時刻と、鳴らなかった量)。
+  // 音声の購読を始めるたびに初期化し、PLAYBACK_TIMING_PUBLISH_INTERVAL_MS ごとに
+  // signal へ反映する (src/audioPlayoutTimingStats.ts)
+  const audioPlayoutTimingRef = useRef(
+    new AudioPlayoutTimingStats(AUDIO_PLAYOUT_TIMING_WINDOW_MS, performance.timeOrigin),
+  );
+  const audioPlayoutTimingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   // 前の Group の Subgroup の stream が開いている間、次の Group の映像 Object を保留する
   // (src/groupSwitchGate.ts)。Object は Group ごとに別の stream で届き、前の Group の末尾が
   // 次の Group の先頭より後に届くと、VideoDecodeOrder が古い Group として捨てるため。
@@ -899,6 +912,44 @@ export function useSubscriber(
   }
 
   /**
+   * 音声の再生の観測の signal への反映を始める (音声の購読を始めるとき)
+   *
+   * 映像トラックの無い (音声だけの) 購読では映像の時間軸を作らないため、映像の統計の
+   * タイマーとは別に持つ。記録は購読を始めるたびに捨てる (前の購読の値を持ち越さない)。
+   */
+  function startAudioPlayoutTiming(): void {
+    stopAudioPlayoutTimingTimer();
+    audioPlayoutTimingRef.current.reset();
+    audioPlayoutTimingTimerRef.current = setInterval(() => {
+      const instance = sub.getSubscriber(subscriberId);
+      if (!instance) return;
+      instance.audioPlayoutTiming.value = audioPlayoutTimingRef.current.snapshot(performance.now());
+    }, PLAYBACK_TIMING_PUBLISH_INTERVAL_MS);
+  }
+
+  /**
+   * 音声の再生の観測の反映を止め、最後の観測値を 1 回反映する
+   *
+   * 停止の直前に切り捨てられた分 (予約済みで鳴らなかった音) まで画面と「Copy for LLM」に
+   * 出したいため、タイマーを止める前に最後の値を反映する。signal には最後に反映した値を
+   * 残す (他の統計と同じく、停止後も直前の購読の値を表示する)
+   */
+  function stopAudioPlayoutTiming(): void {
+    stopAudioPlayoutTimingTimer();
+    const instance = sub.getSubscriber(subscriberId);
+    if (!instance) return;
+    instance.audioPlayoutTiming.value = audioPlayoutTimingRef.current.snapshot(performance.now());
+  }
+
+  /** 音声の再生の観測を signal へ反映するタイマーを止める */
+  function stopAudioPlayoutTimingTimer(): void {
+    if (audioPlayoutTimingTimerRef.current !== null) {
+      clearInterval(audioPlayoutTimingTimerRef.current);
+      audioPlayoutTimingTimerRef.current = null;
+    }
+  }
+
+  /**
    * relay の cache から追いつく途中かどうかの境界を初期化する (購読を始めるたびに呼ぶ)
    *
    * 境界は各 Track の SUBSCRIBE_OK の LARGEST_OBJECT で設定する。この時点では前の購読の
@@ -988,6 +1039,9 @@ export function useSubscriber(
     const playback = audioPlaybackRef.current;
     audioPlaybackRef.current = null;
     if (playback) {
+      // 予約済みでまだ鳴り始めていない音は、AudioContext を閉じると鳴らないまま
+      // 切り捨てられる。この分は他の統計に現れないため、閉じる直前に数える
+      audioPlayoutTimingRef.current.recordStopped(performance.now());
       void playback.context.close().catch(() => {
         // 既に閉じている場合は無視する
       });
@@ -1183,6 +1237,8 @@ export function useSubscriber(
 
     instance.audioDecoder.value = audioDecoderInstance;
     instance.audioDecoderConfigured.value = true;
+    // 音声の再生の観測を始める (音声だけの購読でも再生は起きるため、映像の統計とは別に持つ)
+    startAudioPlayoutTiming();
     // 前の購読で復号に渡した TIMESTAMP の種類と位置を持ち越さない (decoder ごと作り直す)
     audioDecodeInputsRef.current.clear();
 
@@ -1445,6 +1501,11 @@ export function useSubscriber(
       return;
     }
 
+    // 鳴らすと決めたが鳴らし始める前に失敗した音を数えるための状態。失敗はこれまで
+    // ログにしか現れず、鳴らなかった量として数えられていなかった
+    let planned: { arrivalMs: number; targetMs: number | null; durationMs: number } | null = null;
+    let played = false;
+
     try {
       // 可視化用の読み出しは close() の前に済ませる (所有者はこのハンドラ)。
       // 再生の有無に関わらずレベルと波形を更新する。左右のチャンネルは別々に求める
@@ -1488,6 +1549,8 @@ export function useSubscriber(
       const inputs = audioDecodeInputsRef.current;
       const input = inputs.get(audioData.timestamp);
       inputs.delete(audioData.timestamp);
+      // 到着 (復号の出力を受け取った) 時刻。時間軸への記録と観測値の両方に同じ値を使う
+      const arrivalMs = performance.now();
 
       // relay の cache から届いた音は鳴らさない。復号は続ける (Audio Config はどの
       // Object にも載りうるため、cache の分の復号を飛ばすと適用を落とすことがある)。
@@ -1501,13 +1564,22 @@ export function useSubscriber(
       if (!instance.audioPlaybackEnabled.value || playback === null) {
         return;
       }
-      if (!live) {
-        instance.audioCatchUpObjectsSkipped.value += 1;
-        return;
-      }
 
       const numberOfChannels = audioData.numberOfChannels;
       const numberOfFrames = audioData.numberOfFrames;
+      const durationSeconds = numberOfFrames / audioData.sampleRate;
+      if (!live) {
+        instance.audioCatchUpObjectsSkipped.value += 1;
+        // 追いつきの途中で鳴らさなかった音も、鳴らなかった量として数える
+        audioPlayoutTimingRef.current.recordMiss({
+          atMs: arrivalMs,
+          reason: "catchUp",
+          durationMs: durationSeconds * 1_000,
+          targetMs: null,
+          arrivalMs: null,
+        });
+        return;
+      }
 
       // jitter buffer が無効のときは映像を時間軸へ記録しないため、音声も記録しない
       // (同期しないまま音声だけ目標へ合わせると映像とずれる)
@@ -1518,7 +1590,7 @@ export function useSubscriber(
       const timeline = playoutTimelineRef.current;
       if (wallClockTimestamp !== null) {
         // 復号の出力を共有の時間軸へ記録する。映像と同じ式で表示時刻を決める
-        timeline.observe("audio", performance.timeOrigin + performance.now(), wallClockTimestamp);
+        timeline.observe("audio", performance.timeOrigin + arrivalMs, wallClockTimestamp);
       }
 
       // AudioContext の時計と performance.now() の対応を取り直す。まだ描画が始まって
@@ -1531,7 +1603,7 @@ export function useSubscriber(
         playback.clock.update(
           hasMapping ? { contextTime, performanceTime } : null,
           playback.context.currentTime,
-          performance.now(),
+          arrivalMs,
         );
       }
 
@@ -1552,10 +1624,13 @@ export function useSubscriber(
       // は共有の再生遅延に下限が入らないため、ここで下限を必ず適用する。
       // 基準を取り直した回数と捨てた音の数を数える
       const rebasesBefore = playback.playout.rebases;
+      // 予約に使う今の時刻。鳴り始める時刻を performance 軸へ換算する基準にも使うため、
+      // 1 回だけ読む
+      const contextNowSeconds = playback.context.currentTime;
       const decision = playback.playout.schedule(
-        playback.context.currentTime,
+        contextNowSeconds,
         audioData.timestamp,
-        numberOfFrames / audioData.sampleRate,
+        durationSeconds,
         {
           targetStartSeconds,
           enforceTarget: targetStartSeconds !== null && jitterBufferEnabledRef.current,
@@ -1573,8 +1648,25 @@ export function useSubscriber(
       }
       if (decision.kind === "drop") {
         instance.audioPlayoutDrops.value += 1;
+        // 鳴らさなかった音を、理由と長さと一緒に数える。`audioPlayoutDrops` は件数しか
+        // 持たず、何ミリ秒分の音が鳴らなかったかが分からない
+        audioPlayoutTimingRef.current.recordMiss({
+          atMs: performance.now(),
+          reason: decision.reason,
+          durationMs: durationSeconds * 1_000,
+          targetMs,
+          arrivalMs,
+        });
         return;
       }
+      // 鳴らすと決めたが、鳴らし始める前に失敗したら数える (catch 句)
+      planned = { arrivalMs, targetMs, durationMs: durationSeconds };
+      // 鳴り始める時刻 (performance 軸)。時計の対応がまだ無いときは、予約に使った
+      // (performance.now(), currentTime) の組で換算する (`AudioClockBridge` の代用と
+      // 同じ求め方)
+      const startMs =
+        playback.clock.toPerformanceMs(decision.startAt) ??
+        arrivalMs + (decision.startAt - contextNowSeconds) * 1_000;
 
       // 目標を過ぎて届いた分は、波形の周期を使って詰める (NetEq の accelerate)。遅れて
       // 届いた音を捨てると音が途切れるため、鳴らす時刻をずらした分だけ詰めて目標へ戻す
@@ -1617,6 +1709,14 @@ export function useSubscriber(
       source.buffer = audioBuffer;
       source.connect(playback.destination);
       source.start(decision.startAt);
+      // 鳴らすと決めた音を記録する。長さは詰めた後 (実際に鳴る長さ) である
+      played = true;
+      audioPlayoutTimingRef.current.recordPlay(
+        arrivalMs,
+        targetMs,
+        startMs,
+        (frames / audioData.sampleRate) * 1_000,
+      );
 
       // 次の音の補間のために、実際に鳴らしたサンプルを保持する
       playback.previousChannels = stretched.channels;
@@ -1635,6 +1735,16 @@ export function useSubscriber(
         }
       }
     } catch (error) {
+      // 鳴らす準備の途中で失敗した音は、これまでログにしか現れなかった
+      if (planned !== null && !played) {
+        audioPlayoutTimingRef.current.recordMiss({
+          atMs: performance.now(),
+          reason: "error",
+          durationMs: planned.durationMs * 1_000,
+          targetMs: planned.targetMs,
+          arrivalMs: planned.arrivalMs,
+        });
+      }
       console.error(`[${subscriberId}] failed to play audio data:`, error);
     } finally {
       audioData.close();
@@ -2614,6 +2724,8 @@ export function useSubscriber(
     // 再生の停止は instance の有無に関わらず行う。パネルの削除では Map から先に
     // 消えるため、この後の instance 取得が失敗しても AudioContext を残さない
     stopAudioPlayback();
+    // 切り捨てられた分 (予約済みで鳴らなかった音) まで反映してから止める
+    stopAudioPlayoutTiming();
 
     const instance = sub.getSubscriber(subscriberId);
     if (!instance) return;

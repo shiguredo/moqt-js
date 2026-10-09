@@ -3417,6 +3417,62 @@ test("getStats: 詰めと遅れの統計をミリ秒で返す", () => {
   assert.equal(updated?.playoutDrops, control.audioPlayout.drops);
 });
 
+// 完了条件: 音声の再生の観測値 (再生予定時刻・到着時刻・鳴り始める時刻・予定に対する余裕)
+// が getStats から読める。音声の語尾が聞こえないとき、再生予定に間に合っていたのかを
+// この値で切り分ける。累積のカウンタ (playoutDrops) は件数しか持たないため、長さも出す
+test("getStats: 音声の再生の観測値を返す", () => {
+  const { control, errors } = createAvSyncSubscriber();
+  const mapping = audioClockMappingAt(avSyncReferenceMs());
+  const wallClockTimestamp = wallClockTimestampMicrosFor(mapping);
+  // 対応と、その対応を基準にした TIMESTAMP を同じ時刻で観測する
+  const observedWallClockMs = performance.timeOrigin + performance.now();
+  control.playbackTimeline.observe("audio", observedWallClockMs, wallClockTimestamp);
+  control.playbackTimeline.observe("video", observedWallClockMs, wallClockTimestamp);
+  control.audioTimestampKinds.set(wallClockTimestamp, "wallClock");
+
+  const reservation = playAudioFrame(control, wallClockTimestamp, mapping);
+  assert.equal(reservation.startedAtSeconds.length, 1, "音を 1 つ予約すること");
+
+  const timing = (control as unknown as { getStats(): MediaReceiverStats }).getStats().audio
+    ?.playoutTiming;
+  assert.isNotNull(timing);
+  // 鳴らすと決めた音を 1 つ数え、実際に鳴る長さ (960 サンプル / 48 kHz = 20 ms) を足す
+  assert.equal(timing?.playedFrames, 1);
+  assert.closeTo(timing?.playedMs ?? 0, 20, 1e-6);
+  assert.equal(timing?.unplannedFrames, 0, "予定を決められた音として数えること");
+  assert.equal(timing?.missedFrames, 0);
+  assert.equal(timing?.missedMs, 0);
+  // 到着時刻は復号の出力を受け取った時刻であり、予約より前である
+  const arrivalMs = timing?.lastArrivalMs ?? 0;
+  assert.isAbove(arrivalMs, 0);
+  assert.isNotNull(timing?.lastTargetMs, "LOC TIMESTAMP から再生予定時刻を決めること");
+  // 鳴り始める時刻は、予約した時刻 (AudioContext の秒) を対応で performance 軸へ
+  // 換算した値である
+  const expectedStartMs =
+    (reservation.startedAtSeconds[0] ?? 0) * 1_000 -
+    (mapping.contextTime * 1_000 - mapping.performanceTime);
+  assert.closeTo(timing?.lastStartMs ?? 0, expectedStartMs, 1e-6);
+  assert.closeTo(
+    timing?.lastStartDelayMs ?? 0,
+    (timing?.lastStartMs ?? 0) - arrivalMs,
+    1e-6,
+    "鳴るまでの時間は到着から鳴り始めるまでであること",
+  );
+  assert.closeTo(
+    timing?.lastLatenessMs ?? 0,
+    (timing?.lastStartMs ?? 0) - (timing?.lastTargetMs ?? 0),
+    1e-6,
+    "予定からの遅れは鳴り始める時刻と予定の差であること",
+  );
+  // 予定より前に届いている (余裕がある) ため、間に合わなかったわけではない
+  assert.closeTo(timing?.lastSlackMs ?? 0, (timing?.lastTargetMs ?? 0) - arrivalMs, 1e-6);
+  assert.isAbove(timing?.lastSlackMs ?? 0, 0);
+  // 分布も同じ値から求める (1 件なので 3 つとも同じ値)
+  assert.isNotNull(timing?.slackMs);
+  assert.equal(timing?.slackMs?.p50, timing?.slackMs?.max);
+  assert.equal(errors.length, 0);
+});
+
 /**
  * 完了条件: 音声の予約時刻は、共有の時間軸が決めた目標の表示時刻
  * (`Timestamp + 基準の遅れ + max(targetLatency, 再生遅延)`) を

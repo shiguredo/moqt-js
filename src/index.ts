@@ -259,3 +259,14 @@ export type {
   PlaybackTrackBreakdown,
   PlaybackUnsharedReason,
 } from "./playbackTimeline";
+
+// 音声の再生の観測値 (AudioReceiverStats.playoutTiming)。鳴るはずの時刻と鳴らなかった量
+export type {
+  AudioMissEvent,
+  AudioMissReason,
+  AudioMissTotal,
+  AudioPlayoutTimingSnapshot,
+} from "./audioPlayoutTimingStats";
+
+// 分布の要約 (p50 / p95 / max)。映像と音声の時間の統計で共通に使う
+export type { TimingSummary } from "./timingSummary";

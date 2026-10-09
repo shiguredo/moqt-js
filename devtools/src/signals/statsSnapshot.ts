@@ -2,6 +2,7 @@ import type { SessionStatistics } from "moqt-js";
 import type { PanelHttpVersion } from "../utils/httpVersion";
 import type { PlaybackTimingSnapshot } from "../utils/playbackTimingStats";
 import type { PublishTimingSnapshot } from "../utils/publishTimingStats";
+import type { AudioPlayoutTimingSnapshot } from "../../../src/audioPlayoutTimingStats.ts";
 import type { StatusType } from "../types";
 import {
   audioBytesSent,
@@ -208,6 +209,12 @@ export interface SubscriberAudioStats {
   playoutRebases: number;
   /** 遅れが上限を超えて捨てた音の数 */
   playoutDrops: number;
+  /**
+   * 音声の再生の観測値 (src/audioPlayoutTimingStats.ts)。鳴るはずの時刻 (再生予定時刻)・
+   * 届いた時刻・鳴り始める時刻と、予定に対する余裕の分布 (直近 10 秒)、鳴らなかった量
+   * (件数と ms) を理由ごとに持つ
+   */
+  playoutTiming: AudioPlayoutTimingSnapshot;
 }
 
 /** Subscriber の Messages (event timeline) の統計 */
@@ -403,6 +410,7 @@ export function buildSubscriberStats(sub: SubscriberInstance): SubscriberStats {
       lastVoiceActivity: audioLevel?.voiceActivity ?? null,
       playoutRebases: sub.audioPlayoutRebases.value,
       playoutDrops: sub.audioPlayoutDrops.value,
+      playoutTiming: sub.audioPlayoutTiming.value,
     },
     event: {
       objectsReceived: sub.eventObjectsReceived.value,

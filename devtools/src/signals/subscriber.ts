@@ -4,6 +4,10 @@ import type { PanelHttpVersion } from "../utils/httpVersion";
 import type { StatusType } from "../types";
 import type { DecoderWrapper } from "../utils/DecoderWrapper";
 import type { AudioDecoderWrapper } from "../../../src/codec/AudioDecoder.ts";
+import {
+  EMPTY_AUDIO_PLAYOUT_TIMING,
+  type AudioPlayoutTimingSnapshot,
+} from "../../../src/audioPlayoutTimingStats.ts";
 import { EMPTY_PLAYBACK_TIMING, type PlaybackTimingSnapshot } from "../utils/playbackTimingStats";
 
 /**
@@ -147,6 +151,11 @@ export interface SubscriberInstance {
   // 鳴らす時刻を過ぎて届いたなどで基準を取り直した回数と、遅れが上限を超えて捨てた音の数
   audioPlayoutRebases: Signal<number>;
   audioPlayoutDrops: Signal<number>;
+  // 音声の再生の観測値 (再生予定時刻・到着時刻・鳴り始める時刻・予定に対する余裕・
+  // 鳴らなかった量)。useSubscriber が一定間隔で更新する。まだ鳴らしていないときは
+  // 既定値のまま
+  // (src/audioPlayoutTimingStats.ts)
+  audioPlayoutTiming: Signal<AudioPlayoutTimingSnapshot>;
   // 復号した音声のレベル (dBFS)。左右のチャンネルを別々に持ち、モノラルのときは右が
   // null のまま。まだ復号していない状態も null
   audioPeakDbfsLeft: Signal<number | null>;
@@ -216,6 +225,7 @@ export function createSubscriberInstance(id: string): SubscriberInstance {
     audioPlaybackEnabled: signal(false),
     audioPlayoutRebases: signal(0),
     audioPlayoutDrops: signal(0),
+    audioPlayoutTiming: signal<AudioPlayoutTimingSnapshot>(EMPTY_AUDIO_PLAYOUT_TIMING),
     audioPeakDbfsLeft: signal<number | null>(null),
     audioPeakDbfsRight: signal<number | null>(null),
     audioRmsDbfsLeft: signal<number | null>(null),

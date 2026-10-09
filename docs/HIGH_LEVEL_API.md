@@ -472,6 +472,51 @@ interface AudioReceiverStats {
   playoutConcealedMs: number;
   // 目標を守る並べ方で最後に並べた音の遅れ (ms)。基準を消すと 0 に戻る
   playoutLatenessMs: number;
+  // 音声の再生の観測値。鳴るはずの時刻 (再生予定時刻)・届いた時刻・鳴り始める時刻と、
+  // 予定に対する余裕の分布 (直近 10 秒の p50 / p95 / max)、鳴らなかった量 (件数と ms) を
+  // 理由ごとに出す (src/audioPlayoutTimingStats.ts)
+  playoutTiming: AudioPlayoutTimingSnapshot;
+}
+
+// 音声の再生の観測値。時刻はすべて performance.now() と同じ軸のミリ秒であり、
+// 別のマシンでは publisher の時計とのずれを含む
+interface AudioPlayoutTimingSnapshot {
+  // 直近に鳴らすと決めた音の、再生予定時刻 (LOC TIMESTAMP から時間軸が決めた時刻)・
+  // 到着時刻 (復号の出力を受け取った時刻)・鳴り始める時刻。予定を決められなければ null
+  lastTargetMs: number | null;
+  lastArrivalMs: number | null;
+  lastStartMs: number | null;
+  // 直近に鳴らすと決めた音の、予定に対する余裕 (予定 - 到着。負なら届いた時点で予定を
+  // 過ぎている)、到着から鳴り始めるまでの時間、予定からどれだけ過ぎて鳴るか
+  lastSlackMs: number | null;
+  lastStartDelayMs: number | null;
+  lastLatenessMs: number | null;
+  // 直近の窓 (10 秒) の分布 (ms)。予定を決められない音は slackMs / latenessMs に入れない
+  slackMs: TimingSummary | null;
+  startDelayMs: TimingSummary | null;
+  latenessMs: TimingSummary | null;
+  // 鳴らすと決めた音の数と長さの合計 (累積。unplannedFrames を内数に含み、長さは詰めた後)
+  playedFrames: number;
+  playedMs: number;
+  // 再生予定時刻を決められないまま鳴らした音の数 (累積。壁時計の TIMESTAMP を持たない、
+  // jitter buffer が無効のとき)
+  unplannedFrames: number;
+  // 鳴らさなかった音の数と長さの合計 (累積)。理由ごとの和に一致する
+  missedFrames: number;
+  missedMs: number;
+  // 理由ごとの数と長さ (累積)。lateness (目標から離れすぎて捨てた)、backlog (並べすぎて
+  // 捨てた)、catchUp (relay の cache から追いつく途中で鳴らさなかった)、error (鳴らす準備に
+  // 失敗した)、stopped (予約したまま再生を止めて切り捨てられた)
+  missedByReason: Record<AudioMissReason, { count: number; ms: number }>;
+  // 直近に鳴らさなかった音 (古い順、最大 30 件)
+  recentMisses: AudioMissEvent[];
+}
+
+// 分布の要約 (ミリ秒)
+interface TimingSummary {
+  p50: number;
+  p95: number;
+  max: number;
 }
 
 interface VideoReceiverStats {
@@ -574,6 +619,18 @@ jitter buffer の遅れは音声と映像で別々に求める。音声は NetEq
 
 `AudioStats` / `VideoStats` は送信側 (`MediaStats`) の型である。受信側は
 `AudioReceiverStats` / `VideoReceiverStats` を使う。
+
+`AudioReceiverStats.playoutTiming` は、音声が「鳴るはずだった時刻」と「実際に鳴り始める
+時刻」の観測値である。受信した音声の再生予定時刻は LOC の TIMESTAMP から `PlaybackTimeline`
+が決め、到着時刻は復号の出力を受け取った時刻、鳴り始める時刻は `AudioContext` の時計へ
+予約した時刻を `AudioClockBridge` で `performance.now()` の軸へ換算した値である
+(音声出力の遅延は含まない)。予定に対する余裕 (`slackMs` の分布) が負であれば、届いた時点で
+すでに予定を過ぎており、その音は間に合っていない。
+
+`missedFrames` / `missedMs` は、鳴らすと決めたのに鳴らなかった音の数と長さである。
+`playoutDrops` が件数だけを数えるのに対し、こちらは理由 (`missedByReason`) と長さ、
+直近の一覧 (`recentMisses`) を持つ。「遅れて届いたから鳴らなかった」のか「目標から
+離れすぎたから捨てた」のかを分けて見るために使う。
 
 `framesReceived` / `bytesReceived` は復号器へ渡す判定まで進んだ Object を数える
 (`bytesReceived` は payload と properties の長さの合計)。映像は統計の加算が復号順の判定より

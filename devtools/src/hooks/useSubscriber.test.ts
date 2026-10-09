@@ -27,6 +27,7 @@ import {
 import { AudioDecoderWrapper } from "../../../src/codec/AudioDecoder";
 import { buildObjectSendPlan } from "./usePublisher";
 import { EMPTY_PLAYBACK_TIMING, PlaybackTimingStats } from "../utils/playbackTimingStats";
+import { EMPTY_AUDIO_PLAYOUT_TIMING } from "../../../src/audioPlayoutTimingStats";
 import { GroupSwitchGate } from "../../../src/groupSwitchGate";
 import { createSubscriberInstance, subscriberInstances } from "../signals/subscriber";
 import * as pub from "../signals/publisher";
@@ -866,6 +867,15 @@ test("resetSubscriberStats: 音声の統計と最終レベルを初期化する"
   instance.audioWaveformRight.value = new Float32Array([4, 5, 6]);
   instance.audioPlayoutRebases.value = 2;
   instance.audioPlayoutDrops.value = 3;
+  // 鳴らすと決めた音の観測値も、前の購読の値を持ち越さない
+  instance.audioPlayoutTiming.value = {
+    ...EMPTY_AUDIO_PLAYOUT_TIMING,
+    lastArrivalMs: 100,
+    playedFrames: 5,
+    playedMs: 100,
+    missedFrames: 1,
+    missedMs: 20,
+  };
   instance.audioCatchUpObjectsSkipped.value = 5;
 
   resetSubscriberStats(instance);
@@ -882,6 +892,7 @@ test("resetSubscriberStats: 音声の統計と最終レベルを初期化する"
   assert.equal(instance.audioWaveformRight.value, null);
   assert.equal(instance.audioPlayoutRebases.value, 0);
   assert.equal(instance.audioPlayoutDrops.value, 0);
+  assert.deepEqual(instance.audioPlayoutTiming.value, EMPTY_AUDIO_PLAYOUT_TIMING);
   assert.equal(instance.audioCatchUpObjectsSkipped.value, 0);
 });
 

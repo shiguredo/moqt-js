@@ -31,6 +31,7 @@ import { VideoDecoderWrapper } from "./codec/VideoDecoder";
 import { VideoDecodeOrder, priorObjectIdGapOf } from "./videoDecodeOrder";
 import { GroupSwitchGate } from "./groupSwitchGate";
 import { AudioClockBridge, AudioPlayoutScheduler, concealmentEndGain } from "./audioPlayout";
+import { AudioPlayoutTimingStats, AUDIO_PLAYOUT_TIMING_WINDOW_MS } from "./audioPlayoutTimingStats";
 import { compressSamples, concealSamples, type AudioSamples } from "./audioTimeStretch";
 import { JITTER_BUFFER_MAX_QUEUED_FRAMES, PlayoutBuffer } from "./playoutBuffer";
 import { AUDIO_PLAYOUT_DELAY_FLOOR_MS, PlaybackTimeline } from "./playbackTimeline";
@@ -454,6 +455,13 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   private previousAudioSampleRate = 0;
   // AudioContext の時計と performance.now() の対応。予約のたびに取り直す
   private readonly audioClockBridge = new AudioClockBridge();
+  // 音声の再生の観測 (鳴るはずの時刻・届いた時刻・鳴り始める時刻と、鳴らなかった量)。
+  // 鳴らなかった音がどこの段で落ちているかを数値で切り分けるために持つ
+  // (src/audioPlayoutTimingStats.ts)。購読をやり直しても消えない
+  private readonly audioPlayoutTiming = new AudioPlayoutTimingStats(
+    AUDIO_PLAYOUT_TIMING_WINDOW_MS,
+    performance.timeOrigin,
+  );
   // 音声と映像で共有する表示時刻の時間軸。同じ targetLatency と同じ遅れを使う
   private readonly playbackTimeline = new PlaybackTimeline({
     timeOriginMs: performance.timeOrigin,
@@ -875,6 +883,8 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       playoutCompressedMs: this.audioPlayout.compressed * 1_000,
       playoutConcealedMs: this.audioPlayout.concealed * 1_000,
       playoutLatenessMs: this.audioPlayout.lateness * 1_000,
+      // 分布は直近 10 秒のため、呼び出した時点の値を取る
+      playoutTiming: this.audioPlayoutTiming.snapshot(performance.now()),
     };
   }
 
@@ -1054,6 +1064,9 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     });
 
     // AudioContext を閉じる
+    // 予約済みでまだ鳴り始めていない音は、閉じると鳴らないまま切り捨てられる。この分は
+    // どの統計にも現れないため、閉じる直前に数える
+    this.audioPlayoutTiming.recordStopped(performance.now());
     const audioContext = this.audioContext;
     this.audioContext = null;
     await guard(() => audioContext?.close());
@@ -2343,10 +2356,16 @@ export class MediaSubscriberImpl implements MediaSubscriber {
 
     // AudioData を AudioBuffer に変換して再生
     const audioData = data.data;
+    // 鳴らすと決めたが鳴らし始める前に失敗した音を数えるための状態。失敗はこれまで
+    // onError にしか現れず、鳴らなかった量として数えられていなかった
+    let planned: { arrivalMs: number; targetMs: number | null; durationMs: number } | null = null;
+    let played = false;
     try {
       const numberOfChannels = audioData.numberOfChannels;
       const sampleRate = audioData.sampleRate;
       const numberOfFrames = audioData.numberOfFrames;
+      // 到着 (復号の出力を受け取った) 時刻。時間軸への記録と観測値の両方に同じ値を使う
+      const arrivalMs = performance.now();
 
       // 復号の出力を共有の時間軸へ記録し、映像と同じ式で目標の時刻を求める
       // (src/playbackTimeline.ts)。壁時計の TIMESTAMP を持たない音は目標を持たず、
@@ -2359,7 +2378,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       if (isWallClock) {
         this.playbackTimeline.observe(
           "audio",
-          performance.timeOrigin + performance.now(),
+          performance.timeOrigin + arrivalMs,
           audioData.timestamp,
         );
       }
@@ -2373,7 +2392,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
         this.audioClockBridge.update(
           hasMapping ? { contextTime, performanceTime } : null,
           this.audioContext.currentTime,
-          performance.now(),
+          arrivalMs,
         );
       }
       const targetMs = isWallClock
@@ -2381,10 +2400,14 @@ export class MediaSubscriberImpl implements MediaSubscriber {
         : null;
       const targetStartSeconds =
         targetMs === null ? null : this.audioClockBridge.toAudioSeconds(targetMs);
+      // 予約に使う今の時刻 (`AudioContext.currentTime`)。鳴り始める時刻を performance 軸へ
+      // 換算するときの基準にも使うため、1 回だけ読む
+      const contextNowSeconds = this.audioContext.currentTime;
+      const durationSeconds = numberOfFrames / sampleRate;
       const decision = this.audioPlayout.schedule(
-        this.audioContext.currentTime,
+        contextNowSeconds,
         audioData.timestamp,
-        numberOfFrames / sampleRate,
+        durationSeconds,
         {
           targetStartSeconds,
           // 映像も購読しているときだけ目標を守る。音声だけのときは取り直して連続を優先する
@@ -2402,8 +2425,25 @@ export class MediaSubscriberImpl implements MediaSubscriber {
         },
       );
       if (decision.kind === "drop") {
+        // 鳴らさなかった音を、理由と長さと一緒に数える。累積のカウンタ (`playoutDrops`) は
+        // 件数しか持たず、何ミリ秒分の音が鳴らなかったかが分からない
+        this.audioPlayoutTiming.recordMiss({
+          atMs: performance.now(),
+          reason: decision.reason,
+          durationMs: durationSeconds * 1_000,
+          targetMs,
+          arrivalMs,
+        });
         return;
       }
+      // 鳴らすと決めたが、鳴らし始める前に失敗したら数える (catch 句)
+      planned = { arrivalMs, targetMs, durationMs: durationSeconds };
+      // 鳴り始める時刻 (performance 軸)。時計の対応がまだ無いときは、予約に使った
+      // (performance.now(), currentTime) の組で換算する (`AudioClockBridge` の代用と
+      // 同じ求め方)
+      const startMs =
+        this.audioClockBridge.toPerformanceMs(decision.startAt) ??
+        arrivalMs + (decision.startAt - contextNowSeconds) * 1_000;
 
       // 目標を過ぎて届いた分は、波形の周期を使って詰める (NetEq の accelerate)。遅れて
       // 届いた音を捨てると音が途切れるため、鳴らす時刻をずらした分だけ詰めて目標へ戻す
@@ -2468,6 +2508,14 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       source.buffer = audioBuffer;
       source.connect(this.audioDestination);
       source.start(decision.startAt);
+      // 鳴らすと決めた音を記録する。長さは詰めた後 (実際に鳴る長さ) である
+      played = true;
+      this.audioPlayoutTiming.recordPlay(
+        arrivalMs,
+        targetMs,
+        startMs,
+        (frames / sampleRate) * 1_000,
+      );
 
       // 次の音の補間のために、実際に鳴らしたサンプルを保持する
       this.previousAudioChannels = stretched.channels;
@@ -2485,6 +2533,16 @@ export class MediaSubscriberImpl implements MediaSubscriber {
         }
       }
     } catch (error) {
+      // 鳴らす準備の途中で失敗した音は、これまで onError にしか現れなかった
+      if (planned !== null && !played) {
+        this.audioPlayoutTiming.recordMiss({
+          atMs: performance.now(),
+          reason: "error",
+          durationMs: planned.durationMs * 1_000,
+          targetMs: planned.targetMs,
+          arrivalMs: planned.arrivalMs,
+        });
+      }
       this.callbacks.onError?.(error instanceof Error ? error : new Error(String(error)));
     } finally {
       audioData.close();
