@@ -287,11 +287,28 @@ interface MediaSubscriberOptions {
   // Pending Subgroup Stream の buffer 設定 (§11.3.1)。
   // 未指定のフィールドは既定値で補完される
   pendingSubgroup?: Partial<PendingSubgroupBufferOptions>;
+  // 初期 configure (SUBSCRIBE_OK の Track Property の VIDEO_CONFIG / AUDIO_CONFIG) の
+  // 完了まで保留する Object の上限 (件数 / payload と properties の長さの合計)。
+  // 未指定のフィールドは既定値 (512 件 / 1 MiB) で補完される。0 以下で上限なし
+  pendingObjectQueue?: Partial<PendingObjectQueueOptions>;
 }
 ```
 
 MediaPublisherOptions も `audio` / `video` / `useWorker` / `serverCertificateHashes` に加えて
 `authorizationToken` と `pendingSubgroup` を持つ (購読側と同じ形)。
+
+初期 configure (`SUBSCRIBE_OK` の Track Property の `VIDEO_CONFIG` / `AUDIO_CONFIG`) を反映する
+までの間に届いた Object は、到着順に保留してから復号する (draft-ietf-moq-loc-04 Table 1 /
+§2.3.2.1 / §2.3.3.1)。保留は購読要求から初期 configure 完了までの短い区間に限られるが、
+購読が確立しない異常時は区間が伸びるため、件数とバイト数の両方に上限を設ける。
+バイト数の上限は payload と properties の長さの合計で数える (受信統計の `bytesReceived` と
+同じ基準)。
+上限を超えた Object は保留せず破棄し、`onError` で通知する。通知はキューごとに購読期間
+あたり 1 回だけで、音声と映像が同時に溢れれば 1 購読期間に最大 2 回になる (再 start すると
+新しい購読期間として再び通知される)。破棄した Object は受信統計に数えない。
+音声と映像は別々のキューと上限を持ち、上限は `pendingObjectQueue` で変更できる。
+`PendingObjectQueueOptions` (上限の型) と `DEFAULT_PENDING_OBJECT_QUEUE_OPTIONS` (既定値)
+は `moqt-js` から import できる。
 
 `authorizationToken` を省略した場合、接続先の MOQT URI の msf fragment に `c4m` があれば、
 `connect()` がその値を復号して `SETUP` の `AUTHORIZATION TOKEN` (`0x03`) として送る
@@ -501,6 +518,13 @@ jitter buffer の遅れは音声と映像で別々に求める。音声は NetEq
 
 `AudioStats` / `VideoStats` は送信側 (`MediaStats`) の型である。受信側は
 `AudioReceiverStats` / `VideoReceiverStats` を使う。
+
+`framesReceived` / `bytesReceived` は復号器へ渡す判定まで進んだ Object を数える
+(`bytesReceived` は payload と properties の長さの合計)。映像は統計の加算が復号順の判定より
+前にあるため、Group の順序と欠落で復号しないと決めた Object も数え、理由別に
+`staleFramesDropped` / `missingReferenceFramesDropped` へ別途加算する。初期 configure の完了まで
+保留している Object は保留中の間は数えず、解放後は他の Object と同じ扱いで数える。
+保留キューの上限 (`pendingObjectQueue`) を超えて破棄した Object は数えない。
 
 受信した映像は Group の順序と欠落を見て、参照するフレームを復号済みの Object だけを
 復号する。Object は順不同で届きうる (draft-ietf-moq-transport-22 Section 2.1) ため、

@@ -35,6 +35,7 @@ import {
 } from "./msf";
 import {
   catalogFetchFilter,
+  DEFAULT_PENDING_OBJECT_QUEUE_OPTIONS,
   filterPendingCatalogObjects,
   isVideoKeyFrameObject,
   processCatalogPayload,
@@ -372,6 +373,11 @@ interface SubscriberInitialConfigControl {
   audioDecoderConfigured: boolean;
   videoInitialConfigPending: boolean;
   audioInitialConfigPending: boolean;
+  // 初期 configure の完了まで保留するキュー (件数とバイト数の上限つき) と、その計数
+  pendingAudioObjects: MoqtObject[];
+  pendingVideoObjects: MoqtObject[];
+  pendingAudioQueueState: { bytes: number; overflowNotified: boolean };
+  pendingVideoQueueState: { bytes: number; overflowNotified: boolean };
   videoSubscriber: { trackProperties?: { id: bigint; data?: Uint8Array }[] } | null;
   audioSubscriber: { trackProperties?: { id: bigint; data?: Uint8Array }[] } | null;
   // configure は codec / 解像度 / サンプルレートを Catalog の track info から解決するため注入する
@@ -398,6 +404,32 @@ function makeIdentifiedObject(objectId: bigint, marker: number): MoqtObject {
     status: 0,
     payload: new Uint8Array([marker]),
   };
+}
+
+/**
+ * payload 長と properties 長を指定して Object を作る (保留キューのバイト上限の検証用)
+ *
+ * properties は省略可能なため、長さ 0 のときはフィールド自体を作らない
+ * (exactOptionalPropertyTypes では undefined を明示できない)。
+ */
+function makeSizedObject(
+  objectId: bigint,
+  marker: number,
+  payloadLength: number,
+  propertiesLength = 0,
+): MoqtObject {
+  const payload = new Uint8Array(payloadLength);
+  payload[0] = marker;
+  const object: MoqtObject = {
+    groupId: 1n,
+    objectId,
+    status: 0,
+    payload,
+  };
+  if (propertiesLength > 0) {
+    object.properties = new Uint8Array(propertiesLength);
+  }
+  return object;
 }
 
 /**
@@ -809,6 +841,532 @@ test("applyInitialAudioConfig: Track Property の AUDIO_CONFIG が初期 configu
   assert.equal(configured.length, 1);
   assert.deepEqual(Array.from(configured[0] ?? []), [4, 5]);
   assert.deepEqual(decoded, [0x66]);
+});
+
+// ============================================================================
+// 保留キューの上限（初期 configure の完了まで保持する Object）
+// ============================================================================
+
+/**
+ * 上限の既定値は定数として export され、購読の作成時に
+ * `MediaSubscriberOptions.pendingObjectQueue` で上書きできる。保留は購読要求から
+ * 初期 configure 完了までの短い区間に限られるが、`session.subscribe` が解決しない、
+ * または初期 configure がハングする異常時は区間が伸びるため、件数とバイト数の
+ * 両方に上限を設ける (0 以下は上限なしという既存の上限の規約に合わせる)。
+ */
+test("pendingObjectQueue: 既定は 512 件 / 1 MiB の定数として export されている", () => {
+  assert.equal(DEFAULT_PENDING_OBJECT_QUEUE_OPTIONS.maxObjects, 512);
+  assert.equal(DEFAULT_PENDING_OBJECT_QUEUE_OPTIONS.maxBytes, 1 << 20);
+});
+
+/**
+ * 上限の指定を省略した場合は既定値が効く。件数の上限は「上限ぶんは保持し、超えた分は
+ * 保持しない」であり、超過の通知はキューごとに購読期間あたり 1 回だけである。
+ */
+test("handleVideoObject: 上限を省略したら既定の件数上限で保留を打ち切る", () => {
+  const errors: Error[] = [];
+  const subscriber = new MediaSubscriberImpl(
+    "moqt://example.com/live",
+    { namespace: ["live"], video: {} },
+    {
+      onError: (error) => {
+        errors.push(error);
+      },
+    },
+  );
+  const control = subscriber as unknown as SubscriberInitialConfigControl;
+  // subscribeMediaTracks が購読要求より前に有効化する状態を再現する
+  control.videoInitialConfigPending = true;
+
+  // 既定の件数上限ちょうどまで保持し、その次の 1 件は保持しない
+  const limit = DEFAULT_PENDING_OBJECT_QUEUE_OPTIONS.maxObjects;
+  for (let i = 0; i <= limit; i++) {
+    control.handleVideoObject(makeIdentifiedObject(BigInt(i), 0x11));
+  }
+
+  assert.equal(control.pendingVideoObjects.length, limit);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0]?.message ?? "", /video pending object queue overflow/);
+  assert.match(errors[0]?.message ?? "", new RegExp(`maxObjects=${limit}`));
+});
+
+/**
+ * 上限を超えた Object は保持せず破棄し、超過は onError で 1 回だけ通知する。
+ * 上限内の Object は従来どおり初期 configure 完了後に到着順で処理され、
+ * 破棄した Object は受信統計に数えない (保留中の Object を数えていないのと同じ扱い)。
+ */
+test("handleVideoObject: 保留キューの件数上限を超えた Object は破棄し onError を 1 回通知する", async () => {
+  const errors: Error[] = [];
+  const subscriber = new MediaSubscriberImpl(
+    "moqt://example.com/live",
+    { namespace: ["live"], video: {}, pendingObjectQueue: { maxObjects: 2 } },
+    {
+      onError: (error) => {
+        errors.push(error);
+      },
+    },
+  );
+  const control = subscriber as unknown as SubscriberInitialConfigControl;
+  const decoded: number[] = [];
+  control.videoDecoder = {
+    configure: async () => {},
+    decode: (payload) => {
+      decoded.push(payload[0] ?? -1);
+    },
+  };
+  control.videoDecoderConfigured = true;
+  control.videoTrackInfo = { name: "video", packaging: "loc", isLive: true, codec: "vp8" };
+  control.videoInitialConfigPending = true;
+
+  // 上限 2 件のうち 2 件は保留し、3 件目と 4 件目は保持しない
+  control.handleVideoObject(makeIdentifiedObject(0n, 0x11));
+  control.handleVideoObject(makeIdentifiedObject(1n, 0x22));
+  control.handleVideoObject(makeIdentifiedObject(2n, 0x33));
+  control.handleVideoObject(makeIdentifiedObject(3n, 0x44));
+
+  assert.equal(control.pendingVideoObjects.length, 2);
+  assert.equal(control.pendingVideoQueueState.bytes, 2);
+  // 保留中は復号せず、統計にも数えない
+  assert.deepEqual(decoded, []);
+  assert.equal(subscriber.getStats().video?.framesReceived, 0);
+  assert.equal(subscriber.getStats().video?.bytesReceived, 0);
+  // 超過の通知は 1 回だけで、上限と実際の件数を含む
+  assert.equal(errors.length, 1);
+  assert.match(errors[0]?.message ?? "", /video pending object queue overflow/);
+  assert.match(errors[0]?.message ?? "", /maxObjects=2/);
+  assert.match(errors[0]?.message ?? "", /objects=3/);
+
+  // 初期 configure の完了で、保留していた 2 件だけが到着順に復号される
+  await control.applyInitialVideoConfig();
+  assert.deepEqual(decoded, [0x11, 0x22]);
+  assert.equal(subscriber.getStats().video?.framesReceived, 2);
+  assert.equal(subscriber.getStats().video?.bytesReceived, 2);
+  // 解放後は保留キューの計数も空になる
+  assert.equal(control.pendingVideoObjects.length, 0);
+  assert.equal(control.pendingVideoQueueState.bytes, 0);
+});
+
+/**
+ * バイト数の上限は、小さい Object を少しだけ送る場合でも効く。件数の上限に達して
+ * いなくても、payload の合計が上限を超えた Object は保持せず破棄する。
+ */
+test("handleAudioObject: 保留キューのバイト上限を超えた Object は破棄し onError を 1 回通知する", async () => {
+  const errors: Error[] = [];
+  const subscriber = new MediaSubscriberImpl(
+    "moqt://example.com/live",
+    { namespace: ["live"], audio: {}, pendingObjectQueue: { maxBytes: 3 } },
+    {
+      onError: (error) => {
+        errors.push(error);
+      },
+    },
+  );
+  const control = subscriber as unknown as SubscriberInitialConfigControl;
+  const decoded: number[] = [];
+  control.audioDecoder = {
+    configure: async () => {},
+    decode: (payload) => {
+      decoded.push(payload[0] ?? -1);
+    },
+  };
+  control.audioDecoderConfigured = true;
+  control.audioTrackInfo = { name: "audio", packaging: "loc", isLive: true, codec: "opus" };
+  control.audioInitialConfigPending = true;
+
+  // payload 2 バイトは保留し、続く 2 バイトは合計 4 バイトで上限 3 を超えるため保持しない
+  // (さらに続く Object も保持せず、通知は 1 回だけである)
+  control.handleAudioObject(makeSizedObject(0n, 0x11, 2));
+  control.handleAudioObject(makeSizedObject(1n, 0x22, 2));
+  control.handleAudioObject(makeSizedObject(2n, 0x33, 2));
+
+  assert.equal(control.pendingAudioObjects.length, 1);
+  assert.equal(control.pendingAudioQueueState.bytes, 2);
+  assert.deepEqual(decoded, []);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0]?.message ?? "", /audio pending object queue overflow/);
+  assert.match(errors[0]?.message ?? "", /maxBytes=3/);
+  assert.match(errors[0]?.message ?? "", /bytes=4/);
+
+  // 初期 configure の完了で、保留していた 1 件だけが復号される (破棄した分は統計に入らない)
+  await control.applyInitialAudioConfig();
+  assert.deepEqual(decoded, [0x11]);
+  assert.equal(subscriber.getStats().audio?.framesReceived, 1);
+  assert.equal(subscriber.getStats().audio?.bytesReceived, 2);
+  assert.equal(control.pendingAudioObjects.length, 0);
+  assert.equal(control.pendingAudioQueueState.bytes, 0);
+});
+
+/**
+ * バイト数の上限も「上限ぶんは保持し、超える分は保持しない」であり、payload と
+ * properties の合計が上限ちょうどの Object は保持する。上限を 1 バイトでも超えた
+ * Object だけを破棄する (件数の上限の数え方に合わせる)。
+ */
+test("handleAudioObject: payload と properties の合計がバイト上限ちょうどの Object は保持する", () => {
+  const errors: Error[] = [];
+  const subscriber = new MediaSubscriberImpl(
+    "moqt://example.com/live",
+    { namespace: ["live"], audio: {}, pendingObjectQueue: { maxBytes: 6 } },
+    {
+      onError: (error) => {
+        errors.push(error);
+      },
+    },
+  );
+  const control = subscriber as unknown as SubscriberInitialConfigControl;
+  control.audioInitialConfigPending = true;
+
+  // payload 3 バイトの 1 件目で合計 3 バイト、payload 1 バイト + properties 2 バイトの
+  // 2 件目で合計 6 バイト (上限ちょうど) になり、properties 付きでもどちらも保留する
+  control.handleAudioObject(makeSizedObject(0n, 0x11, 3));
+  control.handleAudioObject(makeSizedObject(1n, 0x22, 1, 2));
+  assert.equal(control.pendingAudioObjects.length, 2);
+  assert.equal(control.pendingAudioQueueState.bytes, 6);
+  assert.deepEqual(errors, []);
+
+  // 合計 7 バイトになる 3 件目で初めて破棄し、超過を 1 回だけ通知する
+  control.handleAudioObject(makeSizedObject(2n, 0x33, 1));
+  assert.equal(control.pendingAudioObjects.length, 2);
+  assert.equal(control.pendingAudioQueueState.bytes, 6);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0]?.message ?? "", /maxBytes=6/);
+  assert.match(errors[0]?.message ?? "", /bytes=7/);
+});
+
+/**
+ * properties の長さは wire では varint で運ばれ、上限が無ければ無制限に受理され得る。
+ * payload だけを数えると、payload が 0 バイトに近くても properties が大きい Object が
+ * バイト上限に触れずに保持され続けるため、payload と properties の合計で判定する
+ * (受信統計の bytesReceived と同じ定義)。
+ */
+test("handleAudioObject: payload が小さくても properties との合計がバイト上限を超えたら破棄する", () => {
+  const errors: Error[] = [];
+  const subscriber = new MediaSubscriberImpl(
+    "moqt://example.com/live",
+    { namespace: ["live"], audio: {}, pendingObjectQueue: { maxBytes: 8 } },
+    {
+      onError: (error) => {
+        errors.push(error);
+      },
+    },
+  );
+  const control = subscriber as unknown as SubscriberInitialConfigControl;
+  control.audioInitialConfigPending = true;
+
+  // properties 16 バイトだけでも上限 8 を超える (payload 1 バイトを足した合計は 17 バイト)
+  control.handleAudioObject(makeSizedObject(0n, 0x11, 1, 16));
+  assert.equal(control.pendingAudioObjects.length, 0);
+  assert.equal(control.pendingAudioQueueState.bytes, 0);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0]?.message ?? "", /audio pending object queue overflow/);
+  assert.match(errors[0]?.message ?? "", /maxBytes=8/);
+  // 通知のバイト数は payload と properties の合計 17 であり、payload だけの 1 ではない
+  assert.match(errors[0]?.message ?? "", /bytes=17/);
+
+  // 同じ payload でも properties が無ければ合計 1 バイトで上限に収まるため、保留する
+  control.handleAudioObject(makeSizedObject(1n, 0x22, 1));
+  assert.equal(control.pendingAudioObjects.length, 1);
+  assert.equal(control.pendingAudioQueueState.bytes, 1);
+  assert.equal(errors.length, 1);
+});
+
+/**
+ * 件数とバイト数の上限はどちらも独立に見るため、1 件の Object で同時に超えることがある。
+ * 同時に超えても通知は 1 回だけで、その後の超過でも増えない (キューごとに購読期間あたり
+ * 1 回だけ通知する)。
+ */
+test("handleVideoObject: 件数とバイト数の上限を同時に超えても onError は 1 回だけ通知する", () => {
+  const errors: Error[] = [];
+  const subscriber = new MediaSubscriberImpl(
+    "moqt://example.com/live",
+    { namespace: ["live"], video: {}, pendingObjectQueue: { maxObjects: 1, maxBytes: 2 } },
+    {
+      onError: (error) => {
+        errors.push(error);
+      },
+    },
+  );
+  const control = subscriber as unknown as SubscriberInitialConfigControl;
+  control.videoInitialConfigPending = true;
+
+  // 1 件目 (payload 1 バイト) は件数 1 とバイト数 1 でどちらの上限にも収まる
+  control.handleVideoObject(makeSizedObject(0n, 0x11, 1));
+  assert.equal(control.pendingVideoObjects.length, 1);
+  assert.equal(control.pendingVideoQueueState.bytes, 1);
+
+  // 2 件目 (payload 2 バイト) は件数 2 > 1 とバイト数 3 > 2 を同時に超える
+  control.handleVideoObject(makeSizedObject(1n, 0x22, 2));
+  assert.equal(control.pendingVideoObjects.length, 1);
+  assert.equal(control.pendingVideoQueueState.bytes, 1);
+  assert.equal(errors.length, 1);
+  // 通知の文言には両方の上限と実際の値が入る
+  assert.match(errors[0]?.message ?? "", /video pending object queue overflow/);
+  assert.match(errors[0]?.message ?? "", /maxObjects=1/);
+  assert.match(errors[0]?.message ?? "", /maxBytes=2/);
+  assert.match(errors[0]?.message ?? "", /objects=2/);
+  assert.match(errors[0]?.message ?? "", /bytes=3/);
+
+  // 3 件目も両方を超えるが、通知済みフラグにより通知は増えない
+  control.handleVideoObject(makeSizedObject(2n, 0x33, 2));
+  assert.equal(errors.length, 1);
+  assert.equal(control.pendingVideoObjects.length, 1);
+  assert.equal(control.pendingVideoQueueState.bytes, 1);
+});
+
+/**
+ * 上限に 0 以下を指定した場合は上限なしになる (ConnectOptions の
+ * dataStreamMaxBufferBytes と同じ規約)。既定の件数上限を超える件数でも保持し、
+ * 超過の通知は出ない。
+ */
+test("handleVideoObject: 上限に 0 以下を指定したら無制限に保留する", () => {
+  const errors: Error[] = [];
+  const subscriber = new MediaSubscriberImpl(
+    "moqt://example.com/live",
+    { namespace: ["live"], video: {}, pendingObjectQueue: { maxObjects: 0, maxBytes: 0 } },
+    {
+      onError: (error) => {
+        errors.push(error);
+      },
+    },
+  );
+  const control = subscriber as unknown as SubscriberInitialConfigControl;
+  control.videoInitialConfigPending = true;
+
+  const count = DEFAULT_PENDING_OBJECT_QUEUE_OPTIONS.maxObjects + 1;
+  for (let i = 0; i < count; i++) {
+    control.handleVideoObject(makeIdentifiedObject(BigInt(i), 0x11));
+  }
+
+  assert.equal(control.pendingVideoObjects.length, count);
+  assert.equal(control.pendingVideoQueueState.bytes, count);
+  assert.deepEqual(errors, []);
+});
+
+/**
+ * 上限に負の値を指定した場合も上限なしになる (0 以下で上限なしという規約)。件数は既定の
+ * 上限を超える件数を、バイト数は 1 件で既定の上限を超える payload を送り、どちらの上限も
+ * 効かないことを見る。
+ */
+test("handleAudioObject: 上限に負の値を指定したら無制限に保留する", () => {
+  const errors: Error[] = [];
+  const subscriber = new MediaSubscriberImpl(
+    "moqt://example.com/live",
+    { namespace: ["live"], audio: {}, pendingObjectQueue: { maxObjects: -1, maxBytes: -1 } },
+    {
+      onError: (error) => {
+        errors.push(error);
+      },
+    },
+  );
+  const control = subscriber as unknown as SubscriberInitialConfigControl;
+  control.audioInitialConfigPending = true;
+
+  // 既定の件数上限 + 1 件を送る (負の件数上限が 0 件の上限として扱われないこと)
+  const count = DEFAULT_PENDING_OBJECT_QUEUE_OPTIONS.maxObjects + 1;
+  for (let i = 0; i < count; i++) {
+    control.handleAudioObject(makeIdentifiedObject(BigInt(i), 0x11));
+  }
+  assert.equal(control.pendingAudioObjects.length, count);
+  assert.equal(control.pendingAudioQueueState.bytes, count);
+
+  // 1 件で既定のバイト上限を超える payload も保留する (負のバイト上限が効かないこと)
+  const oversize = 2 << 20;
+  control.handleAudioObject(makeSizedObject(BigInt(count), 0x22, oversize));
+  assert.equal(control.pendingAudioObjects.length, count + 1);
+  assert.equal(control.pendingAudioQueueState.bytes, count + oversize);
+  assert.deepEqual(errors, []);
+});
+
+/**
+ * 上限超過の通知はキューごとに購読期間あたり 1 回だけである。購読をやり直したら、
+ * 新しい購読期間の超過は改めて通知される (通知済みフラグを購読開始で解除する)。
+ */
+test("subscribeMediaTracks: 購読期間ごとに上限超過の通知を解除する", async () => {
+  const errors: Error[] = [];
+  const subscriber = new MediaSubscriberImpl(
+    "moqt://example.com/live",
+    { namespace: ["live"], video: { codec: "vp8" }, pendingObjectQueue: { maxObjects: 1 } },
+    {
+      onError: (error) => {
+        errors.push(error);
+      },
+    },
+  );
+  const control = subscriber as unknown as SubscriberInitialConfigControl & {
+    session: {
+      subscribe(
+        namespace: string[],
+        trackName: string,
+        callbacks: { object: (obj: MoqtObject) => void },
+      ): Promise<{ trackProperties: { id: bigint; data?: Uint8Array }[] }>;
+    } | null;
+    sessionGeneration: number;
+    subscribeMediaTracks(startGeneration: number): Promise<void>;
+  };
+  const decoded: number[] = [];
+  control.videoDecoder = {
+    configure: async () => {},
+    decode: (payload) => {
+      decoded.push(payload[0] ?? -1);
+    },
+  };
+  control.videoDecoderConfigured = true;
+  control.videoTrackInfo = { name: "video", packaging: "loc", isLive: true, codec: "vp8" };
+  // 購読のたびに Group を進める (Group 先頭の Object 0 をキーフレームとして復号させる)
+  let groupId = 1n;
+  let marker = 0x10;
+  control.session = {
+    subscribe: async (_namespace, _trackName, callbacks) => {
+      // 購読要求より前に保留が有効化されている
+      assert.isTrue(control.videoInitialConfigPending);
+      const currentGroupId = groupId;
+      groupId++;
+      const heldMarker = marker;
+      marker++;
+      const droppedMarker = marker;
+      marker++;
+      // 上限 1 件を超える 2 件を購読の確立中に届ける (2 件目は保持せず破棄する)
+      callbacks.object({ ...makeIdentifiedObject(0n, heldMarker), groupId: currentGroupId });
+      callbacks.object({ ...makeIdentifiedObject(1n, droppedMarker), groupId: currentGroupId });
+      return { trackProperties: [] };
+    },
+  };
+
+  await control.subscribeMediaTracks(control.sessionGeneration);
+  // 1 回目の購読期間: 上限内の 1 件だけが復号され、超過の通知は 1 回
+  assert.deepEqual(decoded, [0x10]);
+  assert.equal(errors.length, 1);
+  assert.equal(control.pendingVideoObjects.length, 0);
+  assert.equal(control.pendingVideoQueueState.bytes, 0);
+
+  // 2 回目の購読期間 (購読のやり直し): 通知済みフラグが解除されるため改めて通知される
+  await control.subscribeMediaTracks(control.sessionGeneration);
+  assert.deepEqual(decoded, [0x10, 0x12]);
+  assert.equal(errors.length, 2);
+  assert.equal(control.pendingVideoObjects.length, 0);
+});
+
+/**
+ * 上限超過の通知はキューごとに購読期間あたり 1 回だけであり、音声と映像は別々のキュー
+ * として数える。1 回の購読で両方のキューが溢れたら、1 購読期間に最大 2 回 (キューごとに
+ * 1 回) 通知される。音声と映像で共通の通知済みフラグを持つと 1 回で止まってしまうため、
+ * キューごとのフラグであることをここで固定する。
+ */
+test("subscribeMediaTracks: 音声と映像の両方のキューが溢れたら onError は 2 回になる", async () => {
+  const errors: Error[] = [];
+  const subscriber = new MediaSubscriberImpl(
+    "moqt://example.com/live",
+    {
+      namespace: ["live"],
+      audio: { codec: "opus" },
+      video: { codec: "vp8" },
+      // 音声と映像は同じ上限を持ち、どちらも 1 件で溢れさせる
+      pendingObjectQueue: { maxObjects: 1 },
+    },
+    {
+      onError: (error) => {
+        errors.push(error);
+      },
+    },
+  );
+  const control = subscriber as unknown as SubscriberInitialConfigControl & {
+    session: {
+      subscribe(
+        namespace: string[],
+        trackName: string,
+        callbacks: { object: (obj: MoqtObject) => void },
+      ): Promise<{ trackProperties: { id: bigint; data?: Uint8Array }[] }>;
+    } | null;
+    audioTrackInfo: CatalogTrack | null;
+    videoTrackInfo: CatalogTrack | null;
+    sessionGeneration: number;
+    subscribeMediaTracks(startGeneration: number): Promise<void>;
+  };
+  control.audioTrackInfo = {
+    name: "audio",
+    packaging: "loc",
+    isLive: true,
+    codec: "opus",
+    samplerate: 48000,
+    channelConfig: "2",
+  };
+  control.videoTrackInfo = { name: "video", packaging: "loc", isLive: true, codec: "vp8" };
+  // 上限 1 件を超える 2 件を、音声の購読と映像の購読のそれぞれで届ける (2 件目を破棄させる)
+  const arriveOverLimit = (callbacks: { object: (obj: MoqtObject) => void }): void => {
+    callbacks.object(makeIdentifiedObject(0n, 0x11));
+    callbacks.object(makeIdentifiedObject(1n, 0x22));
+  };
+  control.session = {
+    subscribe: async (_namespace, trackName, callbacks) => {
+      // 購読要求より前に、購読する media 側の保留が有効化されている
+      const initialConfigPending =
+        trackName === "audio"
+          ? control.audioInitialConfigPending
+          : control.videoInitialConfigPending;
+      assert.isTrue(initialConfigPending);
+      arriveOverLimit(callbacks);
+      return { trackProperties: [] };
+    },
+  };
+
+  await control.subscribeMediaTracks(control.sessionGeneration);
+
+  // 通知は音声と映像で 1 回ずつになり、共通のフラグなら 1 回で止まる
+  assert.equal(errors.length, 2);
+  assert.match(errors[0]?.message ?? "", /audio pending object queue overflow/);
+  assert.match(errors[1]?.message ?? "", /video pending object queue overflow/);
+  // どちらのキューも上限内の 1 件だけを保持し、初期 configure の完了までに解放されて空になる
+  assert.equal(control.pendingAudioObjects.length, 0);
+  assert.equal(control.pendingVideoObjects.length, 0);
+  assert.equal(control.pendingAudioQueueState.bytes, 0);
+  assert.equal(control.pendingVideoQueueState.bytes, 0);
+});
+
+/**
+ * close() は保留分を破棄し、上限超過の通知済みフラグも解除する。破棄は解放
+ * (disposeAllResources) が行い、購読の再開はそのあとの start() が新しい購読期間として行う。
+ */
+test("close: 保留キューと上限超過の通知済みフラグを破棄する", async () => {
+  const errors: Error[] = [];
+  const subscriber = new MediaSubscriberImpl(
+    "moqt://example.com/live",
+    { namespace: ["live"], video: {}, pendingObjectQueue: { maxObjects: 1 } },
+    {
+      onError: (error) => {
+        errors.push(error);
+      },
+    },
+  );
+  const control = subscriber as unknown as SubscriberLifecycleControl &
+    SubscriberInitialConfigControl;
+  control.currentState = "active";
+  injectLifecycleResources(control);
+  const decoded: number[] = [];
+  control.videoDecoder = {
+    configure: async () => {},
+    decode: (payload) => {
+      decoded.push(payload[0] ?? -1);
+    },
+    close: () => {},
+  };
+  control.videoDecoderConfigured = true;
+  control.videoInitialConfigPending = true;
+  // 上限 1 件を超える 2 件目で超過を通知させる
+  control.handleVideoObject(makeIdentifiedObject(0n, 0x11));
+  control.handleVideoObject(makeIdentifiedObject(1n, 0x22));
+  assert.equal(control.pendingVideoObjects.length, 1);
+  assert.equal(errors.length, 1);
+  assert.isTrue(control.pendingVideoQueueState.overflowNotified);
+
+  await subscriber.close();
+
+  // 保留分と計数・通知済みフラグ・保留の有効化が破棄され、復号も統計も進まない
+  assert.equal(control.pendingVideoObjects.length, 0);
+  assert.equal(control.pendingVideoQueueState.bytes, 0);
+  assert.isFalse(control.pendingVideoQueueState.overflowNotified);
+  assert.isFalse(control.videoInitialConfigPending);
+  assert.deepEqual(decoded, []);
+  assert.equal(subscriber.getStats().video?.framesReceived, 0);
+  assert.equal(subscriber.state, "closed");
 });
 
 /**

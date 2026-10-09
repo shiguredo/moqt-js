@@ -213,6 +213,15 @@ export interface MediaSubscriberOptions {
   // draft-ietf-moq-transport-22 §11.3.1
   // 未指定 field は DEFAULT_PENDING_SUBGROUP_BUFFER_OPTIONS で補完される
   pendingSubgroup?: Partial<import("../pendingSubgroupBuffer").PendingSubgroupBufferOptions>;
+  // 初期 configure (SUBSCRIBE_OK の Track Property の VIDEO_CONFIG / AUDIO_CONFIG。
+  // draft-ietf-moq-loc-04 Table 1) の完了まで保留する Object の上限
+  // (件数 / payload と properties の長さの合計)。0 以下で上限なし
+  // 未指定 field は DEFAULT_PENDING_OBJECT_QUEUE_OPTIONS で補完される
+  // 音声と映像は別々のキューを持ち、上限もキューごとに判定する。上限を超えた Object は
+  // 保持せず破棄し、超過は onError でキューごとに購読期間あたり 1 回だけ通知する
+  // (音声と映像が同時に溢れれば 1 購読期間に最大 2 回。破棄した Object は受信統計に
+  // 数えない)
+  pendingObjectQueue?: Partial<import("../createMediaSubscriber").PendingObjectQueueOptions>;
 }
 
 // MediaSubscriber コールバック
