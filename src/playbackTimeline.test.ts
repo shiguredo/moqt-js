@@ -19,6 +19,7 @@ import {
   MAX_PLAYOUT_DELAY_MS,
   PLAYBACK_DELAY_DECAY_MS_PER_SECOND,
   PLAYBACK_DISCONTINUITY_MS,
+  PLAYOUT_BASE_DRIFT_MS,
   PLAYOUT_BASE_MAX_DIFFERENCE_MIN_MS,
   PLAYOUT_QUEUE_HEADROOM_FRAMES,
   PlaybackTimeline,
@@ -37,6 +38,8 @@ const FAST_FRAME_MS = 1_000 / 120;
 const MAX_QUEUED_FRAMES = 24;
 // TIMESTAMP (約 1.79e15 マイクロ秒) とミリ秒の変換で生じる誤差を許す幅 (ミリ秒)
 const TOLERANCE_MS = 0.01;
+// 音声の TIMESTAMP が壁時計から遅れる速さ (毎秒ミリ秒)。0754 の実測 (336 秒で 16027 ms) に合わせる
+const DRIFT_TEST_MS_PER_SECOND = 48;
 
 /** メディア時刻 (ミリ秒) のフレームの TIMESTAMP (Unix epoch マイクロ秒) */
 function timestampOf(mediaMs: number): number {
@@ -96,10 +99,37 @@ function observeBothStreams(timeline: PlaybackTimeline, durationMs: number): voi
   }
 }
 
+// 音声の TIMESTAMP だけが壁時計から遅れる到着列を作るときの長さ (ミリ秒)
+const DRIFT_TEST_DURATION_MS = 120_000;
+
+/**
+ * 音声の TIMESTAMP だけが壁時計から遅れていく到着列を与える (0754 の実測)
+ *
+ * 音声と映像はどちらも揺らぎ 0 で同じ時刻に届く。音声の TIMESTAMP だけが毎秒
+ * `DRIFT_TEST_MS_PER_SECOND` ずつ壁時計から遅れる。
+ *
+ * @returns 最後に観測したメディア時刻 (ミリ秒)
+ */
+function observeDriftedStreams(
+  timeline: PlaybackTimeline,
+  frameRate: number,
+  durationMs: number,
+): number {
+  const frameMs = 1_000 / frameRate;
+  const driftPerMs = DRIFT_TEST_MS_PER_SECOND / 1_000;
+  let mediaMs = 0;
+  for (let index = 0; index * frameMs < durationMs; index++) {
+    mediaMs = index * frameMs;
+    const observedAtMs = EPOCH_MS + mediaMs;
+    timeline.observe("video", observedAtMs, timestampOf(mediaMs));
+    timeline.observe("audio", observedAtMs, timestampOf(mediaMs - driftPerMs * mediaMs));
+  }
+  return mediaMs;
+}
+
 // ============================================================================
 // 表示時刻の式
 // ============================================================================
-
 // 基準が無い間は表示時刻を決めない。呼び出し側は到着基準の再生 (映像は届いた順に 1 枚ずつ)
 // へフォールバックする
 test("presentationWallClockMicros: まだ観測していなければ表示時刻を決めない", () => {
@@ -763,18 +793,8 @@ test("presentationWallClockMicros: 120 秒の到着列でも同時刻の表示�
 // 窓の最小値として単調に増え、映像の表示時刻が未来へ伸びて 1 枚も描かれなくなる
 test("observe: 音声の TIMESTAMP がドリフトしたら共有せず、映像の表示時刻が伸びない", () => {
   for (const frameRate of [30, 60]) {
-    const frameMs = 1_000 / frameRate;
     const timeline = createTimeline();
-    // 毎秒 48 ms ずつ音声の TIMESTAMP が壁時計から遅れる (0754 の実測)
-    const driftPerMs = 48 / 1_000;
-    const durationMs = 120_000;
-    let mediaMs = 0;
-    for (let index = 0; index * frameMs < durationMs; index++) {
-      mediaMs = index * frameMs;
-      const observedAtMs = EPOCH_MS + mediaMs;
-      timeline.observe("video", observedAtMs, timestampOf(mediaMs));
-      timeline.observe("audio", observedAtMs, timestampOf(mediaMs - driftPerMs * mediaMs));
-    }
+    const mediaMs = observeDriftedStreams(timeline, frameRate, DRIFT_TEST_DURATION_MS);
     // 差が閾値 (キューが吸収できる長さ - 表示の遅れ) を超えるため、基準を共有しない
     assert.isFalse(timeline.sharingBases, `${frameRate} fps: 基準を共有しないこと`);
     // ずれた側 (音声) は表示時刻を返さず、到着基準の再生へ落ちる
@@ -788,6 +808,54 @@ test("observe: 音声の TIMESTAMP がドリフトしたら共有せず、映像
       videoPresentationMs,
       mediaMs + MAX_PLAYOUT_DELAY_MS + TOLERANCE_MS,
       `${frameRate} fps: 映像の表示時刻が上限を超えないこと`,
+    );
+  }
+});
+
+// 完了条件: ドリフトは「差が閾値 (表示の遅れの上限) を超えたとき」ではなく「差が動き続けて
+// いるとき」に検出する。閾値だけを見ると、検出するまで相手へ足し続けて上限まで遅らせて
+// しまい、その分がそのまま A/V のずれになる (0754 の実測では毎秒 48 ms なので、閾値の
+// 500 ms に達するのは 10 秒以上先である)
+test("observe: ドリフトは差が動き続けた時点で検出する", () => {
+  const timeline = createTimeline();
+  // 閾値に達する前に検出できていれば、映像へ足した分は動きの幅の中に留まる
+  observeDriftedStreams(timeline, 30, 20_000);
+  assert.isFalse(timeline.sharingBases, "基準を共有しないこと");
+  assert.isAtMost(
+    timeline.videoDelayMs ?? 0,
+    PLAYOUT_BASE_DRIFT_MS,
+    "映像へ足した分が動きの幅に収まること",
+  );
+});
+
+// 完了条件: 基準を共有できないと判定したら、ずれた側へ合わせて足した分を戻す。残すと、
+// 戻す先が無いため上限まで遅れたままになり、同じ時刻の音声と映像が最大で上限の分だけ
+// 離れる (映像だけが遅れて、明らかに音声が先行して聞こえる)
+test("observe: ドリフトで基準を共有しなくなったら映像へ足した分を戻す", () => {
+  for (const frameRate of [30, 60]) {
+    const timeline = createTimeline();
+    const mediaMs = observeDriftedStreams(timeline, frameRate, DRIFT_TEST_DURATION_MS);
+    assert.isFalse(timeline.sharingBases, `${frameRate} fps: 基準を共有しないこと`);
+
+    // 映像の表示の遅れは自分の揺らぎだけで決まる。この到着列は揺らぎ 0 であるため、
+    // ドリフトへ合わせて足した分が残っていれば、その分だけ遅れが大きくなる
+    const videoDelayMs = timeline.videoDelayMs;
+    assert.isNotNull(videoDelayMs, `${frameRate} fps: 映像の表示の遅れが決まること`);
+    assert.isAtMost(
+      videoDelayMs ?? 0,
+      TOLERANCE_MS,
+      `${frameRate} fps: 映像の表示の遅れに足した分が残らないこと`,
+    );
+
+    // 音声は到着基準の再生へ落ちるため、実際に鳴るのは「到着 + 再生の遅れ」である
+    // (src/audioPlayout.ts)。映像の表示時刻と比べて、映像が遅れていないこと
+    const playoutDelayMs = timeline.playoutDelayMs ?? AUDIO_PLAYOUT_DELAY_FLOOR_MS;
+    const audioPlaysAtMs = EPOCH_MS + mediaMs + playoutDelayMs;
+    const videoShowsAtMs = EPOCH_MS + performanceMsOf(timeline, "video", mediaMs);
+    assert.isAtMost(
+      videoShowsAtMs - audioPlaysAtMs,
+      SYNC_MIN_DELTA_MS,
+      `${frameRate} fps: 映像が音声より遅れて表示されないこと`,
     );
   }
 });

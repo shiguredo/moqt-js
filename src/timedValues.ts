@@ -46,6 +46,42 @@ export class TimedValues {
     return count;
   }
 
+  /**
+   * 窓の中の最も古い記録 (時刻と値)。無ければ null
+   *
+   * 値が窓の中でどれだけ動いたかを見るために使う。
+   */
+  oldest(): { atMs: number; value: number } | null {
+    if (this.head >= this.times.length) {
+      return null;
+    }
+    const atMs = this.times[this.head];
+    const value = this.values[this.head];
+    if (atMs === undefined || value === undefined) {
+      return null;
+    }
+    return { atMs, value };
+  }
+
+  /**
+   * atMs が sinceMs 以降の値の最小値。無ければ null
+   *
+   * 窓 (prune) より短い区間の最小値を取り直すために使う。窓全体の最小値は、値が
+   * 単調に動いているときに最も古い観測を指したままになるため、直近の動きを見るには
+   * 短い区間で取り直す必要がある。
+   */
+  minAfter(sinceMs: number): number | null {
+    let min: number | null = null;
+    for (let index = this.times.length - 1; index >= this.head; index--) {
+      if ((this.times[index] ?? sinceMs) < sinceMs) {
+        break;
+      }
+      const value = this.values[index] ?? 0;
+      min = min === null ? value : Math.min(min, value);
+    }
+    return min;
+  }
+
   clear(): void {
     this.times = [];
     this.values = [];

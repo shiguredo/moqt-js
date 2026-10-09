@@ -28,6 +28,10 @@
  * - 2 つのトラックの基準の差が、表示の遅れの上限から下限を引いた閾値を超えたら同期しない。
  *   TIMESTAMP が壁時計からずれているトラック (音声のドリフトなど) に、もう片方を
  *   合わせないため
+ * - 基準の差が `PLAYOUT_BASE_DRIFT_MS` を超えて動いたら (差が経路の遅れではなく時計の
+ *   ずれである)、大きさの閾値を待たずに同期しない。合わせると片側の表示の遅れが上限まで
+ *   伸びて戻せなくなるためである。同期しない間は、その時点までに足した分を毎秒
+ *   `PLAYBACK_DELAY_DECAY_MS_PER_SECOND` までで戻す
  *
  * ブラウザ API に依存せず、時刻は引数で受ける (`performance.now()` と
  * `performance.timeOrigin` は呼び出し側が渡す)。
@@ -108,6 +112,36 @@ export const PLAYOUT_QUEUE_HEADROOM_FRAMES = 4;
  * 往復して基準の学習とキューの到着順化が繰り返し起きるため、下限を置く
  */
 export const PLAYOUT_BASE_MAX_DIFFERENCE_MIN_MS = 100;
+
+/**
+ * 2 つのトラックの基準の差が、この幅を超えて動いたら時計がずれているとみなす (ミリ秒)
+ *
+ * 差が大きいだけなら「経路と復号の遅い側」であり、同期の制御で合わせられる。しかし
+ * 差が動き続ける場合、それは経路の遅れではなく、片方の TIMESTAMP が壁時計から
+ * ずれていくこと (0754 の音声のドリフトなど) を意味する。ずれ続ける差を合わせると、
+ * もう片方の表示の遅れが上限まで伸びて戻せなくなるため、動きで見分ける。
+ *
+ * 実時間に対する時計の進み方の違いは 500 ppm (毎秒 0.5 ms) 未満であり、経路と復号の
+ * 最小遅延の差も毎秒ミリ秒の桁でしか動かない。したがってこの幅 (5 秒で 50 ms =
+ * 毎秒 10 ms) を超える動きは時計のずれとみなしてよい
+ */
+export const PLAYOUT_BASE_DRIFT_MS = 50;
+
+/** 基準の差の動きを見る窓 (ミリ秒) */
+export const PLAYOUT_BASE_DRIFT_WINDOW_MS = 5_000;
+
+/** 基準の差を記録する間隔 (ミリ秒) */
+const BASE_DIFFERENCE_SAMPLE_INTERVAL_MS = 250;
+
+/**
+ * 基準の差の動きを見るときに使う、直近の基準を求める窓 (ミリ秒)
+ *
+ * 窓全体 (`PLAYBACK_WINDOW_MS`) の最小値は、TIMESTAMP が壁時計から遅れていくときも
+ * 窓が埋まるまで動かない。短い窓で取り直すことで、合わせる側の遅れが上限へ伸びる前に
+ * 動きを見つける。短くするほど経路の揺らぎの影響を受けやすいため、映像の到着が
+ * まとまっていても最小値が動かない長さにする
+ */
+const BASE_DIFFERENCE_RECENT_WINDOW_MS = 2_000;
 
 /**
  * 同期の制御を行うずれの下限 (ミリ秒)
@@ -209,6 +243,12 @@ export class PlaybackTimeline {
   private lastSyncMs: number | null = null;
   // 直前に同期の制御に使った「自分の遅延の下限」(ミリ秒)。下げる速さの残りを求めるために持つ
   private lastOwnFloorMs: Record<PlaybackStream, number> | null = null;
+  // 2 つのトラックの基準の差の直近の履歴 (ミリ秒)。差が動き続けていれば時計のずれである
+  private readonly baseDifferences = new TimedValues();
+  // 直前に基準の差を記録した時刻 (ミリ秒)。まだ記録していなければ null
+  private lastBaseDifferenceAtMs: number | null = null;
+  // 直前に記録した基準の差 (ミリ秒)。履歴と同じ求め方であり、動きの今側の値になる
+  private lastBaseDifferenceValue: number | null = null;
   private targetLatencyValue: number | null = null;
   private limitedValue = 0;
   private generationValue = 0;
@@ -273,6 +313,7 @@ export class PlaybackTimeline {
     }
     const baseMs = Math.min(...window);
     state.baseMs = baseMs;
+    this.recordBaseDifference(wallClockMs);
 
     if (stream === "audio") {
       // 音声の表示の遅れは NetEq と同じ規則で求める (到着の遅れの 0.95 分位)
@@ -480,6 +521,65 @@ export class PlaybackTimeline {
   }
 
   /**
+   * 2 つのトラックの基準の差を記録する (`BASE_DIFFERENCE_SAMPLE_INTERVAL_MS` ごと)
+   *
+   * 差が動き続けているかを見るために使う (`baseDifferenceDrifted`)。記録するのは窓全体の
+   * 最小値ではなく短い区間の最小値である。窓全体の最小値は、TIMESTAMP が壁時計から
+   * 遅れていくときも窓が埋まるまで動かないため、動きを早く見つけられない
+   */
+  private recordBaseDifference(nowMs: number): void {
+    if (
+      this.lastBaseDifferenceAtMs !== null &&
+      nowMs - this.lastBaseDifferenceAtMs < BASE_DIFFERENCE_SAMPLE_INTERVAL_MS
+    ) {
+      return;
+    }
+    const audioMs = this.recentBaseMs("audio", nowMs);
+    const videoMs = this.recentBaseMs("video", nowMs);
+    if (audioMs === null || videoMs === null) {
+      return;
+    }
+    this.lastBaseDifferenceAtMs = nowMs;
+    this.lastBaseDifferenceValue = audioMs - videoMs;
+    this.baseDifferences.push(nowMs, this.lastBaseDifferenceValue);
+    this.baseDifferences.prune(nowMs - PLAYOUT_BASE_DRIFT_WINDOW_MS);
+  }
+
+  /**
+   * 直近の基準 (ミリ秒。まだ観測していなければ null)
+   *
+   * 窓全体の最小値 (`baseMs`) ではなく `BASE_DIFFERENCE_RECENT_WINDOW_MS` の最小値である。
+   * 基準が単調に動いているとき、窓全体の最小値は最も古い観測を指したままになるため
+   */
+  private recentBaseMs(stream: PlaybackStream, nowMs: number): number | null {
+    return this.streams[stream].offsets.minAfter(nowMs - BASE_DIFFERENCE_RECENT_WINDOW_MS);
+  }
+
+  /**
+   * 基準の差が動き続けているか (時計がずれているとみなすか)
+   *
+   * 窓の中の最も古い記録と今の差を比べる。差が大きいだけでは動きとみなさないため、
+   * 同期の制御で合わせられる差 (経路と復号の遅い側) を時計のずれと誤判定しない
+   */
+  private baseDifferenceDrifted(): boolean {
+    const oldest = this.baseDifferences.oldest();
+    if (oldest === null || this.lastBaseDifferenceValue === null) {
+      return false;
+    }
+    return Math.abs(this.lastBaseDifferenceValue - oldest.value) > PLAYOUT_BASE_DRIFT_MS;
+  }
+
+  /** 今の「音声の基準 - 映像の基準」(ミリ秒)。どちらかを観測していなければ null */
+  private currentBaseDifferenceMs(): number | null {
+    const audioBase = this.streams.audio.baseMs;
+    const videoBase = this.streams.video.baseMs;
+    if (audioBase === null || videoBase === null) {
+      return null;
+    }
+    return audioBase - videoBase;
+  }
+
+  /**
    * 1 つのトラックの基準と学習と実績だけを消す。世代は進めない
    *
    * 音声の再生を止めたときなど、そのトラックを観測していない状態に戻す。表示時刻の式は
@@ -505,6 +605,10 @@ export class PlaybackTimeline {
     this.syncExtraMs = { audio: 0, video: 0 };
     this.lastSyncMs = null;
     this.lastOwnFloorMs = null;
+    // 基準の差の履歴も消す (片方の基準が無い状態の差に意味は無い)
+    this.baseDifferences.clear();
+    this.lastBaseDifferenceAtMs = null;
+    this.lastBaseDifferenceValue = null;
     // 学習を消すとキューの上限 (フレーム間隔) も変わるため、切り下げた分を取り直す
     this.updateLimitedMs();
   }
@@ -570,6 +674,11 @@ export class PlaybackTimeline {
   private updateSyncDelays(nowMs: number): void {
     const naturalMs = this.syncNaturalPresentationMs();
     if (naturalMs === null) {
+      // 2 つのトラックの基準を共有できない (基準がずれている、またはまだ観測していない)。
+      // 合わせる相手がいないため、足した分を自分の基準だけの表示時刻へ戻す。戻さないと、
+      // ずれたトラックへ合わせて足した分がそのまま残り (観測のたびに増え続けて上限で
+      // 頭打ちになる)、その分だけ 2 つの表示時刻が離れたままになる
+      this.decaySyncExtras(nowMs, () => 0);
       return;
     }
 
@@ -578,24 +687,38 @@ export class PlaybackTimeline {
 
     // 2) 足した分を目標へ戻す (毎秒の速さまで。自分の下限が下がった分だけ減らす。
     //    観測の間隔で按分するため、観測が疎でも速さは変わらない)
+    const alignedNaturalMs = Math.max(naturalMs.audio, naturalMs.video) - SYNC_MIN_DELTA_MS;
+    this.decaySyncExtras(nowMs, (stream) => Math.max(0, alignedNaturalMs - naturalMs[stream]));
+
+    // 3) 戻した後のずれをもう一度そろえる (片側だけ戻すと、その分だけずれが開く)
+    this.alignSyncExtras(naturalMs);
+  }
+
+  /**
+   * 足した分を目標へ戻す (毎秒 `PLAYBACK_DELAY_DECAY_MS_PER_SECOND` まで)
+   *
+   * 観測の間隔で按分するため、観測が疎でも速さは変わらない。自分の遅延の下限が同時に
+   * 下がっているときは、その分だけ戻す量を減らす (下限が下がるだけでも表示時刻は前に
+   * 動くため、戻しすぎると不感帯を通り越す)
+   *
+   * @param nowMs - 今の時刻 (ミリ秒)
+   * @param targetExtraMs - トラックごとの、戻す先の足した分 (ミリ秒)
+   */
+  private decaySyncExtras(nowMs: number, targetExtraMs: (stream: PlaybackStream) => number): void {
     const previousSyncMs = this.lastSyncMs;
     this.lastSyncMs = nowMs;
     const elapsedMs = previousSyncMs === null ? 0 : Math.max(0, nowMs - previousSyncMs);
     const budgetMs = (PLAYBACK_DELAY_DECAY_MS_PER_SECOND * elapsedMs) / 1_000;
-    const alignedNaturalMs = Math.max(naturalMs.audio, naturalMs.video) - SYNC_MIN_DELTA_MS;
     for (const stream of ["audio", "video"] as const) {
       const ownDecreaseMs =
         this.lastOwnFloorMs === null
           ? 0
           : Math.max(0, this.lastOwnFloorMs[stream] - (this.naturalDelayMsOf(stream) ?? 0));
       const allowedMs = Math.max(0, budgetMs - ownDecreaseMs);
-      const targetExtraMs = Math.max(0, alignedNaturalMs - naturalMs[stream]);
-      const excessMs = this.syncExtraMs[stream] - targetExtraMs;
+      const excessMs = this.syncExtraMs[stream] - targetExtraMs(stream);
       this.syncExtraMs[stream] -= Math.min(allowedMs, Math.max(0, excessMs));
     }
-
-    // 3) 戻した後のずれをもう一度そろえる (片側だけ戻すと、その分だけずれが開く)
-    this.alignSyncExtras(naturalMs);
+    // 次の制御で「自分の下限が下がった分」を求めるために、今の下限を残す
     this.lastOwnFloorMs = {
       audio: this.naturalDelayMsOf("audio") ?? 0,
       video: this.naturalDelayMsOf("video") ?? 0,
@@ -671,22 +794,30 @@ export class PlaybackTimeline {
   }
 
   /**
-   * 基準の差が閾値を超えたトラック。無ければ null (共有している)
+   * 基準を共有できないトラック。無ければ null (共有している)
    *
-   * 閾値は表示の遅れの上限 (`presentationDelayCapMs`) から、同期が足した分を含まない表示の
-   * 遅れを引いた値である。キューが保持する時間は「表示時刻 - 復号の出力時刻」= 2 つの
-   * トラックの基準の差 + 表示の遅れであり、基準の遅れそのものは含まない。
+   * 次のどちらかで共有できないと判定する。どちらの場合も、遅い側へ合わせて足した分は
+   * `updateSyncDelays` が戻す。
+   *
+   * - 2 つのトラックの基準の差が、表示の遅れの上限 (`presentationDelayCapMs`) から、
+   *   同期が足した分を含まない表示の遅れを引いた閾値を超えている。上限で切られる分は
+   *   合わせられないため、同期の制御では足りない (キューが保持する時間は「表示時刻 -
+   *   復号の出力時刻」= 2 つのトラックの基準の差 + 表示の遅れであり、基準の遅れそのものは
+   *   含まない)
+   * - 基準の差が動き続けている (`baseDifferenceDrifted`)。これは経路の遅れではなく
+   *   TIMESTAMP の時計のずれであり、合わせると片側の表示の遅れが上限まで伸びる
+   *
+   * 大きい側 (遅れて届いている側) が、TIMESTAMP が壁時計からずれている側である
    */
   private driftedStream(): PlaybackStream | null {
-    const audioBase = this.streams.audio.baseMs;
-    const videoBase = this.streams.video.baseMs;
-    if (audioBase === null || videoBase === null) {
+    const difference = this.currentBaseDifferenceMs();
+    if (difference === null) {
       return null;
     }
-    if (Math.abs(audioBase - videoBase) <= this.baseDifferenceLimitMs()) {
+    if (Math.abs(difference) <= this.baseDifferenceLimitMs() && !this.baseDifferenceDrifted()) {
       return null;
     }
-    return audioBase > videoBase ? "audio" : "video";
+    return difference > 0 ? "audio" : "video";
   }
 
   /**
