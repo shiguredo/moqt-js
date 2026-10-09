@@ -288,6 +288,7 @@ export function SubscriberPanel({
           <button
             onClick={() => void stopSubscribing()}
             disabled={stopBtnDisabled}
+            data-testid="subscriber-stop-button"
             class="px-4 py-2.5 bg-red-500 hover:bg-red-600 disabled:bg-slate-300 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors"
           >
             Stop

@@ -267,3 +267,32 @@ test("Tracks カードは同じトラック名に警告を出し、広告しな�
   await page.getByTestId("video-source").selectOption("none");
   await expect(page.getByTestId("tracks-name-warning")).toHaveCount(0);
 });
+
+// 配信側の音声の TIMESTAMP のずれの計測。画面と window.moqtDevTools の
+// 両方から読めること。未配信では観測が無いため「-」(null) になる
+test("音声の TIMESTAMP のずれの計測を画面と window.moqtDevTools に出す", async ({ page }) => {
+  await page.goto(DEVTOOLS_URL);
+
+  // 統計の欄は既定で閉じているため、先に開く
+  await page.getByTestId("publisher-statistics-toggle").click();
+
+  // 配信していない間は観測が無い。値の位置は動かさず「-」を出す
+  await expect(page.getByTestId("publisher-audio-offset-current")).toHaveText("-");
+  await expect(page.getByTestId("publisher-audio-offset-min")).toHaveText("-");
+  await expect(page.getByTestId("publisher-audio-offset-max")).toHaveText("-");
+  await expect(page.getByTestId("publisher-audio-offset-slope-10s")).toHaveText("-");
+  await expect(page.getByTestId("publisher-audio-offset-slope-60s")).toHaveText("-");
+  await expect(page.getByTestId("publisher-audio-offset-applied")).toHaveText("-");
+  await expect(page.getByTestId("publisher-audio-offset-samples")).toHaveText("-");
+
+  // 統計の API からも同じ値 (未観測は null) が読める
+  const offset = await page.evaluate(() => {
+    const api = (
+      window as unknown as {
+        moqtDevTools: { getPublisher: () => { audio: { timestampOffset: unknown } } };
+      }
+    ).moqtDevTools;
+    return api.getPublisher().audio.timestampOffset;
+  });
+  expect(offset).toBeNull();
+});
