@@ -10,6 +10,7 @@ import { isErrorNotifiedByPublisher, type Publisher, type SendObjectParams } fro
 import * as LOC from "./loc";
 import { WallClockMapper } from "./mediaClock";
 import { catalogRepublishIntervalMs } from "./catalogRepublish";
+import { AudioWallClockTimeline } from "./audioWallClock";
 import {
   CATALOG_TRACK_NAME,
   catalogAuthInfoForSetupToken,
@@ -538,6 +539,9 @@ export class MediaPublisherImpl implements MediaPublisher {
   private audioTrackProcessor: MediaStreamTrackProcessor<AudioData> | null = null;
   private videoFrameSource: VideoFrameSource | null = null;
   private audioFrameReader: ReadableStreamDefaultReader<AudioData> | null = null;
+  // 音声の LOC TIMESTAMP を配信側の壁時計から作るための、読み出し時刻の記録
+  // (src/audioWallClock.ts)。マイクの `AudioData.timestamp` は壁時計ではない (issues/0754)
+  private readonly audioWallClock = new AudioWallClockTimeline();
   private videoFrameReader: ReadableStreamDefaultReader<VideoFrame> | null = null;
   // 読んだ映像フレームの timestamp とそのときの壁時計から、映像の LOC TIMESTAMP を
   // 壁時計に換算する (mediaClock.ts)。フレームの取得元を作るたびに作り直す
@@ -1512,6 +1516,9 @@ export class MediaPublisherImpl implements MediaPublisher {
           break;
         }
 
+        // 読み出した壁時計を記録し、LOC TIMESTAMP に使う。マイクの `AudioData.timestamp` は
+        // 壁時計ではないため、そのまま送ると受信側が音声の遅れと解釈して映像を遅らせる
+        this.audioWallClock.record(audioData.timestamp, performance.timeOrigin + performance.now());
         encoder.encode(audioData);
         audioData.close();
       }
@@ -1614,7 +1621,11 @@ export class MediaPublisherImpl implements MediaPublisher {
     // TIMESTAMP は Unix epoch マイクロ秒 (壁時計) で送る
     // (draft-ietf-moq-loc-04 §2.3.1.1。TIMESCALE は付けない)。
     const properties = LOC.encodeAudioProperties({
-      timestamp: LOC.toUnixEpochMicroseconds(BigInt(chunk.timestamp), performance.timeOrigin),
+      // TIMESTAMP は読み出した壁時計から作る。記録が無い (符号化されなかった) ときだけ
+      // 従来の換算へ落とす
+      timestamp:
+        this.audioWallClock.wallClockMicrosOf(chunk.timestamp) ??
+        LOC.toUnixEpochMicroseconds(BigInt(chunk.timestamp), performance.timeOrigin),
       config: audioConfig,
     });
 
