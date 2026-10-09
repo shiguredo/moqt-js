@@ -1,7 +1,7 @@
 /**
  * catalogRepublishIntervalMs の単体テスト: 境界の値
  *
- * draft-ietf-moq-msf-01 Section 5.1: catalog は配信網の cache から落ちうる時間が過ぎたら
+ * draft-ietf-moq-msf-01 Section 5: catalog は配信網の cache から落ちうる時間が過ぎたら
  * publish し直す (SHOULD)。draft-ietf-moq-transport-22 Section 10.3: relay は
  * MAX_CACHE_DURATION を過ぎた Object を cache から配ってはならない (MUST NOT)。
  * 一般の値の性質は catalogRepublish.prop.ts で確かめる。
@@ -21,7 +21,7 @@ test("catalogRepublishIntervalMs: MAX_CACHE_DURATION が 0 なら下限の間隔
   assert.equal(catalogRepublishIntervalMs(0), CATALOG_REPUBLISH_MIN_INTERVAL_MS);
 });
 
-// 画面で選べる最短 (10 秒) では、期限の半分の 5 秒ごとに送り直す
+// moqt-devtools が選べる最短 (10 秒) では、期限の半分の 5 秒ごとに送り直す
 test("catalogRepublishIntervalMs: MAX_CACHE_DURATION が 10 秒なら 5 秒ごとに送り直す", () => {
   assert.equal(catalogRepublishIntervalMs(10_000), 5_000);
 });
@@ -33,7 +33,7 @@ test("catalogRepublishIntervalMs: 半分が下限を下回るときは下限に�
   assert.equal(catalogRepublishIntervalMs(2_000), CATALOG_REPUBLISH_MIN_INTERVAL_MS);
 });
 
-// 既定 (10 分) では、期限より前でも relay が捨てうるため上限の 30 秒ごとに送り直す
+// moqt-devtools の既定 (10 分) では、期限より前でも relay が捨てうるため上限の 30 秒ごとに送り直す
 test("catalogRepublishIntervalMs: MAX_CACHE_DURATION が既定の 10 分なら上限の間隔にする", () => {
   assert.equal(catalogRepublishIntervalMs(600_000), CATALOG_REPUBLISH_MAX_INTERVAL_MS);
   assert.equal(catalogRepublishIntervalMs(60_000), CATALOG_REPUBLISH_MAX_INTERVAL_MS);

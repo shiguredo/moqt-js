@@ -23,6 +23,8 @@
  * Audio Config / Video Config の再送は forwardState 変化のコールバック登録から
  * handleAudioEncodedChunk / handleVideoEncodedChunk までを、publish 呼び出しを記録する
  * 最小セッションを注入して結合で検証する。
+ * catalog の送り直しは、forwardState 変化のコールバック登録から新しい Group の先頭 Object の
+ * 送信までと、定期送り直しの予約 (実時間のタイマー) と解放による取り消しを検証する。
  * encode キューの閾値超過による破棄と droppedFrames の加算、破棄したフレームの
  * キーフレーム要求が次に encode するフレームへ移ることも検証する。
  * session の close 通知は private の通知処理 (handleSessionClose) を世代番号を与えて
@@ -43,6 +45,8 @@ import type { MediaPublisherCallbacks, MediaPublisherOptions } from "./createMed
 import {
   MediaPublisherImpl,
   createMediaPublisher,
+  CATALOG_MAX_CACHE_DURATION_MS,
+  CATALOG_REPUBLISH_DEFAULT_INTERVAL_MS,
   PRIORITY_AUDIO,
   PRIORITY_CATALOG,
   PRIORITY_VIDEO_DELTA,
@@ -68,7 +72,7 @@ import type {
   ResolvedVideoPublishSettings,
 } from "./createMedia/settings";
 import type { VideoFrameSource } from "./frameSource";
-import { CATALOG_TRACK_NAME, decodeCatalogMessage } from "./msf";
+import { CATALOG_TRACK_NAME, decodeCatalogMessage, type Catalog } from "./msf";
 import { PublisherImpl, isErrorNotifiedByPublisher, type Publisher } from "./publisher";
 import type { PublishCallbacks, PublishOptions, Session } from "./session";
 import { ProtocolViolationError } from "./error";
@@ -2016,6 +2020,40 @@ test("start: 接続の世代番号は接続時に捕捉され 解放後の閉包
   assert.isTrue(opened[1].isSessionClosed());
 });
 
+test("start: catalog の Group ID は stop 後の再 start で前回を上回る", async () => {
+  // draft-ietf-moq-msf-01 §6.1: 開始 Group ID は同一 track の過去の全 Group ID を上回る。
+  // 接続の境界だけを置き換えて start() → stop() → start() を最後まで駆動し、catalog の
+  // Group ID が再 start で 0 に戻らないことを確認する
+  const sentByConnection: { groupId: number; objectId: number }[][] = [];
+  const { publisher } = createStartConnectHarness(
+    {},
+    {
+      createCatalogPublisher: () => {
+        const { publisher: catalogPublisher, sent, doneCount } = createRecordingSendPublisher();
+        sentByConnection.push(sent);
+        return { publisher: catalogPublisher, doneCount };
+      },
+    },
+  );
+
+  const stream = {} as MediaStream;
+  await publisher.start(stream);
+  assert.equal(sentByConnection.length, 1);
+  assert.equal(sentByConnection[0]?.length, 1);
+  assert.equal(sentByConnection[0]?.[0]?.objectId, 0);
+  const firstGroupId = sentByConnection[0]?.[0]?.groupId ?? 0;
+
+  await publisher.stop();
+  await publisher.start(stream);
+  assert.equal(sentByConnection.length, 2);
+  assert.equal(sentByConnection[1]?.length, 1);
+  assert.isAbove(sentByConnection[1]?.[0]?.groupId ?? 0, firstGroupId);
+  assert.equal(sentByConnection[1]?.[0]?.objectId, 0);
+
+  // 予約を残さない
+  await publisher.close();
+});
+
 /**
  * WebCodecs の映像エンコーダーの境界を置き換えて setupEncoders を駆動する
  *
@@ -2600,18 +2638,27 @@ interface PublisherGroupControl {
  */
 function createRecordingSendPublisher(): {
   publisher: Publisher;
-  sent: { groupId: number; objectId: number; priority?: number }[];
+  sent: { groupId: number; objectId: number; priority?: number; payload?: Uint8Array }[];
   doneCount: () => number;
 } {
-  const sent: { groupId: number; objectId: number; priority?: number }[] = [];
+  const sent: { groupId: number; objectId: number; priority?: number; payload?: Uint8Array }[] = [];
   let done = 0;
   const publisher = {
     state: "active",
-    sendObject: async (params: { groupId: number; objectId: number; priority?: number }) => {
+    // 実物の PublisherImpl と同じ既定 (FORWARD は 1) にする。送り直しの経路が見送りの
+    // 判定に使う
+    forwardState: true,
+    sendObject: async (params: {
+      groupId: number;
+      objectId: number;
+      priority?: number;
+      payload?: Uint8Array;
+    }) => {
       sent.push({
         groupId: params.groupId,
         objectId: params.objectId,
         priority: params.priority,
+        payload: params.payload,
       });
     },
     done: async () => {
@@ -2619,6 +2666,33 @@ function createRecordingSendPublisher(): {
     },
   } as unknown as Publisher;
   return { publisher, sent, doneCount: () => done };
+}
+
+/**
+ * 初回の送信だけ成功し、2 回目以降の送信が指定の error で失敗する Publisher
+ *
+ * catalog の送り直しの失敗を駆動する。事前検証の違反は publisher 層が通知済みの印を
+ * 付けて reject するため、印の有無を切り替えられるよう error の作り方を渡す。
+ * Publisher の実装は WebTransport を要するため、送信の形だけを持つ最小オブジェクトを
+ * cast で注入する (モジュール置換は行わない)。
+ */
+function createRepublishFailingSendPublisher(createFailure: () => Error): {
+  publisher: Publisher;
+  sendCount: () => number;
+} {
+  let count = 0;
+  const publisher = {
+    state: "active",
+    forwardState: true,
+    sendObject: async (): Promise<void> => {
+      count++;
+      if (count > 1) {
+        throw createFailure();
+      }
+    },
+    done: async () => {},
+  } as unknown as Publisher;
+  return { publisher, sendCount: () => count };
 }
 
 test("初期 Group ID 生成は前回値を下回らない", () => {
@@ -3398,6 +3472,22 @@ interface PublisherForwardControl extends PublisherLifecycleControl {
 }
 
 /**
+ * catalog の送り直しを検証するための制御口
+ *
+ * 送り直しの予約は実時間のタイマーであり、テストが 30 秒待たずに済むよう間隔を
+ * 短く差し替えられるようにする。Group ID と予約の有無も実装の内部状態として見る。
+ */
+interface PublisherCatalogRepublishControl extends PublisherForwardControl {
+  catalogGroupId: number;
+  catalogInitialSent: boolean;
+  currentCatalog: Catalog | null;
+  catalogRepublishTimer: ReturnType<typeof setTimeout> | null;
+  catalogRepublishInterval: number;
+  // 進行中の解放 (テストから解放中の窓を作るために差し替える)
+  disposalInFlight: Promise<void> | null;
+}
+
+/**
  * publish 呼び出しを記録する最小セッション
  *
  * track 名で引く Publisher を返し、渡されたコールバックを記録する。
@@ -3426,6 +3516,8 @@ function createPublishRecordingSession(publishers: Map<string, Publisher>): {
       }
       return publisher;
     },
+    // 解放 (stop / close / ピア起点の close) を駆動できるようにする
+    close: async (): Promise<void> => {},
   } as unknown as Session;
   return { session, callbacksByTrack, optionsByTrack };
 }
@@ -3542,6 +3634,424 @@ test("createPublishers: forwardState が 1 になると Video Config の送り�
   videoCallbacks?.onForwardStateChange?.(true);
   videoCallbacks?.onForwardStateChange?.(false);
   assert.isTrue(control.videoConfigResendRequested);
+});
+
+test("createPublishers: catalog の forwardState が 1 になると新しい Group の先頭 Object として送り直す", async () => {
+  // 配信の開始後に購読を始めた相手への結合の検証。relay は購読者が居ない間 upstream の購読を
+  // pause してよい (paused の間は publisher が Object を送らない) ため、開始時に送った catalog
+  // は後着の購読者へ届かない。createPublishers() が catalog Publisher に
+  // onForwardStateChange を登録し、FORWARD が 1 になった時点で直前より大きい Group ID の
+  // 先頭 Object として同じ payload を送り直すことを確認する
+  const { publisher, control: loopControl } = createLoopTestContext();
+  const control = loopControl as unknown as PublisherCatalogRepublishControl;
+  const { publisher: catalogPublisher, sent: catalogSent } = createRecordingSendPublisher();
+  const publishers = new Map<string, Publisher>([[CATALOG_TRACK_NAME, catalogPublisher]]);
+  const { session, callbacksByTrack, optionsByTrack } = createPublishRecordingSession(publishers);
+  control.session = session;
+
+  await control.createPublishers();
+
+  // 開始時の catalog が保持している Group ID の先頭 Object として 1 件だけ送られること
+  assert.equal(catalogSent.length, 1);
+  assert.equal(catalogSent[0]?.groupId, control.catalogGroupId);
+  assert.equal(catalogSent[0]?.objectId, 0);
+  assert.equal(catalogSent[0]?.priority, PRIORITY_CATALOG);
+
+  // MAX_CACHE_DURATION を relay に伝えること (送り直しの間隔の根拠になる値そのものを固定する)
+  assert.equal(CATALOG_MAX_CACHE_DURATION_MS, 3_600_000);
+  assert.equal(
+    optionsByTrack.get(CATALOG_TRACK_NAME)?.maxCacheDuration,
+    BigInt(CATALOG_MAX_CACHE_DURATION_MS),
+  );
+
+  // catalog Publisher に forwardState 変化のコールバックが登録されていること
+  const catalogCallbacks = callbacksByTrack.get(CATALOG_TRACK_NAME);
+  assert.isDefined(catalogCallbacks);
+  assert.isDefined(catalogCallbacks?.onForwardStateChange);
+
+  // forwardState が 0 に変わっただけでは送らない
+  catalogCallbacks?.onForwardStateChange?.(false);
+  await settle();
+  assert.equal(catalogSent.length, 1);
+
+  // forwardState が 1 になると新しい Group の先頭 Object として同じ payload を送り直す
+  const catalogBeforeRepublish = control.currentCatalog;
+  catalogCallbacks?.onForwardStateChange?.(true);
+  await settle();
+  assert.equal(catalogSent.length, 2);
+  assert.isAbove(catalogSent[1]?.groupId ?? 0, catalogSent[0]?.groupId ?? 0);
+  assert.equal(catalogSent[1]?.objectId, 0);
+  assert.deepEqual(catalogSent[1]?.payload, catalogSent[0]?.payload);
+  // 送り直しは同じ catalog instance を送る (組み立て直さない。generatedAt は開始時のまま)
+  assert.strictEqual(control.currentCatalog, catalogBeforeRepublish);
+
+  // 送り直しで進めた Group ID が、次のインスタンスの開始 Group ID の下限に反映されること
+  // (draft-ietf-moq-msf-01 §6.1。allocateInitialGroupId は候補より前回値を優先する)
+  assert.isAbove(allocateInitialGroupId(1), control.catalogGroupId);
+
+  // 1 → 0 → 1 でも送る (変化のたびに送り直す)
+  catalogCallbacks?.onForwardStateChange?.(false);
+  await settle();
+  catalogCallbacks?.onForwardStateChange?.(true);
+  await settle();
+  assert.equal(catalogSent.length, 3);
+  assert.isAbove(catalogSent[2]?.groupId ?? 0, catalogSent[1]?.groupId ?? 0);
+
+  await publisher.close();
+});
+
+test("createPublishers: catalog の送り直しの reject は onError へ 1 回届き未処理にしない", async () => {
+  // forwardState 変化のコールバックは同期であり送信の完了を待てない。送り直しの失敗を
+  // 握り潰さず onError へ流し、未処理の rejection にしないことを確認する
+  const { publisher: catalogPublisher, sendCount } = createRepublishFailingSendPublisher(
+    () => new Error("catalog resend failed"),
+  );
+  const { publisher, control: loopControl, errors } = createLoopTestContext();
+  const control = loopControl as unknown as PublisherCatalogRepublishControl;
+  const publishers = new Map<string, Publisher>([[CATALOG_TRACK_NAME, catalogPublisher]]);
+  const { session, callbacksByTrack } = createPublishRecordingSession(publishers);
+  control.session = session;
+
+  await withUnhandledRejectionWatch(async (unhandled) => {
+    await control.createPublishers();
+    callbacksByTrack.get(CATALOG_TRACK_NAME)?.onForwardStateChange?.(true);
+    await waitForUnhandledRejectionDetection();
+
+    assert.equal(sendCount(), 2);
+    assert.equal(errors.length, 1);
+    assert.equal(errors[0]?.message, "catalog resend failed");
+    assert.equal(unhandled.length, 0);
+  });
+
+  await publisher.close();
+});
+
+test("createPublishers: catalog の送り直しでは publisher 層が通知済みの reject を通知しない", async () => {
+  // 事前検証の違反は publisher 層が error コールバックで通知してから返値を reject する。
+  // 送り直しの経路で通知し直すと 1 件の失敗で onError が 2 回呼ばれるため、印付きでは
+  // 通知しないことを確認する (抑止の分岐を削るとこのテストが落ちる)
+  const { publisher: catalogPublisher, sendCount } = createRepublishFailingSendPublisher(() =>
+    createNotifiedError("catalog resend rejected after notify"),
+  );
+  const { publisher, control: loopControl, errors } = createLoopTestContext();
+  const control = loopControl as unknown as PublisherCatalogRepublishControl;
+  const publishers = new Map<string, Publisher>([[CATALOG_TRACK_NAME, catalogPublisher]]);
+  const { session, callbacksByTrack } = createPublishRecordingSession(publishers);
+  control.session = session;
+
+  await withUnhandledRejectionWatch(async (unhandled) => {
+    await control.createPublishers();
+    callbacksByTrack.get(CATALOG_TRACK_NAME)?.onForwardStateChange?.(true);
+    await waitForUnhandledRejectionDetection();
+
+    assert.equal(sendCount(), 2);
+    assert.equal(errors.length, 0);
+    assert.equal(unhandled.length, 0);
+  });
+
+  await publisher.close();
+});
+
+test("createPublishers: catalog の送り直しで onError が throw しても未処理の rejection にしない", async () => {
+  // 通知の担い手はこの経路であり、呼び出し元が居ない (forwardState 変化とタイマー)。
+  // 利用者の onError が throw しても、通知の失敗を伝える経路が無いため握って未処理の
+  // rejection にしないことを確認する (handleSessionClose と同じ形)
+  let errors = 0;
+  const publisher = new MediaPublisherImpl(
+    "moqt://example.com/live",
+    { namespace: ["live"] },
+    {
+      onError: () => {
+        errors++;
+        throw new Error("onError threw");
+      },
+    },
+  );
+  const control = publisher as unknown as PublisherCatalogRepublishControl;
+  control.currentState = "publishing";
+  const { publisher: catalogPublisher } = createRepublishFailingSendPublisher(
+    () => new Error("catalog resend failed"),
+  );
+  const publishers = new Map<string, Publisher>([[CATALOG_TRACK_NAME, catalogPublisher]]);
+  const { session, callbacksByTrack } = createPublishRecordingSession(publishers);
+  control.session = session;
+
+  await withUnhandledRejectionWatch(async (unhandled) => {
+    await control.createPublishers();
+    callbacksByTrack.get(CATALOG_TRACK_NAME)?.onForwardStateChange?.(true);
+    await waitForUnhandledRejectionDetection();
+
+    assert.equal(errors, 1);
+    assert.equal(unhandled.length, 0);
+  });
+
+  await publisher.close();
+});
+
+test("createPublishers: catalog の送り直しを間隔ごとに予約し直し、解放で取り消す", async () => {
+  // 配信の開始から MAX_CACHE_DURATION を過ぎた相手にも catalog を届けるための定期送り直しを
+  // 実時間で駆動する。テストが 30 秒待たずに済むよう間隔だけを短くし、送り直しのたびに
+  // 次の予約が入ることと、解放 (close()) で予約が取り消されることを確認する
+  const { publisher, control: loopControl } = createLoopTestContext();
+  const control = loopControl as unknown as PublisherCatalogRepublishControl;
+  const { publisher: catalogPublisher, sent: catalogSent } = createRecordingSendPublisher();
+  const publishers = new Map<string, Publisher>([[CATALOG_TRACK_NAME, catalogPublisher]]);
+  const { session } = createPublishRecordingSession(publishers);
+  control.session = session;
+  // 既定の間隔は MAX_CACHE_DURATION から導出した値であること
+  assert.equal(CATALOG_REPUBLISH_DEFAULT_INTERVAL_MS, 30_000);
+  assert.equal(control.catalogRepublishInterval, CATALOG_REPUBLISH_DEFAULT_INTERVAL_MS);
+  control.catalogRepublishInterval = 10;
+
+  await control.createPublishers();
+  assert.equal(catalogSent.length, 1);
+  assert.isNotNull(control.catalogRepublishTimer);
+
+  // 予約が満了すると新しい Group で送り直され、次の予約が入ること
+  // (1 回だけの送信なら 10 ms の間隔で 120 ms 待てば 2 件目以降が積まれる)
+  await sleep(120);
+  assert.isAtLeast(catalogSent.length, 3);
+  assert.isAbove(catalogSent[1]?.groupId ?? 0, catalogSent[0]?.groupId ?? 0);
+  assert.equal(catalogSent[1]?.objectId, 0);
+  assert.isNotNull(control.catalogRepublishTimer);
+
+  // 解放で予約が取り消され、その後に送り直しが起きないこと
+  await publisher.close();
+  assert.equal(publisher.state, "closed");
+  assert.isNull(control.catalogRepublishTimer);
+  const sentBeforeDisposeWait = catalogSent.length;
+  await sleep(50);
+  assert.equal(catalogSent.length, sentBeforeDisposeWait);
+});
+
+test("createPublishers: FORWARD が 0 の間の送り直しは見送られ Group ID を消費しない", async () => {
+  // publisher は paused の間 Object を送らない (draft-ietf-moq-transport-22 §3.1.1)。
+  // 見送られる送り直しで Group ID と、同一プロセスの開始 Group ID の下限を進めないこと
+  // (音声・映像が encode した分だけ Group を進めるのと同じ扱い) と、予約が維持されることを
+  // 確認する
+  const { publisher, control: loopControl } = createLoopTestContext();
+  const control = loopControl as unknown as PublisherCatalogRepublishControl;
+  const { publisher: catalogPublisher, sent: catalogSent } = createRecordingSendPublisher();
+  const publishers = new Map<string, Publisher>([[CATALOG_TRACK_NAME, catalogPublisher]]);
+  const { session, callbacksByTrack } = createPublishRecordingSession(publishers);
+  control.session = session;
+  control.catalogRepublishInterval = 10;
+
+  await control.createPublishers();
+  assert.equal(catalogSent.length, 1);
+  const groupIdAfterStart = control.catalogGroupId;
+
+  // FORWARD が 1 の間は送り直しで Group ID が進むこと
+  callbacksByTrack.get(CATALOG_TRACK_NAME)?.onForwardStateChange?.(true);
+  await settle();
+  assert.equal(catalogSent.length, 2);
+  const groupIdAfterRepublish = control.catalogGroupId;
+  assert.isAbove(groupIdAfterRepublish, groupIdAfterStart);
+
+  // FORWARD が 0 の間は送らず、Group ID も進めないこと
+  (catalogPublisher as unknown as { forwardState: boolean }).forwardState = false;
+  callbacksByTrack.get(CATALOG_TRACK_NAME)?.onForwardStateChange?.(true);
+  await settle();
+  assert.equal(catalogSent.length, 2);
+  assert.equal(control.catalogGroupId, groupIdAfterRepublish);
+
+  // 予約は維持され、満了しても見送られて Group ID は進まないこと
+  await sleep(50);
+  assert.equal(catalogSent.length, 2);
+  assert.equal(control.catalogGroupId, groupIdAfterRepublish);
+  assert.isNotNull(control.catalogRepublishTimer);
+
+  await publisher.close();
+});
+
+test("createPublishers: catalog Publisher が closed になったら FORWARD が 1 でも送り直さない", async () => {
+  // ピアが catalog の PUBLISH を cancel すると (STOP_SENDING。draft-ietf-moq-transport-22
+  // §3.1.2) publisher は closed になり、配送する相手が居なくなる。FORWARD 0→1 の入口で
+  // 送らず、Group ID も進めず、予約も残さないことを確認する
+  const { publisher, control: loopControl } = createLoopTestContext();
+  const control = loopControl as unknown as PublisherCatalogRepublishControl;
+  const { publisher: catalogPublisher, sent: catalogSent } = createRecordingSendPublisher();
+  const publishers = new Map<string, Publisher>([[CATALOG_TRACK_NAME, catalogPublisher]]);
+  const { session, callbacksByTrack } = createPublishRecordingSession(publishers);
+  control.session = session;
+
+  await control.createPublishers();
+  assert.equal(catalogSent.length, 1);
+  const groupIdBeforeClose = control.catalogGroupId;
+  assert.isNotNull(control.catalogRepublishTimer);
+
+  (catalogPublisher as unknown as { state: string }).state = "closed";
+  callbacksByTrack.get(CATALOG_TRACK_NAME)?.onForwardStateChange?.(true);
+  await settle();
+  assert.equal(catalogSent.length, 1);
+  assert.equal(control.catalogGroupId, groupIdBeforeClose);
+  assert.isNull(control.catalogRepublishTimer);
+
+  await publisher.close();
+});
+
+test("createPublishers: catalog Publisher が closed になったら予約の満了でも送り直さない", async () => {
+  // 同じく cancel 後の予約の満了の入口。送らず、Group ID も進めず、予約を入れ直さないことを
+  // 確認する (満了のたびに再予約していたら、閉じた publisher へ送り続ける経路が残る)
+  const { publisher, control: loopControl } = createLoopTestContext();
+  const control = loopControl as unknown as PublisherCatalogRepublishControl;
+  const { publisher: catalogPublisher, sent: catalogSent } = createRecordingSendPublisher();
+  const publishers = new Map<string, Publisher>([[CATALOG_TRACK_NAME, catalogPublisher]]);
+  const { session } = createPublishRecordingSession(publishers);
+  control.session = session;
+  control.catalogRepublishInterval = 10;
+
+  await control.createPublishers();
+  assert.equal(catalogSent.length, 1);
+  const groupIdBeforeClose = control.catalogGroupId;
+
+  (catalogPublisher as unknown as { state: string }).state = "closed";
+  await sleep(50);
+  assert.equal(catalogSent.length, 1);
+  assert.equal(control.catalogGroupId, groupIdBeforeClose);
+  assert.isNull(control.catalogRepublishTimer);
+
+  await publisher.close();
+});
+
+test("createPublishers: 初期 catalog の送信前に FORWARD が 1 になっても送り直さない", async () => {
+  // stop() → start() の窓。前回 start の currentCatalog は解放で消さないため、新しい
+  // catalog Publisher を作ってから初期 catalog を送るまでの間 (音声・映像の PUBLISH の往復) に
+  // FORWARD 0→1 が届くと、前回の catalog を新しい Group ID で送ってしまい、直後の初期送信が
+  // 同じ Location に別の payload を載せる (draft-ietf-moq-transport-22 §2.1 / §7.1)。
+  // 初期送信が済むまでは送り直さないことを確認する
+  const { publisher, control: loopControl } = createLoopTestContext();
+  const control = loopControl as unknown as PublisherCatalogRepublishControl;
+  const audioSettings = resolveAudioPublishSettings({
+    codec: "aac",
+    bitrate: 64000,
+    trackName: "audio",
+  });
+  control.resolvedAudio = audioSettings;
+  const { publisher: catalogPublisher, sent: catalogSent } = createRecordingSendPublisher();
+  const { publisher: audioPublisher } = createCapturingPublisher();
+  const callbacksByTrack = new Map<string, PublishCallbacks>();
+  // 音声の PUBLISH の応答中 (catalog の Publisher は作成済み、初期 catalog は未送信) に
+  // FORWARD 1 を届かせる
+  let notifyForwardDuringMediaPublish = false;
+  const session = {
+    publish: async (
+      _namespace: string[],
+      trackName: string,
+      callbacks?: PublishCallbacks,
+    ): Promise<Publisher> => {
+      callbacksByTrack.set(trackName, callbacks ?? {});
+      if (trackName === CATALOG_TRACK_NAME) {
+        return catalogPublisher;
+      }
+      if (notifyForwardDuringMediaPublish) {
+        callbacksByTrack.get(CATALOG_TRACK_NAME)?.onForwardStateChange?.(true);
+      }
+      return audioPublisher;
+    },
+    close: async (): Promise<void> => {},
+  } as unknown as Session;
+  control.session = session;
+
+  // 1 回目の start 相当。初期送信より前の FORWARD 1 は currentCatalog が null のため送らない
+  notifyForwardDuringMediaPublish = true;
+  await control.createPublishers();
+  assert.equal(catalogSent.length, 1);
+  assert.equal(catalogSent[0]?.groupId, control.catalogGroupId);
+  assert.equal(catalogSent[0]?.objectId, 0);
+  const firstGroupId = catalogSent[0]?.groupId ?? 0;
+
+  // 2 回目の start 相当。前回の catalog が currentCatalog に残っていても、この start の
+  // 初期送信が済むまでは送り直さない (初期送信 1 件だけが新しい Group ID で送られる)
+  await control.createPublishers();
+  assert.equal(catalogSent.length, 2);
+  assert.isAbove(catalogSent[1]?.groupId ?? 0, firstGroupId);
+  assert.equal(catalogSent[1]?.objectId, 0);
+  assert.equal(catalogSent[1]?.groupId, control.catalogGroupId);
+
+  await publisher.close();
+});
+
+test("createPublishers: 解放が進行中の送り直しは送らない", async () => {
+  // 解放はカタログ Publisher を切り離す前に await を挟む。その間に FORWARD 0→1 が届いても
+  // 送らないことを確認する (切り離し後に届いた場合は catalogPublisher の null ガードで止まる)
+  const { publisher, control: loopControl } = createLoopTestContext();
+  const control = loopControl as unknown as PublisherCatalogRepublishControl;
+  const { publisher: catalogPublisher, sent: catalogSent } = createRecordingSendPublisher();
+  const publishers = new Map<string, Publisher>([[CATALOG_TRACK_NAME, catalogPublisher]]);
+  const { session, callbacksByTrack } = createPublishRecordingSession(publishers);
+  control.session = session;
+
+  await control.createPublishers();
+  assert.equal(catalogSent.length, 1);
+  const groupIdBeforeDisposal = control.catalogGroupId;
+
+  // 解放が進行中の状態を作る
+  control.disposalInFlight = Promise.resolve();
+  callbacksByTrack.get(CATALOG_TRACK_NAME)?.onForwardStateChange?.(true);
+  await settle();
+  assert.equal(catalogSent.length, 1);
+  assert.equal(control.catalogGroupId, groupIdBeforeDisposal);
+
+  control.disposalInFlight = null;
+  await publisher.close();
+});
+
+test("createPublishers: start 失敗の巻き戻し中は送り直さない", async () => {
+  // start() の失敗時の巻き戻しは runDisposal を通さず disposeAllResources を直に await する
+  // ため、その間 disposalInFlight は null のままである。この窓で FORWARD 0→1 が届いても
+  // 破棄中の catalog Publisher へ送らないことを catalogInitialSent で止めている
+  const { publisher, control: loopControl } = createLoopTestContext();
+  const control = loopControl as unknown as PublisherCatalogRepublishControl;
+  const { publisher: catalogPublisher, sent: catalogSent } = createRecordingSendPublisher();
+  const publishers = new Map<string, Publisher>([[CATALOG_TRACK_NAME, catalogPublisher]]);
+  const { session, callbacksByTrack } = createPublishRecordingSession(publishers);
+  control.session = session;
+
+  await control.createPublishers();
+  assert.equal(catalogSent.length, 1);
+  const groupIdBeforeDisposal = control.catalogGroupId;
+
+  // 解放 (巻き戻し) の直後に FORWARD 0→1 が届く窓
+  await control.disposeAllResources();
+  callbacksByTrack.get(CATALOG_TRACK_NAME)?.onForwardStateChange?.(true);
+  await settle();
+  assert.equal(catalogSent.length, 1);
+  assert.equal(control.catalogGroupId, groupIdBeforeDisposal);
+  assert.isFalse(control.catalogInitialSent);
+  assert.isNull(control.catalogRepublishTimer);
+
+  await publisher.close();
+});
+
+test("createPublishers: pause と resume は catalog の送り直しを止めない", async () => {
+  // catalog を relay の cache に保つことが送り直しの目的であり、配信の一時停止とは独立である。
+  // pause() / resume() を挟んでも予約が維持され、送り直しが続くことを確認する
+  const { publisher, control: loopControl } = createLoopTestContext();
+  const control = loopControl as unknown as PublisherCatalogRepublishControl;
+  const { publisher: catalogPublisher, sent: catalogSent } = createRecordingSendPublisher();
+  const publishers = new Map<string, Publisher>([[CATALOG_TRACK_NAME, catalogPublisher]]);
+  const { session } = createPublishRecordingSession(publishers);
+  control.session = session;
+  control.catalogRepublishInterval = 10;
+
+  await control.createPublishers();
+  assert.equal(catalogSent.length, 1);
+  assert.isNotNull(control.catalogRepublishTimer);
+
+  publisher.pause();
+  assert.equal(publisher.state, "paused");
+  await sleep(50);
+  assert.isAtLeast(catalogSent.length, 3);
+  assert.isNotNull(control.catalogRepublishTimer);
+
+  publisher.resume();
+  assert.equal(publisher.state, "publishing");
+  await sleep(50);
+  const sentAfterResume = catalogSent.length;
+  assert.isAtLeast(sentAfterResume, 5);
+
+  await publisher.close();
 });
 
 test("createPublishers: catalog 送信の事前検証 reject は印付きで 1 回だけ通知される", async () => {

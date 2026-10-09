@@ -366,6 +366,11 @@
   - 上限で捨てたログの vnode はキャッシュから落とす。`data` と `payload` は追加後に書き換えない前提になる (行を描画し直さないため、書き換えても表示は古いまま)
   - 1 件追加のコストは表示中の件数に比例する分が残る (1000 件で約 3 ms のうち、表示中の子の走査が大半)。表示する行を画面に入る分だけにする対応は別に行う
   - @voluntas
+- [FIX] catalog を Forward State の変化と MAX_CACHE_DURATION に合わせて送り直す
+  - 配信の開始時に 1 度だけ送っていたため、購読者が居ない間 upstream の購読を pause する relay では (pause するかは relay の裁量)、配信の開始後に購読を始めた相手に catalog が届かず、トラックの購読に進めなかった。`FORWARD` が 0 から 1 になった時点で新しい Group の先頭 Object として送り直す
+  - relay は `MAX_CACHE_DURATION` を過ぎた Object を cache から配れないため、catalog を送るたびに 30 秒後 (`MAX_CACHE_DURATION` の半分を上限 30 秒で頭打ちにした値) の送り直しを予約する。`FORWARD` が 0 の間は送信を見送るため Group ID を消費せず、`stop()` / `close()` / ピア起点の close と、ピアが catalog の `PUBLISH` を cancel した場合は予約も残さない
+  - catalog の Group ID は開始時に割り当て、送り直しのたびに +1 する。`stop()` → `start()` を跨いでも単調に増え、初期 catalog を送る前は送り直さない (同じ Location に別の payload を載せない)
+  - @voluntas
 - [FIX] msf fragment の解析を draft-ietf-moq-transport-22 §8.8 の namespace-name 文字列の規則に揃える
   - §8.8 は「a byte that could have been represented literally but was hex-encoded」を MUST reject とするが、`parseMsfFragmentValue` は literal で書ける byte の hex 表現 (`.61` など) を受理していた。§11.1.2 がこの規則を normatively 採用しているため拒否する
   - Track Namespace Field は §8.7 が 1 バイト以上を MUST とするため、空のフィールド (例: `#msf:-x--catalog`) を拒否する。§8.8 の表記にも空のフィールドを書く方法が無い
@@ -540,7 +545,7 @@
   - @voluntas
 - [FIX] moqt-devtools の publisher が catalog を relay の cache から落ちる前に新しい Group で送り直すようにする
   - catalog を配信の開始時と Forward State が 1 に変わったときにしか送らなかったため、配信の開始から catalog の MAX_CACHE_DURATION (既定 10 分) を過ぎると、停止した後の購読し直しを含め、新しく視聴を始めた subscriber が `failed to get catalog` で失敗していた (draft-ietf-moq-transport-21 Section 10.3 により relay は期限を過ぎた catalog を配れない)
-  - draft-ietf-moq-msf-01 Section 5.1 に従い、catalog を送るたびに、MAX_CACHE_DURATION の半分 (1 秒以上、30 秒以下) の後の送り直しを予約する
+  - draft-ietf-moq-msf-01 Section 5 に従い、catalog を送るたびに、MAX_CACHE_DURATION の半分 (1 秒以上、30 秒以下) の後の送り直しを予約する
   - @voluntas
 - [FIX] moqt-devtools の jitter buffer が、購読の開始に relay の cache から追いつく途中のフレームの遅れを揺らぎとして学習しないようにする
   - 追いつく途中のフレームは実時間より速く、まとまって届いたとみなせない間隔で届くため、その遅れで再生遅延が約 500 ms まで上がり、毎秒 20 ms でしか下がらなかった。購読を始めるたびに表示の遅延が約 25 秒間数百ミリ秒大きかった
@@ -1753,6 +1758,10 @@
   - @voluntas
 
 ### misc
+
+- [UPDATE] moqt-devtools の catalog 送り直しの間隔計算をライブラリへ移して共有する
+  - `catalogRepublishIntervalMs` を devtools の utils からライブラリの `src/catalogRepublish.ts` へ移し、devtools からも同じ実装を使う。devtools の挙動は変わらない
+  - @voluntas
 
 - [UPDATE] moqt-devtools の msf fragment の解析を公開 API の import に置き換える
   - 公開 API に `parseMsfFragmentValue` を加えたため、リポジトリ相対の import を `moqt-js` からの import にする。devtools の挙動は変わらない

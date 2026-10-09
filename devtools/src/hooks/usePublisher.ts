@@ -55,7 +55,7 @@ import {
 import {
   CATALOG_REPUBLISH_MAX_INTERVAL_MS,
   catalogRepublishIntervalMs,
-} from "../utils/catalogRepublish";
+} from "../../../src/catalogRepublish.ts";
 import { shouldSendAudioAsDatagram } from "../utils/audioDelivery";
 import { shouldRequestKeyFrame } from "../utils/keyframeInterval";
 import {
@@ -700,9 +700,9 @@ function releaseVideoStream(): void {
   pub.mediaStream.value = null;
 }
 
-// catalog の送り直し (draft-ietf-moq-msf-01 Section 5.1)
+// catalog の送り直し (draft-ietf-moq-msf-01 Section 5)
 //
-// catalog は relay の cache から落ちる前に新しい Group で送り直す (utils/catalogRepublish.ts)。
+// catalog は relay の cache から落ちる前に新しい Group で送り直す (src/catalogRepublish.ts)。
 // publisher はページに 1 つであるため、タイマーと間隔はモジュールで 1 つだけ持つ。
 // 配信の停止と後始末で止める
 let catalogRepublishTimer: ReturnType<typeof setTimeout> | undefined;
@@ -736,7 +736,7 @@ function scheduleCatalogRepublish(send: () => Promise<void>): void {
 /**
  * 配信の開始時に catalog の送り直しを始める
  *
- * 間隔は catalog の MAX_CACHE_DURATION から決める (utils/catalogRepublish.ts)
+ * 間隔は catalog の MAX_CACHE_DURATION から決める (src/catalogRepublish.ts)
  */
 function startCatalogRepublish(maxCacheDurationMs: number, send: () => Promise<void>): void {
   catalogRepublishInterval = catalogRepublishIntervalMs(maxCacheDurationMs);
@@ -1667,7 +1667,7 @@ export function usePublisher() {
         objectId: 0,
         payload: catalogPayload,
       });
-      // catalog が relay の cache から落ちる前に送り直す (draft-ietf-moq-msf-01 Section 5.1)
+      // catalog が relay の cache から落ちる前に送り直す (draft-ietf-moq-msf-01 Section 5)
       startCatalogRepublish(maxCacheDurationValue, sendCatalogUpdate);
       addLog(
         "info",
