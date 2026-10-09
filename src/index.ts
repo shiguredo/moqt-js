@@ -285,9 +285,46 @@ export {
   type AudioPlayoutTimestampKind,
 } from "./audioPlayoutSession";
 
+// 復号した映像フレームの表示の組み立て (対応表・時間軸への記録・表示の選択・計器への記録)。
+// ライブラリ (createMediaSubscriber) と moqt-devtools が同じ実装を使う。表示の出し先
+// (MediaStreamTrackGenerator / canvas) と表示周期は注入する
+export {
+  VideoPlayoutSession,
+  VideoDecodeInputs,
+  type VideoDecodeInput,
+  type VideoDecodeInputsOptions,
+  type VideoPlayoutOutput,
+  type VideoPlayoutPacing,
+  type VideoPlayoutRequest,
+  type VideoPlayoutResult,
+  type VideoPlayoutSessionOptions,
+  type VideoPlayoutTiming,
+  type VideoPlayoutTimestampKind,
+} from "./videoPlayoutSession";
+
+// 復号した映像フレームの表示待ちのキュー (時間軸が決めた表示時刻に合わせて選ぶ)
+export {
+  PlayoutBuffer,
+  JITTER_BUFFER_MAX_QUEUED_FRAMES,
+  MAX_PRESENTATION_LAG_MS,
+  type PlayoutSelection,
+} from "./playoutBuffer";
+
+// 音声と映像で共有する表示時刻の時間軸 (jitter buffer の目標と遅れの学習)
+export { PlaybackTimeline } from "./playbackTimeline";
+
+// 映像 Object を復号してよいかの判定 (Group の順序と参照するフレームの欠落)
+export { VideoDecodeOrder, priorObjectIdGapOf } from "./videoDecodeOrder";
+
+// 前の Group の Subgroup の stream が開いている間、次の Group の Object を保留する
+export { GroupSwitchGate } from "./groupSwitchGate";
+
+// relay の cache から追いつく途中の Object を、SUBSCRIBE_OK の LARGEST_OBJECT を境界に
+// 選別する (draft-ietf-moq-transport-22 Section 9.20.17)
+export { CatchUpGate, type CatchUpDecision } from "./catchUpGate";
+
 // 分布の要約 (p50 / p95 / max)。映像と音声の時間の統計で共通に使う
 export type { TimingSummary } from "./timingSummary";
-
 // 音声の TIMESTAMP を壁時計へ合わせるための観測 (AudioStats.timestampOffset)。
 // 「読み出した壁時計 - AudioData.timestamp」の推移
 export type { AudioTimestampOffsetStats } from "./audioTimestampClock";

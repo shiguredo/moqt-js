@@ -17,8 +17,8 @@
  * 根拠の仕様はドラフトであり、将来変更される可能性がある。
  */
 
-import type { Location } from "moqt-js";
-import { compareLocations } from "../../../src/session/params.ts";
+import type { Location } from "./message";
+import { compareLocations } from "./session/params";
 
 /**
  * 位置が再生してよいものかどうかの判定

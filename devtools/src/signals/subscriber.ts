@@ -115,7 +115,7 @@ export interface SubscriberInstance {
   // 統計
   framesDecoded: Signal<number>;
   // relay の cache から追いつく途中で、復号したが描かなかったフレーム数。
-  // SUBSCRIBE_OK の LARGEST_OBJECT を境界にした判定 (utils/catchUpGate.ts) で数える
+  // SUBSCRIBE_OK の LARGEST_OBJECT を境界にした判定 (src/catchUpGate.ts) で数える
   catchUpFramesSkipped: Signal<number>;
   // relay の cache から追いつく途中かどうか。購読する Track (映像と音声) のどれかが
   // 境界を越えるまで true で、画面の「Catching up」に使う
@@ -169,7 +169,7 @@ export interface SubscriberInstance {
   audioDatagramObjectsReceived: Signal<number>;
   audioChunksDecoded: Signal<number>;
   // relay の cache から追いつく途中で、復号したが鳴らさなかった音声 Object の数。
-  // 再生が有効なときだけ数える (utils/catchUpGate.ts)
+  // 再生が有効なときだけ数える (src/catchUpGate.ts)
   audioCatchUpObjectsSkipped: Signal<number>;
   // 受信した音声を音声出力デバイスで再生するか。既定は無効
   audioPlaybackEnabled: Signal<boolean>;

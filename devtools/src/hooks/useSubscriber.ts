@@ -18,6 +18,7 @@ import {
   type Property,
   type Location,
   type AuthorizationToken,
+  CatchUpGate,
 } from "moqt-js";
 import { addLog } from "../signals/debugLog";
 import { logDebugMessage } from "./debugMessageLog";
@@ -38,7 +39,6 @@ import {
   waveformSampleCount,
 } from "../utils/audioLevel";
 import { base64ToArrayBuffer } from "../utils/base64";
-import { CatchUpGate } from "../utils/catchUpGate";
 import {
   EMPTY_PLAYBACK_TIMING,
   PLAYBACK_TIMING_WINDOW_MS,
