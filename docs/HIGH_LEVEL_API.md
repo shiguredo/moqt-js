@@ -27,9 +27,10 @@ WebCodecs のエンコード/デコード、Worker 処理、LOC コンテナを�
 └──────────────────────────────────────────────────────────────┘
 ```
 
-`AudioPlayoutSession` (音声の再生の組み立て) は高レベル API の下にある公開 API であり、
-`createMediaSubscriber` (ライブラリ) と moqt-devtools が同じ実装を使う。詳細は
-「音声の再生の組み立て (AudioPlayoutSession)」を参照すること。
+`AudioPlayoutSession` (音声の再生の組み立て) と `VideoPlayoutSession` (映像の表示の組み立て)
+は高レベル API の下にある公開 API であり、`createMediaSubscriber` (ライブラリ) と
+moqt-devtools が同じ実装を使う。詳細は「音声の再生の組み立て (AudioPlayoutSession)」と
+「映像の表示の組み立て (VideoPlayoutSession)」を参照すること。
 
 ---
 
@@ -904,6 +905,183 @@ type AudioPlayoutResult =
 `enforceTarget` が true でも目標の時刻を決められなかったときは到着基準になる。到着基準の遅れは、
 到着した音が「まだ鳴っていない位置」から数える (「統計情報」の説明を参照)。moqt-devtools は
 目標遅延の閉ループを使っていないため `audioDelayFeedback: false` を渡している。
+
+---
+
+## 映像の表示の組み立て (VideoPlayoutSession)
+
+`VideoPlayoutSession` は、復号済みの映像フレーム 1 枚を「表示する」までの組み立てを 1 か所に
+まとめた公開 API である。`createMediaSubscriber` (ライブラリ) と moqt-devtools の映像の表示は
+どちらもこれを使う。同じ組み立てを 2 か所に置くと、表示の遅れ・あふれの扱い・計器の修正を毎回
+2 か所へ入れることになり、片方だけを直すと挙動がずれるためである。
+
+受け取るのは、復号したフレーム (`VideoFrame`) と、そのフレームの TIMESTAMP の種類 (LOC の
+TIMESTAMP と TIMESCALE から決める。draft-ietf-moq-loc-04 §2.3.1.1 / §2.3.1.2) である。渡すと
+次を行う。
+
+- 共有の時間軸 (`PlaybackTimeline`) への到着の記録と、表示時刻の決定
+- 表示待ちのキュー (`PlayoutBuffer`) への積み込みと、あふれた分の破棄
+- 表示周期ごとの選択 (表示時刻を過ぎたフレームのうち最新の 1 枚を表示し、間に合わなかった
+  分を捨てる)
+- 表示の実績 (実際に表示した時刻 - TIMESTAMP) の時間軸への記録
+- 計器 (`VideoPlayoutTiming`) への記録 (あふれて捨てた分と、間に合わなかった分)
+
+表示の出し先は `VideoPlayoutOutput` として注入する。ライブラリは
+`MediaStreamTrackGenerator` の writer、moqt-devtools は canvas へ出す。表示周期の予約
+(`requestAnimationFrame`) も注入できるため、ブラウザ API の無い環境でも記録用の最小
+オブジェクトで検証できる。
+
+```typescript
+import { PlaybackTimeline, VideoDecodeInputs, VideoPlayoutSession } from "moqt-js";
+
+// 時間軸と対応表は呼び出し側が持つ (時間軸は音声と共有する)
+const timeline = new PlaybackTimeline({
+  timeOriginMs: performance.timeOrigin,
+  maxQueuedFrames: 24,
+});
+const decodeInputs = new VideoDecodeInputs({
+  maxTracked: 256,
+  forgetOnDuplicate: false,
+});
+const session = new VideoPlayoutSession({
+  timeline,
+  decodeInputs,
+  output: {
+    isAvailable: () => writer !== null,
+    present: (frame, presentationMs) => {
+      // performanceMs に表示時刻が入る (表示時刻を決められないときは null)
+      void writer?.write(frame);
+      return true;
+    },
+  },
+  pacing: { drainImmediately: true, framesPerDrain: Number.POSITIVE_INFINITY },
+});
+
+// 復号へ渡すときに、TIMESTAMP の種類と Object の位置を覚える
+decodeInputs.remember(timestamp, {
+  timestampKind: "wallClock",
+  location: { group: obj.groupId, object: obj.objectId },
+});
+
+// 復号の出力ごとに呼ぶ
+const input = decodeInputs.take(frame.timestamp);
+session.handleDecodedFrame({
+  frame,
+  timestampKind: input?.timestampKind ?? "none",
+  useTimeline: true,
+});
+```
+
+### オプション
+
+```typescript
+interface VideoPlayoutSessionOptions {
+  // 音声と映像で共有する表示時刻の時間軸
+  timeline: PlaybackTimeline;
+  // 表示すると決めたフレームの出し先
+  output: VideoPlayoutOutput;
+  // 復号へ渡したフレームの情報の対応表 (呼び出し側が持ち、購読ごとに clear() する)
+  decodeInputs: VideoDecodeInputs;
+  // 表示の周期の進め方 (下記)
+  pacing: VideoPlayoutPacing;
+  // 捨てたフレームの記録先 (計器)。映像の計器を持たないときは省略する
+  timing?: VideoPlayoutTiming;
+  // 表示待ちのキューの上限 (枚)。既定は JITTER_BUFFER_MAX_QUEUED_FRAMES (24)
+  maxQueuedFrames?: number;
+  // 表示の周期の予約と取り消し。既定は requestAnimationFrame / cancelAnimationFrame
+  requestFrame?: (callback: () => void) => number;
+  cancelFrame?: (handle: number) => void;
+}
+```
+
+`pacing` は出し先によって変える。`drainImmediately` が true なら、フレームを積んだ時点で
+表示時刻を過ぎているフレームを出す (ライブラリ。表示の間隔は `MediaStreamTrackGenerator` の
+先のブラウザが TIMESTAMP から決める)。false なら表示周期まで待つ (moqt-devtools)。
+`framesPerDrain` は 1 つの表示周期に出す枚数の上限であり、devtools は canvas へ直接描くため
+1 にする (まとめて描くと、まとまって届いたフレームが早送りに見える)。
+
+### VideoDecodeInputs
+
+復号の出力 (`VideoFrame`) では Object の位置が分からないため、decoder へ渡したときの
+TIMESTAMP で引けるように覚えておく対応表である。
+
+```typescript
+interface VideoDecodeInput {
+  timestampKind: "none" | "wallClock" | "mediaTime";
+  location: Location; // Group ID と Object ID
+}
+
+interface VideoDecodeInputsOptions {
+  // 覚えておく上限 (件)。超えたら古い方から忘れる
+  maxTracked: number;
+  // 同じ TIMESTAMP の Object が重なったときに、その TIMESTAMP の分を忘れるか
+  forgetOnDuplicate: boolean;
+}
+```
+
+`remember(timestamp, input)` で覚え、`take(timestamp)` で 1 回だけ引ける (引くと忘れる)。
+TIMESTAMP を持たない Object は覚えない (decoder へ 0 を渡すため、同じ TIMESTAMP の Object を
+誤って対応づける)。`forgetOnDuplicate` は位置を使うかで決める。位置を relay の cache からの
+追いつきの判定 (`CatchUpGate`) に使うときは true にして、重なった TIMESTAMP の分を忘れる
+(どちらの位置か決められないため)。TIMESTAMP の種類だけを使うときは false にして、後から来た
+種類で上書きする。
+
+### handleDecodedFrame の依頼と結果
+
+```typescript
+interface VideoPlayoutRequest {
+  // 復号したフレーム。所有権は呼び出し側に残る (表示すると出し先へ移る)
+  frame: VideoFrame;
+  // フレームの TIMESTAMP の種類。wallClock かつ時間軸を使うときだけ表示時刻を決める
+  timestampKind: "none" | "wallClock" | "mediaTime";
+  // 時間軸を使って表示時刻を決めるか (jitter buffer が有効な購読のとき)。false のときは
+  // 時間軸へ記録せず、届いた順に表示する
+  useTimeline: boolean;
+}
+
+interface VideoPlayoutOutput {
+  // フレームを表示する。実際に表示したかを返す (false のときは同期の実績を記録しない)
+  present(frame: VideoFrame, presentationMs: number | null): boolean;
+  // 今フレームを出せるか (購読が終わった、書く先が無いときは false)
+  isAvailable(): boolean;
+}
+
+interface VideoPlayoutTiming {
+  // 表示待ちの上限を超えて捨てたフレーム
+  recordQueueDrop(timestamp: number): void;
+  // 表示時刻を過ぎて間に合わなかったフレーム
+  recordLateDrop(timestamp: number, presentationMs: number): void;
+}
+
+type VideoPlayoutResult =
+  { status: "queued"; wallClockTimestamp: number | null } | { status: "skipped" };
+```
+
+`queued` は表示待ちへ積んだ (表示時刻に使った壁時計の TIMESTAMP を返す。使わなかったときは
+null)。`skipped` は出し先が無いためフレームを閉じた場合である。時間軸へ記録するのは、種類が
+`wallClock` で `useTimeline` が true のときだけであり、それ以外は届いた順に表示する。
+
+### メソッド
+
+- `handleDecodedFrame(request)` — 復号したフレームを表示待ちへ積み、表示周期へ予約する
+- `clear()` — 予約を取り消し、表示待ちのフレームと対応表を捨てる (購読の停止、時間軸と
+  キューを作り直す直前)
+- `inputs` — 対応表 (`VideoDecodeInputs`)。呼び出し側も `remember` に使う
+- `playout` — 表示待ちのキュー (`PlayoutBuffer`)。統計が `playoutDelayMs()` を読む
+
+### 映像の受信の経路で使う公開 API
+
+映像の受信から表示までの経路で、ライブラリと moqt-devtools が共有する残りの公開 API である。
+
+- `PlaybackTimeline` — 音声と映像で共有する表示時刻の時間軸 (同期の推定と遅延の学習)
+- `PlayoutBuffer` — 復号したフレームを表示時刻に合わせて選ぶキュー。
+  `JITTER_BUFFER_MAX_QUEUED_FRAMES` と `MAX_PRESENTATION_LAG_MS` も公開する
+- `VideoDecodeOrder` — Object を復号してよいかを Group の順序と参照するフレームの欠落から
+  決める (`priorObjectIdGapOf` も公開する)
+- `GroupSwitchGate` — 前の Group の Subgroup の stream が開いている間、次の Group の Object を
+  保留する (draft-ietf-moq-transport-22 Section 2.1 の順不同の到着への対応)
+- `CatchUpGate` — relay の cache から追いつく途中の Object を、SUBSCRIBE_OK の
+  LARGEST_OBJECT を境界に選別する (draft-ietf-moq-transport-22 Section 9.20.17)
 
 ---
 
