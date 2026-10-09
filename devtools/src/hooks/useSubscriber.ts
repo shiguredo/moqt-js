@@ -18,14 +18,21 @@ import {
   type Property,
   type Location,
   type AuthorizationToken,
+  // 映像の再生の経路はライブラリの共有実装を使う (組み立てを 2 か所へ置かない)
+  VideoDecodeOrder,
+  priorObjectIdGapOf,
+  GroupSwitchGate,
   CatchUpGate,
+  PlaybackTimeline,
+  JITTER_BUFFER_MAX_QUEUED_FRAMES,
+  VideoDecodeInputs,
+  VideoPlayoutSession,
 } from "moqt-js";
 import { addLog } from "../signals/debugLog";
 import { logDebugMessage } from "./debugMessageLog";
 import { DecoderWrapper } from "../utils/DecoderWrapper";
 import { AudioDecoderWrapper } from "../../../src/codec/AudioDecoder.ts";
 import { isVideoKeyFrameObject } from "../../../src/createMediaSubscriber.ts";
-import { VideoDecodeOrder, priorObjectIdGapOf } from "../../../src/videoDecodeOrder.ts";
 import {
   DEFAULT_AUDIO_SAMPLE_RATE,
   requiresAudioSpecificConfig,
@@ -45,10 +52,7 @@ import {
   PlaybackTimingStats,
   formatStreamResetCode,
 } from "../utils/playbackTimingStats";
-import { JITTER_BUFFER_MAX_QUEUED_FRAMES, PlayoutBuffer } from "../../../src/playoutBuffer.ts";
-import { PlaybackTimeline } from "../../../src/playbackTimeline.ts";
 import { detectAvSyncTransition, type AvSyncState } from "../utils/avSyncTransition.ts";
-import { GroupSwitchGate } from "../../../src/groupSwitchGate.ts";
 import {
   AUDIO_PLAYOUT_TIMING_WINDOW_MS,
   AudioPlayoutTimingStats,
@@ -327,11 +331,14 @@ export function resolveNewGroupRequestValue(
 }
 
 /**
- * 復号へ渡したフレーム (映像 Object) と音声 Object の情報
+ * 復号へ渡した音声 Object の情報
  *
  * 復号の出力では Object の位置が分からないため、decoder へ渡すときの TIMESTAMP で引けるように
- * 覚える。TIMESTAMP の種類は jitter buffer の表示時刻に使えるかどうかの判定に、位置は relay の
- * cache から追いつく途中かどうかの判定 (CatchUpGate) に使う。
+ * 覚える。TIMESTAMP の種類は再生の目標に使えるかどうかの判定に、位置は relay の cache から
+ * 追いつく途中かどうかの判定 (CatchUpGate) に使う。
+ *
+ * 映像の分はライブラリと共有する対応表 (src/videoPlayoutSession.ts の `VideoDecodeInputs`) が
+ * 持つ。音声の分も同じ形だが、音声 Object の経路を共有実装へ寄せるまではここに残す。
  */
 export interface DecodeInput {
   /** TIMESTAMP の種類 (draft-ietf-moq-loc-04 Section 2.3.1.1 / Section 2.3.1.2) */
@@ -341,12 +348,12 @@ export interface DecodeInput {
 }
 
 /**
- * 復号へ渡した Object の情報を、復号の出力で引けるように覚える
+ * 復号へ渡した音声 Object の情報を、復号の出力で引けるように覚える
  *
  * TIMESTAMP から位置を一意に引けない Object は覚えない。TIMESTAMP を持たない Object は
  * すべて同じ TIMESTAMP (0) を共有し、同じ TIMESTAMP の Object が重なったときはどちらの位置か
  * 決められないためである。復号の出力では位置が分からないものとして扱い、境界の判定をせずに
- * 従来どおり描く・鳴らす (utils/catchUpGate.ts)。
+ * 従来どおり鳴らす (src/catchUpGate.ts)。
  *
  * 出力されなかった (decoder のエラーで捨てられたなど) 分が残り続けないよう、上限を超えたら
  * 古い方から忘れる。
@@ -650,27 +657,32 @@ export function useSubscriber(
       console.error("Failed to set audio output device:", error);
     });
   });
-  // 表示待ちのフレーム (jitter buffer) と予約した描画 (presentFrame / clearPendingFrame が
-  // 使う)。購読を始めるたびに設定 (jitterBufferEnabled) に合わせて作り直す。
-  // 表示時刻は共有の時間軸 (src/playbackTimeline.ts) が決める。音声と映像の両方を
-  // この 1 つの時間軸へ observe することで、同じ式の表示時刻で揃える
+  // 表示時刻の時間軸と、その上での映像の表示の組み立て (時間軸への記録・表示の選択・
+  // 計器への記録)。組み立てはライブラリと共有する (src/videoPlayoutSession.ts)。
+  // 購読を始めるたびに設定 (jitterBufferEnabled) に合わせて作り直す。
+  // 音声と映像の両方をこの 1 つの時間軸へ observe することで、同じ式の表示時刻で揃える
   const playoutTimelineRef = useRef(
     new PlaybackTimeline({
       timeOriginMs: performance.timeOrigin,
       maxQueuedFrames: MAX_PENDING_FRAMES,
     }),
   );
-  const playoutBufferRef = useRef(
-    new PlayoutBuffer<VideoFrame>(MAX_PENDING_FRAMES, playoutTimelineRef.current),
-  );
+  const videoPlayoutRef = useRef<VideoPlayoutSession | null>(null);
   const jitterBufferEnabledRef = useRef(false);
   // 直前の同期の状態 (基準を共有できているかとその理由)。変わったときだけログに残す
   const avSyncStateRef = useRef<AvSyncState | null>(null);
-  const frameAnimationRef = useRef<number | null>(null);
   // decoder に渡したフレームの情報 (chunk の timestamp で引く)。復号の出力で、壁時計の
   // TIMESTAMP のフレームだけを jitter buffer の表示時刻に使い、relay の cache から届いた
-  // フレームは描かずに捨てる (位置を追いつきの境界と比べる)
-  const videoDecodeInputsRef = useRef(new Map<number, DecodeInput>());
+  // フレームは描かずに捨てる (位置を追いつきの境界と比べる)。対応表はライブラリと共有する
+  // (src/videoPlayoutSession.ts)
+  const videoDecodeInputsRef = useRef(
+    new VideoDecodeInputs({
+      maxTracked: MAX_TRACKED_DECODE_INPUTS,
+      // 位置を追いつきの判定に使うため、同じ TIMESTAMP の Object が重なったらその
+      // TIMESTAMP の分は忘れる (どちらの位置か決められない)
+      forgetOnDuplicate: true,
+    }),
+  );
   // 音声も同じ対応表を持つ。Timescale がある TIMESTAMP はメディア時刻であり、壁時計の
   // 時刻と対応しないため、目標の開始時刻を求めずに到着基準で並べる
   const audioDecodeInputsRef = useRef(new Map<number, DecodeInput>());
@@ -814,9 +826,7 @@ export function useSubscriber(
     playbackTimingRef.current.reset();
     const enabled = settings.jitterBufferEnabled.value;
     jitterBufferEnabledRef.current = enabled;
-    for (const frame of playoutBufferRef.current.clear()) {
-      frame.close();
-    }
+    videoPlayoutRef.current?.clear();
     // キューの上限が変わるため、時間軸も作り直す (表示の遅れの上限がキューから決まる)
     const maxQueuedFrames = enabled ? JITTER_BUFFER_MAX_QUEUED_FRAMES : MAX_PENDING_FRAMES;
     playoutTimelineRef.current = new PlaybackTimeline({
@@ -825,15 +835,37 @@ export function useSubscriber(
     });
     // 作り直した時間軸にも同じ targetLatency を渡す (無いときは null でフォールバック)
     playoutTimelineRef.current.setTargetLatencyMs(resolveTargetLatencyMs(tracks));
-    playoutBufferRef.current = new PlayoutBuffer<VideoFrame>(
-      maxQueuedFrames,
-      playoutTimelineRef.current,
-    );
     videoDecodeInputsRef.current.clear();
+    // 復号した映像フレームの表示の組み立て (時間軸への記録・表示の選択・計器への記録) は
+    // ライブラリと共有する実装が持つ (src/videoPlayoutSession.ts)。ここは購読ごとの
+    // 判断 (追いつきの途中は描かない、canvas へ 1 周期に 1 枚描く) だけを渡す
+    videoPlayoutRef.current = new VideoPlayoutSession({
+      timeline: playoutTimelineRef.current,
+      output: {
+        // 購読が終わったら描かない (canvas は描くときに引く)
+        isAvailable: () => sub.getSubscriber(subscriberId) !== undefined,
+        present: (frame, presentationMs) => drawFrame(frame, presentationMs),
+      },
+      decodeInputs: videoDecodeInputsRef.current,
+      pacing: {
+        // canvas へ直接描くため、表示周期を待って 1 枚ずつ描く。まとめて描くと、
+        // まとまって届いたフレームが早送りに見える
+        drainImmediately: false,
+        framesPerDrain: 1,
+      },
+      timing: {
+        recordQueueDrop: (timestamp) => playbackTimingRef.current.recordQueueDrop(timestamp),
+        recordLateDrop: (timestamp, presentationMs) =>
+          playbackTimingRef.current.recordLateDrop(timestamp, presentationMs),
+      },
+      maxQueuedFrames,
+    });
     playbackTimingTimerRef.current = setInterval(() => {
       const instance = sub.getSubscriber(subscriberId);
       if (!instance) return;
-      playbackTimingRef.current.recordPlayoutDelay(playoutBufferRef.current.playoutDelayMs());
+      playbackTimingRef.current.recordPlayoutDelay(
+        videoPlayoutRef.current?.playout.playoutDelayMs() ?? null,
+      );
       instance.playbackTiming.value = playbackTimingRef.current.snapshot(performance.now());
       // 同期の推定も同じ周期で反映する (フレームごとに反映すると再描画が表示の負荷になる)。
       // 内訳の変化 (基準を共有できているか) はログへも残す
@@ -1584,17 +1616,18 @@ export function useSubscriber(
   }
 
   /**
-   * 復号済みフレームを表示待ちのキュー (jitter buffer) へ積み、表示周期ごとに表示する
+   * 復号済みフレームを、ライブラリと共有する表示の組み立てへ渡す
    *
    * jitter buffer が有効で、フレームの TIMESTAMP が壁時計 (Timescale 無し) のときは、
    * TIMESTAMP の間隔どおりの表示時刻に表示し、到着の揺らぎを吸収する
-   * (src/playoutBuffer.ts)。表示時刻を過ぎたフレームが複数あれば最新の 1 枚を次の周期に
-   * 残してその 1 つ前を描き、それより古いものは間に合わなかったフレームとして捨てて数える。
+   * (src/playoutBuffer.ts)。表示待ちのキュー、表示時刻に合わせた選択、あふれた分と
+   * 間に合わなかった分の計器への記録、表示周期の予約は共有実装
+   * (src/videoPlayoutSession.ts) が持つ。
    *
    * jitter buffer が無効のとき、または TIMESTAMP を壁時計として使えないフレームは、
-   * 届いた順に 1 周期に 1 枚ずつ表示する。以下はその場合の説明である。
+   * 届いた順に 1 周期に 1 枚ずつ表示する。
    *
-   * 表示は requestAnimationFrame で 1 周期に 1 枚に絞る。これをしないと 2 つの
+   * 表示は表示周期に 1 枚に絞る (共有実装へ渡す pacing)。これをしないと 2 つの
    * 問題が起きる。
    * - 120 fps の映像では 1 周期に複数枚の復号が完了し、すべて描画すると表示周期
    *   より多く描くことになってかくつく
@@ -1602,26 +1635,17 @@ export function useSubscriber(
    *   見える
    *
    * relay の cache から届いたフレーム (SUBSCRIBE_OK の LARGEST_OBJECT 以前の位置) は、
-   * ここでキューへ積まずに閉じる。復号はしているため参照は壊れない
-   * (utils/catchUpGate.ts)。
-   *
-   * キューは `MAX_PENDING_FRAMES` 枚まで保持し、あふれた分は古い方から捨てる。実回線
-   * では受信チャンクに複数の Object が入り、復号もまとまって完了する (配備 relay の
-   * 実測で約 130 ms ごとに 8 枚) ため、数枚ではあふれてフレームが落ちる。表示周期の
-   * 方が配信周期より短ければキューは自然に減るため、通常の遅延は小さい。配信 fps が
-   * 表示 fps を超える場合と追い上げ中はキューがあふれ続け、常に古いフレームを捨てて
-   * 最新側へ追いつく。
+   * ここでキューへ積まずに閉じる。復号はしているため参照は壊れない (src/catchUpGate.ts)。
    */
   const presentFrame = (frame: VideoFrame): void => {
     const instance = sub.getSubscriber(subscriberId);
-    if (instance === undefined) {
+    const playout = videoPlayoutRef.current;
+    if (instance === undefined || playout === null) {
       // 購読が終わっている。描く先が無いため閉じる
       frame.close();
       return;
     }
-    const inputs = videoDecodeInputsRef.current;
-    const input = inputs.get(frame.timestamp);
-    inputs.delete(frame.timestamp);
+    const input = videoDecodeInputsRef.current.take(frame.timestamp);
     if (input === undefined) {
       // 位置が分からないフレーム (TIMESTAMP を持たない、位置を一意に引けない) は境界と
       // 比べられないため、追いつき中の表示を出し続けない
@@ -1632,98 +1656,48 @@ export function useSubscriber(
       frame.close();
       return;
     }
-    const wallClockTimestamp =
-      jitterBufferEnabledRef.current && input?.timestampKind === "wallClock"
-        ? frame.timestamp
-        : null;
-    if (wallClockTimestamp !== null) {
-      // 復号の出力を共有の時間軸へ記録する (音声と同じ式で表示時刻を決める)
-      playoutTimelineRef.current.observe(
-        "video",
-        performance.timeOrigin + performance.now(),
-        wallClockTimestamp,
-      );
-    }
-    const overflow = playoutBufferRef.current.enqueue(frame, wallClockTimestamp);
-    for (const dropped of overflow) {
-      // あふれて捨てたフレームは表示されないため数える (timestamp は close の前に読む)
-      playbackTimingRef.current.recordQueueDrop(dropped.timestamp);
-      dropped.close();
-    }
-    scheduleFrameDrain();
-  };
-
-  /**
-   * 表示待ちのフレームが残っている間、表示周期ごとに表示するフレームを選び続ける
-   *
-   * 予約を 1 回だけにすると、次のフレームが届くまでキューが減らない。到着が
-   * まとまっている場合 (実回線では受信チャンクに複数の Object が入る)、表示が
-   * 到着のまとまりの数だけしか進まない。jitter buffer では表示時刻を待つフレームも
-   * ある。キューが空になるまで毎周期予約する。
-   */
-  const scheduleFrameDrain = (): void => {
-    if (frameAnimationRef.current !== null) {
-      return;
-    }
-    frameAnimationRef.current = requestAnimationFrame(() => {
-      frameAnimationRef.current = null;
-      const nowMs = performance.now();
-      const selection = playoutBufferRef.current.select(nowMs);
-      for (const late of selection.late) {
-        // 捨てたフレームの表示時刻は、止まりの原因 (間に合わなかった段) を決めるのに使う。
-        // 間に合わずに捨てるのは表示時刻を持つフレームだけであり、表示時刻は選択と同じ
-        // 基準で求まる
-        playbackTimingRef.current.recordLateDrop(
-          late.timestamp,
-          playoutBufferRef.current.presentationTimeMs(late.timestamp) ?? nowMs,
-        );
-        late.close();
-      }
-      if (selection.draw !== null) {
-        drawFrame(selection.draw, selection.drawPresentationMs);
-      }
-      if (playoutBufferRef.current.size > 0) {
-        scheduleFrameDrain();
-      }
+    // 表示時刻の決定 (jitter buffer が有効なときだけ壁時計の TIMESTAMP を使う)、時間軸への
+    // 記録、表示待ちのキューへの積み込み、表示周期の予約は共有実装が行う
+    playout.handleDecodedFrame({
+      frame,
+      timestampKind: input?.timestampKind ?? "none",
+      useTimeline: jitterBufferEnabledRef.current,
     });
   };
 
   /** 表示待ちのフレームを破棄し、予約した描画を取り消す */
   const clearPendingFrame = (): void => {
-    if (frameAnimationRef.current !== null) {
-      cancelAnimationFrame(frameAnimationRef.current);
-      frameAnimationRef.current = null;
-    }
-    for (const frame of playoutBufferRef.current.clear()) {
-      frame.close();
-    }
-    videoDecodeInputsRef.current.clear();
+    videoPlayoutRef.current?.clear();
   };
 
   /**
    * フレームを canvas に描く
    *
+   * 表示の実績 (同期ずれの推定に使う) の記録は、共有の組み立て
+   * (src/videoPlayoutSession.ts) が描いた結果を受けて行う。
+   *
    * @param presentationMs - jitter buffer の表示時刻。表示時刻を決めずに描くときは null
+   * @returns 実際に描いたか。描けなかったときは false (表示の実績として記録しない)
    */
-  const drawFrame = (frame: VideoFrame, presentationMs: number | null): void => {
+  const drawFrame = (frame: VideoFrame, presentationMs: number | null): boolean => {
     const instance = sub.getSubscriber(subscriberId);
     if (!instance) {
       frame.close();
-      return;
+      return false;
     }
 
     const canvas = canvasRef.current;
     if (!canvas) {
       console.warn(`[${subscriberId}] drawFrame: canvas is null`);
       frame.close();
-      return;
+      return false;
     }
 
     const ctx = canvas.getContext("2d");
     if (!ctx) {
       console.warn(`[${subscriberId}] drawFrame: failed to get 2d context`);
       frame.close();
-      return;
+      return false;
     }
 
     // 大きなフレームは上限幅まで縮めて描く (表示は CSS で拡縮される)
@@ -1741,16 +1715,6 @@ export function useSubscriber(
       frame.timestamp,
       presentationMs,
     );
-    // 表示時刻を決められたフレームだけ、実際に描いた時刻を実績として記録する
-    // (同期ずれの推定に使う)。表示時刻が null のフレームは音声と対応づけられない。
-    // 第 3 引数は Unix epoch マイクロ秒
-    if (presentationMs !== null) {
-      playoutTimelineRef.current.recordPresentation(
-        "video",
-        frame.timestamp,
-        BigInt(Math.round((performance.timeOrigin + performance.now()) * 1_000)),
-      );
-    }
     frame.close();
     if (stall !== null) {
       // 止まりを原因と一緒にログへ残す (ログの時刻で relay のログと突き合わせる)
@@ -1764,6 +1728,7 @@ export function useSubscriber(
     }
 
     instance.framesDecoded.value += 1;
+    return true;
   };
 
   const handleObject = async (received: ReceivedVideoObject): Promise<void> => {
@@ -1856,8 +1821,9 @@ export function useSubscriber(
 
       playbackTimingRef.current.recordDecodeStart(performance.now(), plan.timestamp);
       // 復号の出力で TIMESTAMP の種類と位置を引くために覚える (presentFrame が使う)。
-      // 位置は relay の cache から追いつく途中かどうかの判定に使う
-      rememberDecodeInput(videoDecodeInputsRef.current, plan.timestamp, {
+      // 位置は relay の cache から追いつく途中かどうかの判定に使う。対応表はライブラリと
+      // 共有する (src/videoPlayoutSession.ts)
+      videoDecodeInputsRef.current.remember(plan.timestamp, {
         timestampKind: plan.timestampKind,
         location: { group: obj.groupId, object: obj.objectId },
       });
@@ -2432,7 +2398,7 @@ export function useSubscriber(
       instance.statusMessage.value = "Subscribed";
       instance.largestLocation.value = largestLocation ?? null;
       // SUBSCRIBE_OK の LARGEST_OBJECT を、relay の cache から追いつく途中かどうかの境界に
-      // する。この位置以前のフレームは復号しても描かない (utils/catchUpGate.ts)
+      // する。この位置以前のフレームは復号しても描かない (src/catchUpGate.ts)
       videoCatchUpGateRef.current.setBoundary(largestLocation ?? null);
       if (largestLocation !== undefined && largestLocation !== null) {
         addLog("info", `[${subscriberId}] video catch up boundary set`, {
