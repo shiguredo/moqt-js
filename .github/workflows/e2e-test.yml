@@ -25,7 +25,16 @@ permissions:
 
 jobs:
   relay:
-    runs-on: ubuntu-slim
+    # 実時間のメディア (音声) を扱う E2E テストであり、runner の処理能力そのものがテストの
+    # 条件になる。ubuntu-slim (1 vCPU) では Chromium と Vite dev server と Playwright が
+    # 1 コアを奪い合い、配信側の音声の符号化が実時間に追いつかなくなる (実測: 符号化の遅れが
+    # 30〜190 ms へ伸び、一度遅れると戻らない)。その状態では配信側の TIMESTAMP の補正が
+    # 落ち着かず、テストの待ち ("配信側の TIMESTAMP の補正が落ち着くのを待つ") が原理的に
+    # 成立しない。同じテストが 2 vCPU のコンテナでは 3/3 通り、1 vCPU では 3/3 落ちることを
+    # 実測したため、ubuntu-slim はジョブの要件を満たさないと判断し、4 vCPU の ubuntu-24.04 を
+    # 使う。trace は relay プロジェクトだけ切ってある (playwright.config.ts)。trace の
+    # スクリーンキャストも同じコアを奪い、計測を歪めるため
+    runs-on: ubuntu-24.04
     # Chromium の install と、実リレーを相手にしたテストを見込んで余裕を持たせる
     timeout-minutes: 20
     env:

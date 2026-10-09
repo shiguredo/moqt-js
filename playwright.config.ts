@@ -38,7 +38,13 @@ export default defineConfig({
     {
       // 実リレーへ接続するテスト (TEST_MOQT_URI が設定された環境でだけ実行される)
       name: "relay",
-      use: { ...devices["Desktop Chrome"] },
+      use: {
+        ...devices["Desktop Chrome"],
+        // 実時間のメディアを扱うテストであり、runner の処理能力そのものがテストの条件に
+        // なる。trace のスクリーンキャストは同じコアを奪い、配信側の音声の符号化を
+        // 実時間から遅らせて計測を歪めるため、このプロジェクトだけ記録しない
+        trace: "off",
+      },
       testMatch: RELAY_SPEC_PATTERN,
     },
   ],

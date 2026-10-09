@@ -21,7 +21,7 @@ import { RELAY_TEST_TIMEOUT_MS, requireRelayUri } from "./support";
 // headless shell は getUserMedia を NotSupportedError にする
 //
 // `channel: "chromium"` は getUserMedia を「使えるようにする」だけで、マイクの実体は
-// 用意しない。CI の runner (ubuntu-slim) には音声の入力デバイスが無いため、
+// 用意しない。CI の runner は音声の入力デバイスを持たないため、
 // getUserMedia は NotFoundError になり、publisher は音声を諦めて (devtools の
 // `prepareAudioForPublishing` が warn を残す) Object を 1 つも送らない。手元では実機の
 // マイクがあるため、この違いが表面化していなかった。
@@ -117,6 +117,40 @@ const VIDEO_DISPLAY_WAIT_P95_MAX_MS = 200;
  * 学習すると、目標が 700 ms まで膨らむ
  */
 const AUDIO_START_DELAY_P95_MAX_MS = 400;
+
+/**
+ * 後始末の停止ボタンを押すときの待ち時間 (ミリ秒)
+ *
+ * 停止ボタンは、リレー側から先に切れて購読 / 配信が後始末されると無効になる
+ * (devtools の `subscriberControlState` は購読が確立していないとき `stopDisabled` にする)。
+ * 無効になった後に押そうとすると、Playwright はテストのタイムアウト (180 秒) まで
+ * 「押せるようになるのを待ち」続ける。実際に押せるかを短い時間で確かめる
+ */
+const STOP_CLICK_TIMEOUT_MS = 5_000;
+
+/**
+ * まだ動いているときだけ停止ボタンを押す
+ *
+ * 「押せるかを確かめてから押す」までに、リレー側から切れてボタンが無効になることがある
+ * (実測: コンテナでは 4 回中 2 回、無効になった後のクリックがテストのタイムアウトを
+ * 使い切った)。押せなかった理由が「無効になった」である場合だけ見送り、それ以外の理由は
+ * そのまま投げる (本当に押せない不具合を隠さない)
+ */
+async function stopIfRunning(page: Page, testId: string): Promise<void> {
+  const button = page.getByTestId(testId);
+  if (!(await button.isEnabled())) {
+    return;
+  }
+  try {
+    await button.click({ timeout: STOP_CLICK_TIMEOUT_MS });
+  } catch (error) {
+    // ボタンごと消えた場合も、切れて後始末された証拠である。押せるままなら本当の失敗である
+    const stillEnabled = await button.isEnabled().catch(() => false);
+    if (stillEnabled) {
+      throw error;
+    }
+  }
+}
 
 interface DevtoolsStats {
   publisher: PublisherStats;
@@ -489,12 +523,6 @@ test("実リレー経由で同じブラウザから音声を配信し、受信�
 
   // 後始末 (統計を読んでから止める)。リレー側から先に切れていることがあるため、
   // 押せる (まだ配信 / 購読中の) ときだけ止める
-  const publisherStop = page.getByTestId("publisher-stop-button");
-  if (await publisherStop.isEnabled()) {
-    await publisherStop.click();
-  }
-  const subscriberStop = page.getByTestId("subscriber-stop-button");
-  if (await subscriberStop.isEnabled()) {
-    await subscriberStop.click();
-  }
+  await stopIfRunning(page, "publisher-stop-button");
+  await stopIfRunning(page, "subscriber-stop-button");
 });
