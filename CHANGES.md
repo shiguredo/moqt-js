@@ -149,6 +149,12 @@
   - c4m の moqt クレームが exact で許可する track name のうち audio / video を、それぞれのトラック名の欄へ反映して読み取り専用にし、許可されている track name の一覧を Authorization Token の欄に表示する (署名検証はしない。送信するトークンは relay が検証する)。トークンを解除するとトラック名は編集できる
   - 取り込んだトークンのデコード結果 (形式 / alg / iss / aud / exp / nbf / iat / moqt スコープの Actions / Namespace / Track Name) を Authorization Token の欄に常時表示する
   - @voluntas
+- [ADD] `AudioPlayoutSession` を公開し、音声の再生の組み立てをライブラリと moqt-devtools で共有する
+  - 復号した音 (`AudioData`) とその TIMESTAMP の種類 (壁時計 / メディア時刻 / 無し) を渡すと、共有の時間軸への記録・目標の表示時刻の決定・`AudioPlayoutScheduler` での予約・欠落した区間の補間・計器 (`AudioPlayoutTimingStats`) への記録までを行う。鳴らす時刻の目標遅延を決める閉ループへの観測の引き渡しも含む。`moqt-js` から import できる
+  - Web Audio (`AudioContext` とその出力) は `AudioPlayoutOutput` として注入する。`AudioContext` の時計と `performance.now()` の対応は `AudioClockBridge` が境界になるため、ブラウザ API の無い環境でも記録用の最小オブジェクトで検証できる
+  - `createMediaSubscriber` と moqt-devtools が自前で持っていた同じ組み立てを削除し、どちらもこの実装を使う。到着基準の遅れ・閉ループ・計器の修正が 1 か所で済むようになる。挙動と統計の値 (`avSync.delays.*` / `audio.playoutTiming.*` / `playoutRebases` / `playoutDrops`) は変えない
+  - moqt-devtools は目標遅延の閉ループをまだ流していないため `audioDelayFeedback: false` を渡す。`AvSyncStats.delays.audioDelayFeedback` の値は移設の前後で変わらない (閉ループを有効にするのは別の変更とする)
+  - @voluntas
 - [UPDATE] moqt-devtools の Relay URI 欄の表示名を MOQT URI に変更し、初期値を空にする
   - 接続先の URI を MOQT URI と呼ぶ。何も入力されていないことが分かるように初期値を持たせず、`moqt://moq.example.com/` を参考値として placeholder に出す
   - @voluntas

@@ -27,6 +27,10 @@ WebCodecs のエンコード/デコード、Worker 処理、LOC コンテナを�
 └──────────────────────────────────────────────────────────────┘
 ```
 
+`AudioPlayoutSession` (音声の再生の組み立て) は高レベル API の下にある公開 API であり、
+`createMediaSubscriber` (ライブラリ) と moqt-devtools が同じ実装を使う。詳細は
+「音声の再生の組み立て (AudioPlayoutSession)」を参照すること。
+
 ---
 
 ## MediaPublisher
@@ -784,6 +788,122 @@ jitter buffer の遅れは音声と映像で別々に求める。音声は NetEq
 (Section 10.9) が非存在を示す分を除き欠落として扱い、次のキーフレームまでの Object を
 `missingReferenceFramesDropped` に数える。1 Group を複数の Subgroup に分ける publisher の
 Object ID の飛びも欠落として扱う。
+
+---
+
+## 音声の再生の組み立て (AudioPlayoutSession)
+
+`AudioPlayoutSession` は、復号済みの音声 1 つを「鳴らす」までの組み立てを 1 か所にまとめた
+公開 API である。`createMediaSubscriber` (ライブラリ) と moqt-devtools の音声の再生は
+どちらもこれを使う。同じ組み立てを 2 か所に置くと、到着基準の遅れ・目標遅延の閉ループ・
+計器の修正を毎回 2 か所へ入れることになり、片方だけを直すと挙動がずれるためである。
+
+受け取るのは、復号した音 (`AudioData`) と、その音の TIMESTAMP の種類 (LOC の TIMESTAMP と
+TIMESCALE から決める。draft-ietf-moq-loc-04 §2.3.1.1 / §2.3.1.2) である。渡すと次を行う。
+
+- 共有の時間軸 (`PlaybackTimeline`) への到着の記録と、目標の表示時刻の決定
+- `AudioPlayoutScheduler` での予約 (遅れて届いた音は波形を詰めて目標へ戻し、並べすぎは捨てる)
+- 欠落した区間の補間 (直前に鳴らした音の末尾を伸ばす)
+- 計器 (`AudioPlayoutTimingStats`) への記録 (鳴るはずの時刻・届いた時刻・鳴り始める時刻と、
+  鳴らなかった量)
+- 目標遅延の閉ループへの観測の引き渡し (`audioDelayFeedback` が true のとき)
+
+Web Audio (`AudioContext` とその出力) は `AudioPlayoutOutput` として注入する。`AudioContext`
+の時計と `performance.now()` の対応は `AudioClockBridge` が境界になり、このクラス自体は
+ブラウザ API の無い環境でも記録用の最小オブジェクトで検証できる。
+
+```typescript
+import { AudioPlayoutSession, AudioPlayoutTimingStats, PlaybackTimeline } from "moqt-js";
+
+// 時間軸と計器は呼び出し側が持つ (時間軸は映像と共有し、計器は統計として読む)
+const timeline = new PlaybackTimeline({
+  timeOriginMs: performance.timeOrigin,
+  maxQueuedFrames: 8,
+});
+const timing = new AudioPlayoutTimingStats();
+const session = new AudioPlayoutSession({ timing });
+
+// 復号の出力ごとに呼ぶ (output は AudioContext と MediaStreamAudioDestinationNode)
+const result = session.handleDecodedAudio({
+  data: audioData,
+  timestampKind: "wallClock",
+  timeline,
+  useTimeline: true,
+  enforceTarget: true,
+  output: { context, destination },
+});
+```
+
+### オプション
+
+```typescript
+interface AudioPlayoutSessionOptions {
+  // 鳴らした音と鳴らなかった音の記録の入れ先 (計器)
+  timing: AudioPlayoutTimingStats;
+  // 鳴らした結果 (予定をどれだけ過ぎたか、並べすぎで捨てた量) を、目標遅延の閉ループへ
+  // 渡すか (default: true)。false のときも計器への記録は行う
+  audioDelayFeedback?: boolean;
+}
+```
+
+### handleDecodedAudio の依頼
+
+```typescript
+interface AudioPlayoutRequest {
+  // 復号した音。所有権は呼び出し側に残る (この中では close() しない)
+  data: AudioData;
+  // 音の TIMESTAMP の種類。wallClock のときだけ目標の時刻を決める
+  timestampKind: "none" | "wallClock" | "mediaTime";
+  // 音声と映像で共有する表示時刻の時間軸
+  timeline: PlaybackTimeline;
+  // 時間軸を使って鳴らすか (jitter buffer が有効な購読のとき)。false のときは時間軸へ
+  // 記録せず、到着基準で並べる
+  useTimeline: boolean;
+  // 目標の時刻を守るか (揃える相手がいるとき)。false のときは、鳴らす時刻を過ぎて届いた音は
+  // 基準を取り直して鳴らす
+  enforceTarget: boolean;
+  // 鳴らす先。null のときは鳴らさず、時間軸への記録も計器への記録もしない
+  output: AudioPlayoutOutput | null;
+}
+
+interface AudioPlayoutOutput {
+  context: AudioPlayoutContext; // AudioContext の実物を渡せる
+  destination: AudioNode;
+}
+```
+
+### handleDecodedAudio の結果
+
+```typescript
+type AudioPlayoutResult =
+  | { status: "played"; rebased: boolean }
+  | { status: "dropped"; rebased: boolean; reason: "backlog" }
+  | { status: "error"; rebased: boolean; error: Error }
+  | { status: "skipped" };
+```
+
+`rebased` は、この音の予約で鳴らす時刻の基準を取り直したかである (`AudioPlayoutScheduler.rebases`
+が増えたか)。`dropped` は並べすぎで捨てた音であり、計器には理由 (`backlog`) と長さを記録済みで
+ある。`error` は鳴らす準備の途中で失敗した音であり、計器には「鳴らなかった」として記録済みで
+ある (このクラスは throw せず、呼び出し側が `onError` やログへ流す)。`skipped` は鳴らす先が
+無いときである。
+
+### メソッド
+
+- `handleDecodedAudio(request)` — 復号した音を鳴らす (上の 2 節)
+- `reset()` — 予約の基準・時計の対応・直前の音を消す (`AudioContext` を作り直したとき)。
+  統計の累積 (基準を取り直した回数・捨てた音・詰めた合計・補間した合計) は消さない
+- `releaseAudioContext()` — 時計の対応と直前の音だけを消す (`AudioContext` を閉じた後始末)。
+  予約の基準は統計の `playoutLatenessMs` が読むため残す
+- `recordStopped()` — 予約済みでまだ鳴り始めていない音を、鳴らなかった分として計器へ記録する
+  (`AudioContext` を閉じる直前)
+
+`playout` (予約。基準を取り直した回数と捨てた音の数) と `clock` (`AudioContext` の時計と
+`performance.now()` の対応。`usingFallback` を同期の推定に使う) は読み取り用に公開している。
+
+`enforceTarget` が true でも目標の時刻を決められなかったときは到着基準になる。到着基準の遅れは、
+到着した音が「まだ鳴っていない位置」から数える (「統計情報」の説明を参照)。moqt-devtools は
+目標遅延の閉ループを使っていないため `audioDelayFeedback: false` を渡している。
 
 ---
 
