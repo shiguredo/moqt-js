@@ -2400,6 +2400,10 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       if (result.status === "error") {
         this.callbacks.onError?.(result.error);
       }
+    } catch (error) {
+      // 共有実装は鳴らす準備の失敗を結果で返す。ここへ来るのは、その前後の想定外の失敗だけ
+      // である (以前と同じく onError へ通知する)
+      this.callbacks.onError?.(error instanceof Error ? error : new Error(String(error)));
     } finally {
       audioData.close();
     }
