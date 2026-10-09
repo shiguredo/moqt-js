@@ -32,6 +32,11 @@
  * - 2 つのトラックの基準の差が、表示の遅れの上限から下限を引いた閾値を超えたら同期しない。
  *   TIMESTAMP が壁時計からずれているトラック (音声のドリフトなど) に、もう片方を
  *   合わせないため
+ * - 同期しない側が音声のときは、同期をやめずに映像だけを音声へ合わせる。音声の TIMESTAMP が
+ *   信用できないと基準は共有できないが、音声の並べ方は分かっている (「到着 + 到着基準の
+ *   再生の遅れ」= `audioArrivalPlayoutDelayMs`) ため、映像の到着からの遅れをその値へ
+ *   合わせられる。合わせないと 2 つのトラックの相対関係を見る相手がいなくなり、音声と
+ *   映像が別々に並ぶ (実測では音声が 195 ms、映像が 98 ms で 100 ms のずれが残っていた)
  * - 基準の差が `PLAYOUT_BASE_DRIFT_MS` を超えて動いたら (差が経路の遅れではなく時計の
  *   ずれである)、大きさの閾値を待たずに同期しない。合わせると片側の表示の遅れが上限まで
  *   伸びて戻せなくなるためである。同期しない間は、その時点までに足した分を毎秒
@@ -102,6 +107,35 @@ export const PLAYBACK_DISCONTINUITY_MS = 2_000;
  * 始まるため、`src/audioDelayManager.ts` の `AUDIO_DELAY_START_MS` と揃える
  */
 export const AUDIO_PLAYOUT_DELAY_FLOOR_MS = 80;
+
+/**
+ * 音声を到着基準で並べるときの再生の遅れの上限 (ミリ秒)
+ *
+ * `src/audioPlayout.ts` の `AUDIO_PLAYOUT_ARRIVAL_DELAY_SECONDS` と同じ値である。定義は
+ * 時間軸側に置く。時間軸も同じ値を使うため (基準を共有できないとき、映像を音声の
+ * 到着基準の時刻へ合わせる)、片方だけを変えると A/V のずれが残る
+ */
+export const AUDIO_PLAYOUT_ARRIVAL_DELAY_MS = 100;
+
+/**
+ * 到着基準で並べるときの再生の遅れ (ミリ秒)
+ *
+ * 学習した値 (`learnedDelayMs`) は経路の揺らぎを吸収するために必要である。ただし上限
+ * (`AUDIO_PLAYOUT_ARRIVAL_DELAY_MS`) を超える分は使わない。TIMESTAMP が壁時計から
+ * ずれているトラックでは、ずれそのものを揺らぎとして学習してしまうためである。下限は
+ * 共有の時間軸と同じ `AUDIO_PLAYOUT_DELAY_FLOOR_MS` にする。
+ *
+ * 呼び出し側 (音声を鳴らす時刻を決めるとき) と時間軸 (映像を合わせるとき) の両方がこの
+ * 規則を使う。値がずれると A/V の合わせ先がずれる
+ *
+ * @param learnedDelayMs - 共有の時間軸が学習した再生の遅れ (ミリ秒)
+ */
+export function audioArrivalPlayoutDelayMs(learnedDelayMs: number): number {
+  return Math.min(
+    Math.max(learnedDelayMs, AUDIO_PLAYOUT_DELAY_FLOOR_MS),
+    AUDIO_PLAYOUT_ARRIVAL_DELAY_MS,
+  );
+}
 
 /**
  * 表示待ちのキューの上限のうち、揺らぎで一時的に増える分として空けておく枚数
@@ -858,6 +892,12 @@ export class PlaybackTimeline {
    *   伸びてしまうためである
    */
   private updateSyncDelays(nowMs: number): void {
+    if (this.driftedStream() === "audio") {
+      // 音声の TIMESTAMP が信用できず、到着基準で鳴っている。基準は共有できないが、
+      // 音声の並べ方は分かっているため、映像だけをその時刻へ合わせる
+      this.updateSyncDelaysToArrivalAudio(nowMs);
+      return;
+    }
     const naturalMs = this.syncNaturalPresentationMs();
     if (naturalMs === null) {
       // 2 つのトラックの基準を共有できない (基準がずれている、またはまだ観測していない)。
@@ -878,6 +918,66 @@ export class PlaybackTimeline {
 
     // 3) 戻した後のずれをもう一度そろえる (片側だけ戻すと、その分だけずれが開く)
     this.alignSyncExtras(naturalMs);
+  }
+
+  /**
+   * 音声が到着基準で鳴っているときの同期の制御 (映像だけを音声へ合わせる)
+   *
+   * 音声の TIMESTAMP が信用できないと 2 つのトラックの基準は共有できず、これまでは同期の
+   * 制御そのものを止めていた。止めると相対関係を見る相手がいなくなり、音声は「到着 + 到着
+   * 基準の再生の遅れ」、映像は自分の jitter buffer の遅延で別々に並ぶ。実測では音声が
+   * 195 ms、映像が 98 ms で 100 ms のずれが残っていた。
+   *
+   * 音声の並べ方は分かっている (`audioArrivalPlayoutDelayMs`) ため、映像の到着からの遅れ
+   * (`naturalDelayMsOf("video")`) をその値へ合わせることはできる。これで基準を共有
+   * できない状態でもリップシンクが取れる。音声と映像の到着が同じ時刻であることは前提に
+   * する (同じ publisher・同じ経路の 2 つのトラック)。
+   *
+   * - 足すのは映像だけである。音声を遅らせると到着から鳴るまでの時間がその分だけ増える
+   *   (音声の目標は `AUDIO_PLAYOUT_ARRIVAL_DELAY_MS` であり、それ以上は遅らせない)
+   * - 足す量は `PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS` までにする (既存の同期の規則と
+   *   同じ)。映像が音声より遅いときは戻さない (音声を遅らせないと合わせられないため、
+   *   その分は A/V のずれとして残す)
+   * - 足すのは即座、戻すのは毎秒 `PLAYBACK_DELAY_DECAY_MS_PER_SECOND` までにする
+   *   (既存の同期と同じ)
+   */
+  private updateSyncDelaysToArrivalAudio(nowMs: number): void {
+    const audioMs = this.audioArrivalDelayMs;
+    const videoMs = this.naturalDelayMsOf("video");
+    if (audioMs === null || videoMs === null) {
+      // 音声の jitter buffer の遅延か、映像の遅延がまだ決まっていない
+      this.decaySyncExtras(nowMs, () => 0);
+      return;
+    }
+    // 目指す差は不感帯にする。ただし合わせる量は上限までにする (足りない分は A/V のずれと
+    // して残す)。差の大きさで不感帯に収まる場合も、既存の規則と同じく足さない
+    const desiredMs = Math.max(
+      SYNC_MIN_DELTA_MS,
+      Math.abs(audioMs - videoMs) - PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS,
+    );
+    const targetExtraMs = videoMs < audioMs ? Math.max(0, audioMs - desiredMs - videoMs) : 0;
+    // 戻す向きは毎秒の速さまでにする (音声は足さない。足すと到着から鳴るまでが増える)
+    this.decaySyncExtras(nowMs, (stream) => (stream === "video" ? targetExtraMs : 0));
+    // 足す向きは即座に行う (減らすのは decaySyncExtras だけにする)
+    const videoWithExtraMs = videoMs + this.syncExtraMs.video;
+    if (videoWithExtraMs < audioMs - desiredMs) {
+      this.syncExtraMs.video = audioMs - desiredMs - videoMs;
+    }
+  }
+
+  /**
+   * 音声を到着基準で並べるときの再生の遅れ (ミリ秒)。まだ観測していなければ null
+   *
+   * 音声の TIMESTAMP が信用できないとき (基準を共有できないとき) に、映像を合わせる先の
+   * 時刻である。呼び出し側が音声を鳴らすときに使う値と同じ規則で求める
+   * (`audioArrivalPlayoutDelayMs`)。値がずれると A/V の合わせ先がずれる
+   */
+  get audioArrivalDelayMs(): number | null {
+    const playoutDelayMs = this.playoutDelayMs;
+    if (playoutDelayMs === null) {
+      return null;
+    }
+    return audioArrivalPlayoutDelayMs(playoutDelayMs);
   }
 
   /**

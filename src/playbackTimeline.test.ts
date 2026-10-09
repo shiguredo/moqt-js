@@ -15,6 +15,7 @@
 
 import { test, assert } from "vite-plus/test";
 import {
+  AUDIO_PLAYOUT_ARRIVAL_DELAY_MS,
   AUDIO_PLAYOUT_DELAY_FLOOR_MS,
   MAX_PLAYOUT_DELAY_MS,
   PLAYBACK_DELAY_DECAY_MS_PER_SECOND,
@@ -426,8 +427,15 @@ test("sharingBases: 基準の差が閾値を超えたら共有せず、大きい
   // ずれた側 (大きい方) の音声は表示時刻を返さない
   assert.isNull(timeline.presentationWallClockMicros("audio", timestampOf(0)));
   assert.isNull(timeline.presentationPerformanceMs("audio", timestampOf(0)));
-  // もう片方の映像は自分の基準 (0 ms) と自分の表示の遅れで表示時刻を返す
-  assert.closeTo(wallClockMsOf(timeline, "video", 0), EPOCH_MS, TOLERANCE_MS);
+  // もう片方の映像は自分の基準 (0 ms) と自分の表示の遅れで表示時刻を返す。基準が共有できない
+  // ときは、映像を音声の到着基準の時刻 (今の遅れは下限の 80 ms) へ不感帯の手前まで合わせる
+  // ため、表示の遅れは 50 ms (80 - 30) になる。ずれた側の基準 (1 秒) は使わない
+  const expectedVideoDelayMs = AUDIO_PLAYOUT_DELAY_FLOOR_MS - SYNC_MIN_DELTA_MS;
+  assert.closeTo(
+    wallClockMsOf(timeline, "video", 0),
+    EPOCH_MS + expectedVideoDelayMs,
+    TOLERANCE_MS,
+  );
 });
 
 // 閾値は「キューが吸収できる長さ - 表示の遅れ」である。フレーム間隔を覚えていない間は
@@ -822,36 +830,43 @@ test("observe: ドリフトは差が動き続けた時点で検出する", () =>
   // 閾値に達する前に検出できていれば、映像へ足した分は動きの幅の中に留まる
   observeDriftedStreams(timeline, 30, 20_000);
   assert.isFalse(timeline.sharingBases, "基準を共有しないこと");
+  // 検出した後は、映像へ足す先が音声の到着基準の遅れ (上限 100 ms) に変わる。足した分は
+  // 「上限 - 不感帯」の 70 ms までであり、ドリフトで膨らんだ音声の遅延には合わせない
   assert.isAtMost(
     timeline.videoDelayMs ?? 0,
-    PLAYOUT_BASE_DRIFT_MS,
-    "映像へ足した分が動きの幅に収まること",
+    AUDIO_PLAYOUT_ARRIVAL_DELAY_MS - SYNC_MIN_DELTA_MS + TOLERANCE_MS,
+    "映像へ足した分が到着基準の上限の中に収まること",
   );
 });
 
-// 完了条件: 基準を共有できないと判定したら、ずれた側へ合わせて足した分を戻す。残すと、
-// 戻す先が無いため上限まで遅れたままになり、同じ時刻の音声と映像が最大で上限の分だけ
-// 離れる (映像だけが遅れて、明らかに音声が先行して聞こえる)
-test("observe: ドリフトで基準を共有しなくなったら映像へ足した分を戻す", () => {
+// 完了条件: 基準を共有できないと判定したら、ずれた側 (音声) の膨らんだ遅延ではなく、音声の
+// 「到着 + 到着基準の再生の遅れ」(上限 100 ms) へ映像を合わせる。合わせないと相対関係を
+// 見る相手がいなくなり、同じ時刻の音声と映像が離れたままになる。合わせる量は上限 (100 ms)
+// から不感帯 (30 ms) を引いた分までであり、ドリフトで膨らんだ音声の学習値には合わせない
+test("observe: ドリフトで基準を共有しなくなったら映像を音声の到着基準の時刻へ合わせる", () => {
   for (const frameRate of [30, 60]) {
     const timeline = createTimeline();
     const mediaMs = observeDriftedStreams(timeline, frameRate, DRIFT_TEST_DURATION_MS);
     assert.isFalse(timeline.sharingBases, `${frameRate} fps: 基準を共有しないこと`);
 
-    // 映像の表示の遅れは自分の揺らぎだけで決まる。この到着列は揺らぎ 0 であるため、
-    // ドリフトへ合わせて足した分が残っていれば、その分だけ遅れが大きくなる
+    // 映像の表示の遅れは、音声の到着基準の遅れから不感帯を引いた値までになる (この到着列は
+    // 揺らぎ 0 であるため、自分の遅延は 0 で、足した分だけが乗る)
     const videoDelayMs = timeline.videoDelayMs;
     assert.isNotNull(videoDelayMs, `${frameRate} fps: 映像の表示の遅れが決まること`);
-    assert.isAtMost(
+    const arrivalDelayMs = timeline.audioArrivalDelayMs;
+    assert.isNotNull(arrivalDelayMs, `${frameRate} fps: 音声の到着基準の遅れが決まること`);
+    assert.closeTo(
       videoDelayMs ?? 0,
+      (arrivalDelayMs ?? 0) - SYNC_MIN_DELTA_MS,
       TOLERANCE_MS,
-      `${frameRate} fps: 映像の表示の遅れに足した分が残らないこと`,
+      `${frameRate} fps: 映像を音声の到着基準の時刻へ合わせること`,
     );
 
-    // 音声は到着基準の再生へ落ちるため、実際に鳴るのは「到着 + 再生の遅れ」である
-    // (src/audioPlayout.ts)。映像の表示時刻と比べて、映像が遅れていないこと
+    // 音声は到着基準の再生へ落ちるため、実際に鳴るのは「到着 + 到着基準の遅れ」である
+    // (src/audioPlayout.ts)。映像の表示時刻と比べて、映像が音声より遅れていないこと
     const playoutDelayMs = timeline.playoutDelayMs ?? AUDIO_PLAYOUT_DELAY_FLOOR_MS;
-    const audioPlaysAtMs = EPOCH_MS + mediaMs + playoutDelayMs;
+    assert.isAtLeast(playoutDelayMs, arrivalDelayMs ?? 0, "音声の遅れが上限を超えないこと");
+    const audioPlaysAtMs = EPOCH_MS + mediaMs + (arrivalDelayMs ?? 0);
     const videoShowsAtMs = EPOCH_MS + performanceMsOf(timeline, "video", mediaMs);
     assert.isAtMost(
       videoShowsAtMs - audioPlaysAtMs,

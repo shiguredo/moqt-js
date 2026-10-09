@@ -57,6 +57,7 @@ import {
   AUDIO_CLOCK_DEADBAND_MS,
   AUDIO_PLAYOUT_ARRIVAL_DELAY_SECONDS,
   AUDIO_PLAYOUT_DELAY_SECONDS,
+  AUDIO_PLAYOUT_MIN_LEAD_SECONDS,
   AudioClockBridge,
   type AudioClockMapping,
   type AudioPlayoutScheduler,
@@ -3382,6 +3383,7 @@ test("getStats: 詰めと遅れの統計をミリ秒で返す", () => {
   // 目標ちょうどに届き、今 + 余裕からしか鳴らせない音を作る (遅れ 10 ms を詰める)
   const decision = control.audioPlayout.schedule(10, 0, 0.02, {
     targetStartSeconds: 10,
+    arrivalSeconds: 10,
     enforceTarget: true,
     delaySeconds: AUDIO_PLAYOUT_DELAY_SECONDS,
     arrivalDelaySeconds: AUDIO_PLAYOUT_ARRIVAL_DELAY_SECONDS,
@@ -3398,17 +3400,20 @@ test("getStats: 詰めと遅れの統計をミリ秒で返す", () => {
   assert.closeTo(stats?.playoutCompressedMs ?? 0, decision.compressSeconds * 1_000, 1e-6);
   assert.closeTo(stats?.playoutLatenessMs ?? 0, control.audioPlayout.lateness * 1_000, 1e-6);
   // 基準の取り直しと捨てを 1 回ずつ作り、写像も非 0 で固定する
+  // 到着した音がまだ鳴っていない位置は到着の時刻そのもの (対応の無い環境)
   const arrival = {
     targetStartSeconds: null,
+    arrivalSeconds: 100,
     enforceTarget: false,
     delaySeconds: AUDIO_PLAYOUT_DELAY_SECONDS,
     arrivalDelaySeconds: AUDIO_PLAYOUT_ARRIVAL_DELAY_SECONDS,
     presentationDelaySeconds: AUDIO_PLAYOUT_DELAY_SECONDS,
   };
   control.audioPlayout.schedule(100, 0, 0.02, arrival);
-  control.audioPlayout.schedule(200, 20_000, 0.02, arrival);
+  control.audioPlayout.schedule(200, 20_000, 0.02, { ...arrival, arrivalSeconds: 200 });
   control.audioPlayout.schedule(300, 0, 0.02, {
     targetStartSeconds: 300.5,
+    arrivalSeconds: 300,
     enforceTarget: true,
     delaySeconds: AUDIO_PLAYOUT_DELAY_SECONDS,
     arrivalDelaySeconds: AUDIO_PLAYOUT_ARRIVAL_DELAY_SECONDS,
@@ -3726,12 +3731,18 @@ test("handleAudioDecodedData: TIMESCALE がある TIMESTAMP は到着基準に�
 
   const reservation = playAudioFrame(control, decodedTimestamp, mapping);
 
-  // 目標を使わないため、基準は「最初の音の到着 (今) + 再生の遅れ」になる
+  // 目標を使わないため、基準は「到着した音がまだ鳴っていない位置 + 再生の遅れ」になる
   assert.equal(reservation.startedAtSeconds.length, 1);
-  // currentTime は固定値であるため、予約時刻は「currentTime + 再生の遅れ」になる
+  // 予約時刻は「到着の位置 + 到着基準の遅れ」と「今 + 余裕」の遅い方になる。到着の位置は、
+  // 予約のときに測った時刻を getOutputTimestamp の対応で AudioContext の秒へ換算した値
+  // (予約のたびに AudioClockBridge が取り直す)
+  const arrivalSeconds = (reservation.readAtMs + reservation.deviceDelayMs) / 1_000;
   assert.closeTo(
     (reservation.startedAtSeconds[0] ?? 0) * 1_000,
-    reservation.currentTimeSeconds * 1_000 + AUDIO_PLAYOUT_DELAY_SECONDS * 1_000,
+    Math.max(
+      (arrivalSeconds + AUDIO_PLAYOUT_ARRIVAL_DELAY_SECONDS) * 1_000,
+      (reservation.currentTimeSeconds + AUDIO_PLAYOUT_MIN_LEAD_SECONDS) * 1_000,
+    ),
     AV_SYNC_TOLERANCE_MS,
   );
   // 壁時計の TIMESTAMP を観測していないため同期の推定は出さない
@@ -3777,10 +3788,15 @@ test("handleAudioDecodedData: 音声を観測していなくても再生の遅�
 
   assert.equal(errors.length, 0);
   assert.equal(reservation.startedAtSeconds.length, 1);
-  // 到着基準の再生の遅れは下限 (80 ms) になる
+  // 到着基準の再生の遅れは下限 (80 ms) になる。予約時刻は「到着の位置 + 80 ms」と
+  // 「今 + 余裕」の遅い方になる (後者が勝つときは、出力のバッファの分だけ遅れて鳴る)
+  const arrivalSeconds = (reservation.readAtMs + reservation.deviceDelayMs) / 1_000;
   assert.closeTo(
     (reservation.startedAtSeconds[0] ?? 0) * 1_000,
-    reservation.currentTimeSeconds * 1_000 + AUDIO_PLAYOUT_DELAY_SECONDS * 1_000,
+    Math.max(
+      (arrivalSeconds + AUDIO_PLAYOUT_DELAY_SECONDS) * 1_000,
+      (reservation.currentTimeSeconds + AUDIO_PLAYOUT_MIN_LEAD_SECONDS) * 1_000,
+    ),
     AV_SYNC_TOLERANCE_MS,
   );
 });
@@ -4449,6 +4465,7 @@ test("createOutputStream: 再生の基準を消し、統計は残す", () => {
   // 目標を過ぎて届いた音で今の遅れと詰めを作る
   const decision = control.audioPlayout.schedule(10, 0, 0.02, {
     targetStartSeconds: 10,
+    arrivalSeconds: 10,
     enforceTarget: true,
     delaySeconds: AUDIO_PLAYOUT_DELAY_SECONDS,
     arrivalDelaySeconds: AUDIO_PLAYOUT_ARRIVAL_DELAY_SECONDS,

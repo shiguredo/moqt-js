@@ -2408,6 +2408,11 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       // 予約に使う今の時刻 (`AudioContext.currentTime`)。鳴り始める時刻を performance 軸へ
       // 換算するときの基準にも使うため、1 回だけ読む
       const contextNowSeconds = this.audioContext.currentTime;
+      // 到着した音が「まだ鳴っていない位置」(`AudioContext.currentTime` の秒)。AudioContext の
+      // 時計は、既に出力のバッファへ積まれた分だけ実際に鳴る位置より先に進む。到着基準の
+      // 遅れをこれではなく今 (currentTime) から数えると、実際に鳴るのは「到着 + 遅れ +
+      // バッファの分」になる (実測では 100 ms の目標に対して 195.5 ms 鳴っていた)
+      const arrivalSeconds = this.audioClockBridge.toAudioSeconds(arrivalMs) ?? contextNowSeconds;
       const durationSeconds = numberOfFrames / sampleRate;
       // 音声を観測していないとき (壁時計の TIMESTAMP を持たない / Track の TIMESCALE を
       // 使う) は共有の再生遅延に下限が入らないため、ここで下限を必ず適用する
@@ -2422,6 +2427,8 @@ export class MediaSubscriberImpl implements MediaSubscriber {
         durationSeconds,
         {
           targetStartSeconds,
+          // 到着した音がまだ鳴っていない位置。到着基準の遅れはここから数える
+          arrivalSeconds,
           // 映像も購読しているときだけ目標を守る。音声だけのときは取り直して連続を優先する
           enforceTarget: this.videoTrackInfo !== null,
           delaySeconds: playoutDelaySeconds,

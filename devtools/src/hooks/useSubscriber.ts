@@ -1628,6 +1628,11 @@ export function useSubscriber(
       // 予約に使う今の時刻。鳴り始める時刻を performance 軸へ換算する基準にも使うため、
       // 1 回だけ読む
       const contextNowSeconds = playback.context.currentTime;
+      // 到着した音が「まだ鳴っていない位置」(`AudioContext.currentTime` の秒)。AudioContext の
+      // 時計は、既に出力のバッファへ積まれた分だけ実際に鳴る位置より先に進む。到着基準の
+      // 遅れをこれではなく今 (currentTime) から数えると、実際に鳴るのは「到着 + 遅れ +
+      // バッファの分」になる (実測では 100 ms の目標に対して 195.5 ms 鳴っていた)
+      const arrivalSeconds = playback.clock.toAudioSeconds(arrivalMs) ?? contextNowSeconds;
       // 音声を観測していないとき (壁時計の TIMESTAMP を持たない / Track の TIMESCALE を使う)
       // は共有の再生遅延に下限が入らないため、ここで下限を必ず適用する
       const playoutDelaySeconds =
@@ -1641,6 +1646,8 @@ export function useSubscriber(
         durationSeconds,
         {
           targetStartSeconds,
+          // 到着した音がまだ鳴っていない位置。到着基準の遅れはここから数える
+          arrivalSeconds,
           enforceTarget: targetStartSeconds !== null && jitterBufferEnabledRef.current,
           delaySeconds: playoutDelaySeconds,
           // 目標を使えないとき (到着基準) の再生の遅れ。共有の時間軸が学習した値は、

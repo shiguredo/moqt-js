@@ -81,10 +81,22 @@ function valueOf(value: number | null): number {
   return value;
 }
 
-/** 目標を守るとき (映像も購読しているとき) の目標 */
-function enforcedTarget(targetStartSeconds: number): AudioPlayoutTarget {
+/**
+ * 目標を守るとき (映像も購読しているとき) の目標
+ *
+ * `arrivalSeconds` は到着基準へ並べ直すとき (目標から離れすぎて届き、音が途切れていたとき)
+ * だけ使う。到着基準そのものを確かめるテストは、この値を到着の時刻にして明示する
+ *
+ * @param targetStartSeconds - 目標の開始時刻
+ * @param arrivalSeconds - 到着した音がまだ鳴っていない位置。省略すると目標の時刻と同じにする
+ */
+function enforcedTarget(
+  targetStartSeconds: number,
+  arrivalSeconds: number = targetStartSeconds,
+): AudioPlayoutTarget {
   return {
     targetStartSeconds,
+    arrivalSeconds,
     enforceTarget: true,
     delaySeconds: AUDIO_PLAYOUT_DELAY_SECONDS,
     arrivalDelaySeconds: AUDIO_PLAYOUT_DELAY_SECONDS,
@@ -98,15 +110,20 @@ function enforcedTarget(targetStartSeconds: number): AudioPlayoutTarget {
  * - 目標が無い: 壁時計の TIMESTAMP を持たない音。映像を購読していても目標を作れない
  * - 目標はあるが守らない: 音声だけを購読していて揃える相手がいない。鳴らす時刻を過ぎて
  *   届いた音は基準を取り直して鳴らす (捨てない)
+ *
+ * 到着基準の並びを決めるのは到着した音がまだ鳴っていない位置 (`arrivalSeconds`) だけであり、
+ * 目標の時刻は使わない。引数は `arrivalSeconds` (到着の時刻) にする
  */
 const arrivalTargets: {
   label: string;
-  make: (targetStartSeconds: number) => AudioPlayoutTarget;
+  /** @param arrivalSeconds - 到着した音がまだ鳴っていない位置 (到着の時刻) */
+  make: (arrivalSeconds: number) => AudioPlayoutTarget;
 }[] = [
   {
     label: "目標が無い",
-    make: () => ({
+    make: (arrivalSeconds) => ({
       targetStartSeconds: null,
+      arrivalSeconds,
       enforceTarget: true,
       delaySeconds: AUDIO_PLAYOUT_DELAY_SECONDS,
       arrivalDelaySeconds: AUDIO_PLAYOUT_DELAY_SECONDS,
@@ -115,8 +132,9 @@ const arrivalTargets: {
   },
   {
     label: "目標はあるが守らない",
-    make: (targetStartSeconds) => ({
-      targetStartSeconds,
+    make: (arrivalSeconds) => ({
+      targetStartSeconds: arrivalSeconds,
+      arrivalSeconds,
       enforceTarget: false,
       delaySeconds: AUDIO_PLAYOUT_DELAY_SECONDS,
       arrivalDelaySeconds: AUDIO_PLAYOUT_DELAY_SECONDS,
@@ -311,7 +329,7 @@ test("schedule: 目標から離れすぎて届き、音が途切れていた音�
   // 直前の音は 2 秒前に鳴り終わっている (経路が止まっていた)
   startAtOf(scheduler.schedule(10, 0, FRAME_SECONDS, enforcedTarget(10.05)));
   const decision = playDecisionOf(
-    scheduler.schedule(12, FRAME_MICROSECONDS, FRAME_SECONDS, enforcedTarget(11.4)),
+    scheduler.schedule(12, FRAME_MICROSECONDS, FRAME_SECONDS, enforcedTarget(11.4, 12)),
   );
   assert.equal(decision.basis, "arrival", "到着基準へ並べ直すこと");
   assert.closeTo(decision.startAt, 12 + AUDIO_PLAYOUT_DELAY_SECONDS, EPSILON);
@@ -319,7 +337,7 @@ test("schedule: 目標から離れすぎて届き、音が途切れていた音�
   assert.equal(scheduler.rebases, 1, "基準を取り直すこと");
   // 並べ直した後は、その続きから鳴る (重ならない)
   const next = playDecisionOf(
-    scheduler.schedule(12.02, 2 * FRAME_MICROSECONDS, FRAME_SECONDS, enforcedTarget(11.42)),
+    scheduler.schedule(12.02, 2 * FRAME_MICROSECONDS, FRAME_SECONDS, enforcedTarget(11.42, 12.02)),
   );
   assert.closeTo(next.startAt, decision.startAt + FRAME_SECONDS, EPSILON);
   assert.equal(scheduler.drops, 0);
@@ -333,13 +351,13 @@ test("schedule: 経路が止まった後は到着基準で並べ直し、目標�
   startAtOf(scheduler.schedule(10, 0, FRAME_SECONDS, enforcedTarget(10.05)));
   // 2 秒後に届いた、目標より 600 ms 遅れた音は、到着基準へ並べ直して鳴らす
   const rebased = playDecisionOf(
-    scheduler.schedule(12, FRAME_MICROSECONDS, FRAME_SECONDS, enforcedTarget(11.4)),
+    scheduler.schedule(12, FRAME_MICROSECONDS, FRAME_SECONDS, enforcedTarget(11.4, 12)),
   );
   assert.equal(rebased.basis, "arrival");
   assert.equal(scheduler.drops, 0, "捨てないこと");
   // 続けて届く遅れた音も鳴る (前の音の終わりに繋げる)。無音にならないこと
   const stillLate = playDecisionOf(
-    scheduler.schedule(12.02, 2 * FRAME_MICROSECONDS, FRAME_SECONDS, enforcedTarget(11.42)),
+    scheduler.schedule(12.02, 2 * FRAME_MICROSECONDS, FRAME_SECONDS, enforcedTarget(11.42, 12.02)),
   );
   assert.closeTo(
     stillLate.startAt,
@@ -486,7 +504,7 @@ test("schedule: 並べすぎで捨てた後も目標どおりに鳴る", () => {
 test("schedule: 目標を使わないときは最初の音を今 + 再生の遅れに鳴らす", () => {
   for (const { label, make } of arrivalTargets) {
     const scheduler = new AudioPlayoutScheduler();
-    const startAt = startAtOf(scheduler.schedule(10, 1_000_000, FRAME_SECONDS, make(10.02)));
+    const startAt = startAtOf(scheduler.schedule(10, 1_000_000, FRAME_SECONDS, make(10)));
     assert.closeTo(startAt, 10 + AUDIO_PLAYOUT_DELAY_SECONDS, EPSILON, label);
     assert.equal(scheduler.drops, 0, label);
     assert.equal(scheduler.rebases, 0, label);
@@ -500,7 +518,7 @@ test("schedule: 目標を使わないときは timestamp の間隔どおりに�
     const scheduler = new AudioPlayoutScheduler();
     const arrivals = [10, 10.032, 10.041, 10.075, 10.08];
     const starts = arrivals.map((now, index) =>
-      startAtOf(scheduler.schedule(now, index * FRAME_MICROSECONDS, FRAME_SECONDS, make(10.01))),
+      startAtOf(scheduler.schedule(now, index * FRAME_MICROSECONDS, FRAME_SECONDS, make(now))),
     );
     for (const [index, startAt] of starts.entries()) {
       assert.closeTo(
@@ -750,9 +768,7 @@ test("schedule: 目標を使わないときは過ぎてから届いた音で基�
     const scheduler = new AudioPlayoutScheduler();
     startAtOf(scheduler.schedule(10, 0, FRAME_SECONDS, make(10)));
     // 2 つ目の音は 10.10 に鳴らすはずが、10.2 に届く (目標 10.05 はとっくに過ぎている)
-    const late = startAtOf(
-      scheduler.schedule(10.2, FRAME_MICROSECONDS, FRAME_SECONDS, make(10.05)),
-    );
+    const late = startAtOf(scheduler.schedule(10.2, FRAME_MICROSECONDS, FRAME_SECONDS, make(10.2)));
     assert.closeTo(late, 10.2 + AUDIO_PLAYOUT_DELAY_SECONDS, EPSILON, label);
     assert.equal(scheduler.rebases, 1, label);
     assert.equal(scheduler.drops, 0, label);
@@ -850,6 +866,7 @@ test("schedule: 目標が 500 ms 先でも鳴らす", () => {
   const scheduler = new AudioPlayoutScheduler();
   const target: AudioPlayoutTarget = {
     targetStartSeconds: 10.5,
+    arrivalSeconds: 10,
     enforceTarget: true,
     delaySeconds: AUDIO_PLAYOUT_DELAY_SECONDS,
     arrivalDelaySeconds: AUDIO_PLAYOUT_DELAY_SECONDS,
@@ -874,22 +891,24 @@ test("schedule: 目標を使わないときの再生の遅れは arrivalDelaySec
   // 学習した再生の遅れは上限 (300 ms) まで育っているが、到着基準では小さな値を使う
   const delaySeconds = AUDIO_PLAYOUT_MAX_DELAY_SECONDS;
   const arrivalDelaySeconds = AUDIO_PLAYOUT_ARRIVAL_DELAY_SECONDS;
-  const target: AudioPlayoutTarget = {
+  // 到着した音がまだ鳴っていない位置は、その音が届いた時刻である
+  const targetAt = (arrivalSeconds: number): AudioPlayoutTarget => ({
     targetStartSeconds: null,
+    arrivalSeconds,
     enforceTarget: false,
     delaySeconds,
     arrivalDelaySeconds,
     presentationDelaySeconds: delaySeconds,
-  };
+  });
   const scheduler = new AudioPlayoutScheduler();
   assert.closeTo(
-    startAtOf(scheduler.schedule(10, 0, FRAME_SECONDS, target)),
+    startAtOf(scheduler.schedule(10, 0, FRAME_SECONDS, targetAt(10))),
     10 + arrivalDelaySeconds,
     EPSILON,
     "学習した遅れではなく到着基準の遅れで並べること",
   );
   // 過ぎてから届いたときの取り直し先も、到着基準の再生の遅れになる
-  const late = startAtOf(scheduler.schedule(20, FRAME_MICROSECONDS, FRAME_SECONDS, target));
+  const late = startAtOf(scheduler.schedule(20, FRAME_MICROSECONDS, FRAME_SECONDS, targetAt(20)));
   assert.closeTo(late, 20 + arrivalDelaySeconds, EPSILON);
   assert.equal(scheduler.rebases, 1);
 });
@@ -932,15 +951,16 @@ test("reset: 再生の統計は消えず、今の遅れだけ 0 に戻る", () =
   );
   scheduler.confirmConcealment(second.gapSeconds);
   // 目標を使わない並べ方で、過ぎてから届いた音の基準を取り直す
-  const arrivalTarget: AudioPlayoutTarget = {
+  const arrivalTargetAt = (arrivalSeconds: number): AudioPlayoutTarget => ({
     targetStartSeconds: null,
+    arrivalSeconds,
     enforceTarget: false,
     delaySeconds: AUDIO_PLAYOUT_DELAY_SECONDS,
     arrivalDelaySeconds: AUDIO_PLAYOUT_DELAY_SECONDS,
     presentationDelaySeconds: AUDIO_PLAYOUT_DELAY_SECONDS,
-  };
-  scheduler.schedule(100, 0, FRAME_SECONDS, arrivalTarget);
-  scheduler.schedule(200, FRAME_MICROSECONDS, FRAME_SECONDS, arrivalTarget);
+  });
+  scheduler.schedule(100, 0, FRAME_SECONDS, arrivalTargetAt(100));
+  scheduler.schedule(200, FRAME_MICROSECONDS, FRAME_SECONDS, arrivalTargetAt(200));
   // 並べすぎの音を捨てる
   scheduler.schedule(300, 0, FRAME_SECONDS, enforcedTarget(300.5));
   // 目標を過ぎて届いた音で今の遅れと詰めを作る

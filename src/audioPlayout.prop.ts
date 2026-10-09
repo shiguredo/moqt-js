@@ -40,7 +40,6 @@ import {
   AudioClockBridge,
   AudioPlayoutScheduler,
   type AudioPlayoutDecision,
-  type AudioPlayoutTarget,
 } from "./audioPlayout";
 
 /** 浮動小数点の誤差を許す幅 (秒) */
@@ -176,20 +175,21 @@ test("目標を使わないとき: 鳴らす音は重ならず、今 + 余裕以
       fc.array(frameArbitrary, { minLength: 1, maxLength: 300 }),
       (delaySeconds, arrivalDelaySeconds, frames) => {
         const scheduler = new AudioPlayoutScheduler();
-        const target: AudioPlayoutTarget = {
-          targetStartSeconds: null,
-          enforceTarget: false,
-          delaySeconds,
-          arrivalDelaySeconds,
-          presentationDelaySeconds: delaySeconds,
-        };
         let now = 100;
         let timestamp = 0;
         let previousEnd: number | null = null;
         for (const frame of frames) {
           now += frame.arrivalGapSeconds;
           timestamp += frame.timestampStepMicroseconds;
-          const decision = scheduler.schedule(now, timestamp, frame.durationSeconds, target);
+          // 到着した音がまだ鳴っていない位置は、到着の時刻である (対応の無い環境)
+          const decision = scheduler.schedule(now, timestamp, frame.durationSeconds, {
+            targetStartSeconds: null,
+            arrivalSeconds: now,
+            enforceTarget: false,
+            delaySeconds,
+            arrivalDelaySeconds,
+            presentationDelaySeconds: delaySeconds,
+          });
           if (decision.kind === "drop") {
             continue;
           }
@@ -230,6 +230,7 @@ test("目標を守るとき: 並べすぎだけを捨て、離れすぎた音は
       const schedule = (scheduler: AudioPlayoutScheduler, seconds: number) =>
         scheduler.schedule(scenario.nowSeconds, 0, scenario.durationSeconds, {
           targetStartSeconds: seconds,
+          arrivalSeconds: scenario.nowSeconds,
           enforceTarget: true,
           delaySeconds: scenario.delaySeconds,
           arrivalDelaySeconds: scenario.arrivalDelaySeconds,
@@ -291,6 +292,7 @@ test("目標を守るとき: 鳴らす音は目標どおりで重ならず、窓
         const targetStartSeconds = now + frame.offsetSeconds;
         const decision = scheduler.schedule(now, 0, frame.durationSeconds, {
           targetStartSeconds,
+          arrivalSeconds: now,
           enforceTarget: true,
           delaySeconds,
           arrivalDelaySeconds,
