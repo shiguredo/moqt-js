@@ -981,11 +981,11 @@ test("delayBreakdown: ドリフトでは理由と動きの速さを出し、ず�
 // 完了条件: 基準の差が経路差として説明できる上限 (PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS) を
 // 超えたら、超えた分は合わせない。合わせても実際のずれは減らないまま相手側の表示の遅れが
 // 伸びるためである (実測では音声の基準 313 ms・映像 13 ms で映像へ 378 ms を足し、
-// 表示の遅延が 483 ms になっていた)
+// 表示の遅延が 483 ms になっていた)。上限は時計のずれの証拠を見たかどうかに関わらず掛ける
 test("observe: 基準の差が大きくても相手側へ足す分は上限までにする", () => {
   const timeline = createTimeline();
-  // 音声だけが TIMESTAMP より 300 ms 遅れて届く (定常)。ただし最初の 5 秒で 150 ms の段差を
-  // 入れて、時計がそろっていない証拠を見せる (証拠を見るまでは上限を掛けない)
+  // 音声だけが TIMESTAMP より 300 ms 遅れて届く (定常)。段差 (150 ms) も入れて、差が
+  // 動き続けている場合 (ドリフト) と同じ条件にする
   const offsetMs = 300;
   for (let mediaMs = 0; mediaMs < 20_000; mediaMs += FRAME_MS) {
     const stepMs = mediaMs < 5_000 ? 0 : 150;
@@ -1004,6 +1004,47 @@ test("observe: 基準の差が大きくても相手側へ足す分は上限ま�
     timeline.videoDelayMs ?? Infinity,
     PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS + 1,
     "映像の表示の遅れが上限を超えないこと",
+  );
+});
+
+// 完了条件 (実測): 音声の TIMESTAMP が 600 ms 段差でずれても、映像を音声の膨らんだ遅延に
+// 合わせない。段差は「到着 - TIMESTAMP」に現れるため、音声の jitter buffer の遅延 (NetEq の
+// 目標) が 600 ms へ育つ。基準 (窓の最小値) は 10 秒間動かないため、2 つのトラックは
+// 共有されたまま差だけが開く。修正前は、時計のずれの証拠を見る前に上限が掛からず、この差の
+// 全額 (497 ms) を映像へ足して表示待ちが 512 ms になった (実測では syncExtraDelayMs 600.5、
+// displayWait 496 ms、そこから毎秒 20 ms でしか戻らなかった)
+test("observe: 音声の TIMESTAMP が段差でずれても、映像へ足す遅延は上限までにする", () => {
+  const timeline = createTimeline();
+  // 音声は 20 ms ごと (Opus)、映像は 30 fps で、どちらも揺らぎ 0 で届く
+  const audioFrameMs = 20;
+  const stepAtMs = 5_000;
+  const stepMs = 600;
+  let nextVideoMs = 0;
+  for (let wallMs = 0; wallMs < 10_000; wallMs += audioFrameMs) {
+    while (nextVideoMs <= wallMs) {
+      timeline.observe("video", EPOCH_MS + nextVideoMs, timestampOf(nextVideoMs));
+      nextVideoMs += FRAME_MS;
+    }
+    // 段差の後は、音声の TIMESTAMP だけが 600 ms 古くなる (到着は変わらない)
+    const timestampMs = wallMs < stepAtMs ? wallMs : wallMs - stepMs;
+    timeline.observe("audio", EPOCH_MS + wallMs, timestampOf(timestampMs));
+  }
+  // 入力が実測と同じ機構になっていること (音声の遅延が段差の分だけ育つ)
+  assert.isAbove(
+    timeline.playoutDelayMs ?? 0,
+    AUDIO_PLAYOUT_DELAY_FLOOR_MS,
+    "音声の jitter buffer の遅延が段差で育つこと",
+  );
+  // 映像へ足す分は上限までである (段差の全額ではない)
+  assert.isAtMost(
+    timeline.delayBreakdown.video.syncExtraDelayMs,
+    PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS,
+    "映像へ足す分が上限を超えないこと",
+  );
+  assert.isAtMost(
+    timeline.videoDelayMs ?? Infinity,
+    PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS + 1,
+    "映像の表示待ち (displayWait) が上限に留まること",
   );
 });
 

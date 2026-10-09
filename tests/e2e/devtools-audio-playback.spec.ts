@@ -23,8 +23,8 @@ const AUDIO_PLAYBACK_ITEMS = {
   playedMs: "subscriber-audio-playback-played-ms",
   arrivalPlannedFrames: "subscriber-audio-playback-arrival-planned-frames",
   unplannedFrames: "subscriber-audio-playback-unplanned-frames",
-  // 鳴らさなかった量 (理由ごとの件数とミリ秒、および合計)
-  missedLatenessCount: "subscriber-audio-playback-missed-lateness-count",
+  // 鳴らさなかった量 (理由ごとの件数とミリ秒、および合計)。鳴り遅れでは捨てないため、
+  // 理由は backlog / catchUp / error / stopped の 4 つである
   missedBacklogCount: "subscriber-audio-playback-missed-backlog-count",
   missedCatchUpCount: "subscriber-audio-playback-missed-catchUp-count",
   missedErrorCount: "subscriber-audio-playback-missed-error-count",
@@ -85,7 +85,6 @@ test("subscriber の画面に音声の再生の観測を既定値で出す", asy
   await expect(page.getByTestId(AUDIO_PLAYBACK_ITEMS.arrivalPlannedFrames)).toHaveText("0");
   await expect(page.getByTestId(AUDIO_PLAYBACK_ITEMS.unplannedFrames)).toHaveText("0");
   // 鳴らさなかった量は、理由ごとと合計の両方を出す (audio → video の順に並ぶ)
-  await expect(page.getByTestId(AUDIO_PLAYBACK_ITEMS.missedLatenessCount)).toHaveText("0");
   await expect(page.getByTestId(AUDIO_PLAYBACK_ITEMS.missedBacklogCount)).toHaveText("0");
   await expect(page.getByTestId(AUDIO_PLAYBACK_ITEMS.missedCatchUpCount)).toHaveText("0");
   await expect(page.getByTestId(AUDIO_PLAYBACK_ITEMS.missedErrorCount)).toHaveText("0");

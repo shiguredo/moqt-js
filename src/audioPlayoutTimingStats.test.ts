@@ -95,7 +95,6 @@ test("recordMiss: 理由ごとの件数と長さを数え、直近の一覧に�
   assert.equal(snapshot.missedMs, 40, "鳴らさなかった音の長さを足すこと");
   assert.deepEqual(snapshot.missedByReason.backlog, { count: 1, ms: 20 });
   assert.deepEqual(snapshot.missedByReason.catchUp, { count: 1, ms: 20 });
-  assert.deepEqual(snapshot.missedByReason.lateness, { count: 0, ms: 0 });
   assert.deepEqual(snapshot.missedByReason.error, { count: 0, ms: 0 });
   assert.deepEqual(snapshot.missedByReason.stopped, { count: 0, ms: 0 });
   assert.equal(snapshot.recentMisses.length, 2);
@@ -112,7 +111,7 @@ test("recordMiss: 直近の一覧は上限を超えたら古い方から捨て�
   for (let index = 0; index < MAX_RECENT_AUDIO_MISSES + 5; index++) {
     stats.recordMiss({
       atMs: index,
-      reason: "lateness",
+      reason: "backlog",
       durationMs: 20,
       targetMs: null,
       arrivalMs: null,
@@ -189,11 +188,11 @@ test("formatAudioMissEvent: UTC の時刻と理由と長さを 1 行にする", 
   assert.equal(
     formatAudioMissEvent({
       wallClockMs: 0,
-      reason: "lateness",
+      reason: "backlog",
       durationMs: 20.4,
       slackMs: -12.6,
     }),
-    "1970-01-01T00:00:00.000Z lateness 20 ms slack=-13 ms",
+    "1970-01-01T00:00:00.000Z backlog 20 ms slack=-13 ms",
   );
   // 予定が無いときは余裕を "-" にする
   assert.equal(

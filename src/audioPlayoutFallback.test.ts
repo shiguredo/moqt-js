@@ -4,7 +4,7 @@
  * devtools の購読 (マイク + カメラ、`audioDelivery: subgroup`、jitter buffer 有効) の実測では、
  * 送る側の音声の LOC TIMESTAMP がセッションの途中で 40 ms から 623 ms へ段差でずれた。到着は
  * 乱れていないため、ずれているのは TIMESTAMP であり、音の内容が遅れているわけではない。
- * それでも受信側では次の 3 つが起きていた。
+ * それでも受信側では次の 4 つが起きていた。
  *
  * - 到着から鳴り始めるまでが 316 ms (p50)、最大 598 ms になった。時間軸の基準が共有されなく
  *   なると到着基準で並べるが、その再生の遅れに、TIMESTAMP のずれを揺らぎとして学習した値
@@ -12,14 +12,24 @@
  * - 予定より 507 ms 遅く届いた音が `lateness` として捨てられ、語尾が切れた。予定 (TIMESTAMP
  *   から決まる時刻) の方が 500 ms 過去にずれているだけであり、音は遅れていない
  * - 予定を決められない音が `unplannedFrames` に数えられ、予定に対する余裕を読めなかった
+ * - 段差を揺らぎとして学習した音声の遅延 (目標が 700 ms) へ映像を合わせて、映像の
+ *   `syncExtraDelayMs` が 600.5 になり、`displayWait` が 496 ms になった。時計のずれの
+ *   証拠 (差が動き続けていること) を見る前だったため、合わせる量の上限
+ *   (`PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS` = 100 ms) が掛からず、全額を合わせていた。
+ *   その後は毎秒 20 ms でしか戻らず、数十秒間映像が遅れたままになった
+ * - 音声は到着基準へ並べ直すたびに余分な遅れが積み上がり、`playoutRebases` が 24 回に
+ *   なった (17 秒のセッション)。並べ直すと媒体時刻が跳び、鳴っている音の続きが前へずれる
  *
  * このファイルは、実測と同じ入力 (TIMESTAMP が途中で 600 ms 段差でずれる、到着は乱れない) を、
  * 時間軸 (`PlaybackTimeline`)、鳴らす時刻の決定 (`AudioPlayoutScheduler`)、観測
  * (`AudioPlayoutTimingStats`) を本物のまま繋いで再現し、次の受け入れ条件を固定する。
  *
  * - 到着から鳴り始めるまでの時間 (`startDelayMs`) の p50 が 100 ms 程度に収まる
- * - 鳴り遅れ (`missedByReason.lateness`) が増えない (遅れて届いても鳴らす)
+ * - 鳴り遅れで音を捨てない (`missedFrames` が 0 のまま)
  * - 到着基準で鳴らす音も計画に載せ、`unplannedFrames` が 0 になる
+ * - 音声の並べ直し (`playoutRebases`) がほぼ起きない。並べ直すのは音が本当に途切れたときだけ
+ * - 映像は音声の膨らんだ遅延に合わせない。`videoSyncExtraDelayMs` が上限 (100 ms) まで、
+ *   `displayWait` が 100 ms 程度に留まる
  * - TIMESTAMP が正しいとき (正常時) の並べ方は変わらない
  *
  * 時刻は `performance.now()` と同じ軸の値で与える。鳴り始める時刻は `AudioContext` の時計へ
@@ -33,7 +43,12 @@ import {
   AudioPlayoutScheduler,
 } from "./audioPlayout";
 import { AudioPlayoutTimingStats } from "./audioPlayoutTimingStats";
-import { AUDIO_PLAYOUT_DELAY_FLOOR_MS, PlaybackTimeline } from "./playbackTimeline";
+import {
+  AUDIO_PLAYOUT_DELAY_FLOOR_MS,
+  PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS,
+  PlaybackTimeline,
+} from "./playbackTimeline";
+import { summarizeTimings } from "./timingSummary";
 
 /** Opus の 1 フレーム (20 ms) */
 const AUDIO_FRAME_MS = 20;
@@ -73,10 +88,17 @@ interface ScenarioResult {
   readonly arrivalPlannedFrames: number;
   readonly unplannedFrames: number;
   readonly missedFrames: number;
-  readonly latenessMisses: number;
   readonly playedFrames: number;
   /** 基準を共有できていた時間の割合 (正常時の並べ方かを確かめる) */
   readonly sharedBaseFrames: number;
+  /** 音声の基準を取り直した回数 (目標から離れすぎた音の並べ直し) */
+  readonly playoutRebases: number;
+  /** 映像へ同期の制御が足した分の最大値 (ミリ秒)。上限 (100 ms) を超えない */
+  readonly videoSyncExtraMaxMs: number;
+  /** 映像の表示待ち (キューが保持する長さ) の p50 (ミリ秒)。実測の displayWait と同じ値 */
+  readonly videoDelayP50Ms: number;
+  /** 映像の表示待ちの最大値 (ミリ秒) */
+  readonly videoDelayMaxMs: number;
 }
 
 /**
@@ -100,6 +122,9 @@ function runScenario(stepAtMs: number | null): ScenarioResult {
 
   let sharedBaseFrames = 0;
   let nextVideoMs = 0;
+  // 映像の表示待ち (キューが保持する長さ) と、同期の制御が足した分の記録
+  const videoDelaysMs: number[] = [];
+  let videoSyncExtraMaxMs = 0;
   const audioFrames = Math.floor(SCENARIO_MS / AUDIO_FRAME_MS);
   for (let index = 0; index < audioFrames; index++) {
     const wallMs = index * AUDIO_FRAME_MS;
@@ -108,6 +133,16 @@ function runScenario(stepAtMs: number | null): ScenarioResult {
       timeline.observe("video", nextVideoMs, (nextVideoMs - VIDEO_BASE_MS) * 1_000);
       nextVideoMs += VIDEO_FRAME_MS;
     }
+    // 映像の表示待ちは「復号の出力から表示時刻まで」であり、時間軸が決めた映像の遅れ
+    // (`videoDelayMs`) と同じ値になる (devtools の displayWait と同じ求め方)
+    const videoDelayMs = timeline.videoDelayMs;
+    if (videoDelayMs !== null) {
+      videoDelaysMs.push(videoDelayMs);
+    }
+    videoSyncExtraMaxMs = Math.max(
+      videoSyncExtraMaxMs,
+      timeline.delayBreakdown.video.syncExtraDelayMs,
+    );
 
     const arrivalMs = wallMs + arrivalJitterMs(index);
     // 送る側が付ける LOC TIMESTAMP は「到着 - 基準」である
@@ -166,19 +201,48 @@ function runScenario(stepAtMs: number | null): ScenarioResult {
   if (snapshot.startDelayMs === null) {
     throw new Error("expected a startDelay distribution");
   }
+  const videoDelays = summarizeTimings(videoDelaysMs);
+  if (videoDelays === null) {
+    throw new Error("expected a video delay distribution");
+  }
   return {
     startDelayP50: snapshot.startDelayMs.p50,
     startDelayMax: snapshot.startDelayMs.max,
     arrivalPlannedFrames: snapshot.arrivalPlannedFrames,
     unplannedFrames: snapshot.unplannedFrames,
     missedFrames: snapshot.missedFrames,
-    latenessMisses: snapshot.missedByReason.lateness.count,
     playedFrames: snapshot.playedFrames,
     sharedBaseFrames,
+    playoutRebases: playout.rebases,
+    videoSyncExtraMaxMs,
+    videoDelayP50Ms: videoDelays.p50,
+    videoDelayMaxMs: videoDelays.max,
   };
 }
 
-// 受け入れ条件: TIMESTAMP が途中で 600 ms 段差でずれても、到着から鳴り始めるまでの時間が
+// 受け入れ条件 (1): TIMESTAMP が途中で 600 ms 段差でずれても、映像を音声の膨らんだ遅延に
+// 合わせない。修正前は、時計のずれの証拠を見る前に上限が掛からず、映像へ 497 ms を足して
+// 表示待ちが上限の 500 ms に張り付いた (実測では syncExtraDelayMs 600.5、displayWait
+// 496.2 ms)。
+// 修正後は合わせる量が上限 (PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS = 100 ms) までになり、
+// 映像の表示待ちは、本来の表示の遅れ (targetLatency 100 ms + 基準の遅れ 12.5 ms) に
+// 上限までを足した値に留まる
+test("TIMESTAMP が段差でずれても、映像へ足す遅延は上限までにする", () => {
+  const result = runScenario(STEP_AT_MS);
+
+  // 映像へ足す分は上限までである (時計のずれの証拠を見る前でも掛ける)
+  assert.isAtMost(
+    result.videoSyncExtraMaxMs,
+    PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS,
+    "映像へ足す分が上限を超えないこと",
+  );
+  // 映像の表示待ちは、本来の表示の遅れ (100 ms) と足した分 (上限 100 ms) の合計に留まる。
+  // 実測の 496 ms のような待ちを作らない
+  assert.isAtMost(result.videoDelayMaxMs, 100 + PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS + 1);
+  assert.isAtMost(result.videoDelayP50Ms, 150, "表示待ちの p50 が 100 ms 前後に留まること");
+});
+
+// 受け入れ条件 (2): TIMESTAMP が途中で 600 ms 段差でずれても、到着から鳴り始めるまでの時間が
 // 100 ms 程度に収まり、鳴り遅れで音を捨てず、すべての音が計画に載る。修正前は、基準が共有
 // されなくなった後も TIMESTAMP のずれを揺らぎとして学習した値 (316〜500 ms) で並べ、
 // 予定より 507 ms 遅く届いた音を lateness として捨てていた
@@ -191,20 +255,24 @@ test("TIMESTAMP が段差でずれても、到着基準の小さな目標で鳴�
   assert.isAtMost(result.startDelayMax, 150, "大きな遅れを残さないこと");
 
   // 鳴り遅れで音を捨てない (遅れて届いても鳴らす)
-  assert.equal(result.latenessMisses, 0, "lateness で捨てないこと");
   assert.equal(result.missedFrames, 0, "鳴らさなかった音が無いこと");
 
   // 予定を時間軸から決められない音も、到着基準の計画で鳴らす
-  assert.isAbove(result.arrivalPlannedFrames, 0, "到着基準へ並べ直すこと");
+  assert.isAbove(result.arrivalPlannedFrames, 0, "到着基準の計画で鳴らすこと");
   assert.equal(result.unplannedFrames, 0, "計画に載っていない音が無いこと");
   assert.equal(result.playedFrames, SCENARIO_MS / AUDIO_FRAME_MS, "すべての音を鳴らすこと");
+
+  // 並べ直し (媒体時刻を跳ばすこと) は、音が本当に途切れたときだけである。段差の直後は
+  // 音が連続しているため、並べ直さずに遅れたまま鳴らす。実測では 24 回起きていた
+  assert.isAtMost(result.playoutRebases, 2, "音が連続している間は並べ直さないこと");
 
   // 段差の後は基準を共有できない (到着基準で鳴らす状態になること)
   assert.isBelow(result.sharedBaseFrames, result.playedFrames / 2);
 });
 
 // 受け入れ条件: TIMESTAMP が正しいとき (正常時) の並べ方は変えない。目標の時刻に従って
-// 鳴らし、到着基準へ並べ直さない。遅れて届いた音も今 + 余裕で鳴らして詰める (既存の挙動)
+// 鳴らし、到着基準へ並べ直さない。遅れて届いた音も今 + 余裕で鳴らして詰める (既存の挙動)。
+// 映像へ足す遅延も 0 のままである
 test("TIMESTAMP が正しいときは、目標の時刻に従って鳴らし、到着基準へ並べ直さない", () => {
   const result = runScenario(null);
 
@@ -214,7 +282,9 @@ test("TIMESTAMP が正しいときは、目標の時刻に従って鳴らし、�
   assert.isAtMost(result.startDelayP50, TARGET_LATENCY_MS, "表示の遅れを超えないこと");
   assert.isAtLeast(result.startDelayP50, AUDIO_PLAYOUT_DELAY_FLOOR_MS, "下限を下回らないこと");
   assert.equal(result.missedFrames, 0);
-  assert.equal(result.latenessMisses, 0);
   assert.equal(result.unplannedFrames, 0);
+  assert.equal(result.playoutRebases, 0, "並べ直さないこと");
   assert.equal(result.sharedBaseFrames, result.playedFrames, "基準を共有したままであること");
+  // 2 つのトラックの差が上限の中にあるため、同期の制御は足さない (0 のまま)
+  assert.equal(result.videoSyncExtraMaxMs, 0, "映像へ遅延を足さないこと");
 });

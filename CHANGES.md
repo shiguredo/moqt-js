@@ -69,6 +69,10 @@
   - End Group (StartGroup + EndGroupDelta) が 2^64-1 を超える場合は、送信側が InvalidFilterError、受信側が PROTOCOL_VIOLATION で拒否する (従来どおり)
   - 旧 v21 のワイヤ形式で送受信していた moqt-js とは相互運用できない
   - @voluntas
+- [CHANGE] `AUDIO_MISS_REASONS` から `lateness` を削除する
+  - 鳴り遅れで音を捨てなくなったため (遅れたまま鳴らすか、音が途切れていたときだけ到着基準へ並べ直す)、`missedByReason.lateness` は常に 0 になる。鳴らなかった理由は `backlog` (並べすぎ)、`catchUp` (relay の cache から追いつく途中)、`error` (鳴らす準備の失敗)、`stopped` (再生の停止) の 4 つになる
+  - `AudioMissReason` / `AudioPlayoutTimingSnapshot.missedByReason` は公開型のため、`lateness` を扱っているコードは修正が必要になる (後方互換なし)
+  - @voluntas
 - [CHANGE] `AudioPlayoutTimingSnapshot` に `arrivalPlannedFrames` を追加し、`unplannedFrames` の意味を変える
   - 時間軸の再生予定時刻を使えず、到着基準の計画で鳴らした音の数を `arrivalPlannedFrames` で読めるようにする。従来はこれを `unplannedFrames` に数えていたが、`unplannedFrames` は到着基準の計画も持たない音 (呼び出し側が計画を渡していない取りこぼし) の数になり、通常は 0 になる
   - `AudioPlayoutTimingSnapshot` は公開型のため、この型を自前で構築しているコードは `arrivalPlannedFrames` の追加が必要になる (後方互換なし)
@@ -2529,8 +2533,9 @@
 
 - [FIX] 音声の再生が信用できない LOC TIMESTAMP に引きずられて遅れ、鳴り遅れで語尾が切れるのを直す
   - 目標の時刻を使えないとき (壁時計の TIMESTAMP を持たない、jitter buffer が無効、トラックの基準が映像と共有されていない) の再生の遅れが、TIMESTAMP のずれを揺らぎとして学習した値 (実測で 316〜500 ms) になっていた。到着基準の再生の遅れを `AUDIO_PLAYOUT_ARRIVAL_DELAY_SECONDS` (100 ms) で切った値に揃え、到着から 100 ms 程度で鳴らす
-  - 予定から 500 ms を超えて離れた音を捨てていたため、送る側の TIMESTAMP がずれて予定だけが過去になると、鳴り遅れとして音 (語尾) が切れていた。音が途切れていない限り捨てず、到着基準の小さな目標へ並べ直して鳴らす。捨てるのは音が 500 ms の間途切れていたとき (経路の停止) だけにする
-  - 実測のログ相当の入力 (音声の TIMESTAMP が途中で 600 ms 段差でずれ、到着は乱れない) を模したテストで、到着から鳴り始めるまでの p50 が 500 ms → 100 ms、`missedByReason.lateness` が 5 件 → 0 件、`unplannedFrames` が 899 件 → 0 件になった
+  - 予定から 500 ms を超えて離れた音を捨てていたため、送る側の TIMESTAMP がずれて予定だけが過去になると、鳴り遅れとして音 (語尾) が切れていた。鳴り遅れでは捨てない。音がまだ鳴っている (キューが空でない) 間は並べ直さず、前の音の終わりに繋げて遅れたまま鳴らす。並べ直す (媒体時刻を跳ばす) のは、音が本当に途切れていたときだけにする。並べ直しのたびに余分な遅れが積み上がって、到着から鳴り始めるまでが 178 ms になっていた (実測)
+  - A/V 同期が映像へ足す遅延の上限 (`PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS` = 100 ms) を、時計のずれの証拠を見たかどうかに関わらず常に掛ける。実測では、音声の TIMESTAMP が 600 ms 段差でずれ、その段差を揺らぎとして学習した音声の遅延 (jitter buffer の目標で 700 ms) へ映像を合わせて 600.5 ms を足し、映像の表示待ちが 496 ms のまま数十秒戻らなかった。上限を掛けることで映像へ足す分は 100 ms までになり、映像の表示待ちは 100 ms 前後に留まる
+  - 実測のログ相当の入力 (音声の TIMESTAMP が途中で 600 ms 段差でずれ、到着は乱れない) を模したテストで、到着から鳴り始めるまでの p50 が 500 ms → 100 ms、`unplannedFrames` が 899 件 → 0 件、`missedFrames` が 0 件のままになった。並べ直し (`playoutRebases`) が 24 回 → 0 回、映像へ足す遅延が 497 ms → 100 ms (上限)、映像の表示待ちが 500 ms → 200 ms になった
   - @voluntas
 
 ## 2026.2.0

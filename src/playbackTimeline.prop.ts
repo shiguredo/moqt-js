@@ -9,7 +9,10 @@
  * - 同じ TIMESTAMP の音声と映像の表示時刻は、不感帯 (SYNC_MIN_DELTA_MS) の範囲で揃う
  * - 共有の再生遅延は 0 以上で、下げる速さは毎秒 PLAYBACK_DELAY_DECAY_MS_PER_SECOND を
  *   超えない
- * - 120 秒の到着列でも同時刻の音声と映像の表示時刻の差と skewMs は ±50 ms 以内に収まる
+ * - 合わせる量は常に上限 (PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS) までである。120 秒の
+ *   到着列でも、同時刻の音声と映像の表示時刻の差と skewMs は「素の差から上限までの分を
+ *   合わせた残り」に収まる (素の差が上限の中にあるときだけ不感帯に収まる)。時計のずれの
+ *   証拠を見る前でも掛ける
  *
  * 個別の規則 (基準の差が閾値を超えたときのフォールバック、音声の下限、切り下げの統計、
  * TIMESTAMP の飛び) は playbackTimeline.test.ts の単体テストが固定する。
@@ -27,6 +30,7 @@ import {
   SYNC_MIN_DELTA_MS,
   PlaybackTimeline,
   type PlaybackStream,
+  type PlaybackTrackBreakdown,
 } from "./playbackTimeline";
 
 // 送信側の壁時計 (Unix epoch ミリ秒)。メディア時刻 0 の TIMESTAMP にする
@@ -39,6 +43,17 @@ const LOCAL_ORIGIN_MS = 1_000;
 const MAX_QUEUED_FRAMES = JITTER_BUFFER_MAX_QUEUED_FRAMES;
 // TIMESTAMP (約 1.79e15 マイクロ秒) とミリ秒の変換で生じる誤差を許す幅 (ミリ秒)
 const TOLERANCE_MS = 0.01;
+
+/** 到着列を作る長さ (ミリ秒) */
+const DURATION_MS = 120_000;
+
+/**
+ * 合わせない分の検算を許す幅 (ミリ秒)
+ *
+ * 差は TIMESTAMP の µs から ms への丸めと、分布の窓 (最後の 10 秒) と最後の観測の差だけ
+ * ずれる。200 個の seed で確かめた最大のずれは 0.001 ms である
+ */
+const ALLOWANCE_MS = 0.1;
 
 /** メディア時刻 (ミリ秒) のフレームの壁時計の時刻 (Unix epoch ミリ秒) */
 function epochOf(mediaMs: number): number {
@@ -365,7 +380,7 @@ test("PlaybackTimeline: 同時刻の表示時刻の差は上限に収まり、nu
  * 以内である (p95 が 40 ms 程度になる)
  */
 function buildArrivals(seed: number): { stream: PlaybackStream; atMs: number; mediaMs: number }[] {
-  const durationMs = 120_000;
+  const durationMs = DURATION_MS;
   const audioFrameMs = 20;
   const videoFrameMs = 1_000 / 30;
   const audioRandom = seededRandom(seed);
@@ -402,6 +417,18 @@ function buildArrivals(seed: number): { stream: PlaybackStream; atMs: number; me
 }
 
 /**
+ * 2 つのトラックの素の表示の遅れ (基準の遅れ + jitter buffer の遅延) の差 (ミリ秒)
+ *
+ * 同期の制御が足す前の差である。合わせる量の上限はこの差に掛かる
+ */
+function naturalDifferenceMsOf(timeline: PlaybackTimeline): number {
+  const breakdown = timeline.delayBreakdown;
+  const naturalOf = (track: PlaybackTrackBreakdown): number =>
+    (track.baseDelayMs ?? 0) + (track.jitterDelayMs ?? 0);
+  return Math.abs(naturalOf(breakdown.audio) - naturalOf(breakdown.video));
+}
+
+/**
  * 120 秒の到着列を時間軸へ与え、最後の 10 秒の同時刻の表示時刻の差の最大値を求める
  *
  * @returns 時間軸 (skewMs の検算に使う) と、差の最大値 (ミリ秒)
@@ -411,7 +438,7 @@ function runArrivals(seed: number): { timeline: PlaybackTimeline; maxDifferenceM
     timeOriginMs: EPOCH_MS,
     maxQueuedFrames: MAX_QUEUED_FRAMES,
   });
-  const durationMs = 120_000;
+  const durationMs = DURATION_MS;
   const videoFrameMs = 1_000 / 30;
   for (const arrival of buildArrivals(seed)) {
     timeline.observe(arrival.stream, arrival.atMs, timestampOf(arrival.mediaMs));
@@ -437,17 +464,40 @@ function runArrivals(seed: number): { timeline: PlaybackTimeline; maxDifferenceM
   return { timeline, maxDifferenceMs };
 }
 
-test("PlaybackTimeline: 120 秒の到着列でも同時刻の表示時刻の差と skewMs が ±50 ms 以内になる", () => {
+// 方針変更: 合わせる量の上限 (PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS = 100 ms) を常に掛ける
+// ようにしたため、120 秒の到着列で同時刻の表示時刻の差が ±50 ms に収まるとは言えなくなった。
+// 実測では、音声の TIMESTAMP が 600 ms 段差でずれ、その段差を揺らぎとして学習した音声の
+// 遅延へ映像を合わせて 600 ms を足し、映像が 500 ms 遅れたまま数十秒戻らなかった。いまは
+// 上限までの分しか合わせず、残りは A/V のずれとして残す
+test("PlaybackTimeline: 120 秒の到着列でも同時刻の表示時刻の差は合わせない分に収まる", () => {
   fc.assert(
     fc.property(fc.integer({ min: 1, max: 1_000_000 }), (seed) => {
-      const durationMs = 120_000;
       const { timeline, maxDifferenceMs } = runArrivals(seed);
-      // 50 ms はこの性質に求めた許容である (制御は不感帯の 30 ms に収めるが、上限に
-      // 達している間は広がり得るため、余裕を残す)
-      assert.isAtMost(maxDifferenceMs, 50, "同時刻の表示時刻の差が 50 ms 以内であること");
+      // 2 つのトラックの素の表示の遅れの差 (同期の制御が足す前)。合わせる量の上限はこの差に
+      // 掛かる
+      const naturalDifferenceMs = naturalDifferenceMsOf(timeline);
+      // 合わせるのは上限 (PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS) までであり、超えた分は
+      // A/V のずれとして残す。差が上限の中にあるときだけ不感帯 (SYNC_MIN_DELTA_MS) に収まる
+      const allowedDifferenceMs = Math.max(
+        SYNC_MIN_DELTA_MS,
+        naturalDifferenceMs - PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS,
+      );
+      // 丸め (TIMESTAMP の µs 変換) と、分布の窓と最後の観測の差を許す幅 (ミリ秒)
+      assert.isAtMost(
+        maxDifferenceMs,
+        allowedDifferenceMs + ALLOWANCE_MS,
+        "同時刻の表示時刻の差が、合わせない分に収まること",
+      );
 
-      // 実績から求める同期ずれも、同じ式で決めた音声と映像なら ±50 ms 以内になる
-      const timestampMicros = timestampOf(durationMs - 1_000);
+      // 同期の制御が足す分も上限を超えない。超えると、合わせても減らない差のために
+      // 相手側の表示が遅れたままになる (実測では映像へ 600 ms 足していた)
+      const breakdown = timeline.delayBreakdown;
+      assert.isAtMost(breakdown.audio.syncExtraDelayMs, PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS);
+      assert.isAtMost(breakdown.video.syncExtraDelayMs, PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS);
+
+      // 実績から求める同期ずれは、同じ式で決めた音声と映像の表示時刻の差である。合わせない
+      // 分が残るため、ずれの予算 (±50 ms) ではなく、合わせない分までになる
+      const timestampMicros = timestampOf(DURATION_MS - 1_000);
       const audioWallClockMicros = timeline.presentationWallClockMicros("audio", timestampMicros);
       const videoWallClockMicros = timeline.presentationWallClockMicros("video", timestampMicros);
       assert.isNotNull(audioWallClockMicros);
@@ -456,7 +506,11 @@ test("PlaybackTimeline: 120 秒の到着列でも同時刻の表示時刻の差�
       timeline.recordPresentation("video", timestampMicros, videoWallClockMicros ?? 0n);
       const skewMs = timeline.skewMs();
       assert.isNotNull(skewMs, "同期ずれが求まること");
-      assert.isAtMost(Math.abs(skewMs ?? Infinity), 50, "同期ずれが 50 ms 以内であること");
+      assert.isAtMost(
+        Math.abs(skewMs ?? Infinity),
+        allowedDifferenceMs + ALLOWANCE_MS,
+        "同期ずれが、合わせない分に収まること",
+      );
     }),
     // CI の runner はローカルより遅いため、120 秒の列を作る回数を抑える (1 回で 30 fps と
     // Opus の 120 秒分の観測を回す)
@@ -467,21 +521,42 @@ test("PlaybackTimeline: 120 秒の到着列でも同時刻の表示時刻の差�
 }, 60_000);
 
 /**
- * 特定した seed の到着列でも、同時刻の表示時刻の差が不感帯に収まる
+ * 特定した seed の到着列でも、映像を音声の膨らんだ遅延に合わせない
  *
- * 失敗を観測した入力を固定する。同期の制御が相手の目標遅延の段差に追いつかず、差が
- * 最大 112 ms まで開いていた (制御が「経路の相対遅延」を見ており、また 1 秒ごとに
- * 平均の半分しか動かせなかったため)。不感帯まで締めるのは、実際に 30 ms ちょうどで
- * 収まっており、ここが緩むと制御の分解能が落ちたことを見逃すためである
+ * 失敗を観測した入力を固定する。音声は 200 ms の遅れを揺らぎとして学習して jitter buffer の
+ * 遅延が 220〜240 ms になり、映像との素の差が上限 (100 ms) を超える。修正前はその全額を
+ * 映像へ足していたため、映像の表示待ちが音声と同じ 220 ms 前後になり、A/V のずれは
+ * 不感帯に収まっていた。方針を変えた理由は実測である (音声の TIMESTAMP が 600 ms 段差で
+ * ずれ、段差を揺らぎとして学習した遅延へ映像を合わせて 600 ms 足し、映像が 500 ms 遅れた
+ * まま数十秒戻らなかった)。いまは合わせる量が上限までになり、残りは A/V のずれとして残る
  */
-test("PlaybackTimeline: 差が開いていた到着列でも同時刻の表示時刻の差が不感帯に収まる", () => {
+test("PlaybackTimeline: 差が開いていた到着列でも映像の表示待ちは自分の揺らぎ + 上限までにする", () => {
   for (const seed of [50, 139, 194]) {
-    // 差が開く到着列では、合わせる量を上限 (PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS) までに
-    // 抑えるため、不感帯を超えた分が残る。上限までの補正しかしないこと
+    const { timeline, maxDifferenceMs } = runArrivals(seed);
+    const breakdown = timeline.delayBreakdown;
+    const videoNaturalMs =
+      (breakdown.video.baseDelayMs ?? 0) + (breakdown.video.jitterDelayMs ?? 0);
+    // 映像へ足すのは上限までである (音声の膨らんだ遅延には合わせない)
     assert.isAtMost(
-      runArrivals(seed).maxDifferenceMs,
-      SYNC_MIN_DELTA_MS + PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS + 0.01,
-      `seed=${seed} の同時刻の表示時刻の差が上限までの補正に収まること`,
+      breakdown.video.syncExtraDelayMs,
+      PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS,
+      `seed=${seed} の映像へ足す分が上限を超えないこと`,
+    );
+    assert.isAtMost(
+      timeline.videoDelayMs ?? Infinity,
+      videoNaturalMs + PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS + ALLOWANCE_MS,
+      `seed=${seed} の映像の表示待ちが自分の揺らぎ + 上限に収まること`,
+    );
+    // 合わせない分が残るため、同時刻の表示時刻の差は不感帯には収まらない。素の差から
+    // 上限までの分だけになる
+    const allowedDifferenceMs = Math.max(
+      SYNC_MIN_DELTA_MS,
+      naturalDifferenceMsOf(timeline) - PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS,
+    );
+    assert.isAtMost(
+      maxDifferenceMs,
+      allowedDifferenceMs + ALLOWANCE_MS,
+      `seed=${seed} の同時刻の表示時刻の差が合わせない分に収まること`,
     );
   }
 }, 30_000);

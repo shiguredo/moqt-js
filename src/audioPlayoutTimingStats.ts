@@ -34,13 +34,15 @@ export const MAX_RECENT_AUDIO_MISSES = 30;
 /**
  * 鳴らさなかった理由
  *
- * - `lateness`: 再生予定から離れすぎて届き、到着も途切れていたため捨てた (経路の停止など)
  * - `backlog`: 並べすぎて捨てた (再生が追いついていない)
  * - `catchUp`: relay の cache から追いつく途中で鳴らさなかった (意図的なもの)
  * - `error`: 鳴らす準備 (詰め・補間・予約) の途中で失敗した
  * - `stopped`: 予約したまま再生を止めた (予約済みの音が切り捨てられた)
+ *
+ * 鳴り遅れを理由に捨てることはない。音がまだ鳴っている間は遅れたまま鳴らし続け、音が
+ * 途切れたときだけ到着基準へ並べ直す (src/audioPlayout.ts)
  */
-export const AUDIO_MISS_REASONS = ["lateness", "backlog", "catchUp", "error", "stopped"] as const;
+export const AUDIO_MISS_REASONS = ["backlog", "catchUp", "error", "stopped"] as const;
 
 /** 鳴らさなかった理由 */
 export type AudioMissReason = (typeof AUDIO_MISS_REASONS)[number];

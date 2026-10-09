@@ -8,12 +8,13 @@
  *   鳴らすと決めた音が重ならず (前の音の終わりより前に鳴らさない)、鳴らす時刻は今 + 余裕
  *   以上、遅れ (鳴らす時刻 - 今) は「到着基準の再生の遅れ (`arrivalDelaySeconds`) + 余裕」
  *   以下。共有の時間軸が学習した遅れ (`delaySeconds`) では決まらない
- * - 目標を守るときに捨てるのは並べすぎの音 (目標が今 + 上限より先) と、目標から離れすぎて
- *   音が途切れていた音 (直前の音が上限より前に鳴り終わっていた) だけである。目標を過ぎて
- *   届いた音は今 + 余裕で鳴らし、ずらした分を波形の周期で詰める。外側の目標はさらに外側でも
- *   捨てる (単調)
- * - 目標から離れすぎて届いた音も、音が届き続けていれば捨てず、到着基準の小さな目標へ
- *   並べ直して鳴らす (到着から `arrivalDelaySeconds` だけ遅らせ、前の音と重ならない)
+ * - 目標を守るときに捨てるのは並べすぎの音 (目標が今 + 上限より先) だけである。目標を
+ *   過ぎて届いた音は今 + 余裕で鳴らし、ずらした分を波形の周期で詰める。外側の目標はさらに
+ *   外側でも捨てる (単調)
+ * - 目標から離れすぎて届いた音も捨てない。音がまだ鳴っている (キューが空でない) 間は到着
+ *   基準へ並べ直さず、前の音の終わりに繋げて遅れたまま鳴らす。並べ直す (媒体時刻を跳ばす)
+ *   のは、音が本当に途切れたとき (キューが空だったとき) だけである。並べ直したときは
+ *   到着から `arrivalDelaySeconds` だけ遅らせ、前の音と重ならない
  * - 目標を守るときに鳴らす音は、今 + 余裕以降で、目標より前ではなく、前の音と重ならない
  * - 補間の隙間の情報は、下限 (5 ms) を超え上限 (100 ms) 以下で、前の音の終わりに一致し、
  *   今 + 余裕以降から次の音の開始までに収まる
@@ -82,16 +83,16 @@ function assertConcealmentWithinBounds(
 }
 
 /**
- * 経路が止まっていたか (直前の音が `AUDIO_PLAYOUT_MAX_LATENESS_SECONDS` より前に鳴り終わったか)
+ * 音が途切れていたか (直前の音がまだ鳴っていない、または既に鳴り終わっているか)
  *
- * 音が途切れているときだけ、目標から離れすぎた音を捨てる (鳴らしても遅れたままになる)。
- * まだ一度も鳴らしていないとき (previousEnd が null) は捨てない (鳴らす方を選ぶ)。
+ * 音が途切れているときだけ、目標から離れすぎた音を到着基準へ並べ直す (媒体時刻を跳ばす)。
+ * 音がまだ鳴っている間は並べ直さず、遅れたまま鳴らし続ける。
  *
  * @param previousEnd - 直前に鳴らすと決めた音の終わりの時刻。まだ鳴らしていなければ null
  * @param nowSeconds - 今の時刻
  */
-function isStalled(previousEnd: number | null, nowSeconds: number): boolean {
-  return previousEnd !== null && previousEnd < nowSeconds - AUDIO_PLAYOUT_MAX_LATENESS_SECONDS;
+function isInterrupted(previousEnd: number | null, nowSeconds: number): boolean {
+  return previousEnd === null || previousEnd <= nowSeconds;
 }
 
 /** 目標を使わないときに受け取る再生の遅れ (秒)。共有の時間軸が決めた値 */
@@ -216,7 +217,7 @@ test("目標を使わないとき: 鳴らす音は重ならず、今 + 余裕以
   );
 });
 
-test("目標を守るとき: 並べすぎと離れすぎだけを捨て、目標を過ぎた音は今 + 余裕で鳴らす", () => {
+test("目標を守るとき: 並べすぎだけを捨て、離れすぎた音は到着基準へ並べ直して鳴らす", () => {
   fc.assert(
     fc.property(enforcedScenarioArbitrary, (scenario) => {
       const limit = scenario.delaySeconds + scenario.backlogSeconds;
@@ -242,15 +243,23 @@ test("目標を守るとき: 並べすぎと離れすぎだけを捨て、目標
         : 0;
       const tooLateToPlay = latenessSeconds > AUDIO_PLAYOUT_MAX_LATENESS_SECONDS;
       const decision = schedule(makeScheduler(), targetStartSeconds);
-      // 並べすぎ (今 + 再生の遅れ + 余裕より先) と、目標から離れすぎた音だけを捨てる
-      assert.equal(decision.kind, tooFar || tooLateToPlay ? "drop" : "play");
+      // 並べすぎ (今 + 再生の遅れ + 余裕より先) の音だけを捨てる。鳴り遅れでは捨てない
+      assert.equal(decision.kind, tooFar ? "drop" : "play");
       if (decision.kind === "drop") {
-        // 捨てた理由も分けて返す。並べすぎ (backlog) と、目標から離れすぎ (lateness) は
-        // 起きていることの意味が違う (両方は成り立たない)
-        assert.equal(decision.reason, tooFar ? "backlog" : "lateness");
+        assert.equal(decision.reason, "backlog");
       }
       if (decision.kind === "play") {
-        if (tooLate) {
+        if (tooLateToPlay) {
+          // まだ一度も鳴らしていない (キューが空) ため、到着基準へ並べ直して鳴らす。
+          // 目標 (過去) には従わず、詰めもしない
+          assert.equal(decision.basis, "arrival");
+          assert.closeTo(
+            decision.startAt,
+            scenario.nowSeconds + scenario.arrivalDelaySeconds,
+            EPSILON,
+          );
+          assert.equal(decision.compressSeconds, 0);
+        } else if (tooLate) {
           // 目標を過ぎて届いた音は、今から鳴らせる最も早い時刻へずらし、その分を詰める
           assert.closeTo(decision.startAt, scenario.nowSeconds + scenario.minLeadSeconds, EPSILON);
           assert.isAbove(decision.compressSeconds, 0);
@@ -298,8 +307,9 @@ test("目標を守るとき: 鳴らす音は目標どおりで重ならず、窓
           // 補間の隙間は上限に収まり、前の音の終わりに一致し、次の音の開始までに収まる
           assertConcealmentWithinBounds(decision, now, previousEnd);
           if (decision.basis === "arrival") {
-            // 目標から離れすぎて届いた音は、到着基準の小さな目標へ並べ直して鳴らす。
-            // 目標 (過去) には従わず、詰めもしない
+            // 到着基準へ並べ直すのは、音が本当に途切れていたときだけである (キューが空)。
+            // 並べ直した先は到着から小さな目標だけ遅らせ、目標 (過去) には従わず、詰めもしない
+            assert.isTrue(isInterrupted(previousEnd, now), "音が途切れていたこと");
             assert.isAtLeast(decision.startAt, now + arrivalDelaySeconds - EPSILON);
             assert.isAtMost(
               decision.startAt,
@@ -320,8 +330,8 @@ test("目標を守るとき: 鳴らす音は目標どおりで重ならず、窓
           scheduler.confirmStretch(decision.compressSeconds);
           previousEnd = decision.startAt + frame.durationSeconds - decision.compressSeconds;
         } else {
-          // 並べすぎの音と、目標から離れすぎて音が途切れていた音だけを捨てる
-          assert.isTrue(tooFar || isStalled(previousEnd, now), "捨てる理由があること");
+          // 並べすぎの音だけを捨てる。鳴り遅れで捨てることはない
+          assert.isTrue(tooFar, "捨てる理由があること");
         }
       }
     }),

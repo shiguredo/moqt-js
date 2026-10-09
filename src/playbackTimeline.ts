@@ -18,9 +18,13 @@
  *   側の表示の遅れを「後行側 - 不感帯」まで上げる (不感帯の中では 2 つの遅延は独立であり、
  *   映像は音声の jitter buffer の遅延に引きずられない。差が不感帯を超えると、先行する側は
  *   後行側の表示の遅れに合わせて上がる)。合わせる量は「基準の遅れ + 表示の
- *   遅れ」の差そのものであり、経路の相対遅延 (直近の観測) ではない。観測のたびに行い、
- *   上げるのは即座、下げるのは毎秒 `PLAYBACK_DELAY_DECAY_MS_PER_SECOND` までにする
- *   (急に下げると、既に積んだフレームより後ろに並ぶフレームが出る)
+ *   遅れ」の差そのものであり、経路の相対遅延 (直近の観測) ではない。ただし合わせる量は
+ *   `PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS` までにする。時計のずれの証拠を見たかどうかに
+ *   関わらず常に掛ける (実測では、証拠を見る前に音声の TIMESTAMP が 600 ms 段差でずれ、
+ *   段差を揺らぎとして学習した音声の遅延へ映像を合わせて 600 ms 足し、映像が 500 ms
+ *   遅れたまま数十秒戻らなかった)。観測のたびに行い、上げるのは即座、下げるのは毎秒
+ *   `PLAYBACK_DELAY_DECAY_MS_PER_SECOND` までにする (急に下げると、既に積んだフレームより
+ *   後ろに並ぶフレームが出る)
  * - `targetLatency` は 2 つのトラックの表示の遅れの下限になり、同期の制御の分はその上に乗る
  * - 表示の遅れの上限: `MAX_PLAYOUT_DELAY_MS` と、表示待ちのキューが吸収できる長さの
  *   小さい方を表示の遅れに掛ける。基準の遅れは送受信の時計のずれでありキューを消費しない
@@ -136,10 +140,12 @@ export const PLAYOUT_BASE_DRIFT_WINDOW_MS = 5_000;
  * A/V 同期で合わせる、2 つのトラックの基準の差の上限 (ミリ秒)
  *
  * 同じ publisher・同じ経路の 2 つのトラックで、経路と復号の「最小」遅延がこれ以上違う
- * ことはない。これを超える差は TIMESTAMP の時計のずれであり、合わせても実際のずれは
- * 減らないまま、相手側の表示の遅れだけが伸びる (実測では音声の基準が 313 ms・映像が
+ * ことはない。これを超える差は TIMESTAMP の時計のずれであることが多く、合わせても実際の
+ * ずれは減らないまま、相手側の表示の遅れだけが伸びる (実測では音声の基準が 313 ms・映像が
  * 13 ms のとき、映像へ 378 ms を足して表示の遅延が 483 ms になっていた)。合わせるのは
- * この分までにし、残りは A/V のずれとして受け入れる
+ * この分までにし、残りは A/V のずれとして受け入れる。時計のずれの証拠を見たかどうかには
+ * 依らず、常に掛ける (証拠を見る前に 600 ms の段差を合わせて映像を 500 ms 遅らせた実測が
+ * あるため)
  */
 export const PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS = 100;
 
@@ -324,9 +330,6 @@ export class PlaybackTimeline {
   private syncExtraMs: Record<PlaybackStream, number> = { audio: 0, video: 0 };
   // 直前に同期の制御を行った時刻 (ミリ秒)。まだ行っていなければ null
   private lastSyncMs: number | null = null;
-  // 2 つのトラックの TIMESTAMP の時計がそろっていない証拠を見たか。差が経路差として
-  // 説明できる上限を超えても、これを見るまでは合わせる (経路が本当に違う場合があるため)
-  private clockSuspectValue = false;
   // 基準を共有しないと決めた直近の時刻と、そのときの側 (ミリ秒、トラック)。往復を防ぐ
   private lastUnsharedAtMs: number | null = null;
   private lastUnsharedStream: PlaybackStream | null = null;
@@ -933,17 +936,15 @@ export class PlaybackTimeline {
    *
    * 不感帯 (`SYNC_MIN_DELTA_MS`) に収める。ただし合わせる量は
    * `PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS` までにする。それを超える差は経路の遅れでは
-   * なく TIMESTAMP の時計のずれであり、合わせても実際のずれは減らないまま相手側の
-   * 表示の遅れだけが伸びるためである (時計のずれを見るまでは上限を掛けない)。
-   * 差は「足した分を含まない素の値」から決める。今の値から決めると、足すたびに目標が
-   * 上がり続けて上限まで届くまで足してしまう
+   * なく TIMESTAMP の時計のずれであることが多く、合わせても実際のずれは減らないまま
+   * 相手側の表示の遅れだけが伸びるためである。時計のずれの証拠 (`baseDifferenceDrifted`)
+   * を見たかどうかに関わらず常に掛ける。証拠を見る前に 600 ms の段差を合わせて映像を
+   * 500 ms 遅らせた実測があるためである。差は「足した分を含まない素の値」から決める。
+   * 今の値から決めると、足すたびに目標が上がり続けて上限まで届くまで足してしまう
    */
   private desiredDifferenceMs(naturalMs: Record<PlaybackStream, number>): number {
     const differenceMs = Math.abs(naturalMs.audio - naturalMs.video);
-    const maximumMs = this.clockSuspectValue
-      ? PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS
-      : Number.POSITIVE_INFINITY;
-    return Math.max(SYNC_MIN_DELTA_MS, differenceMs - maximumMs);
+    return Math.max(SYNC_MIN_DELTA_MS, differenceMs - PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS);
   }
 
   /**
@@ -1039,11 +1040,6 @@ export class PlaybackTimeline {
       return null;
     }
     const stream: PlaybackStream = difference > 0 ? "audio" : "video";
-    if (this.baseDifferenceDrifted()) {
-      // 差が動いた = 経路の遅れでは説明できない。以後は「経路差として説明できる上限」を
-      // 超える差を時計のずれとして扱い、相手側へ移さない
-      this.clockSuspectValue = true;
-    }
     if (Math.abs(difference) > this.baseDifferenceLimitMs() || this.baseDifferenceDrifted()) {
       this.lastUnsharedAtMs = this.lastBaseDifferenceAtMs;
       this.lastUnsharedStream = stream;

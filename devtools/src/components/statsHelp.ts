@@ -240,8 +240,6 @@ export const PLAYBACK_TIMING_HELP: SectionHelp = {
 
 /** 鳴らさなかった理由ごとの説明 (src/audioPlayoutTimingStats.ts の理由の定義) */
 const AUDIO_MISS_REASON_DESCRIPTIONS: Record<AudioMissReason, string> = {
-  lateness:
-    "The sound was dropped because it was more than the lateness limit (500 ms) from its playout time and no sound had arrived for that long (the path stalled). While the sound keeps arriving, a playout time that far in the past is treated as a drifted TIMESTAMP and the sound is played by arrival instead.",
   backlog:
     "The sound was dropped because the playout was too far behind (the queued sounds exceeded the delay plus the backlog limit).",
   catchUp:
@@ -268,7 +266,7 @@ export const AUDIO_PLAYBACK_TIMING_HELP: SectionHelp = {
     {
       term: "lateness",
       description:
-        "start - target (ms). How much later than the playout time the sound starts; 0 means on time. The sound is never dropped for being late, it is played late instead. Only a sound that arrives more than the lateness limit (500 ms) late while no sound has arrived for that long is dropped.",
+        "start - target (ms). How much later than the playout time the sound starts; 0 means on time. The sound is never dropped for being late. While the sound is still playing, it keeps playing late (the media time is not skipped); only a sound that arrives more than the lateness limit (500 ms) late with nothing playing is re-planned by arrival, which jumps the media time.",
     },
     {
       term: "lastTargetMs / lastArrivalMs / lastStartMs",
@@ -312,8 +310,8 @@ export const AUDIO_PLAYBACK_MISSED_HELP: SectionHelp = {
   ],
   notes: [
     "While playback is off (playbackEnabled false) no sound is expected, so nothing is counted.",
-    "lateness and backlog are the sounds that could not make their playout time. catchUp and stopped are sounds that were dropped on purpose or by stopping.",
-    "lateness + backlog equals the playoutDrops counter above; this one also carries the length in ms and the reason.",
+    "backlog is the sound that could not make its playout time (the queue ran ahead). Being late never drops a sound; catchUp and stopped are sounds that were dropped on purpose or by stopping.",
+    "backlog equals the playoutDrops counter above; this one also carries the length in ms and the reason.",
   ],
 };
 
