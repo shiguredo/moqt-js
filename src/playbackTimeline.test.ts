@@ -20,6 +20,7 @@ import {
   MAX_PLAYOUT_DELAY_MS,
   PLAYBACK_DELAY_DECAY_MS_PER_SECOND,
   PLAYBACK_DISCONTINUITY_MS,
+  PLAYOUT_BASE_DRIFT_CONFIRM_MS,
   PLAYOUT_BASE_DRIFT_MS,
   PLAYOUT_BASE_MAX_DIFFERENCE_MIN_MS,
   PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS,
@@ -1076,4 +1077,93 @@ test("observe: 一度共有をやめたら保持の間は戻さない", () => {
   }
   // 段差のあとは動きが無くなる (動きだけを見ていると判定が解ける) が、保持の間は戻さない
   assert.isFalse(timeline.sharingBases, "保持の間は基準を共有しないこと");
+});
+
+/**
+ * 2 つのトラックの到着列を作り、音声の TIMESTAMP だけを任意の区間ずらす
+ *
+ * 音声は 20 ms ごと (Opus)、映像は 30 fps で、どちらも揺らぎ 0 で届く。音声の TIMESTAMP を
+ * 「読み出した壁時計」の側へずらすと、受信側の基準「到着 - TIMESTAMP」がその分だけ小さく
+ * なる (配信側の補正が遅れの分だけ動いたのと同じ状態になる)。観測のたびの `unsharedReason`
+ * を返す
+ *
+ * @param timeline - 観測させる時間軸
+ * @param durationMs - 観測する長さ (ミリ秒)
+ * @param shiftedMs - 音声の TIMESTAMP をずらす量を返す関数 (ミリ秒)
+ */
+function observeShiftedAudioTimestamp(
+  timeline: PlaybackTimeline,
+  durationMs: number,
+  shiftedMs: (wallMs: number) => number,
+): string[] {
+  const audioFrameMs = 20;
+  const reasons: string[] = [];
+  let nextVideoMs = 0;
+  for (let wallMs = 0; wallMs < durationMs; wallMs += audioFrameMs) {
+    while (nextVideoMs <= wallMs) {
+      timeline.observe("video", EPOCH_MS + nextVideoMs, timestampOf(nextVideoMs));
+      nextVideoMs += FRAME_MS;
+    }
+    timeline.observe("audio", EPOCH_MS + wallMs, timestampOf(wallMs + shiftedMs(wallMs)));
+    reasons.push(timeline.delayBreakdown.unsharedReason);
+  }
+  return reasons;
+}
+
+// 一過性の動き: 音声の TIMESTAMP の原点が 95 ms ずれても、3 秒で元へ戻るなら基準の共有を
+// やめない。共有をやめると `PLAYOUT_BASE_UNSHARED_HOLD_MS` (30 秒) の間は戻らず、その間は
+// 音声が共有の時間軸で並ばない。CI の実リレーテストでは、配信側の読み出しが一瞬 95 ms
+// 遅れただけでこれが起きていた (音声と映像の基準の差は 3〜6 ms で健全だった)
+test("observe: 一過性の基準のずれでは共有をやめない", () => {
+  const timeline = createTimeline();
+  // 5 秒目から 3 秒間、音声の TIMESTAMP だけが 95 ms 新しくなる (到着は変わらない)
+  const excursionStartMs = 5_000;
+  const excursionEndMs = 8_000;
+  const excursionMs = 95;
+  const reasons = observeShiftedAudioTimestamp(timeline, 20_000, (wallMs) =>
+    wallMs >= excursionStartMs && wallMs < excursionEndMs ? excursionMs : 0,
+  );
+  assert.equal(reasons.indexOf("drift"), -1, "一過性の動きを時計のずれと判定しないこと");
+  assert.isTrue(timeline.sharingBases, "観測の後も音声と映像の基準を共有していること");
+});
+
+// 購読の直後の過渡: 基準の差が動いている間は判定を始めない。購読の直後は、relay の cache
+// から届いた分と購読を始めるまでにたまった分をまとめて復号しており、基準の遅れが数百 ms
+// から数秒動く。この動きを時計のずれとみなすと、共有を 30 秒解除したままにしてしまい、
+// 落ち着いた後の観測がすべて解除されたままになる (実機と 1 vCPU の runner で 5 回中 3 回)
+test("observe: 購読の直後の過渡では共有をやめない", () => {
+  const timeline = createTimeline();
+
+  // 音声の復号が 150 ms 遅れて始まり、2 秒かけて実時間に追いつく (cache から届いた分を
+  // まとめて復号している間)
+  const catchUpMs = 150;
+  const catchUpDurationMs = 2_000;
+  const reasons = observeShiftedAudioTimestamp(timeline, 25_000, (wallMs) =>
+    wallMs < catchUpDurationMs ? -catchUpMs * (1 - wallMs / catchUpDurationMs) : 0,
+  );
+
+  assert.equal(reasons.indexOf("drift"), -1, "購読の直後の過渡を時計のずれと判定しないこと");
+  assert.isTrue(timeline.sharingBases, "追いついた後は音声と映像の基準を共有していること");
+});
+
+// 持続するずれ: 同じ 95 ms のずれでも、戻らずに続けば時計のずれと判定する。判定を遅らせる
+// だけで、0754 の音声のドリフトのように戻らないずれを見つけられなくなってはいけない
+// (合わせると相手の表示の遅れが上限まで伸びて戻せなくなる)
+test("observe: 戻らない基準のずれは共有をやめる", () => {
+  const timeline = createTimeline();
+  const excursionStartMs = 5_000;
+  const excursionMs = 95;
+  const reasons = observeShiftedAudioTimestamp(timeline, 20_000, (wallMs) =>
+    wallMs >= excursionStartMs ? excursionMs : 0,
+  );
+  const driftAtMs = reasons.indexOf("drift");
+  assert.isAtLeast(driftAtMs, 0, "戻らないずれを時計のずれと判定すること");
+  // 判定は離れた幅が続いた時間 (`PLAYOUT_BASE_DRIFT_CONFIRM_MS`) を待ってからである。
+  // 一瞬の動きで解除しないための待ちであり、ずれが始まった直後には判定しない
+  assert.isAtLeast(
+    driftAtMs * 20,
+    excursionStartMs + PLAYOUT_BASE_DRIFT_CONFIRM_MS,
+    "離れた幅が続いた時間を待ってから判定すること",
+  );
+  assert.isFalse(timeline.sharingBases, "ずれた側があるときは基準を共有しないこと");
 });
