@@ -46,6 +46,13 @@
  *   しない。合わせると片側の表示の遅れが上限まで伸びて戻せなくなるためである。動いた幅が
  *   元へ戻る一瞬の動き (読み出しが遅れた分の差) では共有を解除しない。同期しない間は、
  *   その時点までに足した分を毎秒 `PLAYBACK_DELAY_DECAY_MS_PER_SECOND` までで戻す
+ *
+ *   動きを見る値には直近の窓 (`BASE_DIFFERENCE_RECENT_WINDOW_MS`) の最小値の差を使う
+ *   (窓全体の最小値の差は、遅れる向きのずれでは窓が埋まるまで動かない)。ただし短い窓は
+ *   経路と復号が一瞬つまずくだけでも大きく動くため (実測: CI の 4 vCPU の runner で毎秒
+ *   200 ms 前後の速さで 1000 ms 近く往復し、窓全体の差は 3 ms 以内で安定していた)、
+ *   待たずに判定するのは 1 回の記録で段差として現れたか、表示時刻が使う基準 (窓全体の
+ *   最小値) の差も同じ向きに動いているときだけにする (`updateBaseDifferenceDrift`)
  * - 同期をやめた後は、閾値が動いても往復させないために `PLAYOUT_BASE_UNSHARED_HOLD_MS`
  *   の間は戻さない。ただし解除のきっかけになった動きが去って差が元の水準へ戻った状態が
  *   `PLAYOUT_BASE_UNSHARED_RELEASE_MS` 続いたら、往復の恐れが無いため保持を待たずに戻す
@@ -201,14 +208,36 @@ export const PLAYOUT_BASE_DRIFT_CONFIRM_MS = 6_000;
  * この幅を超えて離れた動きは、待たずに時計のずれと判定する (ミリ秒)
  *
  * 配信側も 200 ms 以上の段差は音声の時計そのものが飛んだとみなして補正を取り直す
- * (`src/audioTimestampClock.ts` の `AUDIO_TIMESTAMP_OFFSET_STEP_MICROS` と同じ値)。読み出しの
- * 遅れが 200 ms 以上増えて戻ることは考えにくいため、この大きさの動きを一過性とみなして
- * 待つと、本当に時計が飛んだときに、相手の表示の遅れが上限まで伸びたままになる
+ * (`src/audioTimestampClock.ts` の `AUDIO_TIMESTAMP_OFFSET_STEP_MICROS` と同じ値)。
+ *
+ * 待たずに判定してよいのは、次のどちらかである (`updateBaseDifferenceDrift`)。
+ *
+ * - 1 回の記録で `BASE_DIFFERENCE_JUMP_MS` を超えて水準から離れた (段差そのもの)
+ * - **表示時刻が使う基準の差も同じ向きに動いている** (基準が動く向きのずれ)
+ *
+ * 動きを見る短い窓の最小値の差は、経路と復号がつまずくとこの幅を超えて動く (実測: CI の
+ * 4 vCPU の runner で毎秒 200 ms 前後の速さで 1000 ms 近く往復した)。どちらも満たさない
+ * 動きは到着と復号の乱れであり得るため、持続の確認 (`PLAYOUT_BASE_DRIFT_CONFIRM_MS`) を待つ
  */
 export const PLAYOUT_BASE_DRIFT_STEP_MS = 200;
 
-/** 基準の差の動きを見る窓 (ミリ秒) */
+/**
+ * 基準の差の動きを見る窓 (ミリ秒)
+ *
+ * 履歴に残す長さである。動きの速さ (`baseDriftMsPerSecond`) はこの窓の最も古い記録と
+ * 今の差から求める
+ */
 export const PLAYOUT_BASE_DRIFT_WINDOW_MS = 5_000;
+
+/**
+ * 基準の差が 1 回の記録で水準からこれ以上離れたら、待たずに段差とみなす (ミリ秒)
+ *
+ * 段差 (時計そのものが飛ぶ) は 1 回の記録で現れる。経路と復号の乱れは、短い窓の最小値が
+ * 入れ替わることで現れるため、記録の間隔 (250 ms) では数十 ms ずつしか動かない (実測:
+ * CI の 4 vCPU の runner では毎秒 200 ms 前後の速さ、記録 1 回で 50 ms 程度)。段差と
+ * みなす幅 (200 ms) より小さく、乱れの速さより十分大きい値にする
+ */
+const BASE_DIFFERENCE_JUMP_MS = 150;
 
 /**
  * 基準の差が動いていないとみなす、記録 1 回あたりの変化 (ミリ秒)
@@ -268,7 +297,7 @@ export const PLAYOUT_BASE_UNSHARED_HOLD_MS = 30_000;
  * 保持は「差が同じ水準のままで、表示の遅れの上限から決まる閾値だけが動く」場合に必要で
  * ある (`PLAYOUT_BASE_UNSHARED_HOLD_MS`)。逆に、解除のきっかけになった動きが去って差が
  * 戻ったなら、同じ水準へ留まる理由は無く、往復の恐れも無い。戻ったかどうかは、動きの判定
- * が解けていること・差が閾値の内側にあること・差が動かなくなっていることで見る
+ * が解けていること・差が閾値の内側にあること・差が水準へ戻っていることで見る
  * (`canReleaseUnsharedHold`)。
  *
  * 実測 (CI の 4 vCPU の runner、run 38023970857) では、購読の直後に relay の cache から
@@ -292,8 +321,8 @@ const BASE_DIFFERENCE_SAMPLE_INTERVAL_MS = 250;
  *
  * 窓全体 (`PLAYBACK_WINDOW_MS`) の最小値は、TIMESTAMP が壁時計から遅れていくときも
  * 窓が埋まるまで動かない。短い窓で取り直すことで、合わせる側の遅れが上限へ伸びる前に
- * 動きを見つける。短くするほど経路の揺らぎの影響を受けやすいため、映像の到着が
- * まとまっていても最小値が動かない長さにする
+ * 動きを見つける。短くするほど経路と復号の乱れの影響を受けやすいため、待たずに判定する
+ * 段差では窓全体の差 (`baseDifferenceMs`) を参照する (`PLAYOUT_BASE_DRIFT_STEP_MS`)
  */
 const BASE_DIFFERENCE_RECENT_WINDOW_MS = 2_000;
 
@@ -357,6 +386,23 @@ export interface PlaybackDelayBreakdown {
   video: PlaybackTrackBreakdown;
   /** 基準の差「音声 - 映像」(ミリ秒)。どちらかを観測していなければ null */
   baseDifferenceMs: number | null;
+  /**
+   * 直近の窓 (`BASE_DIFFERENCE_RECENT_WINDOW_MS`) の最小値で見た基準の差 (ミリ秒)
+   *
+   * 動きの判定 (`baseDifferenceDeviationMs`) に使う値である。基準 (`baseDifferenceMs`) との
+   * 隔たりが、経路と復号の乱れ (読み出しや復号が一瞬遅れた分) の大きさになる。時計のずれは
+   * 基準も同じ向きに動かし、到着の乱れはこの値だけを動かす
+   */
+  baseDifferenceRecentMs: number | null;
+  /**
+   * 動きの判定に使っている水準 (ミリ秒)。まだ決まっていなければ null
+   *
+   * 動きの側の値からではなく、表示時刻が使う基準 (窓全体の最小値) の差から取る。動きの側から
+   * 取ると、経路と復号の乱れの位相で水準がずれ、乱れが去っても離れた幅が戻らなくなる
+   */
+  baseDifferenceSettledMs: number | null;
+  /** 動きの判定に使う水準からの隔たり (ミリ秒)。水準がまだ無ければ null */
+  baseDifferenceDeviationMs: number | null;
   /** 2 つのトラックで基準を共有しているか */
   sharingBases: boolean;
   /** 共有できていない理由 */
@@ -364,7 +410,9 @@ export interface PlaybackDelayBreakdown {
   /**
    * 直近の基準の差の動き (ミリ秒 / 秒)。まだ履歴が無ければ null
    *
-   * `PLAYOUT_BASE_DRIFT_MS` を超えると、経路の遅れではなく時計のずれとみなして共有をやめる
+   * `PLAYOUT_BASE_DRIFT_MS` を超えて水準から離れたまま `PLAYOUT_BASE_DRIFT_CONFIRM_MS`
+   * 続くと、経路の遅れではなく時計のずれとみなして共有をやめる。段差として現れた動き
+   * (`BASE_DIFFERENCE_JUMP_MS`) と、表示時刻が使う基準も同じ向きに動いた動きは待たない
    */
   baseDriftMsPerSecond: number | null;
   /** 時計のずれとみなす、基準の差の動きの幅 (ミリ秒) */
@@ -486,8 +534,13 @@ export class PlaybackTimeline {
   private readonly baseDifferences = new TimedValues();
   // 直前に基準の差を記録した時刻 (ミリ秒)。まだ記録していなければ null
   private lastBaseDifferenceAtMs: number | null = null;
-  // 直前に記録した基準の差 (ミリ秒)。履歴と同じ求め方であり、動きの今側の値になる
-  private lastBaseDifferenceValue: number | null = null;
+  // 直前に記録した基準の差 (ミリ秒)。短い窓の最小値の差であり、動きの判定が使う値である
+  private baseDifferenceValueMs: number | null = null;
+  // 差が離れ始めたときの、表示時刻が使う基準の差 (ミリ秒)。離れていなければ null。
+  // 動きが時計のずれか (経路と復号の乱れか) を見分ける参照になる
+  private baseDifferenceDeviationReferenceMs: number | null = null;
+  // 直前に記録したときの、表示時刻が使う基準の差 (ミリ秒)。離れ始めの参照に使う
+  private lastReferenceMs: number | null = null;
   // 差が動いていないときの水準 (ミリ秒)。一過性の動きを見分ける基準になる
   private settledBaseDifferenceMs: number | null = null;
   // 差がその水準から `PLAYOUT_BASE_DRIFT_MS` を超えて離れたままになっている始まりの時刻
@@ -813,10 +866,17 @@ export class PlaybackTimeline {
    * 1 つの値にまとめる。表示時刻そのものは `presentationPerformanceMs` が返す。
    */
   get delayBreakdown(): PlaybackDelayBreakdown {
+    // 動きの判定に使っている水準と、そこからの隔たり。水準がまだ無ければ隔たりも無い
+    const settledMs = this.settledBaseDifferenceMs;
+    const valueMs = this.baseDifferenceValueMs;
     return {
       audio: this.trackBreakdownOf("audio"),
       video: this.trackBreakdownOf("video"),
       baseDifferenceMs: this.currentBaseDifferenceMs(),
+      baseDifferenceRecentMs: this.baseDifferenceValueMs,
+      baseDifferenceSettledMs: settledMs,
+      baseDifferenceDeviationMs:
+        settledMs === null || valueMs === null ? null : Math.abs(valueMs - settledMs),
       sharingBases: this.sharingBases,
       unsharedReason: this.unsharedReason(),
       baseDriftMsPerSecond: this.baseDriftMsPerSecond(),
@@ -891,9 +951,9 @@ export class PlaybackTimeline {
   /**
    * 2 つのトラックの基準の差を記録する (`BASE_DIFFERENCE_SAMPLE_INTERVAL_MS` ごと)
    *
-   * 差が動き続けているかを見るために使う (`baseDifferenceDrifted`)。記録するのは窓全体の
-   * 最小値ではなく短い区間の最小値である。窓全体の最小値は、TIMESTAMP が壁時計から
-   * 遅れていくときも窓が埋まるまで動かないため、動きを早く見つけられない
+   * 記録するのは短い区間の最小値の差である。窓全体の最小値の差は、TIMESTAMP が壁時計から
+   * 遅れていくときも窓が埋まるまで動かないため、動きを早く見つけられない。短い窓は経路と
+   * 復号の乱れでも動くため、待たずに判定するときは窓全体の差 (`referenceMs`) を確かめる
    */
   private recordBaseDifference(nowMs: number): void {
     if (
@@ -907,13 +967,26 @@ export class PlaybackTimeline {
     if (audioMs === null || videoMs === null) {
       return;
     }
-    const previousValueMs = this.lastBaseDifferenceValue;
+    // 表示時刻が使う基準 (窓全体の最小値) の差。動きが時計のずれかを見分ける参照になる
+    const referenceMs = this.currentBaseDifferenceMs();
+    if (referenceMs === null) {
+      return;
+    }
+    const previousValueMs = this.baseDifferenceValueMs;
+    const previousReferenceMs = this.lastReferenceMs;
     this.lastBaseDifferenceAtMs = nowMs;
-    this.lastBaseDifferenceValue = audioMs - videoMs;
-    this.baseDifferences.push(nowMs, this.lastBaseDifferenceValue);
+    this.baseDifferenceValueMs = audioMs - videoMs;
+    this.lastReferenceMs = referenceMs;
+    this.baseDifferences.push(nowMs, this.baseDifferenceValueMs);
     this.baseDifferences.prune(nowMs - PLAYOUT_BASE_DRIFT_WINDOW_MS);
     this.baseDifferenceFirstAtMs ??= nowMs;
-    this.updateBaseDifferenceDrift(nowMs, this.lastBaseDifferenceValue, previousValueMs);
+    this.updateBaseDifferenceDrift(
+      nowMs,
+      this.baseDifferenceValueMs,
+      previousValueMs,
+      referenceMs,
+      previousReferenceMs,
+    );
     this.updateUnsharedRelease(nowMs);
   }
 
@@ -928,6 +1001,12 @@ export class PlaybackTimeline {
    * ドリフトでも水準が一緒に動いてしまい、離れた幅が `PLAYOUT_BASE_DRIFT_MS` を超えない
    * (0754 のドリフトを見つけられない)。
    *
+   * 待たずに判定する段差 (`PLAYOUT_BASE_DRIFT_STEP_MS`) だけは、参照 (`referenceMs`) が
+   * 同じ向きに `PLAYOUT_BASE_DRIFT_MS` を超えて動いていることも確かめる。短い窓の最小値の
+   * 差は、経路と復号がつまずくと 200 ms を超えて動くが、表示時刻が使う基準は動かない。
+   * 参照を確かめないと、その乱れを時計のずれとみなして共有を解除し、しかも水準が乱れの
+   * 側で取られると解除が解けなくなる (実測: CI の 4 vCPU の runner、run 38035814270)
+   *
    * 判定は落ち着いた水準を観測してから始める。購読の直後は、relay の cache から届いた分と
    * 購読を始めるまでにたまった分をまとめて復号しており、基準の遅れが数百 ms から数秒動く
    * (実測: 音声の基準の遅れが 800 ms から 18 ms へ落ちた)。この動きを時計のずれとみなすと
@@ -936,11 +1015,15 @@ export class PlaybackTimeline {
    * @param nowMs - 記録した時刻 (ミリ秒)
    * @param valueMs - 記録した差 (ミリ秒)
    * @param previousValueMs - 直前に記録した差 (ミリ秒)。まだ無ければ null
+   * @param referenceMs - 表示時刻が使う基準の差 (ミリ秒)
+   * @param previousReferenceMs - 直前に記録したときの基準の差 (ミリ秒)。まだ無ければ null
    */
   private updateBaseDifferenceDrift(
     nowMs: number,
     valueMs: number,
     previousValueMs: number | null,
+    referenceMs: number,
+    previousReferenceMs: number | null,
   ): void {
     // 差が動いているかどうか。記録の間隔ごとの変化であり、窓の最小値のような遅れが無い
     const changeMs = previousValueMs === null ? 0 : Math.abs(valueMs - previousValueMs);
@@ -966,7 +1049,11 @@ export class PlaybackTimeline {
             ? settledByQuietMs
             : Math.min(settledByQuietMs, settledByLatestMs);
       if (settledAtMs !== null && nowMs >= settledAtMs) {
-        this.settledBaseDifferenceMs = valueMs;
+        // 水準は参照 (表示時刻が使う基準の差) から取る。動きを見る短い窓の差は経路と復号の
+        // 乱れの位相で動くため、そこから取ると乱れの側の水準を基準にしてしまい、乱れが
+        // 去っても離れた幅が戻らず、解除が解けなくなる (実測: CI の 4 vCPU の runner、
+        // run 38035814270 では解除が 25 秒間解けなかった)
+        this.settledBaseDifferenceMs = referenceMs;
       }
       this.baseDifferenceDriftedValue = false;
       return;
@@ -979,22 +1066,41 @@ export class PlaybackTimeline {
         // 離れた水準から戻った。動いていた幅は一過性だったので、今の水準を基準にする
         this.settledBaseDifferenceMs = valueMs;
         this.baseDifferenceDeviationSinceMs = null;
+        this.baseDifferenceDeviationReferenceMs = null;
       }
       return;
     }
+    if (this.baseDifferenceDeviationSinceMs === null) {
+      // 離れ始めの参照を残す。動きと同じ向きに参照が動いていなければ、この動きは経路と
+      // 復号の乱れであり、待たずに判定してはいけない
+      this.baseDifferenceDeviationReferenceMs = previousReferenceMs;
+    }
     const sinceMs = this.baseDifferenceDeviationSinceMs ?? nowMs;
     this.baseDifferenceDeviationSinceMs = sinceMs;
-    // 段差とみなせる大きさの動きは待たない。読み出しの遅れが戻るのを待つのは、その大きさ
-    // では時計のずれと読み出しの遅れを見分けられないためである
+    // 1 回の記録で水準から離れた幅。段差はここに現れ、経路と復号の乱れは数十 ms ずつしか
+    // 動かない (乱れは窓の最小値が入れ替わることで現れるため)
+    const previousDeviationMs =
+      previousValueMs === null ? 0 : Math.abs(previousValueMs - settledMs);
+    const jumpedAway = deviationMs - previousDeviationMs > BASE_DIFFERENCE_JUMP_MS;
+    // 段差とみなせる大きさで、参照も同じ向きに離れていれば待たない。読み出しの遅れが戻るのを
+    // 待つのは、その大きさでは時計のずれと読み出しの遅れを見分けられないためである
+    const referenceFromMs = this.baseDifferenceDeviationReferenceMs ?? referenceMs;
+    const referenceMovementMs = referenceMs - referenceFromMs;
+    const deviationSignedMs = valueMs - settledMs;
+    const referenceMovedSameWay =
+      deviationSignedMs * referenceMovementMs > 0 &&
+      Math.abs(referenceMovementMs) > PLAYOUT_BASE_DRIFT_MS;
     this.baseDifferenceDriftedValue =
-      deviationMs > PLAYOUT_BASE_DRIFT_STEP_MS || nowMs - sinceMs >= PLAYOUT_BASE_DRIFT_CONFIRM_MS;
+      (deviationMs > PLAYOUT_BASE_DRIFT_STEP_MS && (jumpedAway || referenceMovedSameWay)) ||
+      nowMs - sinceMs >= PLAYOUT_BASE_DRIFT_CONFIRM_MS;
   }
 
   /**
    * 直近の基準 (ミリ秒。まだ観測していなければ null)
    *
    * 窓全体の最小値 (`baseMs`) ではなく `BASE_DIFFERENCE_RECENT_WINDOW_MS` の最小値である。
-   * 基準が単調に動いているとき、窓全体の最小値は最も古い観測を指したままになるため
+   * 窓全体の最小値は、TIMESTAMP が壁時計から遅れていくときも窓が埋まるまで動かないため、
+   * 動きを早く見つけるには短い窓が要る (`recordBaseDifference`)
    */
   private recentBaseMs(stream: PlaybackStream, nowMs: number): number | null {
     return this.streams[stream].offsets.minAfter(nowMs - BASE_DIFFERENCE_RECENT_WINDOW_MS);
@@ -1008,6 +1114,10 @@ export class PlaybackTimeline {
    * たびに求める)。差が大きいだけでは動きとみなさないため、同期の制御で合わせられる差
    * (経路と復号の遅い側) を時計のずれと誤判定しない。離れた幅が元へ戻る一過性の動きも
    * 動き続けているとはみなさない
+   *
+   * 動きを見る値 (短い窓の最小値の差) は経路と復号の乱れでも動くため、待たずに判定する
+   * 段差では、表示時刻が使う基準 (窓全体の最小値) の差が同じ向きに動いていることも
+   * 確かめる (`updateBaseDifferenceDrift`)
    */
   private baseDifferenceDrifted(): boolean {
     return this.baseDifferenceDriftedValue;
@@ -1016,18 +1126,18 @@ export class PlaybackTimeline {
   /**
    * 基準の差の履歴の、最も古い記録から今までの動き (遅延の解析に使う)
    *
-   * 履歴の値と今の差は同じ求め方 (直近の窓の最小値の差) でなければ比べられない。
-   * 窓全体の最小値と比べると、TIMESTAMP が遅れていくときに符号が逆になる
+   * 履歴の値と今の差は同じ求め方でなければ比べられない。どちらも動きの判定が使う値
+   * (短い窓の最小値の差) である
    *
    * @returns 動いた幅 (ミリ秒) と、その幅を測った時間 (ミリ秒)。まだ記録が無ければ null
    */
   private baseDifferenceHistory(): { movementMs: number; spanMs: number } | null {
     const oldest = this.baseDifferences.oldest();
-    if (oldest === null || this.lastBaseDifferenceValue === null) {
+    if (oldest === null || this.baseDifferenceValueMs === null) {
       return null;
     }
     return {
-      movementMs: this.lastBaseDifferenceValue - oldest.value,
+      movementMs: this.baseDifferenceValueMs - oldest.value,
       spanMs: this.lastBaseDifferenceAtMs === null ? 0 : this.lastBaseDifferenceAtMs - oldest.atMs,
     };
   }
@@ -1071,9 +1181,11 @@ export class PlaybackTimeline {
     // 基準の差の履歴も消す (片方の基準が無い状態の差に意味は無い)
     this.baseDifferences.clear();
     this.lastBaseDifferenceAtMs = null;
-    this.lastBaseDifferenceValue = null;
+    this.baseDifferenceValueMs = null;
     this.settledBaseDifferenceMs = null;
     this.baseDifferenceDeviationSinceMs = null;
+    this.baseDifferenceDeviationReferenceMs = null;
+    this.lastReferenceMs = null;
     this.baseDifferenceQuietSinceMs = null;
     this.baseDifferenceFirstAtMs = null;
     this.baseDifferenceDriftedValue = false;
@@ -1458,7 +1570,10 @@ export class PlaybackTimeline {
    * - 動きの判定 (`baseDifferenceDrifted`) が解けていること。離れた幅が続いている間
    *   (真のドリフト) は、その幅が元の水準へ戻ったことにならない
    * - 差が閾値 (`baseDifferenceLimitMs`) を超えていないこと (超えていれば合わせられない)
-   * - 差が動かなくなっていること。動きが続いている間は、まだ戻ったとは言えない
+   * - 差が水準へ戻っていること (`baseDifferenceDeviationSinceMs` が消えていること)。記録の
+   *   間隔ごとの変化 (`baseDifferenceQuietSinceMs`) ではなく水準への復帰を見るのは、負荷の
+   *   ある runner では差が数十 ms の幅で細かく動き続け、変化が 0 になる瞬間が来ないためで
+   *   ある (実測: CI の 4 vCPU の runner、run 38035814270 で解除が 25 秒間解けなかった)
    */
   private canReleaseUnsharedHold(): boolean {
     if (this.lastUnsharedStream === null || this.heldUnsharedStream() === null) {
@@ -1471,7 +1586,7 @@ export class PlaybackTimeline {
     if (differenceMs === null || Math.abs(differenceMs) > this.baseDifferenceLimitMs()) {
       return false;
     }
-    return this.baseDifferenceQuietSinceMs !== null;
+    return this.baseDifferenceDeviationSinceMs === null;
   }
 
   /**

@@ -8,9 +8,10 @@ A/V 同期と再生まわりで入れた判断 (閾値・保持・検出・追�
 その値が守っている性質 (相手側のトレードオフ) を壊す。
 
 対象は、2026-10 の 1 週間で `f13db71` (A/V 同期が時計のずれを相手側の遅延へ移すのを止める)
-から `c3e00bf` (受信側が基準の共有を解除した後、差が戻ったら保持を待たずに戻す) までに
-入れた判断である。実装の仕様は `docs/HIGH_LEVEL_API.md` が持つ。ここは判断の理由と、
-見直す手順を持つ。
+から `c3e00bf` (受信側が基準の共有を解除した後、差が戻ったら保持の満了を待たずに戻す) までに
+入れた判断と、2026-10-10 に CI の実リレーの E2E (`38035814270`) を直したときに入れた判断
+(決定 3 の段差の見分け方と、決定 2 の復帰の見方) である。実装の仕様は
+`docs/HIGH_LEVEL_API.md` が持つ。ここは判断の理由と、見直す手順を持つ。
 
 読み方は次のとおり。
 
@@ -27,16 +28,16 @@ A/V 同期と再生まわりで入れた判断 (閾値・保持・検出・追�
 
 ## 決定の一覧
 
-| #   | 決定                           | 主な値                                                                                             | 主な計器                                                      |
-| --- | ------------------------------ | -------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
-| 1   | A/V 同期で合わせる量の上限     | 100 ms (`PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS`)                                                   | `avSync.delays.*.syncExtraDelayMs`                            |
-| 2   | 共有解除の保持と早期解除       | 30 秒 (`PLAYOUT_BASE_UNSHARED_HOLD_MS`) / 2 秒 (`PLAYOUT_BASE_UNSHARED_RELEASE_MS`)                | `avSync.delays.unsharedReason`、`baseUnsharedReturnMs`        |
-| 3   | ドリフト検出と持続性           | 50 ms (`PLAYOUT_BASE_DRIFT_MS`) / 6 秒 / 200 ms                                                    | `avSync.delays.baseDriftMsPerSecond`                          |
-| 4   | 音声の到着基準の遅れと閉ループ | 80〜100 ms / 閉ループ 80〜300 ms                                                                   | `audio.playoutTiming.*`、`avSync.delays.audioDelayFeedback.*` |
-| 5   | 配信側の TIMESTAMP 補正        | 窓 2 秒 / 上昇の上限 100 ms/秒 / 定着 5 秒 / 段差 200 ms                                           | `audio.timestampOffset.*`                                     |
-| 6   | 配信側の追いつき               | `max(60 ms, 床 + 40 ms)` / 再開 20 ms / 確認 100 ms と 2 フレーム / 再開後 1 秒 / `drop` と `keep` | `audio.catchUp.*`                                             |
-| 7   | 受信側の再生の組み立て         | `AudioPlayoutSession` / `VideoPlayoutSession`                                                      | `avSync.*`、`audio.playoutTiming.*`                           |
-| 8   | 復号の出力と投入の対応づけ     | 1,000 マイクロ秒 (`DECODER_OUTPUT_TIMESTAMP_TOLERANCE_MICROS`)                                     | `audio.playoutTiming.arrivalPlannedFrames`                    |
+| #   | 決定                           | 主な値                                                                                             | 主な計器                                                                                    |
+| --- | ------------------------------ | -------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| 1   | A/V 同期で合わせる量の上限     | 100 ms (`PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS`)                                                   | `avSync.delays.*.syncExtraDelayMs`                                                          |
+| 2   | 共有解除の保持と早期解除       | 30 秒 (`PLAYOUT_BASE_UNSHARED_HOLD_MS`) / 2 秒 (`PLAYOUT_BASE_UNSHARED_RELEASE_MS`)                | `avSync.delays.unsharedReason`、`baseUnsharedReturnMs`                                      |
+| 3   | ドリフト検出と持続性           | 50 ms (`PLAYOUT_BASE_DRIFT_MS`) / 6 秒 / 200 ms / 150 ms (`BASE_DIFFERENCE_JUMP_MS`)               | `avSync.delays.baseDifferenceRecentMs`、`baseDifferenceDeviationMs`、`baseDriftMsPerSecond` |
+| 4   | 音声の到着基準の遅れと閉ループ | 80〜100 ms / 閉ループ 80〜300 ms                                                                   | `audio.playoutTiming.*`、`avSync.delays.audioDelayFeedback.*`                               |
+| 5   | 配信側の TIMESTAMP 補正        | 窓 2 秒 / 上昇の上限 100 ms/秒 / 定着 5 秒 / 段差 200 ms                                           | `audio.timestampOffset.*`                                                                   |
+| 6   | 配信側の追いつき               | `max(60 ms, 床 + 40 ms)` / 再開 20 ms / 確認 100 ms と 2 フレーム / 再開後 1 秒 / `drop` と `keep` | `audio.catchUp.*`                                                                           |
+| 7   | 受信側の再生の組み立て         | `AudioPlayoutSession` / `VideoPlayoutSession`                                                      | `avSync.*`、`audio.playoutTiming.*`                                                         |
+| 8   | 復号の出力と投入の対応づけ     | 1,000 マイクロ秒 (`DECODER_OUTPUT_TIMESTAMP_TOLERANCE_MICROS`)                                     | `audio.playoutTiming.arrivalPlannedFrames`                                                  |
 
 ## 1. A/V 同期で合わせる量の上限
 
@@ -121,10 +122,19 @@ cache から届いた分をまとめて復号している間だけ差が 1 秒�
 あり、実リレーの観測が待つ「基準の遅れが 3 秒動かないこと」(`tests/e2e/relay/audio-timestamp.spec.ts`
 の `READY_SETTLED_MS`) より短いため、解除が観測の前に済む。
 
+「差が戻った」の見方は 2026-10-10 に変えた。以前は「記録 1 回ごとの変化が `BASE_DIFFERENCE_QUIET_MS`
+(5 ms) 以下」という条件 (`baseDifferenceQuietSinceMs`) を足していたが、負荷のある runner では
+差が数十 ms の幅で細かく動き続けてこの条件が満たされず、解除が解けなかった (実測: 同じ
+`38035814270` で `hold` のまま 25 秒)。いまは「水準から離れた状態が消えていること」
+(`baseDifferenceDeviationSinceMs` が null) だけを見る。水準は動きの側ではなく**基準**
+(表示時刻が使う窓の最小値の差) から取るため、乱れの側の水準が残って解除が解けなくなることも
+無い。
+
 **根拠が薄い点**: 保持の 30 秒は「13 秒間で 5 回往復した」という 1 例から決めた値であり、
 30 秒あれば往復しないという計測は無い。早期解除の 2 秒は「解除が早すぎることは無い」と
 言えるが、「解除が遅れて観測に間に合わないことが無い」ことの根拠は、観測の待ち時間
-(`READY_SETTLED_MS` = 3 秒) との比較だけである。
+(`READY_SETTLED_MS` = 3 秒) との比較だけである。復帰の判定から「変化が 0」を外したのは
+1 例 (`38035814270`) の分析によるもので、細かく動き続ける差の分布は測っていない。
 
 ### 副作用とトレードオフ
 
@@ -151,6 +161,7 @@ cache から届いた分をまとめて復号している間だけ差が 1 秒�
 - `avSync.delays.unsharedReason`
 - `avSync.delays.baseUnsharedReturnMs`
 - `avSync.delays.baseDifferenceMs`
+- `avSync.delays.baseDifferenceDeviationMs` (水準から離れているか)
 - `avSync.delays.presentationDelayCapMs`
 - `avSync.delays.sharingBases`
 
@@ -161,6 +172,7 @@ cache から届いた分をまとめて復号している間だけ差が 1 秒�
 - `PLAYOUT_BASE_DRIFT_MS` = 50 ms (動いた幅。`9314980` で導入、`10f4215` で下限の考え方を追加)
 - `PLAYOUT_BASE_DRIFT_CONFIRM_MS` = 6 秒 (離れた幅が続く時間)
 - `PLAYOUT_BASE_DRIFT_STEP_MS` = 200 ms (待たずに段差とみなす幅)
+- `BASE_DIFFERENCE_JUMP_MS` = 150 ms (1 回の記録でこれ以上離れたら段差とみなす。2026-10-10 に追加)
 - `PLAYOUT_BASE_DRIFT_WINDOW_MS` = 5 秒 (差の履歴を持つ長さ)
 - `BASE_DIFFERENCE_QUIET_MS` = 5 ms (落ち着いているとみなす 1 回の変化)
 - `BASE_DIFFERENCE_SETTLE_MS` = 3 秒 / `BASE_DIFFERENCE_START_MS` = 10 秒 (判定を始める条件)
@@ -173,18 +185,41 @@ cache から届いた分をまとめて復号している間だけ差が 1 秒�
 ずれていくことであり (0754 の音声のドリフトなど)、合わせるともう片方の表示の遅れが上限まで
 伸びて戻せなくなる。
 
+動きを見るのは「復号の出力 - TIMESTAMP」の**直近 2 秒の窓の最小値**の差 (`baseDifferenceRecentMs`)
+である。ただしこの値は経路と復号がつまずくだけでも動くため、待たずに判定してよいのは次の
+どちらかを満たすときだけにした (2026-10-10、`38035814270` の実測を受けて)。
+
+- 1 回の記録 (250 ms) で `BASE_DIFFERENCE_JUMP_MS` を超えて水準から離れた (段差そのもの)
+- **表示時刻が使う基準 (10 秒の窓の最小値) の差も同じ向きに動いている**
+
+どちらも満たさない動きは、`PLAYOUT_BASE_DRIFT_CONFIRM_MS` (6 秒) の持続を待つ。水準
+(`baseDifferenceSettledMs`) は値ではなく**基準**から取る。動きの側から取ると、乱れの
+位相で水準がずれ、乱れが去っても離れた幅が戻らず解除が解けなくなる。
+
 ### 根拠
 
 - 実時間に対する時計の進み方の違いは 500 ppm (毎秒 0.5 ms) 未満であり、経路と復号の最小
   遅延の差も毎秒ミリ秒の桁でしか動かない。定常状態の差は 1 ms 程度しか動かない (実測)
 - 0754 の音声のドリフトは毎秒 20〜50 ms で動く。この速さなら、段差とみなす幅 200 ms を
-  超えるのは 4 秒程度であり、確認の 6 秒より早く検出できる
+  超えるのは 4 秒程度であり、確認の 6 秒より早く検出できる (**段差として**は、下の実測の
+  とおり検出が遅れる。持続の確認による検出は変わらない)
 - 一過性の動き (読み出しが一瞬遅れた分) は実測で 95 ms 動いて戻る。動いた幅だけでは一過性か
   どうか分からないため、離れた幅が続く時間で見る (`612b78b`、2026-10-10)
 - 購読の直後は、relay の cache から届いた分をまとめて復号しており、基準の遅れが数百 ms から
   数秒動く (実測: 音声の基準の遅れが 800 ms から 18 ms へ落ちた)。この動きを時計のずれと
   みなすと共有を 30 秒解除してしまう (実測: 1 vCPU の runner でも手元でも 5 回中 3 回起きた)。
   そのため落ち着くまで判定しない (`612b78b`)
+- 直近 2 秒の窓の最小値だけを見ていた頃は、到着と復号の乱れで共有が解除された。実測 (CI の
+  4 vCPU の runner、`38035814270`) では、動きの速さ (`baseDriftMsPerSecond`) が 239.6 →
+  183.3 → 0.2 ms/秒と動き、基準の差 (`baseDifferenceMs`) は 1.6 / -3.2 / -2.6 / 0.3 / -0.1 /
+  1.4 ms と 3 ms 以内で安定していた。配信側も健全 (読み出しの遅れは最大 6.8 ms、送信の遅れは
+  11〜25 ms) であり、A/V の基準は揃っていた。解除の理由は `hold` のままで、25 秒の観測が
+  すべて解除された。緑だった `38029890823` でも同じ動き (207.3 ms/秒が 25 秒間続く) が出て
+  おり、解除するかどうかが環境の位相で決まっていた
+- 段差 (`BASE_DIFFERENCE_JUMP_MS`) の 150 ms は、実測の乱れの速さ (毎秒 200 ms 前後 = 記録
+  1 回で 50 ms 程度) より十分大きく、段差とみなす幅 (200 ms) より小さい値である。実測の
+  入力 (音声の TIMESTAMP が 445 ms 段差でずれる) では、直近の窓が埋まる 2 秒後にこの幅を
+  超えて現れる
 
 **根拠が薄い点**:
 
@@ -194,11 +229,19 @@ cache から届いた分をまとめて復号している間だけ差が 1 秒�
 - 200 ms の段差は、配信側の `AUDIO_TIMESTAMP_OFFSET_STEP_MICROS` (200 ms) と同じ値に
   揃えたもので、値そのものの根拠は「読み出しの遅れが 200 ms 以上ぶれて 0.5 秒続くことは
   考えにくい」という見積もりである
+- 150 ms は、1 例 (CI の 4 vCPU の runner、`38035814270` / `38029890823`) の乱れの速さから
+  決めた値であり、乱れの速さの分布は測っていない。乱れが 1 回の記録で 150 ms を超えて動くと、
+  段差と見分けられず解除する (解除の後に戻ることは決定 2 で担保する)
 - 3 秒 / 10 秒 / 2 秒 / 5 ms は、上の実測を満たすように選んだ値であり、個別の計測は無い
 
 ### 副作用とトレードオフ
 
 - 検出が遅れる分だけ相手へ足す遅延が増えるが、足す量は決定 1 の上限 100 ms で抑えられる
+- **遅れる向き (TIMESTAMP が古くなる向き) の段差は、待たずに判定できない**。表示時刻が使う
+  基準 (窓の最小値) は、窓の中に古い水準の観測が残っている間は動かないためである。持続の
+  確認 (6 秒) で検出する分だけ、相手側の表示の遅れが伸びる (上限 100 ms で抑えられる)。
+  同じ向きの到着と復号の乱れ (実測: 1000 ms 近い往復) を時計のずれと誤判定しないこととの
+  引き換えである
 - 段差 200 ms 未満の本物のずれは、離れた幅が元へ戻るまで (最大 6 秒) 検出されない。その間に
   相手側の表示の遅れが伸び得る
 - 落ち着くまで判定しないため、購読の直後の 3 秒 (動きが続く場合は 10 秒) はドリフトを
@@ -210,12 +253,17 @@ cache から届いた分をまとめて復号している間だけ差が 1 秒�
   TIMESTAMP を使わず到着基準で再生する)
 - `baseDifferenceMs` が単調に増えるのに `drift` にならない (幅 50 ms と確認 6 秒が緩すぎる)
 - 逆に、`drift` が一過性の動きで出る (`612b78b` のような誤検出が再発する)
+- `baseDifferenceRecentMs` が 1000 ms 近く往復するのに `baseDifferenceMs` が動かない状態で
+  解除が出る (乱れの速さが `BASE_DIFFERENCE_JUMP_MS` を超えている)
 - 購読の直後に `drift` が出て 30 秒戻らない
 
 ### 見る計器
 
 - `avSync.delays.baseDriftMsPerSecond` / `avSync.delays.baseDriftLimitMs`
-- `avSync.delays.baseDifferenceMs`
+- `avSync.delays.baseDifferenceMs` (表示時刻が使う基準の差)
+- `avSync.delays.baseDifferenceRecentMs` (動きの判定が使う値) /
+  `avSync.delays.baseDifferenceSettledMs` (水準) / `avSync.delays.baseDifferenceDeviationMs`
+  (水準からの隔たり)
 - `avSync.delays.unsharedReason`
 - `audio.playoutTiming.arrivalPlannedFrames` (基準を共有できない間は到着基準で鳴る)
 

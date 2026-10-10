@@ -1133,7 +1133,12 @@ test("observe: 一過性の基準のずれでは共有をやめない", () => {
 // 共有を戻す。CI の実リレー (4 vCPU の runner、run 38023970857) では、購読の直後に relay の
 // cache から届いた分をまとめて復号している間だけ、音声の基準が映像より 1 秒近く開いた。
 // 復号が実時間に追いつくと差は 5 ms 前後へ戻ったが、この一過性の動きで解除した後に 30 秒の
-// 保持がそのまま効き、25 秒の観測がすべて解除のままになった
+// 保持がそのまま効き、25 秒の観測がすべて解除のままになった。
+//
+// この動きは 1 回の記録で段差として現れる (窓の最小値が、遅れていないフレームから遅れた
+// フレームへ入れ替わる) ため、時計のずれと見分けられず解除する。解除した後にきちんと
+// 戻れることが、このテストで固定する性質である。動きを見る短い窓が滑らかに動く乱れ
+// (のこぎり波) は、下のテストのとおり解除しない
 test("observe: 一過性の動きが去って差が戻ったら、保持を待たずに共有を戻す", () => {
   const timeline = createTimeline();
   // 5 秒目に音声の基準が 900 ms 開き (cache から届いた分をまとめて復号している状態)、
@@ -1183,6 +1188,91 @@ test("observe: 一過性の動きが去って差が戻ったら、保持を待�
     releasedAtMs ?? Number.POSITIVE_INFINITY,
     excursionStartMs + PLAYOUT_BASE_UNSHARED_HOLD_MS,
     "保持の満了 (30 秒) を待たずに戻すこと",
+  );
+});
+
+/**
+ * 2 つのトラックの到着列を作り、映像の復号の出力だけを遅らせる
+ *
+ * 音声は 20 ms ごと (Opus)、映像は 30 fps で、どちらも同じ時刻に届く。時間軸へ記録する
+ * 時刻 (復号の出力) だけが `lagMsOf` の分だけ遅れる。遅れは映像の基準「復号の出力 -
+ * TIMESTAMP」をその分だけ大きくする。
+ *
+ * @param timeline - 観測させる時間軸
+ * @param durationMs - 観測する長さ (ミリ秒)
+ * @param lagMsOf - 映像の復号の遅れを返す関数 (メディア時刻のミリ秒)
+ * @returns 1 秒ごとの `unsharedReason`
+ */
+function observeVideoDecoderLag(
+  timeline: PlaybackTimeline,
+  durationMs: number,
+  lagMsOf: (mediaMs: number) => number,
+): string[] {
+  const audioFrameMs = 20;
+  const reasons: string[] = [];
+  let nextVideoMs = 0;
+  let nextAudioMs = 0;
+  let nextSampleMs = 0;
+  for (let wallMs = 0; wallMs < durationMs; wallMs += 5) {
+    while (nextVideoMs <= wallMs) {
+      timeline.observe(
+        "video",
+        EPOCH_MS + nextVideoMs + lagMsOf(nextVideoMs),
+        timestampOf(nextVideoMs),
+      );
+      nextVideoMs += FRAME_MS;
+    }
+    while (nextAudioMs <= wallMs) {
+      timeline.observe("audio", EPOCH_MS + nextAudioMs, timestampOf(nextAudioMs));
+      nextAudioMs += audioFrameMs;
+    }
+    while (nextSampleMs <= wallMs) {
+      reasons.push(timeline.delayBreakdown.unsharedReason);
+      nextSampleMs += 1_000;
+    }
+  }
+  return reasons;
+}
+
+// 到着と復号の乱れ: CI の 4 vCPU の runner (run 38035814270) では、映像の復号の出力が
+// 毎秒 200 ms 前後の速さで 1000 ms 近くまで遅れ、次の観測で戻ることを繰り返していた。
+// このとき基準の差 (10 秒窓の最小値の差) は 1.6〜3.2 ms で安定しており、配信側も健全
+// (読み出しの遅れは最大 6.8 ms、送信の遅れは 11〜25 ms) だった。
+//
+// 動きを見る短い窓の差だけを見て待たずに判定すると、この乱れを時計のずれとみなして共有を
+// 解除する。しかも水準を乱れの側から取ると、乱れが去っても離れた幅が戻らず解除が解けなく
+// なる。同じ大きさの乱れでも共有をやめないこと
+test("observe: 映像の復号がのこぎり波で遅れても共有をやめない", () => {
+  const timeline = createTimeline();
+  // 5 秒ごとに 1000 ms まで遅れ、次の観測で戻る (のこぎり波)
+  const reasons = observeVideoDecoderLag(timeline, 40_000, (mediaMs) => {
+    const periodMs = 5_000;
+    return ((mediaMs % periodMs) / periodMs) * 1_000;
+  });
+  const unshared = reasons.filter((reason) => reason !== "none");
+  assert.deepEqual(unshared, [], "復号の乱れを時計のずれと判定しないこと");
+  assert.isTrue(timeline.sharingBases, "観測の後も音声と映像の基準を共有していること");
+});
+
+// 解除が解けなくならない: 乱れが落ち着いた水準より下 (または上) の側で「動きが無い水準」を
+// 取ると、乱れが去って元の水準へ戻っても離れた幅が戻らず、解除が解けないままになる。
+// CI の runner (run 38035814270) では 25 秒の観測がすべて解除のまま (hold) で、動きの速さは
+// 0 に戻っていた。乱れが去った後に解除が残らないこと
+test("observe: 復号の遅れが去った後に解除が残らない", () => {
+  const timeline = createTimeline();
+  // 10 秒目まではのこぎり波で遅れ (判定を始める水準の決定がこの期間に入る)、以後は遅れない
+  const reasons = observeVideoDecoderLag(timeline, 60_000, (mediaMs) => {
+    if (mediaMs >= 10_000) {
+      return 0;
+    }
+    const periodMs = 5_000;
+    return ((mediaMs % periodMs) / periodMs) * 1_000;
+  });
+  const afterSettled = reasons.slice(10);
+  assert.deepEqual(
+    afterSettled.filter((reason) => reason !== "none"),
+    [],
+    "復号の遅れが去った後に解除が残らないこと",
   );
 });
 

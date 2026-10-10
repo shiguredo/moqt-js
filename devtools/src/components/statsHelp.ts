@@ -9,6 +9,7 @@
 import type { SectionHelp } from "./StatsView";
 import { LATENCY_SEGMENTS, type LatencySegment } from "../utils/latencyBreakdown";
 import {
+  PLAYOUT_BASE_DRIFT_CONFIRM_MS,
   PLAYOUT_BASE_DRIFT_MS,
   PLAYOUT_BASE_UNSHARED_RELEASE_MS,
   PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS,
@@ -170,6 +171,15 @@ export const AV_SYNC_HELP: SectionHelp = {
         "baseDelayMs of the audio minus that of the video (ms). The A/V sync is driven by this difference, so it is the amount one track has to be delayed for the other.",
     },
     {
+      term: "baseDifferenceRecentMs",
+      description:
+        "The same difference taken from the shorter (2 s) window of baseDelayMs (ms). The drift decision is driven by this value, because it reacts first. The gap to baseDifferenceMs is how much the path and the decoding are disturbed right now.",
+    },
+    {
+      term: "baseDifferenceDeviationMs",
+      description: `How far baseDifferenceRecentMs is from the level it settled at (ms). - until a level is taken. Reaching ${PLAYOUT_BASE_DRIFT_MS} ms and staying there for ${PLAYOUT_BASE_DRIFT_CONFIRM_MS / 1_000} s stops sharing the bases, unless the movement is a step (see baseDriftMsPerSecond).`,
+    },
+    {
       term: "sharingBases",
       description:
         "Whether both tracks are treated as one clock. false while one of them is not observed yet, when the difference cannot be compensated within the delay cap, or when the difference keeps moving.",
@@ -181,7 +191,7 @@ export const AV_SYNC_HELP: SectionHelp = {
     },
     {
       term: "baseDriftMsPerSecond",
-      description: `Movement of baseDifferenceMs over the recent window (ms/s). The tracks are unshared when the movement exceeds the drift limit (${PLAYOUT_BASE_DRIFT_MS} ms).`,
+      description: `Movement of baseDifferenceRecentMs over the recent window (ms/s). A movement larger than the drift limit (${PLAYOUT_BASE_DRIFT_MS} ms) that keeps moving is a TIMESTAMP clock offset rather than a path delay, and it stops sharing the bases. A step is judged at once; a movement that appears only in the short window is waited for (an arrival or decoding disturbance can move it too).`,
     },
     {
       term: "baseUnsharedReturnMs",

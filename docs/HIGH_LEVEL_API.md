@@ -703,8 +703,15 @@ interface PlaybackTrackBreakdown {
 interface PlaybackDelayBreakdown {
   audio: PlaybackTrackBreakdown;
   video: PlaybackTrackBreakdown;
-  // 基準の差「音声 - 映像」(ms)。A/V 同期はこの差を合わせる
+  // 基準の差「音声 - 映像」(ms)。表示時刻が使う値であり、A/V 同期はこの差を合わせる
   baseDifferenceMs: number | null;
+  // 動きの判定が使う値 (直近 2 秒の窓の最小値で見た同じ差、ms)。基準との隔たりが、
+  // 経路と復号の乱れの大きさになる
+  baseDifferenceRecentMs: number | null;
+  // 動きの判定に使っている水準 (ms)。まだ決まっていなければ null
+  baseDifferenceSettledMs: number | null;
+  // 水準からの隔たり (ms)。水準がまだ無ければ null
+  baseDifferenceDeviationMs: number | null;
   // 2 つのトラックを同じ時計として扱えているか
   sharingBases: boolean;
   // 扱えない理由。"unobserved" (未観測)、"difference" (差が上限を超えている)、
@@ -788,17 +795,19 @@ jitter buffer の遅れは音声と映像で別々に求める。音声は NetEq
   経路の遅れではなく、片方の TIMESTAMP が壁時計からずれていくこと (音声のドリフトなど) を
   意味する。合わせるともう片方 (ここでは映像) の表示の遅れが上限まで伸びて戻せなくなるため、
   合わせるのをやめ、既に足した分も戻す。ずれた側は TIMESTAMP を使わず到着基準で再生する。
-  離れた幅が元の水準へ戻れば (読み出しが一瞬遅れただけなど) 判定は消え、200 ms を超えて
-  離れた動き (段差) は待たずに判定する。購読の直後の過渡 (relay の cache から届いた分を
-  まとめて復号している間) は、差が落ち着くまで判定を始めない
+  離れた幅が元の水準へ戻れば (読み出しが一瞬遅れた分など) 判定は消える。待たずに判定するのは、
+  1 回の記録で 150 ms を超えて離れた (段差) か、表示時刻が使う基準 (10 秒の窓の最小値) の差も
+  同じ向きに動いているときだけである。動きを見る直近 2 秒の窓は経路と復号の乱れでも大きく
+  動くため (実測で 1000 ms 近い往復)、どちらも満たさない動きは 6 秒の持続を待つ。購読の直後の
+  過渡 (relay の cache から届いた分をまとめて復号している間) は、差が落ち着くまで判定を
+  始めない
 - `hold`: 直前に共有をやめた判定を保持している。閾値は「表示の遅れの上限 - そのトラックの
   遅延」で決まるため jitter buffer の目標遅延で動き、差が変わらなくても共有と解除を
   往復し得る。往復のたびに足した分を戻して (フレームを捨てる) すぐ足し直す (表示が
   止まる) ため、`PLAYOUT_BASE_UNSHARED_HOLD_MS` の間は戻さない。ただし解除のきっかけに
-  なった動きが去り、差が元の水準へ戻った状態 (動きの判定が消え、差が閾値の内側で動かず、
-  きっかけが閾値の移動だけではないこと) が `PLAYOUT_BASE_UNSHARED_RELEASE_MS` 続いたら、
-  往復の恐れが無いため保持を待たずに戻す。どこまで続いたかは
-  `AvSyncStats.delays.baseUnsharedReturnMs` に出る
+  なった動きが去り、差が元の水準へ戻った状態 (動きの判定が消え、差が閾値の内側で、水準から
+  離れていないこと) が `PLAYOUT_BASE_UNSHARED_RELEASE_MS` 続いたら、往復の恐れが無いため
+  保持を待たずに戻す。どこまで続いたかは `AvSyncStats.delays.baseUnsharedReturnMs` に出る
 
 基準を共有できない側が音声のときは、同期の制御を止めず、映像だけを音声の到着基準の時刻へ
 合わせる。音声の TIMESTAMP が信用できなくても、音声の並べ方は分かっているためである。

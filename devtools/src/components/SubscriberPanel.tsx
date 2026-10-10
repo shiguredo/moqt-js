@@ -1009,6 +1009,20 @@ function SubscriberStats({ statsSignal }: { statsSignal: ReadonlySignal<Subscrib
                 testId: "subscriber-av-sync-base-difference",
               },
               {
+                // 動きの判定が使う値 (直近 2 秒の窓の最小値の差)。基準 (baseDifferenceMs)
+                // との隔たりが、経路と復号の乱れの大きさになる
+                label: "baseDifferenceRecentMs",
+                value: formatMs(stats.avSync.delays.baseDifferenceRecentMs),
+                testId: "subscriber-av-sync-base-difference-recent",
+              },
+              {
+                // 水準からの隔たり。この値が baseDriftLimitMs を超えたまま
+                // PLAYOUT_BASE_DRIFT_CONFIRM_MS 続くと共有をやめる (段差は待たない)
+                label: "baseDifferenceDeviationMs",
+                value: formatMs(stats.avSync.delays.baseDifferenceDeviationMs),
+                testId: "subscriber-av-sync-base-difference-deviation",
+              },
+              {
                 label: "sharingBases",
                 value: String(stats.avSync.delays.sharingBases),
                 tone: stats.avSync.delays.sharingBases ? undefined : "warn",
