@@ -8,7 +8,10 @@
 
 import type { SectionHelp } from "./StatsView";
 import { LATENCY_SEGMENTS, type LatencySegment } from "../utils/latencyBreakdown";
-import { PLAYOUT_BASE_DRIFT_MS } from "../../../src/playbackTimeline";
+import {
+  PLAYOUT_BASE_DRIFT_MS,
+  PLAYOUT_BASE_UNSHARED_RELEASE_MS,
+} from "../../../src/playbackTimeline";
 import {
   AUDIO_MISS_REASONS,
   MAX_RECENT_AUDIO_MISSES,
@@ -169,6 +172,10 @@ export const AV_SYNC_HELP: SectionHelp = {
     {
       term: "baseDriftMsPerSecond",
       description: `Movement of baseDifferenceMs over the recent window (ms/s). The tracks are unshared when the movement exceeds the drift limit (${PLAYOUT_BASE_DRIFT_MS} ms).`,
+    },
+    {
+      term: "baseUnsharedReturnMs",
+      description: `How long the release condition of the hold has continued (ms). - while it is not met. When it reaches ${PLAYOUT_BASE_UNSHARED_RELEASE_MS} ms while unsharedReason is hold, the bases are shared again without waiting for the hold to expire.`,
     },
     {
       term: "targetLatencyMs",

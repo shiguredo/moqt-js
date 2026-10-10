@@ -23,6 +23,8 @@ import {
   PLAYOUT_BASE_DRIFT_CONFIRM_MS,
   PLAYOUT_BASE_DRIFT_MS,
   PLAYOUT_BASE_MAX_DIFFERENCE_MIN_MS,
+  PLAYOUT_BASE_UNSHARED_HOLD_MS,
+  PLAYOUT_BASE_UNSHARED_RELEASE_MS,
   PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS,
   PLAYOUT_QUEUE_HEADROOM_FRAMES,
   PlaybackTimeline,
@@ -1127,6 +1129,63 @@ test("observe: 一過性の基準のずれでは共有をやめない", () => {
   assert.isTrue(timeline.sharingBases, "観測の後も音声と映像の基準を共有していること");
 });
 
+// 解除を早める: 一過性の動きが去って差が元の水準へ戻ったら、保持の満了 (30 秒) を待たずに
+// 共有を戻す。CI の実リレー (4 vCPU の runner、run 38023970857) では、購読の直後に relay の
+// cache から届いた分をまとめて復号している間だけ、音声の基準が映像より 1 秒近く開いた。
+// 復号が実時間に追いつくと差は 5 ms 前後へ戻ったが、この一過性の動きで解除した後に 30 秒の
+// 保持がそのまま効き、25 秒の観測がすべて解除のままになった
+test("observe: 一過性の動きが去って差が戻ったら、保持を待たずに共有を戻す", () => {
+  const timeline = createTimeline();
+  // 5 秒目に音声の基準が 900 ms 開き (cache から届いた分をまとめて復号している状態)、
+  // 3 秒かけて実時間に追いつく。音声の TIMESTAMP を古い側へずらすと、受信側の
+  // 「到着 - TIMESTAMP」= 基準の遅れはその分だけ大きくなる
+  const excursionStartMs = 5_000;
+  const catchUpMs = 3_000;
+  const excursionMs = 900;
+  const shiftedMs = (wallMs: number): number => {
+    if (wallMs < excursionStartMs) {
+      return 0;
+    }
+    const progress = Math.min(1, (wallMs - excursionStartMs) / catchUpMs);
+    return -excursionMs * (1 - progress);
+  };
+  const audioFrameMs = 20;
+  const samples: { atMs: number; reason: string }[] = [];
+  let nextVideoMs = 0;
+  for (let wallMs = 0; wallMs < 25_000; wallMs += audioFrameMs) {
+    while (nextVideoMs <= wallMs) {
+      timeline.observe("video", EPOCH_MS + nextVideoMs, timestampOf(nextVideoMs));
+      nextVideoMs += FRAME_MS;
+    }
+    timeline.observe("audio", EPOCH_MS + wallMs, timestampOf(wallMs + shiftedMs(wallMs)));
+    samples.push({ atMs: wallMs, reason: timeline.delayBreakdown.unsharedReason });
+  }
+
+  // 動いている間は解除する (差が閾値を超えている、または離れた幅が続いている) ため、
+  // 一過性の動きでも解除のきっかけで保持に入る
+  assert.isTrue(
+    samples.some((sample) => sample.reason === "hold"),
+    "一過性の動きで解除の保持に入ること",
+  );
+  // 追いついた後は共有を戻す。戻さないと、30 秒の保持が満了するまで音声が共有の時間軸で
+  // 並ばない (実リレーの観測は 25 秒であり、すべて解除のままになる)
+  assert.isTrue(timeline.sharingBases, "一過性の動きが去った後は共有を戻すこと");
+  const releasedAtMs = samples.find(
+    (sample) => sample.atMs > excursionStartMs && sample.reason === "none",
+  )?.atMs;
+  assert.isNotNull(releasedAtMs, "観測の間に共有が戻ること");
+  assert.isAtMost(
+    releasedAtMs ?? Number.POSITIVE_INFINITY,
+    excursionStartMs + catchUpMs + PLAYOUT_BASE_UNSHARED_RELEASE_MS + audioFrameMs,
+    "差が戻ってから解除の条件が続く時間 (`PLAYOUT_BASE_UNSHARED_RELEASE_MS`) のうちに戻すこと",
+  );
+  assert.isBelow(
+    releasedAtMs ?? Number.POSITIVE_INFINITY,
+    excursionStartMs + PLAYOUT_BASE_UNSHARED_HOLD_MS,
+    "保持の満了 (30 秒) を待たずに戻すこと",
+  );
+});
+
 // 購読の直後の過渡: 基準の差が動いている間は判定を始めない。購読の直後は、relay の cache
 // から届いた分と購読を始めるまでにたまった分をまとめて復号しており、基準の遅れが数百 ms
 // から数秒動く。この動きを時計のずれとみなすと、共有を 30 秒解除したままにしてしまい、
@@ -1166,4 +1225,54 @@ test("observe: 戻らない基準のずれは共有をやめる", () => {
     "離れた幅が続いた時間を待ってから判定すること",
   );
   assert.isFalse(timeline.sharingBases, "ずれた側があるときは基準を共有しないこと");
+});
+
+// 差が動き続けている間は解除しない。解除してよいのは「きっかけになった動きが去って差が
+// 元の水準へ戻った」ときだけである。戻らないずれ (真のドリフト) は離れた幅が戻らないため、
+// 保持の満了 (30 秒) より長く観測しても解除の条件を満たさない
+test("observe: 差が動き続けている間は保持を解除しない", () => {
+  const timeline = createTimeline();
+  // 5 秒目から、音声の TIMESTAMP が毎秒 `DRIFT_TEST_MS_PER_SECOND` ずつ壁時計から遅れる
+  // (0754 の実測)。ずれは戻らない
+  const excursionStartMs = 5_000;
+  const reasons = observeShiftedAudioTimestamp(timeline, 60_000, (wallMs) =>
+    wallMs < excursionStartMs
+      ? 0
+      : (-DRIFT_TEST_MS_PER_SECOND * (wallMs - excursionStartMs)) / 1_000,
+  );
+  assert.isTrue(reasons.includes("drift"), "動き続けるずれを時計のずれと判定すること");
+  // 保持の満了 (30 秒) を過ぎても解除しない。解除の条件を数えていないことでも確かめる
+  assert.isFalse(timeline.sharingBases, "差が動き続けている間は共有しないこと");
+  assert.isNull(
+    timeline.delayBreakdown.baseUnsharedReturnMs,
+    "動きが去っていないため解除の条件を数えないこと",
+  );
+});
+
+// 解除のきっかけが動きでない場合は解除しない。差が同じ水準のままで、表示の遅れの上限から
+// 決まる閾値だけが動いて解除されることがあり、このとき差は戻っていない (閾値が戻ればまた
+// 解除される) ため、保持の本来の目的 (往復させないこと) をそのまま残す
+test("observe: 閾値だけが動いた解除は保持する", () => {
+  const timeline = createTimeline();
+  timeline.observe("video", EPOCH_MS, timestampOf(0));
+  // 音声の基準だけ 400 ms 遅らせる (差 400 ms)。閾値は表示の遅れの上限 (500 ms) から
+  // 音声の下限 (80 ms) を引いた 420 ms であり、まだ超えていない
+  timeline.observe("audio", EPOCH_MS + 400, timestampOf(0));
+  assert.isTrue(timeline.sharingBases, "差が閾値の内側なら共有すること");
+  // targetLatency を上げると閾値が下がり、差が変わらないまま解除される
+  timeline.setTargetLatencyMs(MAX_PLAYOUT_DELAY_MS - 50);
+  assert.isFalse(timeline.sharingBases, "閾値を超えたら共有しないこと");
+  assert.equal(timeline.delayBreakdown.unsharedReason, "difference", "閾値を超えていること");
+  // 閾値を戻すと差は再び閾値の内側になるが、解除した直後は保持する (往復させない)
+  timeline.setTargetLatencyMs(null);
+  assert.isFalse(timeline.sharingBases, "閾値が戻っても直ちには共有しないこと");
+  assert.equal(timeline.delayBreakdown.unsharedReason, "hold", "解除を保持していること");
+  // 差が動かないまま観測を続ける (音声の基準の遅れを 400 ms に保つ)。解除のきっかけは
+  // 動きではない (差は同じ水準のまま) ため、保持は満了まで続く
+  observeShiftedAudioTimestamp(timeline, 5_000, () => -400);
+  assert.isFalse(timeline.sharingBases, "閾値だけが動いた解除は保持すること");
+  assert.isNull(
+    timeline.delayBreakdown.baseUnsharedReturnMs,
+    "解除の条件を数えないこと (きっかけが動きではない)",
+  );
 });

@@ -63,6 +63,7 @@ export const EMPTY_AV_SYNC: AvSyncSnapshot = {
     unsharedReason: "unobserved",
     baseDriftMsPerSecond: null,
     baseDriftLimitMs: 0,
+    baseUnsharedReturnMs: null,
     presentationDelayCapMs: 0,
     audioDelayFeedback: EMPTY_AUDIO_DELAY_FEEDBACK,
   },

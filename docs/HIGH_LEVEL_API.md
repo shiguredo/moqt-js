@@ -683,11 +683,15 @@ interface PlaybackDelayBreakdown {
   // 2 つのトラックを同じ時計として扱えているか
   sharingBases: boolean;
   // 扱えない理由。"unobserved" (未観測)、"difference" (差が上限を超えている)、
-  // "drift" (差が動き続けている = TIMESTAMP が壁時計からずれている)、"none"
+  // "drift" (差が動き続けている = TIMESTAMP が壁時計からずれている)、
+  // "hold" (直前にやめた判定を保持している)、"none"
   unsharedReason: PlaybackUnsharedReason;
   // 基準の差の動き (ms/秒)。閾値 (baseDriftLimitMs) を超えるとずれとみなす
   baseDriftMsPerSecond: number | null;
   baseDriftLimitMs: number;
+  // 保持を早く解除する条件 (解除のきっかけが去り、差が戻った状態) が続いている時間 (ms)。
+  // 数えていなければ null。PLAYOUT_BASE_UNSHARED_RELEASE_MS に達すると保持を解除する
+  baseUnsharedReturnMs: number | null;
   presentationDelayCapMs: number;
   // 音声の目標遅延を閉ループで決めた状態。目標が収束しているかと、その理由を読む
   audioDelayFeedback: AudioDelayFeedbackSnapshot;
@@ -762,7 +766,11 @@ jitter buffer の遅れは音声と映像で別々に求める。音声は NetEq
 - `hold`: 直前に共有をやめた判定を保持している。閾値は「表示の遅れの上限 - そのトラックの
   遅延」で決まるため jitter buffer の目標遅延で動き、差が変わらなくても共有と解除を
   往復し得る。往復のたびに足した分を戻して (フレームを捨てる) すぐ足し直す (表示が
-  止まる) ため、`PLAYOUT_BASE_UNSHARED_HOLD_MS` の間は戻さない
+  止まる) ため、`PLAYOUT_BASE_UNSHARED_HOLD_MS` の間は戻さない。ただし解除のきっかけに
+  なった動きが去り、差が元の水準へ戻った状態 (動きの判定が消え、差が閾値の内側で動かず、
+  きっかけが閾値の移動だけではないこと) が `PLAYOUT_BASE_UNSHARED_RELEASE_MS` 続いたら、
+  往復の恐れが無いため保持を待たずに戻す。どこまで続いたかは
+  `AvSyncStats.delays.baseUnsharedReturnMs` に出る
 
 基準を共有できない側が音声のときは、同期の制御を止めず、映像だけを音声の到着基準の時刻へ
 合わせる。音声の TIMESTAMP が信用できなくても、音声の並べ方は分かっているためである。

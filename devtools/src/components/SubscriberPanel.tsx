@@ -1012,6 +1012,14 @@ function SubscriberStats({ statsSignal }: { statsSignal: ReadonlySignal<Subscrib
                 value: formatMs(stats.avSync.delays.baseDriftMsPerSecond),
                 testId: "subscriber-av-sync-drift",
               },
+              {
+                // 共有できていない理由が hold のとき、解除の条件 (きっかけが去って差が戻った
+                // 状態) がどこまで続いたかを読む。PLAYOUT_BASE_UNSHARED_RELEASE_MS に達すると
+                // 保持を待たずに共有を戻す
+                label: "baseUnsharedReturnMs",
+                value: formatMs(stats.avSync.delays.baseUnsharedReturnMs),
+                testId: "subscriber-av-sync-unshared-return",
+              },
             ]}
           />
         </StatSection>

@@ -135,6 +135,7 @@ test("buildSubscriberStats: 記録した同期の 5 項目をそのまま返す"
       unsharedReason: "none",
       baseDriftMsPerSecond: 0.5,
       baseDriftLimitMs: 50,
+      baseUnsharedReturnMs: 1_250,
       presentationDelayCapMs: 500,
       audioDelayFeedback: {
         targetMs: 110,

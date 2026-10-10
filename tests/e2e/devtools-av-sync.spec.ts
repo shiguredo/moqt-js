@@ -25,6 +25,7 @@ const AV_SYNC_ITEMS = {
   sharing: "subscriber-av-sync-sharing",
   unsharedReason: "subscriber-av-sync-unshared-reason",
   drift: "subscriber-av-sync-drift",
+  unsharedReturn: "subscriber-av-sync-unshared-return",
 } as const;
 
 // 遅延の内訳の未観測の値 (空の A/V Sync Snapshot と同じ)
@@ -48,6 +49,8 @@ const EMPTY_DELAYS = {
   unsharedReason: "unobserved",
   baseDriftMsPerSecond: null,
   baseDriftLimitMs: 0,
+  // 解除を早める条件 (きっかけが去って差が戻った状態) はまだ数えていない
+  baseUnsharedReturnMs: null,
   presentationDelayCapMs: 0,
   // 音声の目標遅延の閉ループはまだ動いていない。実際に使う値は揺らぎだけから求めた目標
   // (NetEq の初期値) のままである (`devtools/src/signals/subscriber.ts`)
@@ -132,6 +135,8 @@ test("subscriber の画面に同期の推定と遅延の内訳を既定値で出
   await expect(page.getByTestId(AV_SYNC_ITEMS.sharing)).toHaveText("false");
   await expect(page.getByTestId(AV_SYNC_ITEMS.unsharedReason)).toHaveText("unobserved");
   await expect(page.getByTestId(AV_SYNC_ITEMS.drift)).toHaveText("-");
+  // 解除を早める条件がどこまで続いたか (まだ数えていない)
+  await expect(page.getByTestId(AV_SYNC_ITEMS.unsharedReturn)).toHaveText("-");
 });
 
 test("Target Latency と Render Group の選択が UI から URL へ反映され、生成された URL から復元される", async ({
