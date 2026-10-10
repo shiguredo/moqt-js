@@ -29,6 +29,7 @@ import { createDummyAudioStream } from "../webcodecs-devtools/utils/dummyAudio";
 import { readAllAudioSamples } from "../utils/audioLevel";
 import { AudioLevelTimeline } from "../utils/audioLevelTimeline";
 import { AudioTimestampClock } from "../../../src/audioTimestampClock";
+import { AudioPublishCatchUp } from "../../../src/audioPublishCatchUp";
 import { startPublisherAudioMeter, stopPublisherAudioMeter } from "./publisherAudioMeter";
 import { AudioEncoderWrapper } from "../../../src/codec/AudioEncoder.ts";
 import type { AudioEncodedChunkData } from "../../../src/codec/types.ts";
@@ -1123,15 +1124,26 @@ export function usePublisher() {
           audioData.duration,
           readAllAudioSamples(audioData),
         );
+        const readWallClockMicros = BigInt(
+          Math.round((performance.timeOrigin + performance.now()) * 1_000),
+        );
         // 読み出した壁時計と `AudioData.timestamp` の差を記録する。音声の LOC TIMESTAMP は
         // この差の最小値へ原点を合わせて作る (src/audioTimestampClock.ts)
-        pub.audioTimestampClock.value.record(
-          BigInt(Math.round((performance.timeOrigin + performance.now()) * 1_000)),
-          audioData.timestamp,
-        );
-        // 音声フレームは落としても後続の Object で上書きされるため、映像のような
-        // encodeQueueSize による抑制はしない (src/createMediaPublisher.ts と同じ)
-        encoder.encode(audioData);
+        pub.audioTimestampClock.value.record(readWallClockMicros, audioData.timestamp);
+        // 読み出しと符号化で溜まった遅れが上限を超えたフレームは、符号化せずに捨てて
+        // live へ追いつく (src/audioPublishCatchUp.ts)。映像の encodeQueueSize に
+        // よる抑制にあたる仕組みが音声には無く、一度キューが詰まると遅れが固定される。
+        // 数フレームの穴は受信側の concealment が埋める
+        const encode = pub.audioCatchUp.value.evaluate({
+          timestampMicros: audioData.timestamp,
+          readWallClockMicros,
+          appliedOffsetMicros: pub.audioTimestampClock.value.appliedMicros,
+          durationMicros: audioData.duration,
+          nowMs: performance.now(),
+        });
+        if (encode) {
+          encoder.encode(audioData);
+        }
         audioData.close();
       }
     } catch (error) {
@@ -1330,6 +1342,7 @@ export function usePublisher() {
     // 前の配信のサンプルの記録を持ち越さない
     pub.audioLevelTimeline.value = new AudioLevelTimeline();
     pub.audioTimestampClock.value = new AudioTimestampClock();
+    pub.audioCatchUp.value = new AudioPublishCatchUp();
     const audioTrackProcessor = new MediaStreamTrackProcessor<AudioData>({ track: audioTrack });
     pub.audioFrameReader.value = audioTrackProcessor.readable.getReader();
   }
@@ -1341,6 +1354,17 @@ export function usePublisher() {
   let eventHistory: EventTimelineEntry[] = [];
 
   function handleAudioEncodedChunk(chunk: AudioEncodedChunkData): void {
+    // キューに溜まっている音声の長さを測り、この chunk が覆う最初の投入の timestamp を
+    // 受け取る。送らない chunk でも測るため、送信の可否より先に記録する
+    // (src/audioPublishCatchUp.ts)
+    const { timestampMicros } = pub.audioCatchUp.value.recordEncodedChunk({
+      timestampMicros: chunk.timestamp,
+      durationMicros: chunk.duration,
+      nowMs: performance.now(),
+    });
+    // フレームを捨てると、符号化の出力の timestamp は投入したフレームの timestamp より
+    // 古くなる。LOC TIMESTAMP と Audio Level は、送るサンプルの取得時刻で引く
+    const capturedTimestampMicros = timestampMicros ?? chunk.timestamp;
     const audioPublisherInstance = pub.audioPublisher.value;
     if (!audioPublisherInstance || audioPublisherInstance.state !== "active") return;
     pub.audioChunksEncoded.value++;
@@ -1358,7 +1382,10 @@ export function usePublisher() {
     // LOC Audio Level (draft-ietf-moq-loc-04 §2.3.3.2) は RFC 6464 §3 に従い、
     // chunk が符号化するサンプル列の RMS から -dBov を求める。符号化へ渡したときに
     // 記録したサンプルのうち、chunk の時間の範囲に重なる分を使う (processAudioFrames)
-    const audioLevel = pub.audioLevelTimeline.value.levelFor(chunk.timestamp, chunk.duration);
+    const audioLevel = pub.audioLevelTimeline.value.levelFor(
+      capturedTimestampMicros,
+      chunk.duration,
+    );
     // 配信側のメーターに、直近に送った LOC Audio Level を出す
     pub.audioMeterLevel.value = audioLevel;
 
@@ -1381,8 +1408,8 @@ export function usePublisher() {
       // `AudioData.timestamp` は壁時計ではないため、読み出した壁時計との差の
       // 最小値で原点を合わせる。まだ観測が無いときだけ従来の換算へ落とす
       timestamp:
-        pub.audioTimestampClock.value.apply(chunk.timestamp) ??
-        LOC.toUnixEpochMicroseconds(BigInt(chunk.timestamp), performance.timeOrigin),
+        pub.audioTimestampClock.value.apply(capturedTimestampMicros) ??
+        LOC.toUnixEpochMicroseconds(BigInt(capturedTimestampMicros), performance.timeOrigin),
       audioLevel,
       config: audioConfig,
     });

@@ -355,6 +355,66 @@ function PublisherStats({ statsSignal }: { statsSignal: ReadonlySignal<Publisher
             ]}
           />
         </StatSection>
+
+        {/* 音声が live から遅れたときに古いフレームを捨てて追いついた量。
+            映像は encodeQueueSize が上限を超えたフレームを捨てるが、音声には同じ仕組みが
+            無く、符号化のキューが詰まると遅れが固定される (src/audioPublishCatchUp.ts) */}
+        <StatSection title="Catch-up">
+          <StatList
+            items={[
+              {
+                label: "policy",
+                value: stats.audio.catchUp.policy,
+                testId: "publisher-audio-catchup-policy",
+              },
+              {
+                label: "droppedFrames",
+                value: stats.audio.catchUp.droppedFrames,
+                testId: "publisher-audio-catchup-dropped-frames",
+              },
+              {
+                label: "droppedMs",
+                value: stats.audio.catchUp.droppedMs.toFixed(1),
+                testId: "publisher-audio-catchup-dropped-ms",
+              },
+              {
+                label: "lagMs",
+                value: formatOffsetMs(stats.audio.catchUp.lagMs),
+                testId: "publisher-audio-catchup-lag",
+              },
+              {
+                label: "floorMs",
+                value: formatOffsetMs(stats.audio.catchUp.floorMs),
+                testId: "publisher-audio-catchup-floor",
+              },
+              {
+                label: "maxLagMs",
+                value: formatOffsetMs(stats.audio.catchUp.maxLagMs),
+                testId: "publisher-audio-catchup-max-lag",
+              },
+              {
+                label: "pendingMs",
+                value: stats.audio.catchUp.pendingMs.toFixed(1),
+                testId: "publisher-audio-catchup-pending",
+              },
+              {
+                label: "readLagMs",
+                value: stats.audio.catchUp.readLagMs.toFixed(1),
+                testId: "publisher-audio-catchup-read-lag",
+              },
+              {
+                label: "catchingUp",
+                value: String(stats.audio.catchUp.catchingUp),
+                testId: "publisher-audio-catchup-active",
+              },
+              {
+                label: "catchUpStarts",
+                value: stats.audio.catchUp.catchUpStarts,
+                testId: "publisher-audio-catchup-starts",
+              },
+            ]}
+          />
+        </StatSection>
       </StatGroup>
 
       <StatGroup title="Video">

@@ -12,6 +12,7 @@ import {
 import type { AudioEncoderWrapper } from "../../../src/codec/AudioEncoder.ts";
 import { AudioLevelTimeline } from "../utils/audioLevelTimeline";
 import { AudioTimestampClock } from "../../../src/audioTimestampClock.ts";
+import { AudioPublishCatchUp } from "../../../src/audioPublishCatchUp.ts";
 import type { AudioFormat } from "../utils/microphone";
 
 // Publisher の状態
@@ -127,6 +128,11 @@ export const audioLevelTimeline = signal(new AudioLevelTimeline());
 // 差の最小値へ原点だけを合わせる (ライブラリの src/audioTimestampClock.ts)。
 // 音声の配信を始めるたびに作り直す
 export const audioTimestampClock = signal(new AudioTimestampClock());
+// 音声が live から遅れたときに古いフレームを捨てて追いつく判定と観測
+// (ライブラリの src/audioPublishCatchUp.ts)。映像の encodeQueueSize による抑制に
+// あたる仕組みが音声に無く、符号化が遅れるとキューに溜まった分だけ遅れが固定される。
+// 音声の配信を始めるたびに作り直す
+export const audioCatchUp = signal(new AudioPublishCatchUp());
 // 配信側の音声メーター。取っている音の peak / RMS (dBFS) と直近の波形は Preview 中から
 // 更新する (hooks/publisherAudioMeter.ts)。左右のチャンネルを別々に持ち、モノラルの
 // ときは右が null のままになる。LOC Audio Level は直近に送った Object の値

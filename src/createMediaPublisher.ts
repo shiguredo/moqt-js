@@ -10,6 +10,7 @@ import { isErrorNotifiedByPublisher, type Publisher, type SendObjectParams } fro
 import * as LOC from "./loc";
 import { WallClockMapper } from "./mediaClock";
 import { AudioTimestampClock } from "./audioTimestampClock";
+import { AudioPublishCatchUp } from "./audioPublishCatchUp";
 import { catalogRepublishIntervalMs } from "./catalogRepublish";
 import {
   CATALOG_TRACK_NAME,
@@ -549,6 +550,10 @@ export class MediaPublisherImpl implements MediaPublisher {
   // 差の最小値へ原点だけを合わせる。音声の配信を始めるたびに作り直す
   private audioTimestampClock = new AudioTimestampClock();
 
+  // 音声が live から遅れたときに古いフレームを捨てて追いつく (audioPublishCatchUp.ts)。
+  // 方針は options で選び、観測は配信を始めるたびに消す
+  private audioCatchUp: AudioPublishCatchUp;
+
   // エンコーダー
   private audioEncoder: AudioEncoderWrapper | null = null;
   private videoEncoder: VideoEncoderWrapper | null = null;
@@ -558,8 +563,10 @@ export class MediaPublisherImpl implements MediaPublisher {
     framesSent: 0,
     bytesSent: 0,
     currentGroupId: 0,
-    // 実測値は getStats() が読む時点の観測から作る (audioTimestampClock.snapshot())
+    // 実測値は getStats() が読む時点の観測から作る
+    // (audioTimestampClock.snapshot() / audioCatchUp.snapshot())
     timestampOffset: null,
+    catchUp: null,
   };
   private videoStats: VideoStats = {
     framesSent: 0,
@@ -602,6 +609,9 @@ export class MediaPublisherImpl implements MediaPublisher {
     this.url = url;
     this.options = options;
     this.callbacks = callbacks;
+
+    // 音声の追いつき方は options で選ぶ (省略した場合は "drop"。audioPublishCatchUp.ts)
+    this.audioCatchUp = new AudioPublishCatchUp({ policy: options.audioCatchUp ?? "drop" });
 
     // draft-ietf-moq-msf-01 §6.1: 開始 Group ID は同一 track の
     // 過去の全 Group ID を上回る。新規インスタンスごとに割り当てる。
@@ -889,7 +899,11 @@ export class MediaPublisherImpl implements MediaPublisher {
   getStats(): MediaStats {
     return {
       audio: this.options.audio
-        ? { ...this.audioStats, timestampOffset: this.audioTimestampClock.snapshot() }
+        ? {
+            ...this.audioStats,
+            timestampOffset: this.audioTimestampClock.snapshot(),
+            catchUp: this.audioCatchUp.snapshot(),
+          }
         : null,
       video: this.options.video ? { ...this.videoStats } : null,
     };
@@ -1459,6 +1473,7 @@ export class MediaPublisherImpl implements MediaPublisher {
         }
         // 前の配信の観測を持ち越さない
         this.audioTimestampClock = new AudioTimestampClock();
+        this.audioCatchUp.reset();
         this.audioTrackProcessor = new MediaStreamTrackProcessor({ track: audioTrack });
         this.audioFrameReader = this.audioTrackProcessor.readable.getReader();
       }
@@ -1526,12 +1541,24 @@ export class MediaPublisherImpl implements MediaPublisher {
 
         // 読み出した壁時計と `AudioData.timestamp` の差を記録する。音声の LOC TIMESTAMP は
         // この差の最小値へ原点を合わせて作る (audioTimestampClock.ts)
-        this.audioTimestampClock.record(
-          BigInt(Math.round((performance.timeOrigin + performance.now()) * 1_000)),
-          audioData.timestamp,
+        const readWallClockMicros = BigInt(
+          Math.round((performance.timeOrigin + performance.now()) * 1_000),
         );
+        this.audioTimestampClock.record(readWallClockMicros, audioData.timestamp);
 
-        encoder.encode(audioData);
+        // 読み出しと符号化で溜まった遅れが上限を超えたフレームは、符号化せずに捨てて
+        // live へ追いつく (audioPublishCatchUp.ts)。数フレームの穴は受信側の
+        // concealment が埋める
+        const encode = this.audioCatchUp.evaluate({
+          timestampMicros: audioData.timestamp,
+          readWallClockMicros,
+          appliedOffsetMicros: this.audioTimestampClock.appliedMicros,
+          durationMicros: audioData.duration,
+          nowMs: performance.now(),
+        });
+        if (encode) {
+          encoder.encode(audioData);
+        }
         audioData.close();
       }
     } catch (error) {
@@ -1611,6 +1638,14 @@ export class MediaPublisherImpl implements MediaPublisher {
   }
 
   private handleAudioEncodedChunk(chunk: AudioEncodedChunkData): void {
+    // キューに溜まっている音声の長さを測り、この chunk が覆う最初の投入の timestamp を
+    // 受け取る。送らない chunk でも測るため、送信の可否より先に記録する
+    // (audioPublishCatchUp.ts)
+    const { timestampMicros } = this.audioCatchUp.recordEncodedChunk({
+      timestampMicros: chunk.timestamp,
+      durationMicros: chunk.duration,
+      nowMs: performance.now(),
+    });
     if (!this.audioPublisher || this.audioPublisher.state !== "active") return;
 
     // draft-ietf-moq-loc-04 §2.3.3.1 (Audio Config):
@@ -1634,9 +1669,12 @@ export class MediaPublisherImpl implements MediaPublisher {
     // (draft-ietf-moq-loc-04 §2.3.1.1。TIMESCALE は付けない)。
     // `AudioData.timestamp` は壁時計ではないため、読み出した壁時計との差の
     // 最小値で原点を合わせる。まだ観測が無いときだけ従来の換算へ落とす
+    // フレームを捨てると、符号化の出力の timestamp は投入したフレームの timestamp より
+    // 古くなる。LOC TIMESTAMP は送るサンプルの取得時刻にする (audioPublishCatchUp.ts)
+    const capturedTimestampMicros = timestampMicros ?? chunk.timestamp;
     const wallClockMicros =
-      this.audioTimestampClock.apply(chunk.timestamp) ??
-      LOC.toUnixEpochMicroseconds(BigInt(chunk.timestamp), performance.timeOrigin);
+      this.audioTimestampClock.apply(capturedTimestampMicros) ??
+      LOC.toUnixEpochMicroseconds(BigInt(capturedTimestampMicros), performance.timeOrigin);
     const properties = LOC.encodeAudioProperties({
       timestamp: wallClockMicros,
       config: audioConfig,

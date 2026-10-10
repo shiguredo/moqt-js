@@ -93,9 +93,11 @@ test("buildPublisherExportText: Publisher の節と [publisher] のログだけ�
   assert.notInclude(text, "Subscriber Statistics");
 });
 
-// 破棄したフレーム数は publishTiming の統計 (encodeQueueDrops) の 1 箇所にだけ出す。
-// 同じ値を別名でも出すと同じ数字が 2 行並び、不具合の報告を読む側が内訳と誤解する
-test("buildPublisherExportText: 破棄したフレーム数を 1 つの名前でだけ出す", () => {
+// 映像の破棄したフレーム数は publishTiming の統計 (encodeQueueDrops) の 1 箇所にだけ出す。
+// 同じ値を別名でも出すと同じ数字が 2 行並び、不具合の報告を読む側が内訳と誤解する。
+// 音声の追いつきの droppedFrames は別の値 (遅れた音声を捨てた数) であり、audio の catchUp の
+// 下に出る
+test("buildPublisherExportText: 映像の破棄したフレーム数を 1 つの名前でだけ出す", () => {
   // 配信を始めた状態にして Publisher の節を出させる
   pub.framesEncoded.value = 1;
   // 破棄したフレーム数は publishTimingStats が数える (2 件の破棄を記録する)
@@ -105,7 +107,16 @@ test("buildPublisherExportText: 破棄したフレーム数を 1 つの名前で
   const text = buildPublisherExportText();
 
   assert.include(text, "encodeQueueDrops: 2");
-  assert.notInclude(text, "droppedFrames");
+  const droppedLines = text
+    .split("\n")
+    .filter((line) => line.trimStart().startsWith("droppedFrames:"));
+  assert.lengthOf(droppedLines, 1, "破棄したフレーム数の行が 1 つでない");
+  // 音声の追いつきの統計の下 (audio → catchUp) に出る
+  assert.match(
+    droppedLines[0] ?? "",
+    /^ {4}droppedFrames: /,
+    "音声の追いつきの統計の下に出ていない",
+  );
 });
 
 test("buildSubscriberExportText: 指定した Subscriber の節と、その id のログだけを出す", () => {

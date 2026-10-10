@@ -5,6 +5,7 @@
 import type { PlaybackDelayBreakdown } from "../playbackTimeline";
 import type { AudioPlayoutTimingSnapshot } from "../audioPlayoutTimingStats";
 import type { AudioTimestampOffsetStats } from "../audioTimestampClock";
+import type { AudioPublishCatchUpStats } from "../audioPublishCatchUp";
 
 // オーディオコーデック
 export type AudioCodecType = "opus" | "aac";
@@ -27,6 +28,10 @@ export interface AudioStats {
   // 「読み出した壁時計 - AudioData.timestamp」の現在値・最小・最大と 10 秒 / 60 秒の傾き。
   // まだ観測していないときは null
   timestampOffset: AudioTimestampOffsetStats | null;
+  // 遅れが上限を超えたときに古いフレームを捨てて live へ追いついた量
+  // (src/audioPublishCatchUp.ts)。捨てた数と長さ、観測した遅れを出す。
+  // 実測値は getStats() が読む時点の観測から作る
+  catchUp: AudioPublishCatchUpStats | null;
 }
 
 // 受信側オーディオ統計
@@ -160,6 +165,14 @@ export interface MediaPublisherOptions {
   namespace: string[];
   audio?: AudioPublishOptions;
   video?: VideoPublishOptions;
+  // 音声が live から遅れたときの追いつき方 (src/audioPublishCatchUp.ts)。
+  // draft-ietf-moq-loc-04 §4.1: 音声は 1 chunk = 1 Object = 1 Group であり、映像のような
+  // 抑制が無いため、符号化が実時間に追いつかなくなるとキューに溜まった分だけ遅れが
+  // 固定される。既定の "drop" は、遅れが健全時の値から一定を超えたら読んだフレームを
+  // 符号化せずに捨てて live へ追いつく (数フレームの穴は受信側の concealment が埋める)。
+  // "keep" は捨てずに順に送る (音楽や効果音のように、間引くと内容が壊れる用途)。
+  // 省略した場合は "drop"
+  audioCatchUp?: import("../audioPublishCatchUp").AudioPublishCatchUpPolicy;
   // 符号化から表示までの wallclock の差 (ms)
   // draft-ietf-moq-msf-01 §5.2.8 (targetLatency)
   // 指定すると catalog の音声と映像の両方の track に同じ値を載せる。同じ render group と

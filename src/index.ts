@@ -328,3 +328,19 @@ export type { TimingSummary } from "./timingSummary";
 // 音声の TIMESTAMP を壁時計へ合わせるための観測 (AudioStats.timestampOffset)。
 // 「読み出した壁時計 - AudioData.timestamp」の推移
 export type { AudioTimestampOffsetStats } from "./audioTimestampClock";
+
+// 音声が live から遅れたときに古いフレームを捨てて追いつく判定と観測
+// (AudioStats.catchUp。MediaPublisherOptions.audioCatchUp で方針を選ぶ)
+export {
+  AudioPublishCatchUp,
+  AUDIO_PUBLISH_CATCH_UP_MIN_MS,
+  AUDIO_PUBLISH_CATCH_UP_GROWTH_MS,
+  AUDIO_PUBLISH_CATCH_UP_RESUME_MS,
+  AUDIO_PUBLISH_CATCH_UP_PENDING_TIMEOUT_MS,
+  type AudioPublishCatchUpPolicy,
+  type AudioPublishCatchUpStats,
+  type AudioPublishCatchUpOptions,
+  type AudioPublishCatchUpFrameInput,
+  type AudioPublishCatchUpChunkInput,
+  type AudioPublishCatchUpChunkResult,
+} from "./audioPublishCatchUp";

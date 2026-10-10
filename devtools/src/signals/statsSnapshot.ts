@@ -4,6 +4,7 @@ import type { PlaybackTimingSnapshot } from "../utils/playbackTimingStats";
 import type { PublishTimingSnapshot } from "../utils/publishTimingStats";
 import type { AudioPlayoutTimingSnapshot } from "../../../src/audioPlayoutTimingStats.ts";
 import type { AudioTimestampOffsetStats } from "../../../src/audioTimestampClock.ts";
+import type { AudioPublishCatchUpStats } from "../../../src/audioPublishCatchUp.ts";
 import type { StatusType } from "../types";
 import {
   audioBytesSent,
@@ -16,6 +17,7 @@ import {
   audioMeterRmsDbfsLeft,
   audioMeterRmsDbfsRight,
   audioObjectsSent,
+  audioCatchUp,
   audioPublisher,
   audioTimestampClock,
   bytesSent,
@@ -135,6 +137,13 @@ export interface PublisherAudioStats {
    * 一定なら傾きが 0、ドリフトなら傾きが 0 から離れ、段差なら最小と最大の差が開く
    */
   timestampOffset: AudioTimestampOffsetStats | null;
+  /**
+   * 遅れが上限を超えたときに古いフレームを捨てて live へ追いついた量
+   *
+   * 捨てた数と長さ、観測した遅れと健全時の遅れ (床)、追いつきの最中かどうかを出す。
+   * 方針は "drop" (既定) か "keep" (間引きしたくない用途)
+   */
+  catchUp: AudioPublishCatchUpStats;
 }
 
 /** Publisher の event timeline の状態 */
@@ -345,6 +354,8 @@ export function buildPublisherStats(): PublisherStats {
       lastSentLevel: audioLevel?.level ?? null,
       lastSentVoiceActivity: audioLevel?.voiceActivity ?? null,
       timestampOffset: audioTimestampClock.value.snapshot(),
+      // 遅れが上限を超えたときに捨てて live へ追いついた量 (src/audioPublishCatchUp.ts)
+      catchUp: audioCatchUp.value.snapshot(),
     },
     event: {
       publishing: eventPublisher.value !== null,

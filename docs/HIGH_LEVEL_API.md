@@ -87,6 +87,10 @@ interface MediaPublisherOptions {
   // Pending Subgroup Stream の buffer 設定 (§11.3.1)。
   // 未指定のフィールドは既定値で補完される
   pendingSubgroup?: Partial<PendingSubgroupBufferOptions>;
+  // 音声が live から遅れたときの追いつき方。"drop" (既定) は遅れが上限を超えたら
+  // 古いフレームを捨てて追いつく。"keep" は捨てずに順に送る (音楽や効果音のように、
+  // 間引くと内容が壊れる用途)
+  audioCatchUp?: "drop" | "keep";
 }
 ```
 
@@ -242,6 +246,8 @@ interface AudioStats {
   currentGroupId: number;
   // 音声の TIMESTAMP を壁時計へ合わせるための観測。まだ音声を 1 つも読んでいなければ null
   timestampOffset: AudioTimestampOffsetStats | null;
+  // 遅れが上限を超えたときに古いフレームを捨てて live へ追いついた量
+  catchUp: AudioPublishCatchUpStats | null;
 }
 
 interface AudioTimestampOffsetStats {
@@ -257,6 +263,28 @@ interface AudioTimestampOffsetStats {
   appliedMs: number | null;
   // 観測した数
   samples: number;
+}
+
+interface AudioPublishCatchUpStats {
+  // 使っている方針 ("drop" は遅れたら捨てて追いつく、"keep" は捨てない)
+  policy: AudioPublishCatchUpPolicy;
+  // 遅れが上限を超えたため符号化せずに捨てたフレームの数と、その音声の長さ (ミリ秒、累積)
+  droppedFrames: number;
+  droppedMs: number;
+  // 直近に観測した、配信側が足した遅れ (ミリ秒)
+  lagMs: number | null;
+  // 健全時に観測した遅れ (床、ミリ秒)。下がる方向にだけ動く
+  floorMs: number | null;
+  // 観測した最大の遅れ (ミリ秒)
+  maxLagMs: number | null;
+  // 符号化へ渡したまま出力が返っていない音声の長さ (ミリ秒) とフレームの数
+  pendingMs: number;
+  pendingFrames: number;
+  // 直近に読んだフレームの読み出しの遅れ (ミリ秒)
+  readLagMs: number;
+  // いま追いつきのために捨てているかと、追いつきを始めた回数 (累積)
+  catchingUp: boolean;
+  catchUpStarts: number;
 }
 
 interface VideoStats {
@@ -293,6 +321,39 @@ TIMESTAMP が動くと、受信側がこれを時計のずれとみなして基�
 
 補正の推移は `getStats().audio.timestampOffset` で読める。一定なら傾きが 0、ドリフトなら
 傾きが 0 から離れ、段差なら最小と最大の差が開く (devtools の Publisher 統計と
+「Copy for LLM」にも出る)。
+
+#### 音声の追いつき
+
+音声は、読み出したフレームを符号化の出力を待たずに投入する。符号化が実時間に追いつかなく
+なると、投入したフレームはキューに溜まり、符号化の出力が返るまでの待ちが伸びる。映像は
+`encodeQueueSize` が上限を超えたフレームを捨てて待ちを伸ばさない (`VideoStats.droppedFrames`)
+が、音声には同じ仕組みが無く、キューに溜まった分は実時間と同じ速さでしかはけないため、
+一度遅れると遅れが固定される。遅れは受信側の基準 (復号の出力 - 送られた TIMESTAMP) を
+そのまま押し上げ、音声と映像の基準の差を開かせる。
+
+`MediaPublisherOptions.audioCatchUp` で方針を選ぶ。既定は `"drop"` であり、配信側が足した
+遅れ (読み出しの遅れ + 符号化のキューに溜まっている音声) が、健全時に観測した遅れ (床)
+から 40 ms を超えたら、読んだフレームを符号化せずに捨てて live へ追いつく。40 ms は
+音声の 2 パケット分であり、欠けた区間は Opus の concealment が埋めるため、遅れたまま
+送り続けるより聴感は良い。上限は床からの増加で測るため、健全時の遅れが環境で変わっても
+(遅い runner でも) 健全な状態で捨てることはない。床が 20 ms 未満のときは 60 ms を上限に
+する。読み出しの遅れが上限を超えたフレームは、キューに溜まっていなくてもその場で捨てる。
+
+捨てるのをやめるのは、キューに溜まっている音声が 1 パケット (20 ms) 以下まで減ったときで
+ある。上限を少し下回ったところで再開すると、キューに残った分がはけないまま次のフレームが
+入り、捨てるかどうかが 1 フレームごとに往復して音声が送られなくなる。また、符号化器は
+1 パケット分の入力を保持したまま出力を返すため、キューは 0 にはならない。
+
+なお、`AudioEncoder` が出力する chunk の timestamp は、投入した `AudioData.timestamp` では
+なく「符号化したサンプル数」から作る連続した値になる。フレームを捨てて投入に穴が空くと、
+出力の timestamp は投入より古くなる。LOC TIMESTAMP は送るサンプルの取得時刻でなければ
+ならないため、覆った最初の投入の timestamp を使う (devtools の Audio Level の参照も同じ)。
+
+`"keep"` は捨てずに順に符号化して送る。音楽や効果音のように、間引くと内容が壊れる用途で
+使う。キューに溜まった遅れは戻らないため、受信側の基準の遅れは増えたままになる。
+
+捨てた量と観測した遅れは `getStats().audio.catchUp` で読める (devtools の Publisher 統計と
 「Copy for LLM」にも出る)。
 
 ---
