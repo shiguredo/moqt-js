@@ -61,6 +61,7 @@ import {
 // 復号した音声の再生の組み立て (時間軸への記録・目標の決定・予約・計器への記録) は
 // ライブラリと共有する (組み立てを 2 か所へ置くと、到着基準の遅れ・閉ループ・計器の
 // 修正のたびに両方を直すことになり、片方だけ直すと挙動がずれる)
+import { takeDecodeInputEntry } from "../../../src/decodeInputTimestamps.ts";
 import { AudioPlayoutSession } from "../../../src/audioPlayoutSession.ts";
 // targetLatency の解決規則はライブラリと共有する純関数が持つ (規則を 2 か所に書かない)
 import { effectiveTargetLatencyMs, resolveSharedTargetLatencyMs } from "../../../src/msf/tracks.ts";
@@ -1548,8 +1549,7 @@ export function useSubscriber(
       // 壁時計の TIMESTAMP を持たない音 (TIMESTAMP 無し、Timescale あり) は映像と
       // 対応づけられないため、共有実装が時間軸へ記録せず到着基準で並べる
       const inputs = audioDecodeInputsRef.current;
-      const input = inputs.get(audioData.timestamp);
-      inputs.delete(audioData.timestamp);
+      const input = takeDecodeInputEntry(inputs, audioData.timestamp);
       // 到着 (復号の出力を受け取った) 時刻。鳴らさなかった音の記録に使う
       const arrivalMs = performance.now();
 

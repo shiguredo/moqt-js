@@ -34,6 +34,7 @@ import type { AudioClockBridge, AudioPlayoutScheduler } from "./audioPlayout";
 import { AudioPlayoutTimingStats, AUDIO_PLAYOUT_TIMING_WINDOW_MS } from "./audioPlayoutTimingStats";
 // 復号した音声の再生の組み立ては devtools と共有する (到着基準の遅れ・閉ループ・計器を
 // 1 か所に置くため、src/audioPlayoutSession.ts が持つ)
+import { takeDecodeInputEntry } from "./decodeInputTimestamps";
 import { AudioPlayoutSession, type AudioPlayoutTimestampKind } from "./audioPlayoutSession";
 import { JITTER_BUFFER_MAX_QUEUED_FRAMES } from "./playoutBuffer";
 import { PlaybackTimeline } from "./playbackTimeline";
@@ -2400,8 +2401,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
 
     // 復号へ渡した timestamp の種類を引く。Timescale がある TIMESTAMP は壁時計ではない
     // (draft-ietf-moq-loc-04 §2.3.1.1 / §2.3.1.2)
-    const kind = this.audioTimestampKinds.get(audioData.timestamp);
-    this.audioTimestampKinds.delete(audioData.timestamp);
+    const kind = takeDecodeInputEntry(this.audioTimestampKinds, audioData.timestamp);
     const timestampKind: AudioPlayoutTimestampKind = kind ?? "none";
     // 直近の音が壁時計の TIMESTAMP を持つか (同期の推定を出せるかの判定に使う)
     this.audioWallClockSeen = timestampKind === "wallClock";

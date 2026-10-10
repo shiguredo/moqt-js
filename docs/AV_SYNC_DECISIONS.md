@@ -36,6 +36,7 @@ A/V 同期と再生まわりで入れた判断 (閾値・保持・検出・追�
 | 5   | 配信側の TIMESTAMP 補正        | 窓 2 秒 / 上昇の上限 100 ms/秒 / 定着 5 秒 / 段差 200 ms                            | `audio.timestampOffset.*`                                     |
 | 6   | 配信側の追いつき               | `max(60 ms, 床 + 40 ms)` / 再開 20 ms / `drop` と `keep`                            | `audio.catchUp.*`                                             |
 | 7   | 受信側の再生の組み立て         | `AudioPlayoutSession` / `VideoPlayoutSession`                                       | `avSync.*`、`audio.playoutTiming.*`                           |
+| 8   | 復号の出力と投入の対応づけ     | 1,000 マイクロ秒 (`DECODER_OUTPUT_TIMESTAMP_TOLERANCE_MICROS`)                      | `audio.playoutTiming.arrivalPlannedFrames`                    |
 
 ## 1. A/V 同期で合わせる量の上限
 
@@ -407,10 +408,19 @@ LOC の TIMESTAMP を「送るサンプルの取得時刻」にすること。`A
   出力の timestamp を符号化したサンプル数から作るためである。フレームを捨てて投入に穴が
   空くと、出力の timestamp は投入より古くなる (実測)
 
+その後の実測 (2026-10-10、CI の runner で音声の基準の遅れが 116 ms から 836 ms へ伸びた
+run 38026081292 の切り分け) で、遅れが溜まる段は配信側ではなかった。符号化の出力が返るまでの
+待ち (`pendingMs`) と送信のキュー (`sendQueueMs`)、撮ってから送信が終わるまでの遅れ
+(`sendLagMs`) はどちらも 20 ms 前後で動かず、受信側が Object を受け取るまでの遅れ
+(`receiveDelayMs`) も 20〜30 ms のままだった。残る段は受信側の復号と再生であり、原因は
+決定 8 (復号の出力と投入の対応づけ) だった。配信側の計器は、この切り分けのために足した。
+
 **根拠が薄い点**:
 
 - 60 ms という下限そのものは「3 パケット分」という丸めであり、健全な環境での遅れの分布
   (手元 11 ms、runner 30〜190 ms) から決めた値ではない
+- `sendQueueMs` / `sendLagMs` は健全な状態 (手元の再現で 0〜20 ms / 10〜20 ms) しか測って
+  おらず、送信が実際に詰まる条件 (回線の帯域、relay の stream の上限) での値は無い
 - 5 秒の保留の破棄は「これを超える遅れは追いつきの対象であり、記録を残す意味が無い」という
   見積もりである
 - 「keep」を選ぶべき条件 (間引くと壊れる内容かどうか) は測って決められるものではなく、
@@ -440,6 +450,7 @@ worker の使い方) を見る。追いつきは症状を消すだけで、原�
 
 - `audio.catchUp.policy` / `catchUpStarts` / `catchingUp`
 - `audio.catchUp.lagMs` / `floorMs` / `maxLagMs` / `readLagMs` / `pendingMs` / `pendingFrames`
+- `audio.catchUp.sendQueueMs` / `sendQueueFrames` / `sendLagMs` / `maxSendLagMs`
 - `audio.catchUp.droppedFrames` / `droppedMs`
 - `audio.chunksEncoded` / `audio.encodeErrors`
 - `publishTiming.encodeMs` (符号化の待ち時間)
@@ -493,6 +504,63 @@ worker の使い方) を見る。追いつきは症状を消すだけで、原�
 - `avSync.*` (時間軸の推定)
 - `audio.playoutTiming.*` (鳴らした結果)
 - `playbackTiming.*` (表示の結果)
+
+## 8. 復号の出力と投入の対応づけ
+
+### 決めた値
+
+- `DECODER_OUTPUT_TIMESTAMP_TOLERANCE_MICROS` = 1,000 マイクロ秒 (復号の出力の timestamp と、
+  復号へ渡した timestamp の差として許す上限。`src/decodeInputTimestamps.ts`)
+
+### 守っている性質
+
+復号の出力 (`AudioData`) が、復号へ渡した音の TIMESTAMP の種類 (壁時計かメディア時刻か) を
+保つこと。`AudioData` は種類を持たないため、復号へ渡した時に覚えて出力で引く。種類を失うと、
+その音は共有の時間軸へ記録されず、音声の基準の遅れが更新されない。A/V 同期は更新されない値の
+まま比較を続け、映像の表示を誤った相手へ合わせる (遅れている側を基準にしない)。
+
+### 根拠
+
+実リレー (Opus、48 kHz) の実測で、`AudioDecoder` の出力の `AudioData.timestamp` は復号へ
+渡した timestamp より 100 マイクロ秒だけ大きかった。完全一致で引いていたため、購読を始めて
+1 秒ほどで引けなくなり、復号へ渡した記録が 1 秒に約 50 件増え続けた (実測。記録の上限まで
+増え続け、対応づけは回復しない)。
+
+CI の runner (run 38026081292) では、音声の基準の遅れが 116.3 ms のまま 9 秒間更新されず、
+次に一致した観測で 630.8 ms、さらに 836.2 ms へ飛び、A/V の基準の共有が解除された
+(`unsharedReason` が difference、drift)。同じ観測で映像の基準の遅れは 112.6 ms のまま安定し、
+配信側の原点の傾きも 0 だった。更新されない値と、たまに一致した観測の値とが入れ替わる形は、
+この症状 (基準が凍り、飛ぶ) と一致する。
+
+手元の再現 (実リレーへ配信と購読を同じページから行い、Chromium の CPU を 4 倍に遅くする) では、
+修正前に音声の基準の遅れが 22 ms から 160 ms へ伸び続け、復号へ渡したまま出力が返っていない
+記録が 1 秒に約 50 件増え続けた。修正後は 30 秒間 20 ms 前後で動かず (3 等分した中央値で
+20.4 ms / 19.8 ms / 20.6 ms)、記録は 1 件のままになった。
+
+**根拠が薄い点**: 100 マイクロ秒は 1 つの実装 (Chromium の Opus) の実測であり、他の codec
+(AAC) や他の実装で同じ大きさになるかは測っていない。1 ms という許容は「Opus の最短フレーム
+(2.5 ms) の半分未満」という見積もりで置いた値であり、ずれの分布を測ったものではない。
+
+### 副作用とトレードオフ
+
+- 1 ms 以内のずれは同じ音とみなすため、隣り合う音の間隔が 2 ms 未満の用途では取り違え得る
+  (Opus の最短フレームは 2.5 ms であり、想定していない)
+- 引けなかった記録は、1 ms より古くなった時点で捨てる。出力が入力と対応しないまま続くと、
+  その分の位置 (relay の cache から追いつく途中かどうか) は分からなくなり、従来どおり
+  鳴らす側へ倒れる
+
+### 再考の条件
+
+- `audio.playoutTiming.arrivalPlannedFrames` が増え続ける (種類を引けていない)
+- `avSync.delays.audio.baseDelayMs` が同じ値のまま動かない (更新されていない)
+- 出力の timestamp のずれが 1 ms に近づく codec が現れる
+
+### 見る計器
+
+- `audio.playoutTiming.arrivalPlannedFrames` / `unplannedFrames`
+- `avSync.delays.audio.baseDelayMs`
+- `audio.receiveDelayMs` (受信した壁時計 - LOC TIMESTAMP。配信側の
+  `audio.catchUp.sendLagMs` と対で読み、遅れが配信側と経路にあるのか受信側にあるのかを分ける)
 
 ## 実行時の警告 (前提から外れた状態)
 

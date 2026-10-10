@@ -19,6 +19,12 @@
 - [ADD] moqt-devtools の Subscriber 統計に音声の到着の遅れを追加する
   - `audio.receiveDelayMs` / `audio.maxReceiveDelayMs` は、受信した壁時計から LOC TIMESTAMP を引いた値である。配信側の送信の遅れ (`audio.catchUp.sendLagMs`) と対で読むことで、遅れが配信側と経路にあるのか、受信側の復号と再生にあるのかを分けられる
   - @voluntas
+- [FIX] 復号の出力の timestamp が入力とわずかに違っても、音声の TIMESTAMP の種類を引けるようにする
+  - WebCodecs の `AudioDecoder` は、出力する `AudioData.timestamp` を復号へ渡した timestamp と完全には一致させない。実測 (実リレー、Opus、48 kHz) では 100 マイクロ秒だけ大きかった。完全一致で引いていたため、TIMESTAMP の種類 (壁時計かメディア時刻か) を失った音が共有の時間軸へ記録されなくなり、音声の基準の遅れが更新されなくなっていた
+  - 実測 (CI の runner、run 38026081292) では、音声の基準の遅れが 116.3 ms のまま 9 秒間更新されず、次に一致した観測で 630.8 ms、さらに 836.2 ms へ飛び、A/V の基準の共有が解除された (`unsharedReason` が difference、drift)。同じ観測で映像の基準の遅れは 112.6 ms のまま安定していた
+  - 一致する記録が無いときは、最も古い記録を 1 ms 以内のときだけ引く。Opus の最短のフレームは 2.5 ms であり、隣のフレームと取り違えない。一致が続かなかった後 (出力が欠けた、最初の出力が投入と対応しない) も引けるよう、1 ms より古くなった記録は捨てる。引く処理は `src/decodeInputTimestamps.ts` が持ち、ライブラリと moqt-devtools が共有する
+  - 手元の再現 (Chromium の CPU を 4 倍に遅くした実リレーの配信と購読) では、修正前に音声の基準の遅れが 22 ms から 160 ms へ伸び続け、復号へ渡したまま出力が返っていない記録が 1 秒に約 50 件増え続けた。修正後は 30 秒間 20 ms 前後で動かず (3 等分した中央値で 20.4 ms / 19.8 ms / 20.6 ms)、記録は 1 件のままになった
+  - @voluntas
 - [ADD] moqt-devtools に、A/V 同期と再生の判断が前提から外れた状態の警告を追加する
   - 既にある計器の値だけを組み合わせて 1 秒ごとに判定し、Subscriber の `A/V Sync` と Publisher の `Audio` の `Warnings` セクションと「Copy for LLM」の `warnings` に出す。警告になった時点と戻った時点はデバッグログに 1 件だけ残す
   - 出すのは 4 つである。`syncExtraDelayPinnedAtLimit` (合わせる量が上限の 5 ms 以内のまま 10 秒続く)、`unsharedHoldContinues` (`unsharedReason` が `hold` のまま 20 秒続く)、`timestampOffsetKeepsMoving` (TIMESTAMP の補正の傾きが 5 ms/秒以上)、`catchUpKeepsStarting` (追いつきが 60 秒に 3 回以上始まる)

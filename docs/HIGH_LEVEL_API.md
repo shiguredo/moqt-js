@@ -906,6 +906,107 @@ Web Audio (`AudioContext` とその出力) は `AudioPlayoutOutput` として注
 の時計と `performance.now()` の対応は `AudioClockBridge` が境界になり、このクラス自体は
 ブラウザ API の無い環境でも記録用の最小オブジェクトで検証できる。
 
+`timestampKind` は、復号へ渡したときに覚えた記録を復号の出力の `AudioData.timestamp` で
+引いて決める。WebCodecs の `AudioDecoder` は出力の timestamp を入力と完全には一致させない
+(実測: Opus、48 kHz、実リレーで 100 マイクロ秒だけ大きい)。完全一致で引くと、種類を失った
+音がこの組み立てへ `none` として渡り、共有の時間軸へ記録されなくなる (音声の基準の遅れが
+更新されず、A/V 同期が到着基準へ落ちる)。そのため、一致する記録が無いときは最も古い記録を
+1 ms 以内のときだけ引く。一致が続かなかった後も引けるよう、1 ms より古くなった記録は捨てる。
+引く処理そのものは `src/decodeInputTimestamps.ts` が持ち、ライブラリと devtools が共有する。
+
+```typescript
+import { AudioPlayoutSession, AudioPlayoutTimingStats, PlaybackTimeline } from "moqt-js";
+
+// 時間軸と計器は呼び出し側が持つ (時間軸は映像と共有し、計器は統計として読む)
+const timeline = new PlaybackTimeline({
+  timeOriginMs: performance.timeOrigin,
+  maxQueuedFrames: 8,
+});
+const timing = new AudioPlayoutTimingStats();
+const session = new AudioPlayoutSession({ timing });
+
+// 復号の出力ごとに呼ぶ (output は AudioContext と MediaStreamAudioDestinationNode)
+const result = session.handleDecodedAudio({
+  data: audioData,
+  timestampKind: "wallClock",
+  timeline,
+  useTimeline: true,
+  enforceTarget: true,
+  output: { context, destination },
+});
+```
+
+### オプション
+
+```typescript
+interface AudioPlayoutSessionOptions {
+  // 鳴らした音と鳴らなかった音の記録の入れ先 (計器)
+  timing: AudioPlayoutTimingStats;
+  // 鳴らした結果 (予定をどれだけ過ぎたか、並べすぎで捨てた量) を、目標遅延の閉ループへ
+  // 渡すか (default: true)。false のときも計器への記録は行う
+  audioDelayFeedback?: boolean;
+}
+```
+
+### handleDecodedAudio の依頼
+
+```typescript
+interface AudioPlayoutRequest {
+  // 復号した音。所有権は呼び出し側に残る (この中では close() しない)
+  data: AudioData;
+  // 音の TIMESTAMP の種類。wallClock のときだけ目標の時刻を決める
+  timestampKind: "none" | "wallClock" | "mediaTime";
+  // 音声と映像で共有する表示時刻の時間軸
+  timeline: PlaybackTimeline;
+  // 時間軸を使って鳴らすか (jitter buffer が有効な購読のとき)。false のときは時間軸へ
+  // 記録せず、到着基準で並べる
+  useTimeline: boolean;
+  // 目標の時刻を守るか (揃える相手がいるとき)。false のときは、鳴らす時刻を過ぎて届いた音は
+  // 基準を取り直して鳴らす
+  enforceTarget: boolean;
+  // 鳴らす先。null のときは鳴らさず、時間軸への記録も計器への記録もしない
+  output: AudioPlayoutOutput | null;
+}
+
+interface AudioPlayoutOutput {
+  context: AudioPlayoutContext; // AudioContext の実物を渡せる
+  destination: AudioNode;
+}
+```
+
+### handleDecodedAudio の結果
+
+```typescript
+type AudioPlayoutResult =
+  | { status: "played"; rebased: boolean }
+  | { status: "dropped"; rebased: boolean; reason: "backlog" }
+  | { status: "error"; rebased: boolean; error: Error }
+  | { status: "skipped" };
+```
+
+`rebased` は、この音の予約で鳴らす時刻の基準を取り直したかである (`AudioPlayoutScheduler.rebases`
+が増えたか)。`dropped` は並べすぎで捨てた音であり、計器には理由 (`backlog`) と長さを記録済みで
+ある。`error` は鳴らす準備の途中で失敗した音であり、計器には「鳴らなかった」として記録済みで
+ある (このクラスは throw せず、呼び出し側が `onError` やログへ流す)。`skipped` は鳴らす先が
+無いときである。
+
+### メソッド
+
+- `handleDecodedAudio(request)` — 復号した音を鳴らす (上の 2 節)
+- `reset()` — 予約の基準・時計の対応・直前の音を消す (`AudioContext` を作り直したとき)。
+  統計の累積 (基準を取り直した回数・捨てた音・詰めた合計・補間した合計) は消さない
+- `releaseAudioContext()` — 時計の対応と直前の音だけを消す (`AudioContext` を閉じた後始末)。
+  予約の基準は統計の `playoutLatenessMs` が読むため残す
+- `recordStopped()` — 予約した音のうち、まだ鳴っていない分を鳴らなかった音として計器へ
+  記録する (`AudioContext` を閉じる直前。既に鳴り始めている音は残りの長さだけを数える)
+
+`playout` (予約。基準を取り直した回数と捨てた音の数) と `clock` (`AudioContext` の時計と
+`performance.now()` の対応。`usingFallback` を同期の推定に使う) は読み取り用に公開している。
+
+`enforceTarget` が true でも目標の時刻を決められなかったときは到着基準になる。到着基準の遅れは、
+到着した音が「まだ鳴っていない位置」から数える (「統計情報」の説明を参照)。moqt-devtools は
+目標遅延の閉ループを使っていないため `audioDelayFeedback: false` を渡している。
+
 ---
 
 ## 映像の表示の組み立て (VideoPlayoutSession)
