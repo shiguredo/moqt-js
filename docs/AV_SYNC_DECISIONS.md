@@ -431,7 +431,7 @@ LOC の TIMESTAMP を「送るサンプルの取得時刻」にすること。`A
 - `droppedMs` が増え続ける、または `maxLagMs` が上限に対して大きすぎる
 - `floorMs` が環境の悪化に合わせて上がり、遅れが固定される (`lagMs` が `floorMs` の近くで
   動かない)
-- 受信側の `avSync.delays.audio.baseDelayMs` が配信側の `catchUp.lagMs` と一緒に増える
+- 受信側の `avSync.delays.audio.baseDelayMs` が配信側の `audio.catchUp.lagMs` と一緒に増える
 
 見直すときは、閾値より先に「なぜ符号化が実時間に追いつかないのか」(解像度、ビットレート、
 worker の使い方) を見る。追いつきは症状を消すだけで、原因は消さない。
@@ -442,7 +442,7 @@ worker の使い方) を見る。追いつきは症状を消すだけで、原�
 - `audio.catchUp.lagMs` / `floorMs` / `maxLagMs` / `readLagMs` / `pendingMs` / `pendingFrames`
 - `audio.catchUp.droppedFrames` / `droppedMs`
 - `audio.chunksEncoded` / `audio.encodeErrors`
-- `publisher.latencyBreakdown.encode` (符号化の待ち時間)
+- `publishTiming.encodeMs` (符号化の待ち時間)
 
 ## 7. 受信側の再生の組み立て
 
@@ -486,7 +486,7 @@ worker の使い方) を見る。追いつきは症状を消すだけで、原�
 - ライブラリと devtools で再生の判断 (鳴らすかどうか、いつ描くか) が再び分かれたとき
 - 共有実装の外に置いた判断が、計器に出ない形でずれを生んでいるとき
   (`audio.playoutTiming.unplannedFrames` が 0 でない、`audio.playoutTiming` の値と
-  `audio.objectsReceived` / `chunksDecoded` が合わない)
+  `audio.objectsReceived` / `audio.chunksDecoded` が合わない)
 
 ### 見る計器
 
