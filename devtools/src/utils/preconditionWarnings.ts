@@ -118,7 +118,13 @@ export const CATCH_UP_WARN_WINDOW_MS = 60_000;
  * 追いつきが 1 回始まると、キューが 1 パケット (20 ms) 以下まで減るまで捨て続ける。
  * 捨てる量は少なくとも上限を超えた分であり、上限の下限 (`AUDIO_PUBLISH_CATCH_UP_MIN_MS`
  * = 60 ms) のときで 3 パケット分にあたる。1 分に 3 回始まるなら、少なくとも 1 分に
- * 9 パケット (180 ms) の音が欠ける。音声は実時間で符号化できるという前提が崩れている
+ * 9 パケット (180 ms) の音が欠ける。音声は実時間で符号化できるという前提が崩れている。
+ *
+ * 開始は上限を超えた状態が `AUDIO_PUBLISH_CATCH_UP_CONFIRM_MS` (100 ms) 続いた後か、
+ * 符号化のキューが単独で上限を超えた状態が `AUDIO_PUBLISH_CATCH_UP_QUEUE_CONFIRM_FRAMES`
+ * (2 フレーム) 続いた後である (audioPublishCatchUp.ts)。一過性の超過 (実測: 最長 18 ms)
+ * では始まらないため、これが 1 分に 3 回来るのは、上限を超えた状態が繰り返し続いている
+ * ことを意味する
  */
 export const CATCH_UP_WARN_STARTS = 3;
 

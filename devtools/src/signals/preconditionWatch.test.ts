@@ -10,7 +10,11 @@
  */
 
 import { test, assert, beforeEach } from "vite-plus/test";
-import { AudioPublishCatchUp } from "../../../src/audioPublishCatchUp.ts";
+import {
+  AUDIO_PUBLISH_CATCH_UP_MIN_MS,
+  AUDIO_PUBLISH_CATCH_UP_QUEUE_CONFIRM_FRAMES,
+  AudioPublishCatchUp,
+} from "../../../src/audioPublishCatchUp.ts";
 import { PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS } from "../../../src/playbackTimeline.ts";
 import {
   CATCH_UP_WARN_STARTS,
@@ -25,6 +29,16 @@ import { EMPTY_AV_SYNC, addSubscriber, getSubscriber, removeSubscriber } from ".
 
 /** 音声の 1 フレームの長さ (ミリ秒)。音声は 20 ms ごとに読む */
 const AUDIO_FRAME_MS = 20;
+
+/**
+ * 1 周期で投入するフレームの数
+ *
+ * 符号化のキューが単独で上限 (`AUDIO_PUBLISH_CATCH_UP_MIN_MS`) を超えた状態を
+ * `AUDIO_PUBLISH_CATCH_UP_QUEUE_CONFIRM_FRAMES` 続けるのに要る数である。上限ちょうどの
+ * フレームは「超えた」に数えないため 1 を足す
+ */
+const CATCH_UP_FRAMES_PER_CYCLE =
+  AUDIO_PUBLISH_CATCH_UP_MIN_MS / AUDIO_FRAME_MS + AUDIO_PUBLISH_CATCH_UP_QUEUE_CONFIRM_FRAMES + 1;
 
 /** 上限に張り付いている状態の補償量 (ミリ秒) */
 const PINNED_EXTRA_MS = PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS - SYNC_PINNED_TOLERANCE_MS;
@@ -47,8 +61,9 @@ function avSyncWith(options: { sharingBases: boolean; videoExtraMs: number }) {
  * 実際の追いつきの判定を通して、追いつきを指定した回数だけ始めさせる
  *
  * 読み出しの遅れは 0 にする (補正が無い状態と同じ)。符号化の出力が返らないまま 20 ms の
- * フレームを投入し続けてキューに音声を溜め、上限を超えたところで追いつきが始まる。
- * キューがはけたところで投入を再開させる
+ * フレームを投入し続けてキューに音声を溜める。キューが単独で上限を超えた状態が
+ * `AUDIO_PUBLISH_CATCH_UP_QUEUE_CONFIRM_FRAMES` 続いたところで追いつきが始まる。キューが
+ * はけたところで投入を再開させる
  *
  * @param catchUp - 追いつきの判定
  * @param count - 始めさせる回数
@@ -60,8 +75,8 @@ function startCatchUps(catchUp: AudioPublishCatchUp, count: number): number {
   let guard = 0;
   while (catchUp.snapshot().catchUpStarts < count && guard < 1_000) {
     guard++;
-    // 入力の 1 周期分 (5 フレーム = 100 ms) を、出力が返らないまま投入する
-    for (let index = 0; index < 5; index++) {
+    // 入力の 1 周期分を、出力が返らないまま投入する
+    for (let index = 0; index < CATCH_UP_FRAMES_PER_CYCLE; index++) {
       catchUp.evaluate({
         timestampMicros,
         readWallClockMicros: 0n,

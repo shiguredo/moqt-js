@@ -42,6 +42,23 @@
  * (実測: 手元の 1 台では 11 ms、4 vCPU の runner では 30〜190 ms)。絶対値で測ると、遅い
  * 環境では健全な状態でも捨て続けることになる。
  *
+ * 始めるかどうかは、上限を超えた状態が続いたかで決める。1 フレームの観測だけで始めると、
+ * 読み出しがまとめて行われた分でも始まる。実測 (実リレー、メインスレッドを 60 ms 占有して
+ * 40 ms 明け渡す負荷を 10 秒) では、上限を超えた状態は 66 回現れ、そのうち 25 回は 1 フレーム
+ * で終わった (継続時間は p50 が 1 ms、最長が 18 ms)。負荷の間は、止まっている間に届いた
+ * フレームが止まった後にまとめて読まれるため、読み出しの遅れと符号化のキューの和が 53〜71 ms
+ * になって上限 (60 ms) をまたぐが、読み出しの遅れはその 1 フレームが遅れているだけで、次に
+ * 読むフレームは新しくなっている。この状態で始めると、遅れが減らないまま開始と再開が負荷の
+ * 周期 (100 ms) ごとに往復し、捨てた音だけが増える (実測: 開始 69 回、捨てたフレーム 113)。
+ *
+ * これに対して、符号化が実時間に追いつかなくなった場合は、キューに溜まった分がはけない限り
+ * 次のフレームも上限を超え続けるため、状態は数百 ms 以上続く。そのため、始める条件は
+ * (1) 上限を超えた状態が `AUDIO_PUBLISH_CATCH_UP_CONFIRM_MS` 続いたこと、(2) 符号化の
+ * キューが単独で上限を超えた状態が `AUDIO_PUBLISH_CATCH_UP_QUEUE_CONFIRM_FRAMES` 続いたこと、
+ * の 2 つとし、やめた後は `AUDIO_PUBLISH_CATCH_UP_COOLDOWN_MS` は始めない (詳しくは各定数の
+ * コメント)。負荷では、キューが単独で上限を超えることが無く (実測: 2600 フレーム中 0 回)、
+ * 上限の超過も数 ms で終わるため、どちらの条件も満たさない。
+ *
  * もう 1 つ、フレームを捨てるときに効く性質がある。WebCodecs の `AudioEncoder` は、出力する
  * chunk の timestamp を「投入したフレームの timestamp」ではなく「最初のフレームの
  * timestamp + 符号化したサンプル数」で作る (連続した値になる)。そのため、フレームを捨てて
@@ -98,6 +115,49 @@ export const AUDIO_PUBLISH_CATCH_UP_GROWTH_MS = 40;
  * フレームだけであり、遅れは残っていない
  */
 export const AUDIO_PUBLISH_CATCH_UP_RESUME_MS = 20;
+
+/**
+ * 追いつきを始める前に、上限を超えた状態が続くことを要求する時間 (ミリ秒)
+ *
+ * 1 フレームの観測だけで始めると、読み出しがまとめて行われた分 (メインスレッドが止まって
+ * いる間に届いたフレームを、止まった後に続けて読む) でも始まる。実測では、上限を超えた状態は
+ * 66 回現れ、そのうち 25 回は 1 フレームで終わった (継続時間の p50 は 1 ms、最長は 18 ms)。
+ * 読み出しの遅れは、そのフレーム 1 つが遅れているだけで、次に読むフレームは新しくなって
+ * いるため、1 フレームの超過を追いつきのきっかけにすると、遅れが減らないまま状態だけが
+ * 往復する (実測: 開始の間隔の p50 は 100 ms で、負荷の周期と同じ)。
+ *
+ * これに対して、符号化が実時間に追いつかなくなった場合 (このクラスが追いつくべき状態) は、
+ * キューに溜まった分がはけない限り次のフレームも上限を超え続けるため、状態は数百 ms 以上
+ * 続く。100 ms は、実測した負荷の超過 (最長 18 ms) より十分に長く、実時間に追いつかない
+ * 状態 (キューがはけるまで続く) を待たせない値である
+ */
+export const AUDIO_PUBLISH_CATCH_UP_CONFIRM_MS = 100;
+
+/**
+ * 符号化のキューが単独で上限を超えた状態が続くことを要求するフレーム数
+ *
+ * 実時間に追いつかない状態 (このクラスが追いつくべき状態) では、キューに溜まった分は
+ * はけないため、次のフレームでもキューは上限を超えたままになる。この経路はその場で
+ * 始めてよい。実測 (負荷) では、キューは上限 (60 ms) を超えることが無かった (まとめて
+ * 読まれた 6 フレーム分で 0 ms から 60 ms まで増え、次の負荷までにはけて 10 ms に戻った)
+ * ため、負荷ではこの経路から始まらない。2 フレームにするのは、1 フレームだけの超過
+ * (出力がまとめて返った直後など) で始めないためである
+ */
+export const AUDIO_PUBLISH_CATCH_UP_QUEUE_CONFIRM_FRAMES = 2;
+
+/**
+ * 追いつきをやめた後、次を始めない時間 (ミリ秒)
+ *
+ * 上限をまたぐたびに始め直すと状態が往復する。実測 (負荷の周期が 100 ms) では開始の間隔が
+ * 100 ms から 807 ms に分布した。1 秒は、その最長 (807 ms) より長く、実リレーの E2E が
+ * 回復を待つ 30 秒に対して十分に短い。
+ *
+ * このクールダウンを掛けるのは、遅れが上限を超えた状態が続いたことだけを根拠にする開始
+ * (`AUDIO_PUBLISH_CATCH_UP_CONFIRM_MS` の経路) である。符号化のキューが単独で上限を
+ * 超え続けている場合は、実時間に追いつかない状態そのものであり、待つと遅れが伸びるため
+ * 直ちに始める (`AUDIO_PUBLISH_CATCH_UP_QUEUE_CONFIRM_FRAMES` の経路)
+ */
+export const AUDIO_PUBLISH_CATCH_UP_COOLDOWN_MS = 1_000;
 
 /**
  * 出力が返らない記録を捨てるまでの時間 (ミリ秒)
@@ -243,6 +303,16 @@ export interface AudioPublishCatchUpOptions {
   readonly minMs?: number;
   /** 健全時の遅れからさらに許す遅れ (ミリ秒)。既定は `AUDIO_PUBLISH_CATCH_UP_GROWTH_MS` */
   readonly growthMs?: number;
+  /**
+   * 追いつきを始める前に、上限を超えた状態が続くことを要求する時間 (ミリ秒)。
+   * 既定は `AUDIO_PUBLISH_CATCH_UP_CONFIRM_MS`
+   */
+  readonly confirmMs?: number;
+  /**
+   * 追いつきをやめた後、次を始めない時間 (ミリ秒)。既定は
+   * `AUDIO_PUBLISH_CATCH_UP_COOLDOWN_MS`
+   */
+  readonly cooldownMs?: number;
   /** 出力が返らない記録を捨てるまでの時間 (ミリ秒) */
   readonly pendingTimeoutMs?: number;
 }
@@ -258,6 +328,8 @@ export class AudioPublishCatchUp {
   private readonly policy: AudioPublishCatchUpPolicy;
   private readonly minMs: number;
   private readonly growthMs: number;
+  private readonly confirmMs: number;
+  private readonly cooldownMs: number;
   private readonly pendingTimeoutMs: number;
 
   /** 符号化へ渡したまま出力が返っていないフレーム (timestamp の昇順) */
@@ -282,6 +354,12 @@ export class AudioPublishCatchUp {
   private lastReadLagMs = 0;
   /** 追いつきのために捨てているか */
   private catchingUp = false;
+  /** 上限を超えた状態が始まった時刻 (ミリ秒)。超えていなければ null */
+  private overLimitSinceMs: number | null = null;
+  /** 符号化のキューが単独で上限を超えた状態が続いたフレームの数 */
+  private queueOverFrames = 0;
+  /** 直近に追いつきをやめた時刻 (ミリ秒)。まだやめていなければ null */
+  private resumedAtMs: number | null = null;
   private catchUpStarts = 0;
   private droppedFrames = 0;
   private droppedMs = 0;
@@ -292,6 +370,8 @@ export class AudioPublishCatchUp {
     this.policy = options.policy ?? "drop";
     this.minMs = options.minMs ?? AUDIO_PUBLISH_CATCH_UP_MIN_MS;
     this.growthMs = options.growthMs ?? AUDIO_PUBLISH_CATCH_UP_GROWTH_MS;
+    this.confirmMs = options.confirmMs ?? AUDIO_PUBLISH_CATCH_UP_CONFIRM_MS;
+    this.cooldownMs = options.cooldownMs ?? AUDIO_PUBLISH_CATCH_UP_COOLDOWN_MS;
     this.pendingTimeoutMs = options.pendingTimeoutMs ?? AUDIO_PUBLISH_CATCH_UP_PENDING_TIMEOUT_MS;
   }
 
@@ -318,7 +398,7 @@ export class AudioPublishCatchUp {
     // 送信が終わらなかった記録も同じく捨てる
     this.prunePendingSends(input.nowMs);
 
-    if (this.shouldDrop(lagMs, readLagMs)) {
+    if (this.shouldDrop(lagMs, readLagMs, input.nowMs)) {
       this.droppedFrames++;
       this.droppedMs += durationMs;
       return false;
@@ -441,6 +521,9 @@ export class AudioPublishCatchUp {
     this.lastSendLagMs = null;
     this.maxSendLagMs = null;
     this.catchingUp = false;
+    this.overLimitSinceMs = null;
+    this.queueOverFrames = 0;
+    this.resumedAtMs = null;
     this.catchUpStarts = 0;
     this.droppedFrames = 0;
     this.droppedMs = 0;
@@ -450,7 +533,7 @@ export class AudioPublishCatchUp {
   /**
    * いま符号化せずに捨てるべきか
    *
-   * 2 つの規則を持つ。
+   * 3 つの規則を持つ。
    *
    * - 読み出しの遅れが上限を超えたフレームは、その場で捨てる。受信側の基準の遅れに
    *   そのまま出るためであり、キューに溜まっていないため状態は持ち越さない (1 フレーム
@@ -459,25 +542,61 @@ export class AudioPublishCatchUp {
    *   (`AUDIO_PUBLISH_CATCH_UP_RESUME_MS`) 以下まで減る間は捨て続ける。減る前に再開すると、
    *   キューに残った分がはけないまま次のフレームが入り、捨てるかどうかが往復して音声が
    *   送られなくなる (このファイルの先頭のコメントを参照)
+   * - 始めるのは、上限を超えた状態が続いたときだけにする。条件は 2 つある。
+   *   符号化のキューが単独で上限を超えた状態が
+   *   `AUDIO_PUBLISH_CATCH_UP_QUEUE_CONFIRM_FRAMES` 続いた場合 (実時間に追いつかない
+   *   状態であり、キューがはけるまで続く) と、遅れが上限を超えた状態が
+   *   `AUDIO_PUBLISH_CATCH_UP_CONFIRM_MS` 続いた場合である。読み出しがまとめて行われると
+   *   1 フレームだけ超過することがあり、その場で始めると遅れが減らないまま状態が往復する。
+   *   やめた後も `AUDIO_PUBLISH_CATCH_UP_COOLDOWN_MS` は始めない (詳しくは各定数のコメント)
    */
-  private shouldDrop(lagMs: number, readLagMs: number): boolean {
+  private shouldDrop(lagMs: number, readLagMs: number, nowMs: number): boolean {
     if (this.policy === "keep") {
       return false;
     }
     // 上限は、健全時の遅れ (床) からの増加と、絶対値の下限の大きい方にする
     const startMs = Math.max(this.minMs, (this.floorMs ?? 0) + this.growthMs);
+    // 上限を超えた状態がいつから続いているかを記録する (始めるかどうかは続いた時間で決める)
+    if (lagMs > startMs) {
+      this.overLimitSinceMs ??= nowMs;
+    } else {
+      this.overLimitSinceMs = null;
+    }
+    // 符号化のキューが単独で上限を超えているか (読み出しの遅れによらない、実時間に
+    // 追いつかない状態の証拠)
+    this.queueOverFrames = this.pendingMs > startMs ? this.queueOverFrames + 1 : 0;
     if (readLagMs > startMs) {
       return true;
     }
     if (this.catchingUp) {
       if (this.pendingMs <= AUDIO_PUBLISH_CATCH_UP_RESUME_MS) {
         this.catchingUp = false;
+        this.resumedAtMs = nowMs;
+        // やめた時点から数え直す (続いていた超過をそのまま次の開始の条件に使わない)
+        this.overLimitSinceMs = lagMs > startMs ? nowMs : null;
       }
-    } else if (lagMs > startMs) {
-      this.catchingUp = true;
-      this.catchUpStarts++;
+      return this.catchingUp;
     }
-    return this.catchingUp;
+    // 始めるには、上限を超えた状態が続いている必要がある
+    const queueConfirmed = this.queueOverFrames >= AUDIO_PUBLISH_CATCH_UP_QUEUE_CONFIRM_FRAMES;
+    const lagConfirmed =
+      this.overLimitSinceMs !== null && nowMs - this.overLimitSinceMs >= this.confirmMs;
+    if (!queueConfirmed && !lagConfirmed) {
+      return false;
+    }
+    // 遅れだけが超過している場合 (キューは上限を超えていない) は、やめた直後は始めない。
+    // キューが単独で上限を超え続けている場合は実時間に追いつかない状態そのものであり、
+    // 待つと遅れが伸びるため直ちに始める
+    if (
+      !queueConfirmed &&
+      this.resumedAtMs !== null &&
+      nowMs - this.resumedAtMs < this.cooldownMs
+    ) {
+      return false;
+    }
+    this.catchingUp = true;
+    this.catchUpStarts++;
+    return true;
   }
 
   /** 読み出した時点の遅れ (ミリ秒)。補正がまだ決まっていなければ 0 */

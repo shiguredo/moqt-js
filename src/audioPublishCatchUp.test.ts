@@ -229,8 +229,9 @@ test("AudioPublishCatchUp: 符号化のキューが伸びたら捨て始め、�
   assert.isAtLeast(during.catchUpStarts, 1, "追いつきを始めていない");
   assert.isAbove(during.droppedFrames, 0, "捨てた数が増えていない");
   assert.isAbove(during.droppedMs, 0, "捨てた長さが増えていない");
-  // 遅れは上限 (60 ms) の近くで止まる (実測の 910 ms のように伸び続けない)。上限を超えた
-  // ことは次のフレームを読むまで分からないため、上限 + 1 フレームまで伸びる
+  // 遅れは上限 (60 ms) の近くで止まる (実測の 910 ms のように伸び続けない)。キューが
+  // 単独で上限を超えた状態が `AUDIO_PUBLISH_CATCH_UP_QUEUE_CONFIRM_FRAMES` (2 フレーム)
+  // 続くと始め、その間にキューが伸びた分までで止まる
   assert.isAtMost(
     during.maxLagMs ?? Number.POSITIVE_INFINITY,
     AUDIO_PUBLISH_CATCH_UP_MIN_MS + FRAME_INTERVAL_MS,
@@ -290,34 +291,250 @@ test("AudioPublishCatchUp: 追いつきはキューが 1 パケット以下に�
       nowMs,
     }).timestampMicros;
 
-  // 出力が返らないまま 4 フレーム読む。上限 (60 ms) を超えるのは次のフレームを読んだ
-  // ときであり、そこまで符号化する
-  assert.isTrue(readAt(0, 1_000), "1 つ目のフレームを捨てた");
-  assert.isTrue(readAt(1, 1_020), "2 つ目のフレームを捨てた");
-  assert.isTrue(readAt(2, 1_040), "3 つ目のフレームを捨てた");
-  assert.isTrue(readAt(3, 1_060), "4 つ目のフレームを捨てた");
-  assert.isFalse(readAt(4, 1_080), "上限を超えたのに捨てていない");
+  // 出力が返らないまま読み続ける。上限 (60 ms) をキューが単独で超えた状態が
+  // `AUDIO_PUBLISH_CATCH_UP_QUEUE_CONFIRM_FRAMES` (2 フレーム) 続くと追いつきを始める
+  for (let index = 0; index < 5; index++) {
+    assert.isTrue(
+      readAt(index, 1_000 + index * FRAME_INTERVAL_MS),
+      `${index + 1} つ目のフレームを捨てた`,
+    );
+  }
+  // キューが上限を超えた 1 フレームでは始めない (単発の超過で状態を往復させない)
+  assert.strictEqual(catchUp.snapshot().catchUpStarts, 0, "キューが超えた 1 フレームで始めている");
+  assert.isFalse(
+    catchUp.snapshot().catchingUp,
+    "キューが超えた 1 フレームで追いつき中になっている",
+  );
+  assert.strictEqual(catchUp.snapshot().pendingMs, 100, "キューの長さが違う");
+  // キューが上限を超えた状態が 2 フレーム続いた時点で始める
+  assert.isFalse(readAt(5, 1_100), "キューが上限を超えたままなのに捨てていない");
   assert.isTrue(catchUp.snapshot().catchingUp, "追いつき中になっていない");
   assert.strictEqual(catchUp.snapshot().catchUpStarts, 1, "追いつきを始めた回数が 1 回でない");
 
   // キューが 1 パケット (20 ms) より多く残っている間は捨て続ける
-  outputAt(0, 1_081);
-  assert.isFalse(readAt(5, 1_100), "キューが残っているのに捨てるのをやめている");
-  outputAt(1, 1_101);
-  assert.strictEqual(catchUp.snapshot().pendingMs, 40, "キューの長さが違う");
-  assert.isFalse(readAt(6, 1_120), "1 パケットより多く残っているのに捨てるのをやめている");
+  outputAt(0, 1_101);
+  outputAt(1, 1_102);
+  assert.strictEqual(catchUp.snapshot().pendingMs, 60, "キューの長さが違う");
+  assert.isFalse(readAt(6, 1_120), "キューが残っているのに捨てるのをやめている");
   assert.isTrue(catchUp.snapshot().catchingUp, "キューが残っているのに追いつき中が解けている");
 
   // 1 パケット以下まで減ると投入を再開し、その後は捨てない
-  outputAt(2, 1_121);
-  outputAt(3, 1_122);
+  for (let index = 2; index < 5; index++) {
+    outputAt(index, 1_121 + index);
+  }
   assert.strictEqual(catchUp.snapshot().pendingMs, 0, "キューの長さが違う");
   assert.isTrue(readAt(7, 1_140), "1 パケット以下まで減ったのに捨てている");
   assert.isFalse(catchUp.snapshot().catchingUp, "減ったのに追いつき中になっている");
+
+  // やめた直後は始めない (続いていた超過をそのまま次の開始の条件に使わない)
   assert.isTrue(readAt(8, 1_160), "再開した後に捨てている");
-  outputAt(7, 1_180);
-  assert.isTrue(readAt(9, 1_180), "再開した後に捨てている");
   assert.strictEqual(catchUp.snapshot().catchUpStarts, 1, "追いつきを始め直している");
+});
+
+test("AudioPublishCatchUp: 読み出しの遅れが続いたときは、確認の時間の後で始める", () => {
+  // キューが単独で上限を超えない場合でも、遅れが上限を超えた状態が
+  // `AUDIO_PUBLISH_CATCH_UP_CONFIRM_MS` (100 ms) 続けば始める。実測 (負荷) のように
+  // まとめて読まれた数 ms の超過では始めない
+  const catchUp = new AudioPublishCatchUp();
+  /** 符号化へ渡したフレームの timestamp (キューを出す順に取り出す) */
+  const pendingTimestamps: number[] = [];
+  /** 読んだフレームの数 (timestamp を単調に増やす) */
+  let readCount = 0;
+  /** 読み出す。`readLagMs` は読み出しの遅れ (ミリ秒) */
+  const read = (readLagMs: number, nowMs: number): boolean => {
+    const timestampMicros = WALL_CLOCK_EPOCH_MICROS + readCount * FRAME_MICROS;
+    readCount++;
+    pendingTimestamps.push(timestampMicros);
+    return catchUp.evaluate({
+      timestampMicros,
+      readWallClockMicros: BigInt(timestampMicros + Math.round(readLagMs * 1_000)),
+      appliedOffsetMicros: 0n,
+      durationMicros: FRAME_MICROS,
+      nowMs,
+    });
+  };
+  /** 符号化した分の出力を返し、キューを 1 フレーム分 (20 ms) に保つ */
+  const drainEncoded = (nowMs: number): void => {
+    const timestampMicros = pendingTimestamps.shift();
+    if (timestampMicros === undefined) {
+      throw new Error("出力を返すフレームが無い");
+    }
+    catchUp.recordEncodedChunk({ timestampMicros, durationMicros: FRAME_MICROS, nowMs });
+  };
+
+  // 健全な状態で床 (0 ms) を作る
+  assert.isTrue(read(0, 1_000), "健全な状態でフレームを捨てた");
+  drainEncoded(1_001);
+  assert.isTrue(read(0, 1_020), "健全な状態でフレームを捨てた");
+  drainEncoded(1_021);
+  assert.strictEqual(catchUp.snapshot().floorMs, 0, "床が作れていない");
+
+  // 読み出しの遅れが 50 ms へ増え、キュー 20 ms との和 (70 ms) が上限 (60 ms) を超え続ける。
+  // キューは単独では上限を超えないため、この状態が
+  // `AUDIO_PUBLISH_CATCH_UP_CONFIRM_MS` (100 ms) 続くまでは始めない
+  assert.isTrue(read(50, 1_040), "上限を超えていないのに捨てている");
+  for (const nowMs of [1_060, 1_080, 1_100, 1_120, 1_140]) {
+    assert.isTrue(read(50, nowMs), `${nowMs} ms で、確認の時間の前に捨てている`);
+    drainEncoded(nowMs + 1);
+  }
+  assert.strictEqual(catchUp.snapshot().catchUpStarts, 0, "確認の時間の前に始めている");
+  assert.strictEqual(catchUp.snapshot().pendingMs, 20, "キューの長さが違う");
+  // 1_060 から 100 ms 続いた時点 (1_160) で始める
+  assert.isFalse(read(50, 1_160), "上限を超えた状態が 100 ms 続いたのに捨てていない");
+  assert.strictEqual(catchUp.snapshot().catchUpStarts, 1, "確認の時間の後に始めていない");
+});
+
+test("AudioPublishCatchUp: 読み出しがまとめて行われた分では追いつきを始めない", () => {
+  // 実測 (実リレー、メインスレッドを 60 ms 占有して 40 ms 明け渡す負荷) では、負荷の間に
+  // 届いたフレームが止まった後にまとめて読まれ、1 回の読み出しの中で読み出しの遅れが
+  // 61 ms から 3 ms へ減り、符号化のキューが 0 ms から 60 ms へ増えた。和は 53〜71 ms で
+  // 上限 (60 ms) をまたぐが、この状態は読み出しが済むまでの数 ms しか続かない (実測の
+  // 継続時間は p50 が 1 ms、最長が 18 ms)。ここで追いつきを始めると、遅れが減らないまま
+  // 開始と再開が負荷の周期 (100 ms) ごとに往復し、捨てた音だけが増える (実測: 開始 69 回、
+  // 捨てたフレーム 113)
+  const catchUp = new AudioPublishCatchUp();
+  // フレームの長さは実測と同じ 10 ms (devtools の音声) にする
+  const frameMicros = 10_000;
+  const frameMs = 10;
+  let timestampMicros = WALL_CLOCK_EPOCH_MICROS;
+  /** まとめて読まれた 1 回分。読み出しの遅れは 61 ms から 10 ms ずつ減る (実測と同じ形) */
+  const readBurst = (nowMs: number): boolean[] => {
+    const results: boolean[] = [];
+    for (let index = 0; index < 6; index++) {
+      const readLagMs = 61 - index * 10;
+      const readWallClockMicros = timestampMicros + Math.round(readLagMs * 1_000);
+      results.push(
+        catchUp.evaluate({
+          timestampMicros,
+          readWallClockMicros: BigInt(readWallClockMicros),
+          appliedOffsetMicros: 0n,
+          durationMicros: frameMicros,
+          nowMs: nowMs + index,
+        }),
+      );
+      timestampMicros += frameMicros;
+    }
+    return results;
+  };
+  /**
+   * 符号化の出力が返る (実時間と同じ速さで 1 フレームずつ)
+   *
+   * `recordEncodedChunk()` は投入の順 (FIFO) で古い方から消費するため、渡す timestamp は
+   * 消費の順に使われない (呼び出し側が観測に使う値である)
+   */
+  const drain = (nowMs: number, frames: number): void => {
+    for (let index = 0; index < frames; index++) {
+      catchUp.recordEncodedChunk({
+        timestampMicros: WALL_CLOCK_EPOCH_MICROS + index * frameMicros,
+        durationMicros: frameMicros,
+        nowMs,
+      });
+    }
+  };
+
+  // 健全な状態で床を作る (10 ms ごとに読み、出力も返る)
+  for (let index = 0; index < 10; index++) {
+    assert.isTrue(
+      catchUp.evaluate({
+        timestampMicros,
+        readWallClockMicros: BigInt(timestampMicros),
+        appliedOffsetMicros: 0n,
+        durationMicros: frameMicros,
+        nowMs: 1_000 + index * frameMs,
+      }),
+      "健全な状態でフレームを捨てた",
+    );
+    timestampMicros += frameMicros;
+    catchUp.recordEncodedChunk({
+      timestampMicros,
+      durationMicros: frameMicros,
+      nowMs: 1_000 + index * frameMs,
+    });
+  }
+
+  // 負荷の周期 (100 ms) ごとに、まとめて読まれる状態を繰り返す
+  for (let cycle = 0; cycle < 5; cycle++) {
+    const nowMs = 2_000 + cycle * 100;
+    const results = readBurst(nowMs);
+    // まとめて読まれた 1 つ目は読み出しの遅れだけで上限を超えるため、その場で捨てる
+    assert.isFalse(results[0], "読み出しの遅れが上限を超えたフレームを捨てていない");
+    drain(nowMs + 50, 6);
+  }
+  const stats = catchUp.snapshot();
+  assert.strictEqual(stats.catchUpStarts, 0, "まとめて読まれた分で追いつきを始めている");
+  assert.isFalse(stats.catchingUp, "まとめて読まれた分で追いつき中になっている");
+  assert.isAbove(stats.droppedFrames, 0, "読み出しの遅れが上限を超えたフレームを捨てていない");
+  // 遅れは上限の近くで止まる (実測の 910 ms のように伸び続けない)
+  assert.isAtMost(
+    stats.maxLagMs ?? Number.POSITIVE_INFINITY,
+    AUDIO_PUBLISH_CATCH_UP_MIN_MS + 2 * frameMs,
+    "遅れが上限を超えて伸び続けている",
+  );
+});
+
+test("AudioPublishCatchUp: 追いつきをやめた後は、上限を少し超えただけでは始めない", () => {
+  // 実測では、開始の間隔は p50 が 100 ms、最長が 807 ms であった。上限をまたぐたびに
+  // 始め直すと状態が往復する。やめた後は `AUDIO_PUBLISH_CATCH_UP_COOLDOWN_MS` (1 秒) は
+  // 遅れだけを根拠にした開始をしない。ただし符号化のキューが単独で上限を超え続けている
+  // 場合 (実時間に追いつかない状態) は、待つと遅れが伸びるため直ちに始める
+  const catchUp = new AudioPublishCatchUp({ confirmMs: 0, cooldownMs: 1_000 });
+  /** 符号化へ渡したフレームの timestamp (キューを出す順に取り出す) */
+  const pendingTimestamps: number[] = [];
+  /** 読んだフレームの数 (timestamp を単調に増やす) */
+  let readCount = 0;
+  const read = (readLagMs: number, nowMs: number): boolean => {
+    const timestampMicros = WALL_CLOCK_EPOCH_MICROS + readCount * FRAME_MICROS;
+    readCount++;
+    pendingTimestamps.push(timestampMicros);
+    return catchUp.evaluate({
+      timestampMicros,
+      readWallClockMicros: BigInt(timestampMicros + Math.round(readLagMs * 1_000)),
+      appliedOffsetMicros: 0n,
+      durationMicros: FRAME_MICROS,
+      nowMs,
+    });
+  };
+  /** 出力が返る。`count` を省くと、キューにある分を全部返す */
+  const drain = (nowMs: number, count?: number): void => {
+    const targets =
+      count === undefined ? pendingTimestamps.splice(0) : pendingTimestamps.splice(0, count);
+    for (const timestampMicros of targets) {
+      catchUp.recordEncodedChunk({ timestampMicros, durationMicros: FRAME_MICROS, nowMs });
+    }
+  };
+
+  // キューに溜めて遅れを上限 (60 ms) の上へ出し、追いつきを始める
+  read(0, 1_000);
+  read(0, 1_020);
+  read(0, 1_040);
+  read(0, 1_060);
+  assert.isFalse(read(0, 1_080), "上限を超えたのに捨てていない");
+  assert.strictEqual(catchUp.snapshot().catchUpStarts, 1, "追いつきを始めていない");
+
+  // キューがはけて投入を再開する (クールダウンはここから始まる)
+  drain(1_081);
+  assert.strictEqual(catchUp.snapshot().pendingMs, 0, "キューの長さが違う");
+  assert.isTrue(read(0, 1_100), "1 パケット以下まで減ったのに捨てている");
+  assert.isFalse(catchUp.snapshot().catchingUp, "減ったのに追いつき中になっている");
+
+  // 上限を 5 ms だけ超える状態 (読み出しの遅れ 45 ms + キュー 20 ms) が続いても、
+  // クールダウンの中では始めない。1 フレーム符号化するごとに 1 フレーム出力が返るため、
+  // キューは 20 ms のままで、遅れは上限の近くに留まる
+  for (const nowMs of [1_140, 1_180, 1_220, 1_260]) {
+    assert.isTrue(read(45, nowMs), "上限を超えた状態が続いているのに捨てている");
+    drain(nowMs + 1, 1);
+  }
+  assert.strictEqual(catchUp.snapshot().catchUpStarts, 1, "クールダウン中に始めている");
+
+  // キューが単独で上限を超え続ける場合 (実時間に追いつかない状態) は、クールダウン中でも
+  // 始める。読み出しの遅れは 0 であり、上限を超えるのはキューの分だけである
+  read(0, 1_300);
+  read(0, 1_340);
+  read(0, 1_380);
+  assert.isTrue(read(0, 1_420), "キューが上限を超えた 1 フレームで捨てている");
+  assert.strictEqual(catchUp.snapshot().catchUpStarts, 1, "キューが超えた 1 フレームで始めている");
+  assert.isFalse(read(0, 1_460), "キューが上限を超えたままなのに捨てていない");
+  assert.strictEqual(catchUp.snapshot().catchUpStarts, 2, "キューが超えても始めていない");
 });
 
 test("AudioPublishCatchUp: 読み出しの遅れでも捨てる", () => {
@@ -499,8 +716,9 @@ test("AudioPublishCatchUp: 出力が返らないままの記録は、一定の�
 
 test("AudioPublishCatchUp: フレームの長さが分からなくても、直前の長さで捨てた量を数える", () => {
   // `AudioData.duration` は null になりうる。長さが分からないときは直前のフレームと同じ
-  // 長さとみなす (捨てた長さの集計が 0 のままにならないようにする)
-  const catchUp = new AudioPublishCatchUp({ minMs: 0, growthMs: 0 });
+  // 長さとみなす (捨てた長さの集計が 0 のままにならないようにする)。ここでは長さの集計だけを
+  // 見るため、追いつきの確認の時間は 0 にする (確認そのものは別のテストで固定する)
+  const catchUp = new AudioPublishCatchUp({ minMs: 0, growthMs: 0, confirmMs: 0 });
   const readWallClockMicros = WALL_CLOCK_EPOCH_MICROS;
   assert.isTrue(
     catchUp.evaluate({
