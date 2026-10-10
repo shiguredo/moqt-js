@@ -22,6 +22,10 @@ import { RELAY_TEST_TIMEOUT_MS, requireRelayUri } from "./support";
  *    最小と最大の幅が広がらない (送る TIMESTAMP が壁時計からずれていかないことの直接の検証)
  * 5. 音声と映像の基準の差が妥当な範囲に収まり、増え続けない
  *
+ * 観測を始める前に待つのは「受信側が音声と映像の基準の遅れを観測でき、その値が動かなく
+ * なること」だけである。追いつきの終了、基準の共有の成立、基準の遅れの大きさは runner の
+ * 処理能力で決まるため待たない (待つと、遅い runner で原理的に成立しなくなる)。
+ *
  * 偽のマイク (Chromium の fake device) を使い、受信側の音声の再生を有効にする
  * (再生しないと復号の出力が再生の時間軸へ記録されず、基準が出ない)。
  */
@@ -61,12 +65,12 @@ const OBSERVE_SECONDS = 25;
 const SAMPLE_INTERVAL_MS = 1_000;
 
 /**
- * 受信側が基準の遅れを観測し、共有を始め、relay の cache からの追いつきを終えるまで
- * 待つ上限 (ミリ秒)
+ * 受信側が音声と映像の基準の遅れを観測し、その値が動かなくなるまで待つ上限 (ミリ秒)
  *
- * 待つのは「受信側が実際に観測できるようになったか」である。配信側の補正が落ち着いた
- * ことを条件にすると、補正の落ち着き方 (符号化が実時間に追いつけるか) がそのまま条件に
- * なり、遅い runner で原理的に成立しなくなる
+ * 待つのは「受信側が実際に観測できるようになったか」だけである。追いつきの終了、基準の
+ * 共有の成立、基準の遅れの大きさは、いずれも runner の処理能力で決まるため待ちに含めない
+ * (遅い runner で原理的に成立しない条件を待つと、実装が正しくてもタイムアウトする)。
+ * これらは観測の間の不変条件として本体で見る
  */
 const READY_TIMEOUT_MS = 90_000;
 
@@ -79,18 +83,21 @@ const READY_TIMEOUT_MS = 90_000;
 const READINESS_REPORT_SAMPLES = 30;
 
 /**
- * 観測を始める前に、音声の基準の遅れが動かないでいることを確かめる時間 (ミリ秒)
+ * 観測を始める前に、基準の遅れが動かないでいることを確かめる時間 (ミリ秒)
  *
  * 追いつきの途中や、処理能力が足りずに段差が出た直後から観測を始めると、その段差を
  * 「観測の間の動き」として数えてしまう。受信側の値そのものを見て、動かなくなってから
- * 始める (配信側の補正の落ち着きを見ると、遅い runner では成立しない)
+ * 始める (追いつきの終了や配信側の補正の落ち着きを見ると、遅い runner では成立しない)
  */
 const READY_SETTLED_MS = 3_000;
 
 /**
- * 定常とみなす、1 秒ごとの音声の基準の遅れの動き (ミリ秒)
+ * 定常とみなす、`READY_SETTLED_MS` の間に許す動き (ミリ秒)
  *
- * 定常状態の観測は 1 ms 以内で動く (実測)。段差 (実測で 66 ms) はこれを超える
+ * 1 つの値を、定常とみなす区間の始まりに観測した値と比べる。この値を超えて動いたら、
+ * その時点から区間をやり直す。定常状態の観測はこの値の 1 桁下で動く (実測: CI の runner で
+ * 直近 30 秒の観測のうち、音声の基準の遅れが 0.0 ms、映像が 1.3 ms、基準の差が 1.3 ms
+ * しか動かなかった)。段差 (実測で 66 ms) はこれを超える
  */
 const READY_SETTLE_TOLERANCE_MS = 20;
 
@@ -228,6 +235,8 @@ interface SubscriberObservation {
   unsharedReason: string;
   /** 復号した音声 Chunk の数 */
   chunksDecoded: number;
+  /** 受信した音声を音声出力デバイスで再生するか (これが偽の間は基準が記録されない) */
+  playbackEnabled: boolean;
   /** 鳴らす基準を取り直した回数 */
   playoutRebases: number;
   /** 遅れが上限を超えて捨てた音の数 */
@@ -291,6 +300,7 @@ const EMPTY_SUBSCRIBER_OBSERVATION: SubscriberObservation = {
   sharingBases: false,
   unsharedReason: "unsubscribed",
   chunksDecoded: 0,
+  playbackEnabled: false,
   playoutRebases: 0,
   playoutDrops: 0,
   missedFrames: 0,
@@ -335,6 +345,7 @@ async function readObservation(page: Page): Promise<RelayObservation> {
               sharingBases: delays.sharingBases,
               unsharedReason: delays.unsharedReason,
               chunksDecoded: subscriber.audio.chunksDecoded,
+              playbackEnabled: subscriber.audio.playbackEnabled,
               playoutRebases: subscriber.audio.playoutRebases,
               playoutDrops: subscriber.audio.playoutDrops,
               missedFrames: subscriber.audio.playoutTiming.missedFrames,
@@ -349,59 +360,83 @@ function subscriberOf(observation: RelayObservation): SubscriberObservation {
   return observation.subscriber ?? EMPTY_SUBSCRIBER_OBSERVATION;
 }
 
-/** 観測を始められる状態になったかと、待つ間に見た観測 */
-interface ReadinessWait {
+/** 待つ対象の値 (音声と映像の基準の遅れ)。どちらかをまだ観測できていなければ null */
+interface BaseDelayValues {
+  audioMs: number;
+  videoMs: number;
+}
+
+/**
+ * 待つ対象の値を観測から取り出す
+ *
+ * 基準の遅れが観測できていることだけを求める。共有の有無、追いつきの途中かどうか、
+ * 値の大きさは見ない (どれも runner の処理能力で決まる)
+ */
+function baseDelayValuesOf(observation: RelayObservation): BaseDelayValues | null {
+  const subscriber = observation.subscriber;
+  if (
+    subscriber === null ||
+    subscriber.baseDelayMs === null ||
+    subscriber.videoBaseDelayMs === null
+  ) {
+    return null;
+  }
+  return { audioMs: subscriber.baseDelayMs, videoMs: subscriber.videoBaseDelayMs };
+}
+
+/** 基準の遅れが動かないでいるのを待てたかと、待つ間に見た観測 */
+interface SettleWait {
   ready: boolean;
   /** 待つ間に見た観測 (待てなかったときの切り分けに使う) */
   observations: RelayObservation[];
 }
 
 /**
- * 観測を始められる状態になるまで待つ
+ * 音声と映像の基準の遅れが動かなくなるまで待つ
  *
- * 待つのは「受信側が基準を観測し、映像と共有し、relay の cache からの追いつきを終え、
- * 基準の遅れが動かなくなったか」である。配信側の補正が落ち着いたことを条件にすると、
- * 補正の落ち着き方 (符号化が実時間に追いつけるか) がそのまま条件になり、遅い runner で
- * 原理的に成立しなくなる。
+ * 待つのは「受信側が音声と映像の基準の遅れを観測でき、その値が `READY_SETTLED_MS` の間
+ * `READY_SETTLE_TOLERANCE_MS` を超えて動かないか」だけである。次に挙げるものは待たない。
  *
- * `expect.poll` ではなく自前のループにするのは、待てなかったときに観測値の推移を
- * メッセージへ出して「環境が遅いのか実装が壊れているのか」を切り分けられるようにするためである
+ * - 追いつきの終了 (`catchUpPending`): relay の cache の境界を越えた Object を復号できた
+ *   かに依存し、遅い runner では境界に届かないままになり得る
+ * - 基準の共有 (`sharingBases` / `unsharedReason`): 受信側の経路が一瞬つまずくと解除され、
+ *   実装は解除をしばらく保持するため、同じく runner の処理能力で決まる (実測: CI の runner で
+ *   `drift` のまま 90 秒間戻らなかった)
+ * - 基準の遅れの大きさ: 経路の遅れと処理能力で決まる
+ *
+ * これらは実装が保証すべきことであるため、待ち条件ではなく観測の間の不変条件として
+ * 本体で見る。待つのは値が動かないことだけであり、runner が遅くても値が動かなければ
+ * 待ちは成立する。
+ *
+ * `expect.poll` ではなく自前のループにするのは、待てなかったときに「何を待っていて、
+ * 何が動いていたか」を観測値の推移とあわせてメッセージへ出し、環境が遅いのか実装が
+ * 壊れているのかを切り分けられるようにするためである
  *
  * @returns 待てたかどうかと、待つ間に見た観測
  */
-async function waitForSharedAudioBase(page: Page): Promise<ReadinessWait> {
+async function waitForSettledBaseDelays(page: Page): Promise<SettleWait> {
   const observations: RelayObservation[] = [];
-  let previousBaseDelayMs: number | null = null;
+  // 定常とみなす区間の始まりに観測した値。ここから `READY_SETTLE_TOLERANCE_MS` を超えて
+  // 動いたら、その時点を新しい区間の始まりにする (動き続けている間は区間が伸びない)
+  let settledValues: BaseDelayValues | null = null;
   let settledSinceMs = 0;
   const deadlineMs = performance.now() + READY_TIMEOUT_MS;
   while (performance.now() < deadlineMs) {
     const observation = await readObservation(page);
     observations.push(observation);
-    const subscriber = observation.subscriber;
-    const baseDelayMs = subscriber === null ? null : subscriber.baseDelayMs;
-    const ready =
-      subscriber !== null &&
-      baseDelayMs !== null &&
-      subscriber.videoBaseDelayMs !== null &&
-      subscriber.sharingBases &&
-      subscriber.unsharedReason === "none" &&
-      !subscriber.catchUpPending;
-    if (!ready) {
-      previousBaseDelayMs = null;
-      await page.waitForTimeout(SAMPLE_INTERVAL_MS);
-      continue;
-    }
+    const values = baseDelayValuesOf(observation);
     const nowMs = performance.now();
     if (
-      previousBaseDelayMs === null ||
-      Math.abs(baseDelayMs - previousBaseDelayMs) > READY_SETTLE_TOLERANCE_MS
+      values === null ||
+      settledValues === null ||
+      Math.abs(values.audioMs - settledValues.audioMs) > READY_SETTLE_TOLERANCE_MS ||
+      Math.abs(values.videoMs - settledValues.videoMs) > READY_SETTLE_TOLERANCE_MS
     ) {
-      previousBaseDelayMs = baseDelayMs;
+      settledValues = values;
       settledSinceMs = nowMs;
       await page.waitForTimeout(SAMPLE_INTERVAL_MS);
       continue;
     }
-    previousBaseDelayMs = baseDelayMs;
     if (nowMs - settledSinceMs >= READY_SETTLED_MS) {
       return { ready: true, observations };
     }
@@ -481,6 +516,9 @@ function formatObservationReport(
       observations.map((observation) => subscriberOf(observation).chunksDecoded),
       0,
     )}`,
+    // 音声の再生が有効でないと、復号しても基準が時間軸へ記録されない (基準がいつまでも
+    // 出ない原因の切り分けに要る)
+    `  音声の再生を有効にできたか (playbackEnabled): ${observations.map((observation) => subscriberOf(observation).playbackEnabled).join(", ")}`,
     `  基準の取り直し / 鳴らなかった音 / 捨てた音: ${formatSeries(
       observations.map((observation) => subscriberOf(observation).playoutRebases),
       0,
@@ -492,6 +530,8 @@ function formatObservationReport(
       0,
     )}`,
     `  基準の共有 (unsharedReason): ${observations.map((observation) => subscriberOf(observation).sharingBases).join(", ")} (${observations.map((observation) => subscriberOf(observation).unsharedReason).join(", ")})`,
+    // 追いつきの終了は待ち条件ではなくなったが、共有が戻らない理由の切り分けに要る
+    `  追いつき中 (catchUpPending): ${observations.map((observation) => subscriberOf(observation).catchUpPending).join(", ")}`,
     formatThirds("  この環境での音声の基準の遅れの定常値", baseDelays),
   ];
   if (videoBaseDelays.length > 0) {
@@ -499,6 +539,41 @@ function formatObservationReport(
   }
   if (baseDifferences.length > 0) {
     lines.push(formatThirds("  この環境での基準の差の定常値", baseDifferences));
+  }
+  return lines.join("\n");
+}
+
+/**
+ * 待てなかったときに、何を待っていて、どの値が動いていたのかをまとめる
+ *
+ * 待つ条件は「音声と映像の基準の遅れが `READY_SETTLED_MS` の間 `READY_SETTLE_TOLERANCE_MS`
+ * を超えて動かないこと」だけである。直近の観測から、待っていた値ごとに動いた幅を出し、
+ * どちらが動き続けたのかをログだけで読めるようにする (待ちの条件そのものは、動かなかった
+ * 場合には現れないため、失敗したメッセージに残す)
+ */
+function formatSettleReport(observations: readonly RelayObservation[]): string {
+  // 1 秒ごとの観測であるため、直近 `READY_SETTLED_MS` に当たる回数を取る
+  const samples = Math.ceil(READY_SETTLED_MS / SAMPLE_INTERVAL_MS) + 1;
+  const recent = observations.slice(-samples);
+  const lines = [
+    `  待っていたこと: 音声と映像の基準の遅れが ${READY_SETTLED_MS / 1_000} 秒の間 ${READY_SETTLE_TOLERANCE_MS} ms を超えて動かないこと (直近 ${recent.length} 回の観測で見る)`,
+  ];
+  const targets: [string, (observation: RelayObservation) => number | null][] = [
+    ["音声の基準の遅れ", (observation) => subscriberOf(observation).baseDelayMs],
+    ["映像の基準の遅れ", (observation) => subscriberOf(observation).videoBaseDelayMs],
+  ];
+  for (const [label, valueOf] of targets) {
+    const values = recent
+      .map((observation) => valueOf(observation))
+      .filter((value): value is number => value !== null);
+    if (values.length === 0) {
+      lines.push(`  ${label}: 待つ間に 1 回も観測できなかった`);
+      continue;
+    }
+    const movementMs = Math.max(...values) - Math.min(...values);
+    lines.push(
+      `  ${label}: 動いた幅 ${movementMs.toFixed(1)} ms (許す上限 ${READY_SETTLE_TOLERANCE_MS} ms、直近の値 ${(values[values.length - 1] ?? Number.NaN).toFixed(1)} ms、観測できた回数 ${values.length}/${recent.length})`,
+    );
   }
   return lines.join("\n");
 }
@@ -573,13 +648,14 @@ test("実リレー経由で同じブラウザから音声を配信し、送る T
     )
     .toBeGreaterThan(0);
 
-  // 受信側が基準を観測して共有を始め、relay の cache からの追いつきを終え、基準の遅れが
-  // 動かなくなるまで待つ。購読の直後は、relay の cache から届いた分と購読を始めるまでに
-  // たまった分をまとめて復号しており、基準の遅れは過渡である
-  const readiness = await waitForSharedAudioBase(page);
+  // 受信側が音声と映像の基準の遅れを観測でき、その値が動かなくなるまで待つ。待つのは安定だけ
+  // であり、追いつきの終了や基準の共有の成立は待たない (どちらも runner の処理能力で決まる。
+  // 実装が保証すべきことは、観測の間の不変条件として本体で見る)。購読の直後は、relay の
+  // cache から届いた分と購読を始めるまでにたまった分をまとめて復号しており、値は過渡である
+  const settled = await waitForSettledBaseDelays(page);
   expect(
-    readiness.ready,
-    `受信側が音声と映像の基準を共有して追いつきを終えるのを待つ (${READY_TIMEOUT_MS} ms)\n${formatObservationReport(readiness.observations.slice(-READINESS_REPORT_SAMPLES), subscriberOf)}`,
+    settled.ready,
+    `受信側の音声と映像の基準の遅れが ${READY_SETTLED_MS / 1_000} 秒の間 ${READY_SETTLE_TOLERANCE_MS} ms を超えて動かないのを待つ (${READY_TIMEOUT_MS} ms)\n${formatSettleReport(settled.observations)}\n${formatObservationReport(settled.observations.slice(-READINESS_REPORT_SAMPLES), subscriberOf)}`,
   ).toBe(true);
 
   // 受信側の音声の基準の遅れと、配信側の TIMESTAMP の原点を観測する
