@@ -12,15 +12,20 @@
  * これは「音声の時計と壁時計のずれ」と「撮ってから読むまでの遅れ (0 以上)」の和である。
  * 遅れの最小値を窓で取り直すことで、ずれに最小の遅れを足した値を推定する。
  *
- * 窓の最小値は 2 つの動きに追従する。
+ * 窓の最小値は 3 つの動きに追従する。
  *
- * - ゆっくりしたドリフト: 窓が滑るにつれて最小値が動く
+ * - ゆっくりしたドリフト: 窓が滑るにつれて最小値が動く。上がり方の速さが
+ *   `AUDIO_TIMESTAMP_OFFSET_MAX_CLOCK_RISE_MS_PER_SECOND` の中にあるため、そのまま採用する
  * - 段差: 直近の窓の最小値が適用中の値より `AUDIO_TIMESTAMP_OFFSET_STEP_MICROS` 以上
  *   大きくなったら、古い観測を捨ててその値へ取り直す。段差は音声の時計そのものが飛んだ
  *   のであり、遅れが増えたのではない。取り直しを入れるのは、窓が埋まるまで TIMESTAMP が
- *   実際より古いままになり、受信側の再生の目標が過去へずれて音が捨てられるためである。
+ *   実際より古いままになり、受信側の再生の目標が過去へずれて音が捨てられるためである
+ * - 読み出しの遅れの増加: 遅れが一瞬増えると、窓がその遅れで入れ替わって最小値が上がる。
+ *   これは時計のずれではなく、そのまま採用すると送る TIMESTAMP が遅れの分だけ動く
+ *   (実測では 95 ms)。受信側はこれを時計のずれとみなして基準の共有を 30 秒解除するため、
+ *   遅れが `AUDIO_TIMESTAMP_OFFSET_RISE_HOLD_MS` 続くまで採用しない
  *
- * この 2 つの規則でも、補正の値は「観測した最大値と最小値の差」の範囲でしか動かない。
+ * この 3 つの規則でも、補正の値は「観測した最大値と最小値の差」の範囲でしか動かない。
  * 段差やドリフトの量そのものは `snapshot()` が返す生の観測の統計 (現在値・最小・最大・
  * 傾き) で確かめる。
  *
@@ -57,6 +62,33 @@ export const AUDIO_TIMESTAMP_OFFSET_STEP_WINDOW_MS = 500;
  */
 export const AUDIO_TIMESTAMP_OFFSET_STEP_MIN_SAMPLES = 5;
 
+/**
+ * 補正の上昇が「時計のずれ」として速すぎるかどうかを見る間隔 (ミリ秒)
+ *
+ * この間隔だけ離れた 2 つの窓の最小値を比べる。短くするほど、読み出しの遅れの揺らぎで
+ * 差が動きやすくなる。音声は 20 ms ごとに読むため、0.5 秒の間隔には約 25 個の観測が入る
+ */
+export const AUDIO_TIMESTAMP_OFFSET_RISE_CHECK_MS = 500;
+
+/**
+ * 時計のずれとして追従する、補正の上昇の速さの上限 (ミリ秒 / 秒)
+ *
+ * 実測したドリフトの速さは 20〜50 ms/秒 (0754) である。その 2 倍を上限にする。これを
+ * 超える上昇は、読み出した壁時計と `AudioData.timestamp` の間で読み出しの遅れが増えた
+ * のであり、音声の時計が動いたのではないとみなす
+ */
+export const AUDIO_TIMESTAMP_OFFSET_MAX_CLOCK_RISE_MS_PER_SECOND = 100;
+
+/**
+ * 速すぎる上昇を採用する前に、その水準が続くのを待つ時間 (ミリ秒)
+ *
+ * 読み出しの遅れが一瞬増えて戻る場合、遅れが戻れば窓の最小値も戻るため、この時間の間に
+ * 採用を見送れば送る TIMESTAMP は動かない。遅れが戻らず定着した場合 (機械が遅くなった、
+ * 読み出しの経路が変わったなど) だけ、その水準を採用する。待つ時間は、2 秒の窓が遅れで
+ * 入れ替わるまでの分 (2 秒) と合わせて、読み出しの遅れが 7 秒未満なら動かない長さにする
+ */
+export const AUDIO_TIMESTAMP_OFFSET_RISE_HOLD_MS = 5_000;
+
 /** 傾きを求める短い窓 (ミリ秒) */
 export const AUDIO_TIMESTAMP_SLOPE_WINDOW_MS = 10_000;
 
@@ -92,6 +124,8 @@ export class AudioTimestampClock {
   private head = 0;
   // TIMESTAMP に足している補正 (マイクロ秒)。まだ観測が無ければ null
   private appliedOffsetMicros: number | null = null;
+  // 時計のずれにしては速い上昇を採用せずに待ち始めた時刻 (マイクロ秒)。待っていなければ null
+  private riseHoldSinceMicros: number | null = null;
   // 観測した最小値と最大値 (マイクロ秒)。補正の取り直しでは消さない
   private minOffsetMicros: number | null = null;
   private maxOffsetMicros: number | null = null;
@@ -176,6 +210,7 @@ export class AudioTimestampClock {
     this.observations = [];
     this.head = 0;
     this.appliedOffsetMicros = null;
+    this.riseHoldSinceMicros = null;
     this.minOffsetMicros = null;
     this.maxOffsetMicros = null;
     this.sampleCount = 0;
@@ -187,7 +222,13 @@ export class AudioTimestampClock {
    * 窓の最小値へ合わせるのは、ゆっくりしたドリフトでも補正が止まらないようにするためである
    * (窓が滑るにつれて最小値が動く)。段差 (時計そのものが飛んだ) のときだけ、2 秒の窓が
    * 埋まるのを待たずに直近の窓から取り直す。待つと、その間だけ TIMESTAMP が実際より古く
-   * なり、受信側の再生の目標が過去へずれて音が捨てられる
+   * なり、受信側の再生の目標が過去へずれて音が捨てられる。
+   *
+   * 上がる方向にはもう 1 つ条件を置く。読み出しが一瞬遅れただけでも、その遅れで窓が
+   * 入れ替わると最小値が上がり、送る TIMESTAMP が遅れの分だけ動く。受信側はこれを時計の
+   * ずれとみなして基準の共有を 30 秒解除するため、時計のずれにしては速い上昇は、その水準が
+   * `AUDIO_TIMESTAMP_OFFSET_RISE_HOLD_MS` 続くまで採用しない。下がる方向 (より早く読めた)
+   * は今までどおり即座に合わせる
    */
   private updateAppliedOffset(readMicros: number): void {
     const window = this.offsetWindow(readMicros, AUDIO_TIMESTAMP_OFFSET_WINDOW_MS);
@@ -205,16 +246,62 @@ export class AudioTimestampClock {
         recent.minMicros - appliedMicros >= AUDIO_TIMESTAMP_OFFSET_STEP_MICROS
       ) {
         this.appliedOffsetMicros = recent.minMicros;
+        this.riseHoldSinceMicros = null;
         // 古い観測を捨てる。残すと次の記録でまた古い床へ戻ってしまう
         this.prune(readMicros - AUDIO_TIMESTAMP_OFFSET_STEP_WINDOW_MS * 1_000);
         return;
       }
     }
 
-    // 床へ合わせる。下がる方向 (より早く読めた) も上がる方向 (ドリフト) も同じ規則である。
-    // 補正が実際より大きくなる (TIMESTAMP が実際より新しくなる) と、受信側の再生の目標が
-    // 過去になって音が捨てられるため、常に観測した床を超えない値にする
+    if (appliedMicros !== null && window.minMicros > appliedMicros) {
+      // 上がる方向。待っている最中は、その水準が続く限り採用しない。待ち始めの判断を
+      // 毎回やり直すと、窓が遅れで入れ替わった後は「2 つの窓の最小値の差」が 0 になり、
+      // 待つのをやめてしまう (遅れの分だけ観測の壁時計も後ろへずれるため、比べる窓から
+      // 古い観測が外れる)
+      const heldSinceMicros = this.riseHoldSinceMicros;
+      if (heldSinceMicros !== null) {
+        if (readMicros - heldSinceMicros < AUDIO_TIMESTAMP_OFFSET_RISE_HOLD_MS * 1_000) {
+          return;
+        }
+      } else if (this.riseIsTooFastForClock(readMicros, window.minMicros)) {
+        // 時計のずれにしては速い。読み出しの遅れが増えたとみなして待ち始める
+        this.riseHoldSinceMicros = readMicros;
+        return;
+      }
+    }
+
+    // 床へ合わせる。下がる方向 (より早く読めた) も、速くない上昇 (ドリフト) も同じ規則で
+    // ある。補正が実際より大きくなる (TIMESTAMP が実際より新しくなる) と、受信側の再生の
+    // 目標が過去になって音が捨てられるため、常に観測した床を超えない値にする
+    this.riseHoldSinceMicros = null;
     this.appliedOffsetMicros = window.minMicros;
+  }
+
+  /**
+   * 窓の最小値の上昇が、時計のずれとして考えられる速さを超えているか
+   *
+   * 「直近の窓の最小値」と「`AUDIO_TIMESTAMP_OFFSET_RISE_CHECK_MS` 前の窓の最小値」を
+   * 比べる。どちらも同じ長さの窓の最小値であるため、読み出しの遅れの揺らぎは両方に同じ
+   * ように乗り、差には残らない。ゆっくりしたドリフトでは差が「ドリフトの速さ × 間隔」
+   * になるのに対し、読み出しの遅れが増えたときは、窓が入れ替わる時に遅れの増加分がそのまま
+   * 差になる。観測がまだ無い間隔 (起動直後や、読み出しが止まっていた後) は判断しない
+   *
+   * @param readMicros - 読み出したときの壁時計 (Unix epoch マイクロ秒)
+   * @param windowMinMicros - 直近の窓の最小値 (マイクロ秒)
+   */
+  private riseIsTooFastForClock(readMicros: number, windowMinMicros: number): boolean {
+    const previous = this.offsetWindowBetween(
+      readMicros -
+        (AUDIO_TIMESTAMP_OFFSET_WINDOW_MS + AUDIO_TIMESTAMP_OFFSET_RISE_CHECK_MS) * 1_000,
+      readMicros - AUDIO_TIMESTAMP_OFFSET_RISE_CHECK_MS * 1_000,
+    );
+    if (previous === null) {
+      return false;
+    }
+    // 速さ (ミリ秒 / 秒) × 間隔 (ミリ秒) が、その間隔で許す上昇 (マイクロ秒) になる
+    const allowedMicros =
+      AUDIO_TIMESTAMP_OFFSET_MAX_CLOCK_RISE_MS_PER_SECOND * AUDIO_TIMESTAMP_OFFSET_RISE_CHECK_MS;
+    return windowMinMicros - previous.minMicros > allowedMicros;
   }
 
   /** 直近の窓の最小値と観測の数 */

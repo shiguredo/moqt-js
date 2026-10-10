@@ -3,7 +3,8 @@
  *
  * マイクや Web Audio の `AudioData.timestamp` は壁時計と同じ時計ではない。
  * 刻み (サンプルの間隔) はそのままに、原点だけを「読み出した壁時計 - timestamp」の窓の
- * 最小値へ合わせる。一定のずれ・ドリフト・段差のそれぞれで、補正の動きを固定する。
+ * 最小値へ合わせる。一定のずれ・ドリフト・段差・読み出しの遅れのそれぞれで、補正の動きを
+ * 固定する。
  */
 
 import { test, assert } from "vite-plus/test";
@@ -166,6 +167,58 @@ test("apply: 読み出しの遅れのぶれでは補正を取り直さない", (
     recordSteadyFrame(clock, index);
   }
   assert.equal(appliedOffsetMicros(clock), CLOCK_LAG_MICROS + MIN_READ_DELAY_MICROS);
+});
+
+// 一過性の遅れ: 読み出しが 95 ms 遅れた状態が 3 秒続いて戻っても、補正 (送る TIMESTAMP) を
+// 動かさない。遅れが 2 秒の窓より長く続くと、窓が遅れで入れ替わって最小値が上がる。それを
+// そのまま採用すると送る TIMESTAMP が 95 ms 動き、受信側は時計のずれとみなして基準の共有を
+// 30 秒解除する (CI の実リレーテストで起きた)
+test("apply: 一過性の読み出しの遅れでは補正を動かさない", () => {
+  const clock = new AudioTimestampClock();
+  for (let index = 0; index < 100; index++) {
+    recordSteadyFrame(clock, index);
+  }
+  assert.equal(appliedOffsetMicros(clock), CLOCK_LAG_MICROS + MIN_READ_DELAY_MICROS);
+
+  // 95 ms 遅れて読めたフレームが 3 秒続く (窓の 2 秒より長い)
+  for (let index = 100; index < 250; index++) {
+    recordSteadyFrame(clock, index, MIN_READ_DELAY_MICROS + 95_000);
+  }
+  assert.equal(
+    appliedOffsetMicros(clock),
+    CLOCK_LAG_MICROS + MIN_READ_DELAY_MICROS,
+    "窓が遅れで入れ替わっても補正を動かさないこと",
+  );
+
+  // 遅れが戻った後も動かない
+  for (let index = 250; index < 350; index++) {
+    recordSteadyFrame(clock, index);
+  }
+  assert.equal(appliedOffsetMicros(clock), CLOCK_LAG_MICROS + MIN_READ_DELAY_MICROS);
+  // 送る TIMESTAMP は「撮った時刻 + 最小の遅れ」のままである
+  assert.equal(
+    clock.apply(300 * FRAME_MICROS),
+    BigInt(EPOCH_MICROS + 300 * FRAME_MICROS + CLOCK_LAG_MICROS + MIN_READ_DELAY_MICROS),
+  );
+});
+
+// 読み出しの遅れが定着した場合 (機械が遅くなった、読み出しの経路が変わった) は、待った後で
+// その水準へ合わせる。合わせないと、送る TIMESTAMP が実際より古いままになり、受信側の
+// 基準の遅れがその分だけ伸びる (0754 の症状)
+test("apply: 読み出しの遅れが定着したら補正を合わせる", () => {
+  const clock = new AudioTimestampClock();
+  for (let index = 0; index < 100; index++) {
+    recordSteadyFrame(clock, index);
+  }
+  // 95 ms 遅れて読める状態が 8 秒続く
+  for (let index = 100; index < 500; index++) {
+    recordSteadyFrame(clock, index, MIN_READ_DELAY_MICROS + 95_000);
+  }
+  assert.equal(
+    appliedOffsetMicros(clock),
+    CLOCK_LAG_MICROS + MIN_READ_DELAY_MICROS + 95_000,
+    "遅れが定着したら補正をその水準へ合わせること",
+  );
 });
 
 // 統計は「一定か、ドリフトか、段差か」を実機で読み分けるための値である。現在値・最小・
