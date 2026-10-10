@@ -3276,13 +3276,14 @@ function playAudioFrame(
   };
   // 未開始の対応は 0/0 を返す (実物と同じ)
   const effectiveMapping: AudioClockMapping = mapping ?? { contextTime: 0, performanceTime: 0 };
-  // 「今」は 1 点で測る (測る位置が違うと目標の表示時刻との差がぶれる)
+  // 到着の時刻は実装が測る。テスト側でも「到着より前」の時点を測り、実装が測った値の
+  // 下限として使う
   const nowMs = performance.now();
   const reservation: AudioReservation = {
     readAtMs: nowMs,
     presentationMs: 0,
     // `currentTime` は対応の `contextTime` と同じ座標であり、対応を取った後も進む。
-    // 明示されないときは下で対応から組み立てる
+    // 明示されないときは下で組み立てる
     currentTimeSeconds: currentTimeSeconds ?? 0,
     startedAtSeconds: [],
     bufferFrames: [],
@@ -3292,6 +3293,20 @@ function playAudioFrame(
         ? 0
         : effectiveMapping.contextTime * 1_000 - effectiveMapping.performanceTime,
   };
+  // 目標の表示時刻を使うのは、実装がその音を壁時計の TIMESTAMP として扱うときだけである
+  // (src/createMediaSubscriber.ts の handleAudioDecodedData と同じ判定)。そのときは目標の
+  // 少し前 (不感帯の半分) を「今」にする。目標の時刻を過ぎず、並べすぎの上限にも届かない
+  // 位置になる。到着基準の予約の「今」は下の `getOutputTimestamp()` で測る (実装が到着の
+  // 時刻を測った直後に呼ぶためである)
+  const usesWallClockTarget =
+    currentTimeSeconds === undefined &&
+    control.audioTimestampKinds.get(timestampMicros) === "wallClock";
+  const targetSeconds = usesWallClockTarget
+    ? control.playbackTimeline.presentationPerformanceMs("audio", timestampMicros)
+    : null;
+  if (usesWallClockTarget && targetSeconds !== null) {
+    reservation.currentTimeSeconds = targetSeconds / 1_000 - AUDIO_CLOCK_DEADBAND_MS / 2_000;
+  }
   control.audioContext = {
     get currentTime() {
       return reservation.currentTimeSeconds;
@@ -3299,6 +3314,17 @@ function playAudioFrame(
     getOutputTimestamp: () => {
       reservation.presentationMs =
         control.playbackTimeline.presentationPerformanceMs("audio", timestampMicros) ?? 0;
+      if (targetSeconds === null && currentTimeSeconds === undefined) {
+        // 到着基準の予約では、「今」もこの時点で測る。実装は到着の時刻を測った直後にここを
+        // 呼ぶため、同じ時点の値になる。テストが予約の前に測った値を使うと、実装が到着を
+        // 測るまでの実時間の進行 (負荷の高い runner では数百 ms 止まり得る) の分だけ「今」が
+        // 過去になり、到着した音が到着基準の遅れより前として捨てられる
+        const readAtMs = performance.now();
+        const readContextTimeSeconds =
+          effectiveMapping.contextTime + (readAtMs - effectiveMapping.performanceTime) / 1_000;
+        reservation.currentTimeSeconds =
+          Math.max(readContextTimeSeconds, readAtMs / 1_000) + AUDIO_PLAYOUT_DELAY_SECONDS;
+      }
       return effectiveMapping;
     },
     createBuffer: (_channels: number, frames: number) => {
@@ -3314,21 +3340,6 @@ function playAudioFrame(
     }),
   } as unknown as AudioContext;
   control.audioDestination = {} as MediaStreamAudioDestinationNode;
-  if (currentTimeSeconds === undefined) {
-    // 目標の表示時刻があるときは、その少し前 (不感帯の半分) を「今」にする。目標の時刻を
-    // 過ぎず、並べすぎの上限にも届かない位置になる。目標が無いとき (目標を使わない音) は
-    // 到着基準の並べ方になるため、対応から求めた時刻にその遅れを足す
-    const contextTimeSeconds =
-      effectiveMapping.contextTime + (nowMs - effectiveMapping.performanceTime) / 1_000;
-    const targetSeconds = control.playbackTimeline.presentationPerformanceMs(
-      "audio",
-      timestampMicros,
-    );
-    reservation.currentTimeSeconds =
-      targetSeconds === null
-        ? Math.max(contextTimeSeconds, nowMs / 1_000) + AUDIO_PLAYOUT_DELAY_SECONDS
-        : targetSeconds / 1_000 - AUDIO_CLOCK_DEADBAND_MS / 2_000;
-  }
 
   control.handleAudioDecodedData({
     data: {
