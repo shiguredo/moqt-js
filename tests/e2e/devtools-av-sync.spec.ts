@@ -45,6 +45,10 @@ const EMPTY_DELAYS = {
     presentationDelayCapMs: 0,
   },
   baseDifferenceMs: null,
+  // 動きの判定が使う値と、その水準・隔たりは、まだ観測していないため無い
+  baseDifferenceRecentMs: null,
+  baseDifferenceSettledMs: null,
+  baseDifferenceDeviationMs: null,
   sharingBases: false,
   unsharedReason: "unobserved",
   baseDriftMsPerSecond: null,

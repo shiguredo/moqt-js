@@ -15,12 +15,14 @@ import { RELAY_TEST_TIMEOUT_MS, requireRelayUri } from "./support";
  * 失敗したときに「環境が遅いのか実装が壊れているのか」を切り分けられるようメッセージへ残す。
  *
  * 1. 受信側の音声の基準の遅れが、観測の間に増え続けない (段差とドリフトを捕まえる)
- * 2. 音声と映像の基準の共有が解除されない (`sharingBases` が真、`unsharedReason` が none)
+ * 2. 音声と映像の表示時刻の差 (`avSync.skewMs`) が予算に収まる (利用者に見えるリップシンク)
  * 3. 音声が復号され続け、鳴らなかった音 (`missedFrames`) が増えず、基準の取り直しも
  *    過度に増えない
  * 4. 配信側の「読み出した壁時計 - `AudioData.timestamp`」の傾きが 0 近傍で、観測した
  *    最小と最大の幅が広がらない (送る TIMESTAMP が壁時計からずれていかないことの直接の検証)
  * 5. 音声と映像の基準の差が妥当な範囲に収まり、増え続けない
+ * 6. 基準の共有が解除された場合は、`AV_UNSHARED_RECOVERY_MAX_MS` 以内に戻る (解除そのものは
+ *    到着と復号の乱れでも起きるため判定にしない。記録としてログに出す)
  *
  * 観測を始める前に待つのは「受信側が音声と映像の基準の遅れを観測でき、その値が動かなく
  * なること」だけである。追いつきの終了、基準の共有の成立、基準の遅れの大きさは runner の
@@ -121,6 +123,29 @@ const BASE_DIFFERENCE_GROWTH_MAX_MS = 50;
  * だけを捕まえる
  */
 const BASE_DIFFERENCE_MAX_MS = 1_000;
+
+/**
+ * 音声と映像の表示時刻の差 (利用者に見えるリップシンク) として許す絶対値 (ミリ秒)
+ *
+ * 実際に表示した実績の差 (`avSync.skewMs`) を見る。実装は 2 つの表示時刻の差を不感帯
+ * (`SYNC_MIN_DELTA_MS` = 30 ms) に収め、基準を共有できないときも映像を音声の到着基準の
+ * 時刻へ合わせる。ただし実績には、映像の write の遅れ (最大 `MAX_PRESENTATION_LAG_MS` =
+ * 20 ms)、音声の時計の対応付けの不感帯 (`AUDIO_CLOCK_DEADBAND_MS` = 30 ms)、表示周期
+ * (rAF、60 Hz で 16.7 ms) が乗る。実測 (手元の実リレー) では -87〜-6 ms であり、30 ms を
+ * 判定にすると環境そのものを測ることになる。桁が変わるずれ (0754 の症状では数百 ms) を
+ * 捕まえる値にする
+ */
+const AV_SKEW_MAX_MS = 150;
+
+/**
+ * 基準の共有が解除された後、共有が戻るまでに許す時間 (ミリ秒)
+ *
+ * 実装は一度解除すると `PLAYOUT_BASE_UNSHARED_HOLD_MS` (30 秒) は戻さず、解除のきっかけが
+ * 去った場合は `PLAYOUT_BASE_UNSHARED_RELEASE_MS` (2 秒) で戻る。解除が解けなくなると
+ * 音声が共有の時間軸で並ばないままになるため、それを捕まえる。解除そのものは runner の
+ * 処理能力でも起きる (実測: CI の 4 vCPU の runner、run 38035814270) ため判定にしない
+ */
+const AV_UNSHARED_RECOVERY_MAX_MS = 35_000;
 
 /**
  * 配信側の原点の傾きとして許す上限 (ミリ秒 / 秒)
@@ -227,6 +252,16 @@ interface SubscriberObservation {
   videoBaseDelayMs: number | null;
   /** 基準の差「音声 - 映像」(ミリ秒)。そろっていなければ null */
   baseDifferenceMs: number | null;
+  /**
+   * 動きの判定が使う、直近の窓の最小値で見た基準の差 (ミリ秒)
+   *
+   * 基準 (`baseDifferenceMs`) との隔たりが、経路と復号の乱れの大きさになる
+   */
+  baseDifferenceRecentMs: number | null;
+  /** 動きの判定が使う水準からの隔たり (ミリ秒)。水準がまだ無ければ null */
+  baseDifferenceDeviationMs: number | null;
+  /** 直近に表示した音声と映像の表示時刻の差 (ミリ秒)。揃っていなければ null */
+  skewMs: number | null;
   /** 直近の基準の差の動き (ミリ秒 / 秒)。まだ履歴が無ければ null */
   baseDriftMsPerSecond: number | null;
   /** 基準を共有できているか */
@@ -324,6 +359,9 @@ const EMPTY_SUBSCRIBER_OBSERVATION: SubscriberObservation = {
   baseDelayMs: null,
   videoBaseDelayMs: null,
   baseDifferenceMs: null,
+  baseDifferenceRecentMs: null,
+  baseDifferenceDeviationMs: null,
+  skewMs: null,
   baseDriftMsPerSecond: null,
   sharingBases: false,
   unsharedReason: "unsubscribed",
@@ -384,6 +422,9 @@ async function readObservation(page: Page): Promise<RelayObservation> {
               baseDelayMs: delays.audio.baseDelayMs,
               videoBaseDelayMs: delays.video.baseDelayMs,
               baseDifferenceMs: delays.baseDifferenceMs,
+              baseDifferenceRecentMs: delays.baseDifferenceRecentMs,
+              baseDifferenceDeviationMs: delays.baseDifferenceDeviationMs,
+              skewMs: subscriber.avSync.skewMs,
               baseDriftMsPerSecond: delays.baseDriftMsPerSecond,
               sharingBases: delays.sharingBases,
               unsharedReason: delays.unsharedReason,
@@ -548,6 +589,13 @@ function formatObservationReport(
     `  音声の基準の遅れ (ミリ秒): ${formatSeries(observations.map((observation) => subscriberOf(observation).baseDelayMs))}`,
     `  映像の基準の遅れ (ミリ秒): ${formatSeries(observations.map((observation) => subscriberOf(observation).videoBaseDelayMs))}`,
     `  基準の差 音声 - 映像 (ミリ秒): ${formatSeries(observations.map((observation) => subscriberOf(observation).baseDifferenceMs))}`,
+    // 動きの判定が使う値 (直近 2 秒の窓の最小値の差)。基準との隔たりが、経路と復号の
+    // 乱れの大きさになる。解除があったときに「短い窓だけが動いたのか、基準も動いたのか」を
+    // CI のログだけで切り分けるために出す
+    `  基準の差の直近の窓の値 (ミリ秒): ${formatSeries(observations.map((observation) => subscriberOf(observation).baseDifferenceRecentMs))}`,
+    `  基準の差の水準からの隔たり (ミリ秒): ${formatSeries(observations.map((observation) => subscriberOf(observation).baseDifferenceDeviationMs))}`,
+    // 利用者に見えるリップシンク。表示した音声と映像の実績の差である
+    `  音声と映像の表示時刻の差 skewMs (ミリ秒): ${formatSeries(observations.map((observation) => subscriberOf(observation).skewMs))}`,
     // 基準の差の動きは、受信側の直近の窓の最小値から求まるため、runner が混んでいると
     // 実際の差が動いていなくても大きい値になる (実測: 差が動かないまま 12 ms/秒)。判定には
     // 使わず、解除があったときの切り分けのために残す
@@ -648,9 +696,82 @@ function formatSettleReport(observations: readonly RelayObservation[]): string {
   return lines.join("\n");
 }
 
+/**
+ * 音声と映像の表示時刻の差 (利用者に見えるリップシンク) が予算に収まっているかを見る
+ *
+ * 基準の差ではなく、実際に表示した実績の差 (`avSync.skewMs`) を見る。共有が解除されていても、
+ * 実装は映像を音声の到着基準の時刻へ合わせるため、見えるずれは予算に収まる。
+ *
+ * @param observations - 観測
+ * @param report - 失敗したときに出す観測値の推移
+ */
+function expectSkewWithinBudget(observations: readonly RelayObservation[], report: string): void {
+  const skews = observations
+    .map((observation) => subscriberOf(observation).skewMs)
+    .filter((value): value is number => value !== null);
+  expect(skews.length, `音声と映像の表示時刻の差が観測されている\n${report}`).toBe(OBSERVE_SECONDS);
+  const skewOverflow = skews.find((skew) => Math.abs(skew) > AV_SKEW_MAX_MS);
+  expect(
+    skewOverflow,
+    `音声と映像の表示時刻の差が予算に収まる (許す絶対値 ${AV_SKEW_MAX_MS} ms)\n${report}`,
+  ).toBeUndefined();
+}
+
+/**
+ * 基準の共有が解除されたままにならないことを見る
+ *
+ * 解除そのものは判定にしない。共有は、基準の差が動き続けている (送る TIMESTAMP が壁時計から
+ * ずれている)、または差が上限を超えたときに解除され、実装は一度解除すると 30 秒は戻さない。
+ * 遅い runner では受信側が一瞬つまずいただけでも解除が起きる (実測: CI の 4 vCPU の runner、
+ * run 38035814270) ため、解除そのものを落とすと runner の処理能力を測ることになる。
+ *
+ * 代わりに「解除が残り続けないこと」を判定する。解除が解けなくなると、音声が共有の時間軸で
+ * 並ばないままになり、A/V の対応が失われる (送る TIMESTAMP がずれる症状そのものである)。
+ * 解除したことは記録としてログへ出し、判定には使わない。
+ *
+ * @param page - 観測しているページ
+ * @param observations - 観測
+ * @param report - 失敗したときに出す観測値の推移
+ */
+async function expectUnsharedRecovers(
+  page: Page,
+  observations: readonly RelayObservation[],
+  report: string,
+): Promise<void> {
+  const unshared = observations.filter(
+    (observation) =>
+      !subscriberOf(observation).sharingBases ||
+      subscriberOf(observation).unsharedReason !== "none",
+  );
+  if (unshared.length > 0) {
+    // 解除そのものは記録としてログへ残す (判定にしない)。理由と、切り分けに要る値も出す
+    console.log(
+      `実リレーの音声の観測: 基準の共有を解除した観測が ${unshared.length}/${OBSERVE_SECONDS} 回あった (理由: ${[...new Set(unshared.map((observation) => subscriberOf(observation).unsharedReason))].join(", ")}、最初 ${Math.round((unshared[0]?.atMs ?? 0) - (observations[0]?.atMs ?? 0))} ms)。共有が戻るまで待つ\n${report}`,
+    );
+    // 保持は 30 秒であり、解除のきっかけが去ればさらに 2 秒で戻る。解除を最初に観測した時点を
+    // 起点に、`AV_UNSHARED_RECOVERY_MAX_MS` のうちに戻らなければ、解除が解けていない
+    const deadlineMs = (unshared[0]?.atMs ?? performance.now()) + AV_UNSHARED_RECOVERY_MAX_MS;
+    await expect
+      .poll(() => readSharingBases(page), {
+        message: `解除された基準の共有が ${AV_UNSHARED_RECOVERY_MAX_MS / 1_000} 秒以内に戻る\n${report}`,
+        timeout: Math.max(1_000, deadlineMs - performance.now()),
+        intervals: [SAMPLE_INTERVAL_MS],
+      })
+      .toBe(true);
+  }
+  expect(await readSharingBases(page), `観測の後、音声と映像の基準を共有している\n${report}`).toBe(
+    true,
+  );
+}
+
+/** いま音声と映像の基準を共有できているかを読む */
+async function readSharingBases(page: Page): Promise<boolean> {
+  return subscriberOf(await readObservation(page)).sharingBases;
+}
+
 test("実リレー経由で同じブラウザから音声を配信し、送る TIMESTAMP と受信側の基準がずれない", async ({
   page,
-}) => {
+}): Promise<void> => {
   // 配信と購読の確立、受信側が定常になるまでの待ち (最大 READY_TIMEOUT_MS)、観測 (25 秒)、
   // 画面と Copy for LLM の確認、後始末を見込む
   test.setTimeout(RELAY_TEST_TIMEOUT_MS + READY_TIMEOUT_MS + 60_000);
@@ -807,24 +928,14 @@ test("実リレー経由で同じブラウザから音声を配信し、送る T
     `音声と映像の基準の差が前半から後半へ増えない (増加 ${baseDifferenceGrowthMs.toFixed(1)} ms、許す上限 ${BASE_DIFFERENCE_GROWTH_MAX_MS} ms)\n${report}`,
   ).toBeLessThanOrEqual(BASE_DIFFERENCE_GROWTH_MAX_MS);
 
-  // 音声と映像の基準の共有が解除されないこと。共有は、基準の差が動き続けている (送る
-  // TIMESTAMP が壁時計からずれている)、または差が上限を超えたときに解除され、実装は一度
-  // 解除すると 30 秒は戻さない。解除されたまま音声が共有の時間軸で並ばなくなると、
-  // 受信側は到着基準へ落ちて映像との対応を失う (送る TIMESTAMP がずれる症状そのものである)。
-  //
-  // 遅い runner では、受信側の経路が一瞬つまずいただけでも解除が残るため、この判定は
-  // runner の処理能力にも反応する (実測: 1 vCPU のコンテナでは 5 回中 2 回落ちた)。
-  // 環境の速度を測らないための切り分けは失敗メッセージに出す (観測値の推移と、その
-  // 環境での定常値) ため、ここでは解除そのものを落とす
-  const unsharedObservation = observations.find(
-    (observation) =>
-      !subscriberOf(observation).sharingBases ||
-      subscriberOf(observation).unsharedReason !== "none",
-  );
-  expect(
-    unsharedObservation,
-    `観測の間に音声と映像の基準の共有が解除されない\n${report}`,
-  ).toBeUndefined();
+  // 音声と映像の表示時刻の差 (利用者に見えるリップシンク) が予算に収まること。基準の差では
+  // なく、実際に表示した実績の差を見る (共有が解除されている間も、実装は映像を音声の到着
+  // 基準の時刻へ合わせるため、見えるずれはこの予算に収まる)
+  expectSkewWithinBudget(observations, report);
+
+  // 基準の共有が解除されたこと自体は判定にしない (理由は `expectUnsharedRecovers` を参照)。
+  // 解除の記録はログへ出し、解除が残り続けないことだけを判定する
+  await expectUnsharedRecovers(page, observations, report);
 
   // 送る側の TIMESTAMP が壁時計からずれていかないこと。原点 (読み出した壁時計 -
   // `AudioData.timestamp`) の傾きが 0 近傍であり、観測した最小と最大の幅も広がらない

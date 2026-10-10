@@ -10,7 +10,7 @@ A/V 同期と再生まわりで入れた判断 (閾値・保持・検出・追�
 対象は、2026-10 の 1 週間で `f13db71` (A/V 同期が時計のずれを相手側の遅延へ移すのを止める)
 から `c3e00bf` (受信側が基準の共有を解除した後、差が戻ったら保持の満了を待たずに戻す) までに
 入れた判断と、2026-10-10 に CI の実リレーの E2E (`38035814270`) を直したときに入れた判断
-(決定 3 の段差の見分け方と、決定 2 の復帰の見方) である。実装の仕様は
+(決定 3 の段差の見分け方、決定 2 の復帰の見方、決定 9 の判定) である。実装の仕様は
 `docs/HIGH_LEVEL_API.md` が持つ。ここは判断の理由と、見直す手順を持つ。
 
 読み方は次のとおり。
@@ -38,6 +38,7 @@ A/V 同期と再生まわりで入れた判断 (閾値・保持・検出・追�
 | 6   | 配信側の追いつき               | `max(60 ms, 床 + 40 ms)` / 再開 20 ms / 確認 100 ms と 2 フレーム / 再開後 1 秒 / `drop` と `keep` | `audio.catchUp.*`                                                                           |
 | 7   | 受信側の再生の組み立て         | `AudioPlayoutSession` / `VideoPlayoutSession`                                                      | `avSync.*`、`audio.playoutTiming.*`                                                         |
 | 8   | 復号の出力と投入の対応づけ     | 1,000 マイクロ秒 (`DECODER_OUTPUT_TIMESTAMP_TOLERANCE_MICROS`)                                     | `audio.playoutTiming.arrivalPlannedFrames`                                                  |
+| 9   | 実リレーの E2E の判定          | 150 ms (`AV_SKEW_MAX_MS`) / 35 秒 (`AV_UNSHARED_RECOVERY_MAX_MS`)                                  | `avSync.skewMs`、`avSync.delays.unsharedReason`                                             |
 
 ## 1. A/V 同期で合わせる量の上限
 
@@ -701,6 +702,69 @@ CI の runner (run 38026081292) では、音声の基準の遅れが 116.3 ms �
 - `avSync.delays.audio.baseDelayMs`
 - `audio.receiveDelayMs` (受信した壁時計 - LOC TIMESTAMP。配信側の
   `audio.catchUp.sendLagMs` と対で読み、遅れが配信側と経路にあるのか受信側にあるのかを分ける)
+
+## 9. 実リレーの E2E の判定
+
+### 決めた値
+
+- `tests/e2e/relay/audio-timestamp.spec.ts` の `AV_SKEW_MAX_MS` = 150 ms (利用者に見える
+  音声と映像の表示時刻の差の上限)
+- 同 `AV_UNSHARED_RECOVERY_MAX_MS` = 35 秒 (解除された基準の共有が戻るまでに許す時間)
+
+### 守っている性質
+
+実リレーの E2E が落ちるときに、実装の不具合と環境の乱れを分けること。判定は「実装が守る
+不変条件」だけにする。2026-10-10 まで「観測の間に基準の共有が解除されないこと」を判定して
+いたが、これは実装が守る性質ではなかった。解除は到着と復号の乱れでも起き
+(`unsharedReason` が `drift`)、実装は一度解除すると 30 秒は戻さない (決定 2) ため、判定は
+runner の処理能力を測っていた (実測: CI の 4 vCPU の runner、`38035814270` は解除が 25 秒
+続いて落ち、同じ入力の `38029890823` は緑だった)。
+
+いまは次の 3 つを判定する。
+
+- 音声と映像の表示時刻の差 (`avSync.skewMs`) が `AV_SKEW_MAX_MS` 以内であること。基準の差
+  ではなく、実際に表示した実績の差を見る (共有が解除されている間も、映像を音声の到着基準の
+  時刻へ合わせるため、見えるずれは予算に収まる)
+- 解除された場合は `AV_UNSHARED_RECOVERY_MAX_MS` 以内に共有へ戻ること。無期限の解除だけを
+  失敗にする
+- 解除されたこと自体は記録としてログに出す (判定にしない)。解除の理由と、切り分けに要る値
+  (`baseDifferenceRecentMs`、`baseDifferenceMs`、`baseDriftMsPerSecond`) も同じログに出す
+
+### 根拠
+
+- 解除が環境で起きることは実測で確かめた。`38035814270` の失敗では、`baseDriftMsPerSecond` が
+  239.6 → 183.3 → 0.2 ms/秒と動く一方、`baseDifferenceMs` は 1.6 / -3.2 / -2.6 / 0.3 / -0.1 /
+  1.4 ms と安定し、配信側も健全だった。解除そのものを落とす判定は、到着と復号の乱れが
+  起きた回だけ落ちる
+- 150 ms は、実測 (手元の実リレー) の `skewMs` が -87〜-6 ms であり、30 ms では環境そのものを
+  測ることになるためである。表示の実績には映像の write の遅れ (最大 20 ms)、音声の時計の
+  対応付けの不感帯 (30 ms)、表示周期 (60 Hz で 16.7 ms) が乗る。0754 の症状 (数百 ms のずれ)
+  はこの値で捕まる
+- 35 秒は、保持の 30 秒に早期解除の 2 秒 (決定 2) を足した値である。解除を最初に観測した
+  時点を起点にするため、解除が観測より前に始まっていても足りる
+
+**根拠が薄い点**: `skewMs` の分布は手元の実リレーでしか測っていない (CI の runner では
+未計測)。負荷の高い runner では write の遅れがもっと大きく出る可能性がある。解除の復帰を
+35 秒にした根拠は、保持と早期解除の値 (決定 2) からの計算だけである。
+
+### 副作用とトレードオフ
+
+- 解除そのものを許すため、解除が「起きた」ことによる劣化 (解除の間は A/V が到着基準で
+  並ぶ) は検出しない。劣化が続く場合だけ `AV_UNSHARED_RECOVERY_MAX_MS` で捕まる
+- `skewMs` は表示の実績が両方そろっているときだけ値が出る。片方が古いと null になり、
+  その回は判定に使えない (観測 25 回すべてで値が出ることを別に確かめる)
+
+### 再考の条件
+
+- 解除が戻るまでの時間が `AV_UNSHARED_RECOVERY_MAX_MS` に近づく (復帰が遅くなっている)
+- `AV_SKEW_MAX_MS` に近い値が続く (環境の write の遅れが増えている)
+- `skewMs` が null の回が増える (表示の実績がそろわなくなっている)
+
+### 見る計器
+
+- `avSync.skewMs`
+- `avSync.delays.unsharedReason` / `sharingBases` / `baseUnsharedReturnMs`
+- `avSync.delays.baseDifferenceMs` / `baseDifferenceRecentMs` / `baseDriftMsPerSecond`
 
 ## 実行時の警告 (前提から外れた状態)
 
