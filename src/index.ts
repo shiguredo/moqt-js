@@ -272,6 +272,24 @@ export type {
   AudioPlayoutTimingSnapshot,
 } from "./audioPlayoutTimingStats";
 
+// 受信側の音声が live から遅れたときに、復号器を作り直して追いつく判定と観測
+// (AudioReceiverStats.playoutCatchUp)。遅れが続いたら復号器を作り直す
+export {
+  AudioReceiveCatchUp,
+  AUDIO_RECEIVE_CATCH_UP_MIN_MS,
+  AUDIO_RECEIVE_CATCH_UP_GROWTH_MS,
+  AUDIO_RECEIVE_CATCH_UP_JUMP_MS,
+  AUDIO_RECEIVE_CATCH_UP_FLOOR_WINDOW_MS,
+  AUDIO_RECEIVE_CATCH_UP_CONFIRM_MS,
+  AUDIO_RECEIVE_CATCH_UP_COOLDOWN_MS,
+  AUDIO_RECEIVE_CATCH_UP_SKIP_MIN_MS,
+  EMPTY_AUDIO_RECEIVE_CATCH_UP,
+  type AudioReceiveCatchUpDecision,
+  type AudioReceiveCatchUpObservation,
+  type AudioReceiveCatchUpOptions,
+  type AudioReceiveCatchUpStats,
+} from "./audioReceiveCatchUp";
+
 // 復号した音声の再生の組み立て (時間軸への記録・目標の決定・予約・計器への記録)。
 // ライブラリ (createMediaSubscriber) と moqt-devtools が同じ実装を使う。Web Audio は
 // AudioPlayoutOutput として注入する

@@ -8,6 +8,10 @@ import {
   EMPTY_AUDIO_PLAYOUT_TIMING,
   type AudioPlayoutTimingSnapshot,
 } from "../../../src/audioPlayoutTimingStats.ts";
+import {
+  EMPTY_AUDIO_RECEIVE_CATCH_UP,
+  type AudioReceiveCatchUpStats,
+} from "../../../src/audioReceiveCatchUp.ts";
 import { EMPTY_PLAYBACK_TIMING, type PlaybackTimingSnapshot } from "../utils/playbackTimingStats";
 import {
   AUDIO_DELAY_FEEDBACK_START_MS,
@@ -188,6 +192,10 @@ export interface SubscriberInstance {
   audioCatchUpObjectsSkipped: Signal<number>;
   // 受信した音声を音声出力デバイスで再生するか。既定は無効
   audioPlaybackEnabled: Signal<boolean>;
+  // 受信側の音声の追いつき (復号の出力が送られた TIMESTAMP から遅れ続けたときに、
+  // 復号器を作り直して live へ戻した量)。再生の組み立てが持つ観測値を 1 秒ごとに写す
+  // (src/audioReceiveCatchUp.ts)
+  audioPlayoutCatchUp: Signal<AudioReceiveCatchUpStats>;
   // 受信した音声の鳴らし方の数 (src/audioPlayout.ts)。購読ごとに数える。
   // 鳴らす時刻を過ぎて届いたなどで基準を取り直した回数と、遅れが上限を超えて捨てた音の数
   audioPlayoutRebases: Signal<number>;
@@ -270,6 +278,7 @@ export function createSubscriberInstance(id: string): SubscriberInstance {
     audioPlayoutRebases: signal(0),
     audioPlayoutDrops: signal(0),
     audioPlayoutTiming: signal<AudioPlayoutTimingSnapshot>(EMPTY_AUDIO_PLAYOUT_TIMING),
+    audioPlayoutCatchUp: signal<AudioReceiveCatchUpStats>(EMPTY_AUDIO_RECEIVE_CATCH_UP),
     audioPeakDbfsLeft: signal<number | null>(null),
     audioPeakDbfsRight: signal<number | null>(null),
     audioRmsDbfsLeft: signal<number | null>(null),

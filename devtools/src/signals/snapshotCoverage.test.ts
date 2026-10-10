@@ -222,6 +222,7 @@ const SUBSCRIBER_COVERAGE: CoverageExpectation = {
     audioPlayoutRebases: "audio.playoutRebases",
     audioPlayoutDrops: "audio.playoutDrops",
     audioPlayoutTiming: "audio.playoutTiming",
+    audioPlayoutCatchUp: "audio.playoutCatchUp",
     preconditionWarnings: "warnings",
     eventObjectsReceived: "event.objectsReceived",
   },

@@ -11,6 +11,19 @@
 
 ## develop
 
+- [ADD] moqt-devtools の Subscriber 統計に受信側の音声の追いつきを追加する
+  - `AudioReceiverStats.playoutCatchUp` (`src/audioReceiveCatchUp.ts`) を足し、Subscriber パネルの Audio Playback の Catch-up セクションと「Copy for LLM」に出す。観測した遅れ (`lagMs`)、健全時の遅れ (`floorMs`)、遅れの上限 (`limitMs`)、観測した最大 (`maxLagMs`)、追いつきの最中か (`catchingUp`)、復号器を作り直した回数 (`catchUpStarts`)、飛んだ音の数と長さ (`skippedFrames` / `skippedMs` / `lastSkippedMs`) を出す
+  - `AudioReceiveCatchUp` と `AUDIO_RECEIVE_CATCH_UP_*` の定数、`AudioReceiveCatchUpStats` を `moqt-js` から import できるようにする。時刻と値は呼び出し側が渡すため、単体で使える
+  - @voluntas
+- [FIX] 受信側で音声の復号が遅れて固定されたとき、復号器を作り直して live へ戻す
+  - 受信した音声は、復号器 (WebCodecs の `AudioDecoder`) の中に未処理の音が溜まると、溜まった分だけ復号の出力が送られた TIMESTAMP から遅れたまま固定される。溜まった分は実時間と同じ速さでしか出てこないため、待っても戻らない。鳴らす音を捨てても、捨てた分は復号器から出てきた後の音であり、中の分は減らない
+  - 実リレーの E2E (`tests/e2e/relay/audio-timestamp.spec.ts`) は、CI の runner で「音声の基準の遅れが 116.4 ms から 256.2 ms へ段差で上がり、そのまま戻らない」(増加 139.8 ms、許す上限 50 ms) で落ちていた。同じ観測で映像の基準の遅れは 111.5〜112.2 ms のまま安定しており、遅れは受信側の音声だけにあった (配信側の計器は健全だった)
+  - `src/audioReceiveCatchUp.ts` を足し、復号の出力の遅れ (復号の出力を受け取った壁時計 - `AudioData.timestamp`) が、健全時の遅れ (床) から `AUDIO_RECEIVE_CATCH_UP_GROWTH_MS` (40 ms) を超えたまま `AUDIO_RECEIVE_CATCH_UP_CONFIRM_MS` (100 ms) 続いたら、復号器を作り直す (`AudioDecoderWrapper.reset()`)。上限は床と `AUDIO_RECEIVE_CATCH_UP_MIN_MS` (60 ms) の大きい方であり、床は直近 `AUDIO_RECEIVE_CATCH_UP_FLOOR_WINDOW_MS` (5 秒) の最小値である (観測がそれより長く途切れたときは、途切れる前の床を保つ)
+  - 床から `AUDIO_RECEIVE_CATCH_UP_JUMP_MS` (100 ms) を超える遅れでは、持続を待たずに始める。音声と映像のずれとして合わせられる量の上限 (`PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS` = 100 ms) と同じ値である。実測 (実リレー) では、到着の遅れが 233 ms になった観測で音声と映像の表示時刻の差が -168.6 ms になり (許す絶対値は 150 ms)、100 ms の確認を待つとその間にずれが開いた
+  - 遅れが上限へ戻るまでは `AUDIO_RECEIVE_CATCH_UP_COOLDOWN_MS` (1 秒) ごとに作り直しを重ねる。1 回の作り直しで戻らない状態があるためである (実測: CPU を 6 倍に遅くしてメインスレッドを 60 ms 占有 / 40 ms 明け渡す負荷を 10 秒で、遅れは 145 ms から 2788 ms へ伸び続け、負荷をやめても 23 秒間戻らなかった)
+  - 鳴らす音は捨てない (鳴らなかった音として数えない)。復号器が捨てた音は鳴らす側へ出てこないためであり、`missedFrames` を「受信側が実時間に追いつけていない証拠」として保つ。飛んだ音は復号の出力の timestamp の跳びから測る。`AudioPlayoutResult` に `catchUpStarted` を足す (下位互換)
+  - 手元の 1 台の実測では、修正前に 2788 ms のまま 23 秒間固定されていた遅れが、修正後は負荷の間も 1 秒以内に保たれ、負荷が去った 450 ms 後に 24.9 ms へ戻った。`missedFrames` は購読の直後の 1 音のまま、`playoutRebases` は 0 のままである
+  - @voluntas
 - [FIX] 復号の出力と復号へ渡した timestamp の対応が引けないときも、音声の TIMESTAMP の種類を失わないようにする
   - 引けないときは、直前に分かっている種類を使う (`src/decodeInputTimestamps.ts` の `LastTimestampKind`)。種類は TIMESTAMP の Timescale の有無で決まり (draft-ietf-moq-loc-04 §2.3.1.1 / §2.3.1.2)、ストリームの途中で変わるものではない。種類が変わったときに古い値を使い続けて誤った時間軸の値にしないよう、復号へ渡すたびに上書きする。値が保留している記録から 10 秒より離れているとき (TIMESTAMP が無い音は decoder へ 0 を渡すため、その出力は 0) は当てにしない
   - 1 ms の許容では足りない形がある。実測 (実リレー、CPU を 6 倍に遅くした再現) では、復号へ渡した記録と復号の出力の timestamp の格子が 9.7 ms (または 1 フレーム、19.8 ms) ずれたまま残った。双方が 20 ms ごとに進むため差は縮まらない。記録は残る (この出力より古い記録は捨てる規則は、出力より新しい記録を消さない) ため、同じ判定が出力ごとに繰り返され、対応が引けた 635 回の後、831 回続けて引けなくなった。この間、復号は 50 個/秒で続いていたが、音声は共有の時間軸へ記録されず、音声の基準の遅れは 19.7 ms のまま固定された。CI の run 38039326992 の「前半 144.2 ms のまま 12 秒間動かず、410.1 ms、664.3 ms へ飛んで凍る」形はこれである

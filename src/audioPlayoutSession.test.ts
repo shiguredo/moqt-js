@@ -95,13 +95,18 @@ interface RecordedOutput {
  * @param options.mapping - `getOutputTimestamp()` が返す対応。null なら未開始 (0/0)
  * @param options.currentTimeSeconds - `AudioContext.currentTime` (秒)
  * @param options.failCreateBuffer - `createBuffer` を失敗させるか (失敗した音の検証用)
+ * @param options.advanceCurrentTime - `currentTime` を実時間と同じ速さで進めるか。実時間と
+ *   同じ間隔で音を渡すテストで必要になる (固定のままだと、目標の時刻が実時間からずれていき、
+ *   並べすぎとして捨てられる)
  */
 function makeRecordingOutput(options: {
   timeline: PlaybackTimeline;
   mapping: AudioClockMapping | null;
   currentTimeSeconds: number;
   failCreateBuffer?: boolean;
+  advanceCurrentTime?: boolean;
 }): RecordedOutput {
+  const createdAtMs = performance.now();
   const effectiveMapping: AudioClockMapping = options.mapping ?? {
     contextTime: 0,
     performanceTime: 0,
@@ -114,7 +119,10 @@ function makeRecordingOutput(options: {
   const output: AudioPlayoutOutput = {
     context: {
       get currentTime() {
-        return options.currentTimeSeconds;
+        // 記録用の出力は既定では `currentTime` を固定する (1 音だけを確かめるテスト向け)
+        return options.advanceCurrentTime === true
+          ? options.currentTimeSeconds + (performance.now() - createdAtMs) / 1_000
+          : options.currentTimeSeconds;
       },
       getOutputTimestamp: () => {
         // 実装が目標の表示時刻を求めるのと同じ時点で測る (テスト側の値と実装の値がずれない)
@@ -217,6 +225,16 @@ function handleSound(
 /** `performance.now()` と同じ軸の観測時刻 (Unix epoch ミリ秒) を今とする */
 function observedWallClockMs(): number {
   return performance.timeOrigin + performance.now();
+}
+
+/** 音 1 つの長さ (ミリ秒)。opus のパケットと同じ 20 ms である */
+const SOUND_INTERVAL_MS = (FRAMES_PER_SOUND / SAMPLE_RATE) * 1_000;
+
+/** 実時間と同じ間隔で音を渡すための待ち */
+function sleepMs(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 /** 今の壁時計 (Unix epoch マイクロ秒) を timestamp にする */
@@ -617,4 +635,139 @@ test("recordStopped: 予約済みで鳴らなかった分を計器へ記録す�
   assert.equal(snapshot.missedByReason.stopped.count, 1);
   assert.closeTo(snapshot.missedByReason.stopped.ms, 20, 1e-6);
   assert.equal(snapshot.missedFrames, 1);
+});
+
+/**
+ * 完了条件: 復号の出力が送られた TIMESTAMP から遅れ続けたら、受信側の追いつきを始めて
+ * 復号器の作り直しを求める (結果の `catchUpStarted`)。鳴らす音は捨てない (追いつきは
+ * 復号器を作り直すことで行うため、`missedFrames` を増やさない)。
+ *
+ * 遅れの段差は、実リレーの E2E の失敗 (音声の基準の遅れが 116.4 ms から 256.2 ms へ
+ * 上がり、そのまま戻らなかった) と同じ形にする。音は 1 つ 20 ms であり、実時間と同じ間隔で
+ * 渡す (まとめて渡すと、鳴らす側が並べすぎとして捨てる)。持続の確認 (`100 ms`) は実時間で
+ * 測るため、遅れを上げた後はその時間だけ実際に待つ。
+ */
+test("handleDecodedAudio: 遅れが続いたら復号器の作り直しを求める", async () => {
+  const fixture = makeSessionFixture();
+  const referenceMs = performance.now();
+  const mapping = audioClockMappingAt(referenceMs);
+  const output = makeRecordingOutput({
+    timeline: fixture.timeline,
+    mapping,
+    currentTimeSeconds: referenceMs / 1_000,
+    advanceCurrentTime: true,
+  });
+
+  // 健全な遅れ (20 ms) の音を 100 ms 分鳴らす。床は 20 ms になり、上限は下限の 60 ms になる
+  for (let index = 0; index < 5; index++) {
+    const result = handleSound(fixture, output.output, {
+      timestamp: wallClockTimestampMicros() - 20_000,
+    });
+    assert.equal(result.status, "played");
+    assert.equal(
+      result.status === "skipped" ? undefined : result.catchUpStarted,
+      false,
+      "健全な状態では始めないこと",
+    );
+    await sleepMs(SOUND_INTERVAL_MS);
+  }
+
+  // 遅れを段差で 200 ms へ上げ、持続の確認 (100 ms) より長く続ける。確認は実時間で測るため、
+  // 環境が混んでいても確認が終わるよう、始まるまで (上限 1 秒) 続ける
+  const results: ReturnType<AudioPlayoutSession["handleDecodedAudio"]>[] = [];
+  const deadlineMs = performance.now() + 1_000;
+  while (performance.now() < deadlineMs) {
+    const result = handleSound(fixture, output.output, {
+      timestamp: wallClockTimestampMicros() - 200_000,
+    });
+    results.push(result);
+    if (result.status === "played" && result.catchUpStarted) {
+      break;
+    }
+    await sleepMs(SOUND_INTERVAL_MS);
+  }
+
+  const started = results.find((result) => result.status === "played" && result.catchUpStarted);
+  assert.isDefined(started, "遅れが続いたら復号器の作り直しを求めること");
+  assert.equal(started?.status === "played" && started.catchUpStarted, true);
+  const snapshot = fixture.session.catchUp.snapshot();
+  assert.equal(snapshot.catchUpStarts, 1);
+  assert.equal(snapshot.catchingUp, true, "遅れが上限へ戻るまで追いつきの最中であること");
+  assert.closeTo(snapshot.lagMs ?? 0, 200, 20, "観測した遅れ");
+  assert.closeTo(snapshot.floorMs ?? 0, 20, 5, "床は健全時に観測した遅れであること");
+  assert.closeTo(snapshot.limitMs, 60, 5, "上限は下限 (60 ms) であること");
+  // 鳴らす音は捨てない
+  assert.equal(fixture.timing.snapshot(performance.now()).missedFrames, 0);
+  assert.equal(
+    results.filter((result) => result.status === "dropped").length,
+    0,
+    "追いつきで鳴らさずに捨てないこと",
+  );
+});
+
+/**
+ * 完了条件: 壁時計の TIMESTAMP を持たない音 (TIMESTAMP 無し、Timescale ありのメディア時刻)
+ * では追いつきを判定しない。復号の出力と壁時計を対応づけられないためである。
+ */
+test("handleDecodedAudio: 壁時計でない TIMESTAMP では追いつきを判定しない", () => {
+  const fixture = makeSessionFixture();
+  const output = makeRecordingOutput({
+    timeline: fixture.timeline,
+    mapping: null,
+    currentTimeSeconds: 10,
+  });
+
+  for (let index = 0; index < 10; index++) {
+    const result = handleSound(fixture, output.output, {
+      timestamp: 1_000_000 - index * 20_000,
+      timestampKind: "mediaTime",
+    });
+    assert.equal(result.status, "played");
+    assert.equal(
+      result.status === "skipped" ? undefined : result.catchUpStarted,
+      false,
+      "追いつきを始めないこと",
+    );
+  }
+  assert.isNull(fixture.session.catchUp.snapshot().lagMs, "遅れを観測しないこと");
+  assert.equal(fixture.session.catchUp.snapshot().catchUpStarts, 0);
+});
+
+/**
+ * 完了条件: 鳴らす先が無いとき (音声を再生していないとき) は、追いつきの観測もしない。
+ */
+test("handleDecodedAudio: 鳴らす先が無いときは追いつきを観測しない", () => {
+  const fixture = makeSessionFixture();
+
+  const result = handleSound(fixture, null, { timestamp: 0 });
+
+  assert.deepEqual(result, { status: "skipped" });
+  assert.isNull(fixture.session.catchUp.snapshot().lagMs);
+  assert.equal(fixture.session.catchUp.snapshot().catchUpStarts, 0);
+});
+
+/**
+ * 完了条件: `reset` は受信側の追いつきの観測も消す (AudioContext を作り直したとき)。
+ * 消さないと、前の購読の遅れ (床) を引き継いで誤って追いつきを始める。
+ */
+test("reset: 受信側の追いつきの観測も消す", () => {
+  const fixture = makeSessionFixture();
+  const output = makeRecordingOutput({
+    timeline: fixture.timeline,
+    mapping: null,
+    currentTimeSeconds: 10,
+  });
+  assert.equal(
+    handleSound(fixture, output.output, { timestamp: wallClockTimestampMicros() - 500_000 }).status,
+    "played",
+  );
+  assert.closeTo(fixture.session.catchUp.snapshot().lagMs ?? 0, 500, 50);
+
+  fixture.session.reset();
+
+  const snapshot = fixture.session.catchUp.snapshot();
+  assert.isNull(snapshot.lagMs);
+  assert.isNull(snapshot.floorMs);
+  assert.equal(snapshot.catchUpStarts, 0);
+  assert.equal(snapshot.catchingUp, false);
 });

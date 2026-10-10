@@ -30,6 +30,8 @@ export class AudioDecoderWrapper {
   private worker: Worker | null = null;
   private callbacks: AudioDecoderWrapperCallbacks;
   private configured = false;
+  // 直近に configure() へ渡した設定。追いつきの作り直し (reset) で使い回す
+  private lastConfig: AudioDecoderConfig | null = null;
   // configure() 発行ごとの世代管理 (並行 configure の所有権分離用)
   private readonly generationTracker = new ConfigureGenerationTracker();
 
@@ -52,6 +54,37 @@ export class AudioDecoderWrapper {
   ): Promise<void> {
     const config = getAudioDecoderConfig(codec, sampleRate, channels, description);
 
+    this.lastConfig = config;
+    if (this.useWorker) {
+      await this.configureWorker(config);
+    } else {
+      this.configureDirect(config);
+    }
+    this.configured = true;
+  }
+
+  /**
+   * 復号器を捨てて、同じ設定で作り直す
+   *
+   * 受信側の音声の追いつきで使う (src/audioReceiveCatchUp.ts)。WebCodecs の
+   * `AudioDecoder` は、溜まった音を実時間と同じ速さでしか出さないため、遅れは固定される。
+   * 作り直すと、中に溜まっていた音 (未処理の投入と、まだ届いていない出力) が捨てられ、
+   * 次に復号されるのは最後に届いた Object になる。
+   *
+   * 実測 (手元の 1 台、実リレーへ同じページから配信と購読を行い、CPU を 6 倍に遅くして
+   * メインスレッドを 60 ms 占有 / 40 ms 明け渡す負荷を 10 秒) では、復号の出力の遅れは
+   * 負荷の間 145 ms から 2788 ms へ伸び続け、負荷をやめても 23 秒間戻らなかった。
+   * 追いつき (1 秒ごとに作り直す) を重ねると、負荷が去った後に遅れは 24.9 ms へ戻った。
+   *
+   * 設定は `configure()` に渡されたものを使い回す (`configure()` が毎回新しい設定で
+   * 呼ばれるため、最後の設定が使いたい設定である)。まだ構成していなければ何もしない。
+   * 作り直しに失敗した場合は throw する (呼び出し側が onError やログへ流す)。
+   */
+  async reset(): Promise<void> {
+    const config = this.lastConfig;
+    if (config === null) {
+      return;
+    }
     if (this.useWorker) {
       await this.configureWorker(config);
     } else {

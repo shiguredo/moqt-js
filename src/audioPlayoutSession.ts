@@ -27,6 +27,7 @@ import {
   concealmentEndGain,
 } from "./audioPlayout";
 import type { AudioPlayoutTimingStats } from "./audioPlayoutTimingStats";
+import { AudioReceiveCatchUp } from "./audioReceiveCatchUp";
 import { compressSamples, concealSamples, type AudioSamples } from "./audioTimeStretch";
 import { AUDIO_PLAYOUT_DELAY_FLOOR_MS, type PlaybackTimeline } from "./playbackTimeline";
 
@@ -118,7 +119,13 @@ export interface AudioPlayoutRequest {
  *
  * 呼び出し側は、鳴らなかった音の数 (devtools の `audioPlayoutDrops`) と、基準を取り直した
  * 回数 (`audioPlayoutRebases`) を、この結果から数える。計器への記録 (鳴るはずの時刻・
- * 鳴り始める時刻・鳴らなかった量) はこのクラスが済ませている
+ * 鳴り始める時刻・鳴らなかった量) はこのクラスが済ませている。
+ *
+ * `catchUpStarted` が true のときは、受信側の追いつきを始めているため、呼び出し側は復号器を
+ * 作り直す (`AudioDecoderWrapper.reset()`)。復号器の中に溜まった古い音は、鳴らさずに捨てる
+ * だけでは減らないためである。鳴らす音は捨てない (音を飛ばすのは復号器であり、飛んだ分は
+ * `AudioPlayoutSession.catchUp` の観測値に出る)。詳しい根拠は src/audioReceiveCatchUp.ts の
+ * 先頭のコメントを参照
  */
 export type AudioPlayoutResult =
   | {
@@ -126,20 +133,26 @@ export type AudioPlayoutResult =
       readonly status: "played";
       /** この音の予約で基準を取り直したか (`AudioPlayoutScheduler.rebases` が増えたか) */
       readonly rebased: boolean;
+      /** 受信側の追いつきを始めたか (`catchUpStarted` の説明を参照) */
+      readonly catchUpStarted: boolean;
     }
   | {
-      /** 並べすぎで捨てた (鳴らさなかった) */
+      /** 並べすぎで鳴らさずに捨てた */
       readonly status: "dropped";
       /** この音の予約で基準を取り直したか (捨てる判断と基準の取り直しは同時に起きない) */
       readonly rebased: boolean;
       /** 捨てた理由 */
       readonly reason: "backlog";
+      /** 受信側の追いつきを始めたか (`catchUpStarted` の説明を参照) */
+      readonly catchUpStarted: boolean;
     }
   | {
       /** 鳴らす準備の途中で失敗した (計器には「鳴らなかった」として記録済み) */
       readonly status: "error";
       /** この音の予約で基準を取り直したか */
       readonly rebased: boolean;
+      /** 受信側の追いつきを始めたか (`catchUpStarted` の説明を参照) */
+      readonly catchUpStarted: boolean;
       /** 失敗の内容。呼び出し側が onError やログへ流す */
       readonly error: Error;
     }
@@ -186,6 +199,14 @@ export class AudioPlayoutSession {
    * 同期の推定 (`AvSyncStats.audioClockFallback`) が読む
    */
   readonly clock: AudioClockBridge;
+  /**
+   * 受信側の音声の追いつきの判定と観測 (src/audioReceiveCatchUp.ts)
+   *
+   * 復号の出力が送られた TIMESTAMP から遅れ続けたときに、復号器を作り直して live へ戻す。
+   * 作り直しそのものは、結果 (`AudioPlayoutResult.catchUpStarted`) を受けた呼び出し側が行う
+   * (復号器を持っているのは呼び出し側である)。表示とテスト用 API は `snapshot()` を読む
+   */
+  readonly catchUp: AudioReceiveCatchUp;
   /** 鳴らした音と鳴らなかった音の記録の入れ先 (計器) */
   private readonly timing: AudioPlayoutTimingStats;
   /** 鳴らした結果を閉ループ (音声の目標遅延の学習) へ渡すか */
@@ -199,6 +220,7 @@ export class AudioPlayoutSession {
     this.audioDelayFeedback = options.audioDelayFeedback ?? true;
     this.playout = new AudioPlayoutScheduler();
     this.clock = new AudioClockBridge();
+    this.catchUp = new AudioReceiveCatchUp();
   }
 
   /**
@@ -206,6 +228,7 @@ export class AudioPlayoutSession {
    *
    * 到着 (復号の出力を受け取った) 時刻から、時間軸へ記録し、目標の開始時刻を決め、
    * `AudioContext` の秒へ予約し、計器へ記録する。鳴らなかった音は理由と長さを計器へ残す。
+   * 併せて受信側の追いつきを判定する (`AudioPlayoutResult.catchUpStarted`)。
    * 失敗しても throw せず、結果 (`status: "error"`) で返す (呼び出し側が onError や
    * ログへ流す)。`AudioData` は閉じない。
    *
@@ -224,6 +247,8 @@ export class AudioPlayoutSession {
     // onError にしか現れず、鳴らなかった量として数えられていなかった
     let planned: { arrivalMs: number; targetMs: number | null; durationMs: number } | null = null;
     let played = false;
+    // この音で受信側の追いつきを始めたか (呼び出し側が復号器を作り直すきっかけにする)
+    let catchUpStarted = false;
     // 基準を取り直したかをこの音の前後で比べる (呼び出し側が回数として数える)
     const rebasesBefore = this.playout.rebases;
 
@@ -231,6 +256,7 @@ export class AudioPlayoutSession {
       const numberOfChannels = data.numberOfChannels;
       const sampleRate = data.sampleRate;
       const numberOfFrames = data.numberOfFrames;
+      const durationSeconds = numberOfFrames / sampleRate;
       // 到着 (復号の出力を受け取った) 時刻。時間軸への記録と観測値の両方に同じ値を使う
       const arrivalMs = performance.now();
 
@@ -238,6 +264,20 @@ export class AudioPlayoutSession {
       // メディア時刻 (TIMESCALE あり) と TIMESTAMP 無しの音は映像の表示時刻と対応しない
       const wallClockTimestamp =
         request.useTimeline && request.timestampKind === "wallClock" ? data.timestamp : null;
+
+      // 受信側の追いつき。復号の出力が送られた TIMESTAMP から遅れ続けたら、復号器を作り直して
+      // live へ戻す (src/audioReceiveCatchUp.ts)。ここでは作り直すかどうかだけを決め、鳴らす
+      // 音は捨てない (捨てても復号器の中の分は減らない)。壁時計の TIMESTAMP を持つ音でだけ
+      // 測れる (メディア時刻は壁時計と対応しない)
+      if (wallClockTimestamp !== null) {
+        catchUpStarted = this.catchUp.observe({
+          nowMs: arrivalMs,
+          lagMs: performance.timeOrigin + arrivalMs - wallClockTimestamp / 1_000,
+          durationMs: durationSeconds * 1_000,
+          timestampMicros: wallClockTimestamp,
+        }).rebuildDecoder;
+      }
+
       if (wallClockTimestamp !== null) {
         // 復号の出力を共有の時間軸へ記録し、映像と同じ式で表示時刻を求める
         // (src/playbackTimeline.ts)
@@ -270,7 +310,6 @@ export class AudioPlayoutSession {
       // 遅れをこれではなく今 (currentTime) から数えると、実際に鳴るのは「到着 + 遅れ +
       // バッファの分」になる (実測では 100 ms の目標に対して 195.5 ms 鳴っていた)
       const arrivalSeconds = this.clock.toAudioSeconds(arrivalMs) ?? contextNowSeconds;
-      const durationSeconds = numberOfFrames / sampleRate;
       // 音声を観測していないとき (壁時計の TIMESTAMP を持たない / Track の TIMESCALE を
       // 使う) は共有の再生遅延に下限が入らないため、ここで下限を必ず適用する
       const playoutDelaySeconds =
@@ -307,7 +346,7 @@ export class AudioPlayoutSession {
         });
         // 並べすぎで捨てた量は、目標を増やす判断にも使う
         this.observeDelayFeedback(missedAtMs, request.timeline);
-        return { status: "dropped", rebased, reason: decision.reason };
+        return { status: "dropped", rebased, reason: decision.reason, catchUpStarted };
       }
       // 鳴らすと決めたが、鳴らし始める前に失敗したら数える (catch 句)
       planned = { arrivalMs, targetMs, durationMs: durationSeconds };
@@ -397,7 +436,7 @@ export class AudioPlayoutSession {
           );
         }
       }
-      return { status: "played", rebased };
+      return { status: "played", rebased, catchUpStarted };
     } catch (error) {
       // 鳴らす準備の途中で失敗した音は、これまで onError にしか現れなかった
       if (planned !== null && !played) {
@@ -412,6 +451,7 @@ export class AudioPlayoutSession {
       return {
         status: "error",
         rebased: this.playout.rebases !== rebasesBefore,
+        catchUpStarted,
         error: error instanceof Error ? error : new Error(String(error)),
       };
     }
@@ -422,11 +462,14 @@ export class AudioPlayoutSession {
    *
    * 予約の基準は `AudioContext.currentTime` の秒であり、作り直した `AudioContext` では
    * 0 から始まる。古い基準を使い続けると目標の時刻がずれる (`AudioClockBridge.reset` の
-   * JSDoc を参照)。統計の累積 (基準を取り直した回数、捨てた音、詰めた合計、補間した合計) は
-   * 消さない (購読をやり直しても引き継ぐ)。
+   * JSDoc を参照)。予約の統計の累積 (基準を取り直した回数、捨てた音、詰めた合計、補間した
+   * 合計) は消さない (購読をやり直しても引き継ぐ)。受信側の追いつきの観測と累積
+   * (`AudioReceiveCatchUp.reset`) は消す。再生そのものをやり直すためであり、遅れの床も
+   * 作り直した `AudioContext` では意味を持たない
    */
   reset(): void {
     this.playout.reset();
+    this.catchUp.reset();
     this.forgetAudioContext();
   }
 

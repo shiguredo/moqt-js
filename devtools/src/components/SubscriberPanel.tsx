@@ -15,6 +15,7 @@ import {
   TimingTable,
 } from "./StatsView";
 import {
+  AUDIO_PLAYBACK_CATCH_UP_HELP,
   AUDIO_PLAYBACK_MISSED_HELP,
   AUDIO_PLAYBACK_TIMING_HELP,
   AV_SYNC_HELP,
@@ -526,6 +527,70 @@ function SubscriberStats({ statsSignal }: { statsSignal: ReadonlySignal<Subscrib
                 label: "unplannedFrames",
                 value: stats.audio.playoutTiming.unplannedFrames,
                 testId: "subscriber-audio-playback-unplanned-frames",
+              },
+            ]}
+          />
+        </StatSection>
+
+        <StatSection
+          title="Catch-up"
+          help={AUDIO_PLAYBACK_CATCH_UP_HELP}
+          testId="subscriber-audio-playback-catch-up"
+        >
+          {/* 復号の出力が送られた TIMESTAMP から遅れ続けたときに、復号器を作り直して
+              live へ戻した量。鳴らす音は捨てず、復号器の中に溜まった分を捨てる
+              (src/audioReceiveCatchUp.ts) */}
+          <StatList
+            items={[
+              {
+                // 直近に観測した、復号の出力の遅れ
+                label: "lagMs",
+                value: formatMs(stats.audio.playoutCatchUp.lagMs),
+                testId: "subscriber-audio-playback-catch-up-lag",
+              },
+              {
+                // 健全時の遅れ (直近の窓の最小値)。環境ごとの値であり、これとの差で判定する
+                label: "floorMs",
+                value: formatMs(stats.audio.playoutCatchUp.floorMs),
+                testId: "subscriber-audio-playback-catch-up-floor",
+              },
+              {
+                label: "maxLagMs",
+                value: formatMs(stats.audio.playoutCatchUp.maxLagMs),
+                testId: "subscriber-audio-playback-catch-up-max-lag",
+              },
+              {
+                label: "limitMs",
+                value: stats.audio.playoutCatchUp.limitMs.toFixed(1),
+                testId: "subscriber-audio-playback-catch-up-limit",
+              },
+              {
+                label: "catchingUp",
+                value: String(stats.audio.playoutCatchUp.catchingUp),
+                tone: stats.audio.playoutCatchUp.catchingUp ? ("warn" as const) : undefined,
+                testId: "subscriber-audio-playback-catch-up-active",
+              },
+              {
+                label: "catchUpStarts",
+                value: stats.audio.playoutCatchUp.catchUpStarts,
+                tone: "warn",
+                testId: "subscriber-audio-playback-catch-up-starts",
+              },
+              {
+                // 追いつきで飛んだ音。復号器が捨てた分であり、鳴らなかった音 (Missed) とは別に数える
+                label: "skippedFrames",
+                value: stats.audio.playoutCatchUp.skippedFrames,
+                testId: "subscriber-audio-playback-catch-up-skipped-frames",
+              },
+              {
+                label: "skippedMs",
+                value: stats.audio.playoutCatchUp.skippedMs.toFixed(1),
+                testId: "subscriber-audio-playback-catch-up-skipped-ms",
+              },
+              {
+                label: "lastSkippedMs",
+                value: formatMs(stats.audio.playoutCatchUp.lastSkippedMs),
+                testId: "subscriber-audio-playback-catch-up-last-skipped",
               },
             ]}
           />

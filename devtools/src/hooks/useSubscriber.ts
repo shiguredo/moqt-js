@@ -58,6 +58,7 @@ import {
   AudioPlayoutTimingStats,
   EMPTY_AUDIO_PLAYOUT_TIMING,
 } from "../../../src/audioPlayoutTimingStats.ts";
+import { EMPTY_AUDIO_RECEIVE_CATCH_UP } from "../../../src/audioReceiveCatchUp.ts";
 // 復号した音声の再生の組み立て (時間軸への記録・目標の決定・予約・計器への記録) は
 // ライブラリと共有する (組み立てを 2 か所へ置くと、到着基準の遅れ・閉ループ・計器の
 // 修正のたびに両方を直すことになり、片方だけ直すと挙動がずれる)
@@ -263,6 +264,7 @@ export function resetSubscriberStats(instance: sub.SubscriberInstance): void {
   instance.audioPlayoutRebases.value = 0;
   instance.audioPlayoutDrops.value = 0;
   instance.audioPlayoutTiming.value = EMPTY_AUDIO_PLAYOUT_TIMING;
+  instance.audioPlayoutCatchUp.value = EMPTY_AUDIO_RECEIVE_CATCH_UP;
 }
 
 /**
@@ -917,6 +919,7 @@ export function useSubscriber(
       const instance = sub.getSubscriber(subscriberId);
       if (!instance) return;
       instance.audioPlayoutTiming.value = audioPlayoutTimingRef.current.snapshot(performance.now());
+      publishAudioPlayoutCatchUp(instance);
     }, PLAYBACK_TIMING_PUBLISH_INTERVAL_MS);
   }
 
@@ -932,6 +935,18 @@ export function useSubscriber(
     const instance = sub.getSubscriber(subscriberId);
     if (!instance) return;
     instance.audioPlayoutTiming.value = audioPlayoutTimingRef.current.snapshot(performance.now());
+    publishAudioPlayoutCatchUp(instance);
+  }
+
+  /**
+   * 受信側の音声の追いつきの観測値を signal へ写す
+   *
+   * 観測は再生の組み立て (共有実装) が持つ。1 秒ごとの反映に合わせる (音を鳴らすたびに
+   * 写すと、値が変わっただけで画面が毎秒 50 回描き直される)
+   */
+  function publishAudioPlayoutCatchUp(instance: sub.SubscriberInstance): void {
+    instance.audioPlayoutCatchUp.value =
+      audioPlaybackRef.current?.playout.catchUp.snapshot() ?? EMPTY_AUDIO_RECEIVE_CATCH_UP;
   }
 
   /** 音声の再生の観測を signal へ反映するタイマーを止める */
@@ -1615,6 +1630,11 @@ export function useSubscriber(
       if (result.status !== "skipped" && result.rebased) {
         instance.audioPlayoutRebases.value += 1;
       }
+      if (result.status !== "skipped" && result.catchUpStarted) {
+        // 受信側の追いつきを始めた。復号器に溜まった古い音は、鳴らさずに捨てるだけでは
+        // 減らないため、復号器を作り直して捨てる (src/audioReceiveCatchUp.ts)
+        void resetAudioDecoderForCatchUp(audioDecoderInstance, instance);
+      }
       if (result.status === "error") {
         console.error(`[${subscriberId}] failed to play audio data:`, result.error);
       }
@@ -1624,6 +1644,29 @@ export function useSubscriber(
       console.error(`[${subscriberId}] failed to play audio data:`, error);
     } finally {
       audioData.close();
+    }
+  }
+
+  /**
+   * 受信側の音声の追いつきのために、音声の復号器を作り直す
+   *
+   * 復号器の中に溜まった古い音は実時間と同じ速さでしか出てこないため、鳴らさずに捨てる
+   * だけでは live へ戻らない。詳しい根拠と実測は src/audioReceiveCatchUp.ts が持つ。
+   * 作り直しの失敗は、復号の失敗としてログに残す (この後も復号は続くため、購読そのものは
+   * 止めない)
+   *
+   * @param audioDecoderInstance - 作り直す復号器
+   * @param instance - 失敗を数える購読の統計
+   */
+  async function resetAudioDecoderForCatchUp(
+    audioDecoderInstance: AudioDecoderWrapper,
+    instance: sub.SubscriberInstance,
+  ): Promise<void> {
+    try {
+      await audioDecoderInstance.reset();
+    } catch (error) {
+      console.error(`[${subscriberId}] failed to reset audio decoder for catch-up:`, error);
+      instance.decodeErrors.value += 1;
     }
   }
 

@@ -39,6 +39,7 @@ A/V 同期と再生まわりで入れた判断 (閾値・保持・検出・追�
 | 7   | 受信側の再生の組み立て         | `AudioPlayoutSession` / `VideoPlayoutSession`                                                                   | `avSync.*`、`audio.playoutTiming.*`                                                         |
 | 8   | 復号の出力と投入の対応づけ     | 1,000 マイクロ秒 (`DECODER_OUTPUT_TIMESTAMP_TOLERANCE_MICROS`) / 引けないときは直前の種類 (`LastTimestampKind`) | `audio.playoutTiming.arrivalPlannedFrames`                                                  |
 | 9   | 実リレーの E2E の判定          | 150 ms (`AV_SKEW_MAX_MS`) / 35 秒 (`AV_UNSHARED_RECOVERY_MAX_MS`)                                               | `avSync.skewMs`、`avSync.delays.unsharedReason`                                             |
+| 10  | 受信側の追いつき               | `max(60 ms, 床 + 40 ms)` / 床は直近 5 秒の最小値 / 床 + 100 ms で即時 / 確認 100 ms / 作り直しの間隔 1 秒       | `audio.playoutCatchUp.*`、`avSync.delays.audio.baseDelayMs`                                 |
 
 ## 1. A/V 同期で合わせる量の上限
 
@@ -808,6 +809,149 @@ runner の処理能力を測っていた (実測: CI の 4 vCPU の runner、`38
 - `avSync.delays.unsharedReason` / `sharingBases` / `baseUnsharedReturnMs`
 - `avSync.delays.baseDifferenceMs` / `baseDifferenceRecentMs` / `baseDriftMsPerSecond`
 
+## 10. 受信側の追いつき
+
+### 決めた値
+
+- `AUDIO_RECEIVE_CATCH_UP_MIN_MS` = 60 ms (遅れの上限の下限)
+- `AUDIO_RECEIVE_CATCH_UP_GROWTH_MS` = 40 ms (健全時の遅れ (床) からさらに許す遅れ)
+- `AUDIO_RECEIVE_CATCH_UP_FLOOR_WINDOW_MS` = 5 秒 (床を求める直近の窓)
+- `AUDIO_RECEIVE_CATCH_UP_JUMP_MS` = 100 ms (床を超えた分がこれを超えたら、持続を待たずに始める)
+- `AUDIO_RECEIVE_CATCH_UP_CONFIRM_MS` = 100 ms (上限を超えた状態が続くことを要求する時間)
+- `AUDIO_RECEIVE_CATCH_UP_COOLDOWN_MS` = 1 秒 (遅れが戻るまで作り直しを重ねる間隔)
+- `AUDIO_RECEIVE_CATCH_UP_SKIP_MIN_MS` = 1 ms (timestamp の跳びを、捨てた音とみなす最小)
+- 遅れは「復号の出力を受け取った壁時計 - `AudioData.timestamp`」で測る (`AudioPlayoutSession`)
+- 追いつく手段は復号器の作り直し (`AudioDecoderWrapper.reset()`) だけである。鳴らす音は捨てない
+- 音声の再生は購読 (`AudioPlayoutSession`) ごとに 1 つの `AudioReceiveCatchUp` を持つ
+
+### 守っている性質
+
+復号の出力が送られた TIMESTAMP から遅れて固定されたとき、音声を live へ戻すこと。受信側では、
+復号器 (WebCodecs の `AudioDecoder`) の中に未処理の音が溜まると、溜まった分だけ復号の出力が
+古いまま固定される。溜まった分は実時間と同じ速さでしか出てこないため、待っても戻らない。
+鳴らす音を捨てても、捨てた分は復号器から出てきた後の音であり、中の分は減らない。
+
+あわせて、経路と復号が一瞬つまずいただけの状態 (1 音だけの超過) では始めないこと。始めると
+復号器を作り直すたびに音が飛ぶ。ただし、音声を映像へ合わせられない遅れ (床から
+`AUDIO_RECEIVE_CATCH_UP_JUMP_MS` = 100 ms。決定 1 の上限と同じ) は待たずに始める。待つと、
+その間に映像だけが先へ進んで、利用者に見えるずれが予算 (150 ms) を超える。
+
+鳴らす音を捨てない (鳴らなかった音として数えない) ことも性質である。復号器が捨てた音は
+鳴らす側へ出てこないため、「鳴らなかった音」として数えると、遅れが戻らないまま数だけが
+増え続け、`missedFrames` が「受信側が実時間に追いつけていない証拠」ではなくなる。
+
+### 根拠
+
+実リレーの E2E (`tests/e2e/relay/audio-timestamp.spec.ts`) は、CI の runner で
+「音声の基準の遅れが 116.4 ms から 256.2 ms へ段差で上がり、そのまま戻らない」(増加
+139.8 ms、許す上限 50 ms) で落ちていた。同じ観測で映像の基準の遅れは 111.5〜112.2 ms の
+まま安定しており、遅れは受信側の音声だけにあった。配信側の計器 (決定 6) は健全だった。
+
+実測 (手元の 1 台、実リレーへ同じページから配信と購読) で、状態を 3 つに分けた。
+
+- 負荷なし: 復号の出力の遅れは 20 ms 前後で、基準の遅れは 18〜19 ms のまま動かない
+- CPU を 4 倍に遅くする (45 秒): 遅れは 20〜45 ms で動き、基準の遅れは 18〜28 ms のままで
+  段差は出ない
+- メインスレッドを 2 秒止める: 止めている間に届いた Object の到着の遅れは 2017.9 ms になり、
+  復号の出力の遅れも同じだけ伸びる。止めた後に溜まった分を復号し終えると 20 ms 前後へ
+  戻るが、戻るまでの間は遅れが 100 ms 以上続くため、追いつきは始まる (実測: 止めた直後に
+  1 回始まり、1939.9 ms 分を捨てた)。時間軸が使う基準の遅れは 18.3 ms のままで段差は出ない
+- CPU を 6 倍に遅くし、メインスレッドを 60 ms 占有して 40 ms 明け渡す負荷を 10 秒
+  (実リレーの E2E の `audio-catch-up.spec.ts` と同じ負荷): 復号の出力の遅れは負荷の間
+  145 ms から 2788 ms へ伸び続け、負荷をやめた後も 2788 ms のまま 23 秒間戻らなかった。
+  これが追いつくべき状態である
+
+修正前 (受信側の追いつきが無い状態) の同じ負荷では、遅れが 2788 ms のまま固定され、
+`missedFrames` は 0 のまま (鳴らす側は遅れて並べ続ける)、基準の遅れは窓の最小値のため
+21.4 ms のまま見えなかった。修正後は、負荷の間は作り直しを繰り返して遅れを 1 秒以内に
+保ち、負荷が去った 450 ms 後に遅れが 24.9 ms へ戻って `catchingUp` が下りた。
+`missedFrames` は 1 のまま (購読の直後の 1 音のみ)、`playoutRebases` は 0 のままである。
+
+値の根拠は次のとおり。
+
+- 遅れの測り方を「復号の出力 - 送られた TIMESTAMP」にするのは、時間軸 (`PlaybackTimeline`) が
+  音声の基準に使う値と同じであり、遅れが復号器の中にあることを直接測れるためである
+- 上限を床からの増加で測るのは、健全時の遅れが環境で決まるためである (実測: 手元では
+  18〜19 ms、CI の runner では 116 ms 前後)。絶対値で測ると、遅い環境では健全な状態でも
+  作り直し続ける
+- 床を直近 5 秒の窓の最小値にするのは、購読の直後に relay の cache から届いた分をまとめて
+  復号すると小さな遅れが 1 音だけ出ることがあり、全期間の最小値にすると健全な状態
+  (その環境の定常値) が上限を超えて見えるためである。5 秒は定常値を保つのに十分で、
+  環境が変わったときに数秒で追従する
+- 60 ms の下限は、音声の 1 パケット 20 ms の 3 パケット分である (配信側の決定 6 と同じ値)
+- 40 ms の成長分は、負荷なしから 4 倍の負荷までの揺らぎ (実測で 18〜45 ms) を吸収し、
+  CI の段差 (実測で 139.8 ms) を捕まえる値である
+- 100 ms の確認は、1 音の超過 (実測: CPU を 6 倍に遅くした負荷の前の 8 秒で、上限を
+  250 ms ごとの観測で 1 回だけ超えて次には戻った) で始めない値である
+- 床 + 100 ms で持続を待たずに始めるのは、音声と映像のずれとして合わせられる量の上限
+  (決定 1 の `PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS` = 100 ms) と同じ値である。これを超えた
+  遅れは映像を待たせても合わせられない。実測 (実リレー) では、到着の遅れが 233 ms になった
+  観測で音声と映像の表示時刻の差が -168.6 ms になり (許す絶対値は 150 ms)、100 ms の確認を
+  待つとその間にずれが開いた。200 ms 止める負荷での実測 (各 3 回) では、最大のずれが
+  91.6 / 110.6 / 88.1 ms (待たずに始める) と 111.1 / 108.8 / 110.2 ms (確認を待つ) に
+  なった
+- 観測が窓 (5 秒) より長く途切れた後は、途切れる前の床を窓の長さの分だけ保つ。実測では、
+  途切れた後に現れた 150 ms の遅れが床になり、上限 (150 + 40 ms) を超えず、追いつきが
+  始まらなかった (遅れはそのまま固定された)
+- 1 秒ごとに作り直しを重ねるのは、1 回で戻らない状態があるためである (実測: 負荷の間は
+  1 回作り直しても、その後に溜まり直して遅れが伸び続けた)。上限へ戻れば止まるため、
+  遅れが伸びている間だけ重なる
+- 飛んだ音を timestamp の跳びから測るのは、復号器が捨てた音は鳴らす側へ出てこないため、
+  出力の timestamp が跳ぶことでしか観測できないからである
+
+**根拠が薄い点**:
+
+- すべて手元の 1 台の実測である。CI の runner (4 vCPU) では遅れの現れ方が違い、同じ負荷でも
+  作り直しの回数と飛ぶ長さは変わり得る (CI での計測は未実施)
+- 追いつきが始まる頻度の上限 (1 秒に 1 回) は、恒久的に劣化した環境で聞いて確かめていない。
+  窓 (5 秒) が埋まれば床と共に上限が上がって止まる、という計算上の性質に頼っている
+- 5 秒の窓の最小値を床にするとき、1 音だけ小さな遅れが観測されると、その 5 秒間は上限が
+  下がる。実測 (負荷なしの 45 秒) では床と定常値の差は 5 ms 以内で、誤った開始は起きて
+  いないが、大きな外れ値が出る環境は測っていない
+- 飛んだ音の数は `timestamp` の跳びから求めた推定である。配信側の欠落や relay の cache の
+  再送でも timestamp は跳ぶが、追いつきの最中 (遅れが上限へ戻るまで) だけを数えるため、
+  取り違えるのは追いつきと同時に欠落した場合だけである
+
+### 副作用とトレードオフ
+
+- 追いつき 1 回につき、遅れの分 (実測の CI の段差では 139.8 ms) の音が飛ぶ。飛んだ区間は
+  前の音の末尾からの concealment が上限 (100 ms) まで埋め、それより長い分は無音になる。
+  遅れたまま鳴らし続けるより、live へ戻る方が聴感は良いという判断である (決定 6 と同じ)
+- 遅れが伸び続けている間は 1 秒ごとに作り直す。その間の音は、溜まった分が捨てられるため
+  途切れながら live に近い位置で鳴る (実測: 10 秒の負荷で 13 回、4.1 秒分が飛んだ)
+- 床 + 100 ms を超える遅れでは、1 音の観測でも作り直す。1 音だけの大きな揺らぎ (遅れが
+  一時的に 100 ms を超える) でも音が飛ぶ。経路と復号の揺らぎの実測 (18〜45 ms、最大 97 ms)
+  では届かないが、それより大きい揺らぎの環境は測っていない
+- 飛んだ音は `missedFrames` に現れない。`audio.playoutCatchUp.skippedMs` と `skippedFrames`
+  で読み、`missedFrames` (鳴らす側が見た音) と分けて見る
+- 復号器を作り直すと、復号器に溜まっていた未処理の投入は捨てられる。作り直しの直後に
+  復号されるのは最後に届いた Object であり、その間の音は鳴らない
+- 環境が恒久的に悪化した場合、床が上がって上限も上がるため、追いつきは始まらなくなる
+  (遅れが新しい定常値として受け入れられる)。そのための絶対値の下限が 60 ms である
+
+### 再考の条件
+
+- `audio.playoutCatchUp.catchUpStarts` が 1 分に 3 回以上増え続ける (警告
+  `catchUpKeepsStarting` と同じ考え方)。1 回で 140 ms 前後が飛ぶため、聞いて分かる劣化になる
+- `audio.playoutCatchUp.skippedMs` が増え続けるのに `lagMs` が上限へ戻らない (作り直しが
+  効いていない)
+- `avSync.delays.audio.baseDelayMs` が `audio.receiveDelayMs` (受信した壁時計 - LOC
+  TIMESTAMP) から離れて伸び続ける。受信の処理ではなく復号器の中に溜まっている証拠である
+- `audio.playoutTiming.missedByReason.backlog` が増える (追いつきではなく、鳴らす側が
+  並べすぎで捨て始めている)
+- 床 (5 秒の窓の最小値) が一過性の観測で下がり、健全な状態で追いつきが始まる
+- 床 + 100 ms の経路で始まる回数が増える (1 音の揺らぎで始まっている)。その場合は
+  `lagMs` と `floorMs` の差の分布を見る
+
+### 見る計器
+
+- `audio.playoutCatchUp.lagMs` / `floorMs` / `maxLagMs` / `limitMs`
+- `audio.playoutCatchUp.catchingUp` / `catchUpStarts`
+- `audio.playoutCatchUp.skippedFrames` / `skippedMs` / `lastSkippedMs`
+- `avSync.delays.audio.baseDelayMs` / `audioDelayFeedback.*`
+- `audio.receiveDelayMs` / `maxReceiveDelayMs` (復号器の中かどうかの切り分け)
+- `audio.playoutTiming.missedFrames` / `missedByReason` / `playoutRebases` / `playoutDrops`
+
 ## 実行時の警告 (前提から外れた状態)
 
 上の「再考の条件」のうち、既にある計器の値だけで判定できるものを moqt-devtools が出す。
@@ -842,6 +986,7 @@ runner の処理能力を測っていた (実測: CI の 4 vCPU の runner、`38
 | 音声の再生       | `audio.playoutTiming.slackMs` / `startDelayMs` / `latenessMs`、`missedByReason`、`arrivalPlannedFrames`、`avSync.delays.audioDelayFeedback.*`               | 80〜100 ms で鳴っているか、目標が収束しているか、到着基準へ落ちていないか |
 | 配信側の補正     | `audio.timestampOffset.slope10sMsPerSecond` / `slope60sMsPerSecond` / `appliedMs` / `minMs` / `maxMs`                                                       | TIMESTAMP が壁時計からずれていないか                                      |
 | 配信側の追いつき | `audio.catchUp.catchUpStarts` / `catchingUp` / `lagMs` / `floorMs` / `droppedMs`                                                                            | 実時間で符号化できているか                                                |
+| 受信側の追いつき | `audio.playoutCatchUp.catchUpStarts` / `catchingUp` / `lagMs` / `floorMs` / `skippedMs` / `avSync.delays.audio.baseDelayMs` / `audio.receiveDelayMs`        | 遅れが経路と受信にあるのか、復号器の中にあるのか                          |
 
 ### 2. 判定する
 
@@ -856,6 +1001,8 @@ devtools の `Warnings` と上の 4 指標を、この文書の各決定の「�
 - 時計のずれ (差が動き続ける、配信側の傾きが 0 から離れる) → 決定 3 と 5
 - 経路の遅れ (差は動かないが大きい、跳ねが大きい) → 決定 1、4
 - 実時間に間に合っていない (追いつき、符号化の遅れ) → 決定 6
+- 受信側の復号の出力が古いまま固定されている (`baseDelayMs` が `receiveDelayMs` から離れて
+  伸びる、`audio.playoutCatchUp.skippedMs` が増えない) → 決定 10
 - 組み立てのずれ (ライブラリと devtools で違う、到着基準へ落ちる) → 決定 7
 
 ### 4. 実装を直す

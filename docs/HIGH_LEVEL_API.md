@@ -608,6 +608,31 @@ interface AudioReceiverStats {
   // 予定に対する余裕の分布 (直近 10 秒の p50 / p95 / max)、鳴らなかった量 (件数と ms) を
   // 理由ごとに出す (src/audioPlayoutTimingStats.ts)
   playoutTiming: AudioPlayoutTimingSnapshot;
+  // 受信側の音声の追いつきの観測値 (src/audioReceiveCatchUp.ts)。復号の出力が送られた
+  // TIMESTAMP から遅れ続けたときに、復号器を作り直して live へ戻した量
+  playoutCatchUp: AudioReceiveCatchUpStats;
+}
+
+// 受信側の音声の追いつきの観測値 (ms)
+interface AudioReceiveCatchUpStats {
+  // 直近に観測した、復号の出力の遅れ (復号の出力を受け取った壁時計 - AudioData.timestamp)。
+  // まだ観測していなければ null
+  lagMs: number | null;
+  // 健全時の遅れ (床) と、観測した最大の遅れ。床は直近 5 秒の窓の最小値であり、
+  // 経路と復号の速さという環境の値を含む (実測: 手元で 18〜19 ms、CI の runner で 116 ms 前後)
+  floorMs: number | null;
+  maxLagMs: number | null;
+  // いま使っている遅れの上限。max(60 ms, floorMs + 40 ms)
+  limitMs: number;
+  // いま追いつきの最中か (復号器を作り直した後、遅れが上限へ戻るまで)。この間は 1 秒ごとに
+  // 作り直しを重ねる
+  catchingUp: boolean;
+  // 追いつきを始めた回数 (復号器を作り直した回数、累積)
+  catchUpStarts: number;
+  // 追いつきで飛んだ音の数と長さ (累積の推定。復号の出力の timestamp の跳びから求める)
+  skippedFrames: number;
+  skippedMs: number;
+  lastSkippedMs: number | null;
 }
 
 // 音声の再生の観測値。時刻はすべて performance.now() と同じ軸のミリ秒であり、
@@ -920,6 +945,8 @@ TIMESCALE から決める。draft-ietf-moq-loc-04 §2.3.1.1 / §2.3.1.2) であ�
 - 計器 (`AudioPlayoutTimingStats`) への記録 (鳴るはずの時刻・届いた時刻・鳴り始める時刻と、
   鳴らなかった量)
 - 目標遅延の閉ループへの観測の引き渡し (`audioDelayFeedback` が true のとき)
+- 受信側の追いつきの判定 (`AudioReceiveCatchUp`)。復号の出力が送られた TIMESTAMP から
+  遅れ続けたら、復号器を作り直す必要があることを結果 (`catchUpStarted`) で知らせる
 
 Web Audio (`AudioContext` とその出力) は `AudioPlayoutOutput` として注入する。`AudioContext`
 の時計と `performance.now()` の対応は `AudioClockBridge` が境界になり、このクラス自体は
@@ -1000,15 +1027,17 @@ interface AudioPlayoutOutput {
 
 ```typescript
 type AudioPlayoutResult =
-  | { status: "played"; rebased: boolean }
-  | { status: "dropped"; rebased: boolean; reason: "backlog" }
-  | { status: "error"; rebased: boolean; error: Error }
+  | { status: "played"; rebased: boolean; catchUpStarted: boolean }
+  | { status: "dropped"; rebased: boolean; reason: "backlog"; catchUpStarted: boolean }
+  | { status: "error"; rebased: boolean; catchUpStarted: boolean; error: Error }
   | { status: "skipped" };
 ```
 
 `rebased` は、この音の予約で鳴らす時刻の基準を取り直したかである (`AudioPlayoutScheduler.rebases`
-が増えたか)。`dropped` は並べすぎで捨てた音であり、計器には理由 (`backlog`) と長さを記録済みで
-ある。`error` は鳴らす準備の途中で失敗した音であり、計器には「鳴らなかった」として記録済みで
+が増えたか)。`catchUpStarted` は、この音で受信側の追いつきを始めたかである。true のときは
+復号器を作り直す (`AudioDecoderWrapper.reset()`)。その理由と、鳴らす音を捨てない理由は
+「受信側の追いつき」を参照。`dropped` は並べすぎで捨てた音であり、計器には理由 (`backlog`)
+と長さを記録済みである。`error` は鳴らす準備の途中で失敗した音であり、計器には「鳴らなかった」として記録済みで
 ある (このクラスは throw せず、呼び出し側が `onError` やログへ流す)。`skipped` は鳴らす先が
 無いときである。
 
@@ -1016,7 +1045,10 @@ type AudioPlayoutResult =
 
 - `handleDecodedAudio(request)` — 復号した音を鳴らす (上の 2 節)
 - `reset()` — 予約の基準・時計の対応・直前の音を消す (`AudioContext` を作り直したとき)。
-  統計の累積 (基準を取り直した回数・捨てた音・詰めた合計・補間した合計) は消さない
+  統計の累積 (基準を取り直した回数・捨てた音・詰めた合計・補間した合計) は消さない。
+  受信側の追いつきの観測と累積 (`catchUp`) は消す (再生そのものをやり直すため)
+- `catchUp` — 受信側の追いつきの判定と観測 (`AudioReceiveCatchUp`)。`snapshot()` で
+  `AudioReceiverStats.playoutCatchUp` と同じ値を読める
 - `releaseAudioContext()` — 時計の対応と直前の音だけを消す (`AudioContext` を閉じた後始末)。
   予約の基準は統計の `playoutLatenessMs` が読むため残す
 - `recordStopped()` — 予約した音のうち、まだ鳴っていない分を鳴らなかった音として計器へ
@@ -1028,6 +1060,42 @@ type AudioPlayoutResult =
 `enforceTarget` が true でも目標の時刻を決められなかったときは到着基準になる。到着基準の遅れは、
 到着した音が「まだ鳴っていない位置」から数える (「統計情報」の説明を参照)。moqt-devtools は
 目標遅延の閉ループを使っていないため `audioDelayFeedback: false` を渡している。
+
+### 受信側の追いつき
+
+受信した音声は、復号器 (WebCodecs の `AudioDecoder`) の中に未処理の音が溜まると、溜まった分
+だけ復号の出力が送られた TIMESTAMP から遅れたまま固定される。溜まった分は実時間と同じ速さで
+しか出てこないため、待っても戻らない。鳴らす音を捨てても、捨てた分は復号器から出てきた後の音
+であり、中の分は減らない。
+
+`AudioPlayoutSession` は、復号の出力の遅れ (復号の出力を受け取った壁時計 -
+`AudioData.timestamp`) を `AudioReceiveCatchUp` で観測し、(1) 健全時の遅れ (床) から
+`AUDIO_RECEIVE_CATCH_UP_GROWTH_MS` (40 ms) を超えたまま `AUDIO_RECEIVE_CATCH_UP_CONFIRM_MS`
+(100 ms) 続いたとき、または (2) 床から `AUDIO_RECEIVE_CATCH_UP_JUMP_MS` (100 ms。A/V 同期で
+合わせられる量の上限と同じ) を超えたときに、結果の `catchUpStarted` を true にする。呼び出し側はそれを受けて復号器を作り直す (`AudioDecoderWrapper.reset()`)。復号器を
+作り直すと、中に溜まっていた音が捨てられ、次に復号されるのは最後に届いた Object になる。
+
+```typescript
+import { AudioPlayoutSession, AudioPlayoutTimingStats, PlaybackTimeline } from "moqt-js";
+
+const result = session.handleDecodedAudio({/* 上の例と同じ */});
+if (result.status !== "skipped" && result.catchUpStarted) {
+  await audioDecoder.reset();
+}
+
+// 表示と統計は snapshot() で読める (AudioReceiverStats.playoutCatchUp と同じ値)
+const catchUp = session.catchUp.snapshot();
+```
+
+鳴らす音は捨てない (鳴らなかった音として数えない)。復号器が捨てた音は鳴らす側へ出てこないため、
+`missedFrames` を「受信側が実時間に追いつけていない証拠」として保つためである。飛んだ音は
+復号の出力の timestamp の跳びから測り、`skippedFrames` / `skippedMs` に出す。遅れが上限へ
+戻るまでは `AUDIO_RECEIVE_CATCH_UP_COOLDOWN_MS` (1 秒) ごとに作り直しを重ねる (1 回で戻らない
+状態があるため)。閾値と根拠は `docs/AV_SYNC_DECISIONS.md` の「10. 受信側の追いつき」にある。
+
+`AudioReceiveCatchUp` と `AUDIO_RECEIVE_CATCH_UP_*` の定数、`AudioReceiveCatchUpStats` は
+`moqt-js` から import できる (`AudioReceiveCatchUp` を単体で使うこともできる。時刻と値は
+呼び出し側が渡すため、ブラウザ API は要らない)。
 
 ---
 

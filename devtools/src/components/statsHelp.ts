@@ -29,6 +29,13 @@ import {
   type AudioMissReason,
 } from "../../../src/audioPlayoutTimingStats.ts";
 import {
+  AUDIO_RECEIVE_CATCH_UP_CONFIRM_MS,
+  AUDIO_RECEIVE_CATCH_UP_COOLDOWN_MS,
+  AUDIO_RECEIVE_CATCH_UP_FLOOR_WINDOW_MS,
+  AUDIO_RECEIVE_CATCH_UP_GROWTH_MS,
+  AUDIO_RECEIVE_CATCH_UP_MIN_MS,
+} from "../../../src/audioReceiveCatchUp.ts";
+import {
   DISPLAY_FPS_WINDOW_MS,
   DISPLAY_STALL_FACTOR,
   MAX_RECENT_LOSS_EVENTS,
@@ -40,6 +47,8 @@ import { STALL_CAUSES, type StallCause } from "../utils/stallAnalysis";
 
 // 分布を求める窓 (秒)
 const PLAYBACK_WINDOW_SECONDS = PLAYBACK_TIMING_WINDOW_MS / 1_000;
+// 受信側の音声の追いつきが、健全時の遅れ (床) を求める窓 (秒)
+const FLOOR_WINDOW_SECONDS = AUDIO_RECEIVE_CATCH_UP_FLOOR_WINDOW_MS / 1_000;
 const PUBLISH_WINDOW_SECONDS = PUBLISH_TIMING_WINDOW_MS / 1_000;
 
 /** 分布の表の左上に出す窓の長さと単位 */
@@ -364,6 +373,43 @@ export const AUDIO_PLAYBACK_TIMING_HELP: SectionHelp = {
   notes: [
     "The start is the time reserved on the AudioContext clock, so the output latency of the device is not included. Use the A/V Sync audioClockFallback to see whether the clock is mapped by getOutputTimestamp() or by currentTime.",
     "Only the subscriber's own pipeline is measured. A sound that never arrives or never gets decoded does not appear here (compare audio.objectsReceived / chunksDecoded with audio.playoutTiming.playedFrames).",
+  ],
+};
+
+/** subscriber の Audio Playback の Catch-up */
+export const AUDIO_PLAYBACK_CATCH_UP_HELP: SectionHelp = {
+  summary: `Catch-up of received audio. When the decoded output keeps arriving later than its LOC TIMESTAMP, the decoder is holding the sounds it has not output yet, and it drains them no faster than real time, so the lag stays. The receiver rebuilds the decoder to throw that queue away. The values are measured on the decoded output (ms).`,
+  formula: `lag = (performance.timeOrigin + arrival) - AudioData.timestamp, limit = max(${AUDIO_RECEIVE_CATCH_UP_MIN_MS} ms, floor + ${AUDIO_RECEIVE_CATCH_UP_GROWTH_MS} ms)`,
+  items: [
+    {
+      term: "lagMs / floorMs / maxLagMs",
+      description: `The lag of the last decoded sound, the healthy lag (the smallest lag in the last ${FLOOR_WINDOW_SECONDS} s) and the largest lag observed since subscribing started (ms). The healthy lag of the environment is included (measured: 18-19 ms on a local machine, around 116 ms on a loaded CI runner).`,
+    },
+    {
+      term: "limitMs",
+      description: `The lag allowed now (ms). The larger of ${AUDIO_RECEIVE_CATCH_UP_MIN_MS} ms (3 packets) and floorMs + ${AUDIO_RECEIVE_CATCH_UP_GROWTH_MS} ms (2 packets).`,
+    },
+    {
+      term: "catchingUp",
+      description:
+        "The lag has stayed above limitMs since the last rebuild. While it stays above, the decoder is rebuilt again every " +
+        `${AUDIO_RECEIVE_CATCH_UP_COOLDOWN_MS} ms.`,
+    },
+    {
+      term: "catchUpStarts",
+      description:
+        "Times the decoder was rebuilt (cumulative). Each rebuild throws the sounds queued in the decoder away.",
+    },
+    {
+      term: "skippedFrames / skippedMs / lastSkippedMs",
+      description:
+        "Sounds thrown away by the rebuild (cumulative), estimated from the jump of the timestamps of the decoded output: a jump longer than one sound means the sounds in between were thrown away.",
+    },
+  ],
+  notes: [
+    `A catch-up starts only after the lag stays above limitMs for ${AUDIO_RECEIVE_CATCH_UP_CONFIRM_MS} ms, so a receiver that fell behind once (objects delivered in a burst) is left to recover by itself.`,
+    "The sounds are not counted as missed (see Missed): the sounds the decoder threw away were never output, so the playout never saw them. Compare this counter with playoutDrops and missedFrames.",
+    "The gap left by the skipped sounds is concealed from the end of the previous sound, up to the concealment limit (100 ms); a longer gap stays silent.",
   ],
 };
 

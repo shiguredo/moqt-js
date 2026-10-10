@@ -5,6 +5,7 @@ import type { PublishTimingSnapshot } from "../utils/publishTimingStats";
 import type { AudioPlayoutTimingSnapshot } from "../../../src/audioPlayoutTimingStats.ts";
 import type { AudioTimestampOffsetStats } from "../../../src/audioTimestampClock.ts";
 import type { AudioPublishCatchUpStats } from "../../../src/audioPublishCatchUp.ts";
+import type { AudioReceiveCatchUpStats } from "../../../src/audioReceiveCatchUp.ts";
 import type { PreconditionWarning } from "../utils/preconditionWarnings.ts";
 import type { StatusType } from "../types";
 import {
@@ -252,6 +253,15 @@ export interface SubscriberAudioStats {
    * (件数と ms) を理由ごとに持つ
    */
   playoutTiming: AudioPlayoutTimingSnapshot;
+  /**
+   * 受信側の音声の追いつきの観測値 (src/audioReceiveCatchUp.ts)
+   *
+   * 復号の出力が送られた TIMESTAMP から遅れ続けたときに、復号器を作り直して live へ戻した
+   * 量。観測した遅れと健全時の遅れ (床)、遅れの上限、追いつきの最中かどうか、作り直した
+   * 回数、飛んだ音の数と長さ (timestamp の跳びから求めた推定) を持つ。復号器の作り直しは、
+   * 追いつきを始めたときに購読側が行う
+   */
+  playoutCatchUp: AudioReceiveCatchUpStats;
 }
 
 /** Subscriber の Messages (event timeline) の統計 */
@@ -464,6 +474,7 @@ export function buildSubscriberStats(sub: SubscriberInstance): SubscriberStats {
       playoutRebases: sub.audioPlayoutRebases.value,
       playoutDrops: sub.audioPlayoutDrops.value,
       playoutTiming: sub.audioPlayoutTiming.value,
+      playoutCatchUp: sub.audioPlayoutCatchUp.value,
     },
     event: {
       objectsReceived: sub.eventObjectsReceived.value,

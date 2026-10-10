@@ -920,6 +920,8 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       playoutLatenessMs: this.audioPlayout.lateness * 1_000,
       // 分布は直近 10 秒のため、呼び出した時点の値を取る
       playoutTiming: this.audioPlayoutTiming.snapshot(performance.now()),
+      // 受信側の音声の追いつき (src/audioReceiveCatchUp.ts)
+      playoutCatchUp: this.audioPlayoutSession.catchUp.snapshot(),
     };
   }
 
@@ -2438,12 +2440,37 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       if (result.status === "error") {
         this.callbacks.onError?.(result.error);
       }
+      if (result.status !== "skipped" && result.catchUpStarted) {
+        // 受信側の追いつきを始めた。復号器に溜まった古い音は、鳴らさずに捨てるだけでは
+        // 減らないため、復号器を作り直して捨てる (src/audioReceiveCatchUp.ts)
+        void this.resetAudioDecoderForCatchUp();
+      }
     } catch (error) {
       // 共有実装は鳴らす準備の失敗を結果で返す。ここへ来るのは、その前後の想定外の失敗だけ
       // である (以前と同じく onError へ通知する)
       this.callbacks.onError?.(error instanceof Error ? error : new Error(String(error)));
     } finally {
       audioData.close();
+    }
+  }
+
+  /**
+   * 受信側の音声の追いつきのために、音声の復号器を作り直す
+   *
+   * 復号器の中に溜まった古い音は実時間と同じ速さでしか出てこないため、鳴らさずに捨てる
+   * だけでは live へ戻らない。詳しい根拠と実測は src/audioReceiveCatchUp.ts が持つ。
+   * 作り直しの失敗は、復号の失敗として onError へ通知する (この後も復号は続くため、
+   * 購読そのものは止めない)。
+   */
+  private async resetAudioDecoderForCatchUp(): Promise<void> {
+    const decoder = this.audioDecoder;
+    if (decoder === null) {
+      return;
+    }
+    try {
+      await decoder.reset();
+    } catch (error) {
+      this.callbacks.onError?.(error instanceof Error ? error : new Error(String(error)));
     }
   }
 

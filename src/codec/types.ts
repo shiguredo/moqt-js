@@ -6,6 +6,7 @@ import type { PlaybackDelayBreakdown } from "../playbackTimeline";
 import type { AudioPlayoutTimingSnapshot } from "../audioPlayoutTimingStats";
 import type { AudioTimestampOffsetStats } from "../audioTimestampClock";
 import type { AudioPublishCatchUpStats } from "../audioPublishCatchUp";
+import type { AudioReceiveCatchUpStats } from "../audioReceiveCatchUp";
 
 // オーディオコーデック
 export type AudioCodecType = "opus" | "aac";
@@ -56,6 +57,11 @@ export interface AudioReceiverStats {
   // 理由ごとに出す。時刻は performance.now() と同じ軸のミリ秒
   // (src/audioPlayoutTimingStats.ts)
   playoutTiming: AudioPlayoutTimingSnapshot;
+  // 受信側の音声の追いつき。復号の出力が送られた TIMESTAMP から遅れ続けたときに、
+  // 復号器を作り直して live へ戻した量 (src/audioReceiveCatchUp.ts)。観測した遅れと
+  // 健全時の遅れ (床)、遅れの上限、追いつきの最中かどうか、作り直した回数、飛んだ音の
+  // 数と長さ (timestamp の跳びから求めた推定) を出す
+  playoutCatchUp: AudioReceiveCatchUpStats;
 }
 
 // ビデオ統計
