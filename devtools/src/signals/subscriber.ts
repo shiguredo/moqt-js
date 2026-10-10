@@ -174,6 +174,12 @@ export interface SubscriberInstance {
   // 経路の都合で subgroup に落ちていないか) をここで確認する
   audioDatagramObjectsReceived: Signal<number>;
   audioChunksDecoded: Signal<number>;
+  // 直近に受信した音声 Object の到着の遅れ (ミリ秒)。受信した壁時計 - LOC TIMESTAMP で
+  // あり、配信側の送信の遅れ (audio.catchUp.sendLagMs) と対で読み、遅れが配信側にあるのか
+  // relay と経路にあるのかを分ける。壁時計の TIMESTAMP を持たない Object では更新しない
+  audioReceiveDelayMs: Signal<number | null>;
+  // 受信した音声 Object の到着の遅れの最大 (ミリ秒)。まだ観測していなければ null
+  audioMaxReceiveDelayMs: Signal<number | null>;
   // relay の cache から追いつく途中で、復号したが鳴らさなかった音声 Object の数。
   // 再生が有効なときだけ数える (src/catchUpGate.ts)
   audioCatchUpObjectsSkipped: Signal<number>;
@@ -254,6 +260,8 @@ export function createSubscriberInstance(id: string): SubscriberInstance {
     audioObjectsReceived: signal(0),
     audioDatagramObjectsReceived: signal(0),
     audioChunksDecoded: signal(0),
+    audioReceiveDelayMs: signal<number | null>(null),
+    audioMaxReceiveDelayMs: signal<number | null>(null),
     audioCatchUpObjectsSkipped: signal(0),
     audioPlaybackEnabled: signal(false),
     audioPlayoutRebases: signal(0),

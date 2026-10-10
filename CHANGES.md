@@ -11,6 +11,14 @@
 
 ## develop
 
+- [ADD] `AudioStats.catchUp` に音声の送信のキューの計器を追加する
+  - 音声の Object は 1 Object = 1 Group = 1 ストリームであり、送信の待ち (WebTransport のストリーム生成と書き込み) は符号化のキューより後ろにあるため、符号化のキューの計器では見えなかった。`sendQueueMs` / `sendQueueFrames` (送信キューへ入れたまま送信が終わっていない音声の長さと数) と `sendLagMs` / `maxSendLagMs` (撮ってから送信が終わるまでの遅れと、その最大) を足し、配信側が足した遅れを読み出し (`readLagMs`)・符号化のキュー (`pendingMs` / `pendingFrames`)・送信のキュー (`sendQueueMs` / `sendQueueFrames`) の 3 段に分けて読めるようにする
+  - 実測 (手元の再現) では、健全な状態の `sendLagMs` は 10〜20 ms、`sendQueueMs` は 0〜20 ms であり、受信側の基準の遅れが伸びた区間でもこの 2 つは動かなかった。上限判定は従来どおり読み出しの遅れと符号化のキューの和で行う (送信のキューは捨てても減らないため)
+  - 実リレーの E2E (audio-timestamp / audio-catch-up) の失敗メッセージに、配信側の `audio.catchUp.*` (`readLagMs` / `pendingMs` / `pendingFrames` / `sendQueueMs` / `sendQueueFrames` / `sendLagMs` / `lagMs` / `floorMs` / `droppedFrames` / `droppedMs` / `catchUpStarts` / `catchingUp`) を出すようにする。判定は変えず、次に落ちたときにどの段で遅れたのかを CI のログだけから切り分けられるようにする
+  - @voluntas
+- [ADD] moqt-devtools の Subscriber 統計に音声の到着の遅れを追加する
+  - `audio.receiveDelayMs` / `audio.maxReceiveDelayMs` は、受信した壁時計から LOC TIMESTAMP を引いた値である。配信側の送信の遅れ (`audio.catchUp.sendLagMs`) と対で読むことで、遅れが配信側と経路にあるのか、受信側の復号と再生にあるのかを分けられる
+  - @voluntas
 - [ADD] moqt-devtools に、A/V 同期と再生の判断が前提から外れた状態の警告を追加する
   - 既にある計器の値だけを組み合わせて 1 秒ごとに判定し、Subscriber の `A/V Sync` と Publisher の `Audio` の `Warnings` セクションと「Copy for LLM」の `warnings` に出す。警告になった時点と戻った時点はデバッグログに 1 件だけ残す
   - 出すのは 4 つである。`syncExtraDelayPinnedAtLimit` (合わせる量が上限の 5 ms 以内のまま 10 秒続く)、`unsharedHoldContinues` (`unsharedReason` が `hold` のまま 20 秒続く)、`timestampOffsetKeepsMoving` (TIMESTAMP の補正の傾きが 5 ms/秒以上)、`catchUpKeepsStarting` (追いつきが 60 秒に 3 回以上始まる)

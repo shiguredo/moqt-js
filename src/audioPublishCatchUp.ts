@@ -108,6 +108,31 @@ export const AUDIO_PUBLISH_CATCH_UP_RESUME_MS = 20;
  */
 export const AUDIO_PUBLISH_CATCH_UP_PENDING_TIMEOUT_MS = 5_000;
 
+/** `AudioPublishCatchUp.recordSendStart()` の入力 */
+export interface AudioPublishCatchUpSendStart {
+  /**
+   * 送る Object の対応づけに使う timestamp (マイクロ秒)
+   *
+   * `recordEncodedChunk()` が返した「覆った最初の投入の timestamp」を使う。送出の完了は
+   * 送信キューの順に返るが、失敗した分を取り違えないよう、対応づけは timestamp で行う
+   */
+  readonly timestampMicros: number;
+  /** 送る Object の LOC TIMESTAMP (Unix epoch ミリ秒) */
+  readonly capturedWallClockMs: number;
+  /** フレームの長さ (ミリ秒) */
+  readonly durationMs: number;
+  /** 送信キューへ入れた時刻 (`performance.now()`、ミリ秒) */
+  readonly nowMs: number;
+}
+
+/** `AudioPublishCatchUp.recordSendComplete()` の入力 */
+export interface AudioPublishCatchUpSendComplete {
+  /** `recordSendStart()` に渡した timestamp (マイクロ秒) */
+  readonly timestampMicros: number;
+  /** 送出が完了した時刻 (Unix epoch ミリ秒) */
+  readonly completedWallClockMs: number;
+}
+
 /** `AudioPublishCatchUp.recordEncodedChunk()` の結果 */
 export interface AudioPublishCatchUpChunkResult {
   /**
@@ -145,12 +170,33 @@ export interface AudioPublishCatchUpStats {
   catchingUp: boolean;
   /** 追いつきを始めた回数 (累積) */
   catchUpStarts: number;
+  /** 送信キューへ入れたまま送信が終わっていない音声の長さ (ミリ秒) */
+  sendQueueMs: number;
+  /** 送信キューへ入れたまま送信が終わっていないフレームの数 */
+  sendQueueFrames: number;
+  /**
+   * 直近に送信が終わったフレームの、撮ってから送信が終わるまでの遅れ (ミリ秒)。
+   * まだ送信が終わっていなければ null
+   */
+  sendLagMs: number | null;
+  /** 観測した送信の遅れの最大 (ミリ秒)。まだ送信が終わっていなければ null */
+  maxSendLagMs: number | null;
 }
 
 /** 符号化へ渡したフレームの記録 (出力が返るまで持つ) */
 interface PendingFrame {
   /** 読み出した時刻 (`performance.now()`、ミリ秒) */
   readonly readAtMs: number;
+  /** フレームの長さ (ミリ秒) */
+  readonly durationMs: number;
+}
+
+/** 送信キューへ入れたフレームの記録 (送信が終わるまで持つ) */
+interface PendingSend {
+  /** 送信キューへ入れた時刻 (`performance.now()`、ミリ秒) */
+  readonly queuedAtMs: number;
+  /** 送る Object の LOC TIMESTAMP (Unix epoch ミリ秒) */
+  readonly capturedWallClockMs: number;
   /** フレームの長さ (ミリ秒) */
   readonly durationMs: number;
 }
@@ -218,6 +264,14 @@ export class AudioPublishCatchUp {
   private readonly pending = new Map<number, PendingFrame>();
   /** 符号化へ渡したまま出力が返っていない音声の長さ (ミリ秒) */
   private pendingMs = 0;
+  /** 送信キューへ入れたまま送信が終わっていないフレーム (対応づけの timestamp ごと) */
+  private readonly pendingSends = new Map<number, PendingSend>();
+  /** 送信キューへ入れたまま送信が終わっていない音声の長さ (ミリ秒) */
+  private pendingSendMs = 0;
+  /** 直近に送信が終わったフレームの、撮ってから送信が終わるまでの遅れ (ミリ秒) */
+  private lastSendLagMs: number | null = null;
+  /** 観測した送信の遅れの最大 (ミリ秒) */
+  private maxSendLagMs: number | null = null;
   /** 健全時に観測した遅れ (床、ミリ秒)。下がる方向にだけ動く */
   private floorMs: number | null = null;
   /** 観測した最大の遅れ (ミリ秒) */
@@ -261,6 +315,8 @@ export class AudioPublishCatchUp {
 
     // 出力が返らなかった記録を捨てる (記録が増え続けないようにする)
     this.prunePending(input.nowMs);
+    // 送信が終わらなかった記録も同じく捨てる
+    this.prunePendingSends(input.nowMs);
 
     if (this.shouldDrop(lagMs, readLagMs)) {
       this.droppedFrames++;
@@ -314,6 +370,43 @@ export class AudioPublishCatchUp {
     return { timestampMicros: firstTimestampMicros };
   }
 
+  /**
+   * 送信キューへ入れたことを記録する
+   *
+   * 配信側が足す遅れには、符号化のキューだけでなく送信のキューに残っている分も含まれる。
+   * 送信の完了は `Publisher.sendObject` の返値であり、WebTransport のストリーム生成と
+   * 書き込みの待ち (backpressure) を含む。送信キューは符号化の出力より後ろにあるため、
+   * `recordEncodedChunk()` の待ち (`pendingMs`) では見えない (配信側の統計と devtools に
+   * 出す計器として測る)。
+   */
+  recordSendStart(input: AudioPublishCatchUpSendStart): void {
+    this.pendingSends.set(input.timestampMicros, {
+      queuedAtMs: input.nowMs,
+      capturedWallClockMs: input.capturedWallClockMs,
+      durationMs: input.durationMs,
+    });
+    this.pendingSendMs += input.durationMs;
+  }
+
+  /**
+   * 送出が完了したことを記録する
+   *
+   * 「撮ってから送信が終わるまで」を測る。配信側が足した遅れのうち、受信側の基準の遅れへ
+   * そのまま出る値である。対応づけは timestamp で行うため、送信の完了が順不同でもよい
+   * (送信の失敗・中断で完了が返らない分は `prunePendingSends()` が捨てる)
+   */
+  recordSendComplete(input: AudioPublishCatchUpSendComplete): void {
+    const send = this.pendingSends.get(input.timestampMicros);
+    if (send === undefined) {
+      return;
+    }
+    this.pendingSends.delete(input.timestampMicros);
+    this.pendingSendMs = Math.max(0, this.pendingSendMs - send.durationMs);
+    const lagMs = input.completedWallClockMs - send.capturedWallClockMs;
+    this.lastSendLagMs = lagMs;
+    this.maxSendLagMs = this.maxSendLagMs === null ? lagMs : Math.max(this.maxSendLagMs, lagMs);
+  }
+
   /** 観測値 (配信側の統計と devtools に出す) */
   snapshot(): AudioPublishCatchUpStats {
     return {
@@ -328,6 +421,10 @@ export class AudioPublishCatchUp {
       pendingFrames: this.pending.size,
       catchingUp: this.catchingUp,
       catchUpStarts: this.catchUpStarts,
+      sendQueueMs: this.pendingSendMs,
+      sendQueueFrames: this.pendingSends.size,
+      sendLagMs: this.lastSendLagMs,
+      maxSendLagMs: this.maxSendLagMs,
     };
   }
 
@@ -335,10 +432,14 @@ export class AudioPublishCatchUp {
   reset(): void {
     this.pending.clear();
     this.pendingMs = 0;
+    this.pendingSends.clear();
+    this.pendingSendMs = 0;
     this.floorMs = null;
     this.maxLagMs = null;
     this.lastLagMs = null;
     this.lastReadLagMs = 0;
+    this.lastSendLagMs = null;
+    this.maxSendLagMs = null;
     this.catchingUp = false;
     this.catchUpStarts = 0;
     this.droppedFrames = 0;
@@ -414,5 +515,23 @@ export class AudioPublishCatchUp {
       this.pendingMs -= frame.durationMs;
     }
     this.pendingMs = Math.max(0, this.pendingMs);
+  }
+
+  /**
+   * 送信が終わらないままになった記録を捨てる
+   *
+   * 送信の失敗や配信の停止で完了が返らない記録が残り続けると、送信のキューに残っている
+   * 長さが増え続ける。`prunePending()` と同じ上限を使う
+   */
+  private prunePendingSends(nowMs: number): void {
+    const oldestMs = nowMs - this.pendingTimeoutMs;
+    for (const [timestampMicros, send] of this.pendingSends) {
+      if (send.queuedAtMs >= oldestMs) {
+        break;
+      }
+      this.pendingSends.delete(timestampMicros);
+      this.pendingSendMs -= send.durationMs;
+    }
+    this.pendingSendMs = Math.max(0, this.pendingSendMs);
   }
 }

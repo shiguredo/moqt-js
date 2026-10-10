@@ -96,6 +96,10 @@ function catchUpWith(options: {
     pendingMs: 0,
     readLagMs: 0,
     pendingFrames: 0,
+    sendQueueMs: 0,
+    sendQueueFrames: 0,
+    sendLagMs: null,
+    maxSendLagMs: null,
     catchingUp: false,
     catchUpStarts: options.catchUpStarts,
   };

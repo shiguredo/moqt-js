@@ -91,8 +91,18 @@ interface CatchUpObservation {
   maxLagMs: number | null;
   /** 符号化へ渡したまま出力が返っていない音声の長さ (ミリ秒) */
   pendingMs: number;
+  /** 符号化へ渡したまま出力が返っていないフレームの数 */
+  pendingFrames: number;
+  /** 送信キューへ入れたまま送信が終わっていない音声の長さ (ミリ秒) */
+  sendQueueMs: number;
+  /** 送信キューへ入れたまま送信が終わっていないフレームの数 */
+  sendQueueFrames: number;
+  /** 撮ってから送信が終わるまでの遅れ (ミリ秒)。まだ送信が終わっていなければ null */
+  sendLagMs: number | null;
   /** 直近に読んだフレームの読み出しの遅れ (ミリ秒) */
   readLagMs: number;
+  /** 追いつきを始めた回数 (累積) */
+  catchUpStarts: number;
   /** 追いつきのために捨てているか */
   catchingUp: boolean;
   /** 受信側の音声の基準の遅れ (ミリ秒)。購読していなければ null */
@@ -117,7 +127,12 @@ async function readObservation(page: Page): Promise<CatchUpObservation> {
                 floorMs: number | null;
                 maxLagMs: number | null;
                 pendingMs: number;
+                pendingFrames: number;
+                sendQueueMs: number;
+                sendQueueFrames: number;
+                sendLagMs: number | null;
                 readLagMs: number;
+                catchUpStarts: number;
                 catchingUp: boolean;
               };
             };
@@ -138,7 +153,12 @@ async function readObservation(page: Page): Promise<CatchUpObservation> {
       floorMs: audio.catchUp.floorMs,
       maxLagMs: audio.catchUp.maxLagMs,
       pendingMs: audio.catchUp.pendingMs,
+      pendingFrames: audio.catchUp.pendingFrames,
+      sendQueueMs: audio.catchUp.sendQueueMs,
+      sendQueueFrames: audio.catchUp.sendQueueFrames,
+      sendLagMs: audio.catchUp.sendLagMs,
       readLagMs: audio.catchUp.readLagMs,
+      catchUpStarts: audio.catchUp.catchUpStarts,
       catchingUp: audio.catchUp.catchingUp,
       audioBaseDelayMs: subscriber?.avSync.delays.audio.baseDelayMs ?? null,
       atMs: performance.now(),
@@ -162,7 +182,21 @@ function formatReport(observations: readonly CatchUpObservation[]): string {
     `  健全時の遅れ floorMs (ミリ秒): ${formatSeries(observations.map((row) => row.floorMs))}`,
     `  観測した最大の遅れ maxLagMs (ミリ秒): ${formatSeries(observations.map((row) => row.maxLagMs))}`,
     `  符号化のキューに溜まっている音声 pendingMs (ミリ秒): ${formatSeries(observations.map((row) => row.pendingMs))}`,
+    `  符号化のキューのフレーム数 pendingFrames: ${formatSeries(
+      observations.map((row) => row.pendingFrames),
+      0,
+    )}`,
+    `  送信のキューに溜まっている音声 sendQueueMs (ミリ秒): ${formatSeries(observations.map((row) => row.sendQueueMs))}`,
+    `  送信のキューのフレーム数 sendQueueFrames: ${formatSeries(
+      observations.map((row) => row.sendQueueFrames),
+      0,
+    )}`,
+    `  撮ってから送信が終わるまでの遅れ sendLagMs (ミリ秒): ${formatSeries(observations.map((row) => row.sendLagMs))}`,
     `  読み出しの遅れ readLagMs (ミリ秒): ${formatSeries(observations.map((row) => row.readLagMs))}`,
+    `  追いつきを始めた回数 catchUpStarts: ${formatSeries(
+      observations.map((row) => row.catchUpStarts),
+      0,
+    )}`,
     `  追いつきの最中か catchingUp: ${observations.map((row) => row.catchingUp).join(", ")}`,
     `  捨てたフレームの数 (累積): ${formatSeries(
       observations.map((row) => row.droppedFrames),

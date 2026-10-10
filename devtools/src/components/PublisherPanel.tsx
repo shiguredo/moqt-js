@@ -420,6 +420,32 @@ function PublisherStats({ statsSignal }: { statsSignal: ReadonlySignal<Publisher
                 testId: "publisher-audio-catchup-pending",
               },
               {
+                label: "pendingFrames",
+                value: stats.audio.catchUp.pendingFrames,
+                testId: "publisher-audio-catchup-pending-frames",
+              },
+              {
+                // 送信のキューに残っている分。符号化のキュー (`pendingMs`) では見えない遅れ
+                label: "sendQueueMs",
+                value: stats.audio.catchUp.sendQueueMs.toFixed(1),
+                testId: "publisher-audio-catchup-send-queue",
+              },
+              {
+                label: "sendQueueFrames",
+                value: stats.audio.catchUp.sendQueueFrames,
+                testId: "publisher-audio-catchup-send-queue-frames",
+              },
+              {
+                label: "sendLagMs",
+                value: formatOffsetMs(stats.audio.catchUp.sendLagMs),
+                testId: "publisher-audio-catchup-send-lag",
+              },
+              {
+                label: "maxSendLagMs",
+                value: formatOffsetMs(stats.audio.catchUp.maxSendLagMs),
+                testId: "publisher-audio-catchup-max-send-lag",
+              },
+              {
                 label: "readLagMs",
                 value: stats.audio.catchUp.readLagMs.toFixed(1),
                 testId: "publisher-audio-catchup-read-lag",

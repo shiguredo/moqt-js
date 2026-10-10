@@ -245,6 +245,10 @@ interface SubscriberObservation {
   missedFrames: number;
   /** relay の cache から追いつく途中かどうか */
   catchUpPending: boolean;
+  /** 直近に受信した音声 Object の到着の遅れ (ミリ秒)。まだ観測していなければ null */
+  receiveDelayMs: number | null;
+  /** 受信した音声 Object の到着の遅れの最大 (ミリ秒)。まだ観測していなければ null */
+  maxReceiveDelayMs: number | null;
 }
 
 /** 観測に使う、配信側の音声の TIMESTAMP の値 */
@@ -265,6 +269,30 @@ interface PublisherAudioObservation {
   slope60sMsPerSecond: number | null;
   /** 観測した数 */
   samples: number;
+  /** 配信側が足した遅れ (ミリ秒)。まだ観測していなければ null */
+  lagMs: number | null;
+  /** 健全時の遅れ (床、ミリ秒)。まだ観測していなければ null */
+  floorMs: number | null;
+  /** 直近に読んだフレームの読み出しの遅れ (ミリ秒) */
+  readLagMs: number;
+  /** 符号化へ渡したまま出力が返っていない音声の長さ (ミリ秒) */
+  pendingMs: number;
+  /** 符号化へ渡したまま出力が返っていないフレームの数 */
+  pendingFrames: number;
+  /** 送信キューへ入れたまま送信が終わっていない音声の長さ (ミリ秒) */
+  sendQueueMs: number;
+  /** 送信キューへ入れたまま送信が終わっていないフレームの数 */
+  sendQueueFrames: number;
+  /** 撮ってから送信が終わるまでの遅れ (ミリ秒)。まだ送信が終わっていなければ null */
+  sendLagMs: number | null;
+  /** 追いつきのために捨てたフレームの数 (累積) */
+  droppedFrames: number;
+  /** 追いつきのために捨てた音声の長さ (ミリ秒、累積) */
+  droppedMs: number;
+  /** 追いつきを始めた回数 (累積) */
+  catchUpStarts: number;
+  /** いま追いつきのために捨てているか */
+  catchingUp: boolean;
 }
 
 /**
@@ -305,6 +333,8 @@ const EMPTY_SUBSCRIBER_OBSERVATION: SubscriberObservation = {
   playoutDrops: 0,
   missedFrames: 0,
   catchUpPending: true,
+  receiveDelayMs: null,
+  maxReceiveDelayMs: null,
 };
 
 /** 判定に使う値だけを 1 回の往復で読む (`RelayObservation` の説明を参照) */
@@ -320,6 +350,7 @@ async function readObservation(page: Page): Promise<RelayObservation> {
     ).moqtDevTools;
     const audio = api.getPublisher().audio;
     const offset = audio.timestampOffset;
+    const catchUp = audio.catchUp;
     const subscriber = api.getSubscribers()[0] ?? null;
     const delays = subscriber?.avSync.delays ?? null;
     return {
@@ -333,6 +364,18 @@ async function readObservation(page: Page): Promise<RelayObservation> {
         slope10sMsPerSecond: offset?.slope10sMsPerSecond ?? null,
         slope60sMsPerSecond: offset?.slope60sMsPerSecond ?? null,
         samples: offset?.samples ?? 0,
+        lagMs: catchUp.lagMs,
+        floorMs: catchUp.floorMs,
+        readLagMs: catchUp.readLagMs,
+        pendingMs: catchUp.pendingMs,
+        pendingFrames: catchUp.pendingFrames,
+        sendQueueMs: catchUp.sendQueueMs,
+        sendQueueFrames: catchUp.sendQueueFrames,
+        sendLagMs: catchUp.sendLagMs,
+        droppedFrames: catchUp.droppedFrames,
+        droppedMs: catchUp.droppedMs,
+        catchUpStarts: catchUp.catchUpStarts,
+        catchingUp: catchUp.catchingUp,
       },
       subscriber:
         subscriber === null || delays === null
@@ -350,6 +393,8 @@ async function readObservation(page: Page): Promise<RelayObservation> {
               playoutDrops: subscriber.audio.playoutDrops,
               missedFrames: subscriber.audio.playoutTiming.missedFrames,
               catchUpPending: subscriber.catchUpPending,
+              receiveDelayMs: subscriber.audio.receiveDelayMs,
+              maxReceiveDelayMs: subscriber.audio.maxReceiveDelayMs,
             },
     };
   });
@@ -512,6 +557,27 @@ function formatObservationReport(
     `  配信側の原点の最大値 (ミリ秒): ${formatSeries(observations.map((observation) => observation.publisher.maxMs))}`,
     `  配信側の傾き 10 秒 / 60 秒 (ミリ秒 / 秒): ${formatSeries(observations.map((observation) => observation.publisher.slope10sMsPerSecond))} / ${formatSeries(observations.map((observation) => observation.publisher.slope60sMsPerSecond))}`,
     `  配信側が TIMESTAMP に足している補正 (ミリ秒): ${formatSeries(observations.map((observation) => observation.publisher.appliedMs))}`,
+    // 配信側が足した遅れの内訳。どの段 (読み出し / 符号化のキュー / 送信のキュー) で
+    // 遅れているかを、落ちたときに CI のログだけから切り分けられるようにする
+    `  配信側の遅れ lagMs (ミリ秒): ${formatSeries(observations.map((observation) => observation.publisher.lagMs))}`,
+    `  配信側の健全時の遅れ floorMs (ミリ秒): ${formatSeries(observations.map((observation) => observation.publisher.floorMs))}`,
+    `  配信側の読み出しの遅れ readLagMs (ミリ秒): ${formatSeries(observations.map((observation) => observation.publisher.readLagMs))}`,
+    `  配信側の符号化のキュー pendingMs / pendingFrames: ${formatSeries(observations.map((observation) => observation.publisher.pendingMs))} / ${formatSeries(
+      observations.map((observation) => observation.publisher.pendingFrames),
+      0,
+    )}`,
+    `  配信側の送信のキュー sendQueueMs / sendQueueFrames: ${formatSeries(observations.map((observation) => observation.publisher.sendQueueMs))} / ${formatSeries(
+      observations.map((observation) => observation.publisher.sendQueueFrames),
+      0,
+    )}`,
+    `  配信側の送信の遅れ sendLagMs (ミリ秒): ${formatSeries(observations.map((observation) => observation.publisher.sendLagMs))}`,
+    `  配信側の追いつき droppedFrames / droppedMs / catchUpStarts / catchingUp: ${formatSeries(
+      observations.map((observation) => observation.publisher.droppedFrames),
+      0,
+    )} / ${formatSeries(observations.map((observation) => observation.publisher.droppedMs))} / ${formatSeries(
+      observations.map((observation) => observation.publisher.catchUpStarts),
+      0,
+    )} / ${observations.map((observation) => observation.publisher.catchingUp).join(", ")}`,
     `  復号した音声 Chunk の数: ${formatSeries(
       observations.map((observation) => subscriberOf(observation).chunksDecoded),
       0,
@@ -532,6 +598,10 @@ function formatObservationReport(
     `  基準の共有 (unsharedReason): ${observations.map((observation) => subscriberOf(observation).sharingBases).join(", ")} (${observations.map((observation) => subscriberOf(observation).unsharedReason).join(", ")})`,
     // 追いつきの終了は待ち条件ではなくなったが、共有が戻らない理由の切り分けに要る
     `  追いつき中 (catchUpPending): ${observations.map((observation) => subscriberOf(observation).catchUpPending).join(", ")}`,
+    // 受信側の到着の遅れ。配信側の送信の遅れ (sendLagMs) と対で読み、遅れが配信側と
+    // 経路にあるのか、受信側の復号と再生にあるのかを分ける
+    `  受信側の到着の遅れ (ミリ秒): ${formatSeries(observations.map((observation) => subscriberOf(observation).receiveDelayMs))}`,
+    `  受信側の到着の遅れの最大 (ミリ秒): ${formatSeries(observations.map((observation) => subscriberOf(observation).maxReceiveDelayMs))}`,
     formatThirds("  この環境での音声の基準の遅れの定常値", baseDelays),
   ];
   if (videoBaseDelays.length > 0) {

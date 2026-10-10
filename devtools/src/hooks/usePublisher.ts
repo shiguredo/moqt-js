@@ -1403,13 +1403,14 @@ export function usePublisher() {
     pub.lastSentAudioConfig.value = nextAudioConfig;
     pub.audioConfigResendRequested.value = resendNext;
 
+    // TIMESTAMP は Unix epoch マイクロ秒 (壁時計) で送る (draft-ietf-moq-loc-04 §2.3.1.1)。
+    // `AudioData.timestamp` は壁時計ではないため、読み出した壁時計との差の
+    // 最小値で原点を合わせる。まだ観測が無いときだけ従来の換算へ落とす
+    const locTimestampMicros =
+      pub.audioTimestampClock.value.apply(capturedTimestampMicros) ??
+      LOC.toUnixEpochMicroseconds(BigInt(capturedTimestampMicros), performance.timeOrigin);
     const properties = LOC.encodeAudioProperties({
-      // TIMESTAMP は Unix epoch マイクロ秒 (壁時計) で送る (draft-ietf-moq-loc-04 §2.3.1.1)。
-      // `AudioData.timestamp` は壁時計ではないため、読み出した壁時計との差の
-      // 最小値で原点を合わせる。まだ観測が無いときだけ従来の換算へ落とす
-      timestamp:
-        pub.audioTimestampClock.value.apply(capturedTimestampMicros) ??
-        LOC.toUnixEpochMicroseconds(BigInt(capturedTimestampMicros), performance.timeOrigin),
+      timestamp: locTimestampMicros,
       audioLevel,
       config: audioConfig,
     });
@@ -1447,7 +1448,33 @@ export function usePublisher() {
         "Audio datagram is unavailable on reliable-only WebTransport; sending on a subgroup stream",
       );
     }
-    void audioPublisherInstance.sendObject(sendParams);
+    // 送信キューに入れてから送信が終わるまでの遅れを測る (src/audioPublishCatchUp.ts)。
+    // 音声は 1 Object = 1 Group = 1 ストリームであり (draft-ietf-moq-loc-04 §4.1)、
+    // ストリームの生成と書き込みの待ちがそのまま配信側の遅れになる。送信の待ちは
+    // 符号化の出力より後ろにあるため、符号化のキューの計器では見えない
+    const catchUp = pub.audioCatchUp.value;
+    const sendStartedAtMs = performance.now();
+    let sendResult: Promise<void>;
+    try {
+      sendResult = audioPublisherInstance.sendObject(sendParams);
+    } catch (error) {
+      console.error("Failed to send audio object:", error);
+      return;
+    }
+    catchUp.recordSendStart({
+      timestampMicros: capturedTimestampMicros,
+      capturedWallClockMs: Number(locTimestampMicros) / 1_000,
+      durationMs: (chunk.duration ?? 0) / 1_000,
+      nowMs: sendStartedAtMs,
+    });
+    const complete = (): void => {
+      catchUp.recordSendComplete({
+        timestampMicros: capturedTimestampMicros,
+        completedWallClockMs: performance.timeOrigin + performance.now(),
+      });
+    };
+    // 送信完了は待たない (完了待ちは stopPublishing の done() で行う)。失敗しても記録を消す
+    void sendResult.then(complete, complete);
   }
 
   // Catalog を新しい Group で送り直す

@@ -213,6 +213,16 @@ export interface SubscriberAudioStats {
   /** 復号した音声 Chunk の数。objectsReceived との差が復号せずに捨てた数になる */
   chunksDecoded: number;
   /**
+   * 直近に受信した音声 Object の到着の遅れ (ミリ秒)。受信した壁時計 - LOC TIMESTAMP
+   *
+   * 配信側が足した遅れ (`PublisherAudioStats.catchUp.sendLagMs`) と対で読む。どちらも
+   * 小さければ遅れは受信側の復号と再生にあり、この値だけが大きければ relay と経路にある。
+   * 壁時計の TIMESTAMP を持たない Object だけのときは null
+   */
+  receiveDelayMs: number | null;
+  /** 受信した音声 Object の到着の遅れの最大 (ミリ秒)。まだ観測していなければ null */
+  maxReceiveDelayMs: number | null;
+  /**
    * relay の cache から追いつく途中で、復号したが鳴らさなかった音声 Object の数
    *
    * SUBSCRIBE_OK の LARGEST_OBJECT 以前の位置の Object であり、購読を始めるたびに増える。
@@ -440,6 +450,8 @@ export function buildSubscriberStats(sub: SubscriberInstance): SubscriberStats {
       objectsReceived: sub.audioObjectsReceived.value,
       datagramObjectsReceived: sub.audioDatagramObjectsReceived.value,
       chunksDecoded: sub.audioChunksDecoded.value,
+      receiveDelayMs: sub.audioReceiveDelayMs.value,
+      maxReceiveDelayMs: sub.audioMaxReceiveDelayMs.value,
       catchUpObjectsSkipped: sub.audioCatchUpObjectsSkipped.value,
       decoderConfigured: sub.audioDecoderConfigured.value,
       playbackEnabled: sub.audioPlaybackEnabled.value,

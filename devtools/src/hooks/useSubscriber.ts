@@ -249,6 +249,8 @@ export function resetSubscriberStats(instance: sub.SubscriberInstance): void {
   instance.audioObjectsReceived.value = 0;
   instance.audioDatagramObjectsReceived.value = 0;
   instance.audioChunksDecoded.value = 0;
+  instance.audioReceiveDelayMs.value = null;
+  instance.audioMaxReceiveDelayMs.value = null;
   instance.audioCatchUpObjectsSkipped.value = 0;
   instance.audioLastLevel.value = null;
   instance.audioPeakDbfsLeft.value = null;
@@ -1264,6 +1266,18 @@ export function useSubscriber(
           obj.properties,
         );
         current.audioLastLevel.value = locProperties.audioLevel ?? null;
+
+        // 到着の遅れ (受信した壁時計 - LOC TIMESTAMP)。配信側が足した遅れ
+        // (audio.catchUp.sendLagMs) と対で読み、遅れが配信側にあるのか relay と経路に
+        // あるのかを分ける。壁時計の TIMESTAMP (TIMESCALE なし) のときだけ測れる
+        if (locProperties.timestamp !== undefined && locProperties.timescale === undefined) {
+          const receiveDelayMs =
+            performance.timeOrigin + performance.now() - Number(locProperties.timestamp) / 1_000;
+          current.audioReceiveDelayMs.value = receiveDelayMs;
+          const previousMax = current.audioMaxReceiveDelayMs.value;
+          current.audioMaxReceiveDelayMs.value =
+            previousMax === null ? receiveDelayMs : Math.max(previousMax, receiveDelayMs);
+        }
 
         // draft-ietf-moq-loc-04 §2.3.3.1 (Audio Config) が定める Audio Config は
         // AudioDecoderConfig の description に対応する。値が変わったときだけ

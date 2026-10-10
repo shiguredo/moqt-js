@@ -10,7 +10,7 @@ import { isErrorNotifiedByPublisher, type Publisher, type SendObjectParams } fro
 import * as LOC from "./loc";
 import { WallClockMapper } from "./mediaClock";
 import { AudioTimestampClock } from "./audioTimestampClock";
-import { AudioPublishCatchUp } from "./audioPublishCatchUp";
+import { AudioPublishCatchUp, type AudioPublishCatchUpSendStart } from "./audioPublishCatchUp";
 import { catalogRepublishIntervalMs } from "./catalogRepublish";
 import {
   CATALOG_TRACK_NAME,
@@ -1699,14 +1699,24 @@ export class MediaPublisherImpl implements MediaPublisher {
     this.audioStats.bytesSent += payload.length + properties.length;
     this.audioStats.currentGroupId = this.audioGroupId;
 
-    // 音声フレームは fire-and-forget (後続のオブジェクトで上書きされるため落としても良い)
-    this.sendFrameFireAndForget(this.audioPublisher, {
-      groupId: audioAllocation.groupId,
-      objectId: audioAllocation.objectId,
-      payload,
-      properties,
-      priority: PRIORITY_AUDIO,
-    });
+    // 音声フレームは fire-and-forget (後続のオブジェクトで上書きされるため落としても良い)。
+    // 送信キューに入れてから送信が終わるまでの遅れを測る (audioPublishCatchUp.ts)
+    this.sendAudioFrameFireAndForget(
+      this.audioPublisher,
+      {
+        groupId: audioAllocation.groupId,
+        objectId: audioAllocation.objectId,
+        payload,
+        properties,
+        priority: PRIORITY_AUDIO,
+      },
+      {
+        timestampMicros: capturedTimestampMicros,
+        capturedWallClockMs: Number(wallClockMicros) / 1_000,
+        durationMs: (chunk.duration ?? 0) / 1_000,
+        nowMs: performance.now(),
+      },
+    );
   }
 
   private handleVideoEncodedChunk(chunk: {
@@ -1801,6 +1811,41 @@ export class MediaPublisherImpl implements MediaPublisher {
     // 送信を試みた時点で「Group を開始済み」にする
     // (次に届くキーフレームから新しい Group を開始する)
     this.videoGroupStarted = videoAllocation.state.started;
+  }
+
+  /**
+   * 音声のフレームを fire-and-forget で送り、送信キューにいた時間を測る
+   *
+   * `sendFrameFireAndForget()` と同じく戻り値は使わないが、`Publisher.sendObject` の完了で
+   * 「撮ってから送信が終わるまで」を記録する (audioPublishCatchUp.ts)。送信の待ちは
+   * 符号化の出力より後ろにあるため、符号化のキュー (`pendingMs`) では見えない。音声は
+   * 1 Object = 1 Group = 1 ストリームであり (draft-ietf-moq-loc-04 §4.1)、ストリームの
+   * 生成と書き込みの待ちがそのまま遅れになる
+   *
+   * 同期 throw は送信キューに入っていないため、記録を作らずに通知だけする
+   * (記録を作ると、完了が返らない分が残り続ける)
+   */
+  private sendAudioFrameFireAndForget(
+    publisher: Publisher,
+    params: SendObjectParams,
+    send: AudioPublishCatchUpSendStart,
+  ): void {
+    let result: Promise<void>;
+    try {
+      result = publisher.sendObject(params);
+    } catch (error) {
+      this.callbacks.onError?.(error instanceof Error ? error : new Error(String(error)));
+      return;
+    }
+    this.audioCatchUp.recordSendStart(send);
+    const complete = (): void => {
+      this.audioCatchUp.recordSendComplete({
+        timestampMicros: send.timestampMicros,
+        completedWallClockMs: performance.timeOrigin + performance.now(),
+      });
+    };
+    // 失敗しても記録を消す (残すと送信のキューに残っている長さが減らない)
+    void result.then(complete, complete);
   }
 
   /**
