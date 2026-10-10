@@ -93,7 +93,12 @@ test("window.moqtDevTools から同期の推定と遅延の内訳が読め、未
     if (single === null) {
       throw new Error(`no subscriber stats: ${first.id}`);
     }
-    return { list: first.avSync, single: single.avSync };
+    return {
+      list: first.avSync,
+      single: single.avSync,
+      warnings: first.warnings,
+      singleWarnings: single.warnings,
+    };
   });
 
   // 同期の推定が無い状態の既定値 (null / null / null / 0 / false と、未観測の内訳)
@@ -107,6 +112,9 @@ test("window.moqtDevTools から同期の推定と遅延の内訳が読め、未
   };
   expect(avSync.list).toEqual(defaults);
   expect(avSync.single).toEqual(defaults);
+  // 前提から外れた状態の警告は、購読していなければ空である
+  expect(avSync.warnings).toEqual([]);
+  expect(avSync.singleWarnings).toEqual([]);
 });
 
 test("subscriber の画面に同期の推定と遅延の内訳を既定値で出す", async ({ page }) => {
@@ -137,6 +145,25 @@ test("subscriber の画面に同期の推定と遅延の内訳を既定値で出
   await expect(page.getByTestId(AV_SYNC_ITEMS.drift)).toHaveText("-");
   // 解除を早める条件がどこまで続いたか (まだ数えていない)
   await expect(page.getByTestId(AV_SYNC_ITEMS.unsharedReturn)).toHaveText("-");
+  // 前提から外れた状態の警告も、外れていなければ「-」を出す
+  await expect(page.getByTestId("subscriber-warnings-log")).toHaveText("-");
+});
+
+// 前提から外れた状態の警告の説明。どうなったら見直すかの手掛かりとして、外れる条件と
+// 見直す判断 (識別子) を出す
+test("subscriber の Warnings の説明が、外れる条件と見直す判断を出す", async ({ page }) => {
+  await page.goto(DEVTOOLS_URL);
+  await page.getByTestId("subscriber-statistics-toggle").click();
+
+  await page.getByTestId("subscriber-warnings-help-button").click();
+  const popover = page.getByTestId("subscriber-warnings-help");
+  await expect(popover).toBeVisible();
+  await expect(popover.getByRole("term")).toHaveText([
+    "syncExtraDelayPinnedAtLimit",
+    "unsharedHoldContinues",
+  ]);
+  // 再考の手順を書いた文書を指す
+  await expect(popover).toContainText("docs/AV_SYNC_DECISIONS.md");
 });
 
 test("Target Latency と Render Group の選択が UI から URL へ反映され、生成された URL から復元される", async ({

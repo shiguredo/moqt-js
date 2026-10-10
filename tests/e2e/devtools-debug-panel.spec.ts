@@ -139,6 +139,8 @@ test("Copy for LLM が設定と統計の項目とログを出す", async ({ page
   expect(text).toMatch(/=== Subscriber Statistics \(subscriber-[0-9a-f]{8}\) ===/);
   expect(text).toContain("currentSubGroup:");
   expect(text).toContain("avSync:");
+  // 前提から外れた状態の警告も出す (外れていなければ空)
+  expect(text).toContain("warnings: []");
   expect(text).toContain("audio:");
   expect(text).toContain("sessionStatistics: -");
 

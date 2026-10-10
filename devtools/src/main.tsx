@@ -8,6 +8,7 @@ import {
 } from "./signals/connectionSettings";
 import * as sub from "./signals/subscriber";
 import { initTestApi } from "./testApi";
+import { startPreconditionWatch } from "./signals/preconditionWatch";
 import { queryServerUrl, readStoredServerUrl } from "./utils/serverUrlStore";
 import "./index.css";
 
@@ -29,6 +30,10 @@ async function start(): Promise<void> {
 
   // テスト用 API を初期化 (window.moqtDevTools を公開)
   initTestApi();
+
+  // A/V 同期と再生の判断が前提から外れていないかの判定を始める (1 秒ごと)。パネルの
+  // 開け閉めや購読の有無に依らず動かし、「Copy for LLM」にも同じ値を出す
+  startPreconditionWatch();
 
   // 初期化: Publisher 以外のモードでは最初の Subscriber を作成する。
   // publisher モードは Publisher だけのページのため、Subscriber を 1 つも作らない

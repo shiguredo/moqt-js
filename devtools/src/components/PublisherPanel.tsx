@@ -2,10 +2,22 @@ import { useEffect, useMemo, useRef } from "preact/hooks";
 import { useSignalEffect, type ReadonlySignal } from "@preact/signals";
 import type { ComponentChildren } from "preact";
 import { usePublisher } from "../hooks/usePublisher";
-import { StatGroup, StatList, StatSection, StatsCollapse, TimingTable } from "./StatsView";
-import { PUBLISHER_LATENCY_BREAKDOWN_HELP, PUBLISH_TIMING_CAPTION } from "./statsHelp";
+import {
+  StatGroup,
+  StatList,
+  StatSection,
+  StatsCollapse,
+  TimingTable,
+  EventLog,
+} from "./StatsView";
+import {
+  PUBLISHER_LATENCY_BREAKDOWN_HELP,
+  PUBLISHER_WARNINGS_HELP,
+  PUBLISH_TIMING_CAPTION,
+} from "./statsHelp";
 import { formatBytes } from "../utils/logFormatters";
 import { formatDbfsShort } from "../utils/audioLevel";
+import { formatPreconditionWarning } from "../utils/preconditionWarnings";
 import { AudioMeter } from "./AudioMeter";
 import { VideoCard } from "./VideoCard";
 import { HttpVersionBadge } from "./HttpVersionBadge";
@@ -264,6 +276,16 @@ function PublisherStats({ statsSignal }: { statsSignal: ReadonlySignal<Publisher
   return (
     <>
       <StatGroup title="Audio">
+        {/* 前提から外れた状態 (TIMESTAMP の補正が動き続ける、追いつきが繰り返される)。
+            外れていなければ "-" を出す。値は既にある計器から組み立てる */}
+        <StatSection title="Warnings" help={PUBLISHER_WARNINGS_HELP} testId="publisher-warnings">
+          <EventLog
+            label="broken preconditions"
+            hint="checked every 1 s"
+            lines={stats.warnings.map((warning) => formatPreconditionWarning(warning))}
+            testId="publisher-warnings-log"
+          />
+        </StatSection>
         <StatSection title="Encoding">
           <StatList
             items={[

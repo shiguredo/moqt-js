@@ -11,7 +11,17 @@ import { LATENCY_SEGMENTS, type LatencySegment } from "../utils/latencyBreakdown
 import {
   PLAYOUT_BASE_DRIFT_MS,
   PLAYOUT_BASE_UNSHARED_RELEASE_MS,
+  PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS,
 } from "../../../src/playbackTimeline";
+import {
+  CATCH_UP_WARN_STARTS,
+  CATCH_UP_WARN_WINDOW_MS,
+  SYNC_PINNED_MIN_MS,
+  SYNC_PINNED_TOLERANCE_MS,
+  TIMESTAMP_SLOPE_MIN_SAMPLES,
+  TIMESTAMP_SLOPE_WARN_MS_PER_SECOND,
+  UNSHARED_HOLD_WARN_MS,
+} from "../utils/preconditionWarnings";
 import {
   AUDIO_MISS_REASONS,
   MAX_RECENT_AUDIO_MISSES,
@@ -197,6 +207,51 @@ export const AV_SYNC_HELP: SectionHelp = {
     `baseDelayMs: ${CLOCK_OFFSET_NOTE}`,
     "The two tracks are delayed independently while sharingBases is true. Within the deadband neither track follows the jitter buffer delay of the other.",
     "Both tracks are played by arrival while unsharedReason is drift or difference, which keeps the A/V skew at the difference of the two delays instead of the base difference.",
+  ],
+};
+
+/**
+ * subscriber の Warnings
+ *
+ * 前提から外れた状態だけを出す。どれも「この 1 週間で入れた判断」の前提が崩れたことを示し、
+ * 見直す判断と、判定に使った計器の値を一緒に出す。閾値は実装の定数から埋め込む。
+ */
+export const SUBSCRIBER_WARNINGS_HELP: SectionHelp = {
+  summary:
+    "States where the assumptions behind the A/V sync and playout decisions no longer hold, judged from the counters and delays that are already shown below. Empty when nothing is out of range. How to re-measure and what to reconsider is written in docs/AV_SYNC_DECISIONS.md.",
+  items: [
+    {
+      term: "syncExtraDelayPinnedAtLimit",
+      description: `syncExtraDelayMs stayed within ${SYNC_PINNED_TOLERANCE_MS} ms of PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS (${PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS} ms) for ${SYNC_PINNED_MIN_MS / 1_000} s or more. The difference between the two tracks is larger than the limit, so the rest is left as A/V skew. Reconsider the limit, or the TIMESTAMP clock of the track with the larger baseDelayMs.`,
+    },
+    {
+      term: "unsharedHoldContinues",
+      description: `unsharedReason stayed hold for ${UNSHARED_HOLD_WARN_MS / 1_000} s or more. The early release (the difference returned for ${PLAYOUT_BASE_UNSHARED_RELEASE_MS} ms) did not happen, so the bases were not shared for that long. Reconsider the hold, or why the difference keeps moving or stays out of range.`,
+    },
+  ],
+  notes: [
+    "The two checks are independent. A pinned compensation means the tracks share one clock but the difference cannot be compensated; a long hold means they do not share one clock.",
+    "Both are judged every second from avSync, so a warning appears while the state continues and disappears within a second after it ends.",
+  ],
+};
+
+/** publisher の Warnings */
+export const PUBLISHER_WARNINGS_HELP: SectionHelp = {
+  summary:
+    "States where the assumptions behind the audio TIMESTAMP correction and the catch-up decision no longer hold, judged from the counters that are already shown below. Empty when nothing is out of range. How to re-measure and what to reconsider is written in docs/AV_SYNC_DECISIONS.md.",
+  items: [
+    {
+      term: "timestampOffsetKeepsMoving",
+      description: `The slope of the audio TIMESTAMP offset stayed at ${TIMESTAMP_SLOPE_WARN_MS_PER_SECOND} ms/s or more (over samples of at least ${TIMESTAMP_SLOPE_MIN_SAMPLES}). The audio clock and the wall clock do not tick at the same rate, so the correction has to follow the movement and the receiver sees the base difference moving. Reconsider how much of the movement is treated as a clock drift (the rise limit and the rise hold), or the audio clock itself.`,
+    },
+    {
+      term: "catchUpKeepsStarting",
+      description: `Audio catch-up started ${CATCH_UP_WARN_STARTS} times or more in ${CATCH_UP_WARN_WINDOW_MS / 1_000} s. Each start drops the queued audio down to one packet, so the encoder is not keeping real time. Reconsider the catch-up thresholds, or whether dropping is the right policy for this content (audioCatchUp).`,
+    },
+  ],
+  notes: [
+    "Both are judged every second from audio.timestampOffset and audio.catchUp, so a warning appears while the state continues and disappears within a second after it ends.",
+    "The offset slope is the raw observation (read wall clock - AudioData.timestamp), not the applied correction. A slope away from 0 means the correction keeps moving.",
   ],
 };
 

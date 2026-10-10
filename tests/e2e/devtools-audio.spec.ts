@@ -296,3 +296,38 @@ test("音声の TIMESTAMP のずれの計測を画面と window.moqtDevTools に
   });
   expect(offset).toBeNull();
 });
+
+// 前提から外れた状態の警告 (TIMESTAMP の補正が動き続ける、追いつきが繰り返される)。
+// 配信していない間は観測が無いため警告も出さず、説明には外れる条件を出す
+test("前提から外れた状態の警告を Publisher の画面と window.moqtDevTools に出す", async ({
+  page,
+}) => {
+  await page.goto(DEVTOOLS_URL);
+
+  // 統計の欄は既定で閉じているため、先に開く
+  await page.getByTestId("publisher-statistics-toggle").click();
+
+  // 前提から外れていなければ「-」を出す (値の位置は動かさない)
+  await expect(page.getByTestId("publisher-warnings-log")).toHaveText("-");
+
+  // 統計の API からも読める (空の配列は「外れていない」を表す)
+  const warnings = await page.evaluate(() => {
+    const api = (
+      window as unknown as {
+        moqtDevTools: { getPublisher: () => { warnings: unknown[] } };
+      }
+    ).moqtDevTools;
+    return api.getPublisher().warnings;
+  });
+  expect(warnings).toEqual([]);
+
+  // 説明は、前提から外れる条件と、見直す判断 (識別子) を出す
+  await page.getByTestId("publisher-warnings-help-button").click();
+  const popover = page.getByTestId("publisher-warnings-help");
+  await expect(popover).toBeVisible();
+  await expect(popover.getByRole("term")).toHaveText([
+    "timestampOffsetKeepsMoving",
+    "catchUpKeepsStarting",
+  ]);
+  await expect(popover).toContainText("docs/AV_SYNC_DECISIONS.md");
+});

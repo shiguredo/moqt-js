@@ -14,6 +14,7 @@ import {
   type AudioDelayFeedbackSnapshot,
 } from "../../../src/audioDelayFeedback.ts";
 import { AUDIO_DELAY_START_MS } from "../../../src/audioDelayManager.ts";
+import type { PreconditionWarning } from "../utils/preconditionWarnings.ts";
 
 /**
  * 音声と映像の同期の推定値 (表示とテスト用 API へ出す snapshot)
@@ -144,6 +145,10 @@ export interface SubscriberInstance {
   // 映像の購読を始めたときから useSubscriber が一定間隔で更新する。片方しか購読して
   // いない、または jitter buffer が無効なときは既定値のまま
   avSync: Signal<AvSyncSnapshot>;
+  // A/V 同期と再生の判断が前提から外れていないかの警告 (`utils/preconditionWarnings.ts` の
+  // 判定を `signals/preconditionWatch.ts` が 1 秒ごとに更新する)。外れていなければ空。
+  // 同期の推定 (avSync) を入力にするため、購読を止めたら空に戻す
+  preconditionWarnings: Signal<readonly PreconditionWarning[]>;
   decoderState: Signal<string>;
   // 最大の Location
   largestLocation: Signal<{ group: bigint; object: bigint } | null>;
@@ -238,6 +243,7 @@ export function createSubscriberInstance(id: string): SubscriberInstance {
     decodeErrors: signal(0),
     playbackTiming: signal<PlaybackTimingSnapshot>(EMPTY_PLAYBACK_TIMING),
     avSync: signal<AvSyncSnapshot>(EMPTY_AV_SYNC),
+    preconditionWarnings: signal<readonly PreconditionWarning[]>([]),
     decoderState: signal("unconfigured"),
     largestLocation: signal<{ group: bigint; object: bigint } | null>(null),
     dynamicGroupsSupported: signal(false),

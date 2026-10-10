@@ -160,6 +160,7 @@ const PUBLISHER_COVERAGE: CoverageExpectation = {
     audioMeterLevel: "audio.lastSentLevel",
     audioTimestampClock: "audio.timestampOffset",
     audioCatchUp: "audio.catchUp",
+    preconditionWarnings: "warnings",
     eventPublisher: "event.publishing",
     eventMessagesSent: "event.messagesSent",
   },
@@ -219,6 +220,7 @@ const SUBSCRIBER_COVERAGE: CoverageExpectation = {
     audioPlayoutRebases: "audio.playoutRebases",
     audioPlayoutDrops: "audio.playoutDrops",
     audioPlayoutTiming: "audio.playoutTiming",
+    preconditionWarnings: "warnings",
     eventObjectsReceived: "event.objectsReceived",
   },
   excluded: {

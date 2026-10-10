@@ -11,6 +11,11 @@
 
 ## develop
 
+- [ADD] moqt-devtools に、A/V 同期と再生の判断が前提から外れた状態の警告を追加する
+  - 既にある計器の値だけを組み合わせて 1 秒ごとに判定し、Subscriber の `A/V Sync` と Publisher の `Audio` の `Warnings` セクションと「Copy for LLM」の `warnings` に出す。警告になった時点と戻った時点はデバッグログに 1 件だけ残す
+  - 出すのは 4 つである。`syncExtraDelayPinnedAtLimit` (合わせる量が上限の 5 ms 以内のまま 10 秒続く)、`unsharedHoldContinues` (`unsharedReason` が `hold` のまま 20 秒続く)、`timestampOffsetKeepsMoving` (TIMESTAMP の補正の傾きが 5 ms/秒以上)、`catchUpKeepsStarting` (追いつきが 60 秒に 3 回以上始まる)
+  - 計測そのものは足さない。閾値と、どうなったら何を見直すかは `docs/AV_SYNC_DECISIONS.md` が持つ
+  - @voluntas
 - [FIX] 受信側が一過性の基準の差の動きで共有を解除した後、保持の 30 秒が満了するまで戻さないのを修正する
   - 解除のきっかけになった動きが去って差が元の水準へ戻っても、`PLAYOUT_BASE_UNSHARED_HOLD_MS` (30 秒) の保持は無条件に満了まで続いていた。実リレーの E2E (4 vCPU の runner、run 38023970857) では、購読の直後に relay の cache から届いた分をまとめて復号している間だけ音声の基準が映像より 1 秒近く開き、復号が実時間に追いつくと差は 5 ms 前後へ戻ったが、25 秒の観測がすべて解除のままになり「観測の間に音声と映像の基準の共有が解除されない」で落ちた
   - 解除のきっかけに差の動きがあり、その動きが去って差が戻った状態 (動きの判定が消え、差が表示の遅れの上限から決まる閾値の内側で動かない) が `PLAYOUT_BASE_UNSHARED_RELEASE_MS` (2 秒) 続いたら、往復の恐れが無いため保持を待たずに解除する。差が同じ水準のままで閾値だけが動いた解除と、離れた幅が戻らないドリフトは従来どおり保持する

@@ -14,6 +14,7 @@ import { AudioLevelTimeline } from "../utils/audioLevelTimeline";
 import { AudioTimestampClock } from "../../../src/audioTimestampClock.ts";
 import { AudioPublishCatchUp } from "../../../src/audioPublishCatchUp.ts";
 import type { AudioFormat } from "../utils/microphone";
+import type { PreconditionWarning } from "../utils/preconditionWarnings.ts";
 
 // Publisher の状態
 export const pubSession = signal<Session | null>(null);
@@ -133,6 +134,9 @@ export const audioTimestampClock = signal(new AudioTimestampClock());
 // あたる仕組みが音声に無く、符号化が遅れるとキューに溜まった分だけ遅れが固定される。
 // 音声の配信を始めるたびに作り直す
 export const audioCatchUp = signal(new AudioPublishCatchUp());
+// A/V 同期と再生の判断が前提から外れていないかの警告 (`utils/preconditionWarnings.ts` の
+// 判定を `signals/preconditionWatch.ts` が 1 秒ごとに更新する)。外れていなければ空
+export const preconditionWarnings = signal<readonly PreconditionWarning[]>([]);
 // 配信側の音声メーター。取っている音の peak / RMS (dBFS) と直近の波形は Preview 中から
 // 更新する (hooks/publisherAudioMeter.ts)。左右のチャンネルを別々に持ち、モノラルの
 // ときは右が null のままになる。LOC Audio Level は直近に送った Object の値

@@ -243,6 +243,8 @@ export function resetSubscriberStats(instance: sub.SubscriberInstance): void {
   instance.playbackTiming.value = EMPTY_PLAYBACK_TIMING;
   // 同期の推定も前の購読の値を持ち越さない (映像の購読を始めると作り直す)
   instance.avSync.value = sub.EMPTY_AV_SYNC;
+  // 前提から外れた状態の警告も前の購読の値を持ち越さない
+  instance.preconditionWarnings.value = [];
   instance.largestLocation.value = null;
   instance.audioObjectsReceived.value = 0;
   instance.audioDatagramObjectsReceived.value = 0;
@@ -574,6 +576,8 @@ export function resetSubscriberState(
   instance.eventMessages.value = [];
   // 同期の推定は購読が無い状態の既定値に戻す
   instance.avSync.value = sub.EMPTY_AV_SYNC;
+  // 前提から外れた状態の警告も購読が無い状態に戻す
+  instance.preconditionWarnings.value = [];
 
   instance.largestLocation.value = null;
   // 追いつき中の表示も購読が無い状態に戻す (境界そのものは呼び出し側が消す)

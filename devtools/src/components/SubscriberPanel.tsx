@@ -24,10 +24,12 @@ import {
   PLAYBACK_TIMING_HELP,
   STALL_CAUSES_HELP,
   SUBSCRIBER_LATENCY_BREAKDOWN_HELP,
+  SUBSCRIBER_WARNINGS_HELP,
   TOTAL_LATENCY_SEGMENT,
 } from "./statsHelp";
 import { formatBytes } from "../utils/logFormatters";
 import { formatDbfsShort } from "../utils/audioLevel";
+import { formatPreconditionWarning } from "../utils/preconditionWarnings";
 import { CatalogTracks } from "./CatalogTracks";
 import { MessageList } from "./MessageList";
 import { PANEL_OPTION_ROW_CLASS } from "./panelLayout";
@@ -843,6 +845,16 @@ function SubscriberStats({ statsSignal }: { statsSignal: ReadonlySignal<Subscrib
               同期の制御が足した分) と、2 つのトラックを同じ時計として扱えているかを
               分けて出す。音声と映像の遅れを比べて改善するために要る */}
       <StatGroup title="A/V Sync">
+        {/* 前提から外れた状態 (合わせる量の上限に張り付いたまま、共有の解除の保持が続く)。
+            外れていなければ "-" を出す。値は既にある計器から組み立てる */}
+        <StatSection title="Warnings" help={SUBSCRIBER_WARNINGS_HELP} testId="subscriber-warnings">
+          <EventLog
+            label="broken preconditions"
+            hint="checked every 1 s"
+            lines={stats.warnings.map((warning) => formatPreconditionWarning(warning))}
+            testId="subscriber-warnings-log"
+          />
+        </StatSection>
         <StatSection title="Estimate" help={AV_SYNC_HELP} testId="subscriber-av-sync">
           <StatList
             items={[

@@ -5,6 +5,7 @@ import type { PublishTimingSnapshot } from "../utils/publishTimingStats";
 import type { AudioPlayoutTimingSnapshot } from "../../../src/audioPlayoutTimingStats.ts";
 import type { AudioTimestampOffsetStats } from "../../../src/audioTimestampClock.ts";
 import type { AudioPublishCatchUpStats } from "../../../src/audioPublishCatchUp.ts";
+import type { PreconditionWarning } from "../utils/preconditionWarnings.ts";
 import type { StatusType } from "../types";
 import {
   audioBytesSent,
@@ -34,6 +35,7 @@ import {
   newGroupRequestsReceived,
   objectsSent,
   objectsWithExtensions as pubObjectsWithExtensions,
+  preconditionWarnings,
   pubCodec,
   pubCurrentGroup,
   pubSession,
@@ -183,6 +185,13 @@ export interface PublisherStats {
   audio: PublisherAudioStats;
   /** event timeline (audio / video 以外のデータ) の状態 */
   event: PublisherEventStats;
+  /**
+   * A/V 同期と再生の判断が前提から外れている状態 (外れていなければ空)
+   *
+   * 判定は `utils/preconditionWarnings.ts` が既にある計器の値から行う。どうなったら
+   * 何を見直すかは docs/AV_SYNC_DECISIONS.md が持つ
+   */
+  warnings: readonly PreconditionWarning[];
   /** 制御ストリームとデータストリームの統計。未接続のときは null */
   sessionStatistics: SessionStatistics | null;
   /** 送信している Catalog (bigint は文字列)。まだ送っていないときは null */
@@ -300,6 +309,13 @@ export interface SubscriberStats {
    * 未購読、jitter buffer が無効、音声だけの購読では既定値
    */
   avSync: AvSyncSnapshot;
+  /**
+   * A/V 同期と再生の判断が前提から外れている状態 (外れていなければ空)
+   *
+   * 判定は `utils/preconditionWarnings.ts` が既にある計器の値から行う。どうなったら
+   * 何を見直すかは docs/AV_SYNC_DECISIONS.md が持つ
+   */
+  warnings: readonly PreconditionWarning[];
   audio: SubscriberAudioStats;
   event: SubscriberEventStats;
   /**
@@ -361,6 +377,8 @@ export function buildPublisherStats(): PublisherStats {
       publishing: eventPublisher.value !== null,
       messagesSent: eventMessagesSent.value,
     },
+    // 前提から外れた状態 (signals/preconditionWatch.ts が 1 秒ごとに更新する)
+    warnings: preconditionWarnings.value,
     sessionStatistics: session === null ? null : session.getStatistics(),
     catalog: catalog.value === null ? null : toJsonValue(catalog.value),
   };
@@ -415,6 +433,8 @@ export function buildSubscriberStats(sub: SubscriberInstance): SubscriberStats {
     decoderConfigured: sub.decoderConfigured.value,
     playbackTiming: sub.playbackTiming.value,
     avSync: sub.avSync.value,
+    // 前提から外れた状態 (signals/preconditionWatch.ts が 1 秒ごとに更新する)
+    warnings: sub.preconditionWarnings.value,
     // level 0 (最大音量) と voiceActivity false (無音) は値があるため null に潰さない
     audio: {
       objectsReceived: sub.audioObjectsReceived.value,
