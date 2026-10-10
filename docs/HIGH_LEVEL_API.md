@@ -728,6 +728,9 @@ jitter buffer の遅れ (`catalog の targetLatency` を下限とする) を足�
 (draft-ietf-moq-msf-01 Section 5.2.8 / Section 5.2.11)。`isLive` が false の track の
 `targetLatency` は無視する (Section 5.2.8 の MUST)。
 
+遅延の内訳 (`delays`) の各値の根拠 (何を測ってその値にしたか) と、どうなったら見直すかは
+`docs/AV_SYNC_DECISIONS.md` が持つ。
+
 jitter buffer の遅れは音声と映像で別々に求める。音声は NetEq と同じ規則 (到着の遅れの
 0.95 分位) に加えて、**実際に鳴った結果から閉ループでも目標を決める**。NetEq の規則は
 「直近で最も早く届いた音との差」しか見ないため、到着から鳴り始めるまでの経路 (復号・
