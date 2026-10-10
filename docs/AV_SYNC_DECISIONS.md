@@ -28,17 +28,17 @@ A/V 同期と再生まわりで入れた判断 (閾値・保持・検出・追�
 
 ## 決定の一覧
 
-| #   | 決定                           | 主な値                                                                                             | 主な計器                                                                                    |
-| --- | ------------------------------ | -------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| 1   | A/V 同期で合わせる量の上限     | 100 ms (`PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS`)                                                   | `avSync.delays.*.syncExtraDelayMs`                                                          |
-| 2   | 共有解除の保持と早期解除       | 30 秒 (`PLAYOUT_BASE_UNSHARED_HOLD_MS`) / 2 秒 (`PLAYOUT_BASE_UNSHARED_RELEASE_MS`)                | `avSync.delays.unsharedReason`、`baseUnsharedReturnMs`                                      |
-| 3   | ドリフト検出と持続性           | 50 ms (`PLAYOUT_BASE_DRIFT_MS`) / 6 秒 / 200 ms / 150 ms (`BASE_DIFFERENCE_JUMP_MS`)               | `avSync.delays.baseDifferenceRecentMs`、`baseDifferenceDeviationMs`、`baseDriftMsPerSecond` |
-| 4   | 音声の到着基準の遅れと閉ループ | 80〜100 ms / 閉ループ 80〜300 ms                                                                   | `audio.playoutTiming.*`、`avSync.delays.audioDelayFeedback.*`                               |
-| 5   | 配信側の TIMESTAMP 補正        | 窓 2 秒 / 上昇の上限 100 ms/秒 / 定着 5 秒 / 段差 200 ms                                           | `audio.timestampOffset.*`                                                                   |
-| 6   | 配信側の追いつき               | `max(60 ms, 床 + 40 ms)` / 再開 20 ms / 確認 100 ms と 2 フレーム / 再開後 1 秒 / `drop` と `keep` | `audio.catchUp.*`                                                                           |
-| 7   | 受信側の再生の組み立て         | `AudioPlayoutSession` / `VideoPlayoutSession`                                                      | `avSync.*`、`audio.playoutTiming.*`                                                         |
-| 8   | 復号の出力と投入の対応づけ     | 1,000 マイクロ秒 (`DECODER_OUTPUT_TIMESTAMP_TOLERANCE_MICROS`)                                     | `audio.playoutTiming.arrivalPlannedFrames`                                                  |
-| 9   | 実リレーの E2E の判定          | 150 ms (`AV_SKEW_MAX_MS`) / 35 秒 (`AV_UNSHARED_RECOVERY_MAX_MS`)                                  | `avSync.skewMs`、`avSync.delays.unsharedReason`                                             |
+| #   | 決定                           | 主な値                                                                                                          | 主な計器                                                                                    |
+| --- | ------------------------------ | --------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| 1   | A/V 同期で合わせる量の上限     | 100 ms (`PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS`)                                                                | `avSync.delays.*.syncExtraDelayMs`                                                          |
+| 2   | 共有解除の保持と早期解除       | 30 秒 (`PLAYOUT_BASE_UNSHARED_HOLD_MS`) / 2 秒 (`PLAYOUT_BASE_UNSHARED_RELEASE_MS`)                             | `avSync.delays.unsharedReason`、`baseUnsharedReturnMs`                                      |
+| 3   | ドリフト検出と持続性           | 50 ms (`PLAYOUT_BASE_DRIFT_MS`) / 6 秒 / 200 ms / 150 ms (`BASE_DIFFERENCE_JUMP_MS`)                            | `avSync.delays.baseDifferenceRecentMs`、`baseDifferenceDeviationMs`、`baseDriftMsPerSecond` |
+| 4   | 音声の到着基準の遅れと閉ループ | 80〜100 ms / 閉ループ 80〜300 ms                                                                                | `audio.playoutTiming.*`、`avSync.delays.audioDelayFeedback.*`                               |
+| 5   | 配信側の TIMESTAMP 補正        | 窓 2 秒 / 上昇の上限 100 ms/秒 / 定着 5 秒 / 段差 200 ms                                                        | `audio.timestampOffset.*`                                                                   |
+| 6   | 配信側の追いつき               | `max(60 ms, 床 + 40 ms)` / 再開 20 ms / 確認 100 ms と 2 フレーム / 再開後 1 秒 / `drop` と `keep`              | `audio.catchUp.*`                                                                           |
+| 7   | 受信側の再生の組み立て         | `AudioPlayoutSession` / `VideoPlayoutSession`                                                                   | `avSync.*`、`audio.playoutTiming.*`                                                         |
+| 8   | 復号の出力と投入の対応づけ     | 1,000 マイクロ秒 (`DECODER_OUTPUT_TIMESTAMP_TOLERANCE_MICROS`) / 引けないときは直前の種類 (`LastTimestampKind`) | `audio.playoutTiming.arrivalPlannedFrames`                                                  |
+| 9   | 実リレーの E2E の判定          | 150 ms (`AV_SKEW_MAX_MS`) / 35 秒 (`AV_UNSHARED_RECOVERY_MAX_MS`)                                               | `avSync.skewMs`、`avSync.delays.unsharedReason`                                             |
 
 ## 1. A/V 同期で合わせる量の上限
 
@@ -633,6 +633,11 @@ worker の使い方) を見る。追いつきは症状を消すだけで、原�
 
 - `DECODER_OUTPUT_TIMESTAMP_TOLERANCE_MICROS` = 1,000 マイクロ秒 (復号の出力の timestamp と、
   復号へ渡した timestamp の差として許す上限。`src/decodeInputTimestamps.ts`)
+- `DECODE_INPUT_KIND_FALLBACK_MAX_DISTANCE_MICROS` = 10,000,000 マイクロ秒 (対応が引けない出力に、
+  直前に分かっている種類を使ってよい、保留している記録からの隔たりの上限。同)
+- 対応が引けなかったときは、直前に分かっている種類を使う (`LastTimestampKind`。同)。種類は
+  TIMESTAMP の Timescale の有無で決まる (draft-ietf-moq-loc-04 §2.3.1.1 / §2.3.1.2) ため、
+  直前の値で足りる
 
 ### 守っている性質
 
@@ -659,6 +664,28 @@ CI の runner (run 38026081292) では、音声の基準の遅れが 116.3 ms �
 記録が 1 秒に約 50 件増え続けた。修正後は 30 秒間 20 ms 前後で動かず (3 等分した中央値で
 20.4 ms / 19.8 ms / 20.6 ms)、記録は 1 件のままになった。
 
+同じ 1 ms の許容でも、引けない状態が続く形がもう 1 つある (実測。同じ再現で CPU を 6 倍に
+遅くした 4 回のうち 3 回)。記録と復号の出力の timestamp の格子が 9.7 ms (または 1 フレーム、
+19.8 ms) ずれたまま残り、その差が縮まらない。記録と出力の双方が 20 ms ごとに進むためである。
+このとき、記録は残る (この出力より古い記録は捨てる規則は、出力より新しい記録を消さない) ため、
+同じ判定が出力ごとに繰り返され、以後の出力がすべて引けなくなる。実測では、対応が引けた 635 回の
+後、831 回続けて引けなくなった。この間、復号は 50 個/秒で続いていたが、音声は共有の時間軸へ
+記録されず、音声の基準の遅れは 19.7 ms のまま固定された。CI の run 38039326992 の
+「前半 144.2 ms のまま 12 秒動かず、410.1 ms、664.3 ms へ飛んで凍る」形はこれである。
+
+格子がずれるきっかけは、配信側の TIMESTAMP の補正の段差と、relay の cache の再送である。実測
+(20 秒、入力 1019 個) では、入力の timestamp の間隔に -120 ms から +190 ms の跳びが 30 回
+あった (-20000: 3、-40000: 1、-60000: 4、-80000: 2、-120000: 1、30000: 2、40000: 12、
+60000: 2、80000: 3、100000: 4、190000: 1)。跳びは配信側と relay の性質であり、受信側では
+防げない。また、負荷時は復号の出力が入力から数十 ms から 0.5 秒遅れて出るため (実測)、跳びが
+起きる時点では復号へ渡したままの記録が溜まっている。遅れそのもの (到着の遅れと復号の遅れ) は
+記録の破棄の条件ではない。破棄は timestamp の関係だけで決まるためである (実測: 復号の出力が
+1 フレーム分遅れて出ている間も、記録は 5 件まで溜まり、記録ごとに対応が引けていた)。
+
+そこで、引けないときは直前に分かっている種類を使う。値が 10 秒より離れているとき (TIMESTAMP が
+無い音は decoder へ 0 を渡すため、その出力は 0 である) だけは、別の時間軸の値であり当てに
+しない。
+
 **根拠が薄い点 (他コーデックは未計測)**: 100 マイクロ秒は 1 つの実装 (Chromium の Opus) の
 実測であり、他の codec (AAC) や他の実装で同じ大きさになるかは測っていない。1 ms という
 許容は「Opus の最短フレーム (2.5 ms) の半分未満」という見積もりで置いた値であり、ずれの
@@ -676,6 +703,12 @@ CI の runner (run 38026081292) では、音声の基準の遅れが 116.3 ms �
   timestamp と、復号が作る時間軸との差として現れるためであり、符号化と復号を直接つなぐ
   この計測では条件が足りない
 
+**根拠が薄い点 (格子のずれの作り方)**: 格子が 9.7 ms ずれる形は、実測した入力の跳び
+(-120 ms から +190 ms) のどれがどのように効いたかまでは特定していない。跳びの量そのものでは
+なく、跳びの前後で復号へ渡したままだった記録が残らず、以後の出力がすべて跳びの後の格子に
+乗ることで、差が一定のまま固定される。実装が保証するのは、この状態でも種類を失わないこと
+である (ずれを 0 に戻すことではない)。
+
 ### 副作用とトレードオフ
 
 - 1 ms 以内のずれは同じ音とみなすため、隣り合う音の間隔が 2 ms 未満の用途では取り違え得る
@@ -683,6 +716,13 @@ CI の runner (run 38026081292) では、音声の基準の遅れが 116.3 ms �
 - 引けなかった記録は、1 ms より古くなった時点で捨てる。出力が入力と対応しないまま続くと、
   その分の位置 (relay の cache から追いつく途中かどうか) は分からなくなり、従来どおり
   鳴らす側へ倒れる
+- 直前の種類を使うため、種類が本当にストリームの途中で変わった場合、飛行中 (復号へ渡して
+  出力が返っていない) の音には新しい種類を当てる。種類が変わった直後の数十 ms の音だけで
+  あり、TIMESTAMP の種類はトラックの性質であるため受け入れる。種類が分かるたびに上書きする
+  ため、古い種類を使い続けることはない
+- 直前の種類を使えるのは、値が記録から 10 秒以内のときだけである。10 秒を超えて遅れた音は
+  種類を失う (時間軸へ記録しない)。復号が 10 秒以上遅れて出る状態は、その時点で再生が
+  成り立たない
 - AAC では 1 ms の許容が足りるかどうかが未確認である。AAC のフレームは 1024 サンプル
   (48 kHz で 21.33 ms) であり、Opus (960 サンプル、20 ms) より長い。ずれがフレームの長さに
   比例するなら、1 ms では足りない可能性がある
@@ -692,6 +732,8 @@ CI の runner (run 38026081292) では、音声の基準の遅れが 116.3 ms �
 - `audio.playoutTiming.arrivalPlannedFrames` が増え続ける (種類を引けていない)
 - `avSync.delays.audio.baseDelayMs` が同じ値のまま動かない (更新されていない)
 - 出力の timestamp のずれが 1 ms に近づく codec が現れる
+- 格子のずれが再発し、`LastTimestampKind` を使っている (種類は保ったが対応は引けていない)
+  状態が観測の大半を占める
 - AAC を扱える環境 (AAC を符号化できるブラウザ、または AAC を返すリレー) で配信と購読を
   行えるようになったら、同じ手順 (実リレー、25 秒以上の観測、`arrivalPlannedFrames` と
   `baseDelayMs`) で AAC のずれを測る

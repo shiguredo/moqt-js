@@ -931,7 +931,10 @@ Web Audio (`AudioContext` とその出力) は `AudioPlayoutOutput` として注
 音がこの組み立てへ `none` として渡り、共有の時間軸へ記録されなくなる (音声の基準の遅れが
 更新されず、A/V 同期が到着基準へ落ちる)。そのため、一致する記録が無いときは最も古い記録を
 1 ms 以内のときだけ引く。一致が続かなかった後も引けるよう、1 ms より古くなった記録は捨てる。
-引く処理そのものは `src/decodeInputTimestamps.ts` が持ち、ライブラリと devtools が共有する。
+引けないままになることもある (実測: 記録と復号の出力の timestamp の格子が 9.7 ms ずれたまま
+残り、以後の出力がすべて引けなくなる) ため、引けないときは直前に分かっている種類を使う。
+引く処理とその種類の保持は `src/decodeInputTimestamps.ts` が持ち、ライブラリと devtools が
+共有する。
 
 ```typescript
 import { AudioPlayoutSession, AudioPlayoutTimingStats, PlaybackTimeline } from "moqt-js";

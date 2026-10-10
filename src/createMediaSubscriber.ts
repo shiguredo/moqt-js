@@ -34,7 +34,7 @@ import type { AudioClockBridge, AudioPlayoutScheduler } from "./audioPlayout";
 import { AudioPlayoutTimingStats, AUDIO_PLAYOUT_TIMING_WINDOW_MS } from "./audioPlayoutTimingStats";
 // 復号した音声の再生の組み立ては devtools と共有する (到着基準の遅れ・閉ループ・計器を
 // 1 か所に置くため、src/audioPlayoutSession.ts が持つ)
-import { takeDecodeInputEntry } from "./decodeInputTimestamps";
+import { LastTimestampKind, takeDecodeInputEntry } from "./decodeInputTimestamps";
 import { AudioPlayoutSession, type AudioPlayoutTimestampKind } from "./audioPlayoutSession";
 import { JITTER_BUFFER_MAX_QUEUED_FRAMES } from "./playoutBuffer";
 import { PlaybackTimeline } from "./playbackTimeline";
@@ -509,6 +509,9 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   });
   // 音声も同じ対応表を持つ (Timescale がある TIMESTAMP は壁時計ではない)
   private readonly audioTimestampKinds = new Map<number, "wallClock" | "mediaTime">();
+  // 直前に記録した音声の TIMESTAMP の種類。復号の出力で対応が引けなくなったときに使う
+  // (src/decodeInputTimestamps.ts の `LastTimestampKind` を参照)
+  private readonly lastAudioTimestampKind = new LastTimestampKind<"wallClock" | "mediaTime">();
   // 音声と映像の両方で壁時計の TIMESTAMP を観測したか (同期の推定を出せるか)
   private audioWallClockSeen = false;
   private videoWallClockSeen = false;
@@ -1139,6 +1142,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     this.playbackTimeline.reset();
     this.audioPlayoutSession.releaseAudioContext();
     this.audioTimestampKinds.clear();
+    this.lastAudioTimestampKind.reset();
     this.audioWallClockSeen = false;
     this.videoWallClockSeen = false;
     // Catalog の受信状態を初期値に戻す。受信待ちが残っていれば打ち切る
@@ -2079,6 +2083,11 @@ export class MediaSubscriberImpl implements MediaSubscriber {
    *
    * Timescale が無い TIMESTAMP だけ壁時計である (draft-ietf-moq-loc-04 §2.3.1.1)。
    * 無い TIMESTAMP は decoder に 0 を渡すため、種類は覚えず壁時計にしない。
+   *
+   * 覚えた種類は、直前に分かっている種類としても残す。復号の出力で対応が引けなくなった
+   * ときは、これを使う (`LastTimestampKind`)。種類は Timescale の有無で決まり、
+   * ストリームの途中で変わるものではない。種類が変わったときに古い値を使い続けないよう、
+   * 記録のたびに上書きする。
    */
   private rememberAudioTimestampKind(timestamp: number, source: TimestampSource): void {
     if (source.timestamp === undefined) {
@@ -2086,7 +2095,10 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     }
     const kinds = this.audioTimestampKinds;
     kinds.delete(timestamp);
-    kinds.set(timestamp, source.timescale === undefined ? "wallClock" : "mediaTime");
+    const kind: AudioPlayoutTimestampKind =
+      source.timescale === undefined ? "wallClock" : "mediaTime";
+    kinds.set(timestamp, kind);
+    this.lastAudioTimestampKind.update(kind);
     for (const oldest of kinds.keys()) {
       if (kinds.size <= TIMESTAMP_KIND_MAX_TRACKED) {
         break;
@@ -2402,7 +2414,13 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     // 復号へ渡した timestamp の種類を引く。Timescale がある TIMESTAMP は壁時計ではない
     // (draft-ietf-moq-loc-04 §2.3.1.1 / §2.3.1.2)
     const kind = takeDecodeInputEntry(this.audioTimestampKinds, audioData.timestamp);
-    const timestampKind: AudioPlayoutTimestampKind = kind ?? "none";
+    // 引けないときは、直前に分かっている種類を使う。記録と復号の出力の timestamp の格子が
+    // ずれると (実測: 9.7 ms)、以後の出力がすべて引けなくなる。種類を失うと、その間の音が
+    // 共有の時間軸へ記録されず、音声の基準の遅れが更新されないまま固定される
+    const timestampKind: AudioPlayoutTimestampKind =
+      kind ??
+      this.lastAudioTimestampKind.fallbackFor(this.audioTimestampKinds, audioData.timestamp) ??
+      "none";
     // 直近の音が壁時計の TIMESTAMP を持つか (同期の推定を出せるかの判定に使う)
     this.audioWallClockSeen = timestampKind === "wallClock";
 

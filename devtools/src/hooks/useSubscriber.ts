@@ -61,7 +61,7 @@ import {
 // 復号した音声の再生の組み立て (時間軸への記録・目標の決定・予約・計器への記録) は
 // ライブラリと共有する (組み立てを 2 か所へ置くと、到着基準の遅れ・閉ループ・計器の
 // 修正のたびに両方を直すことになり、片方だけ直すと挙動がずれる)
-import { takeDecodeInputEntry } from "../../../src/decodeInputTimestamps.ts";
+import { LastTimestampKind, takeDecodeInputEntry } from "../../../src/decodeInputTimestamps.ts";
 import { AudioPlayoutSession } from "../../../src/audioPlayoutSession.ts";
 // targetLatency の解決規則はライブラリと共有する純関数が持つ (規則を 2 か所に書かない)
 import { effectiveTargetLatencyMs, resolveSharedTargetLatencyMs } from "../../../src/msf/tracks.ts";
@@ -693,6 +693,10 @@ export function useSubscriber(
   // 音声も同じ対応表を持つ。Timescale がある TIMESTAMP はメディア時刻であり、壁時計の
   // 時刻と対応しないため、目標の開始時刻を求めずに到着基準で並べる
   const audioDecodeInputsRef = useRef(new Map<number, DecodeInput>());
+  // 直前に復号へ渡した音声の TIMESTAMP の種類。復号の出力で対応が引けなくなったときに使う
+  // (src/decodeInputTimestamps.ts の `LastTimestampKind` を参照)。種類は Timescale の有無で
+  // 決まり、ストリームの途中で変わるものではないため、直前の値で足りる
+  const lastAudioTimestampKindRef = useRef(new LastTimestampKind<"wallClock" | "mediaTime">());
   // relay の cache から追いつく途中かどうかを、SUBSCRIBE_OK の LARGEST_OBJECT を境界に
   // 判定する。映像と音声は別の Track であり、SUBSCRIBE_OK が返す境界も別であるため、
   // Track ごとに 1 つ持つ
@@ -1236,6 +1240,7 @@ export function useSubscriber(
     startAudioPlayoutTiming();
     // 前の購読で復号に渡した TIMESTAMP の種類と位置を持ち越さない (decoder ごと作り直す)
     audioDecodeInputsRef.current.clear();
+    lastAudioTimestampKindRef.current.reset();
 
     // 直前に decoder へ渡した Audio Config。AAC のときだけ使う
     let appliedAudioConfig: Uint8Array | undefined;
@@ -1315,6 +1320,10 @@ export function useSubscriber(
             : locProperties.timescale === undefined
               ? "wallClock"
               : "mediaTime";
+        // 直前に分かっている種類として残す。復号の出力で対応が引けなくなったときに使う。
+        // TIMESTAMP が無い (種類 none) 音は decoder へ 0 を渡すため、0 の出力に古い種類を
+        // 当てないよう、このときは上書きしない
+        lastAudioTimestampKindRef.current.update(timestampKind === "none" ? null : timestampKind);
         const timestamp =
           locProperties.timestamp === undefined
             ? 0
@@ -1550,6 +1559,14 @@ export function useSubscriber(
       // 対応づけられないため、共有実装が時間軸へ記録せず到着基準で並べる
       const inputs = audioDecodeInputsRef.current;
       const input = takeDecodeInputEntry(inputs, audioData.timestamp);
+      // 対応が引けないときは、直前に分かっている種類を使う。記録と復号の出力の timestamp の
+      // 格子がずれると (実測: 9.7 ms)、以後の出力がすべて引けなくなる。種類を失うと、その間の
+      // 音が共有の時間軸へ記録されず、音声の基準の遅れが更新されないまま固定される。
+      // 位置 (relay の cache から来たか) は引けたときだけ分かるため、引けないときは
+      // 従来どおり鳴らす側に倒す (下の `input === undefined` の扱い)
+      const lastKind = lastAudioTimestampKindRef.current;
+      const timestampKind =
+        input?.timestampKind ?? lastKind.fallbackFor(inputs, audioData.timestamp) ?? "none";
       // 到着 (復号の出力を受け取った) 時刻。鳴らさなかった音の記録に使う
       const arrivalMs = performance.now();
 
@@ -1585,7 +1602,7 @@ export function useSubscriber(
       // (同期しないまま音声だけ目標へ合わせると映像とずれる)
       const result = playback.playout.handleDecodedAudio({
         data: audioData,
-        timestampKind: input?.timestampKind ?? "none",
+        timestampKind,
         timeline: playoutTimelineRef.current,
         useTimeline: jitterBufferEnabledRef.current,
         enforceTarget: jitterBufferEnabledRef.current,
