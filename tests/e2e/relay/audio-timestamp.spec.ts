@@ -158,6 +158,22 @@ const AV_UNSHARED_RECOVERY_MAX_MS = 35_000;
 const SKEW_OBSERVE_TIMEOUT_MS = 15_000;
 
 /**
+ * 判断に要る標本の数
+ *
+ * 予算を超えた状態が続いた長さで判定するため、続きを見られるだけの標本を集める
+ */
+const SKEW_MIN_SAMPLES = 3;
+
+/**
+ * 予算を超えた状態を続けて許す時間 (ミリ秒)
+ *
+ * 単発の跳びは環境で起きる (表示が一瞬途切れる、解除が戻った直後で 2 つの表示位置が
+ * 揃う途中である)。0754 の症状は「ずれが固定する」ことであり、数百 ms のずれが続く
+ * (実測: 3370 ms が 23 秒続いた)。続いた長さで見れば、環境の跳びと症状を区別できる
+ */
+const SKEW_OVERFLOW_MAX_MS = 2_000;
+
+/**
  * 配信側の原点の傾きとして許す上限 (ミリ秒 / 秒)
  *
  * 実装が保証するのは「一定のずれに収まる」ことである。観測した速さの実測は 0.0 ms/秒で
@@ -741,35 +757,65 @@ async function expectSkewWithinBudget(
   observations: readonly RelayObservation[],
   report: string,
 ): Promise<void> {
-  const observed = observations
+  const recorded = observations
     .map((observation) => subscriberOf(observation).skewMs)
     .filter((value): value is number => value !== null);
-  const skewOverflow = observed.find((skew) => Math.abs(skew) > AV_SKEW_MAX_MS);
+  const recordedOverflowMs = maxSkewOverflowRunMs(recorded);
   expect(
-    skewOverflow,
-    `音声と映像の表示時刻の差が予算に収まる (許す絶対値 ${AV_SKEW_MAX_MS} ms)\n${report}`,
-  ).toBeUndefined();
+    recordedOverflowMs,
+    `音声と映像の表示時刻の差が予算に収まる (許す絶対値 ${AV_SKEW_MAX_MS} ms、続けて許す ${SKEW_OVERFLOW_MAX_MS} ms)\n観測した差: ${formatSkewSamples(recorded)}\n${report}`,
+  ).toBeLessThanOrEqual(SKEW_OVERFLOW_MAX_MS);
 
-  // 共有が戻った後に値が作られることを確かめる。1 回の観測だけでなく、値が観測できた
-  // ところまでを待つ (その瞬間だけ表示が途切れている場合を失敗にしない)
-  let latestSkewMs: number | null = null;
-  await expect
-    .poll(
-      async () => {
-        latestSkewMs = subscriberOf(await readObservation(page)).skewMs;
-        return latestSkewMs;
-      },
-      {
-        message: `共有が戻った後に、音声と映像の表示時刻の差が観測できる (${SKEW_OBSERVE_TIMEOUT_MS} ms 待つ)\n${report}`,
-        timeout: SKEW_OBSERVE_TIMEOUT_MS,
-        intervals: [SAMPLE_INTERVAL_MS],
-      },
-    )
-    .not.toBeNull();
+  // 共有が戻ると値が作られる。解除が長引くと、戻った直後の値は 2 つの表示位置が揃う
+  // 途中であり得るため、判断に要る標本が集まるまで観測してから続いた長さで見る
+  const observed: number[] = [];
+  const deadlineMs = performance.now() + SKEW_OBSERVE_TIMEOUT_MS;
+  while (observed.length < SKEW_MIN_SAMPLES && performance.now() < deadlineMs) {
+    const skewMs = subscriberOf(await readObservation(page)).skewMs;
+    if (skewMs !== null) {
+      observed.push(skewMs);
+    }
+    await page.waitForTimeout(SAMPLE_INTERVAL_MS);
+  }
   expect(
-    Math.abs(latestSkewMs ?? Number.NaN),
-    `共有が戻った後の音声と映像の表示時刻の差が予算に収まる (許す絶対値 ${AV_SKEW_MAX_MS} ms)\n${report}`,
-  ).toBeLessThanOrEqual(AV_SKEW_MAX_MS);
+    observed.length,
+    `共有が戻った後に、音声と映像の表示時刻の差が観測できる (${SKEW_OBSERVE_TIMEOUT_MS} ms で ${SKEW_MIN_SAMPLES} 件)\n${report}`,
+  ).toBeGreaterThanOrEqual(SKEW_MIN_SAMPLES);
+
+  const observedOverflowMs = maxSkewOverflowRunMs(observed);
+  expect(
+    observedOverflowMs,
+    `共有が戻った後の音声と映像の表示時刻の差が予算に収まる (許す絶対値 ${AV_SKEW_MAX_MS} ms、続けて許す ${SKEW_OVERFLOW_MAX_MS} ms)\n観測した差: ${formatSkewSamples(observed)}\n${report}`,
+  ).toBeLessThanOrEqual(SKEW_OVERFLOW_MAX_MS);
+}
+
+/**
+ * 表示時刻の差が予算を超えた状態で続いた最長時間 (ミリ秒)
+ *
+ * 観測は `SAMPLE_INTERVAL_MS` ごとの標本である。単発の跳び (表示が一瞬途切れた、解除が
+ * 戻った直後で位置が揃う途中) と、ずれが固定した状態を区別するために続いた長さで見る
+ *
+ * @param samples - 観測した表示時刻の差
+ * @returns 予算を超えた状態が続いた最長時間
+ */
+function maxSkewOverflowRunMs(samples: readonly number[]): number {
+  let runMs = 0;
+  let maxMs = 0;
+  for (const sample of samples) {
+    runMs = Math.abs(sample) > AV_SKEW_MAX_MS ? runMs + SAMPLE_INTERVAL_MS : 0;
+    maxMs = Math.max(maxMs, runMs);
+  }
+  return maxMs;
+}
+
+/**
+ * 表示時刻の差の一覧を失敗メッセージ用の文字列にする
+ *
+ * @param samples - 観測した表示時刻の差
+ * @returns 1 標本あたり 1 桁の小数で並べた文字列 (空なら "なし")
+ */
+function formatSkewSamples(samples: readonly number[]): string {
+  return samples.length === 0 ? "なし" : samples.map((sample) => sample.toFixed(1)).join(", ");
 }
 
 /**
