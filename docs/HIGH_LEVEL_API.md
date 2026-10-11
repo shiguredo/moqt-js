@@ -1399,6 +1399,14 @@ const latest = subscriber.catalog;
 const published = publisher.getCatalog();
 ```
 
+購読側は、カタログの live 更新を SUBSCRIBE (Next Object) で受けながら、既存の
+カタログを FETCH で取得する。FETCH の要求には必ず Location Filter を載せる
+(`LARGEST_OBJECT` が不明なときも絶対位置 `{0, 0}` を明示する)。Location Filter を
+省略した FETCH は送らない。FETCH の応答が期限内に終わらない場合も、SUBSCRIBE で
+届いた完全なカタログは破棄せず、受信タイムアウトの時点で適用して開始する。
+カタログを受け取れないまま受信タイムアウト (5000 ms) を過ぎると `start()` は
+`catalog receive timeout` で失敗する。
+
 ### 認可トークン
 
 ```typescript

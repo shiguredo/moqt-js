@@ -198,14 +198,14 @@ type ProcessCatalogPayloadResult =
 /**
  * FETCH フェーズ終了時に live バッファから適用すべきオブジェクトを抽出する
  *
- * SUBSCRIBE (Next Object (Location Filter Type 0x05)) と FETCH (フィルタなし) は
- * 独立して評価されるため、
+ * SUBSCRIBE (Next Object (Location Filter Type 0x05)) と FETCH (常に載せる絶対開始の
+ * Location Filter) は独立して評価されるため、
  * 両リクエストの処理時刻の間に publish された Catalog オブジェクトは live と
- * FETCH の両方で届く (draft-ietf-moq-transport-22 §3.3.1。Fetch は「{0, 0} から
- * Largest Object まで」、Next Object 購読は Largest の次から始まるため、処理時刻の
- * ずれだけ範囲が重なる)。FETCH で配信済みの最大 Location 以下のオブジェクトは
- * 適用済みのため除去する (delta の再適用は非冪等であり、add の二重適用は
- * トラックの重複追加になり catalog が破損し得る)。
+ * FETCH の両方で届く (draft-ietf-moq-transport-22 §3.3.1。Fetch は Largest Object の
+ * Group の先頭から Largest Object まで、Next Object 購読は Largest の次から始まるため、
+ * 処理時刻のずれだけ範囲が重なる)。FETCH で配信済みの最大 Location 以下の
+ * オブジェクトは適用済みのため除去する (delta の再適用は非冪等であり、add の
+ * 二重適用はトラックの重複追加になり catalog が破損し得る)。
  *
  * @param pending live SUBSCRIBE でバッファされたオブジェクト
  * @param lastFetchedLocation FETCH で配信された最大 Location
@@ -238,29 +238,28 @@ export function filterPendingCatalogObjects(
  * しない構成では既存 catalog を取得できない。開始位置を最新 Group の先頭にすれば
  * cache が覆える範囲 (cache が持つ最新 Group) と一致する。
  *
- * LARGEST_OBJECT が不明な場合は undefined を返し、呼び出し側はフィルタ無し
- * (従来どおり {0, 0} から Largest Object まで) を要求する。
+ * LARGEST_OBJECT が不明なときと Group 0 のときは、絶対位置 {0, 0} を開始位置にした
+ * Location Filter Type 0x02 を返す。§9.20.9 のとおりこの形式の終端も Largest Object
+ * であり、要求範囲はフィルタ無しと同じ ({0, 0} から Largest Object まで) になる。
+ * 同じ範囲でもフィルタを省略した FETCH は実リレーで応答が返らない (実測: 21.5 秒間
+ * 応答が返らない) ため、常に Location Filter を載せる。省略は仕様上は合法であり
+ * (§9.20.9)、§3.2 は FETCH_OK / FETCH_ERROR の応答を MUST と定める。応答が返らない
+ * 原因がリレーにあるのか受信側にあるのかは未確定であり、切り分けが済めばこの回避策は
+ * 外せる。
  *
  * draft-ietf-moq-transport-22 §3.1.4 (Largest Object) のとおり Largest Object は
- * 到着中の Object を指し得る。フィルタ無しの FETCH は §3.2 のとおり開始位置が
- * {0, 0}、終端が Largest Object となり、実際の終端は FETCH_OK の End Location (§9.12)
- * で示される。
- * ここでは受信した Largest Object の Group の先頭を開始位置に置くだけで、終端は
- * 再計算しない (Group 0 のときは {0, 0} 起点と同じ範囲になるためフィルタを省略する)。
+ * 到着中の Object を指し得る。ここでは受信した Largest Object の Group の先頭を
+ * 開始位置に置くだけで、終端は再計算しない (§9.12 の FETCH_OK の End Location が
+ * 実際の終端を示す)。
  *
  * @param largestLocation SUBSCRIBE_OK で受信した LARGEST_OBJECT (不明なら null)
- * @returns FETCH に載せる Location Filter。undefined はフィルタ無し
+ * @returns FETCH に載せる Location Filter (常に定義済みの値を返す)
  */
-export function catalogFetchFilter(largestLocation: Location | null): LocationFilter | undefined {
-  if (largestLocation === null) {
-    return undefined;
-  }
-  // 2 フィールドの 0:0 (Location Filter Type 0x02) は絶対位置 {0, 0} の指定であり、
-  // フィルタ無しの FETCH の要求範囲 ({0, 0} から Largest Object まで) と一致する。
-  // 同じ範囲を明示する意味がないため、そのままフィルタ無しにする
-  // (§9.20.9。Next Object は 0x05 であり 0:0 ではない)。
-  if (largestLocation.group === 0n) {
-    return undefined;
+export function catalogFetchFilter(largestLocation: Location | null): LocationFilter {
+  if (largestLocation === null || largestLocation.group === 0n) {
+    // 2 フィールドの {0, 0} (Location Filter Type 0x02) は絶対位置 {0, 0} の指定である
+    // (§9.20.9。Next Object は 0x05 であり 0:0 ではない)
+    return { startGroup: 0n, startObject: 0n };
   }
   return { startGroup: largestLocation.group, startObject: 0n };
 }
@@ -1051,9 +1050,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     // catalogReceiveFailed で捨てられる。受信タイムアウトも解除し、解放の途中で
     // タイムアウトの reject が先に届かないようにする。catalogReceiveFailed だけは
     // 解放中の遅延オブジェクトを捨てるラッチとして true にし、後段の初期化節で戻す
-    this.catalogFetchInProgress = false;
-    this.pendingCatalogObjects = [];
-    this.catalogFetchLastLocation = null;
+    this.resetCatalogFetchPhase();
     this.clearCatalogTimer();
     this.catalogReceiveFailed = true;
 
@@ -1337,8 +1334,8 @@ export class MediaSubscriberImpl implements MediaSubscriber {
    *    live の catalog 更新を受信する
    * 2. 独立した FETCH で既存の catalog を取得する。要求範囲は SUBSCRIBE_OK の
    *    LARGEST_OBJECT が示す Group の先頭 Object から Largest Object までとする
-   *    (catalogFetchFilter を参照)。LARGEST_OBJECT が不明な場合だけフィルタ無し
-   *    ({0, 0} から Largest Object まで) で要求する
+   *    (catalogFetchFilter を参照。LARGEST_OBJECT が不明なときも絶対位置 {0, 0} の
+   *    Location Filter を載せ、フィルタ無しの FETCH は送らない)
    * FETCH フェーズ中の live オブジェクトはバッファし、FETCH の終了 (end / error)
    * で順に適用する (delta が full より先に適用される順序逆転を防ぐ)。
    * FETCH と live で二重に届いたオブジェクトは filterPendingCatalogObjects で除去する。
@@ -1348,9 +1345,14 @@ export class MediaSubscriberImpl implements MediaSubscriber {
    * 届かない (L2, L1] の取りこぼしを防ぐ。リレーが FETCH を先に処理すると
    * L2 < L1 になり得るため、順序を入れ替えてはならない。
    *
-   * 異常系契約: 受信タイムアウト後は catalogReceiveFailed で以降の
-   * オブジェクトを破棄する。session.subscribe 失敗時は即時掃除して
+   * 異常系契約: 受信タイムアウトで失敗した後は catalogReceiveFailed で以降の
+   * オブジェクトを破棄する (ドレインでフル catalog を resolve した場合は破棄せず、
+   * 以降の live 更新も適用する)。session.subscribe 失敗時は即時掃除して
    * throw する。成功時を含めタイマーは解除する。
+   * FETCH の応答が期限までに終わらない場合も、live で届いていたフル catalog は
+   * 破棄せずドレインして resolve する (FETCH が end も error も通知しないリレーでも
+   * 受信済みの catalog を使い切る)。この場合 FETCH は FETCH_OK を受ける前に
+   * 保留のまま残る (Fetcher を取得できないため取り消す経路が無い)。
    *
    * @param startGeneration start の開始時に捕捉した世代番号 (解放が先行していないかの検査用)
    * @param timeoutMs Catalog 受信タイムアウト (ミリ秒、省略時は CATALOG_RECEIVE_TIMEOUT)
@@ -1368,24 +1370,35 @@ export class MediaSubscriberImpl implements MediaSubscriber {
 
     // Catalog 受信を待つ Promise を作成
     // タイムアウトは「未 resolve」で reject する。FETCH フェーズ中にフルが来ても
-    // resolve しない契約のため、`!receivedCatalog` だけではフェーズ未完了時にハングする。
+    // その場では resolve しない契約のため、`!receivedCatalog` だけではフェーズ未完了時に
+    // ハングする。フェーズが終わらないまま期限に達したときは、ドレインしてから判定する。
     const catalogPromise = new Promise<Catalog>((resolve, reject) => {
       this.catalogResolve = resolve;
       this.catalogReject = reject;
 
       this.catalogTimer = setTimeout(() => {
         this.catalogTimer = null;
-        if (this.catalogResolve !== null) {
-          this.catalogResolve = null;
-          this.catalogReject = null;
-          // 失敗後に live object が永久バッファされないようフェーズ状態を解除する
-          this.catalogFetchInProgress = false;
-          this.pendingCatalogObjects = [];
-          this.catalogFetchLastLocation = null;
-          // 失敗後の遅延オブジェクトを無害化するため失敗を記録する
-          this.catalogReceiveFailed = true;
-          reject(new Error("catalog receive timeout"));
+        if (this.catalogResolve === null) {
+          return;
         }
+        try {
+          // FETCH の応答が end も error も通知されないまま期限に達しても、live の
+          // SUBSCRIBE で届いていた catalog は破棄しない。まずバッファをドレインし、
+          // フル catalog があれば resolve する (FETCH に応答しない、または応答が
+          // 終わらないリレーでは、受信済みの catalog が使われないまま期限に達していた)
+          this.finishCatalogFetchPhase();
+        } catch (error) {
+          // ドレインは利用者コールバック (onCatalog) を呼ぶ。live 配送経路と同じく
+          // 例外は onError へ流し、タイマーコールバックの外へは出さない
+          // (呼び出し元がライブラリ内に無く、未処理例外になるため)
+          try {
+            this.callbacks.onError?.(error instanceof Error ? error : new Error(String(error)));
+          } catch {
+            // 通知の失敗を伝える経路がこれ以上無い
+          }
+        }
+        // ドレインで resolve 済みなら何もしない
+        this.rejectCatalogReceiveTimeout();
       }, timeoutMs);
     });
 
@@ -1430,9 +1443,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       this.clearCatalogTimer();
       this.catalogResolve = null;
       this.catalogReject = null;
-      this.catalogFetchInProgress = false;
-      this.pendingCatalogObjects = [];
-      this.catalogFetchLastLocation = null;
+      this.resetCatalogFetchPhase();
       throw error;
     }
 
@@ -1440,10 +1451,9 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     // (確保した購読は start の巻き戻しが解放する)
     this.assertStartNotDisposed(startGeneration);
 
-    // 既存 catalog を FETCH で取得する。要求範囲は最新 Group の先頭 Object から
-    // Largest Object までとする (catalogFetchFilter を参照)。LARGEST_OBJECT が
-    // 不明な場合だけフィルタ無し ({0, 0} から Largest Object まで) で要求する。
-    // catalog が未 publish の場合は REQUEST_ERROR (INVALID_RANGE) で reject され、
+    // 既存 catalog を FETCH で取得する。要求範囲と Location Filter は
+    // catalogFetchFilter が決める (フィルタは常に載り、フィルタ無しの FETCH は送らない)。
+    // catalog が未 publish の場合は REQUEST_ERROR で reject され、
     // finishCatalogFetchPhase がフェーズを解除して live 待ちに切り替える。
     const fetchFilter = catalogFetchFilter(this.catalogSubscriber.largestLocation);
     void this.session
@@ -1451,7 +1461,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
         namespace,
         CATALOG_TRACK_NAME,
         {
-          ...(fetchFilter === undefined ? {} : { filter: fetchFilter }),
+          filter: fetchFilter,
           // draft-ietf-moq-msf-01 §11.4.3: catalog に紐づくトークンは FETCH にも MUST 付与
           ...(catalogAuthorizationToken === undefined
             ? {}
@@ -1460,8 +1470,14 @@ export class MediaSubscriberImpl implements MediaSubscriber {
         {
           // FETCH 経由は即時適用。live は object コールバック側でバッファする
           object: (obj: MoqtObject) => {
-            // 失敗後の遅延 FETCH は Location 記録も含めて破棄する
-            if (this.catalogReceiveFailed) {
+            // フェーズ終了後に届いた FETCH は破棄する。SUBSCRIBE_OK を待ってから
+            // FETCH を送るため、FETCH の終端は SUBSCRIBE_OK 時点の Largest Object (L1)
+            // 以降になる。live は Next Object (L1 の次から) を覆うため、FETCH が運ぶ
+            // のは live の窓より前の Location か、live でも同じ Location が届く重複の
+            // どちらかである。適用すると catalog が古い内容へ巻き戻り、delta の
+            // 再適用はトラックの重複追加になり得る
+            // (受信タイムアウトで失敗した後もフェーズは解除済みなので、同じ判定で捨てる)
+            if (!this.catalogFetchInProgress) {
               return;
             }
             // FETCH で配信された最大 Location を記録する (ドレイン時の重複除去用)
@@ -1511,6 +1527,41 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   }
 
   /**
+   * 受信タイムアウトとして catalog の待ちを決着させる
+   *
+   * ドレインで resolve 済みなら何もしない。未解決ならフェーズ状態を解除して reject する。
+   * ドレインが利用者コールバック (onCatalog) の例外で中断した場合も、フェーズ状態を
+   * 解除して決着させる (解除しないと以降の live オブジェクトが永久にバッファされる)。
+   */
+  private rejectCatalogReceiveTimeout(): void {
+    const reject = this.catalogReject;
+    if (this.catalogResolve === null || reject === null) {
+      return;
+    }
+    this.catalogResolve = null;
+    this.catalogReject = null;
+    // 失敗後に live object が永久バッファされないようフェーズ状態を解除する
+    this.resetCatalogFetchPhase();
+    // 失敗後の遅延オブジェクトを無害化するため失敗を記録する
+    this.catalogReceiveFailed = true;
+    reject(new Error("catalog receive timeout"));
+  }
+
+  /**
+   * Catalog FETCH フェーズの状態を解除する
+   *
+   * バッファと Location の記録を捨て、フェーズが終わったことを示す。以降に届く
+   * live のオブジェクトは catalogReceiveFailed が false なら適用され続け、
+   * FETCH のオブジェクトはフェーズが終わったこと自体で捨てられる
+   * (FETCH が運ぶのは適用済みの live より古いか重複した Location だけである)。
+   */
+  private resetCatalogFetchPhase(): void {
+    this.catalogFetchInProgress = false;
+    this.pendingCatalogObjects = [];
+    this.catalogFetchLastLocation = null;
+  }
+
+  /**
    * Catalog FETCH フェーズを終了する
    *
    * live バッファを順適用（ドレイン）してからフラグを下ろし、
@@ -1544,6 +1595,8 @@ export class MediaSubscriberImpl implements MediaSubscriber {
    *
    * FETCH フェーズ中は resolve しない。フェーズ終了後に receivedCatalog が
    * あれば resolve。終了時点で null なら、後続の初回フル適用時に呼ばれる。
+   * フェーズは FETCH の end / error のほか、受信タイムアウト時にも
+   * finishCatalogFetchPhase で終了する (バッファ済みのフル catalog を resolve するため)。
    */
   private tryResolveCatalog(): void {
     if (this.catalogFetchInProgress) {

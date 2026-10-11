@@ -2148,13 +2148,16 @@ export function useSubscriber(
             // Unix epoch ミリ秒から始まる publisher では relay の object cache が
             // 覆えず、上流へ転送される。上流の publisher が FETCH に応答しない
             // 場合、後から参加した購読者は catalog を得られない。
+            // catalogFetchFilter は LARGEST_OBJECT が不明 / Group 0 のときも
+            // 絶対位置 {0, 0} の Location Filter を返すため、LOCATION FILTER を
+            // 省略した FETCH は送らない (省略した FETCH は応答が返らないことがある)
             const fetchFilter = catalogFetchFilter(catalogSubscriberInstance.largestLocation);
             await session
               .fetch(
                 namespaceArray,
                 CATALOG_TRACK_NAME,
                 {
-                  ...(fetchFilter === undefined ? {} : { filter: fetchFilter }),
+                  filter: fetchFilter,
                   // draft-ietf-moq-msf-01 §11.4.3: catalog に紐づくトークンは FETCH にも
                   // MUST 付与する。catalog の authInfo は catalog を受信するまで分からない
                   // ため、SETUP に載せたトークン (MOQT URI の c4m を含む) をそのまま使う

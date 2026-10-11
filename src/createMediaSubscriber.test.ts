@@ -2322,6 +2322,17 @@ function sleep(ms: number): Promise<void> {
   });
 }
 
+/**
+ * subscribe / fetch の登録が終わるまで microtask を進める
+ *
+ * 実時間の待機を使わず、タイマー発火に依存せずに登録完了を待つ。
+ */
+async function flushMicrotasks(): Promise<void> {
+  for (let index = 0; index < 10; index++) {
+    await Promise.resolve();
+  }
+}
+
 test("タイムアウト reject 後に遅延オブジェクトが届いても catalog は更新されない", async () => {
   // 失敗後の遅延 catalog が receivedCatalog 更新と onCatalog 発火を起こさないこと。
   // 10 ms は短い実時間 timeout (fake timers 禁止のため実時間で駆動する)
@@ -2365,6 +2376,130 @@ test("タイムアウト reject 後に遅延オブジェクトが届いても ca
   assert.equal(catalogs.length, 0);
   // FETCH 側の Location 記録も復活しないこと
   assert.isNull(control.catalogFetchLastLocation);
+});
+
+test("FETCH の応答が終わらないまま期限に達しても live のフル catalog で resolve する", async () => {
+  // FETCH が end も error も通知しないリレーでは、バッファした catalog が
+  // 適用されないまま期限に達していた。期限では破棄せずドレインして resolve する。
+  // 50 ms は短い実時間 timeout (fake timers 禁止のため実時間で駆動する)
+  const catalogs: Catalog[] = [];
+  const subscriber = new MediaSubscriberImpl(
+    "moqt://example.com/live",
+    { namespace: ["live"] },
+    {
+      onCatalog: (catalog) => {
+        catalogs.push(catalog);
+      },
+    },
+  );
+  const control = subscriber as unknown as SubscriberCatalogControl;
+  const { session, liveObject, fetchObject, fetchEnd } = createCatalogTestSession({});
+  control.session = session;
+
+  const pending = control.subscribeCatalog(control.sessionGeneration, 50);
+  await flushMicrotasks();
+
+  // FETCH フェーズ中の live のフル catalog はバッファされる (この時点では未適用)
+  liveObject({ ...makeCatalogObject(0n, 0n), payload: encodeCatalog(makeVideoCatalog()) });
+  assert.equal(control.pendingCatalogObjects.length, 1);
+  assert.isNull(subscriber.catalog);
+
+  await pending;
+  assert.isNotNull(subscriber.catalog);
+  // ドレインは catalog を適用するため onCatalog が 1 回発火する (変更前は破棄していた)
+  assert.deepEqual(catalogs, [subscriber.catalog]);
+  assert.isFalse(control.catalogFetchInProgress);
+  assert.isFalse(control.catalogReceiveFailed);
+  assert.equal(control.pendingCatalogObjects.length, 0);
+  assert.isNull(control.catalogTimer);
+  assert.isNull(control.catalogResolve);
+
+  // フェーズが終わったあとの live の catalog 更新は適用され続ける
+  const updatedCatalog = makeCatalog([{ name: "video", packaging: "loc", isLive: false }]);
+  liveObject({ ...makeCatalogObject(1n, 0n), payload: encodeCatalog(updatedCatalog) });
+  assert.deepEqual(subscriber.catalog, updatedCatalog);
+
+  // フェーズ終了後に届いた FETCH のオブジェクトは適用しない。適用すると live で
+  // 得た catalog が古い内容へ巻き戻る (適用済みの live は FETCH が運ぶ Location より新しい)
+  const catalogAfterLiveUpdate = subscriber.catalog;
+  fetchObject({
+    ...makeCatalogObject(0n, 0n),
+    payload: encodeCatalog(makeCatalog([{ name: "video", packaging: "loc", isLive: true }])),
+  });
+  fetchEnd();
+  assert.strictEqual(subscriber.catalog, catalogAfterLiveUpdate);
+});
+
+test("ドレイン中に onCatalog が throw したら onError へ通知して受信タイムアウトで失敗する", async () => {
+  // ドレインは利用者コールバックを呼ぶため、その例外で catalog の待ちが未決着に
+  // ならないこと (live 配送経路と同じく onError へ流し、開始は失敗させる)。
+  // 50 ms は短い実時間 timeout (fake timers 禁止のため実時間で駆動する)
+  const catalogError = new Error("onCatalog failed");
+  const errors: Error[] = [];
+  const subscriber = new MediaSubscriberImpl(
+    "moqt://example.com/live",
+    { namespace: ["live"] },
+    {
+      onCatalog: () => {
+        throw catalogError;
+      },
+      onError: (error) => {
+        errors.push(error);
+      },
+    },
+  );
+  const control = subscriber as unknown as SubscriberCatalogControl;
+  const { session, liveObject } = createCatalogTestSession({});
+  control.session = session;
+
+  const pending = control.subscribeCatalog(control.sessionGeneration, 50);
+  await flushMicrotasks();
+  liveObject({ ...makeCatalogObject(0n, 0n), payload: encodeCatalog(makeVideoCatalog()) });
+
+  let thrown: unknown = null;
+  try {
+    await pending;
+  } catch (error) {
+    thrown = error;
+  }
+  assert.deepEqual(errors, [catalogError]);
+  assert.isTrue(thrown instanceof Error);
+  assert.match((thrown as Error).message, /catalog receive timeout/);
+  assert.isTrue(control.catalogReceiveFailed);
+  assert.isFalse(control.catalogFetchInProgress);
+  assert.equal(control.pendingCatalogObjects.length, 0);
+});
+
+test("FETCH の応答が終わらないまま期限に達し live がフル catalog でなければ reject する", async () => {
+  // バッファが delta だけ (適用の基準になるフルが無い) の場合は resolve しない。
+  // ドレインの誤解決を防ぐガードであり、回帰ガードは上のフル catalog のテストが担う。
+  // 50 ms は短い実時間 timeout (fake timers 禁止のため実時間で駆動する)
+  const subscriber = new MediaSubscriberImpl("moqt://example.com/live", { namespace: ["live"] });
+  const control = subscriber as unknown as SubscriberCatalogControl;
+  const { session, liveObject } = createCatalogTestSession({});
+  control.session = session;
+
+  const pending = control.subscribeCatalog(control.sessionGeneration, 50);
+  await flushMicrotasks();
+  liveObject({
+    ...makeCatalogObject(0n, 0n),
+    payload: encodeCatalogDelta({
+      deltaUpdate: true,
+      operations: [{ type: "add", tracks: [{ name: "audio", packaging: "loc", isLive: true }] }],
+    }),
+  });
+
+  let thrown: unknown = null;
+  try {
+    await pending;
+  } catch (error) {
+    thrown = error;
+  }
+  assert.isTrue(thrown instanceof Error);
+  assert.match((thrown as Error).message, /catalog receive timeout/);
+  assert.isNull(subscriber.catalog);
+  assert.isTrue(control.catalogReceiveFailed);
+  assert.isNull(control.catalogResolve);
 });
 
 test("session.subscribe throw 後に即時掃除されタイマー副作用がない", async () => {
@@ -2415,10 +2550,7 @@ test("成功時は catalog が解決されタイマーが解除される", async
   control.session = session;
 
   const pending = control.subscribeCatalog(control.sessionGeneration, 1000);
-  // subscribe / fetch 登録の完了を microtask の flush で待つ (タイマー不使用)
-  for (let index = 0; index < 10; index++) {
-    await Promise.resolve();
-  }
+  await flushMicrotasks();
   liveObject({
     ...makeCatalogObject(0n, 0n),
     payload: encodeCatalog(makeVideoCatalog()),
@@ -2446,17 +2578,16 @@ test("catalogFetchFilter: LARGEST_OBJECT の Group の先頭 Object から要求
   });
 });
 
-test("catalogFetchFilter: Group 0 ではフィルタを付けない", () => {
+test("catalogFetchFilter: LARGEST_OBJECT が不明 / Group 0 でも絶対位置 {0, 0} を明示する", () => {
   // 2 フィールドの 0:0 (Location Filter Type 0x02) は絶対位置 {0, 0} の指定であり
   // (draft-ietf-moq-transport-22 §9.20.9)、フィルタ無しの要求範囲 {0, 0} から
-  // Largest Object までと一致する。同じ範囲を明示する意味がないため付けない
-  assert.isUndefined(catalogFetchFilter({ group: 0n, object: 5n }));
-});
-
-test("catalogFetchFilter: LARGEST_OBJECT が不明ならフィルタを付けない", () => {
-  // SUBSCRIBE_OK が LARGEST_OBJECT を載せない場合は、従来どおり
-  // {0, 0} から Largest Object までを要求する
-  assert.isUndefined(catalogFetchFilter(null));
+  // Largest Object までと一致する。同じ範囲でもフィルタを省略した FETCH は
+  // リレーから応答が返らないため、常に定義済みのフィルタを返す
+  assert.deepEqual(catalogFetchFilter({ group: 0n, object: 5n }), {
+    startGroup: 0n,
+    startObject: 0n,
+  });
+  assert.deepEqual(catalogFetchFilter(null), { startGroup: 0n, startObject: 0n });
 });
 
 test("subscribeCatalog: LARGEST_OBJECT の Group を FETCH の開始位置にする", async () => {
@@ -2472,10 +2603,7 @@ test("subscribeCatalog: LARGEST_OBJECT の Group を FETCH の開始位置にす
   control.session = session;
 
   const pending = control.subscribeCatalog(control.sessionGeneration, 1000);
-  // subscribe / fetch 登録の完了を microtask の flush で待つ (タイマー不使用)
-  for (let index = 0; index < 10; index++) {
-    await Promise.resolve();
-  }
+  await flushMicrotasks();
 
   assert.deepEqual(fetchOptions()?.filter, { startGroup: 7n, startObject: 0n });
   // live の catalog 購読は Next Object (Location Filter Type 0x05) で開始する。
@@ -2492,25 +2620,36 @@ test("subscribeCatalog: LARGEST_OBJECT の Group を FETCH の開始位置にす
   await pending;
 });
 
-test("subscribeCatalog: LARGEST_OBJECT が無ければフィルタ無しで FETCH する", async () => {
-  const subscriber = new MediaSubscriberImpl("moqt://example.com/live", { namespace: ["live"] });
-  const control = subscriber as unknown as SubscriberCatalogControl;
-  const { session, liveObject, fetchEnd, fetchOptions } = createCatalogTestSession({});
-  control.session = session;
+test("subscribeCatalog: LARGEST_OBJECT が不明 / Group 0 でも絶対位置 {0, 0} のフィルタを載せる", async () => {
+  // LOCATION FILTER を省略した FETCH はリレーから応答が返らない (実測) ため、
+  // フィルタ無しと同じ範囲でも形式を明示する。Group 0 の catalog は {0, 0} 起点の
+  // 要求になり省略しても同じ範囲だが、同じ理由で明示する
+  const cases: { largest: Location | null }[] = [
+    { largest: null },
+    { largest: { group: 0n, object: 4n } },
+  ];
+  for (const testCase of cases) {
+    const subscriber = new MediaSubscriberImpl("moqt://example.com/live", {
+      namespace: ["live"],
+    });
+    const control = subscriber as unknown as SubscriberCatalogControl;
+    const { session, fetchEnd, fetchObject, fetchOptions } = createCatalogTestSession(
+      testCase.largest === null ? {} : { subscribeLargestLocation: testCase.largest },
+    );
+    control.session = session;
 
-  const pending = control.subscribeCatalog(control.sessionGeneration, 1000);
-  for (let index = 0; index < 10; index++) {
-    await Promise.resolve();
+    const pending = control.subscribeCatalog(control.sessionGeneration, 1000);
+    await flushMicrotasks();
+
+    assert.deepEqual(fetchOptions()?.filter, { startGroup: 0n, startObject: 0n });
+
+    fetchObject({
+      ...makeCatalogObject(0n, 4n),
+      payload: encodeCatalog(makeVideoCatalog()),
+    });
+    fetchEnd();
+    await pending;
   }
-
-  assert.isUndefined(fetchOptions()?.filter);
-
-  liveObject({
-    ...makeCatalogObject(0n, 0n),
-    payload: encodeCatalog(makeVideoCatalog()),
-  });
-  fetchEnd();
-  await pending;
 });
 
 /**
@@ -2533,9 +2672,7 @@ test("subscribeCatalog: SETUP に載せたトークンを SUBSCRIBE と FETCH �
   control.session = session;
 
   const pending = control.subscribeCatalog(control.sessionGeneration, 1000);
-  for (let index = 0; index < 10; index++) {
-    await Promise.resolve();
-  }
+  await flushMicrotasks();
 
   assert.equal(subscribeOptions()?.authorizationToken, token);
   assert.equal(fetchOptions()?.authorizationToken, token);
@@ -2557,9 +2694,7 @@ test("subscribeCatalog: SETUP にトークンが無ければ SUBSCRIBE と FETCH
   control.session = session;
 
   const pending = control.subscribeCatalog(control.sessionGeneration, 1000);
-  for (let index = 0; index < 10; index++) {
-    await Promise.resolve();
-  }
+  await flushMicrotasks();
 
   assert.isUndefined(subscribeOptions()?.authorizationToken);
   assert.isUndefined(fetchOptions()?.authorizationToken);
