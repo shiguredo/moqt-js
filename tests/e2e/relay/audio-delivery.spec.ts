@@ -1,4 +1,5 @@
 import { expect, test, type Browser, type Page } from "@playwright/test";
+import type { AudioDelivery } from "moqt-js";
 import type { PublisherStatus, SubscriberStatus } from "../main";
 import {
   RELAY_TEST_TIMEOUT_MS,
@@ -34,9 +35,6 @@ test.use({
   },
   permissions: ["microphone"],
 });
-
-/** 音声 Object の送り方 */
-type Delivery = "subgroup" | "datagram";
 
 /** 往復の観測を続ける秒数 */
 const OBSERVE_SECONDS = 10;
@@ -108,7 +106,7 @@ async function readRound(
  * 保留していた分を数えないためである。
  */
 function expectDeliveryInvariants(
-  delivery: Delivery,
+  delivery: AudioDelivery,
   before: RoundObservation,
   after: RoundObservation,
 ): void {
@@ -185,7 +183,7 @@ function expectDeliveryInvariants(
 async function runDeliveryRound(
   browser: Browser,
   moqtUri: string,
-  delivery: Delivery,
+  delivery: AudioDelivery,
 ): Promise<void> {
   const namespace = createTestNamespace();
   const publisherPage = await openRelayPage(browser);
