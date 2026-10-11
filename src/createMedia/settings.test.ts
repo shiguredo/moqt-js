@@ -22,6 +22,19 @@ test("resolveAudioPublishSettings: 省略時は既定値を使う", () => {
   assert.equal(settings.bitrate, 64000);
   assert.equal(settings.sampleRate, DEFAULT_AUDIO_SAMPLE_RATE);
   assert.equal(settings.channels, DEFAULT_AUDIO_CHANNELS);
+  // 音声 Object の送り方の既定は Subgroup (後方互換)
+  assert.equal(settings.delivery, "subgroup");
+});
+
+// 音声 Object の送り方 (draft-ietf-moq-transport-22 §11) は指定どおりに解決する。
+// datagram を送れるかはセッションの reliability で決まるため、ここでは判定しない
+test("resolveAudioPublishSettings: delivery を指定どおりに解決する", () => {
+  const settings = resolveAudioPublishSettings({
+    codec: "opus",
+    bitrate: 64000,
+    delivery: "datagram",
+  });
+  assert.equal(settings.delivery, "datagram");
 });
 
 // 明示値はそのまま反映され、aac の codec 文字列は mp4a.40.2 になる。

@@ -178,6 +178,7 @@ export {
   type AudioStats,
   type VideoStats,
   type AudioPublishOptions,
+  type AudioDelivery,
   type VideoPublishOptions,
 } from "./createMediaPublisher";
 

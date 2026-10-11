@@ -45,6 +45,7 @@ import { VideoDecodeInputs, VideoPlayoutSession } from "./videoPlayoutSession";
 import { DEFAULT_AUDIO_SAMPLE_RATE, resolveAudioChannelCount } from "./codec/config";
 import type {
   AudioCodecType,
+  AudioDelivery,
   AudioReceiverStats,
   AudioSubscribeOptions,
   AvSyncStats,
@@ -167,6 +168,17 @@ interface PendingObjectQueueState {
   bytes: number;
   /** 上限超過を通知済みか (キューごとに購読期間あたり 1 回だけ通知する) */
   overflowNotified: boolean;
+}
+
+/**
+ * 保留中の音声 Object と、その到着経路
+ *
+ * 経路は到着時にしか分からないため、保留キューを経由しても失わないように一緒に持つ
+ * (統計の経路別の受信数は、復号へ渡した時点で数える)。
+ */
+interface PendingAudioObject {
+  readonly object: MoqtObject;
+  readonly delivery: AudioDelivery;
 }
 
 /**
@@ -541,7 +553,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   // releasePendingVideoObjects、close などの経路での破棄は disposeAllResources が行う
   private audioInitialConfigPending = false;
   private videoInitialConfigPending = false;
-  private pendingAudioObjects: MoqtObject[] = [];
+  private pendingAudioObjects: PendingAudioObject[] = [];
   private pendingVideoObjects: MoqtObject[] = [];
   // 保留キューの計数 (payload と properties の合計バイト数と、上限超過の通知済みフラグ)
   private readonly pendingAudioQueueState: PendingObjectQueueState = {
@@ -554,8 +566,13 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   };
 
   // 統計情報 (受信の分。再生の分は getStats のたびに scheduler から読む)
-  private audioStats: Pick<AudioReceiverStats, "framesReceived" | "bytesReceived"> = {
+  private audioStats: Pick<
+    AudioReceiverStats,
+    "framesReceived" | "subgroupFramesReceived" | "datagramFramesReceived" | "bytesReceived"
+  > = {
     framesReceived: 0,
+    subgroupFramesReceived: 0,
+    datagramFramesReceived: 0,
     bytesReceived: 0,
   };
   private videoStats: VideoReceiverStats = {
@@ -1791,7 +1808,12 @@ export class MediaSubscriberImpl implements MediaSubscriber {
         namespace,
         trackName,
         {
-          object: (obj) => this.handleAudioObject(obj),
+          object: (obj) => this.handleAudioObject(obj, "subgroup"),
+          // draft-ietf-moq-transport-22 §11.2: Datagram で届いた音声も同じ処理へ流し、経路だけを
+          // 数える。Datagram は順序が保証されず (QUIC 上の WebTransport)、再送もされないが、
+          // 音声は 1 Object = 1 Group であり (draft-ietf-moq-loc-04 §4.1)、届いた順に復号へ
+          // 渡して足りる (devtools の購読側と同じ方針)
+          datagram: (obj) => this.handleAudioObject(obj, "datagram"),
           end: () => {
             // トラック終了
           },
@@ -1938,10 +1960,17 @@ export class MediaSubscriberImpl implements MediaSubscriber {
    *
    * @param kind どちらの media のキューか (通知の文言に使う)
    * @param obj 保留するか破棄するかを判定する Object
+   * @param delivery 到着経路。既定値は置かない (映像も呼び出し側が "subgroup" を明示する。
+   *   既定値にすると、到着していない経路の値を暗黙に記録してしまう)
    */
-  private holdPendingObject(kind: "audio" | "video", obj: MoqtObject): void {
+  private holdPendingObject(
+    kind: "audio" | "video",
+    obj: MoqtObject,
+    delivery: AudioDelivery,
+  ): void {
     const isAudio = kind === "audio";
-    const objects = isAudio ? this.pendingAudioObjects : this.pendingVideoObjects;
+    // 件数はどちらのキューも配列の長さで見る (音声のキューだけが到着経路を持つ)
+    const queued = isAudio ? this.pendingAudioObjects.length : this.pendingVideoObjects.length;
     const state = isAudio ? this.pendingAudioQueueState : this.pendingVideoQueueState;
     const limit = this.pendingObjectQueueOptions;
     // バイト数は受信統計の bytesReceived と同じ定義 (payload と properties の長さの合計) で
@@ -1950,7 +1979,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     const bytes = state.bytes + obj.payload.byteLength + (obj.properties?.byteLength ?? 0);
     // 上限 0 以下は無制限を意味する (ConnectOptions.dataStreamMaxBufferBytes と同じ規約)。
     // 上限ちょうどの保持は許し、超える Object だけを破棄する
-    const objectsOver = limit.maxObjects > 0 && objects.length >= limit.maxObjects;
+    const objectsOver = limit.maxObjects > 0 && queued >= limit.maxObjects;
     const bytesOver = limit.maxBytes > 0 && bytes > limit.maxBytes;
     if (objectsOver || bytesOver) {
       if (!state.overflowNotified) {
@@ -1958,13 +1987,17 @@ export class MediaSubscriberImpl implements MediaSubscriber {
         this.callbacks.onError?.(
           new Error(
             // 件数とバイト数は破棄するこの Object を含めた値にする (保持済みの分だけではない)
-            `${kind} pending object queue overflow: maxObjects=${limit.maxObjects}, maxBytes=${limit.maxBytes}, objects=${objects.length + 1}, bytes=${bytes}`,
+            `${kind} pending object queue overflow: maxObjects=${limit.maxObjects}, maxBytes=${limit.maxBytes}, objects=${queued + 1}, bytes=${bytes}`,
           ),
         );
       }
       return;
     }
-    objects.push(obj);
+    if (isAudio) {
+      this.pendingAudioObjects.push({ object: obj, delivery });
+    } else {
+      this.pendingVideoObjects.push(obj);
+    }
     state.bytes = bytes;
   }
 
@@ -1986,11 +2019,11 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   /** 保留中の Audio Object を到着順に処理する */
   private releasePendingAudioObjects(): void {
     this.audioInitialConfigPending = false;
-    const pending = this.pendingAudioObjects;
+    const pendingAudio = this.pendingAudioObjects;
     this.pendingAudioObjects = [];
     this.pendingAudioQueueState.bytes = 0;
-    for (const obj of pending) {
-      this.handleAudioObject(obj);
+    for (const pending of pendingAudio) {
+      this.handleAudioObject(pending.object, pending.delivery);
     }
   }
 
@@ -2034,14 +2067,23 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     this.tryResolveCatalog();
   }
 
-  private handleAudioObject(obj: MoqtObject): void {
+  /**
+   * 音声 Object を復号へ渡す
+   *
+   * 到着した経路 (Subgroup / Datagram) を統計へ数える (draft-ietf-moq-transport-22 §11)。
+   * 経路は保留キューを経由しても保つ (保留中の Object は到着時の経路で数える)
+   *
+   * @param obj - 受信した Object
+   * @param delivery - 到着した経路
+   */
+  private handleAudioObject(obj: MoqtObject, delivery: AudioDelivery): void {
     // 閉じた後は統計も decode も進めない。解放は await を挟むため、state の "closed" だけでは
     // 解放の途中 (decoder の参照を切る前) に届いた Object を判定できない
     if (this.closed) return;
     // 初期 configure (Track Property の AUDIO_CONFIG) の完了まで保留する
     // (上限を超えた Object は holdPendingObject が保持せず破棄する)
     if (this.audioInitialConfigPending) {
-      this.holdPendingObject("audio", obj);
+      this.holdPendingObject("audio", obj, delivery);
       return;
     }
     if (!this.audioDecoder || !this.audioDecoderConfigured) return;
@@ -2071,6 +2113,11 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     }
 
     this.audioStats.framesReceived++;
+    if (delivery === "datagram") {
+      this.audioStats.datagramFramesReceived++;
+    } else {
+      this.audioStats.subgroupFramesReceived++;
+    }
     this.audioStats.bytesReceived += obj.payload.length + (obj.properties?.length ?? 0);
 
     const timestamp = decoderTimestampOf(locProperties);
@@ -2322,9 +2369,10 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     // 解放の途中 (decoder の参照を切る前) に届いた Object を判定できない
     if (this.closed) return;
     // 初期 configure (Track Property の VIDEO_CONFIG) の完了まで保留する
-    // (上限を超えた Object は holdPendingObject が保持せず破棄する)
+    // (上限を超えた Object は holdPendingObject が保持せず破棄する)。映像の経路は
+    // Subgroup だけである (Datagram で届く映像は無い)
     if (this.videoInitialConfigPending) {
-      this.holdPendingObject("video", obj);
+      this.holdPendingObject("video", obj, "subgroup");
       return;
     }
     if (!this.videoDecoder || !this.videoDecoderConfigured) return;
