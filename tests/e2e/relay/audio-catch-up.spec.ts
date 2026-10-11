@@ -354,15 +354,26 @@ ${formatReport(observations)}`,
     `追いついた後に送った音声の Object が増える (増加 ${sentGrowth} 件)\n${formatReport(observations)}`,
   ).toBeGreaterThan(0);
 
-  // 追いついた後に、遅れが再び伸びないこと。伸び続けるなら、捨てても追いつけていない
-  const grown = rest.find(
-    (observation) => (observation.lagMs ?? 0) > floorMs + AUDIO_PUBLISH_CATCH_UP_GROWTH_MS,
-  );
+  // 追いついた後に、遅れが再び伸び続けないこと。1 回の観測が上限を超えること自体は
+  // 異常にしない。runner がメインスレッドを数十〜数百 ms 止めると、その間に届いた
+  // フレームの分だけ読み出しの遅れが跳ねるためである (実測: CI の 4 vCPU の runner、
+  // run 38048874698 では、回復後の観測 10 回の遅れが 0.0, 0.1, 89.6, 116.4, 0.0, 218.0,
+  // 61.3, 57.7, 10.2, 10.2 ms であり、上限 (健全時の値 + 40 ms) を超えたのは 5 回だった。
+  // 実装は超えた分をその場で捨てて戻しており、超えた状態が続いたのは最長で 3 回
+  // = 1.5 秒である)。伸び続けていれば、上限を超えた状態が 2 秒 (4 回) より長く続く
+  const overflowLimitMs = floorMs + AUDIO_PUBLISH_CATCH_UP_GROWTH_MS;
+  let overflowRun = 0;
+  let maxOverflowRun = 0;
+  for (const observation of rest) {
+    const lagMs = observation.lagMs ?? Number.POSITIVE_INFINITY;
+    overflowRun = lagMs > overflowLimitMs ? overflowRun + 1 : 0;
+    maxOverflowRun = Math.max(maxOverflowRun, overflowRun);
+  }
   expect(
-    grown,
-    `追いついた後に、音声の遅れが再び伸びない (許す上限 ${AUDIO_PUBLISH_CATCH_UP_GROWTH_MS} ms、健全時の遅れ ${floorMs.toFixed(1)} ms)
+    maxOverflowRun,
+    `追いついた後に、遅れが上限 (健全時の値 + ${AUDIO_PUBLISH_CATCH_UP_GROWTH_MS} ms = ${overflowLimitMs.toFixed(1)} ms) を超えた状態が続かない (最長 ${maxOverflowRun} 回 = ${maxOverflowRun * SAMPLE_INTERVAL_MS} ms、許す上限 4 回 = 2000 ms)
 ${formatReport(observations)}`,
-  ).toBeUndefined();
+  ).toBeLessThanOrEqual(4);
 
   console.log(`実リレーの音声の追いつきの観測: 遅れが解消した\n${formatReport(observations)}`);
 

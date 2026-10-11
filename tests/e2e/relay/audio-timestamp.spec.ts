@@ -15,11 +15,12 @@ import { RELAY_TEST_TIMEOUT_MS, requireRelayUri } from "./support";
  * 失敗したときに「環境が遅いのか実装が壊れているのか」を切り分けられるようメッセージへ残す。
  *
  * 1. 受信側の音声の基準の遅れが、観測の間に増え続けない (段差とドリフトを捕まえる)
- * 2. 音声と映像の表示時刻の差 (`avSync.skewMs`) が予算に収まる (利用者に見えるリップシンク)
+ * 2. 音声と映像の表示時刻の差 (`avSync.skewMs`) が予算に収まる (利用者に見えるリップシンク)。
+ *    値が作られるのは基準を共有できている間だけであるため、共有が戻った後に見る
  * 3. 音声が復号され続け、鳴らなかった音 (`missedFrames`) が増えず、基準の取り直しも
  *    過度に増えない
- * 4. 配信側の「読み出した壁時計 - `AudioData.timestamp`」の傾きが 0 近傍で、観測した
- *    最小と最大の幅が広がらない (送る TIMESTAMP が壁時計からずれていかないことの直接の検証)
+ * 4. 配信側の「読み出した壁時計 - `AudioData.timestamp`」の傾きが 0 近傍で、TIMESTAMP に
+ *    足す補正が動かない (送る TIMESTAMP が壁時計からずれていかないことの直接の検証)
  * 5. 音声と映像の基準の差が妥当な範囲に収まり、増え続けない
  * 6. 基準の共有が解除された場合は、`AV_UNSHARED_RECOVERY_MAX_MS` 以内に戻る (解除そのものは
  *    到着と復号の乱れでも起きるため判定にしない。記録としてログに出す)
@@ -148,6 +149,15 @@ const AV_SKEW_MAX_MS = 150;
 const AV_UNSHARED_RECOVERY_MAX_MS = 35_000;
 
 /**
+ * 共有が戻った後に、音声と映像の表示時刻の差が観測できるのを待つ上限 (ミリ秒)
+ *
+ * 表示の実績は 1 秒以内に作られ (`SKEW_SAMPLE_WINDOW_MS`)、共有が戻れば値も戻る。遅い
+ * runner で表示が一瞬 (1 秒以上) 途切れることを見込んで余裕を取る。ここで待つのは
+ * 「値が作られるか」だけであり、値そのものは予算で判定する
+ */
+const SKEW_OBSERVE_TIMEOUT_MS = 15_000;
+
+/**
  * 配信側の原点の傾きとして許す上限 (ミリ秒 / 秒)
  *
  * 実装が保証するのは「一定のずれに収まる」ことである。観測した速さの実測は 0.0 ms/秒で
@@ -157,19 +167,28 @@ const AV_UNSHARED_RECOVERY_MAX_MS = 35_000;
 const TIMESTAMP_SLOPE_MAX_MS_PER_SECOND = 5;
 
 /**
- * 観測の間に許す、配信側の原点の最小と最大の幅の増加 (ミリ秒)
+ * 観測の間に許す、配信側が TIMESTAMP に足している補正の動き (ミリ秒)
  *
- * 幅そのものではなく増加を見る。最小と最大は配信を始めてからの累積であり、最初の数秒に
- * 落ち着くまでの分 (実測で 10 ms 程度) を含むためである
+ * 送る TIMESTAMP の対応が観測の間に変わらないことを見る。補正は窓の最小 (床) へ合わせる
+ * ため、読み出しが一瞬遅れて原点の最大が跳ねても動かない (実測: CI の 4 vCPU の runner、
+ * run 38099573874 では、観測の 5 秒目に読み出しの遅れで最大値が 99.1 ms 跳ね、同じ観測で
+ * 23 フレーム (230 ms) を捨てていたが、補正は 5251.3〜5251.4 ms のままだった)。実装が
+ * 段差とみなして取り直すのは、床が 200 ms 以上 (`AUDIO_TIMESTAMP_OFFSET_STEP_MICROS`)
+ * 上がったときだけである。ゆっくりしたドリフトでは、床の上昇が 5 秒続いた分だけ動く
+ * (`AUDIO_TIMESTAMP_OFFSET_RISE_HOLD_MS`。1 ms/秒 のドリフトが 25 秒続いても 20 ms 程度)
  */
-const TIMESTAMP_WIDTH_GROWTH_MAX_MS = 75;
+const TIMESTAMP_CORRECTION_MAX_MS = 75;
 
 /**
- * 配信側の原点の最小と最大の幅として許す絶対値 (ミリ秒)
+ * 観測の間に観測した、配信側の原点の幅として許す絶対値 (ミリ秒)
  *
- * 桁が変わる取り違え (単位や時計の取り違え) を捕まえる。最小と最大は配信を始めてからの
- * 累積であり、読み出しが一瞬遅れた分 (実測: 1 vCPU のコンテナで 190 ms) を含む。段差の
- * 実測 (485〜627 ms) はこれを超える
+ * 桁が変わる取り違え (単位や時計の取り違え) を捕まえる。配信側の `minMs` / `maxMs` の
+ * 累積の幅は絶対値の判定には使わない。観測を始める前の過渡を含むためである。実測 (CI の
+ * 4 vCPU の runner、run 38059225640) では、観測の 25 秒の間ずっと最小 1791642117229.2 ms /
+ * 最大 1791642117834.4 ms (幅 605.2 ms) であり、観測の間の増加は 0 ms だった。この幅は、
+ * 購読が定常になるまでの間に読み出しがまとめて行われた分 (runner がメインスレッドを
+ * 止めた 1 回の分) である。段差のように観測の間に原点の対応が動けば、補正
+ * (`TIMESTAMP_CORRECTION_MAX_MS` で見る) と傾きに現れる
  */
 const TIMESTAMP_WIDTH_MAX_MS = 500;
 
@@ -702,19 +721,55 @@ function formatSettleReport(observations: readonly RelayObservation[]): string {
  * 基準の差ではなく、実際に表示した実績の差 (`avSync.skewMs`) を見る。共有が解除されていても、
  * 実装は映像を音声の到着基準の時刻へ合わせるため、見えるずれは予算に収まる。
  *
+ * 観測の 1 秒ごとに値があることは要求しない。値は「直近に表示した音声と映像の実績が
+ * `SKEW_SAMPLE_WINDOW_MS` (1 秒) 以内にある」ときだけ作られるため、表示が 1 秒以上途切れると
+ * null になる。実測 (CI の 4 vCPU の runner、run 38048874698) では、基準の共有を解除した
+ * 保持 (hold) が観測の 25 秒間続き、`skewMs` が 25 回すべて null だった (この run の基準の
+ * 差は 3.2〜5.8 ms であり、解除は受信側が一瞬つまずいたためである)。判定は 2 つに分ける
+ *
+ * 1. 観測できた値はすべて予算に収まる (0754 の症状である数百 ms のずれを捕まえる)
+ * 2. 共有が戻った後に、値が作られ続ける (基準が合っているのに実績が作られない状態を捕まえる)
+ *
+ * 2 は `expectUnsharedRecovers` の後に呼ぶ。共有が解除されている間は値が作られないためである
+ *
+ * @param page - 観測しているページ
  * @param observations - 観測
  * @param report - 失敗したときに出す観測値の推移
  */
-function expectSkewWithinBudget(observations: readonly RelayObservation[], report: string): void {
-  const skews = observations
+async function expectSkewWithinBudget(
+  page: Page,
+  observations: readonly RelayObservation[],
+  report: string,
+): Promise<void> {
+  const observed = observations
     .map((observation) => subscriberOf(observation).skewMs)
     .filter((value): value is number => value !== null);
-  expect(skews.length, `音声と映像の表示時刻の差が観測されている\n${report}`).toBe(OBSERVE_SECONDS);
-  const skewOverflow = skews.find((skew) => Math.abs(skew) > AV_SKEW_MAX_MS);
+  const skewOverflow = observed.find((skew) => Math.abs(skew) > AV_SKEW_MAX_MS);
   expect(
     skewOverflow,
     `音声と映像の表示時刻の差が予算に収まる (許す絶対値 ${AV_SKEW_MAX_MS} ms)\n${report}`,
   ).toBeUndefined();
+
+  // 共有が戻った後に値が作られることを確かめる。1 回の観測だけでなく、値が観測できた
+  // ところまでを待つ (その瞬間だけ表示が途切れている場合を失敗にしない)
+  let latestSkewMs: number | null = null;
+  await expect
+    .poll(
+      async () => {
+        latestSkewMs = subscriberOf(await readObservation(page)).skewMs;
+        return latestSkewMs;
+      },
+      {
+        message: `共有が戻った後に、音声と映像の表示時刻の差が観測できる (${SKEW_OBSERVE_TIMEOUT_MS} ms 待つ)\n${report}`,
+        timeout: SKEW_OBSERVE_TIMEOUT_MS,
+        intervals: [SAMPLE_INTERVAL_MS],
+      },
+    )
+    .not.toBeNull();
+  expect(
+    Math.abs(latestSkewMs ?? Number.NaN),
+    `共有が戻った後の音声と映像の表示時刻の差が予算に収まる (許す絶対値 ${AV_SKEW_MAX_MS} ms)\n${report}`,
+  ).toBeLessThanOrEqual(AV_SKEW_MAX_MS);
 }
 
 /**
@@ -928,14 +983,14 @@ test("実リレー経由で同じブラウザから音声を配信し、送る T
     `音声と映像の基準の差が前半から後半へ増えない (増加 ${baseDifferenceGrowthMs.toFixed(1)} ms、許す上限 ${BASE_DIFFERENCE_GROWTH_MAX_MS} ms)\n${report}`,
   ).toBeLessThanOrEqual(BASE_DIFFERENCE_GROWTH_MAX_MS);
 
-  // 音声と映像の表示時刻の差 (利用者に見えるリップシンク) が予算に収まること。基準の差では
-  // なく、実際に表示した実績の差を見る (共有が解除されている間も、実装は映像を音声の到着
-  // 基準の時刻へ合わせるため、見えるずれはこの予算に収まる)
-  expectSkewWithinBudget(observations, report);
-
   // 基準の共有が解除されたこと自体は判定にしない (理由は `expectUnsharedRecovers` を参照)。
   // 解除の記録はログへ出し、解除が残り続けないことだけを判定する
   await expectUnsharedRecovers(page, observations, report);
+
+  // 音声と映像の表示時刻の差 (利用者に見えるリップシンク) が予算に収まること。基準の差では
+  // なく、実際に表示した実績の差を見る。共有が解除されている間は値が作られないため、
+  // 共有が戻ったことを確かめた後に見る (`expectSkewWithinBudget` の説明を参照)
+  await expectSkewWithinBudget(page, observations, report);
 
   // 送る側の TIMESTAMP が壁時計からずれていかないこと。原点 (読み出した壁時計 -
   // `AudioData.timestamp`) の傾きが 0 近傍であり、観測した最小と最大の幅も広がらない
@@ -965,24 +1020,33 @@ test("実リレー経由で同じブラウザから音声を配信し、送る T
   expect(lastSlope, `10 秒の傾きが観測されている\n${report}`).not.toBeNull();
   expect(lastLongSlope, `60 秒の傾きが観測されている\n${report}`).not.toBeNull();
 
-  const widths = observations
-    .map((observation) => {
-      const minMs = observation.publisher.minMs;
-      const maxMs = observation.publisher.maxMs;
-      return minMs === null || maxMs === null ? null : maxMs - minMs;
-    })
+  // 配信側が TIMESTAMP に足している補正が、観測の間に動かないこと。原点 (読み出した壁時計 -
+  // `AudioData.timestamp`) の累積の最小と最大は、読み出しが遅れれば最大が跳ね、早まれば
+  // 最小が下がるため、観測の間の動きをそのまま異常とみなせない (実測: run 38099573874 では、
+  // 読み出しの遅れで最大値が 99.1 ms 跳ね、同じ観測で 23 フレーム (230 ms) を捨てていた。
+  // 最小値は動かず、傾きも 0.0 ms/秒のままである)。実装は補正を窓の最小 (床) へ合わせる
+  // ため、この一跳びは送る TIMESTAMP を動かさない。補正が動けば、TIMESTAMP の対応が
+  // 観測の間に変わったことになる
+  const appliedSeries = observations
+    .map((observation) => observation.publisher.appliedMs)
     .filter((value): value is number => value !== null);
-  expect(widths.length, `配信側の原点の幅が観測されている\n${report}`).toBe(OBSERVE_SECONDS);
-  const firstWidthMs = widths[0] ?? Number.NaN;
-  const lastWidthMs = widths[widths.length - 1] ?? Number.NaN;
-  const widthGrowthMs = lastWidthMs - firstWidthMs;
+  expect(appliedSeries.length, `配信側の補正が観測されている\n${report}`).toBe(OBSERVE_SECONDS);
+  const appliedSpreadMs = Math.max(...appliedSeries) - Math.min(...appliedSeries);
   expect(
-    widthGrowthMs,
-    `配信側の原点の最小と最大の幅が広がらない (増加 ${widthGrowthMs.toFixed(1)} ms、許す上限 ${TIMESTAMP_WIDTH_GROWTH_MAX_MS} ms)\n${report}`,
-  ).toBeLessThanOrEqual(TIMESTAMP_WIDTH_GROWTH_MAX_MS);
+    appliedSpreadMs,
+    `配信側が TIMESTAMP に足している補正が動かない (動いた幅 ${appliedSpreadMs.toFixed(1)} ms、許す上限 ${TIMESTAMP_CORRECTION_MAX_MS} ms)\n${report}`,
+  ).toBeLessThanOrEqual(TIMESTAMP_CORRECTION_MAX_MS);
+
+  // 幅の絶対値は、観測の間に観測した原点そのものから見る。累積の幅は観測を始める前の
+  // 過渡を含むため、絶対値の判定には使えない (`TIMESTAMP_WIDTH_MAX_MS` の説明を参照)
+  const origins = observations
+    .map((observation) => observation.publisher.currentMs)
+    .filter((value): value is number => value !== null);
+  expect(origins.length, `配信側の原点が観測されている\n${report}`).toBe(OBSERVE_SECONDS);
+  const originWidthMs = Math.max(...origins) - Math.min(...origins);
   expect(
-    Math.max(...widths),
-    `配信側の原点の最小と最大の幅が小さい (最大 ${Math.max(...widths).toFixed(1)} ms、許す上限 ${TIMESTAMP_WIDTH_MAX_MS} ms)\n${report}`,
+    originWidthMs,
+    `配信側の原点の幅が小さい (観測した幅 ${originWidthMs.toFixed(1)} ms、許す上限 ${TIMESTAMP_WIDTH_MAX_MS} ms)\n${report}`,
   ).toBeLessThanOrEqual(TIMESTAMP_WIDTH_MAX_MS);
 
   // ここまでが通ったことを、CI のログからも読めるようにする
