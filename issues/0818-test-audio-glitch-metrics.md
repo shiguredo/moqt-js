@@ -1,7 +1,7 @@
 # 音声の途切れを数値で評価する仕組みを用意する (Stream と Datagram の両方)
 
 - Created: 2026-10-06
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-10-11
 - Branch: feature/test-audio-glitch-metrics
 - Polished: 2026-10-10
 
@@ -49,3 +49,11 @@
 - 実リレーの音声 E2E の先例: `tests/e2e/relay/audio-timestamp.spec.ts` / `tests/e2e/relay/audio-catch-up.spec.ts` (devtools のページと偽マイク。ライブラリの配線ではない)
 - 0817 (open。実リレーを使った E2E を増やし、Object Datagram 配送 §11.2 も検証対象。tests/e2e/relay/ の主改造元) / 0784 (closed。実リレーへ接続する E2E テストを追加) / 0754 (closed。実リレーの音声 E2E と TIMESTAMP のずれ) / 0793 (devtools 側の補間のテスト。ライブラリ側とは別に管理) / 0794 (補間の末尾フェード。プツプツの主因候補の 1 つ)
 - refs/moq/draft-ietf-moq-transport-22.txt §11 (Data Streams and Datagrams) / §11.2 (Datagrams。サイズ超過時は明示なしで drop)
+
+## 解決方法
+
+- 受信側 (`src/createMediaSubscriber.ts`): 音声購読に `datagram` callback を登録し、Subgroup と同じ処理 (`handleAudioObject`) へ流して経路だけを数える。保留キューの要素に到着経路を持たせ、初期 configure の完了後に解放しても経路を失わないようにした (`PendingAudioObject`)。`AudioReceiverStats` に `subgroupFramesReceived` / `datagramFramesReceived` を足した (`framesReceived` は両方の和)。公開型のため `CHANGES.md` は `[CHANGE]` とした
+- 送信側 (`src/createMediaPublisher.ts` / `src/createMedia/settings.ts`): `AudioPublishOptions.delivery` (`"subgroup" | "datagram"`。既定は `"subgroup"`) と `AudioDelivery` を足した。Datagram は `Publisher.sendDatagram` で送り、完了を待つ戻り値が無いため送信のキューの計器 (`sendQueueMs` / `sendQueueFrames`) は 0 のままにする。`reliability` が `"reliable-only"` のセッション (HTTP/2 上の WebTransport では datagram も再送されるため §6.2、この経路の意味が変わる) では、接続の直後に `start()` をエラーにする
+- 単体テスト: `src/createMedia/settings.test.ts` (既定と明示の解決)、`src/createMediaPublisher.test.ts` (Datagram 経路で送る params と reliable-only の拒否)、`src/createMediaSubscriber.test.ts` (経路別の受信数と、保留キューを経由した経路の保持)
+- 実リレーの E2E (`tests/e2e/relay/audio-delivery.spec.ts`): `tests/e2e/main.ts` に音声の publish / subscribe を足し (偽のマイクの設定はトラックの `getSettings()` から渡す)、同じ spec で Subgroup と Datagram の往復を行う。判定は観測の間の増加で行い、Subgroup は「受信が送信を下回らない (移動中の 1 秒分を許す)」、Datagram は欠落率 (しきい値 0.1)、補間率と捨て率 (しきい値 0.2)、両側のエラーが無いことを見る。手元の実リレーで、Subgroup は送信 501 件 / 受信 501 件、Datagram は送信 502 件 / 受信 501 件を観測した
+- ドキュメント: `docs/HIGH_LEVEL_API.md` の音声オプション・`start()` の失敗条件・`AudioReceiverStats` と、`CHANGES.md` の `## develop`
