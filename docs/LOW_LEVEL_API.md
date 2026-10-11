@@ -386,7 +386,7 @@ Safari 系の `WebTransport` では `writer.close()` が resolve しない場合
 
 ### `fetch()` の流れ
 
-`Session.fetch()` は `FETCH` を新しい双方向ストリームで送り、`FETCH_OK` を待つ。取得範囲は `FetchOptions.filter` の Location Filter として `LOCATION_FILTER` パラメータで送る。省略時はフィルタなし ({0, 0} から Largest Object まで) を要求する。
+`Session.fetch()` は `FETCH` を新しい双方向ストリームで送り、`FETCH_OK` を待つ。取得範囲は `FetchOptions.filter` の Location Filter として `LOCATION_FILTER` パラメータで送る。省略時はフィルタなし ({0, 0} から Largest Object まで) を要求する。省略は仕様上は有効だが (draft-ietf-moq-transport-22 §9.20.9)、実リレーでは応答が返らないことがあるため、catalog の取得では `catalogFetchFilter` が返す絶対開始の Location Filter を常に載せる。
 
 `FETCH_OK` 受信時には、Start Location が確定できる場合 (フィルタなし / 絶対指定) に `endLocation >= startLocation` を検証し、矛盾していれば `PROTOCOL_VIOLATION` でセッションを閉じる。成功時は `FetcherImpl` に以下を保存する。
 
@@ -396,7 +396,7 @@ Safari 系の `WebTransport` では `writer.close()` が resolve しない場合
 
 `Fetcher.cancel()` も subscription と同様に双方向ストリームを close して終了する。
 
-draft-20 で Joining FETCH は削除された (draft-ietf-moq-transport-22 §A.1)。過去データの取得と live 購読の組み合わせは、`subscribe()` (Next Object (`{ nextObject: true }`、Location Filter Type 0x05) の Location Filter) + `fetch()` (フィルタなし) の 2 リクエストで実現する (`createMediaSubscriber` の catalog 取得が該当)。仕様上の正式な置換は `FILL_PARAMETERS` (§3.4) である。
+draft-20 で Joining FETCH は削除された (draft-ietf-moq-transport-22 §A.1)。過去データの取得と live 購読の組み合わせは、`subscribe()` (Next Object (`{ nextObject: true }`、Location Filter Type 0x05) の Location Filter) + `fetch()` (絶対開始の Location Filter) の 2 リクエストで実現する (`createMediaSubscriber` の catalog 取得が該当し、要求範囲は `catalogFetchFilter` が決める)。仕様上の正式な置換は `FILL_PARAMETERS` (§3.4) である。
 
 `FETCH_OK` が返る前にデータストリームが先着する可能性があるため、受信側は `waitForFetcher()` で待機する。
 
