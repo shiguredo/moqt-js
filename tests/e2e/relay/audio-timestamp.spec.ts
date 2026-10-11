@@ -19,8 +19,8 @@ import { RELAY_TEST_TIMEOUT_MS, requireRelayUri } from "./support";
  *    値が作られるのは基準を共有できている間だけであるため、共有が戻った後に見る
  * 3. 音声が復号され続け、鳴らなかった音 (`missedFrames`) が増えず、基準の取り直しも
  *    過度に増えない
- * 4. 配信側の「読み出した壁時計 - `AudioData.timestamp`」の傾きが 0 近傍で、観測した
- *    最小と最大の幅が広がらない (送る TIMESTAMP が壁時計からずれていかないことの直接の検証)
+ * 4. 配信側の「読み出した壁時計 - `AudioData.timestamp`」の傾きが 0 近傍で、TIMESTAMP に
+ *    足す補正が動かない (送る TIMESTAMP が壁時計からずれていかないことの直接の検証)
  * 5. 音声と映像の基準の差が妥当な範囲に収まり、増え続けない
  * 6. 基準の共有が解除された場合は、`AV_UNSHARED_RECOVERY_MAX_MS` 以内に戻る (解除そのものは
  *    到着と復号の乱れでも起きるため判定にしない。記録としてログに出す)
@@ -167,12 +167,17 @@ const SKEW_OBSERVE_TIMEOUT_MS = 15_000;
 const TIMESTAMP_SLOPE_MAX_MS_PER_SECOND = 5;
 
 /**
- * 観測の間に許す、配信側の原点の最小と最大の幅の増加 (ミリ秒)
+ * 観測の間に許す、配信側が TIMESTAMP に足している補正の動き (ミリ秒)
  *
- * 最小と最大は配信を始めてからの累積であり、観測を始める前の分も含む。幅そのものでは
- * なく増加を見るのは、観測の間に新しい最小や最大が現れたかどうかを見るためである
+ * 送る TIMESTAMP の対応が観測の間に変わらないことを見る。補正は窓の最小 (床) へ合わせる
+ * ため、読み出しが一瞬遅れて原点の最大が跳ねても動かない (実測: CI の 4 vCPU の runner、
+ * run 38099573874 では、観測の 5 秒目に読み出しの遅れで最大値が 99.1 ms 跳ね、同じ観測で
+ * 23 フレーム (230 ms) を捨てていたが、補正は 5251.3〜5251.4 ms のままだった)。実装が
+ * 段差とみなして取り直すのは、床が 200 ms 以上 (`AUDIO_TIMESTAMP_OFFSET_STEP_MICROS`)
+ * 上がったときだけである。ゆっくりしたドリフトでは、床の上昇が 5 秒続いた分だけ動く
+ * (`AUDIO_TIMESTAMP_OFFSET_RISE_HOLD_MS`。1 ms/秒 のドリフトが 25 秒続いても 20 ms 程度)
  */
-const TIMESTAMP_WIDTH_GROWTH_MAX_MS = 75;
+const TIMESTAMP_CORRECTION_MAX_MS = 75;
 
 /**
  * 観測の間に観測した、配信側の原点の幅として許す絶対値 (ミリ秒)
@@ -182,8 +187,8 @@ const TIMESTAMP_WIDTH_GROWTH_MAX_MS = 75;
  * 4 vCPU の runner、run 38059225640) では、観測の 25 秒の間ずっと最小 1791642117229.2 ms /
  * 最大 1791642117834.4 ms (幅 605.2 ms) であり、観測の間の増加は 0 ms だった。この幅は、
  * 購読が定常になるまでの間に読み出しがまとめて行われた分 (runner がメインスレッドを
- * 止めた 1 回の分) である。段差のように観測の間に原点が動けば、増加
- * (`TIMESTAMP_WIDTH_GROWTH_MAX_MS` で見る) に現れる
+ * 止めた 1 回の分) である。段差のように観測の間に原点の対応が動けば、補正
+ * (`TIMESTAMP_CORRECTION_MAX_MS` で見る) と傾きに現れる
  */
 const TIMESTAMP_WIDTH_MAX_MS = 500;
 
@@ -1015,23 +1020,22 @@ test("実リレー経由で同じブラウザから音声を配信し、送る T
   expect(lastSlope, `10 秒の傾きが観測されている\n${report}`).not.toBeNull();
   expect(lastLongSlope, `60 秒の傾きが観測されている\n${report}`).not.toBeNull();
 
-  // 最小と最大は配信を始めてからの累積であるため、幅そのものではなく、観測の間に新しい
-  // 最小や最大が現れていないか (増加が 0 か) を見る
-  const widths = observations
-    .map((observation) => {
-      const minMs = observation.publisher.minMs;
-      const maxMs = observation.publisher.maxMs;
-      return minMs === null || maxMs === null ? null : maxMs - minMs;
-    })
+  // 配信側が TIMESTAMP に足している補正が、観測の間に動かないこと。原点 (読み出した壁時計 -
+  // `AudioData.timestamp`) の累積の最小と最大は、読み出しが遅れれば最大が跳ね、早まれば
+  // 最小が下がるため、観測の間の動きをそのまま異常とみなせない (実測: run 38099573874 では、
+  // 読み出しの遅れで最大値が 99.1 ms 跳ね、同じ観測で 23 フレーム (230 ms) を捨てていた。
+  // 最小値は動かず、傾きも 0.0 ms/秒のままである)。実装は補正を窓の最小 (床) へ合わせる
+  // ため、この一跳びは送る TIMESTAMP を動かさない。補正が動けば、TIMESTAMP の対応が
+  // 観測の間に変わったことになる
+  const appliedSeries = observations
+    .map((observation) => observation.publisher.appliedMs)
     .filter((value): value is number => value !== null);
-  expect(widths.length, `配信側の原点の幅が観測されている\n${report}`).toBe(OBSERVE_SECONDS);
-  const firstWidthMs = widths[0] ?? Number.NaN;
-  const lastWidthMs = widths[widths.length - 1] ?? Number.NaN;
-  const widthGrowthMs = lastWidthMs - firstWidthMs;
+  expect(appliedSeries.length, `配信側の補正が観測されている\n${report}`).toBe(OBSERVE_SECONDS);
+  const appliedSpreadMs = Math.max(...appliedSeries) - Math.min(...appliedSeries);
   expect(
-    widthGrowthMs,
-    `配信側の原点の最小と最大の幅が広がらない (増加 ${widthGrowthMs.toFixed(1)} ms、許す上限 ${TIMESTAMP_WIDTH_GROWTH_MAX_MS} ms)\n${report}`,
-  ).toBeLessThanOrEqual(TIMESTAMP_WIDTH_GROWTH_MAX_MS);
+    appliedSpreadMs,
+    `配信側が TIMESTAMP に足している補正が動かない (動いた幅 ${appliedSpreadMs.toFixed(1)} ms、許す上限 ${TIMESTAMP_CORRECTION_MAX_MS} ms)\n${report}`,
+  ).toBeLessThanOrEqual(TIMESTAMP_CORRECTION_MAX_MS);
 
   // 幅の絶対値は、観測の間に観測した原点そのものから見る。累積の幅は観測を始める前の
   // 過渡を含むため、絶対値の判定には使えない (`TIMESTAMP_WIDTH_MAX_MS` の説明を参照)
