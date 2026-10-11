@@ -40,6 +40,7 @@ A/V 同期と再生まわりで入れた判断 (閾値・保持・検出・追�
 | 8   | 復号の出力と投入の対応づけ     | 1,000 マイクロ秒 (`DECODER_OUTPUT_TIMESTAMP_TOLERANCE_MICROS`) / 引けないときは直前の種類 (`LastTimestampKind`) | `audio.playoutTiming.arrivalPlannedFrames`                                                  |
 | 9   | 実リレーの E2E の判定          | 150 ms (`AV_SKEW_MAX_MS`) / 35 秒 (`AV_UNSHARED_RECOVERY_MAX_MS`)                                               | `avSync.skewMs`、`avSync.delays.unsharedReason`                                             |
 | 10  | 受信側の追いつき               | `max(60 ms, 床 + 40 ms)` / 床は直近 5 秒の最小値 / 床 + 100 ms で即時 / 確認 100 ms / 作り直しの間隔 1 秒       | `audio.playoutCatchUp.*`、`avSync.delays.audio.baseDelayMs`                                 |
+| 11  | 音声の配送の E2E の判定        | 10 秒の観測 / 移動中 50 件 (`SUBGROUP_IN_FLIGHT_FRAMES_MAX`) / 欠落率 0.1 / 補間率と捨て率 0.2                  | `audio.framesReceived`、`audio.subgroupFramesReceived`、`audio.datagramFramesReceived`      |
 
 ## 1. A/V 同期で合わせる量の上限
 
@@ -951,6 +952,47 @@ runner の処理能力を測っていた (実測: CI の 4 vCPU の runner、`38
 - `avSync.delays.audio.baseDelayMs` / `audioDelayFeedback.*`
 - `audio.receiveDelayMs` / `maxReceiveDelayMs` (復号器の中かどうかの切り分け)
 - `audio.playoutTiming.missedFrames` / `missedByReason` / `playoutRebases` / `playoutDrops`
+
+## 11. 音声の配送の E2E の判定
+
+### 決めた値
+
+- 観測は 10 秒 (`OBSERVE_SECONDS`)、1 秒ごと (`tests/e2e/relay/audio-delivery.spec.ts`)
+- Subgroup: 観測の間の受信の増加が、送信の増加を下回らない。移動中として 50 件
+  (`SUBGROUP_IN_FLIGHT_FRAMES_MAX` = 1 秒分。音声は 20 ms ごと) を許す
+- Datagram: 欠落率 `DATAGRAM_LOSS_MAX` = 0.1、補間率 `CONCEALMENT_RATIO_MAX` = 0.2、
+  捨て率 `DROP_RATIO_MAX` = 0.2 (分母は鳴らすと決めた音の長さ `playoutTiming.playedMs`)
+- 両側の `errors` が空であること (経路の書き込み失敗がしきい値の内側に紛れないようにする)
+
+### 根拠
+
+- 実測 (手元の実リレーと CI) は、Subgroup が送信 501 件 / 受信 501 件、Datagram が送信
+  502 件 / 受信 501 件 (欠落率 0.002)、補間と捨てはどちらも 0 ms である
+- 負荷の高い runner (load average 14) では、Subgroup の受信が 473 件 (28 件が移動中)、
+  捨て率が 0.057 になった。しきい値はこの変動を許し、経路が全滅する (欠落率 1.0)、10 % を
+  超えて欠落する、補間と捨てが 20 % を超える状態を捕まえる
+- 送信側は符号化の出力の時点で数え、受信側は到着後に数えるため、観測の終わりの分は移動中に
+  なる (実測の 28 件)。移動中の許容はこの差の上限である
+
+### 副作用とトレードオフ
+
+- 10 % 未満の恒常的な欠落は見逃す。補間率と捨て率は片側の判定であり、計器が 0 のままでも
+  通る (検出の主役は欠落率である)
+- 経路別の補間と捨ての計器は無いため、補間率と捨て率は経路ごとに分けられない。同じ観測の
+  中で経路を分けて測ることで、経路による差を読む
+
+### 再考の条件
+
+- CI で 10 % を超える欠落、または 20 % を超える補間・捨てが出たとき
+- `AudioReceiverStats` に経路別の補間・捨ての内訳を足したとき (分けられるようになったら、
+  経路ごとの判定に変える)
+
+### 見る計器
+
+- `audio.framesSent` / `audio.framesReceived`
+- `audio.subgroupFramesReceived` / `audio.datagramFramesReceived`
+- `audio.playoutTiming.playedMs` / `audio.playoutConcealedMs`
+- `audio.playoutTiming.missedByReason.backlog.ms` / `audio.playoutTiming.missedFrames`
 
 ## 実行時の警告 (前提から外れた状態)
 

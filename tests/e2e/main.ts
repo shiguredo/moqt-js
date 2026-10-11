@@ -77,7 +77,8 @@ export interface StartPublisherOptions {
    * 持たないため。tests/e2e/relay/audio-timestamp.spec.ts と同じ条件)
    */
   audio?: {
-    codec: "opus" | "aac";
+    // 実リレーの E2E は opus だけを使う (偽のマイクの音声を Opus で符号化する)
+    codec: "opus";
     bitrate: number;
     /** 音声 Object の送り方 (既定は "subgroup")。draft-ietf-moq-transport-22 §11 */
     delivery?: AudioDelivery;
@@ -88,7 +89,6 @@ export interface StartPublisherOptions {
 export interface PublisherAudioStatus {
   /** 送信した音声 Object の数 */
   framesSent: number;
-  bytesSent: number;
 }
 
 /** Publisher の観測結果 */
@@ -126,19 +126,14 @@ export interface SubscriberAudioStatus {
   framesReceived: number;
   subgroupFramesReceived: number;
   datagramFramesReceived: number;
-  bytesReceived: number;
-  /** 鳴らすと決めた音の数と長さ (ミリ秒) */
-  playedFrames: number;
+  /** 鳴らすと決めた音の長さ (ミリ秒)。補間率と捨て率の分母 */
   playedMs: number;
-  /** 補間した回数と合計 (ミリ秒) */
-  concealments: number;
+  /** 補間した合計 (ミリ秒) */
   concealedMs: number;
-  /** 捨てた回数と、並べすぎとして捨てた長さ (ミリ秒) */
-  drops: number;
+  /** 並べすぎとして捨てた長さ (ミリ秒) */
   droppedMs: number;
-  /** 鳴らさなかった音の数と長さ (ミリ秒) */
+  /** 鳴らさなかった音の数 */
   missedFrames: number;
-  missedMs: number;
 }
 
 /** Subscriber の観測結果 */
@@ -390,7 +385,6 @@ function readPublisherStatus(handle: PublisherHandle): PublisherStatus {
         ? null
         : {
             framesSent: audio.framesSent,
-            bytesSent: audio.bytesSent,
           },
     errors: [...handle.errors],
   };
@@ -414,16 +408,11 @@ function readSubscriberStatus(handle: SubscriberHandle): SubscriberStatus {
             framesReceived: audio.framesReceived,
             subgroupFramesReceived: audio.subgroupFramesReceived,
             datagramFramesReceived: audio.datagramFramesReceived,
-            bytesReceived: audio.bytesReceived,
-            playedFrames: audio.playoutTiming.playedFrames,
             playedMs: audio.playoutTiming.playedMs,
-            concealments: audio.playoutConcealments,
             concealedMs: audio.playoutConcealedMs,
-            drops: audio.playoutDrops,
             // 並べすぎとして捨てた長さ (捨て率の分子)
             droppedMs: audio.playoutTiming.missedByReason.backlog.ms,
             missedFrames: audio.playoutTiming.missedFrames,
-            missedMs: audio.playoutTiming.missedMs,
           },
     errors: [...handle.errors],
   };
