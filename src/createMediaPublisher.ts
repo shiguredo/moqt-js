@@ -32,6 +32,7 @@ import {
   type ResolvedVideoPublishSettings,
 } from "./createMedia/settings";
 import type {
+  AudioDelivery,
   AudioPublishOptions,
   AudioStats,
   MediaPublisher,
@@ -681,6 +682,9 @@ export class MediaPublisherImpl implements MediaPublisher {
       // サーバーに接続
       await this.connectToServer(startGeneration);
 
+      // 音声の送り方がこのセッションで送れるかを、PUBLISH の完了に依存させずに確かめる
+      this.assertAudioDeliverySupported();
+
       // Publisher を作成
       await this.createPublishers();
       // 解放が先行していれば、これ以上リソースを作らずに失敗する。解放は mediaStream を
@@ -718,6 +722,30 @@ export class MediaPublisherImpl implements MediaPublisher {
       // 配線を変えるときは catalog 送信の reject を catch まで運ぶテストを先に用意すること。
       this.notifyStartFailure(error);
       throw error;
+    }
+  }
+
+  /**
+   * 音声の送り方が接続したセッションで使えるかを確かめる
+   *
+   * reliability が "reliable-only" のセッション (HTTP/2 上の WebTransport、
+   * draft-ietf-webtrans-http2) では datagram も再送され、順序も保たれる
+   * (draft-ietf-moq-transport-22 §6.2)。その場合 `delivery: "datagram"` は「再送されない
+   * 経路で送る」という意味を失うため、黙って受けない。devtools の実装は Subgroup へ戻すが、
+   * 高レベル API が宣言された設定を裏で変えると、送り方を計器や購読側の前提から読めなくなる。
+   * 指定されたら明示的に拒否する
+   *
+   * 判定は接続の直後に行う (PUBLISH の完了を待つと、relay が PUBLISH を拒否したときに
+   * 設定のエラーではなく接続のエラーだけが返る)
+   */
+  private assertAudioDeliverySupported(): void {
+    if (this.resolvedAudio?.delivery !== "datagram") {
+      return;
+    }
+    if (this.session?.reliability === "reliable-only") {
+      throw new Error(
+        'audio delivery "datagram" requires datagrams, but the session reliability is "reliable-only"',
+      );
     }
   }
 
@@ -1716,6 +1744,9 @@ export class MediaPublisherImpl implements MediaPublisher {
         durationMs: (chunk.duration ?? 0) / 1_000,
         nowMs: performance.now(),
       },
+      // 送り方は start で解決済みの設定を使う (既定は Subgroup。reliable-only の
+      // セッションで datagram が指定されていれば start が失敗している)
+      this.resolvedAudio?.delivery ?? "subgroup",
     );
   }
 
@@ -1822,19 +1853,48 @@ export class MediaPublisherImpl implements MediaPublisher {
    * 1 Object = 1 Group = 1 ストリームであり (draft-ietf-moq-loc-04 §4.1)、ストリームの
    * 生成と書き込みの待ちがそのまま遅れになる
    *
+   * Datagram で送るときは完了を待つ戻り値が無いため、渡した時点で送信のキューから出た
+   * ものとして記録する (送信のキュー `sendQueueMs` / `sendQueueFrames` は 0 のままになり、
+   * 撮ってから渡すまでの遅れだけが `sendLagMs` に出る)。
+   *
    * 同期 throw は送信キューに入っていないため、記録を作らずに通知だけする
    * (記録を作ると、完了が返らない分が残り続ける)
+   *
+   * @param publisher - 送信に使う音声の Publisher
+   * @param params - 送る Object
+   * @param send - 送信の遅れの記録に使う、撮った時刻と長さ
+   * @param delivery - 音声 Object の送り方 (Subgroup か Datagram)
    */
   private sendAudioFrameFireAndForget(
     publisher: Publisher,
     params: SendObjectParams,
     send: AudioPublishCatchUpSendStart,
+    delivery: AudioDelivery,
   ): void {
-    let result: Promise<void>;
+    let result: Promise<void> | null;
     try {
-      result = publisher.sendObject(params);
+      if (delivery === "datagram") {
+        // SendObjectParams をそのまま渡すと構造的部分型で通ってしまい、Datagram では読まれない
+        // フィールド (status / deliveryTimeout / subgroupDeliveryTimeout) を載せても黙って
+        // 無視される。意味が同じフィールドだけを明示して渡す
+        publisher.sendDatagram({
+          groupId: params.groupId,
+          objectId: params.objectId,
+          payload: params.payload,
+          ...(params.properties === undefined ? {} : { properties: params.properties }),
+          ...(params.priority === undefined ? {} : { priority: params.priority }),
+        });
+        result = null;
+      } else {
+        result = publisher.sendObject(params);
+      }
     } catch (error) {
-      this.callbacks.onError?.(error instanceof Error ? error : new Error(String(error)));
+      // Subgroup の同期 throw は closed だけであり通知を伴わないが、Datagram の検証違反は
+      // Publisher が error 通知してから throw する。1 件の失敗で 2 回通知しないよう、
+      // 通知済みの失敗はここでは握る
+      if (!isErrorNotifiedByPublisher(error)) {
+        this.callbacks.onError?.(error instanceof Error ? error : new Error(String(error)));
+      }
       return;
     }
     this.audioCatchUp.recordSendStart(send);
@@ -1844,6 +1904,10 @@ export class MediaPublisherImpl implements MediaPublisher {
         completedWallClockMs: performance.timeOrigin + performance.now(),
       });
     };
+    if (result === null) {
+      complete();
+      return;
+    }
     // 失敗しても記録を消す (残すと送信のキューに残っている長さが減らない)
     void result.then(complete, complete);
   }
@@ -2029,5 +2093,6 @@ export type {
   AudioStats,
   VideoStats,
   AudioPublishOptions,
+  AudioDelivery,
   VideoPublishOptions,
 };

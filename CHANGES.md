@@ -11,6 +11,14 @@
 
 ## develop
 
+- [CHANGE] `AudioReceiverStats` に経路別の受信数を追加する
+  - `subgroupFramesReceived` / `datagramFramesReceived` を足す (`framesReceived` は両方の和)。`MediaSubscriberImpl` は datagram callback を登録し、Subgroup と同じ処理へ流して経路だけを数える。保留キューを経由しても到着時の経路を保つ
+  - `AudioReceiverStats` は公開型のため、この型を自前で構築しているコードは 2 つの追加が必要になる (後方互換なし)
+  - @voluntas
+- [ADD] 音声 Object の配送経路 (Subgroup / Datagram) を選べるようにする
+  - `AudioPublishOptions.delivery` (`"subgroup" | "datagram"`。既定は `"subgroup"`) と `AudioDelivery` を足す。`"datagram"` は Datagram で送る (draft-ietf-moq-transport-22 §11)。QUIC 上の WebTransport では再送されず、サイズが上限を超えた Object は明示なく drop される (§11.2)。HTTP/2 上の WebTransport では datagram も再送される (§6.2) ため、`reliability` が `"reliable-only"` のセッションでは指定を黙って受けず `start()` がエラーになる
+  - 実リレーの E2E (`tests/e2e/relay/audio-delivery.spec.ts`) を足し、同じ spec で Subgroup と Datagram の往復を行い、経路別の受信数・欠落率・補間率・捨て率を判定する。欠落率は Datagram でだけ見る (§11.2 は暗黙の drop を許すため、受信数 = 送信数は要求しない)。実測 (手元の実リレー) は、負荷の低いときはどちらの経路も送信 501 件 / 受信 501 件で、補間も捨ても 0 ms であった。負荷の高いとき (load average 14) は Datagram の受信が 490 件 (欠落率 0.024)、Subgroup で捨て 520 ms を観測しており、移動中と runner の輻輳はしきい値で許す
+  - @voluntas
 - [ADD] moqt-devtools の Subscriber 統計に受信側の音声の追いつきを追加する
   - `AudioReceiverStats.playoutCatchUp` (`src/audioReceiveCatchUp.ts`) を足し、Subscriber パネルの Audio Playback の Catch-up セクションと「Copy for LLM」に出す。観測した遅れ (`lagMs`)、健全時の遅れ (`floorMs`)、遅れの上限 (`limitMs`)、観測した最大 (`maxLagMs`)、追いつきの最中か (`catchingUp`)、復号器を作り直した回数 (`catchUpStarts`)、飛んだ音の数と長さ (`skippedFrames` / `skippedMs` / `lastSkippedMs`) を出す
   - `AudioReceiveCatchUp` と `AUDIO_RECEIVE_CATCH_UP_*` の定数、`AudioReceiveCatchUpStats` を `moqt-js` から import できるようにする。時刻と値は呼び出し側が渡すため、単体で使える

@@ -1923,6 +1923,8 @@ function createStartConnectHarness(
     holdSessionClose?: boolean;
     createCatalogPublisher?: () => { publisher: Publisher; doneCount: () => number };
     publisherOptions?: MediaPublisherOptions;
+    // session の reliability。datagram を運べないセッション ("reliable-only") の検証に使う
+    reliability?: string;
   } = {},
 ): {
   publisher: MediaPublisherImpl;
@@ -1973,6 +1975,9 @@ function createStartConnectHarness(
     let sessionCloseCalls = 0;
     const holdPublishTrack = options.holdPublishTrack ?? CATALOG_TRACK_NAME;
     const session = {
+      // datagram の可否は reliability で決まる (start の音声の送り方の判定が読む)。
+      // 実際の Session は WebTransport の reliability をそのまま返す
+      reliability: options.reliability,
       publish: async (
         _namespace: string[],
         trackName: string,
@@ -2896,8 +2901,22 @@ test("未使用 track は Group ID を採番しない", () => {
 function createCapturingPublisher(): {
   publisher: Publisher;
   sent: Array<{ properties?: Uint8Array }>;
+  datagrams: Array<{
+    groupId?: number;
+    objectId?: number;
+    payload?: Uint8Array;
+    properties?: Uint8Array;
+    priority?: number;
+  }>;
 } {
   const sent: Array<{ properties?: Uint8Array }> = [];
+  const datagrams: Array<{
+    groupId?: number;
+    objectId?: number;
+    payload?: Uint8Array;
+    properties?: Uint8Array;
+    priority?: number;
+  }> = [];
   const publisher = {
     state: "active",
     done: async () => {
@@ -2906,8 +2925,11 @@ function createCapturingPublisher(): {
     sendObject: async (params: { properties?: Uint8Array }) => {
       sent.push(params);
     },
+    sendDatagram: (params: { properties?: Uint8Array }) => {
+      datagrams.push(params);
+    },
   } as unknown as Publisher;
-  return { publisher, sent };
+  return { publisher, sent, datagrams };
 }
 
 /** Video Config の description を含む chunk を handleVideoEncodedChunk に流す */
@@ -3229,6 +3251,93 @@ test("handleAudioEncodedChunk: description が無い chunk は AUDIO_CONFIG を�
   sendAudioChunk(control);
 
   assert.isUndefined(LOC.decodeAudioProperties(sent[0].properties ?? new Uint8Array(0)).config);
+});
+
+/**
+ * draft-ietf-moq-transport-22 §11 (Data Streams and Datagrams):
+ * delivery が "datagram" なら Datagram で送り、Subgroup (sendObject) へは流さない。
+ * 経路は Object 単位で選べるが、moqt-js の音声は 1 つの設定で統一する
+ */
+test("handleAudioEncodedChunk: delivery が datagram なら Datagram で送る", () => {
+  const { control: loopControl } = createLoopTestContext();
+  const control = loopControl as unknown as PublisherLifecycleControl;
+  const { publisher: audioPublisher, sent, datagrams } = createCapturingPublisher();
+  control.audioPublisher = audioPublisher;
+  // 送り方は start で解決した設定から読む
+  (
+    control as unknown as {
+      resolvedAudio: ReturnType<typeof resolveAudioPublishSettings> | null;
+    }
+  ).resolvedAudio = resolveAudioPublishSettings({
+    codec: "opus",
+    bitrate: 64_000,
+    delivery: "datagram",
+  });
+
+  sendAudioChunk(control, new Uint8Array([0x11, 0x90]));
+
+  assert.equal(datagrams.length, 1);
+  assert.equal(sent.length, 0);
+  // Datagram 経路でも送る中身が欠けないこと (位置・payload・AUDIO_CONFIG)。落ちても呼び出し
+  // 回数だけでは緑になるため、params まで固定する
+  const params = datagrams[0];
+  assert.isNumber(params?.groupId);
+  assert.isNumber(params?.objectId);
+  assert.isAbove(params?.payload?.length ?? 0, 0);
+  assert.deepEqual(
+    LOC.decodeAudioProperties(params?.properties ?? new Uint8Array(0)).config,
+    new Uint8Array([0x11, 0x90]),
+  );
+});
+
+/**
+ * 完了条件: 指定が無ければ従来どおり Subgroup で送る (既定は "subgroup"。後方互換)
+ */
+test("handleAudioEncodedChunk: delivery の既定は Subgroup で送る", () => {
+  const { control: loopControl } = createLoopTestContext();
+  const control = loopControl as unknown as PublisherLifecycleControl;
+  const { publisher: audioPublisher, sent, datagrams } = createCapturingPublisher();
+  control.audioPublisher = audioPublisher;
+  (
+    control as unknown as {
+      resolvedAudio: ReturnType<typeof resolveAudioPublishSettings> | null;
+    }
+  ).resolvedAudio = resolveAudioPublishSettings({ codec: "opus", bitrate: 64_000 });
+
+  sendAudioChunk(control);
+
+  assert.equal(sent.length, 1);
+  assert.equal(datagrams.length, 0);
+});
+
+/**
+ * 完了条件: datagram が再送されない経路でなくなるセッション (HTTP/2 上の WebTransport。
+ * draft-ietf-moq-transport-22 §6.2 は datagram も reliable and ordered とする) で音声の
+ * delivery に "datagram" を指定したら、start がエラーになる。宣言された設定を黙って
+ * Subgroup へ戻すと、送り方を計器や購読側の前提から読めなくなるためである。エラーは onError
+ * にも 1 回通知され、state は created のまま (再 start できる)
+ */
+test("start: reliable-only のセッションでは datagram の音声配信を拒否する", async () => {
+  const { publisher, errors } = createStartConnectHarness(
+    {},
+    {
+      reliability: "reliable-only",
+      publisherOptions: {
+        namespace: ["live"],
+        audio: { codec: "opus", bitrate: 64_000, delivery: "datagram" },
+      },
+    },
+  );
+
+  const failure = await publisher.start({} as MediaStream).then(
+    () => null,
+    (error: unknown) => error,
+  );
+
+  assert.ok(failure instanceof Error);
+  assert.match((failure as Error).message, /reliable-only/);
+  assert.equal(errors.length, 1);
+  assert.equal(publisher.state, "created");
 });
 
 /**

@@ -37,7 +37,15 @@ export interface AudioStats {
 
 // 受信側オーディオ統計
 export interface AudioReceiverStats {
+  // 復号へ渡した音声 Object の数。`subgroupFramesReceived` と `datagramFramesReceived` の和
   framesReceived: number;
+  // Subgroup (Data Stream) で届いた数 (draft-ietf-moq-transport-22 §11)
+  subgroupFramesReceived: number;
+  // Datagram で届いた数 (draft-ietf-moq-transport-22 §11.2)。QUIC 上の WebTransport では
+  // 再送されないため、経路の欠落がそのままこの数の不足になる (HTTP/2 上の WebTransport では
+  // 再送される。§6.2)。補間と捨ての割合 (`playoutConcealments` / `playoutDrops` /
+  // `playoutTiming`) を経路ごとに比べられるようにする
+  datagramFramesReceived: number;
   bytesReceived: number;
   // 目標を使わない並べ方で、基準を取り直した回数
   // (鳴らす時刻を過ぎて届いた音、timestamp が大きく飛んだ音)
@@ -129,6 +137,19 @@ export interface MediaReceiverStats {
   avSync: AvSyncStats | null;
 }
 
+// 音声 Object の送り方 (draft-ietf-moq-transport-22 §11: Data Streams and Datagrams)
+//
+// - "subgroup": Subgroup の Data Stream で送る (既定)。再送され、欠落しない
+// - "datagram": Datagram で送る。再送の有無は下位の transport に依存し、QUIC 上の
+//   WebTransport では再送されず (RFC 9221)、経路の欠落がそのまま音の欠落になる。
+//   HTTP/2 上の WebTransport (draft-ietf-webtrans-http2) では datagram も再送され、順序も
+//   保たれる (§6.2)。サイズが上限を超えた Object は明示なく drop される (§11.2)。
+//   WebTransport が datagram を運べないセッション (reliability が "reliable-only") では、
+//   指定を黙って戻さず `createMediaPublisher` の start がエラーになる (datagram の意味が
+//   transport で変わるため、呼び出し側に明示させる)。送信の完了を待つ戻り値が無いため、
+//   送信のキューの計器 (`AudioStats.catchUp.sendQueueMs` / `sendQueueFrames`) は 0 のままになる
+export type AudioDelivery = "subgroup" | "datagram";
+
 // オーディオ配信オプション
 export interface AudioPublishOptions {
   trackName?: string;
@@ -136,6 +157,8 @@ export interface AudioPublishOptions {
   bitrate: number;
   sampleRate?: number;
   channels?: number;
+  // 音声 Object の送り方 (既定は "subgroup")
+  delivery?: AudioDelivery;
 }
 
 // ビデオ配信オプション

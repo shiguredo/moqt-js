@@ -19,7 +19,7 @@ import {
   getAudioEncoderConfig,
   getVideoEncoderConfig,
 } from "../codec/config";
-import type { AudioPublishOptions, VideoPublishOptions } from "../codec/types";
+import type { AudioDelivery, AudioPublishOptions, VideoPublishOptions } from "../codec/types";
 
 /** 音声トラック名の既定値 */
 export const DEFAULT_AUDIO_TRACK_NAME = "audio";
@@ -38,6 +38,8 @@ export interface ResolvedAudioPublishSettings {
   bitrate: number;
   sampleRate: number;
   channels: number;
+  /** 音声 Object の送り方 */
+  delivery: AudioDelivery;
 }
 
 /** 解決済みの映像配信設定 */
@@ -71,6 +73,9 @@ export function resolveAudioPublishSettings(
     bitrate: options.bitrate,
     sampleRate,
     channels,
+    // 既定は Subgroup。datagram を指定できるかはセッションの reliability に依存するため、
+    // ここでは解決するだけで判定しない (createMediaPublisher の start が判定する)
+    delivery: options.delivery ?? "subgroup",
   };
 }
 

@@ -17,6 +17,7 @@ import {
   connect,
   createMediaPublisher,
   createMediaSubscriber,
+  type AudioDelivery,
   type Fetcher,
   type FetchOptions,
   type LocationFilter,
@@ -68,6 +69,26 @@ export interface StartPublisherOptions {
   url: string;
   /** Track Namespace。spec がテストごとに一意な値を渡す */
   namespace: string[];
+  /**
+   * 音声も配信する。省略すると映像だけを配信する。
+   *
+   * 音声のソースは偽のマイク (Chromium の fake device) である。spec は
+   * `--use-fake-device-for-media-stream` を付けて動かす (CI の runner は入力デバイスを
+   * 持たないため。tests/e2e/relay/audio-timestamp.spec.ts と同じ条件)
+   */
+  audio?: {
+    codec: "opus" | "aac";
+    bitrate: number;
+    /** 音声 Object の送り方 (既定は "subgroup")。draft-ietf-moq-transport-22 §11 */
+    delivery?: AudioDelivery;
+  };
+}
+
+/** Publisher の音声の観測結果 (音声を配信していなければ null) */
+export interface PublisherAudioStatus {
+  /** 送信した音声 Object の数 */
+  framesSent: number;
+  bytesSent: number;
 }
 
 /** Publisher の観測結果 */
@@ -79,6 +100,8 @@ export interface PublisherStatus {
   droppedFrames: number;
   /** 配信中の Group ID。FETCH の Location Filter の絶対指定に使う */
   currentGroupId: number;
+  /** 音声の送信統計 (音声を配信していなければ null) */
+  audio: PublisherAudioStatus | null;
   errors: string[];
 }
 
@@ -86,6 +109,36 @@ export interface PublisherStatus {
 export interface StartSubscriberOptions {
   url: string;
   namespace: string[];
+  /** 音声も購読する (省略すると映像だけを購読する) */
+  audio?: boolean;
+}
+
+/**
+ * Subscriber の音声の観測結果
+ *
+ * 「途切れの少なさ」を数値で見るための値である。分母は鳴らすと決めた音の長さ
+ * (`playedMs`) であり、補間率は `concealedMs` / `playedMs`、捨て率は `droppedMs` /
+ * `playedMs` になる。経路別の受信数は、Subgroup が再送されるのに対して Datagram は
+ * 再送されない (draft-ietf-moq-transport-22 §11.2) ため、欠落率と合わせて経路ごとに比べる
+ */
+export interface SubscriberAudioStatus {
+  /** 復号へ渡した音声 Object の数 (`subgroupFramesReceived` と `datagramFramesReceived` の和) */
+  framesReceived: number;
+  subgroupFramesReceived: number;
+  datagramFramesReceived: number;
+  bytesReceived: number;
+  /** 鳴らすと決めた音の数と長さ (ミリ秒) */
+  playedFrames: number;
+  playedMs: number;
+  /** 補間した回数と合計 (ミリ秒) */
+  concealments: number;
+  concealedMs: number;
+  /** 捨てた回数と、並べすぎとして捨てた長さ (ミリ秒) */
+  drops: number;
+  droppedMs: number;
+  /** 鳴らさなかった音の数と長さ (ミリ秒) */
+  missedFrames: number;
+  missedMs: number;
 }
 
 /** Subscriber の観測結果 */
@@ -98,6 +151,8 @@ export interface SubscriberStatus {
   framesReceived: number;
   keyFramesReceived: number;
   bytesReceived: number;
+  /** 音声の受信と再生の観測結果 (音声を購読していなければ null) */
+  audio: SubscriberAudioStatus | null;
   errors: string[];
 }
 
@@ -303,20 +358,48 @@ function createCanvasStream(): { stream: MediaStream; dispose: () => void } {
   return { stream, dispose };
 }
 
+/**
+ * 偽のマイクから音声トラックを取る
+ *
+ * CI の runner は音声の入力デバイスを持たないため、spec は
+ * `--use-fake-device-for-media-stream` を付けて動かす
+ * (tests/e2e/relay/audio-timestamp.spec.ts と同じ条件)。偽デバイスも 20 ms ごとに音を
+ * 渡すため、配信と購読の経路はそのまま検証できる
+ */
+async function createAudioTrack(): Promise<MediaStreamTrack> {
+  const audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  const track = audioStream.getAudioTracks()[0];
+  if (track === undefined) {
+    throw new Error("failed to get a fake microphone track");
+  }
+  return track;
+}
+
 function readPublisherStatus(handle: PublisherHandle): PublisherStatus {
-  const video = handle.publisher.getStats().video;
+  const stats = handle.publisher.getStats();
+  const video = stats.video;
+  const audio = stats.audio;
   return {
     state: handle.publisher.state,
     framesSent: video?.framesSent ?? 0,
     keyFramesSent: video?.keyFramesSent ?? 0,
     droppedFrames: video?.droppedFrames ?? 0,
     currentGroupId: video?.currentGroupId ?? 0,
+    audio:
+      audio === null
+        ? null
+        : {
+            framesSent: audio.framesSent,
+            bytesSent: audio.bytesSent,
+          },
     errors: [...handle.errors],
   };
 }
 
 function readSubscriberStatus(handle: SubscriberHandle): SubscriberStatus {
-  const video = handle.subscriber.getStats().video;
+  const stats = handle.subscriber.getStats();
+  const video = stats.video;
+  const audio = stats.audio;
   return {
     state: handle.subscriber.state,
     hasCatalog: handle.subscriber.catalog !== null,
@@ -324,6 +407,24 @@ function readSubscriberStatus(handle: SubscriberHandle): SubscriberStatus {
     framesReceived: video?.framesReceived ?? 0,
     keyFramesReceived: video?.keyFramesReceived ?? 0,
     bytesReceived: video?.bytesReceived ?? 0,
+    audio:
+      audio === null
+        ? null
+        : {
+            framesReceived: audio.framesReceived,
+            subgroupFramesReceived: audio.subgroupFramesReceived,
+            datagramFramesReceived: audio.datagramFramesReceived,
+            bytesReceived: audio.bytesReceived,
+            playedFrames: audio.playoutTiming.playedFrames,
+            playedMs: audio.playoutTiming.playedMs,
+            concealments: audio.playoutConcealments,
+            concealedMs: audio.playoutConcealedMs,
+            drops: audio.playoutDrops,
+            // 並べすぎとして捨てた長さ (捨て率の分子)
+            droppedMs: audio.playoutTiming.missedByReason.backlog.ms,
+            missedFrames: audio.playoutTiming.missedFrames,
+            missedMs: audio.playoutTiming.missedMs,
+          },
     errors: [...handle.errors],
   };
 }
@@ -403,11 +504,39 @@ async function startPublisher(options: StartPublisherOptions): Promise<HandleId>
 
   let publisher: MediaPublisher;
   try {
+    // 音声の設定は入力のトラックから決める。偽のマイクはモノラルであり、既定 (ステレオ) の
+    // まま符号化へ渡すと、入力と符号化のパラメーターが合わずに符号化が失敗する
+    // (Chrome の "Input audio buffer is incompatible with codec parameters")。
+    // 実機のマイクでも同じ理由で設定に追従させる
+    const audioTrack = options.audio === undefined ? null : await createAudioTrack();
+    const audioSettings = audioTrack?.getSettings();
+    if (audioTrack !== null) {
+      stream.addTrack(audioTrack);
+    }
     publisher = await createMediaPublisher(
       options.url,
       {
         namespace: options.namespace,
         video: { codec: "vp8", bitrate: 500_000 },
+        // exactOptionalPropertyTypes では optional な値に undefined を渡せないため、
+        // 値がある場合だけ載せる
+        ...(options.audio === undefined
+          ? {}
+          : {
+              audio: {
+                codec: options.audio.codec,
+                bitrate: options.audio.bitrate,
+                ...(audioSettings?.sampleRate === undefined
+                  ? {}
+                  : { sampleRate: audioSettings.sampleRate }),
+                ...(audioSettings?.channelCount === undefined
+                  ? {}
+                  : { channels: audioSettings.channelCount }),
+                ...(options.audio.delivery === undefined
+                  ? {}
+                  : { delivery: options.audio.delivery }),
+              },
+            }),
       },
       {
         onError: (error) => {
@@ -476,6 +605,7 @@ async function startSubscriber(options: StartSubscriberOptions): Promise<HandleI
       {
         namespace: options.namespace,
         video: { codec: "vp8" },
+        ...(options.audio === true ? { audio: { codec: "opus" } } : {}),
       },
       {
         onError: (error) => {

@@ -379,8 +379,9 @@ interface SubscriberInitialConfigControl {
   audioDecoderConfigured: boolean;
   videoInitialConfigPending: boolean;
   audioInitialConfigPending: boolean;
-  // 初期 configure の完了まで保留するキュー (件数とバイト数の上限つき) と、その計数
-  pendingAudioObjects: MoqtObject[];
+  // 初期 configure の完了まで保留するキュー (件数とバイト数の上限つき) と、その計数。
+  // 音声のキューは到着経路も一緒に持つ
+  pendingAudioObjects: Array<{ object: MoqtObject; delivery: string }>;
   pendingVideoObjects: MoqtObject[];
   pendingAudioQueueState: { bytes: number; overflowNotified: boolean };
   pendingVideoQueueState: { bytes: number; overflowNotified: boolean };
@@ -390,7 +391,7 @@ interface SubscriberInitialConfigControl {
   videoTrackInfo: CatalogTrack | null;
   audioTrackInfo: CatalogTrack | null;
   handleVideoObject(obj: MoqtObject): void;
-  handleAudioObject(obj: MoqtObject): void;
+  handleAudioObject(obj: MoqtObject, delivery?: string): void;
   applyInitialVideoConfig(): Promise<void>;
   applyInitialAudioConfig(): Promise<void>;
 }
@@ -1000,6 +1001,45 @@ test("handleAudioObject: 保留キューのバイト上限を超えた Object �
   assert.equal(subscriber.getStats().audio?.bytesReceived, 2);
   assert.equal(control.pendingAudioObjects.length, 0);
   assert.equal(control.pendingAudioQueueState.bytes, 0);
+});
+
+/**
+ * 完了条件: 受信側の統計が音声 Object の到着経路 (Subgroup / Datagram) を分けて数える
+ * (draft-ietf-moq-transport-22 §11)。Datagram は再送されないため、欠落と補間・捨ての割合を
+ * 経路ごとに比べられるようにする。経路は到着時にしか分からないため、保留キューを経由しても
+ * 保つ
+ */
+test("handleAudioObject: 到着経路ごとに受信数を数える (保留キューを経由しても保つ)", async () => {
+  const subscriber = new MediaSubscriberImpl("moqt://example.com/live", {
+    namespace: ["live"],
+    audio: {},
+  });
+  const control = subscriber as unknown as SubscriberInitialConfigControl;
+  const decoded: number[] = [];
+  control.audioDecoder = {
+    configure: async () => {},
+    decode: (payload) => {
+      decoded.push(payload[0] ?? -1);
+    },
+  };
+  control.audioDecoderConfigured = true;
+  control.audioTrackInfo = { name: "audio", packaging: "loc", isLive: true, codec: "opus" };
+
+  // 初期 configure が済んでいない間に届いた Datagram は保留し、経路を保ったまま復号する
+  control.audioInitialConfigPending = true;
+  control.handleAudioObject(makeIdentifiedObject(0n, 0x11), "datagram");
+  assert.equal(control.pendingAudioObjects.length, 1);
+  await control.applyInitialAudioConfig();
+
+  // Subgroup で届いた分と Datagram で届いた分を別々に数える
+  control.handleAudioObject(makeIdentifiedObject(1n, 0x22), "subgroup");
+  control.handleAudioObject(makeIdentifiedObject(2n, 0x33), "datagram");
+
+  const stats = subscriber.getStats().audio;
+  assert.deepEqual(decoded, [0x11, 0x22, 0x33]);
+  assert.equal(stats?.framesReceived, 3);
+  assert.equal(stats?.subgroupFramesReceived, 1);
+  assert.equal(stats?.datagramFramesReceived, 2);
 });
 
 /**
