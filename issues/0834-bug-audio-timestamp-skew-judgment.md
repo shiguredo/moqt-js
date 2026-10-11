@@ -1,7 +1,7 @@
 # audio-timestamp の skew の判定が、共有が戻った直後の 1 回の観測で落ちる
 
 - Created: 2026-10-12
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-10-12
 - Branch: feature/fix-audio-timestamp-skew-judgment
 - Polished: {YYYY-MM-DD}
 
@@ -38,3 +38,12 @@
 - `tests/e2e/relay/audio-timestamp.spec.ts` (`expectSkewWithinBudget` / `expectUnsharedRecovers`)
 - `tests/e2e/relay/audio-catch-up.spec.ts` (同じ「続けて超えた長さ」で判定する先例)
 - draft-ietf-moq-transport-22 (実リレーの挙動の前提)
+
+## 解決方法
+
+- `expectSkewWithinBudget` の判定を、記録した観測と共有が戻った後の観測の両方について「予算 (`AV_SKEW_MAX_MS` = 150 ms) を超えた状態が続いた最長時間」で行うようにした (`maxSkewOverflowRunMs`)。単発の跳び (表示が一瞬途切れた、解除が戻った直後で 2 つの表示位置が揃う途中) では落ちず、ずれが固定する症状では落ちる
+- 続けて許す長さは `SKEW_OVERFLOW_MAX_MS` (2000 ms、標本 2 件) とした。0754 の症状は数百 ms のずれが固定することであり (実測: 3370 ms が 23 秒続いた)、この値で捕まる
+- 共有が戻った後は、判断に要る標本 (`SKEW_MIN_SAMPLES` = 3) が集まるまで `SKEW_OBSERVE_TIMEOUT_MS` (15 秒) の中で観測する。値が観測できない場合はこれまでどおり失敗する
+- 失敗メッセージに観測した `skewMs` の一覧を入れた (`formatSkewSamples`)。どの値で落ちたかをログから読める
+- 触ったファイル: `tests/e2e/relay/audio-timestamp.spec.ts`、`CHANGES.md`
+- 確認: `vp check` / `vp exec tsc --noEmit` / 実リレーの E2E (`vp exec playwright test --project=relay tests/e2e/relay/audio-timestamp.spec.ts`、34.9 秒で成功)。判定は実リレーの E2E 自体が通すため、単体テストは追加していない (`tests/e2e/` は vitest の対象外である)
