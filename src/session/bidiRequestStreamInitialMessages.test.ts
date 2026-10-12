@@ -16,7 +16,7 @@ import { test, assert } from "vite-plus/test";
 import { encodeRequestOkPayload, encodePublishStateNotifyPayload } from "../message/session";
 import { encodeSubscribeOkPayload, encodeRequestUpdatePayload } from "../message/subscribe";
 import { encodePublishDonePayload } from "../message/publish";
-import { MessageType, MessageParameterType } from "../message/types";
+import { MessageType, MessageParameterType, PublishDoneStatusCode } from "../message/types";
 import { SubscriberImpl } from "../subscriber";
 import { ControlStreamReader } from "../controlStream";
 import { concatUint8Arrays } from "../testSupport/helpers";
@@ -214,7 +214,7 @@ test("bidiReadSubscribeResponse: SUBSCRIBE_OK と同一チャンクの PUBLISH_D
   });
   const donePayload = encodePublishDonePayload({
     type: MessageType.PUBLISH_DONE,
-    statusCode: 0n,
+    statusCode: BigInt(PublishDoneStatusCode.TRACK_ENDED),
     streamCount: 0n,
     reasonPhrase: "end of track",
   });

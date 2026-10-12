@@ -29,6 +29,7 @@ export type {
   PublishCallbacks,
   PublishOptions,
   SubgroupStreamEnd,
+  PublishDoneInfo,
   SubscribeCallbacks,
   SubscribeOptions,
   SubscribeTracksOptions,
@@ -58,6 +59,11 @@ export {
 
 // メッセージ型の再エクスポート
 export type { LocationFilter, Location, Parameter } from "./message";
+
+// PUBLISH_DONE の Status Code (draft-ietf-moq-transport-22 §9.9 / §12.4)
+// 購読の終了理由 (SubscribeCallbacks.end の PublishDoneInfo) をアプリが名前で判定できるように
+// 公開する。未知の code は §13 (Grease) により INTERNAL_ERROR に正規化した値が渡る。
+export { PublishDoneStatusCode, isPublishDoneErrorStatus } from "./message";
 
 // Authorization Token の再エクスポート (draft-ietf-moq-transport-22 Section 9.20.2)
 export {

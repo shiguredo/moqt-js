@@ -5,6 +5,8 @@
 
 import { test, assert } from "vite-plus/test";
 import { SubscriberImpl } from "./subscriber";
+import { PublishDoneStatusCode } from "./message/types";
+import type { PublishDoneInfo } from "./session";
 import type { MoqtObject } from "./dataStream";
 import type { Property } from "./properties";
 import { encodeProperties, TrackPropertyId } from "./properties";
@@ -50,8 +52,8 @@ test("closed 状態では handleDatagram は配信しない", () => {
   assert.equal(delivered.length, 0);
 });
 
-test("handleEnd は endCallback を呼んで closed にする", () => {
-  let endCalled = false;
+test("handleEnd は endCallback に status code と reason を渡して closed にする", () => {
+  let received: PublishDoneInfo | undefined;
   const subscriber = new SubscriberImpl(
     ["namespace"],
     "track",
@@ -59,14 +61,17 @@ test("handleEnd は endCallback を呼んで closed にする", () => {
     0n,
     () => {},
     undefined,
-    () => {
-      endCalled = true;
+    (publishDone) => {
+      received = publishDone;
     },
   );
 
   assert.equal(subscriber.state, "active");
-  subscriber.handleEnd();
-  assert.isTrue(endCalled);
+  subscriber.handleEnd(PublishDoneStatusCode.TRACK_ENDED, "done");
+  assert.deepEqual(received, {
+    statusCode: PublishDoneStatusCode.TRACK_ENDED,
+    reasonPhrase: "done",
+  });
   assert.equal(subscriber.state, "closed");
 });
 
@@ -84,8 +89,8 @@ test("handleEnd は closed 状態では endCallback を呼ばない", () => {
     },
   );
 
-  subscriber.handleEnd();
-  subscriber.handleEnd();
+  subscriber.handleEnd(PublishDoneStatusCode.TRACK_ENDED, "");
+  subscriber.handleEnd(PublishDoneStatusCode.TRACK_ENDED, "");
 
   assert.equal(endCallCount, 1);
 });
@@ -244,10 +249,11 @@ test("update は onUpdate の返り値と同一インスタンスを返す", asy
 });
 
 // draft-ietf-moq-transport-22 Section 9.9 (PUBLISH_DONE):
-// UPDATE_FAILED (0x8) 等のエラー・ステータスでは errorCallback を呼ぶ
-test("handleEnd は statusCode がエラーの場合 errorCallback を呼ぶ", () => {
-  let endCalled = false;
-  let errorMessage = "";
+// UPDATE_FAILED (0x8) 等のエラー status でも終了通知は end の 1 回だけで、
+// errorCallback は呼ばない (エラーかどうかは status code で判定する)
+test("handleEnd は statusCode がエラーの場合も errorCallback を呼ばず endCallback を 1 回呼ぶ", () => {
+  const events: string[] = [];
+  let received: PublishDoneInfo | undefined;
   const subscriber = new SubscriberImpl(
     ["namespace"],
     "track",
@@ -255,27 +261,30 @@ test("handleEnd は statusCode がエラーの場合 errorCallback を呼ぶ", (
     0n,
     () => {},
     undefined,
-    () => {
-      endCalled = true;
+    (publishDone) => {
+      events.push("end");
+      received = publishDone;
     },
-    (error: Error) => {
-      errorMessage = error.message;
+    () => {
+      events.push("error");
     },
   );
 
-  // UPDATE_FAILED (0x8) でエラー通知
-  subscriber.handleEnd(0x8n, "update failed");
-  assert.isTrue(endCalled);
-  assert.include(errorMessage, "0x8");
-  assert.include(errorMessage, "update failed");
+  // UPDATE_FAILED (0x8) でも終了通知は end だけ
+  subscriber.handleEnd(PublishDoneStatusCode.UPDATE_FAILED, "update failed");
+  assert.deepEqual(events, ["end"]);
+  assert.deepEqual(received, {
+    statusCode: PublishDoneStatusCode.UPDATE_FAILED,
+    reasonPhrase: "update failed",
+  });
   assert.equal(subscriber.state, "closed");
 });
 
 // draft-ietf-moq-transport-22 Section 9.9 (PUBLISH_DONE):
 // TRACK_ENDED (0x2) は正常終了。errorCallback は呼ばない
 test("handleEnd は statusCode が TRACK_ENDED の場合 errorCallback を呼ばない", () => {
-  let endCalled = false;
-  let errorCalled = false;
+  const events: string[] = [];
+  let received: PublishDoneInfo | undefined;
   const subscriber = new SubscriberImpl(
     ["namespace"],
     "track",
@@ -283,24 +292,27 @@ test("handleEnd は statusCode が TRACK_ENDED の場合 errorCallback を呼ば
     0n,
     () => {},
     undefined,
-    () => {
-      endCalled = true;
+    (publishDone) => {
+      events.push("end");
+      received = publishDone;
     },
     () => {
-      errorCalled = true;
+      events.push("error");
     },
   );
 
-  subscriber.handleEnd(0x2n, "");
-  assert.isTrue(endCalled);
-  assert.isFalse(errorCalled);
+  subscriber.handleEnd(PublishDoneStatusCode.TRACK_ENDED, "");
+  assert.deepEqual(events, ["end"]);
+  assert.deepEqual(received, {
+    statusCode: PublishDoneStatusCode.TRACK_ENDED,
+    reasonPhrase: "",
+  });
 });
 
 // draft-ietf-moq-transport-22 Section 9.9 (PUBLISH_DONE):
-// INTERNAL_ERROR (0x0) はエラー。errorCallback を呼ぶ
-test("handleEnd は statusCode が INTERNAL_ERROR の場合 errorCallback を呼ぶ", () => {
-  let endCalled = false;
-  let errorCalled = false;
+// INTERNAL_ERROR (0x0) も end の 1 回だけで通知する
+test("handleEnd は statusCode が INTERNAL_ERROR の場合も errorCallback を呼ばない", () => {
+  const events: string[] = [];
   const subscriber = new SubscriberImpl(
     ["namespace"],
     "track",
@@ -309,16 +321,15 @@ test("handleEnd は statusCode が INTERNAL_ERROR の場合 errorCallback を呼
     () => {},
     undefined,
     () => {
-      endCalled = true;
+      events.push("end");
     },
     () => {
-      errorCalled = true;
+      events.push("error");
     },
   );
 
-  subscriber.handleEnd(0x0n, "internal");
-  assert.isTrue(endCalled);
-  assert.isTrue(errorCalled);
+  subscriber.handleEnd(PublishDoneStatusCode.INTERNAL_ERROR, "internal");
+  assert.deepEqual(events, ["end"]);
   assert.equal(subscriber.state, "closed");
 });
 

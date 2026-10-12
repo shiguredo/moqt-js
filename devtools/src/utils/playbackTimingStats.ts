@@ -19,7 +19,7 @@
  *   生じたかを分けるため
  */
 
-import { DataStreamErrorCode } from "moqt-js";
+import { DataStreamErrorCode, PublishDoneStatusCode } from "moqt-js";
 import { LATENCY_SEGMENTS, LatencyBreakdown, type LatencySegment } from "./latencyBreakdown";
 import { STALL_CAUSES, StallAnalyzer, type ObjectPosition, type StallCause } from "./stallAnalysis";
 import { TimedValues } from "../../../src/timedValues.ts";
@@ -211,6 +211,21 @@ export function formatStallEvent(stall: StallEvent): string {
 }
 
 /**
+ * code の一覧から「名前 (16 進の値)」にする
+ *
+ * 名前が無い値は名前を付けず 16 進の値だけにする
+ */
+function formatCodeName(code: number, names: Record<string, number>): string {
+  const hex = `0x${code.toString(16)}`;
+  for (const [name, value] of Object.entries(names)) {
+    if (value === code) {
+      return `${name} (${hex})`;
+    }
+  }
+  return hex;
+}
+
+/**
  * RESET_STREAM の error code を「名前 (16 進の値)」にする
  *
  * 名前は draft-ietf-moq-transport-22 Section 12.5 の code の名前である。未知の値は名前を
@@ -220,13 +235,18 @@ export function formatStreamResetCode(errorCode: number | null): string {
   if (errorCode === null) {
     return "no code";
   }
-  const hex = `0x${errorCode.toString(16)}`;
-  for (const [name, value] of Object.entries(DataStreamErrorCode)) {
-    if (value === errorCode) {
-      return `${name} (${hex})`;
-    }
-  }
-  return hex;
+  return formatCodeName(errorCode, DataStreamErrorCode);
+}
+
+/**
+ * PUBLISH_DONE の status code を「名前 (16 進の値)」にする
+ *
+ * 名前は draft-ietf-moq-transport-22 Section 12.4 の Status Code の名前である。未知の値は
+ * 名前を付けず 16 進の値だけにする (受信側では Section 13 により未知の code は
+ * INTERNAL_ERROR に正規化されるため、通常は名前が付く)
+ */
+export function formatPublishDoneStatusCode(statusCode: number): string {
+  return formatCodeName(statusCode, PublishDoneStatusCode);
 }
 
 /**

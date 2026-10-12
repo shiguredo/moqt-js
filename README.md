@@ -96,6 +96,7 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
 - SUBSCRIBE_OK メッセージ
 - REQUEST_UPDATE メッセージ
 - サブスクリプションのキャンセル (双方向ストリームのクローズ)
+- PUBLISH_DONE メッセージ (Status Code と Reason Phrase を `SubscribeCallbacks.end` で通知する)
 - Object Stream 受信 (Subgroup Header)
 - Object Datagram 受信
 - Pending Subgroup Buffer
@@ -354,7 +355,8 @@ const session = await connect("moqt://example.com/moqt", {
 
 const subscriber = await session.subscribe(["live"], "video", {
   object: (obj) => console.log(obj),
-  end: () => console.log("track ended"),
+  // PUBLISH_DONE による購読の終了。statusCode が終了の理由 (draft-ietf-moq-transport-22 §12.4)
+  end: (publishDone) => console.log(`track ended: 0x${publishDone.statusCode.toString(16)}`),
   error: (e) => console.error(e),
 });
 

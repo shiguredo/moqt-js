@@ -13,6 +13,7 @@ export const RFC_FIELD_NAMES: Record<string, string> = {
   fullTrackName: "Full Track Name",
   errorCode: "Error Code",
   reason: "Reason",
+  reasonPhrase: "Reason Phrase",
   statusCode: "Status Code",
   streamCount: "Stream Count",
   maxRequestId: "Max Request ID",

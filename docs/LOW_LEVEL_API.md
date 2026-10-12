@@ -163,6 +163,27 @@ draft-ietf-moq-msf-01 §11.4.3: track に紐づくトークンは、そのトラ
 | `update(options?)`    | 同じ双方向ストリームで `REQUEST_UPDATE` を送る                                                                                    |
 | `unsubscribe()`       | 双方向ストリームを close して購読を終了する                                                                                       |
 
+#### 購読の終了通知
+
+`SubscribeCallbacks.end` は、publisher が PUBLISH_DONE を送って購読を終えたときに呼ばれる (draft-ietf-moq-transport-22 §3.1 / §9.9)。引数の `PublishDoneInfo` が終了の理由を運ぶ。
+
+```typescript
+import type { PublishDoneInfo } from "moqt-js";
+import { PublishDoneStatusCode, isPublishDoneErrorStatus } from "moqt-js";
+
+interface PublishDoneInfo {
+  statusCode: PublishDoneStatusCode;
+  reasonPhrase: string;
+}
+```
+
+- `statusCode` は §12.4 (Publish Done Codes) の値で、`TRACK_ENDED` / `GOING_AWAY` / `EXPIRED` / `TOO_FAR_BEHIND` / `INTERNAL_ERROR` などを区別する。未知の値は §13 (Grease) により `INTERNAL_ERROR` に正規化して渡す
+- エラーを示すかどうかは `isPublishDoneErrorStatus(statusCode)` で判定する。`INTERNAL_ERROR` / `UNAUTHORIZED` / `TOO_FAR_BEHIND` / `UPDATE_FAILED` / `EXCESSIVE_LOAD` / `MALFORMED_TRACK` がエラーである
+- エラーを示す Status Code の PUBLISH_DONE でも `end` だけを 1 回呼び、`error` は呼ばない。エラーかどうかは Status Code で判定する
+- `error` は次の 2 つの場合に呼ばれる。購読が PUBLISH_DONE を伴わない失敗で終わった場合 (§6.4.2.2 の PUBLISH_DONE を伴わない FIN、RESET_STREAM、§12.1 の Malformed Track) と、アプリのコールバック (`object` / `datagram` / `subgroupEnd`) が throw した場合である。後者では購読は終わらない (state は `"active"` のまま) ため、受信を続けるアプリは状態を破棄しないこと
+- セッションの終了 (§6.6 Termination) では `end` を呼ばない。セッションの終了は `ConnectCallbacks.close` が通知する
+- `error` だけを登録していたアプリは、PUBLISH_DONE による終了 (エラーを示す Status Code を含む) を一切受け取れなくなる。終了は `end` で受け取る
+
 ### `Fetcher`
 
 | プロパティ / メソッド | 説明                                           |

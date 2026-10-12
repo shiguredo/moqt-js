@@ -8,7 +8,13 @@
  */
 
 import type { DataStreamErrorCode } from "../error";
-import type { AuthorizationToken, LocationFilter, Parameter, RangeFilterSpec } from "../message";
+import type {
+  AuthorizationToken,
+  LocationFilter,
+  Parameter,
+  PublishDoneStatusCode,
+  RangeFilterSpec,
+} from "../message";
 import type { MoqtObject } from "../dataStream";
 import type { PendingSubgroupBufferOptions } from "../pendingSubgroupBuffer";
 
@@ -457,6 +463,34 @@ export interface SubgroupStreamEnd {
   errorCode?: DataStreamErrorCode;
 }
 
+/**
+ * PUBLISH_DONE による購読の終了
+ *
+ * draft-ietf-moq-transport-22 §9.9 (PUBLISH_DONE): publisher は購読の最後のメッセージとして
+ * PUBLISH_DONE を送って購読を終える。終了の理由は §12.4 (Publish Done Codes) の Status Code が
+ * 表し、TRACK_ENDED / GOING_AWAY / EXPIRED / TOO_FAR_BEHIND / INTERNAL_ERROR などを区別できる。
+ * §13 (Grease) により、未知の Status Code は INTERNAL_ERROR に正規化した値を渡す。
+ *
+ * `src/message/publish.ts` の `PublishDone` は PUBLISH_DONE のワイヤ表現 (`statusCode` は
+ * `bigint`、`streamCount` を持つ) であり、本型とは別である。本型の `statusCode` は正規化済みの
+ * 列挙値である。
+ */
+export interface PublishDoneInfo {
+  /**
+   * draft-ietf-moq-transport-22 §12.4 の Status Code
+   *
+   * エラーを示すかどうかは `isPublishDoneErrorStatus` で判定できる。
+   */
+  statusCode: PublishDoneStatusCode;
+  /**
+   * PUBLISH_DONE の Reason Phrase
+   *
+   * draft-ietf-moq-transport-22 §8.5 (Reason Phrase Structure) は Reason Phrase Length を
+   * vi64 と定めるため、長さ 0 の Reason Phrase を受信しうる (空文字列がありうる)。
+   */
+  reasonPhrase: string;
+}
+
 export interface SubscribeCallbacks {
   object: (object: MoqtObject) => void;
   /**
@@ -466,7 +500,30 @@ export interface SubscribeCallbacks {
    * 注意: Datagram は信頼性がなく、順序も保証されない
    */
   datagram?: (object: MoqtObject) => void;
-  end?: () => void;
+  /**
+   * 購読が PUBLISH_DONE で終わったときのコールバック
+   *
+   * draft-ietf-moq-transport-22 §9.9 (PUBLISH_DONE): publisher は購読の最後のメッセージとして
+   * PUBLISH_DONE を送って購読を終える。終了の理由を `PublishDoneInfo` で渡す。
+   *
+   * エラーを示す Status Code の PUBLISH_DONE でもこのコールバックだけを呼び、`error` は
+   * 呼ばない。`error` が呼ばれる場合は `error` の説明を参照。
+   */
+  end?: (publishDone: PublishDoneInfo) => void;
+  /**
+   * 購読の受信でエラーが起きたときのコールバック
+   *
+   * 次の 2 つの場合に呼ぶ。
+   *
+   * - 購読が PUBLISH_DONE を伴わない失敗で終わった場合 (PUBLISH_DONE の前の FIN §6.4.2.2、
+   *   RESET_STREAM、Malformed Track §12.1)
+   * - アプリのコールバック (`object` / `datagram` / `subgroupEnd`) が throw した場合。
+   *   このとき購読は終わらない (state は `"active"` のまま) ため、受信を続けるアプリは状態を
+   *   破棄しないこと
+   *
+   * セッション終了 (draft-ietf-moq-transport-22 §6.6 Termination) では呼ばない。セッションの
+   * 終了は ConnectCallbacks.close が通知する。
+   */
   error?: (error: Error) => void;
   /**
    * fill fetch ストリームが失敗した時のコールバック

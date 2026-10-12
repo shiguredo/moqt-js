@@ -6,6 +6,7 @@ import {
   type CatalogTrack,
   type MoqtObject,
   type Property,
+  PublishDoneStatusCode,
 } from "moqt-js";
 import {
   buildVideoChunkPlan,
@@ -21,6 +22,8 @@ import {
   resolveCatalogMediaTracks,
   resolveEventTimelineTrack,
   resolveNewGroupRequestValue,
+  resolvePublishDoneDisplay,
+  logPublishDoneEnd,
   type DecodeInput,
   type ReceivedVideoObject,
 } from "./useSubscriber";
@@ -30,6 +33,7 @@ import { EMPTY_PLAYBACK_TIMING, PlaybackTimingStats } from "../utils/playbackTim
 import { EMPTY_AUDIO_PLAYOUT_TIMING } from "../../../src/audioPlayoutTimingStats";
 import { GroupSwitchGate } from "../../../src/groupSwitchGate";
 import { createSubscriberInstance, subscriberInstances } from "../signals/subscriber";
+import { __resetLogStateForTest, getLogBuffer } from "../signals/debugLog";
 import * as pub from "../signals/publisher";
 import { settingsDisabled } from "../signals/connectionSettings";
 import {
@@ -959,3 +963,79 @@ test("resetSubscriberState: 音声 object の処理チェーンを巻き戻す",
 // 代わりになるものを置くこともできない)。時間軸側の規則は src/playbackTimeline.test.ts の
 // resetStream のテストが、再生の遅れの下限の適用は src/createMediaSubscriber.test.ts の
 // 「音声を観測していなくても再生の遅れが下限を下回らない」が固定する
+
+// ============================================================================
+// resolvePublishDoneDisplay
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-22 §9.9 (PUBLISH_DONE) / §12.4 (Publish Done Codes):
+ * エラーを示す Status Code の PUBLISH_DONE でも終了は end に届くため、ログのレベルと画面の
+ * 表示をこの判定で決める。エラー status は error レベルとエラー表示、正常な終わりは
+ * 従来どおり「Stream ended」にする。
+ */
+test("resolvePublishDoneDisplay: 正常な終わりは info レベルで Stream ended にする", () => {
+  const display = resolvePublishDoneDisplay({
+    statusCode: PublishDoneStatusCode.TRACK_ENDED,
+    reasonPhrase: "",
+  });
+  assert.deepEqual(display, {
+    level: "info",
+    status: "disconnected",
+    statusMessage: "Stream ended",
+  });
+});
+
+test("resolvePublishDoneDisplay: エラー status は error レベルで理由を載せたエラー表示にする", () => {
+  const display = resolvePublishDoneDisplay({
+    statusCode: PublishDoneStatusCode.UPDATE_FAILED,
+    reasonPhrase: "update failed",
+  });
+  assert.deepEqual(display, {
+    level: "error",
+    status: "error",
+    statusMessage: "Subscribe error: PUBLISH_DONE with status 0x8: update failed",
+  });
+});
+
+test("resolvePublishDoneDisplay: reason が空でもエラー表示が崩れない", () => {
+  const display = resolvePublishDoneDisplay({
+    statusCode: PublishDoneStatusCode.INTERNAL_ERROR,
+    reasonPhrase: "",
+  });
+  assert.equal(display.level, "error");
+  assert.equal(display.status, "error");
+  assert.equal(display.statusMessage, "Subscribe error: PUBLISH_DONE with status 0x0");
+});
+
+// ============================================================================
+// logPublishDoneEnd
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-22 §9.9 (PUBLISH_DONE) / §12.4 (Publish Done Codes):
+ * 終了の記録はエラー status かどうかでレベルを分ける。購読が今のものかに関わらず記録する
+ * (停止した購読に遅れて届いた終了も残す) ため、この関数は表示の判定と同じ level を使う。
+ */
+test("logPublishDoneEnd: 正常な終わりは info、エラー status は error で理由を記録する", () => {
+  __resetLogStateForTest();
+  logPublishDoneEnd("sub-1", "video stream ended", {
+    statusCode: PublishDoneStatusCode.TRACK_ENDED,
+    reasonPhrase: "",
+  });
+  logPublishDoneEnd("sub-1", "video stream ended", {
+    statusCode: PublishDoneStatusCode.MALFORMED_TRACK,
+    reasonPhrase: "bad track",
+  });
+
+  const entries = getLogBuffer();
+  assert.equal(entries.length, 2);
+  assert.equal(entries[0]?.level, "info");
+  assert.equal(entries[0]?.message, "[sub-1] video stream ended");
+  assert.deepEqual(entries[0]?.data, { statusCode: "TRACK_ENDED (0x2)", reasonPhrase: "" });
+  assert.equal(entries[1]?.level, "error");
+  assert.deepEqual(entries[1]?.data, {
+    statusCode: "MALFORMED_TRACK (0x12)",
+    reasonPhrase: "bad track",
+  });
+});

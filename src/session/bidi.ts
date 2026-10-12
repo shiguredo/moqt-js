@@ -4219,7 +4219,7 @@ export function bidiHandlePublishDone(
       // draft-ietf-moq-transport-22 §13 (Grease):
       // 未知の PUBLISH_DONE コードは INTERNAL_ERROR として扱う
       const normalizedCode = normalizePublishDoneCode(Number(msg.statusCode));
-      subscriber.handleEnd(BigInt(normalizedCode), msg.reasonPhrase);
+      subscriber.handleEnd(normalizedCode, msg.reasonPhrase);
       // subscriber/subscribersByAlias の削除はストリーム close 時
       // (bidiReadRequestStreamMessages の finally) に委譲する
       // draft-ietf-moq-transport-22 §3.1

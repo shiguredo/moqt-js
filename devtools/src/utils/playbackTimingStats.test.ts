@@ -9,6 +9,7 @@ import {
   formatLossEvent,
   formatStallEvent,
   formatStreamResetCode,
+  formatPublishDoneStatusCode,
   type LossEvent,
   type StallEvent,
 } from "./playbackTimingStats";
@@ -238,6 +239,14 @@ test("formatStreamResetCode: 名前と 16 進の値にし、code が無ければ
   assert.equal(formatStreamResetCode(0x12), "MALFORMED_TRACK (0x12)");
   assert.equal(formatStreamResetCode(0x99), "0x99");
   assert.equal(formatStreamResetCode(null), "no code");
+});
+
+// PUBLISH_DONE の status code も error code と同じ形 (名前と 16 進の値) にする。
+// 未知の値は名前を付けず、購読の正常な終わりも名前が付く
+test("formatPublishDoneStatusCode: 名前と 16 進の値にし、未知の値は名前を付けない", () => {
+  assert.equal(formatPublishDoneStatusCode(0x2), "TRACK_ENDED (0x2)");
+  assert.equal(formatPublishDoneStatusCode(0x12), "MALFORMED_TRACK (0x12)");
+  assert.equal(formatPublishDoneStatusCode(0x99), "0x99");
 });
 
 // 欠落 (loss) の止まりと reset は、止まりの一覧とは別に時刻順で残す。到着の遅れの

@@ -1,7 +1,7 @@
 # Subscriber の終了通知に PUBLISH_DONE の status code と reason を載せる
 
 - Created: 2026-10-12
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-10-12
 - Branch: feature/change-subscriber-publish-done-reason
 - Polished: 2026-10-12
 
@@ -62,4 +62,13 @@
 
 ## 解決方法
 
-{未着手}
+- `SubscribeCallbacks.end` を `end?: (publishDone: PublishDoneInfo) => void` に変え、PUBLISH_DONE の Status Code と Reason Phrase を 1 つの通知で渡すようにした。`PublishDoneInfo` は `src/session/publicTypes.ts` に置き、`src/session.ts` と `src/index.ts` から公開した
+- `SubscriberImpl.handleEnd(statusCode: PublishDoneStatusCode, reasonPhrase: string)` は終了通知を 1 回だけ呼び、エラーを示す Status Code でも `error` を呼ばない (エラーかどうかは Status Code で判定する)。`error` は PUBLISH_DONE を伴わない失敗 (§6.4.2.2 の PUBLISH_DONE 前の FIN、RESET_STREAM、§12.1 の Malformed Track) と、アプリのコールバック (`object` / `datagram` / `subgroupEnd`) が throw した場合の通知として残した
+- `PublishDoneStatusCode` / `isPublishDoneErrorStatus` を `src/index.ts` から公開した。`isPublishDoneErrorStatus` の引数は `PublishDoneStatusCode` に変え、§13 (Grease) に従い列挙に無い値はエラーとみなす
+- `bidiHandlePublishDone` は正規化した Status Code (number) をそのまま `handleEnd` に渡すようにした
+- 高レベル API (`createMediaSubscriber`) は catalog / 音声 / 映像の 3 つの購読の `end` で、エラー status のときに `onError` を呼ぶ (`resolvePublishDoneError`)。`docs/HIGH_LEVEL_API.md` の `onError` にその旨と、正常な PUBLISH_DONE では呼ばれないことを追記した
+- devtools は `end` で `PublishDoneInfo` を受け取り、エラー status は error レベルのログとエラー表示にする (`resolvePublishDoneDisplay`)。catalog の購読がエラー status で終わった場合は、変更前の error コールバックと同じくその場で失敗にする。停止した購読に遅れて届いた終了もログに残す (`logPublishDoneEnd`)
+- `docs/LOW_LEVEL_API.md` の `### Subscriber` に購読の終了通知の節を新設し、Status Code の判定・`error` の契約・移行時の注意を書いた。`README.md` の購読サンプルと `src/connect.ts` の JSDoc 例も追従した
+- テスト: `src/message/types.test.ts` を追加し、`isPublishDoneErrorStatus` の全 9 code と列挙に無い値の分類を固定した。`src/subscriber.test.ts` / `src/session/bidiPublishDone.test.ts` / `src/session/bidi.prop.ts` / `src/session.test.ts` / `src/session/bidiReadRequestStreamMessages.test.ts` / `src/session/bidiSubscribeFinReset.test.ts` を新しい通知に追従させ、`src/createMediaSubscriber.test.ts` に catalog / 音声 / 映像の 3 経路の配線テスト、`devtools/src/hooks/useSubscriber.test.ts` に表示判定とログのテスト、`devtools/src/utils/playbackTimingStats.test.ts` に formatter のテストを追加した
+- CHANGES.md は `CODEBASE.md` の「MOQT RFC ドラフト中の特別ルール: CHANGES.md を更新しない」により更新しない
+- `npx vp check` / `npx vp test --run` (3888 件) / `npx vp run e2e-test` (108 件) が通る

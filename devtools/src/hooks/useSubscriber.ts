@@ -18,6 +18,7 @@ import {
   type Property,
   type Location,
   type AuthorizationToken,
+  type PublishDoneInfo,
   // 映像の再生の経路はライブラリの共有実装を使う (組み立てを 2 か所へ置かない)
   VideoDecodeOrder,
   priorObjectIdGapOf,
@@ -32,7 +33,10 @@ import { addLog } from "../signals/debugLog";
 import { logDebugMessage } from "./debugMessageLog";
 import { DecoderWrapper } from "../utils/DecoderWrapper";
 import { AudioDecoderWrapper } from "../../../src/codec/AudioDecoder.ts";
-import { isVideoKeyFrameObject } from "../../../src/createMediaSubscriber.ts";
+import {
+  isVideoKeyFrameObject,
+  resolvePublishDoneError,
+} from "../../../src/createMediaSubscriber.ts";
 import {
   DEFAULT_AUDIO_SAMPLE_RATE,
   requiresAudioSpecificConfig,
@@ -50,6 +54,7 @@ import {
   EMPTY_PLAYBACK_TIMING,
   PLAYBACK_TIMING_WINDOW_MS,
   PlaybackTimingStats,
+  formatPublishDoneStatusCode,
   formatStreamResetCode,
 } from "../utils/playbackTimingStats";
 import { detectAvSyncTransition, type AvSyncState } from "../utils/avSyncTransition.ts";
@@ -132,8 +137,54 @@ export function resolveEventTimelineTrack(catalog: Catalog): CatalogTrack | unde
 
 /** 購読するトラックの終わりとエラーを受けるコールバック */
 interface TrackEndCallbacks {
-  end: () => void;
+  end: (publishDone: PublishDoneInfo) => void;
   error: (error: Error) => void;
+}
+
+/** PUBLISH_DONE の終了通知から決まる、ログのレベルと画面の表示 */
+export interface PublishDoneDisplay {
+  level: "info" | "error";
+  status: "disconnected" | "error";
+  statusMessage: string;
+}
+
+/**
+ * PUBLISH_DONE の終了通知から、ログのレベルと画面の表示を決める
+ *
+ * draft-ietf-moq-transport-22 §9.9 (PUBLISH_DONE): エラーを示す Status Code でも購読の終了は
+ * end に届く。relay の切り分けで失敗を見落とさないよう、エラー status は error レベルとエラー
+ * 表示にし、正常な終わりは従来どおり「Stream ended」にする。
+ */
+export function resolvePublishDoneDisplay(publishDone: PublishDoneInfo): PublishDoneDisplay {
+  const failure = resolvePublishDoneError(publishDone);
+  if (failure === null) {
+    return { level: "info", status: "disconnected", statusMessage: "Stream ended" };
+  }
+  return {
+    level: "error",
+    status: "error",
+    statusMessage: `Subscribe error: ${failure.message}`,
+  };
+}
+
+/**
+ * PUBLISH_DONE による購読の終了を Debug パネルへ記録する
+ *
+ * レベルはエラー status かどうかで決まる。購読が今のものかに関わらず記録するため、停止した
+ * 購読に遅れて届いた終了も残る (セッションの close を stop 主導でも記録するのと同じ方針)。
+ *
+ * テストから呼べるよう export する (パッケージ公開 API ではない)。
+ */
+export function logPublishDoneEnd(
+  subscriberId: string,
+  message: string,
+  publishDone: PublishDoneInfo,
+): void {
+  // レベルは画面の表示と同じ判定から取る (判定源を増やさない)
+  addLog(resolvePublishDoneDisplay(publishDone).level, `[${subscriberId}] ${message}`, {
+    statusCode: formatPublishDoneStatusCode(publishDone.statusCode),
+    reasonPhrase: publishDone.reasonPhrase,
+  });
 }
 
 /** 受信した音声を再生するための audio graph */
@@ -1132,8 +1183,8 @@ export function useSubscriber(
             });
           }
         },
-        end: () => {
-          addLog("info", `[${subscriberId}] event timeline stream ended`);
+        end: (publishDone) => {
+          logPublishDoneEnd(subscriberId, "event timeline stream ended", publishDone);
         },
         error: (error) => {
           addLog("error", `[${subscriberId}] event timeline subscribe error`, {
@@ -1386,9 +1437,9 @@ export function useSubscriber(
         datagram: (obj: MoqtObject) => {
           queueAudioObject(obj, true);
         },
-        end: () => {
-          addLog("info", `[${subscriberId}] audio stream ended`);
-          trackCallbacks?.end();
+        end: (publishDone) => {
+          logPublishDoneEnd(subscriberId, "audio stream ended", publishDone);
+          trackCallbacks?.end(publishDone);
         },
         error: (error) => {
           addLog("error", `[${subscriberId}] audio subscribe error`, {
@@ -1945,12 +1996,15 @@ export function useSubscriber(
     const isCurrentAttempt = createAttemptGuard(abortControllerRef, signal);
     // 購読するトラック (映像があれば映像、無ければ音声) の終わりとエラーの扱い
     const trackCallbacks: TrackEndCallbacks = {
-      end: () => {
+      end: (publishDone) => {
         // 停止した購読の終わりは、次の購読に触らない (session の close と同じ理由)
         if (!isCurrentAttempt()) return;
+        // ログは購読の終了を受け取った側 (映像 / 音声の購読) が記録する。ここは表示と後始末だけを
+        // 担い、エラー status のときはエラー表示を残す
         if (shouldApplyStatusUpdate()) {
-          instance.status.value = "disconnected";
-          instance.statusMessage.value = "Stream ended";
+          const display = resolvePublishDoneDisplay(publishDone);
+          instance.status.value = display.status;
+          instance.statusMessage.value = display.statusMessage;
         }
         teardownSubscriber();
       },
@@ -2192,8 +2246,15 @@ export function useSubscriber(
                   // SUBSCRIBE のデータストリームから受信した Catalog オブジェクト
                   processCatalogObject(obj, "subscribe");
                 },
-                end: () => {
-                  addLog("info", `[${subscriberId}] catalog stream ended`);
+                end: (publishDone) => {
+                  logPublishDoneEnd(subscriberId, "catalog stream ended", publishDone);
+                  // 変更前はエラー status で error コールバックが reject していた。新しい通知では
+                  // 終了が end に来るため、同じ扱いをここで行う (FETCH で catalog を取れる場合も、
+                  // 購読の確立そのものが失敗しているため待たない)
+                  const failure = resolvePublishDoneError(publishDone);
+                  if (failure !== null) {
+                    reject(failure);
+                  }
                 },
                 error: (error) => {
                   addLog("error", `[${subscriberId}] catalog subscribe error`, {
@@ -2444,7 +2505,10 @@ export function useSubscriber(
               videoGroupGateRef.current.endSubgroup(end.groupId, end.subgroupId, performance.now()),
             );
           },
-          end: trackCallbacks.end,
+          end: (publishDone) => {
+            logPublishDoneEnd(subscriberId, "video stream ended", publishDone);
+            trackCallbacks.end(publishDone);
+          },
           error: (error) => {
             console.error(`[${subscriberId}] Subscriber error:`, error);
             trackCallbacks.error(error);

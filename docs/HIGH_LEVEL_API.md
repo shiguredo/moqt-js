@@ -470,6 +470,9 @@ interface MediaSubscriberCallbacks {
   onStateChange?: (state: MediaSubscriberState) => void;
   // カタログを受信するたびに呼ばれる (更新時も呼ばれる)
   onCatalog?: (catalog: Catalog) => void;
+  // 購読の失敗。低レベル API の error とは異なり、エラーを示す Status Code の PUBLISH_DONE
+  // (draft-ietf-moq-transport-22 §9.9 / §12.4) でも呼ばれる。正常な PUBLISH_DONE
+  // (TRACK_ENDED 等) では呼ばれず、状態も変わらない
   onError?: (error: Error) => void;
   onClose?: () => void;
 }

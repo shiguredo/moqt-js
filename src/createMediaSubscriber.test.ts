@@ -16,7 +16,7 @@ import { test, assert } from "vite-plus/test";
 import { MediaSubscriberImpl } from "./createMediaSubscriber";
 import type { VideoDecodeInputs } from "./videoPlayoutSession";
 import type { MediaConnectSettings } from "./createMedia/connect";
-import type { FetchOptions, Session, SubscribeOptions } from "./session";
+import type { FetchOptions, Session, SubscribeCallbacks, SubscribeOptions } from "./session";
 import type { Subscriber, RequestUpdateOptions } from "./subscriber";
 import type {
   AudioReceiverStats,
@@ -40,6 +40,7 @@ import {
   filterPendingCatalogObjects,
   isVideoKeyFrameObject,
   processCatalogPayload,
+  resolvePublishDoneError,
   resolveAuthorizationToken,
 } from "./createMediaSubscriber";
 import * as LOC from "./loc";
@@ -49,6 +50,7 @@ import type { SubgroupStreamEnd } from "./session";
 import { GROUP_SWITCH_HOLD_MS, type GroupSwitchGate } from "./groupSwitchGate";
 import type { VideoDecodeOrder } from "./videoDecodeOrder";
 import type { AuthorizationToken, Location } from "./message";
+import { PublishDoneStatusCode } from "./message/types";
 import {
   useValueToken,
   waitForUnhandledRejectionDetection,
@@ -8712,4 +8714,222 @@ test("subscribeCatalog: カタログの受信 await の解決直後に解放が�
   assert.isNull(control.catalogResolve);
   assert.isNull(control.catalogTimer);
   assert.equal(subscriber.state, "closed");
+});
+
+// ============================================================================
+// resolvePublishDoneError
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-22 §9.9 (PUBLISH_DONE) / §12.4 (Publish Done Codes):
+ * エラーを示す Status Code の PUBLISH_DONE だけを購読の失敗として扱い、
+ * 正常終了 (TRACK_ENDED 等) では失敗にしないことを検証する。
+ */
+test("resolvePublishDoneError: 正常終了の Status Code では null を返す", () => {
+  assert.isNull(
+    resolvePublishDoneError({ statusCode: PublishDoneStatusCode.TRACK_ENDED, reasonPhrase: "" }),
+  );
+  assert.isNull(
+    resolvePublishDoneError({ statusCode: PublishDoneStatusCode.GOING_AWAY, reasonPhrase: "bye" }),
+  );
+  assert.isNull(
+    resolvePublishDoneError({ statusCode: PublishDoneStatusCode.EXPIRED, reasonPhrase: "expired" }),
+  );
+});
+
+test("resolvePublishDoneError: エラーを示す Status Code では status code と reason を載せた Error を返す", () => {
+  const error = resolvePublishDoneError({
+    statusCode: PublishDoneStatusCode.UPDATE_FAILED,
+    reasonPhrase: "update failed",
+  });
+  assert.isNotNull(error);
+  assert.equal(error!.message, "PUBLISH_DONE with status 0x8: update failed");
+});
+
+test("resolvePublishDoneError: reason が空でも Error のメッセージに余分な区切りを残さない", () => {
+  const error = resolvePublishDoneError({
+    statusCode: PublishDoneStatusCode.MALFORMED_TRACK,
+    reasonPhrase: "",
+  });
+  assert.isNotNull(error);
+  assert.equal(error!.message, "PUBLISH_DONE with status 0x12");
+});
+
+// ============================================================================
+// PUBLISH_DONE の終了通知の配線
+// ============================================================================
+
+/**
+ * 完了条件: エラー status の PUBLISH_DONE が高レベル API の onError に届く。
+ *
+ * 低レベル API は PUBLISH_DONE を end だけで通知するため、高レベル API が購読の失敗として
+ * 扱うかどうかは購読の end の配線が決める。映像トラックの経路を実際の購読で固定する。
+ */
+test("subscribeMediaTracks: エラー status の PUBLISH_DONE で映像の購読が onError に届く", async () => {
+  const errors: Error[] = [];
+  const subscriber = new MediaSubscriberImpl(
+    "moqt://example.com/live",
+    { namespace: ["live"], video: { codec: "vp8" } },
+    {
+      onError: (error) => {
+        errors.push(error);
+      },
+    },
+  );
+  const control = subscriber as unknown as SubscriberLifecycleControl & {
+    subscribeMediaTracks(startGeneration: number): Promise<void>;
+  };
+  let videoCallbacks: SubscribeCallbacks | undefined;
+  control.session = {
+    subscribe: async (_namespace: string[], _trackName: string, callbacks: SubscribeCallbacks) => {
+      videoCallbacks = callbacks;
+      return {
+        state: "active",
+        trackProperties: [],
+        unsubscribe: async () => {},
+      } as unknown as Subscriber;
+    },
+    close: async () => {},
+  } as unknown as Session;
+  control.videoTrackInfo = {
+    name: "video",
+    packaging: "loc",
+    isLive: true,
+    codec: "vp8",
+  };
+  control.currentState = "subscribing";
+
+  await control.subscribeMediaTracks(control.sessionGeneration);
+  assert.isDefined(videoCallbacks);
+
+  // 正常終了 (TRACK_ENDED) では購読の失敗として通知しない
+  videoCallbacks?.end?.({ statusCode: PublishDoneStatusCode.TRACK_ENDED, reasonPhrase: "" });
+  assert.deepEqual(errors, []);
+
+  // エラー status では理由を載せた Error が onError に届く
+  videoCallbacks?.end?.({
+    statusCode: PublishDoneStatusCode.MALFORMED_TRACK,
+    reasonPhrase: "bad track",
+  });
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0]?.message, "PUBLISH_DONE with status 0x12: bad track");
+});
+
+/**
+ * 完了条件: 音声だけの購読でも、エラー status の PUBLISH_DONE が onError に届く。
+ *
+ * 音声は映像より先に購読するため、映像側の配線だけを直しても音声だけの購読は失敗を
+ * 通知しないままになる。音声の経路を実際の購読で固定する。
+ */
+test("subscribeMediaTracks: エラー status の PUBLISH_DONE で音声だけの購読が onError に届く", async () => {
+  const errors: Error[] = [];
+  const subscriber = new MediaSubscriberImpl(
+    "moqt://example.com/live",
+    { namespace: ["live"], audio: { codec: "opus" } },
+    {
+      onError: (error) => {
+        errors.push(error);
+      },
+    },
+  );
+  const control = subscriber as unknown as SubscriberLifecycleControl & {
+    subscribeMediaTracks(startGeneration: number): Promise<void>;
+  };
+  let audioCallbacks: SubscribeCallbacks | undefined;
+  control.session = {
+    subscribe: async (_namespace: string[], _trackName: string, callbacks: SubscribeCallbacks) => {
+      audioCallbacks = callbacks;
+      return {
+        state: "active",
+        trackProperties: [],
+        unsubscribe: async () => {},
+      } as unknown as Subscriber;
+    },
+    close: async () => {},
+  } as unknown as Session;
+  control.audioTrackInfo = {
+    name: "audio",
+    packaging: "loc",
+    isLive: true,
+    codec: "opus",
+  };
+  control.currentState = "subscribing";
+
+  await control.subscribeMediaTracks(control.sessionGeneration);
+  assert.isDefined(audioCallbacks);
+
+  audioCallbacks?.end?.({
+    statusCode: PublishDoneStatusCode.EXCESSIVE_LOAD,
+    reasonPhrase: "loaded",
+  });
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0]?.message, "PUBLISH_DONE with status 0x9: loaded");
+});
+
+/**
+ * 完了条件: catalog の購読がエラー status の PUBLISH_DONE で終わったとき、タイムアウトを
+ * 待たずに失敗として通知する。
+ *
+ * catalog は購読の確立そのものなので、失敗の理由を待ち時間ではなく PUBLISH_DONE から
+ * 受け取れる必要がある。FETCH を失敗させて live のカタログ待ちに入れ、その購読の終了を
+ * エラー status で終わらせる。
+ */
+test("subscribeCatalog: エラー status の PUBLISH_DONE で catalog の購読が失敗する", async () => {
+  const errors: Error[] = [];
+  const subscriber = new MediaSubscriberImpl(
+    "moqt://example.com/live",
+    { namespace: ["live"], video: {} },
+    {
+      onError: (error) => {
+        errors.push(error);
+      },
+    },
+  );
+  const control = subscriber as unknown as SubscriberLifecycleControl & {
+    subscribeCatalog(startGeneration: number, timeoutMs?: number): Promise<void>;
+  };
+  let catalogCallbacks: SubscribeCallbacks | undefined;
+  control.session = {
+    subscribe: async (_namespace: string[], _trackName: string, callbacks: SubscribeCallbacks) => {
+      catalogCallbacks = callbacks;
+      return {
+        state: "active",
+        largestLocation: null,
+        unsubscribe: async () => {},
+      } as unknown as Subscriber;
+    },
+    // FETCH を失敗させ、FETCH フェーズを終わらせる (live のカタログ待ちに入る)
+    fetch: async () => {
+      throw new Error("fetch failed");
+    },
+    close: async () => {},
+  } as unknown as Session;
+  control.currentState = "subscribing";
+
+  const pending = control.subscribeCatalog(control.sessionGeneration, 60_000);
+  // 購読の await を解決させ、カタログの受信待ちに入れる
+  await sleep(0);
+  assert.isNotNull(control.catalogResolve);
+  assert.isDefined(catalogCallbacks);
+
+  // カタログが届く前に購読がエラー status の PUBLISH_DONE で終わる。
+  // 購読の失敗は onError に届く (カタログの待ちは購読の受信か解放でしか解けない)
+  catalogCallbacks?.end?.({
+    statusCode: PublishDoneStatusCode.INTERNAL_ERROR,
+    reasonPhrase: "catalog broken",
+  });
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0]?.message, "PUBLISH_DONE with status 0x0: catalog broken");
+
+  // カタログの待ちは解放で打ち切る
+  const closing = subscriber.close();
+  let thrown: unknown = null;
+  try {
+    await pending;
+  } catch (error) {
+    thrown = error;
+  }
+  await closing;
+  assert.instanceOf(thrown, Error);
+  assert.equal((thrown as Error).message, "catalog receive aborted: resources disposed");
 });

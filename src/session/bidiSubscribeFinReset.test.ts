@@ -14,7 +14,8 @@ import {
   encodeGoawayPayload,
 } from "../message/session";
 import { encodePublishDonePayload } from "../message/publish";
-import { MessageType } from "../message/types";
+import { MessageType, PublishDoneStatusCode } from "../message/types";
+import type { PublishDoneInfo } from "../session";
 import { RequestErrorCode, RequestError, SessionErrorCode } from "../error";
 import { REQUEST_UPDATE_STREAM_CLOSED_MESSAGE } from "./namespaceLoops";
 import {
@@ -1236,13 +1237,15 @@ test("bidiReadRequestStreamMessages: PUBLISH_DONE 後の FIN (subscribe ロー�
 
 /**
  * draft-ietf-moq-transport-22 §6.4.2.2 / §9.9:
- * エラー statusCode の PUBLISH_DONE 後に FIN した場合、error 通知は
- * PUBLISH_DONE 由来の 1 回のみであり、FIN 検出で追加の error 通知が
- * 発生しないことを検証する (spurious 二重通知の回帰ガード)。
+ * エラー statusCode の PUBLISH_DONE 後に FIN した場合、終了通知は
+ * PUBLISH_DONE 由来の end の 1 回のみであり、error 通知は発生しない
+ * (PUBLISH_DONE は end だけで通知し、FIN 検出で追加の通知も発生しない)。
  */
-test("bidiReadRequestStreamMessages: エラー statusCode の PUBLISH_DONE 後の FIN では error 通知が 1 回のみ", async () => {
+test("bidiReadRequestStreamMessages: エラー statusCode の PUBLISH_DONE 後の FIN では end の 1 回のみ", async () => {
   const ctx = createPublishReadTestContext({});
   const errorMessages: string[] = [];
+  let endCount = 0;
+  let received: PublishDoneInfo | undefined;
   const subscriber = new SubscriberImpl(
     ["test"],
     "track",
@@ -1250,7 +1253,10 @@ test("bidiReadRequestStreamMessages: エラー statusCode の PUBLISH_DONE 後�
     1n,
     () => {},
     undefined,
-    () => {},
+    (publishDone) => {
+      endCount++;
+      received = publishDone;
+    },
     (e) => {
       errorMessages.push(e.message);
     },
@@ -1277,11 +1283,14 @@ test("bidiReadRequestStreamMessages: エラー statusCode の PUBLISH_DONE 後�
   ctx.readableController.close();
   await readPromise;
 
-  // PUBLISH_DONE 由来の error 通知 1 回のみ (FIN で追加通知されない。
-  // handleEnd はエラー statusCode でも endCallback を呼ぶ既存仕様のため
-  // end の呼び出し有無は検証しない)
-  assert.equal(errorMessages.length, 1);
-  assert.isTrue(errorMessages[0].includes("PUBLISH_DONE"));
+  // PUBLISH_DONE 由来の end 通知 1 回のみ (FIN で追加通知されない)。
+  // エラー status でも end だけを呼び、error は呼ばない
+  assert.equal(endCount, 1);
+  assert.deepEqual(received, {
+    statusCode: PublishDoneStatusCode.INTERNAL_ERROR,
+    reasonPhrase: "",
+  });
+  assert.deepEqual(errorMessages, []);
   assert.equal(subscriber.state, "closed");
   // エラー statusCode の PUBLISH_DONE → FIN でも自方向の FIN (writer.close())
   // が送信される
