@@ -888,16 +888,23 @@ function expectAudioEncoderContract(result: AudioEncoderTestResult): void {
   expect(result.totalByteLength).toBeGreaterThan(0);
 
   // 各 chunk は実データと duration を持ち、timestamp は単調増加する
-  for (const chunk of result.chunks) {
+  for (const [index, chunk] of result.chunks.entries()) {
     expect(chunk.type).toBe("key");
     expect(chunk.byteLength).toBeGreaterThan(0);
     expect(chunk.duration).not.toBeNull();
     expect(chunk.firstByte).toBeGreaterThanOrEqual(0);
     // opus は AudioSpecificConfig を運ばない (Chromium の opus encoder は OpusHead を
-    // 返すが、Wrapper が運ばない判断をする)。AAC の description 経路は Chromium が
-    // isConfigSupported で対応と報告しても実際の符号化が EncodingError になるため
-    // e2e では検証できない (単体テストで検証する)
-    expect(chunk.descriptionByteLength).toBeNull();
+    // 返すが、Wrapper が運ばない判断をする)。aac は draft-ietf-moq-loc-04 §2.3.3.1 の
+    // Audio Config として decoderConfig.description を運ぶが、Chromium が返すのは最初の
+    // chunk だけであり、以降の chunk は description を持たない (headless shell 156 で
+    // 実測)。48 kHz ステレオの AAC-LC の AudioSpecificConfig は 2 バイトである
+    // (Chromium が isConfigSupported で対応と報告しても実際の符号化が EncodingError に
+    // なる環境では aac の経路に入らない)
+    if (result.codec === "aac" && index === 0) {
+      expect(chunk.descriptionByteLength).toBe(2);
+    } else {
+      expect(chunk.descriptionByteLength).toBeNull();
+    }
   }
   expect(result.outputTimestamps[0]).toBe(0);
   expectMonotonicIncrease(result.outputTimestamps);
@@ -1421,46 +1428,72 @@ test("readAudioSamples: 実 AudioData から第 1 チャンネルのサンプル
 // オーディオコーデックの選定
 // ============================================================================
 
-// 符号化できないコーデックが候補に残る状況を再現するための候補順。
+// 符号化できない候補が候補に残る状況を再現するための候補順。
 // テストページは `?audioCodecs=<カンマ区切りの候補>` で候補順を差し替える
 // (devtools/src/codec-test/support.ts と一致させる)。
 //
-// 前提: Chromium は AAC を符号化できない。どの段階で除外されるかは環境で変わる。
-// - AudioEncoder.isConfigSupported が false の環境 (CI の Linux Chromium) では
-//   `encoder unsupported` として除外される
-// - true と報告する環境 (手元の macOS Chromium 153 で実測) では実符号化プローブが
+// AAC を符号化できるかは Chromium のビルドで変わる。実測:
+// - Playwright 1.63.0 の Chromium では符号化できない。`AudioEncoder.isConfigSupported`
+//   が false の環境 (CI の Linux Chromium) では `encoder unsupported` として除外され、
+//   true と報告する環境 (手元の macOS Chromium 153 で実測) では実符号化プローブが
 //   EncodingError で失敗し `encode probe failed` として除外される
-// どちらでも「AAC が除外されて opus が採用される」ことが本質なので、段階は固定しない。
+// - Playwright 1.64.0 の Chromium (headless shell 156.0.8078.4) では符号化でき、
+//   候補の先頭に置くとそのまま採用される (手元の macOS で実測)
+// どちらの環境でも「符号化できる先頭の候補を採用し、それより前の候補は理由付きで
+// 除外する」ことが本質なので、期待する除外の数は採用された候補の位置から導く。
 // なお実符号化プローブまで進んだ場合は AAC の符号化失敗 1 回につき Chromium の
 // GPU プロセスが 1 回落ちる (exit_code=5 で自動再初期化される既知の事象)
 const AUDIO_CODECS_AAC_FIRST = "?audioCodecs=aac,opus";
 const AUDIO_CODECS_AAC_ONLY = "?audioCodecs=aac";
 const AUDIO_CODECS_UNKNOWN_ONLY = "?audioCodecs=unknown";
 
+/** `AUDIO_CODECS_AAC_FIRST` がテストページへ渡す候補順 */
+const AUDIO_CODECS_AAC_FIRST_ORDER: readonly string[] = ["aac", "opus"];
+
 /**
- * 除外理由が codec 名と理由の組で読めることを検証する
+ * 符号化できる先頭の候補が採用され、それより前の候補が理由付きで除外されていることを
+ * 検証する
  *
- * 除外される段階は環境で変わるため (上記の前提を参照)、段階は固定せず
- * 「codec 名 (理由)」の形で理由が読めることだけを固定する。
+ * どの候補を符号化できるかはブラウザのビルドで変わるため、期待する除外の数を採用された
+ * 候補の位置から導く。先頭が採用されたなら除外は無く、2 番目が採用されたなら先頭の候補
+ * だけが除外されている。除外される段階も環境で変わるため、段階は固定せず「codec 名
+ * (理由)」の形で理由が読めることだけを固定する。
+ *
+ * @param result - 選定結果 (採用したコーデックと除外した候補)
+ * @param order - 選定に渡した候補順
  */
-function expectRejectedCodec(rejectedCodecs: string[], codec: string): void {
-  expect(rejectedCodecs).toHaveLength(1);
-  const [rejected] = rejectedCodecs;
-  expect(rejected).toMatch(new RegExp(`^${codec} \\(.+\\)$`));
+function expectCodecSelectionPrefix(
+  result: { codec: string; rejectedCodecs: string[] },
+  order: readonly string[],
+): void {
+  const selectedIndex = order.indexOf(result.codec);
+  expect(
+    selectedIndex,
+    `採用したコーデック ${result.codec} が候補にあること`,
+  ).toBeGreaterThanOrEqual(0);
+  expect(
+    result.rejectedCodecs,
+    `採用したコーデックより前の候補だけが除外されていること (${result.rejectedCodecs.join(", ")})`,
+  ).toHaveLength(selectedIndex);
+  for (const [index, rejected] of result.rejectedCodecs.entries()) {
+    expect(rejected).toMatch(new RegExp(`^${order[index] ?? ""} \\(.+\\)$`));
+  }
 }
 
-test("AudioEncoderWrapper: 符号化できない AAC を除外して opus を選ぶ", async ({ page }) => {
-  // 候補順を AAC 先頭に差し替えても、符号化できない AAC は採用されない
+test("AudioEncoderWrapper: 符号化できる先頭の候補を採用し、それより前の候補を除外する", async ({
+  page,
+}) => {
+  // 候補順を AAC 先頭に差し替える。AAC を符号化できない環境では AAC が除外されて opus が
+  // 採用され、符号化できる環境では AAC がそのまま採用される
   await openCodecTestPage(page, AUDIO_CODECS_AAC_FIRST);
 
   const result = await runCodecTest(page, "audioEncoderDirect");
 
-  expect(result.codec).toBe("opus");
-  expectRejectedCodec(result.rejectedCodecs, "aac");
+  expectCodecSelectionPrefix(result, AUDIO_CODECS_AAC_FIRST_ORDER);
   expectAudioEncoderContract(result);
 });
 
-test("AudioDecoderWrapper: 符号化できない AAC を除外した結果から参照 chunk を作れる", async ({
+test("AudioDecoderWrapper: 除外した候補も載る同じ選定結果から参照 chunk を作れる", async ({
   page,
 }) => {
   // 参照 chunk を作る encode も同じ選定を通るため、除外結果が decoder 側の結果にも載る
@@ -1468,22 +1501,38 @@ test("AudioDecoderWrapper: 符号化できない AAC を除外した結果から
 
   const result = await runCodecTest(page, "audioDecoderDirect");
 
-  expect(result.codec).toBe("opus");
-  expectRejectedCodec(result.rejectedCodecs, "aac");
+  expectCodecSelectionPrefix(result, AUDIO_CODECS_AAC_FIRST_ORDER);
   expectAudioDecoderContract(result);
 });
 
-test("オーディオコーデックの選定: 符号化できる候補が無ければ選択時点で Error になる", async ({
+test("オーディオコーデックの選定: 候補が 1 つだけのときも、符号化できるかどうかで結果が決まる", async ({
   page,
 }) => {
-  // 符号化できない AAC だけを候補にすると、タイムアウトではなく選定時点の
-  // 明示的な Error で失敗する (テストを skip させない契約)。
-  // 候補の列挙と除外理由が載ることも確認する
+  // 候補が 1 つだけのときは、それを符号化できるなら採用され、できないならタイムアウトでは
+  // なく選定時点の明示的な Error で失敗する (テストを skip させない契約)。AAC を符号化
+  // できるかは Chromium のビルドで変わるため、どちらの結果も固定する
   await openCodecTestPage(page, AUDIO_CODECS_AAC_ONLY);
 
-  await expect(runCodecTest(page, "audioEncoderDirect")).rejects.toThrow(
-    /no encodable audio codec in this browser \(candidates: aac\): aac \(.+/,
+  const outcome = await runCodecTest(page, "audioEncoderDirect").then(
+    (value) => ({ accepted: true as const, value }),
+    (error: unknown) => ({ accepted: false as const, error }),
   );
+
+  if (outcome.accepted) {
+    // AAC を符号化できる環境 (Playwright 1.64.0 の Chromium で実測)。候補は 1 つなので
+    // 除外は起きず、そのまま採用される
+    expect(outcome.value.codec).toBe("aac");
+    expect(outcome.value.rejectedCodecs).toEqual([]);
+    expectAudioEncoderContract(outcome.value);
+    return;
+  }
+  // 符号化できない環境では、候補の列挙と除外理由が載った Error になる
+  expect(outcome.error).toBeInstanceOf(Error);
+  if (outcome.error instanceof Error) {
+    expect(outcome.error.message).toMatch(
+      /no encodable audio codec in this browser \(candidates: aac\): aac \(.+/,
+    );
+  }
 });
 
 test("オーディオコーデックの選定: 有効な候補が 1 つも無い場合も選択時点で Error になる", async ({
