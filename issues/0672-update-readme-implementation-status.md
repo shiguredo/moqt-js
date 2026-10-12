@@ -1,7 +1,7 @@
 # README の実装状況を実装に合わせる
 
 - Created: 2026-09-21
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-10-12
 - Branch: feature/update-readme-implementation-status
 - Polished: 2026-09-29
 
@@ -42,4 +42,20 @@ README の「実装状況」は draft ごとの対応を網羅する形で書か
 
 ## 解決方法
 
-{未着手}
+README.md の「実装状況」に、実装済みであるのに記載が無かった次を追記した。
+
+- `INCLUDE_PROPERTIES` パラメータ (draft-ietf-moq-transport-22 §9.20.21。応答の OK メッセージと、SUBSCRIBE_TRACKS が生む PUBLISH に Track Properties を含めるかの指定)
+- `FILL_PARAMETERS` パラメータ (§9.20.15。`SubscribeOptions.fill` で live 手前の範囲を fill fetch する)
+- `TRACK_NAMESPACE_PREFIX` パラメータ (§9.20.20。namespace 系の REQUEST_UPDATE で購読する prefix を更新する)
+- Parameter Scope 検証 (§9.20.1。許可パラメータ集合に無い Message Parameter を PROTOCOL_VIOLATION で拒否する)
+- `MOQLOG` / `MOQMETRICS` 名前空間の公開 API (「MOQ Log / MOQ Metrics」節として追加)
+
+同じく公開 API でありながら記載が無かった次の項目も併せて追加・更新した。
+
+- `C4M` 名前空間の公開 API (「C4M」節)
+- `AUTHORITY` / `PATH` Setup Option の受信時拒否 (INVALID_AUTHORITY / INVALID_PATH)
+- `LARGEST_OBJECT` パラメータ (`Subscriber.largestLocation`)
+- `LOC` 名前空間の公開 API と、Timescale / Video Config / Audio Config を Track Property としても広告できること
+- Timeline の payload が無圧縮 JSON のみであること (MSF_COMPRESSION は未実装)
+
+issue 本文が前提にしていた節番号は draft-22 の値に読み替えた。記載は `src/` の実装と `refs/` の一次資料に突き合わせ、`vp check` が通ることを確認した。`CHANGES.md` の `## develop` の `[ADD]` は、ドラフト中は変更履歴を残さない方針で削除されているため参照していない。`docs/MSF.md` 側の同期は 0670 の担当のため触れていない。
