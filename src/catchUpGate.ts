@@ -77,6 +77,9 @@ export class CatchUpGate {
    * 復号の出力から位置を引けない Object (TIMESTAMP を持たないなど) は境界と比べられない。
    * 判定できないまま「Catching up」を出し続けないよう、追いつきを終えたものとして扱う。
    * 境界は消さないため、位置が分かる Object の判定は続く。
+   *
+   * 購読が PUBLISH_DONE で終わったときも同じ状態にする (以後 Object が来ないため、境界を
+   * 越える判定は起きない)。
    */
   markPositionUnknown(): void {
     this.completed = true;

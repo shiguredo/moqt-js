@@ -19,6 +19,7 @@ import {
   type Location,
   type AuthorizationToken,
   type PublishDoneInfo,
+  isPublishDoneErrorStatus,
   // 映像の再生の経路はライブラリの共有実装を使う (組み立てを 2 か所へ置かない)
   VideoDecodeOrder,
   priorObjectIdGapOf,
@@ -30,6 +31,7 @@ import {
   VideoPlayoutSession,
 } from "moqt-js";
 import { addLog } from "../signals/debugLog";
+import type { TrackEndState } from "../types";
 import { logDebugMessage } from "./debugMessageLog";
 import { DecoderWrapper } from "../utils/DecoderWrapper";
 import { AudioDecoderWrapper } from "../../../src/codec/AudioDecoder.ts";
@@ -135,43 +137,211 @@ export function resolveEventTimelineTrack(catalog: Catalog): CatalogTrack | unde
   return catalog.tracks.find((track) => track.packaging === "eventtimeline");
 }
 
-/** 購読するトラックの終わりとエラーを受けるコールバック */
-interface TrackEndCallbacks {
-  end: (publishDone: PublishDoneInfo) => void;
+/** 追いつき中の判定に使う、映像と音声の境界 */
+interface CatchUpGates {
+  video: CatchUpGate;
+  audio: CatchUpGate;
+}
+
+/** 購読するトラックのエラーを受けるコールバック */
+interface TrackErrorCallbacks {
   error: (error: Error) => void;
 }
 
-/** PUBLISH_DONE の終了通知から決まる、ログのレベルと画面の表示 */
-export interface PublishDoneDisplay {
-  level: "info" | "error";
-  status: "disconnected" | "error";
-  statusMessage: string;
+/**
+ * トラックの終了通知から、表示するトラックの終了状態を決める
+ *
+ * draft-ietf-moq-transport-22 §9.9 (PUBLISH_DONE) / §12.4 (Publish Done Codes): 終了の理由は
+ * Status Code が表す。エラーを示す Status Code はエラーとして残す。
+ */
+export function resolveTrackEndState(publishDone: PublishDoneInfo): TrackEndState {
+  return {
+    isError: isPublishDoneErrorStatus(publishDone.statusCode),
+    statusLabel: formatPublishDoneStatusCode(publishDone.statusCode),
+    reasonPhrase: publishDone.reasonPhrase,
+  };
 }
 
 /**
- * PUBLISH_DONE の終了通知から、ログのレベルと画面の表示を決める
+ * トラックの終了を購読の状態へ反映する
  *
- * draft-ietf-moq-transport-22 §9.9 (PUBLISH_DONE): エラーを示す Status Code でも購読の終了は
- * end に届く。relay の切り分けで失敗を見落とさないよう、エラー status は error レベルとエラー
- * 表示にし、正常な終わりは従来どおり「Stream ended」にする。
+ * 終わったトラックだけを「終了」にし、他のトラックの状態は変えない (理由は handleTrackEnd)。
  */
-export function resolvePublishDoneDisplay(publishDone: PublishDoneInfo): PublishDoneDisplay {
-  const failure = resolvePublishDoneError(publishDone);
-  if (failure === null) {
-    return { level: "info", status: "disconnected", statusMessage: "Stream ended" };
+export function applyTrackEnd(
+  instance: sub.SubscriberInstance,
+  track: "video" | "audio",
+  publishDone: PublishDoneInfo,
+): void {
+  const state = resolveTrackEndState(publishDone);
+  if (track === "video") {
+    instance.videoTrackEnd.value = state;
+    return;
   }
-  return {
-    level: "error",
-    status: "error",
-    statusMessage: `Subscribe error: ${failure.message}`,
-  };
+  instance.audioTrackEnd.value = state;
+}
+
+/** 終了の動詞 (エラーを示す Status Code なら理由が誤りであることも示す) */
+function trackEndVerb(state: TrackEndState): string {
+  return state.isError ? "ended with error" : "ended";
+}
+
+/** 終了状態を「Status Code の名前と値: Reason Phrase」の 1 行にする */
+function formatTrackEndReason(state: TrackEndState): string {
+  return state.reasonPhrase === ""
+    ? state.statusLabel
+    : `${state.statusLabel}: ${state.reasonPhrase}`;
+}
+
+/**
+ * 終了したトラックを「どのトラックが何の理由で終わったか」の 1 行にする
+ *
+ * トラックが 1 本終わると、パネルは「購読中だが何も届かない」状態になる。どのトラックが何の
+ * 理由で終わったかを必ず表示する。映像と音声の両方が終わった場合は両方出す。
+ */
+export function formatTrackEndText(
+  audio: TrackEndState | null,
+  video: TrackEndState | null,
+): string {
+  // 音声と映像を並べるときは audio → video の順にする (CODEBASE.md の表示規約)
+  const parts: string[] = [];
+  if (audio !== null) {
+    parts.push(`audio ${trackEndVerb(audio)}: ${formatTrackEndReason(audio)}`);
+  }
+  if (video !== null) {
+    parts.push(`video ${trackEndVerb(video)}: ${formatTrackEndReason(video)}`);
+  }
+  return parts.join(", ");
+}
+
+/**
+ * 購読が確立したときの Status の文言
+ *
+ * 既に終わったトラックがあれば、その状態を文言そのものにする。購読の確立とトラックの終了は
+ * 前後し得るため、確立時の文言で終了の表示を消さない。パネルは 1 行で省略するため、終わった
+ * トラックの状態を先頭に出す (「Subscribed」を前置しない)。
+ */
+export function subscribedStatusMessage(instance: sub.SubscriberInstance): string {
+  const text = formatTrackEndText(instance.audioTrackEnd.value, instance.videoTrackEnd.value);
+  return text === "" ? "Subscribed" : text;
+}
+
+/**
+ * status / statusMessage を更新してよいか
+ *
+ * stopSubscribing 進行中 (isStopping) と、後始末を通った後 (session が null) の遅延
+ * コールバックでは上書きしない。
+ */
+export function canApplyStatusUpdate(instance: sub.SubscriberInstance): boolean {
+  return !instance.isStopping.value && instance.session.value !== null;
+}
+
+/** エラーを示す Status Code で終わったトラックがあるか */
+function hasTrackEndError(instance: sub.SubscriberInstance): boolean {
+  return (
+    (instance.videoTrackEnd.value?.isError ?? false) ||
+    (instance.audioTrackEnd.value?.isError ?? false)
+  );
+}
+
+/**
+ * 購読が確立したときの表示にする
+ *
+ * 既に終わったトラックがあれば、その理由を文言に残し、エラーを示す Status Code で終わった
+ * トラックがあれば status も error のままにする (購読の確立とトラックの終了は前後し得る)。
+ */
+export function applySubscribedStatus(instance: sub.SubscriberInstance): void {
+  instance.status.value = hasTrackEndError(instance) ? "error" : "connected";
+  instance.statusMessage.value = subscribedStatusMessage(instance);
+}
+
+/**
+ * 終了したトラックを Status の文言へ反映する
+ *
+ * 購読とセッションは維持されるため status は connected (エラー status のトラックがあれば
+ * error) のままとする。トラックの終了で後始末しないため、パネルが何も届かない状態になる。
+ */
+export function refreshTrackEndStatus(instance: sub.SubscriberInstance): void {
+  if (!canApplyStatusUpdate(instance)) {
+    return;
+  }
+  applySubscribedStatus(instance);
+}
+
+/**
+ * 画面の「Catching up」の表示を、映像と音声の境界と終了状態から決める
+ *
+ * 境界を越えていないトラックがあれば追いつき中とする。ただし、境界の無いトラック (購読の
+ * 時点で Object が無い) と、PUBLISH_DONE で終わったトラックは完了として扱う。
+ */
+export function applyCatchUpPending(instance: sub.SubscriberInstance, gates: CatchUpGates): void {
+  // 終わったトラックは境界を越える Object が来ないため、完了していなくても追いつき中としない。
+  // SUBSCRIBE_OK と PUBLISH_DONE が同じチャンクで届くと終了の後に境界が設定されるため、
+  // 終了の時点で畳むだけでは足りない
+  instance.catchUpPending.value =
+    (!gates.video.catchUpCompleted && instance.videoTrackEnd.value === null) ||
+    (!gates.audio.catchUpCompleted && instance.audioTrackEnd.value === null);
+}
+
+/**
+ * 追いつきの判定を待たずにそのトラックを終えたものとして扱う
+ *
+ * 位置が分からない Object を再生したときと、トラックが PUBLISH_DONE で終わったときに使う。
+ * どちらも境界を越える Object が来ないため、判定を待ち続けると「Catching up」が Stop まで残る。
+ */
+function foldCatchUpGate(
+  instance: sub.SubscriberInstance,
+  gate: CatchUpGate,
+  gates: CatchUpGates,
+): void {
+  // 完了済みのトラックは表示に出さないため、何もしなくてよい
+  if (gate.catchUpCompleted) {
+    return;
+  }
+  gate.markPositionUnknown();
+  applyCatchUpPending(instance, gates);
+}
+
+/**
+ * トラックの終了 (PUBLISH_DONE) を購読へ反映する
+ *
+ * draft-ietf-moq-transport-22 §9.9 (PUBLISH_DONE): publisher は購読の最後のメッセージとして
+ * PUBLISH_DONE を送る。これはトラック単位の購読の終了であり、セッションの終了ではない。
+ * セッションは明示的に閉じるまで維持し (§6.6 Termination の CONNECTION_CLOSE /
+ * CLOSE_WEBTRANSPORT_SESSION)、他の購読への影響を考慮する ("Implementations need to consider
+ * the impact on other outstanding subscriptions before making this choice.")。したがってここ
+ * では後始末をしない。終わったトラックの状態と表示だけを変える。
+ *
+ * 停止した購読の終了は次の購読の signal に触らない (createAttemptGuard を参照)。
+ *
+ * @returns 今の購読の終了だったか (停止した購読の終了では何もせず false を返す)
+ */
+export function handleTrackEnd(
+  instance: sub.SubscriberInstance,
+  track: "video" | "audio",
+  publishDone: PublishDoneInfo,
+  gates: CatchUpGates,
+  isCurrentAttempt: () => boolean,
+): boolean {
+  const message = track === "video" ? "video stream ended" : "audio stream ended";
+  if (!isCurrentAttempt()) {
+    // 停止した購読に遅れて届いた終了も、Debug パネルのイベントとしては残す (セッションの close を
+    // stop 主導でも記録するのと同じ方針)。signal は次の購読のものなので触らない
+    logPublishDoneEnd(instance.id, message, publishDone);
+    return false;
+  }
+  applyTrackEnd(instance, track, publishDone);
+  // 終わったトラックの追いつきの判定は待たない (待つと「Catching up」が Stop まで残る)
+  foldCatchUpGate(instance, track === "video" ? gates.video : gates.audio, gates);
+  refreshTrackEndStatus(instance);
+  logPublishDoneEnd(instance.id, message, publishDone);
+  return true;
 }
 
 /**
  * PUBLISH_DONE による購読の終了を Debug パネルへ記録する
  *
- * レベルはエラー status かどうかで決まる。購読が今のものかに関わらず記録するため、停止した
- * 購読に遅れて届いた終了も残る (セッションの close を stop 主導でも記録するのと同じ方針)。
+ * レベルはエラー status かどうかで決まる。停止した購読に遅れて届いた終了も残す (セッションの
+ * close を stop 主導でも記録するのと同じ方針)。signal を触るかは呼び出し側が決める。
  *
  * テストから呼べるよう export する (パッケージ公開 API ではない)。
  */
@@ -181,9 +351,10 @@ export function logPublishDoneEnd(
   publishDone: PublishDoneInfo,
 ): void {
   // レベルは画面の表示と同じ判定から取る (判定源を増やさない)
-  addLog(resolvePublishDoneDisplay(publishDone).level, `[${subscriberId}] ${message}`, {
-    statusCode: formatPublishDoneStatusCode(publishDone.statusCode),
-    reasonPhrase: publishDone.reasonPhrase,
+  const state = resolveTrackEndState(publishDone);
+  addLog(state.isError ? "error" : "info", `[${subscriberId}] ${message}`, {
+    statusCode: state.statusLabel,
+    reasonPhrase: state.reasonPhrase,
   });
 }
 
@@ -638,6 +809,9 @@ export function resetSubscriberState(
   instance.largestLocation.value = null;
   // 追いつき中の表示も購読が無い状態に戻す (境界そのものは呼び出し側が消す)
   instance.catchUpPending.value = false;
+  // トラックの終了状態も購読が無い状態に戻す (次の購読へ持ち越さない)
+  instance.videoTrackEnd.value = null;
+  instance.audioTrackEnd.value = null;
 
   chains.video.current = Promise.resolve();
   // 音声のチェーンも巻き戻す。停止後に残った処理が新しいセッションの signal を
@@ -1023,16 +1197,12 @@ export function useSubscriber(
     }
   }
 
-  /**
-   * 画面の「Catching up」の表示を更新する
-   *
-   * 購読する Track (映像と音声) のうち、境界を越えていないものがあれば追いつき中とする。
-   * 境界の無い Track (購読の時点で Object が無い) は完了として扱う
-   */
+  /** 画面の「Catching up」の表示を更新する (判定は applyCatchUpPending) */
   function refreshCatchUpPending(instance: sub.SubscriberInstance): void {
-    instance.catchUpPending.value =
-      !videoCatchUpGateRef.current.catchUpCompleted ||
-      !audioCatchUpGateRef.current.catchUpCompleted;
+    applyCatchUpPending(instance, {
+      video: videoCatchUpGateRef.current,
+      audio: audioCatchUpGateRef.current,
+    });
   }
 
   /**
@@ -1043,11 +1213,10 @@ export function useSubscriber(
    * (境界は消さないため、位置が分かる Object の判定は続く)
    */
   function markCatchUpUndecided(instance: sub.SubscriberInstance, gate: CatchUpGate): void {
-    if (gate.catchUpCompleted) {
-      return;
-    }
-    gate.markPositionUnknown();
-    refreshCatchUpPending(instance);
+    foldCatchUpGate(instance, gate, {
+      video: videoCatchUpGateRef.current,
+      audio: audioCatchUpGateRef.current,
+    });
   }
 
   /**
@@ -1250,9 +1419,8 @@ export function useSubscriber(
    * LOC properties は Track Property と Object Property の両方から解決し、
    * AUDIO_LEVEL を signal へ、AUDIO_CONFIG (AAC) を decoder の description へ渡す。
    *
-   * `trackCallbacks` を渡すと、音声トラックの終わりとエラーをそれに伝える (音声だけの
-   * 購読では、音声トラックの終わりが購読の終わりになる)。渡さないときはログだけを残す
-   * (映像と音声の購読では、購読の終わりは映像トラックで扱う)
+   * 音声トラックの終わり (PUBLISH_DONE) は `handleTrackEnd` が扱う。`trackCallbacks` を渡すと
+   * 音声トラックのエラーを画面のエラー表示にも伝える (渡さないときはログだけを残す)
    */
   async function startAudioSubscription(
     session: Session,
@@ -1260,7 +1428,8 @@ export function useSubscriber(
     audioTrack: CatalogTrack,
     instance: sub.SubscriberInstance,
     signal: AbortSignal,
-    trackCallbacks?: TrackEndCallbacks,
+    isCurrentAttempt: () => boolean,
+    trackCallbacks?: TrackErrorCallbacks,
   ): Promise<void> {
     if (!audioTrack.codec) {
       throw new Error("audio track codec is not specified in catalog");
@@ -1438,8 +1607,14 @@ export function useSubscriber(
           queueAudioObject(obj, true);
         },
         end: (publishDone) => {
-          logPublishDoneEnd(subscriberId, "audio stream ended", publishDone);
-          trackCallbacks?.end(publishDone);
+          // PUBLISH_DONE はトラック単位の購読の終了であり、後始末はしない (handleTrackEnd を参照)
+          handleTrackEnd(
+            instance,
+            "audio",
+            publishDone,
+            { video: videoCatchUpGateRef.current, audio: audioCatchUpGateRef.current },
+            isCurrentAttempt,
+          );
         },
         error: (error) => {
           addLog("error", `[${subscriberId}] audio subscribe error`, {
@@ -1493,8 +1668,8 @@ export function useSubscriber(
    *
    * 音声トラックの購読の確立で、購読が確立したとみなす (isStarting を下ろす)。音声の
    * 購読の失敗は、購読の失敗として呼び出し元へ投げる (映像と音声の購読のように、
-   * 音声を諦めて続ける対象が無い)。音声トラックの終わりとエラーは `trackCallbacks` で
-   * 購読の終わりとエラーとして扱う。
+   * 音声を諦めて続ける対象が無い)。音声トラックの終わりは `handleTrackEnd` が扱い、
+   * `trackCallbacks` にはエラーだけを伝える。
    *
    * 映像の時間軸が無いため、音声は到着基準で並べ、同期の推定も出さない
    * (statistics は `resetSubscriberStats` が既定値に戻す)
@@ -1505,8 +1680,10 @@ export function useSubscriber(
     audioTrack: CatalogTrack,
     instance: sub.SubscriberInstance,
     signal: AbortSignal,
-    trackCallbacks: TrackEndCallbacks,
+    trackCallbacks: TrackErrorCallbacks,
   ): Promise<void> {
+    // 映像を購読しない経路でも、停止した購読のコールバックが次の購読に触らないよう同じ判定を使う
+    const isCurrentAttempt = createAttemptGuard(abortControllerRef, signal);
     instance.statusMessage.value = "Preparing audio decoder...";
     resetSubscriberStats(instance);
     // 前の購読で jitter buffer が有効でも、映像の時間軸が無いこの購読では同期しない
@@ -1517,15 +1694,15 @@ export function useSubscriber(
       audioTrack,
       instance,
       signal,
+      isCurrentAttempt,
       trackCallbacks,
     );
     // startAudioSubscription 内の checkAborted は関数内で return するだけなので、
     // 中断後もここへ来る。teardownSubscriber が確定させた表示を上書きしない
     if (signal.aborted) return;
     instance.isStarting.value = false;
-    instance.status.value = "connected";
     // 音声トラックの購読が確立した (トラックの一覧は Catalog パネルが出す)
-    instance.statusMessage.value = "Subscribed";
+    applySubscribedStatus(instance);
   }
 
   /**
@@ -1965,15 +2142,13 @@ export function useSubscriber(
     }
   };
 
-  // stopSubscribing 進行中 (isStopping=true) または teardownSubscriber 通過後
-  // (session.value === null) の close / end / error コールバック発火では、
-  // status / statusMessage を上書きしないと判定する。
-  // 非 stop 主導 (通常のサーバ切断 / Stream ended / Subscribe error) では
-  // ガード成立せず詳細メッセージが表示される。
+  // このインスタンスの status / statusMessage を上書きしてよいかを判定する。
+  // 判定そのものは canApplyStatusUpdate に置く (setTimeout のコールバックなど、
+  // getSubscriber を通さない経路からも同じ判定を使うため)。
   const shouldApplyStatusUpdate = (): boolean => {
     const instance = sub.getSubscriber(subscriberId);
     if (!instance) return false;
-    return !instance.isStopping.value && instance.session.value !== null;
+    return canApplyStatusUpdate(instance);
   };
 
   const startSubscribing = async (): Promise<void> => {
@@ -1994,20 +2169,9 @@ export function useSubscriber(
     // この回の購読が今の購読か。この回が登録するコールバックは、今の購読の間だけ
     // 表示を変えて後始末する (停止した購読のコールバックが次の購読を止めないようにする)
     const isCurrentAttempt = createAttemptGuard(abortControllerRef, signal);
-    // 購読するトラック (映像があれば映像、無ければ音声) の終わりとエラーの扱い
-    const trackCallbacks: TrackEndCallbacks = {
-      end: (publishDone) => {
-        // 停止した購読の終わりは、次の購読に触らない (session の close と同じ理由)
-        if (!isCurrentAttempt()) return;
-        // ログは購読の終了を受け取った側 (映像 / 音声の購読) が記録する。ここは表示と後始末だけを
-        // 担い、エラー status のときはエラー表示を残す
-        if (shouldApplyStatusUpdate()) {
-          const display = resolvePublishDoneDisplay(publishDone);
-          instance.status.value = display.status;
-          instance.statusMessage.value = display.statusMessage;
-        }
-        teardownSubscriber();
-      },
+    // 購読するトラック (映像があれば映像、無ければ音声) のエラーの扱い。
+    // 終わり (PUBLISH_DONE) は handleTrackEnd が扱う
+    const trackCallbacks: TrackErrorCallbacks = {
       error: (error) => {
         if (!isCurrentAttempt()) return;
         if (shouldApplyStatusUpdate()) {
@@ -2506,8 +2670,14 @@ export function useSubscriber(
             );
           },
           end: (publishDone) => {
-            logPublishDoneEnd(subscriberId, "video stream ended", publishDone);
-            trackCallbacks.end(publishDone);
+            // PUBLISH_DONE はトラック単位の購読の終了であり、後始末はしない (handleTrackEnd を参照)
+            handleTrackEnd(
+              instance,
+              "video",
+              publishDone,
+              { video: videoCatchUpGateRef.current, audio: audioCatchUpGateRef.current },
+              isCurrentAttempt,
+            );
           },
           error: (error) => {
             console.error(`[${subscriberId}] Subscriber error:`, error);
@@ -2538,9 +2708,8 @@ export function useSubscriber(
       instance.dynamicGroupsSupported.value = supportsDynamicGroups(
         subscriberInstance.trackProperties,
       );
-      instance.status.value = "connected";
       // 映像トラックの購読が確立した (音声はこの後で購読する)
-      instance.statusMessage.value = "Subscribed";
+      applySubscribedStatus(instance);
       instance.largestLocation.value = largestLocation ?? null;
       // SUBSCRIBE_OK の LARGEST_OBJECT を、relay の cache から追いつく途中かどうかの境界に
       // する。この位置以前のフレームは復号しても描かない (src/catchUpGate.ts)
@@ -2572,12 +2741,13 @@ export function useSubscriber(
           audioTrackFromCatalog,
           instance,
           signal,
+          isCurrentAttempt,
         );
         // startAudioSubscription 内の checkAborted は関数内で return するだけなので、
         // 中断後もここへ来る。teardownSubscriber が確定させた表示を上書きしない
         if (signal.aborted) return;
         // 映像と音声の両方が確立した
-        instance.statusMessage.value = "Subscribed";
+        applySubscribedStatus(instance);
       } catch (error) {
         // 中断時は teardownSubscriber が status / statusMessage を確定済み。
         // 映像経路と同じく上書きしない
@@ -2586,7 +2756,7 @@ export function useSubscriber(
           message: error instanceof Error ? error.message : String(error),
         });
         // 中間メッセージを残さず、購読が確立した表示に戻す
-        instance.statusMessage.value = "Subscribed";
+        applySubscribedStatus(instance);
       }
     } catch (error) {
       // 中断時は teardownSubscriber が status / statusMessage / settingsDisabled を確定済み。

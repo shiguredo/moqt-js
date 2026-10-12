@@ -20,6 +20,16 @@ export type AudioCodecType = "opus" | "aac";
 
 export type StatusType = "disconnected" | "connected" | "error";
 
+/** 購読しているトラックの終了状態 (画面の表示に使う) */
+export interface TrackEndState {
+  /** エラーを示す Status Code で終わったか */
+  isError: boolean;
+  /** Status Code の表示 (名前と 16 進の値。例: "TRACK_ENDED (0x2)") */
+  statusLabel: string;
+  /** PUBLISH_DONE の Reason Phrase (空文字列あり) */
+  reasonPhrase: string;
+}
+
 export interface CameraDevice {
   deviceId: string;
   label: string;

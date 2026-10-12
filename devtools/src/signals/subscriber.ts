@@ -1,7 +1,7 @@
 import { signal, computed, type Signal, type ReadonlySignal } from "@preact/signals";
 import type { LOC, Session, Subscriber, Catalog, EventTimelineEntry, AvSyncStats } from "moqt-js";
 import type { PanelHttpVersion } from "../utils/httpVersion";
-import type { StatusType } from "../types";
+import type { StatusType, TrackEndState } from "../types";
 import type { DecoderWrapper } from "../utils/DecoderWrapper";
 import type { AudioDecoderWrapper } from "../../../src/codec/AudioDecoder.ts";
 import {
@@ -129,6 +129,15 @@ export interface SubscriberInstance {
   // relay の cache から追いつく途中かどうか。購読する Track (映像と音声) のどれかが
   // 境界を越えるまで true で、画面の「Catching up」に使う
   catchUpPending: Signal<boolean>;
+  // 購読しているトラックの終了状態 (終了していなければ null)。
+  // draft-ietf-moq-transport-22 §9.9 (PUBLISH_DONE): 終了するのは購読であってセッションでは
+  // ない。セッションを閉じるかは §6.6 (Termination) の判断であり、他の購読への影響を考慮する
+  // ("Implementations need to consider the impact on other outstanding subscriptions")。
+  // 映像が終わっても最後のフレームを保持し、音声が生きていれば再生を続けられるよう、
+  // トラックごとに状態を持つ。パネルはこの signal を直接読まず、useSubscriber が組み立てる
+  // statusMessage (「video ended: ...」) を出す
+  videoTrackEnd: Signal<TrackEndState | null>;
+  audioTrackEnd: Signal<TrackEndState | null>;
   keyFramesDecoded: Signal<number>;
   objectsReceived: Signal<number>;
   currentGroup: Signal<number>;
@@ -246,6 +255,8 @@ export function createSubscriberInstance(id: string): SubscriberInstance {
     framesDecoded: signal(0),
     catchUpFramesSkipped: signal(0),
     catchUpPending: signal(false),
+    videoTrackEnd: signal(null),
+    audioTrackEnd: signal(null),
     keyFramesDecoded: signal(0),
     objectsReceived: signal(0),
     currentGroup: signal(0),

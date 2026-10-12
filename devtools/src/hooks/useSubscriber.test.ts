@@ -22,8 +22,16 @@ import {
   resolveCatalogMediaTracks,
   resolveEventTimelineTrack,
   resolveNewGroupRequestValue,
-  resolvePublishDoneDisplay,
+  applyCatchUpPending,
+  applySubscribedStatus,
+  applyTrackEnd,
+  canApplyStatusUpdate,
+  formatTrackEndText,
+  handleTrackEnd,
   logPublishDoneEnd,
+  refreshTrackEndStatus,
+  resolveTrackEndState,
+  subscribedStatusMessage,
   type DecodeInput,
   type ReceivedVideoObject,
 } from "./useSubscriber";
@@ -32,6 +40,7 @@ import { buildObjectSendPlan } from "./usePublisher";
 import { EMPTY_PLAYBACK_TIMING, PlaybackTimingStats } from "../utils/playbackTimingStats";
 import { EMPTY_AUDIO_PLAYOUT_TIMING } from "../../../src/audioPlayoutTimingStats";
 import { GroupSwitchGate } from "../../../src/groupSwitchGate";
+import { CatchUpGate } from "../../../src/catchUpGate";
 import { createSubscriberInstance, subscriberInstances } from "../signals/subscriber";
 import { __resetLogStateForTest, getLogBuffer } from "../signals/debugLog";
 import * as pub from "../signals/publisher";
@@ -598,6 +607,18 @@ test("resetSubscriberState resets every state signal to initial value", () => {
 
   const chainRef = { current: Promise.resolve().then(() => {}) };
   const previousChain = chainRef.current;
+  instance.videoTrackEnd.value = {
+    isError: false,
+    statusLabel: "TRACK_ENDED (0x2)",
+    reasonPhrase: "",
+  };
+  instance.audioTrackEnd.value = {
+    isError: true,
+    statusLabel: "INTERNAL_ERROR (0x0)",
+    reasonPhrase: "",
+  };
+  const trackEndWasSet =
+    instance.videoTrackEnd.value !== null && instance.audioTrackEnd.value !== null;
 
   resetSubscriberState(instance, { video: chainRef, audio: { current: Promise.resolve() } });
 
@@ -613,6 +634,11 @@ test("resetSubscriberState resets every state signal to initial value", () => {
   // 確立を待っていた購読も終わり、Start Subscribing を押せる状態に戻る
   assert.equal(instance.isStarting.value, false);
   assert.equal(instance.catchUpPending.value, false);
+  // トラックの終了状態も購読が無い状態に戻す (次の購読へ持ち越さない)
+  assert.equal(instance.videoTrackEnd.value, null);
+  assert.equal(instance.audioTrackEnd.value, null);
+  // 初期値から始めるとリセットを消しても通るため、終了した状態から戻すことを確かめる
+  assert.isTrue(trackEndWasSet);
   assert.notStrictEqual(chainRef.current, previousChain);
   // subscriber と isStarting を下ろしてから判定するため、止めたインスタンス自身は数えない。
   // 他に接続設定を使っているものが無いので、入力を有効に戻す
@@ -965,57 +991,13 @@ test("resetSubscriberState: 音声 object の処理チェーンを巻き戻す",
 // 「音声を観測していなくても再生の遅れが下限を下回らない」が固定する
 
 // ============================================================================
-// resolvePublishDoneDisplay
-// ============================================================================
-
-/**
- * draft-ietf-moq-transport-22 §9.9 (PUBLISH_DONE) / §12.4 (Publish Done Codes):
- * エラーを示す Status Code の PUBLISH_DONE でも終了は end に届くため、ログのレベルと画面の
- * 表示をこの判定で決める。エラー status は error レベルとエラー表示、正常な終わりは
- * 従来どおり「Stream ended」にする。
- */
-test("resolvePublishDoneDisplay: 正常な終わりは info レベルで Stream ended にする", () => {
-  const display = resolvePublishDoneDisplay({
-    statusCode: PublishDoneStatusCode.TRACK_ENDED,
-    reasonPhrase: "",
-  });
-  assert.deepEqual(display, {
-    level: "info",
-    status: "disconnected",
-    statusMessage: "Stream ended",
-  });
-});
-
-test("resolvePublishDoneDisplay: エラー status は error レベルで理由を載せたエラー表示にする", () => {
-  const display = resolvePublishDoneDisplay({
-    statusCode: PublishDoneStatusCode.UPDATE_FAILED,
-    reasonPhrase: "update failed",
-  });
-  assert.deepEqual(display, {
-    level: "error",
-    status: "error",
-    statusMessage: "Subscribe error: PUBLISH_DONE with status 0x8: update failed",
-  });
-});
-
-test("resolvePublishDoneDisplay: reason が空でもエラー表示が崩れない", () => {
-  const display = resolvePublishDoneDisplay({
-    statusCode: PublishDoneStatusCode.INTERNAL_ERROR,
-    reasonPhrase: "",
-  });
-  assert.equal(display.level, "error");
-  assert.equal(display.status, "error");
-  assert.equal(display.statusMessage, "Subscribe error: PUBLISH_DONE with status 0x0");
-});
-
-// ============================================================================
 // logPublishDoneEnd
 // ============================================================================
 
 /**
  * draft-ietf-moq-transport-22 §9.9 (PUBLISH_DONE) / §12.4 (Publish Done Codes):
- * 終了の記録はエラー status かどうかでレベルを分ける。購読が今のものかに関わらず記録する
- * (停止した購読に遅れて届いた終了も残す) ため、この関数は表示の判定と同じ level を使う。
+ * 終了の記録はエラー status かどうかでレベルを分ける。判定は表示
+ * (applySubscribedStatus) と同じ resolveTrackEndState を使い、判定源を増やさない。
  */
 test("logPublishDoneEnd: 正常な終わりは info、エラー status は error で理由を記録する", () => {
   __resetLogStateForTest();
@@ -1038,4 +1020,418 @@ test("logPublishDoneEnd: 正常な終わりは info、エラー status は error
     statusCode: "MALFORMED_TRACK (0x12)",
     reasonPhrase: "bad track",
   });
+});
+
+// ============================================================================
+// トラックの終了 (PUBLISH_DONE)
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-22 §9.9 (PUBLISH_DONE) / §12.4 (Publish Done Codes):
+ * 終了の理由 (Status Code と Reason Phrase) をトラックごとの状態にする。
+ */
+test("resolveTrackEndState: Status Code と Reason Phrase を終了状態にする", () => {
+  assert.deepEqual(
+    resolveTrackEndState({ statusCode: PublishDoneStatusCode.TRACK_ENDED, reasonPhrase: "bye" }),
+    { isError: false, statusLabel: "TRACK_ENDED (0x2)", reasonPhrase: "bye" },
+  );
+  assert.deepEqual(
+    resolveTrackEndState({ statusCode: PublishDoneStatusCode.MALFORMED_TRACK, reasonPhrase: "" }),
+    { isError: true, statusLabel: "MALFORMED_TRACK (0x12)", reasonPhrase: "" },
+  );
+});
+
+/**
+ * 完了条件: トラック 1 本の終了で、他のトラックの状態は変わらない。
+ * draft-ietf-moq-transport-22 §3.1 / §9.9: PUBLISH_DONE はトラック単位の購読の終了であり、
+ * 他のトラックの購読とセッションは維持する。
+ */
+test("applyTrackEnd: 終わったトラックだけを終了にし、他のトラックの状態は変えない", () => {
+  const instance = createSubscriberInstance("track-end-1");
+  assert.isNull(instance.videoTrackEnd.value);
+  assert.isNull(instance.audioTrackEnd.value);
+
+  applyTrackEnd(instance, "video", {
+    statusCode: PublishDoneStatusCode.TRACK_ENDED,
+    reasonPhrase: "",
+  });
+
+  assert.deepEqual(instance.videoTrackEnd.value, {
+    isError: false,
+    statusLabel: "TRACK_ENDED (0x2)",
+    reasonPhrase: "",
+  });
+  // 映像が終わっても、音声は生きている扱いのままにする
+  assert.isNull(instance.audioTrackEnd.value);
+
+  applyTrackEnd(instance, "audio", {
+    statusCode: PublishDoneStatusCode.MALFORMED_TRACK,
+    reasonPhrase: "bad track",
+  });
+
+  assert.deepEqual(instance.audioTrackEnd.value, {
+    isError: true,
+    statusLabel: "MALFORMED_TRACK (0x12)",
+    reasonPhrase: "bad track",
+  });
+  // 後から終わったトラックが、先に終わったトラックの状態を書き換えない
+  assert.deepEqual(instance.videoTrackEnd.value, {
+    isError: false,
+    statusLabel: "TRACK_ENDED (0x2)",
+    reasonPhrase: "",
+  });
+});
+
+test("formatTrackEndText: 終了したトラックと理由を並べる", () => {
+  // 終わったトラックが無ければ文言に足さない
+  assert.equal(formatTrackEndText(null, null), "");
+  assert.equal(
+    formatTrackEndText(null, {
+      isError: false,
+      statusLabel: "TRACK_ENDED (0x2)",
+      reasonPhrase: "",
+    }),
+    "video ended: TRACK_ENDED (0x2)",
+  );
+  assert.equal(
+    formatTrackEndText(
+      { isError: true, statusLabel: "MALFORMED_TRACK (0x12)", reasonPhrase: "bad track" },
+      { isError: false, statusLabel: "TRACK_ENDED (0x2)", reasonPhrase: "" },
+    ),
+    "audio ended with error: MALFORMED_TRACK (0x12): bad track, video ended: TRACK_ENDED (0x2)",
+  );
+});
+
+/**
+ * 完了条件: 終わったトラックの状態が表示され、購読とセッションは維持される。
+ * status は connected のままとし (購読は生きている)、文言で終了したトラックと理由を示す。
+ * 後始末をしないため、最後のフレームと再生はそのまま残る。
+ */
+test("refreshTrackEndStatus: 購読を維持したまま、終了したトラックと理由を表示する", () => {
+  resetTestEnvironment();
+  const instance = createSubscriberInstance("track-end-2");
+  instance.session.value = new FakeSession();
+  instance.status.value = "connected";
+  instance.statusMessage.value = "Subscribed";
+
+  applyTrackEnd(instance, "video", {
+    statusCode: PublishDoneStatusCode.TRACK_ENDED,
+    reasonPhrase: "",
+  });
+  refreshTrackEndStatus(instance);
+
+  assert.equal(instance.status.value, "connected");
+  assert.equal(instance.statusMessage.value, "video ended: TRACK_ENDED (0x2)");
+  // 後始末をしていない (session が残る)
+  assert.isNotNull(instance.session.value);
+});
+
+test("refreshTrackEndStatus: エラーを示す Status Code で終わったトラックがあれば error の表示にする", () => {
+  resetTestEnvironment();
+  const instance = createSubscriberInstance("track-end-3");
+  instance.session.value = new FakeSession();
+  instance.status.value = "connected";
+
+  applyTrackEnd(instance, "audio", {
+    statusCode: PublishDoneStatusCode.INTERNAL_ERROR,
+    reasonPhrase: "internal",
+  });
+  refreshTrackEndStatus(instance);
+
+  assert.equal(instance.status.value, "error");
+  assert.equal(
+    instance.statusMessage.value,
+    "audio ended with error: INTERNAL_ERROR (0x0): internal",
+  );
+});
+
+test("refreshTrackEndStatus: 停止中と後始末の後では表示を上書きしない", () => {
+  resetTestEnvironment();
+  const instance = createSubscriberInstance("track-end-4");
+  instance.session.value = new FakeSession();
+  instance.status.value = "connected";
+  instance.statusMessage.value = "Subscribed";
+
+  // 停止処理中 (stopSubscribing 進行中) は上書きしない
+  instance.isStopping.value = true;
+  applyTrackEnd(instance, "video", {
+    statusCode: PublishDoneStatusCode.TRACK_ENDED,
+    reasonPhrase: "",
+  });
+  refreshTrackEndStatus(instance);
+  assert.equal(instance.statusMessage.value, "Subscribed");
+  assert.isFalse(canApplyStatusUpdate(instance));
+
+  // 後始末を通った後 (session が null) も上書きしない
+  instance.isStopping.value = false;
+  instance.session.value = null;
+  refreshTrackEndStatus(instance);
+  assert.equal(instance.statusMessage.value, "Subscribed");
+  assert.isFalse(canApplyStatusUpdate(instance));
+
+  // 表示を戻せる状態では上書きする
+  instance.session.value = new FakeSession();
+  assert.isTrue(canApplyStatusUpdate(instance));
+  refreshTrackEndStatus(instance);
+  assert.equal(instance.statusMessage.value, "video ended: TRACK_ENDED (0x2)");
+});
+
+/**
+ * 完了条件: 購読の確立とトラックの終了が前後しても、終了の表示が消えない。
+ * 確立時の文言を「Subscribed」に固定すると、先に終わったトラックの表示を上書きしてしまう。
+ */
+test("subscribedStatusMessage: 終了したトラックがあれば理由も足す", () => {
+  const instance = createSubscriberInstance("track-end-6");
+  assert.equal(subscribedStatusMessage(instance), "Subscribed");
+
+  applyTrackEnd(instance, "video", {
+    statusCode: PublishDoneStatusCode.TRACK_ENDED,
+    reasonPhrase: "bye",
+  });
+
+  assert.equal(subscribedStatusMessage(instance), "video ended: TRACK_ENDED (0x2): bye");
+});
+
+/**
+ * 完了条件: 購読中のトラックが PUBLISH_DONE で正常に終わっても、他のトラックの購読と subscriber
+ * のセッションが維持される。
+ * draft-ietf-moq-transport-22 §9.9 (PUBLISH_DONE) の終了はトラック単位であり、セッションは
+ * 明示的に閉じるまで維持する (§6.6 Termination)。後始末をすると、無関係な購読とセッションまで
+ * 道連れになり、relay の切り分けで誤った結論を導く。
+ */
+test("handleTrackEnd: 映像の終了でセッションも他のトラックの購読も後始末しない", () => {
+  resetTestEnvironment();
+  const instance = createSubscriberInstance("track-end-7");
+  const session = new FakeSession();
+  const subscriber = new FakeSubscriber();
+  const catalogSubscriber = new FakeSubscriber();
+  const audioSubscriber = new FakeSubscriber();
+  instance.session.value = session;
+  instance.subscriber.value = subscriber;
+  instance.catalogSubscriber.value = catalogSubscriber;
+  instance.audioSubscriber.value = audioSubscriber;
+  instance.status.value = "connected";
+  instance.statusMessage.value = "Subscribed";
+
+  // 映像は relay の cache に追いつく途中、音声は購読の時点で Object が無く追いつき済み
+  const gates = { video: new CatchUpGate(), audio: new CatchUpGate() };
+  gates.video.setBoundary({ group: 5n, object: 0n });
+  gates.audio.setBoundary(null);
+  instance.catchUpPending.value = true;
+
+  __resetLogStateForTest();
+  const handled = handleTrackEnd(
+    instance,
+    "video",
+    { statusCode: PublishDoneStatusCode.TRACK_ENDED, reasonPhrase: "" },
+    gates,
+    () => true,
+  );
+
+  assert.isTrue(handled);
+  // セッションと他のトラックの購読は維持する (後始末をしない)
+  assert.equal(instance.session.value, session);
+  assert.equal(instance.subscriber.value, subscriber);
+  assert.equal(instance.catalogSubscriber.value, catalogSubscriber);
+  assert.equal(instance.audioSubscriber.value, audioSubscriber);
+  assert.isFalse(instance.isStopping.value);
+  // 終わったトラックだけが「終了」になり、表示に理由が出る
+  assert.equal(instance.videoTrackEnd.value?.statusLabel, "TRACK_ENDED (0x2)");
+  assert.isNull(instance.audioTrackEnd.value);
+  assert.equal(instance.status.value, "connected");
+  assert.equal(instance.statusMessage.value, "video ended: TRACK_ENDED (0x2)");
+  // 終わったトラックには境界を越える Object が来ないため、追いつきの表示を残さない
+  assert.isTrue(gates.video.catchUpCompleted);
+  assert.isFalse(instance.catchUpPending.value);
+  // Debug パネルにも理由を残す
+  const [entry] = getLogBuffer();
+  assert.equal(entry?.level, "info");
+  assert.equal(entry?.message, "[track-end-7] video stream ended");
+  assert.deepEqual(entry?.data, { statusCode: "TRACK_ENDED (0x2)", reasonPhrase: "" });
+});
+
+test("handleTrackEnd: 停止した購読の終了では何もしない", () => {
+  resetTestEnvironment();
+  const instance = createSubscriberInstance("track-end-8");
+  instance.session.value = new FakeSession();
+  instance.status.value = "connected";
+  instance.statusMessage.value = "Subscribed";
+  const gates = { video: new CatchUpGate(), audio: new CatchUpGate() };
+  gates.video.setBoundary({ group: 5n, object: 0n });
+
+  // 停止した購読のコールバックは、次の購読の signal に触らない
+  __resetLogStateForTest();
+  const handled = handleTrackEnd(
+    instance,
+    "video",
+    { statusCode: PublishDoneStatusCode.TRACK_ENDED, reasonPhrase: "" },
+    gates,
+    () => false,
+  );
+
+  assert.isFalse(handled);
+  assert.isNull(instance.videoTrackEnd.value);
+  assert.equal(instance.statusMessage.value, "Subscribed");
+  // 停止した購読に遅れて届いた終了も Debug パネルのイベントとしては残す
+  const [entry] = getLogBuffer();
+  assert.equal(entry?.message, "[track-end-8] video stream ended");
+  // 次の購読の追いつきの境界も触らない
+  assert.isFalse(gates.video.catchUpCompleted);
+});
+
+test("handleTrackEnd: 両方のトラックが終わったら両方の理由を表示する", () => {
+  resetTestEnvironment();
+  const instance = createSubscriberInstance("track-end-9");
+  instance.session.value = new FakeSession();
+  const gates = { video: new CatchUpGate(), audio: new CatchUpGate() };
+  gates.video.setBoundary(null);
+  gates.audio.setBoundary(null);
+
+  __resetLogStateForTest();
+  handleTrackEnd(
+    instance,
+    "video",
+    { statusCode: PublishDoneStatusCode.TRACK_ENDED, reasonPhrase: "" },
+    gates,
+    () => true,
+  );
+  handleTrackEnd(
+    instance,
+    "audio",
+    { statusCode: PublishDoneStatusCode.MALFORMED_TRACK, reasonPhrase: "bad track" },
+    gates,
+    () => true,
+  );
+
+  assert.equal(
+    instance.statusMessage.value,
+    "audio ended with error: MALFORMED_TRACK (0x12): bad track, video ended: TRACK_ENDED (0x2)",
+  );
+  // エラーを示す Status Code のトラックがあるため、パネルもエラーの表示にする
+  assert.equal(instance.status.value, "error");
+});
+
+test("applyTrackEnd: 同じトラックを 2 回終わらせたら後の状態にする", () => {
+  const instance = createSubscriberInstance("track-end-10");
+
+  applyTrackEnd(instance, "video", {
+    statusCode: PublishDoneStatusCode.TRACK_ENDED,
+    reasonPhrase: "",
+  });
+  applyTrackEnd(instance, "video", {
+    statusCode: PublishDoneStatusCode.INTERNAL_ERROR,
+    reasonPhrase: "internal",
+  });
+
+  assert.deepEqual(instance.videoTrackEnd.value, {
+    isError: true,
+    statusLabel: "INTERNAL_ERROR (0x0)",
+    reasonPhrase: "internal",
+  });
+});
+
+/**
+ * 完了条件: 購読の確立とトラックの終了が前後しても、終了の表示が消えない。
+ * 確立時に status を connected に固定すると、先にエラーで終わったトラックの表示を消してしまう。
+ */
+test("applySubscribedStatus: エラーで終わったトラックがあれば error の表示を保つ", () => {
+  resetTestEnvironment();
+  const instance = createSubscriberInstance("track-end-11");
+  instance.session.value = new FakeSession();
+
+  applyTrackEnd(instance, "audio", {
+    statusCode: PublishDoneStatusCode.EXCESSIVE_LOAD,
+    reasonPhrase: "loaded",
+  });
+  applySubscribedStatus(instance);
+
+  assert.equal(instance.status.value, "error");
+  assert.equal(
+    instance.statusMessage.value,
+    "audio ended with error: EXCESSIVE_LOAD (0x9): loaded",
+  );
+});
+
+/**
+ * 完了条件: 終わったトラックで「Catching up」が残らない。
+ * SUBSCRIBE_OK と PUBLISH_DONE が同じチャンクで届くと、終了の後に境界が設定される
+ * (src/session/bidi.ts)。終了の時点で畳むだけでは足りないため、表示の判定でも終わった
+ * トラックを完了として扱う。
+ */
+test("applyCatchUpPending: 終了したトラックは境界が後から来ても追いつき中にしない", () => {
+  const instance = createSubscriberInstance("track-end-12");
+  const gates = { video: new CatchUpGate(), audio: new CatchUpGate() };
+  gates.audio.setBoundary(null);
+  // 追いつき中から始め、終了を考慮しない実装でも通らないようにする
+  instance.catchUpPending.value = true;
+  applyTrackEnd(instance, "video", {
+    statusCode: PublishDoneStatusCode.TRACK_ENDED,
+    reasonPhrase: "",
+  });
+
+  // 終了の後に映像の境界が設定される (購読の確立の継続で setBoundary が走る)
+  gates.video.setBoundary({ group: 5n, object: 0n });
+  applyCatchUpPending(instance, gates);
+
+  assert.isFalse(gates.video.catchUpCompleted);
+  assert.isFalse(instance.catchUpPending.value);
+});
+
+/**
+ * 映像だけの購読 (catalog に音声が無い) では音声の境界を設定しない。境界の無いトラックは
+ * 完了として扱う (CatchUpGate.reset) ため、購読しないトラックが「Catching up」を残さない。
+ */
+test("applyCatchUpPending: 境界を設定しないトラックは追いつき中にしない", () => {
+  const instance = createSubscriberInstance("track-end-15");
+  const gates = { video: new CatchUpGate(), audio: new CatchUpGate() };
+  gates.video.setBoundary({ group: 5n, object: 0n });
+
+  // 映像が境界を越えて追いつく
+  gates.video.evaluate({ group: 6n, object: 0n });
+  applyCatchUpPending(instance, gates);
+
+  assert.isTrue(gates.video.catchUpCompleted);
+  assert.isFalse(instance.catchUpPending.value);
+});
+
+test("applyCatchUpPending: 生きているトラックが追いつき中なら追いつき中にする", () => {
+  const instance = createSubscriberInstance("track-end-13");
+  const gates = { video: new CatchUpGate(), audio: new CatchUpGate() };
+  // 音声の境界を越えた後に映像の境界を設定する (映像だけが追いつき中)
+  gates.audio.setBoundary({ group: 5n, object: 0n });
+  gates.audio.evaluate({ group: 6n, object: 0n });
+  gates.video.setBoundary({ group: 5n, object: 0n });
+
+  applyCatchUpPending(instance, gates);
+
+  assert.isTrue(gates.audio.catchUpCompleted);
+  assert.isFalse(gates.video.catchUpCompleted);
+  assert.isTrue(instance.catchUpPending.value);
+});
+
+test("handleTrackEnd: 停止処理中は表示を変えず、終了状態とログを残す", () => {
+  resetTestEnvironment();
+  const instance = createSubscriberInstance("track-end-14");
+  instance.session.value = new FakeSession();
+  instance.status.value = "connected";
+  instance.statusMessage.value = "Subscribed";
+  instance.isStopping.value = true;
+  const gates = { video: new CatchUpGate(), audio: new CatchUpGate() };
+  gates.video.setBoundary(null);
+  __resetLogStateForTest();
+
+  const handled = handleTrackEnd(
+    instance,
+    "video",
+    { statusCode: PublishDoneStatusCode.TRACK_ENDED, reasonPhrase: "" },
+    gates,
+    () => true,
+  );
+
+  assert.isTrue(handled);
+  // 表示は stopSubscribing 側の責務のため、終了では上書きしない
+  assert.equal(instance.statusMessage.value, "Subscribed");
+  // 状態とログは残す
+  assert.equal(instance.videoTrackEnd.value?.statusLabel, "TRACK_ENDED (0x2)");
+  assert.equal(getLogBuffer()[0]?.message, "[track-end-14] video stream ended");
 });
