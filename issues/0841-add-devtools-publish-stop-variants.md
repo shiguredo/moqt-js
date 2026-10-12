@@ -1,7 +1,7 @@
 # moqt-devtools の publish 停止に、止め方のバリエーションを足す
 
 - Created: 2026-10-12
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-10-13
 - Branch: feature/add-devtools-publish-stop-variants
 - Polished: 2026-10-12
 - Reporter: @voluntas
@@ -65,4 +65,22 @@ moqt-devtools の Stop Publish は「各トラックに PUBLISH_DONE (TRACK_ENDE
 
 ## 解決方法
 
-{未着手}
+- `devtools/src/signals/connectionSettings.ts` に `publishStop` signal と `PUBLISH_STOP_MODES` / `isPublishStopMode` を追加し、URL クエリ `publishStop` で往復させた (既定の `publish-done` は URL に載せない)
+- `devtools/src/hooks/usePublisher.ts` に `buildPublishStopPlan(mode)` を追加し、止め方ごとの「送るメッセージ」と「後始末」を純粋な関数に切り出した。`stopPublishing` は 3 分岐になった
+  - `publish-done` (既定): complete catalog と各トラックの PUBLISH_DONE (TRACK_ENDED) を送ってからセッションを閉じる (従来と同じ)
+  - `close-session`: complete catalog も PUBLISH_DONE も送らずにセッションだけを閉じる
+  - `stop-sending`: 何も送らずに送信の経路だけを止め、セッションと PUBLISH は維持する。`stopSendingPaths` を `cleanupPublisher` から切り出し、event timeline の PUBLISH と catalog の PUBLISH を外して送信の再開経路 (購読者の FORWARD による catalog の送り直し、開始処理の続きからのフレーム送信) を塞いだ
+- 配信だけ止めた後に Stop を押したときは、何も送らずにセッションを閉じる (`close-session` と同じ)。3 つ目の止め方を作らない
+- UI は `PublisherPanel.tsx` の Stop の隣の select で選ぶ (英語ラベル `PUBLISH_DONE` / `Close session` / `Stop sending`、`data-testid="publisher-stop-mode"`)。選んだ止め方は Debug パネルのログ (`[publisher] [STOP] <mode>`) に出す
+- テスト: `devtools/src/hooks/usePublisher.test.ts` に 3 つの止め方の段取り、`devtools/src/signals/connectionSettings.test.ts` に URL 往復、`devtools/src/signals/snapshotCoverage.test.ts` に `publishStop` / `sendingStopped` の扱いを追加した
+
+### 実リレーでの観測結果 (`npx vp run e2e-test:relay`、`tests/e2e/relay/devtools-publish-stop.spec.ts`)
+
+止め方を変えても、購読者側の高レベル API の観測値に差は出なかった (差が出なかったため、その事実を記録する)。
+
+- `publishStop=close-session`: 購読者の state=active、停止前の受信 Object=6、停止後 15、購読者の error=なし
+- `publishStop=stop-sending`: 購読者の state=active、停止前の受信 Object=6、停止後 8、購読者の error=なし
+
+`stop-sending` では止めた後に publisher の送信数が伸びないことを assert している。`close-session` では relay が PUBLISH_DONE を代行したかどうかを高レベル API から区別できない (正常終了の PUBLISH_DONE は `onError` を呼ばず、state も変わらない。購読の終了をアプリへ通知する経路が無いことが原因で、これは `0842` の範囲)。そのため、ここでは「どちらの止め方でも購読者が異常終了せず、購読が残る」ことだけを固定し、結果をログに残す形にした。
+
+- `npx vp check` / `npx vp test --run` (3905 件) / `npx vp run e2e-test` (108 件) / `npx vp run e2e-test:relay` (8 件) が通る
