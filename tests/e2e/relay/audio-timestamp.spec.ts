@@ -737,16 +737,20 @@ function formatSettleReport(observations: readonly RelayObservation[]): string {
  * 基準の差ではなく、実際に表示した実績の差 (`avSync.skewMs`) を見る。共有が解除されていても、
  * 実装は映像を音声の到着基準の時刻へ合わせるため、見えるずれは予算に収まる。
  *
- * 観測の 1 秒ごとに値があることは要求しない。値は「直近に表示した音声と映像の実績が
- * `SKEW_SAMPLE_WINDOW_MS` (1 秒) 以内にある」ときだけ作られるため、表示が 1 秒以上途切れると
- * null になる。実測 (CI の 4 vCPU の runner、run 38048874698) では、基準の共有を解除した
- * 保持 (hold) が観測の 25 秒間続き、`skewMs` が 25 回すべて null だった (この run の基準の
- * 差は 3.2〜5.8 ms であり、解除は受信側が一瞬つまずいたためである)。判定は 2 つに分ける
+ * 観測の 1 秒ごとに値があることは要求しない。値は「直近に表示した音声と映像それぞれの実績が
+ * `SKEW_SAMPLE_WINDOW_MS` (1 秒) 以内にある」ときだけ作られる。実績は、そのトラックの表示
+ * 時刻を決めて表示したときだけ記録するため、基準を共有できないと保持された側は実績を作ら
+ * ない。つまり解除している間 (どちらかが到着基準で再生されている間) は値が出ない。実測 (CI の
+ * 4 vCPU の runner、run 38048874698) では、基準の共有を解除した保持 (hold) が観測の 25 秒間
+ * 続き、`skewMs` が 25 回すべて null だった (この run の基準の差は 3.2〜5.8 ms であり、
+ * 解除は受信側が一瞬つまずいたためである)。判定は 2 つに分ける
  *
- * 1. 観測できた値はすべて予算に収まる (0754 の症状である数百 ms のずれを捕まえる)
+ * 1. 共有していた観測の値はすべて予算に収まる (0754 の症状である数百 ms のずれを捕まえる)
  * 2. 共有が戻った後に、値が作られ続ける (基準が合っているのに実績が作られない状態を捕まえる)
  *
- * 2 は `expectUnsharedRecovers` の後に呼ぶ。共有が解除されている間は値が作られないためである
+ * 1 を共有していた観測に限るのは、解除中の値を予算で判定しないためである。解除をまたぐ標本に
+ * は解除前の値が残り得る (実績は 1 秒間使える) ため、標本の側で共有を確かめる。解除中の観測は
+ * 記録としてログへ残す。2 は `expectUnsharedRecovers` の後に呼ぶ
  *
  * @param page - 観測しているページ
  * @param observations - 観測
@@ -757,13 +761,14 @@ async function expectSkewWithinBudget(
   observations: readonly RelayObservation[],
   report: string,
 ): Promise<void> {
-  const recorded = observations
+  const shared = observations.filter((observation) => subscriberOf(observation).sharingBases);
+  const recorded = shared
     .map((observation) => subscriberOf(observation).skewMs)
     .filter((value): value is number => value !== null);
   const recordedOverflowMs = maxSkewOverflowRunMs(recorded);
   expect(
     recordedOverflowMs,
-    `音声と映像の表示時刻の差が予算に収まる (許す絶対値 ${AV_SKEW_MAX_MS} ms、続けて許す ${SKEW_OVERFLOW_MAX_MS} ms)\n観測した差: ${formatSkewSamples(recorded)}\n${report}`,
+    `音声と映像の表示時刻の差が予算に収まる (許す絶対値 ${AV_SKEW_MAX_MS} ms、続けて許す ${SKEW_OVERFLOW_MAX_MS} ms、共有していた観測 ${shared.length}/${observations.length} 回)\n観測した差: ${formatSkewSamples(recorded)}\n${report}`,
   ).toBeLessThanOrEqual(SKEW_OVERFLOW_MAX_MS);
 
   // 共有が戻ると値が作られる。解除が長引くと、戻った直後の値は 2 つの表示位置が揃う

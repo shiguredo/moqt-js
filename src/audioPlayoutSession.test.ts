@@ -18,7 +18,11 @@ import {
 } from "./audioPlayoutSession";
 import { AUDIO_PLAYOUT_TIMING_WINDOW_MS, AudioPlayoutTimingStats } from "./audioPlayoutTimingStats";
 import type { AudioClockMapping } from "./audioPlayout";
-import { AUDIO_PLAYOUT_DELAY_FLOOR_MS, PlaybackTimeline } from "./playbackTimeline";
+import {
+  AUDIO_PLAYOUT_DELAY_FLOOR_MS,
+  MAX_PLAYOUT_DELAY_MS,
+  PlaybackTimeline,
+} from "./playbackTimeline";
 import { JITTER_BUFFER_MAX_QUEUED_FRAMES } from "./playoutBuffer";
 
 /** 音 1 つ分のサンプル数 (48 kHz の 20 ms) */
@@ -381,6 +385,65 @@ test("handleDecodedAudio: 時間軸を使わないときは壁時計でも到着
   const snapshot = fixture.timing.snapshot(performance.now());
   assert.equal(snapshot.arrivalPlannedFrames, 1);
   assert.isNull(snapshot.lastTargetMs);
+});
+
+/**
+ * 完了条件: 基準を共有できず到着基準で鳴らした音 (保持されている側) は、時間軸へ実績を
+ * 記録しない。
+ *
+ * 記録するのは、目標の表示時刻を決めて鳴らした音だけである。同期ずれの推定 (`skewMs`) は
+ * 2 つのトラックの実績がそろっているときだけ値を返すため、到着基準の再生の値を混ぜると、
+ * 制御されていない再生のずれを同期のずれとして読むことになる。映像側は同じ理由で、表示
+ * 時刻を決めていないフレームの実績を作らない (src/videoPlayoutSession.ts)。
+ *
+ * 音声が保持される側になる状態は、音声の基準を映像より大きくしたうえで、表示の遅れの上限を
+ * 下げて共有を解除して作る。上限を戻しても、閾値が動いた解除であるため保持は続く。
+ */
+test("handleDecodedAudio: 保持されている (到着基準の) 音は実績を記録しない", () => {
+  const fixture = makeSessionFixture();
+  const nowMs = observedWallClockMs();
+  // 音声の基準を 400 ms、映像を 100 ms にして、解除したときに音声が保持される側にする
+  const observedTimestamp = Math.round(nowMs * 1_000);
+  fixture.timeline.observe("audio", nowMs, observedTimestamp - 400_000);
+  fixture.timeline.observe("video", nowMs, observedTimestamp - 100_000);
+  assert.isTrue(
+    fixture.timeline.sharingBases,
+    "基準と表示の遅れの観測がそろっていること (差が閾値の内側なら共有すること)",
+  );
+  fixture.timeline.setTargetLatencyMs(MAX_PLAYOUT_DELAY_MS - 50);
+  fixture.timeline.setTargetLatencyMs(null);
+  assert.equal(fixture.timeline.delayBreakdown.unsharedReason, "hold", "解除を保持していること");
+  assert.isNull(
+    fixture.timeline.delayBreakdown.audio.presentationDelayMs,
+    "保持している側の表示時刻は決まらないこと",
+  );
+
+  // 鳴らす音の TIMESTAMP も 200 ms 前にする。音を渡すと時間軸へ観測が入るため、到着と
+  // TIMESTAMP の差を映像 (100 ms) より大きく保ち、保持される側を音声のままにする
+  const soundTimestamp = Math.round((nowMs - 200) * 1_000);
+  const referenceMs = performance.now();
+  const output = makeRecordingOutput({
+    timeline: fixture.timeline,
+    mapping: audioClockMappingAt(referenceMs),
+    currentTimeSeconds: referenceMs / 1_000,
+  });
+  output.setTimestamp(soundTimestamp);
+  assert.isNull(
+    fixture.timeline.presentationPerformanceMs("audio", soundTimestamp),
+    "目標の表示時刻を引けないこと",
+  );
+
+  const result = handleSound(fixture, output.output, { timestamp: soundTimestamp });
+
+  assert.equal(result.status, "played", "到着基準で鳴らすこと");
+  // 映像の実績だけを作る。音声の実績を作っていれば推定が出るため、出ないことで「記録して
+  // いない」ことを確かめる
+  fixture.timeline.recordPresentation(
+    "video",
+    soundTimestamp,
+    BigInt(Math.round((performance.timeOrigin + performance.now()) * 1_000)),
+  );
+  assert.isNull(fixture.timeline.skewMs(), "保持されている側の実績を作らないこと");
 });
 
 /**

@@ -425,8 +425,12 @@ export class AudioPlayoutSession {
       this.previousSampleRate = sampleRate;
 
       // 実際に鳴らす時刻を実績として記録する (同期ずれの推定に使う)。捨てた音は鳴らない
-      // ため記録しない。第 3 引数は Unix epoch マイクロ秒
-      if (wallClockTimestamp !== null) {
+      // ため記録しない。目標の表示時刻を決められなかった音 (基準を共有できず到着基準で
+      // 並べた音) も記録しない。同期ずれの推定は共有している間のずれを読むための値で
+      // あり、制御されていない再生を混ぜると意味が変わる。映像側も、表示時刻を決めて
+      // いないフレームの実績を作らない (src/videoPlayoutSession.ts)。第 3 引数は Unix
+      // epoch マイクロ秒
+      if (targetMs !== null && wallClockTimestamp !== null) {
         const presentedMs = this.clock.toPerformanceMs(decision.startAt);
         if (presentedMs !== null) {
           request.timeline.recordPresentation(

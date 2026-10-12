@@ -829,6 +829,11 @@ export class PlaybackTimeline {
    * 直近に表示した音声と映像それぞれの「表示時刻 - TIMESTAMP」の差を取る。両方が
    * `SKEW_SAMPLE_WINDOW_MS` 以内の実績を持つときだけ値を返す。捨てた音と write しなかった
    * フレームは実績に含めないため、捨てが続くと実績が古くなり null になる。
+   *
+   * 実績は、そのトラックの表示時刻を決めて表示したときだけ記録する (`recordPresentation`
+   * の呼び出し側の条件)。基準を共有できないと保持された側は到着基準で再生されるため、その
+   * 側は表示時刻が決まらず実績を作らない。したがってこの推定は基準を共有している間のずれ
+   * であり、解除している間 (どちらかが到着基準で再生されている間) は null になる。
    */
   skewMs(): number | null {
     const audio = this.audioPresentation;
