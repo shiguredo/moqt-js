@@ -2,6 +2,7 @@ import { test, assert } from "vite-plus/test";
 import { LOC, decodeCatalogMessage, encodeCatalog } from "moqt-js";
 import {
   buildObjectSendPlan,
+  buildPublishStopPlan,
   buildPublisherCatalog,
   buildPublisherCatalogOptions,
   buildPublisherCatalogOptionsFromSettings,
@@ -1447,4 +1448,52 @@ test("buildPublisherTrackDeclarations: 画面の設定と実際に取れた音�
   } finally {
     resetCatalogSettings();
   }
+});
+
+// ============================================================================
+// buildPublishStopPlan
+// ============================================================================
+
+/**
+ * 完了条件: 3 つの止め方で送るメッセージが変わる。
+ * draft-ietf-moq-transport-22 §7.4 (A subscriber remains subscribed to a Track at a Relay until
+ * it unsubscribes, the upstream publisher terminates the subscription, or the subscription
+ * expires.): 止め方によって購読者に届く終了通知が変わるため、段取りをここで固定する。
+ */
+test("buildPublishStopPlan: 既定は complete catalog と PUBLISH_DONE を送ってセッションを閉じる", () => {
+  assert.deepEqual(buildPublishStopPlan("publish-done"), {
+    sendCompleteCatalog: true,
+    sendPublishDone: true,
+    closeSession: true,
+    stopSending: true,
+    detachEventPublisher: false,
+    detachCatalogPublisher: false,
+    statusMessage: "Ready to publish",
+  });
+});
+
+test("buildPublishStopPlan: セッションだけを閉じるときは complete catalog も PUBLISH_DONE も送らない", () => {
+  // complete catalog を送ると、止め方の差ではなく catalog の有無で購読者の表示が変わる
+  assert.deepEqual(buildPublishStopPlan("close-session"), {
+    sendCompleteCatalog: false,
+    sendPublishDone: false,
+    closeSession: true,
+    stopSending: true,
+    detachEventPublisher: false,
+    detachCatalogPublisher: false,
+    statusMessage: "Ready to publish",
+  });
+});
+
+test("buildPublishStopPlan: 配信だけを止めるときは何も送らずセッションを維持する", () => {
+  // 送信の再開経路 (event timeline の PUBLISH と catalog の PUBLISH) も外す
+  assert.deepEqual(buildPublishStopPlan("stop-sending"), {
+    sendCompleteCatalog: false,
+    sendPublishDone: false,
+    closeSession: false,
+    stopSending: true,
+    detachEventPublisher: true,
+    detachCatalogPublisher: true,
+    statusMessage: "Stopped sending (session kept)",
+  });
 });

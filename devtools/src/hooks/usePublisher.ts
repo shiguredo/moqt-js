@@ -23,7 +23,13 @@ import {
   isSameCodecDescription,
   parseResolution,
 } from "../utils/codec";
-import type { AudioCodecType, AudioSourceType, CodecType, VideoSourceType } from "../types";
+import type {
+  AudioCodecType,
+  AudioSourceType,
+  CodecType,
+  PublishStopMode,
+  VideoSourceType,
+} from "../types";
 import { createDummyVideoStream } from "../webcodecs-devtools/utils/dummyVideo";
 import { createDummyAudioStream } from "../webcodecs-devtools/utils/dummyAudio";
 import { readAllAudioSamples } from "../utils/audioLevel";
@@ -745,6 +751,80 @@ function startCatalogRepublish(maxCacheDurationMs: number, send: () => Promise<v
   scheduleCatalogRepublish(send);
 }
 
+/**
+ * Stop Publish の止め方ごとの、送るメッセージと後始末の段取り
+ */
+export interface PublishStopPlan {
+  /** complete catalog を送るか */
+  sendCompleteCatalog: boolean;
+  /** 各トラックに PUBLISH_DONE (TRACK_ENDED) を送るか */
+  sendPublishDone: boolean;
+  /** セッションを閉じるか */
+  closeSession: boolean;
+  /** セッションを維持したまま、送信の経路を止めるか */
+  stopSending: boolean;
+  /** event timeline の PUBLISH を外すか (送信を再開させない) */
+  detachEventPublisher: boolean;
+  /** catalog の PUBLISH を外すか (購読者の FORWARD で送り直しが再開しないようにする) */
+  detachCatalogPublisher: boolean;
+  /** 停止後に出す Status の文言 */
+  statusMessage: string;
+}
+
+/**
+ * Stop Publish の止め方を、送るメッセージと後始末の段取りにする
+ *
+ * draft-ietf-moq-transport-22 §7.4 (A subscriber remains subscribed to a Track at a Relay until
+ * it unsubscribes, the upstream publisher terminates the subscription, or the subscription
+ * expires.): 購読者に届く終了通知は止め方で変わるため、切り分けのために選べるようにする。
+ *
+ * - `publish-done` (既定): complete catalog と各トラックの PUBLISH_DONE (TRACK_ENDED) を送って
+ *   からセッションを閉じる。今までの Stop Publish と同じ
+ * - `close-session`: complete catalog も PUBLISH_DONE も送らずにセッションだけを閉じる。
+ *   complete catalog を送ると購読者の Catalog パネルが空になり、止め方の差ではなく catalog の
+ *   有無で購読者の表示が変わってしまうため送らない
+ * - `stop-sending`: 何も送らずに送信の経路だけを止め、セッションと PUBLISH は維持する
+ */
+export function buildPublishStopPlan(mode: PublishStopMode): PublishStopPlan {
+  switch (mode) {
+    case "close-session":
+      return {
+        sendCompleteCatalog: false,
+        sendPublishDone: false,
+        closeSession: true,
+        stopSending: true,
+        detachEventPublisher: false,
+        detachCatalogPublisher: false,
+        statusMessage: "Ready to publish",
+      };
+    case "stop-sending":
+      return {
+        sendCompleteCatalog: false,
+        sendPublishDone: false,
+        closeSession: false,
+        stopSending: true,
+        detachEventPublisher: true,
+        detachCatalogPublisher: true,
+        statusMessage: "Stopped sending (session kept)",
+      };
+    case "publish-done":
+      return {
+        sendCompleteCatalog: true,
+        sendPublishDone: true,
+        closeSession: true,
+        stopSending: true,
+        detachEventPublisher: false,
+        detachCatalogPublisher: false,
+        statusMessage: "Ready to publish",
+      };
+    default: {
+      // 止め方を足したときに、段取りの決定漏れを型で止める (ここには来ない)
+      const exhaustive: never = mode;
+      throw new Error(`unknown publish stop mode: ${String(exhaustive)}`);
+    }
+  }
+}
+
 export function usePublisher() {
   /**
    * 音声設定に従って音声のストリームを用意し、取れた音の形式を返す
@@ -997,6 +1077,10 @@ export function usePublisher() {
   };
 
   async function processFrames(): Promise<void> {
+    // 配信だけを止めた後に開始処理が続いた場合も、フレームを送らない
+    if (pub.sendingStopped.value) {
+      return;
+    }
     const reader = pub.frameReader.value;
     const encoderInstance = pub.encoder.value;
     if (!reader || !encoderInstance) {
@@ -1103,6 +1187,10 @@ export function usePublisher() {
   }
 
   async function processAudioFrames(): Promise<void> {
+    // 配信だけを止めた後に開始処理が続いた場合も、音声を送らない
+    if (pub.sendingStopped.value) {
+      return;
+    }
     const reader = pub.audioFrameReader.value;
     const encoder = pub.audioEncoder.value;
     if (!reader || !encoder) {
@@ -1486,6 +1574,10 @@ export function usePublisher() {
   // ため 0 にする (§6.2)。Catalog Publisher が active でなければ何もしない
   // (送り直しの予約もしない)。
   const sendCatalogUpdate = async (): Promise<void> => {
+    // 配信だけを止めた後は、購読者の FORWARD で送り直しを再開しない
+    if (pub.sendingStopped.value) {
+      return;
+    }
     const catalogPublisherInstance = pub.catalogPublisher.value;
     const currentCatalog = pub.catalog.value;
     if (
@@ -1526,6 +1618,10 @@ export function usePublisher() {
     namespaceArray: string[],
     maxCacheDuration: number,
   ): Promise<void> {
+    // 配信だけを止めた後に開始処理が続いた場合も、event timeline を購読しない
+    if (pub.sendingStopped.value) {
+      return;
+    }
     const eventPublisherInstance = await session.publish(
       namespaceArray,
       EVENT_TRACK_NAME,
@@ -1582,6 +1678,8 @@ export function usePublisher() {
     // 配信を始めている途中として扱う (pub.isStarting)。connect を待つ間に Subscriber を
     // 止めても、接続設定の入力を有効に戻さない
     pub.isStarting.value = true;
+    // 前の配信で配信だけを止めていた場合も、新しい配信では送る
+    pub.sendingStopped.value = false;
     loggedAudioDatagramFallback = false;
     try {
       pub.pubStatus.value = "disconnected";
@@ -1861,15 +1959,31 @@ export function usePublisher() {
     }
     pub.isStopping.value = true;
 
-    pub.pubStatus.value = "disconnected";
-    pub.pubStatusMessage.value = "Disconnecting...";
+    // 配信だけを止めた後に Stop を押したときは、何も送らずにセッションを閉じる
+    // (close-session と同じ。配信を止めたまま 3 つ目の止め方を作らない)
+    const stopMode = pub.sendingStopped.value ? "close-session" : settings.publishStop.value;
+    const plan = buildPublishStopPlan(stopMode);
+    // 止め方で送るメッセージが変わるため、選んだ止め方をログに残す
+    addLog("info", `[publisher] [STOP] ${stopMode}`, {
+      sendPublishDone: plan.sendPublishDone,
+      sendCompleteCatalog: plan.sendCompleteCatalog,
+      closeSession: plan.closeSession,
+    });
+
+    // セッションを閉じない止め方では、接続は生きたまま送信だけを止める
+    pub.pubStatus.value = plan.closeSession ? "disconnected" : "connected";
+    pub.pubStatusMessage.value = plan.closeSession ? "Disconnecting..." : plan.statusMessage;
 
     // 配信を終えるため catalog の送り直しを止める
     cancelCatalogRepublish();
 
     try {
       // Complete catalog を送信
-      if (pub.catalogPublisher.value && pub.catalogPublisher.value.state === "active") {
+      if (
+        plan.sendCompleteCatalog &&
+        pub.catalogPublisher.value &&
+        pub.catalogPublisher.value.state === "active"
+      ) {
         const completeCatalog = createCompleteCatalog();
         const completeCatalogPayload = encodeCatalog(completeCatalog);
         // 最後に Catalog を送った Group の次を使う。固定値にすると、購読者の到着に
@@ -1893,26 +2007,49 @@ export function usePublisher() {
         await pub.catalogPublisher.value.done();
       }
 
-      if (pub.publisher.value && pub.publisher.value.state === "active") {
-        await pub.publisher.value.done();
-      }
+      if (plan.sendPublishDone) {
+        if (pub.publisher.value && pub.publisher.value.state === "active") {
+          await pub.publisher.value.done();
+        }
 
-      if (pub.audioPublisher.value && pub.audioPublisher.value.state === "active") {
-        await pub.audioPublisher.value.done();
-      }
+        if (pub.audioPublisher.value && pub.audioPublisher.value.state === "active") {
+          await pub.audioPublisher.value.done();
+        }
 
-      if (pub.eventPublisher.value && pub.eventPublisher.value.state === "active") {
-        await pub.eventPublisher.value.done();
+        if (pub.eventPublisher.value && pub.eventPublisher.value.state === "active") {
+          await pub.eventPublisher.value.done();
+        }
       }
     } finally {
-      cleanupPublisher();
+      if (plan.closeSession) {
+        cleanupPublisher();
+      } else if (plan.stopSending) {
+        // セッションと PUBLISH は維持したまま、送信の経路だけを止める。購読者には何も届かない
+        // 状態が続く。PUBLISH_DONE を送らない止め方のため、event timeline の購読を外し、
+        // 購読者の FORWARD で catalog の送り直しが再開しないよう catalog の PUBLISH も外す
+        stopSendingPaths();
+        if (plan.detachEventPublisher) {
+          pub.eventPublisher.value = null;
+        }
+        if (plan.detachCatalogPublisher) {
+          pub.catalogPublisher.value = null;
+        }
+        pub.sendingStopped.value = true;
+      }
       pub.isStopping.value = false;
-      pub.pubStatus.value = "disconnected";
-      pub.pubStatusMessage.value = "Ready to publish";
+      pub.pubStatus.value = plan.closeSession ? "disconnected" : "connected";
+      pub.pubStatusMessage.value = plan.statusMessage;
     }
   };
 
-  const cleanupPublisher = (): void => {
+  /**
+   * 配信の送信経路を止める (セッションは閉じない)
+   *
+   * フレームの読み出しと encoder を止め、catalog の送り直しも止める。PUBLISH は残るため、
+   * 購読者には何も届かない状態が続く (draft-ietf-moq-transport-22 §7.4: 購読は unsubscribe
+   * するか、上流の publisher が購読を終えるか、購読の期限が切れるまで残る)。
+   */
+  function stopSendingPaths(): void {
     // catalog の送り直しを止める (切断やエラーでの後始末を含む)
     cancelCatalogRepublish();
 
@@ -1956,6 +2093,12 @@ export function usePublisher() {
 
     // 音声ストリームを解放する
     stopAudioStream();
+  }
+
+  const cleanupPublisher = (): void => {
+    stopSendingPaths();
+    // セッションを閉じたため、配信を止めた状態は残さない
+    pub.sendingStopped.value = false;
 
     // セッションを閉じる
     if (pub.pubSession.value) {

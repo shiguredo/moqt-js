@@ -41,6 +41,7 @@ import {
   audioNoiseSuppression,
   audioSource,
   audioDelivery,
+  publishStop,
   selectedMicrophoneDeviceId,
   selectedAudioOutputDeviceId,
   url,
@@ -464,6 +465,32 @@ test("buildQueryString: audioDelivery=datagram を URL で往復でき、未知�
   initFromUrl("audioDelivery=stream");
   assert.equal(audioDelivery.value, "datagram");
   audioDelivery.value = "subgroup";
+});
+
+// Stop Publish の止め方。既定の PUBLISH_DONE を送る止め方は URL に載せず、他の 2 つだけ
+// 往復する (実リレーの E2E から URL で止め方を選べるようにするため)
+test("buildQueryString: publishStop を URL で往復でき、未知の値は無視する", () => {
+  publishStop.value = "publish-done";
+  assert.isNull(new URLSearchParams(buildQueryString()).get("publishStop"));
+
+  publishStop.value = "close-session";
+  const params = new URLSearchParams(buildQueryString());
+  assert.equal(params.get("publishStop"), "close-session");
+
+  publishStop.value = "publish-done";
+  initFromUrl(params.toString());
+  assert.equal(publishStop.value, "close-session");
+
+  // 止め方の選択肢に無い値は既定のままにする
+  initFromUrl("publishStop=stop");
+  assert.equal(publishStop.value, "close-session");
+  publishStop.value = "publish-done";
+
+  // 3 つ目の止め方も往復する
+  initFromUrl("publishStop=stop-sending");
+  assert.equal(publishStop.value, "stop-sending");
+  assert.equal(new URLSearchParams(buildQueryString()).get("publishStop"), "stop-sending");
+  publishStop.value = "publish-done";
 });
 
 // URL の mode で表示モードを決める。both は既定のため Copy URL に載せず、publisher /

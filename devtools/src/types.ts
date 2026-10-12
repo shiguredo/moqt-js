@@ -16,6 +16,13 @@ export type AudioSourceType = "none" | "dummy" | "microphone";
 // draft-ietf-moq-transport-22 §11.2。reliable-only (WT-H2) では使えない
 export type AudioDelivery = "subgroup" | "datagram";
 
+// Stop Publish の止め方。publisher の止め方によって購読者に届く終了通知が変わるため、
+// 切り分けのために選べるようにする
+// - "publish-done": 各トラックに PUBLISH_DONE (TRACK_ENDED) を送ってからセッションを閉じる (既定)
+// - "close-session": PUBLISH_DONE を送らずにセッションだけを閉じる
+// - "stop-sending": 何も送らずに配信だけを止める (セッションは維持する)
+export type PublishStopMode = "publish-done" | "close-session" | "stop-sending";
+
 export type AudioCodecType = "opus" | "aac";
 
 export type StatusType = "disconnected" | "connected" | "error";
