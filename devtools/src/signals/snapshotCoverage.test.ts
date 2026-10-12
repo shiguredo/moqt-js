@@ -233,6 +233,8 @@ const SUBSCRIBER_COVERAGE: CoverageExpectation = {
     decoder: "映像のデコーダの実体。状態は decoderState / decoderConfigured に出す",
     isStopping: "停止処理の途中かどうか (一時的な状態)",
     isStarting: "開始処理の途中かどうか (一時的な状態)",
+    videoTrackEnd: "映像トラックの終了状態。終了したトラックと理由は statusMessage に出す",
+    audioTrackEnd: "音声トラックの終了状態。終了したトラックと理由は statusMessage に出す",
     audioSubscriber: "音声の Subscriber の実体。状態は audio.decoderConfigured などに出す",
     audioDecoder: "音声のデコーダの実体。状態は audio.decoderConfigured に出す",
     audioWaveformLeft: "波形の配列は大きく、コピーする統計ではない",

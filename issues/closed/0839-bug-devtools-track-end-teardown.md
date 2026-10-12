@@ -1,7 +1,7 @@
 # moqt-devtools の subscriber が、トラック 1 本の正常終了で購読全体とセッションを閉じる
 
 - Created: 2026-10-12
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-10-12
 - Branch: feature/fix-devtools-track-end-teardown
 - Polished: 2026-10-12
 - Reporter: @voluntas
@@ -64,4 +64,13 @@ moqt-devtools の subscriber は、購読している映像 (音声だけの購�
 
 ## 解決方法
 
-{未着手}
+- `handleTrackEnd` を追加し、PUBLISH_DONE によるトラックの終了では後始末をしないようにした。終わったトラックだけを「終了」にし、他のトラックの購読とセッションは維持する (draft-ietf-moq-transport-22 §9.9 の終了は購読単位であり、セッションを閉じるかは §6.6 の判断である)
+- `SubscriberInstance` に `videoTrackEnd` / `audioTrackEnd` を追加し、`TrackEndState` (エラーかどうか / Status Code の表示 / Reason Phrase) を持つ。表示は `statusMessage` に「video ended: TRACK_ENDED (0x2)」の形で出し、音声と映像を並べるときは audio → video の順にした。映像が終わっても最後のフレームを保持し、音声が生きていれば再生を続ける
+- 終了したトラックの追いつきの判定は畳む。SUBSCRIBE_OK と PUBLISH_DONE が同じチャンクで届いても「Catching up」が残らないよう、表示の判定でも終了したトラックを完了として扱う
+- 停止した購読に遅れて届いた終了は、次の購読の signal に触らずログにだけ残す (セッションの close を stop 主導でも記録するのと同じ方針)
+- 0840 で入れた `resolvePublishDoneDisplay` は終了状態の判定へ統合し、`logPublishDoneEnd` と `applySubscribedStatus` が同じ判定源を使うようにした
+- 表示の更新は `applySubscribedStatus` / `refreshTrackEndStatus` に寄せ、購読の確立とトラックの終了が前後してもエラー status と終了の理由が消えないようにした
+- 停止、WebTransport の close と error、接続と購読の失敗、decoder の再初期化の失敗、アンマウントの後始末は変更していない
+- テスト: `devtools/src/hooks/useSubscriber.test.ts` に、`handleTrackEnd` (セッションと他トラックの購読を後始末しない / 停止した購読では signal を触らない / 停止処理中は表示を変えない / 両トラック終了時の表示)、`applyCatchUpPending` (終了したトラックは境界が後から来ても追いつき中にしない / 境界を設定しないトラック / 生きているトラックが追いつき中)、`applyTrackEnd`、`applySubscribedStatus`、`subscribedStatusMessage` のテストを追加した。`resetSubscriberState` の網羅テストにも新しい signal を足した
+- `npx vp check` / `npx vp test --run` (3901 件) / `npx vp run e2e-test` (108 件) が通る
+- 残った未検証: `startSubscribing` の `end` クロージャはブラウザ API に依存するため単体テストで通せない。実リレーでの「publish 停止 → セッション維持」を固定する e2e は無い
