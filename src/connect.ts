@@ -74,9 +74,8 @@ export async function connect(
   // になる (最終版の ALPN は "moqt"。この規則は RFC 編集者向けの注記の直後にあり、
   // 出版時に削除される箇所である)。
   // 実装が準拠するドラフトは draft-22 であるため "moqt-22" を提示する。ピアが
-  // draft-22 の識別子に対応していない場合は接続できない (現行の実リレーは
-  // draft-21 のため接続できない)。複数の draft を優先順で提示する運用が必要に
-  // なった場合はここに追加する。
+  // draft-22 の識別子に対応していない場合は接続できない。複数の draft を優先順で
+  // 提示する運用が必要になった場合はここに追加する。
   // WebTransport API の protocols オプションが WT-Available-Protocols に相当する。
   // protocols は TypeScript 6.0 の DOM 型で追加されたため、5.x でも通るようキャストする。
   (transportOptions as WebTransportOptions & { protocols?: string[] }).protocols = ["moqt-22"];
