@@ -11,6 +11,11 @@
 
 ## develop
 
+- [CHANGE] Media Subscriber の catalog の delta 適用で、track が継承する namespace を解決する
+  - draft-ietf-moq-msf-01 §5.2.2 は、track が namespace を宣言しない場合に catalog track の namespace を継承する MUST を定める。delta を適用する `applyCatalogDelta` は `catalogNamespace` を受け取れるが、唯一の呼び出し元である `createMediaSubscriber` が渡していなかったため、継承後の重複 (§5.2.3) の検出と remove / clone の対象の解決が効かない経路が残っていた
+  - `processCatalogPayload` が catalog namespace を受け取り、delta の適用時に `applyCatalogDelta` へ渡すようにした。`MediaSubscriberImpl` は `MediaSubscriberOptions.namespace` のフィールド列を "/" で連結した文字列を catalog namespace として使う (購読の処理と同じ配列を毎回読む)。MSF の namespace は文字列であり MOQT の namespace は byte string の列で、対応は仕様で定まっていないため、この連結は実装固有の規約である (継承後の値が配信側の MSF namespace 文字列と食い違う構成では、重複として拒否されるか remove の対象が見つからなくなる)。namespace が空配列のときは §5.2.2 の継承を解決せず、従来どおり namespace 未宣言どうしの重複だけを検出する
+  - これまで受理していた catalog (namespace を宣言しない track と、catalog の namespace を明示した同名 track が delta の add で混ざるもの) は §5.2.3 の重複として拒否されるようになる (後方互換なし)
+  - @voluntas
 - [CHANGE] `AudioReceiverStats` に経路別の受信数を追加する
   - `subgroupFramesReceived` / `datagramFramesReceived` を足す (`framesReceived` は両方の和)。`MediaSubscriberImpl` は datagram callback を登録し、Subgroup と同じ処理へ流して経路だけを数える。保留キューを経由しても到着時の経路を保つ
   - `AudioReceiverStats` は公開型のため、この型を自前で構築しているコードは 2 つの追加が必要になる (後方互換なし)

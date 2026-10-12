@@ -1,7 +1,7 @@
 # Media Subscriber の Catalog 適用が catalogNamespace を渡していない
 
 - Created: 2026-09-24
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-10-12
 - Branch: feature/fix-media-subscriber-catalog-namespace
 - Polished: 2026-09-24
 
@@ -53,4 +53,10 @@ closed の `0647-bug-catalog-required-validation.md` は `applyCatalogDelta` に
 
 ## 解決方法
 
-{未着手}
+- `processCatalogPayload` に `options?: { catalogNamespace?: string }` を足し、delta の適用時に `applyCatalogDelta` へ渡すようにした
+- `MediaSubscriberImpl` は `catalogDeltaOptions()` で `MediaSubscriberOptions.namespace` のフィールド列を "/" で連結した値を呼び出しごとに作って渡す。subscribe が使うのと同じ値から作るため、構築後に呼び出し元が配列を書き換えても SUBSCRIBE と継承値は食い違わない。namespace が空配列のときは §5.2.2 の継承を解決せず、namespace 未宣言どうしの重複だけを検出する従来の挙動になる
+- MSF の namespace は文字列、MOQT の Track Namespace は byte string の列であり、catalog の namespace フィールドとの対応は仕様で定まっていない。フィールド列を "/" で連結する実装固有の規約であることを `MediaSubscriberOptions.namespace` の JSDoc と `CHANGES.md` に書いた
+- 触ったファイル: `src/createMediaSubscriber.ts`、`src/createMediaSubscriber.test.ts`、`src/codec/types.ts`、`CHANGES.md`
+- テスト: 4 件追加した。catalogNamespace の継承で重複する delta が error になること (純関数)、impl 経由で `onError` に届き `receivedCatalog` と `onCatalog` が動かないこと、継承して重複しない delta は適用されること (過剰な拒否のガード)、namespace が空配列なら継承せず従来どおり適用されること
+- 互換性: これまで受理していた catalog (namespace を宣言しない track と、catalog の namespace を明示した同名 track が delta の add で混ざるもの) は §5.2.3 の重複として拒否されるようになる。0647 の前例に合わせ、`CHANGES.md` の `## develop` に `[CHANGE]` を追記した (issue のカテゴリが bug であるためブランチ名は `feature/fix-` のままとした)
+- 確認: `vp check` / `vp exec tsc --noEmit` / `vp test run` (3872 件) が通る
