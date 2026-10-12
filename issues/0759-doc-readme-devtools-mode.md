@@ -1,7 +1,7 @@
 # README の moqt-devtools の説明に表示モード (Publisher / Subscriber) を追記する
 
 - Created: 2026-09-25
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-10-12
 - Branch: feature/update-readme-devtools-mode
 - Polished: 2026-09-30
 
@@ -26,3 +26,12 @@ moqt-devtools に URL クエリ `mode` で Publisher だけ / Subscriber だけ�
 
 - README.md の moqt-devtools の機能一覧の表示モードの項目に、URL クエリ `mode` で切り替えることと、ヘッダーの副題のリンクから他のモードのページを今の接続設定のまま新しいタブで開けることが書かれている
 - その項目が「Publisher / Subscriber 両方の動作確認」の近くにある
+
+## 解決方法
+
+README.md の `### moqt-devtools` の機能一覧を次のように変更した。
+
+- 「Publisher / Subscriber 両方の動作確認」の直後に「表示モード (Publisher のみ / Subscriber のみ)」を移し、URL クエリ `mode` (`both` / `publisher` / `subscriber`) で切り替えることと、ヘッダーの副題のリンクから他のモードのページを今の接続設定を載せた URL で新しいタブに開けることを書いた
+- 一覧の末尾にあった表示モードの項目を削除した
+
+併せて moqt-devtools の機能一覧を実装に合わせて更新した (音声の配送経路の選択、マイク / カメラのデバイス選択、Jitter Buffer、Copy for LLM、前提から外れた状態の警告、統計の詳細など)。
