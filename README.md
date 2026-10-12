@@ -33,9 +33,10 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
   - Publisher / Subscriber 対応
   - 高レベル API (WebCodecs / MediaStream 対応)
   - 音声と映像の同期再生
+  - 音声の配送経路の選択 (Subgroup / Datagram)
 - Media over QUIC Transport (MOQT) 対応
   - [Media over QUIC Transport](https://datatracker.ietf.org/doc/html/draft-ietf-moq-transport-22)
-  - `draft-22` 対応 (接続時のプロトコル識別子は `moqt-22`。現行の Sora MoQ は draft-21 のため、対応するまで疎通確認はできない)
+  - `draft-22` 対応 (接続時のプロトコル識別子は `moqt-22`。Sora MoQ との疎通は実リレーへ接続する E2E テストで確認している)
 - Low Overhead Media Container (LOC) 対応
   - [Low Overhead Media Container](https://datatracker.ietf.org/doc/html/draft-ietf-moq-loc-04)
   - `draft-04` 対応
@@ -43,6 +44,12 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
   - [MOQT Streaming Format](https://datatracker.ietf.org/doc/html/draft-ietf-moq-msf-01)
   - `draft-01` 対応
   - Catalog / Timeline
+- C4M (CAT-4-MOQT) 対応
+  - [C4M](https://datatracker.ietf.org/doc/html/draft-ietf-moq-c4m-01)
+  - `draft-01` 対応
+  - CAT (Common Access Token) のトークンのデコード / 検証 / 発行
+  - CBOR / COSE のコーデック (署名 / 検証は Web Crypto API を使う)
+  - MSF URI Fragment の `c4m` を `SETUP` の Authorization Token として送出
 - 外部依存なし
 
 ## 実装状況
@@ -61,7 +68,7 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
 - 予約 namespace の送信拒否
   - 先頭フィールドが `.` で始まる Track Namespace (`.session` 含む) は publish / subscribe / fetch / trackStatus / subscribeNamespace / subscribeTracks / publishNamespace で送信前に拒否される
   - `.session` namespace と空 Track Name の組み合わせは DOES_NOT_EXIST 相当で拒否される
-- 接続の前に送信できる Track Namespace かを検証する `validateTrackNamespaceForSend` を公開する (draft-ietf-moq-transport-22 §8.7 の 32 フィールド上限・各フィールド 1 バイト以上・4,096 バイト上限と、§2.4.3 / §6.5 の予約 namespace)
+- 接続の前に送信できる Track Namespace かを検証する `validateTrackNamespaceForSend` を公開する (draft-ietf-moq-transport-22 §8.7 の 32 フィールド上限、各フィールド 1 バイト以上、4,096 バイト上限と、§2.4.3 / §6.5 の予約 namespace)
   - Full Track Name (Track Namespace と Track Name の合計) の 4,096 バイト上限は Track Name を含めて決まるため、Request の送信時に検証する
 
 #### Publisher
@@ -101,7 +108,7 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
   - Object ID Filter
   - Priority Filter
   - Object Property Filter
-  - Track Property Filter
+  - Track Property Filter (subscribeTracks() のみ)
 - Subscriber Priority
 - Group Order (Ascending / Descending)
 - OBJECT_DELIVERY_TIMEOUT パラメータ
@@ -109,6 +116,10 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
 - RENDEZVOUS_TIMEOUT パラメータ
 - FILL_TIMEOUT パラメータ (Fetch)
 - NEW_GROUP_REQUEST パラメータ
+- LARGEST_OBJECT パラメータ (0x09。`Subscriber.largestLocation` として公開し、相対 Location Filter と Next Object の基準にする)
+- FILL_PARAMETERS パラメータ (subscribe() の `fill` で live 手前の範囲を fill fetch する)
+- INCLUDE_PROPERTIES パラメータ (subscribe() / subscribeTracks() / fetch() / trackStatus() で、応答の OK メッセージと SUBSCRIBE_TRACKS が生む PUBLISH に Track Properties を含めるかを指定する)
+- TRACK_NAMESPACE_PREFIX パラメータ (namespace 系の REQUEST_UPDATE で購読する prefix を更新する)
 
 #### コントロールメッセージ
 
@@ -118,6 +129,7 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
   - MOQT_IMPLEMENTATION Setup Option
   - MAX_FILTER_RANGES Setup Option
   - MAX_REQUEST_UPDATES Setup Option
+  - WebTransport 利用時の AUTHORITY Setup Option / PATH Setup Option の受信拒否 (INVALID_AUTHORITY / INVALID_PATH)
 - GOAWAY
   - Timeout 対応
   - リクエストストリーム上での受信
@@ -133,6 +145,7 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
 - SUBSCRIBE_NAMESPACE (Namespace 発見)
 - SUBSCRIBE_TRACKS (Track 購読)
 - TRACK_STATUS
+- Parameter Scope 検証 (draft-ietf-moq-transport-22 §9.20.1 の許可パラメータ集合に無い Message Parameter を PROTOCOL_VIOLATION で拒否する)
 
 #### データストリーム
 
@@ -159,6 +172,13 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
 - Video Frame Marking
 - Audio Config
 - Audio Level
+
+#### LOC の公開 API
+
+- `LOC` 名前空間として Properties と Object payload の encode / decode を公開する
+  - `LOCPropertyId` と各 Property の encode / decode (`encodeVideoProperties` / `decodeAudioProperties` など)
+  - Object payload の encode / decode (`encodeLocObjectPayload` / `decodeLocObjectPayload`)
+  - Timescale / Video Config / Audio Config は `PublishOptions` で Track Property としても広告できる (draft-ietf-moq-loc-04 Table 1 の Scope: Track, Object)
 
 ### MOQT Streaming Format
 
@@ -198,6 +218,24 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
 
 - Media Timeline
 - Event Timeline
+- Timeline の payload は無圧縮 JSON のみ (MSF_COMPRESSION による圧縮は未実装)
+
+#### MOQ Log / MOQ Metrics
+
+- `MOQLOG` 名前空間として Log track の payload を公開する ([draft-jennings-moq-log-03](https://datatracker.ietf.org/doc/html/draft-jennings-moq-log-03) / draft-ietf-moq-msf-01 §9)
+  - エントリのエンコード / デコード (`encodeLogEntry` / `decodeLogEntry`) と、Group ID / Object ID / namespace / track name の算出
+- `MOQMETRICS` 名前空間として Metrics track の payload を公開する ([draft-jennings-moq-metrics-02](https://datatracker.ietf.org/doc/html/draft-jennings-moq-metrics-02) / draft-ietf-moq-msf-01 §10)
+  - Capture Object と Metric Object のエンコード / デコードと、Group ID / Object ID / namespace / track name の算出
+
+#### C4M
+
+[draft-ietf-moq-c4m-01](https://datatracker.ietf.org/doc/html/draft-ietf-moq-c4m-01) の CAT (Common Access Token) の実装状況です。
+
+- `C4M` 名前空間として CBOR (RFC 8949) / COSE (RFC 9052) / CAT / JWK (RFC 7517) のコーデックを公開する
+- トークンのデコード (`CatToken.decode` / `decodeCompact` / `decodeCose`) と検証 (`CatToken.verify`)、発行 (`CatTokenBuilder`)
+- `moqt` / `moqt-reval` / `catdpop` クレームと、アクション / namespace / track の認可の判定 (`authorizeCatClaims`)
+- JWK のデコード / エンコードと、サムプリント (RFC 7638) の算出
+- 署名 / 検証は Web Crypto API だけで行い、外部依存を持たない
 
 #### URI / 認可
 
@@ -218,7 +256,7 @@ pnpm add -E moqt-js
 
 ### 高レベル API (推奨)
 
-MediaStream を使用した簡単な配信・受信 API です。WebCodecs API を内部で使用し、エンコード・デコードを自動的に行います。
+MediaStream を使用した配信 / 受信 API です。WebCodecs API を内部で使用し、エンコード / デコードを自動的に行います。
 
 #### Publisher
 
@@ -327,9 +365,10 @@ await subscriber.unsubscribe();
 
 ## ドキュメント
 
-- [高レベル API](docs/HIGH_LEVEL_API.md): `createMediaPublisher` / `createMediaSubscriber` の仕様
-- [低レベル API](docs/LOW_LEVEL_API.md): `connect()` と `Session` の仕様
-- [MOQT Streaming Format](docs/MSF.md): Catalog / Timeline / LOC の公開 API
+- [高レベル API](docs/HIGH_LEVEL_API.md): `createMediaPublisher` / `createMediaSubscriber` と、A/V 同期と再生の共有実装の仕様
+- [低レベル API](docs/LOW_LEVEL_API.md): `connect()` と `Session` / `Publisher` / `Subscriber` / `Fetcher` の仕様
+- [MOQT Streaming Format](docs/MSF.md): Catalog / Timeline の公開 API
+- [A/V 同期と再生の決定の記録](docs/AV_SYNC_DECISIONS.md): A/V 同期と再生の閾値の根拠と再考の条件 (開発者向け)
 
 ## 動作環境
 
@@ -340,14 +379,28 @@ await subscriber.unsubscribe();
 - Mozilla Firefox 最新版
 
 > [!NOTE]
-> Apple Safari 26.4 での動作確認を行っています。
+> Apple Safari 26.4 での動作確認を行っています。Safari 26.4 の WebTransport には単方向ストリームへの `write()` がフラッシュされない WebKit のバグがあり、Safari からの配信は動作しません (購読は動作します)。
 
 ## ビルド
 
+Node.js 22.22.2 以降が必要です (package.json の `engines`。CI では 22 / 24 / 26 で検証しています)。ビルドとテストには [Vite+](https://github.com/voidzero-dev/vite-plus) の `vp` コマンドを使います。
+
 ```bash
 vp install
+```
+
+`vp install` は `prepare` スクリプト経由で `vp pack` を実行し、`dist/` に `index.js` と `index.d.ts` を生成します。ソースを変更した後にビルドし直す場合は `vp run build` を実行します。
+
+```bash
 vp run build
 ```
+
+### git 依存として取り込む場合
+
+`github:shiguredo/moqt-js#develop` のように git 依存として取り込む場合、git から取得したツリーには `dist/` が含まれないため、消費側で `prepare` の実行を許可する設定が必要です。
+
+- pnpm は `allowBuilds` に許可を与えないと `ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED` で失敗します。pnpm 11.19.0 以降はリポジトリ URL 形式 (`moqt-js@git+https://github.com/shiguredo/moqt-js.git`) で指定すると、commit が進んでもキーを書き換えずに済みます
+- npm 12 は git 依存のスクリプト実行が既定で無効のため、`--allow-git=root` などを指定します
 
 ## テスト
 
@@ -360,17 +413,23 @@ vp test
 Playwright による E2E テストは 2 つに分かれています。
 
 ```bash
-# 実リレーを必要としないテスト (moqt-devtools の UI、codec wrapper)
+# 実リレーを必要としないテスト (moqt-devtools / c4m-devtools / webtransport-devtools の UI、codec wrapper)
 vp run e2e-test
 
-# 実リレーへ接続するテスト (SETUP の交換、publish / subscribe、FETCH)
+# 実リレーへ接続するテスト (SETUP の交換、publish / subscribe、FETCH、音声の往復、カタログ)
 vp run e2e-test:relay
 ```
 
-`vp run e2e-test:relay` は `.env` があれば読み込みます。接続先の `TEST_MOQT_URI`
-(`moqt://...`) が設定されていない場合は skip します。設定方法は
+初回は Chromium をインストールしてください。
+
+```bash
+vp exec playwright install --with-deps chromium
+```
+
+Playwright の設定は `.env` があれば読み込みます。実リレーへ接続するテストは、接続先の
+`TEST_MOQT_URI` (`moqt://...`) が設定されていない場合は skip します。設定方法は
 [.env.example](.env.example) を参照してください。CI では `secrets.TEST_MOQT_URI`
-を環境変数として渡します。
+を環境変数として渡し、push と pull request で実行します。
 
 ## サンプル
 
@@ -386,23 +445,30 @@ vp run dev:examples
 
 ## DevTools
 
-[devtools/](devtools/) ディレクトリに開発ツールがあります。
+[devtools/](devtools/) ディレクトリに開発ツールがあります。画面の文言は英語です。
 
 ```bash
-vp run build
+# 開発サーバーを起動する (http://localhost:5173/)
 vp run dev
+
+# デプロイする成果物をビルドする (devtools/dist/)
+vp run build:devtools
 ```
 
 ### オンライン版
 
 <https://moqt-devtools.shiguredo.app/> から利用できます。
 
+- <https://moqt-devtools.shiguredo.app/>: moqt-devtools
+- <https://moqt-devtools.shiguredo.app/c4m-devtools.html>: c4m-devtools
+- <https://moqt-devtools.shiguredo.app/webcodecs-devtools.html>: webcodecs-devtools
+- <https://moqt-devtools.shiguredo.app/webtransport-devtools.html>: webtransport-devtools
+
 ### 使用技術
 
 - [TypeScript](https://github.com/microsoft/TypeScript)
 - [Preact](https://github.com/preactjs/preact)
   - [@preact/signals](https://github.com/preactjs/signals)
-  - [preact-iso](https://github.com/preactjs/preact-iso)
 - [Tailwind CSS](https://github.com/tailwindlabs/tailwindcss)
 - [Vite+](https://github.com/voidzero-dev/vite-plus)
   - [Vite](https://github.com/vitejs/vite)
@@ -411,46 +477,74 @@ vp run dev
   - [Oxc](https://github.com/oxc-project/oxc)
 - [Playwright](https://github.com/microsoft/playwright)
 - [fast-check](https://github.com/dubzzz/fast-check)
+- moqt-js (devtools は `src/index.ts` を直接参照する)
 
 ### moqt-devtools
 
 moqt-js を利用した MOQT の動作確認ツールです。
 
 - Publisher / Subscriber 両方の動作確認
+- 表示モード (Publisher のみ / Subscriber のみ)
+  - URL クエリ `mode` (`both` / `publisher` / `subscriber`) で切り替える
+  - ヘッダーの副題のリンクから、他のモードのページを今の接続設定を載せた URL で新しいタブに開ける
 - 複数 Subscriber の同時接続
-- 音声の入力元の選択 (ダミー音声 / マイク / 音声なし)
-- 映像の入力元の選択 (ダミー映像 / カメラ映像 / 映像なし)
+- 音声の入力元の選択 (ダミー音声 / マイク / 音声なし) とマイクのデバイス選択
+- 音声の配送経路の選択 (Subgroup / Datagram)
+- 映像の入力元の選択 (ダミー映像 / カメラ映像 / 映像なし) とカメラのデバイス選択
 - コーデック選択 (音声: Opus / AAC、映像: VP8 / VP9 / AV1 / H.264 / H.265)
 - 解像度 / フレームレート / ビットレート / キーフレーム間隔の設定
+- 音声のビットレート / サンプルレート / チャンネル数の設定
 - MAX_CACHE_DURATION / targetLatency / renderGroup の設定
 - 自己署名証明書のハッシュ指定
-- Authorization Token の指定 (MSF URL の c4m パラメータ対応)
+- Authorization Token の指定 (Token Type / Alias Type / Token Alias、MSF URL の c4m パラメータ対応)
 - MOQT URI の `#msf:` fragment を URI Fragment 欄へ映して表示し、namespace の固定と c4m の track name の反映を行う
-- Namespace の指定 (draft-ietf-moq-transport-22 §8.8 の namespace-name 文字列。フィールドを `-` で並べ、literal で書けない byte は `.HH`。読めない値・予約 namespace・32 フィールド超では理由を出して配信 / 購読を拒否する)
+- MOQT URI の保存 (Save) と破棄 (Forget)
+- Namespace の指定 (draft-ietf-moq-transport-22 §8.8 の namespace-name 文字列。フィールドを `-` で並べ、literal で書けない byte は `.hh`。読めない値、予約 namespace、32 フィールド超では理由を出して配信 / 購読を拒否する)
 - c4m のトークンのデコード結果 (クレームと moqt スコープ) を Authorization Token の欄に表示する
 - c4m の取り込みを解除したときは、moqt-js が SETUP に載せる MOQT URI の c4m も取り除く
-- WebCodecs Dedicated Worker 対応
+- WebCodecs Dedicated Worker 対応 (音声 / 映像、エンコーダー / デコーダー)
 - 音声レベルメーター (peak / RMS / 波形)
 - 音声と映像の同期再生
+- Jitter Buffer の有効 / 無効の選択 (LOC TIMESTAMP に合わせて映像を表示する)
+- 音声の再生先の選択
 - event timeline のメッセージ送受信
 - デバッグパネル (MOQT プロトコルメッセージのログ表示)
 - 統計情報の表示 (音声 / 映像 / メッセージ / A/V 同期 / セッション)
+  - 遅延の内訳 (到着 / 復号 / 表示の待ち)、音声の再生タイミング、追いつき、損失
+- 統計情報とデバッグログを LLM へ渡すためのコピー (Copy for LLM)
+- 前提から外れた状態の警告の表示 (A/V 同期と再生)
 - カタログ情報の表示
 - HTTP/2 / HTTP/3 接続判別表示
 - FORWARD パラメータ (paused 状態) の表示
 - キーフレームリクエスト (NEW_GROUP_REQUEST)
-- 表示モード (Publisher のみ / Subscriber のみ)
 - 設定を URL クエリパラメータで共有
+
+### c4m-devtools
+
+C4M (CAT-4-MOQT、[draft-ietf-moq-c4m-01](https://datatracker.ietf.org/doc/html/draft-ietf-moq-c4m-01)) の CAT (Common Access Token) をブラウザ内だけでデコード / 検証 / 発行するツールです。moqt-js の `C4M` 名前空間を使い、moqt-js が `SETUP` に載せるのと同じ実装でトークンを扱います。リレーへの接続は行いません。
+
+- トークンのデコード
+  - compact / COSE Sign1 / COSE Mac0 / Base64 包みの入力に対応する
+  - ヘッダ (format / alg / kid / typ) と、現在時刻に対する有効性を表示する
+  - クレーム (iss / sub / aud / exp / nbf / iat / cti / moqt-reval / cnf.jkt / catdpop) と `moqt` スコープ (アクション、namespace、track) を表示する
+- 署名の検証 (JWK または HMAC の対称鍵。期待する alg と typ を指定できる)
+- 認可の判定 (アクション、namespace、track を指定して Allowed / Denied を表示する)
+- 鍵の生成 (ES256 / ES384 / ES512 / EdDSA の鍵ペアと HMAC-SHA256 の対称鍵) と JWK / secret のコピー
+- トークンの発行 (クレームと `moqt` スコープを指定し、compact / COSE 形式で出力する)
+  - 発行したトークンはそのままデコーダへ読み込める
+  - `cnf` の `jkt` は署名鍵のサムプリント (RFC 7638) から設定できる
+- 鍵はブラウザのタブのメモリ上だけで扱い、保存も送信もしない (テスト専用の鍵であることを画面に明記する)
 
 ### webcodecs-devtools
 
 WebCodecs API の動作確認ツールです。moqt-js とは独立しています。
 
 - VideoEncoder / VideoDecoder の動作確認
-- ダミー映像 / カメラ映像の選択
+- ダミー映像 / カメラ映像の選択とカメラデバイスの選択
 - コーデック選択 (VP8 / VP9 / AV1 / H.264 / H.265)
 - 解像度 / フレームレート / ビットレート / キーフレーム間隔の設定
-- Dedicated Worker モード対応
+- Dedicated Worker モード対応 (エンコーダー / デコーダーで独立に選択)
+- 入力映像とデコード結果のプレビュー
 - 統計情報の表示 (フレーム数、キーフレーム数、総バイト数、平均ビットレート)
 - フレームログの表示
 
@@ -459,8 +553,10 @@ WebCodecs API の動作確認ツールです。moqt-js とは独立していま�
 WebTransport API の動作確認ツールです。moqt-js とは独立しています。
 
 - WebTransport API 対応状況の表示 (静的チェック)
+- MDN Browser Compat Data に基づくブラウザ対応バージョンの表示
 - WebTransport 接続 / 切断
 - 自己署名証明書のハッシュ指定
+- 接続オプションの指定 (allowPooling / requireUnreliable / congestionControl / headers / protocols / datagramsReadableType / anticipated streams)
 - WebTransport の接続状態とプロパティの表示
   - ready / closed / draining の Promise 状態
   - closed が受け取った closeInfo (closeCode / reason) の表示 (切断後も保持)
@@ -471,7 +567,12 @@ WebTransport API の動作確認ツールです。moqt-js とは独立してい�
 - 送信専用単方向ストリームの作成と送信
 - 受信専用単方向ストリームの受信
 - Datagram の送受信
+- 接続後の設定 (datagram の max age / max buffered、close() の closeCode / reason)
 - 設定を URL クエリパラメータで共有
+
+## 第三者ライセンス
+
+本プロジェクトは WebRTC のアルゴリズムを一部移植しています。ライセンスの全文は [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) を参照してください。
 
 ## ライセンス
 
