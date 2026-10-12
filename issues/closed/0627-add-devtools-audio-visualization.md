@@ -99,7 +99,7 @@ publisher が property を載せているかは分からない。
 - level は数値をそのまま -dBov として出す (例: `-42 dBov`)。文字列化は純関数
   `formatAudioLevel(level: LOC.AudioLevel | null): string` に切り出し、`null` は
   `not reported` にする。voice activity は `formatVoiceActivity(level:
-LOC.AudioLevel | null): string` で `voice: on` / `voice: off` / `not reported` として
+  LOC.AudioLevel | null): string` で `voice: on` / `voice: off` / `not reported` として
   別の要素に出す (同じ値を 2 度表示しない)。peak / RMS の表示も純関数
   (`formatDbfs(value: number | null): string`、`null` は `not measured`) にする
 - `audioLastLevel` は 0626 が「直近に受信した音声 object の Audio Level」として更新する

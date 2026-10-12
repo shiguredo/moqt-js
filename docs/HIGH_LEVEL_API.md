@@ -1259,7 +1259,8 @@ interface VideoPlayoutTiming {
 }
 
 type VideoPlayoutResult =
-  { status: "queued"; wallClockTimestamp: number | null } | { status: "skipped" };
+  | { status: "queued"; wallClockTimestamp: number | null }
+  | { status: "skipped" };
 ```
 
 `queued` は表示待ちへ積んだ (表示時刻に使った壁時計の TIMESTAMP を返す。使わなかったときは
