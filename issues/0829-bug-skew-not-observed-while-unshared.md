@@ -1,7 +1,7 @@
 # 基準の共有を解除している間、音声と映像の表示時刻の差が観測できない
 
 - Created: 2026-10-11
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-10-12
 - Branch: feature/fix-skew-observation-while-unshared
 - Polished: {YYYY-MM-DD}
 - Reporter: @voluntas
@@ -52,3 +52,20 @@
 - `src/codec/types.ts` の `AvSyncStats.skewMs` / `devtools/src/hooks/useSubscriber.ts` の `avSync.skewMs`
 - `tests/e2e/relay/audio-timestamp.spec.ts` の `expectSkewWithinBudget`
 - closed の 0635 (共有できないときのフォールバックと `skewMs` の定義) / 0754 (音声の TIMESTAMP のドリフト)
+
+## 解決方法
+
+原因は `## 原因` のとおりであり、表示ではなく指標の側の条件であった。原因に応じた分岐のうち「解除中は値を返さないのが仕様である場合」を採り、記録の条件を音声と映像で揃えた。
+
+- `src/audioPlayoutSession.ts` の `handleDecodedAudio` は、目標の表示時刻を決められなかった音 (基準を共有できず到着基準で並べた音) の実績を作らないようにした。映像側 (`src/videoPlayoutSession.ts` の `drain()`) は既に同じ条件であり、これで `skewMs` は基準を共有している間だけ値が出る
+- `src/playbackTimeline.ts` の `skewMs()` と `src/codec/types.ts` / `docs/HIGH_LEVEL_API.md` の `AvSyncStats.skewMs` に、値が出る条件 (基準を共有している間だけ) を明記した。`docs/AV_SYNC_DECISIONS.md` の決定 9 の副作用にも、解除中は保持された側がどちらでも null になることと、E2E の判定を共有していた観測に限ることを書いた
+- `tests/e2e/relay/audio-timestamp.spec.ts` の `expectSkewWithinBudget` は、予算の判定を共有していた観測に対してだけ行うようにした。解除をまたぐ標本には解除前の値が残り得る (実績は 1 秒間使える) ためである。解除中の観測は記録としてログへ残す
+- 単体テストは `src/audioPlayoutSession.test.ts` に「保持されている (到着基準の) 音は実績を記録しない」を足した。音声の基準を映像より大きくして解除を起こし、到着基準で鳴らした音の実績が作られないことを固定している。修正前の実装ではこのテストで `skewMs` が -79.93 ms を返して落ちた
+
+確かめたこと:
+
+- `vp check` / `tsc --noEmit` / 単体テスト (3873 件) が通る
+- 実リレーの E2E (`vp run e2e-test:relay`) が 7 件通る (1.4 分)。`audio-timestamp` は 33.8 秒で、共有は 25 回の観測すべてで保たれ、`skewMs` は -50.7〜-75.7 ms で観測できた
+- 手元の実行では解除 (hold) が起きなかったため、解除中に値が出ないことは単体テストで固定した (解除の再現は環境を選ぶ)
+
+変更は develop に直接コミットした (コード変更 `db9795ce`)。
