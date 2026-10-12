@@ -1,7 +1,7 @@
 # CHANGES.md の develop セクションを規約に適合させる
 
 - Created: 2026-09-21
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-10-12
 - Branch: feature/update-changes-md-cleanup
 - Polished: 2026-09-29
 
@@ -45,4 +45,6 @@
 
 ## 解決方法
 
-{未着手}
+RFC ドラフト中は変更履歴を残さない方針になり (`CODEBASE.md` の「MOQT RFC ドラフト中の特別ルール」)、`CHANGES.md` の `## develop` は draft 対応を示す 1 行だけになった。issue が挙げていた 497 エントリ (issue 番号 70 箇所、同じブランチ内で取り消した中間状態の記述、`### misc` の 4 回出現、種別順序違反、担当者行の欠落・重複) は残っておらず、整形し直す対象が無くなったため closed にする。
+
+リリース時に `## develop` へ書く変更履歴は、この方針の下で改めて作成する。その際は `shiguredo-changelog` の規約 (変更種別の順序、担当者行、中間状態を記載しない、issue 番号を書かない) を適用する。
