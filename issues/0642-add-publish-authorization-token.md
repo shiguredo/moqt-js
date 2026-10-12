@@ -1,7 +1,7 @@
 # PUBLISH に AUTHORIZATION TOKEN を載せられない
 
 - Created: 2026-09-21
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-10-12
 - Branch: feature/add-publish-authorization-token
 - Polished: 2026-09-29
 
@@ -36,4 +36,11 @@ draft-ietf-moq-msf-01 §11.4.3 は、track に紐づくトークンを AUTHORIZA
 
 ## 解決方法
 
-{未着手}
+`PublishOptions.authorizationToken` を追加し、`buildPublishParameters` (`src/session/params.ts`) が未指定でなければ `encodeAuthorizationTokenParameter` を積むようにした。PUBLISH を組み立てる `requestsPublish` (`src/session/requests.ts`) は `requestsNormalizeAuthorizationToken` で SETUP の REGISTER の登録成否に応じた形 (USE_ALIAS / USE_VALUE) へ正規化してから `buildPublishParameters` へ渡す。
+
+`src/session/params.test.ts` に次の 2 件を固定した。
+
+- `buildPublishParameters: authorizationToken が AUTHORIZATION_TOKEN パラメータになる`
+- `buildPublishParameters: authorizationToken 省略時は AUTHORIZATION_TOKEN を送らない`
+
+`vp test` (213 ファイル / 3873 テスト) と `vp check` が通ることを確認した。
