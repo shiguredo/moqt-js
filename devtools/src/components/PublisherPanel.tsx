@@ -28,6 +28,15 @@ import * as settings from "../signals/connectionSettings";
 import { type PublisherStats, buildPublisherStats } from "../signals/statsSnapshot";
 import { createStatsSignal, startStatsTick } from "../signals/statsTick";
 import * as pub from "../signals/publisher";
+import type { PublishStopMode } from "../types";
+
+// Stop Publish の止め方の表示名。許可リスト (PUBLISH_STOP_MODES) に値を足したときは
+// ここにも足す
+const PUBLISH_STOP_LABELS: Record<PublishStopMode, string> = {
+  "publish-done": "PUBLISH_DONE",
+  "close-session": "Close session",
+  "stop-sending": "Stop sending",
+};
 
 /**
  * 音声の TIMESTAMP のずれを ms で出す (小数第 1 位)
@@ -192,6 +201,31 @@ export function PublisherPanel() {
             </svg>
             Publish
           </button>
+          {/*
+            Stop の止め方。publisher の止め方によって購読者に届く終了通知が変わるため、
+            切り分けのために選べるようにする。選んだ値は URL クエリ (publishStop) にも載る
+          */}
+          <select
+            id="publishStop"
+            aria-label="Stop mode"
+            title="Stop mode (URL query publishStop)"
+            value={settings.publishStop.value}
+            onChange={(e) => {
+              const value = e.currentTarget.value;
+              if (settings.isPublishStopMode(value)) {
+                settings.publishStop.value = value;
+              }
+            }}
+            disabled={isStopping}
+            data-testid="publisher-stop-mode"
+            class="px-2 py-2.5 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white disabled:bg-slate-100 disabled:cursor-not-allowed"
+          >
+            {settings.PUBLISH_STOP_MODES.map((value) => (
+              <option key={value} value={value}>
+                {PUBLISH_STOP_LABELS[value]}
+              </option>
+            ))}
+          </select>
           <button
             onClick={() => void stopPublishing()}
             disabled={stopBtnDisabled}

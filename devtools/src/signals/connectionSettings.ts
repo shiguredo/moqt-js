@@ -14,6 +14,7 @@ import type {
   MicrophoneDevice,
   CameraDevice,
   CodecType,
+  PublishStopMode,
   VideoSourceType,
 } from "../types";
 import { toAudioOutputDevices, type AudioOutputDevice } from "../utils/audioOutput";
@@ -203,6 +204,8 @@ export const keyframeInterval = signal(10);
 export const audioSource = signal<AudioSourceType>("dummy");
 // 音声 Object の送り方。既定は subgroup。datagram のときだけ URL に載せる
 export const audioDelivery = signal<AudioDelivery>("subgroup");
+// Stop Publish の止め方。既定は PUBLISH_DONE を送る止め方で、既定は URL に載せない
+export const publishStop = signal<PublishStopMode>("publish-done");
 export const audioCodec = signal<AudioCodecType>("opus");
 export const audioBitrate = signal(64000);
 export const audioSampleRate = signal(48000);
@@ -771,6 +774,10 @@ function buildQueryParams(targetMode: DevtoolsMode): URLSearchParams {
   if (audioDelivery.value === "datagram") {
     params.set("audioDelivery", audioDelivery.value);
   }
+  // 既定 (PUBLISH_DONE を送る) は載せない。Copy URL で止め方を保つ
+  if (publishStop.value !== "publish-done") {
+    params.set("publishStop", publishStop.value);
+  }
   if (audioCodec.value) {
     params.set("audioCodec", audioCodec.value);
   }
@@ -872,6 +879,13 @@ export const AUDIO_SOURCES: readonly AudioSourceType[] = ["none", "dummy", "micr
 /** 音声 Object の送り方。既定は subgroup で、datagram のときだけ URL に載せる */
 export const AUDIO_DELIVERIES: readonly AudioDelivery[] = ["subgroup", "datagram"];
 
+/** Stop Publish の止め方の選択肢。既定は PUBLISH_DONE を送る止め方 */
+export const PUBLISH_STOP_MODES: readonly PublishStopMode[] = [
+  "publish-done",
+  "close-session",
+  "stop-sending",
+];
+
 /** 音声コーデックの選択肢 */
 export const AUDIO_CODECS: readonly AudioCodecType[] = ["opus", "aac"];
 
@@ -944,6 +958,11 @@ export function isAudioDelivery(value: string): value is AudioDelivery {
   return AUDIO_DELIVERIES.some((delivery) => delivery === value);
 }
 
+/** Stop Publish の止め方として受理できる値かを判定する */
+export function isPublishStopMode(value: string): value is PublishStopMode {
+  return PUBLISH_STOP_MODES.some((mode) => mode === value);
+}
+
 /**
  * 音声コーデックとして受理できる値かを判定する
  */
@@ -984,6 +1003,19 @@ export function resolveOptionNumber(
   }
   const parsed = Number(trimmed);
   return options.includes(parsed) ? parsed : current;
+}
+
+/**
+ * Stop Publish の止め方を URL クエリから反映する
+ *
+ * 既定 (PUBLISH_DONE を送る止め方) は URL に載せない扱いで、値があるときだけ反映する。
+ * 選択肢に無い値は無視し、表示と実際の止め方が食い違わないようにする。
+ */
+function applyPublishStopFromUrl(params: URLSearchParams): void {
+  const publishStopParam = params.get("publishStop");
+  if (publishStopParam !== null && isPublishStopMode(publishStopParam)) {
+    publishStop.value = publishStopParam;
+  }
 }
 
 /**
@@ -1084,6 +1116,8 @@ export function initFromUrl(search: string): void {
 
   // 表示モードは許可リストにある値だけを受理する。無い値や mode の無い URL では
   // both のまま (Publisher と Subscriber の両方を表示する)
+  applyPublishStopFromUrl(params);
+
   const modeParam = params.get("mode");
   if (modeParam !== null && isDevtoolsMode(modeParam)) {
     mode.value = modeParam;

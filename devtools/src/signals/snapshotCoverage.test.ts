@@ -121,6 +121,8 @@ const CONNECTION_SETTINGS_COVERAGE: CoverageExpectation = {
     microphoneDevices: "選べる音声入力の一覧で、選んだ値は microphoneDeviceId として出す",
     audioOutputDevices: "選べる音声出力の一覧で、選んだ値は audioOutputDeviceId として出す",
     settingsDisabled: "他の接続が設定を使っている間の入力の状態で、設定の値ではない",
+    publishStop:
+      "Stop Publish の止め方 (操作の仕方) で、購読の状態を表す統計ではない。送るメッセージは Debug パネルのログに出る",
     namespaceLocked:
       "msf fragment が namespace を固定しているかどうかの入力の状態で、設定の値ではない",
     audioTrackNameLocked:
@@ -174,6 +176,8 @@ const PUBLISHER_COVERAGE: CoverageExpectation = {
     mediaStream: "映像の MediaStream の実体 (統計ではない)",
     isPreviewActive: "画面のプレビューを出しているかどうか",
     isStopping: "停止処理の途中かどうか (一時的な状態)",
+    sendingStopped:
+      "配信だけを止めたかどうか (操作の途中の状態)。止めた後の Status は statusMessage に出す",
     isStarting: "開始処理の途中かどうか (一時的な状態)",
     hasActivePublisher: "pubSession と isStarting から求まる computed",
     isPublishing: "publisher と audioPublisher から求まる computed",

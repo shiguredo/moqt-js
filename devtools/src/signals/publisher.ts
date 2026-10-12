@@ -34,6 +34,9 @@ export const mediaStream = signal<MediaStream | null>(null);
 export const isPreviewActive = signal(false);
 // 停止処理中フラグ（二重実行防止）
 export const isStopping = signal(false);
+// 配信だけを止めたか (セッションと PUBLISH は維持したまま送信の経路を止めた状態)。
+// 送信の再開を防ぐガードと、もう一度 Stop を押したときの扱いに使う
+export const sendingStopped = signal(false);
 // 配信を始めてから、配信するトラック (映像があれば映像、無ければ音声) の PUBLISH が確立する
 // (session.publish が返る) か後始末を終えるまで true。startPublishing は connect の後に pubSession を設定するため、
 // connect を待つ間は pubSession が null のまま接続設定を使っている。この間を覆う
