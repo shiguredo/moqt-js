@@ -521,7 +521,7 @@ moqt-js を利用した MOQT の動作確認ツールです。
 
 ### c4m-devtools
 
-C4M (CAT-4-MOQT、[draft-ietf-moq-c4m-01](https://datatracker.ietf.org/doc/html/draft-ietf-moq-c4m-01)) の CAT (Common Access Token) をブラウザ内だけでデコード / 検証 / 発行するツールです。moqt-js の `C4M` 名前空間を使い、moqt-js が `SETUP` に載せるのと同じ実装でトークンを扱います。リレーへの接続は行いません。
+moqt-js を利用した C4M (CAT-4-MOQT) の CAT (Common Access Token) のデコード / 検証 / 発行ツールです。
 
 - トークンのデコード
   - compact / COSE Sign1 / COSE Mac0 / Base64 包みの入力に対応する
