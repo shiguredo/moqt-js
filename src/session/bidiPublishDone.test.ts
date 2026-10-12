@@ -8,13 +8,15 @@
 
 import { test, assert } from "vite-plus/test";
 import { SubscriberImpl } from "../subscriber";
+import { PublishDoneStatusCode } from "../message/types";
+import type { PublishDoneInfo } from "../session";
 
 // ============================================================================
 // bidiHandlePublishDone のテスト
 // ============================================================================
 
-test("bidiHandlePublishDone: PUBLISH_DONE 正常終了で endCallback が呼ばれる", () => {
-  let endCalled = false;
+test("bidiHandlePublishDone: PUBLISH_DONE 正常終了で status code と reason が endCallback に渡る", () => {
+  let received: PublishDoneInfo | undefined;
   let errorCalled: Error | undefined;
 
   const subscriber = new SubscriberImpl(
@@ -24,21 +26,25 @@ test("bidiHandlePublishDone: PUBLISH_DONE 正常終了で endCallback が呼ば�
     1n,
     () => {},
     undefined,
-    () => {
-      endCalled = true;
+    (publishDone) => {
+      received = publishDone;
     },
     (e) => {
       errorCalled = e;
     },
   );
 
-  subscriber.handleEnd(0x2n, undefined);
+  subscriber.handleEnd(PublishDoneStatusCode.TRACK_ENDED, "");
 
-  assert.equal(endCalled, true);
+  assert.deepEqual(received, {
+    statusCode: PublishDoneStatusCode.TRACK_ENDED,
+    reasonPhrase: "",
+  });
   assert.equal(errorCalled, undefined);
 });
 
-test("bidiHandlePublishDone: PUBLISH_DONE INTERNAL_ERROR で errorCallback が呼ばれる", () => {
+test("bidiHandlePublishDone: PUBLISH_DONE INTERNAL_ERROR でも errorCallback は呼ばれない", () => {
+  let received: PublishDoneInfo | undefined;
   let errorCalled: Error | undefined;
 
   const subscriber = new SubscriberImpl(
@@ -48,17 +54,22 @@ test("bidiHandlePublishDone: PUBLISH_DONE INTERNAL_ERROR で errorCallback が�
     1n,
     () => {},
     undefined,
-    () => {},
+    (publishDone) => {
+      received = publishDone;
+    },
     (e) => {
       errorCalled = e;
     },
   );
 
-  subscriber.handleEnd(0x0n, "internal error");
+  subscriber.handleEnd(PublishDoneStatusCode.INTERNAL_ERROR, "internal error");
 
-  assert.notEqual(errorCalled, undefined);
-  assert.isTrue(errorCalled!.message.includes("PUBLISH_DONE"));
-  assert.isTrue(errorCalled!.message.includes("internal error"));
+  // エラー status でも終了通知は end の 1 回だけである。エラーかどうかは status code で判定する
+  assert.deepEqual(received, {
+    statusCode: PublishDoneStatusCode.INTERNAL_ERROR,
+    reasonPhrase: "internal error",
+  });
+  assert.equal(errorCalled, undefined);
 });
 
 test("bidiHandlePublishDone: closed 状態では endCallback が呼ばれない", () => {
@@ -81,7 +92,7 @@ test("bidiHandlePublishDone: closed 状態では endCallback が呼ばれない"
   );
 
   subscriber.markClosed();
-  subscriber.handleEnd(0x2n, undefined);
+  subscriber.handleEnd(PublishDoneStatusCode.TRACK_ENDED, "");
 
   assert.equal(endCalled, false);
   assert.equal(errorCalled, undefined);

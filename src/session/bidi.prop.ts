@@ -90,6 +90,7 @@ import {
 } from "../error";
 import { FetcherImpl } from "../fetcher";
 import { SubscriberImpl } from "../subscriber";
+import type { PublishDoneInfo } from "../session";
 import { fullTrackNameKey, type FullTrackNameKey } from "../fullTrackName";
 import { type PriorGapTracking } from "./priorGapTracking";
 import {
@@ -105,7 +106,6 @@ import {
   MessageParameterType,
   MessageType,
   ObjectStatus,
-  isPublishDoneErrorStatus,
   type Location,
 } from "../message/types";
 import { encodePublishDonePayload } from "../message/publish";
@@ -1211,10 +1211,10 @@ const reasonPhraseArb: fc.Arbitrary<string> = fc
 
 /**
  * draft-ietf-moq-transport-22 §9.9 (PUBLISH_DONE) / §13 (Grease):
- * 受信した状態コードは既知の列挙へ正規化して購読へ通知する。未知値は INTERNAL_ERROR
- * として扱われる。エラーを示す状態コードのときだけ error コールバックが呼ばれ、
- * 成功を示す状態コードでは end コールバックだけが呼ばれる。返り値は記録用の情報であり、
- * デコード結果と一致する。
+ * 受信した状態コードは既知の列挙へ正規化して購読の終了通知へ載せる。未知値は INTERNAL_ERROR
+ * として扱われる。終了通知は end コールバックの 1 回だけで、エラー status でも error
+ * コールバックは呼ばれない (エラーかどうかは status code で判定する)。返り値は記録用の情報で
+ * あり、デコード結果と一致する。
  */
 test("bidiHandlePublishDone: 状態コードを正規化して購読へ通知し、記録用の情報を返す", () => {
   const publishDoneArb = fc.record({
@@ -1235,7 +1235,7 @@ test("bidiHandlePublishDone: 状態コードを正規化して購読へ通知し
       const { session } = createBidiSession();
       const requestId = 10n;
       const events: string[] = [];
-      let notifiedError: Error | undefined;
+      let received: PublishDoneInfo | undefined;
       const subscriber = new SubscriberImpl(
         ["live"],
         "video",
@@ -1243,12 +1243,12 @@ test("bidiHandlePublishDone: 状態コードを正規化して購読へ通知し
         1n,
         () => {},
         undefined,
-        () => {
+        (publishDone) => {
           events.push("end");
+          received = publishDone;
         },
-        (error) => {
+        () => {
           events.push("error");
-          notifiedError = error;
         },
       );
       session.subscribers.set(requestId, subscriber);
@@ -1261,23 +1261,19 @@ test("bidiHandlePublishDone: 状態コードを正規化して購読へ通知し
       assert.equal(record.streamCount, done.streamCount.toString());
       assert.equal(record.reasonPhrase, done.reasonPhrase);
 
-      // 状態コードの正規化結果に応じて error → end の順に通知される
+      // 状態コードの正規化結果にかかわらず、終了通知は end の 1 回だけである。
+      // エラーを示す状態コードでも error コールバックは呼ばず、status code を終了通知に載せる
       const normalized = normalizePublishDoneCode(Number(done.statusCode));
-      const expectError = isPublishDoneErrorStatus(BigInt(normalized));
-      assert.deepEqual(events, expectError ? ["error", "end"] : ["end"]);
+      assert.deepEqual(events, ["end"]);
+      assert.deepEqual(received, {
+        statusCode: normalized,
+        reasonPhrase: done.reasonPhrase,
+      });
       assert.equal(subscriber.state, "closed");
-      if (expectError) {
-        if (notifiedError === undefined) {
-          assert.fail("エラー状態コードで error コールバックが呼ばれなかった");
-        }
-        assert.isTrue(notifiedError.message.includes(done.reasonPhrase));
-      } else {
-        assert.isUndefined(notifiedError);
-      }
 
       // 2 通目の PUBLISH_DONE は state が closed のため通知も状態遷移も起きない
       const secondRecord = bidiHandlePublishDone(session, payload, requestId);
-      assert.deepEqual(events, expectError ? ["error", "end"] : ["end"]);
+      assert.deepEqual(events, ["end"]);
       assert.equal(secondRecord.requestId, requestId.toString());
     }),
   );

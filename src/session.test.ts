@@ -8,6 +8,7 @@ import { test, assert } from "vite-plus/test";
 import {
   SessionImpl,
   type ConnectCallbacks,
+  type PublishDoneInfo,
   type SessionState,
   type SubscribeCallbacks,
   type TracksSubscriptionCallbacks,
@@ -3147,18 +3148,18 @@ test("受信 PUBLISH ストリーム上の正常な PUBLISH_DONE では end の�
 /**
  * draft-ietf-moq-transport-22 §9.9 / §13:
  * 削除された 0x3 SUBSCRIPTION_ENDED を受信した場合、未知コードとして
- * INTERNAL_ERROR に正規化され、エラーとして通知されることを検証する。
- * 旧版が送る 0x3 はエラー扱いになる。
+ * INTERNAL_ERROR (エラー status) に正規化され、終了通知に載ることを検証する。
+ * 旧版が送る 0x3 は未知の code として正規化される。
  */
-test("受信 PUBLISH_DONE の削除された 0x3 は end と error の両方が通知される", async () => {
+test("受信 PUBLISH_DONE の削除された 0x3 は INTERNAL_ERROR に正規化されて終了通知に載る", async () => {
   const session = createSessionImpl();
-  let endCalled = false;
+  let received: PublishDoneInfo | undefined;
   let errorCalled = false;
   let subscriber: SubscriberImpl | undefined;
   const internal = setupIncomingPublishStreamSession(session, {
     object: () => {},
-    end: () => {
-      endCalled = true;
+    end: (publishDone) => {
+      received = publishDone;
       subscriber = internal.subscribers.get(INCOMING_PUBLISH_REQUEST_ID);
     },
     error: () => {
@@ -3185,9 +3186,12 @@ test("受信 PUBLISH_DONE の削除された 0x3 は end と error の両方が�
     ),
   );
 
-  // 正規化によりエラーと終端の両方が通知され、セッションは閉じない
-  assert.isTrue(endCalled);
-  assert.isTrue(errorCalled);
+  // 正規化された status code が終了通知に載り、error は呼ばれない。セッションは閉じない
+  assert.deepEqual(received, {
+    statusCode: PublishDoneStatusCode.INTERNAL_ERROR,
+    reasonPhrase: "",
+  });
+  assert.isFalse(errorCalled);
   assert.isDefined(subscriber);
   assert.equal(subscriber!.state, "closed");
   assert.equal(internal.sessionState, "connected");

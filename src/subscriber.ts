@@ -6,7 +6,7 @@
 import type { Parameter } from "./message/parameter";
 import type { LocationFilter, RangeFilterSpec } from "./message/parameter";
 import type { AuthorizationToken } from "./message/authorizationToken";
-import { isPublishDoneErrorStatus, type Location } from "./message/types";
+import type { Location, PublishDoneStatusCode } from "./message/types";
 import type { MoqtObject } from "./dataStream";
 import { resolveDefaultPublisherPriority, type Property } from "./properties";
 import {
@@ -17,7 +17,7 @@ import {
 } from "./filter";
 import { fullTrackNameKey, type FullTrackNameKey } from "./fullTrackName";
 import { mergeRangeFilters } from "./session/params";
-import type { FillRequestOptions, SubgroupStreamEnd } from "./session";
+import type { FillRequestOptions, PublishDoneInfo, SubgroupStreamEnd } from "./session";
 
 /**
  * Subscriber state
@@ -132,7 +132,7 @@ export class SubscriberImpl implements Subscriber {
   // 未指定の場合は明示的に undefined を代入する (呼び出し側は `?.` で呼ぶ) ため
   // `| undefined` を付ける
   private readonly datagramCallback?: ((object: MoqtObject) => void) | undefined;
-  private readonly endCallback?: (() => void) | undefined;
+  private readonly endCallback?: ((publishDone: PublishDoneInfo) => void) | undefined;
   private readonly errorCallback?: ((error: Error) => void) | undefined;
   private readonly requestId: bigint;
   private trackAlias: bigint;
@@ -184,7 +184,7 @@ export class SubscriberImpl implements Subscriber {
     trackAlias: bigint,
     onObject: (object: MoqtObject) => void,
     onDatagram?: (object: MoqtObject) => void,
-    onEnd?: () => void,
+    onEnd?: (publishDone: PublishDoneInfo) => void,
     onError?: (error: Error) => void,
   ) {
     this.subscriberNamespace = namespace;
@@ -583,26 +583,20 @@ export class SubscriberImpl implements Subscriber {
    *  states by sending PUBLISH_DONE and closing the stream."
    *
    * draft-ietf-moq-transport-22 §9.9 (PUBLISH_DONE):
-   * PUBLISH_DONE Status Code がエラーを示す場合（INTERNAL_ERROR, UPDATE_FAILED 等）、
-   * errorCallback で通知する。
+   * 終了の理由 (Status Code と Reason Phrase) を endCallback に渡す。エラーかどうかは
+   * §12.4 (Publish Done Codes) の Status Code が表し、エラーを示す場合 (INTERNAL_ERROR,
+   * UPDATE_FAILED 等) も endCallback だけを呼ぶ。
+   *
+   * errorCallback の契約 (アプリのコールバックの例外でも呼ばれること) は
+   * SubscribeCallbacks.error を参照。
    */
-  handleEnd(statusCode?: bigint, reasonPhrase?: string): void {
+  handleEnd(statusCode: PublishDoneStatusCode, reasonPhrase: string): void {
     if (this.subscriberState === "closed") {
       return;
     }
     this.subscriberState = "closed";
 
-    // draft-ietf-moq-transport-22 Section 9.9 (PUBLISH_DONE):
-    // INTERNAL_ERROR (0x0) 等はエラー。TRACK_ENDED (0x2) 等はエラーとみなさない。
-    if (statusCode !== undefined && isPublishDoneErrorStatus(statusCode)) {
-      this.errorCallback?.(
-        new Error(
-          `PUBLISH_DONE with status 0x${statusCode.toString(16)}${reasonPhrase ? `: ${reasonPhrase}` : ""}`,
-        ),
-      );
-    }
-
-    this.endCallback?.();
+    this.endCallback?.({ statusCode, reasonPhrase });
   }
 
   /**

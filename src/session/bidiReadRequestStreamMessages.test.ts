@@ -16,6 +16,7 @@ import {
 } from "../message/session";
 import { encodePublishDonePayload, decodePublishDonePayload } from "../message/publish";
 import { MessageType, MessageParameterType, PublishDoneStatusCode } from "../message/types";
+import type { PublishDoneInfo } from "../session";
 import { encodeRequestUpdatePayload } from "../message/subscribe";
 import { createTrackNamespace, encodeParameterTrackNamespace } from "../message";
 import { encodeAuthorizationToken, AuthorizationTokenAliasType } from "../message";
@@ -1155,10 +1156,10 @@ test("bidiReadRequestStreamMessages: REQUEST_UPDATE 拒否でデータストリ�
 /**
  * draft-ietf-moq-transport-22 §9.5.1 / §9.9:
  * 拒否で送出した PUBLISH_DONE (UPDATE_FAILED) のワイヤペイロードを
- * 受信デコーダに流すと、購読側の errorCallback が呼ばれる
+ * 受信デコーダに流すと、購読側の終了通知に正規化された status code が載る
  * (ワイヤペイロード単位の round-trip)。
  */
-test("bidiReadRequestStreamMessages: 送出した PUBLISH_DONE (UPDATE_FAILED) のペイロード受信で errorCallback が呼ばれる", async () => {
+test("bidiReadRequestStreamMessages: 送出した PUBLISH_DONE (UPDATE_FAILED) のペイロード受信で終了通知に status code が載る", async () => {
   // 送信側: INVALID_FILTER 拒否で PUBLISH_DONE を送出させる
   const sender = createPublishReadTestContext({});
 
@@ -1192,8 +1193,8 @@ test("bidiReadRequestStreamMessages: 送出した PUBLISH_DONE (UPDATE_FAILED) �
   assert.equal(sent[1].type, MessageType.PUBLISH_DONE);
 
   // 受信側: 送出されたワイヤを実 SubscriberImpl に流す
+  let received: PublishDoneInfo | undefined;
   let errorCalled: Error | undefined;
-  let endCalled = false;
   const subscriber = new SubscriberImpl(
     ["test"],
     "track",
@@ -1201,8 +1202,8 @@ test("bidiReadRequestStreamMessages: 送出した PUBLISH_DONE (UPDATE_FAILED) �
     1n,
     () => {},
     undefined,
-    () => {
-      endCalled = true;
+    (publishDone) => {
+      received = publishDone;
     },
     (error) => {
       errorCalled = error;
@@ -1212,10 +1213,12 @@ test("bidiReadRequestStreamMessages: 送出した PUBLISH_DONE (UPDATE_FAILED) �
   receiver.session.subscribers.set(0n, subscriber);
   bidiHandlePublishDone(receiver.session, sent[1].payload, 0n);
 
-  // UPDATE_FAILED (0x8) がエラー通知され、終了も通知される
-  assert.isDefined(errorCalled);
-  assert.isTrue(errorCalled!.message.includes("0x8"));
-  assert.isTrue(endCalled);
+  // UPDATE_FAILED (0x8) が終了通知に載り、error は呼ばれない
+  assert.deepEqual(received, {
+    statusCode: PublishDoneStatusCode.UPDATE_FAILED,
+    reasonPhrase: "",
+  });
+  assert.equal(errorCalled, undefined);
   assert.equal(subscriber.state, "closed");
 });
 

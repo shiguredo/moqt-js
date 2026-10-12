@@ -38,7 +38,12 @@ import { resolveMsfAuthorizationToken } from "./msf/c4mAuthorization";
  * const subscriber = await session.subscribe(
  *   ["room", "123"],
  *   "video",
- *   { object: (obj) => console.log(obj), end: () => console.log("track ended"), error: (e) => console.error(e) }
+ *   {
+ *     object: (obj) => console.log(obj),
+ *     // PUBLISH_DONE による購読の終了。statusCode が終了の理由 (draft-ietf-moq-transport-22 §12.4)
+ *     end: (publishDone) => console.log(`track ended: 0x${publishDone.statusCode.toString(16)}`),
+ *     error: (e) => console.error(e),
+ *   }
  * )
  * ```
  */

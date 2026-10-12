@@ -130,6 +130,7 @@ export type {
   PublishCallbacks,
   PublishOptions,
   SubgroupStreamEnd,
+  PublishDoneInfo,
   SubscribeCallbacks,
   SubscribeOptions,
   SubscribeTracksOptions,

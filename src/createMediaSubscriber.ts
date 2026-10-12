@@ -8,10 +8,11 @@ import { connectMediaSession, type MediaConnectSettings } from "./createMedia/co
 import { DEFAULT_AUDIO_TRACK_NAME, DEFAULT_VIDEO_TRACK_NAME } from "./createMedia/settings";
 import { supportsDynamicGroups } from "./properties";
 import { compareLocations } from "./session/params";
-import type { Session, SubgroupStreamEnd, SubscribeOptions } from "./session";
+import type { Session, PublishDoneInfo, SubgroupStreamEnd, SubscribeOptions } from "./session";
 import type { Subscriber } from "./subscriber";
 import type { MoqtObject } from "./dataStream";
 import type { AuthorizationToken, Location, LocationFilter } from "./message";
+import { isPublishDoneErrorStatus } from "./message";
 import * as LOC from "./loc";
 import {
   CATALOG_TRACK_NAME,
@@ -301,6 +302,28 @@ export function isVideoKeyFrameObject(
     return frameMarking.isIndependent;
   }
   return objectId === 0n;
+}
+
+/**
+ * PUBLISH_DONE の終了理由から、購読の失敗として通知すべき Error を作る
+ *
+ * draft-ietf-moq-transport-22 §9.9 (PUBLISH_DONE): 購読は PUBLISH_DONE で終わり、終了の理由は
+ * §12.4 の Status Code が表す。購読の終了は `SubscribeCallbacks.end` が受け取るため、高レベル
+ * API はエラーを示す Status Code のときだけ失敗として扱う。正常終了 (TRACK_ENDED 等) では
+ * null を返す。
+ *
+ * @param publishDone 終了通知が運んだ Status Code と Reason Phrase
+ * @returns エラーを示す Status Code ならその理由を載せた Error、そうでなければ null
+ *
+ * テストと moqt-devtools から参照するための export であり、パッケージ公開 API
+ * (`src/index.ts`) には含めない。
+ */
+export function resolvePublishDoneError(publishDone: PublishDoneInfo): Error | null {
+  if (!isPublishDoneErrorStatus(publishDone.statusCode)) {
+    return null;
+  }
+  const reason = publishDone.reasonPhrase ? `: ${publishDone.reasonPhrase}` : "";
+  return new Error(`PUBLISH_DONE with status 0x${publishDone.statusCode.toString(16)}${reason}`);
 }
 
 /**
@@ -1433,8 +1456,8 @@ export class MediaSubscriberImpl implements MediaSubscriber {
             }
             this.handleCatalogObject(obj);
           },
-          end: () => {
-            // Catalog トラック終了
+          end: (publishDone) => {
+            this.handlePublishDone(publishDone);
           },
           error: (error) => this.callbacks.onError?.(error),
         },
@@ -1890,8 +1913,8 @@ export class MediaSubscriberImpl implements MediaSubscriber {
           // 音声は 1 Object = 1 Group であり (draft-ietf-moq-loc-04 §4.1)、届いた順に復号へ
           // 渡して足りる (devtools の購読側と同じ方針)
           datagram: (obj) => this.handleAudioObject(obj, "datagram"),
-          end: () => {
-            // トラック終了
+          end: (publishDone) => {
+            this.handlePublishDone(publishDone);
           },
           error: (error) => this.callbacks.onError?.(error),
         },
@@ -1943,8 +1966,8 @@ export class MediaSubscriberImpl implements MediaSubscriber {
           subgroupEnd: (end) => {
             this.receiveVideoSubgroupEnd(end);
           },
-          end: () => {
-            // トラック終了
+          end: (publishDone) => {
+            this.handlePublishDone(publishDone);
           },
           error: (error) => this.callbacks.onError?.(error),
         },
@@ -2111,6 +2134,20 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     this.pendingVideoQueueState.bytes = 0;
     for (const obj of pending) {
       this.handleVideoObject(obj);
+    }
+  }
+
+  /**
+   * PUBLISH_DONE による購読の終了を購読の失敗として通知する
+   *
+   * エラーを示す Status Code のときだけ onError を呼ぶ。正常終了 (TRACK_ENDED 等) では何も
+   * しない。購読の終了そのものは SubscribeCallbacks.end が受け取っており、ここでは高レベル
+   * API の契約に合わせて失敗として伝える。判定は resolvePublishDoneError が持つ。
+   */
+  private handlePublishDone(publishDone: PublishDoneInfo): void {
+    const error = resolvePublishDoneError(publishDone);
+    if (error !== null) {
+      this.callbacks.onError?.(error);
     }
   }
 
