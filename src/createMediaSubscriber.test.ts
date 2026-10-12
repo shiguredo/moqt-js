@@ -174,6 +174,170 @@ test("processCatalogPayload: current=null の decode 失敗も error を返す",
   assert.ok(result.kind === "error" && result.error instanceof Error);
 });
 
+test("processCatalogPayload: catalogNamespace の継承で重複する delta は error になる", () => {
+  // draft-ietf-moq-msf-01 §5.2.2: track が namespace を宣言しない場合は catalog track の
+  // namespace を継承する。継承後の重複 (§5.2.3) を検出するには呼び出し元が namespace を渡す
+  const current = makeCatalog([
+    { name: "v", packaging: "loc", isLive: true, namespace: "live/room1" },
+  ]);
+  const delta = encodeCatalogDelta({
+    deltaUpdate: true,
+    operations: [{ type: "add", tracks: [{ name: "v", packaging: "loc", isLive: true }] }],
+  });
+
+  // 継承を渡さないと、namespace 未宣言 (undefined) と "live/room1" は別物とみなされる
+  assert.equal(processCatalogPayload(current, delta).kind, "delta");
+
+  const result = processCatalogPayload(current, delta, { catalogNamespace: "live/room1" });
+  assert.equal(result.kind, "error");
+  if (result.kind === "error") {
+    assert.match(result.error.message, /duplicate track name 'v' under namespace 'live\/room1'/);
+  }
+});
+
+test("catalog の delta 適用: catalog namespace を継承して重複を検出し、onError へ通知する", () => {
+  // MediaSubscriberOptions.namespace を "/" で連結した値を継承に使う (実装固有の規約)
+  const { control, catalogs, errors } = createDeltaTestSubscriber(["live", "room1"]);
+
+  // フル: namespace を明示した track
+  control.handleCatalogObject({
+    ...makeCatalogObject(0n, 0n),
+    payload: encodeCatalog(
+      makeCatalog([{ name: "v", packaging: "loc", isLive: true, namespace: "live/room1" }]),
+    ),
+  });
+  assert.equal(catalogs.length, 1);
+  const applied = control.receivedCatalog;
+
+  // delta: 同じ名前の track を namespace を宣言せずに add する (継承後の重複)
+  control.handleCatalogObject({
+    ...makeCatalogObject(0n, 1n),
+    payload: encodeCatalogDelta({
+      deltaUpdate: true,
+      operations: [{ type: "add", tracks: [{ name: "v", packaging: "loc", isLive: true }] }],
+    }),
+  });
+
+  assert.equal(errors.length, 1);
+  assert.match(errors[0].message, /duplicate track name 'v' under namespace 'live\/room1'/);
+  // 適用しない (receivedCatalog も onCatalog も動かない)
+  assert.strictEqual(control.receivedCatalog, applied);
+  assert.equal(catalogs.length, 1);
+});
+
+test("catalog の delta 適用: 継承して重複しない delta は適用する", () => {
+  // 既存 track の namespace が catalog のものと違えば、継承しても重複しない (過剰な拒否のガード)
+  const { control, catalogs, errors } = createDeltaTestSubscriber(["live", "room1"]);
+
+  control.handleCatalogObject({
+    ...makeCatalogObject(0n, 0n),
+    payload: encodeCatalog(
+      makeCatalog([{ name: "v", packaging: "loc", isLive: true, namespace: "live/room2" }]),
+    ),
+  });
+  control.handleCatalogObject({
+    ...makeCatalogObject(0n, 1n),
+    payload: encodeCatalogDelta({
+      deltaUpdate: true,
+      operations: [{ type: "add", tracks: [{ name: "v", packaging: "loc", isLive: true }] }],
+    }),
+  });
+
+  assert.deepEqual(errors, []);
+  assert.equal(catalogs.length, 2);
+  assert.equal(control.receivedCatalog?.tracks.length, 2);
+});
+
+test("catalog の delta 適用: namespace が空配列なら継承せず従来どおり適用する", () => {
+  // namespace が空配列のときは §5.2.2 の継承を解決しない (namespace 未宣言どうしの重複だけを
+  // 検出する従来の挙動)。namespace を明示した track と namespace 未宣言の track は別物と
+  // して扱う
+  const { control, catalogs, errors } = createDeltaTestSubscriber([]);
+
+  control.handleCatalogObject({
+    ...makeCatalogObject(0n, 0n),
+    payload: encodeCatalog(makeCatalog([{ name: "v", packaging: "loc", isLive: true }])),
+  });
+  control.handleCatalogObject({
+    ...makeCatalogObject(0n, 1n),
+    payload: encodeCatalogDelta({
+      deltaUpdate: true,
+      operations: [
+        {
+          type: "add",
+          tracks: [{ name: "v", packaging: "loc", isLive: true, namespace: "live/room1" }],
+        },
+      ],
+    }),
+  });
+
+  assert.deepEqual(errors, []);
+  assert.equal(catalogs.length, 2);
+  assert.equal(control.receivedCatalog?.tracks.length, 2);
+
+  // 空文字の namespace を明示した track と namespace 未宣言の track も別物として扱う
+  // (継承を解決しないため)。空文字を継承値にすると重複として拒否される入力である
+  control.handleCatalogObject({
+    ...makeCatalogObject(0n, 2n),
+    payload: encodeCatalog(
+      makeCatalog([{ name: "w", packaging: "loc", isLive: true, namespace: "" }]),
+    ),
+  });
+  control.handleCatalogObject({
+    ...makeCatalogObject(0n, 3n),
+    payload: encodeCatalogDelta({
+      deltaUpdate: true,
+      operations: [{ type: "add", tracks: [{ name: "w", packaging: "loc", isLive: true }] }],
+    }),
+  });
+  assert.deepEqual(errors, []);
+  assert.equal(catalogs.length, 4);
+});
+
+/**
+ * delta 適用の検証用の制御口
+ *
+ * `handleCatalogObject` は private であるため、この形にキャストして呼ぶ。
+ */
+interface SubscriberCatalogDeltaControl {
+  receivedCatalog: Catalog | null;
+  handleCatalogObject(obj: MoqtObject): void;
+}
+
+/**
+ * delta 適用のテスト用に購読者を作る
+ *
+ * `catalogs` と `errors` は利用者へ通知された内容の確認に使う。
+ *
+ * @param namespace 購読する Track Namespace のフィールド列
+ * @returns 制御口と、通知された catalog / error
+ */
+function createDeltaTestSubscriber(namespace: string[]): {
+  control: SubscriberCatalogDeltaControl;
+  catalogs: Catalog[];
+  errors: Error[];
+} {
+  const catalogs: Catalog[] = [];
+  const errors: Error[] = [];
+  const subscriber = new MediaSubscriberImpl(
+    "moqt://example.com/live",
+    { namespace },
+    {
+      onCatalog: (catalog) => {
+        catalogs.push(catalog);
+      },
+      onError: (error) => {
+        errors.push(error);
+      },
+    },
+  );
+  return {
+    control: subscriber as unknown as SubscriberCatalogDeltaControl,
+    catalogs,
+    errors,
+  };
+}
+
 // ============================================================================
 // filterPendingCatalogObjects（FETCH と live の二重配信除去）
 // ============================================================================

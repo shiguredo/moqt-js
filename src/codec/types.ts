@@ -244,6 +244,15 @@ export interface MediaPublisherCallbacks {
 
 // MediaSubscriber オプション
 export interface MediaSubscriberOptions {
+  // 購読する Track Namespace のフィールド列。
+  // draft-ietf-moq-msf-01 §5.2.2 のとおり、catalog の track が namespace を宣言しない
+  // 場合は catalog track の namespace を継承する。catalog の namespace フィールドは
+  // 文字列であり、MOQT の Track Namespace のフィールド列との対応は仕様で定まっていない
+  // (フィールド列の文字列表現は draft-ietf-moq-transport-22 §8.8 と msf-01 §11.1.2 が
+  // "-" 区切りと "." + 16 進で定めるが、catalog の namespace フィールドがこの表現を
+  // 使うとは定めていない)。本実装は、このフィールド列を "/" で連結した文字列を
+  // catalog track の namespace として扱う (実装固有の規約。namespace が空配列のときは
+  // 継承を解決しない)
   namespace: string[];
   audio?: AudioSubscribeOptions;
   video?: VideoSubscribeOptions;

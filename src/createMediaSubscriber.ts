@@ -310,10 +310,20 @@ export function isVideoKeyFrameObject(
  * CatalogDelta の判別は `"deltaUpdate" in message` とする（decode 後の内部マーカーは
  * 常に `deltaUpdate: true`。wire の boolean 形式ではない。draft-ietf-moq-msf-01 §5.1.6）。
  * delta 適用規則（§5.3）は `applyCatalogDelta` に委譲する。
+ *
+ * `options.catalogNamespace` は、track が namespace を宣言しない場合に継承する
+ * catalog track の namespace である (§5.2.2)。継承後の値は、重複の検出 (§5.2.3) と
+ * remove / clone の対象の解決に使われる。省略すると継承を解決しない
+ * (`applyCatalogDelta` の未指定挙動)。
+ *
+ * @param current 現在の catalog (未受信なら null)
+ * @param payload Catalog Object の payload
+ * @param options delta の適用に使う catalog namespace
  */
 export function processCatalogPayload(
   current: Catalog | null,
   payload: Uint8Array,
+  options?: { catalogNamespace?: string },
 ): ProcessCatalogPayloadResult {
   try {
     const message = decodeCatalogMessage(payload);
@@ -321,7 +331,7 @@ export function processCatalogPayload(
       if (current === null) {
         return { kind: "ignored", catalog: null };
       }
-      const catalog = applyCatalogDelta(current, message);
+      const catalog = applyCatalogDelta(current, message, options);
       return { kind: "delta", catalog };
     }
     return { kind: "full", catalog: message };
@@ -1517,6 +1527,19 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   }
 
   /**
+   * delta の適用に渡す catalog namespace のオプション
+   *
+   * namespace が空配列のときは継承を解決しない (namespace 未宣言どうしの重複だけを検出する
+   * 従来の挙動)。購読の処理と同じ `this.options.namespace` を毎回読む (構築時に固定しない)。
+   * この配列は start() の前に確定していることを前提にする。
+   * exactOptionalPropertyTypes のため、未指定のときはプロパティを載せない。
+   */
+  private catalogDeltaOptions(): { catalogNamespace?: string } {
+    const namespace = this.options.namespace;
+    return namespace.length === 0 ? {} : { catalogNamespace: namespace.join("/") };
+  }
+
+  /**
    * Catalog 受信タイマーを解除する
    */
   private clearCatalogTimer(): void {
@@ -2103,7 +2126,11 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     if (this.catalogReceiveFailed) {
       return;
     }
-    const result = processCatalogPayload(this.receivedCatalog, obj.payload);
+    const result = processCatalogPayload(
+      this.receivedCatalog,
+      obj.payload,
+      this.catalogDeltaOptions(),
+    );
 
     if (result.kind === "error") {
       this.callbacks.onError?.(result.error);
