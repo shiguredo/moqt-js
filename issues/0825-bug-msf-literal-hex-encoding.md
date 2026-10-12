@@ -1,7 +1,7 @@
 # msf fragment の解析が literal で書ける byte の hex 表現を受理する
 
 - Created: 2026-10-07
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-10-12
 - Branch: feature/fix-msf-literal-hex-encoding
 - Polished: 2026-10-07
 
@@ -43,4 +43,13 @@ draft-ietf-moq-transport-22 §8.8 は、MSF fragment の namespace-name 文字�
 
 ## 解決方法
 
-{未着手}
+`src/fullTrackName.ts` の `parseFullTrackNameSegment` が、literal で書ける byte (`[0-9A-Za-z_]`) の hex 表現を `byte ".${hex}" must be written literally ... per draft-ietf-moq-transport-22 §8.8` で拒否する。msf fragment の解析 (`src/msf/fragment.ts` の `decodeMsfSegment`) はこの関数に委譲しているため、`parseMsfFragmentValue` も同じ規則で拒否する。
+
+完了条件は次のとおり確認した (実行結果)。
+
+- `parseMsfFragmentValue("n.61--t")` / `("n.5f--t")` / `("n.41--t")` はいずれも Error を投げる
+- `parseMsfFragmentValue("na--t")` は受理される (`trackNamespace: ["na"]`)
+- `parseMsfFragmentValue("n.2d--t")` (literal で書けない byte) は受理される
+- `src/msf.test.ts` の `n.61--track` の reject テストを含む `vp test` (213 ファイル / 3873 テスト)、`vp check`、`vp run build:devtools` が通る
+
+`CHANGES.md` の `[FIX]` は、RFC ドラフト中は変更履歴を残さない方針 (`CODEBASE.md` の「MOQT RFC ドラフト中の特別ルール」) のため記載していない。挙動の変更 (受理していた入力の拒否) はリリース時に `## develop` へ記載する。
