@@ -8,8 +8,26 @@
  */
 
 import { assert } from "vite-plus/test";
+import * as fc from "fast-check";
 import { Base64DecodeError } from "./base64url";
-import { CborError, type CborErrorCode } from "./cbor";
+import {
+  CBOR_FALSE,
+  CBOR_NULL,
+  CBOR_TRUE,
+  CBOR_UNDEFINED,
+  type CborValue,
+  CborError,
+  type CborErrorCode,
+  cborArray,
+  cborByteString,
+  cborFloat,
+  cborMap,
+  cborNegative,
+  cborSimple,
+  cborTag,
+  cborTextString,
+  cborUnsigned,
+} from "./cbor";
 import { CoseError, type CoseErrorCode } from "./cose";
 import { C4mError, type C4mErrorCode } from "./moqt";
 import {
@@ -227,4 +245,118 @@ export function encodeBase64Standard(bytes: Uint8Array, padded: boolean): string
     }
   }
   return result;
+}
+
+/**
+ * 整数のヘッド長が変わる境界 (RFC 8949 Section 3)
+ *
+ * 0〜23 は 1 バイトで完結し、24 / 25 / 26 / 27 はそれぞれ 1 / 2 / 4 / 8 バイトの
+ * 引数を伴う。境界を含めないと、生成器の分布 (fast-check の bigInt は範囲の両端に
+ * 偏る) では 1 バイトと 8 バイトのヘッドしか踏まない。
+ */
+const CBOR_INTEGER_BOUNDARIES: readonly bigint[] = [
+  0n,
+  23n,
+  24n,
+  255n,
+  256n,
+  65535n,
+  65536n,
+  4294967295n,
+  4294967296n,
+  9223372036854775807n,
+  9223372036854775808n,
+  18446744073709551615n,
+];
+
+/**
+ * タグのヘッド長が変わる境界 (RFC 8949 Section 3)
+ *
+ * COSE / CWT が使うタグ (17 / 18 / 61) も含める。
+ */
+const CBOR_TAG_BOUNDARIES: readonly bigint[] = [0n, 17n, 18n, 23n, 24n, 61n, 255n, 256n, 65536n];
+
+/**
+ * 浮動小数点数の境界 (RFC 8949 Section 4.2.1 / Section 4.2.2)
+ *
+ * 半精度 / 単精度 / 倍精度で表現が変わる値と、符号付きゼロ・非数・無限大を含める。
+ */
+const CBOR_FLOAT_BOUNDARIES: readonly number[] = [
+  0,
+  -0,
+  1,
+  1.5,
+  -1.5,
+  65504,
+  65505,
+  2 ** -24,
+  2 ** -25,
+  2 ** -14,
+  1e300,
+  Number.MIN_VALUE,
+  Number.NaN,
+  Number.POSITIVE_INFINITY,
+  Number.NEGATIVE_INFINITY,
+];
+
+/**
+ * CBOR のデータ項目を生成する Arbitrary
+ *
+ * cbor / cose / cat / moqt の各 PBT が共有する。`depth` は入れ子の上限である。
+ *
+ * - マップのキーは重複しない符号なし整数にし、決定論的エンコードの順序 (キーの
+ *   エンコード済みバイト列の昇順) に並べておく。並べないと、デコードが返す順序と
+ *   生成した値の順序が食い違い、往復の比較が値の違いではなく順序の違いで落ちる
+ * - テキスト文字列は grapheme 単位で生成し、UTF-8 として不正な文字列を含めない
+ * - `size: "max"` を指定する。fast-check の既定 (`small`) は `maxLength` を 10 に
+ *   切り捨てるため、長い文字列や配列のヘッド (3 / 5 バイト) に到達しない
+ */
+export function cborValueArbitrary(depth: number): fc.Arbitrary<CborValue> {
+  const integerArbitrary = fc.oneof(
+    fc.bigInt({ min: 0n, max: 18446744073709551615n }),
+    fc.constantFrom(...CBOR_INTEGER_BOUNDARIES),
+  );
+  const leaf = fc.oneof(
+    integerArbitrary.map((value) => cborUnsigned(value)),
+    integerArbitrary.map((value) => cborNegative(value)),
+    fc.uint8Array({ maxLength: 24, size: "max" }).map((value) => cborByteString(value)),
+    fc
+      .string({ unit: "grapheme", maxLength: 24, size: "max" })
+      .map((value) => cborTextString(value)),
+    fc.double().map((value) => cborFloat(value)),
+    fc.constantFrom(...CBOR_FLOAT_BOUNDARIES).map((value) => cborFloat(value)),
+    fc.constantFrom(CBOR_NULL, CBOR_UNDEFINED, CBOR_TRUE, CBOR_FALSE),
+    fc.oneof(
+      fc.integer({ min: 0, max: 19 }).map((value) => cborSimple(value)),
+      fc.integer({ min: 32, max: 255 }).map((value) => cborSimple(value)),
+    ),
+  );
+  if (depth <= 0) {
+    return leaf;
+  }
+  const arrayArbitrary = fc
+    .array(cborValueArbitrary(depth - 1), { maxLength: 3, size: "max" })
+    .map((items) => cborArray(items));
+  const mapArbitrary = fc
+    .uniqueArray(fc.tuple(fc.bigInt({ min: 0n, max: 1000n }), cborValueArbitrary(depth - 1)), {
+      selector: (entry) => entry[0].toString(),
+      maxLength: 3,
+      size: "max",
+    })
+    .map((entries) => {
+      const sorted = entries
+        .slice()
+        .sort((left, right) => (left[0] < right[0] ? -1 : left[0] > right[0] ? 1 : 0))
+        .map(([key, value]) => [cborUnsigned(key), value] as [CborValue, CborValue]);
+      return cborMap(sorted);
+    });
+  const tagArbitrary = fc
+    .tuple(fc.constantFrom(...CBOR_TAG_BOUNDARIES), cborValueArbitrary(depth - 1))
+    .map(([tag, value]) => cborTag(tag, value));
+  return fc.oneof(
+    { weight: 4, arbitrary: leaf },
+    { weight: 1, arbitrary: arrayArbitrary },
+    { weight: 1, arbitrary: mapArbitrary },
+    { weight: 1, arbitrary: tagArbitrary },
+  );
 }
