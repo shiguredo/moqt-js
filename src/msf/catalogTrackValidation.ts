@@ -1,9 +1,10 @@
 /**
  * Catalog track の検証 (draft-ietf-moq-msf-01 §5.2 / §7.2 / §8.2 / §9.4 / §10.4)
  *
- * 既知フィールドを pick しつつ §5.2 の MUST / MUST NOT を検証する。packaging 別の
- * MUST は validatePackagingSpecificRules、role が video / audio のときの
- * Conditional MUST は validateRoleSpecificRules が担う。
+ * 既知フィールドを pick しつつ §5.2 の MUST / MUST NOT を検証する。packaging 別の MUST は
+ * validatePackagingSpecificRules、role が video / audio のときの Conditional MUST は
+ * validateRoleSpecificRules、audio codec を持つ track の Conditional MUST (§5.2.28 / §5.2.29)
+ * は validateAudioCodecRules が担う。
  *
  * 参照: draft-ietf-moq-msf-01
  */
@@ -77,9 +78,9 @@ export const KNOWN_TRACK_FIELDS: ReadonlySet<string> = new Set([
  *
  * `options.skipPackagingRequiredFields` は clone operation 用。clone では
  * packaging が継承される (= undefined のことがある) ため、packaging に応じた
- * MUST 検証 (depends / eventType / mimeType="application/json") と role が
- * video / audio のときの Conditional MUST をまとめて skip する
- * (applyCatalogDelta が clone 合成後に再検証する)。
+ * MUST 検証 (depends / eventType / mimeType="application/json") と Conditional MUST
+ * (role が video / audio のときの §5.2.18 / §5.2.22、audio codec を持つときの
+ * §5.2.28 / §5.2.29) をまとめて skip する (applyCatalogDelta が clone 合成後に再検証する)。
  */
 export function buildValidatedCatalogTrack(
   obj: Record<string, unknown>,
@@ -107,8 +108,10 @@ export function buildValidatedCatalogTrack(
     if (packaging !== undefined) {
       validatePackagingSpecificRules(track, packaging, name);
     }
-    // §5.2.18 / §5.2.22 / §5.2.28 / §5.2.29: role 条件付き MUST (packaging 別 MUST の後)
+    // §5.2.18 / §5.2.22: role 条件付き MUST (packaging 別 MUST の後)
     validateRoleSpecificRules(track, name);
+    // §5.2.28 / §5.2.29: audio codec を持つ track の MUST (role に依存しない)
+    validateAudioCodecRules(track, name);
   }
 
   // §5 parser MUST ignore unknown fields → 検証はしないが保持する（§5.4 Variable Substitution 対象）
@@ -347,19 +350,55 @@ function pickPublishTrackFields(
 }
 
 /**
- * role に応じた Conditional MUST を検証する (draft-ietf-moq-msf-01 §5.2.18 / §5.2.22 /
- * §5.2.28 / §5.2.29)
+ * WebCodecs Codec Registry の audio codec string の接頭辞 (§3 Audio Codec Registry)
+ *
+ * `mp4a` は `mp4a.40.2` などの family を表すため接頭辞で判定する (moqt-js の
+ * `parseAudioCodec` も `mp4a` の接頭辞で AAC として扱う)。`pcm-` は `pcm-s16` などの
+ * family である。
+ */
+const AUDIO_CODEC_PREFIXES = [
+  "alaw",
+  "flac",
+  "mp3",
+  "mp4a",
+  "opus",
+  "pcm-",
+  "ulaw",
+  "vorbis",
+] as const;
+
+/**
+ * codec 文字列が audio codec かどうかを判定する
+ *
+ * WebCodecs Codec Registry §3 Audio Codec Registry の codec string (`alaw` / `flac` / `mp3` /
+ * `mp4a.*` / `opus` / `pcm-*` / `ulaw` / `vorbis`) の接頭辞で判定する。MSF §5.2.28 /
+ * §5.2.29 の条件が「audio codecs are specified」であるため、role ではなく codec を手掛かりに
+ * する。video codec (`av01.*` / `avc1.*` / `hvc1.*` / `vp8` / `vp09.*` など) とは接頭辞が
+ * 重ならない。
+ *
+ * `src/msf.ts` からは再輸出するが、パッケージの公開面 (`src/index.ts`) には含めない
+ * (`src/index.ts` は Catalog / Timeline / fragment の解析 / トラック検索を公開し、検証ヘルパーは
+ * モジュール内に留める方針)。高レベル API の `parseAudioCodec` (`src/createMediaSubscriber.ts`)
+ * とは対象が違うため共有しない (あちらは Catalog の検証ではなく復号器の構成のため)。
+ */
+export function isAudioCodec(codec: string): boolean {
+  return AUDIO_CODEC_PREFIXES.some((prefix) => codec.startsWith(prefix));
+}
+
+/**
+ * role に応じた Conditional MUST を検証する (draft-ietf-moq-msf-01 §5.2.18 / §5.2.22)
  *
  * - role='video': codec (§5.2.18) と bitrate (§5.2.22) が MUST
- * - role='audio': 加えて samplerate (§5.2.28) と channelConfig (§5.2.29) が MUST
+ * - role='audio': 同じく codec と bitrate が MUST
  *
  * role は optional であり custom role も許されるため、video / audio 以外には課さない。
- * §5.2.28 / §5.2.29 の仕様上の条件は「audio codecs are specified」であり role ではないが、
- * audio codec を持ち得る他の role (予約 role の audiodescription など) や custom role まで
- * 必須にしないため、本実装は role を手掛かりにする (§5.2.6 の role 一覧のうち audio 系は
- * audio のみを対象とする解釈)。packaging 別 MUST の検証を先に行い、本関数はその後に呼ぶ
- * (エラー文言の順序を保つ)。clone では packaging と同様に条件付き MUST を skip し、
- * applyCatalogDelta が合成後に呼ぶ。
+ * §5.2.18 の仕様上の条件は「tracks which have an inherent codec associated with them」で
+ * role ではないが、codec を持つ raw data track や event stream まで必須にしないため、本実装は
+ * role を手掛かりにする (audio codec を持つ track への §5.2.28 / §5.2.29 は
+ * `validateAudioCodecRules` が扱う)。
+ *
+ * packaging 別 MUST の検証を先に行い、本関数はその後に呼ぶ (エラー文言の順序を保つ)。
+ * clone では packaging と同様に条件付き MUST を skip し、applyCatalogDelta が合成後に呼ぶ。
  */
 export function validateRoleSpecificRules(track: CatalogTrack, name: string): void {
   if (track.role !== "video" && track.role !== "audio") {
@@ -372,7 +411,27 @@ export function validateRoleSpecificRules(track: CatalogTrack, name: string): vo
   if (track.bitrate === undefined) {
     throw new Error(`invalid track '${name}': ${kind} track must include bitrate per §5.2.22`);
   }
-  if (kind !== "audio") {
+}
+
+/**
+ * audio codec を持つ track に samplerate / channelConfig を必須にする
+ * (draft-ietf-moq-msf-01 §5.2.28 / §5.2.29)
+ *
+ * 仕様の条件はどちらも「This property MUST accompany tracks for which audio codecs are
+ * specified.」であり、role ではない。そのため `role: "audiodescription"` や custom role、
+ * role 未指定の track でも、audio codec を持つなら必須にする (§5.2.6 Table 5 の audio 系は
+ * `audio` と `audiodescription` であり、custom role も許される)。
+ *
+ * role が video / audio のときの codec / bitrate は `validateRoleSpecificRules` が扱う。
+ * 本関数はその後に呼ぶ (decode 経路では codec → bitrate → samplerate → channelConfig の順で
+ * エラーになる。clone 経路も同じ順で呼び、合成後の track を検証する)。
+ */
+export function validateAudioCodecRules(track: CatalogTrack, name: string): void {
+  // 実行時には JavaScript から組み立てた track で codec が文字列でないこともある。decode 経路は
+  // §5.2.18 で型を検証済みであり、clone 合成後の検証 (applyCatalogDelta) では型が崩れた値を
+  // 素通りさせる (型の検証は decode 側の責務。ここで TypeError を出すと「検証違反は plain
+  // Error」という契約から外れる)。
+  if (typeof track.codec !== "string" || !isAudioCodec(track.codec)) {
     return;
   }
   if (track.samplerate === undefined) {

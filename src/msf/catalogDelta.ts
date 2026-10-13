@@ -10,6 +10,7 @@ import {
   assertTrackNameUnique,
 } from "./catalogValidation";
 import {
+  validateAudioCodecRules,
   validatePackagingSpecificRules,
   validateRoleSpecificRules,
 } from "./catalogTrackValidation";
@@ -126,9 +127,12 @@ export function applyCatalogDelta(
         if (cloned.packaging !== undefined) {
           validatePackagingSpecificRules(cloned, cloned.packaging, cloned.name);
         }
-        // §5.2.18 / §5.2.22 / §5.2.28 / §5.2.29: role 条件付き MUST も合成後に
-        // 再実行する (base から role を継承し必須フィールドを持たない clone を検出する)。
+        // §5.2.18 / §5.2.22: role 条件付き MUST も合成後に再実行する
+        // (base から role を継承し必須フィールドを持たない clone を検出する)。
         validateRoleSpecificRules(cloned, cloned.name);
+        // §5.2.28 / §5.2.29: audio codec を持つ track の MUST も合成後に再実行する
+        // (codec を継承した clone が samplerate / channelConfig を持たない場合を検出する)。
+        validateAudioCodecRules(cloned, cloned.name);
         tracks.push(cloned);
       }
     }

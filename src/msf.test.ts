@@ -47,6 +47,7 @@ import {
   validateCatalog,
   validateCatalogTrack,
   catalogAuthInfoForSetupToken,
+  isAudioCodec,
 } from "./msf";
 import { AuthorizationTokenAliasType } from "./message/authorizationToken";
 import { effectiveTargetLatencyMs, resolveSharedTargetLatencyMs } from "./msf/tracks";
@@ -345,7 +346,7 @@ test("Catalog: encodeCatalog は packaging 別 MUST を reject する (§5.2.5 /
   );
 });
 
-test("Catalog: encodeCatalog は role が video / audio のときの必須フィールド欠落を reject する (§5.2.18 / §5.2.22 / §5.2.28 / §5.2.29)", () => {
+test("Catalog: encodeCatalog は role=video / audio の必須フィールド欠落を reject する (§5.2.18 / §5.2.22)", () => {
   // §5.2.18: role=video は codec が MUST
   assert.throws(
     () =>
@@ -366,51 +367,32 @@ test("Catalog: encodeCatalog は role が video / audio のときの必須フィ
     /video track must include bitrate per §5\.2\.22/,
   );
 
-  // §5.2.28: role=audio は samplerate が MUST
+  // §5.2.18: role=audio も codec が MUST
   assert.throws(
     () =>
       encodeCatalog({
         version: "draft-01",
-        tracks: [
-          {
-            name: "a",
-            packaging: "loc",
-            isLive: true,
-            role: "audio",
-            codec: "opus",
-            bitrate: 128_000,
-            channelConfig: "2",
-          },
-        ],
+        tracks: [{ name: "a", packaging: "loc", isLive: true, role: "audio", bitrate: 128_000 }],
       }),
-    /audio track must include samplerate per §5\.2\.28/,
+    /audio track must include codec per §5\.2\.18/,
   );
 
-  // §5.2.29: role=audio は channelConfig が MUST
+  // §5.2.22: role=audio も bitrate が MUST
   assert.throws(
     () =>
       encodeCatalog({
         version: "draft-01",
-        tracks: [
-          {
-            name: "a",
-            packaging: "loc",
-            isLive: true,
-            role: "audio",
-            codec: "opus",
-            bitrate: 128_000,
-            samplerate: 48_000,
-          },
-        ],
+        tracks: [{ name: "a", packaging: "loc", isLive: true, role: "audio", codec: "opus" }],
       }),
-    /audio track must include channelConfig per §5\.2\.29/,
+    /audio track must include bitrate per §5\.2\.22/,
   );
 });
 
 // role は optional であり custom role も許されるため、role を持たない最小形の track には
-// §5.2.18 / §5.2.22 / §5.2.28 / §5.2.29 を課さない (従来どおり encode できる)。
-// role が video の必須フィールドは publishTracks 経由の既存テストが固定しているため、
-// ここでは role を持たない track と、role=audio で 4 つが揃った track だけを確かめる。
+// §5.2.18 / §5.2.22 を課さない (従来どおり encode できる)。§5.2.28 / §5.2.29 は codec 条件で
+// あり、codec を持たないこの track には課さない。role が video の必須フィールドは publishTracks
+// 経由の既存テストが固定しているため、ここでは role を持たない track と、role=audio で必要な
+// フィールドが揃った track だけを確かめる。
 test("Catalog: encodeCatalog は role を持たない track と必須フィールドを満たす audio track を encode する", () => {
   const catalog: Catalog = {
     version: "draft-01",
@@ -728,6 +710,39 @@ test("Catalog: tracks と publishTracks で namespace が異なれば同名で�
   assert.strictEqual(decoded.publishTracks?.[0].name, "video");
 });
 
+// isAudioCodec は WebCodecs Codec Registry §3 Audio Codec Registry の codec string を受理し、
+// 高レベル API の parseAudioCodec が扱う opus / mp4a を含む (判定が狭まると §5.2.28 / §5.2.29
+// の MUST が抜けるため、登録済みの audio codec を網羅する)。
+test("isAudioCodec: Audio Codec Registry の codec string を受理する (§5.2.28 / §5.2.29)", () => {
+  for (const codec of [
+    "alaw",
+    "flac",
+    "mp3",
+    "mp4a.40.2",
+    "mp4a.69",
+    "opus",
+    "pcm-s16",
+    "pcm-f32",
+    "ulaw",
+    "vorbis",
+  ]) {
+    assert.isTrue(isAudioCodec(codec), codec);
+  }
+});
+
+test("isAudioCodec: video codec と未知の codec は audio codec と判定しない", () => {
+  for (const codec of [
+    "av01.0.04M.08",
+    "avc1.42001f",
+    "hvc1.1.6.L93.B0",
+    "vp8",
+    "vp09.00.10.08",
+    "com.example.custom",
+  ]) {
+    assert.isFalse(isAudioCodec(codec), codec);
+  }
+});
+
 test("Catalog: role=video で codec が無いと reject (§5.2.18)", () => {
   const catalog = {
     version: "draft-01",
@@ -750,7 +765,7 @@ test("Catalog: role=video で bitrate が無いと reject (§5.2.22)", () => {
   );
 });
 
-test("Catalog: role=audio で codec が無いと reject (§5.2.18)", () => {
+test("Catalog: role=audio で codec が無いと reject (§5.2.18。role 条件)", () => {
   const catalog = {
     version: "draft-01",
     tracks: [
@@ -771,7 +786,7 @@ test("Catalog: role=audio で codec が無いと reject (§5.2.18)", () => {
   );
 });
 
-test("Catalog: role=audio で bitrate が無いと reject (§5.2.22)", () => {
+test("Catalog: role=audio で bitrate が無いと reject (§5.2.22。role 条件)", () => {
   const catalog = {
     version: "draft-01",
     tracks: [
@@ -792,7 +807,165 @@ test("Catalog: role=audio で bitrate が無いと reject (§5.2.22)", () => {
   );
 });
 
-test("Catalog: role=audio で samplerate が無いと reject (§5.2.28)", () => {
+// §5.2.28 / §5.2.29 は packaging にも依存しない。moqlog / moqmetrics の track は codec を
+// 要求されない (§9.4 / §10.4) が、audio codec を持つなら samplerate / channelConfig が MUST。
+test("Catalog: moqlog の track でも audio codec を持てば samplerate が MUST (§5.2.28)", () => {
+  const catalog = {
+    version: "draft-01",
+    tracks: [],
+    publishTracks: [{ name: "log", packaging: "moqlog", role: "log", isLive: true, codec: "opus" }],
+  };
+  assert.throws(
+    () => decodeCatalogMessage(encodeRaw(catalog)),
+    /invalid track 'log': audio track must include samplerate per §5\.2\.28/,
+  );
+});
+
+// §5.2.28 / §5.2.29 の条件は「audio codecs are specified」であり role ではない
+// (draft-ietf-moq-msf-01 §5.2.6 Table 5 の audio 系 role は audio と audiodescription で、
+// custom role も許される)。audio codec を持つ track には role によらず必須にする。
+test("Catalog: role=audiodescription で audio codec を持ち samplerate が無いと reject (§5.2.28)", () => {
+  const catalog = {
+    version: "draft-01",
+    tracks: [
+      {
+        name: "a",
+        packaging: "loc",
+        isLive: true,
+        role: "audiodescription",
+        codec: "opus",
+        bitrate: 128000,
+        channelConfig: "2",
+      },
+    ],
+  };
+  assert.throws(
+    () => decodeCatalogMessage(encodeRaw(catalog)),
+    /invalid track 'a': audio track must include samplerate per §5\.2\.28/,
+  );
+});
+
+test("Catalog: role 未指定で audio codec を持ち channelConfig が無いと reject (§5.2.29)", () => {
+  const catalog = {
+    version: "draft-01",
+    tracks: [
+      {
+        name: "a",
+        packaging: "loc",
+        isLive: true,
+        codec: "opus",
+        samplerate: 48000,
+      },
+    ],
+  };
+  assert.throws(
+    () => decodeCatalogMessage(encodeRaw(catalog)),
+    /invalid track 'a': audio track must include channelConfig per §5\.2\.29/,
+  );
+});
+
+test("Catalog: custom role で audio codec を持ち samplerate が無いと reject (§5.2.28)", () => {
+  const catalog = {
+    version: "draft-01",
+    tracks: [
+      {
+        name: "a",
+        packaging: "loc",
+        isLive: true,
+        role: "com.example.commentary",
+        codec: "mp4a.40.2",
+        bitrate: 128000,
+        channelConfig: "2",
+      },
+    ],
+  };
+  assert.throws(
+    () => decodeCatalogMessage(encodeRaw(catalog)),
+    /invalid track 'a': audio track must include samplerate per §5\.2\.28/,
+  );
+});
+
+// §5.2.28 / §5.2.29 は audio codec が条件であるため、role=audio でも codec が audio codec で
+// なければ課さない (codec / bitrate の必須は §5.2.18 / §5.2.22 として残る)。
+test("Catalog: role=audio でも audio codec でなければ samplerate / channelConfig を課さない", () => {
+  const catalog: Catalog = {
+    version: "draft-01",
+    tracks: [
+      {
+        name: "a",
+        packaging: "loc",
+        isLive: true,
+        role: "audio",
+        codec: "com.example.custom",
+        bitrate: 128000,
+      },
+    ],
+  };
+  const decoded = decodeCatalogMessage(encodeCatalog(catalog)) as Catalog;
+  assert.strictEqual(decoded.tracks[0].codec, "com.example.custom");
+});
+
+test("Catalog: encodeCatalog も role 未指定で audio codec の samplerate 欠落を reject する (§5.2.28)", () => {
+  assert.throws(
+    () =>
+      encodeCatalog({
+        version: "draft-01",
+        tracks: [{ name: "a", packaging: "loc", isLive: true, codec: "opus", channelConfig: "2" }],
+      }),
+    /audio track must include samplerate per §5\.2\.28/,
+  );
+});
+
+test("Catalog: encodeCatalog も role 未指定で audio codec の channelConfig 欠落を reject する (§5.2.29)", () => {
+  assert.throws(
+    () =>
+      encodeCatalog({
+        version: "draft-01",
+        tracks: [{ name: "a", packaging: "loc", isLive: true, codec: "opus", samplerate: 48000 }],
+      }),
+    /audio track must include channelConfig per §5\.2\.29/,
+  );
+});
+
+// 検証順は packaging 別 MUST → role 条件 (codec → bitrate) → codec 条件 (samplerate →
+// channelConfig)。role=audio の代表ケースで、どのエラーが先に報告されるかを固定する
+// (入力は既存テストと同じ組み合わせを使い、報告されるエラーの優先順位だけを確かめる)。
+test("Catalog: role=audio の欠落は codec / bitrate (§5.2.18 / §5.2.22) が samplerate より先に報告される", () => {
+  // bitrate と samplerate の両方が無いときは role 条件の bitrate が先
+  assert.throws(
+    () =>
+      decodeCatalogMessage(
+        encodeRaw({
+          version: "draft-01",
+          tracks: [{ name: "a", packaging: "loc", isLive: true, role: "audio", codec: "opus" }],
+        }),
+      ),
+    /audio track must include bitrate per §5\.2\.22/,
+  );
+
+  // bitrate があり samplerate と channelConfig が無いときは samplerate が先
+  assert.throws(
+    () =>
+      decodeCatalogMessage(
+        encodeRaw({
+          version: "draft-01",
+          tracks: [
+            {
+              name: "a",
+              packaging: "loc",
+              isLive: true,
+              role: "audio",
+              codec: "opus",
+              bitrate: 128000,
+            },
+          ],
+        }),
+      ),
+    /audio track must include samplerate per §5\.2\.28/,
+  );
+});
+
+test("Catalog: audio codec を持ち role=audio の track で samplerate が無いと reject (§5.2.28)", () => {
   const catalog = {
     version: "draft-01",
     tracks: [
@@ -813,7 +986,7 @@ test("Catalog: role=audio で samplerate が無いと reject (§5.2.28)", () => 
   );
 });
 
-test("Catalog: role=audio で channelConfig が無いと reject (§5.2.29)", () => {
+test("Catalog: audio codec を持ち role=audio の track で channelConfig が無いと reject (§5.2.29)", () => {
   const catalog = {
     version: "draft-01",
     tracks: [
@@ -1396,6 +1569,47 @@ test("applyCatalogDelta: 合成後の tracks と引き継いだ publishTracks �
   assert.throws(
     () => applyCatalogDelta(current, delta),
     /duplicate track name 'v' under namespace 'room1' in publishTracks per §5\.2\.3/,
+  );
+});
+
+// codec の型検証は decode 側 (§5.2.18) の責務であり、clone 合成後の検証は型が崩れた値を
+// 素通りさせる。ここで TypeError を出すと「検証違反は plain Error」という契約から外れるため、
+// 手組み delta の clone で非文字列 codec を渡しても throw しないことを固定する。
+test("applyCatalogDelta: clone 合成後に codec が文字列でなくても TypeError にしない", () => {
+  const current: Catalog = {
+    version: "draft-01",
+    tracks: [{ name: "v", packaging: "loc", isLive: true, codec: "vp8", bitrate: 1_000_000 }],
+  };
+  const delta: CatalogDelta = {
+    deltaUpdate: true,
+    operations: [
+      {
+        type: "clone",
+        tracks: [{ name: "a", parentName: "v", codec: 123 } as unknown as CatalogTrack],
+      },
+    ],
+  };
+  assert.doesNotThrow(() => applyCatalogDelta(current, delta));
+});
+
+// §5.2.28 / §5.2.29: clone で codec を上書きした結果も合成後に再検証する (clone 単体では
+// 合成後の属性が決まらないため、decode 側の検証では捕捉できない)。親が audio codec を持つ場合は
+// 親の時点で samplerate / channelConfig が揃っているため、上書きで新たに audio codec になる
+// ケースを固定する。
+test("applyCatalogDelta: clone 合成後の track が audio codec を持つなら samplerate が MUST (§5.2.28)", () => {
+  const current: Catalog = {
+    version: "draft-01",
+    tracks: [{ name: "v", packaging: "loc", isLive: true, codec: "vp8", bitrate: 1_000_000 }],
+  };
+  const delta: CatalogDelta = {
+    deltaUpdate: true,
+    operations: [
+      { type: "clone", tracks: [{ name: "a", parentName: "v", codec: "opus" } as CatalogTrack] },
+    ],
+  };
+  assert.throws(
+    () => applyCatalogDelta(current, delta),
+    /invalid track 'a': audio track must include samplerate per §5\.2\.28/,
   );
 });
 

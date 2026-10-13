@@ -48,6 +48,9 @@ export { decodeCatalogMessage, encodeCatalog, encodeCatalogDelta } from "./msf/c
 // Catalog 検証 (draft-ietf-moq-msf-01 §5.1 / §5.2)
 export { validateCatalog, validateCatalogTrack } from "./msf/catalogValidation";
 
+// audio codec の判定 (draft-ietf-moq-msf-01 §5.2.28 / §5.2.29。WebCodecs Codec Registry §3)
+export { isAudioCodec } from "./msf/catalogTrackValidation";
+
 // Catalog 差分更新の適用 (draft-ietf-moq-msf-01 §5.1.6 / §5.3)
 export { applyCatalogDelta } from "./msf/catalogDelta";
 

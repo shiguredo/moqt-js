@@ -127,9 +127,11 @@ function resetTestEnvironment(): void {
  * 検証に必要なフィールドだけをテストから上書きする。role の既定は video
  * (購読側は getVideoTracks で role === "video" のトラックを取り出す)。
  *
- * `createCatalog` は生成の時点で track 単位の MUST を検証するため、role に応じた必須
- * フィールドを既定で補う (§5.2.18 codec / §5.2.22 bitrate / §5.2.28 samplerate /
- * §5.2.29 channelConfig)。テストが必要とする値は overrides で上書きする。
+ * `createCatalog` は生成の時点で track 単位の MUST を検証するため、role=video / audio の
+ * §5.2.18 codec / §5.2.22 bitrate と、role=audio の §5.2.28 samplerate / §5.2.29
+ * channelConfig を既定で補う。§5.2.28 / §5.2.29 の条件は role ではなく codec (audio codec) で
+ * あるため、audio codec を持つ track を role=audio 以外で作る場合は samplerate と
+ * channelConfig を overrides で明示すること。テストが必要とする値は overrides で上書きする。
  */
 function makeCatalogTrack(overrides: Partial<CatalogTrack> = {}): CatalogTrack {
   const track: CatalogTrack = {
