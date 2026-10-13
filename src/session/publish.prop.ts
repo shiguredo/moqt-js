@@ -1187,10 +1187,15 @@ test("publishSendDatagram: 書き出した datagram がラウンドトリップ�
  * forward は購読の forwardState 切替、send は次の Object の送信である。
  * advanceGroup が真のときは Group ID を進めるため、Group の再訪
  * (Closed Subgroup のエラーパス) は生成しない。
+ * sendEndOfSubgroup は新しい Group の先頭 Object を endOfSubgroup 付きで送る操作であり
+ * (catalog や音声と同じ 1 Group 1 Object の送り方)、常に Group を進める。閉じた Group への
+ * 後続送信を生成しないため、見送りの記録先 (開いている Subgroup) と closedSubgroups の
+ * 対応が単純になる。
  */
 const publisherOperationArb = fc.oneof(
   fc.record({ kind: fc.constant("forward" as const), forward: fc.boolean() }),
   fc.record({ kind: fc.constant("send" as const), advanceGroup: fc.boolean() }),
+  fc.record({ kind: fc.constant("sendEndOfSubgroup" as const) }),
 );
 
 /**
@@ -1198,8 +1203,9 @@ const publisherOperationArb = fc.oneof(
  * 任意の forwardState 切替と Group 送信の列に対して、閉じる Subgroup が
  * 「forwardState が 0 (paused) による見送り (省略) が同じ Group の Subgroup に記録されているなら
  * RESET、なければ FIN」に従うことを検証する。見送りは見送った Object と同じ Group の
- * 開いている Subgroup に記録されるため、省略の有無は送信順序から決まる。done() も同じ
- * 判定で開いている Subgroup を閉じ、当該 track の closedSubgroups を掃除する。
+ * 開いている Subgroup に記録されるため、省略の有無は送信順序から決まる。endOfSubgroup を
+ * 付けた送信も同じ判定でその場で閉じ、done() も同じ判定で開いている Subgroup を閉じ、
+ * 当該 track の closedSubgroups を掃除する。
  */
 test("publishSendObject: 任意の操作列で省略の有無に応じて FIN / RESET を選ぶ", async () => {
   await fc.assert(
@@ -1211,17 +1217,27 @@ test("publishSendObject: 任意の操作列で省略の有無に応じて FIN / 
 
         // 期待する Subgroup ストリームのモデル。omitted は forwardState が 0 の
         // 見送りが「同じ Group の開いているストリーム」へ記録された事実を表し、
-        // closed は後続の Group 送信で閉じられた事実を表す。
+        // closed は後続の Group 送信または endOfSubgroup で閉じられた事実を表す。
         const expected: { groupId: number; omitted: boolean; closed: boolean }[] = [];
         let currentGroupId = -1;
         let nextObjectId = 0;
+        // 直前の送信で Group が閉じたか。閉じた Group への再送は生成しない
+        // (catalog は Group を進めるため、閉じた Group を再訪しない)
+        let currentGroupClosed = false;
 
         for (const operation of operations) {
           if (operation.kind === "forward") {
             publisher.setForwardState(operation.forward);
             continue;
           }
-          if (operation.advanceGroup) {
+          // sendEndOfSubgroup は新しい Group の先頭 Object を endOfSubgroup 付きで送る
+          // (catalog と同じ形)。send は従来どおり Group を進めるかを選ぶ。
+          // 閉じた Group への送信は生成しないため、その場合は Group を進める
+          const sendsEndOfSubgroup = operation.kind === "sendEndOfSubgroup";
+          const advanceGroup = sendsEndOfSubgroup
+            ? true
+            : operation.advanceGroup || currentGroupClosed;
+          if (advanceGroup) {
             currentGroupId += 1;
             nextObjectId = 0;
           }
@@ -1230,9 +1246,12 @@ test("publishSendObject: 任意の操作列で省略の有無に応じて FIN / 
           const objectId = nextObjectId;
           nextObjectId += 1;
 
+          // 送信前に捕捉する (endOfSubgroup の閉じる判定は送信が受け付けられたときの状態で決まる)
+          const forwardStateBeforeSend = publisher.forwardState;
+
           const opened: { groupId: number; omitted: boolean; closed: boolean } | undefined =
             expected[expected.length - 1];
-          if (publisher.forwardState) {
+          if (forwardStateBeforeSend) {
             // 新しい Group の送信は前の Subgroup を閉じて新しいストリームを開く
             if (opened === undefined || opened.groupId !== groupId) {
               if (opened !== undefined) {
@@ -1247,7 +1266,24 @@ test("publishSendObject: 任意の操作列で省略の有無に応じて FIN / 
             opened.omitted = true;
           }
 
-          await publisher.sendObject({ groupId, objectId, payload: new Uint8Array([1, 2, 3]) });
+          await publisher.sendObject({
+            groupId,
+            objectId,
+            payload: new Uint8Array([1, 2, 3]),
+            ...(sendsEndOfSubgroup ? { endOfSubgroup: true } : {}),
+          });
+
+          // endOfSubgroup を付けた送信は、書き込み完了後にその Subgroup を閉じる。
+          // 見送られた場合は閉じない (Subgroup を開いていないため閉じる対象も無い)
+          currentGroupClosed = false;
+          if (sendsEndOfSubgroup && forwardStateBeforeSend) {
+            const sent: { groupId: number; omitted: boolean; closed: boolean } | undefined =
+              expected[expected.length - 1];
+            if (sent !== undefined && sent.groupId === groupId) {
+              sent.closed = true;
+              currentGroupClosed = true;
+            }
+          }
         }
 
         // 生成した操作はすべて有効であり、error 通知は発生しない

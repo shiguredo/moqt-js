@@ -2115,6 +2115,39 @@ test("start: catalog の Group ID は stop 後の再 start で前回を上回る
 });
 
 /**
+ * catalog の送信に endOfSubgroup を付ける
+ *
+ * draft-ietf-moq-transport-22 §11.3.2: Subgroup の全 Object を QUIC stream へ出し終えたら
+ * FIN で閉じる MUST。catalog は delta を送らない (draft-ietf-moq-msf-01 §5) ため、Group の
+ * 先頭 Object 1 つでその Subgroup は完結する。閉じないと次の送り直し (既定 30 秒後) まで
+ * 開いたままになる。ここでは記録用 Publisher で送信パラメータを検証し、実際に FIN が
+ * 出ることは src/session/publishEndOfSubgroup.test.ts が実 WritableStream で固定する。
+ */
+test("start: catalog の送信に endOfSubgroup を付ける", async () => {
+  const sentByConnection: { endOfSubgroup?: boolean }[][] = [];
+  const { publisher } = createStartConnectHarness(
+    {},
+    {
+      createCatalogPublisher: () => {
+        const { publisher: catalogPublisher, sent, doneCount } = createRecordingSendPublisher();
+        sentByConnection.push(sent);
+        return { publisher: catalogPublisher, doneCount };
+      },
+    },
+  );
+
+  const stream = {} as MediaStream;
+  await publisher.start(stream);
+
+  // 初期送信の時点で endOfSubgroup が付いている (送り直しの 30 秒を待たない)
+  assert.equal(sentByConnection.length, 1);
+  assert.equal(sentByConnection[0]?.length, 1);
+  assert.isTrue(sentByConnection[0]?.[0]?.endOfSubgroup);
+
+  await publisher.close();
+});
+
+/**
  * WebCodecs の映像エンコーダーの境界を置き換えて setupEncoders を駆動する
  *
  * node には VideoEncoder と MediaStreamTrackProcessor が無いため、この境界だけを置き換えて
@@ -2698,10 +2731,22 @@ interface PublisherGroupControl {
  */
 function createRecordingSendPublisher(): {
   publisher: Publisher;
-  sent: { groupId: number; objectId: number; priority?: number; payload?: Uint8Array }[];
+  sent: {
+    groupId: number;
+    objectId: number;
+    priority?: number;
+    payload?: Uint8Array;
+    endOfSubgroup?: boolean;
+  }[];
   doneCount: () => number;
 } {
-  const sent: { groupId: number; objectId: number; priority?: number; payload?: Uint8Array }[] = [];
+  const sent: {
+    groupId: number;
+    objectId: number;
+    priority?: number;
+    payload?: Uint8Array;
+    endOfSubgroup?: boolean;
+  }[] = [];
   let done = 0;
   const publisher = {
     state: "active",
@@ -2713,12 +2758,14 @@ function createRecordingSendPublisher(): {
       objectId: number;
       priority?: number;
       payload?: Uint8Array;
+      endOfSubgroup?: boolean;
     }) => {
       sent.push({
         groupId: params.groupId,
         objectId: params.objectId,
         priority: params.priority,
         payload: params.payload,
+        endOfSubgroup: params.endOfSubgroup,
       });
     },
     done: async () => {
@@ -2900,7 +2947,7 @@ test("未使用 track は Group ID を採番しない", () => {
  */
 function createCapturingPublisher(): {
   publisher: Publisher;
-  sent: Array<{ properties?: Uint8Array }>;
+  sent: Array<{ properties?: Uint8Array; endOfSubgroup?: boolean }>;
   datagrams: Array<{
     groupId?: number;
     objectId?: number;
@@ -2909,7 +2956,7 @@ function createCapturingPublisher(): {
     priority?: number;
   }>;
 } {
-  const sent: Array<{ properties?: Uint8Array }> = [];
+  const sent: Array<{ properties?: Uint8Array; endOfSubgroup?: boolean }> = [];
   const datagrams: Array<{
     groupId?: number;
     objectId?: number;
@@ -2922,7 +2969,7 @@ function createCapturingPublisher(): {
     done: async () => {
       // 破棄は no-op (購読の無いテストでは書き込み完了を待つ対象が無い)
     },
-    sendObject: async (params: { properties?: Uint8Array }) => {
+    sendObject: async (params: { properties?: Uint8Array; endOfSubgroup?: boolean }) => {
       sent.push(params);
     },
     sendDatagram: (params: { properties?: Uint8Array }) => {
@@ -3292,6 +3339,10 @@ test("handleAudioEncodedChunk: delivery が datagram なら Datagram で送る",
 
 /**
  * 完了条件: 指定が無ければ従来どおり Subgroup で送る (既定は "subgroup"。後方互換)
+ *
+ * あわせて、音声は 1 Object = 1 Group なので送信の時点で Subgroup を閉じる
+ * (draft-ietf-moq-transport-22 §11.3.2 の MUST)。落ちても呼び出し回数だけでは緑に
+ * なるため、params まで固定する
  */
 test("handleAudioEncodedChunk: delivery の既定は Subgroup で送る", () => {
   const { control: loopControl } = createLoopTestContext();
@@ -3308,6 +3359,7 @@ test("handleAudioEncodedChunk: delivery の既定は Subgroup で送る", () => 
 
   assert.equal(sent.length, 1);
   assert.equal(datagrams.length, 0);
+  assert.isTrue(sent[0]?.endOfSubgroup);
 });
 
 /**
@@ -3846,6 +3898,9 @@ test("createPublishers: catalog の forwardState が 1 になると新しい Gro
   assert.isAbove(catalogSent[1]?.groupId ?? 0, catalogSent[0]?.groupId ?? 0);
   assert.equal(catalogSent[1]?.objectId, 0);
   assert.deepEqual(catalogSent[1]?.payload, catalogSent[0]?.payload);
+  // 送り直しも Subgroup を閉じる (初期送信と同じ形)
+  assert.isTrue(catalogSent[0]?.endOfSubgroup);
+  assert.isTrue(catalogSent[1]?.endOfSubgroup);
   // 送り直しは同じ catalog instance を送る (組み立て直さない。generatedAt は開始時のまま)
   assert.strictEqual(control.currentCatalog, catalogBeforeRepublish);
 

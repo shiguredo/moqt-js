@@ -322,11 +322,14 @@ export async function publishSendObjectInternal(
   streamState.previousObjectId = objectId;
 
   // draft-ietf-moq-transport-22 §11.1.1 (Object Status) / §11.3.2 (Closing Subgroup Streams):
-  // END_OF_GROUP は Group の最終 Object を宣言する status であり、Subgroup の終端は
-  // FIN で通知する。省略 (forwardState が 0 または Location Filter の範囲外の見送り) がある
-  // 場合は FIN ではなく RESET で
-  // 閉じる (§11.3.2 の MUST)。
-  if ((params.status ?? ObjectStatus.NORMAL) === ObjectStatus.END_OF_GROUP) {
+  // END_OF_GROUP は Group の最終 Object を宣言する status であり、Subgroup の終端は FIN で
+  // 通知する。省略 (forwardState が 0 または Location Filter の範囲外の見送り) がある場合は
+  // FIN ではなく RESET で閉じる (§11.3.2 の MUST)。
+  // endOfSubgroup は「この Object が Subgroup の最後である」ことを status ではなく送信側の
+  // 申告で伝える経路である。catalog のように payload を持つ Object が Subgroup の最後に
+  // なる場合、payload を持てない END_OF_GROUP status (§11.1.1) は使えない。
+  // 書き込みの完了を待ってから閉じるため、宣言した payload を残したまま FIN することはない。
+  if (status === ObjectStatus.END_OF_GROUP || params.endOfSubgroup === true) {
     closeSubgroupStreamWithoutWaiting(session, trackAlias);
   }
 }

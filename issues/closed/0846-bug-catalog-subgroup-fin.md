@@ -1,7 +1,7 @@
 # catalog の Subgroup ストリームを Object 送信後に FIN しないため、相手側で DATA_STREAM_TIMEOUT (0x12) になる
 
 - Created: 2026-10-13
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-10-13
 - Branch: feature/fix-catalog-subgroup-fin
 - Polished: 2026-10-13
 
@@ -49,23 +49,26 @@ pnpm dev:examples   # examples/high-level-api/main.ts (createMediaPublisher)
 
 ## 設計方針
 
-- catalog object の書き込み完了直後に、その Subgroup ストリームを FIN で閉じる。§11.3.2 の MUST を catalog について満たす最小の変更であり、相手側から見れば FIN が 30 秒より先に届く。映像・音声には手を入れない (映像は 2 秒、音声は 1 フレームごとに Group が進むため、この待ちが発生しない)。
-- 閉じる契機は呼び出し側から通知する。送信側は「この Object がこの Subgroup の最後である」ことを `sendObject` に伝える。`SendObjectParams` に `endOfGroup?: boolean` を足し、真のときは書き込み完了後に Subgroup を閉じる。`sendDatagram` の `SendDatagramParams.endOfGroup` と同じ意味のオプションであり、公開 API としては追加のみ (後方互換) である。送信が見送られた場合 (`forwardState` が 0、または購読の Location Filter の範囲外) は `publishSendObjectInternal` に入らず閉じない。その Subgroup は省略として記録され、後の Group 切り替えで RESET になる (§11.3.2)。`endOfGroup` は「送信された Object が Subgroup の最後である」ことを示す契約であり、「この Group はもう送らない」という宣言ではない。
+- catalog object の書き込み完了直後に、その Subgroup ストリームを FIN で閉じる。§11.3.2 の MUST を満たす最小の変更であり、相手側から見れば FIN が 30 秒より先に届く。映像には手を入れない (既定 2 秒のキーフレーム間隔で Group が進むため、この待ちが発生しない)。
+- 音声と devtools の event timeline も同じ扱いにする。どちらも 1 Object = 1 Group であり、次の Object が来るまで開いたままになる点で catalog と同じ条件である (音声は通常 20 ms ごとに次のフレームが来るが、pause やトラック終了で止まると同じ待ちになる)。
+- 閉じる契機は呼び出し側から通知する。送信側は「この Object がこの Subgroup の最後である」ことを `sendObject` に伝える。`SendObjectParams` に `endOfSubgroup?: boolean` を足し、真のときは書き込み完了後に Subgroup を閉じる。送信が見送られた場合 (`forwardState` が 0、または購読の Location Filter の範囲外) は `publishSendObjectInternal` に入らず閉じない。その Subgroup は省略として記録され、後の Group 切り替えで RESET になる (§11.3.2)。`endOfSubgroup` は「送信された Object が Subgroup の最後である」ことを示す契約であり、「この Group はもう送らない」という宣言ではない。名前は `SendDatagramParams.endOfGroup` (Datagram の wire ビット。§11.2.1) と別のものであることを示すため `endOfSubgroup` とする。
 - 閉じる処理は `publishSendObjectInternal` の中、書き込みの await の直後に行う。`sendObject` は `session.publisherSendQueues` でトラック単位に直列化されているため、この位置なら同じトラックの後続送信と競合しない。`publishCloseSubgroupStream` は最初の await の前に `session.publisherStreams` から削除するため、後続の Group の送信が待たされることもない。
 - `closeSubgroupStreamWithoutWaiting` の判定 (`omittedObjects` による FIN / RESET の選択) をそのまま使う。省略がある Subgroup は RESET、無い Subgroup は FIN になる (§11.3.2)。
-- 閉じた Group は `session.closedSubgroups` に登録され、同じ Group への後続 `sendObject` は `ClosedSubgroupError` になる。この経路は `publishSendObject` の catch が `publisher.handleError` に渡すため、返値の Promise は reject せず error 通知だけが届く (`status: END_OF_GROUP` 済み Group への送信が fail-fast の reject になるのとは扱いが異なる)。catalog は Group を進めるため実害は無い。
-- FIN の完了は待たない (`closeSubgroupStreamWithoutWaiting` の既存の契約)。`sendCatalogObject` の await が解決する時点で FIN は送信済みだが、ACK は待たない。`done()` が `publishClosePublisherStreamInternal` で完了を待つ既存の形に乗せる。
+- 閉じた Group は `session.closedSubgroups` に登録され、同じ Group への後続 `sendObject` は `ClosedSubgroupError` になる。この経路は `publishSendObject` の catch が `publisher.handleError` に渡すため、返値の Promise は reject せず error 通知だけが届く (`status: END_OF_GROUP` 済み Group への送信が fail-fast の reject になるのとは扱いが異なる)。`forwardState` が 0 の場合は送信前に見送られるため通知も出ない。catalog は Group を進めるため実害は無い。
+- FIN の完了は待たない (`closeSubgroupStreamWithoutWaiting` の既存の契約)。FIN を諦めて RESET に切り替わった場合は `closedSubgroups` の登録を取り消すため、同じ Group へ再び送信できる (§11.3.2)。`done()` が `publishClosePublisherStreamInternal` で完了を待つ既存の形に乗せる。
 - `ObjectStatus.END_OF_GROUP` の Object を追加で 1 つ送る案は採らない。draft-ietf-moq-transport-22 §11.1.1 は Normal 以外の status に payload を持たせないため、独立した Object ID をもう 1 つ使うことになる。加えて購読側の `handleCatalogObject` は status を見ずに空 payload を catalog として復号しようとし、`processCatalogPayload` が decode 失敗として `onError` に回す。読み手を増やさず FIN だけで §11.3.2 の MUST を満たせる。
-- 高レベル API の `src/createMediaPublisher.ts` の `sendCatalogObject` で `endOfGroup: true` を渡す。devtools の `sendCatalogUpdate` と `startPublishing` の初期送信でも同じオプションを渡す (停止時の complete catalog は `done()` が閉じるため不要)。
+- 高レベル API の `src/createMediaPublisher.ts` の `sendCatalogObject` と音声の送信 (`sendAudioFrameFireAndForget` へ渡すパラメータ) で `endOfSubgroup: true` を渡す。devtools の `sendCatalogUpdate` / `startPublishing` の初期送信 / `sendEventMessage` / 音声の `sendObject` でも同じオプションを渡す (停止時の complete catalog は直後の `done()` が閉じるため不要)。
 - 閉じた後の wire 表現は、Group の最大 Object を載せた Subgroup を FIN で閉じた形になる。ただし SubgroupHeader の END_OF_GROUP ビットは立てない (header は最初の Object の書き込み前に送るため、最後の Object であることを知らない)。このビットを立てていない場合、draft-ietf-moq-transport-22 §11.3.1 が定める「FIN から Group の最終 Object を推論する」経路は使えない。相手側の DATA_STREAM_TIMEOUT の解除は FIN の受信で足りるため、本 issue の目的はこの形で達成できる。
 
 ## 完了条件
 
-- `SendObjectParams.endOfGroup` が真のとき、`publishSendObjectInternal` が書き込み完了直後に Subgroup を閉じること。実 `WritableStream` の sink で close / abort を観測する `src/session/publishSubgroupClose.test.ts` と同じ形の単体テストで固定する。
-- 省略 (`forwardState` が 0、または購読の Location Filter の範囲外) がある Subgroup を `endOfGroup: true` で閉じた場合に RESET になること (§11.3.2)。
-- `endOfGroup: true` を付けた Group へ同じ Group の Object を続けて送ろうとすると、`ClosedSubgroupError` が error 通知として届くこと (返値の Promise は reject しない)。
-- catalog の送信が `catalogRepublishIntervalMs` (30 秒) を待たずに FIN を出すこと。`src/createMediaPublisher.ts` の `sendCatalogObject` が `endOfGroup: true` を渡していることと、その送信で FIN が出ることをテストで固定する。
-- `devtools/src/hooks/usePublisher.ts` の初回送信 (`startPublishing`) と送り直し (`sendCatalogUpdate`) でも `endOfGroup: true` を渡し、同じ 30 秒の穴が残っていないこと。
+- `SendObjectParams.endOfSubgroup` が真のとき、`publishSendObjectInternal` が書き込み完了直後に Subgroup を閉じること。実 `WritableStream` の sink で close / abort を観測する `src/session/publishSubgroupClose.test.ts` と同じ形の単体テストで固定する。
+- 省略 (`forwardState` が 0、または購読の Location Filter の範囲外) がある Subgroup を `endOfSubgroup: true` で閉じた場合に RESET になること (§11.3.2)。
+- `endOfSubgroup: true` を付けた Group へ同じ Group の Object を続けて送ろうとすると、`ClosedSubgroupError` が error 通知として届くこと (返値の Promise は reject しない)。
+- FIN を諦めて RESET に切り替わった場合に、同じ Group へ再び送信できること (§11.3.2)。
+- catalog の送信が `catalogRepublishIntervalMs` (30 秒) を待たずに FIN を出すこと。`src/createMediaPublisher.ts` の `sendCatalogObject` が `endOfSubgroup: true` を渡していることと、その送信で FIN が出ることをテストで固定する。
+- 音声の Subgroup 送信 (`src/createMediaPublisher.ts` の音声経路) が `endOfSubgroup: true` を渡し、Datagram 経路には渡さないこと。
+- `devtools/src/hooks/usePublisher.ts` の初回送信 (`startPublishing`)、送り直し (`sendCatalogUpdate`)、event timeline (`sendEventMessage`)、音声の `sendObject` でも `endOfSubgroup: true` を渡し、同じ 30 秒の穴が残っていないこと。
 - `docs/LOW_LEVEL_API.md` の `Publisher` の表と `sendObject()` の内部実装の節に、新しいオプションを記載すること。
 - 実 relay と moqt-rs の `moq-sub` を用意できる環境で、moqt-js の publisher から catalog を受信した約 30 秒後に `0x12 data stream timeout expired` でセッションが閉じないことを確認すること。この確認は moqt-rs を別リポジトリで起動する必要があり、moqt-js の CI と `tests/e2e/relay` (購読側が moqt-js のため 0x12 を検出できない) では自動化できない。手元での確認となり、実施できなかった場合はその旨を PR に記録する。
 - `vp check` / `tsc --noEmit` / `vp test run` が通ること。
@@ -73,4 +76,10 @@ pnpm dev:examples   # examples/high-level-api/main.ts (createMediaPublisher)
 
 ## 解決方法
 
-{対応時に記入}
+- `SendObjectParams` に `endOfSubgroup?: boolean` を追加した。真のとき、`src/session/publish.ts` の `publishSendObjectInternal` が Object の書き込み完了直後に `closeSubgroupStreamWithoutWaiting` を呼び、Subgroup を閉じる。FIN / RESET の判定は既存の `omittedObjects` に委ね、省略がある Subgroup は RESET、無い Subgroup は FIN になる (§11.3.2)。同じ Group への後続送信は `closedSubgroups` により error 通知になる。FIN を諦めて RESET に切り替わった場合は登録を取り消し、同じ Group へ再送できる。
+- オプション名は `endOfSubgroup` とした。`sendDatagram` の `SendDatagramParams.endOfGroup` は Datagram の wire ビット (§11.2.1)、こちらは Subgroup の終端を FIN で示すもの (§11.3.2) であり、同名だと意味が衝突するため。双方の JSDoc と `docs/LOW_LEVEL_API.md` に相互参照を書いた。
+- 送信側の利用箇所を追加した。`src/createMediaPublisher.ts` の `sendCatalogObject` と音声の送信 (1 chunk = 1 Object = 1 Group のため)、`devtools/src/hooks/usePublisher.ts` の `sendCatalogUpdate` / `startPublishing` の初期送信 / `sendEventMessage` / 音声の `sendObject`。Datagram 経路には渡していない (構造的部分型で通ってしまうため明示的に組み立てる)。停止時の complete catalog は直後の `done()` が FIN を出すため対象外とした。
+- `SubgroupHeader` の END_OF_GROUP ビットは立てていない。header は最初の Object の書き込み前に送るため、最後の Object であることを知らない。FIN の受信で相手側の `DATA_STREAM_TIMEOUT` は解除できるため、§11.3.1 の「FIN から Group の最終 Object を推論する」経路は使わない。この判断と理由は `src/publisher.ts` の JSDoc と `docs/LOW_LEVEL_API.md` に書いた。
+- テストを追加した。`src/session/publishEndOfSubgroup.test.ts` が実 `WritableStream` の sink で close / abort を観測し、書き込み完了直後の FIN、`endOfSubgroup` を付けない場合に閉じないこと、見送り時の RESET、閉じた Group への後続送信の error 通知、forwardState 0 と Location Filter 範囲外の見送り、FIN 失敗から RESET への切り替えと再送を固定する。`src/session/publish.prop.ts` の FIN / RESET 選択の PBT に `endOfSubgroup` を送る操作を追加した (実装から `endOfSubgroup` を外すと落ちることを確認済み)。`src/createMediaPublisher.test.ts` は catalog の初期送信 / 送り直しと音声の Subgroup 送信が `endOfSubgroup` を渡すことを固定する。
+- `docs/LOW_LEVEL_API.md` の `Publisher` の説明と `sendObject()` の内部実装の節にオプションを追記した。`CHANGES.md` は CODEBASE.md の「MOQT RFC ドラフト中の特別ルール」に従い更新していない。
+- 検証は `vp check` / `tsc --noEmit` / `vp test run` (217 ファイル / 3795 テスト) の通過と `/review-diff-code` の 3 周 + 最終確認パス (致命的 0・重要 0) で行った。実 relay と moqt-rs の `moq-sub` を使った「catalog 受信の約 30 秒後に 0x12 が出ないこと」の確認は、moqt-rs を別リポジトリで起動する必要があり CI でも `tests/e2e/relay` でも自動化できないため未実施である (PR に記録する)。

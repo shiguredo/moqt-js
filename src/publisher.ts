@@ -105,6 +105,30 @@ export interface SendObjectParams {
    * 先頭以外で指定すると throw する。
    */
   subgroupDeliveryTimeout?: bigint;
+  /**
+   * この Object が Subgroup の最後であるかどうか
+   *
+   * draft-ietf-moq-transport-22 §11.3.2 (Closing Subgroup Streams):
+   * "If a sender has delivered all objects in a Subgroup to the QUIC stream,
+   * except any Objects with Locations smaller than the subscription's Start
+   * Location, it MUST close the stream with a FIN."
+   *
+   * true のときは Object の書き込み完了後に Subgroup を FIN で閉じる。Subgroup に載せる
+   * Object が残っていないことを送信側が知っている場合に使う (catalog は 1 Group に
+   * 1 Object だけを載せるため、常にこれに当たる)。閉じた Group への後続の `sendObject()`
+   * は error 通知になり、返値の Promise は解決する (forwardState が 0 の場合は
+   * 送信前に見送られるため通知も出ない)。FIN の完了がタイムアウトして RESET に
+   * 切り替わった場合は「渡し切っていない」ため、同じ Group へ再び送信できる (§11.3.2)。
+   *
+   * 送信が見送られた場合 (forwardState が 0、または購読の Location Filter の範囲外) は
+   * 閉じない。その Group の Subgroup が既に開いていれば省略として記録され、後の Group
+   * 切り替えで RESET になる (§11.3.2)。
+   *
+   * `sendDatagram()` の `endOfGroup` とは別のものである。あちらは Datagram の wire で
+   * Group の最後を示すビット (§11.2.1)、こちらは Subgroup の終端を FIN で示す
+   * (§11.3.2)。同じ値でも意味が違うため、同じパラメータオブジェクトを使い回さないこと。
+   */
+  endOfSubgroup?: boolean;
 }
 
 /**
@@ -135,6 +159,10 @@ export interface SendDatagramParams {
   priority?: number;
   /**
    * このオブジェクトがグループの最後かどうか
+   *
+   * draft-ietf-moq-transport-22 §11.2.1: Datagram Type の END_OF_GROUP ビット (0x02) を
+   * 立て、「同じ Group ID でより大きい Object ID が存在しない」ことを示す。
+   * `sendObject()` の `endOfSubgroup` (§11.3.2 の FIN) とは別のものである。
    */
   endOfGroup?: boolean;
 }
