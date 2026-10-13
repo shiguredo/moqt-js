@@ -1392,10 +1392,18 @@ export class PlaybackTimeline {
     const videoMs = naturalMs.video + this.syncExtraMs.video;
     // 目標の差は足した分を含まない素の値から決める
     const targetMs = Math.max(audioMs, videoMs) - this.desiredDifferenceMs(naturalMs);
+    // 足す量は上限までにする。相手側が既に足している分まで含めると上限を超えるため、
+    // 足りない分は相手側の戻し (decaySyncExtras) に任せて A/V のずれとして残す
     if (audioMs < targetMs) {
-      this.syncExtraMs.audio = targetMs - naturalMs.audio;
+      this.syncExtraMs.audio = Math.min(
+        PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS,
+        targetMs - naturalMs.audio,
+      );
     } else if (videoMs < targetMs) {
-      this.syncExtraMs.video = targetMs - naturalMs.video;
+      this.syncExtraMs.video = Math.min(
+        PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS,
+        targetMs - naturalMs.video,
+      );
     }
   }
 
