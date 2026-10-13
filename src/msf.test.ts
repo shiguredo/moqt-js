@@ -2260,6 +2260,16 @@ test("resolveInitData: initDataList と initRef で initData を解決する (§
   assert.strictEqual(resolveInitData(catalog, catalog.tracks[0]), "AQIDBA==");
 });
 
+test("resolveInitData: initDataList に無い initRef なら undefined", () => {
+  const catalog: Catalog = {
+    version: "draft-01",
+    tracks: [{ name: "v", packaging: "loc", isLive: true, initRef: "missing" }],
+    initDataList: [{ id: "init1", type: "inline", data: "AAAA" }],
+  };
+  // 参照切れで throw せず undefined を返す挙動は公開 API の互換のため変えない
+  assert.isUndefined(resolveInitData(catalog, catalog.tracks[0]));
+});
+
 test("resolveInitData: initRef 未指定なら undefined", () => {
   const catalog: Catalog = {
     version: "draft-01",
@@ -2315,6 +2325,132 @@ test("resolveCatalogVariables: 変数名の文字種違反は reject (§5.4.1)",
     () => resolveCatalogVariables(catalog, { "bad name": "x" }),
     /invalid variable name/,
   );
+});
+
+// §5.2.13 / §5.1.7: 置換前は validateCatalog が % を含む initRef の参照先を判定できないため
+// 検証を skip する。置換を行う resolveCatalogVariables が置換後に参照切れを検出する。
+test("resolveCatalogVariables: 置換後に initRef の参照先が無ければ reject (§5.2.13)", () => {
+  const catalog: Catalog = {
+    version: "draft-01",
+    tracks: [{ name: "v", packaging: "loc", isLive: true, initRef: "%init%" }],
+    initDataList: [{ id: "other", type: "inline", data: "AAAA" }],
+  };
+  // メッセージには track 名と置換後の initRef が入る
+  assert.throws(
+    () => resolveCatalogVariables(catalog, { init: "unknown" }),
+    /invalid catalog: track 'v' has initRef 'unknown' not present in initDataList per §5\.2\.13/,
+  );
+});
+
+test("resolveCatalogVariables: 未定義変数で initRef が空文字になり参照先が無ければ reject (§5.4)", () => {
+  const catalog: Catalog = {
+    version: "draft-01",
+    tracks: [{ name: "v", packaging: "loc", isLive: true, initRef: "%missing%" }],
+    initDataList: [{ id: "init1", type: "inline", data: "AAAA" }],
+  };
+  // 未定義変数は空文字になる (§5.4 は未定義変数の扱いを定めていない)
+  assert.throws(
+    () => resolveCatalogVariables(catalog, {}),
+    /invalid catalog: track 'v' has initRef '' not present in initDataList per §5\.2\.13/,
+  );
+});
+
+test("resolveCatalogVariables: initDataList の id 側も置換して一致すれば受理する (§5.4)", () => {
+  const catalog: Catalog = {
+    version: "draft-01",
+    tracks: [{ name: "v", packaging: "loc", isLive: true, initRef: "%init%" }],
+    initDataList: [{ id: "%init%", type: "inline", data: "AAAA" }],
+  };
+  const resolved = resolveCatalogVariables(catalog, { init: "init1" });
+  assert.strictEqual(resolved.tracks[0].initRef, "init1");
+  assert.strictEqual(resolved.initDataList?.[0].id, "init1");
+});
+
+test("resolveCatalogVariables: 置換後に一致する initRef と initRef を持たない track は受理する (§5.2.13)", () => {
+  const catalog: Catalog = {
+    version: "draft-01",
+    tracks: [
+      { name: "v", packaging: "loc", isLive: true, initRef: "%init%" },
+      { name: "a", packaging: "loc", isLive: true },
+    ],
+    publishTracks: [{ name: "p", packaging: "loc", isLive: true, initRef: "init1" }],
+    initDataList: [{ id: "init1", type: "inline", data: "AAAA" }],
+  };
+  const resolved = resolveCatalogVariables(catalog, { init: "init1" });
+  assert.strictEqual(resolved.tracks[0].initRef, "init1");
+  assert.isUndefined(resolved.tracks[1].initRef);
+  // 一致する publishTracks の initRef も置換後の値で検証を通る
+  assert.strictEqual(resolved.publishTracks?.[0].initRef, "init1");
+});
+
+// id 側の変数は置換後に解決するため、置換前の id (`%id%`) では一致せず、置換後の id (`other`) と
+// 一致しない initRef は参照切れになる (置換前の initDataList で判定していたら早期 return で
+// 素通りしてしまう)。
+test("resolveCatalogVariables: 置換後の id と一致しない initRef は reject (§5.2.13)", () => {
+  const catalog: Catalog = {
+    version: "draft-01",
+    tracks: [{ name: "v", packaging: "loc", isLive: true, initRef: "init1" }],
+    initDataList: [{ id: "%id%", type: "inline", data: "AAAA" }],
+  };
+  assert.throws(
+    () => resolveCatalogVariables(catalog, { id: "other" }),
+    /invalid catalog: track 'v' has initRef 'init1' not present in initDataList per §5\.2\.13/,
+  );
+});
+
+// publishTracks の initRef も同じ検証の対象である。
+test("resolveCatalogVariables: publishTracks の initRef も置換後に検証する (§5.2.13)", () => {
+  const catalog: Catalog = {
+    version: "draft-01",
+    tracks: [],
+    publishTracks: [{ name: "p", packaging: "loc", isLive: true, initRef: "%init%" }],
+    initDataList: [{ id: "other", type: "inline", data: "AAAA" }],
+  };
+  assert.throws(
+    () => resolveCatalogVariables(catalog, { init: "unknown" }),
+    /invalid catalog: track 'p' has initRef 'unknown' not present in initDataList per §5\.2\.13/,
+  );
+});
+
+// initRef の型 (§5.2.13 の string) の検証は decode 側の責務。手組みの Catalog で型が崩れて
+// いても TypeError を出さない (素通りさせ、decode の検証に委ねる)。
+test("resolveCatalogVariables: initRef が文字列でなくても TypeError にしない (§5.2.13)", () => {
+  const catalog = {
+    version: "draft-01",
+    tracks: [{ name: "v", packaging: "loc", isLive: true, initRef: 123 }],
+    initDataList: [{ id: "init1", type: "inline", data: "AAAA" }],
+  } as unknown as Catalog;
+  assert.doesNotThrow(() => resolveCatalogVariables(catalog, {}));
+});
+
+// 置換後の initRef が initDataList の id と一致する場合は解決できる。
+test("resolveCatalogVariables: 置換後の initRef は resolveInitData で解決できる", () => {
+  const catalog: Catalog = {
+    version: "draft-01",
+    tracks: [{ name: "v", packaging: "loc", isLive: true, initRef: "%init%" }],
+    initDataList: [{ id: "%init%", type: "inline", data: "AAAA" }],
+  };
+  const resolved = resolveCatalogVariables(catalog, { init: "init1" });
+  assert.strictEqual(resolveInitData(resolved, resolved.tracks[0]), "AAAA");
+});
+
+// 非 string の initRef は型の検証を decode 側に委ね、置換経路では TypeError にしない
+// (公開 API の applyCatalogDelta も同じ検証を共有するため、受理集合は TypeError から素通りに
+// 変わる。手組みの delta でのみ到達し、wire の decode は型を検証して拒否する)。
+test("applyCatalogDelta: add の initRef が文字列でなくても TypeError にしない (§5.2.13)", () => {
+  const current: Catalog = { version: "draft-01", tracks: [] };
+  const delta: CatalogDelta = {
+    deltaUpdate: true,
+    operations: [
+      {
+        type: "add",
+        tracks: [
+          { name: "v", packaging: "loc", isLive: true, initRef: 123 } as unknown as CatalogTrack,
+        ],
+      },
+    ],
+  };
+  assert.doesNotThrow(() => applyCatalogDelta(current, delta));
 });
 
 test("resolveCatalogVariables: % リテラル単独は reject (§5.4.1)", () => {

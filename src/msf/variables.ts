@@ -1,16 +1,21 @@
 /**
- * Variable Substitution (draft-ietf-moq-msf-01 §5.4)
+ * Variable Substitution と置換後の参照検証
+ * (draft-ietf-moq-msf-01 §5.4 / §5.2.13 / §5.1.7)
+ *
+ * 置換を行う `resolveCatalogVariables` が、置換後の Catalog の initRef が initDataList の
+ * エントリを指していることも確かめる (置換前は `validateCatalog` が `%` を含む値を対象外に
+ * しているため、参照切れの最後の砦になる)。
  *
  * 参照: draft-ietf-moq-msf-01
  */
 
-import { KNOWN_CATALOG_ROOT_FIELDS } from "./catalogValidation";
+import { KNOWN_CATALOG_ROOT_FIELDS, assertInitRefResolvable } from "./catalogValidation";
 import { KNOWN_TRACK_FIELDS } from "./catalogTrackValidation";
 import { setOwnField } from "./ownFields";
 import type { AuthInfo, Catalog, CatalogTrack, InitDataEntry, PublishTrack } from "./types";
 
 // =============================================================================
-// Variable Substitution (draft-ietf-moq-msf-01 §5.4)
+// Variable Substitution と置換後の参照検証
 // =============================================================================
 
 const VARIABLE_NAME_PATTERN = /^[A-Za-z0-9_-]+$/;
@@ -32,6 +37,28 @@ const VARIABLE_REFERENCE_PATTERN = /%([A-Za-z0-9_-]+)%/g;
  * 走査対象は `Catalog` の既知 named field 内 string 値に加え、root / track の未知フィールド
  * （`validateCatalog` が保持する、§5.6.14 例の `c4m` 等）の string 値も含む。未知フィールドは
  * ネストした object / array 内の string も再帰的に走査する（§5.4 に再帰規則は無いが本実装の方針）。
+ *
+ * 置換後は `initRef` の参照先を判定できるため、`initDataList` に無い `initRef` は throw する
+ * (§5.2.13 / §5.1.7)。置換前は `%` を含む値の参照先を判定できないため `validateCatalog` が
+ * 検証を skip しており、置換を行う本関数が最後の砦になる (`substituteString` が置換後に残った
+ * `%` を reject するため、検証対象の `initRef` と `initDataList` の id に `%` は残らない。
+ * `authInfo` のキーのように置換対象外の値には `%` が残り得る)。未定義変数は空文字になる
+ * (§5.4 は未定義変数の扱いを定めていない) ため、`initRef: "%missing%"` は id が空文字の
+ * エントリが無ければ参照切れとして throw する。
+ *
+ * `validateCatalog` 全体は再実行しない。検証は initRef の参照切れに限定する。置換で値が変わる
+ * string フィールドが他の MUST の条件になっている場合は検証結果が変わり得るためである
+ * (role を条件にする §5.2.18 / §5.2.22、codec を条件にする §5.2.28 / §5.2.29 など。
+ * `role: "%r%"` が `video` になると codec / bitrate が必須になる)。置換結果を再 encode する
+ * 呼び出し元では `encodeCatalog` が拒否するが、購読側のように置換結果を in-memory で使う経路
+ * では検証されない。再実行すると、置換によって初めて生じる §5.2.3 の重複などの別の判断も混ざる。
+ *
+ * 同じ理由で置換によって初めて生じる §5.1.7 の `initDataList` の id 重複も検証しない
+ * (送信時の `encodeCatalog` が拒否する。呼び出し元が `resolveInitData` で解決する場合は
+ * 先頭の一致で解決されるため、参照切れと違って沈黙する点に注意する)。
+ *
+ * なお本関数を呼ばない経路 (購読側の `resolveInitData` の直呼びなど) は、wire 上の `%name%` を
+ * 解決しないため保護されない。
  */
 export function resolveCatalogVariables(
   catalog: Catalog,
@@ -72,6 +99,8 @@ export function resolveCatalogVariables(
       substituteInitDataEntry(entry, variables),
     );
   }
+  // §5.2.13 / §5.1.7: 置換後は参照先を判定できるため、参照切れの Catalog を返さない。
+  assertInitRefResolvable(result.tracks, result.publishTracks, result.initDataList);
   return result;
 }
 

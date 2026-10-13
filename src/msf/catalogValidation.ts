@@ -226,7 +226,10 @@ export function assertTrackNameUnique(
  * 参照先の有無だけを見て type は問わない。
  *
  * §5.4 の変数 (%name%) を含む値は置換前であり参照先を判定できないため対象外とする。
- * initDataList の id 自体が変数を含む場合も同様に判定できないため、検証しない。
+ * initDataList の id 自体が変数を含む場合も同様に判定できないため、検証しない。この対象外条件は
+ * 置換前の呼び出し (validateCatalog / applyCatalogDelta) のためのものであり、置換後の呼び出し
+ * (resolveCatalogVariables) では置換が literal な `%` を reject するため `%` は残り得ず、
+ * 条件は働かない。
  */
 export function assertInitRefResolvable(
   tracks: readonly CatalogTrack[],
@@ -239,8 +242,11 @@ export function assertInitRefResolvable(
   }
   const ids = new Set(entries.map((entry) => entry.id));
   for (const track of [...tracks, ...(publishTracks ?? [])]) {
-    const initRef = track.initRef;
-    if (initRef === undefined) continue;
+    const initRef: unknown = track.initRef;
+    // 型 (§5.2.13 の string) の検証は decode 側の責務。置換後の呼び出しでは JavaScript から
+    // 組み立てた Catalog も渡り得るため、initRef の型が崩れていても TypeError を出さずに
+    // 無視する (initDataList の id は文字列前提のままで、崩れていれば TypeError になる)
+    if (typeof initRef !== "string") continue;
     if (initRef.includes("%")) {
       continue;
     }
