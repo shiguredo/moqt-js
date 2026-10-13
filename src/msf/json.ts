@@ -1,11 +1,12 @@
 /**
- * JSON wire format と bigint の相互変換 helper
+ * JSON wire format の数値 helper
  *
  * MOQT Location (Group ID / Object ID) は vi64 (unsigned 64bit) だが、MSF の
  * JSON wire format では number として表現される。precision loss / 負数を検出して
- * reject する共通処理をまとめる。
+ * reject する共通処理と、JSON では表現できない非有限数 (NaN / ±Infinity) を拒否する
+ * 共通処理をまとめる。
  *
- * 参照: draft-ietf-moq-msf-01 §7.4.1 / draft-ietf-moq-transport-22 §8
+ * 参照: draft-ietf-moq-msf-01 §5.1.2 / §5.2 / §7.4.1 / draft-ietf-moq-transport-22 §8
  */
 
 /**
@@ -41,6 +42,32 @@ export function toMsfLocationBigInt(value: unknown, label: string, context: stri
     );
   }
   return BigInt(value);
+}
+
+/**
+ * 非有限数 (NaN / ±Infinity) を拒否する
+ *
+ * JSON は非有限数を null にする (ECMA-262 の `JSON.stringify` の SerializeJSONProperty)。
+ * wire では number でなくなるため、内部表現のまま扱うと「送った値を自分で decode できない」
+ * 状態になる。また `JSON.parse` は桁あふれした数値リテラル (`1e999`) を Infinity にするため、
+ * 受信側でも同じ値が現れる (§5.1.2 や §5.2 などの number は有限数を求める)。
+ *
+ * @param value - 検証する値。number であることは呼び出し側で確認済み
+ * @param label - フィールド名 (エラー文言に載せる)
+ * @param context - 対象を表す語 (`track 'video'` など)
+ * @param section - 根拠となる仕様の節
+ */
+export function assertFiniteNumber(
+  value: number,
+  label: string,
+  context: string,
+  section: string,
+): void {
+  if (!Number.isFinite(value)) {
+    throw new Error(
+      `invalid ${context}: ${label} must be a finite number per ${section}, got ${value}`,
+    );
+  }
 }
 
 /**

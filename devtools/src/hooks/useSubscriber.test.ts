@@ -124,11 +124,31 @@ function resetTestEnvironment(): void {
  * 検証用の CatalogTrack を作る
  *
  * CatalogTrack は name / packaging / isLive が必須のため既定値を置き、
- * 検証に必要なフィールドだけをテストから上書きする。role は video 固定
+ * 検証に必要なフィールドだけをテストから上書きする。role の既定は video
  * (購読側は getVideoTracks で role === "video" のトラックを取り出す)。
+ *
+ * `createCatalog` は生成の時点で track 単位の MUST を検証するため、role に応じた必須
+ * フィールドを既定で補う (§5.2.18 codec / §5.2.22 bitrate / §5.2.28 samplerate /
+ * §5.2.29 channelConfig)。テストが必要とする値は overrides で上書きする。
  */
 function makeCatalogTrack(overrides: Partial<CatalogTrack> = {}): CatalogTrack {
-  return { name: "video", packaging: "loc", isLive: true, role: "video", ...overrides };
+  const track: CatalogTrack = {
+    name: "video",
+    packaging: "loc",
+    isLive: true,
+    role: "video",
+    ...overrides,
+  };
+  if (track.role === "video") {
+    track.codec ??= "vp8";
+    track.bitrate ??= 1_000_000;
+  } else if (track.role === "audio") {
+    track.codec ??= "opus";
+    track.bitrate ??= 128_000;
+    track.samplerate ??= 48_000;
+    track.channelConfig ??= "2";
+  }
+  return track;
 }
 
 /**
@@ -175,7 +195,8 @@ test("buildVideoDecoderConfig: Catalog の codec と解像度を VideoDecoderCon
 // width / height は Catalog の任意フィールドである (draft-ietf-moq-msf-01 §5.2.26 / §5.2.27)。
 // 未指定のときに codedWidth / codedHeight へ undefined を載せないことを固定する。
 test("buildVideoDecoderConfig: width / height が無いトラックでは codedWidth / codedHeight を載せない", () => {
-  const { catalog, track } = makeCatalogWithTrack(makeCatalogTrack({ codec: "vp8" }));
+  // codec は makeCatalogTrack の既定値 (vp8) を使う
+  const { catalog, track } = makeCatalogWithTrack(makeCatalogTrack());
 
   const config = buildVideoDecoderConfig(track, catalog);
 
@@ -185,11 +206,16 @@ test("buildVideoDecoderConfig: width / height が無いトラックでは codedW
 
 // codec が無い Catalog では Decoder を設定できない。
 // 空の codec 文字列で VideoDecoder.configure を呼ぶ前に失敗させる。
+// role が video の track は §5.2.18 が codec を MUST とするため Catalog の生成時
+// (`createCatalog`) に拒否される。ここでは生成を通った Catalog と、codec を持たない
+// track を直接渡し、購読側の防御を固定する。
 test("buildVideoDecoderConfig: codec が無いトラックは例外にする", () => {
   const { catalog, track } = makeCatalogWithTrack(makeCatalogTrack());
+  const trackWithoutCodec: CatalogTrack = { ...track };
+  delete trackWithoutCodec.codec;
 
   assert.throws(
-    () => buildVideoDecoderConfig(track, catalog),
+    () => buildVideoDecoderConfig(trackWithoutCodec, catalog),
     /video track codec is not specified/,
   );
 });

@@ -8,7 +8,7 @@
  * 参照: draft-ietf-moq-msf-01
  */
 
-import { toMsfLocationBigInt } from "./json";
+import { assertFiniteNumber, assertJsonSafeBigInt, toMsfLocationBigInt } from "./json";
 import { setOwnField } from "./ownFields";
 import type { PackagingType } from "./version";
 import type {
@@ -195,6 +195,7 @@ function pickLatencyAndBuffers(
         `invalid track '${name}': targetLatency must be a number per §5.2.8, got ${typeof value}`,
       );
     }
+    assertFiniteNumber(value, "targetLatency", `track '${name}'`, "§5.2.8");
     track.targetLatency = value;
   }
   if (hasBuffers) {
@@ -275,6 +276,7 @@ function pickTrackDuration(
       `invalid track '${name}': trackDuration must not be included when isLive is true per §5.2.35`,
     );
   }
+  assertFiniteNumber(value, "trackDuration", `track '${name}'`, "§5.2.35");
   track.trackDuration = value;
 }
 
@@ -465,6 +467,7 @@ function pickOptionalNumber(
       `invalid track '${trackName}': ${key} must be a number per ${section}, got ${typeof value}`,
     );
   }
+  assertFiniteNumber(value, key, `track '${trackName}'`, section);
   (track as unknown as Record<string, unknown>)[key] = value;
 }
 
@@ -503,6 +506,7 @@ function validateBuffers(value: unknown, trackName: string): Buffers {
           `invalid track '${trackName}': buffers.${key} must be a number per §5.2.9, got ${typeof v}`,
         );
       }
+      assertFiniteNumber(v, `buffers.${key}`, `track '${trackName}'`, "§5.2.9");
       buffers[key] = v;
     }
   }
@@ -545,9 +549,14 @@ function validateAccessibility(value: unknown, trackName: string): Accessibility
  * MediaTimelineTemplate を検証する (draft-ietf-moq-msf-01 §5.2.15 / §7.4.1)
  *
  * §7.4.1: 6 要素 JSON Array、各要素の型と順序は固定。
- * Location 要素は 2 要素 number 配列、bigint 変換時に precision loss を検出する。
+ * Location 要素は 2 要素配列で、JSON wire では number、`CatalogTrack.template` の内部表現では
+ * bigint である。どちらも precision loss を検出する。decode だけでなく、encode が template を
+ * JSON の形へ変換する前の確認からも呼ばれる (壊れた形を読んで TypeError にしないため)。
  */
-function validateMediaTimelineTemplate(value: unknown, trackName: string): MediaTimelineTemplate {
+export function validateMediaTimelineTemplate(
+  value: unknown,
+  trackName: string,
+): MediaTimelineTemplate {
   if (!Array.isArray(value) || value.length !== 6) {
     throw new Error(
       `invalid track '${trackName}': template must be a 6-element array per §7.4.1, got ${
@@ -579,6 +588,7 @@ function assertTemplateNumber(value: unknown, trackName: string, field: string):
       `invalid track '${trackName}': template ${field} must be a number per §7.4.1, got ${typeof value}`,
     );
   }
+  assertFiniteNumber(value, `template ${field}`, `track '${trackName}'`, "§7.4.1");
   return value;
 }
 
@@ -599,6 +609,19 @@ function assertTemplateLocation(
   return [groupId, objectId] as const;
 }
 
+/**
+ * template の Location 要素を bigint にする
+ *
+ * `CatalogTrack.template` は内部表現で bigint を、JSON wire では number を持つ (§7.4.1)。
+ * decode は JSON しか渡さないが、encode は内部表現を `validateMediaTimelineTemplate` に渡して
+ * から number へ変換するため、bigint は JSON 安全範囲 (負値でない / `Number.MAX_SAFE_INTEGER`
+ * 以下) だけを確認してそのまま通す。範囲外は変換すると自分の decode が拒否する値になる。
+ */
 function toTemplateLocationBigInt(value: unknown, trackName: string, field: string): bigint {
-  return toMsfLocationBigInt(value, `template ${field}`, `track '${trackName}'`);
+  const context = `track '${trackName}'`;
+  if (typeof value === "bigint") {
+    assertJsonSafeBigInt(value, `template ${field}`, context);
+    return value;
+  }
+  return toMsfLocationBigInt(value, `template ${field}`, context);
 }
