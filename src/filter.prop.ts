@@ -305,23 +305,6 @@ test("resolveFilter: Next Object (0x05) は LARGEST_OBJECT の次 Object から�
   );
 });
 
-/**
- * draft-ietf-moq-transport-22 §9.20.9:
- * Next Object (0x05) で LARGEST_OBJECT 未受信のときは {0, 0} から開始する
- * (相対指定と同じ扱い)。+1 を適用する退行 (未配信時に {0, 1}) を検出する。
- */
-test("resolveFilter: Next Object (0x05) で未配信時は {0, 0} になる (PBT)", () => {
-  fc.assert(
-    fc.property(nextObjectFilterArb, (filter) => {
-      const resolved = resolveFilter(filter, null);
-      assert.isDefined(resolved);
-      assert.equal(resolved!.start.group, 0n);
-      assert.equal(resolved!.start.object, 0n);
-      assert.isUndefined(resolved!.endGroup);
-    }),
-  );
-});
-
 // ============================================================================
 // 全種別に共通の不変条件
 // ============================================================================

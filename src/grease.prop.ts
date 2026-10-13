@@ -2,8 +2,9 @@
  * GREASE 値 Property-Based Tests
  * draft-ietf-moq-transport-22 Section 13 (Grease)
  *
- * GREASE 値のパターン 0x7f * N + 0x9D が任意の非負整数 N で成り立つ
- * 不変条件を検証する。
+ * 生成した GREASE 値が必ず判定 (isGreaseValue) を通ることと、パターンから外れた値が
+ * 通らないことを任意のインデックスで検証する。定義式そのものとの一致は、代表値を pin
+ * する回帰アンカー (先頭のテスト) が担う。
  */
 
 import { test, assert } from "vite-plus/test";
@@ -27,37 +28,7 @@ test("generateGreaseValue で生成した値は isGreaseValue が true になる
   );
 });
 
-// プロパティ 2: 生成値は定義式 0x7f * n + 0x9d と一致する
-test("generateGreaseValue は 0x7f * n + 0x9d と一致する", () => {
-  fc.assert(
-    fc.property(fc.nat(), (n) => {
-      assert.equal(generateGreaseValue(n), 0x7fn * BigInt(n) + 0x9dn);
-    }),
-  );
-});
-
-// プロパティ 3: 生成値はパターンの剰余不変条件を満たす
-test("generateGreaseValue の値は (value - 0x9d) % 0x7f === 0 を満たす", () => {
-  fc.assert(
-    fc.property(fc.nat(), (n) => {
-      const value = generateGreaseValue(n);
-      assert.equal((value - 0x9dn) % 0x7fn, 0n);
-      // 派生: value % 0x7f は 0x9d % 0x7f = 0x1e に等しい
-      assert.equal(value % 0x7fn, 0x1en);
-    }),
-  );
-});
-
-// プロパティ 4: 生成値は n に対して単調増加する
-test("generateGreaseValue は n に対して単調増加する", () => {
-  fc.assert(
-    fc.property(fc.nat(), (n) => {
-      assert.isTrue(generateGreaseValue(n) < generateGreaseValue(n + 1));
-    }),
-  );
-});
-
-// プロパティ 5: GREASE 値に 1..0x7e を足した値は GREASE パターンから外れるため false
+// プロパティ 2: GREASE 値に 1..0x7e を足した値は GREASE パターンから外れるため false
 test("GREASE 値に 1..0x7e を足した値は isGreaseValue が false になる", () => {
   fc.assert(
     fc.property(fc.nat(), fc.integer({ min: 1, max: 0x7e }), (n, k) => {
@@ -66,7 +37,7 @@ test("GREASE 値に 1..0x7e を足した値は isGreaseValue が false になる
   );
 });
 
-// プロパティ 6: 基数 0x9d 未満の値は GREASE 値ではない
+// プロパティ 3: 基数 0x9d 未満の値は GREASE 値ではない
 test("0x9d 未満の値は isGreaseValue が false になる", () => {
   fc.assert(
     fc.property(fc.bigInt({ min: 0n, max: 0x9cn }), (v) => {
@@ -75,7 +46,7 @@ test("0x9d 未満の値は isGreaseValue が false になる", () => {
   );
 });
 
-// プロパティ 7: 負数のインデックスは拒否される
+// プロパティ 4: 負数のインデックスは拒否される
 test("generateGreaseValue は負数のインデックスを拒否する", () => {
   fc.assert(
     fc.property(fc.integer({ max: -1 }), (n) => {
@@ -84,7 +55,7 @@ test("generateGreaseValue は負数のインデックスを拒否する", () => 
   );
 });
 
-// プロパティ 8: 非負の非整数・非有限のインデックスは BigInt 変換の RangeError になる
+// プロパティ 5: 非負の非整数・非有限のインデックスは BigInt 変換の RangeError になる
 // 非負検査 (n < 0) は通過するが、BigInt(n) が整数以外を拒否するため、
 // 専用のエラー文言ではなく RangeError が呼び出し側へ漏れる。
 test("generateGreaseValue は非負の非整数・非有限のインデックスを RangeError で拒否する", () => {
@@ -93,7 +64,7 @@ test("generateGreaseValue は非負の非整数・非有限のインデックス
   }
 });
 
-// プロパティ 9: 負の非整数は非負検査で拒否される (BigInt 変換まで到達しない)
+// プロパティ 6: 負の非整数は非負検査で拒否される (BigInt 変換まで到達しない)
 test("generateGreaseValue は負の非整数も非負検査で拒否する", () => {
   assert.throws(() => generateGreaseValue(-0.5), /GREASE index must be non-negative/);
 });

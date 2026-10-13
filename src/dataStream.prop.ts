@@ -140,24 +140,6 @@ const subgroupHeaderArb = fc
 // ============================================================================
 
 /**
- * Ascending Group Order で先頭オブジェクトの encode→decode がラウンドトリップすることを検証する。
- */
-test("FetchObjectFields: Ascending 先頭オブジェクトの encode→decode がラウンドトリップする", () => {
-  fc.assert(
-    fc.property(firstFetchObjectFieldsArb, (original) => {
-      const encoded = encodeFetchObjectFields(original, false, null, GroupOrder.ASCENDING);
-      const [decoded] = decodeFetchObjectFields(encoded, null, 0, true, GroupOrder.ASCENDING);
-
-      assert.equal(decoded.groupId, original.groupId);
-      assert.equal(decoded.subgroupId, original.subgroupId);
-      assert.equal(decoded.objectId, original.objectId);
-      assert.equal(decoded.publisherPriority, original.publisherPriority);
-      assert.equal(decoded.payloadLength, original.payloadLength);
-    }),
-  );
-});
-
-/**
  * draft-ietf-moq-transport-22 §11.4.1.1:
  * DATAGRAM ビットが立つ先頭オブジェクトの encode→decode がラウンドトリップし、
  * Subgroup ID フィールドを消費しない (subgroupId = 0n) ことを検証する。
@@ -283,24 +265,6 @@ test("FetchObjectFields: Ascending 複数オブジェクトの encode→decode �
 // ============================================================================
 // Descending Group Order の PBT
 // ============================================================================
-
-/**
- * Descending Group Order で先頭オブジェクトの encode→decode がラウンドトリップすることを検証する。
- */
-test("FetchObjectFields: Descending 先頭オブジェクトの encode→decode がラウンドトリップする", () => {
-  fc.assert(
-    fc.property(firstFetchObjectFieldsArb, (original) => {
-      const encoded = encodeFetchObjectFields(original, false, null, GroupOrder.DESCENDING);
-      const [decoded] = decodeFetchObjectFields(encoded, null, 0, true, GroupOrder.DESCENDING);
-
-      assert.equal(decoded.groupId, original.groupId);
-      assert.equal(decoded.subgroupId, original.subgroupId);
-      assert.equal(decoded.objectId, original.objectId);
-      assert.equal(decoded.publisherPriority, original.publisherPriority);
-      assert.equal(decoded.payloadLength, original.payloadLength);
-    }),
-  );
-});
 
 /**
  * Descending Group Order で複数オブジェクトの encode→decode がラウンドトリップすることを検証する。

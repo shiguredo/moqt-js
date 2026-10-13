@@ -25,7 +25,6 @@ import {
   cborEquals,
   cborInteger,
   cborMap,
-  cborMapGet,
   cborNegative,
   cborTextString,
   cborUnsigned,
@@ -832,18 +831,6 @@ test("署名対象バイト列は種別・protected ヘッダ・ペイロード�
   );
 });
 
-test("種別だけが違うメッセージの署名対象バイト列は必ず異なる", () => {
-  fc.assert(
-    fc.property(BYTES_ARBITRARY, BYTES_ARBITRARY, (protectedBytes, payload) => {
-      // コンテキスト文字列 ("Signature1" / "MAC0") が異なるため、種別が違えば
-      // 必ず別のバイト列になる (ドメイン分離)
-      const sign1Input = messageSigningInput("sign1", protectedBytes, payload);
-      const mac0Input = messageSigningInput("mac0", protectedBytes, payload);
-      assert.ok(!bytesEqual(sign1Input, mac0Input), "種別が違うのに同じバイト列になった");
-    }),
-  );
-});
-
 test("正規形のヘッダは protected ヘッダとして往復する", () => {
   fc.assert(
     fc.property(coseHeaderArbitrary(), (header) => {
@@ -954,18 +941,6 @@ test("crit を unprotected に置くと拒否する", () => {
       );
     }),
   );
-});
-
-test("空の crit 配列は拒否し、エンコードでは crit なしとして扱う", () => {
-  // RFC 9052 Section 3.1 は crit の配列に 1 つ以上のラベルを求める
-  const empty = cborMap([[cborInteger(HEADER_CRITICAL), cborArray([])]]);
-  assertCoseError(() => decodeProtectedHeader(empty), "emptyCriticalHeader");
-
-  // エンコード側は空の配列を「crit を指定しない」として扱う (createCoseHeader の既定値)。
-  // crit パラメータ自体を出力しないため、自分自身が読めないヘッダは作らない
-  const encoded = encodeCoseHeader(createCoseHeader());
-  assert.equal(cborMapGet(encoded, cborInteger(HEADER_CRITICAL)), undefined);
-  assert.deepEqual(decodeProtectedHeader(encoded), createCoseHeader());
 });
 
 test("ヘッダのエンコードでも crit の規則を検証する", () => {

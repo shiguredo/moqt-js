@@ -7,7 +7,7 @@
  *
  * - フレームを並べ替えない (描く・捨てる順は積んだ順であり、各フレームは 1 回だけ出る)
  * - 壁時計の TIMESTAMP を持つフレームは表示時刻より前に描かない
- * - 再生遅延は 0 以上、キューが吸収できる長さ以下であり、下げる速さは上限を超えない
+ * - 再生遅延は 0 以上で上限を超えず、下げる速さは上限を超えない
  * - 揺らぎの p95 が最大の揺らぎと一致する到着列では、表示間隔が TIMESTAMP の間隔どおりになる
  *
  * 個別の規則 (最新を残して 1 つ前を描き、古いものを捨てる、TIMESTAMP の飛び、キューの上限、
@@ -21,7 +21,6 @@ import {
   MAX_PLAYOUT_DELAY_MS,
   PLAYBACK_DELAY_DECAY_MS_PER_SECOND,
   PLAYBACK_WINDOW_MS,
-  PLAYOUT_QUEUE_HEADROOM_FRAMES,
   PlaybackTimeline,
 } from "./playbackTimeline";
 
@@ -250,32 +249,7 @@ test("PlayoutBuffer: 揺らぎの p95 が最大の揺らぎのとき、表示間
   );
 });
 
-// キューが吸収できる長さ (上限 - 余裕) を超える揺らぎは再生遅延に使わない (上限で抑える)
-test("PlayoutBuffer: 再生遅延はキューが吸収できる長さを超えない", () => {
-  fc.assert(
-    fc.property(
-      fc.double({ min: 8, max: 50, noNaN: true }),
-      fc.integer({ min: 100, max: 5_000 }),
-      (frameMs, jitterMs) => {
-        const timeline = createTimeline();
-        const buffer = new PlayoutBuffer<number>(JITTER_BUFFER_MAX_QUEUED_FRAMES, timeline);
-        let localMs = LOCAL_ORIGIN_MS;
-        for (let index = 0; index < 500; index++) {
-          const mediaMs = index * frameMs;
-          localMs = Math.max(localMs + frameMs, LOCAL_ORIGIN_MS + mediaMs + jitterMs);
-          timeline.observe("video", EPOCH_MS + localMs, timestampOf(mediaMs));
-          buffer.clear();
-        }
-        // キューが吸収できる長さは (上限 - 余裕) 枚分のフレーム間隔である。TIMESTAMP を
-        // マイクロ秒に丸めた差から求めるため、丸めの誤差 (1 マイクロ秒 × 枚数) を許す
-        const queueCapMs =
-          (JITTER_BUFFER_MAX_QUEUED_FRAMES - PLAYOUT_QUEUE_HEADROOM_FRAMES) * frameMs;
-        assert.isAtMost(
-          buffer.playoutDelayMs() ?? Infinity,
-          Math.min(MAX_PLAYOUT_DELAY_MS, queueCapMs) + JITTER_BUFFER_MAX_QUEUED_FRAMES / 1_000,
-        );
-      },
-    ),
-    { numRuns: 50 },
-  );
-});
+// キューが吸収できる長さを超える揺らぎを再生遅延に使わないことは、再生遅延の実体で
+// ある PlaybackTimeline の `videoDelayMs` 側で playbackTimeline.prop.ts が検証する。
+// PlayoutBuffer.playoutDelayMs は timeline.videoDelayMs への委譲であり、
+// キューの中身を参照しないため、ここでは重ねて検証しない。

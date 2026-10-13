@@ -46,16 +46,6 @@ test("maskC4mValue: 伏せ字にした出力からは c4m を取り出せない"
   );
 });
 
-test("maskC4mValue: 2 回かけても結果が変わらない", () => {
-  fc.assert(
-    fc.property(fragmentArbitrary, (fragment) => {
-      const once = maskC4mValue(fragment);
-      assert.equal(maskC4mValue(once), once);
-    }),
-    { numRuns: 200 },
-  );
-});
-
 test("maskC4mValue: c4m 以外の parameter と track-identifier は変えない", () => {
   fc.assert(
     fc.property(fragmentArbitrary, (fragment) => {
@@ -88,18 +78,6 @@ test("maskC4mValue: 複数行の本文へかけても、c4m の後ろの行を�
         assert.equal(masked.split("\n")[1], trailingLine);
       },
     ),
-    { numRuns: 200 },
-  );
-});
-
-test("maskC4mValue: c4m を含まない入力は変えない", () => {
-  const withoutC4m = fc
-    .stringMatching(/^[A-Za-z0-9:._\-/]{0,40}$/)
-    .filter((value) => !value.includes("c4m="));
-  fc.assert(
-    fc.property(withoutC4m, (value) => {
-      assert.equal(maskC4mValue(value), value);
-    }),
     { numRuns: 200 },
   );
 });

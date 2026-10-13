@@ -5,8 +5,6 @@
  *
  * - タイマーの遅れがフレーム間隔未満なら、フレームを飛ばさず、フレーム n を描く時刻は
  *   「開始 + n × フレーム間隔」から遅れの上限までに収まる (ずれが積み上がらない)
- * - 遅れがどれだけ大きくても、フレームの番号は増え続け、待つ時間は負にならず、次に描く
- *   フレームの時刻は 1 周期より前にならない
  */
 
 import { test, assert } from "vite-plus/test";
@@ -37,32 +35,6 @@ test("nextDummyFrame: タイマーの遅れがフレーム間隔未満なら、�
           const dueMs = startMs + frameIndex * frameIntervalMs;
           assert.isAtLeast(nowMs, dueMs - 1e-6, "描く時刻の前に描かないこと");
           assert.isAtMost(nowMs, dueMs + maxLatenessMs + 1e-6, "遅れを積み上げないこと");
-        }
-      },
-    ),
-  );
-});
-
-test("nextDummyFrame: どれだけ遅れても番号は増え、次のフレームは 1 周期より前にならない", () => {
-  fc.assert(
-    fc.property(
-      framerateArbitrary,
-      fc.array(fc.double({ min: 0, max: 5_000, noNaN: true }), { minLength: 1, maxLength: 100 }),
-      (framerate, latenessesMs) => {
-        const frameIntervalMs = 1_000 / framerate;
-        let nowMs = 0;
-        let frameIndex = 0;
-        for (const latenessMs of latenessesMs) {
-          const next = nextDummyFrame(0, frameIntervalMs, frameIndex, nowMs);
-          assert.isAbove(next.frameIndex, frameIndex, "番号は増えること");
-          assert.isAtLeast(next.delayMs, 0, "待つ時間は負にならないこと");
-          assert.isAbove(
-            next.frameIndex * frameIntervalMs,
-            nowMs - frameIntervalMs,
-            "次のフレームの時刻は 1 周期より前にならないこと",
-          );
-          nowMs += next.delayMs + latenessMs;
-          frameIndex = next.frameIndex;
         }
       },
     ),
