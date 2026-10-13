@@ -1,7 +1,7 @@
 # §5.4 の変数置換後に initRef の参照切れが再検証されない
 
 - Created: 2026-09-24
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-10-14
 - Branch: feature/fix-catalog-init-ref-substitution-revalidation
 - Polished: 2026-09-24
 
@@ -48,4 +48,28 @@ closed の `0647-bug-catalog-required-validation.md` で `validateCatalog` に i
 
 ## 解決方法
 
-{未着手}
+- `src/msf/variables.ts` の `resolveCatalogVariables` は、置換結果に対して `assertInitRefResolvable` (§5.2.13 / §5.1.7) を呼び、`initDataList` のどの id とも一致しない `initRef` を throw するようにした。置換前は `%` を含む値を参照先として判定できないため `validateCatalog` が検証を skip しており、置換を行う本関数が置換後の参照切れを検出する
+- 置換後の `initRef` と `initDataList` の id に `%` は残らない (`substituteString` が残った literal な `%` を §5.4.1 として拒否する) ため、`assertInitRefResolvable` の「`%` を含むなら対象外」条件は置換後の呼び出しでは働かない。id 側に変数がある Catalog も置換後の id 集合で判定する。この旨を `assertInitRefResolvable` の JSDoc に追記した
+- 未定義変数を空文字にする現挙動は変えていない (§5.4 は未定義変数の扱いを定めていない)。`initRef: "%missing%"` は空文字になり、id が空文字のエントリが無ければ参照切れとして throw する
+- `validateCatalog` 全体は再実行せず、検証は initRef の参照切れに限定した。**設計方針にある「§5.4 の置換対象は string 値のみで、型・必須フィールドの検証結果は置換で変わらない」は誤りである** (本 issue の着手前に 0691 で `role` を条件にする §5.2.18 / §5.2.22 と `codec` を条件にする §5.2.28 / §5.2.29 が入り、置換で値が変わる string フィールドが他の MUST の条件になった)。`role: "%r%"` が `video` になれば codec / bitrate が必須になるため、置換で検証結果は変わり得る。それらは本 issue の範囲外とし、置換結果を再 encode する呼び出し元では `encodeCatalog` が拒否する (購読側のように in-memory で使う経路では検証されない) ことを JSDoc に明記した
+- 同じ理由で、置換によって初めて生じる §5.2.3 の track 名重複と §5.1.7 の `initDataList` の id 重複は検証しない。送信経路では `encodeCatalog` が拒否するが、`resolveInitData` で解決する場合は先頭の一致で解決されるため、参照切れと違って沈黙する点を JSDoc に明記した
+- 置換後の Catalog を検証する経路を持たない呼び出し元 (購読側は `resolveInitData` を直接呼び、変数置換を行わない) は保護されないことを JSDoc に明記した
+- 非 string の `initRef` は型の検証を decode 側 (§5.2.13 の string) の責務とし、`assertInitRefResolvable` は TypeError を出さずに無視するようにした (置換経路から JavaScript で組み立てた Catalog が渡り得るため)
+- `resolveCatalogVariables` の JSDoc と `src/msf/variables.ts` のモジュールヘッダを更新した
+- テストは置換後の参照切れ / 未定義変数で空文字 / id 側の変数が置換後に一致 / 置換後の id と一致しない / `publishTracks` の initRef / 非 string の initRef (置換経路と `applyCatalogDelta`) / `resolveInitData` の挙動不変を追加した
+- 公開 API の挙動変更ではないため `CHANGES.md` は更新しない (CODEBASE.md の「MOQT RFC ドラフト中の特別ルール」とも整合)
+
+### 検証
+
+- `npx vp check` / `npx tsc --noEmit` / `npx vp test --run` (218 ファイル / 3853 テスト) / `npx vp run e2e-test` (chromium 110 件) が通る
+- `/review-diff-code` を 3 周回し、3 周目で致命的 0 件・重要 0 件になった (1〜2 周目の指摘はすべて反映済み)
+- 呼び出し元は `src/msf.ts` の再輸出 / `src/msf.test.ts` / `src/msf.prop.ts` のみで、devtools や `tests/` からの呼び出しは無い。`src/index.ts` に再輸出していないためパッケージ公開 API ではなく、新しい throw で壊れる既存の呼び出し元は無い
+- 変異テスト (検証呼び出しの削除 / 置換前の値の引き渡し / `publishTracks` の未検証 / 型ガードの撤去) で追加テストが落ちることを確認した
+
+## 残した課題
+
+- 置換によって初めて生じる §5.2.3 の track 名重複と §5.1.7 の `initDataList` の id 重複は検証しない (送信経路は `encodeCatalog` が拒否する。in-memory で `resolveInitData` に渡す経路は沈黙する)
+- 置換で値が変わる `role` / `codec` が条件の MUST (§5.2.18 / §5.2.22 / §5.2.28 / §5.2.29) は置換後に再検証しない (0691 の「残した課題」と同根)
+- `applyCatalogDelta` は置換を行わないため、`%name%` を含む `initRef` の参照切れは delta 経路では検出されない (本 issue の対象外)
+- 購読側 (`devtools/src/hooks/useSubscriber.ts` など) は変数置換を行わないため、wire 上の `%name%` は解決されず `resolveInitData` が `undefined` を返す。置換を購読経路に組み込むかは別の判断とする
+- `substituteString` は string 以外の値 (`initDataList[].id` など) を渡されると TypeError になる (型を迂回した手組み入力のみ。本 issue の対象外)
