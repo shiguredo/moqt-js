@@ -31,15 +31,18 @@ test("pruneLogIds: 上限ちょうどの連番は残す", () => {
   assert.deepEqual([...pruneLogIds(values, 10)], [10]);
 });
 
+// 表示モードの枝刈り (pruneViewModes) は pruneMapByLogId への 1 行委譲である。
+// 委譲先の性質は下のテストが固定するため、ここでは委譲そのもの (DebugPanel が
+// 呼ぶ公開 API として表示モードを落とすこと) だけを固定する。
 test("pruneViewModes: 捨てられたログの表示モードを落とす", () => {
   const viewModes = new Map<number, "data" | "binary">([
     [1, "binary"],
     [5, "data"],
     [10, "binary"],
   ]);
-  const pruned = pruneViewModes(viewModes, 5);
+
   assert.deepEqual(
-    [...pruned],
+    [...pruneViewModes(viewModes, 5)],
     [
       [5, "data"],
       [10, "binary"],
@@ -49,16 +52,8 @@ test("pruneViewModes: 捨てられたログの表示モードを落とす", () =
   assert.equal(viewModes.size, 3);
 });
 
-test("pruneViewModes: 落とすものが無ければ同じ参照を返す", () => {
-  const viewModes = new Map<number, "data" | "binary">([[10, "binary"]]);
-  assert.equal(pruneViewModes(viewModes, 10), viewModes);
-
-  const empty = new Map<number, "data" | "binary">();
-  assert.equal(pruneViewModes(empty, 10), empty);
-  assert.equal(pruneViewModes(viewModes, null), viewModes);
-  assert.equal(pruneViewModes(empty, null), empty);
-});
-
+// 表示モードの枝刈り (pruneViewModes) はこの関数への 1 行委譲のため、ここで同じ性質を
+// 固定する (委譲元と委譲先で同じ Map の扱いを二重に検証しない)
 test("pruneMapByLogId: 捨てられたログの値を落とし、落とすものが無ければ同じ Map を返す", () => {
   // 表示モードと行の vnode のキャッシュで使う。落とすものが無いときに同じ参照を返す
   // ことが、無駄な再描画を起こさないための条件になる

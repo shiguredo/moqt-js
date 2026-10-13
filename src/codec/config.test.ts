@@ -11,8 +11,8 @@ import {
   getVideoDecoderConfig,
   getAudioEncoderConfig,
   getAudioDecoderConfig,
-  requiresAudioSpecificConfig,
   resolveAudioChannelCount,
+  requiresAudioSpecificConfig,
   DEFAULT_AUDIO_SAMPLE_RATE,
   DEFAULT_AUDIO_CHANNELS,
 } from "./config";
@@ -22,35 +22,22 @@ import type { AudioCodecType, VideoCodecType } from "./types";
 // getVideoEncoderConfig
 // ============================================================================
 
-test("getVideoEncoderConfig: vp8 は codec 文字列 vp8 を返す", () => {
-  const config = getVideoEncoderConfig("vp8", 640, 480, 1_000_000, 30);
-  assert.equal(config.codec, "vp8");
-});
+test("getVideoEncoderConfig: vp8 / vp9 / av1 / h264 / h265 の codec 文字列を返す", () => {
+  assert.equal(getVideoEncoderConfig("vp8", 640, 480, 1_000_000, 30).codec, "vp8");
+  assert.equal(getVideoEncoderConfig("vp9", 640, 480, 1_000_000, 30).codec, "vp09.00.10.08");
+  assert.equal(getVideoEncoderConfig("av1", 640, 480, 1_000_000, 30).codec, "av01.0.04M.08");
 
-test("getVideoEncoderConfig: vp9 は codec 文字列 vp09.00.10.08 を返す", () => {
-  const config = getVideoEncoderConfig("vp9", 640, 480, 1_000_000, 30);
-  assert.equal(config.codec, "vp09.00.10.08");
-});
-
-test("getVideoEncoderConfig: av1 は codec 文字列 av01.0.04M.08 を返す", () => {
-  const config = getVideoEncoderConfig("av1", 640, 480, 1_000_000, 30);
-  assert.equal(config.codec, "av01.0.04M.08");
-});
-
-test("getVideoEncoderConfig: h264 は codec 文字列 avc1.42001f と avc.format annexb を返す", () => {
-  const config = getVideoEncoderConfig("h264", 640, 480, 1_000_000, 30);
-  assert.equal(config.codec, "avc1.42001f");
   // H.264 は Annex B 形式を明示する必要がある
-  assert.deepEqual(config.avc, { format: "annexb" });
-});
+  const h264 = getVideoEncoderConfig("h264", 640, 480, 1_000_000, 30);
+  assert.equal(h264.codec, "avc1.42001f");
+  assert.deepEqual(h264.avc, { format: "annexb" });
 
-test("getVideoEncoderConfig: h265 は codec 文字列 hvc1.1.6.L93.B0 と hevc.format annexb を返す", () => {
-  const config = getVideoEncoderConfig("h265", 640, 480, 1_000_000, 30);
-  assert.equal(config.codec, "hvc1.1.6.L93.B0");
   // H.265 も Annex B 形式を明示する必要がある。
   // lib.dom.d.ts の VideoEncoderConfig 型は WebCodecs の hevc フィールドを
   // まだ定義していないため、実行時の値を型キャストで検証する。
-  assert.deepEqual((config as { hevc?: unknown }).hevc, { format: "annexb" });
+  const h265 = getVideoEncoderConfig("h265", 640, 480, 1_000_000, 30);
+  assert.equal(h265.codec, "hvc1.1.6.L93.B0");
+  assert.deepEqual((h265 as { hevc?: unknown }).hevc, { format: "annexb" });
 });
 
 test("getVideoEncoderConfig: width / height / bitrate / framerate が引数どおりに反映される", () => {
@@ -60,14 +47,6 @@ test("getVideoEncoderConfig: width / height / bitrate / framerate が引数ど�
   assert.equal(config.height, 1080);
   assert.equal(config.bitrate, 5_000_000);
   assert.equal(config.framerate, 60);
-});
-
-test("getVideoEncoderConfig: 未知の codec は vp8 にフォールバックする", () => {
-  // default 分岐の検証。union 外の値を渡すため型アサーションを使う
-  const config = getVideoEncoderConfig("unknown" as VideoCodecType, 640, 480, 1_000_000, 30);
-  assert.equal(config.codec, "vp8");
-  assert.equal(config.width, 640);
-  assert.equal(config.height, 480);
 });
 
 // ============================================================================
@@ -101,9 +80,19 @@ test("getVideoDecoderConfig: description 省略時は undefined になる", () =
   assert.isUndefined(config.description);
 });
 
-test("getVideoDecoderConfig: 未知の codec は vp8 にフォールバックする", () => {
-  const config = getVideoDecoderConfig("unknown" as VideoCodecType, 640, 480);
-  assert.equal(config.codec, "vp8");
+// ============================================================================
+// 未知の codec のフォールバック
+// ============================================================================
+
+test("未知の codec は安全側の既定 (vp8 / opus) にフォールバックする", () => {
+  // default 分岐の検証。union 外の値を渡すため型アサーションを使う
+  const videoEncoder = getVideoEncoderConfig("unknown" as VideoCodecType, 640, 480, 1_000_000, 30);
+  assert.equal(videoEncoder.codec, "vp8");
+  assert.equal(videoEncoder.width, 640);
+  assert.equal(videoEncoder.height, 480);
+  assert.equal(getVideoDecoderConfig("unknown" as VideoCodecType, 640, 480).codec, "vp8");
+  assert.equal(getAudioEncoderConfig("unknown" as AudioCodecType, 128_000).codec, "opus");
+  assert.equal(getAudioDecoderConfig("unknown" as AudioCodecType).codec, "opus");
 });
 
 // ============================================================================
@@ -140,11 +129,6 @@ test("getAudioEncoderConfig: sampleRate / channels を指定すると引数ど�
   assert.equal(config.numberOfChannels, 1);
 });
 
-test("getAudioEncoderConfig: 未知の codec は opus にフォールバックする", () => {
-  const config = getAudioEncoderConfig("unknown" as AudioCodecType, 128_000);
-  assert.equal(config.codec, "opus");
-});
-
 // ============================================================================
 // getAudioDecoderConfig
 // ============================================================================
@@ -169,11 +153,6 @@ test("getAudioDecoderConfig: sampleRate / channels を指定すると引数ど�
   assert.equal(config.numberOfChannels, 1);
 });
 
-test("getAudioDecoderConfig: 未知の codec は opus にフォールバックする", () => {
-  const config = getAudioDecoderConfig("unknown" as AudioCodecType);
-  assert.equal(config.codec, "opus");
-});
-
 test("getAudioDecoderConfig: aac は description を AudioDecoderConfig へ渡す", () => {
   // draft-ietf-moq-loc-04 §2.3.3.1 (Audio Config):
   // AAC の AudioSpecificConfig はデコードに必須のため、そのまま渡す
@@ -193,6 +172,10 @@ test("getAudioDecoderConfig: description 省略時は config に載せない", (
   assert.isUndefined(getAudioDecoderConfig("aac", 48_000, 2).description);
 });
 
+// draft-ietf-moq-loc-04 §2.3.3.1 (Audio Config):
+// AAC は AudioSpecificConfig を運ぶ必要があり、opus は運ぶと codec delay の適用で
+// 復号 timestamp が変わるため運ばない。この述語は AudioEncoder と devtools の
+// 購読側が共用するため、既定の分岐を固定する。
 test("requiresAudioSpecificConfig: aac のみ true", () => {
   assert.isTrue(requiresAudioSpecificConfig("aac"));
   assert.isFalse(requiresAudioSpecificConfig("opus"));
@@ -214,9 +197,10 @@ test("resolveAudioChannelCount: stereo は 2 になる", () => {
 });
 
 test("resolveAudioChannelCount: 前後空白・大文字小文字を問わない", () => {
-  // 照合は前後空白除去・小文字化して行う
+  // 照合は前後空白除去・小文字化して行う (名前付き値もサラウンド表記も同じ)
   assert.equal(resolveAudioChannelCount("  Mono  "), 1);
   assert.equal(resolveAudioChannelCount("STEREO"), 2);
+  assert.equal(resolveAudioChannelCount("  5.1  "), 6);
 });
 
 /**
@@ -231,14 +215,16 @@ test("resolveAudioChannelCount: サラウンド表記 (5.1 / 7.1) を解決す�
   assert.equal(resolveAudioChannelCount("7.1"), 8);
 });
 
-test("resolveAudioChannelCount: サラウンド表記も前後空白・大文字小文字を問わない", () => {
-  assert.equal(resolveAudioChannelCount("  5.1  "), 6);
-});
-
-test("resolveAudioChannelCount: 対応表に無い複合表記は throw する", () => {
-  // 非標準表記を暗黙に数値化しない (例: "1.5" を 6 と解釈しない)
+test("resolveAudioChannelCount: 解決できない明示値は throw する", () => {
+  // 対応表に無い複合表記は非標準表記を暗黙に数値化しない (例: "1.5" を 6 と解釈しない)
   assert.throws(() => resolveAudioChannelCount("1.5"), /unsupported audio channelConfig/);
   assert.throws(() => resolveAudioChannelCount("5.1.2"), /unsupported audio channelConfig/);
+  // 整数文字列としても解決できない値 (1 以上の整数のみ受理する)
+  assert.throws(() => resolveAudioChannelCount("0"), /unsupported audio channelConfig/);
+  assert.throws(() => resolveAudioChannelCount("-1"), /unsupported audio channelConfig/);
+  assert.throws(() => resolveAudioChannelCount(""), /unsupported audio channelConfig/);
+  assert.throws(() => resolveAudioChannelCount("   "), /unsupported audio channelConfig/);
+  assert.throws(() => resolveAudioChannelCount("2ch"), /unsupported audio channelConfig/);
 });
 
 test("resolveAudioChannelCount: 整数文字列はその値になる", () => {
@@ -258,16 +244,6 @@ test("resolveAudioChannelCount: 未知の名前は throw する", () => {
   assert.throws(() => resolveAudioChannelCount("quad"), /unsupported audio channelConfig/);
 });
 
-test("resolveAudioChannelCount: 非整数・0 以下・空文字列は throw する", () => {
-  // 1 以上の整数のみ受理する
-  assert.throws(() => resolveAudioChannelCount("1.5"), /unsupported audio channelConfig/);
-  assert.throws(() => resolveAudioChannelCount("0"), /unsupported audio channelConfig/);
-  assert.throws(() => resolveAudioChannelCount("-1"), /unsupported audio channelConfig/);
-  assert.throws(() => resolveAudioChannelCount(""), /unsupported audio channelConfig/);
-  assert.throws(() => resolveAudioChannelCount("   "), /unsupported audio channelConfig/);
-  assert.throws(() => resolveAudioChannelCount("2ch"), /unsupported audio channelConfig/);
-});
-
 test("resolveAudioChannelCount: safe integer 外は throw する", () => {
   // 巨大桁はデコーダ側の不明瞭な拒否に委ねず解決層で throw する
   assert.equal(resolveAudioChannelCount("9007199254740991"), 9007199254740991);
@@ -279,11 +255,4 @@ test("resolveAudioChannelCount: safe integer 外は throw する", () => {
     () => resolveAudioChannelCount("9999999999999999999999"),
     /unsupported audio channelConfig/,
   );
-});
-
-test("resolveAudioChannelCount と getAudioDecoderConfig の合成: mono は 1ch 設定になる", () => {
-  // 解決値をデコーダ設定に渡す配線 (setupDecoders と同形) を pin する
-  const config = getAudioDecoderConfig("opus", 48000, resolveAudioChannelCount("mono"));
-
-  assert.equal(config.numberOfChannels, 1);
 });

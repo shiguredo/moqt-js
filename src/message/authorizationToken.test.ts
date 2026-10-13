@@ -9,94 +9,12 @@ import {
   type AuthorizationToken,
   assertAuthorizationTokenForSetup,
   decodeAuthorizationToken,
-  encodeAuthorizationToken,
 } from "./authorizationToken";
 import { SessionError, SessionErrorCode } from "../error";
 
-test("AuthorizationToken: USE_VALUE の roundtrip", () => {
-  const tokenValue = new TextEncoder().encode("jwt-token-value");
-  const original: AuthorizationToken = {
-    aliasType: AuthorizationTokenAliasType.USE_VALUE,
-    tokenType: 0n,
-    tokenValue,
-  };
-
-  const encoded = encodeAuthorizationToken(original);
-  const decoded = decodeAuthorizationToken(encoded);
-
-  assert.equal(decoded.aliasType, AuthorizationTokenAliasType.USE_VALUE);
-  if (decoded.aliasType === AuthorizationTokenAliasType.USE_VALUE) {
-    assert.equal(decoded.tokenType, 0n);
-    assert.deepEqual(Array.from(decoded.tokenValue), Array.from(tokenValue));
-  }
-});
-
-test("AuthorizationToken: REGISTER の roundtrip", () => {
-  const tokenValue = new TextEncoder().encode("session-token");
-  const original: AuthorizationToken = {
-    aliasType: AuthorizationTokenAliasType.REGISTER,
-    tokenAlias: 42n,
-    tokenType: 1n,
-    tokenValue,
-  };
-
-  const encoded = encodeAuthorizationToken(original);
-  const decoded = decodeAuthorizationToken(encoded);
-
-  assert.equal(decoded.aliasType, AuthorizationTokenAliasType.REGISTER);
-  if (decoded.aliasType === AuthorizationTokenAliasType.REGISTER) {
-    assert.equal(decoded.tokenAlias, 42n);
-    assert.equal(decoded.tokenType, 1n);
-    assert.deepEqual(Array.from(decoded.tokenValue), Array.from(tokenValue));
-  }
-});
-
-test("AuthorizationToken: USE_ALIAS の roundtrip", () => {
-  const original: AuthorizationToken = {
-    aliasType: AuthorizationTokenAliasType.USE_ALIAS,
-    tokenAlias: 7n,
-  };
-
-  const encoded = encodeAuthorizationToken(original);
-  const decoded = decodeAuthorizationToken(encoded);
-
-  assert.equal(decoded.aliasType, AuthorizationTokenAliasType.USE_ALIAS);
-  if (decoded.aliasType === AuthorizationTokenAliasType.USE_ALIAS) {
-    assert.equal(decoded.tokenAlias, 7n);
-  }
-});
-
-test("AuthorizationToken: DELETE の roundtrip", () => {
-  const original: AuthorizationToken = {
-    aliasType: AuthorizationTokenAliasType.DELETE,
-    tokenAlias: 3n,
-  };
-
-  const encoded = encodeAuthorizationToken(original);
-  const decoded = decodeAuthorizationToken(encoded);
-
-  assert.equal(decoded.aliasType, AuthorizationTokenAliasType.DELETE);
-  if (decoded.aliasType === AuthorizationTokenAliasType.DELETE) {
-    assert.equal(decoded.tokenAlias, 3n);
-  }
-});
-
-test("AuthorizationToken: USE_VALUE で空の Token Value を扱える", () => {
-  const original: AuthorizationToken = {
-    aliasType: AuthorizationTokenAliasType.USE_VALUE,
-    tokenType: 0n,
-    tokenValue: new Uint8Array(),
-  };
-
-  const encoded = encodeAuthorizationToken(original);
-  const decoded = decodeAuthorizationToken(encoded);
-
-  assert.equal(decoded.aliasType, AuthorizationTokenAliasType.USE_VALUE);
-  if (decoded.aliasType === AuthorizationTokenAliasType.USE_VALUE) {
-    assert.equal(decoded.tokenType, 0n);
-    assert.equal(decoded.tokenValue.length, 0);
-  }
-});
+// 4 種の Alias Type の round-trip（USE_VALUE / REGISTER / USE_ALIAS / DELETE、
+// 空の Token Value を含む）は authorizationToken.prop.ts の PBT が任意入力で検証する。
+// ここでは PBT では表現できない異常系と SETUP 文脈の制約のみを固定する。
 
 // draft-ietf-moq-transport-22 Section 9.20.2:
 // "If the Token structure cannot be decoded, the receiver MUST close

@@ -423,32 +423,9 @@ test("bidiSendRequestUpdate: raw FILL_PARAMETERS 内側の End Group 超過で I
   assert.equal(written.length, 0);
 });
 
-/**
- * draft-ietf-moq-transport-22 §9.20.9 / §9.20.15:
- * 単一の raw FILL_PARAMETERS の内側超過を InvalidFilterError で拒否する。
- * 複数件の場合は重複検査が先に拒否するため、内側検証は単一の場合に到達する。
- */
-test("bidiSendRequestUpdate: 単一の raw FILL_PARAMETERS 内側超過も InvalidFilterError", async () => {
-  // 内側が超過する単一の組み合わせを手組みする
-  const { session, written } = createBidiSession();
-  const subscriber = new SubscriberImpl(["test"], "track", 0n, 0n, () => {});
-  const exceedingInner = encodeParameters([buildOverflowingLocationFilterParameter()]);
-
-  let thrown: Error | undefined;
-  try {
-    await bidiSendRequestUpdate(session, subscriber, {
-      parameters: [{ type: MessageParameterType.FILL_PARAMETERS, value: exceedingInner }],
-    });
-  } catch (error) {
-    thrown = error instanceof Error ? error : new Error(String(error));
-  }
-
-  // 内側の超過が InvalidFilterError に変換される
-  assert.instanceOf(thrown, InvalidFilterError);
-  assert.isTrue(thrown!.message.includes("absolute range end group exceeds maximum"));
-  assert.equal(session.pendingRequestUpdate.size, 0);
-  assert.equal(written.length, 0);
-});
+// 単一の raw FILL_PARAMETERS の内側超過 (3 フィールド表現) は、直前のテストが
+// 同じ入力と同じアサーション (InvalidFilterError / pending 0 件 / 書き込み 0 件) で
+// 検証済みである。4 フィールド表現の内側超過は別分岐のため次のテストで検証する。
 
 /**
  * draft-ietf-moq-transport-22 §9.20.9 / §9.20.15:

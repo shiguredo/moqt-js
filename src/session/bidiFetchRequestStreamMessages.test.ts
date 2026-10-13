@@ -150,6 +150,9 @@ test("bidiReadFetchResponse: FETCH 応答ストリーム上の REQUEST_UPDATE �
   assert.equal(ctx.written.length, 0);
   // セッション終了のため requestStreams のエントリは削除される
   assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));
+  // draft-ietf-moq-transport-22 §9.1.7 (MAX_REQUEST_UPDATES):
+  // §9.5 の MUST により即座に閉じるため、受信 REQUEST_UPDATE を未応答数として数えない
+  assert.isFalse(ctx.session.receivedRequestUpdateCounts.has(ctx.requestId));
 });
 
 /**
@@ -207,21 +210,9 @@ test("bidiReadFetchResponse: GOAWAY 受信済みでも REQUEST_UPDATE で PROTOC
   );
 });
 
-/**
- * draft-ietf-moq-transport-22 §9.1.7 (MAX_REQUEST_UPDATES) / §9.5:
- * fetch ロールは §9.5 の MUST により PROTOCOL_VIOLATION で即座に閉じるため、
- * 受信 REQUEST_UPDATE を未応答数として数えないことを検証する。
- */
-test("bidiReadFetchResponse: FETCH 応答ストリームの REQUEST_UPDATE は未応答数に数えない", async () => {
-  const ctx = createFetchReadTestContext();
-  await acceptFetchOk(ctx);
-
-  ctx.readableController.enqueue(buildRequestUpdateMessage(ctx.controlWriter));
-  ctx.readableController.close();
-  await waitForMacrotask();
-
-  assert.isFalse(ctx.session.receivedRequestUpdateCounts.has(ctx.requestId));
-});
+// 受信 REQUEST_UPDATE を未応答数 (receivedRequestUpdateCounts) に数えないことは、
+// 同じ入力 (FETCH 応答ストリーム上の REQUEST_UPDATE) を使う直前の
+// PROTOCOL_VIOLATION テストが同じアサーションを含めて検証している。
 
 // ----------------------------------------------------------------------------
 // PUBLISH_STATE_NOTIFY (§9.10 MUST)
@@ -293,29 +284,14 @@ test("bidiReadFetchResponse: ピア FIN で自方向を FIN で閉じて request
   assert.isFalse(errorCalled);
   // データストリームの登録 (fetchers) は双方向ストリームの FIN では変更しない
   assert.isTrue(ctx.session.fetchers.has(ctx.requestId));
-});
-
-/**
- * draft-ietf-moq-transport-22 §6.4.2.2:
- * 応答以外にメッセージを送らない FETCH (FETCH_OK のみで完結する応答) でも、
- * ピア FIN に対する自方向 FIN の SHOULD は成立する。書き込みを伴わず close だけが
- * 実行されることを検証する。
- */
-test("bidiReadFetchResponse: 追加メッセージなしのピア FIN でも自方向 FIN のみ実行される", async () => {
-  const ctx = createFetchReadTestContext();
-  await acceptFetchOk(ctx);
-  const streamInfo = ctx.session.requestStreams.get(ctx.requestId);
-  assert.isDefined(streamInfo);
-
-  ctx.readableController.close();
-  await streamInfo!.writer.closed;
-  await waitForMacrotask();
-
-  // 応答の書き込みは 1 通も発生しない
+  // 自方向を閉じるだけで、応答以外の追加メッセージは書き込まない
   assert.equal(ctx.written.length, 0);
-  assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));
-  assert.equal(ctx.getClosedWithErrorCount(), 0);
 });
+
+// 「応答以外にメッセージを送らない FETCH でもピア FIN に対する自方向 FIN の SHOULD は
+// 成立する」ことは、同じ入力 (FETCH_OK のみ受理した後のピア FIN) を使う直前のテストが
+// 同じアサーション (書き込み 0 通 / requestStreams 削除 / セッションを閉じない) を
+// 含めて検証している。
 
 // ----------------------------------------------------------------------------
 // GOAWAY (§9.2)
@@ -445,37 +421,15 @@ test("bidiCancelFetch: 二重 cancel でも後始末が 1 回だけ実行され�
 // 正常系 (Fetch Object は単方向データストリーム側)
 // ----------------------------------------------------------------------------
 
-/**
- * draft-ietf-moq-transport-22 §3.2.1 (Fetch Object Delivery) / §3.2 (Fetch):
- * 「The publisher creates a single unidirectional stream (see Section 11.4) that
- *  is used to send the Objects.」「The FETCH_OK or FETCH_ERROR can come at any
- *  time relative to object delivery.」
- * FETCH の正常系は「FETCH_OK は双方向ストリーム、Fetch Object とその終端 FIN は
- * 単方向データストリーム」である。データストリーム側の登録と削除は SessionImpl が
- * 担い、双方向ストリームの読み取りループを起動しても影響しないことを検証する。
- */
-test("bidiReadFetchResponse: 正常系で fetchers の登録と削除の挙動が変わらない", async () => {
-  const ctx = createFetchReadTestContext();
-  await acceptFetchOk(ctx);
-  // FETCH_OK 受理で fetchers に登録される (SessionImpl.handleIncomingStream が
-  // FETCH_HEADER の Request ID から fetcher を引く)
-  assert.equal(ctx.session.fetchers.get(ctx.requestId), ctx.fetcher);
-
-  // データストリームの終端 FIN は SessionImpl.handleEnd が処理する。ここでは同じ
-  // 後始末 (handleEnd + fetchers からの削除) を直接呼び、双方向ストリーム側の
-  // 操作が fetchers を変えないことを確かめる。
-  ctx.fetcher.handleEnd();
-  ctx.session.fetchers.delete(ctx.requestId);
-  assert.isFalse(ctx.session.fetchers.has(ctx.requestId));
-  assert.equal(ctx.fetcher.state, "closed");
-
-  // 双方向ストリームの FIN は fetchers の削除状態を変えない
-  ctx.readableController.close();
-  await waitForMacrotask();
-  assert.isFalse(ctx.session.fetchers.has(ctx.requestId));
-  assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));
-  assert.equal(ctx.getClosedWithErrorCount(), 0);
-});
+// draft-ietf-moq-transport-22 §3.2.1 (Fetch Object Delivery) / §3.2 (Fetch):
+// FETCH の正常系 (FETCH_OK は双方向ストリーム、Fetch Object とその終端 FIN は
+// 単方向データストリーム) で fetchers の登録・削除の挙動が変わらないことは、
+// 次のテストの前提 (acceptFetchOk が fetchers への登録を確認する) と、
+// ピア FIN のテスト (requestStreams の削除と fetchers の非変更) が検証している。
+// fetcher.handleEnd() が state を closed にすることは src/fetcher.test.ts の
+// 「handleEnd は endCallback を呼んで closed にする」で検証済みである。
+// テスト側で fetchers.delete() してから「無い」ことを確認する自己成就な
+// テストは置かない。
 
 /**
  * draft-ietf-moq-transport-22 §9.12 (FETCH_OK):

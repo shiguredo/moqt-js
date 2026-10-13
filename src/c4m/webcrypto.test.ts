@@ -1,8 +1,11 @@
 /**
  * Web Crypto API を使う署名 / 検証実装のテスト
  *
- * 成功系の大半は cat.test.ts のベクタ検証で覆う。ここではダイジェストと、
- * 鍵の種別・長さ・署名長のエラーパスを固定する。
+ * 成功系の大半は cat.test.ts のベクタ検証で覆う。ここでは仕様の既知ベクタ
+ * (FIPS 180-4 のダイジェスト、RFC 8032 Section 7.1 の Ed25519) と、
+ * 鍵の種別・長さのエラーパスを固定する。
+ * 全 7 アルゴリズムの round-trip・改ざんの拒否・署名長の検査は
+ * webcrypto.prop.ts の PBT が任意入力で検証する。
  */
 
 import { test, assert } from "vite-plus/test";
@@ -40,37 +43,6 @@ test("SHA-256 / SHA-384 / SHA-512 のダイジェストを計算できる", asyn
     encodeHex(await cryptoImpl.digest("Sha512", message)),
     "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f",
   );
-});
-
-test("HMAC-SHA256 / 384 / 512 の署名と検証を往復できる", async () => {
-  const message = new TextEncoder().encode("message");
-  const cases: Array<["HmacSha256" | "HmacSha384" | "HmacSha512", number]> = [
-    ["HmacSha256", 32],
-    ["HmacSha384", 48],
-    ["HmacSha512", 64],
-  ];
-  for (const [algorithm, keyLength] of cases) {
-    const key = symmetricKey(new Uint8Array(keyLength).fill(0x01));
-    const signature = await cryptoImpl.sign(algorithm, key, message);
-    assert.equal(signature.length, keyLength);
-    await cryptoImpl.verify(algorithm, key, message, signature);
-  }
-});
-
-test("HMAC は改ざんと誤った鍵を拒否する", async () => {
-  const key = symmetricKey(new Uint8Array(32).fill(0x01));
-  const otherKey = symmetricKey(new Uint8Array(32).fill(0x02));
-  const message = new TextEncoder().encode("message");
-  const signature = await cryptoImpl.sign("HmacSha256", key, message);
-  const wrongMessage = new TextEncoder().encode("messagE");
-  const tampered = await captureCryptoError(() =>
-    cryptoImpl.verify("HmacSha256", key, wrongMessage, signature),
-  );
-  assert.equal(tampered.code, "signatureVerificationFailed");
-  const wrongKey = await captureCryptoError(() =>
-    cryptoImpl.verify("HmacSha256", otherKey, message, signature),
-  );
-  assert.equal(wrongKey.code, "signatureVerificationFailed");
 });
 
 test("Ed25519 は RFC 8032 Section 7.1 のテストベクタ 1 と一致する署名を生成する", async () => {
@@ -152,17 +124,4 @@ test("不正な鍵の長さを拒否する", async () => {
     ),
   );
   assert.equal(shortEd25519Key.code, "invalidKey");
-});
-
-test("署名長がアルゴリズムと一致しない場合は拒否する", async () => {
-  const message = new TextEncoder().encode("message");
-  const ecPublic = ec2Key("P256", new Uint8Array(32), new Uint8Array(32));
-  const shortEcSignature = await captureCryptoError(() =>
-    cryptoImpl.verify("Es256", ecPublic, message, new Uint8Array(63)),
-  );
-  assert.equal(shortEcSignature.code, "invalidSignatureLength");
-  const shortEd25519Signature = await captureCryptoError(() =>
-    cryptoImpl.verify("EdDsa", ed25519Key(new Uint8Array(32)), message, new Uint8Array(63)),
-  );
-  assert.equal(shortEd25519Signature.code, "invalidSignatureLength");
 });

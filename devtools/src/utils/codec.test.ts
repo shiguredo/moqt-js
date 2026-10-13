@@ -9,19 +9,10 @@ import {
 } from "./codec";
 import type { CodecType } from "../types";
 
-// Catalog の codec 文字列はエンコーダ設定と一致させる。
-// h264 / h265 選択時に av1 用文字列を誤記しないことの検証。
-test("getCatalogCodec returns expected catalog codec strings", () => {
-  assert.equal(getCatalogCodec("vp8"), "vp8");
-  assert.equal(getCatalogCodec("vp9"), "vp09.00.10.08");
-  assert.equal(getCatalogCodec("av1"), "av01.0.04M.08");
-  assert.equal(getCatalogCodec("h264"), "avc1.42001f");
-  assert.equal(getCatalogCodec("h265"), "hvc1.1.6.L93.B0");
-});
-
-// 対応表の重複による将来の乖離を検出するため、
-// getEncoderConfig の codec 文字列との一致を検証する。
-// width 等は codec 文字列に影響しない任意値である。
+// Catalog の codec 文字列はエンコーダ設定と一致させる。h264 / h265 選択時に av1 用文字列を
+// 誤記しないことの検証。getCatalogCodec の文字列そのもの (vp8 / vp09.00.10.08 / av01.0.04M.08 /
+// avc1.42001f / hvc1.1.6.L93.B0) は getEncoderConfig 側のテストが固定するため、ここでは
+// 両者が同じ対応表から解決されることを見る。width 等は codec 文字列に影響しない任意値である
 test("getCatalogCodec matches getEncoderConfig codec strings", () => {
   const codecs = ["vp8", "vp9", "av1", "h264", "h265"] as const;
   for (const codec of codecs) {

@@ -22,19 +22,8 @@ const nodeProcess = (
   }
 ).process;
 
-test("closed 状態では handleObject は配信しない", () => {
-  const delivered: MoqtObject[] = [];
-  const subscriber = new SubscriberImpl(["namespace"], "track", 0n, 0n, (obj) =>
-    delivered.push(obj),
-  );
-
-  subscriber.markClosed();
-  subscriber.handleObject(createObject(0n, 0n));
-  subscriber.handleObject(createObject(0n, 1n));
-
-  assert.equal(delivered.length, 0);
-});
-
+// closed 状態 (markClosed / unsubscribe) でオブジェクトが配信されないことは
+// subscriber.prop.ts の PBT が任意の objectId で検証する。
 test("closed 状態では handleDatagram は配信しない", () => {
   const delivered: MoqtObject[] = [];
   const subscriber = new SubscriberImpl(

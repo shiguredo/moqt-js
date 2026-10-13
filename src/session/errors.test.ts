@@ -110,26 +110,26 @@ test("toProtocolViolationSessionError: 変換対象以外のエラークラス�
   assert.isNull(sessionError);
 });
 
-test("toProtocolViolationSessionError: undefined は null を返す", () => {
-  // reader.read() の reject が値を持たないケースを想定し、undefined でも安全に null を返す
+test("toProtocolViolationSessionError: undefined / null / Error を継承しないオブジェクトは null を返す", () => {
+  // 次の 3 経路はいずれも ProtocolViolationError / IncompleteDataError ではないため、
+  // 変換せずに安全に null を返すことをまとめて検証する。
+  // - reader.read() の reject が値を持たない (undefined)
+  // - throw null / Promise.reject(null) のように値が null
+  // - WebTransport の reject が DOMException 相当の独自オブジェクトを渡す
   assert.isNull(toProtocolViolationSessionError(undefined));
-});
-
-test("toProtocolViolationSessionError: null は null を返す", () => {
-  // throw null / Promise.reject(null) のように値が null のケースでも安全に null を返す
   assert.isNull(toProtocolViolationSessionError(null));
-});
-
-test("toProtocolViolationSessionError: Error を継承しないオブジェクトは null を返す", () => {
-  // WebTransport の reject が DOMException 相当の独自オブジェクトを渡しても、
-  // ProtocolViolationError ではないため null になることを検証する
-  const domExceptionLike = { name: "AbortError", message: "aborted" };
-  assert.isNull(toProtocolViolationSessionError(domExceptionLike));
+  assert.isNull(toProtocolViolationSessionError({ name: "AbortError", message: "aborted" }));
 });
 
 // ============================================================================
 // toSessionCloseError のテスト
 // draft-ietf-moq-transport-22 §8.3 (Key-Value-Pair Structure)
+//
+// toSessionCloseError は SessionError をそのまま返し、それ以外は
+// toProtocolViolationSessionError へ委譲する (errors.ts)。
+// ProtocolViolationError / IncompleteDataError / 通常の Error の変換結果は
+// 委譲先の toProtocolViolationSessionError のテストで検証済みのため、
+// ここでは SessionError の素通しと非 Error 値の安全な null だけを検証する。
 // ============================================================================
 
 /**
@@ -146,29 +146,6 @@ test("toSessionCloseError: SessionError は同一オブジェクトのまま返�
     SessionErrorCode.KEY_VALUE_FORMATTING_ERROR,
   );
   assert.strictEqual(toSessionCloseError(original), original);
-});
-
-test("toSessionCloseError: ProtocolViolationError は PROTOCOL_VIOLATION の SessionError に変換される", () => {
-  // 従来の変換対象は toProtocolViolationSessionError と同じ挙動を維持する
-  const original = new ProtocolViolationError("invalid value");
-  const sessionError = toSessionCloseError(original);
-  assert.instanceOf(sessionError, SessionError);
-  assert.equal(sessionError?.code, SessionErrorCode.PROTOCOL_VIOLATION);
-  assert.equal(sessionError?.message, "invalid value");
-});
-
-test("toSessionCloseError: IncompleteDataError は PROTOCOL_VIOLATION の SessionError に変換される", () => {
-  // Length が揃った後のメッセージ構造の破損は PROTOCOL_VIOLATION で閉じる
-  const original = new IncompleteDataError("incomplete fields");
-  const sessionError = toSessionCloseError(original);
-  assert.instanceOf(sessionError, SessionError);
-  assert.equal(sessionError?.code, SessionErrorCode.PROTOCOL_VIOLATION);
-  assert.equal(sessionError?.message, "incomplete fields");
-});
-
-test("toSessionCloseError: 通常の Error は null を返す", () => {
-  // ストリームの正常終了・キャンセル等は従来どおり握り潰し対象なので null
-  assert.isNull(toSessionCloseError(new Error("stream reset by peer")));
 });
 
 test("toSessionCloseError: undefined / null / Error を継承しないオブジェクトは null を返す", () => {

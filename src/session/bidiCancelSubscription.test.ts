@@ -75,26 +75,9 @@ test("bidiCancelSubscription: 応答待ちの REQUEST_UPDATE がある状態で 
   assert.isUndefined(ctx.closedWithError);
 });
 
-/**
- * draft-ietf-moq-transport-22 §9.5 / §9.5.1:
- * 保留中の更新が無い状態の unsubscribe では何も起きないことを検証する
- * (回帰ガード。掃除対象が無い場合の no-op)。
- */
-test("bidiCancelSubscription: 応答待ちの更新が無い状態の unsubscribe では保留中の掃除は何もしない", async () => {
-  const ctx = createPublishReadTestContext({});
-  const subscriber = new SubscriberImpl(["test"], "track", ctx.requestId, 1n, () => {});
-  ctx.session.subscribers.set(ctx.requestId, subscriber);
-  ctx.session.subscribersByAlias.set(1n, [subscriber]);
-
-  await bidiCancelSubscription(ctx.session, subscriber);
-
-  // 掃除対象が無くても既存の破棄処理は行われる
-  assert.equal(ctx.session.pendingRequestUpdate.size, 0);
-  assert.isFalse(ctx.session.subscribers.has(ctx.requestId));
-  assert.isFalse(ctx.session.subscribersByAlias.has(1n));
-  assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));
-  assert.isUndefined(ctx.closedWithError);
-});
+// 応答待ちの更新が無い状態での unsubscribe は、pendingRequestUpdate が元から空である
+// ことを確認するだけの恒真なテストになるため置かない。破棄処理 (subscribers /
+// subscribersByAlias / requestStreams の削除) は上のテストで検証済みである。
 
 // ============================================================================
 // bidiCancelSubscription の STOP_SENDING 到達テスト

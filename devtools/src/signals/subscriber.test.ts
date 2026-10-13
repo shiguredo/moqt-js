@@ -77,11 +77,19 @@ test("removeSubscriber drops the entry and changes the Map reference", () => {
   assert.equal(getSubscriber(id), undefined);
 });
 
-test("removeSubscriber on missing id is a safe no-op", () => {
+// 存在しない id の削除は何もしない (例外を投げず、既存の購読も落とさない)。
+// 空の Map と、既存の購読がある Map の両方で確かめる
+test("removeSubscriber: 存在しない id の削除は何もしない", () => {
   resetSubscribers();
-  // 存在しない id を削除しても例外にならず、空 Map のまま。
+  // 空の Map でも例外にならず、何も積まない
   removeSubscriber("nonexistent");
   assert.equal(subscriberInstances.value.size, 0);
+
+  // 既存の購読があるときも、存在しない id の削除でそのエントリを落とさない
+  const id = addSubscriber();
+  removeSubscriber("nonexistent");
+  assert.equal(subscriberInstances.value.has(id), true);
+  assert.equal(subscriberInstances.value.size, 1);
 });
 
 test("removeSubscriber does not throw when decoder / session are null", () => {
@@ -94,14 +102,6 @@ test("removeSubscriber does not throw when decoder / session are null", () => {
   assert.equal(instance.session.value, null);
   removeSubscriber(id);
   assert.equal(subscriberInstances.value.has(id), false);
-});
-
-test("removeSubscriber preserves Map size when id does not exist", () => {
-  resetSubscribers();
-  const id = addSubscriber();
-  removeSubscriber("nonexistent");
-  assert.equal(subscriberInstances.value.size, 1);
-  assert.equal(subscriberInstances.value.has(id), true);
 });
 
 test("subscriberIds reflects added and removed subscribers", () => {

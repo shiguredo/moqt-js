@@ -53,20 +53,36 @@ async function receiveNewGroupRequest(
   return { responses, requests, closedCode: ctx.closedWithError?.code };
 }
 
-// DYNAMIC_GROUPS を広告した publisher は、NEW_GROUP_REQUEST を受理して REQUEST_OK を返し、
-// アプリへ値を知らせる
-test("bidiReadRequestStreamMessages: DYNAMIC_GROUPS を広告した publisher は NEW_GROUP_REQUEST をアプリへ知らせる (publish ロール)", async () => {
-  const result = await receiveNewGroupRequest(true, encodeVarint(0n));
-  assert.deepEqual(result.responses, [MessageType.REQUEST_OK]);
-  assert.deepEqual(result.requests, [0n]);
-  assert.isUndefined(result.closedCode);
-});
+/**
+ * draft-ietf-moq-transport-22 §9.20.19 (NEW GROUP REQUEST Parameter):
+ * "If the original publisher does not support dynamic Groups, it ignores the parameter"
+ * DYNAMIC_GROUPS の広告有無で NEW_GROUP_REQUEST の扱いが変わることを表駆動で検証する。
+ * どちらの場合も更新自体は受理して REQUEST_OK を 1 通返し、セッションは閉じない。
+ * 広告ありのときだけ値をアプリ (onNewGroupRequest) へ知らせる。
+ */
+test("bidiReadRequestStreamMessages: DYNAMIC_GROUPS の広告有無で NEW_GROUP_REQUEST の通知が変わる (publish ロール)", async () => {
+  const cases: {
+    name: string;
+    dynamicGroups: boolean;
+    value: bigint;
+    expectedRequests: bigint[];
+  }[] = [
+    {
+      name: "広告ありは値をアプリへ知らせる",
+      dynamicGroups: true,
+      value: 0n,
+      expectedRequests: [0n],
+    },
+    { name: "広告なしは無視する", dynamicGroups: false, value: 7n, expectedRequests: [] },
+  ];
 
-// 広告していない publisher は NEW_GROUP_REQUEST を無視する (§9.20.19 "If the original
-// publisher does not support dynamic Groups, it ignores the parameter")。更新は受理する
-test("bidiReadRequestStreamMessages: DYNAMIC_GROUPS を広告していない publisher は NEW_GROUP_REQUEST を知らせない (publish ロール)", async () => {
-  const result = await receiveNewGroupRequest(false, encodeVarint(7n));
-  assert.deepEqual(result.responses, [MessageType.REQUEST_OK]);
-  assert.deepEqual(result.requests, []);
-  assert.isUndefined(result.closedCode);
+  for (const testCase of cases) {
+    const result = await receiveNewGroupRequest(
+      testCase.dynamicGroups,
+      encodeVarint(testCase.value),
+    );
+    assert.deepEqual(result.responses, [MessageType.REQUEST_OK]);
+    assert.deepEqual(result.requests, testCase.expectedRequests);
+    assert.isUndefined(result.closedCode);
+  }
 });

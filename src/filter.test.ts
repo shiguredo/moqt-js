@@ -4,17 +4,50 @@
  */
 
 import { test, assert } from "vite-plus/test";
-import { rangeFiltersMatch, trackPropertyFiltersMatch } from "./filter";
+import { rangeFiltersMatch, resolveFilter, trackPropertyFiltersMatch } from "./filter";
 import type { RangeFilterSpec } from "./message/parameter";
 import { encodeProperties, type Property } from "./properties";
+import { MAX_VARINT } from "./varint";
 
 // ============================================================================
 // resolveFilter のテスト
 //
 // resolveFilter は「Filter 種別 × LARGEST_OBJECT の有無 × Location 値」の有限な
 // 離散パターンを扱う純粋関数であるため、検証は src/filter.prop.ts の PBT に
-// 集約している。ここには PBT で表せない意図的なエラー入力を置く。
+// 集約している。ここには PBT で表せない意図的なエラー入力と、生成器が 1 通り
+// しか作れない入力 (Next Object で LARGEST_OBJECT 未受信) を置く。
 // ============================================================================
+
+/**
+ * draft-ietf-moq-transport-22 §9.20.9:
+ * Next Object (0x05) で LARGEST_OBJECT 未受信のときは {0, 0} から開始する
+ * (相対指定と同じ扱い)。+1 を適用する退行 (未配信時に {0, 1}) を検出する。
+ */
+test("resolveFilter: Next Object (0x05) で未配信時は {0, 0} になる", () => {
+  const resolved = resolveFilter({ nextObject: true }, null);
+  assert.isDefined(resolved);
+  assert.equal(resolved!.start.group, 0n);
+  assert.equal(resolved!.start.object, 0n);
+  assert.isUndefined(resolved!.endGroup);
+});
+
+/**
+ * draft-ietf-moq-transport-22 §9.20.9:
+ * 相対指定 (0x01) の Start Location は {Largest Object.Group + 1 - StartGroup, 0}。
+ * 計算結果が負値になる場合は 0、2^64-1 を超える場合は 2^64-1 にクランプする。
+ *
+ * 乱数では Largest Object.Group が 2^64-1 ちょうどで StartGroup が 0 の組を
+ * ほぼ踏まないため、上限側のクランプはここで固定する。
+ */
+test("resolveFilter: 相対指定の Group は負値と 2^64-1 超をクランプする", () => {
+  // 2^64-1 + 1 - 0 = 2^64 になり、上限を超えるため 2^64-1 に丸める
+  assert.equal(
+    resolveFilter({ startGroup: 0n }, { group: MAX_VARINT, object: 0n })?.start.group,
+    MAX_VARINT,
+  );
+  // 0 + 1 - 5 は負値になるため 0 に丸める
+  assert.equal(resolveFilter({ startGroup: 5n }, { group: 0n, object: 0n })?.start.group, 0n);
+});
 
 // ============================================================================
 // objectMatchesFilter のテスト
@@ -28,12 +61,8 @@ import { encodeProperties, type Property } from "./properties";
 // draft-ietf-moq-transport-22 Section 3.3.2 (Range Filters)
 // ============================================================================
 
-/**
- * フィルタなし (空配列) は全通過。
- */
-test("rangeFiltersMatch: フィルタなしは全通過", () => {
-  assert.isTrue(rangeFiltersMatch([], { objectId: 0n }));
-});
+// フィルタなし (空配列) と削除エントリのみの配列が全通過になることは
+// filter.prop.ts の PBT が任意の評価値で検証する。
 
 /**
  * draft-ietf-moq-transport-22 Section 8.6:
@@ -114,13 +143,6 @@ test("rangeFiltersMatch: 削除エントリは評価対象から除外", () => {
   ];
   assert.isTrue(rangeFiltersMatch(filters, { objectId: 6n }));
   assert.isFalse(rangeFiltersMatch(filters, { objectId: 10n }));
-});
-
-/**
- * 削除エントリのみの配列は全通過 (評価対象フィルタなし)。
- */
-test("rangeFiltersMatch: 削除エントリのみは全通過", () => {
-  assert.isTrue(rangeFiltersMatch([{ type: "objectId", remove: true }], { objectId: 5n }));
 });
 
 /**

@@ -292,62 +292,52 @@ test("bidiHandleRequestUpdateOk: 2 通目の REQUEST_OK で PROTOCOL_VIOLATION �
  * draft-ietf-moq-transport-22 §9.20.18:
  * "If the parameter is omitted from REQUEST_UPDATE or PUBLISH_STATE_NOTIFY, the
  *  subscription remains unchanged."
- * 自 update({ forward: false }) の REQUEST_OK 受信時に、送信時の FORWARD 値が
- * SubscriberImpl の forwardState に反映されることを検証する。
+ * 自 update({ forward }) の REQUEST_OK 受信時に、送信時の FORWARD 値が
+ * SubscriberImpl の forwardState に反映されることを表駆動で検証する。
+ * SUBSCRIBE 直後の既定値 true からの false 反映と、false からの true 反映の
+ * 両方向を確認し、初期値と期待値がたまたま一致する偽陽性を防ぐ。
  */
-test("bidiHandleRequestUpdateOk: 自 update({ forward }) の REQUEST_OK で forwardState が反映される", () => {
-  const subscriber = new SubscriberImpl(["test"], "track", 0n, 1n, () => {});
-  const session = {
-    closeWithError: () => {},
-    subscribers: new Map([[0n, subscriber]]),
-    pendingRequestUpdate: new Map([
-      [100n, { resolve: () => {}, reject: () => {}, targetRequestId: 0n, forward: false }],
-    ]),
-    goawayReceivedOnRequestStreams: new Set(),
-    unmatchedRequestOkAllowances: new Map(),
-  } as unknown as BidiSessionInternal;
+test("bidiHandleRequestUpdateOk: 自 update({ forward }) の REQUEST_OK で forwardState が送信値に反映される", () => {
+  const cases: {
+    name: string;
+    initial: boolean | undefined;
+    forward: boolean;
+    expected: boolean;
+  }[] = [
+    { name: "既定値 true → FORWARD=0 の反映", initial: undefined, forward: false, expected: false },
+    { name: "false → FORWARD=1 の反映", initial: false, forward: true, expected: true },
+  ];
 
-  const payload = encodeRequestOkPayload({
-    type: MessageType.REQUEST_OK,
-    parameters: [],
-    trackProperties: [],
-  });
+  for (const testCase of cases) {
+    const subscriber = new SubscriberImpl(["test"], "track", 0n, 1n, () => {});
+    if (testCase.initial !== undefined) {
+      subscriber.setForwardState(testCase.initial);
+    }
+    const session = {
+      closeWithError: () => {},
+      subscribers: new Map([[0n, subscriber]]),
+      pendingRequestUpdate: new Map([
+        [
+          100n,
+          { resolve: () => {}, reject: () => {}, targetRequestId: 0n, forward: testCase.forward },
+        ],
+      ]),
+      goawayReceivedOnRequestStreams: new Set(),
+      unmatchedRequestOkAllowances: new Map(),
+    } as unknown as BidiSessionInternal;
 
-  bidiHandleRequestUpdateOk(session, payload, 0n);
+    const payload = encodeRequestOkPayload({
+      type: MessageType.REQUEST_OK,
+      parameters: [],
+      trackProperties: [],
+    });
 
-  // 送信時の FORWARD=0 が反映され、pending エントリは解決・削除される
-  assert.equal(subscriber.forwardState, false);
-  assert.equal(session.pendingRequestUpdate.size, 0);
-});
+    bidiHandleRequestUpdateOk(session, payload, 0n);
 
-/**
- * draft-ietf-moq-transport-22 §9.20.18:
- * 自 update({ forward: true }) の REQUEST_OK 受信時に、送信時の FORWARD 値が
- * SubscriberImpl の forwardState に true として反映されることを検証する。
- */
-test("bidiHandleRequestUpdateOk: 自 update({ forward: true }) の REQUEST_OK で forwardState が true に反映される", () => {
-  const subscriber = new SubscriberImpl(["test"], "track", 0n, 1n, () => {});
-  subscriber.setForwardState(false);
-  const session = {
-    closeWithError: () => {},
-    subscribers: new Map([[0n, subscriber]]),
-    pendingRequestUpdate: new Map([
-      [100n, { resolve: () => {}, reject: () => {}, targetRequestId: 0n, forward: true }],
-    ]),
-    goawayReceivedOnRequestStreams: new Set(),
-    unmatchedRequestOkAllowances: new Map(),
-  } as unknown as BidiSessionInternal;
-
-  const payload = encodeRequestOkPayload({
-    type: MessageType.REQUEST_OK,
-    parameters: [],
-    trackProperties: [],
-  });
-
-  bidiHandleRequestUpdateOk(session, payload, 0n);
-
-  assert.equal(subscriber.forwardState, true);
-  assert.equal(session.pendingRequestUpdate.size, 0);
+    // 送信時の FORWARD 値が反映され、pending エントリは解決・削除される
+    assert.equal(subscriber.forwardState, testCase.expected);
+    assert.equal(session.pendingRequestUpdate.size, 0);
+  }
 });
 
 /**

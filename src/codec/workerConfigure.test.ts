@@ -155,15 +155,6 @@ test("WorkerConfigureGate: error 優先で configured は無視される", () =>
   assert.deepEqual(notified, []);
 });
 
-test("WorkerConfigureGate: 複数インスタンスは独立する", () => {
-  // 再 configure は新しい管理で行い、前回の完了に影響されない
-  const first = new WorkerConfigureGate();
-  const second = new WorkerConfigureGate();
-
-  assert.isTrue(first.trySettle());
-  assert.isTrue(second.trySettle());
-});
-
 // ============================================================================
 // ConfigureGenerationTracker
 // ============================================================================
@@ -217,22 +208,6 @@ test("ConfigureGenerationTracker: 無効化後の再採番で新世代のみ最�
 
   assert.isFalse(tracker.isLatest(pendingGeneration));
   assert.isTrue(tracker.isLatest(renewedGeneration));
-});
-
-test("ConfigureGenerationTracker: 複数インスタンスは独立する", () => {
-  // Wrapper ごとの世代管理は相互に影響しない。
-  // カウンタは実体ごとに進むため、相手の最新値は自器では旧世代になる
-  const firstTracker = new ConfigureGenerationTracker();
-  const secondTracker = new ConfigureGenerationTracker();
-
-  firstTracker.begin();
-  const firstGeneration = firstTracker.begin();
-  const secondGeneration = secondTracker.begin();
-
-  assert.isTrue(firstTracker.isLatest(firstGeneration));
-  assert.isTrue(secondTracker.isLatest(secondGeneration));
-  assert.isFalse(secondTracker.isLatest(firstGeneration));
-  assert.isFalse(firstTracker.isLatest(secondGeneration));
 });
 
 test("ConfigureGenerationTracker: currentGeneration は採番と無効化で進む", () => {

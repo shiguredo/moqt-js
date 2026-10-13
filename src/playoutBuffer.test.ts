@@ -21,7 +21,6 @@ import {
   type PlayoutSelection,
 } from "./playoutBuffer";
 import {
-  AUDIO_PLAYOUT_DELAY_FLOOR_MS,
   MAX_PLAYOUT_DELAY_MS,
   PLAYBACK_DISCONTINUITY_MS,
   PlaybackTimeline,
@@ -128,40 +127,9 @@ function drawAndLate<T>(selection: PlayoutSelection<T>): { draw: T | null; late:
 // 表示時刻と選択
 // ============================================================================
 
-// 表示時刻 = TIMESTAMP + 基準の遅れ + 再生遅延。表示時刻より前は描かず、過ぎた後の最初の
-// 選択で描く。表示時刻は共有の時間軸が決め、キューは自分では決めない
-test("select: 表示時刻より前は描かず、過ぎたら描く", () => {
-  const timeline = createSharedTimeline();
-  const buffer = new PlayoutBuffer<number>(JITTER_BUFFER_MAX_QUEUED_FRAMES, timeline);
-  // 揺らぎ 0 のフレームが 3 枚届き、時間軸が音声の下限 (80 ms) を再生遅延にする
-  for (let index = 0; index < 3; index++) {
-    observeFrame(timeline, index * FRAME_MS, 0);
-    buffer.enqueue(index, timestampOf(index * FRAME_MS));
-  }
-  assert.closeTo(timeline.playoutDelayMs ?? 0, AUDIO_PLAYOUT_DELAY_FLOOR_MS, TOLERANCE_MS);
-
-  // 表示時刻 = メディア時刻 + 基準の遅れ + 再生遅延 (performance.now() の軸)。
-  // 表示時刻は 1 フレーム間隔で進む
-  const firstMs = buffer.presentationTimeMs(timestampOf(0)) ?? 0;
-  const secondMs = buffer.presentationTimeMs(timestampOf(FRAME_MS)) ?? 0;
-  assert.closeTo(secondMs - firstMs, FRAME_MS, TOLERANCE_MS);
-  // 表示時刻より前の選択では何も描かない
-  assert.deepEqual(buffer.select(firstMs - 1), {
-    draw: null,
-    late: [],
-    drawPresentationMs: null,
-  });
-  // 表示時刻を過ぎたら描く。表示時刻からの遅れが上限以内なので捨てない
-  const selection = buffer.select(firstMs + TOLERANCE_MS);
-  assert.equal(selection.draw, 0, "表示時刻を過ぎた 1 枚目を描くこと");
-  assert.deepEqual(selection.late, []);
-  assert.closeTo(
-    selection.drawPresentationMs ?? 0,
-    firstMs,
-    TOLERANCE_MS,
-    "描くフレームの表示時刻を返すこと",
-  );
-});
+// 表示時刻より前に描かないこと・表示時刻を過ぎたフレームを描くことは
+// playoutBuffer.prop.ts の PBT が任意の操作列で検証する。ここでは 1 枚ごとの
+// 表示時刻の返り値と、捨てる条件を固定する。
 
 // 描くフレームの表示時刻を返す。止まりの原因を決めるとき、フレームが表示時刻に間に合ったか
 // (受け取り、復号) と、表示時刻そのものが遅れたか (再生遅延の増加) を見るために使う

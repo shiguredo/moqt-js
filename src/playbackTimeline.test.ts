@@ -419,7 +419,9 @@ test("presentationDelayMs: 時計のずれの分だけ負になりうる", () =>
 // 同期しない。大きい方のトラックは TIMESTAMP が壁時計からずれているとみなして表示時刻を
 // 返さず (到着基準の再生へ落とす)、もう片方は自分の基準で表示時刻を返す。同期を続けると、
 // ずれた側の基準が窓の最小値として単調に増え、もう片方の表示時刻が未来へ伸びて 1 枚も
-// 描かれなくなる
+// 描かれなくなる。
+// playbackTimeline.prop.ts も「2 つのトラックの基準の差が閾値を超えたときのフォールバックは
+// 単体テストが固定する」と明記しており、PBT では閾値超えを確実には踏まないためここで固定する
 test("sharingBases: 基準の差が閾値を超えたら共有せず、大きい側は表示時刻を返さない", () => {
   const timeline = createTimeline();
   // 映像の基準 0 ms、音声の基準 1 秒 (TIMESTAMP が壁時計から遅れている)。
@@ -769,36 +771,8 @@ function buildArrivals(): { stream: "audio" | "video"; atMs: number; mediaMs: nu
   return arrivals;
 }
 
-// 120 秒の到着列 (揺らぎの p95 が 40 ms 程度、数十秒に 1 回 200 ms 程度の遅れ) を与えても、
-// 同じ TIMESTAMP の音声と映像の表示時刻の差は ±50 ms 以内に収まる。ずれの予算は映像の
-// write の遅れ (MAX_PRESENTATION_LAG_MS = 20 ms) と不感帯 (30 ms) である
-test("presentationWallClockMicros: 120 秒の到着列でも同時刻の表示時刻の差が予算に収まる", () => {
-  const timeline = createTimeline();
-  for (const arrival of buildArrivals()) {
-    timeline.observe(arrival.stream, arrival.atMs, timestampOf(arrival.mediaMs));
-  }
-  assert.isTrue(timeline.sharingBases, "基準を共有し続けること");
-  assert.equal(timeline.targetLatencyLimitedMs, 0, "上限に切り下げられないこと");
-
-  let maxDifferenceMs = 0;
-  for (let mediaMs = 110_000; mediaMs < 120_000; mediaMs += FRAME_MS) {
-    const audioWallClockMicros = timeline.presentationWallClockMicros(
-      "audio",
-      timestampOf(mediaMs),
-    );
-    const videoWallClockMicros = timeline.presentationWallClockMicros(
-      "video",
-      timestampOf(mediaMs),
-    );
-    assert.isNotNull(audioWallClockMicros);
-    assert.isNotNull(videoWallClockMicros);
-    maxDifferenceMs = Math.max(
-      maxDifferenceMs,
-      Math.abs(Number(audioWallClockMicros) - Number(videoWallClockMicros)) / 1_000,
-    );
-  }
-  assert.isAtMost(maxDifferenceMs, 50, "同時刻の表示時刻の差が 50 ms 以内であること");
-});
+// 120 秒の到着列で同時刻の表示時刻の差が「合わせる量の上限まで」に収まることは
+// playbackTimeline.prop.ts の PBT が任意の到着列 (乱数シード) で検証する。
 
 // 完了条件: 音声の TIMESTAMP が壁時計からドリフトする入力 (0754 の実測と同じ毎秒 48 ms) で、
 // 2 つのトラックの基準の差が閾値を超えたら同期しない。同期を続けると、ずれた側の基準が

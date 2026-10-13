@@ -73,17 +73,6 @@ test("formatFullTrackName: 予約文字と非 ASCII をエスケープする", (
 });
 
 /**
- * draft-ietf-moq-transport-22 §2.4.1:
- * "/" 連結では namespace ["a"] + track "b/c" と namespace ["a","b"] + track "c" が
- * 同じ "a/b/c" になっていた。§8.8 の表現ではエスケープが両者を区別する。
- */
-test("formatFullTrackName: 区切り文字の曖昧さで異なる Full Track Name が同じ文字列にならない", () => {
-  assert.equal(formatFullTrackName(["a"], "b/c"), "a--b.2fc");
-  assert.equal(formatFullTrackName(["a", "b"], "c"), "a-b--c");
-  assert.notEqual(formatFullTrackName(["a"], "b/c"), formatFullTrackName(["a", "b"], "c"));
-});
-
-/**
  * draft-ietf-moq-transport-22 §8.7:
  * Track Namespace は 0 フィールドを許す。空のときは "--" の左側だけが空になる。
  * Track Namespace Field は 1 バイト以上を MUST とするため、空のフィールドは

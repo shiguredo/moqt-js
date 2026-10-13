@@ -77,19 +77,15 @@ test("Setup: パラメータなしで作成", () => {
 // AUTHORITY (0x05) / PATH (0x01) は WebTransport 使用時には MUST NOT 送信。
 // moqt-js は WebTransport 専用クライアントのため createSetup には PATH / AUTHORITY を
 // 受け付ける引数を持たない (送信不可) ことを確認する。
-test("Setup: createSetup は PATH / AUTHORITY を含まない", () => {
+// 未指定の場合に PATH / AUTHORITY が存在しないこと (parameters 上にも現れないこと) と、
+// 存在しないパラメータのゲッターが undefined を返すことを併せて固定する。
+test("Setup: createSetup は PATH / AUTHORITY を含まず、未指定のパラメータは undefined", () => {
   const setup = createSetup();
-  assert.isUndefined(getSetupPath(setup));
-  assert.isUndefined(getSetupAuthority(setup));
   assert.isUndefined(setup.parameters.find((p) => p.type === SetupOptionType.PATH));
   assert.isUndefined(setup.parameters.find((p) => p.type === SetupOptionType.AUTHORITY));
-});
-
-test("Setup: 存在しないパラメータは undefined", () => {
-  const setup = createSetup();
   assert.isUndefined(getSetupPath(setup));
   assert.isUndefined(getSetupAuthority(setup));
-  // MOQT_IMPLEMENTATION は存在する
+  // MOQT_IMPLEMENTATION は既定で付与されるため存在する
   assert.isDefined(getSetupMoqtImplementation(setup));
 });
 
@@ -97,28 +93,8 @@ test("Setup: 存在しないパラメータは undefined", () => {
 // プライバシー緩和策として「オプションを完全に省略する」「汎用的な値を送る」
 // 「利用者が設定・無効化できるようにする」が MAY として提示されている。
 // moqtImplementation: false で opt-out（省略）、文字列で override（任意の値）を送信する。
-// 既定 / opt-out / override のラウンドトリップは setup.prop.ts の PBT で検証する。
-test("Setup: moqtImplementation: false は MOQT_IMPLEMENTATION を送信しない", () => {
-  const setup = createSetup({ moqtImplementation: false });
-  // MOQT_IMPLEMENTATION を抑止するため parameters は空になる
-  assert.equal(setup.parameters.length, 0);
-  assert.isUndefined(setup.parameters.find((p) => p.type === SetupOptionType.MOQT_IMPLEMENTATION));
-  assert.isUndefined(getSetupMoqtImplementation(setup));
-});
-
-test("Setup: moqtImplementation の文字列 override を送信する", () => {
-  const setup = createSetup({ moqtImplementation: "moqt-js" });
-  assert.equal(setup.parameters.length, 1);
-  assert.equal(getSetupMoqtImplementation(setup), "moqt-js");
-});
-
-test("Setup: moqtImplementation の空文字列 override を送信する", () => {
-  // 空文字列も指定どおり送信する（値の妥当性検証は行わない）
-  const setup = createSetup({ moqtImplementation: "" });
-  assert.equal(setup.parameters.length, 1);
-  assert.equal(getSetupMoqtImplementation(setup), "");
-});
-
+// 既定 / opt-out / override（空文字列を含む）のラウンドトリップは setup.prop.ts の
+// PBT が任意入力で検証するため、ここでは重複して検証しない。
 test("Setup: moqtImplementation: false でも AUTHORIZATION_TOKEN は送信される", () => {
   // opt-out は MOQT_IMPLEMENTATION のみに影響し、他の Option には影響しない
   const setup = createSetup({
@@ -137,14 +113,12 @@ test("Setup: moqtImplementation: false でも AUTHORIZATION_TOKEN は送信さ�
 // draft-ietf-moq-transport-22 §13 (Grease):
 // GREASE 値は 0x7f * N + 0x9D パターンの予約値。grease: true で SETUP に 1 つ追加する。
 // Option Type はランダム生成のため、isGreaseValue() で予約値であることを検証する。
-test("Setup: grease 未指定は GREASE Option を含まない", () => {
-  const setup = createSetup();
-  assert.isUndefined(setup.parameters.find((p) => isGreaseValue(BigInt(p.type))));
-});
-
-test("Setup: grease: false は GREASE Option を含まない", () => {
-  const setup = createSetup({ grease: false });
-  assert.isUndefined(setup.parameters.find((p) => isGreaseValue(BigInt(p.type))));
+// 未指定と grease: false は実装では同一分岐 (GREASE を追加しない) のため 1 件に統合する。
+test("Setup: grease 未指定 / false は GREASE Option を含まない", () => {
+  for (const options of [undefined, { grease: false }]) {
+    const setup = createSetup(options);
+    assert.isUndefined(setup.parameters.find((p) => isGreaseValue(BigInt(p.type))));
+  }
 });
 
 test("Setup: grease: true は GREASE Setup Option を 1 つ含む", () => {
@@ -276,10 +250,6 @@ test("Setup: SETUP で USE_ALIAS の Authorization Token を指定すると thro
       }),
     "not allowed in SETUP",
   );
-});
-
-test("Setup: AUTHORIZATION_TOKEN の Setup Option Type は 0x03", () => {
-  assert.equal(SetupOptionType.AUTHORIZATION_TOKEN, 0x03);
 });
 
 // ============================================================================

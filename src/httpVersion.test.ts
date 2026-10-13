@@ -18,10 +18,8 @@ test("pending は -- に変換される", () => {
   assert.equal(toHttpVersionLabel("pending"), "--");
 });
 
-test("undefined は -- に変換される", () => {
+// undefined (プロパティ欠落) も未知の値も同じ既定の分岐 ("--") になる
+test("undefined と未知の文字列は -- に変換される", () => {
   assert.equal(toHttpVersionLabel(undefined), "--");
-});
-
-test("未知の文字列は -- に変換される", () => {
   assert.equal(toHttpVersionLabel("unknown-value"), "--");
 });

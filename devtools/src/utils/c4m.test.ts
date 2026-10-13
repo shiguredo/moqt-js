@@ -104,14 +104,6 @@ test("maskC4mValue: fragment 単体の c4m の値を伏せ字にする", () => {
   );
 });
 
-// parameter の区切りは `&` のため、値は `&` の手前までを潰し、後ろの parameter は残す。
-test("maskC4mValue: 他の parameter は残す", () => {
-  assert.equal(
-    maskC4mValue(`msf:room-123--catalog&connection=wt&c4m=${C4M_EXAMPLE}&location-range=1.0`),
-    "msf:room-123--catalog&connection=wt&c4m=<redacted>&location-range=1.0",
-  );
-});
-
 // 伏せ字は `c4m=` の部分一致で潰すため、`c4m` で終わる名前の parameter も伏せ字になる
 // (トークンを出さない側へ倒す意図した挙動)。prop テストの parameter 名の生成はこの前提に
 // 合わせ、`c4m` で終わる名前を作らない。
@@ -130,7 +122,8 @@ test("maskC4mValue: c4m が複数あってもすべて伏せ字にする", () =>
   );
 });
 
-// c4m を持たない入力は変えない。
+// c4m を持たない入力は変えない。prop テストの入力は必ず c4m を含むため、
+// この経路 (置換対象が無いこと) はここで固定する。
 test("maskC4mValue: c4m が無い入力はそのまま返す", () => {
   assert.equal(
     maskC4mValue("moqt://example.com/moqt#msf:room-123--catalog&connection=wt"),

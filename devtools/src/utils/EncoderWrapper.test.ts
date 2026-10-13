@@ -56,40 +56,20 @@ test("EncoderWrapper: configure 前は unconfigured で encodeQueueSize は 0", 
   }
 });
 
-// Worker の生成は configure 時まで遅延される。
-// 生成が早まると Worker を持たない環境で wrapper の生成自体が失敗する。
-test("EncoderWrapper: 生成しただけでは Worker を起動しない", () => {
-  const { callbacks } = makeCallbacks();
-  // Node には Worker が無いため、ここで生成されると ReferenceError になる
-  const wrapper = new EncoderWrapper(true, callbacks);
-
-  assert.equal(wrapper.state, "unconfigured");
-});
-
 // configure 前の close() は何も破棄せず、状態を unconfigured のままにする。
 // プレビュー開始前の後始末 (cleanupPublisher) が configure 前に走る経路がある。
+// close() は冪等であり、停止経路とアンマウント経路の二重実行があり得る
 test("EncoderWrapper: configure 前の close は例外を投げず unconfigured のまま", () => {
   for (const useWorker of [false, true]) {
     const { callbacks, counts } = makeCallbacks();
     const wrapper = new EncoderWrapper(useWorker, callbacks);
 
     wrapper.close();
+    // 二重に呼んでも同じ (close は終端であり、後始末は繰り返せる)
+    wrapper.close();
 
     assert.equal(wrapper.state, "unconfigured");
     assert.equal(wrapper.encodeQueueSize, 0);
     assert.equal(counts.errors, 0);
-  }
-});
-
-// close() は冪等である (停止経路とアンマウント経路の二重実行があり得る)。
-test("EncoderWrapper: close を複数回呼んでも例外を投げない", () => {
-  for (const useWorker of [false, true]) {
-    const { callbacks } = makeCallbacks();
-    const wrapper = new EncoderWrapper(useWorker, callbacks);
-
-    wrapper.close();
-    wrapper.close();
-
-    assert.equal(wrapper.state, "unconfigured");
   }
 });

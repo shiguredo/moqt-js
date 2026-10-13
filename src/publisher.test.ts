@@ -8,16 +8,8 @@ import { ProtocolViolationError } from "./error";
 import { ObjectStatus, PublishDoneStatusCode } from "./message/types";
 import { PublisherImpl, isErrorNotifiedByPublisher } from "./publisher";
 
-test("closed 状態では sendObject がエラーになる", () => {
-  const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n);
-  publisher.markClosed();
-
-  assert.throws(
-    () => publisher.sendObject({ groupId: 0, objectId: 0, payload: new Uint8Array() }),
-    /closed/i,
-  );
-});
-
+// closed 後の sendObject が必ずエラーになることは publisher.prop.ts の PBT が
+// 任意の操作列で検証する。
 test("closed 状態では sendDatagram がエラーになる", () => {
   const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n);
   publisher.markClosed();

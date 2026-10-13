@@ -7,6 +7,8 @@
  * 消費バイト数が Message Body 長と一致しないため違反となる。
  *
  * 正常系の round-trip は src/message/publish.prop.ts の PBT が担う。
+ * 上限超過 (1,025 バイト) の PROTOCOL_VIOLATION も src/message/publish.prop.ts が
+ * 上限値そのものを固定して検証する。
  * Length 宣言の超過は src/message/decode-boundary.test.ts が担う。
  */
 
@@ -32,23 +34,6 @@ test("decodePublishDonePayload: Reason Phrase が上限ちょうどなら通過�
 
   const decoded = decodePublishDonePayload(encoded, 0);
   assert.equal(decoded.reasonPhrase.length, MAX_REASON_PHRASE_LENGTH);
-});
-
-test("decodePublishDonePayload: Reason Phrase が上限を 1 超えると PROTOCOL_VIOLATION", () => {
-  const reasonPhrase = "a".repeat(MAX_REASON_PHRASE_LENGTH + 1);
-  const encoded = encodePublishDonePayload({
-    type: MessageType.PUBLISH_DONE,
-    statusCode: 0n,
-    streamCount: 0n,
-    reasonPhrase,
-  });
-
-  assert.throws(
-    () => decodePublishDonePayload(encoded, 0),
-    new RegExp(
-      `reason phrase length exceeds maximum: ${MAX_REASON_PHRASE_LENGTH + 1} > ${MAX_REASON_PHRASE_LENGTH}`,
-    ),
-  );
 });
 
 test("decodePublishDonePayload: 末尾に後続データがあると PROTOCOL_VIOLATION", () => {

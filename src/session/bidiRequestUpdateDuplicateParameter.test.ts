@@ -51,28 +51,9 @@ test("bidiSendRequestUpdate: raw と型付きの同一 Type 重複は送信前�
   assert.equal(ctx.session.fillFetchTargets.size, 0);
 });
 
-/**
- * 反復が許可される型 (AUTHORIZATION_TOKEN 0x03) だけが重複しても拒否されない
- * (FORWARD の重複拒否がトークンの反復許可を壊していないことの確認)。
- */
-test("bidiSendRequestUpdate: FORWARD の重複が無ければ送信される", async () => {
-  const ctx = createPublishReadTestContext({});
-  const subscriber = new SubscriberImpl(["test"], "track", ctx.requestId, 1n, () => {});
-  subscriber.onUpdate = (options) => bidiSendRequestUpdate(ctx.session, subscriber, options);
-
-  const promise = subscriber.update({ forward: false });
-  // 書き込みは await を挟むため、1 tick 待ってから観測する
-  await new Promise((resolve) => {
-    setTimeout(resolve, 0);
-  });
-
-  // REQUEST_UPDATE が 1 通書かれ、pending が 1 件登録される
-  assert.isAbove(ctx.written.length, 0);
-  assert.equal(ctx.session.pendingRequestUpdate.size, 1);
-  // 応答が来ないままテストを終えないよう pending を解決する
-  for (const [, pending] of ctx.session.pendingRequestUpdate) {
-    pending.resolve();
-  }
-  // update() の Promise は解決する (エントリの削除は REQUEST_OK 受信時に行われる)
-  await promise;
-});
+// 重複が無い REQUEST_UPDATE が送信され pendingRequestUpdate に 1 件登録される正常系は、
+// bidiSendRequestUpdateNewGroupRequest.test.ts の「NEW_GROUP_REQUEST を含まない更新は
+// DYNAMIC_GROUPS 無しでも送信できる」が同じ入力 (update({ forward: false })) と
+// 同じアサーション (written > 0 / pending 1 件) で検証しているため、ここには置かない。
+// なお AUTHORIZATION_TOKEN の反復許可を確認するテストは現状存在せず、
+// 本ファイルの否定テストも FORWARD の重複拒否のみを検証している。

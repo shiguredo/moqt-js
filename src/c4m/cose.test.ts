@@ -192,43 +192,14 @@ test("C4M ドラフトの HMAC の別名 (-4) を受理する", () => {
   assert.equal(header.algorithmIdentifier, C4M_DRAFT_HMAC_SHA256_ALGORITHM_ID);
 });
 
-test("crit は理解できるヘッダパラメータだけを列挙できる", () => {
-  // 存在して理解できるラベルだけを列挙する
-  const header = decodeProtectedHeader(
-    cborMap([
-      [cborUnsigned(1n), cborInteger(5)],
-      [cborUnsigned(16n), cborTextString("CAT")],
-      [cborUnsigned(2n), cborArray([cborUnsigned(1n), cborUnsigned(16n)])],
-    ]),
-  );
-  assert.equal(header.critical.length, 2);
-
-  // 理解できないラベルは拒否する
-  assertCoseError(
-    () =>
-      decodeProtectedHeader(
-        cborMap([
-          [cborUnsigned(1n), cborInteger(5)],
-          [cborUnsigned(2n), cborArray([cborUnsigned(99n)])],
-          [cborUnsigned(99n), cborUnsigned(1n)],
-        ]),
-      ),
-    "unsupportedCriticalHeader",
-  );
-
-  // crit が指すラベルが protected ヘッダに無い場合は致命的エラー (RFC 9052 Section 3.1)
-  assertCoseError(
-    () =>
-      decodeProtectedHeader(
-        cborMap([
-          [cborUnsigned(1n), cborInteger(5)],
-          [cborUnsigned(2n), cborArray([cborUnsigned(16n)])],
-        ]),
-      ),
-    "criticalHeaderNotPresent",
-  );
-
-  // crit の配列は 1 要素以上でなければならない (RFC 9052 Section 3.1)
+/**
+ * RFC 9052 Section 3.1: crit の配列は 1 つ以上の要素を持たなければならない。
+ * 空の配列は emptyCriticalHeader で拒否する。
+ *
+ * crit が理解できないラベルを指す場合 / protected ヘッダに無いラベルを指す場合 /
+ * unprotected ヘッダに置かれた場合は cose.prop.ts の PBT が任意のラベルで検証する。
+ */
+test("crit の配列は空にできない", () => {
   assertCoseError(
     () =>
       decodeProtectedHeader(
@@ -238,18 +209,6 @@ test("crit は理解できるヘッダパラメータだけを列挙できる", 
         ]),
       ),
     "emptyCriticalHeader",
-  );
-
-  // crit は protected ヘッダに置かなければならない (RFC 9052 Section 3.1)
-  assertCoseError(
-    () =>
-      decodeUnprotectedHeader(
-        cborMap([
-          [cborUnsigned(1n), cborInteger(5)],
-          [cborUnsigned(2n), cborArray([cborUnsigned(1n)])],
-        ]),
-      ),
-    "unprotectedCriticalHeader",
   );
 });
 
@@ -291,7 +250,10 @@ test("unprotected ヘッダに alg / typ を置けない", () => {
 });
 
 test("CWT タグは COSE タグが無いと付けられない", () => {
-  // RFC 8392 Section 6: CWT タグは COSE のタグ付きオブジェクトにだけ前置できる
+  // RFC 8392 Section 6: CWT タグは COSE のタグ付きオブジェクトにだけ前置できる。
+  // デコードで CWT タグだけが前置された構造を拒否することを検証する
+  // (CWT タグだけを付けたエンコードの拒否は cose.prop.ts の PBT が任意の
+  //  メッセージで検証する)。
   const array = coseArray(
     protectedHeader(5),
     new TextEncoder().encode("p"),
@@ -300,23 +262,6 @@ test("CWT タグは COSE タグが無いと付けられない", () => {
   const bytes = encodeCbor(cborTag(TAG_CWT, array));
   const error = assertCoseError(() => decodeCoseMessage(bytes), "invalidStructure");
   assert.equal(typeof error.detail, "string");
-
-  // CWT タグだけを付けてエンコードすることもできない
-  const message: CoseMessage = {
-    type: "mac0",
-    mac0: {
-      protected: protectedHeader(5),
-      unprotected: [],
-      payload: new TextEncoder().encode("p"),
-      tag: new Uint8Array([0x01]),
-      coseTagged: false,
-      cwtTagged: false,
-    },
-  };
-  assertCoseError(
-    () => encodeCoseMessage(message, { coseTag: false, cwtTag: true }),
-    "invalidStructure",
-  );
 });
 
 test("エンコード時も alg の種別とメッセージの種別の不一致を拒否する", () => {
@@ -528,38 +473,6 @@ test("既知のバイト列からヘッダをデコードできる", () => {
   const header = decodeProtectedHeader(decodeCbor(protectedBytes));
   assert.equal(header.algorithm, "HmacSha256");
   assert.deepEqual(header.typ, cborTextString("CAT"));
-});
-
-test("protected / unprotected の両方にあるパラメータを拒否する", () => {
-  const protectedBytes = encodeCbor(
-    cborMap([
-      [cborUnsigned(1n), cborInteger(5)],
-      [cborUnsigned(4n), cborByteString(new Uint8Array([1]))],
-      [cborUnsigned(3n), cborTextString("cat")],
-    ]),
-  );
-
-  // kid の重複
-  const kidUnprotected = encodeCbor(
-    cborArray([
-      cborByteString(protectedBytes),
-      cborMap([[cborUnsigned(4n), cborByteString(new Uint8Array([2]))]]),
-      cborByteString(new TextEncoder().encode("p")),
-      cborByteString(new TextEncoder().encode("s")),
-    ]),
-  );
-  assertCoseError(() => decodeCoseMessage(kidUnprotected), "duplicateHeaderParameter", 4);
-
-  // content type の重複
-  const contentTypeUnprotected = encodeCbor(
-    cborArray([
-      cborByteString(protectedBytes),
-      cborMap([[cborUnsigned(3n), cborTextString("cat")]]),
-      cborByteString(new TextEncoder().encode("p")),
-      cborByteString(new TextEncoder().encode("s")),
-    ]),
-  );
-  assertCoseError(() => decodeCoseMessage(contentTypeUnprotected), "duplicateHeaderParameter", 3);
 });
 
 test("kid と content type は unprotected バケットからも読める", () => {

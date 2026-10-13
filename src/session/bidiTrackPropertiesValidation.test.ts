@@ -1,8 +1,8 @@
 /**
- * session/bidi.ts の単体テスト: validateRequestOkNoTrackProperties と未知 Mandatory Track Property
+ * session/bidi.ts の単体テスト: 空必須メッセージの未知 Mandatory Track Property
  *
- * 空必須メッセージの Track Properties 検証と、未知 Mandatory Track
- * Property の受信時の挙動を検証する。
+ * 空必須メッセージ (PUBLISH_OK / REQUEST_UPDATE_OK など) に未知 Mandatory
+ * Track Property が届いた場合の受信経路の挙動を検証する。
  * 実ストリームと実 Map でセッションを構築し、モックやスタブは使わない。
  */
 
@@ -12,36 +12,19 @@ import { encodeRequestOkPayload } from "../message/session";
 import { MessageType, GroupOrder } from "../message/types";
 import { SessionError, SessionErrorCode } from "../error";
 import { PublisherImpl } from "../publisher";
-import {
-  bidiReadPublishResponse,
-  bidiReadRequestStreamMessages,
-  validateRequestOkNoTrackProperties,
-} from "./bidi";
+import { bidiReadPublishResponse, bidiReadRequestStreamMessages } from "./bidi";
 import { createPublishReadTestContext, createOkResponseReadTestContext } from "../testSupport/bidi";
-
-// ============================================================================
-// validateRequestOkNoTrackProperties のテスト
-// ============================================================================
-
-/**
- * draft-ietf-moq-transport-22 §9.3 (REQUEST_OK):
- * 非空の Track Properties は PROTOCOL_VIOLATION の SessionError を返す。
- * 空配列で検証を通過する受理側の性質は、任意のコンテキスト名と任意の
- * Track Properties に対して src/session/bidi.prop.ts の PBT で検証する。
- */
-test("validateRequestOkNoTrackProperties: 非空の Track Properties は PROTOCOL_VIOLATION のエラーを返す", () => {
-  const error = validateRequestOkNoTrackProperties([{ id: 0x1n, value: 0n }], "PUBLISH_OK");
-  if (error === null) {
-    assert.fail("PROTOCOL_VIOLATION の SessionError を期待したが null だった");
-  }
-  assert.equal(error.code, SessionErrorCode.PROTOCOL_VIOLATION);
-  assert.equal(error.message, "track properties must be empty in PUBLISH_OK");
-});
 
 // ============================================================================
 // 空必須メッセージの未知 Mandatory Track Property
 // draft-ietf-moq-transport-22 §9.3 (REQUEST_OK) / §3.7 (Mandatory to Understand Track Properties)
 // ============================================================================
+
+/**
+ * 非空の Track Properties を検出する validateRequestOkNoTrackProperties 自体の性質
+ * (空配列で null / 非空で PROTOCOL_VIOLATION と文言) は、任意のコンテキスト名と
+ * 任意の Track Properties に対して src/session/bidi.prop.ts の PBT で検証する。
+ */
 
 /**
  * draft-ietf-moq-transport-22 §9.3:
