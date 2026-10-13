@@ -369,6 +369,12 @@ export function processCatalogPayload(
 
 /**
  * WebCodecs 形式の codec 文字列から AudioCodecType に変換する
+ *
+ * ここで受理する接頭辞 (`opus` / `mp4a`) は `src/msf/catalogTrackValidation.ts` の
+ * `isAudioCodec` / `AUDIO_CODEC_PREFIXES` が包含している必要がある (MSF §5.2.28 / §5.2.29 の
+ * MUST 判定が codec を手掛かりにするため、対応コーデックを増やすときは両方を見る)。
+ * devtools の `parseAudioCodec` (`devtools/src/utils/codec.ts`) にも同じ写しがあり、3 箇所を
+ * 揃える必要がある。
  */
 function parseAudioCodec(codec: string): AudioCodecType {
   if (codec.startsWith("opus")) {

@@ -35,6 +35,7 @@ import {
   selectLowestBitrateTrack,
   resolveCatalogVariables,
   parseMsfFragmentValue,
+  isAudioCodec,
 } from "./msf";
 
 // =============================================================================
@@ -77,6 +78,20 @@ const roleArb = fc.constantFrom<TrackRole>(
   "eventtimeline",
   "log",
   "metrics",
+);
+
+/**
+ * codec の Arbitrary
+ *
+ * codec は role と独立に生成されるため、audio codec の接頭辞で始まる文字列が事実上生成されないと
+ * §5.2.28 / §5.2.29 (codec 条件) の経路が PBT で踏まれない。video codec / audio codec /
+ * custom codec を重み付きで生成し、§5.2.18 / §5.2.22 (role 条件) と §5.2.28 / §5.2.29
+ * (codec 条件) の両方の経路を踏む。
+ */
+const codecArb: fc.Arbitrary<string> = fc.oneof(
+  { weight: 1, arbitrary: fc.constantFrom("av01.0.04M.08", "vp8") },
+  { weight: 1, arbitrary: fc.constantFrom("opus", "mp4a.40.2", "pcm-s16", "flac") },
+  { weight: 2, arbitrary: fc.string({ maxLength: 64 }) },
 );
 
 /** 非負の bigint を生成する Arbitrary (Location 等で利用) */
@@ -152,8 +167,9 @@ const authInfoArb = fc.dictionary(
  * があるため `catalogTrackArb` には含めず、専用 arbitrary でカバーする。
  *
  * 制約:
- * - `role` が video / audio のときは §5.2.18 / §5.2.22 / §5.2.28 / §5.2.29 の
- *   Conditional MUST を満たすよう必須フィールドを補う
+ * - `role` が video / audio のときは §5.2.18 / §5.2.22 の Conditional MUST を満たすよう
+ *   必須フィールドを補い、audio codec を持つときは §5.2.28 / §5.2.29 の必須フィールドを
+ *   補う (role ではなく codec が条件)
  * - `initRef` は生成しない。単体では参照先 (§5.1.7 initDataList) を保証できず、
  *   delta の add でも参照切れを作らないためである (catalogArb が initDataList と
  *   相関させて付与する)
@@ -173,7 +189,7 @@ const catalogTrackArb: fc.Arbitrary<CatalogTrack> = fc
       label: fc.option(fc.string({ maxLength: 64 }), { nil: undefined }),
       renderGroup: fc.option(fc.nat({ max: 100 }), { nil: undefined }),
       altGroup: fc.option(fc.nat({ max: 100 }), { nil: undefined }),
-      codec: fc.option(fc.string({ maxLength: 64 }), { nil: undefined }),
+      codec: fc.option(codecArb, { nil: undefined }),
       mimeType: fc.option(fc.string({ maxLength: 64 }), { nil: undefined }),
       framerate: fc.option(fc.nat({ max: 120 }), { nil: undefined }),
       timescale: fc.option(fc.nat({ max: 1_000_000 }), { nil: undefined }),
@@ -231,15 +247,21 @@ const catalogTrackArb: fc.Arbitrary<CatalogTrack> = fc
     if (track.packaging === "moqmetrics") {
       track.role = "metrics";
     }
-    // §5.2.18 / §5.2.22 / §5.2.28 / §5.2.29: role が video / audio のときの
-    // Conditional MUST を満たすよう必須フィールドを補う
-    // (role と必須フィールドを独立に生成すると検証を通らない組み合わせができる)
+    // §5.2.18 / §5.2.22: role が video / audio のときの Conditional MUST を満たすよう
+    // 必須フィールドを補う (role と必須フィールドを独立に生成すると検証を通らない
+    // 組み合わせができる)
     if (track.role === "video") {
       track.codec ??= "av01.0.04M.08";
       track.bitrate ??= 1_000_000;
     } else if (track.role === "audio") {
       track.codec ??= "opus";
       track.bitrate ??= 128_000;
+    }
+    // §5.2.28 / §5.2.29: audio codec を持つ track は role によらず samplerate と
+    // channelConfig が MUST。codec は role と独立に生成されるため (codecArb)、
+    // role 未指定 / audiodescription などの reserved role と audio codec の組み合わせも生成され、
+    // ここで補うことで検証を通る (custom role との組み合わせは msf.test.ts の単体テストが覆う)
+    if (track.codec !== undefined && isAudioCodec(track.codec)) {
       track.samplerate ??= 48_000;
       track.channelConfig ??= "2";
     }
@@ -453,8 +475,9 @@ const catalogWithNonFiniteRootArb: fc.Arbitrary<Catalog> = fc
  * track のフィールドに JSON に出ない値 (undefined) を混ぜた Catalog の Arbitrary
  *
  * `JSON.stringify` は値が undefined のプロパティを出力しないため、wire では未指定になる。
- * どの role でも必須でないフィールドだけを選ぶ (`codec` は role が video / audio のとき
- * §5.2.18 の必須であり、undefined にすると拒否されるのが正しい)。
+ * どの role / codec でも必須でないフィールドだけを選ぶ (`codec` は role が video / audio の
+ * とき §5.2.18 の必須、`samplerate` / `channelConfig` は audio codec のとき §5.2.28 /
+ * §5.2.29 の必須であり、undefined にすると拒否されるのが正しい)。
  */
 const catalogWithUndefinedFieldArb: fc.Arbitrary<Catalog> = fc
   .tuple(catalogArb, fc.constantFrom("displayHeight", "width", "framerate", "label"))
