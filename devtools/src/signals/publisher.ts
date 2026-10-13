@@ -1,5 +1,5 @@
 import { computed, signal } from "@preact/signals";
-import type { Session, Publisher, Catalog, LOC } from "moqt-js";
+import type { Session, Publisher, Catalog, LOC, AudioFrameSource } from "moqt-js";
 import type { PanelHttpVersion } from "../utils/httpVersion";
 import type { StatusType } from "../types";
 import type { EncoderWrapper } from "../utils/EncoderWrapper";
@@ -123,6 +123,10 @@ export const audioStream = signal<MediaStream | null>(null);
 // 手放したら null に戻す
 export const audioFormat = signal<AudioFormat | null>(null);
 export const audioStreamCleanup = signal<(() => void) | null>(null);
+// 配信に使う AudioData の取り出し経路。MediaStreamTrackProcessor が無いブラウザ
+// (Safari / Firefox) では Web Audio 経由になり、AudioContext を持つため、配信を
+// 諦めたときも閉じる (ライブラリの src/audioSource.ts)
+export const audioFrameSource = signal<AudioFrameSource | null>(null);
 export const audioFrameReader = signal<ReadableStreamDefaultReader<AudioData> | null>(null);
 // 符号化へ渡した音声のサンプルの記録。送る Object の LOC Audio Level を求める
 // (utils/audioLevelTimeline.ts)。音声の配信を始めるたびに作り直す

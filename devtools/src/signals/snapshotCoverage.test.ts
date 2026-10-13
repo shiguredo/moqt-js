@@ -195,6 +195,8 @@ const PUBLISHER_COVERAGE: CoverageExpectation = {
     audioFormat:
       "実際に取れた音の形式。要求値は audioSampleRateHz / audioChannels に、送った catalog の値は catalog に出る",
     audioStreamCleanup: "音声の後始末の実体 (統計ではない)",
+    audioFrameSource:
+      "AudioData の取り出し経路の実体。Web Audio 経路では AudioContext を持つ (統計ではない)",
     audioFrameReader: "音声の読み取りの実体 (統計ではない)",
     audioLevelTimeline: "LOC Audio Level の算出の実体。直近の値は audio.lastSentLevel に出す",
     audioMeterWaveformLeft: "波形の配列は大きく、コピーする統計ではない",

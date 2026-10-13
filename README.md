@@ -383,6 +383,9 @@ await subscriber.unsubscribe();
 > [!NOTE]
 > Apple Safari 26.4 での動作確認を行っています。Safari 26.4 の WebTransport には単方向ストリームへの `write()` がフラッシュされない WebKit のバグがあり、Safari からの配信は動作しません (購読は動作します)。
 
+> [!NOTE]
+> 音声の取り出しは、`MediaStreamTrackProcessor` が無いブラウザでは Web Audio の `AudioWorklet` で行います。Safari はこの API を DedicatedWorker にしか公開しておらず (Worker へ `MediaStreamTrack` も渡せません)、WebKit の実装は映像トラック専用です。Firefox は実装していません。この経路は Safari 相当の WebKit でも動作を確認しています (`vp exec playwright test --project=webkit`)。
+
 ## ビルド
 
 Node.js 22.22.2 以降が必要です (package.json の `engines`。CI では 22 / 24 / 26 で検証しています)。ビルドとテストには [Vite+](https://github.com/voidzero-dev/vite-plus) の `vp` コマンドを使います。
@@ -412,7 +415,8 @@ vp test
 
 ### E2E テスト
 
-Playwright による E2E テストは 2 つに分かれています。
+Playwright による E2E テストは、実リレーを必要としないものと、実リレーへ接続するものに
+分かれています。
 
 ```bash
 # 実リレーを必要としないテスト (moqt-devtools / c4m-devtools / webtransport-devtools の UI、codec wrapper)
@@ -426,6 +430,16 @@ vp run e2e-test:relay
 
 ```bash
 vp exec playwright install --with-deps chromium
+```
+
+Safari 相当 (WebKit) の確認は macOS の開発機で実行します。Safari は
+`MediaStreamTrackProcessor` をメインスレッドに公開しておらず、音声は Web Audio 経由で
+取り出すため (`src/audioSource.ts`)、その経路を実機と同じ WebKit で確かめます。実リレーへ
+接続するテストは `TEST_MOQT_URI` が設定されている場合だけ実行します。
+
+```bash
+vp exec playwright install webkit
+vp exec playwright test --project=webkit
 ```
 
 Playwright の設定は `.env` があれば読み込みます。実リレーへ接続するテストは、接続先の

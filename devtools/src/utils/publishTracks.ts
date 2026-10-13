@@ -12,7 +12,7 @@ import type { AudioFormat } from "./microphone";
  * (`assertTrackNames`) が同じ規則を見るようにする。
  *
  * 広告の有無は、設定から決まるもの (入力が None) と環境から決まるもの
- * (MediaStreamTrackProcessor が無いブラウザでは音声を取り出せない) だけを扱う。
+ * (音声を取り出す経路が無いブラウザでは音声を配信できない) だけを扱う。
  * カメラとマイクの許可、AudioEncoder の対応は配信を始めるまで確定しないため、
  * ここでは扱わない (結果は配信時のログと status message に出す)。
  */
@@ -69,18 +69,18 @@ export function resolveVideoAdvertisement(videoSource: VideoSourceType): TrackAd
 /**
  * 音声トラックを catalog に載せる予定かどうか
  *
- * MediaStreamTrackProcessor が無いブラウザ (Safari / Firefox) では音声を取り出せないため、
- * 入力が None でなくても載せない。判定は映像の入力と同じく `src/frameSource.ts` の
- * `isMediaStreamTrackProcessorAvailable` を使い、呼び出し側がその結果を渡す。
+ * 音声を取り出す経路が無いブラウザでは、入力が None でなくても載せない。判定は
+ * `moqt-js` の `isAudioFrameSourceAvailable` (MediaStreamTrackProcessor がメインスレッドに
+ * 無いブラウザでは Web Audio の AudioWorklet を使う) を使い、呼び出し側がその結果を渡す。
  */
 export function resolveAudioAdvertisement(
   audioSource: AudioSourceType,
-  mediaStreamTrackProcessorAvailable: boolean,
+  audioFrameSourceAvailable: boolean,
 ): TrackAdvertisement {
   if (audioSource === "none") {
     return { advertised: false, reason: "source-none" };
   }
-  if (!mediaStreamTrackProcessorAvailable) {
+  if (!audioFrameSourceAvailable) {
     return { advertised: false, reason: "browser-unsupported" };
   }
   return { advertised: true };

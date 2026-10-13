@@ -1,7 +1,7 @@
 import type { ComponentChildren } from "preact";
 import { signal } from "@preact/signals";
 import { useId } from "preact/hooks";
-import { isMediaStreamTrackProcessorAvailable } from "moqt-js";
+import { isAudioFrameSourceAvailable } from "moqt-js";
 import * as settings from "../signals/connectionSettings";
 import * as pub from "../signals/publisher";
 import {
@@ -593,7 +593,7 @@ export function ConnectionSettings() {
   const videoAdvertisement = resolveVideoAdvertisement(settings.videoSource.value);
   const audioAdvertisement = resolveAudioAdvertisement(
     settings.audioSource.value,
-    isMediaStreamTrackProcessorAvailable(),
+    isAudioFrameSourceAvailable(),
   );
   const videoAdvertisementText = formatTrackAdvertisement(videoAdvertisement);
   const audioAdvertisementText = formatTrackAdvertisement(audioAdvertisement);

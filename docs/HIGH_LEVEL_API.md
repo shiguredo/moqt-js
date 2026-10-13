@@ -1450,14 +1450,29 @@ const subscriber = await createMediaSubscriber(url, {
 ```
 MediaStream
     │
-    ├─► AudioTrack ─► MediaStreamTrackProcessor ─► AudioEncoder ─► MOQT Publisher (audio)
-    │                                                    │
-    │                                              LOC Properties
+    ├─► AudioTrack ─► AudioFrameSource ─► AudioEncoder ─► MOQT Publisher (audio)
+    │                       │                   │
+    │                       │             LOC Properties
+    │                       │
+    │                       └─ MediaStreamTrackProcessor があればそれを使い、無ければ
+    │                          Web Audio の AudioWorklet で AudioData を組み立てる
     │
-    └─► VideoTrack ─► MediaStreamTrackProcessor ─► VideoEncoder ─► MOQT Publisher (video)
-                                                         │
-                                                   LOC Properties
+    └─► VideoTrack ─► VideoFrameSource ─► VideoEncoder ─► MOQT Publisher (video)
+                             │                   │
+                             │             LOC Properties
+                             │
+                             └─ MediaStreamTrackProcessor があればそれを使い、無ければ
+                                requestVideoFrameCallback で代替する
 ```
+
+音声の取り出し方が 2 つあるのは、ブラウザの実装が揃っていないためである。Safari は
+`MediaStreamTrackProcessor` を DedicatedWorker にしか公開しておらず (WebKit の IDL は
+`Exposed=DedicatedWorker`)、Worker へ `MediaStreamTrack` も渡せない。さらに WebKit の実装は
+映像トラック専用であり、音声トラックを渡すと `TypeError` になる。Firefox は実装していない。
+そのため、この 2 つのブラウザでは Web Audio の `AudioWorklet` で生のサンプルを取り出し、
+`AudioData` を組み立てる (`src/audioSource.ts`)。サンプルレートとチャンネル数は
+`AudioContext` と `AudioWorkletNode` の設定で決まるため、マイクがモノラルでも符号器の設定と
+食い違わない (Safari は `channelCount` 制約を実装しておらず、`getSettings()` も返さない)。
 
 ### MediaSubscriber 内部構成
 
