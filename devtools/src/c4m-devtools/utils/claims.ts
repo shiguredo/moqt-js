@@ -94,14 +94,3 @@ export function formatUnixTime(seconds: number): string {
   }
   return `${date.toISOString()} (${seconds})`;
 }
-
-/**
- * バイト列を 16 進文字列へ整形する
- */
-export function formatBytes(bytes: Uint8Array): string {
-  let text = "";
-  for (const byte of bytes) {
-    text += byte.toString(16).padStart(2, "0");
-  }
-  return text;
-}

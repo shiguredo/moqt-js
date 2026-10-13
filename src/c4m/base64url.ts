@@ -6,9 +6,25 @@
  * (draft-ietf-moq-c4m-01 Section 2 / Section 4) が使われるため、トークン全体の
  * デコードでは両方のアルファベットを受理する。
  *
- * 依存を避けるため、ブラウザの atob / btoa は使わず自前で実装する。
- * RFC 4648 Section 3.5 のとおり、デコード時に余るビットが 0 でない入力は
- * 非正規なエンコードとして拒否する。
+ * 実装は次の理由で自前で持つ (atob / btoa も Uint8Array.fromBase64 も使わない)。
+ *
+ * - atob / btoa は base64url のアルファベット (`-` / `_`) を受理しない
+ *   (HTML Standard の forgiving-base64 が定めるのは `+` / `/` だけである)
+ * - Uint8Array.fromBase64 / Uint8Array.prototype.toBase64
+ *   (tc39/proposal-arraybuffer-base64) は Baseline 2025 で、Chrome 140 /
+ *   Firefox 133 / Safari 18.2 / Node.js 25.0.0 からである。Node.js 22.22.2 以降で
+ *   テストするため、テスト環境では動かない
+ * - 受理規則が異なる。`lastChunkHandling: "loose"` (既定) はデコード時に余るビットが
+ *   0 でない入力を捨てて受理し、ASCII の空白も無視する。ここでは RFC 4648
+ *   Section 3.5 のとおり余るビットが 0 でない入力を非正規なエンコードとして拒否し、
+ *   空白も不正な文字として拒否する。`"strict"` はパディングを必須とするため、
+ *   パディングの有無を問わないここでの受理集合と一致しない
+ * - 標準 Base64 と base64url を試行で判別し、失敗の詳細を Base64DecodeError として
+ *   呼び出し側へ渡す必要がある
+ *
+ * この判断は将来変わり得る。Node.js 25 以降とネイティブ API を前提にできるように
+ * なった時点で置き換えを再検討する。置き換えるときは、受理集合の差 (余るビット /
+ * 空白 / パディングの有無) をテストで固定してから行うこと。
  */
 
 /** 標準 Base64 のアルファベット (RFC 4648 Section 4) */
@@ -176,29 +192,42 @@ export function decodeBase64Url(text: string): Uint8Array {
  * (draft-ietf-moq-c4m-01 Section 2 / Section 4)、トークン全体のデコードでは両方を
  * 受理する。base64url を優先し、パディングの有無も両方を受ける。
  *
+ * 標準 Base64 のパディング無しは試さない。受理の差はパディングの扱いだけであり、
+ * パディング有りの受理集合がパディング無しの上位集合になるためである
+ * (標準 Base64 のパディング無しで成功する入力は、パディング有りでも成功する)。
+ *
  * @param text - デコードする文字列
  * @returns デコードしたバイト列
  * @throws Base64DecodeError どの表現としても不正な場合
  */
 export function decodeBase64OrUrl(text: string): Uint8Array {
-  const attempts: Array<[ReadonlyMap<string, number>, boolean]> = [
-    [BASE64_URL_LOOKUP, false],
-    [BASE64_URL_LOOKUP, true],
-    [BASE64_STANDARD_LOOKUP, true],
-    [BASE64_STANDARD_LOOKUP, false],
-  ];
-  let lastError: Base64DecodeError | undefined;
-  for (const [lookup, allowPadding] of attempts) {
-    try {
-      return decodeWithAlphabet(text, lookup, allowPadding);
-    } catch (error) {
-      if (!(error instanceof Base64DecodeError)) {
-        throw error;
-      }
-      lastError = error;
-    }
+  let error: Base64DecodeError;
+  try {
+    return decodeWithAlphabet(text, BASE64_URL_LOOKUP, false);
+  } catch (caught) {
+    error = toBase64DecodeError(caught);
   }
-  throw lastError ?? new Base64DecodeError("invalid base64");
+  try {
+    return decodeWithAlphabet(text, BASE64_URL_LOOKUP, true);
+  } catch (caught) {
+    error = toBase64DecodeError(caught);
+  }
+  try {
+    return decodeWithAlphabet(text, BASE64_STANDARD_LOOKUP, true);
+  } catch (caught) {
+    error = toBase64DecodeError(caught);
+  }
+  throw error;
+}
+
+/**
+ * Base64DecodeError 以外は呼び出し元へそのまま伝播させる
+ */
+function toBase64DecodeError(error: unknown): Base64DecodeError {
+  if (error instanceof Base64DecodeError) {
+    return error;
+  }
+  throw error;
 }
 
 /**

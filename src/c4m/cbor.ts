@@ -15,6 +15,7 @@
  * 64 ビットの符号なし整数は number では正確に表せないため bigint を使う。
  */
 
+import { bytesEqual } from "./bytes";
 import { unreachableValue } from "./unreachable";
 
 /**
@@ -406,21 +407,6 @@ export function cborEquals(left: CborValue, right: CborValue): boolean {
     default:
       return unreachableValue(left);
   }
-}
-
-/**
- * 2 つのバイト列が等しいかどうかを返す
- */
-function bytesEqual(left: Uint8Array, right: Uint8Array): boolean {
-  if (left.length !== right.length) {
-    return false;
-  }
-  for (let index = 0; index < left.length; index++) {
-    if (left[index] !== right[index]) {
-      return false;
-    }
-  }
-  return true;
 }
 
 /**

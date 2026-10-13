@@ -1,4 +1,6 @@
 import { C4M } from "moqt-js";
+import { actionDisplayName } from "../c4m-devtools/utils/actions";
+import { formatUnixTime } from "../c4m-devtools/utils/claims";
 
 /**
  * MSF URL または MSF URI Fragment から c4m パラメータ (Base64) を取り出す。
@@ -138,11 +140,11 @@ export interface C4mTokenInfo {
   issuer: string | undefined;
   /** `aud` (複数は ", " で連結する)。空の場合は undefined */
   audience: string | undefined;
-  /** `exp` の表示 (例: "1790779292 (2026-09-30T14:41:32.000Z)")。無い場合は undefined */
+  /** `exp` の表示 (例: "2026-09-30T14:41:32.000Z (1790779292)")。無い場合は undefined */
   expiration: string | undefined;
-  /** `nbf` の表示。無い場合は undefined */
+  /** `nbf` の表示 (`exp` と同じ書式)。無い場合は undefined */
   notBefore: string | undefined;
-  /** `iat` の表示。無い場合は undefined */
+  /** `iat` の表示 (`exp` と同じ書式)。無い場合は undefined */
   issuedAt: string | undefined;
   /** `moqt` クレームのスコープ。クレームが無い場合は空配列 */
   scopes: C4mTokenScopeInfo[];
@@ -178,7 +180,7 @@ export function decodeC4mTokenInfo(base64: string): C4mTokenInfo | undefined {
   const trackNames: string[] = [];
   for (const scope of claims.moqt?.scopes ?? []) {
     scopes.push({
-      actions: scope.actions.map(formatAction),
+      actions: scope.actions.map(actionDisplayName),
       namespace: scope.namespace.length > 0 ? formatNamespaceMatches(scope.namespace) : "-",
       track: scope.track !== undefined ? formatMatch(scope.track) : "any",
     });
@@ -191,9 +193,9 @@ export function decodeC4mTokenInfo(base64: string): C4mTokenInfo | undefined {
     algorithm: token.header().algorithm,
     issuer: claims.issuer,
     audience: claims.audience.length > 0 ? claims.audience.join(", ") : undefined,
-    expiration: formatClaimTime(claims.expiration),
-    notBefore: formatClaimTime(claims.notBefore),
-    issuedAt: formatClaimTime(claims.issuedAt),
+    expiration: claims.expiration !== undefined ? formatUnixTime(claims.expiration) : undefined,
+    notBefore: claims.notBefore !== undefined ? formatUnixTime(claims.notBefore) : undefined,
+    issuedAt: claims.issuedAt !== undefined ? formatUnixTime(claims.issuedAt) : undefined,
     scopes,
     trackNames,
   };
@@ -207,16 +209,6 @@ export function decodeC4mTokenInfo(base64: string): C4mTokenInfo | undefined {
  */
 export function extractC4mTrackNames(base64: string): string[] {
   return decodeC4mTokenInfo(base64)?.trackNames ?? [];
-}
-
-/**
- * `moqt` クレームのアクション番号を表示名にする (draft-ietf-moq-c4m-01 Section 2.1 Table 1)
- *
- * 表に無い値は数値の文字列にする (デコード時に拒否していないため、未知の値が来る)。
- */
-function formatAction(action: number): string {
-  const name = C4M.moqtActionFromKey(action);
-  return name === undefined ? String(action) : C4M.moqtActionName(name);
 }
 
 /**
@@ -249,16 +241,6 @@ export function formatNamespaceMatches(matches: C4M.NamespaceMatch[]): string {
       namespaceMatch.type === "end" ? "end" : formatMatch(namespaceMatch.match),
     )
     .join(", ");
-}
-
-/**
- * UNIX 秒のクレームを表示用の文字列にする (例: "1790779292 (2026-09-30T14:41:32.000Z)")
- */
-function formatClaimTime(seconds: number | undefined): string | undefined {
-  if (seconds === undefined) {
-    return undefined;
-  }
-  return `${seconds} (${new Date(seconds * 1000).toISOString()})`;
 }
 
 /** c4m の値に置き換える伏せ字 */

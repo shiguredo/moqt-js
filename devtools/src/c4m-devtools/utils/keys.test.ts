@@ -69,6 +69,8 @@ test("HMAC の対称鍵を生成できる", async () => {
   }
   assert.equal(generated.secret.length, 32);
   assert.notEqual(bytesToHex(generated.secret), bytesToHex(new Uint8Array(32)));
+  // 表示用の 16 進文字列は 2 桁ゼロ埋めにする
+  assert.equal(bytesToHex(new Uint8Array([0x00, 0xab])), "00ab");
 });
 
 test("対称鍵の入力を解釈できる", () => {

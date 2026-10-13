@@ -49,16 +49,15 @@ import {
   type CoseKeyId,
   type CoseMessage,
   DEFAULT_COSE_ENCODING_OPTIONS,
-  HEADER_ALGORITHM,
-  HEADER_KEY_ID,
-  HEADER_TYPE,
   algorithmIdentifier,
   algorithmIsMac,
   coseMessageHeader,
   coseMessagePayload,
   coseMessageSigningInput,
+  createCoseHeader,
   decodeCoseMessage,
   decodeProtectedHeader,
+  encodeCoseHeader,
   encodeCoseMessage,
 } from "./cose";
 import { type CoseCrypto, type CoseKey, CryptoError, defaultSigningAlgorithm } from "./crypto";
@@ -733,7 +732,6 @@ export class CatToken {
   readonly #tokenFormat: TokenFormat;
   readonly #raw: Uint8Array;
   readonly #protectedBytes: Uint8Array;
-  readonly #unprotected: Array<[CborValue, CborValue]>;
   readonly #payloadBytes: Uint8Array;
   readonly #signatureBytes: Uint8Array;
   readonly #input: Uint8Array;
@@ -744,7 +742,6 @@ export class CatToken {
     tokenFormat: TokenFormat,
     raw: Uint8Array,
     protectedBytes: Uint8Array,
-    unprotected: Array<[CborValue, CborValue]>,
     payloadBytes: Uint8Array,
     signatureBytes: Uint8Array,
     input: Uint8Array,
@@ -755,7 +752,6 @@ export class CatToken {
     // 呼び出し側が渡した配列を後から変更してもトークンの内容が変わらないようにコピーする
     this.#raw = raw.slice();
     this.#protectedBytes = protectedBytes;
-    this.#unprotected = unprotected;
     this.#payloadBytes = payloadBytes;
     this.#signatureBytes = signatureBytes;
     this.#input = input;
@@ -776,7 +772,7 @@ export class CatToken {
       if (text !== undefined && countOccurrences(text, ".") === 2) {
         return CatToken.decodeCompact(text).withRaw(input);
       }
-      let firstError: CatError | undefined;
+      let firstError: CatError;
       try {
         return CatToken.decodeCose(input).withRaw(input);
       } catch (error) {
@@ -788,7 +784,7 @@ export class CatToken {
           return CatToken.decodeCose(bytes).withRaw(input);
         }
       }
-      throw firstError ?? new CatError("invalidTokenFormat");
+      throw firstError;
     } catch (error) {
       throw toCatError(error);
     }
@@ -820,7 +816,6 @@ export class CatToken {
         "compact",
         TEXT_ENCODER.encode(text),
         protectedBytes,
-        [],
         payloadBytes,
         signatureBytes,
         signingInput,
@@ -853,7 +848,6 @@ export class CatToken {
           "coseSign1",
           bytes,
           message.sign1.protected,
-          message.sign1.unprotected,
           payload,
           message.sign1.signature,
           signingInput,
@@ -865,7 +859,6 @@ export class CatToken {
         "coseMac0",
         bytes,
         message.mac0.protected,
-        message.mac0.unprotected,
         payload,
         message.mac0.tag,
         signingInput,
@@ -901,7 +894,6 @@ export class CatToken {
       this.#tokenFormat,
       raw,
       this.#protectedBytes,
-      this.#unprotected,
       this.#payloadBytes,
       this.#signatureBytes,
       this.#input,
@@ -942,13 +934,6 @@ export class CatToken {
   }
 
   /**
-   * 署名対象のバイト列を返す
-   */
-  signingInput(): Uint8Array {
-    return this.#input;
-  }
-
-  /**
    * 署名または MAC を返す
    */
   signature(): Uint8Array {
@@ -967,13 +952,6 @@ export class CatToken {
    */
   payload(): Uint8Array {
     return this.#payloadBytes;
-  }
-
-  /**
-   * COSE 形式の場合の unprotected ヘッダを返す
-   */
-  unprotectedHeader(): Array<[CborValue, CborValue]> {
-    return this.#unprotected;
   }
 
   /**
@@ -1083,21 +1061,9 @@ export class CatTokenBuilder {
     return this;
   }
 
-  /** `moqt` クレームを設定する */
-  moqt(moqt: MoqtClaim): this {
-    this.claims.moqt = moqt;
-    return this;
-  }
-
   /** `moqt-reval` (再検証間隔、秒) を設定する */
   moqtReval(seconds: number): this {
     this.claims.moqtReval = seconds;
-    return this;
-  }
-
-  /** `cnf` の `jkt` を IANA 登録の confirmation key 323 で設定する */
-  jwkThumbprint(thumbprint: Uint8Array): this {
-    this.ensureConfirmation().jwkThumbprint = thumbprint;
     return this;
   }
 
@@ -1154,7 +1120,7 @@ export class CatTokenBuilder {
   async buildCompact(crypto: CoseCrypto, key: CoseKey): Promise<string> {
     try {
       const algorithm = this.signingAlgorithm ?? defaultSigningAlgorithm(key);
-      const protectedBytes = this.encodeProtectedHeaderBytes(algorithmIdentifier(algorithm));
+      const protectedBytes = this.encodeProtectedHeaderBytes(algorithm);
       const payloadBytes = encodeCbor(encodeCatClaims(this.claims));
       const protectedText = encodeBase64Url(protectedBytes);
       const payloadText = encodeBase64Url(payloadBytes);
@@ -1185,7 +1151,7 @@ export class CatTokenBuilder {
   ): Promise<Uint8Array> {
     try {
       const algorithm = this.signingAlgorithm ?? defaultSigningAlgorithm(key);
-      const protectedBytes = this.encodeProtectedHeaderBytes(algorithmIdentifier(algorithm));
+      const protectedBytes = this.encodeProtectedHeaderBytes(algorithm);
       const payloadBytes = encodeCbor(encodeCatClaims(this.claims));
       let message: CoseMessage;
       if (algorithmIsMac(algorithm)) {
@@ -1241,20 +1207,17 @@ export class CatTokenBuilder {
 
   /**
    * protected ヘッダをエンコードする
+   *
+   * COSE のヘッダのエンコードは `encodeCoseHeader` に任せる (同じ規則が 2 箇所に
+   * 分かれると、crit の扱いなどが片方だけ変わる)。
    */
-  private encodeProtectedHeaderBytes(algorithmIdentifierValue: number): Uint8Array {
-    const entries: Array<[CborValue, CborValue]> = [
-      [cborInteger(HEADER_ALGORITHM), cborInteger(algorithmIdentifierValue)],
-      [cborInteger(HEADER_TYPE), cborTextString(this.typeHeader ?? CAT_CONTENT_TYPE)],
-    ];
-    if (this.keyIdentifier !== undefined) {
-      const value =
-        this.keyIdentifier.type === "bytes"
-          ? cborByteString(this.keyIdentifier.value)
-          : cborTextString(this.keyIdentifier.value);
-      entries.push([cborInteger(HEADER_KEY_ID), value]);
-    }
-    return encodeCbor(cborMap(entries));
+  private encodeProtectedHeaderBytes(algorithm: Algorithm): Uint8Array {
+    const header = createCoseHeader();
+    header.algorithm = algorithm;
+    header.algorithmIdentifier = algorithmIdentifier(algorithm);
+    header.typ = cborTextString(this.typeHeader ?? CAT_CONTENT_TYPE);
+    header.keyId = this.keyIdentifier;
+    return encodeCbor(encodeCoseHeader(header));
   }
 }
 

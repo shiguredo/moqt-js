@@ -734,8 +734,7 @@ export function coseMessageSignature(message: CoseMessage): Uint8Array {
 export function coseMessageSigningInput(message: CoseMessage): Uint8Array {
   const protectedBytes =
     message.type === "sign1" ? message.sign1.protected : message.mac0.protected;
-  const payload =
-    (message.type === "sign1" ? message.sign1.payload : message.mac0.payload) ?? undefined;
+  const payload = message.type === "sign1" ? message.sign1.payload : message.mac0.payload;
   if (payload === undefined) {
     throw new CoseError("detachedPayloadUnsupported");
   }
@@ -913,7 +912,7 @@ function toCoseSign1(parts: CoseArray, coseTagged: boolean, value: CborValue): C
     unprotected: parts.unprotected,
     payload: parts.payload,
     signature: parts.signature,
-    coseTagged: coseTagged || hasTag(value, TAG_COSE_SIGN1),
+    coseTagged,
     cwtTagged: hasTag(value, TAG_CWT),
   };
 }
@@ -927,7 +926,7 @@ function toCoseMac0(parts: CoseArray, coseTagged: boolean, value: CborValue): Co
     unprotected: parts.unprotected,
     payload: parts.payload,
     tag: parts.signature,
-    coseTagged: coseTagged || hasTag(value, TAG_COSE_MAC0),
+    coseTagged,
     cwtTagged: hasTag(value, TAG_CWT),
   };
 }

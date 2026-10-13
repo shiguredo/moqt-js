@@ -8,6 +8,7 @@
  * このモジュールは I/O も時計も持たない。
  */
 
+import { bytesEqual } from "./bytes";
 import { unreachableValue } from "./unreachable";
 
 import {
@@ -279,21 +280,6 @@ export function matchMatches(match: Match, value: Uint8Array): boolean {
     default:
       return unreachableValue(match);
   }
-}
-
-/**
- * 2 つのバイト列が等しいかどうかを返す
- */
-function bytesEqual(left: Uint8Array, right: Uint8Array): boolean {
-  if (left.length !== right.length) {
-    return false;
-  }
-  for (let index = 0; index < left.length; index++) {
-    if (left[index] !== right[index]) {
-      return false;
-    }
-  }
-  return true;
 }
 
 /**

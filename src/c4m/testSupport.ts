@@ -11,7 +11,6 @@ import { assert } from "vite-plus/test";
 import { Base64DecodeError } from "./base64url";
 import { CborError, type CborErrorCode } from "./cbor";
 import { CoseError, type CoseErrorCode } from "./cose";
-import { CryptoError, type CryptoErrorCode } from "./crypto";
 import { C4mError, type C4mErrorCode } from "./moqt";
 import {
   CatError,
@@ -180,19 +179,6 @@ export function assertClaimValidationError(
   assert.ok(
     error instanceof ClaimValidationError,
     `ClaimValidationError を期待したが ${String(error)} が送出された (code=${code})`,
-  );
-  assert.equal(error.code, code);
-  return error;
-}
-
-/**
- * CryptoError を期待してコードを検証する
- */
-export function assertCryptoError(run: () => unknown, code: CryptoErrorCode): CryptoError {
-  const error = captureThrownError(run);
-  assert.ok(
-    error instanceof CryptoError,
-    `CryptoError を期待したが ${String(error)} が送出された (code=${code})`,
   );
   assert.equal(error.code, code);
   return error;

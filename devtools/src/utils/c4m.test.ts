@@ -225,9 +225,9 @@ test("decodeC4mTokenInfo: クレームとスコープを表示用に取り出す
   assert.equal(info?.algorithm, "HmacSha256");
   assert.equal(info?.issuer, "https://auth.example.com");
   assert.equal(info?.audience, "https://relay.example.com, https://other.example.com");
-  assert.equal(info?.expiration, "1700086400 (2023-11-15T22:13:20.000Z)");
-  assert.equal(info?.notBefore, "1700000000 (2023-11-14T22:13:20.000Z)");
-  assert.equal(info?.issuedAt, "1700043200 (2023-11-15T10:13:20.000Z)");
+  assert.equal(info?.expiration, "2023-11-15T22:13:20.000Z (1700086400)");
+  assert.equal(info?.notBefore, "2023-11-14T22:13:20.000Z (1700000000)");
+  assert.equal(info?.issuedAt, "2023-11-15T10:13:20.000Z (1700043200)");
   assert.deepEqual(info?.scopes, [
     { actions: ["SUBSCRIBE", "PUBLISH"], namespace: "15551, prefix:spam, end", track: "audio" },
   ]);

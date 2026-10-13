@@ -6,7 +6,6 @@ import { test, assert } from "vite-plus/test";
 import { C4M } from "moqt-js";
 import { formatMatch, formatNamespaceMatches } from "../../utils/c4m";
 import {
-  formatBytes,
   formatUnixTime,
   parseList,
   parseMatch,
@@ -78,5 +77,4 @@ test("一覧と数値の入力を解釈できる", () => {
 
 test("時刻とバイト列を整形できる", () => {
   assert.equal(formatUnixTime(1700086400), "2023-11-15T22:13:20.000Z (1700086400)");
-  assert.equal(formatBytes(new Uint8Array([0x00, 0xab])), "00ab");
 });

@@ -34,22 +34,6 @@ export function ecCurveCoordinateLength(curve: EcCurve): number {
 }
 
 /**
- * COSE の `crv` 値 (RFC 9053 Section 7) を返す
- */
-export function ecCurveIdentifier(curve: EcCurve): number {
-  switch (curve) {
-    case "P256":
-      return 1;
-    case "P384":
-      return 2;
-    case "P521":
-      return 3;
-    default:
-      return unreachableValue(curve);
-  }
-}
-
-/**
  * OKP (Octet Key Pair) の曲線 (RFC 9053 Section 7)
  */
 export type OkpCurve = "Ed25519";

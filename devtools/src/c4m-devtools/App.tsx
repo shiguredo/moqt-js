@@ -19,7 +19,6 @@ import {
   publicJwkOf,
 } from "./utils/keys";
 import {
-  formatBytes,
   parseList,
   parseNamespaceMatches,
   parseOptionalNumber,
@@ -261,14 +260,14 @@ function claimRows(claims: C4M.CatClaims): Array<[string, string]> {
     rows.push(["iat", `${claims.issuedAt} (${formatTime(claims.issuedAt)})`]);
   }
   if (claims.cwtId !== undefined) {
-    rows.push(["cti", formatBytes(claims.cwtId)]);
+    rows.push(["cti", bytesToHex(claims.cwtId)]);
   }
   if (claims.moqtReval !== undefined) {
     rows.push(["moqt-reval", `${claims.moqtReval} (seconds)`]);
   }
   if (claims.confirmation !== undefined) {
     const jkt = C4M.confirmationJkt(claims.confirmation);
-    rows.push(["cnf.jkt", jkt !== undefined ? formatBytes(jkt) : "(empty)"]);
+    rows.push(["cnf.jkt", jkt !== undefined ? bytesToHex(jkt) : "(empty)"]);
   }
   if (claims.catdpop !== undefined) {
     rows.push([
@@ -342,7 +341,7 @@ function TokenPanel() {
               {String(token.header().algorithm)} ({String(token.header().algorithmIdentifier)})
             </dd>
             <dt class="text-slate-500">kid</dt>
-            <dd>{keyId !== undefined ? formatBytes(C4M.coseKeyIdAsBytes(keyId)) : "-"}</dd>
+            <dd>{keyId !== undefined ? bytesToHex(C4M.coseKeyIdAsBytes(keyId)) : "-"}</dd>
             <dt class="text-slate-500">typ</dt>
             <dd>{typ?.type === "textString" ? typ.value : "-"}</dd>
             <dt class="text-slate-500">validity</dt>
