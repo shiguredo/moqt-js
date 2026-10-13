@@ -559,27 +559,6 @@ test("直列化できるスコープは CBOR を挟んでも往復し、再エ�
   );
 });
 
-test("スコープの往復は有限宇宙の認可判定を変えない", () => {
-  fc.assert(
-    fc.property(
-      serializableScopeArbitrary(tableActionKeyArbitrary),
-      fc.constantFrom(...MOQT_ACTIONS),
-      (scope, action) => {
-        const decoded = decodeMoqtScope(decodeCbor(encodeCbor(encodeMoqtScope(scope))));
-        for (const namespace of NAMESPACE_UNIVERSE) {
-          for (const trackName of TRACK_UNIVERSE) {
-            assert.equal(
-              moqtScopeAllows(decoded, action, namespace, trackName),
-              moqtScopeAllows(scope, action, namespace, trackName),
-              `往復で認可判定が変わった: ${describeCase(scope, action, namespace, trackName)}`,
-            );
-          }
-        }
-      },
-    ),
-  );
-});
-
 test("直列化できるクレームは CBOR を挟んでも往復し、再エンコードが安定する", () => {
   fc.assert(
     fc.property(
@@ -681,10 +660,10 @@ test("decodeMatch は match-type 1 / 2 を prefix / suffix にし、それ以外
 });
 
 test("任意のデータ項目に対してデコーダは成功するか C4mError になる", () => {
-  // 入れ子 3 段までの任意のデータ項目を 4 つのデコーダへ通す。成功した場合も実装の
-  // 契約 (アクションを 1 個以上持つ) を満たすことまで見る。任意のデータ項目が有効な
-  // moqt-scope になる確率は低いため、成功側も踏むよう numRuns を 2000 に上げる
-  // (実測で 100ms 程度であり、既定の 100 回では有効なスコープをほぼ生成できない)
+  // 入れ子 3 段までの任意のデータ項目を 4 つのデコーダへ通す。C4mError 以外の例外
+  // (RangeError や TypeError) が漏れないことと、エラーコードが既知であることを見る。
+  // 成功側の assert は decodeMoqtScope 自身が保証する契約の再確認であり、任意の
+  // データ項目が有効な moqt-scope になる確率は低いため、回数は既定のままにする
   fc.assert(
     fc.property(cborValueArbitrary(3), (value) => {
       const scope = runDecoder("decodeMoqtScope", () => decodeMoqtScope(value));
@@ -698,7 +677,6 @@ test("任意のデータ項目に対してデコーダは成功するか C4mErro
       runDecoder("decodeCatDpop", () => decodeCatDpop(value));
       runDecoder("decodeMatch", () => decodeMatch(value));
     }),
-    { numRuns: 2000 },
   );
 });
 

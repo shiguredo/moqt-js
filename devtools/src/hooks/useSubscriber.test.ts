@@ -511,8 +511,10 @@ test("resolveNewGroupRequestValue: 最大 Location が無いときは 0 を要�
 // ============================================================================
 
 // startSubscribing は購読開始時に前回の統計を初期化する。
-// リセット漏れがあると再接続後に古い値が表示され続ける。
-test("resetSubscriberStats: 統計値を初期値へ戻す", () => {
+// リセット漏れがあると再接続後に古い値が表示され続ける。受信数・デコード数・最終レベル・
+// 鳴らし方の数も購読のたびに 0 / null へ戻す (前回の値が残ると E2E が「増えた」ことを
+// 判定できない)。映像系と音声系を 1 つのテストでまとめて確かめる
+test("resetSubscriberStats: 映像と音声の統計を初期値へ戻す", () => {
   resetTestEnvironment();
   const instance = createSubscriberInstance("reset-stats-1");
   instance.framesDecoded.value = 10;
@@ -535,6 +537,28 @@ test("resetSubscriberStats: 統計値を初期値へ戻す", () => {
     displayStalls: 3,
     displayQueueDrops: 2,
   };
+  instance.audioObjectsReceived.value = 10;
+  instance.audioDatagramObjectsReceived.value = 4;
+  instance.audioChunksDecoded.value = 10;
+  instance.audioLastLevel.value = { level: 14, voiceActivity: true };
+  instance.audioPeakDbfsLeft.value = -6;
+  instance.audioRmsDbfsLeft.value = -9;
+  instance.audioPeakDbfsRight.value = -7;
+  instance.audioRmsDbfsRight.value = -10;
+  instance.audioWaveformLeft.value = new Float32Array([1, 2, 3]);
+  instance.audioWaveformRight.value = new Float32Array([4, 5, 6]);
+  instance.audioPlayoutRebases.value = 2;
+  instance.audioPlayoutDrops.value = 3;
+  // 鳴らすと決めた音の観測値も、前の購読の値を持ち越さない
+  instance.audioPlayoutTiming.value = {
+    ...EMPTY_AUDIO_PLAYOUT_TIMING,
+    lastArrivalMs: 100,
+    playedFrames: 5,
+    playedMs: 100,
+    missedFrames: 1,
+    missedMs: 20,
+  };
+  instance.audioCatchUpObjectsSkipped.value = 5;
 
   resetSubscriberStats(instance);
 
@@ -555,6 +579,20 @@ test("resetSubscriberStats: 統計値を初期値へ戻す", () => {
   assert.equal(instance.largestLocation.value, null);
   // 受信から表示までの時間の統計も前の購読の値を持ち越さない
   assert.deepEqual(instance.playbackTiming.value, EMPTY_PLAYBACK_TIMING);
+  assert.equal(instance.audioObjectsReceived.value, 0);
+  assert.equal(instance.audioDatagramObjectsReceived.value, 0);
+  assert.equal(instance.audioChunksDecoded.value, 0);
+  assert.equal(instance.audioLastLevel.value, null);
+  assert.equal(instance.audioPeakDbfsLeft.value, null);
+  assert.equal(instance.audioRmsDbfsLeft.value, null);
+  assert.equal(instance.audioPeakDbfsRight.value, null);
+  assert.equal(instance.audioRmsDbfsRight.value, null);
+  assert.equal(instance.audioWaveformLeft.value, null);
+  assert.equal(instance.audioWaveformRight.value, null);
+  assert.equal(instance.audioPlayoutRebases.value, 0);
+  assert.equal(instance.audioPlayoutDrops.value, 0);
+  assert.deepEqual(instance.audioPlayoutTiming.value, EMPTY_AUDIO_PLAYOUT_TIMING);
+  assert.equal(instance.audioCatchUpObjectsSkipped.value, 0);
 });
 
 // ============================================================================
@@ -878,52 +916,6 @@ test("closeSubscriberResources: 音声の後始末を二重に呼んでも例外
 
   assert.deepEqual(calls, ["audio.unsubscribe"]);
   assert.equal(instance.audioSubscriber.value, null);
-});
-
-// 受信数・デコード数・最終レベル・鳴らし方の数は購読のたびに 0 / null へ戻す。
-// 前回の値が残ると E2E が「増えた」ことを判定できない。
-test("resetSubscriberStats: 音声の統計と最終レベルを初期化する", () => {
-  resetTestEnvironment();
-  const instance = createSubscriberInstance("reset-stats-audio-1");
-  instance.audioObjectsReceived.value = 10;
-  instance.audioDatagramObjectsReceived.value = 4;
-  instance.audioChunksDecoded.value = 10;
-  instance.audioLastLevel.value = { level: 14, voiceActivity: true };
-  instance.audioPeakDbfsLeft.value = -6;
-  instance.audioRmsDbfsLeft.value = -9;
-  instance.audioPeakDbfsRight.value = -7;
-  instance.audioRmsDbfsRight.value = -10;
-  instance.audioWaveformLeft.value = new Float32Array([1, 2, 3]);
-  instance.audioWaveformRight.value = new Float32Array([4, 5, 6]);
-  instance.audioPlayoutRebases.value = 2;
-  instance.audioPlayoutDrops.value = 3;
-  // 鳴らすと決めた音の観測値も、前の購読の値を持ち越さない
-  instance.audioPlayoutTiming.value = {
-    ...EMPTY_AUDIO_PLAYOUT_TIMING,
-    lastArrivalMs: 100,
-    playedFrames: 5,
-    playedMs: 100,
-    missedFrames: 1,
-    missedMs: 20,
-  };
-  instance.audioCatchUpObjectsSkipped.value = 5;
-
-  resetSubscriberStats(instance);
-
-  assert.equal(instance.audioObjectsReceived.value, 0);
-  assert.equal(instance.audioDatagramObjectsReceived.value, 0);
-  assert.equal(instance.audioChunksDecoded.value, 0);
-  assert.equal(instance.audioLastLevel.value, null);
-  assert.equal(instance.audioPeakDbfsLeft.value, null);
-  assert.equal(instance.audioRmsDbfsLeft.value, null);
-  assert.equal(instance.audioPeakDbfsRight.value, null);
-  assert.equal(instance.audioRmsDbfsRight.value, null);
-  assert.equal(instance.audioWaveformLeft.value, null);
-  assert.equal(instance.audioWaveformRight.value, null);
-  assert.equal(instance.audioPlayoutRebases.value, 0);
-  assert.equal(instance.audioPlayoutDrops.value, 0);
-  assert.deepEqual(instance.audioPlayoutTiming.value, EMPTY_AUDIO_PLAYOUT_TIMING);
-  assert.equal(instance.audioCatchUpObjectsSkipped.value, 0);
 });
 
 test("resetSubscriberState: 音声の signal を初期化し再生を無効にする", () => {

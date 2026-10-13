@@ -74,17 +74,27 @@ test("createToneSamples は startFrame から連続したサンプル列を返�
   }
 });
 
-test("createToneSamples のエンベロープはループの継ぎ目で連続する", () => {
-  // AudioBuffer は TONE_ENVELOPE_PERIOD_SECONDS 秒で作ってループ再生するため、
-  // 末尾と先頭で振幅が飛ばないことを確認する
+test("createToneSamples のエンベロープはループの継ぎ目の前後で振幅が一致する", () => {
+  // AudioBuffer は TONE_ENVELOPE_PERIOD_SECONDS 秒で作ってループ再生するため、末尾と先頭で
+  // 振幅 (エンベロープ) が飛ばないことを確認する。継ぎ目の 1 サンプルを比べるだけでは、
+  // 440 Hz の正弦波が周期の整数倍の位置で 0 付近になるため何も検出できない。先頭と末尾の
+  // 1 周期ずつのピーク振幅 (エンベロープの値) を比べる
   const frameCount = SAMPLE_RATE * TONE_ENVELOPE_PERIOD_SECONDS;
-  const samples = createToneSamples(SAMPLE_RATE, 1, frameCount + 1);
+  const samples = createToneSamples(SAMPLE_RATE, 1, frameCount);
+  // 1 周期は 48000 / 440 = 109.09 フレームのため、丸めた 109 フレームで peak を測る
+  const cycleFrames = Math.round(SAMPLE_RATE / TONE_FREQUENCY_HZ);
 
-  // 1 サンプル分の差は 440 Hz の波形としては最大でも振幅程度だが、
-  // エンベロープの周期が一致していれば「次のサンプル」は先頭とほぼ同じ値になる
-  const first = samples[0] ?? 0;
-  const wrapped = samples[frameCount] ?? 0;
-  assert.isBelow(Math.abs(first - wrapped), 0.05);
+  let firstPeak = 0;
+  let lastPeak = 0;
+  for (let frame = 0; frame < cycleFrames; frame++) {
+    firstPeak = Math.max(firstPeak, Math.abs(samples[frame] ?? 0));
+    lastPeak = Math.max(lastPeak, Math.abs(samples[frameCount - cycleFrames + frame] ?? 0));
+  }
+
+  // エンベロープは 0.2〜0.3 の間を AudioBuffer の長さ (2 秒) でちょうど 1 周する。
+  // 1 周期 (約 2.3 ms) の間の振幅の変化は 0.001 未満のため、継ぎ目でつながっていれば
+  // 先頭と末尾のピーク振幅はほぼ一致する (エンベロープが周期を持たなければ大きく食い違う)
+  assert.isBelow(Math.abs(firstPeak - lastPeak), 0.01);
 });
 
 test("summarizeToneLevel はトーンから -dBov と voiceActivity を求める", () => {

@@ -806,51 +806,42 @@ test("bidiHandlePublishRequestUpdate: GOAWAY 受信後 + スコープ違反の�
  * draft-ietf-moq-transport-22 §9.5:
  * 応答の書き込みに失敗した場合 (writer が閉じている等) は黙殺され、
  * PROTOCOL_VIOLATION への昇格も callbacks.error の発火も行われず、
- * セッションが閉じないことを検証する。
+ * セッションが閉じない。GOING_AWAY 応答 (判定順序 1) と REQUEST_OK 応答
+ * (判定順序 4) は同じ黙殺パスを通るため表駆動 1 本で検証する。
  */
-test("bidiHandlePublishRequestUpdate: 応答の書き込み失敗は黙殺されセッションが閉じない", async () => {
-  const ctx = createPublishReadTestContext({
-    write() {
-      throw new Error("write failed");
+test("bidiHandlePublishRequestUpdate: 応答の書き込み失敗はどの経路でも黙殺されセッションが閉じない", async () => {
+  const cases: { name: string; goawayReceived: boolean }[] = [
+    {
+      name: "REQUEST_OK 応答 (判定順序 4) の書き込み失敗",
+      goawayReceived: false,
     },
-  });
-  const updatePayload = encodeRequestUpdatePayload({
-    type: MessageType.REQUEST_UPDATE,
-    requestId: 101n,
-    parameters: [],
-  });
-  await bidiHandlePublishRequestUpdate(ctx.session, ctx.requestId, updatePayload);
-
-  // 書き込みは実際に試行され、失敗は吸収され、セッションは閉じない
-  assert.deepEqual(ctx.events, ["write"]);
-  assert.isUndefined(ctx.closedWithError);
-});
-
-/**
- * draft-ietf-moq-transport-22 §9.5:
- * 判定順序 (1) の GOING_AWAY 応答の書き込みに失敗した場合も黙殺され、
- * セッションが閉じないことを検証する (production では GOAWAY 処理の
- * writer.close() により常にこの経路になる。テスト 8 は判定順序 (4) の
- * REQUEST_OK 経路で同じ黙殺パスを検証する)。
- */
-test("bidiHandlePublishRequestUpdate: GOAWAY 後の GOING_AWAY 応答の書き込み失敗は黙殺されセッションが閉じない", async () => {
-  const ctx = createPublishReadTestContext({
-    write() {
-      throw new Error("write failed");
+    {
+      name: "GOAWAY 後の GOING_AWAY 応答 (判定順序 1) の書き込み失敗",
+      goawayReceived: true,
     },
-  });
-  // GOAWAY を受信済みの状態を作る
-  ctx.session.goawayReceivedOnRequestStreams.add(ctx.requestId);
-  const updatePayload = encodeRequestUpdatePayload({
-    type: MessageType.REQUEST_UPDATE,
-    requestId: 101n,
-    parameters: [],
-  });
-  await bidiHandlePublishRequestUpdate(ctx.session, ctx.requestId, updatePayload);
+  ];
 
-  // 書き込みは実際に試行され、失敗は吸収され、セッションは閉じない
-  assert.deepEqual(ctx.events, ["write"]);
-  assert.isUndefined(ctx.closedWithError);
+  for (const testCase of cases) {
+    const ctx = createPublishReadTestContext({
+      write() {
+        throw new Error("write failed");
+      },
+    });
+    if (testCase.goawayReceived) {
+      // production では GOAWAY 処理の writer.close() により常にこの経路になる
+      ctx.session.goawayReceivedOnRequestStreams.add(ctx.requestId);
+    }
+    const updatePayload = encodeRequestUpdatePayload({
+      type: MessageType.REQUEST_UPDATE,
+      requestId: 101n,
+      parameters: [],
+    });
+    await bidiHandlePublishRequestUpdate(ctx.session, ctx.requestId, updatePayload);
+
+    // 書き込みは実際に試行され、失敗は吸収され、セッションは閉じない
+    assert.deepEqual(ctx.events, ["write"]);
+    assert.isUndefined(ctx.closedWithError);
+  }
 });
 
 /**

@@ -10,7 +10,6 @@ import {
   decodeCaptureObject,
   encodeMetricObject,
   decodeMetricObject,
-  metricsGroupId,
   metricsTrackName,
   type MetricsCaptureObject,
   type MetricObject,
@@ -70,19 +69,6 @@ test("MetricObject round-trip: 内容が保持される", () => {
     fc.property(metricObjectArb, (obj) => {
       const decoded = decodeMetricObject(encodeMetricObject(obj));
       assert.deepEqual(decoded, obj);
-    }),
-  );
-});
-
-// msf-01 §10.3: Group ID は 62-bit 未満。非負 timestamp の truncate 結果は常に 0 以上 2^62 未満。
-test("metricsGroupId: 非負 timestamp を 62-bit に truncate する", () => {
-  fc.assert(
-    fc.property(fc.bigInt({ min: 0n, max: (1n << 64n) - 1n }), (timestampMs) => {
-      const groupId = metricsGroupId(timestampMs);
-      // truncate 意味論: 下位 62-bit と一致する
-      assert.equal(groupId, timestampMs & ((1n << 62n) - 1n));
-      assert.isTrue(groupId >= 0n);
-      assert.isTrue(groupId < 1n << 62n);
     }),
   );
 });

@@ -11,7 +11,6 @@ import { ProtocolViolationError } from "./error";
 
 import { encodeJson } from "./testSupport/helpers";
 import {
-  METRICS_GRANULARITY_LEVELS,
   METRICS_CAPTURE_OBJECT_ID,
   MOQMETRICS_NAMESPACE_PREFIX,
   encodeCaptureObject,
@@ -22,23 +21,10 @@ import {
   metricObjectId,
   metricsTrackNamespace,
   metricsTrackName,
-  type MetricsCaptureObject,
-  type MetricObject,
 } from "./moqmetrics";
 
-// Object ID 0（capture timestamp + attributes）の round-trip。
-// 注意: capture_timestamp は Unix epoch ナノ秒だが、JSON number は Number.MAX_SAFE_INTEGER
-// を超えると精度を失う。[MOQMETRICS] §3.1 の例も安全な整数（1720367991）を使う。
-test("MetricsCaptureObject: round-trip", () => {
-  const obj: MetricsCaptureObject = {
-    capture_timestamp: 1720367991000000,
-    attributes: [{ location: "us-east-2" }, { os: "ubuntu20.4" }],
-  };
-  const decoded = decodeCaptureObject(encodeCaptureObject(obj));
-  assert.equal(decoded.capture_timestamp, 1720367991000000);
-  assert.deepEqual(decoded.attributes, [{ location: "us-east-2" }, { os: "ubuntu20.4" }]);
-});
-
+// Object ID 0（capture timestamp + attributes）と Object ID 1 以降（metric name-value pair）の
+// round-trip は moqmetrics.prop.ts の PBT が任意の内容で検証する。
 // [MOQMETRICS] §3.1 の Object 0 例をテストベクタとしてデコードできることを検証する。
 test("MetricsCaptureObject: [MOQMETRICS] §3.1 の例を round-trip する", () => {
   const vector =
@@ -49,14 +35,6 @@ test("MetricsCaptureObject: [MOQMETRICS] §3.1 の例を round-trip する", () 
 
   const redecoded = decodeCaptureObject(encodeCaptureObject(decoded));
   assert.equal(redecoded.capture_timestamp, 1720367991);
-});
-
-// Object ID 1 以降（metric name-value pair）の round-trip。
-test("MetricObject: round-trip", () => {
-  const obj: MetricObject = { metric_name: "cpu_usage_percentage", value: 99 };
-  const decoded = decodeMetricObject(encodeMetricObject(obj));
-  assert.equal(decoded.metric_name, "cpu_usage_percentage");
-  assert.equal(decoded.value, 99);
 });
 
 // [MOQMETRICS] §3.1 の Object 1 / Object 2 例をテストベクタとして検証する。
@@ -105,14 +83,8 @@ test("Metrics payload: 不正な JSON は throw", () => {
   );
 });
 
-// granularity level の文字列 ↔ 優先度（0-7）の対応（msf-01 §10.2、syslog と同一）。
-test("METRICS_GRANULARITY_LEVELS: syslog severity と同一の対応", () => {
-  assert.equal(METRICS_GRANULARITY_LEVELS.Emergency, 0);
-  assert.equal(METRICS_GRANULARITY_LEVELS.Informational, 6);
-  assert.equal(METRICS_GRANULARITY_LEVELS.Debug, 7);
-});
-
 // msf-01 §10.3: Group ID は Unix epoch ミリ秒を 62-bit に truncate。
+// 62-bit の境界値は PBT (moqmetrics.prop.ts) が確率的にしか踏まないため、ここで固定する。
 test("metricsGroupId: Unix epoch ミリ秒を 62-bit に truncate する", () => {
   // 62-bit 以内の値はそのまま
   assert.equal(metricsGroupId(1720367991000n), 1720367991000n);
@@ -147,12 +119,7 @@ test("metricsTrackNamespace: prefix と resourceID の 2 タプル", () => {
 });
 
 // [MOQMETRICS] §3 / msf-01 §10.2（暫定）: Track Name は granularity level の 1 バイト。
-test("metricsTrackName: granularity level の 1 バイトを返す", () => {
-  assert.deepEqual(Array.from(metricsTrackName(0)), [0]);
-  assert.deepEqual(Array.from(metricsTrackName(4)), [4]);
-  assert.deepEqual(Array.from(metricsTrackName(7)), [7]);
-});
-
+// 0-7 の全 level は moqmetrics.prop.ts の PBT が網羅する。
 test("metricsTrackName: 0-7 の範囲外・非整数は throw", () => {
   assert.throws(() => metricsTrackName(-1), /0-7/);
   assert.throws(() => metricsTrackName(8), /0-7/);

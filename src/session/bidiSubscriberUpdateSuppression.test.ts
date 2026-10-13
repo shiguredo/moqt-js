@@ -87,139 +87,144 @@ async function assertNoUnhandledRejection(callback: () => Promise<void>): Promis
 }
 
 /**
- * draft-ietf-moq-transport-22 §9.5:
- * fire-and-forget の update() 後に REQUEST_ERROR が届いても unhandled
- * rejection にならず、保留中の更新が掃除されることを検証する。
+ * fire-and-forget の update() を各 reject 経路で駆動するケース。
+ *
+ * draft-ietf-moq-transport-22 §9.5 / §9.5.1 / §9.2 / §6.4.2.2 / §6.4.2.3 / §3.1:
+ * 経路ごとに update() の reject 原因 (REQUEST_ERROR / GOAWAY / FIN /
+ * RESET_STREAM / unsubscribe) は異なるが、返り値を観測しない呼び出しでも
+ * unhandled rejection にならず、保留中の更新が掃除される点は共通である。
  */
-test("SubscriberImpl.update: fire-and-forget 後の REQUEST_ERROR で unhandled rejection にならない", async () => {
-  const { session, stream, readableController, subscriber, requestId, controlReader } =
-    createFireForgetUpdateContext();
+interface FireForgetRejectCase {
+  name: string;
+  run: () => Promise<void>;
+}
 
-  await assertNoUnhandledRejection(async () => {
-    const readPromise = bidiReadRequestStreamMessages(
-      session,
-      requestId,
-      stream,
-      controlReader,
-      "subscribe",
-    );
-    // fire-and-forget: 返り値の Promise を観測しない
-    void subscriber.update({ forward: true });
-    // REQUEST_ERROR を応答する
-    const errorPayload = encodeRequestErrorPayload({
-      type: MessageType.REQUEST_ERROR,
-      errorCode: BigInt(RequestErrorCode.INTERNAL_ERROR),
-      retryInterval: 0n,
-      reasonPhrase: "request failed",
-    });
-    readableController.enqueue(
-      session.controlWriter!.encode(MessageType.REQUEST_ERROR, errorPayload),
-    );
-    readableController.close();
-    await readPromise;
-    assert.equal(session.pendingRequestUpdate.size, 0);
-  });
-});
+const FIRE_FORGET_REJECT_CASES: FireForgetRejectCase[] = [
+  {
+    name: "REQUEST_ERROR の応答",
+    run: async () => {
+      const { session, stream, readableController, subscriber, requestId, controlReader } =
+        createFireForgetUpdateContext();
+
+      const readPromise = bidiReadRequestStreamMessages(
+        session,
+        requestId,
+        stream,
+        controlReader,
+        "subscribe",
+      );
+      // fire-and-forget: 返り値の Promise を観測しない
+      void subscriber.update({ forward: true });
+      // REQUEST_ERROR を応答する
+      const errorPayload = encodeRequestErrorPayload({
+        type: MessageType.REQUEST_ERROR,
+        errorCode: BigInt(RequestErrorCode.INTERNAL_ERROR),
+        retryInterval: 0n,
+        reasonPhrase: "request failed",
+      });
+      readableController.enqueue(
+        session.controlWriter!.encode(MessageType.REQUEST_ERROR, errorPayload),
+      );
+      readableController.close();
+      await readPromise;
+      assert.equal(session.pendingRequestUpdate.size, 0);
+    },
+  },
+  {
+    name: "GOAWAY の受信",
+    run: async () => {
+      const { session, stream, readableController, subscriber, requestId, controlReader } =
+        createFireForgetUpdateContext();
+
+      const readPromise = bidiReadRequestStreamMessages(
+        session,
+        requestId,
+        stream,
+        controlReader,
+        "subscribe",
+      );
+      // fire-and-forget: 返り値の Promise を観測しない
+      void subscriber.update({ forward: true });
+      const goawayPayload = encodeGoawayPayload({
+        type: MessageType.GOAWAY,
+        newSessionUri: "moqt://new.example.com",
+        timeout: 0n,
+      });
+      readableController.enqueue(session.controlWriter!.encode(MessageType.GOAWAY, goawayPayload));
+      readableController.close();
+      await readPromise;
+      assert.equal(session.pendingRequestUpdate.size, 0);
+    },
+  },
+  {
+    name: "ピア FIN",
+    run: async () => {
+      const { session, stream, readableController, subscriber, requestId, controlReader } =
+        createFireForgetUpdateContext();
+
+      const readPromise = bidiReadRequestStreamMessages(
+        session,
+        requestId,
+        stream,
+        controlReader,
+        "subscribe",
+      );
+      // fire-and-forget: 返り値の Promise を観測しない
+      void subscriber.update({ forward: true });
+      // ピアの FIN を再現する
+      readableController.close();
+      await readPromise;
+      assert.equal(session.pendingRequestUpdate.size, 0);
+    },
+  },
+  {
+    name: "ピアの RESET_STREAM",
+    run: async () => {
+      const { session, stream, readableController, subscriber, requestId, controlReader } =
+        createFireForgetUpdateContext();
+
+      const readPromise = bidiReadRequestStreamMessages(
+        session,
+        requestId,
+        stream,
+        controlReader,
+        "subscribe",
+      );
+      // fire-and-forget: 返り値の Promise を観測しない
+      void subscriber.update({ forward: true });
+      // ピアの RESET_STREAM 相当 (source: "stream" の reject) を再現する
+      readableController.error(
+        Object.assign(new Error("stream reset by peer"), { source: "stream" }),
+      );
+      await readPromise;
+      assert.equal(session.pendingRequestUpdate.size, 0);
+    },
+  },
+  {
+    name: "unsubscribe() による保留の解除",
+    run: async () => {
+      const { session, subscriber } = createFireForgetUpdateContext();
+
+      // fire-and-forget: 返り値の Promise を観測しない
+      void subscriber.update({ forward: true });
+      // 応答が届かないまま unsubscribe() して update() の reject を発生させる
+      await bidiCancelSubscription(session, subscriber);
+      assert.equal(session.pendingRequestUpdate.size, 0);
+    },
+  },
+];
 
 /**
- * draft-ietf-moq-transport-22 §9.2:
- * fire-and-forget の update() 後に GOAWAY が届いても unhandled rejection に
- * ならず、保留中の更新が掃除されることを検証する。
+ * draft-ietf-moq-transport-22 §9.5 / §9.5.1 / §9.2 / §6.4.2.2 / §6.4.2.3 / §3.1:
+ * fire-and-forget の update() は、どの reject 経路でも unhandled rejection に
+ * ならず、保留中の更新が掃除されることを表駆動 1 本で検証する。
+ * 50ms の壁時計待ちは 1 回に抑え、経路ごとの差 (入力メッセージ) だけを表に持つ。
  */
-test("SubscriberImpl.update: fire-and-forget 後の GOAWAY で unhandled rejection にならない", async () => {
-  const { session, stream, readableController, subscriber, requestId, controlReader } =
-    createFireForgetUpdateContext();
-
+test("SubscriberImpl.update: fire-and-forget の update() はどの reject 経路でも unhandled rejection にならない", async () => {
   await assertNoUnhandledRejection(async () => {
-    const readPromise = bidiReadRequestStreamMessages(
-      session,
-      requestId,
-      stream,
-      controlReader,
-      "subscribe",
-    );
-    // fire-and-forget: 返り値の Promise を観測しない
-    void subscriber.update({ forward: true });
-    const goawayPayload = encodeGoawayPayload({
-      type: MessageType.GOAWAY,
-      newSessionUri: "moqt://new.example.com",
-      timeout: 0n,
-    });
-    readableController.enqueue(session.controlWriter!.encode(MessageType.GOAWAY, goawayPayload));
-    readableController.close();
-    await readPromise;
-    assert.equal(session.pendingRequestUpdate.size, 0);
-  });
-});
-
-/**
- * draft-ietf-moq-transport-22 §6.4.2.2:
- * fire-and-forget の update() 後に FIN が届いても unhandled rejection に
- * ならず、保留中の更新が掃除されることを検証する。
- */
-test("SubscriberImpl.update: fire-and-forget 後の FIN で unhandled rejection にならない", async () => {
-  const { session, stream, readableController, subscriber, requestId, controlReader } =
-    createFireForgetUpdateContext();
-
-  await assertNoUnhandledRejection(async () => {
-    const readPromise = bidiReadRequestStreamMessages(
-      session,
-      requestId,
-      stream,
-      controlReader,
-      "subscribe",
-    );
-    // fire-and-forget: 返り値の Promise を観測しない
-    void subscriber.update({ forward: true });
-    // ピアの FIN を再現する
-    readableController.close();
-    await readPromise;
-    assert.equal(session.pendingRequestUpdate.size, 0);
-  });
-});
-
-/**
- * draft-ietf-moq-transport-22 §6.4.2.3:
- * fire-and-forget の update() 後に RESET_STREAM が起きても unhandled
- * rejection にならず、保留中の更新が掃除されることを検証する。
- */
-test("SubscriberImpl.update: fire-and-forget 後の RESET_STREAM で unhandled rejection にならない", async () => {
-  const { session, stream, readableController, subscriber, requestId, controlReader } =
-    createFireForgetUpdateContext();
-
-  await assertNoUnhandledRejection(async () => {
-    const readPromise = bidiReadRequestStreamMessages(
-      session,
-      requestId,
-      stream,
-      controlReader,
-      "subscribe",
-    );
-    // fire-and-forget: 返り値の Promise を観測しない
-    void subscriber.update({ forward: true });
-    // ピアの RESET_STREAM 相当 (source: "stream" の reject) を再現する
-    readableController.error(
-      Object.assign(new Error("stream reset by peer"), { source: "stream" }),
-    );
-    await readPromise;
-    assert.equal(session.pendingRequestUpdate.size, 0);
-  });
-});
-
-/**
- * draft-ietf-moq-transport-22 §3.1:
- * fire-and-forget の update() 後に unsubscribe() しても unhandled rejection に
- * ならず、保留中の更新が掃除されることを検証する。
- */
-test("SubscriberImpl.update: fire-and-forget 後の unsubscribe() で unhandled rejection にならない", async () => {
-  const { session, subscriber } = createFireForgetUpdateContext();
-
-  await assertNoUnhandledRejection(async () => {
-    // fire-and-forget: 返り値の Promise を観測しない
-    void subscriber.update({ forward: true });
-    // 応答が届かないまま unsubscribe() して update() の reject を発生させる
-    await bidiCancelSubscription(session, subscriber);
-    assert.equal(session.pendingRequestUpdate.size, 0);
+    for (const testCase of FIRE_FORGET_REJECT_CASES) {
+      await testCase.run();
+    }
   });
 });
 

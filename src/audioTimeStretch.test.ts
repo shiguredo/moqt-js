@@ -11,8 +11,6 @@
 
 import { test, assert } from "vite-plus/test";
 import {
-  TIME_STRETCH_CORRELATION_THRESHOLD,
-  TIME_STRETCH_MAX_SEAM_STEP_RATIO,
   compressSamples,
   concealSamples,
   expandSamples,
@@ -112,10 +110,8 @@ test("compressSamples: 空の音では何もしない", () => {
   assert.equal(result.lengthChangeSamples, 0);
 });
 
-// 相関の下限は NetEq と同じ 0.9 である (値そのものを固定する)
-test("TIME_STRETCH_CORRELATION_THRESHOLD: NetEq と同じ 0.9", () => {
-  assert.equal(TIME_STRETCH_CORRELATION_THRESHOLD, 0.9);
-});
+// 相関の下限 (TIME_STRETCH_CORRELATION_THRESHOLD = 0.9) は内部定数のため、
+// 値そのものを写すテストは置かない。相関が足りない音を操作しないことは上のテストが担う。
 
 // 16 kHz でもピッチ周期は元のサンプルレートで求まる (レートごとの換算の確認)
 test("compressSamples: 16 kHz でもピッチ周期 1 つ分だけ短くなる", () => {
@@ -240,7 +236,5 @@ test("concealSamples: 16 kHz でも末尾の周期で生成する", () => {
   assert.isAtMost(maxStep(generated), maxStep(samples) * 1.2, "波形が飛ばないこと");
 });
 
-// 継ぎ目の段差の倍率は 2 である (値そのものを固定する)
-test("TIME_STRETCH_MAX_SEAM_STEP_RATIO: 継ぎ目の段差の倍率は 2", () => {
-  assert.equal(TIME_STRETCH_MAX_SEAM_STEP_RATIO, 2);
-});
+// 継ぎ目の段差の倍率 (TIME_STRETCH_MAX_SEAM_STEP_RATIO = 2) は内部定数のため、
+// 値そのものを写すテストは置かない。波形が飛ばないことは上のテストが担う。

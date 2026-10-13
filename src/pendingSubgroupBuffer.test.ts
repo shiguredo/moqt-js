@@ -30,27 +30,27 @@ test("空の buffer は streamCount=0, totalBytes=0", () => {
   assert.equal(buffer.totalBytes, 0);
 });
 
-test("オプション省略時はデフォルトが適用される (1 MiB / 16 MiB / 5000 ms)", () => {
+// 既定値そのもの (1 MiB / 16 MiB / 5000 ms) と、partial 指定時に未指定 field が
+// 既定値で補完されることを 1 件にまとめて確認する。
+test("オプション省略時と partial 指定時はデフォルトが補完される", async () => {
   assert.equal(DEFAULT_PENDING_SUBGROUP_BUFFER_OPTIONS.perStreamMaxBytes, 1 << 20);
   assert.equal(DEFAULT_PENDING_SUBGROUP_BUFFER_OPTIONS.perSessionMaxBytes, 16 << 20);
   assert.equal(DEFAULT_PENDING_SUBGROUP_BUFFER_OPTIONS.timeoutMs, 5000);
+
   // コンストラクタ引数を省略してもエラーにならず、buffer が動作する
   const buffer = new PendingSubgroupBuffer();
   const entry = buffer.add(1n);
   assert.equal(buffer.streamCount, 1);
   buffer.remove(entry);
-});
 
-test("partial オプションは未指定 field がデフォルトで補完される", () => {
   // perStreamMaxBytes のみ上書きしてその他はデフォルトを期待する
-  const buffer = new PendingSubgroupBuffer({ perStreamMaxBytes: 8 });
-  const entry = buffer.add(1n);
-  buffer.appendChunk(entry, new Uint8Array(10));
+  const partial = new PendingSubgroupBuffer({ perStreamMaxBytes: 8 });
+  const partialEntry = partial.add(1n);
+  partial.appendChunk(partialEntry, new Uint8Array(10));
   // perStreamMaxBytes=8 を超えたので overflow-per-stream が即発火する
   // (デフォルト perSessionMaxBytes=16 MiB / timeoutMs=5000 は触れていない)
-  return entry.notified.then((reason) => {
-    assert.equal(reason, "overflow-per-stream");
-  });
+  const reason = await partialEntry.notified;
+  assert.equal(reason, "overflow-per-stream");
 });
 
 test("add で entry が登録され、streamCount と参照が一致する", () => {

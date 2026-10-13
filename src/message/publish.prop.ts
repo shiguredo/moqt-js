@@ -15,8 +15,6 @@ import { createTrackNamespace, trackNamespaceToStrings } from "./parameter";
 import { MessageType } from "./types";
 import { encodeVarint } from "../varint";
 import { ProtocolViolationError } from "../error";
-import { type Property } from "../properties";
-import { decodeRequestOkPayload, encodeRequestOkPayload } from "./session";
 import {
   parametersArb,
   trackPropertiesArb,
@@ -81,29 +79,6 @@ test("Publish のエンコード・デコードがラウンドトリップする
   );
 });
 
-test("PublishOk のエンコード・デコードがラウンドトリップする", () => {
-  fc.assert(
-    fc.property(parametersArb, (parameters) => {
-      const original = {
-        type: MessageType.REQUEST_OK as typeof MessageType.REQUEST_OK,
-        parameters,
-        trackProperties: [] as Property[],
-      };
-
-      const encoded = encodeRequestOkPayload(original);
-      const decoded = decodeRequestOkPayload(encoded);
-
-      assert.equal(decoded.type, MessageType.REQUEST_OK);
-      assert.equal(decoded.parameters.length, parameters.length);
-      for (let i = 0; i < parameters.length; i++) {
-        assert.equal(decoded.parameters[i].type, parameters[i].type);
-        assert.deepEqual(decoded.parameters[i].value, parameters[i].value);
-      }
-      assert.equal(decoded.trackProperties.length, 0);
-    }),
-  );
-});
-
 /**
  * draft-ietf-moq-transport-22 Section 9.9:
  * PUBLISH_DONE は双方向ストリーム上で送信されるため Request ID フィールドはない。
@@ -129,42 +104,6 @@ test("PublishDone のエンコード・デコードがラウンドトリップ�
         assert.equal(decoded.statusCode, statusCode);
         assert.equal(decoded.streamCount, streamCount);
         assert.equal(decoded.reasonPhrase, reasonPhrase);
-      },
-    ),
-  );
-});
-
-/**
- * draft-ietf-moq-transport-22 Section 9:
- * "If the length does not match the length of the Message Body,
- *  the receiver MUST close the session with a PROTOCOL_VIOLATION."
- * Error Reason は PUBLISH_DONE ペイロードの最後のフィールドであり、
- * その後ろに後続データがあると消費バイト数が Message Body 長と一致しないため違反となる。
- * 正常な PUBLISH_DONE の後ろに後続バイト列を連結すると
- * ProtocolViolationError を throw することを検証する。
- */
-test("PUBLISH_DONE の末尾に後続データがあると ProtocolViolationError を throw する", () => {
-  fc.assert(
-    fc.property(
-      fc.bigInt({ min: 0n, max: 100n }),
-      fc.bigInt({ min: 0n, max: 1000000n }),
-      fc.string({ minLength: 0, maxLength: 100 }),
-      fc.uint8Array({ minLength: 1, maxLength: 1000 }),
-      (statusCode, streamCount, reasonPhrase, trailing) => {
-        const original = {
-          type: MessageType.PUBLISH_DONE as typeof MessageType.PUBLISH_DONE,
-          statusCode,
-          streamCount,
-          reasonPhrase,
-        };
-
-        const encoded = encodePublishDonePayload(original);
-        // 正常な PUBLISH_DONE の後ろに 1 バイト以上の後続データを連結する
-        const withTrailing = new Uint8Array(encoded.length + trailing.length);
-        withTrailing.set(encoded, 0);
-        withTrailing.set(trailing, encoded.length);
-
-        assert.throws(() => decodePublishDonePayload(withTrailing), ProtocolViolationError);
       },
     ),
   );

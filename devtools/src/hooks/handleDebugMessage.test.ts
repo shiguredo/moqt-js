@@ -21,48 +21,25 @@ function makeMessage(payload: Uint8Array): DebugMessage {
   };
 }
 
-test("subscriber handleDebugMessage copies payload to independent ArrayBuffer", () => {
-  const source = new Uint8Array([1, 2, 3, 4]);
-  handleSubscriberDebugMessage("subscriber-1", makeMessage(source));
-  const entries = getLogBuffer();
-  assert.equal(entries.length, 1);
-  // 分割代入で唯一のエントリを取り出す (noUncheckedIndexedAccess で index access は
-  // 型上 undefined を含むため、分割代入で回避する)
-  const [entry] = entries;
+/** ログ 1 件の行を取り出す */
+function firstLogMessage(): string {
+  const [entry] = getLogBuffer();
   if (entry === undefined) {
-    // 上の entries.length === 1 により到達しない (型を絞るためのガード)
     throw new Error("expected exactly one log entry");
   }
-  const stored = entry.payload;
-  assert.ok(stored !== undefined);
-  assert.notStrictEqual(stored.buffer, source.buffer);
-  assert.deepEqual(Array.from(stored), [1, 2, 3, 4]);
-});
+  return entry.message;
+}
 
-test("subscriber handleDebugMessage stores undefined payload when source length is 0", () => {
-  handleSubscriberDebugMessage("subscriber-1", makeMessage(new Uint8Array()));
-  const entries = getLogBuffer();
-  assert.equal(entries.length, 1);
-  const [entry] = entries;
-  if (entry === undefined) {
-    // 上の entries.length === 1 により到達しない (型を絞るためのガード)
-    throw new Error("expected exactly one log entry");
-  }
-  assert.equal(entry.payload, undefined);
-});
+// useSubscriber / usePublisher の handleDebugMessage は logDebugMessage への 1 行委譲である。
+// payload の扱い (独立コピー、認可トークンを載せうる型では残さないこと、上限) は委譲先の
+// debugMessageLog.test.ts が固定するため、ここでは接続ごとの prefix (ログの行頭に出る
+// `[subscriber-1]` / `[publisher]`) を付けてログへ 1 件積むことだけを確かめる
+test("handleDebugMessage: 接続ごとの prefix を付けてログへ 1 件積む", () => {
+  handleSubscriberDebugMessage("subscriber-1", makeMessage(new Uint8Array([1, 2, 3, 4])));
+  assert.equal(firstLogMessage(), "[subscriber-1] [RECV] GOAWAY");
 
-test("publisher handleDebugMessage copies payload to independent ArrayBuffer", () => {
-  const source = new Uint8Array([0xaa, 0xbb]);
-  handlePublisherDebugMessage(makeMessage(source));
-  const entries = getLogBuffer();
-  assert.equal(entries.length, 1);
-  const [entry] = entries;
-  if (entry === undefined) {
-    // 上の entries.length === 1 により到達しない (型を絞るためのガード)
-    throw new Error("expected exactly one log entry");
-  }
-  const stored = entry.payload;
-  assert.ok(stored !== undefined);
-  assert.notStrictEqual(stored.buffer, source.buffer);
-  assert.deepEqual(Array.from(stored), [0xaa, 0xbb]);
+  // 別の接続のログと混ざらないよう、prefix ごとに分けて積む
+  __resetLogStateForTest();
+  handlePublisherDebugMessage(makeMessage(new Uint8Array([0xaa, 0xbb])));
+  assert.equal(firstLogMessage(), "[publisher] [RECV] GOAWAY");
 });

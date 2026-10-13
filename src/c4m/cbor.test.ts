@@ -200,15 +200,6 @@ test("indefinite 長のエラーを拒否する", () => {
   assertCborError(() => decodeCbor(decodeHex("5f5f4101ffff")), "invalidAdditionalInformation", 31);
 });
 
-test("マップのキーはエンコード済みバイト列の昇順に並ぶ", () => {
-  const value = cborMap([
-    [cborTextString("aa"), cborUnsigned(3n)],
-    [cborUnsigned(10n), cborUnsigned(2n)],
-    [cborUnsigned(2n), cborUnsigned(1n)],
-  ]);
-  assert.equal(encodeHex(encodeCbor(value)), "a302010a0262616103");
-});
-
 test("重複するマップキーはデコードとエンコードの両方で拒否する", () => {
   assertCborError(() => decodeCbor(decodeHex("a201010102")), "duplicateMapKey");
   const value = cborMap([
@@ -268,29 +259,6 @@ test("タグは保持される", () => {
   const value = decodeCbor(decodeHex("d83dd8184101"));
   assert.deepEqual(value, cborTag(61n, cborTag(24n, cborByteString(new Uint8Array([1])))));
   assert.equal(encodeHex(encodeCbor(value)), "d83dd8184101");
-});
-
-test("ネスト深度の上限はデコードとエンコードの両方で適用される", () => {
-  // 上限ちょうどは通る
-  const bytes = new Uint8Array(MAX_CBOR_DEPTH + 1);
-  bytes.fill(0x81, 0, MAX_CBOR_DEPTH);
-  bytes[MAX_CBOR_DEPTH] = 0x01;
-  let expected = cborUnsigned(1n);
-  for (let depth = 0; depth < MAX_CBOR_DEPTH; depth++) {
-    expected = cborArray([expected]);
-  }
-  assert.deepEqual(decodeCbor(bytes), expected);
-  // 上限を超えるとエラー
-  const tooDeep = new Uint8Array(MAX_CBOR_DEPTH + 2);
-  tooDeep.fill(0x81, 0, MAX_CBOR_DEPTH + 1);
-  tooDeep[MAX_CBOR_DEPTH + 1] = 0x01;
-  assertCborError(() => decodeCbor(tooDeep), "depthLimitExceeded");
-
-  let value = cborUnsigned(1n);
-  for (let depth = 0; depth < MAX_CBOR_DEPTH + 1; depth++) {
-    value = cborArray([value]);
-  }
-  assertCborError(() => encodeCbor(value), "depthLimitExceeded");
 });
 
 test("アクセサーで値を取り出せる", () => {

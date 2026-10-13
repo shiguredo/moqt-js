@@ -79,7 +79,7 @@ function buildRequestUpdate(
 }
 
 /**
- * draft-ietf-moq-transport-22 §9.3 / §9.5 / §9.20.18:
+ * draft-ietf-moq-transport-22 §9.3 / §9.5 / §9.20.18 / §3.1.1:
  * 送信 PUBLISH の PUBLISH_OK と同一チャンクに REQUEST_UPDATE が連結されている
  * 場合も取りこぼさず処理することを検証する。
  *
@@ -88,86 +88,73 @@ function buildRequestUpdate(
  * forwardState へ反映しなければならない (§9.20.18「It specifies whether affected
  *  subscriptions are paused (see Section 3.1.1).」)。連結分を処理しないと publisher は
  * paused のままとなり、REQUEST_OK も返らないため、購読は Objects を受け取れない。
+ * 逆に active のままだと購読者が居ないのに送り続ける。
  *
  * sora-moq リレーは購読者が居ない間 FORWARD=0 (paused) を要求し、購読者が現れると
  * REQUEST_UPDATE (FORWARD=1) を PUBLISH_OK の直後に送る。この経路が壊れると
- * 配信が開始されない。
+ * 配信が開始されない。FORWARD=0 / 1 の両方向を表駆動 1 本で検証する。
  */
-test("bidiReadPublishResponse: PUBLISH_OK と同一チャンクの REQUEST_UPDATE も処理される", async () => {
-  const ctx = createPublishReadTestContext({});
-  // 受信 PUBLISH を受理する前は forwardState が 0 (ピアが購読者不在で要求) にする
-  ctx.publisher.setForwardState(false);
-
-  let resolved = false;
-  ctx.session.pendingPublish.set(ctx.requestId, {
-    resolve: () => {
-      resolved = true;
+test("bidiReadPublishResponse: PUBLISH_OK と同一チャンクの REQUEST_UPDATE (FORWARD=0 / 1) も処理される", async () => {
+  const cases: {
+    name: string;
+    initialForwardState: boolean;
+    forward: 0 | 1;
+    expectedForwardState: boolean;
+  }[] = [
+    {
+      name: "paused から FORWARD=1 で再開する",
+      initialForwardState: false,
+      forward: 1,
+      expectedForwardState: true,
     },
-    reject: () => {},
-    impl: ctx.publisher,
-  });
+    {
+      name: "active から FORWARD=0 で paused に戻す",
+      initialForwardState: true,
+      forward: 0,
+      expectedForwardState: false,
+    },
+  ];
 
-  const readPromise = bidiReadPublishResponse(
-    ctx.session,
-    ctx.requestId,
-    ctx.stream,
-    ctx.controlReader,
-  );
-  enqueueCoalesced(ctx, buildPublishOk(ctx), [buildRequestUpdate(ctx, 1)]);
-  await readPromise;
-  // REQUEST_UPDATE の処理は応答の書き込みを await するため、読み取りループの
-  // 初期メッセージ処理が終わるまで待つ。ここを待たずに検証すると、連結分が
-  // 失われていても同じ結果になり、回帰テストとして機能しない。
-  await waitForMacrotask();
-  ctx.readableController.close();
-  await waitForMacrotask();
+  for (const testCase of cases) {
+    const ctx = createPublishReadTestContext({});
+    // 受信 PUBLISH を受理する前の forwardState を用意する
+    ctx.publisher.setForwardState(testCase.initialForwardState);
 
-  // PUBLISH_OK が最初の応答として処理される
-  assert.isTrue(resolved);
-  assert.isTrue(ctx.session.publishers.has(ctx.requestId));
-  // 連結された REQUEST_UPDATE が処理され、forwardState が 1 に変わる
-  assert.isTrue(ctx.publisher.forwardState);
-  // §9.5 の MUST により REQUEST_OK がちょうど 1 通応答される
-  const written = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
-  assert.equal(written.length, 1);
-  assert.equal(written[0].type, MessageType.REQUEST_OK);
-  assert.isUndefined(ctx.closedWithError);
-});
+    let resolved = false;
+    ctx.session.pendingPublish.set(ctx.requestId, {
+      resolve: () => {
+        resolved = true;
+      },
+      reject: () => {},
+      impl: ctx.publisher,
+    });
 
-/**
- * draft-ietf-moq-transport-22 §9.3 / §9.20.18:
- * 連結された REQUEST_UPDATE で FORWARD=0 (paused) が要求された場合も反映される
- * ことを検証する。連結分が失われると forwardState は 1 のままになり、
- * 購読者が居ないのに Objects を送り続ける。
- */
-test("bidiReadPublishResponse: PUBLISH_OK と同一チャンクの REQUEST_UPDATE (FORWARD=0) も処理される", async () => {
-  const ctx = createPublishReadTestContext({});
-  ctx.publisher.setForwardState(true);
-  ctx.session.pendingPublish.set(ctx.requestId, {
-    resolve: () => {},
-    reject: () => {},
-    impl: ctx.publisher,
-  });
+    const readPromise = bidiReadPublishResponse(
+      ctx.session,
+      ctx.requestId,
+      ctx.stream,
+      ctx.controlReader,
+    );
+    enqueueCoalesced(ctx, buildPublishOk(ctx), [buildRequestUpdate(ctx, testCase.forward)]);
+    await readPromise;
+    // REQUEST_UPDATE の処理は応答の書き込みを await するため、読み取りループの
+    // 初期メッセージ処理が終わるまで待つ。ここを待たずに検証すると、連結分が
+    // 失われていても同じ結果になり、回帰テストとして機能しない。
+    await waitForMacrotask();
+    ctx.readableController.close();
+    await waitForMacrotask();
 
-  const readPromise = bidiReadPublishResponse(
-    ctx.session,
-    ctx.requestId,
-    ctx.stream,
-    ctx.controlReader,
-  );
-  enqueueCoalesced(ctx, buildPublishOk(ctx), [buildRequestUpdate(ctx, 0)]);
-  await readPromise;
-  await waitForMacrotask();
-  ctx.readableController.close();
-  await waitForMacrotask();
-
-  // draft-ietf-moq-transport-22 §9.20.18 / §3.1.1:
-  // FORWARD=0 は subscription が paused であることを意味し、§3.1.1 のとおり
-  // publisher は paused の subscription で Objects を送らない
-  assert.isFalse(ctx.publisher.forwardState);
-  const written = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
-  assert.equal(written.length, 1);
-  assert.equal(written[0].type, MessageType.REQUEST_OK);
+    // PUBLISH_OK が最初の応答として処理される
+    assert.isTrue(resolved);
+    assert.isTrue(ctx.session.publishers.has(ctx.requestId));
+    // 連結された REQUEST_UPDATE が処理され、FORWARD の値が forwardState に変わる
+    assert.equal(ctx.publisher.forwardState, testCase.expectedForwardState);
+    // §9.5 の MUST により REQUEST_OK がちょうど 1 通応答される
+    const written = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
+    assert.equal(written.length, 1);
+    assert.equal(written[0].type, MessageType.REQUEST_OK);
+    assert.isUndefined(ctx.closedWithError);
+  }
 });
 
 /**

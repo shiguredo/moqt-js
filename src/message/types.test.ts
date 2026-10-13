@@ -44,15 +44,6 @@ test("isPublishDoneErrorStatus: 正常な終わりの Status Code をエラー�
   }
 });
 
-// 判定は列挙の全値をいずれか一方に分類する (取りこぼしを検出する)
-test("isPublishDoneErrorStatus: 列挙の全値をエラーか正常な終わりかに分類する", () => {
-  const classified = [...ERROR_STATUS_CODES, ...NON_ERROR_STATUS_CODES].sort(
-    (left, right) => left - right,
-  );
-  const listed = Object.values(PublishDoneStatusCode).sort((left, right) => left - right);
-  assert.deepEqual(classified, listed);
-});
-
 // draft-ietf-moq-transport-22 §13 (Grease):
 // "Receipt of an unknown error code in any error context (… PUBLISH_DONE …) MUST be treated as
 // equivalent to INTERNAL_ERROR for that context." に従い、列挙に無い値はエラーとみなす

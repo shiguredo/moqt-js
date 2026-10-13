@@ -6,7 +6,6 @@
 import { test, assert } from "vite-plus/test";
 import {
   NAMESPACE_OK_ALLOWED_PARAMS,
-  NAMESPACE_REQUEST_UPDATE_ALLOWED_PARAMS,
   PUBLISH_OK_ALLOWED_PARAMS,
   PUBLISH_ALLOWED_PARAMS,
   REQUEST_UPDATE_ALLOWED_PARAMS,
@@ -35,16 +34,6 @@ function assertProtocolViolation(error: SessionError | null, expectedMessage?: s
     assert.equal(error.message, expectedMessage);
   }
 }
-
-/**
- * draft-ietf-moq-transport-22 §9.20.16:
- * EXPIRES は SUBSCRIBE_NAMESPACE_OK / SUBSCRIBE_TRACKS_OK / PUBLISH_NAMESPACE_OK で許可される。
- * NAMESPACE_OK_ALLOWED_PARAMS が EXPIRES のみを含むことを検証する。
- */
-test("NAMESPACE_OK_ALLOWED_PARAMS は EXPIRES のみを含む", () => {
-  assert.isTrue(NAMESPACE_OK_ALLOWED_PARAMS.has(MessageParameterType.EXPIRES));
-  assert.equal(NAMESPACE_OK_ALLOWED_PARAMS.size, 1);
-});
 
 /**
  * draft-ietf-moq-transport-22 §9.20.1:
@@ -103,26 +92,9 @@ test("EXPIRES + 許可外パラメータの混合は PROTOCOL_VIOLATION のエ�
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-22 §9.20.16:
- * EXPIRES のみが PUBLISH_OK に出現できる。
- * PUBLISH_OK_ALLOWED_PARAMS が EXPIRES のみを含むことを検証する。
- */
-test("PUBLISH_OK_ALLOWED_PARAMS は EXPIRES のみを含む", () => {
-  assert.isTrue(PUBLISH_OK_ALLOWED_PARAMS.has(MessageParameterType.EXPIRES));
-  assert.equal(PUBLISH_OK_ALLOWED_PARAMS.size, 1);
-});
-
-/**
  * draft-ietf-moq-transport-22 §9.20.16 / §9.20.1:
  * Subscription Parameters は PUBLISH_OK に出現できない。
  * GROUP_ORDER / FORWARD / LOCATION_FILTER 等がスコープ検証で拒否されることを検証する。
- */
-test("PUBLISH_OK_ALLOWED_PARAMS は GROUP_ORDER を含まない", () => {
-  assert.isFalse(PUBLISH_OK_ALLOWED_PARAMS.has(MessageParameterType.GROUP_ORDER));
-});
-
-/**
- * GROUP_ORDER 付き PUBLISH_OK はスコープ検証で拒否される。
  */
 test("GROUP_ORDER 付き PUBLISH_OK は PROTOCOL_VIOLATION のエラーを返す", () => {
   const error = validateParameterScope(
@@ -174,13 +146,7 @@ test("EXPIRES 付き PUBLISH_OK は検証を通過する", () => {
 /**
  * draft-ietf-moq-transport-22 §3.6.2:
  * SUBSCRIBE_TRACKS の結果 PUBLISH に GROUP_ORDER が載るため許可する。
- */
-test("PUBLISH_ALLOWED_PARAMS は GROUP_ORDER を含む", () => {
-  assert.isTrue(PUBLISH_ALLOWED_PARAMS.has(MessageParameterType.GROUP_ORDER));
-});
-
-/**
- * GROUP_ORDER 付き PUBLISH はスコープ検証で受理される。
+ * GROUP_ORDER 付き PUBLISH がスコープ検証で受理されることを検証する。
  */
 test("GROUP_ORDER 付き PUBLISH は検証を通過する", () => {
   const error = validateParameterScope(
@@ -195,19 +161,8 @@ test("GROUP_ORDER 付き PUBLISH は検証を通過する", () => {
  * draft-ietf-moq-transport-22 §9.8:
  * PUBLISH は初期 Subscription Parameters として FORWARD / GROUP_ORDER /
  * SUBSCRIBER_PRIORITY / SUBGROUP_DELIVERY_TIMEOUT / OBJECT_DELIVERY_TIMEOUT /
- * LOCATION_FILTER を運べる。既存 5 種に加えた 4 種が許可されることを検証する。
- */
-test("PUBLISH_ALLOWED_PARAMS は Subscription Parameters 4 種を含む", () => {
-  assert.isTrue(PUBLISH_ALLOWED_PARAMS.has(MessageParameterType.OBJECT_DELIVERY_TIMEOUT));
-  assert.isTrue(PUBLISH_ALLOWED_PARAMS.has(MessageParameterType.SUBGROUP_DELIVERY_TIMEOUT));
-  assert.isTrue(PUBLISH_ALLOWED_PARAMS.has(MessageParameterType.SUBSCRIBER_PRIORITY));
-  assert.isTrue(PUBLISH_ALLOWED_PARAMS.has(MessageParameterType.LOCATION_FILTER));
-  assert.equal(PUBLISH_ALLOWED_PARAMS.size, 9);
-});
-
-/**
- * draft-ietf-moq-transport-22 §9.8:
- * 新規 4 種付き PUBLISH はいずれもスコープ検証を通過する。
+ * LOCATION_FILTER を運べる。既存 5 種に加えた 4 種がスコープ検証で受理されることを
+ * 検証する。
  */
 test("Subscription Parameters 付き PUBLISH は検証を通過する", () => {
   for (const type of [
@@ -292,58 +247,6 @@ test("TRACK_STATUS_OK の EXPIRES は PROTOCOL_VIOLATION のエラーを返す",
 
 /**
  * draft-ietf-moq-transport-22 §9.20.20 / §9.20.1:
- * TRACK_NAMESPACE_PREFIX は namespace 系 (SUBSCRIBE_NAMESPACE /
- * SUBSCRIBE_TRACKS) の REQUEST_UPDATE にのみ出現できる。
- * subscription 系 REQUEST_UPDATE の許可集合には含まれないことを検証する。
- */
-test("REQUEST_UPDATE_ALLOWED_PARAMS は TRACK_NAMESPACE_PREFIX を含まない", () => {
-  assert.isFalse(REQUEST_UPDATE_ALLOWED_PARAMS.has(MessageParameterType.TRACK_NAMESPACE_PREFIX));
-});
-
-/**
- * draft-ietf-moq-transport-22 §9.20.8 / §9.20.16:
- * GROUP_ORDER と EXPIRES は REQUEST_UPDATE に出現できない。
- */
-test("REQUEST_UPDATE_ALLOWED_PARAMS は GROUP_ORDER / EXPIRES を含まない", () => {
-  assert.isFalse(REQUEST_UPDATE_ALLOWED_PARAMS.has(MessageParameterType.GROUP_ORDER));
-  assert.isFalse(REQUEST_UPDATE_ALLOWED_PARAMS.has(MessageParameterType.EXPIRES));
-});
-
-/**
- * draft-ietf-moq-transport-22 §3.3.2:
- * TRACK_PROPERTY_FILTER は SUBSCRIBE_TRACKS とその REQUEST_UPDATE にのみ
- * 出現できる。subscription 系 REQUEST_UPDATE の許可集合には含まれない。
- */
-test("REQUEST_UPDATE_ALLOWED_PARAMS は TRACK_PROPERTY_FILTER を含まない", () => {
-  assert.isFalse(REQUEST_UPDATE_ALLOWED_PARAMS.has(MessageParameterType.TRACK_PROPERTY_FILTER));
-});
-
-/**
- * draft-ietf-moq-transport-22 §9.20.7 / §9.20.9 / §9.20.19 / §9.20.15 / §3.3.2:
- * SUBSCRIBER_PRIORITY / LOCATION_FILTER / NEW_GROUP_REQUEST / FILL_PARAMETERS /
- * Range Filters (0x25-0x28) は subscription 系 REQUEST_UPDATE に出現できる。
- */
-test("REQUEST_UPDATE_ALLOWED_PARAMS は subscription 系の許可パラメータを含む", () => {
-  for (const type of [
-    MessageParameterType.AUTHORIZATION_TOKEN,
-    MessageParameterType.OBJECT_DELIVERY_TIMEOUT,
-    MessageParameterType.SUBGROUP_DELIVERY_TIMEOUT,
-    MessageParameterType.SUBSCRIBER_PRIORITY,
-    MessageParameterType.FORWARD,
-    MessageParameterType.LOCATION_FILTER,
-    MessageParameterType.NEW_GROUP_REQUEST,
-    MessageParameterType.FILL_PARAMETERS,
-    MessageParameterType.SUBGROUP_FILTER,
-    MessageParameterType.OBJECTID_FILTER,
-    MessageParameterType.PRIORITY_FILTER,
-    MessageParameterType.OBJECT_PROPERTY_FILTER,
-  ]) {
-    assert.isTrue(REQUEST_UPDATE_ALLOWED_PARAMS.has(type));
-  }
-});
-
-/**
- * draft-ietf-moq-transport-22 §9.20.20 / §9.20.1:
  * TRACK_NAMESPACE_PREFIX を subscription 系 REQUEST_UPDATE のスコープ検証に
  * かけると PROTOCOL_VIOLATION の SessionError が返ることを検証する。
  */
@@ -354,25 +257,6 @@ test("TRACK_NAMESPACE_PREFIX 付き subscription 系 REQUEST_UPDATE は PROTOCOL
     "REQUEST_UPDATE",
   );
   assertProtocolViolation(error);
-});
-
-/**
- * draft-ietf-moq-transport-22 §9.5 (REQUEST_UPDATE) の SUBSCRIBE_TRACKS 向け一覧:
- * "AUTHORIZATION_TOKEN / FORWARD / TRACK_PROPERTY_FILTER / TRACK_NAMESPACE_PREFIX"
- * に対応する 4 型が NAMESPACE_REQUEST_UPDATE_ALLOWED_PARAMS に含まれる。
- */
-test("NAMESPACE_REQUEST_UPDATE_ALLOWED_PARAMS は §9.5 の 4 型を含む", () => {
-  assert.isTrue(
-    NAMESPACE_REQUEST_UPDATE_ALLOWED_PARAMS.has(MessageParameterType.TRACK_NAMESPACE_PREFIX),
-  );
-  assert.isTrue(
-    NAMESPACE_REQUEST_UPDATE_ALLOWED_PARAMS.has(MessageParameterType.AUTHORIZATION_TOKEN),
-  );
-  assert.isTrue(NAMESPACE_REQUEST_UPDATE_ALLOWED_PARAMS.has(MessageParameterType.FORWARD));
-  assert.isTrue(
-    NAMESPACE_REQUEST_UPDATE_ALLOWED_PARAMS.has(MessageParameterType.TRACK_PROPERTY_FILTER),
-  );
-  assert.equal(NAMESPACE_REQUEST_UPDATE_ALLOWED_PARAMS.size, 4);
 });
 
 /**

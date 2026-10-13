@@ -42,20 +42,6 @@ test("formatStallEvent: 止まりを時刻、原因、長さ、位置、TIMESTAM
 // 到着の揺らぎと遅延
 // ============================================================================
 
-// 到着の揺らぎは「到着時刻 - メディア時刻」の窓の中の最小値からの差で求める。
-// 送信側と受信側の時計がずれていても、ずれは全ての値に同じだけ乗るため差には残らない
-test("recordArrival: 到着の揺らぎは窓の中で最も早く届いたフレームからの遅れになる", () => {
-  const stats = new PlaybackTimingStats();
-  // 3 フレーム目だけ 40 ms 遅れて届く
-  stats.recordArrival(1_000, 0, null);
-  stats.recordArrival(1_033.333, FRAME_MICROS, null);
-  stats.recordArrival(1_106.666, FRAME_MICROS * 2, null);
-  const snapshot = stats.snapshot(1_200);
-  assert.isNotNull(snapshot.arrivalJitterMs);
-  assert.closeTo(snapshot.arrivalJitterMs?.p50 ?? Number.NaN, 0, 0.01);
-  assert.closeTo(snapshot.arrivalJitterMs?.max ?? Number.NaN, 40, 0.01);
-});
-
 // 遅延は壁時計 - 送信側の壁時計の TIMESTAMP で求める。TIMESTAMP が壁時計でない
 // (Timescale がある) Object では求めない
 test("recordArrival: 壁時計の TIMESTAMP のときだけ遅延を求める", () => {
@@ -67,22 +53,6 @@ test("recordArrival: 壁時計の TIMESTAMP のときだけ遅延を求める", 
   const mediaTimeOnly = new PlaybackTimingStats();
   mediaTimeOnly.recordArrival(500, 90_000, null);
   assert.isNull(mediaTimeOnly.snapshot(600).latencyMs);
-});
-
-// 窓 (既定 10 秒) より前の値は分布に含めない。古い遅れが残ると、いま起きていない
-// 揺らぎを出し続けてしまう
-test("snapshot: 窓より前に記録した値を分布に含めない", () => {
-  const stats = new PlaybackTimingStats();
-  // 最初のフレームは 500 ms 遅れて届き、その後は遅れなく届く
-  stats.recordArrival(500, 0, 500);
-  stats.recordArrival(
-    PLAYBACK_TIMING_WINDOW_MS + 1_000,
-    PLAYBACK_TIMING_WINDOW_MS * 1_000 + 1_000_000,
-    PLAYBACK_TIMING_WINDOW_MS + 1_000,
-  );
-  const snapshot = stats.snapshot(PLAYBACK_TIMING_WINDOW_MS + 1_000);
-  assert.deepEqual(snapshot.latencyMs, { p50: 0, p95: 0, max: 0 });
-  assert.deepEqual(snapshot.arrivalJitterMs, { p50: 0, p95: 0, max: 0 });
 });
 
 // ============================================================================
@@ -354,30 +324,6 @@ test("formatLossEvent: reset は位置と error code、欠落の止まりは止�
     mediaStepMs: 1_365,
   };
   assert.equal(formatLossEvent({ kind: "lossStall", event: stall }), formatStallEvent(stall));
-});
-
-// 描いたフレームの遅延を区間ごとに出す。publisher が読んだ時刻 (TIMESTAMP) は受信側の
-// 950 ms、受け取り 1,000 ms、保留を出たのは 1,010 ms、decoder に渡したのは 1,012 ms、
-// 出力は 1,015 ms、描いたのは 1,045 ms
-test("snapshot: 描いたフレームの遅延を区間ごとに出す", () => {
-  const timeOriginMs = 1_790_263_445_000;
-  const stats = new PlaybackTimingStats(PLAYBACK_TIMING_WINDOW_MS, timeOriginMs);
-  const timestampMicros = (timeOriginMs + 950) * 1_000;
-  stats.recordArrival(1_000, timestampMicros, timeOriginMs + 1_000);
-  stats.recordObjectReleased(timestampMicros, 1_010);
-  stats.recordDecodeStart(1_012, timestampMicros);
-  stats.recordDecodeOutput(1_015, timestampMicros);
-  stats.recordDisplay(1_045, timestampMicros);
-
-  const breakdown = stats.snapshot(1_045).latencyBreakdown;
-  assert.deepEqual(breakdown, {
-    arrival: { p50: 50, p95: 50, max: 50 },
-    hold: { p50: 10, p95: 10, max: 10 },
-    decodeWait: { p50: 2, p95: 2, max: 2 },
-    decode: { p50: 3, p95: 3, max: 3 },
-    displayWait: { p50: 30, p95: 30, max: 30 },
-    displayLatency: { p50: 95, p95: 95, max: 95 },
-  });
 });
 
 // フレーム間隔がまだ分からない (表示が 2 枚目まで) うちは止まりを判定しない

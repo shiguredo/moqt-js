@@ -37,38 +37,10 @@ test("KEYFRAME_INTERVAL_OPTIONS: 選択肢は昇順で重複しない", () => {
 // キーフレーム要求の判定
 // ============================================================================
 
-// 先頭フレーム (直前のキーフレームが無い) と、直前のキーフレームから間隔だけ経過した
-// フレームにキーフレームを要求する。間隔を無視して全フレームをキーフレームにすると
-// 帯域を浪費し、要求が一度も出ないと購読開始時に復号を始められない。境界 (先頭、
-// 間隔 - 1 μs、間隔、間隔 + 1 μs、2 * 間隔 - 1 μs、2 * 間隔) を固定する
-test("shouldRequestKeyFrame: 先頭フレームと間隔の経過で true になる", () => {
-  const intervalSeconds = 10;
-  const intervalUs = intervalSeconds * 1_000_000;
-  assert.isTrue(shouldRequestKeyFrame(null, 0, intervalSeconds));
-  assert.isTrue(shouldRequestKeyFrame(0, intervalUs, intervalSeconds));
-  assert.isTrue(shouldRequestKeyFrame(0, intervalUs * 2, intervalSeconds));
-
-  // 間隔に届く前はキーフレームを要求しない
-  assert.isFalse(shouldRequestKeyFrame(0, 1, intervalSeconds));
-  assert.isFalse(shouldRequestKeyFrame(0, intervalUs - 1, intervalSeconds));
-  // 間隔に届いたフレームでは要求する (直前のキーフレームが 0 のままであれば、
-  // 間隔を過ぎたどのフレームでも要求する)
-  assert.isTrue(shouldRequestKeyFrame(0, intervalUs + 1, intervalSeconds));
-  assert.isTrue(shouldRequestKeyFrame(0, intervalUs * 2 - 1, intervalSeconds));
-});
-
-// 直前のキーフレームが 0 でない場合も、経過時間だけで判定する
-test("shouldRequestKeyFrame: 直前のキーフレームが 0 でなくても経過時間で判定する", () => {
-  const baseUs = 5_000_000;
-  assert.isFalse(shouldRequestKeyFrame(baseUs, baseUs + 9_999_999, 10));
-  assert.isTrue(shouldRequestKeyFrame(baseUs, baseUs + 10_000_000, 10));
-});
-
-// timestamp が巻き戻ったフレーム (映像の入力が差し替わった) は先頭として扱う。
-// 巻き戻りを無視すると、差し替え後にキーフレームが現れず購読側が復号を始められない
-test("shouldRequestKeyFrame: timestamp が巻き戻ったら true になる", () => {
-  assert.isTrue(shouldRequestKeyFrame(5_000_000, 0, 10));
-});
+// 有効な間隔での判定 (先頭フレーム、間隔の境界、timestamp の巻き戻り) は、委譲先の
+// ライブラリ関数 (shouldSendKeyFrame) の境界として src/createMediaPublisher.test.ts が
+// 固定している (この関数は正規化した間隔をそのまま渡すだけ)。ここでは devtools 固有の
+// 正規化、つまり無効な間隔を既定値として判定することを固定する
 
 // 0 を渡すと経過時間の比較が成立せず、キーフレームの要求が意図した周期で出ない。
 // 0 / 負値 / NaN / ±Infinity は既定値の間隔として判定し、呼び出し側の配信ループを

@@ -1,5 +1,5 @@
 import { test, assert } from "vite-plus/test";
-import { AuthorizationTokenAliasType, C4M, validateTrackNamespaceForSend } from "moqt-js";
+import { AuthorizationTokenAliasType, C4M } from "moqt-js";
 import {
   applyC4mFromUrl,
   applyRelayUriInput,
@@ -800,27 +800,23 @@ test("initFromUrl / buildQueryString: renderGroup を全ての選択肢で往復
 
 // 許可リストに無い値と非整数は無視する。小数表記や指数表記も整数の値としては等しくても、
 // select の選択肢が作る表記ではないため受理しない。既に指定済みの値は不正な URL で
-// 上書きしない (空文字は「未指定」であり、下のテストで別に固定する)
-test("initFromUrl: 許可リストに無い値と非整数の targetLatency は無視する", () => {
-  for (const invalid of ["12345", "50.5", "50.0", "1e2", "abc", "-50", "0.0.0"]) {
-    targetLatency.value = null;
-    initFromUrl(`targetLatency=${invalid}`);
-    assert.isNull(targetLatency.value, `${invalid} を無視する`);
-  }
+// 上書きしない (空文字は「未指定」であり、下のテストで別に固定する)。値の判定そのものは
+// resolveOptionNumber のテストが許可リストごとに固定し、ここでは URL の値がその判定へ
+// 渡り、不正な値で現在の値が保たれることを代表 1 値で確かめる
+test("initFromUrl: 許可リストに無い targetLatency と renderGroup は無視する", () => {
+  targetLatency.value = null;
+  initFromUrl("targetLatency=12345");
+  assert.isNull(targetLatency.value, "許可リストに無い値を無視する");
 
   // 既に指定済みの値は、不正な URL で上書きしない
   targetLatency.value = 100;
   initFromUrl("targetLatency=12345");
   assert.equal(targetLatency.value, 100);
   targetLatency.value = null;
-});
 
-test("initFromUrl: 許可リストに無い値と非整数の renderGroup は無視する", () => {
-  for (const invalid of ["2", "0.5", "1.0", "yes", "0.0.0"]) {
-    renderGroup.value = null;
-    initFromUrl(`renderGroup=${invalid}`);
-    assert.isNull(renderGroup.value, `${invalid} を無視する`);
-  }
+  renderGroup.value = null;
+  initFromUrl("renderGroup=2");
+  assert.isNull(renderGroup.value, "許可リストに無い値を無視する");
 
   // 既に指定済みの値は、不正な URL で上書きしない
   renderGroup.value = 0;
@@ -1025,14 +1021,6 @@ test("namespaceProblem: 32 フィールドの Namespace は接続に使える", 
   assert.equal(requireConnectNamespace().length, 32);
 
   resetMsfFragmentSettings();
-});
-
-// devtools はリポジトリ内で公開 API を使う利用者である。`src/index.ts` の公開リストから検証関数を
-// 取り出して実行できることを固定する (境界値・error path・メッセージの意味論は src/session/params.test.ts
-// と src/session/params.prop.ts が担う)
-test("公開 API の validateTrackNamespaceForSend を実行できる", () => {
-  assert.doesNotThrow(() => validateTrackNamespaceForSend(["15551", "spam"]));
-  assert.throws(() => validateTrackNamespaceForSend([".session"]), /reserved/);
 });
 
 // --- msf fragment の namespace ---

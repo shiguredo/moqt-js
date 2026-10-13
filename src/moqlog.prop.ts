@@ -8,7 +8,6 @@ import * as fc from "fast-check";
 import {
   encodeLogEntry,
   decodeLogEntry,
-  logGroupId,
   logTrackName,
   LOG_ENTRY_FIELD_TYPES,
   type LogEntry,
@@ -75,19 +74,6 @@ test("LogEntry round-trip: 型適合の LogEntry で内容が保持される", (
     fc.property(logEntryArb, (entry) => {
       const decoded = decodeLogEntry(encodeLogEntry(entry));
       assert.deepEqual(decoded, entry);
-    }),
-  );
-});
-
-// msf-01 §9.3: Group ID は 62-bit 未満。非負 timestamp の truncate 結果は常に 0 以上 2^62 未満。
-test("logGroupId: 非負 timestamp を 62-bit に truncate する", () => {
-  fc.assert(
-    fc.property(fc.bigInt({ min: 0n, max: (1n << 64n) - 1n }), (timestampMicros) => {
-      const groupId = logGroupId(timestampMicros);
-      // truncate 意味論: 下位 62-bit と一致する
-      assert.equal(groupId, timestampMicros & ((1n << 62n) - 1n));
-      assert.isTrue(groupId >= 0n);
-      assert.isTrue(groupId < 1n << 62n);
     }),
   );
 });

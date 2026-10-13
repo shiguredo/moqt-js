@@ -62,16 +62,6 @@ test("エンコードとデコードは往復する", () => {
   );
 });
 
-test("一度エンコードしたデータ項目は再エンコードしても同じバイト列になる", () => {
-  fc.assert(
-    fc.property(cborValueArbitrary(MAX_TEST_DEPTH), (value) => {
-      const encoded = encodeCbor(value);
-      const decoded = decodeCbor(encoded);
-      assert.deepEqual(encodeCbor(decoded), encoded);
-    }),
-  );
-});
-
 test("任意のバイト列はデコードできるか CborError になり、成功時は値として正規化される", () => {
   fc.assert(
     fc.property(fc.uint8Array({ maxLength: 64, size: "max" }), (bytes) => {

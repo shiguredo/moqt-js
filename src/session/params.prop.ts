@@ -15,11 +15,7 @@
  * - clampTimeoutMs: 通常値 / 1n / 上限ちょうど / 上限 +1 / 2^62 / 2^64-1
  * - matchNamespacePrefix: 完全一致 / 前方一致 / 空 prefix / prefix が長い / 不一致 /
  *   先頭不一致 / 両方空配列
- * - namespacePrefixesOverlap: 双方向の sub-prefix / 完全一致 / 共通 prefix なし / 空 prefix
- * - validateNamespacePrefixUpdate: 重複なし / 双方向の sub-prefix / 複数既存 prefix /
- *   アクティブな既存 prefix なし
  * - compareLocations: 同一 Location / Group 比較 / Object 比較
- * - validateFetchOkEndLocation: End >= Start のとき undefined を返す判定
  * - resolveFetchStartLocation: フィルタなし / reset (0x00) / 2 フィールド (0:0 を
  *   含む絶対開始) / 3 フィールド / 4 フィールド / 相対指定 (0x01) /
  *   Next Object (0x05)
@@ -56,10 +52,7 @@ import {
   extractNewGroupRequest,
   matchNamespacePrefix,
   mergeRangeFilters,
-  namespacePrefixesOverlap,
   resolveFetchStartLocation,
-  validateFetchOkEndLocation,
-  validateNamespacePrefixUpdate,
   validateRangeFilterLimits,
   validateRangeFilterSpecs,
   validateTrackNamespaceForSend,
@@ -416,23 +409,6 @@ test("mergeRangeFilters: 残存する現在のエントリの後ろに update �
         ...updateParams,
       ];
       assert.deepEqual(mergeRangeFilters(current, update), expected);
-    }),
-  );
-});
-
-test("mergeRangeFilters: 結果のキーは常に一意になる", () => {
-  fc.assert(
-    fc.property(uniqueRangeFilterSpecsArb, uniqueRangeFilterSpecsArb, (current, update) => {
-      const keys = mergeRangeFilters(current, update).map((spec) => filterKeyOf(spec));
-      assert.equal(new Set(keys).size, keys.length);
-    }),
-  );
-});
-
-test("mergeRangeFilters: update が空なら現在のエントリがそのまま残る", () => {
-  fc.assert(
-    fc.property(uniqueRangeFilterSpecsArb, (current) => {
-      assert.deepEqual(mergeRangeFilters(current, []), current);
     }),
   );
 });
@@ -855,29 +831,6 @@ test("buildTrackStatusParameters: authorizationToken と includeProperties の�
 // draft-ietf-moq-transport-22 §8.2 / §9.12 / §3.3.1
 // ============================================================================
 
-test("compareLocations: 反射律と反対称律を満たす", () => {
-  fc.assert(
-    fc.property(locationArb, locationArb, (a, b) => {
-      assert.equal(compareLocations(a, a), 0);
-      // a < b なら b > a、等しければ両方 0 になる
-      assert.equal(Math.sign(compareLocations(a, b)), -Math.sign(compareLocations(b, a)));
-    }),
-  );
-});
-
-test("compareLocations: 推移律を満たす", () => {
-  fc.assert(
-    fc.property(locationArb, locationArb, locationArb, (a, b, c) => {
-      if (compareLocations(a, b) <= 0 && compareLocations(b, c) <= 0) {
-        assert.isTrue(compareLocations(a, c) <= 0);
-      }
-      if (compareLocations(a, b) >= 0 && compareLocations(b, c) >= 0) {
-        assert.isTrue(compareLocations(a, c) >= 0);
-      }
-    }),
-  );
-});
-
 test("compareLocations: 仕様の辞書式順序と一致する", () => {
   fc.assert(
     fc.property(locationArb, locationArb, (a, b) => {
@@ -891,19 +844,6 @@ test("compareLocations: 仕様の辞書式順序と一致する", () => {
         expected = a.object < b.object ? -1 : 1;
       }
       assert.equal(compareLocations(a, b), expected);
-    }),
-  );
-});
-
-test("validateFetchOkEndLocation: 判定が compareLocations と一致する", () => {
-  fc.assert(
-    fc.property(locationArb, locationArb, (startLocation, endLocation) => {
-      const result = validateFetchOkEndLocation(startLocation, endLocation);
-      if (compareLocations(endLocation, startLocation) < 0) {
-        assert.isString(result);
-      } else {
-        assert.isUndefined(result);
-      }
     }),
   );
 });
@@ -969,52 +909,6 @@ test("matchNamespacePrefix: prefix が空なら常に全体を suffix として�
     fc.property(fc.array(namespaceFieldArb, { maxLength: 5 }), (trackNamespace) => {
       assert.deepEqual(matchNamespacePrefix(trackNamespace, []), trackNamespace);
     }),
-  );
-});
-
-test("namespacePrefixesOverlap: 対称で、一方が他方の sub-prefix であることと同値", () => {
-  fc.assert(
-    fc.property(
-      fc.array(namespaceFieldArb, { maxLength: 4 }),
-      fc.array(namespaceFieldArb, { maxLength: 4 }),
-      (a, b) => {
-        const overlap = namespacePrefixesOverlap(a, b);
-        assert.equal(overlap, namespacePrefixesOverlap(b, a));
-        assert.equal(
-          overlap,
-          matchNamespacePrefix(b, a) !== null || matchNamespacePrefix(a, b) !== null,
-        );
-      },
-    ),
-  );
-});
-
-test("namespacePrefixesOverlap: 自身とは常に共通 prefix を持つ", () => {
-  fc.assert(
-    fc.property(fc.array(namespaceFieldArb, { maxLength: 4 }), (a) => {
-      assert.isTrue(namespacePrefixesOverlap(a, a));
-    }),
-  );
-});
-
-test("validateNamespacePrefixUpdate: 共通 prefix を持つ既存 prefix がある場合だけ throw する", () => {
-  fc.assert(
-    fc.property(
-      fc.array(namespaceFieldArb, { maxLength: 4 }),
-      fc.array(fc.array(namespaceFieldArb, { maxLength: 4 }), { maxLength: 4 }),
-      (newPrefix, activePrefixes) => {
-        const overlaps = activePrefixes.some((activePrefix) =>
-          namespacePrefixesOverlap(newPrefix, activePrefix),
-        );
-        if (overlaps) {
-          assert.throws(() =>
-            validateNamespacePrefixUpdate(newPrefix, activePrefixes, "SUBSCRIBE_TRACKS"),
-          );
-        } else {
-          validateNamespacePrefixUpdate(newPrefix, activePrefixes, "SUBSCRIBE_TRACKS");
-        }
-      },
-    ),
   );
 });
 

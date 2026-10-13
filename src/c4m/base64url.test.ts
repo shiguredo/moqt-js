@@ -12,7 +12,7 @@ import {
   encodeBase64Url,
   tryDecodeBase64OrUrl,
 } from "./base64url";
-import { assertBase64Error, encodeBase64Standard } from "./testSupport";
+import { assertBase64Error } from "./testSupport";
 
 test("RFC 4648 Section 10 のベクタをエンコードできる", () => {
   const vectors: Array<[string, string]> = [
@@ -37,22 +37,8 @@ test("base64url のアルファベット (62 / 63 文字目) を扱える", () =
   assert.equal(encodeBase64Url(bytes), "-_8");
   assert.deepEqual(decodeBase64Url("-_8"), bytes);
   // 標準アルファベットは decodeBase64OrUrl だけが受け付ける
+  // (パディングあり / なしの標準 Base64 の受理は base64url.prop.ts の PBT が担う)
   assert.deepEqual(decodeBase64OrUrl("+/8"), bytes);
-});
-
-test("パディング付きの base64url もデコードできる", () => {
-  // JWK (RFC 7517) はパディング無しが仕様だが、パディング付きの入力も受理する
-  assert.deepEqual(decodeBase64Url("Zm9v"), new TextEncoder().encode("foo"));
-  assert.deepEqual(decodeBase64Url("Zm8="), new TextEncoder().encode("fo"));
-  assert.deepEqual(decodeBase64Url("Zg=="), new TextEncoder().encode("f"));
-});
-
-test("標準 Base64 (パディングあり / なし) もデコードできる", () => {
-  // draft-ietf-moq-c4m-01 Section 2 / Section 4: URL への埋め込みは標準 Base64
-  const bytes = new Uint8Array([0x00, 0x01, 0x02, 0x03, 0x04]);
-  assert.deepEqual(decodeBase64OrUrl(encodeBase64Standard(bytes, true)), bytes);
-  assert.deepEqual(decodeBase64OrUrl(encodeBase64Standard(bytes, false)), bytes);
-  assert.deepEqual(decodeBase64OrUrl(encodeBase64Url(bytes)), bytes);
 });
 
 test("不正な base64url を拒否する", () => {

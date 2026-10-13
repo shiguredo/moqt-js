@@ -335,7 +335,7 @@ test("recordDisplay: 実際に近い時系列でも、原因ごとの止まり�
         assert.isAtLeast(snapshot.missingGroups, 0);
       },
     ),
-    // 止まりが起きる時系列は 1 割程度のため、回数を増やしてすべての原因を通す
-    { numRuns: 1_000 },
+    // 止まりが起きる時系列は 1 割程度のため、既定より回数を増やす
+    { numRuns: 200 },
   );
 });

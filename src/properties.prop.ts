@@ -10,7 +10,6 @@ import {
   decodePriorGroupIdGap,
   encodePriorObjectIdGap,
   decodePriorObjectIdGap,
-  encodeProperty,
   encodeProperties,
   encodeImmutableProperties,
   decodeImmutableProperties,
@@ -248,30 +247,6 @@ const oddPropertyArb = fc
  * 任意の Property を生成する Arbitrary
  */
 const propertyArb = fc.oneof(evenPropertyArb, oddPropertyArb);
-
-test("encodeProperty のラウンドトリップ: 偶数 ID", () => {
-  fc.assert(
-    fc.property(evenPropertyArb, (header) => {
-      const encoded = encodeProperty(header);
-
-      // エンコードされたデータが正しい形式であることを確認
-      // ID + value の形式
-      assert.isTrue(encoded.length >= 2);
-    }),
-  );
-});
-
-test("encodeProperty のラウンドトリップ: 奇数 ID", () => {
-  fc.assert(
-    fc.property(oddPropertyArb, (header) => {
-      const encoded = encodeProperty(header);
-
-      // エンコードされたデータが正しい形式であることを確認
-      // ID + length + data の形式
-      assert.isTrue(encoded.length >= 2);
-    }),
-  );
-});
 
 /**
  * draft-ietf-moq-transport-22:

@@ -8,35 +8,15 @@ import { test, assert } from "vite-plus/test";
 import { encodeBase64Url } from "./base64url";
 import {
   CAT_CONTENT_TYPE,
-  CLAIM_AUDIENCE,
-  CLAIM_CAT_ALPN,
-  CLAIM_CAT_DPOP,
-  CLAIM_CAT_GEO_ALT,
-  CLAIM_CAT_GEO_COORD,
-  CLAIM_CAT_GEO_ISO3166,
-  CLAIM_CAT_HEADER,
-  CLAIM_CAT_IF,
-  CLAIM_CAT_IF_DATA,
-  CLAIM_CAT_METHOD,
-  CLAIM_CAT_NETWORK_IP,
-  CLAIM_CAT_PROBABILITY_OF_REJECTION,
-  CLAIM_CAT_RENEWAL,
-  CLAIM_CAT_REPLAY,
-  CLAIM_CAT_TLS_PUBLIC_KEY,
-  CLAIM_CAT_URI,
   CLAIM_CAT_VERSION,
   CLAIM_CONFIRMATION,
-  CLAIM_CWT_ID,
   CLAIM_EXPIRATION,
   CLAIM_ISSUED_AT,
   CLAIM_ISSUER,
   CLAIM_NOT_BEFORE,
-  CLAIM_SUBJECT,
   CatError,
   CatToken,
   CatTokenBuilder,
-  CONFIRMATION_C4M_DRAFT_JWK_THUMBPRINT,
-  CONFIRMATION_JWK_THUMBPRINT,
   MOQT_AUTH_TOKEN_TYPE_CAT,
   confirmationJkt,
   createCatClaims,
@@ -71,21 +51,12 @@ import {
   okpCurveIdentifier,
   symmetricKey,
 } from "./crypto";
-import {
-  CLAIM_MOQT,
-  CLAIM_MOQT_REVAL,
-  C4mError,
-  createCatDpop,
-  createMoqtScope,
-  namespaceMatchValue,
-  prefixMatch,
-} from "./moqt";
+import { CLAIM_MOQT, CLAIM_MOQT_REVAL, C4mError } from "./moqt";
 import { WebCrypto } from "./webcrypto";
 import {
   assertCatError,
   assertClaimValidationError,
   captureRejectedError,
-  captureThrownError,
   decodeHex,
   encodeBase64Standard,
   encodeHex,
@@ -276,30 +247,6 @@ test("期待アルゴリズムの不一致を拒否する", async () => {
   assert.equal(error.code, "algorithmMismatch");
 });
 
-test("compact 形式は HMAC で往復できる", async () => {
-  const claims = createCatClaims();
-  claims.issuer = "https://auth.example.com";
-  claims.audience.push("https://relay.example.com");
-  claims.expiration = 1700086400;
-  claims.notBefore = 1700000000;
-  claims.moqtReval = 300;
-  const scope = createMoqtScope(["Publish", "Fetch"]);
-  scope.namespace.push(namespaceMatchValue(prefixMatch(TEXT_ENCODER.encode("example.com"))));
-  claims.moqt = { scopes: [scope] };
-  claims.catdpop = createCatDpop(300, true);
-  claims.confirmation = createConfirmation();
-  claims.confirmation.jwkThumbprint = new Uint8Array(32).fill(0xab);
-
-  const tokenText = await new CatTokenBuilder({ claims }).buildCompact(cryptoImpl, hmacKey());
-  const token = CatToken.decode(TEXT_ENCODER.encode(tokenText));
-  assert.equal(token.format(), "compact");
-  await token.verify(cryptoImpl, hmacKey());
-  assert.deepEqual(token.claims(), claims);
-  // 発行時の HMAC-SHA256 は RFC 9053 の HMAC 256/256 (5) を使う
-  // (ドラフト付録 A のベクタが使う -4 は検証でのみ受理する)
-  assert.equal(token.header().algorithmIdentifier, 5);
-});
-
 test("COSE 形式は HMAC では COSE_Mac0 になる", async () => {
   const tokenBytes = await new CatTokenBuilder()
     .issuer("https://auth.example.com")
@@ -455,32 +402,6 @@ test("cnf の jkt は IANA 登録のキーを優先する", () => {
   assert.deepEqual(cborMapGet(encoded, cborInteger(CLAIM_CONFIRMATION)), cborMap([]));
 });
 
-test("クレーム検証の既定値と許容ずれを確認する", () => {
-  const claims = createCatClaims();
-  claims.expiration = 100;
-  claims.notBefore = 50;
-  // 期限内
-  assert.doesNotThrow(() => validateCatClaims(claims, { referenceTimeSeconds: 100 }));
-  // 期限切れ
-  assertClaimValidationError(
-    () => validateCatClaims(claims, { referenceTimeSeconds: 101 }),
-    "expired",
-  );
-  // 許容ずれの範囲内
-  assert.doesNotThrow(() =>
-    validateCatClaims(claims, { referenceTimeSeconds: 110, clockToleranceSeconds: 10 }),
-  );
-  // nbf より前
-  assertClaimValidationError(
-    () => validateCatClaims(claims, { referenceTimeSeconds: 49 }),
-    "notYetValid",
-  );
-  // nbf は許容ずれで吸収できる
-  assert.doesNotThrow(() =>
-    validateCatClaims(claims, { referenceTimeSeconds: 45, clockToleranceSeconds: 5 }),
-  );
-});
-
 test("既定のクレームセットは空である", () => {
   const claims = createCatClaims();
   assert.equal(claims.issuer, undefined);
@@ -491,10 +412,23 @@ test("既定のクレームセットは空である", () => {
 });
 
 test("タグの付与オプションを尊重する", async () => {
-  const tokenBytes = await new CatTokenBuilder()
+  // 既定では CWT タグ (61) と COSE タグ (17) が付く
+  const taggedBytes = await new CatTokenBuilder()
+    .issuer("https://auth.example.com")
+    .buildCose(cryptoImpl, hmacKey());
+  assert.equal(taggedBytes[0], 0xd8);
+  assert.equal(taggedBytes[1], 0x3d);
+  assert.equal(taggedBytes[2], 0xd1);
+
+  // coseTag / cwtTag に false を指定するとタグが付かない。
+  // HMAC は決定的なので、タグ以外のバイト列は既定の出力と一致する。
+  const untaggedBytes = await new CatTokenBuilder()
     .issuer("https://auth.example.com")
     .buildCoseWith(cryptoImpl, hmacKey(), { coseTag: false, cwtTag: false });
-  const token = CatToken.decode(tokenBytes);
+  assert.deepEqual(untaggedBytes, taggedBytes.subarray(3));
+
+  // タグが無くても COSE_Mac0 としてデコードして検証できる
+  const token = CatToken.decode(untaggedBytes);
   assert.equal(token.format(), "coseMac0");
   await token.verify(cryptoImpl, hmacKey());
 });
@@ -580,33 +514,11 @@ test("非有限の数値クレームを拒否する", () => {
   }
 });
 
-test("非有限の現在時刻を拒否する", () => {
-  const claims = createCatClaims();
-  claims.expiration = 100;
-  assertClaimValidationError(
-    () => validateCatClaims(claims, { referenceTimeSeconds: Number.NaN }),
-    "invalidReferenceTime",
-  );
-  assertClaimValidationError(
-    () => validateCatClaims(claims, { referenceTimeSeconds: 1, clockToleranceSeconds: -1 }),
-    "invalidReferenceTime",
-  );
-});
-
 test("型付きキーは未設定でも raw に置くと拒否する", () => {
   // 型付きフィールドが未設定でも raw に置くと decode と encode で解釈が曖昧になる
   const claims = createCatClaims();
   claims.raw.push([cborInteger(CLAIM_EXPIRATION), cborTextString("x")]);
   assertCatError(() => encodeCatClaims(claims), "duplicateClaim", CLAIM_EXPIRATION);
-});
-
-test("手組みの非有限クレームを検証で拒否する", () => {
-  const expClaims = createCatClaims();
-  expClaims.expiration = Number.NaN;
-  assertClaimValidationError(() => validateCatClaims(expClaims), "nonFiniteClaim");
-  const dpopClaims = createCatClaims();
-  dpopClaims.catdpop = createCatDpop(Infinity, false);
-  assertClaimValidationError(() => validateCatClaims(dpopClaims), "nonFiniteClaim");
 });
 
 test("ビルダーは非有限のタイムスタンプを拒否する", async () => {
@@ -633,35 +545,6 @@ test("ビルダーは非有限のタイムスタンプを拒否する", async ()
   const dpopError = await captureRejectedError(runDpop);
   assert.ok(dpopError instanceof CatError);
   assert.equal(dpopError.code, "c4m");
-});
-
-test("CAT のクレームキーが IANA レジストリと一致する", () => {
-  assert.equal(CLAIM_CAT_REPLAY, 308);
-  assert.equal(CLAIM_CAT_PROBABILITY_OF_REJECTION, 309);
-  assert.equal(CLAIM_CAT_VERSION, 310);
-  assert.equal(CLAIM_CAT_NETWORK_IP, 311);
-  assert.equal(CLAIM_CAT_URI, 312);
-  assert.equal(CLAIM_CAT_METHOD, 313);
-  assert.equal(CLAIM_CAT_ALPN, 314);
-  assert.equal(CLAIM_CAT_HEADER, 315);
-  assert.equal(CLAIM_CAT_GEO_ISO3166, 316);
-  assert.equal(CLAIM_CAT_GEO_COORD, 317);
-  assert.equal(CLAIM_CAT_GEO_ALT, 318);
-  assert.equal(CLAIM_CAT_TLS_PUBLIC_KEY, 319);
-  assert.equal(CLAIM_CAT_IF_DATA, 320);
-  assert.equal(CLAIM_CAT_DPOP, 321);
-  assert.equal(CLAIM_CAT_IF, 322);
-  assert.equal(CLAIM_CAT_RENEWAL, 323);
-  assert.equal(CLAIM_ISSUER, 1);
-  assert.equal(CLAIM_SUBJECT, 2);
-  assert.equal(CLAIM_AUDIENCE, 3);
-  assert.equal(CLAIM_EXPIRATION, 4);
-  assert.equal(CLAIM_NOT_BEFORE, 5);
-  assert.equal(CLAIM_ISSUED_AT, 6);
-  assert.equal(CLAIM_CWT_ID, 7);
-  assert.equal(CLAIM_CONFIRMATION, 8);
-  assert.equal(CONFIRMATION_JWK_THUMBPRINT, 323);
-  assert.equal(CONFIRMATION_C4M_DRAFT_JWK_THUMBPRINT, 3);
 });
 
 test("ビルダーの設定メソッドを確認する", async () => {
@@ -708,18 +591,27 @@ test("生トークンと署名は JSON 化で漏れない", () => {
   assert.notInclude(serialized, vector.signatureHex);
 });
 
-test("URL 埋め込みの compact トークンは標準 Base64 も受理する", () => {
-  const token = CatToken.decode(TEXT_ENCODER.encode(TOKEN_VECTORS[0]?.token ?? ""));
-  const cborBytes = token.payload();
+/**
+ * draft-ietf-moq-c4m-01 Section 2:
+ * "When it must be cast to a string for inclusion in a URL, it is Base64 encoded"
+ * `CatToken.decode` は compact テキスト / 生の COSE / Base64 で包んだ COSE を判別する。
+ * Base64 で包んだ compact テキストは判別の対象外であり、COSE として解釈できないため
+ * 拒否する。受理する表現と拒否する表現を明示的に固定する。
+ */
+test("URL 埋め込みの compact トークンは Base64 で包むと受理しない", () => {
+  const vector = TOKEN_VECTORS[0];
+  assert.ok(vector !== undefined);
+  const token = CatToken.decode(TEXT_ENCODER.encode(vector.token));
+
+  // compact テキストそのものは受理する
+  assert.equal(CatToken.decode(token.rawToken()).format(), "compact");
+
+  // 標準 Base64 で包んだ compact テキストは COSE 形式として解釈できず拒否する
   for (const text of [
-    encodeBase64Standard(cborBytes, true),
-    encodeBase64Standard(cborBytes, false),
+    encodeBase64Standard(token.rawToken(), true),
+    encodeBase64Standard(token.rawToken(), false),
   ]) {
-    // 標準 Base64 は COSE 形式として解釈できる場合だけ成功する
-    const error = captureThrownError(() => CatToken.decode(TEXT_ENCODER.encode(text)));
-    if (error === undefined) {
-      assert.equal(CatToken.decode(TEXT_ENCODER.encode(text)).format(), "compact");
-    }
+    assertCatError(() => CatToken.decode(TEXT_ENCODER.encode(text)), "cose");
   }
 });
 

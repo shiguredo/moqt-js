@@ -12,7 +12,7 @@
 import { test, assert } from "vite-plus/test";
 import { DecoderResetBudget } from "./decoderResetBudget";
 
-test("DecoderResetBudget: 上限の 3 回まで再初期化でき、4 回目で false になる", () => {
+test("DecoderResetBudget: 上限の 3 回まで再初期化でき、上限後は拒否し続ける", () => {
   // 復号フレームを得ないまま再初期化を繰り返す状態を上限で打ち切る。
   // 上限は 3 回であり、その次の 1 回だけが拒否される
   const budget = new DecoderResetBudget();
@@ -20,17 +20,8 @@ test("DecoderResetBudget: 上限の 3 回まで再初期化でき、4 回目で 
   assert.isTrue(budget.tryConsume());
   assert.isTrue(budget.tryConsume());
   assert.isTrue(budget.tryConsume());
-  assert.isFalse(budget.tryConsume());
-});
-
-test("DecoderResetBudget: 上限に達した後は消費が 0 未満にならない", () => {
-  // 上限後の tryConsume は何も消費せず false を返し続ける。拒否が消費を減らす実装だと
-  // 残り回数が負になり、次の呼び出しが再び成功する (上限の判定が呼び出し回数に依存する)
-  const budget = new DecoderResetBudget();
-  for (let index = 0; index < 3; index++) {
-    assert.isTrue(budget.tryConsume());
-  }
-
+  // 上限に達した後の tryConsume は何も消費せず false を返し続ける。拒否が消費を減らす
+  // 実装だと残り回数が負になり、次の呼び出しが再び成功する (上限の判定が呼び出し回数に依存する)
   for (let index = 0; index < 10; index++) {
     assert.isFalse(budget.tryConsume());
   }
@@ -65,20 +56,4 @@ test("DecoderResetBudget: restore を繰り返しても上限を超えない", (
     }
     assert.isFalse(budget.tryConsume());
   }
-});
-
-test("DecoderResetBudget: 複数インスタンスは独立する", () => {
-  // デコーダーごとに予算を持つ。片方の消費が他方に影響しない
-  const first = new DecoderResetBudget();
-  const second = new DecoderResetBudget();
-
-  for (let index = 0; index < 3; index++) {
-    assert.isTrue(first.tryConsume());
-  }
-  assert.isFalse(first.tryConsume());
-  // 他方は消費されていないため、上限の 3 回が成功して 4 回目が false になる
-  for (let index = 0; index < 3; index++) {
-    assert.isTrue(second.tryConsume());
-  }
-  assert.isFalse(second.tryConsume());
 });

@@ -11,7 +11,6 @@ import { ProtocolViolationError } from "./error";
 
 import { encodeJson } from "./testSupport/helpers";
 import {
-  LOG_SEVERITY_LEVELS,
   MOQLOG_NAMESPACE_PREFIX,
   encodeLogEntry,
   decodeLogEntry,
@@ -66,29 +65,16 @@ test("LogEntry: 不正 UTF-8 バイトは throw", () => {
   assert.throws(() => decodeLogEntry(bytes), /invalid moqlog payload JSON/);
 });
 
-// severity 文字列 ↔ 優先度（0-7）の対応（msf-01 §9.2 / [RFC5424]）。
-test("LOG_SEVERITY_LEVELS: syslog severity の対応", () => {
-  assert.equal(LOG_SEVERITY_LEVELS.Emergency, 0);
-  assert.equal(LOG_SEVERITY_LEVELS.Alert, 1);
-  assert.equal(LOG_SEVERITY_LEVELS.Critical, 2);
-  assert.equal(LOG_SEVERITY_LEVELS.Error, 3);
-  assert.equal(LOG_SEVERITY_LEVELS.Warning, 4);
-  assert.equal(LOG_SEVERITY_LEVELS.Notice, 5);
-  assert.equal(LOG_SEVERITY_LEVELS.Informational, 6);
-  assert.equal(LOG_SEVERITY_LEVELS.Debug, 7);
-});
-
 // [MOQLOG] §7 の例は severity に短縮形 "Info" を使うが、§4 本文の正規形は "Informational"。
-// 本表は §4 本文の正規形のみを持ち、decode も値列挙を厳格化しないため "Info" はそのまま通る。
-test("severity 短縮形: LOG_SEVERITY_LEVELS には無く、受理しても正規形へ変換されない", () => {
-  assert.isUndefined(LOG_SEVERITY_LEVELS.Info);
-  assert.equal(LOG_SEVERITY_LEVELS.Informational, 6);
-
+// decode は値列挙を厳格化しないため "Info" はそのまま通る (正規形への変換は行わない)。
+// severity 文字列の任意値の round-trip は moqlog.prop.ts の PBT が検証する。
+test("severity 短縮形: 受理しても正規形へ変換されない", () => {
   const decoded = decodeLogEntry(encodeJson({ severity: "Info" }));
   assert.equal(decoded.severity, "Info");
 });
 
 // msf-01 §9.3: Group ID は Unix epoch マイクロ秒を 62-bit に truncate。
+// 62-bit の境界値は PBT (moqlog.prop.ts) が確率的にしか踏まないため、ここで固定する。
 test("logGroupId: Unix epoch マイクロ秒を 62-bit に truncate する", () => {
   // 62-bit 以内の値はそのまま
   assert.equal(logGroupId(1740807280000000n), 1740807280000000n);
@@ -122,12 +108,7 @@ test("logTrackNamespace: prefix と resourceID の 2 タプル", () => {
 });
 
 // [MOQLOG] §3 / msf-01 §9.2（暫定）: Track Name は priority level の 1 バイト。
-test("logTrackName: priority level の 1 バイトを返す", () => {
-  assert.deepEqual(Array.from(logTrackName(0)), [0]);
-  assert.deepEqual(Array.from(logTrackName(6)), [6]);
-  assert.deepEqual(Array.from(logTrackName(7)), [7]);
-});
-
+// 0-7 の全 level は moqlog.prop.ts の PBT が網羅する。
 test("logTrackName: 0-7 の範囲外・非整数は throw", () => {
   assert.throws(() => logTrackName(-1), /0-7/);
   assert.throws(() => logTrackName(8), /0-7/);
@@ -172,15 +153,10 @@ test("LogEntry: 既知フィールドの型誤りは throw", () => {
 });
 
 // [MOQLOG] §4: pri は RFC5424 の 0-23。本実装は LOG_ENTRY_FIELD_TYPES で finite number の
-// みを検査し、値域は送信側の規約として検査しない。
-test("LogEntry: pri の値域 (0-23) は round-trip で保持される", () => {
-  for (const pri of [0, 1, 23]) {
-    assert.equal(decodeLogEntry(encodeLogEntry({ pri })).pri, pri);
-  }
-});
-
-test("LogEntry: pri の値域外 (負数・24 以上・非整数) も検査せず round-trip で保持される", () => {
-  for (const pri of [-1, 24, 1.5]) {
+// みを検査し、値域は送信側の規約として検査しない。したがって値域内・値域外のいずれも
+// round-trip でそのまま保持される。
+test("LogEntry: pri は値域 (0-23) を検査せず round-trip で保持される", () => {
+  for (const pri of [0, 1, 23, -1, 24, 1.5]) {
     assert.equal(decodeLogEntry(encodeLogEntry({ pri })).pri, pri);
   }
 });

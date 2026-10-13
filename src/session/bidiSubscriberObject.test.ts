@@ -1,15 +1,14 @@
 /**
  * session/bidi.ts の単体テスト: SubscriberImpl の object / datagram 配信と状態遷移
  *
- * SubscriberImpl の handleObject / handleDatagram / setLargestLocation /
- * setTrackAlias / unsubscribe の挙動を検証する。
+ * SubscriberImpl の handleObject / handleDatagram / unsubscribe の挙動を検証する。
  * 実ストリームと実 Map でセッションを構築し、モックやスタブは使わない。
  */
 
 import { test, assert } from "vite-plus/test";
 import { SubscriberImpl } from "../subscriber";
 import { type MoqtObject } from "../dataStream";
-import { ObjectStatus, type Location } from "../message";
+import { ObjectStatus } from "../message";
 
 // ============================================================================
 // SubscriberImpl handleObject / handleDatagram のテスト
@@ -110,31 +109,19 @@ test("SubscriberImpl.handleDatagram: closed 状態では呼ばれない", () => 
 });
 
 // ============================================================================
-// SubscriberImpl setLargestLocation / setTrackProperties のテスト
-// ============================================================================
-
-test("SubscriberImpl.setLargestLocation: largestLocation が設定される", () => {
-  const subscriber = new SubscriberImpl(["test"], "track", 0n, 0n, () => {});
-
-  const location: Location = { group: 5n, object: 10n };
-  subscriber.setLargestLocation(location);
-
-  assert.notEqual(subscriber.largestLocation, null);
-  assert.equal(subscriber.largestLocation!.group, 5n);
-  assert.equal(subscriber.largestLocation!.object, 10n);
-});
-
-test("SubscriberImpl.setTrackAlias: track alias が更新される", () => {
-  const subscriber = new SubscriberImpl(["test"], "track", 0n, 0n, () => {});
-
-  subscriber.setTrackAlias(42n);
-
-  assert.equal(subscriber.getTrackAlias(), 42n);
-});
-
-// ============================================================================
 // SubscriberImpl 状態遷移のテスト
 // ============================================================================
+
+/**
+ * setLargestLocation / setTrackAlias のような代入のみの setter は、代入直後の
+ * getter をそのまま読むだけのテストになると実装の写経になり、仕様変更を検出できない。
+ * - setLargestLocation の初回 null からの設定と上書きは
+ *   src/subscriber.test.ts の「setLargestLocation で largestLocation が更新される」で
+ *   より強い形で検証済み。
+ * - setTrackAlias は SUBSCRIBE_OK 受信時に bidiReadPublishResponse が呼ぶ単一代入であり、
+ *   購読の Track Alias を使った解除処理 (subscribersByAlias 経由) は
+ *   bidiCancelSubscription 等が実ストリームで検証している。
+ */
 
 test("SubscriberImpl: unsubscribe → closed であること", async () => {
   let unsubscribeCalled = false;

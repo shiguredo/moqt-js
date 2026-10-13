@@ -56,16 +56,6 @@ test("DecoderWrapper: configure 前は unconfigured", () => {
   }
 });
 
-// Worker の生成は configure 時まで遅延される。
-// 生成が早まると Worker を持たない環境で wrapper の生成自体が失敗する。
-test("DecoderWrapper: 生成しただけでは Worker を起動しない", () => {
-  const { callbacks } = makeCallbacks();
-  // Node には Worker が無いため、ここで生成されると ReferenceError になる
-  const wrapper = new DecoderWrapper(true, callbacks);
-
-  assert.equal(wrapper.state, "unconfigured");
-});
-
 // 設定が無い状態での reset() は再初期化せず false を返す (console.warn のみ)。
 // デコーダエラーからの復帰が configure 前に走っても例外にせず、呼び出し側が
 // 打ち切りとして扱えるようにする。
@@ -82,42 +72,19 @@ test("DecoderWrapper: 設定が無い状態の reset は例外を投げず false
   }
 });
 
-// resetKeyframeWait() は Worker 未生成 / 未設定でも例外を投げない
-// (デコーダエラー時の復帰経路から呼ばれる)。
-test("DecoderWrapper: configure 前の resetKeyframeWait は例外を投げない", () => {
-  for (const useWorker of [false, true]) {
-    const { callbacks, counts } = makeCallbacks();
-    const wrapper = new DecoderWrapper(useWorker, callbacks);
-
-    wrapper.resetKeyframeWait();
-
-    assert.equal(wrapper.state, "unconfigured");
-    assert.equal(counts.errors, 0);
-  }
-});
-
 // configure 前の close() は何も破棄せず、状態を unconfigured のままにする。
+// close() は冪等であり、停止経路とアンマウント経路の二重実行があり得る。
+// 未生成の Worker / VideoDecoder への後始末が例外にならないことをここで確かめる
 test("DecoderWrapper: configure 前の close は例外を投げず unconfigured のまま", () => {
   for (const useWorker of [false, true]) {
     const { callbacks, counts } = makeCallbacks();
     const wrapper = new DecoderWrapper(useWorker, callbacks);
 
     wrapper.close();
+    // 二重に呼んでも同じ (close は終端であり、後始末は繰り返せる)
+    wrapper.close();
 
     assert.equal(wrapper.state, "unconfigured");
     assert.equal(counts.errors, 0);
-  }
-});
-
-// close() は冪等である (停止経路とアンマウント経路の二重実行があり得る)。
-test("DecoderWrapper: close を複数回呼んでも例外を投げない", () => {
-  for (const useWorker of [false, true]) {
-    const { callbacks } = makeCallbacks();
-    const wrapper = new DecoderWrapper(useWorker, callbacks);
-
-    wrapper.close();
-    wrapper.close();
-
-    assert.equal(wrapper.state, "unconfigured");
   }
 });

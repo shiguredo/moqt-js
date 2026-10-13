@@ -274,78 +274,58 @@ async function readPublishOkWithParameters(
 
 /**
  * draft-ietf-moq-transport-22 §9.20.16:
- * PUBLISH_OK に出現できるのは EXPIRES のみであり、空の PUBLISH_OK は
- * 何も反映せず初期値のまま解決されることを検証する。
+ * PUBLISH_OK に出現できるのは EXPIRES のみである。パラメータ無しと EXPIRES 付きの
+ * どちらもスコープ違反にならず、保留中の発行が同一オブジェクトで解決され、
+ * FORWARD 省略のため forwardState は初期値 true のままであることを表駆動で検証する。
  */
-test("bidiReadPublishResponse: FORWARD 省略の PUBLISH_OK で forwardState が true になる", async () => {
-  const { publisher, resolved } = await readPublishOkWithParameters([]);
+test("bidiReadPublishResponse: パラメータ無し / EXPIRES のみの PUBLISH_OK は forwardState を変えずに解決される", async () => {
+  const cases: { name: string; parameters: { type: number; value: Uint8Array }[] }[] = [
+    { name: "パラメータ無し", parameters: [] },
+    {
+      name: "EXPIRES のみ",
+      parameters: [{ type: MessageParameterType.EXPIRES, value: new Uint8Array([0x0a]) }],
+    },
+  ];
 
-  // 解決された Publisher は保留中のものと同一であり、状態は true になる
-  assert.equal(resolved, publisher);
-  assert.isTrue(publisher.forwardState);
-});
+  for (const testCase of cases) {
+    const { publisher, resolved } = await readPublishOkWithParameters(testCase.parameters);
 
-/**
- * draft-ietf-moq-transport-22 §9.20.16:
- * EXPIRES のみが PUBLISH_OK に出現できる。EXPIRES を含む PUBLISH_OK を
- * 受信した場合、正常に解決されることを検証する。
- */
-test("bidiReadPublishResponse: EXPIRES の PUBLISH_OK は解決される", async () => {
-  const { publisher, resolved } = await readPublishOkWithParameters([
-    { type: MessageParameterType.EXPIRES, value: new Uint8Array([0x0a]) },
-  ]);
-
-  assert.equal(resolved, publisher);
-  assert.isTrue(publisher.forwardState);
-});
-
-/**
- * draft-ietf-moq-transport-22 §9.20.16 / §9.20.1:
- * FORWARD は PUBLISH_OK に出現できない。FORWARD=1 を含む PUBLISH_OK を
- * 受信した場合、PROTOCOL_VIOLATION でセッションを閉じ、保留中の発行を
- * 残さないことを検証する。
- */
-test("bidiReadPublishResponse: FORWARD=1 の PUBLISH_OK で PROTOCOL_VIOLATION", async () => {
-  const ctx = createPublishOkValidationContext([
-    { type: MessageParameterType.FORWARD, value: new Uint8Array([1]) },
-  ]);
-  const stream = ctx.session.requestStreams.get(ctx.requestId) as unknown as {
-    stream: WebTransportBidirectionalStream;
-    controlReader: ControlStreamReader;
-  };
-
-  await bidiReadPublishResponse(ctx.session, ctx.requestId, stream.stream, stream.controlReader);
-
-  assert.isDefined(ctx.closedWithError());
-  assert.equal(ctx.closedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
-  assert.isFalse(ctx.session.pendingPublish.has(ctx.requestId));
-  assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));
-  assert.isDefined(ctx.rejected());
-  assert.isUndefined(ctx.resolved());
+    // 解決された Publisher は保留中のものと同一であり、状態は true になる
+    assert.equal(resolved, publisher);
+    assert.isTrue(publisher.forwardState);
+  }
 });
 
 /**
  * draft-ietf-moq-transport-22 §9.20.16 / §9.20.1:
- * FORWARD=0 を含む PUBLISH_OK を受信した場合も、スコープ違反として
- * PROTOCOL_VIOLATION でセッションを閉じることを検証する。
+ * FORWARD は PUBLISH_OK に出現できない。FORWARD=1 / FORWARD=0 のいずれの値でも
+ * スコープ違反として PROTOCOL_VIOLATION でセッションを閉じ、保留中の発行を
+ * 残さず reject することを表駆動で検証する。
  */
-test("bidiReadPublishResponse: FORWARD=0 の PUBLISH_OK で PROTOCOL_VIOLATION", async () => {
-  const ctx = createPublishOkValidationContext([
-    { type: MessageParameterType.FORWARD, value: new Uint8Array([0]) },
-  ]);
-  const stream = ctx.session.requestStreams.get(ctx.requestId) as unknown as {
-    stream: WebTransportBidirectionalStream;
-    controlReader: ControlStreamReader;
-  };
+test("bidiReadPublishResponse: FORWARD を含む PUBLISH_OK は値によらず PROTOCOL_VIOLATION", async () => {
+  const cases: { name: string; forwardValue: number }[] = [
+    { name: "FORWARD=1", forwardValue: 1 },
+    { name: "FORWARD=0", forwardValue: 0 },
+  ];
 
-  await bidiReadPublishResponse(ctx.session, ctx.requestId, stream.stream, stream.controlReader);
+  for (const testCase of cases) {
+    const ctx = createPublishOkValidationContext([
+      { type: MessageParameterType.FORWARD, value: new Uint8Array([testCase.forwardValue]) },
+    ]);
+    const stream = ctx.session.requestStreams.get(ctx.requestId) as unknown as {
+      stream: WebTransportBidirectionalStream;
+      controlReader: ControlStreamReader;
+    };
 
-  assert.isDefined(ctx.closedWithError());
-  assert.equal(ctx.closedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
-  assert.isFalse(ctx.session.pendingPublish.has(ctx.requestId));
-  assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));
-  assert.isDefined(ctx.rejected());
-  assert.isUndefined(ctx.resolved());
+    await bidiReadPublishResponse(ctx.session, ctx.requestId, stream.stream, stream.controlReader);
+
+    assert.isDefined(ctx.closedWithError());
+    assert.equal(ctx.closedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+    assert.isFalse(ctx.session.pendingPublish.has(ctx.requestId));
+    assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));
+    assert.isDefined(ctx.rejected());
+    assert.isUndefined(ctx.resolved());
+  }
 });
 
 /**
@@ -451,33 +431,10 @@ test("publishSendPublishDone: ピア FIN 後のセッション終了 (sessionSta
   assert.isUndefined(ctx.closedWithError);
 });
 
-/**
- * draft-ietf-moq-transport-22 §6.4.2.2:
- * subscribe ロールではピアの FIN は保持対象外であり、従来どおり
- * requestStreams / subscribers / subscribersByAlias から削除されることを
- * 検証する (publish ロールのみが done() 完了後まで保持される)。
- */
-test("bidiReadRequestStreamMessages: subscribe ロールのピア FIN では従来どおり requestStreams から削除される", async () => {
-  const ctx = createPublishReadTestContext({});
-  const subscriber = new SubscriberImpl(["test"], "track", ctx.requestId, 1n, () => {});
-  ctx.session.subscribers.set(ctx.requestId, subscriber);
-  ctx.session.subscribersByAlias.set(1n, [subscriber]);
-
-  const readPromise = bidiReadRequestStreamMessages(
-    ctx.session,
-    ctx.requestId,
-    ctx.stream,
-    ctx.controlReader,
-    "subscribe",
-  );
-  ctx.readableController.close();
-  await readPromise;
-
-  // subscribe ロールでは FIN でも従来どおり削除される
-  assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));
-  assert.isFalse(ctx.session.subscribers.has(ctx.requestId));
-  assert.isFalse(ctx.session.subscribersByAlias.has(1n));
-});
+// subscribe ロールのピア FIN で requestStreams / subscribers / subscribersByAlias が
+// 削除されることは、続く「subscribe ロールのピア FIN で自方向 FIN が送信される」
+// テストが同じ入力で同一のアサーションを含めて検証している (publish ロールのみが
+// done() 完了後まで保持される点はその次のテストで検証する)。ここでは重複して検証しない。
 
 /**
  * draft-ietf-moq-transport-22 §6.4.2.2:

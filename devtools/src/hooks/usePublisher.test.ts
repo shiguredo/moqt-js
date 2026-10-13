@@ -18,11 +18,9 @@ import type {
   PublisherVideoCatalogOptions,
 } from "./usePublisher";
 import { getAudioEncoderConfig } from "../../../src/codec/config";
-import { getEncoderConfig } from "../utils/codec";
 import { resolveDeclarationAudioFormat } from "../utils/publishTracks";
 import { MESSAGES_EVENT_TYPE, EVENT_TRACK_NAME } from "../utils/eventTimeline";
 import type { EncodedChunkData } from "../utils/EncoderWrapper";
-import type { CodecType } from "../types";
 import * as pub from "../signals/publisher";
 import * as settings from "../signals/connectionSettings";
 import { createSubscriberInstance, subscriberInstances } from "../signals/subscriber";
@@ -33,10 +31,6 @@ const VIDEO_WIDTH = 1280;
 const VIDEO_HEIGHT = 720;
 const VIDEO_FRAMERATE = 30;
 const VIDEO_BITRATE = 2_000_000;
-
-// 検証対象の全 codec。catalog の codec 文字列は getEncoderConfig と一致していなければ
-// 購読側が Decoder を設定できない (Catalog 誤記がそのまま配信不能になる)。
-const ALL_CODECS: CodecType[] = ["vp8", "vp9", "av1", "h264", "h265"];
 
 // 壁時計に換算した TIMESTAMP (2026-09-25 付近、Unix epoch マイクロ秒)。換算は呼び出し側
 // (src/mediaClock.ts の WallClockMapper) が行い、buildObjectSendPlan はそのまま載せる
@@ -122,12 +116,15 @@ function resetPublisherSignals(): void {
 
 // Catalog は購読側が Decoder を設定する唯一の情報源であるため、
 // 設定値がトラックの各フィールドに反映されることを固定する。
-// buildPublisherCatalog は event timeline トラックも常に載せるため、role で映像トラックを特定する
+// buildPublisherCatalog は event timeline トラックも常に載せるため、role で映像トラックを特定する。
+// codec は恒等でない例 (h264) を使う。設定の値 ("h264") をそのまま載せると購読側の
+// VideoDecoder.configure が失敗するため、Catalog 用の文字列へ写す配線をここで固定する
+// (対応表そのものは utils/codec.test.ts が全 codec で固定する)
 test("buildPublisherCatalog: 設定値が video トラックのフィールドに反映される", () => {
   const catalog = buildPublisherCatalog({
     video: {
       trackName: "video",
-      codec: "vp8",
+      codec: "h264",
       width: VIDEO_WIDTH,
       height: VIDEO_HEIGHT,
       framerate: VIDEO_FRAMERATE,
@@ -149,39 +146,12 @@ test("buildPublisherCatalog: 設定値が video トラックのフィールド�
   assert.equal(track.isLive, true);
   assert.equal(track.role, "video");
 
-  // 解像度・フレームレート・ビットレートは設定値がそのまま載る
-  assert.equal(track.codec, "vp8");
+  // 解像度・フレームレート・ビットレートは設定値がそのまま載り、codec は Catalog 用の文字列になる
+  assert.equal(track.codec, "avc1.42001f");
   assert.equal(track.width, VIDEO_WIDTH);
   assert.equal(track.height, VIDEO_HEIGHT);
   assert.equal(track.framerate, VIDEO_FRAMERATE);
   assert.equal(track.bitrate, VIDEO_BITRATE);
-});
-
-// Catalog の codec 文字列と Encoder に渡す codec 文字列がずれると、
-// 購読側は自分の Encoder 出力を復号できなくなる。
-// 対応表を二重管理せず getEncoderConfig と一致することを固定する。
-test("buildPublisherCatalog: codec は getEncoderConfig と同じ対応表から解決する", () => {
-  for (const codec of ALL_CODECS) {
-    const catalog = buildPublisherCatalog({
-      video: {
-        trackName: "video",
-        codec,
-        width: 640,
-        height: 480,
-        framerate: VIDEO_FRAMERATE,
-        bitrate: 1_000_000,
-      },
-    });
-
-    const track = catalog.tracks.find((candidate) => candidate.role === "video");
-    if (track === undefined) {
-      throw new Error("expected a video track");
-    }
-
-    // getEncoderConfig の codec 文字列 (vp8 / vp09.00.10.08 / av01.0.04M.08 /
-    // avc1.42001f / hvc1.1.6.L93.B0) と一致する
-    assert.equal(track.codec, getEncoderConfig(codec, 640, 480, 1_000_000, 30).codec);
-  }
 });
 
 // publisher は生成した Catalog を encodeCatalog で送るため、
@@ -388,28 +358,10 @@ test("decideKeyFrame: 要求を受けると次のフレームをキーフレー�
   );
 });
 
-test("decideKeyFrame: 要求が無ければ keyframeInterval 秒ごとにキーフレームにする", () => {
-  // 先頭フレーム (直前のキーフレームが無い) はキーフレームになる
-  assert.deepEqual(decideKeyFrame(null, 0, 10, false), {
-    keyFrame: true,
-    nextLastKeyFrameTimestampUs: 0,
-  });
-  // 間隔 (10 秒) に届く前はキーフレームにならない
-  assert.deepEqual(decideKeyFrame(0, 1_000_000, 10, false), {
-    keyFrame: false,
-    nextLastKeyFrameTimestampUs: 0,
-  });
-  // 間隔ちょうどでキーフレームになり、記録がそのフレームに移る
-  assert.deepEqual(decideKeyFrame(0, 10_000_000, 10, false), {
-    keyFrame: true,
-    nextLastKeyFrameTimestampUs: 10_000_000,
-  });
-  // 要求があれば間隔の途中でもキーフレームにする
-  assert.deepEqual(decideKeyFrame(0, 3_000_000, 10, true), {
-    keyFrame: true,
-    nextLastKeyFrameTimestampUs: 3_000_000,
-  });
-});
+// 要求が無いときの間隔ごとの判定 (先頭フレーム・境界・直前のキーフレームの記録の移り変わり)
+// は、委譲先の shouldRequestKeyFrame の境界として src/createMediaPublisher.test.ts が固定し、
+// devtools 側の正規化は utils/keyframeInterval.test.ts が固定する。要求 (NEW_GROUP_REQUEST) が
+// あるときの分岐と、そこからの数え直しは上のテストの [0, 3, 8] が固定する
 
 // ============================================================================
 // プレビューの停止 (ブラウザ API を必要としない経路)
@@ -1115,47 +1067,36 @@ function resetCatalogSettings(): void {
 
 // draft-ietf-moq-msf-01 §5.2.8: 宣言が無く isLive が true のときは購読側が表示の遅れを
 // 選んでよい MAY。未指定 (null) のときにキーを作ると、この MAY の経路が消えて購読側が
-// 0 ms の宣言として扱う。signal を直接書き換えて実際の設定を読ませる
-test("buildPublisherCatalogOptionsFromSettings: 未指定 (null) のときは targetLatency と renderGroup のキーを作らない", () => {
+// 0 ms の宣言として扱う。0 ms と renderGroup の 0 はどちらも有効な指定であるため、0 は
+// 未指定と同じ扱いにせず 0 のまま残す。signal を直接書き換え、未指定と 0 がそのまま
+// buildPublisherCatalogOptions へ渡ることを確かめる (キーを落とす判断そのものは委譲先の
+// buildPublisherCatalogOptions のテストが固定する)
+test("buildPublisherCatalogOptionsFromSettings: 未指定 (null) と 0 を区別して渡す", () => {
   resetCatalogSettings();
   try {
     settings.targetLatency.value = null;
     settings.renderGroup.value = null;
 
-    const options = buildPublisherCatalogOptionsFromSettings({ sampleRate: 48000, channels: 2 });
+    const unspecified = buildPublisherCatalogOptionsFromSettings({
+      sampleRate: 48000,
+      channels: 2,
+    });
 
-    assert.isFalse("targetLatency" in options);
-    assert.isFalse("renderGroup" in options);
+    assert.isFalse("targetLatency" in unspecified);
+    assert.isFalse("renderGroup" in unspecified);
     // トラックの設定は既定値のまま載る (未指定でも映像と音声のトラックは落とさない)
-    assert.deepEqual(options.video, makeVideoCatalogOptions());
-    assert.deepEqual(options.audio, makeAudioCatalogOptions());
-  } finally {
-    resetCatalogSettings();
-  }
-});
+    assert.deepEqual(unspecified.video, makeVideoCatalogOptions());
+    assert.deepEqual(unspecified.audio, makeAudioCatalogOptions());
 
-// 0 ms と renderGroup の 0 はどちらも有効な指定である。未指定と同じ扱いにすると、購読側が
-// 表示の遅れを選ぶ §5.2.8 の MAY の経路に落ちて宣言が消えるため、0 は 0 のまま残す
-test("buildPublisherCatalogOptionsFromSettings: 0 のときは未指定と区別して 0 を載せる", () => {
-  resetCatalogSettings();
-  try {
     settings.targetLatency.value = 0;
     settings.renderGroup.value = 0;
 
-    const options = buildPublisherCatalogOptionsFromSettings({ sampleRate: 48000, channels: 2 });
+    const zero = buildPublisherCatalogOptionsFromSettings({ sampleRate: 48000, channels: 2 });
 
-    assert.isTrue("targetLatency" in options);
-    assert.isTrue("renderGroup" in options);
-    assert.equal(options.targetLatency, 0);
-    assert.equal(options.renderGroup, 0);
-
-    // 残した値がそのまま映像と音声の両方の track に載る
-    const catalog = buildPublisherCatalog(options);
-    assert.equal(catalog.tracks.length, 3);
-    for (const track of catalog.tracks.filter((candidate) => candidate.role !== "eventtimeline")) {
-      assert.equal(track.targetLatency, 0);
-      assert.equal(track.renderGroup, 0);
-    }
+    assert.isTrue("targetLatency" in zero);
+    assert.isTrue("renderGroup" in zero);
+    assert.equal(zero.targetLatency, 0);
+    assert.equal(zero.renderGroup, 0);
   } finally {
     resetCatalogSettings();
   }

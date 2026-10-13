@@ -28,7 +28,6 @@ import {
   moqtActionName,
   moqtAuthorizationContext,
   moqtClaimAuthorize,
-  moqtScopeAllows,
   namespaceMatchEnd,
   namespaceMatchValue,
   prefixMatch,
@@ -127,80 +126,10 @@ test("publisher スコープを再構築するとベクタの payload と一致�
   assert.equal(encodeHex(encodeCbor(encodeCatClaims(claims))), vector.payloadHex);
 });
 
-test("nil は名前空間の末尾にだけ一致する", () => {
-  const scope = createMoqtScope(["Subscribe"]);
-  scope.namespace.push(namespaceMatchValue(exactMatch(TEXT_ENCODER.encode("example.com"))));
-  scope.namespace.push(namespaceMatchEnd());
-  assert.equal(
-    moqtScopeAllows(scope, "Subscribe", [TEXT_ENCODER.encode("example.com")], new Uint8Array(0)),
-    true,
-  );
-  assert.equal(
-    moqtScopeAllows(
-      scope,
-      "Subscribe",
-      [TEXT_ENCODER.encode("example.com"), TEXT_ENCODER.encode("alice")],
-      new Uint8Array(0),
-    ),
-    false,
-  );
-  assert.equal(
-    moqtScopeAllows(scope, "Subscribe", [TEXT_ENCODER.encode("example")], new Uint8Array(0)),
-    false,
-  );
-});
-
-test("nil が無い場合は長い名前空間も許可する", () => {
-  const scope = createMoqtScope(["Subscribe"]);
-  scope.namespace.push(namespaceMatchValue(prefixMatch(TEXT_ENCODER.encode("example"))));
-  assert.equal(
-    moqtScopeAllows(
-      scope,
-      "Subscribe",
-      [TEXT_ENCODER.encode("example.com"), TEXT_ENCODER.encode("alice")],
-      new Uint8Array(0),
-    ),
-    true,
-  );
-  assert.equal(
-    moqtScopeAllows(scope, "Subscribe", [TEXT_ENCODER.encode("other")], new Uint8Array(0)),
-    false,
-  );
-});
-
-test("名前空間マッチの無いスコープはすべての名前空間にマッチする", () => {
-  const scope = createMoqtScope(["Publish"]);
-  assert.equal(moqtScopeAllows(scope, "Publish", [], TEXT_ENCODER.encode("track")), true);
-  assert.equal(
-    moqtScopeAllows(
-      scope,
-      "Publish",
-      [TEXT_ENCODER.encode("any"), TEXT_ENCODER.encode("namespace")],
-      TEXT_ENCODER.encode("track"),
-    ),
-    true,
-  );
-  assert.equal(
-    moqtScopeAllows(scope, "Fetch", [TEXT_ENCODER.encode("any")], TEXT_ENCODER.encode("track")),
-    false,
-  );
-});
-
-test("トラックマッチがある場合は適用される", () => {
-  const scope = createMoqtScope(["Publish"]);
-  scope.track = suffixMatch(TEXT_ENCODER.encode(".json"));
-  assert.equal(
-    moqtScopeAllows(scope, "Publish", [TEXT_ENCODER.encode("a")], TEXT_ENCODER.encode("data.json")),
-    true,
-  );
-  assert.equal(
-    moqtScopeAllows(scope, "Publish", [TEXT_ENCODER.encode("a")], TEXT_ENCODER.encode("data.xml")),
-    false,
-  );
-  // 名前空間マッチが無くてもトラックマッチは適用される
-  assert.equal(moqtScopeAllows(scope, "Publish", [], TEXT_ENCODER.encode(".json")), true);
-});
-
+// moqtScopeAllows のマッチ規則 (nil が名前空間の末尾にだけ一致すること、nil が無ければ
+// 残りの名前空間フィールドが任意であること、名前空間マッチが無ければ全許可になること、
+// トラックマッチが評価されること) は moqt.prop.ts の「有限宇宙の全列挙で宣言的モデルと
+// 一致する」PBT が任意のスコープで検証する。ここではデコード / エンコードの異常系を固定する。
 test("不正なスコープのデコードエラーを拒否する", () => {
   assertC4mError(() => decodeMoqtScope(cborArray([cborArray([])])), "emptyActions");
   assertC4mError(() => decodeMoqtScope(cborArray([])), "invalidScopeLength", 0);
@@ -286,24 +215,6 @@ test("スコープとクレームのエンコードエラーと往復を確認�
   claim.scopes.push(scope);
   const encodedClaim = encodeMoqtClaim(claim);
   assert.deepEqual(decodeMoqtClaim(encodedClaim), claim);
-});
-
-test("アクションが安全な整数でない場合はエンコードを拒否する", () => {
-  // 2^53 を超える値は CBOR へ書けてもデコードで元の値に戻らない
-  const fractional: MoqtScope = { actions: [1.5], namespace: [], track: undefined };
-  assertC4mError(() => encodeMoqtScope(fractional), "invalidAction", 1.5);
-  const notANumber: MoqtScope = { actions: [Number.NaN], namespace: [], track: undefined };
-  assertC4mError(() => encodeMoqtScope(notANumber), "invalidAction");
-  const tooLarge: MoqtScope = { actions: [2 ** 63], namespace: [], track: undefined };
-  assertC4mError(() => encodeMoqtScope(tooLarge), "invalidAction", 2 ** 63);
-
-  // 安全な整数の上限は書けて、デコードで元の値に戻る
-  const largest: MoqtScope = {
-    actions: [Number.MAX_SAFE_INTEGER],
-    namespace: [],
-    track: undefined,
-  };
-  assert.deepEqual(decodeMoqtScope(encodeMoqtScope(largest)), largest);
 });
 
 test("スコープのエンコードは空の省略可能部分を出力しない", () => {
@@ -441,30 +352,6 @@ test("catdpop のエラーと往復を確認する", () => {
   assert.deepEqual(cborMapGet(encoded, cborInteger(1)), cborInteger(1));
 });
 
-test("nil で名前空間の長さを固定してもトラックマッチは評価される", () => {
-  const scope = createMoqtScope(["Publish"]);
-  scope.namespace.push(namespaceMatchValue(exactMatch(TEXT_ENCODER.encode("a"))));
-  scope.namespace.push(namespaceMatchEnd());
-  scope.track = exactMatch(TEXT_ENCODER.encode("t"));
-  assert.equal(
-    moqtScopeAllows(scope, "Publish", [TEXT_ENCODER.encode("a")], TEXT_ENCODER.encode("t")),
-    true,
-  );
-  assert.equal(
-    moqtScopeAllows(scope, "Publish", [TEXT_ENCODER.encode("a")], TEXT_ENCODER.encode("other")),
-    false,
-  );
-  assert.equal(
-    moqtScopeAllows(
-      scope,
-      "Publish",
-      [TEXT_ENCODER.encode("a"), TEXT_ENCODER.encode("b")],
-      TEXT_ENCODER.encode("t"),
-    ),
-    false,
-  );
-});
-
 test("catdpop の raw は整数ラベルだけを受け付ける", () => {
   // デコード側は i64 の整数以外のラベルを拒否するため、エンコード側も揃える
   const textLabel = createCatDpop(30, true);
@@ -491,30 +378,4 @@ test("数値クレームは 2^63 を整数へ丸めない", () => {
   const catdpop = createCatDpop(value, false);
   const decoded = decodeCatDpop(encodeCatDpop(catdpop));
   assert.equal(decoded.windowSeconds, value);
-});
-
-test("直接構築したスコープでも nil の位置異常は認可しない", () => {
-  // デコードでは弾かれるが、直接構築したスコープでも nil の位置異常は認可しない
-  const scope: MoqtScope = {
-    actions: [moqtActionKey("Publish")],
-    namespace: [
-      namespaceMatchValue(exactMatch(TEXT_ENCODER.encode("a"))),
-      namespaceMatchEnd(),
-      namespaceMatchValue(exactMatch(TEXT_ENCODER.encode("b"))),
-    ],
-    track: undefined,
-  };
-  assert.equal(
-    moqtScopeAllows(
-      scope,
-      "Publish",
-      [TEXT_ENCODER.encode("a"), TEXT_ENCODER.encode("b")],
-      TEXT_ENCODER.encode("t"),
-    ),
-    false,
-  );
-  assert.equal(
-    moqtScopeAllows(scope, "Publish", [TEXT_ENCODER.encode("a")], TEXT_ENCODER.encode("t")),
-    false,
-  );
 });

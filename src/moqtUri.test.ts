@@ -36,6 +36,10 @@ test("moqt:// + fragment は url 側から除去され fragment フィールド�
   const result = normalizeMoqtUri("moqt://example.com/moqt#track:video");
   assert.equal(result.url, "https://example.com/moqt");
   assert.deepEqual(result.fragment, { type: "track", value: "video" });
+
+  // value にコロンが含まれても最初のコロンで分割される (fragment の解析規則は parseFragment)
+  const withColon = normalizeMoqtUri("moqt://example.com/moqt#type:val:ue");
+  assert.deepEqual(withColon.fragment, { type: "type", value: "val:ue" });
 });
 
 test("moqt:// + クエリ + fragment は両方とも適切に処理される", () => {
@@ -44,28 +48,19 @@ test("moqt:// + クエリ + fragment は両方とも適切に処理される", (
   assert.deepEqual(result.fragment, { type: "ns", value: "room/123" });
 });
 
-test("value にコロンが含まれる fragment は最初のコロンで分割される", () => {
-  const result = normalizeMoqtUri("moqt://example.com/moqt#type:val:ue");
-  assert.deepEqual(result.fragment, { type: "type", value: "val:ue" });
-});
-
-test("コロンなしの fragment は Error になる", () => {
+// fragment の解析は parseFragment へ委譲しているため、URL 経由でも同じエラーになることを
+// 1 件にまとめて確認する (各規則の詳細は parseFragment のテストが担う)
+test("moqt:// + 不正な fragment は parseFragment と同じ Error になる", () => {
   assert.throws(
     () => normalizeMoqtUri("moqt://example.com/moqt#novalue"),
     Error,
     /fragment must contain a colon separator/,
   );
-});
-
-test("type が空の fragment は Error になる", () => {
   assert.throws(
     () => normalizeMoqtUri("moqt://example.com/moqt#:value"),
     Error,
     /fragment type identifier must not be empty/,
   );
-});
-
-test("type に大文字を含む fragment は Error になる", () => {
   assert.throws(
     () => normalizeMoqtUri("moqt://example.com/moqt#TYPE:value"),
     Error,
@@ -207,23 +202,18 @@ test("parseFragment: type が空の場合 Error になる", () => {
   assert.throws(() => parseFragment(":value"), Error, /type identifier must not be empty/);
 });
 
-test("parseFragment: type に大文字を含む場合 Error になる", () => {
+// type の文字種の規則は 1 つであり、代表として大文字・記号・スペースをまとめて確認する
+test("parseFragment: type に許されない文字を含む場合 Error になる", () => {
   assert.throws(
     () => parseFragment("TYPE:value"),
     Error,
     /ASCII lowercase letters, digits, and hyphens/,
   );
-});
-
-test("parseFragment: type に記号を含む場合 Error になる", () => {
   assert.throws(
     () => parseFragment("type_x:value"),
     Error,
     /ASCII lowercase letters, digits, and hyphens/,
   );
-});
-
-test("parseFragment: type にスペースを含む場合 Error になる", () => {
   assert.throws(
     () => parseFragment("ty pe:value"),
     Error,

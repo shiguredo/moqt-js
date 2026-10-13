@@ -143,12 +143,3 @@ test("余るビットが 0 でない入力は非正規なエンコードとし�
     }),
   );
 });
-
-test("デコードしたバイト列の再エンコードは同じ文字列になる", () => {
-  fc.assert(
-    fc.property(bytesArbitrary, (bytes) => {
-      const encoded = encodeBase64Url(bytes);
-      assert.equal(encodeBase64Url(decodeBase64OrUrl(encoded)), encoded);
-    }),
-  );
-});

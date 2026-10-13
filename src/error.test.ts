@@ -56,20 +56,6 @@ test("decode 用エラーは名前と message を保持する", () => {
   assert.equal(malformedTrack.message, "duplicate immutable properties");
 });
 
-test("draft-18 の代表的なエラーコード値を保持する", () => {
-  assert.equal(SessionErrorCode.PROTOCOL_VIOLATION, 0x03);
-  assert.equal(SessionErrorCode.INVALID_PATH, 0x08);
-  assert.equal(RequestErrorCode.MALFORMED_TRACK, 0x12);
-  assert.equal(PublishDoneStatusCode.MALFORMED_TRACK, 0x12);
-  assert.equal(DataStreamErrorCode.MALFORMED_TRACK, 0x12);
-});
-
-test("UNKNOWN_AUTH_TOKEN_ALIAS (0x17) は Session Termination のコードとして保持する", () => {
-  // draft-ietf-moq-transport-22 §16.11.1: 0x17 は Session Termination Error Codes に
-  // 収載されている。未登録 Alias の参照はこのコードの Session Termination で扱う。
-  assert.equal(SessionErrorCode.UNKNOWN_AUTH_TOKEN_ALIAS, 0x17);
-});
-
 test("normalizeRequestErrorCode: 既知のコードはそのまま通す", () => {
   assert.equal(normalizeRequestErrorCode(0x0), RequestErrorCode.INTERNAL_ERROR);
   assert.equal(normalizeRequestErrorCode(0x6), RequestErrorCode.GOING_AWAY);

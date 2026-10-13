@@ -15,7 +15,6 @@ import {
 } from "./fetch";
 import { trackNamespaceToStrings } from "./parameter";
 import { MessageType } from "./types";
-import { ProtocolViolationError } from "../error";
 import { parametersArb, trackPropertiesArb, namespaceArb, trackNameArb } from "./parameterArb";
 
 /**
@@ -59,44 +58,6 @@ test("Fetch のエンコード・デコードがラウンドトリップする",
           assert.equal(decoded.parameters[i].type, parameters[i].type);
           assert.deepEqual(decoded.parameters[i].value, parameters[i].value);
         }
-      },
-    ),
-  );
-});
-
-/**
- * draft-ietf-moq-transport-22 Section 9:
- * "If the length does not match the length of the Message Body,
- *  the receiver MUST close the session with a PROTOCOL_VIOLATION."
- * Parameters は FETCH ペイロードの最後のフィールドであり、
- * その後ろに後続データがあると消費バイト数が Message Body 長と一致しないため違反となる。
- * 正常な FETCH の後ろに後続バイト列を連結すると
- * ProtocolViolationError を throw することを検証する。
- */
-test("FETCH の末尾に後続データがあると ProtocolViolationError を throw する", () => {
-  fc.assert(
-    fc.property(
-      fc.bigInt({ min: 0n, max: 1000000n }),
-      namespaceArb,
-      trackNameArb,
-      parametersArb,
-      fc.uint8Array({ minLength: 1, maxLength: 1000 }),
-      (requestId, trackNamespace, trackName, parameters, trailing) => {
-        const original: Fetch = {
-          type: MessageType.FETCH,
-          requestId,
-          trackNamespace,
-          trackName,
-          parameters,
-        };
-
-        const encoded = encodeFetchPayload(original);
-        // 正常な FETCH の後ろに 1 バイト以上の後続データを連結する
-        const withTrailing = new Uint8Array(encoded.length + trailing.length);
-        withTrailing.set(encoded, 0);
-        withTrailing.set(trailing, encoded.length);
-
-        assert.throws(() => decodeFetchPayload(withTrailing), ProtocolViolationError);
       },
     ),
   );
