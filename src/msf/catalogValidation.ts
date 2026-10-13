@@ -9,6 +9,7 @@
  */
 
 import { buildValidatedCatalogTrack } from "./catalogTrackValidation";
+import { assertFiniteNumber } from "./json";
 import { setOwnField } from "./ownFields";
 import { MSF_KNOWN_VERSIONS } from "./version";
 import type { MsfVersion, PackagingType } from "./version";
@@ -91,6 +92,9 @@ export function validateCatalog(value: unknown): Catalog {
         `invalid catalog: generatedAt must be a number per §5.1.2, got ${typeof value}`,
       );
     }
+    // JSON.parse は桁あふれした数値リテラル (1e999) を Infinity にする。有限でない値は
+    // 再 encode で null になり自分で decode できなくなるため、受理しない
+    assertFiniteNumber(value, "generatedAt", "catalog", "§5.1.2");
     generatedAt = value;
   }
 

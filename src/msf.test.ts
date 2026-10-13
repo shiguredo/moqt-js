@@ -10,8 +10,9 @@ import {
   type Catalog,
   type CatalogTrack,
   type CatalogDelta,
-  type MediaTimelineEntry,
   type EventTimelineEntry,
+  type InitDataEntry,
+  type MediaTimelineEntry,
   decodeCatalogMessage,
   encodeCatalog,
   encodeCatalogDelta,
@@ -161,16 +162,516 @@ test("Catalog: encode 時に isComplete=false が指定されたら reject (§5.
     tracks: [],
     isComplete: false,
   } as unknown as Catalog;
-  assert.throws(() => encodeCatalog(catalog), /isComplete must be true if present/);
+  assert.throws(
+    () => encodeCatalog(catalog),
+    /isComplete must not be included if false per §5\.1\.3, got false/,
+  );
+});
+
+test("Catalog: encode 時に isComplete が boolean でない値なら reject (§5.1.3)", () => {
+  // §5.1.3 は JSON Type: Boolean。非 boolean を黙って落とすと §5.1.3 の型違反を黙認することに
+  // なるため、wire に載せたうえで自己 decode (decode と同じ文言) に拒否させる。
+  const catalog = {
+    version: "draft-01",
+    tracks: [],
+    isComplete: "yes",
+  } as unknown as Catalog;
+  assert.throws(
+    () => encodeCatalog(catalog),
+    /isComplete must not be included if false per §5\.1\.3, got yes/,
+  );
+});
+
+// §5.1.3 の isComplete は wire に出る形で判定する。値が undefined の own property は
+// JSON.stringify が出力せず、継承した値は JSON.stringify が読まない。
+test("Catalog: encode は isComplete の own property だけを wire に載せる (§5.1.3)", () => {
+  const undefinedIsComplete = {
+    version: "draft-01",
+    tracks: [],
+    isComplete: undefined,
+  } as unknown as Catalog;
+  const decoded = decodeCatalogMessage(encodeCatalog(undefinedIsComplete)) as Catalog;
+  assert.isFalse(Object.hasOwn(decoded, "isComplete"));
+
+  const inheritedIsComplete = Object.create({ isComplete: true }) as Record<string, unknown>;
+  inheritedIsComplete.version = "draft-01";
+  inheritedIsComplete.tracks = [];
+  const inheritedDecoded = decodeCatalogMessage(
+    encodeCatalog(inheritedIsComplete as unknown as Catalog),
+  ) as Catalog;
+  assert.isFalse(Object.hasOwn(inheritedDecoded, "isComplete"));
+});
+
+// root の未知フィールド `deltaUpdate` は decode を delta update の経路に落とす。full catalog を
+// 名乗る関数が delta のバイト列を返さないことを固定する (§5.1.6)。
+test("Catalog: encodeCatalog は root に deltaUpdate を持つ Catalog を delta として返さない", () => {
+  // version と tracks が wire に無いと、decode は delta update として読む
+  const withoutVersion = {
+    tracks: undefined as unknown as CatalogTrack[],
+    deltaUpdate: [{ op: "remove", tracks: [{ name: "x" }] }],
+  } as unknown as Catalog;
+  assert.throws(() => encodeCatalog(withoutVersion), /read as a delta update per §5\.1\.6/);
+
+  // version がある場合は delta に含めてはならないフィールドとして拒否される (§5.3)
+  const withVersion = {
+    version: "draft-01",
+    tracks: [],
+    deltaUpdate: [],
+  } as unknown as Catalog;
+  assert.throws(
+    () => encodeCatalog(withVersion),
+    /invalid catalog delta: deltaUpdate must not contain MSF version field per §5\.3/,
+  );
+});
+
+// JSON.parse は桁あふれした数値リテラル (1e999) を Infinity にする。生成日時も有限数でなければ
+// 再 encode で null になり自分で decode できなくなるため、decode の時点で拒否する (§5.1.2)。
+test("Catalog: decode は桁あふれした generatedAt を非有限数として reject する (§5.1.2)", () => {
+  assert.throws(
+    () =>
+      decodeCatalogMessage(encodeRawJson('{"version":"draft-01","tracks":[],"generatedAt":1e999}')),
+    /generatedAt must be a finite number per §5\.1\.2, got Infinity/,
+  );
+});
+
+// 実行時には JavaScript から組み立てた delta で配列や object の型が崩れ得る。`length` や `type` を
+// 無条件に読むと TypeError になり、「検証違反は plain Error」という契約から外れるため拒否する
+// (operations が配列でない場合は §5.3 の「at least one operation」の文言にまとめ、operation が
+// object でない場合は decode と同じ文言にする)。
+test("CatalogDelta: operations が配列でない / operation が object でない場合は plain Error で reject する", () => {
+  const nullOperations = { deltaUpdate: true, operations: null } as unknown as CatalogDelta;
+  assert.throws(
+    () => encodeCatalogDelta(nullOperations),
+    /deltaUpdate must contain at least one operation per §5\.3/,
+  );
+
+  const nullOperation = { deltaUpdate: true, operations: [null] } as unknown as CatalogDelta;
+  assert.throws(
+    () => encodeCatalogDelta(nullOperation),
+    /invalid catalog delta operation at index 0: expected object, got null/,
+  );
+});
+
+test("CatalogDelta: 非有限数の generatedAt は encode / decode とも reject する (§5.1.2)", () => {
+  const delta: CatalogDelta = {
+    deltaUpdate: true,
+    operations: [{ type: "remove", tracks: [{ name: "x" }] }],
+    generatedAt: Number.POSITIVE_INFINITY,
+  };
+  assert.throws(
+    () => encodeCatalogDelta(delta),
+    /generatedAt must be a finite number per §5\.1\.2, got Infinity/,
+  );
+
+  assert.throws(
+    () =>
+      decodeCatalogMessage(
+        encodeRawJson(
+          '{"deltaUpdate":[{"op":"remove","tracks":[{"name":"x"}]}],"generatedAt":1e999}',
+        ),
+      ),
+    /generatedAt must be a finite number per §5\.1\.2, got Infinity/,
+  );
+});
+
+// =============================================================================
+// encode / 生成時の track 単位 MUST 検証
+// =============================================================================
+// §5.2 の track 単位 MUST は decode 側 (validateCatalog) だけでなく、Catalog の生成
+// (createCatalog) と送信 (encodeCatalog) の時点でも検証する。仕様違反の Catalog を
+// ライブラリ自身が送り、相互接続の相手に拒否されたり自分の decodeCatalogMessage で
+// 読めなくなったりする経路を塞ぐためである。検証は decode と同じ関数を通すため、
+// エラー文言も受信側と一致する。
+
+// §5.2.3: Within the catalog, track names MUST be unique per namespace.
+// 「Within the catalog」は tracks と publishTracks の両方を含む。
+test("Catalog: encodeCatalog は tracks と publishTracks をまたぐ重複を reject する (§5.2.3)", () => {
+  const catalog: Catalog = {
+    version: "draft-01",
+    tracks: [{ name: "log", packaging: "loc", isLive: true }],
+    publishTracks: [{ name: "log", packaging: "moqlog", role: "log", isLive: true }],
+  };
+  assert.throws(
+    () => encodeCatalog(catalog),
+    /duplicate track name 'log' under namespace \(no namespace\) in publishTracks per §5\.2\.3/,
+  );
+});
+
+// §5.2.13: initRef は initDataList (§5.1.7) のエントリを指す。参照切れの Catalog は
+// 復号器の初期化データが無いまま configure へ進むため、encode の時点で拒否する。
+test("Catalog: encodeCatalog は initRef の参照切れを reject する (§5.2.13)", () => {
+  const catalog: Catalog = {
+    version: "draft-01",
+    tracks: [{ name: "video", packaging: "loc", isLive: true, initRef: "missing" }],
+    initDataList: [{ id: "v-init", type: "inline", data: "AQID" }],
+  };
+  assert.throws(
+    () => encodeCatalog(catalog),
+    /track 'video' has initRef 'missing' not present in initDataList per §5\.2\.13/,
+  );
+});
+
+test("Catalog: encodeCatalog は packaging 別 MUST を reject する (§5.2.5 / §9.4 / §10.4)", () => {
+  // §9.4: packaging="moqlog" の track は role="log" が MUST
+  const moqlog: Catalog = {
+    version: "draft-01",
+    tracks: [],
+    publishTracks: [{ name: "log", packaging: "moqlog", isLive: true }],
+  };
+  assert.throws(
+    () => encodeCatalog(moqlog),
+    /moqlog track must have role='log' per §9\.4, got '\(absent\)'/,
+  );
+
+  // §10.4: packaging="moqmetrics" の track は role="metrics" が MUST
+  const moqmetrics: Catalog = {
+    version: "draft-01",
+    tracks: [],
+    publishTracks: [{ name: "metrics", packaging: "moqmetrics", isLive: true }],
+  };
+  assert.throws(
+    () => encodeCatalog(moqmetrics),
+    /moqmetrics track must have role='metrics' per §10\.4, got '\(absent\)'/,
+  );
+
+  // §5.2.5: eventType は packaging="eventtimeline" のときだけ使える
+  const eventType: Catalog = {
+    version: "draft-01",
+    tracks: [{ name: "v", packaging: "loc", isLive: true, eventType: "com.example.chat" }],
+  };
+  assert.throws(
+    () => encodeCatalog(eventType),
+    /eventType must not be used unless packaging is 'eventtimeline' per §5\.2\.5/,
+  );
+});
+
+test("Catalog: encodeCatalog は role が video / audio のときの必須フィールド欠落を reject する (§5.2.18 / §5.2.22 / §5.2.28 / §5.2.29)", () => {
+  // §5.2.18: role=video は codec が MUST
+  assert.throws(
+    () =>
+      encodeCatalog({
+        version: "draft-01",
+        tracks: [{ name: "v", packaging: "loc", isLive: true, role: "video", bitrate: 1_000_000 }],
+      }),
+    /video track must include codec per §5\.2\.18/,
+  );
+
+  // §5.2.22: role=video は bitrate が MUST
+  assert.throws(
+    () =>
+      encodeCatalog({
+        version: "draft-01",
+        tracks: [{ name: "v", packaging: "loc", isLive: true, role: "video", codec: "vp8" }],
+      }),
+    /video track must include bitrate per §5\.2\.22/,
+  );
+
+  // §5.2.28: role=audio は samplerate が MUST
+  assert.throws(
+    () =>
+      encodeCatalog({
+        version: "draft-01",
+        tracks: [
+          {
+            name: "a",
+            packaging: "loc",
+            isLive: true,
+            role: "audio",
+            codec: "opus",
+            bitrate: 128_000,
+            channelConfig: "2",
+          },
+        ],
+      }),
+    /audio track must include samplerate per §5\.2\.28/,
+  );
+
+  // §5.2.29: role=audio は channelConfig が MUST
+  assert.throws(
+    () =>
+      encodeCatalog({
+        version: "draft-01",
+        tracks: [
+          {
+            name: "a",
+            packaging: "loc",
+            isLive: true,
+            role: "audio",
+            codec: "opus",
+            bitrate: 128_000,
+            samplerate: 48_000,
+          },
+        ],
+      }),
+    /audio track must include channelConfig per §5\.2\.29/,
+  );
+});
+
+// role は optional であり custom role も許されるため、role を持たない最小形の track には
+// §5.2.18 / §5.2.22 / §5.2.28 / §5.2.29 を課さない (従来どおり encode できる)。
+// role が video の必須フィールドは publishTracks 経由の既存テストが固定しているため、
+// ここでは role を持たない track と、role=audio で 4 つが揃った track だけを確かめる。
+test("Catalog: encodeCatalog は role を持たない track と必須フィールドを満たす audio track を encode する", () => {
+  const catalog: Catalog = {
+    version: "draft-01",
+    tracks: [
+      { name: "raw", packaging: "loc", isLive: true },
+      {
+        name: "audio",
+        packaging: "loc",
+        isLive: true,
+        role: "audio",
+        codec: "opus",
+        bitrate: 128_000,
+        samplerate: 48_000,
+        channelConfig: "2",
+      },
+    ],
+  };
+  const decoded = decodeCatalogMessage(encodeCatalog(catalog)) as Catalog;
+  assert.deepStrictEqual(
+    decoded.tracks.map((track) => track.name),
+    ["raw", "audio"],
+  );
+});
+
+// JSON.stringify は値が undefined のプロパティを出力しないため、そのようなフィールドは
+// wire に現れない (受け手からは未指定に見える)。送っても問題のない Catalog を encode 時に
+// 拒否しないことを固定する (exactOptionalPropertyTypes の型では書けないが、JavaScript から
+// 組み立てた object には現れる)。
+test("Catalog: encodeCatalog は JSON に出ない undefined の値のフィールドを未指定として扱う", () => {
+  const catalog = {
+    version: "draft-01",
+    tracks: [{ name: "v", packaging: "loc", isLive: true, displayHeight: undefined }],
+  } as unknown as Catalog;
+  const decoded = decodeCatalogMessage(encodeCatalog(catalog)) as Catalog;
+  assert.isUndefined(decoded.tracks[0].displayHeight);
+});
+
+// JSON.stringify は関数値とシンボル値のプロパティも出力しない。
+test("Catalog: encodeCatalog は JSON に出ない関数値のフィールドを未指定として扱う", () => {
+  const catalog = {
+    version: "draft-01",
+    tracks: [{ name: "v", packaging: "loc", isLive: true, displayHeight: () => 1 }],
+  } as unknown as Catalog;
+  const decoded = decodeCatalogMessage(encodeCatalog(catalog)) as Catalog;
+  assert.isUndefined(decoded.tracks[0].displayHeight);
+});
+
+test("Catalog: encodeCatalog は JSON に出ないシンボル値のフィールドを未指定として扱う", () => {
+  const catalog = {
+    version: "draft-01",
+    tracks: [{ name: "v", packaging: "loc", isLive: true, displayHeight: Symbol("height") }],
+  } as unknown as Catalog;
+  const decoded = decodeCatalogMessage(encodeCatalog(catalog)) as Catalog;
+  assert.isUndefined(decoded.tracks[0].displayHeight);
+});
+
+// JSON.stringify は疎配列の穴を null にする。encode は送る JSON を decode で検証するため、
+// 穴を読み飛ばす検証 (every) に頼らず wire の null として拒否できる。
+test("Catalog: encodeCatalog は depends の穴を wire と同じ null として reject する", () => {
+  const depends: string[] = [];
+  depends[1] = "video";
+  const catalog = {
+    version: "draft-01",
+    tracks: [{ name: "v", packaging: "loc", isLive: true, depends }],
+  } as unknown as Catalog;
+  assert.throws(() => encodeCatalog(catalog), /depends must be an array of strings per §5\.2\.14/);
+});
+
+// JSON は非有限数 (NaN / ±Infinity) を null にするため、wire では §5.2 の number でなくなる。
+// encode は送る JSON を decode で検証するため、decode と同じ文言で拒否される。
+test("Catalog: encodeCatalog は非有限数のフィールドを reject する", () => {
+  assert.throws(
+    () =>
+      encodeCatalog({
+        version: "draft-01",
+        tracks: [{ name: "v", packaging: "loc", isLive: true, bitrate: Number.NaN }],
+      }),
+    /bitrate must be a number per §5\.2\.22, got object/,
+  );
+
+  assert.throws(
+    () =>
+      encodeCatalog({
+        version: "draft-01",
+        tracks: [{ name: "v", packaging: "loc", isLive: true, width: Number.POSITIVE_INFINITY }],
+      }),
+    /width must be a number per §5\.2\.26, got object/,
+  );
+
+  // template の number 要素 (§7.4.1) は変換の前の検証で拒否される
+  assert.throws(
+    () =>
+      encodeCatalog({
+        version: "draft-01",
+        tracks: [
+          {
+            name: "vod",
+            packaging: "loc",
+            isLive: false,
+            template: [Number.NaN, 0, [0n, 0n], [0n, 0n], 0, 0],
+          },
+        ],
+      }),
+    /template startMediaTime must be a finite number per §7\.4\.1, got NaN/,
+  );
+});
+
+// JSON.parse は桁あふれした数値リテラル (1e999) を Infinity にする。wire では number だが
+// 有限でなく、再 encode すると null になって自分で decode できなくなるため、decode の時点で
+// 拒否する (`JSON.stringify` は非有限数を null にする。ECMA-262 の SerializeJSONProperty)。
+test("Catalog: decode は桁あふれした数値リテラルを非有限数として reject する (§5.2.22)", () => {
+  const raw =
+    '{"version":"draft-01","tracks":[{"name":"v","packaging":"loc","isLive":true,"bitrate":1e999}]}';
+  assert.throws(
+    () => decodeCatalogMessage(encodeRawJson(raw)),
+    /bitrate must be a finite number per §5\.2\.22, got Infinity/,
+  );
+});
+
+// §5.1.7: initDataList のエントリと id の uniqueness。decode と同じ関数を通すため、壊れた
+// entry は TypeError ではなく decode と同じ文言の plain Error になる。
+test("Catalog: encodeCatalog と createCatalog は initDataList の構造違反を reject する", () => {
+  const notAnObject = {
+    version: "draft-01",
+    tracks: [],
+    initDataList: [null],
+  } as unknown as Catalog;
+  assert.throws(
+    () => encodeCatalog(notAnObject),
+    /invalid initDataList entry at index 0: expected object, got null/,
+  );
+  assert.throws(
+    () => createCatalog([], { initDataList: [null] as unknown as InitDataEntry[] }),
+    /invalid initDataList entry at index 0: expected object, got null/,
+  );
+
+  const duplicatedIds: Catalog = {
+    version: "draft-01",
+    tracks: [],
+    initDataList: [
+      { id: "init-1", type: "inline", data: "AQID" },
+      { id: "init-1", type: "inline", data: "AQID" },
+    ],
+  };
+  assert.throws(
+    () => encodeCatalog(duplicatedIds),
+    /duplicate initDataList id 'init-1', ids must be unique within the catalog per §5\.1\.7/,
+  );
+});
+
+// JavaScript から組み立てた Catalog では、配列であるべきフィールドが何でもあり得る。`map` や
+// `template` を無条件に読むと TypeError になり、「検証違反は plain Error」という契約から外れる
+// ため、decode と同じ文言の plain Error で拒否する。
+test("Catalog: encodeCatalog と createCatalog は配列でない tracks / publishTracks を reject する", () => {
+  const missingTracks = { version: "draft-01" } as unknown as Catalog;
+  assert.throws(
+    () => encodeCatalog(missingTracks),
+    /invalid catalog: tracks must be an array per §5\.1\.4, got undefined/,
+  );
+
+  const nullTracks = { version: "draft-01", tracks: null } as unknown as Catalog;
+  assert.throws(
+    () => encodeCatalog(nullTracks),
+    /invalid catalog: tracks must be an array per §5\.1\.4, got object/,
+  );
+
+  const stringPublishTracks = {
+    version: "draft-01",
+    tracks: [{ name: "v", packaging: "loc", isLive: true }],
+    publishTracks: "abc",
+  } as unknown as Catalog;
+  assert.throws(
+    () => encodeCatalog(stringPublishTracks),
+    /invalid catalog: publishTracks must be an array per §5\.1\.5, got string/,
+  );
+
+  assert.throws(
+    () => createCatalog(null as unknown as CatalogTrack[]),
+    /invalid catalog: tracks must be an array per §5\.1\.4, got object/,
+  );
+});
+
+test("Catalog: encodeCatalog は配列内の object でない要素と配列でない template を reject する", () => {
+  // object でない要素は decode 側の検証 (expected object) に委ねる
+  const nullElement = {
+    version: "draft-01",
+    tracks: [null],
+  } as unknown as Catalog;
+  assert.throws(() => encodeCatalog(nullElement), /invalid track: expected object, got null/);
+
+  // template が配列でない場合は 6 要素の検証で拒否する (要素数を読んで TypeError にしない)
+  const notArrayTemplate = {
+    version: "draft-01",
+    tracks: [{ name: "vod", packaging: "loc", isLive: false, template: "abc" }],
+  } as unknown as Catalog;
+  assert.throws(
+    () => encodeCatalog(notArrayTemplate),
+    /template must be a 6-element array per §7\.4\.1, got string/,
+  );
+
+  // 配列だが 6 要素未満の場合も、要素を読む前に decode と同じ文言で拒否する
+  const shortTemplate = {
+    version: "draft-01",
+    tracks: [{ name: "vod", packaging: "loc", isLive: false, template: [0, 0] }],
+  } as unknown as Catalog;
+  assert.throws(
+    () => encodeCatalog(shortTemplate),
+    /template must be a 6-element array per §7\.4\.1, got array of length 2/,
+  );
+
+  // Location が 2 要素配列でない場合も同じ
+  const badLocationTemplate = {
+    version: "draft-01",
+    tracks: [{ name: "vod", packaging: "loc", isLive: false, template: [0, 0, null, null, 0, 0] }],
+  } as unknown as Catalog;
+  assert.throws(
+    () => encodeCatalog(badLocationTemplate),
+    /template startLocation must be a 2-element array per §7\.4\.1, got object/,
+  );
+});
+
+// §7.2 / §8.2 の packaging 別 MUST (depends / mimeType) も encode の時点で拒否する。
+test("Catalog: encodeCatalog は §7.2 / §8.2 の depends / mimeType の MUST を reject する", () => {
+  assert.throws(
+    () =>
+      encodeCatalog({
+        version: "draft-01",
+        tracks: [
+          { name: "t", packaging: "mediatimeline", isLive: true, mimeType: "application/json" },
+        ],
+      }),
+    /mediatimeline track must include depends per §7\.2/,
+  );
+
+  assert.throws(
+    () =>
+      encodeCatalog({
+        version: "draft-01",
+        tracks: [
+          {
+            name: "t",
+            packaging: "eventtimeline",
+            isLive: true,
+            eventType: "com.example.chat",
+            depends: [],
+          },
+        ],
+      }),
+    /eventtimeline track must have mimeType='application\/json' per §8\.2, got '\(absent\)'/,
+  );
 });
 
 test("Catalog: encodeCatalog の JSON フィールド順序は version→...→tracks→publishTracks→initDataList (§5.1.7)", () => {
   // §5.1.7: The Initialization Data List, if present, MUST be located after the tracks array.
+  // publishTracks の moqlog track は §9.4 が role="log" を MUST とするため付ける
+  // (encode 時にも track 単位の MUST を検証する)。
   const catalog: Catalog = {
     version: "draft-01",
     tracks: [{ name: "video", packaging: "loc", isLive: true }],
     initDataList: [{ id: "v-init", type: "inline", data: "AQID" }],
-    publishTracks: [{ name: "log", packaging: "moqlog", isLive: true }],
+    publishTracks: [{ name: "log", packaging: "moqlog", role: "log", isLive: true }],
   };
   const json = new TextDecoder().decode(encodeCatalog(catalog));
   const tracksAt = json.indexOf('"tracks"');
@@ -1937,6 +2438,94 @@ test("createCatalog: version は draft-01 になる", () => {
 test("createCatalog: isComplete=false は無視する (§5.1.3)", () => {
   const catalog = createCatalog([], { isComplete: false as unknown as true });
   assert.isUndefined(catalog.isComplete);
+});
+
+// 生成の時点で track 単位の MUST を検証する。encode と同じ関数を使うため、組み立てた
+// Catalog を送るまでの間に不正な状態を持ち回らない。
+test("createCatalog: track 単位の MUST 違反を reject する", () => {
+  // §5.2.18: role=video は codec が MUST
+  assert.throws(
+    () =>
+      createCatalog([
+        { name: "v", packaging: "loc", isLive: true, role: "video", bitrate: 1_000_000 },
+      ]),
+    /video track must include codec per §5\.2\.18/,
+  );
+
+  // §5.2.3: tracks と options.publishTracks をまたぐ (name, namespace) の重複
+  assert.throws(
+    () =>
+      createCatalog([{ name: "log", packaging: "loc", isLive: true }], {
+        publishTracks: [{ name: "log", packaging: "moqlog", role: "log", isLive: true }],
+      }),
+    /duplicate track name 'log' under namespace \(no namespace\) in publishTracks per §5\.2\.3/,
+  );
+
+  // §5.2.13: initRef の参照切れ
+  assert.throws(
+    () =>
+      createCatalog([{ name: "v", packaging: "loc", isLive: true, initRef: "missing" }], {
+        initDataList: [{ id: "init-1", type: "inline", data: "AQID" }],
+      }),
+    /track 'v' has initRef 'missing' not present in initDataList per §5\.2\.13/,
+  );
+});
+
+// 検証は track を組み替えず、渡された配列をそのまま Catalog に載せる (呼び出し側が保持して
+// いる配列と identity が変わると思わぬ共有のずれを生む)。
+test("createCatalog: 検証を通った tracks をそのまま保持する", () => {
+  const tracks: CatalogTrack[] = [
+    { name: "raw", packaging: "loc", isLive: true },
+    {
+      name: "v",
+      packaging: "loc",
+      isLive: true,
+      role: "video",
+      codec: "vp8",
+      bitrate: 1_000_000,
+    },
+  ];
+  const catalog = createCatalog(tracks);
+  assert.strictEqual(catalog.tracks, tracks);
+});
+
+// 非有限数は wire では null になり §5.2 の number MUST を満たさないため、生成の時点でも
+// decode と同じ文言で拒否する。
+test("createCatalog: 非有限数のフィールドを reject する", () => {
+  assert.throws(
+    () => createCatalog([{ name: "v", packaging: "loc", isLive: true, bitrate: Number.NaN }]),
+    /bitrate must be a number per §5\.2\.22, got object/,
+  );
+});
+
+// template の Location は内部表現で bigint を持つ。JSON 安全範囲外の値は encode 時に
+// number へ落とせず「自分の出力を自分で decode できない」ペアになるため、生成の時点で拒否する。
+test("createCatalog: template の Location が JSON 安全範囲外なら reject する (§7.4.1)", () => {
+  assert.throws(
+    () =>
+      createCatalog([
+        {
+          name: "vod",
+          packaging: "loc",
+          isLive: false,
+          template: [0, 2002, [BigInt(Number.MAX_SAFE_INTEGER) + 1n, 0n], [0n, 0n], 0, 0],
+        },
+      ]),
+    /template startLocation\[0\] exceeds JSON safe integer range/,
+  );
+
+  assert.throws(
+    () =>
+      createCatalog([
+        {
+          name: "vod",
+          packaging: "loc",
+          isLive: false,
+          template: [0, 2002, [-1n, 0n], [0n, 0n], 0, 0],
+        },
+      ]),
+    /template startLocation\[0\] must be non-negative/,
+  );
 });
 
 test("createCompleteCatalog: isComplete=true の Catalog を生成する", () => {

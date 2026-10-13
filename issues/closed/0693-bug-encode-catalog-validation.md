@@ -1,7 +1,7 @@
 # encodeCatalog が track 単位の MUST を検証せず不正な Catalog を送信できる
 
 - Created: 2026-09-24
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-10-14
 - Branch: feature/fix-encode-catalog-validation
 - Polished: 2026-09-24
 
@@ -55,4 +55,27 @@ closed の `0647-bug-catalog-required-validation.md` で受信側 (`decodeCatalo
 
 ## 解決方法
 
-{未着手}
+- `src/msf/catalogCodec.ts` の `encodeCatalog` は、fixed-order で組んだ object を `JSON.stringify` したバイト列を `decodeCatalogMessage` 自身に通してから返すようにした。検証対象を「実際に送る wire」に一致させ、track 単位の MUST と root の型 (§5.1.1 / §5.1.2 / §5.1.3 / §5.1.4 / §5.1.5 / §5.1.7 / §5.2 / §7.2 / §8.2 / §9.4 / §10.4) を decode 側と同じ関数・同じ文言で検証する。`JSON.stringify` の変換 (toJSON と getter の呼び出し、非有限数を null にする、undefined のプロパティを落とす、疎配列の穴を null にする) を含めて判定できるため、内部表現を写して検証する方式のような「検証した値と送る値のずれ」が無い。root の未知フィールドが `deltaUpdate` のときは decode が delta update として読むため、戻り値が full catalog であることも確かめる
+- `src/msf/tracks.ts` の `createCatalog` は、生成した Catalog を `assertCatalogEncodable` (同じ経路の検証入口。公開 API には含めない) に通す。組み立てた時点で違反が分かる。`tracks` / `publishTracks` / `initDataList` は変換せずそのまま保持し、送信の直前に `encodeCatalog` が再検証する
+- `serializeTrackForJson` は template を number へ変換する前に `validateMediaTimelineTemplate` (decode と同じ関数。内部表現の bigint Location も受理し、負値と `Number.MAX_SAFE_INTEGER` 超を拒否する) で検証する。形が壊れた template (配列でない / 6 要素でない / Location が 2 要素配列でない) を読んで TypeError になる経路を塞いだ
+- `src/msf/json.ts` に `assertFiniteNumber` を足した。JSON は非有限数 (NaN / ±Infinity) を null にするため wire では number でなくなり、`JSON.parse` は桁あふれした数値リテラル (`1e999`) を Infinity にする。track の数値フィールド (codec / bitrate / samplerate などの必須値、buffers、targetLatency、trackDuration、template の number) と root の `generatedAt` (catalog と delta の decode、delta の encode) で拒否する。decode の受理集合は「有限でない number を拒否する」分だけ厳しくなる (この値は再 encode で null になり自分で decode できなくなるため)
+- `isComplete` は own で enumerable なプロパティのときだけ wire に載せる (`JSON.stringify` が読む値と同じ基準)。false / 非 boolean の拒否は自己 decode (decode と同じ文言) に委ねる
+- `src/msf/catalogCodec.ts` の `encodeCatalogDelta` は `operations` と各 operation の型を plain `Error` で拒否する (TypeError を塞ぐ)。`generatedAt` は型と有限数を検証する。track 単位の MUST の検証は対象外のまま (delta 単体か合成後かは別の判断)
+- 配列でない `tracks` / `publishTracks`、object でない要素、`initDataList` の構造違反は decode と同じ文言の plain `Error` で拒否する (従来は TypeError になる経路があった)
+- テストは encode / `createCatalog` 経由の拒否 (§5.2.3 / §5.2.5 / §5.2.13 / §5.2.18 / §5.2.22 / §5.2.28 / §5.2.29 / §7.2 / §8.2 / §9.4 / §10.4 / §5.1.3 / §5.1.4 / §5.1.5 / §5.1.7)、非有限数、template の形状、JSON に出ない値 (undefined / 関数 / シンボル)、疎配列を追加した。PBT には「encode に成功した Catalog は必ず decode できる」「値が undefined のフィールドは encode が拒否しない」「非有限数を混ぜた Catalog は encode が必ず拒否する」を追加した
+- `devtools/src/hooks/useSubscriber.test.ts` の Catalog の fixture は、role に応じた必須フィールド (§5.2.18 / §5.2.22 / §5.2.28 / §5.2.29) を補う形にした
+
+### 検証
+
+- `npx vp check` / `npx tsc --noEmit` / `npx vp test --run` (218 ファイル / 3831 テスト) / `npx vp run e2e-test` (chromium 110 件) が通る
+- `/review-diff-code` を 5 周回し、致命的 0 件・重要 0 件で終了した (1〜4 周目の指摘はすべて反映済み)
+- `CHANGES.md` は CODEBASE.md の「MOQT RFC ドラフト中の特別ルール」に従い更新していない。この変更は従来 encode / 作成できていた違反 Catalog を拒否する破壊的変更である
+
+## 残した課題
+
+- `src/msf/timeline.ts` の Media / Event Timeline は、非有限数 (桁あふれした数値リテラル) を受理し、その戻り値を encode すると null になって自分の decode が拒否する経路が残る (本 issue は Catalog の encode と生成だけを扱う)
+- `encodeCatalogDelta` は delta の中身 (add / clone の track 単位 MUST、remove の track の形) を encode 時に検証しない。decode した delta は `decodeCatalogMessage` が op ごとに検証し、合成後の MUST は `applyCatalogDelta` が検証する (encode 時に delta 単体を検証するか合成後を検証するかは別の判断)
+- §9.4 / §10.4 の「MUST be declared in the publishTracks array」は検証していない (配列の位置の制約であり decode の受理集合も変わるため別 issue とする)
+- `renderGroup` (§5.2.11) / `altGroup` (§5.2.12) の整数性は decode も encode も検証しない (`createMediaPublisher` がオプションの時点で個別に守っている)。整数でない値は encode と decode を通り、相互接続の相手が拒否し得る
+- 相対的な影響として、encode は送るバイト列を decode してから返すため、Catalog 1 件あたりの encode コストが数 µs 増える (定期再送は最大 30 秒間隔であり実害は無い)
+- 非有限数のフィールドは wire では null になるため、encode 時のエラー文言は「must be a number per §X, got object」になる (`1e999` の decode は「must be a finite number ... got Infinity」)。原因をより直接示す文言にするには、wire 化の前に内部表現の数値を走査する必要がある

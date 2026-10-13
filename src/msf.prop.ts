@@ -418,6 +418,98 @@ test("Catalog: decode 後の version は常に draft-01", () => {
   );
 });
 
+/**
+ * track の数値フィールドに非有限数 (NaN / ±Infinity) を混ぜた Catalog の Arbitrary
+ *
+ * `JSON.stringify` は非有限数を null にするため、wire では §5.2 の number でなくなる。
+ * encode が拒否すべき入力であり、拒否をすり抜けると「encode できたのに自分の decode が
+ * 拒否する」状態になる。
+ */
+const catalogWithNonFiniteNumberArb: fc.Arbitrary<Catalog> = fc
+  .tuple(
+    catalogArb,
+    fc.constantFrom("bitrate", "width", "height", "framerate", "samplerate", "targetLatency"),
+    fc.constantFrom(Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY),
+  )
+  .map(([catalog, key, value]) => {
+    const [first, ...rest] = catalog.tracks;
+    if (first === undefined) {
+      return catalog;
+    }
+    return { ...catalog, tracks: [{ ...first, [key]: value } as CatalogTrack, ...rest] };
+  });
+
+/**
+ * root の数値フィールドに非有限数 (NaN / ±Infinity) を混ぜた Catalog の Arbitrary
+ *
+ * `generatedAt` (§5.1.2) も JSON では null になり、decode が拒否する。track と同じく、
+ * encode の時点で拒否されることを確かめる。
+ */
+const catalogWithNonFiniteRootArb: fc.Arbitrary<Catalog> = fc
+  .tuple(catalogArb, fc.constantFrom(Number.NaN, Number.POSITIVE_INFINITY))
+  .map(([catalog, value]) => ({ ...catalog, generatedAt: value }));
+
+/**
+ * track のフィールドに JSON に出ない値 (undefined) を混ぜた Catalog の Arbitrary
+ *
+ * `JSON.stringify` は値が undefined のプロパティを出力しないため、wire では未指定になる。
+ * どの role でも必須でないフィールドだけを選ぶ (`codec` は role が video / audio のとき
+ * §5.2.18 の必須であり、undefined にすると拒否されるのが正しい)。
+ */
+const catalogWithUndefinedFieldArb: fc.Arbitrary<Catalog> = fc
+  .tuple(catalogArb, fc.constantFrom("displayHeight", "width", "framerate", "label"))
+  .map(([catalog, key]) => {
+    const [first, ...rest] = catalog.tracks;
+    if (first === undefined) {
+      return catalog;
+    }
+    return { ...catalog, tracks: [{ ...first, [key]: undefined } as CatalogTrack, ...rest] };
+  });
+
+// encode に成功した Catalog は必ず自分で decode できる。encodeCatalog は作った JSON を
+// decodeCatalogMessage に通してから返すため、この性質は実装で保証される。ここでは、JSON の
+// 変換 (undefined のプロパティを落とす、非有限数を null にする) で意味が変わる値を混ぜても
+// 保証が崩れないことを固定する。
+test("Catalog: encode に成功した Catalog は必ず decode できる", () => {
+  fc.assert(
+    fc.property(
+      fc.oneof(catalogArb, catalogWithNonFiniteNumberArb, catalogWithUndefinedFieldArb),
+      (catalog) => {
+        let encoded: Uint8Array;
+        try {
+          encoded = encodeCatalog(catalog);
+        } catch {
+          // 拒否した入力は対象外 (拒否そのものは「非有限数を混ぜた Catalog は encode が必ず
+          // 拒否する」property で固定する)
+          return;
+        }
+        assert.doesNotThrow(() => decodeCatalogMessage(encoded));
+      },
+    ),
+  );
+});
+
+// 値が undefined のプロパティは JSON に出ないため、wire では未指定になる。encode が
+// 「型が違う」として拒否しないことを固定する (型では書けないが JavaScript からは渡せる)。
+test("Catalog: 値が undefined のフィールドは encode が拒否しない", () => {
+  fc.assert(
+    fc.property(catalogWithUndefinedFieldArb, (catalog) => {
+      assert.doesNotThrow(() => encodeCatalog(catalog));
+    }),
+  );
+});
+
+// 非有限数は JSON では null になり、wire で §5.1.2 / §5.2 の number でなくなる。encode は
+// 送る JSON を自分で decode して検証するため、この入力は必ず拒否される (catch で握り潰さず、
+// 期待どおりの拒否であることを固定する)。
+test("Catalog: 非有限数を混ぜた Catalog は encode が必ず拒否する", () => {
+  fc.assert(
+    fc.property(fc.oneof(catalogWithNonFiniteNumberArb, catalogWithNonFiniteRootArb), (catalog) => {
+      assert.throws(() => encodeCatalog(catalog));
+    }),
+  );
+});
+
 // =============================================================================
 // Media Timeline テスト
 // =============================================================================

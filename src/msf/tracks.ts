@@ -2,9 +2,13 @@
  * Catalog のトラック検索・生成と Group 番号付け
  * (draft-ietf-moq-msf-01 §5.1.7 / §5.2.13 / §6.1)
  *
+ * `createCatalog` は生成した Catalog がそのまま送れるかを `catalogCodec` の
+ * `assertCatalogEncodable` で確かめる (実際に送る JSON を decode 側の検証に通す)。
+ *
  * 参照: draft-ietf-moq-msf-01
  */
 
+import { assertCatalogEncodable } from "./catalogCodec";
 import { MSF_VERSION } from "./version";
 import type { Catalog, CatalogTrack } from "./types";
 
@@ -75,6 +79,13 @@ export function getTracksByRenderGroup(catalog: Catalog, renderGroup: number): C
 
 /**
  * 新しい Catalog を作成する
+ *
+ * 生成した Catalog を `assertCatalogEncodable` で検証する。実際に送る JSON を decode 側の
+ * 検証に通すため、track 単位の MUST などの違反は組み立てた時点で分かる。従来作成できていた
+ * 違反 Catalog を拒否する破壊的変更になる。
+ *
+ * 検証を通った `tracks` / `publishTracks` / `initDataList` は変換せずそのまま保持する。
+ * 生成後に書き換えても検証はやり直されないため、`encodeCatalog` が送信の直前に再検証する。
  */
 export function createCatalog(
   tracks: CatalogTrack[],
@@ -88,6 +99,7 @@ export function createCatalog(
     if (options.publishTracks !== undefined) catalog.publishTracks = options.publishTracks;
     if (options.initDataList !== undefined) catalog.initDataList = options.initDataList;
   }
+  assertCatalogEncodable(catalog);
   return catalog;
 }
 
