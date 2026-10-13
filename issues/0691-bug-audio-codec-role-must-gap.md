@@ -1,7 +1,7 @@
 # audio codec を持つ track に §5.2.28 / §5.2.29 の MUST が課されない
 
 - Created: 2026-09-24
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-10-14
 - Branch: feature/fix-audio-codec-role-must-gap
 - Polished: 2026-09-24
 
@@ -60,4 +60,27 @@ closed の `0647-bug-catalog-required-validation.md` は role を手掛かりに
 
 ## 解決方法
 
-{未着手}
+- `src/msf/catalogTrackValidation.ts` に `isAudioCodec(codec)` を追加した。WebCodecs Codec Registry §3 Audio Codec Registry の codec string (`alaw` / `flac` / `mp3` / `mp4a.*` / `opus` / `pcm-*` / `ulaw` / `vorbis`) の接頭辞で判定する。`mp4a` と `pcm-` は family (`mp4a.40.2` / `pcm-s16`) を表すため接頭辞で判定し、`parseAudioCodec` (`src/createMediaSubscriber.ts`) が `opus` / `mp4a` の接頭辞で扱うのと整合させた。video codec (`av01.*` / `avc1.*` / `hvc1.*` / `vp8` / `vp09.*`) とは接頭辞が重ならない
+- §5.2.28 / §5.2.29 の仕様上の条件は「audio codecs are specified」であり role ではないため、`validateRoleSpecificRules` を role 条件付き MUST (§5.2.18 / §5.2.22) だけに絞り、codec 条件の `validateAudioCodecRules` を新設した。呼び出し順は `validatePackagingSpecificRules` → `validateRoleSpecificRules` → `validateAudioCodecRules` とし、role=audio のときの報告順 (codec → bitrate → samplerate → channelConfig) は従来どおりにした。エラー文言は変えていない
+- `role: "audiodescription"` (§5.2.6 Table 5 の audio 系) / custom role / role 未指定 の track でも、audio codec を持てば samplerate と channelConfig を必須にした。packaging にも依存しない (moqlog / moqmetrics の track でも audio codec を持てば必須)。逆に role が video / audio のときの codec / bitrate は従来どおり必須である
+- `role: "audio"` で audio codec でない codec (custom codec など) を持つ track は samplerate / channelConfig を課さない (従来は role だけで必須にしていたため緩和になる)。§5.2.18 の仕様上の条件も role ではなく「codec を持つ track」だが、video / audio 以外には課さない従来の解釈を維持した
+- `src/msf/catalogDelta.ts` の `applyCatalogDelta` は clone 合成後に `validateAudioCodecRules` も呼ぶ (親から codec を継承 / codec を上書きした結果が audio codec なら必須)。合成後の track は型検証を通らないため、`validateAudioCodecRules` の入口で codec が文字列でなければ素通りさせる (型の検証は decode 側の §5.2.18 の責務。ここで TypeError を出すと「検証違反は plain Error」という契約から外れる)
+- `src/msf.ts` から `isAudioCodec` を再輸出した。パッケージの公開面 (`src/index.ts`) には含めない (`src/index.ts` は検証ヘルパーを公開しない方針)
+- `src/msf.prop.ts` の `catalogTrackArb` は role 条件 (video / audio → codec / bitrate) と codec 条件 (audio codec → samplerate / channelConfig) を分けて補うようにした。codec は role と独立に生成されるため、`codecArb` で video codec / audio codec / custom codec を重み付きで生成し、role 未指定や `audiodescription` と audio codec の組み合わせも PBT で踏むようにした
+- テストは §5.2.28 / §5.2.29 の role 非依存の拒否 (audiodescription / custom role / role 未指定 / moqlog)、role=audio でも audio codec でなければ課さない緩和、encode 経路 (§5.2.28 / §5.2.29) の拒否、clone 合成後の拒否、`isAudioCodec` の受理・非受理、報告順を追加した。既存テストの名前とコメントは role 条件と codec 条件を書き分けた (期待値の変更は無い)
+- `createMediaPublisher` と devtools の配信経路は元から audio track に samplerate / channelConfig を設定しており変更していない
+
+### 検証
+
+- `npx vp check` / `npx tsc --noEmit` / `npx vp test --run` (218 ファイル / 3843 テスト) / `npx vp run e2e-test` (chromium 110 件) が通る
+- `/review-diff-code` を 3 周回し、3 周目で致命的 0 件・重要 0 件になった (1〜2 周目の指摘はすべて反映済み)
+- `CHANGES.md` は CODEBASE.md の「MOQT RFC ドラフト中の特別ルール」(2026-10-12) に従い更新していない (完了条件の記載はこれより前のものである)。この変更は従来受理していた Catalog を拒否する破壊的変更と、従来拒否していた Catalog を受理する緩和の両方を含む
+
+## 残した課題
+
+- 購読側の対応コーデックは `opus` / `mp4a` のままで、`isAudioCodec` が受理する他の audio codec (`flac` / `vorbis` / `mp3` / `alaw` / `ulaw` / `pcm-*`) は `parseAudioCodec` が `unsupported audio codec` で失敗する。検証は通るが復号できない組み合わせが残る (本 issue の設計方針どおり別 issue とする)
+- audio codec の接頭辞の知識が `src/msf/catalogTrackValidation.ts` / `src/createMediaSubscriber.ts` / `devtools/src/utils/codec.ts` の 3 箇所にある (JSDoc で同期先を明記したが、機械的な固定は無い)
+- §5.4 の変数置換 (`resolveCatalogVariables`) は置換後に MUST を再検証しない。`codec: "%c%"` が audio codec に解決されると samplerate / channelConfig が無いまま戻る (送信時の `encodeCatalog` は拒否する。open の `0692-bug-catalog-init-ref-substitution-revalidation.md` が扱う)
+- `applyCatalogDelta` の add は合成後に再検証しない (wire の add は decode 時に検証済み。手組みの delta のみ)
+- `encodeCatalogDelta` は add / clone の track 単位 MUST を検証しない (open の `0849-bug-encode-catalog-delta-content-validation.md` が扱う)
+- `devtools/src/hooks/usePublisher.ts` と `devtools/src/hooks/usePublisher.test.ts` のコメントは §5.2.18 / §5.2.22 / §5.2.28 / §5.2.29 を一括りに「audio codec を指定する track に MUST」と書いており、role 条件と codec 条件の区別が反映されていない (本 issue の対象外)
