@@ -518,16 +518,30 @@ test("PlaybackTimeline: 120 秒の到着列でも同時刻の表示時刻の差�
         SYNC_MIN_DELTA_MS,
         naturalDifferenceMs - PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS,
       );
+      // 足すのは即座、戻すのは毎秒 PLAYBACK_DELAY_DECAY_MS_PER_SECOND まで、という設計の
+      // ため、後行側が前の状態で足した分はまだ戻り切っていないことがある。その分は差に
+      // 残る (上限までしか足せない分を、後行側の足し分がさらに広げる)。戻り切っていない
+      // 分は許容へ入れる。上限そのものは下の assert が守る
+      const breakdown = timeline.delayBreakdown;
+      const audioDelayMs =
+        (breakdown.audio.baseDelayMs ?? 0) +
+        (breakdown.audio.jitterDelayMs ?? 0) +
+        breakdown.audio.syncExtraDelayMs;
+      const videoDelayMs =
+        (breakdown.video.baseDelayMs ?? 0) +
+        (breakdown.video.jitterDelayMs ?? 0) +
+        breakdown.video.syncExtraDelayMs;
+      const trailingExtraMs =
+        audioDelayMs >= videoDelayMs
+          ? breakdown.audio.syncExtraDelayMs
+          : breakdown.video.syncExtraDelayMs;
+
       // 丸め (TIMESTAMP の µs 変換) と、分布の窓と最後の観測の差を許す幅 (ミリ秒)
       assert.isAtMost(
         maxDifferenceMs,
-        allowedDifferenceMs + ALLOWANCE_MS,
+        allowedDifferenceMs + trailingExtraMs + ALLOWANCE_MS,
         "同時刻の表示時刻の差が、合わせない分に収まること",
       );
-
-      // 同期の制御が足す分も上限を超えない。超えると、合わせても減らない差のために
-      // 相手側の表示が遅れたままになる (実測では映像へ 600 ms 足していた)
-      const breakdown = timeline.delayBreakdown;
       assert.isAtMost(breakdown.audio.syncExtraDelayMs, PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS);
       assert.isAtMost(breakdown.video.syncExtraDelayMs, PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS);
 
@@ -544,7 +558,7 @@ test("PlaybackTimeline: 120 秒の到着列でも同時刻の表示時刻の差�
       assert.isNotNull(skewMs, "同期ずれが求まること");
       assert.isAtMost(
         Math.abs(skewMs ?? Infinity),
-        allowedDifferenceMs + ALLOWANCE_MS,
+        allowedDifferenceMs + trailingExtraMs + ALLOWANCE_MS,
         "同期ずれが、合わせない分に収まること",
       );
     }),
@@ -567,7 +581,9 @@ test("PlaybackTimeline: 120 秒の到着列でも同時刻の表示時刻の差�
  * まま数十秒戻らなかった)。いまは合わせる量が上限までになり、残りは A/V のずれとして残る
  */
 test("PlaybackTimeline: 差が開いていた到着列でも映像の表示待ちは自分の揺らぎ + 上限までにする", () => {
-  for (const seed of [50, 139, 194]) {
+  // 722071 は develop の CI が落ちた入力である (fast-check の seed 869714401 が生成した
+  // 整数)。修正前は映像へ 102.18 ms 足して上限を超えていた
+  for (const seed of [50, 139, 194, 722071]) {
     const { timeline, maxDifferenceMs } = runArrivals(seed);
     const breakdown = timeline.delayBreakdown;
     const videoNaturalMs =
