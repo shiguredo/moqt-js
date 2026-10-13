@@ -1,7 +1,7 @@
 # PlaybackTimeline の同期の足し分が上限を超える
 
 - Created: 2026-10-12
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-10-13
 - Branch: feature/fix-playback-sync-delay-cap
 - Polished: 2026-10-13
 
@@ -42,4 +42,13 @@
 
 ## 解決方法
 
-{未着手}
+- `src/playbackTimeline.ts` の `alignSyncExtras` が足す量を上限 `PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS` でクランプした。目標 (`targetMs`) は同期が足した分を含む現在の値から求めるため、相手側が既に足している分を上乗せすると上限を超える。超える分は足さず、相手側の足し済み分は相手側の戻し (`decaySyncExtras`) に任せ、足りない分は A/V のずれとして残す
+- `src/playbackTimeline.prop.ts` の比較の許容を実装の契約に合わせた。足すのは即座、戻すのは毎秒 `PLAYBACK_DELAY_DECAY_MS_PER_SECOND` までという設計のため、後行側が前の状態で足した分は戻り切っていないことがあり、その分だけ差が広がる。許容へ入れるのはこの分だけで、上限そのものの assert は緩めていない
+- develop の CI が落ちた入力 (fast-check の seed 869714401 が生成した整数 722071) を固定した回帰テストへ追加した
+
+### 検証
+
+- 失敗を観測した入力 (整数 722071、修正前は映像の足し分 102.18213867187505 ms) で当該テストが通り、映像の足し分が 100.0 ms になること
+- レビューで指摘された別の入力 (整数 183013) で、修正前は上限の assert が、修正後はクランプだけでは差の assert が落ちること、許容を契約に合わせた後はすべて通ることを確認した
+- 同じ property を 25 回 × 3 = 75 seed 実行して失敗しないこと
+- `npx vp check` / `npx vp test --run` (3905 件) / `npx vp run e2e-test` (108 件) が通ること
