@@ -8,7 +8,9 @@ import {
   encodeEventTimeline,
   createCompleteCatalog,
   createVideoFrameSource,
-  isMediaStreamTrackProcessorAvailable,
+  createAudioFrameSource,
+  isAudioFrameSourceAvailable,
+  type AudioFrameSource,
   type AuthInfo,
   type Catalog,
   type CatalogTrack,
@@ -428,12 +430,13 @@ export function buildPublisherCatalog(options: PublisherCatalogOptions): Catalog
 /**
  * 音声を配信できるかどうかを判定する
  *
- * MediaStreamTrackProcessor は音声の取り出しに必須で、未実装のブラウザ
- * (Firefox / Safari) では音声だけを諦める。配信開始後に throw すると、既に
+ * MediaStreamTrackProcessor をメインスレッドに持たないブラウザ (Safari / Firefox) でも、
+ * Web Audio 経由で AudioData を取り出せるため音声を配信できる (src/audioSource.ts)。
+ * どちらの経路も無いブラウザでは音声だけを諦める。配信開始後に throw すると、既に
  * 確立した映像の配信まで巻き込んで止まるため、Catalog を作る前に判定する。
  */
 export function resolveAudioPublishable(audioSource: AudioSourceType): boolean {
-  return audioSource !== "none" && isMediaStreamTrackProcessorAvailable();
+  return audioSource !== "none" && isAudioFrameSourceAvailable();
 }
 
 /**
@@ -847,7 +850,7 @@ export function usePublisher() {
           track.stop();
         }
       };
-      startPublisherAudioMeter(generator.stream);
+      await startPublisherAudioMeter(generator.stream, requested);
       // ダミー音声は要求した形式で作るため、取れた形式は要求した値そのものになる
       pub.audioFormat.value = requested;
       return requested;
@@ -876,8 +879,11 @@ export function usePublisher() {
       }
       pub.audioStream.value = stream;
       pub.audioStreamCleanup.value = cleanup;
-      startPublisherAudioMeter(stream);
-      // マイクはサンプルレートとチャンネル数をデバイスが決めるため、実際に取れた値を持つ
+      await startPublisherAudioMeter(stream, requested);
+      // マイクはサンプルレートとチャンネル数をデバイスが決めるため、実際に取れた値を持つ。
+      // 取れない項目 (Safari は channelCount 制約を実装しておらず、getSettings も返さない) は
+      // 要求値のままにする。実際に流れる形式は取り出し経路が決めるため、
+      // prepareAudioForPublishing が AudioFrameSource の値で上書きする
       const captured = resolveCapturedAudioFormat(track.getSettings(), requested);
       pub.audioFormat.value = captured;
       return captured;
@@ -907,12 +913,12 @@ export function usePublisher() {
   ): Promise<AudioFormat | null> {
     if (!resolveAudioPublishable(source)) {
       // 音声を送らない設定 (source が "none") は意図した設定のためログに出さない。
-      // MediaStreamTrackProcessor が無いブラウザで音声だけを諦めた場合は、
-      // 映像だけの catalog が理由を告げずに届くため、必ず理由を残す
+      // 取り出し経路が無いブラウザで音声だけを諦めた場合は、映像だけの catalog が
+      // 理由を告げずに届くため、必ず理由を残す
       if (source !== "none") {
         addLog(
           "warn",
-          "[publisher] MediaStreamTrackProcessor is required for audio publishing but is not available in this browser, publishing without audio",
+          "[publisher] audio publishing requires MediaStreamTrackProcessor or Web Audio AudioWorklet, but neither is available in this browser, publishing without audio",
           { source },
         );
       }
@@ -933,22 +939,57 @@ export function usePublisher() {
     if (format === null) {
       return null;
     }
-    const supported = await isAudioEncoderConfigSupported(
-      codec,
-      bitrate,
-      format.sampleRate,
-      format.channels,
-    );
-    if (!supported) {
-      addLog("warn", "[publisher] audio codec is not supported in this browser", {
-        codec,
-        sampleRate: format.sampleRate,
-        channels: format.channels,
+    // 配信に使う取り出し経路を作る。実際の形式 (サンプルレートとチャンネル数) は
+    // 経路が決めるため、Catalog と AudioEncoder にはその値を使う。Web Audio 経路では
+    // AudioContext と AudioWorkletNode の設定値になり、マイクの形式 (Safari は
+    // channelCount 制約を実装しておらず、モノラルで取れることがある) に左右されない
+    const audioTrack = pub.audioStream.value?.getAudioTracks()[0];
+    if (audioTrack === undefined) {
+      addLog("warn", "[publisher] audio stream has no track, publishing without audio", {
+        source,
       });
       stopAudioStream();
       return null;
     }
-    return format;
+    let frameSource: AudioFrameSource;
+    try {
+      frameSource = await createAudioFrameSource(audioTrack, format);
+    } catch (error) {
+      addLog("warn", "[publisher] failed to capture audio frames, publishing without audio", {
+        source,
+        message: error instanceof Error ? error.message : String(error),
+      });
+      stopAudioStream();
+      return null;
+    }
+    if (pub.isStopping.value) {
+      // 取り出し経路を用意している間に配信の停止が始まった。ここで持ち続けると、
+      // 後始末を過ぎた AudioContext が残る
+      frameSource.close();
+      return null;
+    }
+    const captured: AudioFormat = {
+      sampleRate: frameSource.sampleRate,
+      channels: frameSource.channels,
+    };
+    pub.audioFrameSource.value = frameSource;
+    pub.audioFormat.value = captured;
+    const supported = await isAudioEncoderConfigSupported(
+      codec,
+      bitrate,
+      captured.sampleRate,
+      captured.channels,
+    );
+    if (!supported) {
+      addLog("warn", "[publisher] audio codec is not supported in this browser", {
+        codec,
+        sampleRate: captured.sampleRate,
+        channels: captured.channels,
+      });
+      stopAudioStream();
+      return null;
+    }
+    return captured;
   }
 
   /**
@@ -971,21 +1012,21 @@ export function usePublisher() {
   }
 
   /**
-   * 配信に使う音声トラックを取り出す
+   * 配信に使う音声の取り出し経路を取り出す
    *
-   * 音声のストリームは `prepareAudioForPublishing` が用意している。音声を使わない
-   * 場合は作成済みのストリームをここで止める。
+   * 取り出し経路は `prepareAudioForPublishing` が用意している。音声を使わない場合は
+   * 作成済みのストリームをここで止める。
    */
-  function takeAudioTrackForPublishing(audioPublishable: boolean): MediaStreamTrack | undefined {
+  function takeAudioFrameSourceForPublishing(audioPublishable: boolean): AudioFrameSource | null {
     if (!audioPublishable) {
       stopAudioStream();
-      return undefined;
+      return null;
     }
-    const audioTrack = pub.audioStream.value?.getAudioTracks()[0];
-    if (!audioTrack) {
-      throw new Error("Failed to get audio track");
+    const frameSource = pub.audioFrameSource.value;
+    if (!frameSource) {
+      throw new Error("Failed to get audio frame source");
     }
-    return audioTrack;
+    return frameSource;
   }
 
   /**
@@ -1019,6 +1060,12 @@ export function usePublisher() {
     // メーターも止め、送った LOC Audio Level の表示も消す
     stopPublisherAudioMeter();
     pub.audioMeterLevel.value = null;
+    // 取り出し経路を閉じる。まだ読み出しを始めていない (配信の途中で諦めた) 場合も
+    // AudioContext を残さない
+    if (pub.audioFrameSource.value) {
+      pub.audioFrameSource.value.close();
+      pub.audioFrameSource.value = null;
+    }
     // 手放したストリームの形式を残さない。Tracks カードは接続設定の値で宣言を出す
     pub.audioFormat.value = null;
     if (pub.audioStreamCleanup.value) {
@@ -1359,7 +1406,7 @@ export function usePublisher() {
   async function startAudioPublishing(
     session: Session,
     namespaceArray: string[],
-    audioTrack: MediaStreamTrack,
+    audioFrameSource: AudioFrameSource,
     options: {
       // 配信する音声トラックの名前 (catalog の name と同じ値)
       trackName: string;
@@ -1431,8 +1478,9 @@ export function usePublisher() {
     pub.audioLevelTimeline.value = new AudioLevelTimeline();
     pub.audioTimestampClock.value = new AudioTimestampClock();
     pub.audioCatchUp.value = new AudioPublishCatchUp();
-    const audioTrackProcessor = new MediaStreamTrackProcessor<AudioData>({ track: audioTrack });
-    pub.audioFrameReader.value = audioTrackProcessor.readable.getReader();
+    // 取り出し経路は prepareAudioForPublishing が作っている
+    // (MediaStreamTrackProcessor が無いブラウザでは Web Audio 経由になる)
+    pub.audioFrameReader.value = audioFrameSource.readable.getReader();
   }
 
   // WT-H2 で Datagram を選んだときの警告は、配信ごとに 1 回だけ出す
@@ -1728,10 +1776,7 @@ export function usePublisher() {
       if (resolveVideoAdvertisement(videoSourceValue).advertised) {
         advertisedTrackNames.push(videoTrackNameValue);
       }
-      if (
-        resolveAudioAdvertisement(audioSourceValue, isMediaStreamTrackProcessorAvailable())
-          .advertised
-      ) {
+      if (resolveAudioAdvertisement(audioSourceValue, isAudioFrameSourceAvailable()).advertised) {
         advertisedTrackNames.push(audioTrackNameValue);
       }
       // event timeline トラックは配信の有無にかかわらず常に広告する。メディアの
@@ -1868,7 +1913,7 @@ export function usePublisher() {
           framerateValue,
         );
       }
-      const audioTrack = takeAudioTrackForPublishing(audioPublishable);
+      const audioFrameSource = takeAudioFrameSourceForPublishing(audioPublishable);
       // Preview で取った映像と音声は配信に引き継いだ
       pub.isPreviewActive.value = false;
 
@@ -1885,8 +1930,8 @@ export function usePublisher() {
       }
 
       // 音声トラックを配信する
-      if (audioTrack && audioFormat !== null) {
-        await startAudioPublishing(session, namespaceArray, audioTrack, {
+      if (audioFrameSource && audioFormat !== null) {
+        await startAudioPublishing(session, namespaceArray, audioFrameSource, {
           trackName: audioTrackNameValue,
           useWorker,
           codec: audioCodecValue,
@@ -1950,7 +1995,7 @@ export function usePublisher() {
       if (videoInput !== null) {
         void processFrames();
       }
-      if (audioTrack) {
+      if (audioFrameSource) {
         void processAudioFrames();
       }
     } catch (error) {

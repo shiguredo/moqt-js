@@ -111,6 +111,14 @@ export interface StartSubscriberOptions {
   namespace: string[];
   /** 音声も購読する (省略すると映像だけを購読する) */
   audio?: boolean;
+  /**
+   * 映像も購読する (既定は true)。
+   *
+   * 配信側が映像トラックを catalog に載せていない場合 (音声だけの配信) は false にする。
+   * catalog に無いトラックを購読すると "video track 'video' not found in catalog" で
+   * 失敗し、音声だけを見たいテストがそのエラーに巻き込まれる
+   */
+  video?: boolean;
 }
 
 /**
@@ -593,7 +601,9 @@ async function startSubscriber(options: StartSubscriberOptions): Promise<HandleI
       options.url,
       {
         namespace: options.namespace,
-        video: { codec: "vp8" },
+        // exactOptionalPropertyTypes では optional な値に undefined を渡せないため、
+        // 購読するトラックだけを載せる
+        ...(options.video === false ? {} : { video: { codec: "vp8" } }),
         ...(options.audio === true ? { audio: { codec: "opus" } } : {}),
       },
       {

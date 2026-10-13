@@ -161,6 +161,7 @@ export function PublisherPanel() {
           <button
             onClick={togglePreview}
             disabled={previewBtnDisabled}
+            data-testid="publisher-preview-button"
             class="w-28 py-2.5 bg-slate-500 hover:bg-slate-600 disabled:bg-slate-300 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors flex items-center justify-center gap-2"
           >
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">

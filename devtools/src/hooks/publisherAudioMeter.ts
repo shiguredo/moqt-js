@@ -1,30 +1,35 @@
 /**
  * 配信側の音声メーターを動かす
  *
- * 取っている音のトラックを複製し、MediaStreamTrackProcessor で AudioData を読んで、
- * peak / RMS (dBFS) と直近の波形を publisher の signal へ反映する。受信側のメーターと同じ
- * 計算 (utils/audioLevel.ts) を使うため、送る側と受ける側の値をそのまま比べられる。
- * 配信の経路 (usePublisher の processAudioFrames) とは別のトラックで読むため、符号化には
- * 影響しない。Preview 中も配信中も、音声のストリームがある間は動かす。
+ * 取っている音のトラックを複製し、AudioData の取り出し経路 (ライブラリの
+ * src/audioSource.ts) で読んで、peak / RMS (dBFS) と直近の波形を publisher の signal へ
+ * 反映する。受信側のメーターと同じ計算 (utils/audioLevel.ts) を使うため、送る側と受ける側の
+ * 値をそのまま比べられる。配信の経路 (usePublisher の processAudioFrames) とは別のトラックで
+ * 読むため、符号化には影響しない。Preview 中も配信中も、音声のストリームがある間は動かす。
  *
  * publisher はページに 1 つであるため、メーターもモジュールで 1 つだけ持つ。
  */
 
-import { isMediaStreamTrackProcessorAvailable } from "moqt-js";
+import { createAudioFrameSource, isAudioFrameSourceAvailable } from "moqt-js";
 import { addLog } from "../signals/debugLog";
 import { readAudioSamples } from "../utils/audioLevel";
 import { AudioMeterAccumulator } from "../utils/audioMeterAccumulator";
+import type { AudioFormat } from "../utils/microphone";
 import * as pub from "../signals/publisher";
 
 /**
  * メーターの値を画面へ反映する間隔 (ミリ秒)
  *
- * マイクの AudioData は 10 ms ごとに届く。届くたびに反映すると描き直しが多すぎる
+ * 音声の AudioData は 10 ms ごとに届く。届くたびに反映すると描き直しが多すぎる
  */
 const AUDIO_METER_UPDATE_INTERVAL_MS = 50;
 
 // 動いているメーターを止める関数。止めると null に戻す
 let stopCurrentMeter: (() => void) | null = null;
+
+// メーターを開始した回数。取り出し経路の用意は非同期であるため、待っている間に
+// 止められた開始を捨てるために使う
+let meterGeneration = 0;
 
 /** 取っている音の値を消す (メーターは「-」と空の波形に戻る) */
 function clearMeterValues(): void {
@@ -39,25 +44,51 @@ function clearMeterValues(): void {
 /**
  * 音声のストリームのメーターを動かす。動いているメーターは先に止める
  *
- * MediaStreamTrackProcessor が無いブラウザ (Firefox / Safari) では動かさない
+ * 取り出し経路が無いブラウザでは動かさない。メーターが動かないことは配信の可否ではない
+ * ため、失敗しても配信は続ける (警告のログだけ残す)。
+ *
+ * @param stream - メーターの対象にする音声のストリーム
+ * @param requested - 取り出し経路に要求する形式。音声の形式は配信の開始まで確定しないため、
+ *   接続設定の値を渡す (メーターは `AudioData.sampleRate` を使うため、ずれても表示は壊れない)
  */
-export function startPublisherAudioMeter(stream: MediaStream): void {
+export async function startPublisherAudioMeter(
+  stream: MediaStream,
+  requested: AudioFormat,
+): Promise<void> {
   stopPublisherAudioMeter();
+  const generation = meterGeneration;
   const [track] = stream.getAudioTracks();
-  if (track === undefined || !isMediaStreamTrackProcessorAvailable()) {
+  if (track === undefined || !isAudioFrameSourceAvailable()) {
     return;
   }
-  // 配信の経路と同じトラックを 2 つの MediaStreamTrackProcessor で読まないよう複製する
+  // 配信の経路と同じトラックを 2 つの取り出し経路で読まないよう複製する
   const meterTrack = track.clone();
-  const reader = new MediaStreamTrackProcessor<AudioData>({
-    track: meterTrack,
-  }).readable.getReader();
+  let frameSource;
+  try {
+    frameSource = await createAudioFrameSource(meterTrack, requested);
+  } catch (error) {
+    meterTrack.stop();
+    addLog("warn", "[publisher] failed to start audio meter", {
+      message: error instanceof Error ? error.message : String(error),
+    });
+    return;
+  }
+  if (generation !== meterGeneration) {
+    // 取り出し経路を待っている間にメーターを止めた。ここで読み始めると、止めたはずの
+    // AudioContext が残る
+    frameSource.close();
+    meterTrack.stop();
+    return;
+  }
+  const reader = frameSource.readable.getReader();
   let stopped = false;
   stopCurrentMeter = (): void => {
     stopped = true;
+    // cancel でも取り出し経路は閉じるが、読み出しを始めていない場合のために明示的に閉じる
     reader.cancel().catch(() => {
       // 既に閉じている場合は無視する
     });
+    frameSource.close();
     meterTrack.stop();
   };
   void readMeter(reader, () => stopped);
@@ -65,6 +96,8 @@ export function startPublisherAudioMeter(stream: MediaStream): void {
 
 /** メーターを止め、値を消す */
 export function stopPublisherAudioMeter(): void {
+  // 開始を待っているメーターも無効にする (取り出し経路を用意している最中の停止)
+  meterGeneration++;
   if (stopCurrentMeter !== null) {
     stopCurrentMeter();
     stopCurrentMeter = null;
