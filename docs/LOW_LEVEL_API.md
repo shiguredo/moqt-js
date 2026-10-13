@@ -150,6 +150,13 @@ draft-ietf-moq-msf-01 §11.4.3: track に紐づくトークンは、そのトラ
 
 `sendObject()` / `sendDatagram()` の送信パラメータは `number` ベースだが、受信した `MoqtObject` は `bigint` ベースで返る。
 
+`sendObject()` の `endOfSubgroup` に `true` を渡すと、その Object の書き込み完了後に Subgroup を `FIN` で閉じる (draft-ietf-moq-transport-22 §11.3.2)。Subgroup に載せる Object が残っていないことを送信側が知っている場合に使う (catalog は 1 Group に 1 Object だけを載せるため常にこれに当たる)。
+
+- 送信が見送られた場合 (`forwardState` が `0`、または購読の `LOCATION_FILTER` の範囲外) は閉じない。その Group の Subgroup が既に開いていれば省略として記録され、後の Group 切り替えで `RESET` になる
+- 閉じた Group への後続の `sendObject()` は error 通知になる (返値の Promise は解決する)。`forwardState` が `0` の場合は送信前に見送られるため通知も出ない。`FIN` の完了がタイムアウトして `RESET` に切り替わった場合は、同じ Group へ再び送信できる
+- `SubgroupHeader` の `END_OF_GROUP` ビット (§11.3.1) は立てない。`FIN` の受信で相手側の `DATA_STREAM_TIMEOUT` は解除できるため、同ビットの「FIN から Group の最終 Object を推論する」経路は使わない
+- `sendDatagram()` の `endOfGroup` とは別のものである。あちらは Datagram の wire で Group の最後を示すビット (§11.2.1) を立てる。同じパラメータオブジェクトを使い回さないこと
+
 `notifyStateChange()` が通知に載せるパラメータは `LARGEST_OBJECT` (送信済み Object がある場合) / `FORWARD` / `LOCATION_FILTER` のみで、現在値から変化したものだけを送る。変化が無ければ送信しない。
 
 ### `Subscriber`
@@ -343,12 +350,14 @@ interface MoqtObject {
 5. `objectIdDelta` を計算する
 6. Object fields と payload を書く
 7. `previousObjectId` を更新する
+8. `endOfSubgroup` が `true` のとき、その Subgroup を `FIN` で閉じる (省略がある場合は `RESET`)
 
 #### 現在の送信モデル
 
 - `1 Group = 1 Subgroup = 1 Stream`
 - `publisherPriority` のデフォルトは `128`
 - `Stream Count` は実際に開いたデータストリーム数を `PUBLISH_DONE` に反映する
+- `FIN` を出す契機は、Group の切り替え、`endOfSubgroup` を付けた Object の送信、`ObjectStatus.END_OF_GROUP` の送信、`done()`、セッション終了時の後始末である
 
 #### `FIRST_OBJ_EXT` を固定で使う理由
 

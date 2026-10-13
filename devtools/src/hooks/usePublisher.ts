@@ -1544,7 +1544,10 @@ export function usePublisher() {
     const sendStartedAtMs = performance.now();
     let sendResult: Promise<void>;
     try {
-      sendResult = audioPublisherInstance.sendObject(sendParams);
+      // 音声は 1 Object = 1 Group なので、この Object で Subgroup を閉じる
+      // (draft-ietf-moq-transport-22 §11.3.2)。sendDatagram には渡さない
+      // (構造的部分型で通ってしまい、Datagram では読まれないフィールドになるため)
+      sendResult = audioPublisherInstance.sendObject({ ...sendParams, endOfSubgroup: true });
     } catch (error) {
       console.error("Failed to send audio object:", error);
       return;
@@ -1595,6 +1598,8 @@ export function usePublisher() {
       groupId,
       objectId: 0,
       payload: encodeCatalog(currentCatalog),
+      // 送信の直後に Subgroup を閉じる理由は sendCatalogObject (ライブラリ側) と同じ
+      endOfSubgroup: true,
     });
     addLog(
       "info",
@@ -1663,6 +1668,10 @@ export function usePublisher() {
         groupId,
         objectId: 0,
         payload: encodeEventTimeline(eventHistory),
+        // 1 メッセージ = 1 Group = 1 Object。送信の直後に Subgroup を閉じる
+        // (draft-ietf-moq-transport-22 §11.3.2)。次のメッセージが 30 秒以上来ないと
+        // 開いたままになり、次の Object を待つ購読側が DATA_STREAM_TIMEOUT で閉じる (§12.2)
+        endOfSubgroup: true,
       });
       pub.eventMessagesSent.value++;
     } catch (error) {
@@ -1826,10 +1835,12 @@ export function usePublisher() {
       // 購読が paused でなくなった時点で送り直すため、送信前に保持値を確定させる
       pub.catalog.value = createdCatalog;
       // Catalog の送信完了は待たず、stopPublishing の done() で待ち合わせる
+      // 送信の直後に Subgroup を閉じる理由は sendCatalogObject (ライブラリ側) と同じ
       void catalogPublisherInstance.sendObject({
         groupId: pub.catalogGroup.value,
         objectId: 0,
         payload: catalogPayload,
+        endOfSubgroup: true,
       });
       // catalog が relay の cache から落ちる前に送り直す (draft-ietf-moq-msf-01 Section 5)
       startCatalogRepublish(maxCacheDurationValue, sendCatalogUpdate);

@@ -1287,12 +1287,21 @@ export class MediaPublisherImpl implements MediaPublisher {
   }
 
   /**
-   * Catalog を Group の先頭 Object として送る
+   * Catalog を Group の先頭 Object として送り、その Subgroup を閉じる
    *
    * 送信は Group の先頭 Object (Object ID 0) に固定する (draft-ietf-moq-msf-01 §5)。
    * 呼び出し元 (publishCatalog / republishCatalog) も catalog Publisher の状態を見るが、
    * 送信点であるこの関数でも見る (この 1 箇所を通る全経路で「active でなければ送らない」を
    * 保証するため)。
+   *
+   * catalog は delta を送らないため、1 Group に載せる Object は常に 1 つになる
+   * (draft-ietf-moq-msf-01 §5 は同じ Group の Object ID 1 以降を delta update とする MUST を
+   * 定めるが、本ライブラリは delta を送らない)。この Object を書き終えた時点で Subgroup に
+   * 続く Object は無いため、endOfSubgroup を渡してその場で FIN で閉じる
+   * (draft-ietf-moq-transport-22 §11.3.2 の MUST)。閉じないと次の送り直し (既定 30 秒後)
+   * まで Subgroup が開いたままになる。開いた Subgroup で次の Object を待つ購読側は、
+   * §12.2 の DATA_STREAM_TIMEOUT でセッションを閉じうる (同節は STOP_SENDING か購読の終了を
+   * MAY とするが、moqt-rs の moq-sub はセッションごと閉じる)。
    */
   private async sendCatalogObject(catalog: Catalog, groupId: number): Promise<void> {
     if (!this.catalogPublisher || this.catalogPublisher.state !== "active") {
@@ -1304,6 +1313,7 @@ export class MediaPublisherImpl implements MediaPublisher {
       objectId: 0,
       payload: encodeCatalog(catalog),
       priority: PRIORITY_CATALOG,
+      endOfSubgroup: true,
     });
   }
 
@@ -1729,6 +1739,11 @@ export class MediaPublisherImpl implements MediaPublisher {
 
     // 音声フレームは fire-and-forget (後続のオブジェクトで上書きされるため落としても良い)。
     // 送信キューに入れてから送信が終わるまでの遅れを測る (audioPublishCatchUp.ts)
+    // 音声は 1 chunk = 1 Object = 1 Group であり (allocateAudioObject)、この Object を
+    // 書き終えた時点でその Subgroup に続く Object は無い。endOfSubgroup を渡して閉じる
+    // (draft-ietf-moq-transport-22 §11.3.2 の MUST)。datagram で送る場合は
+    // sendAudioFrameFireAndForget がこのフィールドを渡さない (Datagram の endOfGroup とは
+    // 別のもの。§11.2.1)
     this.sendAudioFrameFireAndForget(
       this.audioPublisher,
       {
@@ -1737,6 +1752,7 @@ export class MediaPublisherImpl implements MediaPublisher {
         payload,
         properties,
         priority: PRIORITY_AUDIO,
+        endOfSubgroup: true,
       },
       {
         timestampMicros: capturedTimestampMicros,
