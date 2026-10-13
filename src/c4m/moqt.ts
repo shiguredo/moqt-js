@@ -497,13 +497,22 @@ export function decodeMoqtScope(value: CborValue): MoqtScope {
 /**
  * `moqt-scope` をエンコードする
  *
- * `actions` が空の場合、`nil` が末尾以外にある場合、および名前空間マッチ無しで
- * トラックマッチだけを持つ場合はエラーを返す。後者は CDDL の位置指定で表現できず、
- * 黙ってトラック制限を落とすと認可が広がるためである。
+ * アクションが安全な整数でない場合、`actions` が空の場合、`nil` が末尾以外にある
+ * 場合、および名前空間マッチ無しでトラックマッチだけを持つ場合はエラーを返す。
+ * 最後のものは CDDL の位置指定で表現できず、黙ってトラック制限を落とすと認可が
+ * 広がるためである。
+ *
+ * アクションの検証はデコード側と揃える。デコードは i64 の整数を
+ * `Number` へ丸めるため、2^53 を超える値は元の値に戻らない。
  */
 export function encodeMoqtScope(scope: MoqtScope): CborValue {
   if (scope.actions.length === 0) {
     throw new C4mError("emptyActions");
+  }
+  for (const action of scope.actions) {
+    if (!Number.isSafeInteger(action)) {
+      throw new C4mError("invalidAction", Number.isFinite(action) ? action : undefined);
+    }
   }
   const items: CborValue[] = [cborArray(scope.actions.map((action) => cborInteger(action)))];
   if (scope.namespace.length === 0) {
@@ -681,6 +690,8 @@ export function decodeCatDpop(value: CborValue): CatDpop {
  *
  * label 1 はドラフトの例に合わせて整数 (1 / 0) で書く。ウィンドウが有限でない
  * 場合はエラーを返す (デコード側が拒否する値を持つトークンを発行しないため)。
+ * `raw` の label は i64 の整数だけを受け付ける。デコード側も整数以外の label を
+ * 拒否するため、受理域を揃える。
  */
 export function encodeCatDpop(catdpop: CatDpop): CborValue {
   const entries: Array<[CborValue, CborValue]> = [];
@@ -693,7 +704,12 @@ export function encodeCatDpop(catdpop: CatDpop): CborValue {
   if (catdpop.honorJti !== undefined) {
     entries.push([cborInteger(1), cborInteger(catdpop.honorJti ? 1 : 0)]);
   }
-  entries.push(...catdpop.raw.map((entry): [CborValue, CborValue] => [entry[0], entry[1]]));
+  for (const [key, value] of catdpop.raw) {
+    if (cborAsInt64(key) === undefined) {
+      throw new C4mError("unexpectedType", "catdpop label");
+    }
+    entries.push([key, value]);
+  }
   return cborMap(entries);
 }
 
@@ -720,6 +736,7 @@ export type C4mErrorCode =
   | "unexpectedType"
   | "emptyActions"
   | "emptyScopes"
+  | "invalidAction"
   | "invalidMatchArrayLength"
   | "invalidMatchType"
   | "nilNotLast"
@@ -751,6 +768,8 @@ function buildC4mErrorMessage(code: C4mErrorCode, detail: string | number | unde
       return "moqt-scope has no actions";
     case "emptyScopes":
       return "moqt claim has no scopes";
+    case "invalidAction":
+      return `moqt-action must be a safe integer: ${String(detail)}`;
     case "invalidMatchArrayLength":
       return `bin-match array must have 2 elements, got ${String(detail)}`;
     case "invalidMatchType":

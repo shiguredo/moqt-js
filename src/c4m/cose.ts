@@ -362,6 +362,13 @@ function decodeHeaderEntries(
   const header = createCoseHeader();
   for (const [key, entry] of entries) {
     const label = cborAsInteger(key);
+    // RFC 9052 Section 1.5: ラベルは整数かテキスト文字列 (int / tstr) でなければ
+    // ならない。それ以外のラベルを持つヘッダは不正な入力として拒否する
+    // (解釈しないパラメータとして `raw` に残すことも許されるが、同じマップの
+    // 重複判定 (正規化したエンコードの比較) と基準が食い違うため拒否する)
+    if (label === undefined && key.type !== "textString") {
+      throw new CoseError("unexpectedType", "header label");
+    }
     if (label === HEADER_ALGORITHM) {
       const identifier = cborAsInteger(entry);
       if (identifier === undefined) {
@@ -450,7 +457,14 @@ export function encodeCoseHeader(header: CoseHeader): CborValue {
   if (header.contentType !== undefined) {
     entries.push([cborInteger(HEADER_CONTENT_TYPE), header.contentType]);
   }
-  entries.push(...header.raw.map((entry): [CborValue, CborValue] => [entry[0], entry[1]]));
+  for (const entry of header.raw) {
+    // RFC 9052 Section 1.5: 不正なラベル (整数でもテキスト文字列でもない) を持つ
+    // メッセージを作ってはならない
+    if (cborAsInteger(entry[0]) === undefined && entry[0].type !== "textString") {
+      throw new CoseError("unexpectedType", "header label");
+    }
+    entries.push([entry[0], entry[1]]);
+  }
   if (header.critical.length > 0) {
     // デコード側と同じ規則: crit のラベルは理解でき、保護されるマップに実在
     // すること (RFC 9052 Section 3.1)
@@ -744,11 +758,22 @@ export function coseMessageSigningInput(message: CoseMessage): Uint8Array {
  * 例えばタグ無しでデコードしたメッセージに既定のオプションを渡すと CWT タグ (61) と
  * COSE タグ (17 / 18) が付与される。CWT タグを付ける場合は COSE タグも必要になる
  * (RFC 8392 Section 6)。
+ *
+ * ヘッダの `alg` の種別とメッセージの種別 (COSE_Sign1 / COSE_Mac0) が食い違う場合は
+ * `algorithmClassMismatch` で失敗する。デコード側 (`decodeCoseMessageValue`) が同じ
+ * 規則で拒否するため、自分自身が読めないメッセージをエンコードしない。
  */
 export function encodeCoseMessage(
   message: CoseMessage,
   options: CoseEncodingOptions = DEFAULT_COSE_ENCODING_OPTIONS,
 ): Uint8Array {
+  const algorithm = coseMessageHeader(message).algorithm;
+  if (algorithm !== undefined) {
+    const isMac = algorithmIsMac(algorithm);
+    if ((message.type === "sign1" && isMac) || (message.type === "mac0" && !isMac)) {
+      throw new CoseError("algorithmClassMismatch");
+    }
+  }
   const tagged =
     (message.type === "sign1" ? message.sign1.coseTagged : message.mac0.coseTagged) ||
     options.coseTag;

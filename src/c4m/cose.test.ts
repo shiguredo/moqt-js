@@ -28,6 +28,7 @@ import {
   coseMessagePayload,
   coseMessageSignature,
   coseMessageSigningInput,
+  createCoseHeader,
   decodeCoseMessage,
   decodeProtectedHeader,
   decodeUnprotectedHeader,
@@ -39,6 +40,7 @@ import {
   CBOR_NULL,
   type CborValue,
   cborArray,
+  cborBool,
   cborByteString,
   cborInteger,
   cborMap,
@@ -315,6 +317,74 @@ test("CWT タグは COSE タグが無いと付けられない", () => {
     () => encodeCoseMessage(message, { coseTag: false, cwtTag: true }),
     "invalidStructure",
   );
+});
+
+test("エンコード時も alg の種別とメッセージの種別の不一致を拒否する", () => {
+  // デコード側が拒否する組み合わせはエンコード側でも拒否する
+  const sign1WithMac: CoseMessage = {
+    type: "sign1",
+    sign1: {
+      protected: protectedHeader(5),
+      unprotected: [],
+      payload: new Uint8Array(0),
+      signature: new Uint8Array(0),
+      coseTagged: true,
+      cwtTagged: true,
+    },
+  };
+  assertCoseError(() => encodeCoseMessage(sign1WithMac), "algorithmClassMismatch");
+
+  const mac0WithSignature: CoseMessage = {
+    type: "mac0",
+    mac0: {
+      protected: protectedHeader(-7),
+      unprotected: [],
+      payload: new Uint8Array(0),
+      tag: new Uint8Array(0),
+      coseTagged: true,
+      cwtTagged: true,
+    },
+  };
+  assertCoseError(() => encodeCoseMessage(mac0WithSignature), "algorithmClassMismatch");
+
+  // 一致する組み合わせは通り、デコードできる
+  const sign1: CoseMessage = {
+    type: "sign1",
+    sign1: {
+      protected: protectedHeader(-7),
+      unprotected: [],
+      payload: new Uint8Array(0),
+      signature: new Uint8Array([1]),
+      coseTagged: true,
+      cwtTagged: true,
+    },
+  };
+  assert.equal(decodeCoseMessage(encodeCoseMessage(sign1)).type, "sign1");
+});
+
+test("整数でもテキスト文字列でもないヘッダラベルを拒否する", () => {
+  // RFC 9052 Section 1.5: ヘッダのラベルは int / tstr であり、それ以外のラベルを
+  // 持つマップはエラーになる
+  assertCoseError(
+    () => decodeProtectedHeader(cborMap([[cborBool(true), cborUnsigned(1n)]])),
+    "unexpectedType",
+    "header label",
+  );
+  assertCoseError(
+    () =>
+      decodeUnprotectedHeader(cborMap([[cborByteString(new Uint8Array([1])), cborUnsigned(1n)]])),
+    "unexpectedType",
+    "header label",
+  );
+  // 不正なラベルを持つメッセージを作ってはならない (MUST NOT)
+  const invalid = createCoseHeader();
+  invalid.raw.push([cborBool(false), cborUnsigned(1n)]);
+  assertCoseError(() => encodeCoseHeader(invalid), "unexpectedType", "header label");
+
+  // テキスト文字列のラベルは未知のパラメータとして往復する
+  const textLabel = createCoseHeader();
+  textLabel.raw.push([cborTextString("custom"), cborUnsigned(1n)]);
+  assert.deepEqual(decodeProtectedHeader(encodeCoseHeader(textLabel)).raw, textLabel.raw);
 });
 
 test("ヘッダは解釈しないパラメータを往復できる", () => {

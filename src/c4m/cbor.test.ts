@@ -227,6 +227,29 @@ test("不正な入力を拒否する", () => {
   assertCborError(() => decodeCbor(decodeHex("61ff")), "invalidUtf8");
 });
 
+test("エンコードできない整数と単純値を拒否する", () => {
+  // 非整数の number は BigInt への変換で RangeError になっていた
+  assertCborError(() => cborInteger(1.5), "invalidInteger");
+  assertCborError(() => cborInteger(Number.NaN), "invalidInteger");
+  assertCborError(() => cborInteger(2 ** 53), "invalidInteger");
+  assertCborError(() => cborTag(1.5, CBOR_NULL), "invalidInteger");
+  // 8 バイト引数の範囲外は下位バイトだけが書かれ、別の値になっていた
+  assertCborError(() => encodeCbor(cborUnsigned(2n ** 64n)), "invalidInteger");
+  assertCborError(() => encodeCbor(cborNegative(2n ** 64n)), "invalidInteger");
+  assertCborError(() => encodeCbor(cborTag(2n ** 64n, CBOR_NULL)), "invalidInteger");
+  assertCborError(() => encodeCbor({ type: "unsigned", value: -1n }), "invalidInteger");
+  // 単純値は 8 ビットに収まる整数だけ
+  assertCborError(() => cborSimple(300), "invalidSimpleValue", 300);
+  assertCborError(() => cborSimple(-1), "invalidSimpleValue", -1);
+  assertCborError(() => cborSimple(1.5), "invalidSimpleValue", 1.5);
+
+  // 境界は通る
+  assert.equal(encodeHex(encodeCbor(cborUnsigned(2n ** 64n - 1n))), "1bffffffffffffffff");
+  assert.deepEqual(encodeHex(encodeCbor(cborNegative(2n ** 64n - 1n))), "3bffffffffffffffff");
+  assert.deepEqual(cborInteger(Number.MAX_SAFE_INTEGER), cborUnsigned(9007199254740991n));
+  assert.deepEqual(cborInteger(-1), cborNegative(0n));
+});
+
 test("単純値と特殊値を往復できる", () => {
   assert.deepEqual(decodeCbor(new Uint8Array([0xf4])), CBOR_FALSE);
   assert.deepEqual(decodeCbor(new Uint8Array([0xf5])), CBOR_TRUE);
@@ -335,6 +358,42 @@ test("0.0 と -0.0 のキーは等価として扱う", () => {
   assertCborError(() => decodeCbor(decodeHex("a2f9000001f9800002")), "duplicateMapKey");
   // 片方だけなら通る
   assert.doesNotThrow(() => encodeCbor(cborMap([[cborFloat(-0), cborUnsigned(1n)]])));
+});
+
+test("負のゼロのキーも実際の決定論的エンコードのバイト順に並ぶ", () => {
+  // RFC 8949 Section 4.2.1: 並び順はキーの決定論的エンコードの辞書順である。
+  // -0.0 の決定論的エンコードは f9 8000 であり、1.5 (f9 3e00) より後になる。
+  // 重複判定だけは -0.0 と 0.0 を同一視する (Section 5.6.1)
+  const value = cborMap([
+    [cborFloat(-0), cborUnsigned(1n)],
+    [cborFloat(1.5), cborUnsigned(2n)],
+  ]);
+  assert.equal(encodeHex(encodeCbor(value)), "a2f93e0002f9800001");
+  // 往復するとキーの符号も出力順も保たれる
+  assert.deepEqual(
+    decodeCbor(encodeCbor(value)),
+    cborMap([
+      [cborFloat(1.5), cborUnsigned(2n)],
+      [cborFloat(-0), cborUnsigned(1n)],
+    ]),
+  );
+});
+
+test("予約値と長さのオーバーフローを拒否する", () => {
+  // additional information 28 / 29 / 30 は予約されている
+  assertCborError(() => decodeCbor(new Uint8Array([0x1c])), "invalidAdditionalInformation", 28);
+  assertCborError(() => decodeCbor(new Uint8Array([0x1d])), "invalidAdditionalInformation", 29);
+  assertCborError(() => decodeCbor(new Uint8Array([0x1e])), "invalidAdditionalInformation", 30);
+  // major type 0 / 1 / 6 の additional 31 は indefinite 長を持てない
+  assertCborError(() => decodeCbor(new Uint8Array([0x1f])), "invalidAdditionalInformation", 31);
+  assertCborError(() => decodeCbor(new Uint8Array([0x3f])), "invalidAdditionalInformation", 31);
+  assertCborError(() => decodeCbor(new Uint8Array([0xdf])), "invalidAdditionalInformation", 31);
+  // break は indefinite 長の外では使えない
+  assertCborError(() => decodeCbor(new Uint8Array([0xff])), "breakOutsideIndefinite");
+  // 1 バイトで書ける単純値 (0 〜 19) を 0xf8 で書くことはできない
+  assertCborError(() => decodeCbor(new Uint8Array([0xf8, 0x00])), "invalidSimpleValue", 0);
+  // 8 バイトの長さは Number.MAX_SAFE_INTEGER を超えると扱えない
+  assertCborError(() => decodeCbor(decodeHex("5b0020000000000000")), "lengthOverflow");
 });
 
 test("入れ子のキーも正規化してから比較する", () => {

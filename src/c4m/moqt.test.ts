@@ -288,6 +288,24 @@ test("スコープとクレームのエンコードエラーと往復を確認�
   assert.deepEqual(decodeMoqtClaim(encodedClaim), claim);
 });
 
+test("アクションが安全な整数でない場合はエンコードを拒否する", () => {
+  // 2^53 を超える値は CBOR へ書けてもデコードで元の値に戻らない
+  const fractional: MoqtScope = { actions: [1.5], namespace: [], track: undefined };
+  assertC4mError(() => encodeMoqtScope(fractional), "invalidAction", 1.5);
+  const notANumber: MoqtScope = { actions: [Number.NaN], namespace: [], track: undefined };
+  assertC4mError(() => encodeMoqtScope(notANumber), "invalidAction");
+  const tooLarge: MoqtScope = { actions: [2 ** 63], namespace: [], track: undefined };
+  assertC4mError(() => encodeMoqtScope(tooLarge), "invalidAction", 2 ** 63);
+
+  // 安全な整数の上限は書けて、デコードで元の値に戻る
+  const largest: MoqtScope = {
+    actions: [Number.MAX_SAFE_INTEGER],
+    namespace: [],
+    track: undefined,
+  };
+  assert.deepEqual(decodeMoqtScope(encodeMoqtScope(largest)), largest);
+});
+
 test("スコープのエンコードは空の省略可能部分を出力しない", () => {
   const actionOnly = createMoqtScope(["Publish"]);
   assert.deepEqual(encodeMoqtScope(actionOnly), cborArray([cborArray([cborInteger(6)])]));
@@ -445,6 +463,18 @@ test("nil で名前空間の長さを固定してもトラックマッチは評�
     ),
     false,
   );
+});
+
+test("catdpop の raw は整数ラベルだけを受け付ける", () => {
+  // デコード側は i64 の整数以外のラベルを拒否するため、エンコード側も揃える
+  const textLabel = createCatDpop(30, true);
+  textLabel.raw.push([cborTextString("custom"), cborUnsigned(1n)]);
+  assertC4mError(() => encodeCatDpop(textLabel), "unexpectedType", "catdpop label");
+
+  // 整数ラベルは往復する
+  const integerLabel = createCatDpop(30, true);
+  integerLabel.raw.push([cborInteger(1000), cborTextString("x")]);
+  assert.deepEqual(decodeCatDpop(encodeCatDpop(integerLabel)), integerLabel);
 });
 
 test("catdpop の非有限ウィンドウを拒否する", () => {

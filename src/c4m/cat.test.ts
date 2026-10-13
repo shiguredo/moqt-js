@@ -57,6 +57,7 @@ import {
   cborMapGet,
   cborTag,
   cborTextString,
+  cborUnsigned,
   decodeCbor,
   encodeCbor,
 } from "./cbor";
@@ -71,7 +72,9 @@ import {
   symmetricKey,
 } from "./crypto";
 import {
+  CLAIM_MOQT,
   CLAIM_MOQT_REVAL,
+  C4mError,
   createCatDpop,
   createMoqtScope,
   namespaceMatchValue,
@@ -417,6 +420,24 @@ test("raw のクレームは往復して取得できる", () => {
   const claims = decodeCatClaims(value);
   assert.deepEqual(getCatClaim(claims, CLAIM_CAT_VERSION), cborTextString("CAT-v1"));
   assert.deepEqual(encodeCatClaims(claims), value);
+});
+
+test("claims のデコードエラーは CatError に揃い、キー種別はエンコードでも拒否する", () => {
+  // moqt クレームの不正は下位モジュールでは C4mError だが、decodeCatClaims は CatError で返す
+  const emptyScopes = cborMap([[cborInteger(CLAIM_MOQT), cborArray([])]]);
+  const wrapped = assertCatError(() => decodeCatClaims(emptyScopes), "c4m");
+  assert.ok(wrapped.cause instanceof C4mError, "C4mError が cause に入っている");
+
+  // 整数でもテキスト文字列でもない claim key はエンコードでも拒否する
+  const invalidKey = createCatClaims();
+  invalidKey.raw.push([cborFloat(1.5), cborTextString("x")]);
+  assertCatError(() => encodeCatClaims(invalidKey), "unexpectedType", "claim key");
+
+  // 未知の整数キーとテキスト文字列キーは往復する
+  const raw = createCatClaims();
+  raw.raw.push([cborInteger(1000), cborTextString("x")]);
+  raw.raw.push([cborTextString("custom"), cborUnsigned(1n)]);
+  assert.deepEqual(decodeCatClaims(encodeCatClaims(raw)), raw);
 });
 
 test("cnf の jkt は IANA 登録のキーを優先する", () => {

@@ -381,8 +381,22 @@ function cborMapEntries(value: CborValue, name: string): Array<[CborValue, CborV
 
 /**
  * クレームセットをデコードする
+ *
+ * 失敗は `CatError` で返す。`moqt` / `catdpop` クレームのデコードは C4M のエラー
+ * (`C4mError`) を投げるため、ここで CAT のエラーへ揃える。
  */
 export function decodeCatClaims(value: CborValue): CatClaims {
+  try {
+    return decodeCatClaimsCore(value);
+  } catch (error) {
+    throw toCatError(error);
+  }
+}
+
+/**
+ * クレームセットをデコードする本体
+ */
+function decodeCatClaimsCore(value: CborValue): CatClaims {
   const entries = cborMapEntries(value, "claims");
   const claims = createCatClaims();
   for (const [key, entry] of entries) {
@@ -471,7 +485,8 @@ export function decodeCatClaims(value: CborValue): CatClaims {
  * クレームセットをエンコードする
  *
  * 型付きフィールドを持つ claim key を `raw` に置いた場合は、型付きフィールドが
- * 未設定でもエラーを返す。非有限値の数値クレームもエラーを返す。
+ * 未設定でもエラーを返す。整数でもテキスト文字列でもない claim key と、非有限値の
+ * 数値クレームもエラーを返す (どちらもデコード側が拒否する入力である)。
  *
  * デコードしたクレームを再エンコードすると表現が正規化される (`aud` の単一テキスト
  * は配列になり、`cti` のテキストはバイト文字列になり、整数値の浮動小数点数は整数に
@@ -519,10 +534,15 @@ export function encodeCatClaims(claims: CatClaims): CborValue {
     entries.push([cborInteger(CLAIM_CAT_DPOP), encodeCatDpop(claims.catdpop)]);
   }
   for (const [key, value] of claims.raw) {
+    // CWT の claim key は整数またはテキスト文字列 (RFC 8392 Section 3)。デコード側も
+    // それ以外の型を拒否するため、エンコード側でも同じ規則で拒否する
+    const keyInt = cborAsInt64(key);
+    if (keyInt === undefined && key.type !== "textString") {
+      throw new CatError("unexpectedType", "claim key");
+    }
     // 型付きフィールドを持つ claim key を raw に置くと、デコード時に型付き
     // フィールドと raw のどちらが使われるかが曖昧になる。値の型も検証できない
     // ため、設定の有無にかかわらず拒否する
-    const keyInt = cborAsInt64(key);
     if (keyInt !== undefined && isTypedClaimKey(Number(keyInt))) {
       throw new CatError("duplicateClaim", Number(keyInt));
     }

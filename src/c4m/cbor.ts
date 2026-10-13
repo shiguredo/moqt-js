@@ -61,6 +61,7 @@ export type CborErrorCode =
   | "duplicateMapKey"
   | "depthLimitExceeded"
   | "lengthOverflow"
+  | "invalidInteger"
   | "trailingBytes";
 
 export class CborError extends Error {
@@ -98,6 +99,8 @@ function buildCborErrorMessage(code: CborErrorCode, detail?: number): string {
       return `nesting depth exceeds ${MAX_CBOR_DEPTH}`;
     case "lengthOverflow":
       return "length does not fit in a safe integer";
+    case "invalidInteger":
+      return detail === undefined ? "integer is out of range" : `invalid integer: ${detail}`;
     case "trailingBytes":
       return "trailing bytes after the data item";
     default:
@@ -106,12 +109,34 @@ function buildCborErrorMessage(code: CborErrorCode, detail?: number): string {
 }
 
 /**
+ * 整数の引数として書ける値の上限 (major type 0 / 1 / 6 の引数は 8 バイト)
+ */
+const MAX_CBOR_INTEGER_ARGUMENT = 18_446_744_073_709_551_615n;
+
+/**
+ * number / bigint を整数へ揃える
+ *
+ * number は安全な整数だけを受け付ける。2^53 を超える number は既に丸められており、
+ * 呼び出し側が意図した値を復元できないためである。BigInt(value) は非整数で
+ * RangeError を投げるが、CBOR のエラーとして揃える。
+ */
+function toCborInteger(value: bigint | number): bigint {
+  if (typeof value === "number") {
+    if (!Number.isSafeInteger(value)) {
+      throw new CborError("invalidInteger", Number.isFinite(value) ? value : undefined);
+    }
+    return BigInt(value);
+  }
+  return value;
+}
+
+/**
  * 値の符号から整数のデータ項目を作る
  *
  * @param value - エンコードする整数 (number / bigint)
  */
 export function cborInteger(value: bigint | number): CborValue {
-  const integer = BigInt(value);
+  const integer = toCborInteger(value);
   if (integer >= 0n) {
     return { type: "unsigned", value: integer };
   }
@@ -169,7 +194,7 @@ export function cborMap(value: Array<[CborValue, CborValue]>): CborValue {
  * タグ付きデータ項目を作る (major type 6)
  */
 export function cborTag(tag: bigint | number, value: CborValue): CborValue {
-  return { type: "tag", tag: BigInt(tag), value };
+  return { type: "tag", tag: toCborInteger(tag), value };
 }
 
 /**
@@ -188,8 +213,15 @@ export function cborFloat(value: number): CborValue {
 
 /**
  * 上記以外の単純値のデータ項目を作る (major type 7 の 0 〜 19 と 32 〜 255)
+ *
+ * RFC 8949 Section 3.3 のとおり単純値は 0 〜 255 である。8 ビットに収まらない値を
+ * 受け付けるとエンコード時に黙って切り捨てられるため、ここで拒否する。
+ * 20 〜 31 の予約値の拒否はエンコード時に行う。
  */
 export function cborSimple(value: number): CborValue {
+  if (!Number.isInteger(value) || value < 0 || value > 255) {
+    throw new CborError("invalidSimpleValue", Number.isFinite(value) ? value : undefined);
+  }
   return { type: "simple", value };
 }
 
@@ -462,6 +494,11 @@ function checkDepth(depth: number): void {
  * 数値を最小の長さでエンコードする (RFC 8949 Section 3)
  */
 function writeHead(major: number, value: bigint, output: number[]): void {
+  // 引数は 8 バイトまで (RFC 8949 Section 3)。範囲外の値を渡すと下位バイトだけが
+  // 書かれて別の値になるため、切り捨てずに拒否する
+  if (value < 0n || value > MAX_CBOR_INTEGER_ARGUMENT) {
+    throw new CborError("invalidInteger");
+  }
   const prefix = major << 5;
   if (value < 24n) {
     output.push(prefix | Number(value));
@@ -563,36 +600,34 @@ function encodeCborValue(value: CborValue, depth: number, output: number[]): voi
 /**
  * マップを決定論的エンコードで出力する
  *
- * キーのエンコード済みバイト列の昇順に並べる (RFC 8949 Section 4.2.1)。同じ
- * エンコード済みバイト列のキーが 2 つある場合は重複キーとして拒否する。
+ * キーを実際の決定論的エンコードのバイト列の昇順に並べる (RFC 8949 Section 4.2.1)。
+ * 重複キーの判定だけはキーを正規化してから行う。`-0.0` と `0.0` は数値として
+ * 等しく、NaN は同一視するためである (RFC 8949 Section 5.6.1)。
+ *
+ * 並べ替えと重複判定で別のエンコードを使うのは、正規化したバイト列で並べると
+ * `-0.0` のキー (f9 8000) が `0.0` として (f9 0000) 並び、Section 4.2.1 が定める
+ * 順序と一致しないためである。
  */
 function encodeCborMap(
   entries: Array<[CborValue, CborValue]>,
   depth: number,
   output: number[],
 ): void {
-  const encodedKeys: Uint8Array[] = [];
-  for (const entry of entries) {
-    // -0.0 と 0.0 は同一のキーとして扱う (RFC 8949 Section 5.6.1)
-    const normalized = normalizeCborKey(entry[0], depth + 1);
-    const keyOutput: number[] = [];
-    encodeCborValue(normalized, depth + 1, keyOutput);
-    encodedKeys.push(new Uint8Array(keyOutput));
-  }
-  const order: number[] = [];
-  for (let index = 0; index < entries.length; index++) {
-    order.push(index);
-  }
-  order.sort((left, right) =>
-    compareBytes(encodedKeys[left] ?? EMPTY_BYTES, encodedKeys[right] ?? EMPTY_BYTES),
+  const encodedKeys = entries.map((entry) => encodeKeyBytes(entry[0], depth + 1));
+  const normalizedKeys = entries.map((entry) =>
+    encodeKeyBytes(normalizeCborKey(entry[0], depth + 1), depth + 1),
   );
-  for (let index = 1; index < order.length; index++) {
-    const previous = encodedKeys[order[index - 1] ?? 0] ?? EMPTY_BYTES;
-    const current = encodedKeys[order[index] ?? 0] ?? EMPTY_BYTES;
+
+  const duplicateOrder = sortedIndexes(normalizedKeys);
+  for (let index = 1; index < duplicateOrder.length; index++) {
+    const previous = normalizedKeys[duplicateOrder[index - 1] ?? 0] ?? EMPTY_BYTES;
+    const current = normalizedKeys[duplicateOrder[index] ?? 0] ?? EMPTY_BYTES;
     if (compareBytes(previous, current) === 0) {
       throw new CborError("duplicateMapKey");
     }
   }
+
+  const order = sortedIndexes(encodedKeys);
   writeHead(5, BigInt(entries.length), output);
   for (const index of order) {
     const key = encodedKeys[index] ?? EMPTY_BYTES;
@@ -604,6 +639,27 @@ function encodeCborMap(
       encodeCborValue(entry[1], depth + 1, output);
     }
   }
+}
+
+/**
+ * キーをエンコードしたバイト列を返す
+ */
+function encodeKeyBytes(value: CborValue, depth: number): Uint8Array {
+  const keyOutput: number[] = [];
+  encodeCborValue(value, depth, keyOutput);
+  return new Uint8Array(keyOutput);
+}
+
+/**
+ * 連番をバイト列の辞書順に並べ替えて返す
+ */
+function sortedIndexes(keys: readonly Uint8Array[]): number[] {
+  const order: number[] = [];
+  for (let index = 0; index < keys.length; index++) {
+    order.push(index);
+  }
+  order.sort((left, right) => compareBytes(keys[left] ?? EMPTY_BYTES, keys[right] ?? EMPTY_BYTES));
+  return order;
 }
 
 const EMPTY_BYTES = new Uint8Array(0);
