@@ -72,6 +72,7 @@ import type {
   ResolvedVideoPublishSettings,
 } from "./createMedia/settings";
 import type { VideoFrameSource } from "./frameSource";
+import type { AudioFrameSource } from "./audioSource";
 import { CATALOG_TRACK_NAME, decodeCatalogMessage, type Catalog } from "./msf";
 import { PublisherImpl, isErrorNotifiedByPublisher, type Publisher } from "./publisher";
 import type { PublishCallbacks, PublishOptions, Session } from "./session";
@@ -793,8 +794,8 @@ interface PublisherLifecycleControl extends PublisherLoopControl {
   videoConfigResendRequested: boolean;
   // 直前に VIDEO_CONFIG として送った description (session を跨いで保持しない)
   lastSentVideoConfig: Uint8Array | null;
-  // {} 代入のための緩和であり検証対象外である (実装型はプロセッサ型)
-  audioTrackProcessor: unknown;
+  // {} 代入のための緩和であり検証対象外である (実装型は AudioData の取り出し経路)
+  audioFrameSource: AudioFrameSource | null;
   videoFrameSource: VideoFrameSource | null;
   mediaStream: MediaStream | null;
   disposeAllResources(): Promise<void>;
@@ -857,6 +858,29 @@ function createRecordingFrameSource(): {
   return { source, isClosed: () => closed };
 }
 
+/**
+ * 破棄を記録する AudioFrameSource
+ *
+ * Web Audio 経路の取り出し経路は AudioContext を持つため、配信の停止で閉じられたことを
+ * 確かめる (閉じ忘れるとセッションを開き直すたびに増える)
+ */
+function createRecordingAudioFrameSource(): {
+  source: AudioFrameSource;
+  isClosed: () => boolean;
+} {
+  let closed = false;
+  const stream = new ReadableStream<AudioData>();
+  const source: AudioFrameSource = {
+    readable: stream,
+    sampleRate: 48000,
+    channels: 2,
+    close: () => {
+      closed = true;
+    },
+  };
+  return { source, isClosed: () => closed };
+}
+
 test("stop は encoder・source・processor・Publisher・session を残さない", async () => {
   // start / stop 繰り返しでリークしないことの検証。全種のリソースを注入し、
   // stop() 後に参照が null 化され破棄が呼ばれていることを確認する
@@ -869,12 +893,13 @@ test("stop は encoder・source・processor・Publisher・session を残さな�
   const { publisher: audioPublisher, doneCount: audioDoneCount } = createRecordingPublisher();
   const { publisher: videoPublisher, doneCount: videoDoneCount } = createRecordingPublisher();
   const { source, isClosed: isSourceClosed } = createRecordingFrameSource();
+  const { source: audioSource, isClosed: isAudioSourceClosed } = createRecordingAudioFrameSource();
   lifecycle.session = session;
   lifecycle.catalogPublisher = catalogPublisher;
   lifecycle.audioPublisher = audioPublisher;
   lifecycle.videoPublisher = videoPublisher;
   lifecycle.videoFrameSource = source;
-  lifecycle.audioTrackProcessor = {};
+  lifecycle.audioFrameSource = audioSource;
   lifecycle.mediaStream = {} as MediaStream;
 
   await publisher.stop();
@@ -887,7 +912,7 @@ test("stop は encoder・source・processor・Publisher・session を残さな�
   assert.isNull(lifecycle.audioEncoder);
   assert.isNull(lifecycle.videoEncoder);
   assert.isNull(lifecycle.videoFrameSource);
-  assert.isNull(lifecycle.audioTrackProcessor);
+  assert.isNull(lifecycle.audioFrameSource);
   assert.isNull(lifecycle.audioFrameReader);
   assert.isNull(lifecycle.videoFrameReader);
   // 破棄が呼ばれていること
@@ -896,6 +921,7 @@ test("stop は encoder・source・processor・Publisher・session を残さな�
   assert.equal(audioDoneCount(), 1);
   assert.equal(videoDoneCount(), 1);
   assert.isTrue(isSourceClosed());
+  assert.isTrue(isAudioSourceClosed());
   assert.isTrue(isAudioEncoderClosed());
   assert.isTrue(isVideoEncoderClosed());
   assert.isNull(lifecycle.mediaStream);

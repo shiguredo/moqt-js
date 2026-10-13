@@ -216,6 +216,20 @@ export {
   type VideoFrameSource,
 } from "./frameSource";
 
+// AudioData ソース (MediaStreamTrackProcessor / Web Audio AudioWorklet の 2 経路)
+export {
+  AUDIO_FRAME_BLOCK_MS,
+  audioFrameOffsetMicros,
+  buildAudioDataInit,
+  concatPlanarChannels,
+  createAudioFrameSource,
+  isAudioFrameSourceAvailable,
+  resolveAudioBlockFrames,
+  type AudioFrameSource,
+  type AudioFrameSourceOptions,
+  type BuildAudioDataInitOptions,
+} from "./audioSource";
+
 // MOQT 拡張の再エクスポート (draft-ietf-moq-transport-22 Section 10 (MOQT Properties))
 export {
   MOQTPropertyId,

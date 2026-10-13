@@ -43,11 +43,12 @@ import type {
   VideoPublishOptions,
   VideoStats,
 } from "./codec/types";
+import { createVideoFrameSource, type VideoFrameSource } from "./frameSource";
 import {
-  createVideoFrameSource,
-  isMediaStreamTrackProcessorAvailable,
-  type VideoFrameSource,
-} from "./frameSource";
+  createAudioFrameSource,
+  isAudioFrameSourceAvailable,
+  type AudioFrameSource,
+} from "./audioSource";
 
 // デフォルト設定
 
@@ -538,7 +539,7 @@ export class MediaPublisherImpl implements MediaPublisher {
 
   // MediaStream 関連
   private mediaStream: MediaStream | null = null;
-  private audioTrackProcessor: MediaStreamTrackProcessor<AudioData> | null = null;
+  private audioFrameSource: AudioFrameSource | null = null;
   private videoFrameSource: VideoFrameSource | null = null;
   private audioFrameReader: ReadableStreamDefaultReader<AudioData> | null = null;
   private videoFrameReader: ReadableStreamDefaultReader<VideoFrame> | null = null;
@@ -1504,16 +1505,25 @@ export class MediaPublisherImpl implements MediaPublisher {
           audio.channels,
         );
 
-        if (!isMediaStreamTrackProcessorAvailable()) {
+        // 音声の取り出し経路はブラウザで分かれる。MediaStreamTrackProcessor が無い
+        // ブラウザ (Safari / Firefox) は Web Audio 経由で AudioData を組み立てる
+        // (src/audioSource.ts)。どちらの経路も無いブラウザでは音声を諦めるのではなく
+        // 設定の誤りとして失敗させる (Catalog に音声トラックを載せた後に object が
+        // 出せない状態を作らない)
+        if (!isAudioFrameSourceAvailable()) {
           throw new Error(
-            "MediaStreamTrackProcessor is required for audio publishing but is not available in this browser",
+            "audio capture requires MediaStreamTrackProcessor or Web Audio AudioWorklet, but neither is available in this browser",
           );
         }
         // 前の配信の観測を持ち越さない
         this.audioTimestampClock = new AudioTimestampClock();
         this.audioCatchUp.reset();
-        this.audioTrackProcessor = new MediaStreamTrackProcessor({ track: audioTrack });
-        this.audioFrameReader = this.audioTrackProcessor.readable.getReader();
+        const audioFrameSource = await createAudioFrameSource(audioTrack, {
+          sampleRate: audio.sampleRate,
+          channels: audio.channels,
+        });
+        this.audioFrameSource = audioFrameSource;
+        this.audioFrameReader = audioFrameSource.readable.getReader();
       }
     }
 
@@ -1992,11 +2002,14 @@ export class MediaPublisherImpl implements MediaPublisher {
       }
     };
 
-    // VideoFrameSource とプロセッサを解放する
+    // VideoFrameSource と AudioFrameSource を解放する。音声はフレームリーダーの
+    // cancel でも後始末されるが、読み出しを始めていない場合のためにここでも閉じる
     const videoFrameSource = this.videoFrameSource;
     this.videoFrameSource = null;
     await guard(() => videoFrameSource?.close());
-    this.audioTrackProcessor = null;
+    const audioFrameSource = this.audioFrameSource;
+    this.audioFrameSource = null;
+    await guard(() => audioFrameSource?.close());
     // 次回 start() で上書きされるため保持しない
     this.mediaStream = null;
 
