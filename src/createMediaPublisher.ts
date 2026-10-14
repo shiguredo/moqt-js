@@ -9,6 +9,8 @@ import type { PublishOptions, Session } from "./session";
 import { isErrorNotifiedByPublisher, type Publisher, type SendObjectParams } from "./publisher";
 import * as LOC from "./loc";
 import { WallClockMapper } from "./mediaClock";
+import { fadeSpliceEdge } from "./audioSpliceFade";
+import type { AudioSamples } from "./audioTimeStretch";
 import { AudioTimestampClock } from "./audioTimestampClock";
 import { AudioPublishCatchUp, type AudioPublishCatchUpSendStart } from "./audioPublishCatchUp";
 import { catalogRepublishIntervalMs } from "./catalogRepublish";
@@ -1572,6 +1574,10 @@ export class MediaPublisherImpl implements MediaPublisher {
     const encoder = this.audioEncoder;
     if (!reader || !encoder) return;
     const generation = this.processingGeneration;
+    // 1 フレーム先読み (棄却の境目をフェードで繋ぐため)
+    let pending: AudioData | null = null;
+    let pendingHead = false;
+    let previousDropped = false;
 
     try {
       while (
@@ -1604,16 +1610,80 @@ export class MediaPublisherImpl implements MediaPublisher {
           durationMicros: audioData.duration,
           nowMs: performance.now(),
         });
-        if (encode) {
-          encoder.encode(audioData);
+        // 棄却で飛んだ境目は、そのまま符号化へ渡すと波形が飛んでクリックとして聞こえる。
+        // 1 フレーム先読みして、捨てる直前のフレームの末尾と捨てた直後のフレームの先頭を
+        // フェードで落とす (src/audioSpliceFade.ts)
+        if (pending !== null) {
+          this.encodeWithSpliceFade(encoder, pending, pendingHead, !encode);
+          pending = null;
         }
+        if (encode) {
+          pending = audioData;
+          pendingHead = previousDropped;
+          previousDropped = false;
+          continue;
+        }
+        previousDropped = true;
         audioData.close();
+      }
+      if (pending !== null) {
+        // ループを抜けたら保留分を渡す (末尾は落とさない)
+        this.encodeWithSpliceFade(encoder, pending, pendingHead, false);
+        pending = null;
       }
     } catch (error) {
       // 旧世代ループの失敗は通知しない (多重発火の防止)
       if (this.processingActive && generation === this.processingGeneration) {
         this.callbacks.onError?.(error instanceof Error ? error : new Error(String(error)));
       }
+    }
+  }
+
+  /**
+   * 棄却で飛んだ境目をフェードで繋いで符号化へ渡す
+   *
+   * 端を落とすときだけ `AudioData` を作り直す (その他のフレームはそのまま渡す)。
+   * `fadeSpliceEdge` はチャンネルごとの配列を扱うため、平面ごとに取り出して戻す
+   */
+  private encodeWithSpliceFade(
+    encoder: AudioEncoderWrapper,
+    data: AudioData,
+    head: boolean,
+    tail: boolean,
+  ): void {
+    try {
+      if (!head && !tail) {
+        encoder.encode(data);
+        return;
+      }
+      let planes: AudioSamples[] = [];
+      for (let plane = 0; plane < data.numberOfChannels; plane++) {
+        const samples = new Float32Array(data.numberOfFrames);
+        data.copyTo(samples, { planeIndex: plane, format: "f32-planar" });
+        planes.push(samples);
+      }
+      if (head) {
+        planes = fadeSpliceEdge(planes, data.sampleRate, "head");
+      }
+      if (tail) {
+        planes = fadeSpliceEdge(planes, data.sampleRate, "tail");
+      }
+      const merged = new Float32Array(data.numberOfFrames * data.numberOfChannels);
+      for (const [index, plane] of planes.entries()) {
+        merged.set(plane, index * data.numberOfFrames);
+      }
+      const replacement = new AudioData({
+        format: "f32-planar",
+        sampleRate: data.sampleRate,
+        numberOfFrames: data.numberOfFrames,
+        numberOfChannels: data.numberOfChannels,
+        timestamp: data.timestamp,
+        data: merged,
+      });
+      encoder.encode(replacement);
+      replacement.close();
+    } finally {
+      data.close();
     }
   }
 
