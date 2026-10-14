@@ -328,6 +328,7 @@ test("前提から外れた状態の警告を Publisher の画面と window.moqt
   await expect(popover.getByRole("term")).toHaveText([
     "timestampOffsetKeepsMoving",
     "catchUpKeepsStarting",
+    "catchUpDoesNotEnd",
   ]);
   await expect(popover).toContainText("docs/AV_SYNC_DECISIONS.md");
 });

@@ -15,6 +15,7 @@ import {
 } from "../../../src/playbackTimeline.ts";
 import { EMPTY_AV_SYNC, type AvSyncSnapshot } from "../signals/subscriber.ts";
 import {
+  CATCH_UP_STUCK_WARN_MS,
   CATCH_UP_WARN_STARTS,
   CATCH_UP_WARN_WINDOW_MS,
   EMPTY_PUBLISHER_WARNING_STATE,
@@ -85,6 +86,9 @@ function catchUpWith(options: {
   policy?: AudioPublishCatchUpStats["policy"];
   droppedFrames?: number;
   droppedMs?: number;
+  catchingUp?: boolean;
+  pendingMs?: number;
+  pendingFrames?: number;
 }): AudioPublishCatchUpStats {
   return {
     policy: options.policy ?? "drop",
@@ -93,14 +97,14 @@ function catchUpWith(options: {
     lagMs: 120,
     floorMs: 30,
     maxLagMs: 130,
-    pendingMs: 0,
+    pendingMs: options.pendingMs ?? 0,
     readLagMs: 0,
-    pendingFrames: 0,
+    pendingFrames: options.pendingFrames ?? 0,
     sendQueueMs: 0,
     sendQueueFrames: 0,
     sendLagMs: null,
     maxSendLagMs: null,
-    catchingUp: false,
+    catchingUp: options.catchingUp ?? false,
     catchUpStarts: options.catchUpStarts,
   };
 }
@@ -364,6 +368,121 @@ test("detectPublisherWarnings: 窓の外の記録は捨てる", () => {
   }
   // 60 秒 + 1 回分だけ残る (1 秒ごとに観測するため)
   assert.equal(state?.catchUpSamples.length, CATCH_UP_WARN_WINDOW_MS / 1_000 + 1);
+});
+
+// 追いつきが解除されないまま続く状態は、開始の回数を見る警告 (catchUpKeepsStarting) には
+// 現れない (開始が 1 回だけのため)。続いた時間と、その間に捨てた数が増えているかで見る。
+// 追いつきは、キューが 1 パケット以下になればやめ、記録は
+// AUDIO_PUBLISH_CATCH_UP_PENDING_TIMEOUT_MS (5 秒) で捨てられるため、それだけ続くのは
+// 状態が抜けられていないということである
+test("detectPublisherWarnings: 追いつきが解除されないまま続いたら警告を出す", () => {
+  const input = (droppedFrames: number) => ({
+    timestampOffset: null,
+    catchUp: catchUpWith({ catchUpStarts: 1, catchingUp: true, droppedFrames }),
+  });
+  const started = detectPublisherWarnings(null, input(1_500), 0);
+  assert.deepEqual(started.warnings, []);
+  assert.equal(started.state.catchUpSinceMs, 0);
+  assert.equal(started.state.catchUpDroppedAtStart, 1_500);
+
+  // 閾値の手前では出さない
+  const before = detectPublisherWarnings(started.state, input(1_700), CATCH_UP_STUCK_WARN_MS - 1);
+  assert.deepEqual(before.warnings, []);
+
+  // 閾値に達したら、その間に捨てた数と一緒に出す
+  const at = detectPublisherWarnings(before.state, input(1_805), CATCH_UP_STUCK_WARN_MS);
+  assert.lengthOf(at.warnings, 1);
+  const [warning] = at.warnings;
+  assert.equal(warning?.id, "catchUpDoesNotEnd");
+  assert.equal(warning?.decision, "AUDIO_PUBLISH_CATCH_UP_PENDING_TIMEOUT_MS");
+  const values = warning?.values.join(", ") ?? "";
+  assert.include(values, `heldMs=${CATCH_UP_STUCK_WARN_MS}`);
+  assert.include(values, "catchingUp=true");
+  assert.include(values, "catchUpStarts=1");
+  assert.include(values, "droppedSinceStart=305");
+  assert.include(values, "droppedFrames=1805");
+});
+
+// 実測 (moqt-devtools、2026-10-14) の値で警告が出ることを確かめる。16 秒の配信で
+// 1805 フレーム (14440 ms) を捨て、catchingUp は true、catchUpStarts は 1、
+// pendingMs は 32 ms に対して pendingFrames は 0 だった
+test("detectPublisherWarnings: 実測した、追いつきが解除されない状態で警告を出す", () => {
+  const input = {
+    timestampOffset: null,
+    catchUp: catchUpWith({
+      catchUpStarts: 1,
+      catchingUp: true,
+      droppedFrames: 1_805,
+      droppedMs: 14_440,
+      pendingMs: 32,
+      pendingFrames: 0,
+    }),
+  };
+  const started = detectPublisherWarnings(null, input, 0).state;
+  const update = detectPublisherWarnings(
+    started,
+    { ...input, catchUp: { ...input.catchUp, droppedFrames: 1_850 } },
+    CATCH_UP_STUCK_WARN_MS,
+  );
+  const [warning] = update.warnings;
+  assert.equal(warning?.id, "catchUpDoesNotEnd");
+  const values = warning?.values.join(", ") ?? "";
+  assert.include(values, "droppedMs=14440.0 ms");
+  assert.include(values, "pendingMs=32.0 ms");
+  assert.include(values, "pendingFrames=0");
+});
+
+// フレームが届かなくなると読み出しが止まり、追いつきの状態だけが残る。捨てた数が増えて
+// いないため、追いつきの解除ができない状態 (この警告の対象) ではない
+test("detectPublisherWarnings: 追いつきが続いても、捨てた数が増えていなければ警告にしない", () => {
+  const input = {
+    timestampOffset: null,
+    catchUp: catchUpWith({ catchUpStarts: 1, catchingUp: true, droppedFrames: 100 }),
+  };
+  let state = detectPublisherWarnings(null, input, 0).state;
+  state = detectPublisherWarnings(state, input, CATCH_UP_STUCK_WARN_MS * 2).state;
+  const update = detectPublisherWarnings(state, input, CATCH_UP_STUCK_WARN_MS * 3);
+  assert.deepEqual(update.warnings, []);
+});
+
+// 追いつきが終わったら数えるのをやめる。次に始まったら、そこから数え直す (前の追いつきの
+// 時間を持ち越すと、始まった直後に警告が出る)
+test("detectPublisherWarnings: 追いつきが終わったら、続いた時間を数え直す", () => {
+  const input = (catchingUp: boolean, droppedFrames: number) => ({
+    timestampOffset: null,
+    catchUp: catchUpWith({ catchUpStarts: 1, catchingUp, droppedFrames }),
+  });
+  const started = detectPublisherWarnings(null, input(true, 100), 0);
+  assert.equal(started.state.catchUpSinceMs, 0);
+
+  const ended = detectPublisherWarnings(started.state, input(false, 200), 1_000);
+  assert.deepEqual(ended.warnings, []);
+  assert.isNull(ended.state.catchUpSinceMs);
+  assert.isNull(ended.state.catchUpDroppedAtStart);
+
+  const again = detectPublisherWarnings(ended.state, input(true, 300), 2_000);
+  assert.deepEqual(again.warnings, []);
+  assert.equal(again.state.catchUpSinceMs, 2_000);
+  assert.equal(again.state.catchUpDroppedAtStart, 300);
+});
+
+// 配信をやり直すと累積の値は 0 に戻る。前の配信の時刻と回数を持ち越すと、始まった直後に
+// 警告が出てしまうため、減っていたら数え直す
+test("detectPublisherWarnings: 配信をやり直したら、追いつきの続いた時間を数え直す", () => {
+  const input = (droppedFrames: number) => ({
+    timestampOffset: null,
+    catchUp: catchUpWith({ catchUpStarts: 1, catchingUp: true, droppedFrames }),
+  });
+  // 前の配信で追いつきが固定されたまま終わる
+  const previous = detectPublisherWarnings(null, input(1_805), 0).state;
+  const stopped = detectPublisherWarnings(previous, input(1_805), 10_000).state;
+  assert.equal(stopped.catchUpSinceMs, 0);
+
+  // やり直した配信で追いつきが始まる (累積は 0 から)
+  const restarted = detectPublisherWarnings(stopped, input(120), 30_000);
+  assert.deepEqual(restarted.warnings, []);
+  assert.equal(restarted.state.catchUpSinceMs, 30_000);
+  assert.equal(restarted.state.catchUpDroppedAtStart, 120);
 });
 
 // 画面 1 行は識別子で始まり、判定に使った値を括弧の中に並べる。どの計器を見ればよいかを
