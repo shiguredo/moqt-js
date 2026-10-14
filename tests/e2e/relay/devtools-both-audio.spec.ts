@@ -217,6 +217,13 @@ interface DevtoolsSubscriberStats {
       sharingBases: boolean;
       unsharedReason: string;
       baseDifferenceMs: number | null;
+      baseDifferenceRecentMs: number | null;
+      baseDifferenceSettledMs: number | null;
+      baseDifferenceDeviationMs: number | null;
+      baseDriftMsPerSecond: number | null;
+      baseDriftLimitMs: number;
+      baseUnsharedReturnMs: number | null;
+      presentationDelayCapMs: number;
       audioDelayFeedback: {
         targetMs: number;
         jitterTargetMs: number;
@@ -297,6 +304,29 @@ function summarizeSubscriber(stats: DevtoolsSubscriberStats): string {
     `sharingBases=${avSync.delays.sharingBases}`,
     `unsharedReason=${avSync.delays.unsharedReason}`,
     `warnings=${stats.warnings.length}`,
+  ].join(", ");
+}
+
+/**
+ * 基準の共有の判定に使う値を 1 行にする (失敗メッセージとログに残す)
+ *
+ * 解除されて戻らないとき、差そのものが閾値を超えているのか (環境)、解除の判断が
+ * 進んでいないのか (実装) を切り分けるために出す。差は音声 - 映像である
+ */
+function summarizeBaseSharing(stats: DevtoolsSubscriberStats): string {
+  const { delays } = stats.avSync;
+  const ms = (value: number | null): string => (value === null ? "-" : value.toFixed(0));
+  return [
+    `sharingBases=${delays.sharingBases}`,
+    `unsharedReason=${delays.unsharedReason}`,
+    `baseDifferenceMs=${ms(delays.baseDifferenceMs)}`,
+    `baseDifferenceRecentMs=${ms(delays.baseDifferenceRecentMs)}`,
+    `baseDifferenceSettledMs=${ms(delays.baseDifferenceSettledMs)}`,
+    `baseDifferenceDeviationMs=${ms(delays.baseDifferenceDeviationMs)}`,
+    `baseDriftMsPerSecond=${delays.baseDriftMsPerSecond === null ? "-" : delays.baseDriftMsPerSecond.toFixed(1)}`,
+    `baseDriftLimitMs=${delays.baseDriftLimitMs.toFixed(0)}`,
+    `baseUnsharedReturnMs=${ms(delays.baseUnsharedReturnMs)}`,
+    `presentationDelayCapMs=${delays.presentationDelayCapMs.toFixed(0)}`,
   ].join(", ");
 }
 
@@ -651,10 +681,20 @@ test("配信の途中から購読しても、cache から配られた分を飛�
         subscriber.audio.playoutCatchUp.catchingUp,
         `後から購読した側の追いつきが続いている (${summarizeSubscriber(subscriber)})`,
       ).toBe(false);
+      // 一時計測: 共有の判定に使う値を毎秒出す
+      for (let observation = 0; observation < 25; observation++) {
+        const sampled = await readSubscriber(subscriberPage);
+        console.log(`  後から購読した側の共有 ${observation}: ${summarizeBaseSharing(sampled)}`);
+        if (sampled.avSync.delays.sharingBases) {
+          break;
+        }
+        await subscriberPage.waitForTimeout(SAMPLE_INTERVAL_MS);
+      }
+
       // A/V の基準が共有されている
       expect(
         subscriber.avSync.delays.sharingBases,
-        `後から購読した側で A/V の基準が共有されていない (${summarizeSubscriber(subscriber)})`,
+        `後から購読した側で A/V の基準が共有されていない (${summarizeSubscriber(subscriber)}) / ${summarizeBaseSharing(subscriber)}`,
       ).toBe(true);
       // 前提から外れた状態が無い
       expect(
@@ -736,10 +776,20 @@ test("購読をやり直しても、cache から配られた分を飛ばして l
     after.audio.playoutCatchUp.skippedMs - before.audio.playoutCatchUp.skippedMs,
     `やり直しの後の追いつきが飛ばした音が多すぎる (${summarizeSubscriber(after)})`,
   ).toBeLessThan(10_000);
+  // 一時計測: 共有の判定に使う値を毎秒出す
+  for (let observation = 0; observation < 25; observation++) {
+    const sampled = await readSubscriber(page);
+    console.log(`  やり直し後の共有 ${observation}: ${summarizeBaseSharing(sampled)}`);
+    if (sampled.avSync.delays.sharingBases) {
+      break;
+    }
+    await page.waitForTimeout(SAMPLE_INTERVAL_MS);
+  }
+
   // A/V の基準が共有されている
   expect(
     after.avSync.delays.sharingBases,
-    `やり直しの後に A/V の基準が共有されないまま (${summarizeSubscriber(after)})`,
+    `やり直しの後に A/V の基準が共有されないまま (${summarizeSubscriber(after)}) / ${summarizeBaseSharing(after)}`,
   ).toBe(true);
   // 前提から外れた状態が無い
   expect(
