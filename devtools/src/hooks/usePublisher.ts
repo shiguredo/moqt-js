@@ -1324,7 +1324,7 @@ export function usePublisher() {
       {
         maxCacheDuration: BigInt(options.maxCacheDuration),
         // draft-ietf-moq-transport-22 Section 10.6: DYNAMIC_GROUPS=1 を広告し、後から視聴を
-        // 始めた購読者が NEW_GROUP_REQUEST でキーフレームを要求できるようにする
+        // 始めた購読者が NEW_GROUP_REQUEST で新しい Group を要求できるようにする
         dynamicGroups: true,
         // draft-ietf-moq-msf-01 §11.4.3: track に紐づくトークンは PUBLISH にも MUST 付与する
         ...publishAuthorizationTokenOptions(session.setupAuthorizationToken),

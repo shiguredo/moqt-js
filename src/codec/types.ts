@@ -342,7 +342,14 @@ export interface MediaPublisher {
    * `close()` が解放と終端遷移を進めている間は `cannot stop while closing` で拒否する。
    */
   stop(): Promise<void>;
-  requestKeyframe(): void;
+  /**
+   * 次の encode するフレームで新しい Group を始める (キーフレームにする)
+   *
+   * MOQT にはキーフレームの要求というメッセージは無い。NEW_GROUP_REQUEST を受けた
+   * publisher が新しい Group を始めるための操作であり、映像では次のフレームが新しい
+   * Group の先頭 (キーフレーム) になる (draft-ietf-moq-transport-22 §9.20.19)。
+   */
+  startNewGroup(): void;
   /**
    * リソースを解放する (終端)
    *
@@ -407,7 +414,13 @@ export interface MediaSubscriber {
    * close() が解放と終端遷移を進めている間は cannot stop while closing で拒否する。
    */
   stop(): Promise<void>;
-  requestKeyframe(): Promise<void>;
+  /**
+   * REQUEST_UPDATE で NEW_GROUP_REQUEST を送り、新しい Group の開始を要求する
+   *
+   * MOQT にはキーフレームの要求というメッセージは無い (draft-ietf-moq-transport-22
+   * §9.20.19)。映像では新しい Group の先頭がキーフレームになる。
+   */
+  requestNewGroup(): Promise<void>;
   /**
    * リソースを解放する (終端)
    *

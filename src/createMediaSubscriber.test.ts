@@ -2915,20 +2915,20 @@ test("subscribeCatalog: SETUP にトークンが無ければ SUBSCRIBE と FETCH
 });
 
 /**
- * requestKeyframe の値検証用の制御口
+ * requestNewGroup の値検証用の制御口
  */
-interface SubscriberKeyframeControl {
+interface SubscriberNewGroupControl {
   currentState: MediaSubscriberState;
   videoSubscriber: Subscriber | null;
-  requestKeyframe(): Promise<void>;
+  requestNewGroup(): Promise<void>;
 }
 
-test("requestKeyframe は購読者が知る最大 Group ID + 1 を送信する", async () => {
+test("requestNewGroup は購読者が知る最大 Group ID + 1 を送信する", async () => {
   // 固定値でなく送信時点の値を参照することの検証。値は購読で受信した最大 Location
   // (largestReceivedLocation) と LARGEST_OBJECT (largestLocation) の大きい方から作る。
   // 送信間に値を書き換えて 2 回送り、snapshot でなく都度参照と分かるようにする
   const subscriber = new MediaSubscriberImpl("moqt://example.com/live", { namespace: ["live"] });
-  const control = subscriber as unknown as SubscriberKeyframeControl;
+  const control = subscriber as unknown as SubscriberNewGroupControl;
   control.currentState = "active";
   const sent: (RequestUpdateOptions | undefined)[] = [];
   const videoSubscriber = {
@@ -2943,18 +2943,18 @@ test("requestKeyframe は購読者が知る最大 Group ID + 1 を送信する",
   };
   control.videoSubscriber = videoSubscriber as unknown as Subscriber;
 
-  await control.requestKeyframe();
+  await control.requestNewGroup();
   // 受信した Object が LARGEST_OBJECT を追い越したら、受信した値を使う
   videoSubscriber.largestReceivedLocation = { group: 100n, object: 0n };
-  await control.requestKeyframe();
+  await control.requestNewGroup();
 
   assert.equal(sent[0]?.newGroupRequest, 42n, "LARGEST_OBJECT の次の Group");
   assert.equal(sent[1]?.newGroupRequest, 101n, "受信した最大 Location の次の Group");
 });
 
-test("requestKeyframe は情報なし時は 0 を送信する", async () => {
+test("requestNewGroup は情報なし時は 0 を送信する", async () => {
   const subscriber = new MediaSubscriberImpl("moqt://example.com/live", { namespace: ["live"] });
-  const control = subscriber as unknown as SubscriberKeyframeControl;
+  const control = subscriber as unknown as SubscriberNewGroupControl;
   control.currentState = "active";
   let sent: RequestUpdateOptions | undefined;
   control.videoSubscriber = {
@@ -2967,7 +2967,7 @@ test("requestKeyframe は情報なし時は 0 を送信する", async () => {
     },
   } as unknown as Subscriber;
 
-  await control.requestKeyframe();
+  await control.requestNewGroup();
 
   assert.equal(sent?.newGroupRequest, 0n);
 });

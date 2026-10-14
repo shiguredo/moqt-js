@@ -473,10 +473,7 @@ async function startBoth(page: Page, moqtUri: string, namespace: string): Promis
     .toBeGreaterThan(0);
 
   await page.getByTestId("subscriber-subscribe-button").click();
-  const playbackToggle = page.getByTestId("subscriber-audio-playback-toggle");
-  if (!(await playbackToggle.isChecked())) {
-    await playbackToggle.click();
-  }
+  await ensureAudioPlaybackEnabled(page);
 }
 
 /** A/V の基準の共有が戻るのを待つ上限 (ミリ秒)。解除の条件が続けば 2 秒で解除される */
@@ -512,6 +509,19 @@ async function waitForAudio(page: Page): Promise<void> {
       { message: "購読側が音声を復号して鳴らし始めるのを待つ", timeout: AUDIO_ARRIVAL_TIMEOUT_MS },
     )
     .toBe(true);
+}
+
+/**
+ * 受信した音声の再生を有効にする
+ *
+ * 再生のボタンは押されているかどうかを `aria-pressed` で表す。既に有効なら押さない
+ * (押すと停止になる)
+ */
+async function ensureAudioPlaybackEnabled(page: Page): Promise<void> {
+  const toggle = page.getByTestId("subscriber-audio-playback-toggle");
+  if ((await toggle.getAttribute("aria-pressed")) !== "true") {
+    await toggle.click();
+  }
 }
 
 test("配信した音声が、レベルと波形を保ったまま購読側で鳴る", async ({ page }) => {
@@ -656,10 +666,7 @@ test("配信の途中から購読しても、cache から配られた分を飛�
       });
       await subscriberPage.goto(`${DEVTOOLS_URL}?${subscriberParams.toString()}`);
       await subscriberPage.getByTestId("subscriber-subscribe-button").click();
-      const playbackToggle = subscriberPage.getByTestId("subscriber-audio-playback-toggle");
-      if (!(await playbackToggle.isChecked())) {
-        await playbackToggle.click();
-      }
+      await ensureAudioPlaybackEnabled(subscriberPage);
 
       // 後から購読しても音声が届いて鳴る
       await expect
@@ -746,10 +753,7 @@ test("購読をやり直しても、cache から配られた分を飛ばして l
   await page.getByTestId("subscriber-stop-button").click();
   await page.waitForTimeout(3_000);
   await page.getByTestId("subscriber-subscribe-button").click();
-  const playbackToggle = page.getByTestId("subscriber-audio-playback-toggle");
-  if (!(await playbackToggle.isChecked())) {
-    await playbackToggle.click();
-  }
+  await ensureAudioPlaybackEnabled(page);
 
   await expect
     .poll(
@@ -868,10 +872,7 @@ test("購読のやり直しを繰り返しても、毎回 live の音声へ戻�
     await page.waitForTimeout(cycle % 2 === 1 ? 1_000 : 3_000);
     const resumeStartedMs = Date.now();
     await page.getByTestId("subscriber-subscribe-button").click();
-    const playbackToggle = page.getByTestId("subscriber-audio-playback-toggle");
-    if (!(await playbackToggle.isChecked())) {
-      await playbackToggle.click();
-    }
+    await ensureAudioPlaybackEnabled(page);
 
     // 音声が届いて鳴り、live に戻るまで待つ
     let recovered: DevtoolsSubscriberStats | null = null;
@@ -1121,4 +1122,29 @@ test("負荷で配信側の棄却が起きても、音声が壊れない (境目
     `飛んだ音が多すぎる (${summarizeSubscriber(subscriber)})`,
   ).toBeLessThan(2_000);
   expect(publisher.warnings.length, "配信側に警告が出ている").toBe(0);
+});
+
+// NEW_GROUP_REQUEST は REQUEST_UPDATE に載せて送る。送っても画面に何も変わらないと、
+// 押せたのか、publisher が要求を無視したのかを切り分けられない。押した直後に送ったことを
+// ボタンに出し、少し経つと元の表示に戻ることを見る
+test("NEW_GROUP_REQUEST は押すと送ったことをボタンに出し、少し経つと元に戻る", async ({ page }) => {
+  test.setTimeout(TEST_TIMEOUT_MS);
+  const moqtUri = requireRelayUri();
+  if (moqtUri === null) {
+    return;
+  }
+
+  const namespace = formatTrackNamespace(createTestNamespace());
+  await startBoth(page, moqtUri, namespace);
+
+  // 購読が確立するまで待つ (ボタンは購読中だけ押せる)
+  const requestNewGroup = page.getByTestId("subscriber-request-new-group");
+  await expect(requestNewGroup).toBeEnabled();
+  await expect(requestNewGroup).toHaveText("NEW_GROUP_REQUEST");
+
+  await requestNewGroup.click();
+  // 押した直後は、送ったことをボタンで知らせる
+  await expect(requestNewGroup).toHaveText("Sent");
+  // 一定時間で元の表示に戻る (連打しても押せたことが分かる)
+  await expect(requestNewGroup).toHaveText("NEW_GROUP_REQUEST");
 });

@@ -885,9 +885,14 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   }
 
   /**
-   * キーフレームを要求する
+   * REQUEST_UPDATE で NEW_GROUP_REQUEST を送り、新しい Group の開始を要求する
+   *
+   * MOQT にはキーフレームの要求というメッセージは無く、送るのは新しい Group の開始の
+   * 要求である。映像では新しい Group の先頭がキーフレームになるため、新しい購読者の
+   * ためにキーフレームが要る場合や、品質の回復のためにキーフレームが要る場合に使う
+   * (draft-ietf-moq-transport-22 §9.20.19)。
    */
-  async requestKeyframe(): Promise<void> {
+  async requestNewGroup(): Promise<void> {
     if (this.currentState !== "active") {
       return;
     }
@@ -904,7 +909,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     // 従来どおりの文言で先にエラーを返すための防御であり、判定の根拠ではない。
     if (!supportsDynamicGroups(this.videoSubscriber.trackProperties)) {
       throw new Error(
-        "cannot request keyframe: track did not include DYNAMIC_GROUPS property with value 1",
+        "cannot request a new group: track did not include DYNAMIC_GROUPS property with value 1",
       );
     }
 
@@ -2547,7 +2552,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     // VIDEO_FRAME_MARKING が無い publisher の映像も復号できるようにする
     // (Group 先頭をキーフレームとして扱う)。購読が Group の途中から始まった場合は
     // 次の Group 先頭まで VideoDecoderWrapper がキーフレームを待つ。
-    // DYNAMIC_GROUPS=1 の Track では requestKeyframe() が NEW_GROUP_REQUEST を送り、
+    // DYNAMIC_GROUPS=1 の Track では requestNewGroup() が NEW_GROUP_REQUEST を送り、
     // publisher が新しい Group を開始すれば先頭から受け取れる
     // (draft-ietf-moq-transport-22 §9.20.19 の SHOULD。DYNAMIC_GROUPS=1 でない
     //  Track では送れず throw する)

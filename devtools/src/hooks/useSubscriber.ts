@@ -2611,7 +2611,7 @@ export function useSubscriber(
       // NEW_GROUP_REQUEST: 0 = グループ情報なし、新規開始を要求
       // draft-ietf-moq-transport-22 §9.20.19: SUBSCRIBE では MAY (foreknowledge 不要、
       // サポート外なら publisher が無視する) ため、DYNAMIC_GROUPS 確認は不要。
-      // REQUEST_UPDATE 経路の requestKeyframe では DYNAMIC_GROUPS=1 を確認する。
+      // REQUEST_UPDATE 経路の requestNewGroup では DYNAMIC_GROUPS=1 を確認する。
       if (newGroupRequestEnabled) {
         subscribeOptions.newGroupRequest = 0n;
       }
@@ -2828,12 +2828,22 @@ export function useSubscriber(
     resetSubscriberState(instance, { video: chainRef, audio: audioChainRef });
   };
 
-  const requestKeyframe = async (): Promise<void> => {
+  /**
+   * REQUEST_UPDATE で NEW_GROUP_REQUEST を送り、publisher へ新しい Group の開始を要求する
+   *
+   * MOQT にはキーフレームの要求というメッセージは無い。新しい Group の開始を要求し、
+   * 映像なら Group の先頭がキーフレームになることでキーフレームが届く
+   * (draft-ietf-moq-transport-22 §9.20.19)。
+   *
+   * @returns REQUEST_UPDATE を送れたら true。購読していない、DYNAMIC_GROUPS=1 が無い、
+   *   送信に失敗した場合は false
+   */
+  const requestNewGroup = async (): Promise<boolean> => {
     const instance = sub.getSubscriber(subscriberId);
     const subscriberInstance = instance?.subscriber.value;
     if (!subscriberInstance || subscriberInstance.state !== "active") {
-      console.warn(`[${subscriberId}] requestKeyframe: subscriber not active`);
-      return;
+      console.warn(`[${subscriberId}] requestNewGroup: subscriber not active`);
+      return false;
     }
 
     // draft-ietf-moq-transport-22 §9.20.19:
@@ -2844,9 +2854,9 @@ export function useSubscriber(
     // 対する保険として早期 return する。
     if (!supportsDynamicGroups(subscriberInstance.trackProperties)) {
       console.warn(
-        `[${subscriberId}] requestKeyframe: track did not include DYNAMIC_GROUPS=1, skipped`,
+        `[${subscriberId}] requestNewGroup: track did not include DYNAMIC_GROUPS=1, skipped`,
       );
-      return;
+      return false;
     }
 
     try {
@@ -2866,8 +2876,10 @@ export function useSubscriber(
       addLog("info", `[${subscriberId}] requested new group`, {
         newGroupRequest: newGroupRequest.toString(),
       });
+      return true;
     } catch (error) {
-      console.error(`[${subscriberId}] requestKeyframe: failed`, error);
+      console.error(`[${subscriberId}] requestNewGroup: failed`, error);
+      return false;
     }
   };
 
@@ -2881,7 +2893,7 @@ export function useSubscriber(
   return {
     startSubscribing,
     stopSubscribing,
-    requestKeyframe,
+    requestNewGroup,
     toggleAudioPlayback,
   };
 }
