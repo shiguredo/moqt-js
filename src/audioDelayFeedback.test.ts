@@ -20,6 +20,7 @@ import {
   AUDIO_DELAY_FEEDBACK_TOLERANCE_MS,
   AudioDelayFeedback,
   type AudioDelayFeedbackObservation,
+  AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS,
 } from "./audioDelayFeedback";
 import { summarizeTimings } from "./timingSummary";
 
@@ -63,7 +64,11 @@ test("観測が無い間は閉ループの目標を使わない", () => {
   assert.isNull(snapshot.latenessP50Ms, "観測が無いこと");
   // 観測が無い間は、既存の規則 (揺らぎだけから求めた目標) をそのまま使う
   assert.equal(feedback.targetDelayMs(0), 0, "観測が無ければ閉ループの目標を使わないこと");
-  assert.equal(feedback.targetDelayMs(300), 300, "揺らぎだけの目標をそのまま使うこと");
+  assert.equal(
+    feedback.targetDelayMs(300),
+    AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS,
+    "揺らぎだけの目標をそのまま使うこと",
+  );
 
   // 観測を 1 つ受けたら、閉ループの目標 (初期値 100 ms) と大きい方を使う
   feedback.update(observation(0, AUDIO_DELAY_FEEDBACK_TOLERANCE_MS));
@@ -72,7 +77,11 @@ test("観測が無い間は閉ループの目標を使わない", () => {
     AUDIO_DELAY_FEEDBACK_START_MS,
     "観測後は初期値を使うこと",
   );
-  assert.equal(feedback.targetDelayMs(300), 300, "揺らぎだけの目標の方が大きければそれを使うこと");
+  assert.equal(
+    feedback.targetDelayMs(300),
+    AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS,
+    "揺らぎだけの目標の方が大きければそれを使うこと",
+  );
 });
 
 // 遅れが続くなら目標を増やす。増やす量は「遅れ - 許容 + 余白」であり、1 回の上限までにする。
@@ -206,11 +215,15 @@ test("揺らぎだけから求めた目標の方が大きければ、それを�
   feedback.update(observation(0, 100));
 
   assert.equal(feedback.targetDelayMs(20), 90, "閉ループの目標 (上限まで) を使うこと");
-  assert.equal(feedback.targetDelayMs(260), 260, "NetEq の値の方が大きければそれを使うこと");
+  assert.equal(
+    feedback.targetDelayMs(260),
+    AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS,
+    "NetEq の値の方が大きければそれを使うこと",
+  );
 
   const snapshot = feedback.snapshot(260);
   assert.equal(snapshot.jitterTargetMs, 260, "揺らぎだけの目標を出すこと");
-  assert.equal(snapshot.appliedMs, 260, "実際に使う値を出すこと");
+  assert.equal(snapshot.appliedMs, AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS, "実際に使う値を出すこと");
   assert.equal(snapshot.ceilingMs, 90, "明示された上限を出すこと");
 });
 

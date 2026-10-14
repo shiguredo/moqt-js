@@ -36,6 +36,11 @@ import type { TimingSummary } from "./timingSummary";
 export const AUDIO_DELAY_FEEDBACK_MIN_MS = 80;
 
 /**
+ * 目標遅延の上限 (ミリ秒。src/playbackTimeline.ts の AUDIO_PLAYOUT_ARRIVAL_DELAY_MS と同値)
+ */
+export const AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS = 100;
+
+/**
  * 目標遅延の上限 (ミリ秒)
  *
  * まれな大きな乱れまで吸収しようとすると、常に大きく遅れて鳴ることになるため上限を置く。
@@ -212,9 +217,12 @@ export class AudioDelayFeedback {
    */
   targetDelayMs(jitterTargetMs: number): number {
     if (!this.observed) {
-      return jitterTargetMs;
+      return Math.min(jitterTargetMs, AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS);
     }
-    return Math.max(jitterTargetMs, this.feedbackTargetMs);
+    return Math.min(
+      Math.max(jitterTargetMs, this.feedbackTargetMs),
+      AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS,
+    );
   }
 
   /**
