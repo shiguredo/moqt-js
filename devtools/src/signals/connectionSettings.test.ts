@@ -450,21 +450,21 @@ test("buildQueryString: 音声出力デバイスを URL で往復できる", () 
 });
 
 // 音声の送り方。既定の subgroup は URL に載せず、datagram だけ往復する
-test("buildQueryString: audioDelivery=datagram を URL で往復でき、未知の値は無視する", () => {
-  audioDelivery.value = "subgroup";
+test("buildQueryString: audioDelivery=subgroup を URL で往復でき、未知の値は無視する", () => {
+  audioDelivery.value = "datagram";
   assert.isNull(new URLSearchParams(buildQueryString()).get("audioDelivery"));
 
-  audioDelivery.value = "datagram";
-  const params = new URLSearchParams(buildQueryString());
-  assert.equal(params.get("audioDelivery"), "datagram");
-
   audioDelivery.value = "subgroup";
+  const params = new URLSearchParams(buildQueryString());
+  assert.equal(params.get("audioDelivery"), "subgroup");
+
+  audioDelivery.value = "datagram";
   initFromUrl(params.toString());
-  assert.equal(audioDelivery.value, "datagram");
+  assert.equal(audioDelivery.value, "subgroup");
 
   initFromUrl("audioDelivery=stream");
-  assert.equal(audioDelivery.value, "datagram");
-  audioDelivery.value = "subgroup";
+  assert.equal(audioDelivery.value, "subgroup");
+  audioDelivery.value = "datagram";
 });
 
 // Stop Publish の止め方。既定の PUBLISH_DONE を送る止め方は URL に載せず、他の 2 つだけ

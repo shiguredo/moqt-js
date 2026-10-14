@@ -203,7 +203,10 @@ export const keyframeInterval = signal(10);
 // 音を送る。音声なしは "none" を選ぶ (URL では audioSource=none)。
 export const audioSource = signal<AudioSourceType>("dummy");
 // 音声 Object の送り方。既定は subgroup。datagram のときだけ URL に載せる
-export const audioDelivery = signal<AudioDelivery>("subgroup");
+// 音声の配送 (実測 2026-10-14、実リレー経由の 60 秒で比較):
+// datagram は配信側の送信の遅れが 62 → 0 ms、受信の遅れの最大が 313 → 246 ms、鳴り始めが
+// 166 → 155 ms になり、飛ばした音と警告はどちらも 0 のままだった。既定は datagram にする
+export const audioDelivery = signal<AudioDelivery>("datagram");
 // Stop Publish の止め方。既定は PUBLISH_DONE を送る止め方で、既定は URL に載せない
 export const publishStop = signal<PublishStopMode>("publish-done");
 export const audioCodec = signal<AudioCodecType>("opus");
@@ -776,7 +779,8 @@ function buildQueryParams(targetMode: DevtoolsMode): URLSearchParams {
   if (audioSource.value) {
     params.set("audioSource", audioSource.value);
   }
-  if (audioDelivery.value === "datagram") {
+  // 既定は datagram のため、subgroup にしたときだけ載せる
+  if (audioDelivery.value === "subgroup") {
     params.set("audioDelivery", audioDelivery.value);
   }
   // 既定 (PUBLISH_DONE を送る) は載せない。Copy URL で止め方を保つ
