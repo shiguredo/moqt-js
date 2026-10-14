@@ -422,6 +422,20 @@ function SubscriberStats({ statsSignal }: { statsSignal: ReadonlySignal<Subscrib
                 value: stats.audio.playoutDrops,
                 tone: "warn",
               },
+              {
+                label: "playoutCompressedMs",
+                value: Math.round(stats.audio.playoutCompressedMs),
+                tone: "warn",
+              },
+              {
+                label: "playoutConcealedMs",
+                value: Math.round(stats.audio.playoutConcealedMs),
+                tone: "warn",
+              },
+              {
+                label: "playoutConcealments",
+                value: stats.audio.playoutConcealments,
+              },
             ]}
           />
         </StatSection>

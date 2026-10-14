@@ -248,6 +248,17 @@ export interface SubscriberAudioStats {
   /** 遅れが上限を超えて捨てた音の数 */
   playoutDrops: number;
   /**
+   * 目標へ戻すために詰めた (時間圧縮した) 音の合計 (ミリ秒)
+   *
+   * 詰める操作は波形の周期を 1 つ削って繋ぐ (NetEq の accelerate と同じ)。続けて起きると
+   * 音が粗くなるため、量を読めるようにする
+   */
+  playoutCompressedMs: number;
+  /** 欠落した区間を、直前の音の末尾を繰り返して補間した合計 (ミリ秒) */
+  playoutConcealedMs: number;
+  /** 補間した回数 */
+  playoutConcealments: number;
+  /**
    * 音声の再生の観測値 (src/audioPlayoutTimingStats.ts)。鳴るはずの時刻 (再生予定時刻)・
    * 届いた時刻・鳴り始める時刻と、予定に対する余裕の分布 (直近 10 秒)、鳴らなかった量
    * (件数と ms) を理由ごとに持つ
@@ -473,6 +484,9 @@ export function buildSubscriberStats(sub: SubscriberInstance): SubscriberStats {
       lastVoiceActivity: audioLevel?.voiceActivity ?? null,
       playoutRebases: sub.audioPlayoutRebases.value,
       playoutDrops: sub.audioPlayoutDrops.value,
+      playoutCompressedMs: sub.audioPlayoutCompressedMs.value,
+      playoutConcealedMs: sub.audioPlayoutConcealedMs.value,
+      playoutConcealments: sub.audioPlayoutConcealments.value,
       playoutTiming: sub.audioPlayoutTiming.value,
       playoutCatchUp: sub.audioPlayoutCatchUp.value,
     },

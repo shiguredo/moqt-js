@@ -255,6 +255,11 @@ export const useDedicatedWorker = signal(true);
 // false: 届いたタイミングのまま表示する
 export const jitterBufferEnabled = signal(true);
 
+// 購読した音声の再生 (Subscriber の Play audio) を購読の開始時に有効にするか
+// true: 購読と同時に鳴らす。URL クエリ `playAudio=1` で共有できる
+// false: 既定。Subscriber の Play audio を押すまで鳴らさない
+export const playAudioEnabled = signal(false);
+
 // 設定の無効化状態
 export const settingsDisabled = signal(false);
 
@@ -842,6 +847,11 @@ function buildQueryParams(targetMode: DevtoolsMode): URLSearchParams {
     params.set("jitterBuffer", "0");
   }
 
+  // 音声の再生は既定で無効のため、有効にしたときだけ載せる
+  if (playAudioEnabled.value) {
+    params.set("playAudio", "1");
+  }
+
   if (isDebugPanelOpen.value) {
     params.set("debug", "1");
   }
@@ -1015,6 +1025,22 @@ function applyPublishStopFromUrl(params: URLSearchParams): void {
   const publishStopParam = params.get("publishStop");
   if (publishStopParam !== null && isPublishStopMode(publishStopParam)) {
     publishStop.value = publishStopParam;
+  }
+}
+
+/** `playAudio` を URL から読む (購読の開始時に音声の再生を有効にするか) */
+function applyPlayAudioFromUrl(params: URLSearchParams): void {
+  const playAudioParam = params.get("playAudio");
+  if (playAudioParam === "0" || playAudioParam === "1") {
+    playAudioEnabled.value = playAudioParam === "1";
+  }
+}
+
+/** `jitterBuffer` を URL から読む (復号したフレームを TIMESTAMP どおりに表示するか) */
+function applyJitterBufferFromUrl(params: URLSearchParams): void {
+  const jitterBufferParam = params.get("jitterBuffer");
+  if (jitterBufferParam === "0" || jitterBufferParam === "1") {
+    jitterBufferEnabled.value = jitterBufferParam === "1";
   }
 }
 
@@ -1252,10 +1278,9 @@ export function initFromUrl(search: string): void {
     useDedicatedWorker.value = useDedicatedWorkerParam === "1";
   }
 
-  const jitterBufferParam = params.get("jitterBuffer");
-  if (jitterBufferParam === "0" || jitterBufferParam === "1") {
-    jitterBufferEnabled.value = jitterBufferParam === "1";
-  }
+  applyJitterBufferFromUrl(params);
+
+  applyPlayAudioFromUrl(params);
 
   const authAliasTypeParam = params.get("authorizationTokenAliasType");
   if (authAliasTypeParam === "useValue" || authAliasTypeParam === "register") {

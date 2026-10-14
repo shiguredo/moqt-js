@@ -235,7 +235,7 @@ function runScenario(options: ScenarioOptions = {}): ScenarioResult {
   const pattern = options.arrivalPattern ?? "bursty";
   const timeline = new PlaybackTimeline({ timeOriginMs: 0, maxQueuedFrames: MAX_QUEUED_FRAMES });
   timeline.setTargetLatencyMs(options.targetLatencyMs ?? null);
-  const playout = new AudioPlayoutScheduler();
+  const playout = new AudioPlayoutScheduler({ stretchMinSeconds: 0 });
   const clock = new AudioClockBridge();
   const stats = new AudioPlayoutTimingStats(scenarioMs, 0);
   const audioFrames = Math.floor(scenarioMs / AUDIO_FRAME_MS);

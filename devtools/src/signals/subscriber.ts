@@ -209,6 +209,12 @@ export interface SubscriberInstance {
   // 鳴らす時刻を過ぎて届いたなどで基準を取り直した回数と、遅れが上限を超えて捨てた音の数
   audioPlayoutRebases: Signal<number>;
   audioPlayoutDrops: Signal<number>;
+  // 目標へ戻すために詰めた (時間圧縮した) 音の合計 (ミリ秒) と、欠落した区間を補間した
+  // 音の合計 (ミリ秒) と回数。どちらも音を加工する操作であり、続けて起きると音が粗くなる
+  // (ノイズの切り分けに使う。src/audioPlayout.ts)
+  audioPlayoutCompressedMs: Signal<number>;
+  audioPlayoutConcealedMs: Signal<number>;
+  audioPlayoutConcealments: Signal<number>;
   // 音声の再生の観測値 (再生予定時刻・到着時刻・鳴り始める時刻・予定に対する余裕・
   // 鳴らなかった量)。useSubscriber が一定間隔で更新する。まだ鳴らしていないときは
   // 既定値のまま
@@ -288,6 +294,9 @@ export function createSubscriberInstance(id: string): SubscriberInstance {
     audioPlaybackEnabled: signal(false),
     audioPlayoutRebases: signal(0),
     audioPlayoutDrops: signal(0),
+    audioPlayoutCompressedMs: signal(0),
+    audioPlayoutConcealedMs: signal(0),
+    audioPlayoutConcealments: signal(0),
     audioPlayoutTiming: signal<AudioPlayoutTimingSnapshot>(EMPTY_AUDIO_PLAYOUT_TIMING),
     audioPlayoutCatchUp: signal<AudioReceiveCatchUpStats>(EMPTY_AUDIO_RECEIVE_CATCH_UP),
     audioPeakDbfsLeft: signal<number | null>(null),

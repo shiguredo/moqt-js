@@ -84,6 +84,8 @@ export interface ConnectionSettingsSnapshot {
   useDedicatedWorker: boolean;
   /** jitter buffer を有効にするかどうか */
   jitterBufferEnabled: boolean;
+  /** 購読の開始時に音声の再生を有効にするかどうか */
+  playAudioEnabled: boolean;
 }
 
 /** 現在の接続設定をスナップショットへ変換する */
@@ -129,5 +131,6 @@ export function buildConnectionSettingsSnapshot(): ConnectionSettingsSnapshot {
     authorizationTokenFromC4m: settings.authorizationTokenBase64.value.length > 0,
     useDedicatedWorker: settings.useDedicatedWorker.value,
     jitterBufferEnabled: settings.jitterBufferEnabled.value,
+    playAudioEnabled: settings.playAudioEnabled.value,
   };
 }

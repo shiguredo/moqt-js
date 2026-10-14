@@ -21,6 +21,7 @@
  */
 
 import {
+  AUDIO_PLAYOUT_STRETCH_MIN_SECONDS,
   AudioClockBridge,
   AudioPlayoutScheduler,
   arrivalPlayoutDelaySeconds,
@@ -365,9 +366,11 @@ export class AudioPlayoutSession {
         data.copyTo(channelData, { planeIndex: channel, format: "f32-planar" });
         channels.push(channelData);
       }
+      // 詰めてよい長さは、目標に対して遅れている分までにする (削りすぎて「早すぎる」側へ
+      // 振れ、詰める操作が往復するのを防ぐ。src/audioTimeStretch.ts の compressSamples)
       const stretched =
         decision.compressSeconds > 0
-          ? compressSamples(channels, sampleRate)
+          ? compressSamples(channels, sampleRate, Math.round(decision.compressSeconds * sampleRate))
           : { channels, lengthChangeSamples: 0 };
       // 実際に詰められた長さを返す (詰められなかった分は遅れとして残る)
       this.playout.confirmStretch(-stretched.lengthChangeSamples / sampleRate);
@@ -489,6 +492,31 @@ export class AudioPlayoutSession {
   }
 
   /**
+   * 目標へ戻すために詰めた (時間圧縮した) 音の合計 (秒)
+   *
+   * 詰める操作は波形の周期を 1 つ削って繋ぐため、続けて起きると音が粗くなる。ノイズの
+   * 切り分けのため、量を読めるようにする (減らした分は遅れとして残さず、目標へ寄せる)
+   */
+  get compressedSeconds(): number {
+    return this.playout.compressed;
+  }
+
+  /**
+   * 欠落した区間を、直前の音の末尾を繰り返して補間した合計 (秒)
+   *
+   * 補間は繰り返しの継ぎ目が耳につくため、量を読めるようにする。隙間の長さには上限があり
+   * (src/audioPlayout.ts の AUDIO_PLAYOUT_MAX_CONCEAL_SECONDS)、超えた分は無音のまま残る
+   */
+  get concealedSeconds(): number {
+    return this.playout.concealed;
+  }
+
+  /** 補間した回数 (同じ長さの補間でも、回数が多いほど継ぎ目が増える) */
+  get concealments(): number {
+    return this.playout.concealments;
+  }
+
+  /**
    * 予約した音のうち、まだ鳴っていない分を鳴らなかった音として数える
    *
    * `AudioContext` を閉じると、予約した音は鳴らないまま切り捨てられる。この分はどの統計にも
@@ -509,7 +537,21 @@ export class AudioPlayoutSession {
     if (!this.audioDelayFeedback) {
       return;
     }
-    timeline.observeAudioPlayout(this.timing.audioDelayFeedback(atMs));
+    const feedback = this.timing.audioDelayFeedback(atMs);
+    // 不感帯の中の遅れは playout が意図して残す分である (`AUDIO_PLAYOUT_STRETCH_MIN_SECONDS`)。
+    // これを学習へ渡すと、playout は詰めないのに目標だけが上がり続け、遅延が伸びる
+    // (実測: 20 ms の不感帯で 60 秒後に目標 289 ms、遅延 296 ms まで上がった)。不感帯を
+    // 引いた分だけを遅れとして渡す
+    const deadbandMs = AUDIO_PLAYOUT_STRETCH_MIN_SECONDS * 1_000;
+    timeline.observeAudioPlayout({
+      ...feedback,
+      // 見るのは p50 (遅れの代表値) だけである。p95 と max は揺らぎの裾であり、
+      // 不感帯を引くと「たまに大きく遅れた」事実まで消えてしまう
+      latenessMs:
+        feedback.latenessMs === null
+          ? null
+          : { ...feedback.latenessMs, p50: Math.max(0, feedback.latenessMs.p50 - deadbandMs) },
+    });
   }
 
   /** 時計の対応と直前の音を消す (AudioContext を作り直した / 閉じたとき) */

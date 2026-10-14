@@ -3737,9 +3737,11 @@ test("getStats: 音声の再生の統計を返す", () => {
 // 完了条件: 詰めと遅れの統計もミリ秒換算で返る (非 0 の値で固定する)
 test("getStats: 詰めと遅れの統計をミリ秒で返す", () => {
   const { control } = createAvSyncSubscriber();
-  // 目標ちょうどに届き、今 + 余裕からしか鳴らせない音を作る (遅れ 10 ms を詰める)
+  // 目標を過ぎて届き、今 + 余裕からしか鳴らせない音を作る (遅れ 40 ms を詰める)
   const decision = control.audioPlayout.schedule(10, 0, 0.02, {
-    targetStartSeconds: 10,
+    // 目標を 30 ms 前に置く。今 + 余裕 (10 ms) からしか鳴らせないため、遅れは 40 ms になり、
+    // 不感帯 (`AUDIO_PLAYOUT_STRETCH_MIN_SECONDS` = 20 ms) を超える
+    targetStartSeconds: 10 - 0.03,
     arrivalSeconds: 10,
     enforceTarget: true,
     delaySeconds: AUDIO_PLAYOUT_DELAY_SECONDS,
@@ -4853,7 +4855,9 @@ test("createOutputStream: 再生の基準を消し、統計は残す", () => {
   };
   // 目標を過ぎて届いた音で今の遅れと詰めを作る
   const decision = control.audioPlayout.schedule(10, 0, 0.02, {
-    targetStartSeconds: 10,
+    // 目標を 30 ms 前に置く。今 + 余裕 (10 ms) からしか鳴らせないため、遅れは 40 ms になり、
+    // 不感帯 (`AUDIO_PLAYOUT_STRETCH_MIN_SECONDS` = 20 ms) を超える
+    targetStartSeconds: 10 - 0.03,
     arrivalSeconds: 10,
     enforceTarget: true,
     delaySeconds: AUDIO_PLAYOUT_DELAY_SECONDS,

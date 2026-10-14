@@ -27,6 +27,7 @@
 import { test, assert } from "vite-plus/test";
 import * as fc from "fast-check";
 import {
+  AUDIO_PLAYOUT_STRETCH_MIN_SECONDS,
   AUDIO_CLOCK_DEADBAND_MS,
   AUDIO_CLOCK_MAX_CHANGE_MS,
   AUDIO_PLAYOUT_ARRIVAL_DELAY_SECONDS,
@@ -261,9 +262,15 @@ test("目標を守るとき: 並べすぎだけを捨て、離れすぎた音は
           );
           assert.equal(decision.compressSeconds, 0);
         } else if (tooLate) {
-          // 目標を過ぎて届いた音は、今から鳴らせる最も早い時刻へずらし、その分を詰める
+          // 目標を過ぎて届いた音は、今から鳴らせる最も早い時刻へずらす。詰めるのは、遅れが
+          // 不感帯 (`AUDIO_PLAYOUT_STRETCH_MIN_SECONDS`) 以上のときだけである (数 ms の
+          // 系統的な遅れで毎回わずかに詰めると、削った分だけ早すぎる側へ振れて往復する)
           assert.closeTo(decision.startAt, scenario.nowSeconds + scenario.minLeadSeconds, EPSILON);
-          assert.isAbove(decision.compressSeconds, 0);
+          const latenessSeconds = decision.startAt - targetStartSeconds;
+          assert.equal(
+            decision.compressSeconds > 0,
+            latenessSeconds >= AUDIO_PLAYOUT_STRETCH_MIN_SECONDS - EPSILON,
+          );
         } else {
           // 目標の時刻をそのまま使う (前後させると映像とずれる)
           assert.equal(decision.startAt, targetStartSeconds);

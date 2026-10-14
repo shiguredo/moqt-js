@@ -1239,10 +1239,12 @@ export function useSubscriber(
         // 反映する 1 つのインスタンスを渡す
         playout: new AudioPlayoutSession({
           timing: audioPlayoutTimingRef.current,
-          // devtools は閉ループ (音声の目標遅延の学習) をまだ流していない。表示している
-          // AvSyncStats.delays.audioDelayFeedback の値もその状態に依存するため、移設と共有化を
-          // 行う段階では値を変えないよう false を渡す
-          audioDelayFeedback: false,
+          // 閉ループ (音声の目標遅延の学習) を流す (既定の true)。実測 (2026-10-14、実リレー
+          // 経由の 60 秒) では、流さないと目標が実際の到着に合わず、遅れが数 ms 残って
+          // 時間圧縮が 58 秒で 1691 ms 動き続けた (声が粗くなる)。学習させると、揺らぎの
+          // 分だけの遅延へ収束し、詰める操作が要らなくなる
+          // (src/audioDelayFeedback.ts / src/playbackTimeline.ts の observeAudioPlayout)
+          audioDelayFeedback: true,
         }),
       };
       audioPlaybackRef.current = playback;
@@ -1298,6 +1300,8 @@ export function useSubscriber(
     if (instance.audioPlaybackEnabled.value) {
       stopAudioPlayback();
       instance.audioPlaybackEnabled.value = false;
+      // URL クエリ (`playAudio`) へ反映する。共有した URL で同じ状態から始められる
+      settings.playAudioEnabled.value = false;
       return;
     }
 
@@ -1311,6 +1315,7 @@ export function useSubscriber(
     try {
       await startAudioPlayback();
       instance.audioPlaybackEnabled.value = true;
+      settings.playAudioEnabled.value = true;
     } catch (error) {
       console.error(`[${subscriberId}] failed to start audio playback:`, error);
       stopAudioPlayback();
@@ -1855,6 +1860,14 @@ export function useSubscriber(
       if (result.status === "dropped") {
         instance.audioPlayoutDrops.value += 1;
       }
+      // 音を加工した量 (時間圧縮と補間) を写す。ノイズの切り分けに使う
+      instance.audioPlayoutCompressedMs.value = Math.round(
+        playback.playout.compressedSeconds * 1_000,
+      );
+      instance.audioPlayoutConcealedMs.value = Math.round(
+        playback.playout.concealedSeconds * 1_000,
+      );
+      instance.audioPlayoutConcealments.value = playback.playout.concealments;
       if (result.status !== "skipped" && result.rebased) {
         instance.audioPlayoutRebases.value += 1;
       }

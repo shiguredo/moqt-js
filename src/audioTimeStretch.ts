@@ -255,13 +255,21 @@ function pitchPeriodOf(
 /**
  * 音声を時間圧縮する (ピッチ周期 1 つ分を削る)
  *
+ * 削る長さはピッチの周期で決まり、要求では選べない (周期は `TIME_STRETCH_MIN_LAG` の
+ * 2.5 ms から `TIME_STRETCH_MAX_LAG` の 15 ms)。遅れより長い周期を削ると、削りすぎた分は
+ * 「早すぎる」側へ振れ、次の音でまた遅れて詰める往復になる。往復のたびに周期が 1 つ消える
+ * ため、声では粗さ・ざらつきとして聞こえる。削ってよい長さの上限を渡し、周期がそれを
+ * 超えるときは操作しない
+ *
  * @param channels - チャンネルごとの音声 (すべて同じ長さ)
  * @param sampleRate - サンプルレート (Hz)
+ * @param maxLengthChangeSamples - 削ってよいサンプル数の上限 (省略時は無制限)
  * @returns 圧縮した音声と、削ったサンプル数 (負)。操作しなかったときは変化なし
  */
 export function compressSamples(
   channels: readonly AudioSamples[],
   sampleRate: number,
+  maxLengthChangeSamples: number = Number.POSITIVE_INFINITY,
 ): TimeStretchResult {
   const length = channels[0]?.length ?? 0;
   if (length === 0) {
@@ -274,6 +282,10 @@ export function compressSamples(
     return { channels: [...channels], lengthChangeSamples: 0 };
   }
   const removed = pitch.samples;
+  if (removed > maxLengthChangeSamples) {
+    // 遅れより長い周期しか無い。削ると行き過ぎるため、この音では詰めない
+    return { channels: [...channels], lengthChangeSamples: 0 };
+  }
   const output: AudioSamples[] = [];
   for (const channel of channels) {
     const compressed = new Float32Array(length - removed);

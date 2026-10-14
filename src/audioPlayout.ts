@@ -52,6 +52,32 @@ import {
 } from "./playbackTimeline";
 
 /**
+ * 時間圧縮を始める遅れ (秒)
+ *
+ * 時間圧縮は波形の周期を 1 つ削る操作であり、削る長さは周期 (2.5 ms から 15 ms) で決まる。
+ * 遅れが数 ms しかないときに動かすと、削った分だけ「早すぎる」側へ振れ、すぐまた遅れて
+ * 詰める往復になる。実測 (2026-10-14、実リレー経由の 60 秒) では、遅れが約 2.5 ms で
+ * 安定しているのに 58 秒の再生で 2479 ms を詰めており、声では粗さとして聞こえる。
+ * そこで、遅れが 20 ms 未満のときは詰めない。時計の対応付けの不感帯 (30 ms) の中で吸収できる幅で
+ * あり、実測 (2026-10-14、実リレー経由の 60 秒) では圧縮が 1911 ms から 796 ms へ減り、
+ * 鳴り始めの遅れは 103 ms から 114 ms へ僅かに伸びるだけだった。
+ * 時計の対応付けは読み取りごとの数 ms の揺れを意図して無視しており、その範囲の遅れは
+ * 「予定の方が僅かにずれている」だけである。ここで追いかけると、時計層が無視した誤差を
+ * 音の加工で打ち消すことになる。実測 (2026-10-14、実リレー経由の 60 秒) では、不感帯を
+ * 5 ms にすると 1691 ms、10 ms にすると 1911 ms を時間圧縮し、20 ms にすると 796 ms まで
+ * 減った (遅れの代表値は 0、鳴り始めの遅れは 98〜114 ms でほぼ変わらない)。遅れがこの幅を
+ * 超えたときだけ詰め、超えた分は周期 1 つずつ減らす (削りすぎない)
+ */
+export const AUDIO_PLAYOUT_STRETCH_MIN_SECONDS = 0.02;
+
+/**
+ * 不感帯の判定に置く許容 (秒)
+ *
+ * 遅れは時刻の引き算で求めるため、不感帯ちょうどの値が浮動小数点の誤差で下回ることがある
+ */
+export const AUDIO_PLAYOUT_STRETCH_MIN_EPSILON_SECONDS = 1e-9;
+
+/**
  * 再生の遅れの下限 (秒)
  *
  * 目標を使えないとき (壁時計の TIMESTAMP を持たない音、音声だけの購読) の再生の遅れの
@@ -183,6 +209,13 @@ export const AUDIO_CLOCK_MAX_CHANGE_MS = 80;
 export interface AudioPlayoutOptions {
   backlogSeconds?: number;
   minLeadSeconds?: number;
+  /**
+   * 時間圧縮を始める遅れ (秒)
+   *
+   * 省略時は `AUDIO_PLAYOUT_STRETCH_MIN_SECONDS` (時計の対応付けの不感帯と同じ 30 ms)。
+   * 機構そのものを確かめるテストは 0 を渡す
+   */
+  stretchMinSeconds?: number;
 }
 
 /**
@@ -289,6 +322,8 @@ interface PlayoutAnchor {
 export class AudioPlayoutScheduler {
   private readonly backlogSeconds: number;
   private readonly minLeadSeconds: number;
+  /** 時間圧縮を始める遅れ (秒) */
+  private readonly stretchMinSeconds: number;
   private anchor: PlayoutAnchor | null = null;
   // 直前に鳴らすと決めた音の終わりの時刻と timestamp
   private lastEnd: number | null = null;
@@ -310,6 +345,7 @@ export class AudioPlayoutScheduler {
   constructor(options: AudioPlayoutOptions = {}) {
     this.backlogSeconds = options.backlogSeconds ?? AUDIO_PLAYOUT_BACKLOG_SECONDS;
     this.minLeadSeconds = options.minLeadSeconds ?? AUDIO_PLAYOUT_MIN_LEAD_SECONDS;
+    this.stretchMinSeconds = options.stretchMinSeconds ?? AUDIO_PLAYOUT_STRETCH_MIN_SECONDS;
   }
 
   /** 基準を取り直した回数 (目標を使わないときの、過ぎてから届いた音と timestamp が大きく飛んだ音) */
@@ -406,8 +442,17 @@ export class AudioPlayoutScheduler {
     // 遅れは前の音から引き継いだ分も含めた「今の音のずれ」である (積み上げない)。
     // 詰めた分は前の音の終わりが早くなることで次の音へ引き継がれる
     this.latenessSeconds = latenessSeconds;
-    // 詰める量は、遅れの分と音の長さの半分の小さい方にする (1 つの音で詰めすぎない)
-    const compressSeconds = Math.min(this.latenessSeconds, durationSeconds / 2);
+    // 詰める量は、遅れの分と音の長さの半分の小さい方にする (1 つの音で詰めすぎない)。
+    // 遅れが `AUDIO_PLAYOUT_STRETCH_MIN_SECONDS` 未満のときは詰めない (不感帯)。系統的に
+    // 数 ms 遅れて届く音で毎回わずかに詰めると、削った分だけ早すぎる側へ振れて往復する。
+    // 実際に削れる長さは周期で決まるため、周期がこの量を超える音でも詰めない
+    // (src/audioTimeStretch.ts の compressSamples)
+    // 浮動小数点の誤差で不感帯ちょうどの遅れが下回らないように、比較には小さな許容を置く
+    // (時刻は performance.now 系の秒であり、引き算の結果は 1e-15 程度ずれる)
+    const compressSeconds =
+      this.latenessSeconds + AUDIO_PLAYOUT_STRETCH_MIN_EPSILON_SECONDS >= this.stretchMinSeconds
+        ? Math.min(this.latenessSeconds, durationSeconds / 2)
+        : 0;
     this.requestedSeconds = compressSeconds;
     this.lastEnd = startAt + durationSeconds - compressSeconds;
     this.lastTimestampMicroseconds = timestampMicroseconds;

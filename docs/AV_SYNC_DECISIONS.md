@@ -1133,3 +1133,81 @@ devtools の `Warnings` と上の 4 指標を、この文書の各決定の「�
 | `93d7f13`                | 2026-10-10 | 配信側の音声の追いつきを、上限を超えた状態が続いたときだけ始める                |
 | `e5d732d`                | 2026-10-10 | 復号の出力と投入の timestamp の格子がずれても種類を失わないようにする           |
 | `bb14c23`                | 2026-10-10 | 受信側の音声が遅れて固定されたら復号器を作り直して追いつく                      |
+
+## 12. 音声の時間圧縮 (playout の accelerate) の不感帯
+
+### 決めた値
+
+- 時間圧縮を始める遅れ `AUDIO_PLAYOUT_STRETCH_MIN_SECONDS` = 20 ms (src/audioPlayout.ts)
+- 削ってよい長さは遅れている分まで (`compressSamples` の `maxLengthChangeSamples`)。削る長さは
+  ピッチの周期 (2.5〜15 ms) で決まり、要求では選べない
+- 閉ループ (目標遅延の学習) へ渡す遅れからは、不感帯の分を引く (src/audioPlayoutSession.ts)
+- 機構を確かめる単体テストは `stretchMinSeconds: 0` を渡す (方針と機構を分ける)
+
+### 根拠
+
+- 実測 (2026-10-14、実リレー経由の 60 秒、16 kHz モノラル、localhost の devtools):
+  不感帯なしで 2727 ms (60 秒の 4.5 %)、5 ms で 1691 ms、10 ms で 1911 ms、20 ms で
+  722〜780 ms、30 ms で 256 ms を時間圧縮した。鳴り始めの遅れは 98 / 103 / 113〜114 /
+  236 ms である
+- 時計の対応付け (`AUDIO_CLOCK_DEADBAND_MS` = 30 ms) は読み取りごとの数 ms の揺れを意図して
+  無視する。その範囲の遅れを音の加工で打ち消すのは、時計層が無視した誤差を追いかけること
+- 20 ms はこの 30 ms の内側で吸収できる幅であり、圧縮が 1/3.7 になり、遅延の増加は 11 ms に
+  留まる
+- 残る 722〜780 ms は、目標遅延 100 ms を超える揺らぎ (実測の受信遅延は 20〜133 ms) が
+  届いたときの正当な追いつきである。playout の欠陥ではない
+- 学習から不感帯を引かない場合、playout が詰めずに残した遅れを学習が遅れと見て目標を
+  289 ms まで上げ、遅延だけが伸びる (実測。不感帯を引くと target 80 / applied 100 ms で
+  安定し、警告も消える)
+
+### 副作用とトレードオフ
+
+- 不感帯の分 (20 ms) の遅れは残る。目標遅延が 100 ms なので、この分は揺らぎの吸収に使われる
+- 30 ms へ広げると圧縮は 256 ms まで減るが、遅延が 236 ms へ伸びる (目標遅延の学習が
+  jitter 140 ms まで上げる)
+- 学習が目標を jitter 目標より下げる分 (実測で 80 ms < 100 ms) は、圧縮として現れる
+
+### 再考の条件
+
+- 配信側の棄却と送信の詰まりを減らし、受信遅延の揺らぎが目標遅延の内側へ収まったとき
+  (圧縮がさらに減るはず。配信側は平常時 60 秒で 10 ms、負荷時は 1744 ms を捨てていた)
+- 圧縮が 60 秒で 1000 ms を超えたとき (tests/e2e/relay/devtools-both-audio.spec.ts の
+  長時間の判定)
+
+### 見る計器
+
+- `audio.playoutCompressedMs` / `audio.playoutConcealedMs` / `audio.playoutConcealments`
+- `audio.playoutTiming.startDelayMs` / `avSync.delays.audioDelayFeedback.*`
+- `audio.receiveDelayMs` / `maxReceiveDelayMs` / `audio.playoutCatchUp.*`
+
+## 13. 配信側の棄却によるクリック (未解決)
+
+### 実測
+
+- 平常時 (実リレー経由の 60 秒、16 kHz モノラル): `droppedMs` = 10 ms、`catchUpStarts` = 1。
+  クリックは出ない
+- 負荷時 (2026-10-14 の手元のマイク、18.5 秒): `droppedFrames` = 218、`droppedMs` = 1744 ms。
+  1 フレーム = 8.0 ms であり、Opus のパケットは 20 ms (826 Object = 16.5 秒、162 B/Object)。
+  **20 ms のパケットの途中で 8 ms を捨てている**ため、符号化器へ渡る波形が 1 回ごとに飛び、
+  毎秒約 12 回のクリックとして聞こえる
+- `playoutCompressedMs` の残り (60 秒で 722〜780 ms) も、送信の遅れ (実測 max 81 ms) と
+  受信の遅延 (同 133 ms) が目標遅延 100 ms を超えることに由来する
+
+### 決めた方針 (未実装)
+
+- フェードそのものは実装済みである (`src/audioSpliceFade.ts` の `fadeSpliceEdge`。端を 2 ms で
+  0 へ落とし、落とす長さの外は元のまま。単体テスト 3 件あり)
+- 配線先は **`src/createMediaPublisher.ts` の `encoder.encode(audioData)` (1608 行)** である。
+  ここが符号化へフレームを渡す唯一の点であり、devtools とライブラリの利用者の両方に効く。
+  devtools 側は送信の記録だけを行う (`devtools/src/hooks/usePublisher.ts` の
+  `catchUp.recordSendStart` / `recordSendComplete`。1591〜1610 行)
+- その呼び出しの直前に符号化へ渡すフレームを 1 つ保持する (`pendingFrame`)。次のフレームが
+  棄却なら保持分の末尾へ `fadeSpliceEdge(..., "tail")`、棄却明けの先頭へ `"head"` を適用して
+  から渡す。停止時に保持分を flush する (符号化が 1 フレーム = 8 ms 遅れる)
+- 実装したら、負荷をかけた e2e で `droppedMs` と波形 (crest) を測り、クリックが消えたことを
+  確かめる
+
+### 再考の条件
+
+- 負荷時の `droppedMs` が 60 秒で 1000 ms を超えたとき (現行の e2e の上限)
+- 先読みの分 (1 フレーム = 8 ms) の遅延が問題になったとき
