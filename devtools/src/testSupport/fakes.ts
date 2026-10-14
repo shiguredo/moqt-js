@@ -76,6 +76,10 @@ export class FakeSubscriber implements Subscriber {
   // 既定値のままで足りる (mutable な state だけ getter にして状態遷移を持たせる)
   readonly largestLocation: Subscriber["largestLocation"] = null;
 
+  // NEW_GROUP_REQUEST の値の解決にも使うが、後始末フローの検証では受信が無い
+  // (null) 状態で足りる
+  readonly largestReceivedLocation: Subscriber["largestReceivedLocation"] = null;
+
   readonly trackProperties: Subscriber["trackProperties"] = [];
 
   readonly forwardState: boolean = true;

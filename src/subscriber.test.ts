@@ -429,6 +429,101 @@ test("handleObject: SUBGROUP_FILTER で subgroupId 未指定は配信しない",
   assert.equal(delivered.length, 1);
 });
 
+// ============================================================================
+// 購読で受信した最大 Location
+// draft-ietf-moq-transport-22 §3.1.4 (Largest Object) / §9.20.19 (NEW_GROUP_REQUEST)
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-22 §3.1.4 (Largest Object):
+ * "Largest Object updates when the first byte of an Object with a Location larger than
+ *  the previous value is published or received through a subscription."
+ *
+ * 購読で受信した Object で最大 Location が進む。NEW_GROUP_REQUEST の値 (§9.20.19) は
+ * この値と LARGEST_OBJECT の大きい方から作るため、受信で進まないと実 Group より古い値を
+ * 送ることになり、relay と publisher が要求を捨てる。
+ */
+test("largestReceivedLocation: 受信した Object で最大 Location が進む", () => {
+  const subscriber = new SubscriberImpl(["namespace"], "track", 0n, 0n, () => {});
+  assert.isNull(subscriber.largestReceivedLocation, "受信前は null");
+
+  subscriber.handleObject(createObject(3n, 0n));
+  assert.deepEqual(subscriber.largestReceivedLocation, { group: 3n, object: 0n });
+
+  subscriber.handleObject(createObject(3n, 4n));
+  assert.deepEqual(
+    subscriber.largestReceivedLocation,
+    { group: 3n, object: 4n },
+    "同じ Group では Object ID が大きい方になる",
+  );
+
+  subscriber.handleObject(createObject(4n, 0n));
+  assert.deepEqual(
+    subscriber.largestReceivedLocation,
+    { group: 4n, object: 0n },
+    "Group ID が大きい方になる",
+  );
+
+  // 小さい Location では戻らない。Group ID が小さい Object は Object ID が大きくても
+  // 最大 Location を進めない (§8.2 の Location 順序)
+  subscriber.handleObject(createObject(3n, 100n));
+  assert.deepEqual(subscriber.largestReceivedLocation, { group: 4n, object: 0n });
+  subscriber.handleObject(createObject(4n, 0n));
+  assert.deepEqual(subscriber.largestReceivedLocation, { group: 4n, object: 0n });
+});
+
+/**
+ * Datagram 経路と fill fetch 経路も購読で受信した Object である (§3.1.4)。
+ * fill fetch の stream は購読に属する (§3.4)。
+ */
+test("largestReceivedLocation: Datagram と fill fetch の経路でも進む", () => {
+  const subscriber = new SubscriberImpl(
+    ["namespace"],
+    "track",
+    0n,
+    0n,
+    () => {},
+    () => {},
+  );
+
+  subscriber.handleDatagram(createObject(7n, 1n));
+  assert.deepEqual(subscriber.largestReceivedLocation, { group: 7n, object: 1n });
+
+  subscriber.handleFillObject(createObject(9n, 0n));
+  assert.deepEqual(subscriber.largestReceivedLocation, { group: 9n, object: 0n });
+});
+
+/**
+ * LARGEST_OBJECT で報告された値 (largestLocation) とは別の値である。受信しても
+ * largestLocation は変わらない (出所が違う値を 1 つのフィールドに混ぜない)。
+ */
+test("largestReceivedLocation: 受信しても LARGEST_OBJECT の値は変わらない", () => {
+  const subscriber = new SubscriberImpl(["namespace"], "track", 0n, 0n, () => {});
+  subscriber.setLargestLocation({ group: 1n, object: 2n });
+
+  subscriber.handleObject(createObject(5n, 0n));
+
+  assert.deepEqual(subscriber.largestLocation, { group: 1n, object: 2n });
+  assert.deepEqual(subscriber.largestReceivedLocation, { group: 5n, object: 0n });
+});
+
+/**
+ * フィルタの再適用で配送しない Object でも、受信していれば最大 Location は進む。
+ * 配送の可否と「購読者が知る最大 Group ID」は別である (§9.20.19)。
+ */
+test("largestReceivedLocation: フィルタで配送しない Object でも進む", () => {
+  const delivered: MoqtObject[] = [];
+  const subscriber = new SubscriberImpl(["namespace"], "track", 0n, 0n, (obj) =>
+    delivered.push(obj),
+  );
+  subscriber.setRangeFilters([{ type: "objectId", setId: 0, ranges: [{ start: 0n, end: 1n }] }]);
+
+  subscriber.handleObject(createObject(6n, 9n));
+
+  assert.equal(delivered.length, 0, "フィルタで配送しない");
+  assert.deepEqual(subscriber.largestReceivedLocation, { group: 6n, object: 9n });
+});
+
 /**
  * draft-ietf-moq-transport-22 §10.4 (DEFAULT PUBLISHER_PRIORITY) / §11.2.1:
  * Priority 省略時は購読の DEFAULT_PUBLISHER_PRIORITY (省略時 128) を継承し、

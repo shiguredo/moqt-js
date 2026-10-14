@@ -305,6 +305,39 @@ export function isVideoKeyFrameObject(
 }
 
 /**
+ * REQUEST_UPDATE / SUBSCRIBE に載せる NEW_GROUP_REQUEST の値を解決する
+ *
+ * draft-ietf-moq-transport-22 §9.20.19 (NEW GROUP REQUEST Parameter):
+ * "It represents the largest Group ID in the Track known by the subscriber, plus 1.
+ *  A value of 0 indicates that the subscriber has no Group information for the Track."
+ *
+ * 購読者が知る最大 Group ID は、購読で受信した Object の最大 Location
+ * (`Subscriber.largestReceivedLocation`、§3.1.4) と LARGEST_OBJECT で報告された
+ * 最大 Location (`Subscriber.largestLocation`、§9.20.17) の大きい方である。片方だけを
+ * 使うと値を小さく見積もる。値が Largest Group 以下になると relay は上流へ送らず
+ * (§9.20.19 Relay Handling)、Original Publisher も新しい Group を始めないため
+ * (§9.20.19)、古い snapshot から値を作ると要求が届かない。
+ *
+ * テストと moqt-devtools から参照するための export であり、パッケージ公開 API
+ * (`src/index.ts`) には含めない (公開 API の判断は別途行う)。
+ *
+ * @param received 購読で受信した最大 Location (1 件も受け取っていなければ null)
+ * @param reported LARGEST_OBJECT で報告された最大 Location (未受信なら null)
+ * @returns 送る値 (どちらも無ければ 0)
+ */
+export function resolveNewGroupRequestValue(
+  received: Location | null,
+  reported: Location | null,
+): bigint {
+  // 大きい方を採る (§8.2 の Location 順序)。どちらも無ければ null のまま
+  const largest =
+    received === null || (reported !== null && compareLocations(reported, received) > 0)
+      ? reported
+      : received;
+  return largest === null ? 0n : largest.group + 1n;
+}
+
+/**
  * PUBLISH_DONE の終了理由から、購読の失敗として通知すべき Error を作る
  *
  * draft-ietf-moq-transport-22 §9.9 (PUBLISH_DONE): 購読は PUBLISH_DONE で終わり、終了の理由は
@@ -877,10 +910,13 @@ export class MediaSubscriberImpl implements MediaSubscriber {
 
     // REQUEST_UPDATE で NEW_GROUP_REQUEST を送信
     // draft-ietf-moq-transport-22 §9.20.19 (NEW_GROUP_REQUEST = 0x32)。
-    // 値は送信時点の最新 Group ID + 1 (情報なし時は 0) とする。
-    // SUBSCRIBE 直後の snapshot は stale のため使わない。
-    const largestLocation = this.videoSubscriber.largestLocation;
-    const newGroupRequest = largestLocation === null ? 0n : largestLocation.group + 1n;
+    // 値は購読者が知る最大 Group ID + 1 とする。LARGEST_OBJECT の snapshot だけでなく
+    // 購読で受信した Object の最大 Location も使う。古い値 (Largest Group 以下) では
+    // relay が上流へ送らず、publisher も新しい Group を始めない
+    const newGroupRequest = resolveNewGroupRequestValue(
+      this.videoSubscriber.largestReceivedLocation,
+      this.videoSubscriber.largestLocation,
+    );
     await this.videoSubscriber.update({
       newGroupRequest,
     });

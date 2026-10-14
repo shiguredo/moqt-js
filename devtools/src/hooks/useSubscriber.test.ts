@@ -21,7 +21,6 @@ import {
   resolveAudioTrack,
   resolveCatalogMediaTracks,
   resolveEventTimelineTrack,
-  resolveNewGroupRequestValue,
   applyCatchUpPending,
   applySubscribedStatus,
   applyTrackEnd,
@@ -517,22 +516,11 @@ test("recordVideoReceived: TIMESTAMP の無い Object は到着を記録せず�
   assert.equal(snapshot.missingObjects, 1, "Object ID の飛びを届かなかった Object に数えること");
 });
 
-// ============================================================================
-// REQUEST_UPDATE の NEW_GROUP_REQUEST の値
-// ============================================================================
-
-// draft-ietf-moq-transport-22 §9.20.19: 送信時点で知る最大 Group ID + 1 を送る。
-// SUBSCRIBE 直後の snapshot ではなく現在の largestLocation を使う。
-test("resolveNewGroupRequestValue: 最大 Location の次の Group を要求する", () => {
-  assert.equal(resolveNewGroupRequestValue({ group: 41n, object: 7n }), 42n);
-  assert.equal(resolveNewGroupRequestValue({ group: 0n, object: 0n }), 1n);
-});
-
-// 最大 Location が未知 (SUBSCRIBE_OK 未受信) のときは 0 を送り、
-// Group 情報なしで新規 Group の開始を要求する。
-test("resolveNewGroupRequestValue: 最大 Location が無いときは 0 を要求する", () => {
-  assert.equal(resolveNewGroupRequestValue(null), 0n);
-});
+// REQUEST_UPDATE に載せる NEW_GROUP_REQUEST の値 (購読で受信した最大 Location と
+// LARGEST_OBJECT の大きい方 + 1) は、ライブラリの resolveNewGroupRequestValue に
+// 委譲する。判定は src/createMediaSubscriber.test.ts の resolveNewGroupRequestValue が
+// 固定し、devtools 側は Subscriber.largestReceivedLocation をそのまま渡す。
+// largestReceivedLocation が受信で進むことは src/subscriber.test.ts が固定する
 
 // ============================================================================
 // 購読開始時の統計リセット

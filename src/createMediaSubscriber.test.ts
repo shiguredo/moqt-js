@@ -40,6 +40,7 @@ import {
   filterPendingCatalogObjects,
   isVideoKeyFrameObject,
   processCatalogPayload,
+  resolveNewGroupRequestValue,
   resolvePublishDoneError,
   resolveAuthorizationToken,
 } from "./createMediaSubscriber";
@@ -431,6 +432,46 @@ test("isVideoKeyFrameObject: Frame Marking がある場合は isIndependent を�
   assert.isFalse(isVideoKeyFrameObject(0n, deltaFrameMarking));
   assert.isTrue(isVideoKeyFrameObject(3n, keyFrameMarking));
   assert.isFalse(isVideoKeyFrameObject(3n, deltaFrameMarking));
+});
+
+// ============================================================================
+// resolveNewGroupRequestValue（draft-ietf-moq-transport-22 §9.20.19）
+// ============================================================================
+
+/**
+ * §9.20.19 (NEW GROUP REQUEST Parameter):
+ * "It represents the largest Group ID in the Track known by the subscriber, plus 1.
+ *  A value of 0 indicates that the subscriber has no Group information for the Track."
+ *
+ * 購読者が知る最大 Group ID は、購読で受信した Object の最大 Location (§3.1.4) と
+ * LARGEST_OBJECT で報告された最大 Location (§9.20.17) の大きい方である。
+ */
+test("resolveNewGroupRequestValue: 受信と LARGEST_OBJECT の大きい方の次の Group になる", () => {
+  // 受信した Object の方が進んでいる場合
+  assert.equal(
+    resolveNewGroupRequestValue({ group: 41n, object: 3n }, { group: 40n, object: 9n }),
+    42n,
+  );
+  // LARGEST_OBJECT の方が進んでいる場合 (購読直後はこちら)
+  assert.equal(
+    resolveNewGroupRequestValue({ group: 40n, object: 0n }, { group: 41n, object: 3n }),
+    42n,
+  );
+  // Group ID が同じときは Object ID の大小で値が変わらない (Group ID + 1 を作るため)
+  assert.equal(
+    resolveNewGroupRequestValue({ group: 41n, object: 0n }, { group: 41n, object: 7n }),
+    42n,
+  );
+});
+
+/**
+ * 片方だけ分かっていればその値を使い、Group 情報がまったく無ければ 0 を送る
+ * (§9.20.19 の「購読者は Group 情報を持たない」)。
+ */
+test("resolveNewGroupRequestValue: 片方だけでも使う", () => {
+  assert.equal(resolveNewGroupRequestValue({ group: 7n, object: 0n }, null), 8n);
+  assert.equal(resolveNewGroupRequestValue(null, { group: 7n, object: 0n }), 8n);
+  assert.equal(resolveNewGroupRequestValue(null, null), 0n);
 });
 
 // ============================================================================
@@ -2882,8 +2923,9 @@ interface SubscriberKeyframeControl {
   requestKeyframe(): Promise<void>;
 }
 
-test("requestKeyframe は最新 Group ID + 1 を送信する", async () => {
-  // 固定値でなく largestLocation の live 値を参照することの検証。
+test("requestKeyframe は購読者が知る最大 Group ID + 1 を送信する", async () => {
+  // 固定値でなく送信時点の値を参照することの検証。値は購読で受信した最大 Location
+  // (largestReceivedLocation) と LARGEST_OBJECT (largestLocation) の大きい方から作る。
   // 送信間に値を書き換えて 2 回送り、snapshot でなく都度参照と分かるようにする
   const subscriber = new MediaSubscriberImpl("moqt://example.com/live", { namespace: ["live"] });
   const control = subscriber as unknown as SubscriberKeyframeControl;
@@ -2892,7 +2934,9 @@ test("requestKeyframe は最新 Group ID + 1 を送信する", async () => {
   const videoSubscriber = {
     state: "active",
     trackProperties: [{ id: TrackPropertyId.DYNAMIC_GROUPS, value: 1n }],
+    // LARGEST_OBJECT の方が進んでいる (購読直後の状態)
     largestLocation: { group: 41n, object: 3n },
+    largestReceivedLocation: { group: 40n, object: 9n },
     update: async (...args: Parameters<Subscriber["update"]>) => {
       sent.push(args[0]);
     },
@@ -2900,11 +2944,12 @@ test("requestKeyframe は最新 Group ID + 1 を送信する", async () => {
   control.videoSubscriber = videoSubscriber as unknown as Subscriber;
 
   await control.requestKeyframe();
-  videoSubscriber.largestLocation = { group: 100n, object: 0n };
+  // 受信した Object が LARGEST_OBJECT を追い越したら、受信した値を使う
+  videoSubscriber.largestReceivedLocation = { group: 100n, object: 0n };
   await control.requestKeyframe();
 
-  assert.equal(sent[0]?.newGroupRequest, 42n);
-  assert.equal(sent[1]?.newGroupRequest, 101n);
+  assert.equal(sent[0]?.newGroupRequest, 42n, "LARGEST_OBJECT の次の Group");
+  assert.equal(sent[1]?.newGroupRequest, 101n, "受信した最大 Location の次の Group");
 });
 
 test("requestKeyframe は情報なし時は 0 を送信する", async () => {
@@ -2916,6 +2961,7 @@ test("requestKeyframe は情報なし時は 0 を送信する", async () => {
     state: "active",
     trackProperties: [{ id: TrackPropertyId.DYNAMIC_GROUPS, value: 1n }],
     largestLocation: null,
+    largestReceivedLocation: null,
     update: async (...args: Parameters<Subscriber["update"]>) => {
       sent = args[0];
     },
