@@ -989,3 +989,82 @@ test("長時間の配信で、送信の遅れと受信の遅れが悪化しな�
     `観測の最後で音が鳴っていない (${summarizeSubscriber(finalSubscriber)})`,
   ).toBeGreaterThan(AUDIBLE_PEAK_DBFS);
 });
+
+/** 負荷の間にメインスレッドを 1 回で占有する長さ (ミリ秒) */
+const LOAD_SPIN_MS = 60;
+
+/** 負荷の間に明け渡す長さ (ミリ秒) */
+const LOAD_YIELD_MS = 40;
+
+/** 負荷をかける長さ (ミリ秒) */
+const LOAD_MS = 10_000;
+
+test("負荷で配信側の棄却が起きても、音声が壊れない (境目のフェード)", async ({ page }) => {
+  test.setTimeout(TEST_TIMEOUT_MS);
+  const moqtUri = requireRelayUri();
+  if (moqtUri === null) {
+    return;
+  }
+
+  const namespace = formatTrackNamespace(createTestNamespace());
+  await startBoth(page, moqtUri, namespace);
+  await waitForAudio(page);
+  await page.waitForTimeout(2_000);
+
+  // メインスレッドを占有して読み出しと符号化を詰まらせ、配信側の追いつきの棄却を起こす
+  // (実測では 18.5 秒で 218 フレーム = 1744 ms を捨てた)。捨てる境目は 1 フレーム先読みして
+  // 2 ms でフェードする (src/audioSpliceFade.ts)。ここでは棄却が起きたうえで音声が
+  // 壊れないこと (鳴っている・警告が無い) を確かめる
+  await page.evaluate(
+    async (options: { loadMs: number; spinMs: number; yieldMs: number }) => {
+      const end = performance.now() + options.loadMs;
+      while (performance.now() < end) {
+        const spinEnd = performance.now() + options.spinMs;
+        while (performance.now() < spinEnd) {
+          // 実時間を消費する
+        }
+        await new Promise<void>((resolve) => {
+          setTimeout(() => {
+            resolve();
+          }, options.yieldMs);
+        });
+      }
+    },
+    { loadMs: LOAD_MS, spinMs: LOAD_SPIN_MS, yieldMs: LOAD_YIELD_MS },
+  );
+  await page.waitForTimeout(2_000);
+
+  const publisher = await readPublisher(page);
+  const subscriber = await readSubscriber(page);
+  console.log(
+    `負荷の後の配信側: droppedMs=${publisher.audio.catchUp.droppedMs}, ` +
+      `catchUpStarts=${publisher.audio.catchUp.catchUpStarts}, ` +
+      `maxSendLagMs=${publisher.audio.catchUp.maxSendLagMs}`,
+  );
+  console.log(`負荷の後の購読側: ${summarizeSubscriber(subscriber)}`);
+
+  // 棄却が起きたこと (フェードの経路が動く前提が作れていること)
+  expect(
+    publisher.audio.catchUp.droppedMs,
+    `負荷で棄却が起きていない (${publisher.audio.catchUp.droppedMs} ms)。前提が作れていない`,
+  ).toBeGreaterThan(0);
+  // 棄却があっても鳴り続けている
+  expect(
+    subscriber.audio.peakDbfs ?? -100,
+    `負荷の後に音が鳴っていない (${summarizeSubscriber(subscriber)})`,
+  ).toBeGreaterThan(AUDIBLE_PEAK_DBFS);
+  expect(
+    Math.abs((crestDb(subscriber.audio.peakDbfs, subscriber.audio.rmsDbfs) ?? 0) - TONE_CREST_DB),
+    `負荷の後に波形が崩れている (${summarizeSubscriber(subscriber)})`,
+  ).toBeLessThan(TONE_CREST_TOLERANCE_DB + 3);
+  expect(subscriber.warnings.length, "購読側に警告が出ている").toBe(0);
+  expect(
+    subscriber.audio.playoutTiming.missedFrames,
+    `鳴らなかった音が多い (${summarizeSubscriber(subscriber)})`,
+  ).toBeLessThanOrEqual(5);
+  expect(
+    subscriber.audio.playoutCatchUp.skippedMs,
+    `飛んだ音が多すぎる (${summarizeSubscriber(subscriber)})`,
+  ).toBeLessThan(2_000);
+  expect(publisher.warnings.length, "配信側に警告が出ている").toBe(0);
+});
