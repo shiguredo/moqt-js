@@ -1,7 +1,7 @@
 # 高レベル API がマイクの形式と違う設定で音声を符号化して配信が止まる
 
 - Created: 2026-10-14
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-10-14
 - Branch: feature/fix-publisher-audio-capture-format
 - Polished: 2026-10-14
 
@@ -49,3 +49,24 @@
 - `src/codec/config.ts` の `DEFAULT_AUDIO_SAMPLE_RATE` / `DEFAULT_AUDIO_CHANNELS` / `getAudioEncoderConfig`
 - `devtools/src/hooks/usePublisher.ts` の `prepareAudioForPublishing`
 - `tests/e2e/main.ts` の `startPublisher`
+
+## 解決方法
+
+- `src/createMediaPublisher.ts` の `start()` の段階を「接続 → Publisher の作成 (`createPublishers`。音声・映像の PUBLISH の往復のみ) → 音声の取り出し経路の作成と形式の確定 (`prepareAudioFrameSource`) → catalog の送信 (`publishCatalog`) → エンコーダーの構成 (`setupEncoders`) → 処理ループの起動」に変えた。catalog の Object の送信は `createPublishers` から外し、`start()` が `publishCatalog()` を呼ぶ。取り出し経路は PUBLISH の往復より後に作る (先に作ると符号化が始まるまで `AudioData` が溜まり、追いつきの既定 "drop" が冒頭を捨てる)
+- `prepareAudioFrameSource` が `createAudioFrameSource` を 1 度だけ作り、返った `sampleRate` と `channels` を `withCapturedAudioFormat` (`src/createMedia/settings.ts` の純関数) で `resolvedAudio` へ写す。`createCatalogTracks` と `setupEncoders` はこの値を使い、`setupEncoders` は経路を作り直さない (音声エンコーダーを作る条件は読み出しの reader の有無)
+- 取り出した形式を `src/codec/configSupport.ts` の `isAudioEncoderConfigSupported` で確認し、非対応なら configure も catalog の送信もせずに `start()` を失敗させる (エラーに codec / codecString / sampleRate / channels を含む)。取り出し経路が無い場合も `createAudioFrameSource` のエラーで catalog の送信前に失敗する。初期 catalog の送信時に catalog の Publisher が `"active"` でなければ、catalog の Object より先に media の Object を送らない (draft-ietf-moq-msf-01 §11.2 の MUST) ため `start()` を失敗させる
+- `sampleRate` と `channels` は取り出し経路への要求として `createAudioFrameSource` に渡すだけにした。`docs/HIGH_LEVEL_API.md` のオプション・本文・メソッド表と `src/codec/types.ts` の公開オプションをこれに合わせた
+- 追加・更新したテスト
+  - `src/createMedia/settings.test.ts`: `withCapturedAudioFormat` が取り出した形式を写し、他の項目を変えないこと
+  - `src/codec/configSupport.test.ts`: `isAudioEncoderConfigSupported` の判定規則 (supported が false / 省略 / reject / `AudioEncoder` 不在)
+  - `src/createMediaPublisher.test.ts`: 取り出した形式が catalog と configure の両方に使われること、経路が start ごとに 1 度だけ作られること、非対応形式では catalog を送る前に失敗して再試行できること、取り出し経路が無い場合、catalog の Publisher が active でない場合、FORWARD が 0 の初期送信の扱い
+  - `tests/e2e/relay/audio-capture-format.spec.ts`: 実リレー経由で、音声の形式を省略したときも指定した形式がマイクと違うときも、偽のマイク (モノラル) の形式で符号化されて object が送られ、Catalog の宣言が配信に使ったトラックが報告した形式と一致すること。修正を一時退避すると 2 件とも失敗することを確認した
+  - `tests/e2e/main.ts`: 音声の形式をトラックの設定から転送する回避策を外し、配信に使ったトラックが報告した形式を観測値 (`PublisherTrackAudioFormat`) として返すようにした
+- `devtools/src/hooks/usePublisher.ts` の音声の対応確認を `src/codec/configSupport.ts` の共有関数に寄せた
+- `CHANGES.md` は `CODEBASE.md` の「MOQT RFC ドラフト中の特別ルール」により更新していない (この issue の設計方針でも対象外)
+
+### 残した穴 (別 issue 候補)
+
+- `audio` / `video` を指定しても `MediaStream` にそのトラックが無い場合、そのトラックは catalog に宣言されるが object は送られない (この修正の前後で同じ挙動)。`docs/HIGH_LEVEL_API.md` に契約として明記した
+- `devtools/src/codec-test/support.ts` の音声コーデックの対応確認は、共有の `isAudioEncoderConfigSupported` を使わず truthy 判定のままである
+- 送り直し系のテストの冠 (`createPublishers:`) が、catalog の送信・予約を主対象にするものと一致していない

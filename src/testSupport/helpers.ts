@@ -81,26 +81,48 @@ export function waitForUnhandledRejectionDetection(): Promise<void> {
 }
 
 /**
- * globalThis.VideoDecoder を置き換えてテスト本体を実行し、必ず元に戻す
+ * globalThis のプロパティを置き換えてテスト本体を実行し、必ず元に戻す
  *
  * Node には WebCodecs が無いため、この境界だけを置き換えて判定規則を固定する。
- * 実ブラウザの VideoDecoder を駆動する経路は e2e で確認する。
+ * 実ブラウザの WebCodecs を駆動する経路は e2e で確認する。
+ *
+ * @param name - 置き換える globalThis のプロパティ名
+ * @param replacement - 置き換える値 (undefined にすると WebCodecs 非搭載の環境を再現する)
+ * @param run - 置き換えた状態で実行するテスト本体
+ */
+async function withGlobalValue(
+  name: "VideoDecoder" | "AudioEncoder",
+  replacement: unknown,
+  run: () => Promise<void>,
+): Promise<void> {
+  const target = globalThis as unknown as Record<"VideoDecoder" | "AudioEncoder", unknown>;
+  const original = target[name];
+  target[name] = replacement;
+  try {
+    await run();
+  } finally {
+    target[name] = original;
+  }
+}
+
+/**
+ * globalThis.VideoDecoder を置き換えてテスト本体を実行し、必ず元に戻す
  *
  * @param replacement - 置き換える値 (undefined にすると WebCodecs 非搭載の環境を再現する)
  * @param run - 置き換えた状態で実行するテスト本体
  */
-export async function withVideoDecoder(
-  replacement: unknown,
-  run: () => Promise<void>,
-): Promise<void> {
-  const target = globalThis as unknown as { VideoDecoder: unknown };
-  const originalVideoDecoder = target.VideoDecoder;
-  target.VideoDecoder = replacement;
-  try {
-    await run();
-  } finally {
-    target.VideoDecoder = originalVideoDecoder;
-  }
+export function withVideoDecoder(replacement: unknown, run: () => Promise<void>): Promise<void> {
+  return withGlobalValue("VideoDecoder", replacement, run);
+}
+
+/**
+ * globalThis.AudioEncoder を置き換えてテスト本体を実行し、必ず元に戻す
+ *
+ * @param replacement - 置き換える値 (undefined にすると WebCodecs 非搭載の環境を再現する)
+ * @param run - 置き換えた状態で実行するテスト本体
+ */
+export function withAudioEncoder(replacement: unknown, run: () => Promise<void>): Promise<void> {
+  return withGlobalValue("AudioEncoder", replacement, run);
 }
 
 /**

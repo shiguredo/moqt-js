@@ -13,6 +13,9 @@
  * 注入できないため、WebCodecs の境界 (VideoEncoder / MediaStreamTrackProcessor) を
  * テストの前後で置き換え、解放が configure の await に重なる窓を作る
  * (実ブラウザの WebCodecs を駆動する経路は e2e で確認する)。
+ * 音声も同じ理由で境界 (AudioEncoder / MediaStreamTrackProcessor) を置き換え、
+ * 取り出し経路が返した形式が catalog と configure の両方に使われること・経路が start ごとに
+ * 1 度だけ作られること・取り出した形式が非対応なら catalog を送る前に失敗することを検証する。
  * 駆動は公開 pause() / resume() を使い、ループ起動・状態設定・フラグ設定・
  * reader / encoder 注入は start() が接続を要するため private 経由で行う。
  *
@@ -1936,7 +1939,7 @@ interface OpenedPublisherConnection {
  *   (解放が start の await に重なる窓を作る)。保留するのは holdPublishTrack (既定は
  *   catalog) の publish である。createCatalogPublisher を渡すと catalog の Publisher を
  *   作り分ける (送信の失敗を start の catch まで運ぶ)。publisherOptions を渡すと publisher の
- *   オプションを差し替える (映像の setupEncoders を駆動するテスト用)。
+ *   オプションを差し替える (音声 / 映像の設定を持つ harness で start を駆動するテスト用)。
  *   holdSessionClose を立てると session の close の await もテストが解放するまで保留する
  *   (解放が session の close で止まる窓を作る。解放は参照を切り離してから close するため、
  *   止めている間も state は遷移前のままである)
@@ -2017,8 +2020,8 @@ function createStartConnectHarness(
         if (trackName === CATALOG_TRACK_NAME) {
           return catalog.publisher;
         }
-        // 音声 / 映像の Publisher も最小の Publisher を返す (映像の設定を持つ harness で
-        // createPublishers を通すため)
+        // 音声 / 映像の Publisher も最小の Publisher を返す (音声 / 映像の設定を持つ
+        // harness で createPublishers を通すため)
         return createRecordingSendPublisher().publisher;
       },
       close: async () => {
@@ -2242,13 +2245,305 @@ function createVideoMediaStream(): MediaStream {
 }
 
 /**
+ * WebCodecs の音声エンコーダーと音声の取り出し経路の境界を置き換える
+ *
+ * node には AudioEncoder と MediaStreamTrackProcessor が無いため、この境界だけを
+ * 置き換えて音声の取り出しからエンコーダーの configure まで到達させる (useWorker: false の
+ * 直接実行にする。実ブラウザの WebCodecs を駆動する経路は e2e で確認する)。
+ * configure へ渡った設定と、取り出し経路 (MediaStreamTrackProcessor) の生成回数を記録し、
+ * どの形式で何度構成したかを固定できるようにする。
+ *
+ * @param hooks onIsConfigSupported を渡すと対応確認の結果を差し替えられる
+ *   (取り出した形式が非対応のときに start() が失敗する経路を駆動する)
+ * @returns 取り出し経路の生成回数と configure へ渡った設定の取得と、置き換えを元に戻す
+ *   関数 (テストの finally で必ず呼ぶ)
+ */
+function replaceAudioCodecBoundary(
+  hooks: {
+    onIsConfigSupported?: (config: AudioEncoderConfig) => { supported: boolean };
+  } = {},
+): {
+  frameSourceCreatedCount: () => number;
+  configuredConfigs: () => AudioEncoderConfig[];
+  restore: () => void;
+} {
+  const target = globalThis as unknown as {
+    AudioEncoder: unknown;
+    MediaStreamTrackProcessor: unknown;
+  };
+  const originalAudioEncoder = target.AudioEncoder;
+  const originalTrackProcessor = target.MediaStreamTrackProcessor;
+  const configuredConfigs: AudioEncoderConfig[] = [];
+  let frameSourceCreatedCount = 0;
+  target.AudioEncoder = class {
+    readonly state = "configured";
+    static async isConfigSupported(config: AudioEncoderConfig): Promise<{ supported: boolean }> {
+      return hooks.onIsConfigSupported?.(config) ?? { supported: true };
+    }
+    configure(config: AudioEncoderConfig): void {
+      configuredConfigs.push(config);
+    }
+    encode(): void {}
+    close(): void {}
+  };
+  // createProcessorAudioFrameSource の経路を通す (実 ReadableStream を返す)
+  target.MediaStreamTrackProcessor = class {
+    readonly readable = new ReadableStream<AudioData>();
+    constructor() {
+      frameSourceCreatedCount++;
+    }
+  };
+  return {
+    frameSourceCreatedCount: () => frameSourceCreatedCount,
+    configuredConfigs: () => configuredConfigs,
+    restore: () => {
+      target.AudioEncoder = originalAudioEncoder;
+      target.MediaStreamTrackProcessor = originalTrackProcessor;
+    },
+  };
+}
+
+/**
+ * 指定の形式の音声トラックだけを持つ媒体ストリーム
+ *
+ * 音声の取り出し経路 (MediaStreamTrackProcessor) はトラックの getSettings() を実際に
+ * 流れる形式として読むため、マイクの形式を模した値を返す最小のトラックを渡す。
+ */
+function createAudioMediaStream(settings: {
+  sampleRate: number;
+  channelCount: number;
+}): MediaStream {
+  return {
+    getAudioTracks: () => [{ getSettings: () => settings }],
+    getVideoTracks: () => [],
+  } as unknown as MediaStream;
+}
+
+/**
+ * 音声の取り出し経路を駆動する start() の harness
+ *
+ * 音声の配信設定と useWorker: false を持つ publisher と、接続ごとの catalog の送信 payload を
+ * 返す (再試行は新しい接続で行うため、接続ごとに分けて記録する)。
+ */
+function createAudioStartHarness(): {
+  publisher: MediaPublisherImpl;
+  control: PublisherConnectControl & PublisherLifecycleControl & PublisherSessionCloseControl;
+  sentByConnection: { payload?: Uint8Array }[][];
+  errors: Error[];
+} {
+  const sentByConnection: { payload?: Uint8Array }[][] = [];
+  const { publisher, control, errors } = createStartConnectHarness(
+    {},
+    {
+      publisherOptions: {
+        namespace: ["live"],
+        audio: { codec: "opus", bitrate: 64000 },
+        useWorker: false,
+      },
+      createCatalogPublisher: () => {
+        const { publisher: catalogPublisher, sent, doneCount } = createRecordingSendPublisher();
+        sentByConnection.push(sent);
+        return { publisher: catalogPublisher, doneCount };
+      },
+    },
+  );
+  return { publisher, control, sentByConnection, errors };
+}
+
+/**
+ * 完了条件: 音声の形式を省略したときも、取り出し経路が返したサンプルレートとチャンネル数が
+ * Catalog と AudioEncoder の設定になる。要求値 (既定の 48000 Hz / 2 ch) では configure しない。
+ *
+ * 取り出し経路より先に catalog を publish する実装に戻すと、catalog の samplerate と
+ * channelConfig が要求値のままになるため、このテストは落ちる。start() を最後まで駆動し、
+ * 送信 payload の読み戻しと configure の記録の両方で同じ形式を確かめる。
+ */
+test("start: 取り出した音声の形式を catalog と encoder の両方に使う", async () => {
+  const boundary = replaceAudioCodecBoundary();
+  try {
+    const { publisher, sentByConnection } = createAudioStartHarness();
+
+    // マイクはモノラルで 44100 Hz (要求した既定の 48000 Hz / 2 ch と違う形式)
+    await publisher.start(createAudioMediaStream({ sampleRate: 44100, channelCount: 1 }));
+
+    const catalogObject = sentByConnection[0]?.[0];
+    if (catalogObject?.payload === undefined) {
+      throw new Error("expected the catalog object to be sent");
+    }
+    const decoded = decodeCatalogMessage(catalogObject.payload);
+    if (!("version" in decoded)) {
+      throw new Error("expected a full catalog, got a delta update");
+    }
+    const audioTrack = decoded.tracks.find((track) => track.role === "audio");
+    assert.isDefined(audioTrack);
+    assert.equal(audioTrack?.samplerate, 44100);
+    assert.equal(audioTrack?.channelConfig, "1");
+
+    // エンコーダーも catalog と同じ取り出した形式で configure する
+    assert.deepEqual(boundary.configuredConfigs(), [
+      { codec: "opus", sampleRate: 44100, numberOfChannels: 1, bitrate: 64000 },
+    ]);
+    // 取り出し経路は 1 回の start につき 1 度だけ作る。setupEncoders で作り直す実装に
+    // 戻すと、Catalog とエンコーダーは同じ値のまま緑になり、prepareAudioFrameSource が
+    // 作った経路 (Web Audio 経路では AudioContext) が解放されずに残る
+    assert.equal(boundary.frameSourceCreatedCount(), 1);
+
+    await publisher.close();
+  } finally {
+    boundary.restore();
+  }
+});
+
+/**
+ * 完了条件: 取り出した形式がコーデックで符号化できないときは、catalog を送る前に start() が
+ * 失敗し、configure もしない。エラーには codec と sampleRate と channels を含める。
+ *
+ * `AudioEncoder.configure` は未対応の設定でも同期の例外を投げず非同期のエラーになるため、
+ * 対応確認を省くと、音声の object が届かないトラックを宣言した catalog が購読側へ渡る。
+ * 形式を変えた再試行まで駆動し、start ごとに形式を取り直すことも確かめる。
+ */
+test("start: 取り出した形式が非対応なら catalog を送る前に失敗し、形式を変えれば再試行できる", async () => {
+  // 1 回目は非対応、2 回目は対応として返す (取り出し経路は start ごとに作り直される)
+  let configSupported = false;
+  const boundary = replaceAudioCodecBoundary({
+    onIsConfigSupported: () => ({ supported: configSupported }),
+  });
+  try {
+    const { publisher, control, sentByConnection, errors } = createAudioStartHarness();
+
+    let thrown: unknown = null;
+    try {
+      await publisher.start(createAudioMediaStream({ sampleRate: 44100, channelCount: 1 }));
+    } catch (error) {
+      thrown = error;
+    }
+
+    assert.instanceOf(thrown, Error);
+    // どの形式が非対応だったかがメッセージだけで分かること
+    assert.match((thrown as Error).message, /codec=opus/);
+    assert.match((thrown as Error).message, /sampleRate=44100/);
+    assert.match((thrown as Error).message, /channels=1/);
+    // configure も catalog の送信もしない (接続はしているため、記録の枠だけが作られる)
+    assert.isEmpty(boundary.configuredConfigs());
+    assert.equal(sentByConnection.length, 1);
+    assert.equal(sentByConnection[0]?.length, 0);
+    // 中止は通知を伴う失敗であるため onError は 1 回だけ (二重通知しない)
+    assert.equal(errors.length, 1);
+    assert.strictEqual(errors[0], thrown);
+    // 確保した取り出し経路は巻き戻しで解放する (残すと Web Audio 経路では AudioContext が残る)
+    assert.isNull(control.audioFrameSource);
+    // state は動かさない
+    assert.equal(publisher.state, "created");
+
+    // 対応する形式のマイクに変えて再試行すると、その形式で catalog と encoder を構成する
+    configSupported = true;
+    await publisher.start(createAudioMediaStream({ sampleRate: 32000, channelCount: 2 }));
+    assert.equal(publisher.state, "publishing");
+    assert.equal(boundary.frameSourceCreatedCount(), 2);
+
+    // 再試行の接続で送った catalog を使う (1 回目の接続では catalog を送っていない)
+    assert.equal(sentByConnection.length, 2);
+    const catalogObject = sentByConnection[1]?.[0];
+    if (catalogObject?.payload === undefined) {
+      throw new Error("expected the catalog object to be sent");
+    }
+    const decoded = decodeCatalogMessage(catalogObject.payload);
+    if (!("version" in decoded)) {
+      throw new Error("expected a full catalog, got a delta update");
+    }
+    const audioTrack = decoded.tracks.find((track) => track.role === "audio");
+    assert.equal(audioTrack?.samplerate, 32000);
+    assert.equal(audioTrack?.channelConfig, "2");
+    assert.deepEqual(boundary.configuredConfigs(), [
+      { codec: "opus", sampleRate: 32000, numberOfChannels: 2, bitrate: 64000 },
+    ]);
+
+    await publisher.close();
+  } finally {
+    boundary.restore();
+  }
+});
+
+/**
+ * 完了条件 (draft-ietf-moq-msf-01 §11.2): catalog の Object を media の Object より先に
+ * publish する MUST。ピアが catalog の PUBLISH を cancel すると (STOP_SENDING) publisher は
+ * active でなくなるため、catalog を送らないまま media の Object を流さずに start() を失敗させる。
+ *
+ * 送信を握り潰して "publishing" へ進む実装に戻すと、catalog が 1 件も届かないまま音声・映像の
+ * Object だけが流れるため、このテストは落ちる。
+ */
+test("start: 初期 catalog の送信時に publisher が active でなければ publishing に進まない", async () => {
+  const closedCatalogPublisher = {
+    state: "closed",
+    forwardState: false,
+    sendObject: async () => {},
+    done: async () => {},
+  } as unknown as Publisher;
+  const { publisher, errors } = createStartConnectHarness(
+    {},
+    {
+      publisherOptions: {
+        namespace: ["live"],
+        video: { codec: "vp8", bitrate: 1_000_000 },
+        useWorker: false,
+      },
+      createCatalogPublisher: () => ({ publisher: closedCatalogPublisher, doneCount: () => 0 }),
+    },
+  );
+
+  let thrown: unknown = null;
+  try {
+    await publisher.start(createVideoMediaStream());
+  } catch (error) {
+    thrown = error;
+  }
+
+  assert.instanceOf(thrown, Error);
+  assert.match((thrown as Error).message, /catalog publisher state is closed/);
+  // media の Object を流す状態 ("publishing") へ進まない
+  assert.equal(publisher.state, "created");
+  // 失敗は通知を伴う (二重通知しない)
+  assert.equal(errors.length, 1);
+  assert.strictEqual(errors[0], thrown);
+});
+
+/**
+ * 完了条件: 音声の取り出し経路 (MediaStreamTrackProcessor か Web Audio) が無いブラウザでは、
+ * catalog を publish する前に start() を失敗させる (音声トラックを宣言した catalog を送った
+ * 後に object が出せない状態を作らない)。
+ *
+ * node にはどちらの経路も無い (src/audioSource.test.ts が isAudioFrameSourceAvailable の
+ * false を固定している) ため、境界を置き換えずにそのまま駆動できる。
+ */
+test("start: 音声の取り出し経路が無ければ catalog を送る前に失敗する", async () => {
+  const { publisher, sentByConnection, errors } = createAudioStartHarness();
+
+  let thrown: unknown = null;
+  try {
+    await publisher.start(createAudioMediaStream({ sampleRate: 48000, channelCount: 2 }));
+  } catch (error) {
+    thrown = error;
+  }
+
+  assert.instanceOf(thrown, Error);
+  assert.match((thrown as Error).message, /MediaStreamTrackProcessor or Web Audio AudioWorklet/);
+  // catalog は送らず (接続の記録だけが作られる)、state も動かさない
+  assert.equal(sentByConnection.length, 1);
+  assert.equal(sentByConnection[0]?.length, 0);
+  assert.equal(publisher.state, "created");
+  // 失敗は通知を伴う (二重通知しない)
+  assert.equal(errors.length, 1);
+  assert.strictEqual(errors[0], thrown);
+});
+
+/**
  * 完了条件: start の実行中 (createPublishers の await) に利用者の close() が先行した場合、
  * state は "closed" のままで "publishing" に戻らない。
  *
  * 各段階の await の直後の検査 (assertStartNotDisposed) が無いと、解放のあとに
  * createPublishers が戻って処理ループを起動し、"closed" のあとに "publishing" へ進んで
- * しまう (終端が破れ、解放されないリソースも残る)。catalog の publish の完了をテストが
- * 握り、解放が先に終端へ進んだ状態で start を再開させる。
+ * しまう (終端が破れ、解放されないリソースも残る)。catalog トラックの PUBLISH の完了を
+ * テストが握り、解放が先に終端へ進んだ状態で start を再開させる。
  */
 test("start: createPublishers の await 中に close したら closed のままで publishing に戻らない", async () => {
   const states: MediaPublisherState[] = [];
@@ -2269,7 +2564,7 @@ test("start: createPublishers の await 中に close したら closed のまま�
     () => null,
     (error: unknown) => error,
   );
-  // createPublishers が catalog の publish を await したところで止める
+  // createPublishers が catalog トラックの PUBLISH を await したところで止める
   await opened[0].publishing();
   assert.equal(publisher.state, "created");
 
@@ -2422,7 +2717,7 @@ test("start: createPublishers の await 中にピア起点の close が終端へ
  * close() の早期 return も通過する)。
  *
  * 駆動する順序は次のとおりである。
- * 1. start #1 が createPublishers の catalog の publish で止まっている間にピア起点の close が
+ * 1. start #1 が createPublishers の catalog トラックの PUBLISH で止まっている間にピア起点の close が
  *    届き、解放 D1 が session の close で止まる (世代番号は解放の先頭で進む)
  * 2. start #1 は段階の検査で中止し、失敗時の巻き戻し D2 が先に終わって失敗が確定する
  *    (D1 が参照を切り離し済みの session を D2 は触らない)
@@ -2443,12 +2738,12 @@ test("start: 解放の完了後に呼び直した start は世代一致でも cl
         closeCount++;
       },
     },
-    // catalog の publish と session の close の両方をテストが解放する (2 つの窓を作る)
+    // catalog トラックの PUBLISH と session の close の両方をテストが解放する (2 つの窓を作る)
     { holdPublish: true, holdSessionClose: true },
   );
 
   await withUnhandledRejectionWatch(async (unhandled) => {
-    // 1. start #1 を catalog の publish の await で止める
+    // 1. start #1 を catalog トラックの PUBLISH の await で止める
     const firstStart = publisher.start({} as MediaStream).then(
       () => null,
       (error: unknown) => error,
@@ -2623,7 +2918,7 @@ test("start: ピア起点 close の終端通知が throw しても閉包が回�
  * 通知し直さない (1 件の失敗で onError が 2 回呼ばれない)。
  *
  * 印付きの失敗を catch まで運ぶ経路も、接続の境界 (openSession) の差し替えで駆動できる
- * (node に WebTransport は要らない)。送信の reject は createPublishers の await を通って
+ * (node に WebTransport は要らない)。送信の reject は publishCatalog の await を通って
  * start() の catch に届く。
  */
 test("start: catalog 送信の印付き reject は catch を経ても通知しない", async () => {
@@ -3704,13 +3999,16 @@ test("handleVideoEncodedChunk: 送信の同期 throw は onError に 1 回届く
 /**
  * forwardState 変化の登録を検証するための制御口
  *
- * createPublishers() は接続を要する start() からしか呼べないため、publish 呼び出しを
- * 記録する最小セッションを注入して駆動する (モジュール置換は行わない)。
+ * Publisher の作成と catalog の送信は接続を要する start() からしか呼べないため、publish
+ * 呼び出しを記録する最小セッションを注入して駆動する (モジュール置換は行わない)。
+ * start() と同じ順序にするため、Publisher の作成 → catalog の送信を順に呼ぶ
+ * (start() は両者の間で音声の取り出し経路を作るが、この制御口は音声を使わない)
  */
 interface PublisherForwardControl extends PublisherLifecycleControl {
   resolvedAudio: ResolvedAudioPublishSettings | null;
   resolvedVideo: ResolvedVideoPublishSettings | null;
   createPublishers(): Promise<void>;
+  publishCatalog(): Promise<void>;
 }
 
 /**
@@ -3787,6 +4085,8 @@ test("createPublishers: forwardState が 1 になると Audio Config の送り�
 
   await control.createPublishers();
 
+  await control.publishCatalog();
+
   // Catalog が Object ID 0 で 1 件だけ publish されること
   assert.equal(catalogSent.length, 1);
   assert.equal(catalogSent[0].objectId, 0);
@@ -3843,6 +4143,8 @@ test("createPublishers: forwardState が 1 になると Video Config の送り�
 
   await control.createPublishers();
 
+  await control.publishCatalog();
+
   // Catalog が Object ID 0 で 1 件だけ publish されること
   assert.equal(catalogSent.length, 1);
   assert.equal(catalogSent[0].objectId, 0);
@@ -3892,6 +4194,8 @@ test("createPublishers: catalog の forwardState が 1 になると新しい Gro
   control.session = session;
 
   await control.createPublishers();
+
+  await control.publishCatalog();
 
   // 開始時の catalog が保持している Group ID の先頭 Object として 1 件だけ送られること
   assert.equal(catalogSent.length, 1);
@@ -3959,6 +4263,7 @@ test("createPublishers: catalog の送り直しの reject は onError へ 1 回�
 
   await withUnhandledRejectionWatch(async (unhandled) => {
     await control.createPublishers();
+    await control.publishCatalog();
     callbacksByTrack.get(CATALOG_TRACK_NAME)?.onForwardStateChange?.(true);
     await waitForUnhandledRejectionDetection();
 
@@ -3986,6 +4291,7 @@ test("createPublishers: catalog の送り直しでは publisher 層が通知済�
 
   await withUnhandledRejectionWatch(async (unhandled) => {
     await control.createPublishers();
+    await control.publishCatalog();
     callbacksByTrack.get(CATALOG_TRACK_NAME)?.onForwardStateChange?.(true);
     await waitForUnhandledRejectionDetection();
 
@@ -4023,6 +4329,7 @@ test("createPublishers: catalog の送り直しで onError が throw しても�
 
   await withUnhandledRejectionWatch(async (unhandled) => {
     await control.createPublishers();
+    await control.publishCatalog();
     callbacksByTrack.get(CATALOG_TRACK_NAME)?.onForwardStateChange?.(true);
     await waitForUnhandledRejectionDetection();
 
@@ -4033,7 +4340,7 @@ test("createPublishers: catalog の送り直しで onError が throw しても�
   await publisher.close();
 });
 
-test("createPublishers: catalog の送り直しを間隔ごとに予約し直し、解放で取り消す", async () => {
+test("publishCatalog: catalog の送り直しを間隔ごとに予約し直し、解放で取り消す", async () => {
   // 配信の開始から MAX_CACHE_DURATION を過ぎた相手にも catalog を届けるための定期送り直しを
   // 実時間で駆動する。テストが 30 秒待たずに済むよう間隔だけを短くし、送り直しのたびに
   // 次の予約が入ることと、解放 (close()) で予約が取り消されることを確認する
@@ -4049,6 +4356,8 @@ test("createPublishers: catalog の送り直しを間隔ごとに予約し直し
   control.catalogRepublishInterval = 10;
 
   await control.createPublishers();
+
+  await control.publishCatalog();
   assert.equal(catalogSent.length, 1);
   assert.isNotNull(control.catalogRepublishTimer);
 
@@ -4069,6 +4378,43 @@ test("createPublishers: catalog の送り直しを間隔ごとに予約し直し
   assert.equal(catalogSent.length, sentBeforeDisposeWait);
 });
 
+test("publishCatalog: FORWARD が 0 でも初期送信は完了として扱い予約を残す", async () => {
+  // 初期送信の時点で FORWARD が 0 のときも publisher は Object を送らない
+  // (draft-ietf-moq-transport-22 §3.1.1)。publishCatalog の検査は publisher の state だけを
+  // 見るため active なら失敗せず、初期送信の完了として扱って次の FORWARD 0→1 に備える。
+  // 見送りそのものは publisher が行う (「FORWARD が 0 の間の送り直しは見送られ Group ID を
+  // 消費しない」のテストが駆動する)
+  const { publisher, control: loopControl } = createLoopTestContext();
+  const control = loopControl as unknown as PublisherCatalogRepublishControl;
+  const { publisher: catalogPublisher, sent: catalogSent } = createRecordingSendPublisher();
+  // 送信の可否は publisher が決めるため、初期送信の前から FORWARD を 0 にしておく
+  (catalogPublisher as unknown as { forwardState: boolean }).forwardState = false;
+  const publishers = new Map<string, Publisher>([[CATALOG_TRACK_NAME, catalogPublisher]]);
+  const { session } = createPublishRecordingSession(publishers);
+  control.session = session;
+  control.catalogRepublishInterval = 10;
+
+  await control.createPublishers();
+  await control.publishCatalog();
+
+  // active なので例外にはならない。Object を実際に送るかは publisher が決めるため
+  // (FORWARD が 0 の間は送らない。draft-ietf-moq-transport-22 §3.1.1)、記録した stand-in には
+  // 送信の呼び出しだけが残る。見送りでも初期送信の完了として扱い、予約を残す
+  assert.equal(catalogSent.length, 1);
+  assert.isTrue(control.catalogInitialSent);
+  assert.isNotNull(control.catalogRepublishTimer);
+  const groupIdAfterStart = control.catalogGroupId;
+
+  // FORWARD が 1 になれば、予約の満了で新しい Group の先頭 Object として送り直される
+  (catalogPublisher as unknown as { forwardState: boolean }).forwardState = true;
+  await sleep(50);
+  assert.isAtLeast(catalogSent.length, 2);
+  assert.isAbove(catalogSent[1]?.groupId ?? 0, groupIdAfterStart);
+  assert.equal(catalogSent[1]?.objectId, 0);
+
+  await publisher.close();
+});
+
 test("createPublishers: FORWARD が 0 の間の送り直しは見送られ Group ID を消費しない", async () => {
   // publisher は paused の間 Object を送らない (draft-ietf-moq-transport-22 §3.1.1)。
   // 見送られる送り直しで Group ID と、同一プロセスの開始 Group ID の下限を進めないこと
@@ -4083,6 +4429,8 @@ test("createPublishers: FORWARD が 0 の間の送り直しは見送られ Group
   control.catalogRepublishInterval = 10;
 
   await control.createPublishers();
+
+  await control.publishCatalog();
   assert.equal(catalogSent.length, 1);
   const groupIdAfterStart = control.catalogGroupId;
 
@@ -4121,6 +4469,8 @@ test("createPublishers: catalog Publisher が closed になったら FORWARD が
   control.session = session;
 
   await control.createPublishers();
+
+  await control.publishCatalog();
   assert.equal(catalogSent.length, 1);
   const groupIdBeforeClose = control.catalogGroupId;
   assert.isNotNull(control.catalogRepublishTimer);
@@ -4147,6 +4497,8 @@ test("createPublishers: catalog Publisher が closed になったら予約の満
   control.catalogRepublishInterval = 10;
 
   await control.createPublishers();
+
+  await control.publishCatalog();
   assert.equal(catalogSent.length, 1);
   const groupIdBeforeClose = control.catalogGroupId;
 
@@ -4159,9 +4511,10 @@ test("createPublishers: catalog Publisher が closed になったら予約の満
   await publisher.close();
 });
 
-test("createPublishers: 初期 catalog の送信前に FORWARD が 1 になっても送り直さない", async () => {
+test("publishCatalog: 初期 catalog の送信前に FORWARD が 1 になっても送り直さない", async () => {
   // stop() → start() の窓。前回 start の currentCatalog は解放で消さないため、新しい
-  // catalog Publisher を作ってから初期 catalog を送るまでの間 (音声・映像の PUBLISH の往復) に
+  // catalog Publisher を作ってから初期 catalog を送るまでの間 (音声・映像の PUBLISH の往復と
+  // 音声の取り出し経路の準備) に
   // FORWARD 0→1 が届くと、前回の catalog を新しい Group ID で送ってしまい、直後の初期送信が
   // 同じ Location に別の payload を載せる (draft-ietf-moq-transport-22 §2.1 / §7.1)。
   // 初期送信が済むまでは送り直さないことを確認する
@@ -4201,6 +4554,7 @@ test("createPublishers: 初期 catalog の送信前に FORWARD が 1 になっ�
   // 1 回目の start 相当。初期送信より前の FORWARD 1 は currentCatalog が null のため送らない
   notifyForwardDuringMediaPublish = true;
   await control.createPublishers();
+  await control.publishCatalog();
   assert.equal(catalogSent.length, 1);
   assert.equal(catalogSent[0]?.groupId, control.catalogGroupId);
   assert.equal(catalogSent[0]?.objectId, 0);
@@ -4209,6 +4563,7 @@ test("createPublishers: 初期 catalog の送信前に FORWARD が 1 になっ�
   // 2 回目の start 相当。前回の catalog が currentCatalog に残っていても、この start の
   // 初期送信が済むまでは送り直さない (初期送信 1 件だけが新しい Group ID で送られる)
   await control.createPublishers();
+  await control.publishCatalog();
   assert.equal(catalogSent.length, 2);
   assert.isAbove(catalogSent[1]?.groupId ?? 0, firstGroupId);
   assert.equal(catalogSent[1]?.objectId, 0);
@@ -4228,6 +4583,8 @@ test("createPublishers: 解放が進行中の送り直しは送らない", async
   control.session = session;
 
   await control.createPublishers();
+
+  await control.publishCatalog();
   assert.equal(catalogSent.length, 1);
   const groupIdBeforeDisposal = control.catalogGroupId;
 
@@ -4254,6 +4611,8 @@ test("createPublishers: start 失敗の巻き戻し中は送り直さない", as
   control.session = session;
 
   await control.createPublishers();
+
+  await control.publishCatalog();
   assert.equal(catalogSent.length, 1);
   const groupIdBeforeDisposal = control.catalogGroupId;
 
@@ -4281,6 +4640,8 @@ test("createPublishers: pause と resume は catalog の送り直しを止めな
   control.catalogRepublishInterval = 10;
 
   await control.createPublishers();
+
+  await control.publishCatalog();
   assert.equal(catalogSent.length, 1);
   assert.isNotNull(control.catalogRepublishTimer);
 
@@ -4299,14 +4660,14 @@ test("createPublishers: pause と resume は catalog の送り直しを止めな
   await publisher.close();
 });
 
-test("createPublishers: catalog 送信の事前検証 reject は印付きで 1 回だけ通知される", async () => {
-  // start() は createPublishers() を await し、その中で publishCatalog() が catalog 送信を
-  // await する。事前検証の違反は publisher 層が通知してから返値を reject するため、
-  // reject が createPublishers() を伝って start() の catch に届く。
+test("publishCatalog: catalog 送信の事前検証 reject は印付きで 1 回だけ通知される", async () => {
+  // start() は createPublishers() の後に publishCatalog() を await する。事前検証の違反は
+  // publisher 層が通知してから返値を reject するため、reject が publishCatalog() を伝って
+  // start() の catch に届く。
   // ここでは実物の publisher に事前検証で拒否させ、通知が publisher 層の 1 回で終わることと、
   // reject に印が付いたまま伝わることを固定する。
   // start() 自体は node に WebTransport が無く接続できないため、start() の catch が
-  // 受ける位置 (createPublishers() の直後) までを駆動し、通知の抑止は
+  // 受ける位置 (publishCatalog() の await) までを駆動し、通知の抑止は
   // start 失敗の通知のテストで確認する
   const { control: loopControl, errors } = createLoopTestContext();
   const control = loopControl as unknown as PublisherForwardControl;
@@ -4330,6 +4691,7 @@ test("createPublishers: catalog 送信の事前検証 reject は印付きで 1 �
   let rejected: unknown = null;
   try {
     await control.createPublishers();
+    await control.publishCatalog();
   } catch (error) {
     rejected = error;
   }
@@ -5253,6 +5615,7 @@ test("createPublishers: SETUP に載せたトークンを PUBLISH に付与す�
   ).setupAuthorizationToken = token;
   control.session = session;
 
+  // PUBLISH に載るトークンを見るため、catalog の Object の送信は要らない
   await control.createPublishers();
 
   assert.equal(optionsByTrack.get(CATALOG_TRACK_NAME)?.authorizationToken, token);
@@ -5278,6 +5641,7 @@ test("createPublishers: SETUP にトークンが無ければ PUBLISH に付与�
   const { session, optionsByTrack } = createPublishRecordingSession(publishers);
   control.session = session;
 
+  // PUBLISH に載るトークンを見るため、catalog の Object の送信は要らない
   await control.createPublishers();
 
   assert.isUndefined(optionsByTrack.get(CATALOG_TRACK_NAME)?.authorizationToken);

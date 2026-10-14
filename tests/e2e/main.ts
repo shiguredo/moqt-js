@@ -82,6 +82,15 @@ export interface StartPublisherOptions {
     bitrate: number;
     /** 音声 Object の送り方 (未指定なら devtools の既定 "datagram")。draft-ietf-moq-transport-22 §11 */
     delivery?: AudioDelivery;
+    /**
+     * 取り出し経路へ要求するサンプルレート。省略時は既定の 48000 Hz
+     *
+     * 要求は Catalog と AudioEncoder の設定にはならず、経路が返した形式が使われる。
+     * 指定値の扱いを検証する spec が、マイクと違う値を渡すために使う
+     */
+    sampleRate?: number;
+    /** 取り出し経路へ要求するチャンネル数。省略時は既定の 2。使い道は `sampleRate` と同じ */
+    channels?: number;
   };
 }
 
@@ -89,6 +98,20 @@ export interface StartPublisherOptions {
 export interface PublisherAudioStatus {
   /** 送信した音声 Object の数 */
   framesSent: number;
+}
+
+/**
+ * 配信に使った音声トラックが報告した形式
+ *
+ * トラックの `getSettings()` の値である。`MediaStreamTrackProcessor` 経路はこの値を実際に
+ * 流れる形式として読む (無い項目は要求値) ため、Catalog の宣言と突き合わせられる。Web Audio
+ * 経路では符号化に使う形式 (AudioContext のサンプルレートと要求したチャンネル数) とは限らない
+ */
+export interface PublisherTrackAudioFormat {
+  /** トラックが報告したサンプルレート (報告が無ければ null) */
+  sampleRate: number | null;
+  /** トラックが報告したチャンネル数 (報告が無ければ null) */
+  channelCount: number | null;
 }
 
 /** Publisher の観測結果 */
@@ -102,6 +125,8 @@ export interface PublisherStatus {
   currentGroupId: number;
   /** 音声の送信統計 (音声を配信していなければ null) */
   audio: PublisherAudioStatus | null;
+  /** 配信に使った音声トラックが報告した形式 (音声を配信していなければ null) */
+  trackAudioFormat: PublisherTrackAudioFormat | null;
   errors: string[];
 }
 
@@ -144,6 +169,19 @@ export interface SubscriberAudioStatus {
   missedFrames: number;
 }
 
+/**
+ * Catalog が宣言した音声トラックの形式
+ *
+ * 配信側が取り出し経路から写した値である。宣言と実際に流れる形式が食い違うと復号が
+ * 壊れるため、spec が宣言そのものを確かめられるようにする
+ */
+export interface CatalogAudioFormat {
+  /** Catalog の samplerate (宣言が無ければ null) */
+  samplerate: number | null;
+  /** Catalog の channelConfig (宣言が無ければ null) */
+  channelConfig: string | null;
+}
+
 /** Subscriber の観測結果 */
 export interface SubscriberStatus {
   state: string;
@@ -156,6 +194,8 @@ export interface SubscriberStatus {
   bytesReceived: number;
   /** 音声の受信と再生の観測結果 (音声を購読していなければ null) */
   audio: SubscriberAudioStatus | null;
+  /** Catalog が宣言した音声トラックの形式 (音声トラックが無ければ null) */
+  catalogAudioFormat: CatalogAudioFormat | null;
   errors: string[];
 }
 
@@ -237,6 +277,8 @@ interface PublisherHandle {
   /** Canvas の描画タイマーとトラックの解放 */
   dispose: () => void;
   errors: string[];
+  /** 配信に使った音声トラックが報告した形式 (音声を配信していなければ null) */
+  trackAudioFormat: PublisherTrackAudioFormat | null;
 }
 
 interface SubscriberHandle {
@@ -367,7 +409,8 @@ function createCanvasStream(): { stream: MediaStream; dispose: () => void } {
  * CI の runner は音声の入力デバイスを持たないため、spec は
  * `--use-fake-device-for-media-stream` を付けて動かす
  * (tests/e2e/relay/audio-timestamp.spec.ts と同じ条件)。偽デバイスも 20 ms ごとに音を
- * 渡すため、配信と購読の経路はそのまま検証できる
+ * 渡すため、配信と購読の経路はそのまま検証できる。偽デバイスはモノラル (channelCount が 1)
+ * であり、既定の要求 (2 ch) とは違う形式が流れる。ライブラリは取り出した形式で符号化する
  */
 async function createAudioTrack(): Promise<MediaStreamTrack> {
   const audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -394,6 +437,7 @@ function readPublisherStatus(handle: PublisherHandle): PublisherStatus {
         : {
             framesSent: audio.framesSent,
           },
+    trackAudioFormat: handle.trackAudioFormat,
     errors: [...handle.errors],
   };
 }
@@ -402,6 +446,9 @@ function readSubscriberStatus(handle: SubscriberHandle): SubscriberStatus {
   const stats = handle.subscriber.getStats();
   const video = stats.video;
   const audio = stats.audio;
+  const catalogAudioTrack = handle.subscriber.catalog?.tracks.find(
+    (track) => track.role === "audio",
+  );
   return {
     state: handle.subscriber.state,
     hasCatalog: handle.subscriber.catalog !== null,
@@ -409,6 +456,13 @@ function readSubscriberStatus(handle: SubscriberHandle): SubscriberStatus {
     framesReceived: video?.framesReceived ?? 0,
     keyFramesReceived: video?.keyFramesReceived ?? 0,
     bytesReceived: video?.bytesReceived ?? 0,
+    catalogAudioFormat:
+      catalogAudioTrack === undefined
+        ? null
+        : {
+            samplerate: catalogAudioTrack.samplerate ?? null,
+            channelConfig: catalogAudioTrack.channelConfig ?? null,
+          },
     audio:
       audio === null
         ? null
@@ -500,16 +554,26 @@ async function startPublisher(options: StartPublisherOptions): Promise<HandleId>
   const { stream, dispose } = createCanvasStream();
 
   let publisher: MediaPublisher;
+  let trackAudioFormat: PublisherTrackAudioFormat | null = null;
   try {
-    // 音声の設定は入力のトラックから決める。偽のマイクはモノラルであり、既定 (ステレオ) の
-    // まま符号化へ渡すと、入力と符号化のパラメーターが合わずに符号化が失敗する
-    // (Chrome の "Input audio buffer is incompatible with codec parameters")。
-    // 実機のマイクでも同じ理由で設定に追従させる
+    // 音声の形式はライブラリが取り出し経路から決める (要求した値と違っても、実際に流れる
+    // 形式で Catalog と AudioEncoder を構成する)。要求を渡さない場合は既定の 48000 Hz /
+    // 2 ch が要求になり、偽のマイクの形式 (モノラル) と違う状態で配信が成立することを見る。
+    // 渡した場合はその値が要求になる (指定値の扱いを見る spec が使う)
     const audioTrack = options.audio === undefined ? null : await createAudioTrack();
-    const audioSettings = audioTrack?.getSettings();
     if (audioTrack !== null) {
       stream.addTrack(audioTrack);
     }
+    // 取り出し経路 (MediaStreamTrackProcessor) が実際の形式として読む値と同じものを、
+    // spec が Catalog の宣言と突き合わせられるよう観測値に残す
+    const audioSettings = audioTrack?.getSettings();
+    trackAudioFormat =
+      audioTrack === null
+        ? null
+        : {
+            sampleRate: audioSettings?.sampleRate ?? null,
+            channelCount: audioSettings?.channelCount ?? null,
+          };
     publisher = await createMediaPublisher(
       options.url,
       {
@@ -523,15 +587,17 @@ async function startPublisher(options: StartPublisherOptions): Promise<HandleId>
               audio: {
                 codec: options.audio.codec,
                 bitrate: options.audio.bitrate,
-                ...(audioSettings?.sampleRate === undefined
-                  ? {}
-                  : { sampleRate: audioSettings.sampleRate }),
-                ...(audioSettings?.channelCount === undefined
-                  ? {}
-                  : { channels: audioSettings.channelCount }),
                 ...(options.audio.delivery === undefined
                   ? {}
                   : { delivery: options.audio.delivery }),
+                // 要求は取り出し経路へ渡すだけで、Catalog と AudioEncoder には経路が
+                // 返した形式が使われる (ライブラリ側で写す)
+                ...(options.audio.sampleRate === undefined
+                  ? {}
+                  : { sampleRate: options.audio.sampleRate }),
+                ...(options.audio.channels === undefined
+                  ? {}
+                  : { channels: options.audio.channels }),
               },
             }),
       },
@@ -548,7 +614,7 @@ async function startPublisher(options: StartPublisherOptions): Promise<HandleId>
   }
 
   const id = createHandleId("publisher");
-  publishers.set(id, { publisher, dispose, errors });
+  publishers.set(id, { publisher, dispose, errors, trackAudioFormat });
   return id;
 }
 
