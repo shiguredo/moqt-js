@@ -40,6 +40,27 @@ export function extractC4mBase64(input: string): string | undefined {
 }
 
 /**
+ * Base64 (標準 / base64url) のアルファベットとパディング
+ *
+ * `atob` は HTML の forgiving-base64 として ASCII 空白を取り除き、`=` の位置も緩く
+ * 解釈する。c4m の値は URL の parameter なので、ここでは Base64 の文字だけを受理し、
+ * 端数のビットが 0 でない入力 (draft-ietf-moq-msf-01 §11.1.1 の例) の緩さだけを残す。
+ */
+const BASE64_CHARACTERS = new Set(
+  "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/-_=",
+);
+
+/** Base64 の文字だけで書かれているかどうかを返す */
+function isBase64Characters(value: string): boolean {
+  for (const character of value) {
+    if (!BASE64_CHARACTERS.has(character)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
  * c4m の値 (標準 Base64 / base64url) をバイト列へ復号する
  *
  * C4M のトークンは URL では Base64 encoded と定められる (draft-ietf-moq-msf-01 §11.1.1 /
@@ -57,6 +78,10 @@ export function decodeC4mBase64(value: string): Uint8Array | undefined {
   const strict = C4M.tryDecodeBase64OrUrl(value);
   if (strict !== undefined) {
     return strict;
+  }
+  // Base64 の文字でなければ atob へ渡さない (空白や `=` の位置の緩さを引き継がない)
+  if (!isBase64Characters(value)) {
+    return undefined;
   }
   // atob は base64url の `-` と `_` を受理しないため、標準 Base64 の文字へ置き換える
   try {

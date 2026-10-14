@@ -79,6 +79,15 @@ test("extractC4mBase64: 不正な Base64 の c4m は undefined を返す", () =>
   assert.equal(extractC4mBase64("msf:room-123--catalog&c4m=not base64!!"), undefined);
 });
 
+// atob は HTML の forgiving-base64 として ASCII 空白を取り除くため、空白だけの値や
+// 途中に空白を含む値も「復号できる」ように見える。c4m の値は Base64 の文字だけで
+// 書かれている必要があるため、これらは c4m として扱わない。
+test("extractC4mBase64: 空白を含む c4m の値は undefined を返す", () => {
+  assert.equal(extractC4mBase64("msf:room-123--catalog&c4m= "), undefined);
+  assert.equal(extractC4mBase64("msf:room-123--catalog&c4m=QU FB"), undefined);
+  assert.equal(extractC4mBase64(`msf:room-123--catalog&c4m= ${C4M_EXAMPLE}`), undefined);
+});
+
 // 値が空の c4m はトークンとして扱わない。
 test("extractC4mBase64: c4m の値が空の場合は undefined を返す", () => {
   assert.equal(extractC4mBase64("msf:room-123--catalog&c4m="), undefined);
