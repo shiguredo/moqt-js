@@ -7,13 +7,17 @@
  *
  * 前提から外れた状態は、既にある計器の値を組み合わせれば分かる (新しい計測は要らない)。
  * 判定は 1 秒ごとの観測で行う純関数にし、判定に時間が要るもの (上限に張り付いたまま、
- * 保持が続いたまま、追いつきが繰り返される) は前回の状態を引数で受けて数え直す。
+ * 保持が続いたまま、追いつきが繰り返される、追いつきが解除されないまま) は前回の状態を
+ * 引数で受けて数え直す。
  * 判定の根拠と、どうなったら何を見直すかは docs/AV_SYNC_DECISIONS.md が持つ。
  *
  * 出す文言は devtools の UI (英語) と「Copy for LLM」の両方に使うため英語にする。
  */
 
-import type { AudioPublishCatchUpStats } from "../../../src/audioPublishCatchUp.ts";
+import {
+  AUDIO_PUBLISH_CATCH_UP_PENDING_TIMEOUT_MS,
+  type AudioPublishCatchUpStats,
+} from "../../../src/audioPublishCatchUp.ts";
 import type { AudioTimestampOffsetStats } from "../../../src/audioTimestampClock.ts";
 import {
   PLAYOUT_BASE_UNSHARED_HOLD_MS,
@@ -30,7 +34,9 @@ export type PreconditionWarningId =
   // 配信側の TIMESTAMP の補正が動き続けている
   | "timestampOffsetKeepsMoving"
   // 配信側の追いつきが繰り返し始まっている
-  | "catchUpKeepsStarting";
+  | "catchUpKeepsStarting"
+  // 配信側の追いつきが解除されないまま続いている
+  | "catchUpDoesNotEnd";
 
 /**
  * 前提から外れた状態の警告 1 件
@@ -128,6 +134,22 @@ export const CATCH_UP_WARN_WINDOW_MS = 60_000;
  */
 export const CATCH_UP_WARN_STARTS = 3;
 
+/**
+ * 追いつきが解除されないまま続いているとみなす時間 (ミリ秒)
+ *
+ * 追いつきは、符号化のキューに残っている長さが 1 パケット
+ * (`AUDIO_PUBLISH_CATCH_UP_RESUME_MS` = 20 ms) 以下になればやめる。出力が返らない記録は
+ * `AUDIO_PUBLISH_CATCH_UP_PENDING_TIMEOUT_MS` (5 秒) で捨てられるため、記録も、そこから
+ * 求める長さも、遅くとも 5 秒で 0 になる。それだけ続いたうえで捨て続けているのは、解除の
+ * 条件が満たせていない (状態が抜けられていない) ということである。捨てた数が増えていない
+ * (フレームが届いていない) 場合は、別の失敗であり警告にしない。
+ *
+ * 実測 (moqt-devtools、2026-10-14) では、追いつきを始めた後 11 秒以上解除されず、1805
+ * フレーム (14440 ms) を捨てたまま音声が送られなくなった。開始は 1 回だけであり、
+ * `catchUpKeepsStarting` (開始回数を見る) には現れない
+ */
+export const CATCH_UP_STUCK_WARN_MS = AUDIO_PUBLISH_CATCH_UP_PENDING_TIMEOUT_MS;
+
 /** 受信側の警告の判定の状態 (観測のたびに持ち回る) */
 export interface SubscriberWarningState {
   /** 同期の補償が上限に張り付き始めた時刻 (ミリ秒)。張り付いていなければ null */
@@ -161,6 +183,15 @@ export interface PublisherWarningState {
    * 窓の中の増加を数える
    */
   readonly catchUpSamples: readonly CatchUpSample[];
+  /** 追いつきが続き始めた時刻 (ミリ秒)。続いていなければ null */
+  readonly catchUpSinceMs: number | null;
+  /**
+   * 追いつきが続き始めた時点の `droppedFrames`。続いていなければ null
+   *
+   * 続いていることだけを見ると、フレームが届かなくなった (追いつきの状態が残ったまま
+   * 読み出しが止まった) 場合も警告になる。捨てた数が増えているかどうかで分ける
+   */
+  readonly catchUpDroppedAtStart: number | null;
 }
 
 /** 配信側の判定の入力 */
@@ -188,6 +219,8 @@ export const EMPTY_SUBSCRIBER_WARNING_STATE: SubscriberWarningState = {
 /** 空の状態 (配信を始める前) */
 export const EMPTY_PUBLISHER_WARNING_STATE: PublisherWarningState = {
   catchUpSamples: [],
+  catchUpSinceMs: null,
+  catchUpDroppedAtStart: null,
 };
 
 /** 数値を 1 桁のミリ秒で書く (計器の表示と桁を合わせる) */
@@ -363,7 +396,55 @@ export function detectPublisherWarnings(
     });
   }
 
-  return { state: { catchUpSamples }, warnings };
+  // 追いつきが解除されないまま続いているか。続いている間は符号化へ投入しないため、
+  // キューに残っている長さも記録も減らないことがある (実測: 1805 フレーム・14440 ms を
+  // 捨てたまま固定され、音声が一切送られなくなった)
+  const catchingUp = input.catchUp.catchingUp;
+  // 配信をやり直すと累積の値は 0 に戻る。前の配信の時刻と回数を持ち越すと、始まった直後に
+  // 警告が出る (時刻) か、捨てた数が前の配信を超えるまで出ない (回数) ため、減っていたら
+  // 数え直す
+  const restartedFromDrops =
+    state.catchUpDroppedAtStart !== null &&
+    input.catchUp.droppedFrames < state.catchUpDroppedAtStart;
+  const catchUpSinceMs = catchingUp
+    ? ((restartedFromDrops ? null : state.catchUpSinceMs) ?? nowMs)
+    : null;
+  const catchUpDroppedAtStart = catchingUp
+    ? ((restartedFromDrops ? null : state.catchUpDroppedAtStart) ?? input.catchUp.droppedFrames)
+    : null;
+  const droppedSinceStart =
+    catchUpDroppedAtStart === null ? 0 : input.catchUp.droppedFrames - catchUpDroppedAtStart;
+  if (
+    catchUpSinceMs !== null &&
+    nowMs - catchUpSinceMs >= CATCH_UP_STUCK_WARN_MS &&
+    droppedSinceStart > 0
+  ) {
+    warnings.push({
+      id: "catchUpDoesNotEnd",
+      decision: "AUDIO_PUBLISH_CATCH_UP_PENDING_TIMEOUT_MS",
+      message:
+        `Audio catch-up has continued for ${Math.round((nowMs - catchUpSinceMs) / 1000)} s without ` +
+        `ending and is still dropping frames. Records of frames with no encoder output are dropped ` +
+        `after ${AUDIO_PUBLISH_CATCH_UP_PENDING_TIMEOUT_MS / 1000} s, so the queued audio must fall ` +
+        "to one packet by then. If it does not, the state cannot clear and no audio is sent. Check " +
+        "whether pendingMs agrees with pendingFrames (the queued length must not exceed the " +
+        "records) and whether the encoder is producing output.",
+      values: [
+        `heldMs=${Math.round(nowMs - catchUpSinceMs)}`,
+        `catchingUp=${catchingUp}`,
+        `catchUpStarts=${input.catchUp.catchUpStarts}`,
+        `droppedSinceStart=${droppedSinceStart}`,
+        `droppedFrames=${input.catchUp.droppedFrames}`,
+        `droppedMs=${formatMs(input.catchUp.droppedMs)}`,
+        `lagMs=${input.catchUp.lagMs === null ? "-" : formatMs(input.catchUp.lagMs)}`,
+        `readLagMs=${formatMs(input.catchUp.readLagMs)}`,
+        `pendingMs=${formatMs(input.catchUp.pendingMs)}`,
+        `pendingFrames=${input.catchUp.pendingFrames}`,
+      ],
+    });
+  }
+
+  return { state: { catchUpSamples, catchUpSinceMs, catchUpDroppedAtStart }, warnings };
 }
 
 /**

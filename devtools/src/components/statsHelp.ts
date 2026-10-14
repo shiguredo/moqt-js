@@ -15,6 +15,7 @@ import {
   PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS,
 } from "../../../src/playbackTimeline";
 import {
+  CATCH_UP_STUCK_WARN_MS,
   CATCH_UP_WARN_STARTS,
   CATCH_UP_WARN_WINDOW_MS,
   SYNC_PINNED_MIN_MS,
@@ -23,6 +24,7 @@ import {
   TIMESTAMP_SLOPE_WARN_MS_PER_SECOND,
   UNSHARED_HOLD_WARN_MS,
 } from "../utils/preconditionWarnings";
+import { AUDIO_PUBLISH_CATCH_UP_PENDING_TIMEOUT_MS } from "../../../src/audioPublishCatchUp";
 import {
   AUDIO_MISS_REASONS,
   MAX_RECENT_AUDIO_MISSES,
@@ -267,9 +269,13 @@ export const PUBLISHER_WARNINGS_HELP: SectionHelp = {
       term: "catchUpKeepsStarting",
       description: `Audio catch-up started ${CATCH_UP_WARN_STARTS} times or more in ${CATCH_UP_WARN_WINDOW_MS / 1_000} s. Each start drops the queued audio down to one packet, so the encoder is not keeping real time. Reconsider the catch-up thresholds, or whether dropping is the right policy for this content (audioCatchUp).`,
     },
+    {
+      term: "catchUpDoesNotEnd",
+      description: `Audio catch-up kept going for ${CATCH_UP_STUCK_WARN_MS / 1_000} s or more while still dropping frames. Records of frames with no encoder output are dropped after ${AUDIO_PUBLISH_CATCH_UP_PENDING_TIMEOUT_MS / 1_000} s, so the queued audio must fall to one packet by then; if it does not, the state cannot clear and no audio is sent. Check that pendingMs agrees with pendingFrames, and that the encoder is producing output.`,
+    },
   ],
   notes: [
-    "Both are judged every second from audio.timestampOffset and audio.catchUp, so a warning appears while the state continues and disappears within a second after it ends.",
+    "All of these are judged every second from audio.timestampOffset and audio.catchUp, so a warning appears while the state continues and disappears within a second after it ends.",
     "The offset slope is the raw observation (read wall clock - AudioData.timestamp), not the applied correction. A slope away from 0 means the correction keeps moving.",
   ],
 };
