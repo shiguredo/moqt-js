@@ -8,13 +8,17 @@
 
 import { test, assert } from "vite-plus/test";
 import * as fc from "fast-check";
+import { encodeBase64Url } from "./base64url";
 import {
   type CatClaims,
+  CLAIM_AUDIENCE,
+  CLAIM_CWT_ID,
   CatError,
   type CatErrorCode,
   CatToken,
   CatTokenBuilder,
   type ClaimValidationError,
+  authorizeCatClaims,
   createCatClaims,
   decodeCatClaims,
   encodeCatClaims,
@@ -22,7 +26,13 @@ import {
 } from "./cat";
 import {
   type CborValue,
+  cborArray,
+  cborAsArray,
+  cborAsBytes,
+  cborByteString,
   cborInteger,
+  cborMap,
+  cborMapGet,
   cborTextString,
   cborUnsigned,
   decodeCbor,
@@ -38,6 +48,8 @@ import {
 import {
   type CatDpop,
   type Match,
+  MOQT_ACTIONS,
+  type MoqtAction,
   type MoqtClaim,
   type MoqtScope,
   exactMatch,
@@ -48,7 +60,12 @@ import {
 } from "./moqt";
 import { type CoseKey, ec2Key, ec2KeyWithPrivateKey, symmetricKey } from "./crypto";
 import { WebCrypto } from "./webcrypto";
-import { assertClaimValidationError, cborValueArbitrary, decodeHex } from "./testSupport";
+import {
+  assertClaimValidationError,
+  cborValueArbitrary,
+  decodeHex,
+  encodeBase64Standard,
+} from "./testSupport";
 import {
   ES256_PRIVATE_KEY_HEX,
   ES256_PUBLIC_KEY_X_HEX,
@@ -371,6 +388,62 @@ test("claims はエンコードとデコードで往復し、再エンコード�
   );
 });
 
+test("単一のテキストで書かれた aud は 1 要素の配列と同じ claims にデコードされる", () => {
+  fc.assert(
+    fc.property(textArbitrary, (audience) => {
+      // RFC 8392 Section 3.1.3 は aud を単一のテキストでも配列でも認める
+      const single = decodeCatClaims(
+        cborMap([[cborInteger(CLAIM_AUDIENCE), cborTextString(audience)]]),
+      );
+      const list = decodeCatClaims(
+        cborMap([[cborInteger(CLAIM_AUDIENCE), cborArray([cborTextString(audience)])]]),
+      );
+      assert.deepEqual(single.audience, [audience]);
+      assert.deepEqual(list.audience, single.audience);
+      // エンコードは単一でも配列の形に正規化する
+      const encoded = encodeCatClaims(single);
+      const encodedAudience = cborMapGet(encoded, cborInteger(CLAIM_AUDIENCE));
+      assert.ok(encodedAudience !== undefined, "aud がエンコードされていない");
+      assert.deepEqual(cborAsArray(encodedAudience), [cborTextString(audience)]);
+    }),
+  );
+});
+
+test("テキストで書かれた cti は UTF-8 のバイト文字列と同じ claims にデコードされる", () => {
+  fc.assert(
+    fc.property(textArbitrary, (text) => {
+      // 付録 A.2 / A.3 のベクタは cti にテキスト文字列を使う
+      const fromText = decodeCatClaims(
+        cborMap([[cborInteger(CLAIM_CWT_ID), cborTextString(text)]]),
+      );
+      const fromBytes = decodeCatClaims(
+        cborMap([[cborInteger(CLAIM_CWT_ID), cborByteString(TEXT_ENCODER.encode(text))]]),
+      );
+      assert.deepEqual(fromText.cwtId, TEXT_ENCODER.encode(text));
+      assert.deepEqual(fromBytes.cwtId, fromText.cwtId);
+      // エンコードはバイト文字列に正規化する
+      const encodedCwtId = cborMapGet(encodeCatClaims(fromText), cborInteger(CLAIM_CWT_ID));
+      assert.ok(encodedCwtId !== undefined, "cti がエンコードされていない");
+      assert.deepEqual(cborAsBytes(encodedCwtId), fromText.cwtId);
+    }),
+  );
+});
+
+test("moqt クレームが無い claims はいかなるアクションも認可しない", () => {
+  // draft-ietf-moq-c4m-01 Section 2: 明示的に許可されたアクション以外はブロックする
+  fc.assert(
+    fc.property(
+      claimsArbitrary.filter((claims) => claims.moqt === undefined),
+      fc.constantFrom<MoqtAction>(...MOQT_ACTIONS),
+      fc.array(fc.uint8Array({ maxLength: 8, size: "max" }), { maxLength: 3, size: "max" }),
+      fc.uint8Array({ maxLength: 8, size: "max" }),
+      (claims, action, namespace, trackName) => {
+        assert.equal(authorizeCatClaims(claims, action, namespace, trackName), false);
+      },
+    ),
+  );
+});
+
 test("任意のデータ項目の claims デコードは成功するか CatError になる", () => {
   fc.assert(
     fc.property(cborValueArbitrary(3), (value) => {
@@ -494,6 +567,29 @@ test("COSE トークンの payload / 署名 / protected を変えると検証は
 // =============================================================================
 // デコードの全域性
 // =============================================================================
+
+test("COSE トークンを Base64 で包んだ入力も同じ claims にデコードして検証できる", async () => {
+  const key = hmacKey();
+  await fc.assert(
+    fc.asyncProperty(
+      claimsArbitrary,
+      fc.constantFrom<"url" | "standard-padded" | "standard">("url", "standard-padded", "standard"),
+      async (claims, wrapping) => {
+        const bytes = await new CatTokenBuilder({ claims }).buildCose(cryptoImpl, key);
+        // draft-ietf-moq-c4m-01 Section 2 / Section 4: URL に埋め込むときは Base64 を使う
+        const text =
+          wrapping === "url"
+            ? encodeBase64Url(bytes)
+            : encodeBase64Standard(bytes, wrapping === "standard-padded");
+        const wrapped = CatToken.decode(TEXT_ENCODER.encode(text));
+        const raw = CatToken.decode(bytes);
+        assert.equal(wrapped.format(), raw.format());
+        assert.deepEqual(wrapped.claims(), raw.claims());
+        await wrapped.verify(cryptoImpl, key);
+      },
+    ),
+  );
+});
 
 test("任意のバイト列のデコードは成功するか CatError になり、生トークンは入力のまま保たれる", () => {
   fc.assert(

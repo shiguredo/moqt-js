@@ -26,6 +26,7 @@ import {
   cborFloat,
   cborMap,
   cborMapGet,
+  cborNegative,
   cborTag,
   cborTextString,
   cborUnsigned,
@@ -373,5 +374,206 @@ test("cborMapGet は cborEquals で一致する最初の値を返す", () => {
         assert.deepEqual(found, expected);
       },
     ),
+  );
+});
+
+// =============================================================================
+// non-preferred / indefinite 長の入力 (RFC 8949 Section 3.2 / Section 4.2)
+// =============================================================================
+
+const TEXT_ENCODER = new TextEncoder();
+
+/**
+ * 8 バイトの引数でヘッドを書く (RFC 8949 Section 3 の最長の表現)
+ */
+function writeWideHead(major: number, argument: bigint, output: number[]): void {
+  output.push((major << 5) | 27);
+  for (let shift = 56n; shift >= 0n; shift -= 8n) {
+    output.push(Number((argument >> shift) & 0xffn));
+  }
+}
+
+/** バイト列を出力配列へ追記する */
+function appendBytes(bytes: Uint8Array, output: number[]): void {
+  for (const byte of bytes) {
+    output.push(byte);
+  }
+}
+
+/**
+ * 最短形式を使わないエンコーダ
+ *
+ * RFC 8949 Section 4.2 は「デコーダは non-preferred な表現も受理しなければならない」と
+ * 定める。実装の最短形式エンコーダとは別の経路で入力を作るため、整数と長さとタグの
+ * 引数は常に 8 バイトで書き、浮動小数点数は常に倍精度で書く。マップのエントリーは
+ * 生成された順に書く (生成器がキー順を揃えている)。
+ */
+function writeNonPreferred(value: CborValue, output: number[]): void {
+  switch (value.type) {
+    case "unsigned":
+      writeWideHead(0, value.value, output);
+      return;
+    case "negative":
+      writeWideHead(1, value.value, output);
+      return;
+    case "byteString":
+      writeWideHead(2, BigInt(value.value.length), output);
+      appendBytes(value.value, output);
+      return;
+    case "textString": {
+      const bytes = TEXT_ENCODER.encode(value.value);
+      writeWideHead(3, BigInt(bytes.length), output);
+      appendBytes(bytes, output);
+      return;
+    }
+    case "array":
+      writeWideHead(4, BigInt(value.value.length), output);
+      for (const item of value.value) {
+        writeNonPreferred(item, output);
+      }
+      return;
+    case "map":
+      writeWideHead(5, BigInt(value.value.length), output);
+      for (const [key, entry] of value.value) {
+        writeNonPreferred(key, output);
+        writeNonPreferred(entry, output);
+      }
+      return;
+    case "tag":
+      writeWideHead(6, value.tag, output);
+      writeNonPreferred(value.value, output);
+      return;
+    case "bool":
+      output.push(value.value ? 0xf5 : 0xf4);
+      return;
+    case "null":
+      output.push(0xf6);
+      return;
+    case "undefined":
+      output.push(0xf7);
+      return;
+    case "float": {
+      // 最短幅を使わず常に倍精度で書く
+      const view = new DataView(new ArrayBuffer(8));
+      view.setFloat64(0, value.value);
+      output.push(0xfb);
+      for (let index = 0; index < 8; index++) {
+        output.push(view.getUint8(index));
+      }
+      return;
+    }
+    case "simple":
+      // 0 〜 19 は 1 バイト形式しかなく、0xf8 で書くと不正な表現になる
+      if (value.value <= 19) {
+        output.push(0xe0 | value.value);
+      } else {
+        output.push(0xf8, value.value);
+      }
+  }
+}
+
+/**
+ * indefinite 長を使うエンコーダ
+ *
+ * バイト文字列 / テキスト文字列 / 配列 / マップを indefinite 長で書き、文字列は
+ * `chunkSize` 単位の chunk に分割する (RFC 8949 Section 3.2.3)。chunk は
+ * 0 バイトでもよく、テキストの chunk はコードポイント単位で切って UTF-8 として
+ * 妥当にする。それ以外のデータ項目は最短形式を使わないで書く。
+ */
+function writeIndefinite(value: CborValue, chunkSize: number, output: number[]): void {
+  switch (value.type) {
+    case "byteString": {
+      output.push(0x5f);
+      // 0 バイトの chunk も受理されることを踏む
+      writeWideHead(2, 0n, output);
+      for (let offset = 0; offset < value.value.length; offset += chunkSize) {
+        const chunk = value.value.subarray(offset, offset + chunkSize);
+        writeWideHead(2, BigInt(chunk.length), output);
+        appendBytes(chunk, output);
+      }
+      output.push(0xff);
+      return;
+    }
+    case "textString": {
+      output.push(0x7f);
+      writeWideHead(3, 0n, output);
+      const characters = Array.from(value.value);
+      for (let offset = 0; offset < characters.length; offset += chunkSize) {
+        const bytes = TEXT_ENCODER.encode(characters.slice(offset, offset + chunkSize).join(""));
+        writeWideHead(3, BigInt(bytes.length), output);
+        appendBytes(bytes, output);
+      }
+      output.push(0xff);
+      return;
+    }
+    case "array":
+      output.push(0x9f);
+      for (const item of value.value) {
+        writeIndefinite(item, chunkSize, output);
+      }
+      output.push(0xff);
+      return;
+    case "map":
+      output.push(0xbf);
+      for (const [key, entry] of value.value) {
+        writeIndefinite(key, chunkSize, output);
+        writeIndefinite(entry, chunkSize, output);
+      }
+      output.push(0xff);
+      return;
+    case "tag":
+      // タグは indefinite 長を持てないため、ヘッドだけ非最短形式で書く
+      writeWideHead(6, value.tag, output);
+      writeIndefinite(value.value, chunkSize, output);
+      return;
+    default:
+      writeNonPreferred(value, output);
+  }
+}
+
+test("最短形式でないデータ項目も同じ値にデコードされ、再エンコードで最短形式になる", () => {
+  fc.assert(
+    fc.property(cborValueArbitrary(MAX_TEST_DEPTH), (value) => {
+      const output: number[] = [];
+      writeNonPreferred(value, output);
+      const decoded = decodeCbor(new Uint8Array(output));
+      assert.deepEqual(decoded, value);
+      // RFC 8949 Section 4.2: 再エンコードすると最短形式になる
+      assert.deepEqual(encodeCbor(decoded), encodeCbor(value));
+    }),
+  );
+});
+
+test("indefinite 長で書かれたデータ項目も同じ値にデコードされ、再エンコードで最短形式になる", () => {
+  fc.assert(
+    fc.property(cborValueArbitrary(3), fc.integer({ min: 1, max: 4 }), (value, chunkSize) => {
+      const output: number[] = [];
+      writeIndefinite(value, chunkSize, output);
+      const decoded = decodeCbor(new Uint8Array(output));
+      assert.deepEqual(decoded, value);
+      assert.deepEqual(encodeCbor(decoded), encodeCbor(value));
+    }),
+  );
+});
+
+test("同じ値を最短形式とそれ以外の表現で 2 つ持つマップはデコードでも拒否される", () => {
+  // 短い値に限り、最短形式と 8 バイト引数の表現が必ず異なる
+  const keyArbitrary: fc.Arbitrary<CborValue> = fc.oneof(
+    fc.integer({ min: 0, max: 65535 }).map((value) => cborUnsigned(BigInt(value))),
+    fc.integer({ min: 0, max: 65535 }).map((value) => cborNegative(BigInt(value))),
+    fc.stringMatching(/^[a-z]{0,8}$/).map((value) => cborTextString(value)),
+  );
+  fc.assert(
+    fc.property(keyArbitrary, (key) => {
+      const wide: number[] = [];
+      writeNonPreferred(key, wide);
+      const bytes: number[] = [0xa2];
+      appendBytes(encodeCbor(key), bytes);
+      appendBytes(encodeCbor(cborUnsigned(1n)), bytes);
+      appendBytes(new Uint8Array(wide), bytes);
+      appendBytes(encodeCbor(cborUnsigned(2n)), bytes);
+      // RFC 8949 Section 5.6.1: 表現が違っても同じ値のキーは重複である
+      assertCborError(() => decodeCbor(new Uint8Array(bytes)), "duplicateMapKey");
+    }),
   );
 });

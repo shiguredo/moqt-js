@@ -12,7 +12,17 @@
 
 import { test, assert } from "vite-plus/test";
 import * as fc from "fast-check";
-import { cborArray, cborByteString, cborInteger, decodeCbor, encodeCbor } from "./cbor";
+import {
+  cborArray,
+  cborAsInt64,
+  cborBool,
+  cborByteString,
+  cborInteger,
+  cborMap,
+  cborMapGet,
+  decodeCbor,
+  encodeCbor,
+} from "./cbor";
 import {
   C4mError,
   type C4mErrorCode,
@@ -24,11 +34,13 @@ import {
   type MoqtClaim,
   type MoqtScope,
   type NamespaceMatch,
+  catDpopHonorsJti,
   createMoqtClaim,
   decodeCatDpop,
   decodeMatch,
   decodeMoqtClaim,
   decodeMoqtScope,
+  encodeCatDpop,
   encodeMoqtClaim,
   encodeMoqtScope,
   exactMatch,
@@ -742,6 +754,33 @@ test("安全な整数のアクションは負の値を含めてエンコード�
         scope,
         `安全な整数のアクションが往復しない: ${describeScope(scope)}`,
       );
+    }),
+  );
+});
+
+test("catdpop の honor-jti は真偽値でも整数でも同じ値にデコードされる", () => {
+  fc.assert(
+    fc.property(fc.boolean(), fc.integer({ min: 1, max: 3600 }), (honorJti, windowSeconds) => {
+      // Appendix A の JSON 表現は真偽値で書き、Section 3.1.1 の CBOR 例は整数で書く
+      const withBool = decodeCatDpop(
+        cborMap([
+          [cborInteger(0), cborInteger(windowSeconds)],
+          [cborInteger(1), cborBool(honorJti)],
+        ]),
+      );
+      const withInteger = decodeCatDpop(
+        cborMap([
+          [cborInteger(0), cborInteger(windowSeconds)],
+          [cborInteger(1), cborInteger(honorJti ? 1 : 0)],
+        ]),
+      );
+      assert.equal(withBool.honorJti, honorJti);
+      assert.deepEqual(withInteger, withBool);
+      assert.equal(catDpopHonorsJti(withBool), honorJti);
+      // エンコードは整数の形に正規化する
+      const encodedHonorJti = cborMapGet(encodeCatDpop(withBool), cborInteger(1));
+      assert.ok(encodedHonorJti !== undefined, "honor-jti がエンコードされていない");
+      assert.deepEqual(cborAsInt64(encodedHonorJti), honorJti ? 1n : 0n);
     }),
   );
 });
