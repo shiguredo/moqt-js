@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { clickCopyButton } from "./copyFeedback";
 
 // デバッグパネルの表示と「Copy for LLM」のテキストを実ブラウザで確かめる。
 // 実リレーは起動せず、ログはページの中でモジュールを読み込んで直接追加する
@@ -118,10 +119,8 @@ test("Copy for LLM が設定と統計の項目とログを出す", async ({ page
   await openDebugPanel(page);
   await addLogs(page, [{ level: "info", message: "copy-log", data: { requestId: 7 } }]);
 
-  const copyButton = page.getByTestId("debug-log-copy-all");
-  await copyButton.click();
   // クリップボードへの書き込みの完了を待つ ("Copied!" は書き込みが成功した後だけ出る)
-  await expect(copyButton).toHaveText("Copied!");
+  await clickCopyButton(page, "debug-log-copy-all");
   const text = await page.evaluate(() => navigator.clipboard.readText());
 
   // 設定の節。Target Latency / Render Group と音声の設定、認可トークンの設定の有無を出す
@@ -186,18 +185,14 @@ test("Copy for LLM の Publisher と Subscriber のボタンは、その接続�
   ]);
 
   // Publisher のボタンは [publisher] のログだけを出す
-  const publisherButton = page.getByTestId("debug-log-copy-publisher");
-  await publisherButton.click();
-  await expect(publisherButton).toHaveText("Copied!");
+  await clickCopyButton(page, "debug-log-copy-publisher");
   const publisherText = await page.evaluate(() => navigator.clipboard.readText());
   expect(publisherText).toContain("=== Debug Logs ([publisher]) ===");
   expect(publisherText).toContain("[publisher] [SEND] OBJECT");
   expect(publisherText).not.toContain(`[${targetId}] [RECV] OBJECT`);
 
   // Subscriber のボタンはその id の統計とログを出す
-  const subscriberButton = page.getByTestId(`debug-log-copy-${targetId}`);
-  await subscriberButton.click();
-  await expect(subscriberButton).toHaveText("Copied!");
+  await clickCopyButton(page, `debug-log-copy-${targetId}`);
   const subscriberText = await page.evaluate(() => navigator.clipboard.readText());
   expect(subscriberText).toContain(`=== Subscriber Statistics (${targetId}) ===`);
   expect(subscriberText).toContain(`=== Debug Logs ([${targetId}]) ===`);
@@ -305,9 +300,7 @@ test("Copy for LLM は MOQT URI と fragment の c4m (認可トークン) を伏
     publisher.pubStatus.value = "connected";
   });
 
-  const copyButton = page.getByTestId("debug-log-copy-all");
-  await copyButton.click();
-  await expect(copyButton).toHaveText("Copied!");
+  await clickCopyButton(page, "debug-log-copy-all");
   const text = await page.evaluate(() => navigator.clipboard.readText());
 
   // 値は伏せ字にし、トークンの Base64 は本文のどこにも出さない
@@ -322,9 +315,7 @@ test("Copy for LLM は MOQT URI と fragment の c4m (認可トークン) を伏
     `${DEVTOOLS_URL}?fragment=${encodeURIComponent(`msf:room-123--video&c4m=${c4mBase64}`)}`,
   );
   await openDebugPanel(page);
-  const fragmentCopyButton = page.getByTestId("debug-log-copy-all");
-  await fragmentCopyButton.click();
-  await expect(fragmentCopyButton).toHaveText("Copied!");
+  await clickCopyButton(page, "debug-log-copy-all");
   const fragmentText = await page.evaluate(() => navigator.clipboard.readText());
   expect(fragmentText).toContain("fragment: msf:room-123--video&c4m=<redacted>");
   expect(fragmentText).not.toContain(c4mBase64);

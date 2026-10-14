@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import type { PublisherStats, SubscriberStats } from "../../../devtools/src/testApi";
+import { clickCopyButton } from "../copyFeedback";
 import { RELAY_TEST_TIMEOUT_MS, requireRelayUri } from "./support";
 
 /**
@@ -1132,9 +1133,7 @@ test("実リレー経由で同じブラウザから音声を配信し、送る T
 
   // 「Copy for LLM」の本文にも入ること
   await page.getByRole("button", { name: /^Debug/ }).click();
-  const copyButton = page.getByTestId("debug-log-copy-publisher");
-  await copyButton.click();
-  await expect(copyButton).toHaveText("Copied!");
+  await clickCopyButton(page, "debug-log-copy-publisher");
   const text = await page.evaluate(() => navigator.clipboard.readText());
   expect(text).toContain("timestampOffset:");
   expect(text).toContain("slope10sMsPerSecond:");
