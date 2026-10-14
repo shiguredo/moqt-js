@@ -413,6 +413,11 @@ async function startBoth(page: Page, moqtUri: string, namespace: string): Promis
     audioSampleRate: AUDIO_SAMPLE_RATE,
     audioChannels: AUDIO_CHANNELS,
   });
+  // 目標遅延 (ms)。指定すると再生の遅れの上限として使われる (遅延の比較に使う)
+  const targetLatencyMs = process.env.MOQT_TEST_TARGET_LATENCY;
+  if (targetLatencyMs !== undefined) {
+    params.set("targetLatency", targetLatencyMs);
+  }
   await page.goto(`${DEVTOOLS_URL}?${params.toString()}`);
   await expect(page.getByTestId("moqt-uri")).toHaveValue(moqtUri);
 
