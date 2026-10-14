@@ -186,6 +186,7 @@ interface DevtoolsSubscriberStats {
   catchUpFramesSkipped: number;
   audio: {
     objectsReceived: number;
+    datagramObjectsReceived: number;
     chunksDecoded: number;
     playbackEnabled: boolean;
     peakDbfs: number | null;
@@ -273,6 +274,7 @@ function summarizeSubscriber(stats: DevtoolsSubscriberStats): string {
   return [
     `status=${stats.status}`,
     `objects=${audio.objectsReceived}`,
+    `datagramObjects=${audio.datagramObjectsReceived}`,
     `decoded=${audio.chunksDecoded}`,
     `peakDbfs=${audio.peakDbfs === null ? "-" : audio.peakDbfs.toFixed(1)}`,
     `rmsDbfs=${audio.rmsDbfs === null ? "-" : audio.rmsDbfs.toFixed(1)}`,
@@ -417,6 +419,11 @@ async function startBoth(page: Page, moqtUri: string, namespace: string): Promis
   const targetLatencyMs = process.env.MOQT_TEST_TARGET_LATENCY;
   if (targetLatencyMs !== undefined) {
     params.set("targetLatency", targetLatencyMs);
+  }
+  // 音声の配送 (subgroup / datagram)。揺らぎと遅延の比較に使う
+  const audioDelivery = process.env.MOQT_TEST_AUDIO_DELIVERY;
+  if (audioDelivery !== undefined) {
+    params.set("audioDelivery", audioDelivery);
   }
   await page.goto(`${DEVTOOLS_URL}?${params.toString()}`);
   await expect(page.getByTestId("moqt-uri")).toHaveValue(moqtUri);
