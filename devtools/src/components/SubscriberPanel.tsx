@@ -207,7 +207,7 @@ export function SubscriberPanel({
 
         {/* Subscribe Options。Publisher の paused 状態の行と同じ高さの枠で描き、
             映像の上端をそろえる */}
-        <div class={PANEL_OPTION_ROW_CLASS}>
+        <div class={PANEL_OPTION_ROW_CLASS} data-testid="subscriber-option-row">
           <label class="flex items-center gap-2 cursor-pointer">
             <input
               type="checkbox"
@@ -241,6 +241,34 @@ export function SubscriberPanel({
             />
             <span class="text-sm text-slate-600">Play Audio</span>
           </label>
+          {/*
+            購読中の NEW_GROUP_REQUEST (REQUEST_UPDATE)。購読の開始前に効く
+            NEW_GROUP_REQUEST の切り替えと同じ行に置く (どちらも新しい Group、すなわち
+            キーフレームの要求である)。主要な操作の行 (Start Subscribing / Stop) には
+            置かない。Publisher のパネルに無い操作であり、Publisher と行を分けると
+            2 つのパネルで下の項目の位置がずれるためでもある
+          */}
+          <button
+            onClick={() => void requestKeyframe()}
+            disabled={instance.subscriber.value === null || !instance.dynamicGroupsSupported.value}
+            data-testid="subscriber-request-keyframe"
+            class="h-7 px-3 shrink-0 text-xs bg-purple-500 hover:bg-purple-600 disabled:bg-slate-300 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors flex items-center gap-1.5"
+            title={
+              instance.dynamicGroupsSupported.value
+                ? "Send NEW_GROUP_REQUEST to request a new keyframe"
+                : "Track did not include DYNAMIC_GROUPS=1 (draft-ietf-moq-transport-22 §9.20.19)"
+            }
+          >
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+              />
+            </svg>
+            Request Keyframe
+          </button>
         </div>
 
         {/* Buttons */}
@@ -266,27 +294,6 @@ export function SubscriberPanel({
               />
             </svg>
             Start Subscribing
-          </button>
-          {/* 購読中の操作。統計の間ではなく、ほかの操作と並べる */}
-          <button
-            onClick={() => void requestKeyframe()}
-            disabled={instance.subscriber.value === null || !instance.dynamicGroupsSupported.value}
-            class="px-4 py-2.5 bg-purple-500 hover:bg-purple-600 disabled:bg-slate-300 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors flex items-center justify-center gap-2"
-            title={
-              instance.dynamicGroupsSupported.value
-                ? "Send NEW_GROUP_REQUEST to request a new keyframe"
-                : "Track did not include DYNAMIC_GROUPS=1 (draft-ietf-moq-transport-22 §9.20.19)"
-            }
-          >
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="2"
-                d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-              />
-            </svg>
-            Request Keyframe
           </button>
           <button
             onClick={() => void stopSubscribing()}
