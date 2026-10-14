@@ -1086,6 +1086,34 @@ function observeShiftedAudioTimestamp(
   return reasons;
 }
 
+/**
+ * 音声と映像の到着列を与え続ける (呼び出しをまたいで時計を進める)
+ *
+ * `observeShiftedAudioTimestamp` は呼ぶたびに時計を 0 から始めるため、1 つの時間軸で
+ * 何度も観測を続けるテストには使えない。こちらは最後に観測した時刻の続きから進める
+ *
+ * @param timeline - 観測させる時間軸
+ * @returns 観測する関数 (指定した時刻まで進め、各観測の `unsharedReason` を返す)
+ */
+function createObserver(
+  timeline: PlaybackTimeline,
+): (untilMs: number, shiftedMs: (wallMs: number) => number) => string[] {
+  let wallMs = 0;
+  let nextVideoMs = 0;
+  return (untilMs: number, shiftedMs: (wallMs: number) => number): string[] => {
+    const reasons: string[] = [];
+    for (; wallMs < untilMs; wallMs += 20) {
+      while (nextVideoMs <= wallMs) {
+        timeline.observe("video", EPOCH_MS + nextVideoMs, timestampOf(nextVideoMs));
+        nextVideoMs += FRAME_MS;
+      }
+      timeline.observe("audio", EPOCH_MS + wallMs, timestampOf(wallMs + shiftedMs(wallMs)));
+      reasons.push(timeline.delayBreakdown.unsharedReason);
+    }
+    return reasons;
+  };
+}
+
 // 一過性の動き: 音声の TIMESTAMP の原点が 95 ms ずれても、3 秒で元へ戻るなら基準の共有を
 // やめない。共有をやめると `PLAYOUT_BASE_UNSHARED_HOLD_MS` (30 秒) の間は戻らず、その間は
 // 音声が共有の時間軸で並ばない。CI の実リレーテストでは、配信側の読み出しが一瞬 95 ms
@@ -1313,30 +1341,57 @@ test("observe: 差が動き続けている間は保持を解除しない", () =>
   );
 });
 
-// 解除のきっかけが動きでない場合は解除しない。差が同じ水準のままで、表示の遅れの上限から
-// 決まる閾値だけが動いて解除されることがあり、このとき差は戻っていない (閾値が戻ればまた
-// 解除される) ため、保持の本来の目的 (往復させないこと) をそのまま残す
-test("observe: 閾値だけが動いた解除は保持する", () => {
+// 閾値だけが動いた解除でも、閾値が戻って差が水準のままなら解除を早める。差が静かに動く
+// 解除 (購読の直後の cache の再生など) は解除のきっかけが動きにならず、以前は 30 秒の
+// 保持が満了するまで戻らなかった。実測 (CI の runner、run 38532917082) では、差が 8 ms、
+// 水準からの隔たりが 19〜39 ms まで戻っても 25 秒の観測がすべて解除のままになっていた
+test("observe: 閾値だけが動いた解除も、閾値が戻れば解除を早める", () => {
   const timeline = createTimeline();
-  timeline.observe("video", EPOCH_MS, timestampOf(0));
-  // 音声の基準だけ 400 ms 遅らせる (差 400 ms)。閾値は表示の遅れの上限 (500 ms) から
-  // 音声の下限 (80 ms) を引いた 420 ms であり、まだ超えていない
-  timeline.observe("audio", EPOCH_MS + 400, timestampOf(0));
+  const observe = createObserver(timeline);
+  // 音声の基準だけ 400 ms 遅らせて 10 秒観測する (差 400 ms)。閾値は表示の遅れの上限
+  // (500 ms) から音声の下限 (80 ms) を引いた 420 ms であり、まだ超えていない
+  observe(10_000, () => -400);
   assert.isTrue(timeline.sharingBases, "差が閾値の内側なら共有すること");
   // targetLatency を上げると閾値が下がり、差が変わらないまま解除される
   timeline.setTargetLatencyMs(MAX_PLAYOUT_DELAY_MS - 50);
+  observe(11_000, () => -400);
   assert.isFalse(timeline.sharingBases, "閾値を超えたら共有しないこと");
   assert.equal(timeline.delayBreakdown.unsharedReason, "difference", "閾値を超えていること");
-  // 閾値を戻すと差は再び閾値の内側になるが、解除した直後は保持する (往復させない)
+  // 閾値を戻すと差は再び閾値の内側になる。直ちには戻さないが、解除の条件が続けば解除する
   timeline.setTargetLatencyMs(null);
-  assert.isFalse(timeline.sharingBases, "閾値が戻っても直ちには共有しないこと");
-  assert.equal(timeline.delayBreakdown.unsharedReason, "hold", "解除を保持していること");
-  // 差が動かないまま観測を続ける (音声の基準の遅れを 400 ms に保つ)。解除のきっかけは
-  // 動きではない (差は同じ水準のまま) ため、保持は満了まで続く
-  observeShiftedAudioTimestamp(timeline, 5_000, () => -400);
-  assert.isFalse(timeline.sharingBases, "閾値だけが動いた解除は保持すること");
+  const reasons = observe(20_000, () => -400);
+  const releasedAtMs = reasons.indexOf("none") * 20;
+  assert.isAtLeast(releasedAtMs, 0, "閾値が戻った後に解除すること");
+  assert.isAtMost(
+    releasedAtMs,
+    PLAYOUT_BASE_UNSHARED_RELEASE_MS + 1_000,
+    "解除の条件が続いた後 (`PLAYOUT_BASE_UNSHARED_RELEASE_MS`) に解除すること",
+  );
+  assert.isTrue(timeline.sharingBases, "閾値が戻って差が水準のままなら解除すること");
+});
+
+// 閾値が行き来する間は解除を早めない。直近に解除していれば (共有と解除を往復していれば)
+// 落ち着くまで解かない。往復のたびに、足した分を戻してすぐ足し直すことになるためである
+test("observe: 閾値が行き来する間は解除を早めない", () => {
+  const timeline = createTimeline();
+  const observe = createObserver(timeline);
+  observe(10_000, () => -400);
+  // 1 回目の解除と、閾値が戻った後の早期解除
+  timeline.setTargetLatencyMs(MAX_PLAYOUT_DELAY_MS - 50);
+  observe(11_000, () => -400);
+  timeline.setTargetLatencyMs(null);
+  observe(20_000, () => -400);
+  assert.isTrue(timeline.sharingBases, "1 回目は解除すること");
+  // 2 回目の解除 (往復)。差は同じ水準のまま閾値だけが動く
+  timeline.setTargetLatencyMs(MAX_PLAYOUT_DELAY_MS - 50);
+  observe(21_000, () => -400);
+  assert.isFalse(timeline.sharingBases, "2 回目も解除されること");
+  // 閾値を戻しても、直近に解除しているため解除を早めない
+  timeline.setTargetLatencyMs(null);
+  observe(30_000, () => -400);
+  assert.isFalse(timeline.sharingBases, "往復している間は保持すること");
   assert.isNull(
     timeline.delayBreakdown.baseUnsharedReturnMs,
-    "解除の条件を数えないこと (きっかけが動きではない)",
+    "解除の条件を数えないこと (往復している)",
   );
 });
