@@ -80,7 +80,7 @@ export interface StartPublisherOptions {
     // 実リレーの E2E は opus だけを使う (偽のマイクの音声を Opus で符号化する)
     codec: "opus";
     bitrate: number;
-    /** 音声 Object の送り方 (既定は "subgroup")。draft-ietf-moq-transport-22 §11 */
+    /** 音声 Object の送り方 (未指定なら devtools の既定 "datagram")。draft-ietf-moq-transport-22 §11 */
     delivery?: AudioDelivery;
   };
 }

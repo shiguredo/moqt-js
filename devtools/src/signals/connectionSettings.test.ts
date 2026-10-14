@@ -449,7 +449,7 @@ test("buildQueryString: 音声出力デバイスを URL で往復できる", () 
   selectedAudioOutputDeviceId.value = "";
 });
 
-// 音声の送り方。既定の subgroup は URL に載せず、datagram だけ往復する
+// 音声の送り方。既定の datagram は URL に載せず、subgroup だけ往復する
 test("buildQueryString: audioDelivery=subgroup を URL で往復でき、未知の値は無視する", () => {
   audioDelivery.value = "datagram";
   assert.isNull(new URLSearchParams(buildQueryString()).get("audioDelivery"));

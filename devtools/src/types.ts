@@ -12,8 +12,8 @@ export type VideoSourceType = "none" | "dummy" | "camera";
 // "microphone" は選んだ音声入力デバイス。画面の表示名は Dummy (WebAudio)。URL の値は dummy のまま
 export type AudioSourceType = "none" | "dummy" | "microphone";
 
-// 音声 Object の送り方。既定は subgroup (ストリーム)。datagram は
-// draft-ietf-moq-transport-22 §11.2。reliable-only (WT-H2) では使えない
+// 音声 Object の送り方。既定は datagram。subgroup はストリームで送る。
+// datagram は draft-ietf-moq-transport-22 §11.2 で、reliable-only (WT-H2) では使えない
 export type AudioDelivery = "subgroup" | "datagram";
 
 // Stop Publish の止め方。publisher の止め方によって購読者に届く終了通知が変わるため、

@@ -8,17 +8,18 @@ const DEVTOOLS_URL = "http://localhost:5173/index.html";
 test("音声の設定が UI から URL へ反映され、生成された URL から復元される", async ({ page }) => {
   await page.goto(DEVTOOLS_URL);
 
-  // 既定は Web Audio で作る音 (値は dummy)。送り方は Subgroup。コーデックは Opus・64000・48000・2ch
+  // 既定は Web Audio で作る音 (値は dummy)。送り方は Datagram。コーデックは Opus・64000・48000・2ch
   await expect(page.getByTestId("audio-source")).toHaveValue("dummy");
-  await expect(page.getByTestId("audio-delivery")).toHaveValue("subgroup");
+  await expect(page.getByTestId("audio-delivery")).toHaveValue("datagram");
   await expect(page.getByTestId("audio-codec")).toHaveValue("opus");
   await expect(page.getByTestId("audio-bitrate")).toHaveValue("64000");
   await expect(page.getByTestId("audio-sample-rate")).toHaveValue("48000");
   await expect(page.getByTestId("audio-channels")).toHaveValue("2");
 
-  // UI から変更する (Copy URL は history.replaceState で URL を書き換える)
+  // UI から変更する (Copy URL は history.replaceState で URL を書き換える)。
+  // 既定の datagram は URL に載せないため、subgroup へ変えて URL の往復を確かめる
   await page.getByTestId("audio-source").selectOption("none");
-  await page.getByTestId("audio-delivery").selectOption("datagram");
+  await page.getByTestId("audio-delivery").selectOption("subgroup");
   await page.getByTestId("audio-codec").selectOption("aac");
   await page.getByTestId("audio-bitrate").selectOption("96000");
   await page.getByTestId("audio-sample-rate").selectOption("24000");
@@ -26,7 +27,7 @@ test("音声の設定が UI から URL へ反映され、生成された URL か
   await page.getByTestId("copy-url").click();
 
   await expect(page).toHaveURL(/audioSource=none/);
-  await expect(page).toHaveURL(/audioDelivery=datagram/);
+  await expect(page).toHaveURL(/audioDelivery=subgroup/);
   await expect(page).toHaveURL(/audioCodec=aac/);
   await expect(page).toHaveURL(/audioBitrate=96000/);
   await expect(page).toHaveURL(/audioSampleRate=24000/);
@@ -35,7 +36,7 @@ test("音声の設定が UI から URL へ反映され、生成された URL か
   // 生成された URL を開き直すと設定が復元される (UI → signal → URL → signal の往復)
   await page.goto(page.url());
   await expect(page.getByTestId("audio-source")).toHaveValue("none");
-  await expect(page.getByTestId("audio-delivery")).toHaveValue("datagram");
+  await expect(page.getByTestId("audio-delivery")).toHaveValue("subgroup");
   await expect(page.getByTestId("audio-codec")).toHaveValue("aac");
   await expect(page.getByTestId("audio-bitrate")).toHaveValue("96000");
   await expect(page.getByTestId("audio-sample-rate")).toHaveValue("24000");

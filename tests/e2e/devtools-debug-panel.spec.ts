@@ -130,7 +130,7 @@ test("Copy for LLM が設定と統計の項目とログを出す", async ({ page
   expect(text).toContain("renderGroup: -");
   expect(text).toContain("catalogSubscriptionTimeoutMs: 5000");
   expect(text).toContain("audioCodec: opus");
-  expect(text).toContain("audioDelivery: subgroup");
+  expect(text).toContain("audioDelivery: datagram");
   expect(text).toContain("useDedicatedWorker: true");
   expect(text).toContain("jitterBufferEnabled: true");
   expect(text).toContain("authorizationTokenConfigured: false");

@@ -202,7 +202,7 @@ export const keyframeInterval = signal(10);
 // 既定は "dummy" (画面では WebAudio)。映像の Canvas と同じく、開いた時点で生成した
 // 音を送る。音声なしは "none" を選ぶ (URL では audioSource=none)。
 export const audioSource = signal<AudioSourceType>("dummy");
-// 音声 Object の送り方。既定は subgroup。datagram のときだけ URL に載せる
+// 音声 Object の送り方。既定は datagram。subgroup のときだけ URL に載せる
 // 音声の配送 (実測 2026-10-14、実リレー経由の 60 秒で比較):
 // datagram は配信側の送信の遅れが 62 → 0 ms、受信の遅れの最大が 313 → 246 ms、鳴り始めが
 // 166 → 155 ms になり、飛ばした音と警告はどちらも 0 のままだった。既定は datagram にする
@@ -890,7 +890,7 @@ export const VIDEO_SOURCES: readonly VideoSourceType[] = ["none", "dummy", "came
 /** 音声の入力元の選択肢 */
 export const AUDIO_SOURCES: readonly AudioSourceType[] = ["none", "dummy", "microphone"];
 
-/** 音声 Object の送り方。既定は subgroup で、datagram のときだけ URL に載せる */
+/** 音声 Object の送り方。既定は datagram で、subgroup のときだけ URL に載せる */
 export const AUDIO_DELIVERIES: readonly AudioDelivery[] = ["subgroup", "datagram"];
 
 /** Stop Publish の止め方の選択肢。既定は PUBLISH_DONE を送る止め方 */
