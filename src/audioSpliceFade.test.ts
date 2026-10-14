@@ -6,7 +6,7 @@
  */
 
 import { test, assert } from "vite-plus/test";
-import { AUDIO_SPLICE_FADE_MS, fadeSpliceEdge } from "./audioSpliceFade";
+import { AUDIO_SPLICE_FADE_MS, fadeSpliceEdge, mergeFadedPlanes } from "./audioSpliceFade";
 import type { AudioSamples } from "./audioTimeStretch";
 
 /** Opus の 1 フレーム (8 ms、16 kHz) */
@@ -44,4 +44,22 @@ test("fadeSpliceEdge: 元の配列を変えず、チャンネルごとに同じ�
   assert.equal(frame[0], 0.5, "元の配列は変わらないこと");
   assert.equal(faded.length, 2, "チャンネル数が変わらないこと");
   assert.equal(faded[1]?.[0], 0, "すべてのチャンネルの先頭が 0 になること");
+});
+
+test("mergeFadedPlanes: 端を落とし、平面の並びで 1 つのバッファへ戻す", () => {
+  const merged = mergeFadedPlanes([constantFrame(), constantFrame()], SAMPLE_RATE, {
+    head: true,
+    tail: true,
+  });
+  assert.equal(merged.length, FRAME_SAMPLES * 2, "平面の数だけ長くなること");
+  assert.equal(merged[0], 0, "第 1 チャンネルの先頭が 0 になること");
+  assert.equal(merged[FRAME_SAMPLES - 1], 0, "第 1 チャンネルの末尾が 0 になること");
+  assert.equal(merged[FRAME_SAMPLES], 0, "第 2 チャンネルの先頭が 0 になること");
+  assert.closeTo(merged[FADE_SAMPLES] ?? 0, 0.5, 1e-6, "落とす長さの外は元の値");
+});
+
+test("mergeFadedPlanes: 端を指定しなければ値を変えない", () => {
+  const merged = mergeFadedPlanes([constantFrame()], SAMPLE_RATE, {});
+  assert.equal(merged[0], 0.5, "先頭がそのままであること");
+  assert.equal(merged[FRAME_SAMPLES - 1], 0.5, "末尾がそのままであること");
 });

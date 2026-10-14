@@ -9,7 +9,7 @@ import type { PublishOptions, Session } from "./session";
 import { isErrorNotifiedByPublisher, type Publisher, type SendObjectParams } from "./publisher";
 import * as LOC from "./loc";
 import { WallClockMapper } from "./mediaClock";
-import { fadeSpliceEdge } from "./audioSpliceFade";
+import { mergeFadedPlanes } from "./audioSpliceFade";
 import type { AudioSamples } from "./audioTimeStretch";
 import { AudioTimestampClock } from "./audioTimestampClock";
 import { AudioPublishCatchUp, type AudioPublishCatchUpSendStart } from "./audioPublishCatchUp";
@@ -1662,16 +1662,7 @@ export class MediaPublisherImpl implements MediaPublisher {
         data.copyTo(samples, { planeIndex: plane, format: "f32-planar" });
         planes.push(samples);
       }
-      if (head) {
-        planes = fadeSpliceEdge(planes, data.sampleRate, "head");
-      }
-      if (tail) {
-        planes = fadeSpliceEdge(planes, data.sampleRate, "tail");
-      }
-      const merged = new Float32Array(data.numberOfFrames * data.numberOfChannels);
-      for (const [index, plane] of planes.entries()) {
-        merged.set(plane, index * data.numberOfFrames);
-      }
+      const merged = mergeFadedPlanes(planes, data.sampleRate, { head, tail });
       const replacement = new AudioData({
         format: "f32-planar",
         sampleRate: data.sampleRate,

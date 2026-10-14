@@ -57,3 +57,35 @@ export function fadeSpliceEdge(
   }
   return output;
 }
+
+/**
+ * チャンネルごとの音声をフェードしてから 1 つのバッファへ戻す
+ *
+ * `fadeSpliceEdge` はチャンネルごとの配列を扱うが、符号化へ渡す `AudioData` は
+ * `f32-planar` の並び (チャンネルごとに連結した 1 つのバッファ) を取る。その変換と
+ * フェードをまとめて行う
+ *
+ * @param planes - チャンネルごとの音声 (すべて同じ長さ)
+ * @param sampleRate - サンプルレート (Hz)
+ * @param edges - 落とす端 (`head` / `tail`)。省略した端は落とさない
+ * @returns `f32-planar` の並びのバッファ (`AudioData` へ渡せる型)
+ */
+export function mergeFadedPlanes(
+  planes: readonly AudioSamples[],
+  sampleRate: number,
+  edges: { head?: boolean; tail?: boolean },
+): Float32Array<ArrayBuffer> {
+  const length = planes[0]?.length ?? 0;
+  let faded = [...planes];
+  if (edges.head === true) {
+    faded = fadeSpliceEdge(faded, sampleRate, "head");
+  }
+  if (edges.tail === true) {
+    faded = fadeSpliceEdge(faded, sampleRate, "tail");
+  }
+  const merged = new Float32Array(length * faded.length);
+  for (const [index, plane] of faded.entries()) {
+    merged.set(plane, index * length);
+  }
+  return merged;
+}
