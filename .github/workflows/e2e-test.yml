@@ -87,30 +87,6 @@ jobs:
         if: env.TEST_MOQT_URI != ''
         run: vp exec playwright install --with-deps chromium
 
-      # 一時計測: テストが見る遅れ (receiveDelayMs / catchUpLagMs) が経路の遅れなのか処理の
-      # 遅れなのかを切り分ける。host はマスクする。値を読んだら削除する
-      - name: 経路の遅れと CPU の速さを計測する
-        if: env.TEST_MOQT_URI != ''
-        run: |
-          set -euo pipefail
-
-          authority="${TEST_MOQT_URI#*://}"
-          authority="${authority%%/*}"
-          authority="${authority%%[?#]*}"
-          host="${authority%%:*}"
-          echo "::add-mask::$host"
-          echo "--- 経路の往復の遅れ ---"
-          ping -c 5 -q "$host" 2>&1 | grep -E "round-trip|packet loss" || echo "ping を実行できない"
-          echo "--- CPU の速さ (同じ仕事に要した時間。小さいほど速い) ---"
-          node -e '
-            const started = Date.now();
-            let sum = 0;
-            for (let index = 0; index < 20_000_000; index++) {
-              sum += index % 7;
-            }
-            console.log(`cpu_bench_ms=${Date.now() - started} sum=${sum}`);
-          '
-
       - name: 実リレーへ接続する E2E テストを実行する
         if: env.TEST_MOQT_URI != ''
         run: vp run e2e-test:relay
