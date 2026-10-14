@@ -68,6 +68,14 @@
  * 「どの出力がどの投入を覆ったか」を順番 (FIFO) で対応づけ、覆った最初の投入の timestamp を
  * `recordEncodedChunk()` の返り値で呼び出し側へ渡す。
  *
+ * 投入したフレームの同一性も順番でしか表せない。`AudioData.timestamp` は同じ値が続くことが
+ * あり (配信の実測で 4 回)、timestamp を鍵にすると記録が上書きされて「キューに残っている
+ * 長さ」だけが増える。増えた分は出力が返っても減らないため、追いつきをやめる条件
+ * (`AUDIO_PUBLISH_CATCH_UP_RESUME_MS` 以下) に永久に届かなくなり、追いつきを始めた後は
+ * 1 フレームも符号化されなくなる (実測: 16 秒の配信で 1805 フレーム・14440 ms を捨てたまま
+ * 解除されず、音声が送られなくなった)。そのため記録は投入した順の配列で持ち、長さも
+ * 記録と同じ操作でだけ増減する。
+ *
  * ブラウザ API に依存しない (時刻と値は呼び出し側が渡す)。
  */
 
@@ -245,6 +253,8 @@ export interface AudioPublishCatchUpStats {
 
 /** 符号化へ渡したフレームの記録 (出力が返るまで持つ) */
 interface PendingFrame {
+  /** 投入したフレームの `AudioData.timestamp` (マイクロ秒)。同じ値が続くことがある */
+  readonly timestampMicros: number;
   /** 読み出した時刻 (`performance.now()`、ミリ秒) */
   readonly readAtMs: number;
   /** フレームの長さ (ミリ秒) */
@@ -332,12 +342,28 @@ export class AudioPublishCatchUp {
   private readonly cooldownMs: number;
   private readonly pendingTimeoutMs: number;
 
-  /** 符号化へ渡したまま出力が返っていないフレーム (timestamp の昇順) */
-  private readonly pending = new Map<number, PendingFrame>();
+  /**
+   * 符号化へ渡したまま出力が返っていないフレーム (投入した順)
+   *
+   * timestamp を鍵にした `Map` にしないのは、`AudioData.timestamp` が一意ではないためである
+   * (このファイルの先頭のコメントを参照)。同じ timestamp のフレームが来ても記録が上書き
+   * されず、長さの集計も記録と食い違わない
+   */
+  private pending: PendingFrame[] = [];
+  /** 消費した先頭の位置。配列を詰め直さないために持つ */
+  private pendingHead = 0;
   /** 符号化へ渡したまま出力が返っていない音声の長さ (ミリ秒) */
   private pendingMs = 0;
-  /** 送信キューへ入れたまま送信が終わっていないフレーム (対応づけの timestamp ごと) */
-  private readonly pendingSends = new Map<number, PendingSend>();
+  /**
+   * 送信キューへ入れたまま送信が終わっていないフレーム (対応づけの timestamp ごと)
+   *
+   * 同じ timestamp のフレームが続くことがあるため、1 つの timestamp に複数の記録を持ち、
+   * 完了した順に古い方から消す。1 つの記録に上書きすると、消えた分の長さが引かれないまま
+   * `sendQueueMs` に残る (このファイルの先頭のコメントと同じ理由)
+   */
+  private readonly pendingSends = new Map<number, PendingSend[]>();
+  /** 送信キューへ入れたまま送信が終わっていないフレームの数 */
+  private pendingSendFrames = 0;
   /** 送信キューへ入れたまま送信が終わっていない音声の長さ (ミリ秒) */
   private pendingSendMs = 0;
   /** 直近に送信が終わったフレームの、撮ってから送信が終わるまでの遅れ (ミリ秒) */
@@ -404,7 +430,11 @@ export class AudioPublishCatchUp {
       return false;
     }
 
-    this.pending.set(input.timestampMicros, { readAtMs: input.nowMs, durationMs });
+    this.pending.push({
+      timestampMicros: input.timestampMicros,
+      readAtMs: input.nowMs,
+      durationMs,
+    });
     this.pendingMs += durationMs;
     return true;
   }
@@ -419,33 +449,37 @@ export class AudioPublishCatchUp {
    * 順に返るため、順番で対応づける
    */
   recordEncodedChunk(input: AudioPublishCatchUpChunkInput): AudioPublishCatchUpChunkResult {
-    const first = this.pending.entries().next();
-    if (first.done === true) {
+    const first = this.pending[this.pendingHead];
+    if (first === undefined) {
       // 対応づけられる投入が無い (配信を始める前の出力、記録を捨てた後など)
       return { timestampMicros: null };
     }
-    const firstTimestampMicros = first.value[0];
+    const firstTimestampMicros = first.timestampMicros;
 
     // 消費する長さ。長さが分からない chunk は 1 フレーム分だけ消費する
-    let remainMs = (input.durationMicros ?? first.value[1].durationMs * 1_000) / 1_000;
-    for (const [timestampMicros, frame] of this.pending) {
+    let remainMs = (input.durationMicros ?? first.durationMs * 1_000) / 1_000;
+    while (remainMs > 0) {
+      const frame = this.pending[this.pendingHead];
+      if (frame === undefined) {
+        // 記録より長い出力 (捨てた分を覆った、配信の停止をまたいだなど)。残りは捨てる
+        break;
+      }
       if (frame.durationMs <= remainMs) {
-        this.pending.delete(timestampMicros);
+        this.pendingHead++;
         this.pendingMs -= frame.durationMs;
         remainMs -= frame.durationMs;
-        if (remainMs <= 0) {
-          break;
-        }
         continue;
       }
       // 1 つの投入が 2 つの出力にまたがる場合は、残りを次に持ち越す
-      this.pending.set(timestampMicros, {
+      this.pending[this.pendingHead] = {
+        timestampMicros: frame.timestampMicros,
         readAtMs: frame.readAtMs,
         durationMs: frame.durationMs - remainMs,
-      });
+      };
       this.pendingMs -= remainMs;
-      break;
+      remainMs = 0;
     }
+    this.compactPending();
     this.pendingMs = Math.max(0, this.pendingMs);
     return { timestampMicros: firstTimestampMicros };
   }
@@ -460,11 +494,18 @@ export class AudioPublishCatchUp {
    * 出す計器として測る)。
    */
   recordSendStart(input: AudioPublishCatchUpSendStart): void {
-    this.pendingSends.set(input.timestampMicros, {
+    const send: PendingSend = {
       queuedAtMs: input.nowMs,
       capturedWallClockMs: input.capturedWallClockMs,
       durationMs: input.durationMs,
-    });
+    };
+    const sends = this.pendingSends.get(input.timestampMicros);
+    if (sends === undefined) {
+      this.pendingSends.set(input.timestampMicros, [send]);
+    } else {
+      sends.push(send);
+    }
+    this.pendingSendFrames++;
     this.pendingSendMs += input.durationMs;
   }
 
@@ -473,14 +514,19 @@ export class AudioPublishCatchUp {
    *
    * 「撮ってから送信が終わるまで」を測る。配信側が足した遅れのうち、受信側の基準の遅れへ
    * そのまま出る値である。対応づけは timestamp で行うため、送信の完了が順不同でもよい
-   * (送信の失敗・中断で完了が返らない分は `prunePendingSends()` が捨てる)
+   * (送信の失敗・中断で完了が返らない分は `prunePendingSends()` が捨てる)。同じ timestamp の
+   * フレームが続くときは、先に入れた記録 (古い方) から消す
    */
   recordSendComplete(input: AudioPublishCatchUpSendComplete): void {
-    const send = this.pendingSends.get(input.timestampMicros);
-    if (send === undefined) {
+    const sends = this.pendingSends.get(input.timestampMicros);
+    const send = sends?.shift();
+    if (sends === undefined || send === undefined) {
       return;
     }
-    this.pendingSends.delete(input.timestampMicros);
+    if (sends.length === 0) {
+      this.pendingSends.delete(input.timestampMicros);
+    }
+    this.pendingSendFrames--;
     this.pendingSendMs = Math.max(0, this.pendingSendMs - send.durationMs);
     const lagMs = input.completedWallClockMs - send.capturedWallClockMs;
     this.lastSendLagMs = lagMs;
@@ -498,11 +544,11 @@ export class AudioPublishCatchUp {
       maxLagMs: this.maxLagMs,
       pendingMs: this.pendingMs,
       readLagMs: this.lastReadLagMs,
-      pendingFrames: this.pending.size,
+      pendingFrames: this.pendingFrames,
       catchingUp: this.catchingUp,
       catchUpStarts: this.catchUpStarts,
       sendQueueMs: this.pendingSendMs,
-      sendQueueFrames: this.pendingSends.size,
+      sendQueueFrames: this.pendingSendFrames,
       sendLagMs: this.lastSendLagMs,
       maxSendLagMs: this.maxSendLagMs,
     };
@@ -510,9 +556,11 @@ export class AudioPublishCatchUp {
 
   /** 配信のやり直しで観測を消す */
   reset(): void {
-    this.pending.clear();
+    this.pending = [];
+    this.pendingHead = 0;
     this.pendingMs = 0;
     this.pendingSends.clear();
+    this.pendingSendFrames = 0;
     this.pendingSendMs = 0;
     this.floorMs = null;
     this.maxLagMs = null;
@@ -549,6 +597,10 @@ export class AudioPublishCatchUp {
    *   `AUDIO_PUBLISH_CATCH_UP_CONFIRM_MS` 続いた場合である。読み出しがまとめて行われると
    *   1 フレームだけ超過することがあり、その場で始めると遅れが減らないまま状態が往復する。
    *   やめた後も `AUDIO_PUBLISH_CATCH_UP_COOLDOWN_MS` は始めない (詳しくは各定数のコメント)
+   *
+   * やめる条件は「キューが 1 パケット以下」である。長さの集計ではなく記録そのものが
+   * 空になったときもやめる (追いつきの間は投入しないため、集計がずれたまま残ると
+   * 解除できず、そのまま音声が一切送られなくなる)
    */
   private shouldDrop(lagMs: number, readLagMs: number, nowMs: number): boolean {
     if (this.policy === "keep") {
@@ -569,7 +621,11 @@ export class AudioPublishCatchUp {
       return true;
     }
     if (this.catchingUp) {
-      if (this.pendingMs <= AUDIO_PUBLISH_CATCH_UP_RESUME_MS) {
+      // キューが 1 パケット以下まで減ったら投入を再開する。記録が 1 つも無いときも同じ
+      // 扱いにするのは、追いつきの間は投入しないため符号化の出力も返らず、長さの集計が
+      // ずれたまま残ると解除できない (音声が一切送られなくなる) ためである。記録が無ければ
+      // キューは空であり、続けて符号化へ渡さないと出力も返らない
+      if (this.pendingMs <= AUDIO_PUBLISH_CATCH_UP_RESUME_MS || this.pendingFrames === 0) {
         this.catchingUp = false;
         this.resumedAtMs = nowMs;
         // やめた時点から数え直す (続いていた超過をそのまま次の開始の条件に使わない)
@@ -619,6 +675,19 @@ export class AudioPublishCatchUp {
     return this.lastFrameDurationMs;
   }
 
+  /** 符号化へ渡したまま出力が返っていないフレームの数 */
+  private get pendingFrames(): number {
+    return this.pending.length - this.pendingHead;
+  }
+
+  /** 消費した先頭を詰め直す (配列が伸び続けないようにする) */
+  private compactPending(): void {
+    if (this.pendingHead > 0 && this.pendingHead * 2 >= this.pending.length) {
+      this.pending = this.pending.slice(this.pendingHead);
+      this.pendingHead = 0;
+    }
+  }
+
   /**
    * 出力が返らないままになった記録を捨てる
    *
@@ -626,13 +695,15 @@ export class AudioPublishCatchUp {
    */
   private prunePending(nowMs: number): void {
     const oldestMs = nowMs - this.pendingTimeoutMs;
-    for (const [timestampMicros, frame] of this.pending) {
-      if (frame.readAtMs >= oldestMs) {
+    while (this.pendingHead < this.pending.length) {
+      const frame = this.pending[this.pendingHead];
+      if (frame === undefined || frame.readAtMs >= oldestMs) {
         break;
       }
-      this.pending.delete(timestampMicros);
+      this.pendingHead++;
       this.pendingMs -= frame.durationMs;
     }
+    this.compactPending();
     this.pendingMs = Math.max(0, this.pendingMs);
   }
 
@@ -640,16 +711,24 @@ export class AudioPublishCatchUp {
    * 送信が終わらないままになった記録を捨てる
    *
    * 送信の失敗や配信の停止で完了が返らない記録が残り続けると、送信のキューに残っている
-   * 長さが増え続ける。`prunePending()` と同じ上限を使う
+   * 長さが増え続ける。`prunePending()` と同じ上限を使う。1 つの timestamp に複数の記録が
+   * ありうるため、timestamp ごとに古い方から捨てる
    */
   private prunePendingSends(nowMs: number): void {
     const oldestMs = nowMs - this.pendingTimeoutMs;
-    for (const [timestampMicros, send] of this.pendingSends) {
-      if (send.queuedAtMs >= oldestMs) {
-        break;
+    for (const [timestampMicros, sends] of this.pendingSends) {
+      while (sends.length > 0) {
+        const send = sends[0];
+        if (send === undefined || send.queuedAtMs >= oldestMs) {
+          break;
+        }
+        sends.shift();
+        this.pendingSendFrames--;
+        this.pendingSendMs -= send.durationMs;
       }
-      this.pendingSends.delete(timestampMicros);
-      this.pendingSendMs -= send.durationMs;
+      if (sends.length === 0) {
+        this.pendingSends.delete(timestampMicros);
+      }
     }
     this.pendingSendMs = Math.max(0, this.pendingSendMs);
   }

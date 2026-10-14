@@ -761,3 +761,162 @@ test("AudioPublishCatchUp: reset で観測と統計を消す", () => {
   assert.isFalse(stats.catchingUp, "追いつき中の状態が消えていない");
   assert.strictEqual(stats.catchUpStarts, 0, "追いつきを始めた回数が消えていない");
 });
+
+/**
+ * devtools の音声の 1 フレームの長さ (マイクロ秒)
+ *
+ * `MediaStreamTrackProcessor` がマイクから読む `AudioData` は 128 フレームであり、要求した
+ * 16000 Hz では 8 ms になる (実測)。単体テストの 20 ms とは違うため、この値を使うテストを
+ * 分けてある
+ */
+const DEVTOOLS_FRAME_MICROS = 8_000;
+
+/** devtools の音声のフレームの間隔 (ミリ秒) */
+const DEVTOOLS_FRAME_INTERVAL_MS = 8;
+
+/**
+ * 入力の 8 ms を opus の 1 パケット (20 ms) へまとめる符号化器を模した装置
+ *
+ * 投入されたフレームの長さを足し合わせ、1 パケット分 (20 ms) が溜まるたびに出力を返す。
+ * `drainMsPerPacket` が 20 ms より大きいと出力が実時間に追いつかず、キューが伸びる
+ * (実測した「符号化が実時間に追いつかない状態」)。判定するのは本物の `AudioPublishCatchUp`
+ * であり、この装置は環境の側だけを作る
+ */
+class PacketizingEncoder {
+  /** 投入されたが出力が返っていない音声の長さ (マイクロ秒) */
+  private handedMicros = 0;
+  /** 次に出力が返る時刻 (ミリ秒) */
+  private nextOutputAtMs = Number.NEGATIVE_INFINITY;
+
+  constructor(
+    private readonly catchUp: AudioPublishCatchUp,
+    /** 1 パケット (20 ms の投入) を出力するのにかかる時間 (ミリ秒) */
+    public drainMsPerPacket: number,
+  ) {}
+
+  /** フレームを投入した */
+  encode(nowMs: number): void {
+    this.handedMicros += DEVTOOLS_FRAME_MICROS;
+    this.nextOutputAtMs = Math.max(this.nextOutputAtMs, nowMs);
+  }
+
+  /** `nowMs` までに返る出力を返す */
+  drain(nowMs: number): void {
+    while (this.handedMicros >= FRAME_MICROS && this.nextOutputAtMs <= nowMs) {
+      this.catchUp.recordEncodedChunk({
+        timestampMicros: 0,
+        durationMicros: FRAME_MICROS,
+        nowMs: this.nextOutputAtMs,
+      });
+      this.handedMicros -= FRAME_MICROS;
+      this.nextOutputAtMs += this.drainMsPerPacket;
+    }
+  }
+}
+
+test("AudioPublishCatchUp: 同じ timestamp のフレームが続いても、記録は上書きされない", () => {
+  // `AudioData.timestamp` は同じ値が続くことがあり、実測では 16 秒の配信で 4 回現れた。
+  // timestamp を鍵にした Map では記録が上書きされ、消えた分の長さが「キューに残っている
+  // 長さ」(pendingMs) から引かれないまま残る。記録が無いのに長さだけが残ると、追いつきを
+  // やめる条件 (20 ms 以下) に永久に届かなくなる
+  const catchUp = new AudioPublishCatchUp();
+  const readAt = (index: number, timestampMicros: number): boolean =>
+    catchUp.evaluate({
+      timestampMicros,
+      readWallClockMicros: BigInt(WALL_CLOCK_EPOCH_MICROS + index * DEVTOOLS_FRAME_MICROS),
+      appliedOffsetMicros: 0n,
+      durationMicros: DEVTOOLS_FRAME_MICROS,
+      nowMs: 1_000 + index * DEVTOOLS_FRAME_INTERVAL_MS,
+    });
+
+  // 同じ timestamp の 3 フレーム。記録は 3 つ残り、長さは 24 ms になる
+  assert.isTrue(readAt(0, WALL_CLOCK_EPOCH_MICROS), "1 つ目のフレームを捨てた");
+  assert.isTrue(readAt(1, WALL_CLOCK_EPOCH_MICROS), "2 つ目のフレームを捨てた");
+  assert.isTrue(readAt(2, WALL_CLOCK_EPOCH_MICROS), "3 つ目のフレームを捨てた");
+  assert.strictEqual(
+    catchUp.snapshot().pendingFrames,
+    3,
+    "同じ timestamp のフレームの記録が上書きされている",
+  );
+  assert.strictEqual(catchUp.snapshot().pendingMs, 24, "キューの長さが違う");
+
+  // 20 ms の出力 (opus の 1 パケット) が 2 つ返れば、24 ms の投入をすべて覆う
+  catchUp.recordEncodedChunk({
+    timestampMicros: WALL_CLOCK_EPOCH_MICROS,
+    durationMicros: FRAME_MICROS,
+    nowMs: 2_000,
+  });
+  catchUp.recordEncodedChunk({
+    timestampMicros: WALL_CLOCK_EPOCH_MICROS,
+    durationMicros: FRAME_MICROS,
+    nowMs: 2_020,
+  });
+  assert.strictEqual(catchUp.snapshot().pendingFrames, 0, "出力が覆った投入の記録が残っている");
+  assert.strictEqual(
+    catchUp.snapshot().pendingMs,
+    0,
+    "出力が覆った投入の長さが残っている (記録と集計がずれている)",
+  );
+});
+
+test("AudioPublishCatchUp: timestamp が重複しても、キューがはけたら追いつきをやめる", () => {
+  // 実測 (devtools の配信、16 秒) では、符号化が実時間に追いつかなくなって追いつきを
+  // 始めた後、キューがはけても解除されず、1805 フレーム (14440 ms) を捨てたまま音声が
+  // 送られなくなった。観測は `catchingUp: true` のまま `catchUpStarts: 1`、
+  // `pendingMs: 32` に対して `pendingFrames: 0`、`readLagMs: 0.1` であり、読み出しも
+  // 符号化も遅れていないのに捨て続けていた
+  const catchUp = new AudioPublishCatchUp();
+  const encoder = new PacketizingEncoder(catchUp, 20);
+  let readCount = 0;
+  let lastTimestampMicros = WALL_CLOCK_EPOCH_MICROS;
+  let nowMs = 1_000;
+
+  /** 1 フレーム読む。20 フレームごとに timestamp を重複させる */
+  const read = (): boolean => {
+    const wallClockMicros = WALL_CLOCK_EPOCH_MICROS + readCount * DEVTOOLS_FRAME_MICROS;
+    const duplicate = readCount > 0 && readCount % 20 === 0;
+    const timestampMicros = duplicate ? lastTimestampMicros : wallClockMicros;
+    const encode = catchUp.evaluate({
+      timestampMicros,
+      readWallClockMicros: BigInt(wallClockMicros),
+      appliedOffsetMicros: 0n,
+      durationMicros: DEVTOOLS_FRAME_MICROS,
+      nowMs,
+    });
+    if (encode) {
+      encoder.encode(nowMs);
+    }
+    encoder.drain(nowMs);
+    lastTimestampMicros = timestampMicros;
+    readCount++;
+    nowMs += DEVTOOLS_FRAME_INTERVAL_MS;
+    return encode;
+  };
+
+  // 健全な状態 (床を作る)
+  for (let index = 0; index < 50; index++) {
+    read();
+  }
+  // 符号化が実時間に追いつかなくなる (1 パケット 30 ms)。キューが伸びて追いつきを始める
+  encoder.drainMsPerPacket = 30;
+  for (let index = 0; index < 100; index++) {
+    read();
+  }
+  assert.isAtLeast(catchUp.snapshot().catchUpStarts, 1, "追いつきを始めていない");
+
+  // 符号化が速くなる (1 パケット 1 ms)。キューがはけたら投入を再開する
+  encoder.drainMsPerPacket = 1;
+  const recovered: boolean[] = [];
+  for (let index = 0; index < 300; index++) {
+    recovered.push(read());
+  }
+  const stats = catchUp.snapshot();
+  assert.isFalse(stats.catchingUp, "キューがはけたのに追いつき中が続いている");
+  assert.isAtMost(stats.pendingMs, 20, "キューがはけたのに長さが残っている");
+  // 回復した後は捨てない (捨て続けると音声が送られなくなる)
+  assert.strictEqual(
+    recovered.slice(-100).filter((encode) => !encode).length,
+    0,
+    "回復した後にフレームを捨てている",
+  );
+});
