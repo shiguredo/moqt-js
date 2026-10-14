@@ -37,6 +37,7 @@ import { DecoderWrapper } from "../utils/DecoderWrapper";
 import { AudioDecoderWrapper } from "../../../src/codec/AudioDecoder.ts";
 import {
   isVideoKeyFrameObject,
+  resolveNewGroupRequestValue,
   resolvePublishDoneError,
 } from "../../../src/createMediaSubscriber.ts";
 import {
@@ -543,20 +544,6 @@ export function buildVideoChunkPlan(
     timestamp,
     timestampKind,
   };
-}
-
-/**
- * REQUEST_UPDATE に載せる NEW_GROUP_REQUEST の値を解決する
- *
- * draft-ietf-moq-transport-22 §9.20.19: 送信時点で知る最大 Group ID + 1 を送る。
- * 最大 Location が未知 (SUBSCRIBE_OK 未受信) のときは 0 を送り、Group 情報なしで
- * 新規 Group の開始を要求する。SUBSCRIBE 直後の snapshot ではなく
- * `Subscriber.largestLocation` の現在値を渡す。
- */
-export function resolveNewGroupRequestValue(
-  largestLocation: { group: bigint; object: bigint } | null,
-): bigint {
-  return largestLocation === null ? 0n : largestLocation.group + 1n;
 }
 
 /**
@@ -2624,7 +2611,7 @@ export function useSubscriber(
       // NEW_GROUP_REQUEST: 0 = グループ情報なし、新規開始を要求
       // draft-ietf-moq-transport-22 §9.20.19: SUBSCRIBE では MAY (foreknowledge 不要、
       // サポート外なら publisher が無視する) ため、DYNAMIC_GROUPS 確認は不要。
-      // REQUEST_UPDATE 経路の requestKeyframe では DYNAMIC_GROUPS=1 を確認する。
+      // REQUEST_UPDATE 経路の requestNewGroup では DYNAMIC_GROUPS=1 を確認する。
       if (newGroupRequestEnabled) {
         subscribeOptions.newGroupRequest = 0n;
       }
@@ -2841,12 +2828,22 @@ export function useSubscriber(
     resetSubscriberState(instance, { video: chainRef, audio: audioChainRef });
   };
 
-  const requestKeyframe = async (): Promise<void> => {
+  /**
+   * REQUEST_UPDATE で NEW_GROUP_REQUEST を送り、publisher へ新しい Group の開始を要求する
+   *
+   * MOQT にはキーフレームの要求というメッセージは無い。新しい Group の開始を要求し、
+   * 映像なら Group の先頭がキーフレームになることでキーフレームが届く
+   * (draft-ietf-moq-transport-22 §9.20.19)。
+   *
+   * @returns REQUEST_UPDATE を送れたら true。購読していない、DYNAMIC_GROUPS=1 が無い、
+   *   送信に失敗した場合は false
+   */
+  const requestNewGroup = async (): Promise<boolean> => {
     const instance = sub.getSubscriber(subscriberId);
     const subscriberInstance = instance?.subscriber.value;
     if (!subscriberInstance || subscriberInstance.state !== "active") {
-      console.warn(`[${subscriberId}] requestKeyframe: subscriber not active`);
-      return;
+      console.warn(`[${subscriberId}] requestNewGroup: subscriber not active`);
+      return false;
     }
 
     // draft-ietf-moq-transport-22 §9.20.19:
@@ -2857,22 +2854,32 @@ export function useSubscriber(
     // 対する保険として早期 return する。
     if (!supportsDynamicGroups(subscriberInstance.trackProperties)) {
       console.warn(
-        `[${subscriberId}] requestKeyframe: track did not include DYNAMIC_GROUPS=1, skipped`,
+        `[${subscriberId}] requestNewGroup: track did not include DYNAMIC_GROUPS=1, skipped`,
       );
-      return;
+      return false;
     }
 
     try {
       // NEW_GROUP_REQUEST パラメータを含む REQUEST_UPDATE を送信
-      // draft-ietf-moq-transport-22 §9.20.19
-      // NEW_GROUP_REQUEST = 0x32。値は送信時点の最新 Group ID + 1
-      // (情報なし時は 0) とし、SUBSCRIBE 直後の snapshot は使わない。
-      const largestLocation = subscriberInstance.largestLocation;
-      await subscriberInstance.update({
-        newGroupRequest: resolveNewGroupRequestValue(largestLocation),
+      // draft-ietf-moq-transport-22 §9.20.19 (NEW_GROUP_REQUEST = 0x32)。
+      // 値は購読者が知る最大 Group ID + 1 とする。LARGEST_OBJECT の snapshot だけでなく
+      // 購読で受信した Object の最大 Location も使う。値が Largest Group 以下だと relay は
+      // 上流へ送らず、publisher も新しい Group を始めない (要求が無言で捨てられる)
+      const newGroupRequest = resolveNewGroupRequestValue(
+        subscriberInstance.largestReceivedLocation,
+        subscriberInstance.largestLocation,
+      );
+      await subscriberInstance.update({ newGroupRequest });
+      // REQUEST_UPDATE は認可トークンを載せうるため payload をログに残さない
+      // (utils/debugMessageLog.ts)。送った値を残さないと、要求が届いたかを画面から
+      // 判断できない
+      addLog("info", `[${subscriberId}] requested new group`, {
+        newGroupRequest: newGroupRequest.toString(),
       });
+      return true;
     } catch (error) {
-      console.error(`[${subscriberId}] requestKeyframe: failed`, error);
+      console.error(`[${subscriberId}] requestNewGroup: failed`, error);
+      return false;
     }
   };
 
@@ -2886,7 +2893,7 @@ export function useSubscriber(
   return {
     startSubscribing,
     stopSubscribing,
-    requestKeyframe,
+    requestNewGroup,
     toggleAudioPlayback,
   };
 }

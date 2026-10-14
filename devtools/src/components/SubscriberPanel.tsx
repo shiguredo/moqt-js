@@ -1,5 +1,5 @@
 import { useMemo, useRef, useEffect } from "preact/hooks";
-import type { ReadonlySignal } from "@preact/signals";
+import { useSignal, type ReadonlySignal } from "@preact/signals";
 import type { ComponentChildren } from "preact";
 import { useSubscriber } from "../hooks/useSubscriber";
 import { AudioMeter } from "./AudioMeter";
@@ -33,7 +33,7 @@ import { formatDbfsShort } from "../utils/audioLevel";
 import { formatPreconditionWarning } from "../utils/preconditionWarnings";
 import { CatalogTracks } from "./CatalogTracks";
 import { MessageList } from "./MessageList";
-import { PANEL_OPTION_ROW_CLASS } from "./panelLayout";
+import { PANEL_OPTION_CAPTION_CLASS, PANEL_OPTION_ROW_CLASS } from "./panelLayout";
 import { formatLossEvent, formatStallEvent } from "../utils/playbackTimingStats";
 import { AUDIO_MISS_REASONS, formatAudioMissEvent } from "../../../src/audioPlayoutTimingStats.ts";
 import { LATENCY_SEGMENTS } from "../utils/latencyBreakdown";
@@ -55,6 +55,14 @@ function formatMs(value: number | null): string {
   return value === null ? "-" : value.toFixed(1);
 }
 
+/**
+ * Request New Group を押して送れた後、送ったことをボタンに出す時間 (ミリ秒)
+ *
+ * 押しても何も変わらないと、押せたのか、publisher が要求を無視したのかを切り分けられない。
+ * 送れたことだけを一時的に出し、その後に元の表示へ戻す
+ */
+const NEW_GROUP_REQUEST_FEEDBACK_MS = 1500;
+
 export function SubscriberPanel({
   subscriberId,
   onRemove,
@@ -62,11 +70,31 @@ export function SubscriberPanel({
 }: SubscriberPanelProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
-  const { startSubscribing, stopSubscribing, requestKeyframe, toggleAudioPlayback } = useSubscriber(
+  const { startSubscribing, stopSubscribing, requestNewGroup, toggleAudioPlayback } = useSubscriber(
     subscriberId,
     canvasRef,
     audioRef,
   );
+
+  // Request New Group を押して送れた直後だけ、送ったことをボタンに出す。押しても何も
+  // 変わらないと、押せたのか、publisher が要求を無視したのかを切り分けられない
+  const newGroupRequested = useSignal(false);
+  const newGroupRequestedTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(() => {
+    return () => {
+      clearTimeout(newGroupRequestedTimerRef.current);
+    };
+  }, []);
+  const onRequestNewGroup = async (): Promise<void> => {
+    if (!(await requestNewGroup())) {
+      return;
+    }
+    newGroupRequested.value = true;
+    clearTimeout(newGroupRequestedTimerRef.current);
+    newGroupRequestedTimerRef.current = setTimeout(() => {
+      newGroupRequested.value = false;
+    }, NEW_GROUP_REQUEST_FEEDBACK_MS);
+  };
 
   // canvas の背景を slate-800 で初期化する
   useEffect(() => {
@@ -206,45 +234,143 @@ export function SubscriberPanel({
         </div>
 
         {/* Subscribe Options。Publisher の paused 状態の行と同じ高さの枠で描き、
-            映像の上端をそろえる */}
-        <div class={PANEL_OPTION_ROW_CLASS}>
-          <label class="flex items-center gap-2 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={instance.newGroupRequestEnabled.value}
-              onChange={(e) => {
-                instance.newGroupRequestEnabled.value = e.currentTarget.checked;
-              }}
-              disabled={isSubscribing}
-              class="w-4 h-4 text-blue-600 border-slate-300 rounded focus:ring-blue-500 disabled:cursor-not-allowed"
-            />
-            <span class="text-sm text-slate-600">NEW_GROUP_REQUEST</span>
+            映像の上端をそろえる。項目の見出しは、その操作がどのメッセージで効くのか
+            (SUBSCRIBE か REQUEST_UPDATE か) を表す */}
+        <div class={PANEL_OPTION_ROW_CLASS} data-testid="subscriber-option-row">
+          {/*
+            NEW_GROUP_REQUEST。購読の開始時に送る SUBSCRIBE に載せる指定であり、
+            購読中は変更できない (disabled={isSubscribing})。いつ効くのかが読み取れる
+            よう、見出しに SUBSCRIBE を出す。REQUEST_UPDATE へ載せる要求は隣のボタンが
+            行う (draft-ietf-moq-transport-22 §9.20.19)
+          */}
+          <label
+            class={`flex flex-col gap-0.5 ${
+              isSubscribing ? "cursor-not-allowed opacity-60" : "cursor-pointer"
+            }`}
+            title={
+              "NEW_GROUP_REQUEST is sent in the SUBSCRIBE for the video track when subscribing " +
+              "starts. It asks the publisher to start a new Group. It cannot be changed while " +
+              "subscribing (draft-ietf-moq-transport-22 §9.20.19)"
+            }
+          >
+            <span class={PANEL_OPTION_CAPTION_CLASS}>SUBSCRIBE</span>
+            <span class="flex h-7 items-center gap-2">
+              <input
+                type="checkbox"
+                data-testid="subscriber-new-group-request"
+                checked={instance.newGroupRequestEnabled.value}
+                onChange={(e) => {
+                  instance.newGroupRequestEnabled.value = e.currentTarget.checked;
+                }}
+                disabled={isSubscribing}
+                class="w-4 h-4 text-blue-600 border-slate-300 rounded focus:ring-blue-500 disabled:cursor-not-allowed"
+              />
+              <span class="text-sm text-slate-600">NEW_GROUP_REQUEST</span>
+            </span>
           </label>
           {/*
-            受信した音声の再生。既定では再生しない。相互運用の実測で毎回音が出ると
-            邪魔になるため、明示的に有効にしたときだけ音声出力デバイスへ繋ぐ。
-            購読の前も購読中も切り替えられる。Publisher のパネルに無い行を足すと
-            下の項目の位置が 2 つのパネルでずれるため、この行に置く
+            購読中の NEW_GROUP_REQUEST。REQUEST_UPDATE に載せて送る購読中の操作であり、
+            購読の開始時に SUBSCRIBE へ載せる切り替えとは別の経路である。MOQT には
+            キーフレームの要求というメッセージは無く、送るのは新しい Group の開始の要求で
+            ある。見出しに REQUEST_UPDATE を出す。購読の開始前と、DYNAMIC_GROUPS=1 を
+            広告しない Track では押せない (§9.20.19 の MUST NOT)。主要な操作の行
+            (Start Subscribing / Stop) には置かない
           */}
-          <label class="flex items-center gap-2 cursor-pointer">
-            <input
-              type="checkbox"
-              data-testid="subscriber-audio-playback-toggle"
-              checked={instance.audioPlaybackEnabled.value}
-              onChange={(e) => {
-                // 表示は再生の状態 (audioPlaybackEnabled) に従う。押した時点では戻しておき、
-                // 再生を始め終えてから切り替える (始められなかったときに表示だけ残さない)
-                e.currentTarget.checked = instance.audioPlaybackEnabled.value;
-                void toggleAudioPlayback();
-              }}
-              class="w-4 h-4 text-blue-600 border-slate-300 rounded focus:ring-blue-500"
-            />
-            <span class="text-sm text-slate-600">Play Audio</span>
-          </label>
+          <span class="flex flex-col gap-0.5">
+            <span class={PANEL_OPTION_CAPTION_CLASS}>REQUEST_UPDATE</span>
+            <button
+              onClick={() => void onRequestNewGroup()}
+              disabled={
+                instance.subscriber.value === null || !instance.dynamicGroupsSupported.value
+              }
+              data-testid="subscriber-request-new-group"
+              class={`w-40 h-7 px-3 shrink-0 text-xs disabled:bg-slate-300 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors flex items-center justify-center gap-1.5 ${
+                newGroupRequested.value ? "bg-green-500" : "bg-purple-500 hover:bg-purple-600"
+              }`}
+              title={
+                newGroupRequested.value
+                  ? "Sent the request. Waiting for the publisher to start a new Group"
+                  : instance.subscriber.value === null
+                    ? "Subscribe before requesting a new Group"
+                    : instance.dynamicGroupsSupported.value
+                      ? "Send a REQUEST_UPDATE with NEW_GROUP_REQUEST to ask the publisher to start a new Group. For video, the new Group starts with a keyframe"
+                      : "Not available: the track did not include DYNAMIC_GROUPS=1 (draft-ietf-moq-transport-22 §9.20.19)"
+              }
+            >
+              {newGroupRequested.value ? (
+                // 送った直後は、送信済みを表すチェックにする
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-width="2"
+                    d="M4.5 12.75l6 6 9-13.5"
+                  />
+                </svg>
+              ) : (
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-width="2"
+                    d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+                  />
+                </svg>
+              )}
+              {newGroupRequested.value ? "Sent" : "NEW_GROUP_REQUEST"}
+            </button>
+          </span>
         </div>
 
         {/* Buttons */}
         <div class="flex gap-3 mb-4">
+          {/*
+            受信した音声の再生。既定では再生しない。相互運用の実測で毎回音が出ると
+            邪魔になるため、明示的に有効にしたときだけ音声出力デバイスへ繋ぐ。
+            購読の前も購読中も切り替えられる。主要な操作 (Start Subscribing / Stop) の
+            隣にトグルボタンとして置く。チェックボックスは設定の有無しか表せず、
+            再生中かどうかと、押すと何が起きるのかが読み取りにくいため、押すと
+            「Play Audio」から「Stop Audio」へ変わり、色でも状態が分かるようにする
+          */}
+          <button
+            type="button"
+            data-testid="subscriber-audio-playback-toggle"
+            aria-pressed={instance.audioPlaybackEnabled.value}
+            onClick={() => void toggleAudioPlayback()}
+            title={
+              instance.audioPlaybackEnabled.value
+                ? "Stop playing the audio received from the subscribed track"
+                : "Play the audio received from the subscribed track on this device. " +
+                  "It can be enabled before subscribing; the sound starts when audio arrives"
+            }
+            class={`w-32 py-2.5 shrink-0 font-medium rounded-lg transition-colors flex items-center justify-center gap-2 ${
+              instance.audioPlaybackEnabled.value
+                ? "bg-red-500 hover:bg-red-600 text-white"
+                : "bg-slate-500 hover:bg-slate-600 text-white"
+            }`}
+          >
+            {instance.audioPlaybackEnabled.value ? (
+              // 停止の状態は、音が出ないことを表すスピーカー (×付き) にする
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M17.25 9.75L19.5 12m0 0l2.25 2.25M19.5 12l2.25-2.25M19.5 12l-2.25 2.25m-10.5-6l4.72-4.72a.75.75 0 011.28.53v15.88a.75.75 0 01-1.28.53l-4.72-4.72H4.51c-.88 0-1.704-.507-1.938-1.354A9.01 9.01 0 012.25 12c0-.83.112-1.633.322-2.396C2.806 8.756 3.63 8.25 4.51 8.25H6.75z"
+                />
+              </svg>
+            ) : (
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M19.114 5.636a9 9 0 010 12.728M16.463 8.288a5.25 5.25 0 010 7.424M6.75 8.25l4.72-4.72a.75.75 0 011.28.53v15.88a.75.75 0 01-1.28.53l-4.72-4.72H4.51c-.88 0-1.704-.507-1.938-1.354A9.01 9.01 0 012.25 12c0-.83.112-1.633.322-2.396C2.806 8.756 3.63 8.25 4.51 8.25H6.75z"
+                />
+              </svg>
+            )}
+            {instance.audioPlaybackEnabled.value ? "Stop Audio" : "Play Audio"}
+          </button>
           <button
             onClick={() => void startSubscribing()}
             disabled={subscribeBtnDisabled}
@@ -266,27 +392,6 @@ export function SubscriberPanel({
               />
             </svg>
             Start Subscribing
-          </button>
-          {/* 購読中の操作。統計の間ではなく、ほかの操作と並べる */}
-          <button
-            onClick={() => void requestKeyframe()}
-            disabled={instance.subscriber.value === null || !instance.dynamicGroupsSupported.value}
-            class="px-4 py-2.5 bg-purple-500 hover:bg-purple-600 disabled:bg-slate-300 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors flex items-center justify-center gap-2"
-            title={
-              instance.dynamicGroupsSupported.value
-                ? "Send NEW_GROUP_REQUEST to request a new keyframe"
-                : "Track did not include DYNAMIC_GROUPS=1 (draft-ietf-moq-transport-22 §9.20.19)"
-            }
-          >
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="2"
-                d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-              />
-            </svg>
-            Request Keyframe
           </button>
           <button
             onClick={() => void stopSubscribing()}

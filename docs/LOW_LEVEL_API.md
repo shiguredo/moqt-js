@@ -161,14 +161,15 @@ draft-ietf-moq-msf-01 §11.4.3: track に紐づくトークンは、そのトラ
 
 ### `Subscriber`
 
-| プロパティ / メソッド | 説明                                                                                                                              |
-| --------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `state`               | `"active"` / `"closed"`                                                                                                           |
-| `largestLocation`     | `SUBSCRIBE_OK` / `PUBLISH` / `REQUEST_UPDATE_OK` / `PUBLISH_STATE_NOTIFY` で更新される `LARGEST_OBJECT`                           |
-| `trackProperties`     | `SUBSCRIBE_OK` で受信した Track Properties                                                                                        |
-| `forwardState`        | `SUBSCRIBE` 送信時・受信 `PUBLISH`・ケース 1 の `REQUEST_UPDATE`・自 `REQUEST_UPDATE` の `REQUEST_OK` で更新される `FORWARD` 状態 |
-| `update(options?)`    | 同じ双方向ストリームで `REQUEST_UPDATE` を送る                                                                                    |
-| `unsubscribe()`       | 双方向ストリームを close して購読を終了する                                                                                       |
+| プロパティ / メソッド     | 説明                                                                                                                              |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `state`                   | `"active"` / `"closed"`                                                                                                           |
+| `largestLocation`         | `SUBSCRIBE_OK` / `PUBLISH` / `REQUEST_UPDATE_OK` / `PUBLISH_STATE_NOTIFY` で更新される `LARGEST_OBJECT`                           |
+| `largestReceivedLocation` | 購読で受信した Object の最大 Location (Subgroup / Datagram / fill fetch。§3.1.4)                                                  |
+| `trackProperties`         | `SUBSCRIBE_OK` で受信した Track Properties                                                                                        |
+| `forwardState`            | `SUBSCRIBE` 送信時・受信 `PUBLISH`・ケース 1 の `REQUEST_UPDATE`・自 `REQUEST_UPDATE` の `REQUEST_OK` で更新される `FORWARD` 状態 |
+| `update(options?)`        | 同じ双方向ストリームで `REQUEST_UPDATE` を送る                                                                                    |
+| `unsubscribe()`           | 双方向ストリームを close して購読を終了する                                                                                       |
 
 #### 購読の終了通知
 

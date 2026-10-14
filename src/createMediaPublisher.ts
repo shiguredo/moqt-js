@@ -252,7 +252,7 @@ export function resolveKeyframeInterval(video: VideoPublishOptions | undefined):
  * DYNAMIC_GROUPS=1 を広告し、購読者が NEW_GROUP_REQUEST で新しい Group を要求できるように
  * する。後から視聴を始めた購読者は Group の先頭 (キーフレーム) を受け取るまで映像を出せない
  * ため、要求を受けたら次に encode するフレームをキーフレームにして新しい Group を始める
- * (`PublishCallbacks.onNewGroupRequest` から `requestKeyframe()` を呼ぶ)。
+ * (`PublishCallbacks.onNewGroupRequest` から `startNewGroup()` を呼ぶ)。
  */
 export const VIDEO_PUBLISH_OPTIONS: Readonly<PublishOptions> = { dynamicGroups: true };
 
@@ -261,7 +261,7 @@ export const VIDEO_PUBLISH_OPTIONS: Readonly<PublishOptions> = { dynamicGroups: 
  *
  * 直前のキーフレームからの経過時間が間隔以上ならキーフレームにする。先頭のフレーム
  * (直前のキーフレームが無い) と、timestamp が巻き戻ったフレーム (映像の入力が
- * 差し替わった) もキーフレームにする。`requestKeyframe()` は直前のキーフレームの
+ * 差し替わった) もキーフレームにする。`startNewGroup()` は直前のキーフレームの
  * timestamp を消すため、要求の後に次に encode するフレームは必ずキーフレームになる
  * (encode せず破棄したフレームは判定しないため、要求は消費されず次の encode する
  * フレームへ移る)。
@@ -584,7 +584,7 @@ export class MediaPublisherImpl implements MediaPublisher {
   private videoObjectId = 0;
   // 直前のキーフレームの timestamp (マイクロ秒)。まだキーフレームを送っていない場合は
   // null。encode したフレームだけで更新し、破棄したフレームでは更新しない
-  // (requestKeyframe() で null に戻す)
+  // (startNewGroup() で null に戻す)
   private lastKeyFrameTimestampUs: number | null = null;
   // 音声・映像の初回オブジェクト送信済みか (初回は加算せず初期値を送る)
   private audioGroupStarted = false;
@@ -908,12 +908,12 @@ export class MediaPublisherImpl implements MediaPublisher {
   }
 
   /**
-   * 次に encode するフレームをキーフレームにするよう要求する
+   * 次に encode するフレームで新しい Group を始める (キーフレームにする)
    *
    * 直前のキーフレームの記録を消す。破棄したフレームは記録を更新しないため、
-   * 要求は次に encode するフレームまで消費されない。
+   * 新しい Group は次に encode するフレームから始まる。
    */
-  requestKeyframe(): void {
+  startNewGroup(): void {
     if (this.currentState !== "publishing") {
       return;
     }
@@ -1289,8 +1289,8 @@ export class MediaPublisherImpl implements MediaPublisher {
           error: (error) => this.callbacks.onError?.(error),
           // draft-ietf-moq-transport-22 §9.20.19: 新しい Group の要求には、次のフレームを
           // キーフレームにして新しい Group を始めることで応える。次のフレームまでに届いた
-          // 複数の要求は、フレーム番号を 0 に戻すだけなので 1 つの Group にまとまる
-          onNewGroupRequest: () => this.requestKeyframe(),
+          // 複数の要求は、直前のキーフレームの記録を消すだけなので 1 つの Group にまとまる
+          onNewGroupRequest: () => this.startNewGroup(),
           // 映像の description は configure 後の最初の出力と構成変更時にしか現れない
           // ため、forwardState が 1 になった時点で保持値の送り直しを要求し、
           // handleVideoEncodedChunk が次のキーフレームの Object に載せ直す
@@ -1783,7 +1783,7 @@ export class MediaPublisherImpl implements MediaPublisher {
           if (encoder.state === "configured" && encoder.encodeQueueSize <= 2) {
             // キーフレームの判定と直前のキーフレームの更新は、実際に encode する
             // フレームだけで行う。破棄するフレームでも判定と更新を行うと、
-            // requestKeyframe() が消した記録を破棄した分だけ進めてしまい、キーフレームの
+            // startNewGroup() が消した記録を破棄した分だけ進めてしまい、キーフレームの
             // 要求を消費する。要求は次の間隔まで現れなくなる。据え置いた記録で次の
             // フレームが判定を受けるため、繰り越し状態を持たずに要求は次に encode する
             // フレームへ移る

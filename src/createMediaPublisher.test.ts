@@ -29,7 +29,7 @@
  * catalog の送り直しは、forwardState 変化のコールバック登録から新しい Group の先頭 Object の
  * 送信までと、定期送り直しの予約 (実時間のタイマー) と解放による取り消しを検証する。
  * encode キューの閾値超過による破棄と droppedFrames の加算、破棄したフレームの
- * キーフレーム要求が次に encode するフレームへ移ることも検証する。
+ * 新しい Group の開始が次に encode するフレームへ移ることも検証する。
  * session の close 通知は private の通知処理 (handleSessionClose) を世代番号を与えて
  * 直接駆動し、自己起点の解放で届く通知と解放のあとに届く旧 session の通知が捨てられ、
  * 世代番号が一致する通知 (ピア起点の close) だけが解放してから "closed" と onClose を
@@ -122,7 +122,7 @@ function createTestFrame(timestamp = 0): TestFrame {
  * `encodeQueueSize` はキュー滞留の変化を再現できるよう、初期値の引数と更新関数の
  * 両方を持つ (閾値超過で破棄した後にキューが空いて次のフレームが encode される経路を
  * 検証するため)。`keyFrames` は encode の options の `keyFrame` を記録し、破棄した
- * フレームのキーフレーム要求が次に encode するフレームへ移ったかを観測できるようにする。
+ * フレームの新しい Group の開始が次に encode するフレームへ移ったかを観測できるようにする。
  * `setEncoderState` はループの途中で実行時エラー後の状態 (configured 以外) に変え、
  * ループ条件の状態判定と読み取り中の状態判定の両方を検証できるようにする。
  * `failNextEncode` は次の encode を 1 回だけ同期 throw させ、実エンコーダー
@@ -204,7 +204,7 @@ interface PublisherLoopControl {
   currentState: MediaPublisherState;
   processAudioFrames(): Promise<void>;
   processVideoFrames(): Promise<void>;
-  requestKeyframe(): void;
+  startNewGroup(): void;
   // 読んだ映像フレームの timestamp を壁時計に換算する
   videoWallClock: WallClockMapper;
 }
@@ -400,11 +400,11 @@ test("processVideoFrames: 実行時エラーで使えなくなったエンコー
 });
 
 // 破棄するフレームではキーフレームの判定も直前のキーフレームの更新も行わない。行うと、
-// requestKeyframe() が記録を消した直後にキューが閾値を超えていた場合、破棄した分だけ
+// startNewGroup() が記録を消した直後にキューが閾値を超えていた場合、破棄した分だけ
 // 記録が進んで要求が消費され、キーフレームは次の間隔まで現れない。
 // 記録用エンコーダーの encodeQueueSize を変えて閾値超過と回復を作り、
 // encode の options (keyFrame) の記録で要求が次の encode するフレームへ移ることを固定する
-test("processVideoFrames: キュー超過で破棄したフレームはキーフレームの要求を消費しない", async () => {
+test("processVideoFrames: キュー超過で破棄したフレームは新しい Group の開始を消費しない", async () => {
   const { publisher, control, errors } = createLoopTestContext({
     video: { codec: "vp8", bitrate: 1000, keyframeInterval: 10 },
   });
@@ -416,10 +416,10 @@ test("processVideoFrames: キュー超過で破棄したフレームはキーフ
   controller.enqueue(first);
   await settle();
 
-  // キューが閾値 (2) を超えた状態でキーフレームを要求する
-  // (PublishCallbacks.onNewGroupRequest と同じく requestKeyframe() を呼ぶ)
+  // キューが閾値 (2) を超えた状態で新しい Group を要求する
+  // (PublishCallbacks.onNewGroupRequest と同じく startNewGroup() を呼ぶ)
   setEncodeQueueSize(3);
-  control.requestKeyframe();
+  control.startNewGroup();
 
   // 要求の直後に届いた 3 枚はすべて破棄される
   const dropped = [createTestFrame(), createTestFrame(), createTestFrame()];
@@ -494,7 +494,7 @@ test("processVideoFrames: キーフレームの記録は実際に encode した�
 // encode が同期 throw しても、フレームは必ず 1 回閉じられ、記録は進まない。
 // VideoEncoderWrapper.encode は try/catch を持たず encoder.encode と worker.postMessage の
 // 例外をそのまま伝えるため、この経路は実際に起こり得る。記録の更新を encode より前に置くと
-// encode していないフレームで進み、キーフレームの要求を消費する。
+// encode していないフレームで進み、新しい Group の開始を消費する。
 // close() を分岐の外に置くと throw の経路で閉じ忘れる
 test("processVideoFrames: encode が同期 throw するとフレームを閉じ、記録を進めない", async () => {
   const { publisher, control, errors } = createLoopTestContext({
@@ -502,9 +502,9 @@ test("processVideoFrames: encode が同期 throw するとフレームを閉じ�
   });
   const { encoded, keyFrames, failNextEncode, controller } = injectVideoLoop(control);
 
-  // キーフレームを要求した直後のフレームで encode が同期 throw する。
+  // 新しい Group を要求した直後のフレームで encode が同期 throw する。
   // 記録が進むと要求が消費され、次に encode するフレームがキーフレームにならない
-  control.requestKeyframe();
+  control.startNewGroup();
   const failed = createTestFrame();
   failNextEncode(new Error("VideoEncoder.encode failed"));
   // encode の同期 throw はループ全体の catch を抜けて終了するため、
@@ -545,7 +545,7 @@ test("VIDEO_PUBLISH_OPTIONS: 映像トラックは DYNAMIC_GROUPS を広告す�
 /**
  * draft-ietf-moq-transport-22 §9.20.19: NEW_GROUP_REQUEST を受けた publisher は、現在の Group を
  * 終えて新しい Group をできるだけ早く始める SHOULD。映像は onNewGroupRequest から
- * requestKeyframe() を呼び、次に符号化するフレームをキーフレーム (新しい Group の先頭) にする。
+ * startNewGroup() を呼び、次に符号化するフレームをキーフレーム (新しい Group の先頭) にする。
  * 間隔 10 秒の途中 (3 枚目、timestamp 2 秒) で要求を受けると、4 枚目がキーフレームになり、
  * 以降は要求の後から数えた間隔に戻る
  */
@@ -560,8 +560,8 @@ test("processVideoFrames: 新しい Group の要求を受けると次のフレ�
     controller.enqueue(createTestFrame(index * 1_000_000));
     await settle();
   }
-  // PublishCallbacks.onNewGroupRequest と同じく requestKeyframe() を呼ぶ
-  control.requestKeyframe();
+  // PublishCallbacks.onNewGroupRequest と同じく startNewGroup() を呼ぶ
+  control.startNewGroup();
   for (let index = 3; index < 6; index++) {
     controller.enqueue(createTestFrame(index * 1_000_000));
     await settle();
@@ -5025,7 +5025,7 @@ test("createMediaPublisher: 不正な keyframeInterval は公開 API で reject 
 });
 
 test("shouldSendKeyFrame: 直前のキーフレームが無ければキーフレームになる", () => {
-  // 初回フレームと requestKeyframe() 直後 (直前のキーフレームの記録を null に戻す) が
+  // 初回フレームと startNewGroup() 直後 (直前のキーフレームの記録を null に戻す) が
   // キーフレームになることの検証
   assert.isTrue(shouldSendKeyFrame(null, 0, 60));
   assert.isTrue(shouldSendKeyFrame(null, 1_000_000, 1));

@@ -16,7 +16,7 @@ import {
   rangeFiltersMatch,
 } from "./filter";
 import { fullTrackNameKey, type FullTrackNameKey } from "./fullTrackName";
-import { mergeRangeFilters } from "./session/params";
+import { compareLocations, mergeRangeFilters } from "./session/params";
 import type { FillRequestOptions, PublishDoneInfo, SubgroupStreamEnd } from "./session";
 
 /**
@@ -94,6 +94,21 @@ export interface Subscriber {
    */
   readonly largestLocation: Location | null;
   /**
+   * 購読で受信した Object のうち最大の Location (1 件も受け取っていなければ null)
+   *
+   * draft-ietf-moq-transport-22 §3.1.4 (Largest Object):
+   * "Largest Object updates when the first byte of an Object with a Location larger
+   *  than the previous value is published or received through a subscription."
+   * 購読の Object 経路 (Subgroup / Datagram / fill fetch) から届いた Object で進む。
+   * 購読のフィルタで配送しないと決めた Object でも、受信していれば進める。
+   *
+   * `largestLocation` がピアの LARGEST_OBJECT パラメータ (§9.20.17) の値であるのに対し、
+   * こちらは購読者が自分で観測した値である。NEW_GROUP_REQUEST の値
+   * (§9.20.19 の「購読者が知る最大 Group ID + 1」) は、両者の大きい方から
+   * `resolveNewGroupRequestValue` が解決する。
+   */
+  readonly largestReceivedLocation: Location | null;
+  /**
    * SUBSCRIBE_OK で受信した Track Properties
    * draft-ietf-moq-transport-22 Section 9.7 (SUBSCRIBE_OK):
    * OBJECT_DELIVERY_TIMEOUT, MAX_CACHE_DURATION, DEFAULT_PUBLISHER_PRIORITY,
@@ -137,6 +152,11 @@ export class SubscriberImpl implements Subscriber {
   private readonly requestId: bigint;
   private trackAlias: bigint;
   private subscriberLargestLocation: Location | null = null;
+  // draft-ietf-moq-transport-22 §3.1.4 (Largest Object):
+  // 購読で受信した Object の最大 Location。LARGEST_OBJECT で報告された値
+  // (subscriberLargestLocation) とは別に、自分が受信した Object でも進める。
+  // NEW_GROUP_REQUEST の値 (§9.20.19) を古い snapshot から作らないために持つ
+  private subscriberLargestReceivedLocation: Location | null = null;
   private subscriberTrackProperties: Property[] = [];
   // draft-ietf-moq-transport-22 §10.4 (DEFAULT PUBLISHER_PRIORITY):
   // Subgroup Header / Object Datagram で Priority が省略された場合に継承する
@@ -203,6 +223,10 @@ export class SubscriberImpl implements Subscriber {
 
   get largestLocation(): Location | null {
     return this.subscriberLargestLocation;
+  }
+
+  get largestReceivedLocation(): Location | null {
+    return this.subscriberLargestReceivedLocation;
   }
 
   get trackProperties(): ReadonlyArray<Property> {
@@ -426,10 +450,32 @@ export class SubscriberImpl implements Subscriber {
     if (this.subscriberState === "closed") {
       return;
     }
+    // フィルタの再適用より先に記録する。配送しないと決めた Object でも受信した事実は
+    // 変わらず、購読者が知る最大 Location は進む (§3.1.4)
+    this.observeReceivedLocation(object);
     if (!this.passesObjectFilters(object)) {
       return;
     }
     this.objectCallback(object);
+  }
+
+  /**
+   * 受信した Object の Location で、購読で受信した最大 Location を進める
+   *
+   * draft-ietf-moq-transport-22 §3.1.4 (Largest Object):
+   * "Largest Object updates when the first byte of an Object with a Location larger
+   *  than the previous value is published or received through a subscription."
+   * 進めるだけで戻さない (Group ID / Object ID が小さい Object や、Location Filter の
+   * 再適用で配送しない Object では変わらない)。順序は §8.2 の Location 比較に従う。
+   *
+   * @param object - 受信した Object
+   */
+  private observeReceivedLocation(object: MoqtObject): void {
+    const location: Location = { group: object.groupId, object: object.objectId };
+    const current = this.subscriberLargestReceivedLocation;
+    if (current === null || compareLocations(location, current) > 0) {
+      this.subscriberLargestReceivedLocation = location;
+    }
   }
 
   /**
@@ -482,6 +528,8 @@ export class SubscriberImpl implements Subscriber {
     if (this.subscriberState === "closed") {
       return;
     }
+    // Datagram 経路も Subgroup 経路と同じく購読で受信した Object である (§3.1.4)
+    this.observeReceivedLocation(object);
     if (!this.passesObjectFilters(object)) {
       return;
     }
@@ -514,6 +562,9 @@ export class SubscriberImpl implements Subscriber {
     if (this.subscriberState === "closed") {
       return;
     }
+    // fill fetch の stream は購読に属するため、ここで届いた Object も受信した
+    // Location として記録する (§3.1.4)
+    this.observeReceivedLocation(object);
     this.objectCallback({ ...object, fillDelivered: true });
   }
 
