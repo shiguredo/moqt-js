@@ -2,6 +2,7 @@ import { test, assert } from "vite-plus/test";
 import {
   DEFAULT_AUDIO_TRACK_NAME,
   DEFAULT_VIDEO_TRACK_NAME,
+  withCapturedAudioFormat,
   resolveAudioPublishSettings,
   resolveVideoPublishSettings,
 } from "./settings";
@@ -50,6 +51,25 @@ test("resolveAudioPublishSettings: 明示値と aac の codec 文字列", () => 
   assert.equal(settings.codecString, "mp4a.40.2");
   assert.equal(settings.sampleRate, 16000);
   assert.equal(settings.channels, 1);
+});
+
+// 取り出し経路が返した形式は、要求値と違っても Catalog とエンコーダーの設定になる。
+// Chromium の AudioEncoder は AudioData の形式が設定と違うとエラーにするため、
+// ここで写し替えないと符号化が止まる (マイクがモノラルの例)
+test("withCapturedAudioFormat: 取り出した形式を設定へ写す", () => {
+  const requested = resolveAudioPublishSettings({ codec: "opus", bitrate: 64000 });
+  const captured = withCapturedAudioFormat(requested, { sampleRate: 44100, channels: 1 });
+  assert.equal(captured.sampleRate, 44100);
+  assert.equal(captured.channels, 1);
+  // 形式以外は要求どおりのまま (Catalog の codec / bitrate / delivery が変わらない)
+  assert.equal(captured.trackName, DEFAULT_AUDIO_TRACK_NAME);
+  assert.equal(captured.codec, "opus");
+  assert.equal(captured.codecString, "opus");
+  assert.equal(captured.bitrate, 64000);
+  assert.equal(captured.delivery, "subgroup");
+  // 呼び出し元の設定は書き換えない (写した結果は新しい値として返す)
+  assert.equal(requested.sampleRate, DEFAULT_AUDIO_SAMPLE_RATE);
+  assert.equal(requested.channels, DEFAULT_AUDIO_CHANNELS);
 });
 
 // トラックが無い場合は 640x480 / 既定 framerate にフォールバックする。

@@ -26,8 +26,10 @@ import {
 import { AudioEncoderWrapper } from "./codec/AudioEncoder";
 import type { AudioEncodedChunkData } from "./codec/types";
 import { VideoEncoderWrapper } from "./codec/VideoEncoder";
-import { DEFAULT_KEYFRAME_INTERVAL_SECONDS } from "./codec/config";
+import { DEFAULT_KEYFRAME_INTERVAL_SECONDS, getAudioEncoderConfig } from "./codec/config";
+import { isAudioEncoderConfigSupported } from "./codec/configSupport";
 import {
+  withCapturedAudioFormat,
   resolveAudioPublishSettings,
   resolveVideoPublishSettings,
   type ResolvedAudioPublishSettings,
@@ -46,11 +48,7 @@ import type {
   VideoStats,
 } from "./codec/types";
 import { createVideoFrameSource, type VideoFrameSource } from "./frameSource";
-import {
-  createAudioFrameSource,
-  isAudioFrameSourceAvailable,
-  type AudioFrameSource,
-} from "./audioSource";
+import { createAudioFrameSource, type AudioFrameSource } from "./audioSource";
 
 // デフォルト設定
 
@@ -642,9 +640,9 @@ export class MediaPublisherImpl implements MediaPublisher {
   /**
    * 配信を開始する
    *
-   * 接続・Publisher の作成・エンコーダーの設定・処理ループの起動を行い "publishing" に
-   * する。各段階の await の直後に解放が先行していないかを検査し、先行していれば
-   * それ以上リソースを作らずに失敗する。
+   * 接続・Publisher の作成・音声の取り出し経路の準備 (形式の確定と対応確認)・catalog の
+   * 送信・エンコーダーの設定・処理ループの起動を行い "publishing" にする。各段階の await の
+   * 直後に解放が先行していないかを検査し、先行していればそれ以上リソースを作らずに失敗する。
    * 開始の契約 (受け付ける state・失敗時の扱い・解放が先行した場合の優先) は
    * src/codec/types.ts の MediaPublisher を参照。
    */
@@ -688,11 +686,24 @@ export class MediaPublisherImpl implements MediaPublisher {
       // 音声の送り方がこのセッションで送れるかを、PUBLISH の完了に依存させずに確かめる
       this.assertAudioDeliverySupported();
 
-      // Publisher を作成
+      // Publisher を作成 (音声・映像の PUBLISH の往復)
       await this.createPublishers();
       // 解放が先行していれば、これ以上リソースを作らずに失敗する。解放は mediaStream を
-      // 切り離すため setupEncoders は素通りするが、解放が進行中 (切り離しの前) でも
-      // ここで止める。進めると、作ったエンコーダーとフレームリーダーが巻き戻しまで残る
+      // 切り離すため音声の取り出し経路も setupEncoders も素通りするが、解放が進行中
+      // (切り離しの前) でもここで止める。進めると、作ったフレームリーダーとエンコーダーが
+      // 巻き戻しまで残る
+      this.assertStartNotDisposed(startGeneration);
+
+      // 音声の取り出し経路を作り、Catalog とエンコーダーが使う形式を確定する。
+      // PUBLISH の往復より後に作る。経路は読まれるまで `AudioData` を溜め続けるため
+      // (Web Audio 経路)、先に作ると往復の分が遅れとして捨てられる (audioPublishCatchUp)
+      await this.prepareAudioFrameSource();
+      this.assertStartNotDisposed(startGeneration);
+
+      // Catalog を publish (取り出した形式を載せる)。draft-ietf-moq-msf-01 §11.2 は
+      // media track の Object より前に catalog の Object を publish する MUST を定めるため、
+      // 処理ループの起動より前に行う
+      await this.publishCatalog();
       this.assertStartNotDisposed(startGeneration);
 
       // エンコーダーを設定
@@ -748,6 +759,64 @@ export class MediaPublisherImpl implements MediaPublisher {
     if (this.session?.reliability === "reliable-only") {
       throw new Error(
         'audio delivery "datagram" requires datagrams, but the session reliability is "reliable-only"',
+      );
+    }
+  }
+
+  /**
+   * 音声の取り出し経路を作り、Catalog とエンコーダーが使う形式を確定し、符号化の対応を確かめる
+   *
+   * 取り出し経路が実際に流す形式はブラウザが決める (src/audioSource.ts)。要求値のまま
+   * Catalog とエンコーダーを構成すると、Chromium の `AudioEncoder` は `AudioData` の形式が
+   * 設定と違うときにリサンプルもチャンネル変換もせずエラーにし、符号化が止まる
+   * (理由と仕様の根拠は createMedia/settings.ts の withCapturedAudioFormat を参照)。
+   * ここで 1 度だけ作って返った値を resolvedAudio へ写し、catalog を publish する前に
+   * 確定させる (createCatalogTracks と setupEncoders が同じ値を使う)。
+   *
+   * 読み出しの reader もここで取る。取り出し経路を作ってから reader を取るまでに await を
+   * 挟むと、その間に解放が先行したとき (取り消す reader がまだ無い) に経路が残る。解放は
+   * reader の cancel と audioFrameSource の close の両方を行う (disposeAllResources)。
+   *
+   * 取り出した形式がコーデックで符号化できない場合は、configure も catalog の送信も
+   * せずに start() を失敗させる。`AudioEncoder.configure` は未対応の設定でも同期の例外を
+   * 投げず非同期のエラーになるため、送ってからでは音声 object が届かないトラックを
+   * 宣言した catalog が購読側へ残る。
+   */
+  private async prepareAudioFrameSource(): Promise<void> {
+    if (!this.options.audio || !this.mediaStream) {
+      return;
+    }
+    const audioTrack = this.mediaStream.getAudioTracks()[0];
+    if (!audioTrack) {
+      return;
+    }
+    const audio = this.resolvedAudio;
+    if (!audio) {
+      throw new Error("audio settings not resolved");
+    }
+    // 取り出し経路が無いブラウザでは音声を黙って諦めない。音声トラックを宣言した catalog を
+    // 送った後に object が出せない状態になるため、createAudioFrameSource のエラー
+    // (経路が無い旨のメッセージ) として start() を失敗させる (catalog はまだ送っていない)
+    const frameSource = await createAudioFrameSource(audioTrack, {
+      sampleRate: audio.sampleRate,
+      channels: audio.channels,
+    });
+    this.audioFrameSource = frameSource;
+    this.audioFrameReader = frameSource.readable.getReader();
+    const captured = withCapturedAudioFormat(audio, {
+      sampleRate: frameSource.sampleRate,
+      channels: frameSource.channels,
+    });
+    this.resolvedAudio = captured;
+    const config = getAudioEncoderConfig(
+      captured.codec,
+      captured.bitrate,
+      captured.sampleRate,
+      captured.channels,
+    );
+    if (!(await isAudioEncoderConfigSupported(config))) {
+      throw new Error(
+        `audio encoder does not support the captured format: codec=${captured.codec}, codecString=${config.codec}, sampleRate=${captured.sampleRate}, channels=${captured.channels}`,
       );
     }
   }
@@ -955,8 +1024,8 @@ export class MediaPublisherImpl implements MediaPublisher {
    * 送信の失敗の通知の担い手は publisher 層に固定する。事前検証の違反は publisher 層が
    * error コールバックで通知してから返値を reject するため、通知済みの error
    * (isErrorNotifiedByPublisher) では通知しない。ここで通知し直すと 1 件の失敗で
-   * onError が 2 回呼ばれる。catalog 送信の await の reject は createPublishers() を
-   * 通って start() の catch に届く (catalog だけ await するため)。
+   * onError が 2 回呼ばれる。catalog 送信 (publishCatalog) の await の reject は
+   * start() の catch に届く (catalog だけ await するため)。
    * 通知を伴わない失敗 (接続失敗、closed の同期 throw など) は 1 回だけ通知する。
    * throw される値は Error に限らないため unknown で受け、Error 以外は文字列化して通知する。
    */
@@ -1137,6 +1206,12 @@ export class MediaPublisherImpl implements MediaPublisher {
     this.transitionToClosed();
   }
 
+  /**
+   * Catalog・音声・映像の Publisher を作成する (PUBLISH の往復)
+   *
+   * catalog の Object の送信は publishCatalog が担う。start() はこの後に音声の取り出し
+   * 経路を作り、載せる形式を確定してから publishCatalog を呼ぶ
+   */
   private async createPublishers(): Promise<void> {
     if (!this.session) {
       throw new Error("session not connected");
@@ -1229,13 +1304,15 @@ export class MediaPublisherImpl implements MediaPublisher {
         { ...VIDEO_PUBLISH_OPTIONS, ...authorizationTokenOptions },
       );
     }
-
-    // Catalog を publish
-    await this.publishCatalog();
   }
 
   /**
    * Catalog を作成して publish する
+   *
+   * start() が音声の取り出し経路を作り、載せる形式を確定してから呼ぶ。経路より先に送ると、
+   * 宣言した形式と実際に流れる形式が食い違い、購読側が異なる設定で復号することになる。
+   * 初期送信のときに publisher が active でなければ、catalog を送らないまま media の Object を
+   * 流さずに start() を失敗させる (送れないまま進むと §11.2 の MUST に反する)。
    *
    * draft-ietf-moq-msf-01 §5: All catalog updates, both independent and delta,
    * MUST be mapped to MOQT sub-group 0. The first Object (with Object ID 0) in
@@ -1245,8 +1322,14 @@ export class MediaPublisherImpl implements MediaPublisher {
    * object before publishing any media track objects.
    */
   private async publishCatalog(): Promise<void> {
+    // 初期送信の時点で publisher が active でなければ、この start では catalog を 1 度も
+    // 送れない (送り直しは catalogInitialSent が立つまで行われない)。catalog の Object より
+    // 先に media の Object を送ることは §11.2 の MUST に反するため、送らないまま処理ループを
+    // 起動せずに start() を失敗させる (巻き戻しは start() の catch が行う)
     if (!this.catalogPublisher || this.catalogPublisher.state !== "active") {
-      return;
+      throw new Error(
+        `cannot publish the catalog: the catalog publisher state is ${this.catalogPublisher?.state ?? "missing"}`,
+      );
     }
 
     const catalog = this.buildCatalog();
@@ -1293,9 +1376,10 @@ export class MediaPublisherImpl implements MediaPublisher {
    * Catalog を Group の先頭 Object として送り、その Subgroup を閉じる
    *
    * 送信は Group の先頭 Object (Object ID 0) に固定する (draft-ietf-moq-msf-01 §5)。
-   * 呼び出し元 (publishCatalog / republishCatalog) も catalog Publisher の状態を見るが、
-   * 送信点であるこの関数でも見る (この 1 箇所を通る全経路で「active でなければ送らない」を
-   * 保証するため)。
+   * 呼び出し元 (publishCatalog / republishCatalog) は同期で状態を見てからここへ入るため、
+   * この検査は現状到達しない。将来 await を挟む呼び出し元が増えても「active でなければ
+   * 送らない」を送信点で保証するための保険であり、届いた場合は送らずに失敗させる
+   * (黙って戻すと、catalog の Object を送らないまま media の Object が流れる)。
    *
    * catalog は delta を送らないため、1 Group に載せる Object は常に 1 つになる
    * (draft-ietf-moq-msf-01 §5 は同じ Group の Object ID 1 以降を delta update とする MUST を
@@ -1308,7 +1392,9 @@ export class MediaPublisherImpl implements MediaPublisher {
    */
   private async sendCatalogObject(catalog: Catalog, groupId: number): Promise<void> {
     if (!this.catalogPublisher || this.catalogPublisher.state !== "active") {
-      return;
+      throw new Error(
+        `cannot send the catalog: the catalog publisher state is ${this.catalogPublisher?.state ?? "missing"}`,
+      );
     }
 
     await this.catalogPublisher.sendObject({
@@ -1350,8 +1436,9 @@ export class MediaPublisherImpl implements MediaPublisher {
       return;
     }
     // この start の初期 catalog を送る前は送り直さない (理由は catalogInitialSent の宣言を参照)。
-    // 初期送信は createPublishers がこの直後に必ず行い、publisher が FORWARD=0 で見送った場合は
-    // 初期送信の完了として扱うため、次の FORWARD 0→1 で改めて送り直す
+    // 初期送信は start() が publishCatalog で行い (active でなければ start が失敗する)、
+    // publisher が FORWARD=0 で見送った場合は初期送信の完了として扱うため、次の FORWARD 0→1 で
+    // 改めて送り直す
     if (!this.catalogInitialSent) {
       return;
     }
@@ -1487,46 +1574,32 @@ export class MediaPublisherImpl implements MediaPublisher {
     const useWorker = this.options.useWorker ?? true;
 
     // 音声エンコーダー
-    if (this.options.audio && this.mediaStream) {
-      const audioTrack = this.mediaStream.getAudioTracks()[0];
-      if (audioTrack) {
-        this.audioEncoder = new AudioEncoderWrapper(useWorker, {
-          output: (chunk) => this.handleAudioEncodedChunk(chunk),
-          error: (error) => this.callbacks.onError?.(error),
-        });
+    // エンコーダーを作る条件は reader の有無にする。取り出し経路を作ったトラックを
+    // もう一度読み直すと、start の途中で呼び出し側が stream から外した場合に
+    // 「経路はあるのにエンコーダーが無い」状態になり得る (prepareAudioFrameSource が
+    // 経路を作れなかった場合だけ reader が無い)
+    if (this.options.audio && this.audioFrameReader !== null) {
+      this.audioEncoder = new AudioEncoderWrapper(useWorker, {
+        output: (chunk) => this.handleAudioEncodedChunk(chunk),
+        error: (error) => this.callbacks.onError?.(error),
+      });
 
-        // Catalog と同じ解決済み設定を使う (start() で 1 度だけ解決している)
-        const audio = this.resolvedAudio;
-        if (!audio) {
-          throw new Error("audio settings not resolved");
-        }
-        await this.audioEncoder.configure(
-          audio.codec,
-          audio.bitrate,
-          audio.sampleRate,
-          audio.channels,
-        );
-
-        // 音声の取り出し経路はブラウザで分かれる。MediaStreamTrackProcessor が無い
-        // ブラウザ (Safari / Firefox) は Web Audio 経由で AudioData を組み立てる
-        // (src/audioSource.ts)。どちらの経路も無いブラウザでは音声を諦めるのではなく
-        // 設定の誤りとして失敗させる (Catalog に音声トラックを載せた後に object が
-        // 出せない状態を作らない)
-        if (!isAudioFrameSourceAvailable()) {
-          throw new Error(
-            "audio capture requires MediaStreamTrackProcessor or Web Audio AudioWorklet, but neither is available in this browser",
-          );
-        }
-        // 前の配信の観測を持ち越さない
-        this.audioTimestampClock = new AudioTimestampClock();
-        this.audioCatchUp.reset();
-        const audioFrameSource = await createAudioFrameSource(audioTrack, {
-          sampleRate: audio.sampleRate,
-          channels: audio.channels,
-        });
-        this.audioFrameSource = audioFrameSource;
-        this.audioFrameReader = audioFrameSource.readable.getReader();
+      // Catalog と同じ解決済み設定を使う。形式は取り出し経路が返した値であり、
+      // start() の prepareAudioFrameSource で確定している
+      const audio = this.resolvedAudio;
+      if (!audio) {
+        throw new Error("audio settings not resolved");
       }
+      await this.audioEncoder.configure(
+        audio.codec,
+        audio.bitrate,
+        audio.sampleRate,
+        audio.channels,
+      );
+
+      // 前の配信の観測を持ち越さない
+      this.audioTimestampClock = new AudioTimestampClock();
+      this.audioCatchUp.reset();
     }
 
     // 映像エンコーダー

@@ -42,6 +42,7 @@ import { startPublisherAudioMeter, stopPublisherAudioMeter } from "./publisherAu
 import { AudioEncoderWrapper } from "../../../src/codec/AudioEncoder.ts";
 import type { AudioEncodedChunkData } from "../../../src/codec/types.ts";
 import { getAudioEncoderConfig } from "../../../src/codec/config.ts";
+import { isAudioEncoderConfigSupported } from "../../../src/codec/configSupport.ts";
 import {
   allocateAudioObject,
   allocateInitialGroupId,
@@ -974,11 +975,12 @@ export function usePublisher() {
     };
     pub.audioFrameSource.value = frameSource;
     pub.audioFormat.value = captured;
+    // 取り出した形式で符号化できるかを、catalog を送る前に確かめる。`AudioEncoder.configure`
+    // は未対応の設定でも同期の例外を投げず、非同期のエラーコールバックで知らせるため、
+    // 確かめないと購読側は音声 object が届かないまま待つことになる。判定規則は
+    // src/codec/configSupport.ts を正本とする
     const supported = await isAudioEncoderConfigSupported(
-      codec,
-      bitrate,
-      captured.sampleRate,
-      captured.channels,
+      getAudioEncoderConfig(codec, bitrate, captured.sampleRate, captured.channels),
     );
     if (!supported) {
       addLog("warn", "[publisher] audio codec is not supported in this browser", {
@@ -990,25 +992,6 @@ export function usePublisher() {
       return null;
     }
     return captured;
-  }
-
-  /**
-   * 音声の Encoder 設定がこのブラウザで対応しているかを確認する
-   *
-   * `AudioEncoder.configure` は未対応の設定でも例外を投げず、非同期のエラー
-   * コールバックで知らせる。Catalog を送る前に確認しないと、購読側は音声 object が
-   * 届かないまま待つことになる。
-   */
-  async function isAudioEncoderConfigSupported(
-    codec: AudioCodecType,
-    bitrate: number,
-    sampleRate: number,
-    channels: number,
-  ): Promise<boolean> {
-    const config = getAudioEncoderConfig(codec, bitrate, sampleRate, channels);
-    const support = await AudioEncoder.isConfigSupported(config);
-    // supported は optional のため、true のときだけ対応とみなす
-    return support.supported === true;
   }
 
   /**

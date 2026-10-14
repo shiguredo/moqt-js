@@ -156,7 +156,11 @@ export interface AudioPublishOptions {
   trackName?: string;
   codec: AudioCodecType;
   bitrate: number;
+  // 音声の取り出し経路へ要求するサンプルレート。省略時は 48000。
+  // Catalog の samplerate と AudioEncoder の sampleRate には、経路が実際に流す値を使う
+  // (マイクの形式はデバイスが決めるため、要求と違う値になることがある)
   sampleRate?: number;
+  // 音声の取り出し経路へ要求するチャンネル数。省略時は 2。使い道は sampleRate と同じ
   channels?: number;
   // 音声 Object の送り方 (既定は "subgroup")
   delivery?: AudioDelivery;
