@@ -217,6 +217,13 @@ interface DevtoolsSubscriberStats {
       sharingBases: boolean;
       unsharedReason: string;
       baseDifferenceMs: number | null;
+      baseDifferenceRecentMs: number | null;
+      baseDifferenceSettledMs: number | null;
+      baseDifferenceDeviationMs: number | null;
+      baseDriftMsPerSecond: number | null;
+      baseDriftLimitMs: number;
+      baseUnsharedReturnMs: number | null;
+      presentationDelayCapMs: number;
       audioDelayFeedback: {
         targetMs: number;
         jitterTargetMs: number;
@@ -297,6 +304,29 @@ function summarizeSubscriber(stats: DevtoolsSubscriberStats): string {
     `sharingBases=${avSync.delays.sharingBases}`,
     `unsharedReason=${avSync.delays.unsharedReason}`,
     `warnings=${stats.warnings.length}`,
+  ].join(", ");
+}
+
+/**
+ * 基準の共有の判定に使う値を 1 行にする (失敗メッセージとログに残す)
+ *
+ * 解除されて戻らないとき、差そのものが閾値を超えているのか (環境)、解除の判断が
+ * 進んでいないのか (実装) を切り分けるために出す。差は音声 - 映像である
+ */
+function summarizeBaseSharing(stats: DevtoolsSubscriberStats): string {
+  const { delays } = stats.avSync;
+  const ms = (value: number | null): string => (value === null ? "-" : value.toFixed(0));
+  return [
+    `sharingBases=${delays.sharingBases}`,
+    `unsharedReason=${delays.unsharedReason}`,
+    `baseDifferenceMs=${ms(delays.baseDifferenceMs)}`,
+    `baseDifferenceRecentMs=${ms(delays.baseDifferenceRecentMs)}`,
+    `baseDifferenceSettledMs=${ms(delays.baseDifferenceSettledMs)}`,
+    `baseDifferenceDeviationMs=${ms(delays.baseDifferenceDeviationMs)}`,
+    `baseDriftMsPerSecond=${delays.baseDriftMsPerSecond === null ? "-" : delays.baseDriftMsPerSecond.toFixed(1)}`,
+    `baseDriftLimitMs=${delays.baseDriftLimitMs.toFixed(0)}`,
+    `baseUnsharedReturnMs=${ms(delays.baseUnsharedReturnMs)}`,
+    `presentationDelayCapMs=${delays.presentationDelayCapMs.toFixed(0)}`,
   ].join(", ");
 }
 
@@ -447,6 +477,28 @@ async function startBoth(page: Page, moqtUri: string, namespace: string): Promis
   if (!(await playbackToggle.isChecked())) {
     await playbackToggle.click();
   }
+}
+
+/** A/V の基準の共有が戻るのを待つ上限 (ミリ秒)。解除の条件が続けば 2 秒で解除される */
+const BASE_SHARING_TIMEOUT_MS = 15_000;
+
+/**
+ * A/V の基準の共有が戻るのを待つ
+ *
+ * 実装は、いったん共有をやめると `PLAYOUT_BASE_UNSHARED_HOLD_MS` (30 秒) は戻さないが、
+ * 解除の原因が去って差が水準へ戻れば `PLAYOUT_BASE_UNSHARED_RELEASE_MS` で解除する。
+ * 遅い経路では購読の直後の cache の再生で解除されるため、3 秒の観測では戻っていない。
+ * 解除が済むまで待ってから確かめる
+ */
+async function waitForBaseSharing(page: Page, label: string): Promise<DevtoolsSubscriberStats> {
+  const startedAtMs = Date.now();
+  let latest = await readSubscriber(page);
+  while (!latest.avSync.delays.sharingBases && Date.now() - startedAtMs < BASE_SHARING_TIMEOUT_MS) {
+    await page.waitForTimeout(SAMPLE_INTERVAL_MS);
+    latest = await readSubscriber(page);
+  }
+  console.log(`${label}の共有を待った結果: ${summarizeBaseSharing(latest)}`);
+  return latest;
 }
 
 /** 音声が届いて鳴るまで待つ */
@@ -651,18 +703,19 @@ test("配信の途中から購読しても、cache から配られた分を飛�
         subscriber.audio.playoutCatchUp.catchingUp,
         `後から購読した側の追いつきが続いている (${summarizeSubscriber(subscriber)})`,
       ).toBe(false);
-      // A/V の基準が共有されている
+      // A/V の基準が共有されている。解除の原因が去れば解除されるため、待ってから確かめる
+      const shared = await waitForBaseSharing(subscriberPage, "後から購読した側");
       expect(
-        subscriber.avSync.delays.sharingBases,
-        `後から購読した側で A/V の基準が共有されていない (${summarizeSubscriber(subscriber)})`,
+        shared.avSync.delays.sharingBases,
+        `後から購読した側で A/V の基準が共有されていない (${summarizeSubscriber(shared)} / ${summarizeBaseSharing(shared)})`,
       ).toBe(true);
       // 前提から外れた状態が無い
       expect(
-        subscriber.warnings.length,
-        `後から購読した側で警告が出ている (${summarizeSubscriber(subscriber)})`,
+        shared.warnings.length,
+        `後から購読した側で警告が出ている (${summarizeSubscriber(shared)})`,
       ).toBe(0);
       // 後から購読しても、cache から配られた分は鳴らさず live へ戻っている
-      expectLive(subscriber, "後から購読");
+      expectLive(shared, "後から購読");
     } finally {
       await subscriberPage.context().close();
     }
@@ -736,18 +789,19 @@ test("購読をやり直しても、cache から配られた分を飛ばして l
     after.audio.playoutCatchUp.skippedMs - before.audio.playoutCatchUp.skippedMs,
     `やり直しの後の追いつきが飛ばした音が多すぎる (${summarizeSubscriber(after)})`,
   ).toBeLessThan(10_000);
-  // A/V の基準が共有されている
+  // A/V の基準が共有されている。解除の原因が去れば解除されるため、待ってから確かめる
+  const restored = await waitForBaseSharing(page, "購読のやり直し後");
   expect(
-    after.avSync.delays.sharingBases,
-    `やり直しの後に A/V の基準が共有されないまま (${summarizeSubscriber(after)})`,
+    restored.avSync.delays.sharingBases,
+    `やり直しの後に A/V の基準が共有されないまま (${summarizeSubscriber(restored)} / ${summarizeBaseSharing(restored)})`,
   ).toBe(true);
   // 前提から外れた状態が無い
   expect(
-    after.warnings.length,
-    `やり直しの後に警告が出ている (${summarizeSubscriber(after)})`,
+    restored.warnings.length,
+    `やり直しの後に警告が出ている (${summarizeSubscriber(restored)})`,
   ).toBe(0);
   // やり直した後も live の音を鳴らしている
-  expectLive(after, "購読のやり直し後");
+  expectLive(restored, "購読のやり直し後");
 
   // やり直しの後、映像の追いつき (cache から配られた分を飛ばす) と A/V の基準の共有が
   // 戻るかを時間方向に見る。手元の実測 (2026-10-14) では、ここで基準が共有されないまま

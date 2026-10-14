@@ -292,12 +292,12 @@ export const PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS = 100;
 export const PLAYOUT_BASE_UNSHARED_HOLD_MS = 30_000;
 
 /**
- * 解除のきっかけが去って差が戻った状態が、この時間続いたら保持を解除する (ミリ秒)
+ * 解除の原因が去って差が戻った状態が、この時間続いたら保持を解除する (ミリ秒)
  *
  * 保持は「差が同じ水準のままで、表示の遅れの上限から決まる閾値だけが動く」場合に必要で
- * ある (`PLAYOUT_BASE_UNSHARED_HOLD_MS`)。逆に、解除のきっかけになった動きが去って差が
- * 戻ったなら、同じ水準へ留まる理由は無く、往復の恐れも無い。戻ったかどうかは、動きの判定
- * が解けていること・差が閾値の内側にあること・差が水準へ戻っていることで見る
+ * ある (`PLAYOUT_BASE_UNSHARED_HOLD_MS`)。逆に、解除の原因が去って差が戻ったなら、同じ
+ * 水準へ留まる理由は無い。戻ったかどうかは、動きの判定が解けていること・直近に往復して
+ * いないこと・差が閾値の内側にあること・差が水準へ戻っていることで見る
  * (`canReleaseUnsharedHold`)。
  *
  * 実測 (CI の 4 vCPU の runner、run 38023970857) では、購読の直後に relay の cache から
@@ -523,10 +523,10 @@ export class PlaybackTimeline {
   // 基準を共有しないと決めた直近の時刻と、そのときの側 (ミリ秒、トラック)。往復を防ぐ
   private lastUnsharedAtMs: number | null = null;
   private lastUnsharedStream: PlaybackStream | null = null;
-  // 解除のきっかけに基準の差の動きがあったか (閾値だけが動いた解除では解除を早めない)
-  private unsharedTriggerMovedValue = false;
-  // 差が戻った状態 (きっかけが去り、閾値の内側で動かない) になってからの時刻 (ミリ秒)。
-  // 戻っていなければ null
+  // その前の解除の時刻 (ミリ秒)。直近に共有と解除を往復しているかを見るために持つ。
+  // 保持が満了して戻した場合も含める (往復の検出に使う)
+  private previousUnsharedAtMs: number | null = null;
+  // 差が戻った状態 (閾値の内側で動かない) になってからの時刻 (ミリ秒)。戻っていなければ null
   private unsharedReturnedSinceMs: number | null = null;
   // 直前に同期の制御に使った「自分の遅延の下限」(ミリ秒)。下げる速さの残りを求めるために持つ
   private lastOwnFloorMs: Record<PlaybackStream, number> | null = null;
@@ -1194,8 +1194,8 @@ export class PlaybackTimeline {
     this.baseDifferenceQuietSinceMs = null;
     this.baseDifferenceFirstAtMs = null;
     this.baseDifferenceDriftedValue = false;
-    // 解除を早める判断のうち、差の記録を数える分はやり直す。きっかけの種類と保持そのものは
-    // 残す (基準を取り直しても、解除の理由になった動きが去ったかどうかの判断は続ける)
+    // 解除を早める判断のうち、差の記録を数える分はやり直す。保持そのものは残す
+    // (基準を取り直しても、解除の原因が去ったかどうかの判断は続ける)
     this.unsharedReturnedSinceMs = null;
     // 学習を消すとキューの上限 (フレーム間隔) も変わるため、切り下げた分を取り直す
     this.updateLimitedMs();
@@ -1524,26 +1524,25 @@ export class PlaybackTimeline {
   }
 
   /**
-   * 共有をやめた側を保持する (解除を早めてよいかの判断に使う、きっかけの種類も記録する)
+   * 共有をやめた側を保持する (解除を早めてよいかの判断に使う、解除の時刻も記録する)
    *
    * 保持の間は閾値が動いても共有を戻さない (`PLAYOUT_BASE_UNSHARED_HOLD_MS`)。ただし解除の
-   * きっかけになった動きが去って差が戻ったなら、解除を早めてよい (`updateUnsharedRelease`)。
-   * 「きっかけ」が動きだったかは、解除した (更新した) 記録の時点で差が動いていたかで見る。
-   * 差が動いていない間に閾値 (`baseDifferenceLimitMs`) だけが動いて解除した場合、差は同じ
-   * 水準に留まっており、閾値が戻ればまた解除される (往復する) ためである
+   * 原因が去って差が戻ったなら、解除を早めてよい (`updateUnsharedRelease`)。閾値
+   * (`baseDifferenceLimitMs`) だけが動いて解除した場合、差は同じ水準に留まっており、閾値が
+   * 戻ればまた解除される (往復する) ため、直近の解除の時刻を控えて往復を見る
+   * (`isUnsharedRepeatedly`)
    *
    * @param stream - 共有をやめる側
    */
   private holdUnsharedStream(stream: PlaybackStream): void {
     if (this.heldUnsharedStream() === null) {
-      // 新しく解除する。前の解除の判断は持ち越さない
-      this.unsharedTriggerMovedValue = false;
+      // 新しく解除する。前の解除の時刻を控える (直近に往復していないかを見る)。
+      // 前の解除の判断 (戻った状態を数えた分) は持ち越さない
+      this.previousUnsharedAtMs = this.lastUnsharedAtMs;
       this.unsharedReturnedSinceMs = null;
     }
     this.lastUnsharedAtMs = this.lastBaseDifferenceAtMs;
     this.lastUnsharedStream = stream;
-    // 差が動いていれば、きっかけは閾値ではなく動きである (動きが去った後の解除を許す)
-    this.unsharedTriggerMovedValue ||= this.baseDifferenceQuietSinceMs === null;
   }
 
   /**
@@ -1564,35 +1563,40 @@ export class PlaybackTimeline {
     if (nowMs - this.unsharedReturnedSinceMs < PLAYOUT_BASE_UNSHARED_RELEASE_MS) {
       return;
     }
-    // きっかけが去って差が戻った状態が続いた。同じ水準へ留まる理由が無いため解除する
+    // 原因が去って差が戻った状態が続いた。同じ水準へ留まる理由が無いため解除する。
+    // 解除の時刻は残す (直近に往復していないかを次の解除で見る)
     this.lastUnsharedStream = null;
-    this.lastUnsharedAtMs = null;
-    this.unsharedTriggerMovedValue = false;
     this.unsharedReturnedSinceMs = null;
   }
 
   /**
-   * 保持を早く解除してよい状態か (解除のきっかけが去り、差が戻っているか)
+   * 保持を早く解除してよい状態か (解除の原因が去り、差が戻っているか)
    *
    * 次のすべてを見たすこと。どれかが崩れれば、差はまだ解除の水準の側にあり、共有と解除を
    * 往復し得る (保持の対象である)
    *
    * - 保持していること
-   * - 解除のきっかけに動きがあったこと (`unsharedTriggerMovedValue`)。差が同じ水準のまま
-   *   閾値だけが動いた解除 (保持の本来の目的) では解除しない
    * - 動きの判定 (`baseDifferenceDrifted`) が解けていること。離れた幅が続いている間
    *   (真のドリフト) は、その幅が元の水準へ戻ったことにならない
+   * - 直近に往復していないこと (`isUnsharedRepeatedly`)。閾値 (表示の遅れの上限 - 再生の
+   *   遅れ) が動き続けている間は、差が閾値の内側にあっても解除と解除を繰り返す
    * - 差が閾値 (`baseDifferenceLimitMs`) を超えていないこと (超えていれば合わせられない)
    * - 差が水準へ戻っていること (`baseDifferenceDeviationSinceMs` が消えていること)。記録の
    *   間隔ごとの変化 (`baseDifferenceQuietSinceMs`) ではなく水準への復帰を見るのは、負荷の
    *   ある runner では差が数十 ms の幅で細かく動き続け、変化が 0 になる瞬間が来ないためで
    *   ある (実測: CI の 4 vCPU の runner、run 38035814270 で解除が 25 秒間解けなかった)
+   *
+   * 解除のきっかけが動きだったかは見ない。購読の直後の cache の再生では差が静かに動き
+   * (記録 1 回あたり 5 ms 以下)、時計のずれと判定されて解除されることがある。この場合も
+   * 差が水準へ戻れば原因は去っている (実測: CI の runner、run 38532917082 では差が 8 ms、
+   * 水準からの隔たりが 19〜39 ms まで戻っても、きっかけが動きでないため 30 秒解除されず、
+   * 25 秒の観測がすべて解除のままになった)
    */
   private canReleaseUnsharedHold(): boolean {
     if (this.lastUnsharedStream === null || this.heldUnsharedStream() === null) {
       return false;
     }
-    if (!this.unsharedTriggerMovedValue || this.baseDifferenceDrifted()) {
+    if (this.baseDifferenceDrifted() || this.isUnsharedRepeatedly()) {
       return false;
     }
     const differenceMs = this.currentBaseDifferenceMs();
@@ -1600,6 +1604,22 @@ export class PlaybackTimeline {
       return false;
     }
     return this.baseDifferenceDeviationSinceMs === null;
+  }
+
+  /**
+   * 直近に共有と解除を往復しているか
+   *
+   * 2 回の解除が `PLAYOUT_BASE_UNSHARED_HOLD_MS` の内側で起きていれば、閾値 (表示の遅れの
+   * 上限 - 再生の遅れ) が動き続けており、解除してもまた解除される。往復のたびに、同期が
+   * 足した分を戻して (間に合わないフレームを捨てる) すぐ足し直す (表示が待って止まる)
+   * ことになるため、落ち着くまで解かない
+   */
+  private isUnsharedRepeatedly(): boolean {
+    return (
+      this.previousUnsharedAtMs !== null &&
+      this.lastUnsharedAtMs !== null &&
+      this.lastUnsharedAtMs - this.previousUnsharedAtMs < PLAYOUT_BASE_UNSHARED_HOLD_MS
+    );
   }
 
   /**
