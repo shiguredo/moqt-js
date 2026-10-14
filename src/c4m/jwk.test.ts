@@ -178,3 +178,12 @@ test("型が文字列でない JWK のメンバーを拒否する", () => {
     "unexpectedType",
   );
 });
+
+test("正規化できないメンバーを持つ JWK を拒否する", () => {
+  // 正規化 JSON (RFC 7638 Section 3.2) は x / y / k を base64url として復号して
+  // 詰め直すため、復号できないメンバーは invalidBase64 になる
+  const invalidEc: Jwk = { kty: "EC", crv: "P-256", x: "!!", y: "AA", d: undefined };
+  assertJwkError(() => canonicalJwkJson(invalidEc), "invalidBase64");
+  const invalidSymmetric: Jwk = { kty: "oct", k: "!!" };
+  assertJwkError(() => canonicalJwkJson(invalidSymmetric), "invalidBase64");
+});

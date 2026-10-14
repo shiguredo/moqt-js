@@ -29,6 +29,7 @@ import {
   validateCatClaims,
 } from "./cat";
 import {
+  CBOR_NULL,
   cborArray,
   cborByteString,
   cborFloat,
@@ -351,6 +352,21 @@ test("alg の無いトークンを拒否する", () => {
     ]),
   );
   assertCatError(() => CatToken.decode(encodeCbor(value)), "missingAlgorithm");
+});
+
+test("detached payload の COSE トークンを拒否する", () => {
+  // CAT のクレームは payload に載るため、payload が null のトークンは受理しない
+  const protectedBytes = encodeCbor(cborMap([[cborUnsigned(1n), cborInteger(-7)]]));
+  const value = cborTag(
+    18n,
+    cborArray([
+      cborByteString(protectedBytes),
+      cborMap([]),
+      CBOR_NULL,
+      cborByteString(TEXT_ENCODER.encode("signature")),
+    ]),
+  );
+  assertCatError(() => CatToken.decode(encodeCbor(value)), "detachedPayload");
 });
 
 test("型付きクレームの raw への重複を拒否する", () => {

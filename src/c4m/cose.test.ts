@@ -574,3 +574,34 @@ test("ヘッダのエンコードで kid はバイト文字列とテキスト文
   assert.deepEqual(cborMapGet(textKeyId, cborInteger(HEADER_ALGORITHM)), cborInteger(5));
   assert.deepEqual(cborMapGet(textKeyId, cborInteger(HEADER_CRITICAL)), undefined);
 });
+
+test("COSE メッセージの要素の型が違うと拒否する", () => {
+  // protected / unprotected / payload / signature を 1 つずつ別の型にして、
+  // どの位置でも unexpectedType になることを確認する
+  const cases: Array<[number, CborValue]> = [
+    [0, cborTextString("protected")],
+    [1, cborArray([])],
+    [2, cborTextString("payload")],
+    [3, cborTextString("signature")],
+  ];
+  for (const [index, replacement] of cases) {
+    const parts: CborValue[] = [
+      cborByteString(protectedHeader(-7)),
+      cborMap([]),
+      cborByteString(new Uint8Array(0)),
+      cborByteString(new Uint8Array([1])),
+    ];
+    parts[index] = replacement;
+    assertCoseError(
+      () => decodeCoseMessage(encodeCbor(cborTag(TAG_COSE_SIGN1, cborArray(parts)))),
+      "unexpectedType",
+    );
+  }
+
+  // crit はラベルの配列でなければならない
+  assertCoseError(
+    () => decodeProtectedHeader(cborMap([[cborInteger(HEADER_CRITICAL), cborTextString("x")]])),
+    "unexpectedType",
+    "crit",
+  );
+});
