@@ -13,6 +13,9 @@
 
 Media over QUIC Transport draft-22 対応
 
+- [FIX] 一過性の基準のずれで A/V の基準の共有が戻らなくなるのを直す
+  - @voluntas
+
 ## 2026.2.0
 
 **リリース日**: 2026-05-13
