@@ -28,5 +28,8 @@ export const WEBCODECS_DEVTOOLS_URL = `${DEVTOOLS_ORIGIN}/webcodecs-devtools.htm
 /** devtools の codec のページ */
 export const CODEC_TEST_URL = `${DEVTOOLS_ORIGIN}/codec-test.html`;
 
+/** production 検証用アプリの起点 (末尾に `/` は付けない) */
+export const PRODUCTION_ORIGIN = process.env.MOQT_PRODUCTION_ORIGIN ?? "http://localhost:5190";
+
 /** 実リレー接続用のテストページ */
 export const RELAY_PAGE_URL = process.env.MOQT_E2E_PAGE_URL ?? "http://localhost:5180/index.html";
