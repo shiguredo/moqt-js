@@ -599,6 +599,8 @@ interface SubscriberInitialConfigControl {
   audioTrackInfo: CatalogTrack | null;
   handleVideoObject(obj: MoqtObject): void;
   handleAudioObject(obj: MoqtObject, delivery?: string): void;
+  /** 受信の入口 (重複の判定を行う。配信側の冗長化で同じ Object が 2 回届く) */
+  receiveAudioObject(obj: MoqtObject, delivery?: string): void;
   applyInitialVideoConfig(): Promise<void>;
   applyInitialAudioConfig(): Promise<void>;
 }
@@ -1246,6 +1248,45 @@ test("handleAudioObject: 到着経路ごとに受信数を数える (保留キ�
   assert.deepEqual(decoded, [0x11, 0x22, 0x33]);
   assert.equal(stats?.framesReceived, 3);
   assert.equal(stats?.subgroupFramesReceived, 1);
+  assert.equal(stats?.datagramFramesReceived, 2);
+});
+
+/**
+ * 完了条件: 同じ識別子の音声 Object を 2 回受け取ったとき、2 回目は復号へ渡さない。
+ *
+ * 音声は既定で datagram で届き、再送されない (RFC 9221)。経路の損失に備えて配信側が同じ
+ * Object を 2 回送ることがある (devtools の `audioRedundancy=2`)。渡すと同じ音を 2 回鳴らし、
+ * 媒体時刻が実時間より先へ進む。
+ *
+ * 実測 (実リレー、5 % のパケロスを入れて 60 秒、各 2 回): 1 回送りでは欠落 5.6 %・鳴らした
+ * 長さ 94 %・復号器の作り直し 31 回 / 40 秒であったのに対し、2 回送りでは欠落 0.2 %・
+ * 鳴らした長さ 99.4 %・作り直し 1〜3 回 / 60 秒になった
+ */
+test("handleAudioObject: 同じ識別子の音声 Object は 2 回目を復号へ渡さない", () => {
+  const subscriber = new MediaSubscriberImpl("moqt://example.com/live", {
+    namespace: ["live"],
+    audio: {},
+  });
+  const control = subscriber as unknown as SubscriberInitialConfigControl;
+  const decoded: number[] = [];
+  control.audioDecoder = {
+    configure: async () => {},
+    decode: (payload) => {
+      decoded.push(payload[0] ?? -1);
+    },
+  };
+  control.audioDecoderConfigured = true;
+  control.audioTrackInfo = { name: "audio", packaging: "loc", isLive: true, codec: "opus" };
+
+  control.receiveAudioObject(makeIdentifiedObject(0n, 0x11), "datagram");
+  // 配信側の冗長化で、同じ Object がもう 1 回届く
+  control.receiveAudioObject(makeIdentifiedObject(0n, 0x11), "datagram");
+  // 別の Object は通す
+  control.receiveAudioObject(makeIdentifiedObject(1n, 0x22), "datagram");
+
+  assert.deepEqual(decoded, [0x11, 0x22], "同じ Object は 1 回だけ復号すること");
+  const stats = subscriber.getStats().audio;
+  assert.equal(stats?.framesReceived, 2, "受信数にも 2 回目を数えないこと");
   assert.equal(stats?.datagramFramesReceived, 2);
 });
 
@@ -3126,7 +3167,7 @@ interface SubscriberAvSyncControl {
 }
 
 // テストで使う targetLatency と許容幅
-// 目標の表示時刻の計算に再生遅延の下限 (80 ms) ではなく targetLatency を使わせる値
+// 目標の表示時刻の計算に再生遅延の下限 (50 ms) ではなく targetLatency を使わせる値
 const AV_SYNC_TARGET_LATENCY_MS = 120;
 // 上限 (MAX_PLAYOUT_DELAY_MS) を超える targetLatency (切り下げの検証用)
 const AV_SYNC_TOO_LARGE_TARGET_LATENCY_MS = MAX_PLAYOUT_DELAY_MS + 100;
@@ -3755,9 +3796,10 @@ test("handleAudioDecodedData: 音が抜けた分の隙間を補間して予約�
   assert.equal(second.startedAtSeconds.length, 2);
   // 補間は 20 ms 分 (48 kHz で 960 サンプル) を作る
   assert.equal(second.bufferFrames[0], 960, "補間の長さが隙間と同じであること");
-  // 補間は前の音の終わり (10.10) から、届いた音の開始 (10.12) までを埋める
-  assert.closeTo(second.startedAtSeconds[0] ?? 0, 10.1, 1e-9);
-  assert.closeTo(second.startedAtSeconds[1] ?? 0, 10.12, 1e-9);
+  // 補間は前の音の終わり (10.07) から、届いた音の開始 (10.09) までを埋める。前の音は
+  // 到着 (10 s) と再生の遅れ (50 ms) で 10.05 に鳴り始め、20 ms の長さで 10.07 に終わる
+  assert.closeTo(second.startedAtSeconds[0] ?? 0, 10.07, 1e-9);
+  assert.closeTo(second.startedAtSeconds[1] ?? 0, 10.09, 1e-9);
   assert.equal(errors.length, 0);
 });
 
@@ -3960,7 +4002,7 @@ test("handleAudioDecodedData: 目標の表示時刻を getOutputTimestamp で換
   // 目標の表示時刻には共有の時間軸の式 (max(targetLatency, 再生遅延)) が効いていること
   assert.equal(control.playbackTimeline.targetLatencyMs, AV_SYNC_TARGET_LATENCY_MS);
   // 実際に鳴らした結果を 1 つ観測した後は、揺らぎだけから求めた目標
-  // (AUDIO_PLAYOUT_DELAY_FLOOR_MS = 80 ms) ではなく、閉ループの初期値
+  // (NetEq の開始値 = 80 ms) ではなく、閉ループの初期値
   // (AUDIO_DELAY_FEEDBACK_START_MS = 100 ms) と大きい方を使う
   assert.equal(
     control.playbackTimeline.playoutDelayMs,
@@ -3974,8 +4016,8 @@ test("handleAudioDecodedData: 目標の表示時刻を getOutputTimestamp で換
  * 完了条件: `targetLatency` が上限 (`MAX_PLAYOUT_DELAY_MS` = 500 ms) に近いときも音を捨てない。
  *
  * 並べすぎの上限は「表示に使う遅れ (`max(targetLatency, 再生遅延)`) + 余裕」から決まる。
- * 揺らぎから求めた再生遅延 (80 ms) だけを上限にすると、目標が 300 ms より先にある音を
- * すべて捨てて無音になる。
+ * 揺らぎから求めた再生遅延 (NetEq の開始値 80 ms) だけを上限にすると、目標が 300 ms より
+ * 先にある音をすべて捨てて無音になる。
  */
 test("handleAudioDecodedData: targetLatency が 500 ms でも目標の時刻に予約する", () => {
   const { control, errors } = createAvSyncSubscriber();
@@ -4147,9 +4189,9 @@ test("handleAudioDecodedData: TIMESCALE がある TIMESTAMP は到着基準に�
   assert.deepEqual(decodedTimestamps, [decodedTimestamp]);
 
   // 到着基準で鳴らすときの再生の遅れは、共有の時間軸が学習した値 (この予約ではまだ音を
-  // 鳴らしていないため下限 80 ms) を下限と上限で切った値である (src/playbackTimeline.ts の
-  // `audioArrivalPlayoutDelayMs`)。鳴らした後は閉ループ (observeAudioPlayout) が動かす
-  // ため、予約の前に読む
+  // 鳴らしていないため NetEq の開始値 80 ms) を下限 (50 ms) と上限 (100 ms) で切った値で
+  // ある (src/playbackTimeline.ts の `audioArrivalPlayoutDelayMs`)。鳴らした後は閉ループ
+  // (observeAudioPlayout) が動かすため、予約の前に読む
   const arrivalDelayMs = audioArrivalPlayoutDelayMs(
     control.playbackTimeline.playoutDelayMs ?? AUDIO_PLAYOUT_DELAY_FLOOR_MS,
   );
@@ -4159,7 +4201,7 @@ test("handleAudioDecodedData: TIMESCALE がある TIMESTAMP は到着基準に�
 
   // 目標を使わないため、基準は「到着した音がまだ鳴っていない位置 + 再生の遅れ」になる
   assert.equal(reservation.startedAtSeconds.length, 1);
-  // 到着基準の再生の遅れは下限 (80 ms) と上限 (100 ms) の間にある
+  // 到着基準の再生の遅れは下限 (50 ms) と上限 (100 ms) の間にある
   assert.isAtLeast(arrivalDelayMs, AUDIO_PLAYOUT_DELAY_FLOOR_MS);
   assert.isAtMost(arrivalDelayMs, AUDIO_PLAYOUT_ARRIVAL_DELAY_MS);
   // 予約時刻は「到着の位置 + 到着基準の遅れ」と「今 + 余裕」の遅い方になる。到着の位置は、
@@ -4222,7 +4264,7 @@ test("handleAudioDecodedData: 音声を観測していなくても再生の遅�
 
   assert.equal(errors.length, 0);
   assert.equal(reservation.startedAtSeconds.length, 1);
-  // 到着基準の再生の遅れは下限 (80 ms) になる。予約時刻は「到着の位置 + 80 ms」と
+  // 到着基準の再生の遅れは下限 (50 ms) になる。予約時刻は「到着の位置 + 50 ms」と
   // 「今 + 余裕」の遅い方になる (後者が勝つときは、出力のバッファの分だけ遅れて鳴る)
   const arrivalSeconds = (reservation.readAtMs + reservation.deviceDelayMs) / 1_000;
   assert.closeTo(

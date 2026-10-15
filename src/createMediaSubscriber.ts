@@ -143,6 +143,9 @@ export interface PendingObjectQueueOptions {
   maxBytes: number;
 }
 
+/** 同じ音声 Object を 2 回受け取ったときに、2 回目を捨てるために覚える数 */
+const AUDIO_RECENT_OBJECT_IDS_MAX = 256;
+
 /**
  * PendingObjectQueueOptions のデフォルト値
  *
@@ -610,6 +613,10 @@ export class MediaSubscriberImpl implements MediaSubscriber {
 
   // デコーダー設定状態
   private audioDecoderConfigured = false;
+  /** 直近の音声 Object の識別子 (古い方から捨てる) */
+  private readonly recentAudioObjectIds: string[] = [];
+  /** `recentAudioObjectIds` と同じ内容の集合 (重複の判定を速くする) */
+  private readonly recentAudioObjectIdSet = new Set<string>();
   private videoDecoderConfigured = false;
   // 直前に VideoDecoder へ渡した description。
   // draft-ietf-moq-loc-04 §2.3.2.1: config が変化したらデコーダを再構成する。
@@ -1954,12 +1961,12 @@ export class MediaSubscriberImpl implements MediaSubscriber {
         namespace,
         trackName,
         {
-          object: (obj) => this.handleAudioObject(obj, "subgroup"),
+          object: (obj) => this.receiveAudioObject(obj, "subgroup"),
           // draft-ietf-moq-transport-22 §11.2: Datagram で届いた音声も同じ処理へ流し、経路だけを
           // 数える。Datagram は順序が保証されず (QUIC 上の WebTransport)、再送もされないが、
           // 音声は 1 Object = 1 Group であり (draft-ietf-moq-loc-04 §4.1)、届いた順に復号へ
           // 渡して足りる (devtools の購読側と同じ方針)
-          datagram: (obj) => this.handleAudioObject(obj, "datagram"),
+          datagram: (obj) => this.receiveAudioObject(obj, "datagram"),
           end: (publishDone) => {
             this.handlePublishDone(publishDone);
           },
@@ -2240,6 +2247,46 @@ export class MediaSubscriberImpl implements MediaSubscriber {
    * @param obj - 受信した Object
    * @param delivery - 到着した経路
    */
+  /**
+   * 同じ音声 Object を既に受け取っているか (2 回目を捨てる)
+   *
+   * 音声は既定で datagram で届き、再送されない (RFC 9221)。経路の損失に備えて配信側が同じ
+   * Object を 2 回送ることがあるため、2 回目は復号へ渡さない。渡すと同じ音を 2 回鳴らし、
+   * 媒体時刻が実時間より先へ進む (20 ms の音を 2 回鳴らすと 40 ms 分進む)。
+   *
+   * 見るのは Object の識別子 (groupId と objectId) である。同じ識別子の Object は同じ音で
+   * あり、値が同じでも別の Object ではない。直近 `AUDIO_RECENT_OBJECT_IDS_MAX` 件だけ覚える
+   * (2 回目は直後に届くため、これだけあれば足りる)
+   */
+  private isDuplicateAudioObject(obj: MoqtObject): boolean {
+    const id = `${obj.groupId.toString()}:${obj.objectId.toString()}`;
+    if (this.recentAudioObjectIdSet.has(id)) {
+      return true;
+    }
+    this.recentAudioObjectIdSet.add(id);
+    this.recentAudioObjectIds.push(id);
+    if (this.recentAudioObjectIds.length > AUDIO_RECENT_OBJECT_IDS_MAX) {
+      const oldest = this.recentAudioObjectIds.shift();
+      if (oldest !== undefined) {
+        this.recentAudioObjectIdSet.delete(oldest);
+      }
+    }
+    return false;
+  }
+
+  /**
+   * 受信した音声 Object を受け取る
+   *
+   * 同じ Object の 2 回目は捨てる。音声は既定で datagram で届き、再送されない (RFC 9221)
+   * ため、経路の損失に備えて配信側が同じ Object を 2 回送ることがある (devtools の
+   * `audioRedundancy=2`)。ここで捨てるのは、保留キュー (`holdPendingObject`) からの
+   * 再投入は同じ Object であっても 2 回目ではないためである
+   */
+  private receiveAudioObject(obj: MoqtObject, delivery: AudioDelivery): void {
+    if (this.isDuplicateAudioObject(obj)) return;
+    this.handleAudioObject(obj, delivery);
+  }
+
   private handleAudioObject(obj: MoqtObject, delivery: AudioDelivery): void {
     // 閉じた後は統計も decode も進めない。解放は await を挟むため、state の "closed" だけでは
     // 解放の途中 (decoder の参照を切る前) に届いた Object を判定できない

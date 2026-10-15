@@ -270,6 +270,9 @@ export class AudioPlayoutSession {
       // live へ戻す (src/audioReceiveCatchUp.ts)。ここでは作り直すかどうかだけを決め、鳴らす
       // 音は捨てない (捨てても復号器の中の分は減らない)。壁時計の TIMESTAMP を持つ音でだけ
       // 測れる (メディア時刻は壁時計と対応しない)
+      //
+      // 後から届いた復旧の分を推定から除く案は、TIMESTAMP の古さでも位置の順序でも
+      // 改善しなかった (docs/AUDIO_PLAYOUT_LATENCY.md)
       if (wallClockTimestamp !== null) {
         catchUpStarted = this.catchUp.observe({
           nowMs: arrivalMs,
