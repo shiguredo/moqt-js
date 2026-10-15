@@ -156,7 +156,14 @@ const AV_UNSHARED_RECOVERY_MAX_MS = 35_000;
  * runner で表示が一瞬 (1 秒以上) 途切れることを見込んで余裕を取る。ここで待つのは
  * 「値が作られるか」だけであり、値そのものは予算で判定する
  */
-const SKEW_OBSERVE_TIMEOUT_MS = 15_000;
+/**
+ * 表示時刻の差を観測する長さ (ミリ秒)
+ *
+ * 差は「音声と映像それぞれの表示の実績が 1 秒以内にある」ときだけ出る (src/playbackTimeline.ts
+ * の `skewMs`)。実測 (2026-10-15、実リレー、600 ms ごとに観測) では 15 秒で観測できたのは
+ * 3 件であり、要求 (`SKEW_MIN_SAMPLES`) ちょうどで余裕が無かった。45 秒にすると 3 倍になる
+ */
+const SKEW_OBSERVE_TIMEOUT_MS = 45_000;
 
 /**
  * 判断に要る標本の数
