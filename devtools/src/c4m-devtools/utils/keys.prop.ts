@@ -51,8 +51,20 @@ function toHexInput(bytes: Uint8Array, style: HexStyle): string {
   }
 }
 
-/** 16 進のアルファベットに無い文字 (g 〜 z) を必ず 1 つ含む入力 */
-const nonHexTextArbitrary = fc.stringMatching(/^[0-9a-f]*[g-z][0-9a-f]*$/);
+/**
+ * 16 進として解釈できない入力
+ *
+ * 16 進のアルファベットに無い文字 (g 〜 z) を必ず 1 つ含む。ただし `0x` 接頭辞は 16 進として
+ * 解釈できる (`hexToBytes` は接頭辞を外した残りが空でなく、偶数桁の 16 進なら受け付ける)。
+ * `0x` の後ろがその形になる入力は「16 進として解釈できない入力」ではないため除く
+ * (実測: `0xab` は `x` を含むが 16 進として解釈され、生成器がまれに作ってこのテストが落ちた)
+ */
+const nonHexTextArbitrary = fc.stringMatching(/^[0-9a-f]*[g-z][0-9a-f]*$/).filter((text) => {
+  const normalized = text.startsWith("0x") || text.startsWith("0X") ? text.slice(2) : text;
+  return (
+    normalized.length === 0 || normalized.length % 2 !== 0 || !/^[0-9a-fA-F]+$/.test(normalized)
+  );
+});
 
 /** 形式の指定 (detect は自動判別) */
 const formatArbitrary = fc.constantFrom<SecretInputFormat>("detect", "hex", "base64url", "text");
