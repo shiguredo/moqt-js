@@ -141,6 +141,37 @@ test("compressSamples: 16 kHz でもピッチ周期 1 つ分だけ短くなる",
   assert.equal(result.channels[0]?.length, 320 - 80);
 });
 
+/**
+ * 周波数 `frequencyHz` の正弦波 (20 ms、48 kHz) から 20 ms の穴を補間した長さ
+ *
+ * 実リレーの E2E が使う音は正弦波であるため、補間の可否を周波数ごとに見るために使う
+ */
+function concealForFrequency(frequencyHz: number): number {
+  const samples = new Float32Array(FRAME_SAMPLES);
+  for (let index = 0; index < FRAME_SAMPLES; index++) {
+    samples[index] = 0.5 * Math.sin((2 * Math.PI * frequencyHz * index) / SAMPLE_RATE);
+  }
+  return concealSamples([samples], SAMPLE_RATE, 0.02).generatedSamples;
+}
+
+/**
+ * 完了条件: 補間の可否は、末尾の周期が 4 kHz へ間引いたときの格子に乗るかで決まる。格子に
+ * 乗らない純音では補間しない (周期 1 つ分を繰り返すと継ぎ目で波形が飛び、クリックとして
+ * 聞こえるため)。
+ *
+ * 実測 (48 kHz、20 ms のフレーム、振幅 0.5、20 ms の穴): 1000 Hz と 440 Hz は 960 サンプルを
+ * 生成し、300 / 220 / 150 / 100 Hz は生成しない。1000 Hz は 4 kHz で 4 サンプル (格子に乗る)、
+ * 440 Hz は 9.09 サンプル (乗らない) であるが、位数の 18 が探索範囲 (10〜60) に入り、継ぎ目の
+ * 段差が許容に収まるため通る
+ *
+ * 実リレーの E2E では補間の量が小さいが、これは実装の欠陥ではなく、E2E の音が正弦波で
+ * あるためである (会話や音楽では周期が格子に乗りやすく、補間が働く)
+ */
+test("concealSamples: 補間の可否は周期が 4 kHz の格子に乗るかで決まる", () => {
+  assert.equal(concealForFrequency(1_000), 960, "格子に乗る純音は補間すること");
+  assert.equal(concealForFrequency(220), 0, "格子に乗らない純音は補間しないこと");
+});
+
 // 欠落した区間の補間: 周期的な音では、末尾のピッチ周期を必要な長さまで繰り返す
 test("concealSamples: 周期的な音では必要な長さだけ生成する", () => {
   const frame = sineFrame(5);
