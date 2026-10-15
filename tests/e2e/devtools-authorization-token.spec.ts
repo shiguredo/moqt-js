@@ -1,10 +1,10 @@
 import { test, expect } from "@playwright/test";
 import { C4M } from "moqt-js";
+import { DEVTOOLS_URL } from "./urls";
 
 // devtools の Authorization Token の UI テスト
 // 実リレーは起動しない。c4m の取り込みと Token Type 入力による解除を UI で観測する。
 // dev サーバーは playwright.config.ts の webServer で起動される (port 5173)
-const DEVTOOLS_URL = "http://localhost:5173/index.html";
 
 // c4m の Base64 トークン (draft-ietf-moq-msf-01 §11.1.1 / draft-ietf-moq-c4m-01 §2)
 const C4M_BASE64 = "QUFB";

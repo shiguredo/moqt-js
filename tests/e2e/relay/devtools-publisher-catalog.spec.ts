@@ -1,5 +1,6 @@
 import { expect, test, type Browser, type Page } from "@playwright/test";
 import { formatTrackNamespace, parseTrackNamespace } from "../../../src/fullTrackName";
+import { DEVTOOLS_URL } from "../urls";
 import {
   RELAY_TEST_TIMEOUT_MS,
   closeRelayPage,
@@ -19,8 +20,6 @@ import {
 //
 // devtools の UI は playwright.config.ts の webServer (port 5173) が配信する。
 // 接続先は TEST_MOQT_URI で渡す。
-
-const DEVTOOLS_URL = "http://localhost:5173/index.html";
 
 /** devtools の publisher がダミー映像を送り始めるまで待つ上限 */
 const PUBLISH_START_TIMEOUT_MS = 30_000;

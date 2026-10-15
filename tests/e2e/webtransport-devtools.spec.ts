@@ -1,10 +1,10 @@
 import { test, expect } from "@playwright/test";
+import { WEBTRANSPORT_DEVTOOLS_URL as DEVTOOLS_URL } from "./urls";
 
 // webtransport-devtools の UI テスト
 // WebTransport サーバーへの接続は不要で、接続時設定の UI 動作と
 // クエリパラメータ連携（保存・復元・排他検証）を検証する
 // dev サーバーは playwright.config.ts の webServer で起動される (port 5173)
-const DEVTOOLS_URL = "http://localhost:5173/webtransport-devtools.html";
 
 test("クエリパラメータから接続時設定が復元される", async ({ page }) => {
   // 接続時設定を含む URL を開くと、各入力欄に値が復元されることを確認する

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { formatTrackNamespace } from "../../../src/fullTrackName";
 import { RELAY_TEST_TIMEOUT_MS, createTestNamespace, requireRelayUri } from "./support";
+import { DEVTOOLS_URL } from "../urls";
 
 // moqt-devtools の publisher と subscriber を実リレーへつなぎ、配信した音声が購読側で
 // 「崩れずに鳴る」ことを値で確かめる。
@@ -105,8 +106,6 @@ const AUDIO_SAMPLE_RATE = process.env.MOQT_TEST_AUDIO_SAMPLE_RATE ?? "48000";
 
 /** 配信する音声のチャンネル数。手元のマイクの形式 (1) でも回せるように環境変数で切り替える */
 const AUDIO_CHANNELS = process.env.MOQT_TEST_AUDIO_CHANNELS ?? "2";
-
-const DEVTOOLS_URL = process.env.MOQT_DEVTOOLS_URL ?? "http://localhost:5173/index.html";
 
 /** テスト全体の上限 */
 const TEST_TIMEOUT_MS = RELAY_TEST_TIMEOUT_MS * 3;

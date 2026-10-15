@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { RELAY_TEST_TIMEOUT_MS, requireRelayUri } from "./support";
 import { AUDIO_PUBLISH_CATCH_UP_GROWTH_MS } from "../../../src/audioPublishCatchUp";
+import { DEVTOOLS_URL } from "../urls";
 
 /**
  * 実リレー経由で配信し、負荷で音声が遅れた状態を作って、遅れが解消されることを確かめる。
@@ -36,7 +37,6 @@ test.use({
 });
 
 /** devtools のページ (playwright.config.ts の webServer、port 5173) */
-const DEVTOOLS_URL = "http://localhost:5173/index.html";
 
 /** 負荷をかける前に、遅れが落ち着くのを待つ時間 (ミリ秒) */
 const BASELINE_SETTLE_MS = 5_000;

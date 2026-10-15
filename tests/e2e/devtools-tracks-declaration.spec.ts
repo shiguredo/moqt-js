@@ -1,9 +1,9 @@
 import { test, expect } from "@playwright/test";
+import { DEVTOOLS_URL } from "./urls";
 
 // devtools の Tracks カードが出す catalog の宣言の UI テスト
 // 宣言は配信の前に画面が示す値のため、実リレーは起動しない (DOM だけで検証できる)
 // dev サーバーは playwright.config.ts の webServer で起動される (port 5173)
-const DEVTOOLS_URL = "http://localhost:5173/index.html";
 
 // 既定の設定 (devtools/src/signals/connectionSettings.ts) で、Tracks カードに catalog の
 // 宣言が全て出る。キーは catalog のキーそのままで、送信後に catalog を出す Catalog パネルと

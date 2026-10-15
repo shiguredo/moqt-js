@@ -1,10 +1,10 @@
 import { test, expect, type Page } from "@playwright/test";
+import { DEVTOOLS_ORIGIN } from "./urls";
 
 // devtools の画面の文言の UI テスト
 // 画面に出す文言は英語だけにする (コードのコメントとテストのログは日本語のまま)
 // 実リレーは起動しない (接続前の画面と、開いたヘルプ・パネルの文言を見る)
 // dev サーバーは playwright.config.ts の webServer で起動される (port 5173)
-const DEVTOOLS_ORIGIN = "http://localhost:5173";
 
 // ひらがな・カタカナ・漢字のいずれかを含む
 const JAPANESE_PATTERN = /[\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Han}]/u;

@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { WEBCODECS_DEVTOOLS_URL as DUMMY_VIDEO_PAGE_URL } from "./urls";
 
 // dummy の映像のフレーム供給のテスト
 //
@@ -13,7 +14,7 @@ import { test, expect } from "@playwright/test";
 // ここでは必要な形を明示してキャストする (devtools-audio.spec.ts と同じ形)。
 
 /** dummy の映像を読み込むページ (devtools の Vite dev サーバー) */
-const DUMMY_VIDEO_PAGE_URL = "http://localhost:5173/webcodecs-devtools.html";
+
 /** 測定期間 (ミリ秒)。短すぎると周期の揺らぎでぶれる */
 const MEASURE_DURATION_MS = 2_000;
 /** 立ち上がりを捨てる時間 (ミリ秒) */

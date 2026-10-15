@@ -16,6 +16,7 @@
 
 import { expect, test, type Browser, type Page } from "@playwright/test";
 import { formatTrackNamespace, parseTrackNamespace } from "../../../src/fullTrackName";
+import { DEVTOOLS_URL } from "../urls";
 import {
   RELAY_TEST_TIMEOUT_MS,
   closeRelayPage,
@@ -25,7 +26,6 @@ import {
 } from "./support";
 
 /** moqt-devtools (publisher 側) の URL */
-const DEVTOOLS_URL = "http://localhost:5173/index.html";
 
 /** 配信が始まるまでの待ち (エンコーダの初期化と最初の Object の送信を待つ) */
 const PUBLISH_START_TIMEOUT_MS = 30_000;

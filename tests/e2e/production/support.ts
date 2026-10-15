@@ -1,6 +1,7 @@
 import { readdir, readFile } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
 import { test, type Page } from "@playwright/test";
+import { PRODUCTION_ORIGIN } from "../urls";
 
 /**
  * production ビルド検証 (tests/e2e/production) の共通部分
@@ -11,8 +12,13 @@ import { test, type Page } from "@playwright/test";
  * worker の参照そのものである。
  */
 
-/** production 検証用アプリの URL (playwright.config.ts の webServer と一致させる) */
-export const PRODUCTION_ORIGIN = "http://localhost:5190";
+/**
+ * production 検証用アプリの起点
+ *
+ * ポートは playwright.config.ts が空きポートを取って渡すため、spec 側はこの値を使う
+ * (直書きすると、別のアプリが同じポートを使っている環境で取り違える)。
+ */
+export { PRODUCTION_ORIGIN };
 
 /** production 検証用アプリのページ URL */
 export const PRODUCTION_PAGE_URL = `${PRODUCTION_ORIGIN}/index.html`;

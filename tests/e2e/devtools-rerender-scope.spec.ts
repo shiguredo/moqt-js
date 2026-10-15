@@ -1,10 +1,10 @@
 import { expect, test } from "@playwright/test";
+import { DEVTOOLS_ROOT_URL as DEVTOOLS_URL } from "./urls";
 
 // 設定を 1 文字変えたときに再描画されるコンポーネントを数える。コンポーネントテストの
 // 基盤 (Vitest Browser Mode) が無いため、実ブラウザで Preact の描画フックを包んで数える。
 // 副題のリンクは今の接続設定を載せた URL を出すため設定の signal を読むが、その購読は
 // 副題の中だけに閉じている (App が読むと App と子パネルが再描画される)。
-const DEVTOOLS_URL = "http://localhost:5173/";
 
 test("接続設定を変えても App と子パネルは再描画されず、副題だけが再描画される", async ({
   page,

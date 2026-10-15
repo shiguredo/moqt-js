@@ -1,10 +1,10 @@
 import { test, expect } from "@playwright/test";
 import type { SubscriberStats } from "../../devtools/src/testApi";
+import { DEVTOOLS_URL } from "./urls";
 
 // devtools の A/V 同期の統計と、publisher の Target Latency / Render Group の設定の UI テスト
 // 実リレーは起動しない (同期の数値そのものは単体テストと実機の確認で確かめる)
 // dev サーバーは playwright.config.ts の webServer で起動される (port 5173)
-const DEVTOOLS_URL = "http://localhost:5173/index.html";
 
 // 同期の推定と遅延の内訳の data-testid (devtools/src/components/SubscriberPanel.tsx)
 const AV_SYNC_ITEMS = {

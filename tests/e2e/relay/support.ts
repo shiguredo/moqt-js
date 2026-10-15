@@ -1,4 +1,5 @@
 import { test, type Browser, type Page } from "@playwright/test";
+import { RELAY_PAGE_URL } from "../urls";
 
 /**
  * 実リレーへ接続する e2e テストの共通部分
@@ -24,9 +25,10 @@ export const RELAY_TEST_TIMEOUT_MS = 90_000;
 /**
  * 実リレー接続用のテストページ
  *
- * playwright.config.ts の 2 本目の webServer が配信する。
+ * playwright.config.ts の 2 本目の webServer が配信する。ポートは空きポートを取って
+ * 渡されるため、spec 側はこの値を使う (直書きしない)。
  */
-export const RELAY_PAGE_URL = "http://localhost:5180/index.html";
+export { RELAY_PAGE_URL };
 
 /**
  * 実リレーの MOQT URI を取り出す
