@@ -96,7 +96,7 @@ function createSharedTimeline(): PlaybackTimeline {
 /**
  * 映像のフレームを積むたびに、同じメディア時刻の音声も観測する時間軸を作る
  *
- * 音声の下限 (80 ms) を効かせたまま、映像のフレーム間隔からキューが吸収できる長さが
+ * 音声の下限 (50 ms) を効かせたまま、映像のフレーム間隔からキューが吸収できる長さが
  * 決まるようにする (音声の基準の遅れは映像と同じ値になる)
  */
 function observeAudioWithVideo(
@@ -177,7 +177,7 @@ test("select: 描くフレームの表示時刻を返す", () => {
 // 次の周期は何も描けずに表示が飛ぶ
 test("select: 表示時刻からの遅れが上限以内のフレームは古い順に描き、それより遅れたものを捨てる", () => {
   const frameMs = 1_000 / 120;
-  // 基準の遅れを 0 ms、再生遅延を音声の下限 (80 ms) にする
+  // 基準の遅れを 0 ms、再生遅延を音声の下限 (50 ms) にする
   const timeline = createTimeline();
   observeAudioWithVideo(timeline, 0, 0);
   observeFrame(timeline, 0, 0);
@@ -204,7 +204,7 @@ test("select: 表示時刻からの遅れが上限以内のフレームは古い
 // 30 fps では 2 枚が表示時刻を過ぎると古い方は上限を超えて遅れているため、最新を描いて
 // 古い方を捨てる
 test("select: 上限を超えて遅れたフレームを捨てて最新を描く", () => {
-  // 基準の遅れを 0 ms、再生遅延を音声の下限 (80 ms) にする
+  // 基準の遅れを 0 ms、再生遅延を音声の下限 (50 ms) にする
   const timeline = createTimeline();
   observeAudioWithVideo(timeline, 0, 0);
   observeFrame(timeline, 0, 0);

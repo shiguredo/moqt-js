@@ -274,6 +274,9 @@ export function refreshTrackEndStatus(instance: sub.SubscriberInstance): void {
  * 境界を越えていないトラックがあれば追いつき中とする。ただし、境界の無いトラック (購読の
  * 時点で Object が無い) と、PUBLISH_DONE で終わったトラックは完了として扱う。
  */
+/** 同じ音声 Object を 2 回受け取ったときに、2 回目を捨てるために覚える数 (src と同じ) */
+const AUDIO_RECENT_OBJECT_IDS_MAX = 256;
+
 export function applyCatchUpPending(instance: sub.SubscriberInstance, gates: CatchUpGates): void {
   // 終わったトラックは境界を越える Object が来ないため、完了していなくても追いつき中としない。
   // SUBSCRIBE_OK と PUBLISH_DONE が同じチャンクで届くと終了の後に境界が設定されるため、
@@ -1479,6 +1482,12 @@ export function useSubscriber(
      *   使い、処理は Subgroup と同じにする (音声は Group 1 つ = Object 1 つのため、
      *   datagram でも復号の順序は到着順で足りる)
      */
+    // 同じ Object を 2 回受け取ったときに 2 回目を捨てるための最近の識別子。音声は datagram で
+    // 届き再送されない (RFC 9221) ため、経路の損失に備えて配信側が同じ Object を 2 回送る
+    // ことがある。渡すと同じ音を 2 回鳴らし、媒体時刻が実時間より先へ進む
+    const recentAudioObjectIds: string[] = [];
+    const recentAudioObjectIdSet = new Set<string>();
+
     const handleAudioObject = async (obj: MoqtObject, viaDatagram: boolean): Promise<void> => {
       const current = getCurrentAudioSubscriber(audioDecoderInstance);
       if (current === null) {
@@ -1578,7 +1587,25 @@ export function useSubscriber(
     // (同じ Track の音声は 1 本の順序で扱う。draft-ietf-moq-transport-22 §11)
     const queueAudioObject = (obj: MoqtObject, viaDatagram: boolean): void => {
       audioChainRef.current = audioChainRef.current
-        .then(() => handleAudioObject(obj, viaDatagram))
+        // 到着順に処理する。`await` することで、次の Object の処理を待たせる
+        // (復号へ渡す順序が入れ替わらないようにする)
+        .then(async () => {
+          // 同じ Object の 2 回目は捨てる (配信側の冗長化。src/createMediaSubscriber.ts と同じ)。
+          // 保留キューからの再投入と同じ Object が 2 度通るため、受信の入口でだけ判定する
+          const objectId = `${obj.groupId.toString()}:${obj.objectId.toString()}`;
+          if (recentAudioObjectIdSet.has(objectId)) {
+            return;
+          }
+          recentAudioObjectIdSet.add(objectId);
+          recentAudioObjectIds.push(objectId);
+          if (recentAudioObjectIds.length > AUDIO_RECENT_OBJECT_IDS_MAX) {
+            const oldest = recentAudioObjectIds.shift();
+            if (oldest !== undefined) {
+              recentAudioObjectIdSet.delete(oldest);
+            }
+          }
+          await handleAudioObject(obj, viaDatagram);
+        })
         .catch((error: unknown) => {
           // handleAudioObject は内部で握るため、ここへ来るのは想定外の失敗だけ
           console.error(`[${subscriberId}] audio object chain failed:`, error);
@@ -1793,9 +1820,23 @@ export function useSubscriber(
       // 壁時計の TIMESTAMP を持たない音 (TIMESTAMP 無し、Timescale あり) は映像と
       // 対応づけられないため、共有実装が時間軸へ記録せず到着基準で並べる
       const inputs = audioDecodeInputsRef.current;
-      const input = takeDecodeInputEntry(inputs, audioData.timestamp);
+      // 対応とみなす差の上限は、音 1 つの長さの半分にする。復号の出力の timestamp は投入した
+      // 値と小数だけずれる (実測: 完全一致は 1014 件の出力のうち 1〜3 件、最も近い記録との差は
+      // p50 0.30 ms、最大 0.40 ms)。負荷をかけると大きくずれる (実測: CPU を 8 倍に絞った
+      // 実リレーで 9.7 ms。1 ms の既定では 1013 件のうち 5 件が引けず、音が共有の時間軸へ
+      // 記録されない)。半分にすれば、隣のフレームと取り違えない範囲で最大まで広げられる
+      const frameDurationMicros =
+        audioData.numberOfFrames > 0 && audioData.sampleRate > 0
+          ? (audioData.numberOfFrames / audioData.sampleRate) * 1_000_000
+          : 0;
+      const input = takeDecodeInputEntry(
+        inputs,
+        audioData.timestamp,
+        frameDurationMicros > 0 ? Math.max(1_000, Math.floor(frameDurationMicros / 2)) : undefined,
+      );
       // 対応が引けないときは、直前に分かっている種類を使う。記録と復号の出力の timestamp の
-      // 格子がずれると (実測: 9.7 ms)、以後の出力がすべて引けなくなる。種類を失うと、その間の
+      // 格子がずれると (実測: 完全一致は 1014 件の出力のうち 1〜3 件であり、最も近い記録との
+      // 差は p50 0.30 ms、最大 0.40 ms)、以後の出力がすべて引けなくなる。種類を失うと、その間の
       // 音が共有の時間軸へ記録されず、音声の基準の遅れが更新されないまま固定される。
       // 位置 (relay の cache から来たか) は引けたときだけ分かるため、引けないときは
       // 従来どおり鳴らす側に倒す (下の `input === undefined` の扱い)

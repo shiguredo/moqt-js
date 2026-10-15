@@ -249,6 +249,13 @@ test("observe: 遅れが上限へ戻ったら追いつきをやめる", () => {
  * 完了条件: 遅れが上限へ戻るまで、`AUDIO_RECEIVE_CATCH_UP_COOLDOWN_MS` (1 秒) ごとに
  * 始め直す。負荷の間に 1 回作り直しても戻らない状態 (実測: 6 倍に遅くした CPU で
  * メインスレッドを 60 ms 占有 / 40 ms 明け渡す負荷を 10 秒) から戻すための確認である。
+ *
+ * 間隔を伸ばす案 (効かないまま繰り返すときだけ 2 倍にする) と、穴 (timestamp の跳び) の
+ * 直後は始めない案の両方を実装して測ったが、どちらもパケロス 5 % で作り直しの回数は
+ * 変わらなかった (40 秒に 30〜31 回)。穴の直後を 60 秒間始めないようにすると作り直しは
+ * 1 回になるが、遅れが 1458 ms まで育ち、鳴らした長さも 30 秒で 27835 ms へ落ちた。
+ * 作り直しは、損失下でも live を保つ役目を果たしている (詳細は
+ * `docs/AUDIO_PLAYOUT_LATENCY.md`)
  */
 test("observe: 戻らない間はクールダウンごとに始め直す", () => {
   const catchUp = new AudioReceiveCatchUp();
@@ -264,10 +271,6 @@ test("observe: 戻らない間はクールダウンごとに始め直す", () =>
   assert.equal(catchUp.snapshot().catchUpStarts, expectedStartTimes.length);
 });
 
-/**
- * 完了条件: 追いつきで飛んだ音を、復号の出力の timestamp の跳びから測る (捨て方の確認)。
- * 復号器を作り直すと中に溜まった分が捨てられ、次に復号された音の timestamp が跳ぶ。
- */
 test("observe: 追いつきで飛んだ音の長さを timestamp の跳びから測る", () => {
   const catchUp = new AudioReceiveCatchUp();
   // 実測の段差 (116 ms から 256 ms へ) を作る。段差の分 (140 ms) の音が溜まっている

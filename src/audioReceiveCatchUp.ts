@@ -426,12 +426,15 @@ export class AudioReceiveCatchUp {
   private measureSkip(observation: AudioReceiveCatchUpObservation): void {
     const previousMicros = this.lastTimestampMicros;
     this.lastTimestampMicros = observation.timestampMicros;
-    if (previousMicros === null || !this.catchingUp) {
+    if (previousMicros === null) {
       return;
     }
     const frameMicros = observation.durationMs * 1_000;
     const stepMicros = observation.timestampMicros - previousMicros;
     if (stepMicros - frameMicros <= AUDIO_RECEIVE_CATCH_UP_SKIP_MIN_MS * 1_000) {
+      return;
+    }
+    if (!this.catchingUp) {
       return;
     }
     const skippedMs = (stepMicros - frameMicros) / 1_000;

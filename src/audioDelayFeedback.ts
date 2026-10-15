@@ -32,8 +32,20 @@
 
 import type { TimingSummary } from "./timingSummary";
 
-/** 目標遅延の下限 (ミリ秒) */
-export const AUDIO_DELAY_FEEDBACK_MIN_MS = 80;
+/**
+ * 目標遅延の下限 (ミリ秒)
+ *
+ * 閉ループが「遅れが許容の中に収まり、捨てが無い」と判断して下げ続けても、これ以下には
+ * しない。時間軸側の下限 (`AUDIO_PLAYOUT_DELAY_FLOOR_MS`) と同じ値にする。閉ループの値は
+ * 到着基準で鳴らすときの遅れと、映像を合わせる先の両方に効くため、片方だけを変えると
+ * 基準を共有できない状態で A/V のずれが残る
+ *
+ * 値は実リレーの実測で決めた (表と根拠は `src/playbackTimeline.ts` の
+ * `AUDIO_PLAYOUT_DELAY_FLOOR_MS` にある)。観測が無い間の NetEq の初期値
+ * (`AUDIO_DELAY_START_MS` = 80 ms) とは別の値であり、揃える必要はない。初期値は閉ループの
+ * 観測が始まる前にだけ使われ、閉ループは観測が 1 つでも届けば目標を実測から動かす
+ */
+export const AUDIO_DELAY_FEEDBACK_MIN_MS = 50;
 
 /**
  * 目標遅延の上限 (ミリ秒。src/playbackTimeline.ts の AUDIO_PLAYOUT_ARRIVAL_DELAY_MS と同値)

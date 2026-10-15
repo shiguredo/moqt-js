@@ -32,8 +32,14 @@
 /**
  * 復号の出力の timestamp と、復号へ渡した timestamp の差として許す上限 (マイクロ秒)
  *
- * 実測したずれは 100 マイクロ秒である。Opus の最短のフレームは 2.5 ms であり、その半分より
- * 十分に小さい値にして、隣のフレームと取り違えないようにする
+ * 実測したずれは 100 マイクロ秒である (実リレー、1014 件の出力のうち完全一致は 1〜3 件で、
+ * 最も近い記録との差は p50 0.30 ms、p99 0.40 ms、最大 0.40 ms。2026-10-15)。Opus の最短の
+ * フレームは 2.5 ms であり、その半分より十分に小さい値にして、隣のフレームと取り違えない
+ * ようにする。
+ *
+ * CPU を 6 倍に遅くした再現では 9.7 ms のずれが観測されており、この枠では引けない (その
+ * 場合は種類だけを引き継ぐ)。フレームの長さに合わせて枠を広げるのは、フレームの長さを
+ * 受け取る形にしてからにする
  */
 export const DECODER_OUTPUT_TIMESTAMP_TOLERANCE_MICROS = 1_000;
 
@@ -62,10 +68,16 @@ export const DECODE_INPUT_KIND_FALLBACK_MAX_DISTANCE_MICROS = 10_000_000;
  *
  * @param entries - 復号へ渡した timestamp をキーにした記録 (記録した順に並ぶ)
  * @param outputTimestampMicros - 復号の出力の timestamp (マイクロ秒)
+ * @param toleranceMicros - 対応とみなす差の上限 (マイクロ秒。既定は
+ *   `DECODER_OUTPUT_TIMESTAMP_TOLERANCE_MICROS`)。呼び出し側が音 1 つの長さの半分を渡すと、
+ *   隣のフレームと取り違えない範囲で最大まで広げられる (`audioPlayoutSession` ではなく復号の
+ *   出力を持つ呼び出し側が渡す。実測: CPU を 6 倍に遅くすると 9.7 ms ずれ、既定の 1 ms では
+ *   引けない)
  */
 export function takeDecodeInputEntry<T>(
   entries: Map<number, T>,
   outputTimestampMicros: number,
+  toleranceMicros = DECODER_OUTPUT_TIMESTAMP_TOLERANCE_MICROS,
 ): T | undefined {
   const exact = entries.get(outputTimestampMicros);
   if (exact !== undefined) {
@@ -74,25 +86,32 @@ export function takeDecodeInputEntry<T>(
   }
   // この出力より許容以上に古い記録は、この出力にも後続の出力にも対応しない
   for (const [timestamp] of entries) {
-    if (outputTimestampMicros - timestamp <= DECODER_OUTPUT_TIMESTAMP_TOLERANCE_MICROS) {
+    if (outputTimestampMicros - timestamp <= toleranceMicros) {
       break;
     }
     entries.delete(timestamp);
   }
-  // 一致する記録が無いときは、最も古い記録だけを候補にする。出力は投入の順に返るため、
-  // 次に引くべき記録は最も古いものである
-  const oldest = entries.keys().next();
-  if (oldest.done === true) {
+  // 一致する記録が無いときは、許容の中では最も近い記録を対応させる。復号の出力の timestamp は
+  // 投入した値と小数だけずれるため (実測: 実リレーで 1014 件の出力のうち完全一致は 1 件、
+  // 最も近い記録との差は p50 0.30 ms、p99 0.40 ms、最大 0.40 ms)、完全一致では引けない。
+  //
+  // 最も古い記録だけを候補にすると、出力が返らなかった記録が 1 つ残っただけで、その記録が
+  // 永久に一致せず、以降の対応がすべて引けなくなる。許容 (1 ms) は音 1 つの間隔 (20 ms) より
+  // 十分小さいため、複数の記録が候補になることはない
+  let nearest: number | null = null;
+  let nearestDistance = Number.POSITIVE_INFINITY;
+  for (const [timestamp] of entries) {
+    const distance = Math.abs(timestamp - outputTimestampMicros);
+    if (distance < nearestDistance) {
+      nearestDistance = distance;
+      nearest = timestamp;
+    }
+  }
+  if (nearest === null || nearestDistance > toleranceMicros) {
     return undefined;
   }
-  const oldestTimestamp = oldest.value;
-  if (
-    Math.abs(oldestTimestamp - outputTimestampMicros) > DECODER_OUTPUT_TIMESTAMP_TOLERANCE_MICROS
-  ) {
-    return undefined;
-  }
-  const value = entries.get(oldestTimestamp);
-  entries.delete(oldestTimestamp);
+  const value = entries.get(nearest);
+  entries.delete(nearest);
   return value;
 }
 

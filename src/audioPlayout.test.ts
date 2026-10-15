@@ -143,14 +143,14 @@ const arrivalTargets: {
   },
 ];
 
-// 既定の値: 再生の遅れ 80 ms、合計の上限 300 ms、並べすぎの余裕 220 ms (300 - 80)、
-// 鳴らす時刻の下限 10 ms (描画の 1 単位 128 フレームより大きい)、補間の下限 5 ms と
-// 上限 100 ms、時計の不感帯 30 ms、時計の変更の上限 80 ms
+// 既定の値: 再生の遅れ 50 ms (実リレーの実測で決めた下限)、合計の上限 300 ms、並べすぎの
+// 余裕 250 ms (300 - 50)、鳴らす時刻の下限 10 ms (描画の 1 単位 128 フレームより大きい)、
+// 補間の下限 5 ms と上限 100 ms、時計の不感帯 30 ms、時計の変更の上限 80 ms
 test("既定の値: 再生の遅れ、上限、余裕、補間の下限と上限、時計の不感帯と変更の上限", () => {
-  assert.equal(AUDIO_PLAYOUT_DELAY_SECONDS, 0.08);
+  assert.equal(AUDIO_PLAYOUT_DELAY_SECONDS, 0.05);
   assert.equal(AUDIO_PLAYOUT_MAX_DELAY_SECONDS, 0.3);
   assert.equal(AUDIO_PLAYOUT_MIN_LEAD_SECONDS, 0.01);
-  assert.closeTo(AUDIO_PLAYOUT_BACKLOG_SECONDS, 0.22, EPSILON);
+  assert.closeTo(AUDIO_PLAYOUT_BACKLOG_SECONDS, 0.25, EPSILON);
   assert.equal(AUDIO_PLAYOUT_MIN_CONCEAL_SECONDS, 0.005);
   assert.equal(AUDIO_PLAYOUT_MAX_CONCEAL_SECONDS, 0.1);
   assert.equal(AUDIO_CLOCK_DEADBAND_MS, 30);
@@ -913,7 +913,7 @@ test("schedule: 目標を使わないときの再生の遅れは arrivalDelaySec
   assert.equal(scheduler.rebases, 1);
 });
 
-// 到着基準の再生の遅れ: 学習した遅れを上限 (100 ms) で切り、下限 (80 ms) で持ち上げる。
+// 到着基準の再生の遅れ: 学習した遅れを上限 (100 ms) で切り、下限 (50 ms) で持ち上げる。
 // ずれの分だけ育った学習値 (316〜500 ms) をそのまま使うと、その分だけ音が遅れて鳴る
 test("arrivalPlayoutDelaySeconds: 学習した遅れを小さな上限で切る", () => {
   assert.equal(AUDIO_PLAYOUT_ARRIVAL_DELAY_SECONDS, 0.1);
@@ -921,7 +921,7 @@ test("arrivalPlayoutDelaySeconds: 学習した遅れを小さな上限で切る"
   assert.equal(arrivalPlayoutDelaySeconds(AUDIO_PLAYOUT_MAX_DELAY_SECONDS), 0.1);
   assert.equal(arrivalPlayoutDelaySeconds(0.316), 0.1);
   assert.equal(arrivalPlayoutDelaySeconds(0.1), 0.1);
-  // 学習値が小さいときは、既存の下限 (80 ms) を使う
+  // 学習値が小さいときは、既存の下限 (50 ms) を使う
   assert.equal(arrivalPlayoutDelaySeconds(0.02), AUDIO_PLAYOUT_DELAY_SECONDS);
   assert.equal(
     arrivalPlayoutDelaySeconds(AUDIO_PLAYOUT_DELAY_SECONDS),

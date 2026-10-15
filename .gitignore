@@ -48,3 +48,6 @@ coverage/
 # Playwright
 playwright-report/
 test-results/
+
+# 調査用の E2E (tests/e2e/relay/investigation-audio-delay.spec.ts) が書く生ログ
+investigation-logs/

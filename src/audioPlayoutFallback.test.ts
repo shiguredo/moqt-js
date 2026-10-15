@@ -64,6 +64,7 @@ import {
   AUDIO_PLAYOUT_DELAY_FLOOR_MS,
   PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS,
   PlaybackTimeline,
+  SYNC_MIN_DELTA_MS,
 } from "./playbackTimeline";
 import { summarizeTimings } from "./timingSummary";
 
@@ -458,7 +459,7 @@ test("TIMESTAMP が段差でずれても、A/V のずれが ±50 ms 以内にな
 
   // 映像の表示の遅れが音声の到着基準の遅れより小さいときは、映像をその時刻へ合わせる。
   // targetLatency を 50 ms、映像の揺らぎを 0 にすると、映像の表示の遅れは 50 ms であり、
-  // 音声の到着基準の遅れ (100 ms) から不感帯 (30 ms) を引いた 70 ms まで上げる
+  // 音声の到着基準の遅れ (100 ms) から不感帯 (`SYNC_MIN_DELTA_MS`) を引いた値まで上げる
   const ahead = runScenario(STEP_AT_MS, {
     outputLeadMs: MEASURED_OUTPUT_LEAD_MS,
     videoJitterMs: 0,
@@ -466,7 +467,7 @@ test("TIMESTAMP が段差でずれても、A/V のずれが ±50 ms 以内にな
   });
   assert.closeTo(
     ahead.videoDelayP50Ms,
-    ahead.audioArrivalDelayMs - 30,
+    ahead.audioArrivalDelayMs - SYNC_MIN_DELTA_MS,
     1,
     "映像を音声の到着基準の時刻へ合わせること",
   );
@@ -504,8 +505,14 @@ test("TIMESTAMP が正しいときは、目標の時刻に従って鳴らし、�
     assert.equal(result.unplannedFrames, 0);
     assert.equal(result.playoutRebases, 0, "並べ直さないこと");
     assert.equal(result.sharedBaseFrames, result.playedFrames, "基準を共有したままであること");
-    // 2 つのトラックの差が上限の中にあるため、同期の制御は足さない (0 のまま)
-    assert.equal(result.videoSyncExtraMaxMs, 0, "映像へ遅延を足さないこと");
+    // 同期の制御は、2 つのトラックの基準の差 (音声 40 ms、映像 13.4 ms) を不感帯まで詰める
+    // 分だけ映像へ足す。足した分は差から不感帯 (`SYNC_MIN_DELTA_MS`) を引いた値になる
+    assert.closeTo(
+      result.videoSyncExtraMaxMs,
+      AUDIO_BASE_MS - VIDEO_BASE_MS - SYNC_MIN_DELTA_MS,
+      1.5,
+      "映像へ基準の差の分だけ遅延を足すこと",
+    );
     assert.isAtMost(result.steadyAvDifferenceP50Ms, 50, "A/V のずれが 50 ms 以内であること");
   }
 });

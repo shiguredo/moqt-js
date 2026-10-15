@@ -129,6 +129,14 @@ const SAMPLE_INTERVAL_MS = 1_000;
 const SHARE_RECOVERY_SAMPLES = 25;
 
 /** 長時間の配信を観測する長さ (ミリ秒) */
+/** メインスレッドの停止を「環境によるもの」とみなす長さ (ミリ秒)。音を鳴らす予約は
+ * メインスレッドで行うため、これ以上止まると予約が遅れ、基準の取り直しが起き得る */
+const MAIN_THREAD_STALL_TOLERANCE_MS = 100;
+
+/** 受信の遅れの最大がこれ以上なら、経路が跳ねた回とみなす (ミリ秒)。音声の目標遅延の上限は
+ * 100 ms であり、それを超えて跳ねた回は追いつきが音を飛ばして戻す (決定 10) */
+const RECEIVE_DELAY_DISTURBED_MS = 200;
+
 const SOAK_MS = 60_000;
 
 /** 購読をやめてやり直す回数 */
@@ -558,14 +566,37 @@ test("配信した音声が、レベルと波形を保ったまま購読側で�
     `受信した音声が無音に近い (${summarizeSubscriber(subscriber)})`,
   ).toBeGreaterThan(AUDIBLE_PEAK_DBFS);
 
-  // 届いた音がサイン波のまま (ノイズや補間で崩れていない)
-  const subscriberCrest = crestDb(subscriber.audio.peakDbfs, subscriber.audio.rmsDbfs);
-  expect(subscriberCrest, `受信した音声の peak - rms が読めない`).not.toBeNull();
+  // 届いた音がサイン波のまま (ノイズや補間で崩れていない)。レベルと波形の尖りは「直近に
+  // 復号した 1 フレーム (20 ms)」の値であり、1 回読むだけでは跳ねや復号器の作り直しの直後の
+  // フレームを引いて崩れて見える (実測: 受信の遅れが 115 ms まで跳ね、受信側の追いつきが
+  // 1 回働いた回で peak −25.0 / rms −30.6 のフレームを引いた)。6 秒の観測の分布で見る
+  const baselineQuality = await monitorAudio(page, 6_000);
+  console.log(`定常の音の質: ${summarizeQuality(baselineQuality, "定常")}`);
+  const crests = baselineQuality
+    .map((sample) => sample.crestDb)
+    .filter((crest): crest is number => crest !== null)
+    .sort((left, right) => left - right);
+  const medianCrestDb =
+    crests.length === 0 ? null : (crests[Math.floor(crests.length / 2)] ?? null);
   expect(
-    Math.abs((subscriberCrest ?? 0) - TONE_CREST_DB),
-    `受信した音声の波形が崩れている (peak - rms が ${subscriberCrest?.toFixed(1)} dB。` +
-      `サイン波は ${TONE_CREST_DB.toFixed(1)} dB。${summarizeSubscriber(subscriber)})`,
+    medianCrestDb,
+    `受信した音声の peak - rms が読めない (${summarizeQuality(baselineQuality, "定常")})`,
+  ).not.toBeNull();
+  expect(
+    Math.abs((medianCrestDb ?? 0) - TONE_CREST_DB),
+    `受信した音声の波形が崩れている (peak - rms の中央値が ${medianCrestDb?.toFixed(1)} dB。` +
+      `サイン波は ${TONE_CREST_DB.toFixed(1)} dB。${summarizeQuality(baselineQuality, "定常")})`,
   ).toBeLessThan(TONE_CREST_TOLERANCE_DB);
+  // 崩れたフレームが混ざることはある (経路の跳ねと復号器の作り直し)。実装の不具合なら
+  // 定常的に崩れるため、8 割は許容の内側にあることを要求する
+  const withinTolerance = crests.filter(
+    (crest) => Math.abs(crest - TONE_CREST_DB) <= TONE_CREST_TOLERANCE_DB,
+  ).length;
+  expect(
+    withinTolerance / crests.length,
+    `崩れたフレームが多い (許容の内側が ${withinTolerance} / ${crests.length}。` +
+      `${summarizeQuality(baselineQuality, "定常")})`,
+  ).toBeGreaterThanOrEqual(0.8);
 
   // レベルの目安: 入力 (-6 dBFS) と受信の peak が大きく離れていない
   expect(
@@ -603,8 +634,6 @@ test("配信した音声が、レベルと波形を保ったまま購読側で�
   expectLive(subscriber, "定常");
 
   // 時間方向に見る。途切れ (フレームが抜けて窓に無音が入る) が続かないこと
-  const baselineQuality = await monitorAudio(page, 6_000);
-  console.log(`定常の音の質: ${summarizeQuality(baselineQuality, "定常")}`);
   expect(
     baselineQuality.filter((sample) => (sample.peakDbfs ?? -100) < AUDIBLE_PEAK_DBFS).length,
     `定常で音が途切れている: ${summarizeQuality(baselineQuality, "定常")}`,
@@ -936,6 +965,22 @@ test("長時間の配信で、送信の遅れと受信の遅れが悪化しな�
   // 追いつきが 3.2 秒を飛ばし、A/V の基準が共有されないまま残った。時間とともに遅れが
   // 育つのか、途中で詰まるのかを、1 秒ごとに観測して見る
   const series: string[] = [];
+  // メインスレッドが止まった長さを測る。音を鳴らす予約はメインスレッドで行うため、ここが
+  // 止まると予約が遅れ、基準の取り直し (playoutRebases) が起きる。環境の停止と実装の
+  // 不具合を切り分けるために測る (詳細は下の判定)
+  await page.evaluate(() => {
+    const holder = window as unknown as { __stallProbe?: { maxGapMs: number; lastMs: number } };
+    const probe = { lastMs: performance.now(), maxGapMs: 0 };
+    holder.__stallProbe = probe;
+    const tick = (): void => {
+      const now = performance.now();
+      probe.maxGapMs = Math.max(probe.maxGapMs, now - probe.lastMs);
+      probe.lastMs = now;
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  });
+
   let worstSendLagMs = 0;
   let worstReceiveDelayMs = 0;
   const endMs = Date.now() + SOAK_MS;
@@ -961,6 +1006,26 @@ test("長時間の配信で、送信の遅れと受信の遅れが悪化しな�
   }
   const finalPublisher = await readPublisher(page);
   const finalSubscriber = await readSubscriber(page);
+  const mainThreadStallMs = await page.evaluate(
+    () =>
+      (window as unknown as { __stallProbe?: { maxGapMs: number } }).__stallProbe?.maxGapMs ?? 0,
+  );
+  console.log(`メインスレッドが止まった最大の長さ: ${mainThreadStallMs.toFixed(0)} ms`);
+  // 基準の取り直しと、追いつきが飛ばす音は、経路の跳ねとメインスレッドの停止で決まる。
+  // 環境が乱れた回は「設計どおりに戻ったか」だけを見て、静かな回だけ厳しく見る。
+  //
+  // 実測 (2026-10-15): スイート 15 回に 1 回、受信の遅れが 50 ms のまま鳴らせなかった音も
+  // 0 件で、基準の取り直しが 2 回と時間圧縮 1526 ms だけが外れていた (同じ 60 秒の観測を
+  // 単独で 8 回繰り返すと 8 回とも 0 回)。逆に経路が跳ねた回 (受信の遅れの最大 432 ms) は、
+  // 追いつきが 9 回働いて 980 ms を飛ばし、判定を外れた。どちらも環境に対する設計どおりの
+  // 動作である (決定 10 の実測を参照)
+  const disturbed =
+    mainThreadStallMs >= MAIN_THREAD_STALL_TOLERANCE_MS ||
+    worstReceiveDelayMs >= RECEIVE_DELAY_DISTURBED_MS;
+  console.log(`環境の乱れ: ${disturbed ? "あり" : "なし"}`);
+  const rebaseLimit = disturbed ? 2 : 0;
+  const skipLimitMs = disturbed ? 2_000 : 500;
+
   console.log(
     `長時間の観測 (5 秒ごと):\n  ${series.filter((_, index) => index % 5 === 0).join("\n  ")}`,
   );
@@ -1009,16 +1074,17 @@ test("長時間の配信で、送信の遅れと受信の遅れが悪化しな�
     finalSubscriber.audio.playoutTiming.startDelayMs?.p50 ?? Number.POSITIVE_INFINITY,
     `鳴り始めの遅れが大きい (${summarizeSubscriber(finalSubscriber)})`,
   ).toBeLessThan(200);
-  // 音を飛ばしていない
+  // 音を飛ばしていない (経路が跳ねた回は、追いつきが戻すために飛ばす。決定 10)
   expect(
     finalSubscriber.audio.playoutCatchUp.skippedMs,
-    `受信側の追いつきが音を飛ばしている (${summarizeSubscriber(finalSubscriber)})`,
-  ).toBeLessThan(500);
-  // 基準の取り直しが無い
+    `受信側の追いつきが音を飛ばしている (受信の遅れの最大 ${worstReceiveDelayMs.toFixed(0)} ms。` +
+      `${summarizeSubscriber(finalSubscriber)})`,
+  ).toBeLessThan(skipLimitMs);
   expect(
     finalSubscriber.audio.playoutRebases,
-    `受信側が基準を取り直している (${summarizeSubscriber(finalSubscriber)})`,
-  ).toBe(0);
+    `受信側が基準を取り直している (メインスレッドの停止 ${mainThreadStallMs.toFixed(0)} ms、` +
+      `受信の遅れの最大 ${worstReceiveDelayMs.toFixed(0)} ms。${summarizeSubscriber(finalSubscriber)})`,
+  ).toBeLessThanOrEqual(rebaseLimit);
   // 前提から外れた状態が無い
   expect(
     finalSubscriber.warnings.length,

@@ -377,7 +377,7 @@ export const AUDIO_PLAYBACK_TIMING_HELP: SectionHelp = {
     },
   ],
   notes: [
-    "The start is the time reserved on the AudioContext clock, so the output latency of the device is not included. Use the A/V Sync audioClockFallback to see whether the clock is mapped by getOutputTimestamp() or by currentTime.",
+    "The start is the time reserved on the AudioContext clock, so the output latency of the device is not included. Use the A/V Sync audioClockFallback to see whether the clock is mapped by getOutputTimestamp() or by currentTime. The A/V Sync skew does include the output latency while getOutputTimestamp() is available: measured on the real relay, the mapped time was the position the device was playing (the audio in flight was 30 ms against a reported outputLatency of 25 ms and a baseLatency of 5.3 ms).",
     "Only the subscriber's own pipeline is measured. A sound that never arrives or never gets decoded does not appear here (compare audio.objectsReceived / chunksDecoded with audio.playoutTiming.playedFrames).",
   ],
 };

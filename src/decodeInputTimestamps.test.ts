@@ -131,6 +131,45 @@ test("takeDecodeInputEntry: 実測した 9.7 ms のずれでは引けず、そ�
   }
 });
 
+test("takeDecodeInputEntry: 出力が返らなかった記録があっても、次の出力の対応を引ける", () => {
+  // 復号器がエラーで出力を返さなかった記録は残り続ける。最も古い記録だけを候補にすると、
+  // その 1 件が永久に一致せず、以降の対応がすべて引けなくなる (この関数の docstring に
+  // 書かれていた失敗)。許容の中では最も近い記録を対応させるため、古い 1 件は無視される
+  const entries = new Map<number, string>();
+  entries.set(FIRST_INPUT_MICROS, "返らなかった記録");
+  for (let index = 1; index <= 5; index++) {
+    entries.set(FIRST_INPUT_MICROS + index * FRAME_MICROS, `${index} つ目`);
+  }
+  for (let index = 1; index <= 5; index++) {
+    const outputTimestamp =
+      FIRST_INPUT_MICROS + index * FRAME_MICROS - MEASURED_OUTPUT_SHIFT_MICROS;
+    assert.equal(
+      takeDecodeInputEntry(entries, outputTimestamp),
+      `${index} つ目`,
+      `${index} 回目の対応`,
+    );
+  }
+  // 返らなかった記録は、許容より古くなった時点で捨てられる (古い方から捨てる規則)
+  assert.isFalse(entries.has(FIRST_INPUT_MICROS));
+});
+
+test("takeDecodeInputEntry: 音 1 つの長さの半分までなら、ずれていても引ける", () => {
+  // 実測 (2026-10-15、CPU を 8 倍に絞った実リレー): 1 ms の枠では 1013 件の出力のうち 5 件が
+  // 引けなかった。音 1 つの長さ (20 ms) の半分を枠にすると 0 件になった。Opus の最短フレーム
+  // は 2.5 ms であり、その半分 (1.25 ms) なら隣のフレームと取り違えない
+  const entries = new Map<number, string>();
+  entries.set(FIRST_INPUT_MICROS, "1 つ目");
+  entries.set(FIRST_INPUT_MICROS + 20_000, "2 つ目");
+  const shifted = FIRST_INPUT_MICROS - 9_700;
+
+  // 枠が 1 ms では引けない
+  assert.isUndefined(takeDecodeInputEntry(entries, shifted, 1_000));
+  // 音 1 つ (20 ms) の半分の枠なら引ける
+  assert.equal(takeDecodeInputEntry(entries, shifted, 10_000), "1 つ目");
+  // 2.5 ms のフレームでは枠は 1.25 ms であり、9.7 ms のずれは引けない
+  assert.isUndefined(takeDecodeInputEntry(entries, shifted, 1_250));
+});
+
 test("LastTimestampKind: 実測した格子のずれでも種類を失わない", () => {
   // 呼び出し側と同じ順で種類を決める (`src/createMediaSubscriber.ts` と
   // `devtools/src/hooks/useSubscriber.ts`)。引けたときはその記録の種類、引けないときは
