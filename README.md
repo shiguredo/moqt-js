@@ -415,8 +415,8 @@ vp test
 
 ### E2E テスト
 
-Playwright による E2E テストは、実リレーを必要としないものと、実リレーへ接続するものに
-分かれています。
+Playwright による E2E テストは、実リレーを必要としないもの、実リレーへ接続するもの、
+利用側の production ビルドを検証するものに分かれています。
 
 ```bash
 # 実リレーを必要としないテスト (moqt-devtools / c4m-devtools / webtransport-devtools の UI、codec wrapper)
@@ -424,7 +424,15 @@ vp run e2e-test
 
 # 実リレーへ接続するテスト (SETUP の交換、publish / subscribe、FETCH、音声の往復、カタログ)
 vp run e2e-test:relay
+
+# 利用側 Vite の production ビルドで worker が起動するかの検証
+vp run e2e-test:production
 ```
+
+`vp run e2e-test:production` は `moqt-js` を `dist` 経由で消費する最小アプリを
+production ビルドし、`new Worker` へ渡る参照先が自己完結していることと、実 Chromium の
+実 Worker として起動して初期化へ応答することを検証します。`vp run e2e-test:relay` は
+実リレーへ接続する production ビルドの検証も含みます。
 
 初回は Chromium をインストールしてください。
 
