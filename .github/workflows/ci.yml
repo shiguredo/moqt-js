@@ -100,6 +100,9 @@ jobs:
       - run: vp install
       - run: vp exec playwright install --with-deps chromium
       - run: vp run e2e-test
+      # 利用側 Vite の production ビルドで worker が起動することを検証する。
+      # dist を消費するアプリのため、vp run build を含むスクリプトで実行する
+      - run: vp run e2e-test:production
 
   slack-notify:
     needs: [lint, build, typecheck, e2e]

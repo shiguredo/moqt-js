@@ -4,7 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vp dev"
+    "dev": "vp dev",
+    "build:production": "vp build production",
+    "preview:production": "vp preview production"
   },
   "dependencies": {
     "moqt-js": "workspace:*"

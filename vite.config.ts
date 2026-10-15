@@ -1,19 +1,105 @@
 import { defineConfig } from "vite-plus";
+import { Rolldown } from "vite-plus/pack";
 import { resolve, dirname, basename, extname } from "node:path";
 import packageJson from "./package.json" with { type: "json" };
 
 /**
+ * Rolldown の plugin context のうち、このプラグインが利用する emitFile だけを
+ * 取り出した最小限の型。
+ *
+ * 配布するワーカーは自己完結した asset として出力するため asset だけを扱う。
+ */
+interface WorkerEmitContext {
+  emitFile(file: { type: "asset"; source: string; fileName: string }): string;
+}
+
+/**
+ * ワーカーコードに残った「import.meta.url を基準にした相対 URL 参照」を検出する。
+ *
+ * Rolldown は new URL("./data.bin", import.meta.url) のような参照を解決せずに
+ * そのままコードへ残し、asset も出力しない (chunk.imports にも現れない)。
+ * 配布する worker は利用側の Vite が asset としてコピー (または data URL へ
+ * インライン) するため、この形の参照は dist に無いファイルを指すことになり
+ * ワーカーが壊れる。そのためコードへ残っていないかを検査する。
+ */
+const importMetaUrlReference = /new URL\([^)]*,\s*import\.meta\.url\s*\)/;
+
+/**
+ * ワーカーのエントリを Rolldown で単独バンドルし、自己完結した ES module を返す。
+ *
+ * 本体ビルドへ chunk として相乗りさせると workerMessages 等の共有 chunk への
+ * 相対 import が残る。利用側の Vite は new URL() の参照先を asset として
+ * コピー (または data URL へインライン) するだけなので、その相対 import を
+ * 解決できずワーカーがロード即エラーになる。ワーカーを単独でバンドルして
+ * import を持たないコードにすることで、利用側の production ビルドでも動く。
+ *
+ * - platform は browser にする (ワーカーは DOM 相当の API だけを使う)
+ * - target は tsconfig.json の target と同じ ESNext 相当にする (変換しない)
+ *
+ * この入れ子ビルドは本体ビルドの define / alias / plugin を引き継がない。worker の
+ * 依存グラフは現状 src/codec 配下のモジュールだけで __MOQT_JS_VERSION__ 等を
+ * 参照しないが、将来 worker から参照する定数を増やす場合は、本体の define に
+ * 頼らずここで define を渡す必要がある (渡さないと実行時に ReferenceError になる)。
+ */
+async function bundleWorker(workerPath: string): Promise<string> {
+  try {
+    const build = await Rolldown.rolldown({
+      input: workerPath,
+      platform: "browser",
+      transform: { target: "esnext" },
+    });
+    try {
+      const { output } = await build.generate({ format: "esm" });
+      const chunks = output.filter((item) => item.type === "chunk");
+      const assets = output.filter((item) => item.type === "asset");
+      const chunk = chunks[0];
+      if (chunks.length !== 1 || chunk === undefined) {
+        // chunk が分割された時点で自己完結していないため、黙って出力しない
+        throw new Error(`expected exactly one chunk but produced ${chunks.length}`);
+      }
+      if (assets.length > 0) {
+        // asset を出力した worker は dist に無いファイルを参照している。現状の入れ子
+        // ビルドは asset を出力し得ないが、plugin や moduleTypes を渡すように変えた
+        // ときに壊れた worker を配布しないための防御
+        throw new Error(
+          `output contains assets (${assets.length}) but the worker must be self-contained`,
+        );
+      }
+      if (chunk.imports.length > 0 || chunk.dynamicImports.length > 0) {
+        // import が残ったまま出力すると利用側で解決できず、ワーカーが起動しない
+        throw new Error(
+          `bundle still has ${chunk.imports.length} static and ${chunk.dynamicImports.length} dynamic imports`,
+        );
+      }
+      if (importMetaUrlReference.test(chunk.code)) {
+        // Rolldown が解決しなかった参照がコードに残っている時点で、配布物として壊れている
+        throw new Error(
+          "bundle references a file relative to import.meta.url but the file is not bundled",
+        );
+      }
+      return chunk.code;
+    } finally {
+      // Rolldown のネイティブリソースを解放する (解放しないと後続のビルドが止まる)
+      await build.close();
+    }
+  } catch (error) {
+    // どのワーカーのバンドルで何が起きたか分かるように包み直す
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(`Failed to bundle worker ${workerPath}: ${reason}`, { cause: error });
+  }
+}
+
+/**
  * Vite の ?worker インポートを tsdown / Rolldown でも扱えるようにするプラグイン。
- * ?worker で import されたワーカーは別 chunk として出力し、default export を
- * そのワーカー URL で初期化する Worker コンストラクタに置き換える。
+ *
+ * ?worker で import されたワーカーは Rolldown で単独バンドルし、自己完結した
+ * ES module を asset として dist/codec/workers/ へ出力する。default export は
+ * 出力した asset の URL で初期化する Worker コンストラクタに置き換える。
  */
 function moqtWorkerPlugin(): {
   name: string;
   resolveId(source: string, importer?: string): string | null;
-  load(
-    this: { emitFile: (asset: { type: "chunk"; id: string; fileName?: string }) => string },
-    id: string,
-  ): string | null;
+  load(this: WorkerEmitContext, id: string): Promise<string | null>;
 } {
   return {
     name: "moqt-worker",
@@ -27,15 +113,16 @@ function moqtWorkerPlugin(): {
       const base = source.slice(0, -"?worker".length);
       return resolve(dirname(importer), base) + "?worker";
     },
-    load(id) {
+    async load(id) {
       if (!id.endsWith("?worker")) {
         return null;
       }
       const workerPath = id.slice(0, -"?worker".length);
       const name = basename(workerPath, extname(workerPath));
+      const code = await bundleWorker(workerPath);
       const ref = this.emitFile({
-        type: "chunk",
-        id: workerPath,
+        type: "asset",
+        source: code,
         fileName: `codec/workers/${name}.js`,
       });
       return `export default class extends Worker {
