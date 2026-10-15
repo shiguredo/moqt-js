@@ -1,9 +1,9 @@
 import { test, expect } from "@playwright/test";
+import { DEVTOOLS_URL } from "./urls";
 
 // devtools の Keyframe Interval の選択肢と、URL からの復元の UI テスト
 // 実リレーは起動しない。dev サーバーは playwright.config.ts の webServer で起動される
 // (port 5173)
-const DEVTOOLS_URL = "http://localhost:5173/index.html";
 
 // 選択肢は値もラベルも秒で固定する。値がフレーム数だと、framerate を変えたときに
 // 実際の間隔が変わり (30 fps の 300 フレームは 10 秒だが 60 fps では 5 秒)、

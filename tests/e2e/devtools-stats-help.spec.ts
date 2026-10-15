@@ -1,10 +1,10 @@
 import { test, expect } from "@playwright/test";
+import { DEVTOOLS_URL } from "./urls";
 
 // devtools の統計の説明 (?) の UI テスト
 // 説明は常に画面に並べず、(?) を押したときだけポップオーバーに出す
 // 実リレーは起動しない (説明の表示は接続の有無に依らない)
 // dev サーバーは playwright.config.ts の webServer で起動される (port 5173)
-const DEVTOOLS_URL = "http://localhost:5173/index.html";
 
 // subscriber の区間 (devtools/src/utils/latencyBreakdown.ts の LATENCY_SEGMENTS と同じ並び)
 const SUBSCRIBER_SEGMENTS = [

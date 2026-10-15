@@ -1,8 +1,9 @@
 import { expect, test, type Page } from "@playwright/test";
+import { DEVTOOLS_URL } from "./urls";
 
 // MOQT URI は OPFS に覚え、localStorage は使わない。
 // 実リレーは起動しない。dev サーバーは playwright.config.ts の webServer (port 5173)
-const DEVTOOLS_URL = "http://localhost:5173/index.html";
+
 const SERVER_URL_FILE = "server-url.txt";
 
 /** このオリジンの OPFS から覚えた MOQT URI を消す */

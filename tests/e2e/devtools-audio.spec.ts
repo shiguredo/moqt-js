@@ -1,9 +1,9 @@
 import { test, expect } from "@playwright/test";
+import { DEVTOOLS_URL } from "./urls";
 
 // devtools の音声設定と音声再生トグルの UI テスト
 // 実リレーは起動しない (音声 object の到達は相互運用 harness 側で検証する)
 // dev サーバーは playwright.config.ts の webServer で起動される (port 5173)
-const DEVTOOLS_URL = "http://localhost:5173/index.html";
 
 test("音声の設定が UI から URL へ反映され、生成された URL から復元される", async ({ page }) => {
   await page.goto(DEVTOOLS_URL);

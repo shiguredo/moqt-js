@@ -2,6 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 import type { PublisherStats, SubscriberStats } from "../../../devtools/src/testApi";
 import { clickCopyButton } from "../copyFeedback";
 import { RELAY_TEST_TIMEOUT_MS, requireRelayUri } from "./support";
+import { DEVTOOLS_URL } from "../urls";
 
 /**
  * 実リレー経由で、同じブラウザ (同じ devtools のページ) から音声と映像を配信し、
@@ -55,7 +56,6 @@ test.use({
 });
 
 /** devtools のページ (playwright.config.ts の webServer、port 5173) */
-const DEVTOOLS_URL = "http://localhost:5173/index.html";
 
 /**
  * 観測を続ける秒数

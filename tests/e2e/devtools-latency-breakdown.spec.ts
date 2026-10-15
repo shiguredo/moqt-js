@@ -1,10 +1,10 @@
 import { test, expect } from "@playwright/test";
 import type { PublisherStats, SubscriberStats } from "../../devtools/src/testApi";
+import { DEVTOOLS_URL } from "./urls";
 
 // devtools の遅延の区間ごとの統計と、stream の reset と欠落の一覧の UI テスト
 // 実リレーは起動しない (値そのものは実リレー経由の相互運用 harness と手元の計測で確かめる)
 // dev サーバーは playwright.config.ts の webServer で起動される (port 5173)
-const DEVTOOLS_URL = "http://localhost:5173/index.html";
 
 // subscriber の区間 (devtools/src/utils/latencyBreakdown.ts の LATENCY_SEGMENTS と同じ並び)
 const SUBSCRIBER_SEGMENTS = [

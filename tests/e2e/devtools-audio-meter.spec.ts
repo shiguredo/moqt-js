@@ -1,10 +1,10 @@
 import { test, expect } from "@playwright/test";
 import type { SubscriberStats } from "../../devtools/src/testApi";
+import { DEVTOOLS_URL } from "./urls";
 
 // devtools の音声レベルメーターの UI テスト
 // 実リレーは起動しない (音声 object の到達は相互運用 harness 側で検証する)
 // dev サーバーは playwright.config.ts の webServer で起動される (port 5173)
-const DEVTOOLS_URL = "http://localhost:5173/index.html";
 
 test("音声トラックを購読していないときもレベルメーターを描き、値を「-」にする", async ({
   page,

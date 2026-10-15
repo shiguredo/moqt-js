@@ -24,6 +24,7 @@ import type {
 } from "../../devtools/src/codec-test/types";
 // 非対応 codec の候補順はテストページと共有する (選定結果の並びを突き合わせる)
 import { VIDEO_CODEC_CANDIDATES } from "../../devtools/src/codec-test/support";
+import { CODEC_TEST_URL } from "./urls";
 
 // codec Wrapper / Worker プロトコルの契約テスト
 //
@@ -32,7 +33,6 @@ import { VIDEO_CODEC_CANDIDATES } from "../../devtools/src/codec-test/support";
 // ページ側のテストは結果を JSON で返し、失敗時は reject するため、
 // page.evaluate の reject がそのままテストの失敗になる。
 // dev サーバーは playwright.config.ts の webServer で起動される (port 5173)
-const CODEC_TEST_URL = "http://localhost:5173/codec-test.html";
 
 // テストページのパラメータ (devtools/src/codec-test/support.ts と一致させる)
 const VIDEO_WIDTH = 320;

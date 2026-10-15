@@ -1,12 +1,12 @@
 import { test, expect } from "@playwright/test";
 import type { SubscriberStats } from "../../devtools/src/testApi";
 import { EMPTY_AUDIO_PLAYOUT_TIMING } from "../../src/audioPlayoutTimingStats";
+import { DEVTOOLS_URL } from "./urls";
 
 // devtools の Subscriber パネルとテスト用 API が、音声の再生の観測値
 // (再生予定時刻・到着時刻・鳴り始める時刻・予定に対する余裕・鳴らなかった量) を出すことの
 // UI テスト。実リレーは起動しない (値そのものは単体テストと実機の確認で確かめる)
 // dev サーバーは playwright.config.ts の webServer で起動される (port 5173)
-const DEVTOOLS_URL = "http://localhost:5173/index.html";
 
 // 音声の再生の観測の data-testid (devtools/src/components/SubscriberPanel.tsx)
 const AUDIO_PLAYBACK_ITEMS = {

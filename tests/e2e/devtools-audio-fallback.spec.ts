@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { DEVTOOLS_URL } from "./urls";
 
 // MediaStreamTrackProcessor をメインスレッドに持たないブラウザ (Safari / Firefox) の条件で、
 // devtools が音声を配信できると判定し、Web Audio 経由で AudioData を取り出せることを確かめる。
@@ -13,7 +14,6 @@ import { test, expect } from "@playwright/test";
 // CI で回せるようにする。
 //
 // dev サーバーは playwright.config.ts の webServer で起動される (port 5173)
-const DEVTOOLS_URL = "http://localhost:5173/index.html";
 
 /** メインスレッドから MediaStreamTrackProcessor を隠す */
 async function hideTrackProcessor(page: import("@playwright/test").Page): Promise<void> {

@@ -3,6 +3,7 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { formatTrackNamespace } from "../../../src/fullTrackName";
 import { RELAY_TEST_TIMEOUT_MS, createTestNamespace, requireRelayUri } from "./support";
+import { DEVTOOLS_URL } from "../urls";
 
 // 調査専用の spec である。値の判定はせず、計測した結果を `investigation-logs/` へ書く。
 //
@@ -22,7 +23,6 @@ import { RELAY_TEST_TIMEOUT_MS, createTestNamespace, requireRelayUri } from "./s
 // playwright.config.ts のポートをずらす必要がある。
 
 /** devtools のページ */
-const DEVTOOLS_URL = process.env.MOQT_DEVTOOLS_URL ?? "http://localhost:5173/index.html";
 
 /** 観測の間隔 (ミリ秒)。追いつきの開始条件を細かく見るときは 250 にする */
 const SAMPLE_INTERVAL_MS = Number(process.env.MOQT_INVESTIGATION_INTERVAL_MS ?? "1000");

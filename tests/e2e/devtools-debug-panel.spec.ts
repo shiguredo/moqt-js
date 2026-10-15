@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { clickCopyButton } from "./copyFeedback";
+import { DEVTOOLS_URL } from "./urls";
 
 // デバッグパネルの表示と「Copy for LLM」のテキストを実ブラウザで確かめる。
 // 実リレーは起動せず、ログはページの中でモジュールを読み込んで直接追加する
@@ -7,8 +8,6 @@ import { clickCopyButton } from "./copyFeedback";
 //  表示の確認はこの E2E で行う)。
 // コピーしたテキストを読むため、このファイルだけクリップボードの権限を与える
 test.use({ permissions: ["clipboard-read", "clipboard-write"] });
-
-const DEVTOOLS_URL = "http://localhost:5173/index.html";
 
 interface InjectedLog {
   level: "info" | "warn" | "error" | "debug";
