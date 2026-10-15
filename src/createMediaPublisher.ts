@@ -495,6 +495,7 @@ export class MediaPublisherImpl implements MediaPublisher {
   private readonly options: MediaPublisherOptions;
   // Catalog とエンコーダーで同じ値を使うための解決済み設定 (start() で 1 度だけ解決する)
   private resolvedAudio: ResolvedAudioPublishSettings | null = null;
+
   private resolvedVideo: ResolvedVideoPublishSettings | null = null;
   private readonly callbacks: MediaPublisherCallbacks;
 
@@ -2037,13 +2038,21 @@ export class MediaPublisherImpl implements MediaPublisher {
         // SendObjectParams をそのまま渡すと構造的部分型で通ってしまい、Datagram では読まれない
         // フィールド (status / deliveryTimeout / subgroupDeliveryTimeout) を載せても黙って
         // 無視される。意味が同じフィールドだけを明示して渡す
-        publisher.sendDatagram({
+        const datagram = {
           groupId: params.groupId,
           objectId: params.objectId,
           payload: params.payload,
           ...(params.properties === undefined ? {} : { properties: params.properties }),
           ...(params.priority === undefined ? {} : { priority: params.priority }),
-        });
+        };
+        // 冗長度の数だけ同じ Object を送る。全ての copy が落ちる確率は損失率の冗長度乗に
+        // なる。受信側は同じ識別子の Object の 2 回目以降を捨てる
+        // (src/createMediaSubscriber.ts の `receiveAudioObject`)
+        const requestedCopies = this.resolvedAudio?.redundancy ?? 1;
+        const copies = Math.min(3, Math.max(1, Math.floor(requestedCopies)));
+        for (let copy = 0; copy < copies; copy++) {
+          publisher.sendDatagram(datagram);
+        }
         result = null;
       } else {
         result = publisher.sendObject(params);

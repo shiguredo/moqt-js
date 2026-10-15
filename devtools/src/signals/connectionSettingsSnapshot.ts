@@ -48,6 +48,8 @@ export interface ConnectionSettingsSnapshot {
   maxCacheDurationMs: number;
   audioSource: AudioSourceType;
   audioDelivery: AudioDelivery;
+  /** 音声 Object を 1 つにつき何回送るか (1 か 2)。2 のときは経路の損失に備えて 2 回送る */
+  audioRedundancy: number;
   audioCodec: AudioCodecType;
   /** 音声のビットレート (bps) */
   audioBitrateBps: number;
@@ -109,6 +111,7 @@ export function buildConnectionSettingsSnapshot(): ConnectionSettingsSnapshot {
     maxCacheDurationMs: settings.maxCacheDuration.value,
     audioSource: settings.audioSource.value,
     audioDelivery: settings.audioDelivery.value,
+    audioRedundancy: settings.audioRedundancy.value,
     audioCodec: settings.audioCodec.value,
     audioBitrateBps: settings.audioBitrate.value,
     audioSampleRateHz: settings.audioSampleRate.value,

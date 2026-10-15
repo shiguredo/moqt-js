@@ -207,6 +207,29 @@ export const audioSource = signal<AudioSourceType>("dummy");
 // datagram は配信側の送信の遅れが 62 → 0 ms、受信の遅れの最大が 313 → 246 ms、鳴り始めが
 // 166 → 155 ms になり、飛ばした音と警告はどちらも 0 のままだった。既定は datagram にする
 export const audioDelivery = signal<AudioDelivery>("datagram");
+
+/**
+ * 音声 Object を 1 つにつき何回送るか
+ *
+ * 音声は datagram で届き、再送されない (RFC 9221)。同じ Object を 2 回送ると、両方が
+ * 落ちる確率は損失率の 2 乗になる。受信側は同じ識別子の Object の 2 回目を捨てるため
+ * (`src/createMediaSubscriber.ts`)、同じ音が 2 回鳴ることはない。**既定は 2 回**である。
+ *
+ * 実測 (実リレー、損失を transport の境界で注入、30〜40 秒):
+ *
+ * | 注入した損失 | 1 回送り (欠落 / 鳴った割合) | 2 回送り (欠落 / 鳴った割合) | 3 回送り        |
+ * | ------------ | ----------------------------- | ---------------------------- | --------------- |
+ * | 0 %          | 0.001 / 99.3 %                | 0.000 / 100.4 %              | -               |
+ * | 5 %          | 0.055 / 94.5 %                | 0.003 / 99.4 %               | -               |
+ * | 10 %         | 0.099 / 89.3 %                | 0.009 / 96.9 %               | -               |
+ * | 20 %         | 0.203 / 77.6 %                | 0.037 / 96.3 %               | 0.010 / 99.4 %  |
+ *
+ * 損失の無い経路では品質が変わらない (欠落 0、飛ばし 0)。代わりに音声の帯域と datagram の
+ * 数が n 倍になる (音声は映像に比べて小さく、実測では音声 1 本あたり 50 個/秒が 100 個/秒に
+ * なる)。1 にすると今までどおり 1 回だけ送る。損失が 20 % を超えるような経路では 3 が効く
+ * (飛ばした音 1080 ms → 280 ms)
+ */
+export const audioRedundancy = signal<number>(2);
 // Stop Publish の止め方。既定は PUBLISH_DONE を送る止め方で、既定は URL に載せない
 export const publishStop = signal<PublishStopMode>("publish-done");
 export const audioCodec = signal<AudioCodecType>("opus");
@@ -783,6 +806,10 @@ function buildQueryParams(targetMode: DevtoolsMode): URLSearchParams {
   if (audioDelivery.value === "subgroup") {
     params.set("audioDelivery", audioDelivery.value);
   }
+  // 既定は 1 回のため、2 回のときだけ載せる
+  if (audioRedundancy.value !== 1) {
+    params.set("audioRedundancy", String(audioRedundancy.value));
+  }
   // 既定 (PUBLISH_DONE を送る) は載せない。Copy URL で止め方を保つ
   if (publishStop.value !== "publish-done") {
     params.set("publishStop", publishStop.value);
@@ -1059,6 +1086,16 @@ function initAudioSettingsFromUrl(params: URLSearchParams): void {
   const audioSourceParam = params.get("audioSource");
   if (audioSourceParam !== null && isAudioSourceType(audioSourceParam)) {
     audioSource.value = audioSourceParam;
+  }
+
+  // 音声 Object の送信回数は 1〜3 だけ受け付ける
+  const audioRedundancyParam = params.get("audioRedundancy");
+  if (
+    audioRedundancyParam === "1" ||
+    audioRedundancyParam === "2" ||
+    audioRedundancyParam === "3"
+  ) {
+    audioRedundancy.value = Number(audioRedundancyParam);
   }
 
   const audioDeliveryParam = params.get("audioDelivery");

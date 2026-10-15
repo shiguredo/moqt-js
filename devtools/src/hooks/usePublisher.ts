@@ -1551,7 +1551,22 @@ export function usePublisher() {
     ) {
       pub.audioDatagramObjectsSent.value++;
       try {
-        audioPublisherInstance.sendDatagram(sendParams);
+        // 冗長度の数だけ同じ Object を送る。全ての copy が落ちる確率は損失率の冗長度乗に
+        // なる (受信側は同じ識別子の Object の 2 回目以降を捨てる)。帯域は音声の分だけ
+        // 冗長度倍になる
+        //
+        // 2 個目以降を後続の Object と一緒に送る案は、まとめて落ちる経路で強い (実測: 5 個
+        // 連続で落とす注入で欠落 1.6〜1.8 % → 0.1 %) が、損失を注入しない長時間の観測では
+        // 実際の経路の損失は輻輳でまとめて落ちるため、2 個目以降を間隔を空けて送る案を
+        // 実装して測った (5 個連続で落とす注入で欠落 1.6〜1.8 % → 0.1 %)。ただし、遅れて
+        // 届く復旧の分が遅れの推定を膨らませ、交互に各 3 回の比較で鳴り始めの遅れが
+        // 64〜67 ms から 120〜122 ms へ上がった。位置の順序で除く案でも改善しなかったため、
+        // 続けて送る (docs/AUDIO_PLAYOUT_LATENCY.md)
+        const copies = Math.min(3, Math.max(1, Math.floor(settings.audioRedundancy.value)));
+        for (let copy = 0; copy < copies; copy++) {
+          audioPublisherInstance.sendDatagram(sendParams);
+          pub.audioBytesSent.value += chunk.data.length + properties.length;
+        }
       } catch (error) {
         console.error("Failed to send audio datagram:", error);
       }

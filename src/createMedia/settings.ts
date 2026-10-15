@@ -47,6 +47,8 @@ export interface ResolvedAudioPublishSettings {
   channels: number;
   /** 音声 Object の送り方 */
   delivery: AudioDelivery;
+  /** 音声 Object を 1 つにつき何回送るか (1 か 2) */
+  redundancy: number;
 }
 
 /**
@@ -88,6 +90,15 @@ export function resolveAudioPublishSettings(
   const sampleRate = options.sampleRate ?? DEFAULT_AUDIO_SAMPLE_RATE;
   const channels = options.channels ?? DEFAULT_AUDIO_CHANNELS;
   const config = getAudioEncoderConfig(options.codec, options.bitrate, sampleRate, channels);
+  // 冗長度は 1〜3 だけ受理する。4 以上は音声の帯域を無駄にし、0 以下は音が届かない
+  if (
+    options.redundancy !== undefined &&
+    (options.redundancy < 1 || options.redundancy > 3 || !Number.isInteger(options.redundancy))
+  ) {
+    throw new Error(
+      `audio redundancy must be an integer between 1 and 3, got ${options.redundancy}`,
+    );
+  }
 
   return {
     trackName: options.trackName ?? DEFAULT_AUDIO_TRACK_NAME,
@@ -96,6 +107,9 @@ export function resolveAudioPublishSettings(
     bitrate: options.bitrate,
     sampleRate,
     channels,
+    // 既定は 1 回。datagram は再送されない (RFC 9221) ため、損失に備えるなら 2 にする
+    // (src/codec/types.ts の `redundancy` に実測を残す)
+    redundancy: options.redundancy ?? 1,
     // 既定は Subgroup。datagram を指定できるかはセッションの reliability に依存するため、
     // ここでは解決するだけで判定しない (createMediaPublisher の start が判定する)
     delivery: options.delivery ?? "subgroup",

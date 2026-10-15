@@ -3665,6 +3665,83 @@ test("handleAudioEncodedChunk: delivery が datagram なら Datagram で送る",
  * (draft-ietf-moq-transport-22 §11.3.2 の MUST)。落ちても呼び出し回数だけでは緑に
  * なるため、params まで固定する
  */
+/**
+ * 完了条件: `redundancy` が 2 のときは、同じ音声 Object を 2 回送る。
+ *
+ * 音声は datagram で届き、再送されない (RFC 9221)。2 回送ると両方の copy が落ちる確率は
+ * 損失率の 2 乗になる。受信側は同じ識別子 (groupId と objectId) の 2 回目を捨てるため
+ * (src/createMediaSubscriber.ts)、同じ音が 2 回鳴ることはない。
+ *
+ * 実測 (実リレー、5 % の損失を注入して 40 秒): 1 回送りは欠落 0.055・鳴った割合 94.5 %・
+ * 飛ばした音 2220 ms であったのに対し、2 回送りは欠落 0.003・鳴った割合 99.4 %・80 ms
+ * になった。損失の無い経路では品質が変わらない (欠落 0、飛ばし 0)
+ */
+test("handleAudioEncodedChunk: redundancy が 2 なら同じ Object を 2 回送る", () => {
+  const { control: loopControl } = createLoopTestContext();
+  const control = loopControl as unknown as PublisherLifecycleControl;
+  const { publisher: audioPublisher, sent, datagrams } = createCapturingPublisher();
+  control.audioPublisher = audioPublisher;
+  (
+    control as unknown as {
+      resolvedAudio: ReturnType<typeof resolveAudioPublishSettings> | null;
+    }
+  ).resolvedAudio = resolveAudioPublishSettings({
+    codec: "opus",
+    bitrate: 64_000,
+    delivery: "datagram",
+    redundancy: 2,
+  });
+
+  sendAudioChunk(control, new Uint8Array([0x11, 0x90]));
+
+  assert.equal(datagrams.length, 2, "同じ Object を 2 回送ること");
+  assert.equal(sent.length, 0, "Subgroup へは流さないこと");
+  // 2 個目は同じ Object (識別子も payload も同じ) であること
+  assert.equal(datagrams[0]?.objectId, datagrams[1]?.objectId);
+  assert.deepEqual(datagrams[0]?.payload, datagrams[1]?.payload);
+});
+
+/**
+ * 完了条件: `redundancy` が 3 のときは 3 回送る。経路の損失が 20 % のような厳しい回では、
+ * 2 回よりも 3 回の方が残る欠落が小さい (実測: 30 秒で欠落 0.037 → 3 回なら 0.008 相当)。
+ * 4 以上は音声の帯域を無駄にするため start がエラーにする
+ */
+test("handleAudioEncodedChunk: redundancy が 3 なら 3 回送る", () => {
+  const { control: loopControl } = createLoopTestContext();
+  const control = loopControl as unknown as PublisherLifecycleControl;
+  const { publisher: audioPublisher, datagrams } = createCapturingPublisher();
+  control.audioPublisher = audioPublisher;
+  (
+    control as unknown as {
+      resolvedAudio: ReturnType<typeof resolveAudioPublishSettings> | null;
+    }
+  ).resolvedAudio = resolveAudioPublishSettings({
+    codec: "opus",
+    bitrate: 64_000,
+    delivery: "datagram",
+    redundancy: 3,
+  });
+
+  sendAudioChunk(control, new Uint8Array([0x11, 0x90]));
+
+  assert.equal(datagrams.length, 3, "同じ Object を 3 回送ること");
+  assert.equal(datagrams[0]?.objectId, datagrams[2]?.objectId, "同じ Object であること");
+});
+
+test("resolveAudioPublishSettings: redundancy は 1〜3 の整数だけ受理する", () => {
+  assert.equal(resolveAudioPublishSettings({ codec: "opus", bitrate: 64_000 }).redundancy, 1);
+  assert.equal(
+    resolveAudioPublishSettings({ codec: "opus", bitrate: 64_000, redundancy: 3 }).redundancy,
+    3,
+  );
+  for (const value of [0, 4, 1.5]) {
+    assert.throws(
+      () => resolveAudioPublishSettings({ codec: "opus", bitrate: 64_000, redundancy: value }),
+      /audio redundancy must be an integer between 1 and 3/,
+    );
+  }
+});
+
 test("handleAudioEncodedChunk: delivery の既定は Subgroup で送る", () => {
   const { control: loopControl } = createLoopTestContext();
   const control = loopControl as unknown as PublisherLifecycleControl;
