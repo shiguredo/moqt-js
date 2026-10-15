@@ -20,14 +20,17 @@
 - 観測は 60 秒。`AUDIO_PLAYOUT_DELAY_FLOOR_MS` と `AUDIO_DELAY_FEEDBACK_MIN_MS` の 2 つを
   30 / 50 / 80 ms に変えて、各 3 回を交互に実行する (時間帯による経路の条件の違いを、
   下限の違いと混ざらないようにするため)
-- 実行は `investigation-audio-delay-floor.sh` (worktree の直下)。生のログは
-  `investigation-logs/` に置く
-- 1 秒ごとの観測は `tests/e2e/relay/investigation-audio-delay.spec.ts` が行う。これは調査専用で
-  あり、改善ブランチには含めない (追跡しない)。実行例:
+- 実行は、定数を書き換えて各条件を交互に繰り返す (当時の A/B 用のスクリプトは作業環境の
+  ものであり、リポジトリには含めていない)。生のログは `investigation-logs/` へ置く
+  (`.gitignore` に登録済み)
+- 1 秒ごとの観測は `tests/e2e/relay/investigation-audio-delay.spec.ts` が行う。調査専用であり、
+  CI を遅くしないよう `MOQT_INVESTIGATION=1` のときだけ動く (既定では skip する)。実行例:
 
   ```
-  npx vp exec playwright test --project=relay --grep "調査: A/V 同期と音声の遅延の内訳を"
-  npx vp exec playwright test --project=relay --grep "調査: 音声の出力の遅れを測る"
+  MOQT_INVESTIGATION=1 npx vp exec playwright test --project=relay \
+    --grep "調査: A/V 同期と音声の遅延の内訳を"
+  MOQT_INVESTIGATION=1 npx vp exec playwright test --project=relay \
+    --grep "調査: 音声の出力の遅れを測る"
   ```
 
   `音声の出力の遅れを測る` の方は、`AudioContext` の `getOutputTimestamp()` と `outputLatency`、
@@ -147,7 +150,7 @@ jitter が 140 ms でも警告が出ない回があり (4 回)、警告の条件
 585〜1267 ms である。経路が静かな回 (同じ日の午前、時間圧縮 5〜65 ms) と比べて 1 桁以上多く、
 圧縮は「声では粗さとして聞こえる」量である。上限が無ければ jitter の分 (100〜280 ms) まで
 バッファを伸ばせるため、圧縮は減るが遅延が増える。どちらを取るかは実測で決める必要がある
-(`investigation-audio-delay-cap.sh` で上限 100 と 160 を比べる)。
+(`AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS` と `AUDIO_PLAYOUT_ARRIVAL_DELAY_MS` を変えて比べる)。
 
 ### 目標遅延の上限の比較 (2026-10-15、各 3 回)
 
@@ -640,7 +643,7 @@ skippedMs=0, catchUpLagMs=18, receiveDelayMs=19, maxReceiveDelayMs=115, warnings
 
 ## この調査で確認したこと
 
-- 単体テスト: 222 ファイル / 3921 テストが通る (`vp test run`)
+- 単体テスト: 222 ファイル / 3929 テストが通る (`vp test run`)
 - 整形・lint・型: `vp check` が通る
 - 実リレーの E2E: `--project=relay` の 19 テストが通る (60 秒の長時間テストを含む)。
-  調査用の採取テストは `investigation-audio-delay.spec.ts` に分けてあり、追跡しない
+  調査用の採取テスト (`investigation-audio-delay.spec.ts`) は既定で skip する
