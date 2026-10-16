@@ -31,18 +31,21 @@ import { AudioDecoderWrapper } from "./codec/AudioDecoder";
 import { VideoDecoderWrapper } from "./codec/VideoDecoder";
 import { VideoDecodeOrder, priorObjectIdGapOf } from "./videoDecodeOrder";
 import { GroupSwitchGate } from "./groupSwitchGate";
-import type { AudioClockBridge, AudioPlayoutScheduler } from "./audioPlayout";
-import { AudioPlayoutTimingStats, AUDIO_PLAYOUT_TIMING_WINDOW_MS } from "./audioPlayoutTimingStats";
+import type { AudioClockBridge, AudioPlayoutScheduler } from "./playout/audioPlayout";
+import {
+  AudioPlayoutTimingStats,
+  AUDIO_PLAYOUT_TIMING_WINDOW_MS,
+} from "./playout/audioPlayoutTimingStats";
 // 復号した音声の再生の組み立ては devtools と共有する (到着基準の遅れ・閉ループ・計器を
-// 1 か所に置くため、src/audioPlayoutSession.ts が持つ)
-import { LastTimestampKind, takeDecodeInputEntry } from "./decodeInputTimestamps";
-import { AudioPlayoutSession, type AudioPlayoutTimestampKind } from "./audioPlayoutSession";
-import { JITTER_BUFFER_MAX_QUEUED_FRAMES } from "./playoutBuffer";
-import { PlaybackTimeline } from "./playbackTimeline";
+// 1 か所に置くため、src/playout/audioPlayoutSession.ts が持つ)
+import { LastTimestampKind, takeDecodeInputEntry } from "./playout/decodeInputTimestamps";
+import { AudioPlayoutSession, type AudioPlayoutTimestampKind } from "./playout/audioPlayoutSession";
+import { JITTER_BUFFER_MAX_QUEUED_FRAMES } from "./playout/buffer";
+import { PlayoutTimeline } from "./playout/timeline";
 // 復号した映像フレームの表示の組み立て (対応表・時間軸への記録・表示の選択・計器への記録) は
-// devtools と共有する (src/videoPlayoutSession.ts)。組み立てを 2 か所へ置くと、表示の遅れ・
+// devtools と共有する (src/playout/videoPlayoutSession.ts)。組み立てを 2 か所へ置くと、表示の遅れ・
 // あふれの扱い・計器の修正のたびに両方を直すことになり、片方だけ直すと挙動がずれる
-import { VideoDecodeInputs, VideoPlayoutSession } from "./videoPlayoutSession";
+import { VideoDecodeInputs, VideoPlayoutSession } from "./playout/videoPlayoutSession";
 import { DEFAULT_AUDIO_SAMPLE_RATE, resolveAudioChannelCount } from "./codec/config";
 import type {
   AudioCodecType,
@@ -543,13 +546,13 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   private audioDestination: MediaStreamAudioDestinationNode | null = null;
   // 音声の再生の観測 (鳴るはずの時刻・届いた時刻・鳴り始める時刻と、鳴らなかった量)。
   // 鳴らなかった音がどこの段で落ちているかを数値で切り分けるために持つ
-  // (src/audioPlayoutTimingStats.ts)。購読をやり直しても消えない
+  // (src/playout/audioPlayoutTimingStats.ts)。購読をやり直しても消えない
   private readonly audioPlayoutTiming = new AudioPlayoutTimingStats(
     AUDIO_PLAYOUT_TIMING_WINDOW_MS,
     performance.timeOrigin,
   );
   // 復号した音声を鳴らす組み立て (時間軸への記録・目標の決定・予約・計器への記録) は
-  // devtools と共有する (src/audioPlayoutSession.ts)。組み立てを 2 か所へ置くと、到着基準の
+  // devtools と共有する (src/playout/audioPlayoutSession.ts)。組み立てを 2 か所へ置くと、到着基準の
   // 遅れ・閉ループ・計器の修正のたびに両方を直すことになり、片方だけ直すと挙動がずれる。
   // AudioContext を作るたびに reset() で基準を作り直す
   private readonly audioPlayoutSession = new AudioPlayoutSession({
@@ -566,12 +569,12 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     return this.audioPlayoutSession.clock;
   }
   // 音声と映像で共有する表示時刻の時間軸。同じ targetLatency と同じ遅れを使う
-  private readonly playbackTimeline = new PlaybackTimeline({
+  private readonly playoutTimeline = new PlayoutTimeline({
     timeOriginMs: performance.timeOrigin,
     maxQueuedFrames: JITTER_BUFFER_MAX_QUEUED_FRAMES,
   });
   // 復号した映像の表示の組み立て (対応表・時間軸への記録・表示の選択・計器への記録) は
-  // devtools と共有する (src/videoPlayoutSession.ts)。表示すると決めたフレームは
+  // devtools と共有する (src/playout/videoPlayoutSession.ts)。表示すると決めたフレームは
   // MediaStreamTrackGenerator へ書き、表示の間隔はブラウザが TIMESTAMP から決める
   private readonly videoDecodeInputs = new VideoDecodeInputs({
     maxTracked: TIMESTAMP_KIND_MAX_TRACKED,
@@ -580,7 +583,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     forgetOnDuplicate: false,
   });
   private readonly videoPlayoutSession = new VideoPlayoutSession({
-    timeline: this.playbackTimeline,
+    timeline: this.playoutTimeline,
     output: {
       isAvailable: () => this.videoWriter !== null && !this.videoPlayoutStopped,
       present: (frame) => this.presentVideoFrame(frame),
@@ -596,7 +599,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   // 音声も同じ対応表を持つ (Timescale がある TIMESTAMP は壁時計ではない)
   private readonly audioTimestampKinds = new Map<number, "wallClock" | "mediaTime">();
   // 直前に記録した音声の TIMESTAMP の種類。復号の出力で対応が引けなくなったときに使う
-  // (src/decodeInputTimestamps.ts の `LastTimestampKind` を参照)
+  // (src/playout/decodeInputTimestamps.ts の `LastTimestampKind` を参照)
   private readonly lastAudioTimestampKind = new LastTimestampKind<"wallClock" | "mediaTime">();
   // 音声と映像の両方で壁時計の TIMESTAMP を観測したか (同期の推定を出せるか)
   private audioWallClockSeen = false;
@@ -1023,7 +1026,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       playoutLatenessMs: this.audioPlayout.lateness * 1_000,
       // 分布は直近 10 秒のため、呼び出した時点の値を取る
       playoutTiming: this.audioPlayoutTiming.snapshot(performance.now()),
-      // 受信側の音声の追いつき (src/audioReceiveCatchUp.ts)
+      // 受信側の音声の追いつき (src/playout/audioReceiveCatchUp.ts)
       playoutCatchUp: this.audioPlayoutSession.catchUp.snapshot(),
     };
   }
@@ -1043,12 +1046,12 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       return null;
     }
     return {
-      skewMs: this.playbackTimeline.skewMs(),
-      presentationDelayMs: this.playbackTimeline.presentationDelayMs,
-      targetLatencyMs: this.playbackTimeline.targetLatencyMs,
-      targetLatencyLimitedMs: this.playbackTimeline.targetLatencyLimitedMs,
+      skewMs: this.playoutTimeline.skewMs(),
+      presentationDelayMs: this.playoutTimeline.presentationDelayMs,
+      targetLatencyMs: this.playoutTimeline.targetLatencyMs,
+      targetLatencyLimitedMs: this.playoutTimeline.targetLatencyLimitedMs,
       audioClockFallback: this.audioClockBridge.usingFallback,
-      delays: this.playbackTimeline.delayBreakdown,
+      delays: this.playoutTimeline.delayBreakdown,
     };
   }
 
@@ -1115,7 +1118,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
    * audioTimestampKinds / 復号へ渡した映像フレームの対応表 (videoDecodeInputs) / 保留中の
    * Object (音声 / 映像 / Group の切り替え) と上限超過の通知済みフラグ / 表示待ちの
    * 映像フレームと予約した表示 (videoPlayoutSession) /
-   * 共有の時間軸 (playbackTimeline) と、音声の再生の時計の対応と直前の音
+   * 共有の時間軸 (playoutTimeline) と、音声の再生の時計の対応と直前の音
    * (audioPlayoutSession の releaseAudioContext) である。
    * 統計 (audioStats / videoStats) は publisher と同じく再 start へ引き継ぐ。
    * 音声の再生の予約の基準 (audioPlayoutSession) は AudioContext と対で作り直すため、
@@ -1242,7 +1245,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     // 共有の時間軸を作り直し、AudioContext を閉じた後始末をする (時計の対応と直前の音を
     // 消す。予約の基準は統計 (playoutLatenessMs) が読むため残す。AudioClockBridge.reset の
     // JSDoc を参照)
-    this.playbackTimeline.reset();
+    this.playoutTimeline.reset();
     this.audioPlayoutSession.releaseAudioContext();
     this.audioTimestampKinds.clear();
     this.lastAudioTimestampKind.reset();
@@ -1742,7 +1745,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     }
 
     // 解決した track から targetLatency を決めて共有の時間軸へ渡す (draft-ietf-moq-msf-01 §5.2.8)
-    this.playbackTimeline.setTargetLatencyMs(this.resolveSharedTargetLatencyMs());
+    this.playoutTimeline.setTargetLatencyMs(this.resolveSharedTargetLatencyMs());
   }
 
   /**
@@ -1809,7 +1812,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       // 共有の時間軸も作り直す (AudioPlayoutSession.reset と AudioClockBridge.reset の
       // JSDoc を参照)
       this.audioPlayoutSession.reset();
-      this.playbackTimeline.reset();
+      this.playoutTimeline.reset();
       // ブラウザの自動再生ポリシー対応。resume() の失敗は他に通知先が無く、
       // 放置すると未処理の rejection になるため onError へ 1 回流す。
       // 通知の失敗でもこの経路を reject させない (返値の Promise を捨てるため、
@@ -2657,7 +2660,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
    * 復号した音声を鳴らす
    *
    * 再生の組み立て (時間軸への記録・目標の決定・予約・計器への記録) は devtools と共有する
-   * `AudioPlayoutSession` が持つ (src/audioPlayoutSession.ts)。ここは、購読ごとの状態
+   * `AudioPlayoutSession` が持つ (src/playout/audioPlayoutSession.ts)。ここは、購読ごとの状態
    * (復号の出力の timestamp の種類と、鳴らす先の取得) を共有実装へ渡すだけにする。
    *
    * 鳴らす先が無いとき (音声を再生しない購読、AudioContext を閉じた後) は何もせずに閉じる。
@@ -2689,7 +2692,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       const result = this.audioPlayoutSession.handleDecodedAudio({
         data: audioData,
         timestampKind,
-        timeline: this.playbackTimeline,
+        timeline: this.playoutTimeline,
         // ライブラリは jitter buffer を常に有効として扱う
         useTimeline: true,
         // 映像も購読しているときだけ目標の時刻を守る。音声だけのときは取り直して連続を優先する
@@ -2701,7 +2704,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       }
       if (result.status !== "skipped" && result.catchUpStarted) {
         // 受信側の追いつきを始めた。復号器に溜まった古い音は、鳴らさずに捨てるだけでは
-        // 減らないため、復号器を作り直して捨てる (src/audioReceiveCatchUp.ts)
+        // 減らないため、復号器を作り直して捨てる (src/playout/audioReceiveCatchUp.ts)
         void this.resetAudioDecoderForCatchUp();
       }
     } catch (error) {
@@ -2717,7 +2720,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
    * 受信側の音声の追いつきのために、音声の復号器を作り直す
    *
    * 復号器の中に溜まった古い音は実時間と同じ速さでしか出てこないため、鳴らさずに捨てる
-   * だけでは live へ戻らない。詳しい根拠と実測は src/audioReceiveCatchUp.ts が持つ。
+   * だけでは live へ戻らない。詳しい根拠と実測は src/playout/audioReceiveCatchUp.ts が持つ。
    * 作り直しの失敗は、復号の失敗として onError へ通知する (この後も復号は続くため、
    * 購読そのものは止めない)。
    */
@@ -2737,7 +2740,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
    * 復号した映像フレームを表示待ちへ渡す
    *
    * 表示の組み立て (対応表・時間軸への記録・表示の選択・計器への記録) は devtools と共有する
-   * `VideoPlayoutSession` が持つ (src/videoPlayoutSession.ts)。ここは、購読ごとの状態
+   * `VideoPlayoutSession` が持つ (src/playout/videoPlayoutSession.ts)。ここは、購読ごとの状態
    * (復号の出力の timestamp の種類) を共有実装へ渡すだけにする。
    *
    * 出し先が無いとき (映像を表示しない購読、writer を閉じた後) は共有実装がフレームを閉じる。

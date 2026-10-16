@@ -159,7 +159,7 @@ const AV_UNSHARED_RECOVERY_MAX_MS = 35_000;
 /**
  * 表示時刻の差を観測する長さ (ミリ秒)
  *
- * 差は「音声と映像それぞれの表示の実績が 1 秒以内にある」ときだけ出る (src/playbackTimeline.ts
+ * 差は「音声と映像それぞれの表示の実績が 1 秒以内にある」ときだけ出る (src/playout/timeline.ts
  * の `skewMs`)。実測 (2026-10-15、実リレー、600 ms ごとに観測) では 15 秒で観測できたのは
  * 3 件であり、要求 (`SKEW_MIN_SAMPLES`) ちょうどで余裕が無かった。45 秒にすると 3 倍になる
  */
@@ -1117,7 +1117,7 @@ test("実リレー経由で同じブラウザから音声を配信し、送る T
   // 合わせて遅らせるためこの値も伸びるが、runner の処理能力でも伸びる (実測: 1 vCPU の
   // コンテナでは、音声の基準が安定していても上限を超えた)。観測値としてログへ残す
   const videoDisplayWaitP95Ms =
-    stats.subscriber?.playbackTiming.latencyBreakdown.displayWait?.p95 ?? null;
+    stats.subscriber?.playoutTiming.latencyBreakdown.displayWait?.p95 ?? null;
   console.log(
     `実リレーの音声の観測: 映像の表示待ちの p95 ${videoDisplayWaitP95Ms === null ? "-" : videoDisplayWaitP95Ms.toFixed(1)} ms (runner の処理能力でも動くため判定には使わない)`,
   );

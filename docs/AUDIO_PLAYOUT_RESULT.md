@@ -5,16 +5,16 @@
 
 ## 仕組み
 
-- **受信**: datagram で届く音声 Object を復号し、共有の時間軸 (`src/playbackTimeline.ts`) へ
-  到着と TIMESTAMP を記録する。時間軸は NetEq と同じ規則 (`src/audioDelayManager.ts`) で
-  遅れの 0.95 分位から目標遅延を求め、閉ループ (`src/audioDelayFeedback.ts`) が実測の遅れ・
+- **受信**: datagram で届く音声 Object を復号し、共有の時間軸 (`src/playout/timeline.ts`) へ
+  到着と TIMESTAMP を記録する。時間軸は NetEq と同じ規則 (`src/playout/audioDelayManager.ts`) で
+  遅れの 0.95 分位から目標遅延を求め、閉ループ (`src/playout/audioDelayFeedback.ts`) が実測の遅れ・
   余裕で補正する
 - **鳴らす**: 目標の時刻に予約し、間に合わない分は時間圧縮、欠けた分は波形の繰り返しで
-  補間する (`src/audioPlayout.ts` / `src/audioTimeStretch.ts`)
+  補間する (`src/playout/audioPlayout.ts` / `src/playout/audioTimeStretch.ts`)
 - **A/V 同期**: 音声と映像の「表示時刻 − TIMESTAMP」の差を不感帯 (5 ms) で制御し、映像を
   最大 100 ms まで待たせて音声へ合わせる (決定 1 / 9)
 - **追いつき**: 復号の出力が送られた TIMESTAMP から遅れ続けたら、復号器を作り直して live へ
-  戻す (`src/audioReceiveCatchUp.ts`。決定 10)
+  戻す (`src/playout/audioReceiveCatchUp.ts`。決定 10)
 - **パケロス**: 配信側が同じ Object を 2 回送る。受信側は同じ識別子の 2 回目を捨てる
   (`src/createMediaPublisher.ts` / `src/createMediaSubscriber.ts`)
 

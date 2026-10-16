@@ -53,7 +53,7 @@ function maxStep(samples: AudioSamples): number {
 // 削ってよい長さの上限より周期が長いときは操作しない。時間圧縮は周期を 1 つ削るため、
 // 遅れ (上限) が周期より短い音で動かすと削りすぎて「早すぎる」側へ振れ、次の音でまた
 // 遅れて詰める往復になる (実測: 55 秒の再生で 2727 ms を詰めていた。声では粗さとして
-// 聞こえる)。実際の呼び出しは src/audioPlayoutSession.ts が遅れの分を上限に渡す
+// 聞こえる)。実際の呼び出しは src/playout/audioPlayoutSession.ts が遅れの分を上限に渡す
 test("compressSamples: 周期が上限より長いときは操作しない", () => {
   const frame = sineFrame(5);
   // 上限 120 サンプル (2.5 ms) は周期 240 サンプル (5 ms) より短い

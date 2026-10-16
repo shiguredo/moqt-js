@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 import type { SubscriberStats } from "../../devtools/src/testApi";
-import { EMPTY_AUDIO_PLAYOUT_TIMING } from "../../src/audioPlayoutTimingStats";
+import { EMPTY_AUDIO_PLAYOUT_TIMING } from "../../src/playout/audioPlayoutTimingStats";
 import { DEVTOOLS_URL } from "./urls";
 
 // devtools の Subscriber パネルとテスト用 API が、音声の再生の観測値

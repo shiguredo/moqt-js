@@ -15,14 +15,14 @@ import {
   TimingTable,
 } from "./StatsView";
 import {
-  AUDIO_PLAYBACK_CATCH_UP_HELP,
-  AUDIO_PLAYBACK_MISSED_HELP,
-  AUDIO_PLAYBACK_TIMING_HELP,
+  AUDIO_PLAYOUT_CATCH_UP_HELP,
+  AUDIO_PLAYOUT_MISSED_HELP,
+  AUDIO_PLAYOUT_TIMING_HELP,
   AV_SYNC_HELP,
   DECODING_PIPELINE_HELP,
   LOSS_HELP,
-  PLAYBACK_TIMING_CAPTION,
-  PLAYBACK_TIMING_HELP,
+  PLAYOUT_TIMING_CAPTION,
+  PLAYOUT_TIMING_HELP,
   STALL_CAUSES_HELP,
   SUBSCRIBER_LATENCY_BREAKDOWN_HELP,
   SUBSCRIBER_WARNINGS_HELP,
@@ -34,8 +34,11 @@ import { formatPreconditionWarning } from "../utils/preconditionWarnings";
 import { CatalogTracks } from "./CatalogTracks";
 import { MessageList } from "./MessageList";
 import { PANEL_OPTION_CAPTION_CLASS, PANEL_OPTION_ROW_CLASS } from "./panelLayout";
-import { formatLossEvent, formatStallEvent } from "../utils/playbackTimingStats";
-import { AUDIO_MISS_REASONS, formatAudioMissEvent } from "../../../src/audioPlayoutTimingStats.ts";
+import { formatLossEvent, formatStallEvent } from "../utils/playoutTimingStats";
+import {
+  AUDIO_MISS_REASONS,
+  formatAudioMissEvent,
+} from "../../../src/playout/audioPlayoutTimingStats.ts";
 import { LATENCY_SEGMENTS } from "../utils/latencyBreakdown";
 import { STALL_CAUSES } from "../utils/stallAnalysis";
 import { subscriberControlState } from "../utils/subscriberControls";
@@ -577,11 +580,11 @@ function SubscriberStats({ statsSignal }: { statsSignal: ReadonlySignal<Subscrib
       <StatGroup title="Audio Playback">
         <StatSection
           title="Timing"
-          help={AUDIO_PLAYBACK_TIMING_HELP}
+          help={AUDIO_PLAYOUT_TIMING_HELP}
           testId="subscriber-audio-playback-timing"
         >
           <TimingTable
-            caption={PLAYBACK_TIMING_CAPTION}
+            caption={PLAYOUT_TIMING_CAPTION}
             testId="subscriber-audio-playback-timing"
             rows={[
               {
@@ -653,12 +656,12 @@ function SubscriberStats({ statsSignal }: { statsSignal: ReadonlySignal<Subscrib
 
         <StatSection
           title="Catch-up"
-          help={AUDIO_PLAYBACK_CATCH_UP_HELP}
+          help={AUDIO_PLAYOUT_CATCH_UP_HELP}
           testId="subscriber-audio-playback-catch-up"
         >
           {/* 復号の出力が送られた TIMESTAMP から遅れ続けたときに、復号器を作り直して
               live へ戻した量。鳴らす音は捨てず、復号器の中に溜まった分を捨てる
-              (src/audioReceiveCatchUp.ts) */}
+              (src/playout/audioReceiveCatchUp.ts) */}
           <StatList
             items={[
               {
@@ -717,7 +720,7 @@ function SubscriberStats({ statsSignal }: { statsSignal: ReadonlySignal<Subscrib
 
         <StatSection
           title="Missed"
-          help={AUDIO_PLAYBACK_MISSED_HELP}
+          help={AUDIO_PLAYOUT_MISSED_HELP}
           testId="subscriber-audio-playback-missed"
         >
           <StatTable
@@ -815,30 +818,30 @@ function SubscriberStats({ statsSignal }: { statsSignal: ReadonlySignal<Subscrib
 
         <StatSection
           title="Playback Timing"
-          help={PLAYBACK_TIMING_HELP}
+          help={PLAYOUT_TIMING_HELP}
           testId="subscriber-playback-timing"
         >
           <TimingTable
-            caption={PLAYBACK_TIMING_CAPTION}
+            caption={PLAYOUT_TIMING_CAPTION}
             rows={[
               {
                 label: "arrivalJitter",
-                summary: stats.playbackTiming.arrivalJitterMs,
+                summary: stats.playoutTiming.arrivalJitterMs,
                 testId: "subscriber-arrival-jitter",
               },
               {
                 label: "latency",
-                summary: stats.playbackTiming.latencyMs,
+                summary: stats.playoutTiming.latencyMs,
                 testId: "subscriber-latency",
               },
               {
                 label: "decodeTime",
-                summary: stats.playbackTiming.decodeTimeMs,
+                summary: stats.playoutTiming.decodeTimeMs,
                 testId: "subscriber-decode-time",
               },
               {
                 label: "displayInterval",
-                summary: stats.playbackTiming.displayIntervalMs,
+                summary: stats.playoutTiming.displayIntervalMs,
                 testId: "subscriber-display-interval",
               },
             ]}
@@ -847,38 +850,38 @@ function SubscriberStats({ statsSignal }: { statsSignal: ReadonlySignal<Subscrib
             items={[
               {
                 label: "displayFps",
-                value: stats.playbackTiming.displayFps,
+                value: stats.playoutTiming.displayFps,
                 testId: "subscriber-display-fps",
               },
               {
                 label: "displayStalls",
-                value: stats.playbackTiming.displayStalls,
+                value: stats.playoutTiming.displayStalls,
                 tone: "warn",
                 testId: "subscriber-display-stalls",
               },
               {
                 label: "displayStallMs",
-                value: Math.round(stats.playbackTiming.displayStallMs),
+                value: Math.round(stats.playoutTiming.displayStallMs),
                 tone: "warn",
                 testId: "subscriber-display-stall-ms",
               },
               {
                 label: "displayQueueDrops",
-                value: stats.playbackTiming.displayQueueDrops,
+                value: stats.playoutTiming.displayQueueDrops,
                 tone: "warn",
                 testId: "subscriber-display-queue-drops",
               },
               {
                 label: "playoutDelayMs",
                 value:
-                  stats.playbackTiming.playoutDelayMs === null
+                  stats.playoutTiming.playoutDelayMs === null
                     ? "-"
-                    : stats.playbackTiming.playoutDelayMs.toFixed(1),
+                    : stats.playoutTiming.playoutDelayMs.toFixed(1),
                 testId: "subscriber-playout-delay",
               },
               {
                 label: "lateFramesDropped",
-                value: stats.playbackTiming.lateFramesDropped,
+                value: stats.playoutTiming.lateFramesDropped,
                 tone: "warn",
                 testId: "subscriber-late-frames-dropped",
               },
@@ -892,11 +895,11 @@ function SubscriberStats({ statsSignal }: { statsSignal: ReadonlySignal<Subscrib
           testId="subscriber-latency-breakdown"
         >
           <TimingTable
-            caption={PLAYBACK_TIMING_CAPTION}
+            caption={PLAYOUT_TIMING_CAPTION}
             testId="subscriber-latency-breakdown"
             rows={LATENCY_SEGMENTS.map((segment) => ({
               label: segment,
-              summary: stats.playbackTiming.latencyBreakdown[segment],
+              summary: stats.playoutTiming.latencyBreakdown[segment],
               testId: `subscriber-latency-breakdown-${segment}`,
               // 表示の遅延はほかの区間の和のため、合計の行として区切る
               total: segment === TOTAL_LATENCY_SEGMENT,
@@ -911,7 +914,7 @@ function SubscriberStats({ statsSignal }: { statsSignal: ReadonlySignal<Subscrib
             testId="subscriber-stall-causes"
             rows={[
               ...STALL_CAUSES.map((cause) => {
-                const total = stats.playbackTiming.stallCauses[cause];
+                const total = stats.playoutTiming.stallCauses[cause];
                 return {
                   label: cause,
                   values: [String(total.count), String(Math.round(total.ms))],
@@ -924,8 +927,8 @@ function SubscriberStats({ statsSignal }: { statsSignal: ReadonlySignal<Subscrib
               {
                 label: "total",
                 values: [
-                  String(stats.playbackTiming.displayStalls),
-                  String(Math.round(stats.playbackTiming.displayStallMs)),
+                  String(stats.playoutTiming.displayStalls),
+                  String(Math.round(stats.playoutTiming.displayStallMs)),
                 ],
                 testId: "subscriber-stall-cause-total",
                 total: true,
@@ -935,7 +938,7 @@ function SubscriberStats({ statsSignal }: { statsSignal: ReadonlySignal<Subscrib
           <EventLog
             label="recentStalls"
             hint="UTC, newest first"
-            lines={[...stats.playbackTiming.recentStalls]
+            lines={[...stats.playoutTiming.recentStalls]
               .reverse()
               .map((stall) => formatStallEvent(stall))}
             testId="subscriber-recent-stalls"
@@ -947,25 +950,25 @@ function SubscriberStats({ statsSignal }: { statsSignal: ReadonlySignal<Subscrib
             items={[
               {
                 label: "missingObjects",
-                value: stats.playbackTiming.missingObjects,
+                value: stats.playoutTiming.missingObjects,
                 tone: "error",
                 testId: "subscriber-missing-objects",
               },
               {
                 label: "missingGroups",
-                value: stats.playbackTiming.missingGroups,
+                value: stats.playoutTiming.missingGroups,
                 tone: "error",
                 testId: "subscriber-missing-groups",
               },
               {
                 label: "subgroupStreamResets",
-                value: stats.playbackTiming.subgroupStreamResets,
+                value: stats.playoutTiming.subgroupStreamResets,
                 tone: "error",
                 testId: "subscriber-subgroup-stream-resets",
               },
               {
                 label: "groupSwitchHoldExpirations",
-                value: stats.playbackTiming.groupSwitchHoldExpirations,
+                value: stats.playoutTiming.groupSwitchHoldExpirations,
                 tone: "warn",
                 testId: "subscriber-group-switch-hold-expirations",
               },
@@ -975,7 +978,7 @@ function SubscriberStats({ statsSignal }: { statsSignal: ReadonlySignal<Subscrib
             label="subgroupStreamResetsByCode"
             hint="count per error code"
             showCount={false}
-            lines={Object.entries(stats.playbackTiming.subgroupStreamResetsByCode).map(
+            lines={Object.entries(stats.playoutTiming.subgroupStreamResetsByCode).map(
               ([code, count]) => `${code}: ${count}`,
             )}
             testId="subscriber-subgroup-stream-resets-by-code"
@@ -983,7 +986,7 @@ function SubscriberStats({ statsSignal }: { statsSignal: ReadonlySignal<Subscrib
           <EventLog
             label="recentLossEvents"
             hint="UTC, newest first"
-            lines={[...stats.playbackTiming.recentLossEvents]
+            lines={[...stats.playoutTiming.recentLossEvents]
               .reverse()
               .map((lossEvent) => formatLossEvent(lossEvent))}
             testId="subscriber-recent-loss-events"
@@ -1281,21 +1284,21 @@ function SubscriberVideoCard({
   const dropped =
     stats.staleFramesDropped +
     stats.missingReferenceFramesDropped +
-    stats.playbackTiming.lateFramesDropped +
-    stats.playbackTiming.displayQueueDrops;
+    stats.playoutTiming.lateFramesDropped +
+    stats.playoutTiming.displayQueueDrops;
   return (
     <VideoCard
       testIdPrefix="subscriber-video"
-      fps={subscriberActive ? stats.playbackTiming.displayFps : null}
+      fps={subscriberActive ? stats.playoutTiming.displayFps : null}
       latency={[
         {
           label: "latency",
-          summary: stats.playbackTiming.latencyMs,
+          summary: stats.playoutTiming.latencyMs,
           testId: "subscriber-video-latency",
         },
         {
           label: "decode",
-          summary: stats.playbackTiming.decodeTimeMs,
+          summary: stats.playoutTiming.decodeTimeMs,
           testId: "subscriber-video-decode",
         },
       ]}

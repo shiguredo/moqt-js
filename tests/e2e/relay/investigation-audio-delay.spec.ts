@@ -677,7 +677,7 @@ test("調査: 音声の出力の遅れを測る", async ({ page }) => {
 //
 // - `devtools/src/hooks/useSubscriber.ts` の `handleAudioObject` に `obj-probe`
 //   (受信した Object の時刻と到着。devtools は `createMediaSubscriber` を通らない)
-// - `src/audioPlayoutSession.ts` の `catchUp.observe` の呼び出しに `catch-probe`
+// - `src/playout/audioPlayoutSession.ts` の `catchUp.observe` の呼び出しに `catch-probe`
 //   (復号の出力の時刻と、追いつきが作り直しを決めたか)
 test("調査: 受信した Object の時刻の間隔を数える", async ({ page }) => {
   // 調査用のため、明示したときだけ動かす

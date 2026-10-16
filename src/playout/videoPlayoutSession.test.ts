@@ -3,7 +3,7 @@
  *
  * `VideoFrame` と canvas / `MediaStreamTrackGenerator` は node 環境に実物が無いため、
  * 既存の検証と同じく記録用の最小オブジェクトを注入する (モジュール置換は行わない)。時間軸
- * (`PlaybackTimeline`) と `PlayoutBuffer` は実物を使い、共有のロジックとして通しで検証する。
+ * (`PlayoutTimeline`) と `PlayoutBuffer` は実物を使い、共有のロジックとして通しで検証する。
  *
  * ライブラリ (`src/createMediaSubscriber.ts`) と devtools (`devtools/src/hooks/useSubscriber.ts`)
  * が同じ実装を使うため、ここで固定した挙動が両方の基準になる。
@@ -16,8 +16,8 @@ import {
   type VideoPlayoutOutput,
   type VideoPlayoutTiming,
 } from "./videoPlayoutSession";
-import { JITTER_BUFFER_MAX_QUEUED_FRAMES } from "./playoutBuffer";
-import { PlaybackTimeline } from "./playbackTimeline";
+import { JITTER_BUFFER_MAX_QUEUED_FRAMES } from "./buffer";
+import { PlayoutTimeline } from "./timeline";
 
 /**
  * 時間軸の基準にする時刻 (ミリ秒)
@@ -190,8 +190,8 @@ function makeRecordingTiming(): RecordedTiming {
 }
 
 /** まだ何も観測していない時間軸を作る (表示時刻を決められない状態) */
-function makeEmptyTimeline(): PlaybackTimeline {
-  return new PlaybackTimeline({
+function makeEmptyTimeline(): PlayoutTimeline {
+  return new PlayoutTimeline({
     timeOriginMs: TIME_ORIGIN_MS,
     maxQueuedFrames: JITTER_BUFFER_MAX_QUEUED_FRAMES,
   });
@@ -210,7 +210,7 @@ function makeEmptyTimeline(): PlaybackTimeline {
 function makeTimeline(
   observedMs: number,
   targetLatencyMs?: number,
-): { timeline: PlaybackTimeline; timestampMicros: number } {
+): { timeline: PlayoutTimeline; timestampMicros: number } {
   const timeline = makeEmptyTimeline();
   if (targetLatencyMs !== undefined) {
     timeline.setTargetLatencyMs(targetLatencyMs);
@@ -222,7 +222,7 @@ function makeTimeline(
 
 /** テストで使う共有の組み立てを作る (表示の出し先と時間軸は記録用の実物) */
 function makeSession(options: {
-  timeline: PlaybackTimeline;
+  timeline: PlayoutTimeline;
   output: RecordedOutput;
   timing?: VideoPlayoutTiming;
   maxQueuedFrames?: number;
@@ -494,7 +494,7 @@ test("handleDecodedFrame: 表示時刻を決めたフレームだけ、表示の
     useTimeline: true,
   });
   // 音声の実績も同じ TIMESTAMP で記録する。両方の実績が揃ったときだけ同期ずれの推定が出る
-  // (`PlaybackTimeline.skewMs` の JSDoc) ため、推定が出ることで映像の実績が記録されたと分かる
+  // (`PlayoutTimeline.skewMs` の JSDoc) ため、推定が出ることで映像の実績が記録されたと分かる
   timeline.recordPresentation(
     "audio",
     timestampMicros,

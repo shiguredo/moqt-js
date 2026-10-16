@@ -15,8 +15,8 @@ A/V 同期と再生まわりで入れた判断 (閾値・保持・検出・追�
 
 読み方は次のとおり。
 
-- **決めた値**: 定数と値。実装は `src/playbackTimeline.ts`、`src/audioTimestampClock.ts`、
-  `src/audioPublishCatchUp.ts`、`src/audioDelayFeedback.ts` である
+- **決めた値**: 定数と値。実装は `src/playout/timeline.ts`、`src/audioTimestampClock.ts`、
+  `src/audioPublishCatchUp.ts`、`src/playout/audioDelayFeedback.ts` である
 - **守っている性質**: その値が無いと壊れること
 - **根拠**: 実測値と、どのコミットの計測か。実測が無い、または見積もりに留まるものは
   「根拠が薄い」と明記する
@@ -46,9 +46,9 @@ A/V 同期と再生まわりで入れた判断 (閾値・保持・検出・追�
 
 ### 決めた値
 
-- `PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS` = 100 ms (`src/playbackTimeline.ts`)
+- `PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS` = 100 ms (`src/playout/timeline.ts`)
 - あわせて、不感帯は `SYNC_MIN_DELTA_MS` = 5 ms (2026-10-15 の実測で 30 ms から変更)、戻す速さは
-  `PLAYBACK_DELAY_DECAY_MS_PER_SECOND` = 20 ms/秒
+  `PLAYOUT_DELAY_DECAY_MS_PER_SECOND` = 20 ms/秒
 
 ### 守っている性質
 
@@ -62,7 +62,7 @@ A/V 同期と再生まわりで入れた判断 (閾値・保持・検出・追�
 `f13db71` (2026-10-09) で「差が動いたら時計のずれとみなし、合わせる量を 100 ms までに制限する」
 として導入した。導入時の実測は「映像の表示遅延 483 ms を約 175 ms に、実時間のずれ 270 ms を
 約 38 ms にする」である。実測の内訳は音声の基準が 313 ms、映像が 13 ms で、映像へ 378 ms を
-足して表示の遅延が 483 ms になっていた (`src/playbackTimeline.ts` の
+足して表示の遅延が 483 ms になっていた (`src/playout/timeline.ts` の
 `PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS` のコメント)。
 
 上限を時計のずれの証拠を待たずに常に掛けるのは、証拠を見る前に 600 ms の段差を合わせて映像を
@@ -151,7 +151,7 @@ A/V 同期と再生まわりで入れた判断 (閾値・保持・検出・追�
 
 保持の 30 秒は、実測「差が 300 ms でほぼ動かないまま、音声の目標遅延が 380 ms と 100 ms を
 行き来して閾値が 120 ms と 400 ms を行き来し、13 秒間に 5 回 共有と解除を往復した」から、
-往復の周期より十分に長い値として置いた (`src/playbackTimeline.ts` の
+往復の周期より十分に長い値として置いた (`src/playout/timeline.ts` の
 `PLAYOUT_BASE_UNSHARED_HOLD_MS` のコメント)。
 
 早期解除の 2 秒は、実測「CI の 4 vCPU の runner、run 38023970857 で、購読の直後に relay の
@@ -313,8 +313,8 @@ cache から届いた分をまとめて復号している間だけ差が 1 秒�
 - `AUDIO_PLAYOUT_DELAY_FLOOR_MS` = 50 ms (到着基準の遅れの下限。2026-10-15 の実測で 80 ms
   から変更した。表は「根拠」にある)
 - `AUDIO_PLAYOUT_ARRIVAL_DELAY_MS` = 100 ms (到着基準の遅れの上限。
-  `src/audioPlayout.ts` の `AUDIO_PLAYOUT_ARRIVAL_DELAY_SECONDS` と同じ値)
-- 閉ループ (`src/audioDelayFeedback.ts`): 下限 `AUDIO_DELAY_FEEDBACK_MIN_MS` = 50 ms (同上)、
+  `src/playout/audioPlayout.ts` の `AUDIO_PLAYOUT_ARRIVAL_DELAY_SECONDS` と同じ値)
+- 閉ループ (`src/playout/audioDelayFeedback.ts`): 下限 `AUDIO_DELAY_FEEDBACK_MIN_MS` = 50 ms (同上)、
   上限 `AUDIO_DELAY_FEEDBACK_MAX_MS` = 300 ms、初期値 `AUDIO_DELAY_FEEDBACK_START_MS` = 100 ms、
   判断の窓 1 秒、動かす間隔 1 秒、許容 10 ms、余白 20 ms、1 回の増加 20〜40 ms、減らす速さ
   10 ms/秒
@@ -336,14 +336,14 @@ cache から届いた分をまとめて復号している間だけ差が 1 秒�
 ### 根拠
 
 - 到着基準の遅れを予約の軸から数えると、出力のバッファの分だけ遅れた。実測では 100 ms の
-  目標に対して 195.5 ms 鳴っていた (`src/audioPlayoutSession.ts`)。鳴り始めるまでを
+  目標に対して 195.5 ms 鳴っていた (`src/playout/audioPlayoutSession.ts`)。鳴り始めるまでを
   195.5 ms から 105.6 ms にし、ずれを 50 ms 以内にした (`10f4215`、2026-10-09)
 - 予定が無い音は到着基準の 100 ms で鳴らし、316 ms の遅れを無くした (`5096f89`)
 - 閉ループの上限 300 ms は、表示の遅れの上限 (500 ms) より小さく、実測の到着の跳ね
   (最大 271 ms) を概ね収める値である (`1a03f71`、2026-10-09)
 - 初期値 100 ms は、NetEq の初期値 80 ms より少し大きくし、到着から鳴るまでの経路の分を
   最初から見込む。実測では、揺らぎだけから求めた目標が 40 ms のとき、実際にはその目標より
-  遅れて鳴っていた (`src/audioDelayFeedback.ts`)
+  遅れて鳴っていた (`src/playout/audioDelayFeedback.ts`)
 - 映像を音声の到着基準の時刻へ合わせるようになって、基準を共有できない状態でもずれが
   50 ms 以内になった。合わせないと音声が 195 ms、映像が 98 ms で 100 ms のずれが残っていた
   (`10f4215`)
@@ -696,8 +696,8 @@ worker の使い方) を見る。追いつきは症状を消すだけで、原�
 
 ### 決めた値
 
-- 音声は `AudioPlayoutSession` (`src/audioPlayoutSession.ts`)、映像は `VideoPlayoutSession`
-  (`src/videoPlayoutSession.ts`) に組み立てを集約する
+- 音声は `AudioPlayoutSession` (`src/playout/audioPlayoutSession.ts`)、映像は `VideoPlayoutSession`
+  (`src/playout/videoPlayoutSession.ts`) に組み立てを集約する
 - ライブラリ (`createMediaSubscriber`) と moqt-devtools の両方が同じ実装を使う
 
 ### 守っている性質
@@ -740,14 +740,14 @@ worker の使い方) を見る。追いつきは症状を消すだけで、原�
 
 - `avSync.*` (時間軸の推定)
 - `audio.playoutTiming.*` (鳴らした結果)
-- `playbackTiming.*` (表示の結果)
+- `playoutTiming.*` (表示の結果)
 
 ## 8. 復号の出力と投入の対応づけ
 
 ### 決めた値
 
 - `DECODER_OUTPUT_TIMESTAMP_TOLERANCE_MICROS` = 1,000 マイクロ秒 (復号の出力の timestamp と、
-  復号へ渡した timestamp の差として許す上限。`src/decodeInputTimestamps.ts`)
+  復号へ渡した timestamp の差として許す上限。`src/playout/decodeInputTimestamps.ts`)
 - `DECODE_INPUT_KIND_FALLBACK_MAX_DISTANCE_MICROS` = 10,000,000 マイクロ秒 (対応が引けない出力に、
   直前に分かっている種類を使ってよい、保留している記録からの隔たりの上限。同)
 - 対応が引けなかったときは、直前に分かっている種類を使う (`LastTimestampKind`。同)。種類は
@@ -1008,7 +1008,7 @@ runner の処理能力を測っていた (実測: CI の 4 vCPU の runner、`38
 
 値の根拠は次のとおり。
 
-- 遅れの測り方を「復号の出力 - 送られた TIMESTAMP」にするのは、時間軸 (`PlaybackTimeline`) が
+- 遅れの測り方を「復号の出力 - 送られた TIMESTAMP」にするのは、時間軸 (`PlayoutTimeline`) が
   音声の基準に使う値と同じであり、遅れが復号器の中にあることを直接測れるためである
 - 上限を床からの増加で測るのは、健全時の遅れが環境で決まるためである (実測: 手元では
   18〜19 ms、CI の runner では 116 ms 前後)。絶対値で測ると、遅い環境では健全な状態でも
@@ -1287,10 +1287,10 @@ devtools の `Warnings` と上の 4 指標を、この文書の各決定の「�
 
 ### 決めた値
 
-- 時間圧縮を始める遅れ `AUDIO_PLAYOUT_STRETCH_MIN_SECONDS` = 20 ms (src/audioPlayout.ts)
+- 時間圧縮を始める遅れ `AUDIO_PLAYOUT_STRETCH_MIN_SECONDS` = 20 ms (src/playout/audioPlayout.ts)
 - 削ってよい長さは遅れている分まで (`compressSamples` の `maxLengthChangeSamples`)。削る長さは
   ピッチの周期 (2.5〜15 ms) で決まり、要求では選べない
-- 閉ループ (目標遅延の学習) へ渡す遅れからは、不感帯の分を引く (src/audioPlayoutSession.ts)
+- 閉ループ (目標遅延の学習) へ渡す遅れからは、不感帯の分を引く (src/playout/audioPlayoutSession.ts)
 - 機構を確かめる単体テストは `stretchMinSeconds: 0` を渡す (方針と機構を分ける)
 
 ### 根拠

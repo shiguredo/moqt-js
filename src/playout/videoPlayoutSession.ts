@@ -2,9 +2,9 @@
  * 復号した映像フレームの表示の組み立て (対応表・時間軸への記録・表示の選択・計器への記録)
  *
  * 復号へ渡した Object の情報 (TIMESTAMP の種類と位置) を覚えておき、復号の出力を受け取ると、
- * 共有の時間軸 (`src/playbackTimeline.ts`) への記録から `PlayoutBuffer` への積み込み、
+ * 共有の時間軸 (`src/playout/timeline.ts`) への記録から `PlayoutBuffer` への積み込み、
  * 表示周期ごとの選択、表示の実績の記録、捨てたフレームの計器への記録までを行う。表示時刻は
- * 時間軸が決める (音声と同じ式。`src/playoutBuffer.ts`)。
+ * 時間軸が決める (音声と同じ式。`src/playout/buffer.ts`)。
  *
  * 同じ組み立てを `src/createMediaSubscriber.ts` (ライブラリ) と
  * `devtools/src/hooks/useSubscriber.ts` (devtools) が別々に持つと、表示の遅れ・
@@ -20,9 +20,9 @@
  * 公開 API である (src/index.ts)。docs/HIGH_LEVEL_API.md の「映像の表示の組み立て」を参照。
  */
 
-import type { Location } from "./message";
-import type { PlaybackTimeline } from "./playbackTimeline";
-import { JITTER_BUFFER_MAX_QUEUED_FRAMES, PlayoutBuffer } from "./playoutBuffer";
+import type { Location } from "../message";
+import type { PlayoutTimeline } from "./timeline";
+import { JITTER_BUFFER_MAX_QUEUED_FRAMES, PlayoutBuffer } from "./buffer";
 
 /**
  * 映像の TIMESTAMP の種類 (draft-ietf-moq-loc-04 §2.3.1.1 / §2.3.1.2)
@@ -141,7 +141,7 @@ export class VideoDecodeInputs {
  * 捨てたフレームの記録先 (計器)
  *
  * ライブラリは映像の計器を持たないため省略できる。devtools は「受信から表示までの時間」の
- * 統計 (`devtools/src/utils/playbackTimingStats.ts`) へ記録する。
+ * 統計 (`devtools/src/utils/playoutTimingStats.ts`) へ記録する。
  */
 export interface VideoPlayoutTiming {
   /** 表示待ちの上限を超えて捨てたフレーム */
@@ -235,7 +235,7 @@ export type VideoPlayoutResult =
 /** `VideoPlayoutSession` の設定 */
 export interface VideoPlayoutSessionOptions {
   /** 音声と映像で共有する表示時刻の時間軸 */
-  readonly timeline: PlaybackTimeline;
+  readonly timeline: PlayoutTimeline;
   /** 表示すると決めたフレームの出し先 */
   readonly output: VideoPlayoutOutput;
   /** 復号へ渡したフレームの情報の対応表 (呼び出し側が持ち、購読ごとに `clear()` する) */
@@ -263,7 +263,7 @@ export class VideoPlayoutSession {
   readonly inputs: VideoDecodeInputs;
   /** 表示待ちのフレーム (検証と統計が読む) */
   readonly playout: PlayoutBuffer<VideoFrame>;
-  private readonly timeline: PlaybackTimeline;
+  private readonly timeline: PlayoutTimeline;
   private readonly output: VideoPlayoutOutput;
   private readonly pacing: VideoPlayoutPacing;
   private readonly timing: VideoPlayoutTiming | null;
@@ -312,7 +312,7 @@ export class VideoPlayoutSession {
       request.useTimeline && request.timestampKind === "wallClock" ? frame.timestamp : null;
     if (wallClockTimestamp !== null) {
       // 復号の出力を共有の時間軸へ記録し、音声と同じ式で表示時刻を求める
-      // (src/playbackTimeline.ts)
+      // (src/playout/timeline.ts)
       this.timeline.observe(
         "video",
         performance.timeOrigin + performance.now(),

@@ -7,17 +7,17 @@ import type { AudioDecoderWrapper } from "../../../src/codec/AudioDecoder.ts";
 import {
   EMPTY_AUDIO_PLAYOUT_TIMING,
   type AudioPlayoutTimingSnapshot,
-} from "../../../src/audioPlayoutTimingStats.ts";
+} from "../../../src/playout/audioPlayoutTimingStats.ts";
 import {
   EMPTY_AUDIO_RECEIVE_CATCH_UP,
   type AudioReceiveCatchUpStats,
-} from "../../../src/audioReceiveCatchUp.ts";
-import { EMPTY_PLAYBACK_TIMING, type PlaybackTimingSnapshot } from "../utils/playbackTimingStats";
+} from "../../../src/playout/audioReceiveCatchUp.ts";
+import { EMPTY_PLAYOUT_TIMING, type PlayoutTimingSnapshot } from "../utils/playoutTimingStats";
 import {
   AUDIO_DELAY_FEEDBACK_START_MS,
   type AudioDelayFeedbackSnapshot,
-} from "../../../src/audioDelayFeedback.ts";
-import { AUDIO_DELAY_START_MS } from "../../../src/audioDelayManager.ts";
+} from "../../../src/playout/audioDelayFeedback.ts";
+import { AUDIO_DELAY_START_MS } from "../../../src/playout/audioDelayManager.ts";
 import type { PreconditionWarning } from "../utils/preconditionWarnings.ts";
 
 /**
@@ -37,7 +37,7 @@ export type AvSyncSnapshot = AvSyncStats;
  * 音声の目標遅延の閉ループがまだ動いていないときの値
  *
  * 観測が無い間は、実際に使う値 (`appliedMs`) に揺らぎだけから求めた目標 (NetEq の初期値)
- * をそのまま使う (`src/audioDelayFeedback.ts` の `targetDelayMs`)。閉ループの目標
+ * をそのまま使う (`src/playout/audioDelayFeedback.ts` の `targetDelayMs`)。閉ループの目標
  * (`targetMs`) は初期値のままである
  */
 const EMPTY_AUDIO_DELAY_FEEDBACK: AudioDelayFeedbackSnapshot = {
@@ -156,7 +156,7 @@ export interface SubscriberInstance {
   decodeErrors: Signal<number>;
   // 受信から表示までの時間の統計 (到着の揺らぎ・遅延・復号時間・表示間隔の分布と、
   // 表示の止まり・表示キューのあふれの累積)。useSubscriber が一定間隔で更新する
-  playbackTiming: Signal<PlaybackTimingSnapshot>;
+  playoutTiming: Signal<PlayoutTimingSnapshot>;
   // 音声と映像の同期の推定値 (同期ずれ・表示の遅れ・目標遅延・切り下げた分・時計の代用)。
   // 映像の購読を始めたときから useSubscriber が一定間隔で更新する。片方しか購読して
   // いない、または jitter buffer が無効なときは既定値のまま
@@ -203,22 +203,22 @@ export interface SubscriberInstance {
   audioPlaybackEnabled: Signal<boolean>;
   // 受信側の音声の追いつき (復号の出力が送られた TIMESTAMP から遅れ続けたときに、
   // 復号器を作り直して live へ戻した量)。再生の組み立てが持つ観測値を 1 秒ごとに写す
-  // (src/audioReceiveCatchUp.ts)
+  // (src/playout/audioReceiveCatchUp.ts)
   audioPlayoutCatchUp: Signal<AudioReceiveCatchUpStats>;
-  // 受信した音声の鳴らし方の数 (src/audioPlayout.ts)。購読ごとに数える。
+  // 受信した音声の鳴らし方の数 (src/playout/audioPlayout.ts)。購読ごとに数える。
   // 鳴らす時刻を過ぎて届いたなどで基準を取り直した回数と、遅れが上限を超えて捨てた音の数
   audioPlayoutRebases: Signal<number>;
   audioPlayoutDrops: Signal<number>;
   // 目標へ戻すために詰めた (時間圧縮した) 音の合計 (ミリ秒) と、欠落した区間を補間した
   // 音の合計 (ミリ秒) と回数。どちらも音を加工する操作であり、続けて起きると音が粗くなる
-  // (ノイズの切り分けに使う。src/audioPlayout.ts)
+  // (ノイズの切り分けに使う。src/playout/audioPlayout.ts)
   audioPlayoutCompressedMs: Signal<number>;
   audioPlayoutConcealedMs: Signal<number>;
   audioPlayoutConcealments: Signal<number>;
   // 音声の再生の観測値 (再生予定時刻・到着時刻・鳴り始める時刻・予定に対する余裕・
   // 鳴らなかった量)。useSubscriber が一定間隔で更新する。まだ鳴らしていないときは
   // 既定値のまま
-  // (src/audioPlayoutTimingStats.ts)
+  // (src/playout/audioPlayoutTimingStats.ts)
   audioPlayoutTiming: Signal<AudioPlayoutTimingSnapshot>;
   // 復号した音声のレベル (dBFS)。左右のチャンネルを別々に持ち、モノラルのときは右が
   // null のまま。まだ復号していない状態も null
@@ -275,7 +275,7 @@ export function createSubscriberInstance(id: string): SubscriberInstance {
     staleFramesDropped: signal(0),
     missingReferenceFramesDropped: signal(0),
     decodeErrors: signal(0),
-    playbackTiming: signal<PlaybackTimingSnapshot>(EMPTY_PLAYBACK_TIMING),
+    playoutTiming: signal<PlayoutTimingSnapshot>(EMPTY_PLAYOUT_TIMING),
     avSync: signal<AvSyncSnapshot>(EMPTY_AV_SYNC),
     preconditionWarnings: signal<readonly PreconditionWarning[]>([]),
     decoderState: signal("unconfigured"),

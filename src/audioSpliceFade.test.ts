@@ -7,7 +7,7 @@
 
 import { test, assert } from "vite-plus/test";
 import { AUDIO_SPLICE_FADE_MS, fadeSpliceEdge, mergeFadedPlanes } from "./audioSpliceFade";
-import type { AudioSamples } from "./audioTimeStretch";
+import type { AudioSamples } from "./playout/audioTimeStretch";
 
 /** Opus の 1 フレーム (8 ms、16 kHz) */
 const SAMPLE_RATE = 16_000;

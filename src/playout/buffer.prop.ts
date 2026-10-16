@@ -2,7 +2,7 @@
  * PlayoutBuffer の Property-Based Tests
  *
  * 揺らぎのあるフレームの到着 (復号の出力) と requestAnimationFrame 相当の選択を任意の時刻の
- * 列として生成し、共有の時間軸 (PlaybackTimeline) が決めた表示時刻で選ぶキューが満たすべき
+ * 列として生成し、共有の時間軸 (PlayoutTimeline) が決めた表示時刻で選ぶキューが満たすべき
  * 性質を確かめる。
  *
  * - フレームを並べ替えない (描く・捨てる順は積んだ順であり、各フレームは 1 回だけ出る)
@@ -11,18 +11,18 @@
  * - 揺らぎの p95 が最大の揺らぎと一致する到着列では、表示間隔が TIMESTAMP の間隔どおりになる
  *
  * 個別の規則 (最新を残して 1 つ前を描き、古いものを捨てる、TIMESTAMP の飛び、キューの上限、
- * TIMESTAMP を持たないフレームの到着順の再生) は playoutBuffer.test.ts の単体テストが固定する。
+ * TIMESTAMP を持たないフレームの到着順の再生) は src/playout/buffer.test.ts の単体テストが固定する。
  */
 
 import { test, assert } from "vite-plus/test";
 import * as fc from "fast-check";
-import { JITTER_BUFFER_MAX_QUEUED_FRAMES, PlayoutBuffer } from "./playoutBuffer";
+import { JITTER_BUFFER_MAX_QUEUED_FRAMES, PlayoutBuffer } from "./buffer";
 import {
   MAX_PLAYOUT_DELAY_MS,
-  PLAYBACK_DELAY_DECAY_MS_PER_SECOND,
-  PLAYBACK_WINDOW_MS,
-  PlaybackTimeline,
-} from "./playbackTimeline";
+  PLAYOUT_DELAY_DECAY_MS_PER_SECOND,
+  PLAYOUT_WINDOW_MS,
+  PlayoutTimeline,
+} from "./timeline";
 
 // 送信側の壁時計 (Unix epoch ミリ秒)。メディア時刻 0 のフレームの TIMESTAMP にする
 const EPOCH_MS = 1_790_263_445_000;
@@ -38,8 +38,8 @@ function timestampOf(mediaMs: number): number {
 }
 
 /** 表示時刻を決める時間軸を作る (原点は `EPOCH_MS`、表示時刻は `performance.now()` の軸) */
-function createTimeline(): PlaybackTimeline {
-  return new PlaybackTimeline({
+function createTimeline(): PlayoutTimeline {
+  return new PlayoutTimeline({
     timeOriginMs: EPOCH_MS,
     maxQueuedFrames: JITTER_BUFFER_MAX_QUEUED_FRAMES,
   });
@@ -140,13 +140,13 @@ test("PlayoutBuffer: 表示時刻より前に描かず、再生遅延の範囲�
             // (MAX_PLAYOUT_DELAY_MS) を超えず、基準の遅れは `LOCAL_ORIGIN_MS` に揺らぎと
             // 上限 (キューが吸収できる長さ) を足した値になる
             assert.isAtMost(presentationMs ?? Infinity, localMs + MAX_PLAYOUT_DELAY_MS + 0.1);
-            // 下げる速さは毎秒 PLAYBACK_DELAY_DECAY_MS_PER_SECOND まで。
+            // 下げる速さは毎秒 PLAYOUT_DELAY_DECAY_MS_PER_SECOND まで。
             // 再生遅延の上限 (キューの枚数分のフレーム間隔) は TIMESTAMP をマイクロ秒に
             // 丸めた差から求めるため、フレーム間隔が 1 マイクロ秒動くと上限が
             // (キューの上限 - 余裕) マイクロ秒動く。その分は許す
             if (previousDelay !== null && delay < previousDelay.delayMs) {
               const allowedMs =
-                (PLAYBACK_DELAY_DECAY_MS_PER_SECOND * (localMs - previousDelay.atMs)) / 1_000;
+                (PLAYOUT_DELAY_DECAY_MS_PER_SECOND * (localMs - previousDelay.atMs)) / 1_000;
               const roundingMs = JITTER_BUFFER_MAX_QUEUED_FRAMES / 1_000;
               assert.isAtMost(previousDelay.delayMs - delay, allowedMs + roundingMs + TOLERANCE_MS);
             }
@@ -200,7 +200,7 @@ test("PlayoutBuffer: 揺らぎの p95 が最大の揺らぎのとき、表示間
         const timeline = createTimeline();
         const buffer = new PlayoutBuffer<number>(JITTER_BUFFER_MAX_QUEUED_FRAMES, timeline);
         // 窓 (10 秒) の中で基準 (揺らぎ無しのフレーム) が入れ替わらない長さだけ測る
-        const endMs = PLAYBACK_WINDOW_MS - 1_000;
+        const endMs = PLAYOUT_WINDOW_MS - 1_000;
         const frames = Math.floor(endMs / frameMs);
         // 復号の出力は「メディア時刻 + 揺らぎ」の時刻に出る。揺らぎは到着を後ろへずらす
         // だけであり、表示間隔は TIMESTAMP の間隔のままになる
@@ -250,6 +250,6 @@ test("PlayoutBuffer: 揺らぎの p95 が最大の揺らぎのとき、表示間
 });
 
 // キューが吸収できる長さを超える揺らぎを再生遅延に使わないことは、再生遅延の実体で
-// ある PlaybackTimeline の `videoDelayMs` 側で playbackTimeline.prop.ts が検証する。
+// ある PlayoutTimeline の `videoDelayMs` 側で src/playout/timeline.prop.ts が検証する。
 // PlayoutBuffer.playoutDelayMs は timeline.videoDelayMs への委譲であり、
 // キューの中身を参照しないため、ここでは重ねて検証しない。

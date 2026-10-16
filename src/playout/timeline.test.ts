@@ -1,5 +1,5 @@
 /**
- * PlaybackTimeline の単体テスト
+ * PlayoutTimeline の単体テスト
  *
  * 音声と映像の表示時刻を 1 つの式で決める規則を固定する。
  * 表示時刻 = TIMESTAMP + 基準の遅れ + 表示の遅れ であり、基準の遅れはトラックごとの
@@ -8,9 +8,9 @@
  *
  * A/V 同期は 2 つのトラックの表示時刻の差が SYNC_MIN_DELTA_MS を超えたときだけ、先行する
  * 側の表示の遅れを上げる。不感帯の中では 2 つの遅延は独立であり、映像は音声の jitter
- * buffer の遅延に引きずられない。下げるのは毎秒 PLAYBACK_DELAY_DECAY_MS_PER_SECOND まで。
+ * buffer の遅延に引きずられない。下げるのは毎秒 PLAYOUT_DELAY_DECAY_MS_PER_SECOND まで。
  *
- * PBT (観測の順序と揺らぎの任意の列に対する不変条件) は playbackTimeline.prop.ts が固定する。
+ * PBT (観測の順序と揺らぎの任意の列に対する不変条件) は src/playout/timeline.prop.ts が固定する。
  */
 
 import { test, assert } from "vite-plus/test";
@@ -18,8 +18,8 @@ import {
   AUDIO_PLAYOUT_ARRIVAL_DELAY_MS,
   AUDIO_PLAYOUT_DELAY_FLOOR_MS,
   MAX_PLAYOUT_DELAY_MS,
-  PLAYBACK_DELAY_DECAY_MS_PER_SECOND,
-  PLAYBACK_DISCONTINUITY_MS,
+  PLAYOUT_DELAY_DECAY_MS_PER_SECOND,
+  PLAYOUT_DISCONTINUITY_MS,
   PLAYOUT_BASE_DRIFT_CONFIRM_MS,
   PLAYOUT_BASE_DRIFT_MS,
   PLAYOUT_BASE_MAX_DIFFERENCE_MIN_MS,
@@ -27,12 +27,12 @@ import {
   PLAYOUT_BASE_UNSHARED_RELEASE_MS,
   PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS,
   PLAYOUT_QUEUE_HEADROOM_FRAMES,
-  PlaybackTimeline,
+  PlayoutTimeline,
   SYNC_MIN_DELTA_MS,
-} from "./playbackTimeline";
+} from "./timeline";
 import { AUDIO_CLOCK_DEADBAND_MS } from "./audioPlayout";
 import { AUDIO_DELAY_START_MS } from "./audioDelayManager";
-import { MAX_PRESENTATION_LAG_MS, PlayoutBuffer } from "./playoutBuffer";
+import { MAX_PRESENTATION_LAG_MS, PlayoutBuffer } from "./buffer";
 
 // 送信側の壁時計 (Unix epoch ミリ秒)。メディア時刻 0 の TIMESTAMP にする
 const EPOCH_MS = 1_790_263_445_000;
@@ -53,13 +53,13 @@ function timestampOf(mediaMs: number): number {
 }
 
 /** 表示時刻を求める時間軸を作る */
-function createTimeline(): PlaybackTimeline {
-  return new PlaybackTimeline({ timeOriginMs: EPOCH_MS, maxQueuedFrames: MAX_QUEUED_FRAMES });
+function createTimeline(): PlayoutTimeline {
+  return new PlayoutTimeline({ timeOriginMs: EPOCH_MS, maxQueuedFrames: MAX_QUEUED_FRAMES });
 }
 
 /** 表示時刻 (Unix epoch マイクロ秒) をミリ秒にする */
 function wallClockMsOf(
-  timeline: PlaybackTimeline,
+  timeline: PlayoutTimeline,
   stream: "audio" | "video",
   mediaMs: number,
 ): number {
@@ -70,7 +70,7 @@ function wallClockMsOf(
 
 /** 表示時刻 (performance.now() のミリ秒) を返す */
 function performanceMsOf(
-  timeline: PlaybackTimeline,
+  timeline: PlayoutTimeline,
   stream: "audio" | "video",
   mediaMs: number,
 ): number {
@@ -84,7 +84,7 @@ function performanceMsOf(
  *
  * 音声は 20 ms ごと (Opus)、映像は 30 fps。`durationMs` の間、実時間どおりに届く
  */
-function observeBothStreams(timeline: PlaybackTimeline, durationMs: number): void {
+function observeBothStreams(timeline: PlayoutTimeline, durationMs: number): void {
   const arrivals: { stream: "audio" | "video"; atMs: number; mediaMs: number }[] = [];
   for (let index = 0; index * 20 < durationMs; index++) {
     const mediaMs = index * 20;
@@ -117,7 +117,7 @@ const DRIFT_TEST_DURATION_MS = 120_000;
  * @returns 最後に観測したメディア時刻 (ミリ秒)
  */
 function observeDriftedStreams(
-  timeline: PlaybackTimeline,
+  timeline: PlayoutTimeline,
   frameRate: number,
   durationMs: number,
 ): number {
@@ -464,7 +464,7 @@ test("presentationDelayMs: 時計のずれの分だけ負になりうる", () =>
 // 返さず (到着基準の再生へ落とす)、もう片方は自分の基準で表示時刻を返す。同期を続けると、
 // ずれた側の基準が窓の最小値として単調に増え、もう片方の表示時刻が未来へ伸びて 1 枚も
 // 描かれなくなる。
-// playbackTimeline.prop.ts も「2 つのトラックの基準の差が閾値を超えたときのフォールバックは
+// src/playout/timeline.prop.ts も「2 つのトラックの基準の差が閾値を超えたときのフォールバックは
 // 単体テストが固定する」と明記しており、PBT では閾値超えを確実には踏まないためここで固定する
 test("sharingBases: 基準の差が閾値を超えたら共有せず、大きい側は表示時刻を返さない", () => {
   const timeline = createTimeline();
@@ -558,7 +558,7 @@ test("observe: 追いつき中の揺らぎを表示の遅れの目標に使わ�
 });
 
 // TIMESTAMP が大きく動くと (publisher の時計の変更や別の publisher への切り替え)、以降の
-// フレームがすべて遅れて見え、表示の遅れが上限に張り付く。PLAYBACK_DISCONTINUITY_MS 以上
+// フレームがすべて遅れて見え、表示の遅れが上限に張り付く。PLAYOUT_DISCONTINUITY_MS 以上
 // 動いたら時間軸ごと基準を取り直す
 test("observe: TIMESTAMP が飛んだら基準を取り直す", () => {
   const timeline = createTimeline();
@@ -569,7 +569,7 @@ test("observe: TIMESTAMP が飛んだら基準を取り直す", () => {
 
   // TIMESTAMP が 3 秒進んだフレームが届く (1 時間前の TIMESTAMP が届く場合も同じ扱い)
   const jumpMs = 3_000;
-  assert.isAtLeast(jumpMs, PLAYBACK_DISCONTINUITY_MS);
+  assert.isAtLeast(jumpMs, PLAYOUT_DISCONTINUITY_MS);
   const atMs = EPOCH_MS + 2 * FRAME_MS;
   timeline.observe("video", atMs, timestampOf(2 * FRAME_MS + jumpMs));
   // 取り直した後は、新しいフレームの基準の遅れで表示時刻を決める。古い基準は残らない
@@ -589,9 +589,9 @@ test("observe: TIMESTAMP が飛んだら基準を取り直す", () => {
   assert.isAtMost(differenceMs, MAX_PLAYOUT_DELAY_MS, "取り直した後のずれが上限を超えないこと");
 });
 
-// 映像の目標が下がったときは毎秒 PLAYBACK_DELAY_DECAY_MS_PER_SECOND ずつ下げる。急に
+// 映像の目標が下がったときは毎秒 PLAYOUT_DELAY_DECAY_MS_PER_SECOND ずつ下げる。急に
 // 戻すと表示時刻が前へ飛び、フレームを捨てることになる
-test("observe: 映像の表示の遅れを毎秒 PLAYBACK_DELAY_DECAY_MS_PER_SECOND ずつ下げる", () => {
+test("observe: 映像の表示の遅れを毎秒 PLAYOUT_DELAY_DECAY_MS_PER_SECOND ずつ下げる", () => {
   const timeline = createTimeline();
   let available = 0;
   const delays: { atMs: number; delayMs: number }[] = [];
@@ -613,11 +613,11 @@ test("observe: 映像の表示の遅れを毎秒 PLAYBACK_DELAY_DECAY_MS_PER_SEC
     if (previous === undefined || current === undefined || current.delayMs >= previous.delayMs) {
       continue;
     }
-    const allowedMs = (PLAYBACK_DELAY_DECAY_MS_PER_SECOND * (current.atMs - previous.atMs)) / 1_000;
+    const allowedMs = (PLAYOUT_DELAY_DECAY_MS_PER_SECOND * (current.atMs - previous.atMs)) / 1_000;
     assert.isAtMost(
       previous.delayMs - current.delayMs,
       allowedMs + TOLERANCE_MS,
-      "下げる速さが毎秒 PLAYBACK_DELAY_DECAY_MS_PER_SECOND 以下であること",
+      "下げる速さが毎秒 PLAYOUT_DELAY_DECAY_MS_PER_SECOND 以下であること",
     );
   }
 });
@@ -737,7 +737,7 @@ test("resetStream: 音声だけを消すと映像だけの値になる", () => {
   assert.isNull(timeline.skewMs(), "音声の実績を消すこと");
 });
 
-// 世代は「積んでいる映像フレームの表示時刻を決められるか」の目印である (src/playoutBuffer.ts)。
+// 世代は「積んでいる映像フレームの表示時刻を決められるか」の目印である (src/playout/buffer.ts)。
 // 音声だけを消すときに世代を進めると、積んでいるフレームが到着順に落ち、表示時刻を待たずに
 // 描かれる。音声の再生を止めても映像の表示の規則は変えない
 test("resetStream: 世代を進めず、映像の積んだフレームの扱いを変えない", () => {
@@ -816,7 +816,7 @@ function buildArrivals(): { stream: "audio" | "video"; atMs: number; mediaMs: nu
 }
 
 // 120 秒の到着列で同時刻の表示時刻の差が「合わせる量の上限まで」に収まることは
-// playbackTimeline.prop.ts の PBT が任意の到着列 (乱数シード) で検証する。
+// src/playout/timeline.prop.ts の PBT が任意の到着列 (乱数シード) で検証する。
 
 // 完了条件: 音声の TIMESTAMP が壁時計からドリフトする入力 (0754 の実測と同じ毎秒 48 ms) で、
 // 2 つのトラックの基準の差が閾値を超えたら同期しない。同期を続けると、ずれた側の基準が
@@ -884,7 +884,7 @@ test("observe: ドリフトで基準を共有しなくなったら映像を音�
     );
 
     // 音声は到着基準の再生へ落ちるため、実際に鳴るのは「到着 + 到着基準の遅れ」である
-    // (src/audioPlayout.ts)。映像の表示時刻と比べて、映像が音声より遅れていないこと
+    // (src/playout/audioPlayout.ts)。映像の表示時刻と比べて、映像が音声より遅れていないこと
     const playoutDelayMs = timeline.playoutDelayMs ?? AUDIO_PLAYOUT_DELAY_FLOOR_MS;
     assert.isAtLeast(playoutDelayMs, arrivalDelayMs ?? 0, "音声の遅れが上限を超えないこと");
     const audioPlaysAtMs = EPOCH_MS + mediaMs + (arrivalDelayMs ?? 0);
@@ -1112,7 +1112,7 @@ test("observe: 一度共有をやめたら保持の間は戻さない", () => {
  * @param shiftedMs - 音声の TIMESTAMP をずらす量を返す関数 (ミリ秒)
  */
 function observeShiftedAudioTimestamp(
-  timeline: PlaybackTimeline,
+  timeline: PlayoutTimeline,
   durationMs: number,
   shiftedMs: (wallMs: number) => number,
 ): string[] {
@@ -1140,7 +1140,7 @@ function observeShiftedAudioTimestamp(
  * @returns 観測する関数 (指定した時刻まで進め、各観測の `unsharedReason` を返す)
  */
 function createObserver(
-  timeline: PlaybackTimeline,
+  timeline: PlayoutTimeline,
 ): (untilMs: number, shiftedMs: (wallMs: number) => number) => string[] {
   let wallMs = 0;
   let nextVideoMs = 0;
@@ -1250,7 +1250,7 @@ test("observe: 一過性の動きが去って差が戻ったら、保持を待�
  * @returns 1 秒ごとの `unsharedReason`
  */
 function observeVideoDecoderLag(
-  timeline: PlaybackTimeline,
+  timeline: PlayoutTimeline,
   durationMs: number,
   lagMsOf: (mediaMs: number) => number,
 ): string[] {

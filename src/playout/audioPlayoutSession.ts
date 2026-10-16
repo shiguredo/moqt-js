@@ -2,8 +2,8 @@
  * 復号した音声の再生の組み立て (時間軸への記録・目標の決定・予約・計器への記録)
  *
  * 受信した復号済みの音声 (`AudioData`) と、その音の TIMESTAMP の種類 (壁時計かメディア時刻か)
- * を入れると、共有の時間軸 (`src/playbackTimeline.ts`) への記録から
- * `AudioPlayoutScheduler` での予約、計器 (`src/audioPlayoutTimingStats.ts`) への記録までを
+ * を入れると、共有の時間軸 (`src/playout/timeline.ts`) への記録から
+ * `AudioPlayoutScheduler` での予約、計器 (`src/playout/audioPlayoutTimingStats.ts`) への記録までを
  * 行う。鳴らす時刻の目標は、時間軸が決めた表示時刻と `AudioClockBridge` の対応から求める。
  *
  * 同じ組み立てを `src/createMediaSubscriber.ts` (ライブラリ) と
@@ -30,7 +30,7 @@ import {
 import type { AudioPlayoutTimingStats } from "./audioPlayoutTimingStats";
 import { AudioReceiveCatchUp } from "./audioReceiveCatchUp";
 import { compressSamples, concealSamples, type AudioSamples } from "./audioTimeStretch";
-import { AUDIO_PLAYOUT_DELAY_FLOOR_MS, type PlaybackTimeline } from "./playbackTimeline";
+import { AUDIO_PLAYOUT_DELAY_FLOOR_MS, type PlayoutTimeline } from "./timeline";
 
 /**
  * 音の TIMESTAMP の種類 (draft-ietf-moq-loc-04 §2.3.1.1 / §2.3.1.2)
@@ -91,7 +91,7 @@ export interface AudioPlayoutRequest {
    */
   readonly timestampKind: AudioPlayoutTimestampKind;
   /** 音声と映像で共有する表示時刻の時間軸 */
-  readonly timeline: PlaybackTimeline;
+  readonly timeline: PlayoutTimeline;
   /**
    * 時間軸を使って鳴らすか (jitter buffer が有効なとき)
    *
@@ -125,7 +125,7 @@ export interface AudioPlayoutRequest {
  * `catchUpStarted` が true のときは、受信側の追いつきを始めているため、呼び出し側は復号器を
  * 作り直す (`AudioDecoderWrapper.reset()`)。復号器の中に溜まった古い音は、鳴らさずに捨てる
  * だけでは減らないためである。鳴らす音は捨てない (音を飛ばすのは復号器であり、飛んだ分は
- * `AudioPlayoutSession.catchUp` の観測値に出る)。詳しい根拠は src/audioReceiveCatchUp.ts の
+ * `AudioPlayoutSession.catchUp` の観測値に出る)。詳しい根拠は src/playout/audioReceiveCatchUp.ts の
  * 先頭のコメントを参照
  */
 export type AudioPlayoutResult =
@@ -171,7 +171,7 @@ export interface AudioPlayoutSessionOptions {
    *
    * true のとき、鳴らした直後と並べすぎで捨てた直後に、計器が求めた観測
    * (`AudioPlayoutTimingStats.audioDelayFeedback`) を時間軸へ渡す
-   * (`PlaybackTimeline.observeAudioPlayout` / `src/audioDelayFeedback.ts`)。
+   * (`PlayoutTimeline.observeAudioPlayout` / `src/playout/audioDelayFeedback.ts`)。
    *
    * 既定は true (ライブラリの挙動)。devtools はこの閉ループをまだ流しておらず、
    * 表示している `AvSyncStats.delays.audioDelayFeedback` の値もその状態に依存するため、
@@ -201,7 +201,7 @@ export class AudioPlayoutSession {
    */
   readonly clock: AudioClockBridge;
   /**
-   * 受信側の音声の追いつきの判定と観測 (src/audioReceiveCatchUp.ts)
+   * 受信側の音声の追いつきの判定と観測 (src/playout/audioReceiveCatchUp.ts)
    *
    * 復号の出力が送られた TIMESTAMP から遅れ続けたときに、復号器を作り直して live へ戻す。
    * 作り直しそのものは、結果 (`AudioPlayoutResult.catchUpStarted`) を受けた呼び出し側が行う
@@ -267,7 +267,7 @@ export class AudioPlayoutSession {
         request.useTimeline && request.timestampKind === "wallClock" ? data.timestamp : null;
 
       // 受信側の追いつき。復号の出力が送られた TIMESTAMP から遅れ続けたら、復号器を作り直して
-      // live へ戻す (src/audioReceiveCatchUp.ts)。ここでは作り直すかどうかだけを決め、鳴らす
+      // live へ戻す (src/playout/audioReceiveCatchUp.ts)。ここでは作り直すかどうかだけを決め、鳴らす
       // 音は捨てない (捨てても復号器の中の分は減らない)。壁時計の TIMESTAMP を持つ音でだけ
       // 測れる (メディア時刻は壁時計と対応しない)
       //
@@ -284,7 +284,7 @@ export class AudioPlayoutSession {
 
       if (wallClockTimestamp !== null) {
         // 復号の出力を共有の時間軸へ記録し、映像と同じ式で表示時刻を求める
-        // (src/playbackTimeline.ts)
+        // (src/playout/timeline.ts)
         request.timeline.observe("audio", performance.timeOrigin + arrivalMs, wallClockTimestamp);
       }
 
@@ -370,7 +370,7 @@ export class AudioPlayoutSession {
         channels.push(channelData);
       }
       // 詰めてよい長さは、目標に対して遅れている分までにする (削りすぎて「早すぎる」側へ
-      // 振れ、詰める操作が往復するのを防ぐ。src/audioTimeStretch.ts の compressSamples)
+      // 振れ、詰める操作が往復するのを防ぐ。src/playout/audioTimeStretch.ts の compressSamples)
       const stretched =
         decision.compressSeconds > 0
           ? compressSamples(channels, sampleRate, Math.round(decision.compressSeconds * sampleRate))
@@ -378,7 +378,7 @@ export class AudioPlayoutSession {
       // 実際に詰められた長さを返す (詰められなかった分は遅れとして残る)
       this.playout.confirmStretch(-stretched.lengthChangeSamples / sampleRate);
 
-      // 欠落した区間を、直前に鳴らした音の末尾を伸ばして埋める (src/audioTimeStretch.ts)。
+      // 欠落した区間を、直前に鳴らした音の末尾を伸ばして埋める (src/playout/audioTimeStretch.ts)。
       // 実際に補間した長さだけを統計へ返す
       let concealedSeconds = 0;
       if (decision.gapSeconds > 0 && this.previousChannels !== null) {
@@ -434,7 +434,7 @@ export class AudioPlayoutSession {
       // ため記録しない。目標の表示時刻を決められなかった音 (基準を共有できず到着基準で
       // 並べた音) も記録しない。同期ずれの推定は共有している間のずれを読むための値で
       // あり、制御されていない再生を混ぜると意味が変わる。映像側も、表示時刻を決めて
-      // いないフレームの実績を作らない (src/videoPlayoutSession.ts)。第 3 引数は Unix
+      // いないフレームの実績を作らない (src/playout/videoPlayoutSession.ts)。第 3 引数は Unix
       // epoch マイクロ秒
       if (targetMs !== null && wallClockTimestamp !== null) {
         const presentedMs = this.clock.toPerformanceMs(decision.startAt);
@@ -508,7 +508,7 @@ export class AudioPlayoutSession {
    * 欠落した区間を、直前の音の末尾を繰り返して補間した合計 (秒)
    *
    * 補間は繰り返しの継ぎ目が耳につくため、量を読めるようにする。隙間の長さには上限があり
-   * (src/audioPlayout.ts の AUDIO_PLAYOUT_MAX_CONCEAL_SECONDS)、超えた分は無音のまま残る
+   * (src/playout/audioPlayout.ts の AUDIO_PLAYOUT_MAX_CONCEAL_SECONDS)、超えた分は無音のまま残る
    */
   get concealedSeconds(): number {
     return this.playout.concealed;
@@ -534,9 +534,9 @@ export class AudioPlayoutSession {
    * 鳴らした結果 (予定をどれだけ過ぎたか、並べすぎで捨てた量) を閉ループへ渡す
    *
    * 目標を動かすのは毎秒 1 回までであり、呼ぶ側は間隔を気にしない
-   * (`src/audioDelayFeedback.ts`)。`audioDelayFeedback` が false のときは何もしない。
+   * (`src/playout/audioDelayFeedback.ts`)。`audioDelayFeedback` が false のときは何もしない。
    */
-  private observeDelayFeedback(atMs: number, timeline: PlaybackTimeline): void {
+  private observeDelayFeedback(atMs: number, timeline: PlayoutTimeline): void {
     if (!this.audioDelayFeedback) {
       return;
     }

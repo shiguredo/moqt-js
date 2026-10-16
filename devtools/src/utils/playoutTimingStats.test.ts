@@ -1,18 +1,18 @@
 import { test, assert } from "vite-plus/test";
 import {
   DISPLAY_STALL_FACTOR,
-  EMPTY_PLAYBACK_TIMING,
+  EMPTY_PLAYOUT_TIMING,
   MAX_RECENT_LOSS_EVENTS,
   MAX_RECENT_STALLS,
-  PLAYBACK_TIMING_WINDOW_MS,
-  PlaybackTimingStats,
+  PLAYOUT_TIMING_WINDOW_MS,
+  PlayoutTimingStats,
   formatLossEvent,
   formatStallEvent,
   formatStreamResetCode,
   formatPublishDoneStatusCode,
   type LossEvent,
   type StallEvent,
-} from "./playbackTimingStats";
+} from "./playoutTimingStats";
 
 // 30 fps のフレーム間隔 (マイクロ秒)
 const FRAME_MICROS = 33_333;
@@ -45,12 +45,12 @@ test("formatStallEvent: 止まりを時刻、原因、長さ、位置、TIMESTAM
 // 遅延は壁時計 - 送信側の壁時計の TIMESTAMP で求める。TIMESTAMP が壁時計でない
 // (Timescale がある) Object では求めない
 test("recordArrival: 壁時計の TIMESTAMP のときだけ遅延を求める", () => {
-  const stats = new PlaybackTimingStats();
+  const stats = new PlayoutTimingStats();
   // 送信側の壁時計 1,790,000,000,000 ms のフレームが 45 ms 後に届く
   stats.recordArrival(500, 1_790_000_000_000_000, 1_790_000_000_045);
   assert.deepEqual(stats.snapshot(600).latencyMs, { p50: 45, p95: 45, max: 45 });
 
-  const mediaTimeOnly = new PlaybackTimingStats();
+  const mediaTimeOnly = new PlayoutTimingStats();
   mediaTimeOnly.recordArrival(500, 90_000, null);
   assert.isNull(mediaTimeOnly.snapshot(600).latencyMs);
 });
@@ -61,7 +61,7 @@ test("recordArrival: 壁時計の TIMESTAMP のときだけ遅延を求める", 
 
 // decoder に渡した時刻と出力された時刻を timestamp で対応づける
 test("recordDecodeOutput: 同じ timestamp の開始からの経過を復号時間にする", () => {
-  const stats = new PlaybackTimingStats();
+  const stats = new PlayoutTimingStats();
   stats.recordDecodeStart(100, 0);
   stats.recordDecodeStart(110, FRAME_MICROS);
   // 出力の順は decode の順と異なってよい
@@ -72,7 +72,7 @@ test("recordDecodeOutput: 同じ timestamp の開始からの経過を復号時�
 
 // 対応する開始が無い出力 (リセット前に渡したフレームなど) は数えない
 test("recordDecodeOutput: 開始の記録が無い出力は数えない", () => {
-  const stats = new PlaybackTimingStats();
+  const stats = new PlayoutTimingStats();
   stats.recordDecodeOutput(130, 0);
   assert.isNull(stats.snapshot(200).decodeTimeMs);
 });
@@ -80,11 +80,11 @@ test("recordDecodeOutput: 開始の記録が無い出力は数えない", () => 
 // 出力されなかったフレーム (decoder のエラーで捨てられたなど) の開始は窓を過ぎたら
 // 捨てる。同じ timestamp の後の出力と誤って対応づけない
 test("recordDecodeStart: 窓を過ぎた開始の記録は後の出力と対応づけない", () => {
-  const stats = new PlaybackTimingStats();
+  const stats = new PlayoutTimingStats();
   stats.recordDecodeStart(0, 0);
-  stats.recordDecodeStart(PLAYBACK_TIMING_WINDOW_MS + 1, FRAME_MICROS);
-  stats.recordDecodeOutput(PLAYBACK_TIMING_WINDOW_MS + 2, 0);
-  assert.isNull(stats.snapshot(PLAYBACK_TIMING_WINDOW_MS + 3).decodeTimeMs);
+  stats.recordDecodeStart(PLAYOUT_TIMING_WINDOW_MS + 1, FRAME_MICROS);
+  stats.recordDecodeOutput(PLAYOUT_TIMING_WINDOW_MS + 2, 0);
+  assert.isNull(stats.snapshot(PLAYOUT_TIMING_WINDOW_MS + 3).decodeTimeMs);
 });
 
 // ============================================================================
@@ -94,7 +94,7 @@ test("recordDecodeStart: 窓を過ぎた開始の記録は後の出力と対応�
 // フレーム間隔 (描いたフレームのメディア時刻の差の中央値) の 1.5 倍を超える表示間隔を
 // 止まりとして数え、その表示間隔を合計する
 test("recordDisplay: フレーム間隔の 1.5 倍を超えた表示間隔を止まりとして数える", () => {
-  const stats = new PlaybackTimingStats();
+  const stats = new PlayoutTimingStats();
   const displays = [0, 33.3, 66.7, 100, 200, 233.3];
   displays.forEach((nowMs, index) => {
     stats.recordDisplay(nowMs, index * FRAME_MICROS);
@@ -111,7 +111,7 @@ test("recordDisplay: フレーム間隔の 1.5 倍を超えた表示間隔を止
 // (1,120 ms) を過ぎた 1,190 ms に届いて 1,200 ms に表示した。経路の遅れである
 test("recordDisplay: 止まりの原因を数え、直近の止まりとして残す", () => {
   const timeOriginMs = 1_790_263_445_000;
-  const stats = new PlaybackTimingStats(PLAYBACK_TIMING_WINDOW_MS, timeOriginMs);
+  const stats = new PlayoutTimingStats(PLAYOUT_TIMING_WINDOW_MS, timeOriginMs);
   const frameMicros = 40_000;
   const receivedAt = [995, 1_035, 1_075, 1_190];
   const displayedAt = [1_000, 1_040, 1_080, 1_200];
@@ -150,7 +150,7 @@ test("recordDisplay: 止まりの原因を数え、直近の止まりとして�
 
 // 直近の止まりは MAX_RECENT_STALLS 回だけ古い順に残す (原因ごとの累積は全て数える)
 test("recordDisplay: 直近の止まりは上限の回数だけ残す", () => {
-  const stats = new PlaybackTimingStats();
+  const stats = new PlayoutTimingStats();
   let nowMs = 0;
   let timestampMicros = 0;
   // 間隔どおりの表示 2 回でフレーム間隔を覚え、以降は表示ごとに 100 ms 止まる
@@ -168,7 +168,7 @@ test("recordDisplay: 直近の止まりは上限の回数だけ残す", () => {
 
 // 受信の欠けと、Group の切り替えの保留が上限で解けた回数を出す
 test("snapshot: 受信の欠けと保留の期限切れを出す", () => {
-  const stats = new PlaybackTimingStats();
+  const stats = new PlayoutTimingStats();
   stats.recordObjectReceived({ groupId: 0n, objectId: 0n, priorObjectIdGap: 0n }, 0n, null, 0);
   stats.recordObjectReceived({ groupId: 0n, objectId: 2n, priorObjectIdGap: 0n }, 0n, null, 0);
   stats.recordObjectReceived({ groupId: 2n, objectId: 0n, priorObjectIdGap: 0n }, 0n, null, 0);
@@ -186,7 +186,7 @@ test("snapshot: 受信の欠けと保留の期限切れを出す", () => {
 // (draft-ietf-moq-transport-22 Section 12.5)。WebTransport が code を渡さなかった reset は
 // code 無しとして数え、FIN は数えない
 test("recordSubgroupEnd: reset を error code ごとに数え、FIN は数えない", () => {
-  const stats = new PlaybackTimingStats();
+  const stats = new PlayoutTimingStats();
   stats.recordSubgroupEnd(0n, 0n, "reset", 0x0, 0);
   stats.recordSubgroupEnd(1n, 0n, "reset", 0x0, 0);
   stats.recordSubgroupEnd(2n, 0n, "reset", 0x2, 0);
@@ -223,7 +223,7 @@ test("formatPublishDoneStatusCode: 名前と 16 進の値にし、未知の値�
 // 止まりが多くても押し出されない
 test("recentLossEvents: reset と欠落の止まりを残し、到着の遅れの止まりには押し出されない", () => {
   const timeOriginMs = 1_790_263_445_000;
-  const stats = new PlaybackTimingStats(PLAYBACK_TIMING_WINDOW_MS, timeOriginMs);
+  const stats = new PlayoutTimingStats(PLAYOUT_TIMING_WINDOW_MS, timeOriginMs);
   const frameMicros = 40_000;
   // Group 7 の Object 0 から 2 を間隔どおりに受け取って表示する
   for (let index = 0; index < 3; index++) {
@@ -289,7 +289,7 @@ test("recentLossEvents: reset と欠落の止まりを残し、到着の遅れ�
 
 // reset と欠落の止まりの一覧は MAX_RECENT_LOSS_EVENTS 件だけ古い順に残す
 test("recentLossEvents: 上限の件数だけ残す", () => {
-  const stats = new PlaybackTimingStats();
+  const stats = new PlayoutTimingStats();
   for (let index = 0; index < MAX_RECENT_LOSS_EVENTS + 3; index++) {
     stats.recordSubgroupEnd(BigInt(index), 0n, "reset", 0x0, index);
   }
@@ -328,7 +328,7 @@ test("formatLossEvent: reset は位置と error code、欠落の止まりは止�
 
 // フレーム間隔がまだ分からない (表示が 2 枚目まで) うちは止まりを判定しない
 test("recordDisplay: フレーム間隔が分かる前の表示間隔は止まりにしない", () => {
-  const stats = new PlaybackTimingStats();
+  const stats = new PlayoutTimingStats();
   stats.recordDisplay(0, 0);
   stats.recordDisplay(500, FRAME_MICROS);
   assert.equal(stats.snapshot(600).displayStalls, 0);
@@ -336,7 +336,7 @@ test("recordDisplay: フレーム間隔が分かる前の表示間隔は止ま�
 
 // 表示 fps は直近 1 秒に描いたフレーム数である
 test("snapshot: 表示 fps は直近 1 秒に描いたフレーム数になる", () => {
-  const stats = new PlaybackTimingStats();
+  const stats = new PlayoutTimingStats();
   for (let index = 0; index < 90; index++) {
     stats.recordDisplay(index * (1_000 / 30), index * FRAME_MICROS);
   }
@@ -347,7 +347,7 @@ test("snapshot: 表示 fps は直近 1 秒に描いたフレーム数になる",
 // jitter buffer が表示時刻を過ぎたフレームのうち、最新とその 1 つ前より古いものを捨てた数
 // (間に合わなかった数)
 test("recordLateDrop: 間に合わずに捨てたフレームを数える", () => {
-  const stats = new PlaybackTimingStats();
+  const stats = new PlayoutTimingStats();
   stats.recordLateDrop(0, 0);
   stats.recordLateDrop(FRAME_MICROS, 33.3);
   stats.recordLateDrop(FRAME_MICROS * 2, 66.7);
@@ -357,7 +357,7 @@ test("recordLateDrop: 間に合わずに捨てたフレームを数える", () =
 // 現在の再生遅延は jitter buffer が決め、統計はその最後の値を出す。
 // jitter buffer が働いていない (無効 / 壁時計の TIMESTAMP が無い) ときは null
 test("recordPlayoutDelay: 最後に記録した再生遅延を出す", () => {
-  const stats = new PlaybackTimingStats();
+  const stats = new PlayoutTimingStats();
   assert.isNull(stats.snapshot(0).playoutDelayMs);
   stats.recordPlayoutDelay(40);
   stats.recordPlayoutDelay(55);
@@ -367,7 +367,7 @@ test("recordPlayoutDelay: 最後に記録した再生遅延を出す", () => {
 });
 
 test("recordQueueDrop: 表示キューがあふれて捨てたフレームを数える", () => {
-  const stats = new PlaybackTimingStats();
+  const stats = new PlayoutTimingStats();
   stats.recordQueueDrop(0);
   stats.recordQueueDrop(FRAME_MICROS);
   assert.equal(stats.snapshot(0).displayQueueDrops, 2);
@@ -379,7 +379,7 @@ test("recordQueueDrop: 表示キューがあふれて捨てたフレームを数
 
 // 購読を始め直したときは、前の購読の値を持ち越さない
 test("reset: 分布と累積の値を初期状態に戻す", () => {
-  const stats = new PlaybackTimingStats();
+  const stats = new PlayoutTimingStats();
   stats.recordArrival(0, 0, 10);
   stats.recordDecodeStart(0, 0);
   stats.recordDecodeOutput(5, 0);
@@ -395,7 +395,7 @@ test("reset: 分布と累積の値を初期状態に戻す", () => {
   stats.recordSubgroupEnd(0n, 0n, "reset", 0x0, 10);
   stats.recordGroupSwitchHoldExpired();
   stats.reset();
-  assert.deepEqual(stats.snapshot(400), EMPTY_PLAYBACK_TIMING);
+  assert.deepEqual(stats.snapshot(400), EMPTY_PLAYOUT_TIMING);
 
   // リセットの前に渡したフレームの出力は、リセット後の復号時間に含めない
   stats.recordDecodeOutput(410, FRAME_MICROS);

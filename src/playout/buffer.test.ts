@@ -1,11 +1,11 @@
 /**
  * PlayoutBuffer の単体テスト
  *
- * 復号したフレームを積み、共有の時間軸 (PlaybackTimeline) が決めた表示時刻で選ぶ。
+ * 復号したフレームを積み、共有の時間軸 (PlayoutTimeline) が決めた表示時刻で選ぶ。
  * 個々の規則 (表示時刻より前に描かない、表示時刻を過ぎたフレームの捨て方、TIMESTAMP を
  * 持たないフレームの到着順の再生、キューの上限、clear) をここで固定する。
  *
- * 表示時刻の式と学習 (基準の遅れ、再生遅延、フレーム間隔) は playbackTimeline.test.ts が
+ * 表示時刻の式と学習 (基準の遅れ、再生遅延、フレーム間隔) は src/playout/timeline.test.ts が
  * 固定する。このテストは時間軸を実物で作り、キューが学習の結果に従うことだけを見る。
  *
  * 時刻の軸は 2 つある。時間軸へ渡す観測の時刻は受信側の壁時計 (`EPOCH_MS + 経過`) で、
@@ -19,12 +19,8 @@ import {
   MAX_PRESENTATION_LAG_MS,
   PlayoutBuffer,
   type PlayoutSelection,
-} from "./playoutBuffer";
-import {
-  MAX_PLAYOUT_DELAY_MS,
-  PLAYBACK_DISCONTINUITY_MS,
-  PlaybackTimeline,
-} from "./playbackTimeline";
+} from "./buffer";
+import { MAX_PLAYOUT_DELAY_MS, PLAYOUT_DISCONTINUITY_MS, PlayoutTimeline } from "./timeline";
 
 // 送信側の壁時計 (Unix epoch ミリ秒)。メディア時刻 0 のフレームの TIMESTAMP にする
 const EPOCH_MS = 1_790_263_445_000;
@@ -52,8 +48,8 @@ function epochOf(localMs: number): number {
  * 映像の表示の遅れは映像の揺らぎだけで決まる (音声の jitter buffer の遅延は同期の制御を
  * 通してだけ効く)。音声を観測しないこの時間軸は、映像だけの遅れを確かめるテストで使う
  */
-function createTimeline(): PlaybackTimeline {
-  return new PlaybackTimeline({
+function createTimeline(): PlayoutTimeline {
+  return new PlayoutTimeline({
     // 受信側の壁時計は `EPOCH_MS + 経過`、観測の軸 (`performance.now()`) は経過そのものである。
     // `presentationTimeMs` は「メディア時刻 + 表示の遅れ」を返す
     timeOriginMs: EPOCH_MS,
@@ -71,7 +67,7 @@ function createTimeline(): PlaybackTimeline {
  * @param jitterMs - 経路と復号の揺らぎ (ミリ秒)。基準の遅れと再生遅延の元になる
  */
 function observeFrame(
-  timeline: PlaybackTimeline,
+  timeline: PlayoutTimeline,
   mediaMs: number,
   jitterMs: number,
   stream: "audio" | "video" = "video",
@@ -86,7 +82,7 @@ function observeFrame(
  * 音声を購読している購読と同じ構成にする (同期の制御が働き得る状態にする)。映像の表示の
  * 遅れは映像の揺らぎだけで決まり、音声の jitter buffer の遅延には引きずられない
  */
-function createSharedTimeline(): PlaybackTimeline {
+function createSharedTimeline(): PlayoutTimeline {
   const timeline = createTimeline();
   observeFrame(timeline, 0, 0, "audio");
   observeFrame(timeline, 0, 0);
@@ -99,11 +95,7 @@ function createSharedTimeline(): PlaybackTimeline {
  * 音声の下限 (50 ms) を効かせたまま、映像のフレーム間隔からキューが吸収できる長さが
  * 決まるようにする (音声の基準の遅れは映像と同じ値になる)
  */
-function observeAudioWithVideo(
-  timeline: PlaybackTimeline,
-  mediaMs: number,
-  jitterMs: number,
-): void {
+function observeAudioWithVideo(timeline: PlayoutTimeline, mediaMs: number, jitterMs: number): void {
   observeFrame(timeline, mediaMs, jitterMs, "audio");
 }
 
@@ -112,7 +104,7 @@ function observeAudioWithVideo(
  * 求める。時間軸の `presentationPerformanceMs` は「観測の時刻 - 原点」ではなく
  * 「メディア時刻 + 表示の遅れ」を返すため、選択の時刻に直すには原点とメディア時刻を足す
  */
-function selectionTimeOf(timeline: PlaybackTimeline, mediaMs: number): number {
+function selectionTimeOf(timeline: PlayoutTimeline, mediaMs: number): number {
   const presentationMs = timeline.presentationPerformanceMs("video", timestampOf(mediaMs));
   assert.isNotNull(presentationMs, "表示時刻が決まること");
   return (presentationMs ?? 0) + LOCAL_ORIGIN_MS - mediaMs;
@@ -128,7 +120,7 @@ function drawAndLate<T>(selection: PlayoutSelection<T>): { draw: T | null; late:
 // ============================================================================
 
 // 表示時刻より前に描かないこと・表示時刻を過ぎたフレームを描くことは
-// playoutBuffer.prop.ts の PBT が任意の操作列で検証する。ここでは 1 枚ごとの
+// src/playout/buffer.prop.ts の PBT が任意の操作列で検証する。ここでは 1 枚ごとの
 // 表示時刻の返り値と、捨てる条件を固定する。
 
 // 描くフレームの表示時刻を返す。止まりの原因を決めるとき、フレームが表示時刻に間に合ったか
@@ -579,7 +571,7 @@ const JOIN_FIRST_OFFSET_MS = 957.1;
 /** 実測の列を時間軸へ観測させ、キューへ積む。返り値は最後のフレームの観測の時刻と番号 */
 function enqueueJoinCatchUp(
   buffer: PlayoutBuffer<number>,
-  timeline: PlaybackTimeline,
+  timeline: PlayoutTimeline,
 ): { localMs: number; index: number } {
   let last = { localMs: LOCAL_ORIGIN_MS, index: -1 };
   JOIN_CATCH_UP_ARRIVALS.forEach(([arrivalMs, mediaMs], index) => {
@@ -619,7 +611,7 @@ test("playoutDelayMs: 基準を取り直した後も cache から追いつく途
     observeFrame(timeline, mediaMs - hourMs, localMs - LOCAL_ORIGIN_MS - (mediaMs - hourMs));
     buffer.clear();
   }
-  assert.isAtLeast(PLAYBACK_DISCONTINUITY_MS, 2_000);
+  assert.isAtLeast(PLAYOUT_DISCONTINUITY_MS, 2_000);
   // TIMESTAMP が 1 時間進んだフレームが届き、基準を取り直す。取り直した後の遅れ (500 ms) を
   // 学習しない (追いつく途中のフレームの遅れは経路の揺らぎではない)
   for (let index = 0; index < 60; index++) {

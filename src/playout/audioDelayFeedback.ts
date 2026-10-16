@@ -1,7 +1,7 @@
 /**
  * 音声の jitter buffer の目標遅延を、実際に鳴った結果から閉ループで決める
  *
- * `src/audioDelayManager.ts` の学習 (NetEq の移植) は「直近の窓で最も早く届いた音を基準に
+ * `src/playout/audioDelayManager.ts` の学習 (NetEq の移植) は「直近の窓で最も早く届いた音を基準に
  * した相対的な到着の遅れ」の分位点であり、経路の揺らぎは吸収できるが、**ストリーム全体が
  * 一様に遅れている分は見えない**。基準 (最小値) そのものが下へ動くため、相対の遅れは 0 の
  * ままになるためである。実際には、到着から鳴り始めるまでに復号・予約・出力のバッファ・
@@ -40,7 +40,7 @@ import type { TimingSummary } from "./timingSummary";
  * 到着基準で鳴らすときの遅れと、映像を合わせる先の両方に効くため、片方だけを変えると
  * 基準を共有できない状態で A/V のずれが残る
  *
- * 値は実リレーの実測で決めた (表と根拠は `src/playbackTimeline.ts` の
+ * 値は実リレーの実測で決めた (表と根拠は `src/playout/timeline.ts` の
  * `AUDIO_PLAYOUT_DELAY_FLOOR_MS` にある)。観測が無い間の NetEq の初期値
  * (`AUDIO_DELAY_START_MS` = 80 ms) とは別の値であり、揃える必要はない。初期値は閉ループの
  * 観測が始まる前にだけ使われ、閉ループは観測が 1 つでも届けば目標を実測から動かす
@@ -48,7 +48,7 @@ import type { TimingSummary } from "./timingSummary";
 export const AUDIO_DELAY_FEEDBACK_MIN_MS = 50;
 
 /**
- * 目標遅延の上限 (ミリ秒。src/playbackTimeline.ts の AUDIO_PLAYOUT_ARRIVAL_DELAY_MS と同値)
+ * 目標遅延の上限 (ミリ秒。src/playout/timeline.ts の AUDIO_PLAYOUT_ARRIVAL_DELAY_MS と同値)
  */
 export const AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS = 100;
 
@@ -175,7 +175,7 @@ function clampTarget(value: number, lowerMs: number, upperMs: number): number {
 /**
  * 音声の目標遅延を、実際に鳴った結果から決める
  *
- * 音声トラックごとではなく、共有の時間軸 (`PlaybackTimeline`) に 1 つ持つ。目標は
+ * 音声トラックごとではなく、共有の時間軸 (`PlayoutTimeline`) に 1 つ持つ。目標は
  * 到着から鳴るまでの経路 (復号・予約・出力のバッファ) の学習であり、購読のやり直しや
  * TIMESTAMP の段差では変わらないためである。
  */

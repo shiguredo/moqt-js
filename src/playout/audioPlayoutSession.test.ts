@@ -2,7 +2,7 @@
  * AudioPlayoutSession (共有の音声の再生の組み立て) のテスト
  *
  * `AudioData` と Web Audio は node 環境に実物が無いため、既存の検証と同じく記録用の
- * 最小オブジェクトを注入する (モジュール置換は行わない)。時間軸 (`PlaybackTimeline`) と
+ * 最小オブジェクトを注入する (モジュール置換は行わない)。時間軸 (`PlayoutTimeline`) と
  * 計器 (`AudioPlayoutTimingStats`) は実物を使い、共有のロジックとして通しで検証する。
  *
  * ライブラリ (`src/createMediaSubscriber.ts`) と devtools (`devtools/src/hooks/useSubscriber.ts`)
@@ -18,12 +18,8 @@ import {
 } from "./audioPlayoutSession";
 import { AUDIO_PLAYOUT_TIMING_WINDOW_MS, AudioPlayoutTimingStats } from "./audioPlayoutTimingStats";
 import type { AudioClockMapping } from "./audioPlayout";
-import {
-  AUDIO_PLAYOUT_DELAY_FLOOR_MS,
-  MAX_PLAYOUT_DELAY_MS,
-  PlaybackTimeline,
-} from "./playbackTimeline";
-import { JITTER_BUFFER_MAX_QUEUED_FRAMES } from "./playoutBuffer";
+import { AUDIO_PLAYOUT_DELAY_FLOOR_MS, MAX_PLAYOUT_DELAY_MS, PlayoutTimeline } from "./timeline";
+import { JITTER_BUFFER_MAX_QUEUED_FRAMES } from "./buffer";
 
 /** 音 1 つ分のサンプル数 (48 kHz の 20 ms) */
 const FRAMES_PER_SOUND = 960;
@@ -104,7 +100,7 @@ interface RecordedOutput {
  *   並べすぎとして捨てられる)
  */
 function makeRecordingOutput(options: {
-  timeline: PlaybackTimeline;
+  timeline: PlayoutTimeline;
   mapping: AudioClockMapping | null;
   currentTimeSeconds: number;
   failCreateBuffer?: boolean;
@@ -169,13 +165,13 @@ function makeRecordingOutput(options: {
 /** テストで使う時間軸と計器と共有実装の組 */
 interface SessionFixture {
   readonly session: AudioPlayoutSession;
-  readonly timeline: PlaybackTimeline;
+  readonly timeline: PlayoutTimeline;
   readonly timing: AudioPlayoutTimingStats;
 }
 
 /** 時間軸と計器と共有実装を作る */
 function makeSessionFixture(options: { audioDelayFeedback?: boolean } = {}): SessionFixture {
-  const timeline = new PlaybackTimeline({
+  const timeline = new PlayoutTimeline({
     timeOriginMs: performance.timeOrigin,
     maxQueuedFrames: JITTER_BUFFER_MAX_QUEUED_FRAMES,
   });
@@ -394,7 +390,7 @@ test("handleDecodedAudio: 時間軸を使わないときは壁時計でも到着
  * 記録するのは、目標の表示時刻を決めて鳴らした音だけである。同期ずれの推定 (`skewMs`) は
  * 2 つのトラックの実績がそろっているときだけ値を返すため、到着基準の再生の値を混ぜると、
  * 制御されていない再生のずれを同期のずれとして読むことになる。映像側は同じ理由で、表示
- * 時刻を決めていないフレームの実績を作らない (src/videoPlayoutSession.ts)。
+ * 時刻を決めていないフレームの実績を作らない (src/playout/videoPlayoutSession.ts)。
  *
  * 音声が保持される側になる状態は、音声の基準を映像より大きくしたうえで、表示の遅れの上限を
  * 下げて共有を解除して作る。上限を戻しても、閾値が動いた解除であるため保持は続く。
@@ -451,7 +447,7 @@ test("handleDecodedAudio: 保持されている (到着基準の) 音は実績�
  *
  * 1 つ目の音を 1 秒ぶん予約したあと (前の音の終わりが 1 秒先)、さらに timestamp が 2 秒
  * 飛んだ音が届くと、前の音の終わりより前へは並べられないため捨てる
- * (src/audioPlayout.ts の scheduleByArrival)。
+ * (src/playout/audioPlayout.ts の scheduleByArrival)。
  */
 test("handleDecodedAudio: 並べすぎの音は捨てて計器へ記録する", () => {
   const fixture = makeSessionFixture();

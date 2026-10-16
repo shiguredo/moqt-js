@@ -1,11 +1,11 @@
 import type { SessionStatistics } from "moqt-js";
 import type { PanelHttpVersion } from "../utils/httpVersion";
-import type { PlaybackTimingSnapshot } from "../utils/playbackTimingStats";
+import type { PlayoutTimingSnapshot } from "../utils/playoutTimingStats";
 import type { PublishTimingSnapshot } from "../utils/publishTimingStats";
-import type { AudioPlayoutTimingSnapshot } from "../../../src/audioPlayoutTimingStats.ts";
+import type { AudioPlayoutTimingSnapshot } from "../../../src/playout/audioPlayoutTimingStats.ts";
 import type { AudioTimestampOffsetStats } from "../../../src/audioTimestampClock.ts";
 import type { AudioPublishCatchUpStats } from "../../../src/audioPublishCatchUp.ts";
-import type { AudioReceiveCatchUpStats } from "../../../src/audioReceiveCatchUp.ts";
+import type { AudioReceiveCatchUpStats } from "../../../src/playout/audioReceiveCatchUp.ts";
 import type { PreconditionWarning } from "../utils/preconditionWarnings.ts";
 import type { StatusType } from "../types";
 import {
@@ -259,13 +259,13 @@ export interface SubscriberAudioStats {
   /** 補間した回数 */
   playoutConcealments: number;
   /**
-   * 音声の再生の観測値 (src/audioPlayoutTimingStats.ts)。鳴るはずの時刻 (再生予定時刻)・
+   * 音声の再生の観測値 (src/playout/audioPlayoutTimingStats.ts)。鳴るはずの時刻 (再生予定時刻)・
    * 届いた時刻・鳴り始める時刻と、予定に対する余裕の分布 (直近 10 秒)、鳴らなかった量
    * (件数と ms) を理由ごとに持つ
    */
   playoutTiming: AudioPlayoutTimingSnapshot;
   /**
-   * 受信側の音声の追いつきの観測値 (src/audioReceiveCatchUp.ts)
+   * 受信側の音声の追いつきの観測値 (src/playout/audioReceiveCatchUp.ts)
    *
    * 復号の出力が送られた TIMESTAMP から遅れ続けたときに、復号器を作り直して live へ戻した
    * 量。観測した遅れと健全時の遅れ (床)、遅れの上限、追いつきの最中かどうか、作り直した
@@ -330,11 +330,11 @@ export interface SubscriberStats {
   decoderState: string;
   decoderConfigured: boolean;
   /**
-   * 受信から表示までの時間の統計 (utils/playbackTimingStats.ts)。分布は直近 10 秒、
+   * 受信から表示までの時間の統計 (utils/playoutTimingStats.ts)。分布は直近 10 秒、
    * 止まりと表示キューのあふれは購読開始からの累積。latencyMs は送信側の壁時計の
    * LOC TIMESTAMP を基準にするため、別のマシンでは時計のずれを含む
    */
-  playbackTiming: PlaybackTimingSnapshot;
+  playoutTiming: PlayoutTimingSnapshot;
   /**
    * 音声と映像の同期の推定値 (同期ずれ・表示の遅れ・目標遅延・切り下げた分・時計の代用)。
    * 未購読、jitter buffer が無効、音声だけの購読では既定値
@@ -462,7 +462,7 @@ export function buildSubscriberStats(sub: SubscriberInstance): SubscriberStats {
     decodeErrors: sub.decodeErrors.value,
     decoderState: sub.decoderState.value,
     decoderConfigured: sub.decoderConfigured.value,
-    playbackTiming: sub.playbackTiming.value,
+    playoutTiming: sub.playoutTiming.value,
     avSync: sub.avSync.value,
     // 前提から外れた状態 (signals/preconditionWatch.ts が 1 秒ごとに更新する)
     warnings: sub.preconditionWarnings.value,

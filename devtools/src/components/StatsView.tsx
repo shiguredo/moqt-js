@@ -12,7 +12,7 @@
 
 import { Fragment, type ComponentChildren } from "preact";
 import { useEffect, useId, useRef, useState } from "preact/hooks";
-import type { TimingSummary } from "../utils/playbackTimingStats";
+import type { TimingSummary } from "../utils/playoutTimingStats";
 
 /** 説明の 1 項目 */
 export interface HelpItem {
