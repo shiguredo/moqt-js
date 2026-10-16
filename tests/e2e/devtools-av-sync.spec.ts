@@ -62,6 +62,9 @@ const EMPTY_DELAYS = {
     targetMs: 100,
     jitterTargetMs: 80,
     appliedMs: 80,
+    // 圧縮 (粗さ) が続いていないため、適応で広げていないときの上限 (100 ms) のまま
+    appliedCeilingMs: 100,
+    compressionMsPerSecond: 0,
     reason: "initial",
     ceilingMs: null,
     lastChangeMs: 0,

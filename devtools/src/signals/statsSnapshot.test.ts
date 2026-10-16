@@ -151,6 +151,9 @@ test("buildSubscriberStats: 記録した同期の 5 項目をそのまま返す"
         latenessP50Ms: 8.5,
         startDelayP50Ms: 118.25,
         slackP50Ms: 12,
+        // 圧縮が続いて上限を広げている状態 (明示設定 200 ms のうち 160 ms まで使う)
+        appliedCeilingMs: 160,
+        compressionMsPerSecond: 20,
       },
     },
   };

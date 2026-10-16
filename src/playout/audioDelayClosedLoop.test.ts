@@ -28,7 +28,8 @@
  * - 並べすぎで捨てない (`missedByReason.backlog` が 0。実測 5 件)
  * - 到着から鳴り始めるまで (`startDelayMs`) の p50 が 200 ms 以下になる (実測 298.5)。
  *   増やしすぎない
- * - 乱れが無い入力では目標が下がり、`startDelayMs` の p50 が 130 ms 以下になる
+ * - 乱れが無い入力では内部目標が適用される上限 (100 ms) の中に留まり、`startDelayMs` の
+ *   p50 が 130 ms 以下になる
  * - 映像の表示待ち (`displayWait`) と A/V のずれを悪化させない (表示待ちの p50 が 150 ms 以下)
  * - `targetLatencyMs` を明示設定したときは、閉ループがその値を超えない
  *
@@ -46,6 +47,7 @@ import {
 } from "./audioPlayout";
 import { AudioPlayoutTimingStats } from "./audioPlayoutTimingStats";
 import {
+  AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS,
   AUDIO_DELAY_FEEDBACK_START_MS,
   AUDIO_DELAY_FEEDBACK_TOLERANCE_MS,
 } from "./audioDelayFeedback";
@@ -473,11 +475,22 @@ test("乱れが無い入力では目標が下がり、到着から鳴るまで�
   const bursty = runScenario({ arrivalPattern: "bursty" });
 
   // 乱れが無いときの目標は、乱れがあるときより低い (目標は許容の中で増減するため、
-  // 単発の値ではなく定常の p50 で比べる)
-  assert.isBelow(
+  // 単発の値ではなく定常の p50 で比べる)。
+  //
+  // ただし、閉ループの内部目標は実際に適用される上限 (AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS =
+  // 100 ms) で切るようになったため (欠陥 5)、どちらの入力でも必要な目標がこの上限へ届き、
+  // 定常の内部目標はどちらも 100 ms になる。適用する値はこの修正の前から 100 ms で切られて
+  // いたため、鳴り方は変わらない。乱れが無い入力で目標が下がることは、下の「乱れが止まった
+  // 後」の比較で確かめる
+  assert.isAtMost(
     quiet.feedbackTargetP50Ms,
     bursty.feedbackTargetP50Ms,
-    "乱れが無いときの目標が、乱れがあるときより低いこと",
+    "乱れが無いときの目標が、乱れがあるときを超えないこと",
+  );
+  assert.isAtMost(
+    quiet.feedbackTargetP50Ms,
+    AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS,
+    "内部目標が適用される上限を超えないこと",
   );
   // 到着から鳴り始めるまで (実測の 298.5 ms を残さない)
   assert.isAtMost(quiet.startDelayP50, 130, "到着から鳴るまでが 130 ms 以下であること");
@@ -487,15 +500,21 @@ test("乱れが無い入力では目標が下がり、到着から鳴るまで�
   // 15 秒で乱れが止まる。まれな跳ねは入れない (跳ねは NetEq の学習を 5 秒ほど上げ、
   // その間だけ実際に使う目標が跳ねの分になるため、目標が下がることを読む妨げになる)
   const settled = runScenario({ quietAfterFrames: 750, arrivalSpike: false });
-  assert.isBelow(
+  // 内部目標は、実際に適用される上限 (100 ms) で切るようになった (欠陥 5)。この入力では
+  // 乱れの有無にかかわらず、鳴るのに必要な目標が上限へ届くため、内部目標は常に上限にあり、
+  // 「乱れが止まった後に下がった量」は観測できない。修正前は上限を超えて育っていた分を
+  // 減らすのに数秒かかっていたが、いまは超えた分を持たないため、下がるのを待つ必要がない。
+  // 増減そのものの規則 (遅れが収まれば毎秒 10 ms 下げる) は src/playout/audioDelayFeedback.test.ts
+  // が直接固定する
+  assert.isAtMost(
     settled.feedbackTargetSecondHalfP50Ms,
-    settled.feedbackTargetFirstHalfP50Ms,
-    "乱れが止まった後、目標が下がること",
+    AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS,
+    "乱れが止まった後の目標が、適用される上限の中にあること",
   );
-  assert.isBelow(
+  assert.isAtMost(
     settled.feedbackTargetSecondHalfP50Ms,
     bursty.feedbackTargetP50Ms,
-    "乱れが続くときの目標より低いこと",
+    "乱れが続くときの目標を超えないこと",
   );
   assert.isAtMost(settled.startDelayP50, 200, "後半の遅延も増やさないこと");
 });

@@ -705,10 +705,17 @@ export class PlayoutTimeline {
    * 見ないため、ストリーム全体が一様に遅れている分を見つけられない。この観測がその分を
    * 補う。遅れが許容の中に収まっていれば目標を減らすため、正常時は遅延が増えない
    *
+   * 揺らぎだけから求めた目標 (NetEq) は時間軸が持っているため、ここで観測へ足す。圧縮が
+   * 続くときだけ目標の上限を 100 ms から 160 ms へ広げてよいかの判断に使う
+   * (`src/playout/audioDelayFeedback.ts`)
+   *
    * @param observation - 再生の観測 (`AudioPlayoutTimingStats.audioDelayFeedback`)
    */
-  observeAudioPlayout(observation: AudioDelayFeedbackObservation): void {
-    this.audioDelayFeedback.update(observation);
+  observeAudioPlayout(observation: Omit<AudioDelayFeedbackObservation, "jitterTargetMs">): void {
+    this.audioDelayFeedback.update({
+      ...observation,
+      jitterTargetMs: this.audioDelayEstimator.targetDelayMs,
+    });
     const audio = this.streams.audio;
     if (audio.delayMs !== null) {
       // 次の音から新しい目標で並ぶように、その場で表示の遅れを取り直す

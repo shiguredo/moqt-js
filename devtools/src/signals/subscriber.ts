@@ -14,6 +14,7 @@ import {
 } from "../../../src/playout/audioReceiveCatchUp.ts";
 import { EMPTY_PLAYOUT_TIMING, type PlayoutTimingSnapshot } from "../utils/playoutTimingStats";
 import {
+  AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS,
   AUDIO_DELAY_FEEDBACK_START_MS,
   type AudioDelayFeedbackSnapshot,
 } from "../../../src/playout/audioDelayFeedback.ts";
@@ -51,6 +52,9 @@ const EMPTY_AUDIO_DELAY_FEEDBACK: AudioDelayFeedbackSnapshot = {
   latenessP50Ms: null,
   startDelayP50Ms: null,
   slackP50Ms: null,
+  // 閉ループがまだ動いていないため、圧縮は 0 で上限も広げていない (既定の 100 ms)
+  appliedCeilingMs: AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS,
+  compressionMsPerSecond: 0,
 };
 
 /** 同期の推定が無いときの値 (未購読、jitter buffer が無効、音声だけの購読) */

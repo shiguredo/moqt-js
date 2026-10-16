@@ -567,6 +567,14 @@ export interface DecodeInput {
   readonly timestampKind: "none" | "wallClock" | "mediaTime";
   /** Object の位置 (Group ID と Object ID) */
   readonly location: Location;
+  /**
+   * 復号へ渡す時点で測った入力の遅れ (ミリ秒)。測れないときは null
+   *
+   * Object の到着の壁時計 - LOC TIMESTAMP である。復号の出力で引いて、受信側の追いつき
+   * (`src/playout/audioReceiveCatchUp.ts`) が「復号が足している遅れ」を求めるのに使う。
+   * 壁時計の TIMESTAMP (Timescale なし) を持つ音だけ測れる
+   */
+  readonly inputLagMs: number | null;
 }
 
 /**
@@ -575,7 +583,7 @@ export interface DecodeInput {
  * TIMESTAMP から位置を一意に引けない Object は覚えない。TIMESTAMP を持たない Object は
  * すべて同じ TIMESTAMP (0) を共有し、同じ TIMESTAMP の Object が重なったときはどちらの位置か
  * 決められないためである。復号の出力では位置が分からないものとして扱い、境界の判定をせずに
- * 従来どおり鳴らす (src/catchUpGate.ts)。
+ * 従来どおり鳴らす (src/catchUpGate.ts)。入力の遅れも同じ理由で一緒に忘れる。
  *
  * 出力されなかった (decoder のエラーで捨てられたなど) 分が残り続けないよう、上限を超えたら
  * 古い方から忘れる。
@@ -1514,7 +1522,11 @@ export function useSubscriber(
 
         // 到着の遅れ (受信した壁時計 - LOC TIMESTAMP)。配信側が足した遅れ
         // (audio.catchUp.sendLagMs) と対で読み、遅れが配信側にあるのか relay と経路に
-        // あるのかを分ける。壁時計の TIMESTAMP (TIMESCALE なし) のときだけ測れる
+        // あるのかを分ける。壁時計の TIMESTAMP (TIMESCALE なし) のときだけ測れる。
+        // 同じ値を、復号が足している遅れを求める入力の遅れとしても使う
+        // (src/playout/audioReceiveCatchUp.ts の先頭のコメント)。復号へ渡す直前に測るため、
+        // 受信と復号へ渡すまでに掛かった分が入り、復号器が足した分だけが残る
+        let inputLagMs: number | null = null;
         if (locProperties.timestamp !== undefined && locProperties.timescale === undefined) {
           const receiveDelayMs =
             performance.timeOrigin + performance.now() - Number(locProperties.timestamp) / 1_000;
@@ -1522,6 +1534,7 @@ export function useSubscriber(
           const previousMax = current.audioMaxReceiveDelayMs.value;
           current.audioMaxReceiveDelayMs.value =
             previousMax === null ? receiveDelayMs : Math.max(previousMax, receiveDelayMs);
+          inputLagMs = receiveDelayMs;
         }
 
         // draft-ietf-moq-loc-04 §2.3.3.1 (Audio Config) が定める Audio Config は
@@ -1569,10 +1582,12 @@ export function useSubscriber(
             : Number(LOC.toDecoderMicroseconds(locProperties.timestamp, locProperties.timescale));
 
         // 復号の出力で TIMESTAMP の種類と位置を引くために覚える (handleAudioDecoded が使う)。
-        // 位置は relay の cache から追いつく途中かどうかの判定に使う
+        // 位置は relay の cache から追いつく途中かどうかの判定に使う。入力の遅れは、復号が
+        // 足している遅れ (出力の遅れ - 入力の遅れ) を受信側の追いつきへ渡すのに使う
         rememberDecodeInput(audioDecodeInputsRef.current, timestamp, {
           timestampKind,
           location: { group: obj.groupId, object: obj.objectId },
+          inputLagMs,
         });
 
         audioDecoderInstance.decode(obj.payload, "key", timestamp, 0);
@@ -1882,6 +1897,10 @@ export function useSubscriber(
       const result = playback.playout.handleDecodedAudio({
         data: audioData,
         timestampKind,
+        // 入力の遅れ (Object の到着 - LOC TIMESTAMP)。受信側の追いつきが、出力の遅れから
+        // 引いて「復号が足している遅れ」を求める。対応が引けなかったときは、どの音の遅れか
+        // 決められないため渡さない (出力の遅れだけを使う)
+        inputLagMs: input?.inputLagMs ?? null,
         timeline: playoutTimelineRef.current,
         useTimeline: jitterBufferEnabledRef.current,
         enforceTarget: jitterBufferEnabledRef.current,

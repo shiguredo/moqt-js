@@ -9,13 +9,17 @@
  *   以上、遅れ (鳴らす時刻 - 今) は「到着基準の再生の遅れ (`arrivalDelaySeconds`) + 余裕」
  *   以下。共有の時間軸が学習した遅れ (`delaySeconds`) では決まらない
  * - 目標を守るときに捨てるのは並べすぎの音 (目標が今 + 上限より先) だけである。目標を
- *   過ぎて届いた音は今 + 余裕で鳴らし、ずらした分を波形の周期で詰める。外側の目標はさらに
- *   外側でも捨てる (単調)
+ *   過ぎて届いた音は今 + 余裕で鳴らし、ずらした分を波形の周期で詰める。詰める量は「遅れ」
+ *   「音の長さの半分」「キューの余裕 (直前の音の終わり − (今 + 余裕))」の最小値であり、
+ *   余裕が 0 以下のときは詰めない (詰めても遅れは減らず、削った分が無音の穴になる)。外側の
+ *   目標はさらに外側でも捨てる (単調)
  * - 目標から離れすぎて届いた音も捨てない。音がまだ鳴っている (キューが空でない) 間は到着
  *   基準へ並べ直さず、前の音の終わりに繋げて遅れたまま鳴らす。並べ直す (媒体時刻を跳ばす)
  *   のは、音が本当に途切れたとき (キューが空だったとき) だけである。並べ直したときは
  *   到着から `arrivalDelaySeconds` だけ遅らせ、前の音と重ならない
- * - 目標を守るときに鳴らす音は、今 + 余裕以降で、目標より前ではなく、前の音と重ならない
+ * - 目標を守るときに鳴らす音は、今 + 余裕以降で、目標より前ではなく、前の音と重ならない。
+ *   詰める量は「遅れ」「音の長さの半分」「キューの余裕」の最小値であり、余裕が 0 以下の
+ *   ときは 0 である (削った分が無音の穴にならない)
  * - 補間の隙間の情報は、下限 (5 ms) を超え上限 (100 ms) 以下で、前の音の終わりに一致し、
  *   今 + 余裕以降から次の音の開始までに収まる
  * - 時計の対応付けは、不感帯 (30 ms) 未満の差では動かず、1 回の変更は上限 (80 ms) まで。
@@ -260,22 +264,20 @@ test("目標を守るとき: 並べすぎだけを捨て、離れすぎた音は
             scenario.nowSeconds + scenario.arrivalDelaySeconds,
             EPSILON,
           );
-          assert.equal(decision.compressSeconds, 0);
         } else if (tooLate) {
-          // 目標を過ぎて届いた音は、今から鳴らせる最も早い時刻へずらす。詰めるのは、遅れが
-          // 不感帯 (`AUDIO_PLAYOUT_STRETCH_MIN_SECONDS`) 以上のときだけである (数 ms の
-          // 系統的な遅れで毎回わずかに詰めると、削った分だけ早すぎる側へ振れて往復する)
+          // 目標を過ぎて届いた音は、今から鳴らせる最も早い時刻へずらす。まだ一度も鳴らして
+          // いない (キューが空) ため、遅れが不感帯 (`AUDIO_PLAYOUT_STRETCH_MIN_SECONDS`) 以上でも
+          // 詰めない。詰めても次の音の下限は実時間と同じ速さで進むため遅れは減らず、削った分が
+          // 無音の穴になる (キューに余裕があるときの不感帯と余裕の効きは、音の列の性質が固定する)
           assert.closeTo(decision.startAt, scenario.nowSeconds + scenario.minLeadSeconds, EPSILON);
-          const latenessSeconds = decision.startAt - targetStartSeconds;
-          assert.equal(
-            decision.compressSeconds > 0,
-            latenessSeconds >= AUDIO_PLAYOUT_STRETCH_MIN_SECONDS - EPSILON,
-          );
         } else {
           // 目標の時刻をそのまま使う (前後させると映像とずれる)
           assert.equal(decision.startAt, targetStartSeconds);
-          assert.equal(decision.compressSeconds, 0);
         }
+        // どの分岐でも詰めない。到着基準へ並べ直した音も、キューが空の音 (今 + 余裕から
+        // 鳴らす音、目標どおりに鳴る音) も、直前の音の終わりが今 + 余裕以下であり、キューが
+        // 下限まで使い切られている (出力のバッファが下限を決めている) ためである
+        assert.equal(decision.compressSeconds, 0);
       }
       // 外側の目標は、さらに外側でも捨てる (捨てる判断は外側へ単調)
       if (tooFar) {
@@ -333,6 +335,36 @@ test("目標を守るとき: 鳴らす音は目標どおりで重ならず、窓
             assert.isAtMost(
               decision.compressSeconds,
               Math.min(decision.startAt - targetStartSeconds, frame.durationSeconds / 2) + EPSILON,
+            );
+            // キューの余裕 = 直前の音の終わり − (今 + 余裕)。詰めると次に並べる音の下限が
+            // その分だけ前へ動くため、詰める量は余裕までに切る。超えて詰めると、削った分が
+            // 次の音の開始との間の無音の穴になる (5 ms 以下の穴は補間されない)
+            const queueSlackSeconds =
+              (previousEnd ?? -Infinity) - (now + AUDIO_PLAYOUT_MIN_LEAD_SECONDS);
+            assert.isAtMost(
+              decision.compressSeconds,
+              Math.max(0, queueSlackSeconds) + EPSILON,
+              "キューの余裕を超えないこと",
+            );
+            if (queueSlackSeconds <= EPSILON) {
+              // 余裕が 0 以下 (出力のバッファが下限を決めている) ときは詰めない。詰めても
+              // 次の音の下限は実時間と同じ速さで進むため遅れは減らず、削った分が穴になる
+              assert.equal(decision.compressSeconds, 0, "余裕が無いときは詰めないこと");
+            } else {
+              // 余裕があるときは、遅れが不感帯 (`AUDIO_PLAYOUT_STRETCH_MIN_SECONDS`) 以上
+              // なら詰める (減らせる遅れをそのままにしない)
+              assert.equal(
+                decision.compressSeconds > 0,
+                decision.startAt - targetStartSeconds >=
+                  AUDIO_PLAYOUT_STRETCH_MIN_SECONDS - EPSILON,
+                "不感帯以上の遅れで詰めること",
+              );
+            }
+            // 詰めても、この音の終わりは今 + 余裕より前へ出ない (予約できる範囲を削らない)
+            assert.isAtLeast(
+              decision.startAt + frame.durationSeconds - decision.compressSeconds,
+              now + AUDIO_PLAYOUT_MIN_LEAD_SECONDS - EPSILON,
+              "削った分が予約できる範囲に出ないこと",
             );
           }
           // 実際に詰めたものとして次へ渡す (詰めた分だけ前の音の終わりが早くなる)

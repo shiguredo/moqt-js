@@ -20,6 +20,8 @@ import { AUDIO_PLAYOUT_TIMING_WINDOW_MS, AudioPlayoutTimingStats } from "./audio
 import type { AudioClockMapping } from "./audioPlayout";
 import { AUDIO_PLAYOUT_DELAY_FLOOR_MS, MAX_PLAYOUT_DELAY_MS, PlayoutTimeline } from "./timeline";
 import { JITTER_BUFFER_MAX_QUEUED_FRAMES } from "./buffer";
+import { AUDIO_RECEIVE_CATCH_UP_MIN_MS } from "./audioReceiveCatchUp";
+import { AUDIO_DELAY_FEEDBACK_INTERVAL_MS } from "./audioDelayFeedback";
 
 /** 音 1 つ分のサンプル数 (48 kHz の 20 ms) */
 const FRAMES_PER_SOUND = 960;
@@ -203,6 +205,7 @@ function handleSound(
     timestampKind?: AudioPlayoutTimestampKind;
     useTimeline?: boolean;
     enforceTarget?: boolean;
+    inputLagMs?: number | null;
   } = {},
 ): ReturnType<AudioPlayoutSession["handleDecodedAudio"]> {
   const request: AudioPlayoutRequest = {
@@ -214,6 +217,7 @@ function handleSound(
         : { numberOfChannels: options.numberOfChannels }),
     }).data,
     timestampKind: options.timestampKind ?? "wallClock",
+    ...(options.inputLagMs === undefined ? {} : { inputLagMs: options.inputLagMs }),
     timeline: fixture.timeline,
     useTimeline: options.useTimeline ?? true,
     enforceTarget: options.enforceTarget ?? true,
@@ -675,6 +679,68 @@ test("releaseAudioContext: 時計の対応だけを消し、予約の基準は�
 });
 
 /**
+ * 完了条件: 圧縮 (時間圧縮) の増分を閉ループへ渡す。閉ループは「圧縮が続くときだけ目標の
+ * 上限を 160 ms へ広げる」判断に使い、累積ではなく増分を 1 秒ぶん足し合わせる
+ * (`src/playout/audioDelayFeedback.ts`)。
+ */
+test("observeDelayFeedback: 圧縮の増分を閉ループへ渡す", () => {
+  const fixture = makeSessionFixture();
+  // 閉ループへ観測を渡す時刻を指定して呼ぶ (実時間を待たずに毎秒の制御を再現する)
+  const observe = (atMs: number): void => {
+    (
+      fixture.session as unknown as {
+        observeDelayFeedback(atMs: number, timeline: PlayoutTimeline): void;
+      }
+    ).observeDelayFeedback(atMs, fixture.timeline);
+  };
+  // 1 回目の観測 (制御の起点)。この時点では圧縮は無い
+  observe(0);
+  assert.equal(
+    fixture.timeline.delayBreakdown.audioDelayFeedback.compressionMsPerSecond,
+    0,
+    "圧縮が無ければ 0 であること",
+  );
+
+  // 詰めを作る。先に目標が未来の音を並べてキューの余裕を作り、目標を過ぎた音を繋げる
+  // (余裕が無いと詰めない。src/playout/audioPlayout.ts)
+  const target = (targetStartSeconds: number) => ({
+    targetStartSeconds,
+    arrivalSeconds: targetStartSeconds,
+    enforceTarget: true,
+    delaySeconds: 0.08,
+    arrivalDelaySeconds: 0.08,
+    presentationDelaySeconds: 0.08,
+  });
+  const soundSeconds = SOUND_INTERVAL_MS / 1_000;
+  assert.equal(fixture.session.playout.schedule(10, 0, soundSeconds, target(10.2)).kind, "play");
+  const decision = fixture.session.playout.schedule(10.2, 20_000, soundSeconds, target(10.2));
+  assert.equal(decision.kind, "play");
+  if (decision.kind !== "play") {
+    return;
+  }
+  assert.closeTo(decision.compressSeconds, 0.01, 1e-9, "10 ms 詰めること");
+  fixture.session.playout.confirmStretch(decision.compressSeconds);
+  assert.closeTo(fixture.session.playout.compressed, 0.01, 1e-9, "詰めの累積が 10 ms であること");
+
+  // 2 回目は 1 秒後。この 1 秒間に出た圧縮の増分が、そのまま速さ (10 ms / 秒) になる
+  observe(AUDIO_DELAY_FEEDBACK_INTERVAL_MS);
+  assert.closeTo(
+    fixture.timeline.delayBreakdown.audioDelayFeedback.compressionMsPerSecond,
+    10,
+    1e-6,
+    "圧縮の増分を 1 秒ぶんの速さとして渡すこと",
+  );
+
+  // 3 回目は圧縮が無い。累積を渡していれば 10 のままになるため、増分であることが分かる
+  observe(AUDIO_DELAY_FEEDBACK_INTERVAL_MS * 2);
+  assert.equal(
+    fixture.timeline.delayBreakdown.audioDelayFeedback.compressionMsPerSecond,
+    0,
+    "圧縮が止まれば 0 になること",
+  );
+});
+
+/**
  * 完了条件: `recordStopped` は、予約済みでまだ鳴り始めていない音を鳴らなかった分として
  * 計器へ記録する (AudioContext を閉じる直前に呼ぶ)。
  */
@@ -762,6 +828,78 @@ test("handleDecodedAudio: 遅れが続いたら復号器の作り直しを求め
     0,
     "追いつきで鳴らさずに捨てないこと",
   );
+});
+
+/**
+ * 完了条件 (欠陥 4): 受信の入口で測った入力の遅れを、復号の出力の遅れから引いた
+ * 「復号が足している遅れ」で追いつきを決める。入力の遅れも出力の遅れも同じだけ大きい状態
+ * (経路が遅いだけ) では作り直さず、入力の遅れが健全なのに出力の遅れだけが大きい状態
+ * (受信側が溜めている) では作り直す。
+ */
+test("handleDecodedAudio: 入力の遅れを引いた「復号が足している遅れ」で追いつきを決める", () => {
+  // (1) 経路が 200 ms 遅いだけの状態。Object の到着も復号の出力も同じだけ遅れている
+  const pathOnly = makeSessionFixture();
+  const pathOutput = makeRecordingOutput({
+    timeline: pathOnly.timeline,
+    mapping: null,
+    currentTimeSeconds: 10,
+  });
+  for (let index = 0; index < 20; index++) {
+    const result = handleSound(pathOnly, pathOutput.output, {
+      // 復号の出力の遅れ (到着 - TIMESTAMP) が 200 ms 前後になる
+      timestamp: wallClockTimestampMicros() - 200_000,
+      // 受信の入口で測った入力の遅れも同じ 200 ms である
+      inputLagMs: 200,
+    });
+    assert.equal(result.status, "played");
+    assert.equal(
+      result.status === "skipped" ? undefined : result.catchUpStarted,
+      false,
+      "経路が遅いだけの状態では作り直さないこと",
+    );
+  }
+  const pathSnapshot = pathOnly.session.catchUp.snapshot();
+  assert.closeTo(pathSnapshot.inputLagMs ?? 0, 200, 20, "入力の遅れを観測すること");
+  assert.isBelow(
+    pathSnapshot.decodeLagMs ?? Number.NaN,
+    AUDIO_RECEIVE_CATCH_UP_MIN_MS,
+    "復号が足している遅れは小さいこと",
+  );
+  assert.equal(pathSnapshot.catchUpStarts, 0, "作り直しを求めないこと");
+
+  // (2) 入力の遅れが健全なのに、復号の出力の遅れだけが 200 ms (受信側が溜めている)
+  const stuck = makeSessionFixture();
+  const stuckOutput = makeRecordingOutput({
+    timeline: stuck.timeline,
+    mapping: null,
+    currentTimeSeconds: 10,
+  });
+  // まず健全な状態 (入力の遅れ 20 ms、出力の遅れ 20 ms) を観測して床を作る
+  for (let index = 0; index < 5; index++) {
+    const healthy = handleSound(stuck, stuckOutput.output, {
+      timestamp: wallClockTimestampMicros() - 20_000,
+      inputLagMs: 20,
+    });
+    assert.equal(
+      healthy.status === "skipped" ? undefined : healthy.catchUpStarted,
+      false,
+      "健全な状態では始めないこと",
+    );
+  }
+  // 入力の遅れは 20 ms のまま、復号の出力の遅れだけを 200 ms へ上げる
+  const stepped = handleSound(stuck, stuckOutput.output, {
+    timestamp: wallClockTimestampMicros() - 200_000,
+    inputLagMs: 20,
+  });
+  assert.equal(
+    stepped.status === "skipped" ? undefined : stepped.catchUpStarted,
+    true,
+    "受信側が溜めている状態では作り直すこと",
+  );
+  const stuckSnapshot = stuck.session.catchUp.snapshot();
+  assert.closeTo(stuckSnapshot.decodeLagMs ?? 0, 180, 20, "復号が足している遅れを観測すること");
+  assert.closeTo(stuckSnapshot.floorMs ?? 0, 0, 20, "床は健全な値のままであること");
+  assert.equal(stuckSnapshot.catchUpStarts, 1);
 });
 
 /**
