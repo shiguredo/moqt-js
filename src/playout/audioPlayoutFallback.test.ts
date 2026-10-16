@@ -31,7 +31,7 @@
  * `AudioContext.currentTime` と `getOutputTimestamp().contextTime` の差が約 18 ms だった。
  *
  * このファイルは、実測と同じ入力 (TIMESTAMP が途中でずれる、到着は乱れない、映像は正常) を、
- * 時間軸 (`PlaybackTimeline`)、鳴らす時刻の決定 (`AudioPlayoutScheduler`)、観測
+ * 時間軸 (`PlayoutTimeline`)、鳴らす時刻の決定 (`AudioPlayoutScheduler`)、観測
  * (`AudioPlayoutTimingStats`) を本物のまま繋いで再現し、次の受け入れ条件を固定する。
  *
  * - 到着から鳴り始めるまでの時間 (`startDelayMs`) の p50 が 130 ms 以下になる。目標は
@@ -63,9 +63,9 @@ import { AudioPlayoutTimingStats } from "./audioPlayoutTimingStats";
 import {
   AUDIO_PLAYOUT_DELAY_FLOOR_MS,
   PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS,
-  PlaybackTimeline,
+  PlayoutTimeline,
   SYNC_MIN_DELTA_MS,
-} from "./playbackTimeline";
+} from "./timeline";
 import { summarizeTimings } from "./timingSummary";
 
 /** Opus の 1 フレーム (20 ms) */
@@ -199,7 +199,7 @@ interface ScenarioOptions {
  * @param options - 模擬の入力 (出力のバッファの分、映像の揺らぎ、`targetLatency`)
  */
 function runScenario(stepAtMs: number | null, options: ScenarioOptions): ScenarioResult {
-  const timeline = new PlaybackTimeline({ timeOriginMs: 0, maxQueuedFrames: MAX_QUEUED_FRAMES });
+  const timeline = new PlayoutTimeline({ timeOriginMs: 0, maxQueuedFrames: MAX_QUEUED_FRAMES });
   timeline.setTargetLatencyMs(options.targetLatencyMs ?? TARGET_LATENCY_MS);
   const playout = new AudioPlayoutScheduler();
   const clock = new AudioClockBridge();

@@ -666,9 +666,9 @@ interface AudioReceiverStats {
   playoutLatenessMs: number;
   // 音声の再生の観測値。鳴るはずの時刻 (再生予定時刻)・届いた時刻・鳴り始める時刻と、
   // 予定に対する余裕の分布 (直近 10 秒の p50 / p95 / max)、鳴らなかった量 (件数と ms) を
-  // 理由ごとに出す (src/audioPlayoutTimingStats.ts)
+  // 理由ごとに出す (src/playout/audioPlayoutTimingStats.ts)
   playoutTiming: AudioPlayoutTimingSnapshot;
-  // 受信側の音声の追いつきの観測値 (src/audioReceiveCatchUp.ts)。復号の出力が送られた
+  // 受信側の音声の追いつきの観測値 (src/playout/audioReceiveCatchUp.ts)。復号の出力が送られた
   // TIMESTAMP から遅れ続けたときに、復号器を作り直して live へ戻した量
   playoutCatchUp: AudioReceiveCatchUpStats;
 }
@@ -769,10 +769,10 @@ interface AvSyncStats {
   // AudioContext.getOutputTimestamp() を使えず currentTime で代用しているか
   audioClockFallback: boolean;
   // 遅延の内訳。音声と映像の遅れがどこで生じているかを分けて見るために使う
-  delays: PlaybackDelayBreakdown;
+  delays: PlayoutDelayBreakdown;
 }
 
-interface PlaybackTrackBreakdown {
+interface PlayoutTrackBreakdown {
   // 基準の遅れ (ms)。受信側と送信側の時計のずれと、経路と復号の最小遅延
   baseDelayMs: number | null;
   // jitter buffer の遅延 (ms)。自分の揺らぎから求めた値
@@ -786,9 +786,9 @@ interface PlaybackTrackBreakdown {
   presentationDelayCapMs: number;
 }
 
-interface PlaybackDelayBreakdown {
-  audio: PlaybackTrackBreakdown;
-  video: PlaybackTrackBreakdown;
+interface PlayoutDelayBreakdown {
+  audio: PlayoutTrackBreakdown;
+  video: PlayoutTrackBreakdown;
   // 基準の差「音声 - 映像」(ms)。表示時刻が使う値であり、A/V 同期はこの差を合わせる
   baseDifferenceMs: number | null;
   // 動きの判定が使う値 (直近 2 秒の窓の最小値で見た同じ差、ms)。基準との隔たりが、
@@ -803,7 +803,7 @@ interface PlaybackDelayBreakdown {
   // 扱えない理由。"unobserved" (未観測)、"difference" (差が上限を超えている)、
   // "drift" (差が動き続けている = TIMESTAMP が壁時計からずれている)、
   // "hold" (直前にやめた判定を保持している)、"none"
-  unsharedReason: PlaybackUnsharedReason;
+  unsharedReason: PlayoutUnsharedReason;
   // 基準の差の動き (ms/秒)。閾値 (baseDriftLimitMs) を超えるとずれとみなす
   baseDriftMsPerSecond: number | null;
   baseDriftLimitMs: number;
@@ -931,7 +931,7 @@ jitter buffer の遅れは音声と映像で別々に求める。音声は NetEq
 `AudioReceiverStats` / `VideoReceiverStats` を使う。
 
 `AudioReceiverStats.playoutTiming` は、音声が「鳴るはずだった時刻」と「実際に鳴り始める
-時刻」の観測値である。受信した音声の再生予定時刻は LOC の TIMESTAMP から `PlaybackTimeline`
+時刻」の観測値である。受信した音声の再生予定時刻は LOC の TIMESTAMP から `PlayoutTimeline`
 が決め、到着時刻は復号の出力を受け取った時刻、鳴り始める時刻は `AudioContext` の時計へ
 予約した時刻を `AudioClockBridge` で `performance.now()` の軸へ換算した値である
 (音声の出力デバイスの遅延は含まない)。予定に対する余裕 (`slackMs` の分布) が負であれば、
@@ -1001,7 +1001,7 @@ Object ID の飛びも欠落として扱う。
 受け取るのは、復号した音 (`AudioData`) と、その音の TIMESTAMP の種類 (LOC の TIMESTAMP と
 TIMESCALE から決める。draft-ietf-moq-loc-04 §2.3.1.1 / §2.3.1.2) である。渡すと次を行う。
 
-- 共有の時間軸 (`PlaybackTimeline`) への到着の記録と、目標の表示時刻の決定
+- 共有の時間軸 (`PlayoutTimeline`) への到着の記録と、目標の表示時刻の決定
 - `AudioPlayoutScheduler` での予約 (遅れて届いた音は波形を詰めて目標へ戻し、並べすぎは捨てる)
 - 欠落した区間の補間 (直前に鳴らした音の末尾を伸ばす)
 - 計器 (`AudioPlayoutTimingStats`) への記録 (鳴るはずの時刻・届いた時刻・鳴り始める時刻と、
@@ -1022,14 +1022,14 @@ Web Audio (`AudioContext` とその出力) は `AudioPlayoutOutput` として注
 1 ms 以内のときだけ引く。一致が続かなかった後も引けるよう、1 ms より古くなった記録は捨てる。
 引けないままになることもある (実測: 記録と復号の出力の timestamp の格子が 9.7 ms ずれたまま
 残り、以後の出力がすべて引けなくなる) ため、引けないときは直前に分かっている種類を使う。
-引く処理とその種類の保持は `src/decodeInputTimestamps.ts` が持ち、ライブラリと devtools が
+引く処理とその種類の保持は `src/playout/decodeInputTimestamps.ts` が持ち、ライブラリと devtools が
 共有する。
 
 ```typescript
-import { AudioPlayoutSession, AudioPlayoutTimingStats, PlaybackTimeline } from "moqt-js";
+import { AudioPlayoutSession, AudioPlayoutTimingStats, PlayoutTimeline } from "moqt-js";
 
 // 時間軸と計器は呼び出し側が持つ (時間軸は映像と共有し、計器は統計として読む)
-const timeline = new PlaybackTimeline({
+const timeline = new PlayoutTimeline({
   timeOriginMs: performance.timeOrigin,
   maxQueuedFrames: 8,
 });
@@ -1068,7 +1068,7 @@ interface AudioPlayoutRequest {
   // 音の TIMESTAMP の種類。wallClock のときだけ目標の時刻を決める
   timestampKind: "none" | "wallClock" | "mediaTime";
   // 音声と映像で共有する表示時刻の時間軸
-  timeline: PlaybackTimeline;
+  timeline: PlayoutTimeline;
   // 時間軸を使って鳴らすか (jitter buffer が有効な購読のとき)。false のときは時間軸へ
   // 記録せず、到着基準で並べる
   useTimeline: boolean;
@@ -1138,7 +1138,7 @@ type AudioPlayoutResult =
 作り直すと、中に溜まっていた音が捨てられ、次に復号されるのは最後に届いた Object になる。
 
 ```typescript
-import { AudioPlayoutSession, AudioPlayoutTimingStats, PlaybackTimeline } from "moqt-js";
+import { AudioPlayoutSession, AudioPlayoutTimingStats, PlayoutTimeline } from "moqt-js";
 
 const result = session.handleDecodedAudio({/* 上の例と同じ */});
 if (result.status !== "skipped" && result.catchUpStarted) {
@@ -1172,7 +1172,7 @@ const catchUp = session.catchUp.snapshot();
 TIMESTAMP と TIMESCALE から決める。draft-ietf-moq-loc-04 §2.3.1.1 / §2.3.1.2) である。渡すと
 次を行う。
 
-- 共有の時間軸 (`PlaybackTimeline`) への到着の記録と、表示時刻の決定
+- 共有の時間軸 (`PlayoutTimeline`) への到着の記録と、表示時刻の決定
 - 表示待ちのキュー (`PlayoutBuffer`) への積み込みと、あふれた分の破棄
 - 表示周期ごとの選択 (表示時刻を過ぎたフレームのうち最新の 1 枚を表示し、間に合わなかった
   分を捨てる)
@@ -1185,10 +1185,10 @@ TIMESTAMP と TIMESCALE から決める。draft-ietf-moq-loc-04 §2.3.1.1 / §2.
 オブジェクトで検証できる。
 
 ```typescript
-import { PlaybackTimeline, VideoDecodeInputs, VideoPlayoutSession } from "moqt-js";
+import { PlayoutTimeline, VideoDecodeInputs, VideoPlayoutSession } from "moqt-js";
 
 // 時間軸と対応表は呼び出し側が持つ (時間軸は音声と共有する)
-const timeline = new PlaybackTimeline({
+const timeline = new PlayoutTimeline({
   timeOriginMs: performance.timeOrigin,
   maxQueuedFrames: 24,
 });
@@ -1230,7 +1230,7 @@ session.handleDecodedFrame({
 ```typescript
 interface VideoPlayoutSessionOptions {
   // 音声と映像で共有する表示時刻の時間軸
-  timeline: PlaybackTimeline;
+  timeline: PlayoutTimeline;
   // 表示すると決めたフレームの出し先
   output: VideoPlayoutOutput;
   // 復号へ渡したフレームの情報の対応表 (呼び出し側が持ち、購読ごとに clear() する)
@@ -1327,7 +1327,7 @@ null)。`skipped` は出し先が無いためフレームを閉じた場合で�
 
 映像の受信から表示までの経路で、ライブラリと moqt-devtools が共有する残りの公開 API である。
 
-- `PlaybackTimeline` — 音声と映像で共有する表示時刻の時間軸 (同期の推定と遅延の学習)
+- `PlayoutTimeline` — 音声と映像で共有する表示時刻の時間軸 (同期の推定と遅延の学習)
 - `PlayoutBuffer` — 復号したフレームを表示時刻に合わせて選ぶキュー。
   `JITTER_BUFFER_MAX_QUEUED_FRAMES` と `MAX_PRESENTATION_LAG_MS` も公開する
 - `VideoDecodeOrder` — Object を復号してよいかを Group の順序と参照するフレームの欠落から

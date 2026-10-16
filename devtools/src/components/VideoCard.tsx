@@ -1,5 +1,5 @@
 import type { ComponentChildren } from "preact";
-import type { TimingSummary } from "../utils/playbackTimingStats";
+import type { TimingSummary } from "../utils/playoutTimingStats";
 import {
   METER_FIELD_CLASS,
   METER_HEADER_CLASS,

@@ -65,7 +65,7 @@
 | `src/c4m/webcrypto.prop.ts`     | 9        | 1      |
 | `src/message/namespace.prop.ts` | 18       | 1      |
 | `src/message/publish.prop.ts`   | 5        | 1      |
-| `src/playbackTimeline.prop.ts`  | 4        | 1      |
+| `src/playout/timeline.prop.ts`  | 4        | 1      |
 | `src/session/params.prop.ts`    | 43       | 1      |
 | 合計                            | 500      | **79** |
 
@@ -91,15 +91,15 @@
 
 実装と同じ式で期待値を書いているため、実装を変えない限り落ちない。
 
-| 箇所                                                   | 内容                                                                                                                                                                 |
-| ------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/session/params.prop.ts:898`                       | `validateFetchOkEndLocation` の期待値を `compareLocations(endLocation, startLocation) < 0` で書いており、実装 (`params.ts:1074-1082`) の条件式と同一                 |
-| `src/session/params.prop.ts:975`                       | `namespacePrefixesOverlap(a, b)` の期待値が `matchNamespacePrefix(b, a) !== null \|\| matchNamespacePrefix(a, b) !== null` で、実装 (`params.ts:1246-1251`) そのまま |
-| `src/session/params.prop.ts:1000`                      | `validateNamespacePrefixUpdate` の期待値が実装のループ (`params.ts:1274-1285`) の写し                                                                                |
-| `src/grease.prop.ts:31`                                | `0x7f * n + 0x9d` は `grease.ts:52` の式そのまま。同ファイル 14-19 行が代表値を pin 済み                                                                             |
-| `src/moqlog.prop.ts:83`                                | `timestampMicros & ((1n << 62n) - 1n)` は `observability.ts:55` の写し                                                                                               |
-| `src/moqmetrics.prop.ts:78`                            | 同上 (`observability.ts:51-56`)                                                                                                                                      |
-| `devtools/src/utils/playbackTimingStats.prop.ts:29-37` | 「実装と独立したモデル」と書きながら `Math.max(0, Math.ceil(ratio * n) - 1)` は `src/timingSummary.ts:35-37` と同一式                                                |
+| 箇所                                                  | 内容                                                                                                                                                                 |
+| ----------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/session/params.prop.ts:898`                      | `validateFetchOkEndLocation` の期待値を `compareLocations(endLocation, startLocation) < 0` で書いており、実装 (`params.ts:1074-1082`) の条件式と同一                 |
+| `src/session/params.prop.ts:975`                      | `namespacePrefixesOverlap(a, b)` の期待値が `matchNamespacePrefix(b, a) !== null \|\| matchNamespacePrefix(a, b) !== null` で、実装 (`params.ts:1246-1251`) そのまま |
+| `src/session/params.prop.ts:1000`                     | `validateNamespacePrefixUpdate` の期待値が実装のループ (`params.ts:1274-1285`) の写し                                                                                |
+| `src/grease.prop.ts:31`                               | `0x7f * n + 0x9d` は `grease.ts:52` の式そのまま。同ファイル 14-19 行が代表値を pin 済み                                                                             |
+| `src/moqlog.prop.ts:83`                               | `timestampMicros & ((1n << 62n) - 1n)` は `observability.ts:55` の写し                                                                                               |
+| `src/moqmetrics.prop.ts:78`                           | 同上 (`observability.ts:51-56`)                                                                                                                                      |
+| `devtools/src/utils/playoutTimingStats.prop.ts:29-37` | 「実装と独立したモデル」と書きながら `Math.max(0, Math.ceil(ratio * n) - 1)` は `src/playout/timingSummary.ts:35-37` と同一式                                        |
 
 `src/grease.prop.ts` はさらに 40-49 行 (剰余不変条件) と 52-58 行 (単調増加) が 31 行から算術的に従うため、3 テストまとめて削除できる。
 
@@ -110,7 +110,7 @@
 | `src/filter.prop.ts:313`                    | `nextObjectFilterArb` は `fc.constant`、`largestLocation` は `null` 固定。入力 1 通り     |
 | `src/session/incoming.prop.ts:1339` `:1355` | `requestId` を振るが結果が ID 非依存                                                      |
 | `src/publisher.prop.ts:90`                  | `done` は `markClosed()` を呼ぶだけで生成の 1/3 が重複                                    |
-| `src/audioPlayout.prop.ts:398`              | `reset()` が `offsetMs` を null に戻すため、先頭の `updates` がどの assert にも寄与しない |
+| `src/playout/audioPlayout.prop.ts:398`      | `reset()` が `offsetMs` を null に戻すため、先頭の `updates` がどの assert にも寄与しない |
 | `src/namespaceLoops.prop.ts:939`            | 生成したメッセージがアサーションに一切使われない (3 ループ × 100 回)                      |
 | `src/namespaceLoops.prop.ts:1041`           | `validSequenceArb` が `fc.constant` 1 件のみで 100 回同一入力                             |
 
@@ -129,10 +129,10 @@
 
 ### 2.6 過剰な numRuns
 
-| 箇所                                                 | numRuns | 実測                                                                                |
-| ---------------------------------------------------- | ------- | ----------------------------------------------------------------------------------- |
-| `src/c4m/moqt.prop.ts:701`                           | 2000    | 104 ms。成功側 assert が `decodeMoqtScope` の保証により恒真で、根拠が空振りしている |
-| `devtools/src/utils/playbackTimingStats.prop.ts:339` | 1000    | 43 ms。325-331 行の 3 assert が構造的恒真                                           |
+| 箇所                                                | numRuns | 実測                                                                                |
+| --------------------------------------------------- | ------- | ----------------------------------------------------------------------------------- |
+| `src/c4m/moqt.prop.ts:701`                          | 2000    | 104 ms。成功側 assert が `decodeMoqtScope` の保証により恒真で、根拠が空振りしている |
+| `devtools/src/utils/playoutTimingStats.prop.ts:339` | 1000    | 43 ms。325-331 行の 3 assert が構造的恒真                                           |
 
 他は 25〜500。`devtools/src/utils/c4m.prop.ts` と `debugExportText.prop.ts` の 200 は既定 100 で足りる。
 
@@ -219,8 +219,8 @@ PBT が存在するモジュールで、PBT と同じ性質を固定値でなぞ
 
 - 表駆動への統合 (テスト数は減るが書き換えを伴うもの): `src/session/bidi*` に残る同型テスト、`src/session/params.test.ts:373/390/416/436`、`src/dataStream.subgroup.test.ts:689-792`、`src/message/parameter.test.ts:55-134`、`src/createMediaPublisher.test.ts:4329-4506`、`src/properties.test.ts:169-201`
 - `fc.constant` のみを入力にしている PBT: `src/session/namespaceLoops.prop.ts:1041` など
-- 入力が結果に影響しない PBT: `src/session/incoming.prop.ts:1339/1355`、`src/publisher.prop.ts:90`、`src/audioPlayout.prop.ts:398`、`src/namespaceLoops.prop.ts:939`
-- 写経が残る PBT: `src/session/params.prop.ts` の他項目、`devtools/src/utils/playbackTimingStats.prop.ts:29`
+- 入力が結果に影響しない PBT: `src/session/incoming.prop.ts:1339/1355`、`src/publisher.prop.ts:90`、`src/playout/audioPlayout.prop.ts:398`、`src/namespaceLoops.prop.ts:939`
+- 写経が残る PBT: `src/session/params.prop.ts` の他項目、`devtools/src/utils/playoutTimingStats.prop.ts:29`
 - PBT の生成器が境界を踏まない問題: `src/c4m/moqt.prop.ts:647` (prefix / suffix 分岐に入らない試行が 27%)、`src/filter.prop.ts` の相対指定の生成器
 
 ### 副次的に見つかった問題 (テスト整理の範囲外)

@@ -1045,7 +1045,7 @@ test("constructor: 並べすぎの余裕と鳴らす時刻の下限を指定で�
   assert.equal(lateDecision.kind, "play");
   if (lateDecision.kind === "play") {
     // ここは不感帯 0 で回しているため、遅れはそのまま詰める (不感帯そのものの効きは
-    // src/audioPlayout.prop.ts が既定値との関係で確かめる)
+    // src/playout/audioPlayout.prop.ts が既定値との関係で確かめる)
     assert.isAbove(lateDecision.compressSeconds, 0, "遅れを詰めること");
   }
 });

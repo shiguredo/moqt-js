@@ -11,7 +11,7 @@
 
 ## 現状
 
-- `src/audioTimeStretch.ts` の `concealSamples` の JSDoc は、相関が足りない音では補間しないことだけを書いている。`findTailLag` の JSDoc も「2 周期分の末尾が取れない (音が短すぎる) ときは lag 0 を返す」とだけ書いており、どちらもフレーム長で決まる探索範囲を説明していない
+- `src/playout/audioTimeStretch.ts` の `concealSamples` の JSDoc は、相関が足りない音では補間しないことだけを書いている。`findTailLag` の JSDoc も「2 周期分の末尾が取れない (音が短すぎる) ときは lag 0 を返す」とだけ書いており、どちらもフレーム長で決まる探索範囲を説明していない
 - フレーム長ごとの範囲を固定するテストが無い。補間のテストは 20 ms フレームの周期 5 ms と 16 kHz の 20 ms フレームだけである
 - `findTailLag` は `2 * lag <= ダウンサンプル後の長さ` の範囲でしか周期を探さない
 

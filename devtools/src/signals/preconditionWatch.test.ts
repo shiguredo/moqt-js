@@ -15,7 +15,7 @@ import {
   AUDIO_PUBLISH_CATCH_UP_QUEUE_CONFIRM_FRAMES,
   AudioPublishCatchUp,
 } from "../../../src/audioPublishCatchUp.ts";
-import { PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS } from "../../../src/playbackTimeline.ts";
+import { PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS } from "../../../src/playout/timeline.ts";
 import {
   CATCH_UP_WARN_STARTS,
   CATCH_UP_WARN_WINDOW_MS,

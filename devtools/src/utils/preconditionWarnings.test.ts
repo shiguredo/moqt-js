@@ -12,7 +12,7 @@ import type { AudioTimestampOffsetStats } from "../../../src/audioTimestampClock
 import {
   PLAYOUT_BASE_UNSHARED_HOLD_MS,
   PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS,
-} from "../../../src/playbackTimeline.ts";
+} from "../../../src/playout/timeline.ts";
 import { EMPTY_AV_SYNC, type AvSyncSnapshot } from "../signals/subscriber.ts";
 import {
   CATCH_UP_STUCK_WARN_MS,

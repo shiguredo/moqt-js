@@ -7,7 +7,7 @@
  *
  * 受信の欠け (届かなかった Object と Group、RESET_STREAM で終わった stream) の数え方も
  * ここで固定する。原因ごとの回数の和が止まりの回数に一致することは
- * playbackTimingStats.prop.ts の PBT が固定する。
+ * playoutTimingStats.prop.ts の PBT が固定する。
  */
 
 import { test, assert } from "vite-plus/test";

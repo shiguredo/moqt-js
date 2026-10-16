@@ -13,7 +13,7 @@ moqt-devtools とライブラリで、受信した Object を復号して再生�
 ## 現状
 
 - ライブラリ `src/createMediaSubscriber.ts` と devtools `devtools/src/hooks/useSubscriber.ts` が、それぞれ catalog の購読、音声と映像の購読、復号、再生までの組み立てを持つ
-- 第 1 段として音声の再生の組み立てを `src/audioPlayoutSession.ts` の `AudioPlayoutSession` へ寄せた (コミット `d41b8a4`〜`7fabe4c`)。`createMediaSubscriber` の `handleAudioDecodedData` と `useSubscriber` の `handleAudioDecoded` は共有実装を呼ぶだけになり、呼び出し側の 2 ファイルで 387 行減った (追加 117 行・削除 504 行)
+- 第 1 段として音声の再生の組み立てを `src/playout/audioPlayoutSession.ts` の `AudioPlayoutSession` へ寄せた (コミット `d41b8a4`〜`7fabe4c`)。`createMediaSubscriber` の `handleAudioDecodedData` と `useSubscriber` の `handleAudioDecoded` は共有実装を呼ぶだけになり、呼び出し側の 2 ファイルで 387 行減った (追加 117 行・削除 504 行)
 - 映像はまだ 2 実装である
   - 復号へ渡したフレームの情報 (TIMESTAMP の種類と Object の位置) を、ライブラリは `videoTimestampKinds`、devtools は `videoDecodeInputsRef` の `Map<number, DecodeInput>` と `rememberDecodeInput` が持つ。覚える上限も別々である
   - 表示待ちのキュー (`PlayoutBuffer`) の積み方、あふれた分の処理、表示の drain を、ライブラリは `handleVideoDecodedData` / `scheduleVideoFrameDrain` / `writeDueVideoFrames` / `writeVideoFrame` / `clearVideoPlayout`、devtools は `presentFrame` / `scheduleFrameDrain` / `drawFrame` / `clearPendingFrame` が持つ
@@ -29,16 +29,16 @@ moqt-devtools とライブラリで、受信した Object を復号して再生�
 
 ### 第 1 段: 音声の再生の組み立て (完了済み)
 
-- `src/audioPlayoutSession.ts` の `AudioPlayoutSession` が、復号した音声の時間軸への記録、目標の開始時刻の決定、`AudioPlayoutScheduler` への予約、計器 (`src/audioPlayoutTimingStats.ts`) への記録を行う
+- `src/playout/audioPlayoutSession.ts` の `AudioPlayoutSession` が、復号した音声の時間軸への記録、目標の開始時刻の決定、`AudioPlayoutScheduler` への予約、計器 (`src/playout/audioPlayoutTimingStats.ts`) への記録を行う
 - ライブラリと devtools の両方がこれを使う。ブラウザ依存は `AudioPlayoutOutput` として注入する
 - 呼び出し側の 2 ファイルで 387 行減った (追加 117 行・削除 504 行)
 - `src/index.ts` から公開し、`docs/HIGH_LEVEL_API.md` と `CHANGES.md` に記載済み
 
 ### 第 2 段: 映像の再生の経路
 
-- `src/videoPlayoutSession.ts` を新設し、復号したフレームの情報 (TIMESTAMP の種類と Object の位置) の対応表、共有の時間軸への記録、`PlayoutBuffer` への積み方とあふれの処理、表示の drain、表示の実績の記録、捨てたフレームの計器への記録を 1 か所に置く
+- `src/playout/videoPlayoutSession.ts` を新設し、復号したフレームの情報 (TIMESTAMP の種類と Object の位置) の対応表、共有の時間軸への記録、`PlayoutBuffer` への積み方とあふれの処理、表示の drain、表示の実績の記録、捨てたフレームの計器への記録を 1 か所に置く
 - `src/createMediaSubscriber.ts` と `devtools/src/hooks/useSubscriber.ts` の両方から映像側の自前の組み立てを削除し、共有実装を使う
-- `VideoDecodeOrder` / `GroupSwitchGate` / `PlayoutBuffer` / `PlaybackTimeline` / `CatchUpGate` は公開 API から使い、devtools に `../../../src/...` の相対 import を残さない (音声の分は第 4 段で扱う)
+- `VideoDecodeOrder` / `GroupSwitchGate` / `PlayoutBuffer` / `PlayoutTimeline` / `CatchUpGate` は公開 API から使い、devtools に `../../../src/...` の相対 import を残さない (音声の分は第 4 段で扱う)
 - `CatchUpGate` は `src/` へ移し、公開 API から使う
 - 公開 API として `src/index.ts` から出し、`docs/HIGH_LEVEL_API.md` と `CHANGES.md` を更新する
 - 挙動は変えない。devtools の統計、パネル、「Copy for LLM」の項目と `data-testid` を欠けさせない

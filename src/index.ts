@@ -276,14 +276,17 @@ export {
 
 // A/V 同期の遅延の内訳 (AvSyncStats.delays)。遅延の解析に使う
 export type {
-  PlaybackDelayBreakdown,
-  PlaybackTrackBreakdown,
-  PlaybackUnsharedReason,
-} from "./playbackTimeline";
+  PlayoutDelayBreakdown,
+  PlayoutTrackBreakdown,
+  PlayoutUnsharedReason,
+} from "./playout/timeline";
 
 // 音声の目標遅延を閉ループで決めた状態 (AvSyncStats.delays.audioDelayFeedback)。
 // 適用中の目標と、その理由
-export type { AudioDelayFeedbackReason, AudioDelayFeedbackSnapshot } from "./audioDelayFeedback";
+export type {
+  AudioDelayFeedbackReason,
+  AudioDelayFeedbackSnapshot,
+} from "./playout/audioDelayFeedback";
 
 // 音声の再生の観測値 (AudioReceiverStats.playoutTiming)。鳴るはずの時刻と鳴らなかった量
 export type {
@@ -291,7 +294,7 @@ export type {
   AudioMissReason,
   AudioMissTotal,
   AudioPlayoutTimingSnapshot,
-} from "./audioPlayoutTimingStats";
+} from "./playout/audioPlayoutTimingStats";
 
 // 受信側の音声が live から遅れたときに、復号器を作り直して追いつく判定と観測
 // (AudioReceiverStats.playoutCatchUp)。遅れが続いたら復号器を作り直す
@@ -309,7 +312,7 @@ export {
   type AudioReceiveCatchUpObservation,
   type AudioReceiveCatchUpOptions,
   type AudioReceiveCatchUpStats,
-} from "./audioReceiveCatchUp";
+} from "./playout/audioReceiveCatchUp";
 
 // 復号した音声の再生の組み立て (時間軸への記録・目標の決定・予約・計器への記録)。
 // ライブラリ (createMediaSubscriber) と moqt-devtools が同じ実装を使う。Web Audio は
@@ -322,7 +325,7 @@ export {
   type AudioPlayoutResult,
   type AudioPlayoutSessionOptions,
   type AudioPlayoutTimestampKind,
-} from "./audioPlayoutSession";
+} from "./playout/audioPlayoutSession";
 
 // 復号した映像フレームの表示の組み立て (対応表・時間軸への記録・表示の選択・計器への記録)。
 // ライブラリ (createMediaSubscriber) と moqt-devtools が同じ実装を使う。表示の出し先
@@ -339,7 +342,7 @@ export {
   type VideoPlayoutSessionOptions,
   type VideoPlayoutTiming,
   type VideoPlayoutTimestampKind,
-} from "./videoPlayoutSession";
+} from "./playout/videoPlayoutSession";
 
 // 復号した映像フレームの表示待ちのキュー (時間軸が決めた表示時刻に合わせて選ぶ)
 export {
@@ -347,10 +350,10 @@ export {
   JITTER_BUFFER_MAX_QUEUED_FRAMES,
   MAX_PRESENTATION_LAG_MS,
   type PlayoutSelection,
-} from "./playoutBuffer";
+} from "./playout/buffer";
 
 // 音声と映像で共有する表示時刻の時間軸 (jitter buffer の目標と遅れの学習)
-export { PlaybackTimeline } from "./playbackTimeline";
+export { PlayoutTimeline } from "./playout/timeline";
 
 // 映像 Object を復号してよいかの判定 (Group の順序と参照するフレームの欠落)
 export { VideoDecodeOrder, priorObjectIdGapOf } from "./videoDecodeOrder";
@@ -363,7 +366,7 @@ export { GroupSwitchGate } from "./groupSwitchGate";
 export { CatchUpGate, type CatchUpDecision } from "./catchUpGate";
 
 // 分布の要約 (p50 / p95 / max)。映像と音声の時間の統計で共通に使う
-export type { TimingSummary } from "./timingSummary";
+export type { TimingSummary } from "./playout/timingSummary";
 // 音声の TIMESTAMP を壁時計へ合わせるための観測 (AudioStats.timestampOffset)。
 // 「読み出した壁時計 - AudioData.timestamp」の推移
 export type { AudioTimestampOffsetStats } from "./audioTimestampClock";

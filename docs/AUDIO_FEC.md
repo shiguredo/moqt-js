@@ -58,9 +58,9 @@
 
 ### 2.3 冗長化以外の欠落対策
 
-- 補間: `concealSamples()` が直前の音の波形を繰り返して穴を埋める (`src/audioTimeStretch.ts`)。情報を復元するのではなく波形を作る処理である
-- 追いつき: `AudioReceiveCatchUp` が復号の出力の遅れを見て復号器を作り直す (`src/audioReceiveCatchUp.ts`)。遅れの解消であり欠落の回復ではない
-- 遅延推定: libwebrtc の NetEq を移植した `AudioDelayManager` が、500 ms 区間ごとの「基準からの最大の遅れ」をヒストグラムへ入れ、0.95 分位を目標遅延にする (`src/audioDelayManager.ts:195-222`)。窓はおよそ 25 件であり (実測の記録。`docs/AUDIO_PLAYOUT_LATENCY.md` の「遅れの推定は「窓ごとの最大」で決まる」)、**1 件の遅れで推定が動く**。目標遅延は 50〜100 ms で運用している (`src/audioDelayFeedback.ts:48`、`src/playbackTimeline.ts:145-154`)
+- 補間: `concealSamples()` が直前の音の波形を繰り返して穴を埋める (`src/playout/audioTimeStretch.ts`)。情報を復元するのではなく波形を作る処理である
+- 追いつき: `AudioReceiveCatchUp` が復号の出力の遅れを見て復号器を作り直す (`src/playout/audioReceiveCatchUp.ts`)。遅れの解消であり欠落の回復ではない
+- 遅延推定: libwebrtc の NetEq を移植した `AudioDelayManager` が、500 ms 区間ごとの「基準からの最大の遅れ」をヒストグラムへ入れ、0.95 分位を目標遅延にする (`src/playout/audioDelayManager.ts:195-222`)。窓はおよそ 25 件であり (実測の記録。`docs/AUDIO_PLAYOUT_LATENCY.md` の「遅れの推定は「窓ごとの最大」で決まる」)、**1 件の遅れで推定が動く**。目標遅延は 50〜100 ms で運用している (`src/playout/audioDelayFeedback.ts:48`、`src/playout/timeline.ts:145-154`)
 
 ### 2.4 実測されている効果と副作用 (origin/develop の docs より引用)
 
@@ -179,7 +179,7 @@
 ### 4.6 配送方式とバッファ (FEC と同じ土俵の代替)
 
 - **subgroup (再送あり) への切替。** ライブラリの既定は `"subgroup"` であり (`src/createMedia/settings.ts:113-115`)、Data Stream は再送されるため欠落そのものが無くなる。代わりに head-of-line 遅延を払う。datagram を既定にして遅延の裾を縮めた経緯があるため (`origin/develop` の実測記録)、損失のある経路でだけ subgroup へ戻す判断は、目標遅延 50〜100 ms との引き換えになる。**実測で比較すべき代替である**
-- **バッファ (目標遅延) の調整。** 目標遅延の上限を 100 → 160 ms にすると時間圧縮が半減するが、遅延が 20〜25 ms 増える (実測)。遅れて届く復旧を待つ余裕を作る方向であり、A/V 同期の補償上限 (`src/playbackTimeline.ts:154`) との相談になる
+- **バッファ (目標遅延) の調整。** 目標遅延の上限を 100 → 160 ms にすると時間圧縮が半減するが、遅延が 20〜25 ms 増える (実測)。遅れて届く復旧を待つ余裕を作る方向であり、A/V 同期の補償上限 (`src/playout/timeline.ts:154`) との相談になる
 
 ---
 
@@ -245,7 +245,7 @@
 | 冗長化の実装 (受信)    | `src/createMediaSubscriber.ts:2261-2288`                                                                                                                              |
 | 冗長度の解決と検証     | `src/createMedia/settings.ts:87-117`、`src/codec/types.ts:182`                                                                                                        |
 | 音声 Object の割り当て | `src/createMediaPublisher.ts:172-184`                                                                                                                                 |
-| 遅延推定               | `src/audioDelayManager.ts:195-222`                                                                                                                                    |
+| 遅延推定               | `src/playout/audioDelayManager.ts:195-222`                                                                                                                            |
 | 音声の実測記録         | `docs/AUDIO_PLAYOUT_LATENCY.md` (「パケロス対策: 音声 Object の 2 回送り」「まとめて落ちる経路 (バースト損失) と、2 個目を送る間隔」)、`docs/AUDIO_PLAYOUT_RESULT.md` |
 | 損失の注入 harness     | `tests/e2e/relay/investigation-audio-delay.spec.ts`                                                                                                                   |
 | MoQ 仕様               | `refs/moq/draft-ietf-moq-transport-22.txt` §5.1.1、§10.4、§14.1.2、`refs/moq/draft-ietf-moq-msf-01.txt` §5、`refs/moq/draft-ietf-moq-loc-04.txt` §4.1                 |

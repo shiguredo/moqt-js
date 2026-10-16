@@ -1,8 +1,8 @@
 import { test, assert } from "vite-plus/test";
 import { createSubscriberInstance, EMPTY_AV_SYNC } from "./subscriber";
-import { EMPTY_PLAYBACK_TIMING } from "../utils/playbackTimingStats";
+import { EMPTY_PLAYOUT_TIMING } from "../utils/playoutTimingStats";
 import { EMPTY_PUBLISH_TIMING } from "../utils/publishTimingStats";
-import { EMPTY_AUDIO_PLAYOUT_TIMING } from "../../../src/audioPlayoutTimingStats.ts";
+import { EMPTY_AUDIO_PLAYOUT_TIMING } from "../../../src/playout/audioPlayoutTimingStats.ts";
 import { buildPublisherStats, buildSubscriberStats } from "./statsSnapshot";
 import * as pub from "./publisher";
 
@@ -72,9 +72,9 @@ test("buildSubscriberStats: Group の順序と欠落で捨てた映像フレー�
 test("buildSubscriberStats: 受信から表示までの時間の統計を返す", () => {
   // 到着の揺らぎ・遅延・復号時間・表示間隔の分布と、止まり・表示キューのあふれの累積を
   // そのまま出す。E2E と実測スクリプトはこの値でかくつきの原因を切り分ける
-  const instance = createSubscriberInstance("playback-timing");
+  const instance = createSubscriberInstance("playout-timing");
   const timing = {
-    ...EMPTY_PLAYBACK_TIMING,
+    ...EMPTY_PLAYOUT_TIMING,
     arrivalJitterMs: { p50: 1, p95: 20, max: 300 },
     latencyMs: { p50: 45, p95: 80, max: 1_200 },
     displayFps: 30,
@@ -84,12 +84,12 @@ test("buildSubscriberStats: 受信から表示までの時間の統計を返す"
     playoutDelayMs: 40,
     lateFramesDropped: 3,
   };
-  instance.playbackTiming.value = timing;
-  assert.deepEqual(buildSubscriberStats(instance).playbackTiming, timing);
+  instance.playoutTiming.value = timing;
+  assert.deepEqual(buildSubscriberStats(instance).playoutTiming, timing);
   // 購読前は何も記録していない値を返す
   assert.deepEqual(
-    buildSubscriberStats(createSubscriberInstance("playback-timing-empty")).playbackTiming,
-    EMPTY_PLAYBACK_TIMING,
+    buildSubscriberStats(createSubscriberInstance("playout-timing-empty")).playoutTiming,
+    EMPTY_PLAYOUT_TIMING,
   );
 });
 

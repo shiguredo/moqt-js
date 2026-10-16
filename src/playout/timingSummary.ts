@@ -1,7 +1,7 @@
 /**
  * 値の分布の要約 (p50 / p95 / max)
  *
- * 受信から表示までの時間の統計 (devtools の `utils/playbackTimingStats.ts`) と、音声の
+ * 受信から表示までの時間の統計 (devtools の `utils/playoutTimingStats.ts`) と、音声の
  * 再生の観測 (`audioPlayoutTimingStats.ts`) が共通で使う。どちらも「直近の窓の値が
  * どこに集まっているか」を同じ求め方で出し、比べられるようにするためである。
  *

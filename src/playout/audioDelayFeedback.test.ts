@@ -1,9 +1,9 @@
 /**
  * 音声の目標遅延を、実際に鳴った結果から閉ループで決める規則
  *
- * `src/audioDelayFeedback.ts` の規則 (増減の条件、速さ、上下限、`targetLatencyMs` との
+ * `src/playout/audioDelayFeedback.ts` の規則 (増減の条件、速さ、上下限、`targetLatencyMs` との
  * 関係) を固定する。実測に相当する入力を時間軸と鳴らす時刻の決定へ通した受け入れ条件は
- * `src/audioDelayClosedLoop.test.ts` にある。
+ * `src/playout/audioDelayClosedLoop.test.ts` にある。
  *
  * 観測は購読側 (`AudioPlayoutTimingStats.audioDelayFeedback`) が作る値と同じ形の
  * オブジェクトを直接渡す。時刻はミリ秒で、`performance.now()` と同じ軸である。

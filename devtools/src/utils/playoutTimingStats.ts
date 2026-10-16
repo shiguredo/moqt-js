@@ -22,16 +22,16 @@
 import { DataStreamErrorCode, PublishDoneStatusCode } from "moqt-js";
 import { LATENCY_SEGMENTS, LatencyBreakdown, type LatencySegment } from "./latencyBreakdown";
 import { STALL_CAUSES, StallAnalyzer, type ObjectPosition, type StallCause } from "./stallAnalysis";
-import { TimedValues } from "../../../src/timedValues.ts";
-import { summarizeTimings, type TimingSummary } from "../../../src/timingSummary.ts";
+import { TimedValues } from "../../../src/playout/timedValues.ts";
+import { summarizeTimings, type TimingSummary } from "../../../src/playout/timingSummary.ts";
 
-// 分布の要約 (p50 / p95 / max) は、音声の再生の観測 (src/audioPlayoutTimingStats.ts) と
+// 分布の要約 (p50 / p95 / max) は、音声の再生の観測 (src/playout/audioPlayoutTimingStats.ts) と
 // 同じ求め方を使うためライブラリ側に置く。映像側の利用側は従来どおりこのモジュールから
 // 読めるように再エクスポートする
 export { summarizeTimings, type TimingSummary };
 
 /** 分布を求める直近の窓 (ミリ秒) */
-export const PLAYBACK_TIMING_WINDOW_MS = 10_000;
+export const PLAYOUT_TIMING_WINDOW_MS = 10_000;
 
 /** 表示 fps を数える窓 (ミリ秒) */
 export const DISPLAY_FPS_WINDOW_MS = 1_000;
@@ -86,7 +86,7 @@ export type LossEvent =
   | { readonly kind: "lossStall"; readonly event: StallEvent };
 
 /** 統計の値 */
-export interface PlaybackTimingSnapshot {
+export interface PlayoutTimingSnapshot {
   /**
    * 到着の揺らぎ。到着時刻 - メディア時刻 (LOC TIMESTAMP) の、窓の中の最小値からの差。
    * 送信側と受信側の時計のずれに依らない
@@ -168,7 +168,7 @@ function emptyLatencyBreakdown(): Record<LatencySegment, TimingSummary | null> {
 }
 
 /** 何も記録していないときの統計 */
-export const EMPTY_PLAYBACK_TIMING: PlaybackTimingSnapshot = {
+export const EMPTY_PLAYOUT_TIMING: PlayoutTimingSnapshot = {
   arrivalJitterMs: null,
   latencyMs: null,
   decodeTimeMs: null,
@@ -271,7 +271,7 @@ export function formatLossEvent(lossEvent: LossEvent): string {
 /**
  * 受信した映像の到着・復号・表示の時間を記録し、統計を求める
  */
-export class PlaybackTimingStats {
+export class PlayoutTimingStats {
   private readonly windowMs: number;
   private readonly timeOriginMs: number;
   // 到着時刻 - メディア時刻 (ミリ秒)
@@ -308,7 +308,7 @@ export class PlaybackTimingStats {
    *   この間残す
    * @param timeOriginMs - `performance.timeOrigin`。止まりの時刻を壁時計に換算する
    */
-  constructor(windowMs: number = PLAYBACK_TIMING_WINDOW_MS, timeOriginMs = 0) {
+  constructor(windowMs: number = PLAYOUT_TIMING_WINDOW_MS, timeOriginMs = 0) {
     this.windowMs = windowMs;
     this.timeOriginMs = timeOriginMs;
     this.stalls = new StallAnalyzer(windowMs);
@@ -495,7 +495,7 @@ export class PlaybackTimingStats {
    *
    * @param nowMs - 求める時刻 (`performance.now()`)。窓はこの時刻から遡る
    */
-  snapshot(nowMs: number): PlaybackTimingSnapshot {
+  snapshot(nowMs: number): PlayoutTimingSnapshot {
     const gaps = this.stalls.receptionGaps();
     const minAtMs = nowMs - this.windowMs;
     for (const series of [

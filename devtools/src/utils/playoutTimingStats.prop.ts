@@ -1,5 +1,5 @@
 /**
- * PlaybackTimingStats の Property-Based Tests
+ * PlayoutTimingStats の Property-Based Tests
  *
  * 到着・復号・表示の記録を任意の時刻の列として生成し、統計が満たすべき性質を確かめる。
  *
@@ -9,7 +9,7 @@
  * - 表示間隔がフレーム間隔どおりなら止まりは 0 である
  * - 止まりごとに原因を 1 つ決め、原因ごとの回数と時間の和は止まりの回数と時間に一致する
  *
- * 境界値 (百分位の定義、復号時間の対応づけ、リセット) は playbackTimingStats.test.ts の
+ * 境界値 (百分位の定義、復号時間の対応づけ、リセット) は playoutTimingStats.test.ts の
  * 単体テストが固定する。
  */
 
@@ -17,10 +17,10 @@ import { test, assert } from "vite-plus/test";
 import * as fc from "fast-check";
 import {
   MAX_RECENT_STALLS,
-  PLAYBACK_TIMING_WINDOW_MS,
-  PlaybackTimingStats,
+  PLAYOUT_TIMING_WINDOW_MS,
+  PlayoutTimingStats,
   type TimingSummary,
-} from "./playbackTimingStats";
+} from "./playoutTimingStats";
 import { STALL_CAUSES } from "./stallAnalysis";
 
 /**
@@ -50,7 +50,7 @@ const arrivalsArbitrary = fc.array(
 test("snapshot: 到着の揺らぎと遅延は窓の中の到着だけから求める", () => {
   fc.assert(
     fc.property(arrivalsArbitrary, fc.integer({ min: 0, max: 5_000 }), (arrivals, tailMs) => {
-      const stats = new PlaybackTimingStats();
+      const stats = new PlayoutTimingStats();
       // 受信側の時刻 (ms) と、送信側の壁時計のメディア時刻 (µs)
       const recorded: { nowMs: number; latencyMs: number }[] = [];
       let nowMs = 0;
@@ -63,7 +63,7 @@ test("snapshot: 到着の揺らぎと遅延は窓の中の到着だけから求�
       }
       const snapshotAt = nowMs + tailMs;
       const inWindow = recorded.filter(
-        (entry) => entry.nowMs >= snapshotAt - PLAYBACK_TIMING_WINDOW_MS,
+        (entry) => entry.nowMs >= snapshotAt - PLAYOUT_TIMING_WINDOW_MS,
       );
       const snapshot = stats.snapshot(snapshotAt);
       const latencies = inWindow.map((entry) => entry.latencyMs);
@@ -83,8 +83,8 @@ test("snapshot: 到着の揺らぎは送信側と受信側の時計のずれに�
       arrivalsArbitrary,
       fc.integer({ min: -1_000_000_000, max: 1_000_000_000 }),
       (arrivals, clockOffsetMs) => {
-        const aligned = new PlaybackTimingStats();
-        const shifted = new PlaybackTimingStats();
+        const aligned = new PlayoutTimingStats();
+        const shifted = new PlayoutTimingStats();
         let nowMs = 0;
         for (const { elapsedMs, delayMs } of arrivals) {
           nowMs += elapsedMs;
@@ -121,7 +121,7 @@ const displayEventsArbitrary = fc.array(
 test("snapshot: 止まりの回数と時間、表示キューのあふれは減らない", () => {
   fc.assert(
     fc.property(displayEventsArbitrary, (events) => {
-      const stats = new PlaybackTimingStats();
+      const stats = new PlayoutTimingStats();
       let nowMs = 0;
       let mediaMicros = 0;
       let previous = stats.snapshot(nowMs);
@@ -149,7 +149,7 @@ test("recordDisplay: フレーム間隔どおりに表示すると止まりは 0
       fc.integer({ min: 1_000, max: 100_000 }),
       fc.integer({ min: 2, max: 300 }),
       (frameMicros, count) => {
-        const stats = new PlaybackTimingStats();
+        const stats = new PlayoutTimingStats();
         for (let index = 0; index < count; index++) {
           stats.recordDisplay((index * frameMicros) / 1_000, index * frameMicros);
         }
@@ -213,7 +213,7 @@ const frameFateArbitrary = fc.record({
 interface TimelineOperation {
   atMs: number;
   order: number;
-  apply: (stats: PlaybackTimingStats) => void;
+  apply: (stats: PlayoutTimingStats) => void;
 }
 
 // 実際に近い時系列 (受け取り、保留、復号、表示の時刻と、Object と Group の欠け、stream の
@@ -227,7 +227,7 @@ test("recordDisplay: 実際に近い時系列でも、原因ごとの止まり�
       (fates, groupSize) => {
         const frameMs = 40;
         const operations: TimelineOperation[] = [];
-        const add = (atMs: number, apply: (stats: PlaybackTimingStats) => void): void => {
+        const add = (atMs: number, apply: (stats: PlayoutTimingStats) => void): void => {
           operations.push({ atMs, order: operations.length, apply });
         };
         let mediaIndex = 0;
@@ -310,7 +310,7 @@ test("recordDisplay: 実際に近い時系列でも、原因ごとの止まり�
         });
         operations.sort((a, b) => a.atMs - b.atMs || a.order - b.order);
 
-        const stats = new PlaybackTimingStats();
+        const stats = new PlayoutTimingStats();
         for (const operation of operations) {
           operation.apply(stats);
         }

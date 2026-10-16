@@ -66,7 +66,7 @@ export class AudioDecoderWrapper {
   /**
    * 復号器を捨てて、同じ設定で作り直す
    *
-   * 受信側の音声の追いつきで使う (src/audioReceiveCatchUp.ts)。WebCodecs の
+   * 受信側の音声の追いつきで使う (src/playout/audioReceiveCatchUp.ts)。WebCodecs の
    * `AudioDecoder` は、溜まった音を実時間と同じ速さでしか出さないため、遅れは固定される。
    * 作り直すと、中に溜まっていた音 (未処理の投入と、まだ届いていない出力) が捨てられ、
    * 次に復号されるのは最後に届いた Object になる。

@@ -11,11 +11,11 @@
  *   最小値 (ミリ秒)。受信側と送信側の時計のずれと、経路と復号の最小遅延を含む。遅れは
  *   到着ではなく復号の出力の時刻で測る (表示できる時刻には復号の時間も含まれるため)
  * - 表示の遅れ: トラックごとの jitter buffer の遅延 (ミリ秒)。経路の揺らぎから求める
- *   - 音声は NetEq と同じ規則 (`src/audioDelayManager.ts`)。到着の遅れの 0.95 分位である。
+ *   - 音声は NetEq と同じ規則 (`src/playout/audioDelayManager.ts`)。到着の遅れの 0.95 分位である。
  *     ただし、これだけでは**ストリーム全体が一様に遅れている分** (復号・予約・出力の
  *     バッファ・まとめて届いた山) が見えないため、実際に鳴った結果 (予定をどれだけ過ぎた
  *     か、並べすぎで捨てた量) からも目標を決め、大きい方を使う
- *     (`src/audioDelayFeedback.ts`)。正常時 (遅れが無く、捨てが無い) は目標が下がる
+ *     (`src/playout/audioDelayFeedback.ts`)。正常時 (遅れが無く、捨てが無い) は目標が下がる
  *   - 映像は「遅れ - 基準の遅れ」の百分位から求めた揺らぎ (`playoutDelayPercentile`)。
  *     表示時刻の後に届くフレームが 1 秒に `LATE_FRAMES_PER_SECOND` 枚までになる値である
  * - A/V 同期: 2 つのトラックの表示時刻の差が `SYNC_MIN_DELTA_MS` を超えたときだけ、先行する
@@ -27,7 +27,7 @@
  *   関わらず常に掛ける (実測では、証拠を見る前に音声の TIMESTAMP が 600 ms 段差でずれ、
  *   段差を揺らぎとして学習した音声の遅延へ映像を合わせて 600 ms 足し、映像が 500 ms
  *   遅れたまま数十秒戻らなかった)。観測のたびに行い、上げるのは即座、下げるのは毎秒
- *   `PLAYBACK_DELAY_DECAY_MS_PER_SECOND` までにする (急に下げると、既に積んだフレームより
+ *   `PLAYOUT_DELAY_DECAY_MS_PER_SECOND` までにする (急に下げると、既に積んだフレームより
  *   後ろに並ぶフレームが出る)
  * - `targetLatency` は 2 つのトラックの表示の遅れの下限になり、同期の制御の分はその上に乗る
  * - 表示の遅れの上限: `MAX_PLAYOUT_DELAY_MS` と、表示待ちのキューが吸収できる長さの
@@ -45,7 +45,7 @@
  *   の間) 続いたら (差が経路の遅れではなく時計のずれである)、大きさの閾値を待たずに同期
  *   しない。合わせると片側の表示の遅れが上限まで伸びて戻せなくなるためである。動いた幅が
  *   元へ戻る一瞬の動き (読み出しが遅れた分の差) では共有を解除しない。同期しない間は、
- *   その時点までに足した分を毎秒 `PLAYBACK_DELAY_DECAY_MS_PER_SECOND` までで戻す
+ *   その時点までに足した分を毎秒 `PLAYOUT_DELAY_DECAY_MS_PER_SECOND` までで戻す
  *
  *   動きを見る値には直近の窓 (`BASE_DIFFERENCE_RECENT_WINDOW_MS`) の最小値の差を使う
  *   (窓全体の最小値の差は、遅れる向きのずれでは窓が埋まるまで動かない)。ただし短い窓は
@@ -73,7 +73,7 @@ import { AudioDelayManager, type AudioDelayManagerOptions } from "./audioDelayMa
 import { TimedValues } from "./timedValues";
 
 /** 基準の遅れと揺らぎを求める直近の窓 (ミリ秒) */
-export const PLAYBACK_WINDOW_MS = 10_000;
+export const PLAYOUT_WINDOW_MS = 10_000;
 
 /**
  * 表示時刻の後に届くことを許すフレームの数 (1 秒あたり)
@@ -109,7 +109,7 @@ export const CATCH_UP_CHECK_INTERVAL_MS = 250;
 export const CATCH_UP_MIN_BASE_DROP_MS = 20;
 
 /** 目標が下がったときに再生遅延を下げる速さ (ミリ秒 / 秒) */
-export const PLAYBACK_DELAY_DECAY_MS_PER_SECOND = 20;
+export const PLAYOUT_DELAY_DECAY_MS_PER_SECOND = 20;
 
 /**
  * 遅れが基準からこれ以上離れたら、TIMESTAMP の飛びとみなして基準を取り直す (ミリ秒)
@@ -118,7 +118,7 @@ export const PLAYBACK_DELAY_DECAY_MS_PER_SECOND = 20;
  * フレームがすべて遅れて見えて再生遅延が上限に張り付き、大きく進むとフレームが先の時刻で
  * 待ち続ける。再生遅延の上限 (500 ms) と通常の揺らぎより十分大きくする
  */
-export const PLAYBACK_DISCONTINUITY_MS = 2_000;
+export const PLAYOUT_DISCONTINUITY_MS = 2_000;
 
 /**
  * 音声の再生遅延の下限 (ミリ秒)
@@ -147,7 +147,7 @@ export const AUDIO_PLAYOUT_DELAY_FLOOR_MS = 50;
 /**
  * 音声を到着基準で並べるときの再生の遅れの上限 (ミリ秒)
  *
- * `src/audioPlayout.ts` の `AUDIO_PLAYOUT_ARRIVAL_DELAY_SECONDS` と同じ値である。定義は
+ * `src/playout/audioPlayout.ts` の `AUDIO_PLAYOUT_ARRIVAL_DELAY_SECONDS` と同じ値である。定義は
  * 時間軸側に置く。時間軸も同じ値を使うため (基準を共有できないとき、映像を音声の
  * 到着基準の時刻へ合わせる)、片方だけを変えると A/V のずれが残る
  */
@@ -334,7 +334,7 @@ const BASE_DIFFERENCE_SAMPLE_INTERVAL_MS = 250;
 /**
  * 基準の差の動きを見るときに使う、直近の基準を求める窓 (ミリ秒)
  *
- * 窓全体 (`PLAYBACK_WINDOW_MS`) の最小値は、TIMESTAMP が壁時計から遅れていくときも
+ * 窓全体 (`PLAYOUT_WINDOW_MS`) の最小値は、TIMESTAMP が壁時計から遅れていくときも
  * 窓が埋まるまで動かない。短い窓で取り直すことで、合わせる側の遅れが上限へ伸びる前に
  * 動きを見つける。短くするほど経路と復号の乱れの影響を受けやすいため、待たずに判定する
  * 段差では窓全体の差 (`baseDifferenceMs`) を参照する (`PLAYOUT_BASE_DRIFT_STEP_MS`)
@@ -375,10 +375,10 @@ const FRAME_INTERVAL_SAMPLES = 32;
 const SKEW_SAMPLE_WINDOW_MS = 1_000;
 
 /** 表示時刻を求める相手 (音声と映像) */
-export type PlaybackStream = "audio" | "video";
+export type PlayoutStream = "audio" | "video";
 
 /** 2 つのトラックで基準を共有できているか、できていない理由 */
-export type PlaybackUnsharedReason =
+export type PlayoutUnsharedReason =
   // 共有している (どちらも TIMESTAMP を使えている)
   | "none"
   // 基準がまだ足りない (どちらかを観測していない、表示の遅れがまだ決まっていない)
@@ -397,7 +397,7 @@ export type PlaybackUnsharedReason =
  * 遅延と `targetLatency` の大きい方に、同期の制御が足した分を加えて上限で切った値である。
  * どこで遅れが生じているかを分けるために、この 3 つを別々に出す。
  */
-export interface PlaybackTrackBreakdown {
+export interface PlayoutTrackBreakdown {
   /** 基準の遅れ (ミリ秒)。送受信の時計のずれと、経路と復号の最小遅延。未観測なら null */
   baseDelayMs: number | null;
   /** jitter buffer の遅延 (ミリ秒)。自分の揺らぎから求めた値。未観測なら null */
@@ -415,9 +415,9 @@ export interface PlaybackTrackBreakdown {
 }
 
 /** 音声と映像の遅延の内訳 (遅延の解析に使う) */
-export interface PlaybackDelayBreakdown {
-  audio: PlaybackTrackBreakdown;
-  video: PlaybackTrackBreakdown;
+export interface PlayoutDelayBreakdown {
+  audio: PlayoutTrackBreakdown;
+  video: PlayoutTrackBreakdown;
   /** 基準の差「音声 - 映像」(ミリ秒)。どちらかを観測していなければ null */
   baseDifferenceMs: number | null;
   /**
@@ -440,7 +440,7 @@ export interface PlaybackDelayBreakdown {
   /** 2 つのトラックで基準を共有しているか */
   sharingBases: boolean;
   /** 共有できていない理由 */
-  unsharedReason: PlaybackUnsharedReason;
+  unsharedReason: PlayoutUnsharedReason;
   /**
    * 直近の基準の差の動き (ミリ秒 / 秒)。まだ履歴が無ければ null
    *
@@ -529,8 +529,8 @@ export function playoutQueueCapMs(maxQueuedFrames: number, frameIntervalMs: numb
   return Math.max(0, maxQueuedFrames - PLAYOUT_QUEUE_HEADROOM_FRAMES) * frameIntervalMs;
 }
 
-/** `PlaybackTimeline` の設定 */
-export interface PlaybackTimelineOptions {
+/** `PlayoutTimeline` の設定 */
+export interface PlayoutTimelineOptions {
   /** 時刻原点の壁時計 (ミリ秒。呼び出し側が `performance.timeOrigin` を渡す) */
   timeOriginMs: number;
   /** 映像の表示待ちのキューの上限 (枚) */
@@ -541,29 +541,29 @@ export interface PlaybackTimelineOptions {
   audioDelay?: AudioDelayManagerOptions;
 }
 
-export class PlaybackTimeline {
+export class PlayoutTimeline {
   private readonly timeOriginMs: number;
   private readonly maxQueuedFrames: number;
   private readonly maxPresentationDelayMs: number;
-  private readonly streams: Record<PlaybackStream, StreamState>;
+  private readonly streams: Record<PlayoutStream, StreamState>;
   // 音声の jitter buffer の目標遅延 (NetEq と同じ規則)
   private readonly audioDelayManager: AudioDelayManager;
   // 実際に鳴った結果 (予定をどれだけ過ぎたか、並べすぎで捨てた量) から目標を決める閉ループ
   private readonly audioDelayFeedback = new AudioDelayFeedback();
   // 同期の制御が各トラックへ足した遅延 (ミリ秒)。0 以上
-  private syncExtraMs: Record<PlaybackStream, number> = { audio: 0, video: 0 };
+  private syncExtraMs: Record<PlayoutStream, number> = { audio: 0, video: 0 };
   // 直前に同期の制御を行った時刻 (ミリ秒)。まだ行っていなければ null
   private lastSyncMs: number | null = null;
   // 基準を共有しないと決めた直近の時刻と、そのときの側 (ミリ秒、トラック)。往復を防ぐ
   private lastUnsharedAtMs: number | null = null;
-  private lastUnsharedStream: PlaybackStream | null = null;
+  private lastUnsharedStream: PlayoutStream | null = null;
   // その前の解除の時刻 (ミリ秒)。直近に共有と解除を往復しているかを見るために持つ。
   // 保持が満了して戻した場合も含める (往復の検出に使う)
   private previousUnsharedAtMs: number | null = null;
   // 差が戻った状態 (閾値の内側で動かない) になってからの時刻 (ミリ秒)。戻っていなければ null
   private unsharedReturnedSinceMs: number | null = null;
   // 直前に同期の制御に使った「自分の遅延の下限」(ミリ秒)。下げる速さの残りを求めるために持つ
-  private lastOwnFloorMs: Record<PlaybackStream, number> | null = null;
+  private lastOwnFloorMs: Record<PlayoutStream, number> | null = null;
   // 2 つのトラックの基準の差の直近の履歴 (ミリ秒)。動きの速さを出すために使う
   private readonly baseDifferences = new TimedValues();
   // 直前に基準の差を記録した時刻 (ミリ秒)。まだ記録していなければ null
@@ -592,7 +592,7 @@ export class PlaybackTimeline {
   private audioPresentation: PresentationRecord | null = null;
   private videoPresentation: PresentationRecord | null = null;
 
-  constructor(options: PlaybackTimelineOptions) {
+  constructor(options: PlayoutTimelineOptions) {
     this.timeOriginMs = options.timeOriginMs;
     this.maxQueuedFrames = options.maxQueuedFrames;
     this.maxPresentationDelayMs = options.maxPresentationDelayMs ?? MAX_PLAYOUT_DELAY_MS;
@@ -611,13 +611,13 @@ export class PlaybackTimeline {
    *   呼び出し側が `performance.timeOrigin + performance.now()` を渡す)
    * @param timestampMicros - 復号の出力の TIMESTAMP (Unix epoch マイクロ秒)
    */
-  observe(stream: PlaybackStream, wallClockMs: number, timestampMicros: number): void {
+  observe(stream: PlayoutStream, wallClockMs: number, timestampMicros: number): void {
     const current = this.streams[stream];
     const timestampMs = timestampMicros / 1_000;
     const offsetMs = wallClockMs - timestampMs;
     if (
       current.baseMs !== null &&
-      Math.abs(offsetMs - current.baseMs) >= PLAYBACK_DISCONTINUITY_MS
+      Math.abs(offsetMs - current.baseMs) >= PLAYOUT_DISCONTINUITY_MS
     ) {
       // 共有の時間軸ごと取り直す。両方のトラックが同じだけ動くため同期は保たれる
       this.reset();
@@ -640,7 +640,7 @@ export class PlaybackTimeline {
     state.lastTimestampMs = timestampMs;
     state.lastArrivalMs = wallClockMs;
 
-    const minAtMs = wallClockMs - PLAYBACK_WINDOW_MS;
+    const minAtMs = wallClockMs - PLAYOUT_WINDOW_MS;
     state.offsets.push(wallClockMs, offsetMs);
     state.offsets.prune(minAtMs);
     const window = state.offsets.current();
@@ -682,7 +682,7 @@ export class PlaybackTimeline {
         state.delayMs = targetMs;
       } else {
         const elapsedMs = Math.max(0, wallClockMs - state.lastUpdateMs);
-        const decayedMs = state.delayMs - (PLAYBACK_DELAY_DECAY_MS_PER_SECOND * elapsedMs) / 1_000;
+        const decayedMs = state.delayMs - (PLAYOUT_DELAY_DECAY_MS_PER_SECOND * elapsedMs) / 1_000;
         // フレーム間隔が短くなって上限が下がったときは、上限まで直ちに下げる
         state.delayMs = Math.min(Math.max(targetMs, decayedMs), capMs);
       }
@@ -697,11 +697,11 @@ export class PlaybackTimeline {
    * 音声を実際に鳴らした結果の観測を渡す (購読側が鳴らすたびに呼ぶ)
    *
    * 「予定をどれだけ過ぎて鳴ったか」「到着から鳴り始めるまで」「並べすぎで捨てた量」から、
-   * 音声の jitter buffer の目標遅延を閉ループで決める (`src/audioDelayFeedback.ts`)。
+   * 音声の jitter buffer の目標遅延を閉ループで決める (`src/playout/audioDelayFeedback.ts`)。
    * 目標を動かすのは毎秒 1 回までであり、観測のたびに呼んでよい。動かした目標は次の
    * 観測 (またはこの呼び出し) で表示の遅れへ反映する
    *
-   * NetEq の学習 (`src/audioDelayManager.ts`) は「直近で最も早く届いた音との差」しか
+   * NetEq の学習 (`src/playout/audioDelayManager.ts`) は「直近で最も早く届いた音との差」しか
    * 見ないため、ストリーム全体が一様に遅れている分を見つけられない。この観測がその分を
    * 補う。遅れが許容の中に収まっていれば目標を減らすため、正常時は遅延が増えない
    *
@@ -762,7 +762,7 @@ export class PlaybackTimeline {
    * トラックの表示の遅れ (ミリ秒)。TIMESTAMP から表示時刻までの差。まだ基準が無い、
    * またはそのトラックがずれた側 (TIMESTAMP を使わない) ときは null
    */
-  presentationDelayFor(stream: PlaybackStream): number | null {
+  presentationDelayFor(stream: PlayoutStream): number | null {
     return this.presentationDelayMsOf(stream);
   }
 
@@ -812,7 +812,7 @@ export class PlaybackTimeline {
    *
    * @returns 表示時刻。このトラックの TIMESTAMP を使わない (基準がまだ無い) ときは null
    */
-  presentationWallClockMicros(stream: PlaybackStream, timestampMicros: number): bigint | null {
+  presentationWallClockMicros(stream: PlayoutStream, timestampMicros: number): bigint | null {
     const delayMs = this.presentationDelayMsOf(stream);
     if (delayMs === null) {
       return null;
@@ -825,7 +825,7 @@ export class PlaybackTimeline {
    *
    * @returns 表示時刻。このトラックの TIMESTAMP を使わないときは null
    */
-  presentationPerformanceMs(stream: PlaybackStream, timestampMicros: number): number | null {
+  presentationPerformanceMs(stream: PlayoutStream, timestampMicros: number): number | null {
     const wallClockMicros = this.presentationWallClockMicros(stream, timestampMicros);
     if (wallClockMicros === null) {
       return null;
@@ -841,7 +841,7 @@ export class PlaybackTimeline {
    * @param presentedWallClockMicros - 実際に表示する (鳴らす) 時刻 (Unix epoch マイクロ秒)
    */
   recordPresentation(
-    stream: PlaybackStream,
+    stream: PlayoutStream,
     timestampMicros: number,
     presentedWallClockMicros: bigint,
   ): void {
@@ -904,7 +904,7 @@ export class PlaybackTimeline {
    * 「表示の遅れがどこで生じているか」と「2 つのトラックを同じ時計として扱えているか」を
    * 1 つの値にまとめる。表示時刻そのものは `presentationPerformanceMs` が返す。
    */
-  get delayBreakdown(): PlaybackDelayBreakdown {
+  get delayBreakdown(): PlayoutDelayBreakdown {
     // 動きの判定に使っている水準と、そこからの隔たり。水準がまだ無ければ隔たりも無い
     const settledMs = this.settledBaseDifferenceMs;
     const valueMs = this.baseDifferenceValueMs;
@@ -934,7 +934,7 @@ export class PlaybackTimeline {
    * 先に見る。動き続けている差は経路の遅れではなく時計のずれであり、合わせることを
    * やめる原因そのものであるため、差の大きさより先に知りたい
    */
-  private unsharedReason(): PlaybackUnsharedReason {
+  private unsharedReason(): PlayoutUnsharedReason {
     const audio = this.streams.audio;
     const video = this.streams.video;
     if (
@@ -977,7 +977,7 @@ export class PlaybackTimeline {
   }
 
   /** トラックごとの表示時刻の内訳 */
-  private trackBreakdownOf(stream: PlaybackStream): PlaybackTrackBreakdown {
+  private trackBreakdownOf(stream: PlayoutStream): PlayoutTrackBreakdown {
     return {
       baseDelayMs: this.streams[stream].baseMs,
       jitterDelayMs: this.streams[stream].delayMs,
@@ -1141,7 +1141,7 @@ export class PlaybackTimeline {
    * 窓全体の最小値は、TIMESTAMP が壁時計から遅れていくときも窓が埋まるまで動かないため、
    * 動きを早く見つけるには短い窓が要る (`recordBaseDifference`)
    */
-  private recentBaseMs(stream: PlaybackStream, nowMs: number): number | null {
+  private recentBaseMs(stream: PlayoutStream, nowMs: number): number | null {
     return this.streams[stream].offsets.minAfter(nowMs - BASE_DIFFERENCE_RECENT_WINDOW_MS);
   }
 
@@ -1202,7 +1202,7 @@ export class PlaybackTimeline {
    * トラックのキューに積んだフレームは表示時刻を過ぎ、最新の 1 枚以外が捨てられ得る。
    * 消えたトラックの遅延を引きずり続けるより、この副作用を受け入れる
    */
-  resetStream(stream: PlaybackStream): void {
+  resetStream(stream: PlayoutStream): void {
     this.streams[stream] = this.createStreamState();
     if (stream === "audio") {
       this.audioPresentation = null;
@@ -1283,7 +1283,7 @@ export class PlaybackTimeline {
    *   未来へ動かすだけで、並べ替えは起きないためである。観測のたびに行うのは、相手の
    *   目標遅延が段差で動いたときに、次の観測までの間ずれが開くのを防ぐためである
    * - 足した分は、下限を外した表示の遅れから決まる目標へ毎秒
-   *   `PLAYBACK_DELAY_DECAY_MS_PER_SECOND` までで戻す。両側を同じ速さで戻すため、戻して
+   *   `PLAYOUT_DELAY_DECAY_MS_PER_SECOND` までで戻す。両側を同じ速さで戻すため、戻して
    *   いる間もずれは開かない (片側だけ戻すと、その分だけずれが開いて、また足し戻される)
    * - 映像を下げる速さをこの速さに限るのは、表示待ちのキューが急に縮むと、積んだフレームが
    *   一斉に表示時刻を過ぎ、最新の 1 枚以外が間に合わなかったフレームとして捨てられるため
@@ -1340,7 +1340,7 @@ export class PlaybackTimeline {
    * - 足す量は `PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS` までにする (既存の同期の規則と
    *   同じ)。映像が音声より遅いときは戻さない (音声を遅らせないと合わせられないため、
    *   その分は A/V のずれとして残す)
-   * - 足すのは即座、戻すのは毎秒 `PLAYBACK_DELAY_DECAY_MS_PER_SECOND` までにする
+   * - 足すのは即座、戻すのは毎秒 `PLAYOUT_DELAY_DECAY_MS_PER_SECOND` までにする
    *   (既存の同期と同じ)
    */
   private updateSyncDelaysToArrivalAudio(nowMs: number): void {
@@ -1383,7 +1383,7 @@ export class PlaybackTimeline {
   }
 
   /**
-   * 足した分を目標へ戻す (毎秒 `PLAYBACK_DELAY_DECAY_MS_PER_SECOND` まで)
+   * 足した分を目標へ戻す (毎秒 `PLAYOUT_DELAY_DECAY_MS_PER_SECOND` まで)
    *
    * 観測の間隔で按分するため、観測が疎でも速さは変わらない。自分の遅延の下限が同時に
    * 下がっているときは、その分だけ戻す量を減らす (下限が下がるだけでも表示時刻は前に
@@ -1392,11 +1392,11 @@ export class PlaybackTimeline {
    * @param nowMs - 今の時刻 (ミリ秒)
    * @param targetExtraMs - トラックごとの、戻す先の足した分 (ミリ秒)
    */
-  private decaySyncExtras(nowMs: number, targetExtraMs: (stream: PlaybackStream) => number): void {
+  private decaySyncExtras(nowMs: number, targetExtraMs: (stream: PlayoutStream) => number): void {
     const previousSyncMs = this.lastSyncMs;
     this.lastSyncMs = nowMs;
     const elapsedMs = previousSyncMs === null ? 0 : Math.max(0, nowMs - previousSyncMs);
-    const budgetMs = (PLAYBACK_DELAY_DECAY_MS_PER_SECOND * elapsedMs) / 1_000;
+    const budgetMs = (PLAYOUT_DELAY_DECAY_MS_PER_SECOND * elapsedMs) / 1_000;
     for (const stream of ["audio", "video"] as const) {
       const ownDecreaseMs =
         this.lastOwnFloorMs === null
@@ -1421,7 +1421,7 @@ export class PlaybackTimeline {
    *
    * @param naturalMs - 同期が足した分を除いた、トラックごとの表示の遅れ (ミリ秒)
    */
-  private alignSyncExtras(naturalMs: Record<PlaybackStream, number>): void {
+  private alignSyncExtras(naturalMs: Record<PlayoutStream, number>): void {
     const audioMs = naturalMs.audio + this.syncExtraMs.audio;
     const videoMs = naturalMs.video + this.syncExtraMs.video;
     // 目標の差は足した分を含まない素の値から決める
@@ -1456,7 +1456,7 @@ export class PlaybackTimeline {
    * 増えるため) は実測で却下した。音声の表示の遅れの p95 が 129 → 140 ms、映像が
    * 131 → 146 ms と両方が遅くなり、ずれは変わらなかった (2026-10-15、各 3 回)
    */
-  private desiredDifferenceMs(naturalMs: Record<PlaybackStream, number>): number {
+  private desiredDifferenceMs(naturalMs: Record<PlayoutStream, number>): number {
     const differenceMs = Math.abs(naturalMs.audio - naturalMs.video);
     return Math.max(SYNC_MIN_DELTA_MS, differenceMs - PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS);
   }
@@ -1467,9 +1467,7 @@ export class PlaybackTimeline {
    * 素の値で先行する側 (小さい方) へ、後行側から `desiredDifferenceMs` だけ手前になるまで
    * の分を足す。戻す向きは `updateSyncDelays` の減衰だけが行う
    */
-  private targetExtraMsOf(
-    naturalMs: Record<PlaybackStream, number>,
-  ): Record<PlaybackStream, number> {
+  private targetExtraMsOf(naturalMs: Record<PlayoutStream, number>): Record<PlayoutStream, number> {
     const desiredMs = this.desiredDifferenceMs(naturalMs);
     if (naturalMs.audio <= naturalMs.video) {
       return {
@@ -1487,7 +1485,7 @@ export class PlaybackTimeline {
    * トラックの表示の遅れ (ミリ秒)。TIMESTAMP から表示時刻までの差であり、基準の遅れと
    * jitter buffer の遅延の和。まだ基準が無ければ null
    */
-  private presentationDelayMsOf(stream: PlaybackStream): number | null {
+  private presentationDelayMsOf(stream: PlayoutStream): number | null {
     const state = this.streams[stream];
     if (state.baseMs === null) {
       return null;
@@ -1510,7 +1508,7 @@ export class PlaybackTimeline {
    * 大きい方に、同期の制御が足した分を加えた値であり、上限 (`presentationDelayCapMs`) で
    * 切る。映像をまだ観測していなければ null
    */
-  private delayMsOf(stream: PlaybackStream): number | null {
+  private delayMsOf(stream: PlayoutStream): number | null {
     const uncappedMs = this.uncappedDelayMsOf(stream);
     if (uncappedMs === null) {
       return null;
@@ -1523,7 +1521,7 @@ export class PlaybackTimeline {
    *
    * 同期が足した分を含む。観測が無ければ null
    */
-  private uncappedDelayMsOf(stream: PlaybackStream): number | null {
+  private uncappedDelayMsOf(stream: PlayoutStream): number | null {
     const naturalMs = this.naturalDelayMsOf(stream);
     if (naturalMs === null) {
       return null;
@@ -1548,12 +1546,12 @@ export class PlaybackTimeline {
    *
    * 大きい側 (遅れて届いている側) が、TIMESTAMP が壁時計からずれている側である
    */
-  private driftedStream(): PlaybackStream | null {
+  private driftedStream(): PlayoutStream | null {
     const difference = this.currentBaseDifferenceMs();
     if (difference === null) {
       return null;
     }
-    const stream: PlaybackStream = difference > 0 ? "audio" : "video";
+    const stream: PlayoutStream = difference > 0 ? "audio" : "video";
     if (Math.abs(difference) > this.baseDifferenceLimitMs() || this.baseDifferenceDrifted()) {
       this.holdUnsharedStream(stream);
       return stream;
@@ -1572,7 +1570,7 @@ export class PlaybackTimeline {
    *
    * @param stream - 共有をやめる側
    */
-  private holdUnsharedStream(stream: PlaybackStream): void {
+  private holdUnsharedStream(stream: PlayoutStream): void {
     if (this.heldUnsharedStream() === null) {
       // 新しく解除する。前の解除の時刻を控える (直近に往復していないかを見る)。
       // 前の解除の判断 (戻った状態を数えた分) は持ち越さない
@@ -1669,7 +1667,7 @@ export class PlaybackTimeline {
    * なった動きが去って差が戻った状態が続いたときは、往復の恐れが無いため `updateUnsharedRelease`
    * が保持を解除する (そのときは null になる)
    */
-  private heldUnsharedStream(): PlaybackStream | null {
+  private heldUnsharedStream(): PlayoutStream | null {
     if (
       this.lastUnsharedStream === null ||
       this.lastUnsharedAtMs === null ||
@@ -1709,7 +1707,7 @@ export class PlaybackTimeline {
    * `targetLatency` の大きい方) の和である。2 つのトラックのこの値の差が、同期で
    * 合わせる対象になる。どちらかが未観測、または基準がずれているときは null
    */
-  private syncNaturalPresentationMs(): Record<PlaybackStream, number> | null {
+  private syncNaturalPresentationMs(): Record<PlayoutStream, number> | null {
     const audio = this.streams.audio;
     const video = this.streams.video;
     const audioDelayMs = this.naturalDelayMsOf("audio");
@@ -1732,7 +1730,7 @@ export class PlaybackTimeline {
    *
    * 自分の jitter buffer の遅延と `targetLatency` の大きい方である。観測が無ければ null
    */
-  private naturalDelayMsOf(stream: PlaybackStream): number | null {
+  private naturalDelayMsOf(stream: PlayoutStream): number | null {
     const ownDelayMs = this.streams[stream].delayMs;
     if (ownDelayMs === null) {
       return null;

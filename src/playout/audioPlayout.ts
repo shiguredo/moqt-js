@@ -4,7 +4,7 @@
  * 復号した音声 (Opus なら 20 ms ごとの `AudioData`) を、復号の出力が届いたその場で
  * `AudioBufferSourceNode.start()` で鳴らすと、届く間隔の揺らぎ (経路と復号) で前の音と
  * 重なって足されるか、隙間が空いて、ノイズに聞こえる。鳴らす時刻は、映像と同じ
- * `src/playbackTimeline.ts` の時間軸が決めた目標の時刻に従う。
+ * `src/playout/timeline.ts` の時間軸が決めた目標の時刻に従う。
  *
  * - 目標の時刻は `AudioContext.currentTime` と同じ秒で受け取る。壁時計の TIMESTAMP を
  *   持たない音は目標を持たず、到着基準の小さな目標 (`arrivalDelaySeconds`、
@@ -49,7 +49,7 @@ import {
   AUDIO_PLAYOUT_ARRIVAL_DELAY_MS,
   AUDIO_PLAYOUT_DELAY_FLOOR_MS,
   audioArrivalPlayoutDelayMs,
-} from "./playbackTimeline";
+} from "./timeline";
 
 /**
  * 時間圧縮を始める遅れ (秒)
@@ -446,7 +446,7 @@ export class AudioPlayoutScheduler {
     // 遅れが `AUDIO_PLAYOUT_STRETCH_MIN_SECONDS` 未満のときは詰めない (不感帯)。系統的に
     // 数 ms 遅れて届く音で毎回わずかに詰めると、削った分だけ早すぎる側へ振れて往復する。
     // 実際に削れる長さは周期で決まるため、周期がこの量を超える音でも詰めない
-    // (src/audioTimeStretch.ts の compressSamples)
+    // (src/playout/audioTimeStretch.ts の compressSamples)
     // 浮動小数点の誤差で不感帯ちょうどの遅れが下回らないように、比較には小さな許容を置く
     // (時刻は performance.now 系の秒であり、引き算の結果は 1e-15 程度ずれる)
     const compressSeconds =

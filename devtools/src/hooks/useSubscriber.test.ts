@@ -36,8 +36,8 @@ import {
 } from "./useSubscriber";
 import { AudioDecoderWrapper } from "../../../src/codec/AudioDecoder";
 import { buildObjectSendPlan } from "./usePublisher";
-import { EMPTY_PLAYBACK_TIMING, PlaybackTimingStats } from "../utils/playbackTimingStats";
-import { EMPTY_AUDIO_PLAYOUT_TIMING } from "../../../src/audioPlayoutTimingStats";
+import { EMPTY_PLAYOUT_TIMING, PlayoutTimingStats } from "../utils/playoutTimingStats";
+import { EMPTY_AUDIO_PLAYOUT_TIMING } from "../../../src/playout/audioPlayoutTimingStats";
 import { GroupSwitchGate } from "../../../src/groupSwitchGate";
 import { CatchUpGate } from "../../../src/catchUpGate";
 import { createSubscriberInstance, subscriberInstances } from "../signals/subscriber";
@@ -463,7 +463,7 @@ function makeTimedVideoObject(
 // 時刻で記録する。保留を解いた時刻で記録すると、保留した時間が到着の揺らぎと遅延に入る
 test("recordVideoReceived: 保留に渡す前に、受け取った時刻で到着を記録する", () => {
   const gate = new GroupSwitchGate<ReceivedVideoObject>();
-  const stats = new PlaybackTimingStats();
+  const stats = new PlayoutTimingStats();
   // performance.timeOrigin に相当する壁時計 (ミリ秒)。送信側は 40 ms 前に撮っている
   const timeOriginMs = 1_790_263_445_000;
   const firstTimestampMicros = (timeOriginMs - 40) * 1_000;
@@ -505,7 +505,7 @@ test("recordVideoReceived: 保留に渡す前に、受け取った時刻で到�
 // TIMESTAMP の無い Object はメディア時刻が分からないため到着を記録しないが、位置は記録し、
 // 受信の欠け (届かなかった Object) を数える
 test("recordVideoReceived: TIMESTAMP の無い Object は到着を記録せず、位置だけを記録する", () => {
-  const stats = new PlaybackTimingStats();
+  const stats = new PlayoutTimingStats();
 
   // 同じ Group の Object 0 と Object 2 を受け取る (Object 1 が届いていない)
   recordVideoReceived(stats, { object: makeVideoObject(0n), receivedAtMs: 0 }, 0, undefined);
@@ -548,8 +548,8 @@ test("resetSubscriberStats: 映像と音声の統計を初期値へ戻す", () =
   instance.missingReferenceFramesDropped.value = 4;
   instance.decodeErrors.value = 1;
   instance.largestLocation.value = { group: 5n, object: 11n };
-  instance.playbackTiming.value = {
-    ...EMPTY_PLAYBACK_TIMING,
+  instance.playoutTiming.value = {
+    ...EMPTY_PLAYOUT_TIMING,
     displayStalls: 3,
     displayQueueDrops: 2,
   };
@@ -594,7 +594,7 @@ test("resetSubscriberStats: 映像と音声の統計を初期値へ戻す", () =
   assert.equal(instance.decodeErrors.value, 0);
   assert.equal(instance.largestLocation.value, null);
   // 受信から表示までの時間の統計も前の購読の値を持ち越さない
-  assert.deepEqual(instance.playbackTiming.value, EMPTY_PLAYBACK_TIMING);
+  assert.deepEqual(instance.playoutTiming.value, EMPTY_PLAYOUT_TIMING);
   assert.equal(instance.audioObjectsReceived.value, 0);
   assert.equal(instance.audioDatagramObjectsReceived.value, 0);
   assert.equal(instance.audioChunksDecoded.value, 0);
@@ -994,7 +994,7 @@ test("resetSubscriberState: 音声 object の処理チェーンを巻き戻す",
 // 音声の再生を止めたとき (stopAudioPlayback) に共有の時間軸から音声の状態を消すことは、
 // ここでは固定できない。stopAudioPlayback は useSubscriber の中の閉じた関数であり、
 // AudioContext を作るため、ブラウザ API を持たないこのテスト環境からは呼べない (実物の
-// 代わりになるものを置くこともできない)。時間軸側の規則は src/playbackTimeline.test.ts の
+// 代わりになるものを置くこともできない)。時間軸側の規則は src/playout/timeline.test.ts の
 // resetStream のテストが、再生の遅れの下限の適用は src/createMediaSubscriber.test.ts の
 // 「音声を観測していなくても再生の遅れが下限を下回らない」が固定する
 

@@ -2,11 +2,11 @@
  * コーデック関連の型定義
  */
 
-import type { PlaybackDelayBreakdown } from "../playbackTimeline";
-import type { AudioPlayoutTimingSnapshot } from "../audioPlayoutTimingStats";
+import type { PlayoutDelayBreakdown } from "../playout/timeline";
+import type { AudioPlayoutTimingSnapshot } from "../playout/audioPlayoutTimingStats";
 import type { AudioTimestampOffsetStats } from "../audioTimestampClock";
 import type { AudioPublishCatchUpStats } from "../audioPublishCatchUp";
-import type { AudioReceiveCatchUpStats } from "../audioReceiveCatchUp";
+import type { AudioReceiveCatchUpStats } from "../playout/audioReceiveCatchUp";
 
 // オーディオコーデック
 export type AudioCodecType = "opus" | "aac";
@@ -63,10 +63,10 @@ export interface AudioReceiverStats {
   // 音声の再生の観測値。鳴るはずの時刻 (再生予定時刻)・届いた時刻・鳴り始める時刻と、
   // 予定に対する余裕の分布 (直近 10 秒の p50 / p95 / max)、鳴らなかった量 (件数と ms) を
   // 理由ごとに出す。時刻は performance.now() と同じ軸のミリ秒
-  // (src/audioPlayoutTimingStats.ts)
+  // (src/playout/audioPlayoutTimingStats.ts)
   playoutTiming: AudioPlayoutTimingSnapshot;
   // 受信側の音声の追いつき。復号の出力が送られた TIMESTAMP から遅れ続けたときに、
-  // 復号器を作り直して live へ戻した量 (src/audioReceiveCatchUp.ts)。観測した遅れと
+  // 復号器を作り直して live へ戻した量 (src/playout/audioReceiveCatchUp.ts)。観測した遅れと
   // 健全時の遅れ (床)、遅れの上限、追いつきの最中かどうか、作り直した回数、飛んだ音の
   // 数と長さ (timestamp の跳びから求めた推定) を出す
   playoutCatchUp: AudioReceiveCatchUpStats;
@@ -126,7 +126,7 @@ export interface AvSyncStats {
   audioClockFallback: boolean;
   // 遅延の内訳。トラックごとの基準の遅れ・jitter buffer の遅延・同期の制御が足した分・
   // 表示の遅れと、2 つのトラックで基準を共有できているか (遅延の解析に使う)
-  delays: PlaybackDelayBreakdown;
+  delays: PlayoutDelayBreakdown;
 }
 
 // 受信側メディア統計

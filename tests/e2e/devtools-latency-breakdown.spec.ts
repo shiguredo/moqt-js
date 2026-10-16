@@ -45,7 +45,7 @@ test("window.moqtDevTools から遅延の区間ごとの統計が読める", asy
     encodedFps: 0,
   });
   // subscriber: 描いたフレームの区間ごとの遅延
-  const timing = stats.subscriber.playbackTiming;
+  const timing = stats.subscriber.playoutTiming;
   expect(Object.keys(timing.latencyBreakdown)).toEqual([...SUBSCRIBER_SEGMENTS]);
   for (const segment of SUBSCRIBER_SEGMENTS) {
     expect(timing.latencyBreakdown[segment]).toBeNull();

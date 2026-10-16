@@ -11,7 +11,7 @@
  * 先読みの分だけ符号化が 1 フレーム遅れる (8 ms)
  */
 
-import type { AudioSamples } from "./audioTimeStretch";
+import type { AudioSamples } from "./playout/audioTimeStretch";
 
 /** 落とす長さ (ミリ秒)。8 ms のフレームの半分より短くし、音を削りすぎない */
 export const AUDIO_SPLICE_FADE_MS = 2;

@@ -10,7 +10,7 @@ import { isErrorNotifiedByPublisher, type Publisher, type SendObjectParams } fro
 import * as LOC from "./loc";
 import { WallClockMapper } from "./mediaClock";
 import { mergeFadedPlanes } from "./audioSpliceFade";
-import type { AudioSamples } from "./audioTimeStretch";
+import type { AudioSamples } from "./playout/audioTimeStretch";
 import { AudioTimestampClock } from "./audioTimestampClock";
 import { AudioPublishCatchUp, type AudioPublishCatchUpSendStart } from "./audioPublishCatchUp";
 import { catalogRepublishIntervalMs } from "./catalogRepublish";

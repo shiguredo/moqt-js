@@ -22,7 +22,7 @@ import type { AudioTimestampOffsetStats } from "../../../src/audioTimestampClock
 import {
   PLAYOUT_BASE_UNSHARED_HOLD_MS,
   PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS,
-} from "../../../src/playbackTimeline.ts";
+} from "../../../src/playout/timeline.ts";
 import type { AvSyncSnapshot } from "../signals/subscriber";
 
 /** 警告の識別子 (devtools の説明とテストが参照する) */
@@ -59,7 +59,7 @@ export interface PreconditionWarning {
  * 補償が上限に張り付いているとみなす幅 (ミリ秒)
  *
  * 上限に達すると、足す量は上限そのもの (100 ms) になる。観測と観測の間は毎秒
- * `PLAYBACK_DELAY_DECAY_MS_PER_SECOND` (20 ms) だけ戻るが、観測の間隔は映像でも 33 ms で
+ * `PLAYOUT_DELAY_DECAY_MS_PER_SECOND` (20 ms) だけ戻るが、観測の間隔は映像でも 33 ms で
  * あるため 1 ms も戻らない。5 ms の幅は、上限に達した状態と、達していない状態 (差が
  * 上限 + 不感帯より小さい) を分けるために十分である
  */

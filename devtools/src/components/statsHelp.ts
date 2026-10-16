@@ -13,7 +13,7 @@ import {
   PLAYOUT_BASE_DRIFT_MS,
   PLAYOUT_BASE_UNSHARED_RELEASE_MS,
   PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS,
-} from "../../../src/playbackTimeline";
+} from "../../../src/playout/timeline";
 import {
   CATCH_UP_STUCK_WARN_MS,
   CATCH_UP_WARN_STARTS,
@@ -29,32 +29,32 @@ import {
   AUDIO_MISS_REASONS,
   MAX_RECENT_AUDIO_MISSES,
   type AudioMissReason,
-} from "../../../src/audioPlayoutTimingStats.ts";
+} from "../../../src/playout/audioPlayoutTimingStats.ts";
 import {
   AUDIO_RECEIVE_CATCH_UP_CONFIRM_MS,
   AUDIO_RECEIVE_CATCH_UP_COOLDOWN_MS,
   AUDIO_RECEIVE_CATCH_UP_FLOOR_WINDOW_MS,
   AUDIO_RECEIVE_CATCH_UP_GROWTH_MS,
   AUDIO_RECEIVE_CATCH_UP_MIN_MS,
-} from "../../../src/audioReceiveCatchUp.ts";
+} from "../../../src/playout/audioReceiveCatchUp.ts";
 import {
   DISPLAY_FPS_WINDOW_MS,
   DISPLAY_STALL_FACTOR,
   MAX_RECENT_LOSS_EVENTS,
   MAX_RECENT_STALLS,
-  PLAYBACK_TIMING_WINDOW_MS,
-} from "../utils/playbackTimingStats";
+  PLAYOUT_TIMING_WINDOW_MS,
+} from "../utils/playoutTimingStats";
 import { PUBLISH_TIMING_WINDOW_MS } from "../utils/publishTimingStats";
 import { STALL_CAUSES, type StallCause } from "../utils/stallAnalysis";
 
 // 分布を求める窓 (秒)
-const PLAYBACK_WINDOW_SECONDS = PLAYBACK_TIMING_WINDOW_MS / 1_000;
+const PLAYOUT_WINDOW_SECONDS = PLAYOUT_TIMING_WINDOW_MS / 1_000;
 // 受信側の音声の追いつきが、健全時の遅れ (床) を求める窓 (秒)
 const FLOOR_WINDOW_SECONDS = AUDIO_RECEIVE_CATCH_UP_FLOOR_WINDOW_MS / 1_000;
 const PUBLISH_WINDOW_SECONDS = PUBLISH_TIMING_WINDOW_MS / 1_000;
 
 /** 分布の表の左上に出す窓の長さと単位 */
-export const PLAYBACK_TIMING_CAPTION = `last ${PLAYBACK_WINDOW_SECONDS} s, ms`;
+export const PLAYOUT_TIMING_CAPTION = `last ${PLAYOUT_WINDOW_SECONDS} s, ms`;
 export const PUBLISH_TIMING_CAPTION = `last ${PUBLISH_WINDOW_SECONDS} s, ms`;
 
 /** 別のマシンで時計のずれを含むことの注意 */
@@ -80,7 +80,7 @@ const LATENCY_STAGE_SEGMENTS = LATENCY_SEGMENTS.filter(
 
 /** subscriber の Latency Breakdown */
 export const SUBSCRIBER_LATENCY_BREAKDOWN_HELP: SectionHelp = {
-  summary: `Latency of each rendered frame, split into stages. p50 / p95 / max over the last ${PLAYBACK_WINDOW_SECONDS} s (ms).`,
+  summary: `Latency of each rendered frame, split into stages. p50 / p95 / max over the last ${PLAYOUT_WINDOW_SECONDS} s (ms).`,
   formula: `${LATENCY_STAGE_SEGMENTS.join(" + ")} = ${TOTAL_LATENCY_SEGMENT}`,
   items: LATENCY_SEGMENTS.map((segment) => ({
     term: segment,
@@ -281,8 +281,8 @@ export const PUBLISHER_WARNINGS_HELP: SectionHelp = {
 };
 
 /** subscriber の Playback Timing */
-export const PLAYBACK_TIMING_HELP: SectionHelp = {
-  summary: `Timing of received video frames. Distributions are p50 / p95 / max over the last ${PLAYBACK_WINDOW_SECONDS} s (ms). Counters are cumulative since subscribing started.`,
+export const PLAYOUT_TIMING_HELP: SectionHelp = {
+  summary: `Timing of received video frames. Distributions are p50 / p95 / max over the last ${PLAYOUT_WINDOW_SECONDS} s (ms). Counters are cumulative since subscribing started.`,
   items: [
     {
       term: "arrivalJitter",
@@ -325,7 +325,7 @@ export const PLAYBACK_TIMING_HELP: SectionHelp = {
   notes: [`latency: ${CLOCK_OFFSET_NOTE}`],
 };
 
-/** 鳴らさなかった理由ごとの説明 (src/audioPlayoutTimingStats.ts の理由の定義) */
+/** 鳴らさなかった理由ごとの説明 (src/playout/audioPlayoutTimingStats.ts の理由の定義) */
 const AUDIO_MISS_REASON_DESCRIPTIONS: Record<AudioMissReason, string> = {
   backlog:
     "The sound was dropped because the playout was too far behind (the queued sounds exceeded the delay plus the backlog limit).",
@@ -337,8 +337,8 @@ const AUDIO_MISS_REASON_DESCRIPTIONS: Record<AudioMissReason, string> = {
 };
 
 /** subscriber の Audio Playback の Timing */
-export const AUDIO_PLAYBACK_TIMING_HELP: SectionHelp = {
-  summary: `Timing of received audio. The playout time comes from the LOC TIMESTAMP, the arrival is when the decoded AudioData reached the subscriber, and the start is when the sound was scheduled on the AudioContext clock. Distributions are p50 / p95 / max over the last ${PLAYBACK_WINDOW_SECONDS} s (ms).`,
+export const AUDIO_PLAYOUT_TIMING_HELP: SectionHelp = {
+  summary: `Timing of received audio. The playout time comes from the LOC TIMESTAMP, the arrival is when the decoded AudioData reached the subscriber, and the start is when the sound was scheduled on the AudioContext clock. Distributions are p50 / p95 / max over the last ${PLAYOUT_WINDOW_SECONDS} s (ms).`,
   formula: "lateness = start - target, slack = target - arrival, startDelay = start - arrival",
   items: [
     {
@@ -383,7 +383,7 @@ export const AUDIO_PLAYBACK_TIMING_HELP: SectionHelp = {
 };
 
 /** subscriber の Audio Playback の Catch-up */
-export const AUDIO_PLAYBACK_CATCH_UP_HELP: SectionHelp = {
+export const AUDIO_PLAYOUT_CATCH_UP_HELP: SectionHelp = {
   summary: `Catch-up of received audio. When the decoded output keeps arriving later than its LOC TIMESTAMP, the decoder is holding the sounds it has not output yet, and it drains them no faster than real time, so the lag stays. The receiver rebuilds the decoder to throw that queue away. The values are measured on the decoded output (ms).`,
   formula: `lag = (performance.timeOrigin + arrival) - AudioData.timestamp, limit = max(${AUDIO_RECEIVE_CATCH_UP_MIN_MS} ms, floor + ${AUDIO_RECEIVE_CATCH_UP_GROWTH_MS} ms)`,
   items: [
@@ -420,7 +420,7 @@ export const AUDIO_PLAYBACK_CATCH_UP_HELP: SectionHelp = {
 };
 
 /** subscriber の Audio Playback の Missed */
-export const AUDIO_PLAYBACK_MISSED_HELP: SectionHelp = {
+export const AUDIO_PLAYOUT_MISSED_HELP: SectionHelp = {
   summary: `Sounds that should have been played but were not, with their total length. Cumulative since subscribing started. The counts and the ms add up to the total.`,
   items: [
     ...AUDIO_MISS_REASONS.map((reason) => ({

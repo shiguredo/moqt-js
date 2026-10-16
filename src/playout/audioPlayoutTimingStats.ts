@@ -9,7 +9,7 @@
  * 「何ミリ秒分の音が鳴らなかったか」が分からないため、長さも数える。
  *
  * - 時刻はすべて `performance.now()` と同じ軸のミリ秒である。再生予定時刻は LOC の
- *   TIMESTAMP から `playbackTimeline.ts` が決めた時刻であり、鳴り始める時刻は
+ *   TIMESTAMP から `src/playout/timeline.ts` が決めた時刻であり、鳴り始める時刻は
  *   `AudioContext` の時計へ予約した時刻を `AudioClockBridge` で同じ軸へ換算した値である
  *   (音声出力の遅延は含まない)
  * - 分布 (p50 / p95 / max) は直近の窓 (既定 10 秒) の値から求める
@@ -29,7 +29,7 @@ import {
 import { TimedValues } from "./timedValues";
 import { summarizeTimings, type TimingSummary } from "./timingSummary";
 
-/** 分布を求める直近の窓 (ミリ秒)。映像の Playback Timing と同じ長さにする */
+/** 分布を求める直近の窓 (ミリ秒)。映像の Playout Timing と同じ長さにする */
 export const AUDIO_PLAYOUT_TIMING_WINDOW_MS = 10_000;
 
 /** 残す直近の「鳴らさなかった音」の数 */
@@ -44,7 +44,7 @@ export const MAX_RECENT_AUDIO_MISSES = 30;
  * - `stopped`: 予約したまま再生を止めた (予約済みの音が切り捨てられた)
  *
  * 鳴り遅れを理由に捨てることはない。音がまだ鳴っている間は遅れたまま鳴らし続け、音が
- * 途切れたときだけ到着基準へ並べ直す (src/audioPlayout.ts)
+ * 途切れたときだけ到着基準へ並べ直す (src/playout/audioPlayout.ts)
  */
 export const AUDIO_MISS_REASONS = ["backlog", "catchUp", "error", "stopped"] as const;
 
@@ -309,7 +309,7 @@ export class AudioPlayoutTimingStats {
    * 表示用の分布 (`snapshot`) は直近 10 秒の窓である。目標を増やした結果がそこへ現れる
    * までには数秒かかるため、制御には短い窓 (`AUDIO_DELAY_FEEDBACK_WINDOW_MS`) の値を使う。
    * 捨てた量は購読の開始からの累積であり、差を取るのは呼び出し側 (`AudioDelayFeedback`) の
-   * 仕事である (`src/audioDelayFeedback.ts`)
+   * 仕事である (`src/playout/audioDelayFeedback.ts`)
    *
    * @param nowMs - 求める時刻 (ミリ秒)
    */

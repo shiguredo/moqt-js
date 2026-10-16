@@ -277,7 +277,7 @@ export const useDedicatedWorker = signal(true);
 
 // 購読した映像の jitter buffer 設定
 // true: 復号したフレームを LOC TIMESTAMP (壁時計) の間隔どおりに表示し、到着の揺らぎを
-//       吸収する (デフォルト。src/playoutBuffer.ts)
+//       吸収する (デフォルト。src/playout/buffer.ts)
 // false: 届いたタイミングのまま表示する
 export const jitterBufferEnabled = signal(true);
 
@@ -951,7 +951,7 @@ export const CATALOG_SUBSCRIPTION_TIMEOUTS = [3000, 5000, 10000, 30000, 60000, 1
  * ここで選んだ値は catalog に載る宣言であり、購読側が表示の遅れにそのまま使うとは限らない。
  * 購読側は `MAX_PLAYOUT_DELAY_MS` (500 ms) と、表示待ちのキューが吸収できる長さ
  * ((キューの上限 - `PLAYOUT_QUEUE_HEADROOM_FRAMES` (4 枚)) × フレーム間隔) の小さい方へ
- * 切り下げる (`src/playbackTimeline.ts` の `presentationDelayCapMs` / `playoutQueueCapMs`)。
+ * 切り下げる (`src/playout/timeline.ts` の `presentationDelayCapMs` / `playoutQueueCapMs`)。
  *
  * - ライブラリの購読はキューが `JITTER_BUFFER_MAX_QUEUED_FRAMES` (24 枚) 固定で 20 枚分に
  *   なるため、30 fps (約 33 ms 間隔) では 20 枚分が約 667 ms になり 500 ms がそのまま

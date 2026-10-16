@@ -25,7 +25,7 @@ import {
   priorObjectIdGapOf,
   GroupSwitchGate,
   CatchUpGate,
-  PlaybackTimeline,
+  PlayoutTimeline,
   JITTER_BUFFER_MAX_QUEUED_FRAMES,
   VideoDecodeInputs,
   VideoPlayoutSession,
@@ -54,24 +54,27 @@ import {
 } from "../utils/audioLevel";
 import { base64ToArrayBuffer } from "../utils/base64";
 import {
-  EMPTY_PLAYBACK_TIMING,
-  PLAYBACK_TIMING_WINDOW_MS,
-  PlaybackTimingStats,
+  EMPTY_PLAYOUT_TIMING,
+  PLAYOUT_TIMING_WINDOW_MS,
+  PlayoutTimingStats,
   formatPublishDoneStatusCode,
   formatStreamResetCode,
-} from "../utils/playbackTimingStats";
+} from "../utils/playoutTimingStats";
 import { detectAvSyncTransition, type AvSyncState } from "../utils/avSyncTransition.ts";
 import {
   AUDIO_PLAYOUT_TIMING_WINDOW_MS,
   AudioPlayoutTimingStats,
   EMPTY_AUDIO_PLAYOUT_TIMING,
-} from "../../../src/audioPlayoutTimingStats.ts";
-import { EMPTY_AUDIO_RECEIVE_CATCH_UP } from "../../../src/audioReceiveCatchUp.ts";
+} from "../../../src/playout/audioPlayoutTimingStats.ts";
+import { EMPTY_AUDIO_RECEIVE_CATCH_UP } from "../../../src/playout/audioReceiveCatchUp.ts";
 // 復号した音声の再生の組み立て (時間軸への記録・目標の決定・予約・計器への記録) は
 // ライブラリと共有する (組み立てを 2 か所へ置くと、到着基準の遅れ・閉ループ・計器の
 // 修正のたびに両方を直すことになり、片方だけ直すと挙動がずれる)
-import { LastTimestampKind, takeDecodeInputEntry } from "../../../src/decodeInputTimestamps.ts";
-import { AudioPlayoutSession } from "../../../src/audioPlayoutSession.ts";
+import {
+  LastTimestampKind,
+  takeDecodeInputEntry,
+} from "../../../src/playout/decodeInputTimestamps.ts";
+import { AudioPlayoutSession } from "../../../src/playout/audioPlayoutSession.ts";
 // targetLatency の解決規則はライブラリと共有する純関数が持つ (規則を 2 か所に書かない)
 import { effectiveTargetLatencyMs, resolveSharedTargetLatencyMs } from "../../../src/msf/tracks.ts";
 import { applyAudioOutputSink } from "../utils/audioOutput";
@@ -369,7 +372,7 @@ interface AudioPlayback {
   /**
    * 復号した音の再生 (時間軸への記録・目標の決定・予約・計器への記録)
    *
-   * 組み立てはライブラリと共有する実装が持つ (src/audioPlayoutSession.ts)。計器は購読を
+   * 組み立てはライブラリと共有する実装が持つ (src/playout/audioPlayoutSession.ts)。計器は購読を
    * 始めるたびに作り直して signal へ反映する 1 つのインスタンスを使うため、外から渡す
    */
   playout: AudioPlayoutSession;
@@ -415,7 +418,7 @@ const MAX_TRACKED_DECODE_INPUTS = 8192;
  * 記録はフレームごとに行うが、signal への反映をフレームごとにすると再描画が
  * 表示の負荷になり、測る対象 (表示の止まり) を自分で悪化させる。
  */
-const PLAYBACK_TIMING_PUBLISH_INTERVAL_MS = 500;
+const PLAYOUT_TIMING_PUBLISH_INTERVAL_MS = 500;
 
 /**
  * Catalog の `videoTrack` から `VideoDecoderConfig` を組み立てる。
@@ -468,7 +471,7 @@ export function resetSubscriberStats(instance: sub.SubscriberInstance): void {
   instance.staleFramesDropped.value = 0;
   instance.missingReferenceFramesDropped.value = 0;
   instance.decodeErrors.value = 0;
-  instance.playbackTiming.value = EMPTY_PLAYBACK_TIMING;
+  instance.playoutTiming.value = EMPTY_PLAYOUT_TIMING;
   // 同期の推定も前の購読の値を持ち越さない (映像の購読を始めると作り直す)
   instance.avSync.value = sub.EMPTY_AV_SYNC;
   // 前提から外れた状態の警告も前の購読の値を持ち越さない
@@ -556,7 +559,7 @@ export function buildVideoChunkPlan(
  * 覚える。TIMESTAMP の種類は再生の目標に使えるかどうかの判定に、位置は relay の cache から
  * 追いつく途中かどうかの判定 (CatchUpGate) に使う。
  *
- * 映像の分はライブラリと共有する対応表 (src/videoPlayoutSession.ts の `VideoDecodeInputs`) が
+ * 映像の分はライブラリと共有する対応表 (src/playout/videoPlayoutSession.ts の `VideoDecodeInputs`) が
  * 持つ。音声の分も同じ形だが、音声 Object の経路を共有実装へ寄せるまではここに残す。
  */
 export interface DecodeInput {
@@ -630,7 +633,7 @@ export interface ReceivedVideoObject {
  *   (draft-ietf-moq-loc-04 §2.3.1.2) ため、Object の Properties と合わせて解決する
  */
 export function recordVideoReceived(
-  stats: PlaybackTimingStats,
+  stats: PlayoutTimingStats,
   received: ReceivedVideoObject,
   timeOriginMs: number,
   trackProperties: ReadonlyArray<Property> | undefined,
@@ -882,11 +885,11 @@ export function useSubscriber(
     });
   });
   // 表示時刻の時間軸と、その上での映像の表示の組み立て (時間軸への記録・表示の選択・
-  // 計器への記録)。組み立てはライブラリと共有する (src/videoPlayoutSession.ts)。
+  // 計器への記録)。組み立てはライブラリと共有する (src/playout/videoPlayoutSession.ts)。
   // 購読を始めるたびに設定 (jitterBufferEnabled) に合わせて作り直す。
   // 音声と映像の両方をこの 1 つの時間軸へ observe することで、同じ式の表示時刻で揃える
   const playoutTimelineRef = useRef(
-    new PlaybackTimeline({
+    new PlayoutTimeline({
       timeOriginMs: performance.timeOrigin,
       maxQueuedFrames: MAX_PENDING_FRAMES,
     }),
@@ -898,7 +901,7 @@ export function useSubscriber(
   // decoder に渡したフレームの情報 (chunk の timestamp で引く)。復号の出力で、壁時計の
   // TIMESTAMP のフレームだけを jitter buffer の表示時刻に使い、relay の cache から届いた
   // フレームは描かずに捨てる (位置を追いつきの境界と比べる)。対応表はライブラリと共有する
-  // (src/videoPlayoutSession.ts)
+  // (src/playout/videoPlayoutSession.ts)
   const videoDecodeInputsRef = useRef(
     new VideoDecodeInputs({
       maxTracked: MAX_TRACKED_DECODE_INPUTS,
@@ -911,7 +914,7 @@ export function useSubscriber(
   // 時刻と対応しないため、目標の開始時刻を求めずに到着基準で並べる
   const audioDecodeInputsRef = useRef(new Map<number, DecodeInput>());
   // 直前に復号へ渡した音声の TIMESTAMP の種類。復号の出力で対応が引けなくなったときに使う
-  // (src/decodeInputTimestamps.ts の `LastTimestampKind` を参照)。種類は Timescale の有無で
+  // (src/playout/decodeInputTimestamps.ts の `LastTimestampKind` を参照)。種類は Timescale の有無で
   // 決まり、ストリームの途中で変わるものではないため、直前の値で足りる
   const lastAudioTimestampKindRef = useRef(new LastTimestampKind<"wallClock" | "mediaTime">());
   // relay の cache から追いつく途中かどうかを、SUBSCRIBE_OK の LARGEST_OBJECT を境界に
@@ -923,14 +926,14 @@ export function useSubscriber(
   // decoder を構成するたびに初期化し、キーフレームから始める
   const videoDecodeOrderRef = useRef(new VideoDecodeOrder());
   // 受信から表示までの時間の統計 (到着・復号・表示で記録する)。購読を始めるたびに
-  // 初期化し、PLAYBACK_TIMING_PUBLISH_INTERVAL_MS ごとに signal へ反映する
-  const playbackTimingRef = useRef(
-    new PlaybackTimingStats(PLAYBACK_TIMING_WINDOW_MS, performance.timeOrigin),
+  // 初期化し、PLAYOUT_TIMING_PUBLISH_INTERVAL_MS ごとに signal へ反映する
+  const playoutTimingRef = useRef(
+    new PlayoutTimingStats(PLAYOUT_TIMING_WINDOW_MS, performance.timeOrigin),
   );
-  const playbackTimingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const playoutTimingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   // 音声の再生の観測 (鳴るはずの時刻・届いた時刻・鳴り始める時刻と、鳴らなかった量)。
-  // 音声の購読を始めるたびに初期化し、PLAYBACK_TIMING_PUBLISH_INTERVAL_MS ごとに
-  // signal へ反映する (src/audioPlayoutTimingStats.ts)
+  // 音声の購読を始めるたびに初期化し、PLAYOUT_TIMING_PUBLISH_INTERVAL_MS ごとに
+  // signal へ反映する (src/playout/audioPlayoutTimingStats.ts)
   const audioPlayoutTimingRef = useRef(
     new AudioPlayoutTimingStats(AUDIO_PLAYOUT_TIMING_WINDOW_MS, performance.timeOrigin),
   );
@@ -964,7 +967,7 @@ export function useSubscriber(
         const expired = videoGroupGateRef.current.expire(performance.now());
         if (expired.length > 0) {
           // 前の Group の stream の終わりを待たずに保留を解いた
-          playbackTimingRef.current.recordGroupSwitchHoldExpired();
+          playoutTimingRef.current.recordGroupSwitchHoldExpired();
         }
         enqueueVideoObjects(expired);
       },
@@ -1049,15 +1052,15 @@ export function useSubscriber(
    * 時間軸へ渡し、音声と映像で同じ表示時刻の式を使う (draft-ietf-moq-msf-01 §5.2.8)。
    * 音声だけを購読するときは映像の時間軸を作らないため、この関数は呼ばない
    */
-  function startPlaybackTiming(tracks: CatalogMediaTracks): void {
-    stopPlaybackTiming();
-    playbackTimingRef.current.reset();
+  function startPlayoutTiming(tracks: CatalogMediaTracks): void {
+    stopPlayoutTiming();
+    playoutTimingRef.current.reset();
     const enabled = settings.jitterBufferEnabled.value;
     jitterBufferEnabledRef.current = enabled;
     videoPlayoutRef.current?.clear();
     // キューの上限が変わるため、時間軸も作り直す (表示の遅れの上限がキューから決まる)
     const maxQueuedFrames = enabled ? JITTER_BUFFER_MAX_QUEUED_FRAMES : MAX_PENDING_FRAMES;
-    playoutTimelineRef.current = new PlaybackTimeline({
+    playoutTimelineRef.current = new PlayoutTimeline({
       timeOriginMs: performance.timeOrigin,
       maxQueuedFrames,
     });
@@ -1065,7 +1068,7 @@ export function useSubscriber(
     playoutTimelineRef.current.setTargetLatencyMs(resolveTargetLatencyMs(tracks));
     videoDecodeInputsRef.current.clear();
     // 復号した映像フレームの表示の組み立て (時間軸への記録・表示の選択・計器への記録) は
-    // ライブラリと共有する実装が持つ (src/videoPlayoutSession.ts)。ここは購読ごとの
+    // ライブラリと共有する実装が持つ (src/playout/videoPlayoutSession.ts)。ここは購読ごとの
     // 判断 (追いつきの途中は描かない、canvas へ 1 周期に 1 枚描く) だけを渡す
     videoPlayoutRef.current = new VideoPlayoutSession({
       timeline: playoutTimelineRef.current,
@@ -1082,25 +1085,25 @@ export function useSubscriber(
         framesPerDrain: 1,
       },
       timing: {
-        recordQueueDrop: (timestamp) => playbackTimingRef.current.recordQueueDrop(timestamp),
+        recordQueueDrop: (timestamp) => playoutTimingRef.current.recordQueueDrop(timestamp),
         recordLateDrop: (timestamp, presentationMs) =>
-          playbackTimingRef.current.recordLateDrop(timestamp, presentationMs),
+          playoutTimingRef.current.recordLateDrop(timestamp, presentationMs),
       },
       maxQueuedFrames,
     });
-    playbackTimingTimerRef.current = setInterval(() => {
+    playoutTimingTimerRef.current = setInterval(() => {
       const instance = sub.getSubscriber(subscriberId);
       if (!instance) return;
-      playbackTimingRef.current.recordPlayoutDelay(
+      playoutTimingRef.current.recordPlayoutDelay(
         videoPlayoutRef.current?.playout.playoutDelayMs() ?? null,
       );
-      instance.playbackTiming.value = playbackTimingRef.current.snapshot(performance.now());
+      instance.playoutTiming.value = playoutTimingRef.current.snapshot(performance.now());
       // 同期の推定も同じ周期で反映する (フレームごとに反映すると再描画が表示の負荷になる)。
       // 内訳の変化 (基準を共有できているか) はログへも残す
       const avSync = currentAvSyncSnapshot();
       instance.avSync.value = avSync;
       logAvSyncTransition(avSync);
-    }, PLAYBACK_TIMING_PUBLISH_INTERVAL_MS);
+    }, PLAYOUT_TIMING_PUBLISH_INTERVAL_MS);
   }
 
   /**
@@ -1110,12 +1113,12 @@ export function useSubscriber(
    * 時間軸を作り直すまで音声を同期させないため、jitter buffer の状態も下ろす
    * (音声だけの購読では映像の時間軸が無い)
    */
-  function stopPlaybackTiming(): void {
-    if (playbackTimingTimerRef.current !== null) {
-      clearInterval(playbackTimingTimerRef.current);
-      playbackTimingTimerRef.current = null;
+  function stopPlayoutTiming(): void {
+    if (playoutTimingTimerRef.current !== null) {
+      clearInterval(playoutTimingTimerRef.current);
+      playoutTimingTimerRef.current = null;
     }
-    playbackTimingRef.current.reset();
+    playoutTimingRef.current.reset();
     jitterBufferEnabledRef.current = false;
     // 次の購読では状態が変わったときとしてログを出し直す (前の購読の状態を持ち越さない)
     avSyncStateRef.current = null;
@@ -1135,7 +1138,7 @@ export function useSubscriber(
       if (!instance) return;
       instance.audioPlayoutTiming.value = audioPlayoutTimingRef.current.snapshot(performance.now());
       publishAudioPlayoutCatchUp(instance);
-    }, PLAYBACK_TIMING_PUBLISH_INTERVAL_MS);
+    }, PLAYOUT_TIMING_PUBLISH_INTERVAL_MS);
   }
 
   /**
@@ -1225,7 +1228,7 @@ export function useSubscriber(
         context,
         destination: context.createMediaStreamDestination(),
         // 復号した音の再生 (時間軸への記録・目標の決定・予約・計器への記録) は、ライブラリと
-        // 共有する実装に任せる (src/audioPlayoutSession.ts)。計器は購読ごとに signal へ
+        // 共有する実装に任せる (src/playout/audioPlayoutSession.ts)。計器は購読ごとに signal へ
         // 反映する 1 つのインスタンスを渡す
         playout: new AudioPlayoutSession({
           timing: audioPlayoutTimingRef.current,
@@ -1233,7 +1236,7 @@ export function useSubscriber(
           // 経由の 60 秒) では、流さないと目標が実際の到着に合わず、遅れが数 ms 残って
           // 時間圧縮が 58 秒で 1691 ms 動き続けた (声が粗くなる)。学習させると、揺らぎの
           // 分だけの遅延へ収束し、詰める操作が要らなくなる
-          // (src/audioDelayFeedback.ts / src/playbackTimeline.ts の observeAudioPlayout)
+          // (src/playout/audioDelayFeedback.ts / src/playout/timeline.ts の observeAudioPlayout)
           audioDelayFeedback: true,
         }),
       };
@@ -1873,7 +1876,7 @@ export function useSubscriber(
       }
 
       // 再生の組み立て (時間軸への記録・目標の決定・予約・計器への記録) はライブラリと
-      // 共有する実装が持つ (src/audioPlayoutSession.ts)。ここは購読ごとの判断だけを渡す。
+      // 共有する実装が持つ (src/playout/audioPlayoutSession.ts)。ここは購読ごとの判断だけを渡す。
       // jitter buffer が無効のときは映像を時間軸へ記録しないため、音声も記録しない
       // (同期しないまま音声だけ目標へ合わせると映像とずれる)
       const result = playback.playout.handleDecodedAudio({
@@ -1901,7 +1904,7 @@ export function useSubscriber(
       }
       if (result.status !== "skipped" && result.catchUpStarted) {
         // 受信側の追いつきを始めた。復号器に溜まった古い音は、鳴らさずに捨てるだけでは
-        // 減らないため、復号器を作り直して捨てる (src/audioReceiveCatchUp.ts)
+        // 減らないため、復号器を作り直して捨てる (src/playout/audioReceiveCatchUp.ts)
         void resetAudioDecoderForCatchUp(audioDecoderInstance, instance);
       }
       if (result.status === "error") {
@@ -1920,7 +1923,7 @@ export function useSubscriber(
    * 受信側の音声の追いつきのために、音声の復号器を作り直す
    *
    * 復号器の中に溜まった古い音は実時間と同じ速さでしか出てこないため、鳴らさずに捨てる
-   * だけでは live へ戻らない。詳しい根拠と実測は src/audioReceiveCatchUp.ts が持つ。
+   * だけでは live へ戻らない。詳しい根拠と実測は src/playout/audioReceiveCatchUp.ts が持つ。
    * 作り直しの失敗は、復号の失敗としてログに残す (この後も復号は続くため、購読そのものは
    * 止めない)
    *
@@ -1967,9 +1970,9 @@ export function useSubscriber(
    *
    * jitter buffer が有効で、フレームの TIMESTAMP が壁時計 (Timescale 無し) のときは、
    * TIMESTAMP の間隔どおりの表示時刻に表示し、到着の揺らぎを吸収する
-   * (src/playoutBuffer.ts)。表示待ちのキュー、表示時刻に合わせた選択、あふれた分と
+   * (src/playout/buffer.ts)。表示待ちのキュー、表示時刻に合わせた選択、あふれた分と
    * 間に合わなかった分の計器への記録、表示周期の予約は共有実装
-   * (src/videoPlayoutSession.ts) が持つ。
+   * (src/playout/videoPlayoutSession.ts) が持つ。
    *
    * jitter buffer が無効のとき、または TIMESTAMP を壁時計として使えないフレームは、
    * 届いた順に 1 周期に 1 枚ずつ表示する。
@@ -2021,7 +2024,7 @@ export function useSubscriber(
    * フレームを canvas に描く
    *
    * 表示の実績 (同期ずれの推定に使う) の記録は、共有の組み立て
-   * (src/videoPlayoutSession.ts) が描いた結果を受けて行う。
+   * (src/playout/videoPlayoutSession.ts) が描いた結果を受けて行う。
    *
    * @param presentationMs - jitter buffer の表示時刻。表示時刻を決めずに描くときは null
    * @returns 実際に描いたか。描けなかったときは false (表示の実績として記録しない)
@@ -2057,7 +2060,7 @@ export function useSubscriber(
     }
 
     ctx.drawImage(frame, 0, 0, width, height);
-    const stall = playbackTimingRef.current.recordDisplay(
+    const stall = playoutTimingRef.current.recordDisplay(
       performance.now(),
       frame.timestamp,
       presentationMs,
@@ -2100,7 +2103,7 @@ export function useSubscriber(
     // 復号せずに捨てたことを記録する
     const recordDiscarded = (): void => {
       if (timelineTimestamp !== null) {
-        playbackTimingRef.current.recordDiscarded(timelineTimestamp);
+        playoutTimingRef.current.recordDiscarded(timelineTimestamp);
       }
     };
 
@@ -2114,7 +2117,7 @@ export function useSubscriber(
       // 保留から出た時刻を記録する (到着は object コールバックで記録済み)
       if (plan.timestampKind !== "none") {
         timelineTimestamp = plan.timestamp;
-        playbackTimingRef.current.recordObjectReleased(plan.timestamp, performance.now());
+        playoutTimingRef.current.recordObjectReleased(plan.timestamp, performance.now());
       }
 
       // LOC spec 準拠: payload は WebCodecs の internal data をそのまま使用
@@ -2166,10 +2169,10 @@ export function useSubscriber(
         instance.keyFramesDecoded.value += 1;
       }
 
-      playbackTimingRef.current.recordDecodeStart(performance.now(), plan.timestamp);
+      playoutTimingRef.current.recordDecodeStart(performance.now(), plan.timestamp);
       // 復号の出力で TIMESTAMP の種類と位置を引くために覚える (presentFrame が使う)。
       // 位置は relay の cache から追いつく途中かどうかの判定に使う。対応表はライブラリと
-      // 共有する (src/videoPlayoutSession.ts)
+      // 共有する (src/playout/videoPlayoutSession.ts)
       videoDecodeInputsRef.current.remember(plan.timestamp, {
         timestampKind: plan.timestampKind,
         location: { group: obj.groupId, object: obj.objectId },
@@ -2573,7 +2576,7 @@ export function useSubscriber(
 
       const decoderInstance = new DecoderWrapper(settings.useDedicatedWorker.value, {
         output: ({ frame }) => {
-          playbackTimingRef.current.recordDecodeOutput(performance.now(), frame.timestamp);
+          playoutTimingRef.current.recordDecodeOutput(performance.now(), frame.timestamp);
           presentFrame(frame);
         },
         error: (error) => {
@@ -2628,7 +2631,7 @@ export function useSubscriber(
       instance.statusMessage.value = "Subscribing...";
       resetSubscriberStats(instance);
       // 購読する音声と映像のトラックから targetLatency を解決して時間軸へ渡す
-      startPlaybackTiming(tracksFromCatalog);
+      startPlayoutTiming(tracksFromCatalog);
       resetVideoGroupGate();
 
       // Subscriber オプションを構築する
@@ -2674,7 +2677,7 @@ export function useSubscriber(
             // TIMESTAMP の種類は Track の TIMESCALE でも変わるため、Track Properties も渡す
             // (SUBSCRIBE_OK の到着前に届いた Object では Object の Properties だけで判定する)
             recordVideoReceived(
-              playbackTimingRef.current,
+              playoutTimingRef.current,
               received,
               performance.timeOrigin,
               instance.subscriber.value?.trackProperties,
@@ -2692,7 +2695,7 @@ export function useSubscriber(
           subgroupEnd: (end) => {
             // stream の終わり方を記録する。RESET_STREAM は relay が Group の途中で配信を
             // やめたことを示すため、ログにも残す (ログの時刻で relay のログと突き合わせる)
-            playbackTimingRef.current.recordSubgroupEnd(
+            playoutTimingRef.current.recordSubgroupEnd(
               end.groupId,
               end.subgroupId,
               end.reason,
@@ -2847,7 +2850,7 @@ export function useSubscriber(
     // 表示待ちのフレームを破棄する。teardown 後に古いフレームを描画しない
     clearPendingFrame();
     // 受信から表示までの時間の統計の記録を止める
-    stopPlaybackTiming();
+    stopPlayoutTiming();
     // Group の切り替えで保留していた映像 Object を捨てる
     resetVideoGroupGate();
     // 追いつきの境界を消し、画面の「Catching up」も消す

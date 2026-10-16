@@ -12,11 +12,11 @@
 ## 現状
 
 - 外部実装名 (`libwebrtc` / `NetEq`) と外部ソースのファイル名が次のファイルのコメントに残っている
-  - `src/audioTimeStretch.ts` / `src/audioTimeStretch.test.ts`
-  - `src/audioDelayManager.ts`
+  - `src/playout/audioTimeStretch.ts` / `src/playout/audioTimeStretch.test.ts`
+  - `src/playout/audioDelayManager.ts`
   - `src/streamSynchronization.ts`
-  - `src/playbackTimeline.ts` / `src/playbackTimeline.test.ts` / `src/playbackTimeline.prop.ts`
-  - `src/audioPlayout.ts` / `src/audioPlayout.test.ts`
+  - `src/playout/timeline.ts` / `src/playout/timeline.test.ts` / `src/playout/timeline.prop.ts`
+  - `src/playout/audioPlayout.ts` / `src/playout/audioPlayout.test.ts`
   - `src/createMediaSubscriber.ts`
   - `devtools/src/hooks/useSubscriber.ts`
 - 外部実装名への言及は、A/V 同期を追加した変更 (2026-09-26 の 0635) と、音声と映像の遅延を別々に決めた変更 (2026-10-01 の 0782) で追加されたコメントにある。その後の変更 (0786 / 0789) で追加したコメントには無い

@@ -2,7 +2,7 @@
  * 復号した映像フレームを、共有の時間軸が決めた表示時刻に合わせて選ぶキュー
  *
  * 到着のタイミングのままフレームを出し入れすると、経路の到着の揺らぎがそのまま表示間隔の
- * 揺らぎ (かくつき) になる。表示時刻は `src/playbackTimeline.ts` が LOC TIMESTAMP と
+ * 揺らぎ (かくつき) になる。表示時刻は `src/playout/timeline.ts` が LOC TIMESTAMP と
  * 共有の基準の遅れ・再生遅延から決める (音声と同じ式)。学習 (基準の遅れ、再生遅延、
  * フレーム間隔) は時間軸が持つ。
  *
@@ -18,7 +18,7 @@
  * 時刻は呼び出し側が引数で渡す。ブラウザ API に依存しない。
  */
 
-import type { PlaybackStream, PlaybackTimeline } from "./playbackTimeline";
+import type { PlayoutStream, PlayoutTimeline } from "./timeline";
 
 /**
  * 表示時刻を過ぎたフレームを捨てずに描く、表示時刻からの遅れの上限 (ミリ秒)
@@ -68,8 +68,8 @@ export interface PlayoutSelection<T> {
  */
 export class PlayoutBuffer<T> {
   private readonly maxQueuedFrames: number;
-  private readonly timeline: PlaybackTimeline;
-  private readonly stream: PlaybackStream;
+  private readonly timeline: PlayoutTimeline;
+  private readonly stream: PlayoutStream;
   private queue: QueuedFrame<T>[] = [];
 
   /**
@@ -77,11 +77,7 @@ export class PlayoutBuffer<T> {
    * @param timeline - 表示時刻を決める共有の時間軸
    * @param stream - このキューのトラック (既定は video)
    */
-  constructor(
-    maxQueuedFrames: number,
-    timeline: PlaybackTimeline,
-    stream: PlaybackStream = "video",
-  ) {
+  constructor(maxQueuedFrames: number, timeline: PlayoutTimeline, stream: PlayoutStream = "video") {
     this.maxQueuedFrames = maxQueuedFrames;
     this.timeline = timeline;
     this.stream = stream;

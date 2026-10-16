@@ -12,14 +12,14 @@
  *
  * であった。到着には余裕があるのに、鳴るまでに 156〜289 ms 遅れる。原因は、目標 (40 ms) が
  * 「到着から実際に鳴るまでの経路」を含んでいないことである。鳴らす時刻は
- * `max(目標, 今 + 余裕, 直前の音の終わり)` (`src/audioPlayout.ts` の `schedule`) で決まり、
+ * `max(目標, 今 + 余裕, 直前の音の終わり)` (`src/playout/audioPlayout.ts` の `schedule`) で決まり、
  * `今 + 余裕` は `AudioContext.currentTime` の位置、すなわち出力のバッファの分だけ実際に
  * 鳴る位置より先である。目標がそこへ届かないため、どの音も「今から鳴らせる最も早い時刻」に
- * なり、予定を過ぎて鳴る。NetEq の学習 (`src/audioDelayManager.ts`) は直近で最も早く届いた
+ * なり、予定を過ぎて鳴る。NetEq の学習 (`src/playout/audioDelayManager.ts`) は直近で最も早く届いた
  * 音との差しか見ないため、この一様な遅れを見つけられない。
  *
  * このファイルは、実測に相当する入力 (到着がときどき 200〜300 ms 乱れる、`baseDelayMs` 45 ms
- * 前後、映像は正常) を、時間軸 (`PlaybackTimeline`)、鳴らす時刻の決定
+ * 前後、映像は正常) を、時間軸 (`PlayoutTimeline`)、鳴らす時刻の決定
  * (`AudioPlayoutScheduler`)、観測 (`AudioPlayoutTimingStats`)、閉ループ
  * (`AudioDelayFeedback`) を本物のまま `src/createMediaSubscriber.ts` と同じ順で繋いで再現し、
  * 次の受け入れ条件を固定する。
@@ -50,7 +50,7 @@ import {
   AUDIO_DELAY_FEEDBACK_TOLERANCE_MS,
 } from "./audioDelayFeedback";
 import { AUDIO_DELAY_START_MS } from "./audioDelayManager";
-import { AUDIO_PLAYOUT_DELAY_FLOOR_MS, PlaybackTimeline } from "./playbackTimeline";
+import { AUDIO_PLAYOUT_DELAY_FLOOR_MS, PlayoutTimeline } from "./timeline";
 import { summarizeTimings } from "./timingSummary";
 
 /** Opus の 1 フレーム (20 ms) */
@@ -83,7 +83,7 @@ const STEADY_WINDOW_MS = 20_000;
  * であり、実測の p50 (156.15 + 13.9 - 10) から約 160 ms になる。ただし受け入れ条件 4
  * (乱れが無いときの `startDelayMs` の p50 が 130 ms 以下) は出力のバッファの分を下回れない
  * ため、このファイルではリポジトリの実測と同じ 95.5 ms を使う
- * (`src/audioPlayoutFallback.test.ts` の `MEASURED_OUTPUT_LEAD_MS`)。この分だけ、実測より
+ * (`src/playout/audioPlayoutFallback.test.ts` の `MEASURED_OUTPUT_LEAD_MS`)。この分だけ、実測より
  * 遅れが小さく出る
  */
 const OUTPUT_LEAD_MS = 95.5;
@@ -233,7 +233,7 @@ function summarizeWindowP50(
 function runScenario(options: ScenarioOptions = {}): ScenarioResult {
   const scenarioMs = options.scenarioMs ?? SCENARIO_MS;
   const pattern = options.arrivalPattern ?? "bursty";
-  const timeline = new PlaybackTimeline({ timeOriginMs: 0, maxQueuedFrames: MAX_QUEUED_FRAMES });
+  const timeline = new PlayoutTimeline({ timeOriginMs: 0, maxQueuedFrames: MAX_QUEUED_FRAMES });
   timeline.setTargetLatencyMs(options.targetLatencyMs ?? null);
   const playout = new AudioPlayoutScheduler({ stretchMinSeconds: 0 });
   const clock = new AudioClockBridge();
@@ -449,9 +449,9 @@ test("到着が乱れても、予定を過ぎて鳴る量と到着から鳴る�
 
 // 受け入れ条件 (2): 並べすぎで捨てない。実測では `missedByReason.backlog` が 5 件
 // (100 ms) あった。鳴らす時刻を TIMESTAMP から決められる (基準を共有できている) 状態では、
-// 並べすぎの判定 (`src/audioPlayout.ts` の `schedule`) は「目標が `今 + 出力のバッファ +
+// 並べすぎの判定 (`src/playout/audioPlayout.ts` の `schedule`) は「目標が `今 + 出力のバッファ +
 // 上限` より未来か」であり、上限は `max(delaySeconds, presentationDelaySeconds) +
-// AUDIO_PLAYOUT_BACKLOG_SECONDS`、相対の遅れは 0 以上 (`src/playbackTimeline.ts` の基準は
+// AUDIO_PLAYOUT_BACKLOG_SECONDS`、相対の遅れは 0 以上 (`src/playout/timeline.ts` の基準は
 // 観測したフレームを含む窓の最小値) であるため、目標が揺らぎの分を超えて未来になることは
 // ない。捨てが起きるのは到着基準の計画の側であり (キューが上限を超えて溜まったとき)、
 // そちらは目標を変えても動かない。したがってこの条件は、TIMESTAMP から並べられる状態が

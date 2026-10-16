@@ -1,5 +1,5 @@
 /**
- * PlaybackTimeline の Property-Based Tests
+ * PlayoutTimeline の Property-Based Tests
  *
  * 復号の出力の到着列 (観測の順序と経路の揺らぎ) と targetLatency の列を任意に生成し、
  * 表示時刻の式が満たすべき性質を確かめる。
@@ -7,7 +7,7 @@
  * - 表示時刻は µs に丸めた TIMESTAMP + 表示の遅れに一致し、表示の遅れから基準の遅れを
  *   引いた追加分は上限 (MAX_PLAYOUT_DELAY_MS とキューが吸収できる長さの小さい方) を超えない
  * - 同じ TIMESTAMP の音声と映像の表示時刻は、不感帯 (SYNC_MIN_DELTA_MS) の範囲で揃う
- * - 共有の再生遅延は 0 以上で、下げる速さは毎秒 PLAYBACK_DELAY_DECAY_MS_PER_SECOND を
+ * - 共有の再生遅延は 0 以上で、下げる速さは毎秒 PLAYOUT_DELAY_DECAY_MS_PER_SECOND を
  *   超えない
  * - 合わせる量は常に上限 (PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS) までである。120 秒の
  *   到着列でも、同時刻の音声と映像の表示時刻の差と skewMs は「素の差から上限までの分を
@@ -16,25 +16,25 @@
  *
  * 個別の規則 (基準の差が閾値を超えたときのフォールバック、基準の差の動き (時計のずれ)、
  * やめた判定の保持、音声の下限、切り下げの統計、TIMESTAMP の飛び) は
- * playbackTimeline.test.ts の単体テストが固定する。property テストは、テストが独立に
+ * src/playout/timeline.test.ts の単体テストが固定する。property テストは、テストが独立に
  * 計算できる量 (差の大きさ) だけを突き合わせる。
  */
 
 import { test, assert } from "vite-plus/test";
 import * as fc from "fast-check";
-import { JITTER_BUFFER_MAX_QUEUED_FRAMES } from "./playoutBuffer";
+import { JITTER_BUFFER_MAX_QUEUED_FRAMES } from "./buffer";
 import {
   MAX_PLAYOUT_DELAY_MS,
-  PLAYBACK_DELAY_DECAY_MS_PER_SECOND,
-  PLAYBACK_WINDOW_MS,
+  PLAYOUT_DELAY_DECAY_MS_PER_SECOND,
+  PLAYOUT_WINDOW_MS,
   PLAYOUT_BASE_MAX_DIFFERENCE_MIN_MS,
   PLAYOUT_QUEUE_HEADROOM_FRAMES,
   PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS,
   SYNC_MIN_DELTA_MS,
-  PlaybackTimeline,
-  type PlaybackStream,
-  type PlaybackTrackBreakdown,
-} from "./playbackTimeline";
+  PlayoutTimeline,
+  type PlayoutStream,
+  type PlayoutTrackBreakdown,
+} from "./timeline";
 
 // 送信側の壁時計 (Unix epoch ミリ秒)。メディア時刻 0 の TIMESTAMP にする
 const EPOCH_MS = 1_790_263_445_000;
@@ -150,9 +150,9 @@ function runObservations(
   operations: readonly Observation[],
   frameMs: number,
 ): {
-  timeline: PlaybackTimeline;
+  timeline: PlayoutTimeline;
   records: {
-    stream: PlaybackStream;
+    stream: PlayoutStream;
     mediaMs: number;
     wallClockMs: number;
     offsetMs: number;
@@ -162,12 +162,12 @@ function runObservations(
     presentationWallClockMicros: bigint | null;
   }[];
 } {
-  const timeline = new PlaybackTimeline({
+  const timeline = new PlayoutTimeline({
     timeOriginMs: EPOCH_MS - LOCAL_ORIGIN_MS,
     maxQueuedFrames: MAX_QUEUED_FRAMES,
   });
   const records: {
-    stream: PlaybackStream;
+    stream: PlayoutStream;
     mediaMs: number;
     wallClockMs: number;
     offsetMs: number;
@@ -176,11 +176,11 @@ function runObservations(
     videoDelayMs: number | null;
     presentationWallClockMicros: bigint | null;
   }[] = [];
-  const pending: { stream: PlaybackStream; mediaMs: number; localMs: number }[] = [];
+  const pending: { stream: PlayoutStream; mediaMs: number; localMs: number }[] = [];
   const mediaMsOf = { audio: 0, video: 0 };
   const outputLocalMsOf = { audio: LOCAL_ORIGIN_MS, video: LOCAL_ORIGIN_MS };
   const sequence: Observation[] = [...operations, { kind: "observe", jitterMs: 30 }];
-  let stream: PlaybackStream = "video";
+  let stream: PlayoutStream = "video";
   for (const operation of sequence) {
     if (operation.kind === "targetLatency") {
       timeline.setTargetLatencyMs(operation.value);
@@ -241,7 +241,7 @@ function runObservations(
   return { timeline, records };
 }
 
-test("PlaybackTimeline: 表示時刻は TIMESTAMP + 基準の遅れ + 表示の遅れ になる", () => {
+test("PlayoutTimeline: 表示時刻は TIMESTAMP + 基準の遅れ + 表示の遅れ になる", () => {
   fc.assert(
     fc.property(
       operationsArbitrary(),
@@ -262,14 +262,14 @@ test("PlaybackTimeline: 表示時刻は TIMESTAMP + 基準の遅れ + 表示の�
 
         // トラックごとの基準の遅れは「観測の時刻 - メディア時刻」の最小値である
         // (観測の軸は performance.now() であり、壁時計から原点を引いた値で観測する)。
-        // 実装は直近の窓 (`PLAYBACK_WINDOW_MS`) の最小値を基準にするため、テストも同じ窓で
+        // 実装は直近の窓 (`PLAYOUT_WINDOW_MS`) の最小値を基準にするため、テストも同じ窓で
         // 求める (古い観測まで見ると、実装の基準と食い違って差の判定がずれる)
-        const baseOffsetsOf = (target: PlaybackStream): number[] =>
+        const baseOffsetsOf = (target: PlayoutStream): number[] =>
           observations
             .filter(
               (record) =>
                 record.stream === target &&
-                record.wallClockMs >= last.wallClockMs - PLAYBACK_WINDOW_MS,
+                record.wallClockMs >= last.wallClockMs - PLAYOUT_WINDOW_MS,
             )
             .map((record) => record.offsetMs);
         const audioOffsets = baseOffsetsOf("audio");
@@ -342,7 +342,7 @@ test("PlaybackTimeline: 表示時刻は TIMESTAMP + 基準の遅れ + 表示の�
             // 上限 (キューが吸収できる長さ) まで下がったときは、フレーム間隔が短くなった分を
             // 直ちに反映するため、毎秒の速さを超えて下がる
             const elapsedMs = last.wallClockMs - previous.wallClockMs;
-            const allowedMs = (PLAYBACK_DELAY_DECAY_MS_PER_SECOND * elapsedMs) / 1_000;
+            const allowedMs = (PLAYOUT_DELAY_DECAY_MS_PER_SECOND * elapsedMs) / 1_000;
             // 上限は実装が TIMESTAMP の差から測った間隔で決まるため、上限との比較には
             // 丸めの分 (1 枚あたり `QUEUE_INTERVAL_ROUNDING_MS`) を枚数分だけ足した値を使う
             assert.isTrue(
@@ -359,7 +359,7 @@ test("PlaybackTimeline: 表示時刻は TIMESTAMP + 基準の遅れ + 表示の�
   );
 }, 10_000);
 
-test("PlaybackTimeline: 同時刻の表示時刻の差は上限に収まり、null は基準がずれた側だけになる", () => {
+test("PlayoutTimeline: 同時刻の表示時刻の差は上限に収まり、null は基準がずれた側だけになる", () => {
   fc.assert(
     fc.property(
       operationsArbitrary(),
@@ -377,7 +377,7 @@ test("PlaybackTimeline: 同時刻の表示時刻の差は上限に収まり、nu
           last.stream,
           timestampMicros,
         );
-        const otherStream: PlaybackStream = last.stream === "video" ? "audio" : "video";
+        const otherStream: PlayoutStream = last.stream === "video" ? "audio" : "video";
         const otherWallClockMicros = timeline.presentationWallClockMicros(
           otherStream,
           timestampMicros,
@@ -415,7 +415,7 @@ test("PlaybackTimeline: 同時刻の表示時刻の差は上限に収まり、nu
  * 時刻に復号の出力へ出る。揺らぎは 2% が 40 ms 前後、0.5% が 200 ms 前後で、残りは 30 ms
  * 以内である (p95 が 40 ms 程度になる)
  */
-function buildArrivals(seed: number): { stream: PlaybackStream; atMs: number; mediaMs: number }[] {
+function buildArrivals(seed: number): { stream: PlayoutStream; atMs: number; mediaMs: number }[] {
   const durationMs = DURATION_MS;
   const audioFrameMs = 20;
   const videoFrameMs = 1_000 / 30;
@@ -431,7 +431,7 @@ function buildArrivals(seed: number): { stream: PlaybackStream; atMs: number; me
     }
     return random() * 30;
   };
-  const arrivals: { stream: PlaybackStream; atMs: number; mediaMs: number }[] = [];
+  const arrivals: { stream: PlayoutStream; atMs: number; mediaMs: number }[] = [];
   for (let index = 0; index * audioFrameMs < durationMs; index++) {
     const mediaMs = index * audioFrameMs;
     arrivals.push({
@@ -457,9 +457,9 @@ function buildArrivals(seed: number): { stream: PlaybackStream; atMs: number; me
  *
  * 同期の制御が足す前の差である。合わせる量の上限はこの差に掛かる
  */
-function naturalDifferenceMsOf(timeline: PlaybackTimeline): number {
+function naturalDifferenceMsOf(timeline: PlayoutTimeline): number {
   const breakdown = timeline.delayBreakdown;
-  const naturalOf = (track: PlaybackTrackBreakdown): number =>
+  const naturalOf = (track: PlayoutTrackBreakdown): number =>
     (track.baseDelayMs ?? 0) + (track.jitterDelayMs ?? 0);
   return Math.abs(naturalOf(breakdown.audio) - naturalOf(breakdown.video));
 }
@@ -469,8 +469,8 @@ function naturalDifferenceMsOf(timeline: PlaybackTimeline): number {
  *
  * @returns 時間軸 (skewMs の検算に使う) と、差の最大値 (ミリ秒)
  */
-function runArrivals(seed: number): { timeline: PlaybackTimeline; maxDifferenceMs: number } {
-  const timeline = new PlaybackTimeline({
+function runArrivals(seed: number): { timeline: PlayoutTimeline; maxDifferenceMs: number } {
+  const timeline = new PlayoutTimeline({
     timeOriginMs: EPOCH_MS,
     maxQueuedFrames: MAX_QUEUED_FRAMES,
   });
@@ -505,7 +505,7 @@ function runArrivals(seed: number): { timeline: PlaybackTimeline; maxDifferenceM
 // 実測では、音声の TIMESTAMP が 600 ms 段差でずれ、その段差を揺らぎとして学習した音声の
 // 遅延へ映像を合わせて 600 ms を足し、映像が 500 ms 遅れたまま数十秒戻らなかった。いまは
 // 上限までの分しか合わせず、残りは A/V のずれとして残す
-test("PlaybackTimeline: 120 秒の到着列でも同時刻の表示時刻の差は合わせない分に収まる", () => {
+test("PlayoutTimeline: 120 秒の到着列でも同時刻の表示時刻の差は合わせない分に収まる", () => {
   fc.assert(
     fc.property(fc.integer({ min: 1, max: 1_000_000 }), (seed) => {
       const { timeline, maxDifferenceMs } = runArrivals(seed);
@@ -518,7 +518,7 @@ test("PlaybackTimeline: 120 秒の到着列でも同時刻の表示時刻の差�
         SYNC_MIN_DELTA_MS,
         naturalDifferenceMs - PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS,
       );
-      // 足すのは即座、戻すのは毎秒 PLAYBACK_DELAY_DECAY_MS_PER_SECOND まで、という設計の
+      // 足すのは即座、戻すのは毎秒 PLAYOUT_DELAY_DECAY_MS_PER_SECOND まで、という設計の
       // ため、後行側が前の状態で足した分はまだ戻り切っていないことがある。その分は差に
       // 残る (上限までしか足せない分を、後行側の足し分がさらに広げる)。戻り切っていない
       // 分は許容へ入れる。上限そのものは下の assert が守る
@@ -580,7 +580,7 @@ test("PlaybackTimeline: 120 秒の到着列でも同時刻の表示時刻の差�
  * ずれ、段差を揺らぎとして学習した遅延へ映像を合わせて 600 ms 足し、映像が 500 ms 遅れた
  * まま数十秒戻らなかった)。いまは合わせる量が上限までになり、残りは A/V のずれとして残る
  */
-test("PlaybackTimeline: 差が開いていた到着列でも映像の表示待ちは自分の揺らぎ + 上限までにする", () => {
+test("PlayoutTimeline: 差が開いていた到着列でも映像の表示待ちは自分の揺らぎ + 上限までにする", () => {
   // 722071 は develop の CI が落ちた入力である (fast-check の seed 869714401 が生成した
   // 整数)。修正前は映像へ 102.18 ms 足して上限を超えていた
   for (const seed of [50, 139, 194, 722071]) {
