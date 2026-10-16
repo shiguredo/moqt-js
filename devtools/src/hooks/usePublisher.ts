@@ -559,6 +559,48 @@ export function buildObjectSendPlan(
 }
 
 /**
+ * datagram で送った音声 Object の送信の遅れを記録する
+ *
+ * datagram の書き込みは送信キューの投入そのものであり、完了は返らない (fire-and-forget)。
+ * ライブラリ (src/createMediaPublisher.ts の `sendAudioFrameFireAndForget`) と同じく、投入の
+ * 直後を完了として記録する。
+ *
+ * 記録しないと、送信の遅れ (`sendLagMs` / `maxSendLagMs` / `sendQueueMs`) が datagram の経路
+ * では常に 0 のままになり、受信側の到着の遅れを「配信側が足した分」と「経路」に分けられない。
+ * 実際、この穴のせいで到着の裾の切り分けを別途やり直すことになった (2026-10-16 の調査)。
+ * 送信キューの長さは datagram では観測できない (writer の `write()` は投入で解決し、ワイヤに
+ * 出た時刻は分からない) ため、`sendQueueMs` は 0 のままになる。測っているのは
+ * 「撮ってから投入するまでの遅れ」である。
+ *
+ * @param catchUp - 記録先 (配信の音声ごとの観測。`src/audioPublishCatchUp.ts`)
+ * @param send - 送る Object の情報
+ * @param nowMs - 書き込みの直後の時刻 (`performance.now()`、ミリ秒)。完了の時刻にも使う
+ */
+export function recordAudioDatagramSent(
+  catchUp: AudioPublishCatchUp,
+  send: {
+    /** 送る Object が覆う最初の投入の timestamp (マイクロ秒) */
+    readonly timestampMicros: number;
+    /** 送る Object の LOC TIMESTAMP (Unix epoch マイクロ秒) */
+    readonly locTimestampMicros: bigint;
+    /** 音声の長さ (マイクロ秒)。分からなければ null */
+    readonly durationMicros: number | null;
+  },
+  nowMs: number,
+): void {
+  catchUp.recordSendStart({
+    timestampMicros: send.timestampMicros,
+    capturedWallClockMs: Number(send.locTimestampMicros) / 1_000,
+    durationMs: (send.durationMicros ?? 0) / 1_000,
+    nowMs,
+  });
+  catchUp.recordSendComplete({
+    timestampMicros: send.timestampMicros,
+    completedWallClockMs: performance.timeOrigin + nowMs,
+  });
+}
+
+/**
  * 次に符号化するフレームをキーフレームにするかを決める
  *
  * keyframeInterval 秒ごとのキーフレームに加えて、新しい Group の要求 (NEW_GROUP_REQUEST) を
@@ -1567,7 +1609,20 @@ export function usePublisher() {
           audioPublisherInstance.sendDatagram(sendParams);
           pub.audioBytesSent.value += chunk.data.length + properties.length;
         }
+        // 送信の遅れを記録する。datagram は完了が返らないため、投入の直後を完了にする
+        // (recordAudioDatagramSent の JSDoc を参照)。ここを記録しないと、受信側の到着の遅れを
+        // 配信側と経路に分けられない
+        recordAudioDatagramSent(
+          pub.audioCatchUp.value,
+          {
+            timestampMicros: capturedTimestampMicros,
+            locTimestampMicros,
+            durationMicros: chunk.duration,
+          },
+          performance.now(),
+        );
       } catch (error) {
+        // 送れなかった Object は記録しない (送信キューに入っていない)
         console.error("Failed to send audio datagram:", error);
       }
       return;

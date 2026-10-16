@@ -10,6 +10,7 @@ import {
   resolveAudioConfigToSend,
   resolveAudioPublishable,
   decideKeyFrame,
+  recordAudioDatagramSent,
   usePublisher,
 } from "./usePublisher";
 import type {
@@ -18,6 +19,7 @@ import type {
   PublisherVideoCatalogOptions,
 } from "./usePublisher";
 import { getAudioEncoderConfig } from "../../../src/codec/config";
+import { AudioPublishCatchUp } from "../../../src/audioPublishCatchUp";
 import { resolveDeclarationAudioFormat } from "../utils/publishTracks";
 import { MESSAGES_EVENT_TYPE, EVENT_TRACK_NAME } from "../utils/eventTimeline";
 import type { EncodedChunkData } from "../utils/EncoderWrapper";
@@ -1239,6 +1241,46 @@ test("resolveAudioPublishable: 非対応環境と無効設定では false を返
   assert.equal(resolveAudioPublishable("none"), false);
   assert.equal(resolveAudioPublishable("dummy"), false);
   assert.equal(resolveAudioPublishable("microphone"), false);
+});
+
+// datagram で送った音声 Object の送信の遅れを記録する。datagram は完了が返らないため、
+// 書き込みの直後を完了として記録する (ライブラリの sendAudioFrameFireAndForget と同じ扱い)。
+// 記録しないと sendLagMs / maxSendLagMs が datagram の経路では常に null のままになり、
+// 受信側の到着の遅れを配信側と経路に分けられない (2026-10-16 の調査で実際に穴になった)
+test("recordAudioDatagramSent: datagram でも送信の遅れを記録する", () => {
+  const catchUp = new AudioPublishCatchUp();
+  const nowMs = 500;
+  // 120 ms 前に撮った音を、いま送った
+  const capturedWallClockMs = performance.timeOrigin + nowMs - 120;
+  const locTimestampMicros = BigInt(Math.round(capturedWallClockMs * 1_000));
+
+  recordAudioDatagramSent(
+    catchUp,
+    { timestampMicros: 1_000_000, locTimestampMicros, durationMicros: 20_000 },
+    nowMs,
+  );
+
+  const snapshot = catchUp.snapshot();
+  assert.closeTo(snapshot.sendLagMs ?? 0, 120, 0.01, "撮ってから送るまでの遅れを記録すること");
+  assert.closeTo(snapshot.maxSendLagMs ?? 0, 120, 0.01, "最大にも出ること");
+  // 完了を待たない (待てない) ため、送信キューには残らない
+  assert.equal(snapshot.sendQueueFrames, 0, "投入の直後に完了にすること");
+  assert.equal(snapshot.sendQueueMs, 0, "送信キューの長さは残らないこと");
+});
+
+// 長さが分からない chunk でも記録できる (送信キューの長さを 0 として数える)
+test("recordAudioDatagramSent: 長さが分からなくても記録する", () => {
+  const catchUp = new AudioPublishCatchUp();
+  const nowMs = 1_000;
+  const locTimestampMicros = BigInt(Math.round((performance.timeOrigin + nowMs - 20) * 1_000));
+
+  recordAudioDatagramSent(
+    catchUp,
+    { timestampMicros: 2_000_000, locTimestampMicros, durationMicros: null },
+    nowMs,
+  );
+
+  assert.closeTo(catchUp.snapshot().sendLagMs ?? 0, 20, 0.01);
 });
 
 // 接続の設定から組み立てる SETUP のトークンが C4M のトークン (CAT、Token Type 1) のときだけ
