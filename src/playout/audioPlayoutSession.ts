@@ -179,18 +179,6 @@ export type AudioPlayoutResult =
 export interface AudioPlayoutSessionOptions {
   /** 鳴らした音と鳴らなかった音の記録の入れ先 (計器) */
   readonly timing: AudioPlayoutTimingStats;
-  /**
-   * 鳴らした結果を閉ループ (音声の目標遅延の学習) へ渡すか
-   *
-   * true のとき、鳴らした直後と並べすぎで捨てた直後に、計器が求めた観測
-   * (`AudioPlayoutTimingStats.audioDelayFeedback`) を時間軸へ渡す
-   * (`PlayoutTimeline.observeAudioPlayout` / `src/playout/audioDelayFeedback.ts`)。
-   *
-   * 既定は true。ライブラリも moqt-devtools も流す。実測 (2026-10-14、実リレー経由の
-   * 60 秒) では、流さないと目標が実際の到着に合わず、遅れが数 ms 残って時間圧縮が 58 秒で
-   * 1691 ms 動き続けた (声が粗くなる)
-   */
-  readonly audioDelayFeedback?: boolean;
 }
 
 /**
@@ -222,8 +210,6 @@ export class AudioPlayoutSession {
   readonly catchUp: AudioReceiveCatchUp;
   /** 鳴らした音と鳴らなかった音の記録の入れ先 (計器) */
   private readonly timing: AudioPlayoutTimingStats;
-  /** 鳴らした結果を閉ループ (音声の目標遅延の学習) へ渡すか */
-  private readonly audioDelayFeedback: boolean;
   // 直前に鳴らした音のサンプルとサンプルレート。欠落した区間の補間を作るために保持する
   private previousChannels: AudioSamples[] | null = null;
   private previousSampleRate = 0;
@@ -232,7 +218,6 @@ export class AudioPlayoutSession {
 
   constructor(options: AudioPlayoutSessionOptions) {
     this.timing = options.timing;
-    this.audioDelayFeedback = options.audioDelayFeedback ?? true;
     this.playout = new AudioPlayoutScheduler();
     this.clock = new AudioClockBridge();
     this.catchUp = new AudioReceiveCatchUp();
@@ -553,12 +538,11 @@ export class AudioPlayoutSession {
    * 鳴らした結果 (予定をどれだけ過ぎたか、並べすぎで捨てた量) を閉ループへ渡す
    *
    * 目標を動かすのは毎秒 1 回までであり、呼ぶ側は間隔を気にしない
-   * (`src/playout/audioDelayFeedback.ts`)。`audioDelayFeedback` が false のときは何もしない。
+   * (`src/playout/audioDelayFeedback.ts`)。実測 (2026-10-14、実リレー経由の 60 秒) では、
+   * 渡さないと目標が実際の到着に合わず、遅れが数 ms 残って時間圧縮が 58 秒で 1691 ms
+   * 動き続けた (声が粗くなる) ため、常に渡す
    */
   private observeDelayFeedback(atMs: number, timeline: PlayoutTimeline): void {
-    if (!this.audioDelayFeedback) {
-      return;
-    }
     const feedback = this.timing.audioDelayFeedback(atMs);
     // 圧縮 (時間圧縮、粗さ) の増分を閉ループへ渡す。閉ループは「圧縮が続くときだけ目標の
     // 上限を 160 ms へ広げる」判断に使う (`src/playout/audioDelayFeedback.ts`)。累積では

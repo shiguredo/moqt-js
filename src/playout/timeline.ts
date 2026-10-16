@@ -775,14 +775,6 @@ export class PlayoutTimeline {
   }
 
   /**
-   * トラックの表示の遅れ (ミリ秒)。TIMESTAMP から表示時刻までの差。まだ基準が無い、
-   * またはそのトラックがずれた側 (TIMESTAMP を使わない) ときは null
-   */
-  presentationDelayFor(stream: PlayoutStream): number | null {
-    return this.presentationDelayMsOf(stream);
-  }
-
-  /**
    * 音声の jitter buffer の遅延 (ミリ秒)。まだ観測していなければ null
    *
    * 揺らぎだけから求めた値 (NetEq の移植) と、実際に鳴った結果から閉ループが決めた目標の

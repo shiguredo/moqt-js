@@ -966,11 +966,6 @@ test("delayBreakdown: 表示の遅れを基準と jitter buffer と同期の制�
       TOLERANCE_MS,
       `${name}: 表示の遅れが内訳の合計と一致すること`,
     );
-    assert.equal(
-      track.presentationDelayMs,
-      timeline.presentationDelayFor(name),
-      `${name}: presentationDelayFor と同じ値であること`,
-    );
   }
   // 2 つのトラックの基準の差は「音声 - 映像」である
   assert.closeTo(

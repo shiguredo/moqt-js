@@ -272,38 +272,21 @@ interface FloorSample {
   readonly lagMs: number;
 }
 
-/** `AudioReceiveCatchUp` の設定 */
-export interface AudioReceiveCatchUpOptions {
-  /** 遅れの上限の下限 (ミリ秒)。既定は `AUDIO_RECEIVE_CATCH_UP_MIN_MS` */
-  readonly minMs?: number;
-  /** 健全時の遅れからさらに許す遅れ (ミリ秒)。既定は `AUDIO_RECEIVE_CATCH_UP_GROWTH_MS` */
-  readonly growthMs?: number;
-  /**
-   * 持続を待たずに始める、健全時の遅れからの増加 (ミリ秒)。既定は
-   * `AUDIO_RECEIVE_CATCH_UP_JUMP_MS`
-   */
-  readonly jumpMs?: number;
-  /** 床を求める直近の窓 (ミリ秒)。既定は `AUDIO_RECEIVE_CATCH_UP_FLOOR_WINDOW_MS` */
-  readonly floorWindowMs?: number;
-  /** 追いつきを始める前に要求する、上限を超えた状態の持続 (ミリ秒)。既定は `AUDIO_RECEIVE_CATCH_UP_CONFIRM_MS` */
-  readonly confirmMs?: number;
-  /** 追いつきを始めた後、次を始めない時間 (ミリ秒)。既定は `AUDIO_RECEIVE_CATCH_UP_COOLDOWN_MS` */
-  readonly cooldownMs?: number;
-}
-
 /**
  * 受信側の音声の追いつきの判定と観測
  *
  * 音声の購読 (復号した音を鳴らす側) ごとに 1 つ持つ。復号の出力を受け取るたびに
  * `observe()` を呼び、返ってきた `rebuildDecoder` に従って復号器を作り直す。
+ *
+ * 定数は実測で決めた値であり、購読ごとに変えるものではないため、設定は受け取らない
  */
 export class AudioReceiveCatchUp {
-  private readonly minMs: number;
-  private readonly growthMs: number;
-  private readonly jumpMs: number;
-  private readonly floorWindowMs: number;
-  private readonly confirmMs: number;
-  private readonly cooldownMs: number;
+  private readonly minMs = AUDIO_RECEIVE_CATCH_UP_MIN_MS;
+  private readonly growthMs = AUDIO_RECEIVE_CATCH_UP_GROWTH_MS;
+  private readonly jumpMs = AUDIO_RECEIVE_CATCH_UP_JUMP_MS;
+  private readonly floorWindowMs = AUDIO_RECEIVE_CATCH_UP_FLOOR_WINDOW_MS;
+  private readonly confirmMs = AUDIO_RECEIVE_CATCH_UP_CONFIRM_MS;
+  private readonly cooldownMs = AUDIO_RECEIVE_CATCH_UP_COOLDOWN_MS;
 
   /** 直近の窓の観測 (床を求める)。古い方から捨てる */
   private readonly floorSamples: FloorSample[] = [];
@@ -335,15 +318,6 @@ export class AudioReceiveCatchUp {
   private skippedFrames = 0;
   private skippedMs = 0;
   private lastSkippedMs: number | null = null;
-
-  constructor(options: AudioReceiveCatchUpOptions = {}) {
-    this.minMs = options.minMs ?? AUDIO_RECEIVE_CATCH_UP_MIN_MS;
-    this.growthMs = options.growthMs ?? AUDIO_RECEIVE_CATCH_UP_GROWTH_MS;
-    this.jumpMs = options.jumpMs ?? AUDIO_RECEIVE_CATCH_UP_JUMP_MS;
-    this.floorWindowMs = options.floorWindowMs ?? AUDIO_RECEIVE_CATCH_UP_FLOOR_WINDOW_MS;
-    this.confirmMs = options.confirmMs ?? AUDIO_RECEIVE_CATCH_UP_CONFIRM_MS;
-    this.cooldownMs = options.cooldownMs ?? AUDIO_RECEIVE_CATCH_UP_COOLDOWN_MS;
-  }
 
   /**
    * 復号の出力 1 つを観測し、復号器を作り直すかどうかを決める

@@ -172,7 +172,7 @@ interface SessionFixture {
 }
 
 /** 時間軸と計器と共有実装を作る */
-function makeSessionFixture(options: { audioDelayFeedback?: boolean } = {}): SessionFixture {
+function makeSessionFixture(): SessionFixture {
   const timeline = new PlayoutTimeline({
     timeOriginMs: performance.timeOrigin,
     maxQueuedFrames: JITTER_BUFFER_MAX_QUEUED_FRAMES,
@@ -181,11 +181,7 @@ function makeSessionFixture(options: { audioDelayFeedback?: boolean } = {}): Ses
     AUDIO_PLAYOUT_TIMING_WINDOW_MS,
     performance.timeOrigin,
   );
-  const session = new AudioPlayoutSession(
-    options.audioDelayFeedback === undefined
-      ? { timing }
-      : { timing, audioDelayFeedback: options.audioDelayFeedback },
-  );
+  const session = new AudioPlayoutSession({ timing });
   return { session, timeline, timing };
 }
 
@@ -576,34 +572,24 @@ test("handleDecodedAudio: 基準を取り直したかを結果で返す", () => 
 
 /**
  * 完了条件: 鳴らした結果 (予定をどれだけ過ぎたか) を閉ループ (音声の目標遅延の学習) へ
- * 渡すかどうかを、呼び出し側が選べる。既定はライブラリと同じ「渡す」である。
+ * 常に渡す。渡さないと目標が実際の到着に合わず、時間圧縮が止まらなくなる (実測がある。
+ * `src/playout/audioPlayoutSession.ts` の `observeDelayFeedback`)。計器への記録も行う。
  */
-test("handleDecodedAudio: 閉ループへ渡すかどうかを選べる", () => {
-  const withFeedback = makeSessionFixture();
-  const first = makeRecordingOutput({
-    timeline: withFeedback.timeline,
+test("handleDecodedAudio: 鳴らした結果を閉ループへ渡し、計器にも記録する", () => {
+  const fixture = makeSessionFixture();
+  const output = makeRecordingOutput({
+    timeline: fixture.timeline,
     mapping: null,
     currentTimeSeconds: 10,
   });
-  assert.equal(handleSound(withFeedback, first.output, { timestamp: 0 }).status, "played");
-  // 観測が 1 つ届いている (予定を過ぎた量と到着から鳴るまでの分布が残る)
+  assert.equal(handleSound(fixture, output.output, { timestamp: 0 }).status, "played");
+  // 観測が届いている (予定を過ぎた量と到着から鳴るまでの分布が残る)
   assert.isNotNull(
-    withFeedback.timeline.delayBreakdown.audioDelayFeedback.startDelayP50Ms,
-    "既定では閉ループへ渡すこと",
+    fixture.timeline.delayBreakdown.audioDelayFeedback.startDelayP50Ms,
+    "閉ループへ渡すこと",
   );
-
-  const withoutFeedback = makeSessionFixture({ audioDelayFeedback: false });
-  const second = makeRecordingOutput({
-    timeline: withoutFeedback.timeline,
-    mapping: null,
-    currentTimeSeconds: 10,
-  });
-  assert.equal(handleSound(withoutFeedback, second.output, { timestamp: 0 }).status, "played");
-  // 閉ループへ渡さないため、初期状態のままである
-  assert.isNull(withoutFeedback.timeline.delayBreakdown.audioDelayFeedback.startDelayP50Ms);
-  assert.equal(withoutFeedback.timeline.delayBreakdown.audioDelayFeedback.reason, "initial");
-  // 計器への記録は、閉ループへ渡さないときも行う
-  assert.equal(withoutFeedback.timing.snapshot(performance.now()).playedFrames, 1);
+  // 計器にも記録されている
+  assert.equal(fixture.timing.snapshot(performance.now()).playedFrames, 1, "計器に記録すること");
 });
 
 /**

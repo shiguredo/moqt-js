@@ -1006,7 +1006,7 @@ TIMESCALE から決める。draft-ietf-moq-loc-04 §2.3.1.1 / §2.3.1.2) であ�
 - 欠落した区間の補間 (直前に鳴らした音の末尾を伸ばす)
 - 計器 (`AudioPlayoutTimingStats`) への記録 (鳴るはずの時刻・届いた時刻・鳴り始める時刻と、
   鳴らなかった量)
-- 目標遅延の閉ループへの観測の引き渡し (`audioDelayFeedback` が true のとき)
+- 目標遅延の閉ループへの観測の引き渡し (常に行う。実測で、渡さないと時間圧縮が止まらない)
 - 受信側の追いつきの判定 (`AudioReceiveCatchUp`)。復号の出力が送られた TIMESTAMP から
   遅れ続けたら、復号器を作り直す必要があることを結果 (`catchUpStarted`) で知らせる
 
@@ -1060,9 +1060,6 @@ const result = session.handleDecodedAudio({
 interface AudioPlayoutSessionOptions {
   // 鳴らした音と鳴らなかった音の記録の入れ先 (計器)
   timing: AudioPlayoutTimingStats;
-  // 鳴らした結果 (予定をどれだけ過ぎたか、並べすぎで捨てた量) を、目標遅延の閉ループへ
-  // 渡すか (default: true)。false のときも計器への記録は行う
-  audioDelayFeedback?: boolean;
 }
 ```
 
@@ -1128,7 +1125,7 @@ type AudioPlayoutResult =
 
 `enforceTarget` が true でも目標の時刻を決められなかったときは到着基準になる。到着基準の遅れは、
 到着した音が「まだ鳴っていない位置」から数える (「統計情報」の説明を参照)。moqt-devtools も
-ライブラリと同じく目標遅延の閉ループを流す (`audioDelayFeedback` は既定の true)。
+ライブラリと同じく目標遅延の閉ループを流す (この組み立てが常に行う)。
 
 ### 受信側の追いつき
 

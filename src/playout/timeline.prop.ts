@@ -256,7 +256,7 @@ test("PlayoutTimeline: 表示時刻は TIMESTAMP + 基準の遅れ + 表示の�
           return;
         }
         const stream = last.stream;
-        const presentationDelayMs = timeline.presentationDelayFor(stream);
+        const presentationDelayMs = timeline.delayBreakdown[stream].presentationDelayMs;
         assert.isNotNull(timeline.presentationExtraDelayMs, "最後の観測で音声の遅れが決まること");
         assert.isNotNull(timeline.videoDelayMs, "最後の観測で映像の遅れが決まること");
 
@@ -391,13 +391,16 @@ test("PlayoutTimeline: 同時刻の表示時刻の差は上限に収まり、nul
           // どちらも返さないのは、まだ基準が無いときだけである
           if (lastWallClockMicros === null && otherWallClockMicros === null) {
             assert.isNull(
-              timeline.presentationDelayFor(last.stream) ??
-                timeline.presentationDelayFor(otherStream),
+              timeline.delayBreakdown[last.stream].presentationDelayMs ??
+                timeline.delayBreakdown[otherStream].presentationDelayMs,
             );
             return;
           }
           const missing = lastWallClockMicros === null ? last.stream : otherStream;
-          assert.isNull(timeline.presentationDelayFor(missing), "返さない側は基準がずれている");
+          assert.isNull(
+            timeline.delayBreakdown[missing].presentationDelayMs,
+            "返さない側は基準がずれている",
+          );
           assert.isFalse(timeline.sharingBases, "基準を共有していないこと");
           return;
         }

@@ -1240,12 +1240,10 @@ export function useSubscriber(
         // 反映する 1 つのインスタンスを渡す
         playout: new AudioPlayoutSession({
           timing: audioPlayoutTimingRef.current,
-          // 閉ループ (音声の目標遅延の学習) を流す (既定の true)。実測 (2026-10-14、実リレー
-          // 経由の 60 秒) では、流さないと目標が実際の到着に合わず、遅れが数 ms 残って
-          // 時間圧縮が 58 秒で 1691 ms 動き続けた (声が粗くなる)。学習させると、揺らぎの
-          // 分だけの遅延へ収束し、詰める操作が要らなくなる
+          // 閉ループ (音声の目標遅延の学習) は常に流す。実測 (2026-10-14、実リレー経由の
+          // 60 秒) では、流さないと目標が実際の到着に合わず、遅れが数 ms 残って時間圧縮が
+          // 58 秒で 1691 ms 動き続けた (声が粗くなる)
           // (src/playout/audioDelayFeedback.ts / src/playout/timeline.ts の observeAudioPlayout)
-          audioDelayFeedback: true,
         }),
       };
       audioPlaybackRef.current = playback;

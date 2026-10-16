@@ -317,7 +317,6 @@ export {
   EMPTY_AUDIO_RECEIVE_CATCH_UP,
   type AudioReceiveCatchUpDecision,
   type AudioReceiveCatchUpObservation,
-  type AudioReceiveCatchUpOptions,
   type AudioReceiveCatchUpStats,
 } from "./playout/audioReceiveCatchUp";
 
