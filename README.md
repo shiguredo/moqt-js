@@ -415,7 +415,10 @@ await subscriber.unsubscribe();
 > Apple Safari 26.4 での動作確認を行っています。Safari 26.4 の WebTransport には単方向ストリームへの `write()` がフラッシュされない WebKit のバグがあり、Safari からの配信は動作しません (購読は動作します)。
 
 > [!NOTE]
-> 音声の取り出しは、`MediaStreamTrackProcessor` が無いブラウザでは Web Audio の `AudioWorklet` で行います。Safari はこの API を DedicatedWorker にしか公開しておらず (Worker へ `MediaStreamTrack` も渡せません)、WebKit の実装は映像トラック専用です。Firefox は実装していません。この経路は Safari 相当の WebKit でも動作を確認しています (`vp exec playwright test --project=webkit`)。
+> Safari と Firefox は `MediaStreamTrackProcessor` をメインスレッドに公開していないため、音声の取り出しに Web Audio の `AudioWorklet` を使います。2 つの経路が要る理由は [高レベル API](docs/HIGH_LEVEL_API.md) にあります。
+
+> [!NOTE]
+> `AudioWorklet` の経路は Safari 相当の WebKit でも動作を確認しています (`vp exec playwright test --project=webkit`)。
 
 ## サンプル
 
