@@ -272,7 +272,7 @@ MSF は表示の遅れの宣言 (`targetLatency`) を定めますが、実際に
 
 高レベル API (`createMediaSubscriber`) はこの再生を内部で組み立てるため、アプリケーション側で実装する必要はありません。再生の部品は公開 API (`PlayoutTimeline` / `AudioPlayoutSession` / `VideoPlayoutSession`) としても使えます。詳細は [高レベル API](docs/HIGH_LEVEL_API.md) にあります。
 
-実測の条件と生の表は [音声の再生遅延の実測](docs/AUDIO_PLAYOUT_LATENCY.md)、到達点のまとめと既知の限界は [音声再生の到達点](docs/AUDIO_PLAYOUT_RESULT.md) にまとめています。
+実測の条件と生の表は [音声の再生遅延の実測](docs/AUDIO_PLAYOUT_LATENCY.md)、現状と既知の限界は [音声再生の現状](docs/AUDIO_PLAYOUT_RESULT.md) にまとめています。
 
 ## インストール
 
@@ -397,8 +397,8 @@ await subscriber.unsubscribe();
 - [高レベル API](docs/HIGH_LEVEL_API.md): `createMediaPublisher` / `createMediaSubscriber` と、A/V 同期と再生の共有実装の仕様
 - [低レベル API](docs/LOW_LEVEL_API.md): `connect()` と `Session` / `Publisher` / `Subscriber` / `Fetcher` の仕様
 - [MOQT Streaming Format](docs/MSF.md): Catalog / Timeline の公開 API
-- [A/V 同期と再生の決定の記録](docs/AV_SYNC_DECISIONS.md): A/V 同期と再生の閾値の根拠と再考の条件 (開発者向け)
-- [音声再生の到達点](docs/AUDIO_PLAYOUT_RESULT.md): 実リレーで測った音声の遅れ、A/V のずれ、パケロス対策と、既知の限界
+- [A/V 同期と再生の決定と根拠](docs/AV_SYNC_DECISIONS.md): 値を決めた根拠と、再考する条件
+- [音声再生の現状](docs/AUDIO_PLAYOUT_RESULT.md): 実リレーで測った値、規格との対応、既知の限界
 - [ビルド](docs/BUILD.md): Node.js の要件、`vp install` と `vp run build`、git 依存として取り込む場合
 - [テスト](docs/TEST.md): 単体テストの実行方法
 - [E2E テスト](docs/E2E_TEST.md): Playwright による E2E テストの実行方法と、実リレーを使う条件

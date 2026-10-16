@@ -1,4 +1,4 @@
-# 音声再生の到達点 (まとめ)
+# 音声再生の現状
 
 実リレー `moqt://sora-moq.shiguredo.co.jp/` で測った結果である。個々の計測の条件・生の表は
 `docs/AUDIO_PLAYOUT_LATENCY.md`、値の決定は `docs/AV_SYNC_DECISIONS.md` にある。
