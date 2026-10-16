@@ -33,6 +33,7 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
   - Publisher / Subscriber 対応
   - 高レベル API (WebCodecs / MediaStream 対応)
   - 音声と映像の同期再生
+  - 受信側の再生 (playout) の実装 (jitter buffer、時間圧縮 / 時間伸長、補間、追いつき)
   - 音声の配送経路の選択 (Subgroup / Datagram)
 - Media over QUIC Transport (MOQT) 対応
   - [Media over QUIC Transport](https://datatracker.ietf.org/doc/html/draft-ietf-moq-transport-22)
@@ -247,6 +248,47 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
 - `SETUP` に載せたトークンを、catalog の `SUBSCRIBE` / `FETCH` と、catalog の `authInfo` を持つトラックの `SUBSCRIBE` / `REQUEST_UPDATE` にも付与する (draft-ietf-moq-msf-01 §11.4.3)
 - `SETUP` に載せたトークンを `PUBLISH` / `PUBLISH_NAMESPACE` にも付与する (draft-ietf-moq-msf-01 §11.4.3)
 
+## 再生 (playout)
+
+MSF は表示の遅れの宣言 (`targetLatency`) を定めますが、実際にどの時刻に鳴らすかを決めるのは購読する側の仕事です。`moqt-js` は受信側の再生 (playout) をライブラリに持ちます。経路の揺らぎで音が途切れる、音声と映像がずれる、といった品質を、アプリケーションごとの実装に任せません。
+
+### 仕組み
+
+- 表示時刻を決める
+  - LOC の TIMESTAMP と、トラックごとの「復号の出力の時刻 − TIMESTAMP」の直近 10 秒の最小値から、音声と映像の表示時刻を同じ式で決める (`src/playout/timeline.ts`)
+- 音声の jitter buffer の目標遅延を、到着の遅れの分布から決める
+  - libwebrtc の NetEq (`delay_manager.cc` / `histogram.cc`) を移植し、到着の遅れの 0.95 分位から目標を求める (`src/playout/audioDelayManager.ts`)
+  - 実際に鳴った結果 (予定をどれだけ過ぎて鳴ったか、並べすぎで捨てた量) でも目標を補正する (`src/playout/audioDelayFeedback.ts`)
+- 間に合わない音を捨てずに詰める
+  - 波形の周期性を使った時間圧縮 / 時間伸長 (NetEq の `time_stretch.cc` / `accelerate.cc` / `preemptive_expand.cc` の移植) と、欠けた分の波形の繰り返しによる補間 (`src/playout/audioTimeStretch.ts`)
+- 映像は表示時刻を過ぎた最新のフレームを描く
+  - 表示待ちのキューが、時間軸の決めた表示時刻に合わせてフレームを選ぶ (`src/playout/buffer.ts` / `src/playout/videoPlayoutSession.ts`)
+- 映像を音声に合わせる
+  - 「表示時刻 − TIMESTAMP」の差を不感帯 5 ms で制御し、先行する側 (多くの場合 映像) を最大 100 ms まで待たせる
+- live から遅れたら復号器を作り直す
+  - 復号器に溜まった音は、鳴らす音を捨てても減らない。遅れが続いたら復号器を作り直して live へ戻す (`src/playout/audioReceiveCatchUp.ts`)
+- パケロスを配信側の冗長化で吸収する
+  - 同じ音声 Object を最大 3 回送り、受信側は同じ識別子 (`groupId` と `objectId`) の 2 回目以降を捨てる。同じ音が重なって鳴ることはない
+
+高レベル API (`createMediaSubscriber`) はこの再生を内部で組み立てるため、アプリケーション側で実装する必要はありません。再生の部品は公開 API (`PlayoutTimeline` / `AudioPlayoutSession` / `VideoPlayoutSession`) としても使えます。詳細は [高レベル API](docs/HIGH_LEVEL_API.md) にあります。
+
+### 実リレーでの実測
+
+| 軸                           | 値                       | 条件                                                                                                    |
+| ---------------------------- | ------------------------ | ------------------------------------------------------------------------------------------------------- |
+| 鳴り始め (p50)               | 45.6〜67.7 ms            | 下限 50 ms、静かな経路、60 秒の観測 3 回                                                                |
+| A/V のずれ (p50)             | −14〜−19 ms              | 不感帯 5 ms                                                                                             |
+| 音声の目標遅延               | 下限 50 ms / 上限 100 ms | 下限と上限は実測で選んだ固定値。範囲内は到着の遅れの分布 (0.95 分位) と実際に鳴った結果から自動で決める |
+| 音を鳴らせた割合 (損失 20 %) | 99.4 %                   | `delivery` が `"datagram"` で、同じ Object を 3 回送った場合 (`redundancy` = 3)                         |
+
+- ITU-T G.114 の片道 150 ms の目安に対し、鳴り始め 45.6〜67.7 ms に経路の遅れ (実測 17〜23 ms) を足しても内側に入る
+- ITU-R BT.1359-1 が定める「音声の遅れ 30 ms / 進み 22.5 ms」の許容に対し、A/V のずれの実測は −14〜−19 ms で内側に入る
+- 実機のスピーカー遅延と表示遅延は測っていない (ヘッドレスの `outputLatency` は 24〜25 ms)
+- 音声設定の `redundancy` の既定は 1 である (devtools は 2)
+- 実リレーへ接続する E2E テスト (A/V 同期、長時間の観測を含む) を CI で実行している。損失を注入する調査は `MOQT_INVESTIGATION=1` を付けて手元で実行する
+
+実測の条件と生の表は [音声の再生遅延の実測](docs/AUDIO_PLAYOUT_LATENCY.md)、到達点のまとめと既知の限界は [音声再生の到達点](docs/AUDIO_PLAYOUT_RESULT.md) にまとめています。
+
 ## インストール
 
 ```bash
@@ -371,6 +413,7 @@ await subscriber.unsubscribe();
 - [低レベル API](docs/LOW_LEVEL_API.md): `connect()` と `Session` / `Publisher` / `Subscriber` / `Fetcher` の仕様
 - [MOQT Streaming Format](docs/MSF.md): Catalog / Timeline の公開 API
 - [A/V 同期と再生の決定の記録](docs/AV_SYNC_DECISIONS.md): A/V 同期と再生の閾値の根拠と再考の条件 (開発者向け)
+- [音声再生の到達点](docs/AUDIO_PLAYOUT_RESULT.md): 実リレーで測った音声の遅れ、A/V のずれ、パケロス対策と、既知の限界
 
 ## 動作環境
 
