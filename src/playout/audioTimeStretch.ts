@@ -1,10 +1,13 @@
 /**
- * 復号した音声を、波形の周期性を使って時間圧縮・時間伸長・補間する
+ * 復号した音声を、波形の周期性を使って時間圧縮・補間する
  *
- * NetEq (`modules/audio_coding/neteq/time_stretch.cc` と `accelerate.cc` /
- * `preemptive_expand.cc`) の時間伸縮を移植したものである。遅れて届いた音を捨てると
- * 音が途切れるため、届いた音を目標の時刻に間に合わせるために、音の長さをわずかに
- * 詰める (時間圧縮) または伸ばす (時間伸長) ために使う。
+ * NetEq (`modules/audio_coding/neteq/time_stretch.cc` と `accelerate.cc`) の時間圧縮を
+ * 移植したものである。遅れて届いた音を捨てると音が途切れるため、届いた音を目標の時刻に
+ * 間に合わせるために、音の長さをわずかに詰める (時間圧縮) ために使う。
+ *
+ * NetEq の時間伸長 (`preemptive_expand.cc`) は移植していない。この再生は音を伸ばす場面を
+ * 持たないためである (目標より早く届いた音は、前の音の終わりより後ろに置けばよく、足りない
+ * 区間は補間 (`concealSamples`) が埋める)。
  *
  * 規則 (NetEq と同じ):
  *
@@ -14,7 +17,7 @@
  * - その長さだけ離れた 2 つの区間の相関が `TIME_STRETCH_CORRELATION_THRESHOLD` (0.9)
  *   より大きいときだけ操作する。波形が繰り返していない場所で切ると、耳につく
  * - 操作は切れ目の前後 `ピッチ周期` サンプルをクロスフェードして繋ぐ。時間圧縮は
- *   ピッチ周期 1 つ分を削り、時間伸長は 1 つ分を挿す
+ *   ピッチ周期 1 つ分を削る
  * - 操作する位置は音の中央にする (NetEq は 30 ms の入力の 15 ms の位置 = 中央で行う。
  *   ここへ渡す音は Opus の 1 フレーム = 20 ms であるため、中央は 10 ms になる)
  * - 欠落した区間の補間 (`concealSamples`) は末尾の周期を求め、その周期を繰り返す。周期は
@@ -104,7 +107,7 @@ export interface TimeStretchResult {
 interface PitchPeriod {
   /** ピッチの周期 (元のサンプルレートのサンプル数) */
   readonly samples: number;
-  /** 切れ目の前後で波形がどれだけ一致しているか (0 から 1) */
+  /** 切れ目の前後で波形がどれだけ一致しているか (-1 から 1。操作するのは 0.9 以上のとき) */
   readonly correlation: number;
 }
 
@@ -216,8 +219,9 @@ function isSilent(channels: readonly AudioSamples[]): boolean {
  * 切れ目の前後をクロスフェードする (NetEq の `AudioVector::CrossFade` と同じ重み)
  *
  * `target` の `fade` サンプルを、`source` の先頭 `fade` サンプルへ少しずつ寄せる。
- * 重みは NetEq と同じで 1 サンプルずつ `1 / (fade + 1)` ずつ動かす (最初は `target` の
- * まま、最後はほぼ `source` になる)
+ * 重みは NetEq と同じで 1 サンプルずつ `1 / (fade + 1)` ずつ動かす (最初のサンプルで既に
+ * `1 / (fade + 1)` だけ `source` へ寄り、最後はほぼ `source` になる。`target` のままなのは
+ * 重みが 0 の位置までであり、この関数はそこを書かない)
  */
 function crossFade(
   target: AudioSamples,
@@ -308,41 +312,6 @@ export function compressSamples(
 }
 
 /**
- * 音声を時間伸長する (ピッチ周期 1 つ分を挿す)
- *
- * @param channels - チャンネルごとの音声 (すべて同じ長さ)
- * @param sampleRate - サンプルレート (Hz)
- * @returns 伸長した音声と、挿したサンプル数 (正)。操作しなかったときは変化なし
- */
-export function expandSamples(
-  channels: readonly AudioSamples[],
-  sampleRate: number,
-): TimeStretchResult {
-  const length = channels[0]?.length ?? 0;
-  if (length === 0) {
-    return { channels: [...channels], lengthChangeSamples: 0 };
-  }
-  const splice = length >> 1;
-  const pitch = pitchPeriodOf(channels, sampleRate, splice);
-  if (pitch === null) {
-    return { channels: [...channels], lengthChangeSamples: 0 };
-  }
-  const added = pitch.samples;
-  const output: AudioSamples[] = [];
-  for (const channel of channels) {
-    const expanded = new Float32Array(length + added);
-    // 切れ目までと、挿す分 (切れ目の直前のピッチ周期 1 つ分)
-    expanded.set(channel.subarray(0, splice + added), 0);
-    // 挿した分の先頭を、切れ目の直前の音とクロスフェードする
-    crossFade(expanded, splice, channel, splice - added, added);
-    // 切れ目より後
-    expanded.set(channel.subarray(splice), splice + added);
-    output.push(expanded);
-  }
-  return { channels: output, lengthChangeSamples: added };
-}
-
-/**
  * 継ぎ目の段差を許す、末尾の周期の自然な段差に対する倍率
  *
  * 周期どおりに繰り返せていれば、繰り返しの先頭は末尾の続きになるため段差は自然な段差と
@@ -389,7 +358,7 @@ export const TIME_STRETCH_CONCEAL_FADE_CORRELATION = 0.95;
 interface TailPeriod {
   /** 末尾で繰り返している周期 (元のサンプルレートのサンプル数)。端数を含む */
   readonly samples: number;
-  /** 末尾で繰り返しているか (0 から 1)。穴の終わりの段差の大きさの目安でもある */
+  /** 末尾で繰り返しているか (-1 から 1)。穴の終わりの段差の大きさの目安でもある */
   readonly correlation: number;
 }
 
@@ -522,7 +491,7 @@ function readRepeated(signal: AudioSamples, start: number, phase: number): numbe
 }
 
 /**
- * 2 つの区間の正規化した相関 (0 から 1) を求める
+ * 2 つの区間の正規化した相関 (-1 から 1) を求める
  *
  * `end` を末尾とする長さ `window` の区間と、そこから `lag` だけ前の同じ長さの区間を比べる。
  * 窓の長さは呼び出し側が決める (候補ラグに比例させない)
@@ -557,6 +526,11 @@ function normalizedCorrelation(
  * 2 段にするのは、4 kHz の格子に周期が乗らない音で位相がずれるためである。4 kHz だけでは
  * 440 Hz の周期 109.09 サンプルを 108 としか求められず、100 ms の穴で 0.44 周期ずれて
  * 次の音との段差が振幅の 195 % になる (端数まで求めると 3 % になる)。
+ *
+ * 放物線の頂点は細探索した 3 点から求めるため、最大が細探索の端にあるときは求められない。
+ * 端では格子のままにする (端で外挿すると探索の下限の外側のラグを返し、周期が 0.5 サンプル
+ * ずれる)。400 Hz の周期 120 サンプルは細探索の下限そのものであり、この経路を通る
+ *
  * 音が短すぎる、対応していないサンプルレートのときは null
  */
 function findTailPeriod(reference: AudioSamples, samplesPer4kHzSample: number): TailPeriod | null {
@@ -607,13 +581,18 @@ function findTailPeriod(reference: AudioSamples, samplesPer4kHzSample: number): 
       bestLag = lag;
     }
   }
-  // ピークを放物線で補間して端数まで求める (格子の分のずれを 12 分の 1 以下にする)
+  // ピークを放物線で補間して端数まで求める (格子の分のずれを 12 分の 1 以下にする)。頂点は
+  // 前後と最大の 3 点から求めるため、最大が細探索の端にあるときは求められない。端で外挿
+  // すると、評価していないラグ (探索の下限の外側) を返して周期が 0.5 サンプルずれ、穴の
+  // 終わりで位相が合わなくなる (実測: 48 kHz、20 ms のフレーム、400 Hz = 周期 120 サンプル
+  // は細探索の下限そのもので、穴 100 ms の段差が振幅の 85.2 % になった)。上に凸でない
+  // (曲率が 0 以上) ときも頂点を求められないため、どちらも格子のままにする
   const peak = bestLag - firstLag;
-  const before = peak > 0 ? (correlations[peak - 1] ?? bestCorrelation) : bestCorrelation;
-  const after =
-    peak + 1 < correlations.length ? (correlations[peak + 1] ?? bestCorrelation) : bestCorrelation;
+  const hasBothNeighbors = peak > 0 && peak + 1 < correlations.length;
+  const before = hasBothNeighbors ? (correlations[peak - 1] ?? bestCorrelation) : bestCorrelation;
+  const after = hasBothNeighbors ? (correlations[peak + 1] ?? bestCorrelation) : bestCorrelation;
   const curvature = before - 2 * bestCorrelation + after;
-  const offset = curvature === 0 ? 0 : (0.5 * (before - after)) / curvature;
+  const offset = hasBothNeighbors && curvature < 0 ? (0.5 * (before - after)) / curvature : 0;
   const samples = bestLag + Math.max(-0.5, Math.min(0.5, offset));
   return { samples, correlation: bestCorrelation };
 }

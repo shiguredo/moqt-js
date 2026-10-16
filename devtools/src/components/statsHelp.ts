@@ -198,7 +198,7 @@ export const AV_SYNC_HELP: SectionHelp = {
     {
       term: "unsharedReason",
       description:
-        "unobserved: a base or a delay is not decided yet. difference: the base difference is larger than the delay cap. drift: the base difference keeps moving, which is a TIMESTAMP clock offset (e.g. the audio drift in issue 0754) rather than a path delay. hold: the decision to stop sharing is kept for a while so that the threshold (which moves with the jitter buffer delay) cannot make it flap.",
+        "unobserved: a base or a delay is not decided yet. difference: the base difference is larger than the delay cap. drift: the base difference keeps moving, which is a TIMESTAMP clock offset (e.g. the audio timestamp drift) rather than a path delay. hold: the decision to stop sharing is kept for a while so that the threshold (which moves with the jitter buffer delay) cannot make it flap.",
     },
     {
       term: "baseDriftMsPerSecond",

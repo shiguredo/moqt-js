@@ -17,11 +17,12 @@
  * - 遅れが許容の中に収まり、捨てが無いなら目標を減らす (必要以上に遅らせない)
  * - 増減は毎秒 1 回までとし、1 回の増加は上限までにする (数秒スケール。行き過ぎを防ぐ)
  * - 目標は `AUDIO_DELAY_FEEDBACK_MIN_MS` から、**実際に適用される上限**の間に収める
- *   (`upperMs()` = min(AUDIO_DELAY_FEEDBACK_MAX_MS, ceilingMs, AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS))。
- *   適用は `targetDelayMs` が `AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS` で切るため、内部の目標だけが
- *   それを超えて育つと、超えた分は決して適用されず、遅れが収まった後に減らし切るまで
- *   (毎秒 `AUDIO_DELAY_FEEDBACK_DECREASE_MS_PER_SECOND`) の時間だけ復帰が遅れる
- *   (実測: 内部 198.4 ms / 適用 100 ms。この差 98.4 ms を減らすのに 10 秒かかる)。
+ *   (`upperMs()` = min(AUDIO_DELAY_FEEDBACK_MAX_MS, ceilingMs, appliedCeilingMs))。適用も同じ
+ *   上限 (`targetDelayMs` が `appliedCeilingMs` で切る) を使うため、内部の目標が適用されない
+ *   ことはない。以前は適用側が常に 100 ms で切っていたため、内部の目標だけがそれを超えて
+ *   育つと超えた分は決して適用されず、遅れが収まった後に減らし切るまで (毎秒
+ *   `AUDIO_DELAY_FEEDBACK_DECREASE_MS_PER_SECOND`) の時間だけ復帰が遅れていた
+ *   (実測: 内部 198.4 ms / 適用 100 ms。この差 98.4 ms を減らすのに 10 秒かかった)。
  *   実測 198.4 ms は `docs/AUDIO_PLAYOUT_LATENCY.md` の 2026-10-16 の計測にある
  * - `targetLatencyMs` を明示設定したときは、その値を自動で超えない (呼び出し側が
  *   `setCeilingMs` で渡す)。NetEq が求めた遅れ (揺らぎの分) には掛けない。既存の
@@ -276,8 +277,10 @@ export class AudioDelayFeedback {
   private lastChangeMs = 0;
   private adjustments = 0;
   private latest: AudioDelayFeedbackObservation | null = null;
-  // 実際に鳴った結果を 1 つでも観測したか。観測が無い間は閉ループの目標を使わない
-  private observed = false;
+  // 閉ループへ観測が 1 つでも届いたか。届くまでは閉ループの目標を使わない。鳴っていない音の
+  // 観測 (捨てた音の通知) でも true になるため、「実際に鳴った結果を観測したか」ではない
+  // (`targetDelayMs` が参照する)
+  private receivedObservation = false;
   // 圧縮が続くため上限を 160 ms へ広げているか
   private artifactCeilingActive = false;
   // 上限を上げる根拠 (圧縮の速さが閾値を超えた状態) が続いている時間 (ミリ秒)
@@ -318,8 +321,9 @@ export class AudioDelayFeedback {
    * 切り下げると挙動が変わるためである
    *
    * 実際に鳴った結果をまだ 1 つも観測していないときは、閉ループの目標を使わず
-   * `jitterTargetMs` をそのまま返す。閉ループは観測を入力にする制御であり、観測が無い間に
-   * 目標を動かすと、まだ鳴らしていない間の表示の遅れ (購読を始めた直後の基準) が変わる
+   * `jitterTargetMs` を上限 (`AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS` = 100 ms) で切って返す。
+   * 閉ループは観測を入力にする制御であり、観測が無い間に目標を動かすと、まだ鳴らしていない
+   * 間の表示の遅れ (購読を始めた直後の基準) が変わる
    *
    * この値に掛ける上限は、圧縮が続いているときだけ `AUDIO_DELAY_FEEDBACK_ARTIFACT_CEILING_MS`
    * (160 ms) になる。圧縮は経路が 100 ms では足りていない証拠であり、そのときだけ遅延の
@@ -328,7 +332,7 @@ export class AudioDelayFeedback {
    * @param jitterTargetMs - 揺らぎだけから求めた目標遅延 (ミリ秒)
    */
   targetDelayMs(jitterTargetMs: number): number {
-    if (!this.observed) {
+    if (!this.receivedObservation) {
       return Math.min(jitterTargetMs, AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS);
     }
     // 実際に使う値に掛ける上限は、圧縮が続くときだけ広げる (`appliedCeilingMs`)。明示設定
@@ -345,8 +349,8 @@ export class AudioDelayFeedback {
    */
   update(observation: AudioDelayFeedbackObservation): void {
     this.latest = observation;
-    // 1 つでも観測を受けたら、以降は閉ループの目標を使う
-    this.observed = true;
+    // 1 つでも観測を受けたら、以降は閉ループの目標を使う (鳴っていない音の観測でも同じ)
+    this.receivedObservation = true;
     // 圧縮の増分を、次の制御 (毎秒 1 回) まで積む。音ごとの増分をそのまま速さとして見ると、
     // 1 秒間に出た圧縮を取りこぼす
     this.compressionSinceUpdateMs += Math.max(0, observation.compressionMs ?? 0);
@@ -510,29 +514,6 @@ export class AudioDelayFeedback {
       appliedCeilingMs: this.appliedCeilingMs,
       compressionMsPerSecond: this.compressionMsPerSecond,
     };
-  }
-
-  /**
-   * 学習を消して初期状態に戻す
-   *
-   * 目標は「到着から鳴るまでの経路」の学習であり購読のやり直しでは変わらないため、
-   * 通常は呼ばない (購読のやり直しで目標を初期値へ戻すと、その間だけ遅れが戻る)
-   */
-  reset(): void {
-    this.targetMs = AUDIO_DELAY_FEEDBACK_START_MS;
-    this.reason = "initial";
-    this.lastUpdateAtMs = null;
-    this.lastBacklogMisses = 0;
-    this.lastBacklogMs = 0;
-    this.lastChangeMs = 0;
-    this.adjustments = 0;
-    this.latest = null;
-    this.observed = false;
-    this.artifactCeilingActive = false;
-    this.compressionStreakMs = 0;
-    this.quietStreakMs = 0;
-    this.compressionSinceUpdateMs = 0;
-    this.compressionMsPerSecond = 0;
   }
 
   /**

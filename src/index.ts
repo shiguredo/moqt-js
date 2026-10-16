@@ -288,12 +288,19 @@ export type {
   AudioDelayFeedbackSnapshot,
 } from "./playout/audioDelayFeedback";
 
-// 音声の再生の観測値 (AudioReceiverStats.playoutTiming)。鳴るはずの時刻と鳴らなかった量
-export type {
-  AudioMissEvent,
-  AudioMissReason,
-  AudioMissTotal,
-  AudioPlayoutTimingSnapshot,
+// 音声の再生の観測 (鳴るはずの時刻・鳴り始める時刻・鳴らなかった量)。`AudioPlayoutSession` へ
+// 必須で渡す計器であり、利用者が自分で作って統計として読む (docs/HIGH_LEVEL_API.md)。
+// 再生の観測値の型 (AudioReceiverStats.playoutTiming) も同じモジュールが持つ
+export {
+  AudioPlayoutTimingStats,
+  AUDIO_PLAYOUT_TIMING_WINDOW_MS,
+  AUDIO_MISS_REASONS,
+  EMPTY_AUDIO_PLAYOUT_TIMING,
+  formatAudioMissEvent,
+  type AudioMissEvent,
+  type AudioMissReason,
+  type AudioMissTotal,
+  type AudioPlayoutTimingSnapshot,
 } from "./playout/audioPlayoutTimingStats";
 
 // 受信側の音声が live から遅れたときに、復号器を作り直して追いつく判定と観測

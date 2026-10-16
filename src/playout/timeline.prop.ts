@@ -257,7 +257,7 @@ test("PlayoutTimeline: 表示時刻は TIMESTAMP + 基準の遅れ + 表示の�
         }
         const stream = last.stream;
         const presentationDelayMs = timeline.presentationDelayFor(stream);
-        assert.isNotNull(timeline.audioDelayMs, "最後の観測で音声の遅れが決まること");
+        assert.isNotNull(timeline.presentationExtraDelayMs, "最後の観測で音声の遅れが決まること");
         assert.isNotNull(timeline.videoDelayMs, "最後の観測で映像の遅れが決まること");
 
         // トラックごとの基準の遅れは「観測の時刻 - メディア時刻」の最小値である
@@ -291,11 +291,15 @@ test("PlayoutTimeline: 表示時刻は TIMESTAMP + 基準の遅れ + 表示の�
           audioOffsets.length === 0 || videoOffsets.length === 0
             ? 0
             : Math.abs(Math.min(...audioOffsets) - Math.min(...videoOffsets));
-        const delayOfStream = stream === "audio" ? timeline.audioDelayMs : timeline.videoDelayMs;
+        const delayOfStream =
+          stream === "audio" ? timeline.presentationExtraDelayMs : timeline.videoDelayMs;
         // 実装は同期が足した分を含まない遅延で閾値を計算する。ここでは実効値 (足した分を
         // 含む) を使うため、閾値は実装より小さくなる (共有しない側に倒れる)。表示時刻が
         // null になる条件の確認にしか使わないため、この向きで問題ない
-        const delayBiggestMs = Math.max(timeline.audioDelayMs ?? 0, timeline.videoDelayMs ?? 0);
+        const delayBiggestMs = Math.max(
+          timeline.presentationExtraDelayMs ?? 0,
+          timeline.videoDelayMs ?? 0,
+        );
         const sharingBases =
           differenceMs <= Math.max(PLAYOUT_BASE_MAX_DIFFERENCE_MIN_MS, queueCapMs - delayBiggestMs);
 

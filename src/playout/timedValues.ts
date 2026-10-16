@@ -1,8 +1,10 @@
 /**
  * 記録した時刻の順に並んだ値の列
  *
- * 受信から表示までの時間の統計 (playoutTimingStats.ts) と jitter buffer
- * (src/playout/buffer.ts) が、直近の窓の値を保持するために使う。
+ * 受信から表示までの時間の統計 (devtools の `utils/playoutTimingStats.ts` /
+ * `utils/publishTimingStats.ts` / `utils/latencyBreakdown.ts`)、音声の再生の観測
+ * (`audioPlayoutTimingStats.ts`)、時間軸 (`timeline.ts`) が、直近の窓の値を保持するために
+ * 使う。
  *
  * 記録の時刻は単調に増える (`performance.now()`) ため、窓より古い値は先頭にある。
  * 先頭から捨てるときに配列を詰め直さないよう、読み始めの位置を進め、半分を超えたら

@@ -225,7 +225,12 @@ export interface AudioReceiveCatchUpStats {
   floorMs: number | null;
   /** 観測した最大の、復号の出力の遅れ (ミリ秒)。まだ観測していなければ null */
   maxLagMs: number | null;
-  /** いま使っている遅れの上限 (ミリ秒)。床と `AUDIO_RECEIVE_CATCH_UP_GROWTH_MS` から決まる */
+  /**
+   * いま使っている遅れの上限 (ミリ秒)
+   *
+   * 床 (健全時に観測した遅れ) と `AUDIO_RECEIVE_CATCH_UP_GROWTH_MS` から決まる。床がまだ
+   * 観測されていなければ `AUDIO_RECEIVE_CATCH_UP_MIN_MS` がそのまま上限になる
+   */
   limitMs: number;
   /**
    * いま追いつきの最中か

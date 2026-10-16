@@ -110,10 +110,13 @@ export interface AudioPlayoutTimingSnapshot {
   /** 鳴らすと決めた音の長さの合計 (ミリ秒、累積。詰めた分を引いた後) */
   readonly playedMs: number;
   /**
-   * 時間軸の再生予定時刻を使えず、到着基準の計画で鳴らした音の数 (累積)
+   * 到着基準の計画で鳴らした音の数 (累積)
    *
-   * 時間軸が目標を決められていない (TIMESTAMP が壁時計からずれているなど) ことを、
-   * この数と `unplannedFrames` 0 の組み合わせで読む
+   * 時間軸の再生予定時刻を使えなかった音 (TIMESTAMP が壁時計でない、jitter buffer が無効)
+   * だけでなく、予定を決められても使わなかった音 (揃える相手がいないため `enforceTarget` が
+   * false のとき。音声だけの購読) も数える。したがって、この数だけでは「時間軸が目標を
+   * 決められていない」と読めない。予定を決められた音が 1 つも無ければ `slackMs` と
+   * `latenessMs` のどちらも null になるため、時間軸が予定を決められているかはその 2 つで読む
    */
   readonly arrivalPlannedFrames: number;
   /** 到着基準の計画も持たないまま鳴らした音の数 (累積。通常は 0) */
@@ -196,7 +199,8 @@ export class AudioPlayoutTimingStats {
   private readonly startDelays = new TimedValues();
   private readonly latenesses = new TimedValues();
   private lastPlay: LastPlayRecord | null = null;
-  // 予約したが、まだ鳴り始めていない音の区間 (ミリ秒)。鳴らさずに止めた分を数えるために持つ
+  // まだ鳴り終わっていない音の区間 (ミリ秒)。鳴らさずに止めた分を数えるために持つ
+  // (鳴り始めていても終わっていない区間を含む。`recordStopped` が残りの長さを数える)
   private pending: { startMs: number; endMs: number }[] = [];
   private playedFrames = 0;
   private playedMs = 0;
@@ -208,10 +212,14 @@ export class AudioPlayoutTimingStats {
   private recentMisses: AudioMissEvent[] = [];
 
   /**
-   * @param windowMs - 分布を求める直近の窓 (ミリ秒)
-   * @param timeOriginMs - `performance.timeOrigin`。鳴らさなかった時刻を壁時計に換算する
+   * @param windowMs - 分布を求める直近の窓 (ミリ秒)。既定値を置かないのは、窓の長さが
+   *   統計の読み方を決める値であり、呼び出し側が選ぶものだからである
+   * @param timeOriginMs - `performance.timeOrigin`。鳴らさなかった時刻を壁時計に換算する。
+   *   既定を置くと `AudioMissEvent.wallClockMs` が 1970 年になり、relay や publisher の
+   *   ログと突き合わせられなくなる (この値を `formatAudioMissEvent` が UTC の ISO 8601 で
+   *   出す) ため、受け取ることを必須にする
    */
-  constructor(windowMs: number = AUDIO_PLAYOUT_TIMING_WINDOW_MS, timeOriginMs = 0) {
+  constructor(windowMs: number, timeOriginMs: number) {
     this.windowMs = windowMs;
     this.timeOriginMs = timeOriginMs;
   }

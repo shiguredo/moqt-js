@@ -148,25 +148,23 @@ class DelayHistogram {
   }
 }
 
-/** `AudioDelayEstimator` の設定 (省略時は libwebrtc の既定値) */
-export interface AudioDelayEstimatorOptions {
-  historyWindowMs?: number;
-  resampleIntervalMs?: number;
-  quantile?: number;
-  forgetFactor?: number;
-}
-
 /**
  * 音声トラックごとに 1 つ持つ
  *
  * `observe` に「復号の出力の時刻」と「その TIMESTAMP」を渡す。目標遅延は
  * `targetDelayMs` で読む。
+ *
+ * 定数は libwebrtc の既定値であり、経路ごとに変えるものではないため、設定は受け取らない
  */
 export class AudioDelayEstimator {
-  private readonly historyWindowMs: number;
-  private readonly resampleIntervalMs: number;
-  private readonly quantile: number;
-  private readonly histogram: DelayHistogram;
+  private readonly historyWindowMs = AUDIO_DELAY_HISTORY_WINDOW_MS;
+  private readonly resampleIntervalMs = AUDIO_DELAY_RESAMPLE_INTERVAL_MS;
+  private readonly quantile = AUDIO_DELAY_QUANTILE;
+  private readonly histogram = new DelayHistogram(
+    AUDIO_DELAY_BUCKETS,
+    AUDIO_DELAY_FORGET_FACTOR,
+    AUDIO_DELAY_START_FORGET_WEIGHT,
+  );
   // 直近の観測。窓より古いものは捨てる
   private readonly arrivals: Arrival[] = [];
   // 500 ms の区間の最大の相対遅延と、その区間の開始時刻
@@ -174,17 +172,6 @@ export class AudioDelayEstimator {
   private maxInIntervalMs = 0;
   // 求めた目標遅延。まだヒストグラムへ入れていなければ null
   private optimalDelayMs: number | null = null;
-
-  constructor(options: AudioDelayEstimatorOptions = {}) {
-    this.historyWindowMs = options.historyWindowMs ?? AUDIO_DELAY_HISTORY_WINDOW_MS;
-    this.resampleIntervalMs = options.resampleIntervalMs ?? AUDIO_DELAY_RESAMPLE_INTERVAL_MS;
-    this.quantile = options.quantile ?? AUDIO_DELAY_QUANTILE;
-    this.histogram = new DelayHistogram(
-      AUDIO_DELAY_BUCKETS,
-      options.forgetFactor ?? AUDIO_DELAY_FORGET_FACTOR,
-      AUDIO_DELAY_START_FORGET_WEIGHT,
-    );
-  }
 
   /**
    * 復号の出力を 1 つ記録する

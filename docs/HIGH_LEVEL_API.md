@@ -1018,22 +1018,29 @@ Web Audio (`AudioContext` とその出力) は `AudioPlayoutOutput` として注
 引いて決める。WebCodecs の `AudioDecoder` は出力の timestamp を入力と完全には一致させない
 (実測: Opus、48 kHz、実リレーで 100 マイクロ秒だけ大きい)。完全一致で引くと、種類を失った
 音がこの組み立てへ `none` として渡り、共有の時間軸へ記録されなくなる (音声の基準の遅れが
-更新されず、A/V 同期が到着基準へ落ちる)。そのため、一致する記録が無いときは最も古い記録を
-1 ms 以内のときだけ引く。一致が続かなかった後も引けるよう、1 ms より古くなった記録は捨てる。
+更新されず、A/V 同期が到着基準へ落ちる)。そのため、一致する記録が無いときは許容の中では
+最も近い記録を引く。一致が続かなかった後も引けるよう、許容より古くなった記録は捨てる。
 引けないままになることもある (実測: 記録と復号の出力の timestamp の格子が 9.7 ms ずれたまま
 残り、以後の出力がすべて引けなくなる) ため、引けないときは直前に分かっている種類を使う。
 引く処理とその種類の保持は `src/playout/decodeInputTimestamps.ts` が持ち、ライブラリと devtools が
 共有する。
 
 ```typescript
-import { AudioPlayoutSession, AudioPlayoutTimingStats, PlayoutTimeline } from "moqt-js";
+import {
+  AudioPlayoutSession,
+  AudioPlayoutTimingStats,
+  AUDIO_PLAYOUT_TIMING_WINDOW_MS,
+  PlayoutTimeline,
+} from "moqt-js";
 
 // 時間軸と計器は呼び出し側が持つ (時間軸は映像と共有し、計器は統計として読む)
 const timeline = new PlayoutTimeline({
   timeOriginMs: performance.timeOrigin,
   maxQueuedFrames: 8,
 });
-const timing = new AudioPlayoutTimingStats();
+// 窓と時刻原点は必須である。時刻原点を渡さないと、鳴らなかった音の壁時計が 1970 年になり、
+// relay や publisher のログと突き合わせられない
+const timing = new AudioPlayoutTimingStats(AUDIO_PLAYOUT_TIMING_WINDOW_MS, performance.timeOrigin);
 const session = new AudioPlayoutSession({ timing });
 
 // 復号の出力ごとに呼ぶ (output は AudioContext と MediaStreamAudioDestinationNode)
@@ -1120,8 +1127,8 @@ type AudioPlayoutResult =
 `performance.now()` の対応。`usingFallback` を同期の推定に使う) は読み取り用に公開している。
 
 `enforceTarget` が true でも目標の時刻を決められなかったときは到着基準になる。到着基準の遅れは、
-到着した音が「まだ鳴っていない位置」から数える (「統計情報」の説明を参照)。moqt-devtools は
-目標遅延の閉ループを使っていないため `audioDelayFeedback: false` を渡している。
+到着した音が「まだ鳴っていない位置」から数える (「統計情報」の説明を参照)。moqt-devtools も
+ライブラリと同じく目標遅延の閉ループを流す (`audioDelayFeedback` は既定の true)。
 
 ### 受信側の追いつき
 

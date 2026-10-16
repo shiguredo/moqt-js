@@ -186,10 +186,9 @@ export interface AudioPlayoutSessionOptions {
    * (`AudioPlayoutTimingStats.audioDelayFeedback`) を時間軸へ渡す
    * (`PlayoutTimeline.observeAudioPlayout` / `src/playout/audioDelayFeedback.ts`)。
    *
-   * 既定は true (ライブラリの挙動)。devtools はこの閉ループをまだ流しておらず、
-   * 表示している `AvSyncStats.delays.audioDelayFeedback` の値もその状態に依存するため、
-   * 移設と共有化だけを行う段階では false を渡して値を変えない
-   * (tests/e2e/devtools-av-sync.spec.ts の「まだ動いていない」も参照)
+   * 既定は true。ライブラリも moqt-devtools も流す。実測 (2026-10-14、実リレー経由の
+   * 60 秒) では、流さないと目標が実際の到着に合わず、遅れが数 ms 残って時間圧縮が 58 秒で
+   * 1691 ms 動き続けた (声が粗くなる)
    */
   readonly audioDelayFeedback?: boolean;
 }

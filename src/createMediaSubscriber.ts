@@ -2733,10 +2733,29 @@ export class MediaSubscriberImpl implements MediaSubscriber {
 
     // 復号へ渡した timestamp の種類を引く。Timescale がある TIMESTAMP は壁時計ではない
     // (draft-ietf-moq-loc-04 §2.3.1.1 / §2.3.1.2)
-    const kind = takeDecodeInputEntry(this.audioTimestampKinds, audioData.timestamp);
+    //
+    // 対応とみなす差の上限は、音 1 つの長さの半分にする。復号の出力の timestamp は投入した
+    // 値と小数だけずれる (実測: 完全一致は 1014 件の出力のうち 1〜3 件、最も近い記録との差は
+    // p50 0.30 ms、最大 0.40 ms)。負荷をかけると大きくずれる (実測: CPU を 8 倍に絞った
+    // 実リレーで 9.7 ms。既定の 1 ms では引けない)。半分にすれば、隣のフレームと取り違えない
+    // 範囲で最大まで広げられる。moqt-devtools も同じ規則で渡す
+    // (devtools/src/hooks/useSubscriber.ts)
+    const frameDurationMicros =
+      audioData.numberOfFrames > 0 && audioData.sampleRate > 0
+        ? (audioData.numberOfFrames / audioData.sampleRate) * 1_000_000
+        : 0;
+    const timestampToleranceMicros =
+      frameDurationMicros > 0 ? Math.max(1_000, Math.floor(frameDurationMicros / 2)) : undefined;
+    const kind = takeDecodeInputEntry(
+      this.audioTimestampKinds,
+      audioData.timestamp,
+      timestampToleranceMicros,
+    );
     // 入力の遅れ (Object の到着 - LOC TIMESTAMP) も同じ timestamp で引く。受信側の追いつきが
     // 「復号が足している遅れ」を求めるのに使う (src/playout/audioReceiveCatchUp.ts)
-    const inputLagMs = takeDecodeInputEntry(this.audioInputLags, audioData.timestamp) ?? null;
+    const inputLagMs =
+      takeDecodeInputEntry(this.audioInputLags, audioData.timestamp, timestampToleranceMicros) ??
+      null;
     // 引けないときは、直前に分かっている種類を使う。記録と復号の出力の timestamp の格子が
     // ずれると (実測: 9.7 ms)、以後の出力がすべて引けなくなる。種類を失うと、その間の音が
     // 共有の時間軸へ記録されず、音声の基準の遅れが更新されないまま固定される

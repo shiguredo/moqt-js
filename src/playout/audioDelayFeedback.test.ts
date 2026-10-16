@@ -348,22 +348,6 @@ test("累積が戻っても増やさず、観測が無ければ動かさない",
   assert.equal(feedback.snapshot(100).reason, "waiting", "理由が待ちであること");
 });
 
-// 学習を消すと初期状態に戻る (テストと、購読を作り直す呼び出し側のためのもの)
-test("学習を消すと初期状態に戻る", () => {
-  const feedback = new AudioDelayFeedback();
-  feedback.setCeilingMs(200);
-  feedback.update(observation(0, 100));
-  feedback.reset();
-
-  const snapshot = feedback.snapshot(80);
-  assert.equal(snapshot.targetMs, AUDIO_DELAY_FEEDBACK_START_MS, "初期値へ戻ること");
-  assert.equal(snapshot.reason, "initial", "理由も戻ること");
-  assert.equal(snapshot.adjustments, 0, "回数も戻ること");
-  assert.isNull(snapshot.latenessP50Ms, "観測も消えること");
-  // 明示設定の上限は残す (呼び出し側が決めた値である)
-  assert.equal(feedback.ceiling, 200, "明示設定は残ること");
-});
-
 /**
  * 経路へ渡した目標から、その 1 秒に出る圧縮 (時間圧縮) を模す
  *

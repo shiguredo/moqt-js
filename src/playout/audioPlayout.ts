@@ -219,8 +219,8 @@ export interface AudioPlayoutOptions {
   /**
    * 時間圧縮を始める遅れ (秒)
    *
-   * 省略時は `AUDIO_PLAYOUT_STRETCH_MIN_SECONDS` (時計の対応付けの不感帯と同じ 30 ms)。
-   * 機構そのものを確かめるテストは 0 を渡す
+   * 省略時は `AUDIO_PLAYOUT_STRETCH_MIN_SECONDS` (20 ms。時計の対応付けの不感帯 (30 ms) の
+   * 中で吸収できる幅であり、不感帯そのものではない)。機構そのものを確かめるテストは 0 を渡す
    */
   stretchMinSeconds?: number;
 }
@@ -269,9 +269,12 @@ export interface AudioPlayoutTarget {
    */
   arrivalDelaySeconds: number;
   /**
-   * 表示に使っている遅れ (秒)。`max(targetLatency, 再生遅延)` を上限で切った値
+   * 表示に使っている遅れ (秒)
    *
-   * 目標の表示時刻は今からこの値だけ先にあるため、並べすぎの上限はこの値から決める
+   * `max(targetLatency, 揺らぎから求めた再生遅延)` に同期の制御が足した分を加え、上限で
+   * 切った値である (呼び出し側が `PlayoutTimeline.presentationExtraDelayMs` を渡す)。
+   * 目標の表示時刻は今からこの値だけ先にあるため、並べすぎの上限はこの値から決める。
+   * 同期の制御の分を落とすと上限を過小に見積もる
    */
   presentationDelaySeconds: number;
 }

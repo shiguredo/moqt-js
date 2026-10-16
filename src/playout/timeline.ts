@@ -69,7 +69,7 @@ import {
   type AudioDelayFeedbackObservation,
   type AudioDelayFeedbackSnapshot,
 } from "./audioDelayFeedback";
-import { AudioDelayEstimator, type AudioDelayEstimatorOptions } from "./audioDelayEstimator";
+import { AudioDelayEstimator } from "./audioDelayEstimator";
 import { TimedValues } from "./timedValues";
 
 /** 基準の遅れと揺らぎを求める直近の窓 (ミリ秒) */
@@ -194,7 +194,8 @@ export const PLAYOUT_BASE_MAX_DIFFERENCE_MIN_MS = 100;
  *
  * 差が大きいだけなら「経路と復号の遅い側」であり、同期の制御で合わせられる。しかし
  * 差が動き続ける場合、それは経路の遅れではなく、片方の TIMESTAMP が壁時計から
- * ずれていくこと (0754 の音声のドリフトなど) を意味する。ずれ続ける差を合わせると、
+ * ずれていくこと (音声の TIMESTAMP が毎秒 20〜50 ms ずれるドリフトなど) を意味する。
+ * ずれ続ける差を合わせると、
  * もう片方の表示の遅れが上限まで伸びて戻せなくなるため、動きで見分ける。
  *
  * 実時間に対する時計の進み方の違いは 500 ppm (毎秒 0.5 ms) 未満であり、経路と復号の
@@ -212,7 +213,7 @@ export const PLAYOUT_BASE_DRIFT_MS = 50;
  * 一瞬の読み出しの遅れで 30 秒失われる。そこで、離れた幅がこの時間続いたときだけ時計の
  * ずれとみなす。基準 (離れる前の水準) へ戻れば、その動きは一過性だったと分かる。
  *
- * 0754 の音声のドリフト (毎秒 20〜50 ms) のように離れた幅が縮まらないずれは、この待ちの
+ * 音声の TIMESTAMP が毎秒 20〜50 ms ずれるドリフトのように離れた幅が縮まらないずれは、この待ちの
  * 間に検出できる。実際には毎秒 20〜50 ms で動くため、後述の段差とみなす幅を超えるのは
  * 4 秒程度であり、待ち時間より早く検出できる。検出が遅れる分だけ相手へ足す遅延が増えるが、
  * 足す量は `PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS` で抑えられるため、上限までで留まる
@@ -275,7 +276,7 @@ const BASE_DIFFERENCE_SETTLE_MS = 3_000;
 /**
  * 基準の差が落ち着かないままでも判定を始めるまでの時間 (ミリ秒)
  *
- * 0754 の音声のドリフトのように差が動き続ける場合は落ち着くことがない。いつまでも判定を
+ * 音声の TIMESTAMP が毎秒 20〜50 ms ずれるドリフトのように差が動き続ける場合は落ち着くことがない。いつまでも判定を
  * 始めないと、ずれを見つけられない。ドリフトは毎秒 20〜50 ms で動くため、この時間で水準を
  * 決めても、段差とみなす幅 (`PLAYOUT_BASE_DRIFT_STEP_MS`) を超えるのは 4 秒程度後であり、
  * 検出は遅れない
@@ -400,7 +401,10 @@ export type PlayoutUnsharedReason =
 export interface PlayoutTrackBreakdown {
   /** 基準の遅れ (ミリ秒)。送受信の時計のずれと、経路と復号の最小遅延。未観測なら null */
   baseDelayMs: number | null;
-  /** jitter buffer の遅延 (ミリ秒)。自分の揺らぎから求めた値。未観測なら null */
+  /**
+   * jitter buffer の遅延 (ミリ秒)。揺らぎから求めた値と、実際に鳴った結果から閉ループが
+   * 決めた目標の大きい方を上限で切った値。未観測なら null
+   */
   jitterDelayMs: number | null;
   /** 同期の制御が足した分 (ミリ秒)。0 以上 */
   syncExtraDelayMs: number;
@@ -449,7 +453,14 @@ export interface PlayoutDelayBreakdown {
    * (`BASE_DIFFERENCE_JUMP_MS`) と、表示時刻が使う基準も同じ向きに動いた動きは待たない
    */
   baseDriftMsPerSecond: number | null;
-  /** 時計のずれとみなす、基準の差の動きの幅 (ミリ秒) */
+  /**
+   * 時計のずれとみなす、基準の差の水準からの隔たりの幅 (ミリ秒)
+   *
+   * `baseDriftMsPerSecond` と並ぶが**次元が違う** (あちらは動きの速さ、こちらは隔たりの幅)。
+   * 判定 (`baseDifferenceDrifted`) が使うのは隔たりの幅であり、動きの速さは計器として出す
+   * だけで判定には使わない。隔たりがこの幅を超えたまま `PLAYOUT_BASE_DRIFT_CONFIRM_MS`
+   * 続いたとき (または 1 回の記録で段差として現れたとき) に時計のずれとみなす
+   */
   baseDriftLimitMs: number;
   /**
    * 保持を早く解除する条件 (解除のきっかけが去って差が戻った状態) が続いている時間
@@ -537,8 +548,6 @@ export interface PlayoutTimelineOptions {
   maxQueuedFrames: number;
   /** 表示の遅れの上限 (ミリ秒)。省略時は `MAX_PLAYOUT_DELAY_MS` */
   maxPresentationDelayMs?: number;
-  /** 音声の目標遅延の学習の設定 (省略時は libwebrtc の既定値) */
-  audioDelay?: AudioDelayEstimatorOptions;
 }
 
 export class PlayoutTimeline {
@@ -596,7 +605,7 @@ export class PlayoutTimeline {
     this.timeOriginMs = options.timeOriginMs;
     this.maxQueuedFrames = options.maxQueuedFrames;
     this.maxPresentationDelayMs = options.maxPresentationDelayMs ?? MAX_PLAYOUT_DELAY_MS;
-    this.audioDelayEstimator = new AudioDelayEstimator(options.audioDelay);
+    this.audioDelayEstimator = new AudioDelayEstimator();
     this.streams = {
       audio: this.createStreamState(),
       video: this.createStreamState(),
@@ -774,8 +783,12 @@ export class PlayoutTimeline {
   }
 
   /**
-   * 音声の jitter buffer の遅延 (ミリ秒)。自分の揺らぎだけから求めた値である。まだ観測して
-   * いなければ null
+   * 音声の jitter buffer の遅延 (ミリ秒)。まだ観測していなければ null
+   *
+   * 揺らぎだけから求めた値 (NetEq の移植) と、実際に鳴った結果から閉ループが決めた目標の
+   * 大きい方であり、適用の上限 (圧縮が続くときだけ 160 ms、それ以外は 100 ms) で切った値で
+   * ある (`src/playout/audioDelayFeedback.ts`)。揺らぎだけの値ではないことに注意する
+   * (閉ループは、揺らぎからは見えない「ストリーム全体が一様に遅れている分」を補う)。
    *
    * 壁時計の TIMESTAMP を持たない音を到着基準で並べるときの再生の遅れに使う。`targetLatency`
    * と同期の制御による下限は含まない (`presentationExtraDelayMs` を使う)
@@ -795,14 +808,6 @@ export class PlayoutTimeline {
    * 音声の並べすぎの上限は、この値と揺らぎから求めた値の大きい方から決める
    */
   get presentationExtraDelayMs(): number | null {
-    return this.delayMsOf("audio");
-  }
-
-  /**
-   * 音声の jitter buffer の遅延 (ミリ秒)。`targetLatency` と同期の制御が足した分を含む。
-   * まだ観測していなければ null
-   */
-  get audioDelayMs(): number | null {
     return this.delayMsOf("audio");
   }
 
@@ -1045,7 +1050,7 @@ export class PlayoutTimeline {
    *
    * 水準 (基準) は動きが戻ったときにだけ取り直す。記録のたびに取り直すと、ゆっくりした
    * ドリフトでも水準が一緒に動いてしまい、離れた幅が `PLAYOUT_BASE_DRIFT_MS` を超えない
-   * (0754 のドリフトを見つけられない)。
+   * (毎秒 20〜50 ms で動くドリフトを見つけられない)。
    *
    * 待たずに判定する段差 (`PLAYOUT_BASE_DRIFT_STEP_MS`) だけは、参照 (`referenceMs`) が
    * 同じ向きに `PLAYOUT_BASE_DRIFT_MS` を超えて動いていることも確かめる。短い窓の最小値の

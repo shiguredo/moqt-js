@@ -1,6 +1,5 @@
 /**
- * 時間圧縮 (`compressSamples`) と時間伸長 (`expandSamples`)、欠落した区間の補間
- * (`concealSamples`) の単体テスト
+ * 時間圧縮 (`compressSamples`) と欠落した区間の補間 (`concealSamples`) の単体テスト
  *
  * 波形が周期的な音ではピッチ周期 1 つ分だけ長さが変わり、切れ目の前後がクロスフェードで
  * 繋がること、波形が繰り返していない音 (相関が足りない音) では操作しないこと、
@@ -15,7 +14,6 @@ import { test, assert } from "vite-plus/test";
 import {
   compressSamples,
   concealSamples,
-  expandSamples,
   TIME_STRETCH_CONCEAL_FADE_MS,
   type AudioSamples,
 } from "./audioTimeStretch";
@@ -200,24 +198,6 @@ test("compressSamples: すべてのチャンネルを同じ長さだけ詰める
   assert.equal(result.channels[0]?.length, FRAME_SAMPLES + result.lengthChangeSamples);
 });
 
-// 時間伸長はピッチ周期 1 つ分だけ長くなる
-test("expandSamples: 周期的な音はピッチ周期 1 つ分だけ長くなる", () => {
-  const frame = sineFrame(5);
-  const result = expandSamples([frame], SAMPLE_RATE);
-  assert.equal(result.lengthChangeSamples, 240);
-  assert.equal(result.channels[0]?.length, FRAME_SAMPLES + 240);
-  const expanded = result.channels[0] ?? new Float32Array(0);
-  assert.isAtMost(maxStep(expanded), maxStep(frame) * 1.2, "波形が飛ばないこと");
-});
-
-// 相関が足りない音では伸長もしない
-test("expandSamples: 相関が足りない音は操作しない", () => {
-  const frame = noiseFrame(11);
-  const result = expandSamples([frame], SAMPLE_RATE);
-  assert.equal(result.lengthChangeSamples, 0);
-  assert.equal(result.channels[0], frame, "元の音をそのまま返すこと");
-});
-
 // 空の音では何もしない (境界)
 test("compressSamples: 空の音では何もしない", () => {
   const result = compressSamples([new Float32Array(0)], SAMPLE_RATE);
@@ -261,6 +241,25 @@ test("concealSamples: 格子に乗らない純音でも穴の終わりで段差�
     0.1,
     "格子に乗る 200 Hz の段差が振幅の 10 % 以下であること",
   );
+});
+
+/**
+ * 探索の下限 (400 Hz) ちょうどの周期でも、穴の終わりで段差が出ない。
+ *
+ * 端数の周期は、細探索した 3 点 (前後と最大) から放物線の頂点として求める。ところが最大が
+ * 細探索の端にあるときは両隣の相関が無い。それでも外挿すると、評価していないラグ (探索の
+ * 下限の外側) を返し、周期が 0.5 サンプルずれる。実測 (48 kHz、20 ms のフレーム、振幅 0.5、
+ * 400 Hz = 周期 120 サンプル。穴の終わりの段差 / 振幅): 外挿していたときは穴 100 ms で
+ * 85.2 % だった。端では頂点を求めないようにして 5.2 % になる
+ */
+test("concealSamples: 探索の下限ちょうどの周期でも穴の終わりで段差が出ない", () => {
+  for (const gapSeconds of [0.02, 0.04, 0.1]) {
+    assert.isAtMost(
+      endStepRatio(400, gapSeconds),
+      0.1,
+      `400 Hz の段差が振幅の 10 % 以下であること (穴 ${gapSeconds} 秒)`,
+    );
+  }
 });
 
 // 探索の範囲を 100 Hz まで広げたため、格子に乗らない純音も補間する (以前は 300 / 220 /
@@ -511,3 +510,55 @@ test("concealSamples: 16 kHz でも末尾の周期で生成する", () => {
 
 // 継ぎ目の段差の倍率 (TIME_STRETCH_MAX_SEAM_STEP_RATIO = 2) は内部定数のため、
 // 値そのものを写すテストは置かない。波形が飛ばないことは上のテストが担う。
+
+/**
+ * 操作できない入力では、音を変えずに「操作しなかった」を返す
+ *
+ * 4 kHz への間引きはサンプルレートごとのフィルタ表 (8 / 16 / 32 / 48 kHz) を使うため、
+ * 表に無いサンプルレートでは間引いた信号が作れず、ピッチの周期を求められない。44.1 kHz
+ * (AAC など) はこれにあたり、**時間圧縮と補間のどちらも働かなくなる**。落ちるのではなく
+ * 「操作しない」を返すため、呼び出し側からは区別できない (計器にも現れない)
+ */
+test("操作できない入力では音を変えない", () => {
+  const frame = sineFrame(5);
+  const silent = new Float32Array(FRAME_SAMPLES);
+
+  // 対応表に無いサンプルレート (44.1 kHz)。間引いた信号が作れないため操作しない
+  assert.equal(
+    compressSamples([frame], 44_100).lengthChangeSamples,
+    0,
+    "44.1 kHz では時間圧縮しないこと",
+  );
+  assert.deepEqual(
+    concealSamples([frame], 44_100, 0.02).channels,
+    [],
+    "44.1 kHz では補間しないこと",
+  );
+  // サンプルレートが 0 以下 (壊れた入力)
+  assert.equal(compressSamples([frame], 0).lengthChangeSamples, 0, "0 Hz では圧縮しないこと");
+  assert.equal(compressSamples([frame], -1).lengthChangeSamples, 0, "負のレートでは圧縮しないこと");
+  assert.deepEqual(concealSamples([frame], 0, 0.02).channels, [], "0 Hz では補間しないこと");
+  // チャンネルが無い (空の配列)
+  assert.equal(compressSamples([], SAMPLE_RATE).lengthChangeSamples, 0, "空では圧縮しないこと");
+  assert.deepEqual(concealSamples([], SAMPLE_RATE, 0.02).channels, [], "空では補間しないこと");
+  // 相関の窓 (4 kHz で 50 サンプル = 12.5 ms) より短い音
+  const veryShort = new Float32Array(16);
+  assert.equal(compressSamples([veryShort], SAMPLE_RATE).lengthChangeSamples, 0, "短い音");
+  assert.deepEqual(
+    concealSamples([veryShort], SAMPLE_RATE, 0.02).channels,
+    [],
+    "短い音では補間しないこと",
+  );
+  // 長さ 1 の音
+  assert.equal(
+    compressSamples([new Float32Array(1)], SAMPLE_RATE).lengthChangeSamples,
+    0,
+    "1 サンプルでは圧縮しないこと",
+  );
+  // 無音でも、対応表に無いサンプルレートでは操作しない (無音の扱いより前に入力の検証がある)
+  assert.equal(
+    compressSamples([silent], 44_100).lengthChangeSamples,
+    0,
+    "無音でも 44.1 kHz では圧縮しないこと",
+  );
+});
