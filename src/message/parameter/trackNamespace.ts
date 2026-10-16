@@ -11,7 +11,7 @@ import { ProtocolViolationError } from "../../error";
 import { decodeVarint, encodeVarint } from "../../varint";
 import { assertLengthWithinData } from "../../length";
 import { concatUint8Arrays } from "../../bytes";
-import { type Parameter } from "./common";
+import { type Parameter } from "./types";
 
 /**
  * Track Namespace / Full Track Name の最大サイズ（バイト）

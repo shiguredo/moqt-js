@@ -148,8 +148,8 @@ class DelayHistogram {
   }
 }
 
-/** `AudioDelayManager` の設定 (省略時は libwebrtc の既定値) */
-export interface AudioDelayManagerOptions {
+/** `AudioDelayEstimator` の設定 (省略時は libwebrtc の既定値) */
+export interface AudioDelayEstimatorOptions {
   historyWindowMs?: number;
   resampleIntervalMs?: number;
   quantile?: number;
@@ -162,7 +162,7 @@ export interface AudioDelayManagerOptions {
  * `observe` に「復号の出力の時刻」と「その TIMESTAMP」を渡す。目標遅延は
  * `targetDelayMs` で読む。
  */
-export class AudioDelayManager {
+export class AudioDelayEstimator {
   private readonly historyWindowMs: number;
   private readonly resampleIntervalMs: number;
   private readonly quantile: number;
@@ -175,7 +175,7 @@ export class AudioDelayManager {
   // 求めた目標遅延。まだヒストグラムへ入れていなければ null
   private optimalDelayMs: number | null = null;
 
-  constructor(options: AudioDelayManagerOptions = {}) {
+  constructor(options: AudioDelayEstimatorOptions = {}) {
     this.historyWindowMs = options.historyWindowMs ?? AUDIO_DELAY_HISTORY_WINDOW_MS;
     this.resampleIntervalMs = options.resampleIntervalMs ?? AUDIO_DELAY_RESAMPLE_INTERVAL_MS;
     this.quantile = options.quantile ?? AUDIO_DELAY_QUANTILE;

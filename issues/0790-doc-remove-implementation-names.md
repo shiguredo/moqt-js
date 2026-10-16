@@ -13,7 +13,7 @@
 
 - 外部実装名 (`libwebrtc` / `NetEq`) と外部ソースのファイル名が次のファイルのコメントに残っている
   - `src/playout/audioTimeStretch.ts` / `src/playout/audioTimeStretch.test.ts`
-  - `src/playout/audioDelayManager.ts`
+  - `src/playout/audioDelayEstimator.ts`
   - `src/streamSynchronization.ts`
   - `src/playout/timeline.ts` / `src/playout/timeline.test.ts` / `src/playout/timeline.prop.ts`
   - `src/playout/audioPlayout.ts` / `src/playout/audioPlayout.test.ts`

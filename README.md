@@ -257,7 +257,7 @@ MSF は表示の遅れの宣言 (`targetLatency`) を定めますが、実際に
 - 表示時刻を決める
   - LOC の TIMESTAMP と、トラックごとの「復号の出力の時刻 − TIMESTAMP」の直近 10 秒の最小値から、音声と映像の表示時刻を同じ式で決める (`src/playout/timeline.ts`)
 - 音声の jitter buffer の目標遅延を、到着の遅れの分布から決める
-  - libwebrtc の NetEq (`delay_manager.cc` / `histogram.cc`) を移植し、到着の遅れの 0.95 分位から目標を求める (`src/playout/audioDelayManager.ts`)
+  - libwebrtc の NetEq (`delay_manager.cc` / `histogram.cc`) を移植し、到着の遅れの 0.95 分位から目標を求める (`src/playout/audioDelayEstimator.ts`)
   - 実際に鳴った結果 (予定をどれだけ過ぎて鳴ったか、並べすぎで捨てた量) でも目標を補正する (`src/playout/audioDelayFeedback.ts`)
 - 間に合わない音を捨てずに詰める
   - 波形の周期性を使った時間圧縮 / 時間伸長 (NetEq の `time_stretch.cc` / `accelerate.cc` / `preemptive_expand.cc` の移植) と、欠けた分の波形の繰り返しによる補間 (`src/playout/audioTimeStretch.ts`)

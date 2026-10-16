@@ -60,7 +60,7 @@
 
 - 補間: `concealSamples()` が直前の音の波形を繰り返して穴を埋める (`src/playout/audioTimeStretch.ts`)。情報を復元するのではなく波形を作る処理である
 - 追いつき: `AudioReceiveCatchUp` が復号の出力の遅れを見て復号器を作り直す (`src/playout/audioReceiveCatchUp.ts`)。遅れの解消であり欠落の回復ではない
-- 遅延推定: libwebrtc の NetEq を移植した `AudioDelayManager` が、500 ms 区間ごとの「基準からの最大の遅れ」をヒストグラムへ入れ、0.95 分位を目標遅延にする (`src/playout/audioDelayManager.ts:195-222`)。窓はおよそ 25 件であり (実測の記録。`docs/AUDIO_PLAYOUT_LATENCY.md` の「遅れの推定は「窓ごとの最大」で決まる」)、**1 件の遅れで推定が動く**。目標遅延は 50〜100 ms で運用している (`src/playout/audioDelayFeedback.ts:48`、`src/playout/timeline.ts:145-154`)
+- 遅延推定: libwebrtc の NetEq を移植した `AudioDelayEstimator` が、500 ms 区間ごとの「基準からの最大の遅れ」をヒストグラムへ入れ、0.95 分位を目標遅延にする (`src/playout/audioDelayEstimator.ts:195-222`)。窓はおよそ 25 件であり (実測の記録。`docs/AUDIO_PLAYOUT_LATENCY.md` の「遅れの推定は「窓ごとの最大」で決まる」)、**1 件の遅れで推定が動く**。目標遅延は 50〜100 ms で運用している (`src/playout/audioDelayFeedback.ts:48`、`src/playout/timeline.ts:145-154`)
 
 ### 2.4 実測されている効果と副作用 (origin/develop の docs より引用)
 
@@ -245,7 +245,7 @@
 | 冗長化の実装 (受信)    | `src/createMediaSubscriber.ts:2261-2288`                                                                                                                              |
 | 冗長度の解決と検証     | `src/createMedia/settings.ts:87-117`、`src/codec/types.ts:182`                                                                                                        |
 | 音声 Object の割り当て | `src/createMediaPublisher.ts:172-184`                                                                                                                                 |
-| 遅延推定               | `src/playout/audioDelayManager.ts:195-222`                                                                                                                            |
+| 遅延推定               | `src/playout/audioDelayEstimator.ts:195-222`                                                                                                                          |
 | 音声の実測記録         | `docs/AUDIO_PLAYOUT_LATENCY.md` (「パケロス対策: 音声 Object の 2 回送り」「まとめて落ちる経路 (バースト損失) と、2 個目を送る間隔」)、`docs/AUDIO_PLAYOUT_RESULT.md` |
 | 損失の注入 harness     | `tests/e2e/relay/investigation-audio-delay.spec.ts`                                                                                                                   |
 | MoQ 仕様               | `refs/moq/draft-ietf-moq-transport-22.txt` §5.1.1、§10.4、§14.1.2、`refs/moq/draft-ietf-moq-msf-01.txt` §5、`refs/moq/draft-ietf-moq-loc-04.txt` §4.1                 |

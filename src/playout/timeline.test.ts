@@ -31,7 +31,7 @@ import {
   SYNC_MIN_DELTA_MS,
 } from "./timeline";
 import { AUDIO_CLOCK_DEADBAND_MS } from "./audioPlayout";
-import { AUDIO_DELAY_START_MS } from "./audioDelayManager";
+import { AUDIO_DELAY_START_MS } from "./audioDelayEstimator";
 import { MAX_PRESENTATION_LAG_MS, PlayoutBuffer } from "./buffer";
 
 // 送信側の壁時計 (Unix epoch ミリ秒)。メディア時刻 0 の TIMESTAMP にする

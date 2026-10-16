@@ -17,7 +17,7 @@ import {
   AUDIO_DELAY_FEEDBACK_START_MS,
   type AudioDelayFeedbackSnapshot,
 } from "../../../src/playout/audioDelayFeedback.ts";
-import { AUDIO_DELAY_START_MS } from "../../../src/playout/audioDelayManager.ts";
+import { AUDIO_DELAY_START_MS } from "../../../src/playout/audioDelayEstimator.ts";
 import type { PreconditionWarning } from "../utils/preconditionWarnings.ts";
 
 /**

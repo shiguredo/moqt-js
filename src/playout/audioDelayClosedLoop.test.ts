@@ -15,7 +15,7 @@
  * `max(目標, 今 + 余裕, 直前の音の終わり)` (`src/playout/audioPlayout.ts` の `schedule`) で決まり、
  * `今 + 余裕` は `AudioContext.currentTime` の位置、すなわち出力のバッファの分だけ実際に
  * 鳴る位置より先である。目標がそこへ届かないため、どの音も「今から鳴らせる最も早い時刻」に
- * なり、予定を過ぎて鳴る。NetEq の学習 (`src/playout/audioDelayManager.ts`) は直近で最も早く届いた
+ * なり、予定を過ぎて鳴る。NetEq の学習 (`src/playout/audioDelayEstimator.ts`) は直近で最も早く届いた
  * 音との差しか見ないため、この一様な遅れを見つけられない。
  *
  * このファイルは、実測に相当する入力 (到着がときどき 200〜300 ms 乱れる、`baseDelayMs` 45 ms
@@ -49,7 +49,7 @@ import {
   AUDIO_DELAY_FEEDBACK_START_MS,
   AUDIO_DELAY_FEEDBACK_TOLERANCE_MS,
 } from "./audioDelayFeedback";
-import { AUDIO_DELAY_START_MS } from "./audioDelayManager";
+import { AUDIO_DELAY_START_MS } from "./audioDelayEstimator";
 import { AUDIO_PLAYOUT_DELAY_FLOOR_MS, PlayoutTimeline } from "./timeline";
 import { summarizeTimings } from "./timingSummary";
 

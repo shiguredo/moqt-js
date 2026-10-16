@@ -1,5 +1,5 @@
 /**
- * MOQT Data Stream の共通定義
+ * MOQT Object の型と、その値の検証
  * draft-ietf-moq-transport-22 Section 11 (Data Streams and Datagrams)
  *
  * Subgroup (Section 11.3) / Datagram (Section 11.2) / Fetch (Section 11.4) の

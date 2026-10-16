@@ -11,7 +11,7 @@
 import { IncompleteDataError, InvalidFilterError } from "../../error";
 import { decodeVarint, encodeVarint, MAX_VARINT } from "../../varint";
 import { concatUint8Arrays } from "../../bytes";
-import { type Parameter } from "./common";
+import { type Parameter } from "./types";
 
 // ============================================================================
 // Range Filters (draft-ietf-moq-transport-22 Section 3.3.2)

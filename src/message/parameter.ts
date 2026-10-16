@@ -26,7 +26,7 @@
  * import パス (`./parameter`) を維持するための再輸出のみを行う (公開 API は
  * 変えない)。
  *
- * - ./parameter/common: Parameter 表現と共通の上限値
+ * - ./parameter/types: Parameter 型と上限値
  * - ./parameter/kvp: Key-Value-Pair (§8.3)
  * - ./parameter/messageParameter: Message Parameter (§9.20)
  * - ./parameter/locationFilter: Location Filter (§9.20.9)
@@ -35,7 +35,7 @@
  */
 
 // 共通の型と上限値
-export { type Parameter, MAX_REASON_PHRASE_LENGTH } from "./parameter/common";
+export { type Parameter, MAX_REASON_PHRASE_LENGTH } from "./parameter/types";
 
 // Key-Value-Pair (§8.3)
 export { encodeKeyValuePairs, decodeKeyValuePairs } from "./parameter/kvp";

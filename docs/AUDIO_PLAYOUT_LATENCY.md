@@ -567,7 +567,7 @@ EBU R37 は各段で「5 ms 進み〜15 ms 遅れ」、端から端で「40 ms �
 
 ### 遅れの推定は「窓ごとの最大」で決まる (2026-10-15)
 
-`src/playout/audioDelayManager.ts` を読み、計測で確かめた。推定は libwebrtc の `DelayManager` と同じで、
+`src/playout/audioDelayEstimator.ts` を読み、計測で確かめた。推定は libwebrtc の `DelayManager` と同じで、
 **500 ms ごとの「基準からの最大の遅れ」だけをヒストグラムへ入れ、その 0.95 分位**を目標にする。
 窓はおよそ 25 件であり、**1 件の遅れで推定が動く**。計測では、区間の最大が p50 6〜7 ms・
 p90 9〜10 ms でも、遅れが 1 件混じると最大が 121〜224 ms になり、目標遅延が上がった。

@@ -22,7 +22,7 @@ import {
   assertPriorIdGapInObjectProperties,
 } from "../properties";
 import { concatUint8Arrays } from "../bytes";
-import { validatePublisherPriority } from "./common";
+import { validatePublisherPriority } from "./moqtObject";
 
 /**
  * Fetch Header (Section 11.4.1)

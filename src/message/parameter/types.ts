@@ -1,5 +1,5 @@
 /**
- * MOQT Parameter モジュール群の共通定義
+ * MOQT Parameter の型と上限値
  * draft-ietf-moq-transport-22 Section 9.20 (Message Parameter)
  *
  * Key-Value-Pair (Section 8.3) / Message Parameter (Section 9.20) /
@@ -40,7 +40,7 @@ export const MAX_KVP_VALUE_LENGTH = 65535;
  *  it MUST close the session with a PROTOCOL_VIOLATION"
  *
  * Reason Phrase は Parameter ではないが、分割前から本モジュール
- * (src/message/parameter.ts) が公開していたため、共通定義に置いて
- * 従来の import パスを維持する。
+ * (src/message/parameter.ts) が公開していたため、ここに置いて
+ * 同じパスから公開する。
  */
 export const MAX_REASON_PHRASE_LENGTH = 1024;

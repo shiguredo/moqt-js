@@ -11,7 +11,7 @@
  *   最小値 (ミリ秒)。受信側と送信側の時計のずれと、経路と復号の最小遅延を含む。遅れは
  *   到着ではなく復号の出力の時刻で測る (表示できる時刻には復号の時間も含まれるため)
  * - 表示の遅れ: トラックごとの jitter buffer の遅延 (ミリ秒)。経路の揺らぎから求める
- *   - 音声は NetEq と同じ規則 (`src/playout/audioDelayManager.ts`)。到着の遅れの 0.95 分位である。
+ *   - 音声は NetEq と同じ規則 (`src/playout/audioDelayEstimator.ts`)。到着の遅れの 0.95 分位である。
  *     ただし、これだけでは**ストリーム全体が一様に遅れている分** (復号・予約・出力の
  *     バッファ・まとめて届いた山) が見えないため、実際に鳴った結果 (予定をどれだけ過ぎた
  *     か、並べすぎで捨てた量) からも目標を決め、大きい方を使う
@@ -69,7 +69,7 @@ import {
   type AudioDelayFeedbackObservation,
   type AudioDelayFeedbackSnapshot,
 } from "./audioDelayFeedback";
-import { AudioDelayManager, type AudioDelayManagerOptions } from "./audioDelayManager";
+import { AudioDelayEstimator, type AudioDelayEstimatorOptions } from "./audioDelayEstimator";
 import { TimedValues } from "./timedValues";
 
 /** 基準の遅れと揺らぎを求める直近の窓 (ミリ秒) */
@@ -538,7 +538,7 @@ export interface PlayoutTimelineOptions {
   /** 表示の遅れの上限 (ミリ秒)。省略時は `MAX_PLAYOUT_DELAY_MS` */
   maxPresentationDelayMs?: number;
   /** 音声の目標遅延の学習の設定 (省略時は libwebrtc の既定値) */
-  audioDelay?: AudioDelayManagerOptions;
+  audioDelay?: AudioDelayEstimatorOptions;
 }
 
 export class PlayoutTimeline {
@@ -547,7 +547,7 @@ export class PlayoutTimeline {
   private readonly maxPresentationDelayMs: number;
   private readonly streams: Record<PlayoutStream, StreamState>;
   // 音声の jitter buffer の目標遅延 (NetEq と同じ規則)
-  private readonly audioDelayManager: AudioDelayManager;
+  private readonly audioDelayEstimator: AudioDelayEstimator;
   // 実際に鳴った結果 (予定をどれだけ過ぎたか、並べすぎで捨てた量) から目標を決める閉ループ
   private readonly audioDelayFeedback = new AudioDelayFeedback();
   // 同期の制御が各トラックへ足した遅延 (ミリ秒)。0 以上
@@ -596,7 +596,7 @@ export class PlayoutTimeline {
     this.timeOriginMs = options.timeOriginMs;
     this.maxQueuedFrames = options.maxQueuedFrames;
     this.maxPresentationDelayMs = options.maxPresentationDelayMs ?? MAX_PLAYOUT_DELAY_MS;
-    this.audioDelayManager = new AudioDelayManager(options.audioDelay);
+    this.audioDelayEstimator = new AudioDelayEstimator(options.audioDelay);
     this.streams = {
       audio: this.createStreamState(),
       video: this.createStreamState(),
@@ -656,8 +656,8 @@ export class PlayoutTimeline {
       // 音声の表示の遅れは NetEq と同じ規則で求める (到着の遅れの 0.95 分位)。これだけでは
       // ストリーム全体の一様な遅れが見えないため、実際に鳴った結果から決めた目標
       // (`observeAudioPlayout`) との大きい方を使う
-      this.audioDelayManager.observe(wallClockMs, timestampMs);
-      state.delayMs = this.audioDelayFeedback.targetDelayMs(this.audioDelayManager.targetDelayMs);
+      this.audioDelayEstimator.observe(wallClockMs, timestampMs);
+      state.delayMs = this.audioDelayFeedback.targetDelayMs(this.audioDelayEstimator.targetDelayMs);
     } else {
       // 映像の表示の遅れは、遅れの揺らぎの百分位から求める
       // live に追いつくまでに届いたフレームの遅れは経路の揺らぎではない
@@ -701,7 +701,7 @@ export class PlayoutTimeline {
    * 目標を動かすのは毎秒 1 回までであり、観測のたびに呼んでよい。動かした目標は次の
    * 観測 (またはこの呼び出し) で表示の遅れへ反映する
    *
-   * NetEq の学習 (`src/playout/audioDelayManager.ts`) は「直近で最も早く届いた音との差」しか
+   * NetEq の学習 (`src/playout/audioDelayEstimator.ts`) は「直近で最も早く届いた音との差」しか
    * 見ないため、ストリーム全体が一様に遅れている分を見つけられない。この観測がその分を
    * 補う。遅れが許容の中に収まっていれば目標を減らすため、正常時は遅延が増えない
    *
@@ -712,7 +712,7 @@ export class PlayoutTimeline {
     const audio = this.streams.audio;
     if (audio.delayMs !== null) {
       // 次の音から新しい目標で並ぶように、その場で表示の遅れを取り直す
-      audio.delayMs = this.audioDelayFeedback.targetDelayMs(this.audioDelayManager.targetDelayMs);
+      audio.delayMs = this.audioDelayFeedback.targetDelayMs(this.audioDelayEstimator.targetDelayMs);
     }
   }
 
@@ -922,7 +922,7 @@ export class PlayoutTimeline {
       baseDriftLimitMs: PLAYOUT_BASE_DRIFT_MS,
       baseUnsharedReturnMs: this.baseUnsharedReturnMs(),
       presentationDelayCapMs: this.presentationDelayCapMs(),
-      audioDelayFeedback: this.audioDelayFeedback.snapshot(this.audioDelayManager.targetDelayMs),
+      audioDelayFeedback: this.audioDelayFeedback.snapshot(this.audioDelayEstimator.targetDelayMs),
     };
   }
 
@@ -1206,7 +1206,7 @@ export class PlayoutTimeline {
     this.streams[stream] = this.createStreamState();
     if (stream === "audio") {
       this.audioPresentation = null;
-      this.audioDelayManager.reset();
+      this.audioDelayEstimator.reset();
     } else {
       this.videoPresentation = null;
     }

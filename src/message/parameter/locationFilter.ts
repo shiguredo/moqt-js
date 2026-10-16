@@ -11,7 +11,7 @@
 import { InvalidFilterError, ProtocolViolationError } from "../../error";
 import { decodeVarint, encodeVarint, MAX_VARINT } from "../../varint";
 import { concatUint8Arrays } from "../../bytes";
-import { type Parameter } from "./common";
+import { type Parameter } from "./types";
 
 /**
  * Location Filter (Section 3.3.1, Section 9.20.9)

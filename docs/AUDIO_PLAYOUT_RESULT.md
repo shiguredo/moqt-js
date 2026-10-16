@@ -6,7 +6,7 @@
 ## 仕組み
 
 - **受信**: datagram で届く音声 Object を復号し、共有の時間軸 (`src/playout/timeline.ts`) へ
-  到着と TIMESTAMP を記録する。時間軸は NetEq と同じ規則 (`src/playout/audioDelayManager.ts`) で
+  到着と TIMESTAMP を記録する。時間軸は NetEq と同じ規則 (`src/playout/audioDelayEstimator.ts`) で
   遅れの 0.95 分位から目標遅延を求め、閉ループ (`src/playout/audioDelayFeedback.ts`) が実測の遅れ・
   余裕で補正する
 - **鳴らす**: 目標の時刻に予約し、間に合わない分は時間圧縮、欠けた分は波形の繰り返しで

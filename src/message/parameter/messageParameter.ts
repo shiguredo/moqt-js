@@ -26,7 +26,7 @@ import { decodeVarint, encodeVarint, MAX_VARINT } from "../../varint";
 import { assertLengthWithinData } from "../../length";
 import { MessageParameterType, type Location } from "../types";
 import { concatUint8Arrays } from "../../bytes";
-import { MAX_KVP_VALUE_LENGTH, type Parameter } from "./common";
+import { MAX_KVP_VALUE_LENGTH, type Parameter } from "./types";
 import { decodeTrackNamespace } from "./trackNamespace";
 import { decodeLocationFilterParameter, locationFilterEncodedLength } from "./locationFilter";
 import {

@@ -12,7 +12,7 @@
  * 機能単位のモジュールに分割した。本モジュールは既存の import パス
  * (`./dataStream`) を維持するための再輸出のみを行う (公開 API は変えない)。
  *
- * - ./dataStream/common: Subgroup / Datagram / Fetch で共通の型と検証
+ * - ./dataStream/moqtObject: MOQT Object の型と検証
  * - ./dataStream/subgroup: Subgroup Header (Section 11.3.1) と Object fields
  * - ./dataStream/datagram: Object Datagram (Section 11.2.1)
  * - ./dataStream/fetch: Fetch Header と Fetch Object fields (Section 11.4.1)
@@ -21,7 +21,7 @@
  */
 
 // Subgroup / Datagram / Fetch で共通の型と検証
-export { type MoqtObject, validatePublisherPriority } from "./dataStream/common";
+export { type MoqtObject, validatePublisherPriority } from "./dataStream/moqtObject";
 
 // Subgroup (Section 11.3)
 export {

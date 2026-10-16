@@ -19,7 +19,7 @@ import { ProtocolViolationError } from "../../error";
 import { decodeVarint, encodeVarint, MAX_VARINT } from "../../varint";
 import { assertLengthWithinData } from "../../length";
 import { concatUint8Arrays } from "../../bytes";
-import { MAX_KVP_VALUE_LENGTH, type Parameter } from "./common";
+import { MAX_KVP_VALUE_LENGTH, type Parameter } from "./types";
 
 /**
  * 単一のパラメータを delta encoding でエンコードする

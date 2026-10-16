@@ -20,7 +20,7 @@ import {
   ERR_PUBLISHER_PRIORITY_REQUIRED,
   validateObjectStatus,
   validatePublisherPriority,
-} from "./common";
+} from "./moqtObject";
 
 /**
  * Object Datagram Type Flags (Section 11.2.1)

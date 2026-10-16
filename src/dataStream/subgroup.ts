@@ -20,7 +20,7 @@ import {
   ERR_PUBLISHER_PRIORITY_REQUIRED,
   validateObjectStatus,
   validatePublisherPriority,
-} from "./common";
+} from "./moqtObject";
 
 // Subgroup ID の契約違反のエラー文言。型値と実際値は呼び出し側が連結する
 const ERR_SUBGROUP_ID_REQUIRED = "subgroupId is required when the Subgroup ID field is present";
