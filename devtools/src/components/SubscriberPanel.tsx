@@ -650,6 +650,14 @@ function SubscriberStats({ statsSignal }: { statsSignal: ReadonlySignal<Subscrib
                 value: stats.audio.playoutTiming.unplannedFrames,
                 testId: "subscriber-audio-playback-unplanned-frames",
               },
+              {
+                // 時間圧縮と補間を使えないサンプルレート (4 kHz へ間引く表に無い 44.1 kHz など)
+                // で鳴らした音。0 なら使えている。増えていると、遅れが目標へ戻らない原因が
+                // これであると分かる
+                label: "stretchUnavailableFrames",
+                value: stats.audio.playoutTiming.stretchUnavailableFrames,
+                testId: "subscriber-audio-playback-stretch-unavailable-frames",
+              },
             ]}
           />
         </StatSection>

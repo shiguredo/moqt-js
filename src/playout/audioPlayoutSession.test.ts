@@ -51,12 +51,14 @@ interface RecordedAudioData {
  * @param options.timestamp - `AudioData.timestamp` (Unix epoch マイクロ秒)
  * @param options.numberOfFrames - サンプル数。省略時は 20 ms 分
  * @param options.numberOfChannels - チャンネル数
+ * @param options.sampleRate - サンプルレート (Hz)。省略時は 48 kHz
  */
 function makeAudioData(
   options: {
     timestamp?: number;
     numberOfFrames?: number;
     numberOfChannels?: number;
+    sampleRate?: number;
   } = {},
 ): RecordedAudioData {
   const numberOfFrames = options.numberOfFrames ?? FRAMES_PER_SOUND;
@@ -66,7 +68,7 @@ function makeAudioData(
     timestamp: options.timestamp ?? 0,
     numberOfChannels,
     numberOfFrames,
-    sampleRate: SAMPLE_RATE,
+    sampleRate: options.sampleRate ?? SAMPLE_RATE,
     copyTo: (_destination: Float32Array, init: { planeIndex: number; format: string }) => {
       copiedPlanes.push(init.planeIndex);
     },
@@ -202,6 +204,7 @@ function handleSound(
     useTimeline?: boolean;
     enforceTarget?: boolean;
     inputLagMs?: number | null;
+    sampleRate?: number;
   } = {},
 ): ReturnType<AudioPlayoutSession["handleDecodedAudio"]> {
   const request: AudioPlayoutRequest = {
@@ -211,6 +214,7 @@ function handleSound(
       ...(options.numberOfChannels === undefined
         ? {}
         : { numberOfChannels: options.numberOfChannels }),
+      ...(options.sampleRate === undefined ? {} : { sampleRate: options.sampleRate }),
     }).data,
     timestampKind: options.timestampKind ?? "wallClock",
     ...(options.inputLagMs === undefined ? {} : { inputLagMs: options.inputLagMs }),
@@ -590,6 +594,39 @@ test("handleDecodedAudio: 鳴らした結果を閉ループへ渡し、計器に
   );
   // 計器にも記録されている
   assert.equal(fixture.timing.snapshot(performance.now()).playedFrames, 1, "計器に記録すること");
+});
+
+/**
+ * 完了条件: 時間圧縮と補間を使えないサンプルレート (4 kHz へ間引くフィルタの表に無い
+ * 44.1 kHz など) では、そのことを計器に数える。落ちずに「操作しない」を返すため、
+ * 数えないと遅れが目標へ戻らない原因を追えない
+ */
+test("handleDecodedAudio: 時間圧縮を使えないサンプルレートを計器に数える", () => {
+  const fixture = makeSessionFixture();
+  const output = makeRecordingOutput({
+    timeline: fixture.timeline,
+    mapping: null,
+    currentTimeSeconds: 10,
+  });
+  // 48 kHz では数えない
+  assert.equal(handleSound(fixture, output.output, { timestamp: 0 }).status, "played");
+  assert.equal(
+    fixture.timing.snapshot(performance.now()).stretchUnavailableFrames,
+    0,
+    "48 kHz では数えないこと",
+  );
+  // 44.1 kHz (対応表に無い) では数える
+  assert.equal(
+    handleSound(fixture, output.output, { timestamp: 20_000, sampleRate: 44_100 }).status,
+    "played",
+  );
+  assert.equal(
+    fixture.timing.snapshot(performance.now()).stretchUnavailableFrames,
+    1,
+    "44.1 kHz では数えること",
+  );
+  // 鳴らし方は変わらない (鳴らした音として数える)
+  assert.equal(fixture.timing.snapshot(performance.now()).playedFrames, 2);
 });
 
 /**

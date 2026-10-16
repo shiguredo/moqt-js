@@ -129,6 +129,15 @@ export interface AudioPlayoutTimingSnapshot {
   readonly missedByReason: Readonly<Record<AudioMissReason, AudioMissTotal>>;
   /** 直近に鳴らさなかった音 (古い順、最大 `MAX_RECENT_AUDIO_MISSES` 件) */
   readonly recentMisses: readonly AudioMissEvent[];
+  /**
+   * 時間圧縮と補間を使えないサンプルレートで鳴らした音の数 (累積)
+   *
+   * 4 kHz へ間引くフィルタの表 (8 / 16 / 32 / 48 kHz) に無いサンプルレート (44.1 kHz の
+   * AAC など) では、ピッチの周期を求められないため時間圧縮も補間も働かない。落ちずに
+   * 「操作しない」を返すので、この数が増えていることで気付く
+   * (`src/playout/audioTimeStretch.ts` の `isTimeStretchAvailable`)。0 なら使えている
+   */
+  readonly stretchUnavailableFrames: number;
 }
 
 /** どの理由も 0 件の累積 */
@@ -159,6 +168,7 @@ export const EMPTY_AUDIO_PLAYOUT_TIMING: AudioPlayoutTimingSnapshot = {
   missedMs: 0,
   missedByReason: emptyMissTotals(),
   recentMisses: [],
+  stretchUnavailableFrames: 0,
 };
 
 /**
@@ -210,6 +220,7 @@ export class AudioPlayoutTimingStats {
   private missedMs = 0;
   private missedTotals = emptyMissTotals();
   private recentMisses: AudioMissEvent[] = [];
+  private stretchUnavailableFrames = 0;
 
   /**
    * @param windowMs - 分布を求める直近の窓 (ミリ秒)。既定値を置かないのは、窓の長さが
@@ -376,7 +387,18 @@ export class AudioPlayoutTimingStats {
       missedMs: this.missedMs,
       missedByReason,
       recentMisses: [...this.recentMisses],
+      stretchUnavailableFrames: this.stretchUnavailableFrames,
     };
+  }
+
+  /**
+   * 時間圧縮と補間を使えないサンプルレートの音を 1 つ数える
+   *
+   * 鳴らす側 (`src/playout/audioPlayoutSession.ts`) が、音を渡す前に
+   * `isTimeStretchAvailable` で確かめて呼ぶ。数えるだけで鳴らし方は変えない
+   */
+  recordStretchUnavailable(): void {
+    this.stretchUnavailableFrames++;
   }
 
   /** 記録をすべて捨てて初期状態に戻す */
@@ -394,6 +416,7 @@ export class AudioPlayoutTimingStats {
     this.missedMs = 0;
     this.missedTotals = emptyMissTotals();
     this.recentMisses = [];
+    this.stretchUnavailableFrames = 0;
   }
 
   /** 鳴り終わった予約を落とす */

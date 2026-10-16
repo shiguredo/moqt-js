@@ -27,6 +27,7 @@ import {
   arrivalPlayoutDelaySeconds,
   concealmentEndGain,
 } from "./audioPlayout";
+import { isTimeStretchAvailable } from "./audioTimeStretch";
 import type { AudioPlayoutTimingStats } from "./audioPlayoutTimingStats";
 import { AudioReceiveCatchUp } from "./audioReceiveCatchUp";
 import { compressSamples, concealSamples, type AudioSamples } from "./audioTimeStretch";
@@ -257,6 +258,12 @@ export class AudioPlayoutSession {
       const sampleRate = data.sampleRate;
       const numberOfFrames = data.numberOfFrames;
       const durationSeconds = numberOfFrames / sampleRate;
+      // 時間圧縮と補間を使えないサンプルレート (44.1 kHz の AAC など) では、遅れが目標へ
+      // 戻らず、欠落した区間も補間されない。落ちずに「操作しない」を返すため区別できないので、
+      // 計器に数えて気付けるようにする (src/playout/audioTimeStretch.ts)
+      if (!isTimeStretchAvailable(sampleRate)) {
+        this.timing.recordStretchUnavailable();
+      }
       // 到着 (復号の出力を受け取った) 時刻。時間軸への記録と観測値の両方に同じ値を使う
       const arrivalMs = performance.now();
 

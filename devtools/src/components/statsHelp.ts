@@ -375,6 +375,11 @@ export const AUDIO_PLAYOUT_TIMING_HELP: SectionHelp = {
       description:
         "Sounds played without any plan (neither the playout time nor the arrival plan). Normally 0; a value above 0 means the caller did not pass a plan.",
     },
+    {
+      term: "stretchUnavailableFrames",
+      description:
+        "Sounds played at a sample rate where the time stretch and the concealment cannot work (the table used to downsample to 4 kHz has 8, 16, 32 and 48 kHz, as NetEq does). 44.1 kHz audio (AAC, for example) is such a rate. They are played as usual but the lateness is never compressed away and the missing parts are not concealed, so a value above 0 explains why the delay does not come back to the target. 0 means the rate is supported.",
+    },
   ],
   notes: [
     "The start is the time reserved on the AudioContext clock, so the output latency of the device is not included. Use the A/V Sync audioClockFallback to see whether the clock is mapped by getOutputTimestamp() or by currentTime. The A/V Sync skew does include the output latency while getOutputTimestamp() is available: measured on the real relay, the mapped time was the position the device was playing (the audio in flight was 30 ms against a reported outputLatency of 25 ms and a baseLatency of 5.3 ms).",

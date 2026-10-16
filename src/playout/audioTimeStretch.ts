@@ -86,6 +86,22 @@ const DOWNSAMPLE_FILTERS: ReadonlyMap<number, DownsampleFilter> = new Map([
 ]);
 
 /**
+ * 時間圧縮と補間を使えるサンプルレートか
+ *
+ * ピッチの周期は 4 kHz へ間引いた信号から求めるため、間引きのフィルタの表 (8 / 16 / 32 /
+ * 48 kHz。NetEq と同じ) に無いサンプルレートでは周期を求められない。44.1 kHz (AAC など) が
+ * これにあたり、**時間圧縮も補間も働かない**。落ちずに「操作しない」を返すため呼び出し側から
+ * は区別できないので、先にこの関数で確かめて計器へ出す
+ * (src/playout/audioPlayoutTimingStats.ts の `stretchUnavailableFrames`)
+ */
+export function isTimeStretchAvailable(sampleRate: number): boolean {
+  if (!(sampleRate > 0)) {
+    return false;
+  }
+  return DOWNSAMPLE_FILTERS.has(Math.round(sampleRate / 4_000) * 4_000);
+}
+
+/**
  * 音声のサンプル列 (1 チャンネル分)
  *
  * バッファーの型まで固定する (`Float32Array<ArrayBuffer>`)。Web Audio の
