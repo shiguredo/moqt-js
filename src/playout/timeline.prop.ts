@@ -32,6 +32,7 @@ import {
   PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS,
   SYNC_MIN_DELTA_MS,
   PlayoutTimeline,
+  playoutQueueCapMs,
   type PlayoutStream,
   type PlayoutTrackBreakdown,
 } from "./timeline";
@@ -276,11 +277,9 @@ test("PlayoutTimeline: 表示時刻は TIMESTAMP + 基準の遅れ + 表示の�
         const videoOffsets = baseOffsetsOf("video");
         const ownerBaseMs =
           stream === "audio" ? Math.min(...audioOffsets) : Math.min(...videoOffsets);
-        // キューが吸収できる表示の遅れ (表示の遅れの上限)
-        const queueCapMs = Math.min(
-          MAX_PLAYOUT_DELAY_MS,
-          (MAX_QUEUED_FRAMES - PLAYOUT_QUEUE_HEADROOM_FRAMES) * frameMs,
-        );
+        // キューが吸収できる表示の遅れ (表示の遅れの上限)。上限の式は公開されている
+        // (`playoutQueueCapMs`) ため、テスト側で同じ式を組み立て直さない
+        const queueCapMs = playoutQueueCapMs(MAX_QUEUED_FRAMES, frameMs);
         // 実装の上限は、テストが与えた `frameMs` ではなく TIMESTAMP の差から測った間隔を
         // 枚数分だけ掛けた値である。丸めの分 (1 枚あたり) を枚数分だけ足して比べる
         const queueCapWithRoundingMs =
@@ -336,6 +335,13 @@ test("PlayoutTimeline: 表示時刻は TIMESTAMP + 基準の遅れ + 表示の�
           delayOfStream ?? Infinity,
           queueCapWithRoundingMs,
           "jitter buffer の遅延がキューの上限 (TIMESTAMP の丸めの分を含む) に収まること",
+        );
+        // 上限は、実装が公開している最大値も超えない。キューの上限と同じ式をテスト側で
+        // 持たないため、こちらは式の変更に追随しない独立の bound である
+        assert.isAtMost(
+          delayOfStream ?? Infinity,
+          MAX_PLAYOUT_DELAY_MS,
+          "jitter buffer の遅延が公開している最大値を超えないこと",
         );
 
         // 映像の再生遅延が下がった 1 枚では、下げ幅が経過時間 × 毎秒の速さを超えない
