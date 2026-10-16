@@ -4,9 +4,11 @@
  *
  * 波形が周期的な音ではピッチ周期 1 つ分だけ長さが変わり、切れ目の前後がクロスフェードで
  * 繋がること、波形が繰り返していない音 (相関が足りない音) では操作しないこと、
- * 無音では操作することを固定する。補間は末尾の周期を繰り返し、末尾で位相が飛ぶ音や
- * 継ぎ目の段差が大きい音では操作しない。実際の使い方 (遅れて届いた音を目標へ戻す) は
- * audioPlayout.test.ts が、隙間の補間の予約は createMediaSubscriber.test.ts が固定する。
+ * 無音では操作することを固定する。補間は末尾の周期を端数まで求めて繰り返すため、4 kHz の
+ * 格子に乗らない周期でも穴の終わりで位相がずれない。末尾で位相が飛ぶ音や、継ぎ目の段差が
+ * 大きい音 (どのチャンネルでも) では操作せず、周期の推定が確かでない音では生成した音の
+ * 末尾を短くフェードする。実際の使い方 (遅れて届いた音を目標へ戻す) は audioPlayout.test.ts
+ * が、隙間の補間の予約は createMediaSubscriber.test.ts が固定する。
  */
 
 import { test, assert } from "vite-plus/test";
@@ -14,6 +16,7 @@ import {
   compressSamples,
   concealSamples,
   expandSamples,
+  TIME_STRETCH_CONCEAL_FADE_MS,
   type AudioSamples,
 } from "./audioTimeStretch";
 
@@ -48,6 +51,101 @@ function maxStep(samples: AudioSamples): number {
     maximum = Math.max(maximum, Math.abs((samples[index] ?? 0) - (samples[index - 1] ?? 0)));
   }
   return maximum;
+}
+
+/** 周波数 `frequencyHz` の純音 (20 ms、48 kHz) */
+function frequencyFrame(frequencyHz: number, amplitude = 0.5): AudioSamples {
+  const samples = new Float32Array(FRAME_SAMPLES);
+  for (let index = 0; index < FRAME_SAMPLES; index++) {
+    samples[index] = amplitude * Math.sin((2 * Math.PI * frequencyHz * index) / SAMPLE_RATE);
+  }
+  return samples;
+}
+
+/**
+ * 基本周波数 `frequencyHz` の有声 (倍音を 1 / 次数で重ねた周期波) のフレーム
+ *
+ * 実際の声に近づけるため、整数次の倍音を 4 kHz (音声の帯域) まで重ねる。振幅は 0.5 に揃える
+ */
+function voicedFrame(frequencyHz: number): AudioSamples {
+  const samples = new Float32Array(FRAME_SAMPLES);
+  const maxHarmonicHz = 4_000;
+  let norm = 0;
+  for (let harmonic = 1; harmonic * frequencyHz < maxHarmonicHz; harmonic++) {
+    norm += 1 / harmonic;
+  }
+  for (let index = 0; index < FRAME_SAMPLES; index++) {
+    let value = 0;
+    for (let harmonic = 1; harmonic * frequencyHz < maxHarmonicHz; harmonic++) {
+      value +=
+        (1 / harmonic) * Math.sin((2 * Math.PI * harmonic * frequencyHz * index) / SAMPLE_RATE);
+    }
+    samples[index] = (0.5 * value) / norm;
+  }
+  return samples;
+}
+
+/**
+ * 1 極フィルタ (係数 `coefficient`) を通した有色雑音のフレーム
+ *
+ * 白色雑音を `y[n] = a * y[n-1] + (1 - a) * x[n]` でならしたもの。相関は `a` のラグ乗で
+ * 減るため、周期の探索が短いラグを選ぶと 400 Hz のブザーになる
+ */
+function coloredNoiseFrame(coefficient: number, seed: number): AudioSamples {
+  const samples = new Float32Array(FRAME_SAMPLES);
+  let state = seed;
+  let previous = 0;
+  for (let index = 0; index < FRAME_SAMPLES; index++) {
+    state = (state * 1_103_515_245 + 12_345) % 2_147_483_648;
+    const white = (state / 2_147_483_648) * 2 - 1;
+    previous = coefficient * previous + (1 - coefficient) * white;
+    samples[index] = previous;
+  }
+  return samples;
+}
+
+/** 純音に白色雑音を混ぜたフレーム (周期の推定が確かでない音を作る) */
+function noisySineFrame(frequencyHz: number, noiseAmplitude: number): AudioSamples {
+  const samples = frequencyFrame(frequencyHz);
+  let state = 987_654_321;
+  for (let index = 0; index < FRAME_SAMPLES; index++) {
+    state = (state * 1_103_515_245 + 12_345) % 2_147_483_648;
+    samples[index] = (samples[index] ?? 0) + ((state / 2_147_483_648) * 2 - 1) * noiseAmplitude;
+  }
+  return samples;
+}
+
+/**
+ * 生成した音が `period` サンプルで繰り返しているか (端数の周期でも比べられる)
+ *
+ * 1 周期分を比べる。数サンプルだけを比べると、波形が滑らかな場所では周期がずれていても
+ * 差が小さく出るためである
+ */
+function repeatsAtPeriod(generated: AudioSamples, period: number, tolerance: number): boolean {
+  const count = Math.min(Math.round(period), generated.length - period);
+  for (let index = 0; index < count; index++) {
+    if (Math.abs((generated[index + period] ?? 0) - (generated[index] ?? 0)) > tolerance) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * 穴の終わりの段差を、振幅で正規化して返す
+ *
+ * 穴の終わりでは、次に鳴る音が本来の続き (穴の分だけ進んだ音) であるとして、生成した音の
+ * 最後のサンプルとの差を測る。段差が大きいとクリックとして聞こえる
+ */
+function endStepRatio(frequencyHz: number, gapSeconds: number, amplitude = 0.5): number {
+  const frame = frequencyFrame(frequencyHz, amplitude);
+  const target = Math.round(gapSeconds * SAMPLE_RATE);
+  const result = concealSamples([frame], SAMPLE_RATE, gapSeconds);
+  const generated = result.channels[0] ?? new Float32Array(0);
+  const last = generated[generated.length - 1] ?? 0;
+  const next =
+    amplitude * Math.sin((2 * Math.PI * frequencyHz * (FRAME_SAMPLES + target)) / SAMPLE_RATE);
+  return Math.abs(last - next) / amplitude;
 }
 
 // 削ってよい長さの上限より周期が長いときは操作しない。時間圧縮は周期を 1 つ削るため、
@@ -142,34 +240,87 @@ test("compressSamples: 16 kHz でもピッチ周期 1 つ分だけ短くなる",
 });
 
 /**
- * 周波数 `frequencyHz` の正弦波 (20 ms、48 kHz) から 20 ms の穴を補間した長さ
+ * 補間の周期を端数まで求めるため、4 kHz の格子 (48 kHz で 12 サンプル) に乗らない純音でも
+ * 穴の終わりで位相がずれない。
  *
- * 実リレーの E2E が使う音は正弦波であるため、補間の可否を周波数ごとに見るために使う
+ * 実測 (48 kHz、20 ms のフレーム、振幅 0.5、440 Hz。穴の終わりの段差 / 振幅): 格子の周期
+ * 108 サンプルで繰り返していたときは 20 ms で 34.4 %、40 ms で 101.8 %、100 ms で 195.1 %
+ * だった。端数周期 (109.09 サンプル) にすると 4.7 % / 4.5 % / 1.6 % になる。4 kHz の格子に
+ * 乗る 200 Hz (周期 240 サンプル) は 2.6 % のままである
  */
-function concealForFrequency(frequencyHz: number): number {
-  const samples = new Float32Array(FRAME_SAMPLES);
-  for (let index = 0; index < FRAME_SAMPLES; index++) {
-    samples[index] = 0.5 * Math.sin((2 * Math.PI * frequencyHz * index) / SAMPLE_RATE);
+test("concealSamples: 格子に乗らない純音でも穴の終わりで段差が出ない", () => {
+  for (const gapSeconds of [0.02, 0.04, 0.1]) {
+    assert.isAtMost(
+      endStepRatio(440, gapSeconds),
+      0.1,
+      `440 Hz の段差が振幅の 10 % 以下であること (穴 ${gapSeconds} 秒)`,
+    );
   }
-  return concealSamples([samples], SAMPLE_RATE, 0.02).generatedSamples;
-}
+  assert.isAtMost(
+    endStepRatio(200, 0.1),
+    0.1,
+    "格子に乗る 200 Hz の段差が振幅の 10 % 以下であること",
+  );
+});
+
+// 探索の範囲を 100 Hz まで広げたため、格子に乗らない純音も補間する (以前は 300 / 220 /
+// 150 / 100 Hz は補間しなかった)
+test("concealSamples: 格子に乗らない純音も補間する", () => {
+  for (const frequencyHz of [1_000, 440, 300, 220, 150, 100]) {
+    assert.equal(
+      concealSamples([frequencyFrame(frequencyHz)], SAMPLE_RATE, 0.02).generatedSamples,
+      960,
+      `${frequencyHz} Hz を補間すること`,
+    );
+  }
+});
 
 /**
- * 完了条件: 補間の可否は、末尾の周期が 4 kHz へ間引いたときの格子に乗るかで決まる。格子に
- * 乗らない純音では補間しない (周期 1 つ分を繰り返すと継ぎ目で波形が飛び、クリックとして
- * 聞こえるため)。
+ * 有声の低いピッチでは、探索の上限 (窓長 + ラグがフレーム長に収まる範囲) まで広げ、周期を
+ * 端数まで求める。
  *
- * 実測 (48 kHz、20 ms のフレーム、振幅 0.5、20 ms の穴): 1000 Hz と 440 Hz は 960 サンプルを
- * 生成し、300 / 220 / 150 / 100 Hz は生成しない。1000 Hz は 4 kHz で 4 サンプル (格子に乗る)、
- * 440 Hz は 9.09 サンプル (乗らない) であるが、位数の 18 が探索範囲 (10〜60) に入り、継ぎ目の
- * 段差が許容に収まるため通る
- *
- * 実リレーの E2E では補間の量が小さいが、これは実装の欠陥ではなく、E2E の音が正弦波で
- * あるためである (会話や音楽では周期が格子に乗りやすく、補間が働く)
+ * 実測 (48 kHz、20 ms のフレーム、40 ms の穴): 100 Hz の有声は生成に使う周期が 480.02
+ * サンプル (真 480)、120 Hz は 400.00 サンプル (真 400) になる。格子だけで探していたときは
+ * 120 Hz が 396 であり、100 Hz は探索の上限 (137.9 Hz) に届かず補間そのものをしなかった
  */
-test("concealSamples: 補間の可否は周期が 4 kHz の格子に乗るかで決まる", () => {
-  assert.equal(concealForFrequency(1_000), 960, "格子に乗る純音は補間すること");
-  assert.equal(concealForFrequency(220), 0, "格子に乗らない純音は補間しないこと");
+test("concealSamples: 有声の低いピッチでも正しい周期で繰り返す", () => {
+  for (const [frequencyHz, period] of [
+    [100, 480],
+    [120, 400],
+  ] as const) {
+    const result = concealSamples([voicedFrame(frequencyHz)], SAMPLE_RATE, 0.04);
+    assert.equal(result.generatedSamples, 1920, `${frequencyHz} Hz を補間すること`);
+    const generated = result.channels[0] ?? new Float32Array(0);
+    assert.isTrue(
+      repeatsAtPeriod(generated, period, 0.02),
+      `${frequencyHz} Hz が本当の周期 ${period} サンプルで繰り返すこと`,
+    );
+    assert.isFalse(
+      repeatsAtPeriod(generated, 396, 0.02),
+      `${frequencyHz} Hz が格子の周期 396 サンプルで繰り返さないこと`,
+    );
+  }
+});
+
+/**
+ * 相関の窓を候補ラグに比例させると、窓が短い (= ラグが短い) 候補ほど相関が高く出て、有色
+ * 雑音で最短のラグ (120 サンプル = 400 Hz) のブザーを出す。窓を固定長にすると誤検出が消える。
+ *
+ * 実測 (400 フレーム、40 ms の穴): 補間が働いた割合は係数 0.99 が 5.5 % → 0.5 %、0.999 が
+ * 19.5 % → 9.0 %。最短のラグ (120 サンプル) を選んだ回は 6 回 / 17 回 → 0 回
+ */
+test("concealSamples: 有色雑音で最短のラグのブザーを出さない", () => {
+  for (const coefficient of [0.99, 0.999]) {
+    for (let frame = 0; frame < 40; frame++) {
+      const samples = coloredNoiseFrame(coefficient, 12_345 + frame * 7_919);
+      const result = concealSamples([samples], SAMPLE_RATE, 0.04);
+      if (result.generatedSamples === 0) {
+        continue;
+      }
+      const generated = result.channels[0] ?? new Float32Array(0);
+      assert.isFalse(repeatsAtPeriod(generated, 120, 1e-6), "最短のラグで繰り返さないこと");
+    }
+  }
 });
 
 // 欠落した区間の補間: 周期的な音では、末尾のピッチ周期を必要な長さまで繰り返す
@@ -179,8 +330,14 @@ test("concealSamples: 周期的な音では必要な長さだけ生成する", (
   assert.equal(result.generatedSamples, 1920);
   assert.equal(result.channels[0]?.length, 1920);
   const generated = result.channels[0] ?? new Float32Array(0);
-  // 生成の先頭は、直前の音の末尾のピッチ周期 1 つ分から始まる
-  assert.equal(generated[0], frame[FRAME_SAMPLES - 240]);
+  // 生成の先頭は、直前の音の末尾のピッチ周期 1 つ分から始まる。周期は端数 (5 ms の正弦では
+  // 240.0000x サンプル) になるため、末尾 1 周期前のサンプルは線形補間で読み、厳密一致は
+  // しない (実測のずれは 1e-4 未満)
+  assert.isAtMost(
+    Math.abs(generated[0] - (frame[FRAME_SAMPLES - 240] ?? 0)),
+    1e-4,
+    "先頭が末尾の 1 周期前から始まること",
+  );
   // 繰り返しの継ぎ目で波形が飛ばない
   assert.isAtMost(maxStep(generated), maxStep(frame) * 1.2, "波形が飛ばないこと");
 });
@@ -214,11 +371,64 @@ test("concealSamples: 継ぎ目の段差が大きい音では生成しない", (
   assert.equal(result.generatedSamples, 0);
 });
 
-// 前半と後半で周期が違っても、末尾の周期 (後半) で繰り返す
+// 周期は第 1 チャンネルだけで決めるが、繰り返しの継ぎ目の段差はどのチャンネルでもクリックに
+// なるため、第 2 チャンネル以降の段差も確かめる。実測 (48 kHz、40 ms の穴): 第 1 チャンネルが
+// 5 ms の正弦で第 2 チャンネルがランプのとき、第 1 チャンネルだけを見ていたときは 1920
+// サンプル生成し、全チャンネルを見ると生成しない
+test("concealSamples: 第 2 チャンネルの継ぎ目の段差が大きいときは生成しない", () => {
+  const ramp = new Float32Array(FRAME_SAMPLES);
+  for (let index = 0; index < FRAME_SAMPLES; index++) {
+    ramp[index] = (index / FRAME_SAMPLES) * 0.9 - 0.45;
+  }
+  const result = concealSamples([sineFrame(5), ramp], SAMPLE_RATE, 0.04);
+  assert.equal(result.generatedSamples, 0, "第 2 チャンネルの段差で補間しないこと");
+});
+
+/**
+ * 周期の推定が確かでない音では、穴の終わりで次に鳴る音の位相が分からず段差が残る。補間を
+ * やめるのではなく、生成した音の末尾を `TIME_STRETCH_CONCEAL_FADE_MS` (2 ms) で 0 へ落とす。
+ *
+ * 実測 (48 kHz、40 ms の穴、振幅 0.5 の 440 Hz に振幅 0.15 の白色雑音を混ぜた音): 末尾の
+ * サンプルは 0 になる。きれいな 440 Hz では相関が 1.0 のためフェードせず、末尾は次の音の
+ * 続き (-0.484) になる
+ */
+test("concealSamples: 周期の推定が確かでない音は末尾をフェードする", () => {
+  const frame = noisySineFrame(440, 0.15);
+  const result = concealSamples([frame], SAMPLE_RATE, 0.04);
+  assert.equal(result.generatedSamples, 1920, "補間すること");
+  const generated = result.channels[0] ?? new Float32Array(0);
+  assert.equal(generated[generated.length - 1], 0, "末尾のサンプルが 0 になること");
+  // フェードは末尾の 2 ms だけに掛ける (その前は振幅が残る)
+  const fade = Math.round((TIME_STRETCH_CONCEAL_FADE_MS / 1_000) * SAMPLE_RATE);
+  let fadedPeak = 0;
+  for (let index = generated.length - fade / 4; index < generated.length; index++) {
+    fadedPeak = Math.max(fadedPeak, Math.abs(generated[index] ?? 0));
+  }
+  let fullPeak = 0;
+  for (let index = 0; index < 100; index++) {
+    fullPeak = Math.max(fullPeak, Math.abs(generated[index] ?? 0));
+  }
+  assert.isBelow(fadedPeak, fullPeak * 0.3, "フェードした末尾の振幅が下がること");
+  // きれいな純音ではフェードしない (末尾が次の音の続きのまま)
+  const clean = concealSamples([frequencyFrame(440)], SAMPLE_RATE, 0.1);
+  const cleanGenerated = clean.channels[0] ?? new Float32Array(0);
+  const target = Math.round(0.1 * SAMPLE_RATE);
+  const next = 0.5 * Math.sin((2 * Math.PI * 440 * (FRAME_SAMPLES + target - 1)) / SAMPLE_RATE);
+  assert.isAtMost(
+    Math.abs((cleanGenerated[cleanGenerated.length - 1] ?? 0) - next),
+    1e-3,
+    "相関が高い音ではフェードしないこと",
+  );
+});
+
+// 前半と後半で周期が違っても、末尾の周期 (後半) で繰り返す。ただし周期の変わる位置が
+// 末尾から「相関の窓長 (9.75 ms) + 周期」より近いと、末尾が繰り返しているかを確かめられない
+// ため補間しない (実測: 末尾から 720 サンプル目で変わる音は 240 サンプルの周期で補間し、
+// 480 サンプル目で変わる音は補間しない)
 test("concealSamples: 周期が途中で変わっても末尾の周期で繰り返す", () => {
   const frame = sineFrame(5);
-  // 前半 (480 サンプル) だけ周期を 260 サンプルへ変える (前半の中では位相を連続に進める)
-  for (let index = 0; index < 480; index++) {
+  // 前半 (240 サンプル) だけ周期を 260 サンプルへ変える (前半の中では位相を連続に進める)
+  for (let index = 0; index < 240; index++) {
     frame[index] = 0.5 * Math.sin((2 * Math.PI * index) / 260);
   }
   const result = concealSamples([frame], SAMPLE_RATE, 0.04);
@@ -227,6 +437,16 @@ test("concealSamples: 周期が途中で変わっても末尾の周期で繰り�
   const generated = result.channels[0] ?? new Float32Array(0);
   const tail = frame.subarray(FRAME_SAMPLES - 240);
   assert.isAtMost(maxStep(generated), maxStep(tail) * 1.2, "波形が飛ばないこと");
+  // 周期の変わる位置が末尾に近すぎると、末尾が繰り返しているかを確かめられない
+  const late = sineFrame(5);
+  for (let index = 0; index < 480; index++) {
+    late[index] = 0.5 * Math.sin((2 * Math.PI * index) / 260);
+  }
+  assert.equal(
+    concealSamples([late], SAMPLE_RATE, 0.04).generatedSamples,
+    0,
+    "繰り返しを確かめられない音では補間しないこと",
+  );
 });
 
 // 無音は補間してよい (聞こえないため)
@@ -279,7 +499,13 @@ test("concealSamples: 16 kHz でも末尾の周期で生成する", () => {
   const result = concealSamples([samples], 16_000, 0.02);
   assert.equal(result.generatedSamples, 320);
   const generated = result.channels[0] ?? new Float32Array(0);
-  assert.equal(generated[0], samples[320 - 80]);
+  // 周期は端数 (5 ms の正弦では 80.0000x サンプル) になるため、末尾 1 周期前のサンプルは
+  // 線形補間で読む (実測のずれは 1e-4 未満)
+  assert.isAtMost(
+    Math.abs(generated[0] - (samples[320 - 80] ?? 0)),
+    1e-4,
+    "先頭が末尾の 1 周期前から始まること",
+  );
   assert.isAtMost(maxStep(generated), maxStep(samples) * 1.2, "波形が飛ばないこと");
 });
 
