@@ -16,7 +16,13 @@
  * - 並べすぎで捨てたなら、捨てた長さぶんを吸収できるだけ増やす
  * - 遅れが許容の中に収まり、捨てが無いなら目標を減らす (必要以上に遅らせない)
  * - 増減は毎秒 1 回までとし、1 回の増加は上限までにする (数秒スケール。行き過ぎを防ぐ)
- * - 目標は `AUDIO_DELAY_FEEDBACK_MIN_MS` から `AUDIO_DELAY_FEEDBACK_MAX_MS` の間に収める
+ * - 目標は `AUDIO_DELAY_FEEDBACK_MIN_MS` から、**実際に適用される上限**の間に収める
+ *   (`upperMs()` = min(AUDIO_DELAY_FEEDBACK_MAX_MS, ceilingMs, AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS))。
+ *   適用は `targetDelayMs` が `AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS` で切るため、内部の目標だけが
+ *   それを超えて育つと、超えた分は決して適用されず、遅れが収まった後に減らし切るまで
+ *   (毎秒 `AUDIO_DELAY_FEEDBACK_DECREASE_MS_PER_SECOND`) の時間だけ復帰が遅れる
+ *   (実測: 内部 198.4 ms / 適用 100 ms。この差 98.4 ms を減らすのに 10 秒かかる)。
+ *   実測 198.4 ms は `docs/AUDIO_PLAYOUT_LATENCY.md` の 2026-10-16 の計測にある
  * - `targetLatencyMs` を明示設定したときは、その値を自動で超えない (呼び出し側が
  *   `setCeilingMs` で渡す)。NetEq が求めた遅れ (揺らぎの分) には掛けない。既存の
  *   揺らぎの吸収を変えないためである
@@ -49,6 +55,12 @@ export const AUDIO_DELAY_FEEDBACK_MIN_MS = 50;
 
 /**
  * 目標遅延の上限 (ミリ秒。src/playout/timeline.ts の AUDIO_PLAYOUT_ARRIVAL_DELAY_MS と同値)
+ *
+ * 実際に鳴らす側へ渡す値の上限である (`targetDelayMs`)。閉ループが決めた目標も、この値で
+ * 切ってから持つ。内部の目標だけがこれを超えて育つと、超えた分は決して適用されないまま
+ * 残り、遅れが収まってから減らし切るまでの間ずっと「適用は 100 ms のまま」になる
+ * (欠陥 5。実測: 内部 198.4 ms / 適用 100 ms)。NetEq が求めた揺らぎの分は、この値で
+ * 切られる前から `targetDelayMs` が切るため、内部の目標として持つ必要が無い
  */
 export const AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS = 100;
 
@@ -344,8 +356,19 @@ export class AudioDelayFeedback {
     this.observed = false;
   }
 
-  /** 今の上限 (ミリ秒)。明示設定が無ければ `AUDIO_DELAY_FEEDBACK_MAX_MS` */
+  /**
+   * 今の上限 (ミリ秒)。閉ループの目標を持つのに使える上限
+   *
+   * 実際に適用される値の上限と同じにする。適用は `AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS` で
+   * 切られる (`targetDelayMs`) ため、それより大きい目標を持っても適用されない。持つと、
+   * 遅れが収まった後に減らし切るまでの時間だけ復帰が遅れる (欠陥 5。このファイルの先頭の
+   * コメントを参照)
+   */
   private upperMs(): number {
-    return Math.min(AUDIO_DELAY_FEEDBACK_MAX_MS, this.ceilingMs ?? AUDIO_DELAY_FEEDBACK_MAX_MS);
+    return Math.min(
+      AUDIO_DELAY_FEEDBACK_MAX_MS,
+      this.ceilingMs ?? AUDIO_DELAY_FEEDBACK_MAX_MS,
+      AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS,
+    );
   }
 }

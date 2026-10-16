@@ -598,6 +598,11 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   });
   // 音声も同じ対応表を持つ (Timescale がある TIMESTAMP は壁時計ではない)
   private readonly audioTimestampKinds = new Map<number, "wallClock" | "mediaTime">();
+  // 復号へ渡した音声 Object の入力の遅れ (Object の到着の壁時計 - LOC TIMESTAMP、ミリ秒)。
+  // 復号の出力で引いて、受信側の追いつき (src/playout/audioReceiveCatchUp.ts) が
+  // 「復号が足している遅れ」を求めるのに使う。壁時計の TIMESTAMP を持つ音だけ記録する
+  // (メディア時刻は壁時計と対応しないため測れない)
+  private readonly audioInputLags = new Map<number, number>();
   // 直前に記録した音声の TIMESTAMP の種類。復号の出力で対応が引けなくなったときに使う
   // (src/playout/decodeInputTimestamps.ts の `LastTimestampKind` を参照)
   private readonly lastAudioTimestampKind = new LastTimestampKind<"wallClock" | "mediaTime">();
@@ -1248,6 +1253,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     this.playoutTimeline.reset();
     this.audioPlayoutSession.releaseAudioContext();
     this.audioTimestampKinds.clear();
+    this.audioInputLags.clear();
     this.lastAudioTimestampKind.reset();
     this.audioWallClockSeen = false;
     this.videoWallClockSeen = false;
@@ -2302,6 +2308,11 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     }
     if (!this.audioDecoder || !this.audioDecoderConfigured) return;
 
+    // 入力の遅れ (Object の到着の壁時計 - LOC TIMESTAMP) を測る基準。受信側の追いつきが
+    // 「復号が足している遅れ」を求めるのに使う (src/playout/audioReceiveCatchUp.ts)。
+    // ここは object コールバックから同期で呼ばれるため、この時刻が Object の到着である
+    const arrivalWallClockMs = performance.timeOrigin + performance.now();
+
     // LOC から情報を取得
     // Track Property（SUBSCRIBE_OK 由来）と Object Property の両方を探索し、Object を優先する
     const locProperties = LOC.resolveAudioProperties(
@@ -2336,6 +2347,8 @@ export class MediaSubscriberImpl implements MediaSubscriber {
 
     const timestamp = decoderTimestampOf(locProperties);
     this.rememberAudioTimestampKind(timestamp, locProperties);
+    // 入力の遅れも、復号の出力で同じ timestamp から引けるように覚える
+    this.rememberAudioInputLag(timestamp, locProperties, arrivalWallClockMs);
 
     // デコード
     this.audioDecoder.decode(obj.payload, "key", timestamp, 0);
@@ -2367,6 +2380,48 @@ export class MediaSubscriberImpl implements MediaSubscriber {
         break;
       }
       kinds.delete(oldest);
+    }
+  }
+
+  /**
+   * 復号へ渡した音声 Object の入力の遅れを、復号の出力で引けるように覚える
+   *
+   * Object の到着の壁時計 - LOC TIMESTAMP である。受信側の追いつきが、復号の出力の遅れから
+   * この値を引いた「復号が足している遅れ」で復号器を作り直すかどうかを決める
+   * (src/playout/audioReceiveCatchUp.ts の先頭のコメントを参照)。経路が遅いだけの状態では
+   * この値も同じだけ上がるため作り直さず、受信側が溜めたまま戻らない状態 (この値は健全で
+   * 出力の遅れだけが大きい) で作り直す。
+   *
+   * 壁時計の TIMESTAMP (Timescale なし) を持つ音だけ測れる。TIMESTAMP が無い音は decoder へ
+   * 0 を渡すため測れず、Timescale がある音はメディア時刻であり壁時計と対応しない。どちらも
+   * 覚えず、復号の出力では入力の遅れが無いものとして扱う (出力の遅れだけを使う)。
+   *
+   * 同じ TIMESTAMP の Object が重なったときは、どちらの遅れか決められないため、先の記録も
+   * 含めて忘れる (`rememberAudioTimestampKind` と同じ扱い)。出力されなかった (decoder の
+   * エラーで捨てられた) 分が残り続けないよう、上限を超えたら古い方から忘れる。
+   *
+   * @param timestamp - 復号へ渡す timestamp (マイクロ秒)
+   * @param source - 解決済みの LOC (TIMESTAMP と Timescale)
+   * @param arrivalWallClockMs - Object の到着の壁時計 (ミリ秒)
+   */
+  private rememberAudioInputLag(
+    timestamp: number,
+    source: TimestampSource,
+    arrivalWallClockMs: number,
+  ): void {
+    const lags = this.audioInputLags;
+    lags.delete(timestamp);
+    if (source.timestamp === undefined || source.timescale !== undefined) {
+      // 測れない音である。同じ timestamp に測れる記録が残っていると、対応がずれたときに
+      // 別の音の遅れを引くため、消しておく
+      return;
+    }
+    lags.set(timestamp, arrivalWallClockMs - decoderTimestampOf(source) / 1_000);
+    for (const oldest of lags.keys()) {
+      if (lags.size <= TIMESTAMP_KIND_MAX_TRACKED) {
+        break;
+      }
+      lags.delete(oldest);
     }
   }
 
@@ -2661,7 +2716,8 @@ export class MediaSubscriberImpl implements MediaSubscriber {
    *
    * 再生の組み立て (時間軸への記録・目標の決定・予約・計器への記録) は devtools と共有する
    * `AudioPlayoutSession` が持つ (src/playout/audioPlayoutSession.ts)。ここは、購読ごとの状態
-   * (復号の出力の timestamp の種類と、鳴らす先の取得) を共有実装へ渡すだけにする。
+   * (復号の出力の timestamp の種類と、復号へ渡した時点で測った入力の遅れ、鳴らす先の取得) を
+   * 共有実装へ渡すだけにする。
    *
    * 鳴らす先が無いとき (音声を再生しない購読、AudioContext を閉じた後) は何もせずに閉じる。
    * 失敗は onError へ通知する (共有実装は throw しない)。
@@ -2678,6 +2734,9 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     // 復号へ渡した timestamp の種類を引く。Timescale がある TIMESTAMP は壁時計ではない
     // (draft-ietf-moq-loc-04 §2.3.1.1 / §2.3.1.2)
     const kind = takeDecodeInputEntry(this.audioTimestampKinds, audioData.timestamp);
+    // 入力の遅れ (Object の到着 - LOC TIMESTAMP) も同じ timestamp で引く。受信側の追いつきが
+    // 「復号が足している遅れ」を求めるのに使う (src/playout/audioReceiveCatchUp.ts)
+    const inputLagMs = takeDecodeInputEntry(this.audioInputLags, audioData.timestamp) ?? null;
     // 引けないときは、直前に分かっている種類を使う。記録と復号の出力の timestamp の格子が
     // ずれると (実測: 9.7 ms)、以後の出力がすべて引けなくなる。種類を失うと、その間の音が
     // 共有の時間軸へ記録されず、音声の基準の遅れが更新されないまま固定される
@@ -2685,6 +2744,9 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       kind ??
       this.lastAudioTimestampKind.fallbackFor(this.audioTimestampKinds, audioData.timestamp) ??
       "none";
+    // 直前の種類で補ったときは、どの Object の遅れか決められないため入力の遅れを使わない。
+    // 別の音の遅れを引くと、復号が足している遅れを誤って小さく見積もる
+    const matchedInputLagMs = kind === undefined ? null : inputLagMs;
     // 直近の音が壁時計の TIMESTAMP を持つか (同期の推定を出せるかの判定に使う)
     this.audioWallClockSeen = timestampKind === "wallClock";
 
@@ -2692,6 +2754,9 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       const result = this.audioPlayoutSession.handleDecodedAudio({
         data: audioData,
         timestampKind,
+        // 受信の入口で測った入力の遅れ。受信側の追いつきが出力の遅れから引いて
+        // 「復号が足している遅れ」を求める。測れないときは null (出力の遅れだけを使う)
+        inputLagMs: matchedInputLagMs,
         timeline: this.playoutTimeline,
         // ライブラリは jitter buffer を常に有効として扱う
         useTimeline: true,

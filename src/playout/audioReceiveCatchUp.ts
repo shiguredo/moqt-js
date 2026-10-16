@@ -41,6 +41,22 @@
  * 合わせられない遅れ (床から `AUDIO_RECEIVE_CATCH_UP_JUMP_MS` を超えた分) では持続を
  * 待たずに始めることである。
  *
+ * 判定に使う遅れは、復号の出力の遅れ (`lagMs`) そのものではなく、そこから受信の入口で
+ * 測った入力の遅れ (`inputLagMs`、Object の到着 - LOC TIMESTAMP) を引いた「復号が足して
+ * いる遅れ」である (`AudioReceiveCatchUpObservation.inputLagMs`)。出力の遅れだけでは、
+ * 次の 2 つを区別できない。
+ *
+ * - 経路が恒久的に悪化した: Object の到着も復号の出力も同じだけ遅れる。復号器の中に溜まった
+ *   分は増えていないため、作り直しても遅れは戻らない (実測: メインスレッドを 2 秒止めると、
+ *   到着の遅れも復号の出力の遅れも 2017.9 ms になり、止めた後に溜まった分を復号し終えると
+ *   20 ms 前後へ戻った)。ここで作り直しを繰り返すと、音を飛ばすだけになる
+ * - 受信側が溜めたまま戻らない: Object は到着している (入力の遅れは健全) のに、復号の出力
+ *   だけが遅れている。復号器の中に溜まった音は実時間でしか出てこないため、作り直して捨て
+ *   ない限り戻らない。これがこのクラスが直す状態である
+ *
+ * 入力の遅れが測れないとき (TIMESTAMP が無い、Timescale がある) は、出力の遅れをそのまま
+ * 使う。入力の遅れを導入する前と同じ挙動であり、測れないことを理由に作り直しを止めない。
+ *
  * 復号器を作り直すと、復号器の中に溜まっていた音 (未処理の投入と、まだ届いていない出力) は
  * 捨てられる。次に復号される音は、作り直した時点で届いている最も新しい Object であるため、
  * 音はその分だけ飛ぶ。飛んだ長さは復号の出力の timestamp の跳びとして現れるので、これを
@@ -59,6 +75,14 @@
  * 床は「今の環境で健全なときの遅れ」であり、その環境の経路と復号の速さで決まる
  * (実測: 手元では 18〜19 ms、実リレーの E2E の失敗では 116 ms 前後)。遅れが段差で上がっても、
  * 窓がその値で埋まれば床も上がるため、環境が恒久的に悪化した状態で作り直しを繰り返さない。
+ *
+ * 床を求める値は、「復号が足している遅れ」= 出力の遅れ - 入力の遅れ である (このファイルの
+ * 先頭のコメントを参照)。入力の遅れを引かないと、受信側が溜めたまま戻らない状態でも床が
+ * 出力の遅れへ追いつく。実装を駆動した再現 (8〜20 秒を 250 ms に固定し、20 秒以降も復号器に
+ * 溜まったまま) では、13 秒で床が 250 ms へ追いつき、20〜60 秒の 40 秒間は作り直しが 0 回の
+ * まま 250 ms で固定された。復号器の中の音は実時間でしか出てこないため、これは恒久的な
+ * 劣化になる。入力の遅れを引けば、経路が遅いだけの状態 (入力の遅れも同じだけ上がる) では
+ * 床が上がらず、受信側が溜めた状態では床が上がる前に作り直しが要求される。
  *
  * 全期間の最小値にしないのは、購読の直後に relay の cache から届いた分をまとめて復号すると
  * 1 音だけ小さな遅れが出ることがあり、それを床にすると健全な状態 (その環境の定常値) が
@@ -90,10 +114,12 @@ export const AUDIO_RECEIVE_CATCH_UP_GROWTH_MS = 40;
  * 健全時の遅れを超えた分がこれを超えたら、持続を待たずに始める (ミリ秒)
  *
  * 音声と映像のずれとして合わせられる量の上限 (`PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS` = 100 ms。
- * `docs/AV_SYNC_DECISIONS.md` の決定 1) と同じ値である。復号の出力が健全時の遅れから 100 ms
- * を超えて遅れているとき、受信側は音声を映像へ合わせられない (映像を待たせても足りない)。
- * この状態は、受信の処理がまとめて遅れて、止まっている間に届いた Object を復号し終えるまで
- * 続く。待たずに始めて溜まった分を捨てる方が、遅れた音を鳴らし続けるより良い。
+ * `docs/AV_SYNC_DECISIONS.md` の決定 1) と同じ値である。復号が足している遅れ (出力の遅れ -
+ * 入力の遅れ) が健全時の遅れから 100 ms を超えているとき、受信側は音声を映像へ合わせられない
+ * (映像を待たせても足りない)。この状態は、受信の処理がまとめて遅れて、止まっている間に届いた
+ * Object を復号し終えるまで続く。待たずに始めて溜まった分を捨てる方が、遅れた音を鳴らし続ける
+ * より良い。経路そのものが遅いだけの状態では、入力の遅れも同じだけ上がるためここへは来ない
+ * (作り直しても戻らないため、来ないのが正しい)。
  *
  * 実測 (手元の 1 台、実リレー) では、到着の遅れが 233 ms になった観測で、音声と映像の表示
  * 時刻の差が -168.6 ms になった (許す絶対値は 150 ms)。1 音だけの揺らぎ (実測: 65 ms 前後)
@@ -109,7 +135,8 @@ export const AUDIO_RECEIVE_CATCH_UP_JUMP_MS = 100;
  * 経路と復号が一瞬つまずいただけでも始まる。実測 (手元の 1 台、CPU を 6 倍に遅くした負荷の
  * 前の 8 秒、250 ms ごとの観測) では、復号の出力の遅れは 20〜45 ms で動き、上限
  * (床 21.4 ms + 40 ms = 61.4 ms) を超えたのは 250 ms ごとの観測で 1 回だけで、次には戻って
- * いた。100 ms (5 音) の持続を要求すれば、この形では始まらない。
+ * いた。100 ms (5 音) の持続を要求すれば、この形では始まらない。出力の遅れの観測を
+ * 入力の遅れの分だけ引いた値でも、動く幅は同じか小さくなる (入力の遅れも同時に動くため)。
  *
  * `AUDIO_RECEIVE_CATCH_UP_JUMP_MS` を超える遅れ (音声を映像へ合わせられない状態) は、
  * この持続を待たずに始める。待つと、その間に映像だけが先へ進んでずれが開くためである
@@ -152,6 +179,15 @@ export interface AudioReceiveCatchUpObservation {
    * 測れないため、呼び出し側が観測しない
    */
   readonly lagMs: number;
+  /**
+   * 受信の入口で測った入力の遅れ (ミリ秒)。測れないときは null / 省略
+   *
+   * Object の到着の壁時計 - LOC TIMESTAMP である。判定は、この値を `lagMs` から引いた
+   * 「復号が足している遅れ」で行う (このファイルの先頭のコメントを参照)。TIMESTAMP が
+   * 無い / Timescale がある (メディア時刻である) 音では測れないため、呼び出し側が
+   * null を渡す。省略したときは `lagMs` をそのまま使う (入力の遅れを導入する前と同じ挙動)
+   */
+  readonly inputLagMs?: number | null;
   /** 音の長さ (ミリ秒) */
   readonly durationMs: number;
   /** 復号の出力の timestamp (Unix epoch マイクロ秒)。追いつきで飛んだ長さを測る */
@@ -173,9 +209,21 @@ export interface AudioReceiveCatchUpDecision {
 export interface AudioReceiveCatchUpStats {
   /** 直近に観測した、復号の出力の遅れ (ミリ秒)。まだ観測していなければ null */
   lagMs: number | null;
-  /** 健全時に観測した遅れ (床、ミリ秒)。直近の窓の最小値であり、まだ観測していなければ null */
+  /** 直近に観測した、受信の入口の入力の遅れ (ミリ秒)。測れなければ null */
+  inputLagMs: number | null;
+  /**
+   * 直近に観測した、復号が足している遅れ (ミリ秒)。まだ観測していなければ null
+   *
+   * 出力の遅れ - 入力の遅れである。判定 (床と上限) はこの値で行う。入力の遅れが測れない
+   * ときは出力の遅れそのものになる
+   */
+  decodeLagMs: number | null;
+  /**
+   * 健全時に観測した、復号が足している遅れ (床、ミリ秒)。直近の窓の最小値であり、
+   * まだ観測していなければ null
+   */
   floorMs: number | null;
-  /** 観測した最大の遅れ (ミリ秒)。まだ観測していなければ null */
+  /** 観測した最大の、復号の出力の遅れ (ミリ秒)。まだ観測していなければ null */
   maxLagMs: number | null;
   /** いま使っている遅れの上限 (ミリ秒)。床と `AUDIO_RECEIVE_CATCH_UP_GROWTH_MS` から決まる */
   limitMs: number;
@@ -199,6 +247,8 @@ export interface AudioReceiveCatchUpStats {
 /** 何も観測していないときの追いつきの観測値 */
 export const EMPTY_AUDIO_RECEIVE_CATCH_UP: AudioReceiveCatchUpStats = {
   lagMs: null,
+  inputLagMs: null,
+  decodeLagMs: null,
   floorMs: null,
   maxLagMs: null,
   limitMs: AUDIO_RECEIVE_CATCH_UP_MIN_MS,
@@ -213,7 +263,7 @@ export const EMPTY_AUDIO_RECEIVE_CATCH_UP: AudioReceiveCatchUpStats = {
 interface FloorSample {
   /** 観測した時刻 (ミリ秒) */
   readonly atMs: number;
-  /** 観測した遅れ (ミリ秒) */
+  /** 観測した「復号が足している遅れ」 (ミリ秒) */
   readonly lagMs: number;
 }
 
@@ -252,10 +302,14 @@ export class AudioReceiveCatchUp {
 
   /** 直近の窓の観測 (床を求める)。古い方から捨てる */
   private readonly floorSamples: FloorSample[] = [];
-  /** 健全時に観測した遅れ (床、ミリ秒)。直近の窓の最小値 */
+  /** 健全時に観測した「復号が足している遅れ」 (床、ミリ秒)。直近の窓の最小値 */
   private floorMs: number | null = null;
-  /** 直近に観測した遅れ (ミリ秒) */
+  /** 直近に観測した、復号の出力の遅れ (ミリ秒) */
   private lastLagMs: number | null = null;
+  /** 直近に観測した、受信の入口の入力の遅れ (ミリ秒)。測れなければ null */
+  private lastInputLagMs: number | null = null;
+  /** 直近に観測した、「復号が足している遅れ」 (ミリ秒) */
+  private lastDecodeLagMs: number | null = null;
   /** 観測した最大の遅れ (ミリ秒) */
   private maxLagMs: number | null = null;
   /** 上限を超えた状態が始まった時刻 (ミリ秒)。超えていなければ null */
@@ -289,26 +343,35 @@ export class AudioReceiveCatchUp {
   /**
    * 復号の出力 1 つを観測し、復号器を作り直すかどうかを決める
    *
+   * 判定に使うのは、出力の遅れから入力の遅れを引いた「復号が足している遅れ」である
+   * (このファイルの先頭のコメントを参照)。測れないときは出力の遅れをそのまま使う。
+   *
    * @param observation - 届いた時刻と、その音の TIMESTAMP からの遅れ
    */
   observe(observation: AudioReceiveCatchUpObservation): AudioReceiveCatchUpDecision {
     const lagMs = observation.lagMs;
+    // 復号が足している遅れ。入力の遅れが測れないときは出力の遅れそのものを使う。負になる
+    // のは 2 つの遅れを別の時点で測ったときの丸めであり、健全な状態として 0 に寄せる
+    const inputLagMs = observation.inputLagMs ?? null;
+    const decodeLagMs = inputLagMs === null ? lagMs : Math.max(0, lagMs - inputLagMs);
     this.lastLagMs = lagMs;
+    this.lastInputLagMs = inputLagMs;
+    this.lastDecodeLagMs = decodeLagMs;
     this.maxLagMs = this.maxLagMs === null ? lagMs : Math.max(this.maxLagMs, lagMs);
-    this.updateFloor(observation.nowMs, lagMs);
+    this.updateFloor(observation.nowMs, decodeLagMs);
     const limitMs = this.limitMs();
 
     // 追いつきで飛んだ音を、timestamp の跳びから測る (遅れが戻る判定より先に行う)
     this.measureSkip(observation);
 
-    if (lagMs <= limitMs) {
+    if (decodeLagMs <= limitMs) {
       // 上限の中へ戻った (作り直しが効いた)。次に上限を超えたら、また始められる
       this.catchingUp = false;
       this.overLimitSinceMs = null;
       return { rebuildDecoder: false };
     }
     this.overLimitSinceMs ??= observation.nowMs;
-    if (!this.shouldStart(observation.nowMs, lagMs)) {
+    if (!this.shouldStart(observation.nowMs, decodeLagMs)) {
       return { rebuildDecoder: false };
     }
     // 遅れが上限へ戻るまで始め直す。実測 (CPU を 6 倍に遅くしてメインスレッドを
@@ -324,6 +387,8 @@ export class AudioReceiveCatchUp {
   snapshot(): AudioReceiveCatchUpStats {
     return {
       lagMs: this.lastLagMs,
+      inputLagMs: this.lastInputLagMs,
+      decodeLagMs: this.lastDecodeLagMs,
       floorMs: this.floorMs,
       maxLagMs: this.maxLagMs,
       limitMs: this.limitMs(),
@@ -340,6 +405,8 @@ export class AudioReceiveCatchUp {
     this.floorSamples.length = 0;
     this.floorMs = null;
     this.lastLagMs = null;
+    this.lastInputLagMs = null;
+    this.lastDecodeLagMs = null;
     this.maxLagMs = null;
     this.overLimitSinceMs = null;
     this.catchingUp = false;
@@ -366,13 +433,13 @@ export class AudioReceiveCatchUp {
    * 遅れている場合は、音声を映像へ合わせられない状態であり、その場で始める。上限を超えた
    * 状態が `AUDIO_RECEIVE_CATCH_UP_CONFIRM_MS` 続いた場合も始める。どちらも、直近に始めて
    * いれば `AUDIO_RECEIVE_CATCH_UP_COOLDOWN_MS` たっていることを要求する (詳しくは各定数の
-   * コメント)
+   * コメント)。見る値は「復号が足している遅れ」である (`observe` を参照)
    */
-  private shouldStart(nowMs: number, lagMs: number): boolean {
+  private shouldStart(nowMs: number, decodeLagMs: number): boolean {
     if (this.startedAtMs !== null && nowMs - this.startedAtMs < this.cooldownMs) {
       return false;
     }
-    if (lagMs > (this.floorMs ?? 0) + this.jumpMs) {
+    if (decodeLagMs > (this.floorMs ?? 0) + this.jumpMs) {
       return true;
     }
     if (this.overLimitSinceMs === null) {
@@ -388,20 +455,23 @@ export class AudioReceiveCatchUp {
    * 復号が長く止まった) は、途切れる前の床を窓の長さの分だけ保つ。途切れている間に溜まった
    * 分をそのまま床にすると、遅れが健全な値とみなされ、追いつきが始まらなくなる (実測:
    * 10 秒の観測のうち 5 秒を超えて途切れた後、遅れが 150 ms のまま固定され、始まらなかった)
+   *
+   * @param nowMs - 観測した時刻 (ミリ秒)
+   * @param decodeLagMs - 復号が足している遅れ (ミリ秒)。出力の遅れ - 入力の遅れ
    */
-  private updateFloor(nowMs: number, lagMs: number): void {
+  private updateFloor(nowMs: number, decodeLagMs: number): void {
     const previousAtMs = this.lastObservedAtMs;
     this.lastObservedAtMs = nowMs;
     if (previousAtMs !== null && nowMs - previousAtMs > this.floorWindowMs) {
       this.heldFloorMs = this.floorMs;
       this.heldFloorUntilMs = nowMs + this.floorWindowMs;
     }
-    this.floorSamples.push({ atMs: nowMs, lagMs });
+    this.floorSamples.push({ atMs: nowMs, lagMs: decodeLagMs });
     const oldestMs = nowMs - this.floorWindowMs;
     while (this.floorSamples.length > 0 && (this.floorSamples[0]?.atMs ?? 0) <= oldestMs) {
       this.floorSamples.shift();
     }
-    let floorMs = lagMs;
+    let floorMs = decodeLagMs;
     for (const sample of this.floorSamples) {
       floorMs = Math.min(floorMs, sample.lagMs);
     }

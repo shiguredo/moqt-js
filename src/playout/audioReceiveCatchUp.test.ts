@@ -65,12 +65,15 @@ interface Step {
  * @param lagsMs - 音ごとの遅れ (ミリ秒)
  * @param skipsMs - 音ごとの、手前で飛んだ長さ (ミリ秒)。省略時は飛ばない
  * @param startAtMs - 最初の音の時刻 (ミリ秒)。省略時は 0 (前の観測から続けて観測する)
+ * @param inputLagsMs - 音ごとの入力の遅れ (ミリ秒)。null のときは渡さない (入力の遅れを
+ *   導入する前の挙動になり、出力の遅れだけを見る)
  */
 function observeSeries(
   catchUp: AudioReceiveCatchUp,
   lagsMs: readonly number[],
   skipsMs: readonly number[] = [],
   startAtMs = 0,
+  inputLagsMs: readonly number[] | null = null,
 ): Step[] {
   const steps: Step[] = [];
   let skippedMicros = 0;
@@ -83,6 +86,7 @@ function observeSeries(
     const decision = catchUp.observe({
       nowMs,
       lagMs,
+      inputLagMs: inputLagsMs === null ? null : (inputLagsMs[index] ?? 0),
       durationMs: FRAME_INTERVAL_MS,
       timestampMicros,
     });
@@ -113,6 +117,8 @@ test("observe: 健全な状態では追いつきを始めない", () => {
   assert.deepEqual(startTimesMs(steps), []);
   const snapshot = catchUp.snapshot();
   assert.equal(snapshot.lagMs, HEALTHY_LAG_MS);
+  assert.isNull(snapshot.inputLagMs, "入力の遅れは渡していないこと");
+  assert.equal(snapshot.decodeLagMs, HEALTHY_LAG_MS, "測れないときは出力の遅れそのものであること");
   assert.equal(snapshot.floorMs, HEALTHY_LAG_MS);
   // 床が下限より小さく観測されても、上限は下限を下回らない
   assert.equal(snapshot.limitMs, AUDIO_RECEIVE_CATCH_UP_MIN_MS);
@@ -347,6 +353,8 @@ test("reset: 観測と累積を消す", () => {
 
   const snapshot = catchUp.snapshot();
   assert.isNull(snapshot.lagMs);
+  assert.isNull(snapshot.inputLagMs);
+  assert.isNull(snapshot.decodeLagMs);
   assert.isNull(snapshot.floorMs);
   assert.isNull(snapshot.maxLagMs);
   assert.equal(snapshot.catchUpStarts, 0);
@@ -407,4 +415,209 @@ test("observe: 観測が途切れた後も、途切れる前の床を保つ", ()
   // 超えるので、その場で始まる
   assert.deepEqual(startTimesMs(steps), [resumeAtMs]);
   assert.equal(catchUp.snapshot().catchUpStarts, 1);
+});
+
+// ============================================================================
+// 入力の遅れ (Object の到着 - LOC TIMESTAMP) で「経路が遅い」と「受信側が溜めている」を分ける
+// ============================================================================
+
+/** 健全なときの入力の遅れ (ミリ秒)。受信の入口で測る Object の到着 - LOC TIMESTAMP */
+const HEALTHY_INPUT_LAG_MS = 25;
+
+/** 健全なときの、到着から復号の出力までの分 (ミリ秒)。出力の遅れは 30 ms になる */
+const HEALTHY_DECODE_LAG_MS = 5;
+
+/** 受信側がまとめて遅れている間の入力の遅れ (ミリ秒)。実測の段差 (250 ms 前後) に合わせる */
+const BLOCKED_INPUT_LAG_MS = 250;
+
+/** 復号器に溜まる分 (ミリ秒)。出力の遅れ 250 ms - 入力の遅れ 25 ms。実時間でしか出てこない */
+const STUCK_DECODE_LAG_MS = 225;
+
+/** 受信側がまとめて遅れ始める時刻 (ミリ秒)。8 秒 */
+const BLOCK_START_MS = 8_000;
+
+/** 受信側の遅れが直る時刻 (ミリ秒)。20 秒。復号器に溜まった分は残る */
+const RECOVERY_MS = 20_000;
+
+/** この節の観測の長さ (ミリ秒)。60 秒 */
+const STUCK_SCENARIO_MS = 60_000;
+
+/** 受信側が溜めたまま戻らない状態を駆動した結果 */
+interface StuckDecoderRun {
+  /** 作り直しを求めた時刻 (ミリ秒) */
+  readonly startTimesMs: number[];
+  /** 受信側の遅れが直った後 (20 秒以降) に作り直しを求めた時刻 (ミリ秒) */
+  readonly afterRecoveryStartTimesMs: number[];
+  /** 受信側の遅れが直った後に観測した出力の遅れの最小値 (ミリ秒) */
+  readonly minLagAfterRecoveryMs: number;
+  /** 最後に観測した出力の遅れ (ミリ秒) */
+  readonly finalLagMs: number;
+  /** 最後の床 (ミリ秒) */
+  readonly finalFloorMs: number | null;
+  /** 最後の「復号が足している遅れ」 (ミリ秒) */
+  readonly finalDecodeLagMs: number | null;
+}
+
+/**
+ * 受信側が溜めたまま戻らない状態を、実装を駆動して作る
+ *
+ * - 0〜8 秒: 健全。入力の遅れ 25 ms、復号の出力の遅れ 30 ms
+ * - 8〜20 秒: 受信側がまとめて遅れる。Object の到着も復号の出力も 250 ms 前後遅れるが、
+ *   復号器の中には溜まっていない (入力の遅れも同じだけ上がる)
+ * - 20 秒以降: 受信側は直り、入力の遅れは 25 ms へ戻る。ところが、遅れていた間に届いた
+ *   Object がまとめて復号へ入り、復号器の中に 225 ms が溜まったままになる (実時間でしか
+ *   出てこない)。作り直すと捨てられて、出力の遅れは 30 ms へ戻る
+ *
+ * @param catchUp - 観測する追いつきの判定
+ * @param useInputLag - 入力の遅れを渡すか。false のときは導入前の挙動 (出力の遅れだけを見る)
+ */
+function observeStuckDecoder(catchUp: AudioReceiveCatchUp, useInputLag: boolean): StuckDecoderRun {
+  const startTimes: number[] = [];
+  let stuckDecodeLagMs = 0;
+  let wasBlocked = false;
+  let minLagAfterRecoveryMs = Number.POSITIVE_INFINITY;
+  let finalLagMs = 0;
+  for (let index = 0; index < STUCK_SCENARIO_MS / FRAME_INTERVAL_MS; index++) {
+    const nowMs = index * FRAME_INTERVAL_MS;
+    const blocked = nowMs >= BLOCK_START_MS && nowMs < RECOVERY_MS;
+    const inputLagMs = blocked ? BLOCKED_INPUT_LAG_MS : HEALTHY_INPUT_LAG_MS;
+    if (wasBlocked && !blocked) {
+      // 遅れていた分がまとめて復号へ入り、復号器の中に溜まる
+      stuckDecodeLagMs = STUCK_DECODE_LAG_MS;
+    }
+    wasBlocked = blocked;
+    const lagMs = inputLagMs + HEALTHY_DECODE_LAG_MS + stuckDecodeLagMs;
+    finalLagMs = lagMs;
+    if (nowMs >= RECOVERY_MS) {
+      minLagAfterRecoveryMs = Math.min(minLagAfterRecoveryMs, lagMs);
+    }
+    const decision = catchUp.observe({
+      nowMs,
+      lagMs,
+      inputLagMs: useInputLag ? inputLagMs : null,
+      durationMs: FRAME_INTERVAL_MS,
+      timestampMicros: TIMESTAMP_ORIGIN_MICROS + nowMs * 1_000,
+    });
+    if (decision.rebuildDecoder) {
+      startTimes.push(nowMs);
+      // 復号器を作り直した。溜まっていた分は捨てられる
+      stuckDecodeLagMs = 0;
+    }
+  }
+  const snapshot = catchUp.snapshot();
+  return {
+    startTimesMs: startTimes,
+    afterRecoveryStartTimesMs: startTimes.filter((atMs) => atMs >= RECOVERY_MS),
+    minLagAfterRecoveryMs:
+      minLagAfterRecoveryMs === Number.POSITIVE_INFINITY ? 0 : minLagAfterRecoveryMs,
+    finalLagMs,
+    finalFloorMs: snapshot.floorMs,
+    finalDecodeLagMs: snapshot.decodeLagMs,
+  };
+}
+
+/**
+ * 完了条件 (欠陥 4): 入力の遅れが健全なまま、復号の出力の遅れだけが大きい状態 (受信側が
+ * 溜めている) では、20 秒に受信側が直った時点で作り直しを求め、復号器に溜まった音を捨てて
+ * 出力の遅れを 30 ms へ戻す。床は「復号が足している遅れ」の最小値であるため、出力の遅れが
+ * 250 ms のまま 5 秒続いても 5 ms のまま上がらない。
+ *
+ * 受信側が遅れている間 (8〜20 秒) は、入力の遅れも同じだけ上がるため作り直しを求めない
+ * (経路が遅いだけの状態で、作り直しても戻らない)。
+ */
+test("observe: 受信側が溜めたまま戻らない状態では、直った時点で作り直しを求める", () => {
+  const run = observeStuckDecoder(new AudioReceiveCatchUp(), true);
+
+  // 受信側が遅れている間は、入力の遅れも上がるため求めない
+  assert.deepEqual(
+    run.startTimesMs.filter((atMs) => atMs < RECOVERY_MS),
+    [],
+    "経路が遅いだけの状態では作り直さないこと",
+  );
+  // 受信側が直った時点で、復号器に溜まった分 (225 ms) を捨てる
+  assert.deepEqual(run.afterRecoveryStartTimesMs, [RECOVERY_MS], "直った時点で作り直すこと");
+  // 作り直しが効いて、遅れは 30 ms 前後へ戻る
+  assert.equal(run.minLagAfterRecoveryMs, HEALTHY_INPUT_LAG_MS + HEALTHY_DECODE_LAG_MS);
+  assert.equal(run.finalLagMs, HEALTHY_INPUT_LAG_MS + HEALTHY_DECODE_LAG_MS);
+  // 床は健全な値 (復号が足している 5 ms) のままで、出力の遅れ (250 ms) へ追いつかない
+  assert.equal(run.finalFloorMs, HEALTHY_DECODE_LAG_MS);
+  assert.equal(run.finalDecodeLagMs, HEALTHY_DECODE_LAG_MS);
+});
+
+/**
+ * 完了条件 (欠陥 4 の再現): 入力の遅れを渡さない (導入前の挙動) と同じ入力では、出力の遅れが
+ * 250 ms のまま 5 秒続いた時点で床が 250 ms へ追いつき、それ以降は作り直しを求めなくなる。
+ * 20 秒に受信側が直っても、復号器に溜まった音は実時間でしか出てこないため、40 秒間 250 ms の
+ * まま固定される (実装を駆動した再現と同じ形)。
+ */
+test("observe: 入力の遅れを渡さないと、床が出力の遅れへ追いついて求めなくなる", () => {
+  const run = observeStuckDecoder(new AudioReceiveCatchUp(), false);
+
+  // 段差の直後は作り直しを求める (入力の遅れが無いため、経路の遅れも段差に見える)
+  assert.isAbove(run.startTimesMs.length, 1, "段差の直後は作り直しを求めること");
+  // 5 秒の窓が 250 ms で埋まると、床が上がって求めなくなる
+  assert.deepEqual(run.afterRecoveryStartTimesMs, [], "直った後も作り直しを求めないこと");
+  assert.equal(run.finalFloorMs, BLOCKED_INPUT_LAG_MS + HEALTHY_DECODE_LAG_MS);
+  assert.equal(run.finalLagMs, BLOCKED_INPUT_LAG_MS + HEALTHY_DECODE_LAG_MS, "250 ms のまま");
+});
+
+/**
+ * 完了条件 (欠陥 4): 経路が恒久的に悪化した状態 (入力の遅れも出力の遅れも同じだけ上がる) では、
+ * 作り直しを求めない。復号器の中に溜まっていないため、作り直しても遅れは戻らず、音を飛ばす
+ * だけになる。
+ */
+test("observe: 経路が恒久的に悪化した状態では作り直しを求めない", () => {
+  const catchUp = new AudioReceiveCatchUp();
+  const frames = 3_000;
+  // 5 音の健全な状態の後に、経路が恒久的に 250 ms 遅くなる。Object の到着も復号の出力も
+  // 同じだけ遅れる (復号器の中には溜まっていない)
+  const lagsMs = [
+    ...steadyLags(5, HEALTHY_INPUT_LAG_MS + HEALTHY_DECODE_LAG_MS),
+    ...steadyLags(frames - 5, BLOCKED_INPUT_LAG_MS + HEALTHY_DECODE_LAG_MS),
+  ];
+  const inputLagsMs = [
+    ...steadyLags(5, HEALTHY_INPUT_LAG_MS),
+    ...steadyLags(frames - 5, BLOCKED_INPUT_LAG_MS),
+  ];
+  const steps = observeSeries(catchUp, lagsMs, [], 0, inputLagsMs);
+
+  assert.deepEqual(startTimesMs(steps), [], "入力の遅れも同じだけ上がるため求めないこと");
+  assert.equal(catchUp.snapshot().decodeLagMs, HEALTHY_DECODE_LAG_MS);
+  // 入力の遅れを渡さない場合は、同じ入力でも段差として作り直しを求める (導入前の挙動)。
+  // 床が出力の遅れへ追いつくまで、クールダウンごとに繰り返す
+  const legacy = observeSeries(new AudioReceiveCatchUp(), lagsMs);
+  assert.isAbove(startTimesMs(legacy).length, 1, "導入前は段差で作り直しを繰り返すこと");
+});
+
+/**
+ * 完了条件: 入力の遅れが測れないとき (TIMESTAMP が無い、Timescale がある) は、出力の遅れを
+ * そのまま使う。入力の遅れを導入する前と同じ挙動であり、測れないことを理由に作り直しを
+ * 止めない。
+ */
+test("observe: 入力の遅れが測れないときは、出力の遅れをそのまま使う", () => {
+  const catchUp = new AudioReceiveCatchUp();
+  // TIMESTAMP が無い / Timescale がある (メディア時刻である) 音では測れないため、呼び出し側は
+  // null を渡す
+  const startTimes: number[] = [];
+  let timestampMicros = TIMESTAMP_ORIGIN_MICROS;
+  for (let index = 0; index < 25; index++) {
+    const nowMs = index * FRAME_INTERVAL_MS;
+    const lagMs = index < 5 ? HEALTHY_LAG_MS : 200;
+    const decision = catchUp.observe({
+      nowMs,
+      lagMs,
+      inputLagMs: null,
+      durationMs: FRAME_INTERVAL_MS,
+      timestampMicros,
+    });
+    if (decision.rebuildDecoder) {
+      startTimes.push(nowMs);
+    }
+    timestampMicros += FRAME_INTERVAL_MS * 1_000;
+  }
+
+  assert.deepEqual(startTimes, [100], "測れないときも、出力の遅れで判定すること");
+  const snapshot = catchUp.snapshot();
+  assert.isNull(snapshot.inputLagMs, "測れなかったことが残ること");
+  assert.equal(snapshot.decodeLagMs, 200, "入力の遅れが無いときは出力の遅れそのもの");
 });

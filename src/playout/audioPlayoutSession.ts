@@ -90,6 +90,19 @@ export interface AudioPlayoutRequest {
    * `wallClock` のときだけ、共有の時間軸へ記録して目標の開始時刻を決める
    */
   readonly timestampKind: AudioPlayoutTimestampKind;
+  /**
+   * 受信の入口で測った入力の遅れ (ミリ秒)。測れないときは null / 省略
+   *
+   * Object の到着の壁時計 - LOC TIMESTAMP である。受信側の追いつき (`catchUp`) が、出力の
+   * 遅れからこの値を引いた「復号が足している遅れ」で復号器の作り直しを決めるために使う
+   * (src/playout/audioReceiveCatchUp.ts の先頭のコメントを参照)。経路が遅いだけの状態
+   * (入力の遅れも出力の遅れも同じだけ上がる) では作り直さず、受信側が溜めたまま戻らない
+   * 状態 (入力の遅れは健全で出力の遅れだけが大きい) で作り直す。
+   *
+   * TIMESTAMP が無い / Timescale がある (メディア時刻である) 音では測れないため、呼び出し
+   * 側が null を渡す。省略したときは出力の遅れだけを使う (入力の遅れを導入する前と同じ挙動)
+   */
+  readonly inputLagMs?: number | null;
   /** 音声と映像で共有する表示時刻の時間軸 */
   readonly timeline: PlayoutTimeline;
   /**
@@ -277,6 +290,11 @@ export class AudioPlayoutSession {
         catchUpStarted = this.catchUp.observe({
           nowMs: arrivalMs,
           lagMs: performance.timeOrigin + arrivalMs - wallClockTimestamp / 1_000,
+          // 復号が足している遅れ (出力の遅れ - 入力の遅れ) で作り直しを決める。入力の遅れは
+          // 呼び出し側が Object を復号へ渡す時点で測り、復号の出力で引いてここへ渡す。
+          // 測れないとき (TIMESTAMP が無い、Timescale がある、対応が引けない) は null に
+          // なっており、そのときは出力の遅れだけを使う
+          inputLagMs: request.inputLagMs ?? null,
           durationMs: durationSeconds * 1_000,
           timestampMicros: wallClockTimestamp,
         }).rebuildDecoder;

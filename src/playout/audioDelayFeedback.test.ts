@@ -84,23 +84,47 @@ test("観測が無い間は閉ループの目標を使わない", () => {
   );
 });
 
+/**
+ * 遅れが許容の中に収まっている観測だけを与えて、目標を下限まで下げる
+ *
+ * 内部目標は、実際に適用される上限 (`AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS` = 100 ms) で切る
+ * (欠陥 5)。初期値もこの上限と同じ 100 ms であるため、増える向きの規則を確かめるには、
+ * まず下げて余地を作る必要がある。最初の観測は前回が無いため動かず、以降は毎秒 10 ms ずつ
+ * 下がるので、6 回 (5 秒) で下限 (50 ms) へ届く
+ *
+ * @param feedback - 下げる対象
+ */
+function lowerToMinimum(feedback: AudioDelayFeedback): void {
+  for (let index = 0; index < 6; index++) {
+    feedback.update(observation(index * AUDIO_DELAY_FEEDBACK_INTERVAL_MS, 0));
+  }
+}
+
 // 遅れが続くなら目標を増やす。増やす量は「遅れ - 許容 + 余白」であり、1 回の上限までにする。
 // 許容のすぐ上で往復しないよう余白を足す
 test("遅れが続くなら、遅れの分だけ目標を増やす", () => {
-  const feedback = new AudioDelayFeedback();
+  // 遅れ 20 ms: 20 - 10 + 20 = 30 だけ増やす
+  const gentle = new AudioDelayFeedback();
+  lowerToMinimum(gentle);
+  assert.equal(gentle.feedbackTargetMs, AUDIO_DELAY_FEEDBACK_MIN_MS, "まず下限まで下げること");
+
+  gentle.update(observation(6_000, 20));
+  assert.equal(
+    gentle.feedbackTargetMs,
+    AUDIO_DELAY_FEEDBACK_MIN_MS + 30,
+    "遅れに応じた分だけ増やすこと",
+  );
+  // 理由は遅れである
+  assert.equal(gentle.snapshot(40).reason, "lateness", "理由が遅れであること");
 
   // 遅れ 60 ms: 60 - 10 + 20 = 70 だが、1 回の上限 (40) までにする
-  feedback.update(observation(0, 60));
-  assert.equal(feedback.feedbackTargetMs, AUDIO_DELAY_FEEDBACK_START_MS + 40, "上限まで増やすこと");
-  // 理由は遅れである
-  assert.equal(feedback.snapshot(40).reason, "lateness", "理由が遅れであること");
-
-  // 遅れ 20 ms: 20 - 10 + 20 = 30 だけ増やす
-  feedback.update(observation(AUDIO_DELAY_FEEDBACK_INTERVAL_MS, 20));
+  const steep = new AudioDelayFeedback();
+  lowerToMinimum(steep);
+  steep.update(observation(6_000, 60));
   assert.equal(
-    feedback.feedbackTargetMs,
-    AUDIO_DELAY_FEEDBACK_START_MS + AUDIO_DELAY_FEEDBACK_MAX_STEP_MS + 30,
-    "遅れに応じた分だけ増やすこと",
+    steep.feedbackTargetMs,
+    AUDIO_DELAY_FEEDBACK_MIN_MS + AUDIO_DELAY_FEEDBACK_MAX_STEP_MS,
+    "1 回の増加は上限までにすること",
   );
 });
 
@@ -108,33 +132,35 @@ test("遅れが続くなら、遅れの分だけ目標を増やす", () => {
 // 上限に張り付いて遅延だけが増える
 test("間隔が空いていなければ目標を動かさない", () => {
   const feedback = new AudioDelayFeedback();
+  lowerToMinimum(feedback);
 
-  feedback.update(observation(0, 100));
+  feedback.update(observation(6_000, 100));
   const afterFirst = feedback.feedbackTargetMs;
-  assert.isAbove(afterFirst, AUDIO_DELAY_FEEDBACK_START_MS, "まず増やすこと");
+  assert.isAbove(afterFirst, AUDIO_DELAY_FEEDBACK_MIN_MS, "まず増やすこと");
 
-  feedback.update(observation(AUDIO_DELAY_FEEDBACK_INTERVAL_MS - 1, 100));
+  feedback.update(observation(6_000 + AUDIO_DELAY_FEEDBACK_INTERVAL_MS - 1, 100));
   assert.equal(feedback.feedbackTargetMs, afterFirst, "間隔の途中では動かさないこと");
   assert.equal(feedback.snapshot(100).reason, "waiting", "動かしていないことが分かること");
 
-  feedback.update(observation(AUDIO_DELAY_FEEDBACK_INTERVAL_MS, 100));
+  feedback.update(observation(6_000 + AUDIO_DELAY_FEEDBACK_INTERVAL_MS, 100));
   assert.isAbove(feedback.feedbackTargetMs, afterFirst, "間隔が空いたら動かすこと");
 });
 
 // 並べすぎで捨てたなら、捨てた長さぶんを吸収できるだけ増やす (捨てた長さ + 余白、1 回の上限まで)
 test("並べすぎで捨てたなら、捨てた長さぶん増やす", () => {
   const feedback = new AudioDelayFeedback();
+  lowerToMinimum(feedback);
 
-  feedback.update(observation(0, 0, 5, 100));
+  feedback.update(observation(6_000, 0, 5, 100));
   assert.equal(
     feedback.feedbackTargetMs,
-    AUDIO_DELAY_FEEDBACK_START_MS + 40,
+    AUDIO_DELAY_FEEDBACK_MIN_MS + 40,
     "捨てた長さと余白の合計を上限で切って増やすこと",
   );
   assert.equal(feedback.snapshot(40).reason, "backlog", "理由が並べすぎであること");
 
   // 捨てが続いていない (累積が増えていない) なら、遅れの判断へ移る
-  feedback.update(observation(AUDIO_DELAY_FEEDBACK_INTERVAL_MS, 0, 5, 100));
+  feedback.update(observation(7_000, 0, 5, 100));
   assert.equal(feedback.snapshot(140).reason, "settled", "捨てが無ければ減らす判断へ移ること");
 });
 
@@ -163,8 +189,9 @@ test("遅れが許容の中に収まっていれば、毎秒の速さで目標�
   );
 });
 
-// 目標は下限 (50 ms) から上限 (300 ms) の間に収める。下限より下げると揺らぎを吸収できず、
-// 上限より上げると常に大きく遅れて鳴る
+// 目標は下限 (50 ms) から、実際に適用される上限 (100 ms) の間に収める。下限より下げると
+// 揺らぎを吸収できず、上限より上げると常に大きく遅れて鳴る。適用は
+// `AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS` で切られるため、内部目標もそこで切る (欠陥 5)
 test("目標を下限と上限の中に収める", () => {
   const feedback = new AudioDelayFeedback();
 
@@ -174,36 +201,100 @@ test("目標を下限と上限の中に収める", () => {
   }
   assert.equal(feedback.feedbackTargetMs, AUDIO_DELAY_FEEDBACK_MIN_MS, "下限で止まること");
 
-  // 十分な回数を増やしても上限を超えない
+  // 十分な回数を増やしても、適用される上限を超えない
   for (let index = 0; index < 100; index++) {
     feedback.update(observation(1_000_000 + index * AUDIO_DELAY_FEEDBACK_INTERVAL_MS, 400));
   }
-  assert.equal(feedback.feedbackTargetMs, AUDIO_DELAY_FEEDBACK_MAX_MS, "上限で止まること");
+  assert.equal(
+    feedback.feedbackTargetMs,
+    AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS,
+    "適用される上限で止まること",
+  );
+});
+
+// 内部目標は、実際に適用される上限 (min(AUDIO_DELAY_FEEDBACK_MAX_MS, ceilingMs,
+// AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS)) で止まる (欠陥 5)。実測では内部目標が 198.4 ms まで
+// 巻き上がり、適用は 100 ms のままで、乖離した分を減らし切るまで復帰に 20 秒以上かかった
+test("内部目標は、実際に適用される上限で止まる", () => {
+  // 明示設定が無いときは、絶対上限 (300 ms) ではなく適用される上限 (100 ms) で止まる
+  const automatic = new AudioDelayFeedback();
+  for (let index = 0; index < 120; index++) {
+    automatic.update(observation(index * AUDIO_DELAY_FEEDBACK_INTERVAL_MS, 400));
+  }
+  assert.isBelow(
+    AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS,
+    AUDIO_DELAY_FEEDBACK_MAX_MS,
+    "適用される上限が絶対上限より小さいこと",
+  );
+  assert.equal(
+    automatic.feedbackTargetMs,
+    AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS,
+    "明示設定が無いときは適用される上限で止まること",
+  );
+  // 実際に使う値と乖離しない (乖離が無ければ、遅れが収まった時点でそのまま下がる)
+  assert.equal(
+    automatic.snapshot(0).appliedMs,
+    automatic.feedbackTargetMs,
+    "内部目標と実際に使う値が一致すること",
+  );
+
+  // 明示設定が適用される上限より大きいときも、適用される上限で止まる
+  const largeCeiling = new AudioDelayFeedback();
+  largeCeiling.setCeilingMs(AUDIO_DELAY_FEEDBACK_MAX_MS);
+  for (let index = 0; index < 120; index++) {
+    largeCeiling.update(observation(index * AUDIO_DELAY_FEEDBACK_INTERVAL_MS, 400));
+  }
+  assert.equal(
+    largeCeiling.feedbackTargetMs,
+    AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS,
+    "大きい明示設定でも適用される上限で止まること",
+  );
+
+  // 明示設定が適用される上限より小さいときは、その値で止まる
+  for (const ceilingMs of [90, 70, 60]) {
+    const capped = new AudioDelayFeedback();
+    capped.setCeilingMs(ceilingMs);
+    for (let index = 0; index < 120; index++) {
+      capped.update(observation(index * AUDIO_DELAY_FEEDBACK_INTERVAL_MS, 400));
+    }
+    assert.equal(capped.feedbackTargetMs, ceilingMs, `明示設定 ${ceilingMs} ms で止まること`);
+  }
 });
 
 // 明示設定 (`targetLatencyMs`) は、自動で決める目標の上限として尊重する。
 // 値が変わった時点で、既に超えていればその場で収める
 test("明示設定を上限として尊重する", () => {
   const feedback = new AudioDelayFeedback();
+  // 明示設定が無いときは、適用される上限 (100 ms) まで上がる
   for (let index = 0; index < 10; index++) {
     feedback.update(observation(index * AUDIO_DELAY_FEEDBACK_INTERVAL_MS, 400));
   }
-  assert.isAbove(feedback.feedbackTargetMs, 120, "まず自動で増えること");
+  assert.equal(
+    feedback.feedbackTargetMs,
+    AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS,
+    "明示が無ければ適用される上限まで上がること",
+  );
 
-  feedback.setCeilingMs(120);
-  assert.equal(feedback.feedbackTargetMs, 120, "上限に収めること");
-  assert.equal(feedback.ceiling, 120, "上限を保持すること");
+  // 適用される上限より小さい明示設定は、その場で収める
+  feedback.setCeilingMs(60);
+  assert.equal(feedback.feedbackTargetMs, 60, "上限に収めること");
+  assert.equal(feedback.ceiling, 60, "上限を保持すること");
 
   // 上限より大きい値へは増えない
   for (let index = 0; index < 10; index++) {
     feedback.update(observation(1_000_000 + index * AUDIO_DELAY_FEEDBACK_INTERVAL_MS, 400));
   }
-  assert.equal(feedback.feedbackTargetMs, 120, "上限を超えないこと");
+  assert.equal(feedback.feedbackTargetMs, 60, "上限を超えないこと");
 
-  // 上限を外すと、また自動で増える
+  // 上限を外すと、また自動で増える (適用される上限まで)
   feedback.setCeilingMs(null);
   feedback.update(observation(2_000_000, 400));
-  assert.isAbove(feedback.feedbackTargetMs, 120, "上限が無ければ増えること");
+  assert.isAbove(feedback.feedbackTargetMs, 60, "上限が無ければ増えること");
+  assert.isAtMost(
+    feedback.feedbackTargetMs,
+    AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS,
+    "適用される上限は超えないこと",
+  );
 });
 
 // 揺らぎだけから求めた目標 (NetEq) の方が大きいときは、それを使う。上限は自動で決める分に

@@ -15,6 +15,8 @@
 import { test, assert } from "vite-plus/test";
 import { MediaSubscriberImpl } from "./createMediaSubscriber";
 import type { VideoDecodeInputs } from "./playout/videoPlayoutSession";
+import type { AudioPlayoutSession } from "./playout/audioPlayoutSession";
+import { AUDIO_RECEIVE_CATCH_UP_MIN_MS } from "./playout/audioReceiveCatchUp";
 import type { MediaConnectSettings } from "./createMedia/connect";
 import type { FetchOptions, Session, SubscribeCallbacks, SubscribeOptions } from "./session";
 import type { Subscriber, RequestUpdateOptions } from "./subscriber";
@@ -3151,6 +3153,11 @@ interface SubscriberAvSyncControl {
   } | null;
   audioDecoderConfigured: boolean;
   audioTimestampKinds: Map<number, "wallClock" | "mediaTime">;
+  // 復号へ渡した音声 Object の入力の遅れ (Object の到着 - LOC TIMESTAMP、ミリ秒) の対応表。
+  // 復号の出力で引いて、受信側の追いつきへ渡しているかを確かめる
+  audioInputLags: Map<number, number>;
+  // 受信側の追いつきの観測 (入力の遅れを引いた「復号が足している遅れ」) を読む
+  readonly audioPlayoutSession: AudioPlayoutSession;
   // 復号へ渡した映像フレームの情報の対応表 (共有実装が持つ)
   videoDecodeInputs: VideoDecodeInputs;
   audioWallClockSeen: boolean;
@@ -3803,6 +3810,88 @@ test("handleAudioDecodedData: 音が抜けた分の隙間を補間して予約�
   assert.equal(errors.length, 0);
 });
 
+// 完了条件 (欠陥 4): Object を復号へ渡す時点で入力の遅れ (Object の到着 - LOC TIMESTAMP) を
+// 測り、復号の出力で同じ TIMESTAMP から引いて、受信側の追いつきへ渡す。経路が遅いだけの
+// 状態 (入力の遅れも出力の遅れも同じだけ大きい) では作り直しを求めない
+test("handleAudioDecodedData: 復号へ渡す時点の入力の遅れを、復号の出力で引いて渡す", () => {
+  const { control, errors } = createAvSyncSubscriber();
+  const decodedTimestamps: number[] = [];
+  control.audioDecoder = {
+    decode: (_payload, _type, timestamp) => {
+      decodedTimestamps.push(timestamp);
+    },
+  };
+  control.audioDecoderConfigured = true;
+  control.receivedCatalog = makeAudioVideoCatalog({ isLive: true }, { isLive: true });
+  control.extractTrackInfo();
+
+  // 復号の出力の遅れ (到着 - TIMESTAMP) が 200 ms 前後になる Object を復号へ渡す
+  const wallClockTimestamp = Math.round((performance.timeOrigin + performance.now() - 200) * 1_000);
+  control.handleAudioObject({
+    groupId: 1n,
+    objectId: 0n,
+    status: 0,
+    payload: new Uint8Array([0xaa]),
+    properties: LOC.encodeAudioProperties({ timestamp: BigInt(wallClockTimestamp) }),
+  });
+  assert.deepEqual(decodedTimestamps, [wallClockTimestamp], "復号へ渡すこと");
+  assert.closeTo(
+    control.audioInputLags.get(wallClockTimestamp) ?? 0,
+    200,
+    20,
+    "復号へ渡す時点の入力の遅れを覚えること",
+  );
+
+  // 復号の出力 (同じ TIMESTAMP) を鳴らす。入力の遅れを引いた「復号が足している遅れ」は小さい
+  playAudioFrame(control, wallClockTimestamp, null, 10);
+
+  const snapshot = control.audioPlayoutSession.catchUp.snapshot();
+  assert.closeTo(snapshot.inputLagMs ?? 0, 200, 20, "入力の遅れを復号の出力で引くこと");
+  assert.isBelow(
+    snapshot.decodeLagMs ?? Number.NaN,
+    AUDIO_RECEIVE_CATCH_UP_MIN_MS,
+    "復号が足している遅れは小さいこと",
+  );
+  assert.equal(snapshot.catchUpStarts, 0, "経路が遅いだけの状態では作り直さないこと");
+  // 引いた記録は残さない (出力されなかった分が溜まらない)
+  assert.equal(control.audioInputLags.size, 0, "引いた分は忘れること");
+  assert.equal(errors.length, 0);
+});
+
+// 完了条件: TIMESCALE がある TIMESTAMP (メディア時刻) は壁時計と対応しないため、入力の遅れを
+// 測らない。復号の出力では入力の遅れが無いものとして扱い、出力の遅れだけを使う
+test("handleAudioDecodedData: メディア時刻の Object では入力の遅れを測らない", () => {
+  const { control, errors } = createAvSyncSubscriber();
+  const decodedTimestamps: number[] = [];
+  control.audioDecoder = {
+    decode: (_payload, _type, timestamp) => {
+      decodedTimestamps.push(timestamp);
+    },
+  };
+  control.audioDecoderConfigured = true;
+  control.receivedCatalog = makeAudioVideoCatalog({ isLive: true }, { isLive: true });
+  control.extractTrackInfo();
+
+  // TIMESCALE がある TIMESTAMP はメディア時刻である (1 秒 = 1000 の目盛り)。
+  // デコーダへはマイクロ秒へ換算して渡す
+  control.handleAudioObject({
+    groupId: 1n,
+    objectId: 0n,
+    status: 0,
+    payload: new Uint8Array([0xaa]),
+    properties: LOC.encodeAudioProperties({ timestamp: 1_000n, timescale: 1_000n }),
+  });
+  const decodedTimestamp = 1_000_000;
+  assert.deepEqual(decodedTimestamps, [decodedTimestamp], "マイクロ秒へ換算して渡すこと");
+  assert.equal(control.audioInputLags.size, 0, "メディア時刻では入力の遅れを測らないこと");
+
+  playAudioFrame(control, decodedTimestamp, null, 10);
+
+  // 壁時計ではないため、追いつきの観測そのものを行わない
+  assert.isNull(control.audioPlayoutSession.catchUp.snapshot().inputLagMs);
+  assert.equal(errors.length, 0);
+});
+
 // 完了条件: 音声の再生の統計が getStats から読める。時間はミリ秒で返る
 test("getStats: 音声の再生の統計を返す", () => {
   const { control } = createAvSyncSubscriber();
@@ -3825,6 +3914,17 @@ test("getStats: 音声の再生の統計を返す", () => {
 // 完了条件: 詰めと遅れの統計もミリ秒換算で返る (非 0 の値で固定する)
 test("getStats: 詰めと遅れの統計をミリ秒で返す", () => {
   const { control } = createAvSyncSubscriber();
+  // 詰めるにはキューの余裕 (直前の音の終わり - (今 + 余裕)) が要る。まっさらな scheduler には
+  // 直前の音が無く (余裕が 0)、いまは余裕の分しか詰めないため、目標が未来の音を 1 つ先に
+  // 並べて余裕を作る (直前の音の終わりは 10.22 になる。旧挙動ではキューが空でも詰めていた)
+  control.audioPlayout.schedule(10, 0, 0.02, {
+    targetStartSeconds: 10.2,
+    arrivalSeconds: 10,
+    enforceTarget: true,
+    delaySeconds: AUDIO_PLAYOUT_DELAY_SECONDS,
+    arrivalDelaySeconds: AUDIO_PLAYOUT_ARRIVAL_DELAY_SECONDS,
+    presentationDelaySeconds: AUDIO_PLAYOUT_DELAY_SECONDS,
+  });
   // 目標を過ぎて届き、今 + 余裕からしか鳴らせない音を作る (遅れ 40 ms を詰める)
   const decision = control.audioPlayout.schedule(10, 0, 0.02, {
     // 目標を 30 ms 前に置く。今 + 余裕 (10 ms) からしか鳴らせないため、遅れは 40 ms になり、
@@ -4941,6 +5041,17 @@ test("createOutputStream: 再生の基準を消し、統計は残す", () => {
     codec: "opus",
     samplerate: 48_000,
   };
+  // 詰めるにはキューの余裕 (直前の音の終わり - (今 + 余裕)) が要る。まっさらな scheduler には
+  // 直前の音が無く (余裕が 0)、いまは余裕の分しか詰めないため、目標が未来の音を 1 つ先に
+  // 並べて余裕を作る (直前の音の終わりは 10.22 になる。旧挙動ではキューが空でも詰めていた)
+  control.audioPlayout.schedule(10, 0, 0.02, {
+    targetStartSeconds: 10.2,
+    arrivalSeconds: 10,
+    enforceTarget: true,
+    delaySeconds: AUDIO_PLAYOUT_DELAY_SECONDS,
+    arrivalDelaySeconds: AUDIO_PLAYOUT_ARRIVAL_DELAY_SECONDS,
+    presentationDelaySeconds: AUDIO_PLAYOUT_DELAY_SECONDS,
+  });
   // 目標を過ぎて届いた音で今の遅れと詰めを作る
   const decision = control.audioPlayout.schedule(10, 0, 0.02, {
     // 目標を 30 ms 前に置く。今 + 余裕 (10 ms) からしか鳴らせないため、遅れは 40 ms になり、
