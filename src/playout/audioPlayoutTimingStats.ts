@@ -311,9 +311,13 @@ export class AudioPlayoutTimingStats {
    * 捨てた量は購読の開始からの累積であり、差を取るのは呼び出し側 (`AudioDelayFeedback`) の
    * 仕事である (`src/playout/audioDelayFeedback.ts`)
    *
+   * 揺らぎだけから求めた目標 (NetEq) は時間軸が持っているため、この戻り値には含めない
+   * (`PlayoutTimeline.observeAudioPlayout` が足す)。圧縮の増分も購読側
+   * (`AudioPlayoutSession`) が足す (省略したときは 0 とみなされる)
+   *
    * @param nowMs - 求める時刻 (ミリ秒)
    */
-  audioDelayFeedback(nowMs: number): AudioDelayFeedbackObservation {
+  audioDelayFeedback(nowMs: number): Omit<AudioDelayFeedbackObservation, "jitterTargetMs"> {
     // 表示用の分布と同じ長さまでを残し、制御にはその中でも短い窓を使う
     const minAtMs = nowMs - this.windowMs;
     for (const series of [this.slacks, this.startDelays, this.latenesses]) {

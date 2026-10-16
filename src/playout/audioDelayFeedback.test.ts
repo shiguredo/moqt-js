@@ -11,6 +11,7 @@
 
 import { test, assert } from "vite-plus/test";
 import {
+  AUDIO_DELAY_FEEDBACK_ARTIFACT_CEILING_MS,
   AUDIO_DELAY_FEEDBACK_DECREASE_MS_PER_SECOND,
   AUDIO_DELAY_FEEDBACK_INTERVAL_MS,
   AUDIO_DELAY_FEEDBACK_MAX_MS,
@@ -27,16 +28,25 @@ import { summarizeTimings } from "./timingSummary";
 /**
  * 観測を 1 つ作る
  *
+ * `jitterTargetMs` の既定は適用の上限 (100 ms) であり、「経路は 100 ms 以内で足りている」
+ * ことを意味する (上限を 100 ms へ戻してよい状態)
+ *
  * @param atMs - 観測した時刻 (ミリ秒)
  * @param latenessP50Ms - 予定を過ぎて鳴った量の p50 (ミリ秒)。観測が無いときは null
- * @param backlogMisses - 並べすぎで捨てた音の数 (累積)
- * @param backlogMs - 並べすぎで捨てた長さ (ミリ秒、累積)
+ * @param options.backlogMisses - 並べすぎで捨てた音の数 (累積)
+ * @param options.backlogMs - 並べすぎで捨てた長さ (ミリ秒、累積)
+ * @param options.compressionMs - 前の観測から増えた圧縮 (ミリ秒)。既定は 0 (圧縮なし)
+ * @param options.jitterTargetMs - 揺らぎだけから求めた目標 (NetEq、ミリ秒)
  */
 function observation(
   atMs: number,
   latenessP50Ms: number | null,
-  backlogMisses = 0,
-  backlogMs = 0,
+  options: {
+    backlogMisses?: number;
+    backlogMs?: number;
+    compressionMs?: number;
+    jitterTargetMs?: number;
+  } = {},
 ): AudioDelayFeedbackObservation {
   const latenessMs = summarizeTimings(latenessP50Ms === null ? [] : [latenessP50Ms]);
   const startDelayMs = summarizeTimings([120]);
@@ -46,8 +56,10 @@ function observation(
     latenessMs,
     startDelayMs,
     slackMs,
-    backlogMisses,
-    backlogMs,
+    backlogMisses: options.backlogMisses ?? 0,
+    backlogMs: options.backlogMs ?? 0,
+    compressionMs: options.compressionMs ?? 0,
+    jitterTargetMs: options.jitterTargetMs ?? AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS,
   };
 }
 
@@ -151,7 +163,7 @@ test("並べすぎで捨てたなら、捨てた長さぶん増やす", () => {
   const feedback = new AudioDelayFeedback();
   lowerToMinimum(feedback);
 
-  feedback.update(observation(6_000, 0, 5, 100));
+  feedback.update(observation(6_000, 0, { backlogMisses: 5, backlogMs: 100 }));
   assert.equal(
     feedback.feedbackTargetMs,
     AUDIO_DELAY_FEEDBACK_MIN_MS + 40,
@@ -160,7 +172,7 @@ test("並べすぎで捨てたなら、捨てた長さぶん増やす", () => {
   assert.equal(feedback.snapshot(40).reason, "backlog", "理由が並べすぎであること");
 
   // 捨てが続いていない (累積が増えていない) なら、遅れの判断へ移る
-  feedback.update(observation(7_000, 0, 5, 100));
+  feedback.update(observation(7_000, 0, { backlogMisses: 5, backlogMs: 100 }));
   assert.equal(feedback.snapshot(140).reason, "settled", "捨てが無ければ減らす判断へ移ること");
 });
 
@@ -322,11 +334,11 @@ test("揺らぎだけから求めた目標の方が大きければ、それを�
 // 観測が無い (まだ鳴らしていない) ときは目標を動かさない
 test("累積が戻っても増やさず、観測が無ければ動かさない", () => {
   const feedback = new AudioDelayFeedback();
-  feedback.update(observation(0, 0, 5, 100));
+  feedback.update(observation(0, 0, { backlogMisses: 5, backlogMs: 100 }));
   assert.equal(feedback.snapshot(40).reason, "backlog", "捨てで増えること");
 
   // 購読のやり直しで累積が 0 に戻る
-  feedback.update(observation(AUDIO_DELAY_FEEDBACK_INTERVAL_MS, 0, 0, 0));
+  feedback.update(observation(AUDIO_DELAY_FEEDBACK_INTERVAL_MS, 0));
   assert.equal(feedback.snapshot(140).reason, "settled", "捨ての差が負でも増やさないこと");
 
   // 遅れの観測が無いときは動かさない
@@ -350,4 +362,207 @@ test("学習を消すと初期状態に戻る", () => {
   assert.isNull(snapshot.latenessP50Ms, "観測も消えること");
   // 明示設定の上限は残す (呼び出し側が決めた値である)
   assert.equal(feedback.ceiling, 200, "明示設定は残ること");
+});
+
+/**
+ * 経路へ渡した目標から、その 1 秒に出る圧縮 (時間圧縮) を模す
+ *
+ * 経路が必要とする遅延 (`pathMs`) に適用する目標が届いていなければ毎秒 20 ms 詰める
+ * (実測の圧縮は毎秒 9〜17 ms であり、同じ向きの入力である)。目標が届けば詰めない
+ */
+function compressionFor(appliedMs: number, pathMs: number): number {
+  return appliedMs < pathMs ? 20 : 0;
+}
+
+// 圧縮 (粗さ) が続くときだけ上限を 160 ms へ広げる。実測 (2026-10-16、実リレー 60 秒) では
+// 揺らぎだけの目標 (NetEq) が 100〜340 ms に育ち、上限 100 ms が常時拘束されて時間圧縮が
+// 60 秒で 550〜1000 ms (静かな回でも 556〜996 ms) 続いた。上限を上げれば、遅れて届いて
+// いた音が収まって圧縮が止まる
+test("圧縮が続くときだけ上限を 160 ms へ広げ、圧縮を止める", () => {
+  const feedback = new AudioDelayFeedback();
+  // 経路は 160 ms を必要とする (実測の jitterTargetMs の下限側)
+  const pathMs = AUDIO_DELAY_FEEDBACK_ARTIFACT_CEILING_MS;
+  const step = (second: number): number => {
+    const appliedMs = feedback.targetDelayMs(pathMs);
+    const compressionMs = compressionFor(appliedMs, pathMs);
+    feedback.update(
+      observation(second * AUDIO_DELAY_FEEDBACK_INTERVAL_MS, 0, {
+        compressionMs,
+        jitterTargetMs: pathMs,
+      }),
+    );
+    return compressionMs;
+  };
+
+  // 1 秒目と 2 秒目は既定の上限 (100 ms) のままで、詰め続けている
+  assert.equal(step(0), 20, "最初の 1 秒は詰めていること");
+  assert.equal(step(1), 20, "2 秒目も詰めていること");
+  assert.equal(
+    feedback.snapshot(pathMs).appliedCeilingMs,
+    AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS,
+    "1 秒では広げないこと",
+  );
+  assert.equal(feedback.snapshot(pathMs).compressionMsPerSecond, 20, "圧縮の速さを観測すること");
+
+  // 2 秒続いたため 3 秒目には 160 ms まで使い、圧縮が止まる
+  assert.equal(step(2), 20, "広げる直前までは詰めていること");
+  const raised = feedback.snapshot(pathMs);
+  assert.equal(
+    raised.appliedCeilingMs,
+    AUDIO_DELAY_FEEDBACK_ARTIFACT_CEILING_MS,
+    "圧縮が 2 秒続いたら 160 ms へ広げること",
+  );
+  assert.equal(raised.appliedMs, pathMs, "適用する目標が 100 ms を超えて 160 ms になること");
+  for (let second = 3; second <= 60; second++) {
+    assert.equal(step(second), 0, `${second + 1} 秒目に圧縮が止まること`);
+    assert.equal(
+      feedback.snapshot(pathMs).appliedCeilingMs,
+      AUDIO_DELAY_FEEDBACK_ARTIFACT_CEILING_MS,
+      "経路が 160 ms を必要とする間は広げたままにすること",
+    );
+  }
+});
+
+// 経路が静かになったら 15 秒で上限を 100 ms へ戻す。圧縮が 0 になっただけでは戻さない
+// (揺らぎが 100 ms を超えている経路では、戻した直後に圧縮が再発して往復する)
+test("経路が静かになったら、15 秒で上限を 100 ms へ戻す", () => {
+  const feedback = new AudioDelayFeedback();
+  const pathMs = AUDIO_DELAY_FEEDBACK_ARTIFACT_CEILING_MS;
+  // 0〜9 秒: 経路は 160 ms を必要とし、遅れも続く (内部の目標が広げた上限まで育つ)
+  for (let second = 0; second <= 9; second++) {
+    const appliedMs = feedback.targetDelayMs(pathMs);
+    feedback.update(
+      observation(second * AUDIO_DELAY_FEEDBACK_INTERVAL_MS, 40, {
+        compressionMs: compressionFor(appliedMs, pathMs),
+        jitterTargetMs: pathMs,
+      }),
+    );
+  }
+  assert.equal(
+    feedback.snapshot(pathMs).appliedCeilingMs,
+    AUDIO_DELAY_FEEDBACK_ARTIFACT_CEILING_MS,
+    "まず 160 ms へ広げること",
+  );
+  assert.equal(feedback.snapshot(pathMs).appliedMs, pathMs);
+
+  // 10 秒目から経路が静かになる (推定 90 ms、圧縮 0、遅れも収まる)。14 秒ぶんでは戻さない
+  for (let second = 10; second <= 23; second++) {
+    feedback.update(
+      observation(second * AUDIO_DELAY_FEEDBACK_INTERVAL_MS, 0, { jitterTargetMs: 90 }),
+    );
+    assert.equal(
+      feedback.snapshot(90).appliedCeilingMs,
+      AUDIO_DELAY_FEEDBACK_ARTIFACT_CEILING_MS,
+      `${second + 1} 秒目ではまだ戻さないこと`,
+    );
+  }
+  // 15 秒ぶん続いた時点で戻す。適用する値は 100 ms 以下になり、内部の目標は既存の速さ
+  // (毎秒 10 ms) で下限まで下がっている
+  feedback.update(observation(24 * AUDIO_DELAY_FEEDBACK_INTERVAL_MS, 0, { jitterTargetMs: 90 }));
+  assert.equal(
+    feedback.snapshot(90).appliedCeilingMs,
+    AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS,
+    "15 秒で 100 ms へ戻すこと",
+  );
+  assert.isAtMost(feedback.snapshot(90).appliedMs, AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS);
+  assert.equal(feedback.feedbackTargetMs, AUDIO_DELAY_FEEDBACK_MIN_MS, "内部の目標も下がること");
+});
+
+// 圧縮が無ければ上限を広げない (遅延を増やさない)。揺らぎだけの目標が 160 ms でも同じである
+test("圧縮が無ければ上限を広げない", () => {
+  const feedback = new AudioDelayFeedback();
+  for (let second = 0; second <= 60; second++) {
+    feedback.update(
+      observation(second * AUDIO_DELAY_FEEDBACK_INTERVAL_MS, 0, { jitterTargetMs: 160 }),
+    );
+  }
+  const snapshot = feedback.snapshot(160);
+  assert.equal(snapshot.appliedCeilingMs, AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS, "広げないこと");
+  assert.equal(snapshot.appliedMs, AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS, "遅延を増やさないこと");
+});
+
+// 揺らぎが 100 ms を超えている間は上限を戻さない (往復しない)。圧縮が 0 になっても、経路が
+// 100 ms を必要としている間は 160 ms のままでよい (戻せば 2 秒でまた広げることになる)
+test("揺らぎが 100 ms を超えている間は上限を戻さない", () => {
+  const feedback = new AudioDelayFeedback();
+  const pathMs = 120;
+  for (let second = 0; second <= 60; second++) {
+    const appliedMs = feedback.targetDelayMs(pathMs);
+    feedback.update(
+      observation(second * AUDIO_DELAY_FEEDBACK_INTERVAL_MS, 0, {
+        compressionMs: compressionFor(appliedMs, pathMs),
+        jitterTargetMs: pathMs,
+      }),
+    );
+    if (second >= 3) {
+      assert.equal(
+        feedback.snapshot(pathMs).appliedCeilingMs,
+        AUDIO_DELAY_FEEDBACK_ARTIFACT_CEILING_MS,
+        `${second + 1} 秒目も 160 ms のままであること`,
+      );
+    }
+  }
+  assert.equal(feedback.snapshot(pathMs).compressionMsPerSecond, 0, "圧縮は止まっていること");
+  assert.equal(feedback.snapshot(pathMs).appliedMs, pathMs, "推定の分だけ使うこと");
+});
+
+// 一時的な圧縮では上限を広げない。到着が一度乱れただけで 40 ms の遅延を払い続けないよう、
+// 2 秒続くまで待つ
+test("一時的な圧縮では上限を広げない", () => {
+  const feedback = new AudioDelayFeedback();
+  feedback.update(observation(0, 0, { compressionMs: 20, jitterTargetMs: 160 }));
+  for (let second = 1; second <= 30; second++) {
+    feedback.update(
+      observation(second * AUDIO_DELAY_FEEDBACK_INTERVAL_MS, 0, { jitterTargetMs: 160 }),
+    );
+    assert.equal(
+      feedback.snapshot(160).appliedCeilingMs,
+      AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS,
+      `${second + 1} 秒目も広げないこと`,
+    );
+  }
+});
+
+// 明示設定 (`targetLatencyMs`) があるときは、広げる分をその値で切る。明示設定は利用者が
+// 宣言した遅延の予算である。ただし既定の上限 (100 ms) は下回らない (既存の規則では
+// 揺らぎだけの目標に明示設定を掛けないため、下回らせると適用する値が既定より小さくなる)
+test("明示設定があるときは、広げる分をその値で切る", () => {
+  /** 圧縮が 2 秒以上続く入力で 10 秒回した閉ループを作る */
+  const driven = (ceilingMs: number | null): AudioDelayFeedback => {
+    const feedback = new AudioDelayFeedback();
+    feedback.setCeilingMs(ceilingMs);
+    for (let second = 0; second <= 10; second++) {
+      feedback.update(
+        observation(second * AUDIO_DELAY_FEEDBACK_INTERVAL_MS, 400, {
+          compressionMs: 20,
+          jitterTargetMs: 160,
+        }),
+      );
+    }
+    return feedback;
+  };
+
+  // 明示設定が無いときは 160 ms まで広がる
+  assert.equal(
+    driven(null).snapshot(160).appliedCeilingMs,
+    AUDIO_DELAY_FEEDBACK_ARTIFACT_CEILING_MS,
+  );
+  // 明示設定 120 ms のときは 120 ms まで
+  assert.equal(driven(120).snapshot(160).appliedCeilingMs, 120);
+  assert.equal(driven(120).snapshot(160).appliedMs, 120, "適用も明示設定までにすること");
+  // 明示設定 90 ms のときは広げない (適用の上限は既定の 100 ms のまま)
+  assert.equal(
+    driven(90).snapshot(160).appliedCeilingMs,
+    AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS,
+    "既定の上限を下回らせないこと",
+  );
+  assert.equal(driven(90).snapshot(160).appliedMs, AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS);
+  // 明示設定 200 ms のときは、絶対上限 (160 ms) が優先する
+  assert.equal(
+    driven(200).snapshot(160).appliedCeilingMs,
+    AUDIO_DELAY_FEEDBACK_ARTIFACT_CEILING_MS,
+  );
+  // 閉ループが決めた目標は、明示設定があるときはその値で切る (既存の規則)
+  assert.equal(driven(120).snapshot(160).targetMs, 120);
+  assert.equal(driven(90).snapshot(160).targetMs, 90);
 });

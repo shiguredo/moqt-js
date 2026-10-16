@@ -21,6 +21,7 @@ import type { AudioClockMapping } from "./audioPlayout";
 import { AUDIO_PLAYOUT_DELAY_FLOOR_MS, MAX_PLAYOUT_DELAY_MS, PlayoutTimeline } from "./timeline";
 import { JITTER_BUFFER_MAX_QUEUED_FRAMES } from "./buffer";
 import { AUDIO_RECEIVE_CATCH_UP_MIN_MS } from "./audioReceiveCatchUp";
+import { AUDIO_DELAY_FEEDBACK_INTERVAL_MS } from "./audioDelayFeedback";
 
 /** 音 1 つ分のサンプル数 (48 kHz の 20 ms) */
 const FRAMES_PER_SOUND = 960;
@@ -675,6 +676,68 @@ test("releaseAudioContext: 時計の対応だけを消し、予約の基準は�
 
   assert.isNull(fixture.session.clock.currentOffsetMs, "時計の対応を消すこと");
   assert.isAbove(fixture.session.playout.lateness, 0, "予約の基準は残すこと");
+});
+
+/**
+ * 完了条件: 圧縮 (時間圧縮) の増分を閉ループへ渡す。閉ループは「圧縮が続くときだけ目標の
+ * 上限を 160 ms へ広げる」判断に使い、累積ではなく増分を 1 秒ぶん足し合わせる
+ * (`src/playout/audioDelayFeedback.ts`)。
+ */
+test("observeDelayFeedback: 圧縮の増分を閉ループへ渡す", () => {
+  const fixture = makeSessionFixture();
+  // 閉ループへ観測を渡す時刻を指定して呼ぶ (実時間を待たずに毎秒の制御を再現する)
+  const observe = (atMs: number): void => {
+    (
+      fixture.session as unknown as {
+        observeDelayFeedback(atMs: number, timeline: PlayoutTimeline): void;
+      }
+    ).observeDelayFeedback(atMs, fixture.timeline);
+  };
+  // 1 回目の観測 (制御の起点)。この時点では圧縮は無い
+  observe(0);
+  assert.equal(
+    fixture.timeline.delayBreakdown.audioDelayFeedback.compressionMsPerSecond,
+    0,
+    "圧縮が無ければ 0 であること",
+  );
+
+  // 詰めを作る。先に目標が未来の音を並べてキューの余裕を作り、目標を過ぎた音を繋げる
+  // (余裕が無いと詰めない。src/playout/audioPlayout.ts)
+  const target = (targetStartSeconds: number) => ({
+    targetStartSeconds,
+    arrivalSeconds: targetStartSeconds,
+    enforceTarget: true,
+    delaySeconds: 0.08,
+    arrivalDelaySeconds: 0.08,
+    presentationDelaySeconds: 0.08,
+  });
+  const soundSeconds = SOUND_INTERVAL_MS / 1_000;
+  assert.equal(fixture.session.playout.schedule(10, 0, soundSeconds, target(10.2)).kind, "play");
+  const decision = fixture.session.playout.schedule(10.2, 20_000, soundSeconds, target(10.2));
+  assert.equal(decision.kind, "play");
+  if (decision.kind !== "play") {
+    return;
+  }
+  assert.closeTo(decision.compressSeconds, 0.01, 1e-9, "10 ms 詰めること");
+  fixture.session.playout.confirmStretch(decision.compressSeconds);
+  assert.closeTo(fixture.session.playout.compressed, 0.01, 1e-9, "詰めの累積が 10 ms であること");
+
+  // 2 回目は 1 秒後。この 1 秒間に出た圧縮の増分が、そのまま速さ (10 ms / 秒) になる
+  observe(AUDIO_DELAY_FEEDBACK_INTERVAL_MS);
+  assert.closeTo(
+    fixture.timeline.delayBreakdown.audioDelayFeedback.compressionMsPerSecond,
+    10,
+    1e-6,
+    "圧縮の増分を 1 秒ぶんの速さとして渡すこと",
+  );
+
+  // 3 回目は圧縮が無い。累積を渡していれば 10 のままになるため、増分であることが分かる
+  observe(AUDIO_DELAY_FEEDBACK_INTERVAL_MS * 2);
+  assert.equal(
+    fixture.timeline.delayBreakdown.audioDelayFeedback.compressionMsPerSecond,
+    0,
+    "圧縮が止まれば 0 になること",
+  );
 });
 
 /**
