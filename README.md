@@ -399,6 +399,8 @@ await subscriber.unsubscribe();
 - [MOQT Streaming Format](docs/MSF.md): Catalog / Timeline の公開 API
 - [A/V 同期と再生の決定の記録](docs/AV_SYNC_DECISIONS.md): A/V 同期と再生の閾値の根拠と再考の条件 (開発者向け)
 - [音声再生の到達点](docs/AUDIO_PLAYOUT_RESULT.md): 実リレーで測った音声の遅れ、A/V のずれ、パケロス対策と、既知の限界
+- [ビルド](docs/BUILD.md): Node.js の要件、`vp install` と `vp run build`、git 依存として取り込む場合
+- [テスト](docs/TEST.md): 単体テストの実行方法
 - [E2E テスト](docs/E2E_TEST.md): Playwright による E2E テストの実行方法と、実リレーを使う条件
 
 ## 動作環境
@@ -414,35 +416,6 @@ await subscriber.unsubscribe();
 
 > [!NOTE]
 > 音声の取り出しは、`MediaStreamTrackProcessor` が無いブラウザでは Web Audio の `AudioWorklet` で行います。Safari はこの API を DedicatedWorker にしか公開しておらず (Worker へ `MediaStreamTrack` も渡せません)、WebKit の実装は映像トラック専用です。Firefox は実装していません。この経路は Safari 相当の WebKit でも動作を確認しています (`vp exec playwright test --project=webkit`)。
-
-## ビルド
-
-Node.js 22.22.2 以降が必要です (package.json の `engines`。CI では 22 / 24 / 26 で検証しています)。ビルドとテストには [Vite+](https://github.com/voidzero-dev/vite-plus) の `vp` コマンドを使います。
-
-```bash
-vp install
-```
-
-`vp install` は `prepare` スクリプト経由で `vp pack` を実行し、`dist/` に `index.js` と `index.d.ts` を生成します。ソースを変更した後にビルドし直す場合は `vp run build` を実行します。
-
-```bash
-vp run build
-```
-
-### git 依存として取り込む場合
-
-`github:shiguredo/moqt-js#develop` のように git 依存として取り込む場合、git から取得したツリーには `dist/` が含まれないため、消費側で `prepare` の実行を許可する設定が必要です。
-
-- pnpm は `allowBuilds` に許可を与えないと `ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED` で失敗します。pnpm 11.19.0 以降はリポジトリ URL 形式 (`moqt-js@git+https://github.com/shiguredo/moqt-js.git`) で指定すると、commit が進んでもキーを書き換えずに済みます
-- npm 12 は git 依存のスクリプト実行が既定で無効のため、`--allow-git=root` などを指定します
-
-## テスト
-
-```bash
-vp test
-```
-
-E2E テスト (Playwright) の実行方法は [E2E テスト](docs/E2E_TEST.md) を参照してください。
 
 ## サンプル
 
