@@ -49,7 +49,7 @@ closed/0645 は `RedirectInfo` を公開再エクスポートに加えた issue 
 ## 参照
 
 - closed/0645 (`RedirectInfo` を公開再エクスポートに加えた issue。本 issue はその「残した課題」) / 0654 / 0677 (公開 API の変更を伴う未着手 issue)
-- draft-ietf-moq-transport-21 §9.4.1 (Redirect Structure) / §9.4.2 (REQUEST_ERROR の Redirect は REDIRECT のときだけ存在する)
+- draft-ietf-moq-transport-22 §9.4.1 (Redirect Structure) / §9.4.2 (REQUEST_ERROR の Redirect は REDIRECT のときだけ存在する)
 - `src/index.ts` の再エクスポート、`src/error.ts` の `RedirectInfo` / `RequestError`、`tsconfig.json` の exclude、`vite.config.ts` の `lint.options.typeCheck`、`.github/workflows/ci.yml` の lint job と typecheck job、`prek.toml` の `vp-check` / `vp-typecheck` フック
 
 ## 解決方法

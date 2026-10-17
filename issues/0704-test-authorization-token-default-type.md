@@ -9,7 +9,7 @@
 
 closed の `0652-bug-devtools-c4m-token-type.md` の調査で、`devtools/src/signals/connectionSettings.test.ts` のリセットヘルパーが Token Type を `"0"` にハードコードしていることが判明した。signal の宣言時の既定値 (`signal<string>("0")`) を変えても、テストはリセットヘルパーが入れた値で走るため素通りする。既定値の確認は e2e (実ブラウザで devtools を開いて `toHaveValue("0")` を見る) だけである。
 
-既定値は「c4m を取り込んでいないときの手入力トークンをどの Token Type で送るか」を決める値であり、`0652` は transport-21 §8.9 を根拠に `"0"` (out-of-band) のまま据え置くと判断した。この判断が Node テストで守られていない。
+既定値は「c4m を取り込んでいないときの手入力トークンをどの Token Type で送るか」を決める値であり、`0652` は draft-ietf-moq-transport-22 §8.9 を根拠に `"0"` (out-of-band) のまま据え置くと判断した。この判断が Node テストで守られていない。
 
 ## 現状
 
@@ -44,7 +44,7 @@ closed の `0652-bug-devtools-c4m-token-type.md` の調査で、`devtools/src/si
 
 ## 参照
 
-- draft-ietf-moq-transport-21 §8.9 (Token Type の意味。Type 0 は表に無い型で out-of-band 交渉) / §9.1.4 (AUTHORIZATION TOKEN Setup Option 0x03) / §16.6 Table 12 (登録済みの型)
+- draft-ietf-moq-transport-22 §8.9 (Token Type の意味。Type 0 は表に無い型で out-of-band 交渉) / §9.1.4 (AUTHORIZATION TOKEN Setup Option 0x03) / §16.6 Table 13 (登録済みの型)
 - draft-ietf-moq-c4m-01 §7.1 Table 4 (0x01 = CAT) / §7.1.1 (CAT の Payload)
 - closed の `0652-bug-devtools-c4m-token-type.md` (既定値 `"0"` の据え置きを判断。「残した課題」に本件がある)
 - `devtools/src/signals/connectionSettings.test.ts` の `resetAuthorizationTokenSettings` / `devtools/src/hooks/usePublisher.test.ts` の `resetPublisherSignals` (同型のハードコード)

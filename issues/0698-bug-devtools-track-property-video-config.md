@@ -49,7 +49,7 @@ closed の `0649-bug-media-subscriber-track-property-config.md` は高レベル 
 ## 参照
 
 - draft-ietf-moq-loc-04 Table 1 (VIDEO_CONFIG 0x0D / AUDIO_CONFIG 0x0F の Scope は Track, Object。TIMESTAMP / VIDEO_FRAME_MARKING は Object のみ) / §2.3.2.1 (Video Config) / §2.3.3.1 (Audio Config)。`refs/moq/draft-ietf-moq-loc-04.txt`
-- draft-ietf-moq-transport-21 §9.20 (SUBSCRIBE_OK の Track Properties)
+- draft-ietf-moq-transport-22 §9.7 (SUBSCRIBE_OK) / §10 (MOQT Properties)
 - closed `0649-bug-media-subscriber-track-property-config.md` (高レベル API 側の修正。devtools は対象外と明記されている)
 - 0677 (ライブラリ側映像デコーダの reset ループ) / 0678 (devtools の映像エンコーダのバックプレッシャ。publisher 側)
 

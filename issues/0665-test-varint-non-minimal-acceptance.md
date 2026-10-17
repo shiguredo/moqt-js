@@ -29,7 +29,7 @@ MOQT の varint は非最短表現を受理しなければならない。実装�
 
 ## 参照
 
-- `refs/moq/draft-ietf-moq-transport-21.txt` §8.1: 「Variable-length integers do not need to be encoded using the minimum number of bytes; any encoding length that can represent the value is valid. ... For example, the value 0 can be encoded as 0x00, 0x8000, 0xc00000, or any longer form.」
+- `refs/moq/draft-ietf-moq-transport-22.txt` §8.1: 「Variable-length integers do not need to be encoded using the minimum number of bytes; any encoding length that can represent the value is valid. ... For example, the value 0 can be encoded as 0x00, 0x8000, 0xc00000, or any longer form.」
 - 同 §8.1 Table 4 (Example Integer Encodings) の 8 例: 0x25 / 0x8025 / 0xbbbd / 0xed7f3e7d / 0xfaa1a0e403d8 / 0xfc8998abc66bc0 / 0xfefa318fa8e3ca11 / 0xffffffffffffffffff
 
 ## 解決方法

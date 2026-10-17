@@ -16,13 +16,13 @@ closed の `0652-bug-devtools-c4m-token-type.md` で devtools が送る Token Ty
 - `src/msf/c4m.ts` の `getC4mParameter` (80 行目) は `c4m` の値を Base64 文字列のまま返す (JSDoc 74-79 行目「base64 文字列のまま返す。検証しない。」)。同ファイルに Token Type を扱う型も値も無い
 - `src/msf.test.ts` は `getC4mParameter` の文字列レベルの挙動 (最初の `c4m` を返す 1954 行目 / 該当なしは undefined 1962 行目 / 空文字列もそのまま返す 1967 行目) だけを固定する
 - devtools 側は `devtools/src/utils/c4m.ts` の `extractC4mBase64` (16 行目) で Base64 を取り出し、`devtools/src/signals/connectionSettings.ts` の `applyC4mFromUrl` (157 行目) が `authorizationTokenType.value = "1"` を設定する (166 行目)。`buildAuthorizationToken` (104 行目) が Base64 を復号した生バイト列を `tokenValue` にし (105-115 行目)、Token Type を 10 進文字列から bigint にする (117-121 行目)
-- 送信は SETUP では `src/message/setup.ts` の `createSetup` (61 行目) が `SetupOptionType.AUTHORIZATION_TOKEN` (74 行目) として `encodeAuthorizationToken` (75 行目) を積む (draft-ietf-moq-transport-21 §9.1.4)。SUBSCRIBE などでは `src/session/params.ts` の `encodeAuthorizationTokenParameter` (734 行目) が Message Parameter 0x03 を積む (§9.20.3)
+- 送信は SETUP では `src/message/setup.ts` の `createSetup` (61 行目) が `SetupOptionType.AUTHORIZATION_TOKEN` (74 行目) として `encodeAuthorizationToken` (75 行目) を積む (draft-ietf-moq-transport-22 §9.1.4)。SUBSCRIBE などでは `src/session/params.ts` の `encodeAuthorizationTokenParameter` (734 行目) が Message Parameter 0x03 を積む (§9.20.2)
 - トークン構造の符号化は `src/message/authorizationToken.ts` の `encodeAuthorizationToken` (89 行目) で、Alias Type / Token Type / Token Value を varint と長さ付きバイト列で書く
 - `tests/e2e/` の webServer は devtools の dev サーバーだけである (`playwright.config.ts`)。`tests/e2e/devtools-authorization-token.spec.ts` は 4-5 行目に「実リレーは起動しない」と明記し、Token Type が `"1"` になることまでを固定する (24 行目)
 - 「相互運用 harness」はテストのコメントに登場する (`tests/e2e/devtools-audio.spec.ts` 4 行目「音声 object の到達は相互運用 harness 側で検証する」、`tests/e2e/devtools-audio-meter.spec.ts` 5 行目 / 154 行目) が、リポジトリ内に実体が無い。`README.md` 12-13 行目は「時雨堂が開発している MOQT Relay サーバーとのみ疎通確認を行っている」と述べる
 - 受信側の要件: draft-ietf-moq-c4m-01 §7.1 Table 4 は 0x01 を CAT として登録し、§7.1.1 は「Token Type が 0x01 のとき Token Payload は CBOR エンコードされた CWT として直列化した CAT」と定め、relay の MUST (署名 / MAC の検証、有効期限と標準クレームの確認、`moqt` claim と `moqt-reval` claim の処理、DPoP claim の処理) を列挙する。検証に失敗したトークンは接続または操作を拒否する MUST
 - §2 は本ドラフトが単一のトークン形式 (CAT) を使い、URL に載せるときは Base64 エンコードすると定める。§4 は URL への追加方法をアプリケーションの裁量とする
-- draft-ietf-moq-transport-21 §16.6 Table 12 の登録は 0x0 (Reserved、仕様は §8.9) と greasing 用の範囲 (`0x7f * N + 0x9D`) だけであり、0x01 は c4m が登録する。§8.9 は Type 0 を「表に無い型であり out-of-band で交渉する」と定める
+- draft-ietf-moq-transport-22 §16.6 Table 13 の登録は 0x0 (Reserved、仕様は §8.9) と greasing 用の範囲 (`0x7f * N + 0x9D`) だけであり、0x01 は c4m が登録する。§8.9 は Type 0 を「表に無い型であり out-of-band で交渉する」と定める
 - したがって、送信側が「Base64 を復号したバイト列を Token Type 1 で送る」ことと、relay が「そのバイト列を CBOR の CWT として検証して通す」ことは別であり、後者の確認手段が無い
 
 ## 設計方針
@@ -48,7 +48,7 @@ closed の `0652-bug-devtools-c4m-token-type.md` で devtools が送る Token Ty
 ## 参照
 
 - draft-ietf-moq-c4m-01 §2 (Token format) / §4 (Adding a token to a URL) / §7.1 Table 4 (0x01 = CAT) / §7.1.1 (CAT の Payload と relay の MUST)
-- draft-ietf-moq-transport-21 §8.9 (Token Type の意味。Type 0 は表に無い型) / §9.1.4 (AUTHORIZATION TOKEN Setup Option 0x03) / §9.20.3 (AUTHORIZATION TOKEN Message Parameter 0x03) / §16.6 Table 12 (登録済みの型)
+- draft-ietf-moq-transport-22 §8.9 (Token Type の意味。Type 0 は表に無い型) / §9.1.4 (AUTHORIZATION TOKEN Setup Option 0x03) / §9.20.2 (AUTHORIZATION TOKEN Message Parameter 0x03) / §16.6 Table 13 (登録済みの型)
 - draft-ietf-moq-msf-01 §11.1.1 (MSF URI Fragment の `c4m`。Base64 encoded C4M token)
 - closed の `0652-bug-devtools-c4m-token-type.md` (送信側を 0x01 に直した。「残した課題」に本件がある)
 - `src/msf/c4m.ts` の `getC4mParameter` / `src/msf.test.ts` の `getC4mParameter` テスト / `src/message/setup.ts` の `createSetup` / `src/message/authorizationToken.ts` の `encodeAuthorizationToken`

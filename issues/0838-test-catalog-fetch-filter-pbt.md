@@ -17,7 +17,7 @@ catalog の FETCH に載せる Location Filter を決める `catalogFetchFilter`
 
 - `src/createMediaSubscriber.test.ts` の `catalogFetchFilter` のテストは 3 例である (Largest Object が Group 7 のとき / Group 0 のとき / 不明なとき)
 - `src/` の性質テストは `*.prop.ts` に置く規約で、`catalogFetchFilter` の prop ファイルは無い
-- Group ID は `vi64` であり、0 と 2^64 - 1 の近傍が境界になる (draft-ietf-moq-transport-22 §1.4.3)
+- Group ID は `vi64` であり、0 と 2^64 - 1 の近傍が境界になる (draft-ietf-moq-transport-22 §8.1)
 
 ## 設計方針
 
@@ -41,5 +41,5 @@ catalog の FETCH に載せる Location Filter を決める `catalogFetchFilter`
 - `src/createMediaSubscriber.ts` の `catalogFetchFilter`
 - `src/filter.prop.ts` / `src/msf.prop.ts` (prop ファイルの作法)
 - `src/createMediaSubscriber.test.ts` (`catalogFetchFilter` の例示テスト)
-- draft-ietf-moq-transport-22 §9.20.9 (LOCATION FILTER) / §1.4.3 (vi64)
+- draft-ietf-moq-transport-22 §9.20.9 (LOCATION FILTER) / §8.1 (Variable-Length Integers)
 - draft-ietf-moq-msf-01 §5 (catalog は Group の先頭 Object)

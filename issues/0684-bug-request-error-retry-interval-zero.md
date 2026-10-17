@@ -7,7 +7,7 @@
 
 ## 目的
 
-draft-ietf-moq-transport-21 §9.4.2 は REQUEST_ERROR の Retry Interval を「要求を再送するまでの最小時間 (ミリ秒) + 1」と定め、「値が 0 なら要求を再試行すべきでない (SHOULD NOT)」「同じパラメータで後から再試行できるなら送信側は 0 以外の Retry Interval を載せる」「1 は即座に再試行してよい」と定める。§12.3 は EXCESSIVE_LOAD について「送信側は再試行できる時期を Retry Interval で示す SHOULD」、UNAUTHORIZED について「認可トークンがまだ有効でない場合は再試行できるかもしれない」と定める。
+draft-ietf-moq-transport-22 §9.4.2 は REQUEST_ERROR の Retry Interval を「要求を再送するまでの最小時間 (ミリ秒) + 1」と定め、「値が 0 なら要求を再試行すべきでない (SHOULD NOT)」「同じパラメータで後から再試行できるなら送信側は 0 以外の Retry Interval を載せる」「1 は即座に再試行してよい」と定める。§12.3 は EXCESSIVE_LOAD について「送信側は再試行できる時期を Retry Interval で示す SHOULD」、UNAUTHORIZED について「認可トークンがまだ有効でない場合は再試行できるかもしれない」と定める。
 
 ライブラリは REQUEST_ERROR を送る 2 つのヘルパーで Retry Interval を `0n` に固定しており、呼び出し側が値を指定する手段が無い。0 は「そのままでは再試行しない」の意味なので、再試行可能な失敗を再試行可能としてピアへ伝えられない。closed/0645 の「残した課題」にも「送信側 (`bidiSendRequestError` / `incomingSendRequestErrorAndClose`) は常に Retry Interval 0 を送るため、再試行可能であることをピアへ伝えない (§9.4.2 の SHOULD。受信側の本 issue とは別の論点)」と記録されている。
 
@@ -47,7 +47,7 @@ draft-ietf-moq-transport-21 §9.4.2 は REQUEST_ERROR の Retry Interval を「�
 
 ## 参照
 
-- draft-ietf-moq-transport-21 §9.4.2 (REQUEST_ERROR Message Format。Retry Interval はミリ秒 + 1、0 は再試行しない、1 は即座に再試行) / §12.3 (Request Error Codes。EXCESSIVE_LOAD の SHOULD / UNAUTHORIZED / REDIRECT の 0 の扱い)
+- draft-ietf-moq-transport-22 §9.4.2 (REQUEST_ERROR Message Format。Retry Interval はミリ秒 + 1、0 は再試行しない、1 は即座に再試行) / §12.3 (Request Error Codes。EXCESSIVE_LOAD の SHOULD / UNAUTHORIZED / REDIRECT の 0 の扱い)
 - closed/0645 (受信側の `retryInterval` / `redirect` の伝搬。本 issue はその「残した課題」) / 0662 (bidi の状態機械の PBT)
 - `src/session/bidi.ts` の `bidiSendRequestError`、`src/session/incoming.ts` の `incomingSendRequestErrorAndClose`、`src/message/session.ts` の `encodeRequestErrorPayload`、`src/varint.ts` の `encodeVarint`、`src/error.ts` の `RequestError`
 

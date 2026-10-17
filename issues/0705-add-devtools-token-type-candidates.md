@@ -19,7 +19,7 @@ closed の `0652-bug-devtools-c4m-token-type.md` で Token Type 0x01 (CAT) を�
 - 同画面には他に 14 個の `<select>` があり (合計 15 個)、列挙できる値は `<select>` で選ばせるのが慣例である (Codec は 489-501 行目、Audio Codec は 671-689 行目で `data-testid="audio-codec"` は 673 行目)
 - `devtools/src/signals/connectionSettings.ts` の `buildAuthorizationToken` (104 行目) は Token Type を 10 進文字列として解釈し、空文字は 0n にし (117-118 行目)、`safeParseBigInt` (173 行目) が失敗すると `undefined` を返して SETUP の AUTHORIZATION_TOKEN を送出しない (119-121 行目)。負値・16 進表記・数字の間に空白を含む値は無言で送信されない (前後の空白は 117 行目の `trim` で落ちる)
 - `initFromUrl` (421 行目) はクエリパラメータ `authorizationTokenType` の値を検証せずに signal へ入れる (520-522 行目)。URL 由来の任意の文字列が入力欄に出る
-- 登録済みの型: draft-ietf-moq-transport-21 §8.9 は Token Type 0 を「表に無い型であり out-of-band で交渉する」と定め、§16.6 Table 12 の登録は 0x0 (Reserved、仕様は §8.9) と greasing 用の範囲 (`0x7f * N + 0x9D`、§13) だけである。0x01 = CAT は draft-ietf-moq-c4m-01 §7.1 Table 4 が登録し、§7.1.1 が Payload (CBOR エンコードされた CWT として直列化した CAT) を定める。`PRIVACY_PASS_TOKEN` は draft-ietf-moq-privacy-pass-auth-03 §6.1 が登録を要求しているが、コードポイントは TBD である
+- 登録済みの型: draft-ietf-moq-transport-22 §8.9 は Token Type 0 を「表に無い型であり out-of-band で交渉する」と定め、§16.6 Table 13 の登録は 0x0 (Reserved、仕様は §8.9) と greasing 用の範囲 (`0x7f * N + 0x9D`、§13) だけである。0x01 = CAT は draft-ietf-moq-c4m-01 §7.1 Table 4 が登録し、§7.1.1 が Payload (CBOR エンコードされた CWT として直列化した CAT) を定める。`PRIVACY_PASS_TOKEN` は draft-ietf-moq-privacy-pass-auth-03 §6.1 が登録を要求しているが、コードポイントは TBD である
 - `tests/e2e/devtools-authorization-token.spec.ts` は `data-testid="authorization-token-type"` に対して `fill` を使う (29 行目 `fill("0")`、55 行目 `fill("2")`)。`<select>` に変えると `fill` では操作できない
 
 ## 設計方針
@@ -27,7 +27,7 @@ closed の `0652-bug-devtools-c4m-token-type.md` で Token Type 0x01 (CAT) を�
 - Token Type を `<select>` と自由入力の併用にする。候補は既知の型 (「out-of-band (0x0)」= `0`、「CAT (0x01)」= `1`) と「その他 (自由入力)」とし、「その他」を選んだときだけテキスト入力を出す。条件分岐の形は同画面の Token Alias (853-868 行目) に合わせる
 - 入力値が候補に無い場合は「その他」を選択した状態でテキスト入力に値を出し、c4m の取り込み (`applyC4mFromUrl` が `"1"` を入れる 166 行目) と URL クエリ (`initFromUrl` 520-522 行目) のどちらの経路でも表示が実値と一致するようにする
 - 候補は 1 箇所に定義する。案: `devtools/src/signals/connectionSettings.ts` に `AUTHORIZATION_TOKEN_TYPES = [{ value: "0", label: "out-of-band (0x0)" }, { value: "1", label: "CAT (0x01)" }] as const` を置き、値は 10 進文字列のまま保持する (送信側の `buildAuthorizationToken` は変更しない)
-- 各候補の説明は節番号つきで書く。0 は transport-21 §8.9 (表に無い型 / out-of-band 交渉)、0x01 は c4m-01 §7.1 Table 4 と §7.1.1 (Payload は CBOR エンコードされた CWT)。greasing の範囲 (§16.6 Table 12 / §13) と未登録の `PRIVACY_PASS_TOKEN` (§6.1、コードポイント TBD) は候補にしない
+- 各候補の説明は節番号つきで書く。0 は draft-ietf-moq-transport-22 §8.9 (表に無い型 / out-of-band 交渉)、0x01 は c4m-01 §7.1 Table 4 と §7.1.1 (Payload は CBOR エンコードされた CWT)。greasing の範囲 (§16.6 Table 13 / §13) と未登録の `PRIVACY_PASS_TOKEN` (§6.1、コードポイント TBD) は候補にしない
 - Token Type が空文字のときは 0n として送られる既存のフォールバック (117-118 行目) は変えない。候補に「未指定 (空)」を足すかは実装時に決める (第一案: 足さない。既定は `"0"` であり、空文字は手入力の産物である)
 - c4m 取り込みの解除 (881-884 行目) と `clearImportedC4mToken` (313 行目) の挙動は変えない。候補の選択でも c4m の Base64 を解除する
 - テスト: `data-testid="authorization-token-type"` を維持し、`tests/e2e/devtools-authorization-token.spec.ts` の `fill` を `selectOption` に直す (29 行目 / 55 行目)。任意の値を入力する経路 (「その他」を選んでテキスト入力) の e2e も足す。`devtools/src/signals/connectionSettings.test.ts` には候補定数の値 (0 と 1 が含まれ、値が重複しない) のテストを足す
@@ -46,7 +46,7 @@ closed の `0652-bug-devtools-c4m-token-type.md` で Token Type 0x01 (CAT) を�
 
 ## 参照
 
-- draft-ietf-moq-transport-21 §8.9 (Token Type の意味。Type 0 は表に無い型で out-of-band 交渉) / §13 (Grease) / §16.6 Table 12 (登録済みの型)
+- draft-ietf-moq-transport-22 §8.9 (Token Type の意味。Type 0 は表に無い型で out-of-band 交渉) / §13 (Grease) / §16.6 Table 13 (登録済みの型)
 - draft-ietf-moq-c4m-01 §7.1 Table 4 (0x01 = CAT) / §7.1.1 (CAT の Payload)
 - draft-ietf-moq-privacy-pass-auth-03 §6.1 (MOQT Auth Token Type への登録要求。コードポイントは TBD)
 - closed の `0652-bug-devtools-c4m-token-type.md` (「残した課題」に候補表示が無いことが挙げられている)

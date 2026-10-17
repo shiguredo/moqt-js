@@ -7,7 +7,7 @@
 
 ## 目的
 
-closed の `0646-bug-data-stream-buffer-limit.md` で、上限を超えた受信データストリームを `cancelStreamQuiet` で打ち切る実装を入れた。この経路は文字列 reason しか渡せないため、draft-ietf-moq-transport-21 §12.5 の「reset / STOP_SENDING には relevant なコードを使う SHOULD」を wire 上で満たせない。ピアは打ち切りの理由 (過負荷 / malformed track) をコードで判別できない。同じ制約は 0646 が入れた上限超過だけでなく、malformed track の打ち切りと fill / pending mode の打ち切りにもあり、コードを reason 文字列へ埋め込む経路と埋め込まない経路が混在している。0646 の「残した課題」にも同じ制約が記録されている。
+closed の `0646-bug-data-stream-buffer-limit.md` で、上限を超えた受信データストリームを `cancelStreamQuiet` で打ち切る実装を入れた。この経路は文字列 reason しか渡せないため、draft-ietf-moq-transport-22 §12.5 の「reset / STOP_SENDING には relevant なコードを使う SHOULD」を wire 上で満たせない。ピアは打ち切りの理由 (過負荷 / malformed track) をコードで判別できない。同じ制約は 0646 が入れた上限超過だけでなく、malformed track の打ち切りと fill / pending mode の打ち切りにもあり、コードを reason 文字列へ埋め込む経路と埋め込まない経路が混在している。0646 の「残した課題」にも同じ制約が記録されている。
 
 ## 現状
 
@@ -17,7 +17,7 @@ closed の `0646-bug-data-stream-buffer-limit.md` で、上限を超えた受信
 - コードを埋め込まない経路は 4 種類ある。`dataStreamHandleMalformedSubgroupTrack` (831-849 行目) は 845-848 行目で同じ malformed 打ち切りでありながら `code=` を含めない。fill の malformed (557-560 行目)、pending mode の abandon (922-925 行目 / 938-941 行目 / 954-957 行目の 3 か所)、`src/session/namespaceLoops.ts` の 304 行目も含めない
 - 受信側は逆にコードを読める。`src/session/bidi.ts` の `createResetStreamErrorWithMessage` (4470-4483 行目) が読み取り失敗値の `streamErrorCode` を取り出し、`normalizeDataStreamErrorCode` (4478 行目) で正規化してアプリへ渡す。`src/error.ts` の `DataStreamErrorCode` (154-165 行目) に `EXCESSIVE_LOAD` (0x9、163 行目) と `MALFORMED_TRACK` (0x12、164 行目) は定義済みである
 - 送信方向も同じ制約を持つ。`WritableStreamDefaultWriter.abort(reason)` へ渡しているのは全て文字列である (`src/session/bidi.ts` の 510 / 809 / 1594 / 3970 / 4053 行目、`src/session/publish.ts` の 216 / 240 / 383 / 506 / 527 行目、`src/session/namespaces.ts` の 604 / 626 行目)
-- draft-ietf-moq-transport-21 §12.5 は「The application SHOULD use a relevant error code when resetting or sending STOP_SENDING on any stream.」と定める (`refs/moq/draft-ietf-moq-transport-21.txt` の 6677-6678 行目)
+- draft-ietf-moq-transport-22 §12.5 は「The application SHOULD use a relevant error code when resetting or sending STOP_SENDING on any stream.」と定める (`refs/moq/draft-ietf-moq-transport-22.txt` の 6957-6958 行目)
 - `src/session.test.ts` の「Subgroup データストリーム: バッファ上限を超えると打ち切られ購読が closed になる」(6291 行目) は、cancel の reason に `code=9` が含まれることを現在の契約として固定している (6355 行目)
 - 0646 の「残した課題」に「`cancelStreamQuiet` の reason は wire のエラーコードを送れないため、§12.5 の『reset / STOP_SENDING には relevant なコードを使う SHOULD』は wire 上では満たせない」と記録されている
 
@@ -43,8 +43,8 @@ closed の `0646-bug-data-stream-buffer-limit.md` で、上限を超えた受信
 
 ## 参照
 
-- draft-ietf-moq-transport-21 §12.5 (Stream Reset Error Codes。冒頭の SHOULD と EXCESSIVE_LOAD 0x9 / MALFORMED_TRACK 0x12)。本文は `refs/moq/draft-ietf-moq-transport-21.txt` の 6675-6710 行目
-- draft-ietf-moq-transport-21 §12.1 (Malformed Tracks の打ち切り)
+- draft-ietf-moq-transport-22 §12.5 (Stream Reset Error Codes。冒頭の SHOULD と EXCESSIVE_LOAD 0x9 / MALFORMED_TRACK 0x12)。本文は `refs/moq/draft-ietf-moq-transport-22.txt` の 6955-6989 行目
+- draft-ietf-moq-transport-22 §12.1 (Malformed Tracks の打ち切り)
 - closed `0646-bug-data-stream-buffer-limit.md` (打ち切りを入れた issue。残した課題に `cancelStreamQuiet` の制約がある)
 - W3C WebTransport (https://www.w3.org/TR/webtransport/)。`ReadableStream` の cancel には application error code を渡す引数が無い
 

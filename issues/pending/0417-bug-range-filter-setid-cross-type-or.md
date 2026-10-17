@@ -8,7 +8,7 @@
 
 ## 目的
 
-draft-ietf-moq-transport-19 §5.1.3 の「All filter parameters with the same SetID value are combined using logical "AND" operations, then all the resulting sets are combined using logical "OR" operations」を、TRACK_PROPERTY_FILTER とオブジェクトフィルタ (SUBGROUP / OBJECTID / PRIORITY / OBJECT_PROPERTY) をまたいで適用する。
+draft-ietf-moq-transport-22 §3.3.2 の「Filter parameters with the same SetID are AND'd; distinct SetIDs are OR'd. The final result is SetID=0 OR SetID=1 OR ... SetID=255, where each SetID=i is the AND of all filter parameters carrying that SetID.」を、TRACK_PROPERTY_FILTER とオブジェクトフィルタ (SUBGROUP / OBJECTID / PRIORITY / OBJECT_PROPERTY) をまたいで適用する。
 
 ## 現状
 
@@ -35,8 +35,8 @@ draft-ietf-moq-transport-19 §5.1.3 の「All filter parameters with the same Se
 
 ## 参照
 
-- draft-ietf-moq-transport-19 §5.1.3 (Range Filters / SetID の AND / OR 結合 / TRACK_PROPERTY_FILTER)
-- draft-ietf-moq-transport-19 §5.1.4 (Combining Filters / Pass = Forward AND Location Filters AND Range Filters)
+- draft-ietf-moq-transport-22 §3.3.2 (Range Filters / SetID の AND / OR 結合 / TRACK_PROPERTY_FILTER)
+- draft-ietf-moq-transport-22 §3.3.3 (Combining Filters / Pass = Forward AND Location Filters AND Range Filters)
 - 関連: `issues/closed/0385-moqt-draft-19-range-filter-evaluation-logic.md` (Range Filter 評価の導入)
 
 ## 解決方法
@@ -45,9 +45,9 @@ draft-ietf-moq-transport-19 §5.1.3 の「All filter parameters with the same Se
 
 ## pending にした理由
 
-- 本 issue の前提 (解釈 A: TRACK_PROPERTY_FILTER とオブジェクトフィルタが異なる SetID の場合に OR 結合される) は、draft-ietf-moq-transport-19 の一次資料から確定できない (polish-issue 本審で検証済み)。
-  - §5.1.3 の結合規則「All filter parameters with the same SetID value are combined using logical "AND" operations, then all the resulting sets are combined using logical "OR" operations.」は種別を限定しないが、同じ節の直後の「PUBLISH messages which pass the filter will be forwarded while those which do not pass it will not be forwarded nor will any Objects.」は、track 不通過の PUBLISH のオブジェクト転送を明示的に否定しており、issue の反例 (track 不通過でも objectId 3-5 を満たすオブジェクトは転送されるべき) と直接矛盾する。
-  - §5.1.4 の「All filter types are combined using logical "AND" operations ... Pass = Forward AND Location Filters AND Range Filters」も種別間 AND を支持する。
-  - moq-wg でもこの節の解釈は未確定であり、明確化作業が進行中 (moq-wg/moq-transport issue #1810「New section on filters hard to process」/ PR #1851「Clarify Range Filters section for readability」)。
+- 本 issue の前提 (解釈 A: TRACK_PROPERTY_FILTER とオブジェクトフィルタが異なる SetID の場合に OR 結合される) は、draft-ietf-moq-transport-22 の一次資料から確定できない (polish-issue 本審で検証済み)。
+  - §3.3.2 の結合規則「Filter parameters with the same SetID are AND'd; distinct SetIDs are OR'd. The final result is SetID=0 OR SetID=1 OR ... SetID=255, where each SetID=i is the AND of all filter parameters carrying that SetID.」は種別を限定しないが、同じ節の Track Property Filter の段落の「PUBLISH messages which pass the filter will be forwarded while those which do not pass it will not be forwarded nor will any Objects.」は、track 不通過の PUBLISH のオブジェクト転送を明示的に否定しており、issue の反例 (track 不通過でも objectId 3-5 を満たすオブジェクトは転送されるべき) と直接矛盾する。
+  - §3.3.3 の「All filter types are combined using logical "AND" operations ... Pass = Forward AND Location Filters AND Range Filters」も種別間 AND を支持する。
+  - moq-wg/moq-transport の PR #1851「Clarify the Range Filters section for readability」は draft-22 に反映済み (Appendix A.3) だが、解釈 A を確定する記述は draft-22 §3.3.2 に無く、異なる SetID 間の OR 結合と Track Property Filter の否定文の矛盾は残っている。
 - 現行実装 (0385 で確立) は解釈 B (0x29 は PUBLISH ゲート。不通過は UNINTERESTED で拒否) を採用しており、CHANGES.md にも「受信 PUBLISH の Track Properties に対する TRACK_PROPERTY_FILTER 評価を追加し、不通過は UNINTERESTED で拒否する」と記録済み。
-- 対応方針: moq-wg の明確化 (issue #1810 / PR #1851 の結果) で解釈 A が確定した場合にのみ、本 issue を reopened にして対応する。解釈 B が確定した場合は本 issue を closed にする。
+- 対応方針: 将来の仕様改訂で解釈 A が確定した場合にのみ、本 issue を reopened にして対応する。解釈 B が確定した場合は本 issue を closed にする。

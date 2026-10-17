@@ -14,7 +14,7 @@
 すべて現行の docs とコードで確認した。
 
 - `docs/HIGH_LEVEL_API.md` の使用例 2 箇所が `https://relay.example.com/moqt` を渡している。`src/moqtUri.ts` の `normalizeMoqtUri` は `moqt://` で始まらない URL を `Error` で拒否し、`moqt://` の例は README 側にしかない
-- `docs/LOW_LEVEL_API.md` の `ConnectOptions` 表が `moqtImplementation` を「SETUP Option 0x0A」としている。`SetupOptionType.MOQT_IMPLEMENTATION` は 0x07 で、draft-21 §9.1.5 (MOQT IMPLEMENTATION) も 0x07 と定める
+- `docs/LOW_LEVEL_API.md` の `ConnectOptions` 表が `moqtImplementation` を「SETUP Option 0x0A」としている。`SetupOptionType.MOQT_IMPLEMENTATION` は 0x07 で、draft-22 §9.1.5 (MOQT IMPLEMENTATION) も 0x07 と定める
 - `docs/LOW_LEVEL_API.md` の `ConnectOptions` 表に次の 5 つが無い (`src/session/publicTypes.ts` に定義がある)
   - `maxAuthTokenCacheSize` (SETUP Option 0x04、省略時の既定 0)
   - `maxRequestUpdates` (SETUP Option 0x08、省略時の既定 0 = 無制限)

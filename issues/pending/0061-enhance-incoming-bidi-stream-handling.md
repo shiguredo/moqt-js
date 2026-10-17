@@ -9,11 +9,11 @@ Model: Opus 4.6
 
 ## RFC 根拠
 
-draft-ietf-moq-transport-17 Section 3.3 Session initialization:
+draft-ietf-moq-transport-22 Section 6.3 Session initialization:
 
-> In addition to the control streams, this specification uses bidirectional streams to carry requests. A request stream begins with one of these six message types: TRACK_STATUS, SUBSCRIBE, PUBLISH, FETCH, PUBLISH_NAMESPACE, and SUBSCRIBE_NAMESPACE. Bidirectional streams MUST NOT begin with any other message type unless negotiated. If they do, the peer MUST close the Session with a PROTOCOL_VIOLATION. Objects are sent on unidirectional streams.
+> In addition to the control streams, this specification uses bidirectional streams to carry requests. A request stream begins with one of these seven message types: TRACK_STATUS, SUBSCRIBE, PUBLISH, FETCH, PUBLISH_NAMESPACE, SUBSCRIBE_NAMESPACE, and SUBSCRIBE_TRACKS. Bidirectional streams MUST NOT begin with any other message type unless negotiated. If they do, the peer MUST close the Session with a PROTOCOL_VIOLATION. Objects are sent on unidirectional streams.
 
-draft-ietf-moq-transport-17 Section 5.1 Subscriptions:
+draft-ietf-moq-transport-22 Section 3.1 Subscriptions:
 
 > Either endpoint can initiate a subscription to a track without exchanging any prior messages other than SETUP.
 

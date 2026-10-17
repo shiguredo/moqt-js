@@ -42,7 +42,7 @@
 
 ## 参照
 
-- draft-ietf-moq-transport-21 §9.1 (SETUP) / §12.2 (CONTROL_MESSAGE_TIMEOUT 0x11 / DATA_STREAM_TIMEOUT 0x12) / §12.5 (EXCESSIVE_LOAD 0x9)。`initialize` のオプションが対応する節である
+- draft-ietf-moq-transport-22 §9.1 (SETUP) / §12.2 (CONTROL_MESSAGE_TIMEOUT 0x11 / DATA_STREAM_TIMEOUT 0x12) / §12.5 (EXCESSIVE_LOAD 0x9)。`initialize` のオプションが対応する節である
 - closed `0646-bug-data-stream-buffer-limit.md` (型を 2 箇所へ足す必要があった例。残した課題に重複が記録されている)
 
 ## 解決方法
