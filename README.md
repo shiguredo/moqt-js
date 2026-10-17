@@ -186,6 +186,8 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
 
 [draft-ietf-moq-msf-01](https://datatracker.ietf.org/doc/html/draft-ietf-moq-msf-01) の機能実装状況です。
 
+MSF-01 §5 は catalog の取得に Joining FETCH を MUST としているが、Joining FETCH は MOQT transport draft-20 で削除され draft-22 には存在しない。moqt-js は draft-22 を前提とするため、この要件は draft-22 §3.4 の fill fetch stream (`FILL_PARAMETERS`) として解釈する。現状は `subscribe()` + `fetch()` の 2 リクエストで代替している。
+
 #### Catalog
 
 - Root

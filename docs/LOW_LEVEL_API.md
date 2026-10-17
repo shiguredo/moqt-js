@@ -326,7 +326,7 @@ interface MoqtObject {
 - `publishNamespace()` は専用双方向ストリームで `PUBLISH_NAMESPACE` を送り、専用ループで `REQUEST_OK` / `REQUEST_ERROR` を待つ
 - `subscribeNamespace()` は専用双方向ストリームを別実装で開き、`REQUEST_OK` の後も `NAMESPACE` / `NAMESPACE_DONE` を受け続ける
 - `subscribeTracks()` も専用双方向ストリームを別実装で開き、`REQUEST_OK` の後は prefix に一致する `PUBLISH` / `PUBLISH_SKIPPED` を受け続ける
-- `PUBLISH_NAMESPACE_DONE` は draft-17 で削除されたため、公開終了はローカル状態の cleanup のみで表現している
+- `PUBLISH_NAMESPACE` の終了を通知する専用メッセージは draft-22 に存在しないため、公開終了はローカル状態の cleanup のみで表現している
 - 接続の前に `validateTrackNamespaceForSend(namespace, trackName?)` で送信できる Track Namespace かを検証できる。§8.7 の構造の制約 (33 フィールド以上、空のフィールド、4,096 バイト超) と、§2.4.3 の予約 namespace (先頭フィールドが `.` で始まる値、`.` 単体)、§6.5 の `.session` (Application は publish できない) と `.session` と空 Track Name の組み合わせ (DOES_NOT_EXIST) を拒否する
   - Request の送信時にも同じ検証が走り、失敗は同期の `Error` になる (アプリケーションの入力ミスとして扱い、セッションは閉じない)。Full Track Name (Track Namespace と Track Name の合計) の 4,096 バイト上限は Track Name を含めて判定するため、送信時に検証する
 
@@ -427,7 +427,7 @@ Safari 系の `WebTransport` では `writer.close()` が resolve しない場合
 
 ### `fetch()` の流れ
 
-`Session.fetch()` は `FETCH` を新しい双方向ストリームで送り、`FETCH_OK` を待つ。取得範囲は `FetchOptions.filter` の Location Filter として `LOCATION_FILTER` パラメータで送る。省略時はフィルタなし ({0, 0} から Largest Object まで) を要求する。省略は仕様上は有効だが (draft-ietf-moq-transport-22 §9.20.9)、実リレーでは応答が返らないことがあるため、catalog の取得では `catalogFetchFilter` が返す絶対開始の Location Filter を常に載せる。
+`Session.fetch()` は `FETCH` を新しい双方向ストリームで送り、`FETCH_OK` を待つ。取得範囲は `FetchOptions.filter` の Location Filter として `LOCATION_FILTER` パラメータで送る。省略時はフィルタなし ({0, 0} から Largest Object まで) を要求する。省略は仕様上は有効だが (draft-ietf-moq-transport-22 §3.2)、実リレーでは応答が返らないことがあるため、catalog の取得では `catalogFetchFilter` が返す絶対開始の Location Filter を常に載せる。
 
 `FETCH_OK` 受信時には、Start Location が確定できる場合 (フィルタなし / 絶対指定) に `endLocation >= startLocation` を検証し、矛盾していれば `PROTOCOL_VIOLATION` でセッションを閉じる。成功時は `FetcherImpl` に以下を保存する。
 
@@ -437,7 +437,7 @@ Safari 系の `WebTransport` では `writer.close()` が resolve しない場合
 
 `Fetcher.cancel()` も subscription と同様に双方向ストリームを close して終了する。
 
-draft-20 で Joining FETCH は削除された (draft-ietf-moq-transport-22 §A.1)。過去データの取得と live 購読の組み合わせは、`subscribe()` (Next Object (`{ nextObject: true }`、Location Filter Type 0x05) の Location Filter) + `fetch()` (絶対開始の Location Filter) の 2 リクエストで実現する (`createMediaSubscriber` の catalog 取得が該当し、要求範囲は `catalogFetchFilter` が決める)。仕様上の正式な置換は `FILL_PARAMETERS` (§3.4) である。
+Joining FETCH は draft-20 で削除された (draft-ietf-moq-transport-22 §A.3)。draft-22 では `FILL_PARAMETERS` (§9.20.15) を持つ SUBSCRIBE が fill fetch stream (§3.4) を開かせる形が正式な置換であり、MSF の catalog 取得 (draft-ietf-moq-msf-01 §5 の Joining FETCH (offset = 0)) も draft-22 前提ではこの fill fetch として解釈する。現状の実装は `subscribe()` (Next Object (`{ nextObject: true }`、Location Filter Type 0x05) の Location Filter) + `fetch()` (絶対開始の Location Filter) の 2 リクエストで代替しており (`createMediaSubscriber` の catalog 取得が該当し、要求範囲は `catalogFetchFilter` が決める)、catalog の fill fetch 化は未実装である。
 
 `FETCH_OK` が返る前にデータストリームが先着する可能性があるため、受信側は `waitForFetcher()` で待機する。
 
@@ -519,7 +519,7 @@ Datagram 受信時は `decodeObjectDatagram()` で decode し、`trackAlias` か
 
 `startControlMessageLoop()` はセッション期間中ずっと制御ストリームを読み続ける。制御ストリームが途中で閉じた場合は `PROTOCOL_VIOLATION` とする。
 
-制御ストリームで処理するメッセージは `GOAWAY` のみである (リクエスト / レスポンスは draft-17 で双方向ストリームへ移動し、現在の規定は draft-ietf-moq-transport-22 §6.3 にある)。
+制御ストリームで処理するメッセージは `GOAWAY` のみである (SETUP の後、制御ストリームで送られるメッセージは `GOAWAY` だけ。draft-ietf-moq-transport-22 §9 のメッセージ表 / §9.2)。リクエスト / レスポンスは双方向ストリームで送る (§6.3 / §6.4.2)。
 
 - `PUBLISH_DONE` を制御ストリームで受け取った場合は仕様違反としてセッションを閉じる。`PUBLISH_DONE` は request 双方向ストリーム側でのみ処理する。
 - `PUBLISH_NAMESPACE` / `REQUEST_OK` / `REQUEST_ERROR` は制御ストリーム上で受け取った場合も仕様違反としてセッションを閉じる。これらは専用の双方向ストリームで送受信される。

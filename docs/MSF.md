@@ -11,6 +11,10 @@ moqt-js からの入口のみを示す。
 - 公開版: [draft-ietf-moq-msf-01](https://datatracker.ietf.org/doc/html/draft-ietf-moq-msf-01)
 - LOC: [draft-ietf-moq-loc-04](https://datatracker.ietf.org/doc/html/draft-ietf-moq-loc-04)
 
+## draft-22 前提
+
+MSF-01 §5 は catalog の取得に SUBSCRIBE + Joining FETCH (offset = 0) を MUST としているが、Joining FETCH は MOQT transport draft-20 で削除され、draft-22 には存在しない (draft-ietf-moq-transport-22 §A.3)。moqt-js は draft-22 を前提とするため、この要件は draft-22 §3.4 の fill fetch stream (`FILL_PARAMETERS` §9.20.15) として解釈する。現状の catalog 取得は `subscribe()` + `fetch()` の 2 リクエストで代替しており、fill fetch 化は未実装である。
+
 ## moqt-js での公開 API
 
 - 高レベル: [`createMediaPublisher`](HIGH_LEVEL_API.md) / [`createMediaSubscriber`](HIGH_LEVEL_API.md)
