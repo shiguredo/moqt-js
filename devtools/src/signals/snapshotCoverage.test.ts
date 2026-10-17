@@ -171,7 +171,8 @@ const PUBLISHER_COVERAGE: CoverageExpectation = {
       "Session の実体 (制御ストリームとデータストリームの統計は sessionStatistics に出す)",
     publisher: "Publisher の実体。統計は objectsSent / bytesSent / currentGroup に出す",
     catalogPublisher: "Catalog 用の Publisher の実体。送った Catalog は catalog に出す",
-    catalogGroup: "Catalog を送る Group ID。時刻由来の値で、診断に使わない",
+    catalogGroup:
+      "Catalog を送る Group ID。配信ごとに単調ガードから払い出し直す値で、診断に使わない",
     encoder: "エンコーダの実体。状態は encoderState、統計は framesEncoded / chunksEncoded に出す",
     mediaStream: "映像の MediaStream の実体 (統計ではない)",
     isPreviewActive: "画面のプレビューを出しているかどうか",

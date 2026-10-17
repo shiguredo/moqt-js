@@ -57,6 +57,7 @@ import {
   allocateAudioObject,
   allocateInitialGroupId,
   allocateVideoObject,
+  noteGroupId,
   resolveAudioConfigToSend,
   selectCodecDescription,
   resolveKeyframeInterval,
@@ -3140,11 +3141,73 @@ test("初期 Group ID 生成は前回値を下回らない", () => {
   assert.equal(second, first + 1);
 });
 
-test("初期 Group ID 生成は非有限値を拒否する", () => {
+test("noteGroupId: 配信を止めて再開しても、開始 Group ID が前回の最大値を上回る", () => {
+  // draft-ietf-moq-msf-01 §6.1: 配信を再開したときの開始 Group ID は、同一 track で
+  // 以前に publish したどの Group ID よりも大きいことを MUST とする。配信中に進めた Group ID
+  // (映像のキーフレーム、音声の chunk、Catalog と event timeline の送り直し) を単調ガードへ
+  // 伝えておかないと、停止と再開を繰り返したときに開始値が前回の最大値を下回る
+  const base = 9_000_000_000_000;
+  const start = allocateInitialGroupId(base);
+  // 配信中に Group を進める (送信のたびに追随させる)
+  noteGroupId(start + 1);
+  noteGroupId(start + 5);
+
+  // 停止 → 再開の開始値は、前回送ったどの Group ID よりも大きい
+  const restarted = allocateInitialGroupId(base);
+  assert.isAbove(restarted, start + 5, "再開の開始 Group ID が前回の最大値を上回っていない");
+  assert.equal(restarted, start + 6, "再開の開始 Group ID が前回の最大値の次でない");
+});
+
+test("noteGroupId: 安全整数でない値を拒否し、単調ガードを汚染しない", () => {
+  // allocateInitialGroupId と同じ検証。ガードが NaN になると Math.max が常に NaN を返し、
+  // 全トラックの開始 Group ID を払い出せなくなる
+  const base = 9_200_000_000_000;
+  noteGroupId(base);
+  const before = allocateInitialGroupId(1);
+  for (const value of [
+    Number.NaN,
+    Number.POSITIVE_INFINITY,
+    Number.NEGATIVE_INFINITY,
+    // 有限でも安全整数でない値 (ガードが固定してしまう)
+    1.5,
+    Number.MAX_SAFE_INTEGER + 1,
+  ]) {
+    let thrown: unknown = null;
+    try {
+      noteGroupId(value);
+    } catch (error) {
+      thrown = error;
+    }
+    assert.isTrue(thrown instanceof Error, "安全整数でない値を拒否していない");
+  }
+  assert.equal(allocateInitialGroupId(1), before + 1, "単調ガードが汚染されている");
+});
+
+test("noteGroupId: 送信済みの最大値より小さい値では単調ガードが下がらない", () => {
+  // 同じトラックで Group を進めない経路 (Group を進めない Object の送信) から呼ばれても、
+  // 既に送った最大値を忘れない。他のテストが進めたガードの影響を受けないよう、値は
+  // 相対で確かめる
+  const base = 9_300_000_000_000;
+  noteGroupId(base + 100);
+  const high = allocateInitialGroupId(1);
+  assert.isAbove(high, base + 100, "前提: 送信済みの値が単調ガードに入っていない");
+
+  noteGroupId(base);
+  assert.equal(allocateInitialGroupId(1), high + 1, "単調ガードが下がっている");
+});
+
+test("初期 Group ID 生成は安全整数でない値を拒否する", () => {
   // 共有カウンタの汚染を防ぐための検証。拒否後に正常割当てを行い、
-  // 単調性が壊れていないことも確認する
+  // 単調性が壊れていないことも確認する。有限でも安全整数でない値 (1.5 や 2^53) は
+  // 単調ガードが固定してしまうため拒否する
   const before = allocateInitialGroupId(200);
-  for (const candidate of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+  for (const candidate of [
+    Number.NaN,
+    Number.POSITIVE_INFINITY,
+    Number.NEGATIVE_INFINITY,
+    1.5,
+    Number.MAX_SAFE_INTEGER + 1,
+  ]) {
     let thrown: unknown = null;
     try {
       allocateInitialGroupId(candidate);

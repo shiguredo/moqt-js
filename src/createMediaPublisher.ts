@@ -91,31 +91,61 @@ export const CATALOG_REPUBLISH_DEFAULT_INTERVAL_MS = catalogRepublishIntervalMs(
   CATALOG_MAX_CACHE_DURATION_MS,
 );
 
-// 同一プロセス内で割り当てた初期 Group ID の最大値
-// (draft-ietf-moq-msf-01 §6.1: 再起動時の開始 Group ID は
-// 同一 track の過去の全 Group ID を上回らなければならない)
-// 音声・映像の両 track で共有し、安全側 (大きめ) に倒す。
-let lastAllocatedInitialGroupId = 0;
+// 割り当てた開始 Group ID と送信に使った Group ID の最大値 (全トラックで共有)
+// (draft-ietf-moq-msf-01 §6.1: 再開時の開始 Group ID は同一 track で以前に publish した
+// どの Group ID よりも大きいことが MUST。トラックを跨いで安全側 (大きめ) に倒す)
+let maxGroupIdSeen = 0;
 
 /**
  * 初期 Group ID を割り当てる (MSF 生成に単調ガードを付けた Publisher 側の割当て)
  *
- * draft-ietf-moq-msf-01 §6.1 に基づき `createInitialGroupId` (Unix epoch
- * ミリ秒起点) を使う。`Date.now()` は `MAX_SAFE_INTEGER` に収まるため
- * Publisher 側の `number` 型に変換する。同一プロセス内の前回値を
- * 下回らないよう前回 + 1 との最大値を取る。プロセス跨ぎは壁時計に委ねる。
- * `candidate` は有限数のみ受け付け、非有限値は拒否する。
+ * draft-ietf-moq-msf-01 §6.1 (Group ID は track ごとに一意で単調増加が MUST、再開時の
+ * 開始値は同一 track の以前のどの Group ID よりも大きいことが MUST) に基づき
+ * `createInitialGroupId` (Unix epoch ミリ秒起点) を使う。`Date.now()` は
+ * `MAX_SAFE_INTEGER` に収まるため Publisher 側の `number` 型に変換する。同一プロセス内の
+ * 前回値を下回らないよう前回 + 1 との最大値を取る。プロセス跨ぎは壁時計に委ねる。
+ * `candidate` は安全整数のみ受け付け、それ以外は拒否する。前回値は `noteGroupId` が
+ * 送信済みの Group ID で押し上げることもある (配信中に Group を進めた場合)。
  *
  * 単体テストから固定値で駆動するため export する
  * (パッケージ公開 API には含めない)。
  */
 export function allocateInitialGroupId(candidate = Number(createInitialGroupId())): number {
-  if (!Number.isFinite(candidate)) {
-    throw new Error(`initial group id candidate must be finite, got ${candidate}`);
+  if (!Number.isSafeInteger(candidate)) {
+    throw new Error(`initial group id candidate must be a safe integer, got ${candidate}`);
   }
-  const next = Math.max(candidate, lastAllocatedInitialGroupId + 1);
-  lastAllocatedInitialGroupId = next;
+  const next = Math.max(candidate, maxGroupIdSeen + 1);
+  // 内部 API 用の防御。候補もガードも安全整数である限り本番の値 (壁時計由来) では到達しない。
+  // ガードが 2^53 - 1 に達すると ここで例外になり、以後の払い出しが止まる
+  // (重複した Group ID を配り続けるより安全側。到達させるには noteGroupId に
+  // Number.MAX_SAFE_INTEGER を渡す必要があり、テストすると共有ガードが汚れる)
+  if (!Number.isSafeInteger(next)) {
+    throw new Error(`initial group id must be a safe integer, got ${next}`);
+  }
+  maxGroupIdSeen = next;
   return next;
+}
+
+/**
+ * 送信した Group ID を単調ガードへ追随させる
+ *
+ * draft-ietf-moq-msf-01 §6.1 は、配信を再開したときの開始 Group ID が「同一 track で以前に
+ * publish したどの Group ID よりも大きいこと」を MUST とする。配信中に Group を進めた値を
+ * ここへ渡しておかないと、停止と再開を繰り返したときに開始値が前回の最大値を下回る。
+ *
+ * ガードはプロセス内の全トラックで共有されるため、どのトラックの経路で呼んでもよい。
+ * 単体テストと moqt-devtools から同じ規則を使うため export する
+ * (パッケージ公開 API には含めない)。
+ *
+ * @param groupId - 送信に使う Group ID (Group を進めたときに呼ぶ)
+ */
+export function noteGroupId(groupId: number): void {
+  // 安全整数でないと guard + 1 === guard となり、全トラックが同じ Group ID を払い出し続ける
+  // (draft-ietf-moq-msf-01 §6.1 の一意性 MUST に反する)
+  if (!Number.isSafeInteger(groupId)) {
+    throw new Error(`group id must be a safe integer, got ${groupId}`);
+  }
+  maxGroupIdSeen = Math.max(maxGroupIdSeen, groupId);
 }
 
 // グループ管理・キーフレーム判定
@@ -1520,9 +1550,7 @@ export class MediaPublisherImpl implements MediaPublisher {
 
     const groupId = this.catalogGroupId + 1;
     this.catalogGroupId = groupId;
-    // draft-ietf-moq-msf-01 §6.1: 送信済み最大を追跡し、次インスタンスの開始 Group ID が
-    // 上回るようにする (音声・映像と同じ)
-    lastAllocatedInitialGroupId = Math.max(lastAllocatedInitialGroupId, groupId);
+    noteGroupId(groupId);
     // 次の送り直しをこの送信から数え直す
     this.scheduleCatalogRepublish();
     void this.sendCatalogObject(catalog, groupId).catch((error: unknown) => {
@@ -1961,9 +1989,7 @@ export class MediaPublisherImpl implements MediaPublisher {
     this.audioGroupId = audioAllocation.state.groupId;
     this.audioGroupStarted = audioAllocation.state.started;
     if (audioAllocation.groupAdvanced) {
-      // draft-ietf-moq-msf-01 §6.1: 送信済み最大を追跡し、
-      // 次インスタンスの開始 Group ID が上回るようにする
-      lastAllocatedInitialGroupId = Math.max(lastAllocatedInitialGroupId, this.audioGroupId);
+      noteGroupId(this.audioGroupId);
     }
 
     const payload = chunk.data;
@@ -2040,9 +2066,7 @@ export class MediaPublisherImpl implements MediaPublisher {
     this.videoGroupId = videoAllocation.state.groupId;
     this.videoObjectId = videoAllocation.state.objectId;
     if (videoAllocation.groupAdvanced) {
-      // draft-ietf-moq-msf-01 §6.1: 送信済み最大を追跡し、
-      // 次インスタンスの開始 Group ID が上回るようにする
-      lastAllocatedInitialGroupId = Math.max(lastAllocatedInitialGroupId, this.videoGroupId);
+      noteGroupId(this.videoGroupId);
     }
     if (chunk.type === "key") {
       this.videoStats.keyFramesSent++;
