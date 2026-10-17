@@ -24,10 +24,10 @@ export const catalog = signal<Catalog | null>(null);
 // Catalog を最後に送った Group ID。Catalog を送り直すたびに進める。
 //
 // 同じ Location を 2 度送ると購読側で重複として扱われるため、送り直しは新しい Group で
-// 行う。draft-ietf-moq-msf-01 §6.1 は Group ID の一意性と単調増加を MUST とし、
-// publisher の再起動時には以前に publish したどの Group ID よりも大きい値から始める
-// ことを MUST とするため、映像トラック (pubCurrentGroup) と同じく Unix epoch ミリ秒を
-// 開始値にする。実際の開始値は startPublishing が設定する。
+// 行う。draft-ietf-moq-msf-01 §6.1 は Group ID が track ごとに一意で単調増加することを
+// MUST とし、publisher の再起動時には同一 track で以前に publish したどの Group ID よりも
+// 大きい値から始めることを MUST とする。配信を始めるときの値は startPublishing が
+// applyPublishStartGroupIds で払い出し直す (この初期値は配信の開始前に上書きされる)。
 export const catalogGroup = signal(Date.now());
 export const encoder = signal<EncoderWrapper | null>(null);
 export const mediaStream = signal<MediaStream | null>(null);
@@ -66,6 +66,8 @@ export const pubCodec = signal("");
 export const framesEncoded = signal(0);
 export const keyFramesEncoded = signal(0);
 export const objectsSent = signal(0);
+// 配信を始めるときの値は startPublishing が applyPublishStartGroupIds で払い出し直す
+// (この初期値は配信の開始前に上書きされる)
 export const pubCurrentGroup = signal(Date.now());
 export const bytesSent = signal(0);
 
@@ -156,6 +158,8 @@ export const audioMeterWaveformRight = signal<Float32Array | null>(null);
 export const audioMeterLevel = signal<LOC.AudioLevel | null>(null);
 
 // 音声の Group ID。draft-ietf-moq-loc-04 §4.1 に従い chunk ごとに Group を進める
+// 配信を始めるときの値は startPublishing が applyPublishStartGroupIds で払い出し直す
+// (この初期値は配信の開始前に上書きされる)
 export const pubCurrentAudioGroup = signal(Date.now());
 // 送った音声 Object の数とバイト数 (video の objectsSent / bytesSent と同じく、配信の
 // たびに 0 に戻す)。datagramObjects は内数で、Subgroup で送った数は objectsSent との差
@@ -179,6 +183,8 @@ export const audioConfigResendRequested = signal(false);
 // メッセージを送る (draft-ietf-moq-msf-01 §8)。Group ID はメッセージごとに進める
 export const eventPublisher = signal<Publisher | null>(null);
 // 最後に event timeline を送った Group ID。配信を始めるたびに設定し直す
+// 配信を始めるときの値は startPublishing が applyPublishStartGroupIds で払い出し直す
+// (この初期値は配信の開始前に上書きされる)
 export const eventGroup = signal(Date.now());
 // 送信したメッセージの数 (画面の表示用)
 export const eventMessagesSent = signal(0);

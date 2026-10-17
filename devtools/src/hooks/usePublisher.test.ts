@@ -11,6 +11,7 @@ import {
   resolveAudioConfigToSend,
   resolveAudioPublishable,
   decideKeyFrame,
+  applyPublishStartGroupIds,
   recordAudioDatagramSent,
   usePublisher,
 } from "./usePublisher";
@@ -21,6 +22,7 @@ import type {
 } from "./usePublisher";
 import { getAudioEncoderConfig } from "../../../src/codec/config";
 import { AudioPublishCatchUp } from "../../../src/audioPublishCatchUp";
+import { allocateInitialGroupId } from "../../../src/createMediaPublisher";
 import { resolveDeclarationAudioFormat } from "../utils/publishTracks";
 import { MESSAGES_EVENT_TYPE, EVENT_TRACK_NAME } from "../utils/eventTimeline";
 import type { EncodedChunkData } from "../utils/EncoderWrapper";
@@ -1480,6 +1482,122 @@ test("buildPublishStopPlan: 配信だけを止めるときは何も送らずセ�
     detachCatalogPublisher: true,
     statusMessage: "Stopped sending (session kept)",
   });
+});
+
+// ============================================================================
+// 配信ごとの開始 Group ID
+// ============================================================================
+
+/**
+ * draft-ietf-moq-msf-01 §6.1: Group ID は track ごとに一意で単調増加することが MUST で
+ * あり、配信を再開したときの開始 Group ID は同一 track で以前に publish したどの Group ID
+ * よりも大きいことが MUST である。短時間の停止と再開や chunk をまとめて送った後では
+ * Date.now() が前回の最大値を上回る保証がないため、単調ガード付きの割当てを 4 つの
+ * トラックで共有する
+ *
+ * 配信の開始 (startPublishing) からの呼び出しは WebTransport と WebCodecs に依存し
+ * 単体テストから到達できない (接続の前に検証で失敗する。モックは使わない)。ここでは
+ * 払い出しの契約だけを固定する
+ */
+test("applyPublishStartGroupIds: 4 つのトラックの開始 Group ID を単調ガードから払い出す", () => {
+  applyPublishStartGroupIds();
+  const first = {
+    video: pub.pubCurrentGroup.value,
+    audio: pub.pubCurrentAudioGroup.value,
+    catalog: pub.catalogGroup.value,
+    event: pub.eventGroup.value,
+  };
+  applyPublishStartGroupIds();
+  const second = {
+    video: pub.pubCurrentGroup.value,
+    audio: pub.pubCurrentAudioGroup.value,
+    catalog: pub.catalogGroup.value,
+    event: pub.eventGroup.value,
+  };
+
+  // 同じトラックの次の配信の開始値は、前回 publish したどの Group ID よりも大きい (§6.1)
+  for (const track of ["video", "audio", "catalog", "event"] as const) {
+    assert.isAbove(second[track], first[track], `${track} の開始 Group ID が前回を上回っていない`);
+  }
+  // 共有ガードの実装性質として、同じ配信の中でトラック間の値も重複しない
+  // (§6.1 が MUST とするのは track 内の一意性であり、トラック間の重複は許される)
+  const all = [...Object.values(first), ...Object.values(second)];
+  assert.equal(new Set(all).size, all.length, "トラック間で開始 Group ID が重複している");
+});
+
+// ============================================================================
+// 送信した Group ID の単調ガードへの追随
+// ============================================================================
+
+/**
+ * draft-ietf-moq-msf-01 §6.1: 配信を再開したときの開始 Group ID は、同一 track で以前に
+ * publish したどの Group ID よりも大きいことを MUST とする。配信中に Group を進める経路
+ * (この 2 件は event timeline と complete catalog) は、送った Group ID を単調ガードへ
+ * 伝えておかないと、停止 → 再開の開始値が前回の最大値を下回る。
+ *
+ * 映像と音声と Catalog の送り直しの経路は WebCodecs と実セッションに依存するため
+ * 単体テストから駆動できない (ライブラリ側の同じ規則は src/createMediaPublisher.test.ts が
+ * 固定している)
+ */
+test("sendEventMessage: 進めた Group ID を単調ガードへ伝える", async () => {
+  resetPublisherSignals();
+  const publisher = usePublisher();
+
+  // 他のテストが進めたガードより大きい値にして、追随の有無だけを見る
+  const base = 9_500_000_000_000;
+  pub.eventGroup.value = base;
+  const sent: number[] = [];
+  pub.eventPublisher.value = {
+    state: "active",
+    sendObject: async (params: { groupId: number }) => {
+      sent.push(params.groupId);
+    },
+  } as unknown as Publisher;
+
+  // この検証は「共有ガードが base 未満」という前提に依存する。前提が崩れたら黙って
+  // 通さず、ここで落とす
+  const guardBefore = allocateInitialGroupId(0) - 1;
+  assert.isBelow(guardBefore, base, "共有ガードが base を超えており、この検証は空振りする");
+
+  await publisher.sendEventMessage("hello");
+
+  assert.equal(sent.length, 1, "event timeline のメッセージを送っていない");
+  assert.equal(sent[0], base + 1, "払い出した開始値の次の Group で送っていない");
+  assert.equal(allocateInitialGroupId(1), base + 2, "送った Group ID を単調ガードへ伝えていない");
+});
+
+test("stopPublishing: complete catalog を送るときも単調ガードへ伝える", async () => {
+  resetPublisherSignals();
+  resetSettingsUsage();
+  const publisher = usePublisher();
+
+  const base = 9_600_000_000_000;
+  pub.catalogGroup.value = base;
+  const sent: number[] = [];
+  pub.catalogPublisher.value = {
+    state: "active",
+    sendObject: async (params: { groupId: number }) => {
+      sent.push(params.groupId);
+    },
+    done: async () => {},
+    closeSubgroup: async () => {},
+  } as unknown as Publisher;
+
+  const guardBefore = allocateInitialGroupId(0) - 1;
+  assert.isBelow(guardBefore, base, "共有ガードが base を超えており、この検証は空振りする");
+
+  const previousStopMode = settings.publishStop.value;
+  settings.publishStop.value = "publish-done";
+  try {
+    await publisher.stopPublishing();
+
+    assert.equal(sent.length, 1, "complete catalog を送っていない");
+    assert.equal(sent[0], base + 1, "払い出した開始値の次の Group で送っていない");
+    assert.equal(allocateInitialGroupId(1), base + 2, "送った Group ID を単調ガードへ伝えていない");
+  } finally {
+    settings.publishStop.value = previousStopMode;
+    resetPublisherSignals();
+  }
 });
 
 // ============================================================================

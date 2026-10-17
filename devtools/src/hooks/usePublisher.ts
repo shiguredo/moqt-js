@@ -54,6 +54,7 @@ import {
   allocateAudioObject,
   allocateInitialGroupId,
   assertCatalogLatencyOptions,
+  noteGroupId,
   PRIORITY_AUDIO,
   PRIORITY_VIDEO_DELTA,
   PRIORITY_VIDEO_KEY,
@@ -878,6 +879,28 @@ export function buildPublishStopPlan(mode: PublishStopMode): PublishStopPlan {
   }
 }
 
+/**
+ * 配信を始めるときのトラックごとの開始 Group ID を払い出して設定する
+ *
+ * draft-ietf-moq-msf-01 §6.1: Group ID は track ごとに一意で単調増加することを MUST とし、
+ * 配信を再開したときの開始 Group ID は同一 track で以前に publish したどの Group ID よりも
+ * 大きいことを MUST とする。短時間の停止と再開や chunk をまとめて送った後では `Date.now()`
+ * が前回の最大値を上回る保証がないため、ライブラリの `allocateInitialGroupId`
+ * (単調ガード付きの割当て) を 4 つのトラックで共有する。
+ * ガードはプロセス内で共有されるため、払い出した値はトラック間でも重複しない。
+ *
+ * 4 つのトラックすべてを払い出す。配信しないトラックの分もガードが進むが、値が飛ぶだけで
+ * 害は無い。
+ *
+ * 単体テストから呼ぶため export する (配信の開始以外からは呼ばない)。
+ */
+export function applyPublishStartGroupIds(): void {
+  pub.pubCurrentGroup.value = allocateInitialGroupId();
+  pub.pubCurrentAudioGroup.value = allocateInitialGroupId();
+  pub.catalogGroup.value = allocateInitialGroupId();
+  pub.eventGroup.value = allocateInitialGroupId();
+}
+
 export function usePublisher() {
   /**
    * 音声設定に従って音声のストリームを用意し、取れた音の形式を返す
@@ -1251,6 +1274,9 @@ export function usePublisher() {
 
     pub.pubCurrentGroup.value = plan.nextGroupId;
     pub.pubCurrentObjectId.value = plan.nextObjectId;
+    if (plan.isKeyFrame) {
+      noteGroupId(plan.groupId);
+    }
 
     pub.objectsWithExtensions.value++;
 
@@ -1575,6 +1601,9 @@ export function usePublisher() {
     });
     pub.pubAudioGroupStarted.value = allocation.state.started;
     pub.pubCurrentAudioGroup.value = allocation.state.groupId;
+    if (allocation.groupAdvanced) {
+      noteGroupId(allocation.state.groupId);
+    }
 
     // LOC Audio Level (draft-ietf-moq-loc-04 §2.3.3.2) は RFC 6464 §3 に従い、
     // chunk が符号化するサンプル列の RMS から -dBov を求める。符号化へ渡したときに
@@ -1731,6 +1760,7 @@ export function usePublisher() {
     }
     const groupId = pub.catalogGroup.value + 1;
     pub.catalogGroup.value = groupId;
+    noteGroupId(groupId);
     // 次の送り直しを、この送信から数えて予約し直す
     scheduleCatalogRepublish(sendCatalogUpdate);
     await catalogPublisherInstance.sendObject({
@@ -1802,6 +1832,7 @@ export function usePublisher() {
     eventHistory = appendMessageEventEntry(eventHistory, buildMessageEventEntry(text, Date.now()));
     const groupId = pub.eventGroup.value + 1;
     pub.eventGroup.value = groupId;
+    noteGroupId(groupId);
     try {
       await eventPublisherInstance.sendObject({
         groupId,
@@ -1963,11 +1994,9 @@ export function usePublisher() {
         buildPublisherCatalogOptionsFromSettings(audioFormat),
       );
       const catalogPayload = encodeCatalog(createdCatalog);
-      // draft-ietf-moq-msf-01 §6.1:
-      // Group ID は Track ごとに単調増加が MUST であり、publisher が再起動した場合は
-      // 以前に publish したどの Group ID よりも大きい値から始めなければならない。
-      // 映像トラックと同じく Unix epoch ミリ秒を開始値にする。
-      pub.catalogGroup.value = Date.now();
+      // 映像 / 音声 / Catalog / event timeline の開始 Group ID をここでまとめて払い出す
+      // (draft-ietf-moq-msf-01 §6.1。理由は applyPublishStartGroupIds を参照)
+      applyPublishStartGroupIds();
       // 購読が paused でなくなった時点で送り直すため、送信前に保持値を確定させる
       pub.catalog.value = createdCatalog;
       // Catalog の送信完了は待たず、stopPublishing の done() で待ち合わせる
@@ -2055,7 +2084,6 @@ export function usePublisher() {
       pub.framesEncoded.value = 0;
       pub.keyFramesEncoded.value = 0;
       pub.objectsSent.value = 0;
-      pub.pubCurrentGroup.value = Date.now();
       pub.pubCurrentObjectId.value = 0;
       pub.bytesSent.value = 0;
       pub.chunksEncoded.value = 0;
@@ -2067,22 +2095,15 @@ export function usePublisher() {
       pub.audioChunksEncoded.value = 0;
       pub.audioEncodeErrors.value = 0;
       pub.pubAudioGroupStarted.value = false;
-      // draft-ietf-moq-msf-01 §6.1: 配信を再開したときの開始 Group ID は、前回
-      // publish したどの Group ID よりも大きいことを MUST とする。音声は chunk
-      // ごとに Group を進めるため Date.now() だけでは単調性を保証できない。
-      // ライブラリの allocateInitialGroupId (同一プロセス内で前回割り当てた開始値を
-      // 必ず上回る単調ガード付きの割当て) を使う
-      pub.pubCurrentAudioGroup.value = allocateInitialGroupId();
       // 直前に送った Audio Config と送り直し要求は配信ごとに忘れる。保留値も同じ理由で
       // 忘れる (映像のみの配信ではここが唯一の破棄点であり、残すと前の配信の codec の値を
       // 新しい配信の最初の Object に載せてしまう)
       pub.lastSentAudioConfig.value = null;
       pub.audioConfigResendRequested.value = false;
       pendingAudioConfig = null;
-      // event timeline の履歴と Group ID も配信ごとに初期化する。Group ID は音声と
-      // 同じく単調ガード付きの割り当てを使い、再開時の単調性を守る (§6.1)
+      // event timeline の履歴も配信ごとに初期化する (開始 Group ID は配信の始めに
+      // applyPublishStartGroupIds が払い出している)
       eventHistory = [];
-      pub.eventGroup.value = allocateInitialGroupId();
       pub.eventMessagesSent.value = 0;
 
       // フレームを読み出してエンコードする
@@ -2140,6 +2161,7 @@ export function usePublisher() {
         // よる Catalog の送り直しと Group ID が衝突し得る (draft-ietf-moq-msf-01 §6.1)。
         const completeCatalogGroup = pub.catalogGroup.value + 1;
         pub.catalogGroup.value = completeCatalogGroup;
+        noteGroupId(completeCatalogGroup);
         // Complete catalog の送信完了は直後の done() で待ち合わせる
         void pub.catalogPublisher.value.sendObject({
           groupId: completeCatalogGroup,
@@ -2291,9 +2313,8 @@ export function usePublisher() {
     pub.eventPublisher.value = null;
     pub.catalogPublisher.value = null;
     pub.catalog.value = null;
-    // catalogGroup は次回の startPublishing が Date.now() で設定し直す。
-    // 0 に戻すと、再起動後の Group ID が前回より小さくなり
-    // draft-ietf-moq-msf-01 §6.1 の MUST に反するため触らない。
+    // catalogGroup は次回の startPublishing が allocateInitialGroupId で払い出し直す。
+    // 送信済みの最大値は単調ガード (noteGroupId) が覚えているため、ここでは触らない。
     pub.pubCodec.value = "";
     pub.forwardState.value = null;
     pub.httpVersion.value = null;
