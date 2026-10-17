@@ -1,5 +1,7 @@
 # Joining Fetch 有効時に DATAGRAM_LOOP_ERROR が発生する
 
+- Completed: 2026-10-17
+
 ## 概要
 
 Joining Fetch を有効にして Subscribe すると、SUBSCRIBE_OK 受信直後に DATAGRAM_LOOP_ERROR が発生してセッションが切断される。
@@ -62,3 +64,13 @@ Joining Fetch を有効にして Subscribe すると、SUBSCRIBE_OK 受信直後
 - `src/message/fetch.ts:23-29` で `FetchType.STANDALONE = 0x01` / `RELATIVE_JOINING = 0x02` / `ABSOLUTE_JOINING = 0x03` を定義。draft-ietf-moq-transport-17 Section 9.16.2 に準拠した値のまま。
 - `src/message/fetch.ts:90-170` のエンコード / デコード経路でも Joining 系の `joiningRequestId` / `joiningStart` を扱えており、クライアント側実装に欠落はない。
 - リレー側の Joining FETCH 対応状況に関する追加情報は得られていないため、現時点では引き続きリレー側の対応待ちで pending 維持。
+
+## 解決方法
+
+本 issue は、前提となる Joining FETCH がプロトコルから削除され、moqt-js 側にも該当機能が存在しないため closed にする。
+
+- Joining FETCH は draft-ietf-moq-transport-20 で削除された (draft-ietf-moq-transport-22 Appendix A.3「Replace Joining FETCH with fill fetch streams」「Remove the Joining variant of FETCH」)。draft-ietf-moq-transport-22 の FETCH (§9.11) に Fetch Type / Joining / Standalone は存在せず、置換は FILL_PARAMETERS (§9.20.15) による fill fetch stream (§3.4) である (moqt-js では `src/session/params.ts` の `buildFillParameters` と `src/session/dataStreamIncoming.ts` の fill fetch 受信経路で実装済み)。
+- moqt-js も Joining FETCH を削除済みで、`FetchType` / `JoiningFetch` / `bidiSendJoiningFetch` は存在しない。`src/message/fetch.ts` は draft-22 §9.11 の FETCH メッセージのみを扱い、devtools の「Joining Fetch」チェックボックスも存在しない。
+- したがって、本 issue の再現手順 (devtools で「Joining Fetch」を有効にする) と pending 理由 (リレーの Joining FETCH 対応待ち) は前提が消滅している。
+- fill fetch 経路 (FILL_PARAMETERS による fill fetch stream) で同様の症状が出る場合は、現行ワイヤ (draft-22) を前提とした別 issue を起票する。
+- 本文の「状況確認 (2026-04-29)」は当時の記録であり、現在の `src/message/fetch.ts` に `FetchType` の定義はない。
