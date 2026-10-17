@@ -71,6 +71,10 @@ export interface EncodeState {
  * Encoder を閉じた後も emit 済みの出力はコールバックへ届き得る。世代を進めることで、
  * 止める前に依頼した出力を閉じた Subgroup へ送らない (draft-ietf-moq-transport-22
  * §11.3.2)。記録を消すのは次の配信へ持ち越さないためである。
+ *
+ * ライブラリの MediaPublisher は使わない。世代が処理ループの制御と共有されており、進める
+ * 主体 (pause() / stop() / close() と配信ごとの初期化) が分かれているため、世代と記録を
+ * 1 つのオブジェクトにまとめられない (`EncodeState` の JSDoc を参照)。
  */
 export function advanceEncodeGeneration(state: EncodeState): void {
   state.generation += 1;

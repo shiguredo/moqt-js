@@ -2008,7 +2008,10 @@ export class MediaPublisherImpl implements MediaPublisher {
     description?: Uint8Array;
   }): void {
     // 符号化を依頼した時点の世代と一致する出力だけを送る (規則は src/encodeGeneration.ts)
-    // 送らない出力でも description は失わない (次のキーフレームで載せる)
+    // 送らない出力でも description は失わない。保留した値は次に送る Object で載せる
+    // (値が変わった出力として扱うため resolveVideoConfigToSend はキーフレームに限らず載せる)。
+    // pause() の後は resume() が次の encode をキーフレームにするため、実際に載るのは
+    // キーフレームになる
     if (chunk.description !== undefined && chunk.description.length > 0) {
       this.pendingVideoConfig = chunk.description;
     }

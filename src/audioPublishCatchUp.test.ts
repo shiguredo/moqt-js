@@ -936,7 +936,7 @@ test("AudioPublishCatchUp: timestamp が重複しても、キューがはけた�
   );
 });
 
-test("AudioPublishCatchUp: 出力は覆った最初の投入の世代を返す", () => {
+test("AudioPublishCatchUp: 世代が飛んでも覆った最初の投入の世代を返す", () => {
   // 配信を止めた時点で開いている Subgroup を閉じた後、止める前に依頼した符号化の出力が
   // 届くことがある。呼び出し側はこの世代と現在の世代を比べて送信の可否を決める
   const catchUp = new AudioPublishCatchUp();
