@@ -1,7 +1,7 @@
 # devtools の初期 Group ID の割当てを単調ガード付きに統一する
 
 - Created: 2026-09-20
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-10-17
 - Branch: feature/update-devtools-group-id-allocation
 - Polished: 2026-09-28
 
@@ -48,4 +48,22 @@ devtools の publisher は音声トラックについて `allocateInitialGroupId
 
 ## 解決方法
 
-{未着手}
+- ライブラリの単調ガード (`maxGroupIdSeen`。旧名 `lastAllocatedInitialGroupId`) へ送信に使う Group ID を伝える `noteGroupId(groupId)` を `src/createMediaPublisher.ts` に追加した。設計方針では `allocateInitialGroupId` へ候補として渡すとしていたが、`allocateInitialGroupId` は `Math.max(candidate, guard + 1)` を返すため候補として渡すと Group ID を 1 つ余分に消費する。送信済みの値を記録する専用の関数に分けた (この点は設計方針と異なる)
+- `noteGroupId` は安全整数のみ受け付ける (`Number.isSafeInteger`)。安全整数でない値でガードが固定すると `guard + 1 === guard` となり、全トラックが同じ Group ID を払い出し続けて draft-ietf-moq-msf-01 §6.1 の一意性 MUST に反する。`allocateInitialGroupId` の候補の検証も有限数から安全整数へ揃え、払い出す値 (`guard + 1`) も検証する
+- ライブラリの追随は既存の 3 箇所 (Catalog の送り直し / 音声 chunk / 映像キーフレーム) を `noteGroupId` に寄せ、規則を 1 つにした。呼び出し側のコメントは `noteGroupId` の JSDoc へ集約した
+- devtools の初期 Group ID を `applyPublishStartGroupIds()` に統一した (`devtools/src/hooks/usePublisher.ts`)。映像 (`pubCurrentGroup`) と Catalog (`catalogGroup`) は `Date.now()` だったものを `allocateInitialGroupId` にし、音声 (`pubCurrentAudioGroup`) と event timeline (`eventGroup`) と合わせて 4 トラックすべてを配信の始めにまとめて払い出す (設計方針の「3 箇所」に event timeline を加えた形)
+- devtools で Group を進める経路で `noteGroupId` を呼び、単調ガードを送信済み最大値へ追随させた。映像のキーフレーム (`plan.groupId`) / 音声の chunk (`allocation.groupId`。進めたときだけ) / Catalog の送り直し / complete catalog / event timeline のメッセージごと
+- `cleanupPublisher` の `catalogGroup` を残す理由、`devtools/src/signals/publisher.ts` の 4 つの初期値の説明、`devtools/src/signals/snapshotCoverage.test.ts` の除外理由を、新しい払い出しに合わせて書き直した
+- 追加・更新したテスト
+  - `src/createMediaPublisher.test.ts`: `noteGroupId` が送信済みの最大値へ追随し、停止 → 再開の開始 Group ID が前回の最大値を上回ること、小さい値ではガードが下がらないこと、安全整数でない値を拒否してガードを汚染しないこと、`allocateInitialGroupId` が安全整数でない候補を拒否すること
+  - `devtools/src/hooks/usePublisher.test.ts`: 4 トラックの開始値が単調ガードから払い出され、次の配信で前回を上回ること、event timeline と complete catalog の送信経路が `noteGroupId` を呼ぶこと (共有ガードが前提を満たしているかを assert で明示する)。映像と音声と Catalog の送り直しの経路は WebCodecs と実セッションに依存するため単体テストから駆動できない旨をコメントに残した
+- `vp check` / `tsc --noEmit` / `vp test run` (228 ファイル / 3996 テスト) / `vp run e2e-test` (111 テスト) が通ることを確認した
+- `CHANGES.md` は `CODEBASE.md` の「MOQT RFC ドラフト中の特別ルール」により更新していない (この issue の対象でもない)
+
+### 残した穴 (別 issue 候補)
+
+- draft-ietf-moq-msf-01 §6.1 の Prior Group ID Gap Extension を送る SHOULD は未実装である。ガードは全トラック共有で track ごとの前回最大値を保持しておらず、プロセスを跨いだ再開では前の Group ID は原理的に分からない。実装するには track ごとの前回最大値と Publisher の properties 生成への追加が要る (draft-ietf-moq-transport-22 §10.8 は Property 0x3C を optional とするため、送らないこと自体は許容である)
+- ガードをトラック間で共有しているため、devtools とライブラリの `MediaPublisher` を同じページで併用すると互いの開始値が飛ぶ。§6.1 が MUST とするのは track 内の一意性と単調増加であり、実装はトラック横断でも一意になる安全側である
+- devtools の映像と event timeline は払い出した開始値を最初に送らず、初回送信は 1 つ進んだ Group から始まる (`buildObjectSendPlan` がキーフレームで必ず Group を進めるため。ライブラリの `allocateVideoObject` は初回に進めない)。表示される「開始 Group ID」と実際の初回送信値が 1 ずれる
+- 共有ガードはプロセス内のみで、ページ再読み込みを跨ぐ単調性は壁時計に依存する (値は `Date.now()` 起点のため、通常は壁時計が勝つ)
+- 実機で「停止 → 即再開」を繰り返したときの 4 トラックの Group ID を観測する経路は無い (単体テストはガードの値までしか固定しない)
