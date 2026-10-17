@@ -38,6 +38,13 @@ import { readAllAudioSamples } from "../utils/audioLevel";
 import { AudioLevelTimeline } from "../utils/audioLevelTimeline";
 import { AudioTimestampClock } from "../../../src/audioTimestampClock";
 import { AudioPublishCatchUp } from "../../../src/audioPublishCatchUp";
+import { selectCodecDescription } from "../../../src/createMediaPublisher";
+import {
+  advanceEncodeGeneration,
+  recordEncodeGeneration,
+  shouldSendEncodedChunk,
+  type EncodeState,
+} from "../../../src/encodeGeneration";
 import { startPublisherAudioMeter, stopPublisherAudioMeter } from "./publisherAudioMeter";
 import { AudioEncoderWrapper } from "../../../src/codec/AudioEncoder.ts";
 import type { AudioEncodedChunkData } from "../../../src/codec/types.ts";
@@ -1189,6 +1196,8 @@ export function usePublisher() {
             pub.newGroupRequested.value,
           );
           encoderInstance.encode(frame, { keyFrame: decision.keyFrame });
+          // 出力が返ったときに、依頼した時点の世代と比べて送信の可否を決める
+          recordEncodeGeneration(encodeState.records, encodeState.generation, frame.timestamp);
           pub.lastKeyFrameTimestampUs.value = decision.nextLastKeyFrameTimestampUs;
           if (decision.keyFrame) {
             pub.newGroupRequested.value = false;
@@ -1204,6 +1213,12 @@ export function usePublisher() {
   }
 
   function handleEncodedChunk(chunk: EncodedChunkData): void {
+    // 送信を止めた後に届いた出力は送らない (Encoder を閉じた後も emit 済みの出力は届き得る)。
+    // 対応する記録が無い出力も送らない (配信を始める前の出力、記録を消した後の出力)
+    if (!shouldSendEncodedChunk(encodeState.records, encodeState.generation, chunk.timestamp)) {
+      return;
+    }
+
     const publisherInstance = pub.publisher.value;
     if (!publisherInstance || publisherInstance.state !== "active") return;
 
@@ -1296,6 +1311,7 @@ export function usePublisher() {
         // 数フレームの穴は受信側の concealment が埋める
         const encode = pub.audioCatchUp.value.evaluate({
           timestampMicros: audioData.timestamp,
+          generation: encodeState.generation,
           readWallClockMicros,
           appliedOffsetMicros: pub.audioTimestampClock.value.appliedMicros,
           durationMicros: audioData.duration,
@@ -1406,6 +1422,9 @@ export function usePublisher() {
       },
     });
     pub.encoder.value = encoderInstance;
+    // 前の配信の記録を持ち越さない (配信ごとの初期化)
+    encodeState.records.clear();
+    pendingAudioConfig = null;
 
     // Encoder を設定する
     await encoderInstance.configure(encoderConfig);
@@ -1511,6 +1530,16 @@ export function usePublisher() {
   // WT-H2 で Datagram を選んだときの警告は、配信ごとに 1 回だけ出す
   let loggedAudioDatagramFallback = false;
 
+  // 符号化を依頼した時点の世代と、映像の記録。送信を止めるたびに世代を進めて記録を消し、
+  // それ以降に届く出力を捨てる (規則はライブラリと共有する。src/encodeGeneration.ts)
+  const encodeState: EncodeState = { generation: 0, records: new Map() };
+
+  // 送らない出力が持っていた Audio Config (まだ送っていない値)。description は configure
+  // 後の最初の出力にしか載らないため、送信を止める直前に届いた出力を捨てると、復号に必要な
+  // Audio Config を以後の配信で送れなくなる。捨てる出力の値はここに残し、次に送る Object で
+  // 載せる (ライブラリの MediaPublisher.pendingAudioConfig と同じ規則)
+  let pendingAudioConfig: Uint8Array | null = null;
+
   // event timeline に載せる履歴。配信を始めるたびに空にする (draft-ietf-moq-msf-01 §8.3)
   let eventHistory: EventTimelineEntry[] = [];
 
@@ -1518,14 +1547,21 @@ export function usePublisher() {
     // キューに溜まっている音声の長さを測り、この chunk が覆う最初の投入の timestamp を
     // 受け取る。送らない chunk でも測るため、送信の可否より先に記録する
     // (src/audioPublishCatchUp.ts)
-    const { timestampMicros } = pub.audioCatchUp.value.recordEncodedChunk({
-      timestampMicros: chunk.timestamp,
-      durationMicros: chunk.duration,
-      nowMs: performance.now(),
-    });
+    const { timestampMicros, generation: encodedGeneration } =
+      pub.audioCatchUp.value.recordEncodedChunk({
+        timestampMicros: chunk.timestamp,
+        durationMicros: chunk.duration,
+        nowMs: performance.now(),
+      });
+    // 送信を止めた後に届いた出力は送らない。対応する記録が無い出力も送らない
+    // 送らない出力でも description は失わない (次に送る Object で載せる)
+    if (chunk.description !== undefined && chunk.description.length > 0) {
+      pendingAudioConfig = chunk.description;
+    }
+    if (timestampMicros === null || encodedGeneration !== encodeState.generation) return;
     // フレームを捨てると、符号化の出力の timestamp は投入したフレームの timestamp より
     // 古くなる。LOC TIMESTAMP と Audio Level は、送るサンプルの取得時刻で引く
-    const capturedTimestampMicros = timestampMicros ?? chunk.timestamp;
+    const capturedTimestampMicros = timestampMicros;
     const audioPublisherInstance = pub.audioPublisher.value;
     if (!audioPublisherInstance || audioPublisherInstance.state !== "active") return;
     pub.audioChunksEncoded.value++;
@@ -1558,11 +1594,13 @@ export function usePublisher() {
       resendNext,
     } = resolveAudioConfigToSend(
       pub.lastSentAudioConfig.value,
-      chunk.description,
+      selectCodecDescription(chunk.description, pendingAudioConfig),
       pub.audioConfigResendRequested.value,
     );
     pub.lastSentAudioConfig.value = nextAudioConfig;
     pub.audioConfigResendRequested.value = resendNext;
+    // 解決に使った保留値は消す (次に同じ値を載せない)
+    pendingAudioConfig = null;
 
     // TIMESTAMP は Unix epoch マイクロ秒 (壁時計) で送る (draft-ietf-moq-loc-04 §2.3.1.1)。
     // `AudioData.timestamp` は壁時計ではないため、読み出した壁時計との差の
@@ -2035,9 +2073,12 @@ export function usePublisher() {
       // ライブラリの allocateInitialGroupId (同一プロセス内で前回割り当てた開始値を
       // 必ず上回る単調ガード付きの割当て) を使う
       pub.pubCurrentAudioGroup.value = allocateInitialGroupId();
-      // 直前に送った Audio Config と送り直し要求は配信ごとに忘れる
+      // 直前に送った Audio Config と送り直し要求は配信ごとに忘れる。保留値も同じ理由で
+      // 忘れる (映像のみの配信ではここが唯一の破棄点であり、残すと前の配信の codec の値を
+      // 新しい配信の最初の Object に載せてしまう)
       pub.lastSentAudioConfig.value = null;
       pub.audioConfigResendRequested.value = false;
+      pendingAudioConfig = null;
       // event timeline の履歴と Group ID も配信ごとに初期化する。Group ID は音声と
       // 同じく単調ガード付きの割り当てを使い、再開時の単調性を守る (§6.1)
       eventHistory = [];
@@ -2152,6 +2193,26 @@ export function usePublisher() {
   };
 
   /**
+   * 各 track で開いている Subgroup を閉じる
+   *
+   * draft-ietf-moq-transport-22 §11.3.2 (Closing Subgroup Streams):
+   * 開いている Subgroup が無い track と、既に closed の Publisher では何もしない。
+   * 戻り値は reject しないため待たない
+   */
+  function closePublisherSubgroups(): void {
+    for (const publisher of [
+      pub.publisher.value,
+      pub.audioPublisher.value,
+      pub.catalogPublisher.value,
+      pub.eventPublisher.value,
+    ]) {
+      if (publisher !== null) {
+        void publisher.closeSubgroup();
+      }
+    }
+  }
+
+  /**
    * 配信の送信経路を止める (セッションは閉じない)
    *
    * フレームの読み出しと encoder を止め、catalog の送り直しも止める。PUBLISH は残るため、
@@ -2159,6 +2220,14 @@ export function usePublisher() {
    * するか、上流の publisher が購読を終えるか、購読の期限が切れるまで残る)。
    */
   function stopSendingPaths(): void {
+    // これ以降に届く符号化の出力を捨てる (Encoder を閉じた後も emit 済みの出力は届き得る)
+    advanceEncodeGeneration(encodeState);
+
+    // 開いている Subgroup を閉じる (draft-ietf-moq-transport-22 §11.3.2)。セッションと
+    // PUBLISH は維持したまま送信だけを止めるため、閉じないと次の Object を待つ購読側が
+    // DATA_STREAM_TIMEOUT (0x12) でセッションを閉じうる
+    closePublisherSubgroups();
+
     // catalog の送り直しを止める (切断やエラーでの後始末を含む)
     cancelCatalogRepublish();
 

@@ -341,7 +341,22 @@ export interface MediaPublisher {
    * 並行呼び出しは未対応であり直列に呼ぶこと。
    */
   start(stream: MediaStream): Promise<void>;
+  /**
+   * 配信を一時停止する
+   *
+   * `"publishing"` からのみ呼べる。エンコードを止めるだけでなく、開いている Subgroup
+   * ストリームを閉じる (draft-ietf-moq-transport-22 §11.3.2)。止めた時点で「その Subgroup に
+   * 続く Object は無い」ため FIN の MUST を満たせる。閉じないと、次の Object を待つ購読側が
+   * `DATA_STREAM_TIMEOUT` (0x12) でセッションを閉じうる。詳細は docs/HIGH_LEVEL_API.md を参照。
+   */
   pause(): void;
+  /**
+   * 配信を再開する
+   *
+   * `"paused"` からのみ呼べる。一度閉じた Group へは送れないため、次に encode する
+   * フレームをキーフレームにして新しい Group から送り直す (`startNewGroup()` と同じ効果)。
+   * 詳細は docs/HIGH_LEVEL_API.md を参照。
+   */
   resume(): void;
   /**
    * 配信を停止する

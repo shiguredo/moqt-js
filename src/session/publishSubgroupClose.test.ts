@@ -18,6 +18,7 @@ import { ProtocolViolationError } from "../error";
 import type { SessionInternal } from "./types";
 import {
   publishClosePublisherStream,
+  publishCloseSubgroup,
   publishMarkStreamOmitted,
   publishResetPublisherStream,
   publishSendObject,
@@ -90,10 +91,24 @@ function createHarness(): {
   publisher.onSendObjectSkipped = (groupId) => {
     publishMarkStreamOmitted(session, publisher.getTrackAlias(), groupId);
   };
+  publisher.onCloseSubgroup = () => publishCloseSubgroup(session, publisher.getTrackAlias());
   publisher.onDoneInternal = async () => {
     await publishClosePublisherStream(session, publisher.getTrackAlias());
   };
   return { session, publisher, records, errors };
+}
+
+/**
+ * 待たずに始めた close の完了を待つ
+ *
+ * `closeSubgroup()` は FIN の完了を待たない契約であり、sink の close / abort を観測するには
+ * 記録した完了を待つ (done() が publishClosePublisherStreamInternal で行うのと同じ)。
+ */
+async function waitForPendingCloses(session: SessionInternal, trackAlias: bigint): Promise<void> {
+  const pendingCloses = session.publisherPendingCloses.get(trackAlias);
+  if (pendingCloses !== undefined) {
+    await Promise.all(pendingCloses);
+  }
 }
 
 /**
@@ -333,4 +348,85 @@ test("publishResetPublisherStream: peer cancel の RESET は従来どおり", as
   assert.equal(records[0].abortReasons[0], "peer cancelled subscription");
   // ストリーム状態は削除される
   assert.isFalse(session.publisherStreams.has(publisher.getTrackAlias()));
+});
+
+/**
+ * closeSubgroup: Object を送らずに、開いている Subgroup を閉じる
+ *
+ * draft-ietf-moq-transport-22 §11.3.2 (Closing Subgroup Streams):
+ * 配信を止める経路 (pause / devtools の stop-sending) から呼ばれる。止めた時点で
+ * 「その Subgroup に続く Object は無い」ため FIN の MUST を満たせる。
+ */
+test("closeSubgroup: 開いている Subgroup を FIN で閉じる", async () => {
+  const { session, publisher, records, errors } = createHarness();
+  await publisher.sendObject({ groupId: 0, objectId: 0, payload: new Uint8Array([1]) });
+  assert.equal(records[0].closeCount, 0);
+
+  await publisher.closeSubgroup();
+  await waitForPendingCloses(session, publisher.getTrackAlias());
+
+  assert.equal(records.length, 1);
+  assert.equal(records[0].closeCount, 1, "FIN で閉じていない");
+  assert.equal(records[0].abortCount, 0, "RESET している");
+
+  // 閉じた後に同じ Group へ送ると error 通知になる (返値の Promise は reject しない)
+  await publisher.sendObject({ groupId: 0, objectId: 1, payload: new Uint8Array([2]) });
+  assert.equal(errors.length, 1, "閉じた Group への送信が通知されていない");
+
+  await publisher.done();
+});
+
+/**
+ * 省略 (forwardState が 0、または Location Filter の範囲外の見送り) がある Subgroup は
+ * §11.3.2 の MUST により RESET で閉じる。
+ */
+test("closeSubgroup: 省略がある Subgroup は RESET で閉じる", async () => {
+  const { session, publisher, records } = createHarness();
+  await publisher.sendObject({ groupId: 0, objectId: 0, payload: new Uint8Array([1]) });
+  publisher.setForwardState(false);
+  await publisher.sendObject({ groupId: 0, objectId: 1, payload: new Uint8Array([2]) });
+
+  await publisher.closeSubgroup();
+  await waitForPendingCloses(session, publisher.getTrackAlias());
+
+  assert.equal(records.length, 1);
+  assert.equal(records[0].abortCount, 1, "RESET していない");
+  assert.equal(records[0].closeCount, 0, "FIN で閉じている");
+  assert.equal(records[0].abortReasons[0], "subgroup omitted objects");
+
+  await publisher.done();
+});
+
+/**
+ * 開いている Subgroup が無い場合は何もしない (ストリームも開かないし、エラーにもしない)。
+ */
+test("closeSubgroup: 開いている Subgroup が無い場合は何もしない", async () => {
+  const { publisher, records, errors } = createHarness();
+
+  await publisher.closeSubgroup();
+
+  assert.equal(records.length, 0, "ストリームを開いている");
+  assert.equal(errors.length, 0);
+
+  await publisher.done();
+});
+
+/**
+ * 送信キューに載り、キュー済みの送信が終わってから閉じる。
+ * 逆順に走ると、閉じた Group への送信として error 通知になる。
+ */
+test("closeSubgroup: 送信キューに載り、キュー済みの送信の後に閉じる", async () => {
+  const { session, publisher, records, errors } = createHarness();
+
+  // 送信の完了を待たずに閉じる
+  const sending = publisher.sendObject({ groupId: 0, objectId: 0, payload: new Uint8Array([1]) });
+  const closing = publisher.closeSubgroup();
+  await Promise.all([sending, closing]);
+  await waitForPendingCloses(session, publisher.getTrackAlias());
+
+  assert.equal(errors.length, 0, "キュー済みの送信が閉じた後の送信になっている");
+  assert.equal(records.length, 1, "閉じる前に別のストリームを開いている");
+  assert.equal(records[0].closeCount, 1, "FIN で閉じていない");
+
+  await publisher.done();
 });

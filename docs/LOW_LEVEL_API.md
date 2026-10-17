@@ -146,6 +146,7 @@ draft-ietf-moq-msf-01 §11.4.3: track に紐づくトークンは、そのトラ
 | `sendObject(params)`          | Subgroup stream に Object を送る                            |
 | `sendDatagram(params)`        | Datagram として Object を送る                               |
 | `notifyStateChange(options?)` | 購読状態の変化を `PUBLISH_STATE_NOTIFY` で購読者へ通知する  |
+| `closeSubgroup()`             | 開いている Subgroup を Object を送らずに閉じる              |
 | `done()`                      | 現在のデータストリームを閉じて `PUBLISH_DONE` を送る        |
 
 `sendObject()` / `sendDatagram()` の送信パラメータは `number` ベースだが、受信した `MoqtObject` は `bigint` ベースで返る。
@@ -156,6 +157,15 @@ draft-ietf-moq-msf-01 §11.4.3: track に紐づくトークンは、そのトラ
 - 閉じた Group への後続の `sendObject()` は error 通知になる (返値の Promise は解決する)。`forwardState` が `0` の場合は送信前に見送られるため通知も出ない。`FIN` の完了がタイムアウトして `RESET` に切り替わった場合は、同じ Group へ再び送信できる
 - `SubgroupHeader` の `END_OF_GROUP` ビット (§11.3.1) は立てない。`FIN` の受信で相手側の `DATA_STREAM_TIMEOUT` は解除できるため、同ビットの「FIN から Group の最終 Object を推論する」経路は使わない
 - `sendDatagram()` の `endOfGroup` とは別のものである。あちらは Datagram の wire で Group の最後を示すビット (§11.2.1) を立てる。同じパラメータオブジェクトを使い回さないこと
+
+`closeSubgroup()` は、送信を止める時点で「その Subgroup に続く Object は無い」と分かったときに、Object を送らずに開いている Subgroup を閉じる (draft-ietf-moq-transport-22 §11.3.2)。`sendObject()` の `endOfSubgroup` は「送信する Object が Subgroup の最後である」ことを示す経路であり、送る Object が無い場合は使えない。
+
+- 開いている Subgroup が無い場合と、Publisher が既に `"closed"` の場合は何もしない (例外も投げない)
+- `FIN` と `RESET` は §11.3.2 の判定に従う。見送った Object がある Subgroup は `RESET` になる
+- 送信キューに載せ、キュー済みの送信が終わってから閉じる。`FIN` の完了は待たず、`done()` が完了を待つ
+- `writer.close()` が失敗・タイムアウトした場合は `RESET` に切り替わる (これは通知しない)
+- 返値の Promise は解決する。内部コールバックの失敗は error 通知になる
+- 閉じた後に同じ Group へ `sendObject()` すると error 通知になる。`FIN` の完了がタイムアウトして `RESET` に切り替わった場合は、`endOfSubgroup` と同じく同じ Group へ再び送信できる
 
 `notifyStateChange()` が通知に載せるパラメータは `LARGEST_OBJECT` (送信済み Object がある場合) / `FORWARD` / `LOCATION_FILTER` のみで、現在値から変化したものだけを送る。変化が無ければ送信しない。
 
@@ -358,7 +368,7 @@ interface MoqtObject {
 - `1 Group = 1 Subgroup = 1 Stream`
 - `publisherPriority` のデフォルトは `128`
 - `Stream Count` は実際に開いたデータストリーム数を `PUBLISH_DONE` に反映する
-- `FIN` を出す契機は、Group の切り替え、`endOfSubgroup` を付けた Object の送信、`ObjectStatus.END_OF_GROUP` の送信、`done()`、セッション終了時の後始末である
+- `FIN` を出す契機は、Group の切り替え、`endOfSubgroup` を付けた Object の送信、`ObjectStatus.END_OF_GROUP` の送信、`closeSubgroup()`、`done()`、セッション終了時の後始末である
 
 #### `FIRST_OBJ_EXT` を固定で使う理由
 

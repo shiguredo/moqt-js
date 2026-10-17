@@ -58,6 +58,7 @@ import {
   allocateInitialGroupId,
   allocateVideoObject,
   resolveAudioConfigToSend,
+  selectCodecDescription,
   resolveKeyframeInterval,
   resolveVideoConfigToSend,
   shouldSendKeyFrame,
@@ -201,6 +202,8 @@ interface PublisherLoopControl {
   videoEncoder: VideoEncoderWrapper | null;
   processingActive: boolean;
   processingGeneration: number;
+  // 直前のキーフレームの timestamp (resume() が新しい Group を始めるかの確認に使う)
+  lastKeyFrameTimestampUs: number | null;
   currentState: MediaPublisherState;
   processAudioFrames(): Promise<void>;
   processVideoFrames(): Promise<void>;
@@ -3027,6 +3030,8 @@ test("start: 接続の await 中に close したら受け取った session を�
 interface PublisherGroupControl {
   audioGroupId: number;
   videoGroupId: number;
+  // encode を依頼した時点の世代 (入力フレームの timestamp を鍵にする)
+  videoEncodeGenerations: Map<number, number>;
   audioPublisher: Publisher | null;
   videoPublisher: Publisher | null;
   handleAudioEncodedChunk(chunk: {
@@ -3060,6 +3065,7 @@ function createRecordingSendPublisher(): {
     endOfSubgroup?: boolean;
   }[];
   doneCount: () => number;
+  closeSubgroupCount: () => number;
 } {
   const sent: {
     groupId: number;
@@ -3069,11 +3075,15 @@ function createRecordingSendPublisher(): {
     endOfSubgroup?: boolean;
   }[] = [];
   let done = 0;
+  let closeSubgroup = 0;
   const publisher = {
     state: "active",
     // 実物の PublisherImpl と同じ既定 (FORWARD は 1) にする。送り直しの経路が見送りの
     // 判定に使う
     forwardState: true,
+    closeSubgroup: async () => {
+      closeSubgroup++;
+    },
     sendObject: async (params: {
       groupId: number;
       objectId: number;
@@ -3093,7 +3103,7 @@ function createRecordingSendPublisher(): {
       done++;
     },
   } as unknown as Publisher;
-  return { publisher, sent, doneCount: () => done };
+  return { publisher, sent, doneCount: () => done, closeSubgroupCount: () => closeSubgroup };
 }
 
 /**
@@ -3178,6 +3188,9 @@ test("音声・映像とも初回送信値は初期値である", () => {
   const initialAudio = control.audioGroupId;
   const initialVideo = control.videoGroupId;
 
+  // 符号化を依頼した時点の記録を作る (実経路と同じ)
+  recordAudioEncode(control, 0);
+  recordVideoEncode(control, 0);
   control.handleAudioEncodedChunk({
     data: new Uint8Array([1]),
     type: "key",
@@ -3198,6 +3211,7 @@ test("音声・映像とも初回送信値は初期値である", () => {
 
   // 音声は LOC draft-ietf-moq-loc-04 §4.1 に従いフレームごとに Group が進み、
   // Object ID は常に 0 のまま
+  recordAudioEncode(control, 1);
   control.handleAudioEncodedChunk({
     data: new Uint8Array([2]),
     type: "key",
@@ -3208,6 +3222,7 @@ test("音声・映像とも初回送信値は初期値である", () => {
   assert.equal(audioSent[1].objectId, 0);
 
   // 2 回目以降の key で加算されること
+  recordVideoEncode(control, 1);
   control.handleVideoEncodedChunk({
     data: new Uint8Array([2]),
     type: "key",
@@ -3231,12 +3246,14 @@ test("新規割当ては送信済み最大値を上回る", () => {
   // video のみの構成では audio 側を採番しないこと
   assert.equal(control.audioGroupId, 0);
 
+  recordVideoEncode(control, 0);
   control.handleVideoEncodedChunk({
     data: new Uint8Array([1]),
     type: "key",
     timestamp: 0,
     duration: null,
   });
+  recordVideoEncode(control, 1);
   control.handleVideoEncodedChunk({
     data: new Uint8Array([2]),
     type: "key",
@@ -3290,6 +3307,9 @@ function createCapturingPublisher(): {
     done: async () => {
       // 破棄は no-op (購読の無いテストでは書き込み完了を待つ対象が無い)
     },
+    closeSubgroup: async () => {
+      // 開いている Subgroup は無い (テストは実ストリームを持たない) ため no-op
+    },
     sendObject: async (params: { properties?: Uint8Array; endOfSubgroup?: boolean }) => {
       sent.push(params);
     },
@@ -3298,6 +3318,54 @@ function createCapturingPublisher(): {
     },
   } as unknown as Publisher;
   return { publisher, sent, datagrams };
+}
+
+/**
+ * 映像の符号化を依頼した時点の世代を記録する (テスト用)
+ *
+ * `handleVideoEncodedChunk` は、符号化を依頼した時点の世代と一致する出力だけを送る
+ * (記録の無い出力は送らない)。テストはエンコーダーを挟まずに出力を流すため、実経路と
+ * 同じ記録を先に作る
+ */
+function recordVideoEncode(control: unknown, timestamp: number): void {
+  const internal = control as {
+    videoEncodeGenerations: Map<number, number>;
+    processingGeneration: number;
+  };
+  internal.videoEncodeGenerations.set(timestamp, internal.processingGeneration);
+}
+
+/**
+ * 音声の符号化を依頼した時点の投入を記録する (テスト用)
+ *
+ * 長さは 20 ms とし、1 つの出力が覆い切るものとして記録する
+ */
+function recordAudioEncode(control: unknown, timestampMicros: number): void {
+  const internal = control as {
+    audioCatchUp: {
+      evaluate(input: {
+        timestampMicros: number;
+        generation: number;
+        readWallClockMicros: bigint;
+        appliedOffsetMicros: bigint | null;
+        durationMicros: number | null;
+        nowMs: number;
+      }): boolean;
+    };
+    processingGeneration: number;
+  };
+  // 追いつきの判定で捨てられると記録が作られず、テストが空振りで通る
+  assert.isTrue(
+    internal.audioCatchUp.evaluate({
+      timestampMicros,
+      generation: internal.processingGeneration,
+      readWallClockMicros: 0n,
+      appliedOffsetMicros: null,
+      durationMicros: 20_000,
+      nowMs: performance.now(),
+    }),
+    "テストの前提となる投入が捨てられている",
+  );
 }
 
 /** Video Config の description を含む chunk を handleVideoEncodedChunk に流す */
@@ -3317,6 +3385,8 @@ function sendVideoChunk(
       }): void;
     }
   ).handleVideoEncodedChunk.bind(control);
+  // 実経路では encode を依頼した時点で世代を記録する
+  recordVideoEncode(control, 1000);
   handler({
     data: new Uint8Array([0xaa]),
     type,
@@ -3551,6 +3621,8 @@ function sendAudioChunk(control: PublisherLifecycleControl, description?: Uint8A
       }): void;
     }
   ).handleAudioEncodedChunk.bind(control);
+  // 実経路では encode を依頼した時点で投入を記録する
+  recordAudioEncode(control, 1000);
   handler({
     data: new Uint8Array([0xbb]),
     type: "key",
@@ -3990,6 +4062,7 @@ async function driveSendFailure(
   return withUnhandledRejectionWatch(async (unhandled) => {
     if (kind === "audio") {
       control.audioPublisher = publisher;
+      recordAudioEncode(control, 0);
       control.handleAudioEncodedChunk({
         data: new Uint8Array([0xaa]),
         type: "key",
@@ -3998,6 +4071,7 @@ async function driveSendFailure(
       });
     } else {
       control.videoPublisher = publisher;
+      recordVideoEncode(control, 0);
       control.handleVideoEncodedChunk({
         data: new Uint8Array([0xaa]),
         type: "key",
@@ -5224,6 +5298,8 @@ test("送信する Object の Priority 引数は各定数どおりになる", ()
   control.audioPublisher = audioPublisher;
   control.videoPublisher = videoPublisher;
 
+  // 符号化を依頼した時点の記録を作る (実経路と同じ)
+  recordAudioEncode(control, 0);
   control.handleAudioEncodedChunk({
     data: new Uint8Array([1]),
     type: "key",
@@ -5231,18 +5307,21 @@ test("送信する Object の Priority 引数は各定数どおりになる", ()
     duration: null,
   });
   // 音声は 1 フレーム 1 Group のため、2 件目以降も音声の値を載せる
+  recordAudioEncode(control, 1);
   control.handleAudioEncodedChunk({
     data: new Uint8Array([2]),
     type: "key",
     timestamp: 1,
     duration: null,
   });
+  recordVideoEncode(control, 0);
   control.handleVideoEncodedChunk({
     data: new Uint8Array([1]),
     type: "key",
     timestamp: 0,
     duration: null,
   });
+  recordVideoEncode(control, 1);
   control.handleVideoEncodedChunk({
     data: new Uint8Array([2]),
     type: "delta",
@@ -5723,4 +5802,246 @@ test("createPublishers: SETUP にトークンが無ければ PUBLISH に付与�
 
   assert.isUndefined(optionsByTrack.get(CATALOG_TRACK_NAME)?.authorizationToken);
   assert.isUndefined(optionsByTrack.get(audioSettings.trackName)?.authorizationToken);
+});
+
+test("pause: 開いている Subgroup を閉じる", async () => {
+  // draft-ietf-moq-transport-22 §11.3.2: 配信を止めた時点で「その Subgroup に続く Object は
+  // 無い」ため、開いている Subgroup を FIN で閉じる MUST を満たせる。閉じないと、次の
+  // Object を待つ購読側が DATA_STREAM_TIMEOUT (0x12) でセッションを閉じうる
+  const { publisher, control: loopControl } = createLoopTestContext();
+  const control = loopControl as unknown as PublisherGroupControl & {
+    catalogPublisher: Publisher | null;
+  };
+  const catalog = createRecordingSendPublisher();
+  const audio = createRecordingSendPublisher();
+  const video = createRecordingSendPublisher();
+  control.catalogPublisher = catalog.publisher;
+  control.audioPublisher = audio.publisher;
+  control.videoPublisher = video.publisher;
+
+  publisher.pause();
+
+  assert.equal(publisher.state, "paused");
+  assert.equal(catalog.closeSubgroupCount(), 1, "catalog の Subgroup を閉じていない");
+  assert.equal(audio.closeSubgroupCount(), 1, "音声の Subgroup を閉じていない");
+  assert.equal(video.closeSubgroupCount(), 1, "映像の Subgroup を閉じていない");
+
+  // catalog の送り直しは止めない (pause は送信の停止であり、購読の維持とは別である)
+  await publisher.close();
+});
+
+test("pause: 止める前に依頼した映像の出力は送られない", () => {
+  // 符号化は非同期であり、pause の直前に依頼したフレームの出力が pause の後に届く。
+  // 止めた時点で閉じた Subgroup へ送らない (WebCodecs は出力の到着順も保証しないため、
+  // 到着順ではなく依頼した時点の世代で判定する)
+  const { publisher, control: loopControl } = createLoopTestContext();
+  const control = loopControl as unknown as PublisherGroupControl;
+  const { publisher: videoPublisher, sent } = createRecordingSendPublisher();
+  control.videoPublisher = videoPublisher;
+
+  recordVideoEncode(control, 1000);
+  publisher.pause();
+  control.handleVideoEncodedChunk({
+    data: new Uint8Array([0xaa]),
+    type: "key",
+    timestamp: 1000,
+    duration: null,
+  });
+
+  assert.equal(sent.length, 0, "閉じた Subgroup へ送っている");
+});
+
+test("pause: 止める前に依頼した音声の出力は送られない", () => {
+  // 音声も同じ規則。世代は audioPublishCatchUp の投入の記録に載せて返す
+  const { publisher, control: loopControl } = createLoopTestContext();
+  const control = loopControl as unknown as PublisherGroupControl;
+  const { publisher: audioPublisher, sent } = createRecordingSendPublisher();
+  control.audioPublisher = audioPublisher;
+
+  recordAudioEncode(control, 0);
+  publisher.pause();
+  control.handleAudioEncodedChunk({
+    data: new Uint8Array([0xbb]),
+    type: "key",
+    timestamp: 0,
+    duration: null,
+  });
+
+  assert.equal(sent.length, 0, "閉じた Subgroup へ送っている");
+});
+
+test("pause → resume: 再開後はキーフレームで新しい Group を始める", async () => {
+  // 閉じた Group へ送り直さないよう、再開後は新しい Group をキーフレームから始める
+  // (startNewGroup() と同じ効果)。直前のキーフレームの記録が残っていると、再開後の
+  // 最初のフレームがデルタになり、購読側は映像を出せない
+  const { publisher, control } = createLoopTestContext({
+    video: { codec: "vp8", bitrate: 1000 },
+  });
+  const groupControl = control as unknown as PublisherGroupControl;
+  const { publisher: videoPublisher, sent } = createRecordingSendPublisher();
+  groupControl.videoPublisher = videoPublisher;
+
+  // 配信が始まっている状態を作る (最初のキーフレームは初期の Group をそのまま使う)
+  const initialVideoGroupId = groupControl.videoGroupId;
+  recordVideoEncode(groupControl, 0);
+  groupControl.handleVideoEncodedChunk({
+    data: new Uint8Array([0xaa]),
+    type: "key",
+    timestamp: 0,
+    duration: null,
+  });
+  assert.equal(sent[0].groupId, initialVideoGroupId);
+
+  // 直前のキーフレームの記録が残ったまま pause → resume する
+  control.lastKeyFrameTimestampUs = 1000;
+  publisher.pause();
+  publisher.resume();
+  assert.equal(publisher.state, "publishing");
+
+  // 実ループに 1 枚流す。記録が消えているためキーフレームとして encode される
+  const { keyFrames, controller } = injectVideoLoop(control);
+  const loop = control.processVideoFrames();
+  const frame = createTestFrame(2000);
+  controller.enqueue(frame);
+  await Promise.resolve();
+  await Promise.resolve();
+  controller.close();
+  await loop;
+
+  assert.deepEqual(keyFrames, [true], "再開後の最初のフレームがキーフレームになっていない");
+  // encode を依頼した時点の世代が記録される (実経路の記録。取り違えると出力を送れない)
+  assert.equal(
+    groupControl.videoEncodeGenerations.get(frame.timestamp),
+    control.processingGeneration,
+    "encode を依頼した時点の世代が記録されていない",
+  );
+
+  // その出力を流すと、新しい Group の先頭 Object になる
+  groupControl.handleVideoEncodedChunk({
+    data: new Uint8Array([0xaa]),
+    type: "key",
+    timestamp: frame.timestamp,
+    duration: null,
+  });
+
+  assert.equal(
+    sent[1].groupId,
+    initialVideoGroupId + 1,
+    "再開後のキーフレームが新しい Group になっていない",
+  );
+  assert.equal(sent[1].objectId, 0);
+});
+
+test("start: 配信ごとの初期化で前の配信の映像の記録を消す", async () => {
+  // stop のあとの start は同じインスタンスを使い、世代のカウンタは戻さない。記録を
+  // 持ち越すと、前の配信の出力と取り違えて新しい配信の出力を捨てるおそれがある。
+  // start() が呼ぶ初期化 (setupEncoders) を通した後は記録が残っていないことを確認する
+  const { control: loopControl } = createLoopTestContext();
+  const control = loopControl as unknown as PublisherGroupControl & {
+    setupEncoders(): Promise<void>;
+  };
+  const { publisher: videoPublisher, sent } = createRecordingSendPublisher();
+  control.videoPublisher = videoPublisher;
+
+  recordVideoEncode(control, 1000);
+  await control.setupEncoders();
+
+  control.handleVideoEncodedChunk({
+    data: new Uint8Array([0xaa]),
+    type: "key",
+    timestamp: 1000,
+    duration: null,
+  });
+
+  assert.equal(sent.length, 0, "前の配信の記録が残っている");
+});
+
+test("pause: 捨てた出力の Audio Config は次の送信で載る", () => {
+  // description は configure 後の最初の出力にしか載らない。配信を止める直前に届いた出力を
+  // 捨てるときに description を失うと、復号に必要な AUDIO_CONFIG を以後の配信で送れなく
+  // なる (AAC は AudioSpecificConfig が必須で、catalog の Track Property にも載せない)
+  const { publisher, control: loopControl } = createLoopTestContext();
+  const control = loopControl as unknown as PublisherGroupControl;
+  const { publisher: audioPublisher, sent } = createCapturingPublisher();
+  control.audioPublisher = audioPublisher;
+
+  const description = new Uint8Array([0x11, 0x90]);
+  recordAudioEncode(control, 0);
+  publisher.pause();
+  control.handleAudioEncodedChunk({
+    data: new Uint8Array([0xbb]),
+    type: "key",
+    timestamp: 0,
+    duration: null,
+    description,
+  });
+  assert.equal(sent.length, 0, "閉じた Subgroup へ送っている");
+
+  // 再開後に届く出力は description を持たないが、捨てた出力の値が載る
+  publisher.resume();
+  recordAudioEncode(control, 1000);
+  control.handleAudioEncodedChunk({
+    data: new Uint8Array([0xbb]),
+    type: "key",
+    timestamp: 1000,
+    duration: null,
+  });
+
+  assert.equal(sent.length, 1);
+  const decoded = LOC.decodeAudioProperties(sent[0].properties ?? new Uint8Array(0));
+  assert.deepEqual(decoded.config, description, "捨てた出力の Audio Config が載っていない");
+});
+
+test("pause: 捨てた出力の Video Config は次のキーフレームで載る", () => {
+  // 映像も同じ (canonical 形式の description は configure 後の最初の出力にしか載らない)
+  const { publisher, control: loopControl } = createLoopTestContext();
+  const control = loopControl as unknown as PublisherGroupControl;
+  const { publisher: videoPublisher, sent } = createCapturingPublisher();
+  control.videoPublisher = videoPublisher;
+
+  const description = new Uint8Array([0x01, 0x42, 0xc0, 0x1f]);
+  recordVideoEncode(control, 1000);
+  publisher.pause();
+  control.handleVideoEncodedChunk({
+    data: new Uint8Array([0xaa]),
+    type: "key",
+    timestamp: 1000,
+    duration: null,
+    description,
+  });
+  assert.equal(sent.length, 0, "閉じた Subgroup へ送っている");
+
+  publisher.resume();
+  recordVideoEncode(control, 2000);
+  control.handleVideoEncodedChunk({
+    data: new Uint8Array([0xaa]),
+    type: "key",
+    timestamp: 2000,
+    duration: null,
+  });
+
+  assert.equal(sent.length, 1);
+  const decoded = LOC.decodeVideoProperties(sent[0].properties ?? new Uint8Array(0));
+  assert.deepEqual(decoded.config, description, "捨てた出力の Video Config が載っていない");
+});
+
+test("selectCodecDescription: 空の description は保留値を覆わない", () => {
+  // 送らなかった出力の description を保留している間は、空の description を「値なし」として
+  // 扱う (覆うと、載せる値が無いまま保留値が消える)
+  const pending = new Uint8Array([1, 2]);
+
+  const fresh = new Uint8Array([3, 4]);
+  assert.deepEqual(
+    selectCodecDescription(fresh, pending),
+    fresh,
+    "値のある description を使っていない",
+  );
+  assert.deepEqual(
+    selectCodecDescription(new Uint8Array(), pending),
+    pending,
+    "空の description が保留値を覆っている",
+  );
+  assert.deepEqual(selectCodecDescription(undefined, pending), pending);
+  assert.isUndefined(selectCodecDescription(new Uint8Array(), null), "値が無いのに載せている");
+  assert.isUndefined(selectCodecDescription(undefined, null));
 });

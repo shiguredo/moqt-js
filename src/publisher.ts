@@ -284,6 +284,30 @@ export interface Publisher {
    */
   sendDatagram(params: SendDatagramParams): void;
   /**
+   * 開いている Subgroup を、Object を送らずに閉じる
+   * draft-ietf-moq-transport-22 Section 11.3.2 (Closing Subgroup Streams)
+   *
+   * 送信を止める時点で「その Subgroup に続く Object は無い」と分かったときに使う。
+   * `sendObject()` の `endOfSubgroup` は「送信する Object が Subgroup の最後である」ことを
+   * 示す経路であり、Object を送らずに閉じることはできない。
+   *
+   * 開いている Subgroup が無い場合と、Publisher が既に `"closed"` の場合は何もしない
+   * (例外も投げない)。停止の後始末 (`done()` の後) から呼ばれる経路があるため、
+   * `sendObject()` / `sendDatagram()` の「closed なら throw」とは扱いを変える。
+   *
+   * Group の途中でも FIN で閉じてよい。Object ID は送信する時点で払い出すため、送らな
+   * かったフレームは wire 上の Object として存在せず、「渡し切っていない」状態にならない
+   * (§11.3.2 の RESET が要るのは、見送った Object を残したまま閉じる場合である)。
+   *
+   * FIN と RESET は §11.3.2 の判定に従う。見送った Object がある Subgroup は RESET に
+   * なる。送信キューに載せ、キュー済みの送信が終わってから閉じる。FIN の完了は待たない
+   * (`done()` が完了を待つ)。`writer.close()` が失敗・タイムアウトした場合は RESET に
+   * 切り替わる (これは通知しない。§11.3.2 の MUST を満たす側へ倒すだけである)。
+   * 返値の Promise は reject せず、内部コールバックの失敗は error 通知になる。
+   * 閉じた後に同じ Group へ `sendObject()` すると error 通知になる。
+   */
+  closeSubgroup(): Promise<void>;
+  /**
    * 購読状態の変化を PUBLISH_STATE_NOTIFY で購読者へ通知する
    * draft-ietf-moq-transport-22 §9.10 (PUBLISH_STATE_NOTIFY)
    *
@@ -431,6 +455,14 @@ export class PublisherImpl implements Publisher {
   onSendObjectSkipped?: (groupId: number) => void;
   onSendDatagram?: (params: SendDatagramParams) => void;
   onDoneInternal?: (status: PublishDoneStatusCode) => Promise<void>;
+  /**
+   * 開いている Subgroup を閉じる (セッション内部コールバック)
+   *
+   * draft-ietf-moq-transport-22 §11.3.2:
+   * 閉じ方 (FIN / RESET) の判定とストリームの後始末はセッション側が行う。
+   * onSendObject / onDoneInternal と同じ役割分担である
+   */
+  onCloseSubgroup?: () => Promise<void>;
   /**
    * PUBLISH_STATE_NOTIFY の送信 (セッション内部コールバック)
    *
@@ -844,6 +876,35 @@ export class PublisherImpl implements Publisher {
 
     if (this.onSendDatagram) {
       this.onSendDatagram(params);
+    }
+  }
+
+  /**
+   * 開いている Subgroup を、Object を送らずに閉じる (契約はインタフェースの JSDoc を参照)
+   *
+   * 既に closed の場合と、内部コールバックが未設定の場合 (セッションを伴わない利用) は
+   * 何もしない。返値は reject せず、内部コールバックの失敗 (同期 throw を含む) は
+   * error 通知に変換する (呼び出し側は `void` で呼ぶ)
+   */
+  closeSubgroup(): Promise<void> {
+    if (this.publisherState === "closed" || this.onCloseSubgroup === undefined) {
+      return Promise.resolve();
+    }
+    try {
+      return this.onCloseSubgroup().catch((error: unknown) => {
+        // error コールバック (アプリの onError) が throw しても返値は reject させない
+        // (呼び出し側は void で呼ぶため、未処理の rejection になる)
+        try {
+          this.handleError(error instanceof Error ? error : new Error(String(error)));
+        } catch {
+          // 通知の失敗を伝える経路がこれ以上無いため握る
+        }
+      });
+    } catch (error) {
+      // 同期 throw も error 通知に変換する (呼び出し側は void で呼ぶため、
+      // そのまま外へ流すと未処理の例外になる)
+      this.handleError(error instanceof Error ? error : new Error(String(error)));
+      return Promise.resolve();
     }
   }
 

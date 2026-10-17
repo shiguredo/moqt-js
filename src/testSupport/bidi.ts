@@ -26,6 +26,7 @@ import { type BidiSessionInternal, bidiSendPublishStateNotify } from "../session
 import type { SessionInternal } from "../session/types";
 import {
   publishClosePublisherStream,
+  publishCloseSubgroup,
   publishMarkStreamOmitted,
   publishSendDatagram,
   publishSendObject,
@@ -208,6 +209,8 @@ export function createPublishReadTestContext(
   publisher.onSendObjectSkipped = (groupId) => {
     publishMarkStreamOmitted(session, publisher.getTrackAlias(), groupId);
   };
+  // SessionImpl と同じ配線 (開いている Subgroup を Object を送らずに閉じる)
+  publisher.onCloseSubgroup = () => publishCloseSubgroup(session, publisher.getTrackAlias());
   // SessionImpl の onDoneInternal と同じ後始末 (データストリーム FIN → PUBLISH_DONE)
   publisher.onDoneInternal = async (status) => {
     await publishClosePublisherStream(session, publisher.getTrackAlias());

@@ -43,6 +43,7 @@ import * as bidi from "./bidi";
 import {
   publishSendObject,
   publishClosePublisherStream,
+  publishCloseSubgroup,
   publishSendDatagram,
   publishSendPublishDone,
   publishMarkStreamOmitted,
@@ -204,6 +205,10 @@ export async function requestsPublish(
   impl.onSendObjectSkipped = (groupId) => {
     publishMarkStreamOmitted(session, impl.getTrackAlias(), groupId);
   };
+  // draft-ietf-moq-transport-22 §11.3.2 (Closing Subgroup Streams):
+  // Object を送らずに、その track で開いている Subgroup を閉じる。FIN / RESET の選択は
+  // publishCloseSubgroup が既存の省略の記録から決める
+  impl.onCloseSubgroup = () => requestsCloseSubgroup(session, impl.getTrackAlias());
 
   // データグラム送信コールバックを設定
   impl.onSendDatagram = (params: SendDatagramParams) => {
@@ -762,6 +767,17 @@ export function requestsClosePublisherStream(
   trackAlias: bigint,
 ): Promise<void> {
   return publishClosePublisherStream(session as unknown as SessionInternal, trackAlias);
+}
+
+/**
+ * 開いている Subgroup を、Object を送らずに閉じる
+ * 送信キューに入れて、進行中の sendObject が完了してから閉じる
+ */
+export function requestsCloseSubgroup(
+  session: RequestsSessionInternal,
+  trackAlias: bigint,
+): Promise<void> {
+  return publishCloseSubgroup(session as unknown as SessionInternal, trackAlias);
 }
 
 export function requestsSendDatagram(

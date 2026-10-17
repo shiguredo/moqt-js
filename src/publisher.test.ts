@@ -882,3 +882,84 @@ test("handleError: error コールバック未指定でも印は付く", () => {
 
   assert.isTrue(isErrorNotifiedByPublisher(failure));
 });
+
+/**
+ * closeSubgroup の契約:
+ * 開いている Subgroup を閉じる内部コールバックを呼ぶ。既に closed の場合は何もしない
+ * (停止の後始末では done() の後に stopSendingPaths() が通るため、throw すると
+ * 後始末が途中で落ちる)。内部コールバックが未設定の場合も何もしない。
+ */
+test("closeSubgroup は onCloseSubgroup を呼ぶ", async () => {
+  let callCount = 0;
+  const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n);
+  publisher.onCloseSubgroup = async () => {
+    callCount++;
+  };
+
+  await publisher.closeSubgroup();
+
+  assert.equal(callCount, 1);
+});
+
+test("closeSubgroup は closed 状態では onCloseSubgroup を呼ばない", async () => {
+  let callCount = 0;
+  const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n);
+  publisher.onCloseSubgroup = async () => {
+    callCount++;
+  };
+  publisher.markClosed();
+
+  // throw しない (sendObject / sendDatagram の「closed なら throw」とは扱いを変える)
+  await publisher.closeSubgroup();
+
+  assert.equal(callCount, 0);
+});
+
+test("closeSubgroup は onCloseSubgroup が未設定でも throw しない", async () => {
+  const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n);
+
+  await publisher.closeSubgroup();
+});
+
+test("closeSubgroup は内部コールバックの失敗を error 通知にする", async () => {
+  const errors: Error[] = [];
+  const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n, (error) => {
+    errors.push(error);
+  });
+  publisher.onCloseSubgroup = async () => {
+    throw new Error("close failed");
+  };
+
+  // 返値は reject しない (呼び出し側は void で呼ぶ)
+  await publisher.closeSubgroup();
+
+  assert.equal(errors.length, 1, "error 通知が 1 回でない");
+  assert.isTrue(isErrorNotifiedByPublisher(errors[0]));
+});
+
+test("closeSubgroup は内部コールバックの同期 throw も error 通知にする", async () => {
+  const errors: Error[] = [];
+  const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n, (error) => {
+    errors.push(error);
+  });
+  publisher.onCloseSubgroup = () => {
+    throw new Error("sync close failed");
+  };
+
+  await publisher.closeSubgroup();
+
+  assert.equal(errors.length, 1, "error 通知が 1 回でない");
+  assert.isTrue(isErrorNotifiedByPublisher(errors[0]));
+});
+
+test("closeSubgroup は error コールバックが throw しても reject しない", async () => {
+  // アプリの onError が throw しても、呼び出し側 (void) に未処理の rejection を残さない
+  const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n, () => {
+    throw new Error("app error callback failed");
+  });
+  publisher.onCloseSubgroup = async () => {
+    throw new Error("close failed");
+  };
+
+  await publisher.closeSubgroup();
+});

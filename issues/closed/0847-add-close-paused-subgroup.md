@@ -1,7 +1,7 @@
 # 配信を止めるときに開いている Subgroup を閉じる手段が無い
 
 - Created: 2026-10-13
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-10-17
 - Branch: feature/add-close-paused-subgroup
 - Polished: 2026-10-17
 
@@ -62,4 +62,27 @@ moqt-js の publisher は、配信を止めても開いている Subgroup スト
 
 ## 解決方法
 
-{対応時に記入}
+- `Publisher` に `closeSubgroup(): Promise<void>` を公開 API として追加した (`src/publisher.ts`)。開いている Subgroup を Object を送らずに閉じる。セッション側は `publishCloseSubgroup` (`src/session/publish.ts`) が `publisherSendQueues` に載せ、既存の `closeSubgroupStreamWithoutWaiting` で `FIN` / `RESET` を選ぶ (draft-ietf-moq-transport-22 §11.3.2。見送った Object がある Subgroup は `RESET`)。開いている Subgroup が無い場合と Publisher が `"closed"` の場合は何もしない。返値の Promise は reject せず、内部コールバックの失敗 (同期 throw を含む) は error 通知にする。`FIN` の完了は待たず、`done()` が待つ
+- `MediaPublisher.pause()` が開いている Subgroup を閉じるようにした (`src/createMediaPublisher.ts`)。`setState("paused")` の前に閉じる (アプリの `onStateChange` が throw しても後始末が残らないようにする)。閉じた Group へ送り直さないよう、`resume()` は次に encode するフレームをキーフレームにして新しい Group から始める (後方互換性は無い)。実際に閉じる対象は映像だけで、音声と catalog と event は 1 Object ごとに `endOfSubgroup: true` で送るため no-op になる
+- 止める前に依頼した符号化の出力を送らないようにした。WebCodecs は出力の到着順を保証しないため、依頼した時点の世代を記録し、出力の到着時に現在の世代と比べる (`src/encodeGeneration.ts` に規則を集約し、moqt-devtools と共有)。映像は入力フレームの `timestamp` を鍵にし、音声は `audioPublishCatchUp` の投入と出力の対応に世代を載せる (`AudioPublishCatchUpFrameInput.generation` / `AudioPublishCatchUpChunkResult.generation`)。`pause()` のたびに `processingGeneration` が進むため、`stop()` / `close()` / 配信のやり直しでも同じ判定になる
+- 捨てた出力が持つ codec description は失わない (`pendingAudioConfig` / `pendingVideoConfig`)。configure 後の最初の出力にしか載らないため、捨てると復号に必要な `AUDIO_CONFIG` を以後の配信で送れなくなる (AAC は AudioSpecificConfig が必須で、catalog の Track Property にも載せない)。空の description は「値なし」として扱い、保留値を覆わない (`selectCodecDescription`)。配信ごとの初期化と解放時に破棄する
+- `devtools/src/hooks/usePublisher.ts` の stop-sending (`stopSendingPaths()`) が各 track の `closeSubgroup()` を呼び、Encoder を閉じた後に届いた出力と前の配信の保留 config を送らないようにした
+- 追加・更新したテスト
+  - `src/session/publishSubgroupClose.test.ts`: `FIN` で閉じること、省略がある Subgroup は `RESET` で閉じること、開いている Subgroup が無ければ何もしないこと、送信キューに載りキュー済みの送信の後に閉じること
+  - `src/publisher.test.ts`: `onCloseSubgroup` を呼ぶこと、`"closed"` では呼ばないこと、未設定でも throw しないこと、同期 throw / 非同期 reject を error 通知にすること、error コールバックが throw しても reject しないこと
+  - `src/createMediaPublisher.test.ts`: `pause()` が Subgroup を閉じること、止める前に依頼した映像 / 音声の出力を送らないこと、再開後はキーフレームで新しい Group を始めること (実ループで記録の実経路まで確認)、配信ごとの初期化で前の配信の記録を消すこと、捨てた出力の Audio Config / Video Config が次の送信で載ること、`selectCodecDescription` の境界
+  - `src/encodeGeneration.test.ts` / `src/encodeGeneration.prop.ts`: 境界 (記録が無い出力、同じ timestamp の上書き) と、依頼と停止が任意の順で起き出力の到着順も保証されない状況で最後に依頼した世代の出力だけを送る性質
+  - `src/audioPublishCatchUp.test.ts` / `src/audioPublishCatchUp.prop.ts`: 出力が覆った最初の投入の世代を返すこと、記録を消した後の出力は世代を返さないこと
+  - `devtools/src/hooks/usePublisher.test.ts`: 送信を止めるときの状態遷移と、stop-sending が 4 track の Subgroup を閉じること
+  - `src/testSupport/bidi.ts`: `SessionImpl.publish` と同じ配線に `onCloseSubgroup` を足した (harness 経由の検証が空振りしないようにする)
+- `docs/LOW_LEVEL_API.md` (メソッド表、`FIN` を出す契機、契約) / `docs/HIGH_LEVEL_API.md` (メソッド表、状態遷移の説明、一時停止の例) / `src/codec/types.ts` に `closeSubgroup()` と `pause()` / `resume()` の契約を書いた
+- `CHANGES.md` は `CODEBASE.md` の「MOQT RFC ドラフト中の特別ルール」により更新していない (この issue の設計方針でも対象外)
+
+### 残した穴 (別 issue 候補)
+
+- moqt-rs の `moq-sub` を相手にした実機確認 (約 30 秒後に `0x12 data stream timeout expired` でセッションが閉じないこと) は、moqt-rs を別リポジトリで起動する必要があり自動化できないため実施していない (PR に記録する)
+- 音声の `prunePending` が 5 秒で捨てた記録の出力が後から届くと、順番で対応づける `recordEncodedChunk` は 1 つ後ろの記録に当てる。その世代が現在の世代と一致すると、止める前に依頼した chunk を止めた後に送り得る (到達には出力が 5 秒以上遅れることが要る)。残余リスクとして `prunePending` の JSDoc に明記した
+- 映像の世代の記録は入力 `timestamp` を鍵にするため、停止をまたいで同じ timestamp のフレームが現れると 1 枚落ちる (従来は両方送っていた)。`EncodedVideoChunk.timestamp === VideoFrame.timestamp` が崩れる実装では映像が無言で全損する (計器で気付ける経路が無い)
+- `videoEncodeGenerations` には音声側の `prunePending` に相当する掃除が無く、出力が返らなかった記録は次の配信の初期化まで残る (実害は小さい)
+- `AudioPublishCatchUpChunkResult` の `timestampMicros` と `generation` は必ず同時に null / 値になるが、型は独立した nullable のままである (判別可能 union にできる)
+- devtools は `resolveAudioConfigToSend` を自前実装のまま持ち、ライブラリ版と空 description の扱いが違う (今回の呼び出しは `selectCodecDescription` を通るため正規化される)
