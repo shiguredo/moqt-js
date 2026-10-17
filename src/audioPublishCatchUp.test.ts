@@ -177,6 +177,7 @@ class AudioFrameStream {
         Math.round(input.readDelayMs * 1_000);
       const encode = this.catchUp.evaluate({
         timestampMicros,
+        generation: 0,
         readWallClockMicros: BigInt(readWallClockMicros),
         appliedOffsetMicros: BigInt(APPLIED_OFFSET_MICROS),
         durationMicros: FRAME_MICROS,
@@ -279,6 +280,7 @@ test("AudioPublishCatchUp: 追いつきはキューが 1 パケット以下に�
   const readAt = (index: number, nowMs: number): boolean =>
     catchUp.evaluate({
       timestampMicros: WALL_CLOCK_EPOCH_MICROS + index * FRAME_MICROS,
+      generation: 0,
       readWallClockMicros: BigInt(WALL_CLOCK_EPOCH_MICROS + index * FRAME_MICROS),
       appliedOffsetMicros: 0n,
       durationMicros: FRAME_MICROS,
@@ -347,6 +349,7 @@ test("AudioPublishCatchUp: 読み出しの遅れが続いたときは、確認�
     pendingTimestamps.push(timestampMicros);
     return catchUp.evaluate({
       timestampMicros,
+      generation: 0,
       readWallClockMicros: BigInt(timestampMicros + Math.round(readLagMs * 1_000)),
       appliedOffsetMicros: 0n,
       durationMicros: FRAME_MICROS,
@@ -406,6 +409,7 @@ test("AudioPublishCatchUp: 読み出しがまとめて行われた分では追�
       results.push(
         catchUp.evaluate({
           timestampMicros,
+          generation: 0,
           readWallClockMicros: BigInt(readWallClockMicros),
           appliedOffsetMicros: 0n,
           durationMicros: frameMicros,
@@ -437,6 +441,7 @@ test("AudioPublishCatchUp: 読み出しがまとめて行われた分では追�
     assert.isTrue(
       catchUp.evaluate({
         timestampMicros,
+        generation: 0,
         readWallClockMicros: BigInt(timestampMicros),
         appliedOffsetMicros: 0n,
         durationMicros: frameMicros,
@@ -488,6 +493,7 @@ test("AudioPublishCatchUp: 追いつきをやめた後は、上限を少し超�
     pendingTimestamps.push(timestampMicros);
     return catchUp.evaluate({
       timestampMicros,
+      generation: 0,
       readWallClockMicros: BigInt(timestampMicros + Math.round(readLagMs * 1_000)),
       appliedOffsetMicros: 0n,
       durationMicros: FRAME_MICROS,
@@ -565,6 +571,7 @@ test("AudioPublishCatchUp: 補正がまだ決まっていない間は読み出�
   const evaluate = (index: number, appliedOffsetMicros: bigint | null): boolean =>
     catchUp.evaluate({
       timestampMicros: baseWallClockMicros + index * FRAME_MICROS,
+      generation: 0,
       readWallClockMicros: BigInt(baseWallClockMicros + index * FRAME_MICROS + 5_000_000),
       appliedOffsetMicros,
       durationMicros: FRAME_MICROS,
@@ -628,6 +635,7 @@ test("AudioPublishCatchUp: 出力の timestamp が投入より古くても、投
   const baseWallClockMicros = WALL_CLOCK_EPOCH_MICROS;
   const first = catchUp.evaluate({
     timestampMicros: baseWallClockMicros,
+    generation: 0,
     readWallClockMicros: BigInt(baseWallClockMicros),
     appliedOffsetMicros: 0n,
     durationMicros: 10_000,
@@ -636,6 +644,7 @@ test("AudioPublishCatchUp: 出力の timestamp が投入より古くても、投
   assert.isTrue(first, "1 つ目のフレームを捨てた");
   const second = catchUp.evaluate({
     timestampMicros: baseWallClockMicros + 10_000,
+    generation: 0,
     readWallClockMicros: BigInt(baseWallClockMicros + 10_000),
     appliedOffsetMicros: 0n,
     durationMicros: 10_000,
@@ -668,6 +677,7 @@ test("AudioPublishCatchUp: 投入が 2 つの出力にまたがっても、順�
   const evaluate = (index: number, durationMicros: number): boolean =>
     catchUp.evaluate({
       timestampMicros: baseWallClockMicros + index * durationMicros,
+      generation: 0,
       readWallClockMicros: BigInt(baseWallClockMicros + index * durationMicros),
       appliedOffsetMicros: 0n,
       durationMicros,
@@ -700,6 +710,7 @@ test("AudioPublishCatchUp: 出力が返らないままの記録は、一定の�
   const evaluate = (nowMs: number, index: number): boolean =>
     catchUp.evaluate({
       timestampMicros: WALL_CLOCK_EPOCH_MICROS + index * FRAME_MICROS,
+      generation: 0,
       readWallClockMicros: BigInt(WALL_CLOCK_EPOCH_MICROS + index * FRAME_MICROS),
       appliedOffsetMicros: 0n,
       durationMicros: FRAME_MICROS,
@@ -723,6 +734,7 @@ test("AudioPublishCatchUp: フレームの長さが分からなくても、直�
   assert.isTrue(
     catchUp.evaluate({
       timestampMicros: readWallClockMicros,
+      generation: 0,
       readWallClockMicros: BigInt(readWallClockMicros),
       appliedOffsetMicros: 0n,
       durationMicros: FRAME_MICROS,
@@ -733,6 +745,7 @@ test("AudioPublishCatchUp: フレームの長さが分からなくても、直�
   // 出力が返らないまま次のフレームを読むと、キューに溜まっている音声があるため捨てる
   const dropped = catchUp.evaluate({
     timestampMicros: readWallClockMicros + FRAME_MICROS,
+    generation: 0,
     readWallClockMicros: BigInt(readWallClockMicros + FRAME_MICROS),
     appliedOffsetMicros: 0n,
     durationMicros: null,
@@ -823,6 +836,7 @@ test("AudioPublishCatchUp: 同じ timestamp のフレームが続いても、記
   const readAt = (index: number, timestampMicros: number): boolean =>
     catchUp.evaluate({
       timestampMicros,
+      generation: 0,
       readWallClockMicros: BigInt(WALL_CLOCK_EPOCH_MICROS + index * DEVTOOLS_FRAME_MICROS),
       appliedOffsetMicros: 0n,
       durationMicros: DEVTOOLS_FRAME_MICROS,
@@ -878,6 +892,7 @@ test("AudioPublishCatchUp: timestamp が重複しても、キューがはけた�
     const timestampMicros = duplicate ? lastTimestampMicros : wallClockMicros;
     const encode = catchUp.evaluate({
       timestampMicros,
+      generation: 0,
       readWallClockMicros: BigInt(wallClockMicros),
       appliedOffsetMicros: 0n,
       durationMicros: DEVTOOLS_FRAME_MICROS,
@@ -919,4 +934,78 @@ test("AudioPublishCatchUp: timestamp が重複しても、キューがはけた�
     0,
     "回復した後にフレームを捨てている",
   );
+});
+
+test("AudioPublishCatchUp: 出力は覆った最初の投入の世代を返す", () => {
+  // 配信を止めた時点で開いている Subgroup を閉じた後、止める前に依頼した符号化の出力が
+  // 届くことがある。呼び出し側はこの世代と現在の世代を比べて送信の可否を決める
+  const catchUp = new AudioPublishCatchUp();
+  const baseMicros = 1_000_000;
+  assert.isTrue(
+    catchUp.evaluate({
+      timestampMicros: baseMicros,
+      generation: 7,
+      readWallClockMicros: 0n,
+      appliedOffsetMicros: null,
+      durationMicros: 20_000,
+      nowMs: 0,
+    }),
+    "1 つ目の投入が捨てられている",
+  );
+  assert.isTrue(
+    catchUp.evaluate({
+      timestampMicros: baseMicros + 20_000,
+      generation: 9,
+      readWallClockMicros: 0n,
+      appliedOffsetMicros: null,
+      durationMicros: 20_000,
+      nowMs: 1,
+    }),
+    "2 つ目の投入が捨てられている",
+  );
+
+  // 1 つの出力が 2 つの投入を覆う場合は、覆った最初の投入の世代を返す
+  const chunk = catchUp.recordEncodedChunk({
+    timestampMicros: baseMicros,
+    durationMicros: 40_000,
+    nowMs: 2,
+  });
+  assert.strictEqual(chunk.timestampMicros, baseMicros, "覆った最初の投入の timestamp でない");
+  assert.strictEqual(chunk.generation, 7, "覆った最初の投入の世代でない");
+
+  // 対応する投入が無い出力は、timestamp も世代も返さない
+  const unmatched = catchUp.recordEncodedChunk({
+    timestampMicros: baseMicros + 40_000,
+    durationMicros: 20_000,
+    nowMs: 3,
+  });
+  assert.isNull(unmatched.timestampMicros, "対応が無いのに timestamp を返している");
+  assert.isNull(unmatched.generation, "対応が無いのに世代を返している");
+});
+
+test("AudioPublishCatchUp: 記録を消した後の出力は世代を返さない", () => {
+  // 配信ごとの初期化 (reset) で記録を消した後、前の配信の出力が届いた場合。呼び出し側は
+  // 世代が無い出力を送らない (閉じた Subgroup へ送らない)
+  const catchUp = new AudioPublishCatchUp();
+  assert.isTrue(
+    catchUp.evaluate({
+      timestampMicros: 5_000,
+      generation: 3,
+      readWallClockMicros: 0n,
+      appliedOffsetMicros: null,
+      durationMicros: 20_000,
+      nowMs: 0,
+    }),
+    "投入が捨てられている",
+  );
+
+  catchUp.reset();
+
+  const chunk = catchUp.recordEncodedChunk({
+    timestampMicros: 5_000,
+    durationMicros: 20_000,
+    nowMs: 1,
+  });
+  assert.isNull(chunk.timestampMicros, "記録を消したのに timestamp を返している");
+  assert.isNull(chunk.generation, "記録を消したのに世代を返している");
 });

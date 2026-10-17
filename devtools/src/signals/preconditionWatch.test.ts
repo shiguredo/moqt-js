@@ -79,6 +79,7 @@ function startCatchUps(catchUp: AudioPublishCatchUp, count: number): number {
     for (let index = 0; index < CATCH_UP_FRAMES_PER_CYCLE; index++) {
       catchUp.evaluate({
         timestampMicros,
+        generation: 0,
         readWallClockMicros: 0n,
         // 補正がまだ決まっていない状態と同じにする (読み出しの遅れは 0 とみなす)
         appliedOffsetMicros: null,

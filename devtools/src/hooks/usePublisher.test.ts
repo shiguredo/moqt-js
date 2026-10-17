@@ -1,5 +1,6 @@
 import { test, assert } from "vite-plus/test";
 import { LOC, decodeCatalogMessage, encodeCatalog } from "moqt-js";
+import type { Publisher } from "moqt-js";
 import {
   buildObjectSendPlan,
   buildPublishStopPlan,
@@ -1479,4 +1480,54 @@ test("buildPublishStopPlan: 配信だけを止めるときは何も送らずセ�
     detachCatalogPublisher: true,
     statusMessage: "Stopped sending (session kept)",
   });
+});
+
+// ============================================================================
+// Subgroup を閉じる (配信だけを止める)
+// ============================================================================
+
+/** Subgroup を閉じた回数を記録する最小の Publisher */
+function createCloseRecordingPublisher(): { publisher: Publisher; closeCount: () => number } {
+  let closeSubgroup = 0;
+  const publisher = {
+    state: "active",
+    closeSubgroup: async () => {
+      closeSubgroup++;
+    },
+  } as unknown as Publisher;
+  return { publisher, closeCount: () => closeSubgroup };
+}
+
+/**
+ * 配信だけを止めるとき (stop-sending) は、セッションと PUBLISH を維持したまま各 track の
+ * 開いている Subgroup を閉じる。閉じないと、次の Object を待つ購読側が
+ * DATA_STREAM_TIMEOUT (0x12) でセッションを閉じうる (draft-ietf-moq-transport-22 §11.3.2)
+ */
+test("stopPublishing: 配信だけを止めるときは各 Publisher の Subgroup を閉じる", async () => {
+  resetPublisherSignals();
+  resetSettingsUsage();
+  const publisher = usePublisher();
+
+  const video = createCloseRecordingPublisher();
+  const audio = createCloseRecordingPublisher();
+  const catalog = createCloseRecordingPublisher();
+  const event = createCloseRecordingPublisher();
+  pub.publisher.value = video.publisher;
+  pub.audioPublisher.value = audio.publisher;
+  pub.catalogPublisher.value = catalog.publisher;
+  pub.eventPublisher.value = event.publisher;
+
+  const previousStopMode = settings.publishStop.value;
+  settings.publishStop.value = "stop-sending";
+  try {
+    await publisher.stopPublishing();
+
+    assert.equal(video.closeCount(), 1, "映像の Subgroup を閉じていない");
+    assert.equal(audio.closeCount(), 1, "音声の Subgroup を閉じていない");
+    assert.equal(catalog.closeCount(), 1, "catalog の Subgroup を閉じていない");
+    assert.equal(event.closeCount(), 1, "event の Subgroup を閉じていない");
+  } finally {
+    settings.publishStop.value = previousStopMode;
+    resetPublisherSignals();
+  }
 });

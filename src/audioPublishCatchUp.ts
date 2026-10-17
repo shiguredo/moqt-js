@@ -208,10 +208,17 @@ export interface AudioPublishCatchUpChunkResult {
    *
    * LOC TIMESTAMP には `chunk.timestamp` ではなくこの値を使う。符号化の出力の timestamp は
    * 連続した値であり、フレームを捨てた分だけ投入したフレームの timestamp より古くなる
-   * (このファイルの先頭のコメントを参照)。対応が無ければ呼び出し側が `chunk.timestamp` へ
-   * 落とせる
+   * (このファイルの先頭のコメントを参照)
    */
   readonly timestampMicros: number | null;
+  /**
+   * 覆った最初の投入の世代。対応が無ければ null
+   *
+   * 呼び出し側は、現在の世代と一致するときだけこの chunk を送る。配信を止めた時点で
+   * 開いていた Subgroup を閉じた後、止める前に依頼した符号化の出力が届くことがあるため、
+   * 世代で選り分ける
+   */
+  readonly generation: number | null;
 }
 
 /** 音声の追いつきの観測値 (配信側の統計と devtools に出す) */
@@ -255,6 +262,8 @@ export interface AudioPublishCatchUpStats {
 interface PendingFrame {
   /** 投入したフレームの `AudioData.timestamp` (マイクロ秒)。同じ値が続くことがある */
   readonly timestampMicros: number;
+  /** 符号化を依頼した時点の世代 */
+  readonly generation: number;
   /** 読み出した時刻 (`performance.now()`、ミリ秒) */
   readonly readAtMs: number;
   /** フレームの長さ (ミリ秒) */
@@ -275,6 +284,13 @@ interface PendingSend {
 export interface AudioPublishCatchUpFrameInput {
   /** `AudioData.timestamp` (マイクロ秒) */
   readonly timestampMicros: number;
+  /**
+   * 符号化を依頼した時点の世代 (呼び出し側が持つ値)
+   *
+   * 出力が返ったときに、依頼した時点の世代と現在の世代を比べて送信の可否を決めるために
+   * 使う。`recordEncodedChunk()` が、覆った最初の投入の世代を返す
+   */
+  readonly generation: number;
   /** 読み出した壁時計 (Unix epoch マイクロ秒) */
   readonly readWallClockMicros: bigint;
   /**
@@ -432,6 +448,7 @@ export class AudioPublishCatchUp {
 
     this.pending.push({
       timestampMicros: input.timestampMicros,
+      generation: input.generation,
       readAtMs: input.nowMs,
       durationMs,
     });
@@ -452,9 +469,10 @@ export class AudioPublishCatchUp {
     const first = this.pending[this.pendingHead];
     if (first === undefined) {
       // 対応づけられる投入が無い (配信を始める前の出力、記録を捨てた後など)
-      return { timestampMicros: null };
+      return { timestampMicros: null, generation: null };
     }
     const firstTimestampMicros = first.timestampMicros;
+    const firstGeneration = first.generation;
 
     // 消費する長さ。長さが分からない chunk は 1 フレーム分だけ消費する
     let remainMs = (input.durationMicros ?? first.durationMs * 1_000) / 1_000;
@@ -473,6 +491,7 @@ export class AudioPublishCatchUp {
       // 1 つの投入が 2 つの出力にまたがる場合は、残りを次に持ち越す
       this.pending[this.pendingHead] = {
         timestampMicros: frame.timestampMicros,
+        generation: frame.generation,
         readAtMs: frame.readAtMs,
         durationMs: frame.durationMs - remainMs,
       };
@@ -481,7 +500,7 @@ export class AudioPublishCatchUp {
     }
     this.compactPending();
     this.pendingMs = Math.max(0, this.pendingMs);
-    return { timestampMicros: firstTimestampMicros };
+    return { timestampMicros: firstTimestampMicros, generation: firstGeneration };
   }
 
   /**
@@ -691,7 +710,12 @@ export class AudioPublishCatchUp {
   /**
    * 出力が返らないままになった記録を捨てる
    *
-   * 記録は読み出した順に入るため、古い方から見て残っていれば以降も残っている
+   * 記録は読み出した順に入るため、古い方から見て残っていれば以降も残っている。
+   *
+   * 注意 (残余リスク): 捨てた記録の出力が後から届くと、順番で対応づける recordEncodedChunk は
+   * 1 つ後ろの記録に当てる。その記録の世代が現在の世代と一致すると、配信を止める前に依頼した
+   * chunk を止めた後に送り得る (到達には出力がこの時間以上遅れることが要る)。世代を厳密に
+   * 保つには、捨てた事実を記録して次の出力を対応なしとして扱う必要がある
    */
   private prunePending(nowMs: number): void {
     const oldestMs = nowMs - this.pendingTimeoutMs;

@@ -49,6 +49,7 @@ import type {
 } from "./codec/types";
 import { createVideoFrameSource, type VideoFrameSource } from "./frameSource";
 import { createAudioFrameSource, type AudioFrameSource } from "./audioSource";
+import { recordEncodeGeneration, shouldSendEncodedChunk } from "./encodeGeneration";
 
 // デフォルト設定
 
@@ -372,6 +373,28 @@ export function resolveAudioConfigToSend(
 }
 
 /**
+ * 送る Object に載せる codec description を決める純関数
+ *
+ * `resolveAudioConfigToSend` / `resolveVideoConfigToSend` は空の description を「値なし」と
+ * 扱う契約である (length 0 は設定として意味を持たない)。送らなかった出力の description を
+ * 保留している場合に空の description が届くと、そのままでは保留値を覆ってしまい、載せる値が
+ * 無いまま保留値が消える。ここで同じ規則 (length > 0 のときだけ値として扱う) に正規化する。
+ *
+ * 単体テストと moqt-devtools から同じ規則を使うため export する
+ * (パッケージ公開 API には含めない)。
+ *
+ * @param description - 今回の出力が持つ description
+ * @param pending - 送らなかった出力が持っていた description (無ければ null)
+ */
+export function selectCodecDescription(
+  description: Uint8Array | undefined,
+  pending: Uint8Array | null,
+): Uint8Array | undefined {
+  if (description !== undefined && description.length > 0) return description;
+  return pending ?? undefined;
+}
+
+/**
  * 送信する Video Config を解決する純関数
  *
  * draft-ietf-moq-loc-04 §2.3.2.1 (Video Config): avcC / hvcC などの extradata は
@@ -529,12 +552,24 @@ export class MediaPublisherImpl implements MediaPublisher {
   // 映像の description はキーフレームごとには再出現しないため、次のキーフレームの
   // Object に保持値を 1 度だけ載せ直し、載せた時点で解消する
   private videoConfigResendRequested = false;
+
+  // 送らない出力が持っていた Video Config (まだ送っていない値)。理由は pendingAudioConfig
+  // と同じ (canonical 形式の description は configure 後の最初の出力にしか載らない)
+  private pendingVideoConfig: Uint8Array | null = null;
   // 直前に AUDIO_CONFIG として送った description。同じ値の重複送出を避けつつ、
   // forwardState が 1 になった時点の送り直しの材料にもする
   private lastSentAudioConfig: Uint8Array | null = null;
   // forwardState が 0 から 1 になった時点で立てる Audio Config の送り直し要求。
   // 次の Object に保持値を 1 度だけ載せ直し、載せた時点で解消する
   private audioConfigResendRequested = false;
+
+  // 送らない出力が持っていた Audio Config (まだ送っていない値)
+  //
+  // description は configure 後の最初の出力 (と構成が変わったとき) にしか載らないため、
+  // 配信を止める直前に届いた出力を捨てると、復号に必要な Audio Config を以後の配信で
+  // 送れなくなる (AAC は AudioSpecificConfig が必須)。捨てる出力の値はここに残し、
+  // 次に送る Object で載せる
+  private pendingAudioConfig: Uint8Array | null = null;
   private audioPublisher: Publisher | null = null;
   private videoPublisher: Publisher | null = null;
 
@@ -600,6 +635,12 @@ export class MediaPublisherImpl implements MediaPublisher {
   // 処理ループの世代 (pause / stop / close で加算し、
   // 旧ループの encode と onError 通知を抑止する)
   private processingGeneration = 0;
+
+  // 映像の符号化を依頼した時点の世代 (入力フレームの timestamp を鍵にする)。
+  // WebCodecs は出力の到着順を保証しないため、到着順ではなく timestamp で依頼に対応づける。
+  // 配信を止めた時点で閉じた Subgroup へ送らないことと、停止と再開をまたいだ古い出力が
+  // 新しい Group の先頭に混ざらないようにするために使う。配信ごとの初期化で消す
+  private readonly videoEncodeGenerations = new Map<number, number>();
 
   // 現在の Catalog
   private currentCatalog: Catalog | null = null;
@@ -834,6 +875,9 @@ export class MediaPublisherImpl implements MediaPublisher {
    * 1 フレームは破棄される。また pause 中にキュー滞留した 2 フレーム目以降は
    * resume 後に新ループが stale フレームとして encode する。
    * フレーム到着がない間の待機は残留し、stop / close の cancel で回収される。
+   *
+   * 開いている Subgroup ストリームを閉じる (理由と契約は codec/types.ts の
+   * MediaPublisher.pause() を参照)。draft-ietf-moq-transport-22 §11.3.2。
    */
   pause(): void {
     if (this.currentState !== "publishing") {
@@ -842,6 +886,9 @@ export class MediaPublisherImpl implements MediaPublisher {
 
     this.processingActive = false;
     this.processingGeneration++;
+    // setState はアプリの onStateChange を同期で呼ぶ。そこで throw されても後始末が
+    // 残らないよう、閉じる操作を先に行う
+    this.closeSubgroups();
     this.setState("paused");
   }
 
@@ -849,6 +896,8 @@ export class MediaPublisherImpl implements MediaPublisher {
    * 配信を再開する
    *
    * 現世代のまま処理ループを起動する。 paused からのみ到達する。
+   * 次に encode するフレームをキーフレームにして新しい Group から始める (理由は
+   * codec/types.ts の MediaPublisher.resume() を参照)。
    * 旧ループは次フレーム到着時に世代不一致で encode せず終了し、
    * 失敗通知も抑止されるため、 encode と onError の多重化は起きない
    * (read() 待機自体の一時的な並行は残る)。
@@ -860,8 +909,26 @@ export class MediaPublisherImpl implements MediaPublisher {
     }
 
     this.processingActive = true;
+    // 閉じた Group へ送り直さないよう、次の encode するフレームをキーフレームにして新しい
+    // Group を始める (startNewGroup() と同じ効果)。state が "publishing" に戻る前に
+    // 行うため、startNewGroup() を呼ぶ順序には依存させない
+    this.lastKeyFrameTimestampUs = null;
     this.startProcessingLoops();
     this.setState("publishing");
+  }
+
+  /**
+   * 開いている Subgroup を閉じる
+   *
+   * 開いているものが無い track と、既に closed の Publisher では何もしない
+   * (`Publisher.closeSubgroup()` の契約)。戻り値は reject しないため待たない
+   */
+  private closeSubgroups(): void {
+    for (const publisher of [this.catalogPublisher, this.audioPublisher, this.videoPublisher]) {
+      if (publisher !== null) {
+        void publisher.closeSubgroup();
+      }
+    }
   }
 
   /**
@@ -1574,6 +1641,13 @@ export class MediaPublisherImpl implements MediaPublisher {
   private async setupEncoders(): Promise<void> {
     const useWorker = this.options.useWorker ?? true;
 
+    // 前の配信の記録を持ち越さない (配信ごとの初期化)。音声の有無によらず消す。
+    // 保留した codec description も解放時に消すが、破棄の後に届いた出力で再充填され得るため
+    // ここでも消す (前の配信の値を新しい配信の最初の Object に載せない)
+    this.videoEncodeGenerations.clear();
+    this.pendingAudioConfig = null;
+    this.pendingVideoConfig = null;
+
     // 音声エンコーダー
     // エンコーダーを作る条件は reader の有無にする。取り出し経路を作ったトラックを
     // もう一度読み直すと、start の途中で呼び出し側が stream から外した場合に
@@ -1679,6 +1753,7 @@ export class MediaPublisherImpl implements MediaPublisher {
         // concealment が埋める
         const encode = this.audioCatchUp.evaluate({
           timestampMicros: audioData.timestamp,
+          generation,
           readWallClockMicros,
           appliedOffsetMicros: this.audioTimestampClock.appliedMicros,
           durationMicros: audioData.duration,
@@ -1794,6 +1869,9 @@ export class MediaPublisherImpl implements MediaPublisher {
               this.keyframeInterval,
             );
             encoder.encode(frame, { keyFrame: isKeyFrame });
+            // 出力が返ったときに、依頼した時点の世代と比べて送信の可否を決める。
+            // 依頼の直後に pause した場合、この出力は閉じた Subgroup へ送らない
+            recordEncodeGeneration(this.videoEncodeGenerations, generation, frame.timestamp);
             // 記録の更新は encode の後ろに置く。encode が同期 throw した場合は encode して
             // いないため記録を進めず、次のフレームが同じ記録で判定を受ける
             if (isKeyFrame) {
@@ -1824,11 +1902,20 @@ export class MediaPublisherImpl implements MediaPublisher {
     // キューに溜まっている音声の長さを測り、この chunk が覆う最初の投入の timestamp を
     // 受け取る。送らない chunk でも測るため、送信の可否より先に記録する
     // (audioPublishCatchUp.ts)
-    const { timestampMicros } = this.audioCatchUp.recordEncodedChunk({
-      timestampMicros: chunk.timestamp,
-      durationMicros: chunk.duration,
-      nowMs: performance.now(),
-    });
+    const { timestampMicros, generation: encodedGeneration } = this.audioCatchUp.recordEncodedChunk(
+      {
+        timestampMicros: chunk.timestamp,
+        durationMicros: chunk.duration,
+        nowMs: performance.now(),
+      },
+    );
+    // 符号化を依頼した時点の世代と一致する出力だけを送る (映像と同じ規則)。
+    // 対応する記録が無い出力も送らない (配信を始める前の出力、記録を捨てた後の出力)
+    // 送らない出力でも description は失わない (次に送る Object で載せる)
+    if (chunk.description !== undefined && chunk.description.length > 0) {
+      this.pendingAudioConfig = chunk.description;
+    }
+    if (timestampMicros === null || encodedGeneration !== this.processingGeneration) return;
     if (!this.audioPublisher || this.audioPublisher.state !== "active") return;
 
     // draft-ietf-moq-loc-04 §2.3.3.1 (Audio Config):
@@ -1841,11 +1928,13 @@ export class MediaPublisherImpl implements MediaPublisher {
       resendNext,
     } = resolveAudioConfigToSend(
       this.lastSentAudioConfig,
-      chunk.description,
+      selectCodecDescription(chunk.description, this.pendingAudioConfig),
       this.audioConfigResendRequested,
     );
     this.lastSentAudioConfig = next;
     this.audioConfigResendRequested = resendNext;
+    // 解決に使った保留値は消す (次に同じ値を載せない)
+    this.pendingAudioConfig = null;
 
     // LOC Properties をエンコード。
     // TIMESTAMP は Unix epoch マイクロ秒 (壁時計) で送る
@@ -1854,7 +1943,7 @@ export class MediaPublisherImpl implements MediaPublisher {
     // 最小値で原点を合わせる。まだ観測が無いときだけ従来の換算へ落とす
     // フレームを捨てると、符号化の出力の timestamp は投入したフレームの timestamp より
     // 古くなる。LOC TIMESTAMP は送るサンプルの取得時刻にする (audioPublishCatchUp.ts)
-    const capturedTimestampMicros = timestampMicros ?? chunk.timestamp;
+    const capturedTimestampMicros = timestampMicros;
     const wallClockMicros =
       this.audioTimestampClock.apply(capturedTimestampMicros) ??
       LOC.toUnixEpochMicroseconds(BigInt(capturedTimestampMicros), performance.timeOrigin);
@@ -1918,6 +2007,20 @@ export class MediaPublisherImpl implements MediaPublisher {
     duration: number | null;
     description?: Uint8Array;
   }): void {
+    // 符号化を依頼した時点の世代と一致する出力だけを送る (規則は src/encodeGeneration.ts)
+    // 送らない出力でも description は失わない (次のキーフレームで載せる)
+    if (chunk.description !== undefined && chunk.description.length > 0) {
+      this.pendingVideoConfig = chunk.description;
+    }
+    if (
+      !shouldSendEncodedChunk(
+        this.videoEncodeGenerations,
+        this.processingGeneration,
+        chunk.timestamp,
+      )
+    ) {
+      return;
+    }
     if (!this.videoPublisher || this.videoPublisher.state !== "active") return;
 
     // キーフレームで新しいグループを開始
@@ -1963,12 +2066,14 @@ export class MediaPublisherImpl implements MediaPublisher {
       resendNext: resendVideoConfigNext,
     } = resolveVideoConfigToSend(
       this.lastSentVideoConfig,
-      chunk.description,
+      selectCodecDescription(chunk.description, this.pendingVideoConfig),
       chunk.type === "key",
       this.videoConfigResendRequested,
     );
     this.lastSentVideoConfig = nextVideoConfig;
     this.videoConfigResendRequested = resendVideoConfigNext;
+    // 解決に使った保留値は消す (次に同じ値を載せない)
+    this.pendingVideoConfig = null;
 
     // フレームを読んだ時点で記録するため、ここで記録が無いことは無い。念のため、無ければ
     // この chunk を読んだ時点とみなす
@@ -2188,6 +2293,7 @@ export class MediaPublisherImpl implements MediaPublisher {
     // 破棄する (破棄中に届いた出力で再充填されないようにする)
     this.lastSentAudioConfig = null;
     this.audioConfigResendRequested = false;
+    this.pendingAudioConfig = null;
     const videoPublisher = this.videoPublisher;
     this.videoPublisher = null;
     await guard(async () => {
@@ -2199,6 +2305,7 @@ export class MediaPublisherImpl implements MediaPublisher {
     // 破棄する (破棄中に届いた出力で再充填されないようにする)
     this.lastSentVideoConfig = null;
     this.videoConfigResendRequested = false;
+    this.pendingVideoConfig = null;
 
     // セッションを閉じる
     const session = this.session;

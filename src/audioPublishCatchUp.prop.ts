@@ -122,6 +122,7 @@ function run(steps: readonly ReadStep[]): {
     encoder.drainMsPerPacket = step.drainMsPerPacket;
     const encode = catchUp.evaluate({
       timestampMicros,
+      generation: 0,
       readWallClockMicros: BigInt(wallClockMicros),
       appliedOffsetMicros: 0n,
       durationMicros: FRAME_MICROS,
@@ -216,6 +217,7 @@ test("追いつきを始めても、キューに残っている長さが記録�
         if (
           catchUp.evaluate({
             timestampMicros,
+            generation: 0,
             readWallClockMicros: BigInt(wallClockMicros),
             appliedOffsetMicros: 0n,
             durationMicros: FRAME_MICROS,
@@ -235,5 +237,60 @@ test("追いつきを始めても、キューに残っている長さが記録�
         );
       }
     }),
+  );
+});
+
+/**
+ * 符号化を依頼した時点の世代の対応づけ
+ *
+ * 配信を止めた時点で開いている Subgroup を閉じるため、止める前に依頼した出力は送らない
+ * (draft-ietf-moq-transport-22 §11.3.2)。どの出力を捨てるかを決めるのがこの世代であり、
+ * 「出力が覆う最初の投入の世代を返す」という対応づけが崩れると、閉じた Subgroup へ送るか、
+ * 逆に送るべき出力を捨てる。
+ *
+ * 追いつきの判定で投入が捨てられないよう policy: "keep" にする (捨てると記録が作られず、
+ * 対応づけの検証にならない)。
+ */
+test("AudioPublishCatchUp: 出力は覆った最初の投入の世代を返す", () => {
+  // 投入するフレームの世代の列 (配信の途中で止めて再開する状況を作る)
+  fc.assert(
+    fc.property(
+      fc.array(fc.integer({ min: 0, max: 3 }), { minLength: 1, maxLength: 20 }),
+      (generations) => {
+        const catchUp = new AudioPublishCatchUp({ policy: "keep" });
+        let nowMs = 1_000;
+        const timestampMicros = WALL_CLOCK_EPOCH_MICROS;
+
+        for (const generation of generations) {
+          const encoded = catchUp.evaluate({
+            timestampMicros,
+            generation,
+            readWallClockMicros: BigInt(timestampMicros + nowMs * 1_000),
+            appliedOffsetMicros: BigInt(nowMs * 1_000),
+            durationMicros: FRAME_MICROS,
+            nowMs,
+          });
+          assert.isTrue(encoded, "policy が keep なのに投入が捨てられている");
+          nowMs += 1;
+        }
+
+        // 全投入を覆う 1 つの出力は、最初の投入の世代を返す
+        const all = catchUp.recordEncodedChunk({
+          timestampMicros,
+          durationMicros: FRAME_MICROS * generations.length,
+          nowMs,
+        });
+        assert.strictEqual(all.generation, generations[0], "覆った最初の投入の世代でない");
+        assert.strictEqual(all.timestampMicros, timestampMicros);
+
+        // 覆う投入が無くなった後の出力は世代を返さない (呼び出し側は送らない)
+        const extra = catchUp.recordEncodedChunk({
+          timestampMicros,
+          durationMicros: FRAME_MICROS,
+          nowMs: nowMs + 1,
+        });
+        assert.isNull(extra.generation, "投入が無いのに世代を返している");
+      },
+    ),
   );
 });

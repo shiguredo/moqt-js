@@ -381,6 +381,33 @@ function closeSubgroupStreamWithoutWaiting(session: BidiSessionInternal, trackAl
 }
 
 /**
+ * 開いている Subgroup を、Object を送らずに閉じる（Promise チェーン排他制御付き）
+ *
+ * draft-ietf-moq-transport-22 §11.3.2 (Closing Subgroup Streams):
+ * 送信を止める時点で「その Subgroup に続く Object は無い」と分かったときに使う。
+ * FIN と RESET の選択は closeSubgroupStreamWithoutWaiting の判定 (省略がある Subgroup は
+ * RESET) に従う。開いている Subgroup が無い場合は何もしない。
+ *
+ * 送信キュー (`publisherSendQueues`) に載せ、キュー済みの送信が終わってから閉じる。
+ * Group の切り替えで `createUnidirectionalStream()` を待っている送信が、閉じた後に
+ * ストリームを開き直して FIN を無効にするのを防ぐ。FIN の完了は待たない
+ * (`done()` が publishClosePublisherStreamInternal で完了を待つ)。
+ */
+export function publishCloseSubgroup(
+  session: BidiSessionInternal,
+  trackAlias: bigint,
+): Promise<void> {
+  const previousPromise = session.publisherSendQueues.get(trackAlias) ?? Promise.resolve();
+  const currentPromise = previousPromise
+    .catch(() => {})
+    .then(() => {
+      closeSubgroupStreamWithoutWaiting(session, trackAlias);
+    });
+  session.publisherSendQueues.set(trackAlias, currentPromise);
+  return currentPromise;
+}
+
+/**
  * Publisher のストリームを閉じる（Promise チェーン排他制御付き）
  *
  * @param timeoutMs - writer.close の打ち切りまでのミリ秒 (テスト用の短縮のためにある。
