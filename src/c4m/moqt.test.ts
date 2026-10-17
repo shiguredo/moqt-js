@@ -245,7 +245,7 @@ test("アクションの対応表を確認する", () => {
     );
   }
   assert.equal(moqtActionFromKey(9), undefined);
-  // draft-ietf-moq-transport-21 で CLIENT_SETUP / SERVER_SETUP は 1 つの SETUP に統合された
+  // draft-17 で CLIENT_SETUP / SERVER_SETUP は 1 つの SETUP に統合された (draft-22 §A.6)
   assert.equal(moqtActionName("ClientSetup"), "SETUP");
   assert.equal(moqtActionName("ServerSetup"), "SETUP");
   assert.equal(moqtAuthorizationContext("ClientSetup"), "SETUP");

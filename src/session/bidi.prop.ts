@@ -796,8 +796,8 @@ test("hasPendingRequestUpdate: 対象 Request ID の pending の有無と一致�
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.5.1 (v22 は REQUEST_UPDATE_OK):
- * "The receiver MUST still send a REQUEST_OK for each successful update"
+ * draft-ietf-moq-transport-22 §9.5.1 (Updating Subscriptions):
+ * "The receiver MUST still send a REQUEST_UPDATE_OK for each successful update"
  * 1 通の REQUEST_OK は 1 件だけを解決する。解決では pending から消え、送信時の
  * FORWARD / Range Filters / LOCATION_FILTER のうち値があるものだけが返る。
  * 同じ対象の残りは pending に残り、他の Request ID は影響を受けない。

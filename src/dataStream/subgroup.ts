@@ -32,7 +32,7 @@ const ERR_SUBGROUP_ID_FIRST_OBJECT_MODE =
 /**
  * Subgroup Header Type Flags (Section 11.3.1)
  *
- * draft-ietf-moq-transport-22 Section 11.3.1 (Appendix A.2 #1774 で
+ * draft-ietf-moq-transport-22 Section 11.3.1 (Appendix A.3 #1774 で
  * Type Flags bitfield として記述):
  * Type Flags はフラグ集合を表す可変長整数であり、定義値は 1 バイト
  * (128 未満) に収まる。bit 4 は常に 1 であり、下位 4 ビットと bit 5-6 が

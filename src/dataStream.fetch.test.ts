@@ -2370,7 +2370,7 @@ test("FetchObjectFields: End of Range 以外の 128 以上の flags は拒否さ
 });
 
 // ============================================================================
-// draft-21 適合監査 D-13: End of Range が先頭レコードのときの prior 参照
+// draft-22 適合監査 D-13: End of Range が先頭レコードのときの prior 参照
 // draft-ietf-moq-transport-22 §11.4.1.2
 // ============================================================================
 
@@ -2486,7 +2486,7 @@ test("FetchObjectFields: 先頭レコードが End of Range でも明示指定�
 });
 
 // ============================================================================
-// draft-21 適合監査 D-7: Prior Group ID Gap / Prior Object ID Gap
+// draft-22 適合監査 D-7: Prior Group ID Gap / Prior Object ID Gap
 // draft-ietf-moq-transport-22 §10.8 / §10.9
 // ============================================================================
 

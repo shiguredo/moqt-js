@@ -1408,7 +1408,7 @@ test("parseProperties: IMMUTABLE 内側奇数型の Length 宣言超過で Proto
 });
 
 // ============================================================================
-// draft-21 適合監査 改善-1: 既知 Type の Value / Length 不一致
+// draft-22 適合監査 改善-1: 既知 Type の Value / Length 不一致
 // draft-ietf-moq-transport-22 §8.3
 // ============================================================================
 
@@ -1450,7 +1450,7 @@ test("decodeProperties: 未知偶数 Type の Value 欠落は IncompleteDataErro
 });
 
 // ============================================================================
-// draft-21 適合監査 D-7: assertPriorIdGapInObjectProperties
+// draft-22 適合監査 D-7: assertPriorIdGapInObjectProperties
 // draft-ietf-moq-transport-22 §10.8 / §10.9
 // ============================================================================
 

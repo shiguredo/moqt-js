@@ -51,7 +51,7 @@ function createFetch(): Fetch {
  * 固定バイト列でピン留めする (draft-19 形式は Request ID の直後に Fetch Type
  * が入るため、バイト列が一致すれば旧形式への回帰を検出できる)。
  */
-test("encodeFetchPayload: draft-21 の固定バイト列を生成する", () => {
+test("encodeFetchPayload: draft-22 の固定バイト列を生成する", () => {
   const msg = createFetch();
 
   // Request ID = 1 (0x01)
@@ -83,7 +83,7 @@ test("encodeFetchPayload: draft-21 の固定バイト列を生成する", () => 
  * 固定バイト列をデコードすると Request ID / Track Namespace / Track Name /
  * Parameters に復元されることを検証する。
  */
-test("decodeFetchPayload: draft-21 の固定バイト列をデコードする", () => {
+test("decodeFetchPayload: draft-22 の固定バイト列をデコードする", () => {
   const data = new Uint8Array([
     0x01, // Request ID
     0x01, // Number of Namespace Tuples

@@ -958,7 +958,7 @@ test("publishClosePublisherStream: 詰まった close は短い timeout で打�
 });
 
 // ============================================================================
-// draft-21 適合監査 D-10: 送信関数の forwardState 参照
+// draft-22 適合監査 D-10: 送信関数の forwardState 参照
 // draft-ietf-moq-transport-22 §3.1.1 (Pausing Subscriptions)
 // ============================================================================
 

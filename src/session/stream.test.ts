@@ -292,7 +292,7 @@ test("processSubgroupObjects: 通知中の除去でも後続に配送される",
 });
 
 // ============================================================================
-// draft-21 適合監査 D-9: delivery timeout 上書きは FIRST_OBJECT ビット時のみ
+// draft-22 適合監査 D-9: delivery timeout 上書きは FIRST_OBJECT ビット時のみ
 // draft-ietf-moq-transport-22 §5.2 / §2.2
 // ============================================================================
 
@@ -335,7 +335,7 @@ test("processSubgroupObjects: FIRST_OBJECT ビットなしでは timeout を抽�
 });
 
 // ============================================================================
-// draft-21 適合監査 D-7: Prior Group ID Gap / Prior Object ID Gap
+// draft-22 適合監査 D-7: Prior Group ID Gap / Prior Object ID Gap
 // draft-ietf-moq-transport-22 §10.8 / §10.9
 // ============================================================================
 
@@ -453,7 +453,7 @@ test("processSubgroupObjects: mutable と IMMUTABLE_PROPERTIES の合算 2 回�
 });
 
 // ============================================================================
-// draft-21 適合監査 D-8: END_OF_GROUP による Group 最終 Object の検出
+// draft-22 適合監査 D-8: END_OF_GROUP による Group 最終 Object の検出
 // draft-ietf-moq-transport-22 §12.1
 // ============================================================================
 

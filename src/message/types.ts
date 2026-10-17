@@ -313,8 +313,8 @@ export type ObjectStatus = (typeof ObjectStatus)[keyof typeof ObjectStatus];
  * - 0x9: EXCESSIVE_LOAD
  * - 0x12: MALFORMED_TRACK
  *
- * draft-ietf-moq-transport-21 Appendix A.2 で 0x3
- * SUBSCRIPTION_ENDED は削除された。Largest Object が Location Filter の
+ * 0x3 SUBSCRIPTION_ENDED は draft-20 で削除された
+ * (draft-ietf-moq-transport-22 §A.3)。Largest Object が Location Filter の
  * 終端を過ぎても購読は終わらない。
  */
 export const PublishDoneStatusCode = {

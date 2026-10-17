@@ -4,7 +4,7 @@
  *
  * §6.3 (Session initialization): 制御ストリームは単方向ストリームのペアになり、
  * SETUP はその先頭で交換される。CLIENT_SETUP と SERVER_SETUP が単一の SETUP に
- * 統合されたのは v21 からの変更である (付録 A.6 の変更履歴)。
+ * 統合されたのは draft-17 での変更である (付録 A.6 の変更履歴)。
  *
  * §6.3.2 (Extension Negotiation): 拡張機能のサポートは SETUP の Setup Option で
  * 宣言する。汎用の宣言形式は無く、各拡張仕様が Option の型・値・交渉規則を定める。

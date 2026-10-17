@@ -14,8 +14,8 @@ export { PublishDoneStatusCode };
  *
  * draft-ietf-moq-transport-22 Section 6.6 (Termination)
  *
- * draft-ietf-moq-transport-21 Appendix A.2 で 0x15
- * VERSION_NEGOTIATION_FAILED は削除された。
+ * 0x15 VERSION_NEGOTIATION_FAILED は draft-20 で削除された
+ * (draft-ietf-moq-transport-22 §A.3)。
  */
 export const SessionErrorCode = {
   NO_ERROR: 0x0,
@@ -54,9 +54,10 @@ export type SessionErrorCode = (typeof SessionErrorCode)[keyof typeof SessionErr
  * draft-ietf-moq-transport-22:
  * - GOING_AWAY (0x6) を追加
  * - EXCESSIVE_LOAD (0x9) を追加
- * - DUPLICATE_SUBSCRIPTION を削除（draft-21 §3.1 で同一 Track への複数サブスクリプションが許可）
+ * - DUPLICATE_SUBSCRIPTION を削除（draft-22 §3.1 で同一 Track への複数サブスクリプションが許可）
  * - NAMESPACE_TOO_LARGE (0x31) を追加
- * - INVALID_JOINING_REQUEST_ID (0x32) を削除 (draft-21 で Joining FETCH 削除)
+ * - INVALID_JOINING_REQUEST_ID (0x32) を削除 (Joining FETCH の削除は draft-20 であり、
+ *   draft-22 §A.3「Replace Joining FETCH with fill fetch streams」に記載がある)
  * - UNKNOWN_STATUS_IN_RANGE を削除
  */
 export const RequestErrorCode = {

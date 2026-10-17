@@ -1422,10 +1422,11 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   /**
    * Catalog を subscribe して受信を待つ
    *
-   * 既存の catalog と live の catalog 更新をまとめて受信する。draft-21 で
-   * Joining FETCH は削除された (draft-ietf-moq-transport-22 §9.11) ため、
-   * 本実装では以下の 2 リクエストで代替する (仕様上の正式な置換は
-   * FILL_PARAMETERS (§3.4) であり、実装は別途):
+   * 既存の catalog と live の catalog 更新をまとめて受信する。Joining FETCH は
+   * draft-20 で削除された (draft-ietf-moq-transport-22 §A.3「Replace Joining FETCH
+   * with fill fetch streams」)。MSF-01 §5 は Joining FETCH を MUST とするが、
+   * draft-22 前提では §3.4 の FILL_PARAMETERS による fill fetch として解釈する。
+   * 本実装では以下の 2 リクエストで代替しており、fill fetch 化は未実装である:
    * 1. SUBSCRIBE (Next Object (Location Filter Type 0x05) の Location Filter) で
    *    live の catalog 更新を受信する
    * 2. 独立した FETCH で既存の catalog を取得する。要求範囲は SUBSCRIBE_OK の

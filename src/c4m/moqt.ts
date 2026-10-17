@@ -139,9 +139,10 @@ export function moqtActionFromKey(key: number): MoqtAction | undefined {
 /**
  * MOQT のメッセージ名を返す (ログとデバッグ用)
  *
- * draft-ietf-moq-transport-21 は CLIENT_SETUP と SERVER_SETUP を 1 つの SETUP メッセージに
- * 統合したため、ClientSetup と ServerSetup はどちらも `SETUP` を返す
- * (Authorization Context (Table 2) も同じ名前を使う)。
+ * draft-17 で CLIENT_SETUP と SERVER_SETUP が 1 つの SETUP メッセージに
+ * 統合された (draft-ietf-moq-transport-22 §A.6)。そのため ClientSetup と
+ * ServerSetup はどちらも `SETUP` を返す (Authorization Context (Table 2) も
+ * 同じ名前を使う)。
  */
 export function moqtActionName(action: MoqtAction): string {
   switch (action) {

@@ -325,11 +325,12 @@ export interface BidiSessionInternal {
    * coalescing された REQUEST_ERROR で pending を消した件数の残り
    * (pending の無い REQUEST_OK を許容する枠)
    *
-   * draft-ietf-moq-transport-21 §9.5.1 (Updating Subscriptions)
-   * (v22 は REQUEST_UPDATE_ERROR):
-   * "If the coalesced REQUEST_UPDATE results in REQUEST_ERROR, only a single
-   *  REQUEST_ERROR will be sent and the sender of the REQUEST_UPDATEs will not
-   *  always be able to determine which caused an error."
+   * draft-ietf-moq-transport-22 §9.5.1 (Updating Subscriptions):
+   * "The receiver MUST still send a REQUEST_UPDATE_OK for each successful
+   *  update, but it is not required to process intermediate states individually.
+   *  If the coalesced REQUEST_UPDATE results in an error, only a single
+   *  REQUEST_UPDATE_ERROR will be sent and the sender of the REQUEST_UPDATEs
+   *  will not always be able to determine which caused an error."
    * coalescing は「失敗した更新を 1 通の REQUEST_ERROR にまとめる」ものであり、
    * 同時に in-flight だった成功分の更新には §9.5 の MUST により REQUEST_OK が
    * 別途届く。その REQUEST_OK は pending を消した後に届くため、消した件数分だけ
@@ -1428,9 +1429,9 @@ export async function bidiReadTrackStatusResponse(
 
       session.pendingTrackStatus.delete(requestId);
       pending.resolve({ parameters: decoded.parameters });
-      // draft-ietf-moq-transport-21 §9.13 / §6.4.2.2 (v22 は TRACK_STATUS_ERROR):
+      // draft-ietf-moq-transport-22 §9.13 / §6.4.2.2:
       // "The bidi stream is closed with a FIN after TRACK_STATUS_OK or
-      //  REQUEST_ERROR are sent." レスポンスを受けた requester も自方向を
+      //  TRACK_STATUS_ERROR are sent." レスポンスを受けた requester も自方向を
       // FIN で閉じ、ストリームを graceful に完了させる。requestStreams の
       // エントリから writer を引くため削除より先に実行する。
       await closeRequestStreamWriter(session, requestId);
@@ -4608,19 +4609,18 @@ export function bidiHandleRequestUpdateOk(
 ): void {
   const msg = decodeRequestOkPayload(payload);
 
-  // draft-ietf-moq-transport-21 §9.5 (REQUEST_UPDATE) (v22 は REQUEST_UPDATE_OK /
-  // REQUEST_UPDATE_ERROR):
-  // "The receiver of a REQUEST_UPDATE MUST respond with exactly one REQUEST_OK
-  //  or REQUEST_ERROR message indicating if the update was successful, unless it
-  //  is coalescing failed updates to produce just one REQUEST_ERROR for multiple
-  //  REQUEST_UPDATE messages."
+  // draft-ietf-moq-transport-22 §9.5 (REQUEST_UPDATE):
+  // "The receiver of a REQUEST_UPDATE MUST respond with exactly one
+  //  REQUEST_UPDATE_OK or REQUEST_UPDATE_ERROR message indicating if the update
+  //  was successful, unless it is coalescing failed updates to produce just one
+  //  REQUEST_UPDATE_ERROR for multiple REQUEST_UPDATE messages."
   // 確立後の REQUEST_OK はこの応答であり、自 endpoint が送った REQUEST_UPDATE に
   // 1 対 1 で対応する。対応する更新が無い REQUEST_OK は 2 通目以降の応答である。
-  // 初回応答について §3.1 (Subscriptions) は
-  // "A publisher MUST send exactly one SUBSCRIBE_OK or REQUEST_ERROR in response
-  //  to a SUBSCRIBE.  A subscriber MUST send exactly one PUBLISH_OK ... in
-  //  response to a PUBLISH.  The peer SHOULD close the session with a protocol
-  //  error if it receives more than one."
+  // 初回応答について draft-ietf-moq-transport-22 §3.1 (Subscriptions) は
+  // "A publisher MUST send exactly one SUBSCRIBE_OK or SUBSCRIBE_ERROR in
+  //  response to a SUBSCRIBE.  A subscriber MUST send exactly one PUBLISH_OK
+  //  (Section 9.3) or PUBLISH_ERROR in response to a PUBLISH.  The peer SHOULD
+  //  close the session with a protocol error if it receives more than one."
   // と定めており、確立済みストリームへの 2 通目の応答もこれに準じて
   // PROTOCOL_VIOLATION でセッションを閉じる。
   //
@@ -4747,8 +4747,8 @@ export function hasPendingRequestUpdate(
 /**
  * 指定の targetRequestId を対象とする保留中の REQUEST_UPDATE を 1 件解決する
  *
- * draft-ietf-moq-transport-21 §9.5.1 (v22 は REQUEST_UPDATE_OK):
- * "The receiver MUST still send a REQUEST_OK for each successful update"
+ * draft-ietf-moq-transport-22 §9.5.1 (Updating Subscriptions):
+ * "The receiver MUST still send a REQUEST_UPDATE_OK for each successful update"
  * REQUEST_OK は各更新につき 1 通送られるため、1 件のみ解決する。
  *
  * @returns 解決した更新の FORWARD / Range Filters / LOCATION_FILTER 送信値 (省略時は undefined = 反映しない)

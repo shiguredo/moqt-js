@@ -93,7 +93,7 @@ test("normalizePublishDoneCode: 未知のコードは INTERNAL_ERROR に正規�
 });
 
 /**
- * draft-ietf-moq-transport-21 Appendix A.2:
+ * draft-ietf-moq-transport-22 §A.3 (draft-20 で削除):
  * 削除された 0x3 SUBSCRIPTION_ENDED は未知コードとして
  * INTERNAL_ERROR に正規化されることを検証する。
  */
@@ -120,7 +120,7 @@ test("normalizeSessionErrorCode: 未知のコードは INTERNAL_ERROR に正規�
 });
 
 /**
- * draft-ietf-moq-transport-22 §16.11.1 / §13 / Appendix A.2:
+ * draft-ietf-moq-transport-22 §16.11.1 / §13 / Appendix A.3:
  * 削除された 0x15 VERSION_NEGOTIATION_FAILED は未知コードとして
  * INTERNAL_ERROR に正規化されることを検証する。
  */

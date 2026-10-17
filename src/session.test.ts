@@ -8700,10 +8700,11 @@ test("受信 PUBLISH ストリーム上の許可外パラメータの PUBLISH_ST
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.5 (REQUEST_UPDATE) (v22 は REQUEST_UPDATE_OK /
- * REQUEST_UPDATE_ERROR):
- * "The receiver of a REQUEST_UPDATE MUST respond with exactly one REQUEST_OK
- *  or REQUEST_ERROR message ..."
+ * draft-ietf-moq-transport-22 §9.5 (REQUEST_UPDATE):
+ * "The receiver of a REQUEST_UPDATE MUST respond with exactly one
+ *  REQUEST_UPDATE_OK or REQUEST_UPDATE_ERROR message indicating if the update
+ *  was successful, unless it is coalescing failed updates to produce just one
+ *  REQUEST_UPDATE_ERROR for multiple REQUEST_UPDATE messages."
  * 受信 PUBLISH ストリーム上の REQUEST_OK は自 endpoint が送った REQUEST_UPDATE への
  * 応答である。対応する未応答の REQUEST_UPDATE が無い REQUEST_OK は 2 通目以降の
  * 応答であり、PROTOCOL_VIOLATION でセッションを閉じる。
@@ -9587,7 +9588,7 @@ test("SessionImpl の validateIncomingRequestId 消費後に未対応リクエ�
 });
 
 // ============================================================================
-// draft-21 適合監査: SETUP の上限広告と localMaxFilterRanges (A-5 / I-1)
+// draft-22 適合監査: SETUP の上限広告と localMaxFilterRanges (A-5 / I-1)
 // ============================================================================
 
 /**
@@ -9843,7 +9844,7 @@ test("initialize: SETUP に載せた Authorization Token を setupAuthorizationT
 });
 
 // ============================================================================
-// draft-21 適合監査: 受信 PUBLISH 経路の MAX_REQUEST_UPDATES 強制 (§9.1.7)
+// draft-22 適合監査: 受信 PUBLISH 経路の MAX_REQUEST_UPDATES 強制 (§9.1.7)
 // ============================================================================
 
 /**
@@ -9941,7 +9942,7 @@ test("受信 PUBLISH ストリーム上の REQUEST_UPDATE は未広告 (0 = 無�
 });
 
 // ============================================================================
-// draft-21 適合修正の回帰テスト
+// 適合修正の回帰テスト
 // ============================================================================
 
 /**
