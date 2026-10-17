@@ -806,10 +806,14 @@ CI の runner (run 38026081292) では、音声の基準の遅れが 116.3 ms �
 許容は「Opus の最短フレーム (2.5 ms) の半分未満」という見積もりで置いた値であり、ずれの
 分布を測ったものではない。AAC は未計測である。理由は 2 つある。
 
-- 実リレー経由で AAC の音声を作れない。配信側の符号化は Chromium の WebCodecs が行うが、
-  この環境の Chromium は AAC を「対応」と報告しても実際には符号化できず、moqt-devtools は
-  AAC を除外して Opus を選ぶ (実測。`tests/e2e/codec-wrappers.spec.ts` の
-  「符号化できない AAC を除外して opus を選ぶ」が固定している)
+- AAC を符号化できるブラウザが限られる。配信側の符号化はブラウザの WebCodecs が行うが、
+  ブラウザの AAC エンコーダーは対応するサンプルレート (44100 / 48000 Hz) とビットレートの
+  下限を持ち、`AudioEncoder.isConfigSupported` は範囲外でも true を返し得る。実測では
+  Playwright の Chromium 156 は 48 kHz ステレオ 64000 bps を符号化でき、Chrome 155
+  (macOS) は同条件で符号化できず (実際の符号化が EncodingError)、96000 bps では成功した。
+  ビットレートの可否は単調ではなく、実測では 48000 / 64000 bps が失敗し 56000 / 72000 /
+  80000 / 96000 bps が成功した。moqt-devtools は AAC を選ぶとビットレートを下限
+  (96000 bps) まで上げ、配信開始前に無音を 1 チャンク実際に符号化して確かめる
 - 代わりの計測 (WebCodecs の符号化と復号を直接行う) では、このずれを再現できない。20 ms の
   無音を 20 個、timestamp を epoch マイクロ秒で与えて符号化し、その chunk を復号したところ、
   Chromium と WebKit のどちらでも、Opus と AAC のどちらも出力の timestamp は入力と完全に

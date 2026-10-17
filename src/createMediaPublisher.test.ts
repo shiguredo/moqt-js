@@ -2265,6 +2265,8 @@ function createVideoMediaStream(): MediaStream {
 function replaceAudioCodecBoundary(
   hooks: {
     onIsConfigSupported?: (config: AudioEncoderConfig) => { supported: boolean };
+    /** 実符号化確認 (probe) の符号化だけを失敗させる (対応の申告は true のまま) */
+    probeEncodeFails?: boolean;
   } = {},
 ): {
   frameSourceCreatedCount: () => number;
@@ -2273,21 +2275,61 @@ function replaceAudioCodecBoundary(
 } {
   const target = globalThis as unknown as {
     AudioEncoder: unknown;
+    AudioData: unknown;
     MediaStreamTrackProcessor: unknown;
   };
   const originalAudioEncoder = target.AudioEncoder;
+  const originalAudioData = target.AudioData;
   const originalTrackProcessor = target.MediaStreamTrackProcessor;
-  const configuredConfigs: AudioEncoderConfig[] = [];
+  // 実際に符号化できるかを確かめる probe (src/codec/configSupport.ts の
+  // probeAudioEncoderConfig) が作る AudioData。probe の確認用エンコーダーを
+  // 本物のエンコーダーと取り違えないよう、この型で encode されたインスタンスを
+  // probe とみなす
+  class ProbeAudioData {
+    close(): void {}
+  }
+  // probe の確認用エンコーダーも含めた全インスタンス。configure の記録は
+  // 本物のエンコーダー (probe 以外) のものだけを返す
+  const encoders: {
+    probe: boolean;
+    config: AudioEncoderConfig | null;
+  }[] = [];
   let frameSourceCreatedCount = 0;
+  target.AudioData = ProbeAudioData;
   target.AudioEncoder = class {
     readonly state = "configured";
+    private readonly entry: { probe: boolean; config: AudioEncoderConfig | null };
+    private readonly init: {
+      output?: (chunk: unknown) => void;
+      error?: (error: unknown) => void;
+    };
     static async isConfigSupported(config: AudioEncoderConfig): Promise<{ supported: boolean }> {
       return hooks.onIsConfigSupported?.(config) ?? { supported: true };
     }
-    configure(config: AudioEncoderConfig): void {
-      configuredConfigs.push(config);
+    constructor(init: { output?: (chunk: unknown) => void }) {
+      this.init = init;
+      this.entry = { probe: false, config: null };
+      encoders.push(this.entry);
     }
-    encode(): void {}
+    configure(config: AudioEncoderConfig): void {
+      this.entry.config = config;
+    }
+    encode(data: unknown): void {
+      // probe は確認用の AudioData を渡してくる。本物のエンコーダーは
+      // 取り出し経路のフレーム (テストでは流れない) を渡すため区別できる
+      if (data instanceof ProbeAudioData) {
+        this.entry.probe = true;
+        if (hooks.probeEncodeFails === true) {
+          // 対応の申告は true なのに実際の符号化が失敗する環境 (Chrome 155 の AAC で
+          // ビットレートが下限未満のとき) を再現する。出力は返さず理由だけを通知する
+          this.init.error?.(new Error("Encoding error."));
+          return;
+        }
+        // 出力チャンクを 1 件返し、probe を「符号化できた」と判定させる
+        this.init.output?.({});
+      }
+    }
+    async flush(): Promise<void> {}
     close(): void {}
   };
   // createProcessorAudioFrameSource の経路を通す (実 ReadableStream を返す)
@@ -2299,9 +2341,11 @@ function replaceAudioCodecBoundary(
   };
   return {
     frameSourceCreatedCount: () => frameSourceCreatedCount,
-    configuredConfigs: () => configuredConfigs,
+    configuredConfigs: () =>
+      encoders.flatMap((entry) => (entry.probe || entry.config === null ? [] : [entry.config])),
     restore: () => {
       target.AudioEncoder = originalAudioEncoder;
+      target.AudioData = originalAudioData;
       target.MediaStreamTrackProcessor = originalTrackProcessor;
     },
   };
@@ -2461,6 +2505,48 @@ test("start: 取り出した形式が非対応なら catalog を送る前に失�
     assert.deepEqual(boundary.configuredConfigs(), [
       { codec: "opus", sampleRate: 32000, numberOfChannels: 2, bitrate: 64000 },
     ]);
+
+    await publisher.close();
+  } finally {
+    boundary.restore();
+  }
+});
+
+/**
+ * 完了条件: 対応の申告はあるが実際の符号化が失敗する形式では、catalog を送る前に
+ * start() が失敗し、エンコーダーが返した理由をエラーに含める。
+ *
+ * AAC はブラウザのエンコーダーがビットレートの下限を持ち、範囲外では
+ * isConfigSupported が true を返しても実際の符号化が EncodingError になる
+ * (Chrome 155 の macOS で実測)。対応の申告だけで配信を始めると、音声 Object が
+ * 1 つも送られないまま catalog だけが音声トラックを広告する。
+ */
+test("start: 取り出した形式の実符号化が失敗したら catalog を送る前に失敗する", async () => {
+  const boundary = replaceAudioCodecBoundary({ probeEncodeFails: true });
+  try {
+    const { publisher, sentByConnection, errors } = createAudioStartHarness();
+
+    let thrown: unknown = null;
+    try {
+      await publisher.start(createAudioMediaStream({ sampleRate: 48000, channelCount: 1 }));
+    } catch (error) {
+      thrown = error;
+    }
+
+    assert.instanceOf(thrown, Error);
+    // どの設定が符号化できなかったかと、エンコーダーが返した理由が読めること
+    assert.match((thrown as Error).message, /codec=opus/);
+    assert.match((thrown as Error).message, /bitrate=64000/);
+    assert.match((thrown as Error).message, /: Encoding error\./);
+    // configure も catalog の送信もしない (接続はしているため、記録の枠だけが作られる)
+    assert.isEmpty(boundary.configuredConfigs());
+    assert.equal(sentByConnection.length, 1);
+    assert.equal(sentByConnection[0]?.length, 0);
+    // 中止は通知を伴う失敗であるため onError は 1 回だけ
+    assert.equal(errors.length, 1);
+    assert.strictEqual(errors[0], thrown);
+    // state は動かさない (再試行できる)
+    assert.equal(publisher.state, "created");
 
     await publisher.close();
   } finally {

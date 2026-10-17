@@ -1083,6 +1083,14 @@ export function ConnectionSettings() {
                         const value = e.currentTarget.value;
                         if (settings.isAudioCodecType(value)) {
                           settings.audioCodec.value = value;
+                          // AAC はブラウザのエンコーダーがビットレートの下限を持つため、
+                          // 下限を下回る値のままだと配信が失敗する
+                          // (signals/connectionSettings.ts の AAC_MIN_AUDIO_BITRATE)。
+                          // 選択したコーデックで実際に符号化できるかは配信開始前に確かめる
+                          settings.audioBitrate.value = settings.resolveAudioBitrateForCodec(
+                            value,
+                            settings.audioBitrate.value,
+                          );
                         }
                       }}
                       disabled={settings.settingsDisabled.value}

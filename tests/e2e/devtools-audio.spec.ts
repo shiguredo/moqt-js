@@ -336,3 +336,28 @@ test("前提から外れた状態の警告を Publisher の画面と window.moqt
   ]);
   await expect(popover).toContainText("docs/AV_SYNC_DECISIONS.md");
 });
+
+test("音声コーデックを AAC に切り替えると、AAC のビットレート下限まで上げる", async ({ page }) => {
+  // AAC のエンコーダーはビットレートの下限を持つため、既定の 64000 bps のまま
+  // AAC を選ぶと配信が失敗する (Chrome 155 の macOS で実測)。AAC へ切り替えたときは
+  // 下限 (96000 bps) まで上げる
+  await page.goto(DEVTOOLS_URL);
+  await expect(page.getByTestId("audio-codec")).toHaveValue("opus");
+  await expect(page.getByTestId("audio-bitrate")).toHaveValue("64000");
+
+  await page.getByTestId("audio-codec").selectOption("aac");
+  await expect(page.getByTestId("audio-bitrate")).toHaveValue("96000");
+
+  // 利用者が明示した下限以上の値は変えない
+  await page.getByTestId("audio-bitrate").selectOption("128000");
+  await page.getByTestId("audio-codec").selectOption("opus");
+  await page.getByTestId("audio-bitrate").selectOption("128000");
+  await page.getByTestId("audio-codec").selectOption("aac");
+  await expect(page.getByTestId("audio-bitrate")).toHaveValue("128000");
+
+  // 32000 bps のような下限未満の値は、AAC へ切り替えた時点で下限まで上げる
+  await page.getByTestId("audio-bitrate").selectOption("32000");
+  await page.getByTestId("audio-codec").selectOption("opus");
+  await page.getByTestId("audio-codec").selectOption("aac");
+  await expect(page.getByTestId("audio-bitrate")).toHaveValue("96000");
+});

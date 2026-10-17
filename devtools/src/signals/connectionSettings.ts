@@ -933,6 +933,33 @@ export const AUDIO_CODECS: readonly AudioCodecType[] = ["opus", "aac"];
 /** 音声ビットレートの選択肢 */
 export const AUDIO_BITRATES = [32000, 64000, 96000, 128000];
 
+/**
+ * AAC を選んだときに使う音声ビットレートの下限 (bps)
+ *
+ * ブラウザの AAC エンコーダーはビットレートの下限を持つ。Chrome 155 (macOS) の
+ * AAC は 48 kHz ステレオで 64000 bps を符号化できず (isConfigSupported は true を
+ * 返すが、実際の符号化は EncodingError)、80000 bps 以上で成功する (実測)。
+ * 既定の 64000 bps のまま AAC を選ぶと配信が失敗するため、AAC へ切り替えたときは
+ * この値までビットレートを上げる。実際に符号化できるかは配信開始前の実符号化確認
+ * (src/codec/configSupport.ts の probeAudioEncoderConfig) が確かめる
+ */
+export const AAC_MIN_AUDIO_BITRATE = 96000;
+
+/**
+ * 音声コーデックに合わせてビットレートを解決する
+ *
+ * 現在のビットレートが AAC の下限を下回るときだけ、下限まで上げる。利用者が
+ * 明示的に選んだ下限以上の値はそのまま残す。コーデックを Opus へ戻しても
+ * ビットレートは戻さない (AAC のために上げた値を、利用者の操作なしに下げない)
+ *
+ * @param codec - 選んだ音声コーデック
+ * @param bitrate - 現在の音声ビットレート (bps)
+ * @returns 実際に使う音声ビットレート (bps)
+ */
+export function resolveAudioBitrateForCodec(codec: AudioCodecType, bitrate: number): number {
+  return codec === "aac" && bitrate < AAC_MIN_AUDIO_BITRATE ? AAC_MIN_AUDIO_BITRATE : bitrate;
+}
+
 /** 音声サンプルレートの選択肢 */
 export const AUDIO_SAMPLE_RATES = [8000, 16000, 24000, 48000];
 
@@ -1122,6 +1149,11 @@ function initAudioSettingsFromUrl(params: URLSearchParams): void {
   if (audioChannelsParam !== null && AUDIO_CHANNELS.includes(Number(audioChannelsParam))) {
     audioChannels.value = Number(audioChannelsParam);
   }
+
+  // AAC のビットレートはブラウザのエンコーダーが下限を持つため、URL で復元した
+  // 組み合わせでも下限まで上げる (UI でコーデックを切り替えたときと同じ規則)。
+  // 明示された下限以上の値はそのまま残す
+  audioBitrate.value = resolveAudioBitrateForCodec(audioCodec.value, audioBitrate.value);
 
   const microphoneDeviceIdParam = params.get("microphoneDeviceId");
   if (microphoneDeviceIdParam) {

@@ -49,7 +49,7 @@ import { startPublisherAudioMeter, stopPublisherAudioMeter } from "./publisherAu
 import { AudioEncoderWrapper } from "../../../src/codec/AudioEncoder.ts";
 import type { AudioEncodedChunkData } from "../../../src/codec/types.ts";
 import { getAudioEncoderConfig } from "../../../src/codec/config.ts";
-import { isAudioEncoderConfigSupported } from "../../../src/codec/configSupport.ts";
+import { probeAudioEncoderConfig } from "../../../src/codec/configSupport.ts";
 import {
   allocateAudioObject,
   allocateInitialGroupId,
@@ -1047,21 +1047,24 @@ export function usePublisher() {
     };
     pub.audioFrameSource.value = frameSource;
     pub.audioFormat.value = captured;
-    // 取り出した形式で符号化できるかを、catalog を送る前に確かめる。`AudioEncoder.configure`
-    // は未対応の設定でも同期の例外を投げず、非同期のエラーコールバックで知らせるため、
-    // 確かめないと購読側は音声 object が届かないまま待つことになる。判定規則は
-    // src/codec/configSupport.ts を正本とする
-    const supported = await isAudioEncoderConfigSupported(
-      getAudioEncoderConfig(codec, bitrate, captured.sampleRate, captured.channels),
-    );
-    if (!supported) {
-      addLog("warn", "[publisher] audio codec is not supported in this browser", {
-        codec,
-        sampleRate: captured.sampleRate,
-        channels: captured.channels,
-      });
+    // 取り出した形式で実際に符号化できるかを、catalog を送る前に確かめる。
+    // `AudioEncoder.configure` は未対応の設定でも同期の例外を投げず、非同期の
+    // エラーコールバックで知らせる。さらに AAC はプラットフォームのエンコーダーが
+    // 対応するサンプルレートとビットレートの下限を持ち、範囲外では
+    // isConfigSupported が true を返しても実際の符号化が失敗する (Chrome 155 の
+    // macOS で実測。48 kHz ステレオの 64000 bps は EncodingError)。対応の申告だけを
+    // 信じると、音声 Object が 1 つも送られないまま catalog だけが音声トラックを
+    // 広告する。無音を 1 チャンク実際に符号化して確かめ、失敗したら理由を残して
+    // 配信開始を失敗させる (黙って音声を諦めると、利用者は原因を知れない)。
+    // 判定規則は src/codec/configSupport.ts を正本とする
+    const config = getAudioEncoderConfig(codec, bitrate, captured.sampleRate, captured.channels);
+    const probe = await probeAudioEncoderConfig(config);
+    if (!probe.supported) {
       stopAudioStream();
-      return null;
+      const reason = probe.reason === undefined ? "" : `: ${probe.reason}`;
+      throw new Error(
+        `audio encoder cannot encode the selected settings: codec=${codec}, codecString=${config.codec}, sampleRate=${captured.sampleRate}, channels=${captured.channels}, bitrate=${bitrate}${reason}`,
+      );
     }
     return captured;
   }
@@ -1920,8 +1923,13 @@ export function usePublisher() {
               // WebTransportCloseInfo.reason は optional のため未指定時は空文字にする
               reason: (closeInfo.reason ?? "").slice(0, 1024),
             });
-            pub.pubStatus.value = "disconnected";
-            pub.pubStatusMessage.value = `Disconnected: closeCode=${closeInfo.closeCode}, reason=${closeInfo.reason}`;
+            // 配信の開始に失敗したときは、catch が失敗の理由を status に出した後に
+            // ここへ来る (後始末の session.close() で閉じるため)。失敗の理由を
+            // 「Disconnected」で上書きすると、利用者に原因が伝わらない
+            if (pub.pubStatus.value !== "error") {
+              pub.pubStatus.value = "disconnected";
+              pub.pubStatusMessage.value = `Disconnected: closeCode=${closeInfo.closeCode}, reason=${closeInfo.reason}`;
+            }
             cleanupPublisher();
           },
           error: (error) => {

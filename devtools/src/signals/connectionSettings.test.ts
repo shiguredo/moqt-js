@@ -33,10 +33,13 @@ import {
   renderGroup,
   requireConnectNamespace,
   RENDER_GROUP_OPTIONS,
+  resolveAudioBitrateForCodec,
   resolveOptionNumber,
   targetLatency,
   TARGET_LATENCY_OPTIONS,
   audioAutoGainControl,
+  audioBitrate,
+  audioCodec,
   audioEchoCancellation,
   audioNoiseSuppression,
   audioSource,
@@ -1487,4 +1490,44 @@ test("discardImportedC4mToken: c4m を持たない URL は変えない", () => {
 
   assert.equal(url.value, "moqt://example.com/moqt#msf:room-123--catalog&connection=wt");
   resetMsfFragmentSettings();
+});
+
+// AAC はブラウザのエンコーダーがビットレートの下限を持つため、AAC を選んだときは
+// 下限 (96000 bps) まで上げる。明示された下限以上の値と Opus の値は変えない
+test("resolveAudioBitrateForCodec: AAC の下限まで上げ、それ以外は変えない", () => {
+  // Opus はどの選択肢でも符号化できるため値を変えない
+  assert.equal(resolveAudioBitrateForCodec("opus", 32000), 32000);
+  assert.equal(resolveAudioBitrateForCodec("opus", 64000), 64000);
+
+  // AAC は下限を下回る値だけ 96000 へ上げる
+  assert.equal(resolveAudioBitrateForCodec("aac", 32000), 96000);
+  assert.equal(resolveAudioBitrateForCodec("aac", 64000), 96000);
+  assert.equal(resolveAudioBitrateForCodec("aac", 96000), 96000);
+  assert.equal(resolveAudioBitrateForCodec("aac", 128000), 128000);
+
+  // コーデックを Opus へ戻しても、AAC のために上げた値を下げない
+  assert.equal(resolveAudioBitrateForCodec("opus", 96000), 96000);
+});
+
+// URL で復元した組み合わせでも、AAC のビットレートは下限まで上げる (UI でコーデックを
+// 切り替えたときと同じ規則)。明示された下限以上の値と Opus の値は変えない
+test("initFromUrl: AAC のビットレートを下限まで上げ、Opus はそのままにする", () => {
+  audioCodec.value = "opus";
+  audioBitrate.value = 64000;
+
+  initFromUrl("audioCodec=aac&audioBitrate=64000");
+  assert.equal(audioCodec.value, "aac");
+  assert.equal(audioBitrate.value, 96000);
+
+  // 下限以上を明示した場合はそのまま
+  initFromUrl("audioCodec=aac&audioBitrate=128000");
+  assert.equal(audioBitrate.value, 128000);
+
+  // Opus のビットレートは変えない
+  initFromUrl("audioCodec=opus&audioBitrate=32000");
+  assert.equal(audioBitrate.value, 32000);
+
+  // 他のテストへ持ち越さない
+  audioCodec.value = "opus";
+  audioBitrate.value = 64000;
 });

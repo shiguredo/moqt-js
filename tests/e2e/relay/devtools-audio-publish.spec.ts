@@ -178,3 +178,177 @@ test("MediaStreamTrackProcessor が無いブラウザでも moqt-devtools のダ
     await closeRelayPage(publisherPage);
   }
 });
+
+test("moqt-devtools のダミー音声を AAC で符号化して実リレー経由で届く", async ({ browser }) => {
+  // AAC の経路は Opus と符号化の入口が違い (Audio Config を AUDIO_CONFIG として送る)、
+  // ビットレートの下限もブラウザの実装で決まる。実際に配信と購読を通して確かめる
+  test.setTimeout(TEST_TIMEOUT_MS);
+  const moqtUri = requireRelayUri();
+  if (moqtUri === null) {
+    return;
+  }
+
+  const requestedNamespace = createTestNamespace();
+  const publisherPage = await browser.newPage();
+  const params = new URLSearchParams({
+    url: moqtUri,
+    namespace: formatTrackNamespace(requestedNamespace),
+    mode: "publisher",
+    videoSource: "none",
+    audioSource: "dummy",
+    audioCodec: "aac",
+    // Chrome 155 の AAC エンコーダーは 48 kHz ステレオで 64000 bps を符号化できない
+    // (isConfigSupported は true を返すが実際の符号化は EncodingError。実測)。
+    // 96000 bps なら Chrome 155 と Playwright の Chromium のどちらでも成功する
+    audioBitrate: "96000",
+    audioSampleRate: "48000",
+    audioChannels: "2",
+  });
+
+  let subscriberId: string | undefined;
+  let receivingPage: Page | null = null;
+  try {
+    await publisherPage.goto(`${DEVTOOLS_URL}?${params.toString()}`);
+    await expect(publisherPage.getByTestId("moqt-uri")).toHaveValue(moqtUri);
+    await expect(publisherPage.getByTestId("audio-track-advertised")).toHaveText("Yes");
+    const effectiveNamespace = parseTrackNamespace(
+      await publisherPage.getByTestId("namespace").inputValue(),
+    );
+
+    await publisherPage.getByTestId("publisher-publish-button").click();
+    await expect
+      .poll(
+        async () => {
+          const stats = await readPublisherStats(publisherPage);
+          return stats.audio.objectsSent;
+        },
+        {
+          message: "AAC で符号化したダミー音声の Object が送られ始めるのを待つ",
+          timeout: WAIT_TIMEOUT_MS,
+        },
+      )
+      .toBeGreaterThan(0);
+
+    const publisherStats = await readPublisherStats(publisherPage);
+    expect(publisherStats.status).toBe("connected");
+    expect(publisherStats.audio.encodeErrors).toBe(0);
+    expect(publisherStats.audio.chunksEncoded).toBeGreaterThan(0);
+
+    receivingPage = await openRelayPage(browser);
+    subscriberId = await receivingPage.evaluate(
+      (options) => window.__moqtE2E.startSubscriber(options),
+      {
+        url: moqtUri,
+        namespace: effectiveNamespace,
+        audio: true,
+        audioCodec: "aac" as const,
+        video: false,
+      },
+    );
+    const activeSubscriberId = subscriberId;
+
+    // 受信だけでなく、復号して鳴らし始めたところまで待つ (AAC の Audio Config を
+    // 適用できていないと、Object は届いても復号が進まず、鳴った長さが 0 のままになる)
+    await expect
+      .poll(
+        () =>
+          receivingPage?.evaluate(
+            (id) => window.__moqtE2E.getSubscriber(id).audio?.playedMs ?? 0,
+            activeSubscriberId,
+          ),
+        {
+          message: "購読者が AAC の音声を復号して鳴らし始めるのを待つ",
+          timeout: WAIT_TIMEOUT_MS,
+        },
+      )
+      .toBeGreaterThan(0);
+
+    const subscriberStatus = await receivingPage.evaluate(
+      (id) => window.__moqtE2E.getSubscriber(id),
+      activeSubscriberId,
+    );
+    expect(subscriberStatus.errors).toEqual([]);
+    expect(subscriberStatus.state).toBe("active");
+    expect(subscriberStatus.hasCatalog).toBe(true);
+    expect(subscriberStatus.audio?.framesReceived ?? 0).toBeGreaterThan(0);
+    expect(subscriberStatus.audio?.playedMs ?? 0).toBeGreaterThan(0);
+    expect(subscriberStatus.catalogAudioFormat?.samplerate).toBe(48_000);
+    expect(subscriberStatus.catalogAudioFormat?.channelConfig).toBe("2");
+
+    console.log(
+      "AAC の配信結果:",
+      `objectsSent=${publisherStats.audio.objectsSent}`,
+      `chunksEncoded=${publisherStats.audio.chunksEncoded}`,
+      `framesReceived=${subscriberStatus.audio?.framesReceived ?? 0}`,
+    );
+  } finally {
+    if (receivingPage !== null && subscriberId !== undefined) {
+      await receivingPage.evaluate((id) => window.__moqtE2E.stopSubscriber(id), subscriberId);
+    }
+    if (receivingPage !== null) {
+      await closeRelayPage(receivingPage);
+    }
+    await closeRelayPage(publisherPage);
+  }
+});
+
+test("moqt-devtools は AAC で符号化できない形式のとき、配信開始前に理由付きで失敗する", async ({
+  browser,
+}) => {
+  // Chromium の AAC エンコーダーは 44100 / 48000 Hz だけに対応する (実測。
+  // isConfigSupported は 16000 Hz を非対応と報告する)。対応の申告だけで配信を
+  // 始めると、音声 Object が 1 つも送られないまま catalog だけが音声トラックを
+  // 広告するため、配信開始前に失敗することを固定する
+  test.setTimeout(TEST_TIMEOUT_MS);
+  const moqtUri = requireRelayUri();
+  if (moqtUri === null) {
+    return;
+  }
+
+  const namespace = createTestNamespace();
+  const publisherPage = await browser.newPage();
+  const params = new URLSearchParams({
+    url: moqtUri,
+    namespace: formatTrackNamespace(namespace),
+    mode: "publisher",
+    videoSource: "none",
+    audioSource: "dummy",
+    audioCodec: "aac",
+    audioBitrate: "96000",
+    audioSampleRate: "16000",
+    audioChannels: "2",
+  });
+
+  try {
+    await publisherPage.goto(`${DEVTOOLS_URL}?${params.toString()}`);
+    await publisherPage.getByTestId("publisher-publish-button").click();
+
+    await expect
+      .poll(
+        async () => {
+          const stats = await readPublisherStats(publisherPage);
+          return stats.status;
+        },
+        {
+          message: "AAC の符号化できない設定で配信開始がエラーになるのを待つ",
+          timeout: WAIT_TIMEOUT_MS,
+        },
+      )
+      .toBe("error");
+
+    const stats = await readPublisherStats(publisherPage);
+    // どの設定が符号化できなかったかと、ブラウザが返した理由が読めること
+    expect(stats.statusMessage).toContain(
+      "Failed: audio encoder cannot encode the selected settings",
+    );
+    expect(stats.statusMessage).toContain("codec=aac");
+    expect(stats.statusMessage).toContain("codecString=mp4a.40.2");
+    expect(stats.statusMessage).toContain("sampleRate=16000");
+    expect(stats.statusMessage).toContain("bitrate=96000");
+    // 音声 Object は 1 つも送られない (catalog も送らないため、購読側を待たせない)
+    expect(stats.audio.objectsSent).toBe(0);
+    expect(stats.audio.encodeErrors).toBe(0);
+  } finally {
+    await closeRelayPage(publisherPage);
+  }
+});

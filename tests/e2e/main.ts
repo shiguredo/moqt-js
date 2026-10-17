@@ -77,8 +77,15 @@ export interface StartPublisherOptions {
    * 持たないため。tests/e2e/relay/audio-timestamp.spec.ts と同じ条件)
    */
   audio?: {
-    // 実リレーの E2E は opus だけを使う (偽のマイクの音声を Opus で符号化する)
-    codec: "opus";
+    /**
+     * 音声のコーデック。偽のマイクの音声をこのコーデックで符号化する。
+     *
+     * aac は「取り出した形式 (偽のマイクは 16 kHz モノラル) を AAC で符号化できるかを
+     * 配信開始前に確かめる」経路のテストに使う。Chromium の AAC エンコーダーは
+     * 44100 / 48000 Hz だけに対応するため、この条件では start() が明確なエラーで
+     * 失敗することを確かめられる
+     */
+    codec: "opus" | "aac";
     bitrate: number;
     /** 音声 Object の送り方 (未指定なら devtools の既定 "datagram")。draft-ietf-moq-transport-22 §11 */
     delivery?: AudioDelivery;
@@ -136,6 +143,13 @@ export interface StartSubscriberOptions {
   namespace: string[];
   /** 音声も購読する (省略すると映像だけを購読する) */
   audio?: boolean;
+  /**
+   * 購読する音声のコーデック (省略時は opus)
+   *
+   * 映像と同じく、テストページは catalog から自動取得せず明示する。AAC の配信を
+   * 購読する経路を確かめるときに "aac" を渡す
+   */
+  audioCodec?: "opus" | "aac";
   /**
    * 映像も購読する (既定は true)。
    *
@@ -670,7 +684,9 @@ async function startSubscriber(options: StartSubscriberOptions): Promise<HandleI
         // exactOptionalPropertyTypes では optional な値に undefined を渡せないため、
         // 購読するトラックだけを載せる
         ...(options.video === false ? {} : { video: { codec: "vp8" } }),
-        ...(options.audio === true ? { audio: { codec: "opus" } } : {}),
+        ...(options.audio === true
+          ? { audio: { codec: options.audioCodec === "aac" ? "aac" : "opus" } }
+          : {}),
       },
       {
         onError: (error) => {

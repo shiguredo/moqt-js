@@ -27,7 +27,7 @@ import { AudioEncoderWrapper } from "./codec/AudioEncoder";
 import type { AudioEncodedChunkData } from "./codec/types";
 import { VideoEncoderWrapper } from "./codec/VideoEncoder";
 import { DEFAULT_KEYFRAME_INTERVAL_SECONDS, getAudioEncoderConfig } from "./codec/config";
-import { isAudioEncoderConfigSupported } from "./codec/configSupport";
+import { probeAudioEncoderConfig } from "./codec/configSupport";
 import {
   withCapturedAudioFormat,
   resolveAudioPublishSettings,
@@ -852,7 +852,9 @@ export class MediaPublisherImpl implements MediaPublisher {
    * 取り出した形式がコーデックで符号化できない場合は、configure も catalog の送信も
    * せずに start() を失敗させる。`AudioEncoder.configure` は未対応の設定でも同期の例外を
    * 投げず非同期のエラーになるため、送ってからでは音声 object が届かないトラックを
-   * 宣言した catalog が購読側へ残る。
+   * 宣言した catalog が購読側へ残る。対応の申告 (`isConfigSupported`) だけでは実際に
+   * 符号化できるかを保証しないため、無音を 1 チャンク実際に符号化して確かめる
+   * (`probeAudioEncoderConfig`)。
    */
   private async prepareAudioFrameSource(): Promise<void> {
     if (!this.options.audio || !this.mediaStream) {
@@ -886,9 +888,16 @@ export class MediaPublisherImpl implements MediaPublisher {
       captured.sampleRate,
       captured.channels,
     );
-    if (!(await isAudioEncoderConfigSupported(config))) {
+    // 対応の申告だけでは実際に符号化できるかを保証しない。AAC はプラットフォームの
+    // エンコーダーが対応する形式とビットレートの下限を持ち、範囲外では
+    // isConfigSupported が true を返しても最初の符号化が非同期のエラーになる
+    // (Chrome 155 の macOS で実測)。確認しないと、音声 Object が届かないトラックを
+    // catalog に宣言したまま配信を始めてしまうため、無音を 1 チャンク実際に符号化する
+    const probe = await probeAudioEncoderConfig(config);
+    if (!probe.supported) {
+      const reason = probe.reason === undefined ? "" : `: ${probe.reason}`;
       throw new Error(
-        `audio encoder does not support the captured format: codec=${captured.codec}, codecString=${config.codec}, sampleRate=${captured.sampleRate}, channels=${captured.channels}`,
+        `audio encoder does not support the captured format: codec=${captured.codec}, codecString=${config.codec}, sampleRate=${captured.sampleRate}, channels=${captured.channels}, bitrate=${captured.bitrate}${reason}`,
       );
     }
   }

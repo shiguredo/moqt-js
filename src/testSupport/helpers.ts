@@ -91,11 +91,14 @@ export function waitForUnhandledRejectionDetection(): Promise<void> {
  * @param run - 置き換えた状態で実行するテスト本体
  */
 async function withGlobalValue(
-  name: "VideoDecoder" | "AudioEncoder",
+  name: "VideoDecoder" | "AudioEncoder" | "AudioData",
   replacement: unknown,
   run: () => Promise<void>,
 ): Promise<void> {
-  const target = globalThis as unknown as Record<"VideoDecoder" | "AudioEncoder", unknown>;
+  const target = globalThis as unknown as Record<
+    "VideoDecoder" | "AudioEncoder" | "AudioData",
+    unknown
+  >;
   const original = target[name];
   target[name] = replacement;
   try {
@@ -123,6 +126,19 @@ export function withVideoDecoder(replacement: unknown, run: () => Promise<void>)
  */
 export function withAudioEncoder(replacement: unknown, run: () => Promise<void>): Promise<void> {
   return withGlobalValue("AudioEncoder", replacement, run);
+}
+
+/**
+ * globalThis.AudioData を置き換えてテスト本体を実行し、必ず元に戻す
+ *
+ * Node には AudioData が無いため、実符号化確認 (probeAudioEncoderConfig) が
+ * 確認用の AudioData を作る経路を固定するときに使う。
+ *
+ * @param replacement - 置き換える値 (undefined にすると AudioData 非搭載の環境を再現する)
+ * @param run - 置き換えた状態で実行するテスト本体
+ */
+export function withAudioData(replacement: unknown, run: () => Promise<void>): Promise<void> {
+  return withGlobalValue("AudioData", replacement, run);
 }
 
 /**
