@@ -77,6 +77,9 @@ test("デバッグパネルがログを新しい順に表示し、展開と折�
   // 表示は新しい順
   await expect(rows.nth(0)).toContainText("e2e-log-2");
   await expect(rows.nth(1)).toContainText("e2e-log-1");
+  // 重要度は色だけでなく文字でも出す (色覚に依らず、コピーした行からも読める)
+  await expect(rows.nth(0).getByTestId("debug-log-level")).toHaveText("WARN");
+  await expect(rows.nth(1).getByTestId("debug-log-level")).toHaveText("INFO");
   await expect(page.getByTestId("debug-log-count")).toHaveText("Logs: 2");
   // 追加時に整形した絶対時刻 (HH:MM:SS.mmm) と経過時間 (+S.mmm) を出す
   await expect(rows.nth(1)).toContainText(/\d{2}:\d{2}:\d{2}\.\d{3}/);
@@ -409,4 +412,261 @@ test("行のコピーで、その行だけがコピー済みの表示になる",
 
   // 1.5 秒で元に戻る
   await expect(copiedMark).toHaveCount(0);
+});
+
+test("絞り込み: 本文・重要度・接続元で表示するログを絞れる", async ({ page }) => {
+  await page.goto(DEVTOOLS_URL);
+  await openDebugPanel(page);
+  // 接続元の選択肢は起動時に作られた Subscriber の id を使う
+  const subscriberId = await page.evaluate(() => {
+    const host = window as unknown as {
+      moqtDevTools: { getSubscribers: () => { id: string }[] };
+    };
+    return host.moqtDevTools.getSubscribers()[0]?.id ?? "";
+  });
+  expect(subscriberId).toMatch(/^subscriber-[0-9a-f]{8}$/);
+
+  await addLogs(page, [
+    { level: "info", message: "[publisher] [SEND] SUBSCRIBE", data: { requestId: 1 } },
+    { level: "warn", message: "[publisher] something warned", data: { requestId: 2 } },
+    { level: "error", message: `[${subscriberId}] failed to decode`, data: { requestId: 3 } },
+  ]);
+
+  const rows = page.getByTestId("debug-log-row");
+  await expect(rows).toHaveCount(3);
+
+  // 本文だけでなく、data の整形結果 (Request ID: 3) でも検索できる
+  await page.getByTestId("debug-log-filter").fill("request id: 3");
+  await expect(rows).toHaveCount(1);
+  await expect(rows.nth(0)).toContainText("failed to decode");
+  await expect(page.getByTestId("debug-log-visible-count")).toHaveText("1 of 3 shown");
+
+  // 一致しない検索語では空の案内を出す
+  await page.getByTestId("debug-log-filter").fill("no-such-log");
+  await expect(rows).toHaveCount(0);
+  await expect(page.getByTestId("debug-log-list")).toContainText("No logs match the filter.");
+
+  // 検索欄の Esc は検索語だけを消し、パネルは閉じない
+  await page.getByTestId("debug-log-filter").press("Escape");
+  await expect(page.getByTestId("debug-log-filter")).toHaveValue("");
+  await expect(page.getByTestId("debug-panel")).toBeVisible();
+
+  // 重要度で絞る
+  await page.getByTestId("debug-log-level-info").uncheck();
+  await expect(rows).toHaveCount(2);
+  await expect(page.getByTestId("debug-log-visible-count")).toHaveText("2 of 3 shown");
+
+  // 接続元で絞る
+  await page.getByTestId("debug-log-level-info").check();
+  await page.getByTestId("debug-log-source").selectOption(subscriberId);
+  await expect(rows).toHaveCount(1);
+  await expect(rows.nth(0)).toContainText("failed to decode");
+
+  // 絞り込み中は、画面に出ているログだけをコピーできる
+  await clickCopyButton(page, "debug-log-copy-visible");
+  const visibleText = await page.evaluate(() => navigator.clipboard.readText());
+  expect(visibleText).toContain("failed to decode");
+  expect(visibleText).not.toContain("SUBSCRIBE");
+
+  // 重要度をすべて外すと一致するログが無いことを案内する
+  await page.getByTestId("debug-log-level-warn").uncheck();
+  await page.getByTestId("debug-log-level-error").uncheck();
+  await page.getByTestId("debug-log-level-debug").uncheck();
+  await expect(rows).toHaveCount(0);
+  await expect(page.getByTestId("debug-log-list")).toContainText("No logs match the filter.");
+
+  // 絞り込みを既定へ戻すと件数の表示も消える (Reset は検索語・重要度・接続元をまとめて戻す)
+  await page.getByTestId("debug-log-filter-reset").click();
+  await expect(rows).toHaveCount(3);
+  await expect(page.getByTestId("debug-log-visible-count")).toHaveCount(0);
+  await expect(page.getByTestId("debug-log-copy-visible")).toHaveCount(0);
+});
+
+test("一時停止: 停止中もログは溜まり、再開すると最新を表示する", async ({ page }) => {
+  await page.goto(DEVTOOLS_URL);
+  await openDebugPanel(page);
+  await addLogs(page, [
+    { level: "info", message: "before-1" },
+    { level: "info", message: "before-2" },
+  ]);
+
+  const rows = page.getByTestId("debug-log-row");
+  await expect(rows).toHaveCount(2);
+
+  // 停止すると、その時点の一覧を固定する
+  await page.getByTestId("debug-log-pause").click();
+  await expect(page.getByTestId("debug-log-pause")).toHaveText("Resume");
+
+  await addLogs(page, [
+    { level: "warn", message: "after-1" },
+    { level: "warn", message: "after-2" },
+  ]);
+  // 停止中は表示が増えず、増えた件数だけを出す。総件数は増えている
+  await expect(rows).toHaveCount(2);
+  await expect(page.getByTestId("debug-log-new-count")).toHaveText("2 new");
+  await expect(page.getByTestId("debug-log-count")).toHaveText("Logs: 4");
+
+  // 再開すると停止中に増えた分も表示する
+  await page.getByTestId("debug-log-pause").click();
+  await expect(rows).toHaveCount(4);
+  await expect(rows.nth(0)).toContainText("after-2");
+  await expect(page.getByTestId("debug-log-new-count")).toHaveCount(0);
+});
+
+test("一時停止中に上限を超えて増えたログも、増加件数として数える", async ({ page }) => {
+  await page.goto(DEVTOOLS_URL);
+  await openDebugPanel(page);
+  // ログが無い状態で停止すると、その旨を出す
+  await page.getByTestId("debug-log-pause").click();
+  await expect(page.getByTestId("debug-log-list")).toContainText("Paused with no logs.");
+
+  // 上限 (1000 件) を超えて追加する。絞り込みが無いときは、保持側で捨てられた分も
+  // 含めた追加総数を出さないと「増えた件数」が事実と異なる
+  await addLogs(
+    page,
+    Array.from({ length: 1005 }, (_, index) => ({
+      level: "info" as const,
+      message: `overflow-${index}`,
+    })),
+  );
+  await expect(page.getByTestId("debug-log-new-count")).toHaveText("1005 new");
+  await expect(page.getByTestId("debug-log-count")).toHaveText("Logs: 1000");
+
+  // 再開すると保持している 1000 件を表示する
+  await page.getByTestId("debug-log-pause").click();
+  await expect(page.getByTestId("debug-log-row")).toHaveCount(1000);
+});
+
+test("payload だけを持つ行も展開すると hex dump を出す", async ({ page }) => {
+  await page.goto(DEVTOOLS_URL);
+  await openDebugPanel(page);
+  await addLogs(page, [{ level: "info", message: "payload-only", payload: [1, 2, 3] }]);
+
+  const rows = page.getByTestId("debug-log-row");
+  await expect(rows).toHaveCount(1);
+  // Expand All は payload だけの行も対象にする
+  await page.getByRole("button", { name: "Expand All" }).click();
+  await expect(rows.nth(0).locator("pre")).toContainText("0000  01 02 03");
+  // 中身が空になる Data タブは出さず、Binary タブだけを出す
+  await expect(rows.nth(0).getByRole("button", { name: /^Data$/ })).toHaveCount(0);
+  await expect(rows.nth(0).getByRole("button", { name: /^Binary/ })).toBeVisible();
+});
+
+test("最新へ戻る: 先頭から離れて読んでいる間は新しいログで引き戻さない", async ({ page }) => {
+  await page.goto(DEVTOOLS_URL);
+  await openDebugPanel(page);
+  await addLogs(
+    page,
+    Array.from({ length: 100 }, (_, index) => ({
+      level: "info" as const,
+      message: `scroll-log-${index}`,
+      data: { index },
+    })),
+  );
+
+  const rows = page.getByTestId("debug-log-row");
+  const list = page.getByTestId("debug-log-list");
+  await expect(rows).toHaveCount(100);
+  // いちばん古いログが見えるところまでスクロールする
+  await list.evaluate((element) => {
+    element.scrollTop = element.scrollHeight;
+  });
+  await expect(page.getByTestId("debug-log-jump-latest")).toBeVisible();
+  const scrollTopBefore = await list.evaluate((element) => element.scrollTop);
+  expect(scrollTopBefore).toBeGreaterThan(0);
+
+  // 先頭から離れている間は、新しいログが来ても先頭へ引き戻さない。
+  // (ブラウザのスクロールアンカリングにより scrollTop は行の高さ分ずれることがあるため、
+  //  0 に戻らないことと、最新へ戻るボタンが残ることを確かめる)
+  await addLogs(page, [{ level: "info", message: "while-scrolled" }]);
+  await expect(rows).toHaveCount(101);
+  const scrollTopAfter = await list.evaluate((element) => element.scrollTop);
+  expect(scrollTopAfter).toBeGreaterThan(0);
+  await expect(page.getByTestId("debug-log-jump-latest")).toBeVisible();
+
+  // Jump to latest で先頭へ戻り、ボタンは消える
+  await page.getByTestId("debug-log-jump-latest").click();
+  expect(await list.evaluate((element) => element.scrollTop)).toBe(0);
+  await expect(page.getByTestId("debug-log-jump-latest")).toHaveCount(0);
+});
+
+test("Debug ボタンはパネルの開閉で位置が変わらず、同じボタンで閉じられる", async ({ page }) => {
+  await page.goto(DEVTOOLS_URL);
+  const debugButton = page.getByRole("button", { name: /^Debug/ });
+  const before = await debugButton.boundingBox();
+  if (before === null) {
+    throw new Error("expected debug button to be visible");
+  }
+
+  await debugButton.click();
+  await expect(page.getByTestId("debug-panel")).toBeVisible();
+  const afterOpen = await debugButton.boundingBox();
+  if (afterOpen === null) {
+    throw new Error("expected debug button to stay visible");
+  }
+  // 押した場所から動かない
+  expect(afterOpen.x).toBe(before.x);
+  expect(afterOpen.y).toBe(before.y);
+
+  // 同じボタンでもう一度閉じられる
+  await debugButton.click();
+  await expect(page.getByTestId("debug-panel")).toHaveCount(0);
+});
+
+test("狭い画面ではパネルが全幅になり、パネル内で横にはみ出さない", async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 720 });
+  await page.goto(DEVTOOLS_URL);
+  await openDebugPanel(page);
+
+  const panel = page.getByTestId("debug-panel");
+  await expect(panel).toBeVisible();
+  const box = await panel.boundingBox();
+  if (box === null) {
+    throw new Error("expected debug panel to be visible");
+  }
+  // ビューポート幅いっぱいに広がる (640px 固定のままだと画面外へはみ出す)。
+  // headed ではスクロールバー分だけ狭くなるため範囲で見る
+  expect(box.width).toBeGreaterThanOrEqual(350);
+  expect(box.width).toBeLessThanOrEqual(375);
+  // パネル内のコントロールが横スクロールを起こさない
+  expect(await panel.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+
+  // 640〜1023 px でも全幅にする (640 px 固定のままだと本文を覆い、固定ボタンも隠れる)
+  await page.setViewportSize({ width: 800, height: 720 });
+  await expect
+    .poll(async () => {
+      const midBox = await panel.boundingBox();
+      return midBox?.width;
+    })
+    .toBe(800);
+});
+
+test("パネルを開いても右上のボタンがタイトルに重ならない", async ({ page }) => {
+  // パネルを開くと本文の幅が狭くなるため、右上固定の Copy URL / Debug ボタンが
+  // 見出しに重なることがある。ボタンと見出しの矩形が交差しないことを確かめる
+  await page.goto(DEVTOOLS_URL);
+  await openDebugPanel(page);
+
+  // レイアウトの反映を待ってから矩形を比べる
+  await expect
+    .poll(async () => {
+      const headingBox = await page.locator("h1").boundingBox();
+      const buttonBox = await page.getByTestId("copy-url").boundingBox();
+      if (headingBox === null || buttonBox === null) {
+        return false;
+      }
+      return (
+        buttonBox.x + buttonBox.width <= headingBox.x ||
+        headingBox.x + headingBox.width <= buttonBox.x ||
+        buttonBox.y + buttonBox.height <= headingBox.y ||
+        headingBox.y + headingBox.height <= buttonBox.y
+      );
+    })
+    .toBe(true);
+  // 本文の 2 列を 1 列にして、パネルを開いた状態で横スクロールを起こさない
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    ),
+  ).toBeLessThanOrEqual(0);
 });

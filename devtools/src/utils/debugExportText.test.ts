@@ -17,6 +17,9 @@ function createLogEntry(overrides: Partial<LogEntry> = {}): LogEntry {
     timestamp: 1_700_000_000_000,
     level: "info",
     message: "message",
+    // 整形は source と searchText を使わないため、判定に影響しない値を置く
+    source: null,
+    searchText: "",
     formattedTimestamp: "12:34:56.789",
     formattedElapsed: "+0.000",
     formattedDelta: "",
@@ -123,14 +126,23 @@ test("formatLogEntryText: 時刻と本文と data と payload を並べる", () 
 
   const text = formatLogEntryText(entry);
 
-  assert.include(text, "12:34:56.789 [publisher] [SEND] OBJECT");
+  assert.include(text, "12:34:56.789 [INFO] [publisher] [SEND] OBJECT");
   assert.include(text, "Request ID: 3");
   assert.include(text, "Binary (2 bytes):");
   assert.include(text, "0000  01 02");
 });
 
 test("formatLogEntryText: data と payload が無いログは時刻と本文だけにする", () => {
-  assert.equal(formatLogEntryText(createLogEntry({ message: "simple" })), "12:34:56.789 simple");
+  assert.equal(
+    formatLogEntryText(createLogEntry({ message: "simple" })),
+    "12:34:56.789 [INFO] simple",
+  );
+});
+
+test("formatLogEntryText: 重要度は文字で出す", () => {
+  // 行の色は貼り付けた先に残らないため、コピー本文では重要度を文字で持たせる
+  const text = formatLogEntryText(createLogEntry({ level: "error", message: "failed" }));
+  assert.equal(text, "12:34:56.789 [ERROR] failed");
 });
 
 test("formatLogsSection: 見出しに絞り込みを出し、一致するログだけを並べる", () => {
@@ -163,7 +175,7 @@ test("buildDebugExportText: 接続設定・統計・ログの順に節を並べ�
   assert.isTrue(text.startsWith("=== Connection Settings ===\nurl:"));
   // namespace の初期値はページごとのランダム (moqt-devtools-...) のため、接頭辞だけを確かめる
   assert.include(text, "namespace: moqt-devtools-");
-  assert.isTrue(text.endsWith("=== Debug Logs ===\n12:34:56.789 only log"));
+  assert.isTrue(text.endsWith("=== Debug Logs ===\n12:34:56.789 [INFO] only log"));
 });
 
 test("buildDebugExportText: Publisher の統計が null のときは節を出さない", () => {

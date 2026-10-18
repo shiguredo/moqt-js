@@ -1,5 +1,10 @@
 import { signal } from "@preact/signals";
-import { formatAbsoluteTime, formatDeltaTime, formatElapsedTime } from "../utils/logFormatters";
+import {
+  formatAbsoluteTime,
+  formatDeltaTime,
+  formatElapsedTime,
+  formatMessageData,
+} from "../utils/logFormatters";
 
 /**
  * デバッグログの蓄積
@@ -23,6 +28,12 @@ export interface LogEntry {
   timestamp: number;
   level: LogLevel;
   message: string;
+  // メッセージ行頭の接続識別子 (`[publisher]` / `[subscriber-...]`)。
+  // 接続元でログを絞り込むために追加時に 1 回だけ取り出す。無ければ null
+  source: string | null;
+  // 検索欄で使う小文字化済みの文字列。メッセージ本文と data の表示用の整形を
+  // 追加時に 1 回だけ連結する。検索のたびに data を整形し直さない
+  searchText: string;
   // 表示用に整形済みの絶対時刻 (HH:MM:SS.mmm)。追加時に 1 回だけ計算する
   formattedTimestamp: string;
   // 表示用に整形済みの経過時間。基準は「ログを消してから最初の 1 件」
@@ -72,6 +83,49 @@ export function __resetLogStateForTest(): void {
 }
 
 /**
+ * メッセージ行頭の接続識別子を取り出す
+ *
+ * ログの行は `[publisher] [SEND] PUBLISH` や `[subscriber-1] video stream ended`
+ * のように接続識別子から始まる。接続元での絞り込みに使うため、追加時に取り出す。
+ * 識別子は `[publisher]` / `[subscriber-...]` の形 (小文字で始まる) だけを認める。
+ * `[WARN]` のような本文の角括弧を接続元と誤認しないためである。
+ * 識別子で始まらない行 (前提警告など、呼び出し側が付け忘れた行) は null になる。
+ */
+export function extractLogSource(message: string): string | null {
+  return /^\[([a-z][a-z0-9-]*)\]/.exec(message)?.[1] ?? null;
+}
+
+/**
+ * 検索用の文字列の上限 (文字数)
+ *
+ * Catalog のように data が大きいログを 1,000 件保持しても、検索用の文字列で
+ * メモリを圧迫しないようにする。上限を超えた分は検索対象にしない (本文の行頭は残る)。
+ */
+export const MAX_SEARCH_TEXT_LENGTH = 4096;
+
+/**
+ * 検索欄で使う文字列を作る
+ *
+ * 表示している本文 (メッセージと data の整形結果) を小文字化して連結する。
+ * `formatMessageData` は bigint を含む Catalog でも例外にならないが、トップレベルに
+ * 循環参照があると再帰が止まらない。整形に失敗してもログ自体を失わないよう、
+ * そのときはメッセージ本文だけを検索対象にする。
+ */
+export function buildLogSearchText(message: string, data: unknown): string {
+  if (data === undefined) {
+    return message.slice(0, MAX_SEARCH_TEXT_LENGTH).toLowerCase();
+  }
+  let formattedData: string;
+  try {
+    formattedData = formatMessageData(data);
+  } catch {
+    // 循環参照など整形できない data でも、追加するログを落とさない
+    formattedData = "";
+  }
+  return `${message}\n${formattedData}`.slice(0, MAX_SEARCH_TEXT_LENGTH).toLowerCase();
+}
+
+/**
  * ログを 1 件追加する
  *
  * 行は追加時に作った vnode を使い回す (再描画しない) ため、`data` と `payload` は
@@ -98,6 +152,8 @@ export function addLog(
     timestamp,
     level,
     message,
+    source: extractLogSource(message),
+    searchText: buildLogSearchText(message, data),
     formattedTimestamp: formatAbsoluteTime(timestamp),
     formattedElapsed: formatElapsedTime(timestamp, firstTimestamp),
     formattedDelta: previous === undefined ? "" : formatDeltaTime(timestamp, previous.timestamp),

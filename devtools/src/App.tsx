@@ -26,20 +26,20 @@ export function App() {
     useCopyUrlButton(buildQueryString);
 
   return (
-    <div class="flex min-h-screen">
-      {/* メインコンテンツ */}
+    <div class="flex min-h-screen bg-slate-100">
+      {/* メインコンテンツ。十分に広い画面でパネルを開いている間だけ幅を空ける
+          (狭い画面ではパネルが全幅になるため、空けると本文が読めない) */}
       <div
-        class={`flex-1 bg-slate-100 min-h-screen transition-all duration-300 ${debugPanelOpen ? "mr-[640px]" : ""}`}
+        class={`flex-1 bg-slate-100 min-h-screen transition-all duration-300 ${debugPanelOpen ? "mr-0 lg:mr-[640px]" : ""}`}
       >
-        {/* 右上固定のボタン群 */}
-        <div
-          class={`fixed top-4 z-30 flex items-center gap-3 transition-all duration-300 ${debugPanelOpen ? "right-[656px]" : "right-4"}`}
-        >
+        {/* 右上固定のボタン群。パネルの開閉で位置を変えない (押した場所から
+            動くと押し直しづらい)。パネルはこのボタン群より下に開く */}
+        <div class="fixed top-4 right-4 z-30 flex items-center gap-3">
           {/* Copy URL ボタン */}
           <button
             onClick={copyUrlToClipboard}
             data-testid="copy-url"
-            class="p-4 rounded-xl shadow-lg transition-all flex items-center gap-2 bg-emerald-500 hover:bg-emerald-600 text-white font-medium"
+            class="w-40 p-4 rounded-xl shadow-lg transition-all flex items-center justify-center gap-2 bg-emerald-500 hover:bg-emerald-600 text-white font-medium"
             title="Copy URL with current settings"
           >
             <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -56,7 +56,7 @@ export function App() {
           {/* Debug ボタン */}
           <button
             onClick={toggleDebugPanel}
-            class={`p-4 rounded-xl shadow-lg transition-all flex items-center gap-2 ${
+            class={`relative p-4 rounded-xl shadow-lg transition-all flex items-center gap-2 ${
               debugPanelOpen ? "bg-slate-600 hover:bg-slate-700" : "bg-blue-500 hover:bg-blue-600"
             } text-white font-medium`}
             title="Debug Logs"
@@ -70,8 +70,13 @@ export function App() {
               />
             </svg>
             <span>Debug</span>
-            {/* ログ件数バッジ。件数を読むのはこのコンポーネントの中だけにする */}
-            {!debugPanelOpen && <DebugLogBadge />}
+            {/* ログ件数バッジ。件数を読むのはこのコンポーネントの中だけにする。
+                ボタンの幅を変えないよう、文字ではなくボタンの角に重ねる */}
+            {!debugPanelOpen && (
+              <span class="absolute -top-1 -right-1">
+                <DebugLogBadge />
+              </span>
+            )}
           </button>
         </div>
 
@@ -117,8 +122,11 @@ export function App() {
           {/* Connection Settings */}
           <ConnectionSettings />
 
-          {/* Main Content */}
-          <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* Main Content。パネルを開いて本文が狭くなるときは 1 列にする
+              (2 列のままだと入力欄がはみ出す) */}
+          <div
+            class={`grid grid-cols-1 gap-6 ${debugPanelOpen ? "2xl:grid-cols-2" : "lg:grid-cols-2"}`}
+          >
             {/* Publisher Panel。subscriber モードでは表示しない */}
             {currentMode !== "subscriber" && <PublisherPanel />}
 
