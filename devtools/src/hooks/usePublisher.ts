@@ -1403,7 +1403,7 @@ export function usePublisher() {
         onNewGroupRequest: (newGroupRequest) => {
           pub.newGroupRequestsReceived.value++;
           pub.newGroupRequested.value = true;
-          addLog("info", "NEW_GROUP_REQUEST received", {
+          addLog("info", "[publisher] NEW_GROUP_REQUEST received", {
             newGroupRequest: newGroupRequest.toString(),
           });
         },

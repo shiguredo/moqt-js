@@ -128,6 +128,31 @@ test("formatMessageData JSON-stringifies array with object elements", () => {
   assert.equal(result, JSON.stringify([{ a: 1 }], null, 2));
 });
 
+// Catalog は Media Timeline Template (§5.2.15) に [bigint, bigint] を含む。
+// JSON.stringify は bigint で例外になるため、表示を壊さず読める形にする。
+test("formatMessageData は catalog の bigint を文字列にして表示する", () => {
+  const result = formatMessageData({
+    catalog: {
+      tracks: [{ name: "video", mediaTimelineTemplate: [0, 0, [1n, 2n], [0n, 0n], 0, 0] }],
+    },
+  });
+  // bigint の値が読め、キーも残る (例外にならない)
+  assert.ok(result.includes('"1"'));
+  assert.ok(result.includes("mediaTimelineTemplate"));
+});
+
+test("formatMessageData はオブジェクトを含む配列の bigint でも throw しない", () => {
+  const result = formatMessageData([{ location: [1n, 2n] }]);
+  assert.ok(result.includes('"1"'));
+});
+
+test("formatMessageData は JSON にできない値を (unserializable) として表示する", () => {
+  const circular: Record<string, unknown> = {};
+  circular["self"] = circular;
+  const result = formatMessageData({ catalog: circular });
+  assert.ok(result.includes("(unserializable)"));
+});
+
 test("formatMessageData returns empty string for empty object", () => {
   assert.equal(formatMessageData({}), "");
 });

@@ -31,6 +31,19 @@ function getLevelColor(level: LogLevel): string {
 }
 
 /**
+ * 展開した行の data を表示用に整形する
+ *
+ * 整形できない data (循環参照など) でもパネルの行を壊さない。
+ */
+function formatRowData(data: unknown): string {
+  try {
+    return formatMessageData(data);
+  } catch {
+    return "(unserializable)";
+  }
+}
+
+/**
  * デバッグログの 1 行
  *
  * 時刻は追加時に整形済みの値 (`formattedTimestamp` / `formattedElapsed` /
@@ -47,6 +60,12 @@ export function DebugLogRow({
   onSelectViewMode,
 }: DebugLogRowProps) {
   const logId = entry.id;
+  const hasData = entry.data !== undefined;
+  const payload = entry.payload;
+  const hasPayload = payload !== undefined;
+  // data を持たず payload だけを持つ行は、展開したら Binary を出す。data の空文字を
+  // 出すと、展開しても何も見えない行になる
+  const effectiveViewMode = !hasData && hasPayload ? "binary" : viewMode;
 
   return (
     <div
@@ -56,7 +75,7 @@ export function DebugLogRow({
     >
       <div class="flex gap-2 p-2 items-center">
         {/* 展開アイコン */}
-        {entry.data !== undefined && (
+        {(hasData || hasPayload) && (
           <svg
             class={`w-4 h-4 text-slate-400 transition-transform ${isExpanded ? "rotate-90" : ""}`}
             fill="none"
@@ -71,7 +90,14 @@ export function DebugLogRow({
             />
           </svg>
         )}
-        {entry.data === undefined && <div class="w-4" />}
+        {!hasData && !hasPayload && <div class="w-4" />}
+        {/* 重要度。色だけに頼らず、行をコピーしたときや色覚に依らず読めるようにする */}
+        <span
+          data-testid="debug-log-level"
+          class="shrink-0 w-12 text-xs font-semibold tracking-wide"
+        >
+          {entry.level.toUpperCase()}
+        </span>
         {/* タイムスタンプ列 */}
         <div class="flex flex-col text-xs whitespace-nowrap min-w-[140px]">
           <span class="text-slate-600 font-medium">{entry.formattedTimestamp}</span>
@@ -122,44 +148,47 @@ export function DebugLogRow({
         </button>
       </div>
       {/* データ（展開時のみ表示） */}
-      {isExpanded && (entry.data !== undefined || entry.payload !== undefined) && (
+      {isExpanded && (hasData || hasPayload) && (
         <div class="mx-2 mb-2">
-          {/* タブ */}
-          {entry.payload !== undefined && (
+          {/* タブ。payload を持つ行だけ Binary を選べる。data を持たない行は
+              Data タブを出さない (中身が空になるため) */}
+          {hasPayload && (
             <div class="flex gap-1 mb-1">
-              <button
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onSelectViewMode(logId, "data");
-                }}
-                class={`px-2 py-0.5 text-xs rounded-t transition-colors ${
-                  viewMode === "data"
-                    ? "bg-white/70 text-slate-700 font-medium"
-                    : "bg-white/30 text-slate-500 hover:bg-white/50"
-                }`}
-              >
-                Data
-              </button>
+              {hasData && (
+                <button
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onSelectViewMode(logId, "data");
+                  }}
+                  class={`px-2 py-0.5 text-xs rounded-t transition-colors ${
+                    effectiveViewMode === "data"
+                      ? "bg-white/70 text-slate-700 font-medium"
+                      : "bg-white/30 text-slate-500 hover:bg-white/50"
+                  }`}
+                >
+                  Data
+                </button>
+              )}
               <button
                 onClick={(event) => {
                   event.stopPropagation();
                   onSelectViewMode(logId, "binary");
                 }}
                 class={`px-2 py-0.5 text-xs rounded-t transition-colors ${
-                  viewMode === "binary"
+                  effectiveViewMode === "binary"
                     ? "bg-white/70 text-slate-700 font-medium"
                     : "bg-white/30 text-slate-500 hover:bg-white/50"
                 }`}
               >
-                Binary ({entry.payload.length} bytes)
+                Binary ({payload.length} bytes)
               </button>
             </div>
           )}
           {/* コンテンツ */}
           <pre class="text-xs p-3 bg-white/70 rounded overflow-auto max-h-96">
-            {viewMode === "binary" && entry.payload !== undefined
-              ? formatHexDump(entry.payload)
-              : formatMessageData(entry.data)}
+            {effectiveViewMode === "binary" && payload !== undefined
+              ? formatHexDump(payload)
+              : formatRowData(entry.data)}
           </pre>
         </div>
       )}

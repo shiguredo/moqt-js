@@ -147,10 +147,13 @@ export function formatSnapshotSection(title: string, snapshot: object): string {
  * ログ 1 件をテキストにする
  *
  * 行のコピーと一括コピーで同じ整形を使う。時刻は追加時に整形済みのため、
- * ここでは整形し直さない。
+ * ここでは整形し直さない。重要度は行の色ではなく文字で持たせる (貼り付けた先で
+ * error と info を区別できるようにする)。
  */
 export function formatLogEntryText(entry: LogEntry): string {
-  const parts: string[] = [`${entry.formattedTimestamp} ${entry.message}`];
+  const parts: string[] = [
+    `${entry.formattedTimestamp} [${entry.level.toUpperCase()}] ${entry.message}`,
+  ];
   if (entry.data !== undefined) {
     parts.push(formatMessageData(entry.data));
   }

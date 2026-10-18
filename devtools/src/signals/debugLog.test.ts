@@ -2,6 +2,7 @@ import { test, assert, beforeEach } from "vite-plus/test";
 import { effect } from "@preact/signals";
 import {
   MAX_LOGS,
+  MAX_SEARCH_TEXT_LENGTH,
   __resetLogStateForTest,
   addLog,
   clearLog,
@@ -196,6 +197,79 @@ test("addLog: data と payload は渡したときだけ載る", () => {
   assert.notProperty(withData, "payload");
   assert.notProperty(withPayload, "data");
   assert.deepEqual(withPayload.payload, new Uint8Array([1, 2, 3]));
+});
+
+test("addLog: 行頭の接続識別子を source として取り出す", () => {
+  // 接続元での絞り込みはメッセージ文字列の部分一致ではなく、行頭の識別子で行う。
+  // 追加時に 1 回だけ取り出し、行の表示を組み立て直さずに使えるようにする
+  addLog("info", "[publisher] [SEND] SUBSCRIBE");
+  addLog("info", "[subscriber-1] video stream ended");
+  addLog("info", "NEW_GROUP_REQUEST received");
+  // 本文の角括弧 (重要度など) は接続元と誤認しない
+  addLog("info", "[WARN] bracket-only");
+
+  const [publisher, subscriber, noSource, bracketOnly] = getLogBuffer();
+  assert.equal(publisher?.source, "publisher");
+  assert.equal(subscriber?.source, "subscriber-1");
+  // 識別子で始まらない行は接続元を持たない
+  assert.equal(noSource?.source, null);
+  assert.equal(bracketOnly?.source, null);
+});
+
+test("addLog: 検索用の文字列を追加時に作る", () => {
+  // 検索のたびに data を整形し直さないよう、表示と同じ整形結果を小文字化して
+  // 追加時に持つ。data の項目 (Request ID など) でも検索できる
+  addLog("info", "[publisher] [SEND] SUBSCRIBE", {
+    requestId: 7,
+    trackNamespace: ["room"],
+    trackName: "video",
+  });
+  addLog("info", "Plain Message");
+
+  const [withData, noData] = getLogBuffer();
+  assert.include(withData?.searchText ?? "", "[publisher] [send] subscribe");
+  assert.include(withData?.searchText ?? "", "request id: 7");
+  assert.include(withData?.searchText ?? "", "full track name: room--video");
+  assert.equal(noData?.searchText, "plain message");
+});
+
+test("addLog: bigint を含む catalog の data でも検索用の文字列を作れる", () => {
+  // Catalog は Media Timeline Template に [bigint, bigint] を含む。
+  // 検索用の文字列を作る経路で例外にならないこと
+  addLog("info", "[subscriber-1] [RECV] OBJECT", {
+    catalog: { tracks: [{ mediaTimelineTemplate: [0, 0, [1n, 2n]] }] },
+  });
+
+  const [entry] = getLogBuffer();
+  assert.isDefined(entry);
+  assert.include(entry.searchText, "mediatimelinetemplate");
+  assert.include(entry.searchText, '"1"');
+});
+
+test("addLog: 循環参照を含む data でもログを失わない", () => {
+  // 検索用の文字列は data を整形して作る。整形できない data (循環参照) で
+  // 例外を投げると、debug callback の経路まで壊れる。ログ自体は残すこと
+  const circular: Record<string, unknown> = {};
+  circular["self"] = circular;
+  addLog("info", "[publisher] circular data", circular);
+
+  const [entry] = getLogBuffer();
+  assert.isDefined(entry);
+  assert.equal(entry.message, "[publisher] circular data");
+  assert.include(entry.searchText, "[publisher] circular data");
+  assert.strictEqual(entry.data, circular);
+});
+
+test("addLog: 検索用の文字列は上限で切る", () => {
+  // Catalog のように data が大きいログを 1,000 件保持しても、検索用の文字列で
+  // メモリを圧迫しないこと。行頭のメッセージは残る
+  const hugeValue = "x".repeat(MAX_SEARCH_TEXT_LENGTH * 2);
+  addLog("info", "[publisher] big data", { value: hugeValue });
+
+  const [entry] = getLogBuffer();
+  assert.isDefined(entry);
+  assert.isAtMost(entry.searchText.length, MAX_SEARCH_TEXT_LENGTH);
+  assert.include(entry.searchText, "[publisher] big data");
 });
 
 test("clearLog: ログを空にし、次のログを経過時間の基準にする", () => {

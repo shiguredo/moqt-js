@@ -75,6 +75,29 @@ export function isParameter(key: string): boolean {
 }
 
 /**
+ * 値を JSON として整形する
+ *
+ * Catalog は Media Timeline Template に `[bigint, bigint]` を含むため、
+ * `JSON.stringify` をそのまま呼ぶと bigint で例外になる。bigint は文字列へ
+ * 置き換える。循環参照など JSON にできない値でも表示を壊さないよう、そのときは
+ * 読める文字列を返す。
+ */
+function formatJsonValue(value: unknown): string {
+  try {
+    return (
+      JSON.stringify(
+        value,
+        (_key, item: unknown) => (typeof item === "bigint" ? item.toString() : item),
+        2,
+      ) ?? String(value)
+    );
+  } catch {
+    // 循環参照など、JSON にできない値
+    return "(unserializable)";
+  }
+}
+
+/**
  * RFC 仕様書風のフォーマット
  *
  * trackNamespace + trackName の組は `Full Track Name: room-123--video` の 1 行に
@@ -107,7 +130,7 @@ export function formatMessageData(data: unknown, indent = 0): string {
     }
     const hasObjects = data.some((item) => typeof item === "object" && item !== null);
     if (hasObjects) {
-      return JSON.stringify(data, null, 2);
+      return formatJsonValue(data);
     }
     return `[${data.join(", ")}]`;
   }
@@ -163,7 +186,7 @@ export function formatMessageData(data: unknown, indent = 0): string {
   for (const [key, value] of fields) {
     const displayName = RFC_FIELD_NAMES[key] ?? key;
     if (key === "catalog" && typeof value === "object" && value !== null) {
-      const jsonStr = JSON.stringify(value, null, 2);
+      const jsonStr = formatJsonValue(value);
       const indentedJson = jsonStr
         .split("\n")
         .map((line, i) => (i === 0 ? line : `${spaces}  ${line}`))
