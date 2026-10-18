@@ -60,6 +60,47 @@ async function readPublisherStats(page: Page): Promise<DevtoolsPublisherStats> {
   });
 }
 
+/** AAC の実符号化確認の結果 (devtools の publisher が使う判定と同じ形) */
+interface AacEncoderProbe {
+  supported: boolean;
+  reason?: string;
+}
+
+/**
+ * このブラウザが AAC を実際に符号化できるかを、devtools と同じ判定で確かめる
+ *
+ * AAC の符号化はプラットフォームのエンコーダーに依存する。macOS は AudioToolbox、
+ * Windows は Media Foundation を使うが、Linux の Chrome には AAC エンコーダーが無い。
+ * CI の runner は Linux のため、AAC の実リレー配信を確かめる前に、実行環境で符号化
+ * できるかを判定する。判定規則を二重に持たないよう、devtools が読み込んだ
+ * src/codec/configSupport.ts の実体を performance の取得結果から探して import する
+ */
+async function probeAacEncoding(page: Page): Promise<AacEncoderProbe> {
+  return page.evaluate(async () => {
+    const moduleUrl = performance
+      .getEntriesByType("resource")
+      .map((entry) => entry.name)
+      .find((name) => name.includes("/src/codec/configSupport.ts"));
+    if (moduleUrl === undefined) {
+      throw new Error("configSupport.ts is not loaded by the devtools page");
+    }
+    const module = (await import(moduleUrl)) as {
+      probeAudioEncoderConfig: (config: {
+        codec: string;
+        sampleRate: number;
+        numberOfChannels: number;
+        bitrate: number;
+      }) => Promise<AacEncoderProbe>;
+    };
+    return module.probeAudioEncoderConfig({
+      codec: "mp4a.40.2",
+      sampleRate: 48_000,
+      numberOfChannels: 2,
+      bitrate: 96_000,
+    });
+  });
+}
+
 test("MediaStreamTrackProcessor が無いブラウザでも moqt-devtools のダミー音声が実リレー経由で届く", async ({
   browser,
 }) => {
@@ -210,6 +251,17 @@ test("moqt-devtools のダミー音声を AAC で符号化して実リレー経�
   try {
     await publisherPage.goto(`${DEVTOOLS_URL}?${params.toString()}`);
     await expect(publisherPage.getByTestId("moqt-uri")).toHaveValue(moqtUri);
+    // AAC を符号化できない環境 (CI の Linux など) では、この経路を確かめずに skip する。
+    // 配信を始めてからでは、失敗した理由が対象の不具合か環境の制約かを切り分けられない
+    const aacEncoding = await probeAacEncoding(publisherPage);
+    if (!aacEncoding.supported) {
+      const reason = aacEncoding.reason === undefined ? "" : `: ${aacEncoding.reason}`;
+      test.skip(
+        true,
+        `このブラウザは AAC を符号化できないため、AAC の実リレー配信を確かめない${reason}`,
+      );
+      return;
+    }
     await expect(publisherPage.getByTestId("audio-track-advertised")).toHaveText("Yes");
     const effectiveNamespace = parseTrackNamespace(
       await publisherPage.getByTestId("namespace").inputValue(),
