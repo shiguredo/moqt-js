@@ -435,6 +435,7 @@ export function SubscriberPanel({
         {/* Video。Audio と同じ枠で囲み、映像からは読み取れない値 (表示 fps、受信から
             表示までと復号の遅延、捨てたフレーム数) をヘッダーに出す */}
         <SubscriberVideoCard
+          subscriberId={subscriberId}
           statsSignal={statsSignal}
           subscriberActive={instance.subscriber.value !== null}
         >
@@ -1275,10 +1276,12 @@ function SubscriberStats({ statsSignal }: { statsSignal: ReadonlySignal<Subscrib
  * まとめて読み直し、このコンポーネントだけを描き直す
  */
 function SubscriberVideoCard({
+  subscriberId,
   statsSignal,
   subscriberActive,
   children,
 }: {
+  subscriberId: string;
   statsSignal: ReadonlySignal<SubscriberStats | null>;
   subscriberActive: boolean;
   children: ComponentChildren;
@@ -1297,6 +1300,7 @@ function SubscriberVideoCard({
   return (
     <VideoCard
       testIdPrefix="subscriber-video"
+      lightboxKey={`subscriber-video-${subscriberId}`}
       fps={subscriberActive ? stats.playoutTiming.displayFps : null}
       latency={[
         {
