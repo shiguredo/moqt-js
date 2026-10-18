@@ -496,6 +496,7 @@ moqt-js を利用した MOQT の動作確認ツールです。
 - WebCodecs Dedicated Worker 対応 (音声 / 映像、エンコーダー / デコーダー)
 - 音声レベルメーター (peak / RMS / 波形)
 - 音声と映像の同期再生
+- 映像の拡大表示 (ライトボックス: 通常表示の 2 倍の幅 / 全画面)
 - Jitter Buffer の有効 / 無効の選択 (LOC TIMESTAMP に合わせて映像を表示する)
 - 音声の再生先の選択
 - event timeline のメッセージ送受信

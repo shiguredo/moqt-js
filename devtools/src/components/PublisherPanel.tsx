@@ -623,6 +623,7 @@ function PublisherVideoCard({
   return (
     <VideoCard
       testIdPrefix="publisher-video"
+      lightboxKey="publisher-video"
       fps={pub.publisher.value === null ? null : stats.publishTiming.encodedFps}
       latency={[
         {
