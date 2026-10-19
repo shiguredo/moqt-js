@@ -266,3 +266,30 @@ test("SubscriberPreDecodeDelay: 上限超過の短縮を音声と映像で揃え
   assert.isAbove(videoDue.flat().length, 0, "映像の期限も前倒しされること");
   assert.isBelow(clock.now(), 1_000, "元の期限より前に通知すること");
 });
+
+// キューが空になったら短縮を解除し、次の Object は元の遅延で待つ。
+test("SubscriberPreDecodeDelay: キューが空になったら短縮を解除する", () => {
+  const { delay, clock, audioDue } = makeDelay({
+    maxBytes: 50,
+    bytesOfVideo: () => 20,
+    bytesOfAudio: () => 20,
+  });
+  delay.start(1_000);
+  delay.pushVideo(makeItem(0));
+  delay.pushVideo(makeItem(1));
+  delay.pushVideo(makeItem(2));
+  delay.pushAudio(makeItem(3));
+
+  // 前倒しされた期限で通知し、両方のキューが空になって短縮が解除される
+  clock.advance(2_000);
+  assert.equal(delay.videoSize, 0);
+  assert.equal(delay.audioSize, 0);
+
+  // 空になった後の Object は元の遅延 (1,000 ms) で待つ
+  delay.pushAudio(makeItem(9));
+  const dueCount = audioDue.length;
+  clock.advance(999);
+  assert.equal(audioDue.length, dueCount, "元の遅延の前では通知しないこと");
+  clock.advance(1);
+  assert.deepEqual(audioDue.at(-1), [makeItem(9)], "元の期限で通知すること");
+});

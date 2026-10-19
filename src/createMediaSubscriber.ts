@@ -771,7 +771,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
         }
       },
       onOverflow: (overflow) => this.notifyPreDecodeOverflow("audio", overflow),
-      onDelayShortenChanged: () => this.synchronizePreDecodeDelayShorten(),
+      onDelayShortenChanged: (reset) => this.synchronizePreDecodeDelayShorten(reset),
       onDueError: (error) => this.notifyPreDecodeDueError(error),
     });
   }
@@ -801,7 +801,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
         }
       },
       onOverflow: (overflow) => this.notifyPreDecodeOverflow("video", overflow),
-      onDelayShortenChanged: () => this.synchronizePreDecodeDelayShorten(),
+      onDelayShortenChanged: (reset) => this.synchronizePreDecodeDelayShorten(reset),
       onDueError: (error) => this.notifyPreDecodeDueError(error),
     });
   }
@@ -811,17 +811,20 @@ export class MediaSubscriberImpl implements MediaSubscriber {
    *
    * 上限超過による遅延の短縮はメディアごとのキューで起きる。片方だけ短くなると、表示時刻の
    * 基準の遅れがメディアごとにずれ、A/V 同期を合わせられなくなる。短縮量の大きい方 (実効
-   * 的な遅延が短い方) に両方を揃え、同じ遅延で復号する。
+   * 的な遅延が短い方) に両方を揃え、同じ遅延で復号する。一方のキューが空になって短縮が
+   * 解除されたときは両方を解除し、次の Object から元の遅延へ戻す。
    *
    * 段の通知から呼ばれるため、揃える操作が再び通知しないようフラグで止める。
+   *
+   * @param reset - キューが空になって短縮が解除されたかどうか
    */
-  private synchronizePreDecodeDelayShorten(): void {
+  private synchronizePreDecodeDelayShorten(reset: boolean): void {
     const audioStage = this.audioPreDecodeStage;
     const videoStage = this.videoPreDecodeStage;
     if (audioStage === null || videoStage === null || this.synchronizingPreDecodeDelay) {
       return;
     }
-    const shortenMs = Math.max(audioStage.delayShortenMs, videoStage.delayShortenMs);
+    const shortenMs = reset ? 0 : Math.max(audioStage.delayShortenMs, videoStage.delayShortenMs);
     if (audioStage.delayShortenMs === shortenMs && videoStage.delayShortenMs === shortenMs) {
       return;
     }
@@ -845,12 +848,18 @@ export class MediaSubscriberImpl implements MediaSubscriber {
    */
   private notifyPreDecodeOverflow(
     kind: "audio" | "video",
-    overflow: { dropped: number; delayMs: number; effectiveDelayMs: number },
+    overflow: {
+      dropped: number;
+      size: number;
+      bufferedBytes: number;
+      delayMs: number;
+      effectiveDelayMs: number;
+    },
   ): void {
     try {
       this.callbacks.onError?.(
         new Error(
-          `${kind} pre-decode delay queue overflow: dropped=${overflow.dropped}, delayMs=${overflow.delayMs}, effectiveDelayMs=${overflow.effectiveDelayMs}`,
+          `${kind} pre-decode delay queue overflow: dropped=${overflow.dropped}, size=${overflow.size}, bufferedBytes=${overflow.bufferedBytes}, delayMs=${overflow.delayMs}, effectiveDelayMs=${overflow.effectiveDelayMs}`,
         ),
       );
     } catch {

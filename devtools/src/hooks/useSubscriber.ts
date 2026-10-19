@@ -1045,7 +1045,9 @@ export function useSubscriber(
     addLog("warn", `[${subscriberId}] pre-decode delay queue overflow`, {
       media: overflow.media,
       delayMs: overflow.delayMs,
+      effectiveDelayMs: overflow.effectiveDelayMs,
       dropped: overflow.dropped,
+      size: overflow.size,
     });
   }
 
@@ -2072,8 +2074,9 @@ export function useSubscriber(
         inputLagMs: input?.inputLagMs ?? null,
         // 意図した復号前の遅延は復号器に溜まった遅れではない。追いつきの判定から差し引く。
         // 設定値ではなく、その Object を実際に保持した時間を使う (遅延の変更と上限超過の
-        // 短縮のどちらでも実際の値とずれるため)
-        intentionalDelayMs: input?.intentionalDelayMs ?? 0,
+        // 短縮のどちらでも実際の値とずれるため)。対応が引けない出力では設定値へ戻し、
+        // 遅延中に 0 を引いて誤発動しないようにする
+        intentionalDelayMs: input?.intentionalDelayMs ?? preDecodeDelayRef.current?.delayMs ?? 0,
         timeline: playoutTimelineRef.current,
         useTimeline: jitterBufferEnabledRef.current,
         enforceTarget: jitterBufferEnabledRef.current,

@@ -80,17 +80,12 @@ export class SubscriberPreDecodeDelay<TVideo, TAudio> {
     return this.delayMsValue;
   }
 
-  /** いまの実効的な遅延 (ミリ秒)。上限超過で短縮されているときは設定値より小さい */
-  get effectiveDelayMs(): number {
-    return this.audioStage?.effectiveDelayMs ?? this.delayMsValue;
-  }
-
-  /** 映像の段が保持している件数 (テストと計器の確認用) */
+  /** 映像の段が保持している件数 (テスト用) */
   get videoSize(): number {
     return this.videoStage?.size ?? 0;
   }
 
-  /** 音声の段が保持している件数 (テストと計器の確認用) */
+  /** 音声の段が保持している件数 (テスト用) */
   get audioSize(): number {
     return this.audioStage?.size ?? 0;
   }
@@ -190,16 +185,19 @@ export class SubscriberPreDecodeDelay<TVideo, TAudio> {
    * 音声と映像の段の実効的な遅延を揃える
    *
    * 上限超過による遅延の短縮はメディアごとのキューで起きる。片方だけ短くなると A/V の
-   * 表示時刻がずれるため、短縮量の大きい方 (実効的な遅延が短い方) に両方を揃える。
+   * 表示時刻がずれるため、短縮量の大きい方 (実効的な遅延が短い方) に両方を揃える。一方の
+   * キューが空になって短縮が解除されたときは両方を解除する。
    * 段の通知から呼ばれるため、揃える操作が再び通知しないようフラグで止める。
+   *
+   * @param reset - キューが空になって短縮が解除されたかどうか
    */
-  private synchronizeDelayShorten(): void {
+  private synchronizeDelayShorten(reset: boolean): void {
     const videoStage = this.videoStage;
     const audioStage = this.audioStage;
     if (videoStage === null || audioStage === null || this.synchronizing) {
       return;
     }
-    const shortenMs = Math.max(videoStage.delayShortenMs, audioStage.delayShortenMs);
+    const shortenMs = reset ? 0 : Math.max(videoStage.delayShortenMs, audioStage.delayShortenMs);
     if (videoStage.delayShortenMs === shortenMs && audioStage.delayShortenMs === shortenMs) {
       return;
     }
@@ -219,7 +217,7 @@ export class SubscriberPreDecodeDelay<TVideo, TAudio> {
       bytesOf: this.options.bytesOfVideo,
       onDue: this.options.onVideoDue,
       onOverflow: (overflow) => this.options.onOverflow({ media: "video", ...overflow }),
-      onDelayShortenChanged: () => this.synchronizeDelayShorten(),
+      onDelayShortenChanged: (reset) => this.synchronizeDelayShorten(reset),
       ...(this.options.onDueError === undefined ? {} : { onDueError: this.options.onDueError }),
       ...(this.options.clock === undefined ? {} : { clock: this.options.clock }),
       ...(this.options.maxBytes === undefined ? {} : { maxBytes: this.options.maxBytes }),
@@ -234,7 +232,7 @@ export class SubscriberPreDecodeDelay<TVideo, TAudio> {
       bytesOf: this.options.bytesOfAudio,
       onDue: this.options.onAudioDue,
       onOverflow: (overflow) => this.options.onOverflow({ media: "audio", ...overflow }),
-      onDelayShortenChanged: () => this.synchronizeDelayShorten(),
+      onDelayShortenChanged: (reset) => this.synchronizeDelayShorten(reset),
       ...(this.options.onDueError === undefined ? {} : { onDueError: this.options.onDueError }),
       ...(this.options.clock === undefined ? {} : { clock: this.options.clock }),
       ...(this.options.maxBytes === undefined ? {} : { maxBytes: this.options.maxBytes }),
