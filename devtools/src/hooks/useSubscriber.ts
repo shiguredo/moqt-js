@@ -579,6 +579,14 @@ export interface DecodeInput {
    * 壁時計の TIMESTAMP (Timescale なし) を持つ音だけ測れる
    */
   readonly inputLagMs: number | null;
+  /**
+   * 復号へ渡すまで実際に保持した時間 (ミリ秒)
+   *
+   * 復号前の遅延で保持した時間である。受信側の追いつき (`src/playout/audioReceiveCatchUp.ts`)
+   * が出力の遅れから差し引く。動的に遅延を変えた場合や上限超過で短縮された場合に備え、
+   * 設定値ではなく実際に保持した時間を使う
+   */
+  readonly intentionalDelayMs: number;
 }
 
 /**
@@ -1726,6 +1734,8 @@ export function useSubscriber(
           timestampKind,
           location: { group: obj.groupId, object: obj.objectId },
           inputLagMs,
+          // 復号へ渡すまで実際に保持した時間 (遅延の変更や上限超過の短縮も含む)
+          intentionalDelayMs: Math.max(0, performance.now() - receivedAtMs),
         });
 
         audioDecoderInstance.decode(obj.payload, "key", timestamp, 0);
@@ -2060,8 +2070,10 @@ export function useSubscriber(
         // 引いて「復号が足している遅れ」を求める。対応が引けなかったときは、どの音の遅れか
         // 決められないため渡さない (出力の遅れだけを使う)
         inputLagMs: input?.inputLagMs ?? null,
-        // 意図した復号前の遅延は復号器に溜まった遅れではない。追いつきの判定から差し引く
-        intentionalDelayMs: preDecodeDelayRef.current?.delayMs ?? 0,
+        // 意図した復号前の遅延は復号器に溜まった遅れではない。追いつきの判定から差し引く。
+        // 設定値ではなく、その Object を実際に保持した時間を使う (遅延の変更と上限超過の
+        // 短縮のどちらでも実際の値とずれるため)
+        intentionalDelayMs: input?.intentionalDelayMs ?? 0,
         timeline: playoutTimelineRef.current,
         useTimeline: jitterBufferEnabledRef.current,
         enforceTarget: jitterBufferEnabledRef.current,

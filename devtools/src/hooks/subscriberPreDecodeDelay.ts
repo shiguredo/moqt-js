@@ -58,6 +58,10 @@ export class SubscriberPreDecodeDelay<TVideo, TAudio> {
   private videoStage: PreDecodeDelayStage<TVideo> | null = null;
   private audioStage: PreDecodeDelayStage<TAudio> | null = null;
   private delayMsValue = 0;
+  // start 済みか。未 start の setDelayMs は値を覚えるだけにする
+  private started = false;
+  // 音声と映像の短縮量を揃える操作の再入を止めるフラグ
+  private synchronizing = false;
 
   /**
    * @param options - 期限の通知先、バイト数の数え方、時計
@@ -74,6 +78,11 @@ export class SubscriberPreDecodeDelay<TVideo, TAudio> {
   /** 現在の遅延 (ミリ秒)。段を持っていない間も最後に設定した値を返す */
   get delayMs(): number {
     return this.delayMsValue;
+  }
+
+  /** いまの実効的な遅延 (ミリ秒)。上限超過で短縮されているときは設定値より小さい */
+  get effectiveDelayMs(): number {
+    return this.audioStage?.effectiveDelayMs ?? this.delayMsValue;
   }
 
   /** 映像の段が保持している件数 (テストと計器の確認用) */
@@ -95,6 +104,7 @@ export class SubscriberPreDecodeDelay<TVideo, TAudio> {
    */
   start(delayMs: number): void {
     this.stop();
+    this.started = true;
     this.delayMsValue = delayMs;
     if (delayMs <= 0) {
       return;
@@ -105,6 +115,7 @@ export class SubscriberPreDecodeDelay<TVideo, TAudio> {
 
   /** 購読の停止時に、段とタイマーを破棄する */
   stop(): void {
+    this.started = false;
     this.videoStage?.stop();
     this.videoStage = null;
     this.audioStage?.stop();
@@ -122,6 +133,10 @@ export class SubscriberPreDecodeDelay<TVideo, TAudio> {
    */
   setDelayMs(value: number): void {
     this.delayMsValue = value;
+    if (!this.started) {
+      // 購読していない間は値を覚えるだけで、段は作らない (次の start で使う)
+      return;
+    }
     if (value <= 0) {
       this.videoStage?.flush();
       this.videoStage?.stop();
@@ -171,6 +186,32 @@ export class SubscriberPreDecodeDelay<TVideo, TAudio> {
     return true;
   }
 
+  /**
+   * 音声と映像の段の実効的な遅延を揃える
+   *
+   * 上限超過による遅延の短縮はメディアごとのキューで起きる。片方だけ短くなると A/V の
+   * 表示時刻がずれるため、短縮量の大きい方 (実効的な遅延が短い方) に両方を揃える。
+   * 段の通知から呼ばれるため、揃える操作が再び通知しないようフラグで止める。
+   */
+  private synchronizeDelayShorten(): void {
+    const videoStage = this.videoStage;
+    const audioStage = this.audioStage;
+    if (videoStage === null || audioStage === null || this.synchronizing) {
+      return;
+    }
+    const shortenMs = Math.max(videoStage.delayShortenMs, audioStage.delayShortenMs);
+    if (videoStage.delayShortenMs === shortenMs && audioStage.delayShortenMs === shortenMs) {
+      return;
+    }
+    this.synchronizing = true;
+    try {
+      videoStage.setDelayShortenMs(shortenMs);
+      audioStage.setDelayShortenMs(shortenMs);
+    } finally {
+      this.synchronizing = false;
+    }
+  }
+
   /** 映像の段を作る */
   private createVideoStage(delayMs: number): PreDecodeDelayStage<TVideo> {
     return new PreDecodeDelayStage<TVideo>({
@@ -178,6 +219,7 @@ export class SubscriberPreDecodeDelay<TVideo, TAudio> {
       bytesOf: this.options.bytesOfVideo,
       onDue: this.options.onVideoDue,
       onOverflow: (overflow) => this.options.onOverflow({ media: "video", ...overflow }),
+      onDelayShortenChanged: () => this.synchronizeDelayShorten(),
       ...(this.options.onDueError === undefined ? {} : { onDueError: this.options.onDueError }),
       ...(this.options.clock === undefined ? {} : { clock: this.options.clock }),
       ...(this.options.maxBytes === undefined ? {} : { maxBytes: this.options.maxBytes }),
@@ -192,6 +234,7 @@ export class SubscriberPreDecodeDelay<TVideo, TAudio> {
       bytesOf: this.options.bytesOfAudio,
       onDue: this.options.onAudioDue,
       onOverflow: (overflow) => this.options.onOverflow({ media: "audio", ...overflow }),
+      onDelayShortenChanged: () => this.synchronizeDelayShorten(),
       ...(this.options.onDueError === undefined ? {} : { onDueError: this.options.onDueError }),
       ...(this.options.clock === undefined ? {} : { clock: this.options.clock }),
       ...(this.options.maxBytes === undefined ? {} : { maxBytes: this.options.maxBytes }),

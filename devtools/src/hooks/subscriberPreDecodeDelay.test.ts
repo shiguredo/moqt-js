@@ -27,7 +27,14 @@ interface TestItem {
 const bytesOfItem = (item: TestItem): number => item.bytes;
 
 /** 遅延の管理と、期限の通知・上限超過の記録を作る */
-function makeDelay(): {
+function makeDelay(
+  options: {
+    maxBytes?: number;
+    maxObjects?: number;
+    bytesOfVideo?: (item: TestItem) => number;
+    bytesOfAudio?: (item: TestItem) => number;
+  } = {},
+): {
   delay: SubscriberPreDecodeDelay<TestItem, TestItem>;
   clock: FakePreDecodeDelayClock;
   videoDue: TestItem[][];
@@ -39,8 +46,8 @@ function makeDelay(): {
   const audioDue: TestItem[][] = [];
   const overflows: SubscriberPreDecodeDelayOverflow[] = [];
   const delay = new SubscriberPreDecodeDelay<TestItem, TestItem>({
-    bytesOfVideo: bytesOfItem,
-    bytesOfAudio: bytesOfItem,
+    bytesOfVideo: options.bytesOfVideo ?? bytesOfItem,
+    bytesOfAudio: options.bytesOfAudio ?? bytesOfItem,
     onVideoDue: (items) => {
       videoDue.push([...items]);
     },
@@ -51,6 +58,8 @@ function makeDelay(): {
       overflows.push(overflow);
     },
     clock,
+    ...(options.maxBytes === undefined ? {} : { maxBytes: options.maxBytes }),
+    ...(options.maxObjects === undefined ? {} : { maxObjects: options.maxObjects }),
   });
   return { delay, clock, videoDue, audioDue, overflows };
 }
@@ -220,4 +229,40 @@ test("SubscriberPreDecodeDelay: 音声と映像の件数を別々に持つ", () 
   clock.advance(100);
   assert.equal(delay.videoSize, 0);
   assert.equal(delay.audioSize, 0);
+});
+
+// start する前の setDelayMs は値を覚えるだけで、段を作らない。
+test("SubscriberPreDecodeDelay: start 前の setDelayMs は段を作らない", () => {
+  const { delay } = makeDelay();
+  delay.setDelayMs(100);
+  assert.isFalse(delay.isActive, "購読していない間は段を作らないこと");
+  assert.equal(delay.delayMs, 100, "設定値は覚えること");
+  assert.isFalse(delay.pushVideo(makeItem(0)));
+
+  delay.start(100);
+  assert.isTrue(delay.isActive, "start で段を作ること");
+  assert.isTrue(delay.pushVideo(makeItem(0)));
+});
+
+// 上限超過による短縮は音声と映像で揃える (片方だけ短くなると A/V の表示時刻がずれる)。
+test("SubscriberPreDecodeDelay: 上限超過の短縮を音声と映像で揃える", () => {
+  // 1 件 20 バイトで 50 バイトまでしか保持できない
+  const { delay, clock, videoDue, audioDue } = makeDelay({
+    maxBytes: 50,
+    bytesOfVideo: () => 20,
+    bytesOfAudio: () => 20,
+  });
+  delay.start(1_000);
+
+  // 映像だけ上限超過させる (3 件目で 60 バイトになる)
+  delay.pushVideo(makeItem(0));
+  delay.pushVideo(makeItem(1));
+  delay.pushVideo(makeItem(2));
+  delay.pushAudio(makeItem(3));
+
+  // 映像の短縮に音声も揃うため、音声も元の期限 (1,000 ms) より前に通知される
+  clock.advance(10);
+  assert.isAbove(audioDue.flat().length, 0, "音声の期限も前倒しされること");
+  assert.isAbove(videoDue.flat().length, 0, "映像の期限も前倒しされること");
+  assert.isBelow(clock.now(), 1_000, "元の期限より前に通知すること");
 });
