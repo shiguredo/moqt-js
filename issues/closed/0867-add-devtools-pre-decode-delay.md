@@ -84,7 +84,7 @@ moqt-devtools の Subscriber で、再生遅延を接続中に動的に変更で
 - キュー上限超過時は古い Object から落とし、購読期間あたりメディアごとに 1 回だけ警告ログを残す。
 - `src/playout/preDecodeDelay.test.ts` に `setDelayMs` の延長・短縮・順序・不正値と `takeAll` のテストを追加した。`devtools/src/signals/connectionSettings.test.ts` と `connectionSettingsSnapshot.test.ts` に設定と URL のテストを追加した。`tests/e2e/devtools-playback-delay.spec.ts` で既定値・UI からの変更・Copy URL・URL からの復元を確認した。モックやスタブは使っていない。動的変更の配線は、レビューでの修正で `devtools/src/hooks/subscriberPreDecodeDelay.test.ts` と `src/playout/preDecodeDelayStage.test.ts` を追加して固定した。
 - `docs/PLAYOUT_DELAY.md` に moqt-devtools での動的設定の節を追加し、README の devtools の機能一覧に Playback Delay を追加した。
-- `vp fmt --write .` / `tsc --noEmit` / `vp lint` / `vp test run` (233 ファイル、4099 テスト成功) / `vp run build` / `vp exec playwright test --project=chromium tests/e2e/devtools-playback-delay.spec.ts` が通ることを確認した。
+- `vp fmt --write .` / `tsc --noEmit` / `vp lint` / `vp test run` (233 ファイル、4103 テスト成功) / `vp run build` / `vp exec playwright test --project=chromium tests/e2e/devtools-playback-delay.spec.ts` が通ることを確認した。
 - 実リレーに接続したまま Playback Delay を変えたときの表示遅延は E2E で測っていない。キューの期限計算と devtools の適用経路はテストで固定しているが、実リレーでの計測は今後の確認項目とする。
 
 ## レビューでの修正 (2026-10-20)

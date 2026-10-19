@@ -97,7 +97,7 @@
 - 映像デコーダーのエラー時と音声デコーダーのエラー時は復号前の段を破棄する。音声の追いつきで復号器を作り直すときは破棄しない。段が保持しているのは復号器に溜まった古い入力ではなく、これから復号する直近の入力であり、捨てると次の Object が期限を迎えるまで復号へ何も渡らず、指定した遅延の分だけ無音になる。
 - `src/playout/preDecodeDelay.test.ts` にキューの境界・順序・上限のテストを追加し、`src/createMediaSubscriber.test.ts` に検証・音声と映像の期限・Group の順序・`close()` の破棄・上限超過の通知のテストを追加した。`src/playout/audioReceiveCatchUp.test.ts` と `src/playout/audioPlayoutSession.test.ts` に意図した遅延のテストを追加した。モックやスタブは使っていない。
 - `docs/PLAYOUT_DELAY.md` を追加し、`docs/HIGH_LEVEL_API.md`、`docs/AV_SYNC_DECISIONS.md`、`README.md` を更新した。
-- `vp fmt --write .` / `tsc --noEmit` / `vp lint` / `vp test run` (233 ファイル、4099 テスト成功) / `vp run build` が通ることを確認した。
+- `vp fmt --write .` / `tsc --noEmit` / `vp lint` / `vp test run` (233 ファイル、4103 テスト成功) / `vp run build` が通ることを確認した。
 
 ## レビューでの修正 (2026-10-20)
 
@@ -110,6 +110,7 @@
 - `src/playout/preDecodeDelay.prop.ts` (PBT) と `src/playout/preDecodeDelayStage.test.ts` を追加した。`stop()` の破棄、映像側の上限超過通知、復号器のエラー時の段の破棄、実際に保持した時間の記録などのテストも追加した。
 - 上限超過で期限を前倒ししたときにタイマーを張り直すようにした。しないと、最初の Object の元の期限 (遅延の分) まで復号が止まり、その間も古い Object を落とし続ける。
 - 短縮した遅延はキューが空になったら解除する。期限は各 Object を積んだ時点で決めて保持し、短縮を時間で解消しない (時間で解消すると、保持中の Object の期限が時間と一緒に動いて取り出せなくなる)。
-- 音声と映像で短縮量を揃え、A/V 同期が崩れないようにした。同期はこれから積む Object にだけ効かせ、既に保持している Object の期限は動かさない。
+- 音声と映像で短縮量を揃え、A/V 同期が崩れないようにした。同期はこれから積む Object にだけ効かせ、既に保持している Object の期限は動かさない。復号へ渡す順序は積んだ順を守り、同期で短縮しても後から積んだ Object が先に復号されないようにした。
 - 音声の追いつきに渡す意図した遅延は、設定値ではなく実際に保持した時間にした。上限超過で短縮した区間でも正しく差し引ける。
 - 表示遅延の実測 (`avSync.presentationDelayMs` が指定値の分だけ増えること) は未了である。実リレーでの計測は今後の確認項目とする (docs/PLAYOUT_DELAY.md に記載)。
+- 上限超過でキーフレームを落とした場合は、次のキーフレームまで映像を復号できないことがある (既知の制限)。
