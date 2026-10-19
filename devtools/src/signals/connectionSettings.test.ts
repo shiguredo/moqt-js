@@ -1,4 +1,5 @@
 import { test, assert } from "vite-plus/test";
+import { MAX_PRE_DECODE_DELAY_MS } from "../../../src/playout/preDecodeDelay";
 import { AuthorizationTokenAliasType, C4M } from "moqt-js";
 import {
   applyC4mFromUrl,
@@ -361,11 +362,11 @@ test("buildQueryString: preDecodeDelayMs を URL で往復できる", () => {
   assert.equal(preDecodeDelayMs.value, 2_000);
 });
 
-// 選択肢は 2 秒以上を含み、ライブラリの上限 (30 秒) を超えない。
+// 選択肢は 2 秒以上を含み、ライブラリの上限 (MAX_PRE_DECODE_DELAY_MS) を超えない。
 test("PRE_DECODE_DELAY_OPTIONS: 2 秒以上を含み上限を超えない", () => {
   assert.include([...PRE_DECODE_DELAY_OPTIONS], 2_000);
   assert.include([...PRE_DECODE_DELAY_OPTIONS], 10_000);
-  assert.isAtMost(Math.max(...PRE_DECODE_DELAY_OPTIONS), 30_000);
+  assert.isAtMost(Math.max(...PRE_DECODE_DELAY_OPTIONS), MAX_PRE_DECODE_DELAY_MS);
 });
 
 // 開いた時点の音声入力は Web Audio で作る音 (値は dummy)。映像の Canvas と揃える

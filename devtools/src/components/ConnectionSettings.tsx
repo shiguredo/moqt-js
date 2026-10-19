@@ -1728,7 +1728,7 @@ export function ConnectionSettings() {
                   {/* 復号前の再生遅延。接続中も変更できるよう settingsDisabled にしない */}
                   <div class="flex flex-col lg:col-span-2">
                     <label for="preDecodeDelayMs" class="block text-xs text-slate-500 mb-2">
-                      Playback Delay
+                      Playback Delay (Audio + Video)
                     </label>
                     <select
                       id="preDecodeDelayMs"

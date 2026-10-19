@@ -76,9 +76,9 @@ import {
 } from "../../../src/playout/decodeInputTimestamps.ts";
 import { AudioPlayoutSession } from "../../../src/playout/audioPlayoutSession.ts";
 import {
-  PreDecodeDelayQueue,
-  type PreDecodeDelayPushResult,
-} from "../../../src/playout/preDecodeDelay.ts";
+  SubscriberPreDecodeDelay,
+  type SubscriberPreDecodeDelayOverflow,
+} from "./subscriberPreDecodeDelay.ts";
 // targetLatency の解決規則はライブラリと共有する純関数が持つ (規則を 2 か所に書かない)
 import { effectiveTargetLatencyMs, resolveSharedTargetLatencyMs } from "../../../src/msf/tracks.ts";
 import { applyAudioOutputSink } from "../utils/audioOutput";
@@ -626,7 +626,7 @@ export interface ReceivedVideoObject {
 }
 
 /**
- * 復号前の遅延キューが保持する音声 Object
+ * 復号前の遅延の段が保持する音声 Object
  *
  * 到着時刻は受信の遅れ (`audio.receiveDelayMs`) と入力の遅れを、復号時ではなく到着時点の
  * 値で測るために持つ。遅延の分だけ受信の遅れが大きく見えると、受信側の追いつきの判定が
@@ -639,7 +639,7 @@ interface DelayedAudioObject {
   readonly receivedAtMs: number;
 }
 
-/** Object が復号前のキューで占めるバイト数 (受信統計と同じ定義) */
+/** Object が占めるバイト数 (受信統計と同じ定義) */
 function objectBufferedBytes(obj: MoqtObject): number {
   return obj.payload.byteLength + (obj.properties?.byteLength ?? 0);
 }
@@ -975,17 +975,15 @@ export function useSubscriber(
   // 購読を始めるたびと停止で初期化する
   const videoGroupGateRef = useRef(new GroupSwitchGate<ReceivedVideoObject>());
   const videoGroupGateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // 復号前の再生遅延。購読中に設定を変えられるよう、キューとタイマーを ref で持つ。
-  // 0 のときはキューを作らず、既存の経路をそのまま通す
-  const preDecodeDelayMsRef = useRef(0);
-  const preDecodeActiveRef = useRef(false);
-  const videoPreDecodeRef = useRef<PreDecodeDelayQueue<ReceivedVideoObject> | null>(null);
-  const videoPreDecodeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const videoPreDecodeOverflowNotifiedRef = useRef(false);
-  const audioPreDecodeRef = useRef<PreDecodeDelayQueue<DelayedAudioObject> | null>(null);
-  const audioPreDecodeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const audioPreDecodeOverflowNotifiedRef = useRef(false);
-  // 音声の遅延キューから復号チェーンへ流す関数。購読を始めるときに設定し、
+  // 復号前の再生遅延。購読中に設定を変えられるよう、音声と映像の段をまとめて持つ。
+  // 0 のときは段を作らず、既存の経路をそのまま通す
+  const preDecodeDelayRef = useRef<SubscriberPreDecodeDelay<
+    ReceivedVideoObject,
+    DelayedAudioObject
+  > | null>(null);
+  // 購読中か。停止後に設定を変えても段を作らないために使う
+  const preDecodeSubscribedRef = useRef(false);
+  // 音声の段から復号チェーンへ流す関数。購読を始めるときに設定し、
   // 停止すると null にする (古い購読の handleAudioObject を呼ばないため)
   const appendAudioPreDecodeRef = useRef<((items: readonly DelayedAudioObject[]) => void) | null>(
     null,
@@ -996,19 +994,12 @@ export function useSubscriber(
    * 上限で保留を解くタイマーを張り直す
    */
   function enqueueVideoObjects(objects: ReceivedVideoObject[]): void {
-    const delayedQueue = videoPreDecodeRef.current;
-    if (delayedQueue === null) {
-      appendVideoPreDecode(objects);
-    } else {
-      for (const received of objects) {
-        const result = delayedQueue.push(
-          received,
-          objectBufferedBytes(received.object),
-          performance.now(),
-        );
-        handlePreDecodeOverflow("video", result);
+    // 段が無い (遅延 0 または停止中) のときは既存の経路でそのまま復号する
+    const delay = preDecodeDelayRef.current;
+    for (const received of objects) {
+      if (delay === null || !delay.pushVideo(received)) {
+        appendVideoPreDecode([received]);
       }
-      scheduleVideoPreDecodeDrain();
     }
     if (videoGroupGateTimerRef.current !== null) {
       clearTimeout(videoGroupGateTimerRef.current);
@@ -1041,168 +1032,40 @@ export function useSubscriber(
     videoGroupGateRef.current.reset();
   }
 
-  /** 復号前キューの上限超過を通知する (購読期間あたりメディアごとに 1 回) */
-  function handlePreDecodeOverflow(
-    kind: "audio" | "video",
-    result: PreDecodeDelayPushResult<unknown>,
-  ): void {
-    if (!result.overflowed) {
-      return;
-    }
-    if (kind === "audio") {
-      if (audioPreDecodeOverflowNotifiedRef.current) {
-        return;
-      }
-      audioPreDecodeOverflowNotifiedRef.current = true;
-    } else {
-      if (videoPreDecodeOverflowNotifiedRef.current) {
-        return;
-      }
-      videoPreDecodeOverflowNotifiedRef.current = true;
-    }
+  /** 復号前の段の上限超過をログに残す (購読期間あたりメディアごとに 1 回) */
+  function logPreDecodeOverflow(overflow: SubscriberPreDecodeDelayOverflow): void {
     addLog("warn", `[${subscriberId}] pre-decode delay queue overflow`, {
-      media: kind,
-      delayMs: preDecodeDelayMsRef.current,
-      dropped: result.dropped.length,
+      media: overflow.media,
+      delayMs: overflow.delayMs,
+      dropped: overflow.dropped,
     });
   }
 
-  /** 映像の復号前キューから復号チェーンへ積む */
+  /** 復号前の段を返す (初回に作る)。期限の通知先は下の関数を参照する */
+  function getPreDecodeDelay(): SubscriberPreDecodeDelay<ReceivedVideoObject, DelayedAudioObject> {
+    let delay = preDecodeDelayRef.current;
+    if (delay === null) {
+      delay = new SubscriberPreDecodeDelay<ReceivedVideoObject, DelayedAudioObject>({
+        bytesOfVideo: (received) => objectBufferedBytes(received.object),
+        bytesOfAudio: (item) => objectBufferedBytes(item.object),
+        onVideoDue: (items) => appendVideoPreDecode(items),
+        onAudioDue: (items) => appendAudioPreDecodeRef.current?.(items),
+        onOverflow: (overflow) => logPreDecodeOverflow(overflow),
+        onDueError: (error) => {
+          addLog("error", `[${subscriberId}] failed to drain pre-decode delay queue`, {
+            error: String(error),
+          });
+        },
+      });
+      preDecodeDelayRef.current = delay;
+    }
+    return delay;
+  }
+
+  /** 映像の復号前の段から復号チェーンへ積む */
   function appendVideoPreDecode(objects: readonly ReceivedVideoObject[]): void {
     for (const received of objects) {
       chainRef.current = chainRef.current.then(() => handleObject(received)).catch(() => {});
-    }
-  }
-
-  /** 映像の復号前キューの期限が来た Object を復号チェーンへ流す */
-  function drainVideoPreDecode(): void {
-    const queue = videoPreDecodeRef.current;
-    if (queue === null) {
-      return;
-    }
-    appendVideoPreDecode(queue.takeDue(performance.now()));
-    scheduleVideoPreDecodeDrain();
-  }
-
-  /** 映像の復号前キューの次の期限にタイマーを張る */
-  function scheduleVideoPreDecodeDrain(): void {
-    if (videoPreDecodeTimerRef.current !== null) {
-      return;
-    }
-    const queue = videoPreDecodeRef.current;
-    if (queue === null) {
-      return;
-    }
-    const dueMs = queue.nextDueMs();
-    if (dueMs === null) {
-      return;
-    }
-    videoPreDecodeTimerRef.current = setTimeout(
-      () => {
-        videoPreDecodeTimerRef.current = null;
-        drainVideoPreDecode();
-      },
-      Math.max(0, dueMs - performance.now()),
-    );
-  }
-
-  /** 映像の復号前キューの期限を計算し直し、タイマーを張り直す */
-  function rescheduleVideoPreDecodeDrain(): void {
-    if (videoPreDecodeTimerRef.current !== null) {
-      clearTimeout(videoPreDecodeTimerRef.current);
-      videoPreDecodeTimerRef.current = null;
-    }
-    scheduleVideoPreDecodeDrain();
-  }
-
-  /** 映像の復号前キューを期限を待たずに復号チェーンへ流す */
-  function flushVideoPreDecode(): void {
-    if (videoPreDecodeTimerRef.current !== null) {
-      clearTimeout(videoPreDecodeTimerRef.current);
-      videoPreDecodeTimerRef.current = null;
-    }
-    const queue = videoPreDecodeRef.current;
-    if (queue !== null) {
-      appendVideoPreDecode(queue.takeAll());
-    }
-  }
-
-  /** 音声の復号前キューから復号チェーンへ流す (関数は購読の開始時に設定する) */
-  function appendAudioPreDecode(items: readonly DelayedAudioObject[]): void {
-    appendAudioPreDecodeRef.current?.(items);
-  }
-
-  /** 音声の復号前キューの期限が来た Object を復号チェーンへ流す */
-  function drainAudioPreDecode(): void {
-    const queue = audioPreDecodeRef.current;
-    if (queue === null) {
-      return;
-    }
-    appendAudioPreDecode(queue.takeDue(performance.now()));
-    scheduleAudioPreDecodeDrain();
-  }
-
-  /** 音声の復号前キューの次の期限にタイマーを張る */
-  function scheduleAudioPreDecodeDrain(): void {
-    if (audioPreDecodeTimerRef.current !== null) {
-      return;
-    }
-    const queue = audioPreDecodeRef.current;
-    if (queue === null) {
-      return;
-    }
-    const dueMs = queue.nextDueMs();
-    if (dueMs === null) {
-      return;
-    }
-    audioPreDecodeTimerRef.current = setTimeout(
-      () => {
-        audioPreDecodeTimerRef.current = null;
-        drainAudioPreDecode();
-      },
-      Math.max(0, dueMs - performance.now()),
-    );
-  }
-
-  /** 音声の復号前キューの期限を計算し直し、タイマーを張り直す */
-  function rescheduleAudioPreDecodeDrain(): void {
-    if (audioPreDecodeTimerRef.current !== null) {
-      clearTimeout(audioPreDecodeTimerRef.current);
-      audioPreDecodeTimerRef.current = null;
-    }
-    scheduleAudioPreDecodeDrain();
-  }
-
-  /** 音声の復号前キューを期限を待たずに復号チェーンへ流す */
-  function flushAudioPreDecode(): void {
-    if (audioPreDecodeTimerRef.current !== null) {
-      clearTimeout(audioPreDecodeTimerRef.current);
-      audioPreDecodeTimerRef.current = null;
-    }
-    const queue = audioPreDecodeRef.current;
-    if (queue !== null) {
-      appendAudioPreDecode(queue.takeAll());
-    }
-  }
-
-  /**
-   * 購読の開始時に、現在の設定で復号前キューを作る
-   *
-   * 前の購読のキューとタイマーは先に破棄する。遅延が 0 のときはキューを作らず、
-   * 受信した Object を既存の経路でそのまま復号する。
-   */
-  function initializePreDecodeQueues(): void {
-    resetPreDecodeQueues();
-    preDecodeActiveRef.current = true;
-    const delayMs = settings.preDecodeDelayMs.value;
-    preDecodeDelayMsRef.current = delayMs;
-    if (delayMs > 0) {
-      videoPreDecodeRef.current = new PreDecodeDelayQueue<ReceivedVideoObject>({
-        delayMs,
-      });
-      audioPreDecodeRef.current = new PreDecodeDelayQueue<DelayedAudioObject>({
-        delayMs,
-      });
     }
   }
 
@@ -1213,71 +1076,53 @@ export function useSubscriber(
    * 復号の出力の時刻が遅延の分だけ動いても、古い基準が 10 秒間は残る。古い基準のままだと
    * 表示時刻が実際の復号より遅延の分だけ前になり、映像が表示時刻を過ぎたフレームとして
    * 捨てられる。基準を取り直し、表示待ちのフレームも捨てて、変更後の遅延ですぐに並べ直す。
+   * 音声の追いつきの床 (直近の遅れの最小値) も古い遅延のまま残るため、観測を消す。残すと
+   * 変更後の最初の復号出力を復号器の詰まりと誤判定する。
    */
   function resetPlayoutTimingForPreDecodeChange(): void {
     playoutTimelineRef.current.reset();
     videoPlayoutRef.current?.clear();
+    audioPlaybackRef.current?.playout.catchUp.reset();
   }
 
-  /** 復号前のキュー、タイマー、上限超過の通知済みフラグを破棄する */
-  function resetPreDecodeQueues(): void {
-    preDecodeActiveRef.current = false;
-    if (videoPreDecodeTimerRef.current !== null) {
-      clearTimeout(videoPreDecodeTimerRef.current);
-      videoPreDecodeTimerRef.current = null;
-    }
-    if (audioPreDecodeTimerRef.current !== null) {
-      clearTimeout(audioPreDecodeTimerRef.current);
-      audioPreDecodeTimerRef.current = null;
-    }
-    videoPreDecodeRef.current = null;
-    audioPreDecodeRef.current = null;
-    videoPreDecodeOverflowNotifiedRef.current = false;
-    audioPreDecodeOverflowNotifiedRef.current = false;
+  /**
+   * 購読の開始時に、現在の設定で復号前の段を作る
+   *
+   * 前の購読の段とタイマーは先に破棄する。遅延が 0 のときは段を作らず、受信した Object を
+   * 既存の経路でそのまま復号する。
+   */
+  function initializePreDecodeDelay(): void {
+    preDecodeSubscribedRef.current = true;
+    getPreDecodeDelay().start(settings.preDecodeDelayMs.value);
+  }
+
+  /** 復号前の段、タイマー、音声の復号チェーンへの通知先を破棄する */
+  function resetPreDecodeDelay(): void {
+    preDecodeSubscribedRef.current = false;
+    preDecodeDelayRef.current?.stop();
     appendAudioPreDecodeRef.current = null;
   }
 
   /**
-   * 設定の変更を、進行中の購読の復号前キューへ反映する
+   * 設定の変更を、進行中の購読の復号前の段へ反映する
    *
-   * 購読していないときは値だけを覚える。購読中に 0 から増やしたときは新しいキューを作り、
-   * 減らしたときは保持中の Object の期限を計算し直す。0 にしたときは保持中の Object を
-   * 待たずに復号チェーンへ流し、キューをやめる。
+   * 購読していないときは何もしない (次の購読の開始時に現在の設定で段を作る)。購読中に
+   * 0 から増やしたときは段を作り、減らしたときは保持中の Object の期限を計算し直す。
+   * 0 にしたときは保持中の Object を待たずに復号チェーンへ流して段をやめる。
    */
   function applyPreDecodeDelay(value: number): void {
-    preDecodeDelayMsRef.current = value;
-    if (!preDecodeActiveRef.current) {
+    if (!preDecodeSubscribedRef.current) {
       return;
     }
-    if (value > 0) {
-      const videoQueue = videoPreDecodeRef.current;
-      if (videoQueue === null) {
-        videoPreDecodeRef.current = new PreDecodeDelayQueue<ReceivedVideoObject>({
-          delayMs: value,
-        });
-        // 新しいキューは上限超過の通知をやり直す
-        videoPreDecodeOverflowNotifiedRef.current = false;
-      } else {
-        videoQueue.setDelayMs(value);
-      }
-      const audioQueue = audioPreDecodeRef.current;
-      if (audioQueue === null) {
-        audioPreDecodeRef.current = new PreDecodeDelayQueue<DelayedAudioObject>({
-          delayMs: value,
-        });
-        audioPreDecodeOverflowNotifiedRef.current = false;
-      } else {
-        audioQueue.setDelayMs(value);
-      }
-      rescheduleVideoPreDecodeDrain();
-      rescheduleAudioPreDecodeDrain();
-      resetPlayoutTimingForPreDecodeChange();
+    const delay = getPreDecodeDelay();
+    if (delay.delayMs === value) {
       return;
     }
-    flushVideoPreDecode();
-    videoPreDecodeRef.current = null;
-    flushAudioPreDecode();
-    audioPreDecodeRef.current = null;
+    if (value > 0 && !delay.isActive) {
+      delay.start(value);
+    } else {
+      delay.setDelayMs(value);
+    }
     resetPlayoutTimingForPreDecodeChange();
   }
 
@@ -1927,7 +1772,7 @@ export function useSubscriber(
         });
     };
 
-    // 復号前の遅延キューから音声を復号チェーンへ流す。購読の開始時に設定し、停止時に
+    // 復号前の段から音声を復号チェーンへ流す。購読の開始時に設定し、停止時に
     // 破棄する。動的な遅延の変更にも使う
     appendAudioPreDecodeRef.current = (items) => {
       for (const item of items) {
@@ -1936,19 +1781,12 @@ export function useSubscriber(
     };
 
     const queueAudioObject = (obj: MoqtObject, viaDatagram: boolean): void => {
-      const delayedQueue = audioPreDecodeRef.current;
-      if (delayedQueue === null) {
-        enqueueAudioDecodeDirect(obj, viaDatagram, performance.now());
-        return;
-      }
+      // 到着時刻は復号前の遅延を挟んでも失わないよう、受信の入口で 1 回だけ測る
       const receivedAtMs = performance.now();
-      const result = delayedQueue.push(
-        { object: obj, viaDatagram, receivedAtMs },
-        objectBufferedBytes(obj),
-        receivedAtMs,
-      );
-      handlePreDecodeOverflow("audio", result);
-      scheduleAudioPreDecodeDrain();
+      const delay = preDecodeDelayRef.current;
+      if (delay === null || !delay.pushAudio({ object: obj, viaDatagram, receivedAtMs })) {
+        enqueueAudioDecodeDirect(obj, viaDatagram, receivedAtMs);
+      }
     };
 
     const audioSubscriberInstance = await session.subscribe(
@@ -2222,6 +2060,8 @@ export function useSubscriber(
         // 引いて「復号が足している遅れ」を求める。対応が引けなかったときは、どの音の遅れか
         // 決められないため渡さない (出力の遅れだけを使う)
         inputLagMs: input?.inputLagMs ?? null,
+        // 意図した復号前の遅延は復号器に溜まった遅れではない。追いつきの判定から差し引く
+        intentionalDelayMs: preDecodeDelayRef.current?.delayMs ?? 0,
         timeline: playoutTimelineRef.current,
         useTimeline: jitterBufferEnabledRef.current,
         enforceTarget: jitterBufferEnabledRef.current,
@@ -2526,9 +2366,9 @@ export function useSubscriber(
     }
   };
 
-  // 再生遅延の変更を、今の購読の復号前キューへ即座に反映する。
-  // 購読していないときは値だけを覚え、次の購読の開始時に使う。遅延を 0 にしたときの
-  // flush が handleObject を参照するため、この effect は handleObject の定義後に置く
+  // 再生遅延の変更を、今の購読の復号前の段へ即座に反映する。
+  // 購読していないときは何もしない (次の購読の開始時に現在の設定で段を作る)。遅延を 0 に
+  // したときの flush が handleObject を参照するため、この effect は handleObject の定義後に置く
   useSignalEffect(() => {
     applyPreDecodeDelay(settings.preDecodeDelayMs.value);
   });
@@ -2577,8 +2417,8 @@ export function useSubscriber(
     instance.isStarting.value = true;
     // 前の購読の追いつきの状態を持ち越さない (境界は各 Track の SUBSCRIBE_OK で設定する)
     resetCatchUpGates();
-    // 現在の設定で復号前のキューを作る。前の購読のキューとタイマーはここで破棄する
-    initializePreDecodeQueues();
+    // 現在の設定で復号前の段を作る。前の購読の段とタイマーはここで破棄する
+    initializePreDecodeDelay();
 
     try {
       instance.status.value = "disconnected";
@@ -3204,8 +3044,8 @@ export function useSubscriber(
     resetVideoGroupGate();
     // 追いつきの境界を消し、画面の「Catching up」も消す
     resetCatchUpGates();
-    // 復号前の遅延キューとタイマーを破棄する (停止後に復号へ流さない)
-    resetPreDecodeQueues();
+    // 復号前の段とタイマーを破棄する (停止後に復号へ流さない)
+    resetPreDecodeDelay();
     // 再生の停止は instance の有無に関わらず行う。パネルの削除では Map から先に
     // 消えるため、この後の instance 取得が失敗しても AudioContext を残さない
     stopAudioPlayback();
