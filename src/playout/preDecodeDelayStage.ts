@@ -33,7 +33,7 @@ export interface PreDecodeDelayStageClock {
 }
 
 /** ブラウザの `performance.now` と `setTimeout` を使う既定の時計 */
-export const DEFAULT_PRE_DECODE_DELAY_STAGE_CLOCK: PreDecodeDelayStageClock = {
+const DEFAULT_PRE_DECODE_DELAY_STAGE_CLOCK: PreDecodeDelayStageClock = {
   now: () => performance.now(),
   setTimer: (callback, delayMs) => setTimeout(callback, delayMs),
   clearTimer: (handle) => {
@@ -56,7 +56,7 @@ export interface PreDecodeDelayStageOverflow {
 }
 
 /** `PreDecodeDelayStage` の設定 */
-export interface PreDecodeDelayStageOptions<T> {
+interface PreDecodeDelayStageOptions<T> {
   /** 復号まで保持する時間 (ミリ秒) */
   delayMs: number;
   /** 保持してよいバイト数の上限。0 以下は無制限 */
@@ -69,8 +69,12 @@ export interface PreDecodeDelayStageOptions<T> {
   onDue: (items: readonly T[]) => void;
   /** 上限超過の通知。段を作り直すまで 1 回だけ呼ばれる */
   onOverflow?: (overflow: PreDecodeDelayStageOverflow) => void;
-  /** 上限超過による遅延の短縮量が変わったときの通知 (音声と映像で揃えるのに使う) */
-  onDelayShortenChanged?: () => void;
+  /**
+   * 上限超過による遅延の短縮量が変わったときの通知 (音声と映像で揃えるのに使う)
+   *
+   * @param reset - キューが空になって短縮が解除されたかどうか
+   */
+  onDelayShortenChanged?: (reset: boolean) => void;
   /** `onDue` が throw したときの通知。期限の張り直しは保証される */
   onDueError?: (error: unknown) => void;
   /** 時計とタイマー。省略するとブラウザの実時間を使う */
@@ -186,6 +190,8 @@ export class PreDecodeDelayStage<T> {
     this.cancelTimer();
     this.queue.clear();
     this.overflowNotified = false;
+    // 同じ短縮量で再開したときに同期の通知が落ちないよう、通知済みの値も戻す
+    this.lastNotifiedShortenMs = 0;
   }
 
   /** 上限超過の通知済みフラグを解除する (購読をやり直すときに使う) */
@@ -240,7 +246,7 @@ export class PreDecodeDelayStage<T> {
    * 期限が前倒しされた場合)。
    */
   private schedule(): void {
-    const dueMs = this.queue.nextDueMs(this.clock.now());
+    const dueMs = this.queue.nextDueMs();
     if (dueMs === null) {
       this.cancelTimer();
       return;
@@ -272,10 +278,12 @@ export class PreDecodeDelayStage<T> {
   /** 上限超過による短縮量が変わったら通知する */
   private notifyDelayShortenChanged(): void {
     const shortenMs = this.queue.delayShortenMs;
-    if (shortenMs === this.lastNotifiedShortenMs) {
+    const previousShortenMs = this.lastNotifiedShortenMs;
+    if (shortenMs === previousShortenMs) {
       return;
     }
     this.lastNotifiedShortenMs = shortenMs;
-    this.options.onDelayShortenChanged?.();
+    // キューが空になって解除されたかを伝える (音声と映像の短縮を両方解除するため)
+    this.options.onDelayShortenChanged?.(shortenMs === 0 && previousShortenMs > 0);
   }
 }

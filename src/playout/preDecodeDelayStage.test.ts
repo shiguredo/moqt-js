@@ -268,3 +268,29 @@ test("PreDecodeDelayStage: キューのバイト数は bytesOf の合計にな�
   stage.push("cde");
   assert.equal(stage.bufferedBytes, 5);
 });
+
+// キューが空になったら短縮を解除し、次の Object は元の遅延で待つ。
+test("PreDecodeDelayStage: キューが空になったら短縮を解除する", () => {
+  const { stage, clock, due } = makeStage({
+    delayMs: 1_000,
+    maxBytes: 50,
+    maxObjects: 0,
+    bytesOf: () => 20,
+  });
+  stage.push("a");
+  clock.advance(10);
+  stage.push("b");
+  clock.advance(10);
+  stage.push("c");
+  // 前倒しされた期限で通知し、キューが空になる
+  clock.advance(20);
+  assert.isAbove(due.flat().length, 0);
+  assert.equal(stage.size, 0);
+
+  // 空になった後の Object は元の遅延 (1,000 ms) で待つ
+  stage.push("d");
+  clock.advance(999);
+  assert.equal(due.flat().includes("d"), false, "空になった後は元の遅延の前では通知しないこと");
+  clock.advance(1);
+  assert.isTrue(due.flat().includes("d"), "元の期限で通知すること");
+});
