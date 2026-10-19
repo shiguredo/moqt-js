@@ -272,7 +272,7 @@ MSF-01 §5 は catalog の取得に Joining FETCH を MUST としているが、
 - パケロスを配信側の冗長化で吸収する
   - 同じ音声 Object を最大 3 回送り、受信側は同じ識別子 (`groupId` と `objectId`) の 2 回目以降を捨てる。同じ音が重なって鳴ることはない
 - 購読側の再生遅延を指定する
-  - `MediaSubscriberOptions.preDecodeDelayMs` で、受信した Object を復号前に時間で保持する。2 秒以上の遅延でも復号済みフレームを溜めず、受信バッファの上限も変えない (`src/playout/preDecodeDelay.ts`)。詳細は [購読側の再生遅延](docs/PLAYOUT_DELAY.md)
+  - `MediaSubscriberOptions.preDecodeDelayMs` で、受信した Object を復号前に時間で保持する。2 秒以上の遅延でも復号済みフレームを溜めず、受信バッファの上限も変えない (`src/playout/preDecodeDelay.ts`)。保持上限を超えた場合は古い Object を落として残りの期限を前倒しし、実際の遅延を短くする。詳細は [購読側の再生遅延](docs/PLAYOUT_DELAY.md)
 
 高レベル API (`createMediaSubscriber`) はこの再生を内部で組み立てるため、アプリケーション側で実装する必要はありません。再生の部品は公開 API (`PlayoutTimeline` / `AudioPlayoutSession` / `VideoPlayoutSession`) としても使えます。詳細は [高レベル API](docs/HIGH_LEVEL_API.md) にあります。
 

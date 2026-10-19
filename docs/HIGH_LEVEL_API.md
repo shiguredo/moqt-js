@@ -520,13 +520,16 @@ MediaPublisherOptions も `audio` / `video` / `useWorker` / `serverCertificateHa
 追加しない。2 秒以上も指定でき、上限は `MAX_PRE_DECODE_DELAY_MS` (30 秒) である。復号済みの
 `VideoFrame` を保持するのではなく、圧縮済みの Object を復号前に保持するため、2 秒以上の遅延でも
 フレームのメモリが遅延に比例して増えない。保持上限 (トラックごとに 64 MiB / 8,192 件) を
-超えた場合は古い Object から破棄し、`onError` でメディアごとに購読期間あたり 1 回通知する。
+超えた場合は古い Object から破棄し、残りの Object の期限を保持できる時間まで前倒しする
+(実際の遅延が指定値より短くなる)。上限超過は `onError` でメディアごとに購読期間あたり 1 回
+通知する。
 
 この値は受信バッファ (`dataStreamMaxBufferBytes` / `dataStreamMaxTotalBufferBytes`)、
 `pendingSubgroup`、`pendingObjectQueue` とは独立している。受信バッファはメモリ保護の上限で
 あり、値を大きくしても再生タイミングは変わらない。jitter buffer の遅延の上限
 (`MAX_PLAYOUT_DELAY_MS` = 500 ms) も `preDecodeDelayMs` には掛からない。catalog の
-`targetLatency` と併用すると遅延は加算されるため、実際の表示遅延は
+`targetLatency` とは加算されるが、`targetLatency` 側は `MAX_PLAYOUT_DELAY_MS` と表示待ちの
+キューの上限で切り下げられ、切り下げた分は `avSync.targetLatencyLimitedMs` に出る。実際の表示遅延は
 `avSync.presentationDelayMs` などで確認すること。値は生成時に固定し、購読中の変更 API は
 高レベル API には無い。moqt-devtools は共有の `PreDecodeDelayQueue` を使い、接続中に
 Playback Delay を変更できる。詳細は [再生遅延](PLAYOUT_DELAY.md) を参照すること。
