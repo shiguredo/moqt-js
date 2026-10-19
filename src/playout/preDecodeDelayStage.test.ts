@@ -27,6 +27,7 @@ function makeStage(
     delayMs?: number;
     maxBytes?: number;
     maxObjects?: number;
+    bytesOf?: (item: string) => number;
     onDueError?: (error: unknown) => void;
   } = {},
 ): {
@@ -42,7 +43,7 @@ function makeStage(
     delayMs: options.delayMs ?? 100,
     ...(options.maxBytes === undefined ? {} : { maxBytes: options.maxBytes }),
     ...(options.maxObjects === undefined ? {} : { maxObjects: options.maxObjects }),
-    bytesOf: bytesOfString,
+    bytesOf: options.bytesOf ?? bytesOfString,
     clock,
     onDue: (items) => {
       due.push([...items]);
@@ -139,10 +140,37 @@ test("PreDecodeDelayStage: 上限超過は 1 回だけ通知する", () => {
   assert.equal(overflows.length, 2, "解除後は改めて通知すること");
 });
 
+// 上限超過が起きたら、元の期限を待たずに前倒しした期限で通知する。タイマーを張り直さない
+// と、元の期限 (遅延の分) まで復号が止まり、その間も古い Object を落とし続ける。
+test("PreDecodeDelayStage: 上限超過の直後に前倒しした期限で通知する", () => {
+  // 1 件 20 バイトで 50 バイトまでしか保持できないため、3 件目で上限超過する
+  const { stage, clock, due } = makeStage({
+    delayMs: 1_000,
+    maxBytes: 50,
+    maxObjects: 0,
+    bytesOf: () => 20,
+  });
+  stage.push("a");
+  clock.advance(10);
+  stage.push("b");
+  clock.advance(10);
+  stage.push("c");
+
+  // 3 件目の push で上限超過し、残りの期限が前倒しされる
+  clock.advance(10);
+  assert.isAbove(due.flat().length, 0, "元の期限 (1,000 ms) を待たずに通知すること");
+  assert.isBelow(clock.now(), 1_000, "元の期限より前に通知すること");
+});
+
 // 上限超過が続いても、期限の来た Object を通知し続ける (キューが詰まらない)。
 test("PreDecodeDelayStage: 上限超過が続いても通知し続ける", () => {
-  // 保持できるのは 5 件 (50 ms 分) だが、遅延は 1,000 ms ある
-  const { stage, clock, due } = makeStage({ delayMs: 1_000, maxBytes: 50, maxObjects: 0 });
+  // 1 件 20 バイトで 50 バイトまでしか保持できない。遅延は 1,000 ms ある
+  const { stage, clock, due } = makeStage({
+    delayMs: 1_000,
+    maxBytes: 50,
+    maxObjects: 0,
+    bytesOf: () => 20,
+  });
   for (let index = 0; index < 100; index++) {
     stage.push(`object-${index}`);
     clock.advance(10);
@@ -159,7 +187,7 @@ test("PreDecodeDelayStage: 上限超過が続いても通知し続ける", () =>
       "積んだ順に通知すること",
     );
   }
-  assert.isAtMost(stage.size, 5, "上限を超えて保持しないこと");
+  assert.isAtMost(stage.size, 3, "上限を超えて保持しないこと");
 });
 
 // 期限の通知が throw しても、次の期限のタイマーは張り直す。

@@ -13,6 +13,9 @@
  * 上限超過の通知は購読期間 (この段を作り直すまで) あたり 1 回だけ行う。段を使い回す経路では
  * `resetOverflowNotification` で解除できる。
  *
+ * `stop` はキューとタイマーを捨てるが、段そのものは再利用できる (復号器のエラー後に購読を
+ * 続ける経路と、購読の停止・再 start の両方で使う)。
+ *
  * タイマーと時計は差し替えられる。テストでは決定的な時計とタイマーを渡し、実時間を待たずに
  * 期限の計算と並び順を検証する。
  */
@@ -46,8 +49,10 @@ export interface PreDecodeDelayStageOverflow {
   readonly size: number;
   /** 落としたあとのキューに残っているバイト数 */
   readonly bufferedBytes: number;
-  /** 設定されている遅延 (ミリ秒)。実際の遅延は上限超過で短くなることがある */
+  /** 設定されている遅延 (ミリ秒) */
   readonly delayMs: number;
+  /** 上限超過で前倒ししたあとの実効的な遅延 (ミリ秒) */
+  readonly effectiveDelayMs: number;
 }
 
 /** `PreDecodeDelayStage` の設定 */
@@ -64,6 +69,8 @@ export interface PreDecodeDelayStageOptions<T> {
   onDue: (items: readonly T[]) => void;
   /** 上限超過の通知。段を作り直すまで 1 回だけ呼ばれる */
   onOverflow?: (overflow: PreDecodeDelayStageOverflow) => void;
+  /** 上限超過による遅延の短縮量が変わったときの通知 (音声と映像で揃えるのに使う) */
+  onDelayShortenChanged?: () => void;
   /** `onDue` が throw したときの通知。期限の張り直しは保証される */
   onDueError?: (error: unknown) => void;
   /** 時計とタイマー。省略するとブラウザの実時間を使う */
@@ -76,7 +83,9 @@ export class PreDecodeDelayStage<T> {
   private readonly options: PreDecodeDelayStageOptions<T>;
   private readonly clock: PreDecodeDelayStageClock;
   private timer: unknown = null;
+  private timerDueMs: number | null = null;
   private overflowNotified = false;
+  private lastNotifiedShortenMs = 0;
 
   /**
    * @param options - 遅延、保持上限、期限の通知先
@@ -97,6 +106,16 @@ export class PreDecodeDelayStage<T> {
     return this.queue.delayMs;
   }
 
+  /** 上限超過で前倒ししている量 (ミリ秒)。0 なら設定した遅延のまま */
+  get delayShortenMs(): number {
+    return this.queue.delayShortenMs;
+  }
+
+  /** いまの実効的な遅延 (ミリ秒)。上限超過で前倒しした分を引いた値 */
+  get effectiveDelayMs(): number {
+    return this.queue.effectiveDelayMs;
+  }
+
   /** 保持している件数 */
   get size(): number {
     return this.queue.size;
@@ -108,21 +127,32 @@ export class PreDecodeDelayStage<T> {
   }
 
   /**
-   * 次の期限 (ミリ秒)。保持していなければ null
+   * Object を積み、次の期限のタイマーを張る
    *
-   * 上限超過で遅延が短くなっている場合は、その短くなった期限を返す。
+   * 上限超過で保存している Object の期限が前倒しされた場合は、既に張ってあるタイマーより
+   * 早い期限になるため張り直す。これをしないと、最初の Object の元の期限が来るまで復号が
+   * 止まり、その間も古い Object を落とし続ける。
    */
-  get nextDueMs(): number | null {
-    return this.queue.nextDueMs();
-  }
-
-  /** Object を積み、次の期限のタイマーを張る */
   push(item: T): void {
     const result = this.queue.push(item, this.options.bytesOf(item), this.clock.now());
     if (result.overflowed) {
       this.notifyOverflow(result);
     }
+    this.notifyDelayShortenChanged();
     this.schedule();
+  }
+
+  /**
+   * 上限超過で前倒しする量を外から設定する
+   *
+   * 音声と映像で同じ実効的な遅延を保つため、購読側が 2 つの段の短縮量を揃えるのに使う。
+   *
+   * @param value - 短縮量 (ミリ秒)
+   */
+  setDelayShortenMs(value: number): void {
+    this.queue.setDelayShortenMs(value);
+    this.notifyDelayShortenChanged();
+    this.reschedule();
   }
 
   /**
@@ -132,6 +162,7 @@ export class PreDecodeDelayStage<T> {
    */
   setDelayMs(value: number): void {
     this.queue.setDelayMs(value);
+    this.notifyDelayShortenChanged();
     this.reschedule();
   }
 
@@ -146,7 +177,11 @@ export class PreDecodeDelayStage<T> {
     this.emit(this.queue.takeAll());
   }
 
-  /** キューとタイマーを破棄する */
+  /**
+   * キューとタイマーを破棄する
+   *
+   * 段そのものは再利用できる (購読の停止・再 start と復号器のエラー後の両方で使う)。
+   */
   stop(): void {
     this.cancelTimer();
     this.queue.clear();
@@ -161,8 +196,10 @@ export class PreDecodeDelayStage<T> {
   /** 期限が来た Object を取り出して復号へ渡し、次の期限のタイマーを張る */
   private drain(): void {
     this.timer = null;
+    this.timerDueMs = null;
     try {
       this.emit(this.queue.takeDue(this.clock.now()));
+      this.notifyDelayShortenChanged();
     } finally {
       // onDue が throw しても、キューに残った Object の期限は張り直す
       this.schedule();
@@ -192,19 +229,28 @@ export class PreDecodeDelayStage<T> {
       size: this.queue.size,
       bufferedBytes: this.queue.bufferedBytes,
       delayMs: this.queue.delayMs,
+      effectiveDelayMs: this.queue.effectiveDelayMs,
     });
   }
 
-  /** 次の期限にタイマーを張る (既に張ってあれば何もしない) */
+  /**
+   * 次の期限にタイマーを張る
+   *
+   * 既にタイマーがあっても、期限が早まっていれば張り直す (上限超過で残りの Object の
+   * 期限が前倒しされた場合)。
+   */
   private schedule(): void {
-    if (this.timer !== null) {
-      return;
-    }
-    const dueMs = this.queue.nextDueMs();
+    const dueMs = this.queue.nextDueMs(this.clock.now());
     if (dueMs === null) {
+      this.cancelTimer();
       return;
     }
+    if (this.timer !== null && this.timerDueMs !== null && this.timerDueMs <= dueMs) {
+      return;
+    }
+    this.cancelTimer();
     this.timer = this.clock.setTimer(() => this.drain(), Math.max(0, dueMs - this.clock.now()));
+    this.timerDueMs = dueMs;
   }
 
   /** タイマーを張り直す */
@@ -220,5 +266,16 @@ export class PreDecodeDelayStage<T> {
     }
     this.clock.clearTimer(this.timer);
     this.timer = null;
+    this.timerDueMs = null;
+  }
+
+  /** 上限超過による短縮量が変わったら通知する */
+  private notifyDelayShortenChanged(): void {
+    const shortenMs = this.queue.delayShortenMs;
+    if (shortenMs === this.lastNotifiedShortenMs) {
+      return;
+    }
+    this.lastNotifiedShortenMs = shortenMs;
+    this.options.onDelayShortenChanged?.();
   }
 }

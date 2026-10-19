@@ -187,6 +187,27 @@ test("PreDecodeDelayQueue: 上限超過で短くなった遅延は空になっ�
   assert.deepEqual(queue.takeDue(2_001_000), ["after"], "元の期限で取り出すこと");
 });
 
+// 上限超過で短くした遅延は、時間の経過とともに実時間と同じ速さで元へ戻る。
+test("PreDecodeDelayQueue: 短縮は時間の経過とともに解消する", () => {
+  const queue = new PreDecodeDelayQueue<string>({ delayMs: 1_000, maxBytes: 50 });
+  // 20 バイトを 10 ms 間隔で積む。3 件目で上限超過する
+  queue.push("a", 20, 0);
+  queue.push("b", 20, 10);
+  queue.push("c", 20, 20);
+
+  // 3 件目の時点では、残っている先頭 (t=10) の期限が t=20 に前倒しされている
+  assert.equal(queue.nextDueMs(20), 20, "上限超過で期限が前倒しされること");
+  // 10 ms 経つと短縮も 10 ms 解消し、期限も 10 ms 後ろへ動く
+  assert.equal(queue.nextDueMs(30), 30, "短縮が時間の経過で解消すること");
+  // 十分に時間が経つと短縮は無くなり、元の遅延 (1,000 ms) に戻る
+  assert.equal(queue.nextDueMs(1_020), 1_010, "元の遅延に戻ること");
+  // 戻ったあとの Object は元の遅延で待つ
+  queue.takeDue(2_000);
+  assert.equal(queue.size, 0, "期限の来た Object をすべて取り出すこと");
+  queue.push("d", 20, 2_000);
+  assert.equal(queue.nextDueMs(2_000), 3_000, "戻った後は元の遅延で待つこと");
+});
+
 // 遅延の値が不正なら生成時にエラーにする。
 test("PreDecodeDelayQueue: 不正な遅延は生成時にエラーにする", () => {
   assert.throws(
