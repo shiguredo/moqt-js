@@ -2042,6 +2042,9 @@ interface SubscriberPreDecodeDelayControl extends SubscriberVideoGateControl {
   videoInitialConfigPending: boolean;
   pendingVideoObjects: MoqtObject[];
   currentState: MediaSubscriberState;
+  audioIntentionalDelays: Map<number, number>;
+  handleAudioDecoderError(error: Error): void;
+  handleVideoDecoderError(error: Error): void;
   notifyPreDecodeOverflow(
     kind: "audio" | "video",
     overflow: { dropped: number; delayMs: number },
@@ -2079,6 +2082,7 @@ function createPreDecodeDelaySubscriber(delayMs: number): {
       decodedVideo.push(payload[0] ?? -1);
     },
     close: async () => {},
+    reset: async () => {},
   } as unknown as SubscriberVideoGateControl["videoDecoder"];
   control.videoDecoderConfigured = true;
   return { subscriber, control, decodedAudio, decodedVideo, errors };
@@ -2217,6 +2221,13 @@ test("receiveAudioObject: 復号前の遅延を挟んでも入力の遅れを到
     200,
     30,
     "到着時点の入力の遅れを記録すること",
+  );
+  // 意図した遅延は設定値ではなく、実際に保持した時間を記録する
+  assert.closeTo(
+    control.audioIntentionalDelays.get(wallClockTimestamp) ?? 0,
+    40,
+    30,
+    "復号へ渡すまで実際に保持した時間を記録すること",
   );
   await subscriber.close();
 });
@@ -2361,6 +2372,25 @@ test("receiveVideoObject: 復号前の段の上限超過を 1 回だけ通知す
   assert.equal(errors.length, 1, "上限超過の通知は 1 回だけであること");
   assert.match(errors[0]?.message ?? "", /video pre-decode delay queue overflow/);
   assert.equal(control.videoPreDecodeStage.size, 1, "古い Object を落として新しい方を残すこと");
+  await subscriber.close();
+});
+
+/**
+ * 完了条件: 復号器のエラー時は復号前の段を破棄し、古い入力を復号器へ渡さない。
+ */
+test("handleAudioDecoderError / handleVideoDecoderError: 復号前の段を破棄する", async () => {
+  const { subscriber, control, errors } = createPreDecodeDelaySubscriber(80);
+  control.receiveAudioObject(makeIdentifiedObject(0n, 0x11), "subgroup");
+  control.receiveVideoObject(makeStreamVideoObject(1n, 0n));
+  assert.equal(control.audioPreDecodeStage?.size, 1);
+  assert.equal(control.videoPreDecodeStage?.size, 1);
+
+  control.handleAudioDecoderError(new Error("audio decoder failed"));
+  control.handleVideoDecoderError(new Error("video decoder failed"));
+
+  assert.equal(control.audioPreDecodeStage?.size, 0, "音声の段を破棄すること");
+  assert.equal(control.videoPreDecodeStage?.size, 0, "映像の段を破棄すること");
+  assert.equal(errors.length, 2, "失敗を onError へ通知すること");
   await subscriber.close();
 });
 

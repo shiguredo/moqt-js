@@ -643,6 +643,9 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   // 「復号が足している遅れ」を求めるのに使う。壁時計の TIMESTAMP を持つ音だけ記録する
   // (メディア時刻は壁時計と対応しないため測れない)
   private readonly audioInputLags = new Map<number, number>();
+  // 復号へ渡すまで実際に保持した時間 (ミリ秒)。上限超過で遅延が短くなった区間も含め、
+  // 意図した遅延として音声の追いつきの判定から差し引く
+  private readonly audioIntentionalDelays = new Map<number, number>();
   // 直前に記録した音声の TIMESTAMP の種類。復号の出力で対応が引けなくなったときに使う
   // (src/playout/decodeInputTimestamps.ts の `LastTimestampKind` を参照)
   private readonly lastAudioTimestampKind = new LastTimestampKind<"wallClock" | "mediaTime">();
@@ -696,6 +699,8 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   // 復号前の Object を時間で保持する段 (音声と映像で別々)。0 のときは null
   private readonly audioPreDecodeStage: PreDecodeDelayStage<PendingAudioObject> | null;
   private readonly videoPreDecodeStage: PreDecodeDelayStage<MoqtObject> | null;
+  // 音声と映像の短縮量を揃える操作の再入を止めるフラグ
+  private synchronizingPreDecodeDelay = false;
 
   // 統計情報 (受信の分。再生の分は getStats のたびに scheduler から読む)
   private audioStats: Pick<
@@ -766,6 +771,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
         }
       },
       onOverflow: (overflow) => this.notifyPreDecodeOverflow("audio", overflow),
+      onDelayShortenChanged: () => this.synchronizePreDecodeDelayShorten(),
       onDueError: (error) => this.notifyPreDecodeDueError(error),
     });
   }
@@ -795,8 +801,37 @@ export class MediaSubscriberImpl implements MediaSubscriber {
         }
       },
       onOverflow: (overflow) => this.notifyPreDecodeOverflow("video", overflow),
+      onDelayShortenChanged: () => this.synchronizePreDecodeDelayShorten(),
       onDueError: (error) => this.notifyPreDecodeDueError(error),
     });
+  }
+
+  /**
+   * 音声と映像の段の実効的な遅延を揃える
+   *
+   * 上限超過による遅延の短縮はメディアごとのキューで起きる。片方だけ短くなると、表示時刻の
+   * 基準の遅れがメディアごとにずれ、A/V 同期を合わせられなくなる。短縮量の大きい方 (実効
+   * 的な遅延が短い方) に両方を揃え、同じ遅延で復号する。
+   *
+   * 段の通知から呼ばれるため、揃える操作が再び通知しないようフラグで止める。
+   */
+  private synchronizePreDecodeDelayShorten(): void {
+    const audioStage = this.audioPreDecodeStage;
+    const videoStage = this.videoPreDecodeStage;
+    if (audioStage === null || videoStage === null || this.synchronizingPreDecodeDelay) {
+      return;
+    }
+    const shortenMs = Math.max(audioStage.delayShortenMs, videoStage.delayShortenMs);
+    if (audioStage.delayShortenMs === shortenMs && videoStage.delayShortenMs === shortenMs) {
+      return;
+    }
+    this.synchronizingPreDecodeDelay = true;
+    try {
+      audioStage.setDelayShortenMs(shortenMs);
+      videoStage.setDelayShortenMs(shortenMs);
+    } finally {
+      this.synchronizingPreDecodeDelay = false;
+    }
   }
 
   /**
@@ -810,12 +845,12 @@ export class MediaSubscriberImpl implements MediaSubscriber {
    */
   private notifyPreDecodeOverflow(
     kind: "audio" | "video",
-    overflow: { dropped: number; delayMs: number },
+    overflow: { dropped: number; delayMs: number; effectiveDelayMs: number },
   ): void {
     try {
       this.callbacks.onError?.(
         new Error(
-          `${kind} pre-decode delay queue overflow: dropped=${overflow.dropped}, delayMs=${this.preDecodeDelayMs}`,
+          `${kind} pre-decode delay queue overflow: dropped=${overflow.dropped}, delayMs=${overflow.delayMs}, effectiveDelayMs=${overflow.effectiveDelayMs}`,
         ),
       );
     } catch {
@@ -1402,6 +1437,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     this.audioPlayoutSession.releaseAudioContext();
     this.audioTimestampKinds.clear();
     this.audioInputLags.clear();
+    this.audioIntentionalDelays.clear();
     this.lastAudioTimestampKind.reset();
     this.audioWallClockSeen = false;
     this.videoWallClockSeen = false;
@@ -2008,12 +2044,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     if (this.audioTrackInfo) {
       this.audioDecoder = new AudioDecoderWrapper(useWorker, {
         output: (data) => this.handleAudioDecodedData(data),
-        error: (error) => {
-          // 復号前の段に残っている入力を捨てる。復号器が壊れた状態で古い入力を渡すと、
-          // 同じエラーを繰り返す
-          this.audioPreDecodeStage?.stop();
-          this.callbacks.onError?.(error);
-        },
+        error: (error) => this.handleAudioDecoderError(error),
       });
 
       // Catalog または options から codec を取得
@@ -2570,6 +2601,12 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     this.rememberAudioTimestampKind(timestamp, locProperties);
     // 入力の遅れも、復号の出力で同じ timestamp から引けるように覚える
     this.rememberAudioInputLag(timestamp, locProperties, arrivalWallClockMs);
+    // 実際に復号へ渡すまで保持した時間も覚える。上限超過で遅延が短くなった区間では設定値と
+    // ずれるため、追いつきの判定には実際の値を渡す
+    this.rememberAudioIntentionalDelay(
+      timestamp,
+      performance.timeOrigin + performance.now() - arrivalWallClockMs,
+    );
 
     // デコード
     this.audioDecoder.decode(obj.payload, "key", timestamp, 0);
@@ -2643,6 +2680,28 @@ export class MediaSubscriberImpl implements MediaSubscriber {
         break;
       }
       lags.delete(oldest);
+    }
+  }
+
+  /**
+   * 復号へ渡すまで実際に保持した時間を、復号の出力で引けるように覚える
+   *
+   * 受信側の追いつきには「意図して遅らせた分」を出力の遅れから差し引く必要がある。設定した
+   * 遅延ではなく実際に保持した時間を使うのは、上限超過でキューが期限を前倒しした区間でも
+   * 正しく差し引くためである。
+   *
+   * @param timestamp - 復号へ渡す timestamp (マイクロ秒)
+   * @param heldMs - Object の到着から復号へ渡すまで保持した時間 (ミリ秒)
+   */
+  private rememberAudioIntentionalDelay(timestamp: number, heldMs: number): void {
+    const delays = this.audioIntentionalDelays;
+    delays.delete(timestamp);
+    delays.set(timestamp, Math.max(0, heldMs));
+    for (const oldest of delays.keys()) {
+      if (delays.size <= TIMESTAMP_KIND_MAX_TRACKED) {
+        break;
+      }
+      delays.delete(oldest);
     }
   }
 
@@ -3008,6 +3067,13 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     const inputLagMs =
       takeDecodeInputEntry(this.audioInputLags, audioData.timestamp, timestampToleranceMicros) ??
       null;
+    // 意図して遅らせた分は、設定値ではなく実際に保持した時間を使う
+    const intentionalDelayMs =
+      takeDecodeInputEntry(
+        this.audioIntentionalDelays,
+        audioData.timestamp,
+        timestampToleranceMicros,
+      ) ?? this.preDecodeDelayMs;
     // 引けないときは、直前に分かっている種類を使う。記録と復号の出力の timestamp の格子が
     // ずれると (実測: 9.7 ms)、以後の出力がすべて引けなくなる。種類を失うと、その間の音が
     // 共有の時間軸へ記録されず、音声の基準の遅れが更新されないまま固定される
@@ -3029,7 +3095,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
         // 「復号が足している遅れ」を求める。測れないときは null (出力の遅れだけを使う)
         inputLagMs: matchedInputLagMs,
         // 意図した復号前の遅延は復号器に溜まった遅れではない。追いつきの判定から差し引く
-        intentionalDelayMs: this.preDecodeDelayMs,
+        intentionalDelayMs,
         timeline: this.playoutTimeline,
         // ライブラリは jitter buffer を常に有効として扱う
         useTimeline: true,
@@ -3101,6 +3167,23 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     // 表示しなかった (出し先が無い) ときは、最後に表示したフレームの状態を残す
     if (result.status === "queued") {
       this.videoWallClockSeen = result.wallClockTimestamp !== null;
+    }
+  }
+
+  /**
+   * 音声デコーダーのエラーを受けて、復号前の段を破棄する
+   *
+   * 復号器が壊れた状態で古い入力を渡すと、同じエラーを繰り返す。復号器そのものの作り直しは
+   * 追いつきの経路が持つため、ここでは段を捨てて通知だけを行う。
+   *
+   * @param error - 通知する失敗
+   */
+  private handleAudioDecoderError(error: Error): void {
+    this.audioPreDecodeStage?.stop();
+    try {
+      this.callbacks.onError?.(error);
+    } catch {
+      // 通知の失敗を伝える経路がこれ以上無い
     }
   }
 
