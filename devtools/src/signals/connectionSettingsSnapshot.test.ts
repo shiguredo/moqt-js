@@ -41,6 +41,7 @@ function resetSettingSignals(): void {
   settings.authorizationTokenAlias.value = "0";
   settings.useDedicatedWorker.value = true;
   settings.jitterBufferEnabled.value = true;
+  settings.preDecodeDelayMs.value = 0;
 }
 
 test("buildConnectionSettingsSnapshot: 接続に使う設定をそのまま写す", () => {
@@ -76,6 +77,7 @@ test("buildConnectionSettingsSnapshot: 接続に使う設定をそのまま写�
   settings.certificateHash.value = "AQID";
   settings.useDedicatedWorker.value = false;
   settings.jitterBufferEnabled.value = false;
+  settings.preDecodeDelayMs.value = 2_000;
 
   try {
     const snapshot = buildConnectionSettingsSnapshot();
@@ -110,6 +112,7 @@ test("buildConnectionSettingsSnapshot: 接続に使う設定をそのまま写�
     assert.equal(snapshot.certificateHash, "AQID");
     assert.equal(snapshot.useDedicatedWorker, false);
     assert.equal(snapshot.jitterBufferEnabled, false);
+    assert.equal(snapshot.preDecodeDelayMs, 2_000);
   } finally {
     resetSettingSignals();
   }
