@@ -96,4 +96,4 @@ moqt-devtools の Subscriber で、再生遅延を接続中に動的に変更で
 - 復号前の段を `src/playout/preDecodeDelayStage.ts` の `PreDecodeDelayStage` にまとめ、音声と映像、停止・再開の重複した配線を無くした。動的変更の配線は `devtools/src/hooks/subscriberPreDecodeDelay.ts` に切り出し、`devtools/src/hooks/subscriberPreDecodeDelay.test.ts` で 0 からの作成・増減・0 への flush・停止時の破棄・上限超過の通知を固定した。
 - 設定画面のラベルを `Playback Delay (Audio + Video)` にし、音声と映像の両方に効くことを示した。
 - 上限超過で遅延が短くなったときは、音声と映像の短縮量を揃えて A/V 同期を保つようにした。
-- 短縮した遅延は実時間と同じ速さで解消し、到着が一瞬途切れても表示が止まらないようにした。
+- 短縮した遅延はキューが空になったら解除する。期限は各 Object を積んだ時点で決めて保持し、短縮を時間で解消しない (時間で解消すると、保持中の Object の期限が時間と一緒に動いて取り出せなくなる)。
