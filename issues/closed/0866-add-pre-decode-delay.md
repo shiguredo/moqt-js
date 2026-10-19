@@ -94,7 +94,18 @@
 - `src/createMediaSubscriber.ts` で、音声は `receiveAudioObject` から復号前キューへ、映像は `GroupSwitchGate` を通した後の `handleVideoObjects` から復号前キューへ積む。メディアごとに 1 本のタイマーで期限を待ち、期限後に復号する。`close()` / `stop()` でキューとタイマーを破棄する。
 - 音声の入力の遅れは、復号前の遅延を挟んでも到着時点の値で記録する。初期 configure の保留を経由しても失わないよう、保留中の Object にも到着時刻を持たせた。
 - `AudioReceiveCatchUpObservation.intentionalDelayMs` と `AudioPlayoutRequest.intentionalDelayMs` を追加し、出力の遅れから入力の遅れと意図した遅延を引いて「復号が足している遅れ」を求めるようにした。音声の追いつきが意図した遅延を復号器の詰まりと誤判定しない。
-- 映像デコーダーのエラー時と音声の追いつきで復号器を作り直すときは、復号前キューも破棄する。
+- 映像デコーダーのエラー時と音声デコーダーのエラー時は復号前の段を破棄する。音声の追いつきで復号器を作り直すときは破棄しない。段が保持しているのは復号器に溜まった古い入力ではなく、これから復号する直近の入力であり、捨てると次の Object が期限を迎えるまで復号へ何も渡らず、指定した遅延の分だけ無音になる。
 - `src/playout/preDecodeDelay.test.ts` にキューの境界・順序・上限のテストを追加し、`src/createMediaSubscriber.test.ts` に検証・音声と映像の期限・Group の順序・`close()` の破棄・上限超過の通知のテストを追加した。`src/playout/audioReceiveCatchUp.test.ts` と `src/playout/audioPlayoutSession.test.ts` に意図した遅延のテストを追加した。モックやスタブは使っていない。
 - `docs/PLAYOUT_DELAY.md` を追加し、`docs/HIGH_LEVEL_API.md`、`docs/AV_SYNC_DECISIONS.md`、`README.md` を更新した。
 - `vp fmt --write .` / `tsc --noEmit` / `vp lint` / `vp test run` (230 ファイル、4054 テスト成功) / `vp run build` が通ることを確認した。
+
+## レビューでの修正 (2026-10-20)
+
+差分レビュー (review-diff-code) の指摘を受けて、次の点を修正した。
+
+- 上限超過で古い Object を落としたとき、残っている Object の期限を「保持できる時間」まで前倒しするようにした。これが無いと、保持できる時間が遅延より短い構成 (高いビットレートで長い遅延) で先頭の期限が来る前に毎回落とされ、復号へ何も渡らなくなる。
+- 音声の追いつきで復号器を作り直すときは復号前の段を破棄しない (上の解決方法のとおり)。
+- 遅延の保持とタイマーを `src/playout/preDecodeDelayStage.ts` の `PreDecodeDelayStage` へまとめ、音声と映像で重複していた配線を 1 か所にした。上限超過の通知は段が購読期間あたり 1 回に抑える。
+- 映像の初期 configure の保留を音声と同じ順序にした。保留キューを経由してから復号前の段へ積むため、`pendingObjectQueue` の上限と通知が効き、遅延の起点も configure 完了後になる。
+- `src/playout/preDecodeDelay.prop.ts` (PBT) と `src/playout/preDecodeDelayStage.test.ts` を追加した。`stop()` の破棄、映像側の上限超過通知、`intentionalDelayMs` の配線などのテストも追加した。
+- 表示遅延の実測 (`avSync.presentationDelayMs` が指定値の分だけ増えること) は未了である。実リレーでの計測は今後の確認項目とする (docs/PLAYOUT_DELAY.md に記載)。
