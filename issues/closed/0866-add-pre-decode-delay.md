@@ -53,7 +53,7 @@
 ### 音声の受信側追いつき
 
 - `AudioReceiveCatchUpObservation` に `intentionalDelayMs?: number` を追加し、`decodeLagMs` の計算から意図した遅延を引く。
-- `AudioPlayoutSession` の `AudioPlayoutRequest` に `intentionalDelayMs?: number` を追加し、そのまま観測へ渡す。`createMediaSubscriber` は `preDecodeDelayMs` を渡す。devtools は未指定 (0) のままで挙動を変えない。
+- `AudioPlayoutSession` の `AudioPlayoutRequest` に `intentionalDelayMs?: number` を追加し、そのまま観測へ渡す。`createMediaSubscriber` は実際に保持した時間を渡す。0867 で devtools にも動的な遅延を追加したため、devtools は「未指定 (0) のまま」ではなくなった。
 - これにより、意図した遅延を復号器の詰まりと誤判定しない。実際に復号器が遅れた場合は従来どおり追いつきが始まる。
 
 ### 通信仕様
@@ -97,7 +97,7 @@
 - 映像デコーダーのエラー時と音声デコーダーのエラー時は復号前の段を破棄する。音声の追いつきで復号器を作り直すときは破棄しない。段が保持しているのは復号器に溜まった古い入力ではなく、これから復号する直近の入力であり、捨てると次の Object が期限を迎えるまで復号へ何も渡らず、指定した遅延の分だけ無音になる。
 - `src/playout/preDecodeDelay.test.ts` にキューの境界・順序・上限のテストを追加し、`src/createMediaSubscriber.test.ts` に検証・音声と映像の期限・Group の順序・`close()` の破棄・上限超過の通知のテストを追加した。`src/playout/audioReceiveCatchUp.test.ts` と `src/playout/audioPlayoutSession.test.ts` に意図した遅延のテストを追加した。モックやスタブは使っていない。
 - `docs/PLAYOUT_DELAY.md` を追加し、`docs/HIGH_LEVEL_API.md`、`docs/AV_SYNC_DECISIONS.md`、`README.md` を更新した。
-- `vp fmt --write .` / `tsc --noEmit` / `vp lint` / `vp test run` (230 ファイル、4054 テスト成功) / `vp run build` が通ることを確認した。
+- `vp fmt --write .` / `tsc --noEmit` / `vp lint` / `vp test run` (233 ファイル、4099 テスト成功) / `vp run build` が通ることを確認した。
 
 ## レビューでの修正 (2026-10-20)
 
@@ -107,5 +107,8 @@
 - 音声の追いつきで復号器を作り直すときは復号前の段を破棄しない (上の解決方法のとおり)。
 - 遅延の保持とタイマーを `src/playout/preDecodeDelayStage.ts` の `PreDecodeDelayStage` へまとめ、音声と映像で重複していた配線を 1 か所にした。上限超過の通知は段が購読期間あたり 1 回に抑える。
 - 映像の初期 configure の保留を音声と同じ順序にした。保留キューを経由してから復号前の段へ積むため、`pendingObjectQueue` の上限と通知が効き、遅延の起点も configure 完了後になる。
-- `src/playout/preDecodeDelay.prop.ts` (PBT) と `src/playout/preDecodeDelayStage.test.ts` を追加した。`stop()` の破棄、映像側の上限超過通知、`intentionalDelayMs` の配線などのテストも追加した。
+- `src/playout/preDecodeDelay.prop.ts` (PBT) と `src/playout/preDecodeDelayStage.test.ts` を追加した。`stop()` の破棄、映像側の上限超過通知、復号器のエラー時の段の破棄、実際に保持した時間の記録などのテストも追加した。
+- 上限超過で期限を前倒ししたときにタイマーを張り直すようにした。しないと、最初の Object の元の期限 (遅延の分) まで復号が止まり、その間も古い Object を落とし続ける。
+- 短縮した遅延は実時間と同じ速さで解消する。音声と映像で短縮量を揃え、A/V 同期が崩れないようにした。
+- 音声の追いつきに渡す意図した遅延は、設定値ではなく実際に保持した時間にした。上限超過で短縮した区間でも正しく差し引ける。
 - 表示遅延の実測 (`avSync.presentationDelayMs` が指定値の分だけ増えること) は未了である。実リレーでの計測は今後の確認項目とする (docs/PLAYOUT_DELAY.md に記載)。

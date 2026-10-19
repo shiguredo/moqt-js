@@ -51,7 +51,7 @@ moqt-devtools の Subscriber で、再生遅延を接続中に動的に変更で
 
 ## 完了条件
 
-- moqt-devtools の Subscriber の設定画面に `Playback delay` があり、0 / 500 / 1,000 / 2,000 / 3,000 / 5,000 / 10,000 ms から選べる。
+- moqt-devtools の Subscriber の設定画面に `Playback Delay (Audio + Video)` があり、0 / 500 / 1,000 / 2,000 / 3,000 / 5,000 / 10,000 ms から選べる。
 - 接続中に設定を変えると、購読を止めずに音声と映像の復号開始が変わる。0 に戻すと保持中の Object が待たずに復号へ流れる。
 - 遅延中の映像の `latency` は遅延の分を含んだ値になる。音声の `receiveDelayMs` は到着時点で測る値であり、遅延の分を含まない (入力の遅れとして追いつきの判定に使い、意図した遅延は別に差し引く)。
 - URL クエリ `preDecodeDelayMs` で設定が復元され、Copy URL で書き出される。既定の 0 は載らない。
@@ -84,14 +84,16 @@ moqt-devtools の Subscriber で、再生遅延を接続中に動的に変更で
 - キュー上限超過時は古い Object から落とし、購読期間あたりメディアごとに 1 回だけ警告ログを残す。
 - `src/playout/preDecodeDelay.test.ts` に `setDelayMs` の延長・短縮・順序・不正値と `takeAll` のテストを追加した。`devtools/src/signals/connectionSettings.test.ts` と `connectionSettingsSnapshot.test.ts` に設定と URL のテストを追加した。`tests/e2e/devtools-playback-delay.spec.ts` で既定値・UI からの変更・Copy URL・URL からの復元を確認した。モックやスタブは使っていない。動的変更の配線は、レビューでの修正で `devtools/src/hooks/subscriberPreDecodeDelay.test.ts` と `src/playout/preDecodeDelayStage.test.ts` を追加して固定した。
 - `docs/PLAYOUT_DELAY.md` に moqt-devtools での動的設定の節を追加し、README の devtools の機能一覧に Playback Delay を追加した。
-- `vp fmt --write .` / `tsc --noEmit` / `vp lint` / `vp test run` (230 ファイル、4064 テスト成功) / `vp run build` / `vp exec playwright test --project=chromium tests/e2e/devtools-playback-delay.spec.ts` が通ることを確認した。
+- `vp fmt --write .` / `tsc --noEmit` / `vp lint` / `vp test run` (233 ファイル、4099 テスト成功) / `vp run build` / `vp exec playwright test --project=chromium tests/e2e/devtools-playback-delay.spec.ts` が通ることを確認した。
 - 実リレーに接続したまま Playback Delay を変えたときの表示遅延は E2E で測っていない。キューの期限計算と devtools の適用経路はテストで固定しているが、実リレーでの計測は今後の確認項目とする。
 
 ## レビューでの修正 (2026-10-20)
 
 差分レビュー (review-diff-code) の指摘を受けて、次の点を修正した。
 
-- `AudioPlayoutSession.handleDecodedAudio` に `intentionalDelayMs` を渡すようにした。渡さないと、購読中に遅延を大きく変えたときに音声の受信側追いつきが意図した遅延を復号器の詰まりと誤判定し、復号器を 1 秒おきに作り直す。
+- `AudioPlayoutSession.handleDecodedAudio` に `intentionalDelayMs` を渡すようにした。渡さないと、購読中に遅延を変えたとき (購読開始時から遅延がある場合も含む) に音声の受信側追いつきが意図した遅延を復号器の詰まりと誤判定し、復号器を 1 秒おきに作り直す。値は設定値ではなく、その Object を実際に保持した時間を使う。
 - 遅延を変えたときに音声の追いつきの観測を消すようにした。床 (直近の遅れの最小値) が古い遅延のまま残ると、変更後の最初の復号出力を詰まりと誤判定する。
 - 復号前の段を `src/playout/preDecodeDelayStage.ts` の `PreDecodeDelayStage` にまとめ、音声と映像、停止・再開の重複した配線を無くした。動的変更の配線は `devtools/src/hooks/subscriberPreDecodeDelay.ts` に切り出し、`devtools/src/hooks/subscriberPreDecodeDelay.test.ts` で 0 からの作成・増減・0 への flush・停止時の破棄・上限超過の通知を固定した。
 - 設定画面のラベルを `Playback Delay (Audio + Video)` にし、音声と映像の両方に効くことを示した。
+- 上限超過で遅延が短くなったときは、音声と映像の短縮量を揃えて A/V 同期を保つようにした。
+- 短縮した遅延は実時間と同じ速さで解消し、到着が一瞬途切れても表示が止まらないようにした。
