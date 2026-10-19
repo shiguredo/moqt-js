@@ -105,19 +105,9 @@ export class PreDecodeDelayStage<T> {
     });
   }
 
-  /** 設定されている遅延 (ミリ秒) */
-  get delayMs(): number {
-    return this.queue.delayMs;
-  }
-
   /** 上限超過で前倒ししている量 (ミリ秒)。0 なら設定した遅延のまま */
   get delayShortenMs(): number {
     return this.queue.delayShortenMs;
-  }
-
-  /** いまの実効的な遅延 (ミリ秒)。上限超過で前倒しした分を引いた値 */
-  get effectiveDelayMs(): number {
-    return this.queue.effectiveDelayMs;
   }
 
   /** 保持している件数 */

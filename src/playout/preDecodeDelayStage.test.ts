@@ -229,15 +229,14 @@ test("PreDecodeDelayStage: 期限の昇順に通知する", () => {
   assert.deepEqual(due, [["1 件目"], ["2 件目"]], "期限の昇順に通知すること");
 });
 
-// 実装のクラスが公開している遅延と件数はキューの値と一致する。
-test("PreDecodeDelayStage: delayMs / size / bufferedBytes はキューの値を返す", () => {
+// 段の件数とバイト数はキューの値と一致する。
+test("PreDecodeDelayStage: size / bufferedBytes はキューの値を返す", () => {
   const { stage } = makeStage({ delayMs: 100 });
-  assert.equal(stage.delayMs, 100);
   stage.push("abc");
   assert.equal(stage.size, 1);
   assert.equal(stage.bufferedBytes, 3);
   stage.setDelayMs(250);
-  assert.equal(stage.delayMs, 250);
+  assert.equal(stage.delayShortenMs, 0, "遅延を変えたら短縮は解除されること");
 });
 
 // 上限超過の判定はキューと同じ規則である (上限 0 以下は無制限)。

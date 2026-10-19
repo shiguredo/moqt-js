@@ -38,8 +38,15 @@ interface TakeOperation {
   readonly advanceMs: number;
 }
 
+/** 上限超過の同期を模して短縮量を外から設定する操作 */
+interface ShortenOperation {
+  readonly kind: "shorten";
+  readonly shortenMs: number;
+  readonly advanceMs: number;
+}
+
 /** 任意の操作列 */
-type Operation = PushOperation | TakeOperation;
+type Operation = PushOperation | TakeOperation | ShortenOperation;
 
 /** 積む操作と取り出す操作の任意列 */
 const operationsArbitrary: fc.Arbitrary<Operation[]> = fc.array(
@@ -52,6 +59,11 @@ const operationsArbitrary: fc.Arbitrary<Operation[]> = fc.array(
     fc.record<TakeOperation>({
       kind: fc.constant("take"),
       advanceMs: fc.integer({ min: 0, max: 300 }),
+    }),
+    fc.record<ShortenOperation>({
+      kind: fc.constant("shorten"),
+      shortenMs: fc.integer({ min: 0, max: 1_000 }),
+      advanceMs: fc.integer({ min: 0, max: 20 }),
     }),
   ),
   { minLength: 1, maxLength: 80 },
@@ -86,10 +98,12 @@ test("PreDecodeDelayQueue: 積んだ順に取り出し、バイト数が保存�
             for (const dropped of result.dropped) {
               droppedBytes += dropped.bytes;
             }
-          } else {
+          } else if (operation.kind === "take") {
             for (const item of queue.takeDue(nowMs)) {
               taken.push(item.id);
             }
+          } else {
+            queue.setDelayShortenMs(Math.min(delayMs, operation.shortenMs));
           }
           assert.isAtMost(queue.bufferedBytes, maxBytes, "保持バイト数が上限を超えないこと");
         }

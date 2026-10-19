@@ -22,6 +22,10 @@
  * 積んだ Object の期限は動かさない (期限を実効的な遅延から毎回計算し直すと、短縮を時間で
  * 解消するときに期限が時間と一緒に動き、いつまでも取り出せなくなる)。上限超過の前倒しだけが
  * 既に積んだ Object の期限を動かす。
+ *
+ * 取り出しは積んだ順を守る。実効的な遅延を小さくすると、後から積んだ Object の期限が先に
+ * 来ることがあるが、先頭の Object が未期限の間は取り出さない。追い越させると復号へ渡す順序が
+ * 入れ替わり、音声の時刻が往復する・映像が欠落扱いになるためである。
  */
 
 /**
@@ -109,8 +113,8 @@ export class PreDecodeDelayQueue<T> {
   private readonly maxBytes: number;
   private readonly maxObjects: number;
   // 積んだ時刻の昇順に並べた Object。期限 (dueAtMs) はこの順序と一致しないことがある
-  // (短縮中に積んだ Object の期限が、後から積んだ Object より遅くなる) ため、取り出しは
-  // 全件を見る
+  // (実効的な遅延を小さくすると、後から積んだ Object の期限が先に来る) ため、取り出しは
+  // 先頭から期限が連続して来ている分だけを返す
   private entries: PreDecodeDelayEntry<T>[] = [];
   private bufferedBytesValue = 0;
   // 上限超過で前倒しした遅延の短縮分 (ミリ秒)。これから積む Object の期限にだけ使う
@@ -242,43 +246,43 @@ export class PreDecodeDelayQueue<T> {
   /**
    * 期限が来た Object を取り出す
    *
-   * 期限は積んだ時刻の順に並んでいるとは限らないため、全件を見て期限が来たものを
-   * 積んだ順に返す。
+   * 積んだ順を守るため、先頭から期限が来ている分だけを返す。後ろの Object の期限が先に
+   * 来ていても、先頭が未期限なら取り出さない (追い越させない)。
    *
    * @param nowMs - 今の時刻 (ミリ秒)
    * @returns 期限が来た Object (積んだ順)
    */
   takeDue(nowMs: number): T[] {
-    const due: T[] = [];
-    const remaining: PreDecodeDelayEntry<T>[] = [];
-    for (const entry of this.entries) {
-      if (entry.dueAtMs <= nowMs) {
-        this.bufferedBytesValue -= entry.bytes;
-        due.push(entry.item);
-      } else {
-        remaining.push(entry);
+    let dueCount = 0;
+    while (dueCount < this.entries.length) {
+      const entry = this.entries[dueCount];
+      if (entry === undefined || entry.dueAtMs > nowMs) {
+        break;
       }
+      dueCount++;
     }
-    if (due.length === 0) {
+    if (dueCount === 0) {
       return [];
     }
-    this.entries = remaining;
+    const due = this.entries.splice(0, dueCount);
+    for (const entry of due) {
+      this.bufferedBytesValue -= entry.bytes;
+    }
     if (this.entries.length === 0) {
       // 空になったら上限超過による短縮は解除する。次の Object は元の遅延で保持する
       this.delayShortenValue = 0;
     }
-    return due;
+    return due.map((entry) => entry.item);
   }
 
-  /** 次に期限が来る時刻 (ミリ秒)。保持していなければ null */
+  /**
+   * 次に期限が来る時刻 (ミリ秒)。保持していなければ null
+   *
+   * 積んだ順を守るため、先頭の Object の期限を返す (後ろの Object の期限が先でも待つ)。
+   */
   nextDueMs(): number | null {
-    let nextMs: number | null = null;
-    for (const entry of this.entries) {
-      if (nextMs === null || entry.dueAtMs < nextMs) {
-        nextMs = entry.dueAtMs;
-      }
-    }
-    return nextMs;
+    const head = this.entries[0];
+    return head === undefined ? null : head.dueAtMs;
   }
 
   /**
