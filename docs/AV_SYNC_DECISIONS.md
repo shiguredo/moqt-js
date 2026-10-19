@@ -964,6 +964,9 @@ runner の処理能力を測っていた (実測: CI の 4 vCPU の runner、`38
 - `AUDIO_RECEIVE_CATCH_UP_COOLDOWN_MS` = 1 秒 (遅れが戻るまで作り直しを重ねる間隔)
 - `AUDIO_RECEIVE_CATCH_UP_SKIP_MIN_MS` = 1 ms (timestamp の跳びを、捨てた音とみなす最小)
 - 遅れは「復号の出力を受け取った壁時計 - `AudioData.timestamp`」で測る (`AudioPlayoutSession`)
+- 購読側が `MediaSubscriberOptions.preDecodeDelayMs` で復号を意図的に遅らせている場合は、
+  その値を `AudioReceiveCatchUpObservation.intentionalDelayMs` として渡し、出力の遅れから
+  差し引く。意図した遅延を復号器の詰まりと誤判定しない
 - 追いつく手段は復号器の作り直し (`AudioDecoderWrapper.reset()`) だけである。鳴らす音は捨てない
 - 音声の再生は購読 (`AudioPlayoutSession`) ごとに 1 つの `AudioReceiveCatchUp` を持つ
 

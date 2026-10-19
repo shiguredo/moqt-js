@@ -24,6 +24,9 @@ import {
 /** 音声の 1 音の長さ (ミリ秒)。opus のパケットと同じ 20 ms にする */
 const FRAME_INTERVAL_MS = 20;
 
+/** テストで使う、意図した復号前の遅延 (ミリ秒) */
+const INTENTIONAL_DELAY_MS = 2_000;
+
 /** 復号の出力の timestamp の起点 (Unix epoch マイクロ秒)。実時間と同じ桁にする */
 const TIMESTAMP_ORIGIN_MICROS = 1_800_000_000_000_000;
 
@@ -620,4 +623,96 @@ test("observe: 入力の遅れが測れないときは、出力の遅れをそ�
   const snapshot = catchUp.snapshot();
   assert.isNull(snapshot.inputLagMs, "測れなかったことが残ること");
   assert.equal(snapshot.decodeLagMs, 200, "入力の遅れが無いときは出力の遅れそのもの");
+});
+
+/**
+ * 完了条件: 購読側が意図して復号を遅らせている場合、その遅延は復号器に溜まった遅れではない。
+ * 出力の遅れから意図した遅延を引いた値が健全な範囲なら、追いつきを始めない。
+ */
+test("observe: 意図した復号前の遅延は復号器の詰まりとして扱わない", () => {
+  const catchUp = new AudioReceiveCatchUp();
+  // 2 秒遅らせている。出力の遅れは「意図した遅延 + 入力の遅れ + 健全な復号の遅れ」になる
+  const inputLagMs = 10;
+  const lagMs = INTENTIONAL_DELAY_MS + inputLagMs + HEALTHY_LAG_MS;
+  const startTimes: number[] = [];
+  let timestampMicros = TIMESTAMP_ORIGIN_MICROS;
+  for (let index = 0; index < 25; index++) {
+    const nowMs = index * FRAME_INTERVAL_MS;
+    const decision = catchUp.observe({
+      nowMs,
+      lagMs,
+      inputLagMs,
+      intentionalDelayMs: INTENTIONAL_DELAY_MS,
+      durationMs: FRAME_INTERVAL_MS,
+      timestampMicros,
+    });
+    if (decision.rebuildDecoder) {
+      startTimes.push(nowMs);
+    }
+    timestampMicros += FRAME_INTERVAL_MS * 1_000;
+  }
+
+  assert.deepEqual(startTimes, [], "意図した遅延では作り直さないこと");
+  const snapshot = catchUp.snapshot();
+  assert.equal(snapshot.lagMs, lagMs, "観測した出力の遅れはそのまま残ること");
+  assert.equal(snapshot.inputLagMs, inputLagMs);
+  assert.equal(snapshot.decodeLagMs, HEALTHY_LAG_MS, "意図した遅延と入力の遅れを引くこと");
+  assert.equal(snapshot.catchUpStarts, 0);
+});
+
+/**
+ * 完了条件: TIMESTAMP が無い / Timescale がある音では入力の遅れを測れない。その場合でも
+ * 意図した遅延だけは差し引き、復号器の詰まりと誤判定しない。
+ */
+test("observe: 入力の遅れが測れなくても意図した遅延を差し引く", () => {
+  const catchUp = new AudioReceiveCatchUp();
+  const decision = catchUp.observe({
+    nowMs: 0,
+    lagMs: INTENTIONAL_DELAY_MS + HEALTHY_LAG_MS,
+    inputLagMs: null,
+    intentionalDelayMs: INTENTIONAL_DELAY_MS,
+    durationMs: FRAME_INTERVAL_MS,
+    timestampMicros: TIMESTAMP_ORIGIN_MICROS,
+  });
+
+  assert.isFalse(decision.rebuildDecoder, "意図した遅延では作り直さないこと");
+  const snapshot = catchUp.snapshot();
+  assert.isNull(snapshot.inputLagMs);
+  assert.equal(snapshot.decodeLagMs, HEALTHY_LAG_MS, "出力の遅れから意図した遅延を引くこと");
+});
+
+/**
+ * 完了条件: 意図した遅延を差し引いた後に復号器が実際に詰まったら、従来どおり追いつきを
+ * 始める。意図した遅延が判定を覆い隠さない。
+ */
+test("observe: 意図した遅延を超えて復号器が遅れたら追いつきを始める", () => {
+  const catchUp = new AudioReceiveCatchUp();
+  const inputLagMs = 10;
+  const healthyLagMs = INTENTIONAL_DELAY_MS + inputLagMs + HEALTHY_LAG_MS;
+  let timestampMicros = TIMESTAMP_ORIGIN_MICROS;
+  const observe = (nowMs: number, lagMs: number) => {
+    const decision = catchUp.observe({
+      nowMs,
+      lagMs,
+      inputLagMs,
+      intentionalDelayMs: INTENTIONAL_DELAY_MS,
+      durationMs: FRAME_INTERVAL_MS,
+      timestampMicros,
+    });
+    timestampMicros += FRAME_INTERVAL_MS * 1_000;
+    return decision;
+  };
+
+  // 5 秒間は健全な復号の遅れ (20 ms) が続く
+  for (let index = 0; index < 250; index++) {
+    assert.isFalse(
+      observe(index * FRAME_INTERVAL_MS, healthyLagMs).rebuildDecoder,
+      "健全な間は作り直さないこと",
+    );
+  }
+  // 復号器が 150 ms 余計に詰まる。意図した遅延を引いても 170 ms の遅れが残る
+  const decision = observe(250 * FRAME_INTERVAL_MS, healthyLagMs + 150);
+
+  assert.isTrue(decision.rebuildDecoder, "意図した遅延を超えたら作り直すこと");
+  assert.equal(catchUp.snapshot().decodeLagMs, HEALTHY_LAG_MS + 150);
 });

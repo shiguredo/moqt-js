@@ -1,0 +1,244 @@
+/**
+ * PreDecodeDelayQueue (復号前の Object を時間で保持するキュー) の単体テスト
+ *
+ * タイマーは持たないため、すべて時刻を引数で渡して固定する。2 秒の遅延は実際に待たず、
+ * 期限の計算だけで検証する。
+ */
+
+import { test, assert } from "vite-plus/test";
+import {
+  MAX_PRE_DECODE_DELAY_MS,
+  PreDecodeDelayQueue,
+  type PreDecodeDelayQueueOptions,
+} from "./preDecodeDelay";
+
+/** テストで使う遅延 (ミリ秒) */
+const DELAY_MS = 2_000;
+
+/** テスト用のキューを作る */
+function makeQueue(options: Partial<PreDecodeDelayQueueOptions> = {}): PreDecodeDelayQueue<string> {
+  return new PreDecodeDelayQueue<string>({ delayMs: DELAY_MS, ...options });
+}
+
+// 2 秒の遅延では、期限の 1 ms 前まで取り出せず、期限ちょうどで取り出せる。
+test("PreDecodeDelayQueue: 2 秒の期限まで Object を取り出さない", () => {
+  const queue = makeQueue();
+  const result = queue.push("a", 3, 1_000);
+
+  assert.equal(result.dropped.length, 0, "上限内の追加では落とさないこと");
+  assert.isFalse(result.overflowed, "上限内の追加では overflow にしないこと");
+  assert.equal(queue.size, 1);
+  assert.equal(queue.bufferedBytes, 3);
+  assert.equal(queue.nextDueMs(), 3_000);
+
+  assert.deepEqual(queue.takeDue(2_999), [], "期限の 1 ms 前では取り出さないこと");
+  assert.equal(queue.size, 1, "期限前は保持したままであること");
+  assert.deepEqual(queue.takeDue(3_000), ["a"], "期限ちょうどで取り出すこと");
+  assert.equal(queue.size, 0);
+  assert.equal(queue.bufferedBytes, 0, "取り出した分のバイト数を戻すこと");
+  assert.isNull(queue.nextDueMs(), "空になったら次の期限は無いこと");
+});
+
+// 積んだ時刻が前後しても、期限の昇順に並べて取り出す。
+test("PreDecodeDelayQueue: 期限の昇順に並べて取り出す", () => {
+  const queue = makeQueue();
+  queue.push("先に積んだが期限が遅い", 1, 1_000);
+  queue.push("後に積んだが期限が早い", 1, 500);
+
+  assert.equal(queue.nextDueMs(), 2_500, "期限が最も早い Object を先頭にすること");
+  assert.deepEqual(
+    queue.takeDue(2_600),
+    ["後に積んだが期限が早い"],
+    "期限が来た Object だけを取り出すこと",
+  );
+  assert.deepEqual(
+    queue.takeDue(3_000),
+    ["先に積んだが期限が遅い"],
+    "残りの Object を期限で取り出すこと",
+  );
+});
+
+// 同じ期限の Object は積んだ順に取り出す (安定した順序)。
+test("PreDecodeDelayQueue: 同じ期限の Object は積んだ順に取り出す", () => {
+  const queue = makeQueue();
+  queue.push("1 件目", 1, 1_000);
+  queue.push("2 件目", 1, 1_000);
+  queue.push("3 件目", 1, 1_000);
+
+  assert.deepEqual(queue.takeDue(3_000), ["1 件目", "2 件目", "3 件目"]);
+});
+
+// clear は保持している Object とバイト数をすべて捨てる。
+test("PreDecodeDelayQueue: clear で保持とバイト数を捨てる", () => {
+  const queue = makeQueue();
+  queue.push("a", 4, 1_000);
+  queue.push("b", 6, 1_000);
+  assert.equal(queue.bufferedBytes, 10);
+
+  queue.clear();
+
+  assert.equal(queue.size, 0);
+  assert.equal(queue.bufferedBytes, 0);
+  assert.isNull(queue.nextDueMs());
+  assert.deepEqual(queue.takeDue(10_000), []);
+});
+
+// 件数上限を超えたら古い Object から落とす。
+test("PreDecodeDelayQueue: 件数上限を超えたら古い Object から落とす", () => {
+  const queue = makeQueue({ maxObjects: 2 });
+  queue.push("a", 1, 1_000);
+  queue.push("b", 1, 1_000);
+  const result = queue.push("c", 1, 1_000);
+
+  assert.isTrue(result.overflowed);
+  assert.deepEqual(result.dropped, ["a"], "古い Object を落とすこと");
+  assert.equal(queue.size, 2);
+  assert.deepEqual(queue.takeDue(3_000), ["b", "c"]);
+});
+
+// バイト上限を超えたら古い Object から落とし、保持しているバイト数を合わせる。
+test("PreDecodeDelayQueue: バイト上限を超えたら古い Object から落とす", () => {
+  const queue = makeQueue({ maxBytes: 10 });
+  queue.push("a", 6, 1_000);
+  const result = queue.push("b", 6, 1_000);
+
+  assert.isTrue(result.overflowed);
+  assert.deepEqual(result.dropped, ["a"]);
+  assert.equal(queue.size, 1);
+  assert.equal(queue.bufferedBytes, 6, "落とした分のバイト数を引くこと");
+  assert.deepEqual(queue.takeDue(3_000), ["b"]);
+});
+
+// 1 件だけでバイト上限を超える Object は保持しない。
+test("PreDecodeDelayQueue: 1 件でバイト上限を超える Object は保持しない", () => {
+  const queue = makeQueue({ maxBytes: 10 });
+  const result = queue.push("巨大", 11, 1_000);
+
+  assert.isTrue(result.overflowed);
+  assert.deepEqual(result.dropped, ["巨大"]);
+  assert.equal(queue.size, 0);
+  assert.equal(queue.bufferedBytes, 0);
+  assert.isNull(queue.nextDueMs());
+});
+
+// 上限に 0 以下を指定したら無制限にする (既存の受信バッファ上限の規約に合わせる)。
+test("PreDecodeDelayQueue: 上限に 0 以下を指定したら無制限にする", () => {
+  const queue = makeQueue({ maxBytes: 0, maxObjects: 0 });
+  for (let index = 0; index < 20; index++) {
+    const result = queue.push(`object-${index}`, 1_000_000, 1_000);
+    assert.isFalse(result.overflowed, "上限が無制限なら overflow にしないこと");
+  }
+  assert.equal(queue.size, 20);
+});
+
+// 遅延 0 では積んだ直後に取り出せる。
+test("PreDecodeDelayQueue: 遅延 0 では積んだ直後に取り出せる", () => {
+  const queue = new PreDecodeDelayQueue<string>({ delayMs: 0 });
+  queue.push("a", 1, 5_000);
+
+  assert.equal(queue.nextDueMs(), 5_000);
+  assert.deepEqual(queue.takeDue(5_000), ["a"]);
+});
+
+// 遅延の値が不正なら生成時にエラーにする。
+test("PreDecodeDelayQueue: 不正な遅延は生成時にエラーにする", () => {
+  assert.throws(
+    () => new PreDecodeDelayQueue<string>({ delayMs: -1 }),
+    /delayMs must be a finite number >= 0/,
+  );
+  assert.throws(
+    () => new PreDecodeDelayQueue<string>({ delayMs: Number.NaN }),
+    /delayMs must be a finite number >= 0/,
+  );
+  assert.throws(
+    () => new PreDecodeDelayQueue<string>({ delayMs: Number.POSITIVE_INFINITY }),
+    /delayMs must be a finite number >= 0/,
+  );
+});
+
+// バイト数が不正なら push 時にエラーにする。
+test("PreDecodeDelayQueue: 不正なバイト数は push 時にエラーにする", () => {
+  const queue = makeQueue();
+  assert.throws(() => queue.push("a", -1, 1_000), /bytes must be a finite number >= 0/);
+  assert.throws(() => queue.push("a", Number.NaN, 1_000), /bytes must be a finite number >= 0/);
+});
+
+// 定数の関係を固定する。遅延の上限は 2 秒以上を含む。
+test("PreDecodeDelayQueue: 遅延の上限は 2 秒以上である", () => {
+  assert.isAtLeast(MAX_PRE_DECODE_DELAY_MS, 2_000);
+});
+
+// 遅延を後から大きくすると、保持中の Object の期限も新しい値で計算し直す。
+test("PreDecodeDelayQueue: setDelayMs で保持中の期限を後ろへ伸ばす", () => {
+  const queue = makeQueue();
+  queue.push("a", 1, 1_000);
+
+  queue.setDelayMs(5_000);
+
+  assert.equal(queue.delayMs, 5_000);
+  assert.equal(queue.nextDueMs(), 6_000);
+  assert.deepEqual(queue.takeDue(5_999), [], "新しい期限の前では取り出さないこと");
+  assert.deepEqual(queue.takeDue(6_000), ["a"]);
+});
+
+// 遅延を後から小さくすると、期限が早まり、期限を過ぎた Object はすぐに取り出せる。
+test("PreDecodeDelayQueue: setDelayMs で保持中の期限を前へ縮める", () => {
+  const queue = makeQueue();
+  queue.push("a", 1, 1_000);
+
+  queue.setDelayMs(500);
+
+  assert.equal(queue.nextDueMs(), 1_500);
+  assert.deepEqual(queue.takeDue(1_500), ["a"]);
+});
+
+// 遅延を変えても、保持している Object の順序は積んだ順のままである。
+test("PreDecodeDelayQueue: setDelayMs しても Object の順序を変えない", () => {
+  const queue = makeQueue();
+  queue.push("a", 1, 1_000);
+  queue.push("b", 1, 1_100);
+  queue.push("c", 1, 1_200);
+
+  queue.setDelayMs(100);
+
+  assert.deepEqual(queue.takeDue(1_300), ["a", "b", "c"]);
+});
+
+// takeAll は期限を待たずにすべて取り出し、件数とバイト数を戻す。
+test("PreDecodeDelayQueue: takeAll で期限を待たずに取り出す", () => {
+  const queue = makeQueue();
+  queue.push("a", 3, 1_000);
+  queue.push("b", 4, 1_000);
+
+  const items = queue.takeAll();
+
+  assert.deepEqual(items, ["a", "b"]);
+  assert.equal(queue.size, 0);
+  assert.equal(queue.bufferedBytes, 0);
+  assert.isNull(queue.nextDueMs());
+  assert.deepEqual(queue.takeAll(), [], "空のときは空配列を返すこと");
+});
+
+// setDelayMs の値も生成時と同じ規則で検証する。
+test("PreDecodeDelayQueue: setDelayMs の不正値を拒否する", () => {
+  const queue = makeQueue();
+  assert.throws(() => queue.setDelayMs(-1), /delayMs must be a finite number >= 0/);
+  assert.throws(() => queue.setDelayMs(Number.NaN), /delayMs must be a finite number >= 0/);
+  assert.throws(
+    () => queue.setDelayMs(Number.POSITIVE_INFINITY),
+    /delayMs must be a finite number >= 0/,
+  );
+  assert.throws(
+    () => queue.setDelayMs(MAX_PRE_DECODE_DELAY_MS + 1),
+    /delayMs must be <=/,
+    "上限を超える遅延を拒否すること",
+  );
+});
+
+// 生成時も上限を超える遅延を拒否する。
+test("PreDecodeDelayQueue: 上限を超える遅延は生成時に拒否する", () => {
+  assert.throws(
+    () => new PreDecodeDelayQueue<string>({ delayMs: MAX_PRE_DECODE_DELAY_MS + 1 }),
+    /delayMs must be <=/,
+  );
+});

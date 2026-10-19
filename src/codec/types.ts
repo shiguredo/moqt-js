@@ -310,6 +310,12 @@ export interface MediaSubscriberOptions {
   // (音声と映像が同時に溢れれば 1 購読期間に最大 2 回。破棄した Object は受信統計に
   // 数えない)
   pendingObjectQueue?: Partial<import("../createMediaSubscriber").PendingObjectQueueOptions>;
+  // 受信した Object を復号へ渡すまでの追加遅延 (ms)。既定 0
+  // 2 秒以上の遅延も指定できる。上限は MAX_PRE_DECODE_DELAY_MS
+  // 実際の表示遅延は、この値に経路・復号・jitter buffer の遅れが加わる。
+  // catalog の targetLatency とは加算される。受信バッファの上限
+  // (ConnectOptions.dataStreamMaxBufferBytes) とは無関係であり、その値は変えない
+  preDecodeDelayMs?: number;
 }
 
 // MediaSubscriber コールバック

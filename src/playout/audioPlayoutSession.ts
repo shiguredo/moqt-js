@@ -104,6 +104,14 @@ export interface AudioPlayoutRequest {
    * 側が null を渡す。省略したときは出力の遅れだけを使う (入力の遅れを導入する前と同じ挙動)
    */
   readonly inputLagMs?: number | null;
+  /**
+   * 意図した復号前の遅延 (ミリ秒)。省略したときは 0
+   *
+   * 購読側が `MediaSubscriberOptions.preDecodeDelayMs` で復号を意図的に遅らせているとき、
+   * その分は復号器に溜まった遅れではない。受信側の追いつきは、出力の遅れから入力の遅れと
+   * この値を引いた「復号が足している遅れ」で復号器の作り直しを決める
+   */
+  readonly intentionalDelayMs?: number;
   /** 音声と映像で共有する表示時刻の時間軸 */
   readonly timeline: PlayoutTimeline;
   /**
@@ -288,6 +296,8 @@ export class AudioPlayoutSession {
           // 測れないとき (TIMESTAMP が無い、Timescale がある、対応が引けない) は null に
           // なっており、そのときは出力の遅れだけを使う
           inputLagMs: request.inputLagMs ?? null,
+          // 意図した復号前の遅延は復号器に溜まった遅れではない。追いつきの判定から差し引く
+          intentionalDelayMs: request.intentionalDelayMs ?? 0,
           durationMs: durationSeconds * 1_000,
           timestampMicros: wallClockTimestamp,
         }).rebuildDecoder;

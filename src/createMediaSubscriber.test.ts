@@ -13,7 +13,8 @@
  */
 
 import { test, assert } from "vite-plus/test";
-import { MediaSubscriberImpl } from "./createMediaSubscriber";
+import { MediaSubscriberImpl, createMediaSubscriber } from "./createMediaSubscriber";
+import { MAX_PRE_DECODE_DELAY_MS, PreDecodeDelayQueue } from "./playout/preDecodeDelay";
 import type { VideoDecodeInputs } from "./playout/videoPlayoutSession";
 import type { AudioPlayoutSession } from "./playout/audioPlayoutSession";
 import { AUDIO_RECEIVE_CATCH_UP_MIN_MS } from "./playout/audioReceiveCatchUp";
@@ -21,6 +22,7 @@ import type { MediaConnectSettings } from "./createMedia/connect";
 import type { FetchOptions, Session, SubscribeCallbacks, SubscribeOptions } from "./session";
 import type { Subscriber, RequestUpdateOptions } from "./subscriber";
 import type {
+  AudioDelivery,
   AudioReceiverStats,
   MediaReceiverStats,
   MediaSubscriberCallbacks,
@@ -2013,6 +2015,67 @@ function createVideoGateSubscriber(): {
   return { subscriber, control, decoded };
 }
 
+/** 復号前の遅延キューが保持する音声 Object (実装の private 型と同じ形) */
+interface DelayedAudioItem {
+  readonly object: MoqtObject;
+  readonly delivery: AudioDelivery;
+  readonly arrivalWallClockMs: number;
+}
+
+/**
+ * 復号前の遅延の検証用の制御口
+ *
+ * `receiveAudioObject` / `receiveVideoObject` を直接駆動し、期限が来るまで復号へ
+ * 渡らないこと、期限後に到着順で渡ることを確かめる。デコーダはブラウザ API を
+ * 必要とするため、記録用の最小オブジェクトを注入する (モジュール置換は行わない)。
+ */
+interface SubscriberPreDecodeDelayControl extends SubscriberVideoGateControl {
+  audioDecoder: {
+    decode(payload: Uint8Array, type: "key" | "delta", timestamp: number, duration: number): void;
+    close(): Promise<void>;
+  } | null;
+  audioDecoderConfigured: boolean;
+  audioInputLags: Map<number, number>;
+  audioPreDecodeQueue: PreDecodeDelayQueue<DelayedAudioItem> | null;
+  videoPreDecodeQueue: PreDecodeDelayQueue<MoqtObject> | null;
+  receiveAudioObject(obj: MoqtObject, delivery?: AudioDelivery): void;
+}
+
+/** 復号前の遅延を持つ購読と、復号へ渡った payload の記録を作る */
+function createPreDecodeDelaySubscriber(delayMs: number): {
+  subscriber: MediaSubscriberImpl;
+  control: SubscriberPreDecodeDelayControl;
+  decodedAudio: number[];
+  decodedVideo: number[];
+  errors: Error[];
+} {
+  const errors: Error[] = [];
+  const subscriber = new MediaSubscriberImpl(
+    "moqt://example.com/live",
+    { namespace: ["live"], audio: {}, video: {}, preDecodeDelayMs: delayMs },
+    { onError: (error) => errors.push(error) },
+  );
+  const control = subscriber as unknown as SubscriberPreDecodeDelayControl;
+  const decodedAudio: number[] = [];
+  const decodedVideo: number[] = [];
+  control.audioDecoder = {
+    decode: (payload) => {
+      decodedAudio.push(payload[0] ?? -1);
+    },
+    close: async () => {},
+  };
+  control.audioDecoderConfigured = true;
+  // 映像デコーダの型は decode だけを持つため、close() を足した実物の代役を型変換して入れる
+  control.videoDecoder = {
+    decode: (payload: Uint8Array) => {
+      decodedVideo.push(payload[0] ?? -1);
+    },
+    close: async () => {},
+  } as unknown as SubscriberVideoGateControl["videoDecoder"];
+  control.videoDecoderConfigured = true;
+  return { subscriber, control, decodedAudio, decodedVideo, errors };
+}
+
 /**
  * draft-ietf-moq-transport-22 Section 2.1: Object は順不同で届きうる。後から購読した直後
  * などに、次の Group の先頭 (キーフレーム) が前の Group の最後の Object より先に届くことが
@@ -2046,6 +2109,185 @@ test("receiveVideoObject: 前の Group の stream が終わらなくても上限
     setTimeout(resolve, GROUP_SWITCH_HOLD_MS + 30);
   });
   assert.deepEqual(decoded, [0x10, 0x20]);
+});
+
+/**
+ * 完了条件: `preDecodeDelayMs` は 0 と上限を受け付け、負数・非有限数・上限超過は拒否する。
+ * 0 のときは遅延キューを作らず、既存の経路をそのまま通す。
+ */
+test("MediaSubscriberImpl: preDecodeDelayMs の不正値を拒否する", async () => {
+  // 0 は追加遅延なしとして受け付け、キューを作らない
+  const zero = new MediaSubscriberImpl("moqt://example.com/live", {
+    namespace: ["live"],
+    audio: {},
+    preDecodeDelayMs: 0,
+  });
+  const zeroControl = zero as unknown as SubscriberPreDecodeDelayControl;
+  assert.isNull(zeroControl.audioPreDecodeQueue, "0 のときは音声のキューを作らないこと");
+  assert.isNull(zeroControl.videoPreDecodeQueue, "0 のときは映像のキューを作らないこと");
+  await zero.close();
+
+  // 上限は受け付ける
+  const atLimit = new MediaSubscriberImpl("moqt://example.com/live", {
+    namespace: ["live"],
+    audio: {},
+    preDecodeDelayMs: MAX_PRE_DECODE_DELAY_MS,
+  });
+  const atLimitControl = atLimit as unknown as SubscriberPreDecodeDelayControl;
+  assert.isNotNull(atLimitControl.audioPreDecodeQueue, "上限の指定ではキューを作ること");
+  await atLimit.close();
+
+  for (const value of [-1, Number.NaN, Number.POSITIVE_INFINITY, MAX_PRE_DECODE_DELAY_MS + 1]) {
+    assert.throws(
+      () =>
+        new MediaSubscriberImpl("moqt://example.com/live", {
+          namespace: ["live"],
+          audio: {},
+          preDecodeDelayMs: value,
+        }),
+      /preDecodeDelayMs/,
+      `不正な値 ${value} を拒否すること`,
+    );
+  }
+
+  // 公開 API の生成経路でも reject する
+  let factoryError: unknown;
+  try {
+    await createMediaSubscriber("moqt://example.com/live", {
+      namespace: ["live"],
+      audio: {},
+      preDecodeDelayMs: -1,
+    });
+  } catch (error) {
+    factoryError = error;
+  }
+  assert.ok(factoryError instanceof Error);
+  assert.match(factoryError.message, /preDecodeDelayMs/);
+});
+
+/**
+ * 完了条件: 音声 Object は `preDecodeDelayMs` の期限まで復号へ渡らず、期限後に到着順で
+ * 復号される。復号の前後で遅延キューの件数も変わる。
+ */
+test("receiveAudioObject: preDecodeDelayMs の期限まで復号しない", async () => {
+  const { subscriber, control, decodedAudio } = createPreDecodeDelaySubscriber(80);
+
+  control.receiveAudioObject(makeIdentifiedObject(0n, 0x11), "subgroup");
+
+  assert.deepEqual(decodedAudio, [], "期限前は復号しないこと");
+  assert.equal(control.audioPreDecodeQueue?.size, 1, "復号前キューに保持すること");
+  await sleep(20);
+  assert.deepEqual(decodedAudio, [], "期限の途中でも復号しないこと");
+  await sleep(120);
+  assert.deepEqual(decodedAudio, [0x11], "期限後に復号すること");
+  assert.equal(control.audioPreDecodeQueue?.size, 0, "復号した分をキューから除くこと");
+  await subscriber.close();
+});
+
+/**
+ * 完了条件: 復号前の遅延を挟んでも、入力の遅れ (Object の到着 - LOC TIMESTAMP) は
+ * 到着時点の値で記録される。復号の出力は遅れるが、入力の遅れを遅延の分だけ大きくすると
+ * 受信側の追いつきが復号器の詰まりと誤判定する。
+ */
+test("receiveAudioObject: 復号前の遅延を挟んでも入力の遅れを到着時点で測る", async () => {
+  const { subscriber, control, decodedAudio } = createPreDecodeDelaySubscriber(40);
+  const wallClockTimestamp = Math.round((performance.timeOrigin + performance.now() - 200) * 1_000);
+  const object: MoqtObject = {
+    ...makeIdentifiedObject(0n, 0x11),
+    properties: LOC.encodeAudioProperties({ timestamp: BigInt(wallClockTimestamp) }),
+  };
+
+  control.receiveAudioObject(object, "datagram");
+
+  assert.equal(control.audioInputLags.size, 0, "期限前は復号へ渡さないこと");
+  await sleep(80);
+  assert.deepEqual(decodedAudio, [0x11]);
+  assert.closeTo(
+    control.audioInputLags.get(wallClockTimestamp) ?? 0,
+    200,
+    30,
+    "到着時点の入力の遅れを記録すること",
+  );
+  await subscriber.close();
+});
+
+/**
+ * 完了条件: 映像 Object も `preDecodeDelayMs` の期限まで復号へ渡らない。
+ */
+test("receiveVideoObject: preDecodeDelayMs の期限まで復号しない", async () => {
+  const { subscriber, control, decodedVideo } = createPreDecodeDelaySubscriber(80);
+
+  control.receiveVideoObject(makeStreamVideoObject(1n, 0n));
+
+  assert.deepEqual(decodedVideo, [], "期限前は復号しないこと");
+  assert.equal(control.videoPreDecodeQueue?.size, 1, "復号前キューに保持すること");
+  await sleep(20);
+  assert.deepEqual(decodedVideo, [], "期限の途中でも復号しないこと");
+  await sleep(120);
+  assert.deepEqual(decodedVideo, [0x10], "期限後に復号すること");
+  assert.equal(control.videoPreDecodeQueue?.size, 0);
+  await subscriber.close();
+});
+
+/**
+ * 完了条件: 復号前の遅延は Group の切り替えの順序を変えない。前の Group の Object が先に
+ * 復号され、保留されていた次の Group の Object はその後に復号される。
+ */
+test("receiveVideoObject: 復号前の遅延は Group の順序を変えない", async () => {
+  const { subscriber, control, decodedVideo } = createPreDecodeDelaySubscriber(40);
+
+  control.receiveVideoObject(makeStreamVideoObject(1n, 0n));
+  control.receiveVideoObject(makeStreamVideoObject(2n, 0n));
+  control.receiveVideoObject(makeStreamVideoObject(1n, 1n));
+  assert.deepEqual(decodedVideo, [], "期限前はどれも復号しないこと");
+
+  // 前の Group の stream を終わらせると、保留していた次の Group の Object もキューへ入る
+  control.receiveVideoSubgroupEnd({ groupId: 1n, subgroupId: 0n, reason: "fin" });
+  await sleep(80);
+
+  assert.deepEqual(decodedVideo, [0x10, 0x11, 0x20], "Group の順序を保つこと");
+  await subscriber.close();
+});
+
+/**
+ * 完了条件: `close()` は復号前の遅延キューとタイマーを破棄する。期限が来ても復号しない。
+ */
+test("close: 復号前の遅延キューを破棄し、期限が来ても復号しない", async () => {
+  const { subscriber, control, decodedAudio, decodedVideo } = createPreDecodeDelaySubscriber(80);
+  control.receiveAudioObject(makeIdentifiedObject(0n, 0x11), "subgroup");
+  control.receiveVideoObject(makeStreamVideoObject(1n, 0n));
+  assert.equal(control.audioPreDecodeQueue?.size, 1);
+  assert.equal(control.videoPreDecodeQueue?.size, 1);
+
+  await subscriber.close();
+
+  assert.equal(control.audioPreDecodeQueue?.size, 0, "音声のキューを破棄すること");
+  assert.equal(control.videoPreDecodeQueue?.size, 0, "映像のキューを破棄すること");
+  await sleep(120);
+  assert.deepEqual(decodedAudio, [], "閉じた後に復号しないこと");
+  assert.deepEqual(decodedVideo, [], "閉じた後に復号しないこと");
+});
+
+/**
+ * 完了条件: 復号前キューの上限を超えたら古い Object を落とし、`onError` をメディアごとに
+ * 1 回だけ通知する。上限の判定は上限を小さくした実物のキューで固定する。
+ */
+test("receiveAudioObject: 復号前キューの上限超過を 1 回だけ通知する", async () => {
+  const { subscriber, control, errors } = createPreDecodeDelaySubscriber(1_000);
+  control.audioPreDecodeQueue = new PreDecodeDelayQueue<DelayedAudioItem>({
+    delayMs: 1_000,
+    maxObjects: 1,
+    maxBytes: 1_024,
+  });
+
+  control.receiveAudioObject(makeIdentifiedObject(0n, 0x11), "subgroup");
+  control.receiveAudioObject(makeIdentifiedObject(1n, 0x22), "subgroup");
+  control.receiveAudioObject(makeIdentifiedObject(2n, 0x33), "subgroup");
+
+  assert.equal(errors.length, 1, "上限超過の通知は 1 回だけであること");
+  assert.match(errors[0]?.message ?? "", /audio pre-decode delay queue overflow/);
+  assert.equal(control.audioPreDecodeQueue.size, 1, "古い Object を落として新しい方を残すこと");
+  await subscriber.close();
 });
 
 /**
