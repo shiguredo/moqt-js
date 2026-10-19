@@ -109,7 +109,7 @@ export function DebugLogRow({
           </div>
         </div>
         {/* メッセージ */}
-        <span class="flex-1 break-all">{entry.message}</span>
+        <span class="flex-1 break-words">{entry.message}</span>
         {/* コピーボタン */}
         <button
           onClick={(event) => onCopy(entry, event)}

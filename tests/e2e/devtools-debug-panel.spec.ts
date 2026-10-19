@@ -607,6 +607,8 @@ test("Debug ボタンはパネルの開閉で位置が変わらず、同じボ�
   // 押した場所から動かない
   expect(afterOpen.x).toBe(before.x);
   expect(afterOpen.y).toBe(before.y);
+  // lg 以上では Debug ボタンで閉じられるため、ヘッダーの閉じるボタンは出さない
+  await expect(page.getByTitle("Close (Esc)")).toBeHidden();
 
   // 同じボタンでもう一度閉じられる
   await debugButton.click();
@@ -639,6 +641,11 @@ test("狭い画面ではパネルが全幅になり、パネル内で横には�
       return midBox?.width;
     })
     .toBe(800);
+  // lg 未満は Debug ボタンがパネルに隠れるため、ヘッダーの閉じるボタンで閉じられる
+  const closeButton = page.getByTitle("Close (Esc)");
+  await expect(closeButton).toBeVisible();
+  await closeButton.click();
+  await expect(panel).toHaveCount(0);
 });
 
 test("パネルを開いても右上のボタンがタイトルに重ならない", async ({ page }) => {

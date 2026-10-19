@@ -33,16 +33,17 @@ export function App() {
         class={`flex-1 bg-slate-100 min-h-screen transition-all duration-300 ${debugPanelOpen ? "mr-0 lg:mr-[640px]" : ""}`}
       >
         {/* 右上固定のボタン群。パネルの開閉で位置を変えない (押した場所から
-            動くと押し直しづらい)。パネルはこのボタン群より下に開く */}
-        <div class="fixed top-4 right-4 z-30 flex items-center gap-3">
+            動くと押し直しづらい)。パネルはこのボタン群より下に開く。
+            2 つのボタンは幅を揃え、背景を薄くして本文の邪魔をしないようにする */}
+        <div class="fixed top-4 right-4 z-30 flex items-center gap-2">
           {/* Copy URL ボタン */}
           <button
             onClick={copyUrlToClipboard}
             data-testid="copy-url"
-            class="w-40 p-4 rounded-xl shadow-lg transition-all flex items-center justify-center gap-2 bg-emerald-500 hover:bg-emerald-600 text-white font-medium"
+            class="w-36 px-3 py-2 rounded-lg shadow-sm border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 transition-colors flex items-center justify-center gap-2 font-medium"
             title="Copy URL with current settings"
           >
-            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path
                 stroke-linecap="round"
                 stroke-linejoin="round"
@@ -56,12 +57,14 @@ export function App() {
           {/* Debug ボタン */}
           <button
             onClick={toggleDebugPanel}
-            class={`relative p-4 rounded-xl shadow-lg transition-all flex items-center gap-2 ${
-              debugPanelOpen ? "bg-slate-600 hover:bg-slate-700" : "bg-blue-500 hover:bg-blue-600"
-            } text-white font-medium`}
+            class={`relative w-36 px-3 py-2 rounded-lg shadow-sm border transition-colors flex items-center justify-center gap-2 font-medium ${
+              debugPanelOpen
+                ? "border-slate-300 bg-slate-100 text-slate-700 hover:bg-slate-200"
+                : "border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100"
+            }`}
             title="Debug Logs"
           >
-            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path
                 stroke-linecap="round"
                 stroke-linejoin="round"

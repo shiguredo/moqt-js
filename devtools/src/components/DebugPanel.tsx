@@ -247,12 +247,14 @@ export function DebugPanel() {
   return (
     <div
       data-testid="debug-panel"
-      class="fixed top-0 right-0 bottom-0 z-50 flex w-full max-w-full flex-col border-l border-slate-200 bg-white shadow-2xl lg:top-20 lg:w-[640px]"
+      class="fixed top-0 right-0 bottom-0 z-50 flex w-full max-w-full flex-col border-l border-slate-200 bg-white shadow-2xl lg:top-16 lg:w-[640px]"
     >
-      {/* ヘッダー */}
-      <div class="flex items-center justify-between p-4 border-b border-slate-200 bg-slate-50">
-        <h2 class="text-lg font-semibold text-slate-700 flex items-center gap-2">
-          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      {/* ヘッダー。見出しは本文より弱くして、ログの一覧を主役にする。
+          lg 以上では右上の Debug ボタンで閉じられるため閉じるボタンを出さない
+          (lg 未満はパネルが全画面になり Debug ボタンが隠れるため出す) */}
+      <div class="flex items-center justify-between px-3 py-2 border-b border-slate-100">
+        <h2 class="flex items-center gap-2 text-sm font-medium text-slate-500">
+          <svg class="w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path
               stroke-linecap="round"
               stroke-linejoin="round"
@@ -264,10 +266,11 @@ export function DebugPanel() {
         </h2>
         <button
           onClick={closeDebugPanel}
-          class="p-2 hover:bg-slate-200 rounded-lg transition-colors"
+          class="p-1.5 hover:bg-slate-100 rounded-lg transition-colors lg:hidden"
           title="Close (Esc)"
+          aria-label="Close debug logs"
         >
-          <svg class="w-5 h-5 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg class="w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path
               stroke-linecap="round"
               stroke-linejoin="round"
