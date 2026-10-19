@@ -531,8 +531,9 @@ MediaPublisherOptions も `audio` / `video` / `useWorker` / `serverCertificateHa
 `targetLatency` とは加算されるが、`targetLatency` 側は `MAX_PLAYOUT_DELAY_MS` と表示待ちの
 キューの上限で切り下げられ、切り下げた分は `avSync.targetLatencyLimitedMs` に出る。実際の表示遅延は
 `avSync.presentationDelayMs` などで確認すること。値は生成時に固定し、購読中の変更 API は
-高レベル API には無い。moqt-devtools は共有の `PreDecodeDelayQueue` を使い、接続中に
-Playback Delay を変更できる。詳細は [再生遅延](PLAYOUT_DELAY.md) を参照すること。
+高レベル API には無い。moqt-devtools は共有の復号前の遅延の段 (`PreDecodeDelayStage` /
+`SubscriberPreDecodeDelay`) を使い、接続中に Playback Delay を変更できる。詳細は
+[再生遅延](PLAYOUT_DELAY.md) を参照すること。
 
 `authorizationToken` を省略した場合、接続先の MOQT URI の msf fragment に `c4m` があれば、
 `connect()` がその値を復号して `SETUP` の `AUTHORIZATION TOKEN` (`0x03`) として送る

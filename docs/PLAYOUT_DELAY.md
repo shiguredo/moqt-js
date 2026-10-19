@@ -64,15 +64,15 @@ import { MAX_PRE_DECODE_DELAY_MS } from "moqt-js";
 - 0 より大きい有限数で、`MAX_PRE_DECODE_DELAY_MS` 以下でなければならない。負数、`NaN`、
   `Infinity`、上限超過は生成時にエラーになる。
 - 高レベル API の `MediaSubscriberOptions.preDecodeDelayMs` は生成時に固定する。購読中の
-  動的変更は高レベル API では対象外である。moqt-devtools は共有の `PreDecodeDelayQueue` を
-  使って接続中にも変更できる (下記)。
+  動的変更は高レベル API では対象外である。moqt-devtools は共有の復号前の遅延の段
+  (`PreDecodeDelayStage` / `SubscriberPreDecodeDelay`) を使って接続中にも変更できる (下記)。
 - `MediaPublisherOptions` には無い。購読側だけの設定である。
 - ワイヤフォーマット、MOQT のパラメータ、catalog、MSF のフィールドは変更しない。
 
 ## 動作
 
 1. 受信した音声と映像の Object を、復号へ渡せる状態になった時刻にメディアごとの
-   `PreDecodeDelayQueue` へ積む。期限は `その時刻 + preDecodeDelayMs` である。
+   遅延の段へ積む。期限は `その時刻 + preDecodeDelayMs` である。
 2. メディアごとに 1 本のタイマーが期限を待ち、期限が来た Object を積んだ順に復号へ渡す。
 3. 復号の出力は遅延の分だけ後ろへずれる。`PlayoutTimeline` は「復号の出力の時刻 - TIMESTAMP」
    の最小値から基準の遅れを学習するため、`preDecodeDelayMs` は基準の遅れに含まれる。
@@ -88,7 +88,10 @@ import { MAX_PRE_DECODE_DELAY_MS } from "moqt-js";
 ## A/V 同期と受信側の追いつき
 
 音声と映像の両方に同じ `preDecodeDelayMs` を適用する。2 つの復号の出力は同じだけ後ろへ
-ずれるため、`PlayoutTimeline` の A/V 同期は今までどおり動く。
+ずれるため、`PlayoutTimeline` の A/V 同期は今までどおり動く。保持上限を超えて一方の実効的な
+遅延が短くなったときは、短縮量の大きい方へ両方を揃える (`synchronizePreDecodeDelayShorten` /
+`SubscriberPreDecodeDelay`)。片方だけ短くなると表示時刻の基準がメディアごとにずれ、A/V 同期を
+合わせられなくなるためである。
 
 `targetLatency` とは加算される。catalog が 100 ms を宣言しているときに 2,000 ms を指定すると、
 表示遅延は約 2,100 ms 以上になる。総遅延を厳密に指定する値ではない。publisher の
@@ -109,8 +112,8 @@ buffer の遅延として `MAX_PLAYOUT_DELAY_MS` (500 ms) と表示待ちのキ�
 
 ## moqt-devtools での動的設定
 
-moqt-devtools の Subscriber の設定画面に `Playback Delay` の select がある。選択肢は
-Off / 500 / 1,000 / 2,000 / 3,000 / 5,000 / 10,000 ms であり、既定は Off である。この設定だけは
+moqt-devtools の Subscriber の設定画面に `Playback Delay (Audio + Video)` の select がある。
+選択肢は Off / 500 / 1,000 / 2,000 / 3,000 / 5,000 / 10,000 ms であり、既定は Off である。この設定だけは
 購読中も変更でき、変更は進行中の購読へ即座に反映する。
 
 - 遅延を大きくすると、その時点から受信する Object が対象になる。保持中の Object の期限も
@@ -136,15 +139,18 @@ Off / 500 / 1,000 / 2,000 / 3,000 / 5,000 / 10,000 ms であり、既定は Off 
 - 上限を超えたら古い Object から破棄する。新しい Object を破棄するとキューが埋まったままになり、
   以降の Object をすべて捨てることになるためである。
 - 1 件だけでバイト上限を超える Object は保持しない。
-- 古い Object を破棄したときは、残っている Object の期限を「保持できる時間」まで前倒しする。
-  落とした分を遅延の短縮として吸収するためである。これをしないと、保持できる時間が指定した
-  遅延より短い構成 (高いビットレートで長い遅延を指定した場合) では、先頭の期限が来る前に
-  毎回破棄され、復号へ何も渡らなくなる。キューが空になると遅延は元の値へ戻る。
+- 古い Object を破棄したときは、残っている Object の期限を「保持できる時間」まで前倒しし、
+  タイマーもその期限で張り直す。落とした分を遅延の短縮として吸収するためである。これをしないと、
+  保持できる時間が指定した遅延より短い構成 (高いビットレートで長い遅延を指定した場合) では、
+  先頭の期限が来る前に毎回破棄され、復号へ何も渡らなくなる。
+- 短縮は実時間と同じ速さで解消し、元の遅延へ戻る。一気に戻すと、到着が一瞬途切れてキューが
+  空になっただけで次の Object が元の遅延だけ保持され、表示が止まるためである。
 - 上限超過は購読期間あたりメディアごとに 1 回だけ通知する。高レベル API は `onError`、
-  moqt-devtools は警告ログ (`debugLog`) で通知する。通知済みフラグは `close()` / `stop()` と
-  再 start で解除する。
+  moqt-devtools は警告ログ (`addLog`) で通知する。通知には設定した遅延と実効的な遅延を含める。
+  通知済みフラグは `close()` / `stop()` と再 start で解除する。
 - 上限超過が続くと、指定した遅延より実際の遅延が短くなる。高いビットレートで長い遅延を
-  指定するときは、この上限に注意する。
+  指定するときは、この上限に注意する。短縮中は音声の追いつきの判定に使う「意図した遅延」も
+  実際に保持した時間になる。
 
 ## 開始時と経路の注意
 
