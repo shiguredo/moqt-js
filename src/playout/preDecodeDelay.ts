@@ -6,11 +6,17 @@
  * 受信した圧縮済み Object を復号へ渡す前に時間で保持し、復号の開始を遅らせる。
  *
  * このクラスはブラウザ API に依存せず、時刻は呼び出し側が引数で渡す。タイマーは持たない
- * (キューから取り出す時刻の判定だけを持つ)。キューが空になるまで時間が進まないため、
- * 次の期限 (`nextDueMs`) を呼び出し側のタイマーが使う。
+ * (キューから取り出す時刻の判定だけを持つ)。呼び出し側は `nextDueMs` で次の期限を引いて
+ * タイマーを張る。
  *
  * 保持上限を超えたときは古い Object から落とす。新しい Object を落とすとキューが埋まった
  * ままになり、以降の Object をすべて捨てることになるためである。ライブ側を優先する。
+ *
+ * 古い Object を落としただけでは、保持できる時間 (上限 / ビットレート) が遅延より短い構成で
+ * キューが詰まったままになる。先頭の期限 `積んだ時刻 + 遅延` が来る前に毎回落とされるため、
+ * `takeDue` が何も返さなくなる。そこで上限超過のたびに残っている Object の期限を前倒しし、
+ * 「保持できる時間」まで実効的な遅延を短くする。落とした分を配信の遅れとして吸収し、
+ * 復号が止まらないようにするためである。キューが空になると実効的な遅延は元の値へ戻る。
  */
 
 /**
@@ -26,8 +32,8 @@ export const MAX_PRE_DECODE_DELAY_MS = 30_000;
  *
  * 2 秒の遅延を想定したバイト数ではない。上限は壊れた publisher や極端に高いビットレートで
  * メモリが無制限に増えないようにするための保護であり、この値を超えた遅延は保持できない。
- * 20 Mbps の映像を 30 秒保持すると 75 MiB になるため、長い遅延と高いビットレートの組み合わせ
- * では古い Object が落ちる。
+ * 20 Mbps の映像を 30 秒保持すると 75 MB (約 71.5 MiB) になるため、長い遅延と高い
+ * ビットレートの組み合わせでは古い Object が落ち、実効的な遅延が短くなる。
  */
 export const PRE_DECODE_QUEUE_MAX_BYTES = 64 * 1024 * 1024;
 
@@ -90,6 +96,10 @@ function assertPreDecodeDelayMs(value: number): void {
  * 遅延は `setDelayMs` で変更できる。保持中の Object の期限も新しい値で計算し直すため、
  * 購読を止めずに再生遅延を変えられる。遅延を 0 にしたときは `takeAll` で待たずに
  * 取り出し、呼び出し側が復号へ流す。
+ *
+ * 保持上限を超えて Object を落としたときは、残りの Object の期限を「保持できる時間」まで
+ * 前倒しする (`delayShortenMs`)。落とした分を遅延の短縮として吸収し、キューが詰まって
+ * 復号が止まるのを防ぐ。キューが空になると短縮は解除される。
  */
 export class PreDecodeDelayQueue<T> {
   private delayMsValue: number;
@@ -97,6 +107,8 @@ export class PreDecodeDelayQueue<T> {
   private readonly maxObjects: number;
   private entries: PreDecodeDelayEntry<T>[] = [];
   private bufferedBytesValue = 0;
+  // 上限超過で前倒しした遅延の短縮分 (ミリ秒)。実効的な遅延は delayMsValue - この値
+  private delayShortenMs = 0;
 
   /**
    * @param options - 遅延と保持上限
@@ -116,14 +128,16 @@ export class PreDecodeDelayQueue<T> {
   /**
    * 遅延を変更する
    *
-   * 保持中の Object の期限は新しい値で計算し直される。呼び出し側は変更後にタイマーを
-   * 張り直すこと (期限が早まる場合がある)。
+   * 保持中の Object の期限は新しい値で計算し直される。上限超過で前倒ししていた短縮分は
+   * 解除し、新しい遅延を起点にやり直す。呼び出し側は変更後にタイマーを張り直すこと
+   * (期限が早まる場合がある)。
    *
    * @param value - 新しい遅延 (ミリ秒)
    */
   setDelayMs(value: number): void {
     assertPreDecodeDelayMs(value);
     this.delayMsValue = value;
+    this.delayShortenMs = 0;
   }
 
   /** 保持している件数 */
@@ -178,6 +192,11 @@ export class PreDecodeDelayQueue<T> {
       this.bufferedBytesValue -= removed.bytes;
       dropped.push(removed.item);
     }
+    if (dropped.length > 0) {
+      // 落とした分だけ遅延を詰める。これをしないと、保持できる時間が遅延より短い構成で
+      // 先頭の期限が来る前に毎回落とされ、takeDue が何も返さなくなる
+      this.shortenDelayForOverflow(nowMs);
+    }
     return { dropped, overflowed: dropped.length > 0 };
   }
 
@@ -188,10 +207,11 @@ export class PreDecodeDelayQueue<T> {
    * @returns 期限が来た Object (積んだ順)
    */
   takeDue(nowMs: number): T[] {
+    const effectiveDelayMs = this.effectiveDelayMs();
     let dueCount = 0;
     while (dueCount < this.entries.length) {
       const entry = this.entries[dueCount];
-      if (entry === undefined || entry.enqueuedAtMs + this.delayMsValue > nowMs) {
+      if (entry === undefined || entry.enqueuedAtMs + effectiveDelayMs > nowMs) {
         break;
       }
       dueCount++;
@@ -203,13 +223,17 @@ export class PreDecodeDelayQueue<T> {
     for (const entry of due) {
       this.bufferedBytesValue -= entry.bytes;
     }
+    if (this.entries.length === 0) {
+      // 空になったら上限超過による短縮は解除する。次の Object は元の遅延で保持する
+      this.delayShortenMs = 0;
+    }
     return due.map((entry) => entry.item);
   }
 
   /** 次に期限が来る時刻 (ミリ秒)。保持していなければ null */
   nextDueMs(): number | null {
     const head = this.entries[0];
-    return head === undefined ? null : head.enqueuedAtMs + this.delayMsValue;
+    return head === undefined ? null : head.enqueuedAtMs + this.effectiveDelayMs();
   }
 
   /**
@@ -224,6 +248,7 @@ export class PreDecodeDelayQueue<T> {
     const items = this.entries.map((entry) => entry.item);
     this.entries = [];
     this.bufferedBytesValue = 0;
+    this.delayShortenMs = 0;
     return items;
   }
 
@@ -231,6 +256,31 @@ export class PreDecodeDelayQueue<T> {
   clear(): void {
     this.entries = [];
     this.bufferedBytesValue = 0;
+    this.delayShortenMs = 0;
+  }
+
+  /** いまの実効的な遅延 (ミリ秒)。上限超過で前倒しした分を引いた値 */
+  private effectiveDelayMs(): number {
+    return Math.max(0, this.delayMsValue - this.delayShortenMs);
+  }
+
+  /**
+   * 上限超過で Object を落としたあと、残っている Object の期限を前倒しする
+   *
+   * 先頭の Object がいま期限を迎えるように短縮し、それより前の短縮は維持する。保持できる
+   * 時間だけ遅延を短くして、落とした分を遅れとして吸収する。
+   *
+   * @param nowMs - 落とした時刻 (ミリ秒)
+   */
+  private shortenDelayForOverflow(nowMs: number): void {
+    const head = this.entries[0];
+    if (head === undefined) {
+      this.delayShortenMs = 0;
+      return;
+    }
+    const headAgeMs = nowMs - head.enqueuedAtMs;
+    const shortenMs = Math.max(0, this.delayMsValue - headAgeMs);
+    this.delayShortenMs = Math.min(this.delayMsValue, Math.max(this.delayShortenMs, shortenMs));
   }
 
   /** 保持上限を超えているか */

@@ -140,6 +140,53 @@ test("PreDecodeDelayQueue: 遅延 0 では積んだ直後に取り出せる", ()
   assert.deepEqual(queue.takeDue(5_000), ["a"]);
 });
 
+// 保持できる時間 (上限 / ビットレート) が遅延より短い構成でも、上限超過が続く間は
+// 取り出し続ける。落とした分だけ実効的な遅延を短くして、復号が止まらないようにする。
+test("PreDecodeDelayQueue: 上限超過が続いても取り出し続ける", () => {
+  // 20 バイトを 10 ms ごとに積む。100 バイト (5 件) しか保持できないため、保持できるのは
+  // 50 ms 分であり、1,000 ms の遅延より短い
+  const queue = new PreDecodeDelayQueue<string>({ delayMs: 1_000, maxBytes: 100 });
+  const taken: string[] = [];
+  for (let index = 0; index < 100; index++) {
+    const nowMs = index * 10;
+    queue.push(`object-${index}`, 20, nowMs);
+    taken.push(...queue.takeDue(nowMs));
+  }
+
+  assert.isAbove(taken.length, 0, "上限超過が続いても取り出すこと");
+  // 取り出した順序は積んだ順のままである
+  const takenIndexes = taken.map((item) => Number(item.replace("object-", "")));
+  for (let index = 1; index < takenIndexes.length; index++) {
+    assert.isAbove(
+      takenIndexes[index] ?? 0,
+      takenIndexes[index - 1] ?? 0,
+      "積んだ順に取り出すこと",
+    );
+  }
+  assert.isAtMost(queue.size, 5, "上限を超えて保持しないこと");
+});
+
+// 上限超過で短くした遅延は、キューが空になったら元の遅延へ戻る。
+test("PreDecodeDelayQueue: 上限超過で短くなった遅延は空になった後に戻る", () => {
+  const queue = new PreDecodeDelayQueue<string>({ delayMs: 1_000, maxBytes: 100 });
+  for (let index = 0; index < 100; index++) {
+    queue.push(`object-${index}`, 20, index * 10);
+  }
+
+  // 本来の期限 (積んだ時刻 + 1,000 ms) より前に取り出せる = 遅延が短くなっている
+  const nextDueMs = queue.nextDueMs();
+  assert.isNotNull(nextDueMs);
+  assert.isBelow(nextDueMs ?? Number.POSITIVE_INFINITY, 99 * 10 + 1_000, "遅延が短くなること");
+
+  // すべて取り出して空にすると短縮は解除され、次の Object は元の遅延で待つ
+  queue.takeDue(1_000_000);
+  assert.equal(queue.size, 0);
+  queue.push("after", 20, 2_000_000);
+  assert.equal(queue.nextDueMs(), 2_001_000, "空になった後は元の遅延に戻ること");
+  assert.deepEqual(queue.takeDue(2_000_999), [], "元の期限の前では取り出さないこと");
+  assert.deepEqual(queue.takeDue(2_001_000), ["after"], "元の期限で取り出すこと");
+});
+
 // 遅延の値が不正なら生成時にエラーにする。
 test("PreDecodeDelayQueue: 不正な遅延は生成時にエラーにする", () => {
   assert.throws(
