@@ -218,7 +218,7 @@ test("schedule: 出力のバッファが下限を決めているときは詰め�
       requests += 1;
     }
     // 前の音の終わりから今回の開始までに空いた分を数える。0.5 ms 以下の隙間は
-    // snapToPreviousEnd が前の音の終わりに揃えるため穴にならない (揃わない 0.5 ms 超の
+    // snapToPreviousEnd が前の音の終わりに揃えるため穴にならない (揃えられないときは無音として計器に出る。揃わない 0.5 ms 超の
     // 隙間は補間され、gapSeconds に入る)
     if (previousEnd !== null && decision.startAt > previousEnd && decision.gapSeconds === 0) {
       silentGapSeconds += decision.startAt - previousEnd;

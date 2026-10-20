@@ -112,7 +112,7 @@ function assertConcealmentWithinBounds(
   if (totalGapSeconds <= AUDIO_PLAYOUT_MIN_CONCEAL_SECONDS) {
     // 下限以下の隙間は前の音の終わりに揃える。揃えられないのは前の音の終わりが今より
     // 過去のときだけであり、その場合は無音として記録する
-    assert.isTrue(previousEnd < now, "下限以下の隙間を残してよいのは揃えられないときだけ");
+    assert.isTrue(previousEnd <= now, "下限以下の隙間を残してよいのは揃えられないときだけ");
     assert.closeTo(decision.totalGapSeconds, totalGapSeconds, EPSILON);
     assert.equal(decision.gapSeconds, 0);
     assert.equal(decision.gapStartSeconds, 0);

@@ -343,7 +343,9 @@ export type AudioPlayoutDecision =
        * - `gapSeconds`: 補間を予約した長さ
        * - 残り (上限 `AUDIO_PLAYOUT_MAX_CONCEAL_SECONDS` を超えた分): 無音で残る
        *
-       * 隙間が無い、または下限 (`AUDIO_PLAYOUT_MIN_CONCEAL_SECONDS`) 以下のときは 0
+       * 隙間が無いときは 0。下限 (`AUDIO_PLAYOUT_MIN_CONCEAL_SECONDS`) 以下でも、前の音の
+       * 終わりが今より過去で揃えられないときは正の値になる (補間はせず無音として残る。
+       * このとき `gapStartSeconds` は 0 で `gapSeconds` も 0)
        */
       totalGapSeconds: number;
       /**
@@ -515,7 +517,7 @@ export class AudioPlayoutScheduler {
     // 今 + 余裕で決まり、その下限は実時間と同じ速さで進むため、詰めても遅れは 1 ms も
     // 減らない。削った分は次の音の開始との間の穴になる。実測 (2026-10-16、実装を直接駆動。
     // 出力のリード 95.5 ms、表示の遅れ 66 ms、10 ms の音 100 フレーム) では、100 件すべてが
-    // 圧縮を要求して 5 ms ずつ削れ、99 件・495 ms の穴 (5 ms 以下は `concealmentOf` の規則で
+    // 圧縮を要求して 5 ms ずつ削れ、99 件・495 ms の穴 (当時 5 ms 以下は `concealmentOf` の規則で
     // 補間されないため無音) が空き、遅れは 39.5 ms のまま 1 ms も減らなかった
     const queueSlackSeconds = (previousEnd ?? -Infinity) - (nowSeconds + this.minLeadSeconds);
     // 詰める量は「遅れ」「音の長さの半分」「キューの余裕」の最小値にする (1 つの音で
