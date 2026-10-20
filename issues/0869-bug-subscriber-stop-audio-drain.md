@@ -1,7 +1,7 @@
 # 購読の停止で予約済みの音声を鳴らし切らずに切り捨てる
 
 - Created: 2026-10-20
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-10-20
 - Branch: feature/fix-subscriber-stop-audio-drain
 - Polished: {YYYY-MM-DD}
 - Reporter: @voluntas
@@ -56,6 +56,34 @@
 - 停止に要する時間が上限 (例: 300 ms) を超えないこと (単体テスト)
 - `MediaSubscriber.stop` の契約と docs が更新されていること
 - `vp check` / `tsc --noEmit` / `vp test run` と、実リレーの既存 E2E が通ること
+
+## 解決方法
+
+- 停止を「受信停止 → 復号前の段を flush → 予約済みの drain (上限 300 ms) → 復号停止 →
+  `AudioContext.close`」の順に組み替えた。停止の要求後は新しい音声 Object を受け付けず
+  (`audioReceiveStopped`)、drain の間は flush した Object だけを復号する
+  (`audioDecodeStopped`)。drain の後に届いた復号出力は予約せず閉じる
+- `AudioPlayoutSession.drainReserved` を追加し、ライブラリと devtools で共有した。待ち時間は
+  「最後に鳴り終わる予約 - 現在 + 余裕 100 ms」を 0〜300 ms にクランプする。flush した
+  Object の復号出力は、件数を復号の出力で減らして 0 になるまで待つ。`stop` は 300 ms、
+  `close` とピア起点の close は 150 ms、start 失敗の巻き戻しは drain しない
+- 計器: `AudioPlayoutTimingSnapshot.lastDrain` に、停止時の予約残 (`pendingMsAtStart`)、
+  要求した待ち時間 (`requestedMs`)、実際の待ち時間 (`waitedMs`)、鳴らすことになった量
+  (`playedMs`)、切った量 (`cutMs`)、flush した件数 (`flushedObjects`) を足した。
+  `missedByReason.stopped` の意味は変えていない
+- devtools: `SubscriberAudioStop` に停止処理を切り出し、`stopAudioPlayback` を非同期化した。
+  二重停止は同じ Promise を共有し、停止中は `Finishing audio playback...` を出してボタンを
+  無効にする。パネルの削除・アンマウント・セッションの close は fire-and-forget で drain し、
+  `AudioContext` は必ず閉じる
+- 実リレーの検証 (3 回): `missedByReason.stopped` の増分は 0 件、`lastDrain.cutMs` は 0 ms、
+  drain の待ち時間は 51〜153 ms、停止の完了 (statusMessage が `Ready to subscribe` へ戻るまで)
+  は 94〜209 ms だった。修正前は 7 件 / 121〜124 ms が切られていた
+- `preDecodeDelayMs = 2000` の検証: 保持分を 200 件 flush し、drain の 225.7 ms は鳴らせたが、
+  上限 300 ms を超える 1467.8 ms は `stopped` に計上した。保持分をすべて鳴らすには設定した
+  遅延の分だけ停止を待つことになり、停止の応答性と取引になるため、上限内だけ鳴らす設計に
+  した
+- 実リレーの既存 E2E は 21 件成功 (skip 11)。`vp check` / `tsc --noEmit` /
+  `vp test run` (234 ファイル / 4134 テスト) も成功
 
 ## 参照
 
