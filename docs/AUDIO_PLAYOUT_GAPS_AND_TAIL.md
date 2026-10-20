@@ -133,18 +133,28 @@ timestamp の順と逆に届くと、隙間 0 のまま内容だけが逆順に�
   失われるのは flush の後に届いた Object だけであり、停止の要求後は新しい Object を
   受け付けないため通常は 0 件である (`src/createMediaSubscriber.ts` /
   `src/playout/preDecodeDelayStage.ts` / `devtools/src/hooks/subscriberPreDecodeDelay.ts`)
-  実リレーでの計測結果は「実装後の検証」にまとめた
-- 配信側: `src/createMediaPublisher.ts` の `MediaPublisherImpl.stop` と `close` は
-  `processingGeneration` を進めてから `disposeAllResources` を呼ぶ。`processAudioFrames` の
-  1 フレーム先読み、停止直後に読んだフレーム、encoder に渡したが出力が返る前のフレームが
-  送られない。単体ハーネスで 10 ms のブロック 3 つ分 = 30 ms を実測した (未読 1、世代不一致で
-  符号化されない 1、符号化されたが出力が close の後で捨てられる 1)。`pause` は reader を
-  cancel しないため 20 ms である
+  実リレーの計測 (3 回) では、`missedByReason.stopped` の増分は 0 件、`lastDrain.cutMs` は
+  0 ms、drain の待ち時間は 51〜153 ms、停止の完了 (statusMessage が戻るまで) は 94〜209 ms
+  だった。`preDecodeDelayMs = 2000` では保持分を 200 件 flush し、225.7 ms 鳴らしたあとに
+  1467.8 ms を `stopped` に計上した (上限 300 ms を超える分は切られる)。上限で打ち切った
+  とき、復号の出力が届かなかった flush 分は `lastDrain.undecodedFlushedObjects` に件数だけ
+  残る (復号していないため長さは分からず、`stopped` には入らない)
+- 配信側: 停止時は、周期読み出しのループ自身が取り込みキューを読み切ってから
+  1 フレーム先読みの保留分を encode し、`AudioEncoderWrapper.flush()` で encoder に残った
+  出力を待って送り切る (この間は世代を進めない)。実装前は単体ハーネスで 10 ms のブロック
+  3 つ分 = 30 ms を実測した (未読 1、世代不一致で符号化されない 1、符号化されたが出力が
+  close の後で捨てられる 1)。実装後は同じハーネスで送れなかった量が 0 になることを
+  固定している。datagram 配送では、書いた末尾の datagram が PUBLISH_DONE より後に届いて
+  購読者に捨てられないよう、送信完了の後に 50 ms 待ってから PUBLISH_DONE を送る
+  (`AUDIO_TAIL_PUBLISH_DONE_GRACE_MS`)。`pause` は対象外であり、reader を cancel しない
+  ため 20 ms の欠落が残る
 - Datagram の順序: 停止時に送った末尾の datagram は、PUBLISH_DONE (control stream) より後に
   購読者へ届き得る。購読者は PUBLISH_DONE を受けた時点で購読を closed にするため、後から
   届いた datagram は捨てられる (`src/subscriber.ts` の `SubscriberImpl.handleEnd` と
   `handleDatagram`)。実リレーの publish-done の計測では切られた予約は 0 件で観測されな
-  かったが、control stream と datagram の間には順序保証が無く、経路の順序次第で起こり得る
+  かったが、control stream と datagram の間には順序保証が無く、経路の順序次第で起こり得る。
+  送信側では、datagram の write 完了の後に 50 ms 待ってから PUBLISH_DONE を送るようにした
+  (猶予の長さの根拠と残るリスクは 8 章を参照)
 
 ## 否定した仮説
 
@@ -228,14 +238,15 @@ timestamp の順と逆に届くと、隙間 0 のまま内容だけが逆順に�
    初期 configure 待ちと同じ保留キューへ積み、再構成の完了後に到着順で復号する。config が
    途中で変わるのは AAC を使う場合であり、この調査の前提 (Opus) からは外れる。コード上の
    欠陥として記録だけ残す
-8. **配信側の末尾 (Opus + Datagram、未実装)**
-   停止時に 1 フレーム先読みを encode し、Opus の encoder に残った入力を
-   `AudioEncoder.flush` 相当で出力させる。WebTransport の datagram には送信完了の通知が
-   無いため、残りの datagram を書いた後、PUBLISH_DONE を送る前にどれだけ待つか、末尾を
-   冗長化するか、購読側で PUBLISH_DONE の後の短い猶予の間 datagram を受け付けるかを
-   設計時に決める。draft-ietf-moq-transport-22 §11.3.2 の「閉じた Subgroup へ送らない」
-   規則は Subgroup 配送の話であり、Datagram では「PUBLISH_DONE の後に届いた Object を
-   購読者が捨てる」規則として読み替える
+8. **配信側の末尾 (Opus + Datagram、実装済み)**
+   停止時に周期読み出しのループ自身が取り込みキューを読み切り、1 フレーム先読みを encode
+   し、`AudioEncoderWrapper.flush()` で encoder に残った入力を出力させてから送る。
+   送るかどうかは世代ではなく「停止の受付時に確定した範囲」で決める (flush が終わるまで
+   世代を進めない)。`sendDatagram` は返値の Promise で write の完了を表し、停止時は末尾の
+   送信完了を待ってから `AUDIO_TAIL_PUBLISH_DONE_GRACE_MS` = 50 ms の猶予を置き、
+   PUBLISH_DONE を送る。購読側の PUBLISH_DONE 後猶予 (datagram の受け付け延長) は
+   侵襲的なため実装していない。送れなかった量は `AudioStats.tailDroppedFrames` /
+   `tailDroppedMs`、送ろうとした末尾は `tailFlushedFrames` / `tailFlushedMs`（送信を試みた時点で数える） で読める
 
 ## 実装後の検証 (2026-10-20、実リレー)
 
@@ -277,15 +288,12 @@ timestamp の順と逆に届くと、隙間 0 のまま内容だけが逆順に�
   drain の 225.7 ms は鳴らせたが、残り 1467.8 ms は上限 300 ms のため `stopped` に計上した。
   上限で打ち切ったとき、復号の出力が届かなかった flush 分は `lastDrain.undecodedFlushedObjects`
   に件数だけ残る (復号していないため長さは分からず、`stopped` には入らない)
-- 計器の `gapCount` / `gapMs` は購読の開始からの累積であり、波形の無音は収録区間
-  (60.74 秒) の値である。収録の前後の穴は計器だけに含まれるため、両者は一致しない
-  (実測: `gapMs` 73.3 ms に対し波形の無音 39.9 ms)。同じ収録区間の境界の段差は
-  `boundaryStepCount` 10 件と波形の不連続 10 件で一致した
-- 補間が完全に成功した穴でも、補間の生成長の丸め (半サンプル以内) を穴として数えていた
-  (レビューで修正)。この表の `gapCount` / `gapMs` は修正前の実装による値であり、
-  修正後は再計測が必要である
-- 秒単位の長い途絶 (配信の停止、経路の断) も 1 回の穴として `gapMs` / `gapMaxMs` に
-  入る。補間の失敗ではなく、その前の無音を含むためである
+- 配信側の停止の末尾 (別の修正): ライブラリの Publisher (worker 符号化の既定) で、停止時に
+  読んだ 4 ブロック (40 ms) がすべて encode・送信され、修正前の 30 ms の欠落が 0 になった
+  (単体ハーネス)。実ブラウザ + 実リレーの追加テスト `tests/e2e/relay/audio-publisher-tail.spec.ts`
+  では、datagram 配送で停止 102 ms・flush 1 件 20 ms・`tailDroppedFrames` 0・
+  `tailFlushTimeoutCount` 0、subgroup 配送で停止 44 ms・flush 1 件 20 ms・`tailDroppedFrames` 0
+  だった。購読者は停止の後に末尾を 2 件受信しており、PUBLISH_DONE より先に届いている
 
 ## 検証方法
 
