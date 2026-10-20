@@ -384,7 +384,7 @@ export const AUDIO_PLAYOUT_TIMING_HELP: SectionHelp = {
     {
       term: "gapCount / gapMs / gapMaxMs",
       description:
-        "Holes left between two sounds that the concealment could not fill (cumulative): the number, the total ms and the longest ms. A hole is the part before the earliest time a buffer can be reserved (an underrun or a lead shortfall), a concealment that failed, or the part beyond the concealment limit (100 ms). gapMs is the unfilled length; the 2 ms edge fades count as concealment, so they are not included. It is cumulative since subscribing started while a recorded waveform covers only the capture window, so the two do not match. A long interruption also appears as one large hole. The click is decided by the step, not by the silence length; read boundaryStepCount together with these. Cumulative since subscribing started, not the 10 s window.",
+        "Holes left between two sounds that the concealment could not fill (cumulative): the number, the total ms and the longest ms. A hole is the part before the earliest time a buffer can be reserved (an underrun or a lead shortfall), a concealment that failed, or the part beyond the concealment limit (100 ms). gapMs is the unfilled length; the 2 ms edge fades count as concealment, so they are not included. A difference that is only rounding (within half a sample) is not counted as a hole. It is cumulative since subscribing started while a recorded waveform covers only the capture window, so the two do not match. A long interruption also appears as one large hole. The click is decided by the step, not by the silence length; read boundaryStepCount together with these. Not the 10 s window.",
     },
     {
       term: "unrecoverableGapCount / unrecoverableGapMs",
@@ -398,7 +398,7 @@ export const AUDIO_PLAYOUT_TIMING_HELP: SectionHelp = {
     },
     {
       term: "boundaryStepCount / boundaryStepMax",
-      description: `Buffer boundaries whose step (the difference between the samples that the output actually plays) is above ${AUDIO_PLAYOUT_BOUNDARY_STEP_THRESHOLD} (3 times the normal step of a 440 Hz tone, 0.0174; an absolute value, so normal audio can exceed it). Counts every boundary, including the step where the output cuts to a gap and back and the step of a media-time jump (loss or decoder rebuild). At a gap that could not be concealed, the step is the amplitude of the sound just before the silence (the previous sound's tail is not faded).`,
+      description: `Buffer boundaries whose step (the difference between the samples that the output actually plays) is above ${AUDIO_PLAYOUT_BOUNDARY_STEP_THRESHOLD} (3 times the normal step of a 440 Hz tone, 0.0174; an absolute value, so normal audio can exceed it). Counts every boundary, including the step where the output cuts to a gap and back and the step of a media-time jump (loss or decoder rebuild). At a gap with no concealment, the step is the amplitude of the sound just before the silence (the previous sound's tail is not faded); when the concealment fills part of the gap, its faded tail keeps the step small.`,
     },
   ],
   notes: [

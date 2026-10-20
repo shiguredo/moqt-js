@@ -806,19 +806,20 @@ export class AudioPlayoutScheduler {
       nowSeconds + this.minLeadSeconds,
       previousEnd ?? -Infinity,
     );
-    // 前の音の終わりとの差が下限以下なら、前の音の終わりに揃えて穴を作らない
-    // (scheduleByArrival と同じ。過去へは戻さないガードは snapToPreviousEnd が持つ)
-    const snappedStartAt = this.snapToPreviousEnd(startAt, previousEnd, nowSeconds);
-    this.rebase(snappedStartAt, timestampMicroseconds);
-    this.lastEnd = snappedStartAt + durationSeconds;
+    // ここでは前の音の終わりに揃えない。この経路は前の音が既に鳴り終わっている
+    // (`previousEnd <= now`) ときだけ呼ばれ、揃えても過去への予約になるためである。
+    // 下限以下の隙間が残る場合は concealmentOf が無音として返し、呼び出し側が先頭を
+    // フェードする
+    this.rebase(startAt, timestampMicroseconds);
+    this.lastEnd = startAt + durationSeconds;
     this.lastTimestampMicroseconds = timestampMicroseconds;
     // 到着基準へ移ったため、目標に対する遅れは無い (詰めない)
     this.latenessSeconds = 0;
     this.requestedSeconds = 0;
-    const concealment = this.concealmentOf(nowSeconds, previousEnd, snappedStartAt);
+    const concealment = this.concealmentOf(nowSeconds, previousEnd, startAt);
     return {
       kind: "play",
-      startAt: snappedStartAt,
+      startAt,
       basis: "arrival",
       compressSeconds: 0,
       ...concealment,

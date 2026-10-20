@@ -101,7 +101,7 @@ function assertConcealmentWithinBounds(
     0,
     Math.min(totalGapSeconds, reservableStartSeconds - previousEnd),
   );
-  if (totalGapSeconds <= EPSILON) {
+  if (totalGapSeconds <= 0) {
     // 隙間が無い
     assert.equal(decision.totalGapSeconds, 0);
     assert.equal(decision.gapSeconds, 0);
@@ -109,7 +109,7 @@ function assertConcealmentWithinBounds(
     assert.equal(decision.unrecoverableGapSeconds, 0);
     return;
   }
-  if (totalGapSeconds <= AUDIO_PLAYOUT_MIN_CONCEAL_SECONDS + EPSILON) {
+  if (totalGapSeconds <= AUDIO_PLAYOUT_MIN_CONCEAL_SECONDS) {
     // 下限以下の隙間は前の音の終わりに揃える。揃えられないのは前の音の終わりが今より
     // 過去のときだけであり、その場合は無音として記録する
     assert.isTrue(previousEnd < now, "下限以下の隙間を残してよいのは揃えられないときだけ");
