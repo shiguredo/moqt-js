@@ -2243,6 +2243,10 @@ export function useSubscriber(
     instance: sub.SubscriberInstance,
   ): Promise<void> {
     try {
+      // 復号器の reset は未処理の出力を捨てる。flush の印と待ちを残すと、次の停止で
+      // 停止前投入分の出力が印を消費し、drain が早く終わる
+      audioDecodeFlushMarksRef.current.length = 0;
+      audioStopRef.current.discardFlushedOutputs();
       await audioDecoderInstance.reset();
     } catch (error) {
       console.error(`[${subscriberId}] failed to reset audio decoder for catch-up:`, error);

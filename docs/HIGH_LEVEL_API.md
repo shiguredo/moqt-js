@@ -796,14 +796,16 @@ interface AudioPlayoutTimingSnapshot {
 interface AudioPlayoutDrainStats {
   // 停止を始めた時点で予約されていた長さ
   pendingMsAtStart: number;
-  // drain で待つと決めた上限、実際に待った時間
+  // drain で待つと決めた上限
   requestedMs: number;
+  // 実際に待った時間
   waitedMs: number;
   // 鳴らすことになった合計 (停止時の残り + drain 中に増えた予約 - 切った量)
   playedMs: number;
   // 上限で切った長さ。missedByReason.stopped の増分と一致する
   cutMs: number;
   // 停止時に復号前の段から flush した件数と、復号の出力が届かなかった件数
+  // (復号器の作り直しで捨てられた分を含む)
   flushedObjects: number;
   undecodedFlushedObjects: number;
 }

@@ -3305,14 +3305,6 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   }
 
   /**
-   * 受信側の音声の追いつきのために、音声の復号器を作り直す
-   *
-   * 復号器の中に溜まった古い音は実時間と同じ速さでしか出てこないため、鳴らさずに捨てる
-   * だけでは live へ戻らない。詳しい根拠と実測は src/playout/audioReceiveCatchUp.ts が持つ。
-   * 作り直しの失敗は、復号の失敗として onError へ通知する (この後も復号は続くため、
-   * 購読そのものは止めない)。
-   */
-  /**
    * 復号器が未処理の投入と未到着の出力を捨てたときに、投入順の対応をリセットする
    *
    * flush 分の番号が残ったままだと、drain が上限まで待ち続け、実際は再生済みの分を
@@ -3326,6 +3318,14 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     }
   }
 
+  /**
+   * 受信側の音声の追いつきのために、音声の復号器を作り直す
+   *
+   * 復号器の中に溜まった古い音は実時間と同じ速さでしか出てこないため、鳴らさずに捨てる
+   * だけでは live へ戻らない。詳しい根拠と実測は src/playout/audioReceiveCatchUp.ts が持つ。
+   * 作り直しの失敗は、復号の失敗として onError へ通知する (この後も復号は続くため、
+   * 購読そのものは止めない)。
+   */
   private async resetAudioDecoderForCatchUp(): Promise<void> {
     const decoder = this.audioDecoder;
     if (decoder === null) {

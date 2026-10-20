@@ -56,6 +56,16 @@ export class SubscriberAudioStop {
   // 停止の処理中か (遅れて届く Object を復号へ積まないために呼び出し側が見る)
   private stoppingFlag = false;
 
+  /**
+   * flush した Object の復号の出力を待つのをやめる
+   *
+   * drain の間に復号器が作り直されると、flush 分の出力は届かない。残りの予約だけを
+   * 待つようにして、上限まで空回りさせない
+   */
+  discardFlushedOutputs(): void {
+    this.flushPending = 0;
+  }
+
   /** 停止の処理中か */
   get isStopping(): boolean {
     return this.stoppingFlag;
