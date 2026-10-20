@@ -1,5 +1,6 @@
 import { test, assert } from "vite-plus/test";
 import {
+  AUDIO_PLAYOUT_BOUNDARY_STEP_THRESHOLD,
   AUDIO_PLAYOUT_TIMING_WINDOW_MS,
   AudioPlayoutTimingStats,
   EMPTY_AUDIO_PLAYOUT_TIMING,
@@ -211,8 +212,23 @@ test("reset: すべての記録を捨てて初期状態へ戻す", () => {
     arrivalMs: 0,
   });
   stats.recordStopped(40);
+  // 穴・予約の追い越し・境界の段差も reset で消えること (記録していないと、
+  // 消し忘れても 0 のままで通ってしまう)
+  stats.recordGap({ uncoveredMs: 5, unrecoverableMs: 2 });
+  stats.recordLateStart(3);
+  stats.recordBoundaryStep(0.2);
   stats.reset();
   assert.deepEqual(stats.snapshot(100), EMPTY_AUDIO_PLAYOUT_TIMING);
+});
+
+// 完了条件: 前の音の終わりへ揃えるスナップで予定より最大 0.5 ms 早く鳴っても、
+// 遅れは負にしない (playout 側の遅れと同じ丸めにする)
+test("recordPlay: 予定より早く鳴った音の遅れを 0 にする", () => {
+  const stats = new AudioPlayoutTimingStats(AUDIO_PLAYOUT_TIMING_WINDOW_MS, 0);
+  stats.recordPlay(0, 100, 99.6, 20, "timestamp");
+  const snapshot = stats.snapshot(0);
+  assert.equal(snapshot.lastLatenessMs, 0, "遅れを負にしないこと");
+  assert.equal(snapshot.latenessMs?.max, 0, "分布にも負の値を入れないこと");
 });
 
 // 完了条件: 鳴らさなかった 1 件を、UTC の ISO 8601 (ミリ秒まで)・理由・長さ・余裕の
@@ -243,26 +259,37 @@ test("formatAudioMissEvent: UTC の時刻と理由と長さを 1 行にする", 
 // しきい値以下の段差は回数に数えず最大だけ残す
 test("recordGap / recordLateStart / recordBoundaryStep: 穴と追い越しと段差を数える", () => {
   const stats = new AudioPlayoutTimingStats(AUDIO_PLAYOUT_TIMING_WINDOW_MS, 0);
-  stats.recordGap({ silentMs: 20, unrecoverableMs: 20 });
-  stats.recordGap({ silentMs: 8, unrecoverableMs: 0 });
-  stats.recordGap({ silentMs: 0, unrecoverableMs: 0 });
+  stats.recordGap({ uncoveredMs: 20, unrecoverableMs: 20 });
+  stats.recordGap({ uncoveredMs: 8, unrecoverableMs: 0 });
+  stats.recordGap({ uncoveredMs: 0, unrecoverableMs: 0 });
+  // 予約できなかった長さが穴の長さを超えても、穴の長さまでに切り詰める
+  stats.recordGap({ uncoveredMs: 4, unrecoverableMs: 10 });
+  // 非有限・負値は記録しない (NaN が集計へ入ると閉ループの目標まで NaN になる)
+  stats.recordGap({ uncoveredMs: Number.NaN, unrecoverableMs: 0 });
+  stats.recordGap({ uncoveredMs: -1, unrecoverableMs: 0 });
   stats.recordLateStart(2);
   stats.recordLateStart(0.5);
   stats.recordLateStart(0);
+  stats.recordLateStart(Number.NaN);
   stats.recordBoundaryStep(0.2);
   stats.recordBoundaryStep(0.04);
+  // しきい値ちょうどは「超えた」ではないため数えない
+  stats.recordBoundaryStep(AUDIO_PLAYOUT_BOUNDARY_STEP_THRESHOLD);
+  stats.recordBoundaryStep(Number.NaN);
+  // 負の段差は絶対値を取る
+  stats.recordBoundaryStep(-0.3);
   const snapshot = stats.snapshot(0);
-  assert.equal(snapshot.gapCount, 2, "無音の穴を数えること");
-  assert.equal(snapshot.gapMs, 28, "穴の合計を数えること");
+  assert.equal(snapshot.gapCount, 3, "無音の穴を数えること");
+  assert.equal(snapshot.gapMs, 32, "穴の合計を数えること");
   assert.equal(snapshot.gapMaxMs, 20, "穴の最大を数えること");
-  assert.equal(snapshot.unrecoverableGapCount, 1, "予約できない穴を数えること");
-  assert.equal(snapshot.unrecoverableGapMs, 20, "予約できない長さを数えること");
+  assert.equal(snapshot.unrecoverableGapCount, 2, "予約できない穴を数えること");
+  assert.equal(snapshot.unrecoverableGapMs, 24, "予約できない長さを数えること");
   assert.equal(snapshot.lateStartCount, 2, "追い越した回数を数えること");
   assert.equal(snapshot.lateStartMaxMs, 2, "追い越した最大を残すこと");
-  assert.equal(snapshot.boundaryStepCount, 1, "しきい値を超えた段差だけ数えること");
-  assert.closeTo(snapshot.boundaryStepMax, 0.2, 1e-9, "段差の最大は残すこと");
+  assert.equal(snapshot.boundaryStepCount, 2, "しきい値を超えた段差だけ数えること");
+  assert.closeTo(snapshot.boundaryStepMax, 0.3, 1e-9, "段差の最大は残すこと");
   // 目標遅延の閉ループへ穴の累積を渡す
   const feedback = stats.audioDelayFeedback(0);
-  assert.equal(feedback.gapCount, 2);
-  assert.equal(feedback.gapMs, 28);
+  assert.equal(feedback.gapCount, 3);
+  assert.equal(feedback.gapMs, 32);
 });

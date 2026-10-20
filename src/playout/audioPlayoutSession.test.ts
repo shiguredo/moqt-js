@@ -1183,8 +1183,17 @@ test("handleDecodedAudio: 予約できる隙間を補間し、補間の末尾と
   assert.equal(output.recordedBuffers.length, 3, "実音と補間を予約すること");
   const conceal = output.recordedBuffers[1];
   const real = output.recordedBuffers[2];
+  const first = output.recordedBuffers[0];
   assert.isNotNull(conceal);
   assert.isNotNull(real);
+  assert.isNotNull(first);
+  // 補間は前の音の終わり (1 つ目の開始 + 音の長さ) から始まる
+  assert.closeTo(
+    (conceal?.whenSeconds ?? Number.NaN) - ((first?.whenSeconds ?? Number.NaN) + 20 / 1_000),
+    0,
+    1e-9,
+    "補間の開始時刻は前の音の終わりであること",
+  );
   // 80 ms 進んだ timestamp のうち、音の長さ 20 ms を引いた 60 ms が隙間である
   assert.isAbove((conceal?.channels[0]?.length ?? 0) / SAMPLE_RATE, 0.05, "隙間を補間すること");
   // 補間の末尾は 2 ms フェードで 0 になる
@@ -1210,8 +1219,46 @@ test("handleDecodedAudio: 予約できる隙間を補間し、補間の末尾と
 });
 
 /**
- * 完了条件: 予約時点で既に過去の隙間 (アンダーラン) は補間できず、無音の穴として計器に出る。
- * 補間できる未来の分だけを補間し、補間の先頭も無音から立ち上がるためフェードインする。
+ * 完了条件: 補間が完全に成功した隙間は、補間の生成長の丸め (半サンプル以内) を無音の穴として
+ * 数えない。隙間がサンプル境界に乗らない場合も 0 になる。
+ */
+test("handleDecodedAudio: サンプル境界に乗らない隙間でも完全な補間は穴に数えない", () => {
+  const fixture = makeSessionFixture();
+  const samples = [constantSamples(0.2)];
+  const output = makeRecordingOutput({
+    timeline: fixture.timeline,
+    mapping: null,
+    currentTimeSeconds: 10,
+    mappingFromCurrentTime: true,
+  });
+
+  handleSound(fixture, output.output, {
+    timestamp: 0,
+    timestampKind: "none",
+    useTimeline: false,
+    enforceTarget: false,
+    samples,
+  });
+  // 80.01 ms 進んだ timestamp。音の長さ 20 ms を引いた 60.01 ms が隙間であり、48 kHz で
+  // 2880.48 サンプルになる。補間の生成長は 2880 サンプルに丸められるため、差は半サンプル
+  // (10.4 µs) 未満であり、無音の穴として数えてはならない
+  handleSound(fixture, output.output, {
+    timestamp: 80_010,
+    timestampKind: "none",
+    useTimeline: false,
+    enforceTarget: false,
+    samples,
+  });
+
+  const snapshot = fixture.timing.snapshot(performance.now());
+  assert.equal(snapshot.gapCount, 0, "補間の丸めの差を穴として数えないこと");
+  assert.equal(snapshot.gapMs, 0, "補間の丸めの差を穴の長さに足さないこと");
+});
+
+/**
+ * 完了条件: 予約できる最も早い時刻より前の隙間 (アンダーランと余裕不足) は補間できず、
+ * 無音の穴として計器に出る。この入力では予約できる最も早い時刻が今回の開始と重なるため、
+ * 隙間のすべてが無音になり、穴の前後の段差は片側だけフェードで覆われる。
  */
 test("handleDecodedAudio: 予約できない隙間を無音の穴として数える", () => {
   const fixture = makeSessionFixture();
@@ -1332,9 +1379,8 @@ test("handleDecodedAudio: 予約した時刻を currentTime が追い越した�
 
   const snapshot = fixture.timing.snapshot(performance.now());
   assert.isAtLeast(snapshot.lateStartCount, 1, "追い越しを数えること");
+  // 予約は今 + 余裕で決まり、createBuffer の 60 ms が余裕の 10 ms を超えるため追い越す
   assert.isAbove(snapshot.lateStartMaxMs, 0, "追い越した長さを残すこと");
-  // 予約は今 + 余裕で決まり、createBuffer の 12 ms が余裕の 10 ms を超えるため追い越す
-  assert.isAbove(snapshot.lateStartMaxMs, 0);
   const lastBuffer = output.recordedBuffers[output.recordedBuffers.length - 1];
   assert.isAbove(
     lastBuffer?.currentTimeAtStart ?? Number.NEGATIVE_INFINITY,

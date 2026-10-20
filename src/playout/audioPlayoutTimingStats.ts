@@ -154,29 +154,30 @@ export interface AudioPlayoutTimingSnapshot {
    * 穴として残した回数 (累積)
    *
    * 前の音の終わりと今回の音の開始の間の隙間から、実際に補間で埋めた長さを引いた残りを
-   * 1 回として数える。予約時点で既に過去だった分 (アンダーラン)、補間が失敗した分、
-   * 補間の上限 (100 ms) を超えた分を含む。補間で埋めた穴や、端のフェードで覆った穴は
-   * 数えない (フェードで覆われた穴では、実際のデジタル無音が 0 サンプルになることがある)。
-   * 実際に出力されたビット完全な 0 の区間の数とは一致しないため、`boundaryStepCount` と
-   * 併せて読む
+   * 1 回として数える。予約できる最も早い時刻より前だった分 (アンダーランと余裕不足)、
+   * 補間が失敗した分、補間の上限 (100 ms) を超えた分を含む。補間の生成長は半サンプル以内で
+   * 丸められるため、その範囲の差は補間で埋まったものとして数えない。実際に出力された
+   * ビット完全な 0 の区間の数とは一致しない (フェード中のサンプルは 0 でないため) ので、
+   * `boundaryStepCount` と併せて読む
    */
   readonly gapCount: number;
   /**
    * 穴として残した長さの合計 (ミリ秒、累積)
    *
-   * 「補間で埋まらなかった長さ」であり、端のフェードで覆う分を含む。したがって、実際に
-   * 出力されたビット完全な 0 の合計とは一致しない (実測: 143.2 ms 対 122.6 ms)。クリックは
-   * 0 の長さではなく境界の段差で決まるため、`boundaryStepCount` / `boundaryStepMax` と
-   * 併せて読む
+   * 「補間で埋まらなかった長さ」であり、端の 2 ms フェードは補間の長さに数えるため含まない。
+   * 実際に出力されたビット完全な 0 の合計とは一致しない (フェード中のサンプルは 0 でない
+   * ため)。秒単位の長い途絶 (配信の停止、経路の断) も 1 回の穴として含む。クリックは 0 の
+   * 長さではなく境界の段差で決まるため、`boundaryStepCount` / `boundaryStepMax` と併せて読む
    */
   readonly gapMs: number;
-  /** 穴として残した 1 回の最大 (ミリ秒、累積。最初の音より前の無音は含まない) */
+  /** 穴として残した 1 回の最大 (ミリ秒。記録期間中の最大であり、最初の音より前の無音は含まない) */
   readonly gapMaxMs: number;
   /**
-   * 予約時点で既に過去で、補間を予約できなかった無音の回数 (累積)
+   * 予約できる最も早い時刻より前だった無音の回数 (累積)
    *
-   * `gapCount` のうち、前の音の終わりが「今 + 余裕」より過去だったために補間バッファを
-   * 置けなかった回数である。事後には埋められないため、目標遅延を増やす判断に使う
+   * `gapCount` のうち、前の音の終わりが「今 + 余裕」より前だったために補間バッファを
+   * 置けなかった回数である。既に過去の分だけでなく、今より未来でも余裕に満たない分も含む。
+   * 事後には埋められないため、目標遅延を増やす判断に使う
    */
   readonly unrecoverableGapCount: number;
   /** 予約できなかった無音の合計 (ミリ秒、累積)。`gapMs` に含まれる */
@@ -189,16 +190,18 @@ export interface AudioPlayoutTimingSnapshot {
    * 可能性がある (重なりそのものはこの計器では分からない)
    */
   readonly lateStartCount: number;
-  /** 予約を追い越した最大の長さ (ミリ秒、累積) */
+  /** 予約を追い越した最大の長さ (ミリ秒。記録期間中の最大) */
   readonly lateStartMaxMs: number;
   /**
    * バッファ境界の段差が `AUDIO_PLAYOUT_BOUNDARY_STEP_THRESHOLD` を超えた回数 (累積)
    *
-   * 無音の穴の前後と、media 時刻が飛んだ境界 (損失・復号器の作り直し) を数える。無音を
-   * 挟む境界では、実際に鳴る段差 (無音へ落ちる直前のバッファ末尾の振幅) を数える
+   * すべてのバッファ境界の段差 (直前のバッファの末尾と次のバッファの先頭の差) を測り、
+   * しきい値を超えた回数を数える。無音の穴の前後と、media 時刻が飛んだ境界 (損失・復号器の
+   * 作り直し) のほか、通常の音の切れ目も含む。しきい値は 440 Hz のトーンの正常な 1 階差分
+   * から決めた絶対値であり、実音声では正常な段差がこれを超えることがある
    */
   readonly boundaryStepCount: number;
-  /** バッファ境界の段差の最大 (累積。0 から 1 の振幅) */
+  /** バッファ境界の段差の最大 (0 から 1 の振幅。記録期間中の最大) */
   readonly boundaryStepMax: number;
 }
 
@@ -342,7 +345,9 @@ export class AudioPlayoutTimingStats {
     this.prunePending(arrivalMs);
     const startDelayMs = startMs - arrivalMs;
     const slackMs = targetMs === null ? null : targetMs - arrivalMs;
-    const latenessMs = targetMs === null ? null : startMs - targetMs;
+    // 前の音の終わりへ揃えるスナップで、音が予定より最大 0.5 ms 早く鳴ることがある。
+    // playout 側の遅れ (`AudioPlayoutScheduler.latenessSeconds`) と同じく 0 で丸める
+    const latenessMs = targetMs === null ? null : Math.max(0, startMs - targetMs);
     this.startDelays.push(arrivalMs, startDelayMs);
     if (basis === "arrival") {
       // 到着基準の計画に載せた音である (時間軸が予定を決めていても使っていない)
@@ -490,23 +495,25 @@ export class AudioPlayoutTimingStats {
    * 穴として残した区間を 1 つ記録する
    *
    * 呼び出し側 (`AudioPlayoutSession`) が、隙間の合計から実際に補間で埋めた長さを引いた
-   * 残りを渡す。端のフェードで覆う分を含むため、`silentMs` はビット完全な 0 の長さとは
-   * 限らない (フェードで覆われた穴では 0 サンプルになることがある)。予約時点で既に過去
-   * だった長さは `unrecoverableMs` として別に数える (`unrecoverableMs` は `silentMs` に
-   * 含まれる)
+   * 残りを渡す。端の 2 ms フェードは補間の長さに数えるため、この値には含まれない。
+   * 予約できる最も早い時刻より前だった長さは `unrecoverableMs` として別に数える
+   * (`unrecoverableMs` は `uncoveredMs` に含まれる)
    *
-   * @param gap.silentMs - 補間で埋まらなかった長さ (ミリ秒。端のフェードで覆う分を含む)
-   * @param gap.unrecoverableMs - そのうち予約時点で既に過去だった長さ (ミリ秒)
+   * @param gap.uncoveredMs - 補間で埋まらなかった長さ (ミリ秒。0 以下と非有限は無視する)
+   * @param gap.unrecoverableMs - そのうち予約できる最も早い時刻より前だった長さ (ミリ秒)
    */
-  recordGap(gap: { silentMs: number; unrecoverableMs: number }): void {
-    const silentMs = Math.max(0, gap.silentMs);
-    if (silentMs <= 0) {
+  recordGap(gap: { uncoveredMs: number; unrecoverableMs: number }): void {
+    if (!Number.isFinite(gap.uncoveredMs) || !Number.isFinite(gap.unrecoverableMs)) {
+      return;
+    }
+    const uncoveredMs = Math.max(0, gap.uncoveredMs);
+    if (uncoveredMs <= 0) {
       return;
     }
     this.gapCount += 1;
-    this.gapMs += silentMs;
-    this.gapMaxMs = Math.max(this.gapMaxMs, silentMs);
-    const unrecoverableMs = Math.min(silentMs, Math.max(0, gap.unrecoverableMs));
+    this.gapMs += uncoveredMs;
+    this.gapMaxMs = Math.max(this.gapMaxMs, uncoveredMs);
+    const unrecoverableMs = Math.min(uncoveredMs, Math.max(0, gap.unrecoverableMs));
     if (unrecoverableMs > 0) {
       this.unrecoverableGapCount += 1;
       this.unrecoverableGapMs += unrecoverableMs;
@@ -516,10 +523,10 @@ export class AudioPlayoutTimingStats {
   /**
    * 予約した時刻を `AudioContext.currentTime` が追い越したことを記録する
    *
-   * @param lateMs - 追い越した長さ (ミリ秒)。0 以下なら記録しない
+   * @param lateMs - 追い越した長さ (ミリ秒)。0 以下と非有限なら記録しない
    */
   recordLateStart(lateMs: number): void {
-    if (!(lateMs > 0)) {
+    if (!Number.isFinite(lateMs) || !(lateMs > 0)) {
       return;
     }
     this.lateStartCount += 1;
@@ -532,9 +539,12 @@ export class AudioPlayoutTimingStats {
    * 段差が `AUDIO_PLAYOUT_BOUNDARY_STEP_THRESHOLD` を超えたときだけ回数を数え、最大は
    * しきい値以下でも更新する (実際にどれだけ近づいたかを読めるようにする)
    *
-   * @param step - 境界の段差 (0 から 1 の振幅)
+   * @param step - 境界の段差 (0 から 1 の振幅)。非有限なら記録しない
    */
   recordBoundaryStep(step: number): void {
+    if (!Number.isFinite(step)) {
+      return;
+    }
     const amplitude = Math.abs(step);
     this.boundaryStepMax = Math.max(this.boundaryStepMax, amplitude);
     if (amplitude > AUDIO_PLAYOUT_BOUNDARY_STEP_THRESHOLD) {

@@ -445,7 +445,8 @@ export class AudioPlayoutSession {
    * 時間圧縮・補間・フェードを行い、実際に鳴らすバッファを予約する
    *
    * 補間で埋める隙間は、補間の末尾を 2 ms で 0 へ落とし、直後の音声の先頭を 2 ms で
-   * フェードインする。予約時点で既に過去の無音がある場合は、補間の先頭もフェードインする。
+   * フェードインする。予約できる最も早い時刻より前に無音がある場合は、補間の先頭も
+   * フェードインする。
    * 穴が無い通常の境界にはフェードを入れない (20 ms 周期の振幅変調になるため)。
    * 実際に無音で出る穴、予約の追い越し、バッファ境界の段差は計器へ記録する
    *
@@ -501,9 +502,9 @@ export class AudioPlayoutSession {
         // 次の音と揃わないときに段差になるためである。長さの違う音との継ぎ目を
         // フェードで繋ぐ既存の処理と同じものを使う
         let concealedChannels = fadeSpliceEdge(concealed.channels, this.previousSampleRate, "tail");
-        // 補間の先頭が前の音の末尾と接していない (予約時点で既に過去の無音がある) ときは、
-        // 無音から補間音へ立ち上がる段差を消すため先頭もフェードインする。前の音と
-        // 連続しているときはフェードしない (波形の続きをそのまま鳴らす)
+        // 補間の先頭が前の音の末尾と接していない (予約できる最も早い時刻より前の無音が
+        // ある) ときは、無音から補間音へ立ち上がる段差を消すため先頭もフェードインする。
+        // 前の音と連続しているときはフェードしない (波形の続きをそのまま鳴らす)
         const startsAfterSilence = decision.unrecoverableGapSeconds > 0;
         if (startsAfterSilence) {
           concealedChannels = fadeSpliceEdge(concealedChannels, this.previousSampleRate, "head");
@@ -531,16 +532,19 @@ export class AudioPlayoutSession {
     }
     this.playout.confirmConcealment(concealedSeconds);
 
-    // 予約できた隙間のうち補間で埋まらなかった分 (予約できなかったアンダーラン、補間の
-    // 失敗、補間の上限を超えた分) を、実際に無音で出る穴として数える
+    // 予約できた隙間のうち補間で埋まらなかった分 (予約できる最も早い時刻より前の分、
+    // 補間の失敗、補間の上限を超えた分) を、無音で出る穴として数える。補間の生成長は
+    // 半サンプル以内で丸められる (src/playout/audioTimeStretch.ts の
+    // concealSamples の Math.round) ため、その分は補間で埋まったものとして扱う
     const totalGapMs = decision.totalGapSeconds * 1_000;
     if (totalGapMs > 0) {
       const concealedMs = concealedSeconds * 1_000;
-      // 補間の生成長は秒へ丸めるため 1 サンプル未満の差が出る。1 µs 未満は数えない
-      const silentMs = Math.max(0, totalGapMs - concealedMs);
-      if (silentMs >= 0.001) {
+      const roundToleranceMs =
+        concealedScheduled && this.previousSampleRate > 0 ? 500 / this.previousSampleRate : 0;
+      const uncoveredMs = Math.max(0, totalGapMs - concealedMs);
+      if (uncoveredMs > roundToleranceMs) {
         this.timing.recordGap({
-          silentMs,
+          uncoveredMs,
           unrecoverableMs: decision.unrecoverableGapSeconds * 1_000,
         });
       }
@@ -554,19 +558,12 @@ export class AudioPlayoutSession {
       : stretched.channels;
     const frames = playChannels[0]?.length ?? numberOfFrames;
     // 実音の先頭と、直前に予約したバッファの末尾の段差を測る。補間を挟んだ境界は
-    // 両側とも 0 にフェードしてあるため段差は 0 になる。穴を挟むときは無音へ落ちる
-    // 直前の振幅が残る
+    // 両側とも 0 にフェードしてあるため段差は 0 になり、穴を挟むときは無音へ落ちる
+    // 直前の振幅が残る。穴を挟むときの先頭は fadeSpliceEdge で必ず 0 に落とすため、
+    // どの経路も「直前のバッファの末尾」と「今回のバッファの先頭」の差で表せる
     if (this.lastScheduledTailSample !== null) {
       const head = playChannels[0]?.[0] ?? 0;
-      let step: number;
-      if (concealedScheduled) {
-        step = Math.abs(head - this.lastScheduledTailSample);
-      } else if (hasGap) {
-        step = Math.max(Math.abs(this.lastScheduledTailSample), Math.abs(head));
-      } else {
-        step = Math.abs(head - this.lastScheduledTailSample);
-      }
-      this.timing.recordBoundaryStep(step);
+      this.timing.recordBoundaryStep(Math.abs(head - this.lastScheduledTailSample));
     }
     this.startBuffer(output, numberOfChannels, playChannels, frames, sampleRate, decision.startAt);
     this.lastScheduledTailSample = playChannels[0]?.[frames - 1] ?? 0;

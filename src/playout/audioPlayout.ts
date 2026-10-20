@@ -318,9 +318,9 @@ export type AudioPlayoutDecision =
       /**
        * 補間する隙間の開始時刻 (`AudioContext.currentTime` の秒)。
        *
-       * 通常は直前の音の終わり (`lastEnd`) と同じである。前の音の終わりが既に過去の
-       * ときは予約できる最も早い時刻 (`now + minLead`) になるため、直前の音の終わりとは
-       * 一致しない (`unrecoverableGapSeconds` が正になる)。補間しないとき
+       * 通常は直前の音の終わり (`lastEnd`) と同じである。前の音の終わりが予約できる
+       * 最も早い時刻 (`now + minLead`) より前のときは、その時刻になるため、直前の音の
+       * 終わりとは一致しない (`unrecoverableGapSeconds` が正になる)。補間しないとき
        * (`gapSeconds` が 0) は 0 であり、使わない
        */
       gapStartSeconds: number;
@@ -336,8 +336,8 @@ export type AudioPlayoutDecision =
        * 今回の音の開始までの隙間の合計 (秒)。補間の上限で切る前の値である
        *
        * 隙間は `previousEnd` から `startAt` までであり、次の 3 つに分かれる。
-       * - `gapStartSeconds - previousEnd`: 予約時点で既に過去であり、補間バッファを置けない
-       *   (`unrecoverableGapSeconds`)
+       * - `gapStartSeconds - previousEnd`: 予約できる最も早い時刻より前であり、補間バッファを
+       *   置けない (`unrecoverableGapSeconds`)。既に過去の分も含む
        * - `gapSeconds`: 補間を予約した長さ
        * - 残り (上限 `AUDIO_PLAYOUT_MAX_CONCEAL_SECONDS` を超えた分): 無音で残る
        *
@@ -345,13 +345,15 @@ export type AudioPlayoutDecision =
        */
       totalGapSeconds: number;
       /**
-       * 予約時点で既に過去だった隙間の長さ (秒)
+       * 予約できる最も早い時刻より前の隙間の長さ (秒)
        *
-       * 直前の音の終わり (`previousEnd`) が「今 + 余裕 (`now + minLead`)」より過去のとき、
-       * その分の区間は補間バッファを過去に予約できないため無音のまま残る (アンダーラン)。
-       * この場合、補間の先頭は前の音の末尾と連続しない (間に無音がある) ため、呼び出し側は
-       * 補間の先頭と今回の音の先頭をフェードインして段差を消す。0 なら隙間の先頭は
-       * 直前の音の終わりに接しており、補間の先頭は前の音と連続する
+       * 直前の音の終わり (`previousEnd`) が「今 + 余裕 (`now + minLead`)」より前のとき、
+       * その分の区間は補間バッファを予約できないため無音のまま残る。**既に過去の分だけでなく、
+       * 今より未来でも余裕 (`minLead`) に満たない分も含む**。アンダーランと、予約の余裕が
+       * 足りないだけの両方がここに入る。この場合、補間の先頭は前の音の末尾と連続しない
+       * (間に無音がある) ため、呼び出し側は補間の先頭と今回の音の先頭をフェードインして
+       * 段差を消す。0 なら隙間の先頭は直前の音の終わりに接しており、補間の先頭は前の音と
+       * 連続する
        */
       unrecoverableGapSeconds: number;
     }
@@ -478,8 +480,10 @@ export class AudioPlayoutScheduler {
     const startAt = this.snapToPreviousEnd(
       Math.max(targetStartSeconds, earliestSeconds),
       previousEnd,
+      nowSeconds,
     );
-    // スナップで目標より前に鳴ることがあるため、遅れは負にしない (計器が負にならない)
+    // スナップで目標より前に鳴ることがあるため、遅れは負にしない。統計側も同じ丸めをする
+    // (`AudioPlayoutTimingStats.recordPlay`)
     const latenessSeconds = Math.max(0, startAt - targetStartSeconds);
     if (latenessSeconds > AUDIO_PLAYOUT_MAX_LATENESS_SECONDS) {
       // 目標から離れすぎている。直前の音がまだ鳴っている間は、音が連続しているため到着基準へ
@@ -589,18 +593,28 @@ export class AudioPlayoutScheduler {
    * 吸収する (最大 0.5 ms 早く鳴るだけで、目標に対する遅れは無視できる)。
    *
    * 前の音の終わりが今 + 余裕よりわずかに過去のときも、この範囲なら前の音の終わりは
-   * まだ未来 (今 + 余裕 − 0.5 ms 以降) であり、予約できる。
+   * まだ未来 (今 + 余裕 − 0.5 ms 以降) であり、予約できる。ただし今より過去へは戻さない
+   * (余裕 (`minLeadSeconds`) を 0 に設定したときに、過去への予約にならないようにするため)
    *
    * @param startAt - 決めた開始時刻 (秒)
    * @param previousEnd - 直前の音の終わりの時刻 (秒)。無ければ null
+   * @param nowSeconds - 今の時刻 (`AudioContext.currentTime`。秒)
    * @returns 揃えた開始時刻 (秒)
    */
-  private snapToPreviousEnd(startAt: number, previousEnd: number | null): number {
+  private snapToPreviousEnd(
+    startAt: number,
+    previousEnd: number | null,
+    nowSeconds: number,
+  ): number {
     if (previousEnd === null) {
       return startAt;
     }
     const gapSeconds = startAt - previousEnd;
     if (gapSeconds <= 0 || gapSeconds > AUDIO_PLAYOUT_MIN_CONCEAL_SECONDS) {
+      return startAt;
+    }
+    if (previousEnd < nowSeconds) {
+      // 過去へは予約しない (時計の進み方によっては start() が即時開始になり重なる)
       return startAt;
     }
     return previousEnd;
@@ -609,9 +623,10 @@ export class AudioPlayoutScheduler {
   /**
    * 前の音の終わりと今回の開始時刻の間から、補間する隙間を求める
    *
-   * 隙間を「予約時点で既に過去の分 (`unrecoverableGapSeconds`)」「予約できる分
-   * (`gapSeconds`、上限 `AUDIO_PLAYOUT_MAX_CONCEAL_SECONDS` で切る)」「上限を超えて無音で
-   * 残る分」に分ける。下限 (`AUDIO_PLAYOUT_MIN_CONCEAL_SECONDS`) 以下の隙間は補間しない。
+   * 隙間を「予約できる最も早い時刻より前の分 (`unrecoverableGapSeconds`。既に過去の分と、
+   * 未来でも余裕に満たない分の両方を含む)」「予約できる分 (`gapSeconds`、上限
+   * `AUDIO_PLAYOUT_MAX_CONCEAL_SECONDS` で切る)」「上限を超えて無音で残る分」に分ける。
+   * 下限 (`AUDIO_PLAYOUT_MIN_CONCEAL_SECONDS`) 以下の隙間は補間しない。
    *
    * 前の音の終わりが過去でも、今回の開始が今 + 余裕より未来なら、その未来の分は補間を
    * 予約できる。予約する区間は必ず `now + minLead` 以降になる。見つかった隙間は
@@ -740,7 +755,7 @@ export class AudioPlayoutScheduler {
     }
     // 前の音の終わりとの差が下限以下なら、前の音の終わりに揃えて穴を作らない
     // (目標の表示時刻の更新や浮動小数点の丸めで生じる 0.5 ms 未満の前進を連続再生で吸収する)
-    startAt = this.snapToPreviousEnd(startAt, previousEnd);
+    startAt = this.snapToPreviousEnd(startAt, previousEnd, nowSeconds);
     this.lastEnd = startAt + durationSeconds;
     this.lastTimestampMicroseconds = timestampMicroseconds;
     const concealment = this.concealmentOf(nowSeconds, previousEnd, startAt);
@@ -778,6 +793,9 @@ export class AudioPlayoutScheduler {
       nowSeconds + this.minLeadSeconds,
       previousEnd ?? -Infinity,
     );
+    // ここでは前の音の終わりに揃える必要が無い。startAt は必ず previousEnd 以上であり、
+    // 揃える対象の 0.5 ms 以下の隙間は、previousEnd が今 + 余裕より前で startAt が
+    // 今 + 余裕のときにしか生じない (その場合に揃えると今 + 余裕より前の予約になる)
     this.rebase(startAt, timestampMicroseconds);
     this.lastEnd = startAt + durationSeconds;
     this.lastTimestampMicroseconds = timestampMicroseconds;

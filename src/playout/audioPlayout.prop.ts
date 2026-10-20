@@ -100,7 +100,7 @@ function assertConcealmentWithinBounds(
       boundaryGapSeconds > AUDIO_PLAYOUT_MIN_CONCEAL_SECONDS - EPSILON,
     "下限以下の隙間を残さないこと",
   );
-  const totalGapSeconds = decision.startAt - previousEnd;
+  const totalGapSeconds = boundaryGapSeconds;
   if (totalGapSeconds <= AUDIO_PLAYOUT_MIN_CONCEAL_SECONDS) {
     // 下限以下の隙間は前の音の終わりに揃える (記録もしない)
     assert.equal(decision.totalGapSeconds, 0);

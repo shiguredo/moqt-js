@@ -217,8 +217,9 @@ test("schedule: 出力のバッファが下限を決めているときは詰め�
     if (decision.compressSeconds > 0) {
       requests += 1;
     }
-    // 前の音の終わりから今回の開始までに空いた分を数える。0.5 ms 以下は補間されず無音で残る
-    // (補間されていれば gapSeconds に入る)
+    // 前の音の終わりから今回の開始までに空いた分を数える。0.5 ms 以下の隙間は
+    // snapToPreviousEnd が前の音の終わりに揃えるため穴にならない (揃わない 0.5 ms 超の
+    // 隙間は補間され、gapSeconds に入る)
     if (previousEnd !== null && decision.startAt > previousEnd && decision.gapSeconds === 0) {
       silentGapSeconds += decision.startAt - previousEnd;
     }
@@ -720,9 +721,10 @@ test("schedule: 下限のすぐ上の隙間は補間する", () => {
   assert.closeTo(second.gapStartSeconds, previousEnd, EPSILON);
 });
 
-// 前の音の終わりが今 + 余裕より過去でも、今回の開始がその先なら、未来の分だけは補間する。
-// 過去の分は予約時点で既に埋められないため unrecoverableGapSeconds として返す
-test("schedule: 隙間の先頭が過去でも予約できる未来の分は補間する", () => {
+// 前の音の終わりが今 + 余裕より前でも、今回の開始がその先なら、未来の分だけは補間する。
+// 今 + 余裕より前の分 (既に過去の分と、未来でも余裕に満たない分) は予約できないため
+// unrecoverableGapSeconds として返す
+test("schedule: 隙間の先頭が今 + 余裕より前でも予約できる未来の分は補間する", () => {
   const scheduler = new AudioPlayoutScheduler({ stretchMinSeconds: 0 });
   const first = playFirst(scheduler);
   const previousEnd = first.startAt + FRAME_SECONDS - first.compressSeconds;
@@ -734,7 +736,9 @@ test("schedule: 隙間の先頭が過去でも予約できる未来の分は補�
   // 補間の開始は予約できる最も早い時刻 (今 + 余裕) になる
   assert.closeTo(second.gapStartSeconds, nowSeconds + AUDIO_PLAYOUT_MIN_LEAD_SECONDS, EPSILON);
   assert.closeTo(second.gapSeconds, 10.06 - (nowSeconds + AUDIO_PLAYOUT_MIN_LEAD_SECONDS), EPSILON);
-  // 過去の分 (前の音の終わりから今 + 余裕まで) は補間しない
+  // 今 + 余裕より前の分 (前の音の終わりから今 + 余裕まで) は補間しない。この例の前の音の
+  // 終わりは今より未来であり、「既に過去」ではなく余裕に満たない分である
+  assert.isAbove(previousEnd, nowSeconds, "この例の unrecoverable は未来の分であること");
   assert.closeTo(
     second.unrecoverableGapSeconds,
     nowSeconds + AUDIO_PLAYOUT_MIN_LEAD_SECONDS - previousEnd,
