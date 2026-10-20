@@ -812,6 +812,8 @@ export class MediaPublisherImpl implements MediaPublisher {
 
   // 処理ループの中断フラグ
   private processingActive = false;
+  /** 周期読み出しのループが生きているか (自然終了を含む。停止時の drain 待ちの判定に使う) */
+  private processingLoopRunning = false;
 
   // 処理ループの世代 (pause / stop / close で加算し、
   // 旧ループの encode と onError 通知を抑止する)
@@ -887,6 +889,9 @@ export class MediaPublisherImpl implements MediaPublisher {
     // ピア起点の close の解放が進行中のときも同じである。解放が終端へ進む前に start が
     // 完了すると、そのあと state が "closed" になり、新しい start の資源を解放する経路が
     // 残らない (close() は早期 return、start() / stop() は state で拒否される)
+    if (this.stopInProgress) {
+      throw new Error("cannot start while stopping");
+    }
     if (this.disposalInFlight !== null) {
       throw new Error("cannot start while closing");
     }
@@ -1078,6 +1083,12 @@ export class MediaPublisherImpl implements MediaPublisher {
    * MediaPublisher.pause() を参照)。draft-ietf-moq-transport-22 §11.3.2。
    */
   pause(): void {
+    // close() は末尾 flush の間も state を "publishing" のままにするため、世代を進めると
+    // 末尾の出力が捨てられる。停止と同じく、終端へ動く途中は拒否する。ピア起点の close は
+    // closing を立てずに解放するため disposalInFlight も見る
+    if (this.closing !== null || this.disposalInFlight !== null) {
+      throw new Error("cannot pause while closing");
+    }
     if (this.currentState !== "publishing") {
       throw new Error(`cannot pause in state: ${this.currentState}`);
     }
@@ -1106,8 +1117,16 @@ export class MediaPublisherImpl implements MediaPublisher {
    * reader は pause で破棄していないため再取得は不要である。
    */
   resume(): void {
+    // close() の末尾 flush の間は処理ループを起こさない。ピア起点の close も同じ
+    if (this.closing !== null || this.disposalInFlight !== null) {
+      throw new Error("cannot resume while closing");
+    }
     if (this.currentState !== "paused") {
       throw new Error(`cannot resume in state: ${this.currentState}`);
+    }
+    // 停止の末尾 flush の間は処理ループを起こさない (停止の受付後のフレームを送らない)
+    if (this.stopInProgress) {
+      throw new Error("cannot resume while stopping");
     }
 
     this.processingActive = true;
@@ -1942,6 +1961,8 @@ export class MediaPublisherImpl implements MediaPublisher {
   }
 
   private async processAudioFrames(): Promise<void> {
+    // このループが生きている。停止時の drain はこのループが読み切る
+    this.processingLoopRunning = true;
     const reader = this.audioFrameReader;
     const encoder = this.audioEncoder;
     if (!reader || !encoder) return;
@@ -1986,9 +2007,10 @@ export class MediaPublisherImpl implements MediaPublisher {
         if (audioData === null) {
           break;
         }
-        // 停止の末尾 drain の間は、読んだフレームを末尾の範囲として記録する
+        // 停止の末尾 drain の間は、読んだフレームを末尾の範囲として記録する。旧世代の
+        // ループ (pause / resume を挟んだ残り) は末尾の範囲外であるため記録しない
         const activeTail = this.audioTailDrain;
-        if (activeTail !== null) {
+        if (activeTail !== null && generation === this.processingGeneration) {
           activeTail.framesRead++;
           activeTail.readBlocks.push({
             startMicros: audioData.timestamp,
@@ -2046,8 +2068,14 @@ export class MediaPublisherImpl implements MediaPublisher {
         this.callbacks.onError?.(error instanceof Error ? error : new Error(String(error)));
       }
     } finally {
-      // 停止側 (finishAudioTail) へ読み出しの完了を知らせる
-      this.audioTailDrain?.resolveDone();
+      if (generation === this.processingGeneration) {
+        // 現世代のループが終わった (正常終了・reader の終わり・エラー)。停止時の drain は
+        // もう待つ相手がいないため、finishAudioTail が待たないようにする
+        this.processingLoopRunning = false;
+        // 停止側 (finishAudioTail) へ読み出しの完了を知らせる。旧世代のループは
+        // まだ現世代が読み切っていないため、完了として扱わない
+        this.audioTailDrain?.resolveDone();
+      }
     }
   }
 
@@ -2680,7 +2708,7 @@ export class MediaPublisherImpl implements MediaPublisher {
     try {
       // ループ自身が drain を終えて保留分を encode するまで待つ。paused からの停止では
       // ループが既に終了しており、待っても読み切る対象が無いため待たない
-      if (this.processingActive) {
+      if (this.processingActive && this.processingLoopRunning) {
         const drained = await waitWithTimeout(
           done,
           AUDIO_TAIL_DRAIN_MAX_MS + AUDIO_TAIL_DRAIN_QUIET_MS,
@@ -2696,7 +2724,13 @@ export class MediaPublisherImpl implements MediaPublisher {
       const flushMethod = (encoder as { flush?: () => Promise<void> }).flush;
       let flush: Promise<void>;
       if (typeof flushMethod === "function") {
-        flush = flushMethod.call(encoder);
+        try {
+          flush = flushMethod.call(encoder);
+        } catch (error) {
+          // 同期の失敗でも、drain 中に発行した末尾の送信は待つ (下の送信待ちへ続ける)
+          this.callbacks.onError?.(error instanceof Error ? error : new Error(String(error)));
+          flush = Promise.resolve();
+        }
       } else {
         // flush を持たない注入 (テストの記録用エンコーダーなど) は待たない
         flush = Promise.resolve();

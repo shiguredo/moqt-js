@@ -24,18 +24,33 @@ test("flush: direct は WebCodecs の flush を待つ", async () => {
   const callbacks = createCallbacks();
   const wrapper = new AudioEncoderWrapper(false, callbacks);
   let flushed = 0;
+  let resolveFlush: (() => void) | null = null;
   const control = wrapper as unknown as { configured: boolean; encoder: unknown };
   control.configured = true;
   control.encoder = {
     state: "configured",
-    flush: async (): Promise<void> => {
-      flushed += 1;
-    },
+    flush: (): Promise<void> =>
+      new Promise<void>((resolve) => {
+        flushed += 1;
+        resolveFlush = resolve;
+      }),
   };
 
-  await wrapper.flush();
-
+  let settled = false;
+  const pending = wrapper.flush().then(() => {
+    settled = true;
+  });
+  // WebCodecs の flush が解決するまでは wrapper.flush() も解決しない
+  await new Promise<void>((resolve) => {
+    setTimeout(() => {
+      resolve();
+    }, 0);
+  });
+  assert.isFalse(settled, "WebCodecs の flush の解決を待つこと");
   assert.equal(flushed, 1, "WebCodecs の flush を 1 回呼ぶこと");
+  (resolveFlush as unknown as (() => void) | null)?.();
+  await pending;
+  assert.isTrue(settled, "WebCodecs の flush が解決したら wrapper.flush() も解決すること");
   assert.equal(callbacks.errors.length, 0, "失敗を通知しないこと");
 });
 
