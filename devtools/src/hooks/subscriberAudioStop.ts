@@ -32,6 +32,7 @@ export interface SubscriberAudioStopTarget {
     maxWaitMs: number;
     isFlushSettled: () => boolean;
     flushedObjects: number;
+    remainingFlushedObjects: () => number;
   }) => Promise<void>;
   /** `AudioContext` を閉じる (失敗は握り潰す) */
   closeAudioContext: () => Promise<void>;
@@ -79,7 +80,12 @@ export class SubscriberAudioStop {
       try {
         // 復号前の段の保持分を flush して復号へ流す。flush の通知先 (復号チェーン) を
         // 外すのは flush の後である (外すと flush した Object が復号へ流れない)
-        const flushed = target.flushAudio();
+        let flushed = 0;
+        try {
+          flushed = target.flushAudio();
+        } catch {
+          // flush の失敗で停止そのものを失敗させない。AudioContext は下で必ず閉じる
+        }
         this.flushPending = flushed;
         try {
           // 予約が尽き、かつ flush した分の復号の出力が届くまで待つ
@@ -87,21 +93,21 @@ export class SubscriberAudioStop {
             maxWaitMs: AUDIO_PLAYOUT_DRAIN_MAX_MS,
             isFlushSettled: () => this.flushPending === 0,
             flushedObjects: flushed,
+            remainingFlushedObjects: () => this.flushPending,
           });
         } catch {
           // drain の失敗で停止そのものを失敗させない。切った量は計器に残らず、残りの
           // 予約は AudioContext を閉じた時点で切られる
-        } finally {
-          // drain が失敗しても AudioContext は必ず閉じる
-          try {
-            await target.closeAudioContext();
-          } finally {
-            target.onStopped?.();
-          }
         }
       } finally {
-        this.flushPending = 0;
-        this.stoppingFlag = false;
+        // flush や drain が失敗しても AudioContext は必ず閉じる
+        try {
+          await target.closeAudioContext();
+        } finally {
+          target.onStopped?.();
+          this.flushPending = 0;
+          this.stoppingFlag = false;
+        }
       }
     })();
     this.stopPromise = stopping;

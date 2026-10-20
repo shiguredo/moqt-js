@@ -118,9 +118,6 @@ const DEFAULT_AUDIO_PLAYOUT_DRAIN_CLOCK: AudioPlayoutDrainClock = {
     }),
 };
 
-/** drain の結果 (計器の `lastDrain` と同じ形) */
-export type AudioPlayoutDrainResult = AudioPlayoutDrainStats;
-
 /** `AudioPlayoutSession.drainReserved` の設定 */
 export interface AudioPlayoutDrainOptions {
   /** drain を待つ上限 (ミリ秒)。省略すると通常の停止の上限 */
@@ -135,6 +132,13 @@ export interface AudioPlayoutDrainOptions {
   isFlushSettled?: () => boolean;
   /** flush した Object の件数 (計器に残す) */
   flushedObjects?: number;
+  /**
+   * flush したが、まだ復号の出力が届いていない Object の数を返す
+   *
+   * drain の終了時点で残った数を計器 (`lastDrain.undecodedFlushedObjects`) に残す。
+   * 復号の出力が届かなかった Object は、復号器を閉じる時点で捨てられる
+   */
+  remainingFlushedObjects?: () => number;
   /** 時計と待ち。テストで決定的に駆動するために差し替える */
   clock?: AudioPlayoutDrainClock;
 }
@@ -712,7 +716,7 @@ export class AudioPlayoutSession {
    * @param options - 待ちの上限、flush の完了判定、時計
    * @returns 待った結果 (鳴らせた量と切った量)
    */
-  async drainReserved(options: AudioPlayoutDrainOptions = {}): Promise<AudioPlayoutDrainResult> {
+  async drainReserved(options: AudioPlayoutDrainOptions = {}): Promise<AudioPlayoutDrainStats> {
     const clock = options.clock ?? DEFAULT_AUDIO_PLAYOUT_DRAIN_CLOCK;
     const maxWaitMs = Math.max(0, options.maxWaitMs ?? AUDIO_PLAYOUT_DRAIN_MAX_MS);
     const flushedObjects = Math.max(0, options.flushedObjects ?? 0);
@@ -728,7 +732,9 @@ export class AudioPlayoutSession {
       (pendingEndMs === null ? 0 : pendingEndMs - startMs) + AUDIO_PLAYOUT_DRAIN_MARGIN_MS,
     );
     if (flushedObjects > 0 || !isFlushSettled()) {
-      requestedMs = Math.max(requestedMs, AUDIO_PLAYOUT_DRAIN_MARGIN_MS);
+      // flush した Object の復号は非同期に済む。予約が無くても復号の出力を待てるよう、
+      // 上限まで待つ (復号が終われば isFlushSettled が true になり早く終わる)
+      requestedMs = Math.max(requestedMs, maxWaitMs);
     }
     requestedMs = Math.min(maxWaitMs, requestedMs);
 
@@ -756,13 +762,14 @@ export class AudioPlayoutSession {
     );
     const playedMs = Math.max(0, pendingMsAtStart + reservedDuringDrainMs - cutMs);
     this.timing.recordStopped(finishedMs);
-    const result: AudioPlayoutDrainResult = {
+    const result: AudioPlayoutDrainStats = {
       pendingMsAtStart,
       requestedMs,
       waitedMs: Math.max(0, finishedMs - startMs),
       playedMs,
       cutMs,
       flushedObjects,
+      undecodedFlushedObjects: Math.max(0, options.remainingFlushedObjects?.() ?? 0),
     };
     this.timing.recordDrain(result);
     return result;

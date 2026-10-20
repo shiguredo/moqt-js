@@ -65,25 +65,30 @@
   (`audioDecodeStopped`)。drain の後に届いた復号出力は予約せず閉じる
 - `AudioPlayoutSession.drainReserved` を追加し、ライブラリと devtools で共有した。待ち時間は
   「最後に鳴り終わる予約 - 現在 + 余裕 100 ms」を 0〜300 ms にクランプする。flush した
-  Object の復号出力は、件数を復号の出力で減らして 0 になるまで待つ。`stop` は 300 ms、
-  `close` とピア起点の close は 150 ms、start 失敗の巻き戻しは drain しない
+  Object の復号出力は timestamp で対応させ、flush 分だけが 0 になるまで待つ (停止の前に
+  復号器へ投入していた Object の出力では減らさない)。予約が無くても、flush があれば上限まで
+  待つ (復号が終われば早く終わる)。`stop` は 300 ms、`close` とピア起点の close は 150 ms、
+  start 失敗の巻き戻しは drain しない
 - 計器: `AudioPlayoutTimingSnapshot.lastDrain` に、停止時の予約残 (`pendingMsAtStart`)、
   要求した待ち時間 (`requestedMs`)、実際の待ち時間 (`waitedMs`)、鳴らすことになった量
-  (`playedMs`)、切った量 (`cutMs`)、flush した件数 (`flushedObjects`) を足した。
-  `missedByReason.stopped` の意味は変えていない
+  (`playedMs`)、切った量 (`cutMs`)、flush した件数 (`flushedObjects`)、復号の出力が届かず
+  切った件数 (`undecodedFlushedObjects`) を足した。`missedByReason.stopped` の意味は
+  変えていない
 - devtools: `SubscriberAudioStop` に停止処理を切り出し、`stopAudioPlayback` を非同期化した。
   二重停止は同じ Promise を共有し、停止中は `Finishing audio playback...` を出してボタンを
   無効にする。パネルの削除・アンマウント・セッションの close は fire-and-forget で drain し、
-  `AudioContext` は必ず閉じる
+  `AudioContext` は必ず閉じる (flush や drain が失敗しても閉じる)。音声の再生トグルを OFF に
+  しただけでは購読を止めないため、復号前の段を flush せず、復号チェーンへの接続も外さない
 - 実リレーの検証 (3 回): `missedByReason.stopped` の増分は 0 件、`lastDrain.cutMs` は 0 ms、
   drain の待ち時間は 51〜153 ms、停止の完了 (statusMessage が `Ready to subscribe` へ戻るまで)
   は 94〜209 ms だった。修正前は 7 件 / 121〜124 ms が切られていた
 - `preDecodeDelayMs = 2000` の検証: 保持分を 200 件 flush し、drain の 225.7 ms は鳴らせたが、
-  上限 300 ms を超える 1467.8 ms は `stopped` に計上した。保持分をすべて鳴らすには設定した
-  遅延の分だけ停止を待つことになり、停止の応答性と取引になるため、上限内だけ鳴らす設計に
-  した
+  上限 300 ms を超える 1467.8 ms は `stopped` に計上した。上限までに復号の出力が届かなかった
+  flush 分は件数だけ `lastDrain.undecodedFlushedObjects` に残る (復号していないため長さは
+  分からず、`stopped` には入らない)。保持分をすべて鳴らすには設定した遅延の分だけ停止を
+  待つことになり、停止の応答性と取引になるため、上限内だけ鳴らす設計にした
 - 実リレーの既存 E2E は 21 件成功 (skip 11)。`vp check` / `tsc --noEmit` /
-  `vp test run` (234 ファイル / 4134 テスト) も成功
+  `vp test run` (234 ファイル / 4137 テスト) も成功
 
 ## 参照
 

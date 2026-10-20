@@ -335,6 +335,7 @@ test("recordDrain: drain の結果を lastDrain に残す", (): void => {
     playedMs: 20,
     cutMs,
     flushedObjects: 2,
+    undecodedFlushedObjects: 0,
   });
 
   const snapshot = stats.snapshot(150);
@@ -345,6 +346,7 @@ test("recordDrain: drain の結果を lastDrain に残す", (): void => {
     playedMs: 20,
     cutMs: 0,
     flushedObjects: 2,
+    undecodedFlushedObjects: 0,
   });
   // 予約は [100, 120] と [120, 140] であり、150 では両方鳴り終わっているため
   // stopped (切った量) は 0 のまま

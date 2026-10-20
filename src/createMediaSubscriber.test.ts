@@ -9505,7 +9505,7 @@ interface SubscriberDrainControl extends SubscriberFrameControl {
   readonly audioPlayoutSession: AudioPlayoutSession;
   // 停止の drain の状態 (復号の停止と flush の復号待ちの残り)
   audioDecodeStopped: boolean;
-  audioDrainFlushPending: number;
+  audioDrainFlushedTimestamps: Set<number>;
 }
 
 /**
@@ -9614,6 +9614,7 @@ test("handleAudioDecodedData: drain 終了後に届いた復号出力は予約�
     numberOfChannels: 1,
     sampleRate: 48_000,
     numberOfFrames: 960,
+    timestamp: 1_000,
     copyTo: () => {},
     close: () => {
       closeCount++;
@@ -9622,12 +9623,12 @@ test("handleAudioDecodedData: drain 終了後に届いた復号出力は予約�
 
   // drain 終了相当の状態にする。復号の待ちは 1 件残っている
   control.audioDecodeStopped = true;
-  control.audioDrainFlushPending = 1;
+  control.audioDrainFlushedTimestamps.add(1_000);
   control.handleAudioDecodedData({ data: audioData });
 
   assert.equal(starts, 0, "予約しないこと");
   assert.equal(closeCount, 1, "AudioData を閉じること");
-  assert.equal(control.audioDrainFlushPending, 0, "drain の完了判定用の減算は行うこと");
+  assert.equal(control.audioDrainFlushedTimestamps.size, 0, "drain の完了判定用の減算は行うこと");
 
   // 対照: 停止していなければ予約する
   control.audioDecodeStopped = false;
@@ -9640,6 +9641,38 @@ test("handleAudioDecodedData: drain 終了後に届いた復号出力は予約�
   } as unknown as AudioData;
   control.handleAudioDecodedData({ data: liveAudioData });
   assert.equal(starts, 1, "停止していなければ予約すること");
+});
+
+/**
+ * 完了条件: drain の flush 待ちは、flush した Object の復号出力だけを減らす。停止の前に
+ * 復号器へ投入していた Object の出力では減らさない (drain が早く終わって末尾を切らないため)。
+ */
+test("handleAudioDecodedData: flush 由来の復号出力だけを drain の待ちから減らす", () => {
+  const subscriber = new MediaSubscriberImpl("moqt://example.com/live", {
+    namespace: ["live"],
+    audio: {},
+  });
+  const control = subscriber as unknown as SubscriberDrainControl;
+  const makeAudioData = (timestamp: number): AudioData =>
+    ({
+      numberOfChannels: 1,
+      sampleRate: 48_000,
+      numberOfFrames: 960,
+      timestamp,
+      copyTo: () => {},
+      close: () => {},
+    }) as unknown as AudioData;
+
+  control.audioDecodeStopped = true;
+  control.audioDrainFlushedTimestamps.add(200_000);
+
+  // 停止の前に投入していた Object の出力 (timestamp が違う) では減らない
+  control.handleAudioDecodedData({ data: makeAudioData(100_000) });
+  assert.equal(control.audioDrainFlushedTimestamps.size, 1, "flush 分以外では減らさないこと");
+
+  // flush した Object の出力では減る
+  control.handleAudioDecodedData({ data: makeAudioData(200_000) });
+  assert.equal(control.audioDrainFlushedTimestamps.size, 0, "flush 分の出力で減ること");
 });
 
 /**

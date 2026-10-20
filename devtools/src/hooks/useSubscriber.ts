@@ -1387,6 +1387,9 @@ export function useSubscriber(
    * 自動再生ポリシー下でも `resume()` と `play()` が通る。
    */
   async function startAudioPlayback(): Promise<void> {
+    // 購読の停止 (drain) の途中は再生を始めない。停止の最後に AudioContext を閉じるため、
+    // 作り直しても直後に閉じられる
+    if (audioStopRef.current.isStopping) return;
     let playback = audioPlaybackRef.current;
     if (playback === null) {
       const context = new AudioContext();
@@ -1481,6 +1484,33 @@ export function useSubscriber(
   }
 
   /**
+   * 音声出力だけを止める (購読は続ける)
+   *
+   * 購読の停止時と違い、復号前の段は flush しない (保持している Object は購読の停止時に
+   * 流す)。復号チェーンへの接続 (`appendAudioPreDecodeRef`) も外さない。外すと、購読を
+   * 続けたまま音声を再度有効にしたときに、復号前の段から流れた Object が復号へ届かない。
+   * 予約済みで鳴り始めていない音は、閉じるときに切った量として計器へ残す。
+   */
+  function pauseAudioPlayback(): void {
+    audioPlaybackPendingRef.current = false;
+    const playback = audioPlaybackRef.current;
+    audioPlaybackRef.current = null;
+    const audioElement = audioRef.current;
+    if (audioElement) {
+      audioElement.pause();
+      audioElement.srcObject = null;
+    }
+    if (playback !== null) {
+      // 予約済みで鳴り始めていない音は、閉じると鳴らないまま切り捨てられる
+      playback.playout.recordStopped();
+      playoutTimelineRef.current.resetStream("audio");
+      void playback.context.close().catch(() => {
+        // 既に閉じている場合は無視する
+      });
+    }
+  }
+
+  /**
    * 受信した音声を再生するかどうかを切り替える
    *
    * 既定は無効。有効にしたときだけ音声出力デバイスへ繋ぐ。
@@ -1488,9 +1518,12 @@ export function useSubscriber(
   const toggleAudioPlayback = async (): Promise<void> => {
     const instance = sub.getSubscriber(subscriberId);
     if (!instance) return;
+    // 購読の停止 (drain) の途中は切り替えない。停止の最後に AudioContext を閉じるため、
+    // 途中で作り直すと参照が失われ、有効のまま無音になる
+    if (audioStopRef.current.isStopping) return;
 
     if (instance.audioPlaybackEnabled.value) {
-      void stopAudioPlayback();
+      pauseAudioPlayback();
       instance.audioPlaybackEnabled.value = false;
       // URL クエリ (`playAudio`) へ反映する。共有した URL で同じ状態から始められる
       settings.playAudioEnabled.value = false;

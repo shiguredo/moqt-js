@@ -1548,7 +1548,30 @@ test("drainReserved: flush の復号出力が届くまで待つ", async () => {
 
   assert.isAtLeast(result.waitedMs, 50, "flush の復号出力を待つこと");
   assert.isAtMost(result.waitedMs, 100, "余裕 (100 ms) を超えて待たないこと");
+  assert.equal(result.requestedMs, 300, "flush があるときは上限まで待つ");
   assert.equal(result.flushedObjects, 1);
+  assert.equal(result.undecodedFlushedObjects, 0, "復号された flush 分は残さないこと");
+  assert.equal(result.cutMs, 0);
+});
+
+/**
+ * 完了条件: 上限まで待っても flush した Object の復号の出力が届かない場合、その件数を
+ * drain の結果に残す。復号していないため、長さは `stopped` に計上できない。
+ */
+test("drainReserved: 復号の出力が届かなかった flush 分を件数で残す", async () => {
+  const fixture = makeSessionFixture();
+  const clock = new ManualDrainClock(1_000);
+  const result = await fixture.session.drainReserved({
+    clock,
+    maxWaitMs: 200,
+    isFlushSettled: () => false,
+    flushedObjects: 3,
+    remainingFlushedObjects: () => 3,
+  });
+  assert.equal(result.requestedMs, 200, "flush があるときは上限まで待つ");
+  assert.equal(result.waitedMs, 200, "上限まで待つこと");
+  assert.equal(result.flushedObjects, 3);
+  assert.equal(result.undecodedFlushedObjects, 3, "復号されなかった flush 分を数えること");
   assert.equal(result.cutMs, 0);
 });
 

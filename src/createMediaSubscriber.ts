@@ -38,7 +38,11 @@ import {
 } from "./playout/audioPlayoutTimingStats";
 // 復号した音声の再生の組み立ては devtools と共有する (到着基準の遅れ・閉ループ・計器を
 // 1 か所に置くため、src/playout/audioPlayoutSession.ts が持つ)
-import { LastTimestampKind, takeDecodeInputEntry } from "./playout/decodeInputTimestamps";
+import {
+  DECODER_OUTPUT_TIMESTAMP_TOLERANCE_MICROS,
+  LastTimestampKind,
+  takeDecodeInputEntry,
+} from "./playout/decodeInputTimestamps";
 import { AudioPlayoutSession, type AudioPlayoutTimestampKind } from "./playout/audioPlayoutSession";
 import { JITTER_BUFFER_MAX_QUEUED_FRAMES } from "./playout/buffer";
 import { PlayoutTimeline } from "./playout/timeline";
@@ -548,8 +552,15 @@ export class MediaSubscriberImpl implements MediaSubscriber {
    * フラグで復号の可否を決める。drain が終わった時点で立てる
    */
   private audioDecodeStopped = false;
-  /** 復号前の段から flush したが、まだ復号の出力が届いていない Object の数 */
-  private audioDrainFlushPending = 0;
+  /**
+   * 復号前の段から flush した Object の復号出力の timestamp
+   *
+   * 復号の出力は投入した値と小数だけずれるため、許容の中で近い値と対応させる。停止の前に
+   * 復号器へ投入していた Object の出力を flush 分として数えないよう、timestamp で区別する
+   */
+  private readonly audioDrainFlushedTimestamps = new Set<number>();
+  /** flush の間に復号へ渡した timestamp を記録しているか */
+  private capturingAudioDrainFlush = false;
   /**
    * 次の解放で drain を待つ上限 (ミリ秒)。null なら drain しない
    *
@@ -1013,7 +1024,8 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     // 前の停止で立てた drain 用のフラグも戻す (再開した購読では受信も復号も通常どおり行う)
     this.audioReceiveStopped = false;
     this.audioDecodeStopped = false;
-    this.audioDrainFlushPending = 0;
+    this.capturingAudioDrainFlush = false;
+    this.audioDrainFlushedTimestamps.clear();
     this.drainOnDisposeMaxMs = null;
 
     // 失敗時に戻す遷移前の state
@@ -1441,15 +1453,24 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     const drainMaxMs = this.drainOnDisposeMaxMs;
     this.drainOnDisposeMaxMs = null;
     if (drainMaxMs !== null) {
-      const flushedObjects = this.audioPreDecodeStage?.flush() ?? 0;
-      this.audioDrainFlushPending += flushedObjects;
+      // flush の間に復号へ渡した Object の timestamp を覚え、復号の出力と対応させる。
+      // 停止の前に投入していた Object の出力を flush 分として数えないためである
+      this.capturingAudioDrainFlush = true;
+      let flushedObjects = 0;
+      try {
+        flushedObjects = this.audioPreDecodeStage?.flush() ?? 0;
+      } finally {
+        this.capturingAudioDrainFlush = false;
+      }
       await guard(async () => {
         await this.audioPlayoutSession.drainReserved({
           maxWaitMs: drainMaxMs,
-          isFlushSettled: () => this.audioDrainFlushPending === 0,
+          isFlushSettled: () => this.audioDrainFlushedTimestamps.size === 0,
           flushedObjects,
+          remainingFlushedObjects: () => this.audioDrainFlushedTimestamps.size,
         });
       });
+      this.audioDrainFlushedTimestamps.clear();
     } else {
       // drain しない経路 (start 失敗の巻き戻し) でも、予約が残っていれば切った量を数える
       this.audioPlayoutSession.recordStopped();
@@ -1552,10 +1573,9 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     this.lastAppliedAudioConfig = null;
     // 出力の参照を切り離す (次の start で新しい MediaStream を作る)
     this.outputStream = null;
-    // 停止の要求で立てた drain 用のフラグを戻す (再 start は通常の受信と復号から始める)
-    this.audioReceiveStopped = false;
-    this.audioDecodeStopped = false;
-    this.audioDrainFlushPending = 0;
+    // 停止の要求で立てたフラグは戻さない (停止したまま)。再 start の入口で戻す。解放が
+    // 並行したときに、先に終わった解放がまだ drain 中の解放の前提を壊さないためである
+    this.audioDrainFlushedTimestamps.clear();
 
     if (firstFailure !== null) {
       const failure: Error = firstFailure;
@@ -2712,6 +2732,12 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       performance.timeOrigin + performance.now() - arrivalWallClockMs,
     );
 
+    // drain の flush で復号へ渡した Object は、復号の出力と対応させるために timestamp を
+    // 覚えておく
+    if (this.capturingAudioDrainFlush) {
+      this.audioDrainFlushedTimestamps.add(timestamp);
+    }
+
     // デコード
     this.audioDecoder.decode(obj.payload, "key", timestamp, 0);
   }
@@ -3137,13 +3163,41 @@ export class MediaSubscriberImpl implements MediaSubscriber {
    * 鳴らす先が無いとき (音声を再生しない購読、AudioContext を閉じた後) は何もせずに閉じる。
    * 失敗は onError へ通知する (共有実装は throw しない)。
    */
+  /**
+   * 復号の出力が、drain の flush で復号へ渡した Object のものかを判定して対応表から消す
+   *
+   * 復号の出力の timestamp は投入した値と小数だけずれるため、完全一致で引けないときは
+   * 許容の中で最も近い記録を対応させる (`takeDecodeInputEntry` と同じ考え方)。停止の前に
+   * 投入していた Object の出力では何もしない
+   *
+   * @param outputTimestampMicros - 復号の出力の timestamp (マイクロ秒)
+   * @returns flush した Object の出力なら true
+   */
+  private takeFlushedAudioOutput(outputTimestampMicros: number): boolean {
+    if (this.audioDrainFlushedTimestamps.delete(outputTimestampMicros)) {
+      return true;
+    }
+    let nearest: number | null = null;
+    let nearestDistance = Number.POSITIVE_INFINITY;
+    for (const timestamp of this.audioDrainFlushedTimestamps) {
+      const distance = Math.abs(outputTimestampMicros - timestamp);
+      if (distance < nearestDistance) {
+        nearest = timestamp;
+        nearestDistance = distance;
+      }
+    }
+    if (nearest === null || nearestDistance > DECODER_OUTPUT_TIMESTAMP_TOLERANCE_MICROS) {
+      return false;
+    }
+    this.audioDrainFlushedTimestamps.delete(nearest);
+    return true;
+  }
+
   private handleAudioDecodedData(data: { data: AudioData }): void {
     const audioData = data.data;
     // 停止時の flush で復号へ流した Object の出力が届いた。drain はこの数が 0 になるまで待つ。
     // 減算は drain の完了判定に要るため、捨てる判定より先に行う
-    if (this.audioDrainFlushPending > 0) {
-      this.audioDrainFlushPending--;
-    }
+    this.takeFlushedAudioOutput(audioData.timestamp);
     // drain が終わった後 (recordStopped の後) に届いた復号の出力は予約しない。ここで渡すと、
     // 切った量として数えられないまま閉じる直前の AudioContext に積まれ、閉じたときに消える
     if (this.audioDecodeStopped) {

@@ -50,19 +50,24 @@
 
 ## 検証
 
-- 単体テスト: 222 ファイル / **3929 テスト成功** (`vp test run`)
-- 実リレー E2E: **19 テスト成功** (`vp run e2e-test:relay`。A/V 同期と 60 秒の長時間の観測を
-  含む)。損失を注入する調査 (`investigation-audio-delay.spec.ts`) は `MOQT_INVESTIGATION=1` の
-  ときだけ動き、既定では skip する
+- 単体テスト: 234 ファイル / **4137 テスト成功** (`vp test run`)
+- 実リレー E2E: **21 テスト成功** (skip 11。`vp run e2e-test:relay`。A/V 同期と 60 秒の
+  長時間の観測を含む)。損失を注入する調査 (`investigation-audio-delay.spec.ts` と
+  `investigation-audio-output.spec.ts`) は `MOQT_INVESTIGATION=1` のときだけ動き、既定では
+  skip する
 
 ## 既知の限界
 
+- **停止の drain は上限 (stop は 300 ms、close とピア起点の close は 150 ms) で打ち切る。**
+  上限を超えて残った予約は `missedByReason.stopped` に計上される。flush したが復号の出力が
+  届かなかった Object は切られ、件数だけ `lastDrain.undecodedFlushedObjects` に残る
+  (復号していないため長さは分からない)
 - **受信の playout は、経路の揺らぎが目標遅延を超えると無音の穴を出す。** 無音の穴を補間と
   境界フェードで埋める実装 (2026-10-20) の後、実リレー 60 秒の波形収録で無音 8 個 /
   39.9 ms、段差 10 件まで減った (実装前は 36 個 / 149 ms / 90 件)。負荷時は目標遅延が
   適応の上限 160 ms まで上がり、それを超える揺らぎで残るアンダーランの開始点が段差として
   残る。遅延をさらに増やすかどうかの取引になる。詳細は `docs/AUDIO_PLAYOUT_GAPS_AND_TAIL.md`
-- **購読を Stop すると、予約済みの音声を最大 0.3 秒鳴らし切ってから `AudioContext` を
+- **購読を Stop すると、予約済みの音声を最大 300 ms 鳴らし切ってから `AudioContext` を
   閉じる。** 実リレーの 3 回の計測で、`missedByReason.stopped` の増分は 0 件、`lastDrain` の
   `cutMs` は 0 ms、待ち時間は 51〜153 ms、停止の完了は 94〜209 ms だった。上限を超えて
   残った分だけが切られる。配信側の停止では従来どおり切られない
