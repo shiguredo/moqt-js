@@ -42,6 +42,8 @@ import { LastTimestampKind, takeDecodeInputEntry } from "./playout/decodeInputTi
 import { AudioPlayoutSession, type AudioPlayoutTimestampKind } from "./playout/audioPlayoutSession";
 import { JITTER_BUFFER_MAX_QUEUED_FRAMES } from "./playout/buffer";
 import { PlayoutTimeline } from "./playout/timeline";
+import { MAX_PRE_DECODE_DELAY_MS } from "./playout/preDecodeDelay";
+import { PreDecodeDelayStage } from "./playout/preDecodeDelayStage";
 // 復号した映像フレームの表示の組み立て (対応表・時間軸への記録・表示の選択・計器への記録) は
 // devtools と共有する (src/playout/videoPlayoutSession.ts)。組み立てを 2 か所へ置くと、表示の遅れ・
 // あふれの扱い・計器の修正のたびに両方を直すことになり、片方だけ直すと挙動がずれる
@@ -186,6 +188,44 @@ interface PendingObjectQueueState {
 interface PendingAudioObject {
   readonly object: MoqtObject;
   readonly delivery: AudioDelivery;
+  /** Object の到着時刻 (Unix epoch ミリ秒)。復号前の遅延を挟んでも入力の遅れを測れるようにする */
+  readonly arrivalWallClockMs: number;
+}
+
+/**
+ * `MediaSubscriberOptions.preDecodeDelayMs` を検証してミリ秒の値にする
+ *
+ * 未指定は 0 (追加遅延なし)。負数、非有限数、上限超過は生成時にエラーにする。
+ * 上限 (`MAX_PRE_DECODE_DELAY_MS`) を置くのは、タイマーと保持量が無制限に増えないように
+ * するためである。
+ *
+ * @param value - 利用者が指定した値
+ * @returns 検証済みの遅延 (ミリ秒)
+ */
+function resolvePreDecodeDelayMs(value: number | undefined): number {
+  if (value === undefined) {
+    return 0;
+  }
+  if (!Number.isFinite(value) || value < 0) {
+    throw new Error(`preDecodeDelayMs must be a finite number >= 0, got ${value}`);
+  }
+  if (value > MAX_PRE_DECODE_DELAY_MS) {
+    throw new Error(`preDecodeDelayMs must be <= ${MAX_PRE_DECODE_DELAY_MS}, got ${value}`);
+  }
+  return value;
+}
+
+/**
+ * Object が占めるバイト数
+ *
+ * 受信統計の `bytesReceived` と同じ定義 (payload と properties の長さの合計) で数える。
+ * Object 自体の固定費は件数の上限で抑える。
+ *
+ * @param obj - 対象の Object
+ * @returns payload と properties の合計バイト数
+ */
+function moqtObjectBufferedBytes(obj: MoqtObject): number {
+  return obj.payload.byteLength + (obj.properties?.byteLength ?? 0);
 }
 
 /**
@@ -603,6 +643,9 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   // 「復号が足している遅れ」を求めるのに使う。壁時計の TIMESTAMP を持つ音だけ記録する
   // (メディア時刻は壁時計と対応しないため測れない)
   private readonly audioInputLags = new Map<number, number>();
+  // 復号へ渡すまで実際に保持した時間 (ミリ秒)。上限超過で遅延が短くなった区間も含め、
+  // 意図した遅延として音声の追いつきの判定から差し引く
+  private readonly audioIntentionalDelays = new Map<number, number>();
   // 直前に記録した音声の TIMESTAMP の種類。復号の出力で対応が引けなくなったときに使う
   // (src/playout/decodeInputTimestamps.ts の `LastTimestampKind` を参照)
   private readonly lastAudioTimestampKind = new LastTimestampKind<"wallClock" | "mediaTime">();
@@ -651,6 +694,14 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     overflowNotified: false,
   };
 
+  // 復号前の追加遅延 (ミリ秒)。0 のときは段を作らず、既存の経路をそのまま通す
+  private readonly preDecodeDelayMs: number;
+  // 復号前の Object を時間で保持する段 (音声と映像で別々)。0 のときは null
+  private readonly audioPreDecodeStage: PreDecodeDelayStage<PendingAudioObject> | null;
+  private readonly videoPreDecodeStage: PreDecodeDelayStage<MoqtObject> | null;
+  // 音声と映像の短縮量を揃える操作の再入を止めるフラグ
+  private synchronizingPreDecodeDelay = false;
+
   // 統計情報 (受信の分。再生の分は getStats のたびに scheduler から読む)
   private audioStats: Pick<
     AudioReceiverStats,
@@ -690,6 +741,143 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       ...DEFAULT_PENDING_OBJECT_QUEUE_OPTIONS,
       ...options.pendingObjectQueue,
     };
+    this.preDecodeDelayMs = resolvePreDecodeDelayMs(options.preDecodeDelayMs);
+    this.audioPreDecodeStage = this.createAudioPreDecodeStage();
+    this.videoPreDecodeStage = this.createVideoPreDecodeStage();
+  }
+
+  /**
+   * 音声の復号前の段を作る
+   *
+   * 期限が来た Object を復号へ渡す。購読が閉じたあとは復号しない。上限超過は購読期間
+   * あたり 1 回だけ onError へ通知する。
+   *
+   * @returns 遅延 0 のときは null
+   */
+  private createAudioPreDecodeStage(): PreDecodeDelayStage<PendingAudioObject> | null {
+    if (this.preDecodeDelayMs <= 0) {
+      return null;
+    }
+    return new PreDecodeDelayStage<PendingAudioObject>({
+      delayMs: this.preDecodeDelayMs,
+      bytesOf: (item) => moqtObjectBufferedBytes(item.object),
+      onDue: (items) => {
+        for (const item of items) {
+          if (this.closed) {
+            this.audioPreDecodeStage?.stop();
+            return;
+          }
+          this.decodeAudioObject(item.object, item.delivery, item.arrivalWallClockMs);
+        }
+      },
+      onOverflow: (overflow) => this.notifyPreDecodeOverflow("audio", overflow),
+      onDelayShortenChanged: (reset) => this.synchronizePreDecodeDelayShorten(reset),
+      onDueError: (error) => this.notifyPreDecodeDueError(error),
+    });
+  }
+
+  /**
+   * 映像の復号前の段を作る
+   *
+   * 期限が来た Object を復号へ渡す。購読が閉じたあとは復号しない。上限超過は購読期間
+   * あたり 1 回だけ onError へ通知する。
+   *
+   * @returns 遅延 0 のときは null
+   */
+  private createVideoPreDecodeStage(): PreDecodeDelayStage<MoqtObject> | null {
+    if (this.preDecodeDelayMs <= 0) {
+      return null;
+    }
+    return new PreDecodeDelayStage<MoqtObject>({
+      delayMs: this.preDecodeDelayMs,
+      bytesOf: moqtObjectBufferedBytes,
+      onDue: (objects) => {
+        for (const obj of objects) {
+          if (this.closed) {
+            this.videoPreDecodeStage?.stop();
+            return;
+          }
+          this.decodeVideoObject(obj);
+        }
+      },
+      onOverflow: (overflow) => this.notifyPreDecodeOverflow("video", overflow),
+      onDelayShortenChanged: (reset) => this.synchronizePreDecodeDelayShorten(reset),
+      onDueError: (error) => this.notifyPreDecodeDueError(error),
+    });
+  }
+
+  /**
+   * 音声と映像の段の実効的な遅延を揃える
+   *
+   * 上限超過による遅延の短縮はメディアごとのキューで起きる。片方だけ短くなると、表示時刻の
+   * 基準の遅れがメディアごとにずれ、A/V 同期を合わせられなくなる。短縮量の大きい方 (実効
+   * 的な遅延が短い方) に両方を揃え、同じ遅延で復号する。一方のキューが空になって短縮が
+   * 解除されたときは両方を解除し、次の Object から元の遅延へ戻す。
+   *
+   * 段の通知から呼ばれるため、揃える操作が再び通知しないようフラグで止める。
+   *
+   * @param reset - キューが空になって短縮が解除されたかどうか
+   */
+  private synchronizePreDecodeDelayShorten(reset: boolean): void {
+    const audioStage = this.audioPreDecodeStage;
+    const videoStage = this.videoPreDecodeStage;
+    if (audioStage === null || videoStage === null || this.synchronizingPreDecodeDelay) {
+      return;
+    }
+    const shortenMs = reset ? 0 : Math.max(audioStage.delayShortenMs, videoStage.delayShortenMs);
+    if (audioStage.delayShortenMs === shortenMs && videoStage.delayShortenMs === shortenMs) {
+      return;
+    }
+    this.synchronizingPreDecodeDelay = true;
+    try {
+      audioStage.setDelayShortenMs(shortenMs);
+      videoStage.setDelayShortenMs(shortenMs);
+    } finally {
+      this.synchronizingPreDecodeDelay = false;
+    }
+  }
+
+  /**
+   * 復号前の段の上限超過を onError へ通知する
+   *
+   * 段が購読期間あたり 1 回に抑えるため、ここでは通知だけを行う。通知の失敗を伝える経路が
+   * これ以上無いため、onError の throw は握り潰す。
+   *
+   * @param kind - どちらのメディアの段か
+   * @param overflow - 上限超過の内容
+   */
+  private notifyPreDecodeOverflow(
+    kind: "audio" | "video",
+    overflow: {
+      dropped: number;
+      size: number;
+      bufferedBytes: number;
+      delayMs: number;
+      effectiveDelayMs: number;
+    },
+  ): void {
+    try {
+      this.callbacks.onError?.(
+        new Error(
+          `${kind} pre-decode delay queue overflow: dropped=${overflow.dropped}, size=${overflow.size}, bufferedBytes=${overflow.bufferedBytes}, delayMs=${overflow.delayMs}, effectiveDelayMs=${overflow.effectiveDelayMs}`,
+        ),
+      );
+    } catch {
+      // 通知の失敗を伝える経路がこれ以上無い
+    }
+  }
+
+  /**
+   * 復号前の段の期限処理で起きた失敗を onError へ通知する
+   *
+   * @param error - 通知する失敗
+   */
+  private notifyPreDecodeDueError(error: unknown): void {
+    try {
+      this.callbacks.onError?.(error instanceof Error ? error : new Error(String(error)));
+    } catch {
+      // 通知の失敗を伝える経路がこれ以上無い
+    }
   }
 
   get state(): MediaSubscriberState {
@@ -1121,7 +1309,8 @@ export class MediaSubscriberImpl implements MediaSubscriber {
    * videoInitialConfigPending / videoGroupGateTimer / videoDecodeOrder /
    * videoPlayoutStopped / audioWallClockSeen / videoWallClockSeen /
    * audioTimestampKinds / 復号へ渡した映像フレームの対応表 (videoDecodeInputs) / 保留中の
-   * Object (音声 / 映像 / Group の切り替え) と上限超過の通知済みフラグ / 表示待ちの
+   * Object (音声 / 映像 / Group の切り替え) と上限超過の通知済みフラグ / 復号前の遅延
+   * の段 (音声 / 映像) とその上限超過の通知済みフラグ / 表示待ちの
    * 映像フレームと予約した表示 (videoPlayoutSession) /
    * 共有の時間軸 (playoutTimeline) と、音声の再生の時計の対応と直前の音
    * (audioPlayoutSession の releaseAudioContext) である。
@@ -1235,6 +1424,9 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     this.audioInitialConfigPending = false;
     this.videoInitialConfigPending = false;
     this.resetPendingObjectQueues();
+    // 復号前の遅延の段も破棄する。タイマーが残っていると、閉じた購読で復号が走る
+    this.audioPreDecodeStage?.stop();
+    this.videoPreDecodeStage?.stop();
     // Group の切り替えで保留していた映像 Object も破棄する
     if (this.videoGroupGateTimer !== null) {
       clearTimeout(this.videoGroupGateTimer);
@@ -1254,6 +1446,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     this.audioPlayoutSession.releaseAudioContext();
     this.audioTimestampKinds.clear();
     this.audioInputLags.clear();
+    this.audioIntentionalDelays.clear();
     this.lastAudioTimestampKind.reset();
     this.audioWallClockSeen = false;
     this.videoWallClockSeen = false;
@@ -1860,7 +2053,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     if (this.audioTrackInfo) {
       this.audioDecoder = new AudioDecoderWrapper(useWorker, {
         output: (data) => this.handleAudioDecodedData(data),
-        error: (error) => this.callbacks.onError?.(error),
+        error: (error) => this.handleAudioDecoderError(error),
       });
 
       // Catalog または options から codec を取得
@@ -1954,6 +2147,10 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     }
 
     const namespace = this.options.namespace;
+
+    // 復号前の遅延の段の上限超過も購読期間あたり 1 回だけにするため、前の購読期間の
+    // 通知済みフラグをここで解除する
+    this.resetPreDecodeOverflowNotifications();
 
     // 音声サブスクライバー
     if (this.audioTrackInfo) {
@@ -2125,11 +2322,22 @@ export class MediaSubscriberImpl implements MediaSubscriber {
    * @param obj 保留するか破棄するかを判定する Object
    * @param delivery 到着経路。既定値は置かない (映像も呼び出し側が "subgroup" を明示する。
    *   既定値にすると、到着していない経路の値を暗黙に記録してしまう)
+   * @param arrivalWallClockMs 音声 Object の到着時刻 (Unix epoch ミリ秒)。復号前の遅延を
+   *   挟んでも入力の遅れを測れるように、保留を経由しても失わない。音声では必須であり、
+   *   既定値は置かない (復号へ渡した時刻を到着時刻として黙って記録しないため)
    */
+  private holdPendingObject(
+    kind: "audio",
+    obj: MoqtObject,
+    delivery: AudioDelivery,
+    arrivalWallClockMs: number,
+  ): void;
+  private holdPendingObject(kind: "video", obj: MoqtObject, delivery: AudioDelivery): void;
   private holdPendingObject(
     kind: "audio" | "video",
     obj: MoqtObject,
     delivery: AudioDelivery,
+    arrivalWallClockMs?: number,
   ): void {
     const isAudio = kind === "audio";
     // 件数はどちらのキューも配列の長さで見る (音声のキューだけが到着経路を持つ)
@@ -2139,7 +2347,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     // バイト数は受信統計の bytesReceived と同じ定義 (payload と properties の長さの合計) で
     // 数える。properties を数えないと、payload 0 バイトで properties が大きい Object が
     // バイト上限に触れずに保持され続ける
-    const bytes = state.bytes + obj.payload.byteLength + (obj.properties?.byteLength ?? 0);
+    const bytes = state.bytes + moqtObjectBufferedBytes(obj);
     // 上限 0 以下は無制限を意味する (ConnectOptions.dataStreamMaxBufferBytes と同じ規約)。
     // 上限ちょうどの保持は許し、超える Object だけを破棄する
     const objectsOver = limit.maxObjects > 0 && queued >= limit.maxObjects;
@@ -2157,7 +2365,11 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       return;
     }
     if (isAudio) {
-      this.pendingAudioObjects.push({ object: obj, delivery });
+      if (arrivalWallClockMs === undefined) {
+        // 型のオーバーロードで防いでいるが、実装へ抜けた場合は到着時刻を偽装しない
+        throw new Error("audio pending object requires arrivalWallClockMs");
+      }
+      this.pendingAudioObjects.push({ object: obj, delivery, arrivalWallClockMs });
     } else {
       this.pendingVideoObjects.push(obj);
     }
@@ -2179,6 +2391,17 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     this.pendingVideoQueueState.overflowNotified = false;
   }
 
+  /**
+   * 復号前の遅延の段の上限超過の通知済みフラグを解除する
+   *
+   * 購読の開始で呼ぶ。解放が途中で失敗して再 start した場合も、新しい購読期間で改めて
+   * 1 回通知できるようにする。
+   */
+  private resetPreDecodeOverflowNotifications(): void {
+    this.audioPreDecodeStage?.resetOverflowNotification();
+    this.videoPreDecodeStage?.resetOverflowNotification();
+  }
+
   /** 保留中の Audio Object を到着順に処理する */
   private releasePendingAudioObjects(): void {
     this.audioInitialConfigPending = false;
@@ -2186,7 +2409,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     this.pendingAudioObjects = [];
     this.pendingAudioQueueState.bytes = 0;
     for (const pending of pendingAudio) {
-      this.handleAudioObject(pending.object, pending.delivery);
+      this.handleAudioObject(pending.object, pending.delivery, pending.arrivalWallClockMs);
     }
   }
 
@@ -2294,25 +2517,62 @@ export class MediaSubscriberImpl implements MediaSubscriber {
    */
   private receiveAudioObject(obj: MoqtObject, delivery: AudioDelivery): void {
     if (this.isDuplicateAudioObject(obj)) return;
-    this.handleAudioObject(obj, delivery);
+    // 到着時刻は復号前の遅延を挟んでも失わないよう、受信の入口で 1 回だけ測る
+    this.handleAudioObject(obj, delivery, performance.timeOrigin + performance.now());
   }
 
-  private handleAudioObject(obj: MoqtObject, delivery: AudioDelivery): void {
+  /**
+   * 音声 Object を復号前の遅延の段へ積む (遅延なしならそのまま復号する)
+   *
+   * 初期 configure の完了までは保留キューに入れ、復号できる状態になってから遅延の段へ
+   * 移す。こうすると、遅延の起点が「復号へ渡せる状態になった時点」になり、configure の
+   * 待ち時間を遅延として二重に数えない。
+   *
+   * @param obj - 受信した Object
+   * @param delivery - 到着経路
+   * @param arrivalWallClockMs - Object の到着時刻 (Unix epoch ミリ秒)。受信の入口
+   *   (`receiveAudioObject`) と保留からの解放は必ず明示して渡す。既定値は購読の内部から
+   *   直接この関数を呼ぶ経路 (テストを含む) だけが使い、受信の入口の値の代わりにはしない
+   */
+  private handleAudioObject(
+    obj: MoqtObject,
+    delivery: AudioDelivery,
+    arrivalWallClockMs: number = performance.timeOrigin + performance.now(),
+  ): void {
     // 閉じた後は統計も decode も進めない。解放は await を挟むため、state の "closed" だけでは
     // 解放の途中 (decoder の参照を切る前) に届いた Object を判定できない
     if (this.closed) return;
     // 初期 configure (Track Property の AUDIO_CONFIG) の完了まで保留する
     // (上限を超えた Object は holdPendingObject が保持せず破棄する)
     if (this.audioInitialConfigPending) {
-      this.holdPendingObject("audio", obj, delivery);
+      this.holdPendingObject("audio", obj, delivery, arrivalWallClockMs);
       return;
     }
     if (!this.audioDecoder || !this.audioDecoderConfigured) return;
+    if (this.audioPreDecodeStage === null) {
+      this.decodeAudioObject(obj, delivery, arrivalWallClockMs);
+      return;
+    }
+    this.audioPreDecodeStage.push({ object: obj, delivery, arrivalWallClockMs });
+  }
 
-    // 入力の遅れ (Object の到着の壁時計 - LOC TIMESTAMP) を測る基準。受信側の追いつきが
-    // 「復号が足している遅れ」を求めるのに使う (src/playout/audioReceiveCatchUp.ts)。
-    // ここは object コールバックから同期で呼ばれるため、この時刻が Object の到着である
-    const arrivalWallClockMs = performance.timeOrigin + performance.now();
+  /**
+   * 音声 Object を復号へ渡す
+   *
+   * 復号前の遅延キューからも呼ばれる。遅延の間に閉じられた、または再構成中になった場合は
+   * 復号しない (受信の入口と同じ扱い)。
+   *
+   * @param obj - 復号する Object
+   * @param delivery - 到着経路
+   * @param arrivalWallClockMs - Object の到着時刻 (Unix epoch ミリ秒)
+   */
+  private decodeAudioObject(
+    obj: MoqtObject,
+    delivery: AudioDelivery,
+    arrivalWallClockMs: number,
+  ): void {
+    if (this.closed) return;
+    if (!this.audioDecoder || !this.audioDecoderConfigured) return;
 
     // LOC から情報を取得
     // Track Property（SUBSCRIBE_OK 由来）と Object Property の両方を探索し、Object を優先する
@@ -2344,12 +2604,18 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     } else {
       this.audioStats.subgroupFramesReceived++;
     }
-    this.audioStats.bytesReceived += obj.payload.length + (obj.properties?.length ?? 0);
+    this.audioStats.bytesReceived += moqtObjectBufferedBytes(obj);
 
     const timestamp = decoderTimestampOf(locProperties);
     this.rememberAudioTimestampKind(timestamp, locProperties);
     // 入力の遅れも、復号の出力で同じ timestamp から引けるように覚える
     this.rememberAudioInputLag(timestamp, locProperties, arrivalWallClockMs);
+    // 実際に復号へ渡すまで保持した時間も覚える。上限超過で遅延が短くなった区間では設定値と
+    // ずれるため、追いつきの判定には実際の値を渡す
+    this.rememberAudioIntentionalDelay(
+      timestamp,
+      performance.timeOrigin + performance.now() - arrivalWallClockMs,
+    );
 
     // デコード
     this.audioDecoder.decode(obj.payload, "key", timestamp, 0);
@@ -2423,6 +2689,28 @@ export class MediaSubscriberImpl implements MediaSubscriber {
         break;
       }
       lags.delete(oldest);
+    }
+  }
+
+  /**
+   * 復号へ渡すまで実際に保持した時間を、復号の出力で引けるように覚える
+   *
+   * 受信側の追いつきには「意図して遅らせた分」を出力の遅れから差し引く必要がある。設定した
+   * 遅延ではなく実際に保持した時間を使うのは、上限超過でキューが期限を前倒しした区間でも
+   * 正しく差し引くためである。
+   *
+   * @param timestamp - 復号へ渡す timestamp (マイクロ秒)
+   * @param heldMs - Object の到着から復号へ渡すまで保持した時間 (ミリ秒)
+   */
+  private rememberAudioIntentionalDelay(timestamp: number, heldMs: number): void {
+    const delays = this.audioIntentionalDelays;
+    delays.delete(timestamp);
+    delays.set(timestamp, Math.max(0, heldMs));
+    for (const oldest of delays.keys()) {
+      if (delays.size <= TIMESTAMP_KIND_MAX_TRACKED) {
+        break;
+      }
+      delays.delete(oldest);
     }
   }
 
@@ -2614,6 +2902,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
 
   /** 保留を通った映像 Object を順に処理し、保留が残っていれば上限のタイマーを張り直す */
   private handleVideoObjects(objects: MoqtObject[]): void {
+    if (this.closed) return;
     for (const obj of objects) {
       this.handleVideoObject(obj);
     }
@@ -2634,6 +2923,16 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     );
   }
 
+  /**
+   * 映像 Object を復号前の遅延の段へ積む (遅延なしならそのまま復号する)
+   *
+   * 初期 configure (Track Property の VIDEO_CONFIG) の完了までは保留キューに入れ、復号
+   * できる状態になってから遅延の段へ移す (音声の `handleAudioObject` と同じ扱い)。こうすると、
+   * 遅延の起点が「復号へ渡せる状態になった時点」になり、configure の待ち時間を遅延として
+   * 二重に数えない。Group の切り替えの保留は受信時に済ませてある (相対的な順序を保つため)。
+   *
+   * @param obj - 復号前に保持する Object
+   */
   private handleVideoObject(obj: MoqtObject): void {
     // 閉じた後は統計も decode も進めない。解放は await を挟むため、state の "closed" だけでは
     // 解放の途中 (decoder の参照を切る前) に届いた Object を判定できない
@@ -2645,6 +2944,26 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       this.holdPendingObject("video", obj, "subgroup");
       return;
     }
+    if (!this.videoDecoder || !this.videoDecoderConfigured) return;
+    if (this.videoPreDecodeStage === null) {
+      this.decodeVideoObject(obj);
+      return;
+    }
+    this.videoPreDecodeStage.push(obj);
+  }
+
+  /**
+   * 映像 Object を復号へ渡す
+   *
+   * 復号前の遅延の段からも呼ばれる。遅延の間に閉じられた、または再構成中になった場合は
+   * 復号しない (受信の入口と同じ扱い)。
+   *
+   * @param obj - 復号する Object
+   */
+  private decodeVideoObject(obj: MoqtObject): void {
+    // 閉じた後は統計も decode も進めない。解放は await を挟むため、state の "closed" だけでは
+    // 解放の途中 (decoder の参照を切る前) に届いた Object を判定できない
+    if (this.closed) return;
     if (!this.videoDecoder || !this.videoDecoderConfigured) return;
 
     // LOC から情報を取得
@@ -2685,7 +3004,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     }
 
     this.videoStats.framesReceived++;
-    this.videoStats.bytesReceived += obj.payload.length + (obj.properties?.length ?? 0);
+    this.videoStats.bytesReceived += moqtObjectBufferedBytes(obj);
     if (isKeyFrame) {
       this.videoStats.keyFramesReceived++;
     }
@@ -2757,6 +3076,13 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     const inputLagMs =
       takeDecodeInputEntry(this.audioInputLags, audioData.timestamp, timestampToleranceMicros) ??
       null;
+    // 意図して遅らせた分は、設定値ではなく実際に保持した時間を使う
+    const intentionalDelayMs =
+      takeDecodeInputEntry(
+        this.audioIntentionalDelays,
+        audioData.timestamp,
+        timestampToleranceMicros,
+      ) ?? this.preDecodeDelayMs;
     // 引けないときは、直前に分かっている種類を使う。記録と復号の出力の timestamp の格子が
     // ずれると (実測: 9.7 ms)、以後の出力がすべて引けなくなる。種類を失うと、その間の音が
     // 共有の時間軸へ記録されず、音声の基準の遅れが更新されないまま固定される
@@ -2777,6 +3103,8 @@ export class MediaSubscriberImpl implements MediaSubscriber {
         // 受信の入口で測った入力の遅れ。受信側の追いつきが出力の遅れから引いて
         // 「復号が足している遅れ」を求める。測れないときは null (出力の遅れだけを使う)
         inputLagMs: matchedInputLagMs,
+        // 意図した復号前の遅延は復号器に溜まった遅れではない。追いつきの判定から差し引く
+        intentionalDelayMs,
         timeline: this.playoutTimeline,
         // ライブラリは jitter buffer を常に有効として扱う
         useTimeline: true,
@@ -2789,7 +3117,10 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       }
       if (result.status !== "skipped" && result.catchUpStarted) {
         // 受信側の追いつきを始めた。復号器に溜まった古い音は、鳴らさずに捨てるだけでは
-        // 減らないため、復号器を作り直して捨てる (src/playout/audioReceiveCatchUp.ts)
+        // 減らないため、復号器を作り直して捨てる (src/playout/audioReceiveCatchUp.ts)。
+        // 復号前の遅延の段は破棄しない。段が保持しているのは復号器に溜まった古い入力では
+        // なく、これから復号する直近の入力である。捨てると次の Object が期限を迎えるまで
+        // 復号へ何も渡らず、指定した遅延の分だけ無音になる
         void this.resetAudioDecoderForCatchUp();
       }
     } catch (error) {
@@ -2849,6 +3180,23 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   }
 
   /**
+   * 音声デコーダーのエラーを受けて、復号前の段を破棄する
+   *
+   * 復号器が壊れた状態で古い入力を渡すと、同じエラーを繰り返す。復号器そのものの作り直しは
+   * 追いつきの経路が持つため、ここでは段を捨てて通知だけを行う。
+   *
+   * @param error - 通知する失敗
+   */
+  private handleAudioDecoderError(error: Error): void {
+    this.audioPreDecodeStage?.stop();
+    try {
+      this.callbacks.onError?.(error);
+    } catch {
+      // 通知の失敗を伝える経路がこれ以上無い
+    }
+  }
+
+  /**
    * 映像デコーダーのエラーを受けて復帰を試みる
    *
    * 通知は 1 回だけ行い、通知の失敗で復帰を止めない。通知したあとデコーダーを
@@ -2866,6 +3214,9 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     } catch {
       // 通知の失敗を伝える経路がこれ以上無い
     }
+    // 復号前の段に残っている入力を捨てる。復号器を作り直した後に古い入力を渡すと、
+    // 同じエラーを繰り返す
+    this.videoPreDecodeStage?.stop();
     this.videoDecodeOrder.reset();
     // catch は置かない。reject しない契約であり、戻り値も見ない
     void this.videoDecoder?.reset();

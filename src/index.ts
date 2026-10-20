@@ -361,6 +361,13 @@ export {
 // 音声と映像で共有する表示時刻の時間軸 (jitter buffer の目標と遅れの学習)
 export { PlayoutTimeline } from "./playout/timeline";
 
+// 購読側の復号前の再生遅延 (MediaSubscriberOptions.preDecodeDelayMs) の上限と保持上限
+export {
+  MAX_PRE_DECODE_DELAY_MS,
+  PRE_DECODE_QUEUE_MAX_BYTES,
+  PRE_DECODE_QUEUE_MAX_OBJECTS,
+} from "./playout/preDecodeDelay";
+
 // 映像 Object を復号してよいかの判定 (Group の順序と参照するフレームの欠落)
 export { VideoDecodeOrder, priorObjectIdGapOf } from "./videoDecodeOrder";
 

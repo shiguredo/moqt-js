@@ -281,6 +281,13 @@ export const useDedicatedWorker = signal(true);
 // false: 届いたタイミングのまま表示する
 export const jitterBufferEnabled = signal(true);
 
+// 購読側の復号前の再生遅延 (ms)。0 は追加しない
+// 受信した Object を復号へ渡すまで保持する (src/playout/preDecodeDelay.ts)。
+// 接続中も変更でき、変更は進行中の購読へ即座に反映する。
+// 高レベル API の MediaSubscriberOptions.preDecodeDelayMs と違い、生成時に固定しない
+export const PRE_DECODE_DELAY_OPTIONS = [0, 500, 1_000, 2_000, 3_000, 5_000, 10_000] as const;
+export const preDecodeDelayMs = signal(0);
+
 // 購読した音声の再生 (Subscriber の Play audio) を購読の開始時に有効にするか
 // true: 購読と同時に鳴らす。URL クエリ `playAudio=1` で共有できる
 // false: 既定。Subscriber の Play audio を押すまで鳴らさない
@@ -878,6 +885,11 @@ function buildQueryParams(targetMode: DevtoolsMode): URLSearchParams {
     params.set("jitterBuffer", "0");
   }
 
+  // 再生遅延は既定 0 のため、指定があるときだけ載せる
+  if (preDecodeDelayMs.value > 0) {
+    params.set("preDecodeDelayMs", String(preDecodeDelayMs.value));
+  }
+
   // 音声の再生は既定で無効のため、有効にしたときだけ載せる
   if (playAudioEnabled.value) {
     params.set("playAudio", "1");
@@ -1099,6 +1111,22 @@ function applyJitterBufferFromUrl(params: URLSearchParams): void {
   const jitterBufferParam = params.get("jitterBuffer");
   if (jitterBufferParam === "0" || jitterBufferParam === "1") {
     jitterBufferEnabled.value = jitterBufferParam === "1";
+  }
+}
+
+/** `preDecodeDelayMs` を URL から読む (復号前の再生遅延) */
+function applyPreDecodeDelayFromUrl(params: URLSearchParams): void {
+  const preDecodeDelayParam = params.get("preDecodeDelayMs");
+  if (preDecodeDelayParam === null) {
+    return;
+  }
+  const value = resolveOptionNumber(
+    preDecodeDelayParam,
+    PRE_DECODE_DELAY_OPTIONS,
+    preDecodeDelayMs.value,
+  );
+  if (value !== null) {
+    preDecodeDelayMs.value = value;
   }
 }
 
@@ -1352,6 +1380,8 @@ export function initFromUrl(search: string): void {
   }
 
   applyJitterBufferFromUrl(params);
+
+  applyPreDecodeDelayFromUrl(params);
 
   applyPlayAudioFromUrl(params);
 

@@ -75,6 +75,10 @@ import {
   takeDecodeInputEntry,
 } from "../../../src/playout/decodeInputTimestamps.ts";
 import { AudioPlayoutSession } from "../../../src/playout/audioPlayoutSession.ts";
+import {
+  SubscriberPreDecodeDelay,
+  type SubscriberPreDecodeDelayOverflow,
+} from "./subscriberPreDecodeDelay.ts";
 // targetLatency の解決規則はライブラリと共有する純関数が持つ (規則を 2 か所に書かない)
 import { effectiveTargetLatencyMs, resolveSharedTargetLatencyMs } from "../../../src/msf/tracks.ts";
 import { applyAudioOutputSink } from "../utils/audioOutput";
@@ -575,6 +579,14 @@ export interface DecodeInput {
    * 壁時計の TIMESTAMP (Timescale なし) を持つ音だけ測れる
    */
   readonly inputLagMs: number | null;
+  /**
+   * 復号へ渡すまで実際に保持した時間 (ミリ秒)
+   *
+   * 復号前の遅延で保持した時間である。受信側の追いつき (`src/playout/audioReceiveCatchUp.ts`)
+   * が出力の遅れから差し引く。動的に遅延を変えた場合や上限超過で短縮された場合に備え、
+   * 設定値ではなく実際に保持した時間を使う
+   */
+  readonly intentionalDelayMs: number;
 }
 
 /**
@@ -619,6 +631,25 @@ export interface ReceivedVideoObject {
   readonly object: MoqtObject;
   /** object コールバックで受け取った時刻 (`performance.now()`) */
   readonly receivedAtMs: number;
+}
+
+/**
+ * 復号前の遅延の段が保持する音声 Object
+ *
+ * 到着時刻は受信の遅れ (`audio.receiveDelayMs`) と入力の遅れを、復号時ではなく到着時点の
+ * 値で測るために持つ。遅延の分だけ受信の遅れが大きく見えると、受信側の追いつきの判定が
+ * 誤る。
+ */
+interface DelayedAudioObject {
+  readonly object: MoqtObject;
+  readonly viaDatagram: boolean;
+  /** object コールバックで受け取った時刻 (`performance.now()`) */
+  readonly receivedAtMs: number;
+}
+
+/** Object が占めるバイト数 (受信統計と同じ定義) */
+function objectBufferedBytes(obj: MoqtObject): number {
+  return obj.payload.byteLength + (obj.properties?.byteLength ?? 0);
 }
 
 /**
@@ -952,14 +983,31 @@ export function useSubscriber(
   // 購読を始めるたびと停止で初期化する
   const videoGroupGateRef = useRef(new GroupSwitchGate<ReceivedVideoObject>());
   const videoGroupGateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // 復号前の再生遅延。購読中に設定を変えられるよう、音声と映像の段をまとめて持つ。
+  // 0 のときは段を作らず、既存の経路をそのまま通す
+  const preDecodeDelayRef = useRef<SubscriberPreDecodeDelay<
+    ReceivedVideoObject,
+    DelayedAudioObject
+  > | null>(null);
+  // 購読中か。停止後に設定を変えても段を作らないために使う
+  const preDecodeSubscribedRef = useRef(false);
+  // 音声の段から復号チェーンへ流す関数。購読を始めるときに設定し、
+  // 停止すると null にする (古い購読の handleAudioObject を呼ばないため)
+  const appendAudioPreDecodeRef = useRef<((items: readonly DelayedAudioObject[]) => void) | null>(
+    null,
+  );
 
   /**
    * 保留を通った映像 Object を到着順の Promise チェーンに積み、保留が残っていれば
    * 上限で保留を解くタイマーを張り直す
    */
   function enqueueVideoObjects(objects: ReceivedVideoObject[]): void {
+    // 段が無い (遅延 0 または停止中) のときは既存の経路でそのまま復号する
+    const delay = preDecodeDelayRef.current;
     for (const received of objects) {
-      chainRef.current = chainRef.current.then(() => handleObject(received)).catch(() => {});
+      if (delay === null || !delay.pushVideo(received)) {
+        appendVideoPreDecode([received]);
+      }
     }
     if (videoGroupGateTimerRef.current !== null) {
       clearTimeout(videoGroupGateTimerRef.current);
@@ -990,6 +1038,102 @@ export function useSubscriber(
       videoGroupGateTimerRef.current = null;
     }
     videoGroupGateRef.current.reset();
+  }
+
+  /** 復号前の段の上限超過をログに残す (購読期間あたりメディアごとに 1 回) */
+  function logPreDecodeOverflow(overflow: SubscriberPreDecodeDelayOverflow): void {
+    addLog("warn", `[${subscriberId}] pre-decode delay queue overflow`, {
+      media: overflow.media,
+      delayMs: overflow.delayMs,
+      effectiveDelayMs: overflow.effectiveDelayMs,
+      dropped: overflow.dropped,
+      size: overflow.size,
+    });
+  }
+
+  /** 復号前の段を返す (初回に作る)。期限の通知先は下の関数を参照する */
+  function getPreDecodeDelay(): SubscriberPreDecodeDelay<ReceivedVideoObject, DelayedAudioObject> {
+    let delay = preDecodeDelayRef.current;
+    if (delay === null) {
+      delay = new SubscriberPreDecodeDelay<ReceivedVideoObject, DelayedAudioObject>({
+        bytesOfVideo: (received) => objectBufferedBytes(received.object),
+        bytesOfAudio: (item) => objectBufferedBytes(item.object),
+        onVideoDue: (items) => appendVideoPreDecode(items),
+        onAudioDue: (items) => appendAudioPreDecodeRef.current?.(items),
+        onOverflow: (overflow) => logPreDecodeOverflow(overflow),
+        onDueError: (error) => {
+          addLog("error", `[${subscriberId}] failed to drain pre-decode delay queue`, {
+            error: String(error),
+          });
+        },
+      });
+      preDecodeDelayRef.current = delay;
+    }
+    return delay;
+  }
+
+  /** 映像の復号前の段から復号チェーンへ積む */
+  function appendVideoPreDecode(objects: readonly ReceivedVideoObject[]): void {
+    for (const received of objects) {
+      chainRef.current = chainRef.current.then(() => handleObject(received)).catch(() => {});
+    }
+  }
+
+  /**
+   * 復号前の遅延を変えたときに、表示時刻の基準を取り直す
+   *
+   * 基準の遅れは「復号の出力の時刻 - TIMESTAMP」の直近 10 秒の最小値であるため、
+   * 復号の出力の時刻が遅延の分だけ動いても、古い基準が 10 秒間は残る。古い基準のままだと
+   * 表示時刻が実際の復号より遅延の分だけ前になり、映像が表示時刻を過ぎたフレームとして
+   * 捨てられる。基準を取り直し、表示待ちのフレームも捨てて、変更後の遅延ですぐに並べ直す。
+   * 音声の追いつきの床 (直近の遅れの最小値) も古い遅延のまま残るため、観測を消す。残すと
+   * 変更後の最初の復号出力を復号器の詰まりと誤判定する。
+   */
+  function resetPlayoutTimingForPreDecodeChange(): void {
+    playoutTimelineRef.current.reset();
+    videoPlayoutRef.current?.clear();
+    audioPlaybackRef.current?.playout.catchUp.reset();
+  }
+
+  /**
+   * 購読の開始時に、現在の設定で復号前の段を作る
+   *
+   * 前の購読の段とタイマーは先に破棄する。遅延が 0 のときは段を作らず、受信した Object を
+   * 既存の経路でそのまま復号する。
+   */
+  function initializePreDecodeDelay(): void {
+    preDecodeSubscribedRef.current = true;
+    getPreDecodeDelay().start(settings.preDecodeDelayMs.value);
+  }
+
+  /** 復号前の段、タイマー、音声の復号チェーンへの通知先を破棄する */
+  function resetPreDecodeDelay(): void {
+    preDecodeSubscribedRef.current = false;
+    preDecodeDelayRef.current?.stop();
+    appendAudioPreDecodeRef.current = null;
+  }
+
+  /**
+   * 設定の変更を、進行中の購読の復号前の段へ反映する
+   *
+   * 購読していないときは何もしない (次の購読の開始時に現在の設定で段を作る)。購読中に
+   * 0 から増やしたときは段を作り、減らしたときは保持中の Object の期限を計算し直す。
+   * 0 にしたときは保持中の Object を待たずに復号チェーンへ流して段をやめる。
+   */
+  function applyPreDecodeDelay(value: number): void {
+    if (!preDecodeSubscribedRef.current) {
+      return;
+    }
+    const delay = getPreDecodeDelay();
+    if (delay.delayMs === value) {
+      return;
+    }
+    if (value > 0 && !delay.isActive) {
+      delay.start(value);
+    } else {
+      delay.setDelayMs(value);
+    }
+    resetPlayoutTimingForPreDecodeChange();
   }
 
   /**
@@ -1490,6 +1634,8 @@ export function useSubscriber(
      * @param viaDatagram - datagram で届いた Object かどうか。経路別の数を出すためだけに
      *   使い、処理は Subgroup と同じにする (音声は Group 1 つ = Object 1 つのため、
      *   datagram でも復号の順序は到着順で足りる)
+     * @param receivedAtMs - object コールバックで受け取った時刻。復号前の遅延を挟んでも
+     *   受信の遅れを到着時点の値で測るために使う
      */
     // 同じ Object を 2 回受け取ったときに 2 回目を捨てるための最近の識別子。音声は datagram で
     // 届き再送されない (RFC 9221) ため、経路の損失に備えて配信側が同じ Object を 2 回送る
@@ -1497,7 +1643,11 @@ export function useSubscriber(
     const recentAudioObjectIds: string[] = [];
     const recentAudioObjectIdSet = new Set<string>();
 
-    const handleAudioObject = async (obj: MoqtObject, viaDatagram: boolean): Promise<void> => {
+    const handleAudioObject = async (
+      obj: MoqtObject,
+      viaDatagram: boolean,
+      receivedAtMs: number,
+    ): Promise<void> => {
       const current = getCurrentAudioSubscriber(audioDecoderInstance);
       if (current === null) {
         return;
@@ -1522,12 +1672,12 @@ export function useSubscriber(
         // (audio.catchUp.sendLagMs) と対で読み、遅れが配信側にあるのか relay と経路に
         // あるのかを分ける。壁時計の TIMESTAMP (TIMESCALE なし) のときだけ測れる。
         // 同じ値を、復号が足している遅れを求める入力の遅れとしても使う
-        // (src/playout/audioReceiveCatchUp.ts の先頭のコメント)。復号へ渡す直前に測るため、
-        // 受信と復号へ渡すまでに掛かった分が入り、復号器が足した分だけが残る
+        // (src/playout/audioReceiveCatchUp.ts の先頭のコメント)。受信の入口で測った到着時刻を
+        // 使うため、復号前の遅延を挟んでも遅延の分が入力の遅れに含まれない
         let inputLagMs: number | null = null;
         if (locProperties.timestamp !== undefined && locProperties.timescale === undefined) {
           const receiveDelayMs =
-            performance.timeOrigin + performance.now() - Number(locProperties.timestamp) / 1_000;
+            performance.timeOrigin + receivedAtMs - Number(locProperties.timestamp) / 1_000;
           current.audioReceiveDelayMs.value = receiveDelayMs;
           const previousMax = current.audioMaxReceiveDelayMs.value;
           current.audioMaxReceiveDelayMs.value =
@@ -1586,6 +1736,8 @@ export function useSubscriber(
           timestampKind,
           location: { group: obj.groupId, object: obj.objectId },
           inputLagMs,
+          // 復号へ渡すまで実際に保持した時間 (遅延の変更や上限超過の短縮も含む)
+          intentionalDelayMs: Math.max(0, performance.now() - receivedAtMs),
         });
 
         audioDecoderInstance.decode(obj.payload, "key", timestamp, 0);
@@ -1601,7 +1753,11 @@ export function useSubscriber(
     // 到着順にデコードする。映像とは独立したチェーンにすることで、映像のデコード待ちが
     // 音声の到着を遅らせないようにする。datagram で届いた Object も同じチェーンへ流す
     // (同じ Track の音声は 1 本の順序で扱う。draft-ietf-moq-transport-22 §11)
-    const queueAudioObject = (obj: MoqtObject, viaDatagram: boolean): void => {
+    const enqueueAudioDecodeDirect = (
+      obj: MoqtObject,
+      viaDatagram: boolean,
+      receivedAtMs: number,
+    ): void => {
       audioChainRef.current = audioChainRef.current
         // 到着順に処理する。`await` することで、次の Object の処理を待たせる
         // (復号へ渡す順序が入れ替わらないようにする)
@@ -1620,12 +1776,29 @@ export function useSubscriber(
               recentAudioObjectIdSet.delete(oldest);
             }
           }
-          await handleAudioObject(obj, viaDatagram);
+          await handleAudioObject(obj, viaDatagram, receivedAtMs);
         })
         .catch((error: unknown) => {
           // handleAudioObject は内部で握るため、ここへ来るのは想定外の失敗だけ
           console.error(`[${subscriberId}] audio object chain failed:`, error);
         });
+    };
+
+    // 復号前の段から音声を復号チェーンへ流す。購読の開始時に設定し、停止時に
+    // 破棄する。動的な遅延の変更にも使う
+    appendAudioPreDecodeRef.current = (items) => {
+      for (const item of items) {
+        enqueueAudioDecodeDirect(item.object, item.viaDatagram, item.receivedAtMs);
+      }
+    };
+
+    const queueAudioObject = (obj: MoqtObject, viaDatagram: boolean): void => {
+      // 到着時刻は復号前の遅延を挟んでも失わないよう、受信の入口で 1 回だけ測る
+      const receivedAtMs = performance.now();
+      const delay = preDecodeDelayRef.current;
+      if (delay === null || !delay.pushAudio({ object: obj, viaDatagram, receivedAtMs })) {
+        enqueueAudioDecodeDirect(obj, viaDatagram, receivedAtMs);
+      }
     };
 
     const audioSubscriberInstance = await session.subscribe(
@@ -1899,6 +2072,11 @@ export function useSubscriber(
         // 引いて「復号が足している遅れ」を求める。対応が引けなかったときは、どの音の遅れか
         // 決められないため渡さない (出力の遅れだけを使う)
         inputLagMs: input?.inputLagMs ?? null,
+        // 意図した復号前の遅延は復号器に溜まった遅れではない。追いつきの判定から差し引く。
+        // 設定値ではなく、その Object を実際に保持した時間を使う (遅延の変更と上限超過の
+        // 短縮のどちらでも実際の値とずれるため)。対応が引けない出力では設定値へ戻し、
+        // 遅延中に 0 を引いて誤発動しないようにする
+        intentionalDelayMs: input?.intentionalDelayMs ?? preDecodeDelayRef.current?.delayMs ?? 0,
         timeline: playoutTimelineRef.current,
         useTimeline: jitterBufferEnabledRef.current,
         enforceTarget: jitterBufferEnabledRef.current,
@@ -2203,6 +2381,13 @@ export function useSubscriber(
     }
   };
 
+  // 再生遅延の変更を、今の購読の復号前の段へ即座に反映する。
+  // 購読していないときは何もしない (次の購読の開始時に現在の設定で段を作る)。遅延を 0 に
+  // したときの flush が handleObject を参照するため、この effect は handleObject の定義後に置く
+  useSignalEffect(() => {
+    applyPreDecodeDelay(settings.preDecodeDelayMs.value);
+  });
+
   // このインスタンスの status / statusMessage を上書きしてよいかを判定する。
   // 判定そのものは canApplyStatusUpdate に置く (setTimeout のコールバックなど、
   // getSubscriber を通さない経路からも同じ判定を使うため)。
@@ -2247,6 +2432,8 @@ export function useSubscriber(
     instance.isStarting.value = true;
     // 前の購読の追いつきの状態を持ち越さない (境界は各 Track の SUBSCRIBE_OK で設定する)
     resetCatchUpGates();
+    // 現在の設定で復号前の段を作る。前の購読の段とタイマーはここで破棄する
+    initializePreDecodeDelay();
 
     try {
       instance.status.value = "disconnected";
@@ -2872,6 +3059,8 @@ export function useSubscriber(
     resetVideoGroupGate();
     // 追いつきの境界を消し、画面の「Catching up」も消す
     resetCatchUpGates();
+    // 復号前の段とタイマーを破棄する (停止後に復号へ流さない)
+    resetPreDecodeDelay();
     // 再生の停止は instance の有無に関わらず行う。パネルの削除では Map から先に
     // 消えるため、この後の instance 取得が失敗しても AudioContext を残さない
     stopAudioPlayback();

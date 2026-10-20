@@ -404,11 +404,13 @@ test("rememberDecodeInput: TIMESTAMP の種類と位置と入力の遅れを覚�
     timestampKind: "wallClock",
     location: { group: 5n, object: 3n },
     inputLagMs: 25,
+    intentionalDelayMs: 2_000,
   });
   assert.deepEqual(inputs.get(1_000), {
     timestampKind: "wallClock",
     location: { group: 5n, object: 3n },
     inputLagMs: 25,
+    intentionalDelayMs: 2_000,
   });
 });
 
@@ -420,11 +422,13 @@ test("rememberDecodeInput: 入力の遅れが測れないときは null で覚�
     timestampKind: "mediaTime",
     location: { group: 5n, object: 3n },
     inputLagMs: null,
+    intentionalDelayMs: 0,
   });
   assert.deepEqual(inputs.get(1_000), {
     timestampKind: "mediaTime",
     location: { group: 5n, object: 3n },
     inputLagMs: null,
+    intentionalDelayMs: 0,
   });
 });
 
@@ -436,6 +440,7 @@ test("rememberDecodeInput: TIMESTAMP を持たない Object は覚えない", ()
     timestampKind: "none",
     location: { group: 5n, object: 3n },
     inputLagMs: null,
+    intentionalDelayMs: 0,
   });
   assert.isFalse(inputs.has(0), "TIMESTAMP を持たない Object の位置を覚えた");
 });
@@ -449,11 +454,13 @@ test("rememberDecodeInput: 同じ TIMESTAMP の Object が重なったら、そ�
     timestampKind: "mediaTime",
     location: { group: 1n, object: 1n },
     inputLagMs: 25,
+    intentionalDelayMs: 0,
   });
   rememberDecodeInput(inputs, 1_000, {
     timestampKind: "mediaTime",
     location: { group: 1n, object: 2n },
     inputLagMs: 30,
+    intentionalDelayMs: 0,
   });
   assert.isFalse(inputs.has(1_000), "同じ TIMESTAMP の位置を覚えたままにした");
 });

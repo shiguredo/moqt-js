@@ -492,6 +492,11 @@ interface MediaSubscriberOptions {
   // 完了まで保留する Object の上限 (件数 / payload と properties の長さの合計)。
   // 未指定のフィールドは既定値 (512 件 / 1 MiB) で補完される。0 以下で上限なし
   pendingObjectQueue?: Partial<PendingObjectQueueOptions>;
+  // 受信した Object を復号へ渡すまでの追加遅延 (ms)。default: 0
+  // 2 秒以上も指定できる。上限は MAX_PRE_DECODE_DELAY_MS (30 秒)
+  // 実際の表示遅延は、この値に経路・復号・jitter buffer の遅れが加わる。
+  // catalog の targetLatency とは加算される
+  preDecodeDelayMs?: number;
 }
 ```
 
@@ -510,6 +515,25 @@ MediaPublisherOptions も `audio` / `video` / `useWorker` / `serverCertificateHa
 音声と映像は別々のキューと上限を持ち、上限は `pendingObjectQueue` で変更できる。
 `PendingObjectQueueOptions` (上限の型) と `DEFAULT_PENDING_OBJECT_QUEUE_OPTIONS` (既定値)
 は `moqt-js` から import できる。
+
+`preDecodeDelayMs` は、受信した Object を復号へ渡すまでの追加遅延 (ミリ秒) である。0 (既定) は
+追加しない。2 秒以上も指定でき、上限は `MAX_PRE_DECODE_DELAY_MS` (30 秒) である。復号済みの
+`VideoFrame` を保持するのではなく、圧縮済みの Object を復号前に保持するため、2 秒以上の遅延でも
+フレームのメモリが遅延に比例して増えない。保持上限 (トラックごとに 64 MiB / 8,192 件) を
+超えた場合は古い Object から破棄し、残りの Object の期限を保持できる時間まで前倒しする
+(実際の遅延が指定値より短くなる)。上限超過は `onError` でメディアごとに購読期間あたり 1 回
+通知する。
+
+この値は受信バッファ (`dataStreamMaxBufferBytes` / `dataStreamMaxTotalBufferBytes`)、
+`pendingSubgroup`、`pendingObjectQueue` とは独立している。受信バッファはメモリ保護の上限で
+あり、値を大きくしても再生タイミングは変わらない。jitter buffer の遅延の上限
+(`MAX_PLAYOUT_DELAY_MS` = 500 ms) も `preDecodeDelayMs` には掛からない。catalog の
+`targetLatency` とは加算されるが、`targetLatency` 側は `MAX_PLAYOUT_DELAY_MS` と表示待ちの
+キューの上限で切り下げられ、切り下げた分は `avSync.targetLatencyLimitedMs` に出る。実際の表示遅延は
+`avSync.presentationDelayMs` などで確認すること。値は生成時に固定し、購読中の変更 API は
+高レベル API には無い。moqt-devtools は共有の復号前の遅延の段 (`PreDecodeDelayStage` /
+`SubscriberPreDecodeDelay`) を使い、接続中に Playback Delay を変更できる。詳細は
+[再生遅延](PLAYOUT_DELAY.md) を参照すること。
 
 `authorizationToken` を省略した場合、接続先の MOQT URI の msf fragment に `c4m` があれば、
 `connect()` がその値を復号して `SETUP` の `AUTHORIZATION TOKEN` (`0x03`) として送る
@@ -777,7 +801,8 @@ interface AvSyncStats {
   // どちらかの実績が 1 秒より古いときは null。基準を共有できないと保持された側は到着
   // 基準で再生され、その側は実績を作らないため、解除している間も null になる
   skewMs: number | null;
-  // 表示の遅れ (ms)。TIMESTAMP から表示時刻までの差。基準が未確立なら null
+  // 表示の遅れ (ms)。TIMESTAMP から表示時刻までの差。基準が未確立なら null。
+  // preDecodeDelayMs を指定した場合は、その分を含む
   presentationDelayMs: number | null;
   // catalog から解決した目標遅延 (ms)。無い、または使えないときは null。
   // 実際に表示の遅れに使う値は、上限に収まらない分を切り下げた値になる
@@ -791,7 +816,8 @@ interface AvSyncStats {
 }
 
 interface PlayoutTrackBreakdown {
-  // 基準の遅れ (ms)。受信側と送信側の時計のずれと、経路と復号の最小遅延
+  // 基準の遅れ (ms)。受信側と送信側の時計のずれと、経路と復号の最小遅延。
+  // preDecodeDelayMs を指定した場合は、その分を含む
   baseDelayMs: number | null;
   // jitter buffer の遅延 (ms)。自分の揺らぎから求めた値
   jitterDelayMs: number | null;
@@ -1089,6 +1115,10 @@ interface AudioPlayoutRequest {
   data: AudioData;
   // 音の TIMESTAMP の種類。wallClock のときだけ目標の時刻を決める
   timestampKind: "none" | "wallClock" | "mediaTime";
+  // 意図した復号前の遅延 (ms)。省略時は 0
+  // 購読側が preDecodeDelayMs で復号を遅らせているとき、その分は復号器の詰まりではない。
+  // 受信側の追いつきは、出力の遅れから入力の遅れとこの値を引いて判定する
+  intentionalDelayMs?: number;
   // 音声と映像で共有する表示時刻の時間軸
   timeline: PlayoutTimeline;
   // 時間軸を使って鳴らすか (jitter buffer が有効な購読のとき)。false のときは時間軸へ
@@ -1158,6 +1188,11 @@ type AudioPlayoutResult =
 (100 ms) 続いたとき、または (2) 床から `AUDIO_RECEIVE_CATCH_UP_JUMP_MS` (100 ms。A/V 同期で
 合わせられる量の上限と同じ) を超えたときに、結果の `catchUpStarted` を true にする。呼び出し側はそれを受けて復号器を作り直す (`AudioDecoderWrapper.reset()`)。復号器を
 作り直すと、中に溜まっていた音が捨てられ、次に復号されるのは最後に届いた Object になる。
+
+購読側が `MediaSubscriberOptions.preDecodeDelayMs` で復号を意図的に遅らせているときは、
+`AudioPlayoutRequest.intentionalDelayMs` にその値を渡す。受信側の追いつきは、出力の遅れから
+入力の遅れと意図した遅延を引いた値で判定するため、意図した遅延を復号器の詰まりと誤判定しない。
+意図した遅延を超えて復号器が遅れた場合は従来どおり `catchUpStarted` が true になる。
 
 ```typescript
 import { AudioPlayoutSession, AudioPlayoutTimingStats, PlayoutTimeline } from "moqt-js";

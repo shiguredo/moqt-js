@@ -1,4 +1,5 @@
 import { test, assert } from "vite-plus/test";
+import { MAX_PRE_DECODE_DELAY_MS } from "../../../src/playout/preDecodeDelay";
 import { AuthorizationTokenAliasType, C4M } from "moqt-js";
 import {
   applyC4mFromUrl,
@@ -24,6 +25,8 @@ import {
   isVideoSourceType,
   jitterBufferEnabled,
   keyframeInterval,
+  PRE_DECODE_DELAY_OPTIONS,
+  preDecodeDelayMs,
   mode,
   namespace,
   namespaceArray,
@@ -325,6 +328,45 @@ test("buildQueryString: jitter buffer を無効にした設定を URL で往復�
   initFromUrl(query);
   assert.isFalse(jitterBufferEnabled.value);
   jitterBufferEnabled.value = true;
+});
+
+// 復号前の再生遅延は既定で 0 (追加遅延なし) である。
+test("preDecodeDelayMs: 既定は 0", () => {
+  assert.equal(preDecodeDelayMs.value, 0);
+});
+
+// URL の preDecodeDelayMs は選択肢にある値だけを反映し、それ以外は無視する。
+test("initFromUrl: preDecodeDelayMs で復号前の再生遅延を反映する", () => {
+  preDecodeDelayMs.value = 0;
+  initFromUrl("preDecodeDelayMs=2000");
+  assert.equal(preDecodeDelayMs.value, 2_000);
+  initFromUrl("preDecodeDelayMs=9000");
+  assert.equal(preDecodeDelayMs.value, 2_000, "選択肢に無い値は無視すること");
+  initFromUrl("preDecodeDelayMs=-1");
+  assert.equal(preDecodeDelayMs.value, 2_000, "負数は無視すること");
+  initFromUrl("preDecodeDelayMs=0");
+  assert.equal(preDecodeDelayMs.value, 0);
+});
+
+// Copy URL は既定の 0 を載せず、指定した遅延を復元できる。
+test("buildQueryString: preDecodeDelayMs を URL で往復できる", () => {
+  preDecodeDelayMs.value = 0;
+  assert.isNull(new URLSearchParams(buildQueryString()).get("preDecodeDelayMs"));
+
+  preDecodeDelayMs.value = 2_000;
+  const query = buildQueryString();
+  assert.equal(new URLSearchParams(query).get("preDecodeDelayMs"), "2000");
+
+  preDecodeDelayMs.value = 0;
+  initFromUrl(query);
+  assert.equal(preDecodeDelayMs.value, 2_000);
+});
+
+// 選択肢は 2 秒以上を含み、ライブラリの上限 (MAX_PRE_DECODE_DELAY_MS) を超えない。
+test("PRE_DECODE_DELAY_OPTIONS: 2 秒以上を含み上限を超えない", () => {
+  assert.include([...PRE_DECODE_DELAY_OPTIONS], 2_000);
+  assert.include([...PRE_DECODE_DELAY_OPTIONS], 10_000);
+  assert.isAtMost(Math.max(...PRE_DECODE_DELAY_OPTIONS), MAX_PRE_DECODE_DELAY_MS);
 });
 
 // 開いた時点の音声入力は Web Audio で作る音 (値は dummy)。映像の Canvas と揃える

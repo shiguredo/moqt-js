@@ -271,6 +271,8 @@ MSF-01 §5 は catalog の取得に Joining FETCH を MUST としているが、
   - 復号器に溜まった音は、鳴らす音を捨てても減らない。遅れが続いたら復号器を作り直して live へ戻す (`src/playout/audioReceiveCatchUp.ts`)
 - パケロスを配信側の冗長化で吸収する
   - 同じ音声 Object を最大 3 回送り、受信側は同じ識別子 (`groupId` と `objectId`) の 2 回目以降を捨てる。同じ音が重なって鳴ることはない
+- 購読側の再生遅延を指定する
+  - `MediaSubscriberOptions.preDecodeDelayMs` で、受信した Object を復号前に時間で保持する。2 秒以上の遅延でも復号済みフレームを溜めず、受信バッファの上限も変えない (`src/playout/preDecodeDelay.ts`)。保持上限を超えた場合は古い Object を落として残りの期限を前倒しし、実際の遅延を短くする。詳細は [購読側の再生遅延](docs/PLAYOUT_DELAY.md)
 
 高レベル API (`createMediaSubscriber`) はこの再生を内部で組み立てるため、アプリケーション側で実装する必要はありません。再生の部品は公開 API (`PlayoutTimeline` / `AudioPlayoutSession` / `VideoPlayoutSession`) としても使えます。詳細は [高レベル API](docs/HIGH_LEVEL_API.md) にあります。
 
@@ -498,6 +500,7 @@ moqt-js を利用した MOQT の動作確認ツールです。
 - 音声と映像の同期再生
 - 映像の拡大表示 (ライトボックス: 通常表示の 2 倍の幅 / 全画面)
 - Jitter Buffer の有効 / 無効の選択 (LOC TIMESTAMP に合わせて映像を表示する)
+- 再生遅延 (Playback Delay) の動的設定 (Off / 500 / 1,000 / 2,000 / 3,000 / 5,000 / 10,000 ms。接続中も変更できる)
 - 音声の再生先の選択
 - event timeline のメッセージ送受信
 - デバッグパネル (MOQT プロトコルメッセージのログ表示)

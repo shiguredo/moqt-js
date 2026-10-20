@@ -42,9 +42,10 @@
  * 待たずに始めることである。
  *
  * 判定に使う遅れは、復号の出力の遅れ (`lagMs`) そのものではなく、そこから受信の入口で
- * 測った入力の遅れ (`inputLagMs`、Object の到着 - LOC TIMESTAMP) を引いた「復号が足して
- * いる遅れ」である (`AudioReceiveCatchUpObservation.inputLagMs`)。出力の遅れだけでは、
- * 次の 2 つを区別できない。
+ * 測った入力の遅れ (`inputLagMs`、Object の到着 - LOC TIMESTAMP) と、購読側が意図して
+ * 復号を遅らせている分 (`intentionalDelayMs`) を引いた「復号が足している遅れ」である
+ * (`AudioReceiveCatchUpObservation.inputLagMs` / `intentionalDelayMs`)。入力の遅れを
+ * 引くのは、出力の遅れだけでは次の 2 つを区別できないためである。
  *
  * - 経路が恒久的に悪化した: Object の到着も復号の出力も同じだけ遅れる。復号器の中に溜まった
  *   分は増えていないため、作り直しても遅れは戻らない (実測: メインスレッドを 2 秒止めると、
@@ -76,8 +77,8 @@
  * (実測: 手元では 18〜19 ms、実リレーの E2E の失敗では 116 ms 前後)。遅れが段差で上がっても、
  * 窓がその値で埋まれば床も上がるため、環境が恒久的に悪化した状態で作り直しを繰り返さない。
  *
- * 床を求める値は、「復号が足している遅れ」= 出力の遅れ - 入力の遅れ である (このファイルの
- * 先頭のコメントを参照)。入力の遅れを引かないと、受信側が溜めたまま戻らない状態でも床が
+ * 床を求める値は、「復号が足している遅れ」= 出力の遅れ - 入力の遅れ - 意図した遅延 である
+ * (このファイルの先頭のコメントを参照)。入力の遅れを引かないと、受信側が溜めたまま戻らない状態でも床が
  * 出力の遅れへ追いつく。実装を駆動した再現 (8〜20 秒を 250 ms に固定し、20 秒以降も復号器に
  * 溜まったまま) では、13 秒で床が 250 ms へ追いつき、20〜60 秒の 40 秒間は作り直しが 0 回の
  * まま 250 ms で固定された。復号器の中の音は実時間でしか出てこないため、これは恒久的な
@@ -188,6 +189,15 @@ export interface AudioReceiveCatchUpObservation {
    * null を渡す。省略したときは `lagMs` をそのまま使う (入力の遅れを導入する前と同じ挙動)
    */
   readonly inputLagMs?: number | null;
+  /**
+   * 意図した復号前の遅延 (ミリ秒)。省略したときは 0
+   *
+   * 購読側が `MediaSubscriberOptions.preDecodeDelayMs` で復号を意図的に遅らせているとき、
+   * その分は復号器に溜まった遅れではない。出力の遅れから入力の遅れとこの値を引いて
+   * 「復号が足している遅れ」を求める。この値を引かないと、2 秒遅らせただけで復号器が
+   * 詰まっていると誤判定し、復号器の作り直しを繰り返す
+   */
+  readonly intentionalDelayMs?: number;
   /** 音の長さ (ミリ秒) */
   readonly durationMs: number;
   /** 復号の出力の timestamp (Unix epoch マイクロ秒)。追いつきで飛んだ長さを測る */
@@ -214,8 +224,8 @@ export interface AudioReceiveCatchUpStats {
   /**
    * 直近に観測した、復号が足している遅れ (ミリ秒)。まだ観測していなければ null
    *
-   * 出力の遅れ - 入力の遅れである。判定 (床と上限) はこの値で行う。入力の遅れが測れない
-   * ときは出力の遅れそのものになる
+   * 出力の遅れ - 入力の遅れ - 意図した遅延である。判定 (床と上限) はこの値で行う。
+   * 入力の遅れが測れないときは出力の遅れ - 意図した遅延になる
    */
   decodeLagMs: number | null;
   /**
@@ -322,17 +332,24 @@ export class AudioReceiveCatchUp {
   /**
    * 復号の出力 1 つを観測し、復号器を作り直すかどうかを決める
    *
-   * 判定に使うのは、出力の遅れから入力の遅れを引いた「復号が足している遅れ」である
-   * (このファイルの先頭のコメントを参照)。測れないときは出力の遅れをそのまま使う。
+   * 判定に使うのは、出力の遅れから入力の遅れと意図した遅延を引いた「復号が足している
+   * 遅れ」である (このファイルの先頭のコメントを参照)。入力の遅れが測れないときは
+   * 出力の遅れから意図した遅延だけを引く。
    *
    * @param observation - 届いた時刻と、その音の TIMESTAMP からの遅れ
    */
   observe(observation: AudioReceiveCatchUpObservation): AudioReceiveCatchUpDecision {
     const lagMs = observation.lagMs;
+    // 意図した遅延は復号器に溜まった遅れではない。購読側が復号を遅らせている場合も、
+    // 復号器が詰まっていない限り追いつきを始めないよう、出力の遅れから差し引く
+    const intentionalDelayMs = Math.max(0, observation.intentionalDelayMs ?? 0);
     // 復号が足している遅れ。入力の遅れが測れないときは出力の遅れそのものを使う。負になる
     // のは 2 つの遅れを別の時点で測ったときの丸めであり、健全な状態として 0 に寄せる
     const inputLagMs = observation.inputLagMs ?? null;
-    const decodeLagMs = inputLagMs === null ? lagMs : Math.max(0, lagMs - inputLagMs);
+    const decodeLagMs =
+      inputLagMs === null
+        ? Math.max(0, lagMs - intentionalDelayMs)
+        : Math.max(0, lagMs - inputLagMs - intentionalDelayMs);
     this.lastLagMs = lagMs;
     this.lastInputLagMs = inputLagMs;
     this.lastDecodeLagMs = decodeLagMs;
@@ -436,7 +453,7 @@ export class AudioReceiveCatchUp {
    * 10 秒の観測のうち 5 秒を超えて途切れた後、遅れが 150 ms のまま固定され、始まらなかった)
    *
    * @param nowMs - 観測した時刻 (ミリ秒)
-   * @param decodeLagMs - 復号が足している遅れ (ミリ秒)。出力の遅れ - 入力の遅れ
+   * @param decodeLagMs - 復号が足している遅れ (ミリ秒)。出力の遅れ - 入力の遅れ - 意図した遅延
    */
   private updateFloor(nowMs: number, decodeLagMs: number): void {
     const previousAtMs = this.lastObservedAtMs;

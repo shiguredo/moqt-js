@@ -204,6 +204,7 @@ function handleSound(
     useTimeline?: boolean;
     enforceTarget?: boolean;
     inputLagMs?: number | null;
+    intentionalDelayMs?: number;
     sampleRate?: number;
   } = {},
 ): ReturnType<AudioPlayoutSession["handleDecodedAudio"]> {
@@ -218,6 +219,9 @@ function handleSound(
     }).data,
     timestampKind: options.timestampKind ?? "wallClock",
     ...(options.inputLagMs === undefined ? {} : { inputLagMs: options.inputLagMs }),
+    ...(options.intentionalDelayMs === undefined
+      ? {}
+      : { intentionalDelayMs: options.intentionalDelayMs }),
     timeline: fixture.timeline,
     useTimeline: options.useTimeline ?? true,
     enforceTarget: options.enforceTarget ?? true,
@@ -990,4 +994,70 @@ test("reset: 受信側の追いつきの観測も消す", () => {
   assert.isNull(snapshot.floorMs);
   assert.equal(snapshot.catchUpStarts, 0);
   assert.equal(snapshot.catchingUp, false);
+});
+
+/**
+ * 完了条件: 購読側が意図して復号を遅らせている場合、その遅延は復号器に溜まった遅れではない。
+ * 出力の遅れから意図した遅延を引いた値が健全な範囲なら、追いつきを始めない。同じ観測でも
+ * 意図した遅延を指定しなければ、従来どおり復号器の詰まりとして作り直しを求める。
+ */
+test("handleDecodedAudio: 意図した復号前の遅延では追いつきを始めない", () => {
+  // 2 秒遅らせている。出力の遅れは約 2,020 ms、入力の遅れは 20 ms である
+  const delayedLagMicros = 2_020_000;
+  const intentionalDelayMs = 2_000;
+
+  const delayed = makeSessionFixture();
+  const delayedOutput = makeRecordingOutput({
+    timeline: delayed.timeline,
+    mapping: null,
+    currentTimeSeconds: 10,
+  });
+  for (let index = 0; index < 20; index++) {
+    const result = handleSound(delayed, delayedOutput.output, {
+      timestamp: wallClockTimestampMicros() - delayedLagMicros,
+      inputLagMs: 20,
+      intentionalDelayMs,
+    });
+    assert.equal(result.status, "played");
+    assert.equal(
+      result.status === "skipped" ? undefined : result.catchUpStarted,
+      false,
+      "意図した遅延では復号器を作り直さないこと",
+    );
+  }
+  const delayedSnapshot = delayed.session.catchUp.snapshot();
+  assert.closeTo(delayedSnapshot.lagMs ?? 0, 2_020, 50, "出力の遅れは意図した遅延を含むこと");
+  assert.isBelow(
+    delayedSnapshot.decodeLagMs ?? Number.NaN,
+    AUDIO_RECEIVE_CATCH_UP_MIN_MS,
+    "意図した遅延を引いた復号の遅れは小さいこと",
+  );
+  assert.equal(delayedSnapshot.catchUpStarts, 0);
+
+  // 同じ出力の遅れでも、意図した遅延を指定しなければ復号器が詰まっていると判定する
+  const legacy = makeSessionFixture();
+  const legacyOutput = makeRecordingOutput({
+    timeline: legacy.timeline,
+    mapping: null,
+    currentTimeSeconds: 10,
+  });
+  // まず健全な遅れ (20 ms) を観測して床を作る。床が 2 秒の遅れで埋まると、同じ遅れが
+  // 続いても段差として扱われない
+  for (let index = 0; index < 5; index++) {
+    handleSound(legacy, legacyOutput.output, {
+      timestamp: wallClockTimestampMicros() - 20_000,
+      inputLagMs: 20,
+    });
+  }
+  const legacyResult = handleSound(legacy, legacyOutput.output, {
+    timestamp: wallClockTimestampMicros() - delayedLagMicros,
+    inputLagMs: 20,
+  });
+
+  assert.equal(
+    legacyResult.status === "skipped" ? undefined : legacyResult.catchUpStarted,
+    true,
+    "意図した遅延を指定しなければ従来どおり作り直すこと",
+  );
+  assert.equal(legacy.session.catchUp.snapshot().catchUpStarts, 1);
 });

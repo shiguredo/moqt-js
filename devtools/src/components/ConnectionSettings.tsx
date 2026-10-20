@@ -1725,6 +1725,27 @@ export function ConnectionSettings() {
                       <span class="text-sm text-slate-600">Play video at LOC TIMESTAMP</span>
                     </label>
                   </div>
+                  {/* 復号前の再生遅延。接続中も変更できるよう settingsDisabled にしない */}
+                  <div class="flex flex-col lg:col-span-2">
+                    <label for="preDecodeDelayMs" class="block text-xs text-slate-500 mb-2">
+                      Playback Delay (Audio + Video)
+                    </label>
+                    <select
+                      id="preDecodeDelayMs"
+                      data-testid="settings-pre-decode-delay"
+                      value={String(settings.preDecodeDelayMs.value)}
+                      onChange={(e) =>
+                        (settings.preDecodeDelayMs.value = Number(e.currentTarget.value))
+                      }
+                      class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white"
+                    >
+                      {settings.PRE_DECODE_DELAY_OPTIONS.map((value) => (
+                        <option key={String(value)} value={String(value)}>
+                          {value === 0 ? "Off" : `${value} ms`}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
               </SettingsCard>
             </div>

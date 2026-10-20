@@ -86,6 +86,8 @@ export interface ConnectionSettingsSnapshot {
   useDedicatedWorker: boolean;
   /** jitter buffer を有効にするかどうか */
   jitterBufferEnabled: boolean;
+  /** 復号前の再生遅延 (ms)。0 は追加遅延なし */
+  preDecodeDelayMs: number;
   /** 購読の開始時に音声の再生を有効にするかどうか */
   playAudioEnabled: boolean;
 }
@@ -134,6 +136,7 @@ export function buildConnectionSettingsSnapshot(): ConnectionSettingsSnapshot {
     authorizationTokenFromC4m: settings.authorizationTokenBase64.value.length > 0,
     useDedicatedWorker: settings.useDedicatedWorker.value,
     jitterBufferEnabled: settings.jitterBufferEnabled.value,
+    preDecodeDelayMs: settings.preDecodeDelayMs.value,
     playAudioEnabled: settings.playAudioEnabled.value,
   };
 }
