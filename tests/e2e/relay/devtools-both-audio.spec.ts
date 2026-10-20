@@ -217,6 +217,16 @@ interface DevtoolsSubscriberStats {
       missedFrames: number;
       missedByReason: Record<string, { count: number; ms: number }>;
       startDelayMs: { p50: number | null; p95: number | null; max: number | null } | null;
+      // 補間で埋まらなかった無音の穴と、実際に段差が残ったバッファ境界
+      gapCount: number;
+      gapMs: number;
+      gapMaxMs: number;
+      unrecoverableGapCount: number;
+      unrecoverableGapMs: number;
+      lateStartCount: number;
+      lateStartMaxMs: number;
+      boundaryStepCount: number;
+      boundaryStepMax: number;
     };
   };
   avSync: {
@@ -299,6 +309,11 @@ function summarizeSubscriber(stats: DevtoolsSubscriberStats): string {
     `compressedMs=${audio.playoutCompressedMs}`,
     `concealedMs=${audio.playoutConcealedMs}`,
     `concealments=${audio.playoutConcealments}`,
+    `gapCount=${audio.playoutTiming.gapCount}`,
+    `gapMs=${audio.playoutTiming.gapMs.toFixed(0)}`,
+    `unrecoverableGapMs=${audio.playoutTiming.unrecoverableGapMs.toFixed(0)}`,
+    `boundaryStepCount=${audio.playoutTiming.boundaryStepCount}`,
+    `lateStartCount=${audio.playoutTiming.lateStartCount}`,
     `catchUpStarts=${audio.playoutCatchUp.catchUpStarts}`,
     `catchUpPending=${audio.playoutCatchUp.catchingUp}`,
     `skippedMs=${audio.playoutCatchUp.skippedMs.toFixed(0)}`,
@@ -1064,10 +1079,21 @@ test("長時間の配信で、送信の遅れと受信の遅れが悪化しな�
     `受信側の時間圧縮が多い (60 秒で ${finalSubscriber.audio.playoutCompressedMs} ms。` +
       `声では粗さとして聞こえる)`,
   ).toBeLessThan(2_500);
+  // 補間の量の上限。以前は 5 ms 以下の穴を補間せず無音にしていたため、この値は
+  // 小さかった (実測 60 秒で 60〜70 ms)。いまは無音の穴を補間へ変えたため増える
+  // (実測: 負荷時に 60 秒で 217〜270 ms)。補間は無音のクリックより聴感上よいため、
+  // 退行の主判定は後述の境界の段差 (boundaryStepCount) と gapMs で行い、補間そのものの
+  // 上限は 600 ms とする
   expect(
     finalSubscriber.audio.playoutConcealedMs,
     `受信側の補間が多い (${summarizeSubscriber(finalSubscriber)})`,
-  ).toBeLessThan(200);
+  ).toBeLessThan(600);
+  // 実際に段差が残ったバッファ境界の回数 (補間で埋めた穴は 2 ms フェードで消えるため
+  // 数えない)。実測は負荷時に 60 秒で 10 回、正常時は 0 に近い。60 秒で 30 回を上限にする
+  expect(
+    finalSubscriber.audio.playoutTiming.boundaryStepCount,
+    `受信側にフェードされていない段差が残っている (${summarizeSubscriber(finalSubscriber)})`,
+  ).toBeLessThan(30);
   // 鳴り始めの遅れが低いこと (実測 114 ms。目標遅延 100 ms に揃っている)
   expect(
     finalSubscriber.audio.playoutTiming.startDelayMs?.p50 ?? Number.POSITIVE_INFINITY,
