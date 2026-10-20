@@ -89,6 +89,10 @@ import * as settings from "../signals/connectionSettings";
 import * as sub from "../signals/subscriber";
 import * as pub from "../signals/publisher";
 import { useRef, useEffect } from "preact/hooks";
+import {
+  SUBSCRIBER_AUDIO_STOPPING_STATUS_MESSAGE,
+  SubscriberAudioStop,
+} from "./subscriberAudioStop.ts";
 import { useSignalEffect } from "@preact/signals";
 import type { RefObject } from "preact";
 
@@ -893,6 +897,16 @@ export function handleDebugMessage(subscriberId: string, message: DebugMessage):
 // preact 11 では useRef<T>(null) の戻り値が RefObject<T | null> になるため、
 // null を許容するシグネチャにしている。実装側は canvasRef.current を
 // null チェックしてから利用する。
+/**
+ * 現在時刻 (performance.now と同じ軸のミリ秒)
+ *
+ * フックの関数の直下で `performance.now()` を呼ぶと、React Compiler の純粋性の検査に
+ * 引っかかる。時刻を読む関数をモジュールの外へ寄せ、呼び出し側の関数を純粋に見せる
+ */
+function nowMs(): number {
+  return performance.now();
+}
+
 export function useSubscriber(
   subscriberId: string,
   canvasRef: RefObject<HTMLCanvasElement | null>,
@@ -1027,7 +1041,7 @@ export function useSubscriber(
         }
         enqueueVideoObjects(expired);
       },
-      Math.max(0, deadlineMs - performance.now()),
+      Math.max(0, deadlineMs - nowMs()),
     );
   }
 
@@ -1288,7 +1302,7 @@ export function useSubscriber(
     audioPlayoutTimingTimerRef.current = setInterval(() => {
       const instance = sub.getSubscriber(subscriberId);
       if (!instance) return;
-      instance.audioPlayoutTiming.value = audioPlayoutTimingRef.current.snapshot(performance.now());
+      instance.audioPlayoutTiming.value = audioPlayoutTimingRef.current.snapshot(nowMs());
       publishAudioPlayoutCatchUp(instance);
     }, PLAYOUT_TIMING_PUBLISH_INTERVAL_MS);
   }
@@ -1304,7 +1318,7 @@ export function useSubscriber(
     stopAudioPlayoutTimingTimer();
     const instance = sub.getSubscriber(subscriberId);
     if (!instance) return;
-    instance.audioPlayoutTiming.value = audioPlayoutTimingRef.current.snapshot(performance.now());
+    instance.audioPlayoutTiming.value = audioPlayoutTimingRef.current.snapshot(nowMs());
     publishAudioPlayoutCatchUp(instance);
   }
 
@@ -1406,29 +1420,64 @@ export function useSubscriber(
     }
   }
 
-  /** 音声出力を止め、`<audio>` からストリームを外す */
-  function stopAudioPlayback(): void {
+  // 停止時に音声を鳴らし切る処理 (flush → drain → AudioContext.close)。
+  // 二重呼び出しは同じ Promise を共有し、AudioContext も 1 回だけ閉じる
+  const audioStopRef = useRef(new SubscriberAudioStop());
+
+  /**
+   * 音声出力を止め、`<audio>` からストリームを外す
+   *
+   * 停止の要求を受けたら、新規の音声 Object を復号へ積むのを止め、復号前の段に保持して
+   * いる Object を flush して復号へ流し、予約済みの音が鳴り終わるまで待ってから
+   * `AudioContext` を閉じる (drain)。待ち時間の上限は `AUDIO_PLAYOUT_DRAIN_MAX_MS`。
+   * 復号前の段の flush 分の復号出力は、予約されるまで待つ。
+   *
+   * 二重に呼ばれた場合は同じ Promise を返す。停止の完了を待てない経路 (パネルの削除、
+   * アンマウント、セッションの close 通知) は `void` で呼び、AudioContext はこの処理が
+   * 必ず閉じる。
+   */
+  function stopAudioPlayback(): Promise<void> {
     // 停止したら進行中の再生開始も無効として扱う
     audioPlaybackPendingRef.current = false;
-    const audioElement = audioRef.current;
-    if (audioElement) {
-      audioElement.pause();
-      audioElement.srcObject = null;
-    }
-    const playback = audioPlaybackRef.current;
-    audioPlaybackRef.current = null;
-    if (playback) {
-      // 予約済みでまだ鳴り始めていない音は、AudioContext を閉じると鳴らないまま
-      // 切り捨てられる。この分は他の統計に現れないため、閉じる直前に数える
-      playback.playout.recordStopped();
-      void playback.context.close().catch(() => {
-        // 既に閉じている場合は無視する
-      });
-    }
-    // 時間軸からも音声の基準と学習と実績を消す。残すと共有の再生遅延に音声の下限
-    // (AUDIO_PLAYOUT_DELAY_FLOOR_MS) が残り、映像の表示が音声を一度も再生していない購読より
-    // 遅れたまま固定される。世代は進めない (積んでいる映像フレームを到着順に落とさない)
-    playoutTimelineRef.current.resetStream("audio");
+    return audioStopRef.current.stop({
+      flushAudio: () => {
+        // 復号前の段の保持分を flush して復号へ流す。flush の通知は
+        // appendAudioPreDecodeRef 経由で復号チェーンへ積まれるため、flush の後に外す
+        const delay = preDecodeDelayRef.current;
+        const flushed = delay?.flushAudio() ?? 0;
+        appendAudioPreDecodeRef.current = null;
+        return flushed;
+      },
+      drain: async (options) => {
+        const playback = audioPlaybackRef.current;
+        if (playback === null) {
+          return;
+        }
+        // 予約済みの音が鳴り終わるまで待つ。flush した分の復号出力が届くまでは
+        // 予約が尽きていても終えない
+        await playback.playout.drainReserved(options);
+      },
+      closeAudioContext: async () => {
+        const playback = audioPlaybackRef.current;
+        audioPlaybackRef.current = null;
+        const audioElement = audioRef.current;
+        if (audioElement) {
+          audioElement.pause();
+          audioElement.srcObject = null;
+        }
+        if (playback !== null) {
+          await playback.context.close().catch(() => {
+            // 既に閉じている場合は無視する
+          });
+        }
+      },
+      onStopped: () => {
+        // 時間軸からも音声の基準と学習と実績を消す。残すと共有の再生遅延に音声の下限
+        // (AUDIO_PLAYOUT_DELAY_FLOOR_MS) が残り、映像の表示が音声を一度も再生していない購読より
+        // 遅れたまま固定される。世代は進めない (積んでいる映像フレームを到着順に落とさない)
+        playoutTimelineRef.current.resetStream("audio");
+      },
+    });
   }
 
   /**
@@ -1441,7 +1490,7 @@ export function useSubscriber(
     if (!instance) return;
 
     if (instance.audioPlaybackEnabled.value) {
-      stopAudioPlayback();
+      void stopAudioPlayback();
       instance.audioPlaybackEnabled.value = false;
       // URL クエリ (`playAudio`) へ反映する。共有した URL で同じ状態から始められる
       settings.playAudioEnabled.value = false;
@@ -1461,7 +1510,7 @@ export function useSubscriber(
       settings.playAudioEnabled.value = true;
     } catch (error) {
       console.error(`[${subscriberId}] failed to start audio playback:`, error);
-      stopAudioPlayback();
+      void stopAudioPlayback();
       instance.audioPlaybackEnabled.value = false;
     } finally {
       audioPlaybackPendingRef.current = false;
@@ -1793,6 +1842,11 @@ export function useSubscriber(
     };
 
     const queueAudioObject = (obj: MoqtObject, viaDatagram: boolean): void => {
+      // 停止の処理が始まった後に届いた Object は積まない。復号前の段や復号へ渡すと、
+      // drain が終わった後に予約が増え、閉じた AudioContext への予約になる
+      if (audioStopRef.current.isStopping) {
+        return;
+      }
       // 到着時刻は復号前の遅延を挟んでも失わないよう、受信の入口で 1 回だけ測る
       const receivedAtMs = performance.now();
       const delay = preDecodeDelayRef.current;
@@ -1962,6 +2016,8 @@ export function useSubscriber(
     audioData: AudioData,
     audioDecoderInstance: AudioDecoderWrapper,
   ): void {
+    // 停止時の flush で復号へ流した Object の出力が届いた。drain はこの数が 0 になるまで待つ
+    audioStopRef.current.noteDecodedOutput();
     const instance = getCurrentAudioSubscriber(audioDecoderInstance);
     if (instance === null) {
       audioData.close();
@@ -2033,7 +2089,7 @@ export function useSubscriber(
       const timestampKind =
         input?.timestampKind ?? lastKind.fallbackFor(inputs, audioData.timestamp) ?? "none";
       // 到着 (復号の出力を受け取った) 時刻。鳴らさなかった音の記録に使う
-      const arrivalMs = performance.now();
+      const arrivalMs = nowMs();
 
       // relay の cache から届いた音は鳴らさない。復号は続ける (Audio Config はどの
       // Object にも載りうるため、cache の分の復号を飛ばすと適用を落とすことがある)。
@@ -3040,6 +3096,10 @@ export function useSubscriber(
         await subscriberInstance.unsubscribe();
       }
     } finally {
+      // 予約済みの音声を鳴らし切ってから後始末する。drain の間は停止中であることを
+      // status に出し、ボタンは isStopping で無効のままにする
+      instance.statusMessage.value = SUBSCRIBER_AUDIO_STOPPING_STATUS_MESSAGE;
+      await stopAudioPlayback();
       teardownSubscriber();
       instance.isStopping.value = false;
       instance.status.value = "disconnected";
@@ -3059,11 +3119,13 @@ export function useSubscriber(
     resetVideoGroupGate();
     // 追いつきの境界を消し、画面の「Catching up」も消す
     resetCatchUpGates();
-    // 復号前の段とタイマーを破棄する (停止後に復号へ流さない)
+    // 音声を drain してから AudioContext を閉じる。復号前の段の保持分の flush は
+    // stopAudioPlayback が行うため、段を破棄するより先に呼ぶ。await できない経路
+    // (パネルの削除、アンマウント、セッションの close 通知) なので fire-and-forget にし、
+    // AudioContext は stopAudioPlayback が必ず閉じる
+    void stopAudioPlayback();
+    // 復号前の段とタイマーを破棄する (flush 済み。停止後に復号へ流さない)
     resetPreDecodeDelay();
-    // 再生の停止は instance の有無に関わらず行う。パネルの削除では Map から先に
-    // 消えるため、この後の instance 取得が失敗しても AudioContext を残さない
-    stopAudioPlayback();
     // 切り捨てられた分 (予約済みで鳴らなかった音) まで反映してから止める
     stopAudioPlayoutTiming();
 

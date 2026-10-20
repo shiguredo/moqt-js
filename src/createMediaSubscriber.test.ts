@@ -2288,9 +2288,10 @@ test("receiveVideoObject: 復号前の遅延は Group の順序を変えない",
 });
 
 /**
- * 完了条件: `close()` は復号前の段とタイマーを破棄する。期限が来ても復号しない。
+ * 完了条件: `close()` は音声の復号前の段を flush して復号へ流す (停止時に保持分まで
+ * 鳴らし切るため)。映像は従来どおり破棄し、flush の後に期限が来ても追加で復号しない。
  */
-test("close: 復号前の段を破棄し、期限が来ても復号しない", async () => {
+test("close: 音声の復号前の段を flush してから破棄する", async () => {
   const { subscriber, control, decodedAudio, decodedVideo } = createPreDecodeDelaySubscriber(80);
   control.receiveAudioObject(makeIdentifiedObject(0n, 0x11), "subgroup");
   control.receiveVideoObject(makeStreamVideoObject(1n, 0n));
@@ -2301,15 +2302,18 @@ test("close: 復号前の段を破棄し、期限が来ても復号しない", a
 
   assert.equal(control.audioPreDecodeStage?.size, 0, "音声の段を破棄すること");
   assert.equal(control.videoPreDecodeStage?.size, 0, "映像の段を破棄すること");
+  assert.deepEqual(decodedAudio, [0x11], "保持していた音声を復号へ流すこと");
+  const decodedAudioCount = decodedAudio.length;
   await sleep(300);
-  assert.deepEqual(decodedAudio, [], "閉じた後に復号しないこと");
-  assert.deepEqual(decodedVideo, [], "閉じた後に復号しないこと");
+  assert.equal(decodedAudio.length, decodedAudioCount, "flush の後に追加で復号しないこと");
+  assert.deepEqual(decodedVideo, [], "映像は flush しないこと");
 });
 
 /**
- * 完了条件: `stop()` も復号前の段とタイマーを破棄する。期限が来ても復号しない。
+ * 完了条件: `stop()` は音声の復号前の段を flush して復号へ流し、そのあと破棄する。
+ * flush の後に期限が来ても追加で復号しない。
  */
-test("stop: 復号前の段を破棄し、期限が来ても復号しない", async () => {
+test("stop: 音声の復号前の段を flush してから破棄する", async () => {
   const { subscriber, control, decodedAudio, decodedVideo } = createPreDecodeDelaySubscriber(80);
   control.receiveAudioObject(makeIdentifiedObject(0n, 0x11), "subgroup");
   control.receiveVideoObject(makeStreamVideoObject(1n, 0n));
@@ -2319,9 +2323,11 @@ test("stop: 復号前の段を破棄し、期限が来ても復号しない", as
 
   assert.equal(control.audioPreDecodeStage?.size, 0, "音声の段を破棄すること");
   assert.equal(control.videoPreDecodeStage?.size, 0, "映像の段を破棄すること");
+  assert.deepEqual(decodedAudio, [0x11], "保持していた音声を復号へ流すこと");
+  const decodedAudioCount = decodedAudio.length;
   await sleep(300);
-  assert.deepEqual(decodedAudio, [], "停止後に復号しないこと");
-  assert.deepEqual(decodedVideo, [], "停止後に復号しないこと");
+  assert.equal(decodedAudio.length, decodedAudioCount, "flush の後に追加で復号しないこと");
+  assert.deepEqual(decodedVideo, [], "映像は flush しないこと");
 });
 
 /**
@@ -6964,8 +6970,9 @@ test("start: 解放が進行中でも失敗時の巻き戻しで遷移前の sta
   // 接続の失敗が解決する前に、ピア起点の close の解放を開始する (世代番号が進む)
   const closing = control.handleSessionClose(generation);
   await blocked.started;
-  // 解放は session の close で止まっており、まだ "closed" になっていないこと
-  assert.equal(subscriber.state, "subscribing");
+  // 解放は session の close で止まっており、まだ "closed" になっていないこと。
+  // start の失敗の巻き戻しは解放を待たずに進むため、state は既に遷移前へ戻り得る
+  assert.notEqual(subscriber.state, "closed");
   assert.equal(closeCount, 0);
 
   // この間に start が失敗したら、巻き戻しで遷移前の "stopped" に戻ること
@@ -9481,4 +9488,177 @@ test("subscribeCatalog: エラー status の PUBLISH_DONE で catalog の購読�
   await closing;
   assert.instanceOf(thrown, Error);
   assert.equal((thrown as Error).message, "catalog receive aborted: resources disposed");
+});
+
+// ============================================================================
+// 停止時の drain (予約済みの音声を鳴らし切ってから AudioContext を閉じる)
+// ============================================================================
+
+/**
+ * 停止時に drain が動くことを確かめるための制御口
+ *
+ * AudioContext は node に実物が無いため、既存の検証と同じく記録用の最小オブジェクトを
+ * 注入する (モジュール置換は行わない)。
+ */
+interface SubscriberDrainControl extends SubscriberFrameControl {
+  currentState: MediaSubscriberState;
+  readonly audioPlayoutSession: AudioPlayoutSession;
+  // 停止の drain の状態 (復号の停止と flush の復号待ちの残り)
+  audioDecodeStopped: boolean;
+  audioDrainFlushPending: number;
+}
+
+/**
+ * 完了条件: stop は予約済みの音声が鳴り終わるまで待ち、鳴らし切ってから AudioContext を
+ * 閉じる。鳴らし切れた分は `missedByReason.stopped` に数えず、drain の結果を計器に残す。
+ */
+test("stop: 予約済みの音声を鳴らし切ってから AudioContext を閉じる", async () => {
+  const subscriber = new MediaSubscriberImpl("moqt://example.com/live", {
+    namespace: ["live"],
+    audio: {},
+  });
+  const control = subscriber as unknown as SubscriberDrainControl;
+  control.currentState = "active";
+
+  // `getOutputTimestamp()` の対応から音声の出力遅延を 100 ms にし、到着基準の予約を作る
+  const closesAtMs: number[] = [];
+  const startsAtMs: number[] = [];
+  control.audioContext = {
+    get currentTime(): number {
+      return performance.now() / 1_000;
+    },
+    getOutputTimestamp: () => ({
+      contextTime: performance.now() / 1_000 + 0.1,
+      performanceTime: performance.now(),
+    }),
+    createBuffer: () => ({ copyToChannel: () => {} }) as unknown as AudioBuffer,
+    createBufferSource: () =>
+      ({
+        buffer: null,
+        connect: () => {},
+        start: (when: number) => {
+          startsAtMs.push(when * 1_000);
+        },
+      }) as unknown as AudioBufferSourceNode,
+    close: async () => {
+      closesAtMs.push(performance.now());
+    },
+  } as unknown as AudioContext;
+  // 解放では出力先の音声トラックを止めるため、stream と getAudioTracks も持たせる
+  control.audioDestination = {
+    stream: { getAudioTracks: () => [] },
+  } as unknown as MediaStreamAudioDestinationNode;
+
+  const audioData = {
+    numberOfChannels: 1,
+    sampleRate: 48_000,
+    numberOfFrames: 960,
+    copyTo: () => {},
+    close: () => {},
+  } as unknown as AudioData;
+  control.handleAudioDecodedData({ data: audioData });
+  assert.equal(startsAtMs.length, 1, "音を 1 つ予約すること");
+
+  const stopStartedAtMs = performance.now();
+  await subscriber.stop();
+  const waitedMs = performance.now() - stopStartedAtMs;
+
+  // AudioContext は停止の要求より後に閉じる (すぐには閉じない)
+  assert.equal(closesAtMs.length, 1);
+  assert.isAbove(closesAtMs[0] ?? 0, stopStartedAtMs);
+  // 予約した音 (到着基準の既定遅延 100 ms + 20 ms) が鳴り終わるのを待つ
+  assert.isAtLeast(waitedMs, 50, "予約が鳴り終わるまで待つこと");
+  assert.isAtMost(waitedMs, 500, "待ち時間の上限 (300 ms) を大きく超えないこと");
+
+  const timing = subscriber.getStats().audio?.playoutTiming;
+  assert.isDefined(timing?.lastDrain, "drain の結果を計器に残すこと");
+  assert.equal(timing?.lastDrain?.cutMs, 0, "鳴らし切れたので切った量は 0");
+  assert.isAbove(timing?.lastDrain?.playedMs ?? 0, 0, "鳴らせた量を残すこと");
+  assert.equal(timing?.missedByReason.stopped.count, 0, "切った音を数えないこと");
+  assert.equal(timing?.missedByReason.stopped.ms, 0);
+});
+
+/**
+ * 完了条件: drain が終わった後 (音声の復号を止めた後) に届いた復号の出力は、予約せずに
+ * AudioData を閉じて捨てる。閉じる直前の AudioContext に積むと、切った量として数えられない
+ * まま閉じたときに消えるためである。flush の復号待ちの減算は捨てる判定より先に行う。
+ */
+test("handleAudioDecodedData: drain 終了後に届いた復号出力は予約せず閉じる", () => {
+  const subscriber = new MediaSubscriberImpl("moqt://example.com/live", {
+    namespace: ["live"],
+    audio: {},
+  });
+  const control = subscriber as unknown as SubscriberDrainControl;
+  control.currentState = "active";
+  let starts = 0;
+  control.audioContext = {
+    currentTime: 0,
+    getOutputTimestamp: () => ({ contextTime: 0, performanceTime: 0 }),
+    createBuffer: () => ({ copyToChannel: () => {} }) as unknown as AudioBuffer,
+    createBufferSource: () =>
+      ({
+        buffer: null,
+        connect: () => {},
+        start: () => {
+          starts++;
+        },
+      }) as unknown as AudioBufferSourceNode,
+    close: async () => {},
+  } as unknown as AudioContext;
+  control.audioDestination = {
+    stream: { getAudioTracks: () => [] },
+  } as unknown as MediaStreamAudioDestinationNode;
+
+  let closeCount = 0;
+  const audioData = {
+    numberOfChannels: 1,
+    sampleRate: 48_000,
+    numberOfFrames: 960,
+    copyTo: () => {},
+    close: () => {
+      closeCount++;
+    },
+  } as unknown as AudioData;
+
+  // drain 終了相当の状態にする。復号の待ちは 1 件残っている
+  control.audioDecodeStopped = true;
+  control.audioDrainFlushPending = 1;
+  control.handleAudioDecodedData({ data: audioData });
+
+  assert.equal(starts, 0, "予約しないこと");
+  assert.equal(closeCount, 1, "AudioData を閉じること");
+  assert.equal(control.audioDrainFlushPending, 0, "drain の完了判定用の減算は行うこと");
+
+  // 対照: 停止していなければ予約する
+  control.audioDecodeStopped = false;
+  const liveAudioData = {
+    numberOfChannels: 1,
+    sampleRate: 48_000,
+    numberOfFrames: 960,
+    copyTo: () => {},
+    close: () => {},
+  } as unknown as AudioData;
+  control.handleAudioDecodedData({ data: liveAudioData });
+  assert.equal(starts, 1, "停止していなければ予約すること");
+});
+
+/**
+ * 完了条件: 復号前の段から flush した Object の件数を drain の結果に残す。
+ * 復号の出力が届かない場合は上限で打ち切る (停止が終わらないことはない)。
+ */
+test("stop: preDecodeDelayMs の保持分を flush し、drain の結果に件数を残す", async () => {
+  const { subscriber, control } = createPreDecodeDelaySubscriber(2_000);
+  control.receiveAudioObject(makeIdentifiedObject(0n, 0x11), "subgroup");
+  control.receiveAudioObject(makeIdentifiedObject(1n, 0x22), "subgroup");
+  control.currentState = "active";
+  assert.equal(control.audioPreDecodeStage?.size, 2);
+
+  const stopStartedAtMs = performance.now();
+  await subscriber.stop();
+  const waitedMs = performance.now() - stopStartedAtMs;
+
+  const timing = subscriber.getStats().audio?.playoutTiming;
+  assert.equal(timing?.lastDrain?.flushedObjects, 2, "flush した件数を残すこと");
+  // 復号の出力を待つが、届かないため上限 (余裕の 100 ms) で打ち切る
+  assert.isAtMost(waitedMs, 400, "復号の出力が無くても停止が長引かないこと");
 });

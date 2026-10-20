@@ -108,6 +108,21 @@ export class SubscriberPreDecodeDelay<TVideo, TAudio> {
     this.audioStage = this.createAudioStage(delayMs);
   }
 
+  /**
+   * 音声の段に保持している Object を期限を待たずに復号へ流す (停止時の flush)
+   *
+   * 段は破棄しない。呼び出し側が flush の後に `stop` する。復号へ流した Object の
+   * 出力が予約されるまで、停止側 (drain) が待つために件数を返す
+   *
+   * @returns 復号へ流した Object の件数
+   */
+  flushAudio(): number {
+    if (this.audioStage === null) {
+      return 0;
+    }
+    return this.audioStage.flush();
+  }
+
   /** 購読の停止時に、段とタイマーを破棄する */
   stop(): void {
     this.started = false;
