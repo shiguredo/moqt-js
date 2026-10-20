@@ -4,6 +4,7 @@
 - Completed: {YYYY-MM-DD}
 - Branch: feature/fix-playout-media-jump-and-late-start
 - Polished: {YYYY-MM-DD}
+- Reporter: @voluntas
 
 ## 目的
 

@@ -32,8 +32,9 @@ Data Stream の再送と順序保証があるため、Datagram 固有の損失�
 | 位相の飛び (440 Hz のゼロ交差間隔の外れ)                             | 0 件                                                                                                                                   |
 | 同時刻の計器                                                         | `playoutCompressedMs` 180 ms、`playoutConcealedMs` 66 ms (`concealments` 2 回)、`playoutDrops` 0、`playoutRebases` 0、`missedFrames` 0 |
 
-- 90 件の不連続は、すべて無音区間の両端で説明できる (36 個 × 2 端 = 72 件、検出下限未満の
-  微小な無音 9 個 × 2 端 = 18 件、開始前の過渡 1 件)。波形を継ぎはぎしたのではなく、
+- 90 件の不連続は、すべて無音区間の両端で説明できる (36 個の開始 36 件 + 終了 35 件 =
+  71 件。先頭の無音の開始端は収録の外にある。検出下限未満の微小な無音 9 個 × 2 端 = 18 件、
+  開始前の過渡 1 件。合計 90 件)。波形を継ぎはぎしたのではなく、
   **鳴っている途中に 0 が挿入され、位相はそのまま戻る**形である
 - 同じ AudioWorklet のタップで、ネットワークを介さず同じ AudioContext の 440 Hz を
   14.94 秒録る対照実験では、定常状態の無音も段差も 0 件だった。タップ経路は出力を
@@ -62,15 +63,18 @@ Data Stream の再送と順序保証があるため、Datagram 固有の損失�
 
 ### 1. 無音の穴と境界の段差
 
+以下は修正前 (`develop` `4eb42b8a`) の機序である。現在は下限を 0.5 ms まで下げ、予約できる
+未来の分は補間する (後述の修正方針)。
+
 `src/playout/audioPlayout.ts` の `AudioPlayoutScheduler.concealmentOf` は、二つの場合に
 補間を返さない。
 
-- 隙間が `AUDIO_PLAYOUT_MIN_CONCEAL_SECONDS` (5 ms) 以下のとき。補間の継ぎ目が耳につくと
-  いう理由で補間せず、無音のまま残す。実リレーで検出した 36 個のうち 27 個 (62.9 ms) と、
-  検出下限未満の微小な無音 9 個 (約 10 ms) がこれに当たる
-- 前の音の終わりが「今 + 余裕 (`AUDIO_PLAYOUT_MIN_LEAD_SECONDS` = 10 ms)」より過去のとき。
-  補間バッファを過去に予約できないためである。36 個のうち 9 個 (合計 86.2 ms、5.8〜22.5 ms)
-  がこれに当たる。アンダーランである
+- 隙間が `AUDIO_PLAYOUT_MIN_CONCEAL_SECONDS` (修正前は 5 ms) 以下のとき。補間の継ぎ目が
+  耳につくという理由で補間せず、無音のまま残す。実リレーで検出した 36 個のうち 27 個
+  (62.9 ms) と、検出下限未満の微小な無音 9 個 (約 10 ms) がこれに当たる
+- 前の音の終わりが「今 + 余裕 (`AUDIO_PLAYOUT_MIN_LEAD_SECONDS` = 10 ms)」より前のとき。
+  補間バッファを今 + 余裕より前に予約できないためである。36 個のうち 9 個
+  (合計 86.2 ms、5.8〜22.5 ms) がこれに当たる。アンダーランである
 
 `src/playout/audioPlayoutSession.ts` の `AudioPlayoutSession.startBuffer` は、サンプルを
 `createBuffer` と `copyToChannel` で詰めて `start(whenSeconds)` するだけで、バッファ境界の
@@ -140,7 +144,9 @@ timestamp の順と逆に届くと、隙間 0 のまま内容だけが逆順に�
 - 予約判断の後に `currentTime` が追い越したことによる重なり: 実機の long-task 記録は 0 件で
   未発生。ただし `createBuffer` の中で時計を 12 ms 進めると、600 フレーム中 22 回、41 ms の
   重なりが再現するため、機序自体は残る
-- 過去時刻の `start()`: 否定。予約時刻は常に今 + 余裕以上へクランプされる
+- 過去時刻の `start()` による重なり: 実リレーでは未発生 (`lateStartCount` 0)。予約判断の
+  時点では今 + 余裕以降に置くが、`start()` の直前に `currentTime` を取り直すことはしない
+  ため、メインスレッドの停止で追い越され得る (計器のみ。押し直しは別の課題)
 - 冗長化 2 回送りによる同じ音の二重再生: 否定。2 回目は復号へ渡る前に捨てられる
 - catch-up の復号器作り直しで、破棄した旧 Worker の出力が交錯する: 否定。dispose の前に
   message handler が外れる
@@ -154,8 +160,9 @@ timestamp の順と逆に届くと、隙間 0 のまま内容だけが逆順に�
 
 1. **計器を足す (実装済み)**
    `AudioPlayoutTimingSnapshot` に、補間で埋まらなかった無音の穴 (`gapCount` / `gapMs` /
-   `gapMaxMs`)、予約時点で既に過去だった穴 (`unrecoverableGapCount` /
-   `unrecoverableGapMs`)、予約した時刻を `AudioContext.currentTime` が追い越した回数と最大
+   `gapMaxMs`)、予約できる最も早い時刻 (今 + 余裕) より前だった穴
+   (`unrecoverableGapCount` / `unrecoverableGapMs`。既に過去の分と、未来でも余裕に
+   満たない分を含む)、予約した時刻を `AudioContext.currentTime` が追い越した回数と最大
    (`lateStartCount` / `lateStartMaxMs`)、バッファ境界の段差 (`boundaryStepCount` /
    `boundaryStepMax`。しきい値は 440 Hz トーンの正常な差分の約 3 倍の 0.05) を足した。
    `AudioReceiverStats.playoutTiming` と devtools の Audio Playback Timing から読める。
@@ -164,7 +171,7 @@ timestamp の順と逆に届くと、隙間 0 のまま内容だけが逆順に�
    `AUDIO_PLAYOUT_MIN_CONCEAL_SECONDS` を 5 ms から 0.5 ms へ下げ、予約できる隙間は補間で
    埋める。0.5 ms 以下の隙間は前の音の終わりに揃えて穴を作らない (目標の表示時刻が前の
    フレームから 20 µs〜0.5 ms だけ動くことがあり、これを穴として扱うと 1〜2 サンプルの
-   デジタル無音が残って段差になるため)。前の音の終わりが既に過去でも、今回の開始が今 + 余裕より未来なら、その未来の分
+   デジタル無音が残って段差になるため)。前の音の終わりが今 + 余裕より前でも、今回の開始が今 + 余裕より未来なら、その未来の分
    だけ補間する (`AudioPlayoutScheduler.concealmentOf` の `unrecoverableGapSeconds` と
    `gapStartSeconds`)。補間の末尾は 2 ms で 0 へ落とし、直後の音声の先頭は 2 ms で
    フェードインする (`src/audioSpliceFade.ts` の `fadeSpliceEdge`)。補間の先頭が無音から
@@ -243,8 +250,19 @@ timestamp の順と逆に届くと、隙間 0 のまま内容だけが逆順に�
   復号や予約の遅れの合算) で起きるアンダーランの開始点 9 件と、media 時刻が飛ぶ境界 1 件で
   ある。前者は遅延をさらに増やすかどうかの取引になり、後者は別の課題で扱う
 - 既存の E2E (実リレー) の長時間テストは、補間の上限を 200 ms から 600 ms へ変更し
-  (`AUDIO_PLAYOUT_RESULT.md` の既知の限界と同じ理由)、境界の段差 30 件未満の判定を
-  加えた。実測は補間 201 ms、段差 9 件、鳴り始め 155.5 ms、予約の追い越し 0 件で通る
+  (`AUDIO_PLAYOUT_RESULT.md` の既知の限界と同じ理由)、境界の段差 30 件未満と gapMs 300 ms
+  未満の判定を加えた。通した回の実測は補間 201 ms、段差 9 件、鳴り始め 155.5 ms、予約の
+  追い越し 0 件であり、負荷の高い回は補間 217〜270 ms、段差 10 件だった (同一 run の
+  生ログは残していないため、値は負荷で幅がある)
+- 計器の `gapCount` / `gapMs` は購読の開始からの累積であり、波形の無音は収録区間
+  (60.74 秒) の値である。収録の前後の穴は計器だけに含まれるため、両者は一致しない
+  (実測: `gapMs` 73.3 ms に対し波形の無音 39.9 ms)。同じ収録区間の境界の段差は
+  `boundaryStepCount` 10 件と波形の不連続 10 件で一致した
+- 補間が完全に成功した穴でも、補間の生成長の丸め (半サンプル以内) を穴として数えていた
+  (レビューで修正)。この表の `gapCount` / `gapMs` は修正前の実装による値であり、
+  修正後は再計測が必要である
+- 秒単位の長い途絶 (配信の停止、経路の断) も 1 回の穴として `gapMs` / `gapMaxMs` に
+  入る。補間の失敗ではなく、その前の無音を含むためである
 
 ## 検証方法
 

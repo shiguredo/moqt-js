@@ -25,10 +25,11 @@ Datagram (moqt-devtools の既定。冗長度 2) であり、復号の出力は 
 
 - `src/playout/audioPlayout.ts` の `AudioPlayoutScheduler.concealmentOf` は、隙間が
   `AUDIO_PLAYOUT_MIN_CONCEAL_SECONDS` (5 ms) 以下のときと、前の音の終わりが
-  `nowSeconds + minLeadSeconds` より過去のときに補間を返さない。実リレーで検出した 36 個の
-  無音区間のうち、前者が 27 個 (62.9 ms) と検出下限未満の微小な無音 9 個 (約 10 ms)、
-  後者 (アンダーラン) が 9 個 (合計 86.2 ms、5.8〜22.5 ms) である。90 件の不連続の 80 % と
-  20 % に対応する
+  `nowSeconds + minLeadSeconds` より前のときに補間を返さない。実リレーで検出した無音区間
+  36 個のうち、前者が 27 個 (62.9 ms)、後者 (アンダーラン) が 9 個 (合計 86.2 ms、
+  5.8〜22.5 ms) である。これとは別に検出下限未満の微小な無音が 9 個 (約 10 ms) ある。
+  90 件の不連続の内訳は、36 個の両端のうち 71 件 (先頭の開始端は収録の外)、微小な無音
+  9 個 × 2 端 = 18 件、開始前の過渡 1 件である
 - `src/playout/audioPlayoutSession.ts` の `AudioPlayoutSession.startBuffer` は、
   `createBuffer` と `copyToChannel` でサンプルを詰めて `start(whenSeconds)` するだけで、
   バッファ境界のフェードもクロスフェードも行わない。補間しなかった隙間の前後は、440 Hz の
@@ -91,8 +92,9 @@ media 時刻の飛びの両側フェードと、予約時刻の押し直しは�
 ## 解決方法
 
 - 計器: `AudioPlayoutTimingSnapshot` に、補間で埋まらなかった穴 (`gapCount` / `gapMs` /
-  `gapMaxMs`)、予約時点で既に過去だった穴 (`unrecoverableGapCount` / `unrecoverableGapMs`)、
-  予約の追い越し (`lateStartCount` / `lateStartMaxMs`)、バッファ境界の段差
+  `gapMaxMs`)、予約できる最も早い時刻 (今 + 余裕) より前だった穴
+  (`unrecoverableGapCount` / `unrecoverableGapMs`。既に過去の分と、未来でも余裕に満たない
+  分を含む)、予約の追い越し (`lateStartCount` / `lateStartMaxMs`)、バッファ境界の段差
   (`boundaryStepCount` / `boundaryStepMax`、しきい値
   `AUDIO_PLAYOUT_BOUNDARY_STEP_THRESHOLD` = 0.05) を足した。`AudioReceiverStats.playoutTiming`
   と devtools の Audio Playback Timing から読める。段差は実際に鳴るサンプルで測るため、
@@ -110,6 +112,17 @@ media 時刻の飛びの両側フェードと、予約時刻の押し直しは�
   (develop、load 3.0) から、8 個 / 39.9 ms / 段差 10 件 (実装後、load 10.7) へ減った。
   計器は `gapCount` 21 / `gapMs` 73.3 ms / 予約不能 9 / 57.5 ms / `boundaryStepCount` 10 で、
   波形の段差 10 件と一致した。`lateStartCount` は 0。実リレーの E2E も通る
+- 計器の読み方: `gapCount` / `gapMs` は購読開始からの累積であり、波形の無音は収録区間
+  (60.74 秒) の値であるため一致しない (収録前後の穴は計器だけに含まれる。実測: `gapMs`
+  73.3 ms に対し波形の無音 39.9 ms)。完了条件の「波形と一致」は、同じ収録区間の境界の
+  段差が一致すること (`boundaryStepCount` 10 = 波形の不連続 10) と、穴の量が同じ桁に
+  収まることで判定した
+- レビューでの修正: 補間の生成長の丸め (半サンプル以内) を穴として数えていたため、
+  半サンプルを超える差だけを穴として数えるようにした。補間が完全に成功した穴の約半分が
+  `gapCount` から外れる。この修正後の実リレーの再計測は未了である (上の実測値は修正前の
+  実装による)
+- 設計方針にあった「鳴らした音の長さに対する割合」は、専用のフィールドを足さず
+  `playedMs` と併記して読む形にした (累積の定義を増やすと意味が二重になるため)
 - 対象外として分けたもの: media 時刻が飛ぶ境界の両側フェードと、予約時刻の押し直しは
   `issues/0871-bug-playout-media-jump-and-late-start.md` で扱う
 
