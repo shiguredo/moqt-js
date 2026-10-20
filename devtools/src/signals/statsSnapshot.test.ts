@@ -244,9 +244,26 @@ test("buildSubscriberStats: 音声の再生の観測値を返す", () => {
       ...EMPTY_AUDIO_PLAYOUT_TIMING.missedByReason,
       lateness: { count: 2, ms: 40 },
     },
+    // 補間で埋まらなかった無音の穴、予約の追い越し、バッファ境界の段差
+    gapCount: 3,
+    gapMs: 48,
+    gapMaxMs: 22,
+    unrecoverableGapCount: 1,
+    unrecoverableGapMs: 20,
+    lateStartCount: 1,
+    lateStartMaxMs: 2,
+    boundaryStepCount: 2,
+    boundaryStepMax: 0.19,
   };
   instance.audioPlayoutTiming.value = timing;
   assert.deepEqual(buildSubscriberStats(instance).audio.playoutTiming, timing);
+  // 穴・追い越し・段差も E2E と devtools から読める
+  const passed = buildSubscriberStats(instance).audio.playoutTiming;
+  assert.equal(passed.gapCount, 3);
+  assert.equal(passed.gapMs, 48);
+  assert.equal(passed.unrecoverableGapMs, 20);
+  assert.equal(passed.lateStartMaxMs, 2);
+  assert.equal(passed.boundaryStepMax, 0.19);
   // 購読前は何も記録していない値を返す
   assert.deepEqual(
     buildSubscriberStats(createSubscriberInstance("audio-playout-timing-empty")).audio

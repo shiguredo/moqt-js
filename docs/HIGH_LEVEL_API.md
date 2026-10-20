@@ -708,7 +708,9 @@ interface AudioReceiverStats {
   playoutLatenessMs: number;
   // 音声の再生の観測値。鳴るはずの時刻 (再生予定時刻)・届いた時刻・鳴り始める時刻と、
   // 予定に対する余裕の分布 (直近 10 秒の p50 / p95 / max)、鳴らなかった量 (件数と ms) を
-  // 理由ごとに出す (src/playout/audioPlayoutTimingStats.ts)
+  // 理由ごとに出す。補間で埋まらなかった無音の穴 (回数 / ms / 最大 / 予約できなかった分)、
+  // 予約を currentTime が追い越した回数、バッファ境界の段差も累積で持つ
+  // (src/playout/audioPlayoutTimingStats.ts)
   playoutTiming: AudioPlayoutTimingSnapshot;
   // 受信側の音声の追いつきの観測値 (src/playout/audioReceiveCatchUp.ts)。復号の出力が送られた
   // TIMESTAMP から遅れ続けたときに、復号器を作り直して live へ戻した量
@@ -986,6 +988,22 @@ jitter buffer の遅れは音声と映像で別々に求める。音声は NetEq
 `max(目標, 今 + 余裕, 直前の音の終わり)` で決まるため、目標が「今 + 余裕」(出力の
 バッファの分だけ先) に届いていないと、どの音も予定を過ぎて鳴る。この遅れを
 `latenessMs` が示し、閉ループが目標を増やす。詳細は上の jitter buffer の説明を参照。
+
+`AudioPlayoutTimingSnapshot` の `gapCount` / `gapMs` / `gapMaxMs` は、穴として残した回数・
+長さの合計・最大である。穴は、予約時点で既に過去だった分 (アンダーラン)、補間が失敗した
+分、補間の上限 (100 ms) を超えた分からでき、その両端では出力が 0 へ落ちて戻るためクリック
+として聞こえる。`gapMs` は「補間で埋まらなかった長さ」であり、穴の端を 2 ms のフェードで
+覆う分を含むため、実際に出力されたビット完全な 0 の合計とは一致しない (実測: 143.2 ms 対
+122.6 ms)。クリックは 0 の長さではなく境界の段差で決まるため、`boundaryStepCount` /
+`boundaryStepMax` と併せて読む。`unrecoverableGapCount` /
+`unrecoverableGapMs` は穴のうち予約時点で既に過去だった分 (事後には埋められない) であり、
+閉ループが目標遅延を増やす判断に使う。`lateStartCount` / `lateStartMaxMs` は、予約した
+開始時刻を `source.start()` の時点の `AudioContext.currentTime` が追い越した回数と最大で
+あり、1 件でも出たら直前の音と重なっている可能性がある (重なりそのものは計器に出ない)。
+`boundaryStepCount` / `boundaryStepMax` は、バッファ境界で実際に鳴るサンプルの段差が
+0.05 (`AUDIO_PLAYOUT_BOUNDARY_STEP_THRESHOLD`。440 Hz の正常な差分 p99.9 = 0.0174 の約
+3 倍) を超えた回数と最大である。`stretchUnavailableFrames` と同じく累積であり、購読を
+やり直すと 0 に戻る。
 
 `arrivalPlannedFrames` は、時間軸の再生予定時刻を使えず、到着基準の計画で鳴らした音の数で
 ある。使えないのは壁時計の TIMESTAMP を持たない、jitter buffer が無効、トラックの基準が

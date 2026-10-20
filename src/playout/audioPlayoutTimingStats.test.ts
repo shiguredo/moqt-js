@@ -238,3 +238,31 @@ test("formatAudioMissEvent: UTC の時刻と理由と長さを 1 行にする", 
     "1970-01-01T00:00:01.000Z catchUp 20 ms slack=-",
   );
 });
+
+// 完了条件: 補間で埋まらなかった無音の穴・予約の追い越し・バッファ境界の段差を累積で数える。
+// しきい値以下の段差は回数に数えず最大だけ残す
+test("recordGap / recordLateStart / recordBoundaryStep: 穴と追い越しと段差を数える", () => {
+  const stats = new AudioPlayoutTimingStats(AUDIO_PLAYOUT_TIMING_WINDOW_MS, 0);
+  stats.recordGap({ silentMs: 20, unrecoverableMs: 20 });
+  stats.recordGap({ silentMs: 8, unrecoverableMs: 0 });
+  stats.recordGap({ silentMs: 0, unrecoverableMs: 0 });
+  stats.recordLateStart(2);
+  stats.recordLateStart(0.5);
+  stats.recordLateStart(0);
+  stats.recordBoundaryStep(0.2);
+  stats.recordBoundaryStep(0.04);
+  const snapshot = stats.snapshot(0);
+  assert.equal(snapshot.gapCount, 2, "無音の穴を数えること");
+  assert.equal(snapshot.gapMs, 28, "穴の合計を数えること");
+  assert.equal(snapshot.gapMaxMs, 20, "穴の最大を数えること");
+  assert.equal(snapshot.unrecoverableGapCount, 1, "予約できない穴を数えること");
+  assert.equal(snapshot.unrecoverableGapMs, 20, "予約できない長さを数えること");
+  assert.equal(snapshot.lateStartCount, 2, "追い越した回数を数えること");
+  assert.equal(snapshot.lateStartMaxMs, 2, "追い越した最大を残すこと");
+  assert.equal(snapshot.boundaryStepCount, 1, "しきい値を超えた段差だけ数えること");
+  assert.closeTo(snapshot.boundaryStepMax, 0.2, 1e-9, "段差の最大は残すこと");
+  // 目標遅延の閉ループへ穴の累積を渡す
+  const feedback = stats.audioDelayFeedback(0);
+  assert.equal(feedback.gapCount, 2);
+  assert.equal(feedback.gapMs, 28);
+});

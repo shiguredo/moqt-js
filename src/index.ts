@@ -294,6 +294,7 @@ export type {
 export {
   AudioPlayoutTimingStats,
   AUDIO_PLAYOUT_TIMING_WINDOW_MS,
+  AUDIO_PLAYOUT_BOUNDARY_STEP_THRESHOLD,
   AUDIO_MISS_REASONS,
   EMPTY_AUDIO_PLAYOUT_TIMING,
   formatAudioMissEvent,

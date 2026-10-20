@@ -7,6 +7,7 @@
  */
 
 import type { SectionHelp } from "./StatsView";
+import { AUDIO_PLAYOUT_BOUNDARY_STEP_THRESHOLD } from "../../../src/playout/audioPlayoutTimingStats.ts";
 import { LATENCY_SEGMENTS, type LatencySegment } from "../utils/latencyBreakdown";
 import {
   PLAYOUT_BASE_DRIFT_CONFIRM_MS,
@@ -379,6 +380,25 @@ export const AUDIO_PLAYOUT_TIMING_HELP: SectionHelp = {
       term: "stretchUnavailableFrames",
       description:
         "Sounds played at a sample rate where the time stretch and the concealment cannot work (the table used to downsample to 4 kHz has 8, 16, 32 and 48 kHz, as NetEq does). 44.1 kHz audio (AAC, for example) is such a rate. They are played as usual but the lateness is never compressed away and the missing parts are not concealed, so a value above 0 explains why the delay does not come back to the target. 0 means the rate is supported.",
+    },
+    {
+      term: "gapCount / gapMs / gapMaxMs",
+      description:
+        "Holes left between two sounds that the concealment could not fill (cumulative): the number, the total ms and the longest ms. A hole is the part already in the past when the sound was scheduled (an underrun), a concealment that failed, or the part beyond the concealment limit (100 ms). gapMs is the unfilled length and includes the 2 ms edge fades, so it does not equal the bit-exact silence in the output (measured: 143.2 ms against 122.6 ms). A hole covered by a fade can leave 0 silent samples. The click is decided by the step, not by the silence length; read boundaryStepCount together with these. Cumulative since subscribing started, not the 10 s window.",
+    },
+    {
+      term: "unrecoverableGapCount / unrecoverableGapMs",
+      description:
+        "The part of the gaps that was already in the past when the sound was scheduled (count and ms, cumulative). A buffer cannot be reserved in the past, so this part cannot be concealed. The closed loop raises the target delay for these holes so the same jitter does not become a hole again.",
+    },
+    {
+      term: "lateStartCount / lateStartMaxMs",
+      description:
+        "Times the reserved start time was already in the past when source.start() was called, and the longest lateness (cumulative, ms). Web Audio starts a past time immediately, so a value above 0 means the previous sound may be overlapping; the overlap itself is not measured here. 0 is expected.",
+    },
+    {
+      term: "boundaryStepCount / boundaryStepMax",
+      description: `Buffer boundaries whose step (the difference between the samples that the output actually plays) is above ${AUDIO_PLAYOUT_BOUNDARY_STEP_THRESHOLD} (3 times the normal step of a 440 Hz tone, 0.0174). The step left where the output cuts to a gap and back, and the step of a media-time jump (loss or decoder rebuild). Gaps are faded for 2 ms, so a value above 0 means an unfaded discontinuity remains (for example the tail of the sound before a gap that could not be concealed).`,
     },
   ],
   notes: [

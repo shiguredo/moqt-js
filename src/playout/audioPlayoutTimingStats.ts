@@ -14,6 +14,9 @@
  *   (音声出力の遅延は含まない)
  * - 分布 (p50 / p95 / max) は直近の窓 (既定 10 秒) の値から求める
  * - 鳴らなかった量は購読の開始 (reset) からの累積である。理由ごとに数え、和は合計に一致する
+ * - 鳴ったが無音だった区間 (穴)、バッファ境界の段差、予約の追い越しも累積で数える。
+ *   実リレーの波形収録では、鳴らした音の境界にデジタル無音が入り、その両端がクリックに
+ *   なっていた。鳴らなかった音の計器だけでは検出できなかったため、出力の穴として数える
  * - 時間軸の再生予定時刻を使わずに鳴らした音 (LOC TIMESTAMP が壁時計でない、jitter buffer
  *   が無効、トラックの基準が共有されていない) は、到着から一定の遅れで鳴らす計画に載せ、
  *   `arrivalPlannedFrames` に数える。時間軸が予定を決めていれば、その予定との差 (余裕と
@@ -34,6 +37,15 @@ export const AUDIO_PLAYOUT_TIMING_WINDOW_MS = 10_000;
 
 /** 残す直近の「鳴らさなかった音」の数 */
 export const MAX_RECENT_AUDIO_MISSES = 30;
+
+/**
+ * バッファ境界の段差を異常とみなす振幅 (0 から 1)
+ *
+ * 実リレーの 440 Hz トーンの正常な 1 階差分は p99.9 で 0.0174 であり、その約 3 倍を
+ * 異常とする (実リレーの波形計測の判定と同じ倍率)。自然な差分は音の種類で変わるため、
+ * 値を絶対値で決めるのではなく、記録した最大値と併せて読む
+ */
+export const AUDIO_PLAYOUT_BOUNDARY_STEP_THRESHOLD = 0.05;
 
 /**
  * 鳴らさなかった理由
@@ -138,6 +150,56 @@ export interface AudioPlayoutTimingSnapshot {
    * (`src/playout/audioTimeStretch.ts` の `isTimeStretchAvailable`)。0 なら使えている
    */
   readonly stretchUnavailableFrames: number;
+  /**
+   * 穴として残した回数 (累積)
+   *
+   * 前の音の終わりと今回の音の開始の間の隙間から、実際に補間で埋めた長さを引いた残りを
+   * 1 回として数える。予約時点で既に過去だった分 (アンダーラン)、補間が失敗した分、
+   * 補間の上限 (100 ms) を超えた分を含む。補間で埋めた穴や、端のフェードで覆った穴は
+   * 数えない (フェードで覆われた穴では、実際のデジタル無音が 0 サンプルになることがある)。
+   * 実際に出力されたビット完全な 0 の区間の数とは一致しないため、`boundaryStepCount` と
+   * 併せて読む
+   */
+  readonly gapCount: number;
+  /**
+   * 穴として残した長さの合計 (ミリ秒、累積)
+   *
+   * 「補間で埋まらなかった長さ」であり、端のフェードで覆う分を含む。したがって、実際に
+   * 出力されたビット完全な 0 の合計とは一致しない (実測: 143.2 ms 対 122.6 ms)。クリックは
+   * 0 の長さではなく境界の段差で決まるため、`boundaryStepCount` / `boundaryStepMax` と
+   * 併せて読む
+   */
+  readonly gapMs: number;
+  /** 穴として残した 1 回の最大 (ミリ秒、累積。最初の音より前の無音は含まない) */
+  readonly gapMaxMs: number;
+  /**
+   * 予約時点で既に過去で、補間を予約できなかった無音の回数 (累積)
+   *
+   * `gapCount` のうち、前の音の終わりが「今 + 余裕」より過去だったために補間バッファを
+   * 置けなかった回数である。事後には埋められないため、目標遅延を増やす判断に使う
+   */
+  readonly unrecoverableGapCount: number;
+  /** 予約できなかった無音の合計 (ミリ秒、累積)。`gapMs` に含まれる */
+  readonly unrecoverableGapMs: number;
+  /**
+   * 予約した時刻を `AudioContext.currentTime` が追い越した回数 (累積)
+   *
+   * `source.start(when)` の直前に読んだ `currentTime` が `when` を過ぎていた回数である。
+   * Web Audio は過去の時刻を即時開始にするため、1 件でも出たら直前の音と重なっている
+   * 可能性がある (重なりそのものはこの計器では分からない)
+   */
+  readonly lateStartCount: number;
+  /** 予約を追い越した最大の長さ (ミリ秒、累積) */
+  readonly lateStartMaxMs: number;
+  /**
+   * バッファ境界の段差が `AUDIO_PLAYOUT_BOUNDARY_STEP_THRESHOLD` を超えた回数 (累積)
+   *
+   * 無音の穴の前後と、media 時刻が飛んだ境界 (損失・復号器の作り直し) を数える。無音を
+   * 挟む境界では、実際に鳴る段差 (無音へ落ちる直前のバッファ末尾の振幅) を数える
+   */
+  readonly boundaryStepCount: number;
+  /** バッファ境界の段差の最大 (累積。0 から 1 の振幅) */
+  readonly boundaryStepMax: number;
 }
 
 /** どの理由も 0 件の累積 */
@@ -169,6 +231,15 @@ export const EMPTY_AUDIO_PLAYOUT_TIMING: AudioPlayoutTimingSnapshot = {
   missedByReason: emptyMissTotals(),
   recentMisses: [],
   stretchUnavailableFrames: 0,
+  gapCount: 0,
+  gapMs: 0,
+  gapMaxMs: 0,
+  unrecoverableGapCount: 0,
+  unrecoverableGapMs: 0,
+  lateStartCount: 0,
+  lateStartMaxMs: 0,
+  boundaryStepCount: 0,
+  boundaryStepMax: 0,
 };
 
 /**
@@ -221,6 +292,18 @@ export class AudioPlayoutTimingStats {
   private missedTotals = emptyMissTotals();
   private recentMisses: AudioMissEvent[] = [];
   private stretchUnavailableFrames = 0;
+  // 補間で埋まらなかった無音の穴 (回数・合計 ms・最大 ms) と、そのうち予約できなかった分
+  private gapCount = 0;
+  private gapMs = 0;
+  private gapMaxMs = 0;
+  private unrecoverableGapCount = 0;
+  private unrecoverableGapMs = 0;
+  // 予約した時刻を currentTime が追い越した回数と最大 (ms)
+  private lateStartCount = 0;
+  private lateStartMaxMs = 0;
+  // バッファ境界の段差 (しきい値を超えた回数と最大)
+  private boundaryStepCount = 0;
+  private boundaryStepMax = 0;
 
   /**
    * @param windowMs - 分布を求める直近の窓 (ミリ秒)。既定値を置かないのは、窓の長さが
@@ -350,6 +433,9 @@ export class AudioPlayoutTimingStats {
       slackMs: summarizeTimings(this.slacks.since(controlMinAtMs)),
       backlogMisses: this.missedTotals.backlog.count,
       backlogMs: this.missedTotals.backlog.ms,
+      // 補間で埋まらなかった無音の穴。目標遅延を増やす判断に使う
+      gapCount: this.gapCount,
+      gapMs: this.gapMs,
     };
   }
 
@@ -388,7 +474,72 @@ export class AudioPlayoutTimingStats {
       missedByReason,
       recentMisses: [...this.recentMisses],
       stretchUnavailableFrames: this.stretchUnavailableFrames,
+      gapCount: this.gapCount,
+      gapMs: this.gapMs,
+      gapMaxMs: this.gapMaxMs,
+      unrecoverableGapCount: this.unrecoverableGapCount,
+      unrecoverableGapMs: this.unrecoverableGapMs,
+      lateStartCount: this.lateStartCount,
+      lateStartMaxMs: this.lateStartMaxMs,
+      boundaryStepCount: this.boundaryStepCount,
+      boundaryStepMax: this.boundaryStepMax,
     };
+  }
+
+  /**
+   * 穴として残した区間を 1 つ記録する
+   *
+   * 呼び出し側 (`AudioPlayoutSession`) が、隙間の合計から実際に補間で埋めた長さを引いた
+   * 残りを渡す。端のフェードで覆う分を含むため、`silentMs` はビット完全な 0 の長さとは
+   * 限らない (フェードで覆われた穴では 0 サンプルになることがある)。予約時点で既に過去
+   * だった長さは `unrecoverableMs` として別に数える (`unrecoverableMs` は `silentMs` に
+   * 含まれる)
+   *
+   * @param gap.silentMs - 補間で埋まらなかった長さ (ミリ秒。端のフェードで覆う分を含む)
+   * @param gap.unrecoverableMs - そのうち予約時点で既に過去だった長さ (ミリ秒)
+   */
+  recordGap(gap: { silentMs: number; unrecoverableMs: number }): void {
+    const silentMs = Math.max(0, gap.silentMs);
+    if (silentMs <= 0) {
+      return;
+    }
+    this.gapCount += 1;
+    this.gapMs += silentMs;
+    this.gapMaxMs = Math.max(this.gapMaxMs, silentMs);
+    const unrecoverableMs = Math.min(silentMs, Math.max(0, gap.unrecoverableMs));
+    if (unrecoverableMs > 0) {
+      this.unrecoverableGapCount += 1;
+      this.unrecoverableGapMs += unrecoverableMs;
+    }
+  }
+
+  /**
+   * 予約した時刻を `AudioContext.currentTime` が追い越したことを記録する
+   *
+   * @param lateMs - 追い越した長さ (ミリ秒)。0 以下なら記録しない
+   */
+  recordLateStart(lateMs: number): void {
+    if (!(lateMs > 0)) {
+      return;
+    }
+    this.lateStartCount += 1;
+    this.lateStartMaxMs = Math.max(this.lateStartMaxMs, lateMs);
+  }
+
+  /**
+   * バッファ境界の段差を 1 つ記録する
+   *
+   * 段差が `AUDIO_PLAYOUT_BOUNDARY_STEP_THRESHOLD` を超えたときだけ回数を数え、最大は
+   * しきい値以下でも更新する (実際にどれだけ近づいたかを読めるようにする)
+   *
+   * @param step - 境界の段差 (0 から 1 の振幅)
+   */
+  recordBoundaryStep(step: number): void {
+    const amplitude = Math.abs(step);
+    this.boundaryStepMax = Math.max(this.boundaryStepMax, amplitude);
+    if (amplitude > AUDIO_PLAYOUT_BOUNDARY_STEP_THRESHOLD) {
+      this.boundaryStepCount += 1;
+    }
   }
 
   /**
@@ -417,6 +568,15 @@ export class AudioPlayoutTimingStats {
     this.missedTotals = emptyMissTotals();
     this.recentMisses = [];
     this.stretchUnavailableFrames = 0;
+    this.gapCount = 0;
+    this.gapMs = 0;
+    this.gapMaxMs = 0;
+    this.unrecoverableGapCount = 0;
+    this.unrecoverableGapMs = 0;
+    this.lateStartCount = 0;
+    this.lateStartMaxMs = 0;
+    this.boundaryStepCount = 0;
+    this.boundaryStepMax = 0;
   }
 
   /** 鳴り終わった予約を落とす */

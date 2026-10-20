@@ -158,7 +158,7 @@ test("既定の値: 再生の遅れ、上限、余裕、補間の下限と上限
   assert.equal(AUDIO_PLAYOUT_MAX_DELAY_SECONDS, 0.3);
   assert.equal(AUDIO_PLAYOUT_MIN_LEAD_SECONDS, 0.01);
   assert.closeTo(AUDIO_PLAYOUT_BACKLOG_SECONDS, 0.25, EPSILON);
-  assert.equal(AUDIO_PLAYOUT_MIN_CONCEAL_SECONDS, 0.005);
+  assert.equal(AUDIO_PLAYOUT_MIN_CONCEAL_SECONDS, 0.0005);
   assert.equal(AUDIO_PLAYOUT_MAX_CONCEAL_SECONDS, 0.1);
   assert.equal(AUDIO_CLOCK_DEADBAND_MS, 30);
   assert.equal(AUDIO_CLOCK_MAX_CHANGE_MS, 80);
@@ -189,7 +189,7 @@ test("schedule: 目標の時刻が今 + 余裕ちょうどなら鳴らす", () =
 // 決まる状態では、詰めても次の音の下限は実時間と同じ速さで進むため遅れは 1 ms も減らず、
 // 削った分がそのまま無音の穴になる。実測 (Lead の再現と同じ入力: 出力のリード 95.5 ms、
 // 表示の遅れ 66 ms、10 ms の音 100 フレーム) では、100 件すべてが圧縮を要求し、5 ms ずつ
-// 削れて 99 件・495 ms の穴 (5 ms 以下は補間しないため無音) が空き、遅れは 39.5 ms のまま
+// 削れて 99 件・495 ms の穴 (当時は 5 ms 以下を補間しないため無音) が空き、遅れは 39.5 ms のまま
 // 変わらなかった。修正後は圧縮の要求 0 件・穴 0 件で、遅れは 39.5 ms のままである
 test("schedule: 出力のバッファが下限を決めているときは詰めない", () => {
   const scheduler = new AudioPlayoutScheduler({ stretchMinSeconds: 0 });
@@ -217,7 +217,7 @@ test("schedule: 出力のバッファが下限を決めているときは詰め�
     if (decision.compressSeconds > 0) {
       requests += 1;
     }
-    // 前の音の終わりから今回の開始までに空いた分を数える。5 ms 以下は補間されず無音で残る
+    // 前の音の終わりから今回の開始までに空いた分を数える。0.5 ms 以下は補間されず無音で残る
     // (補間されていれば gapSeconds に入る)
     if (previousEnd !== null && decision.startAt > previousEnd && decision.gapSeconds === 0) {
       silentGapSeconds += decision.startAt - previousEnd;
@@ -648,26 +648,51 @@ test("schedule: 補間する隙間は上限で切る", () => {
   assert.equal(second.gapSeconds, AUDIO_PLAYOUT_MAX_CONCEAL_SECONDS);
 });
 
-// 5 ms 以下の隙間は補間しない (継ぎ目が耳につく)。隙間の情報も返さない
-test("schedule: 5 ms 以下の隙間は補間しない", () => {
+// 下限 (0.5 ms) 以下の隙間は、前の音の終わりに揃えて穴を作らない。目標の表示時刻の更新や
+// 浮動小数点の丸めで 20 µs〜0.5 ms だけ後ろへずれることがあり、これを穴として扱うと
+// 1〜2 サンプルのデジタル無音が残って段差になるためである
+test("schedule: 下限以下の隙間は前の音の終わりに揃える", () => {
   const scheduler = new AudioPlayoutScheduler({ stretchMinSeconds: 0 });
   const first = playFirst(scheduler);
+  const previousEnd = first.startAt + FRAME_SECONDS - first.compressSeconds;
   const second = playDecisionOf(
-    scheduler.schedule(
-      10,
-      FRAME_MICROSECONDS,
-      FRAME_SECONDS,
-      enforcedTarget(first.startAt + FRAME_SECONDS - first.compressSeconds + 0.004),
-    ),
+    scheduler.schedule(10, FRAME_MICROSECONDS, FRAME_SECONDS, enforcedTarget(previousEnd + 0.0004)),
   );
+  assert.equal(second.startAt, previousEnd, "前の音の終わりに揃えること");
   assert.equal(second.gapSeconds, 0);
   assert.equal(second.gapStartSeconds, 0);
+  assert.equal(second.totalGapSeconds, 0);
+  assert.equal(second.unrecoverableGapSeconds, 0);
   assert.equal(scheduler.concealments, 0);
+  // 揃えた分だけ目標より早く鳴るが、遅れの計器は負にしない
+  assert.equal(scheduler.lateness, 0, "遅れを負にしないこと");
 });
 
-// 隙間がちょうど下限 (5 ms) なら補間しない (境界)。前の音の終わりを 0 にするため
-// duration 0 の音を使い、計算誤差の無い引き算で下限ちょうどを作る
-test("schedule: 隙間がちょうど下限なら補間しない", () => {
+// 前のフレームの目標から 20 µs〜0.4 ms だけ後ろにずれた入力でも、出力にゼロサンプルを
+// 挟まず、段差の計器を増やさない
+test("schedule: 20 µs〜0.4 ms の前進を前の音の終わりに揃えて吸収する", () => {
+  for (const offsetSeconds of [0.00002, 0.0001, 0.0004]) {
+    const scheduler = new AudioPlayoutScheduler({ stretchMinSeconds: 0 });
+    const first = playFirst(scheduler);
+    const previousEnd = first.startAt + FRAME_SECONDS - first.compressSeconds;
+    const second = playDecisionOf(
+      scheduler.schedule(
+        10,
+        FRAME_MICROSECONDS,
+        FRAME_SECONDS,
+        enforcedTarget(previousEnd + offsetSeconds),
+      ),
+    );
+    assert.equal(second.startAt, previousEnd, "前の音の終わりに揃えること");
+    assert.equal(second.gapSeconds, 0);
+    assert.equal(second.totalGapSeconds, 0);
+    assert.equal(scheduler.lateness, 0);
+  }
+});
+
+// 隙間がちょうど下限 (0.5 ms) なら前の音の終わりに揃える (境界)。前の音の終わりを 0 に
+// するため duration 0 の音を使い、計算誤差の無い引き算で下限ちょうどを作る
+test("schedule: 隙間がちょうど下限なら前の音の終わりに揃える", () => {
   const scheduler = new AudioPlayoutScheduler({ minLeadSeconds: 0 });
   assert.equal(scheduler.schedule(0, 0, 0, enforcedTarget(0)).kind, "play");
   const second = playDecisionOf(
@@ -678,6 +703,7 @@ test("schedule: 隙間がちょうど下限なら補間しない", () => {
       enforcedTarget(AUDIO_PLAYOUT_MIN_CONCEAL_SECONDS),
     ),
   );
+  assert.equal(second.startAt, 0, "前の音の終わりに揃えること");
   assert.equal(second.gapSeconds, 0);
   assert.equal(second.gapStartSeconds, 0);
 });
@@ -694,8 +720,9 @@ test("schedule: 下限のすぐ上の隙間は補間する", () => {
   assert.closeTo(second.gapStartSeconds, previousEnd, EPSILON);
 });
 
-// 隙間の開始が今 + 余裕より前なら予約できないため補間しない
-test("schedule: 隙間の開始が今 + 余裕より前なら補間しない", () => {
+// 前の音の終わりが今 + 余裕より過去でも、今回の開始がその先なら、未来の分だけは補間する。
+// 過去の分は予約時点で既に埋められないため unrecoverableGapSeconds として返す
+test("schedule: 隙間の先頭が過去でも予約できる未来の分は補間する", () => {
   const scheduler = new AudioPlayoutScheduler({ stretchMinSeconds: 0 });
   const first = playFirst(scheduler);
   const previousEnd = first.startAt + FRAME_SECONDS - first.compressSeconds;
@@ -704,10 +731,16 @@ test("schedule: 隙間の開始が今 + 余裕より前なら補間しない", (
   const second = playDecisionOf(
     scheduler.schedule(nowSeconds, FRAME_MICROSECONDS, FRAME_SECONDS, enforcedTarget(10.06)),
   );
-  assert.equal(second.gapSeconds, 0);
-  assert.equal(second.gapStartSeconds, 0);
-  // 補間しない理由が「隙間の開始が今 + 余裕より前」であること (長さだけなら補間できる)
-  assert.isAbove(second.startAt - previousEnd, AUDIO_PLAYOUT_MIN_CONCEAL_SECONDS);
+  // 補間の開始は予約できる最も早い時刻 (今 + 余裕) になる
+  assert.closeTo(second.gapStartSeconds, nowSeconds + AUDIO_PLAYOUT_MIN_LEAD_SECONDS, EPSILON);
+  assert.closeTo(second.gapSeconds, 10.06 - (nowSeconds + AUDIO_PLAYOUT_MIN_LEAD_SECONDS), EPSILON);
+  // 過去の分 (前の音の終わりから今 + 余裕まで) は補間しない
+  assert.closeTo(
+    second.unrecoverableGapSeconds,
+    nowSeconds + AUDIO_PLAYOUT_MIN_LEAD_SECONDS - previousEnd,
+    EPSILON,
+  );
+  assert.closeTo(second.totalGapSeconds, second.startAt - previousEnd, EPSILON);
   assert.isAtLeast(second.startAt - nowSeconds, AUDIO_PLAYOUT_MIN_LEAD_SECONDS - EPSILON);
 });
 
@@ -947,6 +980,8 @@ test("schedule: 目標が 500 ms 先でも鳴らす", () => {
     compressSeconds: 0,
     gapStartSeconds: 0,
     gapSeconds: 0,
+    totalGapSeconds: 0,
+    unrecoverableGapSeconds: 0,
   });
   assert.equal(scheduler.drops, 0);
 });

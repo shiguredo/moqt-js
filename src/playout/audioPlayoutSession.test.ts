@@ -52,6 +52,7 @@ interface RecordedAudioData {
  * @param options.numberOfFrames - サンプル数。省略時は 20 ms 分
  * @param options.numberOfChannels - チャンネル数
  * @param options.sampleRate - サンプルレート (Hz)。省略時は 48 kHz
+ * @param options.samples - チャンネルごとの実サンプル。省略時は無音 (0)
  */
 function makeAudioData(
   options: {
@@ -59,6 +60,7 @@ function makeAudioData(
     numberOfFrames?: number;
     numberOfChannels?: number;
     sampleRate?: number;
+    samples?: readonly Float32Array[];
   } = {},
 ): RecordedAudioData {
   const numberOfFrames = options.numberOfFrames ?? FRAMES_PER_SOUND;
@@ -69,12 +71,34 @@ function makeAudioData(
     numberOfChannels,
     numberOfFrames,
     sampleRate: options.sampleRate ?? SAMPLE_RATE,
-    copyTo: (_destination: Float32Array, init: { planeIndex: number; format: string }) => {
+    copyTo: (destination: Float32Array, init: { planeIndex: number; format: string }) => {
       copiedPlanes.push(init.planeIndex);
+      // 本番の AudioData.copyTo と同じく、チャンネルごとのサンプルを書き込む
+      const samples = options.samples?.[init.planeIndex];
+      if (samples !== undefined) {
+        destination.set(samples.subarray(0, Math.min(destination.length, samples.length)));
+      }
     },
     close: () => {},
   } as unknown as AudioData;
   return { data, copiedPlanes };
+}
+
+/** 一定振幅のサンプル列を作る (境界の段差を測るため、末尾と先頭が 0 でない値になる) */
+function constantSamples(amplitude: number, frames = FRAMES_PER_SOUND): Float32Array {
+  const samples = new Float32Array(frames);
+  samples.fill(amplitude);
+  return samples;
+}
+
+/** 連続した 440 Hz の正弦のサンプル列 (frameIndex 番目の 20 ms) を作る */
+function toneSamples(frameIndex: number, amplitude = 0.2): Float32Array {
+  const samples = new Float32Array(FRAMES_PER_SOUND);
+  for (let index = 0; index < FRAMES_PER_SOUND; index++) {
+    const position = frameIndex * FRAMES_PER_SOUND + index;
+    samples[index] = amplitude * Math.sin(2 * Math.PI * 440 * (position / SAMPLE_RATE));
+  }
+  return samples;
 }
 
 /** 音を鳴らす先の記録用オブジェクト */
@@ -90,6 +114,14 @@ interface RecordedOutput {
   readonly bufferChannels: number[];
   /** `getOutputTimestamp()` を読んだ時点の目標の表示時刻 (ミリ秒) */
   readonly presentationMs: number;
+  /** 予約したバッファの内容 (予約順)。補間の分も含む */
+  readonly recordedBuffers: {
+    whenSeconds: number;
+    sampleRate: number;
+    channels: Float32Array[];
+    /** `start()` を呼んだ時点の `currentTime` (秒) */
+    currentTimeAtStart: number;
+  }[];
 }
 
 /**
@@ -102,6 +134,13 @@ interface RecordedOutput {
  * @param options.advanceCurrentTime - `currentTime` を実時間と同じ速さで進めるか。実時間と
  *   同じ間隔で音を渡すテストで必要になる (固定のままだと、目標の時刻が実時間からずれていき、
  *   並べすぎとして捨てられる)
+ * @param options.createBufferWorkMs - `createBuffer` のたびに `currentTime` を進める長さ
+ *   (ミリ秒)。予約の判断から `start()` までのメインスレッドの停止を模す
+ * @param options.advanceOnTimestampMs - `getOutputTimestamp()` を読むたびに `currentTime` を
+ *   進める長さ (ミリ秒)。音の到着の間隔を実時間で待たずに作る
+ * @param options.mappingFromCurrentTime - `getOutputTimestamp()` に、その時点の
+ *   `currentTime` と同じ位置を返させるか。到着した音がまだ鳴っていない位置を
+ *   `currentTime` に一致させる (到着基準の並べ方を決定的にする)
  */
 function makeRecordingOutput(options: {
   timeline: PlayoutTimeline;
@@ -109,6 +148,9 @@ function makeRecordingOutput(options: {
   currentTimeSeconds: number;
   failCreateBuffer?: boolean;
   advanceCurrentTime?: boolean;
+  createBufferWorkMs?: number;
+  advanceOnTimestampMs?: number;
+  mappingFromCurrentTime?: boolean;
 }): RecordedOutput {
   const createdAtMs = performance.now();
   const effectiveMapping: AudioClockMapping = options.mapping ?? {
@@ -118,19 +160,32 @@ function makeRecordingOutput(options: {
   const startedAtSeconds: number[] = [];
   const bufferFrames: number[] = [];
   const bufferChannels: number[] = [];
+  const recordedBuffers: RecordedOutput["recordedBuffers"] = [];
   let presentationMs = 0;
   let timestampMicros = 0;
+  // createBuffer で進めた作業時間 (ミリ秒)。予約判断の後に currentTime が進む
+  let workMs = 0;
+  // getOutputTimestamp() を読むたびに進める時間 (ミリ秒)。到着の間隔を作る
+  let timestampAdvanceMs = 0;
   const output: AudioPlayoutOutput = {
     context: {
       get currentTime() {
         // 記録用の出力は既定では `currentTime` を固定する (1 音だけを確かめるテスト向け)
-        return options.advanceCurrentTime === true
-          ? options.currentTimeSeconds + (performance.now() - createdAtMs) / 1_000
-          : options.currentTimeSeconds;
+        const elapsedSeconds =
+          options.advanceCurrentTime === true ? (performance.now() - createdAtMs) / 1_000 : 0;
+        return options.currentTimeSeconds + elapsedSeconds + (workMs + timestampAdvanceMs) / 1_000;
       },
       getOutputTimestamp: () => {
         // 実装が目標の表示時刻を求めるのと同じ時点で測る (テスト側の値と実装の値がずれない)
         presentationMs = options.timeline.presentationPerformanceMs("audio", timestampMicros) ?? 0;
+        // 到着の間隔を作るため、対応を読むたびに時計を進める
+        timestampAdvanceMs += options.advanceOnTimestampMs ?? 0;
+        if (options.mappingFromCurrentTime === true) {
+          return {
+            contextTime: options.currentTimeSeconds + (workMs + timestampAdvanceMs) / 1_000,
+            performanceTime: performance.now(),
+          };
+        }
         return effectiveMapping;
       },
       createBuffer: (numberOfChannels: number, length: number) => {
@@ -139,16 +194,43 @@ function makeRecordingOutput(options: {
         }
         bufferChannels.push(numberOfChannels);
         bufferFrames.push(length);
-        return { copyToChannel: () => {} } as unknown as AudioBuffer;
+        // メインスレッドの停止を模して時計を進める
+        workMs += options.createBufferWorkMs ?? 0;
+        const channels: Float32Array[] = [];
+        for (let channel = 0; channel < numberOfChannels; channel++) {
+          channels.push(new Float32Array(length));
+        }
+        return {
+          copyToChannel: (samples: Float32Array, channel: number) => {
+            channels[channel]?.set(samples.subarray(0, length));
+          },
+          __channels: channels,
+          sampleRate: SAMPLE_RATE,
+        } as unknown as AudioBuffer;
       },
-      createBufferSource: () =>
-        ({
-          buffer: null,
+      createBufferSource: () => {
+        const source = {
+          buffer: null as AudioBuffer | null,
           connect: () => {},
           start: (when: number) => {
             startedAtSeconds.push(when);
+            const buffer = source.buffer as unknown as {
+              __channels: Float32Array[];
+              sampleRate: number;
+            } | null;
+            if (buffer !== null) {
+              recordedBuffers.push({
+                whenSeconds: when,
+                sampleRate: buffer.sampleRate,
+                channels: buffer.__channels,
+                currentTimeAtStart:
+                  options.currentTimeSeconds + (workMs + timestampAdvanceMs) / 1_000,
+              });
+            }
           },
-        }) as unknown as AudioBufferSourceNode,
+        };
+        return source as unknown as AudioBufferSourceNode;
+      },
     },
     destination: {} as AudioNode,
   };
@@ -160,6 +242,7 @@ function makeRecordingOutput(options: {
     startedAtSeconds,
     bufferFrames,
     bufferChannels,
+    recordedBuffers,
     get presentationMs() {
       return presentationMs;
     },
@@ -206,6 +289,7 @@ function handleSound(
     inputLagMs?: number | null;
     intentionalDelayMs?: number;
     sampleRate?: number;
+    samples?: readonly Float32Array[];
   } = {},
 ): ReturnType<AudioPlayoutSession["handleDecodedAudio"]> {
   const request: AudioPlayoutRequest = {
@@ -216,6 +300,7 @@ function handleSound(
         ? {}
         : { numberOfChannels: options.numberOfChannels }),
       ...(options.sampleRate === undefined ? {} : { sampleRate: options.sampleRate }),
+      ...(options.samples === undefined ? {} : { samples: options.samples }),
     }).data,
     timestampKind: options.timestampKind ?? "wallClock",
     ...(options.inputLagMs === undefined ? {} : { inputLagMs: options.inputLagMs }),
@@ -1060,4 +1145,259 @@ test("handleDecodedAudio: 意図した復号前の遅延では追いつきを始
     "意図した遅延を指定しなければ従来どおり作り直すこと",
   );
   assert.equal(legacy.session.catchUp.snapshot().catchUpStarts, 1);
+});
+
+/**
+ * 完了条件: 予約できる隙間は補間で埋め、補間の末尾と直後の音声の先頭を 2 ms フェードする。
+ * 穴が無い通常の境界にはフェードを入れない (20 ms 周期の振幅変調になるため)。
+ */
+test("handleDecodedAudio: 予約できる隙間を補間し、補間の末尾と次の先頭をフェードする", () => {
+  const fixture = makeSessionFixture();
+  const samples = [constantSamples(0.2)];
+  const output = makeRecordingOutput({
+    timeline: fixture.timeline,
+    mapping: null,
+    currentTimeSeconds: 10,
+    mappingFromCurrentTime: true,
+  });
+
+  // 到着基準で 1 つ目を鳴らす (今 + 再生の遅れ)
+  handleSound(fixture, output.output, {
+    timestamp: 0,
+    timestampKind: "none",
+    useTimeline: false,
+    enforceTarget: false,
+    samples,
+  });
+  // 80 ms 進んだ timestamp の音が届くと、前の音の終わりから 80 ms の隙間になる。
+  // 前の音の終わりはまだ未来であり、隙間は予約できる
+  handleSound(fixture, output.output, {
+    timestamp: 80_000,
+    timestampKind: "none",
+    useTimeline: false,
+    enforceTarget: false,
+    samples,
+  });
+
+  // 予約したのは 1 つ目の実音、2 つ目の補間、2 つ目の実音である
+  assert.equal(output.recordedBuffers.length, 3, "実音と補間を予約すること");
+  const conceal = output.recordedBuffers[1];
+  const real = output.recordedBuffers[2];
+  assert.isNotNull(conceal);
+  assert.isNotNull(real);
+  // 80 ms 進んだ timestamp のうち、音の長さ 20 ms を引いた 60 ms が隙間である
+  assert.isAbove((conceal?.channels[0]?.length ?? 0) / SAMPLE_RATE, 0.05, "隙間を補間すること");
+  // 補間の末尾は 2 ms フェードで 0 になる
+  assert.closeTo(
+    conceal?.channels[0]?.[(conceal?.channels[0]?.length ?? 1) - 1] ?? Number.NaN,
+    0,
+    1e-6,
+    "補間の末尾を 0 に落とすこと",
+  );
+  // 直後の実音の先頭もフェードインで 0 から始まる
+  assert.closeTo(
+    real?.channels[0]?.[0] ?? Number.NaN,
+    0,
+    1e-6,
+    "次の音の先頭をフェードインすること",
+  );
+  // 隙間は補間で埋まったため、無音の穴としては数えない
+  const snapshot = fixture.timing.snapshot(performance.now());
+  assert.equal(snapshot.gapCount, 0, "補間で埋めた隙間を無音として数えないこと");
+  assert.equal(snapshot.unrecoverableGapCount, 0);
+  assert.equal(snapshot.boundaryStepCount, 0, "補間の継ぎ目に大きな段差が無いこと");
+  assert.isAbove(fixture.session.concealedSeconds, 0.05, "補間した長さを記録すること");
+});
+
+/**
+ * 完了条件: 予約時点で既に過去の隙間 (アンダーラン) は補間できず、無音の穴として計器に出る。
+ * 補間できる未来の分だけを補間し、補間の先頭も無音から立ち上がるためフェードインする。
+ */
+test("handleDecodedAudio: 予約できない隙間を無音の穴として数える", () => {
+  const fixture = makeSessionFixture();
+  const samples = [constantSamples(0.2)];
+  const output = makeRecordingOutput({
+    timeline: fixture.timeline,
+    mapping: null,
+    currentTimeSeconds: 10,
+    mappingFromCurrentTime: true,
+    advanceOnTimestampMs: 200,
+  });
+
+  handleSound(fixture, output.output, {
+    timestamp: 0,
+    timestampKind: "none",
+    useTimeline: false,
+    enforceTarget: false,
+    samples,
+  });
+  // 40 ms 進んだ timestamp の音。到着も 200 ms 進むため、前の音の終わり (今 + 70 ms) は
+  // 既に過去になり、今回の目標も今 + 余裕より過去になる
+  handleSound(fixture, output.output, {
+    timestamp: 40_000,
+    timestampKind: "none",
+    useTimeline: false,
+    enforceTarget: false,
+    samples,
+  });
+
+  const snapshot = fixture.timing.snapshot(performance.now());
+  assert.equal(snapshot.gapCount, 1, "無音の穴を 1 つ数えること");
+  assert.isAbove(snapshot.gapMs, 100, "穴の長さ (100 ms 以上) を数えること");
+  assert.closeTo(snapshot.gapMs, snapshot.gapMaxMs, 1e-6, "1 回の穴なので合計と最大が一致すること");
+  assert.equal(snapshot.unrecoverableGapCount, 1, "予約できない穴として数えること");
+  assert.isAbove(snapshot.unrecoverableGapMs, 100, "予約できない長さを数えること");
+  // 無音へ落ちる直前の音の末尾が段差として残る (片側だけはフェードできない)
+  assert.isAtLeast(snapshot.boundaryStepCount, 1, "無音の手前の段差を数えること");
+  assert.closeTo(snapshot.boundaryStepMax, 0.2, 1e-6, "段差の振幅は前の音の末尾であること");
+  // 直後の実音の先頭はフェードインで 0 から始まる
+  const real = output.recordedBuffers[output.recordedBuffers.length - 1];
+  assert.closeTo(
+    real?.channels[0]?.[0] ?? Number.NaN,
+    0,
+    1e-6,
+    "次の音の先頭をフェードインすること",
+  );
+});
+
+/**
+ * 完了条件: 穴が無い通常の境界にはフェードを入れない。全バッファ境界に一律のフェードを
+ * 入れると 20 ms 周期の振幅変調になるためである。
+ */
+test("handleDecodedAudio: 穴が無い境界にはフェードを入れない", () => {
+  const fixture = makeSessionFixture();
+  const samples = [constantSamples(0.2)];
+  const output = makeRecordingOutput({
+    timeline: fixture.timeline,
+    mapping: null,
+    currentTimeSeconds: 10,
+    mappingFromCurrentTime: true,
+  });
+
+  for (let index = 0; index < 2; index++) {
+    handleSound(fixture, output.output, {
+      timestamp: index * 20_000,
+      timestampKind: "none",
+      useTimeline: false,
+      enforceTarget: false,
+      samples,
+    });
+  }
+
+  assert.equal(output.recordedBuffers.length, 2);
+  // 2 つ目の先頭はフェードされておらず、元の振幅のままである
+  assert.closeTo(
+    output.recordedBuffers[1]?.channels[0]?.[0] ?? Number.NaN,
+    0.2,
+    1e-6,
+    "穴が無い境界の先頭はフェードしないこと",
+  );
+  const snapshot = fixture.timing.snapshot(performance.now());
+  assert.equal(snapshot.gapCount, 0);
+  assert.equal(snapshot.boundaryStepCount, 0, "連続した音の境界を段差として数えないこと");
+});
+
+/**
+ * 完了条件: 予約した時刻を currentTime が追い越したら、計器に回数と最大を残す。
+ * 追い越しは直前の音との重なりになり得るため、値が 1 でも出たら重なりの可能性がある。
+ */
+test("handleDecodedAudio: 予約した時刻を currentTime が追い越したら計器に残す", () => {
+  const fixture = makeSessionFixture();
+  const samples = [constantSamples(0.2)];
+  const output = makeRecordingOutput({
+    timeline: fixture.timeline,
+    mapping: null,
+    currentTimeSeconds: 10,
+    mappingFromCurrentTime: true,
+    advanceOnTimestampMs: 120,
+    createBufferWorkMs: 60,
+  });
+
+  handleSound(fixture, output.output, {
+    timestamp: 0,
+    timestampKind: "none",
+    useTimeline: false,
+    enforceTarget: false,
+    samples,
+  });
+  // 前の音は既に鳴り終わっており、今回は到着 + 再生の遅れ (50 ms) で鳴らす。createBuffer で
+  // 60 ms 進むため、start() の時点で予約時刻を追い越す
+  handleSound(fixture, output.output, {
+    timestamp: 200_000,
+    timestampKind: "none",
+    useTimeline: false,
+    enforceTarget: false,
+    samples,
+  });
+
+  const snapshot = fixture.timing.snapshot(performance.now());
+  assert.isAtLeast(snapshot.lateStartCount, 1, "追い越しを数えること");
+  assert.isAbove(snapshot.lateStartMaxMs, 0, "追い越した長さを残すこと");
+  // 予約は今 + 余裕で決まり、createBuffer の 12 ms が余裕の 10 ms を超えるため追い越す
+  assert.isAbove(snapshot.lateStartMaxMs, 0);
+  const lastBuffer = output.recordedBuffers[output.recordedBuffers.length - 1];
+  assert.isAbove(
+    lastBuffer?.currentTimeAtStart ?? Number.NEGATIVE_INFINITY,
+    lastBuffer?.whenSeconds ?? Number.POSITIVE_INFINITY,
+    "start() の時点で予約時刻が過去になっていること",
+  );
+});
+
+/**
+ * 完了条件: 目標の表示時刻が前のフレームから 20 µs〜0.4 ms だけ後ろにずれても、出力に
+ * ゼロサンプルを挟まず、境界の段差を計器に数えない。目標の更新と浮動小数点の丸めで
+ * 生じる微小な前進は、前の音の終わりに揃えて連続再生で吸収する。
+ */
+test("handleDecodedAudio: 目標の 20 µs〜0.4 ms の前進を前の音の終わりに揃える", () => {
+  for (const offsetMs of [0.02, 0.1, 0.4]) {
+    const fixture = makeSessionFixture();
+    const output = makeRecordingOutput({
+      timeline: fixture.timeline,
+      mapping: null,
+      currentTimeSeconds: 10,
+      mappingFromCurrentTime: true,
+      advanceOnTimestampMs: offsetMs,
+    });
+
+    // 到着基準で 1 つ目を鳴らす
+    handleSound(fixture, output.output, {
+      timestamp: 0,
+      timestampKind: "none",
+      useTimeline: false,
+      enforceTarget: false,
+      samples: [toneSamples(0)],
+    });
+    // 2 つ目は到着が offsetMs 進み、timestamp が 20 ms + offsetMs 進む。前の音の終わりから
+    // offsetMs の隙間ができるが、下限 (0.5 ms) 以下なので前の音の終わりに揃える
+    handleSound(fixture, output.output, {
+      timestamp: 20_000 + Math.round(offsetMs * 1_000),
+      timestampKind: "none",
+      useTimeline: false,
+      enforceTarget: false,
+      samples: [toneSamples(1)],
+    });
+
+    assert.equal(output.recordedBuffers.length, 2);
+    const first = output.recordedBuffers[0];
+    const second = output.recordedBuffers[1];
+    assert.isNotNull(first);
+    assert.isNotNull(second);
+    // 2 つのバッファはサンプル単位で連続している (間に 1 サンプルのゼロも無い)
+    assert.closeTo(
+      second?.whenSeconds ?? Number.NaN,
+      (first?.whenSeconds ?? Number.NaN) +
+        (first?.channels[0]?.length ?? 0) / (first?.sampleRate ?? SAMPLE_RATE),
+      1e-9,
+      "前の音の終わりに揃えて連続すること",
+    );
+    const tail = first?.channels[0]?.[(first?.channels[0]?.length ?? 1) - 1] ?? 0;
+    const head = second?.channels[0]?.[0] ?? 0;
+    assert.isAbove(Math.abs(tail), 0.001, "末尾が 0 でないこと");
+    assert.isAbove(Math.abs(head), 0.001, "先頭が 0 でないこと");
+    assert.isBelow(Math.abs(head - tail), 0.05, "境界の段差が自然な差分以下であること");
+    const snapshot = fixture.timing.snapshot(performance.now());
+    assert.equal(snapshot.gapCount, 0, "穴として数えないこと");
+    assert.equal(snapshot.boundaryStepCount, 0, "段差として数えないこと");
+    assert.equal(fixture.session.playout.lateness, 0, "遅れを負にしないこと");
+  }
 });

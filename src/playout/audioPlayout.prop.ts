@@ -20,8 +20,9 @@
  * - 目標を守るときに鳴らす音は、今 + 余裕以降で、目標より前ではなく、前の音と重ならない。
  *   詰める量は「遅れ」「音の長さの半分」「キューの余裕」の最小値であり、余裕が 0 以下の
  *   ときは 0 である (削った分が無音の穴にならない)
- * - 補間の隙間の情報は、下限 (5 ms) を超え上限 (100 ms) 以下で、前の音の終わりに一致し、
- *   今 + 余裕以降から次の音の開始までに収まる
+ * - 補間の隙間の情報は、下限 (0.5 ms) を超え上限 (100 ms) 以下で、予約できる最も早い
+ *   時刻 (前の音の終わりか今 + 余裕の遅い方) から次の音の開始までに収まる。前の音の
+ *   終わりが過去の分は `unrecoverableGapSeconds` として別に返す
  * - 時計の対応付けは、不感帯 (30 ms) 未満の差では動かず、1 回の変更は上限 (80 ms) まで。
  *   対応からの換算は往復し、reset の直後の update は前の対応に依存せず観測値そのものを採る
  *
@@ -64,24 +65,73 @@ function valueOf(value: number | null): number {
   return value;
 }
 
-/** 補間の隙間が下限と上限に収まり、前の音の終わりに一致し、今 + 余裕以降から次の音の開始までに収まることを確かめる */
+/**
+ * 隙間の情報が、次の 3 つの区分と一致することを確かめる
+ *
+ * - 予約時点で既に過去 (`unrecoverableGapSeconds`): 前の音の終わりから予約できる先頭まで
+ * - 予約できる先頭から今回の開始まで (`gapStartSeconds` / `gapSeconds`): 上限で切る
+ * - 上限を超えて無音で残る分
+ *
+ * 前の音の終わりが未来なら補間は前の音の終わりから始まり (`unrecoverableGapSeconds` は 0)、
+ * 過去なら予約できる最も早い時刻 (今 + 余裕) から始まる。
+ *
+ * 前の音の終わりとの差が下限 (0.5 ms) 以下なら、schedule が開始時刻を前の音の終わりへ
+ * 揃えて穴を作らない (目標の表示時刻の更新や浮動小数点の丸めで生じる 20 µs〜0.5 ms の
+ * 前進を連続再生で吸収する)。そのため `startAt < previousEnd` にならず、0 より大きく
+ * 下限以下の隙間も残らない
+ */
 function assertConcealmentWithinBounds(
   decision: Extract<AudioPlayoutDecision, { kind: "play" }>,
   now: number,
   previousEnd: number | null,
 ): void {
-  if (decision.gapSeconds === 0) {
+  if (previousEnd === null) {
+    assert.equal(decision.totalGapSeconds, 0);
+    assert.equal(decision.gapSeconds, 0);
     assert.equal(decision.gapStartSeconds, 0);
+    assert.equal(decision.unrecoverableGapSeconds, 0);
+    return;
+  }
+  // 重ならず、下限以下の穴も残さない (前の音の終わりに揃える)
+  assert.isAtLeast(decision.startAt, previousEnd - EPSILON);
+  const boundaryGapSeconds = decision.startAt - previousEnd;
+  assert.isTrue(
+    boundaryGapSeconds <= EPSILON ||
+      boundaryGapSeconds > AUDIO_PLAYOUT_MIN_CONCEAL_SECONDS - EPSILON,
+    "下限以下の隙間を残さないこと",
+  );
+  const totalGapSeconds = decision.startAt - previousEnd;
+  if (totalGapSeconds <= AUDIO_PLAYOUT_MIN_CONCEAL_SECONDS) {
+    // 下限以下の隙間は前の音の終わりに揃える (記録もしない)
+    assert.equal(decision.totalGapSeconds, 0);
+    assert.equal(decision.gapSeconds, 0);
+    assert.equal(decision.gapStartSeconds, 0);
+    assert.equal(decision.unrecoverableGapSeconds, 0);
+    return;
+  }
+  assert.closeTo(decision.totalGapSeconds, totalGapSeconds, EPSILON);
+  const reservableStartSeconds = Math.max(previousEnd, now + AUDIO_PLAYOUT_MIN_LEAD_SECONDS);
+  const unrecoverableSeconds = Math.max(
+    0,
+    Math.min(totalGapSeconds, reservableStartSeconds - previousEnd),
+  );
+  assert.closeTo(decision.unrecoverableGapSeconds, unrecoverableSeconds, EPSILON);
+  if (decision.gapSeconds === 0) {
+    // 予約できる区間が下限以下。隙間の先頭は補間しないため 0
+    assert.equal(decision.gapStartSeconds, 0);
+    assert.isAtMost(
+      decision.startAt - reservableStartSeconds,
+      AUDIO_PLAYOUT_MIN_CONCEAL_SECONDS + EPSILON,
+    );
     return;
   }
   assert.isAbove(decision.gapSeconds, AUDIO_PLAYOUT_MIN_CONCEAL_SECONDS - EPSILON);
+  assert.closeTo(decision.gapStartSeconds, reservableStartSeconds, EPSILON);
   assert.closeTo(
     decision.gapSeconds,
     Math.min(decision.startAt - decision.gapStartSeconds, AUDIO_PLAYOUT_MAX_CONCEAL_SECONDS),
     EPSILON,
   );
-  assert.isNotNull(previousEnd);
-  assert.closeTo(decision.gapStartSeconds, previousEnd ?? 0, EPSILON);
   assert.isAtLeast(decision.gapStartSeconds, now + AUDIO_PLAYOUT_MIN_LEAD_SECONDS - EPSILON);
   assert.isAtMost(decision.gapStartSeconds + decision.gapSeconds, decision.startAt + EPSILON);
 }
@@ -201,8 +251,12 @@ test("目標を使わないとき: 鳴らす音は重ならず、今 + 余裕以
           const { startAt } = decision;
           // 到着基準の並べ方である
           assert.equal(decision.basis, "arrival");
-          // 過ぎた時刻や、描画に間に合わない時刻を指定しない
-          assert.isAtLeast(startAt, now + AUDIO_PLAYOUT_MIN_LEAD_SECONDS - EPSILON);
+          // 過ぎた時刻や、描画に間に合わない時刻を指定しない。前の音の終わりとの差が
+          // 下限以下のときはスナップで最大 0.5 ms 前へ揃うことがある
+          assert.isAtLeast(
+            startAt,
+            now + AUDIO_PLAYOUT_MIN_LEAD_SECONDS - AUDIO_PLAYOUT_MIN_CONCEAL_SECONDS - EPSILON,
+          );
           // 補間の隙間は上限に収まり、前の音の終わりに一致し、次の音の開始までに収まる
           assertConcealmentWithinBounds(decision, now, previousEnd);
           // 並べすぎの上限は「到着基準の再生の遅れ + 余裕」である。共有の時間軸が学習した
@@ -311,7 +365,11 @@ test("目標を守るとき: 鳴らす音は目標どおりで重ならず、窓
         if (decision.kind === "play") {
           // 鳴らすと決めた音は、今 + 余裕以降で、前の音と重ならない
           assert.isFalse(tooFar);
-          assert.isAtLeast(decision.startAt, now + AUDIO_PLAYOUT_MIN_LEAD_SECONDS - EPSILON);
+          // 前の音の終わりとの差が下限以下のときはスナップで最大 0.5 ms 前へ揃う
+          assert.isAtLeast(
+            decision.startAt,
+            now + AUDIO_PLAYOUT_MIN_LEAD_SECONDS - AUDIO_PLAYOUT_MIN_CONCEAL_SECONDS - EPSILON,
+          );
           if (previousEnd !== null) {
             assert.isAtLeast(decision.startAt, previousEnd - EPSILON, "重ならないこと");
           }
@@ -328,17 +386,22 @@ test("目標を守るとき: 鳴らす音は目標どおりで重ならず、窓
             );
             assert.equal(decision.compressSeconds, 0);
           } else {
+            // スナップで目標より最大 0.5 ms 前へ揃うことがある。遅れは負にしない
+            const latenessSeconds = Math.max(0, decision.startAt - targetStartSeconds);
             // 時間軸の目標に従う音は、目標より前に鳴らず、ずらした分だけ詰める
-            assert.isAtLeast(decision.startAt, targetStartSeconds - EPSILON);
+            assert.isAtLeast(
+              decision.startAt,
+              targetStartSeconds - AUDIO_PLAYOUT_MIN_CONCEAL_SECONDS - EPSILON,
+            );
             // 詰める量は遅れの分までである
             assert.isAtLeast(decision.compressSeconds, 0);
             assert.isAtMost(
               decision.compressSeconds,
-              Math.min(decision.startAt - targetStartSeconds, frame.durationSeconds / 2) + EPSILON,
+              Math.min(latenessSeconds, frame.durationSeconds / 2) + EPSILON,
             );
             // キューの余裕 = 直前の音の終わり − (今 + 余裕)。詰めると次に並べる音の下限が
             // その分だけ前へ動くため、詰める量は余裕までに切る。超えて詰めると、削った分が
-            // 次の音の開始との間の無音の穴になる (5 ms 以下の穴は補間されない)
+            // 次の音の開始との間の無音の穴になる (0.5 ms 以下の穴は補間されない)
             const queueSlackSeconds =
               (previousEnd ?? -Infinity) - (now + AUDIO_PLAYOUT_MIN_LEAD_SECONDS);
             assert.isAtMost(
@@ -355,15 +418,15 @@ test("目標を守るとき: 鳴らす音は目標どおりで重ならず、窓
               // なら詰める (減らせる遅れをそのままにしない)
               assert.equal(
                 decision.compressSeconds > 0,
-                decision.startAt - targetStartSeconds >=
-                  AUDIO_PLAYOUT_STRETCH_MIN_SECONDS - EPSILON,
+                latenessSeconds >= AUDIO_PLAYOUT_STRETCH_MIN_SECONDS - EPSILON,
                 "不感帯以上の遅れで詰めること",
               );
             }
-            // 詰めても、この音の終わりは今 + 余裕より前へ出ない (予約できる範囲を削らない)
+            // 詰めても、この音の終わりは今 + 余裕より前へ出ない (予約できる範囲を削らない)。
+            // スナップで開始が最大 0.5 ms 前へ揃う分だけ許容する
             assert.isAtLeast(
               decision.startAt + frame.durationSeconds - decision.compressSeconds,
-              now + AUDIO_PLAYOUT_MIN_LEAD_SECONDS - EPSILON,
+              now + AUDIO_PLAYOUT_MIN_LEAD_SECONDS - AUDIO_PLAYOUT_MIN_CONCEAL_SECONDS - EPSILON,
               "削った分が予約できる範囲に出ないこと",
             );
           }

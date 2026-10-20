@@ -579,3 +579,51 @@ test("目標は、到着から鳴れる最も早い時刻の近くへ収束す�
   );
   assert.isAtMost(result.slackP50, 200, "余裕を増やしすぎないこと");
 });
+
+// 完了条件: 穴が空いた後は、閉ループの目標が最後の穴から 5 秒間下がらない。
+// 目標を上げてもすぐ下げると、負荷時に穴が周期的に再発するためである
+test("穴の後は閉ループの目標を 5 秒間下げない", () => {
+  const timeline = new PlayoutTimeline({ timeOriginMs: 0, maxQueuedFrames: MAX_QUEUED_FRAMES });
+  timeline.setTargetLatencyMs(null);
+  // 音声の基準と揺らぎの学習を作る (揺らぎ 0)
+  for (let index = 0; index < 10; index++) {
+    const wallMs = 1_000 + index * AUDIO_FRAME_MS;
+    timeline.observe("audio", wallMs, (wallMs - AUDIO_BASE_MS) * 1_000);
+  }
+
+  /** 観測を 1 つ渡し、その直後の閉ループの目標 (ミリ秒) を記録する */
+  const observe = (atMs: number, gapCount = 0, gapMs = 0): void => {
+    timeline.observeAudioPlayout({
+      atMs,
+      latenessMs: summarizeTimings([0]),
+      startDelayMs: summarizeTimings([120]),
+      slackMs: summarizeTimings([20]),
+      backlogMisses: 0,
+      backlogMs: 0,
+      compressionMs: 0,
+      gapCount,
+      gapMs,
+    });
+  };
+  observe(1_000); // 最初の観測 (間隔が無いため動かさない)
+  observe(2_000); // 下がる
+  observe(3_000); // 下がる
+  observe(4_000, 1, 20); // 穴。上げる
+  const afterGapMs = timeline.delayBreakdown.audioDelayFeedback.targetMs;
+  // 穴の後 1〜4 秒は下げない
+  for (const atMs of [5_000, 6_000, 7_000, 8_000]) {
+    observe(atMs);
+    assert.equal(
+      timeline.delayBreakdown.audioDelayFeedback.targetMs,
+      afterGapMs,
+      "穴の後は目標を下げないこと",
+    );
+  }
+  // 最後の穴 (4,000 ms) から 5,000 ms 経つと下げる
+  observe(9_000);
+  assert.isBelow(
+    timeline.delayBreakdown.audioDelayFeedback.targetMs,
+    afterGapMs,
+    "5 秒経過後に下げること",
+  );
+});
