@@ -394,7 +394,7 @@ export const AUDIO_PLAYOUT_TIMING_HELP: SectionHelp = {
     {
       term: "lateStartCount / lateStartMaxMs",
       description:
-        "Times the reserved start time was already in the past when source.start() was called, and the longest lateness (cumulative, ms). Web Audio starts a past time immediately, so a value above 0 means the previous sound may be overlapping; the overlap itself is not measured here. 0 is expected.",
+        "Times the reserved start time was already in the past when source.start() was called, and the longest lateness (cumulative, ms). When the start time is that close, it is pushed to currentTime + 3 ms and the first 2 ms are faded in, so an overlap does not happen; a value above 0 is the evidence that the main thread was late while reserving. 0 is expected.",
     },
     {
       term: "boundaryStepCount / boundaryStepMax",

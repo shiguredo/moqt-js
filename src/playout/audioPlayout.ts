@@ -121,6 +121,17 @@ export const AUDIO_PLAYOUT_BACKLOG_SECONDS =
 export const AUDIO_PLAYOUT_MIN_LEAD_SECONDS = 0.01;
 
 /**
+ * 予約した開始時刻を押し直すときに確保する余裕 (秒)
+ *
+ * `AudioBufferSourceNode.start(when)` の直前に取り直した `AudioContext.currentTime` に対して
+ * `when` がこの余裕より近いと、レンダリング量子 (128 フレーム = 48 kHz で約 2.7 ms) の
+ * 境界をまたいで即時開始になり、直前の音と重なり得る。量子 1 つ分より少し大きい 3 ms を
+ * 確保する。予約の判断に使う `AUDIO_PLAYOUT_MIN_LEAD_SECONDS` (10 ms) を押し直しにも使うと、
+ * 余裕の分だけ遅れが増えるため別の値にする
+ */
+export const AUDIO_PLAYOUT_PUSH_START_LEAD_SECONDS = 0.003;
+
+/**
  * 目標から離れすぎた音を、到着基準へ並べ直す境目 (秒)
  *
  * 経路の停止などで目標から大きく離れた音を鳴らすと、その分だけ音が遅れたままになる。
@@ -585,6 +596,23 @@ export class AudioPlayoutScheduler {
     }
     this.concealCount += 1;
     this.concealedSeconds += applied;
+  }
+
+  /**
+   * 直前の音の終わりを、開始を押し直した分だけ遅らせる
+   *
+   * 予約した開始時刻を `AudioContext.currentTime` + 余裕へ押し直すと、その音は押し直した
+   * 分だけ後ろで鳴り終わる。次の音は「前の音の終わり」より前には置かないため、ここを
+   * 同じ分だけ遅らせないと、次に予約する音が押し直した音と重なって足し合わされる。
+   * 押し直した分は開始が遅れるだけで、音の長さは変わらない。
+   *
+   * @param delaySeconds - 押し直した長さ (秒)。0 以下なら何もしない
+   */
+  shiftPlayoutEnd(delaySeconds: number): void {
+    if (!(delaySeconds > 0) || this.lastEnd === null) {
+      return;
+    }
+    this.lastEnd += delaySeconds;
   }
 
   /**
