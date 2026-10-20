@@ -394,7 +394,12 @@ export const AUDIO_PLAYOUT_TIMING_HELP: SectionHelp = {
     {
       term: "lateStartCount / lateStartMaxMs",
       description:
-        "Times the reserved start time was already in the past when source.start() was called, and the longest lateness (cumulative, ms). When the start time is that close, it is pushed to currentTime + 3 ms and the first 2 ms are faded in, so an overlap does not happen; a value above 0 is the evidence that the main thread was late while reserving. 0 is expected.",
+        "Times the reserved start time was already in the past when source.start() was called, and the longest lateness ever seen (ms). When the start time is that close, it is pushed to currentTime + 3 ms and the first 2 ms are faded in, so an overlap does not happen; a value above 0 is the evidence that the main thread was late while reserving. Only overtakes are counted, so a push caused just by the 3 ms lead is not included; read pushStartCount / pushStartMaxMs for every push. 0 is expected.",
+    },
+    {
+      term: "pushStartCount / pushStartMaxMs",
+      description:
+        "Times the reserved start time was pushed to currentTime + 3 ms, and the longest push (ms). Includes pushes caused only by the 3 ms lead, which lateStartCount does not count. The first 2 ms are faded in, but the previous sound's tail is not, so a boundary created by the push can still appear in boundaryStepCount.",
     },
     {
       term: "boundaryStepCount / boundaryStepMax",
