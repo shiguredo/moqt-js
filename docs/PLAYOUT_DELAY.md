@@ -91,11 +91,13 @@ import { MAX_PRE_DECODE_DELAY_MS } from "moqt-js";
 `MediaSubscriber.stop` は `PreDecodeDelayStage.flush` を呼んでから段を止め、flush した
 Object の復号出力が予約されるまで待つ。そのうえで、予約済みの音が鳴り終わるまで待ってから
 `AudioContext` を閉じる (drain)。待ち時間は「最後に鳴り終わる予約 - 現在 + 余裕 100 ms」を
-0〜300 ms にクランプした値である。moqt-devtools も同じで、停止は drain の完了を待つ非同期
+0〜300 ms にクランプした値である。flush した音があるときは、予約が無くてもこの上限まで
+待つ (復号が終われば早く終わる)。moqt-devtools も同じで、停止は drain の完了を待つ非同期
 の処理になる。
 
 停止時の切断量は計器で読む。切った量は `missedByReason.stopped`、drain で鳴らせた量・
-切った量・待ち時間・flush した件数は `lastDrain` に残る。`close()` とピア起点の close も
+切った量・待ち時間・flush した件数・復号されなかった件数 (`undecodedFlushedObjects`) は
+`lastDrain` に残る。`close()` とピア起点の close も
 drain するが、上限は 150 ms である。映像は drain の対象外であり、停止時に破棄する
 (詳細は `docs/AUDIO_PLAYOUT_GAPS_AND_TAIL.md` にある)。
 
