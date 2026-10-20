@@ -9505,7 +9505,8 @@ interface SubscriberDrainControl extends SubscriberFrameControl {
   readonly audioPlayoutSession: AudioPlayoutSession;
   // 停止の drain の状態 (復号の停止と flush の復号待ちの残り)
   audioDecodeStopped: boolean;
-  audioDrainFlushedTimestamps: Set<number>;
+  audioDecodeSubmitSequences: number[];
+  audioDrainFlushedSequences: Set<number>;
 }
 
 /**
@@ -9623,12 +9624,13 @@ test("handleAudioDecodedData: drain 終了後に届いた復号出力は予約�
 
   // drain 終了相当の状態にする。復号の待ちは 1 件残っている
   control.audioDecodeStopped = true;
-  control.audioDrainFlushedTimestamps.add(1_000);
+  control.audioDecodeSubmitSequences.push(0);
+  control.audioDrainFlushedSequences.add(0);
   control.handleAudioDecodedData({ data: audioData });
 
   assert.equal(starts, 0, "予約しないこと");
   assert.equal(closeCount, 1, "AudioData を閉じること");
-  assert.equal(control.audioDrainFlushedTimestamps.size, 0, "drain の完了判定用の減算は行うこと");
+  assert.equal(control.audioDrainFlushedSequences.size, 0, "drain の完了判定用の減算は行うこと");
 
   // 対照: 停止していなければ予約する
   control.audioDecodeStopped = false;
@@ -9664,15 +9666,17 @@ test("handleAudioDecodedData: flush 由来の復号出力だけを drain の待�
     }) as unknown as AudioData;
 
   control.audioDecodeStopped = true;
-  control.audioDrainFlushedTimestamps.add(200_000);
+  // 停止の前に復号へ渡した音 (通し番号 0) と、flush で復号へ渡した音 (通し番号 1)
+  control.audioDecodeSubmitSequences.push(0, 1);
+  control.audioDrainFlushedSequences.add(1);
 
-  // 停止の前に投入していた Object の出力 (timestamp が違う) では減らない
+  // 停止の前に投入していた Object の出力 (通し番号 0) では減らない
   control.handleAudioDecodedData({ data: makeAudioData(100_000) });
-  assert.equal(control.audioDrainFlushedTimestamps.size, 1, "flush 分以外では減らさないこと");
+  assert.equal(control.audioDrainFlushedSequences.size, 1, "flush 分以外では減らさないこと");
 
-  // flush した Object の出力では減る
+  // flush した Object の出力 (通し番号 1) では減る
   control.handleAudioDecodedData({ data: makeAudioData(200_000) });
-  assert.equal(control.audioDrainFlushedTimestamps.size, 0, "flush 分の出力で減ること");
+  assert.equal(control.audioDrainFlushedSequences.size, 0, "flush 分の出力で減ること");
 });
 
 /**
