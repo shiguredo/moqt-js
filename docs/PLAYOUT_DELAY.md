@@ -85,6 +85,18 @@ import { MAX_PRE_DECODE_DELAY_MS } from "moqt-js";
 映像の Group の切り替え (`GroupSwitchGate`) は受信時に今までどおり処理し、復号だけを遅らせる。
 `subgroupEnd` も受信時に処理する。相対的な順序を変えないためである。
 
+## 停止時の扱い
+
+購読の停止時は、遅延の段に保持している Object を復号へ流さずに破棄する。ライブラリの
+`MediaSubscriber.stop` は `PreDecodeDelayStage.stop` を呼び、段はタイマーとキューを捨てる。
+moqt-devtools も停止時に同じである。そのため、停止の時点で保持していた Object の分
+(最大で `preDecodeDelayMs`) は復号も再生もされない。遅延を 0 に動的に変えたときだけは、
+保持している Object を復号へ流してからキューをやめる。
+
+停止時に保持分まで聞きたい場合は、停止の前に `preDecodeDelayMs` だけ待つか、遅延を 0 に
+して保持分を復号へ流してから停止する。受信済みの音声を鳴らし切る処理は今後の課題であり、
+詳細は `docs/AUDIO_PLAYOUT_GAPS_AND_TAIL.md` にある。
+
 ## A/V 同期と受信側の追いつき
 
 音声と映像の両方に同じ `preDecodeDelayMs` を適用する。2 つの復号の出力は同じだけ後ろへ
