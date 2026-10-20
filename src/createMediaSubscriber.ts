@@ -561,6 +561,10 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   private readonly audioDrainFlushedSequences = new Set<number>();
   /** drain の flush で復号へ渡した件数 (復号器へ渡らなかった分は flushedObjects との差) */
   private audioDrainFlushedSubmitted = 0;
+  /** 復号器の作り直しで捨てた flush 分の件数 (undecodedFlushedObjects に含める) */
+  private audioDrainFlushedDiscarded = 0;
+  /** 進行中の解放の数 (最後に終わった解放だけが停止のフラグを戻す) */
+  private activeDisposals = 0;
   /** flush の間に復号へ渡した音の通し番号を記録しているか */
   private capturingAudioDrainFlush = false;
   /**
@@ -1036,6 +1040,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     this.audioDecodeSubmitSequences.length = 0;
     this.audioDrainFlushedSequences.clear();
     this.audioDrainFlushedSubmitted = 0;
+    this.audioDrainFlushedDiscarded = 0;
     this.pendingDrainMaxMs = null;
 
     // 失敗時に戻す遷移前の state
@@ -1394,8 +1399,8 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     // 世代番号を進める。これ以降に届く旧 session の close 通知は
     // handleSessionClose が世代不一致で捨てる (stop / close / start 失敗の全経路)
     this.sessionGeneration++;
-    // この解放が最後の解放かを判定するために、進めた後の世代を覚えておく
-    const disposalGeneration = this.sessionGeneration;
+    // 最後に終わった解放だけが停止のフラグを戻せるように、進行中の解放を数える
+    this.activeDisposals += 1;
     // 停止の要求として、新しい音声 Object の受付をここで止める。以降に届く Object は
     // 復号前の段にも復号にも渡さない (flush した Object だけは drain の間に復号する)
     this.audioReceiveStopped = true;
@@ -1481,7 +1486,9 @@ export class MediaSubscriberImpl implements MediaSubscriber {
           isFlushSettled: () => this.audioDrainFlushedSequences.size === 0,
           flushedObjects,
           remainingFlushedObjects: () =>
-            Math.max(0, flushedObjects - flushedSubmitted) + this.audioDrainFlushedSequences.size,
+            Math.max(0, flushedObjects - flushedSubmitted) +
+            this.audioDrainFlushedSequences.size +
+            this.audioDrainFlushedDiscarded,
         });
       });
       this.audioDrainFlushedSequences.clear();
@@ -1588,15 +1595,18 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     this.lastAppliedAudioConfig = null;
     // 出力の参照を切り離す (次の start で新しい MediaStream を作る)
     this.outputStream = null;
-    // 停止の要求で立てたフラグは、最後の解放だけが戻す。start 失敗の巻き戻しとピア起点の
-    // close の解放が並行したときに、先に終わった解放がまだ drain 中の前提を壊さないため
-    if (disposalGeneration === this.sessionGeneration) {
+    this.activeDisposals -= 1;
+    // 停止の要求で立てたフラグは、最後に終わった解放だけが戻す。start 失敗の巻き戻しと
+    // ピア起点の close の解放が並行したときに、先に終わった解放がまだ drain 中の前提を
+    // 壊さないため
+    if (this.activeDisposals === 0) {
       this.audioReceiveStopped = false;
       this.audioDecodeStopped = false;
       this.capturingAudioDrainFlush = false;
       this.audioDecodeSubmitSequences.length = 0;
       this.audioDrainFlushedSequences.clear();
       this.audioDrainFlushedSubmitted = 0;
+      this.audioDrainFlushedDiscarded = 0;
     }
 
     if (firstFailure !== null) {
@@ -2915,6 +2925,8 @@ export class MediaSubscriberImpl implements MediaSubscriber {
    * reject させない。
    */
   private async reconfigureAudioDecoder(description: Uint8Array): Promise<void> {
+    // 復号器の configure も未処理の出力を捨てる。投入順の対応をリセットする
+    this.discardPendingAudioDecodes();
     try {
       // 閉じた後は configure を発行しない (閉じた後に復号器を作り直さない)。解放は await を
       // 挟むため、state の "closed" だけでは解放の途中を判定できない
@@ -3300,11 +3312,28 @@ export class MediaSubscriberImpl implements MediaSubscriber {
    * 作り直しの失敗は、復号の失敗として onError へ通知する (この後も復号は続くため、
    * 購読そのものは止めない)。
    */
+  /**
+   * 復号器が未処理の投入と未到着の出力を捨てたときに、投入順の対応をリセットする
+   *
+   * flush 分の番号が残ったままだと、drain が上限まで待ち続け、実際は再生済みの分を
+   * `undecodedFlushedObjects` に計上してしまう。捨てた分は計器へ回す
+   */
+  private discardPendingAudioDecodes(): void {
+    this.audioDecodeSubmitSequences.length = 0;
+    if (this.audioDrainFlushedSequences.size > 0) {
+      this.audioDrainFlushedDiscarded += this.audioDrainFlushedSequences.size;
+      this.audioDrainFlushedSequences.clear();
+    }
+  }
+
   private async resetAudioDecoderForCatchUp(): Promise<void> {
     const decoder = this.audioDecoder;
     if (decoder === null) {
       return;
     }
+    // 復号器の reset は未処理の投入と未到着の出力を捨てる。投入順の対応をそのままに
+    // すると、捨てた出力の分だけ以後の対応がずれるため、ここで捨てる
+    this.discardPendingAudioDecodes();
     try {
       await decoder.reset();
     } catch (error) {

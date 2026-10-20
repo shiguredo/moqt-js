@@ -1448,6 +1448,9 @@ export function useSubscriber(
     // 停止したら進行中の再生開始も無効として扱う
     audioPlaybackPendingRef.current = false;
     return audioStopRef.current.stop({
+      resetFlushedMarks: () => {
+        audioDecodeFlushMarksRef.current.length = 0;
+      },
       flushAudio: () => {
         // 復号前の段の保持分を flush して復号へ流す。flush の通知は
         // appendAudioPreDecodeRef 経由で復号チェーンへ積まれるため、flush の後に外す

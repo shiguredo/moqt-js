@@ -9507,6 +9507,8 @@ interface SubscriberDrainControl extends SubscriberFrameControl {
   audioDecodeStopped: boolean;
   audioDecodeSubmitSequences: number[];
   audioDrainFlushedSequences: Set<number>;
+  audioDrainFlushedDiscarded: number;
+  discardPendingAudioDecodes: () => void;
 }
 
 /**
@@ -9677,6 +9679,26 @@ test("handleAudioDecodedData: flush 由来の復号出力だけを drain の待�
   // flush した Object の出力 (通し番号 1) では減る
   control.handleAudioDecodedData({ data: makeAudioData(200_000) });
   assert.equal(control.audioDrainFlushedSequences.size, 0, "flush 分の出力で減ること");
+});
+
+/**
+ * 完了条件: 復号器の作り直しで未処理の出力が捨てられたら、投入順の対応も捨てる。
+ * 残すと以後の対応がずれ、drain が上限まで待って実際は再生済みの分を未復号と数える。
+ */
+test("discardPendingAudioDecodes: 復号器の作り直しで投入順の対応を捨てる", () => {
+  const subscriber = new MediaSubscriberImpl("moqt://example.com/live", {
+    namespace: ["live"],
+    audio: {},
+  });
+  const control = subscriber as unknown as SubscriberDrainControl;
+  control.audioDecodeSubmitSequences.push(0, 1);
+  control.audioDrainFlushedSequences.add(1);
+
+  control.discardPendingAudioDecodes();
+
+  assert.equal(control.audioDecodeSubmitSequences.length, 0, "投入順を捨てること");
+  assert.equal(control.audioDrainFlushedSequences.size, 0, "flush の待ちを残さないこと");
+  assert.equal(control.audioDrainFlushedDiscarded, 1, "捨てた flush 分を数えること");
 });
 
 /**

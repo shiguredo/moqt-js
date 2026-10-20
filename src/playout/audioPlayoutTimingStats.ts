@@ -122,8 +122,9 @@ export interface AudioPlayoutDrainStats {
   /**
    * flush したが、drain の終了までに復号の出力が届かなかった Object の件数
    *
-   * 上限 (300 ms / 150 ms) で drain を打ち切ったときの残りである。復号されていないため
-   * 長さは分からず、`playedMs` / `cutMs` / `missedByReason.stopped` のどれにも含まれない
+   * 上限 (300 ms / 150 ms) で drain を打ち切ったときの残りと、復号器の作り直しで捨てられた
+   * 分を含む。復号されていないため長さは分からず、`playedMs` / `cutMs` /
+   * `missedByReason.stopped` のどれにも含まれない
    */
   readonly undecodedFlushedObjects: number;
 }

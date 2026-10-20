@@ -34,6 +34,13 @@ export interface SubscriberAudioStopTarget {
     flushedObjects: number;
     remainingFlushedObjects: () => number;
   }) => Promise<void>;
+  /**
+   * 前の停止で付けたままの flush の印を捨てる
+   *
+   * 復号の出力が落ちた (復号器の reset・復号の失敗・停止後に走るチェーンの末尾) 場合に
+   * 印が残ると、次の停止で停止前投入分の出力がその印を消費し、drain が早く終わる
+   */
+  resetFlushedMarks?: () => void;
   /** `AudioContext` を閉じる (失敗は握り潰す) */
   closeAudioContext: () => Promise<void>;
   /** drain と close が終わったあとの後始末 (時間軸から音声の状態を消すなど) */
@@ -83,6 +90,8 @@ export class SubscriberAudioStop {
     const stopping = (async (): Promise<void> => {
       this.stoppingFlag = true;
       try {
+        // 前の停止で付けたままの印を捨てる (次の flush 分だけを数える)
+        target.resetFlushedMarks?.();
         // 復号前の段の保持分を flush して復号へ流す。flush の通知先 (復号チェーン) を
         // 外すのは flush の後である (外すと flush した Object が復号へ流れない)
         let flushed = 0;
