@@ -120,10 +120,10 @@ test("SubscriberAudioStop: flush した復号の出力を待つ", async (): Prom
     drain: async (request) => {
       assert.equal(request.flushedObjects, 3);
       assert.isFalse(request.isFlushSettled(), "flush の直後はまだ待つこと");
-      stop.noteDecodedOutput();
-      stop.noteDecodedOutput();
+      stop.noteFlushedOutput();
+      stop.noteFlushedOutput();
       assert.isFalse(request.isFlushSettled(), "2 つ届いてもまだ待つこと");
-      stop.noteDecodedOutput();
+      stop.noteFlushedOutput();
       assert.isTrue(request.isFlushSettled(), "すべて届いたら待ち終えること");
     },
   });
@@ -167,7 +167,7 @@ test("SubscriberAudioStop: 停止中だけ isStopping が true になる", async
   await draining;
   assert.isFalse(stop.isStopping, "停止が終わったら戻ること");
   // flush 待ちが無いときに出力が届いても数を負にしない
-  stop.noteDecodedOutput();
+  stop.noteFlushedOutput();
   assert.isFalse(stop.isStopping);
 });
 

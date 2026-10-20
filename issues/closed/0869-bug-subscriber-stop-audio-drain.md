@@ -61,12 +61,13 @@
 
 - 停止を「受信停止 → 復号前の段を flush → 予約済みの drain (上限 300 ms) → 復号停止 →
   `AudioContext.close`」の順に組み替えた。停止の要求後は新しい音声 Object を受け付けず
-  (`audioReceiveStopped`)、drain の間は flush した Object だけを復号する
-  (`audioDecodeStopped`)。drain の後に届いた復号出力は予約せず閉じる
+  (`audioReceiveStopped`)、drain の間は flush した Object と停止前に投入済みの Object を
+  復号する (`audioDecodeStopped` は drain の後で立てる)。drain の後に届いた復号出力は
+  予約せず閉じる
 - `AudioPlayoutSession.drainReserved` を追加し、ライブラリと devtools で共有した。待ち時間は
   「最後に鳴り終わる予約 - 現在 + 余裕 100 ms」を 0〜300 ms にクランプする。flush した
-  Object の復号出力は timestamp で対応させ、flush 分だけが 0 になるまで待つ (停止の前に
-  復号器へ投入していた Object の出力では減らさない)。予約が無くても、flush があれば上限まで
+  Object の復号出力は投入順で対応させ、flush 分だけが 0 になるまで待つ (停止の前に復号器へ
+  投入していた Object の出力では減らさない。devtools も同じ投入順で対応する)。予約が無くても、flush があれば上限まで
   待つ (復号が終われば早く終わる)。`stop` は 300 ms、`close` とピア起点の close は 150 ms、
   start 失敗の巻き戻しは drain しない
 - 計器: `AudioPlayoutTimingSnapshot.lastDrain` に、停止時の予約残 (`pendingMsAtStart`)、

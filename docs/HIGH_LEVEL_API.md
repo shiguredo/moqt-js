@@ -617,8 +617,9 @@ created / stopped ──────────► subscribing ─────�
 `stop()` は停止の要求後、新しい音声 Object の受付を止め、復号前の遅延の段
 (`preDecodeDelayMs`) に保持していた音声を flush して復号へ流し、予約済みの音が鳴り終わる
 まで待ってから `AudioContext` を閉じる (drain)。待ち時間は「最後に鳴り終わる予約 - 現在 +
-余裕 100 ms」を 0〜300 ms にクランプした値である。flush 分の復号の出力は、timestamp を
-対応させて flush した Object のものだけを待ち、予約されるまで待つ。上限で鳴り切れなかった
+余裕 100 ms」を 0〜300 ms にクランプした値である。flush 分の復号の出力は、投入順で対応
+させて flush した Object のものだけを待ち、予約されるまで待つ。flush があるときは、予約が
+無くても上限まで待つ (復号が終われば早く終わる)。上限で鳴り切れなかった
 分だけが `getStats().audio.playoutTiming.missedByReason.stopped` に残り、鳴らせた量・切った量・
 待った時間・flush した件数・復号の出力が届かなかった件数 (`undecodedFlushedObjects`) は
 同 `lastDrain` で読める。

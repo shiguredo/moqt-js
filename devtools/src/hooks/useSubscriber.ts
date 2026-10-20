@@ -1010,6 +1010,11 @@ export function useSubscriber(
   const appendAudioPreDecodeRef = useRef<((items: readonly DelayedAudioObject[]) => void) | null>(
     null,
   );
+  // 停止の flush で復号へ渡した Object を、復号の出力と投入順で対応させるための印。
+  // 復号の出力は投入順に届くため、出力ごとに先頭の印を取り出す
+  const audioDecodeFlushMarksRef = useRef<boolean[]>([]);
+  // flush の間に復号チェーンへ積んだ Object に印を付けるか
+  const capturingAudioFlushRef = useRef(false);
 
   /**
    * 保留を通った映像 Object を到着順の Promise チェーンに積み、保留が残っていれば
@@ -1447,7 +1452,13 @@ export function useSubscriber(
         // 復号前の段の保持分を flush して復号へ流す。flush の通知は
         // appendAudioPreDecodeRef 経由で復号チェーンへ積まれるため、flush の後に外す
         const delay = preDecodeDelayRef.current;
-        const flushed = delay?.flushAudio() ?? 0;
+        capturingAudioFlushRef.current = true;
+        let flushed = 0;
+        try {
+          flushed = delay?.flushAudio() ?? 0;
+        } finally {
+          capturingAudioFlushRef.current = false;
+        }
         appendAudioPreDecodeRef.current = null;
         return flushed;
       },
@@ -1729,6 +1740,7 @@ export function useSubscriber(
       obj: MoqtObject,
       viaDatagram: boolean,
       receivedAtMs: number,
+      flushed = false,
     ): Promise<void> => {
       const current = getCurrentAudioSubscriber(audioDecoderInstance);
       if (current === null) {
@@ -1822,6 +1834,9 @@ export function useSubscriber(
           intentionalDelayMs: Math.max(0, performance.now() - receivedAtMs),
         });
 
+        // 復号の出力は投入順に届く。停止の flush で渡した音には印を付け、drain の
+        // 完了判定で対応させる
+        audioDecodeFlushMarksRef.current.push(flushed);
         audioDecoderInstance.decode(obj.payload, "key", timestamp, 0);
         current.audioChunksDecoded.value += 1;
       } catch (error) {
@@ -1839,6 +1854,7 @@ export function useSubscriber(
       obj: MoqtObject,
       viaDatagram: boolean,
       receivedAtMs: number,
+      flushed = false,
     ): void => {
       audioChainRef.current = audioChainRef.current
         // 到着順に処理する。`await` することで、次の Object の処理を待たせる
@@ -1858,7 +1874,7 @@ export function useSubscriber(
               recentAudioObjectIdSet.delete(oldest);
             }
           }
-          await handleAudioObject(obj, viaDatagram, receivedAtMs);
+          await handleAudioObject(obj, viaDatagram, receivedAtMs, flushed);
         })
         .catch((error: unknown) => {
           // handleAudioObject は内部で握るため、ここへ来るのは想定外の失敗だけ
@@ -1869,8 +1885,10 @@ export function useSubscriber(
     // 復号前の段から音声を復号チェーンへ流す。購読の開始時に設定し、停止時に
     // 破棄する。動的な遅延の変更にも使う
     appendAudioPreDecodeRef.current = (items) => {
+      // flush の間は、ここから積む Object に印を付ける (drain の完了判定で使う)
+      const flushed = capturingAudioFlushRef.current;
       for (const item of items) {
-        enqueueAudioDecodeDirect(item.object, item.viaDatagram, item.receivedAtMs);
+        enqueueAudioDecodeDirect(item.object, item.viaDatagram, item.receivedAtMs, flushed);
       }
     };
 
@@ -2049,8 +2067,11 @@ export function useSubscriber(
     audioData: AudioData,
     audioDecoderInstance: AudioDecoderWrapper,
   ): void {
-    // 停止時の flush で復号へ流した Object の出力が届いた。drain はこの数が 0 になるまで待つ
-    audioStopRef.current.noteDecodedOutput();
+    // 停止時の flush で復号へ流した Object の出力が届いた。印の付いた出力だけを
+    // drain の待ちから減らす (停止前に投入した Object の出力では減らさない)
+    if (audioDecodeFlushMarksRef.current.shift() === true) {
+      audioStopRef.current.noteFlushedOutput();
+    }
     const instance = getCurrentAudioSubscriber(audioDecoderInstance);
     if (instance === null) {
       audioData.close();

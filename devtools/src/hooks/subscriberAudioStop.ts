@@ -54,8 +54,13 @@ export class SubscriberAudioStop {
     return this.stoppingFlag;
   }
 
-  /** 復号の出力が 1 つ届いた (flush した分の待ちを減らす) */
-  noteDecodedOutput(): void {
+  /**
+   * flush した Object の復号の出力が 1 つ届いた (待ちを減らす)
+   *
+   * 停止の前に復号器へ投入していた Object の出力では呼ばない。呼び出し側が flush 分の
+   * 投入に印を付け、印の付いた出力だけで減らす
+   */
+  noteFlushedOutput(): void {
     if (this.flushPending > 0) {
       this.flushPending--;
     }
