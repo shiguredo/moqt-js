@@ -71,6 +71,148 @@ export const PRIORITY_AUDIO = 64;
 export const PRIORITY_VIDEO_DELTA = 128;
 
 /**
+ * 停止時に取り込みキューから次を待つ時間 (ミリ秒)
+ *
+ * 音声の取り込みは 10 ms ブロックで届くため、これより短くすると「停止の受付時点で
+ * 既にキューにあったフレーム」だけを読み切れる (停止後の新規キャプチャは含めない)。
+ * 5 ms は停止の待ち時間への寄与を小さくしつつ、キューに残ったフレームの取り出しを
+ * 妨げない長さである
+ */
+export const AUDIO_TAIL_DRAIN_QUIET_MS = 5;
+
+/**
+ * 停止時に追加で読み出す取り込みブロックの上限
+ *
+ * 1 ブロック 10 ms なので最大 40 ms。停止の受付時にキューへ溜まり得る量の安全弁であり、
+ * 通常は 1〜2 ブロックで静穏窓に達する
+ */
+export const AUDIO_TAIL_DRAIN_MAX_FRAMES = 4;
+
+/** 停止時の末尾 drain (新規読み出しを止めて読み切る) の上限 (ミリ秒) */
+export const AUDIO_TAIL_DRAIN_MAX_MS = 50;
+
+/**
+ * 停止時の encoder flush と datagram の送信完了を待つ上限 (ミリ秒)
+ *
+ * encoder や worker が応答しない場合でも停止がハングしないための安全弁である。
+ * 上限で打ち切った場合は計器 (`tailFlushTimeoutCount`) に残し、待たずに解放へ進む
+ */
+export const AUDIO_TAIL_FLUSH_MAX_MS = 150;
+
+/**
+ * datagram 配送の停止時に、末尾の datagram を書いてから PUBLISH_DONE を送るまでの猶予
+ * (ミリ秒)
+ *
+ * draft-ietf-moq-transport-22 では datagram と control stream の間に順序保証が無い。
+ * 購読者は PUBLISH_DONE を受けた時点で購読を閉じ、後から届いた datagram を捨てるため、
+ * 末尾の datagram が PUBLISH_DONE より後に届くと失われる。実リレーの経路の遅れは
+ * 17〜23 ms であり、その約 2 倍を待つ。subgroup 配送では `done()` が送信キューを
+ * 待つため猶予は要らない
+ */
+export const AUDIO_TAIL_PUBLISH_DONE_GRACE_MS = 50;
+
+/** 末尾の drain の状態 (停止の受付から flush の完了まで) */
+interface AudioTailDrainState {
+  /** この時刻を過ぎたら読み出しを止める (`performance.now` 軸のミリ秒) */
+  readonly deadlineMs: number;
+  /** 追加で読み出すブロックの上限 */
+  readonly maxFrames: number;
+  /** 読み出したブロックの数 */
+  framesRead: number;
+  /** 読み出したブロックの範囲 (入力の timestamp と長さ、マイクロ秒) */
+  readonly readBlocks: { startMicros: number; endMicros: number }[];
+  /** 送信した chunk の数 */
+  sentFrames: number;
+  /** 送信した chunk の長さの合計 (ミリ秒) */
+  sentMs: number;
+  /** 送信した chunk が覆った入力の末尾 (マイクロ秒) */
+  sentEndMicros: number | null;
+  /** 末尾の送信 (datagram の write / subgroup の送信) の完了 */
+  readonly sendPromises: Promise<void>[];
+  /** ループが drain を終えたことを知らせる */
+  readonly done: Promise<void>;
+  resolveDone: () => void;
+}
+
+/**
+ * `reader.read()` を指定時間だけ待つ
+ *
+ * 時間内に読めなければ `{ kind: "quiet" }` を返し、待つのをやめる。負けた read は
+ * そのまま残るため、後からフレームが解決したら閉じて捨てる (停止後に新しく
+ * キャプチャされたフレームを送らない)。reader 自体の cancel は解放が行う。
+ */
+async function readAudioFrameWithin(
+  reader: ReadableStreamDefaultReader<AudioData>,
+  timeoutMs: number,
+): Promise<{ kind: "frame"; value: AudioData } | { kind: "done" } | { kind: "quiet" }> {
+  let abandoned = false;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  // 負けた read が後からフレームを返した場合は所有者不明になるため閉じる
+  const readPromise = reader.read().then((result) => {
+    if (abandoned && !result.done) {
+      result.value.close();
+    }
+    return result;
+  });
+  try {
+    const timeout = new Promise<{ kind: "quiet" }>((resolve) => {
+      timer = setTimeout(() => resolve({ kind: "quiet" }), timeoutMs);
+    });
+    const result = await Promise.race([
+      readPromise.then((read) =>
+        read.done ? ({ kind: "done" } as const) : ({ kind: "frame", value: read.value } as const),
+      ),
+      timeout,
+    ]);
+    if (result.kind === "quiet") {
+      abandoned = true;
+    }
+    return result;
+  } finally {
+    if (timer !== null) {
+      clearTimeout(timer);
+    }
+  }
+}
+
+/** 指定時間だけ待つ (タイマーを 1 本だけ作る) */
+function delayMs(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+/**
+ * Promise を上限時間まで待つ
+ *
+ * 上限を過ぎた場合は `{ timedOut: true }` を返し、呼び出し側は待つのをやめる。
+ * 負けた Promise は捨てる (後から reject しても未処理の rejection にしないため、
+ * catch を付けておく)。
+ */
+async function waitWithTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+): Promise<{ timedOut: false; value: T } | { timedOut: true }> {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  try {
+    const timeout = new Promise<{ timedOut: true }>((resolve) => {
+      timer = setTimeout(() => resolve({ timedOut: true }), timeoutMs);
+    });
+    const result = await Promise.race([
+      promise.then((value) => ({ timedOut: false as const, value })),
+      timeout,
+    ]);
+    return result;
+  } finally {
+    if (timer !== null) {
+      clearTimeout(timer);
+    }
+    // 負けた Promise の rejection を未処理にしない
+    void promise.catch(() => {});
+  }
+}
+
+/**
  * catalog の MAX_CACHE_DURATION (ミリ秒)
  *
  * relay はこの時間を過ぎた Object を cache から配れない (MUST NOT。
@@ -635,6 +777,11 @@ export class MediaPublisherImpl implements MediaPublisher {
     // (audioTimestampClock.snapshot() / audioCatchUp.snapshot())
     timestampOffset: null,
     catchUp: null,
+    tailFlushedFrames: 0,
+    tailFlushedMs: 0,
+    tailDroppedFrames: 0,
+    tailDroppedMs: 0,
+    tailFlushTimeoutCount: 0,
   };
   private videoStats: VideoStats = {
     framesSent: 0,
@@ -665,6 +812,14 @@ export class MediaPublisherImpl implements MediaPublisher {
   // 処理ループの世代 (pause / stop / close で加算し、
   // 旧ループの encode と onError 通知を抑止する)
   private processingGeneration = 0;
+  // 停止時の末尾 drain の状態。null なら通常の周期読み出し
+  private audioTailDrain: AudioTailDrainState | null = null;
+  // 末尾の drain の完了 (stop / close が同時に呼ばれたときに共有する)
+  private audioTailCompletion: Promise<void> | null = null;
+  // 停止の処理中か (二重 stop の防止)
+  private stopInProgress = false;
+  // datagram 配送の停止で末尾を送ったため、PUBLISH_DONE の前に猶予を待つか
+  private pendingAudioTailGrace = false;
 
   // 映像の符号化を依頼した時点の世代 (入力フレームの timestamp を鍵にする)。
   // WebCodecs は出力の到着順を保証しないため、到着順ではなく timestamp で依頼に対応づける。
@@ -990,27 +1145,44 @@ export class MediaPublisherImpl implements MediaPublisher {
     if (this.closing !== null) {
       throw new Error("cannot stop while closing");
     }
+    // 末尾 flush を待っている間の二重 stop は受け付けない (並行呼び出しは未対応)
+    if (this.stopInProgress) {
+      throw new Error("cannot stop while stopping");
+    }
     if (this.currentState !== "publishing" && this.currentState !== "paused") {
       throw new Error(`cannot stop in state: ${this.currentState}`);
     }
 
-    // 世代を進める。 stop 後の cancel 解決と start 後の新ループが
-    // 同一世代を共有しないようにする (旧ループ失敗の誤通知防止)
-    this.processingGeneration++;
+    this.stopInProgress = true;
+    try {
+      // 末尾 flush: 停止の受付時に確定した範囲 (読んだフレームと encoder の中身) を
+      // 符号化して送り切る。世代はこの時点では進めない (進めると末尾の出力が
+      // 世代不一致で捨てられる)。ピア起点の解放が進行中なら session が閉じているため
+      // 送れないので行わない
+      if (this.disposalInFlight === null) {
+        await this.finishAudioTail();
+      }
 
-    // 利用者起点の解放として数える (ピア起点の close の解放と重なった場合はこちらが
-    // 停止を決める)
-    this.userDisposalCount++;
-    // ピア起点の close の解放が進行中ならそれを共有し、その成否を受ける
-    await this.runDisposal();
+      // 世代を進める。 stop 後の cancel 解決と start 後の新ループが
+      // 同一世代を共有しないようにする (旧ループ失敗の誤通知防止)
+      this.processingGeneration++;
 
-    // 解放中に close() が終端まで進んでいれば "stopped" に戻さない。戻すと close() の
-    // 終端性が崩れ、state が "closed" でなくなるため次の close() が早期 return を通過して
-    // onClose が 2 回呼ばれる。通常は closing のガード (close() が解放と終端遷移を進めて
-    // いる間は cannot stop while closing) で抑えられており、この検査はそれを通過する経路が
-    // 将来増えたときの保険である。await のあとに現在値を読み直すため getter の state を使う
-    if (this.state !== "closed") {
-      this.setState("stopped");
+      // 利用者起点の解放として数える (ピア起点の close の解放と重なった場合はこちらが
+      // 停止を決める)
+      this.userDisposalCount++;
+      // ピア起点の close の解放が進行中ならそれを共有し、その成否を受ける
+      await this.runDisposal();
+
+      // 解放中に close() が終端まで進んでいれば "stopped" に戻さない。戻すと close() の
+      // 終端性が崩れ、state が "closed" でなくなるため次の close() が早期 return を通過して
+      // onClose が 2 回呼ばれる。通常は closing のガード (close() が解放と終端遷移を進めて
+      // いる間は cannot stop while closing) で抑えられており、この検査はそれを通過する経路が
+      // 将来増えたときの保険である。await のあとに現在値を読み直すため getter の state を使う
+      if (this.state !== "closed") {
+        this.setState("stopped");
+      }
+    } finally {
+      this.stopInProgress = false;
     }
   }
 
@@ -1058,18 +1230,25 @@ export class MediaPublisherImpl implements MediaPublisher {
       return;
     }
 
-    // 世代を進める。 close 後の cancel 解決と再 start 後の新ループが
-    // 同一世代を共有しないようにする (旧ループ失敗の誤通知防止)
-    this.processingGeneration++;
-
-    // 利用者起点の解放として数える (ピア起点の close の解放と重なった場合はこちらが終端を
-    // 決める)
-    this.userDisposalCount++;
+    // 解放 (進行中ならそれを共有する) と終端遷移を 1 つの Promise にまとめ、同時に呼ばれた
+    // close() と共有する。末尾 flush は世代を進める前に行う (進めると末尾の出力が
+    // 世代不一致で捨てられる)。closing は待つ前に立てるため、この間に stop() が
+    // 入ると cannot stop while closing で拒否される
+    const closing = (async (): Promise<void> => {
+      if (this.disposalInFlight === null) {
+        await this.finishAudioTail();
+      }
+      // 世代を進める。 close 後の cancel 解決と再 start 後の新ループが
+      // 同一世代を共有しないようにする (旧ループ失敗の誤通知防止)
+      this.processingGeneration++;
+      // 利用者起点の解放として数える (ピア起点の close の解放と重なった場合はこちらが
+      // 終端を決める)
+      this.userDisposalCount++;
+      await this.runDisposal();
+      this.transitionToClosed();
+    })();
     // 解放 (進行中ならそれを共有する) と終端遷移を 1 つの Promise にまとめ、同時に呼ばれた
     // close() と共有する。解放が成功したときだけ終端へ進む
-    const closing = this.runDisposal().then(() => {
-      this.transitionToClosed();
-    });
     this.closing = closing;
     try {
       await closing;
@@ -1770,8 +1949,44 @@ export class MediaPublisherImpl implements MediaPublisher {
         generation === this.processingGeneration &&
         encoder.state === "configured"
       ) {
-        const { value: audioData, done } = await reader.read();
-        if (done) break;
+        // 停止時の末尾 drain は、このループ自身が reader から読み切る (停止側からは
+        // 読まない)。同じ reader を 2 か所から読むと保留中の read とフレームを
+        // 取り合うためである。停止側はループの完了 (done) を待つ
+        const tail = this.audioTailDrain;
+        let audioData: AudioData | null = null;
+        if (tail !== null) {
+          // 上限と期限に達したら読み出しを止める (保留分はループを抜けた後に encode する)
+          if (tail.framesRead >= tail.maxFrames || performance.now() >= tail.deadlineMs) {
+            break;
+          }
+          // 静穏窓の間に読めたフレームだけを末尾として扱う。負けた read は
+          // readAudioFrameWithin が後から閉じて捨てる (停止後の新規キャプチャは範囲外)
+          const read = await readAudioFrameWithin(reader, AUDIO_TAIL_DRAIN_QUIET_MS);
+          if (read.kind === "frame") {
+            audioData = read.value;
+          }
+        } else {
+          // 停止の受付より前に始めた read が残っている場合は、これが返るまで待つ (10 ms
+          // 周期で次のフレームが来る)。停止の直前に capture された可能性があるため、
+          // この 1 フレームは末尾に含める
+          const read = await reader.read();
+          if (!read.done) {
+            audioData = read.value;
+          }
+        }
+        // フレームが読めなかった (ストリームの終わり・静穏窓の期限) らループを抜ける
+        if (audioData === null) {
+          break;
+        }
+        // 停止の末尾 drain の間は、読んだフレームを末尾の範囲として記録する
+        const activeTail = this.audioTailDrain;
+        if (activeTail !== null) {
+          activeTail.framesRead++;
+          activeTail.readBlocks.push({
+            startMicros: audioData.timestamp,
+            endMicros: audioData.timestamp + audioData.duration,
+          });
+        }
         if (generation !== this.processingGeneration) {
           // 旧世代ループは encode せず終了する (フレームは破棄前に閉じる)
           audioData.close();
@@ -1822,6 +2037,9 @@ export class MediaPublisherImpl implements MediaPublisher {
       if (this.processingActive && generation === this.processingGeneration) {
         this.callbacks.onError?.(error instanceof Error ? error : new Error(String(error)));
       }
+    } finally {
+      // 停止側 (finishAudioTail) へ読み出しの完了を知らせる
+      this.audioTailDrain?.resolveDone();
     }
   }
 
@@ -2001,6 +2219,16 @@ export class MediaPublisherImpl implements MediaPublisher {
       noteGroupId(this.audioGroupId);
     }
 
+    // 停止時の末尾 flush で送れた量を数える (送信を試みた時点で数える。失敗は
+    // Publisher が onError へ通知する)
+    const tail = this.audioTailDrain;
+    if (tail !== null) {
+      tail.sentFrames++;
+      tail.sentMs += (chunk.duration ?? 0) / 1_000;
+      const endMicros = timestampMicros + (chunk.duration ?? 0);
+      tail.sentEndMicros =
+        tail.sentEndMicros === null ? endMicros : Math.max(tail.sentEndMicros, endMicros);
+    }
     const payload = chunk.data;
     this.audioStats.framesSent++;
     this.audioStats.bytesSent += payload.length + properties.length;
@@ -2191,12 +2419,24 @@ export class MediaPublisherImpl implements MediaPublisher {
         // (src/createMediaSubscriber.ts の `receiveAudioObject`)
         const requestedCopies = this.resolvedAudio?.redundancy ?? 1;
         const copies = Math.min(3, Math.max(1, Math.floor(requestedCopies)));
+        const sends: Promise<void>[] = [];
         for (let copy = 0; copy < copies; copy++) {
-          publisher.sendDatagram(datagram);
+          sends.push(publisher.sendDatagram(datagram));
+        }
+        // 停止時の末尾では、書き終えたことを PUBLISH_DONE の前に待てるようにする
+        const tail = this.audioTailDrain;
+        if (tail !== null) {
+          tail.sendPromises.push(...sends);
         }
         result = null;
       } else {
         result = publisher.sendObject(params);
+        // subgroup も停止時の末尾では送信の完了を待てるようにする (done() が待つが、
+        // 待ちの上限を 1 か所に揃える)
+        const tail = this.audioTailDrain;
+        if (tail !== null) {
+          tail.sendPromises.push(result);
+        }
       }
     } catch (error) {
       // Subgroup の同期 throw は closed だけであり通知を伴わないが、Datagram の検証違反は
@@ -2318,6 +2558,13 @@ export class MediaPublisherImpl implements MediaPublisher {
         await catalogPublisher.done();
       }
     });
+    // datagram 配送の停止では、末尾の datagram の write 完了 (finishAudioTail が待つ) の
+    // 後に PUBLISH_DONE を送る。stream と datagram の順序保証が無いため、送信完了の後に
+    // 猶予を置いてから PUBLISH_DONE を送る
+    if (this.pendingAudioTailGrace) {
+      this.pendingAudioTailGrace = false;
+      await guard(() => delayMs(AUDIO_TAIL_PUBLISH_DONE_GRACE_MS));
+    }
     const audioPublisher = this.audioPublisher;
     this.audioPublisher = null;
     await guard(async () => {
@@ -2352,10 +2599,172 @@ export class MediaPublisherImpl implements MediaPublisher {
       }
     });
 
+    // 停止時の末尾 flush の状態を戻す (再 start は通常の周期読み出しから始める)
+    this.audioTailDrain = null;
+    this.pendingAudioTailGrace = false;
+
     if (firstFailure !== null) {
       const failure: Error = firstFailure;
       throw failure;
     }
+  }
+
+  /**
+   * 停止の受付時の末尾を符号化して送り切る
+   *
+   * 順序は次のとおり。
+   *
+   * 1. 周期読み出しのループ自身に、取り込みキューに残っている分を読ませる
+   *    (ループ内で `tailDrain` を参照して読み切る。停止側からは読まない)
+   * 2. 保留分 (1 フレーム先読み) を含めて encode する (ループを抜けた後の処理)
+   * 3. `AudioEncoderWrapper.flush()` で encoder に残った出力を待つ
+   * 4. 末尾の送信 (datagram の write と subgroup の送信) の完了を待つ
+   *
+   * この間は `processingGeneration` を進めない。進めると世代不一致で末尾の出力が
+   * 捨てられるためである。「停止の受付時に確定した範囲」= 停止の受付時点の世代の
+   * 出力までを送り、flush が終わってから stop / close が世代を進める。
+   *
+   * 全体の上限は `AUDIO_TAIL_DRAIN_MAX_MS` + `AUDIO_TAIL_FLUSH_MAX_MS`。
+   * 上限で打ち切った場合は encoder の残りを送れなかったことになり、
+   * `tailFlushTimeoutCount` と `tailDropped*` に残る。
+   */
+  private finishAudioTail(): Promise<void> {
+    const existing = this.audioTailCompletion;
+    if (existing !== null) {
+      return existing;
+    }
+    const run = this.runFinishAudioTail();
+    this.audioTailCompletion = run;
+    const clear = (): void => {
+      if (this.audioTailCompletion === run) {
+        this.audioTailCompletion = null;
+      }
+    };
+    run.then(clear, clear);
+    return run;
+  }
+
+  /** `finishAudioTail` の本体 (二重呼び出しは `finishAudioTail` が 1 つにまとめる) */
+  private async runFinishAudioTail(): Promise<void> {
+    const reader = this.audioFrameReader;
+    const encoder = this.audioEncoder;
+    if (reader === null || encoder === null) {
+      return;
+    }
+    let resolveDone: () => void = () => {};
+    const done = new Promise<void>((resolve) => {
+      resolveDone = resolve;
+    });
+    const state: AudioTailDrainState = {
+      deadlineMs: performance.now() + AUDIO_TAIL_DRAIN_MAX_MS,
+      maxFrames: AUDIO_TAIL_DRAIN_MAX_FRAMES,
+      framesRead: 0,
+      readBlocks: [],
+      sentFrames: 0,
+      sentMs: 0,
+      sentEndMicros: null,
+      sendPromises: [],
+      done,
+      resolveDone,
+    };
+    this.audioTailDrain = state;
+    let flushTimedOut = false;
+    try {
+      // ループ自身が drain を終えて保留分を encode するまで待つ。ループが既に終了して
+      // いる場合に備えて上限で打ち切る
+      const drained = await waitWithTimeout(
+        done,
+        AUDIO_TAIL_DRAIN_MAX_MS + AUDIO_TAIL_DRAIN_QUIET_MS,
+      );
+      if (drained.timedOut) {
+        // ループが応答しない (想定外)。読み出しの完了は待たずに flush へ進む
+        flushTimedOut = true;
+      }
+      // encoder に残った入力を出力させる。direct は WebCodecs の flush、worker は
+      // flush の出力を送ってから flushed を返す順序を待つ (どちらも resolve した時点で
+      // 出力はすべてコールバックへ届いている)
+      let flush: Promise<void>;
+      try {
+        flush = encoder.flush();
+      } catch (error) {
+        // flush を持たない注入 (テストの記録用エンコーダーなど) は待たない
+        flush = Promise.resolve();
+        if (error instanceof TypeError) {
+          // メソッドが無いだけである。失敗として通知しない
+        } else {
+          this.callbacks.onError?.(error instanceof Error ? error : new Error(String(error)));
+        }
+      }
+      let flushed: { timedOut: false } | { timedOut: true };
+      try {
+        flushed = await waitWithTimeout(flush, AUDIO_TAIL_FLUSH_MAX_MS);
+      } catch (error) {
+        // flush の失敗で停止そのものを失敗させない (切った量は計器に残る)
+        this.callbacks.onError?.(error instanceof Error ? error : new Error(String(error)));
+        flushed = { timedOut: false };
+      }
+      if (flushed.timedOut) {
+        flushTimedOut = true;
+      }
+      // datagram の write / subgroup の送信の完了を待つ。書いた直後に待っても送信が
+      // 未完了なら順序の保証にならないため、必ず完了を待ってから猶予へ進む
+      if (state.sendPromises.length > 0) {
+        const sent = await waitWithTimeout(
+          Promise.all(
+            state.sendPromises.map((promise) =>
+              promise.then(
+                () => undefined,
+                () => undefined,
+              ),
+            ),
+          ),
+          AUDIO_TAIL_FLUSH_MAX_MS,
+        );
+        if (sent.timedOut) {
+          flushTimedOut = true;
+        }
+      }
+    } catch (error) {
+      // 末尾 flush の失敗で停止そのものを失敗させない (解放は続ける)。切った量は
+      // commitAudioTailStats が計器に残す
+      this.callbacks.onError?.(error instanceof Error ? error : new Error(String(error)));
+    } finally {
+      this.commitAudioTailStats(state, flushTimedOut);
+      this.audioTailDrain = null;
+    }
+  }
+
+  /**
+   * 末尾 drain の結果を統計と、PUBLISH_DONE の猶予の要否へ反映する
+   *
+   * 送れなかった量は「読み出した入力の範囲」と「送信した chunk が覆った範囲」の差で
+   * 求める。入力の timestamp は連続しているため、被覆の差がそのまま送れなかった長さに
+   * なる
+   */
+  private commitAudioTailStats(state: AudioTailDrainState, flushTimedOut: boolean): void {
+    const sentEndMicros = state.sentEndMicros;
+    let droppedFrames = 0;
+    let droppedMs = 0;
+    for (const block of state.readBlocks) {
+      if (sentEndMicros !== null && block.endMicros <= sentEndMicros) {
+        continue;
+      }
+      droppedFrames++;
+      const coveredFromMicros =
+        sentEndMicros === null ? block.startMicros : Math.max(block.startMicros, sentEndMicros);
+      droppedMs += Math.max(0, block.endMicros - coveredFromMicros) / 1_000;
+    }
+    this.audioStats.tailFlushedFrames += state.sentFrames;
+    this.audioStats.tailFlushedMs += state.sentMs;
+    this.audioStats.tailDroppedFrames += droppedFrames;
+    this.audioStats.tailDroppedMs += droppedMs;
+    if (flushTimedOut) {
+      this.audioStats.tailFlushTimeoutCount++;
+    }
+    // datagram は control stream との順序保証が無いため、末尾を送ったときだけ
+    // PUBLISH_DONE の前に猶予を待つ
+    const delivery = this.resolvedAudio?.delivery ?? "subgroup";
+    this.pendingAudioTailGrace = delivery === "datagram" && state.sentFrames > 0;
   }
 
   private async cancelFrameReaders(): Promise<void> {

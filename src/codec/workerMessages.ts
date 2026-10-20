@@ -5,8 +5,8 @@
  * 送受信の対応が片側だけ変わった場合は `tsc --noEmit` で検出される。
  *
  * メッセージの流れ:
- * - Wrapper → Worker: `init` / `encode` / `decode` / `resetKeyframeWait` / `close`
- * - Worker → Wrapper: `configured` / `encoded` / `decoded` / `skipped` / `error`
+ * - Wrapper → Worker: `init` / `encode` / `flush` / `decode` / `resetKeyframeWait` / `close`
+ * - Worker → Wrapper: `configured` / `encoded` / `flushed` / `decoded` / `skipped` / `error`
  *
  * `configured` は初期化成功、`error` は初期化失敗または実行時エラーを表す。
  * 初期化失敗時は `configured` を送らない (Wrapper の configure() がハングしない前提)。
@@ -34,6 +34,16 @@ export interface VideoEncoderWorkerEncodeRequest {
 export interface AudioEncoderWorkerEncodeRequest {
   type: "encode";
   data: AudioData;
+}
+
+/**
+ * Wrapper → Worker: 符号化中の出力をすべて吐き出す
+ *
+ * 停止時に encoder の中に残ったパケットを取り出すために使う。応答は `flushed`
+ * (失敗は `error`)。`encoded` の応答は `flushed` より先に届く (postMessage の順序)。
+ */
+export interface AudioEncoderWorkerFlushRequest {
+  type: "flush";
 }
 
 /** Wrapper → Worker: エンコード済みチャンクのデコード (映像 / 音声で同形) */
@@ -69,6 +79,11 @@ export interface VideoEncoderWorkerEncodedResponse {
   timestamp: number;
   duration: number | null;
   description?: ArrayBuffer;
+}
+
+/** Worker → Wrapper: flush 完了 (これより前に `encoded` が届く) */
+export interface AudioEncoderWorkerFlushedResponse {
+  type: "flushed";
 }
 
 /** Worker → Wrapper: エンコード済み音声チャンク */
@@ -110,6 +125,7 @@ export type VideoEncoderWorkerResponse =
 export type AudioEncoderWorkerResponse =
   | WorkerConfiguredResponse
   | AudioEncoderWorkerEncodedResponse
+  | AudioEncoderWorkerFlushedResponse
   | WorkerErrorResponse;
 
 /** 映像デコーダー Worker の応答 */

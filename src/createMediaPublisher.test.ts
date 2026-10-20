@@ -54,6 +54,7 @@ import {
   PRIORITY_CATALOG,
   PRIORITY_VIDEO_DELTA,
   PRIORITY_VIDEO_KEY,
+  AUDIO_TAIL_PUBLISH_DONE_GRACE_MS,
   allocateAudioObject,
   allocateInitialGroupId,
   allocateVideoObject,
@@ -6193,4 +6194,364 @@ test("selectCodecDescription: 空の description は保留値を覆わない", (
   assert.deepEqual(selectCodecDescription(undefined, pending), pending);
   assert.isUndefined(selectCodecDescription(new Uint8Array(), null), "値が無いのに載せている");
   assert.isUndefined(selectCodecDescription(undefined, null));
+});
+
+// ============================================================================
+// 停止時の末尾 flush (0870): 停止前に読んだフレームと encoder の中身を送り切る
+// ============================================================================
+
+/** 末尾 flush の検証で使う音声ブロック (10 ms) */
+interface TailAudioBlock {
+  readonly timestamp: number;
+  readonly duration: number;
+  closed: boolean;
+  close(): void;
+}
+
+/** 音声ブロックを作る (48 kHz の 10 ms。timestamp はマイクロ秒) */
+function createTailAudioBlock(index: number): TailAudioBlock {
+  const block: TailAudioBlock = {
+    timestamp: index * 10_000,
+    duration: 10_000,
+    closed: false,
+    close: () => {
+      block.closed = true;
+    },
+  };
+  return block;
+}
+
+/**
+ * 停止時の末尾 flush の検証用の制御口
+ *
+ * `processAudioFrames` と private の送信経路を直接駆動する。エンコーダーと Publisher は
+ * 既存の検証と同じく記録用の最小オブジェクトを注入する (モジュール置換は行わない)。
+ */
+interface TailFlushControl extends PublisherLoopControl {
+  audioPublisher: Publisher | null;
+  resolvedAudio: { delivery: "datagram" | "subgroup"; redundancy: number } | null;
+  audioTailDrain: unknown;
+  pendingAudioTailGrace: boolean;
+  handleAudioEncodedChunk(chunk: {
+    data: Uint8Array;
+    type: "key" | "delta";
+    timestamp: number;
+    duration: number | null;
+    description?: Uint8Array;
+  }): void;
+}
+
+/** 送信の記録 (種類と時刻) */
+interface TailSentRecord {
+  readonly kind: "datagram" | "subgroup" | "done";
+  readonly atMs: number;
+}
+
+/**
+ * 停止時の末尾 flush を駆動するコンテキストを作る
+ *
+ * エンコーダーは encode されたフレームを溜め、`flush()` でまとめて出力する (WebCodecs の
+ * 「flush するまで出力が返らない」状態を再現する)。出力は本番の経路
+ * (`handleAudioEncodedChunk`) へ渡す。
+ */
+function createTailFlushContext(options: {
+  delivery: "datagram" | "subgroup";
+  flushDelayMs?: number;
+}): {
+  publisher: MediaPublisherImpl;
+  control: TailFlushControl;
+  controller: ReadableStreamDefaultController<TailAudioBlock>;
+  encodedBlocks: TailAudioBlock[];
+  sent: TailSentRecord[];
+  order: string[];
+  errors: Error[];
+} {
+  const errors: Error[] = [];
+  const publisher = new MediaPublisherImpl(
+    "moqt://example.com/live",
+    {
+      namespace: ["live"],
+      audio: { codec: "opus", bitrate: 64_000, delivery: options.delivery },
+    },
+    {
+      onError: (error) => {
+        errors.push(error);
+      },
+    },
+  );
+  const control = publisher as unknown as TailFlushControl;
+  control.currentState = "publishing";
+  control.processingActive = true;
+  // start() が解決する値と同じ形にする (送り方と冗長度)
+  control.resolvedAudio = { delivery: options.delivery, redundancy: 1 };
+
+  let controller!: ReadableStreamDefaultController<TailAudioBlock>;
+  const stream = new ReadableStream<TailAudioBlock>({
+    start(c) {
+      controller = c;
+    },
+  });
+  control.audioFrameReader =
+    stream.getReader() as unknown as ReadableStreamDefaultReader<AudioData>;
+
+  // 送信の記録 (PUBLISH_DONE の順序を時刻で確かめる)
+  const sent: TailSentRecord[] = [];
+  const order: string[] = [];
+  const audioPublisher = {
+    state: "active",
+    forwardState: true,
+    closeSubgroup: async () => {},
+    sendObject: async () => {
+      sent.push({ kind: "subgroup", atMs: performance.now() });
+      order.push("send");
+    },
+    sendDatagram: () => {
+      sent.push({ kind: "datagram", atMs: performance.now() });
+      order.push("send");
+      return Promise.resolve();
+    },
+    done: async () => {
+      sent.push({ kind: "done", atMs: performance.now() });
+      order.push("done");
+    },
+  } as unknown as Publisher;
+  control.audioPublisher = audioPublisher;
+
+  // エンコーダー: encode されたフレームを溜め、flush でまとめて出力する
+  const encodedBlocks: TailAudioBlock[] = [];
+  let flushTimer: ReturnType<typeof setTimeout> | null = null;
+  const encoder = {
+    state: "configured",
+    encodeQueueSize: 0,
+    encode: (data: TailAudioBlock) => {
+      encodedBlocks.push(data);
+      order.push("encode");
+    },
+    flush: async (): Promise<void> => {
+      const delayMs = options.flushDelayMs ?? 0;
+      if (delayMs > 0) {
+        await new Promise<void>((resolve) => {
+          flushTimer = setTimeout(resolve, delayMs);
+        });
+      }
+      order.push("flush");
+      // flush の出力を本番の経路へ渡す (ここで送信される)
+      const pending = encodedBlocks.splice(0);
+      for (const block of pending) {
+        control.handleAudioEncodedChunk({
+          data: new Uint8Array([1]),
+          type: "key",
+          timestamp: block.timestamp,
+          duration: block.duration,
+        });
+      }
+    },
+    close: () => {
+      if (flushTimer !== null) {
+        clearTimeout(flushTimer);
+        flushTimer = null;
+      }
+      order.push("close");
+    },
+  };
+  control.audioEncoder = encoder as unknown as AudioEncoderWrapper;
+  return { publisher, control, controller, encodedBlocks, sent, order, errors };
+}
+
+/**
+ * 完了条件: 停止の前に投入した 10 ms ブロックがすべて encode され、送信される
+ * (末尾の欠落 30 ms → 0 ms)。
+ */
+test("stop: 停止前に読んだ音声ブロックをすべて encode・送信する", async () => {
+  const context = createTailFlushContext({ delivery: "subgroup" });
+  const blocks = [
+    createTailAudioBlock(0),
+    createTailAudioBlock(1),
+    createTailAudioBlock(2),
+    createTailAudioBlock(3),
+  ];
+  const loop = context.control.processAudioFrames();
+  // 2 ブロックを処理させ、残り 2 ブロックをキューに残した状態で停止する
+  context.controller.enqueue(blocks[0]!);
+  context.controller.enqueue(blocks[1]!);
+  await settle();
+  assert.equal(context.encodedBlocks.length, 1, "先読みでブロック 0 が encode されること");
+
+  context.controller.enqueue(blocks[2]!);
+  context.controller.enqueue(blocks[3]!);
+  await context.publisher.stop();
+  await loop;
+
+  // 停止前に投入した 4 ブロックがすべて encode され、送信された
+  assert.equal(context.encodedBlocks.length, 0, "flush で溜めた出力をすべて出したこと");
+  const sentCount = context.sent.filter((record) => record.kind !== "done").length;
+  assert.equal(sentCount, 4, "4 ブロック分の Object を送ること (30 ms の欠落を 0 にする)");
+  const stats = context.publisher.getStats().audio;
+  assert.isDefined(stats);
+  assert.equal(stats?.tailFlushedFrames, 4, "flush で送れた末尾を数えること");
+  assert.isAbove(stats?.tailFlushedMs ?? 0, 0);
+  assert.equal(stats?.tailDroppedFrames, 0, "停止時に取りこぼした入力が無いこと");
+  assert.equal(stats?.tailDroppedMs, 0);
+  // ブロックはすべて閉じられる (閉じ忘れが無い)
+  for (const block of blocks) {
+    assert.isTrue(block.closed, "読み出したブロックを閉じること");
+  }
+  assert.isNull(context.control.audioTailDrain, "tail drain の状態を残さないこと");
+  assert.equal(context.errors.length, 0);
+});
+
+/**
+ * 完了条件: encoder に残った出力が flush で送られ、encoder の close と PUBLISH_DONE の
+ * 前に送信が終わること。
+ */
+test("stop: flush の出力を encoder の close と PUBLISH_DONE より前に送る", async () => {
+  const context = createTailFlushContext({ delivery: "subgroup" });
+  const loop = context.control.processAudioFrames();
+  for (let index = 0; index < 4; index++) {
+    context.controller.enqueue(createTailAudioBlock(index));
+  }
+  await settle();
+  await context.publisher.stop();
+  await loop;
+
+  const sendIndexes = context.order
+    .map((entry, index) => (entry === "send" ? index : -1))
+    .filter((index) => index >= 0);
+  const closeIndex = context.order.indexOf("close");
+  const doneIndex = context.order.indexOf("done");
+  assert.isAbove(sendIndexes.length, 0, "flush の出力を送ること");
+  assert.isAbove(closeIndex, Math.max(...sendIndexes), "送信の後に encoder を閉じること");
+  assert.isAbove(doneIndex, closeIndex, "PUBLISH_DONE は close の後 (dispose の中) であること");
+});
+
+/**
+ * 完了条件: datagram 配送の停止では、末尾の datagram を書いた後に猶予
+ * (AUDIO_TAIL_PUBLISH_DONE_GRACE_MS) を待ってから PUBLISH_DONE を送る。
+ */
+test("stop: datagram 配送では PUBLISH_DONE を末尾 datagram の後に送る", async () => {
+  const context = createTailFlushContext({ delivery: "datagram" });
+  const loop = context.control.processAudioFrames();
+  for (let index = 0; index < 4; index++) {
+    context.controller.enqueue(createTailAudioBlock(index));
+  }
+  await settle();
+  await context.publisher.stop();
+  await loop;
+
+  // 最後に書いた datagram (lib の対象が ES2023 より前のため findLast を使わない)
+  let lastDatagram: TailSentRecord | undefined;
+  for (const record of context.sent) {
+    if (record.kind === "datagram") {
+      lastDatagram = record;
+    }
+  }
+  const done = context.sent.find((record) => record.kind === "done");
+  assert.isDefined(lastDatagram, "末尾の datagram を書くこと");
+  assert.isDefined(done, "PUBLISH_DONE を送ること");
+  const gapMs = (done?.atMs ?? 0) - (lastDatagram?.atMs ?? 0);
+  assert.isAtLeast(gapMs, AUDIO_TAIL_PUBLISH_DONE_GRACE_MS - 5, "猶予を待つこと");
+  assert.isAtMost(gapMs, AUDIO_TAIL_PUBLISH_DONE_GRACE_MS + 200, "猶予を超えて待たないこと");
+  // PUBLISH_DONE の後に datagram を送らない
+  assert.isFalse(
+    context.sent.some((record) => record.kind === "datagram" && record.atMs > (done?.atMs ?? 0)),
+    "PUBLISH_DONE の後に datagram を送らないこと",
+  );
+});
+
+/**
+ * 完了条件: 末尾 flush の待ちの間の二重 stop は拒否され、1 回目の停止は完了する。
+ */
+test("stop: 末尾 flush の待ちの間の二重 stop を拒否する", async () => {
+  const context = createTailFlushContext({ delivery: "subgroup", flushDelayMs: 20 });
+  const loop = context.control.processAudioFrames();
+  context.controller.enqueue(createTailAudioBlock(0));
+  await settle();
+
+  const first = context.publisher.stop();
+  let secondError: unknown = null;
+  try {
+    await context.publisher.stop();
+  } catch (error) {
+    secondError = error;
+  }
+  assert.instanceOf(secondError, Error);
+  assert.match((secondError as Error).message, /cannot stop while stopping/);
+  await first;
+  await loop;
+  assert.equal(context.control.currentState, "stopped");
+});
+
+/**
+ * 完了条件: close() の末尾 flush の待ちの間の stop は cannot stop while closing で拒否する。
+ */
+test("stop: close の末尾 flush の待ちの間は cannot stop while closing で拒否する", async () => {
+  const context = createTailFlushContext({ delivery: "subgroup", flushDelayMs: 20 });
+  const loop = context.control.processAudioFrames();
+  context.controller.enqueue(createTailAudioBlock(0));
+  await settle();
+
+  const closing = context.publisher.close();
+  let stopError: unknown = null;
+  try {
+    await context.publisher.stop();
+  } catch (error) {
+    stopError = error;
+  }
+  assert.instanceOf(stopError, Error);
+  assert.match((stopError as Error).message, /cannot stop while closing/);
+  await closing;
+  await loop;
+  assert.equal(context.control.currentState, "closed");
+});
+
+/**
+ * 完了条件: 停止の後に再 start 相当の処理ループを動かしても、末尾 flush の状態が残らず
+ * 通常どおり encode と送信ができる。
+ */
+test("stop: 停止の後に再 start 相当でループを動かせる", async () => {
+  const context = createTailFlushContext({ delivery: "subgroup" });
+  const loop = context.control.processAudioFrames();
+  context.controller.enqueue(createTailAudioBlock(0));
+  await settle();
+  // 停止の受付時点ではループは次のフレームの read で待っている。実際のトラックは
+  // 10 ms 周期でフレームを出すため、停止の直後に次のフレームが届いて read が解ける
+  const stopping = context.publisher.stop();
+  context.controller.enqueue(createTailAudioBlock(10));
+  await stopping;
+  await loop;
+  const sentAfterStop = context.sent.filter((record) => record.kind !== "done").length;
+  // 1 フレーム先読みの保留分と、停止直後に読んだ 1 フレーム (保留の read を解いた分)
+  assert.equal(sentAfterStop, 2, "保留分と停止直後に読んだフレームを送ること");
+  assert.equal(context.control.pendingAudioTailGrace, false, "猶予の状態を残さないこと");
+
+  // 再 start 相当: 新しい reader と encoder を注入し、publishing に戻してループを動かす
+  let controller!: ReadableStreamDefaultController<TailAudioBlock>;
+  const stream = new ReadableStream<TailAudioBlock>({
+    start(c) {
+      controller = c;
+    },
+  });
+  context.control.audioFrameReader =
+    stream.getReader() as unknown as ReadableStreamDefaultReader<AudioData>;
+  const encoded: TailAudioBlock[] = [];
+  context.control.audioEncoder = {
+    state: "configured",
+    encodeQueueSize: 0,
+    encode: (data: TailAudioBlock) => {
+      encoded.push(data);
+    },
+    flush: async () => {},
+    close: () => {},
+  } as unknown as AudioEncoderWrapper;
+  context.control.currentState = "publishing";
+  context.control.processingActive = true;
+  const secondLoop = context.control.processAudioFrames();
+  const block = createTailAudioBlock(10);
+  controller.enqueue(block);
+  await settle();
+  controller.close();
+  await secondLoop;
+
+  assert.equal(encoded.length, 1, "再 start 相当で次のフレームを encode すること");
+  assert.isTrue(block.closed);
 });

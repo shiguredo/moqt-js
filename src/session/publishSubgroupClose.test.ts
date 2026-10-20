@@ -266,7 +266,7 @@ test("sendDatagram: 範囲外 Datagram の見送りでは Subgroup は FIN で�
   });
   await publisher.sendObject({ groupId: 0, objectId: 0, payload: new Uint8Array([1]) });
   // 範囲外の Datagram は送信されないが、Subgroup の省略としては記録しない
-  publisher.sendDatagram({ groupId: 0, objectId: 1, payload: new Uint8Array([2]) });
+  void publisher.sendDatagram({ groupId: 0, objectId: 1, payload: new Uint8Array([2]) });
 
   await publisher.done();
 

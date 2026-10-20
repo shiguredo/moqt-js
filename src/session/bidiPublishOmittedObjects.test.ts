@@ -164,7 +164,7 @@ test("bidiReadRequestStreamMessages: datagram で Largest Location が進んで�
   const trackAlias = ctx.publisher.getTrackAlias();
   await ctx.publisher.sendObject({ groupId: 0, objectId: 0, payload: new Uint8Array([1]) });
   // datagram は Subgroup を持たないが Largest Location を進める
-  ctx.publisher.sendDatagram({ groupId: 0, objectId: 5, payload: new Uint8Array([2]) });
+  void ctx.publisher.sendDatagram({ groupId: 0, objectId: 5, payload: new Uint8Array([2]) });
   assert.equal(ctx.publisher.getLargestLocation()?.object, 5n);
 
   // Subgroup の次の Object は (0, 1) であり範囲内 (datagram の (0, 5) とは無関係)

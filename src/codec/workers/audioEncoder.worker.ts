@@ -7,6 +7,7 @@ import { closeCodecQuiet, isCodecConfigured, replaceCodec } from "../codecLifecy
 import {
   ignoreUnknownWorkerRequest,
   type AudioEncoderWorkerEncodeRequest,
+  type AudioEncoderWorkerFlushRequest,
   type WorkerCloseRequest,
   type WorkerInitRequest,
 } from "../workerMessages";
@@ -16,6 +17,7 @@ declare const self: DedicatedWorkerGlobalScope;
 type AudioEncoderWorkerRequest =
   | WorkerInitRequest<AudioEncoderConfig>
   | AudioEncoderWorkerEncodeRequest
+  | AudioEncoderWorkerFlushRequest
   | WorkerCloseRequest;
 
 let audioEncoder: AudioEncoder | null = null;
@@ -86,6 +88,23 @@ self.onmessage = (event: MessageEvent<AudioEncoderWorkerRequest>) => {
         audioEncoder.encode(message.data);
       }
       message.data.close();
+      break;
+    }
+
+    case "flush": {
+      // encoder に残った入力を出力させ、encoded の応答をすべて送ってから flushed を返す
+      if (audioEncoder === null) {
+        self.postMessage({ type: "flushed" });
+        break;
+      }
+      audioEncoder.flush().then(
+        () => {
+          self.postMessage({ type: "flushed" });
+        },
+        (error: unknown) => {
+          self.postMessage(workerErrorResponse(error));
+        },
+      );
       break;
     }
 

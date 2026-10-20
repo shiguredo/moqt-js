@@ -105,6 +105,16 @@ export interface StartPublisherOptions {
 export interface PublisherAudioStatus {
   /** 送信した音声 Object の数 */
   framesSent: number;
+  /** 停止時に encoder の flush で送れた末尾の Object の数 */
+  tailFlushedFrames: number;
+  /** 停止時に encoder の flush で送れた末尾の長さ (ミリ秒) */
+  tailFlushedMs: number;
+  /** 停止時に読んだが送れなかった末尾の Object の数 */
+  tailDroppedFrames: number;
+  /** 停止時に読んだが送れなかった末尾の長さ (ミリ秒) */
+  tailDroppedMs: number;
+  /** 停止時の flush か送信の待ちが上限で打ち切られた回数 */
+  tailFlushTimeoutCount: number;
 }
 
 /**
@@ -450,6 +460,11 @@ function readPublisherStatus(handle: PublisherHandle): PublisherStatus {
         ? null
         : {
             framesSent: audio.framesSent,
+            tailFlushedFrames: audio.tailFlushedFrames,
+            tailFlushedMs: audio.tailFlushedMs,
+            tailDroppedFrames: audio.tailDroppedFrames,
+            tailDroppedMs: audio.tailDroppedMs,
+            tailFlushTimeoutCount: audio.tailFlushTimeoutCount,
           },
     trackAudioFormat: handle.trackAudioFormat,
     errors: [...handle.errors],
@@ -653,16 +668,16 @@ async function stopPublisher(id: HandleId): Promise<PublisherStatus> {
   }
   publishers.delete(id);
 
-  const status = readPublisherStatus(handle);
   handle.dispose();
 
   try {
     await handle.publisher.close();
   } catch (error) {
     handle.errors.push(toErrorMessage(error));
-    return readPublisherStatus(handle);
   }
-  return status;
+  // 末尾 flush の計器 (tailFlushed* / tailDropped*) は close の完了後に確定するため、
+  // 停止の後に読む。state は "closed" になる
+  return readPublisherStatus(handle);
 }
 
 /**

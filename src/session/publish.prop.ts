@@ -1153,7 +1153,7 @@ test("publishSendDatagram: 書き出した datagram がラウンドトリップ�
             // exactOptionalPropertyTypes のため、指定がある場合だけ priority を載せる
             ...(request.priority !== undefined ? { priority: request.priority } : {}),
           };
-          publishSendDatagram(session, publisher, sendParams);
+          void publishSendDatagram(session, publisher, sendParams);
         }
         await waitForDatagrams(requests.length);
 

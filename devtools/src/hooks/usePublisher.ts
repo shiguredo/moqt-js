@@ -1676,7 +1676,7 @@ export function usePublisher() {
         // 続けて送る (docs/AUDIO_PLAYOUT_LATENCY.md)
         const copies = Math.min(3, Math.max(1, Math.floor(settings.audioRedundancy.value)));
         for (let copy = 0; copy < copies; copy++) {
-          audioPublisherInstance.sendDatagram(sendParams);
+          void audioPublisherInstance.sendDatagram(sendParams);
           pub.audioBytesSent.value += chunk.data.length + properties.length;
         }
         // 送信の遅れを記録する。datagram は完了が返らないため、投入の直後を完了にする

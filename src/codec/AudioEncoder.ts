@@ -19,7 +19,10 @@ import {
   replaceCodec,
   warnCodecNotConfigured,
 } from "./codecLifecycle";
-import type { AudioEncoderWorkerData } from "./workerMessages";
+import type {
+  AudioEncoderWorkerEncodedResponse,
+  AudioEncoderWorkerFlushRequest,
+} from "./workerMessages";
 
 /**
  * オーディオエンコーダーラッパークラス
@@ -34,6 +37,10 @@ export class AudioEncoderWrapper {
   private codec: AudioCodecType | null = null;
   // configure() 発行ごとの世代管理 (並行 configure の所有権分離用)
   private readonly generationTracker = new ConfigureGenerationTracker();
+  // 進行中の flush (worker モードで flush 要求の応答を待つ)。二重呼び出しは同じ Promise を共有する
+  private pendingFlush: Promise<void> | null = null;
+  private pendingFlushResolve: (() => void) | null = null;
+  private pendingFlushReject: ((error: Error) => void) | null = null;
 
   constructor(useWorker: boolean, callbacks: AudioEncoderWrapperCallbacks) {
     this.useWorker = useWorker;
@@ -70,11 +77,16 @@ export class AudioEncoderWrapper {
           this.worker = worker;
         },
       ),
-      dataTypes: ["encoded"],
+      dataTypes: ["encoded", "flushed"],
       loadWorkerModule: () => import("./workers/audioEncoder.worker?worker"),
-      // dataTypes で "encoded" のみを受け取るため、種別の分岐は不要
       handleWorkerData: (response) => {
-        const message = response as AudioEncoderWorkerData;
+        // flush の完了応答。worker は flush の出力 (encoded) を送ってから flushed を
+        // 送るため、これを受け取った時点で出力はすべて本体のコールバックへ届いている
+        if (response.type === "flushed") {
+          this.pendingFlushResolve?.();
+          return;
+        }
+        const message = response as AudioEncoderWorkerEncodedResponse;
         // Worker は metadata をそのまま返すため、運ぶかの判断は Wrapper 側で行う。
         // exactOptionalPropertyTypes では optional な description に undefined を渡せないため、
         // 値がある場合だけ載せる
@@ -90,7 +102,11 @@ export class AudioEncoderWrapper {
           ...(description !== undefined ? { description } : {}),
         });
       },
-      notifyError: (error) => this.callbacks.error(error),
+      notifyError: (error) => {
+        // flush の待ちを reject する (応答が来ないと停止がハングするため)
+        this.pendingFlushReject?.(error);
+        this.callbacks.error(error);
+      },
     });
   }
 
@@ -165,6 +181,51 @@ export class AudioEncoderWrapper {
   }
 
   /**
+   * 符号化中の入力をすべて出力させ、出力のコールバックが終わるまで待つ
+   *
+   * 停止時に encoder の中に残った 1 パケットを取り出し、末尾を欠けさせないために使う。
+   * 直接実行モードは WebCodecs の `AudioEncoder.flush()` を待つ (resolve した時点で
+   * 出力はすべてコールバックへ渡っている)。Worker モードは worker へ `flush` を要求し、
+   * worker が flush の出力を postMessage してから `flushed` を返す順序を待つ
+   * (postMessage の順序が保たれるため、`flushed` の時点で出力は本体へ届いている)。
+   * 未設定・未構成のときは何もしない。
+   *
+   * 二重に呼ばれた場合は進行中の Promise を返す。close() されると reject する。
+   */
+  async flush(): Promise<void> {
+    if (!this.configured) {
+      return;
+    }
+    if (this.useWorker) {
+      const worker = this.worker;
+      if (!worker) {
+        return;
+      }
+      if (this.pendingFlush !== null) {
+        return this.pendingFlush;
+      }
+      const flush = new Promise<void>((resolve, reject) => {
+        this.pendingFlushResolve = resolve;
+        this.pendingFlushReject = reject;
+        const request: AudioEncoderWorkerFlushRequest = { type: "flush" };
+        worker.postMessage(request);
+      });
+      this.pendingFlush = flush;
+      try {
+        await flush;
+      } finally {
+        this.pendingFlush = null;
+        this.pendingFlushResolve = null;
+        this.pendingFlushReject = null;
+      }
+      return;
+    }
+    if (this.encoder !== null && isCodecConfigured(this.encoder)) {
+      await this.encoder.flush();
+    }
+  }
+
+  /**
    * エンコーダーの状態を取得する
    */
   get state(): string {
@@ -175,6 +236,11 @@ export class AudioEncoderWrapper {
    * エンコーダーを閉じる
    */
   close(): void {
+    // flush の待ちが残っていれば reject する (応答が来ないまま停止がハングしないように)
+    this.pendingFlushReject?.(new Error("audio encoder closed before flush completed"));
+    this.pendingFlush = null;
+    this.pendingFlushResolve = null;
+    this.pendingFlushReject = null;
     // 待機中の configure 世代を無効化する。
     // 遅延成功した旧世代は破棄・reject される (中断扱い)。
     this.generationTracker.invalidateAll();

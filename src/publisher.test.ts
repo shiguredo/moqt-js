@@ -320,7 +320,7 @@ test("END_OF_TRACK 送信後の sendDatagram は同期 throw する", () => {
 
   let thrown: unknown = null;
   try {
-    publisher.sendDatagram({ groupId: 0, objectId: 1, payload: new Uint8Array([1]) });
+    void publisher.sendDatagram({ groupId: 0, objectId: 1, payload: new Uint8Array([1]) });
   } catch (error) {
     thrown = error;
   }
@@ -542,7 +542,7 @@ test("getLargestLocation: sendDatagram で最大 Location を更新する", () =
   const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n);
   publisher.onSendDatagram = () => {};
 
-  publisher.sendDatagram({ groupId: 2, objectId: 7, payload: new Uint8Array() });
+  void publisher.sendDatagram({ groupId: 2, objectId: 7, payload: new Uint8Array() });
   assert.deepEqual(publisher.getLargestLocation(), { group: 2n, object: 7n });
 });
 
@@ -617,7 +617,7 @@ test("forwardState=false の sendDatagram は送信しない", () => {
   };
   publisher.setForwardState(false);
 
-  publisher.sendDatagram({ groupId: 0, objectId: 0, payload: new Uint8Array([1]) });
+  void publisher.sendDatagram({ groupId: 0, objectId: 0, payload: new Uint8Array([1]) });
 
   assert.equal(sent, 0);
   assert.isNull(publisher.getLargestLocation());
@@ -718,8 +718,8 @@ test("sendDatagram: 購読の Location Filter の範囲外は送信せず Larges
   });
 
   // 範囲外だが大きい Location {6, 0} を先に送る
-  publisher.sendDatagram({ groupId: 6, objectId: 0, payload: new Uint8Array() });
-  publisher.sendDatagram({ groupId: 5, objectId: 0, payload: new Uint8Array() });
+  void publisher.sendDatagram({ groupId: 6, objectId: 0, payload: new Uint8Array() });
+  void publisher.sendDatagram({ groupId: 5, objectId: 0, payload: new Uint8Array() });
 
   assert.deepEqual(sentGroups, [5]);
   assert.equal(publisher.getLargestLocation()?.group, 5n);

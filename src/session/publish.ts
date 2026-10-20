@@ -616,10 +616,10 @@ export function publishSendDatagram(
   session: SessionInternal,
   publisher: PublisherImpl,
   params: SendDatagramParams,
-): void {
+): Promise<void> {
   // セッションクローズ後は datagram を送らない
   if (session.sessionState === "closed") {
-    return;
+    return Promise.resolve();
   }
 
   // draft-ietf-moq-transport-22 §3.1.1:
@@ -627,7 +627,7 @@ export function publishSendDatagram(
   // PublisherImpl 側でも同じガードを持つが、内部送信関数を直接呼ぶ経路の
   // 防御としてここでも参照する。
   if (!publisher.forwardState) {
-    return;
+    return Promise.resolve();
   }
 
   // 不正 ID はローカル API 誤用のため、送信前に通知して throw する
@@ -700,12 +700,19 @@ export function publishSendDatagram(
   }
 
   const writer = publishGetDatagramWriter(session);
-  writer.write(datagram).catch((err: unknown) => {
+  const written = writer.write(datagram);
+  // 失敗は従来どおり error 通知する。返値は reject させない (fire-and-forget で
+  // 呼ぶ利用者を壊さず、停止時の「書き終えた」待ちだけを可能にする)
+  void written.catch((err: unknown) => {
     if (session.sessionState === "closed") {
       return;
     }
     publisher.handleError(err instanceof Error ? err : new Error(String(err)));
   });
+  return written.then(
+    () => undefined,
+    () => undefined,
+  );
 }
 
 /**

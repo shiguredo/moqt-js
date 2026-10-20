@@ -281,8 +281,12 @@ export interface Publisher {
    * (§11.1.2 の EOT / END_OF_GROUP の定義による解釈)。
    * 購読の Location Filter の範囲外 Datagram は送信せず、何もせず return する
    * (draft-ietf-moq-transport-22 §3.3.1)。
+   * 返値は Datagram の送信 (WebTransport の datagram writer への write) の完了で
+   * resolve する。送信の失敗は従来どおり `onError` へ通知し、返値は reject しない
+   * (fire-and-forget で呼ぶ利用者を壊さない)。停止時に末尾の datagram を書き終えた
+   * ことを確かめてから PUBLISH_DONE を送る用途で待てるようにする。
    */
-  sendDatagram(params: SendDatagramParams): void;
+  sendDatagram(params: SendDatagramParams): Promise<void>;
   /**
    * 開いている Subgroup を、Object を送らずに閉じる
    * draft-ietf-moq-transport-22 Section 11.3.2 (Closing Subgroup Streams)
@@ -453,7 +457,7 @@ export class PublisherImpl implements Publisher {
    * 記録側 (publishMarkStreamOmitted) が Group の一致を見る。
    */
   onSendObjectSkipped?: (groupId: number) => void;
-  onSendDatagram?: (params: SendDatagramParams) => void;
+  onSendDatagram?: (params: SendDatagramParams) => Promise<void> | void;
   onDoneInternal?: (status: PublishDoneStatusCode) => Promise<void>;
   /**
    * 開いている Subgroup を閉じる (セッション内部コールバック)
@@ -855,10 +859,10 @@ export class PublisherImpl implements Publisher {
    * 委譲先 (onSendDatagram) の ID / priority 検証も自分で error 通知してから throw する。
    * 購読の Location Filter の範囲外 Datagram は送信しない (§3.3.1)。
    */
-  sendDatagram(params: SendDatagramParams): void {
+  sendDatagram(params: SendDatagramParams): Promise<void> {
     const guard = this.guardSend("datagram", params.groupId);
     if (guard === "skip") {
-      return;
+      return Promise.resolve();
     }
     if (guard !== null) {
       throw guard;
@@ -867,7 +871,7 @@ export class PublisherImpl implements Publisher {
     // draft-ietf-moq-transport-22 §3.3.1:
     // 購読の Location Filter の範囲外 Datagram は送信しない。
     if (this.isOutsideLocationFilter(params.groupId, params.objectId)) {
-      return;
+      return Promise.resolve();
     }
 
     // draft-ietf-moq-transport-22 §9.20.17:
@@ -875,8 +879,10 @@ export class PublisherImpl implements Publisher {
     this.recordLargestLocation(params.groupId, params.objectId);
 
     if (this.onSendDatagram) {
-      this.onSendDatagram(params);
+      // 同期 throw は従来どおり呼び出し側へ流す (検証違反の契約を変えない)
+      return Promise.resolve(this.onSendDatagram(params));
     }
+    return Promise.resolve();
   }
 
   /**
