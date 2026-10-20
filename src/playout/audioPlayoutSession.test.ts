@@ -17,10 +17,12 @@ import {
   type AudioPlayoutTimestampKind,
 } from "./audioPlayoutSession";
 import { AUDIO_PLAYOUT_TIMING_WINDOW_MS, AudioPlayoutTimingStats } from "./audioPlayoutTimingStats";
-import type { AudioClockMapping } from "./audioPlayout";
+import { AUDIO_PLAYOUT_PUSH_START_LEAD_SECONDS, type AudioClockMapping } from "./audioPlayout";
+import * as fc from "fast-check";
 import { AUDIO_PLAYOUT_DELAY_FLOOR_MS, MAX_PLAYOUT_DELAY_MS, PlayoutTimeline } from "./timeline";
 import { JITTER_BUFFER_MAX_QUEUED_FRAMES } from "./buffer";
 import { AUDIO_RECEIVE_CATCH_UP_MIN_MS } from "./audioReceiveCatchUp";
+import { AUDIO_SPLICE_FADE_MS } from "../audioSpliceFade";
 import { AUDIO_DELAY_FEEDBACK_INTERVAL_MS } from "./audioDelayFeedback";
 
 /** 音 1 つ分のサンプル数 (48 kHz の 20 ms) */
@@ -1348,11 +1350,12 @@ test("handleDecodedAudio: 穴が無い境界にはフェードを入れない", 
 });
 
 /**
- * 完了条件: 予約した時刻を currentTime が追い越したら、計器に回数と最大を残す。
- * 追い越しは直前の音との重なりになり得るため、値が 1 でも出たら重なりの可能性がある。
+ * 完了条件: 予約した時刻を currentTime が追い越したら押し直し、重ならず、次の音も
+ * 押し直した音の終わりから並ぶ。押し直しの境界は段差として計器に残す。
  */
-test("handleDecodedAudio: 予約した時刻を currentTime が追い越したら計器に残す", () => {
+test("handleDecodedAudio: 予約した時刻を currentTime が追い越したら押し直す", () => {
   const fixture = makeSessionFixture();
+  // 定振幅にして、フェードの有無と段差 (前の音の末尾) を検出できるようにする
   const samples = [constantSamples(0.2)];
   const output = makeRecordingOutput({
     timeline: fixture.timeline,
@@ -1360,7 +1363,7 @@ test("handleDecodedAudio: 予約した時刻を currentTime が追い越した�
     currentTimeSeconds: 10,
     mappingFromCurrentTime: true,
     advanceOnTimestampMs: 120,
-    createBufferWorkMs: 60,
+    createBufferWorkMs: 12,
   });
 
   handleSound(fixture, output.output, {
@@ -1370,8 +1373,8 @@ test("handleDecodedAudio: 予約した時刻を currentTime が追い越した�
     enforceTarget: false,
     samples,
   });
-  // 前の音は既に鳴り終わっており、今回は到着 + 再生の遅れ (50 ms) で鳴らす。createBuffer で
-  // 60 ms 進むため、start() の時点で予約時刻を追い越す
+  // 前の音は既に鳴り終わっており、今回は到着 + 再生の遅れで鳴らす。createBuffer で
+  // 12 ms 進むため、start() の時点で予約時刻を追い越す
   handleSound(fixture, output.output, {
     timestamp: 200_000,
     timestampKind: "none",
@@ -1382,13 +1385,244 @@ test("handleDecodedAudio: 予約した時刻を currentTime が追い越した�
 
   const snapshot = fixture.timing.snapshot(performance.now());
   assert.isAtLeast(snapshot.lateStartCount, 1, "追い越しを数えること");
-  // 予約は今 + 余裕で決まり、createBuffer の 60 ms が余裕の 10 ms を超えるため追い越す
+  // 予約は今 + 余裕で決まり、createBuffer の 12 ms が余裕の 10 ms を超えるため追い越す
   assert.isAbove(snapshot.lateStartMaxMs, 0, "追い越した長さを残すこと");
   const lastBuffer = output.recordedBuffers[output.recordedBuffers.length - 1];
+  assert.isNotNull(lastBuffer);
+  // 押し直した後の時刻は currentTime + 余裕より前にならない
+  assert.isAtLeast(
+    lastBuffer?.whenSeconds ?? Number.NaN,
+    (lastBuffer?.currentTimeAtStart ?? Number.NaN) + AUDIO_PLAYOUT_PUSH_START_LEAD_SECONDS - 1e-9,
+    "押し直した時刻が currentTime + 余裕以降であること",
+  );
+  // 予約した時刻より後ろへ押し直している
   assert.isAbove(
-    lastBuffer?.currentTimeAtStart ?? Number.NEGATIVE_INFINITY,
-    lastBuffer?.whenSeconds ?? Number.POSITIVE_INFINITY,
-    "start() の時点で予約時刻が過去になっていること",
+    lastBuffer?.whenSeconds ?? Number.NaN,
+    (lastBuffer?.currentTimeAtStart ?? Number.NaN) - AUDIO_PLAYOUT_PUSH_START_LEAD_SECONDS + 1e-9,
+  );
+  // 押し直したバッファの先頭は 2 ms フェードインで 0 から始まり、元の振幅へ戻る
+  const pushedChannels = lastBuffer?.channels[0];
+  const fadeSamples = Math.round((AUDIO_SPLICE_FADE_MS / 1_000) * SAMPLE_RATE);
+  assert.closeTo(pushedChannels?.[0] ?? Number.NaN, 0, 1e-6, "先頭を 0 から始めること");
+  // フェードの後は元の波形へ戻る (同じ波形を鳴らした 1 つ目のバッファと比べる)
+  const referenceChannels = output.recordedBuffers[0]?.channels[0];
+  assert.closeTo(
+    pushedChannels?.[fadeSamples] ?? Number.NaN,
+    referenceChannels?.[fadeSamples] ?? Number.NaN,
+    1e-6,
+    "2 ms のフェードの後は元の波形であること",
+  );
+  // 押し直しで生じた境界も、前の音の末尾はフェードできないため段差として数える。
+  // 段差の値は前の音の末尾 (定振幅 0.2) であり、今回の先頭 (フェードで 0) との差ではない
+  assert.equal(snapshot.boundaryStepCount, 1, "押し直しの境界の段差も数えること");
+  assert.closeTo(snapshot.boundaryStepMax, 0.2, 1e-6, "段差は前の音の末尾の振幅であること");
+  assert.isAtLeast(snapshot.pushStartCount, 1, "押し直した回数を数えること");
+  assert.isAbove(snapshot.pushStartMaxMs, 0, "押し直した長さを残すこと");
+
+  // 次の音は、押し直した後の終わりちょうどから並ぶ (重ならない)。押し直しの分だけ
+  // 前の音の終わりをずらしていないと、ここがずれて重なる
+  const pushedEndSeconds =
+    (lastBuffer?.whenSeconds ?? Number.NaN) +
+    (lastBuffer?.channels[0]?.length ?? 0) / (lastBuffer?.sampleRate ?? SAMPLE_RATE);
+  // 押し直した分だけ、次に並べる音の下限 (スケジューラが持つ前の音の終わり) も後ろへずれる。
+  // 次の音を並べる前に読む
+  const schedulerEnd = (fixture.session.playout as unknown as { lastEnd: number | null }).lastEnd;
+  assert.closeTo(
+    schedulerEnd ?? Number.NaN,
+    pushedEndSeconds,
+    1e-6,
+    "押し直した分だけ次の音の下限を後ろへずらすこと",
+  );
+  // 次の音は押し直した音の終わりより前から鳴らない
+  handleSound(fixture, output.output, {
+    timestamp: 220_000,
+    timestampKind: "none",
+    useTimeline: false,
+    enforceTarget: false,
+    samples,
+  });
+  const next = output.recordedBuffers[output.recordedBuffers.length - 1];
+  assert.isNotNull(next);
+  assert.isAtLeast(
+    next?.whenSeconds ?? Number.NaN,
+    pushedEndSeconds - 1e-9,
+    "押し直した音の終わりから次を並べること (重ならない)",
+  );
+});
+
+/**
+ * 完了条件: 穴を挟まない押し直しでも先頭を 2 ms フェードし、段差は前の音の末尾で測る。
+ * 穴のフェードと区別して検出できるよう、連続した音 (隙間 0) で押し直しを起こす。
+ */
+test("handleDecodedAudio: 穴を挟まない押し直しでも先頭をフェードし段差は前の末尾で測る", () => {
+  const fixture = makeSessionFixture();
+  const samples = [constantSamples(0.2)];
+  const output = makeRecordingOutput({
+    timeline: fixture.timeline,
+    mapping: null,
+    currentTimeSeconds: 10,
+    mappingFromCurrentTime: true,
+    createBufferWorkMs: 60,
+  });
+
+  handleSound(fixture, output.output, {
+    timestamp: 0,
+    timestampKind: "none",
+    useTimeline: false,
+    enforceTarget: false,
+    samples,
+  });
+  const firstSound = output.recordedBuffers[0];
+  assert.isNotNull(firstSound);
+  const fadeSamples = Math.round((AUDIO_SPLICE_FADE_MS / 1_000) * SAMPLE_RATE);
+  const channels = firstSound?.channels[0];
+  // 穴のフェードは掛からない (隙間 0)。押し直しのフェードだけが先頭を 0 にする
+  assert.closeTo(channels?.[0] ?? Number.NaN, 0, 1e-6, "押し直しで先頭を 0 から始めること");
+  assert.isAbove(
+    channels?.[Math.floor(fadeSamples / 2)] ?? Number.NaN,
+    0,
+    "フェードの途中は 0 より大きいこと",
+  );
+  assert.isBelow(
+    channels?.[Math.floor(fadeSamples / 2)] ?? Number.NaN,
+    0.2,
+    "フェードの途中は元の振幅より小さいこと",
+  );
+
+  // 連続した 2 音目 (この音も押し直される)。段差は前の音の末尾で測る
+  handleSound(fixture, output.output, {
+    timestamp: 20_000,
+    timestampKind: "none",
+    useTimeline: false,
+    enforceTarget: false,
+    samples,
+  });
+  const snapshot = fixture.timing.snapshot(performance.now());
+  assert.isAtLeast(snapshot.boundaryStepCount, 1, "押し直しの境界を段差として数えること");
+  assert.closeTo(snapshot.boundaryStepMax, 0.2, 1e-6, "段差は前の音の末尾の振幅であること");
+});
+
+/**
+ * 完了条件: 補間が押し直されたときも、直後の実音は補間の終わりから並ぶ (重ならない)。
+ */
+test("handleDecodedAudio: 補間が押し直されても実音は補間の終わりから並ぶ", () => {
+  const fixture = makeSessionFixture();
+  const samples = [constantSamples(0.2)];
+  const output = makeRecordingOutput({
+    timeline: fixture.timeline,
+    mapping: null,
+    currentTimeSeconds: 10,
+    mappingFromCurrentTime: true,
+    // createBuffer のたびに時計が進み、補間の予約も押し直される
+    createBufferWorkMs: 60,
+  });
+
+  handleSound(fixture, output.output, {
+    timestamp: 0,
+    timestampKind: "none",
+    useTimeline: false,
+    enforceTarget: false,
+    samples,
+  });
+  // 80 ms 進んだ timestamp の音で 60 ms の隙間を作り、補間を予約させる
+  handleSound(fixture, output.output, {
+    timestamp: 80_000,
+    timestampKind: "none",
+    useTimeline: false,
+    enforceTarget: false,
+    samples,
+  });
+
+  assert.equal(output.recordedBuffers.length, 3, "実音と補間を予約すること");
+  const conceal = output.recordedBuffers[1];
+  const real = output.recordedBuffers[2];
+  assert.isNotNull(conceal);
+  assert.isNotNull(real);
+  const concealEndSeconds =
+    (conceal?.whenSeconds ?? Number.NaN) +
+    (conceal?.channels[0]?.length ?? 0) / (conceal?.sampleRate ?? SAMPLE_RATE);
+  // 実音は押し直された補間の終わりより前から鳴らない
+  assert.isAtLeast(
+    real?.whenSeconds ?? Number.NaN,
+    concealEndSeconds - 1e-9,
+    "補間の終わりから実音を並べること (重ならない)",
+  );
+});
+
+/**
+ * 完了条件: 押し直しが起きない通常経路では、start 時刻も先頭のフェードも変わらない。
+ */
+test("handleDecodedAudio: 押し直しが起きない通常経路では start 時刻を変えない", () => {
+  const fixture = makeSessionFixture();
+  const output = makeRecordingOutput({
+    timeline: fixture.timeline,
+    mapping: null,
+    currentTimeSeconds: 10,
+    mappingFromCurrentTime: true,
+  });
+
+  for (let index = 0; index < 2; index++) {
+    handleSound(fixture, output.output, {
+      timestamp: index * 20_000,
+      timestampKind: "none",
+      useTimeline: false,
+      enforceTarget: false,
+      samples: [toneSamples(index)],
+    });
+  }
+
+  assert.equal(output.recordedBuffers.length, 2);
+  // 余裕より先に予約できているため、押し直していない (start 時刻は元の値のまま)
+  assert.isAtLeast(
+    output.recordedBuffers[0]?.whenSeconds ?? Number.NaN,
+    (output.recordedBuffers[0]?.currentTimeAtStart ?? Number.NaN) +
+      AUDIO_PLAYOUT_PUSH_START_LEAD_SECONDS -
+      1e-9,
+  );
+  const snapshot = fixture.timing.snapshot(performance.now());
+  assert.equal(snapshot.lateStartCount, 0, "追い越しが無いこと");
+  // 通常の境界はフェードしない (先頭が 0 でない)
+  assert.isAbove(
+    Math.abs(output.recordedBuffers[1]?.channels[0]?.[0] ?? 0),
+    0.001,
+    "押し直しが無い境界の先頭はフェードしないこと",
+  );
+});
+
+/**
+ * 完了条件: 押し直すときは、start() の時刻が currentTime + 余裕より前にならない。
+ * メインスレッドの停止 (createBuffer で時計を進める) を任意の長さで与えて通す。
+ */
+test("property: 押し直した start 時刻は currentTime + 余裕より前にならない", () => {
+  fc.assert(
+    fc.property(fc.integer({ min: 0, max: 80 }), (workMs) => {
+      const fixture = makeSessionFixture();
+      const output = makeRecordingOutput({
+        timeline: fixture.timeline,
+        mapping: null,
+        currentTimeSeconds: 10,
+        mappingFromCurrentTime: true,
+        advanceOnTimestampMs: workMs,
+        createBufferWorkMs: workMs,
+      });
+      for (let index = 0; index < 2; index++) {
+        handleSound(fixture, output.output, {
+          timestamp: index * 20_000,
+          timestampKind: "none",
+          useTimeline: false,
+          enforceTarget: false,
+          samples: [toneSamples(index)],
+        });
+      }
+      for (const buffer of output.recordedBuffers) {
+        assert.isAtLeast(
+          buffer.whenSeconds,
+          buffer.currentTimeAtStart + AUDIO_PLAYOUT_PUSH_START_LEAD_SECONDS - 1e-9,
+          "start 時刻が currentTime + 余裕より前にならないこと",
+        );
+      }
+    }),
+    { numRuns: 20 },
   );
 });
 

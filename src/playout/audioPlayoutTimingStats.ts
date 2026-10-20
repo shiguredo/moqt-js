@@ -222,12 +222,17 @@ export interface AudioPlayoutTimingSnapshot {
    * 予約した時刻を `AudioContext.currentTime` が追い越した回数 (累積)
    *
    * `source.start(when)` の直前に読んだ `currentTime` が `when` を過ぎていた回数である。
-   * Web Audio は過去の時刻を即時開始にするため、1 件でも出たら直前の音と重なっている
-   * 可能性がある (重なりそのものはこの計器では分からない)
+   * 追い越し (および余裕 3 ms 未満) のときは開始時刻を `currentTime + 3 ms` へ押し直して
+   * 先頭をフェードインするため、重なりは起きない。0 より大きいことは、予約の処理の間に
+   * メインスレッドが遅れた証拠として読む (重なりそのものはこの計器では分からない)
    */
   readonly lateStartCount: number;
   /** 予約を追い越した最大の長さ (ミリ秒。記録期間中の最大) */
   readonly lateStartMaxMs: number;
+  /** 予約時刻を currentTime + 余裕へ押し直した回数 (追い越しの有無を問わない) */
+  readonly pushStartCount: number;
+  /** 押し直した最大の長さ (ミリ秒。記録期間中の最大) */
+  readonly pushStartMaxMs: number;
   /**
    * バッファ境界の段差が `AUDIO_PLAYOUT_BOUNDARY_STEP_THRESHOLD` を超えた回数 (累積)
    *
@@ -279,6 +284,8 @@ export const EMPTY_AUDIO_PLAYOUT_TIMING: AudioPlayoutTimingSnapshot = {
   unrecoverableGapMs: 0,
   lateStartCount: 0,
   lateStartMaxMs: 0,
+  pushStartCount: 0,
+  pushStartMaxMs: 0,
   boundaryStepCount: 0,
   boundaryStepMax: 0,
   lastDrain: null,
@@ -345,6 +352,8 @@ export class AudioPlayoutTimingStats {
   // 予約した時刻を currentTime が追い越した回数と最大 (ms)
   private lateStartCount = 0;
   private lateStartMaxMs = 0;
+  private pushStartCount = 0;
+  private pushStartMaxMs = 0;
   // バッファ境界の段差 (しきい値を超えた回数と最大)
   private boundaryStepCount = 0;
   private boundaryStepMax = 0;
@@ -575,6 +584,8 @@ export class AudioPlayoutTimingStats {
       unrecoverableGapMs: this.unrecoverableGapMs,
       lateStartCount: this.lateStartCount,
       lateStartMaxMs: this.lateStartMaxMs,
+      pushStartCount: this.pushStartCount,
+      pushStartMaxMs: this.pushStartMaxMs,
       boundaryStepCount: this.boundaryStepCount,
       boundaryStepMax: this.boundaryStepMax,
       lastDrain: this.lastDrain,
@@ -621,6 +632,20 @@ export class AudioPlayoutTimingStats {
     }
     this.lateStartCount += 1;
     this.lateStartMaxMs = Math.max(this.lateStartMaxMs, lateMs);
+  }
+
+  /**
+   * 予約時刻を押し直したことを記録する
+   *
+   * 追い越しの有無を問わない (余裕より近かっただけの押し直しも含む)。`lateStartCount` は
+   * 追い越した回数だけを数えるため、押し直しの発生はこちらで読む
+   */
+  recordPushStart(pushMs: number): void {
+    if (!Number.isFinite(pushMs) || !(pushMs > 0)) {
+      return;
+    }
+    this.pushStartCount += 1;
+    this.pushStartMaxMs = Math.max(this.pushStartMaxMs, pushMs);
   }
 
   /**
@@ -675,6 +700,8 @@ export class AudioPlayoutTimingStats {
     this.unrecoverableGapCount = 0;
     this.unrecoverableGapMs = 0;
     this.lateStartCount = 0;
+    this.pushStartCount = 0;
+    this.pushStartMaxMs = 0;
     this.lateStartMaxMs = 0;
     this.boundaryStepCount = 0;
     this.boundaryStepMax = 0;
