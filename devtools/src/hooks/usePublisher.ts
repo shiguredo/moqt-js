@@ -1679,7 +1679,7 @@ export function usePublisher() {
           void audioPublisherInstance.sendDatagram(sendParams);
           pub.audioBytesSent.value += chunk.data.length + properties.length;
         }
-        // 送信の遅れを記録する。datagram は完了が返らないため、投入の直後を完了にする
+        // 送信の遅れを記録する。送信の完了を待たず、投入の直後を記録する
         // (recordAudioDatagramSent の JSDoc を参照)。ここを記録しないと、受信側の到着の遅れを
         // 配信側と経路に分けられない
         recordAudioDatagramSent(

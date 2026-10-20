@@ -3,7 +3,7 @@
 - Created: 2026-10-20
 - Completed: 2026-10-20
 - Branch: feature/fix-publisher-audio-tail-flush
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-10-20
 - Reporter: @voluntas
 
 ## 目的
@@ -62,8 +62,9 @@
 - Opus encoder に残った入力が flush で出力され、close の前に送信されること (単体テスト)
 - PUBLISH_DONE の後に datagram を送らないことと、末尾の datagram が PUBLISH_DONE より先に
   届く方策が実装されていること
-- 実リレーで publisher を停止したとき、購読側で最後に受信した Object の TIMESTAMP と停止
-  時刻の差が、パイプライン遅延 (Opus の 20 ms と経路の遅れ) の範囲に収まること
+- 実リレーで publisher を停止したとき、購読側が停止後に末尾の Object を 1 件以上受信し、
+  停止の所要時間が上限 (drain 55 ms + flush・送信 150 ms + 猶予 50 ms) に収まること
+  (購読側の TIMESTAMP と停止時刻の比較は計測用の口が無いため未実施)
 - 送れなかった出力が統計に出ること
 - `vp check` / `tsc --noEmit` / `vp test run` と、実リレーの既存 E2E が通ること
 
@@ -71,13 +72,13 @@
 
 - 停止の順序を「周期読み出しのループ自身が取り込みキューを読み切る」「1 フレーム先読みを
   encode する」「`AudioEncoderWrapper.flush()` で encoder の出力を待つ」「datagram の
-  write / subgroup の送信の完了を待つ」「datagram 配送なら 50 ms 待つ」「PUBLISH_DONE」
+  write / subgroup の送信の完了を待つ」「配送方式にかかわらず 50 ms 待つ」「PUBLISH_DONE」
   に組み替えた。stop / close のたびに `processingGeneration` を先に進めると末尾の出力が
   世代不一致で捨てられるため、末尾 flush の後に進める
 - 読み切りの打ち切りは、ループ内で `Promise.race([read, sleep(5 ms)])` を使い、停止の受付時
   に既に capture されていた分だけを末尾に含める。負けた read は後から解決したら閉じて
   捨てる。上限は 4 ブロック / 50 ms、停止の待ちは flush と送信を合わせて 150 ms で打ち切る
-  (`tailFlushTimeoutCount` に残す)
+  (`tailFlushTimeoutCount` に残す。drain の待ち 55 ms は別に取る)
 - `AudioEncoderWrapper.flush()` を追加した。direct は WebCodecs の `AudioEncoder.flush`、
   worker は `flush` / `flushed` メッセージで、worker が flush の出力を `encoded` として
   送ってから `flushed` を返す順序を保証する。`close()` は待っている flush を reject して

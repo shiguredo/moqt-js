@@ -156,7 +156,11 @@ async function readAudioFrameWithin(
   });
   try {
     const timeout = new Promise<{ kind: "quiet" }>((resolve) => {
-      timer = setTimeout(() => resolve({ kind: "quiet" }), timeoutMs);
+      timer = setTimeout(() => {
+        // 負けた read がこの後にフレームを返したら閉じる
+        abandoned = true;
+        resolve({ kind: "quiet" });
+      }, timeoutMs);
     });
     const result = await Promise.race([
       readPromise.then((read) =>
@@ -1076,6 +1080,10 @@ export class MediaPublisherImpl implements MediaPublisher {
   pause(): void {
     if (this.currentState !== "publishing") {
       throw new Error(`cannot pause in state: ${this.currentState}`);
+    }
+    // 停止の末尾 flush の間は世代を進めない (進めると末尾の出力が捨てられる)
+    if (this.stopInProgress) {
+      throw new Error("cannot pause while stopping");
     }
 
     this.processingActive = false;
@@ -2670,34 +2678,35 @@ export class MediaPublisherImpl implements MediaPublisher {
     this.audioTailDrain = state;
     let flushTimedOut = false;
     try {
-      // ループ自身が drain を終えて保留分を encode するまで待つ。ループが既に終了して
-      // いる場合に備えて上限で打ち切る
-      const drained = await waitWithTimeout(
-        done,
-        AUDIO_TAIL_DRAIN_MAX_MS + AUDIO_TAIL_DRAIN_QUIET_MS,
-      );
-      if (drained.timedOut) {
-        // ループが応答しない (想定外)。読み出しの完了は待たずに flush へ進む
-        flushTimedOut = true;
+      // ループ自身が drain を終えて保留分を encode するまで待つ。paused からの停止では
+      // ループが既に終了しており、待っても読み切る対象が無いため待たない
+      if (this.processingActive) {
+        const drained = await waitWithTimeout(
+          done,
+          AUDIO_TAIL_DRAIN_MAX_MS + AUDIO_TAIL_DRAIN_QUIET_MS,
+        );
+        if (drained.timedOut) {
+          // ループが応答しない (想定外)。読み出しの完了は待たずに flush へ進む
+          flushTimedOut = true;
+        }
       }
       // encoder に残った入力を出力させる。direct は WebCodecs の flush、worker は
       // flush の出力を送ってから flushed を返す順序を待つ (どちらも resolve した時点で
       // 出力はすべてコールバックへ届いている)
+      const flushMethod = (encoder as { flush?: () => Promise<void> }).flush;
       let flush: Promise<void>;
-      try {
-        flush = encoder.flush();
-      } catch (error) {
+      if (typeof flushMethod === "function") {
+        flush = flushMethod.call(encoder);
+      } else {
         // flush を持たない注入 (テストの記録用エンコーダーなど) は待たない
         flush = Promise.resolve();
-        if (error instanceof TypeError) {
-          // メソッドが無いだけである。失敗として通知しない
-        } else {
-          this.callbacks.onError?.(error instanceof Error ? error : new Error(String(error)));
-        }
       }
+      // flush と送信の完了を合わせて上限に収める。残り時間で待つ
+      const flushDeadlineMs = performance.now() + AUDIO_TAIL_FLUSH_MAX_MS;
+      const flushRemainingMs = (): number => Math.max(0, flushDeadlineMs - performance.now());
       let flushed: { timedOut: false } | { timedOut: true };
       try {
-        flushed = await waitWithTimeout(flush, AUDIO_TAIL_FLUSH_MAX_MS);
+        flushed = await waitWithTimeout(flush, flushRemainingMs());
       } catch (error) {
         // flush の失敗で停止そのものを失敗させない (切った量は計器に残る)
         this.callbacks.onError?.(error instanceof Error ? error : new Error(String(error)));
@@ -2718,7 +2727,7 @@ export class MediaPublisherImpl implements MediaPublisher {
               ),
             ),
           ),
-          AUDIO_TAIL_FLUSH_MAX_MS,
+          flushRemainingMs(),
         );
         if (sent.timedOut) {
           flushTimedOut = true;
@@ -2761,10 +2770,10 @@ export class MediaPublisherImpl implements MediaPublisher {
     if (flushTimedOut) {
       this.audioStats.tailFlushTimeoutCount++;
     }
-    // datagram は control stream との順序保証が無いため、末尾を送ったときだけ
-    // PUBLISH_DONE の前に猶予を待つ
-    const delivery = this.resolvedAudio?.delivery ?? "subgroup";
-    this.pendingAudioTailGrace = delivery === "datagram" && state.sentFrames > 0;
+    // Object の配送 (datagram と subgroup) と PUBLISH_DONE の control stream には
+    // 到着順の保証が無いため、末尾を送ったときは配送方式にかかわらず PUBLISH_DONE の
+    // 前に猶予を待つ
+    this.pendingAudioTailGrace = state.sentFrames > 0;
   }
 
   private async cancelFrameReaders(): Promise<void> {
