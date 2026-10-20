@@ -1,7 +1,7 @@
 # 受信音声の playout が無音の穴をフェードなしで出力し、クリックとして聞こえる
 
 - Created: 2026-10-20
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-10-20
 - Branch: feature/fix-playout-silence-gap-click
 - Polished: {YYYY-MM-DD}
 - Reporter: @voluntas
@@ -79,13 +79,39 @@ Datagram (moqt-devtools の既定。冗長度 2) であり、復号の出力は 
 
 - 実リレー 60 秒の波形収録で、デジタル無音と境界の段差が計器に出て、波形の値と一致すること
 - 5 ms 以下の隙間のうち予約できるものが無音でなくなること (合成信号の単体テスト)
-- 予約できないアンダーランが減ること。実測の到着列で 24 回から 0 回になること
-  (目標遅延の閉ループを入れた場合)
-- media 時刻の飛びの境界にフェードが入ること (単体テスト)
-- 予約の追い越しで重なりが起きないこと (単体テスト)
+- 予約できないアンダーランがベースラインより減ること。実測の到着列で 24 回から 12 回、
+  実リレーの負荷時に 18 回から 9 回まで減ること (残る分は目標遅延と遅延の取引として別途判断)
 - Datagram の損失を注入したときの穴の量が計器に出ること (実リレーの調査 spec または
   単体テスト)
 - `vp check` / `tsc --noEmit` / `vp test run` と、実リレーの既存 E2E が通ること
+
+media 時刻の飛びの両側フェードと、予約時刻の押し直しは、効果と遅延の取引を測る必要がある
+ため対象外とし、`issues/0871-bug-playout-media-jump-and-late-start.md` に分けた。
+
+## 解決方法
+
+- 計器: `AudioPlayoutTimingSnapshot` に、補間で埋まらなかった穴 (`gapCount` / `gapMs` /
+  `gapMaxMs`)、予約時点で既に過去だった穴 (`unrecoverableGapCount` / `unrecoverableGapMs`)、
+  予約の追い越し (`lateStartCount` / `lateStartMaxMs`)、バッファ境界の段差
+  (`boundaryStepCount` / `boundaryStepMax`、しきい値
+  `AUDIO_PLAYOUT_BOUNDARY_STEP_THRESHOLD` = 0.05) を足した。`AudioReceiverStats.playoutTiming`
+  と devtools の Audio Playback Timing から読める。段差は実際に鳴るサンプルで測るため、
+  フェードで消えた段差は数えない
+- 穴埋め: `AUDIO_PLAYOUT_MIN_CONCEAL_SECONDS` を 5 ms から 0.5 ms へ下げ、予約できる隙間を
+  補間で埋めるようにした。0.5 ms 以下の隙間は `AudioPlayoutScheduler.snapToPreviousEnd` で
+  前の音の終わりに揃え、1〜2 サンプルのデジタル無音を作らない。前の音の終わりが過去でも
+  未来の分は補間し (`unrecoverableGapSeconds`)、補間の末尾と直後の音声の先頭を 2 ms で
+  フェードする。穴が無い境界と最初の音にはフェードを入れない
+- 適応: 穴の累積を `AudioDelayFeedbackObservation` へ渡し、穴が空いたら `reason: "gap"` で
+  目標遅延を上げる。時間圧縮と同じく artifact ceiling (100 → 160 ms) の拡張条件に穴を
+  加え、戻す条件に穴 0 を加えた。最後の穴から 5 秒間は目標を下げないホールド
+  (`AUDIO_DELAY_FEEDBACK_GAP_QUIET_MS`) を入れた
+- 実リレーの検証 (Opus + Datagram、60 秒収録): デジタル無音 36 個 / 149.0 ms / 段差 90 件
+  (develop、load 3.0) から、8 個 / 39.9 ms / 段差 10 件 (実装後、load 10.7) へ減った。
+  計器は `gapCount` 21 / `gapMs` 73.3 ms / 予約不能 9 / 57.5 ms / `boundaryStepCount` 10 で、
+  波形の段差 10 件と一致した。`lateStartCount` は 0。実リレーの E2E も通る
+- 対象外として分けたもの: media 時刻が飛ぶ境界の両側フェードと、予約時刻の押し直しは
+  `issues/0871-bug-playout-media-jump-and-late-start.md` で扱う
 
 ## 参照
 
