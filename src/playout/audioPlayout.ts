@@ -178,7 +178,9 @@ export function arrivalPlayoutDelaySeconds(learnedDelaySeconds: number): number 
  * 440 Hz のトーンでは補間が失敗しないため、隙間を埋める方がよい。0.5 ms は 48 kHz で
  * 24 サンプルであり、これ以下の段差はサンプル数個で耳につかない。また、これ以下の隙間は
  * 「補間する」のではなく前の音の終わりへ揃えて穴を作らない (`snapToPreviousEnd`)。目標の
- * 表示時刻の更新や浮動小数点の丸めで生じる 20 µs〜0.5 ms の前進を連続再生で吸収するため
+ * 表示時刻の更新や浮動小数点の丸めで生じる 20 µs〜0.5 ms の前進を連続再生で吸収するため。
+ * 前の音の終わりが今より過去で揃えられないときは、実際に無音として出るため
+ * `concealmentOf` が隙間として返し、呼び出し側が先頭をフェードする
  */
 export const AUDIO_PLAYOUT_MIN_CONCEAL_SECONDS = 0.0005;
 
@@ -650,10 +652,12 @@ export class AudioPlayoutScheduler {
         unrecoverableGapSeconds: 0,
       };
     }
-    // 下限以下の隙間は、schedule / scheduleByArrival が前の音の終わりへ揃えるため、
-    // ここへは届かない (浮動小数点の誤差で残った場合も穴として扱わない)
+    // 隙間が無ければ何も返さない。下限以下の隙間は schedule / scheduleByArrival が
+    // 前の音の終わりへ揃えるため通常はここへ届かないが、揃えられなかった場合
+    // (前の音の終わりが今より過去で、過去へは予約しないため) は、実際に無音として出る。
+    // そのため下限以下でも totalGapSeconds / unrecoverableGapSeconds を返す
     const totalGapSeconds = startAt - previousEnd;
-    if (totalGapSeconds <= AUDIO_PLAYOUT_MIN_CONCEAL_SECONDS) {
+    if (totalGapSeconds <= 0) {
       return {
         gapStartSeconds: 0,
         gapSeconds: 0,
@@ -661,13 +665,22 @@ export class AudioPlayoutScheduler {
         unrecoverableGapSeconds: 0,
       };
     }
-    // 補間バッファを予約できる最も早い時刻。前の音の終わりが今 + 余裕より過去でも、
+    // 補間バッファを予約できる最も早い時刻。前の音の終わりが今 + 余裕より前でも、
     // 今回の音の開始がその先なら、未来の分だけは補間できる
     const reservableStartSeconds = Math.max(previousEnd, nowSeconds + this.minLeadSeconds);
     const unrecoverableGapSeconds = Math.max(
       0,
       Math.min(totalGapSeconds, reservableStartSeconds - previousEnd),
     );
+    if (totalGapSeconds <= AUDIO_PLAYOUT_MIN_CONCEAL_SECONDS) {
+      // 下限以下の隙間は補間しない。揃えられなかった分は無音として残る
+      return {
+        gapStartSeconds: 0,
+        gapSeconds: 0,
+        totalGapSeconds,
+        unrecoverableGapSeconds,
+      };
+    }
     // 予約できる区間 = 予約できる先頭から startAt まで (上限で切る)
     const reservableSeconds = Math.min(
       startAt - reservableStartSeconds,
@@ -793,17 +806,23 @@ export class AudioPlayoutScheduler {
       nowSeconds + this.minLeadSeconds,
       previousEnd ?? -Infinity,
     );
-    // ここでは前の音の終わりに揃える必要が無い。startAt は必ず previousEnd 以上であり、
-    // 揃える対象の 0.5 ms 以下の隙間は、previousEnd が今 + 余裕より前で startAt が
-    // 今 + 余裕のときにしか生じない (その場合に揃えると今 + 余裕より前の予約になる)
-    this.rebase(startAt, timestampMicroseconds);
-    this.lastEnd = startAt + durationSeconds;
+    // 前の音の終わりとの差が下限以下なら、前の音の終わりに揃えて穴を作らない
+    // (scheduleByArrival と同じ。過去へは戻さないガードは snapToPreviousEnd が持つ)
+    const snappedStartAt = this.snapToPreviousEnd(startAt, previousEnd, nowSeconds);
+    this.rebase(snappedStartAt, timestampMicroseconds);
+    this.lastEnd = snappedStartAt + durationSeconds;
     this.lastTimestampMicroseconds = timestampMicroseconds;
     // 到着基準へ移ったため、目標に対する遅れは無い (詰めない)
     this.latenessSeconds = 0;
     this.requestedSeconds = 0;
-    const concealment = this.concealmentOf(nowSeconds, previousEnd, startAt);
-    return { kind: "play", startAt, basis: "arrival", compressSeconds: 0, ...concealment };
+    const concealment = this.concealmentOf(nowSeconds, previousEnd, snappedStartAt);
+    return {
+      kind: "play",
+      startAt: snappedStartAt,
+      basis: "arrival",
+      compressSeconds: 0,
+      ...concealment,
+    };
   }
 
   /**

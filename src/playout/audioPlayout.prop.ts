@@ -68,17 +68,18 @@ function valueOf(value: number | null): number {
 /**
  * 隙間の情報が、次の 3 つの区分と一致することを確かめる
  *
- * - 予約時点で既に過去 (`unrecoverableGapSeconds`): 前の音の終わりから予約できる先頭まで
+ * - 予約できる最も早い時刻より前 (`unrecoverableGapSeconds`): 前の音の終わりから予約できる
+ *   先頭まで。既に過去の分と、未来でも今 + 余裕に満たない分を含む
  * - 予約できる先頭から今回の開始まで (`gapStartSeconds` / `gapSeconds`): 上限で切る
  * - 上限を超えて無音で残る分
  *
  * 前の音の終わりが未来なら補間は前の音の終わりから始まり (`unrecoverableGapSeconds` は 0)、
- * 過去なら予約できる最も早い時刻 (今 + 余裕) から始まる。
+ * 今 + 余裕より前なら予約できる最も早い時刻 (今 + 余裕) から始まる。
  *
  * 前の音の終わりとの差が下限 (0.5 ms) 以下なら、schedule が開始時刻を前の音の終わりへ
  * 揃えて穴を作らない (目標の表示時刻の更新や浮動小数点の丸めで生じる 20 µs〜0.5 ms の
- * 前進を連続再生で吸収する)。そのため `startAt < previousEnd` にならず、0 より大きく
- * 下限以下の隙間も残らない
+ * 前進を連続再生で吸収する)。揃えないのは前の音の終わりが今より過去のときだけで、
+ * そのときは 0 より大きく下限以下の隙間が無音として残る
  */
 function assertConcealmentWithinBounds(
   decision: Extract<AudioPlayoutDecision, { kind: "play" }>,
@@ -92,29 +93,33 @@ function assertConcealmentWithinBounds(
     assert.equal(decision.unrecoverableGapSeconds, 0);
     return;
   }
-  // 重ならず、下限以下の穴も残さない (前の音の終わりに揃える)
+  // 重ならない
   assert.isAtLeast(decision.startAt, previousEnd - EPSILON);
-  const boundaryGapSeconds = decision.startAt - previousEnd;
-  assert.isTrue(
-    boundaryGapSeconds <= EPSILON ||
-      boundaryGapSeconds > AUDIO_PLAYOUT_MIN_CONCEAL_SECONDS - EPSILON,
-    "下限以下の隙間を残さないこと",
+  const totalGapSeconds = decision.startAt - previousEnd;
+  const reservableStartSeconds = Math.max(previousEnd, now + AUDIO_PLAYOUT_MIN_LEAD_SECONDS);
+  const unrecoverableSeconds = Math.max(
+    0,
+    Math.min(totalGapSeconds, reservableStartSeconds - previousEnd),
   );
-  const totalGapSeconds = boundaryGapSeconds;
-  if (totalGapSeconds <= AUDIO_PLAYOUT_MIN_CONCEAL_SECONDS) {
-    // 下限以下の隙間は前の音の終わりに揃える (記録もしない)
+  if (totalGapSeconds <= EPSILON) {
+    // 隙間が無い
     assert.equal(decision.totalGapSeconds, 0);
     assert.equal(decision.gapSeconds, 0);
     assert.equal(decision.gapStartSeconds, 0);
     assert.equal(decision.unrecoverableGapSeconds, 0);
     return;
   }
+  if (totalGapSeconds <= AUDIO_PLAYOUT_MIN_CONCEAL_SECONDS + EPSILON) {
+    // 下限以下の隙間は前の音の終わりに揃える。揃えられないのは前の音の終わりが今より
+    // 過去のときだけであり、その場合は無音として記録する
+    assert.isTrue(previousEnd < now, "下限以下の隙間を残してよいのは揃えられないときだけ");
+    assert.closeTo(decision.totalGapSeconds, totalGapSeconds, EPSILON);
+    assert.equal(decision.gapSeconds, 0);
+    assert.equal(decision.gapStartSeconds, 0);
+    assert.closeTo(decision.unrecoverableGapSeconds, unrecoverableSeconds, EPSILON);
+    return;
+  }
   assert.closeTo(decision.totalGapSeconds, totalGapSeconds, EPSILON);
-  const reservableStartSeconds = Math.max(previousEnd, now + AUDIO_PLAYOUT_MIN_LEAD_SECONDS);
-  const unrecoverableSeconds = Math.max(
-    0,
-    Math.min(totalGapSeconds, reservableStartSeconds - previousEnd),
-  );
   assert.closeTo(decision.unrecoverableGapSeconds, unrecoverableSeconds, EPSILON);
   if (decision.gapSeconds === 0) {
     // 予約できる区間が下限以下。隙間の先頭は補間しないため 0

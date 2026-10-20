@@ -1253,6 +1253,9 @@ test("handleDecodedAudio: サンプル境界に乗らない隙間でも完全な
   const snapshot = fixture.timing.snapshot(performance.now());
   assert.equal(snapshot.gapCount, 0, "補間の丸めの差を穴として数えないこと");
   assert.equal(snapshot.gapMs, 0, "補間の丸めの差を穴の長さに足さないこと");
+  // 穴として数えないのが「補間しなかった」ことによるものではないことを確かめる
+  assert.equal(output.recordedBuffers.length, 3, "実音と補間と実音を予約すること");
+  assert.isAbove(fixture.session.concealedSeconds, 0.05, "補間した長さを記録すること");
 });
 
 /**

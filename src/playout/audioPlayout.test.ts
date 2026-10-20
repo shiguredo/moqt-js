@@ -709,6 +709,21 @@ test("schedule: 隙間がちょうど下限なら前の音の終わりに揃え�
   assert.equal(second.gapStartSeconds, 0);
 });
 
+// 前の音の終わりが今より過去のときは過去へ予約しないため揃えず、0.5 ms 以下の隙間でも
+// 無音として返す (呼び出し側が無音として数え、先頭をフェードする)
+test("schedule: 前の音の終わりが今より過去なら下限以下の隙間を無音として返す", () => {
+  const scheduler = new AudioPlayoutScheduler({ minLeadSeconds: 0 });
+  // 長さ 0 の音で前の音の終わりを 0 にし、次を 0.1 ms 後に予約する (隙間 0.2 ms)
+  assert.equal(scheduler.schedule(0, 0, 0, enforcedTarget(0)).kind, "play");
+  const second = playDecisionOf(
+    scheduler.schedule(0.0001, FRAME_MICROSECONDS, FRAME_SECONDS, enforcedTarget(0.0002)),
+  );
+  assert.closeTo(second.totalGapSeconds, second.startAt, EPSILON);
+  assert.equal(second.gapSeconds, 0, "下限以下は補間しないこと");
+  assert.equal(second.gapStartSeconds, 0);
+  assert.isAbove(second.unrecoverableGapSeconds, 0, "揃えられない分は無音として返すこと");
+});
+
 // 下限のすぐ上 (6 ms) の隙間は補間する
 test("schedule: 下限のすぐ上の隙間は補間する", () => {
   const scheduler = new AudioPlayoutScheduler({ stretchMinSeconds: 0 });

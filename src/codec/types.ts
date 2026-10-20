@@ -63,8 +63,8 @@ export interface AudioReceiverStats {
   // 音声の再生の観測値。鳴るはずの時刻 (再生予定時刻)・届いた時刻・鳴り始める時刻と、
   // 予定に対する余裕の分布 (直近 10 秒の p50 / p95 / max)、鳴らなかった量 (件数と ms) を
   // 理由ごとに出す。加えて、補間で埋まらなかった無音の穴 (回数 / 合計 ms / 最大 ms と、
-  // 予約時点で既に過去だった分)、予約した時刻を currentTime が追い越した回数と最大、
-  // バッファ境界の段差の回数と最大を累積で持つ。時刻は performance.now() と同じ軸の
+  // 予約できる最も早い時刻より前だった分)、予約した時刻を currentTime が追い越した回数と
+  // 最大、バッファ境界の段差の回数と最大を累積で持つ。時刻は performance.now() と同じ軸の
   // ミリ秒 (src/playout/audioPlayoutTimingStats.ts)
   playoutTiming: AudioPlayoutTimingSnapshot;
   // 受信側の音声の追いつき。復号の出力が送られた TIMESTAMP から遅れ続けたときに、
