@@ -63,9 +63,10 @@
 - PUBLISH_DONE の後に datagram を送らないことと、末尾の datagram が PUBLISH_DONE より先に
   届く方策が実装されていること
 - 実リレーで publisher を停止したとき、購読側が停止後に末尾の Object を 1 件以上受信し、
-  停止の所要時間が上限 (drain 55 ms + flush・送信 150 ms + 猶予 50 ms) に収まること
-  (購読側の TIMESTAMP と停止時刻の比較は計測用の口が無いため未実施)
-- 送れなかった出力が統計に出ること
+  停止の計器 (`tailFlushTimeoutCount` 0 / `tailDropped*` 0 / `tailFlushed*` が 1 以上) が
+  上限内で完了していること (停止の所要時間はログに出すが、E2E 環境の負荷で変動するため
+  判定に使わない。購読側の TIMESTAMP と停止時刻の比較は計測用の口が無いため未実施)
+- 送れなかった出力が統計に出ること (読んだが送れなかった分。write の失敗は含まない)
 - `vp check` / `tsc --noEmit` / `vp test run` と、実リレーの既存 E2E が通ること
 
 ## 解決方法
@@ -90,9 +91,14 @@
   `tailDroppedFrames` / `tailDroppedMs` (読んだが送れなかった末尾)、
   `tailFlushTimeoutCount` (上限で打ち切った回数) を追加した
 - 単体ハーネス: 停止前に投入した 10 ms ブロック 4 個がすべて encode・送信され、30 ms から
-  0 ms になった。flush の出力が encoder の close と PUBLISH_DONE より前に送られること、
-  PUBLISH_DONE の後に datagram が無いこと、二重 stop / close 中の stop、再 start を固定した
-- 実ブラウザ + 実リレー: `tests/e2e/relay/audio-publisher-tail.spec.ts` を追加した。library の
+  0 ms になった。Publisher に記録用の encoder を注入し、flush の出力が encoder の close と
+  PUBLISH_DONE より前に送られること、PUBLISH_DONE の後に datagram が無いこと、二重 stop /
+  close 中の stop、再 start を固定した。`AudioEncoderWrapper.flush` は記録用の worker /
+  encoder を注入した単体テストで、flush の要求順序と二重呼び出しの共有、close による
+  reject を固定した
+- 実ブラウザ + 実リレー: `tests/e2e/relay/audio-publisher-tail.spec.ts` を追加し、停止の
+  所要時間が上限に収まることも assert する。subgroup の 44 ms は全配送で 50 ms 猶予を待つ
+  変更の前の値であり、再測が必要である。library の
   Publisher (worker 符号化の既定) で datagram 配送は停止 102 ms・flush 1 件 20 ms・欠落 0・
   timeout 0、subgroup 配送は停止 44 ms・flush 1 件 20 ms・欠落 0 で、購読者は停止の後に
   末尾を 2 件受信した。全 E2E は 22 件成功 (AAC の 1 件は負荷時の flake で、単体再実行では
