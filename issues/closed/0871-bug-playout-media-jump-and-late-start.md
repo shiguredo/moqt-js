@@ -3,7 +3,7 @@
 - Created: 2026-10-20
 - Completed: 2026-10-20
 - Branch: feature/fix-playout-media-jump-and-late-start
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-10-20
 - Reporter: @voluntas
 
 ## 目的
