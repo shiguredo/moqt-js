@@ -52,8 +52,8 @@
 
 ## 完了条件
 
-- 合成信号で 12 ms の停止を与えたとき、予約の追い越しによる重なりが 0 になること
-  (単体テスト)
+- 合成信号で `createBuffer` の処理に 12 ms の停止を与えたとき、予約の追い越しによる
+  重なりが 0 になること (単体テスト)
 - 押し直しを入れた場合、実リレーの A/V 同期 (`skewMs`)、鳴り始めの遅れ (E2E の 200 ms
   未満)、既存の E2E 判定に回帰が無いこと
 - media 時刻の飛びの両側フェードは、1 フレーム先読みの +20 ms の効果を計測して採否を
@@ -63,14 +63,14 @@
 
 ## 解決方法
 
-- 押し直し: `AudioPlayoutSession.startBuffer` が `createBuffer` と `createBufferSource` の
-  後に `currentTime` を取り直し、`whenSeconds < currentTime +
-  AUDIO_PLAYOUT_PUSH_START_LEAD_SECONDS` (3 ms) ならその時刻へ押し直して `start()` する。
-  押し直した音は先頭 2 ms をフェードインし、押し直した分だけ
-  `AudioPlayoutScheduler.shiftPlayoutEnd` で次の音を後ろへずらす。押し直しの境界はフェード
-  したため `boundaryStepCount` に数えない。`recordPlay` / `recordPresentation` は実際の
-  開始時刻を使う。`lateStartCount` / `lateStartMaxMs` の意味 (予約時刻を currentTime が
-  追い越した回数と長さ) は変えていない
+- 押し直し: `AudioPlayoutSession.startBuffer` が `copyToChannel` の後に `currentTime` を
+  取り直し、`whenSeconds < currentTime + AUDIO_PLAYOUT_PUSH_START_LEAD_SECONDS` (3 ms) なら
+  その時刻へ押し直して `start()` する。押し直した音は先頭 2 ms をフェードインし、押し直した
+  分だけ `AudioPlayoutScheduler.shiftPlayoutEnd` で次の音を後ろへずらす。前の音の末尾は
+  フェードできないため、押し直しで生じた境界の段差は `boundaryStepCount` に数える。
+  `recordPlay` / `recordPresentation` は実際の開始時刻を使う。`lateStartCount` /
+  `lateStartMaxMs` の意味 (予約時刻を currentTime が追い越した回数と長さ) は変えていない。
+  押し直した回数と最大は `pushStartCount` / `pushStartMaxMs` で読める
 - media 飛びの両側フェードの計測: 実リレーの実装後収録 (61.1 秒、load 10.7) の不連続 10 件は
   無音の穴の開始 9 件と media 飛び 1 件であり、media 飛びの段差は 0.171 (peak の 56 %)、
   原因は catchUp の復号器作り直し (missedFrames 1 / 20 ms) だった。1 フレーム先読みの
@@ -83,7 +83,7 @@
   0 件・サンプル不連続 0 件、`gapCount` 1 / 20 ms (予約不能 0)、`boundaryStepCount` 1 /
   0.108、`lateStartCount` 0 (`lateStartMaxMs` 0)、鳴り始め p50 65.3 ms、A/V のずれ
   −9.2 ms だった。全 E2E は 23 件成功 (skip 11)。`vp check` / `tsc --noEmit` /
-  `vp test run` (234 ファイル / 4142 テスト) も成功
+  `vp test run` (235 ファイル / 4151 テスト) も成功
 
 ## 参照
 

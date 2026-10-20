@@ -71,6 +71,16 @@
   閉じる。** 実リレーの 3 回の計測で、`missedByReason.stopped` の増分は 0 件、`lastDrain` の
   `cutMs` は 0 ms、待ち時間は 51〜153 ms、停止の完了は 94〜209 ms だった。配信側の停止では
   従来どおり切られない
+- **予約時刻を `AudioContext` が追い越した音は、先頭 2 ms のフェード付きで
+  `currentTime + 3 ms` へ押し直す。** 直前の音との重なりは起きない。遅れるのは追い越した
+  分と 3 ms であり、上限は 3 ms ではない。押し直した回数は `pushStartCount` /
+  `pushStartMaxMs` で読む (`lateStartCount` は追い越した回数だけを数えるため 0 でも
+  押し直しは起き得る)。前の音の末尾はフェードできないため、押し直しで生じた境界の段差は
+  `boundaryStepCount` に数える
+- **media 時刻が飛ぶ境界の両側フェードは、1 フレーム先読みの +20 ms の代償が大きいため
+  実装していない。** 実リレーの実装後収録では 60 秒で 1 件 (段差は peak の 56 %) であり、
+  全音声 +20 ms (startDelay 134 → 154 ms、A/V skew −3.8 → −23.8 ms) に見合わない。段差は
+  `boundaryStepCount` で監視し、再検討条件は `docs/AUDIO_PLAYOUT_GAPS_AND_TAIL.md` に残す
 - **配信側の停止では、ライブラリの Publisher が encoder の flush と送信完了を待ってから
   PUBLISH_DONE を送る。** 実ブラウザ + 実リレー (worker 符号化の既定) の追加テストでは、
   datagram 配送で停止 102 ms・末尾 1 件 20 ms・欠落 0、subgroup 配送で停止 44 ms・20 ms・
