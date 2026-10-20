@@ -172,11 +172,11 @@ interface MediaPublisherCallbacks {
 | メソッド                                    | 説明                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `start(stream: MediaStream): Promise<void>` | MediaStream を渡して配信開始（`"created"` と `"stopped"` から呼べる。`"stopped"` は `stop()` 後の再開であり、解放した資源を作り直して再接続する。失敗時は確保済みを解放し、state は変えずに再試行できる。`"closed"` からは `cannot start in state` で拒否される。実行中に `close()` またはピア起点の close が重なった場合は `"closed"` を優先して失敗する。解放 (`close()` とピア起点の close / `stop()` の解放) が進行している間は `cannot start while closing` で拒否する。音声の `delivery` に `"datagram"` を指定し、接続したセッションが datagram を運べない (`reliability` が `"reliable-only"`) 場合は拒否する。音声の取り出した形式が `AudioEncoder` で符号化できない場合 (対応の申告だけでは実際に符号化できるかを保証しないため、無音を 1 チャンク実際に符号化して確かめる) と、音声トラックを渡したのに音声の取り出し経路が無い場合も、catalog を publish する前に失敗する。ピアが catalog の `PUBLISH` を cancel して catalog の Publisher が `"active"` でなくなった場合も、catalog を送らないまま media の Object を流さずに失敗する） |
-| `pause()`                                   | 配信一時停止（エンコードを止め、開いている Subgroup を閉じる）                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `pause()`                                   | 配信一時停止（エンコードを止め、開いている Subgroup を閉じる）。停止の末尾 flush の間は `cannot pause while stopping` で拒否する                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `resume()`                                  | 配信再開（次のフレームで新しい Group をキーフレームから始める）                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| `stop(): Promise<void>`                     | 配信停止（`"publishing"` と `"paused"` からのみ。`close()` と同じ解放を行い、`"stopped"` は再開可能であり終端ではない。`"stopped"` からの再 `stop()` は `cannot stop in state` で throw する。ピア起点の close の解放中は進行中の解放を共有して完了を待つ。解放の失敗時は state を変えず元のエラーを throw。`onClose` は通知しない。`close()` が解放と終端遷移を進めている間は `cannot stop while closing`）                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `stop(): Promise<void>`                     | 配信停止（`"publishing"` と `"paused"` からのみ。停止の受付時に capture 済みの音声を flush して送り切ってから解放する（本文の「音声の末尾 flush」）。末尾を送ったときは配送方式（datagram / subgroup）にかかわらず PUBLISH_DONE の前に 50 ms の猶予を待つ。末尾 flush の間は `cannot stop while stopping` で二重停止を拒否する。`close()` と同じ解放を行い、`"stopped"` は再開可能であり終端ではない。`"stopped"` からの再 `stop()` は `cannot stop in state` で throw する。ピア起点の close の解放中は進行中の解放を共有して完了を待つ。解放の失敗時は state を変えず元のエラーを throw。`onClose` は通知しない。`close()` が解放と終端遷移を進めている間は `cannot stop while closing`）                                                                                                                                                                                                                                                                                                                                                          |
 | `startNewGroup()`                           | 新しい Group を始める（次のフレームがキーフレームになる）                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `close(): Promise<void>`                    | リソース解放（終端。どの状態からでも可能。解放してから `"closed"` にして `onClose` を通知する。`"closed"` での再 `close()` は早期 return するため `onClose` は 1 回だけ。進行中の解放（`stop()` / ピア起点の close）は共有して完了を待ち、その成否が結果になる。解放の失敗時は state と `onClose` を変えず元のエラーを throw する。ピア起点の close の通知も解放してから通知する）                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `close(): Promise<void>`                    | リソース解放（終端。どの状態からでも可能。音声の末尾 flush と PUBLISH_DONE 前の猶予を行ってから解放する。解放してから `"closed"` にして `onClose` を通知する。`"closed"` での再 `close()` は早期 return するため `onClose` は 1 回だけ。進行中の解放（`stop()` / ピア起点の close）は共有して完了を待ち、その成否が結果になる。解放の失敗時は state と `onClose` を変えず元のエラーを throw する。ピア起点の close の通知も解放してから通知する）                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `getStats(): MediaStats`                    | 送信側の統計情報取得                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `getCatalog(): Catalog \| null`             | 配信中に生成したカタログ取得                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 
@@ -216,7 +216,9 @@ created / stopped ───────────────┬────�
 なる) の 2 つであり、図では別の線で描いている。
 
 `stop()` は `close()` と同じ解放を行い、state を `"stopped"` にする (`"paused"` からの
-`stop()` も同じである)。`"stopped"` は終端ではなく再開可能であり、`start(stream)` で再び
+`stop()` も同じである)。解放の前に、停止の受付時に capture 済みの音声を flush して
+送り切る (datagram 配送では PUBLISH_DONE の前に 50 ms の猶予を待つ)。そのため `stop()` /
+`close()` の完了は、通常の解放より 10〜60 ms (datagram では +50 ms) 遅くなる。`"stopped"` は終端ではなく再開可能であり、`start(stream)` で再び
 配信を始められる。`"stopped"` からの `stop()` は `cannot stop in state` で拒否される。
 `stop()` の成功時に `onClose` は通知しない (停止であり終端ではない)。
 
@@ -311,6 +313,21 @@ interface AudioStats {
   timestampOffset: AudioTimestampOffsetStats | null;
   // 遅れが上限を超えたときに古いフレームを捨てて live へ追いついた量
   catchUp: AudioPublishCatchUpStats | null;
+  // 停止時に encoder の flush で送ろうとした末尾の量 (累積。停止のたびに増える)。
+  // 数は符号化の出力 (chunk) の数、長さは chunk の duration の合計 (ミリ秒)。
+  // 送信を試みた時点で数えるため、write が失敗した分も含む。停止以外の経路 (pause) では
+  // 増えない
+  tailFlushedFrames: number;
+  tailFlushedMs: number;
+  // 停止時に取り込みキューから読み出したが、送れなかった入力の量 (累積)。
+  // 数は取り込みブロック (10 ms) の数、長さは送信した chunk が覆わなかった範囲 (ミリ秒)。
+  // 0 でも、drain の打ち切りで読まなかった取り込みキューと write の失敗は含まない
+  tailDroppedFrames: number;
+  tailDroppedMs: number;
+  // 停止時の drain・flush・送信の待ちが上限で打ち切られた停止の回数 (累積)。
+  // 1 つの停止で複数の待ちが打ち切られても 1 回と数える。1 以上なら、入力が途切れた・
+  // worker が応答しなかったなどの打ち切りがあったことを示す
+  tailFlushTimeoutCount: number;
 }
 
 interface AudioTimestampOffsetStats {
@@ -453,6 +470,32 @@ timestamp を鍵にすると記録が上書きされて「キューに残って�
 ---
 
 ## MediaSubscriber
+
+#### 音声の末尾 flush (停止時)
+
+`stop()` / `close()` は、止める前に読んだフレームと encoder の中身を送り切る。
+
+1. 周期読み出しのループ自身に、取り込みキューに残っている分を読ませる
+   (`AUDIO_TAIL_DRAIN_QUIET_MS` = 5 ms の静穏窓と `AUDIO_TAIL_DRAIN_MAX_FRAMES` = 4 ブロック
+   の上限。停止の受付時に capture 済みの分だけを対象にし、停止後の新規キャプチャは
+   含めない)
+2. 1 フレーム先読みの保留分を encode する
+3. `AudioEncoderWrapper.flush()` で encoder に残った出力を待つ (direct は WebCodecs の
+   `AudioEncoder.flush`、worker は flush の出力を送ってから完了を返す順序)
+4. 末尾の送信 (datagram の write / subgroup の送信) の完了を待つ
+5. 末尾を送ったときは、配送方式 (datagram / subgroup) にかかわらず
+   `AUDIO_TAIL_PUBLISH_DONE_GRACE_MS` = 50 ms 待ってから PUBLISH_DONE を送る
+   (Object の stream / datagram と PUBLISH_DONE の control stream には順序保証が無いため)
+
+この間は世代 (処理ループの有効性) を進めない。進めると末尾の出力が世代不一致で捨てられる。
+flush と送信の完了を待つ上限は `AUDIO_TAIL_FLUSH_MAX_MS` = 150 ms で、超えた場合は
+`tailFlushTimeoutCount` に残して解放へ進む (停止がハングしない)。これとは別に drain の
+待ち (`AUDIO_TAIL_DRAIN_MAX_MS` + 静穏窓) が最大 55 ms あり、末尾を送ったときは 50 ms の
+猶予が加わるため、停止の待ちは最大で約 255 ms、これに解放の時間が加わる。末尾を送らな
+かったときは猶予が無い。通常は 50〜110 ms 程度である。`tailFlushTimeoutCount` は
+drain・flush・送信のいずれかの待ちが打ち切られた停止の回数を数える。送ろうとした末尾の量は
+`tailFlushedFrames` / `tailFlushedMs` (送信を試みた時点で数える)、送れなかった量は
+`tailDroppedFrames` / `tailDroppedMs` で読める。
 
 ### 作成
 
