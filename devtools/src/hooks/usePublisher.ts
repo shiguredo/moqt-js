@@ -27,6 +27,7 @@ import {
 } from "../utils/codec";
 import type {
   AudioCodecType,
+  AudioDelivery,
   AudioSourceType,
   CodecType,
   PublishStopMode,
@@ -563,6 +564,52 @@ export function buildObjectSendPlan(
     // この値がその Subgroup の実効優先度になる
     priority: isKeyFrame ? PRIORITY_VIDEO_KEY : PRIORITY_VIDEO_DELTA,
     isKeyFrame,
+  };
+}
+
+/** 音声 Object の送信計画 (送る copy の数と 1 回あたりのバイト数) */
+export interface AudioSendCopyPlan {
+  /** datagram で送るか。false のときは subgroup で 1 回だけ送る */
+  datagram: boolean;
+  /** 同じ音声 Object を送る回数。datagram は冗長度 (1〜3)、subgroup は 1 */
+  copies: number;
+  /** 1 回送るあたりのバイト数 (payload と properties の長さの合計) */
+  bytesPerCopy: number;
+}
+
+/**
+ * 音声 Object の送信計画を作る
+ *
+ * 音声は 1 chunk = 1 Object = 1 Group であり (draft-ietf-moq-loc-04 §4.1)、datagram は
+ * 再送されない (RFC 9221) ため、配信側は同じ Object を冗長度の数だけ送る。subgroup は
+ * Data Stream が再送されるため 1 回だけ送る。datagram を運べないセッション
+ * (reliability が "reliable-only") も subgroup で 1 回だけ送る。
+ *
+ * バイト数は実際に送る copy の数だけ数える。Object 1 件につき 1 回と copy ごとの 1 回を
+ * 両方足すと、冗長度 2 で 3 倍になる (帯域の見積もりが過大になる)。送信ループと計器が
+ * 同じ計画を読むよう、回数の解決をここに置く。
+ *
+ * @param options.delivery - 音声の送り方の設定
+ * @param options.reliability - 下位 WebTransport の reliability
+ * @param options.redundancy - datagram で送る回数 (1〜3。範囲外は 1〜3 に丸める)
+ * @param options.payloadBytes - payload の長さ
+ * @param options.propertiesBytes - LOC Properties の長さ
+ */
+export function buildAudioSendCopyPlan(options: {
+  readonly delivery: AudioDelivery;
+  readonly reliability: string | undefined;
+  readonly redundancy: number;
+  readonly payloadBytes: number;
+  readonly propertiesBytes: number;
+}): AudioSendCopyPlan {
+  const datagram = shouldSendAudioAsDatagram(options.delivery, options.reliability);
+  // datagram 以外 (subgroup) は再送されるため 1 回だけ送る。datagram は冗長度の数だけ
+  // 送り、4 以上は帯域を無駄にするため 3 に切る (src/codec/types.ts の AudioPublishOptions)
+  const copies = datagram ? Math.min(3, Math.max(1, Math.floor(options.redundancy))) : 1;
+  return {
+    datagram,
+    copies,
+    bytesPerCopy: options.payloadBytes + options.propertiesBytes,
   };
 }
 
@@ -1657,10 +1704,17 @@ export function usePublisher() {
     };
     // 送った Object を数える (video の objectsSent / bytesSent と同じ扱い)
     pub.audioObjectsSent.value++;
-    pub.audioBytesSent.value += chunk.data.length + properties.length;
-    if (
-      shouldSendAudioAsDatagram(settings.audioDelivery.value, pub.pubSession.value?.reliability)
-    ) {
+    // 送る copy の数と 1 回あたりのバイト数を決める。datagram は冗長度の数だけ送り、
+    // subgroup は 1 回だけ送る。バイト数は実際に送る copy ごとに数える (Object 1 件に
+    // つき 1 回ではない)
+    const sendCopyPlan = buildAudioSendCopyPlan({
+      delivery: settings.audioDelivery.value,
+      reliability: pub.pubSession.value?.reliability,
+      redundancy: settings.audioRedundancy.value,
+      payloadBytes: chunk.data.length,
+      propertiesBytes: properties.length,
+    });
+    if (sendCopyPlan.datagram) {
       pub.audioDatagramObjectsSent.value++;
       try {
         // 冗長度の数だけ同じ Object を送る。全ての copy が落ちる確率は損失率の冗長度乗に
@@ -1674,10 +1728,9 @@ export function usePublisher() {
         // 届く復旧の分が遅れの推定を膨らませ、交互に各 3 回の比較で鳴り始めの遅れが
         // 64〜67 ms から 120〜122 ms へ上がった。位置の順序で除く案でも改善しなかったため、
         // 続けて送る (docs/AUDIO_PLAYOUT_LATENCY.md)
-        const copies = Math.min(3, Math.max(1, Math.floor(settings.audioRedundancy.value)));
-        for (let copy = 0; copy < copies; copy++) {
+        for (let copy = 0; copy < sendCopyPlan.copies; copy++) {
           void audioPublisherInstance.sendDatagram(sendParams);
-          pub.audioBytesSent.value += chunk.data.length + properties.length;
+          pub.audioBytesSent.value += sendCopyPlan.bytesPerCopy;
         }
         // 送信の遅れを記録する。送信の完了を待たず、投入の直後を記録する
         // (recordAudioDatagramSent の JSDoc を参照)。ここを記録しないと、受信側の到着の遅れを
@@ -1723,6 +1776,9 @@ export function usePublisher() {
       console.error("Failed to send audio object:", error);
       return;
     }
+    // subgroup は 1 回だけ送る。送信キューへ投入できた時点で、実際に送った copy の
+    // バイト数を数える
+    pub.audioBytesSent.value += sendCopyPlan.bytesPerCopy;
     catchUp.recordSendStart({
       timestampMicros: capturedTimestampMicros,
       capturedWallClockMs: Number(locTimestampMicros) / 1_000,
