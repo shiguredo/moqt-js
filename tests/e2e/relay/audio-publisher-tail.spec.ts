@@ -183,6 +183,9 @@ test.describe("ライブラリの配信停止の末尾", () => {
           publisherAudio?.tailDroppedFrames,
           `停止時に読んだ末尾が送られていない (${delivery})`,
         ).toBe(0);
+        // 停止の所要時間は計測してログに出すだけにする。E2E は page evaluate と後始末を
+        // 含み、CI の負荷で変動するため、判定は計器 (tailFlushTimeoutCount / tailDropped)
+        // で行う
         expect(afterPublisher.errors, `配信側のエラーが無い (${delivery})`).toEqual([]);
         expect(afterSubscriber.errors, `購読側のエラーが無い (${delivery})`).toEqual([]);
         // 末尾の Object が PUBLISH_DONE より先に届いている (少なくとも 1 件)

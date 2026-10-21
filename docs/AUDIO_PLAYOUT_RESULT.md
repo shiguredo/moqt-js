@@ -71,6 +71,12 @@
   閉じる。** 実リレーの 3 回の計測で、`missedByReason.stopped` の増分は 0 件、`lastDrain` の
   `cutMs` は 0 ms、待ち時間は 51〜153 ms、停止の完了は 94〜209 ms だった。配信側の停止では
   従来どおり切られない
+- **配信側の停止では、ライブラリの Publisher が encoder の flush と送信完了を待ってから
+  PUBLISH_DONE を送る。** 実ブラウザ + 実リレー (worker 符号化の既定) の追加テストでは、
+  datagram 配送で停止 102 ms・末尾 1 件 20 ms・欠落 0、subgroup 配送で停止 44 ms・20 ms・
+  欠落 0 だった。datagram では送信完了の後に 50 ms 待つため、経路が 50 ms を超えて跳ねた
+  回は PUBLISH_DONE の後に届いた datagram が捨てられ得る (実測では未観測)。devtools の
+  main-thread 符号化経路は停止時も音声ループを止めないため、末尾は切れない
 - **実機のスピーカー遅延・表示遅延は測っていない。** ヘッドレスの `outputLatency` は
   24〜25 ms であり (`getOutputTimestamp` の実測)、実機の値は環境で変わる
 - まれに 15 秒以上、A/V のずれが観測できない回がある (スイートで 3 回に 1 回程度。単独では
