@@ -162,7 +162,12 @@ export const AV_SYNC_HELP: SectionHelp = {
     {
       term: "skewMs",
       description:
-        "Measured A/V skew (ms). Positive when the video is presented later than the audio. Uses the recorded presentation times, so it does not include the output latency of the audio device nor the render cycle of the display.",
+        "Measured A/V skew (ms). Positive when the video is presented later than the audio. Uses the recorded video presentation and the audio reservation converted through the AudioContext output clock. It does not measure additional HTMLAudioElement buffering, its selected output device, speaker latency, or display scanout.",
+    },
+    {
+      term: "audioPlayoutCorrectionMs",
+      description:
+        "Smoothed difference between the AudioContext reservation converted through its output clock and the target captured when reserving it (ms). Used to align the audio and video presentation targets. Fallback clock samples do not update it; it expires after 1 s without a valid output-clock sample. Downstream HTMLAudioElement and device latency are not measured.",
     },
     {
       term: "baseDelayMs",
@@ -251,7 +256,7 @@ export const SUBSCRIBER_WARNINGS_HELP: SectionHelp = {
   items: [
     {
       term: "syncExtraDelayPinnedAtLimit",
-      description: `syncExtraDelayMs stayed within ${SYNC_PINNED_TOLERANCE_MS} ms of PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS (${PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS} ms) for ${SYNC_PINNED_MIN_MS / 1_000} s or more. The difference between the two tracks is larger than the limit, so the rest is left as A/V skew. Reconsider the limit, or the TIMESTAMP clock of the track with the larger baseDelayMs.`,
+      description: `syncExtraDelayMs stayed within ${SYNC_PINNED_TOLERANCE_MS} ms of the compensation budget (base difference up to ${PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS} ms, plus the known buffer and audio output differences) for ${SYNC_PINNED_MIN_MS / 1_000} s or more. The difference between the two tracks is larger than the limit, so the rest is left as A/V skew. Reconsider the limit, or the TIMESTAMP clock of the track with the larger baseDelayMs.`,
     },
     {
       term: "unsharedHoldContinues",
@@ -391,7 +396,7 @@ export const AUDIO_PLAYOUT_TIMING_HELP: SectionHelp = {
     {
       term: "stretchUnavailableFrames",
       description:
-        "Sounds played at a sample rate where the time stretch and the concealment cannot work (the table used to downsample to 4 kHz has 8, 16, 32 and 48 kHz, as NetEq does). 44.1 kHz audio (AAC, for example) is such a rate. They are played as usual but the lateness is never compressed away and the missing parts are not concealed, so a value above 0 explains why the delay does not come back to the target. 0 means the rate is supported.",
+        "Sounds played at a sample rate unsupported by time stretch and concealment, such as 96 kHz. The analysis supports 8, 16, 32 and 48 kHz filters plus conversion of the analysis signal for 44.1 kHz; the original audio keeps its sample rate. Unsupported audio is played without compression or concealment. 0 means the rate is supported, but processing still depends on waveform correlation.",
     },
     {
       term: "gapCount / gapMs / gapMaxMs",

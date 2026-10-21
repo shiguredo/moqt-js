@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
-import { writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { formatTrackNamespace } from "../../../src/fullTrackName";
 import { RELAY_TEST_TIMEOUT_MS, createTestNamespace, requireRelayUri } from "./support";
 import { DEVTOOLS_URL } from "../urls";
@@ -135,6 +135,9 @@ interface SubscriberStats {
     playoutTiming: {
       playedMs: number;
       missedFrames: number;
+      gapCount: number;
+      gapMs: number;
+      unrecoverableGapMs: number;
       startDelayMs: { p50: number | null } | null;
     };
     playoutCatchUp: {
@@ -155,6 +158,7 @@ interface SubscriberStats {
       baseDifferenceRecentMs: number | null;
       baseDifferenceSettledMs: number | null;
       baseDriftMsPerSecond: number | null;
+      audioPlayoutCorrectionMs?: number;
       audio: {
         baseDelayMs: number | null;
         jitterDelayMs: number | null;
@@ -498,6 +502,7 @@ test("調査: A/V 同期と音声の遅延の内訳を 1 秒ごとに採る", as
         videoSyncExtraMs: delays.video.syncExtraDelayMs,
         audioPresentationMs: delays.audio.presentationDelayMs,
         videoPresentationMs: delays.video.presentationDelayMs,
+        audioPlayoutCorrectionMs: delays.audioPlayoutCorrectionMs ?? 0,
         skewMs: avSync.skewMs,
         startDelayP50Ms: audio.playoutTiming.startDelayMs?.p50 ?? null,
         compressedMs: audio.playoutCompressedMs,
@@ -507,6 +512,9 @@ test("調査: A/V 同期と音声の遅延の内訳を 1 秒ごとに採る", as
         catchUpObjectsSkipped: audio.catchUpObjectsSkipped,
         playedMs: audio.playoutTiming.playedMs,
         missedFrames: audio.playoutTiming.missedFrames,
+        gapCount: audio.playoutTiming.gapCount,
+        gapMs: audio.playoutTiming.gapMs,
+        unrecoverableGapMs: audio.playoutTiming.unrecoverableGapMs,
         rebases: audio.playoutRebases,
         videoSkipped: stats.catchUpFramesSkipped,
         // 受信側の追いつき (音を飛ばす条件を測る)
@@ -538,6 +546,7 @@ test("調査: A/V 同期と音声の遅延の内訳を 1 秒ごとに採る", as
     "investigation-logs",
     `av-sync-samples-${Date.now().toString()}.jsonl`,
   );
+  mkdirSync(dirname(outputPath), { recursive: true });
   writeFileSync(outputPath, `${samples.join("\n")}\n`);
   console.log(`調査の観測を書いた: ${outputPath} (${samples.length.toString()} 件)`);
 });
@@ -659,6 +668,7 @@ test("調査: 音声の出力の遅れを測る", async ({ page }) => {
     "investigation-logs",
     `audio-output-${Date.now().toString()}.jsonl`,
   );
+  mkdirSync(dirname(outputPath), { recursive: true });
   writeFileSync(outputPath, `${samples.map((sample) => JSON.stringify(sample)).join("\n")}\n`);
   console.log(`調査の観測を書いた: ${outputPath} (${samples.length.toString()} 件)`);
   console.log(

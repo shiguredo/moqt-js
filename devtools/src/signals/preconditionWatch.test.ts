@@ -53,6 +53,7 @@ function avSyncWith(options: { sharingBases: boolean; videoExtraMs: number }) {
       sharingBases: options.sharingBases,
       unsharedReason: options.sharingBases ? ("none" as const) : ("hold" as const),
       baseDifferenceMs: 250,
+      presentationDelayCapMs: 500,
     },
   };
 }

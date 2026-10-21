@@ -33,7 +33,7 @@ import {
 /** 上限に張り付いている状態の最小の補償量 (ミリ秒) */
 const PINNED_EXTRA_MS = PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS - SYNC_PINNED_TOLERANCE_MS;
 
-/** 内訳を上書きした同期の推定値を作る (既定値は未観測のまま) */
+/** 制御中の同期の推定値を作り、対象の内訳だけを上書きする */
 function avSyncWith(options: {
   sharingBases?: boolean;
   unsharedReason?: AvSyncSnapshot["delays"]["unsharedReason"];
@@ -43,16 +43,26 @@ function avSyncWith(options: {
   baseDriftMsPerSecond?: number | null;
   baseUnsharedReturnMs?: number | null;
   presentationDelayCapMs?: number;
+  audioJitterMs?: number;
+  videoJitterMs?: number;
 }): AvSyncSnapshot {
   return {
     ...EMPTY_AV_SYNC,
     delays: {
       ...EMPTY_AV_SYNC.delays,
-      audio: { ...EMPTY_AV_SYNC.delays.audio, syncExtraDelayMs: options.audioExtraMs ?? 0 },
-      video: { ...EMPTY_AV_SYNC.delays.video, syncExtraDelayMs: options.videoExtraMs ?? 0 },
+      audio: {
+        ...EMPTY_AV_SYNC.delays.audio,
+        syncExtraDelayMs: options.audioExtraMs ?? 0,
+        jitterDelayMs: options.audioJitterMs ?? null,
+      },
+      video: {
+        ...EMPTY_AV_SYNC.delays.video,
+        syncExtraDelayMs: options.videoExtraMs ?? 0,
+        jitterDelayMs: options.videoJitterMs ?? null,
+      },
       sharingBases: options.sharingBases ?? true,
       unsharedReason: options.unsharedReason ?? "none",
-      baseDifferenceMs: options.baseDifferenceMs ?? null,
+      baseDifferenceMs: options.baseDifferenceMs === undefined ? 250 : options.baseDifferenceMs,
       baseDriftMsPerSecond: options.baseDriftMsPerSecond ?? null,
       baseUnsharedReturnMs: options.baseUnsharedReturnMs ?? null,
       presentationDelayCapMs: options.presentationDelayCapMs ?? 400,
@@ -134,6 +144,42 @@ test("detectSubscriberWarnings: 補償が上限に達したら数え始める", 
 });
 
 // 張り付いたまま `SYNC_PINNED_MIN_MS` 続いたときだけ警告を出す。境目の前後で分ける
+test("detectSubscriberWarnings: 既知のバッファ差を補償した分を上限への張り付きと取り違えない", () => {
+  const snapshot = avSyncWith({
+    baseDifferenceMs: 0,
+    audioJitterMs: 160,
+    videoJitterMs: 0,
+    videoExtraMs: 155,
+  });
+  const start = detectSubscriberWarnings(null, snapshot, 0);
+  const after = detectSubscriberWarnings(start.state, snapshot, SYNC_PINNED_MIN_MS);
+  assert.deepEqual(after.warnings, [], "音切れを防ぐ待ち時間だけで時計の警告を出さないこと");
+  assert.isNull(after.state.syncPinnedSinceMs);
+});
+
+test("detectSubscriberWarnings: 逆向きのバッファ差を補償予算へ足さない", () => {
+  const snapshot = avSyncWith({
+    baseDifferenceMs: 250,
+    audioJitterMs: 50,
+    videoJitterMs: 130,
+    videoExtraMs: 100,
+  });
+  const start = detectSubscriberWarnings(null, snapshot, 0);
+  const after = detectSubscriberWarnings(start.state, snapshot, SYNC_PINNED_MIN_MS);
+  assert.equal(
+    after.warnings[0]?.id,
+    "syncExtraDelayPinnedAtLimit",
+    "相殺した後も残る上限への張り付きを検出すること",
+  );
+});
+
+test("detectSubscriberWarnings: 表示の上限が未観測なら張り付きと判定しない", () => {
+  const snapshot = avSyncWith({ presentationDelayCapMs: 0, videoExtraMs: 30 });
+  const start = detectSubscriberWarnings(null, snapshot, 0);
+  const after = detectSubscriberWarnings(start.state, snapshot, SYNC_PINNED_MIN_MS);
+  assert.deepEqual(after.warnings, []);
+});
+
 test("detectSubscriberWarnings: 上限に張り付いたままの時間が境目を超えたら警告を出す", () => {
   const pinned = avSyncWith({ videoExtraMs: PINNED_EXTRA_MS, baseDifferenceMs: 250 });
   const before = detectSubscriberWarnings(null, pinned, 1_000);

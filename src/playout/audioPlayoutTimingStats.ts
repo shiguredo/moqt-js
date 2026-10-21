@@ -11,7 +11,8 @@
  * - 時刻はすべて `performance.now()` と同じ軸のミリ秒である。再生予定時刻は LOC の
  *   TIMESTAMP から `src/playout/timeline.ts` が決めた時刻であり、鳴り始める時刻は
  *   `AudioContext` の時計へ予約した時刻を `AudioClockBridge` で同じ軸へ換算した値である
- *   (音声出力の遅延は含まない)
+ *   (出力時計で換算できた場合の AudioContext の予約時刻であり、下流の HTMLAudioElement や
+ *   デバイスがさらに足す遅延は含まない)
  * - 分布 (p50 / p95 / max) は直近の窓 (既定 10 秒) の値から求める
  * - 鳴らなかった量は購読の開始 (reset) からの累積である。理由ごとに数え、和は合計に一致する
  * - 鳴ったが無音だった区間 (穴)、バッファ境界の段差、予約の追い越しも累積で数える。
@@ -179,8 +180,8 @@ export interface AudioPlayoutTimingSnapshot {
   /**
    * 時間圧縮と補間を使えないサンプルレートで鳴らした音の数 (累積)
    *
-   * 4 kHz へ間引くフィルタの表 (8 / 16 / 32 / 48 kHz) に無いサンプルレート (44.1 kHz の
-   * AAC など) では、ピッチの周期を求められないため時間圧縮も補間も働かない。落ちずに
+   * フィルタの表 (8 / 16 / 32 / 48 kHz) と解析信号の変換 (44.1 kHz) のどちらにも
+   * 対応しないレート (96 kHz など) では、時間圧縮も補間も働かない。落ちずに
    * 「操作しない」を返すので、この数が増えていることで気付く
    * (`src/playout/audioTimeStretch.ts` の `isTimeStretchAvailable`)。0 なら使えている
    */
@@ -521,14 +522,19 @@ export class AudioPlayoutTimingStats {
    * (`AudioPlayoutSession`) が足す (省略したときは 0 とみなされる)
    *
    * @param nowMs - 求める時刻 (ミリ秒)
+   * @param sinceMs - 制御へ渡す分布の開始時刻。再開前の実績を除くときに渡す
    */
-  audioDelayFeedback(nowMs: number): Omit<AudioDelayFeedbackObservation, "jitterTargetMs"> {
+  audioDelayFeedback(
+    nowMs: number,
+    sinceMs = Number.NEGATIVE_INFINITY,
+  ): Omit<AudioDelayFeedbackObservation, "jitterTargetMs"> {
     // 表示用の分布と同じ長さまでを残し、制御にはその中でも短い窓を使う
     const minAtMs = nowMs - this.windowMs;
     for (const series of [this.slacks, this.startDelays, this.latenesses]) {
       series.prune(minAtMs);
     }
-    const controlMinAtMs = nowMs - AUDIO_DELAY_FEEDBACK_WINDOW_MS;
+    // 表示用の分布と累積は残す一方、再開前の遅れを新しい再生の制御へ混ぜない
+    const controlMinAtMs = Math.max(nowMs - AUDIO_DELAY_FEEDBACK_WINDOW_MS, sinceMs);
     return {
       atMs: nowMs,
       latenessMs: summarizeTimings(this.latenesses.since(controlMinAtMs)),

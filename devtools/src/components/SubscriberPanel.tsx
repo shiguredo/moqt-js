@@ -345,6 +345,7 @@ export function SubscriberPanel({
               instance.audioPlaybackEnabled.value
                 ? "Stop playing the audio received from the subscribed track"
                 : "Play the audio received from the subscribed track on this device. " +
+                  "Video waits for the audio buffer to keep playback synchronized. " +
                   "It can be enabled before subscribing; the sound starts when audio arrives"
             }
             class={`w-32 py-2.5 shrink-0 font-medium rounded-lg transition-colors flex items-center justify-center gap-2 ${
@@ -1275,6 +1276,11 @@ function SubscriberStats({ statsSignal }: { statsSignal: ReadonlySignal<Subscrib
                 label: "audioClockFallback",
                 value: String(stats.avSync.audioClockFallback),
                 testId: "subscriber-av-sync-audio-clock-fallback",
+              },
+              {
+                label: "audioPlayoutCorrectionMs",
+                value: formatMs(stats.avSync.delays.audioPlayoutCorrectionMs),
+                testId: "subscriber-av-sync-audio-playout-correction",
               },
             ]}
           />

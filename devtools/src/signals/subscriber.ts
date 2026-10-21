@@ -68,6 +68,7 @@ export const EMPTY_AV_SYNC: AvSyncSnapshot = {
   delays: {
     audio: emptyTrackBreakdown(),
     video: emptyTrackBreakdown(),
+    audioPlayoutCorrectionMs: 0,
     baseDifferenceMs: null,
     baseDifferenceRecentMs: null,
     baseDifferenceSettledMs: null,

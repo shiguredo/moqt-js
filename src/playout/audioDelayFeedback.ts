@@ -55,10 +55,8 @@ import type { TimingSummary } from "./timingSummary";
  * 到着基準で鳴らすときの遅れと、映像を合わせる先の両方に効くため、片方だけを変えると
  * 基準を共有できない状態で A/V のずれが残る
  *
- * 値は実リレーの実測で決めた (表と根拠は `src/playout/timeline.ts` の
- * `AUDIO_PLAYOUT_DELAY_FLOOR_MS` にある)。観測が無い間の NetEq の初期値
- * (`AUDIO_DELAY_START_MS` = 80 ms) とは別の値であり、揃える必要はない。初期値は閉ループの
- * 観測が始まる前にだけ使われ、閉ループは観測が 1 つでも届けば目標を実測から動かす
+ * 値は実リレーの実測で決めた安全下限である。閉ループはこの値から始める。
+ * 到着の分布がまだ無い間は、到着の推定の開始値 80 ms を使って初期の音切れを抑える
  */
 export const AUDIO_DELAY_FEEDBACK_MIN_MS = 50;
 
@@ -131,10 +129,10 @@ export const AUDIO_DELAY_FEEDBACK_MAX_MS = 300;
 /**
  * 最初の目標遅延 (ミリ秒)
  *
- * 観測がまだ無いときに使う。NetEq の初期値 (80 ms) より少し大きくし、到着から鳴るまでの
- * 経路の分を最初から見込む (実測の目標は 40 ms であり、これが小さすぎた)
+ * 閉ループは安全下限から始める。最初の再生の観測だけで固定の 100 ms を
+ * 適用すると、静かな経路でも映像が跳ねて遅れる。経路と出力に必要な分は観測から増やす
  */
-export const AUDIO_DELAY_FEEDBACK_START_MS = 100;
+export const AUDIO_DELAY_FEEDBACK_START_MS = AUDIO_DELAY_FEEDBACK_MIN_MS;
 
 /**
  * 目標を動かす間隔 (ミリ秒)
@@ -251,6 +249,8 @@ export interface AudioDelayFeedbackObservation {
    * あることを戻す条件に加える
    */
   readonly jitterTargetMs: number;
+  /** 到着基準の再生に別の下限がある場合、その値から穴を吸収する分を増やす (ミリ秒) */
+  readonly arrivalDelayFloorMs?: number;
 }
 
 /** 閉ループの状態 (計器とテスト用) */
@@ -299,8 +299,8 @@ function clampTarget(value: number, lowerMs: number, upperMs: number): number {
  * 音声の目標遅延を、実際に鳴った結果から決める
  *
  * 音声トラックごとではなく、共有の時間軸 (`PlayoutTimeline`) に 1 つ持つ。目標は
- * 到着から鳴るまでの経路 (復号・予約・出力のバッファ) の学習であり、購読のやり直しや
- * TIMESTAMP の段差では変わらないためである。
+ * 到着から鳴るまでの経路を学ぶ。音声の再生を取り直したときは、過去の穴と遅れを
+ * 持ち込まないように初期化する。
  */
 export class AudioDelayFeedback {
   private targetMs = AUDIO_DELAY_FEEDBACK_START_MS;
@@ -325,6 +325,8 @@ export class AudioDelayFeedback {
   // 観測 (捨てた音の通知) でも true になるため、「実際に鳴った結果を観測したか」ではない
   // (`targetDelayMs` が参照する)
   private receivedObservation = false;
+  // 再開時の最初の累積は前の再生の実績を含みうるため、差分の基準としてだけ使う
+  private restarting = false;
   // 圧縮が続くため上限を 160 ms へ広げているか
   private artifactCeilingActive = false;
   // 上限を上げる根拠 (圧縮の速さが閾値を超えた状態) が続いている時間 (ミリ秒)
@@ -355,6 +357,30 @@ export class AudioDelayFeedback {
   /** 閉ループが決めた目標 (ミリ秒)。揺らぎだけの目標を含まない */
   get feedbackTargetMs(): number {
     return clampTarget(this.targetMs, AUDIO_DELAY_FEEDBACK_MIN_MS, this.upperMs());
+  }
+
+  /** 再生を止めたとき、前の穴と制御の待ち時間を次の再生へ持ち込まない */
+  reset(): void {
+    this.targetMs = AUDIO_DELAY_FEEDBACK_START_MS;
+    this.reason = "initial";
+    this.lastUpdateAtMs = null;
+    this.lastBacklogMisses = 0;
+    this.lastBacklogMs = 0;
+    this.lastGapCount = 0;
+    this.lastGapMs = 0;
+    this.lastGapAtMs = null;
+    this.gapCeilingMs = null;
+    this.gapCeilingUntilMs = 0;
+    this.lastChangeMs = 0;
+    this.adjustments = 0;
+    this.latest = null;
+    this.receivedObservation = false;
+    this.restarting = true;
+    this.artifactCeilingActive = false;
+    this.compressionStreakMs = 0;
+    this.quietStreakMs = 0;
+    this.compressionSinceUpdateMs = 0;
+    this.compressionMsPerSecond = 0;
   }
 
   /**
@@ -393,7 +419,22 @@ export class AudioDelayFeedback {
    * 短いため、間隔を空けずに動かすと、増やした結果が現れる前に増やし続ける
    */
   update(observation: AudioDelayFeedbackObservation): void {
+    // 穴への対処は内部目標ではなく、その音へ実際に適用していた深さから増やす。
+    // 到着の推定の方が深い場合、内部目標へ足すだけでは再生の深さが変わらない
+    const previousAppliedMs = Math.max(
+      this.targetDelayMs(observation.jitterTargetMs),
+      observation.arrivalDelayFloorMs ?? 0,
+    );
     this.latest = observation;
+    if (this.restarting) {
+      // 計器が累積を残す場合と、購読をやり直して 0 に戻す場合の両方を扱う。
+      // 過去の穴を新しい穴と数えると、再開直後にまた目標が広がってしまう
+      this.lastBacklogMisses = observation.backlogMisses;
+      this.lastBacklogMs = observation.backlogMs;
+      this.lastGapCount = observation.gapCount ?? 0;
+      this.lastGapMs = observation.gapMs ?? 0;
+      this.restarting = false;
+    }
     // 1 つでも観測を受けたら、以降は閉ループの目標を使う (鳴っていない音の観測でも同じ)
     this.receivedObservation = true;
     // 圧縮の増分を、次の制御 (毎秒 1 回) まで積む。音ごとの増分をそのまま速さとして見ると、
@@ -432,7 +473,7 @@ export class AudioDelayFeedback {
         this.artifactCeilingLimitMs(),
         Math.max(
           AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS,
-          this.feedbackTargetMs + gapMsDelta + AUDIO_DELAY_FEEDBACK_MARGIN_MS,
+          previousAppliedMs + gapMsDelta + AUDIO_DELAY_FEEDBACK_MARGIN_MS,
         ),
       );
       this.gapCeilingMs = Math.max(this.gapCeilingMs ?? 0, widenedMs);
@@ -500,7 +541,7 @@ export class AudioDelayFeedback {
       return;
     }
     this.targetMs = clampTarget(
-      this.targetMs + changeMs,
+      (gapDelta > 0 ? Math.max(this.targetMs, previousAppliedMs) : this.targetMs) + changeMs,
       AUDIO_DELAY_FEEDBACK_MIN_MS,
       this.upperMs(),
     );
@@ -598,7 +639,13 @@ export class AudioDelayFeedback {
       this.latest.atMs < this.gapCeilingUntilMs;
     return Math.max(
       artifactCeilingMs,
-      gapCeilingHeld ? (this.gapCeilingMs ?? AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS) : 0,
+      // 穴の保持期間中に予算を下げた場合も、現在の設定を即座に適用する。
+      gapCeilingHeld
+        ? Math.min(
+            this.gapCeilingMs ?? AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS,
+            this.artifactCeilingLimitMs(),
+          )
+        : 0,
     );
   }
 

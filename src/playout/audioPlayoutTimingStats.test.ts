@@ -200,6 +200,20 @@ test("audioDelayFeedback: 短い窓の分布と、累積の捨てた量を返す
   assert.equal(later.backlogMisses, 1, "累積は窓に関係なく残ること");
 });
 
+test("音声の再開より前の分布を閉ループへ渡さず、表示用の分布は残す", () => {
+  const stats = new AudioPlayoutTimingStats(10_000, 0);
+  stats.recordPlay(100, 100, 200, 20, "timestamp");
+  stats.recordPlay(120, 120, 220, 20, "timestamp");
+  stats.recordPlay(200, 250, 250, 20, "timestamp");
+  assert.equal(stats.audioDelayFeedback(220).latenessMs?.p50, 100);
+  assert.equal(
+    stats.audioDelayFeedback(220, 150).latenessMs?.p50,
+    0,
+    "再開後の分布だけで制御すること",
+  );
+  assert.equal(stats.snapshot(220).latenessMs?.p50, 100, "表示用の過去の実績を消さないこと");
+});
+
 // 完了条件: reset で、すべての記録を捨てて初期状態へ戻す。購読をやり直すときに使う
 test("reset: すべての記録を捨てて初期状態へ戻す", () => {
   const stats = new AudioPlayoutTimingStats(AUDIO_PLAYOUT_TIMING_WINDOW_MS, 0);

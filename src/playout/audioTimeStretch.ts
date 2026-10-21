@@ -89,16 +89,16 @@ const DOWNSAMPLE_FILTERS: ReadonlyMap<number, DownsampleFilter> = new Map([
  * 時間圧縮と補間を使えるサンプルレートか
  *
  * ピッチの周期は 4 kHz へ間引いた信号から求めるため、間引きのフィルタの表 (8 / 16 / 32 /
- * 48 kHz。NetEq と同じ) に無いサンプルレートでは周期を求められない。44.1 kHz (AAC など) が
- * これにあたり、**時間圧縮も補間も働かない**。落ちずに「操作しない」を返すため呼び出し側から
- * は区別できないので、先にこの関数で確かめて計器へ出す
+ * 48 kHz。NetEq と同じ) に加え、44.1 kHz は解析用の信号だけを 48 kHz へ換算する。
+ * 元の音声はリサンプルせず、求めた周期を元のレートへ戻して操作する。それ以外の
+ * レートでは操作しないため、先にこの関数で確かめて計器へ出す
  * (src/playout/audioPlayoutTimingStats.ts の `stretchUnavailableFrames`)
  */
 export function isTimeStretchAvailable(sampleRate: number): boolean {
   if (!(sampleRate > 0)) {
     return false;
   }
-  return DOWNSAMPLE_FILTERS.has(Math.round(sampleRate / 4_000) * 4_000);
+  return sampleRate === 44_100 || DOWNSAMPLE_FILTERS.has(Math.round(sampleRate / 4_000) * 4_000);
 }
 
 /**
@@ -129,6 +129,15 @@ interface PitchPeriod {
 
 /** 4 kHz へ間引く (NetEq の `DspHelper::DownsampleTo4kHz` と同じ係数と遅延補正) */
 function downsampleTo4kHz(signal: AudioSamples, samplesPer4kHzSample: number): AudioSamples {
+  if (samplesPer4kHzSample === 44_100 / 4_000) {
+    // 非整数比の入力は解析用だけ 48 kHz の格子へ移す。その後も既存の低域フィルタを
+    // 通す。再生する音のサンプルは変更せず、周期の推定だけを共通化する。
+    const resampled = Float32Array.from(
+      { length: Math.floor((signal.length * 48_000) / 44_100) },
+      (_, index) => sampleAt(signal, (index * 44_100) / 48_000),
+    );
+    return downsampleTo4kHz(resampled, 12);
+  }
   const filter = DOWNSAMPLE_FILTERS.get(samplesPer4kHzSample * 4_000);
   if (filter === undefined) {
     return new Float32Array(0);
@@ -184,7 +193,8 @@ function analyze(
   sampleRate: number,
   spliceSamples: number,
 ): PitchPeriod | null {
-  const samplesPer4kHzSample = Math.round(sampleRate / 4_000);
+  const samplesPer4kHzSample =
+    sampleRate === 44_100 ? sampleRate / 4_000 : Math.round(sampleRate / 4_000);
   if (samplesPer4kHzSample <= 0) {
     return null;
   }
@@ -199,7 +209,7 @@ function analyze(
   }
   const lag = findLag(downsampled, maxLag);
   // ピッチの周期を元のサンプルレートへ戻す
-  const samples = lag * samplesPer4kHzSample;
+  const samples = Math.round(lag * samplesPer4kHzSample);
   if (samples <= 0 || samples > spliceSamples || spliceSamples + samples > reference.length) {
     // 切れ目の前後が音に収まらない (音が短すぎる)
     return null;
@@ -421,7 +431,8 @@ export function concealSamples(
     return { channels: [], generatedSamples: 0 };
   }
   // 末尾で繰り返している周期を、4 kHz の粗い探索と元のサンプルレートの端数補間で求める
-  const samplesPer4kHzSample = Math.round(sampleRate / 4_000);
+  const samplesPer4kHzSample =
+    sampleRate === 44_100 ? sampleRate / 4_000 : Math.round(sampleRate / 4_000);
   const tail = findTailPeriod(reference, samplesPer4kHzSample);
   if (tail === null || tail.samples <= 0 || tail.samples > length) {
     // 末尾に周期が無い (音が短すぎる、対応していないサンプルレート)
@@ -543,9 +554,9 @@ function normalizedCorrelation(
  * 440 Hz の周期 109.09 サンプルを 108 としか求められず、100 ms の穴で 0.44 周期ずれて
  * 次の音との段差が振幅の 195 % になる (端数まで求めると 3 % になる)。
  *
- * 放物線の頂点は細探索した 3 点から求めるため、最大が細探索の端にあるときは求められない。
- * 端では格子のままにする (端で外挿すると探索の下限の外側のラグを返し、周期が 0.5 サンプル
- * ずれる)。400 Hz の周期 120 サンプルは細探索の下限そのものであり、この経路を通る
+ * 放物線の頂点には実際の隣接 3 点の相関を使う。探索範囲の外側も 1 サンプルずつ評価し、
+ * 44.1 kHz のように下限が整数でないレートでも、周期を範囲の内側へ丸めない。
+ * 入力の長さの制約で隣接点を評価できないときは、外挿せず格子のままにする
  *
  * 音が短すぎる、対応していないサンプルレートのときは null
  */
@@ -572,16 +583,20 @@ function findTailPeriod(reference: AudioSamples, samplesPer4kHzSample: number): 
   }
   // 粗いラグの周辺 (±1 格子) を元のサンプルレートで評価する
   const length = reference.length;
-  const fullWindow = Math.min(
-    window * samplesPer4kHzSample,
-    length - TIME_STRETCH_MIN_LAG * samplesPer4kHzSample,
+  const fullWindow = Math.floor(
+    Math.min(window * samplesPer4kHzSample, length - TIME_STRETCH_MIN_LAG * samplesPer4kHzSample),
   );
   const center = coarseLag * samplesPer4kHzSample;
+  // 端数の下限を ceil すると 44.1 kHz / 399 Hz の真の周期 110.526 サンプルが
+  // 探索の外になり、111 サンプルへ丸めた位相誤差が長い補間で蓄積する。外側へ丸め、
+  // 放物線補間に必要な隣接 1 サンプルも実際に評価する。
   const firstLag = Math.max(
-    TIME_STRETCH_MIN_LAG * samplesPer4kHzSample,
-    center - samplesPer4kHzSample,
+    1,
+    Math.floor(
+      Math.max(TIME_STRETCH_MIN_LAG * samplesPer4kHzSample, center - samplesPer4kHzSample),
+    ) - 1,
   );
-  const lastLag = Math.min(length - fullWindow, center + samplesPer4kHzSample);
+  const lastLag = Math.min(length - fullWindow, Math.ceil(center + samplesPer4kHzSample) + 1);
   if (fullWindow <= 0 || lastLag < firstLag) {
     // 元のサンプルレートで評価できない (音が短すぎる) ときは粗い格子のまま使う
     return { samples: center, correlation: coarseCorrelation };
@@ -597,18 +612,19 @@ function findTailPeriod(reference: AudioSamples, samplesPer4kHzSample: number): 
       bestLag = lag;
     }
   }
-  // ピークを放物線で補間して端数まで求める (格子の分のずれを 12 分の 1 以下にする)。頂点は
-  // 前後と最大の 3 点から求めるため、最大が細探索の端にあるときは求められない。端で外挿
-  // すると、評価していないラグ (探索の下限の外側) を返して周期が 0.5 サンプルずれ、穴の
-  // 終わりで位相が合わなくなる (実測: 48 kHz、20 ms のフレーム、400 Hz = 周期 120 サンプル
-  // は細探索の下限そのもので、穴 100 ms の段差が振幅の 85.2 % になった)。上に凸でない
-  // (曲率が 0 以上) ときも頂点を求められないため、どちらも格子のままにする
+  // ピークを放物線で補間して端数まで求める。最大値を欠けた隣接点の代用にすると
+  // 架空の頂点を作るため、実際に前後を評価できたときだけ補間する。上に凸でない
+  // (曲率が 0 以上) ときも頂点を求められないため、格子のままにする
   const peak = bestLag - firstLag;
   const hasBothNeighbors = peak > 0 && peak + 1 < correlations.length;
   const before = hasBothNeighbors ? (correlations[peak - 1] ?? bestCorrelation) : bestCorrelation;
   const after = hasBothNeighbors ? (correlations[peak + 1] ?? bestCorrelation) : bestCorrelation;
   const curvature = before - 2 * bestCorrelation + after;
-  const offset = hasBothNeighbors && curvature < 0 ? (0.5 * (before - after)) / curvature : 0;
+  // 整数ラグが丸め誤差の範囲で完全相関なら、その周期を維持する。有限窓の前後の
+  // 相関は非対称になり得るため、正しい整数周期まで放物線の頂点へずらすと位相を壊す。
+  const exactPeriod = bestCorrelation >= 1 - 1e-12;
+  const offset =
+    !exactPeriod && hasBothNeighbors && curvature < 0 ? (0.5 * (before - after)) / curvature : 0;
   const samples = bestLag + Math.max(-0.5, Math.min(0.5, offset));
   return { samples, correlation: bestCorrelation };
 }

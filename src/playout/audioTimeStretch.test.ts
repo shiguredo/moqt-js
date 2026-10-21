@@ -515,24 +515,23 @@ test("concealSamples: 16 kHz でも末尾の周期で生成する", () => {
  * 操作できない入力では、音を変えずに「操作しなかった」を返す
  *
  * 4 kHz への間引きはサンプルレートごとのフィルタ表 (8 / 16 / 32 / 48 kHz) を使うため、
- * 表に無いサンプルレートでは間引いた信号が作れず、ピッチの周期を求められない。44.1 kHz
- * (AAC など) はこれにあたり、**時間圧縮と補間のどちらも働かなくなる**。落ちるのではなく
- * 「操作しない」を返すため、呼び出し側からは区別できない (計器にも現れない)
+ * 44.1 kHz は解析用の変換を持つが、96 kHz には対応していない。非対応のレートでは
+ * 音を変更せずに返し、呼び出し側が計器で区別する。
  */
 test("操作できない入力では音を変えない", () => {
   const frame = sineFrame(5);
   const silent = new Float32Array(FRAME_SAMPLES);
 
-  // 対応表に無いサンプルレート (44.1 kHz)。間引いた信号が作れないため操作しない
+  // 対応表にも解析用の変換にも無いサンプルレートは操作しない
   assert.equal(
-    compressSamples([frame], 44_100).lengthChangeSamples,
+    compressSamples([frame], 96_000).lengthChangeSamples,
     0,
-    "44.1 kHz では時間圧縮しないこと",
+    "非対応のレートでは時間圧縮しないこと",
   );
   assert.deepEqual(
-    concealSamples([frame], 44_100, 0.02).channels,
+    concealSamples([frame], 96_000, 0.02).channels,
     [],
-    "44.1 kHz では補間しないこと",
+    "非対応のレートでは補間しないこと",
   );
   // サンプルレートが 0 以下 (壊れた入力)
   assert.equal(compressSamples([frame], 0).lengthChangeSamples, 0, "0 Hz では圧縮しないこと");
@@ -557,8 +556,8 @@ test("操作できない入力では音を変えない", () => {
   );
   // 無音でも、対応表に無いサンプルレートでは操作しない (無音の扱いより前に入力の検証がある)
   assert.equal(
-    compressSamples([silent], 44_100).lengthChangeSamples,
+    compressSamples([silent], 96_000).lengthChangeSamples,
     0,
-    "無音でも 44.1 kHz では圧縮しないこと",
+    "無音でも非対応のレートでは圧縮しないこと",
   );
 });
