@@ -1,7 +1,7 @@
 # ライブラリの音声購読が LARGEST_OBJECT 以前の cache 音声を鳴らすのを直す
 
 - Created: 2026-10-21
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-10-21
 - Branch: feature/fix-playout-audio-correctness
 - Polished: {YYYY-MM-DD}
 
@@ -42,4 +42,14 @@ devtools は SUBSCRIBE_OK の LARGEST_OBJECT 以前の音声を復号するが�
 
 ## 解決方法
 
-{対応時に記入}
+ライブラリの音声購読に、SUBSCRIBE_OK の LARGEST_OBJECT を境界にした cache 音声の除外を入れた。
+`src/createMediaSubscriber.ts` で `CatchUpGate` (`src/catchUpGate.ts`) を再利用し、購読確立後に
+`audioSubscriber.largestLocation` を境界に設定する。`receiveAudioObject` の入口と、初期 configure の
+保留から解放する `handleAudioObject` の両方で境界以前の Object を復号へ渡さず捨て、境界が null の
+購読では全 Object を live として扱う。購読の開始と停止で境界をリセットする。捨てた数は
+`AudioReceiverStats.catchUpObjectsSkipped` (累積) で読めるようにし、`docs/HIGH_LEVEL_API.md` の型と
+説明を更新した。
+
+検証: 境界以前・境界以後・境界 null・購読やり直しでのリセット・購読確立前に保留された cache の解放時
+除外を単体テストで固定した (createMediaSubscriber.test.ts 202 テスト)。`vp check` / `tsc --noEmit` /
+`vp test run` が通る。
