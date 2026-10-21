@@ -29,13 +29,13 @@ jobs:
       - run: vp check
 
   build:
-    runs-on: ubuntu-slim
-    # 単体テストがまれにハングする。ジョブの上限は延ばさず、テストのステップに短い
-    # 上限と 1 回の再試行を置いて、ハングしてもジョブの残り時間で復旧できるようにする。
-    # ハングしたときは MOQT_TEST_TRACE の記録から原因のテストを特定する。
+    # ubuntu-slim は 1 vCPU であり、単体テスト (235 ファイル) の所要時間が 2.5 分〜
+    # 10 分超まで変動してジョブの上限にかかり、ハングしたように見えていた。CPU が
+    # 安定している 4 vCPU の ubuntu-24.04 を使う (relay と同じ理由)。
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     strategy:
-      # 1 つの Node でハングしても他の Node の結果を打ち切らない
+      # 1 つの Node で失敗しても他の Node の結果を打ち切らない
       fail-fast: false
       matrix:
         node:
@@ -49,16 +49,7 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: true
       - name: Run vp test
-        id: test
-        # ハングしたときは 4 分で打ち切り、原因を特定できるよう開始 / 終了を記録する
-        timeout-minutes: 4
-        continue-on-error: true
-        env:
-          MOQT_TEST_TRACE: "1"
-        run: vp test
-      - name: Retry vp test after a hang
-        if: steps.test.outcome == 'failure'
-        timeout-minutes: 4
+        # 実際にハングしたときに原因を特定できるよう、開始 / 終了を記録する
         env:
           MOQT_TEST_TRACE: "1"
         run: vp test
