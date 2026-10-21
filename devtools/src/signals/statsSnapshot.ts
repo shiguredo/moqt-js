@@ -6,6 +6,7 @@ import type { AudioPlayoutTimingSnapshot } from "../../../src/playout/audioPlayo
 import type { AudioTimestampOffsetStats } from "../../../src/audioTimestampClock.ts";
 import type { AudioPublishCatchUpStats } from "../../../src/audioPublishCatchUp.ts";
 import type { AudioReceiveCatchUpStats } from "../../../src/playout/audioReceiveCatchUp.ts";
+import type { HostDelaySnapshot } from "../utils/hostDelayTracker.ts";
 import type { PreconditionWarning } from "../utils/preconditionWarnings.ts";
 import type { StatusType } from "../types";
 import {
@@ -273,6 +274,15 @@ export interface SubscriberAudioStats {
    * 追いつきを始めたときに購読側が行う
    */
   playoutCatchUp: AudioReceiveCatchUpStats;
+  /**
+   * メインスレッドの停止 (longtask) と音声の到着の重なりの観測値
+   * (devtools/src/utils/hostDelayTracker.ts)
+   *
+   * 直近の窓の停止の回数と合計 ms、停止区間と到着の間隔が重なった到着の数を持つ。
+   * 停止の報告は止まった後に届くため、到着の観測時に停止中だったかを 1 件ずつ記録するの
+   * ではなく、記録した停止区間と到着の間隔を統計を出すときに突き合わせる
+   */
+  hostDelay: HostDelaySnapshot;
 }
 
 /** Subscriber の Messages (event timeline) の統計 */
@@ -489,6 +499,8 @@ export function buildSubscriberStats(sub: SubscriberInstance): SubscriberStats {
       playoutConcealments: sub.audioPlayoutConcealments.value,
       playoutTiming: sub.audioPlayoutTiming.value,
       playoutCatchUp: sub.audioPlayoutCatchUp.value,
+      // メインスレッドの停止と音声の到着の重なり (devtools/src/utils/hostDelayTracker.ts)
+      hostDelay: sub.audioHostDelay.value,
     },
     event: {
       objectsReceived: sub.eventObjectsReceived.value,

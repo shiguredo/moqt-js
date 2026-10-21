@@ -1,6 +1,7 @@
 import { test, expect } from "@playwright/test";
 import type { SubscriberStats } from "../../devtools/src/testApi";
 import { EMPTY_AUDIO_PLAYOUT_TIMING } from "../../src/playout/audioPlayoutTimingStats";
+import { EMPTY_HOST_DELAY } from "../../devtools/src/utils/hostDelayTracker";
 import { DEVTOOLS_URL } from "./urls";
 
 // devtools の Subscriber パネルとテスト用 API が、音声の再生の観測値
@@ -32,6 +33,10 @@ const AUDIO_PLAYBACK_ITEMS = {
   missedTotalCount: "subscriber-audio-playback-missed-total-count",
   missedTotalMs: "subscriber-audio-playback-missed-total-ms",
   recentMisses: "subscriber-audio-playback-recent-misses",
+  // メインスレッドの停止 (longtask) と、停止区間と重なった到着
+  hostStallCount: "subscriber-audio-host-stall-count",
+  hostStallMs: "subscriber-audio-host-stall-ms",
+  hostOverlappedArrivals: "subscriber-audio-host-overlapped-arrivals",
 } as const;
 
 test("window.moqtDevTools から音声の再生の観測値が読め、未購読では既定値になる", async ({
@@ -59,12 +64,20 @@ test("window.moqtDevTools から音声の再生の観測値が読め、未購読
     if (single === null) {
       throw new Error(`no subscriber stats: ${first.id}`);
     }
-    return { list: first.audio.playoutTiming, single: single.audio.playoutTiming };
+    return {
+      list: first.audio.playoutTiming,
+      single: single.audio.playoutTiming,
+      listHostDelay: first.audio.hostDelay,
+      singleHostDelay: single.audio.hostDelay,
+    };
   });
 
   // まだ鳴らしていないため、値が無いことを null で、累積を 0 で表す
   expect(playoutTiming.list).toEqual(EMPTY_AUDIO_PLAYOUT_TIMING);
   expect(playoutTiming.single).toEqual(EMPTY_AUDIO_PLAYOUT_TIMING);
+  // メインスレッドの停止もまだ観測していない (longtask を報告しない環境でも 0 になる)
+  expect(playoutTiming.listHostDelay).toEqual(EMPTY_HOST_DELAY);
+  expect(playoutTiming.singleHostDelay).toEqual(EMPTY_HOST_DELAY);
 });
 
 test("subscriber の画面に音声の再生の観測を既定値で出す", async ({ page }) => {
@@ -93,4 +106,8 @@ test("subscriber の画面に音声の再生の観測を既定値で出す", asy
   await expect(page.getByTestId(AUDIO_PLAYBACK_ITEMS.missedTotalMs)).toHaveText("0");
   // 直近の一覧はまだ空である
   await expect(page.getByTestId(AUDIO_PLAYBACK_ITEMS.recentMisses)).toHaveText("-");
+  // メインスレッドの停止はまだ観測していない (監視していない環境でも 0 になる)
+  await expect(page.getByTestId(AUDIO_PLAYBACK_ITEMS.hostStallCount)).toHaveText("0");
+  await expect(page.getByTestId(AUDIO_PLAYBACK_ITEMS.hostStallMs)).toHaveText("0");
+  await expect(page.getByTestId(AUDIO_PLAYBACK_ITEMS.hostOverlappedArrivals)).toHaveText("0");
 });

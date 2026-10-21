@@ -3,6 +3,7 @@ import { createSubscriberInstance, EMPTY_AV_SYNC } from "./subscriber";
 import { EMPTY_PLAYOUT_TIMING } from "../utils/playoutTimingStats";
 import { EMPTY_PUBLISH_TIMING } from "../utils/publishTimingStats";
 import { EMPTY_AUDIO_PLAYOUT_TIMING } from "../../../src/playout/audioPlayoutTimingStats.ts";
+import { EMPTY_HOST_DELAY } from "../utils/hostDelayTracker.ts";
 import { buildPublisherStats, buildSubscriberStats } from "./statsSnapshot";
 import * as pub from "./publisher";
 
@@ -262,6 +263,37 @@ test("buildSubscriberStats: 音声の再生の観測値を返す", () => {
     buildSubscriberStats(createSubscriberInstance("audio-playout-timing-empty")).audio
       .playoutTiming,
     EMPTY_AUDIO_PLAYOUT_TIMING,
+  );
+});
+
+test("buildSubscriberStats: メインスレッドの停止と到着の重なりを返す", () => {
+  // 到着の遅れ (receiveDelayMs) には、経路と relay の遅れだけでなく、同じページの
+  // メインスレッドが止まっていた分も混ざる。停止の回数・合計・停止と重なった到着の数を
+  // コピー本文の JSON でも読めるようにする
+  const instance = createSubscriberInstance("audio-host-delay");
+  instance.audioHostDelay.value = {
+    stallCount: 2,
+    stallMs: 173.5,
+    overlappedArrivalCount: 1,
+  };
+
+  const stats = buildSubscriberStats(instance);
+  assert.deepEqual(stats.audio.hostDelay, instance.audioHostDelay.value);
+  // Copy for LLM の JSON にも同じ値が出る
+  const jsonText = JSON.stringify(stats);
+  const json = JSON.parse(jsonText) as {
+    audio: { hostDelay: { stallCount: number; stallMs: number; overlappedArrivalCount: number } };
+  };
+  assert.deepEqual(json.audio.hostDelay, {
+    stallCount: 2,
+    stallMs: 173.5,
+    overlappedArrivalCount: 1,
+  });
+
+  // 購読前は何も観測していない値 (0) を返す
+  assert.deepEqual(
+    buildSubscriberStats(createSubscriberInstance("audio-host-delay-empty")).audio.hostDelay,
+    EMPTY_HOST_DELAY,
   );
 });
 

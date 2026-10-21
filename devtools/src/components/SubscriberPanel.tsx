@@ -661,6 +661,36 @@ function SubscriberStats({ statsSignal }: { statsSignal: ReadonlySignal<Subscrib
               },
             ]}
           />
+          {/* メインスレッドの停止 (longtask) の計器。音声の到着の遅れ (receiveDelayMs) には、
+              経路と relay の遅れだけでなく、同じページのメインスレッドが止まっていた分も
+              混ざる。停止の回数と長さ、停止の間に待たされた到着の数を並べて出す */}
+          <StatList
+            items={[
+              {
+                // 直近の窓で観測した longtask の回数
+                label: "stallCount",
+                value: stats.audio.hostDelay.stallCount,
+                tone: "warn",
+                testId: "subscriber-audio-host-stall-count",
+              },
+              {
+                // 直近の窓で観測した停止の合計
+                label: "stallMs",
+                value: Math.round(stats.audio.hostDelay.stallMs),
+                tone: "warn",
+                testId: "subscriber-audio-host-stall-ms",
+              },
+              {
+                // 直前の到着から今回の到着までの間隔が停止区間と重なった数。
+                // 止まっている間は到着のコールバックが動かないため、停止の直後に
+                // 観測された到着がここに入る
+                label: "overlappedArrivals",
+                value: stats.audio.hostDelay.overlappedArrivalCount,
+                tone: "warn",
+                testId: "subscriber-audio-host-overlapped-arrivals",
+              },
+            ]}
+          />
         </StatSection>
 
         <StatSection

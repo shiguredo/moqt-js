@@ -46,6 +46,7 @@ import {
   PLAYOUT_TIMING_WINDOW_MS,
 } from "../utils/playoutTimingStats";
 import { PUBLISH_TIMING_WINDOW_MS } from "../utils/publishTimingStats";
+import { HOST_DELAY_WINDOW_MS } from "../utils/hostDelayTracker";
 import { STALL_CAUSES, type StallCause } from "../utils/stallAnalysis";
 
 // 分布を求める窓 (秒)
@@ -404,6 +405,10 @@ export const AUDIO_PLAYOUT_TIMING_HELP: SectionHelp = {
     {
       term: "boundaryStepCount / boundaryStepMax",
       description: `Buffer boundaries whose step (the difference between the samples that the output actually plays) is above ${AUDIO_PLAYOUT_BOUNDARY_STEP_THRESHOLD} (3 times the normal step of a 440 Hz tone, 0.0174; an absolute value, so normal audio can exceed it). Counts every boundary, including the step where the output cuts to a gap and back and the step of a media-time jump (loss or decoder rebuild). At a gap with no concealment, the step is the amplitude of the sound just before the silence (the previous sound's tail is not faded); when the concealment fills part of the gap, its faded tail keeps the step small.`,
+    },
+    {
+      term: "stallCount / stallMs / overlappedArrivals",
+      description: `Long tasks of the main thread in the last ${HOST_DELAY_WINDOW_MS / 1_000} s (tasks of 50 ms or more), their total ms, and the audio arrivals whose wait happened to span one of them. A long task blocks the callbacks of this same page, so an arrival is never observed inside the stall; the first arrival after the stall is the one that waited during it. The arrival time of an audio Object is read when its callback runs, so receiveDelayMs includes this host delay as well as the network path and the relay. 0 while the browser does not report long tasks.`,
     },
   ],
   notes: [

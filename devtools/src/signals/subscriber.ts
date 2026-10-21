@@ -12,6 +12,7 @@ import {
   EMPTY_AUDIO_RECEIVE_CATCH_UP,
   type AudioReceiveCatchUpStats,
 } from "../../../src/playout/audioReceiveCatchUp.ts";
+import { EMPTY_HOST_DELAY, type HostDelaySnapshot } from "../utils/hostDelayTracker.ts";
 import { EMPTY_PLAYOUT_TIMING, type PlayoutTimingSnapshot } from "../utils/playoutTimingStats";
 import {
   AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS,
@@ -224,6 +225,11 @@ export interface SubscriberInstance {
   // 既定値のまま
   // (src/playout/audioPlayoutTimingStats.ts)
   audioPlayoutTiming: Signal<AudioPlayoutTimingSnapshot>;
+  // メインスレッドの停止 (longtask) と音声の到着の重なりの観測値。直近の窓の停止回数・
+  // 停止の合計 ms・停止区間と到着の間隔が重なった到着の数を持つ。useSubscriber が一定間隔で
+  // 更新する。まだ停止を観測していないときは既定値のまま
+  // (devtools/src/utils/hostDelayTracker.ts)
+  audioHostDelay: Signal<HostDelaySnapshot>;
   // 復号した音声のレベル (dBFS)。左右のチャンネルを別々に持ち、モノラルのときは右が
   // null のまま。まだ復号していない状態も null
   audioPeakDbfsLeft: Signal<number | null>;
@@ -302,6 +308,7 @@ export function createSubscriberInstance(id: string): SubscriberInstance {
     audioPlayoutConcealedMs: signal(0),
     audioPlayoutConcealments: signal(0),
     audioPlayoutTiming: signal<AudioPlayoutTimingSnapshot>(EMPTY_AUDIO_PLAYOUT_TIMING),
+    audioHostDelay: signal<HostDelaySnapshot>(EMPTY_HOST_DELAY),
     audioPlayoutCatchUp: signal<AudioReceiveCatchUpStats>(EMPTY_AUDIO_RECEIVE_CATCH_UP),
     audioPeakDbfsLeft: signal<number | null>(null),
     audioPeakDbfsRight: signal<number | null>(null),
