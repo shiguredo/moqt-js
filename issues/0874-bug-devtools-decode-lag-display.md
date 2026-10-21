@@ -1,7 +1,7 @@
 # devtools の catch-up 表示が判定に使う decodeLag ではなく lag を出しているのを直す
 
 - Created: 2026-10-21
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-10-21
 - Branch: feature/add-devtools-audio-playout-instruments
 - Polished: {YYYY-MM-DD}
 
@@ -37,4 +37,10 @@
 
 ## 解決方法
 
-{対応時に記入}
+受信側の追いつきの表示を、判定に使う `decodeLagMs` と `limitMs` が主になるように変えた。`lagMs` は
+入力の遅れと意図した遅延を含む生の値として参考表示に残した。`devtools/src/signals/statsSnapshot.ts` は
+両方の値を JSON に出し、`statsHelp.ts` の説明を実装 (判定は `decodeLagMs`、開始条件は床 + 100 ms 超、
+確認を待たずに始まる場合がある) に合わせた。
+
+検証: `statsSnapshot` の単体テストで `decodeLagMs` と `limitMs` が JSON に出ること、既存の値が変わらない
+ことを固定した。`vp check` / `tsc --noEmit` / `vp test run` が通る。
