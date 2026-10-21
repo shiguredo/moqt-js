@@ -949,6 +949,10 @@ export function useSubscriber(
   );
   const videoPlayoutRef = useRef<VideoPlayoutSession | null>(null);
   const jitterBufferEnabledRef = useRef(false);
+  // 音声だけを購読しているか。映像の時間軸が無いため目標の開始時刻を守らず、到着基準で
+  // 並べる (ライブラリの `createMediaSubscriber` の `enforceTarget` と同じ規則)。
+  // jitter buffer と受信側の追いつきは音声だけでも使う
+  const audioOnlyPlaybackRef = useRef(false);
   // 直前の同期の状態 (基準を共有できているかとその理由)。変わったときだけログに残す
   const avSyncStateRef = useRef<AvSyncState | null>(null);
   // decoder に渡したフレームの情報 (chunk の timestamp で引く)。復号の出力で、壁時計の
@@ -1182,7 +1186,8 @@ export function useSubscriber(
    * 作り直した時間軸で推定をやり直す)。
    */
   function currentAvSyncSnapshot(): sub.AvSyncSnapshot {
-    if (!jitterBufferEnabledRef.current) {
+    // 音声だけの購読では映像が無く、同期の推定として意味を持たない
+    if (!jitterBufferEnabledRef.current || audioOnlyPlaybackRef.current) {
       return sub.EMPTY_AV_SYNC;
     }
     const timeline = playoutTimelineRef.current;
@@ -1225,6 +1230,8 @@ export function useSubscriber(
    */
   function startPlayoutTiming(tracks: CatalogMediaTracks): void {
     stopPlayoutTiming();
+    // 映像の時間軸を作る購読では、音声は映像に合わせて目標の開始時刻を守る
+    audioOnlyPlaybackRef.current = false;
     playoutTimingRef.current.reset();
     const enabled = settings.jitterBufferEnabled.value;
     jitterBufferEnabledRef.current = enabled;
@@ -1987,8 +1994,9 @@ export function useSubscriber(
    * 音声を諦めて続ける対象が無い)。音声トラックの終わりは `handleTrackEnd` が扱い、
    * `trackCallbacks` にはエラーだけを伝える。
    *
-   * 映像の時間軸が無いため、音声は到着基準で並べ、同期の推定も出さない
-   * (statistics は `resetSubscriberStats` が既定値に戻す)
+   * 映像の時間軸は作らないが、音声の jitter buffer と受信側の追いつきは使う。同期の推定
+   * (A/V) は映像が無いため出さない (statistics は `resetSubscriberStats` が既定値に
+   * 戻す)
    */
   async function subscribeAudioOnly(
     session: Session,
@@ -2002,8 +2010,20 @@ export function useSubscriber(
     const isCurrentAttempt = createAttemptGuard(abortControllerRef, signal);
     instance.statusMessage.value = "Preparing audio decoder...";
     resetSubscriberStats(instance);
-    // 前の購読で jitter buffer が有効でも、映像の時間軸が無いこの購読では同期しない
-    jitterBufferEnabledRef.current = false;
+    // 映像は購読しないが、音声の jitter buffer と受信側の追いつきは使う。時間軸を作らないと
+    // 到着の揺らぎの学習 (NetEq) と閉ループが動かず、固定の遅れで再生することになる。
+    // 同期の推定 (A/V) は映像が無いため出さない
+    audioOnlyPlaybackRef.current = true;
+    const audioOnlyJitterBufferEnabled = settings.jitterBufferEnabled.value;
+    jitterBufferEnabledRef.current = audioOnlyJitterBufferEnabled;
+    playoutTimelineRef.current = new PlayoutTimeline({
+      timeOriginMs: performance.timeOrigin,
+      maxQueuedFrames: audioOnlyJitterBufferEnabled
+        ? JITTER_BUFFER_MAX_QUEUED_FRAMES
+        : MAX_PENDING_FRAMES,
+    });
+    // 音声の Track だけでも targetLatency は宣言され得る (draft-ietf-moq-msf-01 §5.2.8)
+    playoutTimelineRef.current.setTargetLatencyMs(effectiveTargetLatencyMs(audioTrack));
     await startAudioSubscription(
       session,
       namespaceArray,
@@ -2192,7 +2212,9 @@ export function useSubscriber(
         intentionalDelayMs: input?.intentionalDelayMs ?? preDecodeDelayRef.current?.delayMs ?? 0,
         timeline: playoutTimelineRef.current,
         useTimeline: jitterBufferEnabledRef.current,
-        enforceTarget: jitterBufferEnabledRef.current,
+        // 音声だけの購読では映像に合わせる相手が無いため、目標の開始時刻を守らず
+        // 到着基準で並べる (ライブラリの `enforceTarget` と同じ規則)
+        enforceTarget: jitterBufferEnabledRef.current && !audioOnlyPlaybackRef.current,
         output: { context: playback.context, destination: playback.destination },
       });
       // 捨てた音と基準を取り直した回数を画面の統計へ反映する (計器への記録は共有実装が済ませる)
