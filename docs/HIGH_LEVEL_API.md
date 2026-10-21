@@ -1075,7 +1075,10 @@ jitter buffer の遅れは音声と映像で別々に求める。音声は NetEq
 分 (既に過去の分と、未来でも余裕に満たない分を含む。事後には埋められない) であり、
 閉ループが目標遅延を増やす判断に使う。`lateStartCount` / `lateStartMaxMs` は、予約した
 開始時刻を `source.start()` の時点の `AudioContext.currentTime` が追い越した回数と最大で
-あり、1 件でも出たら直前の音と重なっている可能性がある (重なりそのものは計器に出ない)。
+ある。追い越し (および余裕 3 ms 未満) のときは開始時刻を `currentTime + 3 ms` へ押し直し、
+先頭 2 ms をフェードインするため、重なりは起きない。追い越した回数だけを数えるため、
+余裕より近かっただけの押し直しは含まない。押し直した回数と最大は `pushStartCount` /
+`pushStartMaxMs` で読む。
 `boundaryStepCount` / `boundaryStepMax` は、バッファ境界で実際に鳴るサンプルの段差が
 0.05 (`AUDIO_PLAYOUT_BOUNDARY_STEP_THRESHOLD`。440 Hz の正常な差分 p99.9 = 0.0174 の約
 3 倍) を超えた回数と最大である。すべての境界を測るため、通常の音の切れ目も含む。しきい値は
