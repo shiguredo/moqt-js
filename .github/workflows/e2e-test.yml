@@ -37,10 +37,10 @@ jobs:
     #   終わる。落ち着いた環境では 5 回中 3 回通ったが、他の負荷と重なった回は 5 回中 0 回
     # - 2 vCPU: 5/5 通る (1 回 34〜36 秒)。ローカルの Mac も 5/5 通る
     # テストの前提 (受信側が実時間に追いつき、共有が成立し続けること) を runner が満たす
-    # 必要があるため、2 vCPU 以上が確実な 4 vCPU の ubuntu-24.04 を使う。trace は relay
+    # 必要があるため、CPU が安定している ubuntu-26.04 を使う。trace は relay
     # プロジェクトだけ切ってある (playwright.config.ts)。trace のスクリーンキャストも
     # 同じコアを奪い、計測を歪めるため
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     # Chromium の install と、実リレーを相手にしたテストを見込んで余裕を持たせる
     timeout-minutes: 20
     env:

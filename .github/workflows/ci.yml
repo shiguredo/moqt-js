@@ -30,9 +30,9 @@ jobs:
 
   build:
     # ubuntu-slim は 1 vCPU であり、単体テスト (235 ファイル) の所要時間が 2.5 分〜
-    # 10 分超まで変動してジョブの上限にかかり、ハングしたように見えていた。CPU が
-    # 安定している 4 vCPU の ubuntu-24.04 を使う (relay と同じ理由)。
-    runs-on: ubuntu-24.04
+    # 10 分超まで変動してジョブの上限にかかり、ハングしたように見えていた。単体テストは
+    # 軽いジョブではないため、CPU が安定している ubuntu-26.04 を使う。
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     strategy:
       # 1 つの Node で失敗しても他の Node の結果を打ち切らない
@@ -93,12 +93,12 @@ jobs:
       - run: vp run typecheck
 
   e2e:
-    runs-on: ubuntu-slim
+    # E2E はブラウザを動かす重いジョブのため ubuntu-slim では足りない
+    runs-on: ubuntu-26.04
     # devtools の UI テスト (vp run e2e-test) の実行時間はランナーの性能に強く依存する。
-    # ローカル (Apple Silicon) では短時間で終わるのに対し、CI の 2 vCPU ランナーでは
-    # テスト全体の合計がランナー性能に比例して伸びるため、遅いランナーでは 15 分を
-    # 超えてキャンセルされることがあった。テストの内容と並列度は変えず、実測の
-    # 2 倍以上の余裕を取る
+    # ローカル (Apple Silicon) では短時間で終わるのに対し、CI のランナーではテスト全体の
+    # 合計がランナー性能に比例して伸びる。テストの内容と並列度は変えず、実測の 2 倍以上の
+    # 余裕を取る
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
