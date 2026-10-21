@@ -19,6 +19,9 @@
  * - 無音の穴が空いたなら、穴の長さぶんを吸収できるだけ増やす。穴は事後には埋められない
  *   ため、次に同じ揺らぎが来ても穴にならないよう、先に目標を増やす
  *   (実測では目標の深さ 86 ms で 60 秒に 24 回、120.5 ms で 0 回になった)
+ * - 穴による増加は、圧縮が 2 秒続くのを待たずに適用する。穴 1 個でも「経路の揺らぎが
+ *   目標を超えた」証拠であり、穴は事後には埋められないためである。適用の上限を穴の長さ +
+ *   余白まで一時的に広げ、最後の穴から `AUDIO_DELAY_FEEDBACK_GAP_QUIET_MS` の間だけ保持する
  * - 遅れが許容の中に収まり、捨てが無いなら目標を減らす (必要以上に遅らせない)
  * - 増減は毎秒 1 回までとし、1 回の増加は上限までにする (数秒スケール。行き過ぎを防ぐ)
  * - 目標は `AUDIO_DELAY_FEEDBACK_MIN_MS` から、**実際に適用される上限**の間に収める
@@ -275,8 +278,10 @@ export interface AudioDelayFeedbackSnapshot {
   /**
    * 実際に適用する値に掛けている上限 (ミリ秒)
    *
-   * 広げていないときは `AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS` (100 ms)。圧縮か穴が続くと
-   * `AUDIO_DELAY_FEEDBACK_ARTIFACT_CEILING_MS` (160 ms) まで広がるが、明示設定
+   * 広げていないときは `AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS` (100 ms)。穴が空いたときは
+   * 「穴の長さ + 余白」を吸収できる値まで一時的に広がり (最後の穴から
+   * `AUDIO_DELAY_FEEDBACK_GAP_QUIET_MS` の間だけ保持する)、圧縮か穴が続くと
+   * `AUDIO_DELAY_FEEDBACK_ARTIFACT_CEILING_MS` (160 ms) まで広がる。明示設定
    * (`ceilingMs`) があるときはその値までに切る (既定の 100 ms は下回らない)。実際に適用
    * された値は `appliedMs` に出る
    */
@@ -309,6 +314,10 @@ export class AudioDelayFeedback {
   private lastGapMs = 0;
   // 最後に穴が空いたと観測した時刻 (ミリ秒)。この時刻から一定時間は目標を下げない
   private lastGapAtMs: number | null = null;
+  // 穴 1 個で一時的に広げた目標の上限 (ミリ秒)。広げていないときは null
+  private gapCeilingMs: number | null = null;
+  // 穴で広げた上限を保持する期限 (observation.atMs と同じ軸、ミリ秒)
+  private gapCeilingUntilMs = 0;
   private lastChangeMs = 0;
   private adjustments = 0;
   private latest: AudioDelayFeedbackObservation | null = null;
@@ -415,6 +424,22 @@ export class AudioDelayFeedback {
     if (gapDelta > 0) {
       // 穴が空いた。この時刻から一定時間は目標を下げない (下げた直後の再発を避ける)
       this.lastGapAtMs = observation.atMs;
+      // 穴は事後には埋められない。1 個でも「経路の揺らぎが目標を超えた」証拠であるため、
+      // 圧縮が 2 秒続くのを待たずに、その穴を吸収できる上限まで一時的に広げる
+      // (`AUDIO_DELAY_FEEDBACK_GAP_QUIET_MS` の間だけ保持する)。広げ幅は穴の長さ + 余白で
+      // あり、実際に使う上限 (`artifactCeilingLimitMs`) と 100 ms の間で切る
+      const widenedMs = Math.min(
+        this.artifactCeilingLimitMs(),
+        Math.max(
+          AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS,
+          this.feedbackTargetMs + gapMsDelta + AUDIO_DELAY_FEEDBACK_MARGIN_MS,
+        ),
+      );
+      this.gapCeilingMs = Math.max(this.gapCeilingMs ?? 0, widenedMs);
+      this.gapCeilingUntilMs = observation.atMs + AUDIO_DELAY_FEEDBACK_GAP_QUIET_MS;
+    } else if (this.gapCeilingMs !== null && observation.atMs >= this.gapCeilingUntilMs) {
+      // 最後の穴から 5 秒が経った。穴で広げた上限を戻す (目標は減らす規則が下げる)
+      this.gapCeilingMs = null;
     }
     this.lastUpdateAtMs = observation.atMs;
 
@@ -558,11 +583,33 @@ export class AudioDelayFeedback {
    * 適応で広げる分がそれを超えてはならない。ただし既定の上限は下回らない。既存の規則では
    * 揺らぎだけの目標に明示設定を掛けないため、ここで下回らせると、明示設定が既定より小さい
    * ときに適用する値が既定より小さくなってしまう (実測と決定をやり直すことになる)
+   *
+   * 穴 1 個でも、その穴を吸収できる上限まで一時的に広げる (`gapCeilingMs`)。穴は事後には
+   * 埋められないため、圧縮が 2 秒続くのを待たない。広げた上限は最後の穴から
+   * `AUDIO_DELAY_FEEDBACK_GAP_QUIET_MS` の間だけ保持し、その後に戻す
    */
   private get appliedCeilingMs(): number {
-    if (!this.artifactCeilingActive) {
-      return AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS;
-    }
+    const artifactCeilingMs = this.artifactCeilingActive
+      ? this.artifactCeilingLimitMs()
+      : AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS;
+    const gapCeilingHeld =
+      this.gapCeilingMs !== null &&
+      this.latest !== null &&
+      this.latest.atMs < this.gapCeilingUntilMs;
+    return Math.max(
+      artifactCeilingMs,
+      gapCeilingHeld ? (this.gapCeilingMs ?? AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS) : 0,
+    );
+  }
+
+  /**
+   * 圧縮か穴が続くときに広げてよい上限 (ミリ秒)
+   *
+   * 明示設定 (`targetLatencyMs`) があるときはその値で切るが、既定の上限 (100 ms) は
+   * 下回らない。100 ms を下回ると、既定より小さい明示設定を渡したときに、適用する値が
+   * 既定より小さくなるためである
+   */
+  private artifactCeilingLimitMs(): number {
     return Math.max(
       AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS,
       Math.min(

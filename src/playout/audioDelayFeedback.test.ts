@@ -559,54 +559,97 @@ test("明示設定があるときは、広げる分をその値で切る", () =>
 });
 
 // 完了条件: 補間で埋まらなかった無音の穴が空いたら、穴の長さぶんを吸収できるだけ目標を
-// 増やす (reason は "gap")。穴は事後には埋められないため、先に目標を増やす
+// 増やす (reason は "gap")。穴は事後には埋められないため、先に目標を増やす。穴 1 個でも
+// 圧縮の継続 (2 秒) を待たずに適用する (issue 0882)
 test("穴が空いたら目標を増やす", () => {
   const feedback = new AudioDelayFeedback();
   // 最初の観測 (遅れは許容の中) は間隔が無いため動かさない
   feedback.update(observation(0, 0));
   assert.equal(feedback.snapshot(100).reason, "waiting");
 
-  // 1 秒後に穴 (20 ms) が空いた。理由は "gap" になる。目標は既定の上限 (100 ms) に
-  // 達しているため、上限を広げる前は動かない (穴の証拠は 2 秒続くと上限を広げる)
+  // 1 秒後に穴 (20 ms) が空いた。理由は "gap" になり、穴の長さ + 余白 (20 + 20 ms) まで
+  // 適用の上限を一時的に広げて、その上限まで目標を増やす
   feedback.update(observation(1_000, 0, { gapCount: 1, gapMs: 20 }));
   const first = feedback.snapshot(100);
   assert.equal(first.reason, "gap", "理由が穴であること");
-  assert.equal(
-    first.appliedCeilingMs,
-    AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS,
-    "まだ上限を広げないこと",
-  );
+  assert.equal(first.appliedCeilingMs, 140, "穴の長さ + 余白まで上限を広げること");
+  assert.equal(first.targetMs, 140, "広げた上限まで増やすこと");
+  assert.equal(first.lastChangeMs, 40, "1 回の増加は 40 ms までにすること");
+  assert.equal(first.adjustments, 1);
 
-  // 穴が 2 秒続くと上限が 160 ms へ広がり、穴の長さ + 余白 (20 + 20 ms) だけ増える
-  feedback.update(observation(2_000, 0, { gapCount: 2, gapMs: 40 }));
+  // 穴が続くと、穴の長さ + 余白のぶんさらに増える (1 回の増加は上限 40 ms まで)。
+  // 上限は穴を吸収できる 160 ms まで広がる
+  feedback.update(observation(2_000, 0, { gapCount: 2, gapMs: 60 }));
   const expanded = feedback.snapshot(100);
   assert.equal(expanded.reason, "gap");
   assert.equal(expanded.appliedCeilingMs, AUDIO_DELAY_FEEDBACK_ARTIFACT_CEILING_MS);
-  assert.equal(expanded.lastChangeMs, 40, "穴の長さ + 余白 (20 + 20 ms) を増やすこと");
-  assert.equal(expanded.adjustments, 1);
+  assert.equal(expanded.targetMs, AUDIO_DELAY_FEEDBACK_ARTIFACT_CEILING_MS);
+  assert.equal(expanded.lastChangeMs, 20, "広げた上限まで増やすこと");
 
-  // 穴が続けばさらに増える (1 回の増加は上限 40 ms まで)
-  feedback.update(observation(3_000, 0, { gapCount: 3, gapMs: 60 }));
+  // 上限に達した後は増えない
+  feedback.update(observation(3_000, 0, { gapCount: 3, gapMs: 80 }));
   assert.equal(feedback.snapshot(100).reason, "gap");
-  // 上限 (160 ms) に達するまで増える (140 → 160)
-  assert.equal(feedback.snapshot(100).lastChangeMs, 20, "広げた上限まで増やすこと");
+  assert.equal(
+    feedback.snapshot(100).targetMs,
+    AUDIO_DELAY_FEEDBACK_ARTIFACT_CEILING_MS,
+    "160 ms を超えないこと",
+  );
+  assert.equal(feedback.snapshot(100).lastChangeMs, 0, "上限に達したら動かさないこと");
+});
+
+// 完了条件: 穴 1 個で広げた上限は、最後の穴から 5 秒 (AUDIO_DELAY_FEEDBACK_GAP_QUIET_MS) の
+// 間だけ保持し、その後に 100 ms へ戻す。戻した直後に目標が下がり、次に同じ揺らぎが来ても
+// 穴にならないよう、その 5 秒の間は下げない
+test("穴 1 個で広げた上限は 5 秒後に戻す", () => {
+  const feedback = new AudioDelayFeedback();
+  feedback.update(observation(0, 0));
+  feedback.update(observation(1_000, 0, { gapCount: 1, gapMs: 20 }));
+  assert.equal(feedback.snapshot(100).appliedCeilingMs, 140);
+
+  // 最後の穴 (1,000 ms) から 5 秒が経つまでは、遅れが許容内でも上限を戻さない
+  for (const atMs of [2_000, 3_000, 4_000, 5_000]) {
+    feedback.update(observation(atMs, 0));
+    assert.equal(feedback.snapshot(100).appliedCeilingMs, 140, "5 秒間は保持すること");
+    assert.equal(feedback.snapshot(100).reason, "waiting", "5 秒間は下げないこと");
+  }
+  // 5,000 ms 経過 (6,000 ms の観測) で上限を戻し、目標も 100 ms へ戻る
+  feedback.update(observation(6_000, 0));
+  assert.equal(
+    feedback.snapshot(100).appliedCeilingMs,
+    AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS,
+    "5 秒後に上限を戻すこと",
+  );
+  assert.equal(feedback.snapshot(100).targetMs, AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS);
+});
+
+// 完了条件: 明示設定の上限 (`targetLatencyMs`) があるときは、穴 1 個で広げる上限もその値で
+// 切る。明示設定は利用者が宣言した遅延の予算であり、適応で超えてはならない
+test("穴で広げる上限は明示設定で切る", () => {
+  const feedback = new AudioDelayFeedback();
+  feedback.setCeilingMs(120);
+  feedback.update(observation(0, 0));
+  feedback.update(observation(1_000, 0, { gapCount: 1, gapMs: 40 }));
+  const snapshot = feedback.snapshot(100);
+  assert.equal(snapshot.appliedCeilingMs, 120, "明示設定の 120 ms で切ること");
+  assert.equal(snapshot.targetMs, 120, "明示設定の上限まで増やすこと");
 });
 
 // 完了条件: 穴が続いたら、時間圧縮が続いたときと同じく artifact ceiling (100 → 160 ms) を
-// 広げる。穴 1 回では 2 秒続くまで広げない
+// 広げる。穴 1 個の一時的な広げ (穴の長さ + 余白) と段階を分ける
 test("穴が続くと artifact ceiling を広げる", () => {
   const feedback = new AudioDelayFeedback();
+  // 1 個だけでは、その穴を吸収できる上限 (140 ms) までしか広げない
   feedback.update(observation(0, 0, { gapCount: 1, gapMs: 20 }));
   assert.equal(
     feedback.snapshot(0).appliedCeilingMs,
-    AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS,
-    "1 回では広げないこと",
+    140,
+    "穴 1 個は穴の長さ + 余白までであること",
   );
   feedback.update(observation(1_000, 0, { gapCount: 2, gapMs: 40 }));
-  // まだ 1 秒ぶんの証拠である (最初の観測は間隔が無く数えない)
-  assert.equal(feedback.snapshot(0).appliedCeilingMs, AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS);
+  // 2 個目の穴では、穴の長さ + 余白 (40 + 20 ms) を吸収できる上限 (160 ms) まで広がる
+  assert.equal(feedback.snapshot(0).appliedCeilingMs, 160);
   feedback.update(observation(2_000, 0, { gapCount: 3, gapMs: 60 }));
-  // 2 秒ぶんの証拠がそろったため広げる
+  // 2 秒ぶんの証拠がそろったため artifact ceiling (160 ms) まで広げる
   assert.equal(feedback.snapshot(0).appliedCeilingMs, AUDIO_DELAY_FEEDBACK_ARTIFACT_CEILING_MS);
 });
 
