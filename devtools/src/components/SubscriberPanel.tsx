@@ -37,6 +37,7 @@ import { PANEL_OPTION_CAPTION_CLASS, PANEL_OPTION_ROW_CLASS } from "./panelLayou
 import { formatLossEvent, formatStallEvent } from "../utils/playoutTimingStats";
 import {
   AUDIO_MISS_REASONS,
+  AUDIO_PLAYOUT_BOUNDARY_STEP_THRESHOLD,
   formatAudioMissEvent,
 } from "../../../src/playout/audioPlayoutTimingStats.ts";
 import { LATENCY_SEGMENTS } from "../utils/latencyBreakdown";
@@ -500,6 +501,19 @@ function SubscriberStats({ statsSignal }: { statsSignal: ReadonlySignal<Subscrib
               },
               { label: "chunksDecoded", value: stats.audio.chunksDecoded },
               {
+                // 受信した壁時計 - LOC TIMESTAMP。配信側の送信の遅れ (audio.catchUp.sendLagMs)
+                // と対で読み、遅れが配信側にあるのか relay と経路にあるのかを分ける
+                label: "receiveDelayMs",
+                value: formatMs(stats.audio.receiveDelayMs),
+                testId: "subscriber-audio-receive-delay",
+              },
+              {
+                // 到着の遅れの最大。停止 (longtask) の計器と並べて読む
+                label: "maxReceiveDelayMs",
+                value: formatMs(stats.audio.maxReceiveDelayMs),
+                testId: "subscriber-audio-max-receive-delay",
+              },
+              {
                 // relay の cache から追いつくまでに鳴らさなかった音声 Object の数
                 label: "catchUpObjectsSkipped",
                 value: stats.audio.catchUpObjectsSkipped,
@@ -658,6 +672,134 @@ function SubscriberStats({ statsSignal }: { statsSignal: ReadonlySignal<Subscrib
                 label: "stretchUnavailableFrames",
                 value: stats.audio.playoutTiming.stretchUnavailableFrames,
                 testId: "subscriber-audio-playback-stretch-unavailable-frames",
+              },
+            ]}
+          />
+          {/* 補間で埋まらなかった無音の穴、予約の追い越しと押し直し、バッファ境界の段差。
+              「プチプチ」の原因が無音の穴なのか、段差なのか、予約の遅れなのかを分ける。
+              すべて購読の開始からの累積である (docs/AUDIO_PLAYOUT_GAPS_AND_TAIL.md) */}
+          <StatList
+            items={[
+              {
+                // 補間で埋まらなかった穴の回数と長さ。長い途絶も 1 回の穴として入る
+                label: "gapCount",
+                value: stats.audio.playoutTiming.gapCount,
+                tone: "warn",
+                testId: "subscriber-audio-playback-gap-count",
+              },
+              {
+                label: "gapMs",
+                value: Math.round(stats.audio.playoutTiming.gapMs),
+                tone: "warn",
+                testId: "subscriber-audio-playback-gap-ms",
+              },
+              {
+                label: "gapMaxMs",
+                value: Math.round(stats.audio.playoutTiming.gapMaxMs),
+                tone: "warn",
+                testId: "subscriber-audio-playback-gap-max-ms",
+              },
+              {
+                // 予約できる最も早い時刻 (今 + 余裕) より前だった穴。事後には埋められない
+                label: "unrecoverableGapCount",
+                value: stats.audio.playoutTiming.unrecoverableGapCount,
+                tone: "warn",
+                testId: "subscriber-audio-playback-unrecoverable-gap-count",
+              },
+              {
+                label: "unrecoverableGapMs",
+                value: Math.round(stats.audio.playoutTiming.unrecoverableGapMs),
+                tone: "warn",
+                testId: "subscriber-audio-playback-unrecoverable-gap-ms",
+              },
+              {
+                // 予約した時刻を currentTime が追い越した回数。0 より大きいことは、
+                // 予約の処理の間にメインスレッドが遅れた証拠である
+                label: "lateStartCount",
+                value: stats.audio.playoutTiming.lateStartCount,
+                tone: "warn",
+                testId: "subscriber-audio-playback-late-start-count",
+              },
+              {
+                label: "lateStartMaxMs",
+                value: formatMs(stats.audio.playoutTiming.lateStartMaxMs),
+                testId: "subscriber-audio-playback-late-start-max",
+              },
+              {
+                // 予約時刻を currentTime + 余裕へ押し直した回数 (追い越しの有無を問わない)
+                label: "pushStartCount",
+                value: stats.audio.playoutTiming.pushStartCount,
+                tone: "warn",
+                testId: "subscriber-audio-playback-push-start-count",
+              },
+              {
+                label: "pushStartMaxMs",
+                value: formatMs(stats.audio.playoutTiming.pushStartMaxMs),
+                testId: "subscriber-audio-playback-push-start-max",
+              },
+              {
+                // バッファ境界の段差がしきい値を超えた回数。無音の前後と media 時刻の飛び、
+                // 通常の音の切れ目を含む
+                label: "boundaryStepCount",
+                value: stats.audio.playoutTiming.boundaryStepCount,
+                tone: "warn",
+                testId: "subscriber-audio-playback-boundary-step-count",
+              },
+              {
+                // 段差の最大 (0 から 1 の振幅)。しきい値 (440 Hz トーンの正常な差分の約 3 倍)
+                // を超えたときだけ色をつける
+                label: "boundaryStepMax",
+                value: Number(stats.audio.playoutTiming.boundaryStepMax.toFixed(3)),
+                tone:
+                  stats.audio.playoutTiming.boundaryStepMax > AUDIO_PLAYOUT_BOUNDARY_STEP_THRESHOLD
+                    ? "warn"
+                    : undefined,
+                testId: "subscriber-audio-playback-boundary-step-max",
+              },
+              {
+                // 直近の停止で予約済みの音を鳴らし切った量
+                label: "drainPlayedMs",
+                value: formatMs(stats.audio.playoutTiming.lastDrain?.playedMs ?? null),
+                testId: "subscriber-audio-playback-drain-played-ms",
+              },
+              {
+                // 停止で上限まで待っても鳴らせずに切った量
+                label: "drainCutMs",
+                value:
+                  stats.audio.playoutTiming.lastDrain === null
+                    ? "-"
+                    : Math.round(stats.audio.playoutTiming.lastDrain.cutMs),
+                tone: "warn",
+                testId: "subscriber-audio-playback-drain-cut-ms",
+              },
+              {
+                label: "drainWaitedMs",
+                value: formatMs(stats.audio.playoutTiming.lastDrain?.waitedMs ?? null),
+                testId: "subscriber-audio-playback-drain-waited-ms",
+              },
+              {
+                label: "drainRequestedMs",
+                value: formatMs(stats.audio.playoutTiming.lastDrain?.requestedMs ?? null),
+                testId: "subscriber-audio-playback-drain-requested-ms",
+              },
+            ]}
+          />
+          {/* 目標遅延の閉ループが広げた上限と、直近 1 秒に詰めた長さ。圧縮が続くと声が
+              粗くなるため、上限へ張り付いているかを併せて読む
+              (src/playout/audioDelayFeedback.ts) */}
+          <StatList
+            items={[
+              {
+                label: "appliedCeilingMs",
+                value: formatMs(stats.audio.appliedCeilingMs),
+                testId: "subscriber-audio-playback-applied-ceiling",
+              },
+              {
+                // 0 より大きい間は時間圧縮が続いている
+                label: "compressionMsPerSecond",
+                value: Number(stats.audio.compressionMsPerSecond.toFixed(1)),
+                tone: "warn",
+                testId: "subscriber-audio-playback-compression-ms-per-second",
               },
             ]}
           />

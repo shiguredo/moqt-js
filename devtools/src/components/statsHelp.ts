@@ -26,6 +26,10 @@ import {
 } from "../utils/preconditionWarnings";
 import { AUDIO_PUBLISH_CATCH_UP_PENDING_TIMEOUT_MS } from "../../../src/audioPublishCatchUp";
 import {
+  AUDIO_DELAY_FEEDBACK_ARTIFACT_CEILING_MS,
+  AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS,
+} from "../../../src/playout/audioDelayFeedback.ts";
+import {
   AUDIO_MISS_REASONS,
   AUDIO_PLAYOUT_BOUNDARY_STEP_THRESHOLD,
   MAX_RECENT_AUDIO_MISSES,
@@ -358,6 +362,11 @@ export const AUDIO_PLAYOUT_TIMING_HELP: SectionHelp = {
         "start - target (ms). How much later than the playout time the sound starts; 0 means on time. The sound is never dropped for being late. While the sound is still playing, it keeps playing late (the media time is not skipped); only a sound that arrives more than the lateness limit (500 ms) late with nothing playing is re-planned by arrival, which jumps the media time.",
     },
     {
+      term: "receiveDelayMs / maxReceiveDelayMs",
+      description:
+        "Wall clock at the arrival minus the LOC TIMESTAMP of the audio Object (ms): the last sound and the largest since subscribing started. Read it next to the publisher's catchUp.sendLagMs to tell the delay inside the publisher from the delay of the network path and the relay. It is measured when the receiving callback runs, so it also includes how long the main thread of this page was stopped (see stallCount / stallMs). - while no Object with a wall-clock TIMESTAMP has arrived.",
+    },
+    {
       term: "lastTargetMs / lastArrivalMs / lastStartMs",
       description:
         "The three times of the last sound that was played, on the performance.now() axis (ms). lastTargetMs is - while the playout time cannot be decided.",
@@ -405,6 +414,20 @@ export const AUDIO_PLAYOUT_TIMING_HELP: SectionHelp = {
     {
       term: "boundaryStepCount / boundaryStepMax",
       description: `Buffer boundaries whose step (the difference between the samples that the output actually plays) is above ${AUDIO_PLAYOUT_BOUNDARY_STEP_THRESHOLD} (3 times the normal step of a 440 Hz tone, 0.0174; an absolute value, so normal audio can exceed it). Counts every boundary, including the step where the output cuts to a gap and back and the step of a media-time jump (loss or decoder rebuild). At a gap with no concealment, the step is the amplitude of the sound just before the silence (the previous sound's tail is not faded); when the concealment fills part of the gap, its faded tail keeps the step small.`,
+    },
+    {
+      term: "drainPlayedMs / drainCutMs / drainWaitedMs / drainRequestedMs",
+      description:
+        "Result of the last stop (drain), in ms: the reserved sounds played before closing the AudioContext, the part cut at the wait limit, the time actually waited, and the wait limit that was asked for. - before the first stop. drainCutMs matches the increase of missedByReason.stopped; drainPlayedMs includes the sounds that were already reserved at the stop.",
+    },
+    {
+      term: "appliedCeilingMs",
+      description: `The limit actually applied to the target delay (ms). It is ${AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS} ms normally and widens to ${AUDIO_DELAY_FEEDBACK_ARTIFACT_CEILING_MS} ms while the time compression or the gaps continue, unless the explicit targetLatency caps more tightly. The value actually used is appliedMs in A/V Sync.`,
+    },
+    {
+      term: "compressionMsPerSecond",
+      description:
+        "Speed of the time compression observed in the last control interval (ms/s). Above 0 means the periodic waveform is being shortened to catch up, which is what makes the voice rough. It also widens appliedCeilingMs when it continues.",
     },
     {
       term: "stallCount / stallMs / overlappedArrivals",

@@ -37,6 +37,31 @@ const AUDIO_PLAYBACK_ITEMS = {
   hostStallCount: "subscriber-audio-host-stall-count",
   hostStallMs: "subscriber-audio-host-stall-ms",
   hostOverlappedArrivals: "subscriber-audio-host-overlapped-arrivals",
+  // 受信の到着の遅れ。配信側の sendLagMs と対で読む
+  receiveDelayMs: "subscriber-audio-receive-delay",
+  maxReceiveDelayMs: "subscriber-audio-max-receive-delay",
+  // 補間で埋まらなかった穴と、予約できなかった穴
+  gapCount: "subscriber-audio-playback-gap-count",
+  gapMs: "subscriber-audio-playback-gap-ms",
+  gapMaxMs: "subscriber-audio-playback-gap-max-ms",
+  unrecoverableGapCount: "subscriber-audio-playback-unrecoverable-gap-count",
+  unrecoverableGapMs: "subscriber-audio-playback-unrecoverable-gap-ms",
+  // 予約の追い越しと押し直し
+  lateStartCount: "subscriber-audio-playback-late-start-count",
+  lateStartMaxMs: "subscriber-audio-playback-late-start-max",
+  pushStartCount: "subscriber-audio-playback-push-start-count",
+  pushStartMaxMs: "subscriber-audio-playback-push-start-max",
+  // バッファ境界の段差
+  boundaryStepCount: "subscriber-audio-playback-boundary-step-count",
+  boundaryStepMax: "subscriber-audio-playback-boundary-step-max",
+  // 停止の drain
+  drainPlayedMs: "subscriber-audio-playback-drain-played-ms",
+  drainCutMs: "subscriber-audio-playback-drain-cut-ms",
+  drainWaitedMs: "subscriber-audio-playback-drain-waited-ms",
+  drainRequestedMs: "subscriber-audio-playback-drain-requested-ms",
+  // 目標遅延の上限と時間圧縮の速さ
+  appliedCeilingMs: "subscriber-audio-playback-applied-ceiling",
+  compressionMsPerSecond: "subscriber-audio-playback-compression-ms-per-second",
 } as const;
 
 test("window.moqtDevTools から音声の再生の観測値が読め、未購読では既定値になる", async ({
@@ -110,4 +135,26 @@ test("subscriber の画面に音声の再生の観測を既定値で出す", asy
   await expect(page.getByTestId(AUDIO_PLAYBACK_ITEMS.hostStallCount)).toHaveText("0");
   await expect(page.getByTestId(AUDIO_PLAYBACK_ITEMS.hostStallMs)).toHaveText("0");
   await expect(page.getByTestId(AUDIO_PLAYBACK_ITEMS.hostOverlappedArrivals)).toHaveText("0");
+  // 到着の遅れはまだ観測していない
+  await expect(page.getByTestId(AUDIO_PLAYBACK_ITEMS.receiveDelayMs)).toHaveText("-");
+  await expect(page.getByTestId(AUDIO_PLAYBACK_ITEMS.maxReceiveDelayMs)).toHaveText("-");
+  // 穴・予約不能の穴・予約の追い越しと押し直し・境界の段差は 0 から始まる
+  await expect(page.getByTestId(AUDIO_PLAYBACK_ITEMS.gapCount)).toHaveText("0");
+  await expect(page.getByTestId(AUDIO_PLAYBACK_ITEMS.gapMs)).toHaveText("0");
+  await expect(page.getByTestId(AUDIO_PLAYBACK_ITEMS.gapMaxMs)).toHaveText("0");
+  await expect(page.getByTestId(AUDIO_PLAYBACK_ITEMS.unrecoverableGapCount)).toHaveText("0");
+  await expect(page.getByTestId(AUDIO_PLAYBACK_ITEMS.unrecoverableGapMs)).toHaveText("0");
+  await expect(page.getByTestId(AUDIO_PLAYBACK_ITEMS.lateStartCount)).toHaveText("0");
+  await expect(page.getByTestId(AUDIO_PLAYBACK_ITEMS.lateStartMaxMs)).toHaveText("0.0");
+  await expect(page.getByTestId(AUDIO_PLAYBACK_ITEMS.pushStartCount)).toHaveText("0");
+  await expect(page.getByTestId(AUDIO_PLAYBACK_ITEMS.pushStartMaxMs)).toHaveText("0.0");
+  await expect(page.getByTestId(AUDIO_PLAYBACK_ITEMS.boundaryStepCount)).toHaveText("0");
+  await expect(page.getByTestId(AUDIO_PLAYBACK_ITEMS.boundaryStepMax)).toHaveText("0");
+  // まだ停止していないため drain の値は "-"、上限は既定の 100 ms、圧縮は 0
+  await expect(page.getByTestId(AUDIO_PLAYBACK_ITEMS.drainPlayedMs)).toHaveText("-");
+  await expect(page.getByTestId(AUDIO_PLAYBACK_ITEMS.drainCutMs)).toHaveText("-");
+  await expect(page.getByTestId(AUDIO_PLAYBACK_ITEMS.drainWaitedMs)).toHaveText("-");
+  await expect(page.getByTestId(AUDIO_PLAYBACK_ITEMS.drainRequestedMs)).toHaveText("-");
+  await expect(page.getByTestId(AUDIO_PLAYBACK_ITEMS.appliedCeilingMs)).toHaveText("100.0");
+  await expect(page.getByTestId(AUDIO_PLAYBACK_ITEMS.compressionMsPerSecond)).toHaveText("0");
 });

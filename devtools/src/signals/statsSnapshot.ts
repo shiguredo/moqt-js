@@ -260,6 +260,22 @@ export interface SubscriberAudioStats {
   /** 補間した回数 */
   playoutConcealments: number;
   /**
+   * 時間圧縮 (粗さ) や無音の穴が続いたときに広げる、目標遅延の実際の上限 (ミリ秒)
+   *
+   * 明示設定 (`targetLatency`) で決まる上限とは別に、閉ループが圧縮の継続を見て
+   * 100 ms から 160 ms へ広げる (`src/playout/audioDelayFeedback.ts` の
+   * `appliedCeilingMs`)。値は A/V 同期の snapshot (`avSync.delays.audioDelayFeedback`)
+   * から写す
+   */
+  appliedCeilingMs: number;
+  /**
+   * 直近 1 秒に時間圧縮で詰めた音の長さ (ミリ秒/秒)
+   *
+   * 0 より大きい間は声が粗くなる操作が続いている。`playoutCompressedMs` の増分を
+   * 1 秒あたりに直した値であり、`avSync.delays.audioDelayFeedback` から写す
+   */
+  compressionMsPerSecond: number;
+  /**
    * 音声の再生の観測値 (src/playout/audioPlayoutTimingStats.ts)。鳴るはずの時刻 (再生予定時刻)・
    * 届いた時刻・鳴り始める時刻と、予定に対する余裕の分布 (直近 10 秒)、鳴らなかった量
    * (件数と ms) を理由ごとに持つ
@@ -447,6 +463,9 @@ function convertLargestLocation(
 export function buildSubscriberStats(sub: SubscriberInstance): SubscriberStats {
   const session = sub.session.value;
   const audioLevel = sub.audioLastLevel.value;
+  // 目標遅延の閉ループの観測値は A/V 同期の snapshot が持つ。音声の表示へ写して、
+  // 圧縮が続いているか (上限を広げているか) を音声の節だけで読めるようにする
+  const audioDelayFeedback = sub.avSync.value.delays.audioDelayFeedback;
   return {
     id: sub.id,
     status: sub.status.value,
@@ -497,6 +516,10 @@ export function buildSubscriberStats(sub: SubscriberInstance): SubscriberStats {
       playoutCompressedMs: sub.audioPlayoutCompressedMs.value,
       playoutConcealedMs: sub.audioPlayoutConcealedMs.value,
       playoutConcealments: sub.audioPlayoutConcealments.value,
+      // 閉ループが広げた目標遅延の上限と、直近 1 秒に詰めた長さ
+      // (avSync.delays.audioDelayFeedback の snapshot から写す)
+      appliedCeilingMs: audioDelayFeedback.appliedCeilingMs,
+      compressionMsPerSecond: audioDelayFeedback.compressionMsPerSecond,
       playoutTiming: sub.audioPlayoutTiming.value,
       playoutCatchUp: sub.audioPlayoutCatchUp.value,
       // メインスレッドの停止と音声の到着の重なり (devtools/src/utils/hostDelayTracker.ts)

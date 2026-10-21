@@ -190,6 +190,14 @@ timestamp の順と逆に届くと、隙間 0 のまま内容だけが逆順に�
    バッファ境界の段差 (`boundaryStepCount` /
    `boundaryStepMax`。しきい値は 440 Hz トーンの正常な差分の約 3 倍の 0.05) を足した。
    `AudioReceiverStats.playoutTiming` と devtools の Audio Playback Timing から読める。
+   devtools には、穴・予約不能の穴・予約の追い越しと押し直し・境界の段差を表示する。
+   停止の drain は `drainPlayedMs` / `drainCutMs` / `drainWaitedMs` / `drainRequestedMs`、
+   受信の到着の遅れは Audio の `receiveDelayMs` / `maxReceiveDelayMs`、目標の上限と圧縮は
+   `appliedCeilingMs` / `compressionMsPerSecond` で読める。メインスレッドの停止は
+   `stallCount` / `stallMs` / `overlappedArrivals` に出し、直近 10 秒の longtask (50 ms 以上)
+   と、到着の間隔が停止区間と重なった到着の数を読める。到着の時刻は受信のコールバックが
+   動いた時点で測るため、`receiveDelayMs` には経路と relay の遅れだけでなく、この停止の分も
+   混ざる
    段差は「実際に鳴るサンプル」で測るため、2 ms フェードで消えた段差は数えない
 2. **予約できる穴を埋める (実装済み)**
    `AUDIO_PLAYOUT_MIN_CONCEAL_SECONDS` を 5 ms から 0.5 ms へ下げ、予約できる隙間は補間で
@@ -322,7 +330,8 @@ timestamp の順と逆に届くと、隙間 0 のまま内容だけが逆順に�
   あり、通常の CI では動かさない
 - E2E の判定: 計器の `boundaryStepCount` / `gapMs` を実リレーの標準スイートへ足し、
   穴と段差の量を判定する (長時間テストに追加済み)
-- devtools: 統計に穴の回数・ms、予約の追い越し、境界の段差を表示する (追加済み)
+- devtools: 統計に穴の回数・ms、予約の追い越しと押し直し、境界の段差、停止の drain、
+  到着の遅れ、目標の上限と圧縮、メインスレッドの停止を表示する (追加済み)
 
 ## 残る不明点
 
