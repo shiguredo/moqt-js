@@ -1,7 +1,7 @@
 # playout の押し直しで currentTime を読んだ後に再コピーして再追い越しするのを直す
 
 - Created: 2026-10-21
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-10-21
 - Branch: feature/fix-playout-audio-correctness
 - Polished: {YYYY-MM-DD}
 
@@ -37,4 +37,12 @@ docs は「押し直しで重なりは起きない」と断言しているが、
 
 ## 解決方法
 
-{対応時に記入}
+`AudioPlayoutSession.startBuffer` の押し直しから、`currentTime` を読んだ後に重い処理を挟む競合を
+取り除いた。押し直しが不要なときは素のコピー後に直ちに `start` する。押し直すときはフェード版の
+コピー後にもう一度 `currentTime` を取り直し、開始時刻を「今 + 余裕」へ再調整してから `start` する
+(バッファのコピーはやり直さない)。押し直しの計器は最終的な値で 1 回だけ記録する。
+
+検証: `copyToChannel` 中に時計を 12 ms 進める注入で、再コピー中に停止しても開始時刻が過去にならず、
+次のバッファと重ならず、`lateStart` / `pushStart` が二重計上しないことを単体テストで固定した
+(旧実装では失敗することを確認済み)。property テストにもコピー中の時計前進を追加した。
+`vp check` / `tsc --noEmit` / `vp test run` が通る。

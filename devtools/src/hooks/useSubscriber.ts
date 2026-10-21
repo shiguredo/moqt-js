@@ -67,6 +67,7 @@ import {
   EMPTY_AUDIO_PLAYOUT_TIMING,
 } from "../../../src/playout/audioPlayoutTimingStats.ts";
 import { EMPTY_AUDIO_RECEIVE_CATCH_UP } from "../../../src/playout/audioReceiveCatchUp.ts";
+import { EMPTY_HOST_DELAY, HostDelayTracker } from "../utils/hostDelayTracker.ts";
 // 復号した音声の再生の組み立て (時間軸への記録・目標の決定・予約・計器への記録) は
 // ライブラリと共有する (組み立てを 2 か所へ置くと、到着基準の遅れ・閉ループ・計器の
 // 修正のたびに両方を直すことになり、片方だけ直すと挙動がずれる)
@@ -501,6 +502,8 @@ export function resetSubscriberStats(instance: sub.SubscriberInstance): void {
   instance.audioPlayoutRebases.value = 0;
   instance.audioPlayoutDrops.value = 0;
   instance.audioPlayoutTiming.value = EMPTY_AUDIO_PLAYOUT_TIMING;
+  instance.audioHostDelay.value = EMPTY_HOST_DELAY;
+  instance.audioDelayFeedback.value = sub.EMPTY_AUDIO_DELAY_FEEDBACK;
   instance.audioPlayoutCatchUp.value = EMPTY_AUDIO_RECEIVE_CATCH_UP;
 }
 
@@ -949,6 +952,10 @@ export function useSubscriber(
   );
   const videoPlayoutRef = useRef<VideoPlayoutSession | null>(null);
   const jitterBufferEnabledRef = useRef(false);
+  // 音声だけを購読しているか。映像の時間軸が無いため目標の開始時刻を守らず、到着基準で
+  // 並べる (ライブラリの `createMediaSubscriber` の `enforceTarget` と同じ規則)。
+  // jitter buffer と受信側の追いつきは音声だけでも使う
+  const audioOnlyPlaybackRef = useRef(false);
   // 直前の同期の状態 (基準を共有できているかとその理由)。変わったときだけログに残す
   const avSyncStateRef = useRef<AvSyncState | null>(null);
   // decoder に渡したフレームの情報 (chunk の timestamp で引く)。復号の出力で、壁時計の
@@ -991,6 +998,11 @@ export function useSubscriber(
     new AudioPlayoutTimingStats(AUDIO_PLAYOUT_TIMING_WINDOW_MS, performance.timeOrigin),
   );
   const audioPlayoutTimingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // メインスレッドの停止 (PerformanceObserver の longtask) と音声の到着の重なりの計器。
+  // 音声の購読を始めるたびに作り直し、止めるときに observer を外す
+  // (devtools/src/utils/hostDelayTracker.ts)
+  const hostDelayTrackerRef = useRef(new HostDelayTracker());
+  const hostDelayObserverRef = useRef<PerformanceObserver | null>(null);
   // 前の Group の Subgroup の stream が開いている間、次の Group の映像 Object を保留する
   // (src/groupSwitchGate.ts)。Object は Group ごとに別の stream で届き、前の Group の末尾が
   // 次の Group の先頭より後に届くと、VideoDecodeOrder が古い Group として捨てるため。
@@ -1182,7 +1194,8 @@ export function useSubscriber(
    * 作り直した時間軸で推定をやり直す)。
    */
   function currentAvSyncSnapshot(): sub.AvSyncSnapshot {
-    if (!jitterBufferEnabledRef.current) {
+    // 音声だけの購読では映像が無く、同期の推定として意味を持たない
+    if (!jitterBufferEnabledRef.current || audioOnlyPlaybackRef.current) {
       return sub.EMPTY_AV_SYNC;
     }
     const timeline = playoutTimelineRef.current;
@@ -1225,6 +1238,8 @@ export function useSubscriber(
    */
   function startPlayoutTiming(tracks: CatalogMediaTracks): void {
     stopPlayoutTiming();
+    // 映像の時間軸を作る購読では、音声は映像に合わせて目標の開始時刻を守る
+    audioOnlyPlaybackRef.current = false;
     playoutTimingRef.current.reset();
     const enabled = settings.jitterBufferEnabled.value;
     jitterBufferEnabledRef.current = enabled;
@@ -1304,10 +1319,19 @@ export function useSubscriber(
   function startAudioPlayoutTiming(): void {
     stopAudioPlayoutTimingTimer();
     audioPlayoutTimingRef.current.reset();
+    // メインスレッドの停止の監視も購読ごとに始め直す (前の購読の停止を持ち越さない)
+    startHostDelayTracking();
     audioPlayoutTimingTimerRef.current = setInterval(() => {
       const instance = sub.getSubscriber(subscriberId);
       if (!instance) return;
-      instance.audioPlayoutTiming.value = audioPlayoutTimingRef.current.snapshot(nowMs());
+      const currentMs = nowMs();
+      instance.audioPlayoutTiming.value = audioPlayoutTimingRef.current.snapshot(currentMs);
+      instance.audioHostDelay.value = hostDelayTrackerRef.current.snapshot(currentMs);
+      // 目標遅延の閉ループの内訳。音声だけの購読でも A/V 同期の snapshot は作らないため、
+      // 時間軸から直接読む (音声だけでも jitter buffer と閉ループは動かす)
+      instance.audioDelayFeedback.value = jitterBufferEnabledRef.current
+        ? playoutTimelineRef.current.audioDelayFeedbackStats()
+        : sub.EMPTY_AUDIO_DELAY_FEEDBACK;
       publishAudioPlayoutCatchUp(instance);
     }, PLAYOUT_TIMING_PUBLISH_INTERVAL_MS);
   }
@@ -1321,10 +1345,58 @@ export function useSubscriber(
    */
   function stopAudioPlayoutTiming(): void {
     stopAudioPlayoutTimingTimer();
+    // 停止の監視を先に外し、最後の値を反映した後に届いた停止で統計が変わらないようにする
+    stopHostDelayTracking();
     const instance = sub.getSubscriber(subscriberId);
     if (!instance) return;
-    instance.audioPlayoutTiming.value = audioPlayoutTimingRef.current.snapshot(nowMs());
+    const currentMs = nowMs();
+    instance.audioPlayoutTiming.value = audioPlayoutTimingRef.current.snapshot(currentMs);
+    instance.audioHostDelay.value = hostDelayTrackerRef.current.snapshot(currentMs);
+    instance.audioDelayFeedback.value = jitterBufferEnabledRef.current
+      ? playoutTimelineRef.current.audioDelayFeedbackStats()
+      : sub.EMPTY_AUDIO_DELAY_FEEDBACK;
     publishAudioPlayoutCatchUp(instance);
+  }
+
+  /**
+   * メインスレッドの停止 (PerformanceObserver の longtask) の監視を始める
+   *
+   * 音声の購読を始めるたびに呼ぶ。`PerformanceObserver` が無い環境と、`longtask` を
+   * 報告しない環境 (Safari / Firefox など) では何もしない。このとき signal は既定値
+   * (0) のままになり、停止の回数が 0 であることと「監視していない」ことは区別できないが、
+   * 計器のために音声の経路を変えないことを優先する。
+   *
+   * 停止区間は `longtask` の `startTime` と `duration` をそのまま渡す。報告は止まった後に
+   * 届くため、到着との重なりは `HostDelayTracker.snapshot()` が記録の順序に依らず求める。
+   */
+  function startHostDelayTracking(): void {
+    stopHostDelayTracking();
+    hostDelayTrackerRef.current.reset();
+    if (typeof PerformanceObserver === "undefined") {
+      return;
+    }
+    // longtask を報告しないブラウザでは observe しても通知が来ない。対応表で先に確かめる
+    if (!PerformanceObserver.supportedEntryTypes?.includes("longtask")) {
+      return;
+    }
+    try {
+      const observer = new PerformanceObserver((list) => {
+        for (const entry of list.getEntries()) {
+          hostDelayTrackerRef.current.recordStall(entry.startTime, entry.duration);
+        }
+      });
+      observer.observe({ type: "longtask" });
+      hostDelayObserverRef.current = observer;
+    } catch (error) {
+      // 監視を始められなくても音声の統計は動かす (計器だけを 0 のままにする)
+      console.error(`[${subscriberId}] failed to observe long tasks:`, error);
+    }
+  }
+
+  /** メインスレッドの停止の監視を止める (購読の停止と、購読のやり直しの前) */
+  function stopHostDelayTracking(): void {
+    hostDelayObserverRef.current?.disconnect();
+    hostDelayObserverRef.current = null;
   }
 
   /**
@@ -1903,6 +1975,9 @@ export function useSubscriber(
       }
       // 到着時刻は復号前の遅延を挟んでも失わないよう、受信の入口で 1 回だけ測る
       const receivedAtMs = performance.now();
+      // メインスレッドの停止と、その間に待たされた到着の重なりを数える。到着の時刻は
+      // ここで測った値を使う (復号前の遅延を挟んだ後の時刻ではない)
+      hostDelayTrackerRef.current.recordArrival(receivedAtMs);
       const delay = preDecodeDelayRef.current;
       if (delay === null || !delay.pushAudio({ object: obj, viaDatagram, receivedAtMs })) {
         enqueueAudioDecodeDirect(obj, viaDatagram, receivedAtMs);
@@ -1987,8 +2062,9 @@ export function useSubscriber(
    * 音声を諦めて続ける対象が無い)。音声トラックの終わりは `handleTrackEnd` が扱い、
    * `trackCallbacks` にはエラーだけを伝える。
    *
-   * 映像の時間軸が無いため、音声は到着基準で並べ、同期の推定も出さない
-   * (statistics は `resetSubscriberStats` が既定値に戻す)
+   * 映像の時間軸は作らないが、音声の jitter buffer と受信側の追いつきは使う。同期の推定
+   * (A/V) は映像が無いため出さない (statistics は `resetSubscriberStats` が既定値に
+   * 戻す)
    */
   async function subscribeAudioOnly(
     session: Session,
@@ -2002,8 +2078,20 @@ export function useSubscriber(
     const isCurrentAttempt = createAttemptGuard(abortControllerRef, signal);
     instance.statusMessage.value = "Preparing audio decoder...";
     resetSubscriberStats(instance);
-    // 前の購読で jitter buffer が有効でも、映像の時間軸が無いこの購読では同期しない
-    jitterBufferEnabledRef.current = false;
+    // 映像は購読しないが、音声の jitter buffer と受信側の追いつきは使う。時間軸を作らないと
+    // 到着の揺らぎの学習 (NetEq) と閉ループが動かず、固定の遅れで再生することになる。
+    // 同期の推定 (A/V) は映像が無いため出さない
+    audioOnlyPlaybackRef.current = true;
+    const audioOnlyJitterBufferEnabled = settings.jitterBufferEnabled.value;
+    jitterBufferEnabledRef.current = audioOnlyJitterBufferEnabled;
+    playoutTimelineRef.current = new PlayoutTimeline({
+      timeOriginMs: performance.timeOrigin,
+      maxQueuedFrames: audioOnlyJitterBufferEnabled
+        ? JITTER_BUFFER_MAX_QUEUED_FRAMES
+        : MAX_PENDING_FRAMES,
+    });
+    // 音声の Track だけでも targetLatency は宣言され得る (draft-ietf-moq-msf-01 §5.2.8)
+    playoutTimelineRef.current.setTargetLatencyMs(effectiveTargetLatencyMs(audioTrack));
     await startAudioSubscription(
       session,
       namespaceArray,
@@ -2192,7 +2280,9 @@ export function useSubscriber(
         intentionalDelayMs: input?.intentionalDelayMs ?? preDecodeDelayRef.current?.delayMs ?? 0,
         timeline: playoutTimelineRef.current,
         useTimeline: jitterBufferEnabledRef.current,
-        enforceTarget: jitterBufferEnabledRef.current,
+        // 音声だけの購読では映像に合わせる相手が無いため、目標の開始時刻を守らず
+        // 到着基準で並べる (ライブラリの `enforceTarget` と同じ規則)
+        enforceTarget: jitterBufferEnabledRef.current && !audioOnlyPlaybackRef.current,
         output: { context: playback.context, destination: playback.destination },
       });
       // 捨てた音と基準を取り直した回数を画面の統計へ反映する (計器への記録は共有実装が済ませる)

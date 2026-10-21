@@ -12,6 +12,7 @@ import {
   EMPTY_AUDIO_RECEIVE_CATCH_UP,
   type AudioReceiveCatchUpStats,
 } from "../../../src/playout/audioReceiveCatchUp.ts";
+import { EMPTY_HOST_DELAY, type HostDelaySnapshot } from "../utils/hostDelayTracker.ts";
 import { EMPTY_PLAYOUT_TIMING, type PlayoutTimingSnapshot } from "../utils/playoutTimingStats";
 import {
   AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS,
@@ -41,7 +42,7 @@ export type AvSyncSnapshot = AvSyncStats;
  * をそのまま使う (`src/playout/audioDelayFeedback.ts` の `targetDelayMs`)。閉ループの目標
  * (`targetMs`) は初期値のままである
  */
-const EMPTY_AUDIO_DELAY_FEEDBACK: AudioDelayFeedbackSnapshot = {
+export const EMPTY_AUDIO_DELAY_FEEDBACK: AudioDelayFeedbackSnapshot = {
   targetMs: AUDIO_DELAY_FEEDBACK_START_MS,
   jitterTargetMs: AUDIO_DELAY_START_MS,
   appliedMs: AUDIO_DELAY_START_MS,
@@ -224,6 +225,16 @@ export interface SubscriberInstance {
   // 既定値のまま
   // (src/playout/audioPlayoutTimingStats.ts)
   audioPlayoutTiming: Signal<AudioPlayoutTimingSnapshot>;
+  // メインスレッドの停止 (longtask) と音声の到着の重なりの観測値。直近の窓の停止回数・
+  // 停止の合計 ms・停止区間と到着の間隔が重なった到着の数を持つ。useSubscriber が一定間隔で
+  // 更新する。まだ停止を観測していないときは既定値のまま
+  // (devtools/src/utils/hostDelayTracker.ts)
+  audioHostDelay: Signal<HostDelaySnapshot>;
+  // 音声の jitter buffer の目標遅延の閉ループの内訳 (目標・実際に使う値・上限・圧縮の速さ)。
+  // 音声だけを購読するときは A/V 同期の推定を出さないため、目標遅延の内訳はここから読む。
+  // useSubscriber が一定間隔で更新する
+  // (src/playout/audioDelayFeedback.ts)
+  audioDelayFeedback: Signal<AudioDelayFeedbackSnapshot>;
   // 復号した音声のレベル (dBFS)。左右のチャンネルを別々に持ち、モノラルのときは右が
   // null のまま。まだ復号していない状態も null
   audioPeakDbfsLeft: Signal<number | null>;
@@ -302,6 +313,8 @@ export function createSubscriberInstance(id: string): SubscriberInstance {
     audioPlayoutConcealedMs: signal(0),
     audioPlayoutConcealments: signal(0),
     audioPlayoutTiming: signal<AudioPlayoutTimingSnapshot>(EMPTY_AUDIO_PLAYOUT_TIMING),
+    audioHostDelay: signal<HostDelaySnapshot>(EMPTY_HOST_DELAY),
+    audioDelayFeedback: signal<AudioDelayFeedbackSnapshot>(EMPTY_AUDIO_DELAY_FEEDBACK),
     audioPlayoutCatchUp: signal<AudioReceiveCatchUpStats>(EMPTY_AUDIO_RECEIVE_CATCH_UP),
     audioPeakDbfsLeft: signal<number | null>(null),
     audioPeakDbfsRight: signal<number | null>(null),

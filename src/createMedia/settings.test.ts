@@ -38,6 +38,68 @@ test("resolveAudioPublishSettings: delivery を指定どおりに解決する", 
   assert.equal(settings.delivery, "datagram");
 });
 
+// 冗長化は datagram の送信経路でしか実装していない。datagram では 2 以上を受け付け、
+// 何回送るかをそのまま解決する。
+test("resolveAudioPublishSettings: datagram では冗長度 2 以上を解決する", () => {
+  for (const redundancy of [2, 3]) {
+    const settings = resolveAudioPublishSettings({
+      codec: "opus",
+      bitrate: 64000,
+      delivery: "datagram",
+      redundancy,
+    });
+    assert.equal(settings.redundancy, redundancy, "指定した冗長度をそのまま返すこと");
+  }
+});
+
+// subgroup 配送は Data Stream が再送されるため冗長化の意味が無い。指定を黙って無視すると
+// 利用者が冗長化されていると誤解するため、start() で拒否する。
+test("resolveAudioPublishSettings: subgroup で冗長度 2 以上を指定するとエラーになる", () => {
+  for (const delivery of ["subgroup", undefined] as const) {
+    assert.throws(
+      () =>
+        resolveAudioPublishSettings({
+          codec: "opus",
+          bitrate: 64000,
+          ...(delivery === undefined ? {} : { delivery }),
+          redundancy: 2,
+        }),
+      /redundancy must be 1 when delivery is "subgroup"/,
+      "subgroup 配送では冗長度 2 を拒否すること",
+    );
+  }
+});
+
+// 冗長度 1 はどの配送方式でも受け付ける (既定値でもある)。
+test("resolveAudioPublishSettings: 冗長度 1 は subgroup でも受け付ける", () => {
+  for (const delivery of ["subgroup", "datagram"] as const) {
+    const settings = resolveAudioPublishSettings({
+      codec: "opus",
+      bitrate: 64000,
+      delivery,
+      redundancy: 1,
+    });
+    assert.equal(settings.redundancy, 1, "冗長度 1 をそのまま返すこと");
+  }
+});
+
+// 冗長度の範囲 (1〜3 の整数) の検証は配送方式に関係なく行う。
+test("resolveAudioPublishSettings: 冗長度の範囲外は配送方式に関係なくエラーになる", () => {
+  for (const redundancy of [0, 4, 1.5]) {
+    assert.throws(
+      () =>
+        resolveAudioPublishSettings({
+          codec: "opus",
+          bitrate: 64000,
+          delivery: "datagram",
+          redundancy,
+        }),
+      /redundancy must be an integer between 1 and 3/,
+      "1〜3 の整数以外を拒否すること",
+    );
+  }
+});
+
 // 明示値はそのまま反映され、aac の codec 文字列は mp4a.40.2 になる。
 test("resolveAudioPublishSettings: 明示値と aac の codec 文字列", () => {
   const settings = resolveAudioPublishSettings({

@@ -63,6 +63,11 @@ export interface AudioReceiverStats {
   // `playoutTiming`) を経路ごとに比べられるようにする
   datagramFramesReceived: number;
   bytesReceived: number;
+  // SUBSCRIBE_OK の LARGEST_OBJECT 以前の音声 Object を、relay の cache から届いた分として
+  // 復号へ渡さず捨てた数 (累積)。購読を始めるたびに境界を設定し直し、停止すると境界を消す。
+  // 境界が無い (LARGEST_OBJECT が省略された) 購読では 0 のまま
+  // (src/catchUpGate.ts)
+  catchUpObjectsSkipped: number;
   // 目標を使わない並べ方で、基準を取り直した回数
   // (鳴らす時刻を過ぎて届いた音、timestamp が大きく飛んだ音)
   playoutRebases: number;
@@ -197,7 +202,8 @@ export interface AudioPublishOptions {
   // である。損失の無い経路では品質が変わらない (欠落 0、飛ばし 0)。代わりに音声の帯域と
   // datagram の数が n 倍になる。4 以上は帯域を無駄にするため start() がエラーにする
   //
-  // delivery が "subgroup" のときは Data Stream が再送されるため、2 以上にする意味は無い
+  // delivery が "subgroup" のときは Data Stream が再送されるため、2 以上を指定できない
+  // (冗長化は datagram の送信経路でしか実装しておらず、黙って無視せず start() がエラーにする)
   redundancy?: number;
 }
 

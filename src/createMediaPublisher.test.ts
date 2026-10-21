@@ -3953,12 +3953,28 @@ test("handleAudioEncodedChunk: redundancy が 3 なら 3 回送る", () => {
 test("resolveAudioPublishSettings: redundancy は 1〜3 の整数だけ受理する", () => {
   assert.equal(resolveAudioPublishSettings({ codec: "opus", bitrate: 64_000 }).redundancy, 1);
   assert.equal(
-    resolveAudioPublishSettings({ codec: "opus", bitrate: 64_000, redundancy: 3 }).redundancy,
+    resolveAudioPublishSettings({
+      codec: "opus",
+      bitrate: 64_000,
+      delivery: "datagram",
+      redundancy: 3,
+    }).redundancy,
     3,
+  );
+  // 冗長化は datagram の送信経路でしか実装していないため、subgroup で 2 以上は拒否する
+  assert.throws(
+    () => resolveAudioPublishSettings({ codec: "opus", bitrate: 64_000, redundancy: 2 }),
+    /audio redundancy must be 1 when delivery is "subgroup"/,
   );
   for (const value of [0, 4, 1.5]) {
     assert.throws(
-      () => resolveAudioPublishSettings({ codec: "opus", bitrate: 64_000, redundancy: value }),
+      () =>
+        resolveAudioPublishSettings({
+          codec: "opus",
+          bitrate: 64_000,
+          delivery: "datagram",
+          redundancy: value,
+        }),
       /audio redundancy must be an integer between 1 and 3/,
     );
   }

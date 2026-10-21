@@ -1,7 +1,7 @@
 # subgroup 配送で指定された音声冗長度が黙って無視されるのを直す
 
 - Created: 2026-10-21
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-10-21
 - Branch: feature/fix-audio-demo-hardening
 - Polished: {YYYY-MM-DD}
 
@@ -38,4 +38,13 @@ datagram 配送の分岐だけである。subgroup 配送では同じ Object を
 
 ## 解決方法
 
-{対応時に記入}
+subgroup 配送で `redundancy` 2 以上を指定すると、送信回数が増えないまま黙って無視されていた。
+`src/createMedia/settings.ts` の `resolveAudioPublishSettings` で配送方式と冗長度の組み合わせを検証し、
+`delivery !== "datagram" && redundancy > 1` のときはエラーにするようにした。エラーメッセージは英語で
+配送方式と冗長度の実際の値を含める。`src/codec/types.ts` と `docs/HIGH_LEVEL_API.md` の説明も、
+subgroup では 2 以上を指定できない旨に更新した。
+
+検証: datagram + 2/3 は成功、subgroup (と delivery 省略) + 2 はエラー、redundancy 1 はどちらでも成功、
+範囲外は配送方式に関係なくエラーになることを単体テストで固定した。既存の
+createMediaPublisher.test.ts の期待値も新しい制約に合わせた。`vp check` / `tsc --noEmit` /
+`vp test run` が通る。

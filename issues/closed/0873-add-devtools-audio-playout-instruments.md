@@ -1,7 +1,7 @@
 # devtools の Audio Playback に穴・段差・押し直し・drain の計器を表示する
 
 - Created: 2026-10-21
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-10-21
 - Branch: feature/add-devtools-audio-playout-instruments
 - Polished: {YYYY-MM-DD}
 
@@ -43,4 +43,14 @@
 
 ## 解決方法
 
-{対応時に記入}
+Audio Playback Timing と Audio の節に、未表示だった計器を追加した。穴 (`gapCount` / `gapMs` /
+`gapMaxMs` / `unrecoverableGapCount` / `unrecoverableGapMs`)、境界の段差 (`boundaryStepCount` /
+`boundaryStepMax`)、押し直し (`lateStartCount` / `lateStartMaxMs` / `pushStartCount` / `pushStartMaxMs`)、
+drain (`playedMs` / `cutMs` / `waitedMs` / `requestedMs`)、到着の遅れ (`receiveDelayMs` /
+`maxReceiveDelayMs`)、目標遅延の上限と圧縮 (`appliedCeilingMs` / `compressionMsPerSecond`) を表示し、
+`statsSnapshot` の JSON と同じ値にした。`statsHelp.ts` に用語説明を足し、
+`docs/AUDIO_PLAYOUT_GAPS_AND_TAIL.md` の「devtools の Audio Playback Timing から読める」という記述を
+実装に合わせた。
+
+検証: `statsSnapshot` の単体テストで JSON の値を固定し、軽量な Playwright で新しい `testId` の表示を
+確認した。`vp check` / `tsc --noEmit` / `vp test run` が通る。

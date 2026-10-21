@@ -2,6 +2,7 @@ import { test, assert } from "vite-plus/test";
 import { LOC, decodeCatalogMessage, encodeCatalog } from "moqt-js";
 import type { Publisher } from "moqt-js";
 import {
+  buildAudioSendCopyPlan,
   buildObjectSendPlan,
   buildPublishStopPlan,
   buildPublisherCatalog,
@@ -319,6 +320,58 @@ test("buildObjectSendPlan: payload は chunk の data をそのまま使う", ()
   const plan = buildObjectSendPlan({ groupId: 0, objectId: 0 }, chunk, TEST_WALL_CLOCK_MICROS);
 
   assert.strictEqual(plan.payload, chunk.data);
+});
+
+// ============================================================================
+// 音声 Object の送信計画 (冗長度ごとのバイト数)
+// ============================================================================
+
+// datagram は同じ Object を冗長度の数だけ送る。bytesSent は送った copy の数だけ数える
+// 必要があり、Object 1 件につき 1 回と copy ごとの 1 回を両方足すと冗長度 2 で 3 倍に
+// なる。送信ループが使う計画 (回数と 1 回あたりのバイト数) をここで固定する。
+test("buildAudioSendCopyPlan: 冗長度 1/2/3 の送信バイト数が (payload + properties) × 冗長度 になる", () => {
+  const payloadBytes = 120;
+  const propertiesBytes = 35;
+  for (const redundancy of [1, 2, 3]) {
+    const plan = buildAudioSendCopyPlan({
+      delivery: "datagram",
+      reliability: "supports-unreliable",
+      redundancy,
+      payloadBytes,
+      propertiesBytes,
+    });
+    assert.equal(plan.datagram, true);
+    assert.equal(plan.copies, redundancy);
+    assert.equal(plan.bytesPerCopy, payloadBytes + propertiesBytes);
+    // 送信ループと同じく copy ごとに 1 回ずつ数える
+    let bytesSent = 0;
+    for (let copy = 0; copy < plan.copies; copy++) {
+      bytesSent += plan.bytesPerCopy;
+    }
+    assert.equal(bytesSent, (payloadBytes + propertiesBytes) * redundancy);
+  }
+});
+
+// subgroup は Data Stream が再送されるため 1 回だけ送る。datagram を運べない
+// reliability ("reliable-only") のセッションも subgroup へ落として 1 回だけ送る。
+test("buildAudioSendCopyPlan: subgroup と datagram を運べない経路は 1 回だけ送る", () => {
+  const payloadBytes = 120;
+  const propertiesBytes = 35;
+  for (const options of [
+    { delivery: "subgroup" as const, reliability: "supports-unreliable" },
+    { delivery: "datagram" as const, reliability: "reliable-only" },
+  ]) {
+    const plan = buildAudioSendCopyPlan({
+      ...options,
+      // 設定が 3 でも、subgroup へ落ちた経路では 1 回だけ送る
+      redundancy: 3,
+      payloadBytes,
+      propertiesBytes,
+    });
+    assert.equal(plan.datagram, false);
+    assert.equal(plan.copies, 1);
+    assert.equal(plan.bytesPerCopy, payloadBytes + propertiesBytes);
+  }
 });
 
 // ============================================================================

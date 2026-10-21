@@ -1,7 +1,7 @@
 # devtools の音声 bytesSent が冗長度の分だけ余計に加算されるのを直す
 
 - Created: 2026-10-21
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-10-21
 - Branch: feature/fix-playout-audio-correctness
 - Polished: {YYYY-MM-DD}
 
@@ -33,4 +33,10 @@ devtools の配信側音声統計 `audioBytesSent` が Object 1 件につき 1 �
 
 ## 解決方法
 
-{対応時に記入}
+devtools の `audioBytesSent` が冗長 copy ごとの加算に加えて Object 1 件につき 1 回加算しており、
+冗長度 2 で 3 倍、3 で 4 倍になっていた。音声 Object の送信計画を純関数 `buildAudioSendCopyPlan` に
+切り出し、datagram は copy ごとに `payload + properties` を 1 回、subgroup と reliable-only は送信成功後に
+1 回だけ加算するようにした。
+
+検証: 冗長度 1 / 2 / 3 で `bytesSent = (payload + properties) × 冗長度` になり、subgroup と
+reliable-only が 1 回になることを単体テストで固定した。`vp check` / `tsc --noEmit` / `vp test run` が通る。

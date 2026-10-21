@@ -31,6 +31,7 @@ import { AudioDecoderWrapper } from "./codec/AudioDecoder";
 import { VideoDecoderWrapper } from "./codec/VideoDecoder";
 import { VideoDecodeOrder, priorObjectIdGapOf } from "./videoDecodeOrder";
 import { GroupSwitchGate } from "./groupSwitchGate";
+import { CatchUpGate } from "./catchUpGate";
 import type { AudioClockBridge, AudioPlayoutScheduler } from "./playout/audioPlayout";
 import {
   AudioPlayoutTimingStats,
@@ -593,6 +594,13 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   private session: Session | null = null;
   private catalogSubscriber: Subscriber | null = null;
   private audioSubscriber: Subscriber | null = null;
+  /**
+   * relay の cache から追いつく途中の音声 Object を選別する境界
+   *
+   * SUBSCRIBE_OK の LARGEST_OBJECT 以前の音声 Object は購読より前に publish された分であり、
+   * 復号へ渡さない。devtools の購読側と同じ判定を使う (src/catchUpGate.ts)
+   */
+  private readonly audioCatchUpGate = new CatchUpGate();
   private videoSubscriber: Subscriber | null = null;
   // session close 通知の世代番号。解放 (disposeAllResources) のたびに進む
   // (捕捉値と一致しない通知は自己起点の解放によるものとして捨てる)
@@ -750,12 +758,17 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   // 統計情報 (受信の分。再生の分は getStats のたびに scheduler から読む)
   private audioStats: Pick<
     AudioReceiverStats,
-    "framesReceived" | "subgroupFramesReceived" | "datagramFramesReceived" | "bytesReceived"
+    | "framesReceived"
+    | "subgroupFramesReceived"
+    | "datagramFramesReceived"
+    | "bytesReceived"
+    | "catchUpObjectsSkipped"
   > = {
     framesReceived: 0,
     subgroupFramesReceived: 0,
     datagramFramesReceived: 0,
     bytesReceived: 0,
+    catchUpObjectsSkipped: 0,
   };
   private videoStats: VideoReceiverStats = {
     framesReceived: 0,
@@ -1404,6 +1417,9 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     // 停止の要求として、新しい音声 Object の受付をここで止める。以降に届く Object は
     // 復号前の段にも復号にも渡さない (flush した Object だけは drain の間に復号する)
     this.audioReceiveStopped = true;
+    // 音声の cache の境界も消す。次の購読は SUBSCRIBE_OK の LARGEST_OBJECT で設定し直す
+    // (停止の直後に届く Object を、前の購読の境界で捨てない)
+    this.audioCatchUpGate.reset();
     // session は解放の最後に閉じるが、参照は先頭で切り離す。解放は await を挟むため、
     // 2 つの解放 (ピア起点の close と start 失敗の巻き戻しなど) が並行したときに、後の
     // 解放が同じ session を掴んで close の完了を二重に待つのを防ぐ
@@ -2296,6 +2312,9 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     // 音声サブスクライバー
     if (this.audioTrackInfo) {
       const trackName = this.audioTrackInfo.name;
+      // 購読を始めるたびに前の購読の境界を消す。新しい SUBSCRIBE_OK の LARGEST_OBJECT を
+      // 設定するまでの Object を、前の購読の境界で捨てない
+      this.audioCatchUpGate.reset();
       // 購読要求より前に保留を有効化し、購読確立前後に届く Object を落とさない
       // (初期 configure は購読確立直後に適用する)。上限超過の通知はキューごとに
       // 購読期間あたり 1 回だけにするため、前の購読期間の通知済みフラグをここで解除する
@@ -2305,7 +2324,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       const authorizationToken = await this.resolveTrackAuthorizationToken(this.audioTrackInfo);
       // 解放が先行していれば、購読要求も出さない (解放で session は切り離し済み)
       this.assertStartNotDisposed(startGeneration);
-      this.audioSubscriber = await this.session.subscribe(
+      const audioSubscriber = await this.session.subscribe(
         namespace,
         trackName,
         {
@@ -2324,9 +2343,14 @@ export class MediaSubscriberImpl implements MediaSubscriber {
         // 値がある場合だけ載せる
         authorizationToken === undefined ? {} : { authorizationToken },
       );
+      this.audioSubscriber = audioSubscriber;
       // 購読の await 中に解放が先行していれば、初期 configure の適用も映像側の購読も行わない
       // (確立した購読は start の巻き戻しが解除する)
       this.assertStartNotDisposed(startGeneration);
+      // SUBSCRIBE_OK の LARGEST_OBJECT を cache の境界にする。これ以前の位置の音声 Object は
+      // 購読より前に publish された分であり、復号へ渡さない (src/catchUpGate.ts)。
+      // LARGEST_OBJECT が省略された (null の) ときは全 Object を live として扱う
+      this.audioCatchUpGate.setBoundary(audioSubscriber.largestLocation);
       // draft-ietf-moq-loc-04 Table 1: AUDIO_CONFIG は Track Property でも届く。
       // 購読確立直後に初期 configure へ反映し、保留していた Object を到着順に処理する
       // (media ごとに行う。音声の適用が映像の SUBSCRIBE_OK 待ちにならないようにする)
@@ -2649,7 +2673,35 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   }
 
   /**
+   * 音声 Object が cache の境界より後 (live) かを判定する
+   *
+   * 境界以前の Object は relay の cache から届いた分であり、復号へ渡さず捨てる
+   * (src/catchUpGate.ts)。捨てた数は統計 (`catchUpObjectsSkipped`) に残す。境界が無い
+   * (LARGEST_OBJECT が省略された) 購読では全 Object を live として扱う。
+   *
+   * 受信の入口だけでなく初期 configure の保留から解放するときにも判定する。購読の確立前に
+   * 保留した Object は、境界が設定された後の解放で初めて cache かどうかが決まるためである。
+   *
+   * @param obj - 判定する音声 Object
+   * @returns 復号へ渡してよい (live) か
+   */
+  private admitAudioObjectByCatchUp(obj: MoqtObject): boolean {
+    const decision = this.audioCatchUpGate.evaluate({
+      group: obj.groupId,
+      object: obj.objectId,
+    });
+    if (decision.live) return true;
+    this.audioStats.catchUpObjectsSkipped++;
+    return false;
+  }
+
+  /**
    * 受信した音声 Object を受け取る
+   *
+   * SUBSCRIBE_OK の LARGEST_OBJECT 以前の位置の Object は relay の cache から届いた分で
+   * あり、復号へ渡さず捨てる (src/catchUpGate.ts)。共有の時間軸へ古い TIMESTAMP を混ぜると、
+   * 基準の遅れを取り直して遅延が跳ねるためである。境界が無い (LARGEST_OBJECT が省略された)
+   * 購読では全 Object を live として扱う。
    *
    * 同じ Object の 2 回目は捨てる。音声は既定で datagram で届き、再送されない (RFC 9221)
    * ため、経路の損失に備えて配信側が同じ Object を 2 回送ることがある (devtools の
@@ -2660,6 +2712,9 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     // 停止の解放中に届いた Object は捨てる。復号前の段や復号へ渡すと、drain が終わった後に
     // 予約が増え、閉じた AudioContext への予約や統計の取りこぼしになる
     if (this.audioReceiveStopped) return;
+    // 購読より前に publish された cache の音声は復号へ渡さない。境界より後の最初の
+    // Object から live として扱う
+    if (!this.admitAudioObjectByCatchUp(obj)) return;
     if (this.isDuplicateAudioObject(obj)) return;
     // 到着時刻は復号前の遅延を挟んでも失わないよう、受信の入口で 1 回だけ測る
     this.handleAudioObject(obj, delivery, performance.timeOrigin + performance.now());
@@ -2687,6 +2742,8 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     // "closed" だけでは解放の途中 (decoder の参照を切る前) に届いた Object を判定できない
     if (this.closed) return;
     if (this.audioReceiveStopped) return;
+    // 初期 configure の完了まで保留していた Object も、解放の時点の境界で選別する
+    if (!this.admitAudioObjectByCatchUp(obj)) return;
     // 初期 configure (Track Property の AUDIO_CONFIG) の完了まで保留する
     // (上限を超えた Object は holdPendingObject が保持せず破棄する)
     if (this.audioInitialConfigPending) {

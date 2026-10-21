@@ -1,7 +1,7 @@
 # 音声だけの購読で jitter 推定が床に固定し時間圧縮が 0 になる原因を特定して直す
 
 - Created: 2026-10-21
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-10-21
 - Branch: feature/fix-audio-demo-hardening
 - Polished: {YYYY-MM-DD}
 
@@ -41,4 +41,16 @@ Wi-Fi のデモで音声だけを購読すると、到着の尾は映像あり�
 
 ## 解決方法
 
-{対応時に記入}
+音声だけを購読すると、devtools が jitter buffer を無効にして映像の時間軸を作らないため、
+NetEq の揺らぎ推定と閉ループが動かず、`jitterTargetMs` が 80 ms の初期値に固定し、受信側の追いつきも
+動かなかった。`devtools/src/hooks/useSubscriber.ts` の `subscribeAudioOnly` で音声用の
+`PlayoutTimeline` を作り、`useTimeline` を有効にした (`enforceTarget` は映像が無いため false のまま)。
+`src/playout/timeline.ts` に `audioDelayFeedbackStats()` を追加し、`devtools` の音声統計
+`audio.audioDelayFeedback` と Audio Playback の表示から、音声だけでも目標・実際に使う値・上限・
+圧縮の速さを読めるようにした。A/V 同期の推定は映像が無いため出さない。
+
+検証: 実リレーの音声だけの 60 秒計測 (videoSource=none、同一ページ) で、修正前は
+`jitterTargetMs` 80 / `appliedMs` 80 の固定だったものが、修正後は到着の揺らぎに反応して
+`jitterTargetMs` 80 → 100、`appliedMs` 80 → 100、reason が `waiting` に変わることを確認した
+(100 ms は到着基準の再生遅延の上限であり、Wi-Fi の周期的な約 105 ms の停滞はまだ僅かに超える)。
+`vp check` / `tsc --noEmit` / `vp test run` が通る。

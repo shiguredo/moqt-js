@@ -1,7 +1,7 @@
 # 音声購読に絶対 LOCATION_FILTER を付けない設計制約を docs に書く
 
 - Created: 2026-10-21
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-10-21
 - Branch: feature/fix-audio-demo-hardening
 - Polished: {YYYY-MM-DD}
 
@@ -37,4 +37,10 @@ A/V 同期を壊す。現状はこの前提がコードのコメントにしか�
 
 ## 解決方法
 
-{対応時に記入}
+`docs/AUDIO_PLAYOUT_RESULT.md` の「既知の限界」に、音声の購読は LOCATION_FILTER を送らないこと、
+絶対位置の filter を足すとリレーが cache の保持範囲の先頭から replay し得るため受信側が古い音声を
+まとめて復号し、時間軸の基準学習と A/V 同期が乱れることを書いた。リレーの実装名や内部仕様は書かず、
+MOQT の filter と cache の考え方、moqt-js の設計制約だけを記述した。配信 API の冗長度の説明も、
+subgroup 配送では 2 以上を指定できない旨に合わせた。
+
+検証: `vp check` (Markdown の整形を含む) が通る。
