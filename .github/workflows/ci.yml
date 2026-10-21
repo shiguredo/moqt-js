@@ -30,9 +30,10 @@ jobs:
 
   build:
     runs-on: ubuntu-slim
-    # 単体テストがまれにハングし、10 分のジョブ上限で打ち切られていた。テストの
-    # ステップに短い上限と 1 回の再試行を置き、ハングしても自動で復旧できるようにする。
-    timeout-minutes: 15
+    # 単体テストがまれにハングする。ジョブの上限は延ばさず、テストのステップに短い
+    # 上限と 1 回の再試行を置いて、ハングしてもジョブの残り時間で復旧できるようにする。
+    # ハングしたときは MOQT_TEST_TRACE の記録から原因のテストを特定する。
+    timeout-minutes: 10
     strategy:
       # 1 つの Node でハングしても他の Node の結果を打ち切らない
       fail-fast: false
@@ -49,15 +50,15 @@ jobs:
           cache: true
       - name: Run vp test
         id: test
-        # ハングしたときは 6 分で打ち切り、原因を特定できるよう開始 / 終了を記録する
-        timeout-minutes: 6
+        # ハングしたときは 4 分で打ち切り、原因を特定できるよう開始 / 終了を記録する
+        timeout-minutes: 4
         continue-on-error: true
         env:
           MOQT_TEST_TRACE: "1"
         run: vp test
       - name: Retry vp test after a hang
         if: steps.test.outcome == 'failure'
-        timeout-minutes: 8
+        timeout-minutes: 4
         env:
           MOQT_TEST_TRACE: "1"
         run: vp test
