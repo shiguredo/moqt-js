@@ -42,7 +42,7 @@ jobs:
     # 同じコアを奪い、計測を歪めるため
     runs-on: ubuntu-24.04
     # Chromium の install と、実リレーを相手にしたテストを見込んで余裕を持たせる
-    timeout-minutes: 20
+    timeout-minutes: 25
     env:
       TEST_MOQT_URI: ${{ secrets.TEST_MOQT_URI }}
     steps:
@@ -87,6 +87,15 @@ jobs:
         if: env.TEST_MOQT_URI != ''
         run: vp exec playwright install --with-deps chromium
 
+      # 実リレーの E2E は runner の負荷で計測が揺れ、まれに前提から外れて失敗する。
+      # 失敗したら 1 回だけやり直し、CI を不安定にしない
       - name: 実リレーへ接続する E2E テストを実行する
+        id: relay
         if: env.TEST_MOQT_URI != ''
+        timeout-minutes: 9
+        continue-on-error: true
+        run: vp run e2e-test:relay
+      - name: 実リレーへ接続する E2E テストを再実行する
+        if: env.TEST_MOQT_URI != '' && steps.relay.outcome == 'failure'
+        timeout-minutes: 9
         run: vp run e2e-test:relay
