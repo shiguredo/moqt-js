@@ -794,6 +794,17 @@ export class PlayoutTimeline {
   }
 
   /**
+   * 音声の jitter buffer の目標遅延の閉ループの内訳 (表示用)
+   *
+   * 音声だけを購読するときは A/V 同期の推定を出さないため、目標遅延がどう決まったかを
+   * ここから読めるようにする。まだ音声を観測していなければ初期値の内訳を返す
+   * (`src/playout/audioDelayFeedback.ts` の `AudioDelayFeedbackSnapshot`)
+   */
+  audioDelayFeedbackStats(): AudioDelayFeedbackSnapshot {
+    return this.audioDelayFeedback.snapshot(this.audioDelayEstimator.targetDelayMs);
+  }
+
+  /**
    * 音声の表示の遅れのうち、基準の遅れを除いた分 (ミリ秒)。自分の揺らぎと `targetLatency` の
    * 大きい方に同期の制御が足した分を加えた値であり、上限で切る。まだ観測していなければ null
    *
