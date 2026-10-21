@@ -30,7 +30,7 @@ import {
 } from "./audioPlayout";
 import { fadeSpliceEdge } from "../audioSpliceFade";
 import { isTimeStretchAvailable } from "./audioTimeStretch";
-import type { AudioPlayoutTimingStats } from "./audioPlayoutTimingStats";
+import type { AudioPlayoutDrainStats, AudioPlayoutTimingStats } from "./audioPlayoutTimingStats";
 import { AudioReceiveCatchUp } from "./audioReceiveCatchUp";
 import { compressSamples, concealSamples, type AudioSamples } from "./audioTimeStretch";
 import { AUDIO_PLAYOUT_DELAY_FLOOR_MS, type PlayoutTimeline } from "./timeline";
@@ -77,6 +77,80 @@ export interface AudioPlayoutContext {
 export interface AudioPlayoutOutput {
   readonly context: AudioPlayoutContext;
   readonly destination: AudioNode;
+}
+
+/** 停止時に予約済みの音を鳴らし切るとき、最後の予約の終わりに足す余裕 (ミリ秒) */
+export const AUDIO_PLAYOUT_DRAIN_MARGIN_MS = 100;
+
+/** 通常の停止 (購読の stop) で drain を待つ上限 (ミリ秒) */
+export const AUDIO_PLAYOUT_DRAIN_MAX_MS = 300;
+
+/**
+ * 終端の停止 (close / ピア起点の close) で drain を待つ上限 (ミリ秒)
+ *
+ * 終端は利用者やピアが再生を終える操作であり、エラー後の後始末でも通る。通常の停止より
+ * 短くして、後始末が長くブロックしないようにする。この時間で鳴らし切れなかった分だけが
+ * `missedByReason.stopped` に残る
+ */
+export const AUDIO_PLAYOUT_DRAIN_CLOSE_MAX_MS = 150;
+
+/** drain の待ち合わせで残りの予約を確認する間隔 (ミリ秒) */
+export const AUDIO_PLAYOUT_DRAIN_POLL_MS = 25;
+
+/**
+ * drain の待ちを終えたとみなす許容誤差 (ミリ秒)
+ *
+ * 実時計 (`performance.now()`) の大きな値へポーリング間隔を足すと、浮動小数点の
+ * 丸めで残り時間が 0 よりごくわずかに大きいまま時計が進まなくなる (例: 上限 300 ms
+ * に対して 299.99999999999994 ms)。そのままでは待ちループが終わらず、ワーカーが
+ * 止まる。この誤差以内なら待ち終えたものとして扱う
+ */
+const AUDIO_PLAYOUT_DRAIN_WAIT_EPSILON_MS = 1e-6;
+
+/**
+ * drain の待ち合わせで使う時計と待ち
+ *
+ * テストでは決定的な実装を渡し、実時間を待たずに待ち時間の上限と終了条件を検証する。
+ */
+export interface AudioPlayoutDrainClock {
+  /** 現在時刻 (ミリ秒)。`performance.now()` と同じ軸 */
+  now(): number;
+  /** 指定した時間だけ待つ */
+  sleep(ms: number): Promise<void>;
+}
+
+/** ブラウザの実時間を使う既定の時計 */
+const DEFAULT_AUDIO_PLAYOUT_DRAIN_CLOCK: AudioPlayoutDrainClock = {
+  now: () => performance.now(),
+  sleep: (ms) =>
+    new Promise((resolve) => {
+      setTimeout(resolve, ms);
+    }),
+};
+
+/** `AudioPlayoutSession.drainReserved` の設定 */
+export interface AudioPlayoutDrainOptions {
+  /** drain を待つ上限 (ミリ秒)。省略すると通常の停止の上限 */
+  maxWaitMs?: number;
+  /**
+   * 復号前の段から flush した Object の復号出力を待ち終えたか
+   *
+   * flush した Object は復号が非同期に済むため、予約が尽きていても復号の出力がまだ届いて
+   * いないことがある。呼び出し側が「flush した件数を復号の出力で減らした残り」を返し、
+   * false の間は drain を終えない
+   */
+  isFlushSettled?: () => boolean;
+  /** flush した Object の件数 (計器に残す) */
+  flushedObjects?: number;
+  /**
+   * flush したが、まだ復号の出力が届いていない Object の数を返す
+   *
+   * drain の終了時点で残った数を計器 (`lastDrain.undecodedFlushedObjects`) に残す。
+   * 復号の出力が届かなかった Object は、復号器を閉じる時点で捨てられる
+   */
+  remainingFlushedObjects?: () => number;
+  /** 時計と待ち。テストで決定的に駆動するために差し替える */
+  clock?: AudioPlayoutDrainClock;
 }
 
 /** 復号した音 1 つ分の再生の依頼 */
@@ -635,6 +709,80 @@ export class AudioPlayoutSession {
    */
   recordStopped(): void {
     this.timing.recordStopped(performance.now());
+  }
+
+  /**
+   * 予約済みの音を鳴らし切ってから止める (停止時の drain)
+   *
+   * 停止の要求時点で予約されている音の最後が鳴り終わるまで待ち、そのあとに
+   * `recordStopped` で切った量を計器へ残す。待ち時間は「最後の予約の終わり - 現在 +
+   * 余裕」を上限 (`maxWaitMs`。既定は通常の停止の 300 ms) で切った値である。
+   * `isFlushSettled` が false の間は、復号前の段から flush した Object の復号出力が
+   * まだ届いていないため、予約が尽きていても終えない。
+   *
+   * 待って鳴らせた量と上限で切った量は、計器の `lastDrain` に残す。
+   * `missedByReason.stopped` の意味 (切った量) は変えない。
+   *
+   * @param options - 待ちの上限、flush の完了判定、時計
+   * @returns 待った結果 (鳴らせた量と切った量)
+   */
+  async drainReserved(options: AudioPlayoutDrainOptions = {}): Promise<AudioPlayoutDrainStats> {
+    const clock = options.clock ?? DEFAULT_AUDIO_PLAYOUT_DRAIN_CLOCK;
+    const maxWaitMs = Math.max(0, options.maxWaitMs ?? AUDIO_PLAYOUT_DRAIN_MAX_MS);
+    const flushedObjects = Math.max(0, options.flushedObjects ?? 0);
+    const isFlushSettled = options.isFlushSettled ?? (() => true);
+    const startMs = clock.now();
+    const pendingMsAtStart = this.timing.pendingMs(startMs);
+    const pendingEndMs = this.timing.pendingEndMs(startMs);
+    const playedMsAtStart = this.timing.snapshot(startMs).playedMs;
+    // 最後の予約が鳴り終わるまでの時間に余裕を足す。flush した Object があるときは、
+    // その復号出力の予約がこれから増えるため、余裕の分は必ず待つ (復号の速さに依存させない)
+    let requestedMs = Math.max(
+      0,
+      (pendingEndMs === null ? 0 : pendingEndMs - startMs) + AUDIO_PLAYOUT_DRAIN_MARGIN_MS,
+    );
+    if (flushedObjects > 0 || !isFlushSettled()) {
+      // flush した Object の復号は非同期に済む。予約が無くても復号の出力を待てるよう、
+      // 上限まで待つ (復号が終われば isFlushSettled が true になり早く終わる)
+      requestedMs = Math.max(requestedMs, maxWaitMs);
+    }
+    requestedMs = Math.min(maxWaitMs, requestedMs);
+
+    for (;;) {
+      const nowMs = clock.now();
+      const elapsedMs = nowMs - startMs;
+      const endMs = this.timing.pendingEndMs(nowMs);
+      const reservedDone = endMs === null || endMs <= nowMs;
+      if (reservedDone && isFlushSettled()) {
+        break;
+      }
+      if (elapsedMs >= requestedMs - AUDIO_PLAYOUT_DRAIN_WAIT_EPSILON_MS) {
+        break;
+      }
+      await clock.sleep(Math.min(AUDIO_PLAYOUT_DRAIN_POLL_MS, requestedMs - elapsedMs));
+    }
+
+    const finishedMs = clock.now();
+    // 待っても鳴り終わらなかった予約が、切った量である (`recordStopped` が数える)
+    const cutMs = this.timing.pendingMs(finishedMs);
+    // 鳴らせた量 = 停止時に予約されていた長さ + drain 中に増えた予約 - 切った長さ
+    const reservedDuringDrainMs = Math.max(
+      0,
+      this.timing.snapshot(finishedMs).playedMs - playedMsAtStart,
+    );
+    const playedMs = Math.max(0, pendingMsAtStart + reservedDuringDrainMs - cutMs);
+    this.timing.recordStopped(finishedMs);
+    const result: AudioPlayoutDrainStats = {
+      pendingMsAtStart,
+      requestedMs,
+      waitedMs: Math.max(0, finishedMs - startMs),
+      playedMs,
+      cutMs,
+      flushedObjects,
+      undecodedFlushedObjects: Math.max(0, options.remainingFlushedObjects?.() ?? 0),
+    };
+    this.timing.recordDrain(result);
+    return result;
   }
 
   /**

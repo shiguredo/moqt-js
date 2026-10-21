@@ -293,3 +293,65 @@ test("recordGap / recordLateStart / recordBoundaryStep: 穴と追い越しと段
   assert.equal(feedback.gapCount, 3);
   assert.equal(feedback.gapMs, 32);
 });
+
+/**
+ * 完了条件: 停止時の drain が、予約済みの最後の終わり (pendingEndMs) と残りの長さ
+ * (pendingMs) を読めること。時刻を過ぎた予約は数えない。
+ */
+test("pendingEndMs / pendingMs: 鳴り終わっていない予約の最後と残りを返す", (): void => {
+  const stats = new AudioPlayoutTimingStats(AUDIO_PLAYOUT_TIMING_WINDOW_MS, 0);
+  assert.isNull(stats.pendingEndMs(0), "予約が無ければ null");
+  assert.equal(stats.pendingMs(0), 0);
+
+  // [100, 120] と [140, 160] の 2 つを予約する (時刻は performance.now 軸のミリ秒)
+  stats.recordPlay(0, 100, 100, 20, "timestamp");
+  stats.recordPlay(0, 140, 140, 20, "timestamp");
+
+  assert.equal(stats.pendingEndMs(0), 160, "最後に鳴り終わる時刻を返すこと");
+  assert.equal(stats.pendingMs(0), 40, "残りの合計を返すこと");
+  // 1 つ目の途中では、1 つ目の残りと 2 つ目を含める
+  assert.equal(stats.pendingEndMs(110), 160);
+  assert.equal(stats.pendingMs(110), 30);
+  // すべて鳴り終わった後は何も残らない
+  assert.isNull(stats.pendingEndMs(200));
+  assert.equal(stats.pendingMs(200), 0);
+});
+
+/**
+ * 完了条件: drain の結果 (鳴らせた量・切った量・待ち時間・flush 件数) を計器に残す。
+ * `missedByReason.stopped` の意味 (切った量) は変えない。
+ */
+test("recordDrain: drain の結果を lastDrain に残す", (): void => {
+  const stats = new AudioPlayoutTimingStats(AUDIO_PLAYOUT_TIMING_WINDOW_MS, 0);
+  stats.recordPlay(0, 100, 100, 20, "timestamp");
+  // drain の間に 1 つ鳴らせた (予約を追加した) ことにする
+  stats.recordPlay(10, 120, 120, 20, "timestamp");
+  const cutMs = stats.pendingMs(150);
+  stats.recordStopped(150);
+  stats.recordDrain({
+    pendingMsAtStart: 40,
+    requestedMs: 100,
+    waitedMs: 100,
+    playedMs: 20,
+    cutMs,
+    flushedObjects: 2,
+    undecodedFlushedObjects: 0,
+  });
+
+  const snapshot = stats.snapshot(150);
+  assert.deepEqual(snapshot.lastDrain, {
+    pendingMsAtStart: 40,
+    requestedMs: 100,
+    waitedMs: 100,
+    playedMs: 20,
+    cutMs: 0,
+    flushedObjects: 2,
+    undecodedFlushedObjects: 0,
+  });
+  // 予約は [100, 120] と [120, 140] であり、150 では両方鳴り終わっているため
+  // stopped (切った量) は 0 のまま
+  assert.equal(snapshot.missedByReason.stopped.ms, cutMs);
+  // reset で前の購読の drain を残さない
+  stats.reset();
+  assert.isNull(stats.snapshot(150).lastDrain);
+});

@@ -64,8 +64,9 @@ export interface AudioReceiverStats {
   // 予定に対する余裕の分布 (直近 10 秒の p50 / p95 / max)、鳴らなかった量 (件数と ms) を
   // 理由ごとに出す。加えて、補間で埋まらなかった無音の穴 (回数 / 合計 ms / 最大 ms と、
   // 予約できる最も早い時刻より前だった分)、予約した時刻を currentTime が追い越した回数と
-  // 最大、バッファ境界の段差の回数と最大を累積で持つ。時刻は performance.now() と同じ軸の
-  // ミリ秒 (src/playout/audioPlayoutTimingStats.ts)
+  // 最大、バッファ境界の段差の回数と最大を累積で持つ。加えて、直近の停止で予約済みの音を
+  // 鳴らし切った drain の結果 (鳴らせた量・切った量・待ち時間・flush 件数、`lastDrain`)
+  // を持つ。時刻は performance.now() と同じ軸のミリ秒 (src/playout/audioPlayoutTimingStats.ts)
   playoutTiming: AudioPlayoutTimingSnapshot;
   // 受信側の音声の追いつき。復号の出力が送られた TIMESTAMP から遅れ続けたときに、
   // 復号器を作り直して live へ戻した量 (src/playout/audioReceiveCatchUp.ts)。観測した遅れと
@@ -451,6 +452,11 @@ export interface MediaSubscriber {
    * 進行中の解放を共有して完了を待ち、この stop が state を "stopped" にする
    * (あとから解放を終えたピア起点の経路は state も onClose も動かさない)。
    * close() が解放と終端遷移を進めている間は cannot stop while closing で拒否する。
+   * 停止の要求後は新しい音声 Object を受け付けず、復号前の遅延の段に保持していた音声は
+   * flush して復号へ流す。予約済みの音が鳴り終わるまで待ってから `AudioContext` を
+   * 閉じる (最大 300 ms。上限は `AudioPlayoutSession.drainReserved` の
+   * `AUDIO_PLAYOUT_DRAIN_MAX_MS`)。待って鳴らせた量と切った量は
+   * `getStats().audio.playoutTiming.lastDrain` で読める。
    */
   stop(): Promise<void>;
   /**

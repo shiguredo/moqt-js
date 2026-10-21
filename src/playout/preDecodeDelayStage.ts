@@ -164,11 +164,15 @@ export class PreDecodeDelayStage<T> {
    * 保持している Object を期限を待たずに `onDue` へ流す
    *
    * 動的に遅延を 0 にしたときに、保持中の Object を捨てずに復号へ流してライブへ追いつく
-   * ために使う。
+   * ために使う。購読の停止時も、保持分を鳴らし切るために stop の前に呼ぶ。
+   *
+   * @returns `onDue` へ流した Object の件数 (停止時の drain が復号の完了を待つのに使う)
    */
-  flush(): void {
+  flush(): number {
     this.cancelTimer();
-    this.emit(this.queue.takeAll());
+    const items = this.queue.takeAll();
+    this.emit(items);
+    return items.length;
   }
 
   /**

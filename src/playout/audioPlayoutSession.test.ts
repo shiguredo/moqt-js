@@ -1450,3 +1450,175 @@ test("handleDecodedAudio: 目標の 20 µs〜0.4 ms の前進を前の音の終�
     assert.equal(fixture.session.playout.lateness, 0, "遅れを負にしないこと");
   }
 });
+
+// ===== 停止時の drain =====
+
+/**
+ * drain の待ち合わせを決定的に駆動する時計
+ *
+ * `sleep` は実時間を待たずに時計だけを進める。テストを実時間 (最大 300 ms) に依存させない。
+ */
+class ManualDrainClock {
+  private currentMs: number;
+
+  constructor(startMs: number) {
+    this.currentMs = startMs;
+  }
+
+  now(): number {
+    return this.currentMs;
+  }
+
+  async sleep(ms: number): Promise<void> {
+    this.currentMs += ms;
+    await Promise.resolve();
+  }
+}
+
+/**
+ * 完了条件: drain は予約済みの音が鳴り終わるまで待ち、切った量を stopped に残す。
+ * 鳴らし切れた場合は切った量が 0 になる。
+ */
+test("drainReserved: 予約済みの音が鳴り終わるまで待つ", async () => {
+  const fixture = makeSessionFixture();
+  // 120 ms 先に 20 ms の予約がある状態を作る (実時間を使わず、時計だけで駆動する)
+  const startMs = 1_000;
+  fixture.timing.recordPlay(startMs, startMs + 120, startMs + 120, 20, "timestamp");
+  const clock = new ManualDrainClock(startMs);
+
+  const result = await fixture.session.drainReserved({ clock });
+
+  // 予約の終わり (start + 140 ms) まで、25 ms のポーリングで待つ
+  assert.isAtLeast(result.waitedMs, 120, "予約が鳴り終わるまで待つこと");
+  assert.isAtMost(result.waitedMs, 200, "最後の予約の終わりを過ぎて待ち続けないこと");
+  assert.equal(result.cutMs, 0, "待って鳴らし切れたので切った量は 0");
+  assert.equal(result.pendingMsAtStart, 20);
+  assert.equal(result.playedMs, 20, "予約済みを鳴らせた量");
+  assert.equal(result.flushedObjects, 0);
+  const snapshot = fixture.timing.snapshot(clock.now());
+  assert.equal(snapshot.missedByReason.stopped.count, 0, "切った音を数えないこと");
+  assert.deepEqual(snapshot.lastDrain, result, "drain の結果を計器に残すこと");
+});
+
+/**
+ * 完了条件: 予約が上限 (300 ms) より先にある場合、上限で待ちを打ち切って残りを
+ * 切った量として数える。
+ */
+test("drainReserved: 上限で打ち切り、残りを stopped に数える", async () => {
+  const fixture = makeSessionFixture();
+  const nowMs = performance.now();
+  const clock = new ManualDrainClock(nowMs);
+  // 10 秒先に 20 ms の予約がある状態を作る (実際には鳴り終わるまで待てない長さ)
+  fixture.timing.recordPlay(nowMs, nowMs + 10_000, nowMs + 10_000, 20, "timestamp");
+
+  const result = await fixture.session.drainReserved({ clock });
+
+  assert.equal(result.requestedMs, 300, "通常の停止の上限は 300 ms");
+  assert.closeTo(result.waitedMs, 300, 1e-6, "上限まで待つこと");
+  assert.equal(result.playedMs, 0, "上限で切った分は鳴らせていない");
+  // 予約は [now+10_000, now+10_020] のままで、まだ始まっていないため残りは 20 ms
+  assert.closeTo(result.cutMs, 20, 1e-6, "上限で切った残りを数えること");
+  const snapshot = fixture.timing.snapshot(clock.now());
+  assert.closeTo(snapshot.missedByReason.stopped.ms, result.cutMs, 1e-9);
+  assert.equal(snapshot.missedByReason.stopped.count, 1);
+});
+
+/**
+ * 完了条件: 時計の丸めで残り時間が許容誤差未満になっても、待ちループが終わる。
+ * 実時計は大きな値へ 25 ms を足すため、上限ちょうどで 299.99999999999994 ms の
+ * ような端数になり得る。残りが極小のまま時計が進まないと、ループが終わらない。
+ */
+test("drainReserved: 時計の丸めで残りが極小になっても待ちを終える", async () => {
+  const fixture = makeSessionFixture();
+  // 最後の 1 回だけ、時計の精度で 0.5 µs 足りなくなる時計を模す
+  class CoarseClock {
+    private currentMs = 0;
+    private calls = 0;
+
+    now(): number {
+      return this.currentMs;
+    }
+
+    async sleep(ms: number): Promise<void> {
+      this.calls += 1;
+      if (this.calls === 12) {
+        this.currentMs += ms - 0.000_000_5;
+      } else if (ms > 1e-6) {
+        this.currentMs += ms;
+      }
+      await Promise.resolve();
+    }
+  }
+  const clock = new CoarseClock();
+  fixture.timing.recordPlay(0, 1_000, 1_000, 20, "timestamp");
+
+  const result = await fixture.session.drainReserved({ clock, maxWaitMs: 300 });
+
+  assert.closeTo(result.waitedMs, 300, 1e-3, "上限まで待って終わること");
+  assert.closeTo(result.cutMs, 20, 1e-6, "切った残りを数えること");
+});
+
+/**
+ * 完了条件: flush した Object の復号出力を待つ間は、予約が尽きていても drain を
+ * 終えない。復号の出力が届かなかった場合は上限で打ち切る。
+ */
+test("drainReserved: flush の復号出力が届くまで待つ", async () => {
+  const fixture = makeSessionFixture();
+  const clock = new ManualDrainClock(performance.now());
+  const startMs = clock.now();
+  let settled = false;
+  // 60 ms 後に復号の出力が届いたことにする
+  const isFlushSettled = (): boolean => {
+    if (!settled && clock.now() - startMs >= 60) {
+      settled = true;
+    }
+    return settled;
+  };
+
+  const result = await fixture.session.drainReserved({
+    clock,
+    isFlushSettled,
+    flushedObjects: 1,
+  });
+
+  assert.isAtLeast(result.waitedMs, 50, "flush の復号出力を待つこと");
+  assert.isAtMost(result.waitedMs, 100, "余裕 (100 ms) を超えて待たないこと");
+  assert.equal(result.requestedMs, 300, "flush があるときは上限まで待つ");
+  assert.equal(result.flushedObjects, 1);
+  assert.equal(result.undecodedFlushedObjects, 0, "復号された flush 分は残さないこと");
+  assert.equal(result.cutMs, 0);
+});
+
+/**
+ * 完了条件: 上限まで待っても flush した Object の復号の出力が届かない場合、その件数を
+ * drain の結果に残す。復号していないため、長さは `stopped` に計上できない。
+ */
+test("drainReserved: 復号の出力が届かなかった flush 分を件数で残す", async () => {
+  const fixture = makeSessionFixture();
+  const clock = new ManualDrainClock(1_000);
+  const result = await fixture.session.drainReserved({
+    clock,
+    maxWaitMs: 200,
+    isFlushSettled: () => false,
+    flushedObjects: 3,
+    remainingFlushedObjects: () => 3,
+  });
+  assert.equal(result.requestedMs, 200, "flush があるときは上限まで待つ");
+  assert.equal(result.waitedMs, 200, "上限まで待つこと");
+  assert.equal(result.flushedObjects, 3);
+  assert.equal(result.undecodedFlushedObjects, 3, "復号されなかった flush 分を数えること");
+  assert.equal(result.cutMs, 0);
+});
+
+/**
+ * 完了条件: 予約も flush も無ければ待たずに終わる。
+ */
+test("drainReserved: 何も無ければ待たない", async () => {
+  const fixture = makeSessionFixture();
+  const clock = new ManualDrainClock(performance.now());
+  const result = await fixture.session.drainReserved({ clock });
+  assert.equal(result.waitedMs, 0);
+  assert.equal(result.requestedMs, 100, "余裕の分だけは待つ上限を持つ");
+  assert.equal(result.cutMs, 0);
+  assert.equal(result.playedMs, 0);
+});

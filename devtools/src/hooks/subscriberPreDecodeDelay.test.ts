@@ -293,3 +293,33 @@ test("SubscriberPreDecodeDelay: キューが空になったら短縮を解除す
   clock.advance(1);
   assert.deepEqual(audioDue.at(-1), [makeItem(9)], "元の期限で通知すること");
 });
+
+/**
+ * 完了条件: `flushAudio` は音声の段の保持分だけを復号へ流し、流した件数を返す。
+ * 映像の段は保持したまま残る (停止時の音声の flush に使う)。
+ */
+test("SubscriberPreDecodeDelay: flushAudio は音声だけを流して件数を返す", () => {
+  const { delay, clock, videoDue, audioDue } = makeDelay();
+  delay.start(1_000);
+  delay.pushVideo({ id: 1, bytes: 1 });
+  delay.pushAudio({ id: 2, bytes: 1 });
+  delay.pushAudio({ id: 3, bytes: 1 });
+  assert.deepEqual(audioDue, [], "期限前は通知しないこと");
+
+  const flushed = delay.flushAudio();
+
+  assert.equal(flushed, 2, "音声の件数を返すこと");
+  assert.deepEqual(audioDue, [
+    [
+      { id: 2, bytes: 1 },
+      { id: 3, bytes: 1 },
+    ],
+  ]);
+  assert.equal(delay.audioSize, 0);
+  assert.equal(delay.videoSize, 1, "映像の段は残すこと");
+  clock.advance(1_000);
+  assert.equal(videoDue.length, 1, "映像は期限で通知すること");
+  // 段が無い (遅延 0) 場合は 0
+  delay.stop();
+  assert.equal(delay.flushAudio(), 0);
+});

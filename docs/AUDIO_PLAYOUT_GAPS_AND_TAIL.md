@@ -43,6 +43,12 @@ Data Stream の再送と順序保証があるため、Datagram 固有の損失�
 
 ### 最後が聞こえない
 
+以下の表は **drain (停止時に予約済みを鳴らし切る処理) を実装する前** の実リレー計測である。
+既定値 (`preDecodeDelayMs = 0`) では、購読側の Stop で切られる予約は 0 件であり、実リレーで
+3 回計測して確認した (`lastDrain` の鳴らせた量と `missedByReason.stopped`)。`preDecodeDelayMs`
+を指定したときは、flush 分のうち上限までに鳴らし切れない分が切られる。未計測なのは目標遅延
+50 ms の経路と実機スピーカーでの聴感だけである。
+
 | 停止の種類                 | 停止操作の後に音が出ていた時間 | 切られた予約済み音声                                        | 購読者の状態                 |
 | -------------------------- | ------------------------------ | ----------------------------------------------------------- | ---------------------------- |
 | 購読側の Stop              | +15.7 ms で停止                | **7 件 / 121.3 ms** (3 回の計測で 121.3 / 124.0 / 121.7 ms) | disconnected                 |
@@ -51,7 +57,9 @@ Data Stream の再送と順序保証があるため、Datagram 固有の損失�
 | publisher の publish-done  | +233.7 ms                      | 0 件 / 0 ms                                                 | connected (TRACK_ENDED のみ) |
 
 - 購読側の Stop では、目標遅延 (この計測では `appliedMs` = 100 ms) と 1 フレーム分の予約が
-  残ったまま `AudioContext` が閉じられる。停止を押す直前に話された 0.12 秒が聞こえない
+  残ったまま `AudioContext` が閉じられていた。停止を押す直前に話された 0.12 秒が聞こえない。
+  drain を入れた後は、停止の要求で新規の受信と復号を止め、予約済みの音が鳴り終わるまで
+  待ってから閉じるため、この 0.12 秒は鳴る (上限の 300 ms を超えた分だけが切られる)
 - 配信側の停止では購読側のセッションも `AudioContext` も閉じられず、受信済みのバッファを
   鳴らし切る。配信側の停止だけでは「最後が聞こえない」は起きない
 - 配信側の capture から encode までの末尾は、単体ハーネスで 30 ms 欠ける (後述)。ただし
@@ -112,16 +120,20 @@ timestamp の順と逆に届くと、隙間 0 のまま内容だけが逆順に�
 
 ### 3. 停止で切られる音
 
-- 購読側: `src/createMediaSubscriber.ts` の `MediaSubscriberImpl.stop` は
-  `AudioPlayoutSession.recordStopped` を呼んだ直後に `AudioContext.close()` する。
-  `devtools/src/hooks/useSubscriber.ts` の `stopAudioPlayback` も同じである。予約済みの音は
-  目標遅延 (100 ms) と 1 フレーム (20 ms) の分だけ先に積まれているため、その分が切られる。
-  切った量は `missedByReason.stopped` に残るが、鳴らし切る処理は無い
-- 復号前の遅延: `preDecodeDelayMs` が 0 より大きいとき、`MediaSubscriberImpl` の
-  `disposeAllResources` が `audioPreDecodeStage.stop()` を呼び、`PreDecodeDelayStage.stop` は
-  タイマーとキューを捨てる。保持中の Object は復号へ流れない。失われる量は最大で `delayMs`
-  分である (2000 ms の設定で 20 ms の Object 3 件 = 60 ms を実測)。devtools も同じで、
-  動的に遅延を 0 にしたときだけ `flush` する
+- 購読側: 停止時は予約済みの音を鳴らし切ってから `AudioContext` を閉じる (drain)。停止の
+  要求後は新しい音声 Object を受け付けず、復号前の遅延の段は flush して復号へ流し、
+  「最後に鳴り終わる予約 - 現在 + 余裕 100 ms」を 0〜300 ms にクランプした時間だけ待つ。
+  flush した音があるときは、予約が無くても上限まで待つ (復号が終われば早く終わる)。
+  上限で鳴り切れなかった分だけが `missedByReason.stopped` に残り、鳴らせた量・切った量・
+  待ち時間・flush 件数・復号されなかった件数 (`undecodedFlushedObjects`) は `lastDrain` で
+  読める (`src/createMediaSubscriber.ts` /
+  `src/playout/audioPlayoutSession.ts` / `devtools/src/hooks/useSubscriber.ts`)
+- 復号前の遅延: 停止時は `preDecodeDelayStage.stop()` の前に `flush()` を呼び、保持中の
+  Object を期限を待たずに復号へ流す。flush した分の復号出力は drain の待ち時間に含める。
+  失われるのは flush の後に届いた Object だけであり、停止の要求後は新しい Object を
+  受け付けないため通常は 0 件である (`src/createMediaSubscriber.ts` /
+  `src/playout/preDecodeDelayStage.ts` / `devtools/src/hooks/subscriberPreDecodeDelay.ts`)
+  実リレーでの計測結果は「実装後の検証」にまとめた
 - 配信側: `src/createMediaPublisher.ts` の `MediaPublisherImpl.stop` と `close` は
   `processingGeneration` を進めてから `disposeAllResources` を呼ぶ。`processAudioFrames` の
   1 フレーム先読み、停止直後に読んだフレーム、encoder に渡したが出力が返る前のフレームが
@@ -203,12 +215,15 @@ timestamp の順と逆に届くと、隙間 0 のまま内容だけが逆順に�
    最大を計器 (`lateStartCount` / `lateStartMaxMs`) に足した。**1 件でも出たら、直前の音と
    重なっている可能性がある** (重なりそのものは計器に出ない)。押し直すと次の音との間の穴に
    なるため、フェードと併用する必要がある
-6. **停止時に鳴らし切る (購読側、未実装)**
+6. **停止時に鳴らし切る (購読側、実装済み)**
    新規の受信と復号を止め、予約済みが鳴り終わるまで待ってから `AudioContext` を閉じる。
    復号前の段は stop ではなく flush して復号へ流す。待ち時間は最後に鳴り終わる時刻から
-   現在までに余裕 (100 ms) を足し、0〜300 ms にクランプする。`MediaSubscriber.stop` は
+   現在までに余裕 (100 ms) を足し、0〜300 ms にクランプする。flush した音があるときは、
+   予約が無くても上限まで待つ (復号が終われば早く終わる)。`MediaSubscriber.stop` は
    Promise を返すため待ちを追加できる。devtools の停止は同期関数なので、drain の完了を
-   待つ非同期の停止と UI 表示が要る
+   待つ非同期の停止と UI 表示が要る。実装は `AudioPlayoutSession.drainReserved` に置き、
+   ライブラリと devtools で共有する。`close()` とピア起点の close の上限は 150 ms とする
+   (エラー後の後始末が長くブロックしないため)
 7. **Audio Config の再構成中も Object を保持する (Opus 前提では対象外)**
    初期 configure 待ちと同じ保留キューへ積み、再構成の完了後に到着順で復号する。config が
    途中で変わるのは AAC を使う場合であり、この調査の前提 (Opus) からは外れる。コード上の
@@ -256,6 +271,12 @@ timestamp の順と逆に届くと、隙間 0 のまま内容だけが逆順に�
   未満の判定を加えた。通した回の実測は補間 201 ms、段差 9 件、鳴り始め 155.5 ms、予約の
   追い越し 0 件であり、負荷の高い回は補間 217〜270 ms、段差 10 件だった (同一 run の
   生ログは残していないため、値は負荷で幅がある)
+- 停止の drain (別の修正): 購読側 Stop を 3 回測り、いずれも `missedByReason.stopped` の
+  増分 0 件 / `lastDrain` の `playedMs` 44〜128 ms / `cutMs` 0 ms / 待ち時間 51〜153 ms
+  だった。停止の完了は 94〜209 ms である。`preDecodeDelayMs = 2000` では 200 件 flush し、
+  drain の 225.7 ms は鳴らせたが、残り 1467.8 ms は上限 300 ms のため `stopped` に計上した。
+  上限で打ち切ったとき、復号の出力が届かなかった flush 分は `lastDrain.undecodedFlushedObjects`
+  に件数だけ残る (復号していないため長さは分からず、`stopped` には入らない)
 - 計器の `gapCount` / `gapMs` は購読の開始からの累積であり、波形の無音は収録区間
   (60.74 秒) の値である。収録の前後の穴は計器だけに含まれるため、両者は一致しない
   (実測: `gapMs` 73.3 ms に対し波形の無音 39.9 ms)。同じ収録区間の境界の段差は
@@ -280,8 +301,9 @@ timestamp の順と逆に届くと、隙間 0 のまま内容だけが逆順に�
 ## 残る不明点
 
 - 実機のスピーカーで「プチプチ」と聞こえるかの確認はしていない。波形の段差からの推定である
-- 静かな経路 (目標遅延 50 ms) での購読 Stop の切断量は測っていない。実測は目標遅延 100 ms の
-  条件である
+- 購読 Stop の drain は、目標遅延 100〜160 ms の条件で `stopped` 0 件を確認した。目標遅延
+  50 ms の静かな経路では未計測である。`preDecodeDelayMs > 0` では上限 300 ms を超える保持分が
+  切られるため、遅延を大きく設定したときの停止の聞こえ方は聴感で確認していない
 - Datagram の損失があるときの穴の量を測っていない。今回の収録は損失 0 相当であり、
   Opus の PLC を使えない状態で 20 ms のフレームが落ちたときに、補間で埋まる割合と、
   冗長度 2 で救える割合は未計測である

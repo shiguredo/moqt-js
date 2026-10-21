@@ -293,3 +293,25 @@ test("PreDecodeDelayStage: キューが空になったら短縮を解除する",
   clock.advance(1);
   assert.isTrue(due.flat().includes("d"), "元の期限で通知すること");
 });
+
+/**
+ * 完了条件: `flush` は保持している Object を期限を待たずに通知し、流した件数を返す。
+ * 停止時の drain が「復号の出力をいくつ待つか」を決めるのに使う。
+ */
+test("flush: 保持分をまとめて通知し、流した件数を返す", (): void => {
+  const { stage, clock, due } = makeStage({ delayMs: 1_000 });
+  stage.push("a");
+  stage.push("b");
+  assert.deepEqual(due, [], "期限前は通知しないこと");
+
+  const flushed = stage.flush();
+
+  assert.equal(flushed, 2, "流した件数を返すこと");
+  assert.deepEqual(due, [["a", "b"]], "積んだ順に通知すること");
+  assert.equal(stage.size, 0);
+  // タイマーも解除されており、時間が経っても二重に通知しない
+  clock.advance(2_000);
+  assert.deepEqual(due, [["a", "b"]]);
+  // 空の段の flush は 0 件
+  assert.equal(stage.flush(), 0);
+});

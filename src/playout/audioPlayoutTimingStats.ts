@@ -94,6 +94,41 @@ export interface AudioPlayoutMiss {
   readonly arrivalMs: number | null;
 }
 
+/**
+ * drain (停止時に予約済みの音を鳴らし切る待ち) の結果
+ *
+ * 停止の要求から `AudioContext` を閉じるまでに、予約済みの音をどれだけ鳴らせて、
+ * どれだけを上限で切ったかを残す。`missedByReason.stopped` は「切った量」だけを持つため、
+ * 待って鳴らせた量はこの値で読む。
+ */
+export interface AudioPlayoutDrainStats {
+  /** drain を始めた時点で予約されていた長さ (ミリ秒) */
+  readonly pendingMsAtStart: number;
+  /** drain で待つと決めた上限の時間 (ミリ秒) */
+  readonly requestedMs: number;
+  /** 実際に待った時間 (ミリ秒) */
+  readonly waitedMs: number;
+  /**
+   * drain で鳴らすことになった合計 (ミリ秒)
+   *
+   * 「停止した時点で予約されていた残り + drain 中に増えた予約 - 切った量」である。
+   * 停止時の予約残を含むため、drain の間に新しく鳴らし始めた長さだけではない
+   */
+  readonly playedMs: number;
+  /** 上限で切った長さ (ミリ秒)。`missedByReason.stopped` の増分と一致する */
+  readonly cutMs: number;
+  /** 停止時に復号前の段から flush した Object の件数 */
+  readonly flushedObjects: number;
+  /**
+   * flush したが、drain の終了までに復号の出力が届かなかった Object の件数
+   *
+   * 上限 (300 ms / 150 ms) で drain を打ち切ったときの残りと、復号器の作り直しで捨てられた
+   * 分を含む。復号されていないため長さは分からず、`playedMs` / `cutMs` /
+   * `missedByReason.stopped` のどれにも含まれない
+   */
+  readonly undecodedFlushedObjects: number;
+}
+
 /** 音声の再生の観測値 (表示とテスト用 API へ出す snapshot) */
 export interface AudioPlayoutTimingSnapshot {
   /** 直近に鳴らすと決めた音の再生予定時刻 (ミリ秒)。予定を決められなければ null */
@@ -204,6 +239,8 @@ export interface AudioPlayoutTimingSnapshot {
   readonly boundaryStepCount: number;
   /** バッファ境界の段差の最大 (0 から 1 の振幅。記録期間中の最大) */
   readonly boundaryStepMax: number;
+  /** 直近の停止で行った drain の結果。まだ停止していなければ null */
+  readonly lastDrain: AudioPlayoutDrainStats | null;
 }
 
 /** どの理由も 0 件の累積 */
@@ -244,6 +281,7 @@ export const EMPTY_AUDIO_PLAYOUT_TIMING: AudioPlayoutTimingSnapshot = {
   lateStartMaxMs: 0,
   boundaryStepCount: 0,
   boundaryStepMax: 0,
+  lastDrain: null,
 };
 
 /**
@@ -295,6 +333,8 @@ export class AudioPlayoutTimingStats {
   private missedMs = 0;
   private missedTotals = emptyMissTotals();
   private recentMisses: AudioMissEvent[] = [];
+  // 直近の停止で行った drain の結果 (購読の開始 (reset) で消す)
+  private lastDrain: AudioPlayoutDrainStats | null = null;
   private stretchUnavailableFrames = 0;
   // 補間で埋まらなかった無音の穴 (回数・合計 ms・最大 ms) と、そのうち予約できなかった分
   private gapCount = 0;
@@ -412,6 +452,54 @@ export class AudioPlayoutTimingStats {
   }
 
   /**
+   * 最後に鳴り終わる予約の時刻 (ミリ秒)
+   *
+   * 停止時に「あとどれだけ待てば予約済みが鳴り終わるか」を決めるのに使う。鳴り終わって
+   * いない予約が無ければ null。時刻は `performance.now()` と同じ軸である
+   *
+   * @param nowMs - 求める時刻 (ミリ秒)
+   */
+  pendingEndMs(nowMs: number): number | null {
+    this.prunePending(nowMs);
+    let endMs: number | null = null;
+    for (const pending of this.pending) {
+      if (endMs === null || pending.endMs > endMs) {
+        endMs = pending.endMs;
+      }
+    }
+    return endMs;
+  }
+
+  /**
+   * 予約済みでまだ鳴り終わっていない長さ (ミリ秒)
+   *
+   * 停止した時点で切ることになる量である。`recordStopped` の直前に読むと、上限で切る量を
+   * 待ち時間の側から先に読める
+   *
+   * @param nowMs - 求める時刻 (ミリ秒)
+   */
+  pendingMs(nowMs: number): number {
+    this.prunePending(nowMs);
+    let totalMs = 0;
+    for (const pending of this.pending) {
+      totalMs += Math.max(0, pending.endMs - Math.max(pending.startMs, nowMs));
+    }
+    return totalMs;
+  }
+
+  /**
+   * drain の結果を残す
+   *
+   * `recordStopped` の後に呼ぶ。`cutMs` は `recordStopped` が数えた量と一致する
+   * (drain で鳴らせた分は `playedMs` で読む)。
+   *
+   * @param stats - drain の結果
+   */
+  recordDrain(stats: AudioPlayoutDrainStats): void {
+    this.lastDrain = stats;
+  }
+
+  /**
    * 目標遅延を閉ループで決めるための観測を求める
    *
    * 表示用の分布 (`snapshot`) は直近 10 秒の窓である。目標を増やした結果がそこへ現れる
@@ -489,6 +577,7 @@ export class AudioPlayoutTimingStats {
       lateStartMaxMs: this.lateStartMaxMs,
       boundaryStepCount: this.boundaryStepCount,
       boundaryStepMax: this.boundaryStepMax,
+      lastDrain: this.lastDrain,
     };
   }
 
@@ -578,6 +667,7 @@ export class AudioPlayoutTimingStats {
     this.missedMs = 0;
     this.missedTotals = emptyMissTotals();
     this.recentMisses = [];
+    this.lastDrain = null;
     this.stretchUnavailableFrames = 0;
     this.gapCount = 0;
     this.gapMs = 0;

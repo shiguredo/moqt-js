@@ -566,13 +566,13 @@ interface MediaSubscriberCallbacks {
 
 ### メソッド
 
-| メソッド                           | 説明                                                                                                                                                                                                                                                                                                                                                                        |
-| ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `start(): Promise<void>`           | 購読開始（`"created"` と `"stopped"` から呼べる。開始を取り消すには `close()` を使う。実行中にピア起点の close または `close()` が重なると `"closed"` を優先して失敗する。失敗時は解放して遷移前の state に戻る。解放 (`close()` とピア起点の close / `stop()` の解放) が進行している間は `cannot start while closing` で拒否する）                                         |
-| `stop(): Promise<void>`            | 購読停止（`"active"` からのみ。`"subscribing"` を含むそれ以外は `cannot stop in state` で throw。解放して `"stopped"` にする。ピア起点の close の解放中は進行中の解放を共有して完了を待つ。解放の失敗時は state と `onClose` を変えず元のエラーを throw。`close()` が解放と終端遷移を進めている間は `cannot stop while closing`）                                           |
-| `requestNewGroup(): Promise<void>` | 新しい Group の開始を要求（REQUEST_UPDATE 送信。値は購読で受信した Object と `LARGEST_OBJECT` の大きい方の次の Group。映像は新しい Group の先頭がキーフレームになる）                                                                                                                                                                                                       |
-| `close(): Promise<void>`           | リソース解放（終端。どの状態からでも可能。開始の取り消しもこれを使う。呼ぶと解放の完了を待たずに閉じたものとして扱い、解放の await 中に届いた Object は統計に数えず復号にも渡さない。進行中の解放（`stop()` / ピア起点の close）は共有して完了を待ち、その成否が結果になる。同時に呼んでも解放と通知は 1 回。解放の失敗時は state と `onClose` を変えず元のエラーを throw） |
-| `getStats(): MediaReceiverStats`   | 受信側の統計情報取得                                                                                                                                                                                                                                                                                                                                                        |
+| メソッド                           | 説明                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `start(): Promise<void>`           | 購読開始（`"created"` と `"stopped"` から呼べる。開始を取り消すには `close()` を使う。実行中にピア起点の close または `close()` が重なると `"closed"` を優先して失敗する。失敗時は解放して遷移前の state に戻る。解放 (`close()` とピア起点の close / `stop()` の解放) が進行している間は `cannot start while closing` で拒否する）                                                                                                                                                                                                                                                                          |
+| `stop(): Promise<void>`            | 購読停止（`"active"` からのみ。`"subscribing"` を含むそれ以外は `cannot stop in state` で throw。解放して `"stopped"` にする。停止の要求後は新しい音声 Object を受け付けず、復号前の遅延の段に保持していた音声を flush して復号へ流し、予約済みの音が鳴り終わるまで待ってから `AudioContext` を閉じる（drain。最大 300 ms）。鳴らせた量と切った量は `getStats().audio.playoutTiming.lastDrain` で読める。ピア起点の close の解放中は進行中の解放を共有して完了を待つ。解放の失敗時は state と `onClose` を変えず元のエラーを throw。`close()` が解放と終端遷移を進めている間は `cannot stop while closing`） |
+| `requestNewGroup(): Promise<void>` | 新しい Group の開始を要求（REQUEST_UPDATE 送信。値は購読で受信した Object と `LARGEST_OBJECT` の大きい方の次の Group。映像は新しい Group の先頭がキーフレームになる）                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `close(): Promise<void>`           | リソース解放（終端。どの状態からでも可能。開始の取り消しもこれを使う。呼ぶと解放の完了を待たずに閉じたものとして扱い、解放の await 中に届いた Object は統計に数えず復号にも渡さない。進行中の解放（`stop()` / ピア起点の close）は共有して完了を待ち、その成否が結果になる。同時に呼んでも解放と通知は 1 回。解放の失敗時は state と `onClose` を変えず元のエラーを throw）                                                                                                                                                                                                                                  |
+| `getStats(): MediaReceiverStats`   | 受信側の統計情報取得                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 
 ### プロパティ
 
@@ -614,6 +614,17 @@ created / stopped ──────────► subscribing ─────�
 
 `stop()` は `close()` と同じ解放を行い、`mediaStream` と `catalog` は無効になる。
 再開するときは `start()` を呼び、再 start 後の新しい `mediaStream` を使う。
+`stop()` は停止の要求後、新しい音声 Object の受付を止め、復号前の遅延の段
+(`preDecodeDelayMs`) に保持していた音声を flush して復号へ流し、予約済みの音が鳴り終わる
+まで待ってから `AudioContext` を閉じる (drain)。待ち時間は「最後に鳴り終わる予約 - 現在 +
+余裕 100 ms」を 0〜300 ms にクランプした値である。flush 分の復号の出力は、投入順で対応
+させて flush した Object のものだけを待ち、予約されるまで待つ。flush があるときは、予約が
+無くても上限まで待つ (復号が終われば早く終わる)。上限で鳴り切れなかった
+分だけが `getStats().audio.playoutTiming.missedByReason.stopped` に残り、鳴らせた量・切った量・
+待った時間・flush した件数・復号の出力が届かなかった件数 (`undecodedFlushedObjects`) は
+同 `lastDrain` で読める。
+`close()` とピア起点の close も drain するが、後始末が長くブロックしないよう上限は 150 ms と
+する。
 `close()` のあとに `start()` を呼ぶと `cannot start in state: closed` で拒否される。
 `stop()` の成功時に `onClose` は通知しない (停止であり終端ではない)。
 
@@ -777,6 +788,26 @@ interface AudioPlayoutTimingSnapshot {
   missedByReason: Record<AudioMissReason, { count: number; ms: number }>;
   // 直近に鳴らさなかった音 (古い順、最大 30 件)
   recentMisses: AudioMissEvent[];
+  // 直近の停止の drain の結果。停止していなければ null
+  lastDrain: AudioPlayoutDrainStats | null;
+}
+
+// 直近の停止で予約済みの音を鳴らし切った結果。時刻と長さはミリ秒
+interface AudioPlayoutDrainStats {
+  // 停止を始めた時点で予約されていた長さ
+  pendingMsAtStart: number;
+  // drain で待つと決めた上限
+  requestedMs: number;
+  // 実際に待った時間
+  waitedMs: number;
+  // 鳴らすことになった合計 (停止時の残り + drain 中に増えた予約 - 切った量)
+  playedMs: number;
+  // 上限で切った長さ。missedByReason.stopped の増分と一致する
+  cutMs: number;
+  // 停止時に復号前の段から flush した件数と、復号の出力が届かなかった件数
+  // (復号器の作り直しで捨てられた分を含む)
+  flushedObjects: number;
+  undecodedFlushedObjects: number;
 }
 
 // 分布の要約 (ミリ秒)

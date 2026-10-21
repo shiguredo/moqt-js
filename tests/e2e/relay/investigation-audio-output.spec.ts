@@ -927,6 +927,8 @@ interface SubscriberStopRecord {
   round: number;
   stopClickAtMs: number;
   stopClickDoneMs: number;
+  /** Stop の完了 (status が disconnected になった) までの時間 (ミリ秒) */
+  stopDurationMs: number;
   beforeStop: unknown;
   afterStop: unknown;
   /** 停止直前の目標遅延 (appliedMs / feedbackTargetMs / jitterTargetMs) */
@@ -936,6 +938,8 @@ interface SubscriberStopRecord {
   /** 停止時の missedMs / playedMs */
   missedMs: { before: number | null; after: number | null };
   playedMs: { before: number | null; after: number | null };
+  /** drain の結果 (鳴らせた量・切った量・待ち時間・flush 件数) */
+  lastDrain: unknown;
 }
 
 // Lead 依頼 1: 購読側 Stop で切られる「予約済みで鳴らなかった音」を 3 回測る。
@@ -969,6 +973,28 @@ test("調査: 購読側の Stop の切断量を 3 回測る", async ({ browser }
       const stopClickAtMs = Date.now();
       await page.getByTestId("subscriber-stop-button").click();
       const stopClickDoneMs = Date.now();
+      // drain を含む停止の完了を待つ (status が disconnected になるまで)
+      const stopWaitStartedAtMs = Date.now();
+      let stopCompletedAtMs = stopWaitStartedAtMs;
+      for (;;) {
+        const subscriber = (
+          (await readStats(page)) as {
+            subscriber: { status: string; statusMessage: string } | null;
+          }
+        ).subscriber;
+        // 停止の完了は statusMessage が "Ready to subscribe" に戻った時点である。
+        // status は停止の入口で "disconnected" になるため完了の判定には使えない
+        if (subscriber === null || subscriber.statusMessage === "Ready to subscribe") {
+          stopCompletedAtMs = Date.now();
+          break;
+        }
+        if (Date.now() - stopWaitStartedAtMs > 5_000) {
+          stopCompletedAtMs = Date.now();
+          break;
+        }
+        await page.waitForTimeout(20);
+      }
+      const stopDurationMs = stopCompletedAtMs - stopClickAtMs;
       // teardown の unsubscribe と recordStopped の反映を待つ
       await page.waitForTimeout(1_500);
       const afterStop = await readStats(page);
@@ -991,6 +1017,7 @@ test("調査: 購読側の Stop の切断量を 3 回測る", async ({ browser }
                 missedMs: number;
                 playedMs: number;
                 missedByReason: Record<string, { count: number; ms: number }>;
+                lastDrain: unknown;
               };
             };
           } | null;
@@ -1002,6 +1029,7 @@ test("調査: 購読側の Stop の切断量を 3 回測る", async ({ browser }
         round,
         stopClickAtMs,
         stopClickDoneMs,
+        stopDurationMs,
         beforeStop,
         afterStop,
         targetBefore: beforeSubscriber?.avSync.delays.audioDelayFeedback ?? null,
@@ -1033,12 +1061,15 @@ test("調査: 購読側の Stop の切断量を 3 回測る", async ({ browser }
           before: beforeSubscriber?.audio.playoutTiming.playedMs ?? null,
           after: afterSubscriber?.audio.playoutTiming.playedMs ?? null,
         },
+        lastDrain: afterSubscriber?.audio.playoutTiming.lastDrain ?? null,
       };
       records.push(record);
       console.log(
-        `購読側 Stop ${String(round)} 回目: 目標遅延 applied=${String((record.targetBefore as { appliedMs: number } | null)?.appliedMs)} ms / ` +
+        `購読側 Stop ${String(round)} 回目: 完了まで ${stopDurationMs.toFixed(0)} ms / ` +
+          `目標遅延 applied=${String((record.targetBefore as { appliedMs: number } | null)?.appliedMs)} ms / ` +
           `jitterTarget=${String((record.targetBefore as { jitterTargetMs: number } | null)?.jitterTargetMs)} ms, ` +
           `予約済みで鳴らなかった音 ${String(record.stoppedAdded.count)} 件 / ${record.stoppedAdded.ms.toFixed(1)} ms, ` +
+          `lastDrain=${JSON.stringify(record.lastDrain)}, ` +
           `missedMs ${String(record.missedMs.before)} → ${String(record.missedMs.after)}, ` +
           `playedMs ${String(record.playedMs.before)} → ${String(record.playedMs.after)}`,
       );
@@ -1053,6 +1084,68 @@ test("調査: 購読側の Stop の切断量を 3 回測る", async ({ browser }
   writeFileSync(
     join(OUTPUT_DIR, "subscriber-stop-repeat.json"),
     `${JSON.stringify({ generatedAt: new Date().toISOString(), records }, null, 2)}\n`,
+  );
+});
+
+// Lead 依頼: preDecodeDelayMs を指定した購読を停止したとき、復号前の段の保持分が
+// flush され、drain の間 (最大 300 ms) 鳴ることを確かめる。停止で切られた量と lastDrain を
+// 記録する。値の判定はしない。
+test("調査: pre-decode 遅延ありで購読を止めたときの drain", async ({ page }) => {
+  test.skip(process.env.MOQT_INVESTIGATION !== "1", "MOQT_INVESTIGATION=1 のときだけ動かす");
+  test.setTimeout(RELAY_TEST_TIMEOUT_MS * 3);
+  const moqtUri = requireRelayUri();
+  if (moqtUri === null) {
+    return;
+  }
+  writeEnvironment(moqtUri);
+  await installAudioOutputTap(page);
+  const namespace = formatTrackNamespace(createTestNamespace());
+  // 2 秒の復号前遅延。5 秒受信すると段に約 2 秒分の音声が保持されている
+  await startBoth(page, moqtUri, namespace, "publish-done", { preDecodeDelayMs: "2000" });
+  await waitForAudio(page);
+  await activateSubscriberTap(page);
+  await page.waitForTimeout(5_000);
+  const beforeStop = await readStats(page);
+  const stopClickAtMs = Date.now();
+  await page.getByTestId("subscriber-stop-button").click();
+  // drain を含む停止の完了を待つ (statusMessage が "Ready to subscribe" に戻るまで)
+  const stopWaitStartedAtMs = Date.now();
+  let stopCompletedAtMs = stopWaitStartedAtMs;
+  for (;;) {
+    const subscriber = (
+      (await readStats(page)) as {
+        subscriber: { status: string; statusMessage: string } | null;
+      }
+    ).subscriber;
+    if (subscriber === null || subscriber.statusMessage === "Ready to subscribe") {
+      stopCompletedAtMs = Date.now();
+      break;
+    }
+    if (Date.now() - stopWaitStartedAtMs > 5_000) {
+      stopCompletedAtMs = Date.now();
+      break;
+    }
+    await page.waitForTimeout(20);
+  }
+  const stopDurationMs = stopCompletedAtMs - stopClickAtMs;
+  await page.waitForTimeout(1_000);
+  const afterStop = await readStats(page);
+  const afterPlayoutTiming = (
+    afterStop as {
+      subscriber: { audio: { playoutTiming: unknown } } | null;
+    }
+  ).subscriber?.audio.playoutTiming;
+  console.log(
+    `pre-decode 遅延ありの Stop: 完了まで ${stopDurationMs.toFixed(0)} ms / ` +
+      `playoutTiming=${JSON.stringify(afterPlayoutTiming)}`,
+  );
+  writeFileSync(
+    join(OUTPUT_DIR, "subscriber-stop-predecode-delay.json"),
+    `${JSON.stringify(
+      { generatedAt: new Date().toISOString(), stopDurationMs, beforeStop, afterStop },
+      null,
+      2,
+    )}\n`,
   );
 });
 

@@ -87,15 +87,19 @@ import { MAX_PRE_DECODE_DELAY_MS } from "moqt-js";
 
 ## 停止時の扱い
 
-購読の停止時は、遅延の段に保持している Object を復号へ流さずに破棄する。ライブラリの
-`MediaSubscriber.stop` は `PreDecodeDelayStage.stop` を呼び、段はタイマーとキューを捨てる。
-moqt-devtools も停止時に同じである。そのため、停止の時点で保持していた Object の分
-(最大で `preDecodeDelayMs`) は復号も再生もされない。遅延を 0 に動的に変えたときだけは、
-保持している Object を復号へ流してからキューをやめる。
+購読の停止時は、遅延の段に保持している音声 Object を flush して復号へ流す。ライブラリの
+`MediaSubscriber.stop` は `PreDecodeDelayStage.flush` を呼んでから段を止め、flush した
+Object の復号出力が予約されるまで待つ。そのうえで、予約済みの音が鳴り終わるまで待ってから
+`AudioContext` を閉じる (drain)。待ち時間は「最後に鳴り終わる予約 - 現在 + 余裕 100 ms」を
+0〜300 ms にクランプした値である。flush した音があるときは、予約が無くてもこの上限まで
+待つ (復号が終われば早く終わる)。moqt-devtools も同じで、停止は drain の完了を待つ非同期
+の処理になる。
 
-停止時に保持分まで聞きたい場合は、停止の前に `preDecodeDelayMs` だけ待つか、遅延を 0 に
-して保持分を復号へ流してから停止する。受信済みの音声を鳴らし切る処理は今後の課題であり、
-詳細は `docs/AUDIO_PLAYOUT_GAPS_AND_TAIL.md` にある。
+停止時の切断量は計器で読む。切った量は `missedByReason.stopped`、drain で鳴らせた量・
+切った量・待ち時間・flush した件数・復号されなかった件数 (`undecodedFlushedObjects`) は
+`lastDrain` に残る。`close()` とピア起点の close も
+drain するが、上限は 150 ms である。映像は drain の対象外であり、停止時に破棄する
+(詳細は `docs/AUDIO_PLAYOUT_GAPS_AND_TAIL.md` にある)。
 
 ## A/V 同期と受信側の追いつき
 
@@ -181,7 +185,9 @@ moqt-devtools の Subscriber の設定画面に `Playback Delay (Audio + Video)`
   見えた後に追いつくことがある。この遅延機能はその挙動を変えない。
 - バックグラウンドタブなどでタイマーが抑制されると、期限が遅れて表示がさらに遅れる。
   順序は保たれ、復帰後にまとめて処理される。
-- `close()` / `stop()` は保持中の Object とタイマーを破棄する。閉じた後に復号は走らない。
+- `close()` / `stop()` は音声の保持中の Object を flush して復号へ流し、予約済みが鳴り終わる
+  まで待ってからタイマーとキューを破棄する。停止の後始末 (drain と `AudioContext` の close) が
+  終わった後に復号は走らない。映像は flush せずに破棄する。
 - 映像デコーダーのエラー時と音声デコーダーのエラー時は、復号前の段も破棄する。古い入力を
   復号器へ渡して同じエラーを繰り返さないためである。音声の追いつきで復号器を作り直すときは
   破棄しない。段が保持しているのはこれから復号する直近の入力であり、捨てると指定した遅延の
