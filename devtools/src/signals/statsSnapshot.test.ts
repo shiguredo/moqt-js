@@ -1,5 +1,5 @@
 import { test, assert } from "vite-plus/test";
-import { createSubscriberInstance, EMPTY_AV_SYNC } from "./subscriber";
+import { createSubscriberInstance, EMPTY_AV_SYNC, EMPTY_AUDIO_DELAY_FEEDBACK } from "./subscriber";
 import { EMPTY_PLAYOUT_TIMING } from "../utils/playoutTimingStats";
 import { EMPTY_PUBLISH_TIMING } from "../utils/publishTimingStats";
 import { EMPTY_AUDIO_PLAYOUT_TIMING } from "../../../src/playout/audioPlayoutTimingStats.ts";
@@ -302,17 +302,12 @@ test("buildSubscriberStats: Audio Playback の穴・段差・drain・上限を J
   instance.audioPlayoutTiming.value = playoutTiming;
   instance.audioReceiveDelayMs.value = 120.5;
   instance.audioMaxReceiveDelayMs.value = 201.25;
-  // 時間圧縮が続いて上限を 100 ms から 160 ms へ広げている状態
-  instance.avSync.value = {
-    ...EMPTY_AV_SYNC,
-    delays: {
-      ...EMPTY_AV_SYNC.delays,
-      audioDelayFeedback: {
-        ...EMPTY_AV_SYNC.delays.audioDelayFeedback,
-        appliedCeilingMs: 160,
-        compressionMsPerSecond: 20,
-      },
-    },
+  // 時間圧縮が続いて上限を 100 ms から 160 ms へ広げている状態。音声だけの購読でも
+  // 読めるよう、A/V 同期ではなく音声の統計が持つ閉ループの値を使う
+  instance.audioDelayFeedback.value = {
+    ...EMPTY_AUDIO_DELAY_FEEDBACK,
+    appliedCeilingMs: 160,
+    compressionMsPerSecond: 20,
   };
 
   const stats = buildSubscriberStats(instance);
@@ -332,6 +327,11 @@ test("buildSubscriberStats: Audio Playback の穴・段差・drain・上限を J
       maxReceiveDelayMs: number;
       appliedCeilingMs: number;
       compressionMsPerSecond: number;
+      audioDelayFeedback: {
+        appliedMs: number;
+        appliedCeilingMs: number;
+        compressionMsPerSecond: number;
+      };
       playoutTiming: {
         gapCount: number;
         gapMs: number;
@@ -357,6 +357,14 @@ test("buildSubscriberStats: Audio Playback の穴・段差・drain・上限を J
   assert.equal(json.audio.maxReceiveDelayMs, 201.25);
   assert.equal(json.audio.appliedCeilingMs, 160);
   assert.equal(json.audio.compressionMsPerSecond, 20);
+  // 閉ループの内訳も音声の節にあり、音声だけの購読でも読める
+  assert.equal(json.audio.audioDelayFeedback.appliedCeilingMs, 160);
+  assert.equal(json.audio.audioDelayFeedback.compressionMsPerSecond, 20);
+  assert.equal(
+    json.audio.audioDelayFeedback.appliedMs,
+    EMPTY_AUDIO_DELAY_FEEDBACK.appliedMs,
+    "閉ループの内訳の既定値を変えないこと",
+  );
   assert.deepEqual(json.audio.playoutTiming, {
     ...playoutTiming,
     // JSON へ直列化しても値は同じ (bigint などは無い)

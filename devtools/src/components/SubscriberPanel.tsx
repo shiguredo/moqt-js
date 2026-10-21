@@ -790,6 +790,25 @@ function SubscriberStats({ statsSignal }: { statsSignal: ReadonlySignal<Subscrib
           <StatList
             items={[
               {
+                // 実際に使う目標遅延。揺らぎだけから求めた値 (jitterTargetMs) と閉ループの
+                // 目標の大きい方を上限で切った値
+                label: "appliedMs",
+                value: formatMs(stats.audio.audioDelayFeedback.appliedMs),
+                testId: "subscriber-audio-playback-applied-ms",
+              },
+              {
+                // 揺らぎだけから求めた目標遅延 (NetEq の移植)
+                label: "jitterTargetMs",
+                value: formatMs(stats.audio.audioDelayFeedback.jitterTargetMs),
+                testId: "subscriber-audio-playback-jitter-target-ms",
+              },
+              {
+                // 直前に目標を動かした理由 (initial / compression / gap / backlog など)
+                label: "delayReason",
+                value: stats.audio.audioDelayFeedback.reason,
+                testId: "subscriber-audio-playback-delay-reason",
+              },
+              {
                 label: "appliedCeilingMs",
                 value: formatMs(stats.audio.appliedCeilingMs),
                 testId: "subscriber-audio-playback-applied-ceiling",

@@ -6,6 +6,7 @@ import type { AudioPlayoutTimingSnapshot } from "../../../src/playout/audioPlayo
 import type { AudioTimestampOffsetStats } from "../../../src/audioTimestampClock.ts";
 import type { AudioPublishCatchUpStats } from "../../../src/audioPublishCatchUp.ts";
 import type { AudioReceiveCatchUpStats } from "../../../src/playout/audioReceiveCatchUp.ts";
+import type { AudioDelayFeedbackSnapshot } from "../../../src/playout/audioDelayFeedback.ts";
 import type { HostDelaySnapshot } from "../utils/hostDelayTracker.ts";
 import type { PreconditionWarning } from "../utils/preconditionWarnings.ts";
 import type { StatusType } from "../types";
@@ -272,9 +273,16 @@ export interface SubscriberAudioStats {
    * 直近 1 秒に時間圧縮で詰めた音の長さ (ミリ秒/秒)
    *
    * 0 より大きい間は声が粗くなる操作が続いている。`playoutCompressedMs` の増分を
-   * 1 秒あたりに直した値であり、`avSync.delays.audioDelayFeedback` から写す
+   * 1 秒あたりに直した値であり、`audioDelayFeedback` から写す
    */
   compressionMsPerSecond: number;
+  /**
+   * 音声の目標遅延の閉ループの内訳 (src/playout/audioDelayFeedback.ts)
+   *
+   * 目標・実際に使う値・明示上限・広げた上限・圧縮の速さを持つ。音声だけを購読するときは
+   * `avSync` を作らないため、目標遅延の内訳はここから読む
+   */
+  audioDelayFeedback: AudioDelayFeedbackSnapshot;
   /**
    * 音声の再生の観測値 (src/playout/audioPlayoutTimingStats.ts)。鳴るはずの時刻 (再生予定時刻)・
    * 届いた時刻・鳴り始める時刻と、予定に対する余裕の分布 (直近 10 秒)、鳴らなかった量
@@ -466,7 +474,7 @@ export function buildSubscriberStats(sub: SubscriberInstance): SubscriberStats {
   const audioLevel = sub.audioLastLevel.value;
   // 目標遅延の閉ループの観測値は A/V 同期の snapshot が持つ。音声の表示へ写して、
   // 圧縮が続いているか (上限を広げているか) を音声の節だけで読めるようにする
-  const audioDelayFeedback = sub.avSync.value.delays.audioDelayFeedback;
+  const audioDelayFeedback = sub.audioDelayFeedback.value;
   return {
     id: sub.id,
     status: sub.status.value,
@@ -518,9 +526,11 @@ export function buildSubscriberStats(sub: SubscriberInstance): SubscriberStats {
       playoutConcealedMs: sub.audioPlayoutConcealedMs.value,
       playoutConcealments: sub.audioPlayoutConcealments.value,
       // 閉ループが広げた目標遅延の上限と、直近 1 秒に詰めた長さ
-      // (avSync.delays.audioDelayFeedback の snapshot から写す)
+      // (audioDelayFeedback の snapshot から写す。音声だけの購読でも読める)
       appliedCeilingMs: audioDelayFeedback.appliedCeilingMs,
       compressionMsPerSecond: audioDelayFeedback.compressionMsPerSecond,
+      // 目標遅延の閉ループの内訳 (目標・実際に使う値・明示上限・広げた上限・圧縮の速さ)
+      audioDelayFeedback,
       playoutTiming: sub.audioPlayoutTiming.value,
       playoutCatchUp: sub.audioPlayoutCatchUp.value,
       // メインスレッドの停止と音声の到着の重なり (devtools/src/utils/hostDelayTracker.ts)

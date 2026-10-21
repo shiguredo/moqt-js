@@ -422,8 +422,13 @@ export const AUDIO_PLAYOUT_TIMING_HELP: SectionHelp = {
         "Result of the last stop (drain), in ms: the reserved sounds played before closing the AudioContext, the part cut at the wait limit, the time actually waited, and the wait limit that was asked for. - before the first stop. drainCutMs matches the increase of missedByReason.stopped; drainPlayedMs includes the sounds that were already reserved at the stop.",
     },
     {
+      term: "appliedMs / jitterTargetMs / delayReason",
+      description:
+        "The target delay actually used (ms), the target derived only from the arrival jitter (NetEq, ms), and the reason the closed loop last moved the target (initial, compression, gap, backlog, and so on). appliedMs is the larger of the jitter target and the closed loop target, capped by the applied ceiling. They are read from the same snapshot as the A/V Sync breakdown when both tracks are subscribed, and from the audio pipeline when only audio is subscribed.",
+    },
+    {
       term: "appliedCeilingMs",
-      description: `The limit actually applied to the target delay (ms). It is ${AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS} ms normally and widens to ${AUDIO_DELAY_FEEDBACK_ARTIFACT_CEILING_MS} ms while the time compression or the gaps continue, unless the explicit targetLatency caps more tightly. The value actually used is appliedMs in A/V Sync.`,
+      description: `The limit actually applied to the target delay (ms). It is ${AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS} ms normally and widens to ${AUDIO_DELAY_FEEDBACK_ARTIFACT_CEILING_MS} ms while the time compression or the gaps continue, unless the explicit targetLatency caps more tightly. The value actually used is appliedMs in this section (and also in A/V Sync).`,
     },
     {
       term: "compressionMsPerSecond",

@@ -503,6 +503,7 @@ export function resetSubscriberStats(instance: sub.SubscriberInstance): void {
   instance.audioPlayoutDrops.value = 0;
   instance.audioPlayoutTiming.value = EMPTY_AUDIO_PLAYOUT_TIMING;
   instance.audioHostDelay.value = EMPTY_HOST_DELAY;
+  instance.audioDelayFeedback.value = sub.EMPTY_AUDIO_DELAY_FEEDBACK;
   instance.audioPlayoutCatchUp.value = EMPTY_AUDIO_RECEIVE_CATCH_UP;
 }
 
@@ -1326,6 +1327,11 @@ export function useSubscriber(
       const currentMs = nowMs();
       instance.audioPlayoutTiming.value = audioPlayoutTimingRef.current.snapshot(currentMs);
       instance.audioHostDelay.value = hostDelayTrackerRef.current.snapshot(currentMs);
+      // 目標遅延の閉ループの内訳。音声だけの購読でも A/V 同期の snapshot は作らないため、
+      // 時間軸から直接読む (音声だけでも jitter buffer と閉ループは動かす)
+      instance.audioDelayFeedback.value = jitterBufferEnabledRef.current
+        ? playoutTimelineRef.current.audioDelayFeedbackStats()
+        : sub.EMPTY_AUDIO_DELAY_FEEDBACK;
       publishAudioPlayoutCatchUp(instance);
     }, PLAYOUT_TIMING_PUBLISH_INTERVAL_MS);
   }
@@ -1346,6 +1352,9 @@ export function useSubscriber(
     const currentMs = nowMs();
     instance.audioPlayoutTiming.value = audioPlayoutTimingRef.current.snapshot(currentMs);
     instance.audioHostDelay.value = hostDelayTrackerRef.current.snapshot(currentMs);
+    instance.audioDelayFeedback.value = jitterBufferEnabledRef.current
+      ? playoutTimelineRef.current.audioDelayFeedbackStats()
+      : sub.EMPTY_AUDIO_DELAY_FEEDBACK;
     publishAudioPlayoutCatchUp(instance);
   }
 
