@@ -9,11 +9,16 @@
  * 予定を過ぎて鳴り続け、並べすぎの音が捨てられる。
  *
  * そこで、実際に観測した「予定をどれだけ過ぎて鳴ったか」(`latenessMs`) と「到着から鳴り
- * 始めるまで」(`startDelayMs`)、そして「並べすぎで捨てた量」(`missedByReason.backlog`) を
- * 見て目標を増減する。
+ * 始めるまで」(`startDelayMs`)、「並べすぎで捨てた量」(`missedByReason.backlog`)、そして
+ * 「補間で埋まらなかった無音の穴」(`gapCount` / `gapMs`) を見て目標を増減する。
  *
  * - 遅れが続くなら目標を増やす (乱れと、到着から鳴るまでの経路の分を吸収する)
+ * - 穴が空いた後は、最後の穴から `AUDIO_DELAY_FEEDBACK_GAP_QUIET_MS` が経つまで目標を
+ *   下げない (下げた直後に同じ揺らぎで穴が再発する往復を避ける)
  * - 並べすぎで捨てたなら、捨てた長さぶんを吸収できるだけ増やす
+ * - 無音の穴が空いたなら、穴の長さぶんを吸収できるだけ増やす。穴は事後には埋められない
+ *   ため、次に同じ揺らぎが来ても穴にならないよう、先に目標を増やす
+ *   (実測では目標の深さ 86 ms で 60 秒に 24 回、120.5 ms で 0 回になった)
  * - 遅れが許容の中に収まり、捨てが無いなら目標を減らす (必要以上に遅らせない)
  * - 増減は毎秒 1 回までとし、1 回の増加は上限までにする (数秒スケール。行き過ぎを防ぐ)
  * - 目標は `AUDIO_DELAY_FEEDBACK_MIN_MS` から、**実際に適用される上限**の間に収める
@@ -66,11 +71,11 @@ export const AUDIO_DELAY_FEEDBACK_MIN_MS = 50;
 export const AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS = 100;
 
 /**
- * 圧縮 (時間圧縮) が続くときにだけ使う上限 (ミリ秒)
+ * 圧縮か無音の穴が続くときにだけ使う上限 (ミリ秒)
  *
  * 既定の上限 (`AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS` = 100 ms) を超えて目標を上げてよいのは、
- * 圧縮 = 粗さが続いているときだけである。圧縮は「経路が 100 ms では足りていない」証拠で
- * あり、目標を上げれば遅れて届く音が減って圧縮そのものが減る。実測 (2026-10-16、実リレー
+ * 圧縮 = 粗さか無音の穴が続いているときだけである。どちらも「経路が 100 ms では足りて
+ * いない」証拠であり、目標を上げれば遅れて届く音が減って圧縮も穴も減る。実測 (2026-10-16、実リレー
  * 60 秒) では揺らぎだけの目標 (NetEq) が 100〜340 ms に育ち、上限 100 ms が常時拘束されて
  * 時間圧縮が 60 秒で 550〜1000 ms (静かな回でも 556〜996 ms) 続いた。上限を静的に 160 ms へ
  * 上げると圧縮は約 3 割減る回がある一方、鳴り始めが 115 ms から 155 ms へ +40 ms になる
@@ -86,12 +91,13 @@ export const AUDIO_DELAY_FEEDBACK_ARTIFACT_CEILING_MS = 160;
  * 以下である。不感帯 (20 ms) を超える遅れが続く正常な状態でも数 ms/秒 の圧縮は出るため
  * (実測: 圧縮が 0 だった秒は 59 秒中 4〜7 秒)、これを下回る圧縮で上限を上げると遅延の代償
  * だけを払うことになる。逆に、これを超える圧縮が続くなら 100 ms では足りていないと
- * 判断できる
+ * 判断できる。無音の穴が空いたときは、この速さに関係なく「100 ms では足りていない」証拠に
+ * なる (穴は事後には埋められず、クリックとして聞こえるためである)
  */
 export const AUDIO_DELAY_FEEDBACK_COMPRESSION_MIN_MS_PER_SECOND = 5;
 
 /**
- * 上限を上げるまでに、圧縮が続くのを待つ時間 (ミリ秒)
+ * 上限を上げるまでに、圧縮か無音の穴が続くのを待つ時間 (ミリ秒)
  *
  * 到着が一時的に乱れただけでも圧縮は出る。2 秒続いたときだけ「経路が 100 ms では足りない」と
  * みなす。詰め始めてから、その結果が観測の窓 (1 秒) に現れるまでを待つ意味もある。制御は
@@ -100,10 +106,10 @@ export const AUDIO_DELAY_FEEDBACK_COMPRESSION_MIN_MS_PER_SECOND = 5;
 export const AUDIO_DELAY_FEEDBACK_COMPRESSION_CONFIRM_MS = 2_000;
 
 /**
- * 上限を 100 ms へ戻すまでに、圧縮が 0 で経路が静かな状態が続くのを待つ時間 (ミリ秒)
+ * 上限を 100 ms へ戻すまでに、圧縮も穴も 0 で経路が静かな状態が続くのを待つ時間 (ミリ秒)
  *
- * 戻す条件に「揺らぎだけの目標 (`jitterTargetMs`) が 100 ms 以下」を必ず入れる。圧縮が 0 に
- * なっただけで戻すと、揺らぎが 100 ms を超えている経路では、戻した直後に遅れが生じて圧縮が
+ * 戻す条件に「揺らぎだけの目標 (`jitterTargetMs`) が 100 ms 以下」を必ず入れる。圧縮や穴が 0 に
+ * なっただけで戻すと、揺らぎが 100 ms を超えている経路では、戻した直後に遅れが生じて圧縮や穴が
  * 再発し、2 秒でまた 160 ms へ上げる往復になる (周期 20 秒前後で遅延が 60 ms 上下する)。
  * 15 秒は、実測のまれな跳ね (最大 271 ms) が引いてから揺らぎの推定が下がるまでの数秒より
  * 十分に長い
@@ -167,17 +173,32 @@ export const AUDIO_DELAY_FEEDBACK_MAX_STEP_MS = 40;
  */
 export const AUDIO_DELAY_FEEDBACK_DECREASE_MS_PER_SECOND = 10;
 
+/**
+ * 穴が空いた後、目標を下げない時間 (ミリ秒)
+ *
+ * 目標を上げてもすぐ下げると、負荷時に穴が周期的に再発する。実リレーの計測 (2026-10-20、
+ * load average 8.8、61 秒) では、目標が 100 → 154 → 139 → 120 → 102 → 100 → 109 → 160 →
+ * 108 → 131 → 113 ms と往復し、下げた区間で受信の遅れの裾 (最大 118 ms) が目標を超えて
+ * 穴が再発した (gap 3 → 24、unrecoverable 2 → 18、concealments 2 → 13)。穴は一度出た経路
+ * では数秒おきに再発するため、最後の穴から 5 秒は「深めに構える」。
+ * 5 秒は制御の間隔 (1 秒) の数回ぶんであり、実測の穴の再発間隔 (数秒) より長い。
+ * この間も目標を上げる向き (遅れ / 並べすぎ / 穴) は許す
+ */
+export const AUDIO_DELAY_FEEDBACK_GAP_QUIET_MS = 5_000;
+
 /** 目標を動かした理由 */
 export type AudioDelayFeedbackReason =
   // まだ動かしていない (初期値のまま)
   | "initial"
   // 並べすぎで捨てたため増やした
   | "backlog"
+  // 補間で埋まらなかった無音の穴が空いたため増やした
+  | "gap"
   // 予定を過ぎて鳴ったため増やした
   | "lateness"
   // 遅れが許容の中に収まり、捨てが無いため減らした
   | "settled"
-  // 動かす条件がそろっていない (観測が無い、または前回から間隔が空いていない)
+  // 動かす条件がそろっていない (観測が無い、間隔が空いていない、または穴の後のホールド中)
   | "waiting";
 
 /**
@@ -199,6 +220,16 @@ export interface AudioDelayFeedbackObservation {
   readonly backlogMisses: number;
   /** 並べすぎで捨てた音の長さ (ミリ秒、累積) */
   readonly backlogMs: number;
+  /**
+   * 補間で埋まらなかった無音の穴の数 (累積)
+   *
+   * 累積を渡し、このクラスが前回との差を取る (`backlogMisses` と同じ形)。`gapMs` と
+   * 両方があるときだけ差を取る。省いた観測では前回の値を保つ (省略で累積が 0 に戻ると、
+   * 次の観測が新しい穴として数えられるため)
+   */
+  readonly gapCount?: number;
+  /** 補間で埋まらなかった無音の穴の長さ (ミリ秒、累積)。`gapCount` と両方があるときだけ使う */
+  readonly gapMs?: number;
   /**
    * 前の観測から増えた圧縮 (時間圧縮) の長さ (ミリ秒、増分)
    *
@@ -244,7 +275,7 @@ export interface AudioDelayFeedbackSnapshot {
   /**
    * 実際に適用する値に掛けている上限 (ミリ秒)
    *
-   * 広げていないときは `AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS` (100 ms)。圧縮が続くと
+   * 広げていないときは `AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS` (100 ms)。圧縮か穴が続くと
    * `AUDIO_DELAY_FEEDBACK_ARTIFACT_CEILING_MS` (160 ms) まで広がるが、明示設定
    * (`ceilingMs`) があるときはその値までに切る (既定の 100 ms は下回らない)。実際に適用
    * された値は `appliedMs` に出る
@@ -274,6 +305,10 @@ export class AudioDelayFeedback {
   private lastUpdateAtMs: number | null = null;
   private lastBacklogMisses = 0;
   private lastBacklogMs = 0;
+  private lastGapCount = 0;
+  private lastGapMs = 0;
+  // 最後に穴が空いたと観測した時刻 (ミリ秒)。この時刻から一定時間は目標を下げない
+  private lastGapAtMs: number | null = null;
   private lastChangeMs = 0;
   private adjustments = 0;
   private latest: AudioDelayFeedbackObservation | null = null;
@@ -325,9 +360,10 @@ export class AudioDelayFeedback {
    * 閉ループは観測を入力にする制御であり、観測が無い間に目標を動かすと、まだ鳴らしていない
    * 間の表示の遅れ (購読を始めた直後の基準) が変わる
    *
-   * この値に掛ける上限は、圧縮が続いているときだけ `AUDIO_DELAY_FEEDBACK_ARTIFACT_CEILING_MS`
-   * (160 ms) になる。圧縮は経路が 100 ms では足りていない証拠であり、そのときだけ遅延の
-   * 代償を払う。明示設定 (`targetLatencyMs`) は閉ループの目標にだけ掛ける (既存の規則)
+   * この値に掛ける上限は、圧縮か穴が続いているときだけ
+   * `AUDIO_DELAY_FEEDBACK_ARTIFACT_CEILING_MS` (160 ms) になる。どちらも経路が 100 ms では
+   * 足りていない証拠であり、そのときだけ遅延の代償を払う。明示設定 (`targetLatencyMs`) は
+   * 閉ループの目標にだけ掛ける (既存の規則)
    *
    * @param jitterTargetMs - 揺らぎだけから求めた目標遅延 (ミリ秒)
    */
@@ -366,11 +402,25 @@ export class AudioDelayFeedback {
     const backlogMsDelta = Math.max(0, observation.backlogMs - this.lastBacklogMs);
     this.lastBacklogMisses = observation.backlogMisses;
     this.lastBacklogMs = observation.backlogMs;
+    // 穴も同じく前回からの差にする。値を省いた観測で累積を 0 に戻すと、次の観測が
+    // 新しい穴として数えられるため、省いたときは前回の値をそのまま使う
+    let gapDelta = 0;
+    let gapMsDelta = 0;
+    if (observation.gapCount !== undefined && observation.gapMs !== undefined) {
+      gapDelta = Math.max(0, observation.gapCount - this.lastGapCount);
+      gapMsDelta = Math.max(0, observation.gapMs - this.lastGapMs);
+      this.lastGapCount = observation.gapCount;
+      this.lastGapMs = observation.gapMs;
+    }
+    if (gapDelta > 0) {
+      // 穴が空いた。この時刻から一定時間は目標を下げない (下げた直後の再発を避ける)
+      this.lastGapAtMs = observation.atMs;
+    }
     this.lastUpdateAtMs = observation.atMs;
 
-    // 圧縮が続くときだけ上限を広げる。目標を動かす前に判断する (同じ観測で新しい上限まで
+    // 圧縮か穴が続くときだけ上限を広げる。目標を動かす前に判断する (同じ観測で新しい上限まで
     // 上げてよい)
-    this.updateArtifactCeiling(elapsedMs, observation.jitterTargetMs);
+    this.updateArtifactCeiling(elapsedMs, observation.jitterTargetMs, gapDelta);
 
     const latenessP50Ms = observation.latenessMs?.p50 ?? null;
     const previousTargetMs = this.feedbackTargetMs;
@@ -383,6 +433,15 @@ export class AudioDelayFeedback {
         AUDIO_DELAY_FEEDBACK_MAX_STEP_MS,
       );
       this.reason = "backlog";
+    } else if (gapDelta > 0) {
+      // 補間で埋まらなかった無音の穴が空いた。穴の長さぶんを吸収できるだけ増やす。
+      // 穴は事後には埋められないため、次に同じ揺らぎが来ても穴にならないよう先に増やす
+      changeMs = clampTarget(
+        gapMsDelta + AUDIO_DELAY_FEEDBACK_MARGIN_MS,
+        AUDIO_DELAY_FEEDBACK_MIN_STEP_MS,
+        AUDIO_DELAY_FEEDBACK_MAX_STEP_MS,
+      );
+      this.reason = "gap";
     } else if (latenessP50Ms !== null && latenessP50Ms > AUDIO_DELAY_FEEDBACK_TOLERANCE_MS) {
       // 予定を過ぎて鳴っている。過ぎた分を吸収できるだけ増やす
       changeMs = clampTarget(
@@ -396,6 +455,15 @@ export class AudioDelayFeedback {
       // 観測からの時間で決めるため、前回が無いときは動かさない (1 回の観測だけで
       // 「余裕が続いている」とは言えない)
       if (elapsedMs === null) {
+        this.reason = "waiting";
+        return;
+      }
+      // 最後の穴から一定時間は下げない。負荷時に目標を下げた直後、同じ揺らぎで穴が
+      // 再発して目標を上げ直す往復になるためである (この間も上げる向きは許す)
+      if (
+        this.lastGapAtMs !== null &&
+        observation.atMs - this.lastGapAtMs < AUDIO_DELAY_FEEDBACK_GAP_QUIET_MS
+      ) {
         this.reason = "waiting";
         return;
       }
@@ -418,14 +486,15 @@ export class AudioDelayFeedback {
   }
 
   /**
-   * 圧縮 (粗さ) が続くときだけ使う上限を、上げる / 戻す
+   * 圧縮 (粗さ) か無音の穴が続くときだけ使う上限を、上げる / 戻す
    *
-   * - 上げる: 圧縮の速さが `AUDIO_DELAY_FEEDBACK_COMPRESSION_MIN_MS_PER_SECOND` を超える状態が
-   *   `AUDIO_DELAY_FEEDBACK_COMPRESSION_CONFIRM_MS` 続いたとき。100 ms では足りない証拠が
-   *   そろったということである
+   * - 上げる: 圧縮の速さが `AUDIO_DELAY_FEEDBACK_COMPRESSION_MIN_MS_PER_SECOND` を超える状態か、
+   *   無音の穴が空いた状態が `AUDIO_DELAY_FEEDBACK_COMPRESSION_CONFIRM_MS` 続いたとき。
+   *   100 ms では足りない証拠がそろったということである。穴は 1 回でも「その揺らぎが
+   *   目標を超えた」証拠であり、0.5 ms の穴でもクリックになる
    * - 戻す: 揺らぎだけの目標 (`jitterTargetMs`) が `AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS` 以下で
-   *   あり、かつ圧縮が 0 の状態が `AUDIO_DELAY_FEEDBACK_ARTIFACT_RELEASE_MS` 続いたとき。
-   *   圧縮が 0 だけでは戻さない。揺らぎが 100 ms を超えている経路では、戻した直後に圧縮が
+   *   あり、かつ圧縮も穴も 0 の状態が `AUDIO_DELAY_FEEDBACK_ARTIFACT_RELEASE_MS` 続いたとき。
+   *   片方だけでは戻さない。揺らぎが 100 ms を超えている経路では、戻した直後に圧縮や穴が
    *   再発して 2 秒でまた上げる往復になる (このファイルの定数のコメントを参照)
    *
    * 目標そのものは動かさない。上げた上限は `targetDelayMs` が使い、戻した上限は
@@ -434,8 +503,13 @@ export class AudioDelayFeedback {
    *
    * @param elapsedMs - 前回の制御からの時間 (ミリ秒)。前回が無ければ null
    * @param jitterTargetMs - 揺らぎだけから求めた目標遅延 (ミリ秒)
+   * @param gapDelta - 前回の制御から増えた無音の穴の数
    */
-  private updateArtifactCeiling(elapsedMs: number | null, jitterTargetMs: number): void {
+  private updateArtifactCeiling(
+    elapsedMs: number | null,
+    jitterTargetMs: number,
+    gapDelta: number,
+  ): void {
     const spanMs = elapsedMs ?? 0;
     const compressionMs = this.compressionSinceUpdateMs;
     this.compressionSinceUpdateMs = 0;
@@ -443,12 +517,16 @@ export class AudioDelayFeedback {
     // 速さを求められないため 0 とする
     const rateMsPerSecond = spanMs > 0 ? (compressionMs / spanMs) * 1_000 : 0;
     this.compressionMsPerSecond = rateMsPerSecond;
-    if (rateMsPerSecond > AUDIO_DELAY_FEEDBACK_COMPRESSION_MIN_MS_PER_SECOND) {
-      // 100 ms では足りていない証拠が続いている
+    if (rateMsPerSecond > AUDIO_DELAY_FEEDBACK_COMPRESSION_MIN_MS_PER_SECOND || gapDelta > 0) {
+      // 圧縮か穴が出ており、100 ms では足りていない証拠が続いている
       this.compressionStreakMs += spanMs;
       this.quietStreakMs = 0;
-    } else if (compressionMs === 0 && jitterTargetMs <= AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS) {
-      // 圧縮が無く、経路も 100 ms 以内で足りている
+    } else if (
+      compressionMs === 0 &&
+      gapDelta === 0 &&
+      jitterTargetMs <= AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS
+    ) {
+      // 圧縮も穴も無く、経路も 100 ms 以内で足りている
       this.quietStreakMs += spanMs;
       this.compressionStreakMs = 0;
     } else {
@@ -475,8 +553,8 @@ export class AudioDelayFeedback {
   /**
    * 実際に適用する値に掛ける上限 (ミリ秒)
    *
-   * 広げていないときは `AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS` (100 ms)。圧縮が続くときに広げる
-   * 分は、明示設定 (`targetLatencyMs`) で切る。明示設定は利用者が宣言した遅延の予算であり、
+   * 広げていないときは `AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS` (100 ms)。圧縮か穴が続くときに
+   * 広げる分は、明示設定 (`targetLatencyMs`) で切る。明示設定は利用者が宣言した遅延の予算であり、
    * 適応で広げる分がそれを超えてはならない。ただし既定の上限は下回らない。既存の規則では
    * 揺らぎだけの目標に明示設定を掛けないため、ここで下回らせると、明示設定が既定より小さい
    * ときに適用する値が既定より小さくなってしまう (実測と決定をやり直すことになる)

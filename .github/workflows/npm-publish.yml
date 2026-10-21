@@ -12,7 +12,8 @@ permissions:
 jobs:
   build:
     name: Build
-    runs-on: ubuntu-slim
+    # ライブラリをビルドするため ubuntu-slim では足りない
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: voidzero-dev/setup-vp@68f39c78aaf39be468cabd2afb09c162574c84af # v1.21.2

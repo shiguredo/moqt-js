@@ -244,6 +244,16 @@ test("buildSubscriberStats: 音声の再生の観測値を返す", () => {
       ...EMPTY_AUDIO_PLAYOUT_TIMING.missedByReason,
       lateness: { count: 2, ms: 40 },
     },
+    // 補間で埋まらなかった無音の穴、予約の追い越し、バッファ境界の段差
+    gapCount: 3,
+    gapMs: 48,
+    gapMaxMs: 22,
+    unrecoverableGapCount: 1,
+    unrecoverableGapMs: 20,
+    lateStartCount: 1,
+    lateStartMaxMs: 2,
+    boundaryStepCount: 2,
+    boundaryStepMax: 0.19,
   };
   instance.audioPlayoutTiming.value = timing;
   assert.deepEqual(buildSubscriberStats(instance).audio.playoutTiming, timing);

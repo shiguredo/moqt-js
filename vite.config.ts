@@ -1223,6 +1223,12 @@ export default defineConfig({
     // 計算を回すテストがタイムアウトすることがあった。テストの内容は変えず、遅い
     // runner でも完走できる余裕を持たせる (個別に長いテストはテスト側で指定する)
     testTimeout: 30_000,
+    // CI でハングしたときに、どのファイル / テストまで進んだかを追えるようにする。
+    // 通常の reporter は完了時しか出さないため、MOQT_TEST_TRACE=1 のときだけ有効にする
+    reporters:
+      process.env.MOQT_TEST_TRACE === "1"
+        ? ["default", "./scripts/vitest-trace-reporter.mjs"]
+        : ["default"],
     coverage: {
       provider: "v8",
       exclude: ["src/message/debug.ts"],

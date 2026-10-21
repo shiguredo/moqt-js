@@ -845,3 +845,6 @@ ITU-R BT.1359-1 の許容内である。
 - 整形・lint・型: `vp check` が通る
 - 実リレーの E2E: `--project=relay` の 20 テストが通る (60 秒の長時間テストを含む)。
   調査用の採取テスト (`investigation-audio-delay.spec.ts`) は既定で skip する
+
+2026-10-20 の追加調査 (受信 playout の無音の穴と、停止時の末尾の欠落) は
+`docs/AUDIO_PLAYOUT_GAPS_AND_TAIL.md` にある。

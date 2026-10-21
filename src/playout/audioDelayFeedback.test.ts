@@ -21,6 +21,7 @@ import {
   AUDIO_DELAY_FEEDBACK_TOLERANCE_MS,
   AudioDelayFeedback,
   type AudioDelayFeedbackObservation,
+  AUDIO_DELAY_FEEDBACK_GAP_QUIET_MS,
   AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS,
 } from "./audioDelayFeedback";
 import { summarizeTimings } from "./timingSummary";
@@ -37,6 +38,8 @@ import { summarizeTimings } from "./timingSummary";
  * @param options.backlogMs - 並べすぎで捨てた長さ (ミリ秒、累積)
  * @param options.compressionMs - 前の観測から増えた圧縮 (ミリ秒)。既定は 0 (圧縮なし)
  * @param options.jitterTargetMs - 揺らぎだけから求めた目標 (NetEq、ミリ秒)
+ * @param options.gapCount - 補間で埋まらなかった無音の穴の数 (累積)
+ * @param options.gapMs - 補間で埋まらなかった無音の穴の長さ (ミリ秒、累積)
  */
 function observation(
   atMs: number,
@@ -46,6 +49,8 @@ function observation(
     backlogMs?: number;
     compressionMs?: number;
     jitterTargetMs?: number;
+    gapCount?: number;
+    gapMs?: number;
   } = {},
 ): AudioDelayFeedbackObservation {
   const latenessMs = summarizeTimings(latenessP50Ms === null ? [] : [latenessP50Ms]);
@@ -60,6 +65,8 @@ function observation(
     backlogMs: options.backlogMs ?? 0,
     compressionMs: options.compressionMs ?? 0,
     jitterTargetMs: options.jitterTargetMs ?? AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS,
+    gapCount: options.gapCount ?? 0,
+    gapMs: options.gapMs ?? 0,
   };
 }
 
@@ -549,4 +556,144 @@ test("明示設定があるときは、広げる分をその値で切る", () =>
   // 閉ループが決めた目標は、明示設定があるときはその値で切る (既存の規則)
   assert.equal(driven(120).snapshot(160).targetMs, 120);
   assert.equal(driven(90).snapshot(160).targetMs, 90);
+});
+
+// 完了条件: 補間で埋まらなかった無音の穴が空いたら、穴の長さぶんを吸収できるだけ目標を
+// 増やす (reason は "gap")。穴は事後には埋められないため、先に目標を増やす
+test("穴が空いたら目標を増やす", () => {
+  const feedback = new AudioDelayFeedback();
+  // 最初の観測 (遅れは許容の中) は間隔が無いため動かさない
+  feedback.update(observation(0, 0));
+  assert.equal(feedback.snapshot(100).reason, "waiting");
+
+  // 1 秒後に穴 (20 ms) が空いた。理由は "gap" になる。目標は既定の上限 (100 ms) に
+  // 達しているため、上限を広げる前は動かない (穴の証拠は 2 秒続くと上限を広げる)
+  feedback.update(observation(1_000, 0, { gapCount: 1, gapMs: 20 }));
+  const first = feedback.snapshot(100);
+  assert.equal(first.reason, "gap", "理由が穴であること");
+  assert.equal(
+    first.appliedCeilingMs,
+    AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS,
+    "まだ上限を広げないこと",
+  );
+
+  // 穴が 2 秒続くと上限が 160 ms へ広がり、穴の長さ + 余白 (20 + 20 ms) だけ増える
+  feedback.update(observation(2_000, 0, { gapCount: 2, gapMs: 40 }));
+  const expanded = feedback.snapshot(100);
+  assert.equal(expanded.reason, "gap");
+  assert.equal(expanded.appliedCeilingMs, AUDIO_DELAY_FEEDBACK_ARTIFACT_CEILING_MS);
+  assert.equal(expanded.lastChangeMs, 40, "穴の長さ + 余白 (20 + 20 ms) を増やすこと");
+  assert.equal(expanded.adjustments, 1);
+
+  // 穴が続けばさらに増える (1 回の増加は上限 40 ms まで)
+  feedback.update(observation(3_000, 0, { gapCount: 3, gapMs: 60 }));
+  assert.equal(feedback.snapshot(100).reason, "gap");
+  // 上限 (160 ms) に達するまで増える (140 → 160)
+  assert.equal(feedback.snapshot(100).lastChangeMs, 20, "広げた上限まで増やすこと");
+});
+
+// 完了条件: 穴が続いたら、時間圧縮が続いたときと同じく artifact ceiling (100 → 160 ms) を
+// 広げる。穴 1 回では 2 秒続くまで広げない
+test("穴が続くと artifact ceiling を広げる", () => {
+  const feedback = new AudioDelayFeedback();
+  feedback.update(observation(0, 0, { gapCount: 1, gapMs: 20 }));
+  assert.equal(
+    feedback.snapshot(0).appliedCeilingMs,
+    AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS,
+    "1 回では広げないこと",
+  );
+  feedback.update(observation(1_000, 0, { gapCount: 2, gapMs: 40 }));
+  // まだ 1 秒ぶんの証拠である (最初の観測は間隔が無く数えない)
+  assert.equal(feedback.snapshot(0).appliedCeilingMs, AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS);
+  feedback.update(observation(2_000, 0, { gapCount: 3, gapMs: 60 }));
+  // 2 秒ぶんの証拠がそろったため広げる
+  assert.equal(feedback.snapshot(0).appliedCeilingMs, AUDIO_DELAY_FEEDBACK_ARTIFACT_CEILING_MS);
+});
+
+// 完了条件: 穴が 0 でない間は artifact ceiling を 100 ms へ戻さない。戻す条件は
+// 「圧縮も穴も 0 で、揺らぎだけの目標が 100 ms 以下」が 15 秒続くことである
+test("穴が続く間は artifact ceiling を戻さない", () => {
+  const feedback = new AudioDelayFeedback();
+  // 2 秒ぶんの穴で広げる
+  feedback.update(observation(0, 0, { gapCount: 1, gapMs: 20 }));
+  feedback.update(observation(1_000, 0, { gapCount: 2, gapMs: 40 }));
+  feedback.update(observation(2_000, 0, { gapCount: 3, gapMs: 60 }));
+  assert.equal(feedback.snapshot(0).appliedCeilingMs, AUDIO_DELAY_FEEDBACK_ARTIFACT_CEILING_MS);
+  // 穴が 1 つでも出続ける間は、圧縮 0・揺らぎ 100 ms 以下でも戻さない
+  let gapCount = 3;
+  for (let index = 3; index <= 20; index++) {
+    gapCount += 1;
+    feedback.update(observation(index * 1_000, 0, { gapCount, gapMs: gapCount * 20 }));
+    assert.equal(
+      feedback.snapshot(0).appliedCeilingMs,
+      AUDIO_DELAY_FEEDBACK_ARTIFACT_CEILING_MS,
+      "穴が続く間は広げたままであること",
+    );
+  }
+  // 穴が止まってから 15 秒で戻す
+  for (let index = 21; index <= 37; index++) {
+    feedback.update(observation(index * 1_000, 0, { gapCount, gapMs: gapCount * 20 }));
+  }
+  assert.equal(
+    feedback.snapshot(0).appliedCeilingMs,
+    AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS,
+    "穴が 15 秒止まったら戻すこと",
+  );
+});
+
+// 完了条件: 穴が空いた後は、最後の穴から 5 秒が経つまで目標を下げない。下げた直後に
+// 同じ揺らぎで穴が再発する往復を避けるためである (この間も上げる向きは許す)
+test("穴の後は 5 秒間目標を下げない", () => {
+  const feedback = new AudioDelayFeedback();
+  // 最初の観測は間隔が無いため動かさない
+  feedback.update(observation(0, 0));
+  // 許容内の遅れが続き、目標を 10 ms/秒で下げる
+  feedback.update(observation(1_000, 0));
+  feedback.update(observation(2_000, 0));
+  assert.isBelow(feedback.snapshot(0).targetMs, AUDIO_DELAY_FEEDBACK_START_MS);
+  const beforeGapMs = feedback.snapshot(0).targetMs;
+
+  // 3 秒目に穴 (20 ms) が空いた。穴の長さ + 余白だけ増やそうとする
+  feedback.update(observation(3_000, 0, { gapCount: 1, gapMs: 20 }));
+  const afterGapMs = feedback.snapshot(0).targetMs;
+  assert.equal(feedback.snapshot(0).reason, "gap");
+  assert.isAbove(afterGapMs, beforeGapMs, "穴で目標を上げること");
+
+  // 穴の後 1〜4 秒 (4,000〜7,000 ms) は許容内でも下げない
+  for (const atMs of [4_000, 5_000, 6_000, 7_000]) {
+    feedback.update(observation(atMs, 0));
+    assert.equal(feedback.snapshot(0).reason, "waiting", "穴の後は待つこと");
+    assert.equal(feedback.snapshot(0).targetMs, afterGapMs, "穴の後は下げないこと");
+  }
+  // 最後の穴 (3,000 ms) から 5,000 ms 経った 8,000 ms で下げる
+  feedback.update(observation(8_000, 0));
+  assert.equal(feedback.snapshot(0).reason, "settled");
+  assert.isBelow(feedback.snapshot(0).targetMs, afterGapMs, "5 秒経過後に下げること");
+});
+
+// 完了条件: ホールド中も、遅れや並べすぎによる上昇は許す (深めに構える方向は止めない)
+test("穴の後のホールド中でも目標の上昇は許す", () => {
+  const feedback = new AudioDelayFeedback();
+  feedback.update(observation(0, 0));
+  // 目標を 100 ms から下げておく (70 ms)
+  for (const atMs of [1_000, 2_000, 3_000]) {
+    feedback.update(observation(atMs, 0));
+  }
+  const lowMs = feedback.snapshot(0).targetMs;
+  assert.isBelow(lowMs, AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS);
+
+  // 4 秒目に穴。ホールドに入る
+  feedback.update(observation(4_000, 0, { gapCount: 1, gapMs: 1 }));
+  const afterGapMs = feedback.snapshot(0).targetMs;
+
+  // 5 秒目 (穴の 1 秒後) に遅れが許容を超えた。ホールド中でも上げる
+  feedback.update(observation(5_000, 60));
+  const snapshot = feedback.snapshot(0);
+  assert.equal(snapshot.reason, "lateness", "ホールド中でも遅れでは上げること");
+  assert.isAbove(snapshot.targetMs, afterGapMs, "ホールド中でも上げること");
+});
+
+// 完了条件: 定数は 5 秒である (実測の穴の再発間隔より長く、制御間隔の数回ぶん)
+test("穴の後のホールドは 5,000 ms である", () => {
+  assert.equal(AUDIO_DELAY_FEEDBACK_GAP_QUIET_MS, 5_000);
 });

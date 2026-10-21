@@ -25,8 +25,10 @@ import {
   AudioClockBridge,
   AudioPlayoutScheduler,
   arrivalPlayoutDelaySeconds,
+  type AudioPlayoutDecision,
   concealmentEndGain,
 } from "./audioPlayout";
+import { fadeSpliceEdge } from "../audioSpliceFade";
 import { isTimeStretchAvailable } from "./audioTimeStretch";
 import type { AudioPlayoutTimingStats } from "./audioPlayoutTimingStats";
 import { AudioReceiveCatchUp } from "./audioReceiveCatchUp";
@@ -223,6 +225,9 @@ export class AudioPlayoutSession {
   // 直前に鳴らした音のサンプルとサンプルレート。欠落した区間の補間を作るために保持する
   private previousChannels: AudioSamples[] | null = null;
   private previousSampleRate = 0;
+  // 直前に予約したバッファ (補間を含む) の末尾のサンプル。境界の段差を測るために保持する。
+  // 補間の末尾は 2 ms フェードで 0 にしてから予約するため、補間の後は 0 になる
+  private lastScheduledTailSample: number | null = null;
   // 閉ループへ渡した圧縮 (時間圧縮) の累積 (ミリ秒)。前回からの増分を渡す
   private lastCompressedMs = 0;
 
@@ -384,74 +389,20 @@ export class AudioPlayoutSession {
         this.clock.toPerformanceMs(decision.startAt) ??
         arrivalMs + (decision.startAt - contextNowSeconds) * 1_000;
 
-      // 目標を過ぎて届いた分は、波形の周期を使って詰める (NetEq の accelerate)。遅れて
-      // 届いた音を捨てると音が途切れるため、鳴らす時刻をずらした分だけ詰めて目標へ戻す
-      const channels: AudioSamples[] = [];
-      for (let channel = 0; channel < numberOfChannels; channel++) {
-        const channelData = new Float32Array(numberOfFrames);
-        data.copyTo(channelData, { planeIndex: channel, format: "f32-planar" });
-        channels.push(channelData);
-      }
-      // 詰めてよい長さは、目標に対して遅れている分までにする (削りすぎて「早すぎる」側へ
-      // 振れ、詰める操作が往復するのを防ぐ。src/playout/audioTimeStretch.ts の compressSamples)
-      const stretched =
-        decision.compressSeconds > 0
-          ? compressSamples(channels, sampleRate, Math.round(decision.compressSeconds * sampleRate))
-          : { channels, lengthChangeSamples: 0 };
-      // 実際に詰められた長さを返す (詰められなかった分は遅れとして残る)
-      this.playout.confirmStretch(-stretched.lengthChangeSamples / sampleRate);
-
-      // 欠落した区間を、直前に鳴らした音の末尾を伸ばして埋める (src/playout/audioTimeStretch.ts)。
-      // 実際に補間した長さだけを統計へ返す
-      let concealedSeconds = 0;
-      if (decision.gapSeconds > 0 && this.previousChannels !== null) {
-        // 長い補間ほど末尾の振幅を下げる (繰り返しの音を目立たなくする)
-        const endGain = concealmentEndGain(decision.gapSeconds);
-        const concealed = concealSamples(
-          this.previousChannels,
-          this.previousSampleRate,
-          decision.gapSeconds,
-          endGain,
-        );
-        const concealedFrames = concealed.channels[0]?.length ?? 0;
-        if (concealedFrames > 0) {
-          this.startBuffer(
-            output,
-            concealed.channels.length,
-            concealed.channels,
-            concealedFrames,
-            this.previousSampleRate,
-            decision.gapStartSeconds,
-          );
-          concealedSeconds = concealed.generatedSamples / this.previousSampleRate;
-        }
-      }
-      this.playout.confirmConcealment(concealedSeconds);
-
-      const frames = stretched.channels[0]?.length ?? numberOfFrames;
-      this.startBuffer(
+      // 時間圧縮・補間・フェードを行い、実際に鳴らすバッファを予約する
+      const playedSeconds = this.playSound(
         output,
+        decision,
+        data,
         numberOfChannels,
-        stretched.channels,
-        frames,
         sampleRate,
-        decision.startAt,
+        numberOfFrames,
       );
-      // 鳴らすと決めた音を記録する。長さは詰めた後 (実際に鳴る長さ) である
       played = true;
-      this.timing.recordPlay(
-        arrivalMs,
-        targetMs,
-        startMs,
-        (frames / sampleRate) * 1_000,
-        decision.basis,
-      );
+      // 鳴らすと決めた音を記録する。長さは詰めた後 (実際に鳴る長さ) である
+      this.timing.recordPlay(arrivalMs, targetMs, startMs, playedSeconds * 1_000, decision.basis);
       // 実際に鳴った結果 (予定をどれだけ過ぎたか) を、目標を決める閉ループへ渡す
       this.observeDelayFeedback(performance.now(), request.timeline);
-
-      // 次の音の補間のために、実際に鳴らしたサンプルを保持する
-      this.previousChannels = stretched.channels;
-      this.previousSampleRate = sampleRate;
 
       // 実際に鳴らす時刻を実績として記録する (同期ずれの推定に使う)。捨てた音は鳴らない
       // ため記録しない。目標の表示時刻を決められなかった音 (基準を共有できず到着基準で
@@ -488,6 +439,139 @@ export class AudioPlayoutSession {
         error: error instanceof Error ? error : new Error(String(error)),
       };
     }
+  }
+
+  /**
+   * 時間圧縮・補間・フェードを行い、実際に鳴らすバッファを予約する
+   *
+   * 補間で埋める隙間は、補間の末尾を 2 ms で 0 へ落とし、直後の音声の先頭を 2 ms で
+   * フェードインする。予約できる最も早い時刻より前に無音がある場合は、補間の先頭も
+   * フェードインする。
+   * 穴が無い通常の境界にはフェードを入れない (20 ms 周期の振幅変調になるため)。
+   * 実際に無音で出る穴、予約の追い越し、バッファ境界の段差は計器へ記録する
+   *
+   * @param output - 鳴らす先
+   * @param decision - 鳴らすと決めた時刻と隙間の情報
+   * @param data - 復号した音 (サンプルの取り出し元)
+   * @param numberOfChannels - チャンネル数
+   * @param sampleRate - サンプルレート (Hz)
+   * @param numberOfFrames - 復号した音のサンプル数
+   * @returns 実際に鳴らす長さ (秒。詰めた分を引いた後)
+   */
+  private playSound(
+    output: AudioPlayoutOutput,
+    decision: Extract<AudioPlayoutDecision, { kind: "play" }>,
+    data: AudioData,
+    numberOfChannels: number,
+    sampleRate: number,
+    numberOfFrames: number,
+  ): number {
+    // 目標を過ぎて届いた分は、波形の周期を使って詰める (NetEq の accelerate)。遅れて
+    // 届いた音を捨てると音が途切れるため、鳴らす時刻をずらした分だけ詰めて目標へ戻す
+    const channels: AudioSamples[] = [];
+    for (let channel = 0; channel < numberOfChannels; channel++) {
+      const channelData = new Float32Array(numberOfFrames);
+      data.copyTo(channelData, { planeIndex: channel, format: "f32-planar" });
+      channels.push(channelData);
+    }
+    // 詰めてよい長さは、目標に対して遅れている分までにする (削りすぎて「早すぎる」側へ
+    // 振れ、詰める操作が往復するのを防ぐ。src/playout/audioTimeStretch.ts の compressSamples)
+    const stretched =
+      decision.compressSeconds > 0
+        ? compressSamples(channels, sampleRate, Math.round(decision.compressSeconds * sampleRate))
+        : { channels, lengthChangeSamples: 0 };
+    // 実際に詰められた長さを返す (詰められなかった分は遅れとして残る)
+    this.playout.confirmStretch(-stretched.lengthChangeSamples / sampleRate);
+
+    // 欠落した区間を、直前に鳴らした音の末尾を伸ばして埋める (src/playout/audioTimeStretch.ts)。
+    // 実際に補間した長さだけを統計へ返す
+    let concealedSeconds = 0;
+    let concealedScheduled = false;
+    if (decision.gapSeconds > 0 && this.previousChannels !== null) {
+      // 長い補間ほど末尾の振幅を下げる (繰り返しの音を目立たなくする)
+      const endGain = concealmentEndGain(decision.gapSeconds);
+      const concealed = concealSamples(
+        this.previousChannels,
+        this.previousSampleRate,
+        decision.gapSeconds,
+        endGain,
+      );
+      const concealedFrames = concealed.channels[0]?.length ?? 0;
+      if (concealedFrames > 0) {
+        // 補間の末尾は必ず 2 ms で 0 へ落とす。そのまま鳴らすと、繰り返しの位相が
+        // 次の音と揃わないときに段差になるためである。長さの違う音との継ぎ目を
+        // フェードで繋ぐ既存の処理と同じものを使う
+        let concealedChannels = fadeSpliceEdge(concealed.channels, this.previousSampleRate, "tail");
+        // 補間の先頭が前の音の末尾と接していない (予約できる最も早い時刻より前の無音が
+        // ある) ときは、無音から補間音へ立ち上がる段差を消すため先頭もフェードインする。
+        // 前の音と連続しているときはフェードしない (波形の続きをそのまま鳴らす)
+        const startsAfterSilence = decision.unrecoverableGapSeconds > 0;
+        if (startsAfterSilence) {
+          concealedChannels = fadeSpliceEdge(concealedChannels, this.previousSampleRate, "head");
+        }
+        // 直前のバッファの末尾と補間の先頭の段差。無音を挟むときは無音へ落ちる分だけが
+        // 段差として残る
+        if (this.lastScheduledTailSample !== null) {
+          const step = startsAfterSilence
+            ? Math.abs(this.lastScheduledTailSample)
+            : Math.abs((concealedChannels[0]?.[0] ?? 0) - this.lastScheduledTailSample);
+          this.timing.recordBoundaryStep(step);
+        }
+        this.startBuffer(
+          output,
+          concealedChannels.length,
+          concealedChannels,
+          concealedFrames,
+          this.previousSampleRate,
+          decision.gapStartSeconds,
+        );
+        concealedSeconds = concealed.generatedSamples / this.previousSampleRate;
+        concealedScheduled = true;
+        this.lastScheduledTailSample = concealedChannels[0]?.[concealedFrames - 1] ?? 0;
+      }
+    }
+    this.playout.confirmConcealment(concealedSeconds);
+
+    // 予約できた隙間のうち補間で埋まらなかった分 (予約できる最も早い時刻より前の分、
+    // 補間の失敗、補間の上限を超えた分) を、無音で出る穴として数える。補間の生成長は
+    // 半サンプル以内で丸められる (src/playout/audioTimeStretch.ts の
+    // concealSamples の Math.round) ため、その分は補間で埋まったものとして扱う
+    const totalGapMs = decision.totalGapSeconds * 1_000;
+    if (totalGapMs > 0) {
+      const concealedMs = concealedSeconds * 1_000;
+      const roundToleranceMs =
+        concealedScheduled && this.previousSampleRate > 0 ? 500 / this.previousSampleRate : 0;
+      const uncoveredMs = Math.max(0, totalGapMs - concealedMs);
+      if (uncoveredMs > roundToleranceMs) {
+        this.timing.recordGap({
+          uncoveredMs,
+          unrecoverableMs: decision.unrecoverableGapSeconds * 1_000,
+        });
+      }
+    }
+
+    // 穴を挟む境界は、次の音の先頭を 2 ms フェードインして、無音から鳴り始める段差を
+    // 消す。穴が無い通常の境界には入れない (20 ms 周期の振幅変調になるため)
+    const hasGap = decision.totalGapSeconds > 0;
+    const playChannels = hasGap
+      ? fadeSpliceEdge(stretched.channels, sampleRate, "head")
+      : stretched.channels;
+    const frames = playChannels[0]?.length ?? numberOfFrames;
+    // 実音の先頭と、直前に予約したバッファの末尾の段差を測る。補間を挟んだ境界は
+    // 両側とも 0 にフェードしてあるため段差は 0 になり、穴を挟むときは無音へ落ちる
+    // 直前の振幅が残る。穴を挟むときの先頭は fadeSpliceEdge で必ず 0 に落とすため、
+    // どの経路も「直前のバッファの末尾」と「今回のバッファの先頭」の差で表せる
+    if (this.lastScheduledTailSample !== null) {
+      const head = playChannels[0]?.[0] ?? 0;
+      this.timing.recordBoundaryStep(Math.abs(head - this.lastScheduledTailSample));
+    }
+    this.startBuffer(output, numberOfChannels, playChannels, frames, sampleRate, decision.startAt);
+    this.lastScheduledTailSample = playChannels[0]?.[frames - 1] ?? 0;
+    // 次の音の補間のために、実際に鳴らしたサンプル (フェードする前の生のサンプル) を
+    // 保持する。補間は末尾の周期を繰り返すため、先頭のフェードは影響しない
+    this.previousChannels = stretched.channels;
+    this.previousSampleRate = sampleRate;
+    return (playChannels[0]?.length ?? numberOfFrames) / sampleRate;
   }
 
   /**
@@ -563,9 +647,11 @@ export class AudioPlayoutSession {
    */
   private observeDelayFeedback(atMs: number, timeline: PlayoutTimeline): void {
     const feedback = this.timing.audioDelayFeedback(atMs);
-    // 圧縮 (時間圧縮、粗さ) の増分を閉ループへ渡す。閉ループは「圧縮が続くときだけ目標の
-    // 上限を 160 ms へ広げる」判断に使う (`src/playout/audioDelayFeedback.ts`)。累積では
-    // なく増分を渡すのは、購読のやり直しで累積が 0 に戻っても負の差を作らないためである
+    // 圧縮 (時間圧縮、粗さ) の増分を閉ループへ渡す。閉ループは「圧縮か無音の穴が続く
+    // ときだけ目標の上限を 160 ms へ広げる」判断に使う
+    // (`src/playout/audioDelayFeedback.ts`)。累積ではなく増分を渡すのは、購読のやり直しで
+    // 累積が 0 に戻っても負の差を作らないためである。穴の累積は `feedback` に含まれる
+    // (`AudioPlayoutTimingStats.audioDelayFeedback`)
     const compressedMs = this.playout.compressed * 1_000;
     const compressionMs = Math.max(0, compressedMs - this.lastCompressedMs);
     this.lastCompressedMs = compressedMs;
@@ -591,6 +677,8 @@ export class AudioPlayoutSession {
     this.clock.reset();
     this.previousChannels = null;
     this.previousSampleRate = 0;
+    // 予約済みのバッファは AudioContext と一緒に捨てられるため、境界の段差の基準も消す
+    this.lastScheduledTailSample = null;
   }
 
   /**
@@ -621,6 +709,12 @@ export class AudioPlayoutSession {
     const source = output.context.createBufferSource();
     source.buffer = audioBuffer;
     source.connect(output.destination);
+    // 予約した時刻を currentTime が追い越していたら、Web Audio は即時開始にして直前の音と
+    // 重なり得る。押し直しは行わず、計器に残して気付けるようにする
+    const nowSeconds = output.context.currentTime;
+    if (whenSeconds < nowSeconds) {
+      this.timing.recordLateStart((nowSeconds - whenSeconds) * 1_000);
+    }
     source.start(whenSeconds);
   }
 }
