@@ -3,6 +3,8 @@ import { createSubscriberInstance, EMPTY_AV_SYNC } from "./subscriber";
 import { EMPTY_PLAYOUT_TIMING } from "../utils/playoutTimingStats";
 import { EMPTY_PUBLISH_TIMING } from "../utils/publishTimingStats";
 import { EMPTY_AUDIO_PLAYOUT_TIMING } from "../../../src/playout/audioPlayoutTimingStats.ts";
+import { EMPTY_AUDIO_RECEIVE_CATCH_UP } from "../../../src/playout/audioReceiveCatchUp.ts";
+import { EMPTY_HOST_DELAY } from "../utils/hostDelayTracker.ts";
 import { buildPublisherStats, buildSubscriberStats } from "./statsSnapshot";
 import * as pub from "./publisher";
 
@@ -262,6 +264,187 @@ test("buildSubscriberStats: 音声の再生の観測値を返す", () => {
     buildSubscriberStats(createSubscriberInstance("audio-playout-timing-empty")).audio
       .playoutTiming,
     EMPTY_AUDIO_PLAYOUT_TIMING,
+  );
+});
+
+test("buildSubscriberStats: Audio Playback の穴・段差・drain・上限を JSON に出す", () => {
+  // 画面の Audio Playback Timing と Audio に出していた値を、Copy for LLM の JSON でも
+  // 同じ名前で読めるようにする。値はスナップショットをそのまま写し、上限と圧縮の速さだけ
+  // A/V 同期の audioDelayFeedback から写す
+  const instance = createSubscriberInstance("audio-playout-instruments");
+  const playoutTiming = {
+    ...EMPTY_AUDIO_PLAYOUT_TIMING,
+    // 補間で埋まらなかった穴と、予約できなかった穴
+    gapCount: 3,
+    gapMs: 48.4,
+    gapMaxMs: 21.9,
+    unrecoverableGapCount: 2,
+    unrecoverableGapMs: 30.2,
+    // 予約の追い越しと押し直し
+    lateStartCount: 1,
+    lateStartMaxMs: 2.5,
+    pushStartCount: 4,
+    pushStartMaxMs: 6.5,
+    // バッファ境界の段差
+    boundaryStepCount: 2,
+    boundaryStepMax: 0.19,
+    // 停止時の drain
+    lastDrain: {
+      pendingMsAtStart: 80,
+      requestedMs: 100,
+      waitedMs: 90.5,
+      playedMs: 70,
+      cutMs: 10,
+      flushedObjects: 0,
+      undecodedFlushedObjects: 0,
+    },
+  };
+  instance.audioPlayoutTiming.value = playoutTiming;
+  instance.audioReceiveDelayMs.value = 120.5;
+  instance.audioMaxReceiveDelayMs.value = 201.25;
+  // 時間圧縮が続いて上限を 100 ms から 160 ms へ広げている状態
+  instance.avSync.value = {
+    ...EMPTY_AV_SYNC,
+    delays: {
+      ...EMPTY_AV_SYNC.delays,
+      audioDelayFeedback: {
+        ...EMPTY_AV_SYNC.delays.audioDelayFeedback,
+        appliedCeilingMs: 160,
+        compressionMsPerSecond: 20,
+      },
+    },
+  };
+
+  const stats = buildSubscriberStats(instance);
+  // 音声の節に写した上限と圧縮の速さ
+  assert.equal(stats.audio.appliedCeilingMs, 160, "適用中の上限を写すこと");
+  assert.equal(stats.audio.compressionMsPerSecond, 20, "圧縮の速さを写すこと");
+  // 既存の値 (playoutTiming 全体) は変えない
+  assert.deepEqual(stats.audio.playoutTiming, playoutTiming);
+  assert.equal(stats.audio.receiveDelayMs, 120.5, "到着の遅れを変えないこと");
+  assert.equal(stats.audio.maxReceiveDelayMs, 201.25, "到着の遅れの最大を変えないこと");
+
+  // Copy for LLM の JSON にも、画面と同じ値が出る
+  const jsonText = JSON.stringify(stats);
+  const json = JSON.parse(jsonText) as {
+    audio: {
+      receiveDelayMs: number;
+      maxReceiveDelayMs: number;
+      appliedCeilingMs: number;
+      compressionMsPerSecond: number;
+      playoutTiming: {
+        gapCount: number;
+        gapMs: number;
+        gapMaxMs: number;
+        unrecoverableGapCount: number;
+        unrecoverableGapMs: number;
+        lateStartCount: number;
+        lateStartMaxMs: number;
+        pushStartCount: number;
+        pushStartMaxMs: number;
+        boundaryStepCount: number;
+        boundaryStepMax: number;
+        lastDrain: {
+          playedMs: number;
+          cutMs: number;
+          waitedMs: number;
+          requestedMs: number;
+        } | null;
+      };
+    };
+  };
+  assert.equal(json.audio.receiveDelayMs, 120.5);
+  assert.equal(json.audio.maxReceiveDelayMs, 201.25);
+  assert.equal(json.audio.appliedCeilingMs, 160);
+  assert.equal(json.audio.compressionMsPerSecond, 20);
+  assert.deepEqual(json.audio.playoutTiming, {
+    ...playoutTiming,
+    // JSON へ直列化しても値は同じ (bigint などは無い)
+    lastDrain: playoutTiming.lastDrain,
+  });
+});
+
+test("buildSubscriberStats: 受信側の追いつきの判定値を JSON に出す", () => {
+  // 表示と判定が食い違わないよう、判定に使う decodeLagMs と limitMs を JSON にも出す。
+  // lagMs は入力の遅れと意図した遅延を含む生の値として残し、既存の値も変えない
+  const instance = createSubscriberInstance("audio-catch-up-decision");
+  const catchUp = {
+    ...EMPTY_AUDIO_RECEIVE_CATCH_UP,
+    lagMs: 92.5,
+    inputLagMs: 20,
+    decodeLagMs: 72.5,
+    floorMs: 21.4,
+    maxLagMs: 120.5,
+    limitMs: 61.4,
+    catchingUp: true,
+    catchUpStarts: 1,
+    skippedFrames: 2,
+    skippedMs: 40,
+    lastSkippedMs: 20,
+  };
+  instance.audioPlayoutCatchUp.value = catchUp;
+
+  const stats = buildSubscriberStats(instance);
+  assert.deepEqual(stats.audio.playoutCatchUp, catchUp);
+  // Copy for LLM の JSON にも、判定に使う値と参考値の両方が出る
+  const jsonText = JSON.stringify(stats);
+  const json = JSON.parse(jsonText) as {
+    audio: {
+      playoutCatchUp: {
+        lagMs: number | null;
+        decodeLagMs: number | null;
+        floorMs: number | null;
+        maxLagMs: number | null;
+        limitMs: number;
+        catchingUp: boolean;
+        catchUpStarts: number;
+        skippedFrames: number;
+        skippedMs: number;
+        lastSkippedMs: number | null;
+      };
+    };
+  };
+  assert.equal(json.audio.playoutCatchUp.decodeLagMs, 72.5, "判定に使う遅れを出すこと");
+  assert.equal(json.audio.playoutCatchUp.limitMs, 61.4, "判定に使う上限を出すこと");
+  // 既存の値は変えない
+  assert.equal(json.audio.playoutCatchUp.lagMs, 92.5);
+  assert.equal(json.audio.playoutCatchUp.floorMs, 21.4);
+  assert.equal(json.audio.playoutCatchUp.maxLagMs, 120.5);
+  assert.equal(json.audio.playoutCatchUp.catchingUp, true);
+  assert.equal(json.audio.playoutCatchUp.catchUpStarts, 1);
+  assert.equal(json.audio.playoutCatchUp.skippedFrames, 2);
+  assert.equal(json.audio.playoutCatchUp.skippedMs, 40);
+  assert.equal(json.audio.playoutCatchUp.lastSkippedMs, 20);
+});
+
+test("buildSubscriberStats: メインスレッドの停止と到着の重なりを返す", () => {
+  // 到着の遅れ (receiveDelayMs) には、経路と relay の遅れだけでなく、同じページの
+  // メインスレッドが止まっていた分も混ざる。停止の回数・合計・停止と重なった到着の数を
+  // コピー本文の JSON でも読めるようにする
+  const instance = createSubscriberInstance("audio-host-delay");
+  instance.audioHostDelay.value = {
+    stallCount: 2,
+    stallMs: 173.5,
+    overlappedArrivalCount: 1,
+  };
+
+  const stats = buildSubscriberStats(instance);
+  assert.deepEqual(stats.audio.hostDelay, instance.audioHostDelay.value);
+  // Copy for LLM の JSON にも同じ値が出る
+  const jsonText = JSON.stringify(stats);
+  const json = JSON.parse(jsonText) as {
+    audio: { hostDelay: { stallCount: number; stallMs: number; overlappedArrivalCount: number } };
+  };
+  assert.deepEqual(json.audio.hostDelay, {
+    stallCount: 2,
+    stallMs: 173.5,
+    overlappedArrivalCount: 1,
+  });
+
+  // 購読前は何も観測していない値 (0) を返す
+  assert.deepEqual(
+    buildSubscriberStats(createSubscriberInstance("audio-host-delay-empty")).audio.hostDelay,
+    EMPTY_HOST_DELAY,
   );
 });
 
