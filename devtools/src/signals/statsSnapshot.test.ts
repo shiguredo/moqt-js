@@ -3,6 +3,7 @@ import { createSubscriberInstance, EMPTY_AV_SYNC } from "./subscriber";
 import { EMPTY_PLAYOUT_TIMING } from "../utils/playoutTimingStats";
 import { EMPTY_PUBLISH_TIMING } from "../utils/publishTimingStats";
 import { EMPTY_AUDIO_PLAYOUT_TIMING } from "../../../src/playout/audioPlayoutTimingStats.ts";
+import { EMPTY_AUDIO_RECEIVE_CATCH_UP } from "../../../src/playout/audioReceiveCatchUp.ts";
 import { EMPTY_HOST_DELAY } from "../utils/hostDelayTracker.ts";
 import { buildPublisherStats, buildSubscriberStats } from "./statsSnapshot";
 import * as pub from "./publisher";
@@ -361,6 +362,59 @@ test("buildSubscriberStats: Audio Playback の穴・段差・drain・上限を J
     // JSON へ直列化しても値は同じ (bigint などは無い)
     lastDrain: playoutTiming.lastDrain,
   });
+});
+
+test("buildSubscriberStats: 受信側の追いつきの判定値を JSON に出す", () => {
+  // 表示と判定が食い違わないよう、判定に使う decodeLagMs と limitMs を JSON にも出す。
+  // lagMs は入力の遅れと意図した遅延を含む生の値として残し、既存の値も変えない
+  const instance = createSubscriberInstance("audio-catch-up-decision");
+  const catchUp = {
+    ...EMPTY_AUDIO_RECEIVE_CATCH_UP,
+    lagMs: 92.5,
+    inputLagMs: 20,
+    decodeLagMs: 72.5,
+    floorMs: 21.4,
+    maxLagMs: 120.5,
+    limitMs: 61.4,
+    catchingUp: true,
+    catchUpStarts: 1,
+    skippedFrames: 2,
+    skippedMs: 40,
+    lastSkippedMs: 20,
+  };
+  instance.audioPlayoutCatchUp.value = catchUp;
+
+  const stats = buildSubscriberStats(instance);
+  assert.deepEqual(stats.audio.playoutCatchUp, catchUp);
+  // Copy for LLM の JSON にも、判定に使う値と参考値の両方が出る
+  const jsonText = JSON.stringify(stats);
+  const json = JSON.parse(jsonText) as {
+    audio: {
+      playoutCatchUp: {
+        lagMs: number | null;
+        decodeLagMs: number | null;
+        floorMs: number | null;
+        maxLagMs: number | null;
+        limitMs: number;
+        catchingUp: boolean;
+        catchUpStarts: number;
+        skippedFrames: number;
+        skippedMs: number;
+        lastSkippedMs: number | null;
+      };
+    };
+  };
+  assert.equal(json.audio.playoutCatchUp.decodeLagMs, 72.5, "判定に使う遅れを出すこと");
+  assert.equal(json.audio.playoutCatchUp.limitMs, 61.4, "判定に使う上限を出すこと");
+  // 既存の値は変えない
+  assert.equal(json.audio.playoutCatchUp.lagMs, 92.5);
+  assert.equal(json.audio.playoutCatchUp.floorMs, 21.4);
+  assert.equal(json.audio.playoutCatchUp.maxLagMs, 120.5);
+  assert.equal(json.audio.playoutCatchUp.catchingUp, true);
+  assert.equal(json.audio.playoutCatchUp.catchUpStarts, 1);
+  assert.equal(json.audio.playoutCatchUp.skippedFrames, 2);
+  assert.equal(json.audio.playoutCatchUp.skippedMs, 40);
+  assert.equal(json.audio.playoutCatchUp.lastSkippedMs, 20);
 });
 
 test("buildSubscriberStats: メインスレッドの停止と到着の重なりを返す", () => {

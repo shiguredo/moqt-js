@@ -846,7 +846,22 @@ function SubscriberStats({ statsSignal }: { statsSignal: ReadonlySignal<Subscrib
           <StatList
             items={[
               {
-                // 直近に観測した、復号の出力の遅れ
+                // 判定に使う「復号が足している遅れ」。復号の出力の遅れ (lagMs) から、
+                // 受信の入口の入力の遅れと、意図した復号前の遅延を引いた値である。
+                // 追いつきを始めるかはこの値と limitMs の比較で決まる
+                label: "decodeLagMs",
+                value: formatMs(stats.audio.playoutCatchUp.decodeLagMs),
+                testId: "subscriber-audio-playback-catch-up-decode-lag",
+              },
+              {
+                // 復号が足している遅れの上限。床 (健全時の遅れ) + 40 ms と 60 ms の大きい方
+                label: "limitMs",
+                value: stats.audio.playoutCatchUp.limitMs.toFixed(1),
+                testId: "subscriber-audio-playback-catch-up-limit",
+              },
+              {
+                // 直近に観測した、復号の出力の遅れそのもの。判定には使わず、入力の遅れを
+                // 含む生の値を参考として残す
                 label: "lagMs",
                 value: formatMs(stats.audio.playoutCatchUp.lagMs),
                 testId: "subscriber-audio-playback-catch-up-lag",
@@ -861,11 +876,6 @@ function SubscriberStats({ statsSignal }: { statsSignal: ReadonlySignal<Subscrib
                 label: "maxLagMs",
                 value: formatMs(stats.audio.playoutCatchUp.maxLagMs),
                 testId: "subscriber-audio-playback-catch-up-max-lag",
-              },
-              {
-                label: "limitMs",
-                value: stats.audio.playoutCatchUp.limitMs.toFixed(1),
-                testId: "subscriber-audio-playback-catch-up-limit",
               },
               {
                 label: "catchingUp",

@@ -62,6 +62,10 @@ const AUDIO_PLAYBACK_ITEMS = {
   // 目標遅延の上限と時間圧縮の速さ
   appliedCeilingMs: "subscriber-audio-playback-applied-ceiling",
   compressionMsPerSecond: "subscriber-audio-playback-compression-ms-per-second",
+  // 受信側の追いつきの判定に使う値と、参考の生の遅れ
+  decodeLagMs: "subscriber-audio-playback-catch-up-decode-lag",
+  catchUpLimitMs: "subscriber-audio-playback-catch-up-limit",
+  catchUpLagMs: "subscriber-audio-playback-catch-up-lag",
 } as const;
 
 test("window.moqtDevTools から音声の再生の観測値が読め、未購読では既定値になる", async ({
@@ -157,4 +161,9 @@ test("subscriber の画面に音声の再生の観測を既定値で出す", asy
   await expect(page.getByTestId(AUDIO_PLAYBACK_ITEMS.drainRequestedMs)).toHaveText("-");
   await expect(page.getByTestId(AUDIO_PLAYBACK_ITEMS.appliedCeilingMs)).toHaveText("100.0");
   await expect(page.getByTestId(AUDIO_PLAYBACK_ITEMS.compressionMsPerSecond)).toHaveText("0");
+  // 追いつきの判定に使う遅れはまだ観測しておらず、上限は絶対値の下限 (60 ms) になる。
+  // 生の遅れ (lagMs) は参考値として別に出す
+  await expect(page.getByTestId(AUDIO_PLAYBACK_ITEMS.decodeLagMs)).toHaveText("-");
+  await expect(page.getByTestId(AUDIO_PLAYBACK_ITEMS.catchUpLimitMs)).toHaveText("60.0");
+  await expect(page.getByTestId(AUDIO_PLAYBACK_ITEMS.catchUpLagMs)).toHaveText("-");
 });

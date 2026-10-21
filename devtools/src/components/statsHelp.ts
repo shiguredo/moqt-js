@@ -40,6 +40,7 @@ import {
   AUDIO_RECEIVE_CATCH_UP_COOLDOWN_MS,
   AUDIO_RECEIVE_CATCH_UP_FLOOR_WINDOW_MS,
   AUDIO_RECEIVE_CATCH_UP_GROWTH_MS,
+  AUDIO_RECEIVE_CATCH_UP_JUMP_MS,
   AUDIO_RECEIVE_CATCH_UP_MIN_MS,
 } from "../../../src/playout/audioReceiveCatchUp.ts";
 import {
@@ -442,21 +443,35 @@ export const AUDIO_PLAYOUT_TIMING_HELP: SectionHelp = {
 
 /** subscriber の Audio Playback の Catch-up */
 export const AUDIO_PLAYOUT_CATCH_UP_HELP: SectionHelp = {
-  summary: `Catch-up of received audio. When the decoded output keeps arriving later than its LOC TIMESTAMP, the decoder is holding the sounds it has not output yet, and it drains them no faster than real time, so the lag stays. The receiver rebuilds the decoder to throw that queue away. The values are measured on the decoded output (ms).`,
-  formula: `lag = (performance.timeOrigin + arrival) - AudioData.timestamp, limit = max(${AUDIO_RECEIVE_CATCH_UP_MIN_MS} ms, floor + ${AUDIO_RECEIVE_CATCH_UP_GROWTH_MS} ms)`,
+  summary: `Catch-up of received audio. When the decoded output keeps arriving later than its LOC TIMESTAMP, the decoder is holding the sounds it has not output yet, and it drains them no faster than real time, so the lag stays. The receiver rebuilds the decoder to throw that queue away. The decision uses decodeLagMs, the part of the lag that the decoder itself adds, rather than the raw lagMs (ms).`,
+  formula: `lag = (performance.timeOrigin + arrival) - AudioData.timestamp, decodeLag = lag - inputLag - intentionalDelay, limit = max(${AUDIO_RECEIVE_CATCH_UP_MIN_MS} ms, floor + ${AUDIO_RECEIVE_CATCH_UP_GROWTH_MS} ms)`,
   items: [
     {
-      term: "lagMs / floorMs / maxLagMs",
-      description: `The lag of the last decoded sound, the healthy lag (the smallest lag in the last ${FLOOR_WINDOW_SECONDS} s) and the largest lag observed since subscribing started (ms). The healthy lag of the environment is included (measured: 18-19 ms on a local machine, around 116 ms on a loaded CI runner).`,
+      term: "decodeLagMs",
+      description:
+        "The lag the decoder itself adds (ms): the raw lag of the last decoded sound (lagMs) minus the input lag of the Object measured at the receiving entry and the intentional pre-decode delay. This is the value the catch-up decision compares with limitMs. - until a decoded sound is observed.",
+    },
+    {
+      term: "lagMs",
+      description:
+        "The raw lag of the last decoded sound (ms), measured as performance.timeOrigin + arrival - AudioData.timestamp. Shown for reference; it includes the delay of the network path and the relay, which rebuilding the decoder cannot remove.",
+    },
+    {
+      term: "floorMs",
+      description: `The healthy decode lag (the smallest decodeLagMs in the last ${FLOOR_WINDOW_SECONDS} s, ms). The healthy lag of the environment is included (measured: 18-19 ms on a local machine, around 116 ms on a loaded CI runner).`,
+    },
+    {
+      term: "maxLagMs",
+      description: "The largest raw lag (lagMs) observed since subscribing started (ms).",
     },
     {
       term: "limitMs",
-      description: `The lag allowed now (ms). The larger of ${AUDIO_RECEIVE_CATCH_UP_MIN_MS} ms (3 packets) and floorMs + ${AUDIO_RECEIVE_CATCH_UP_GROWTH_MS} ms (2 packets).`,
+      description: `The decode lag allowed now (ms). The larger of ${AUDIO_RECEIVE_CATCH_UP_MIN_MS} ms (3 packets) and floorMs + ${AUDIO_RECEIVE_CATCH_UP_GROWTH_MS} ms (2 packets).`,
     },
     {
       term: "catchingUp",
       description:
-        "The lag has stayed above limitMs since the last rebuild. While it stays above, the decoder is rebuilt again every " +
+        "decodeLagMs has stayed above limitMs since the last rebuild. While it stays above, the decoder is rebuilt again every " +
         `${AUDIO_RECEIVE_CATCH_UP_COOLDOWN_MS} ms.`,
     },
     {
@@ -471,7 +486,7 @@ export const AUDIO_PLAYOUT_CATCH_UP_HELP: SectionHelp = {
     },
   ],
   notes: [
-    `A catch-up starts only after the lag stays above limitMs for ${AUDIO_RECEIVE_CATCH_UP_CONFIRM_MS} ms, so a receiver that fell behind once (objects delivered in a burst) is left to recover by itself.`,
+    `The decision uses decodeLagMs, not lagMs. A catch-up starts at once when decodeLagMs is more than ${AUDIO_RECEIVE_CATCH_UP_JUMP_MS} ms above the floor (the A/V sync cannot compensate that much); otherwise it starts after decodeLagMs stays above limitMs for ${AUDIO_RECEIVE_CATCH_UP_CONFIRM_MS} ms. Both paths require ${AUDIO_RECEIVE_CATCH_UP_COOLDOWN_MS} ms since the last start, so a receiver that fell behind once (objects delivered in a burst) is left to recover by itself.`,
     "The sounds are not counted as missed (see Missed): the sounds the decoder threw away were never output, so the playout never saw them. Compare this counter with playoutDrops and missedFrames.",
     "The gap left by the skipped sounds is concealed from the end of the previous sound, up to the concealment limit (100 ms); a longer gap stays silent.",
   ],
