@@ -73,6 +73,7 @@ import {
 } from "./playout/audioPlayout";
 import { AUDIO_DELAY_FEEDBACK_START_MS } from "./playout/audioDelayFeedback";
 import {
+  AUDIO_ONLY_ARRIVAL_DELAY_FLOOR_MS,
   AUDIO_PLAYOUT_ARRIVAL_DELAY_MS,
   AUDIO_PLAYOUT_DELAY_FLOOR_MS,
   MAX_PLAYOUT_DELAY_MS,
@@ -4307,6 +4308,9 @@ function playAudioFrame(
 // 直前の音の時間伸長で埋めて予約する (無音のまま残さない)
 test("handleAudioDecodedData: 音が抜けた分の隙間を補間して予約する", () => {
   const { control, errors } = createAvSyncSubscriber();
+  // 映像も購読している (音声だけの下限を足さない) 状態にする
+  control.receivedCatalog = makeAudioVideoCatalog({ isLive: true }, { isLive: true });
+  control.extractTrackInfo();
   // 目標を使わない (壁時計の TIMESTAMP を持たない) 到着基準の並べ方にする
   const first = playAudioFrame(control, 0, null, 10);
   assert.equal(first.bufferFrames.length, 1, "最初の音だけを予約すること");
@@ -4885,6 +4889,50 @@ test("handleAudioDecodedData: 音声を観測していなくても再生の遅�
     (reservation.startedAtSeconds[0] ?? 0) * 1_000,
     Math.max(
       (arrivalSeconds + AUDIO_PLAYOUT_DELAY_SECONDS) * 1_000,
+      (reservation.currentTimeSeconds + AUDIO_PLAYOUT_MIN_LEAD_SECONDS) * 1_000,
+    ),
+    AV_SYNC_TOLERANCE_MS,
+  );
+});
+
+/**
+ * 完了条件: 音声だけの購読 (映像に合わせる相手がいない) では、到着基準の再生の遅れに
+ * 下限 `AUDIO_ONLY_ARRIVAL_DELAY_FLOOR_MS` を足す。Wi-Fi の周期的な停滞は揺らぎの推定に
+ * 届かず、上限 100 ms では足りないためである。映像を購読しているときは足さない
+ * (前のテストが 50 ms のままであることを固定する)。
+ */
+test("handleAudioDecodedData: 音声だけの購読では到着基準の再生の遅れに下限を足す", () => {
+  const errors: Error[] = [];
+  const subscriber = new MediaSubscriberImpl(
+    "moqt://example.com/live",
+    { namespace: ["live"], audio: {} },
+    {
+      onError: (error) => {
+        errors.push(error);
+      },
+    },
+  );
+  const control = subscriber as unknown as SubscriberAvSyncControl;
+  const mapping = audioClockMappingAt(avSyncReferenceMs());
+  // 目標の表示時刻を使わない音 (Timescale のある TIMESTAMP) として鳴らす
+  const decodedTimestamp = 1_500_000;
+  control.audioTimestampKinds.set(decodedTimestamp, "mediaTime");
+  const reservation = playAudioFrame(control, decodedTimestamp, mapping, 1_000);
+
+  assert.equal(errors.length, 0);
+  assert.equal(reservation.startedAtSeconds.length, 1);
+  // 到着基準の再生の遅れは、床 (50 ms) ではなく音声だけの購読の下限 (120 ms) になる
+  const arrivalSeconds = (reservation.readAtMs + reservation.deviceDelayMs) / 1_000;
+  const arrivalDelayMs = Math.max(
+    AUDIO_ONLY_ARRIVAL_DELAY_FLOOR_MS,
+    audioArrivalPlayoutDelayMs(
+      control.playoutTimeline.playoutDelayMs ?? AUDIO_PLAYOUT_DELAY_FLOOR_MS,
+    ),
+  );
+  assert.closeTo(
+    (reservation.startedAtSeconds[0] ?? 0) * 1_000,
+    Math.max(
+      (arrivalSeconds + arrivalDelayMs / 1_000) * 1_000,
       (reservation.currentTimeSeconds + AUDIO_PLAYOUT_MIN_LEAD_SECONDS) * 1_000,
     ),
     AV_SYNC_TOLERANCE_MS,

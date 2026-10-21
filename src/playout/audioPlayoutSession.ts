@@ -209,6 +209,15 @@ export interface AudioPlayoutRequest {
    */
   readonly enforceTarget: boolean;
   /**
+   * 到着基準で並べるときの再生の遅れの下限 (ミリ秒)。省略したときは 0
+   *
+   * 音声だけを購読していて揃える相手がいないとき、揺らぎの推定が届いていない周期的な
+   * 停滞を先に吸収するために使う (`src/playout/timeline.ts` の
+   * `AUDIO_ONLY_ARRIVAL_DELAY_FLOOR_MS`)。映像に合わせる相手がいるときは渡さない
+   * (映像とのずれの原因になる)
+   */
+  readonly arrivalDelayFloorMs?: number;
+  /**
    * 鳴らす先。null のときは鳴らさず、時間軸への記録も計器への記録もしない
    * (音声を再生していないとき)
    */
@@ -424,6 +433,12 @@ export class AudioPlayoutSession {
           request.timeline.playoutDelayMs ?? AUDIO_PLAYOUT_DELAY_FLOOR_MS,
           AUDIO_PLAYOUT_DELAY_FLOOR_MS,
         ) / 1_000;
+      // 音声だけの購読では、揺らぎの推定が届いていない周期的な停滞を先に吸収するため、
+      // 呼び出し側が渡した下限まで遅らせる。映像に合わせる相手がいるときは渡されない
+      const arrivalDelaySeconds = Math.max(
+        arrivalPlayoutDelaySeconds(playoutDelaySeconds),
+        (request.arrivalDelayFloorMs ?? 0) / 1_000,
+      );
       const decision = this.playout.schedule(contextNowSeconds, data.timestamp, durationSeconds, {
         targetStartSeconds,
         // 到着した音がまだ鳴っていない位置。到着基準の遅れはここから数える
@@ -434,8 +449,8 @@ export class AudioPlayoutSession {
         delaySeconds: playoutDelaySeconds,
         // 目標を使えないとき (到着基準) の再生の遅れ。共有の時間軸が学習した値は、
         // TIMESTAMP が壁時計からずれているトラックではそのずれの分だけ大きく育つため、
-        // 上限で切った小さな値を使う
-        arrivalDelaySeconds: arrivalPlayoutDelaySeconds(playoutDelaySeconds),
+        // 上限で切った小さな値を使う。音声だけの購読では下限を足す
+        arrivalDelaySeconds,
         presentationDelaySeconds:
           (request.timeline.presentationExtraDelayMs ?? AUDIO_PLAYOUT_DELAY_FLOOR_MS) / 1_000,
       });

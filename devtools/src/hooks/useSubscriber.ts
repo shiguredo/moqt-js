@@ -67,6 +67,7 @@ import {
   EMPTY_AUDIO_PLAYOUT_TIMING,
 } from "../../../src/playout/audioPlayoutTimingStats.ts";
 import { EMPTY_AUDIO_RECEIVE_CATCH_UP } from "../../../src/playout/audioReceiveCatchUp.ts";
+import { AUDIO_ONLY_ARRIVAL_DELAY_FLOOR_MS } from "../../../src/playout/timeline.ts";
 import { EMPTY_HOST_DELAY, HostDelayTracker } from "../utils/hostDelayTracker.ts";
 // 復号した音声の再生の組み立て (時間軸への記録・目標の決定・予約・計器への記録) は
 // ライブラリと共有する (組み立てを 2 か所へ置くと、到着基準の遅れ・閉ループ・計器の
@@ -2283,6 +2284,11 @@ export function useSubscriber(
         // 音声だけの購読では映像に合わせる相手が無いため、目標の開始時刻を守らず
         // 到着基準で並べる (ライブラリの `enforceTarget` と同じ規則)
         enforceTarget: jitterBufferEnabledRef.current && !audioOnlyPlaybackRef.current,
+        // 音声だけのときは、揺らぎの推定が届いていない周期的な停滞を先に吸収するため、
+        // 到着基準の再生の遅れに下限を足す (ライブラリの audio-only と同じ規則)
+        ...(audioOnlyPlaybackRef.current
+          ? { arrivalDelayFloorMs: AUDIO_ONLY_ARRIVAL_DELAY_FLOOR_MS }
+          : {}),
         output: { context: playback.context, destination: playback.destination },
       });
       // 捨てた音と基準を取り直した回数を画面の統計へ反映する (計器への記録は共有実装が済ませる)

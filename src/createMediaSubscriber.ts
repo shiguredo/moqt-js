@@ -42,7 +42,7 @@ import {
 import { LastTimestampKind, takeDecodeInputEntry } from "./playout/decodeInputTimestamps";
 import { AudioPlayoutSession, type AudioPlayoutTimestampKind } from "./playout/audioPlayoutSession";
 import { JITTER_BUFFER_MAX_QUEUED_FRAMES } from "./playout/buffer";
-import { PlayoutTimeline } from "./playout/timeline";
+import { AUDIO_ONLY_ARRIVAL_DELAY_FLOOR_MS, PlayoutTimeline } from "./playout/timeline";
 import { MAX_PRE_DECODE_DELAY_MS } from "./playout/preDecodeDelay";
 import {
   AUDIO_PLAYOUT_DRAIN_CLOSE_MAX_MS,
@@ -3339,6 +3339,11 @@ export class MediaSubscriberImpl implements MediaSubscriber {
         useTimeline: true,
         // 映像も購読しているときだけ目標の時刻を守る。音声だけのときは取り直して連続を優先する
         enforceTarget: this.videoTrackInfo !== null,
+        // 音声だけのときは、揺らぎの推定が届いていない周期的な停滞を先に吸収するため、
+        // 到着基準の再生の遅れに下限を足す (映像を購読しているときは足さない)
+        ...(this.videoTrackInfo === null
+          ? { arrivalDelayFloorMs: AUDIO_ONLY_ARRIVAL_DELAY_FLOOR_MS }
+          : {}),
         output: { context, destination },
       });
       if (result.status === "error") {
