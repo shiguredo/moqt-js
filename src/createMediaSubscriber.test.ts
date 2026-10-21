@@ -654,6 +654,88 @@ function makeSizedObject(
 }
 
 /**
+ * 音声の cache 境界の検証用の制御口
+ *
+ * `subscribeMediaTracks` を実際に駆動し、SUBSCRIBE_OK の LARGEST_OBJECT を境界として
+ * 設定させる。Session は購読の確立と Object のコールバックの捕捉だけを持つ最小の代役で
+ * ある (モジュール置換は行わない)。
+ */
+interface SubscriberAudioCatchUpControl extends SubscriberInitialConfigControl {
+  session: Session | null;
+  audioTrackInfo: CatalogTrack | null;
+  sessionGeneration: number;
+  subscribeMediaTracks(startGeneration: number): Promise<void>;
+}
+
+/** 音声の cache 境界を検証するための組 */
+interface AudioCatchUpHarness {
+  readonly subscriber: MediaSubscriberImpl;
+  readonly control: SubscriberAudioCatchUpControl;
+  /** 購読の Object コールバックへ Object を流す */
+  readonly deliver: (obj: MoqtObject, delivery?: AudioDelivery) => void;
+  /** 復号へ渡った Object の payload の先頭バイト (到着順) */
+  readonly decoded: number[];
+}
+
+/**
+ * 音声の cache 境界を検証する組を作る
+ *
+ * 購読のたびに `boundaries` の次の要素を SUBSCRIBE_OK の LARGEST_OBJECT として返す。
+ * `onSubscribe` は購読の確立中 (SUBSCRIBE_OK を返す前) に呼ばれ、前の購読の境界が
+ * 残っていないかを確かめるために Object を届ける。
+ */
+function createAudioCatchUpHarness(options: {
+  boundaries: readonly (Location | null)[];
+  onSubscribe?: (deliver: (obj: MoqtObject) => void, subscriptionIndex: number) => void;
+}): AudioCatchUpHarness {
+  const subscriber = new MediaSubscriberImpl("moqt://example.com/live", {
+    namespace: ["live"],
+    audio: { codec: "opus" },
+  });
+  const control = subscriber as unknown as SubscriberAudioCatchUpControl;
+  const decoded: number[] = [];
+  control.audioDecoder = {
+    configure: async () => {},
+    decode: (payload) => {
+      decoded.push(payload[0] ?? -1);
+    },
+  };
+  control.audioDecoderConfigured = true;
+  control.audioTrackInfo = { name: "audio", packaging: "loc", isLive: true, codec: "opus" };
+  let objectCallback: ((obj: MoqtObject) => void) | null = null;
+  let datagramCallback: ((obj: MoqtObject) => void) | null = null;
+  let subscriptionIndex = 0;
+  control.session = {
+    subscribe: async (...args: Parameters<Session["subscribe"]>): Promise<Subscriber> => {
+      objectCallback = args[2].object;
+      datagramCallback = args[2].datagram ?? null;
+      const largestLocation = options.boundaries[subscriptionIndex] ?? null;
+      // 購読の確立中に届く Object を、前の購読の境界が残っていない状態で受け取れるか
+      options.onSubscribe?.((obj) => objectCallback?.(obj), subscriptionIndex);
+      subscriptionIndex++;
+      return {
+        state: "active",
+        largestLocation,
+        trackProperties: [],
+        unsubscribe: async () => {},
+      } as unknown as Subscriber;
+    },
+  } as unknown as Session;
+  return {
+    subscriber,
+    control,
+    deliver: (obj, delivery = "datagram") => {
+      if (delivery === "datagram") {
+        datagramCallback?.(obj);
+        return;
+      }
+      objectCallback?.(obj);
+    },
+    decoded,
+  };
+}
+
+/**
  * draft-ietf-moq-loc-04 Table 1 / §2.3.2.1:
  * VIDEO_CONFIG は Track Property でも届く。SUBSCRIBE_OK の Track Property を初期 configure に
  * 反映し、その完了までに届いた Object を保留して復号に渡す (最初の Object を捨てない)。
@@ -816,8 +898,12 @@ test("subscribeMediaTracks: 音声も SUBSCRIBE_OK の Track Property を購読�
       assert.isTrue(control.audioInitialConfigPending);
       callbacks.object(makeIdentifiedObject(0n, 0x88));
       return {
+        largestLocation: null,
         trackProperties: [{ id: LOC.LOCPropertyId.AUDIO_CONFIG, data: new Uint8Array([6, 6]) }],
-      } as unknown as { trackProperties: { id: bigint; data?: Uint8Array }[] };
+      } as unknown as {
+        largestLocation: Location | null;
+        trackProperties: { id: bigint; data?: Uint8Array }[];
+      };
     },
   };
 
@@ -872,7 +958,7 @@ function createMediaTrackSubscribeCapture(authInfo?: CatalogTrack["authInfo"]): 
   control.session = {
     subscribe: async (...args: Parameters<Session["subscribe"]>): Promise<Subscriber> => {
       captured.push(args[3]);
-      return { trackProperties: [] } as unknown as Subscriber;
+      return { largestLocation: null, trackProperties: [] } as unknown as Subscriber;
     },
   } as unknown as Session;
   return { control, captured };
@@ -1062,6 +1148,82 @@ test("applyInitialAudioConfig: Track Property の AUDIO_CONFIG が初期 configu
   assert.equal(configured.length, 1);
   assert.deepEqual(Array.from(configured[0] ?? []), [4, 5]);
   assert.deepEqual(decoded, [0x66]);
+});
+
+/**
+ * 完了条件: SUBSCRIBE_OK の LARGEST_OBJECT 以前の音声 Object は relay の cache から
+ * 届いた分として復号へ渡さず、捨てた数を統計に出す。境界より後の Object は live として
+ * 復号する。
+ */
+test("receiveAudioObject: SUBSCRIBE_OK の LARGEST_OBJECT 以前の音声 Object を復号へ渡さない", async () => {
+  const harness = createAudioCatchUpHarness({
+    boundaries: [{ group: 1n, object: 1n }],
+    onSubscribe: (deliver, subscriptionIndex) => {
+      if (subscriptionIndex === 0) {
+        // 購読の確立前 (境界を設定する前) に届いて保留された Object も、境界が決まった後の
+        // 解放で cache と判定して捨てる
+        deliver({ ...makeIdentifiedObject(0n, 0x99), groupId: 1n });
+      }
+    },
+  });
+  await harness.control.subscribeMediaTracks(harness.control.sessionGeneration);
+
+  // 境界そのもの、境界より前の位置、前の Group の位置は cache の音声である
+  harness.deliver({ ...makeIdentifiedObject(1n, 0x11), groupId: 1n });
+  harness.deliver({ ...makeIdentifiedObject(0n, 0x22), groupId: 1n });
+  harness.deliver({ ...makeIdentifiedObject(9n, 0x33), groupId: 0n });
+  // 境界より後の位置は live である
+  harness.deliver({ ...makeIdentifiedObject(2n, 0x44), groupId: 1n });
+  harness.deliver({ ...makeIdentifiedObject(0n, 0x55), groupId: 2n });
+
+  assert.deepEqual(harness.decoded, [0x44, 0x55], "境界以前の音声だけを復号しないこと");
+  const stats = harness.subscriber.getStats().audio;
+  assert.equal(stats?.catchUpObjectsSkipped, 4, "保留から解放した分も含めて捨てた数を数えること");
+  assert.equal(stats?.framesReceived, 2, "捨てた分を受信数に含めないこと");
+});
+
+/**
+ * 完了条件: LARGEST_OBJECT が省略された (null の) 購読では、位置によらず全 Object を
+ * live として復号する。
+ */
+test("receiveAudioObject: LARGEST_OBJECT が無い購読では全 Object を live として復号する", async () => {
+  const harness = createAudioCatchUpHarness({ boundaries: [null] });
+  await harness.control.subscribeMediaTracks(harness.control.sessionGeneration);
+
+  harness.deliver({ ...makeIdentifiedObject(1n, 0x11), groupId: 0n });
+  harness.deliver({ ...makeIdentifiedObject(2n, 0x22), groupId: 1n });
+
+  assert.deepEqual(harness.decoded, [0x11, 0x22]);
+  assert.equal(harness.subscriber.getStats().audio?.catchUpObjectsSkipped, 0);
+});
+
+/**
+ * 完了条件: 購読を始め直すと前の購読の境界が消える。2 回目の購読の確立中に、前の購読の
+ * 境界以前だった位置の Object を届けても捨てず、live として復号する。
+ */
+test("receiveAudioObject: 購読のやり直しで cache の境界をリセットする", async () => {
+  const harness = createAudioCatchUpHarness({
+    boundaries: [{ group: 1n, object: 1n }, null],
+    onSubscribe: (deliver, subscriptionIndex) => {
+      if (subscriptionIndex === 1) {
+        // 2 回目の購読の確立中 (SUBSCRIBE_OK を受け取る前) に、前の購読の境界以前だった
+        // 位置の Object を届ける。購読の開始で境界を消していなければ捨てられる
+        deliver({ ...makeIdentifiedObject(0n, 0x77), groupId: 1n });
+      }
+    },
+  });
+  // 1 回目の購読: 境界が設定され、境界以前の Object は捨てる
+  await harness.control.subscribeMediaTracks(harness.control.sessionGeneration);
+  harness.deliver({ ...makeIdentifiedObject(1n, 0x11), groupId: 1n });
+  assert.deepEqual(harness.decoded, []);
+
+  // 2 回目の購読: 開始時に境界を消しているため、確立中に届いた Object は live になる
+  await harness.control.subscribeMediaTracks(harness.control.sessionGeneration);
+  // 2 回目は LARGEST_OBJECT が無いため、確立後の Object も live である
+  harness.deliver({ ...makeIdentifiedObject(2n, 0x88), groupId: 2n });
+
+  assert.deepEqual(harness.decoded, [0x77, 0x88], "前の購読の境界で捨てないこと");
+  assert.equal(harness.subscriber.getStats().audio?.catchUpObjectsSkipped, 1);
 });
 
 // ============================================================================
@@ -1603,7 +1765,7 @@ test("subscribeMediaTracks: 音声と映像の両方のキューが溢れたら 
           : control.videoInitialConfigPending;
       assert.isTrue(initialConfigPending);
       arriveOverLimit(callbacks);
-      return { trackProperties: [] };
+      return { largestLocation: null, trackProperties: [] };
     },
   };
 
@@ -8385,6 +8547,7 @@ test("subscribeMediaTracks: 購読の確立中に解放が先行したら初期 
   let trackPropertyReads = 0;
   completeSubscribe({
     state: "active",
+    largestLocation: null,
     get trackProperties() {
       trackPropertyReads++;
       return [{ id: LOC.LOCPropertyId.AUDIO_CONFIG, data: new Uint8Array([1, 2]) }];
@@ -9037,6 +9200,7 @@ test("subscribeMediaTracks: 映像の購読確立中に解放が先行したら�
   let trackPropertyReads = 0;
   completeSubscribe({
     state: "active",
+    largestLocation: null,
     get trackProperties() {
       trackPropertyReads++;
       return [{ id: LOC.LOCPropertyId.VIDEO_CONFIG, data: new Uint8Array([1, 2]) }];
@@ -9108,6 +9272,7 @@ test("subscribeMediaTracks: 音声の初期 configure 適用中に解放が先�
     subscribe: async () =>
       ({
         state: "active",
+        largestLocation: null,
         trackProperties: [{ id: LOC.LOCPropertyId.AUDIO_CONFIG, data: new Uint8Array([1, 2]) }],
         unsubscribe: async () => {},
       }) as unknown as Subscriber,
@@ -9397,6 +9562,7 @@ test("subscribeMediaTracks: エラー status の PUBLISH_DONE で音声だけの
       audioCallbacks = callbacks;
       return {
         state: "active",
+        largestLocation: null,
         trackProperties: [],
         unsubscribe: async () => {},
       } as unknown as Subscriber;

@@ -746,6 +746,9 @@ interface AudioReceiverStats {
   // この数の不足になる。補間と捨ての割合を経路ごとに比べるのに使う
   datagramFramesReceived: number;
   bytesReceived: number;
+  // SUBSCRIBE_OK の LARGEST_OBJECT 以前の音声 Object を、relay の cache から届いた分として
+  // 復号へ渡さず捨てた数 (累積)
+  catchUpObjectsSkipped: number;
   // 再生の統計。値は購読をやり直しても消えない (今の遅れだけが 0 に戻る)
   // 目標を使わない並べ方で、基準を取り直した回数
   // (鳴らす時刻を過ぎて届いた音、timestamp が大きく飛んだ音)
@@ -1122,6 +1125,12 @@ jitter buffer の遅れは音声と映像で別々に求める。音声は NetEq
 `staleFramesDropped` / `missingReferenceFramesDropped` へ別途加算する。初期 configure の完了まで
 保留している Object は保留中の間は数えず、解放後は他の Object と同じ扱いで数える。
 保留キューの上限 (`pendingObjectQueue`) を超えて破棄した Object は数えない。
+
+`catchUpObjectsSkipped` は、SUBSCRIBE_OK の LARGEST_OBJECT 以前の位置の音声 Object を、
+relay の cache から届いた分として復号へ渡さず捨てた数である (`framesReceived` には含めない)。
+購読を始めるたびに境界を設定し直し、停止すると境界を消す。境界が無い
+(LARGEST_OBJECT が省略された) 購読では捨てず、全 Object を live として扱う
+(src/catchUpGate.ts)。
 
 受信した映像は Group の順序と欠落を見て、参照するフレームを復号済みの Object だけを
 復号する。Object は順不同で届きうる (draft-ietf-moq-transport-22 Section 2.1) ため、

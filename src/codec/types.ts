@@ -63,6 +63,11 @@ export interface AudioReceiverStats {
   // `playoutTiming`) を経路ごとに比べられるようにする
   datagramFramesReceived: number;
   bytesReceived: number;
+  // SUBSCRIBE_OK の LARGEST_OBJECT 以前の音声 Object を、relay の cache から届いた分として
+  // 復号へ渡さず捨てた数 (累積)。購読を始めるたびに境界を設定し直し、停止すると境界を消す。
+  // 境界が無い (LARGEST_OBJECT が省略された) 購読では 0 のまま
+  // (src/catchUpGate.ts)
+  catchUpObjectsSkipped: number;
   // 目標を使わない並べ方で、基準を取り直した回数
   // (鳴らす時刻を過ぎて届いた音、timestamp が大きく飛んだ音)
   playoutRebases: number;
