@@ -138,6 +138,8 @@ interface RecordedOutput {
  *   並べすぎとして捨てられる)
  * @param options.createBufferWorkMs - `createBuffer` のたびに `currentTime` を進める長さ
  *   (ミリ秒)。予約の判断から `start()` までのメインスレッドの停止を模す
+ * @param options.copyToChannelWorkMs - `copyToChannel` のたびに `currentTime` を進める長さ
+ *   (ミリ秒)。押し直しのフェード版の再コピー中の停止を模す
  * @param options.advanceOnTimestampMs - `getOutputTimestamp()` を読むたびに `currentTime` を
  *   進める長さ (ミリ秒)。音の到着の間隔を実時間で待たずに作る
  * @param options.mappingFromCurrentTime - `getOutputTimestamp()` に、その時点の
@@ -151,6 +153,7 @@ function makeRecordingOutput(options: {
   failCreateBuffer?: boolean;
   advanceCurrentTime?: boolean;
   createBufferWorkMs?: number;
+  copyToChannelWorkMs?: number;
   advanceOnTimestampMs?: number;
   mappingFromCurrentTime?: boolean;
 }): RecordedOutput {
@@ -204,6 +207,8 @@ function makeRecordingOutput(options: {
         }
         return {
           copyToChannel: (samples: Float32Array, channel: number) => {
+            // フェード版の再コピー中の停止を模して時計を進める
+            workMs += options.copyToChannelWorkMs ?? 0;
             channels[channel]?.set(samples.subarray(0, length));
           },
           __channels: channels,
@@ -1451,6 +1456,90 @@ test("handleDecodedAudio: 予約した時刻を currentTime が追い越した�
 });
 
 /**
+ * 完了条件: 押し直しのフェード版の再コピー中にメインスレッドが止まり時計が進んでも、
+ * 開始時刻が過去にならず、次の音と重ならない。押し直しの計器は最終的な値で 1 回だけ
+ * 記録する (再調整のたびに記録しない)。
+ */
+test("handleDecodedAudio: 押し直しの再コピー中に時計が進んでも開始時刻を過去にしない", () => {
+  const fixture = makeSessionFixture();
+  const samples = [constantSamples(0.2)];
+  const output = makeRecordingOutput({
+    timeline: fixture.timeline,
+    mapping: null,
+    currentTimeSeconds: 10,
+    mappingFromCurrentTime: true,
+    // createBuffer で 200 ms 進め、予約の判断より後に currentTime が予約時刻を追い越す
+    createBufferWorkMs: 200,
+    // 素のコピーとフェード版の再コピーでそれぞれ 12 ms 進める。押し直しの余裕 3 ms を
+    // 超えるため、再コピーの後に currentTime を取り直さないと開始時刻が過去になる
+    copyToChannelWorkMs: 12,
+  });
+
+  // 1 つ目は到着基準の 50 ms 後 (10.05) に予約され、createBuffer とコピーの間に
+  // 追い越されて押し直される
+  handleSound(fixture, output.output, {
+    timestamp: 0,
+    timestampKind: "none",
+    useTimeline: false,
+    enforceTarget: false,
+    samples,
+  });
+  // 2 つ目は 1 つ目の終わり (押し直した後の 10.247) を下限に予約され、同じく押し直される
+  handleSound(fixture, output.output, {
+    timestamp: 500_000,
+    timestampKind: "none",
+    useTimeline: false,
+    enforceTarget: false,
+    samples,
+  });
+
+  assert.equal(output.recordedBuffers.length, 2);
+  const first = output.recordedBuffers[0];
+  const second = output.recordedBuffers[1];
+  assert.isNotNull(first);
+  assert.isNotNull(second);
+
+  // すべての予約で、start() の時点の currentTime に対して開始時刻が余裕より前にならない
+  for (const buffer of output.recordedBuffers) {
+    assert.isAtLeast(
+      buffer.whenSeconds,
+      buffer.currentTimeAtStart + AUDIO_PLAYOUT_PUSH_START_LEAD_SECONDS - 1e-9,
+      "再コピー中に時計が進んでも開始時刻が過去にならないこと",
+    );
+  }
+
+  // 2 つ目は 1 つ目の終わりを下限に予約され、押し直した後も重ならない
+  const firstEndSeconds =
+    (first?.whenSeconds ?? Number.NaN) +
+    (first?.channels[0]?.length ?? 0) / (first?.sampleRate ?? SAMPLE_RATE);
+  assert.isAtLeast(
+    second?.whenSeconds ?? Number.NaN,
+    firstEndSeconds - 1e-9,
+    "押し直した音の終わりから次を並べること (重ならない)",
+  );
+
+  const snapshot = fixture.timing.snapshot(performance.now());
+  // 2 つの音をそれぞれ 1 回ずつ押し直しており、再調整のたびに記録していないこと
+  assert.equal(snapshot.pushStartCount, 2, "押し直しの計器を二重計上しないこと");
+  assert.equal(snapshot.lateStartCount, 2, "追い越しの計器を二重計上しないこと");
+  // 計器は、再コピーの後に入り直した最終的な値で記録する。2 つ目の予約時刻は
+  // 1 つ目の終わり (押し直した後の開始時刻) である
+  const secondNowSeconds = second?.currentTimeAtStart ?? Number.NaN;
+  assert.closeTo(
+    snapshot.pushStartMaxMs,
+    (secondNowSeconds + AUDIO_PLAYOUT_PUSH_START_LEAD_SECONDS - firstEndSeconds) * 1_000,
+    0.5,
+    "押し直した量を最終的な開始時刻で記録すること",
+  );
+  assert.closeTo(
+    snapshot.lateStartMaxMs,
+    (secondNowSeconds - firstEndSeconds) * 1_000,
+    0.5,
+    "追い越した長さを最終的な currentTime で記録すること",
+  );
+});
+
+/**
  * 完了条件: 穴を挟まない押し直しでも先頭を 2 ms フェードし、段差は前の音の末尾で測る。
  * 穴のフェードと区別して検出できるよう、連続した音 (隙間 0) で押し直しを起こす。
  */
@@ -1604,6 +1693,7 @@ test("property: 押し直した start 時刻は currentTime + 余裕より前に
         mappingFromCurrentTime: true,
         advanceOnTimestampMs: workMs,
         createBufferWorkMs: workMs,
+        copyToChannelWorkMs: workMs,
       });
       for (let index = 0; index < 2; index++) {
         handleSound(fixture, output.output, {

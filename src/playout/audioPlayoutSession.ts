@@ -898,32 +898,40 @@ export class AudioPlayoutSession {
     for (let channel = 0; channel < channelCount; channel++) {
       audioBuffer.copyToChannel(channels[channel] ?? new Float32Array(frames), channel);
     }
-    // コピーの直後に currentTime を取り直し、そのまま start する。予約した時刻が余裕
+    // コピーの直後に currentTime を取り直し、押し直しの要否を決める。予約した時刻が余裕
     // (`AUDIO_PLAYOUT_PUSH_START_LEAD_SECONDS`。レンダリング量子 128 フレーム = 48 kHz で
     // 約 2.7 ms を踏まえた 3 ms) より近いと、次の量子で即時開始になり、直前の音と
     // 重なり得るため、余裕の先へ押し直す
     const nowSeconds = output.context.currentTime;
     const earliestSeconds = nowSeconds + AUDIO_PLAYOUT_PUSH_START_LEAD_SECONDS;
-    let startAtSeconds = whenSeconds;
-    let pushed = false;
-    if (whenSeconds < earliestSeconds) {
-      // 予約した時刻を currentTime が追い越していたら、追い越した長さを計器に残す
-      // (計器の意味は変えない)。追い越していなくても余裕より近ければ押し直す
-      const lateMs = (nowSeconds - whenSeconds) * 1_000;
-      if (lateMs > 0) {
-        this.timing.recordLateStart(lateMs);
-      }
-      // 押し直した量 (余裕より近かっただけの場合も含む) を計器に残す
-      this.timing.recordPushStart((earliestSeconds - whenSeconds) * 1_000);
-      startAtSeconds = earliestSeconds;
-      pushed = true;
-      // 押し直しで生じた無音から鳴り始める段差を消すため、先頭 2 ms をフェードインする
-      const playChannels = fadeSpliceEdge(channels, sampleRate, "head");
-      for (let channel = 0; channel < channelCount; channel++) {
-        audioBuffer.copyToChannel(playChannels[channel] ?? new Float32Array(frames), channel);
-      }
+    if (whenSeconds >= earliestSeconds) {
+      // 押し直さないときは、ここから start までに何もしない (時計を進める処理を挟むと
+      // 予約した時刻を追い越す)
+      source.start(whenSeconds);
+      return { startAtSeconds: whenSeconds, pushed: false };
     }
+
+    // 押し直すと決まった。押し直しで生じた無音から鳴り始める段差を消すため、先頭 2 ms を
+    // フェードインする。このコピーは重いため、終わった後にもう一度 currentTime を取り直す。
+    // 取り直した時点で押し直した時刻を再び追い越していれば、開始時刻だけを新しい
+    // 「今 + 余裕」へ再調整する (バッファのコピーはやり直さない)
+    const playChannels = fadeSpliceEdge(channels, sampleRate, "head");
+    for (let channel = 0; channel < channelCount; channel++) {
+      audioBuffer.copyToChannel(playChannels[channel] ?? new Float32Array(frames), channel);
+    }
+    const finalNowSeconds = output.context.currentTime;
+    const finalEarliestSeconds = finalNowSeconds + AUDIO_PLAYOUT_PUSH_START_LEAD_SECONDS;
+    // 再調整した後の開始時刻で start する。ここから start までに重い処理を挟まない
+    const startAtSeconds = Math.max(earliestSeconds, finalEarliestSeconds);
+    // 押し直しの計器は、再調整した後の最終的な値で 1 回だけ記録する (二重計上しない)。
+    // 予約した時刻を currentTime が追い越していたら、追い越した長さも残す
+    const lateMs = (finalNowSeconds - whenSeconds) * 1_000;
+    if (lateMs > 0) {
+      this.timing.recordLateStart(lateMs);
+    }
+    // 押し直した量 (余裕より近かっただけの場合も含む) を計器に残す
+    this.timing.recordPushStart((startAtSeconds - whenSeconds) * 1_000);
     source.start(startAtSeconds);
-    return { startAtSeconds, pushed };
+    return { startAtSeconds, pushed: true };
   }
 }
