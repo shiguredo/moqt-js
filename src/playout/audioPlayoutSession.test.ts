@@ -295,6 +295,7 @@ function handleSound(
     enforceTarget?: boolean;
     inputLagMs?: number | null;
     intentionalDelayMs?: number;
+    arrivalDelayFloorMs?: number;
     sampleRate?: number;
     samples?: readonly Float32Array[];
   } = {},
@@ -317,6 +318,9 @@ function handleSound(
     timeline: fixture.timeline,
     useTimeline: options.useTimeline ?? true,
     enforceTarget: options.enforceTarget ?? true,
+    ...(options.arrivalDelayFloorMs === undefined
+      ? {}
+      : { arrivalDelayFloorMs: options.arrivalDelayFloorMs }),
     output,
   };
   return fixture.session.handleDecodedAudio(request);
@@ -481,6 +485,52 @@ test("handleDecodedAudio: 時間軸を使わないときは壁時計でも到着
   const snapshot = fixture.timing.snapshot(performance.now());
   assert.equal(snapshot.arrivalPlannedFrames, 1);
   assert.isNull(snapshot.lastTargetMs);
+});
+
+/**
+ * 完了条件: 音声だけの購読 (揃える相手がいない) では、到着基準で並べる再生の遅れに
+ * 呼び出し側が渡した下限を足す。揺らぎの推定は Wi-Fi の周期的な停滞に届かないため、
+ * 経路の停滞を先に吸収する下限を持つ (issues/closed/0881-change-audio-only-arrival-delay-floor.md)。
+ */
+test("handleDecodedAudio: 到着基準の再生の遅れに下限を足す", () => {
+  // 下限を渡さないときは再生の遅れの床 (AUDIO_PLAYOUT_DELAY_FLOOR_MS) で鳴らす
+  const withoutFloorFixture = makeSessionFixture();
+  const withoutFloor = makeRecordingOutput({
+    timeline: withoutFloorFixture.timeline,
+    mapping: null,
+    currentTimeSeconds: 10,
+  });
+  assert.equal(
+    handleSound(withoutFloorFixture, withoutFloor.output, {
+      timestamp: 20_000,
+      timestampKind: "none",
+    }).status,
+    "played",
+  );
+  assert.closeTo(
+    withoutFloor.startedAtSeconds[0] ?? 0,
+    10 + AUDIO_PLAYOUT_DELAY_FLOOR_MS / 1_000,
+    1e-6,
+    "下限が無いときは再生の遅れの床で鳴らすこと",
+  );
+
+  // 下限 120 ms を渡すと、最初の音の基準を「到着 + 下限」に置き、以降の音もその基準から
+  // 並ぶ。床ではなく下限まで遅らせる
+  const withFloorFixture = makeSessionFixture();
+  const withFloor = makeRecordingOutput({
+    timeline: withFloorFixture.timeline,
+    mapping: null,
+    currentTimeSeconds: 10,
+  });
+  assert.equal(
+    handleSound(withFloorFixture, withFloor.output, {
+      timestamp: 20_000,
+      timestampKind: "none",
+      arrivalDelayFloorMs: 120,
+    }).status,
+    "played",
+  );
+  assert.closeTo(withFloor.startedAtSeconds[0] ?? 0, 10.12, 1e-6, "下限 120 ms だけ遅らせること");
 });
 
 /**
