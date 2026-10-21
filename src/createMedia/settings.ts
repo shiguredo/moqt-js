@@ -47,7 +47,12 @@ export interface ResolvedAudioPublishSettings {
   channels: number;
   /** 音声 Object の送り方 */
   delivery: AudioDelivery;
-  /** 音声 Object を 1 つにつき何回送るか (1 か 2) */
+  /**
+   * 音声 Object を 1 つにつき何回送るか (1〜3)
+   *
+   * 2 以上を指定できるのは datagram 配送だけである。subgroup 配送は Data Stream が
+   * 再送されるため冗長化の意味が無く、指定された場合は start() がエラーにする
+   */
   redundancy: number;
 }
 
@@ -100,6 +105,18 @@ export function resolveAudioPublishSettings(
     );
   }
 
+  // 既定は 1 回。datagram は再送されない (RFC 9221) ため、損失に備えるなら 2 にする
+  // (src/codec/types.ts の `redundancy` に実測を残す)
+  const redundancy = options.redundancy ?? 1;
+  // 既定は Subgroup。datagram を指定できるかはセッションの reliability に依存するため、
+  // ここでは解決するだけで判定しない (createMediaPublisher の start が判定する)
+  const delivery = options.delivery ?? "subgroup";
+  // 冗長化は datagram の送信経路でしか実装していない。subgroup 配送で 2 以上を指定すると
+  // 送信回数が増えないまま黙って無視され、利用者が冗長化されていると誤解するため拒否する
+  if (delivery !== "datagram" && redundancy > 1) {
+    throw new Error(`audio redundancy must be 1 when delivery is "${delivery}", got ${redundancy}`);
+  }
+
   return {
     trackName: options.trackName ?? DEFAULT_AUDIO_TRACK_NAME,
     codec: options.codec,
@@ -107,12 +124,8 @@ export function resolveAudioPublishSettings(
     bitrate: options.bitrate,
     sampleRate,
     channels,
-    // 既定は 1 回。datagram は再送されない (RFC 9221) ため、損失に備えるなら 2 にする
-    // (src/codec/types.ts の `redundancy` に実測を残す)
-    redundancy: options.redundancy ?? 1,
-    // 既定は Subgroup。datagram を指定できるかはセッションの reliability に依存するため、
-    // ここでは解決するだけで判定しない (createMediaPublisher の start が判定する)
-    delivery: options.delivery ?? "subgroup",
+    redundancy,
+    delivery,
   };
 }
 

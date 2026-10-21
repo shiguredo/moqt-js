@@ -197,7 +197,8 @@ export interface AudioPublishOptions {
   // である。損失の無い経路では品質が変わらない (欠落 0、飛ばし 0)。代わりに音声の帯域と
   // datagram の数が n 倍になる。4 以上は帯域を無駄にするため start() がエラーにする
   //
-  // delivery が "subgroup" のときは Data Stream が再送されるため、2 以上にする意味は無い
+  // delivery が "subgroup" のときは Data Stream が再送されるため、2 以上を指定できない
+  // (冗長化は datagram の送信経路でしか実装しておらず、黙って無視せず start() がエラーにする)
   redundancy?: number;
 }
 
