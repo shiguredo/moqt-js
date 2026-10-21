@@ -534,6 +534,58 @@ test("handleDecodedAudio: 到着基準の再生の遅れに下限を足す", () 
 });
 
 /**
+ * 完了条件: 音声だけの購読では、穴を観測して閉ループの目標が広がったとき、その目標まで
+ * 到着基準の再生の遅れを深くする。下限だけでは 140 ms を超える跳ねを吸収できないため、
+ * 穴 1 個で広げた目標 (`AUDIO_ONLY_ARRIVAL_DELAY_MAX_MS` = 160 ms まで) を使う
+ * (issues/closed/0882-change-gap-delay-ceiling-hold.md)。
+ */
+test("handleDecodedAudio: 音声だけの購読では穴で広げた目標まで遅らせる", () => {
+  const fixture = makeSessionFixture();
+  const nowMs = observedWallClockMs();
+  // 音声の基準と jitter buffer の遅れを作る
+  fixture.timeline.observe("audio", nowMs, Math.round(nowMs * 1_000));
+  // 閉ループへ観測を渡し、穴 2 回で目標を 160 ms まで広げる (実時間を待たない)
+  const observe = (atMs: number, gapCount: number, gapMs: number): void => {
+    fixture.timeline.observeAudioPlayout({
+      atMs,
+      latenessMs: null,
+      startDelayMs: null,
+      slackMs: null,
+      backlogMisses: 0,
+      backlogMs: 0,
+      compressionMs: 0,
+      gapCount,
+      gapMs,
+    });
+  };
+  observe(0, 0, 0);
+  observe(1_000, 1, 20);
+  assert.equal(fixture.timeline.playoutDelayMs, 140, "穴 1 個で 140 ms まで広がること");
+  observe(2_000, 2, 60);
+  assert.equal(fixture.timeline.playoutDelayMs, 160, "穴 2 個で 160 ms まで広がること");
+
+  const output = makeRecordingOutput({
+    timeline: fixture.timeline,
+    mapping: null,
+    currentTimeSeconds: 10,
+  });
+  assert.equal(
+    handleSound(fixture, output.output, {
+      timestamp: 20_000,
+      timestampKind: "none",
+      arrivalDelayFloorMs: 140,
+    }).status,
+    "played",
+  );
+  assert.closeTo(
+    output.startedAtSeconds[0] ?? 0,
+    10.16,
+    1e-6,
+    "広げた目標 160 ms まで遅らせること",
+  );
+});
+
+/**
  * 完了条件: 基準を共有できず到着基準で鳴らした音 (保持されている側) は、時間軸へ実績を
  * 記録しない。
  *

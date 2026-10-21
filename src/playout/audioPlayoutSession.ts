@@ -34,7 +34,11 @@ import { isTimeStretchAvailable } from "./audioTimeStretch";
 import type { AudioPlayoutDrainStats, AudioPlayoutTimingStats } from "./audioPlayoutTimingStats";
 import { AudioReceiveCatchUp } from "./audioReceiveCatchUp";
 import { compressSamples, concealSamples, type AudioSamples } from "./audioTimeStretch";
-import { AUDIO_PLAYOUT_DELAY_FLOOR_MS, type PlayoutTimeline } from "./timeline";
+import {
+  AUDIO_PLAYOUT_DELAY_FLOOR_MS,
+  audioOnlyArrivalPlayoutDelayMs,
+  type PlayoutTimeline,
+} from "./timeline";
 
 /**
  * 音の TIMESTAMP の種類 (draft-ietf-moq-loc-04 §2.3.1.1 / §2.3.1.2)
@@ -434,11 +438,19 @@ export class AudioPlayoutSession {
           AUDIO_PLAYOUT_DELAY_FLOOR_MS,
         ) / 1_000;
       // 音声だけの購読では、揺らぎの推定が届いていない周期的な停滞を先に吸収するため、
-      // 呼び出し側が渡した下限まで遅らせる。映像に合わせる相手がいるときは渡されない
-      const arrivalDelaySeconds = Math.max(
-        arrivalPlayoutDelaySeconds(playoutDelaySeconds),
-        (request.arrivalDelayFloorMs ?? 0) / 1_000,
-      );
+      // 呼び出し側が渡した下限まで遅らせる。穴を観測して閉ループが目標を広げたときは、
+      // 目標の分だけ深く構える (音声だけの上限まで。映像に合わせる相手がいるときは
+      // 渡されない)
+      const arrivalDelaySeconds =
+        request.arrivalDelayFloorMs === undefined
+          ? arrivalPlayoutDelaySeconds(playoutDelaySeconds)
+          : Math.max(
+              arrivalPlayoutDelaySeconds(playoutDelaySeconds),
+              audioOnlyArrivalPlayoutDelayMs(
+                playoutDelaySeconds * 1_000,
+                request.arrivalDelayFloorMs,
+              ) / 1_000,
+            );
       const decision = this.playout.schedule(contextNowSeconds, data.timestamp, durationSeconds, {
         targetStartSeconds,
         // 到着した音がまだ鳴っていない位置。到着基準の遅れはここから数える

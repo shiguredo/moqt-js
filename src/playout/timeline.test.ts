@@ -29,6 +29,9 @@ import {
   PLAYOUT_QUEUE_HEADROOM_FRAMES,
   PlayoutTimeline,
   SYNC_MIN_DELTA_MS,
+  AUDIO_ONLY_ARRIVAL_DELAY_MAX_MS,
+  AUDIO_ONLY_ARRIVAL_DELAY_FLOOR_MS,
+  audioOnlyArrivalPlayoutDelayMs,
 } from "./timeline";
 import { AUDIO_CLOCK_DEADBAND_MS } from "./audioPlayout";
 import { AUDIO_DELAY_START_MS } from "./audioDelayEstimator";
@@ -1483,4 +1486,28 @@ test("observe: 片方のトラックが届かなくなっても保持は満了�
     timeline.observe("audio", EPOCH_MS + mediaMs, timestampOf(mediaMs));
   }
   assert.isTrue(timeline.sharingBases, "映像が届かない間も保持が満了して共有が戻ること");
+});
+
+// 完了条件: 音声だけの購読の到着基準の遅れは、下限を必ず確保したうえで、学習した値
+// (穴を観測して閉ループが広げた目標) を音声だけの上限まで使う。共有の基準があるトラックは
+// 100 ms の上限のまま (TIMESTAMP の時計のずれを揺らぎとして学習するため)
+test("audioOnlyArrivalPlayoutDelayMs: 下限を確保して学習した値を上限まで使う", () => {
+  assert.equal(
+    audioOnlyArrivalPlayoutDelayMs(50, AUDIO_ONLY_ARRIVAL_DELAY_FLOOR_MS),
+    AUDIO_ONLY_ARRIVAL_DELAY_FLOOR_MS,
+    "学習した値が下限より小さければ下限を使うこと",
+  );
+  assert.equal(
+    audioOnlyArrivalPlayoutDelayMs(150, AUDIO_ONLY_ARRIVAL_DELAY_FLOOR_MS),
+    150,
+    "学習した値が下限より大きければその値を使うこと",
+  );
+  assert.equal(
+    audioOnlyArrivalPlayoutDelayMs(300, AUDIO_ONLY_ARRIVAL_DELAY_FLOOR_MS),
+    AUDIO_ONLY_ARRIVAL_DELAY_MAX_MS,
+    "音声だけの上限 160 ms で切ること",
+  );
+  // 映像に合わせる相手がいない音声だけの購読でだけ使う関数である。共有の基準がある
+  // トラックは 100 ms の上限 (AUDIO_PLAYOUT_ARRIVAL_DELAY_MS) のままである
+  assert.equal(audioOnlyArrivalPlayoutDelayMs(140, 0), 140, "下限 0 でも学習した値を返すこと");
 });

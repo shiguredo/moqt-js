@@ -27,6 +27,7 @@ import {
 import { AUDIO_PUBLISH_CATCH_UP_PENDING_TIMEOUT_MS } from "../../../src/audioPublishCatchUp";
 import {
   AUDIO_DELAY_FEEDBACK_ARTIFACT_CEILING_MS,
+  AUDIO_DELAY_FEEDBACK_GAP_QUIET_MS,
   AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS,
 } from "../../../src/playout/audioDelayFeedback.ts";
 import {
@@ -428,7 +429,7 @@ export const AUDIO_PLAYOUT_TIMING_HELP: SectionHelp = {
     },
     {
       term: "appliedCeilingMs",
-      description: `The limit actually applied to the target delay (ms). It is ${AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS} ms normally and widens to ${AUDIO_DELAY_FEEDBACK_ARTIFACT_CEILING_MS} ms while the time compression or the gaps continue, unless the explicit targetLatency caps more tightly. The value actually used is appliedMs in this section (and also in A/V Sync).`,
+      description: `The limit actually applied to the target delay (ms). It is ${AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS} ms normally. A single gap widens it for ${AUDIO_DELAY_FEEDBACK_GAP_QUIET_MS / 1_000} s to what the gap plus the margin needs, and sustained time compression or gaps widen it to ${AUDIO_DELAY_FEEDBACK_ARTIFACT_CEILING_MS} ms, unless the explicit targetLatency caps more tightly. The value actually used is appliedMs in this section (and also in A/V Sync).`,
     },
     {
       term: "compressionMsPerSecond",
