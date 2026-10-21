@@ -460,12 +460,12 @@ interface ConnectionSummaryItem {
  * 接続設定の要約を作る (欄を閉じている間に 1 行で出す)
  *
  * 接続先と、配信で送る映像と音声の要点を並べる。映像や音声の入力が None のときは形式を出さない。
- * subscriber モードは Publisher だけが使う設定を隠すため、MOQT URI と Namespace だけにする
+ * subscriber モードは Publisher だけが使う設定を隠すため、MOQT URI と Track Namespace だけにする
  */
 function buildConnectionSummary(currentMode: DevtoolsMode): ConnectionSummaryItem[] {
   const summary: ConnectionSummaryItem[] = [
     { label: "MOQT URI", value: settings.url.value || "-" },
-    { label: "Namespace", value: settings.namespace.value || "-" },
+    { label: "Track Namespace", value: settings.namespace.value || "-" },
   ];
   if (currentMode === "subscriber") {
     return summary;
@@ -826,11 +826,11 @@ export function ConnectionSettings() {
             />
           </div>
         </div>
-        {/* Namespace は接続先の特定に使うため、URI Fragment より左に置く */}
+        {/* Track Namespace は接続先の特定に使うため、URI Fragment より左に置く */}
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 mt-4">
           <div class="lg:col-span-2">
             <label for="namespace" class="block text-sm font-medium text-slate-600 mb-1">
-              Namespace
+              Track Namespace
               <span class="text-xs text-slate-400 ml-1">
                 {settings.namespaceLocked.value
                   ? "(fixed by the msf fragment)"
