@@ -212,7 +212,7 @@ export async function requestsPublish(
 
   // データグラム送信コールバックを設定
   impl.onSendDatagram = (params: SendDatagramParams) => {
-    requestsSendDatagram(session, impl, params);
+    return requestsSendDatagram(session, impl, params);
   };
 
   // PUBLISH_STATE_NOTIFY 送信コールバックを設定
@@ -784,8 +784,8 @@ export function requestsSendDatagram(
   session: RequestsSessionInternal,
   publisher: PublisherImpl,
   params: SendDatagramParams,
-): void {
-  publishSendDatagram(session as unknown as SessionInternal, publisher, params);
+): Promise<void> {
+  return publishSendDatagram(session as unknown as SessionInternal, publisher, params);
 }
 
 /**

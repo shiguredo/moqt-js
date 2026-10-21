@@ -139,15 +139,15 @@ draft-ietf-moq-msf-01 §11.4.3: track に紐づくトークンは、そのトラ
 
 ### `Publisher`
 
-| プロパティ / メソッド         | 説明                                                        |
-| ----------------------------- | ----------------------------------------------------------- |
-| `state`                       | `"active"` / `"closed"`                                     |
-| `forwardState`                | `PUBLISH_OK` / `REQUEST_UPDATE` で更新された `FORWARD` 状態 |
-| `sendObject(params)`          | Subgroup stream に Object を送る                            |
-| `sendDatagram(params)`        | Datagram として Object を送る                               |
-| `notifyStateChange(options?)` | 購読状態の変化を `PUBLISH_STATE_NOTIFY` で購読者へ通知する  |
-| `closeSubgroup()`             | 開いている Subgroup を Object を送らずに閉じる              |
-| `done()`                      | 現在のデータストリームを閉じて `PUBLISH_DONE` を送る        |
+| プロパティ / メソッド         | 説明                                                                                                                                |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `state`                       | `"active"` / `"closed"`                                                                                                             |
+| `forwardState`                | `PUBLISH_OK` / `REQUEST_UPDATE` で更新された `FORWARD` 状態                                                                         |
+| `sendObject(params)`          | Subgroup stream に Object を送る                                                                                                    |
+| `sendDatagram(params)`        | Datagram として Object を送る。返値の Promise は datagram の write の完了で resolve する（失敗は `onError` へ通知し reject しない） |
+| `notifyStateChange(options?)` | 購読状態の変化を `PUBLISH_STATE_NOTIFY` で購読者へ通知する                                                                          |
+| `closeSubgroup()`             | 開いている Subgroup を Object を送らずに閉じる                                                                                      |
+| `done()`                      | 現在のデータストリームを閉じて `PUBLISH_DONE` を送る                                                                                |
 
 `sendObject()` / `sendDatagram()` の送信パラメータは `number` ベースだが、受信した `MoqtObject` は `bigint` ベースで返る。
 

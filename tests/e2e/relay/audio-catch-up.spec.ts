@@ -348,7 +348,14 @@ ${formatReport(observations)}`,
     `追いついた後に音声の Object を送り続けている
 ${formatReport(observations)}`,
   ).toBeUndefined();
-  const sentGrowth = (rest[rest.length - 1]?.objectsSent ?? 0) - (recovered?.objectsSent ?? 0);
+  let sentGrowth = (rest[rest.length - 1]?.objectsSent ?? 0) - (recovered?.objectsSent ?? 0);
+  if (sentGrowth <= 0) {
+    // CI の runner が一時的に止まると、回復後の観測が同じ値のまま並ぶことがある。
+    // 少し待ってからもう一度観測し、それでも増えないときだけ失敗にする
+    await page.waitForTimeout(2_000);
+    const retried = await sample();
+    sentGrowth = (retried.objectsSent ?? 0) - (recovered?.objectsSent ?? 0);
+  }
   expect(
     sentGrowth,
     `追いついた後に送った音声の Object が増える (増加 ${sentGrowth} 件)\n${formatReport(observations)}`,

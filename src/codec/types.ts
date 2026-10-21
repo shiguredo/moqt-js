@@ -33,6 +33,22 @@ export interface AudioStats {
   // (src/audioPublishCatchUp.ts)。捨てた数と長さ、観測した遅れを出す。
   // 実測値は getStats() が読む時点の観測から作る
   catchUp: AudioPublishCatchUpStats | null;
+  // 停止時に encoder の flush で送ろうとした末尾の量 (累積。停止のたびに増える)。
+  // 数は符号化の出力 (chunk) の数、長さは chunk の duration の合計 (ミリ秒)。
+  // 送信を試みた時点で数えるため、write が失敗した分も含む。停止以外の経路 (pause) では
+  // 増えない
+  tailFlushedFrames: number;
+  tailFlushedMs: number;
+  // 停止時に取り込みキューから読み出したが、送れなかった入力の量 (累積)。
+  // 数は取り込みブロック (10 ms) の数、長さは送信した chunk が覆わなかった範囲
+  // (ミリ秒)。0 でも、drain の打ち切りで読まなかった取り込みキューと、write の
+  // 失敗は含まない
+  tailDroppedFrames: number;
+  tailDroppedMs: number;
+  // 停止時の drain・flush・送信の待ちが上限で打ち切られた停止の回数 (累積)。
+  // 1 つの停止で複数の待ちが打ち切られても 1 回と数える。1 以上なら、入力が途切れた・
+  // worker が応答しなかったなどの打ち切りがあったことを示す
+  tailFlushTimeoutCount: number;
 }
 
 // 受信側オーディオ統計

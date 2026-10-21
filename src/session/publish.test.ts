@@ -508,7 +508,7 @@ test("publishSendDatagram: 不正 objectId で通知して throw する", () => 
 
   let thrown: Error | undefined;
   try {
-    publishSendDatagram(session, publisher, {
+    void publishSendDatagram(session, publisher, {
       groupId: 0,
       objectId: -1,
       payload: new Uint8Array([1, 2, 3]),
@@ -538,7 +538,7 @@ test("publishSendDatagram: 範囲外 priority (300) で通知して throw する
 
   let thrown: Error | undefined;
   try {
-    publishSendDatagram(session, publisher, {
+    void publishSendDatagram(session, publisher, {
       groupId: 0,
       objectId: 0,
       payload: new Uint8Array([1, 2, 3]),
@@ -570,7 +570,7 @@ test("publishSendDatagram: 境界値 0 / 255 の priority は送信できる", (
       errors.push(error);
     });
 
-    publishSendDatagram(session, publisher, {
+    void publishSendDatagram(session, publisher, {
       groupId: 0,
       objectId: 0,
       payload: new Uint8Array([1, 2, 3]),
@@ -598,7 +598,7 @@ test("publishSendDatagram: -1 / 非整数の priority で通知して throw す�
 
     let thrown: Error | undefined;
     try {
-      publishSendDatagram(session, publisher, {
+      void publishSendDatagram(session, publisher, {
         groupId: 0,
         objectId: 0,
         payload: new Uint8Array([1, 2, 3]),
@@ -729,7 +729,7 @@ test("publishSendDatagram: 不正 groupId で通知して throw する", () => {
 
   let thrown: Error | undefined;
   try {
-    publishSendDatagram(session, publisher, {
+    void publishSendDatagram(session, publisher, {
       groupId: 2 ** 64,
       objectId: 0,
       payload: new Uint8Array([1, 2, 3]),
@@ -991,7 +991,7 @@ test("publishSendDatagram: forwardState=false では datagram writer を取得�
   const publisher = new PublisherImpl(["test"], "track", 0n, 1n);
   publisher.setForwardState(false);
 
-  publishSendDatagram(session, publisher, {
+  void publishSendDatagram(session, publisher, {
     groupId: 0,
     objectId: 0,
     payload: new Uint8Array([1]),

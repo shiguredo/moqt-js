@@ -1108,7 +1108,7 @@ export class SessionImpl implements Session {
    * datagram を送信する
    * draft-ietf-moq-transport-22 Section 11.2 (Datagrams)
    */
-  sendDatagram(publisher: PublisherImpl, params: SendDatagramParams): void {
+  sendDatagram(publisher: PublisherImpl, params: SendDatagramParams): Promise<void> {
     return requestsSendDatagram(this as unknown as RequestsSessionInternal, publisher, params);
   }
 

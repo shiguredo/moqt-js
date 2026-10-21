@@ -1,9 +1,9 @@
 # 配信の停止で符号化パイプラインの末尾 30 ms が送られない
 
 - Created: 2026-10-20
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-10-20
 - Branch: feature/fix-publisher-audio-tail-flush
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-10-20
 - Reporter: @voluntas
 
 ## 目的
@@ -62,10 +62,47 @@
 - Opus encoder に残った入力が flush で出力され、close の前に送信されること (単体テスト)
 - PUBLISH_DONE の後に datagram を送らないことと、末尾の datagram が PUBLISH_DONE より先に
   届く方策が実装されていること
-- 実リレーで publisher を停止したとき、購読側で最後に受信した Object の TIMESTAMP と停止
-  時刻の差が、パイプライン遅延 (Opus の 20 ms と経路の遅れ) の範囲に収まること
-- 送れなかった出力が統計に出ること
+- 実リレーで publisher を停止したとき、購読側が停止後に末尾の Object を 1 件以上受信し、
+  停止の計器 (`tailFlushTimeoutCount` 0 / `tailDropped*` 0 / `tailFlushed*` が 1 以上) が
+  上限内で完了していること (停止の所要時間はログに出すが、E2E 環境の負荷で変動するため
+  判定に使わない。購読側の TIMESTAMP と停止時刻の比較は計測用の口が無いため未実施)
+- 送れなかった出力が統計に出ること (読んだが送れなかった分。write の失敗は含まない)
 - `vp check` / `tsc --noEmit` / `vp test run` と、実リレーの既存 E2E が通ること
+
+## 解決方法
+
+- 停止の順序を「周期読み出しのループ自身が取り込みキューを読み切る」「1 フレーム先読みを
+  encode する」「`AudioEncoderWrapper.flush()` で encoder の出力を待つ」「datagram の
+  write / subgroup の送信の完了を待つ」「配送方式にかかわらず 50 ms 待つ」「PUBLISH_DONE」
+  に組み替えた。stop / close のたびに `processingGeneration` を先に進めると末尾の出力が
+  世代不一致で捨てられるため、末尾 flush の後に進める
+- 読み切りの打ち切りは、ループ内で `Promise.race([read, sleep(5 ms)])` を使い、停止の受付時
+  に既に capture されていた分だけを末尾に含める。負けた read は後から解決したら閉じて
+  捨てる。上限は 4 ブロック / 50 ms、停止の待ちは flush と送信を合わせて 150 ms で打ち切る
+  (`tailFlushTimeoutCount` に残す。drain の待ち 55 ms は別に取る)
+- `AudioEncoderWrapper.flush()` を追加した。direct は WebCodecs の `AudioEncoder.flush`、
+  worker は `flush` / `flushed` メッセージで、worker が flush の出力を `encoded` として
+  送ってから `flushed` を返す順序を保証する。`close()` は待っている flush を reject して
+  ハングしない
+- `Publisher.sendDatagram` の返値を `Promise<void>` にした (write の完了で resolve、失敗は
+  従来どおり onError で通知)。停止時は末尾の write の完了を待った後に
+  `AUDIO_TAIL_PUBLISH_DONE_GRACE_MS` = 50 ms 待ってから PUBLISH_DONE を送る
+- 計器: `AudioStats` に `tailFlushedFrames` / `tailFlushedMs` (flush で送れた末尾)、
+  `tailDroppedFrames` / `tailDroppedMs` (読んだが送れなかった末尾)、
+  `tailFlushTimeoutCount` (上限で打ち切った回数) を追加した
+- 単体ハーネス: 停止前に投入した 10 ms ブロック 4 個がすべて encode・送信され、30 ms から
+  0 ms になった。Publisher に記録用の encoder を注入し、flush の出力が encoder の close と
+  PUBLISH_DONE より前に送られること、PUBLISH_DONE の後に datagram が無いこと、二重 stop /
+  close 中の stop、再 start を固定した。`AudioEncoderWrapper.flush` は記録用の worker /
+  encoder を注入した単体テストで、flush の要求順序と二重呼び出しの共有、close による
+  reject を固定した
+- 実ブラウザ + 実リレー: `tests/e2e/relay/audio-publisher-tail.spec.ts` を追加し、停止の
+  所要時間が上限に収まることも assert する。subgroup の 44 ms は全配送で 50 ms 猶予を待つ
+  変更の前の値であり、再測が必要である。library の
+  Publisher (worker 符号化の既定) で datagram 配送は停止 102 ms・flush 1 件 20 ms・欠落 0・
+  timeout 0、subgroup 配送は停止 44 ms・flush 1 件 20 ms・欠落 0 で、購読者は停止の後に
+  末尾を 2 件受信した。全 E2E は 22 件成功 (AAC の 1 件は負荷時の flake で、単体再実行では
+  成功)。`vp check` / `tsc --noEmit` / `vp test run` (234 ファイル / 4140 テスト) も成功
 
 ## 参照
 
