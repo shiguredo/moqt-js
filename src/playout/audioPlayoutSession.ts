@@ -98,6 +98,16 @@ export const AUDIO_PLAYOUT_DRAIN_CLOSE_MAX_MS = 150;
 export const AUDIO_PLAYOUT_DRAIN_POLL_MS = 25;
 
 /**
+ * drain の待ちを終えたとみなす許容誤差 (ミリ秒)
+ *
+ * 実時計 (`performance.now()`) の大きな値へポーリング間隔を足すと、浮動小数点の
+ * 丸めで残り時間が 0 よりごくわずかに大きいまま時計が進まなくなる (例: 上限 300 ms
+ * に対して 299.99999999999994 ms)。そのままでは待ちループが終わらず、ワーカーが
+ * 止まる。この誤差以内なら待ち終えたものとして扱う
+ */
+const AUDIO_PLAYOUT_DRAIN_WAIT_EPSILON_MS = 1e-6;
+
+/**
  * drain の待ち合わせで使う時計と待ち
  *
  * テストでは決定的な実装を渡し、実時間を待たずに待ち時間の上限と終了条件を検証する。
@@ -746,7 +756,7 @@ export class AudioPlayoutSession {
       if (reservedDone && isFlushSettled()) {
         break;
       }
-      if (elapsedMs >= requestedMs) {
+      if (elapsedMs >= requestedMs - AUDIO_PLAYOUT_DRAIN_WAIT_EPSILON_MS) {
         break;
       }
       await clock.sleep(Math.min(AUDIO_PLAYOUT_DRAIN_POLL_MS, requestedMs - elapsedMs));

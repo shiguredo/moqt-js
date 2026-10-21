@@ -1524,6 +1524,41 @@ test("drainReserved: 上限で打ち切り、残りを stopped に数える", as
 });
 
 /**
+ * 完了条件: 時計の丸めで残り時間が許容誤差未満になっても、待ちループが終わる。
+ * 実時計は大きな値へ 25 ms を足すため、上限ちょうどで 299.99999999999994 ms の
+ * ような端数になり得る。残りが極小のまま時計が進まないと、ループが終わらない。
+ */
+test("drainReserved: 時計の丸めで残りが極小になっても待ちを終える", async () => {
+  const fixture = makeSessionFixture();
+  // 最後の 1 回だけ、時計の精度で 0.5 µs 足りなくなる時計を模す
+  class CoarseClock {
+    private currentMs = 0;
+    private calls = 0;
+
+    now(): number {
+      return this.currentMs;
+    }
+
+    async sleep(ms: number): Promise<void> {
+      this.calls += 1;
+      if (this.calls === 12) {
+        this.currentMs += ms - 0.000_000_5;
+      } else if (ms > 1e-6) {
+        this.currentMs += ms;
+      }
+      await Promise.resolve();
+    }
+  }
+  const clock = new CoarseClock();
+  fixture.timing.recordPlay(0, 1_000, 1_000, 20, "timestamp");
+
+  const result = await fixture.session.drainReserved({ clock, maxWaitMs: 300 });
+
+  assert.closeTo(result.waitedMs, 300, 1e-3, "上限まで待って終わること");
+  assert.closeTo(result.cutMs, 20, 1e-6, "切った残りを数えること");
+});
+
+/**
  * 完了条件: flush した Object の復号出力を待つ間は、予約が尽きていても drain を
  * 終えない。復号の出力が届かなかった場合は上限で打ち切る。
  */
