@@ -25,6 +25,13 @@ import type {
 } from "./workerMessages";
 
 /**
+ * Worker モジュールの読み込み
+ *
+ * テストでは記録用の Worker を返す実装を注入する。既定は Vite の `?worker` import。
+ */
+export type AudioEncoderWorkerModuleLoader = () => Promise<{ default: new () => Worker }>;
+
+/**
  * オーディオエンコーダーラッパークラス
  */
 export class AudioEncoderWrapper {
@@ -41,10 +48,17 @@ export class AudioEncoderWrapper {
   private pendingFlush: Promise<void> | null = null;
   private pendingFlushResolve: (() => void) | null = null;
   private pendingFlushReject: ((error: Error) => void) | null = null;
+  // Worker モジュールの読み込み (テストで記録用の Worker を注入するため)
+  private readonly loadWorkerModule: AudioEncoderWorkerModuleLoader | null;
 
-  constructor(useWorker: boolean, callbacks: AudioEncoderWrapperCallbacks) {
+  constructor(
+    useWorker: boolean,
+    callbacks: AudioEncoderWrapperCallbacks,
+    loadWorkerModule: AudioEncoderWorkerModuleLoader | null = null,
+  ) {
     this.useWorker = useWorker;
     this.callbacks = callbacks;
+    this.loadWorkerModule = loadWorkerModule;
   }
 
   /**
@@ -78,7 +92,8 @@ export class AudioEncoderWrapper {
         },
       ),
       dataTypes: ["encoded", "flushed"],
-      loadWorkerModule: () => import("./workers/audioEncoder.worker?worker"),
+      loadWorkerModule:
+        this.loadWorkerModule ?? (() => import("./workers/audioEncoder.worker?worker")),
       handleWorkerData: (response) => {
         // flush の完了応答。worker は flush の出力 (encoded) を送ってから flushed を
         // 送るため、これを受け取った時点で出力はすべて本体のコールバックへ届いている
