@@ -177,6 +177,31 @@ export const AUDIO_PLAYOUT_ARRIVAL_DELAY_MS = 100;
 export const AUDIO_ONLY_ARRIVAL_DELAY_FLOOR_MS = 140;
 
 /**
+ * 音声だけを購読するときの、学習した再生の遅れを使える上限 (ミリ秒)
+ *
+ * 映像に合わせる相手がいないため、閉ループが穴を観測して広げた目標 (最大
+ * `AUDIO_DELAY_FEEDBACK_ARTIFACT_CEILING_MS` = 160 ms) まで到着基準の遅れに使う。
+ * 共有の基準があるトラックの上限 (`AUDIO_PLAYOUT_ARRIVAL_DELAY_MS` = 100 ms) はそのまま
+ * にする。TIMESTAMP の時計のずれを揺らぎとして学習するトラックでは、100 ms を超える分を
+ * 使うと遅延だけが増えるためである
+ */
+export const AUDIO_ONLY_ARRIVAL_DELAY_MAX_MS = 160;
+
+/**
+ * 音声だけを購読するときの到着基準の再生の遅れ (ミリ秒)
+ *
+ * 下限 (`AUDIO_ONLY_ARRIVAL_DELAY_FLOOR_MS`) を必ず確保し、その上で学習した値
+ * (`learnedDelayMs`) を上限 (`AUDIO_ONLY_ARRIVAL_DELAY_MAX_MS`) まで使う。穴を観測して
+ * 閉ループが目標を広げたとき、その分だけ深く構える
+ *
+ * @param learnedDelayMs - 共有の時間軸が学習した再生の遅れ (ミリ秒)
+ * @param floorMs - 確保する下限 (ミリ秒)。この関数は音声だけの購読でだけ使う
+ */
+export function audioOnlyArrivalPlayoutDelayMs(learnedDelayMs: number, floorMs: number): number {
+  return Math.max(floorMs, Math.min(learnedDelayMs, AUDIO_ONLY_ARRIVAL_DELAY_MAX_MS));
+}
+
+/**
  * 到着基準で並べるときの再生の遅れ (ミリ秒)
  *
  * 学習した値 (`learnedDelayMs`) は経路の揺らぎを吸収するために必要である。ただし上限
