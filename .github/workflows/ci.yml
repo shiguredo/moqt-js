@@ -13,7 +13,8 @@ permissions:
 
 jobs:
   lint:
-    runs-on: ubuntu-slim
+    # ライブラリのビルド (vp run build) を含むため ubuntu-slim では足りない
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -56,7 +57,8 @@ jobs:
       - run: vp run build
 
   typecheck:
-    runs-on: ubuntu-slim
+    # install 時の prepare が vp pack で d.ts を生成するため、ビルドを伴う
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     strategy:
       fail-fast: false
