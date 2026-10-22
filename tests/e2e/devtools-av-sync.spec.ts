@@ -30,6 +30,7 @@ const AV_SYNC_ITEMS = {
 
 // 遅延の内訳の未観測の値 (空の A/V Sync Snapshot と同じ)
 const EMPTY_DELAYS = {
+  audioPlayoutCorrectionMs: 0,
   audio: {
     baseDelayMs: null,
     jitterDelayMs: null,
@@ -59,7 +60,7 @@ const EMPTY_DELAYS = {
   // 音声の目標遅延の閉ループはまだ動いていない。実際に使う値は揺らぎだけから求めた目標
   // (NetEq の初期値) のままである (`devtools/src/signals/subscriber.ts`)
   audioDelayFeedback: {
-    targetMs: 100,
+    targetMs: 50,
     jitterTargetMs: 80,
     appliedMs: 80,
     // 圧縮 (粗さ) が続いていないため、適応で広げていないときの上限 (100 ms) のまま
@@ -142,7 +143,7 @@ test("subscriber の画面に同期の推定と遅延の内訳を既定値で出
   await expect(page.getByTestId(AV_SYNC_ITEMS.videoPresentation)).toHaveText("-");
   // 音声の目標遅延の閉ループ (まだ動いていないため、揺らぎだけの目標と初期値のまま)
   await expect(page.getByTestId(AV_SYNC_ITEMS.audioTargetApplied)).toHaveText("80.0");
-  await expect(page.getByTestId(AV_SYNC_ITEMS.audioTarget)).toHaveText("100.0");
+  await expect(page.getByTestId(AV_SYNC_ITEMS.audioTarget)).toHaveText("50.0");
   await expect(page.getByTestId(AV_SYNC_ITEMS.audioTargetReason)).toHaveText("initial");
   await expect(page.getByTestId(AV_SYNC_ITEMS.audioTargetLateness)).toHaveText("-");
   // 基準を共有できているかと、できていない理由

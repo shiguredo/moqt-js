@@ -118,6 +118,7 @@ test("buildSubscriberStats: 記録した同期の 5 項目をそのまま返す"
     targetLatencyLimitedMs: 0,
     audioClockFallback: false,
     delays: {
+      audioPlayoutCorrectionMs: 0,
       audio: {
         baseDelayMs: 12.5,
         jitterDelayMs: 60,

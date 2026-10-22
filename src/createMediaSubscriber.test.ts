@@ -71,7 +71,7 @@ import {
   type AudioClockMapping,
   type AudioPlayoutScheduler,
 } from "./playout/audioPlayout";
-import { AUDIO_DELAY_FEEDBACK_START_MS } from "./playout/audioDelayFeedback";
+import { AUDIO_DELAY_START_MS } from "./playout/audioDelayEstimator";
 import {
   AUDIO_ONLY_ARRIVAL_DELAY_FLOOR_MS,
   AUDIO_PLAYOUT_ARRIVAL_DELAY_MS,
@@ -4578,7 +4578,9 @@ test("handleAudioDecodedData: 対応が無いときは目標の表示時刻を�
   // 対応が無いので、この音は到着基準 (今 + 再生の遅れ) で予約される
   assert.equal(reservation.startedAtSeconds.length, 1);
   const startedAtMs = (reservation.startedAtSeconds[0] ?? 0) * 1_000;
-  const playoutDelayMs = control.playoutTimeline.playoutDelayMs ?? AUDIO_PLAYOUT_DELAY_FLOOR_MS;
+  // 予約には明示された targetLatency の下限も入る。閉ループの内部目標だけではない。
+  const playoutDelayMs =
+    control.playoutTimeline.presentationExtraDelayMs ?? AUDIO_PLAYOUT_DELAY_FLOOR_MS;
   assert.isAbove(startedAtMs, reservation.currentTimeSeconds * 1_000);
   assert.isAtMost(
     startedAtMs,
@@ -4619,13 +4621,12 @@ test("handleAudioDecodedData: 目標の表示時刻を getOutputTimestamp で換
   );
   // 目標の表示時刻には共有の時間軸の式 (max(targetLatency, 再生遅延)) が効いていること
   assert.equal(control.playoutTimeline.targetLatencyMs, AV_SYNC_TARGET_LATENCY_MS);
-  // 実際に鳴らした結果を 1 つ観測した後は、揺らぎだけから求めた目標
-  // (NetEq の開始値 = 80 ms) ではなく、閉ループの初期値
-  // (AUDIO_DELAY_FEEDBACK_START_MS = 100 ms) と大きい方を使う
+  // 再生の観測後も、到着推定の開始値 80 ms と閉ループの開始値 50 ms の大きい方を使う。
+  // 最初の観測だけで 100 ms へ跳ね上げない
   assert.equal(
     control.playoutTimeline.playoutDelayMs,
-    AUDIO_DELAY_FEEDBACK_START_MS,
-    "閉ループの目標を使うこと",
+    AUDIO_DELAY_START_MS,
+    "到着の分布が揃うまでは初期の余裕を保つこと",
   );
   assert.equal(errors.length, 0);
 });

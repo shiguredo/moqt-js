@@ -126,7 +126,7 @@ interface MediaPublisherOptions {
 音声と映像で同じ値にするための宣言 (draft-ietf-moq-msf-01 §5.2.8 の MUST) であり、片方だけ
 配信するときも購読側の表示の遅れの下限として使われる。0 ms を宣言しても、購読側は
 `max(targetLatency, 揺らぎから求めた再生遅延)` を使うため、音声には下限 (実リレーの実測で
-決めた 50 ms。まだ何も観測していない間は NetEq の開始値の 80 ms) がある。受信側で実際に
+決めた 50 ms。閉ループも 50 ms から始め、到着推定は分布が揃うまで 80 ms) がある。受信側で実際に
 観測した遅れから目標を増やすとき (閉ループ) は、宣言した `targetLatency` を上限にするため、
 指定より遅らせることはない。publisher は `targetLatency` が有限数で
 あることと `renderGroup` が有限の整数であることを検証する (非有限値は JSON で null になり
@@ -913,6 +913,8 @@ interface PlayoutTrackBreakdown {
 interface PlayoutDelayBreakdown {
   audio: PlayoutTrackBreakdown;
   video: PlayoutTrackBreakdown;
+  // AudioContext の時計で換算した予約時刻と、予約時点の目標との差 (ms)
+  audioPlayoutCorrectionMs: number;
   // 基準の差「音声 - 映像」(ms)。表示時刻が使う値であり、A/V 同期はこの差を合わせる
   baseDifferenceMs: number | null;
   // 動きの判定が使う値 (直近 2 秒の窓の最小値で見た同じ差、ms)。基準との隔たりが、
@@ -992,10 +994,10 @@ jitter buffer の遅れは音声と映像で別々に求める。音声は NetEq
   いれば `reason` が `settled` と `lateness` の間を行き来し、`latenessP50Ms` が許容の近くに
   留まる
 
-映像の遅れは揺らぎの百分位である。2 つの表示時刻の差 (A/V のずれ) は、差が 30 ms
-未満の間はそのままにし、超えたときだけ先行する側の表示の遅れを「後行側 - 30 ms」まで
+映像の遅れは揺らぎの百分位である。2 つの表示時刻の差 (A/V のずれ) は、差が 5 ms
+未満の間はそのままにし、超えたときだけ先行する側の表示の遅れを「後行側 - 5 ms」まで
 即座に上げて抑える。上げた分は毎秒 20 ms までで戻す。このため不感帯の中では映像の遅延は
-音声の jitter buffer の遅延に引きずられず、A/V のずれは 30 ms 程度に収まる。
+音声の jitter buffer の遅延に引きずられず、補償できる範囲では予定時刻の差を 5 ms 以内に収める。
 
 基準の差は「遅い側を待つ」ことでしか合わせられないため、2 つのトラックの基準を共有しない
 場合がある。理由は `AvSyncStats.delays.unsharedReason` に出る。
@@ -1035,16 +1037,30 @@ jitter buffer の遅れは音声と映像で別々に求める。音声は NetEq
   2 つのトラック)。実測では、この合わせを止めていたために音声が 195 ms、映像が 98 ms で
   100 ms のずれが残っていた
 
-合わせる量は常に `PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS` (100 ms) までにする。時計のずれの
-証拠 (`drift`) を見たかどうかには依らない。同じ publisher・同じ経路の 2 つのトラックで
-最小遅延がそれ以上違うことはなく、超える分は時計のずれであることが多いためである。証拠を
-見る前に上限を掛けないと、音声の TIMESTAMP が 600 ms 段差でずれ、その段差を揺らぎとして
-学習した音声の遅延 (jitter buffer の目標で 700 ms) へ映像を合わせて 600 ms 足し、映像の
-表示待ちが 500 ms のまま数十秒戻らなくなる (実測)。上限を掛けることで、映像の表示待ちは
-本来の表示の遅れ (100 ms 程度) に上限までを足した値に留まる。合わせない分は A/V のずれと
-して残る (音声の基準が 313 ms・映像が 13 ms の実測では、映像へ 378 ms を足して表示の遅延が
-483 ms になっていた。上限を掛けると表示の遅延は約 175 ms、実時間の A/V のずれは約 38 ms
-になる)
+基準の差を補償する量は `PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS` (100 ms) までにする。
+時計のずれの証拠が見える前でも適用し、片方の TIMESTAMP が大きくずれたときに相手の遅延が
+際限なく伸びるのを防ぐ。自分で決めた jitter buffer の差は別に補償し、最終的な表示待ちは
+キューと表示の上限に収める。音声の目標が 160 ms に広がっても、基準を共有できてキューに
+余裕があれば映像を合わせられる。
+
+音声の出力時計で換算した開始時刻と予約時点の予定の差も、映像の合わせ先へ反映する。
+残差は 250 ms の時定数で平滑化し、`AvSyncStats.delays.audioPlayoutCorrectionMs` に出る。
+出力時計を代用している間は新しい残差を取り込まない。再生結果で目標が変わった呼び出し内で
+同期も更新し、音声の停止では残差と閉ループを初期化する。制御には再開後の分布だけを使い、
+表示用の過去の分布と累積は残す。共有の表示時刻を 1 つ保持して各補償を引き直すため、
+jitter や残差が上下しても、過去の補償を再び足して遅延を積み上げない。
+cache の追いつきで到着基準そのものが下がった分は共有の表示時刻にも反映し、
+古い基準を同期の追加遅延として持ち越さない。
+
+音声の換算は AudioContext の予約までを表す。MediaStream を HTMLAudioElement で再生する
+場合、その後のバッファと選択した音声デバイスの追加遅延は計器に含まれない。
+
+Audio Playback を有効にすると、映像は音声のバッファと出力に必要な分だけ待つ。
+閉ループの初期値だけによる 100 ms への跳ね上げは行わない。到着推定は初期の音切れを
+抑えるため 80 ms を保ち、分布が揃った後は安全下限 50 ms まで観測に適応する。
+音声だけの再生には別の下限があり、穴への対処は実際に使う下限から増やす。
+TIMESTAMP が無い場合、メディア時刻の場合、`useTimeline: false` の場合も、この閉ループの
+適用値を到着基準の再生に使う。壁時計の基準は作らない。
 
 どちらの場合も、2 つのトラックはそれぞれの到着と jitter buffer の遅れで並ぶ。A/V のずれは
 基準の差ではなく、2 つの遅れの差 (数十 ms) になる。`delays` はこの判断に使った内訳
@@ -1162,9 +1178,16 @@ TIMESCALE から決める。draft-ietf-moq-loc-04 §2.3.1.1 / §2.3.1.2) であ�
 - 受信側の追いつきの判定 (`AudioReceiveCatchUp`)。復号の出力が送られた TIMESTAMP から
   遅れ続けたら、復号器を作り直す必要があることを結果 (`catchUpStarted`) で知らせる
 
-Web Audio (`AudioContext` とその出力) は `AudioPlayoutOutput` として注入する。`AudioContext`
-の時計と `performance.now()` の対応は `AudioClockBridge` が境界になり、このクラス自体は
-ブラウザ API の無い環境でも記録用の最小オブジェクトで検証できる。
+Web Audio (`AudioContext` とその出力) は `AudioPlayoutOutput` として渡す。`AudioContext`
+の時計と `performance.now()` の対応は `AudioClockBridge` が境界になる。再開直後などで
+`getOutputTimestamp().performanceTime` が 0 の間は `currentTime` で代用し、出力の残差を学習しない。
+代用値は現在の 2 時計から取り直す。同じ Context の停止と再開でも古い対応を持ち越さず、
+停止していた時間を未来の予約として扱わない。
+出力との結合は実ブラウザの `AudioData` と Web Audio で検証する。
+
+44.1 kHz の音声も時間圧縮と補間に対応する。周期を探す解析用の信号だけを 48 kHz へ変換し、
+元の音声は元のレートのまま処理する。相関が足りない波形では圧縮しない。96 kHz などの
+非対応レートは加工せず、`stretchUnavailableFrames` に数える。
 
 `timestampKind` は、復号へ渡したときに覚えた記録を復号の出力の `AudioData.timestamp` で
 引いて決める。WebCodecs の `AudioDecoder` は出力の timestamp を入力と完全には一致させない

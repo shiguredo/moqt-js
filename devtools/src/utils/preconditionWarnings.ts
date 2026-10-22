@@ -21,7 +21,7 @@ import {
 import type { AudioTimestampOffsetStats } from "../../../src/audioTimestampClock.ts";
 import {
   PLAYOUT_BASE_UNSHARED_HOLD_MS,
-  PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS,
+  syncCompensationLimitMs,
 } from "../../../src/playout/timeline.ts";
 import type { AvSyncSnapshot } from "../signals/subscriber";
 
@@ -58,7 +58,7 @@ export interface PreconditionWarning {
 /**
  * 補償が上限に張り付いているとみなす幅 (ミリ秒)
  *
- * 上限に達すると、足す量は上限そのもの (100 ms) になる。観測と観測の間は毎秒
+ * 上限に達すると、足す量は基準差とバッファ差から求めた補償予算になる。観測と観測の間は毎秒
  * `PLAYOUT_DELAY_DECAY_MS_PER_SECOND` (20 ms) だけ戻るが、観測の間隔は映像でも 33 ms で
  * あるため 1 ms も戻らない。5 ms の幅は、上限に達した状態と、達していない状態 (差が
  * 上限 + 不感帯より小さい) を分けるために十分である
@@ -68,9 +68,9 @@ export const SYNC_PINNED_TOLERANCE_MS = 5;
 /**
  * 上限に張り付いたまま警告を出すまでの時間 (ミリ秒)
  *
- * 張り付いた分は毎秒 20 ms で戻るため、100 ms の補償は 5 秒で戻り切る。その 2 倍を
- * 「戻らない」とみなす。一過性の差 (まとめて届いた山で一瞬開いた、など) では 10 秒も
- * 続かない
+ * 旧来の固定上限 100 ms が毎秒 20 ms で戻る 5 秒の 2 倍から決めた閾値を保つ。
+ * 現在はバッファ差も予算に含めるため、あらゆる補償量が 10 秒以内で戻る保証ではない。
+ * 可変予算そのものへの張り付きが続く場合に、経路と出力の遅延を確認する目安とする
  */
 export const SYNC_PINNED_MIN_MS = 10_000;
 
@@ -255,10 +255,30 @@ export function detectSubscriberWarnings(
 
   // 上限に張り付いたままか。基準を共有している間だけ意味を持つ (共有していない間は
   // 足した分を戻すため、上限に留まらない)
-  const extraMs = Math.max(delays.audio.syncExtraDelayMs, delays.video.syncExtraDelayMs);
+  // 同期本体と同じ符号付きの予算を使う。基準の差を相殺するバッファ差は加算しない。
+  const capMs = delays.presentationDelayCapMs;
+  const audioOwnMs = Math.min(
+    capMs,
+    Math.max(delays.audio.jitterDelayMs ?? 0, snapshot.targetLatencyMs ?? 0),
+  );
+  const videoOwnMs = Math.min(
+    capMs,
+    Math.max(delays.video.jitterDelayMs ?? 0, snapshot.targetLatencyMs ?? 0),
+  );
+  const bufferDifferenceMs = audioOwnMs + delays.audioPlayoutCorrectionMs - videoOwnMs;
+  const differenceMs = (delays.baseDifferenceMs ?? 0) + bufferDifferenceMs;
+  const leading = differenceMs >= 0 ? "video" : "audio";
+  const extraMs = delays[leading].syncExtraDelayMs;
+  const limitMs = Math.min(
+    Math.max(0, capMs - (leading === "audio" ? audioOwnMs : videoOwnMs)),
+    syncCompensationLimitMs(delays.baseDifferenceMs ?? 0, bufferDifferenceMs),
+  );
   const pinned =
     delays.sharingBases &&
-    extraMs >= PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS - SYNC_PINNED_TOLERANCE_MS;
+    delays.baseDifferenceMs !== null &&
+    limitMs > 0 &&
+    Math.abs(differenceMs) > limitMs + SYNC_PINNED_TOLERANCE_MS &&
+    extraMs >= limitMs - SYNC_PINNED_TOLERANCE_MS;
   const syncPinnedSinceMs = pinned ? (state.syncPinnedSinceMs ?? nowMs) : null;
   if (syncPinnedSinceMs !== null && nowMs - syncPinnedSinceMs >= SYNC_PINNED_MIN_MS) {
     warnings.push({
@@ -271,7 +291,7 @@ export function detectSubscriberWarnings(
         "Reconsider the limit, or the TIMESTAMP clock of the track with the larger baseDelayMs.",
       values: [
         `syncExtraDelayMs=${formatMs(extraMs)}`,
-        `limitMs=${PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS}`,
+        `limitMs=${limitMs}`,
         `heldMs=${Math.round(nowMs - syncPinnedSinceMs)}`,
         `baseDifferenceMs=${delays.baseDifferenceMs === null ? "-" : formatMs(delays.baseDifferenceMs)}`,
         `sharingBases=${delays.sharingBases}`,

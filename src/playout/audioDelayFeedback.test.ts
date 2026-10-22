@@ -51,6 +51,7 @@ function observation(
     jitterTargetMs?: number;
     gapCount?: number;
     gapMs?: number;
+    arrivalDelayFloorMs?: number;
   } = {},
 ): AudioDelayFeedbackObservation {
   const latenessMs = summarizeTimings(latenessP50Ms === null ? [] : [latenessP50Ms]);
@@ -67,10 +68,37 @@ function observation(
     jitterTargetMs: options.jitterTargetMs ?? AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS,
     gapCount: options.gapCount ?? 0,
     gapMs: options.gapMs ?? 0,
+    ...(options.arrivalDelayFloorMs === undefined
+      ? {}
+      : { arrivalDelayFloorMs: options.arrivalDelayFloorMs }),
   };
 }
 
-// 閉ループの目標は初期値 (100 ms) から始める。ただし、実際に鳴った結果をまだ 1 つも
+// 再開では過去の累積を新しい穴として数えない。明示された予算は同じ配信の設定なので残す。
+test("reset: 過去の穴を捨て、再開後の新しい穴だけに適応する", () => {
+  const feedback = new AudioDelayFeedback();
+  feedback.setCeilingMs(120);
+  feedback.update(observation(0, 0));
+  feedback.update(observation(1_000, 0, { gapCount: 1, gapMs: 40 }));
+  assert.equal(feedback.feedbackTargetMs, 120);
+  feedback.reset();
+  feedback.update(observation(2_000, 0, { jitterTargetMs: 20, gapCount: 1, gapMs: 40 }));
+  assert.equal(feedback.targetDelayMs(20), 50, "過去の穴で増やし直さないこと");
+  assert.equal(feedback.ceiling, 120, "明示された予算は残すこと");
+  feedback.update(observation(3_000, 0, { jitterTargetMs: 20, gapCount: 2, gapMs: 60 }));
+  assert.equal(feedback.targetDelayMs(20), 90, "再開後の穴には適応すること");
+});
+
+test("音声だけの再生では実際に使う下限から穴への対処を増やす", () => {
+  const feedback = new AudioDelayFeedback();
+  feedback.update(observation(0, 0, { jitterTargetMs: 20, arrivalDelayFloorMs: 140 }));
+  feedback.update(
+    observation(1_000, 0, { jitterTargetMs: 20, arrivalDelayFloorMs: 140, gapCount: 1, gapMs: 20 }),
+  );
+  assert.equal(feedback.targetDelayMs(20), 160, "下限より浅い内部目標を増やすだけで終わらないこと");
+});
+
+// 閉ループの目標は初期値 (50 ms) から始める。ただし、実際に鳴った結果をまだ 1 つも
 // 観測していない間は使わない (観測が無い間に動かすと、まだ鳴らしていない間の表示の遅れが
 // 変わる)。観測を受けたら、揺らぎだけから求めた目標 (NetEq) との大きい方を使う
 test("観測が無い間は閉ループの目標を使わない", () => {
@@ -89,7 +117,7 @@ test("観測が無い間は閉ループの目標を使わない", () => {
     "揺らぎだけの目標をそのまま使うこと",
   );
 
-  // 観測を 1 つ受けたら、閉ループの目標 (初期値 100 ms) と大きい方を使う
+  // 観測を 1 つ受けたら、閉ループの目標 (初期値 50 ms) と大きい方を使う
   feedback.update(observation(0, AUDIO_DELAY_FEEDBACK_TOLERANCE_MS));
   assert.equal(
     feedback.targetDelayMs(0),
@@ -104,16 +132,15 @@ test("観測が無い間は閉ループの目標を使わない", () => {
 });
 
 /**
- * 遅れが許容の中に収まっている観測だけを与えて、目標を下限まで下げる
+ * 遅れが許容の中に収まっている観測だけを与えて、目標が下限に留まることを確かめる
  *
  * 内部目標は、実際に適用される上限 (`AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS` = 100 ms) で切る
- * (欠陥 5)。初期値もこの上限と同じ 100 ms であるため、増える向きの規則を確かめるには、
- * まず下げて余地を作る必要がある。最初の観測は前回が無いため動かず、以降は毎秒 10 ms ずつ
- * 下がるので、6 回 (5 秒) で下限 (50 ms) へ届く
+ * 初期値は下限と同じ 50 ms である。ここでは 5 秒ぶんの安定した観測を与え、
+ * 増える向きの規則を確認する前提を作る
  *
- * @param feedback - 下げる対象
+ * @param feedback - 安定した観測を与える対象
  */
-function lowerToMinimum(feedback: AudioDelayFeedback): void {
+function observeStableAtMinimum(feedback: AudioDelayFeedback): void {
   for (let index = 0; index < 6; index++) {
     feedback.update(observation(index * AUDIO_DELAY_FEEDBACK_INTERVAL_MS, 0));
   }
@@ -124,8 +151,8 @@ function lowerToMinimum(feedback: AudioDelayFeedback): void {
 test("遅れが続くなら、遅れの分だけ目標を増やす", () => {
   // 遅れ 20 ms: 20 - 10 + 20 = 30 だけ増やす
   const gentle = new AudioDelayFeedback();
-  lowerToMinimum(gentle);
-  assert.equal(gentle.feedbackTargetMs, AUDIO_DELAY_FEEDBACK_MIN_MS, "まず下限まで下げること");
+  observeStableAtMinimum(gentle);
+  assert.equal(gentle.feedbackTargetMs, AUDIO_DELAY_FEEDBACK_MIN_MS, "下限を維持すること");
 
   gentle.update(observation(6_000, 20));
   assert.equal(
@@ -138,7 +165,7 @@ test("遅れが続くなら、遅れの分だけ目標を増やす", () => {
 
   // 遅れ 60 ms: 60 - 10 + 20 = 70 だが、1 回の上限 (40) までにする
   const steep = new AudioDelayFeedback();
-  lowerToMinimum(steep);
+  observeStableAtMinimum(steep);
   steep.update(observation(6_000, 60));
   assert.equal(
     steep.feedbackTargetMs,
@@ -151,7 +178,7 @@ test("遅れが続くなら、遅れの分だけ目標を増やす", () => {
 // 上限に張り付いて遅延だけが増える
 test("間隔が空いていなければ目標を動かさない", () => {
   const feedback = new AudioDelayFeedback();
-  lowerToMinimum(feedback);
+  observeStableAtMinimum(feedback);
 
   feedback.update(observation(6_000, 100));
   const afterFirst = feedback.feedbackTargetMs;
@@ -168,7 +195,7 @@ test("間隔が空いていなければ目標を動かさない", () => {
 // 並べすぎで捨てたなら、捨てた長さぶんを吸収できるだけ増やす (捨てた長さ + 余白、1 回の上限まで)
 test("並べすぎで捨てたなら、捨てた長さぶん増やす", () => {
   const feedback = new AudioDelayFeedback();
-  lowerToMinimum(feedback);
+  observeStableAtMinimum(feedback);
 
   feedback.update(observation(6_000, 0, { backlogMisses: 5, backlogMs: 100 }));
   assert.equal(
@@ -560,7 +587,7 @@ test("明示設定があるときは、広げる分をその値で切る", () =>
 
 // 完了条件: 補間で埋まらなかった無音の穴が空いたら、穴の長さぶんを吸収できるだけ目標を
 // 増やす (reason は "gap")。穴は事後には埋められないため、先に目標を増やす。穴 1 個でも
-// 圧縮の継続 (2 秒) を待たずに適用する (issue 0882)
+// 圧縮の継続 (2 秒) を待たずに適用する
 test("穴が空いたら目標を増やす", () => {
   const feedback = new AudioDelayFeedback();
   // 最初の観測 (遅れは許容の中) は間隔が無いため動かさない
@@ -574,7 +601,7 @@ test("穴が空いたら目標を増やす", () => {
   assert.equal(first.reason, "gap", "理由が穴であること");
   assert.equal(first.appliedCeilingMs, 140, "穴の長さ + 余白まで上限を広げること");
   assert.equal(first.targetMs, 140, "広げた上限まで増やすこと");
-  assert.equal(first.lastChangeMs, 40, "1 回の増加は 40 ms までにすること");
+  assert.equal(first.appliedMs - 100, 40, "実際に使っていた 100 ms から 40 ms 増やすこと");
   assert.equal(first.adjustments, 1);
 
   // 穴が続くと、穴の長さ + 余白のぶんさらに増える (1 回の増加は上限 40 ms まで)。
@@ -688,12 +715,13 @@ test("穴が続く間は artifact ceiling を戻さない", () => {
 // 同じ揺らぎで穴が再発する往復を避けるためである (この間も上げる向きは許す)
 test("穴の後は 5 秒間目標を下げない", () => {
   const feedback = new AudioDelayFeedback();
-  // 最初の観測は間隔が無いため動かさない
-  feedback.update(observation(0, 0));
+  // 初期値は安全下限なので、まず実際の遅れで目標を上げてから減衰を確認する
+  feedback.update(observation(0, 60));
+  const increasedMs = feedback.feedbackTargetMs;
   // 許容内の遅れが続き、目標を 10 ms/秒で下げる
   feedback.update(observation(1_000, 0));
   feedback.update(observation(2_000, 0));
-  assert.isBelow(feedback.snapshot(0).targetMs, AUDIO_DELAY_FEEDBACK_START_MS);
+  assert.isBelow(feedback.snapshot(0).targetMs, increasedMs);
   const beforeGapMs = feedback.snapshot(0).targetMs;
 
   // 3 秒目に穴 (20 ms) が空いた。穴の長さ + 余白だけ増やそうとする
@@ -718,7 +746,7 @@ test("穴の後は 5 秒間目標を下げない", () => {
 test("穴の後のホールド中でも目標の上昇は許す", () => {
   const feedback = new AudioDelayFeedback();
   feedback.update(observation(0, 0));
-  // 目標を 100 ms から下げておく (70 ms)
+  // 安全下限で落ち着いた状態を作る
   for (const atMs of [1_000, 2_000, 3_000]) {
     feedback.update(observation(atMs, 0));
   }
@@ -726,11 +754,11 @@ test("穴の後のホールド中でも目標の上昇は許す", () => {
   assert.isBelow(lowMs, AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS);
 
   // 4 秒目に穴。ホールドに入る
-  feedback.update(observation(4_000, 0, { gapCount: 1, gapMs: 1 }));
+  feedback.update(observation(4_000, 0, { gapCount: 1, gapMs: 1, jitterTargetMs: 0 }));
   const afterGapMs = feedback.snapshot(0).targetMs;
 
   // 5 秒目 (穴の 1 秒後) に遅れが許容を超えた。ホールド中でも上げる
-  feedback.update(observation(5_000, 60));
+  feedback.update(observation(5_000, 60, { jitterTargetMs: 0 }));
   const snapshot = feedback.snapshot(0);
   assert.equal(snapshot.reason, "lateness", "ホールド中でも遅れでは上げること");
   assert.isAbove(snapshot.targetMs, afterGapMs, "ホールド中でも上げること");

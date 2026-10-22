@@ -30,7 +30,7 @@
  *   増やしすぎない
  * - 乱れが無い入力では内部目標が適用される上限 (100 ms) の中に留まり、`startDelayMs` の
  *   p50 が 130 ms 以下になる
- * - 映像の表示待ち (`displayWait`) と A/V のずれを悪化させない (表示待ちの p50 が 150 ms 以下)
+ * - 映像を実際の音声の再生時刻へ合わせ、音声より余分に待たせない
  * - `targetLatencyMs` を明示設定したときは、閉ループがその値を超えない
  *
  * 時刻は `performance.now()` と同じ軸の値で与える。出力のバッファの分は
@@ -180,6 +180,9 @@ interface ScenarioResult {
   /** 映像の表示待ち (キューが保持する長さ) の p50 / max (ミリ秒) */
   readonly videoDelayP50Ms: number;
   readonly videoDelayMaxMs: number;
+  /** 媒体時刻から実際の音声予約までの p50。映像も同じ媒体時刻で比較する */
+  readonly audioPresentationP50Ms: number;
+  readonly audioPresentationMaxMs: number;
   /** 映像へ同期の制御が足した分の最大値 (ミリ秒) */
   readonly videoSyncExtraMaxMs: number;
   /** A/V のずれ (ミリ秒) の p50 / p95。開始直後の過渡 (映像の学習がまだ無い) を除く */
@@ -254,6 +257,7 @@ function runScenario(options: ScenarioOptions = {}): ScenarioResult {
   const appliedTargetsMs: { atMs: number; valueMs: number }[] = [];
   const feedbackTargetsMs: { atMs: number; valueMs: number }[] = [];
   const videoDelaysMs: number[] = [];
+  const audioPresentationDelaysMs: number[] = [];
   const avDifferencesMs: number[] = [];
   for (let index = 0; index < audioFrames; index++) {
     const wallMs = index * AUDIO_FRAME_MS;
@@ -343,10 +347,14 @@ function runScenario(options: ScenarioOptions = {}): ScenarioResult {
     const startMs =
       clock.toPerformanceMs(decision.startAt) ??
       arrivalMs + (decision.startAt - contextNowSeconds) * 1_000;
+    audioPresentationDelaysMs.push(startMs - timestampMicros / 1_000);
     if (videoDelayMs !== null && index * AUDIO_FRAME_MS >= AV_DIFFERENCE_SKIP_MS) {
       // 映像の学習が始まる前 (表示の遅れが 0 の間) は過渡であり、A/V のずれとして
       // 数えない。既存のテストと同じ考え方である
-      avDifferencesMs.push(Math.abs(startMs - arrivalMs - videoDelayMs));
+      // 到着時刻はトラックごとに異なる。同じ媒体時刻からの差で比較する。
+      avDifferencesMs.push(
+        Math.abs(startMs - timestampMicros / 1_000 - VIDEO_BASE_MS - videoDelayMs),
+      );
     }
     // 実際の再生と同じ順で結果を返す (詰めた分だけ長さが縮む)
     playout.confirmStretch(decision.compressSeconds);
@@ -358,6 +366,14 @@ function runScenario(options: ScenarioOptions = {}): ScenarioResult {
       AUDIO_FRAME_MS - decision.compressSeconds * 1_000,
       decision.basis,
     );
+    // Session と同じく、予約時の目標に対する残差も閉ループへ渡す。
+    if (targetMs !== null)
+      timeline.recordPresentation(
+        "audio",
+        timestampMicros,
+        BigInt(Math.round(startMs * 1_000)),
+        BigInt(Math.round(targetMs * 1_000)),
+      );
     timeline.observeAudioPlayout(stats.audioDelayFeedback(arrivalMs));
   }
 
@@ -409,6 +425,8 @@ function runScenario(options: ScenarioOptions = {}): ScenarioResult {
     playoutRebases: playout.rebases,
     videoDelayP50Ms: videoDelays.p50,
     videoDelayMaxMs: videoDelays.max,
+    audioPresentationP50Ms: summarizeTimings(audioPresentationDelaysMs)?.p50 ?? Infinity,
+    audioPresentationMaxMs: summarizeTimings(audioPresentationDelaysMs)?.max ?? Infinity,
     videoSyncExtraMaxMs,
     avDifferenceP50Ms: avDifference.p50,
     avDifferenceP95Ms: avDifference.p95,
@@ -520,13 +538,22 @@ test("乱れが無い入力では目標が下がり、到着から鳴るまで�
 });
 
 // 受け入れ条件 (5): 目標を上げても、映像の表示待ち (キューが保持する長さ) と A/V のずれを
-// 悪化させない。音声の表示の遅れが増える分だけ映像も待つが、表示待ちの p50 は 150 ms 以下に
-// 留まり、同期の制御が足す分は上限 (100 ms) までである
+// 悪化させない。出力時計の残差も含めて実際の音声へ合わせるため、映像だけの固定の
+// 深さではなく、同じ媒体時刻からの遅延を比較する。音声自身の遅延上限も独立に守る。
 test("目標を上げても、映像の表示待ちと A/V のずれを悪化させない", () => {
   const result = runScenario();
 
-  assert.isAtMost(result.videoDelayP50Ms, 150, "映像の表示待ちの p50 が 150 ms 以下であること");
-  assert.isAtMost(result.videoDelayMaxMs, 250, "映像の表示待ちを増やしすぎないこと");
+  assert.isAtMost(result.audioPresentationP50Ms, 210, "音声自身の遅延を増やしすぎないこと");
+  assert.isAtMost(
+    result.videoDelayP50Ms + VIDEO_BASE_MS,
+    result.audioPresentationP50Ms + 10,
+    "映像を実際の音声より余分に待たせないこと",
+  );
+  assert.isAtMost(
+    result.videoDelayMaxMs + VIDEO_BASE_MS,
+    result.audioPresentationMaxMs + 10,
+    "停滞時にも実際の音声を超えて待ち時間を積み上げないこと",
+  );
   assert.isAtMost(result.avDifferenceP50Ms, 50, "A/V のずれの p50 が 50 ms 以内であること");
   assert.isAtMost(result.avDifferenceP95Ms, 100, "A/V のずれを広げないこと");
   // 並べ直し (媒体時刻を跳ばすこと) を増やさない
@@ -565,7 +592,7 @@ test("目標は、到着から鳴れる最も早い時刻の近くへ収束す�
   // 最初の音では、実際に鳴った結果の観測がまだ無いため、揺らぎだけから求めた目標の
   // 初期値 (NetEq の `AUDIO_DELAY_START_MS` = 80 ms) をそのまま使う
   assert.equal(result.targetStartMs, AUDIO_DELAY_START_MS, "観測前は既存の規則のままであること");
-  // 観測を受けた後は、閉ループの初期値 (100 ms) 以上になる
+  // 観測を受けた後は、閉ループの初期値 (50 ms) 以上になる
   assert.isAtLeast(
     result.targetP50Ms,
     AUDIO_DELAY_FEEDBACK_START_MS,
