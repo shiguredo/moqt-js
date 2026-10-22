@@ -236,6 +236,19 @@ export const AUDIO_CLOCK_DEADBAND_MS = 30;
  */
 export const AUDIO_CLOCK_MAX_CHANGE_MS = 80;
 
+/**
+ * `AudioContext` の時計が止まっていたと判定する、`performance.now()` との進みの差 (ミリ秒)
+ *
+ * 予約は音声 1 つ分 (20 ms) ごとに行われ、その間の 2 つの時計の進みの差は数 ms に収まる。
+ * これ以上 `performance.now()` だけが進んでいたら、`AudioContext` が停止していた
+ * (`suspend` / `resume`、または音声のレンダリングが止まった) とみなす。停止中は
+ * `currentTime` が止まり `performance.now()` は進むため、再開後の対応は数百 ms の段差になる。
+ * 段差を `AUDIO_CLOCK_MAX_CHANGE_MS` (80 ms) ずつ補正すると、再開直後の予約が数百 ms
+ * 未来になって破棄される (CI の実測: 1 秒の停止後に約 900 ms 古い対応が残り、backlog で破棄)。
+ * 停止を検出したときは段差をそのまま取り直す
+ */
+export const AUDIO_CLOCK_STALL_MS = 250;
+
 /** 再生の余裕、下限 (省略時は既定の値) */
 export interface AudioPlayoutOptions {
   backlogSeconds?: number;
@@ -907,6 +920,9 @@ export interface AudioClockMapping {
  *
  * - 対応は予約のたびに取り直し、直前の値との差が `AUDIO_CLOCK_DEADBAND_MS` 未満なら無視し、
  *   大きくても 1 回の変更を `AUDIO_CLOCK_MAX_CHANGE_MS` までにする
+ * - `AudioContext` が停止していた (2 つの時計の進みの差が `AUDIO_CLOCK_STALL_MS` 以上) ときは、
+ *   段差をそのまま取り直す。停止中の `currentTime` は止まるため、上限までずつ補正すると
+ *   再開直後の予約が未来になり破棄される
  * - `AudioContext` を作り直したときは `reset()` で対応を消し、次の予約で取り直す
  * - `getOutputTimestamp()` が未開始 (両方 0) のときは `currentTime` と `performance.now()` の
  *   差で代用する。この差は音声の出力遅延を含まないため、鳴るのは目標より出力遅延の分だけ
@@ -917,6 +933,9 @@ export interface AudioClockMapping {
 export class AudioClockBridge {
   private offsetMs: number | null = null;
   private fallback = false;
+  // 前回の update の 2 つの時計。停止 (performance.now() だけが進む) の検出に使う
+  private lastCurrentTimeSeconds: number | null = null;
+  private lastPerformanceNowMs: number | null = null;
 
   /**
    * 対応を取り直す (予約のたびに呼ぶ)
@@ -934,7 +953,23 @@ export class AudioClockBridge {
       mapping === null
         ? currentTimeSeconds * 1_000 - performanceNowMs
         : mapping.contextTime * 1_000 - mapping.performanceTime;
-    if (this.offsetMs === null) {
+    // 2 つの時計の進みの差が大きいときは、AudioContext が停止していたとみなす。
+    // 停止中は currentTime が止まり performance.now() だけが進むため、再開後の対応は
+    // 段差になる。80 ms ずつ補正すると数百 ms 残り、再開直後の予約が未来になって
+    // 破棄されるため、段差をそのまま取り直す。currentTime が戻る入力 (時計の巻き戻し) は
+    // 停止ではないため、進んだ場合だけを対象にする
+    const audioElapsedMs =
+      this.lastCurrentTimeSeconds === null
+        ? null
+        : (currentTimeSeconds - this.lastCurrentTimeSeconds) * 1_000;
+    const performanceElapsedMs =
+      this.lastPerformanceNowMs === null ? null : performanceNowMs - this.lastPerformanceNowMs;
+    const stalled =
+      audioElapsedMs !== null &&
+      performanceElapsedMs !== null &&
+      audioElapsedMs >= 0 &&
+      performanceElapsedMs - audioElapsedMs >= AUDIO_CLOCK_STALL_MS;
+    if (this.offsetMs === null || stalled) {
       this.offsetMs = observedMs;
     } else {
       const differenceMs = observedMs - this.offsetMs;
@@ -944,6 +979,8 @@ export class AudioClockBridge {
       }
     }
     this.fallback = mapping === null;
+    this.lastCurrentTimeSeconds = currentTimeSeconds;
+    this.lastPerformanceNowMs = performanceNowMs;
   }
 
   /**
@@ -958,6 +995,10 @@ export class AudioClockBridge {
   reset(): void {
     this.offsetMs = null;
     this.fallback = false;
+    // 停止の判定に使う前回の時計も消す。作り直した AudioContext は 0 から始まるため、
+    // 前の Context の currentTime と比べると、停止していなくても段差として扱ってしまう
+    this.lastCurrentTimeSeconds = null;
+    this.lastPerformanceNowMs = null;
   }
 
   /**

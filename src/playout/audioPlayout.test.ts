@@ -25,6 +25,7 @@ import { test, assert } from "vite-plus/test";
 import {
   AUDIO_CLOCK_DEADBAND_MS,
   AUDIO_CLOCK_MAX_CHANGE_MS,
+  AUDIO_CLOCK_STALL_MS,
   AUDIO_PLAYOUT_ARRIVAL_DELAY_SECONDS,
   AUDIO_PLAYOUT_BACKLOG_SECONDS,
   AUDIO_PLAYOUT_CONCEAL_END_GAIN,
@@ -1237,6 +1238,32 @@ test("AudioClockBridge: 1 回の変更は上限までにする", () => {
   const behindSeconds = 100 - (AUDIO_CLOCK_MAX_CHANGE_MS * 10) / 1_000;
   bridge.update({ contextTime: behindSeconds, performanceTime: 5_000 }, behindSeconds, 5_000);
   assert.closeTo(valueOf(bridge.currentOffsetMs), 95_000, EPSILON);
+});
+
+// AudioClockBridge: AudioContext が停止していたときは、段差を上限までずつ補正せず、対応を
+// そのまま取り直す。停止中は currentTime が止まり performance.now() だけが進むため、
+// 再開後の対応は数百 ms ずれる。80 ms ずつ補正すると、再開直後の予約が未来になって破棄される
+test("AudioClockBridge: 停止を検出したら対応をそのまま取り直す", () => {
+  const bridge = new AudioClockBridge();
+  bridge.update({ contextTime: 1, performanceTime: 2_000 }, 1, 2_000);
+  assert.closeTo(valueOf(bridge.currentOffsetMs), -1_000, EPSILON);
+
+  // 1 秒の停止: currentTime は 1 秒のまま、performance.now() だけが 3,000 ms へ進む
+  bridge.update({ contextTime: 1, performanceTime: 3_000 }, 1, 3_000);
+  assert.closeTo(
+    valueOf(bridge.currentOffsetMs),
+    -2_000,
+    EPSILON,
+    "停止の段差を上限まで分割せず、観測値をそのまま採ること",
+  );
+  // 停止を検出した幅は 250 ms 以上であること (閾値を下回ると 80 ms/回の補正に戻る)
+  assert.isAtLeast(AUDIO_CLOCK_STALL_MS, AUDIO_CLOCK_MAX_CHANGE_MS * 2);
+  // 再開直後の予約 (performance 軸で 3,090 ms) が未来にならないこと
+  assert.closeTo(valueOf(bridge.toAudioSeconds(3_090)), 1.09, EPSILON);
+
+  // 停止していない (2 つの時計が同じだけ進んだ) ときは対応を変えない
+  bridge.update({ contextTime: 2, performanceTime: 4_000 }, 2, 4_000);
+  assert.closeTo(valueOf(bridge.currentOffsetMs), -2_000, EPSILON);
 });
 
 // AudioClockBridge: reset で対応と代用の印を消し、次の予約で取り直す (影響は reset の

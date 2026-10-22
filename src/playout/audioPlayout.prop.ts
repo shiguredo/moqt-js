@@ -24,6 +24,7 @@
  *   時刻 (前の音の終わりか今 + 余裕の遅い方) から次の音の開始までに収まる。前の音の
  *   終わりが過去の分は `unrecoverableGapSeconds` として別に返す
  * - 時計の対応付けは、不感帯 (30 ms) 未満の差では動かず、1 回の変更は上限 (80 ms) まで。
+ *   `AudioContext` が停止していた (2 つの時計の進みの差が 250 ms 以上) ときは観測値をそのまま採る。
  *   対応からの換算は往復し、reset の直後の update は前の対応に依存せず観測値そのものを採る
  *
  * 個々の規則は audioPlayout.test.ts の単体テストが固定する。
@@ -35,6 +36,7 @@ import {
   AUDIO_PLAYOUT_STRETCH_MIN_SECONDS,
   AUDIO_CLOCK_DEADBAND_MS,
   AUDIO_CLOCK_MAX_CHANGE_MS,
+  AUDIO_CLOCK_STALL_MS,
   AUDIO_PLAYOUT_ARRIVAL_DELAY_SECONDS,
   AUDIO_PLAYOUT_BACKLOG_SECONDS,
   AUDIO_PLAYOUT_DELAY_SECONDS,
@@ -452,7 +454,23 @@ test("AudioClockBridge: 対応付けは不感帯未満では動かず、1 回の
     fc.property(fc.array(clockUpdateArbitrary, { minLength: 1, maxLength: 100 }), (updates) => {
       const bridge = new AudioClockBridge();
       let previousOffsetMs: number | null = null;
+      let previousCurrentTimeSeconds: number | null = null;
+      let previousPerformanceTimeMs: number | null = null;
       for (const update of updates) {
+        // 停止の判定はブリッジと同じ材料 (前回からの 2 つの時計の進み) で行う
+        const audioElapsedMs =
+          previousCurrentTimeSeconds === null
+            ? null
+            : (update.contextTimeSeconds - previousCurrentTimeSeconds) * 1_000;
+        const performanceElapsedMs =
+          previousPerformanceTimeMs === null
+            ? null
+            : update.performanceTimeMs - previousPerformanceTimeMs;
+        const stalled =
+          audioElapsedMs !== null &&
+          performanceElapsedMs !== null &&
+          audioElapsedMs >= 0 &&
+          performanceElapsedMs - audioElapsedMs >= AUDIO_CLOCK_STALL_MS;
         bridge.update(
           update.useMapping
             ? { contextTime: update.contextTimeSeconds, performanceTime: update.performanceTimeMs }
@@ -462,17 +480,30 @@ test("AudioClockBridge: 対応付けは不感帯未満では動かず、1 回の
         );
         const offsetMs = valueOf(bridge.currentOffsetMs);
         if (previousOffsetMs !== null) {
-          // 動かないか、不感帯 (30 ms) 以上で上限 (80 ms) 以下だけ動く
-          const changeMs = Math.abs(offsetMs - previousOffsetMs);
-          assert.isTrue(
-            changeMs < EPSILON_MS ||
-              (changeMs >= AUDIO_CLOCK_DEADBAND_MS - EPSILON_MS &&
-                changeMs <= AUDIO_CLOCK_MAX_CHANGE_MS + EPSILON_MS),
-          );
+          if (stalled) {
+            // 停止を検出したときは、段差を分割せず観測値そのものを採る
+            const observedMs = update.contextTimeSeconds * 1_000 - update.performanceTimeMs;
+            assert.closeTo(
+              offsetMs,
+              observedMs,
+              Math.max(1, Math.abs(observedMs)) * 1e-9,
+              "停止の段差をそのまま取り直すこと",
+            );
+          } else {
+            // 動かないか、不感帯 (30 ms) 以上で上限 (80 ms) 以下だけ動く
+            const changeMs = Math.abs(offsetMs - previousOffsetMs);
+            assert.isTrue(
+              changeMs < EPSILON_MS ||
+                (changeMs >= AUDIO_CLOCK_DEADBAND_MS - EPSILON_MS &&
+                  changeMs <= AUDIO_CLOCK_MAX_CHANGE_MS + EPSILON_MS),
+            );
+          }
         }
         // 代用しているかどうかは、最後に渡した対応で決まる
         assert.equal(bridge.usingFallback, !update.useMapping);
         previousOffsetMs = offsetMs;
+        previousCurrentTimeSeconds = update.contextTimeSeconds;
+        previousPerformanceTimeMs = update.performanceTimeMs;
       }
     }),
   );
