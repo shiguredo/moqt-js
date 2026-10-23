@@ -75,14 +75,11 @@ export interface CatalogSubscriptionState {
  * 購読と catalog の適用に必要なものだけを明示的に受け取る。`MediaSubscriberImpl` の
  * 状態へは `state` の getter / setter を通してだけ触れる。
  */
-export interface CatalogSubscriptionDependencies {
+interface CatalogSubscriptionDependencies {
   /** MediaSubscriberImpl が持つ catalog 購読フェーズの状態 */
   readonly state: CatalogSubscriptionState;
-  /** 購読の設定 (namespace / 音声・映像の要求 / 認可トークンの取得) */
-  readonly options: Pick<
-    MediaSubscriberOptions,
-    "namespace" | "audio" | "video" | "getAuthorizationToken"
-  >;
+  /** 購読の設定 (namespace / 音声・映像の要求) */
+  readonly options: Pick<MediaSubscriberOptions, "namespace" | "audio" | "video">;
   /** 接続済みの Session (未接続なら null) */
   readonly session: () => Session | null;
   /** 利用者の onError への通知。通知の例外は呼び出し元の経路へそのまま伝わる */
@@ -393,8 +390,9 @@ export class CatalogSubscription {
   /**
    * 受信待ちの Promise を打ち切る (解放時)
    *
-   * 解放の後に await が残ると `start()` が永久に解決しないため、受信待ちを reject して
-   * 状態を初期値に戻す。打ち切りの判断と後始末をこのモジュールへ集約する。
+   * 解放の後に await が残ると `start()` が永久に解決しないため、受信待ちを reject する。
+   * 戻すのは受信待ちの 3 状態 (`catalogWaiting` / `catalogResolve` / `catalogReject`)
+   * だけであり、FETCH フェーズの状態は呼び出し側が先に落とす。
    *
    * @param error - 待っている呼び出し元へ渡すエラー
    */

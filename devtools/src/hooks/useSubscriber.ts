@@ -980,17 +980,14 @@ export function useSubscriber(
         sub.getSubscriber(subscriberId)?.audioPlaybackEnabled ?? null,
       playAudioEnabled: settings.playAudioEnabled,
       getSelectedAudioOutputDeviceId: () => settings.selectedAudioOutputDeviceId.value,
-      readAudioPlayoutCumulative: () =>
-        readAudioPlayoutCumulative(mediaPlayoutRef.current?.getStats().audio ?? null),
-      setAudioPlayoutBaseline: (baseline) => {
-        audioPlayoutStatsBaselineRef.current = baseline;
-      },
-      publishAudioPlayoutCumulative: () => {
+      restartAudioPlayoutCumulative: () => {
+        // 入口の統計を 1 回だけ読み、基準と表示に共用する
         const instance = sub.getSubscriber(subscriberId);
-        if (instance === undefined) {
-          return;
+        const audio = mediaPlayoutRef.current?.getStats().audio ?? null;
+        audioPlayoutStatsBaselineRef.current = readAudioPlayoutCumulative(audio);
+        if (instance !== undefined) {
+          publishAudioPlayoutCumulative(instance, audio);
         }
-        publishAudioPlayoutCumulative(instance, mediaPlayoutRef.current?.getStats().audio ?? null);
       },
     });
     audioPlaybackControllerRef.current = controller;

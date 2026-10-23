@@ -22,7 +22,6 @@
 import type { Signal } from "@preact/signals";
 import type { RefObject } from "preact";
 import type { MediaPlayout } from "moqt-js";
-import type { AudioPlayoutCumulative } from "../utils/audioPlayoutCumulative";
 import { applyAudioOutputSink } from "../utils/audioOutput";
 import {
   discardStaleAudioPlaybackStart,
@@ -50,7 +49,7 @@ interface AudioPlaybackStartAttempt {
 }
 
 /** 音声の再生のライフサイクルの依存 (フックから渡す) */
-export interface AudioPlaybackControllerDeps {
+interface AudioPlaybackControllerDeps {
   /** ログに使う subscriber の ID */
   readonly subscriberId: string;
   /** 音声を鳴らす `<audio>` 要素 */
@@ -67,12 +66,12 @@ export interface AudioPlaybackControllerDeps {
   readonly playAudioEnabled: Signal<boolean>;
   /** `setSinkId` に渡す、選択中の音声出力デバイスの ID (空文字は既定) */
   getSelectedAudioOutputDeviceId(): string;
-  /** 再生を始めた時点の累積の計器の基準を覚える */
-  setAudioPlayoutBaseline(baseline: AudioPlayoutCumulative | null): void;
-  /** 入口の統計から累積の計器を読む (音声を構成していなければ null) */
-  readAudioPlayoutCumulative(): AudioPlayoutCumulative | null;
-  /** 累積の計器を signal へ写す */
-  publishAudioPlayoutCumulative(): void;
+  /**
+   * 再生を始めた時点の累積の計器の基準を取り直し、signal へ写す
+   *
+   * 入口の統計 (`getStats()`) を 1 回だけ読んで基準と表示に共用する。
+   */
+  restartAudioPlayoutCumulative(): void;
 }
 
 /** 音声の再生のライフサイクル */
@@ -351,8 +350,7 @@ export function createAudioPlaybackController(
           // 開始の経路は再生が無効なときだけ通るため、AudioContext は必ず作り直している。
           // 予約の基準と累積の表示の起点を取り直す
           deps.mediaPlayoutRef.current?.resetAudioPlayback();
-          deps.setAudioPlayoutBaseline(deps.readAudioPlayoutCumulative());
-          deps.publishAudioPlayoutCumulative();
+          deps.restartAudioPlayoutCumulative();
           enabled.value = true;
           deps.playAudioEnabled.value = true;
         },

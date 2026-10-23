@@ -507,6 +507,19 @@ function decoderTimestampOf(resolved: TimestampSource): number {
 }
 
 /**
+ * catalog 購読フェーズの状態の getter / setter の定義
+ *
+ * `PropertyDescriptor` のままだと値の型が `any` になり、フィールドの取り違えを
+ * コンパイラが検出できない。状態のキーと値の型を結び付ける。
+ */
+type CatalogStateDescriptors = {
+  readonly [K in keyof CatalogSubscriptionState]: {
+    readonly get: () => CatalogSubscriptionState[K];
+    readonly set: (value: CatalogSubscriptionState[K]) => void;
+  };
+};
+
+/**
  * MediaSubscriber の実装クラス
  *
  * 単体テストから復号ハンドラを駆動するため export する
@@ -599,8 +612,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   // Catalog
   private receivedCatalog: Catalog | null = null;
   private catalogResolve: ((catalog: Catalog) => void) | null = null;
-  // Catalog 受信待ちの reject。解放時に待ちを打ち切るために持つ
-  // (resolve だけでは解放後に start() の await が永久に解決しない)
+  // Catalog 受信待ちの reject。解放時の打ち切りは abortReceive が行う
   private catalogReject: ((error: Error) => void) | null = null;
   // Catalog 受信待ちを await しているか。解放で打ち切るのは await が付いた
   // 待ちだけであり (await が付く前の reject には受け手が無い)、その判定に使う
@@ -754,12 +766,9 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     this.videoPreDecodeStage = this.createVideoPreDecodeStage();
     // catalog 購読フェーズの状態は単体テストが制御口として直接読み書きするため、この
     // クラスがフィールドとして持つ。フェーズの処理 (CatalogSubscription) へは、この
-    // クラスのフィールドを読み書きする getter / setter の束として渡す
-    // catalog 購読フェーズの状態は単体テストが制御口として直接読み書きするため、この
-    // クラスがフィールドとして持つ。フェーズの処理 (CatalogSubscription) へは、この
-    // クラスのフィールドを読み書きする getter / setter の束として渡す。
-    // PropertyDescriptor の Record で型付けし、状態を増やしたときの定義漏れを型で拘束する
-    const catalogStateDescriptors: Record<keyof CatalogSubscriptionState, PropertyDescriptor> = {
+    // クラスのフィールドを読み書きする getter / setter の束として渡す。マップ型で
+    // 型付けし、状態を増やしたときの定義漏れと値の取り違えを型で拘束する
+    const catalogStateDescriptors: CatalogStateDescriptors = {
       catalogSubscriber: {
         get: () => this.catalogSubscriber,
         set: (value) => {
@@ -1668,8 +1677,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     this.playout.clearAll();
     this.audioWallClockSeen = false;
     this.videoWallClockSeen = false;
-    // Catalog の受信状態を初期値に戻す。受信待ちが残っていれば打ち切る
-    // (解放後に await が残ると start() が永久に解決しない)
+    // Catalog の受信状態を初期値に戻す。受信待ちの打ち切りは abortReceive が行う
     this.receivedCatalog = null;
     this.audioTrackInfo = null;
     this.videoTrackInfo = null;
