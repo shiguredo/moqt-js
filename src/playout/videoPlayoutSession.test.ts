@@ -228,14 +228,11 @@ function makeSession(options: {
   maxQueuedFrames?: number;
   drainImmediately: boolean;
   framesPerDrain: number;
-  decodeInputs?: VideoDecodeInputs;
 }): { session: VideoPlayoutSession; scheduler: RecordedFrameScheduler } {
   const scheduler = makeFrameScheduler();
   const session = new VideoPlayoutSession({
     timeline: options.timeline,
     output: options.output.output,
-    decodeInputs:
-      options.decodeInputs ?? new VideoDecodeInputs({ maxTracked: 8, forgetOnDuplicate: true }),
     pacing: {
       drainImmediately: options.drainImmediately,
       framesPerDrain: options.framesPerDrain,
@@ -653,18 +650,49 @@ test("handleDecodedFrame: 間に合わなかったフレームは計器へ記録
   );
 });
 
-test("clear(): 予約を取り消し、表示待ちと対応表を捨てる", () => {
-  const timeline = makeEmptyTimeline();
+test("計器の recordLateDrop が throw しても、遅れたフレームを閉じて表示を続ける", () => {
+  // 表示時刻を過ぎたフレームの記録が失敗しても、フレームを閉じて表示周期を止めない
+  const { timeline, timestampMicros } = makeTimeline(nowMs() - 1_000);
   const output = makeRecordingOutput();
-  const decodeInputs = new VideoDecodeInputs({ maxTracked: 8, forgetOnDuplicate: true });
-  decodeInputs.remember(1_000, {
-    timestampKind: "wallClock",
-    location: { group: 1n, object: 1n },
-  });
+  const throwing: VideoPlayoutTiming = {
+    recordQueueDrop: () => undefined,
+    recordLateDrop: () => {
+      throw new Error("late drop recorder failed");
+    },
+  };
   const { session, scheduler } = makeSession({
     timeline,
     output,
-    decodeInputs,
+    timing: throwing,
+    drainImmediately: false,
+    framesPerDrain: 1,
+  });
+  const frames = [0, 33_000, 66_000].map((offset) => makeVideoFrame(timestampMicros + offset));
+  for (const recorded of frames) {
+    session.handleDecodedFrame({
+      frame: recorded.frame,
+      timestampKind: "wallClock",
+      useTimeline: true,
+    });
+  }
+
+  scheduler.runNext();
+
+  assert.isTrue(frames[0]?.isClosed(), "間に合わなかったフレームを閉じていない");
+  assert.isTrue(frames[1]?.isClosed(), "間に合わなかったフレームを閉じていない");
+  assert.deepEqual(
+    output.presented.map((present) => present.timestamp),
+    [timestampMicros + 66_000],
+  );
+});
+
+test("clear(): 予約を取り消し、表示待ちを捨てる", () => {
+  // 復号へ渡した入力の対応表は呼び出し側 (MediaPlayout) が持つため、ここでは消さない
+  const timeline = makeEmptyTimeline();
+  const output = makeRecordingOutput();
+  const { session, scheduler } = makeSession({
+    timeline,
+    output,
     drainImmediately: false,
     framesPerDrain: Number.POSITIVE_INFINITY,
   });
@@ -679,7 +707,35 @@ test("clear(): 予約を取り消し、表示待ちと対応表を捨てる", ()
   assert.isTrue(recorded.isClosed(), "表示待ちのフレームを閉じていない");
   assert.equal(scheduler.cancelled.length, 1);
   assert.isFalse(scheduler.pending);
-  assert.equal(decodeInputs.size, 0);
+});
+
+test("計器が throw しても、捨てたフレームを閉じて表示周期を続ける", () => {
+  // 計器は throw しない契約だが、実装が失敗してもフレームを閉じ損ねないことを固定する
+  const timeline = makeEmptyTimeline();
+  const output = makeRecordingOutput();
+  const throwing: VideoPlayoutTiming = {
+    recordQueueDrop: () => {
+      throw new Error("queue drop recorder failed");
+    },
+    recordLateDrop: () => {
+      throw new Error("late drop recorder failed");
+    },
+  };
+  const { session } = makeSession({
+    timeline,
+    output,
+    timing: throwing,
+    maxQueuedFrames: 1,
+    drainImmediately: false,
+    framesPerDrain: Number.POSITIVE_INFINITY,
+  });
+
+  // 1 枚目で上限に達し、2 枚目の到着で 1 枚目があふれる
+  const first = handleArrivalOrderFrame(session, 1_000_000);
+  const second = handleArrivalOrderFrame(session, 1_100_000);
+  assert.isTrue(first.isClosed(), "あふれたフレームを閉じていない");
+  assert.isFalse(second.isClosed(), "残ったフレームを閉じてしまっている");
+  assert.equal(session.playout.size, 1);
 });
 
 test("clear(): 表示している間に出し先が無くなったら、表示待ちを捨てる", () => {

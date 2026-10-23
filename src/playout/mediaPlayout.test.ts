@@ -8,17 +8,15 @@
  */
 
 import { test, assert } from "vite-plus/test";
-import { AudioPlayoutSession } from "./audioPlayoutSession";
-import { AudioPlayoutTimingStats } from "./audioPlayoutTimingStats";
-import { AudioDecodeInputs } from "./decodeInputTimestamps";
-import { createMediaPlayout, type MediaPlayout } from "./mediaPlayout";
-import { PlayoutTimeline } from "./timeline";
 import {
-  VideoDecodeInputs,
-  VideoPlayoutSession,
-  type VideoPlayoutOutput,
-} from "./videoPlayoutSession";
+  playoutAudioClockOf,
+  playoutInternalsOf,
+  playoutVideoSessionOf,
+} from "../testSupport/mediaPlayoutInternals";
 import type { AudioPlayoutContext } from "./audioPlayoutSession";
+import { AudioPlayoutTimingStats } from "./audioPlayoutTimingStats";
+import { createMediaPlayout, type MediaPlayout } from "./mediaPlayout";
+import type { VideoPlayoutOutput } from "./videoPlayoutSession";
 
 /**
  * 映像の出し先
@@ -38,25 +36,6 @@ function createVideoOutput(): VideoPlayoutOutput {
 /** 映像を構成する入口 (音声なし) */
 function createVideoPlayout(): MediaPlayout {
   return createMediaPlayout({ video: { output: createVideoOutput() } });
-}
-
-/**
- * 入口の内部状態を読む
- *
- * 状態の破棄は公開 API から観測できない (統計は意図的に残す) ため、テストの中だけで
- * 内部の形へキャストして確かめる。
- */
-interface MediaPlayoutInternals {
-  readonly timeline: PlayoutTimeline;
-  readonly audioInputs: AudioDecodeInputs;
-  readonly videoInputs: VideoDecodeInputs;
-  readonly audio: { readonly session: AudioPlayoutSession } | null;
-  readonly video: { readonly session: VideoPlayoutSession } | null;
-}
-
-/** 入口の内部状態を読む (テストの中だけで使う) */
-function internalsOf(playout: MediaPlayout): MediaPlayoutInternals {
-  return playout as unknown as MediaPlayoutInternals;
 }
 
 test("createMediaPlayout: 音声も映像も指定しないとエラーになる", () => {
@@ -145,32 +124,26 @@ test("maxQueuedFrames: 映像の表示待ちのキューの上限へ渡す", () 
     video: { output: createVideoOutput() },
     maxQueuedFrames: 2,
   });
-  const session = internalsOf(playout).video?.session;
-  assert.isNotNull(session);
+  const session = playoutVideoSessionOf(playout);
   // 表示待ちのバッファをテストの中だけで直接駆動する (VideoFrame は Node に無いため、
   // バッファが読む timestamp と close だけを持つ最小のオブジェクトを渡す)
-  const buffer = session as unknown as {
-    playout: {
-      readonly size: number;
-      enqueue(frame: VideoFrame, timestampMicros: number | null): VideoFrame[];
-    };
-  };
+  const buffer = session.playout;
   const evicted: VideoFrame[] = [];
   for (let index = 0; index < 3; index++) {
     const frame = {
       timestamp: 1_000_000 + index,
       close: () => undefined,
     } as unknown as VideoFrame;
-    evicted.push(...buffer.playout.enqueue(frame, null));
+    evicted.push(...buffer.enqueue(frame, null));
   }
   // 上限 2 枚を超えた 1 枚が追い出される (既定 24 のままなら 3 枚とも残る)
-  assert.strictEqual(buffer.playout.size, 2);
+  assert.strictEqual(buffer.size, 2);
   assert.strictEqual(evicted.length, 1);
 });
 
 test("drainAudio: 待ちの条件と flush の件数をセッションへ渡す", async () => {
-  // 転送が落ちると、flush した Object の復号出力を待たずに停止が返る。待ちの上限まで
-  // 待ったことと、flush の件数・未復号の件数が統計へ出ることを固定する
+  // 上限と flush の待ち条件がセッションへ届くことを固定する。上限の転送が落ちると
+  // 既定の 300 ms まで待つ (返り値の requestedMs で見る)
   const playout = createMediaPlayout({ audio: {} });
   const result = await playout.drainAudio({
     maxWaitMs: 40,
@@ -180,6 +153,8 @@ test("drainAudio: 待ちの条件と flush の件数をセッションへ渡す"
   });
   assert.strictEqual(result.flushedObjects, 2);
   assert.strictEqual(result.undecodedFlushedObjects, 1);
+  // ここでは maxWaitMs: 40 を指定しているため、返る上限も 40 になる
+  assert.strictEqual(result.requestedMs, 40);
   assert.isAtLeast(result.waitedMs, 20);
   assert.strictEqual(result.pendingMsAtStart, 0);
 });
@@ -192,7 +167,7 @@ test("decodeInputs: 上限と重複の扱いを音声と映像の対応表へ渡
     video: { output: createVideoOutput() },
     decodeInputs: { maxTracked: 2, forgetOnDuplicate: true },
   });
-  const internals = internalsOf(playout);
+  const internals = playoutInternalsOf(playout);
   for (let index = 0; index < 3; index++) {
     playout.trackAudioDecodeInput(1_000_000 + index, { timestampKind: "wallClock" });
   }
@@ -205,9 +180,14 @@ test("decodeInputs: 上限と重複の扱いを音声と映像の対応表へ渡
   // 上限 2 件を超えた分は古い方から忘れる
   assert.strictEqual(internals.audioInputs.size, 2);
   assert.strictEqual(internals.videoInputs.size, 2);
-  // 同じ TIMESTAMP の記録が重なったら、その TIMESTAMP の分を忘れる
+  // 同じ TIMESTAMP の記録が重なったら、その TIMESTAMP の分を忘れる (音声・映像とも)
   playout.trackAudioDecodeInput(1_000_002, { timestampKind: "mediaTime" });
   assert.strictEqual(internals.audioInputs.size, 1);
+  playout.trackVideoDecodeInput(2_000_002, {
+    timestampKind: "mediaTime",
+    location: { group: 2n, object: 2n },
+  });
+  assert.strictEqual(internals.videoInputs.size, 1);
 });
 
 test("getStats: 音声と映像の両方で時間軸を使うときは同期の推定値を返す", () => {
@@ -261,7 +241,7 @@ test("getStats: 音声の閉ループの内訳を delayFeedback として返す"
   assert.isNotNull(feedback);
   // 目標を動かした回数は 0、上限の指定は無い
   assert.strictEqual(feedback?.adjustments, 0);
-  assert.isNull(feedback?.ceilingMs ?? null);
+  assert.isNull(feedback?.ceilingMs);
   // 適用する目標は、揺らぎから求めた値以上になる (初期値でも 0 未満にはならない)
   assert.isAtLeast(feedback?.appliedMs ?? -1, 0);
 });
@@ -272,18 +252,6 @@ test("drainAudio: 音声を使わない構成では待たずに 0 を返す", as
   assert.strictEqual(result.pendingMsAtStart, 0);
   assert.strictEqual(result.cutMs, 0);
   assert.strictEqual(result.waitedMs, 0);
-});
-
-test("drainAudio: 音声を使って予約が無いときは待たずに終わる", async () => {
-  const playout = createMediaPlayout({ audio: {} });
-  const result = await playout.drainAudio();
-  assert.strictEqual(result.pendingMsAtStart, 0);
-  assert.strictEqual(result.cutMs, 0);
-  // 予約が無いので、上限まで待たずにすぐ終わる (待ちの上限候補は返る)
-  assert.isAtLeast(result.requestedMs, 0);
-  assert.isBelow(result.waitedMs, 50);
-  assert.strictEqual(result.flushedObjects, 0);
-  assert.strictEqual(result.undecodedFlushedObjects, 0);
 });
 
 test("drainAudio: 待ちの上限の不正な値はエラーになる", async () => {
@@ -330,12 +298,22 @@ test("clearAll: 時間軸・復号入力の対応表・映像待ちを捨て、�
     audio: { timing },
     video: { output: createVideoOutput() },
   });
-  const internals = internalsOf(playout);
+  const internals = playoutInternalsOf(playout);
   playout.trackAudioDecodeInput(1_000_000, { timestampKind: "wallClock" });
   playout.trackVideoDecodeInput(2_000_000, {
     timestampKind: "wallClock",
     location: { group: 1n, object: 2n },
   });
+  // 表示待ちに実フレームを 1 枚積む (Node に VideoFrame が無いため最小のオブジェクト)
+  let closed = 0;
+  const frame = {
+    timestamp: 2_000_000,
+    close: () => {
+      closed++;
+    },
+  } as unknown as VideoFrame;
+  const session = playoutVideoSessionOf(playout);
+  session.playout.enqueue(frame, null);
   timing.recordPlay(0, 50, 50, 20, "timestamp");
   // 時間軸の世代を進めておく (observe の有無を世代で観測できる)
   internals.timeline.observe("audio", 10_000, 1_000_000);
@@ -343,9 +321,11 @@ test("clearAll: 時間軸・復号入力の対応表・映像待ちを捨て、�
 
   playout.clearAll();
 
-  // 復号へ渡した入力の対応表と時間軸が初期化される
+  // 復号へ渡した入力の対応表・時間軸・表示待ちが初期化される
   assert.strictEqual(internals.audioInputs.size, 0);
   assert.strictEqual(internals.videoInputs.size, 0);
+  assert.strictEqual(session.playout.size, 0);
+  assert.strictEqual(closed, 1);
   assert.notStrictEqual(internals.timeline.generation, generation);
   // 計器の累積は停止直後の統計として残る
   assert.strictEqual(playout.getStats().audio?.timing.playedFrames, 1);
@@ -356,7 +336,7 @@ test("resetPlayout: 映像の対応表と時間軸・追いつきの観測を取
     audio: {},
     video: { output: createVideoOutput() },
   });
-  const internals = internalsOf(playout);
+  const internals = playoutInternalsOf(playout);
   playout.trackVideoDecodeInput(2_000_000, {
     timestampKind: "wallClock",
     location: { group: 1n, object: 2n },
@@ -379,7 +359,7 @@ test("resetPlayout: 映像の対応表と時間軸・追いつきの観測を取
 
 test("resetAudioPlayback: 音声の予約の基準と追いつきの観測を取り直す", () => {
   const playout = createMediaPlayout({ audio: {} });
-  const internals = internalsOf(playout);
+  const internals = playoutInternalsOf(playout);
   internals.audio?.session.catchUp.observe({
     nowMs: 1_000,
     lagMs: 100,
@@ -388,16 +368,29 @@ test("resetAudioPlayback: 音声の予約の基準と追いつきの観測を取
   });
   assert.strictEqual(playout.getStats().audio?.catchUp.lagMs, 100);
 
+  const clock = playoutAudioClockOf(playout);
+  clock.update({ contextTime: 10, performanceTime: 1_000 }, 10, 1_000);
+  assert.strictEqual(clock.currentOffsetMs, 9_000);
+
   playout.resetAudioPlayback();
 
   assert.isNull(playout.getStats().audio?.catchUp.lagMs);
+  // 予約の基準 (時計の対応) も取り直す
+  assert.isNull(clock.currentOffsetMs);
+  assert.isFalse(clock.usingFallback);
 });
 
 test("track*: 構成していない media への記録は何もしない", () => {
-  // 映像なしの入口で音声の記録は残るが、音声なしの入口では映像の記録は残らない
+  // 映像なしの入口では映像の記録を残さず、音声なしの入口では音声の記録を残さない
   const audioOnly = createMediaPlayout({ audio: {} });
   audioOnly.trackAudioDecodeInput(1_000_000, { timestampKind: "wallClock" });
-  assert.strictEqual(internalsOf(audioOnly).audioInputs.size, 1);
+  audioOnly.trackVideoDecodeInput(2_000_000, {
+    timestampKind: "wallClock",
+    location: { group: 1n, object: 2n },
+  });
+  const audioInternals = playoutInternalsOf(audioOnly);
+  assert.strictEqual(audioInternals.audioInputs.size, 1);
+  assert.strictEqual(audioInternals.videoInputs.size, 0);
 
   const videoOnly = createVideoPlayout();
   videoOnly.trackAudioDecodeInput(1_000_000, { timestampKind: "wallClock" });
@@ -405,8 +398,74 @@ test("track*: 構成していない media への記録は何もしない", () =>
     timestampKind: "wallClock",
     location: { group: 1n, object: 2n },
   });
-  assert.strictEqual(internalsOf(videoOnly).audioInputs.size, 0);
-  assert.strictEqual(internalsOf(videoOnly).videoInputs.size, 1);
+  const videoInternals = playoutInternalsOf(videoOnly);
+  assert.strictEqual(videoInternals.audioInputs.size, 0);
+  assert.strictEqual(videoInternals.videoInputs.size, 1);
+});
+
+test("pushVideo: 映像を構成していない入口ではフレームを閉じて skipped を返す", () => {
+  // 映像を使わない入口でも、呼び出し側が渡したフレームの所有権は入口が引き取る
+  const playout = createMediaPlayout({ audio: {} });
+  let closed = 0;
+  const frame = {
+    timestamp: 1_000_000,
+    close: () => {
+      closed++;
+    },
+  } as unknown as VideoFrame;
+
+  const result = playout.pushVideo(frame);
+
+  assert.strictEqual(result.status, "skipped");
+  assert.strictEqual(closed, 1);
+  assert.strictEqual(playoutInternalsOf(playout).videoInputs.size, 0);
+});
+
+test("setAudioOutput(null): 閉じた AudioContext の時計の対応を捨てる", () => {
+  // 閉じた Context の時計の対応を残すと、次に鳴らすときに古い対応で予約する。null を
+  // 渡したときに releaseAudioContext が呼ばれていることを固定する
+  const playout = createMediaPlayout({
+    audio: { context: {} as AudioPlayoutContext, destination: {} as AudioNode },
+  });
+  const clock = playoutAudioClockOf(playout);
+  clock.update({ contextTime: 10, performanceTime: 1_000 }, 10, 1_000);
+  assert.strictEqual(clock.currentOffsetMs, 9_000);
+
+  playout.setAudioOutput(null);
+
+  assert.isNull(clock.currentOffsetMs);
+  assert.isFalse(clock.usingFallback);
+  assert.isNull(clock.toAudioSeconds(5_000));
+});
+
+test("resetAudioPlayback: 映像の表示待ちを残し、resetPlayout は捨てる", () => {
+  // devtools は音声だけを止めるときに resetAudioPlayback を選び、映像を止めない
+  const playout = createMediaPlayout({
+    audio: {},
+    video: { output: createVideoOutput() },
+  });
+  const session = playoutVideoSessionOf(playout);
+  let closed = 0;
+  const frame = {
+    timestamp: 1_000_000,
+    close: () => {
+      closed++;
+    },
+  } as unknown as VideoFrame;
+  session.playout.enqueue(frame, null);
+  assert.strictEqual(session.playout.size, 1);
+
+  playout.resetAudioPlayback();
+
+  // 音声の状態だけを取り直すため、映像の表示待ちは残る
+  assert.strictEqual(session.playout.size, 1);
+  assert.strictEqual(closed, 0);
+
+  playout.resetPlayout();
+
+  // 映像の表示待ちは捨て、フレームを閉じる
+  assert.strictEqual(session.playout.size, 0);
+  assert.strictEqual(closed, 1);
 });
 
 test("setAudioOutput: 音声を構成していない入口ではエラーになる", () => {

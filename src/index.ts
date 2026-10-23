@@ -327,11 +327,7 @@ export {
 // 音声の再生の入口 (MediaPlayout) の型。Web Audio は AudioPlayoutOutput として注入し、
 // 鳴らし切る待ちの設定と結果は drainAudio が受け取る・返す。組み立て (時間軸への記録・
 // 目標の決定・予約・計器への記録) は入口の内部で行う
-export {
-  type AudioPlayoutContext,
-  type AudioPlayoutOutput,
-  type AudioPlayoutTimestampKind,
-} from "./playout/audioPlayoutSession";
+export { type AudioPlayoutContext, type AudioPlayoutOutput } from "./playout/audioPlayoutSession";
 
 // 映像の表示の入口 (MediaPlayout) の型。表示の出し先 (MediaStreamTrackGenerator / canvas)
 // と表示周期、捨てたフレームの記録先は注入し、復号へ渡した入力の情報は
@@ -341,7 +337,6 @@ export {
   type VideoPlayoutOutput,
   type VideoPlayoutPacing,
   type VideoPlayoutTiming,
-  type VideoPlayoutTimestampKind,
 } from "./playout/videoPlayoutSession";
 
 // 復号済みの音声と映像の再生の入口。時間軸・音声の再生の組み立て・映像の表示の組み立て・
@@ -350,6 +345,10 @@ export {
 // ライブラリ (createMediaSubscriber) と moqt-devtools を含む呼び出し側は、この入口だけを
 // 使う (個々の組み立てを直接使わない)
 export { createMediaPlayout } from "./playout/mediaPlayout";
+export {
+  AUDIO_PLAYOUT_DRAIN_CLOSE_MAX_MS,
+  AUDIO_PLAYOUT_DRAIN_MAX_MS,
+} from "./playout/audioPlayoutSession";
 export type {
   MediaPlayout,
   MediaPlayoutOptions,
@@ -358,6 +357,7 @@ export type {
   MediaPlayoutDecodeInputOptions,
   MediaPlayoutAudioDecodeInput,
   MediaPlayoutVideoDecodeInput,
+  PlayoutTimestampKind,
   MediaPlayoutDrainOptions,
   MediaPlayoutDrainStats,
   MediaPlayoutAudioResult,

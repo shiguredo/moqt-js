@@ -96,6 +96,32 @@ export interface AudioPlayoutMiss {
 }
 
 /**
+ * 音声の再生を鳴らし切るときの設定 (`MediaPlayout.drainAudio` が受け取る)
+ *
+ * `MediaPlayoutDrainStats` の `lastDrain` がこのモジュールの計器に載るため、ここに置く。
+ * コールバック (`isFlushSettled` / `remainingFlushedObjects`) は throw しないこと
+ * (throw しても drain は失敗させず、待ち終えた / 残り 0 として扱う)。
+ */
+export interface MediaPlayoutDrainOptions {
+  /**
+   * drain を待つ上限 (ミリ秒)。既定は通常の停止の上限 (300 ms)
+   *
+   * 購読の終端では、呼び出し側が短い上限 (150 ms) を明示して渡す。
+   */
+  readonly maxWaitMs?: number;
+  /**
+   * 復号前の段から flush した Object の復号出力を待ち終えたか
+   *
+   * false の間は drain を終えない (予約が尽きていても復号の出力がまだ届いていない)。
+   */
+  readonly isFlushSettled?: () => boolean;
+  /** flush した Object の件数 (計器に残す) */
+  readonly flushedObjects?: number;
+  /** flush したが、まだ復号の出力が届いていない Object の数を返す */
+  readonly remainingFlushedObjects?: () => number;
+}
+
+/**
  * drain (停止時に予約済みの音を鳴らし切る待ち) の結果
  *
  * 停止の要求から `AudioContext` を閉じるまでに、予約済みの音をどれだけ鳴らせて、
@@ -321,6 +347,10 @@ interface LastPlayRecord {
 
 /**
  * 音声の再生の観測を記録し、観測値を求める
+ *
+ * `record*` は音声の再生の組み立て (`AudioPlayoutSession`) と、計器へ記録する実装
+ * (moqt-devtools) が呼ぶ。アプリケーションが独自に観測を数える場合も同じ API を使える。
+ * 読む側は `snapshot` を使い、購読をやり直すときは `reset` で消す。
  */
 export class AudioPlayoutTimingStats {
   private readonly windowMs: number;
@@ -518,8 +548,8 @@ export class AudioPlayoutTimingStats {
    * 仕事である (`src/playout/audioDelayFeedback.ts`)
    *
    * 揺らぎだけから求めた目標 (NetEq) は時間軸が持っているため、この戻り値には含めない
-   * (`PlayoutTimeline.observeAudioPlayout` が足す)。圧縮の増分も購読側
-   * (`AudioPlayoutSession`) が足す (省略したときは 0 とみなされる)
+   * (`PlayoutTimeline.observeAudioPlayout` が足す)。圧縮の増分も `AudioPlayoutSession` が
+   * 足す (省略したときは 0 とみなされる)
    *
    * @param nowMs - 求める時刻 (ミリ秒)
    * @param sinceMs - 制御へ渡す分布の開始時刻。再開前の実績を除くときに渡す

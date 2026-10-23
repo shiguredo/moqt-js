@@ -129,6 +129,9 @@ export function createCompleteCatalog(): Catalog {
  *
  * draft-ietf-moq-msf-01 §5.2.8: `isLive` が false のトラックの `targetLatency` は
  * 無視する MUST。宣言が無いときは null を返し、使う側が表示の遅れを選ぶ (MAY)。
+ * 負や非有限の値は表示の遅れにできないため、宣言が無いものとして null を返す
+ * (入口の `setTargetLatencyMs` は 0 以上だけを受け取るため、ここで正規化しないと
+ * 購読の開始が失敗する)。
  *
  * @param track - 対象のトラック。解決できていないときは null
  */
@@ -136,7 +139,12 @@ export function effectiveTargetLatencyMs(track: CatalogTrack | null): number | n
   if (track === null || !track.isLive) {
     return null;
   }
-  return track.targetLatency ?? null;
+  const latencyMs = track.targetLatency;
+  if (latencyMs === undefined || !Number.isFinite(latencyMs) || latencyMs < 0) {
+    // 負や非有限は表示の遅れにならない。宣言が無いものとして扱う (start を失敗させない)
+    return null;
+  }
+  return latencyMs;
 }
 
 /**

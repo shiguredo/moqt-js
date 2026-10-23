@@ -1,10 +1,11 @@
 /**
- * 復号した映像フレームの表示の組み立て (対応表・時間軸への記録・表示の選択・計器への記録)
+ * 復号した映像フレームの表示の組み立て (時間軸への記録・表示の選択・計器への記録)
  *
- * 復号へ渡した Object の情報 (TIMESTAMP の種類と位置) を覚えておき、復号の出力を受け取ると、
- * 共有の時間軸 (`src/playout/timeline.ts`) への記録から `PlayoutBuffer` への積み込み、
- * 表示周期ごとの選択、表示の実績の記録、捨てたフレームの計器への記録までを行う。表示時刻は
- * 時間軸が決める (音声と同じ式。`src/playout/buffer.ts`)。
+ * 復号へ渡した Object の情報 (TIMESTAMP の種類と位置) の対応表は `VideoDecodeInputs` として
+ * 提供し、入口 (`MediaPlayout`) が保持する。復号の出力を受け取ると、共有の時間軸
+ * (`src/playout/timeline.ts`) への記録から `PlayoutBuffer` への積み込み、表示周期ごとの
+ * 選択、表示の実績の記録、捨てたフレームの計器への記録までを行う。表示時刻は時間軸が
+ * 決める (音声と同じ式。`src/playout/buffer.ts`)。
  *
  * 同じ組み立てを `src/createMediaSubscriber.ts` (ライブラリ) と
  * `devtools/src/hooks/useSubscriber.ts` (devtools) が別々に持つと、表示の遅れ・
@@ -23,18 +24,13 @@
  */
 
 import type { Location } from "../message";
+import {
+  storeDecodeInput,
+  type DecodeInputsOptions,
+  type PlayoutTimestampKind,
+} from "./decodeInputTimestamps";
 import type { PlayoutTimeline } from "./timeline";
 import { JITTER_BUFFER_MAX_QUEUED_FRAMES, PlayoutBuffer } from "./buffer";
-
-/**
- * 映像の TIMESTAMP の種類 (draft-ietf-moq-loc-04 §2.3.1.1 / §2.3.1.2)
- *
- * - `wallClock`: TIMESCALE が無い TIMESTAMP (Unix epoch マイクロ秒)。音声と同じ時間軸で
- *   表示時刻を決められる
- * - `mediaTime`: TIMESCALE がある TIMESTAMP。メディア時刻であり壁時計とは対応しない
- * - `none`: TIMESTAMP が無い (decoder へは 0 を渡す)
- */
-export type VideoPlayoutTimestampKind = "none" | "wallClock" | "mediaTime";
 
 /**
  * 復号へ渡した映像 Object の情報
@@ -45,28 +41,9 @@ export type VideoPlayoutTimestampKind = "none" | "wallClock" | "mediaTime";
  */
 export interface VideoDecodeInput {
   /** TIMESTAMP の種類 */
-  readonly timestampKind: VideoPlayoutTimestampKind;
+  readonly timestampKind: PlayoutTimestampKind;
   /** Object の位置 (Group ID と Object ID) */
   readonly location: Location;
-}
-
-/** `VideoDecodeInputs` の設定 */
-export interface VideoDecodeInputsOptions {
-  /**
-   * 覚えておく上限 (件)
-   *
-   * 出力されなかった (decoder のエラーで捨てられたなど) 分が残り続けないよう、超えたら
-   * 古い方から忘れる
-   */
-  readonly maxTracked: number;
-  /**
-   * 同じ TIMESTAMP の Object が重なったときに、その TIMESTAMP の分を忘れるか
-   *
-   * true のとき、同じ TIMESTAMP の Object が重なったらどちらの位置か決められないため
-   * その TIMESTAMP の分を忘れる (位置を追いつきの判定に使うとき)。false のときは後から
-   * 来た情報で上書きする (TIMESTAMP の種類しか使わないとき)。
-   */
-  readonly forgetOnDuplicate: boolean;
 }
 
 /**
@@ -76,13 +53,14 @@ export interface VideoDecodeInputsOptions {
  * 使うときは、種類が `none` の入力と、重なった TIMESTAMP の入力を覚えない
  * (`forgetOnDuplicate`)。復号の出力では位置が分からないものとして扱う。
  *
- * 1 つの購読に対して 1 つ作る。購読を始めるたびに `clear()` で消す。
+ * 1 つの再生のまとまりに対して 1 つ作る。購読を始めるとき (`MediaPlayout.resetPlayout`) と
+ * 停止するとき (`MediaPlayout.clearAll`) に `clear()` して再利用する。
  */
 export class VideoDecodeInputs {
   private readonly inputs = new Map<number, VideoDecodeInput>();
-  private readonly options: VideoDecodeInputsOptions;
+  private readonly options: DecodeInputsOptions;
 
-  constructor(options: VideoDecodeInputsOptions) {
+  constructor(options: DecodeInputsOptions) {
     this.options = options;
   }
 
@@ -98,27 +76,7 @@ export class VideoDecodeInputs {
    * @param input - TIMESTAMP の種類と Object の位置
    */
   remember(timestamp: number, input: VideoDecodeInput): void {
-    if (input.timestampKind === "none") {
-      // 位置を一意に引けないため覚えない。既に覚えていた分 (同じ TIMESTAMP の先の Object) も
-      // 忘れ、どちらも位置が分からないものとして扱う
-      this.inputs.delete(timestamp);
-      return;
-    }
-    if (this.inputs.has(timestamp)) {
-      if (this.options.forgetOnDuplicate) {
-        this.inputs.delete(timestamp);
-        return;
-      }
-      // 上書きする。位置は使わないため、後から来た種類で上書きしてよい
-      this.inputs.delete(timestamp);
-    }
-    this.inputs.set(timestamp, input);
-    for (const oldest of this.inputs.keys()) {
-      if (this.inputs.size <= this.options.maxTracked) {
-        break;
-      }
-      this.inputs.delete(oldest);
-    }
+    storeDecodeInput(this.inputs, timestamp, input, this.options);
   }
 
   /**
@@ -146,10 +104,17 @@ export class VideoDecodeInputs {
  * 統計 (`devtools/src/utils/playoutTimingStats.ts`) へ記録する。
  */
 export interface VideoPlayoutTiming {
-  /** 表示待ちの上限を超えて捨てたフレーム */
+  /**
+   * 表示待ちの上限を超えて捨てたフレーム
+   *
+   * この関数は throw しないこと。throw してもフレームは閉じ、表示周期は続ける
+   * (計器の失敗で表示が止まらないようにする)。
+   */
   recordQueueDrop(timestamp: number): void;
   /**
    * 表示時刻を過ぎて間に合わなかったフレーム
+   *
+   * この関数は throw しないこと。throw してもフレームは閉じ、表示周期は続ける。
    *
    * @param presentationMs - このフレームの表示時刻。決められないときは捨てた時刻
    */
@@ -166,6 +131,13 @@ export interface VideoPlayoutOutput {
   /**
    * フレームを表示する
    *
+   * 所有権は true / false にかかわらず出し先へ移る。閉じる責任も出し先が負う
+   * (false を返して閉じない実装はフレームを漏らす)。false は「同期の実績に記録しない」
+   * という意味だけを持つ。
+   *
+   * この関数は throw しないこと。throw した場合はフレームを閉じ、表示の実績に記録しない
+   * (表示周期の中で呼ばれるため、呼び出し側へ status を返す経路は無い)。
+   *
    * @param presentationMs - 時間軸が決めた表示時刻 (`performance.now()` のミリ秒)。表示時刻を
    *   決めずに届いた順に表示するフレームは null
    * @returns 実際に表示したか。false のときは同期の実績として記録しない
@@ -176,6 +148,9 @@ export interface VideoPlayoutOutput {
    *
    * 購読が終わった、書く先が無いときは false。false のときのフレームは表示せずに閉じ、
    * 表示待ちのフレームも捨てる (出せないままメモリを占め続けないため)。
+   *
+   * この関数は throw しないこと。throw した場合はフレームを閉じて `status: "skipped"`
+   * として扱う。
    */
   isAvailable(): boolean;
 }
@@ -207,7 +182,7 @@ export interface VideoPlayoutRequest {
    *
    * `wallClock` かつ時間軸を使うときだけ、共有の時間軸へ記録して表示時刻を決める
    */
-  readonly timestampKind: VideoPlayoutTimestampKind;
+  readonly timestampKind: PlayoutTimestampKind;
   /**
    * 時間軸を使って表示時刻を決めるか (jitter buffer が有効なとき)
    *
@@ -240,8 +215,6 @@ export interface VideoPlayoutSessionOptions {
   readonly timeline: PlayoutTimeline;
   /** 表示すると決めたフレームの出し先 */
   readonly output: VideoPlayoutOutput;
-  /** 復号へ渡したフレームの情報の対応表 (呼び出し側が持ち、購読ごとに `clear()` する) */
-  readonly decodeInputs: VideoDecodeInputs;
   /** 表示の周期の進め方 */
   readonly pacing: VideoPlayoutPacing;
   /** 捨てたフレームの記録先 (計器)。映像の計器を持たないときは省略する */
@@ -257,12 +230,10 @@ export interface VideoPlayoutSessionOptions {
 /**
  * 復号した映像フレームの表示
  *
- * 1 つの購読 (または表示) に対して 1 つ作る。時間軸とキューを作り直すときは、新しい
+ * 1 つの表示のまとまりに対して 1 つ作る。時間軸とキューを作り直すときは、新しい
  * インスタンスを作る (古いインスタンスは `clear()` してから捨てる)。
  */
 export class VideoPlayoutSession {
-  /** 復号へ渡したフレームの情報の対応表 (呼び出し側も `remember` に使う) */
-  readonly inputs: VideoDecodeInputs;
   /** 表示待ちのフレーム (検証と統計が読む) */
   readonly playout: PlayoutBuffer<VideoFrame>;
   private readonly timeline: PlayoutTimeline;
@@ -280,7 +251,6 @@ export class VideoPlayoutSession {
     this.output = options.output;
     this.pacing = options.pacing;
     this.timing = options.timing ?? null;
-    this.inputs = options.decodeInputs;
     this.playout = new PlayoutBuffer<VideoFrame>(
       options.maxQueuedFrames ?? JITTER_BUFFER_MAX_QUEUED_FRAMES,
       options.timeline,
@@ -324,8 +294,13 @@ export class VideoPlayoutSession {
 
     const overflow = this.playout.enqueue(frame, wallClockTimestamp);
     for (const dropped of overflow) {
-      // あふれて捨てたフレームは表示されないため計器へ残す (timestamp は閉じる前に読む)
-      this.timing?.recordQueueDrop(dropped.timestamp);
+      // あふれて捨てたフレームは表示されないため計器へ残す (timestamp は閉じる前に読む)。
+      // 計器は throw しない契約である。それでも表示が止まらないよう、失敗しても閉じる
+      try {
+        this.timing?.recordQueueDrop(dropped.timestamp);
+      } catch {
+        // 記録の失敗でフレームを閉じ損ねない
+      }
       dropped.close();
     }
 
@@ -338,10 +313,11 @@ export class VideoPlayoutSession {
   }
 
   /**
-   * 予約を取り消し、表示待ちのフレームと対応表を捨てる
+   * 予約を取り消し、表示待ちのフレームを捨てる
    *
    * 購読の停止と、時間軸・キューを作り直す直前に呼ぶ。捨てたフレームは計器へ記録しない
-   * (購読の停止で表示されなかった分は、停止の統計が別に数える)。
+   * (購読の停止で表示されなかった分は、停止の統計が別に数える)。復号へ渡した入力の
+   * 対応表は呼び出し側 (`MediaPlayout`) が持つため、ここでは消さない。
    */
   clear(): void {
     if (this.frameRequest !== null) {
@@ -351,7 +327,6 @@ export class VideoPlayoutSession {
     for (const frame of this.playout.clear()) {
       frame.close();
     }
-    this.inputs.clear();
   }
 
   /**
@@ -367,10 +342,14 @@ export class VideoPlayoutSession {
       for (const late of selection.late) {
         // 間に合わなかったフレームの表示時刻は、止まりの原因 (間に合わなかった段) を決めるのに
         // 使う。表示時刻は選択と同じ基準で求まる
-        this.timing?.recordLateDrop(
-          late.timestamp,
-          this.playout.presentationTimeMs(late.timestamp) ?? nowMs,
-        );
+        try {
+          this.timing?.recordLateDrop(
+            late.timestamp,
+            this.playout.presentationTimeMs(late.timestamp) ?? nowMs,
+          );
+        } catch {
+          // 記録の失敗でフレームを閉じ損ねない
+        }
         late.close();
       }
       const draw = selection.draw;

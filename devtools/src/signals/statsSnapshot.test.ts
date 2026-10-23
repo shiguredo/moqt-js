@@ -1,9 +1,8 @@
 import { test, assert } from "vite-plus/test";
+import { EMPTY_AUDIO_PLAYOUT_TIMING, EMPTY_AUDIO_RECEIVE_CATCH_UP } from "moqt-js";
 import { createSubscriberInstance, EMPTY_AV_SYNC, EMPTY_AUDIO_DELAY_FEEDBACK } from "./subscriber";
 import { EMPTY_PLAYOUT_TIMING } from "../utils/playoutTimingStats";
 import { EMPTY_PUBLISH_TIMING } from "../utils/publishTimingStats";
-import { EMPTY_AUDIO_PLAYOUT_TIMING } from "../../../src/playout/audioPlayoutTimingStats.ts";
-import { EMPTY_AUDIO_RECEIVE_CATCH_UP } from "../../../src/playout/audioReceiveCatchUp.ts";
 import { EMPTY_HOST_DELAY } from "../utils/hostDelayTracker.ts";
 import { buildPublisherStats, buildSubscriberStats } from "./statsSnapshot";
 import * as pub from "./publisher";

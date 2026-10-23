@@ -2,8 +2,8 @@
 
 ## 概要
 
-A/V 同期と再生まわりで入れた判断 (閾値・保持・検出・追いつき・補正) を、値・根拠・副作用・
-再考の条件・計器の 5 点で並べる。目的は「なぜその値なのか」「どうなったら見直すのか」を
+A/V 同期と再生まわりで入れた判断 (閾値、保持、検出、追いつき、補正) を、値、根拠、副作用、
+再考の条件、計器の 5 点で並べる。目的は「なぜその値なのか」「どうなったら見直すのか」を
 症状が出る前に残し、再考すべきときに再考できるようにすることである。値だけを見て動かすと、
 その値が守っている性質 (相手側のトレードオフ) を壊す。
 
@@ -33,10 +33,10 @@ A/V 同期と再生まわりで入れた判断 (閾値・保持・検出・追�
 | 1   | A/V 同期で補償する基準の差     | 100 ms (`PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS`) / 不感帯 5 ms (`SYNC_MIN_DELTA_MS`)                            | `avSync.delays.*.syncExtraDelayMs`、`avSync.skewMs`                                         |
 | 2   | 共有解除の保持と早期解除       | 30 秒 (`PLAYOUT_BASE_UNSHARED_HOLD_MS`) / 2 秒 (`PLAYOUT_BASE_UNSHARED_RELEASE_MS`)                             | `avSync.delays.unsharedReason`、`baseUnsharedReturnMs`                                      |
 | 3   | ドリフト検出と持続性           | 50 ms (`PLAYOUT_BASE_DRIFT_MS`) / 6 秒 / 200 ms / 150 ms (`BASE_DIFFERENCE_JUMP_MS`)                            | `avSync.delays.baseDifferenceRecentMs`、`baseDifferenceDeviationMs`、`baseDriftMsPerSecond` |
-| 4   | 音声の到着基準の遅れと閉ループ | 50〜100 ms / 閉ループ 50〜300 ms                                                                                | `audio.playoutTiming.*`、`avSync.delays.audioDelayFeedback.*`                               |
+| 4   | 音声の到着基準の遅れと閉ループ | 50〜100 ms / 閉ループ 50〜100 ms (穴や圧縮が続くとき 160 ms)                                                    | `audio.playoutTiming.*`、`avSync.delays.audioDelayFeedback.*`                               |
 | 5   | 配信側の TIMESTAMP 補正        | 窓 2 秒 / 上昇の上限 100 ms/秒 / 定着 5 秒 / 段差 200 ms                                                        | `audio.timestampOffset.*`                                                                   |
 | 6   | 配信側の追いつき               | `max(60 ms, 床 + 40 ms)` / 再開 20 ms / 確認 100 ms と 2 フレーム / 再開後 1 秒 / `drop` と `keep`              | `audio.catchUp.*`                                                                           |
-| 7   | 受信側の再生の組み立て         | `AudioPlayoutSession` / `VideoPlayoutSession`                                                                   | `avSync.*`、`audio.playoutTiming.*`                                                         |
+| 7   | 受信側の再生の組み立て         | `MediaPlayout` (内部: `AudioPlayoutSession` / `VideoPlayoutSession`)                                            | `avSync.*`、`audio.playoutTiming.*`                                                         |
 | 8   | 復号の出力と投入の対応づけ     | 1,000 マイクロ秒 (`DECODER_OUTPUT_TIMESTAMP_TOLERANCE_MICROS`) / 引けないときは直前の種類 (`LastTimestampKind`) | `audio.playoutTiming.arrivalPlannedFrames`                                                  |
 | 9   | 実リレーの E2E の判定          | 150 ms (`AV_SKEW_MAX_MS`) / 35 秒 (`AV_UNSHARED_RECOVERY_MAX_MS`)                                               | `avSync.skewMs`、`avSync.delays.unsharedReason`                                             |
 | 10  | 受信側の追いつき               | `max(60 ms, 床 + 40 ms)` / 床は直近 5 秒の最小値 / 床 + 100 ms で即時 / 確認 100 ms / 作り直しの間隔 1 秒       | `audio.playoutCatchUp.*`、`avSync.delays.audio.baseDelayMs`                                 |
@@ -103,7 +103,7 @@ A/V 同期と再生まわりで入れた判断 (閾値・保持・検出・追�
 経路の条件は同一ではないため、50 ms 開始の音切れの非劣性は未確認とし、従来の 80 ms を保った。
 生データはローカルの `investigation-logs/adaptive-av-sync-20261021/` に保存している。
 
-数値の回帰は単体・プロパティテストで確認する。一定の残差だけでなく、残差の任意の増減、
+数値の回帰は単体 / プロパティテストで確認する。一定の残差だけでなく、残差の任意の増減、
 バッファ差の向きの逆転、160 ms への適応、残差の失効、音声の再開を対象にする。
 実ブラウザでは実際の Web Audio → MediaStream → HTMLAudioElement と canvas の経路を通す。
 AudioContext を閉じて再生成し、映像だけを継続した後で音声を再開する。停止と再開で出力時計の
@@ -309,9 +309,13 @@ cache から届いた分をまとめて復号している間だけ差が 1 秒�
 - `AUDIO_PLAYOUT_ARRIVAL_DELAY_MS` = 100 ms (到着基準の遅れの上限。
   `src/playout/audioPlayout.ts` の `AUDIO_PLAYOUT_ARRIVAL_DELAY_SECONDS` と同じ値)
 - 閉ループ (`src/playout/audioDelayFeedback.ts`): 下限 `AUDIO_DELAY_FEEDBACK_MIN_MS` = 50 ms (同上)、
-  上限 `AUDIO_DELAY_FEEDBACK_MAX_MS` = 300 ms、初期値 `AUDIO_DELAY_FEEDBACK_START_MS` = 50 ms、
-  判断の窓 1 秒、動かす間隔 1 秒、許容 10 ms、余白 20 ms、1 回の増加 20〜40 ms、減らす速さ
-  10 ms/秒
+  適用する上限 `AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS` = 100 ms、初期値
+  `AUDIO_DELAY_FEEDBACK_START_MS` = 50 ms、判断の窓 1 秒、動かす間隔 1 秒、許容 10 ms、余白
+  20 ms、1 回の増加 20〜40 ms、減らす速さ 10 ms/秒。圧縮か穴が続くときは上限を
+  `AUDIO_DELAY_FEEDBACK_ARTIFACT_CEILING_MS` = 160 ms まで広げる (穴 1 個でも、その穴を
+  吸収できる値まで `AUDIO_DELAY_FEEDBACK_GAP_QUIET_MS` の間だけ広げる)
+- 絶対上限 `AUDIO_DELAY_FEEDBACK_MAX_MS` = 300 ms もあるが、適用する上限 (100 ms と 160 ms) が
+  常に小さいため、現状の経路では拘束しない
 
 ### 守っている性質
 
@@ -333,8 +337,15 @@ cache から届いた分をまとめて復号している間だけ差が 1 秒�
   目標に対して 195.5 ms 鳴っていた (`src/playout/audioPlayoutSession.ts`)。鳴り始めるまでを
   195.5 ms から 105.6 ms にし、ずれを 50 ms 以内にした (`10f4215`、2026-10-09)
 - 予定が無い音は到着基準の 100 ms で鳴らし、316 ms の遅れを無くした (`5096f89`)
-- 閉ループの上限 300 ms は、表示の遅れの上限 (500 ms) より小さく、実測の到着の跳ね
-  (最大 271 ms) を概ね収める値である (`1a03f71`、2026-10-09)
+- 閉ループの実効の上限は 100 ms であり、圧縮か穴が続くときだけ 160 ms まで広げる。160 ms は
+  2026-10-16 の実リレーの実測 (揺らぎだけの目標が 100〜340 ms に育ち、上限 100 ms では時間
+  圧縮が 60 秒で 550〜1000 ms 続いた) で、静的に 160 ms へ上げると圧縮が約 3 割減る回が
+  ある一方、鳴り始めが 115 ms から 155 ms へ +40 ms になることから決めた
+  (`AUDIO_DELAY_FEEDBACK_ARTIFACT_CEILING_MS`)
+- 実測の到着の跳ねは最大 271 ms あり、160 ms では吸収しきれない。吸収しきれない分は穴として
+  記録し、上限を 160 ms まで広げるところで止める (それ以上広げると遅延の代償が上回る)。
+  絶対上限 `AUDIO_DELAY_FEEDBACK_MAX_MS` = 300 ms は、この跳ねを概ね収める値として置いたが、
+  実効の上限が 160 ms のため現状は拘束しない
 - 閉ループの初期値は 2026-10-21 に 100 → 50 ms にした。到着推定の開始値は 80 ms を
   保つ。両方を 50 ms にした試行では初期の穴が多く、50 ms 開始の音切れの非劣性を
   確認できなかったためである。到着推定は 500 ms の区間から分布を学び、
@@ -361,17 +372,19 @@ cache から届いた分をまとめて復号している間だけ差が 1 秒�
   「150 ms 未満に抑えれば多くの用途で有意な影響はない」「ネットワーク計画の上限は 400 ms」
   とする。鳴り始め 45.6〜67.7 ms に経路の遅れ (実測 17〜23 ms) と復号を足した値はこの
   150 ms の内側であり、下限を 50 ms まで下げることはこの範囲で意味を持つ (参考文献を参照)
-- 上限 100 ms は 2026-10-15 に実リレーで測り直した。160 ms にすると時間圧縮はおよそ半分
+- 静的に 160 ms にする案は 2026-10-15 に実リレーで測り直した。時間圧縮はおよそ半分
   (60 秒で 914〜1393 → 447〜850 ms) になるが、鳴り始めが 20〜25 ms 遅くなり (95.7〜113.8 →
   111.4〜135.5 ms)、補間と追いつきが飛ばす音はむしろ増えた (補間 0〜165 ms、飛ばす音
-  0〜740 ms)。遅延を優先して 100 ms を維持する (詳細は `docs/AUDIO_PLAYOUT_LATENCY.md`)
+  0〜740 ms)。このため常時は 100 ms を維持し、圧縮か穴が続くときだけ上限を一時的に 160 ms
+  へ広げる (詳細は `docs/AUDIO_PLAYOUT_LATENCY.md`)
 
 **根拠が薄い点**:
 
 - 100 ms という上限は「316 ms は遅すぎた」という実測から下げた値であり、50 から 100 の間の
   どこが最適かの計測は無い (80 から 100 の間も測っていない)
-- 300 ms は実測の跳ねの最大 271 ms に対して余裕を 30 ms しか取っておらず、これを超える
-  跳ねがどれくらいの頻度で起きるかは測っていない
+- 160 ms は実測の揺らぎ (100〜340 ms) の下限側と遅延の代償 (+40 ms) の釣り合いで決めた値で
+  あり、網羅的な A/B ではない。実測の跳ねは最大 271 ms あり、160 ms を超える跳ねがどれくらい
+  の頻度で起きるかは測っていない
 - 50 ms は 60 秒の観測 3 回ずつの実測であり、それより長い時間や別の経路での余裕は測って
   いない。揺らぎの尾 (0.95 分位を超える 5 %) が目標を超えると時間圧縮として現れるため、
   圧縮の頻度と長さの分布は測っていない
@@ -386,9 +399,10 @@ cache から届いた分をまとめて復号している間だけ差が 1 秒�
   なるためである。鳴らす音の 0.1 % 程度であり、語尾が切れる捨て (`missedByReason.backlog`)
   は増えない
 - 通常の適用上限は 100 ms、穴を観測した後は 5 秒間 160 ms まで広げる。指定した
-  `targetLatencyMs` がそれより小さければ、その上限に収める。上限の変更は保持中の穴にも反映する
-- 閉ループは `targetLatencyMs` を自動で超えない。`targetLatency` を明示すると、遅れが
-  残っていても目標が増えない (devtools では `ceilingMs` が warn 色になる)
+  `targetLatencyMs` が 100 ms より大きいときは、160 ms を上限としてその値までに切る
+  (100 ms は下回らない)。上限の変更は保持中の穴にも反映する
+- 閉ループは明示した `targetLatencyMs` を自動で超えない (100 ms は下回らない)。`targetLatency`
+  を明示すると、遅れが残っていても目標が増えない (devtools では `ceilingMs` が warn 色になる)
 - 目標を増やすと、その分だけ映像も一緒に遅れる (基準の遅れとして共有されるため)
 
 ### 再考の条件
@@ -399,7 +413,8 @@ cache から届いた分をまとめて復号している間だけ差が 1 秒�
   `audio.playoutTiming.missedByReason.backlog` が増え続ける
 - `audio.playoutCompressedMs` が 60 秒で 100 ms を超える (下限を下げた分の劣化。
   下限 50 ms の実測は 32〜65 ms、下限 30 ms は 496〜1143 ms だった)
-- `avSync.delays.audioDelayFeedback.appliedMs` が上限 300 ms に張り付く
+- `avSync.delays.audioDelayFeedback.appliedCeilingMs` が 160 ms に張り付く (穴や圧縮が続いて
+  上限を広げ続けている)
 - `audio.playoutTiming.arrivalPlannedFrames` が増え続ける (時間軸の表示時刻を使えていない)
 - `avSync.delays.audioDelayFeedback.adjustments` が増え続ける (目標が収束していない)
 
@@ -693,9 +708,12 @@ worker の使い方) を見る。追いつきは症状を消すだけで、原�
 
 ### 決めた値
 
-- 音声は `AudioPlayoutSession` (`src/playout/audioPlayoutSession.ts`)、映像は `VideoPlayoutSession`
-  (`src/playout/videoPlayoutSession.ts`) に組み立てを集約する
-- ライブラリ (`createMediaSubscriber`) と moqt-devtools の両方が同じ実装を使う
+- 公開の入口は `MediaPlayout` (`src/playout/mediaPlayout.ts`) とする。音声の組み立ては内部の
+  `AudioPlayoutSession` (`src/playout/audioPlayoutSession.ts`)、映像の表示の組み立ては内部の
+  `VideoPlayoutSession` (`src/playout/videoPlayoutSession.ts`) が持つ
+- ライブラリ (`createMediaSubscriber`) と moqt-devtools の両方が同じ入口を使う
+- 2026-10-23: 公開の入口を `MediaPlayout` に一本化した (それまでは `AudioPlayoutSession` と
+  `VideoPlayoutSession` を公開していた)
 
 ### 守っている性質
 
@@ -748,7 +766,7 @@ worker の使い方) を見る。追いつきは症状を消すだけで、原�
 - `DECODE_INPUT_KIND_FALLBACK_MAX_DISTANCE_MICROS` = 10,000,000 マイクロ秒 (対応が引けない出力に、
   直前に分かっている種類を使ってよい、保留している記録からの隔たりの上限。同)
 - 対応が引けなかったときは、直前に分かっている種類を使う (`LastTimestampKind`。同)。種類は
-  TIMESTAMP の Timescale の有無で決まる (draft-ietf-moq-loc-04 §2.3.1.1 / §2.3.1.2) ため、
+  TIMESTAMP に TIMESCALE があるかで決まる (draft-ietf-moq-loc-04 §2.3.1.1 / §2.3.1.2) ため、
   直前の値で足りる
 
 ### 守っている性質
@@ -815,7 +833,7 @@ CI の runner (run 38026081292) では、音声の基準の遅れが 116.3 ms �
   無音を 20 個、timestamp を epoch マイクロ秒で与えて符号化し、その chunk を復号したところ、
   Chromium と WebKit のどちらでも、Opus と AAC のどちらも出力の timestamp は入力と完全に
   一致した (差は 21〜22 個すべて 0)。実リレーの +100 マイクロ秒は、符号化の出力の timestamp
-  (符号化したサンプル数から作る連続した値) ではなく、配信側が LOC TIMESTAMP に使う投入の
+  (符号化したサンプル数から作る連続した値) ではなく、配信側が LOC の TIMESTAMP に使う投入の
   timestamp と、復号が作る時間軸との差として現れるためであり、符号化と復号を直接つなぐ
   この計測では条件が足りない
 
@@ -858,7 +876,7 @@ CI の runner (run 38026081292) では、音声の基準の遅れが 116.3 ms �
 
 - `audio.playoutTiming.arrivalPlannedFrames` / `unplannedFrames`
 - `avSync.delays.audio.baseDelayMs`
-- `audio.receiveDelayMs` (受信した壁時計 - LOC TIMESTAMP。配信側の
+- `audio.receiveDelayMs` (受信した壁時計 - LOC の TIMESTAMP。配信側の
   `audio.catchUp.sendLagMs` と対で読み、遅れが配信側と経路にあるのか受信側にあるのかを分ける)
 
 ## 9. 実リレーの E2E の判定
@@ -962,8 +980,9 @@ runner の処理能力を測っていた (実測: CI の 4 vCPU の runner、`38
 - `AUDIO_RECEIVE_CATCH_UP_SKIP_MIN_MS` = 1 ms (timestamp の跳びを、捨てた音とみなす最小)
 - 遅れは「復号の出力を受け取った壁時計 - `AudioData.timestamp`」で測る (`AudioPlayoutSession`)
 - 購読側が `MediaSubscriberOptions.preDecodeDelayMs` で復号を意図的に遅らせている場合は、
-  その値を `AudioReceiveCatchUpObservation.intentionalDelayMs` として渡し、出力の遅れから
-  差し引く。意図した遅延を復号器の詰まりと誤判定しない
+  その値を `MediaPlayoutAudioDecodeInput.intentionalDelayMs` として渡し (設定値ではなく復号へ
+  渡すまで実際に保持した時間)、出力の遅れから差し引く。意図した遅延を復号器の詰まりと
+  誤判定しない
 - 追いつく手段は復号器の作り直し (`AudioDecoderWrapper.reset()`) だけである。鳴らす音は捨てない
 - 音声の再生は購読 (`AudioPlayoutSession`) ごとに 1 つの `AudioReceiveCatchUp` を持つ
 
@@ -1072,7 +1091,7 @@ runner の処理能力を測っていた (実測: CI の 4 vCPU の runner、`38
   成功)。1 個目を失ったときに届く 2 個目が「遅れて届いた音」として遅れの推定に入るためで
   ある。TIMESTAMP の古さで見分ける案 (枠 60 ms / 120 ms) も、**位置 (Group ID と Object ID)
   の順序で見分ける案も改善しなかった** (後者で交互に各 3 回: 続けて送る側は鳴り始めの遅れ
-  64.3〜99.9 ms・揺らぎの推定 20 / 20 / 140 ms、間を空ける側は 120.4〜122.2 ms・80 / 80 /
+  64.3〜99.9 ms、揺らぎの推定 20 / 20 / 140 ms、間を空ける側は 120.4〜122.2 ms、80 / 80 /
   80 ms)。まとめて落ちる経路での利得 (欠落 1.6〜1.8 % → 0.1 %) より常時の遅延が大きいため、
   **続けて送る** (詳細は `docs/AUDIO_PLAYOUT_LATENCY.md`)
 - 観測が窓 (5 秒) より長く途切れた後は、途切れる前の床を窓の長さの分だけ保つ。実測では、
@@ -1167,8 +1186,8 @@ runner の処理能力を測っていた (実測: CI の 4 vCPU の runner、`38
 
 ### 再考の条件
 
-- CI で 10 % を超える欠落、または 20 % を超える補間・捨てが出たとき
-- `AudioReceiverStats` に経路別の補間・捨ての内訳を足したとき (分けられるようになったら、
+- CI で 10 % を超える欠落、または 20 % を超える補間 / 捨てが出たとき
+- `AudioReceiverStats` に経路別の補間 / 捨ての内訳を足したとき (分けられるようになったら、
   経路ごとの判定に変える)
 
 ### 見る計器
@@ -1191,7 +1210,7 @@ runner の処理能力を測っていた (実測: CI の 4 vCPU の runner、`38
 | `unsharedHoldContinues`       | `unsharedReason` が `hold` のまま 20 秒続く                                                                    | 早期解除は差が戻れば 2 秒で済む。続くのは差が戻っていないか、閾値だけが動いた解除が繰り返されているかである。保持の満了 (30 秒) を待たずに 2/3 で出す                                                                                                                                                                                                                             |
 | `timestampOffsetKeepsMoving`  | 観測が 500 個以上あり、`slope60sMsPerSecond` (無ければ `slope10sMsPerSecond`) が 5 ms/秒以上                   | 実リレーの E2E が「一定のずれ」の上限に使っている値 (実測は 0.0 ms/秒、ずれる場合は 20 ms/秒 を超える)。観測 500 個は 10 秒分 (音声を 20 ms ごとに読む) である                                                                                                                                                                                                                    |
 | `catchUpKeepsStarting`        | 60 秒の窓の中で `catchUpStarts` が 3 以上増える                                                                | 1 回の追いつきで 60 ms (3 パケット) 以上を捨てる。1 分に 3 回なら 9 パケットの音が欠け、音声は実時間で符号化できるという前提が崩れている。開始は上限を超えた状態が 100 ms 続いた後 (決定 6) であるため、これが 3 回来るのは、負荷の周期より長く上限を超え続けている                                                                                                               |
-| `catchUpDoesNotEnd`           | `catchingUp` が `AUDIO_PUBLISH_CATCH_UP_PENDING_TIMEOUT_MS` (5 秒) 以上続き、その間に `droppedFrames` が増える | 追いつきはキューが 1 パケット以下になればやめ、出力が返らない記録は 5 秒で捨てられるため、記録もそこから求める長さも遅くとも 5 秒で 0 になる。それだけ続いたうえで捨て続けているのは解除の条件が満たせていない (実測: 1805 フレーム・14440 ms を捨てたまま固定され、音声が一切送られなくなった)。捨てた数が増えていない (フレームが届いていない) 場合は別の失敗であるため出さない |
+| `catchUpDoesNotEnd`           | `catchingUp` が `AUDIO_PUBLISH_CATCH_UP_PENDING_TIMEOUT_MS` (5 秒) 以上続き、その間に `droppedFrames` が増える | 追いつきはキューが 1 パケット以下になればやめ、出力が返らない記録は 5 秒で捨てられるため、記録もそこから求める長さも遅くとも 5 秒で 0 になる。それだけ続いたうえで捨て続けているのは解除の条件が満たせていない (実測: 1805 フレーム、14440 ms を捨てたまま固定され、音声が一切送られなくなった)。捨てた数が増えていない (フレームが届いていない) 場合は別の失敗であるため出さない |
 
 ## 再考の手順
 

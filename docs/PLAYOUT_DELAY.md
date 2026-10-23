@@ -37,10 +37,10 @@ relay の cache や再送の挙動に依存する。遅延を時間で安定し�
 
 ## 復号済みフレームを保持しない理由
 
-`PlayoutBuffer` が保持するのは復号済みの `VideoFrame` である。2 秒の遅延をこれで実現すると、
-1080p 30 fps で約 60 枚、60 fps で約 120 枚の `VideoFrame` を保持することになり、
-1 枚あたり数 MiB のメモリが遅延に比例して増える。`JITTER_BUFFER_MAX_QUEUED_FRAMES` (24 枚) を
-遅延に合わせて増やすと、同じ問題が大きくなる。
+表示待ちのキュー (内部実装の `PlayoutBuffer`) が保持するのは復号済みの `VideoFrame` である。
+2 秒の遅延をこれで実現すると、1080p 30 fps で約 60 枚、60 fps で約 120 枚の `VideoFrame` を
+保持することになり、1 枚あたり数 MiB のメモリが遅延に比例して増える。
+`JITTER_BUFFER_MAX_QUEUED_FRAMES` (24 枚) を遅延に合わせて増やすと、同じ問題が大きくなる。
 
 そこで、受信した圧縮済み Object を復号前に保持する。2 秒の遅延で保持するのは、例えば
 20 Mbps の映像でも約 5 MiB であり、復号済みフレームを保持するより桁違いに小さい。
@@ -74,8 +74,9 @@ import { MAX_PRE_DECODE_DELAY_MS } from "moqt-js";
 1. 受信した音声と映像の Object を、復号へ渡せる状態になった時刻にメディアごとの
    遅延の段へ積む。期限は `その時刻 + preDecodeDelayMs` である。
 2. メディアごとに 1 本のタイマーが期限を待ち、期限が来た Object を積んだ順に復号へ渡す。
-3. 復号の出力は遅延の分だけ後ろへずれる。`PlayoutTimeline` は「復号の出力の時刻 - TIMESTAMP」
-   の最小値から基準の遅れを学習するため、`preDecodeDelayMs` は基準の遅れに含まれる。
+3. 復号の出力は遅延の分だけ後ろへずれる。共有の時間軸 (内部実装の `PlayoutTimeline`) は
+   「復号の出力の時刻 - TIMESTAMP」の最小値から基準の遅れを学習するため、`preDecodeDelayMs`
+   は基準の遅れに含まれる。
 4. 表示時刻は `TIMESTAMP + 基準の遅れ + 再生遅延` のままである。実際の表示遅延は、
    `preDecodeDelayMs` に経路と復号の遅れ、jitter buffer の遅延を加えた値になる。
 
@@ -91,24 +92,26 @@ import { MAX_PRE_DECODE_DELAY_MS } from "moqt-js";
 `MediaSubscriber.stop` は `PreDecodeDelayStage.flush` を呼んでから段を止め、flush した
 Object の復号出力が予約されるまで待つ。そのうえで、予約済みの音が鳴り終わるまで待ってから
 `AudioContext` を閉じる (drain)。待ち時間は「最後に鳴り終わる予約 - 現在 + 余裕 100 ms」を
-0〜300 ms にクランプした値である。flush した音があるときは、予約が無くてもこの上限まで
-待つ (復号が終われば早く終わる)。moqt-devtools も同じで、停止は drain の完了を待つ非同期
-の処理になる。
+0〜300 ms (`AUDIO_PLAYOUT_DRAIN_MAX_MS`) にクランプした値である。flush した音があるときは、
+予約が無くてもこの上限まで待つ (復号が終われば早く終わる)。moqt-devtools も同じで、停止は
+drain の完了を待つ非同期の処理になる。
 
-停止時の切断量は計器で読む。切った量は `missedByReason.stopped`、drain で鳴らせた量、
-切った量、待ち時間、flush した件数、復号されなかった件数 (`undecodedFlushedObjects`) は
-`lastDrain` に残る。`close()` とピア起点の close も
-drain するが、上限は 150 ms である。映像は drain の対象外であり、停止時に破棄する
+停止時の切断量は計器で読む。`missedByReason.stopped` が切り捨てた量、`lastDrain` の
+`playedMs` が鳴らせた量、`cutMs` が上限で切った量、`waitedMs` が待った時間、
+`flushedObjects` が flush した件数、`undecodedFlushedObjects` が復号されなかった件数である。
+`close()` とピア起点の close も drain するが、上限は 150 ms
+(`AUDIO_PLAYOUT_DRAIN_CLOSE_MAX_MS`) である。映像は drain の対象外であり、停止時に破棄する
 (詳細は `docs/AUDIO_PLAYOUT_GAPS_AND_TAIL.md` にある)。
 
 ## A/V 同期と受信側の追いつき
 
 音声と映像の両方に同じ `preDecodeDelayMs` を適用する。2 つの復号の出力は同じだけ後ろへ
-ずれるため、`PlayoutTimeline` の A/V 同期は今までどおり動く。保持上限を超えて一方の実効的な
-遅延が短くなったときは、短縮量の大きい方へ両方を揃える (`synchronizePreDecodeDelayShorten` /
-`SubscriberPreDecodeDelay`)。片方だけ短くなると表示時刻の基準がメディアごとにずれ、A/V 同期を
-合わせられなくなるためである。短縮の同期は「これから積む Object」の期限にだけ効く。既に保持して
-いる Object の期限は動かさないため、揃えた時点で一方の保持分がまとめて復号へ流れることはない。
+ずれるため、共有の時間軸 (内部実装の `PlayoutTimeline`) の A/V 同期は今までどおり動く。
+保持上限を超えて一方の実効的な遅延が短くなったときは、短縮量の大きい方へ両方を揃える
+(`synchronizePreDecodeDelayShorten` / `SubscriberPreDecodeDelay`)。片方だけ短くなると表示時刻の
+基準がメディアごとにずれ、A/V 同期を合わせられなくなるためである。短縮の同期は「これから積む
+Object」の期限にだけ効く。既に保持している Object の期限は動かさないため、揃えた時点で一方の
+保持分がまとめて復号へ流れることはない。
 復号へ渡す順序は積んだ順を守る。短縮で後から積んだ Object の期限が先に来ても、先頭の Object が
 未期限の間は取り出さない。順序を入れ替えると音声の時刻が往復し、映像が欠落扱いになるためである。
 
@@ -119,8 +122,8 @@ buffer の遅延として `MAX_PLAYOUT_DELAY_MS` (500 ms) と表示待ちのキ�
 切り下げた分は `avSync.targetLatencyLimitedMs` に出る。`preDecodeDelayMs` 側にはこの上限は
 掛からない。
 
-音声の受信側追いつき (`AudioReceiveCatchUp`) は、復号の出力の遅れから入力の遅れを引いた
-「復号が足している遅れ」で判定する。意図した遅延をそのまま渡すと、復号器に 2 秒分が溜まって
+音声の受信側追いつき (内部実装の `AudioReceiveCatchUp`) は、復号の出力の遅れから入力の遅れを
+引いた「復号が足している遅れ」で判定する。意図した遅延をそのまま渡すと、復号器に 2 秒分が溜まって
 いると誤判定する。そこで再生の入口 (`createMediaPlayout`) へ渡す入力の記録
 (`MediaPlayoutAudioDecodeInput`) の `intentionalDelayMs` に、設定値ではなく復号へ渡すまで
 実際に保持した時間を渡し、判定から差し引く (moqt-devtools も同じ値を渡す)。

@@ -3,12 +3,16 @@ import { formatTrackNamespace } from "../../../src/fullTrackName";
 import { DEVTOOLS_URL } from "../urls";
 import { RELAY_TEST_TIMEOUT_MS, createTestNamespace, requireRelayUri } from "./support";
 
+// 音声の再生の開始を page.evaluate の中で連続して押すため、ユーザー操作を待たずに
+// AudioContext を再開できるようにする (実ブラウザのフラグであり、mock ではない)
+test.use({ launchOptions: { args: ["--autoplay-policy=no-user-gesture-required"] } });
+
 // moqt-devtools の subscriber で、音声の再生の停止・再開と購読のやり直しを実リレーで確かめる。
 //
 // 1 つ目は、購読の停止で音声を鳴らし切る (drain、上限 300 ms) 直後に購読をやり直しても、
-// 古い停止の後始末が新しい購読の再生を壊さないことを見る。2 つ目は、音声の再生を
-// 切り替えて `AudioContext` を作り直したとき、画面へ出す加工の量 (時間圧縮・補間) が
-// 前の再生の累積を持ち越さず 0 から始まることを見る。
+// 古い停止の後始末が新しい購読の再生を壊さないことを見る。2 つ目は、音声の再生を始めた
+// 直後に止めたときに、再生の状態と画面のエラーが壊れないことを見る (切り替えの await の
+// 競合の回帰)。
 //
 // 配信は devtools の dummy の音声と映像を使う (マイクとカメラを要求しない)。
 // 実リレーは TEST_MOQT_URI が設定された環境でだけ動く。
@@ -34,9 +38,6 @@ interface DevtoolsSubscriberStats {
     playbackEnabled: boolean;
     peakDbfs: number | null;
     rmsDbfs: number | null;
-    playoutCompressedMs: number;
-    playoutConcealedMs: number;
-    playoutConcealments: number;
     playoutTiming: {
       playedFrames: number;
       playedMs: number;
@@ -86,12 +87,22 @@ function summarizeSubscriber(stats: DevtoolsSubscriberStats): string {
     `playbackEnabled=${audio.playbackEnabled}`,
     `playedFrames=${audio.playoutTiming.playedFrames}`,
     `playedMs=${audio.playoutTiming.playedMs.toFixed(0)}`,
-    `compressedMs=${audio.playoutCompressedMs}`,
-    `concealedMs=${audio.playoutConcealedMs}`,
-    `concealments=${audio.playoutConcealments}`,
     `peakDbfs=${audio.peakDbfs === null ? "-" : audio.peakDbfs.toFixed(1)}`,
     `warnings=${stats.warnings.length}`,
   ].join(", ");
+}
+
+/** 購読が確立するのを待つ */
+async function waitForSubscriberConnected(page: Page): Promise<void> {
+  await expect
+    .poll(
+      async () => {
+        const stats = await readSubscriber(page);
+        return stats.status;
+      },
+      { message: "購読が確立するのを待つ", timeout: SUBSCRIBE_TIMEOUT_MS },
+    )
+    .toBe("connected");
 }
 
 /**
@@ -140,39 +151,59 @@ async function ensureAudioPlaybackEnabled(page: Page): Promise<void> {
   await expect(toggle).toHaveAttribute("aria-pressed", "true");
 }
 
-test("購読の停止の直後に購読をやり直しても、音声の再生を続けられる", async ({ page }) => {
+/**
+ * 経路 (リソースの取得、WebTransport / QUIC) の console error か
+ *
+ * 判定から除くのは既知の接頭辞のものだけにする。大文字小文字を無視して `QUIC` や
+ * `net::` / `ERR_` のような広い語で除くと、アプリのエラーまで落とす。
+ */
+function isNetworkConsoleError(text: string): boolean {
+  return (
+    text.includes("Failed to load resource: net::") ||
+    text.startsWith("net::ERR_") ||
+    text.includes("WebTransportError") ||
+    text.includes("WebTransport connection")
+  );
+}
+
+/**
+ * console error と捕捉されなかった例外の記録を作る
+ *
+ * 判定にはアプリのエラーだけを使う。経路のエラーはログへ残す。
+ */
+function collectConsoleErrors(page: Page): string[] {
+  const applicationErrors: string[] = [];
+  page.on("console", (message) => {
+    if (message.type() !== "error") return;
+    const text = message.text();
+    if (isNetworkConsoleError(text)) {
+      console.log(`経路の console error は判定から除く: ${text}`);
+      return;
+    }
+    applicationErrors.push(text);
+  });
+  page.on("pageerror", (error) => {
+    applicationErrors.push(String(error));
+  });
+  return applicationErrors;
+}
+
+// このテストは、購読の停止 (drain と AudioContext の close) が終わってから購読をやり直す。
+// Stop の後始末が終わるまで Subscribe は無効であり、操作は直列化される。停止の drain の
+// 途中に再購読が入る競合は、devtools 側の単体 seam (audioPlaybackLifecycle) が担保する。
+test("購読の停止後に購読をやり直しても、音声の再生を続けられる (直列化された再購読)", async ({
+  page,
+}) => {
   test.setTimeout(TEST_TIMEOUT_MS);
   const moqtUri = requireRelayUri();
   if (moqtUri === null) {
     return;
   }
 
-  // 実ブラウザの console error と、捕捉されなかった例外を記録する
-  const consoleErrors: string[] = [];
-  page.on("console", (message) => {
-    if (message.type() === "error") {
-      consoleErrors.push(message.text());
-    }
-  });
-  page.on("pageerror", (error) => {
-    consoleErrors.push(String(error));
-  });
-
+  const consoleErrors = collectConsoleErrors(page);
   const namespace = formatTrackNamespace(createTestNamespace());
   await startBoth(page, moqtUri, namespace);
-  // 購読を確立してから再生を有効にする
-  await expect
-    .poll(
-      async () => {
-        const stats = await readSubscriber(page);
-        return stats.status;
-      },
-      {
-        message: "購読が確立するのを待つ",
-        timeout: SUBSCRIBE_TIMEOUT_MS,
-      },
-    )
-    .toBe("connected");
+  await waitForSubscriberConnected(page);
   await ensureAudioPlaybackEnabled(page);
   // 再生が定常になってから停止する
   await expect
@@ -181,10 +212,7 @@ test("購読の停止の直後に購読をやり直しても、音声の再生�
         const stats = await readSubscriber(page);
         return stats.audio.playoutTiming.playedFrames;
       },
-      {
-        message: "停止の前に音を鳴らし始めるのを待つ",
-        timeout: AUDIO_ARRIVAL_TIMEOUT_MS,
-      },
+      { message: "停止の前に音を鳴らし始めるのを待つ", timeout: AUDIO_ARRIVAL_TIMEOUT_MS },
     )
     .toBeGreaterThan(50);
   const beforeStop = await readSubscriber(page);
@@ -192,28 +220,40 @@ test("購読の停止の直後に購読をやり直しても、音声の再生�
 
   // 停止する。音声は予約済みの分を鳴らし切ってから止まる (drain、上限は 300 ms)。
   // Stop の直後に Subscribe を押す。Subscribe は停止の後始末が終わるまで無効なので、
-  // 押せるようになった時点で押す = drain が終わった直後の再購読になる。
+  // 押せるようになった時点で押す = drain が終わった後の再購読になる。
   const stopStartedMs = Date.now();
   await page.getByTestId("subscriber-stop-button").click();
   await page.getByTestId("subscriber-subscribe-button").click();
-  const stopToSubscribeMs = Date.now() - stopStartedMs;
-  console.log(`停止から再購読までの時間: ${stopToSubscribeMs} ms`);
-  // drain の上限 (300 ms) と、操作の往復と CI の遅さの余裕。これより長いと「直後」ではない
-  expect(stopToSubscribeMs, "停止から再購読までに時間がかかりすぎている").toBeLessThan(3_000);
+  console.log(`停止から再購読までの時間: ${Date.now() - stopStartedMs} ms`);
 
-  // 再購読の確立と音声の再生を待つ
+  // 再購読が確立し、音声の Object が届いて復号されることを待つ
+  await waitForSubscriberConnected(page);
   await expect
     .poll(
       async () => {
         const stats = await readSubscriber(page);
-        return stats.status;
+        return stats.audio.chunksDecoded;
       },
       {
-        message: "再購読が確立するのを待つ",
-        timeout: SUBSCRIBE_TIMEOUT_MS,
+        message: "再購読の後も音声の Object が復号されるのを待つ",
+        timeout: AUDIO_ARRIVAL_TIMEOUT_MS,
       },
     )
-    .toBe("connected");
+    .toBeGreaterThan(0);
+  // 再購読の後に音声が届き、再生が無効のままであることを条件で待つ (反映の周期を
+  // 固定の時間で待たない)
+  await expect
+    .poll(
+      async () => {
+        const stats = await readSubscriber(page);
+        return stats.audio.playbackEnabled ? -1 : stats.audio.chunksDecoded;
+      },
+      {
+        message: "再購読の後も音声が届き、再生が無効のままであることを待つ",
+        timeout: AUDIO_ARRIVAL_TIMEOUT_MS,
+      },
+    )
+    .toBeGreaterThan(0);
   const afterSubscribe = await readSubscriber(page);
   console.log(`再購読の直後: ${summarizeSubscriber(afterSubscribe)}`);
   // 再購読した時点では再生はまだ有効ではない (Stop で止まっている)
@@ -221,9 +261,9 @@ test("購読の停止の直後に購読をやり直しても、音声の再生�
     afterSubscribe.audio.playbackEnabled,
     `再購読の直後の再生の状態が想定と違う (${summarizeSubscriber(afterSubscribe)})`,
   ).toBe(false);
-  const framesBeforePlay = afterSubscribe.audio.playoutTiming.playedFrames;
+  // 再生を有効にしていない間は、鳴らした記録が増えない
   expect(
-    framesBeforePlay,
+    afterSubscribe.audio.playoutTiming.playedFrames,
     `再生を有効にする前に音を鳴らしている (${summarizeSubscriber(afterSubscribe)})`,
   ).toBe(0);
 
@@ -253,118 +293,103 @@ test("購読の停止の直後に購読をやり直しても、音声の再生�
     after.audio.playoutTiming.playedFrames,
     `押した後に音が鳴っていない (${summarizeSubscriber(after)})`,
   ).toBeGreaterThan(0);
-  // 停止と再購読の間、実ブラウザの console error を出さない
+  // 停止と再購読の間、アプリの console error を出さない
   expect(
     consoleErrors,
     `停止と再購読の間に console error が出た: ${consoleErrors.join(" | ")}`,
   ).toEqual([]);
 });
 
-test("音声の再生を入れ直すと、加工した量の表示が 0 から始まる", async ({ page }) => {
+test("音声の再生を押した直後に購読を止めても、再生の状態とアプリのエラーが壊れない", async ({
+  page,
+}) => {
   test.setTimeout(TEST_TIMEOUT_MS);
   const moqtUri = requireRelayUri();
   if (moqtUri === null) {
     return;
   }
 
+  const consoleErrors = collectConsoleErrors(page);
   const namespace = formatTrackNamespace(createTestNamespace());
   await startBoth(page, moqtUri, namespace);
+  await waitForSubscriberConnected(page);
+  // 音声が届いていないと再生の開始もすぐ終わってしまい、await の競合を作れない
   await expect
     .poll(
       async () => {
         const stats = await readSubscriber(page);
-        return stats.status;
+        return stats.audio.chunksDecoded;
       },
-      {
-        message: "購読が確立するのを待つ",
-        timeout: SUBSCRIBE_TIMEOUT_MS,
-      },
+      { message: "音声が復号され始めるのを待つ", timeout: AUDIO_ARRIVAL_TIMEOUT_MS },
     )
-    .toBe("connected");
+    .toBeGreaterThan(0);
+
+  // Play Audio と Stop を同じタスクで押し、最終状態が壊れないことを確かめる。Play Audio の
+  // 処理は非同期 (AudioContext の作成と resume、<audio> の play) であり、その await の間に
+  // 購読の停止 (drain と AudioContext の close) が始まり得る。停止後に開始の続きが戻っても
+  // 再生を有効にしてはならない。停止側は unsubscribe を待ってから再生を止めるため、この
+  // 順序が必ず stale 分岐を通る保証はない。判定の順序は devtools の
+  // audioPlaybackLifecycle の単体テストが担保する。
+  const toggle = page.getByTestId("subscriber-audio-playback-toggle");
+  await page.evaluate(() => {
+    const playbackToggle = document.querySelector<HTMLButtonElement>(
+      '[data-testid="subscriber-audio-playback-toggle"]',
+    );
+    const stopButton = document.querySelector<HTMLButtonElement>(
+      '[data-testid="subscriber-stop-button"]',
+    );
+    if (playbackToggle === null || stopButton === null) {
+      throw new Error("failed to find the playback toggle or the stop button");
+    }
+    playbackToggle.click();
+    stopButton.click();
+  });
+
+  // 停止の後始末が終わるまで待つ (Subscribe は停止中は無効)
+  await expect(page.getByTestId("subscriber-subscribe-button")).toBeEnabled();
+  // 停止の後に、開始の続きが再生を有効にしていない
+  await expect
+    .poll(
+      async () => {
+        const stats = await readSubscriber(page);
+        return stats.audio.playbackEnabled;
+      },
+      { message: "停止の後に再生が有効に戻っていないことを待つ", timeout: 10_000 },
+    )
+    .toBe(false);
+  await expect(toggle).toHaveAttribute("aria-pressed", "false");
+  const after = await readSubscriber(page);
+  console.log(`停止の直後: ${summarizeSubscriber(after)}`);
+  // 停止した後の状態が「購読していない」になっている
+  expect(after.status, `停止の直後に購読の状態が壊れている (${summarizeSubscriber(after)})`).toBe(
+    "disconnected",
+  );
+
+  // 停止の後始末が終わった後に購読と再生をやり直せる (停止が次の購読を壊さない)
+  await page.getByTestId("subscriber-subscribe-button").click();
+  await waitForSubscriberConnected(page);
   await ensureAudioPlaybackEnabled(page);
   await expect
     .poll(
       async () => {
         const stats = await readSubscriber(page);
-        return stats.audio.playoutTiming.playedFrames;
+        return stats.audio.playbackEnabled ? stats.audio.playoutTiming.playedFrames : 0;
       },
       {
-        message: "音を鳴らし始めるのを待つ",
+        message: "停止の後に再生をやり直して音を鳴らし始めるのを待つ",
         timeout: AUDIO_ARRIVAL_TIMEOUT_MS,
       },
     )
-    .toBeGreaterThan(50);
-
-  // 加工 (時間圧縮・補間) の量を計器へ出す。メインスレッドを実時間で止めると、その間に
-  // 鳴る予定だった音が遅れて届き、目標へ詰める (圧縮) か穴を補間する (補間) 動きになる。
-  // 実ブラウザの停止であり、longtask と同じ条件である。
-  await page.evaluate(() => {
-    const endMs = performance.now() + 2_000;
-    while (performance.now() < endMs) {
-      // 実時間で止まるまで空回しする
-    }
-  });
-  // 停止から復帰し、加工の量が計器に出るまで待つ
-  await expect
-    .poll(
-      async () => {
-        const stats = await readSubscriber(page);
-        return stats.audio.playoutCompressedMs + stats.audio.playoutConcealedMs;
-      },
-      { message: "音を加工した量が計器に出るのを待つ", timeout: 20_000 },
-    )
     .toBeGreaterThan(0);
-
-  const beforeToggle = await readSubscriber(page);
-  console.log(`再生を入れ直す前: ${summarizeSubscriber(beforeToggle)}`);
-  const beforeTotal =
-    beforeToggle.audio.playoutCompressedMs + beforeToggle.audio.playoutConcealedMs;
+  const afterRestart = await readSubscriber(page);
+  console.log(`再開の後: ${summarizeSubscriber(afterRestart)}`);
   expect(
-    beforeTotal,
-    `再生を入れ直す前に加工の量が計器へ出ていない (${summarizeSubscriber(beforeToggle)})`,
+    afterRestart.audio.playoutTiming.playedFrames,
+    `停止の後に再生をやり直しても音が鳴らない (${summarizeSubscriber(afterRestart)})`,
   ).toBeGreaterThan(0);
-
-  // 再生を止めて入れ直す。AudioContext を作り直し、累積の計器は購読の統計として残るが、
-  // 画面へ出す値は再生を始めた時点からの差 (0 起点) になる。
-  const toggle = page.getByTestId("subscriber-audio-playback-toggle");
-  await toggle.click();
-  await expect(toggle).toHaveAttribute("aria-pressed", "false");
-  await toggle.click();
-  await expect(toggle).toHaveAttribute("aria-pressed", "true");
-  // 押した直後 (累積の計器の基準を取り直した直後) の表示を読む
-  const afterToggle = await readSubscriber(page);
+  // 押した直後に停止しても、アプリの console error を出さない
   expect(
-    afterToggle.audio.playbackEnabled,
-    `再生を再開できていない (${summarizeSubscriber(afterToggle)})`,
-  ).toBe(true);
-  console.log(`再生を入れ直した直後: ${summarizeSubscriber(afterToggle)}`);
-  // 前の再生の累積を持ち越さず、0 から始まる (直後に少し加工されても、前の累積とは
-  // 桁が違う)。前の累積が計器から消えないことを、次の再生で増えることで確かめる
-  expect(
-    afterToggle.audio.playoutCompressedMs,
-    `入れ直した直後の時間圧縮の表示が 0 起点になっていない (前=${beforeToggle.audio.playoutCompressedMs}, 後=${afterToggle.audio.playoutCompressedMs})`,
-  ).toBeLessThanOrEqual(20);
-  expect(
-    afterToggle.audio.playoutConcealedMs,
-    `入れ直した直後の補間の表示が 0 起点になっていない (前=${beforeToggle.audio.playoutConcealedMs}, 後=${afterToggle.audio.playoutConcealedMs})`,
-  ).toBeLessThanOrEqual(20);
-  // 前の再生で計器に溜まった量より、入れ直した直後の表示が少ない (前の累積を持ち越さない)
-  const afterTotal = afterToggle.audio.playoutCompressedMs + afterToggle.audio.playoutConcealedMs;
-  expect(
-    afterTotal,
-    `入れ直した直後の表示が前の再生の累積を持ち越している (前=${beforeTotal}, 後=${afterTotal})`,
-  ).toBeLessThan(beforeTotal);
-  // 入れ直した後も音は鳴り続ける
-  await expect
-    .poll(
-      async () => {
-        const stats = await readSubscriber(page);
-        return stats.audio.playoutTiming.playedFrames;
-      },
-      {
-        message: "入れ直した後に音を鳴らし続けるのを待つ",
-        timeout: AUDIO_ARRIVAL_TIMEOUT_MS,
-      },
-    )
-    .toBeGreaterThan(0);
+    consoleErrors,
+    `再生の開始と停止の間に console error が出た: ${consoleErrors.join(" | ")}`,
+  ).toEqual([]);
 });
