@@ -509,8 +509,9 @@ function decoderTimestampOf(resolved: TimestampSource): number {
 /**
  * catalog 購読フェーズの状態の getter / setter の定義
  *
- * `PropertyDescriptor` のままだと値の型が `any` になり、フィールドの取り違えを
- * コンパイラが検出できない。状態のキーと値の型を結び付ける。
+ * `PropertyDescriptor` のままだと値の型が `any` になり、型の異なるフィールド間の
+ * 取り違えをコンパイラが検出できない。状態のキーと値の型を結び付ける。同じ型の
+ * フィールドどうしの取り違え (audioTrackInfo と videoTrackInfo など) は防げない。
  */
 type CatalogStateDescriptors = {
   readonly [K in keyof CatalogSubscriptionState]: {

@@ -392,7 +392,8 @@ export class CatalogSubscription {
    *
    * 解放の後に await が残ると `start()` が永久に解決しないため、受信待ちを reject する。
    * 戻すのは受信待ちの 3 状態 (`catalogWaiting` / `catalogResolve` / `catalogReject`)
-   * だけであり、FETCH フェーズの状態は呼び出し側が先に落とす。
+   * だけであり、FETCH フェーズの状態とタイマーは呼び出し側が先に落とす
+   * (`resetCatalogFetchPhase` / `clearCatalogTimer`)。
    *
    * @param error - 待っている呼び出し元へ渡すエラー
    */
