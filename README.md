@@ -274,7 +274,9 @@ MSF-01 §5 は catalog の取得に Joining FETCH を MUST としているが、
 - 購読側の再生遅延を指定する
   - `MediaSubscriberOptions.preDecodeDelayMs` で、受信した Object を復号前に時間で保持する。2 秒以上の遅延でも復号済みフレームを溜めず、受信バッファの上限も変えない (`src/playout/preDecodeDelay.ts`)。保持上限を超えた場合は古い Object を落として残りの期限を前倒しし、実際の遅延を短くする。詳細は [購読側の再生遅延](docs/PLAYOUT_DELAY.md)
 
-高レベル API (`createMediaSubscriber`) はこの再生を内部で組み立てるため、アプリケーション側で実装する必要はありません。再生の部品は公開 API (`PlayoutTimeline` / `AudioPlayoutSession` / `VideoPlayoutSession`) としても使えます。詳細は [高レベル API](docs/HIGH_LEVEL_API.md) にあります。
+再生の入口は `createMediaPlayout` (`src/playout/mediaPlayout.ts`) です。復号へ渡す直前に `trackAudioDecodeInput` / `trackVideoDecodeInput` で TIMESTAMP の種類と Object の位置を記録し、復号の出力を `pushAudio` / `pushVideo` へ渡すだけで、時間軸・jitter buffer・音声の予約・映像の表示・A/V 同期・計器がそろいます。`createMediaSubscriber` も内部でこの入口を使っています。
+
+高レベル API (`createMediaSubscriber`) はこの再生を内部で組み立てるため、アプリケーション側で実装する必要はありません。自分で受信・復号を組み立てる場合も、再生はこの入口 (`createMediaPlayout`) 1 つで完結します。詳細は [高レベル API](docs/HIGH_LEVEL_API.md) にあります。
 
 実測の条件と生の表は [音声の再生遅延の実測](docs/AUDIO_PLAYOUT_LATENCY.md)、現状と既知の限界は [音声再生の現状](docs/AUDIO_PLAYOUT_RESULT.md) にまとめています。
 

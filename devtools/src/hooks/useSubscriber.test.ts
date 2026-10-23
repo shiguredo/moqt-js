@@ -15,7 +15,6 @@ import {
   createAttemptGuard,
   closeSubscriberResources,
   recordVideoReceived,
-  rememberDecodeInput,
   resetSubscriberState,
   resetSubscriberStats,
   resolveAudioTrack,
@@ -31,7 +30,6 @@ import {
   refreshTrackEndStatus,
   resolveTrackEndState,
   subscribedStatusMessage,
-  type DecodeInput,
   type ReceivedVideoObject,
 } from "./useSubscriber";
 import { AudioDecoderWrapper } from "../../../src/codec/AudioDecoder";
@@ -389,80 +387,6 @@ test("buildVideoChunkPlan: Track の TIMESCALE があるときはメディア時
   );
   assert.equal(withObjectTimescale.timestampKind, "mediaTime");
   assert.equal(withObjectTimescale.timestamp, 1_000_000);
-});
-
-// ============================================================================
-// 復号へ渡した Object の情報 (位置と TIMESTAMP の種類、入力の遅れ)
-// ============================================================================
-
-test("rememberDecodeInput: TIMESTAMP の種類と位置と入力の遅れを覚える", () => {
-  // 復号の出力では Object の位置が分からないため、decoder へ渡した TIMESTAMP で引く。
-  // 入力の遅れ (Object の到着 - LOC TIMESTAMP) も一緒に覚え、復号の出力で引いて
-  // 受信側の追いつきへ渡す (src/playout/audioReceiveCatchUp.ts)
-  const inputs = new Map<number, DecodeInput>();
-  rememberDecodeInput(inputs, 1_000, {
-    timestampKind: "wallClock",
-    location: { group: 5n, object: 3n },
-    inputLagMs: 25,
-    intentionalDelayMs: 2_000,
-  });
-  assert.deepEqual(inputs.get(1_000), {
-    timestampKind: "wallClock",
-    location: { group: 5n, object: 3n },
-    inputLagMs: 25,
-    intentionalDelayMs: 2_000,
-  });
-});
-
-test("rememberDecodeInput: 入力の遅れが測れないときは null で覚える", () => {
-  // Timescale がある TIMESTAMP はメディア時刻であり、壁時計と対応しないため測れない。
-  // 復号の出力では入力の遅れが無いものとして扱い、出力の遅れだけを使う
-  const inputs = new Map<number, DecodeInput>();
-  rememberDecodeInput(inputs, 1_000, {
-    timestampKind: "mediaTime",
-    location: { group: 5n, object: 3n },
-    inputLagMs: null,
-    intentionalDelayMs: 0,
-  });
-  assert.deepEqual(inputs.get(1_000), {
-    timestampKind: "mediaTime",
-    location: { group: 5n, object: 3n },
-    inputLagMs: null,
-    intentionalDelayMs: 0,
-  });
-});
-
-test("rememberDecodeInput: TIMESTAMP を持たない Object は覚えない", () => {
-  // TIMESTAMP が無い Object はすべて同じ TIMESTAMP (0) を共有するため、位置を一意に引けない。
-  // 復号の出力では位置が分からないものとして扱い、境界の判定をせずに描く・鳴らす
-  const inputs = new Map<number, DecodeInput>();
-  rememberDecodeInput(inputs, 0, {
-    timestampKind: "none",
-    location: { group: 5n, object: 3n },
-    inputLagMs: null,
-    intentionalDelayMs: 0,
-  });
-  assert.isFalse(inputs.has(0), "TIMESTAMP を持たない Object の位置を覚えた");
-});
-
-test("rememberDecodeInput: 同じ TIMESTAMP の Object が重なったら、その TIMESTAMP の分を忘れる", () => {
-  // 同じ TIMESTAMP の Object が 2 つあるとき、復号の出力がどちらの位置かは決められない。
-  // 先に覚えていた分も忘れ、どちらも位置が分からないものとして扱う。入力の遅れも同じ理由で
-  // 一緒に忘れる (別の音の遅れを引かない)
-  const inputs = new Map<number, DecodeInput>();
-  rememberDecodeInput(inputs, 1_000, {
-    timestampKind: "mediaTime",
-    location: { group: 1n, object: 1n },
-    inputLagMs: 25,
-    intentionalDelayMs: 0,
-  });
-  rememberDecodeInput(inputs, 1_000, {
-    timestampKind: "mediaTime",
-    location: { group: 1n, object: 2n },
-    inputLagMs: 30,
-    intentionalDelayMs: 0,
-  });
-  assert.isFalse(inputs.has(1_000), "同じ TIMESTAMP の位置を覚えたままにした");
 });
 
 // ============================================================================

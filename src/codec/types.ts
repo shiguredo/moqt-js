@@ -476,7 +476,7 @@ export interface MediaSubscriber {
    * close() が解放と終端遷移を進めている間は cannot stop while closing で拒否する。
    * 停止の要求後は新しい音声 Object を受け付けず、復号前の遅延の段に保持していた音声は
    * flush して復号へ流す。予約済みの音が鳴り終わるまで待ってから `AudioContext` を
-   * 閉じる (最大 300 ms。上限は `AudioPlayoutSession.drainReserved` の
+   * 閉じる (最大 300 ms。上限は `MediaPlayout.drainAudio` の
    * `AUDIO_PLAYOUT_DRAIN_MAX_MS`)。待って鳴らせた量と切った量は
    * `getStats().audio.playoutTiming.lastDrain` で読める。
    */

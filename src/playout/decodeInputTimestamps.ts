@@ -1,3 +1,5 @@
+import type { Location } from "../message";
+
 /**
  * 復号へ渡した timestamp から、復号の出力を引く
  *
@@ -168,5 +170,173 @@ export class LastTimestampKind<K extends string> {
       nearest = Math.min(nearest, Math.abs(outputTimestampMicros - timestamp));
     }
     return nearest <= DECODE_INPUT_KIND_FALLBACK_MAX_DISTANCE_MICROS ? this.value : null;
+  }
+}
+
+/**
+ * 復号へ渡した音声 Object の TIMESTAMP の種類
+ *
+ * `none` (TIMESTAMP が無い) は覚えない。decoder へは 0 を渡すため、同じ TIMESTAMP の音が
+ * すべて重なり、種類も位置も一意に引けないためである。
+ */
+export type AudioDecodeInputKind = "wallClock" | "mediaTime";
+
+/** 復号へ渡した音声 Object の情報 */
+export interface AudioDecodeInput {
+  /** TIMESTAMP の種類 */
+  readonly timestampKind: AudioDecodeInputKind;
+  /** Object の位置。位置を使わないときは null */
+  readonly location: Location | null;
+  /**
+   * 受信の入口で測った入力の遅れ (ミリ秒)。測れないときは null
+   *
+   * 壁時計の TIMESTAMP を持つ音だけ測れる (`src/playout/audioReceiveCatchUp.ts`)。
+   */
+  readonly inputLagMs: number | null;
+  /**
+   * 復号へ渡すまで実際に保持した時間 (ミリ秒)。測れないときは null
+   *
+   * 復号前の遅延の段を挟むと、`MediaPlayoutOptions.intentionalDelayMs` の設定値ではなく、
+   * 実際に保持した時間を使う必要がある (上限超過で期限が前倒しになる区間があるため)。
+   */
+  readonly intentionalDelayMs: number | null;
+}
+
+/**
+ * `AudioDecodeInputs.remember` へ渡す情報
+ *
+ * 測れない値は省略できる (省略した値は null として覚え、`resolve` でも null を返す)。
+ */
+export interface AudioDecodeInputRecord {
+  /** TIMESTAMP の種類。`none` の音は覚えない */
+  readonly timestampKind: AudioDecodeInputKind | "none";
+  /** Object の位置。位置を使わないときは省略する */
+  readonly location?: Location | null;
+  /** 受信の入口で測った入力の遅れ (ミリ秒) */
+  readonly inputLagMs?: number | null;
+  /** 復号へ渡すまで実際に保持した時間 (ミリ秒) */
+  readonly intentionalDelayMs?: number | null;
+}
+
+/**
+ * 復号の出力に対して解決した音声の入力の情報
+ *
+ * `input` が null のときは、種類を直前に分かっている値で補っただけであり、位置と遅れは
+ * 使えない (どの Object の値か決められないため)。呼び出し側は種類だけを使う。
+ */
+export interface ResolvedAudioDecodeInput {
+  /** 復号の出力の timestamp に対応する TIMESTAMP の種類。分からなければ null */
+  readonly timestampKind: AudioDecodeInputKind | null;
+  /** 対応する記録。引けなかった (補った、または分からない) ときは null */
+  readonly input: AudioDecodeInput | null;
+}
+
+/** `AudioDecodeInputs` の設定 */
+export interface AudioDecodeInputsOptions {
+  /**
+   * 覚えておく上限 (件)
+   *
+   * 出力されなかった (decoder のエラーで捨てられたなど) 分が残り続けないよう、超えたら
+   * 古い方から忘れる。
+   */
+  readonly maxTracked: number;
+  /**
+   * 同じ TIMESTAMP の Object が重なったときに、その TIMESTAMP の分を忘れるか
+   *
+   * true のとき、同じ TIMESTAMP の Object が重なったらどちらの位置か決められないため
+   * その TIMESTAMP の分を忘れる (位置を追いつきの判定に使うとき)。false のときは後から
+   * 来た情報で上書きする (TIMESTAMP の種類しか使わないとき)。
+   */
+  readonly forgetOnDuplicate: boolean;
+}
+
+/**
+ * 復号へ渡した音声 Object の情報を、復号の出力で引けるように覚えておく対応表
+ *
+ * 復号の出力 (`AudioData.timestamp`) は、入力の timestamp と小数だけずれる
+ * (`takeDecodeInputEntry`)。完全一致で引けなくなっても種類を失わないよう、ずれを許容して
+ * 最も近い記録を引き、引けないときは直前に分かっている種類で補う (`LastTimestampKind`)。
+ *
+ * 1 つの音声の購読 (または再生) に対して 1 つ作る。購読を始めるたびに `clear()` で消す。
+ */
+export class AudioDecodeInputs {
+  private readonly inputs = new Map<number, AudioDecodeInput>();
+  private readonly lastKind = new LastTimestampKind<AudioDecodeInputKind>();
+  private readonly options: AudioDecodeInputsOptions;
+
+  constructor(options: AudioDecodeInputsOptions) {
+    this.options = options;
+  }
+
+  /** 覚えている件数 */
+  get size(): number {
+    return this.inputs.size;
+  }
+
+  /**
+   * 復号へ渡した Object の情報を覚える
+   *
+   * TIMESTAMP を持たない音 (`none`) と、同じ TIMESTAMP が重なった音は、位置も種類も一意に
+   * 引けないため覚えない (`forgetOnDuplicate` が true のとき)。
+   *
+   * @param timestampMicros - decoder へ渡した TIMESTAMP (マイクロ秒)
+   * @param record - TIMESTAMP の種類と、測れた付加情報
+   */
+  remember(timestampMicros: number, record: AudioDecodeInputRecord): void {
+    if (record.timestampKind === "none") {
+      // decoder へ 0 を渡す音は種類も位置も引けない。既に覚えていた分も忘れる
+      this.inputs.delete(timestampMicros);
+      return;
+    }
+    // 直前に分かっている種類として残す。復号の出力で対応が引けなくなったときに使う
+    this.lastKind.update(record.timestampKind);
+    if (this.inputs.has(timestampMicros)) {
+      if (this.options.forgetOnDuplicate) {
+        // どちらの Object の情報か決められないため忘れる
+        this.inputs.delete(timestampMicros);
+        return;
+      }
+      // 上書きする。種類しか使わないときは、後から来た種類で上書きしてよい
+      this.inputs.delete(timestampMicros);
+    }
+    this.inputs.set(timestampMicros, {
+      timestampKind: record.timestampKind,
+      location: record.location ?? null,
+      inputLagMs: record.inputLagMs ?? null,
+      intentionalDelayMs: record.intentionalDelayMs ?? null,
+    });
+    for (const oldest of this.inputs.keys()) {
+      if (this.inputs.size <= this.options.maxTracked) {
+        break;
+      }
+      this.inputs.delete(oldest);
+    }
+  }
+
+  /**
+   * 復号の出力の timestamp に対する入力を解決する (引いた記録は忘れる)
+   *
+   * 完全一致する記録が無ければ、`toleranceMicros` の中で最も近い記録を引く。それも
+   * 無ければ、直前に分かっている種類を、保留している記録から離れすぎていないときだけ
+   * 返す (`matched` は false)。
+   *
+   * @param outputTimestampMicros - 復号の出力の timestamp (マイクロ秒)
+   * @param toleranceMicros - 対応とみなす差の上限 (マイクロ秒)
+   */
+  resolve(outputTimestampMicros: number, toleranceMicros: number): ResolvedAudioDecodeInput {
+    const matched = takeDecodeInputEntry(this.inputs, outputTimestampMicros, toleranceMicros);
+    if (matched !== undefined) {
+      return { timestampKind: matched.timestampKind, input: matched };
+    }
+    return {
+      timestampKind: this.lastKind.fallbackFor(this.inputs, outputTimestampMicros),
+      input: null,
+    };
+  }
+
+  /** すべて忘れる (購読を始めるとき、AudioContext を作り直すとき) */
+  clear(): void {
+    this.inputs.clear();
+    this.lastKind.reset();
   }
 }

@@ -27,11 +27,20 @@ export interface SubscriberAudioStopTarget {
    * @returns 復号へ流した Object の件数
    */
   flushAudio: () => number;
-  /** 予約済みの音が鳴り終わるまで待つ (`AudioPlayoutSession.drainReserved`) */
+  /**
+   * 予約済みの音が鳴り終わるまで待つ (`MediaPlayout.drainAudio`)
+   *
+   * 渡す項目は `AudioPlayoutDrainOptions` のうち、flush した Object の復号の出力を待つ
+   * 条件だけである (`MediaPlayout.drainAudio` が受け取る)
+   */
   drain: (options: {
+    /** drain を待つ上限 (ミリ秒) */
     maxWaitMs: number;
+    /** 復号前の段から flush した Object の復号出力を待ち終えたか */
     isFlushSettled: () => boolean;
+    /** flush した Object の件数 */
     flushedObjects: number;
+    /** flush したが、まだ復号の出力が届いていない Object の数 */
     remainingFlushedObjects: () => number;
   }) => Promise<void>;
   /**

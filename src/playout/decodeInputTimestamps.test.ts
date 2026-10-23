@@ -18,6 +18,7 @@
 
 import { test, assert } from "vite-plus/test";
 import {
+  AudioDecodeInputs,
   DECODER_OUTPUT_TIMESTAMP_TOLERANCE_MICROS,
   DECODE_INPUT_KIND_FALLBACK_MAX_DISTANCE_MICROS,
   LastTimestampKind,
@@ -253,4 +254,145 @@ test("LastTimestampKind: 別の時間軸の値には使わない", () => {
 
   // 記録が無ければ、その出力が同じ時間軸のものかを言えない
   assert.isNull(lastKind.fallbackFor(new Map<number, string>(), FIRST_INPUT_MICROS));
+});
+
+/**
+ * 復号へ渡した音声 Object の情報を覚える対応表の単体テスト
+ *
+ * 音声の再生の入口 (src/playout/mediaPlayout.ts) は、復号の出力の timestamp でこの表を引き、
+ * TIMESTAMP の種類・Object の位置・入力の遅れ・実際に保持した時間を得る。位置は relay の
+ * cache から追いつく途中の音を鳴らさないための選別に、入力の遅れと保持時間は受信側の
+ * 追いつきの判定に使う。種類を失うと共有の時間軸へ音声の基準が記録されなくなるため、
+ * ずれても種類を失わないことを固定する
+ */
+
+/** 追跡の上限を小さくした表を作る (上限の追い出しを短い手順で確かめる) */
+function createInputs(maxTracked = 256, forgetOnDuplicate = false): AudioDecodeInputs {
+  return new AudioDecodeInputs({ maxTracked, forgetOnDuplicate });
+}
+
+test("AudioDecodeInputs: 復号の出力の timestamp で記録と付加情報を引く", () => {
+  const inputs = createInputs();
+  const location = { group: 3n, object: 7n };
+  inputs.remember(FIRST_INPUT_MICROS, {
+    timestampKind: "wallClock",
+    location,
+    inputLagMs: 12.5,
+    intentionalDelayMs: 200,
+  });
+
+  // 完全一致する記録は、種類・位置・入力の遅れ・実際の保持時間をすべて返す
+  const resolved = inputs.resolve(FIRST_INPUT_MICROS, 1_000);
+  assert.strictEqual(resolved.timestampKind, "wallClock");
+  assert.isNotNull(resolved.input);
+  assert.deepEqual(resolved.input?.location, location);
+  assert.strictEqual(resolved.input?.inputLagMs, 12.5);
+  assert.strictEqual(resolved.input?.intentionalDelayMs, 200);
+
+  // 引いた記録は忘れる。同じ出力が 2 度来ても同じ音の遅れを 2 度使わない
+  assert.strictEqual(inputs.size, 0);
+  const again = inputs.resolve(FIRST_INPUT_MICROS, 1_000);
+  // 記録が残っていないため、直前に分かっている種類を当てにできるかも判断できない
+  // (`LastTimestampKind.fallbackFor` は残っている記録との距離で判断する)
+  assert.isNull(again.timestampKind);
+  assert.isNull(again.input);
+});
+
+test("AudioDecodeInputs: 実測した timestamp のずれは許容の中で引く", () => {
+  const inputs = createInputs();
+  inputs.remember(FIRST_INPUT_MICROS, { timestampKind: "wallClock" });
+
+  // 実測 (実リレー、Opus、48 kHz) では復号の出力が入力より 100 マイクロ秒だけ大きかった。
+  // 完全一致で引くと種類を失うため、許容の中で最も近い記録を引く
+  const resolved = inputs.resolve(FIRST_INPUT_MICROS + 100, 1_000);
+  assert.isNotNull(resolved.input);
+  assert.strictEqual(resolved.timestampKind, "wallClock");
+
+  // 許容より離れた出力は引かない。古い記録は捨て、種類も当てにできない (記録が残らない)
+  inputs.remember(FIRST_INPUT_MICROS, { timestampKind: "wallClock" });
+  const far = inputs.resolve(FIRST_INPUT_MICROS + 2_000, 1_000);
+  assert.isNull(far.input);
+  assert.isNull(far.timestampKind);
+  // 許容より古い記録は、この出力にも後続の出力にも対応しないため捨てる
+  assert.strictEqual(inputs.size, 0);
+});
+
+test("AudioDecodeInputs: 別の時間軸の値には種類を当てにしない", () => {
+  const inputs = createInputs();
+  inputs.remember(FIRST_INPUT_MICROS, { timestampKind: "wallClock" });
+
+  // TIMESTAMP が無い音の 0 や、ミリ秒とマイクロ秒の取り違えは、記録から離れすぎている。
+  // 直前の種類を当てると誤った時刻として共有の時間軸へ記録してしまう
+  assert.isNull(inputs.resolve(0, 1_000).timestampKind);
+  assert.isNull(
+    inputs.resolve(FIRST_INPUT_MICROS - DECODE_INPUT_KIND_FALLBACK_MAX_DISTANCE_MICROS - 1, 1_000)
+      .timestampKind,
+  );
+});
+
+test("AudioDecodeInputs: TIMESTAMP が無い音は覚えず、直前の種類も変えない", () => {
+  const inputs = createInputs();
+  inputs.remember(FIRST_INPUT_MICROS, { timestampKind: "mediaTime" });
+  // decoder へ 0 を渡す音 (種類 none) は、種類も位置も一意に引けない。覚えず、直前の種類も
+  // 上書きしない (0 の出力に古い種類を当てないため)
+  inputs.remember(0, { timestampKind: "none" });
+  assert.strictEqual(inputs.size, 1);
+  assert.strictEqual(inputs.resolve(0, 1_000).timestampKind, null);
+
+  // 既に同じ TIMESTAMP を覚えていても、none の記録でその分を忘れる
+  inputs.remember(FIRST_INPUT_MICROS, { timestampKind: "none" });
+  assert.strictEqual(inputs.size, 0);
+});
+
+test("AudioDecodeInputs: 同じ TIMESTAMP が重なったときの扱いを選べる", () => {
+  const location = { group: 1n, object: 2n };
+  // 位置を使わないときは、後から来た種類で上書きする
+  const overwrite = createInputs(256, false);
+  overwrite.remember(FIRST_INPUT_MICROS, { timestampKind: "wallClock", location });
+  overwrite.remember(FIRST_INPUT_MICROS, { timestampKind: "mediaTime", location });
+  const overwritten = overwrite.resolve(FIRST_INPUT_MICROS, 1_000);
+  assert.strictEqual(overwritten.timestampKind, "mediaTime");
+
+  // 位置を使うときは、どちらの Object か決められないため忘れる
+  const forget = createInputs(256, true);
+  forget.remember(FIRST_INPUT_MICROS, { timestampKind: "wallClock", location });
+  forget.remember(FIRST_INPUT_MICROS, { timestampKind: "wallClock", location });
+  const forgotten = forget.resolve(FIRST_INPUT_MICROS, 1_000);
+  assert.isNull(forgotten.input);
+  // 記録が残らないため、どの時間軸の値かも言えない (種類 "none" として扱われる)
+  assert.isNull(forgotten.timestampKind);
+});
+
+test("AudioDecodeInputs: 上限を超えたら古い方から忘れる", () => {
+  const inputs = createInputs(2);
+  for (let index = 0; index < 3; index++) {
+    inputs.remember(FIRST_INPUT_MICROS + index * 20_000, { timestampKind: "wallClock" });
+  }
+  // 最も古い記録だけが追い出され、後ろ 2 件は引ける
+  assert.strictEqual(inputs.size, 2);
+  assert.isNull(inputs.resolve(FIRST_INPUT_MICROS, 1_000).input);
+  assert.isNotNull(inputs.resolve(FIRST_INPUT_MICROS + 20_000, 1_000).input);
+  assert.isNotNull(inputs.resolve(FIRST_INPUT_MICROS + 40_000, 1_000).input);
+});
+
+test("AudioDecodeInputs: clear ですべて忘れる", () => {
+  const inputs = createInputs();
+  inputs.remember(FIRST_INPUT_MICROS, { timestampKind: "wallClock" });
+  inputs.clear();
+  assert.strictEqual(inputs.size, 0);
+  // 直前に分かっている種類も忘れる。購読をやり直した後に前の種類を当てない
+  assert.isNull(inputs.resolve(FIRST_INPUT_MICROS, 1_000).timestampKind);
+});
+
+test("AudioDecodeInputs: 測れない付加情報は null として覚える", () => {
+  const inputs = createInputs();
+  // メディア時刻 (TIMESCALE あり) の音は壁時計と対応しないため、入力の遅れを測れない。
+  // 位置も使わない呼び出し側は渡さない。省略した値は null で覚え、引いたときに null を返す
+  inputs.remember(FIRST_INPUT_MICROS, { timestampKind: "mediaTime" });
+  const resolved = inputs.resolve(FIRST_INPUT_MICROS, 1_000);
+  assert.isNotNull(resolved.input);
+  assert.isNull(resolved.input?.location);
+  assert.isNull(resolved.input?.inputLagMs);
+  assert.isNull(resolved.input?.intentionalDelayMs);
+  assert.strictEqual(resolved.timestampKind, "mediaTime");
 });
