@@ -284,9 +284,13 @@ export type {
 // 音声の目標遅延を閉ループで決めた状態 (AvSyncStats.delays.audioDelayFeedback)。
 // 適用中の目標と、その理由
 export type {
+  AudioDelayFeedbackObservation,
   AudioDelayFeedbackReason,
   AudioDelayFeedbackSnapshot,
 } from "./playout/audioDelayFeedback";
+
+// 音声の再生の計器 (AudioPlayoutTimingStats) へ記録するときの型
+export type { AudioPlayoutBasis } from "./playout/audioPlayout";
 
 // 音声の再生の観測 (鳴るはずの時刻・鳴り始める時刻・鳴らなかった量)。再生の入口
 // (MediaPlayout) の `audio.timing` に渡す計器であり、利用者が自分の実行周期で画面へ出す
@@ -302,7 +306,7 @@ export {
   type AudioMissEvent,
   type AudioMissReason,
   type AudioMissTotal,
-  type AudioPlayoutDrainStats,
+  type AudioPlayoutMiss,
   type AudioPlayoutTimingSnapshot,
 } from "./playout/audioPlayoutTimingStats";
 
@@ -325,7 +329,6 @@ export {
 // 目標の決定・予約・計器への記録) は入口の内部で行う
 export {
   type AudioPlayoutContext,
-  type AudioPlayoutDrainOptions,
   type AudioPlayoutOutput,
   type AudioPlayoutTimestampKind,
 } from "./playout/audioPlayoutSession";
@@ -335,7 +338,6 @@ export {
 // trackVideoDecodeInput で記録する。組み立て (対応表・時間軸への記録・表示の選択・計器への
 // 記録) は入口の内部で行う
 export {
-  type VideoDecodeInput,
   type VideoPlayoutOutput,
   type VideoPlayoutPacing,
   type VideoPlayoutTiming,
@@ -347,22 +349,22 @@ export {
 // 復号へ渡す直前に入力を記録して、復号の出力を push するだけで使える。
 // ライブラリ (createMediaSubscriber) と moqt-devtools を含む呼び出し側は、この入口だけを
 // 使う (個々の組み立てを直接使わない)
-export {
+export { createMediaPlayout } from "./playout/mediaPlayout";
+export type {
   MediaPlayout,
-  createMediaPlayout,
-  type MediaPlayoutOptions,
-  type MediaPlayoutAudioOptions,
-  type MediaPlayoutVideoOptions,
-  type MediaPlayoutDecodeInputOptions,
-  type MediaPlayoutAudioDecodeInput,
-  type MediaPlayoutVideoDecodeInput,
-  type MediaPlayoutAdmitAudioInput,
-  type MediaPlayoutAdmitVideoInput,
-  type MediaPlayoutAudioResult,
-  type MediaPlayoutVideoResult,
-  type MediaPlayoutStats,
-  type MediaPlayoutAudioStats,
-  type MediaPlayoutVideoStats,
+  MediaPlayoutOptions,
+  MediaPlayoutAudioOptions,
+  MediaPlayoutVideoOptions,
+  MediaPlayoutDecodeInputOptions,
+  MediaPlayoutAudioDecodeInput,
+  MediaPlayoutVideoDecodeInput,
+  MediaPlayoutDrainOptions,
+  MediaPlayoutDrainStats,
+  MediaPlayoutAudioResult,
+  MediaPlayoutVideoResult,
+  MediaPlayoutStats,
+  MediaPlayoutAudioStats,
+  MediaPlayoutVideoStats,
 } from "./playout/mediaPlayout";
 
 // 映像の表示待ちのキューの上限の既定値 (MediaPlayoutOptions.maxQueuedFrames)

@@ -4,8 +4,9 @@ import type { Location } from "../message";
  * 復号へ渡した timestamp から、復号の出力を引く
  *
  * 音声の TIMESTAMP の種類 (壁時計かメディア時刻か) は、復号へ渡した時に覚えて復号の出力で
- * 引く。`AudioData` は種類を持たないためである (`src/createMediaSubscriber.ts` と
- * `devtools/src/hooks/useSubscriber.ts`)。ところが WebCodecs の `AudioDecoder` は、出力する
+ * 引く。`AudioData` は種類を持たないためである。覚えて引く処理は `AudioDecodeInputs` が持ち、
+ * 使うのは再生の入口 (`src/playout/mediaPlayout.ts` の `MediaPlayout.pushAudio`) である。
+ * ところが WebCodecs の `AudioDecoder` は、出力する
  * `AudioData.timestamp` を入力の timestamp と完全には一致させない。実測 (実リレー、Opus、
  * 48 kHz) では出力が入力より 100 マイクロ秒だけ大きかった。
  *
@@ -181,6 +182,15 @@ export class LastTimestampKind<K extends string> {
  */
 export type AudioDecodeInputKind = "wallClock" | "mediaTime";
 
+/**
+ * 音声と映像で共通の TIMESTAMP の種類 (`draft-ietf-moq-loc-04 §2.3.1.1 / §2.3.1.2`)
+ *
+ * - `wallClock`: TIMESCALE が無い TIMESTAMP (Unix epoch マイクロ秒)
+ * - `mediaTime`: TIMESCALE がある TIMESTAMP
+ * - `none`: TIMESTAMP が無い (decoder へは 0 を渡す)
+ */
+export type PlayoutTimestampKind = "none" | AudioDecodeInputKind;
+
 /** 復号へ渡した音声 Object の情報 */
 export interface AudioDecodeInput {
   /** TIMESTAMP の種類 */
@@ -318,7 +328,7 @@ export class AudioDecodeInputs {
    *
    * 完全一致する記録が無ければ、`toleranceMicros` の中で最も近い記録を引く。それも
    * 無ければ、直前に分かっている種類を、保留している記録から離れすぎていないときだけ
-   * 返す (`matched` は false)。
+   * 返す (そのとき `input` は null)。
    *
    * @param outputTimestampMicros - 復号の出力の timestamp (マイクロ秒)
    * @param toleranceMicros - 対応とみなす差の上限 (マイクロ秒)
@@ -334,7 +344,12 @@ export class AudioDecodeInputs {
     };
   }
 
-  /** すべて忘れる (購読を始めるとき、AudioContext を作り直すとき) */
+  /**
+   * すべて忘れる
+   *
+   * 購読の停止 (`MediaPlayout.clearAll`) で呼ぶ。`AudioContext` を作り直すときは
+   * `AudioPlayoutSession.reset` が時計の対応と追いつきの観測だけを消し、この対応表は消さない。
+   */
   clear(): void {
     this.inputs.clear();
     this.lastKind.reset();

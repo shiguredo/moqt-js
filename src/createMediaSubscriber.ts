@@ -70,15 +70,6 @@ import type {
 } from "./codec/types";
 
 /**
- * 復号へ渡した入力の対応表に覚えておく上限 (件)
- *
- * 復号の出力で引けなかった (decoder のエラーで捨てられたなど) 分が残り続けないよう、
- * 超えたら古い方から捨てる。音声と映像の両方に同じ上限を使う
- * (`MediaPlayoutOptions.decodeInputs.maxTracked`)
- */
-const TIMESTAMP_KIND_MAX_TRACKED = 256;
-
-/**
  * authInfo に応じて Authorization Token を解決する純粋関数
  *
  * draft-ietf-moq-msf-01 §5.2.42: authInfo の存在は subscribe 時に認可トークンが必要であるシグナル。
@@ -638,25 +629,19 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   private outputStream: MediaStream | null = null;
   private audioContext: AudioContext | null = null;
   private audioDestination: MediaStreamAudioDestinationNode | null = null;
-  // 音声の再生の観測 (鳴るはずの時刻・届いた時刻・鳴り始める時刻と、鳴らなかった量)。
-  // 鳴らなかった音がどこの段で落ちているかを数値で切り分けるために持つ
-  // (src/playout/audioPlayoutTimingStats.ts)。購読をやり直しても消えない
-  private readonly audioPlayoutTiming = new AudioPlayoutTimingStats(
-    AUDIO_PLAYOUT_TIMING_WINDOW_MS,
-    performance.timeOrigin,
-  );
   /**
    * 復号済みの音声と映像の再生の入口 (src/playout/mediaPlayout.ts)
    *
    * 時間軸 (jitter buffer)・音声の再生の組み立て・映像の表示の組み立て・復号へ渡した入力の
-   * 対応表を 1 つにまとめて持つ。購読ごとの状態はこの中だけに置き、購読のやり直しや停止では
-   * この入口の `reset` / `clear` / `releaseAudioContext` を呼ぶ。
+   * 対応表を 1 つにまとめて持つ。再生の組み立ての状態はこの中だけに置き、購読のやり直しや
+   * 停止ではこの入口の `resetPlayout` / `resetAudioPlayback` / `clearAll` と
+   * `setAudioOutput(null)` を呼ぶ。
    *
    * 音声は購読していないときも構成する (従来も音声の再生の組み立ては常に作り、統計だけを
-   * 購読の設定で出し分けていた)。音声の再生の計器 (`audioPlayoutTiming`) は購読のやり直しを
-   * またいで引き継ぐためである。映像は購読する設定のときだけ構成する (映像を表示しない購読
-   * には表示する先が無い)。音声を揃える相手がいるかは、catalog で映像トラックを解決できたか
-   * (`counterpart`) で決める。
+   * 購読の設定で出し分けていた)。音声の再生の計器は構築時に作ってこの入口へ渡し、この入口を
+   * 購読のやり直しで作り直さないため、購読をやり直しても引き継がれる。映像は購読する設定の
+   * ときだけ構成する (映像を表示しない購読には表示する先が無い)。音声を揃える相手がいるかは、
+   * catalog で映像トラックを解決できたか (`hasCounterpart`) で決める。
    *
    * 復号前の遅延の段の設定 (`preDecodeDelayMs`) を意図した遅延として渡すため、フィールドの
    * 初期化子ではなくコンストラクタで作る。
@@ -665,7 +650,6 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   // 音声と映像の両方で壁時計の TIMESTAMP を観測したか (同期の推定を出せるか)
   private audioWallClockSeen = false;
   private videoWallClockSeen = false;
-  private videoPlayoutStopped = false;
 
   // ビデオ出力用
   private videoTrackGenerator: MediaStreamTrackGenerator<VideoFrame> | null = null;
@@ -715,7 +699,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   // 音声と映像の短縮量を揃える操作の再入を止めるフラグ
   private synchronizingPreDecodeDelay = false;
 
-  // 統計情報 (受信の分。再生の分は getStats のたびに scheduler から読む)
+  // 統計情報 (受信の分。再生の分は getStats のたびに再生の入口 (MediaPlayout) から読む)
   private audioStats: Pick<
     AudioReceiverStats,
     | "framesReceived"
@@ -763,42 +747,32 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     this.audioPreDecodeStage = this.createAudioPreDecodeStage();
     this.videoPreDecodeStage = this.createVideoPreDecodeStage();
     this.playout = createMediaPlayout({
-      // 音声は購読していないときも構成する (従来も音声の再生の組み立ては常に作り、統計だけを
-      // 購読の設定で出し分けていた)。音声の再生の計器 (`audioPlayoutTiming`) は購読の
-      // やり直しをまたいで引き継ぐためである。
-      // AudioContext と出力は createOutputStream が作ったときに setAudioOutput で付ける
+      // 音声は購読していないときも構成する。AudioContext と出力は createOutputStream が
+      // 作ったときに setAudioOutput で付ける (構成する理由は playout フィールドの JSDoc を
+      // 参照)
       audio: {
-        timing: this.audioPlayoutTiming,
+        // 計器は構築時に作って渡し、購読のやり直しでも入口を作り直さないため引き継がれる
+        timing: new AudioPlayoutTimingStats(AUDIO_PLAYOUT_TIMING_WINDOW_MS, performance.timeOrigin),
         // 揃える相手は、映像を購読する設定かではなく catalog で映像トラックを解決できたかで
         // 決める (解決できていなければ音声だけの並べ方にする)
-        counterpart: () => this.videoTrackInfo !== null,
+        hasCounterpart: () => this.videoTrackInfo !== null,
       },
       // 映像は購読する設定のときだけ構成する (映像を表示しない購読では、何を書くかも
       // 表示の周期も決まらない)
       video: this.options.video
         ? {
             output: {
-              isAvailable: () => this.videoWriter !== null && !this.videoPlayoutStopped,
+              // 出し先は writer の有無だけで判定する (購読の停止では writer を先に外す)
+              isAvailable: () => this.videoWriter !== null,
               present: (frame) => this.presentVideoFrame(frame),
-            },
-            pacing: {
-              // 書いた時点では表示されず、表示の間隔はブラウザが TIMESTAMP から決める。
-              // 表示時刻を既に過ぎているフレームは、表示周期を待たずにすべて書く
-              drainImmediately: true,
-              framesPerDrain: Number.POSITIVE_INFINITY,
             },
           }
         : null,
       // 復号の出力で入力が引けなかった音に使う、復号前の遅延の設定値。記録から引けた音は、
       // 復号へ渡すまで実際に保持した時間を使う
       intentionalDelayMs: this.preDecodeDelayMs,
-      // 復号へ渡した入力の対応表の上限。超えたら古い方から忘れる
-      decodeInputs: {
-        maxTracked: TIMESTAMP_KIND_MAX_TRACKED,
-        // ライブラリは位置を使わない (種類だけで表示時刻を決められるかを見る) ため、同じ
-        // TIMESTAMP の Object が重なったら後から来た種類で上書きする
-        forgetOnDuplicate: false,
-      },
+      // pacing (表示の周期) と decodeInputs (復号へ渡した入力の対応表) は入口の既定を使う。
+      // どちらもライブラリの使い方と同じ値であり、ここで同じ値を書き写さない
     });
   }
 
@@ -1297,11 +1271,13 @@ export class MediaSubscriberImpl implements MediaSubscriber {
    * 消えず、今の遅れ (`playoutLatenessMs`) は基準を消すと (購読のやり直し、AudioContext
    * の作り直し) 0 に戻る。時間はミリ秒で返す
    *
-   * @param audio - 再生の入口が返した音声の再生の統計。音声を構成していないときは null
+   * @param audio - 再生の入口が返した音声の再生の統計。この実装は常に音声を構成するため
+   *   非 null (null は入口の契約上あり得る)
    */
   private audioReceiverStats(audio: MediaPlayoutAudioStats | null): AudioReceiverStats {
     if (audio === null) {
-      // 音声の再生の入口は常に音声を構成する (コンストラクタ)。ここには来ない
+      // コンストラクタが audio オプションを必ず渡して入口を作るため、この実装では入口の
+      // audio は非 null である (型は入口の契約に合わせて null を許す)。ここには来ない
       throw new Error("audio playout is not configured");
     }
     return {
@@ -1398,15 +1374,17 @@ export class MediaSubscriberImpl implements MediaSubscriber {
    * catalogReceiveFailed / audioDecoderConfigured / videoDecoderConfigured /
    * lastAppliedVideoConfig / lastAppliedAudioConfig / audioInitialConfigPending /
    * videoInitialConfigPending / videoGroupGateTimer / videoDecodeOrder /
-   * videoPlayoutStopped / audioWallClockSeen / videoWallClockSeen /
+   * audioWallClockSeen / videoWallClockSeen /
    * 保留中の Object (音声 / 映像 / Group の切り替え) と上限超過の通知済みフラグ /
    * 復号前の遅延の段 (音声 / 映像) とその上限超過の通知済みフラグ / 再生の入口
    * (`MediaPlayout`) が持つ、表示待ちの映像フレームと予約した表示、時間軸、復号へ渡した
-   * 入力の対応表、音声の追いつきの観測、AudioContext の時計の対応と直前の音である。
+   * 入力の対応表、AudioContext の時計の対応と直前の音である。
+   * 受信側の音声の追いつきの観測は、停止直後の統計として読めるよう `MediaPlayout.clearAll`
+   * が残す (次に AudioContext を作り直す createOutputStream の `resetAudioPlayback` で消える)。
    * 統計 (audioStats / videoStats) は publisher と同じく再 start へ引き継ぐ。
    * 音声の再生の予約の基準 (`MediaPlayout` の音声の再生の組み立て) は AudioContext と対で
    * 作り直すため、ここでは消さず (統計の playoutLatenessMs が読む)、createOutputStream が
-   * reset する。
+   * `resetAudioPlayback` で取り直す。
    * 破棄の段階失敗は後続を止めず、最後に最初の失敗を throw する。
    * 解放のあとに届く旧 session の close 通知で state と onClose が動くことはない
    * (世代番号を進めるため)。
@@ -1551,7 +1529,9 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     const audioContext = this.audioContext;
     this.audioContext = null;
     await guard(() => audioContext?.close());
-    // 鳴らす先を外す。以後に届いた復号の出力は、再生の入口が何もせずに閉じる
+    // 鳴らす先を外す。閉じた AudioContext の時計の対応と直前の音を捨て
+    // (MediaPlayout.setAudioOutput の JSDoc を参照)、以後に届いた復号の出力は
+    // audioDecodeStopped の判定で閉じる (入口へは渡さない)
     this.playout.setAudioOutput(null);
 
     // session を閉じる (再 start では接続からやり直す)
@@ -1580,15 +1560,12 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     // 復号順の判定も初期化する (setupDecoders の成功パスでも初期化するが、
     // 前世代で最後に許可した Object を持ち越さないようここでも戻す)
     this.videoDecodeOrder.reset();
-    // 表示待ちの映像を破棄し、予約した選択を取り消す。次の購読で作り直す
-    this.clearVideoPlayout();
-    this.videoPlayoutStopped = false;
     // 再生の入口の状態をすべて捨てる (時間軸の基準と学習、復号へ渡した入力の対応表、
-    // 映像の表示待ち、音声の追いつきの観測)。予約の基準は統計 (playoutLatenessMs) が
-    // 読むため残す (MediaPlayout.clear と AudioClockBridge.reset の JSDoc を参照)。
-    // AudioContext を閉じた後始末 (時計の対応と直前の音) もここで行う
-    this.playout.clear();
-    this.playout.releaseAudioContext();
+    // 映像の表示待ちと予約した選択)。計器の累積と受信側の追いつきの観測は、停止直後の
+    // 統計として読めるよう残す (MediaPlayout.clearAll の JSDoc を参照。追いつきは次の
+    // createOutputStream の resetAudioPlayback が消す)。音声の再生の予約の基準は統計
+    // (playoutLatenessMs) が読むため残す
+    this.playout.clearAll();
     this.audioWallClockSeen = false;
     this.videoWallClockSeen = false;
     // Catalog の受信状態を初期値に戻す。受信待ちが残っていれば打ち切る
@@ -2167,11 +2144,6 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       this.audioContext = new AudioContext({
         sampleRate,
       });
-      // AudioContext を作り直したため、音声の再生の基準 (予約・時計の対応・直前の音) と
-      // 共有の時間軸も作り直す (MediaPlayout.resetAudio と AudioClockBridge.reset の
-      // JSDoc を参照)
-      this.playout.resetAudio();
-      this.playout.reset();
       // ブラウザの自動再生ポリシー対応。resume() の失敗は他に通知先が無く、
       // 放置すると未処理の rejection になるため onError へ 1 回流す。
       // 通知の失敗でもこの経路を reject させない (返値の Promise を捨てるため、
@@ -2191,6 +2163,14 @@ export class MediaSubscriberImpl implements MediaSubscriber {
         context: this.audioContext,
         destination: this.audioDestination,
       });
+      // AudioContext を作り直したため、音声の再生の基準 (予約・時計の対応・直前の音) を
+      // 新しい Context の時計で取り直す。出力を付けたあとに呼ぶ
+      // (MediaPlayout.setAudioOutput と resetAudioPlayback の JSDoc を参照)
+      this.playout.resetAudioPlayback();
+      // 共有の時間軸も作り直す。resetPlayout は映像の表示待ちと復号へ渡した映像入力の
+      // 対応表も捨てるため、前の Context で観測した遅れを次の購読へ引きずらない。停止の
+      // 解放が失敗して start をやり直す場合も、前の購読の状態が残っていればここで捨てられる
+      this.playout.resetPlayout();
       const audioTrack = this.audioDestination.stream.getAudioTracks()[0];
       if (audioTrack) {
         this.outputStream.addTrack(audioTrack);
@@ -2820,8 +2800,9 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     const timestamp = decoderTimestampOf(locProperties);
     // 復号の出力で TIMESTAMP の種類と、復号へ渡すまで実際に保持した時間を引けるようにする。
     // 入力の遅れ (Object の到着の壁時計 - LOC TIMESTAMP) は壁時計の TIMESTAMP を持つ音だけ
-    // 測れる (メディア時刻は壁時計と対応しないため測れない)。TIMESTAMP が無い音は decoder へ
-    // 0 を渡すため種類を記録しない (同じ TIMESTAMP の音が重なり、種類も位置も一意に引けない)
+    // 測れる (メディア時刻は壁時計と対応しないため測れない)。TIMESTAMP が無い音も、同じ
+    // TIMESTAMP に残った古い記録を入口 (MediaPlayout.trackAudioDecodeInput) が消せるよう、
+    // 種類 "none" として記録する。位置は記録しない (音声の選別 (admit) を使わないため)
     const timestampKind: AudioPlayoutTimestampKind =
       locProperties.timestamp === undefined
         ? "none"
@@ -3182,12 +3163,18 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   /**
    * 復号した音声を鳴らす
    *
-   * 再生の組み立て (時間軸への記録・目標の決定・予約・計器への記録) は再生の入口
-   * (`MediaPlayout`) が持つ (src/playout/mediaPlayout.ts)。ここは、購読ごとの状態
-   * (鳴らす先があるか、受信側の追いつきを始めたか) を入口へ渡すだけにする。
+   * 再生の組み立て (時間軸への記録・目標の決定・予約・計器への記録) と、鳴らす先があるかの
+   * 判定は再生の入口 (`MediaPlayout`) が持つ (src/playout/mediaPlayout.ts)。ここに残るのは、
+   * 停止の drain の待ちに使う flush 分の対応 (audioDecodeSubmitSequences /
+   * audioDrainFlushedSequences)、直近の音が壁時計の TIMESTAMP を持つかの観測
+   * (audioWallClockSeen)、復号の出力の後始末 (finally の AudioData.close) である。
+   * 受信側の追いつきを始めたか (catchUpStarted) は入口の結果から受け取り、復号器の作り直しを
+   * ここで行う。
    *
-   * 鳴らす先が無いとき (音声を再生しない購読、AudioContext を閉じた後) は何もせずに閉じる。
-   * 失敗は onError へ通知する (再生の入口は鳴らす準備の失敗を結果で返し、throw しない)。
+   * 鳴らす先が無いとき (音声を再生しない購読、AudioContext を閉じた後) は入口が
+   * `status: "skipped"` を返す。復号の出力 (`AudioData`) は入口の結果にかかわらず finally で
+   * 閉じる。失敗は onError へ通知する (再生の入口は鳴らす準備の失敗を結果で返し、throw
+   * しない)。
    */
   private handleAudioDecodedData(data: { data: AudioData }): void {
     const audioData = data.data;
@@ -3201,12 +3188,6 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     // drain が終わった後 (recordStopped の後) に届いた復号の出力は予約しない。ここで渡すと、
     // 切った量として数えられないまま閉じる直前の AudioContext に積まれ、閉じたときに消える
     if (this.audioDecodeStopped) {
-      audioData.close();
-      return;
-    }
-    const context = this.audioContext;
-    const destination = this.audioDestination;
-    if (!context || !destination) {
       audioData.close();
       return;
     }
@@ -3344,8 +3325,8 @@ export class MediaSubscriberImpl implements MediaSubscriber {
    * 表示すると決めたフレームを MediaStreamTrackGenerator に書く
    *
    * 成功時は Generator 所有のため閉じない。失敗時はここで閉じる。書けたかどうかは
-   * `writer.write` の Promise で決まり、ここでは待たない (元の実装と同じく、表示の実績は
-   * 共有実装が書いた時点で記録する)。
+   * `writer.write` の Promise で決まり、ここでは待たない (表示の実績は再生の入口が
+   * `present` を呼んだ時点で記録する)。
    *
    * @param frame - 書くフレーム
    * @returns 常に true (書く先があれば書いたものとして扱う)
@@ -3364,12 +3345,6 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       frame.close();
     }
     return true;
-  }
-
-  /** 表示待ちの映像を破棄し、予約した表示を取り消す */
-  private clearVideoPlayout(): void {
-    this.playout.clearVideo();
-    this.videoPlayoutStopped = true;
   }
 }
 

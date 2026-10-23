@@ -95,8 +95,8 @@ Object の復号出力が予約されるまで待つ。そのうえで、予約�
 待つ (復号が終われば早く終わる)。moqt-devtools も同じで、停止は drain の完了を待つ非同期
 の処理になる。
 
-停止時の切断量は計器で読む。切った量は `missedByReason.stopped`、drain で鳴らせた量・
-切った量・待ち時間・flush した件数・復号されなかった件数 (`undecodedFlushedObjects`) は
+停止時の切断量は計器で読む。切った量は `missedByReason.stopped`、drain で鳴らせた量、
+切った量、待ち時間、flush した件数、復号されなかった件数 (`undecodedFlushedObjects`) は
 `lastDrain` に残る。`close()` とピア起点の close も
 drain するが、上限は 150 ms である。映像は drain の対象外であり、停止時に破棄する
 (詳細は `docs/AUDIO_PLAYOUT_GAPS_AND_TAIL.md` にある)。
@@ -121,9 +121,9 @@ buffer の遅延として `MAX_PLAYOUT_DELAY_MS` (500 ms) と表示待ちのキ�
 
 音声の受信側追いつき (`AudioReceiveCatchUp`) は、復号の出力の遅れから入力の遅れを引いた
 「復号が足している遅れ」で判定する。意図した遅延をそのまま渡すと、復号器に 2 秒分が溜まって
-いると誤判定する。そこで `AudioPlayoutRequest.intentionalDelayMs` と
-`AudioReceiveCatchUpObservation.intentionalDelayMs` に `preDecodeDelayMs` を渡し、判定から
-差し引く (moqt-devtools も同じ値を渡す)。
+いると誤判定する。そこで再生の入口 (`createMediaPlayout`) へ渡す入力の記録
+(`MediaPlayoutAudioDecodeInput`) の `intentionalDelayMs` に、設定値ではなく復号へ渡すまで
+実際に保持した時間を渡し、判定から差し引く (moqt-devtools も同じ値を渡す)。
 
 - `audio.playoutCatchUp.lagMs` は意図した遅延を含む。
 - `audio.playoutCatchUp.decodeLagMs` は意図した遅延と入力の遅れを引いた値である。
@@ -144,7 +144,7 @@ moqt-devtools の Subscriber の設定画面に `Playback Delay (Audio + Video)`
   観測も消す。床 (直近の遅れの最小値) が古い遅延のまま残ると、変更後の最初の復号出力を
   復号器の詰まりと誤判定するためである。このため変更直後は一瞬 A/V の並びが変わる可能性が
   ある。
-- URL クエリ `preDecodeDelayMs` で復元・共有できる。既定の Off は URL に載せない。
+- URL クエリ `preDecodeDelayMs` で復元 / 共有できる。既定の Off は URL に載せない。
 - 映像は受信時に到着を記録し、遅延後に復号する。音声は受信の遅れ (`audio.receiveDelayMs`) を
   到着時点で測り、遅延後に復号する。到着時点で測るため、`audio.receiveDelayMs` は遅延の分を
   含まない。入力の遅れとして追いつきの判定に使い、意図した遅延は `intentionalDelayMs` として

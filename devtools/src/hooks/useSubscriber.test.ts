@@ -17,6 +17,7 @@ import {
   recordVideoReceived,
   resetSubscriberState,
   resetSubscriberStats,
+  subtractAudioPlayoutCumulative,
   resolveAudioTrack,
   resolveCatalogMediaTracks,
   resolveEventTimelineTrack,
@@ -520,6 +521,10 @@ test("resetSubscriberStats: 映像と音声の統計を初期値へ戻す", () =
   instance.audioWaveformRight.value = new Float32Array([4, 5, 6]);
   instance.audioPlayoutRebases.value = 2;
   instance.audioPlayoutDrops.value = 3;
+  // 音を加工した量も 500 ms の反映でしか更新しないため、購読を始めた時点で戻す
+  instance.audioPlayoutCompressedMs.value = 120;
+  instance.audioPlayoutConcealedMs.value = 40;
+  instance.audioPlayoutConcealments.value = 7;
   // 鳴らすと決めた音の観測値も、前の購読の値を持ち越さない
   instance.audioPlayoutTiming.value = {
     ...EMPTY_AUDIO_PLAYOUT_TIMING,
@@ -562,8 +567,51 @@ test("resetSubscriberStats: 映像と音声の統計を初期値へ戻す", () =
   assert.equal(instance.audioWaveformRight.value, null);
   assert.equal(instance.audioPlayoutRebases.value, 0);
   assert.equal(instance.audioPlayoutDrops.value, 0);
+  assert.equal(instance.audioPlayoutCompressedMs.value, 0);
+  assert.equal(instance.audioPlayoutConcealedMs.value, 0);
+  assert.equal(instance.audioPlayoutConcealments.value, 0);
   assert.deepEqual(instance.audioPlayoutTiming.value, EMPTY_AUDIO_PLAYOUT_TIMING);
   assert.equal(instance.audioCatchUpObjectsSkipped.value, 0);
+});
+
+// ============================================================================
+// 音声の再生の累積の計器 (再生を始めた時点からの差)
+// ============================================================================
+
+// 累積は再生の入口の統計として AudioContext の作り直しをまたいで引き継がれる。
+// 画面へ出す値は再生を始めた時点 (baseline) からの差にする。入口を作り直した直後は
+// baseline が無く、そのときは累積をそのまま表示する (0 から数え直す)。
+test("subtractAudioPlayoutCumulative: baseline が無ければ累積をそのまま返す", () => {
+  const difference = subtractAudioPlayoutCumulative(
+    {
+      compressedMs: 12.5,
+      concealedMs: 3.4,
+      concealments: 2,
+    },
+    null,
+  );
+
+  // ミリ秒は画面の表示に合わせて整数へ丸め、回数はそのまま返す
+  assert.deepEqual(difference, { compressedMs: 13, concealedMs: 3, concealments: 2 });
+});
+
+// AudioContext を作り直すと入口の累積は引き継がれるため、再生を始めた時点の値を引く。
+// 引かないと、前の再生で加工した量が次の再生の最初から表示されてしまう。
+test("subtractAudioPlayoutCumulative: baseline があれば再生開始時点からの差を返す", () => {
+  const difference = subtractAudioPlayoutCumulative(
+    {
+      compressedMs: 30.5,
+      concealedMs: 10.5,
+      concealments: 5,
+    },
+    {
+      compressedMs: 20,
+      concealedMs: 4,
+      concealments: 2,
+    },
+  );
+
+  assert.deepEqual(difference, { compressedMs: 11, concealedMs: 7, concealments: 3 });
 });
 
 // ============================================================================

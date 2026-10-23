@@ -17,7 +17,9 @@
  * 注入すれば検証できる。呼び出し側が devtools 固有の判断 (relay の cache から追いつく
  * 途中のフレームを表示しない、購読ごとの統計と画面への反映) を持つ。
  *
- * 公開 API である (src/index.ts)。docs/HIGH_LEVEL_API.md の「映像の表示の組み立て」を参照。
+ * 内部実装である (src/index.ts からは公開していない)。公開 API は再生の入口
+ * (`MediaPlayout`) である。docs/HIGH_LEVEL_API.md の「内部実装」の「映像の表示の組み立て」を
+ * 参照。
  */
 
 import type { Location } from "../message";
@@ -300,7 +302,7 @@ export class VideoPlayoutSession {
    */
   handleDecodedFrame(request: VideoPlayoutRequest): VideoPlayoutResult {
     const frame = request.frame;
-    if (!this.output.isAvailable()) {
+    if (!this.isOutputAvailable()) {
       // 出し先が無い。表示待ちに積まずに閉じる (キューに入れても誰も出さない)
       frame.close();
       return { status: "skipped" };
@@ -377,7 +379,15 @@ export class VideoPlayoutSession {
       }
       // 表示すると出し先へ所有権が移る (devtools は閉じる) ため、記録に使う値は先に読む
       const timestamp = draw.timestamp;
-      const presented = this.output.present(draw, selection.drawPresentationMs);
+      // 出し先は throw しない契約である。それでも表示が止まらないよう、throw したときは
+      // フレームを閉じて表示の実績に記録せずに次のフレームへ進む
+      let presented: boolean;
+      try {
+        presented = this.output.present(draw, selection.drawPresentationMs);
+      } catch {
+        draw.close();
+        presented = false;
+      }
       if (presented && selection.drawPresentationMs !== null) {
         // 実際に表示した時刻を実績として記録する (同期ずれの推定に使う)。表示時刻を決めずに
         // 表示したフレームは音声と対応づけられないため記録しない。第 3 引数は Unix epoch マイクロ秒
@@ -406,12 +416,26 @@ export class VideoPlayoutSession {
     }
     this.frameRequest = this.requestFrame(() => {
       this.frameRequest = null;
-      if (!this.output.isAvailable()) {
+      if (!this.isOutputAvailable()) {
         this.clear();
         return;
       }
       this.drain();
       this.scheduleDrain();
     });
+  }
+
+  /**
+   * 今フレームを出せるかを返す
+   *
+   * 出し先は throw しない契約である。それでも表示が止まらないよう、throw したときは
+   * 出せない (false) として扱う (フレームを閉じ、表示待ちを捨てる側へ倒す)。
+   */
+  private isOutputAvailable(): boolean {
+    try {
+      return this.output.isAvailable();
+    } catch {
+      return false;
+    }
   }
 }

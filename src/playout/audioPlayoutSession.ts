@@ -17,9 +17,12 @@
  * 呼び出し側が devtools 固有の判断 (relay の cache から追いつく途中の音を
  * 鳴らさない、音声だけを購読している、再生の有効・無効、UI への反映) を持つ。
  *
- * 公開 API である (src/index.ts)。docs/HIGH_LEVEL_API.md の「音声の再生の組み立て」を参照。
+ * 内部実装である (src/index.ts からは公開していない)。公開 API は再生の入口
+ * (`MediaPlayout`) である。docs/HIGH_LEVEL_API.md の「内部実装」の「音声の再生の組み立て」を
+ * 参照。
  */
 
+import type { PlayoutTimestampKind } from "./decodeInputTimestamps";
 import {
   AUDIO_PLAYOUT_PUSH_START_LEAD_SECONDS,
   AUDIO_PLAYOUT_STRETCH_MIN_SECONDS,
@@ -31,7 +34,7 @@ import {
 } from "./audioPlayout";
 import { fadeSpliceEdge } from "../audioSpliceFade";
 import { isTimeStretchAvailable } from "./audioTimeStretch";
-import type { AudioPlayoutDrainStats, AudioPlayoutTimingStats } from "./audioPlayoutTimingStats";
+import type { AudioPlayoutTimingStats, MediaPlayoutDrainStats } from "./audioPlayoutTimingStats";
 import { AudioReceiveCatchUp } from "./audioReceiveCatchUp";
 import { compressSamples, concealSamples, type AudioSamples } from "./audioTimeStretch";
 import {
@@ -48,7 +51,7 @@ import {
  * - `mediaTime`: TIMESCALE がある TIMESTAMP。メディア時刻であり壁時計とは対応しない
  * - `none`: TIMESTAMP が無い (decoder へは 0 を渡す)
  */
-export type AudioPlayoutTimestampKind = "none" | "wallClock" | "mediaTime";
+export type AudioPlayoutTimestampKind = PlayoutTimestampKind;
 
 /**
  * Web Audio のうち、音声の再生で使う部分
@@ -63,7 +66,7 @@ export interface AudioPlayoutContext {
    * `AudioContext.getOutputTimestamp()`
    *
    * まだ音を出していない / 再開直後で performanceTime が 0 のときは対応を作らない
-   * (`AudioClockBridge.update` の JSDoc を参照)
+   * (内部の `AudioClockBridge` が判定する)
    */
   getOutputTimestamp(): AudioTimestamp;
   /** `AudioContext.createBuffer`。鳴らす音と、欠落した区間の補間の両方に使う */
@@ -112,28 +115,14 @@ export const AUDIO_PLAYOUT_DRAIN_POLL_MS = 25;
  */
 const AUDIO_PLAYOUT_DRAIN_WAIT_EPSILON_MS = 1e-6;
 
-/**
- * drain の待ち合わせで使う時計と待ち
- *
- * 予約の記録と同じ performance 軸の時計を使う。
- */
-export interface AudioPlayoutDrainClock {
-  /** 現在時刻 (ミリ秒)。`performance.now()` と同じ軸 */
-  now(): number;
-  /** 指定した時間だけ待つ */
-  sleep(ms: number): Promise<void>;
+/** 指定した時間だけ待つ (drain の待ち合わせで使う) */
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
-/** ブラウザの実時間を使う既定の時計 */
-const DEFAULT_AUDIO_PLAYOUT_DRAIN_CLOCK: AudioPlayoutDrainClock = {
-  now: () => performance.now(),
-  sleep: (ms) =>
-    new Promise((resolve) => {
-      setTimeout(resolve, ms);
-    }),
-};
-
-/** `AudioPlayoutSession.drainReserved` の設定 */
+/** 鳴らし切る待ちの設定 (公開 API は `MediaPlayout.drainAudio` が受け取る) */
 export interface AudioPlayoutDrainOptions {
   /** drain を待つ上限 (ミリ秒)。省略すると通常の停止の上限 */
   maxWaitMs?: number;
@@ -154,8 +143,6 @@ export interface AudioPlayoutDrainOptions {
    * 復号の出力が届かなかった Object は、復号器を閉じる時点で捨てられる
    */
   remainingFlushedObjects?: () => number;
-  /** 予約の記録と同じ performance 軸の時計と待ち */
-  clock?: AudioPlayoutDrainClock;
 }
 
 /** 復号した音 1 つ分の再生の依頼 */
@@ -817,12 +804,11 @@ export class AudioPlayoutSession {
    * @param options - 待ちの上限、flush の完了判定、時計
    * @returns 待った結果 (鳴らせた量と切った量)
    */
-  async drainReserved(options: AudioPlayoutDrainOptions = {}): Promise<AudioPlayoutDrainStats> {
-    const clock = options.clock ?? DEFAULT_AUDIO_PLAYOUT_DRAIN_CLOCK;
+  async drainReserved(options: AudioPlayoutDrainOptions = {}): Promise<MediaPlayoutDrainStats> {
     const maxWaitMs = Math.max(0, options.maxWaitMs ?? AUDIO_PLAYOUT_DRAIN_MAX_MS);
     const flushedObjects = Math.max(0, options.flushedObjects ?? 0);
     const isFlushSettled = options.isFlushSettled ?? (() => true);
-    const startMs = clock.now();
+    const startMs = performance.now();
     const pendingMsAtStart = this.timing.pendingMs(startMs);
     const pendingEndMs = this.timing.pendingEndMs(startMs);
     const playedMsAtStart = this.timing.snapshot(startMs).playedMs;
@@ -840,7 +826,7 @@ export class AudioPlayoutSession {
     requestedMs = Math.min(maxWaitMs, requestedMs);
 
     for (;;) {
-      const nowMs = clock.now();
+      const nowMs = performance.now();
       const elapsedMs = nowMs - startMs;
       const endMs = this.timing.pendingEndMs(nowMs);
       const reservedDone = endMs === null || endMs <= nowMs;
@@ -850,10 +836,10 @@ export class AudioPlayoutSession {
       if (elapsedMs >= requestedMs - AUDIO_PLAYOUT_DRAIN_WAIT_EPSILON_MS) {
         break;
       }
-      await clock.sleep(Math.min(AUDIO_PLAYOUT_DRAIN_POLL_MS, requestedMs - elapsedMs));
+      await sleep(Math.min(AUDIO_PLAYOUT_DRAIN_POLL_MS, requestedMs - elapsedMs));
     }
 
-    const finishedMs = clock.now();
+    const finishedMs = performance.now();
     // 待っても鳴り終わらなかった予約が、切った量である (`recordStopped` が数える)
     const cutMs = this.timing.pendingMs(finishedMs);
     // 鳴らせた量 = 停止時に予約されていた長さ + drain 中に増えた予約 - 切った長さ
@@ -863,7 +849,7 @@ export class AudioPlayoutSession {
     );
     const playedMs = Math.max(0, pendingMsAtStart + reservedDuringDrainMs - cutMs);
     this.timing.recordStopped(finishedMs);
-    const result: AudioPlayoutDrainStats = {
+    const result: MediaPlayoutDrainStats = {
       pendingMsAtStart,
       requestedMs,
       waitedMs: Math.max(0, finishedMs - startMs),

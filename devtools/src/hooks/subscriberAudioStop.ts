@@ -17,6 +17,7 @@
  * 検証するためである (既存の検証と同じく、注入する記録用オブジェクトで駆動する)。
  */
 
+import type { MediaPlayoutDrainOptions } from "moqt-js";
 import { AUDIO_PLAYOUT_DRAIN_MAX_MS } from "../../../src/playout/audioPlayoutSession.ts";
 
 /** 停止処理が使う対象 (フックから渡す) */
@@ -30,19 +31,21 @@ export interface SubscriberAudioStopTarget {
   /**
    * 予約済みの音が鳴り終わるまで待つ (`MediaPlayout.drainAudio`)
    *
-   * 渡す項目は `AudioPlayoutDrainOptions` のうち、flush した Object の復号の出力を待つ
-   * 条件だけである (`MediaPlayout.drainAudio` が受け取る)
+   * 引数は `MediaPlayoutDrainOptions` のうち、待ちの上限 (`maxWaitMs`) と、flush した
+   * Object の復号の出力を待つ条件 (`isFlushSettled` / `flushedObjects` /
+   * `remainingFlushedObjects`) だけである。
+   *
+   * これらの項目は停止の経路が必ず渡すため、公開の設定 (すべて省略可能) から実際に渡す
+   * 項目だけを取り出し、必須にする
    */
-  drain: (options: {
-    /** drain を待つ上限 (ミリ秒) */
-    maxWaitMs: number;
-    /** 復号前の段から flush した Object の復号出力を待ち終えたか */
-    isFlushSettled: () => boolean;
-    /** flush した Object の件数 */
-    flushedObjects: number;
-    /** flush したが、まだ復号の出力が届いていない Object の数 */
-    remainingFlushedObjects: () => number;
-  }) => Promise<void>;
+  drain: (
+    options: Required<
+      Pick<
+        MediaPlayoutDrainOptions,
+        "maxWaitMs" | "isFlushSettled" | "flushedObjects" | "remainingFlushedObjects"
+      >
+    >,
+  ) => Promise<void>;
   /**
    * 前の停止で付けたままの flush の印を捨てる
    *

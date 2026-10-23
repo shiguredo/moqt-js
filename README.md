@@ -274,9 +274,7 @@ MSF-01 §5 は catalog の取得に Joining FETCH を MUST としているが、
 - 購読側の再生遅延を指定する
   - `MediaSubscriberOptions.preDecodeDelayMs` で、受信した Object を復号前に時間で保持する。2 秒以上の遅延でも復号済みフレームを溜めず、受信バッファの上限も変えない (`src/playout/preDecodeDelay.ts`)。保持上限を超えた場合は古い Object を落として残りの期限を前倒しし、実際の遅延を短くする。詳細は [購読側の再生遅延](docs/PLAYOUT_DELAY.md)
 
-再生の入口は `createMediaPlayout` (`src/playout/mediaPlayout.ts`) です。復号へ渡す直前に `trackAudioDecodeInput` / `trackVideoDecodeInput` で TIMESTAMP の種類と Object の位置を記録し、復号の出力を `pushAudio` / `pushVideo` へ渡すだけで、時間軸・jitter buffer・音声の予約・映像の表示・A/V 同期・計器がそろいます。`createMediaSubscriber` も内部でこの入口を使っています。
-
-高レベル API (`createMediaSubscriber`) はこの再生を内部で組み立てるため、アプリケーション側で実装する必要はありません。自分で受信・復号を組み立てる場合も、再生はこの入口 (`createMediaPlayout`) 1 つで完結します。詳細は [高レベル API](docs/HIGH_LEVEL_API.md) にあります。
+再生の入口は `createMediaPlayout(options)` (`src/playout/mediaPlayout.ts`) です。復号へ渡す直前に `trackAudioDecodeInput` / `trackVideoDecodeInput` で TIMESTAMP の種類と Object の位置を記録し、復号の出力を `pushAudio` / `pushVideo` へ渡すだけで、共有の時間軸、音声の予約、映像の表示、A/V 同期、計器がそろいます。`createMediaPublisher` と `createMediaSubscriber` が WebCodecs のエンコード / デコードまでを隠蔽するのに対し、`createMediaPlayout` は復号済みのフレームを受け取ります。`createMediaSubscriber` はこの入口を内部で使うため、高レベル API を使う場合は再生を自分で実装する必要はなく、受信と復号を自分で組み立てる場合もこの入口 1 つで完結します。詳細は [高レベル API](docs/HIGH_LEVEL_API.md) にあります。
 
 実測の条件と生の表は [音声の再生遅延の実測](docs/AUDIO_PLAYOUT_LATENCY.md)、現状と既知の限界は [音声再生の現状](docs/AUDIO_PLAYOUT_RESULT.md) にまとめています。
 
@@ -400,7 +398,7 @@ await subscriber.unsubscribe();
 
 ## ドキュメント
 
-- [高レベル API](docs/HIGH_LEVEL_API.md): `createMediaPublisher` / `createMediaSubscriber` と、A/V 同期と再生の共有実装の仕様
+- [高レベル API](docs/HIGH_LEVEL_API.md): `createMediaPublisher` / `createMediaSubscriber` / `createMediaPlayout` と、A/V 同期と再生の入口 (MediaPlayout) の仕様
 - [低レベル API](docs/LOW_LEVEL_API.md): `connect()` と `Session` / `Publisher` / `Subscriber` / `Fetcher` の仕様
 - [MOQT Streaming Format](docs/MSF.md): Catalog / Timeline の公開 API
 - [A/V 同期と再生の決定と根拠](docs/AV_SYNC_DECISIONS.md): 値を決めた根拠と、再考する条件

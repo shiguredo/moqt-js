@@ -7,8 +7,9 @@
  * 分かれている。これは修正を 1 か所へ閉じるための分割であり、使う側から見ると、時間軸・
  * 計器・セッション・復号の入力の対応表をすべて自分で組み立てる必要があった。
  *
- * このファイルはそれらの組み立てを 1 か所にまとめ、使う側には「復号へ渡した入力を記録する」
- * 「復号の出力を渡す」「統計を読む」だけを見せる。音声と映像の時間軸が同じであること、
+ * このファイルはそれらの組み立てを 1 か所にまとめ、使う側には、普段の操作 (「復号へ渡した
+ * 入力を記録する」「復号の出力を渡す」「統計を読む」) と、停止や `AudioContext` の作り直しに
+ * 使うライフサイクルのメソッドだけを見せる。音声と映像の時間軸が同じであること、
  * 目標の開始時刻を守るかどうか、音声だけを購読しているときの到着基準の下限といった判断は、
  * すべてこの中で行う。
  *
@@ -60,13 +61,12 @@ import type { AudioDelayFeedbackSnapshot } from "./audioDelayFeedback";
 import {
   AUDIO_PLAYOUT_TIMING_WINDOW_MS,
   AudioPlayoutTimingStats,
-  type AudioPlayoutDrainStats,
   type AudioPlayoutTimingSnapshot,
+  type MediaPlayoutDrainStats,
 } from "./audioPlayoutTimingStats";
 import {
   AudioPlayoutSession,
   type AudioPlayoutContext,
-  type AudioPlayoutDrainOptions,
   type AudioPlayoutOutput,
   type AudioPlayoutTimestampKind,
 } from "./audioPlayoutSession";
@@ -74,43 +74,52 @@ import type { AudioReceiveCatchUpStats } from "./audioReceiveCatchUp";
 import { JITTER_BUFFER_MAX_QUEUED_FRAMES } from "./buffer";
 import {
   AudioDecodeInputs,
-  type AudioDecodeInput,
-  type AudioDecodeInputRecord,
+  DECODER_OUTPUT_TIMESTAMP_TOLERANCE_MICROS,
+  type PlayoutTimestampKind,
 } from "./decodeInputTimestamps";
 import { AUDIO_ONLY_ARRIVAL_DELAY_FLOOR_MS, PlayoutTimeline } from "./timeline";
 import {
   VideoDecodeInputs,
   VideoPlayoutSession,
-  type VideoDecodeInput,
   type VideoPlayoutOutput,
   type VideoPlayoutPacing,
   type VideoPlayoutSessionOptions,
   type VideoPlayoutTiming,
-  type VideoPlayoutTimestampKind,
 } from "./videoPlayoutSession";
 
-/** 復号へ渡した音声 Object の情報 (呼び出し側が記録する) */
-export type MediaPlayoutAudioDecodeInput = AudioDecodeInputRecord;
+/**
+ * 復号へ渡した音声 Object の情報 (呼び出し側が記録する)
+ *
+ * TIMESTAMP の種類は、復号の出力 (`AudioData`) が持たないため記録する。位置・入力の遅れ・
+ * 実際に保持した時間は、選別 (`admit`) と受信側の追いつきの判定に使う。測れない値は
+ * 省略してよい (省略した値は null として扱う)。
+ */
+export interface MediaPlayoutAudioDecodeInput {
+  /**
+   * TIMESTAMP の種類 (`draft-ietf-moq-loc-04 §2.3.1.1 / §2.3.1.2`)
+   *
+   * Timescale が無い TIMESTAMP は壁時計 (Unix epoch マイクロ秒)、Timescale がある TIMESTAMP
+   * はメディア時刻である。TIMESTAMP が無い音は `"none"` とし、記録しても復号の出力からは
+   * 種類も位置も一意に引けないため、この入口は記録しない (同じ TIMESTAMP の古い記録は消す)。
+   */
+  readonly timestampKind: PlayoutTimestampKind;
+  /** Object の位置。選別 (`admit`) にだけ使う */
+  readonly location?: Location | null;
+  /** 受信の入口で測った入力の遅れ (ミリ秒)。壁時計の TIMESTAMP を持つ音だけ測れる */
+  readonly inputLagMs?: number | null;
+  /** 復号へ渡すまで実際に保持した時間 (ミリ秒)。復号前の遅延の段を使うときに渡す */
+  readonly intentionalDelayMs?: number | null;
+}
 
 /**
  * 復号へ渡した映像 Object の情報 (呼び出し側が記録する)
  *
- * `src/playout/videoPlayoutSession.ts` の `VideoDecodeInput` をそのまま使える。
+ * `VideoFrame` は TIMESTAMP の種類も Object の位置も持たないため、復号へ渡す直前に記録する。
  */
-export type MediaPlayoutVideoDecodeInput = VideoDecodeInput;
-
-/**
- * 音声の選別に渡す入力の情報
- *
- * 記録から引けなかった音では null が渡る。
- */
-export type MediaPlayoutAdmitAudioInput = AudioDecodeInput;
-
-/** 映像の選別に渡す入力の情報 */
-export interface MediaPlayoutAdmitVideoInput {
-  /** TIMESTAMP の種類 */
-  readonly timestampKind: VideoPlayoutTimestampKind;
-  /** Object の位置 */
+export interface MediaPlayoutVideoDecodeInput {
+  /** TIMESTAMP の種類 (`draft-ietf-moq-loc-04 §2.3.1.1 / §2.3.1.2`) */
+  readonly timestampKind: PlayoutTimestampKind;
+  /** Object の位置。選別 (`admit`) にだけ使う */
   readonly location: Location;
 }
 
@@ -124,6 +133,7 @@ export interface MediaPlayoutAdmitVideoInput {
  * 音声を使うが、まだ鳴らす先が無い (再生の開始を待っている) ときは `context` と
  * `destination` を省略する。このときも復号の入力の記録と選別は行い、`pushAudio` は
  * `status: "skipped"` を返す。鳴らし始めるときに `setAudioOutput` で出力を付ける。
+ * `context` と `destination` は同時に指定する (片方だけでは鳴らせない)。
  */
 export interface MediaPlayoutAudioOptions {
   /** `AudioContext` (`AudioContext` は `AudioPlayoutContext` を構造的に満たす) */
@@ -134,7 +144,8 @@ export interface MediaPlayoutAudioOptions {
    * 計器。省略すると内部で作る
    *
    * 「鳴らなかった量」を自分の実行周期で画面へ出したいときは、作ったものを渡して直接読む
-   * (ライブラリと moqt-devtools は渡す)。
+   * (`new AudioPlayoutTimingStats(AUDIO_PLAYOUT_TIMING_WINDOW_MS, performance.timeOrigin)`)。
+   * ライブラリと moqt-devtools は渡す。
    */
   readonly timing?: AudioPlayoutTimingStats;
   /**
@@ -142,20 +153,23 @@ export interface MediaPlayoutAudioOptions {
    *
    * 引数は記録した入力の情報で、記録から引けなかったときは null である。false を返すと
    * その音は鳴らさず、`pushAudio` は `status: "notAdmitted"` を返す (時間軸へも計器へも
-   * 記録しない。数えるかどうかは呼び出し側が決める)。
+   * 記録しない。数えるかどうかは呼び出し側が決める)。鳴らす先が無いときは `skipped` が
+   * 優先されるが、選別はその場合も呼ばれる (追いつきの状態を進める副作用を落とさない)。
+   * このコールバックは throw しないこと。throw した場合は `status: "error"` として返す。
    * moqt-devtools が、relay の cache から追いつく途中の音を鳴らさないために使う。
    */
-  readonly admit?: (input: MediaPlayoutAdmitAudioInput | null) => boolean;
+  readonly admit?: (input: MediaPlayoutAudioDecodeInput | null) => boolean;
   /**
    * 揃える相手 (映像) がいるかを返す。省略すると「映像の出力が構成されているか」で決める
    *
    * 揃える相手がいない (音声だけを購読している) ときは、目標の開始時刻を守らずに到着基準で
    * 並べ、揺らぎの推定が届いていない周期的な停滞を先に吸収する下限を足す。映像の出力を
-   * 構成していても、catalog に映像のトラックが無い購読では揃える相手がいないため、
-   * 呼び出し側が実際のトラックの有無を返す (ライブラリは
-   * `() => this.videoTrackInfo !== null` を渡す)。
+   * 構成していても catalog に映像のトラックが無い購読では揃える相手がいないため、呼び出し側が
+   * 実際のトラックの有無を返す (ライブラリは `() => this.videoTrackInfo !== null` を渡す)。
+   * 映像の出力を構成していないときは、このコールバックの値によらず揃える相手はいない。
+   * このコールバックは throw しないこと。throw した場合は `status: "error"` として返す。
    */
-  readonly counterpart?: () => boolean;
+  readonly hasCounterpart?: () => boolean;
 }
 
 /**
@@ -183,8 +197,10 @@ export interface MediaPlayoutVideoOptions {
    * 引数は記録した入力の情報で、記録から引けなかったときは null である。false を返すと
    * そのフレームは表示せずに閉じ、`pushVideo` は `status: "notAdmitted"` を返す。
    * moqt-devtools が、relay の cache から追いつく途中のフレームを描かないために使う。
+   * このコールバック (および `output.isAvailable`) は throw しないこと。throw した場合は
+   * フレームを閉じて `status: "skipped"` を返す (表示しない扱いにする)。
    */
-  readonly admit?: (input: MediaPlayoutAdmitVideoInput | null) => boolean;
+  readonly admit?: (input: MediaPlayoutVideoDecodeInput | null) => boolean;
 }
 
 /**
@@ -197,7 +213,8 @@ export interface MediaPlayoutDecodeInputOptions {
    * 覚えておく上限 (件)。既定は 256
    *
    * 出力されなかった (decoder のエラーで捨てられたなど) 分が残り続けないよう、超えたら
-   * 古い方から忘れる。
+   * 古い方から忘れる。relay の cache からまとめて復号する購読では、復号へ渡してから出力が
+   * 届くまでの件数が増えるため、大きい値を指定する (moqt-devtools は 8192)。
    */
   readonly maxTracked?: number;
   /**
@@ -210,36 +227,56 @@ export interface MediaPlayoutDecodeInputOptions {
   readonly forgetOnDuplicate?: boolean;
 }
 
+/** 音声の再生を鳴らし切るときの設定 */
+export interface MediaPlayoutDrainOptions {
+  /** drain を待つ上限 (ミリ秒)。既定は通常の停止の上限 (`AUDIO_PLAYOUT_DRAIN_MAX_MS`) */
+  readonly maxWaitMs?: number;
+  /**
+   * 復号前の段から flush した Object の復号出力を待ち終えたか
+   *
+   * false の間は drain を終えない (予約が尽きていても復号の出力がまだ届いていない)。
+   */
+  readonly isFlushSettled?: () => boolean;
+  /** flush した Object の件数 (計器に残す) */
+  readonly flushedObjects?: number;
+  /** flush したが、まだ復号の出力が届いていない Object の数を返す */
+  readonly remainingFlushedObjects?: () => number;
+}
+
+export type { MediaPlayoutDrainStats };
+
 /** `MediaPlayout` の設定 */
 export interface MediaPlayoutOptions {
-  /** 音声の再生。省略すると音声を鳴らさない */
+  /**
+   * 音声の再生。省略すると音声を構成しない (`pushAudio` は `skipped` を返す)
+   *
+   * `audio: {}` のように指定すると、鳴らす先が無くても音声を構成する
+   * (`getStats().audio` が非 null になり、`setAudioOutput` で後から出力を足せる)。
+   */
   readonly audio?: MediaPlayoutAudioOptions | null;
-  /** 映像の表示。省略すると映像を表示しない */
+  /** 映像の表示。省略すると映像を構成しない (`pushVideo` はフレームを閉じて `skipped` を返す) */
   readonly video?: MediaPlayoutVideoOptions | null;
   /**
    * 共有の時間軸 (jitter buffer) を使うか。既定は true
    *
-   * false のときは時間軸へ記録せず、届いた順に鳴らし・表示する。
+   * false のときは TIMESTAMP の対応付けと表示時刻の決定をせず、届いた順に鳴らし・表示する
+   * (音声の目標遅延の閉ループは動き続ける。時間軸の学習だけを使わない)。
    */
   readonly jitterBuffer?: boolean;
   /**
-   * 時刻原点の壁時計 (ミリ秒)。既定は `performance.timeOrigin`
-   *
-   * 統計の時刻を同じ軸で読むために、呼び出し側が持つ値を渡せる。
-   */
-  readonly timeOriginMs?: number;
-  /**
    * catalog から解決した表示の遅れの目標 (ミリ秒)。既定は null
    *
-   * draft-ietf-moq-msf-01 §5.2.8 の `targetLatency`。音声と映像の両方に同じ値を使う。
-   * 購読の途中で catalog が更新されたときは `setTargetLatencyMs` で変える。
+   * `draft-ietf-moq-msf-01 §5.2.8` の `targetLatency`。MUST は同じ render group と
+   * alternate group の track が同じ値を持つことであり、音声と映像で同じ値を使うこと自体は
+   * MUST ではない。この入口は 1 つの値しか持てないため、呼び出し側が同じ group の track に
+   * 同じ値を載せて渡す (ライブラリは catalog から解決した 1 値を渡す)。購読の途中で
+   * 変わったときは `setTargetLatencyMs` で変える。
    */
   readonly targetLatencyMs?: number | null;
   /**
-   * 映像の表示待ちのキューの上限 (枚)
+   * 映像の表示待ちのキューの上限 (枚)。既定は `JITTER_BUFFER_MAX_QUEUED_FRAMES` (24)
    *
-   * 省略すると `JITTER_BUFFER_MAX_QUEUED_FRAMES`。時間軸が許す表示の遅れの上限もこの値から
-   * 決まる。
+   * 時間軸が許す表示の遅れの上限もこの値から決まる。1 以上の整数を指定する。
    */
   readonly maxQueuedFrames?: number;
   /**
@@ -251,10 +288,6 @@ export interface MediaPlayoutOptions {
   readonly intentionalDelayMs?: number;
   /** 復号へ渡した入力の対応表の設定 */
   readonly decodeInputs?: MediaPlayoutDecodeInputOptions;
-  /** 映像の表示周期の予約。既定は `requestAnimationFrame` */
-  readonly requestFrame?: (callback: () => void) => number;
-  /** 映像の表示周期の予約の取り消し。既定は `cancelAnimationFrame` */
-  readonly cancelFrame?: (handle: number) => void;
 }
 
 /** 音声の再生の結果 */
@@ -279,7 +312,7 @@ export type MediaPlayoutAudioResult =
       readonly timestampKind: AudioPlayoutTimestampKind;
     }
   | {
-      /** 鳴らす準備の途中で失敗した (計器には「鳴らなかった」として記録済み) */
+      /** 鳴らす準備の途中で失敗した。選別の失敗は計器に記録しない */
       readonly status: "error";
       readonly rebased: boolean;
       readonly catchUpStarted: boolean;
@@ -298,7 +331,7 @@ export type MediaPlayoutAudioResult =
       readonly timestampKind: AudioPlayoutTimestampKind;
     }
   | {
-      /** 鳴らす先が無いため何もしなかった (音声を再生していない) */
+      /** 鳴らす先が無いか、音声を構成していないため何もしなかった */
       readonly status: "skipped";
       readonly timestampKind: AudioPlayoutTimestampKind;
     };
@@ -320,7 +353,12 @@ export type MediaPlayoutVideoResult =
       readonly status: "notAdmitted";
     }
   | {
-      /** 出し先が無いか、映像を表示しない設定のため、表示せずに閉じた */
+      /**
+       * 表示しなかった (フレームは閉じてある)
+       *
+       * 出し先が無い、映像を構成していない、または選別 (`admit` / `output.isAvailable`) が
+       * throw したときである。
+       */
       readonly status: "skipped";
     };
 
@@ -342,6 +380,8 @@ export interface MediaPlayoutAudioStats {
   readonly timing: AudioPlayoutTimingSnapshot;
   /** 受信側の追いつきの観測値 */
   readonly catchUp: AudioReceiveCatchUpStats;
+  /** 音声の目標遅延の閉ループの内訳 (音声だけを使うときに読む) */
+  readonly delayFeedback: AudioDelayFeedbackSnapshot;
 }
 
 /** 映像の表示の統計 */
@@ -354,15 +394,15 @@ export interface MediaPlayoutVideoStats {
 
 /** 再生の統計 */
 export interface MediaPlayoutStats {
-  /** 音声の再生の統計 (音声を再生していないときは null) */
+  /** 音声の再生の統計 (音声を構成していないときだけ null) */
   readonly audio: MediaPlayoutAudioStats | null;
-  /** 映像の表示の統計 (映像を表示していないときは null) */
+  /** 映像の表示の統計 (映像を構成していないときだけ null) */
   readonly video: MediaPlayoutVideoStats | null;
   /**
    * 音声と映像の同期の推定値
    *
-   * 音声か映像の片方しか使わないとき、時間軸を使わないときは null。壁時計の TIMESTAMP を
-   * 観測しているかどうかの判断は、購読しているトラックを知っている呼び出し側が行う
+   * 音声か映像の片方を構成していないとき、時間軸を使わないときは null。壁時計の TIMESTAMP
+   * を観測しているかどうかの判断は、購読しているトラックを知っている呼び出し側が行う
    * (`createMediaSubscriber` は音声と映像の両方で壁時計の TIMESTAMP を観測するまで null を
    * 返す)。
    */
@@ -372,19 +412,47 @@ export interface MediaPlayoutStats {
 /** 復号へ渡した入力の対応表の既定の上限 (件) */
 const DEFAULT_MAX_TRACKED_DECODE_INPUTS = 256;
 
+/** 表示待ちのキューの上限の下限 (枚)。0 以下では 1 枚も保持できない */
+const MIN_MAX_QUEUED_FRAMES = 1;
+
 /**
- * 復号の出力から入力を引き当てるときの、timestamp のずれの下限の許容 (マイクロ秒)
+ * 数値の設定を検証する
  *
- * 音 1 つの長さが分からない (0 以下) ときに使う。実測のずれは最大 0.40 ミリ秒であり、
- * 負荷時は 9.7 ミリ秒まで広がる (`src/playout/decodeInputTimestamps.ts`)。
+ * 公開 API の数値は、範囲外の値で無限ループや無音を起こさないよう入口で弾く
+ * (`preDecodeDelayMs` の検証と同じ方針)。
+ *
+ * @param name - 設定の名前 (エラーメッセージに使う)
+ * @param value - 検証する値
+ * @param minimum - 許す最小値
+ * @throws 有限数でない、または最小値より小さい場合
  */
-const MIN_AUDIO_TIMESTAMP_TOLERANCE_MICROS = 1_000;
+function validateNumberOption(name: string, value: number, minimum: number): void {
+  if (!Number.isFinite(value) || value < minimum) {
+    throw new Error(`${name} must be a finite number >= ${minimum}, got ${value}`);
+  }
+}
+
+/**
+ * 整数の設定を検証する
+ *
+ * @param name - 設定の名前 (エラーメッセージに使う)
+ * @param value - 検証する値
+ * @param minimum - 許す最小値
+ * @throws 整数でない、または最小値より小さい場合
+ */
+function validateIntegerOption(name: string, value: number, minimum: number): void {
+  if (!Number.isInteger(value) || value < minimum) {
+    throw new Error(`${name} must be an integer >= ${minimum}, got ${value}`);
+  }
+}
 
 /**
  * 復号済みの音声と映像の再生の入口
  *
- * 1 つの購読 (または再生) に対して 1 つ作る。音声と映像は同じ時間軸を共有するため、
- * 片方だけを渡しても、後から `setAudioOutput` で音声を足せる。
+ * 1 つの購読 (または再生) に対して 1 つ作る。音声と映像は同じ時間軸を共有する。
+ * 音声は `audio` オプションを渡して構成しておき、鳴らす先 (`context` / `destination`) だけを
+ * 後から `setAudioOutput` で付ける。`audio` を省略した場合は音声を構成しないため、
+ * 後から出力を足すことはできない (映像だけを使う)。
  */
 export class MediaPlayout {
   /** 復号へ渡した音声 Object の対応表 (呼び出し側が直接使うことは想定しない) */
@@ -395,29 +463,25 @@ export class MediaPlayout {
   private readonly timeline: PlayoutTimeline;
   /** 時間軸 (jitter buffer) を使うか */
   private readonly useTimeline: boolean;
-  /** 映像の表示待ちのキューの上限 (枚)。時間軸と表示の組み立てで同じ値を使う */
-  private readonly maxQueuedFrames: number;
-  /** 映像の表示周期の予約 (ブラウザ依存)。テストは注入する */
-  private readonly requestFrame: (callback: () => void) => number;
-  /** 映像の表示周期の予約の取り消し (ブラウザ依存)。テストは注入する */
-  private readonly cancelFrame: (handle: number) => void;
-  /**
-   * 復号の出力で入力が引けなかったときに使う、意図した復号前の遅延 (ミリ秒)
-   *
-   * 購読の途中で復号前の遅延の設定が変わったときは `setIntentionalDelayMs` で更新する。
-   */
+  /** 復号の出力で入力が引けなかったときに使う、意図した復号前の遅延 (ミリ秒) */
   private fallbackIntentionalDelayMs: number;
-  // 音声の再生 (音声を使わないときは null)
-  private readonly audioSession: AudioPlayoutSession | null;
-  private readonly audioTiming: AudioPlayoutTimingStats | null;
-  private readonly audioAdmit: ((input: AudioDecodeInput | null) => boolean) | null;
-  /** 揃える相手 (映像) がいるかを返す。null なら映像の出力の有無で決める */
-  private readonly audioCounterpart: (() => boolean) | null;
+  /** 映像の表示待ちのキューの上限 (枚)。時間軸の上限と映像キューへ同じ値を渡す */
+  private readonly maxQueuedFrames: number;
+  // 音声の再生 (音声を構成していないときは null)。音声の計器と選別は音声の有無と
+  // 同じ寿命であり、別々に null を判定すると到達しない防御が残るため 1 つにまとめる
+  private readonly audio: {
+    readonly session: AudioPlayoutSession;
+    readonly timing: AudioPlayoutTimingStats;
+    readonly admit: ((input: MediaPlayoutAudioDecodeInput | null) => boolean) | null;
+    readonly hasCounterpart: (() => boolean) | null;
+  } | null;
   // 鳴らす先 (後から付け外しできる)
   private audioOutput: AudioPlayoutOutput | null;
-  // 映像の表示 (映像を使わないときは null)
-  private readonly videoSession: VideoPlayoutSession | null;
-  private readonly videoAdmit: ((input: MediaPlayoutAdmitVideoInput | null) => boolean) | null;
+  // 映像の表示 (映像を構成していないときは null)
+  private readonly video: {
+    readonly session: VideoPlayoutSession;
+    readonly admit: ((input: MediaPlayoutVideoDecodeInput | null) => boolean) | null;
+  } | null;
 
   constructor(options: MediaPlayoutOptions) {
     const audioOptions = options.audio ?? null;
@@ -425,31 +489,40 @@ export class MediaPlayout {
     if (audioOptions === null && videoOptions === null) {
       throw new Error("at least one of audio or video must be specified");
     }
+    // 数値の設定は、範囲外の値でハングや無音を起こさないよう先に検証する
+    if (options.targetLatencyMs !== undefined && options.targetLatencyMs !== null) {
+      validateNumberOption("targetLatencyMs", options.targetLatencyMs, 0);
+    }
+    if (options.maxQueuedFrames !== undefined) {
+      validateIntegerOption("maxQueuedFrames", options.maxQueuedFrames, MIN_MAX_QUEUED_FRAMES);
+    }
+    if (options.intentionalDelayMs !== undefined) {
+      validateNumberOption("intentionalDelayMs", options.intentionalDelayMs, 0);
+    }
+    const decodeInputOptions = options.decodeInputs ?? {};
+    if (decodeInputOptions.maxTracked !== undefined) {
+      validateIntegerOption("decodeInputs.maxTracked", decodeInputOptions.maxTracked, 1);
+    }
+
     this.useTimeline = options.jitterBuffer ?? true;
     this.fallbackIntentionalDelayMs = options.intentionalDelayMs ?? 0;
+    // 時間軸の上限と映像キューの上限は同じ値にする。片方だけに渡すと、公開オプションが
+    // どちらの意味で効いているか読めなくなる
     this.maxQueuedFrames = options.maxQueuedFrames ?? JITTER_BUFFER_MAX_QUEUED_FRAMES;
-    // 表示周期の予約はブラウザ依存である。注入口を用意するのは、ブラウザ API の無い環境で
-    // 検証できるようにするため
-    this.requestFrame = options.requestFrame ?? ((callback) => requestAnimationFrame(callback));
-    this.cancelFrame = options.cancelFrame ?? ((handle) => cancelAnimationFrame(handle));
-    const timeOriginMs = options.timeOriginMs ?? performance.timeOrigin;
-    this.timeline = new PlayoutTimeline({ timeOriginMs, maxQueuedFrames: this.maxQueuedFrames });
-    // 目標の遅延は音声と映像で同じ値を使う (draft-ietf-moq-msf-01 §5.2.8 の MUST)
+    this.timeline = new PlayoutTimeline({
+      timeOriginMs: performance.timeOrigin,
+      maxQueuedFrames: this.maxQueuedFrames,
+    });
+    // 目標の遅延は音声と映像で同じ値を使う (同じ render group の track は同じ値でなければ
+    // ならない MUST。この入口は 1 値しか持てないため、呼び出し側が解決した値を渡す)
     this.timeline.setTargetLatencyMs(options.targetLatencyMs ?? null);
 
-    const decodeInputOptions = options.decodeInputs ?? {};
     const maxTracked = decodeInputOptions.maxTracked ?? DEFAULT_MAX_TRACKED_DECODE_INPUTS;
     const forgetOnDuplicate = decodeInputOptions.forgetOnDuplicate ?? false;
     this.audioInputs = new AudioDecodeInputs({ maxTracked, forgetOnDuplicate });
     this.videoInputs = new VideoDecodeInputs({ maxTracked, forgetOnDuplicate });
 
     if (audioOptions !== null) {
-      this.audioTiming =
-        audioOptions.timing ??
-        new AudioPlayoutTimingStats(AUDIO_PLAYOUT_TIMING_WINDOW_MS, timeOriginMs);
-      this.audioSession = new AudioPlayoutSession({ timing: this.audioTiming });
-      this.audioAdmit = audioOptions.admit ?? null;
-      this.audioCounterpart = audioOptions.counterpart ?? null;
       const context = audioOptions.context;
       const destination = audioOptions.destination;
       if ((context === undefined) !== (destination === undefined)) {
@@ -461,22 +534,29 @@ export class MediaPlayout {
             `destination=${destination === undefined ? "missing" : "present"}`,
         );
       }
+      const timing =
+        audioOptions.timing ??
+        new AudioPlayoutTimingStats(AUDIO_PLAYOUT_TIMING_WINDOW_MS, performance.timeOrigin);
+      this.audio = {
+        session: new AudioPlayoutSession({ timing }),
+        timing,
+        admit: audioOptions.admit ?? null,
+        hasCounterpart: audioOptions.hasCounterpart ?? null,
+      };
       this.audioOutput =
         context !== undefined && destination !== undefined ? { context, destination } : null;
     } else {
-      this.audioTiming = null;
-      this.audioSession = null;
-      this.audioAdmit = null;
-      this.audioCounterpart = null;
+      this.audio = null;
       this.audioOutput = null;
     }
 
     if (videoOptions !== null) {
-      this.videoSession = new VideoPlayoutSession(this.buildVideoSessionOptions(videoOptions));
-      this.videoAdmit = videoOptions.admit ?? null;
+      this.video = {
+        session: new VideoPlayoutSession(this.buildVideoSessionOptions(videoOptions)),
+        admit: videoOptions.admit ?? null,
+      };
     } else {
-      this.videoSession = null;
-      this.videoAdmit = null;
+      this.video = null;
     }
   }
 
@@ -491,30 +571,34 @@ export class MediaPlayout {
       timeline: this.timeline,
       output: options.output,
       decodeInputs: this.videoInputs,
+      maxQueuedFrames: this.maxQueuedFrames,
+      // 既定はライブラリの使い方 (書いた時点では表示せず、表示の間隔はブラウザが決める)
       pacing: options.pacing ?? {
         drainImmediately: true,
         framesPerDrain: Number.POSITIVE_INFINITY,
       },
-      maxQueuedFrames: this.maxQueuedFrames,
-      requestFrame: this.requestFrame,
-      cancelFrame: this.cancelFrame,
     };
-    if (options.timing !== undefined) {
-      return { ...base, timing: options.timing };
+    if (options.timing === undefined) {
+      return base;
     }
-    return base;
+    return { ...base, timing: options.timing };
   }
 
   /**
    * 復号へ渡した音声 Object の情報を記録する
    *
    * `AudioDecoder.decode()` へ渡す直前に呼ぶ。復号の出力 (`AudioData`) には TIMESTAMP の
-   * 種類が無いため、この記録を `pushAudio` が引く。
+   * 種類が無いため、この記録を `pushAudio` が引く。`timestampKind` が `"none"` の音は、
+   * 同じ TIMESTAMP に残った古い記録を消す (種類も位置も一意に引けないため)。
+   * 音声を構成していないときは何もしない。
    *
    * @param timestampMicros - decoder へ渡した TIMESTAMP (マイクロ秒)
    * @param input - TIMESTAMP の種類と、測れた付加情報
    */
   trackAudioDecodeInput(timestampMicros: number, input: MediaPlayoutAudioDecodeInput): void {
+    if (this.audio === null) {
+      return;
+    }
     this.audioInputs.remember(timestampMicros, input);
   }
 
@@ -523,12 +607,15 @@ export class MediaPlayout {
    *
    * `VideoDecoder.decode()` へ渡す直前に呼ぶ。復号の出力 (`VideoFrame`) では Object の位置が
    * 分からないため、この記録を `pushVideo` が引く。位置は選別
-   * (`MediaPlayoutVideoOptions.admit`) にだけ使う。
+   * (`MediaPlayoutVideoOptions.admit`) にだけ使う。映像を構成していないときは何もしない。
    *
    * @param timestampMicros - decoder へ渡した TIMESTAMP (マイクロ秒)
    * @param input - TIMESTAMP の種類と Object の位置
    */
   trackVideoDecodeInput(timestampMicros: number, input: MediaPlayoutVideoDecodeInput): void {
+    if (this.video === null) {
+      return;
+    }
     this.videoInputs.remember(timestampMicros, input);
   }
 
@@ -542,41 +629,59 @@ export class MediaPlayout {
    * 守らず、揺らぎの推定が届いていない周期的な停滞を先に吸収する下限を足す。これは
    * ライブラリと moqt-devtools で同じ規則である。
    *
+   * `admit` だけは鳴らす先が無いときも呼ぶ (追いつきの状態を進める副作用を落とさない)。
+   * 戻り値は `skipped` が優先される (`notAdmitted` より先に判定する)。
+   *
    * @param data - 復号した音
    */
   pushAudio(data: AudioData): MediaPlayoutAudioResult {
-    const session = this.audioSession;
-    if (session === null) {
-      throw new Error("audio is not configured: pass MediaPlayoutOptions.audio");
+    const audio = this.audio;
+    if (audio === null) {
+      // 音声を構成していない。AudioData は呼び出し側の所有物なので触らない
+      return { status: "skipped", timestampKind: "none" };
     }
+    const session = audio.session;
     // 復号の出力の timestamp に対応する入力を引く。対応とみなす差の上限は音 1 つの長さの
     // 半分にする (隣の音と取り違えない範囲で最大まで広げられる)
     //
-    // close 済みの AudioData は寸法を読めない実装がありうる。この入口で throw させず、
-    // 復号の組み立てへ渡して「鳴らせない」結果 (status: "error") として返す
+    // close 済みの AudioData は寸法を読めない実装がありうる。読めないときは対応表を引かず、
+    // 種類 "none" として復号の組み立てへ渡す (その中で「鳴らせない」結果になる)
     let inputTimestamp = 0;
     let frameDurationMicros = 0;
+    let readable = true;
     try {
       inputTimestamp = data.timestamp;
       if (data.numberOfFrames > 0 && data.sampleRate > 0) {
         frameDurationMicros = (data.numberOfFrames / data.sampleRate) * 1_000_000;
       }
     } catch {
-      // 読めない値は使わない。対応表を引かず、種類 none として渡す
+      readable = false;
     }
     const toleranceMicros =
       frameDurationMicros > 0
-        ? Math.max(MIN_AUDIO_TIMESTAMP_TOLERANCE_MICROS, Math.floor(frameDurationMicros / 2))
-        : MIN_AUDIO_TIMESTAMP_TOLERANCE_MICROS;
-    const resolved = this.audioInputs.resolve(inputTimestamp, toleranceMicros);
+        ? Math.max(DECODER_OUTPUT_TIMESTAMP_TOLERANCE_MICROS, Math.floor(frameDurationMicros / 2))
+        : DECODER_OUTPUT_TIMESTAMP_TOLERANCE_MICROS;
+    const resolved = readable
+      ? this.audioInputs.resolve(inputTimestamp, toleranceMicros)
+      : { timestampKind: null, input: null };
     const timestampKind: AudioPlayoutTimestampKind = resolved.timestampKind ?? "none";
     const matched = resolved.input;
 
     // 選別は鳴らす先があるかどうかに関わらず行う。呼び出し側の選別は追いつきの状態を進める
-    // 副作用を持ちうるため、再生していない間も判定を飛ばさない (moqt-devtools が使う)。
-    // 記録から引けなかった音も渡す (位置が分からないため、呼び出し側が従来どおり鳴らす側に
-    // 倒せるようにする)
-    const admitted = this.audioAdmit === null || this.audioAdmit(matched);
+    // 副作用を持ちうるため、再生していない間も判定を飛ばさない (moqt-devtools が使う)
+    let admitted: boolean;
+    try {
+      admitted = audio.admit === null || audio.admit(matched);
+    } catch (error) {
+      // コールバックは throw しない契約である。それでも状態を壊さず結果で返す
+      return {
+        status: "error",
+        rebased: false,
+        catchUpStarted: false,
+        error: error instanceof Error ? error : new Error(String(error)),
+        timestampKind,
+      };
+    }
     if (this.audioOutput === null) {
       // 鳴らす先が無いため何もしない。計器へも時間軸へも記録しない
       return { status: "skipped", timestampKind };
@@ -587,8 +692,19 @@ export class MediaPlayout {
 
     // 揃える相手 (映像) がいるときだけ目標の開始時刻を守る。音声だけのときは到着基準で
     // 並べ、下限を足して周期的な停滞を先に吸収する
-    const hasCounterpart =
-      this.videoSession !== null && (this.audioCounterpart === null || this.audioCounterpart());
+    let counterpartPresent: boolean;
+    try {
+      counterpartPresent =
+        this.video !== null && (audio.hasCounterpart === null || audio.hasCounterpart());
+    } catch (error) {
+      return {
+        status: "error",
+        rebased: false,
+        catchUpStarted: false,
+        error: error instanceof Error ? error : new Error(String(error)),
+        timestampKind,
+      };
+    }
     const result = session.handleDecodedAudio({
       data,
       timestampKind,
@@ -599,9 +715,9 @@ export class MediaPlayout {
       intentionalDelayMs: matched?.intentionalDelayMs ?? this.fallbackIntentionalDelayMs,
       timeline: this.timeline,
       useTimeline: this.useTimeline,
-      enforceTarget: this.useTimeline && hasCounterpart,
+      enforceTarget: this.useTimeline && counterpartPresent,
       // 映像に合わせる相手がいるときは渡さない (映像とのずれの原因になる)
-      ...(hasCounterpart ? {} : { arrivalDelayFloorMs: AUDIO_ONLY_ARRIVAL_DELAY_FLOOR_MS }),
+      ...(counterpartPresent ? {} : { arrivalDelayFloorMs: AUDIO_ONLY_ARRIVAL_DELAY_FLOOR_MS }),
       output: this.audioOutput,
     });
     return { ...result, timestampKind };
@@ -612,24 +728,32 @@ export class MediaPlayout {
    *
    * 時間軸への記録、表示待ちのキューへの積み込み、表示周期ごとの選択、計器への記録は
    * この中で行う。表示するとフレームの所有権は出し先へ移る (この中では閉じない)。
-   * 表示しないと決めたときは閉じる。
+   * 表示しないと決めたとき、映像を構成していないとき、選別が throw したときは閉じる。
    *
    * @param frame - 復号したフレーム
    */
   pushVideo(frame: VideoFrame): MediaPlayoutVideoResult {
-    const session = this.videoSession;
-    if (session === null) {
-      throw new Error("video is not configured: pass MediaPlayoutOptions.video");
+    const video = this.video;
+    if (video === null) {
+      // 映像を構成していない。フレームは入口が所有して閉じる
+      frame.close();
+      return { status: "skipped" };
     }
+    const session = video.session;
     const input = this.videoInputs.take(frame.timestamp);
-    if (this.videoAdmit !== null) {
+    if (video.admit !== null) {
       // 記録から引けなかったフレームも渡す (位置が分からないため、呼び出し側が従来どおり
       // 表示する側に倒せるようにする)
-      const forAdmit: MediaPlayoutAdmitVideoInput | null =
-        input === undefined
-          ? null
-          : { timestampKind: input.timestampKind, location: input.location };
-      if (!this.videoAdmit(forAdmit)) {
+      let admitted: boolean;
+      try {
+        admitted = video.admit(input ?? null);
+      } catch {
+        // コールバックは throw しない契約である。それでも状態を壊さず、フレームを閉じて
+        // 表示しなかった (skipped) として返す
+        frame.close();
+        return { status: "skipped" };
+      }
+      if (!admitted) {
         frame.close();
         return { status: "notAdmitted" };
       }
@@ -646,22 +770,26 @@ export class MediaPlayout {
    *
    * `AudioContext` を作り直したときや、音声の再生を止めるときに使う。null を渡すと鳴らさず、
    * 以降の `pushAudio` は `status: "skipped"` を返す (時間軸へも計器へも記録しない)。
-   * `AudioContext` を作り直したときは、続けて `releaseAudioContext` を呼ぶ。
+   * null を渡したときは、出力の時計の対応と直前の音も捨てる (閉じた `AudioContext` の
+   * 時計で次の音を予約しないため)。
+   *
+   * `AudioContext` を作り直したときは、新しい出力を付けたあとに `resetAudioPlayback` を
+   * 呼ぶ (予約の基準を作り直す。時計の対応を捨てるのは null を渡したときだけであり、
+   * 出力を差し替えるだけでは旧 `AudioContext` の対応は残る)。
    *
    * @param output - 新しい出力。null で鳴らさない
+   * @throws 音声を構成していない (MediaPlayoutOptions.audio を省略した) 場合
    */
   setAudioOutput(output: AudioPlayoutOutput | null): void {
+    const audio = this.audio;
+    if (audio === null) {
+      throw new Error("audio is not configured: pass MediaPlayoutOptions.audio");
+    }
+    if (output === null) {
+      // 閉じた Context の時計の対応を残すと、次に鳴らすときに古い対応で予約する
+      audio.session.releaseAudioContext();
+    }
     this.audioOutput = output;
-  }
-
-  /**
-   * 出力の時計の対応を捨てる
-   *
-   * `AudioContext` を閉じたときに呼ぶ。次に音を鳴らすときに、新しい `AudioContext` の時計で
-   * 対応を作り直す。
-   */
-  releaseAudioContext(): void {
-    this.audioSession?.releaseAudioContext();
   }
 
   /**
@@ -672,6 +800,9 @@ export class MediaPlayout {
    * @param value - 目標 (ミリ秒)。null で目標を使わない
    */
   setTargetLatencyMs(value: number | null): void {
+    if (value !== null) {
+      validateNumberOption("targetLatencyMs", value, 0);
+    }
     this.timeline.setTargetLatencyMs(value);
   }
 
@@ -686,32 +817,22 @@ export class MediaPlayout {
    * @param value - 意図した復号前の遅延 (ミリ秒)。0 以上
    */
   setIntentionalDelayMs(value: number): void {
+    validateNumberOption("intentionalDelayMs", value, 0);
     this.fallbackIntentionalDelayMs = value;
   }
 
   /**
-   * 音声の目標遅延の閉ループの内訳を読む
+   * 再生の状態を取り直す
    *
-   * 音声だけを使うときは同期の推定値 (`getStats().avSync`) を作らないため、目標の内訳だけを
-   * ここから読む (moqt-devtools が使う)。
+   * 時間軸の基準と学習を取り直し、映像の表示待ちと復号へ渡した映像入力の対応表を捨て、
+   * 音声の追いつきの観測を消す。復号前の遅延の段の設定を変えたときや、購読を始めるときに
+   * 呼ぶ。音声の予約の基準と計器の累積は消さない (`resetAudioPlayback` と
+   * `MediaPlayoutAudioStats` を参照)。
    */
-  getAudioDelayFeedback(): AudioDelayFeedbackSnapshot {
-    return this.timeline.audioDelayFeedbackStats();
-  }
-
-  /**
-   * 表示時刻の基準を取り直す
-   *
-   * 復号前の遅延の段の設定を変えたときに呼ぶ。基準の遅れは「復号の出力の時刻 -
-   * TIMESTAMP」の直近 10 秒の最小値であり、復号の出力の時刻が遅延の分だけ動いても古い
-   * 基準が残る。古い基準のままだと表示時刻が実際の復号より遅延の分だけ前になり、映像が
-   * 表示時刻を過ぎたフレームとして捨てられる。音声の追いつきの床 (直近の遅れの最小値) も
-   * 古い遅延のまま残るため、観測も消す。
-   */
-  reset(): void {
+  resetPlayout(): void {
     this.timeline.reset();
-    this.clearVideo();
-    this.audioSession?.catchUp.reset();
+    this.clearVideoQueue();
+    this.audio?.session.catchUp.reset();
   }
 
   /**
@@ -721,7 +842,7 @@ export class MediaPlayout {
    * (`AUDIO_PLAYOUT_DELAY_FLOOR_MS`) が残り、映像の表示が音声を一度も再生していない購読より
    * 遅れたまま固定される。世代は進めない (積んでいる映像フレームを到着順に落とさない)。
    */
-  resetAudioStream(): void {
+  resetAudioTimeline(): void {
     this.timeline.resetStream("audio");
   }
 
@@ -729,10 +850,11 @@ export class MediaPlayout {
    * 音声の再生の状態を取り直す
    *
    * 予約の基準・出力の時計の対応・追いつきの観測を消す。`AudioContext` を作り直したときに
-   * 呼ぶ。計器の累積 (鳴った量・鳴らなかった量) は購読の統計として引き継ぐため消さない。
+   * 呼ぶ。計器の累積 (鳴った量・鳴らなかった量・詰め・補間・基準の取り直し・捨て) は購読の
+   * 統計として引き継ぐため消さない。
    */
-  resetAudio(): void {
-    this.audioSession?.reset();
+  resetAudioPlayback(): void {
+    this.audio?.session.reset();
   }
 
   /**
@@ -740,24 +862,25 @@ export class MediaPlayout {
    *
    * 時間軸の基準と学習、復号へ渡した入力の対応表、映像の表示待ちを消す。計器の累積
    * (再生の観測・受信側の追いつきの観測) は、停止直後の統計として読めるよう残す
-   * (次に `resetAudio` を呼んだときに消える)。`AudioContext` の時計の対応は
-   * `releaseAudioContext` で別に消す。
+   * (次に `resetAudioPlayback` で音声の再生の状態を取り直すときに、追いつきの観測も消える)。
+   * `AudioContext` の時計の対応は `setAudioOutput(null)` で消す。
    */
-  clear(): void {
+  clearAll(): void {
     this.timeline.reset();
     this.audioInputs.clear();
-    this.videoInputs.clear();
-    this.videoSession?.clear();
+    // 映像の対応表は VideoPlayoutSession が同じ Map を持っているため、そちらで消す
+    this.video?.session.clear();
   }
 
   /**
    * 予約済みで鳴り終わっていない音を「切った量」として計器へ残す
    *
    * 鳴らす先を閉じる直前に呼ぶ。閉じると予約は鳴らないまま消えるため、計器に残さないと
-   * 「鳴らなかった量」に現れない。
+   * 「鳴らなかった量」に現れない。すぐに閉じる場合の後始末であり、待つ必要がある場合は
+   * `drainAudio` を使う。
    */
   recordAudioStopped(): void {
-    this.audioSession?.recordStopped();
+    this.audio?.session.recordStopped();
   }
 
   /**
@@ -767,26 +890,21 @@ export class MediaPlayout {
    *
    * @param options - 待ち時間と、flush した Object の復号の出力を待つ条件
    */
-  drainAudio(options: AudioPlayoutDrainOptions = {}): Promise<AudioPlayoutDrainStats> {
-    const session = this.audioSession;
-    if (session === null) {
-      // 音声を鳴らさない設定では、待つ予約が無い
-      return Promise.resolve({
-        pendingMsAtStart: 0,
-        requestedMs: 0,
-        waitedMs: 0,
-        playedMs: 0,
-        cutMs: 0,
-        flushedObjects: 0,
-        undecodedFlushedObjects: 0,
-      });
+  async drainAudio(options: MediaPlayoutDrainOptions = {}): Promise<MediaPlayoutDrainStats> {
+    if (options.maxWaitMs !== undefined) {
+      validateNumberOption("maxWaitMs", options.maxWaitMs, 0);
+    }
+    const session = this.audio?.session;
+    if (session === undefined) {
+      // 音声を構成していないため、待つ予約が無い
+      return emptyDrainStats();
     }
     return session.drainReserved(options);
   }
 
-  /** 表示待ちの映像を捨て、予約した表示を取り消す */
-  clearVideo(): void {
-    this.videoSession?.clear();
+  /** 表示待ちの映像を捨て、予約した表示を取り消す (復号へ渡した映像入力の対応表も消える) */
+  clearVideoQueue(): void {
+    this.video?.session.clear();
   }
 
   /**
@@ -795,28 +913,29 @@ export class MediaPlayout {
    * 時間軸 (直近の窓) の値は呼び出した時点で求める。
    */
   getStats(): MediaPlayoutStats {
-    const audio = this.audioSession;
-    const video = this.videoSession;
+    const audio = this.audio;
+    const video = this.video;
     return {
       audio:
-        audio === null || this.audioTiming === null
+        audio === null
           ? null
           : {
-              rebases: audio.playout.rebases,
-              drops: audio.playout.drops,
-              concealments: audio.playout.concealments,
-              compressedMs: audio.playout.compressed * 1_000,
-              concealedMs: audio.playout.concealed * 1_000,
-              latenessMs: audio.playout.lateness * 1_000,
-              timing: this.audioTiming.snapshot(performance.now()),
-              catchUp: audio.catchUp.snapshot(),
+              rebases: audio.session.playout.rebases,
+              drops: audio.session.playout.drops,
+              concealments: audio.session.playout.concealments,
+              compressedMs: audio.session.playout.compressed * 1_000,
+              concealedMs: audio.session.playout.concealed * 1_000,
+              latenessMs: audio.session.playout.lateness * 1_000,
+              timing: audio.timing.snapshot(performance.now()),
+              catchUp: audio.session.catchUp.snapshot(),
+              delayFeedback: this.timeline.audioDelayFeedbackStats(),
             },
       video:
         video === null
           ? null
           : {
-              queuedFrames: video.playout.size,
-              playoutDelayMs: video.playout.playoutDelayMs(),
+              queuedFrames: video.session.playout.size,
+              playoutDelayMs: video.session.playout.playoutDelayMs(),
             },
       avSync: this.buildAvSyncStats(),
     };
@@ -825,13 +944,13 @@ export class MediaPlayout {
   /**
    * 音声と映像の同期の推定値
    *
-   * 片方しか使わないとき、時間軸を使わないときは null。壁時計の TIMESTAMP を観測している
-   * かどうかは、購読しているトラックを知っている呼び出し側が判定する
+   * 片方を構成していないとき、時間軸を使わないときは null。壁時計の TIMESTAMP を観測して
+   * いるかどうかは、購読しているトラックを知っている呼び出し側が判定する
    * (`createMediaSubscriber` を参照)。
    */
   private buildAvSyncStats(): AvSyncStats | null {
-    const audio = this.audioSession;
-    if (!this.useTimeline || audio === null || this.videoSession === null) {
+    const audio = this.audio;
+    if (!this.useTimeline || audio === null || this.video === null) {
       return null;
     }
     return {
@@ -840,14 +959,29 @@ export class MediaPlayout {
       targetLatencyMs: this.timeline.targetLatencyMs,
       targetLatencyLimitedMs: this.timeline.targetLatencyLimitedMs,
       // 音声を再生していない間は AudioContext が無く、時計の代用も起きていない
-      audioClockFallback: this.audioOutput !== null && audio.clock.usingFallback,
+      audioClockFallback: this.audioOutput !== null && audio.session.clock.usingFallback,
       delays: this.timeline.delayBreakdown,
     };
   }
 }
 
+/** 音声の drain をしない (構成していない) ときの結果 */
+function emptyDrainStats(): MediaPlayoutDrainStats {
+  return {
+    pendingMsAtStart: 0,
+    requestedMs: 0,
+    waitedMs: 0,
+    playedMs: 0,
+    cutMs: 0,
+    flushedObjects: 0,
+    undecodedFlushedObjects: 0,
+  };
+}
+
 /**
  * 復号済みの音声と映像の再生の入口を作る
+ *
+ * 音声は `audio` オプションを渡して構成し、鳴らす先だけを後から `setAudioOutput` で付ける。
  *
  * @param options - 音声の出力と映像の出し先、時間軸の設定
  * @returns 再生の入口

@@ -102,7 +102,7 @@ export interface AudioPlayoutMiss {
  * どれだけを上限で切ったかを残す。`missedByReason.stopped` は「切った量」だけを持つため、
  * 待って鳴らせた量はこの値で読む。
  */
-export interface AudioPlayoutDrainStats {
+export interface MediaPlayoutDrainStats {
   /** drain を始めた時点で予約されていた長さ (ミリ秒) */
   readonly pendingMsAtStart: number;
   /** drain で待つと決めた上限の時間 (ミリ秒) */
@@ -246,7 +246,7 @@ export interface AudioPlayoutTimingSnapshot {
   /** バッファ境界の段差の最大 (0 から 1 の振幅。記録期間中の最大) */
   readonly boundaryStepMax: number;
   /** 直近の停止で行った drain の結果。まだ停止していなければ null */
-  readonly lastDrain: AudioPlayoutDrainStats | null;
+  readonly lastDrain: MediaPlayoutDrainStats | null;
 }
 
 /** どの理由も 0 件の累積 */
@@ -342,7 +342,7 @@ export class AudioPlayoutTimingStats {
   private missedTotals = emptyMissTotals();
   private recentMisses: AudioMissEvent[] = [];
   // 直近の停止で行った drain の結果 (購読の開始 (reset) で消す)
-  private lastDrain: AudioPlayoutDrainStats | null = null;
+  private lastDrain: MediaPlayoutDrainStats | null = null;
   private stretchUnavailableFrames = 0;
   // 補間で埋まらなかった無音の穴 (回数・合計 ms・最大 ms) と、そのうち予約できなかった分
   private gapCount = 0;
@@ -505,7 +505,7 @@ export class AudioPlayoutTimingStats {
    *
    * @param stats - drain の結果
    */
-  recordDrain(stats: AudioPlayoutDrainStats): void {
+  recordDrain(stats: MediaPlayoutDrainStats): void {
     this.lastDrain = stats;
   }
 
@@ -558,7 +558,7 @@ export class AudioPlayoutTimingStats {
     for (const series of [this.slacks, this.startDelays, this.latenesses]) {
       series.prune(minAtMs);
     }
-    const missedByReason = {} as Record<AudioMissReason, AudioMissTotal>;
+    const missedByReason = emptyMissTotals();
     for (const reason of AUDIO_MISS_REASONS) {
       const total = this.missedTotals[reason];
       missedByReason[reason] = { count: total.count, ms: total.ms };

@@ -16,10 +16,15 @@ import { test, assert } from "vite-plus/test";
 import { MediaSubscriberImpl, createMediaSubscriber } from "./createMediaSubscriber";
 import { MAX_PRE_DECODE_DELAY_MS } from "./playout/preDecodeDelay";
 import { PreDecodeDelayStage } from "./playout/preDecodeDelayStage";
-import type { AudioPlayoutSession } from "./playout/audioPlayoutSession";
+import type { AudioPlayoutSession, AudioPlayoutOutput } from "./playout/audioPlayoutSession";
+import type { AudioPlayoutTimingStats } from "./playout/audioPlayoutTimingStats";
 import type { AudioDecodeInput } from "./playout/decodeInputTimestamps";
 import type { MediaPlayout } from "./playout/mediaPlayout";
-import { AUDIO_RECEIVE_CATCH_UP_MIN_MS } from "./playout/audioReceiveCatchUp";
+import type { VideoDecodeInput } from "./playout/videoPlayoutSession";
+import {
+  AUDIO_RECEIVE_CATCH_UP_MIN_MS,
+  type AudioReceiveCatchUp,
+} from "./playout/audioReceiveCatchUp";
 import type { MediaConnectSettings } from "./createMedia/connect";
 import type { FetchOptions, Session, SubscribeCallbacks, SubscribeOptions } from "./session";
 import type { Subscriber, RequestUpdateOptions } from "./subscriber";
@@ -93,17 +98,28 @@ import {
 interface MediaPlayoutInternals {
   /** 音声と映像で共有する表示時刻の時間軸 */
   readonly timeline: PlayoutTimeline;
-  /** 音声の再生の組み立て (予約・時計の対応・受信側の追いつき) */
-  readonly audioSession: AudioPlayoutSession;
+  /**
+   * 音声の再生の組み立て (予約・時計の対応・受信側の追いつき) と計器
+   *
+   * 音声を構成していない入口では null になる (ライブラリは常に構成する)
+   */
+  readonly audio: {
+    readonly session: AudioPlayoutSession;
+    readonly timing: AudioPlayoutTimingStats;
+  } | null;
   /** 復号へ渡した音声 Object の対応表 (記録は内部の Map が持つ) */
   readonly audioInputs: { readonly inputs: Map<number, AudioDecodeInput> };
+  /** 復号へ渡した映像 Object の対応表 (記録は内部の Map が持つ) */
+  readonly videoInputs: { readonly inputs: Map<number, VideoDecodeInput> };
+  /** 鳴らす先 (AudioContext と出力先)。付け外しできるため null があり得る */
+  readonly audioOutput: AudioPlayoutOutput | null;
 }
 
 /**
  * 再生の入口を内部形状へキャストする
  *
- * 実装 (src/createMediaSubscriber.ts) の private を検証から読むためのキャストであり、
- * テストの中だけに閉じる。ファサードへ検証用の公開プロパティは足さない。
+ * 再生の入口 (src/playout/mediaPlayout.ts) の private を検証から読むためのキャストであり、
+ * テストの中だけに閉じる。入口へ検証用の公開プロパティは足さない。
  */
 function playoutInternalsOf(control: { readonly playout: MediaPlayout }): MediaPlayoutInternals {
   return control.playout as unknown as MediaPlayoutInternals;
@@ -114,9 +130,44 @@ function playoutTimelineOf(control: { readonly playout: MediaPlayout }): Playout
   return playoutInternalsOf(control).timeline;
 }
 
+/**
+ * 再生の入口が持つ音声の状態 (再生の組み立てと計器) を読む
+ *
+ * ライブラリは音声を常に構成するため null にはならない。入口の型に合わせて null を
+ * 受け取り、来た場合はテストの前提が崩れているため throw する。
+ */
+function playoutAudioOf(control: {
+  readonly playout: MediaPlayout;
+}): NonNullable<MediaPlayoutInternals["audio"]> {
+  const audio = playoutInternalsOf(control).audio;
+  if (audio === null) {
+    throw new Error("audio is not configured");
+  }
+  return audio;
+}
+
 /** 再生の入口が持つ音声の再生の組み立て (予約と追いつき) を読む */
 function playoutAudioSessionOf(control: { readonly playout: MediaPlayout }): AudioPlayoutSession {
-  return playoutInternalsOf(control).audioSession;
+  return playoutAudioOf(control).session;
+}
+
+/** 再生の入口が持つ音声の計器 (鳴らした音と鳴らなかった音の累積) を読む */
+function playoutAudioTimingOf(control: {
+  readonly playout: MediaPlayout;
+}): AudioPlayoutTimingStats {
+  return playoutAudioOf(control).timing;
+}
+
+/** 再生の入口が持つ音声の追いつきの観測を読む */
+function playoutAudioCatchUpOf(control: { readonly playout: MediaPlayout }): AudioReceiveCatchUp {
+  return playoutAudioSessionOf(control).catchUp;
+}
+
+/** 再生の入口へ付いている鳴らす先 (AudioContext と出力先) を読む */
+function playoutAudioOutputOf(control: {
+  readonly playout: MediaPlayout;
+}): AudioPlayoutOutput | null {
+  return playoutInternalsOf(control).audioOutput;
 }
 
 /** 再生の入口が持つ音声の予約 (基準の取り直しと捨ての数) を読む */
@@ -136,6 +187,13 @@ function playoutAudioInputsOf(control: {
   readonly playout: MediaPlayout;
 }): Map<number, AudioDecodeInput> {
   return playoutInternalsOf(control).audioInputs.inputs;
+}
+
+/** 再生の入口が覚えている、復号へ渡した映像 Object の記録を読む */
+function playoutVideoInputsOf(control: {
+  readonly playout: MediaPlayout;
+}): Map<number, VideoDecodeInput> {
+  return playoutInternalsOf(control).videoInputs.inputs;
 }
 
 /**
@@ -2913,7 +2971,8 @@ test("handleAudioDecodedData: 音声変換失敗時に onError 通知し AudioDa
 
 test("handleVideoDecodedData: 出力先不在時はフレームを閉じる", () => {
   // writer 不在の既存正常系が維持されることの検証。
-  // 早期 return 経路のため onError 通知はなく、write も呼ばれない
+  // 再生の入口が出力の有無を判定してフレームを閉じるため、onError 通知はなく、write も
+  // 呼ばれない
   const errors: Error[] = [];
   const subscriber = new MediaSubscriberImpl(
     "moqt://example.com/live",
@@ -2935,7 +2994,8 @@ test("handleVideoDecodedData: 出力先不在時はフレームを閉じる", ()
 
 test("handleAudioDecodedData: 出力先不在時はフレームを閉じる", () => {
   // context 不在の既存正常系が維持されることの検証。
-  // 早期 return 経路のため onError 通知はない
+  // 再生の入口が `status: "skipped"` を返し、復号の出力は finally で閉じるため onError
+  // 通知はない
   const errors: Error[] = [];
   const subscriber = new MediaSubscriberImpl(
     "moqt://example.com/live",
@@ -3732,8 +3792,9 @@ test("extractTrackInfo: role ありカタログの名前不一致は先頭を採
 /**
  * 音声と映像の同期の検証用の制御口
  *
- * 表示時刻の計算は src/playout/timeline.ts が持ち、createMediaSubscriber 側は
- * catalog の targetLatency の解決、共有の時間軸への記録、AudioContext の時計との換算を担う。
+ * 表示時刻の計算と共有の時間軸への記録は再生の入口 (src/playout/mediaPlayout.ts) と
+ * src/playout/timeline.ts が持ち、createMediaSubscriber 側は catalog の targetLatency の
+ * 解決と AudioContext の作成・注入を担う。
  * AudioContext / AudioData / VideoFrame はブラウザ専用 API であり node 環境に実物がないため、
  * 既存の検証と同じく記録用の最小オブジェクトを注入する (モジュール置換は行わない)。
  */
@@ -4225,6 +4286,57 @@ test("avSync: 壁時計の TIMESTAMP を観測していないときは null に�
 
   assert.equal(errors.length, 0);
   assert.isNull(stats.avSync);
+});
+
+/**
+ * 完了条件: 復号した映像フレームが壁時計の TIMESTAMP を持つとき、handleVideoDecodedData が
+ * 入口の結果 (`wallClockTimestamp`) から videoWallClockSeen を立て、avSync の壁時計の
+ * ゲートが開くこと。音声の側も実装の経路 (handleAudioDecodedData) で壁時計の TIMESTAMP を
+ * 観測させ、markWallClockObserved のようなフラグの直接設定は使わない。
+ */
+test("handleVideoDecodedData: 壁時計の TIMESTAMP を持つフレームで avSync のゲートが開く", () => {
+  const { subscriber, control, errors } = createAvSyncSubscriber();
+  // 音声と映像の track を catalog から解決する (avSync を出せる条件の 1 つ)
+  control.receivedCatalog = makeAudioVideoCatalog(
+    { isLive: true, targetLatency: AV_SYNC_TARGET_LATENCY_MS },
+    { isLive: true, targetLatency: AV_SYNC_TARGET_LATENCY_MS },
+  );
+  control.extractTrackInfo();
+  assert.equal(errors.length, 0);
+
+  // 音声の側は復号の出力を入口へ渡して壁時計の TIMESTAMP を観測済みにする
+  const mapping = audioClockMappingAt(avSyncReferenceMs());
+  const audioTimestampMicros = wallClockTimestampMicrosFor(mapping);
+  control.playout.trackAudioDecodeInput(audioTimestampMicros, { timestampKind: "wallClock" });
+  playAudioFrame(control, audioTimestampMicros, mapping);
+  assert.isTrue(control.audioWallClockSeen, "音声の壁時計の TIMESTAMP を観測すること");
+  assert.isFalse(control.videoWallClockSeen, "映像はまだ観測していないこと");
+  // 音声だけでは avSync を出さない
+  assert.isNull(subscriber.getStats().avSync);
+
+  // 壁時計の TIMESTAMP を持つフレームを handleVideoDecodedData へ通す。表示周期は node 環境に
+  // 無いため、予約と取り消しを差し替えて受ける
+  const videoTimestampMicros = wallClockTimestampMicrosOf(
+    performance.timeOrigin + performance.now(),
+  );
+  control.playout.trackVideoDecodeInput(videoTimestampMicros, {
+    timestampKind: "wallClock",
+    location: { group: 0n, object: 0n },
+  });
+  const { writer } = createRecordingVideoWriter();
+  control.videoWriter = writer;
+  installAnimationFrameRecorder();
+  try {
+    const { frame } = createTimestampedRecordingFrame(videoTimestampMicros);
+    control.handleVideoDecodedData({ frame });
+  } finally {
+    restoreAnimationFrame();
+    clearPendingAnimationFrame();
+  }
+
+  // 入口が返した壁時計の TIMESTAMP から videoWallClockSeen が立ち、avSync を出せるようになる
+  assert.isTrue(control.videoWallClockSeen, "映像の壁時計の TIMESTAMP を観測すること");
+  assert.isNotNull(subscriber.getStats().avSync, "両方で壁時計を観測したら avSync を出すこと");
 });
 
 /**
@@ -5181,36 +5293,52 @@ function createRecordingVideoWriter(): {
 let pendingAnimationFrame: FrameRequestCallback | null = null;
 let animationFrameCount = 0;
 
-/** コールバックを呼ばずに予約だけを捕まえる (表示周期を作り直さない) */
+/**
+ * コールバックを呼ばずに予約だけを捕まえる (表示周期を作り直さない)
+ *
+ * 予約の取り消し (`cancelAnimationFrame`) も node 環境には無い。表示待ちを捨てる経路
+ * (MediaPlayout.clearAll) が予約を取り消すため、記録せずに受けるだけの関数へ差し替える。
+ */
 function installAnimationFrameRecorder(): void {
   const globalWithAnimationFrame = globalThis as unknown as {
     requestAnimationFrame?: (callback: FrameRequestCallback) => number;
+    cancelAnimationFrame?: (handle: number) => void;
   };
   // node 環境には表示周期が無いため、テストの間だけ差し替え、後で元に戻す
   restoreAnimationFrame();
   originalAnimationFrame = globalWithAnimationFrame.requestAnimationFrame;
+  originalCancelAnimationFrame = globalWithAnimationFrame.cancelAnimationFrame;
   globalWithAnimationFrame.requestAnimationFrame = (callback) => {
     pendingAnimationFrame = callback;
     animationFrameCount++;
     return 0;
   };
+  globalWithAnimationFrame.cancelAnimationFrame = () => {};
 }
 
 /** 差し替えた表示周期を元に戻す (テストの終了時に呼ぶ) */
 function restoreAnimationFrame(): void {
   const globalWithAnimationFrame = globalThis as unknown as {
     requestAnimationFrame?: (callback: FrameRequestCallback) => number;
+    cancelAnimationFrame?: (handle: number) => void;
   };
   if (originalAnimationFrame === undefined) {
     delete globalWithAnimationFrame.requestAnimationFrame;
   } else {
     globalWithAnimationFrame.requestAnimationFrame = originalAnimationFrame;
   }
+  if (originalCancelAnimationFrame === undefined) {
+    delete globalWithAnimationFrame.cancelAnimationFrame;
+  } else {
+    globalWithAnimationFrame.cancelAnimationFrame = originalCancelAnimationFrame;
+  }
   originalAnimationFrame = undefined;
+  originalCancelAnimationFrame = undefined;
 }
 
 // 差し替える前の表示周期 (元に戻すために持つ)
 let originalAnimationFrame: ((callback: FrameRequestCallback) => number) | undefined;
+let originalCancelAnimationFrame: ((handle: number) => void) | undefined;
 
 /** 予約された表示周期のコールバックを 1 回実行する */
 function runPendingAnimationFrame(): VideoFrame[] {
@@ -5450,8 +5578,6 @@ interface SubscriberLifecycleControl {
   pendingVideoObjects: MoqtObject[];
   // 前の Group の stream が開いている間に保留する映像 Object (解放で破棄する)
   videoGroupGate: GroupSwitchGate<MoqtObject>;
-  // 映像の表示を止めるフラグ。解放で初期値 (false) に戻る
-  videoPlayoutStopped: boolean;
   // 復号順の判定 (解放で初期化する)
   videoDecodeOrder: VideoDecodeOrder;
   // 再生の入口 (MediaPlayout)。AudioContext の時計の対応はその中が持つ
@@ -5636,8 +5762,6 @@ function fillStopRuntimeState(control: SubscriberLifecycleControl): void {
   control.videoDecoderConfigured = true;
   control.lastAppliedVideoConfig = new Uint8Array([1]);
   control.lastAppliedAudioConfig = new Uint8Array([2]);
-  // 映像の表示を止めるフラグ (解放で false に戻る)
-  control.videoPlayoutStopped = true;
   // 前世代で復号した Object (解放で初期化しないと、再 start で同じ位置の
   // キーフレームを stale として捨ててしまう)
   control.videoDecodeOrder.admit({
@@ -5679,9 +5803,13 @@ test("createOutputStream: AudioContext を作り直すと時計の対応を初�
   // 前の AudioContext の対応を入れておく (作り直しで消えることを見る)
   playoutAudioClockOf(control).update({ contextTime: 500, performanceTime: 400_000 }, 500, 400_000);
   assert.equal(playoutAudioClockOf(control).currentOffsetMs, 100_000);
+  // createOutputStream の前は入口に鳴らす先が無い
+  assert.isNull(playoutAudioOutputOf(control));
 
-  // 差し替えた AudioContext が受け取った値 (実装がこの分岐を通った印)
+  // 差し替えた AudioContext が受け取った値と、作成した出力先 (実装がこの分岐を通った印)
   const createdOptions: AudioContextOptions[] = [];
+  const createdContexts: AudioContext[] = [];
+  const createdDestinations: MediaStreamAudioDestinationNode[] = [];
   const target = globalThis as unknown as { AudioContext: unknown; MediaStream: unknown };
   const originalAudioContext = target.AudioContext;
   const originalMediaStream = target.MediaStream;
@@ -5689,11 +5817,14 @@ test("createOutputStream: AudioContext を作り直すと時計の対応を初�
     readonly state = "running";
     constructor(options: AudioContextOptions) {
       createdOptions.push(options);
+      createdContexts.push(this as unknown as AudioContext);
     }
     createMediaStreamDestination(): MediaStreamAudioDestinationNode {
-      return {
+      const destination = {
         stream: { getAudioTracks: () => [] },
       } as unknown as MediaStreamAudioDestinationNode;
+      createdDestinations.push(destination);
+      return destination;
     }
   };
   target.MediaStream = class {
@@ -5709,6 +5840,12 @@ test("createOutputStream: AudioContext を作り直すと時計の対応を初�
   // track の sampleRate で AudioContext を作っていること
   assert.equal(createdOptions.length, 1);
   assert.equal(createdOptions[0]?.sampleRate, 48_000);
+  // 入口に鳴らす先 (AudioContext と出力先) が付いていること。createOutputStream が
+  // setAudioOutput まで行い、入口がその組を保持している
+  const audioOutput = playoutAudioOutputOf(control);
+  assert.isNotNull(audioOutput);
+  assert.strictEqual(audioOutput?.context, createdContexts[0]);
+  assert.strictEqual(audioOutput?.destination, createdDestinations[0]);
   // 時計の対応が初期化され、次の予約で取り直すこと
   assert.isNull(playoutAudioClockOf(control).currentOffsetMs);
   assert.isFalse(playoutAudioClockOf(control).usingFallback);
@@ -5991,9 +6128,8 @@ test("stop: 全参照を解放し unsubscribe と close を 1 回ずつ呼ぶ", 
   assert.isFalse(control.videoDecoderConfigured);
   assert.isNull(control.lastAppliedVideoConfig);
   assert.isNull(control.lastAppliedAudioConfig);
-  // 映像の表示を止めるフラグと AudioContext の時計の対応も初期値に戻ること
+  // AudioContext の時計の対応も初期値に戻ること
   // (対応を残す影響は AudioClockBridge.reset の JSDoc を参照)
-  assert.isFalse(control.videoPlayoutStopped);
   assert.isNull(playoutAudioClockOf(control).currentOffsetMs);
   assert.isFalse(playoutAudioClockOf(control).usingFallback);
   // 復号順の判定も初期化されること (前世代で復号した Object を引き継ぐと、再 start で
@@ -6015,6 +6151,131 @@ test("stop: 全参照を解放し unsubscribe と close を 1 回ずつ呼ぶ", 
   assert.equal(subscriber.state, "stopped");
   assert.deepEqual(states, ["stopped"]);
   assert.equal(closeCount, 0);
+});
+
+/**
+ * 完了条件: stop / close の解放は、再生の入口 (`MediaPlayout.clearAll`) を通して、共有の
+ * 時間軸・復号へ渡した入力の対応表 (音声と映像)・映像の表示待ちを捨てる。計器の累積
+ * (鳴らした音の数と長さ) と受信側の追いつきの観測 (`playoutCatchUp.lagMs`) は停止直後の
+ * 統計として残す (追いつきは次の createOutputStream の `resetAudioPlayback` が消す)。
+ */
+test("stop / close: 再生の入口の時間軸・復号入力の対応表・映像の表示待ちを捨てる", async () => {
+  // stop (再 start 可能な停止) と close (終端) は同じ解放 (disposeAllResources) を通る
+  for (const method of ["stop", "close"] as const) {
+    const subscriber = new MediaSubscriberImpl(
+      "moqt://example.com/live",
+      { namespace: ["live"], audio: {}, video: {} },
+      {},
+    );
+    const control = subscriber as unknown as SubscriberLifecycleControl & {
+      handleVideoDecodedData(data: { frame: VideoFrame }): void;
+    };
+    // stop は "active" からのみ呼べる。close も同じ解放を通る
+    control.currentState = "active";
+    injectLifecycleResources(control);
+    fillStopRuntimeState(control);
+
+    // 計器の累積と受信側の追いつきの観測に値を入れる。clearAll はこれらを残すため、
+    // 停止直後の統計に同じ値が現れることを確かめる
+    playoutAudioTimingOf(control).recordPlay(0, null, 10, 20, "arrival");
+    playoutAudioCatchUpOf(control).observe({
+      nowMs: 1_000,
+      lagMs: 150,
+      durationMs: 20,
+      timestampMicros: 1_000_000,
+    });
+    assert.equal(
+      subscriber.getStats().audio?.playoutTiming.playedFrames,
+      1,
+      `${method}: 停止前は計器に鳴らした音があること`,
+    );
+    assert.equal(
+      subscriber.getStats().audio?.playoutCatchUp.lagMs,
+      150,
+      `${method}: 停止前は追いつきの観測があること`,
+    );
+
+    // 時間軸に映像の観測を入れ、表示の遅れを決められる状態にする。停止後に観測が消えた
+    // ことは presentationDelayMs が null に戻ることで確かめる
+    const observedWallClockMs = performance.timeOrigin + performance.now();
+    const timestampMicros = wallClockTimestampMicrosOf(observedWallClockMs);
+    playoutTimelineOf(control).observe("video", observedWallClockMs, timestampMicros);
+    control.playout.setTargetLatencyMs(AV_SYNC_TARGET_LATENCY_MS);
+    assert.isNotNull(
+      playoutTimelineOf(control).presentationDelayMs,
+      `${method}: 停止前は時間軸に観測があること`,
+    );
+
+    // 復号へ渡した入力の対応表 (音声・映像) に記録を残す
+    control.playout.trackAudioDecodeInput(timestampMicros, { timestampKind: "wallClock" });
+    control.playout.trackVideoDecodeInput(timestampMicros, {
+      timestampKind: "wallClock",
+      location: { group: 0n, object: 0n },
+    });
+    assert.equal(playoutAudioInputsOf(control).size, 1, `${method}: 音声の対応表に記録があること`);
+    assert.equal(playoutVideoInputsOf(control).size, 1, `${method}: 映像の対応表に記録があること`);
+
+    // 映像の表示待ちに 1 枚積む。表示時刻が未来になるよう targetLatency を設定してある。
+    // 表示周期の予約 (requestAnimationFrame) とその取り消し (cancelAnimationFrame) は
+    // node 環境に無いため、解放で予約を取り消すところまで差し替えて受ける
+    installAnimationFrameRecorder();
+    try {
+      const { frame } = createTimestampedRecordingFrame(timestampMicros);
+      control.handleVideoDecodedData({ frame });
+      assert.equal(
+        control.playout.getStats().video?.queuedFrames,
+        1,
+        `${method}: 停止前は映像の表示待ちに 1 枚あること`,
+      );
+      // 積んだフレームは復号へ渡した入力の記録を 1 件引くため、映像の対応表が空になることを
+      // 停止前後で比べられるよう、別の TIMESTAMP の記録を残し直す
+      control.playout.trackVideoDecodeInput(timestampMicros + 1_000_000, {
+        timestampKind: "wallClock",
+        location: { group: 0n, object: 1n },
+      });
+      assert.equal(
+        playoutVideoInputsOf(control).size,
+        1,
+        `${method}: 映像の対応表に記録があること`,
+      );
+
+      if (method === "stop") {
+        await subscriber.stop();
+      } else {
+        await subscriber.close();
+      }
+    } finally {
+      restoreAnimationFrame();
+      clearPendingAnimationFrame();
+    }
+
+    // 復号へ渡した入力の対応表・時間軸・映像の表示待ちが捨てられていること
+    assert.equal(playoutAudioInputsOf(control).size, 0, `${method}: 音声の対応表を捨てること`);
+    assert.equal(playoutVideoInputsOf(control).size, 0, `${method}: 映像の対応表を捨てること`);
+    assert.isNull(playoutTimelineOf(control).presentationDelayMs, `${method}: 時間軸を捨てること`);
+    assert.equal(
+      control.playout.getStats().video?.queuedFrames,
+      0,
+      `${method}: 映像の表示待ちを捨てること`,
+    );
+    // 計器の累積と受信側の追いつきの観測は、停止直後の統計として残っていること
+    const audioStatsAfterStop = subscriber.getStats().audio;
+    assert.equal(
+      audioStatsAfterStop?.playoutTiming.playedFrames,
+      1,
+      `${method}: 計器の累積 (鳴らした音の数) を残すこと`,
+    );
+    assert.equal(
+      audioStatsAfterStop?.playoutTiming.playedMs,
+      20,
+      `${method}: 計器の累積 (鳴らした長さ) を残すこと`,
+    );
+    assert.equal(
+      audioStatsAfterStop?.playoutCatchUp.lagMs,
+      150,
+      `${method}: 追いつきの観測を残すこと`,
+    );
+  }
 });
 
 /**

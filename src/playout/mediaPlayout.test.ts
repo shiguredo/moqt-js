@@ -2,16 +2,23 @@
  * 再生の入口 (`MediaPlayout`) の単体テスト
  *
  * WebCodecs の `AudioData` / `VideoFrame` はブラウザにしか無いため、このファイルでは
- * 「時間軸・計器・セッションの組み立て」「統計」「設定」「ライフサイクル」を実クラスで
- * 検証する。実 `AudioData` / `VideoFrame` / `AudioContext` を使う再生の経路は
+ * 「時間軸・計器・セッションの組み立て」「統計」「設定と検証」「状態の破棄」「ライフサイクル」を
+ * 実クラスで検証する。実 `AudioData` / `VideoFrame` / `AudioContext` を使う再生の経路は
  * tests/e2e の playout のスペックが担当する。
  */
 
 import { test, assert } from "vite-plus/test";
+import { AudioPlayoutSession } from "./audioPlayoutSession";
 import { AudioPlayoutTimingStats } from "./audioPlayoutTimingStats";
-import { createMediaPlayout, MediaPlayout } from "./mediaPlayout";
+import { AudioDecodeInputs } from "./decodeInputTimestamps";
+import { createMediaPlayout, type MediaPlayout } from "./mediaPlayout";
+import { PlayoutTimeline } from "./timeline";
+import {
+  VideoDecodeInputs,
+  VideoPlayoutSession,
+  type VideoPlayoutOutput,
+} from "./videoPlayoutSession";
 import type { AudioPlayoutContext } from "./audioPlayoutSession";
-import type { VideoPlayoutOutput } from "./videoPlayoutSession";
 
 /**
  * 映像の出し先
@@ -28,9 +35,28 @@ function createVideoOutput(): VideoPlayoutOutput {
   };
 }
 
-/** 映像を表示する構成 (音声なし) の入口を作る */
+/** 映像を構成する入口 (音声なし) */
 function createVideoPlayout(): MediaPlayout {
   return createMediaPlayout({ video: { output: createVideoOutput() } });
+}
+
+/**
+ * 入口の内部状態を読む
+ *
+ * 状態の破棄は公開 API から観測できない (統計は意図的に残す) ため、テストの中だけで
+ * 内部の形へキャストして確かめる。
+ */
+interface MediaPlayoutInternals {
+  readonly timeline: PlayoutTimeline;
+  readonly audioInputs: AudioDecodeInputs;
+  readonly videoInputs: VideoDecodeInputs;
+  readonly audio: { readonly session: AudioPlayoutSession } | null;
+  readonly video: { readonly session: VideoPlayoutSession } | null;
+}
+
+/** 入口の内部状態を読む (テストの中だけで使う) */
+function internalsOf(playout: MediaPlayout): MediaPlayoutInternals {
+  return playout as unknown as MediaPlayoutInternals;
 }
 
 test("createMediaPlayout: 音声も映像も指定しないとエラーになる", () => {
@@ -48,10 +74,43 @@ test("createMediaPlayout: 音声の context だけを指定するとエラーに
   );
 });
 
+test("createMediaPlayout: 範囲外の数値オプションはエラーになる", () => {
+  // 負の maxQueuedFrames は PlayoutBuffer の追い出しが終わらず、最初の pushVideo で
+  // 固まる。数値の設定は入口で弾く (preDecodeDelayMs の検証と同じ方針)
+  assert.throws(
+    () => createMediaPlayout({ audio: {}, maxQueuedFrames: -1 }),
+    /maxQueuedFrames must be an integer >= 1, got -1/,
+  );
+  assert.throws(
+    () => createMediaPlayout({ audio: {}, maxQueuedFrames: 0 }),
+    /maxQueuedFrames must be an integer >= 1/,
+  );
+  assert.throws(
+    () => createMediaPlayout({ audio: {}, maxQueuedFrames: 1.5 }),
+    /maxQueuedFrames must be an integer >= 1/,
+  );
+  assert.throws(
+    () => createMediaPlayout({ audio: {}, maxQueuedFrames: Number.NaN }),
+    /maxQueuedFrames must be an integer >= 1/,
+  );
+  assert.throws(
+    () => createMediaPlayout({ audio: {}, decodeInputs: { maxTracked: 0 } }),
+    /decodeInputs.maxTracked must be an integer >= 1/,
+  );
+  assert.throws(
+    () => createMediaPlayout({ audio: {}, intentionalDelayMs: -1 }),
+    /intentionalDelayMs must be a finite number >= 0/,
+  );
+  assert.throws(
+    () => createMediaPlayout({ audio: {}, targetLatencyMs: -5 }),
+    /targetLatencyMs must be a finite number >= 0/,
+  );
+});
+
 test("getStats: 音声だけの構成では映像と同期の推定値を返さない", () => {
   const playout = createMediaPlayout({ audio: {} });
   const stats = playout.getStats();
-  // 音声の統計は返す (鳴らす先が無くても計器は持つ)
+  // 音声を構成していれば、鳴らす先が無くても計器と統計は返す
   assert.isNotNull(stats.audio);
   assert.isNull(stats.video);
   // 揃える相手がいないため、同期の推定値は作らない
@@ -79,6 +138,78 @@ test("getStats: 時間軸を使わない構成では同期の推定値を返さ�
   assert.isNull(playout.getStats().avSync);
 });
 
+test("maxQueuedFrames: 映像の表示待ちのキューの上限へ渡す", () => {
+  // 公開オプションの上限が時間軸だけでなく映像のキューにも効くことを固定する。片方だけに
+  // 渡すと、devtools が jitter buffer 無効時に指定する 12 枚が効かなくなる
+  const playout = createMediaPlayout({
+    video: { output: createVideoOutput() },
+    maxQueuedFrames: 2,
+  });
+  const session = internalsOf(playout).video?.session;
+  assert.isNotNull(session);
+  // 表示待ちのバッファをテストの中だけで直接駆動する (VideoFrame は Node に無いため、
+  // バッファが読む timestamp と close だけを持つ最小のオブジェクトを渡す)
+  const buffer = session as unknown as {
+    playout: {
+      readonly size: number;
+      enqueue(frame: VideoFrame, timestampMicros: number | null): VideoFrame[];
+    };
+  };
+  const evicted: VideoFrame[] = [];
+  for (let index = 0; index < 3; index++) {
+    const frame = {
+      timestamp: 1_000_000 + index,
+      close: () => undefined,
+    } as unknown as VideoFrame;
+    evicted.push(...buffer.playout.enqueue(frame, null));
+  }
+  // 上限 2 枚を超えた 1 枚が追い出される (既定 24 のままなら 3 枚とも残る)
+  assert.strictEqual(buffer.playout.size, 2);
+  assert.strictEqual(evicted.length, 1);
+});
+
+test("drainAudio: 待ちの条件と flush の件数をセッションへ渡す", async () => {
+  // 転送が落ちると、flush した Object の復号出力を待たずに停止が返る。待ちの上限まで
+  // 待ったことと、flush の件数・未復号の件数が統計へ出ることを固定する
+  const playout = createMediaPlayout({ audio: {} });
+  const result = await playout.drainAudio({
+    maxWaitMs: 40,
+    flushedObjects: 2,
+    isFlushSettled: () => false,
+    remainingFlushedObjects: () => 1,
+  });
+  assert.strictEqual(result.flushedObjects, 2);
+  assert.strictEqual(result.undecodedFlushedObjects, 1);
+  assert.isAtLeast(result.waitedMs, 20);
+  assert.strictEqual(result.pendingMsAtStart, 0);
+});
+
+test("decodeInputs: 上限と重複の扱いを音声と映像の対応表へ渡す", () => {
+  // 既定値を固定する変異で全テストが通らないよう、上限と forgetOnDuplicate が両方の
+  // 対応表へ届くことを固定する
+  const playout = createMediaPlayout({
+    audio: {},
+    video: { output: createVideoOutput() },
+    decodeInputs: { maxTracked: 2, forgetOnDuplicate: true },
+  });
+  const internals = internalsOf(playout);
+  for (let index = 0; index < 3; index++) {
+    playout.trackAudioDecodeInput(1_000_000 + index, { timestampKind: "wallClock" });
+  }
+  for (let index = 0; index < 3; index++) {
+    playout.trackVideoDecodeInput(2_000_000 + index, {
+      timestampKind: "wallClock",
+      location: { group: BigInt(index), object: 1n },
+    });
+  }
+  // 上限 2 件を超えた分は古い方から忘れる
+  assert.strictEqual(internals.audioInputs.size, 2);
+  assert.strictEqual(internals.videoInputs.size, 2);
+  // 同じ TIMESTAMP の記録が重なったら、その TIMESTAMP の分を忘れる
+  playout.trackAudioDecodeInput(1_000_002, { timestampKind: "mediaTime" });
+  assert.strictEqual(internals.audioInputs.size, 1);
+});
+
 test("getStats: 音声と映像の両方で時間軸を使うときは同期の推定値を返す", () => {
   const playout = createMediaPlayout({
     audio: {},
@@ -104,29 +235,35 @@ test("setTargetLatencyMs: 目標の遅延と音声の閉ループの上限へ反
     targetLatencyMs: 300,
   });
   // 構築時に渡した値が同期の推定値と閉ループの上限の両方へ入る
-  // (draft-ietf-moq-msf-01 §5.2.8 の MUST: 同じ render group の track は同じ値)
   assert.strictEqual(playout.getStats().avSync?.targetLatencyMs, 300);
-  assert.strictEqual(playout.getAudioDelayFeedback().ceilingMs, 300);
+  assert.strictEqual(playout.getStats().audio?.delayFeedback.ceilingMs, 300);
 
   // 購読の途中で catalog の値が変わったときも同じ経路で変えられる
   playout.setTargetLatencyMs(500);
   assert.strictEqual(playout.getStats().avSync?.targetLatencyMs, 500);
-  assert.strictEqual(playout.getAudioDelayFeedback().ceilingMs, 500);
+  assert.strictEqual(playout.getStats().audio?.delayFeedback.ceilingMs, 500);
 
   // null は目標を使わない (宣言が無い) ことを意味する
   playout.setTargetLatencyMs(null);
   assert.isNull(playout.getStats().avSync?.targetLatencyMs);
-  assert.isNull(playout.getAudioDelayFeedback().ceilingMs);
+  assert.isNull(playout.getStats().audio?.delayFeedback.ceilingMs);
+
+  // 負の値は受け付けない (表示の遅れが負になる)
+  assert.throws(
+    () => playout.setTargetLatencyMs(-1),
+    /targetLatencyMs must be a finite number >= 0, got -1/,
+  );
 });
 
-test("getAudioDelayFeedback: 音声を観測していないときは初期値の内訳を返す", () => {
+test("getStats: 音声の閉ループの内訳を delayFeedback として返す", () => {
   const playout = createMediaPlayout({ audio: {} });
-  const feedback = playout.getAudioDelayFeedback();
+  const feedback = playout.getStats().audio?.delayFeedback;
+  assert.isNotNull(feedback);
   // 目標を動かした回数は 0、上限の指定は無い
-  assert.strictEqual(feedback.adjustments, 0);
-  assert.isNull(feedback.ceilingMs);
+  assert.strictEqual(feedback?.adjustments, 0);
+  assert.isNull(feedback?.ceilingMs ?? null);
   // 適用する目標は、揺らぎから求めた値以上になる (初期値でも 0 未満にはならない)
-  assert.isAtLeast(feedback.appliedMs, 0);
+  assert.isAtLeast(feedback?.appliedMs ?? -1, 0);
 });
 
 test("drainAudio: 音声を使わない構成では待たずに 0 を返す", async () => {
@@ -137,12 +274,36 @@ test("drainAudio: 音声を使わない構成では待たずに 0 を返す", as
   assert.strictEqual(result.waitedMs, 0);
 });
 
-test("drainAudio: 音声を使って予約が無いときはすぐに終わる", async () => {
+test("drainAudio: 音声を使って予約が無いときは待たずに終わる", async () => {
   const playout = createMediaPlayout({ audio: {} });
   const result = await playout.drainAudio();
   assert.strictEqual(result.pendingMsAtStart, 0);
   assert.strictEqual(result.cutMs, 0);
+  // 予約が無いので、上限まで待たずにすぐ終わる (待ちの上限候補は返る)
+  assert.isAtLeast(result.requestedMs, 0);
+  assert.isBelow(result.waitedMs, 50);
+  assert.strictEqual(result.flushedObjects, 0);
   assert.strictEqual(result.undecodedFlushedObjects, 0);
+});
+
+test("drainAudio: 待ちの上限の不正な値はエラーになる", async () => {
+  // NaN を通すと待ちの判定が常に偽になり、停止が返らなくなる
+  const playout = createMediaPlayout({ audio: {} });
+  // Chai の assert には rejects が無いため、reject を捕まえて確かめる
+  const capture = async (run: () => Promise<unknown>): Promise<Error | null> => {
+    try {
+      await run();
+      return null;
+    } catch (error) {
+      return error instanceof Error ? error : new Error(String(error));
+    }
+  };
+  const nanError = await capture(() => playout.drainAudio({ maxWaitMs: Number.NaN }));
+  assert.isNotNull(nanError);
+  assert.match(nanError?.message ?? "", /maxWaitMs must be a finite number >= 0/);
+  const negativeError = await capture(() => playout.drainAudio({ maxWaitMs: -1 }));
+  assert.isNotNull(negativeError);
+  assert.match(negativeError?.message ?? "", /maxWaitMs must be a finite number >= 0/);
 });
 
 test("getStats: 渡した計器へ記録した内容を同じ窓で返す", () => {
@@ -163,22 +324,108 @@ test("getStats: 渡した計器へ記録した内容を同じ窓で返す", () =
   assert.isNull(stats.audio?.catchUp.lagMs);
 });
 
-test("reset: 計器と時間軸の状態を持ったまま呼んでも壊れない", () => {
+test("clearAll: 時間軸・復号入力の対応表・映像待ちを捨て、計器の累積は残す", () => {
   const timing = new AudioPlayoutTimingStats(10_000, performance.timeOrigin);
   const playout = createMediaPlayout({
     audio: { timing },
     video: { output: createVideoOutput() },
   });
-  // 復号前の遅延を変えたときの基準の取り直しは、実際に観測がある状態で呼ばれる。
-  // ここでは、観測が無い状態でも例外を投げず、消えるものが消えることだけを確かめる
-  assert.doesNotThrow(() => {
-    playout.reset();
-    playout.resetAudioStream();
-    playout.recordAudioStopped();
-    playout.clearVideo();
-    playout.releaseAudioContext();
-    playout.setAudioOutput(null);
+  const internals = internalsOf(playout);
+  playout.trackAudioDecodeInput(1_000_000, { timestampKind: "wallClock" });
+  playout.trackVideoDecodeInput(2_000_000, {
+    timestampKind: "wallClock",
+    location: { group: 1n, object: 2n },
   });
-  // 計器の累積は reset では消えない (購読の統計として引き継ぐ)
-  assert.strictEqual(timing.snapshot(performance.now()).playedFrames, 0);
+  timing.recordPlay(0, 50, 50, 20, "timestamp");
+  // 時間軸の世代を進めておく (observe の有無を世代で観測できる)
+  internals.timeline.observe("audio", 10_000, 1_000_000);
+  const generation = internals.timeline.generation;
+
+  playout.clearAll();
+
+  // 復号へ渡した入力の対応表と時間軸が初期化される
+  assert.strictEqual(internals.audioInputs.size, 0);
+  assert.strictEqual(internals.videoInputs.size, 0);
+  assert.notStrictEqual(internals.timeline.generation, generation);
+  // 計器の累積は停止直後の統計として残る
+  assert.strictEqual(playout.getStats().audio?.timing.playedFrames, 1);
+});
+
+test("resetPlayout: 映像の対応表と時間軸・追いつきの観測を取り直す", () => {
+  const playout = createMediaPlayout({
+    audio: {},
+    video: { output: createVideoOutput() },
+  });
+  const internals = internalsOf(playout);
+  playout.trackVideoDecodeInput(2_000_000, {
+    timestampKind: "wallClock",
+    location: { group: 1n, object: 2n },
+  });
+  // 追いつきの観測を 1 件入れる (観測は lagMs に現れる)
+  internals.audio?.session.catchUp.observe({
+    nowMs: 1_000,
+    lagMs: 100,
+    durationMs: 20,
+    timestampMicros: 900_000,
+  });
+  const generation = internals.timeline.generation;
+
+  playout.resetPlayout();
+
+  assert.strictEqual(internals.videoInputs.size, 0);
+  assert.notStrictEqual(internals.timeline.generation, generation);
+  assert.isNull(playout.getStats().audio?.catchUp.lagMs);
+});
+
+test("resetAudioPlayback: 音声の予約の基準と追いつきの観測を取り直す", () => {
+  const playout = createMediaPlayout({ audio: {} });
+  const internals = internalsOf(playout);
+  internals.audio?.session.catchUp.observe({
+    nowMs: 1_000,
+    lagMs: 100,
+    durationMs: 20,
+    timestampMicros: 900_000,
+  });
+  assert.strictEqual(playout.getStats().audio?.catchUp.lagMs, 100);
+
+  playout.resetAudioPlayback();
+
+  assert.isNull(playout.getStats().audio?.catchUp.lagMs);
+});
+
+test("track*: 構成していない media への記録は何もしない", () => {
+  // 映像なしの入口で音声の記録は残るが、音声なしの入口では映像の記録は残らない
+  const audioOnly = createMediaPlayout({ audio: {} });
+  audioOnly.trackAudioDecodeInput(1_000_000, { timestampKind: "wallClock" });
+  assert.strictEqual(internalsOf(audioOnly).audioInputs.size, 1);
+
+  const videoOnly = createVideoPlayout();
+  videoOnly.trackAudioDecodeInput(1_000_000, { timestampKind: "wallClock" });
+  videoOnly.trackVideoDecodeInput(2_000_000, {
+    timestampKind: "wallClock",
+    location: { group: 1n, object: 2n },
+  });
+  assert.strictEqual(internalsOf(videoOnly).audioInputs.size, 0);
+  assert.strictEqual(internalsOf(videoOnly).videoInputs.size, 1);
+});
+
+test("setAudioOutput: 音声を構成していない入口ではエラーになる", () => {
+  // 音声を構成していないのに出力を付けても、pushAudio は何もしない。黙って受け取らずに
+  // 設定の誤りとして返す
+  const playout = createVideoPlayout();
+  assert.throws(
+    () => playout.setAudioOutput(null),
+    /audio is not configured: pass MediaPlayoutOptions.audio/,
+  );
+});
+
+test("setIntentionalDelayMs: 負の値はエラーになる", () => {
+  const playout = createMediaPlayout({ audio: {} });
+  assert.throws(
+    () => playout.setIntentionalDelayMs(-1),
+    /intentionalDelayMs must be a finite number >= 0/,
+  );
+  // 0 以上は受け付ける
+  assert.doesNotThrow(() => playout.setIntentionalDelayMs(0));
+  assert.doesNotThrow(() => playout.setIntentionalDelayMs(250));
 });

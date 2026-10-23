@@ -28,8 +28,9 @@ import {
   JITTER_BUFFER_MAX_QUEUED_FRAMES,
   createMediaPlayout,
   type MediaPlayout,
-  type MediaPlayoutAdmitAudioInput,
-  type MediaPlayoutAdmitVideoInput,
+  type MediaPlayoutAudioDecodeInput,
+  type MediaPlayoutAudioStats,
+  type MediaPlayoutVideoDecodeInput,
 } from "moqt-js";
 import { addLog } from "../signals/debugLog";
 import type { TrackEndState } from "../types";
@@ -382,15 +383,43 @@ interface AudioPlayback {
 /**
  * 音声の再生の累積の計器 (時間圧縮・補間)
  *
- * 再生の入口 (MediaPlayout) の AudioPlayoutSession は、AudioContext を作り直しても購読の
- * 統計として累積を引き継ぐ (ライブラリの createMediaSubscriber と同じ)。devtools の画面は
+ * 再生の入口 (MediaPlayout) は、AudioContext を作り直しても購読の統計として累積を
+ * 引き継ぐ (ライブラリの createMediaSubscriber と同じ)。devtools の画面は
  * 再生を始めるたびに 0 から数えていたため、再生を始めた時点の値を覚えておき、表示する
  * ときに差を出す
  */
-interface AudioPlayoutCumulative {
+export interface AudioPlayoutCumulative {
   compressedMs: number;
   concealedMs: number;
   concealments: number;
+}
+
+/**
+ * 音声の再生の累積の計器の差を求める
+ *
+ * 累積は再生の入口の統計として AudioContext の作り直しをまたいで引き継がれるため、画面へ
+ * 出す値は再生を始めた時点 (baseline) からの差にする。baseline が null (入口を作り直した
+ * 直後で、まだ再生を始めていない) のときは累積をそのまま返す。ミリ秒は画面の表示に合わせて
+ * 整数へ丸め、回数はそのまま返す。
+ *
+ * テストから呼べるよう export する (パッケージ公開 API ではない)。
+ */
+export function subtractAudioPlayoutCumulative(
+  cumulative: AudioPlayoutCumulative,
+  baseline: AudioPlayoutCumulative | null,
+): AudioPlayoutCumulative {
+  if (baseline === null) {
+    return {
+      compressedMs: Math.round(cumulative.compressedMs),
+      concealedMs: Math.round(cumulative.concealedMs),
+      concealments: cumulative.concealments,
+    };
+  }
+  return {
+    compressedMs: Math.round(cumulative.compressedMs - baseline.compressedMs),
+    concealedMs: Math.round(cumulative.concealedMs - baseline.concealedMs),
+    concealments: cumulative.concealments - baseline.concealments,
+  };
 }
 
 /**
@@ -508,6 +537,11 @@ export function resetSubscriberStats(instance: sub.SubscriberInstance): void {
   instance.audioWaveformRight.value = null;
   instance.audioPlayoutRebases.value = 0;
   instance.audioPlayoutDrops.value = 0;
+  // 音を加工した量 (時間圧縮と補間) は 500 ms の反映でしか更新しないため、購読を始めた
+  // 時点で戻さないと前の購読の値が次の購読の最初まで残る
+  instance.audioPlayoutCompressedMs.value = 0;
+  instance.audioPlayoutConcealedMs.value = 0;
+  instance.audioPlayoutConcealments.value = 0;
   instance.audioPlayoutTiming.value = EMPTY_AUDIO_PLAYOUT_TIMING;
   instance.audioHostDelay.value = EMPTY_HOST_DELAY;
   instance.audioDelayFeedback.value = sub.EMPTY_AUDIO_DELAY_FEEDBACK;
@@ -862,7 +896,15 @@ export function useSubscriber(
   const chainRef = useRef<Promise<void>>(Promise.resolve());
   // 音声 object の順次処理用 Promise チェーン (映像とは独立させる)
   const audioChainRef = useRef<Promise<void>>(Promise.resolve());
-  // 受信した音声を再生するための audio graph (トグル有効時のみ非 null)
+  // 受信した音声を再生するための audio graph (トグル有効時のみ非 null)。トグルは購読前から
+  // 押せるため、購読していない間は入口が無いまま AudioContext だけを作れる。
+  //
+  // 不変条件: 再生の入口 (mediaPlayoutRef.current) がある間は、非 null ならその入口に同じ
+  // AudioContext が鳴らす先として付いている。例外は 2 つだけである。再生を始めている途中
+  // (AudioContext を作ってから呼び出し側が setAudioOutput するまで) と、停止の drain の
+  // 途中に入口が作り直された場合で、後者は閉じる Context を新しい入口へ付けないため、非
+  // null でも入口には付いていない期間がある (closeAudioContext が古い入口から外し、drain が
+  // 終わると null に戻る)。
   const audioPlaybackRef = useRef<AudioPlayback | null>(null);
   // 再生開始の進行中フラグ。連打で AudioContext を二重に作らないための再入ガード
   const audioPlaybackPendingRef = useRef(false);
@@ -891,10 +933,6 @@ export function useSubscriber(
   // ことで、同じ式の表示時刻で揃える
   const mediaPlayoutRef = useRef<MediaPlayout | null>(null);
   const jitterBufferEnabledRef = useRef(false);
-  // 音声だけを購読しているか。映像の時間軸が無いため目標の開始時刻を守らず、到着基準で
-  // 並べる (ライブラリの `createMediaSubscriber` の `enforceTarget` と同じ規則)。
-  // jitter buffer と受信側の追いつきは音声だけでも使う
-  const audioOnlyPlaybackRef = useRef(false);
   // 直前の同期の状態 (基準を共有できているかとその理由)。変わったときだけログに残す
   const avSyncStateRef = useRef<AvSyncState | null>(null);
   // relay の cache から追いつく途中かどうかを、SUBSCRIBE_OK の LARGEST_OBJECT を境界に
@@ -947,7 +985,7 @@ export function useSubscriber(
   const audioDecodeFlushMarksRef = useRef<boolean[]>([]);
   // flush の間に復号チェーンへ積んだ Object に印を付けるか
   const capturingAudioFlushRef = useRef(false);
-  // 音声の再生を始めた時点の累積の計器。再生の入口の AudioPlayoutSession は AudioContext を
+  // 音声の再生を始めた時点の累積の計器。再生の入口 (MediaPlayout) は AudioContext を
   // 作り直しても累積を引き継ぐため、画面へ出す値はこの時点からの差にする
   const audioPlayoutStatsBaselineRef = useRef<AudioPlayoutCumulative | null>(null);
 
@@ -958,12 +996,13 @@ export function useSubscriber(
    * 表示を終える (判定できないまま「Catching up」を出し続けない)。鳴らす側に倒す
    * (src/catchUpGate.ts)。
    */
-  function admitAudioPlayout(input: MediaPlayoutAdmitAudioInput | null): boolean {
+  function admitAudioPlayout(input: MediaPlayoutAudioDecodeInput | null): boolean {
     const instance = sub.getSubscriber(subscriberId);
     if (!instance) {
       return true;
     }
-    if (input === null || input.location === null) {
+    // 位置は省略できる (測れなかった値は省略してよい)。位置が無い音は境界と比べられない
+    if (input === null || input.location === undefined || input.location === null) {
       markCatchUpUndecided(instance, audioCatchUpGateRef.current);
       return true;
     }
@@ -977,7 +1016,7 @@ export function useSubscriber(
    * 表示を終える (判定できないまま「Catching up」を出し続けない)。描く側に倒す
    * (src/catchUpGate.ts)。
    */
-  function admitVideoPlayout(input: MediaPlayoutAdmitVideoInput | null): boolean {
+  function admitVideoPlayout(input: MediaPlayoutVideoDecodeInput | null): boolean {
     const instance = sub.getSubscriber(subscriberId);
     if (!instance) {
       return true;
@@ -989,9 +1028,14 @@ export function useSubscriber(
     return admitPresentFrame(instance, input.location);
   }
 
-  /** 音声の再生の累積の計器を読む (再生の入口が無いときは null) */
-  function readAudioPlayoutCumulative(): AudioPlayoutCumulative | null {
-    const audio = mediaPlayoutRef.current?.getStats().audio ?? null;
+  /**
+   * 音声の再生の累積の計器を、入口の統計から取り出す (音声を構成していないときは null)
+   *
+   * @param audio - `MediaPlayout.getStats().audio`。周期の先頭で 1 回だけ読んだ値を渡す
+   */
+  function readAudioPlayoutCumulative(
+    audio: MediaPlayoutAudioStats | null,
+  ): AudioPlayoutCumulative | null {
     if (audio === null) {
       return null;
     }
@@ -1003,6 +1047,31 @@ export function useSubscriber(
   }
 
   /**
+   * 音声を加工した量 (時間圧縮と補間) を signal へ写す
+   *
+   * ノイズの切り分けに使う。累積は購読の統計として AudioContext の作り直しをまたいで
+   * 引き継がれるため、再生を始めた時点の値を引いて、再生ごとに 0 から数えていた今の表示に
+   * 合わせる。復号の出力ごとに読むと音声の出力 1 つごとに入口の統計を組み立て直すことになる
+   * ため、500 ms の反映に合わせる (音を加工した量は、この周期で読んでも遅れない)
+   */
+  function publishAudioPlayoutCumulative(
+    instance: sub.SubscriberInstance,
+    audio: MediaPlayoutAudioStats | null,
+  ): void {
+    const cumulative = readAudioPlayoutCumulative(audio);
+    if (cumulative === null) {
+      return;
+    }
+    const difference = subtractAudioPlayoutCumulative(
+      cumulative,
+      audioPlayoutStatsBaselineRef.current,
+    );
+    instance.audioPlayoutCompressedMs.value = difference.compressedMs;
+    instance.audioPlayoutConcealedMs.value = difference.concealedMs;
+    instance.audioPlayoutConcealments.value = difference.concealments;
+  }
+
+  /**
    * 購読を始めるときに、音声と映像の再生の入口を作り直す
    *
    * 時間軸 (jitter buffer) の有効・無効は購読を始めた時点の設定で決める (購読中は設定を
@@ -1010,24 +1079,29 @@ export function useSubscriber(
    * ことで、同じ式の表示時刻で揃える。音声だけの購読では映像の表示の組み立てを含めない
    * (揃える相手がいない音声の並べ方を入口が選ぶ)。
    *
-   * @param options - 映像を含めるか、jitter buffer の有効・無効、表示待ちの上限、
-   *   catalog の targetLatency
+   * 表示待ちのキューの上限 (`maxQueuedFrames`) は、呼び出し側が先に立てておく
+   * `jitterBufferEnabledRef` から決める (時間軸の有効・無効と必ず同じ値を使うため、
+   * 引数では受け取らない)。
+   *
+   * @param options - 映像を含めるか、jitter buffer の有効・無効、catalog の targetLatency
    */
   function createSubscriberMediaPlayout(options: {
     video: boolean;
     jitterBuffer: boolean;
-    maxQueuedFrames: number;
     targetLatencyMs: number | null;
-  }): MediaPlayout {
+  }): void {
     // 前の購読の映像の表示 (予約した表示と表示待ち) を捨てる
-    mediaPlayoutRef.current?.clearVideo();
+    mediaPlayoutRef.current?.clearVideoQueue();
     // 累積の計器は作り直した入口の値 (0) から数える
     audioPlayoutStatsBaselineRef.current = null;
     const playback = audioPlaybackRef.current;
     const playout = createMediaPlayout({
       jitterBuffer: options.jitterBuffer,
-      maxQueuedFrames: options.maxQueuedFrames,
-      timeOriginMs: performance.timeOrigin,
+      // jitter buffer が無効のときは、到着と復号のゆらぎを吸収するだけの小さな上限にする
+      // (時間軸が許す表示の遅れの上限もこの値から決まる)
+      maxQueuedFrames: jitterBufferEnabledRef.current
+        ? JITTER_BUFFER_MAX_QUEUED_FRAMES
+        : MAX_PENDING_FRAMES,
       targetLatencyMs: options.targetLatencyMs,
       // 復号の出力で入力が引けなかった音に使う、意図した復号前の遅延。購読中に設定が
       // 変わったときは setIntentionalDelayMs で更新する
@@ -1068,12 +1142,13 @@ export function useSubscriber(
           }
         : null,
     });
-    // 再生中の AudioContext があれば、作り直した入口へ鳴らす先を付ける
-    if (playback !== null) {
+    // 再生中の AudioContext があれば、作り直した入口へ鳴らす先を付ける。停止の drain の
+    // 途中なら、その AudioContext はまもなく閉じるため付けない (付け直すと、閉じる Context を
+    // 新しい入口が掴んだままになり、次の音を閉じた Context へ予約してしまう)
+    if (playback !== null && !audioStopRef.current.isStopping) {
       playout.setAudioOutput({ context: playback.context, destination: playback.destination });
     }
     mediaPlayoutRef.current = playout;
-    return playout;
   }
 
   /**
@@ -1169,9 +1244,9 @@ export function useSubscriber(
    * 変更後の最初の復号出力を復号器の詰まりと誤判定する。
    */
   function resetPlayoutTimingForPreDecodeChange(): void {
-    // 時間軸の基準・映像の表示待ち・音声の追いつきの観測をまとめて消す (再生の入口の reset)。
-    // 音声と映像のどちらも、変更後の遅延ですぐに並べ直す
-    mediaPlayoutRef.current?.reset();
+    // 時間軸の基準・映像の表示待ち・音声の追いつきの観測をまとめて消す
+    // (再生の入口の resetPlayout)。音声と映像のどちらも、変更後の遅延ですぐに並べ直す
+    mediaPlayoutRef.current?.resetPlayout();
   }
 
   /**
@@ -1238,23 +1313,6 @@ export function useSubscriber(
   }
 
   /**
-   * 同期の 5 項目の今の値をまとめる
-   *
-   * jitter buffer が無効のときは映像を時間軸へ記録せず、音声も到着基準で並べるため、
-   * 同期の推定として意味を持たない。このときは既定値に固定する (有効に戻ると、
-   * 作り直した時間軸で推定をやり直す)。
-   */
-  function currentAvSyncSnapshot(): sub.AvSyncSnapshot {
-    // 音声だけの購読では映像が無く、同期の推定として意味を持たない
-    if (!jitterBufferEnabledRef.current || audioOnlyPlaybackRef.current) {
-      return sub.EMPTY_AV_SYNC;
-    }
-    // 時間軸・音声の計器・映像の計器・音声の時計の対応は再生の入口が持つ。音声を再生して
-    // いない間は入口が audioClockFallback を false で返す
-    return mediaPlayoutRef.current?.getStats().avSync ?? sub.EMPTY_AV_SYNC;
-  }
-
-  /**
    * 基準を共有できているかが変わったら、内訳と一緒にログへ残す
    *
    * 2 つのトラックを別々の時計として扱い始めた (戻った) 時点が、A/V のずれが広がる
@@ -1281,8 +1339,6 @@ export function useSubscriber(
    */
   function startPlayoutTiming(tracks: CatalogMediaTracks): void {
     stopPlayoutTiming();
-    // 映像の時間軸を作る購読では、音声は映像に合わせて目標の開始時刻を守る
-    audioOnlyPlaybackRef.current = false;
     playoutTimingRef.current.reset();
     const enabled = settings.jitterBufferEnabled.value;
     jitterBufferEnabledRef.current = enabled;
@@ -1291,19 +1347,19 @@ export function useSubscriber(
     createSubscriberMediaPlayout({
       video: true,
       jitterBuffer: enabled,
-      maxQueuedFrames: enabled ? JITTER_BUFFER_MAX_QUEUED_FRAMES : MAX_PENDING_FRAMES,
       targetLatencyMs: resolveTargetLatencyMs(tracks),
     });
     playoutTimingTimerRef.current = setInterval(() => {
       const instance = sub.getSubscriber(subscriberId);
       if (!instance) return;
-      playoutTimingRef.current.recordPlayoutDelay(
-        mediaPlayoutRef.current?.getStats().video?.playoutDelayMs ?? null,
-      );
+      // 入口の統計は 1 回だけ読み、この周期で写す値へ配る (組み立てを繰り返さない)
+      const stats = mediaPlayoutRef.current?.getStats() ?? null;
+      playoutTimingRef.current.recordPlayoutDelay(stats?.video?.playoutDelayMs ?? null);
       instance.playoutTiming.value = playoutTimingRef.current.snapshot(performance.now());
       // 同期の推定も同じ周期で反映する (フレームごとに反映すると再描画が表示の負荷になる)。
-      // 内訳の変化 (基準を共有できているか) はログへも残す
-      const avSync = currentAvSyncSnapshot();
+      // jitter buffer が無効のときと音声だけの購読では、入口が avSync を null で返すため
+      // 既定値に落とす。内訳の変化 (基準を共有できているか) はログへも残す
+      const avSync = stats?.avSync ?? sub.EMPTY_AV_SYNC;
       instance.avSync.value = avSync;
       logAvSyncTransition(avSync);
     }, PLAYOUT_TIMING_PUBLISH_INTERVAL_MS);
@@ -1342,12 +1398,16 @@ export function useSubscriber(
       const instance = sub.getSubscriber(subscriberId);
       if (!instance) return;
       const currentMs = nowMs();
+      // 入口の統計は 1 回だけ読み、この周期で写す値へ配る (組み立てを繰り返さない)
+      const audio = mediaPlayoutRef.current?.getStats().audio ?? null;
       instance.audioPlayoutTiming.value = audioPlayoutTimingRef.current.snapshot(currentMs);
       instance.audioHostDelay.value = hostDelayTrackerRef.current.snapshot(currentMs);
       // 目標遅延の閉ループの内訳。音声だけの購読でも A/V 同期の snapshot は作らないため、
       // 再生の入口から直接読む (音声だけでも jitter buffer と閉ループは動かす)
-      instance.audioDelayFeedback.value = currentAudioDelayFeedback();
-      publishAudioPlayoutCatchUp(instance);
+      instance.audioDelayFeedback.value = currentAudioDelayFeedback(audio);
+      publishAudioPlayoutCatchUp(instance, audio);
+      // 音声を加工した量 (時間圧縮と補間) も同じ周期で写す (復号の出力ごとには読まない)
+      publishAudioPlayoutCumulative(instance, audio);
     }, PLAYOUT_TIMING_PUBLISH_INTERVAL_MS);
   }
 
@@ -1365,10 +1425,13 @@ export function useSubscriber(
     const instance = sub.getSubscriber(subscriberId);
     if (!instance) return;
     const currentMs = nowMs();
+    // 入口の統計は 1 回だけ読み、最後の値を各 signal へ配る
+    const audio = mediaPlayoutRef.current?.getStats().audio ?? null;
     instance.audioPlayoutTiming.value = audioPlayoutTimingRef.current.snapshot(currentMs);
     instance.audioHostDelay.value = hostDelayTrackerRef.current.snapshot(currentMs);
-    instance.audioDelayFeedback.value = currentAudioDelayFeedback();
-    publishAudioPlayoutCatchUp(instance);
+    instance.audioDelayFeedback.value = currentAudioDelayFeedback(audio);
+    publishAudioPlayoutCatchUp(instance, audio);
+    publishAudioPlayoutCumulative(instance, audio);
   }
 
   /**
@@ -1413,33 +1476,42 @@ export function useSubscriber(
   }
 
   /**
-   * 音声の目標遅延の閉ループの内訳を読む
+   * 音声の目標遅延の閉ループの内訳を、入口の統計から取り出す
    *
    * 音声だけの購読でも A/V 同期の snapshot は作らないため、再生の入口から直接読む
    * (音声だけでも jitter buffer と閉ループは動かす)。jitter buffer が無効のときと、
-   * まだ再生の入口が無いときは既定値にする
+   * 音声を構成していないときは既定値にする
+   *
+   * @param audio - `MediaPlayout.getStats().audio`。周期の先頭で 1 回だけ読んだ値を渡す
    */
-  function currentAudioDelayFeedback(): AudioDelayFeedbackSnapshot {
+  function currentAudioDelayFeedback(
+    audio: MediaPlayoutAudioStats | null,
+  ): AudioDelayFeedbackSnapshot {
     if (!jitterBufferEnabledRef.current) {
       return sub.EMPTY_AUDIO_DELAY_FEEDBACK;
     }
-    return mediaPlayoutRef.current?.getAudioDelayFeedback() ?? sub.EMPTY_AUDIO_DELAY_FEEDBACK;
+    // 目標遅延の閉ループの内訳は、再生の入口の統計 (`getStats().audio.delayFeedback`) が持つ
+    return audio?.delayFeedback ?? sub.EMPTY_AUDIO_DELAY_FEEDBACK;
   }
 
   /**
    * 受信側の音声の追いつきの観測値を signal へ写す
    *
-   * 観測は再生の入口が持つ。1 秒ごとの反映に合わせる (音を鳴らすたびに写すと、値が
+   * 観測は再生の入口が持つ。500 ms ごとの反映に合わせる (音を鳴らすたびに写すと、値が
    * 変わっただけで画面が毎秒 50 回描き直される)。音声を再生していない間は鳴らしていない
    * ため、既定値にする
+   *
+   * @param audio - `MediaPlayout.getStats().audio`。周期の先頭で 1 回だけ読んだ値を渡す
    */
-  function publishAudioPlayoutCatchUp(instance: sub.SubscriberInstance): void {
+  function publishAudioPlayoutCatchUp(
+    instance: sub.SubscriberInstance,
+    audio: MediaPlayoutAudioStats | null,
+  ): void {
     if (audioPlaybackRef.current === null) {
       instance.audioPlayoutCatchUp.value = EMPTY_AUDIO_RECEIVE_CATCH_UP;
       return;
     }
-    instance.audioPlayoutCatchUp.value =
-      mediaPlayoutRef.current?.getStats().audio?.catchUp ?? EMPTY_AUDIO_RECEIVE_CATCH_UP;
+    instance.audioPlayoutCatchUp.value = audio?.catchUp ?? EMPTY_AUDIO_RECEIVE_CATCH_UP;
   }
 
   /** 音声の再生の観測を signal へ反映するタイマーを止める */
@@ -1498,12 +1570,13 @@ export function useSubscriber(
    * 鳴らす先を再生の入口へ付けるのは呼び出し側である。`audioPlaybackEnabled` を立てる直前に
    * 付けることで、有効になる前に届いた音を捨てる今の扱いを変えない。
    *
-   * @returns `AudioContext` を作り直したか (作り直したときは呼び出し側が音声の状態を取り直す)
+   * 停止の drain の途中に呼ばないこと (呼ぶかどうかは `toggleAudioPlayback` が判定する)。
+   * 停止の最後に `AudioContext` を閉じるため、ここで作り直しても直後に閉じられる。
+   *
+   * @returns 新しい `AudioContext` を作ったか (既存を使い回したときは false)。true のときは
+   *   呼び出し側が音声の状態を取り直す
    */
   async function startAudioPlayback(): Promise<boolean> {
-    // 購読の停止 (drain) の途中は再生を始めない。停止の最後に AudioContext を閉じるため、
-    // 作り直しても直後に閉じられる
-    if (audioStopRef.current.isStopping) return false;
     let playback = audioPlaybackRef.current;
     let createdContext = false;
     if (playback === null) {
@@ -1582,9 +1655,14 @@ export function useSubscriber(
       closeAudioContext: async () => {
         const playback = audioPlaybackRef.current;
         audioPlaybackRef.current = null;
-        // 閉じる AudioContext を再生の入口から外し、時計の対応と直前の音を捨てる
+        // 閉じる AudioContext を再生の入口から外し、時計の対応と直前の音を捨てる。
+        // 停止の drain の間に購読がやり直されて入口が作り直されることがあるため、
+        // 作り直された入口からも外す (残すと、閉じた Context へ次の音を予約してしまう)。
+        // 入口が作り直されていなければ、下の 1 回で足りる
         stoppingPlayout?.setAudioOutput(null);
-        stoppingPlayout?.releaseAudioContext();
+        if (mediaPlayoutRef.current !== stoppingPlayout) {
+          mediaPlayoutRef.current?.setAudioOutput(null);
+        }
         const audioElement = audioRef.current;
         if (audioElement) {
           audioElement.pause();
@@ -1600,7 +1678,7 @@ export function useSubscriber(
         // 時間軸からも音声の基準と学習と実績を消す。残すと共有の再生遅延に音声の下限
         // (AUDIO_PLAYOUT_DELAY_FLOOR_MS) が残り、映像の表示が音声を一度も再生していない購読より
         // 遅れたまま固定される。世代は進めない (積んでいる映像フレームを到着順に落とさない)
-        stoppingPlayout?.resetAudioStream();
+        stoppingPlayout?.resetAudioTimeline();
       },
     });
   }
@@ -1615,7 +1693,7 @@ export function useSubscriber(
    *
    * 音声の再生の状態 (予約の基準・追いつきの観測) も取り直す。有効に戻したときに、古い
    * `AudioContext` の基準で並べ直さないためである。映像の表示は止めない
-   * (音声の停止で `reset()` を使うと映像の表示待ちまで消える)。
+   * (`resetPlayout` を使うと映像の表示待ちまで消える)。
    */
   function pauseAudioPlayback(): void {
     audioPlaybackPendingRef.current = false;
@@ -1631,9 +1709,9 @@ export function useSubscriber(
     if (playback !== null) {
       // 予約済みで鳴り始めていない音は、閉じると鳴らないまま切り捨てられる
       playout?.recordAudioStopped();
-      playout?.resetAudioStream();
+      playout?.resetAudioTimeline();
       // 鳴らす先を外したので、予約の基準・時計の対応・追いつきの観測を取り直す
-      playout?.resetAudio();
+      playout?.resetAudioPlayback();
       void playback.context.close().catch(() => {
         // 既に閉じている場合は無視する
       });
@@ -1680,9 +1758,11 @@ export function useSubscriber(
         });
         if (createdContext) {
           // 新しい AudioContext の基準で鳴らし直す。累積の計器は購読単位で引き継がれる
-          // ため、画面へ出す値の起点を取り直す
-          mediaPlayoutRef.current?.resetAudio();
-          audioPlayoutStatsBaselineRef.current = readAudioPlayoutCumulative();
+          // ため、画面へ出す値の起点を取り直し、すぐ 0 から表示する
+          mediaPlayoutRef.current?.resetAudioPlayback();
+          const audio = mediaPlayoutRef.current?.getStats().audio ?? null;
+          audioPlayoutStatsBaselineRef.current = readAudioPlayoutCumulative(audio);
+          publishAudioPlayoutCumulative(instance, audio);
         }
       }
       instance.audioPlaybackEnabled.value = true;
@@ -1956,17 +2036,16 @@ export function useSubscriber(
         // 入力の遅れは、復号が足している遅れ (出力の遅れ - 入力の遅れ) を受信側の追いつきへ
         // 渡すのに使う。
         // TIMESTAMP を持たない音は decoder へ 0 を渡すため、同じ TIMESTAMP の音がすべて
-        // 重なり、種類も位置も一意に引けない。記録せず、復号の出力では種類 "none" として扱う
-        // (入口の対応表も種類 none は覚えないため、呼ばないことに意味の差は無い)
-        if (timestampKind !== "none") {
-          mediaPlayoutRef.current?.trackAudioDecodeInput(timestamp, {
-            timestampKind,
-            location: { group: obj.groupId, object: obj.objectId },
-            inputLagMs,
-            // 復号へ渡すまで実際に保持した時間 (遅延の変更や上限超過の短縮も含む)
-            intentionalDelayMs: Math.max(0, performance.now() - receivedAtMs),
-          });
-        }
+        // 重なり、種類も位置も一意に引けない。それでも呼ぶのは、入口が種類 "none" の記録で
+        // 同じ TIMESTAMP に残った古い記録を消すためである (古い記録が残ると、次の復号の
+        // 出力が前の音の位置を引いてしまう)
+        mediaPlayoutRef.current?.trackAudioDecodeInput(timestamp, {
+          timestampKind,
+          location: { group: obj.groupId, object: obj.objectId },
+          inputLagMs,
+          // 復号へ渡すまで実際に保持した時間 (遅延の変更や上限超過の短縮も含む)
+          intentionalDelayMs: Math.max(0, performance.now() - receivedAtMs),
+        });
 
         // 復号の出力は投入順に届く。停止の flush で渡した音には印を付け、drain の
         // 完了判定で対応させる
@@ -2141,16 +2220,12 @@ export function useSubscriber(
     // 到着の揺らぎの学習 (NetEq) と閉ループが動かず、固定の遅れで再生することになる。
     // 同期の推定 (A/V) は映像が無いため出さない。音声の Track だけでも targetLatency は
     // 宣言され得る (draft-ietf-moq-msf-01 §5.2.8)
-    audioOnlyPlaybackRef.current = true;
     const audioOnlyJitterBufferEnabled = settings.jitterBufferEnabled.value;
     jitterBufferEnabledRef.current = audioOnlyJitterBufferEnabled;
     createSubscriberMediaPlayout({
       // 揃える相手の映像がいないため、映像の表示の組み立ては含めない
       video: false,
       jitterBuffer: audioOnlyJitterBufferEnabled,
-      maxQueuedFrames: audioOnlyJitterBufferEnabled
-        ? JITTER_BUFFER_MAX_QUEUED_FRAMES
-        : MAX_PENDING_FRAMES,
       targetLatencyMs: effectiveTargetLatencyMs(audioTrack),
     });
     await startAudioSubscription(
@@ -2306,21 +2381,8 @@ export function useSubscriber(
       if (result.status === "dropped") {
         instance.audioPlayoutDrops.value += 1;
       }
-      // 音を加工した量 (時間圧縮と補間) を写す。ノイズの切り分けに使う。累積は購読の
-      // 統計として AudioContext の作り直しをまたいで引き継がれるため、再生を始めた時点の
-      // 値を引いて、再生ごとに 0 から数えていた今の表示に合わせる
-      const cumulative = readAudioPlayoutCumulative();
-      if (cumulative !== null) {
-        const baseline = audioPlayoutStatsBaselineRef.current;
-        instance.audioPlayoutCompressedMs.value = Math.round(
-          cumulative.compressedMs - (baseline?.compressedMs ?? 0),
-        );
-        instance.audioPlayoutConcealedMs.value = Math.round(
-          cumulative.concealedMs - (baseline?.concealedMs ?? 0),
-        );
-        instance.audioPlayoutConcealments.value =
-          cumulative.concealments - (baseline?.concealments ?? 0);
-      }
+      // 音を加工した量 (時間圧縮と補間) は、再生の入口の統計を 500 ms の反映
+      // (startAudioPlayoutTiming) で写す。音声の出力 1 つごとには読まない
       if (result.rebased) {
         instance.audioPlayoutRebases.value += 1;
       }
@@ -2392,7 +2454,7 @@ export function useSubscriber(
   }
 
   /**
-   * 復号済みフレームを、ライブラリと共有する再生の入口へ渡す
+   * 復号済みフレームを、ライブラリが提供する再生の入口へ渡す
    *
    * jitter buffer が有効で、フレームの TIMESTAMP が壁時計 (Timescale 無し) のときは、
    * TIMESTAMP の間隔どおりの表示時刻に表示し、到着の揺らぎを吸収する
@@ -2427,11 +2489,6 @@ export function useSubscriber(
       // 描かなかったフレームも数える (境界を越えたときのログと画面が読む)
       instance.catchUpFramesSkipped.value += 1;
     }
-  };
-
-  /** 表示待ちのフレームを破棄し、予約した描画を取り消す */
-  const clearPendingFrame = (): void => {
-    mediaPlayoutRef.current?.clearVideo();
   };
 
   /**
@@ -3274,8 +3331,10 @@ export function useSubscriber(
   // close 系 (closeSubscriberResources) と signal リセット系 (resetSubscriberState) を
   // 順に呼ぶ orchestrator。SubscriberInstance を Map から削除しない (= 同じ id で再 setup 可能)。
   const teardownSubscriber = (): void => {
-    // 表示待ちのフレームを破棄する。teardown 後に古いフレームを描画しない
-    clearPendingFrame();
+    // 停止の drain の間に入口が作り直されても、作り直した入口を触らないよう参照を固定する
+    const stoppingPlayout = mediaPlayoutRef.current;
+    // 表示待ちのフレームはすぐに捨てる。teardown 後に古いフレームを描画しない
+    stoppingPlayout?.clearVideoQueue();
     // 受信から表示までの時間の統計の記録を止める
     stopPlayoutTiming();
     // Group の切り替えで保留していた映像 Object を捨てる
@@ -3286,14 +3345,24 @@ export function useSubscriber(
     // stopAudioPlayback が行うため、段を破棄するより先に呼ぶ。await できない経路
     // (パネルの削除、アンマウント、セッションの close 通知) なので fire-and-forget にし、
     // AudioContext は stopAudioPlayback が必ず閉じる
-    void stopAudioPlayback();
+    //
+    // 入口の状態 (時間軸・復号へ渡した入力の対応表・表示待ち・追いつきの観測) は、drain が
+    // 終わってから捨てる。drain の前に捨てると、復号前の段から flush した音を鳴らし切る
+    // ための時間軸と観測が、鳴らし切る前に消える。計器の累積は購読の統計として残す
+    const clearStoppedPlayout = (): void => {
+      stoppingPlayout?.clearAll();
+      // 停止の drain の間に入口が作り直されていなければ、再生の入口を無い状態に戻す。
+      // 戻さないと、停止後に遅れて届いた復号の出力が `playout === null` のガードを通らず、
+      // 停止した入口を触ってしまう (作り直されていたら、その入口は触らない)
+      if (mediaPlayoutRef.current === stoppingPlayout) {
+        mediaPlayoutRef.current = null;
+      }
+    };
+    void stopAudioPlayback().then(clearStoppedPlayout, clearStoppedPlayout);
     // 復号前の段とタイマーを破棄する (flush 済み。停止後に復号へ流さない)
     resetPreDecodeDelay();
     // 切り捨てられた分 (予約済みで鳴らなかった音) まで反映してから止める
     stopAudioPlayoutTiming();
-    // 再生の入口が持つ状態 (時間軸・復号へ渡した入力の対応表・表示待ち・追いつきの観測) を
-    // 捨てる。計器の累積は購読の統計として引き継ぐため消さない
-    mediaPlayoutRef.current?.clear();
 
     const instance = sub.getSubscriber(subscriberId);
     if (!instance) return;
