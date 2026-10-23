@@ -1511,7 +1511,10 @@ export function useSubscriber(
     instance: sub.SubscriberInstance,
     audio: MediaPlayoutAudioStats | null,
   ): void {
-    if (!getAudioPlaybackController().hasPlayback()) {
+    // 再生の有無を読むだけなので、コントローラが未生成なら生成しない
+    // (音声を再生しない購読で 500 ms ごとに生成するのを避ける)
+    const controller = audioPlaybackControllerRef.current;
+    if (controller === null || !controller.hasPlayback()) {
       instance.audioPlayoutCatchUp.value = EMPTY_AUDIO_RECEIVE_CATCH_UP;
       return;
     }

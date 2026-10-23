@@ -25,7 +25,6 @@ import {
   getAudioTracks,
   getTrackByName,
   getVideoTracks,
-  type AuthInfo,
   type Catalog,
   type CatalogTrack,
 } from "../msf";
@@ -103,12 +102,6 @@ export interface CatalogSubscriptionDependencies {
   ) => MoqtObject[];
   /** FETCH の開始位置を決める純関数 (`catalogFetchFilter`) */
   readonly fetchFilter: (largestLocation: Location | null) => LocationFilter;
-  /** authInfo から Authorization Token を解決する純関数 (`resolveAuthorizationToken`) */
-  readonly resolveTrackToken: (
-    authInfo: AuthInfo | undefined,
-    getAuthorizationToken: MediaSubscriberOptions["getAuthorizationToken"],
-    setupAuthorizationToken: AuthorizationToken | undefined,
-  ) => Promise<AuthorizationToken | undefined>;
 }
 
 /**
@@ -388,52 +381,31 @@ export class CatalogSubscription {
   }
 
   /**
-   * track の authInfo に応じて Authorization Token を解決する
-   *
-   * draft-ietf-moq-msf-01 §5.2.42: authInfo の存在は subscribe 時に認可トークンが必要であるシグナル。
-   * §11.4.3: track に紐づくトークンは、そのトラックに関係する AUTHORIZATION TOKEN パラメータを
-   * 受け付けるすべての制御メッセージ (SUBSCRIBE / FETCH / REQUEST_UPDATE) へ MUST 付与する。
-   * §11.4.2: トークン取得は仕様の対象外のため、getAuthorizationToken コールバックで注入する。
-   * §11.4.4: トークンを取得できない場合はエラーを呼び出し元に伝播する。
-   *
-   * コールバックが無い場合は、SETUP に載せたトークン (`Session.setupAuthorizationToken`) を
-   * 既定のトークンとして使う。
-   *
-   * @param track - 解決したトラック情報 (未解決なら null)
-   * @returns 解決した Authorization Token (認可不要なら undefined)
-   */
-  resolveTrackAuthorizationToken(
-    track: CatalogTrack | null,
-  ): Promise<AuthorizationToken | undefined> {
-    return this.deps.resolveTrackToken(
-      track?.authInfo,
-      this.deps.options.getAuthorizationToken,
-      this.deps.session()?.setupAuthorizationToken,
-    );
-  }
-
-  /**
-   * delta の適用に渡す catalog namespace のオプション
-   *
-   * namespace が空配列のときは継承を解決しない (namespace 未宣言どうしの重複だけを検出する
-   * 従来の挙動)。購読の処理と同じ `options.namespace` を毎回読む (構築時に固定しない)。
-   * この配列は start() の前に確定していることを前提にする。
-   * exactOptionalPropertyTypes のため、未指定のときはプロパティを載せない。
-   *
-   * @returns delta の適用に渡す catalog namespace (未指定なら空オブジェクト)
-   */
-  deltaOptions(): { catalogNamespace?: string } {
-    const namespace = this.deps.options.namespace;
-    return namespace.length === 0 ? {} : { catalogNamespace: namespace.join("/") };
-  }
-
-  /**
    * Catalog 受信タイマーを解除する
    */
   clearCatalogTimer(): void {
     if (this.state.catalogTimer !== null) {
       clearTimeout(this.state.catalogTimer);
       this.state.catalogTimer = null;
+    }
+  }
+
+  /**
+   * 受信待ちの Promise を打ち切る (解放時)
+   *
+   * 解放の後に await が残ると `start()` が永久に解決しないため、受信待ちを reject して
+   * 状態を初期値に戻す。打ち切りの判断と後始末をこのモジュールへ集約する。
+   *
+   * @param error - 待っている呼び出し元へ渡すエラー
+   */
+  abortReceive(error: Error): void {
+    const reject = this.state.catalogReject;
+    const waiting = this.state.catalogWaiting;
+    this.state.catalogWaiting = false;
+    this.state.catalogResolve = null;
+    this.state.catalogReject = null;
+    if (waiting) {
+      reject?.(error);
     }
   }
 

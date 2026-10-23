@@ -421,14 +421,13 @@ let originalAnimationFrame: ((callback: FrameRequestCallback) => number) | undef
 let originalCancelAnimationFrame: ((handle: number) => void) | undefined;
 
 /** 予約された表示周期のコールバックを 1 回実行する */
-export function runPendingAnimationFrame(): VideoFrame[] {
+export function runPendingAnimationFrame(): void {
   const callback = pendingAnimationFrame;
   pendingAnimationFrame = null;
   if (callback === null) {
-    return [];
+    return;
   }
   callback(performance.now());
-  return [];
 }
 
 /** 表示周期の予約を消す (前のテストの持ち越しを防ぐ) */

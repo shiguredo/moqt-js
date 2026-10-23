@@ -507,23 +507,6 @@ function decoderTimestampOf(resolved: TimestampSource): number {
 }
 
 /**
- * 状態オブジェクトの 1 フィールド分の getter / setter を作る
- *
- * `Object.defineProperties` で使う。矢印関数で読み書きするため、`this` の束縛を
- * 気にせず実装クラスのフィールドを読み書きできる。
- *
- * @param read - フィールドを読む
- * @param write - フィールドへ書く
- * @returns getter / setter の定義
- */
-function stateField<T>(read: () => T, write: (value: T) => void): PropertyDescriptor {
-  return {
-    get: read,
-    set: write,
-  };
-}
-
-/**
  * MediaSubscriber の実装クラス
  *
  * 単体テストから復号ハンドラを駆動するため export する
@@ -772,108 +755,88 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     // catalog 購読フェーズの状態は単体テストが制御口として直接読み書きするため、この
     // クラスがフィールドとして持つ。フェーズの処理 (CatalogSubscription) へは、この
     // クラスのフィールドを読み書きする getter / setter の束として渡す
+    // catalog 購読フェーズの状態は単体テストが制御口として直接読み書きするため、この
+    // クラスがフィールドとして持つ。フェーズの処理 (CatalogSubscription) へは、この
+    // クラスのフィールドを読み書きする getter / setter の束として渡す。
+    // PropertyDescriptor の Record で型付けし、状態を増やしたときの定義漏れを型で拘束する
+    const catalogStateDescriptors: Record<keyof CatalogSubscriptionState, PropertyDescriptor> = {
+      catalogSubscriber: {
+        get: () => this.catalogSubscriber,
+        set: (value) => {
+          this.catalogSubscriber = value;
+        },
+      },
+      receivedCatalog: {
+        get: () => this.receivedCatalog,
+        set: (value) => {
+          this.receivedCatalog = value;
+        },
+      },
+      catalogResolve: {
+        get: () => this.catalogResolve,
+        set: (value) => {
+          this.catalogResolve = value;
+        },
+      },
+      catalogReject: {
+        get: () => this.catalogReject,
+        set: (value) => {
+          this.catalogReject = value;
+        },
+      },
+      catalogWaiting: {
+        get: () => this.catalogWaiting,
+        set: (value) => {
+          this.catalogWaiting = value;
+        },
+      },
+      catalogFetchInProgress: {
+        get: () => this.catalogFetchInProgress,
+        set: (value) => {
+          this.catalogFetchInProgress = value;
+        },
+      },
+      pendingCatalogObjects: {
+        get: () => this.pendingCatalogObjects,
+        set: (value) => {
+          this.pendingCatalogObjects = value;
+        },
+      },
+      catalogFetchLastLocation: {
+        get: () => this.catalogFetchLastLocation,
+        set: (value) => {
+          this.catalogFetchLastLocation = value;
+        },
+      },
+      catalogTimer: {
+        get: () => this.catalogTimer,
+        set: (value) => {
+          this.catalogTimer = value;
+        },
+      },
+      catalogReceiveFailed: {
+        get: () => this.catalogReceiveFailed,
+        set: (value) => {
+          this.catalogReceiveFailed = value;
+        },
+      },
+      audioTrackInfo: {
+        get: () => this.audioTrackInfo,
+        set: (value) => {
+          this.audioTrackInfo = value;
+        },
+      },
+      videoTrackInfo: {
+        get: () => this.videoTrackInfo,
+        set: (value) => {
+          this.videoTrackInfo = value;
+        },
+      },
+    };
     const catalogState = Object.defineProperties(
       {},
-      {
-        catalogSubscriber: stateField(
-          () => this.catalogSubscriber,
-          (value) => {
-            this.catalogSubscriber = value;
-          },
-        ),
-
-        receivedCatalog: stateField(
-          () => this.receivedCatalog,
-          (value) => {
-            this.receivedCatalog = value;
-          },
-        ),
-
-        catalogResolve: stateField(
-          () => this.catalogResolve,
-          (value) => {
-            this.catalogResolve = value;
-          },
-        ),
-
-        catalogReject: stateField(
-          () => this.catalogReject,
-          (value) => {
-            this.catalogReject = value;
-          },
-        ),
-
-        catalogWaiting: stateField(
-          () => this.catalogWaiting,
-          (value) => {
-            this.catalogWaiting = value;
-          },
-        ),
-
-        catalogFetchInProgress: stateField(
-          () => this.catalogFetchInProgress,
-          (value) => {
-            this.catalogFetchInProgress = value;
-          },
-        ),
-
-        pendingCatalogObjects: stateField(
-          () => this.pendingCatalogObjects,
-          (value) => {
-            this.pendingCatalogObjects = value;
-          },
-        ),
-
-        catalogFetchLastLocation: stateField(
-          () => this.catalogFetchLastLocation,
-          (value) => {
-            this.catalogFetchLastLocation = value;
-          },
-        ),
-
-        catalogTimer: stateField(
-          () => this.catalogTimer,
-          (value) => {
-            this.catalogTimer = value;
-          },
-        ),
-
-        catalogReceiveFailed: stateField(
-          () => this.catalogReceiveFailed,
-          (value) => {
-            this.catalogReceiveFailed = value;
-          },
-        ),
-
-        audioTrackInfo: stateField(
-          () => this.audioTrackInfo,
-          (value) => {
-            this.audioTrackInfo = value;
-          },
-        ),
-
-        videoTrackInfo: stateField(
-          () => this.videoTrackInfo,
-          (value) => {
-            this.videoTrackInfo = value;
-          },
-        ),
-      },
+      catalogStateDescriptors,
     ) as CatalogSubscriptionState;
-    // catalog 購読フェーズへ、購読と解決に必要なものだけを明示的に渡す
-    this.catalogSubscription = new CatalogSubscription({
-      state: catalogState,
-      options: this.options,
-      session: () => this.session,
-      reportError: (error) => this.callbacks.onError?.(error),
-      handlePublishDone: (publishDone) => this.handlePublishDone(publishDone),
-      assertStartNotDisposed: (startGeneration) => this.assertStartNotDisposed(startGeneration),
-      applyTargetLatencyMs: (latencyMs) => this.playout.setTargetLatencyMs(latencyMs),
-      applyObject: (obj) => this.handleCatalogObject(obj),
-      filterPendingObjects: filterPendingCatalogObjects,
-      fetchFilter: catalogFetchFilter,
-      resolveTrackToken: resolveAuthorizationToken,
-    });
     this.playout = createMediaPlayout({
       // 音声は購読していないときも構成する。AudioContext と出力は createOutputStream が
       // 作ったときに setAudioOutput で付ける (構成する理由と計器の引き継ぎは playout
@@ -899,6 +862,19 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       intentionalDelayMs: this.preDecodeDelayMs,
       // pacing (表示の周期) と decodeInputs (復号へ渡した入力の対応表) は入口の既定を使う。
       // どちらもライブラリの使い方と同じ値であり、ここで同じ値を書き写さない
+    });
+    // catalog 購読フェーズへ、購読と解決に必要なものだけを明示的に渡す
+    this.catalogSubscription = new CatalogSubscription({
+      state: catalogState,
+      options: this.options,
+      session: () => this.session,
+      reportError: (error) => this.callbacks.onError?.(error),
+      handlePublishDone: (publishDone) => this.handlePublishDone(publishDone),
+      assertStartNotDisposed: (startGeneration) => this.assertStartNotDisposed(startGeneration),
+      applyTargetLatencyMs: (latencyMs) => this.playout.setTargetLatencyMs(latencyMs),
+      applyObject: (obj) => this.handleCatalogObject(obj),
+      filterPendingObjects: filterPendingCatalogObjects,
+      fetchFilter: catalogFetchFilter,
     });
   }
 
@@ -1697,16 +1673,9 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     this.receivedCatalog = null;
     this.audioTrackInfo = null;
     this.videoTrackInfo = null;
-    const catalogReject = this.catalogReject;
-    const catalogWaitPending = this.catalogWaiting;
-    this.catalogWaiting = false;
-    this.catalogResolve = null;
-    this.catalogReject = null;
+    this.catalogSubscription.abortReceive(new Error("catalog receive aborted: resources disposed"));
     // フェーズの状態とタイマーは先頭で初期値にしてある。ここではラッチを戻す
     this.catalogReceiveFailed = false;
-    if (catalogWaitPending) {
-      catalogReject?.(new Error("catalog receive aborted: resources disposed"));
-    }
     // デコーダの設定状態を初期値に戻す (閉じた後に decode しない)
     this.audioDecoderConfigured = false;
     this.videoDecoderConfigured = false;
@@ -2063,8 +2032,10 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       this.audioInitialConfigPending = true;
       this.pendingAudioQueueState.overflowNotified = false;
       // draft-ietf-moq-msf-01 §11.4.3: authInfo を持つ track にはトークンを MUST 付与
-      const authorizationToken = await this.catalogSubscription.resolveTrackAuthorizationToken(
-        this.audioTrackInfo,
+      const authorizationToken = await resolveAuthorizationToken(
+        this.audioTrackInfo?.authInfo,
+        this.options.getAuthorizationToken,
+        this.session?.setupAuthorizationToken,
       );
       // 解放が先行していれば、購読要求も出さない (解放で session は切り離し済み)
       this.assertStartNotDisposed(startGeneration);
@@ -2113,8 +2084,10 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       this.pendingVideoQueueState.overflowNotified = false;
 
       // draft-ietf-moq-msf-01 §11.4.3: authInfo を持つ track にはトークンを MUST 付与
-      const videoAuthorizationToken = await this.catalogSubscription.resolveTrackAuthorizationToken(
-        this.videoTrackInfo,
+      const videoAuthorizationToken = await resolveAuthorizationToken(
+        this.videoTrackInfo?.authInfo,
+        this.options.getAuthorizationToken,
+        this.session?.setupAuthorizationToken,
       );
       // 解放が先行していれば、購読要求も出さない (解放で session は切り離し済み)
       this.assertStartNotDisposed(startGeneration);
@@ -2359,10 +2332,11 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     if (this.catalogReceiveFailed) {
       return;
     }
+    const namespace = this.options.namespace;
     const result = processCatalogPayload(
       this.receivedCatalog,
       obj.payload,
-      this.catalogSubscription.deltaOptions(),
+      namespace.length === 0 ? {} : { catalogNamespace: namespace.join("/") },
     );
 
     if (result.kind === "error") {
