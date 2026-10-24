@@ -1,6 +1,6 @@
 /**
  * Session の状態と停止待ちを実クラス・実時計で検証する。
- * AudioData / Web Audio は tests/e2e/audio-playout-session.spec.ts で実 API を使う。
+ * AudioData / Web Audio は tests/e2e/media-playout-audio.spec.ts で実 API を使う。
  * 予約・圧縮・補間の境界値は各処理の単体テストと PBT が担当する。
  */
 import { assert, test } from "vite-plus/test";
@@ -14,6 +14,25 @@ function createSession(): { session: AudioPlayoutSession; timing: AudioPlayoutTi
 
 // 出力時計と予約は AudioContext ごとに異なる。次の Context へ以前の予約位置を
 // 持ち越さないことを、実 scheduler の状態で確かめる。
+test("drainReserved: コールバックが throw しても結果を返す", async () => {
+  // 注入されたコールバックは throw しない契約だが、throw しても drain を失敗させず、
+  // 記録 (lastDrain) を残す。待ち終えた / 残り 0 として扱う
+  const { session } = createSession();
+  const result = await session.drainReserved({
+    maxWaitMs: 30,
+    flushedObjects: 1,
+    isFlushSettled: () => {
+      throw new Error("isFlushSettled failed");
+    },
+    remainingFlushedObjects: () => {
+      throw new Error("remainingFlushedObjects failed");
+    },
+  });
+  assert.strictEqual(result.flushedObjects, 1);
+  assert.strictEqual(result.undecodedFlushedObjects, 0);
+  assert.strictEqual(result.requestedMs, 30);
+});
+
 test("reset: 予約と出力時計と追いつきの状態を取り直す", () => {
   const { session } = createSession();
   session.clock.update({ contextTime: 10, performanceTime: 1_000 }, 10, 1_000);

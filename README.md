@@ -104,7 +104,7 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
 - FETCH メッセージ
 - FETCH_OK メッセージ
 - Fetch Group Order (Ascending / Descending)
-- Location Filter (0x05 Next Object / 0x01 相対 startGroup / 0x02 絶対開始 / 0x03・0x04 絶対範囲 / 0x00 除去)
+- Location Filter (0x00 None / 0x01 Relative Start / 0x02 Absolute Start / 0x03 Absolute Start, Group End / 0x04 Absolute Range / 0x05 Next Object)
 - Range Filters (subscribe() / subscribeTracks() / fetch() / update() で送信可能)
   - Subgroup Filter
   - Object ID Filter
@@ -274,7 +274,9 @@ MSF-01 §5 は catalog の取得に Joining FETCH を MUST としているが、
 - 購読側の再生遅延を指定する
   - `MediaSubscriberOptions.preDecodeDelayMs` で、受信した Object を復号前に時間で保持する。2 秒以上の遅延でも復号済みフレームを溜めず、受信バッファの上限も変えない (`src/playout/preDecodeDelay.ts`)。保持上限を超えた場合は古い Object を落として残りの期限を前倒しし、実際の遅延を短くする。詳細は [購読側の再生遅延](docs/PLAYOUT_DELAY.md)
 
-高レベル API (`createMediaSubscriber`) はこの再生を内部で組み立てるため、アプリケーション側で実装する必要はありません。再生の部品は公開 API (`PlayoutTimeline` / `AudioPlayoutSession` / `VideoPlayoutSession`) としても使えます。詳細は [高レベル API](docs/HIGH_LEVEL_API.md) にあります。
+再生の入口は `createMediaPlayout(options)` (`src/playout/mediaPlayout.ts`) です。復号へ渡す直前に `trackAudioDecodeInput` / `trackVideoDecodeInput` で TIMESTAMP の種類と Object の位置を記録し、復号の出力を `pushAudio` / `pushVideo` へ渡すだけで、共有の時間軸、音声の予約、映像の表示、A/V 同期、計器がそろいます。
+
+`createMediaPublisher` と `createMediaSubscriber` が WebCodecs のエンコード / デコードまでを隠蔽するのに対し、`createMediaPlayout` は復号済みのフレームを受け取ります。`createMediaSubscriber` はこの入口を内部で使うため、高レベル API を使う場合は再生を自分で実装する必要はなく、受信と復号を自分で組み立てる場合もこの入口 1 つで完結します。詳細は [高レベル API](docs/HIGH_LEVEL_API.md) にあります。
 
 実測の条件と生の表は [音声の再生遅延の実測](docs/AUDIO_PLAYOUT_LATENCY.md)、現状と既知の限界は [音声再生の現状](docs/AUDIO_PLAYOUT_RESULT.md) にまとめています。
 
@@ -398,7 +400,7 @@ await subscriber.unsubscribe();
 
 ## ドキュメント
 
-- [高レベル API](docs/HIGH_LEVEL_API.md): `createMediaPublisher` / `createMediaSubscriber` と、A/V 同期と再生の共有実装の仕様
+- [高レベル API](docs/HIGH_LEVEL_API.md): `createMediaPublisher` / `createMediaSubscriber` / `createMediaPlayout` と、A/V 同期と再生の入口 (MediaPlayout) の仕様
 - [低レベル API](docs/LOW_LEVEL_API.md): `connect()` と `Session` / `Publisher` / `Subscriber` / `Fetcher` の仕様
 - [MOQT Streaming Format](docs/MSF.md): Catalog / Timeline の公開 API
 - [A/V 同期と再生の決定と根拠](docs/AV_SYNC_DECISIONS.md): 値を決めた根拠と、再考する条件
@@ -499,7 +501,7 @@ moqt-js を利用した MOQT の動作確認ツールです。
 - 音声レベルメーター (peak / RMS / 波形)
 - 音声と映像の同期再生
 - 映像の拡大表示 (ライトボックス: 通常表示の 2 倍の幅 / 全画面)
-- Jitter Buffer の有効 / 無効の選択 (LOC TIMESTAMP に合わせて映像を表示する)
+- Jitter Buffer の有効 / 無効の選択 (LOC の TIMESTAMP に合わせて映像を表示する)
 - 再生遅延 (Playback Delay) の動的設定 (Off / 500 / 1,000 / 2,000 / 3,000 / 5,000 / 10,000 ms。接続中も変更できる)
 - 音声の再生先の選択
 - event timeline のメッセージ送受信

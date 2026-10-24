@@ -208,7 +208,7 @@ export interface SubscriberInstance {
   // 受信した音声を音声出力デバイスで再生するか。既定は無効
   audioPlaybackEnabled: Signal<boolean>;
   // 受信側の音声の追いつき (復号の出力が送られた TIMESTAMP から遅れ続けたときに、
-  // 復号器を作り直して live へ戻した量)。再生の組み立てが持つ観測値を 1 秒ごとに写す
+  // 復号器を作り直して live へ戻した量)。再生の入口が持つ観測値を 500 ms ごとに写す
   // (src/playout/audioReceiveCatchUp.ts)
   audioPlayoutCatchUp: Signal<AudioReceiveCatchUpStats>;
   // 受信した音声の鳴らし方の数 (src/playout/audioPlayout.ts)。購読ごとに数える。
@@ -217,7 +217,8 @@ export interface SubscriberInstance {
   audioPlayoutDrops: Signal<number>;
   // 目標へ戻すために詰めた (時間圧縮した) 音の合計 (ミリ秒) と、欠落した区間を補間した
   // 音の合計 (ミリ秒) と回数。どちらも音を加工する操作であり、続けて起きると音が粗くなる
-  // (ノイズの切り分けに使う。src/playout/audioPlayout.ts)
+  // (ノイズの切り分けに使う。src/playout/audioPlayout.ts)。計数は購読の間の累積であり、
+  // 表示は再生を始めた時点からの差にする (useSubscriber が 500 ms ごとに写す)
   audioPlayoutCompressedMs: Signal<number>;
   audioPlayoutConcealedMs: Signal<number>;
   audioPlayoutConcealments: Signal<number>;

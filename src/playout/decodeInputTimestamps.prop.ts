@@ -136,7 +136,13 @@ test("LastTimestampKind: 記録が近くにあるときだけ覚えている種�
       fc.array(fc.record({ gap: fc.integer({ min: 1, max: 30_000 }) }), {
         maxLength: 8,
       }),
-      fc.integer({ min: 0, max: 4_000_000 }),
+      fc.oneof(
+        fc.integer({ min: 0, max: DECODE_INPUT_KIND_FALLBACK_MAX_DISTANCE_MICROS }),
+        fc.integer({
+          min: DECODE_INPUT_KIND_FALLBACK_MAX_DISTANCE_MICROS + 1,
+          max: DECODE_INPUT_KIND_FALLBACK_MAX_DISTANCE_MICROS * 2,
+        }),
+      ),
       (kind, entries, distanceMicros) => {
         const last = new LastTimestampKind<"wallClock" | "mediaTime">();
         last.reset();

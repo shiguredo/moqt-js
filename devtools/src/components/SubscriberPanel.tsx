@@ -334,11 +334,14 @@ export function SubscriberPanel({
             購読の前も購読中も切り替えられる。主要な操作 (Start Subscribing / Stop) の
             隣にトグルボタンとして置く。チェックボックスは設定の有無しか表せず、
             再生中かどうかと、押すと何が起きるのかが読み取りにくいため、押すと
-            「Play Audio」から「Stop Audio」へ変わり、色でも状態が分かるようにする
+            「Play Audio」から「Stop Audio」へ変わり、色でも状態が分かるようにする。
+            停止の drain の間は、AudioContext を閉じる途中であり開始の結果も確定しない
+            ため押せないようにする
           */}
           <button
             type="button"
             data-testid="subscriber-audio-playback-toggle"
+            disabled={instance.isStopping.value}
             aria-pressed={instance.audioPlaybackEnabled.value}
             onClick={() => void toggleAudioPlayback()}
             title={
@@ -348,7 +351,7 @@ export function SubscriberPanel({
                   "Video waits for the audio buffer to keep playback synchronized. " +
                   "It can be enabled before subscribing; the sound starts when audio arrives"
             }
-            class={`w-32 py-2.5 shrink-0 font-medium rounded-lg transition-colors flex items-center justify-center gap-2 ${
+            class={`w-32 py-2.5 shrink-0 font-medium rounded-lg transition-colors flex items-center justify-center gap-2 disabled:bg-slate-300 disabled:cursor-not-allowed ${
               instance.audioPlaybackEnabled.value
                 ? "bg-red-500 hover:bg-red-600 text-white"
                 : "bg-slate-500 hover:bg-slate-600 text-white"

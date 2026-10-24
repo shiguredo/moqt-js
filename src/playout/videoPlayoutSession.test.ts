@@ -14,6 +14,7 @@ import {
   VideoDecodeInputs,
   VideoPlayoutSession,
   type VideoPlayoutOutput,
+  type VideoPlayoutResult,
   type VideoPlayoutTiming,
 } from "./videoPlayoutSession";
 import { JITTER_BUFFER_MAX_QUEUED_FRAMES } from "./buffer";
@@ -228,14 +229,11 @@ function makeSession(options: {
   maxQueuedFrames?: number;
   drainImmediately: boolean;
   framesPerDrain: number;
-  decodeInputs?: VideoDecodeInputs;
 }): { session: VideoPlayoutSession; scheduler: RecordedFrameScheduler } {
   const scheduler = makeFrameScheduler();
   const session = new VideoPlayoutSession({
     timeline: options.timeline,
     output: options.output.output,
-    decodeInputs:
-      options.decodeInputs ?? new VideoDecodeInputs({ maxTracked: 8, forgetOnDuplicate: true }),
     pacing: {
       drainImmediately: options.drainImmediately,
       framesPerDrain: options.framesPerDrain,
@@ -264,6 +262,111 @@ function handleArrivalOrderFrame(
     useTimeline: true,
   });
   return recorded;
+}
+
+/** `makeDefaultSession` で変えられる項目 (省略した項目は既定値を使う) */
+interface DefaultSessionOptions {
+  /** 使う時間軸。省略すると空の時間軸 (表示時刻を決められない状態) を作る */
+  readonly timeline?: PlayoutTimeline;
+  /** 使う出し先。省略すると記録用の出し先を作る */
+  readonly output?: RecordedOutput;
+  /** 計器 (省略すると渡さない) */
+  readonly timing?: VideoPlayoutTiming;
+  /** 表示待ちの上限 (省略すると時間軸の既定値) */
+  readonly maxQueuedFrames?: number;
+  /** 表示の周期で、積んだ時点で出すか (既定は true = ライブラリの進め方) */
+  readonly drainImmediately?: boolean;
+  /** 1 つの表示周期に出す枚数 (既定はすべて) */
+  readonly framesPerDrain?: number;
+}
+
+/**
+ * 既定の組み立てを作る
+ *
+ * 空の時間軸と記録用の出し先を使い、表示の周期は「積んだ時点で表示時刻を過ぎた
+ * フレームをすべて出す」(ライブラリの進め方) にする。テストは変えたい項目だけを渡す。
+ *
+ * @param options - 変えたい項目
+ * @returns 時間軸・出し先・セッション・表示周期の記録
+ */
+function makeDefaultSession(options: DefaultSessionOptions = {}): {
+  timeline: PlayoutTimeline;
+  output: RecordedOutput;
+  session: VideoPlayoutSession;
+  scheduler: RecordedFrameScheduler;
+} {
+  const timeline = options.timeline ?? makeEmptyTimeline();
+  const output = options.output ?? makeRecordingOutput();
+  const { session, scheduler } = makeSession({
+    timeline,
+    output,
+    drainImmediately: options.drainImmediately ?? true,
+    framesPerDrain: options.framesPerDrain ?? Number.POSITIVE_INFINITY,
+    ...(options.timing === undefined ? {} : { timing: options.timing }),
+    ...(options.maxQueuedFrames === undefined ? {} : { maxQueuedFrames: options.maxQueuedFrames }),
+  });
+  return { timeline, output, session, scheduler };
+}
+
+/** 壁時計の TIMESTAMP を持つフレームを 1 枚渡した結果 */
+interface HandledWallClockFrame {
+  /** 渡したフレーム (閉じられたかを後で確かめられる) */
+  readonly recorded: RecordedVideoFrame;
+  /** 表示の判断の結果 */
+  readonly result: VideoPlayoutResult;
+}
+
+/**
+ * 壁時計の TIMESTAMP を持つフレームを 1 枚渡す
+ *
+ * @param session - 渡す先のセッション
+ * @param timestampMicros - フレームの TIMESTAMP (Unix epoch マイクロ秒)
+ * @returns 渡したフレームと結果
+ */
+function handleWallClockFrame(
+  session: VideoPlayoutSession,
+  timestampMicros: number,
+): HandledWallClockFrame {
+  const recorded = makeVideoFrame(timestampMicros);
+  const result = session.handleDecodedFrame({
+    frame: recorded.frame,
+    timestampKind: "wallClock",
+    useTimeline: true,
+  });
+  return { recorded, result };
+}
+
+/**
+ * 壁時計の TIMESTAMP を持つフレームをまとめて渡す
+ *
+ * @param session - 渡す先のセッション
+ * @param timestampsMicros - フレームの TIMESTAMP (Unix epoch マイクロ秒) の並び
+ * @returns 渡したフレームの並び (閉じられたかを後で確かめられる)
+ */
+function handleWallClockFrames(
+  session: VideoPlayoutSession,
+  timestampsMicros: readonly number[],
+): RecordedVideoFrame[] {
+  return timestampsMicros.map(
+    (timestampMicros) => handleWallClockFrame(session, timestampMicros).recorded,
+  );
+}
+
+/**
+ * 音声の表示の実績を時間軸へ記録する
+ *
+ * 映像の実績と揃ったときにだけ同期ずれの推定が出るため、映像の実績を記録できたかを
+ * 確かめるのに使う。
+ *
+ * @param timeline - 記録する時間軸
+ * @param timestampMicros - 映像と同じ TIMESTAMP (Unix epoch マイクロ秒)
+ */
+function recordAudioPresentation(timeline: PlayoutTimeline, timestampMicros: number): void {
+  timeline.recordPresentation(
+    "audio",
+    timestampMicros,
+    BigInt(Math.round((TIME_ORIGIN_MS + nowMs()) * 1_000)),
+  );
 }
 
 // ============================================================================
@@ -341,22 +444,11 @@ test("VideoDecodeInputs: clear() ですべて忘れる", () => {
 // ============================================================================
 
 test("handleDecodedFrame: 出し先が無いときは表示せずに閉じ、時間軸へも記録しない", () => {
-  const timeline = makeEmptyTimeline();
   const output = makeRecordingOutput();
   output.setAvailable(false);
-  const { session, scheduler } = makeSession({
-    timeline,
-    output,
-    drainImmediately: true,
-    framesPerDrain: Number.POSITIVE_INFINITY,
-  });
+  const { timeline, session, scheduler } = makeDefaultSession({ output });
 
-  const recorded = makeVideoFrame(1_700_000_000_000_000);
-  const result = session.handleDecodedFrame({
-    frame: recorded.frame,
-    timestampKind: "wallClock",
-    useTimeline: true,
-  });
+  const { recorded, result } = handleWallClockFrame(session, 1_700_000_000_000_000);
 
   assert.equal(result.status, "skipped");
   assert.isTrue(recorded.isClosed(), "表示しないフレームを閉じていない");
@@ -369,20 +461,9 @@ test("handleDecodedFrame: 出し先が無いときは表示せずに閉じ、時
 test("handleDecodedFrame: 壁時計の TIMESTAMP を時間軸へ記録し、表示時刻を過ぎたフレームを出す", () => {
   // 1 秒前に観測した TIMESTAMP は、表示時刻 (観測時刻 + 表示の遅れ) を既に過ぎている
   const { timeline, timestampMicros } = makeTimeline(nowMs() - 1_000);
-  const output = makeRecordingOutput();
-  const { session, scheduler } = makeSession({
-    timeline,
-    output,
-    drainImmediately: true,
-    framesPerDrain: Number.POSITIVE_INFINITY,
-  });
+  const { output, session, scheduler } = makeDefaultSession({ timeline });
 
-  const recorded = makeVideoFrame(timestampMicros);
-  const result = session.handleDecodedFrame({
-    frame: recorded.frame,
-    timestampKind: "wallClock",
-    useTimeline: true,
-  });
+  const { recorded, result } = handleWallClockFrame(session, timestampMicros);
 
   assert.equal(result.status, "queued");
   assert.equal(result.status === "queued" ? result.wallClockTimestamp : null, timestampMicros);
@@ -407,19 +488,9 @@ test("handleDecodedFrame: 表示時刻を過ぎていないフレームはキュ
   // targetLatency を下限にすると、観測した直後のフレームの表示時刻も未来に残る
   const targetLatencyMs = 120;
   const { timeline, timestampMicros } = makeTimeline(nowMs(), targetLatencyMs);
-  const output = makeRecordingOutput();
-  const { session, scheduler } = makeSession({
-    timeline,
-    output,
-    drainImmediately: true,
-    framesPerDrain: Number.POSITIVE_INFINITY,
-  });
+  const { output, session, scheduler } = makeDefaultSession({ timeline });
 
-  session.handleDecodedFrame({
-    frame: makeVideoFrame(timestampMicros).frame,
-    timestampKind: "wallClock",
-    useTimeline: true,
-  });
+  handleWallClockFrame(session, timestampMicros);
 
   const presentationMs = timeline.presentationPerformanceMs("video", timestampMicros);
   assert.isNotNull(presentationMs);
@@ -443,13 +514,7 @@ test("handleDecodedFrame: 表示時刻を過ぎていないフレームはキュ
 
 test("handleDecodedFrame: メディア時刻と時間軸を使わないときは、届いた順に表示する", () => {
   const { timeline, timestampMicros } = makeTimeline(nowMs() - 1_000);
-  const output = makeRecordingOutput();
-  const { session } = makeSession({
-    timeline,
-    output,
-    drainImmediately: true,
-    framesPerDrain: Number.POSITIVE_INFINITY,
-  });
+  const { output, session } = makeDefaultSession({ timeline });
 
   // メディア時刻 (Timescale あり) は映像の表示時刻と対応しない
   const mediaTime = makeVideoFrame(timestampMicros);
@@ -480,26 +545,12 @@ test("handleDecodedFrame: メディア時刻と時間軸を使わないときは
 
 test("handleDecodedFrame: 表示時刻を決めたフレームだけ、表示の実績を時間軸へ記録する", () => {
   const { timeline, timestampMicros } = makeTimeline(nowMs() - 1_000);
-  const output = makeRecordingOutput();
-  const { session } = makeSession({
-    timeline,
-    output,
-    drainImmediately: true,
-    framesPerDrain: Number.POSITIVE_INFINITY,
-  });
+  const { session } = makeDefaultSession({ timeline });
 
-  session.handleDecodedFrame({
-    frame: makeVideoFrame(timestampMicros).frame,
-    timestampKind: "wallClock",
-    useTimeline: true,
-  });
+  handleWallClockFrame(session, timestampMicros);
   // 音声の実績も同じ TIMESTAMP で記録する。両方の実績が揃ったときだけ同期ずれの推定が出る
   // (`PlayoutTimeline.skewMs` の JSDoc) ため、推定が出ることで映像の実績が記録されたと分かる
-  timeline.recordPresentation(
-    "audio",
-    timestampMicros,
-    BigInt(Math.round((TIME_ORIGIN_MS + nowMs()) * 1_000)),
-  );
+  recordAudioPresentation(timeline, timestampMicros);
 
   const skewMs = timeline.skewMs();
   assert.isNotNull(skewMs, "映像の表示の実績が記録されていない");
@@ -512,41 +563,23 @@ test("handleDecodedFrame: 実際に表示できなかったフレームの実績
   const output = makeRecordingOutput();
   // canvas が無い (出し先が出せない) 状態
   output.setPresented(false);
-  const { session } = makeSession({
-    timeline,
-    output,
-    drainImmediately: true,
-    framesPerDrain: Number.POSITIVE_INFINITY,
-  });
+  const { session } = makeDefaultSession({ timeline, output });
 
-  session.handleDecodedFrame({
-    frame: makeVideoFrame(timestampMicros).frame,
-    timestampKind: "wallClock",
-    useTimeline: true,
-  });
+  handleWallClockFrame(session, timestampMicros);
   assert.equal(output.requested.length, 1);
   assert.equal(output.presented.length, 0);
   // 音声の実績だけを記録しても、映像の実績が無いため同期ずれの推定は出ない
-  timeline.recordPresentation(
-    "audio",
-    timestampMicros,
-    BigInt(Math.round((TIME_ORIGIN_MS + nowMs()) * 1_000)),
-  );
+  recordAudioPresentation(timeline, timestampMicros);
   assert.isNull(timeline.skewMs());
 });
 
 test("handleDecodedFrame: 表示待ちの上限を超えたフレームは計器へ記録して閉じる", () => {
-  const timeline = makeEmptyTimeline();
-  const output = makeRecordingOutput();
   const timing = makeRecordingTiming();
-  const { session } = makeSession({
-    timeline,
-    output,
+  const { session } = makeDefaultSession({
     timing: timing.timing,
     maxQueuedFrames: 1,
     // 積んだ時点では出さない (あふれを作る)
     drainImmediately: false,
-    framesPerDrain: Number.POSITIVE_INFINITY,
   });
 
   const first = handleArrivalOrderFrame(session, 1_000);
@@ -559,11 +592,7 @@ test("handleDecodedFrame: 表示待ちの上限を超えたフレームは計器
 });
 
 test("handleDecodedFrame: 表示周期に 1 枚だけ出す (devtools の進め方)", () => {
-  const timeline = makeEmptyTimeline();
-  const output = makeRecordingOutput();
-  const { session, scheduler } = makeSession({
-    timeline,
-    output,
+  const { output, session, scheduler } = makeDefaultSession({
     drainImmediately: false,
     framesPerDrain: 1,
   });
@@ -592,14 +621,7 @@ test("handleDecodedFrame: 表示周期に 1 枚だけ出す (devtools の進め�
 });
 
 test("handleDecodedFrame: 1 つの表示周期ですべて出す (ライブラリの進め方)", () => {
-  const timeline = makeEmptyTimeline();
-  const output = makeRecordingOutput();
-  const { session, scheduler } = makeSession({
-    timeline,
-    output,
-    drainImmediately: true,
-    framesPerDrain: Number.POSITIVE_INFINITY,
-  });
+  const { output, session, scheduler } = makeDefaultSession();
 
   handleArrivalOrderFrame(session, 1_000);
   handleArrivalOrderFrame(session, 2_000);
@@ -617,24 +639,19 @@ test("handleDecodedFrame: 間に合わなかったフレームは計器へ記録
   // 1 秒前に観測した TIMESTAMP を持つ 3 枚を積む。古い 2 枚は表示時刻から 20 ms を超えて
   // 遅れているため捨てられ、最新の 1 枚だけが描かれる
   const { timeline, timestampMicros } = makeTimeline(nowMs() - 1_000);
-  const output = makeRecordingOutput();
   const timing = makeRecordingTiming();
-  const { session, scheduler } = makeSession({
+  const { output, session, scheduler } = makeDefaultSession({
     timeline,
-    output,
     timing: timing.timing,
     drainImmediately: false,
     framesPerDrain: 1,
   });
 
-  const frames = [0, 33_000, 66_000].map((offset) => makeVideoFrame(timestampMicros + offset));
-  for (const recorded of frames) {
-    session.handleDecodedFrame({
-      frame: recorded.frame,
-      timestampKind: "wallClock",
-      useTimeline: true,
-    });
-  }
+  const frames = handleWallClockFrames(session, [
+    timestampMicros,
+    timestampMicros + 33_000,
+    timestampMicros + 66_000,
+  ]);
   assert.equal(session.playout.size, 3);
 
   scheduler.runNext();
@@ -653,21 +670,40 @@ test("handleDecodedFrame: 間に合わなかったフレームは計器へ記録
   );
 });
 
-test("clear(): 予約を取り消し、表示待ちと対応表を捨てる", () => {
-  const timeline = makeEmptyTimeline();
-  const output = makeRecordingOutput();
-  const decodeInputs = new VideoDecodeInputs({ maxTracked: 8, forgetOnDuplicate: true });
-  decodeInputs.remember(1_000, {
-    timestampKind: "wallClock",
-    location: { group: 1n, object: 1n },
-  });
-  const { session, scheduler } = makeSession({
+test("計器の recordLateDrop が throw しても、遅れたフレームを閉じて表示を続ける", () => {
+  // 表示時刻を過ぎたフレームの記録が失敗しても、フレームを閉じて表示周期を止めない
+  const { timeline, timestampMicros } = makeTimeline(nowMs() - 1_000);
+  const throwing: VideoPlayoutTiming = {
+    recordQueueDrop: () => undefined,
+    recordLateDrop: () => {
+      throw new Error("late drop recorder failed");
+    },
+  };
+  const { output, session, scheduler } = makeDefaultSession({
     timeline,
-    output,
-    decodeInputs,
+    timing: throwing,
     drainImmediately: false,
-    framesPerDrain: Number.POSITIVE_INFINITY,
+    framesPerDrain: 1,
   });
+  const frames = handleWallClockFrames(session, [
+    timestampMicros,
+    timestampMicros + 33_000,
+    timestampMicros + 66_000,
+  ]);
+
+  scheduler.runNext();
+
+  assert.isTrue(frames[0]?.isClosed(), "間に合わなかったフレームを閉じていない");
+  assert.isTrue(frames[1]?.isClosed(), "間に合わなかったフレームを閉じていない");
+  assert.deepEqual(
+    output.presented.map((present) => present.timestamp),
+    [timestampMicros + 66_000],
+  );
+});
+
+test("clear(): 予約を取り消し、表示待ちを捨てる", () => {
+  // 復号へ渡した入力の対応表は呼び出し側 (MediaPlayout) が持つため、ここでは消さない
+  const { session, scheduler } = makeDefaultSession({ drainImmediately: false });
 
   const recorded = handleArrivalOrderFrame(session, 1_000);
   assert.equal(session.playout.size, 1);
@@ -679,18 +715,34 @@ test("clear(): 予約を取り消し、表示待ちと対応表を捨てる", ()
   assert.isTrue(recorded.isClosed(), "表示待ちのフレームを閉じていない");
   assert.equal(scheduler.cancelled.length, 1);
   assert.isFalse(scheduler.pending);
-  assert.equal(decodeInputs.size, 0);
+});
+
+test("計器が throw しても、捨てたフレームを閉じて表示周期を続ける", () => {
+  // 計器は throw しない契約だが、実装が失敗してもフレームを閉じ損ねないことを固定する
+  const throwing: VideoPlayoutTiming = {
+    recordQueueDrop: () => {
+      throw new Error("queue drop recorder failed");
+    },
+    recordLateDrop: () => {
+      throw new Error("late drop recorder failed");
+    },
+  };
+  const { session } = makeDefaultSession({
+    timing: throwing,
+    maxQueuedFrames: 1,
+    drainImmediately: false,
+  });
+
+  // 1 枚目で上限に達し、2 枚目の到着で 1 枚目があふれる
+  const first = handleArrivalOrderFrame(session, 1_000_000);
+  const second = handleArrivalOrderFrame(session, 1_100_000);
+  assert.isTrue(first.isClosed(), "あふれたフレームを閉じていない");
+  assert.isFalse(second.isClosed(), "残ったフレームを閉じてしまっている");
+  assert.equal(session.playout.size, 1);
 });
 
 test("clear(): 表示している間に出し先が無くなったら、表示待ちを捨てる", () => {
-  const timeline = makeEmptyTimeline();
-  const output = makeRecordingOutput();
-  const { session, scheduler } = makeSession({
-    timeline,
-    output,
-    drainImmediately: false,
-    framesPerDrain: Number.POSITIVE_INFINITY,
-  });
+  const { output, session, scheduler } = makeDefaultSession({ drainImmediately: false });
 
   const recorded = handleArrivalOrderFrame(session, 1_000);
   assert.equal(session.playout.size, 1);
@@ -707,19 +759,13 @@ test("clear(): 表示している間に出し先が無くなったら、表示�
 test("handleDecodedFrame: 基準を取り直した後に残ったフレームは表示時刻を決めずに出す", () => {
   // targetLatency を下限にして、表示時刻が未来に残るフレームを積む
   const { timeline, timestampMicros } = makeTimeline(nowMs(), 120);
-  const output = makeRecordingOutput();
-  const { session, scheduler } = makeSession({
+  const { output, session, scheduler } = makeDefaultSession({
     timeline,
-    output,
     drainImmediately: false,
     framesPerDrain: 1,
   });
 
-  session.handleDecodedFrame({
-    frame: makeVideoFrame(timestampMicros).frame,
-    timestampKind: "wallClock",
-    useTimeline: true,
-  });
+  handleWallClockFrame(session, timestampMicros);
   // 基準を取り直す (世代が進む)。積んだときの世代と違うフレームは、新しい基準では表示時刻を
   // 決められないため、届いた順に出す
   timeline.reset();

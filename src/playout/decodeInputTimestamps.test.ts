@@ -18,6 +18,7 @@
 
 import { test, assert } from "vite-plus/test";
 import {
+  AudioDecodeInputs,
   DECODER_OUTPUT_TIMESTAMP_TOLERANCE_MICROS,
   DECODE_INPUT_KIND_FALLBACK_MAX_DISTANCE_MICROS,
   LastTimestampKind,
@@ -38,7 +39,7 @@ const MEASURED_OUTPUT_SHIFT_MICROS = 100;
  *
  * 復号の出力が記録より古い側にずれる。実測では 9.7 ms と 19.8 ms (1 フレーム) があった
  */
-const MEASURED_GRID_OFFSETS_MICROS = [9_700, 19_800];
+const MEASURED_GRID_OFFSET_MICROS = 9_700;
 
 test("takeDecodeInputEntry: 完全一致する記録を取り出す", () => {
   const entries = new Map<number, string>();
@@ -53,7 +54,7 @@ test("takeDecodeInputEntry: 完全一致する記録を取り出す", () => {
 });
 
 test("takeDecodeInputEntry: 復号の出力が入力より 100 マイクロ秒大きくても取り出す", () => {
-  // 実測した形そのもの。完全一致しないため、最も古い記録を許容の中で引く
+  // 実測した形そのもの。完全一致しないため、最も近い記録を許容の中で引く
   const entries = new Map<number, string>();
   entries.set(FIRST_INPUT_MICROS, "1 つ目");
 
@@ -77,21 +78,6 @@ test("takeDecodeInputEntry: 許容を超えて離れた記録は取り出さな�
   assert.strictEqual(entries.size, 0);
 });
 
-test("takeDecodeInputEntry: 一致しないままになっても、古い記録を捨てて次の記録を引ける", () => {
-  // 最初の出力が 1 つ目の記録と対応しなかった (出力が欠けた) 後も、2 つ目の出力は
-  // 2 つ目の記録から引ける。古い記録を残すと、以降の対応がすべて引けなくなる
-  const entries = new Map<number, string>();
-  entries.set(FIRST_INPUT_MICROS, "1 つ目");
-  entries.set(FIRST_INPUT_MICROS + FRAME_MICROS, "2 つ目");
-
-  // 1 つ目の記録は、2 つ目の出力の timestamp より 1 フレーム分古い。捨てて 2 つ目を引く
-  assert.strictEqual(
-    takeDecodeInputEntry(entries, FIRST_INPUT_MICROS + FRAME_MICROS + MEASURED_OUTPUT_SHIFT_MICROS),
-    "2 つ目",
-  );
-  assert.strictEqual(entries.size, 0);
-});
-
 test("takeDecodeInputEntry: 許容の境界は取り出す", () => {
   const entries = new Map<number, string>();
   entries.set(FIRST_INPUT_MICROS, "1 つ目");
@@ -109,26 +95,6 @@ test("takeDecodeInputEntry: 許容の境界は取り出す", () => {
 
 test("takeDecodeInputEntry: 記録が無ければ undefined", () => {
   assert.isUndefined(takeDecodeInputEntry(new Map<number, string>(), FIRST_INPUT_MICROS));
-});
-
-test("takeDecodeInputEntry: 実測した 9.7 ms のずれでは引けず、その状態が続く", () => {
-  // 実測 (実リレー、CPU を 6 倍に遅くした再現) では、記録と復号の出力の格子が 9.7 ms
-  // ずれたまま残った。双方が 20 ms ごとに進むため差は縮まらない。この形では、記録は
-  // 残り (この出力より古い記録は捨てる規則は、出力より新しい記録を消さない)、同じ判定が
-  // 出力ごとに繰り返されて、以後の出力がすべて引けなくなる (実測: 対応が引けた 635 回の
-  // 後、831 回続けて引けなくなった)
-  const entries = new Map<number, "wallClock" | "mediaTime">();
-  for (let index = 0; index < 50; index++) {
-    entries.set(FIRST_INPUT_MICROS + index * FRAME_MICROS, "wallClock");
-    const outputTimestamp =
-      FIRST_INPUT_MICROS + index * FRAME_MICROS - MEASURED_GRID_OFFSETS_MICROS[0];
-    assert.isUndefined(
-      takeDecodeInputEntry(entries, outputTimestamp),
-      `${index} 回目も対応が引けない`,
-    );
-    // 引けない状態が続いても記録は 1 件のままである (実測と同じ)
-    assert.strictEqual(entries.size, 1, `${index} 回目の記録の数`);
-  }
 });
 
 test("takeDecodeInputEntry: 出力が返らなかった記録があっても、次の出力の対応を引ける", () => {
@@ -170,48 +136,13 @@ test("takeDecodeInputEntry: 音 1 つの長さの半分までなら、ずれて�
   assert.isUndefined(takeDecodeInputEntry(entries, shifted, 1_250));
 });
 
-test("LastTimestampKind: 実測した格子のずれでも種類を失わない", () => {
-  // 呼び出し側と同じ順で種類を決める (`src/createMediaSubscriber.ts` と
-  // `devtools/src/hooks/useSubscriber.ts`)。引けたときはその記録の種類、引けないときは
-  // 直前に分かっている種類、どちらも無ければ none
-  const resolve = (
-    entries: Map<number, "wallClock" | "mediaTime">,
-    outputTimestamp: number,
-    lastKind: LastTimestampKind<"wallClock" | "mediaTime">,
-  ): "none" | "wallClock" | "mediaTime" =>
-    takeDecodeInputEntry(entries, outputTimestamp) ??
-    lastKind.fallbackFor(entries, outputTimestamp) ??
-    "none";
-
-  for (const offsetMicros of MEASURED_GRID_OFFSETS_MICROS) {
-    const lastKind = new LastTimestampKind<"wallClock" | "mediaTime">();
-    lastKind.update("wallClock");
-    const entries = new Map<number, "wallClock" | "mediaTime">();
-    let lost = 0;
-    for (let index = 0; index < 50; index++) {
-      entries.set(FIRST_INPUT_MICROS + index * FRAME_MICROS, "wallClock");
-      const kind = resolve(
-        entries,
-        FIRST_INPUT_MICROS + index * FRAME_MICROS - offsetMicros,
-        lastKind,
-      );
-      if (kind === "none") {
-        lost += 1;
-      }
-    }
-    // ずれが 1 フレーム (19.8 ms) のときは隣の記録を引く (種類は同じであるため実害は無い)。
-    // どちらのずれでも、種類を失った出力は 1 つも無い
-    assert.strictEqual(lost, 0, `${offsetMicros}: 種類を失った出力の数`);
-  }
-});
-
 test("LastTimestampKind: 種類が変わったら新しい種類を使う", () => {
   // 種類は TIMESTAMP の Timescale の有無で決まる。ストリームの途中で変わったときに
   // 古い種類を使い続けると、誤った時間軸の値として共有の時間軸へ記録してしまう
   const lastKind = new LastTimestampKind<"wallClock" | "mediaTime">();
   const entries = new Map<number, "wallClock" | "mediaTime">();
   entries.set(FIRST_INPUT_MICROS, "wallClock");
-  const outputTimestamp = FIRST_INPUT_MICROS - MEASURED_GRID_OFFSETS_MICROS[0];
+  const outputTimestamp = FIRST_INPUT_MICROS - MEASURED_GRID_OFFSET_MICROS;
 
   lastKind.update("wallClock");
   assert.strictEqual(lastKind.fallbackFor(entries, outputTimestamp), "wallClock");
@@ -247,10 +178,168 @@ test("LastTimestampKind: 別の時間軸の値には使わない", () => {
 
   // 実測した格子のずれは当てにする
   assert.strictEqual(
-    lastKind.fallbackFor(entries, FIRST_INPUT_MICROS - MEASURED_GRID_OFFSETS_MICROS[0]),
+    lastKind.fallbackFor(entries, FIRST_INPUT_MICROS - MEASURED_GRID_OFFSET_MICROS),
     "wallClock",
   );
 
   // 記録が無ければ、その出力が同じ時間軸のものかを言えない
   assert.isNull(lastKind.fallbackFor(new Map<number, string>(), FIRST_INPUT_MICROS));
+});
+
+/**
+ * 復号へ渡した音声 Object の情報を覚える対応表の単体テスト
+ *
+ * 音声の再生の入口 (src/playout/mediaPlayout.ts) は、復号の出力の timestamp でこの表を引き、
+ * TIMESTAMP の種類・Object の位置・入力の遅れ・実際に保持した時間を得る。位置は relay の
+ * cache から追いつく途中の音を鳴らさないための選別に、入力の遅れと保持時間は受信側の
+ * 追いつきの判定に使う。種類を失うと共有の時間軸へ音声の基準が記録されなくなるため、
+ * ずれても種類を失わないことを固定する
+ */
+
+/** 追跡の上限を小さくした表を作る (上限の追い出しを短い手順で確かめる) */
+function createInputs(maxTracked = 256, forgetOnDuplicate = false): AudioDecodeInputs {
+  return new AudioDecodeInputs({ maxTracked, forgetOnDuplicate });
+}
+
+test("AudioDecodeInputs: 復号の出力の timestamp で記録と付加情報を引く", () => {
+  const inputs = createInputs();
+  const location = { group: 3n, object: 7n };
+  inputs.remember(FIRST_INPUT_MICROS, {
+    timestampKind: "wallClock",
+    location,
+    inputLagMs: 12.5,
+    intentionalDelayMs: 200,
+  });
+
+  // 完全一致する記録は、種類・位置・入力の遅れ・実際の保持時間をすべて返す
+  const resolved = inputs.resolve(FIRST_INPUT_MICROS, 1_000);
+  assert.strictEqual(resolved.timestampKind, "wallClock");
+  assert.isNotNull(resolved.input);
+  assert.deepEqual(resolved.input?.location, location);
+  assert.strictEqual(resolved.input?.inputLagMs, 12.5);
+  assert.strictEqual(resolved.input?.intentionalDelayMs, 200);
+
+  // 引いた記録は忘れる。同じ出力が 2 度来ても同じ音の遅れを 2 度使わない
+  assert.strictEqual(inputs.size, 0);
+  const again = inputs.resolve(FIRST_INPUT_MICROS, 1_000);
+  // 記録が残っていないため、直前に分かっている種類を当てにできるかも判断できない
+  // (`LastTimestampKind.fallbackFor` は残っている記録との距離で判断する)
+  assert.isNull(again.timestampKind);
+  assert.isNull(again.input);
+});
+
+test("AudioDecodeInputs: 実測した timestamp のずれは許容の中で引く", () => {
+  const inputs = createInputs();
+  inputs.remember(FIRST_INPUT_MICROS, { timestampKind: "wallClock" });
+
+  // 実測 (実リレー、Opus、48 kHz) では復号の出力が入力より 100 マイクロ秒だけ大きかった。
+  // 完全一致で引くと種類を失うため、許容の中で最も近い記録を引く
+  const resolved = inputs.resolve(FIRST_INPUT_MICROS + 100, 1_000);
+  assert.isNotNull(resolved.input);
+  assert.strictEqual(resolved.timestampKind, "wallClock");
+
+  // 許容より離れた出力は引かない。古い記録は捨て、種類も当てにできない (記録が残らない)
+  inputs.remember(FIRST_INPUT_MICROS, { timestampKind: "wallClock" });
+  const far = inputs.resolve(FIRST_INPUT_MICROS + 2_000, 1_000);
+  assert.isNull(far.input);
+  assert.isNull(far.timestampKind);
+  // 許容より古い記録は、この出力にも後続の出力にも対応しないため捨てる
+  assert.strictEqual(inputs.size, 0);
+});
+
+test("AudioDecodeInputs: 別の時間軸の値には種類を当てにしない", () => {
+  const inputs = createInputs();
+  inputs.remember(FIRST_INPUT_MICROS, { timestampKind: "wallClock" });
+
+  // TIMESTAMP が無い音の 0 や、ミリ秒とマイクロ秒の取り違えは、記録から離れすぎている。
+  // 直前の種類を当てると誤った時刻として共有の時間軸へ記録してしまう
+  assert.isNull(inputs.resolve(0, 1_000).timestampKind);
+  assert.isNull(
+    inputs.resolve(FIRST_INPUT_MICROS - DECODE_INPUT_KIND_FALLBACK_MAX_DISTANCE_MICROS - 1, 1_000)
+      .timestampKind,
+  );
+});
+
+test("LastTimestampKind: 距離が上限ちょうどなら種類を返し、超えると返さない", () => {
+  // 境界の比較 (<=) が < になると、上限ちょうどの音で種類を失う
+  const last = new LastTimestampKind<"wallClock" | "mediaTime">();
+  last.update("wallClock");
+  const entries = new Map<number, "wallClock" | "mediaTime">([[FIRST_INPUT_MICROS, "wallClock"]]);
+  assert.strictEqual(
+    last.fallbackFor(entries, FIRST_INPUT_MICROS + DECODE_INPUT_KIND_FALLBACK_MAX_DISTANCE_MICROS),
+    "wallClock",
+  );
+  assert.isNull(
+    last.fallbackFor(
+      entries,
+      FIRST_INPUT_MICROS + DECODE_INPUT_KIND_FALLBACK_MAX_DISTANCE_MICROS + 1,
+    ),
+  );
+});
+
+test("AudioDecodeInputs: TIMESTAMP が無い音は覚えず、直前の種類も変えない", () => {
+  const inputs = createInputs();
+  inputs.remember(FIRST_INPUT_MICROS, { timestampKind: "mediaTime" });
+  // decoder へ 0 を渡す音 (種類 none) は、種類も位置も一意に引けない。覚えず、直前の種類も
+  // 上書きしない (0 の出力に古い種類を当てないため)
+  inputs.remember(0, { timestampKind: "none" });
+  assert.strictEqual(inputs.size, 1);
+  assert.strictEqual(inputs.resolve(0, 1_000).timestampKind, null);
+
+  // 既に同じ TIMESTAMP を覚えていても、none の記録でその分を忘れる
+  inputs.remember(FIRST_INPUT_MICROS, { timestampKind: "none" });
+  assert.strictEqual(inputs.size, 0);
+});
+
+test("AudioDecodeInputs: 同じ TIMESTAMP が重なったときの扱いを選べる", () => {
+  const location = { group: 1n, object: 2n };
+  // 位置を使わないときは、後から来た種類で上書きする
+  const overwrite = createInputs(256, false);
+  overwrite.remember(FIRST_INPUT_MICROS, { timestampKind: "wallClock", location });
+  overwrite.remember(FIRST_INPUT_MICROS, { timestampKind: "mediaTime", location });
+  const overwritten = overwrite.resolve(FIRST_INPUT_MICROS, 1_000);
+  assert.strictEqual(overwritten.timestampKind, "mediaTime");
+
+  // 位置を使うときは、どちらの Object か決められないため忘れる
+  const forget = createInputs(256, true);
+  forget.remember(FIRST_INPUT_MICROS, { timestampKind: "wallClock", location });
+  forget.remember(FIRST_INPUT_MICROS, { timestampKind: "wallClock", location });
+  const forgotten = forget.resolve(FIRST_INPUT_MICROS, 1_000);
+  assert.isNull(forgotten.input);
+  // 記録が残らないため、どの時間軸の値かも言えない (種類 "none" として扱われる)
+  assert.isNull(forgotten.timestampKind);
+});
+
+test("AudioDecodeInputs: 上限を超えたら古い方から忘れる", () => {
+  const inputs = createInputs(2);
+  for (let index = 0; index < 3; index++) {
+    inputs.remember(FIRST_INPUT_MICROS + index * 20_000, { timestampKind: "wallClock" });
+  }
+  // 最も古い記録だけが追い出され、後ろ 2 件は引ける
+  assert.strictEqual(inputs.size, 2);
+  assert.isNull(inputs.resolve(FIRST_INPUT_MICROS, 1_000).input);
+  assert.isNotNull(inputs.resolve(FIRST_INPUT_MICROS + 20_000, 1_000).input);
+  assert.isNotNull(inputs.resolve(FIRST_INPUT_MICROS + 40_000, 1_000).input);
+});
+
+test("AudioDecodeInputs: clear ですべて忘れる", () => {
+  const inputs = createInputs();
+  inputs.remember(FIRST_INPUT_MICROS, { timestampKind: "wallClock" });
+  inputs.clear();
+  assert.strictEqual(inputs.size, 0);
+  // 直前に分かっている種類も忘れる。購読をやり直した後に前の種類を当てない
+  assert.isNull(inputs.resolve(FIRST_INPUT_MICROS, 1_000).timestampKind);
+});
+
+test("AudioDecodeInputs: 測れない付加情報は null として覚える", () => {
+  const inputs = createInputs();
+  // メディア時刻 (TIMESCALE あり) の音は壁時計と対応しないため、入力の遅れを測れない。
+  // 位置も使わない呼び出し側は渡さない。省略した値は null で覚え、引いたときに null を返す
+  inputs.remember(FIRST_INPUT_MICROS, { timestampKind: "mediaTime" });
+  const resolved = inputs.resolve(FIRST_INPUT_MICROS, 1_000);
+  assert.isNotNull(resolved.input);
+  assert.isNull(resolved.input?.location);
+  assert.isNull(resolved.input?.inputLagMs);
+  assert.isNull(resolved.input?.intentionalDelayMs);
+  assert.strictEqual(resolved.timestampKind, "mediaTime");
 });

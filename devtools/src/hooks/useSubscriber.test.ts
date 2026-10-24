@@ -1,6 +1,7 @@
 import { test, assert } from "vite-plus/test";
 import {
   LOC,
+  EMPTY_AUDIO_PLAYOUT_TIMING,
   createCatalog,
   getVideoTracks,
   type CatalogTrack,
@@ -15,7 +16,6 @@ import {
   createAttemptGuard,
   closeSubscriberResources,
   recordVideoReceived,
-  rememberDecodeInput,
   resetSubscriberState,
   resetSubscriberStats,
   resolveAudioTrack,
@@ -31,13 +31,11 @@ import {
   refreshTrackEndStatus,
   resolveTrackEndState,
   subscribedStatusMessage,
-  type DecodeInput,
   type ReceivedVideoObject,
 } from "./useSubscriber";
 import { AudioDecoderWrapper } from "../../../src/codec/AudioDecoder";
 import { buildObjectSendPlan } from "./usePublisher";
 import { EMPTY_PLAYOUT_TIMING, PlayoutTimingStats } from "../utils/playoutTimingStats";
-import { EMPTY_AUDIO_PLAYOUT_TIMING } from "../../../src/playout/audioPlayoutTimingStats";
 import { GroupSwitchGate } from "../../../src/groupSwitchGate";
 import { CatchUpGate } from "../../../src/catchUpGate";
 import { createSubscriberInstance, subscriberInstances } from "../signals/subscriber";
@@ -392,80 +390,6 @@ test("buildVideoChunkPlan: Track の TIMESCALE があるときはメディア時
 });
 
 // ============================================================================
-// 復号へ渡した Object の情報 (位置と TIMESTAMP の種類、入力の遅れ)
-// ============================================================================
-
-test("rememberDecodeInput: TIMESTAMP の種類と位置と入力の遅れを覚える", () => {
-  // 復号の出力では Object の位置が分からないため、decoder へ渡した TIMESTAMP で引く。
-  // 入力の遅れ (Object の到着 - LOC TIMESTAMP) も一緒に覚え、復号の出力で引いて
-  // 受信側の追いつきへ渡す (src/playout/audioReceiveCatchUp.ts)
-  const inputs = new Map<number, DecodeInput>();
-  rememberDecodeInput(inputs, 1_000, {
-    timestampKind: "wallClock",
-    location: { group: 5n, object: 3n },
-    inputLagMs: 25,
-    intentionalDelayMs: 2_000,
-  });
-  assert.deepEqual(inputs.get(1_000), {
-    timestampKind: "wallClock",
-    location: { group: 5n, object: 3n },
-    inputLagMs: 25,
-    intentionalDelayMs: 2_000,
-  });
-});
-
-test("rememberDecodeInput: 入力の遅れが測れないときは null で覚える", () => {
-  // Timescale がある TIMESTAMP はメディア時刻であり、壁時計と対応しないため測れない。
-  // 復号の出力では入力の遅れが無いものとして扱い、出力の遅れだけを使う
-  const inputs = new Map<number, DecodeInput>();
-  rememberDecodeInput(inputs, 1_000, {
-    timestampKind: "mediaTime",
-    location: { group: 5n, object: 3n },
-    inputLagMs: null,
-    intentionalDelayMs: 0,
-  });
-  assert.deepEqual(inputs.get(1_000), {
-    timestampKind: "mediaTime",
-    location: { group: 5n, object: 3n },
-    inputLagMs: null,
-    intentionalDelayMs: 0,
-  });
-});
-
-test("rememberDecodeInput: TIMESTAMP を持たない Object は覚えない", () => {
-  // TIMESTAMP が無い Object はすべて同じ TIMESTAMP (0) を共有するため、位置を一意に引けない。
-  // 復号の出力では位置が分からないものとして扱い、境界の判定をせずに描く・鳴らす
-  const inputs = new Map<number, DecodeInput>();
-  rememberDecodeInput(inputs, 0, {
-    timestampKind: "none",
-    location: { group: 5n, object: 3n },
-    inputLagMs: null,
-    intentionalDelayMs: 0,
-  });
-  assert.isFalse(inputs.has(0), "TIMESTAMP を持たない Object の位置を覚えた");
-});
-
-test("rememberDecodeInput: 同じ TIMESTAMP の Object が重なったら、その TIMESTAMP の分を忘れる", () => {
-  // 同じ TIMESTAMP の Object が 2 つあるとき、復号の出力がどちらの位置かは決められない。
-  // 先に覚えていた分も忘れ、どちらも位置が分からないものとして扱う。入力の遅れも同じ理由で
-  // 一緒に忘れる (別の音の遅れを引かない)
-  const inputs = new Map<number, DecodeInput>();
-  rememberDecodeInput(inputs, 1_000, {
-    timestampKind: "mediaTime",
-    location: { group: 1n, object: 1n },
-    inputLagMs: 25,
-    intentionalDelayMs: 0,
-  });
-  rememberDecodeInput(inputs, 1_000, {
-    timestampKind: "mediaTime",
-    location: { group: 1n, object: 2n },
-    inputLagMs: 30,
-    intentionalDelayMs: 0,
-  });
-  assert.isFalse(inputs.has(1_000), "同じ TIMESTAMP の位置を覚えたままにした");
-});
-
-// ============================================================================
 // 映像 Object の到着の記録
 // ============================================================================
 
@@ -596,6 +520,10 @@ test("resetSubscriberStats: 映像と音声の統計を初期値へ戻す", () =
   instance.audioWaveformRight.value = new Float32Array([4, 5, 6]);
   instance.audioPlayoutRebases.value = 2;
   instance.audioPlayoutDrops.value = 3;
+  // 音を加工した量も 500 ms の反映でしか更新しないため、購読を始めた時点で戻す
+  instance.audioPlayoutCompressedMs.value = 120;
+  instance.audioPlayoutConcealedMs.value = 40;
+  instance.audioPlayoutConcealments.value = 7;
   // 鳴らすと決めた音の観測値も、前の購読の値を持ち越さない
   instance.audioPlayoutTiming.value = {
     ...EMPTY_AUDIO_PLAYOUT_TIMING,
@@ -638,6 +566,9 @@ test("resetSubscriberStats: 映像と音声の統計を初期値へ戻す", () =
   assert.equal(instance.audioWaveformRight.value, null);
   assert.equal(instance.audioPlayoutRebases.value, 0);
   assert.equal(instance.audioPlayoutDrops.value, 0);
+  assert.equal(instance.audioPlayoutCompressedMs.value, 0);
+  assert.equal(instance.audioPlayoutConcealedMs.value, 0);
+  assert.equal(instance.audioPlayoutConcealments.value, 0);
   assert.deepEqual(instance.audioPlayoutTiming.value, EMPTY_AUDIO_PLAYOUT_TIMING);
   assert.equal(instance.audioCatchUpObjectsSkipped.value, 0);
 });

@@ -2,35 +2,42 @@
 
 ## 概要
 
-moqt-js に MediaStream ベースの高レベル API を追加する。
-WebCodecs のエンコード/デコード、Worker 処理、LOC コンテナを内部で隠蔽し、
-シンプルなファクトリー関数で MOQT メディア配信を実現する。
+moqt-js の高レベル API は、MediaStream ベースの配信と視聴、復号済みフレームの再生を担う。
+
+配信 (`createMediaPublisher`) と視聴 (`createMediaSubscriber`) は、WebCodecs の
+エンコード / デコード、Worker 処理、LOC コンテナを内部で隠蔽し、シンプルなファクトリー関数で
+MOQT メディアの配信と視聴を実現する。
+
+再生 (`createMediaPlayout`) は、呼び出し側が復号した音声と映像を受け取り、共有の時間軸、
+音声の予約、映像の表示、A/V 同期、計器をまとめる。復号 (WebCodecs) と Worker 処理、
+受信、購読の管理は呼び出し側が持つ。
 
 ## API 階層
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│ 高レベル API (MediaStream)                                    │
+│ 高レベル API                                                 │
 │                                                              │
-│ createMediaPublisher(url, options)                           │
-│ createMediaSubscriber(url, options)                          │
+│ createMediaPublisher(url, options)   ← 配信                  │
+│ createMediaSubscriber(url, options)  ← 視聴                  │
+│ createMediaPlayout(options)          ← 再生                  │
 │                                                              │
-│ 用途: シンプルなメディア配信                                  │
-│ 内部: Worker + WebCodecs + LOC を隠蔽                         │
+│ 用途: 配信、視聴、再生                                       │
+│ 配信と視聴: Worker + WebCodecs + LOC を隠蔽                  │
+│ 再生: 時間軸、音声の予約、映像の表示、計器を隠蔽             │
 ├──────────────────────────────────────────────────────────────┤
-│ 低レベル API (MoqtObject)                                     │
+│ 低レベル API (MoqtObject)                                    │
 │                                                              │
 │ connect() → session.publish() / session.subscribe()          │
 │ publisher.sendObject() / subscriber.object callback          │
 │                                                              │
-│ 用途: MOQT プロトコル直接操作、メディア以外のデータ配信        │
+│ 用途: MOQT プロトコル直接操作、メディア以外のデータ配信      │
 └──────────────────────────────────────────────────────────────┘
 ```
 
-`AudioPlayoutSession` (音声の再生の組み立て) と `VideoPlayoutSession` (映像の表示の組み立て)
-は高レベル API の下にある公開 API であり、`createMediaSubscriber` (ライブラリ) と
-moqt-devtools が同じ実装を使う。詳細は「音声の再生の組み立て (AudioPlayoutSession)」と
-「映像の表示の組み立て (VideoPlayoutSession)」を参照すること。
+再生の公開 API は、復号済みの音声と映像を再生する入口 `createMediaPlayout` の 1 本である。
+使い方は「再生の入口 (MediaPlayout)」を、内部の組み立ては「内部実装」の「再生の組み立て」を
+参照すること。
 
 ---
 
@@ -298,6 +305,32 @@ catalog の Group ID は送り直しのたびに +1 し、`stop()` → `start()`
 間も同じである。送り直しでも同じ catalog instance を送るため、`generatedAt` (§5.1.2) は
 配信の開始時に組み立てた時刻のままである。
 
+### 音声の末尾 flush (停止時)
+
+`stop()` / `close()` は、止める前に読んだフレームと encoder の中身を送り切る。
+
+1. 周期読み出しのループ自身に、取り込みキューに残っている分を読ませる
+   (`AUDIO_TAIL_DRAIN_QUIET_MS` = 5 ms の静穏窓と `AUDIO_TAIL_DRAIN_MAX_FRAMES` = 4 ブロック
+   の上限。停止の受付時に capture 済みの分だけを対象にし、停止後の新規キャプチャは
+   含めない)
+2. 1 フレーム先読みの保留分を encode する
+3. `AudioEncoderWrapper.flush()` で encoder に残った出力を待つ (direct は WebCodecs の
+   `AudioEncoder.flush`、worker は flush の出力を送ってから完了を返す順序)
+4. 末尾の送信 (datagram の write / subgroup の送信) の完了を待つ
+5. 末尾を送ったときは、配送方式 (datagram / subgroup) にかかわらず
+   `AUDIO_TAIL_PUBLISH_DONE_GRACE_MS` = 50 ms 待ってから PUBLISH_DONE を送る
+   (Object の stream / datagram と PUBLISH_DONE の control stream には順序保証が無いため)
+
+この間は世代 (処理ループの有効性) を進めない。進めると末尾の出力が世代不一致で捨てられる。
+flush と送信の完了を待つ上限は `AUDIO_TAIL_FLUSH_MAX_MS` = 150 ms で、超えた場合は
+`tailFlushTimeoutCount` に残して解放へ進む (停止がハングしない)。これとは別に drain の
+待ち (`AUDIO_TAIL_DRAIN_MAX_MS` + 静穏窓) が最大 55 ms あり、末尾を送ったときは 50 ms の
+猶予が加わるため、停止の待ちは最大で約 255 ms、これに解放の時間が加わる。末尾を送らな
+かったときは猶予が無い。通常は 50〜110 ms 程度である。`tailFlushTimeoutCount` は
+drain、flush、送信のいずれかの待ちが打ち切られた停止の回数を数える。送ろうとした末尾の量は
+`tailFlushedFrames` / `tailFlushedMs` (送信を試みた時点で数える)、送れなかった量は
+`tailDroppedFrames` / `tailDroppedMs` で読める。
+
 ### 統計情報
 
 ```typescript
@@ -325,8 +358,8 @@ interface AudioStats {
   // 0 でも、drain の打ち切りで読まなかった取り込みキューと write の失敗は含まない
   tailDroppedFrames: number;
   tailDroppedMs: number;
-  // 停止時の drain・flush・送信の待ちが上限で打ち切られた停止の回数 (累積)。
-  // 1 つの停止で複数の待ちが打ち切られても 1 回と数える。1 以上なら、入力が途切れた・
+  // 停止時の drain、flush、送信の待ちが上限で打ち切られた停止の回数 (累積)。
+  // 1 つの停止で複数の待ちが打ち切られても 1 回と数える。1 以上なら、入力が途切れた、
   // worker が応答しなかったなどの打ち切りがあったことを示す
   tailFlushTimeoutCount: number;
 }
@@ -390,7 +423,7 @@ interface VideoStats {
 
 #### 音声の TIMESTAMP
 
-音声の LOC TIMESTAMP (Timescale を載せない Unix epoch マイクロ秒) は、
+音声の LOC TIMESTAMP (TIMESCALE を載せない Unix epoch マイクロ秒) は、
 `AudioData.timestamp` の刻み (サンプルの間隔) をそのまま使い、原点だけを配信側の壁時計へ
 合わせて作る。マイクや Web Audio の `AudioData.timestamp` は `performance.now()` と同じ
 時計ではなく、一定のずれのほかにドリフトや段差で動く。そのまま壁時計として
@@ -446,7 +479,7 @@ TIMESTAMP が動くと、受信側がこれを時計のずれとみなして基�
 
 なお、`AudioEncoder` が出力する chunk の timestamp は、投入した `AudioData.timestamp` では
 なく「符号化したサンプル数」から作る連続した値になる。フレームを捨てて投入に穴が空くと、
-出力の timestamp は投入より古くなる。LOC TIMESTAMP は送るサンプルの取得時刻でなければ
+出力の timestamp は投入より古くなる。LOC の TIMESTAMP は送るサンプルの取得時刻でなければ
 ならないため、覆った最初の投入の timestamp を使う (devtools の Audio Level の参照も同じ)。
 
 投入したフレームの同一性も順番で持つ。`AudioData.timestamp` は同じ値が続くことがあり、
@@ -456,7 +489,7 @@ timestamp を鍵にすると記録が上書きされて「キューに残って�
 `"keep"` は捨てずに順に符号化して送る。音楽や効果音のように、間引くと内容が壊れる用途で
 使う。キューに溜まった遅れは戻らないため、受信側の基準の遅れは増えたままになる。
 
-配信側が足す遅れは、読み出し・符号化のキュー・送信のキューの 3 段に分けて読める。
+配信側が足す遅れは、読み出し、符号化のキュー、送信のキューの 3 段に分けて読める。
 `readLagMs` が読み出し、`pendingMs` / `pendingFrames` が符号化のキュー、`sendQueueMs` /
 `sendQueueFrames` が送信のキュー (1 Object = 1 Group = 1 ストリームのため、ストリームの
 生成と書き込みの待ちがここに出る) である。`sendLagMs` は撮ってから送信が終わるまでの遅れで、
@@ -471,32 +504,6 @@ timestamp を鍵にすると記録が上書きされて「キューに残って�
 ---
 
 ## MediaSubscriber
-
-#### 音声の末尾 flush (停止時)
-
-`stop()` / `close()` は、止める前に読んだフレームと encoder の中身を送り切る。
-
-1. 周期読み出しのループ自身に、取り込みキューに残っている分を読ませる
-   (`AUDIO_TAIL_DRAIN_QUIET_MS` = 5 ms の静穏窓と `AUDIO_TAIL_DRAIN_MAX_FRAMES` = 4 ブロック
-   の上限。停止の受付時に capture 済みの分だけを対象にし、停止後の新規キャプチャは
-   含めない)
-2. 1 フレーム先読みの保留分を encode する
-3. `AudioEncoderWrapper.flush()` で encoder に残った出力を待つ (direct は WebCodecs の
-   `AudioEncoder.flush`、worker は flush の出力を送ってから完了を返す順序)
-4. 末尾の送信 (datagram の write / subgroup の送信) の完了を待つ
-5. 末尾を送ったときは、配送方式 (datagram / subgroup) にかかわらず
-   `AUDIO_TAIL_PUBLISH_DONE_GRACE_MS` = 50 ms 待ってから PUBLISH_DONE を送る
-   (Object の stream / datagram と PUBLISH_DONE の control stream には順序保証が無いため)
-
-この間は世代 (処理ループの有効性) を進めない。進めると末尾の出力が世代不一致で捨てられる。
-flush と送信の完了を待つ上限は `AUDIO_TAIL_FLUSH_MAX_MS` = 150 ms で、超えた場合は
-`tailFlushTimeoutCount` に残して解放へ進む (停止がハングしない)。これとは別に drain の
-待ち (`AUDIO_TAIL_DRAIN_MAX_MS` + 静穏窓) が最大 55 ms あり、末尾を送ったときは 50 ms の
-猶予が加わるため、停止の待ちは最大で約 255 ms、これに解放の時間が加わる。末尾を送らな
-かったときは猶予が無い。通常は 50〜110 ms 程度である。`tailFlushTimeoutCount` は
-drain・flush・送信のいずれかの待ちが打ち切られた停止の回数を数える。送ろうとした末尾の量は
-`tailFlushedFrames` / `tailFlushedMs` (送信を試みた時点で数える)、送れなかった量は
-`tailDroppedFrames` / `tailDroppedMs` で読める。
 
 ### 作成
 
@@ -538,7 +545,7 @@ interface MediaSubscriberOptions {
   pendingObjectQueue?: Partial<PendingObjectQueueOptions>;
   // 受信した Object を復号へ渡すまでの追加遅延 (ms)。default: 0
   // 2 秒以上も指定できる。上限は MAX_PRE_DECODE_DELAY_MS (30 秒)
-  // 実際の表示遅延は、この値に経路・復号・jitter buffer の遅れが加わる。
+  // 実際の表示遅延は、この値に経路、復号、jitter buffer の遅れが加わる。
   // catalog の targetLatency とは加算される
   preDecodeDelayMs?: number;
 }
@@ -610,13 +617,13 @@ interface MediaSubscriberCallbacks {
 
 ### メソッド
 
-| メソッド                           | 説明                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `start(): Promise<void>`           | 購読開始（`"created"` と `"stopped"` から呼べる。開始を取り消すには `close()` を使う。実行中にピア起点の close または `close()` が重なると `"closed"` を優先して失敗する。失敗時は解放して遷移前の state に戻る。解放 (`close()` とピア起点の close / `stop()` の解放) が進行している間は `cannot start while closing` で拒否する）                                                                                                                                                                                                                                                                          |
-| `stop(): Promise<void>`            | 購読停止（`"active"` からのみ。`"subscribing"` を含むそれ以外は `cannot stop in state` で throw。解放して `"stopped"` にする。停止の要求後は新しい音声 Object を受け付けず、復号前の遅延の段に保持していた音声を flush して復号へ流し、予約済みの音が鳴り終わるまで待ってから `AudioContext` を閉じる（drain。最大 300 ms）。鳴らせた量と切った量は `getStats().audio.playoutTiming.lastDrain` で読める。ピア起点の close の解放中は進行中の解放を共有して完了を待つ。解放の失敗時は state と `onClose` を変えず元のエラーを throw。`close()` が解放と終端遷移を進めている間は `cannot stop while closing`） |
-| `requestNewGroup(): Promise<void>` | 新しい Group の開始を要求（REQUEST_UPDATE 送信。値は購読で受信した Object と `LARGEST_OBJECT` の大きい方の次の Group。映像は新しい Group の先頭がキーフレームになる）                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `close(): Promise<void>`           | リソース解放（終端。どの状態からでも可能。開始の取り消しもこれを使う。呼ぶと解放の完了を待たずに閉じたものとして扱い、解放の await 中に届いた Object は統計に数えず復号にも渡さない。進行中の解放（`stop()` / ピア起点の close）は共有して完了を待ち、その成否が結果になる。同時に呼んでも解放と通知は 1 回。解放の失敗時は state と `onClose` を変えず元のエラーを throw）                                                                                                                                                                                                                                  |
-| `getStats(): MediaReceiverStats`   | 受信側の統計情報取得                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| メソッド                           | 説明                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `start(): Promise<void>`           | 購読開始（`"created"` と `"stopped"` から呼べる。開始を取り消すには `close()` を使う。実行中にピア起点の close または `close()` が重なると `"closed"` を優先して失敗する。失敗時は解放して遷移前の state に戻る。解放 (`close()` とピア起点の close / `stop()` の解放) が進行している間は `cannot start while closing` で拒否する）                                                                                                                                                                                                                                                                                                        |
+| `stop(): Promise<void>`            | 購読停止（`"active"` からのみ。`"subscribing"` を含むそれ以外は `cannot stop in state` で throw。解放して `"stopped"` にする。停止の要求後は新しい音声 Object を受け付けず、復号前の遅延の段に保持していた音声を flush して復号へ流し、予約済みの音が鳴り終わるまで待ってから `AudioContext` を閉じる（drain。最大 300 ms、`AUDIO_PLAYOUT_DRAIN_MAX_MS`）。鳴らせた量と切った量は `getStats().audio.playoutTiming.lastDrain` で読める。ピア起点の close の解放中は進行中の解放を共有して完了を待つ。解放の失敗時は state と `onClose` を変えず元のエラーを throw。`close()` が解放と終端遷移を進めている間は `cannot stop while closing`） |
+| `requestNewGroup(): Promise<void>` | 新しい Group の開始を要求（REQUEST_UPDATE 送信。値は購読で受信した Object と `LARGEST_OBJECT` の大きい方の次の Group。映像は新しい Group の先頭がキーフレームになる）                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `close(): Promise<void>`           | リソース解放（終端。どの状態からでも可能。開始の取り消しもこれを使う。呼ぶと解放の完了を待たずに閉じたものとして扱い、解放の await 中に届いた Object は統計に数えず復号にも渡さない。進行中の解放（`stop()` / ピア起点の close）は共有して完了を待ち、その成否が結果になる。同時に呼んでも解放と通知は 1 回。解放の失敗時は state と `onClose` を変えず元のエラーを throw）                                                                                                                                                                                                                                                                |
+| `getStats(): MediaReceiverStats`   | 受信側の統計情報取得                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 
 ### プロパティ
 
@@ -664,11 +671,11 @@ created / stopped ──────────► subscribing ─────�
 余裕 100 ms」を 0〜300 ms にクランプした値である。flush 分の復号の出力は、投入順で対応
 させて flush した Object のものだけを待ち、予約されるまで待つ。flush があるときは、予約が
 無くても上限まで待つ (復号が終われば早く終わる)。上限で鳴り切れなかった
-分だけが `getStats().audio.playoutTiming.missedByReason.stopped` に残り、鳴らせた量・切った量・
-待った時間・flush した件数・復号の出力が届かなかった件数 (`undecodedFlushedObjects`) は
+分だけが `getStats().audio.playoutTiming.missedByReason.stopped` に残り、鳴らせた量、切った量、
+待った時間、flush した件数、復号の出力が届かなかった件数 (`undecodedFlushedObjects`) は
 同 `lastDrain` で読める。
-`close()` とピア起点の close も drain するが、後始末が長くブロックしないよう上限は 150 ms と
-する。
+`close()` とピア起点の close も drain するが、後始末が長くブロックしないよう上限は 150 ms
+(`AUDIO_PLAYOUT_DRAIN_CLOSE_MAX_MS`) とする。
 `close()` のあとに `start()` を呼ぶと `cannot start in state: closed` で拒否される。
 `stop()` の成功時に `onClose` は通知しない (停止であり終端ではない)。
 
@@ -764,7 +771,7 @@ interface AudioReceiverStats {
   playoutConcealedMs: number;
   // 目標を守る並べ方で最後に並べた音の遅れ (ms)。基準を消すと 0 に戻る
   playoutLatenessMs: number;
-  // 音声の再生の観測値。鳴るはずの時刻 (再生予定時刻)・届いた時刻・鳴り始める時刻と、
+  // 音声の再生の観測値。鳴るはずの時刻 (再生予定時刻)、届いた時刻、鳴り始める時刻と、
   // 予定に対する余裕の分布 (直近 10 秒の p50 / p95 / max)、鳴らなかった量 (件数と ms) を
   // 理由ごとに出す。補間で埋まらなかった無音の穴 (回数 / ms / 最大 / 予約できなかった分)、
   // 予約を currentTime が追い越した回数、バッファ境界の段差も累積で持つ
@@ -780,11 +787,21 @@ interface AudioReceiveCatchUpStats {
   // 直近に観測した、復号の出力の遅れ (復号の出力を受け取った壁時計 - AudioData.timestamp)。
   // まだ観測していなければ null
   lagMs: number | null;
-  // 健全時の遅れ (床) と、観測した最大の遅れ。床は直近 5 秒の窓の最小値であり、
-  // 経路と復号の速さという環境の値を含む (実測: 手元で 18〜19 ms、CI の runner で 116 ms 前後)
+  // 直近に観測した、受信の入口の入力の遅れ (Object の到着の壁時計 - LOC TIMESTAMP)。
+  // 測れなければ null
+  inputLagMs: number | null;
+  // 直近に観測した、復号が足している遅れ。出力の遅れ - 入力の遅れ - 意図した遅延であり、
+  // 追いつきの判定 (床と上限) はこの値で行う。入力の遅れが測れないときは
+  // 出力の遅れ - 意図した遅延になる
+  decodeLagMs: number | null;
+  // 健全時に観測した、復号が足している遅れ (床)。直近 5 秒の窓の最小値であり、経路と復号の
+  // 速さという環境の値を含む (実測: 手元で 18〜19 ms、CI の runner で 116 ms 前後)。
+  // まだ観測していなければ null
   floorMs: number | null;
+  // 観測した最大の、復号の出力の遅れ (ms)
   maxLagMs: number | null;
-  // いま使っている遅れの上限。max(60 ms, floorMs + 40 ms)
+  // いま使っている遅れの上限。床と AUDIO_RECEIVE_CATCH_UP_GROWTH_MS (40 ms) から決まり、
+  // 床がまだ無ければ AUDIO_RECEIVE_CATCH_UP_MIN_MS (60 ms) になる
   limitMs: number;
   // いま追いつきの最中か (復号器を作り直した後、遅れが上限へ戻るまで)。この間は 1 秒ごとに
   // 作り直しを重ねる
@@ -800,8 +817,8 @@ interface AudioReceiveCatchUpStats {
 // 音声の再生の観測値。時刻はすべて performance.now() と同じ軸のミリ秒であり、
 // 別のマシンでは publisher の時計とのずれを含む
 interface AudioPlayoutTimingSnapshot {
-  // 直近に鳴らすと決めた音の、再生予定時刻 (LOC TIMESTAMP から時間軸が決めた時刻)・
-  // 到着時刻 (復号の出力を受け取った時刻)・鳴り始める時刻。予定を決められなければ null
+  // 直近に鳴らすと決めた音の、再生予定時刻 (LOC TIMESTAMP から時間軸が決めた時刻)、
+  // 到着時刻 (復号の出力を受け取った時刻)、鳴り始める時刻。予定を決められなければ null
   lastTargetMs: number | null;
   lastArrivalMs: number | null;
   lastStartMs: number | null;
@@ -819,8 +836,10 @@ interface AudioPlayoutTimingSnapshot {
   playedMs: number;
   // 時間軸の再生予定時刻を使えず、到着基準の計画で鳴らした音の数 (累積)。壁時計の
   // TIMESTAMP を持たない、jitter buffer が無効、トラックの基準が共有されていない
-  // (TIMESTAMP が壁時計からずれている) ときに起きる。このとき startDelayMs は到着から
-  // 100 ms を超えない (316 ms のような遅れを作らない)
+  // (TIMESTAMP が壁時計からずれている) ときのほか、予定を決められても使わなかった音
+  // (揃える相手がいない音声だけの購読のとき) も数える。
+  // このとき startDelayMs は、揃える相手がいるときは到着から 100 ms を超えず (316 ms の
+  // ような遅れを作らない)、音声だけのときは 140 ms を下限に 160 ms までになる
   arrivalPlannedFrames: number;
   // 到着基準の計画も持たないまま鳴らした音の数 (累積)。呼び出し側が計画を渡していない
   // 取りこぼしであり、通常は 0
@@ -832,29 +851,34 @@ interface AudioPlayoutTimingSnapshot {
   // 追いつく途中で鳴らさなかった)、error (鳴らす準備に失敗した)、stopped (予約したまま
   // 再生を止めて切り捨てられた)。鳴り遅れでは捨てない (遅れたまま鳴らすか、音が途切れて
   // いたときだけ到着基準へ並べ直す)
-  missedByReason: Record<AudioMissReason, { count: number; ms: number }>;
+  missedByReason: Readonly<Record<AudioMissReason, AudioMissTotal>>;
   // 直近に鳴らさなかった音 (古い順、最大 30 件)
-  recentMisses: AudioMissEvent[];
-  // 直近の停止の drain の結果。停止していなければ null
-  lastDrain: AudioPlayoutDrainStats | null;
-}
-
-// 直近の停止で予約済みの音を鳴らし切った結果。時刻と長さはミリ秒
-interface AudioPlayoutDrainStats {
-  // 停止を始めた時点で予約されていた長さ
-  pendingMsAtStart: number;
-  // drain で待つと決めた上限
-  requestedMs: number;
-  // 実際に待った時間
-  waitedMs: number;
-  // 鳴らすことになった合計 (停止時の残り + drain 中に増えた予約 - 切った量)
-  playedMs: number;
-  // 上限で切った長さ。missedByReason.stopped の増分と一致する
-  cutMs: number;
-  // 停止時に復号前の段から flush した件数と、復号の出力が届かなかった件数
-  // (復号器の作り直しで捨てられた分を含む)
-  flushedObjects: number;
-  undecodedFlushedObjects: number;
+  recentMisses: readonly AudioMissEvent[];
+  // 時間圧縮と補間を使えないサンプルレートで鳴らした音の数 (累積)。96 kHz などは加工せず、
+  // 「操作しない」を返すため、この数で気付く。0 なら使えている
+  stretchUnavailableFrames: number;
+  // 補間で埋まらなかった無音の穴の回数、長さの合計 (ms)、最大 (ms) (累積)。予約できる
+  // 最も早い時刻より前だった分、補間が失敗した分、補間の上限 (100 ms) を超えた分を含む
+  gapCount: number;
+  gapMs: number;
+  gapMaxMs: number;
+  // 穴のうち、予約できる最も早い時刻より前だった回数と長さの合計 (ms) (累積)。
+  // 事後には埋められないため、目標遅延を増やす判断に使う
+  unrecoverableGapCount: number;
+  unrecoverableGapMs: number;
+  // 予約した開始時刻を AudioContext.currentTime が追い越した回数と最大 (ms) (累積)
+  lateStartCount: number;
+  lateStartMaxMs: number;
+  // 開始時刻を currentTime + 余裕へ押し直した回数と最大 (ms) (累積。追い越しの有無を問わない)
+  pushStartCount: number;
+  pushStartMaxMs: number;
+  // バッファ境界の段差が AUDIO_PLAYOUT_BOUNDARY_STEP_THRESHOLD を超えた回数と最大
+  // (0 から 1 の振幅、累積)
+  boundaryStepCount: number;
+  boundaryStepMax: number;
+  // 直近の停止の drain の結果。停止していなければ null。形は再生の入口が返す
+  // MediaPlayoutDrainStats (「再生の入口 (MediaPlayout)」の「ライフサイクル」) と同じ
+  lastDrain: MediaPlayoutDrainStats | null;
 }
 
 // 分布の要約 (ミリ秒)
@@ -868,7 +892,7 @@ interface VideoReceiverStats {
   framesReceived: number;
   keyFramesReceived: number;
   bytesReceived: number;
-  // 復号中の Group より古い Group の Object と、重複・遅着の Object として捨てたフレーム数
+  // 復号中の Group より古い Group の Object と、重複 / 遅着の Object として捨てたフレーム数
   staleFramesDropped: number;
   // 参照するフレームが欠けているため、キーフレームを待つ間に捨てたフレーム数
   missingReferenceFramesDropped: number;
@@ -949,8 +973,8 @@ interface AudioDelayFeedbackSnapshot {
   // 実際に使っている目標遅延 (ms)。鳴らした結果をまだ観測していない間は jitterTargetMs
   appliedMs: number;
   // 直前に目標を動かした理由。"initial" (初期値)、"backlog" (並べすぎで捨てた)、
-  // "lateness" (予定を過ぎて鳴った)、"settled" (遅れが許容の中に収まった)、
-  // "waiting" (動かす条件がそろっていない)
+  // "gap" (補間で埋まらなかった無音の穴が空いた)、"lateness" (予定を過ぎて鳴った)、
+  // "settled" (遅れが許容の中に収まった)、"waiting" (動かす条件がそろっていない)
   reason: AudioDelayFeedbackReason;
   // 明示設定 (catalog の targetLatency) の上限 (ms)。無ければ null
   ceilingMs: number | null;
@@ -958,16 +982,24 @@ interface AudioDelayFeedbackSnapshot {
   lastChangeMs: number;
   // 目標を動かした回数
   adjustments: number;
-  // 直近 (1 秒) の、予定を過ぎて鳴った量・到着から鳴り始めるまでの時間・予定に対する
+  // 直近 (1 秒) の、予定を過ぎて鳴った量、到着から鳴り始めるまでの時間、予定に対する
   // 余裕の p50 (ms)。まだ鳴らしていなければ null
   latenessP50Ms: number | null;
   startDelayP50Ms: number | null;
   slackP50Ms: number | null;
+  // 実際に適用する値に掛けている上限 (ms)。広げていないときは 100
+  // (AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS)。穴が空いたときは穴の長さを吸収できる値まで
+  // 一時的に広がり、圧縮か穴が続くと 160 (AUDIO_DELAY_FEEDBACK_ARTIFACT_CEILING_MS) まで
+  // 広がる。明示設定 (catalog の targetLatency) があるときは 160 ms を上限として
+  // その値までに切る (既定の 100 ms は下回らない)
+  appliedCeilingMs: number;
+  // 直近の制御で観測した圧縮の速さ (ms / 秒)。上限を上げる判断に使った値
+  compressionMsPerSecond: number;
 }
 ```
 
-音声と映像の表示時刻は 1 つの式で決める。`LOC Timestamp` (Timescale が無ければ Unix epoch
-マイクロ秒の壁時計) に、基準の遅れ (送受信の時計のずれと、経路と復号の最小遅延) と
+音声と映像の表示時刻は 1 つの式で決める。LOC の TIMESTAMP (TIMESCALE が無ければ Unix
+epoch マイクロ秒の壁時計) に、基準の遅れ (送受信の時計のずれと、経路と復号の最小遅延) と
 jitter buffer の遅れ (`catalog の targetLatency` を下限とする) を足した時刻が目標になる
 (draft-ietf-moq-msf-01 Section 5.2.8 / Section 5.2.11)。`isLive` が false の track の
 `targetLatency` は無視する (Section 5.2.8 の MUST)。
@@ -977,8 +1009,8 @@ jitter buffer の遅れ (`catalog の targetLatency` を下限とする) を足�
 
 jitter buffer の遅れは音声と映像で別々に求める。音声は NetEq と同じ規則 (到着の遅れの
 0.95 分位) に加えて、**実際に鳴った結果から閉ループでも目標を決める**。NetEq の規則は
-「直近で最も早く届いた音との差」しか見ないため、到着から鳴り始めるまでの経路 (復号・
-予約・出力のバッファ・まとめて届いた山) の分だけストリーム全体が一様に遅れていることを
+「直近で最も早く届いた音との差」しか見ないため、到着から鳴り始めるまでの経路 (復号、
+予約、出力のバッファ、まとめて届いた山) の分だけストリーム全体が一様に遅れていることを
 見つけられない。その分を、予定をどれだけ過ぎて鳴ったか (`latenessMs`) と並べすぎで捨てた
 量 (`missedByReason.backlog`) から学ぶ。
 
@@ -986,10 +1018,12 @@ jitter buffer の遅れは音声と映像で別々に求める。音声は NetEq
 - 遅れが許容 (10 ms) の中に収まり、捨てが無いなら目標を減らす (毎秒 10 ms)
 - 目標を動かすのは毎秒 1 回までであり、1 回の増加は 40 ms までにする。判断には直近 1 秒の
   分布を使う (表示用の 10 秒の窓は、目標を増やした結果が現れるまでに数秒かかる)
-- 目標は 50 ms から 300 ms の間に収める (下限は実リレーの実測で決めた値)。観測が無い間は
-  増減せず、NetEq の値をそのまま使う
-- `catalog の targetLatency` を宣言したときは、その値を自動で決める目標の上限にする
-  (NetEq が求めた遅れには掛けない。既存の揺らぎの吸収を変えないため)
+- 目標は 50 ms から、実際に適用する上限の間に収める。適用する上限は通常 100 ms
+  (`AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS`) であり、穴が空いたときは穴の長さを吸収できる値まで、
+  圧縮か穴が 2 秒続いたときは 160 ms (`AUDIO_DELAY_FEEDBACK_ARTIFACT_CEILING_MS`) まで広がる
+  (下限は実リレーの実測で決めた値)。観測が無い間は増減せず、NetEq の値をそのまま使う
+- `catalog の targetLatency` を宣言したときは、その値を広げる上限に使う (既定の 100 ms は
+  下回らない。NetEq が求めた遅れには掛けない。既存の揺らぎの吸収を変えないため)
 - いま使っている目標とその理由は `AvSyncStats.delays.audioDelayFeedback` に出る。収束して
   いれば `reason` が `settled` と `lateness` の間を行き来し、`latenessP50Ms` が許容の近くに
   留まる
@@ -1025,15 +1059,18 @@ jitter buffer の遅れは音声と映像で別々に求める。音声は NetEq
 基準を共有できない側が音声のときは、同期の制御を止めず、映像だけを音声の到着基準の時刻へ
 合わせる。音声の TIMESTAMP が信用できなくても、音声の並べ方は分かっているためである。
 
-- 音声は「到着 + 到着基準の再生の遅れ」で鳴る (`AUDIO_PLAYOUT_ARRIVAL_DELAY_SECONDS` = 100 ms
-  を上限とし、下限は 50 ms)。この値へ映像の到着からの遅れ (jitter buffer の遅延) を
-  合わせる
+- 音声は「到着 + 到着基準の再生の遅れ」で鳴る。揃える相手 (映像) がいるときは
+  `AUDIO_PLAYOUT_ARRIVAL_DELAY_MS` = 100 ms を上限とし、下限は 50 ms にする。この値へ映像の
+  到着からの遅れ (jitter buffer の遅延) を合わせる
+- 音声だけを購読しているときは、映像に合わせる相手がいない。揺らぎの推定が届いていない
+  周期的な停滞を先に吸収する `AUDIO_ONLY_ARRIVAL_DELAY_FLOOR_MS` = 140 ms を下限にし、
+  閉ループが穴を観測して広げた目標を `AUDIO_ONLY_ARRIVAL_DELAY_MAX_MS` = 160 ms まで使う
 - 足すのは映像だけである。音声を遅らせると到着から鳴るまでの時間がその分だけ増える。
   映像が音声より遅いときは戻さない (音声を遅らせないと合わせられないため、その分は
   A/V のずれとして残す)
 - 足す量は `PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS` (100 ms) までとし、足すのは即座、
   戻すのは毎秒 20 ms までにする (共有できる場合と同じ規則)
-- 音声と映像の到着が同じ時刻であることは前提にする (同じ publisher・同じ経路の
+- 音声と映像の到着が同じ時刻であることは前提にする (同じ publisher、同じ経路の
   2 つのトラック)。実測では、この合わせを止めていたために音声が 195 ms、映像が 98 ms で
   100 ms のずれが残っていた
 
@@ -1059,23 +1096,23 @@ Audio Playback を有効にすると、映像は音声のバッファと出力�
 閉ループの初期値だけによる 100 ms への跳ね上げは行わない。到着推定は初期の音切れを
 抑えるため 80 ms を保ち、分布が揃った後は安全下限 50 ms まで観測に適応する。
 音声だけの再生には別の下限があり、穴への対処は実際に使う下限から増やす。
-TIMESTAMP が無い場合、メディア時刻の場合、`useTimeline: false` の場合も、この閉ループの
+TIMESTAMP が無い場合、メディア時刻の場合、`jitterBuffer: false` の場合も、この閉ループの
 適用値を到着基準の再生に使う。壁時計の基準は作らない。
 
 どちらの場合も、2 つのトラックはそれぞれの到着と jitter buffer の遅れで並ぶ。A/V のずれは
 基準の差ではなく、2 つの遅れの差 (数十 ms) になる。`delays` はこの判断に使った内訳
-(基準の遅れ・jitter buffer の遅延・足した分・共有できているか・差の動き) をそのまま出す
+(基準の遅れ、jitter buffer の遅延、足した分、共有できているか、差の動き) をそのまま出す
 ため、音声と映像の遅れを比べて改善するときに使える。
 
 `AudioStats` / `VideoStats` は送信側 (`MediaStats`) の型である。受信側は
 `AudioReceiverStats` / `VideoReceiverStats` を使う。
 
 `AudioReceiverStats.playoutTiming` は、音声が「鳴るはずだった時刻」と「実際に鳴り始める
-時刻」の観測値である。受信した音声の再生予定時刻は LOC の TIMESTAMP から `PlayoutTimeline`
-が決め、到着時刻は復号の出力を受け取った時刻、鳴り始める時刻は `AudioContext` の時計へ
-予約した時刻を `AudioClockBridge` で `performance.now()` の軸へ換算した値である
-(音声の出力デバイスの遅延は含まない)。予定に対する余裕 (`slackMs` の分布) が負であれば、
-届いた時点ですでに予定を過ぎており、その音は間に合っていない。
+時刻」の観測値である。受信した音声の再生予定時刻は LOC の TIMESTAMP から共有の時間軸が
+決め、到着時刻は復号の出力を受け取った時刻、鳴り始める時刻は `AudioContext` の時計へ予約
+した時刻を `performance.now()` の軸へ換算した値である (音声の出力デバイスの遅延は含まない)。
+予定に対する余裕 (`slackMs` の分布) が負であれば、届いた時点ですでに予定を過ぎており、その
+音は間に合っていない。
 
 `latenessMs` / `startDelayMs` / `slackMs` の分布は、音声の目標遅延を決める閉ループにも
 使う (`AvSyncStats.delays.audioDelayFeedback`)。鳴らす時刻は
@@ -1083,12 +1120,13 @@ TIMESTAMP が無い場合、メディア時刻の場合、`useTimeline: false` �
 バッファの分だけ先) に届いていないと、どの音も予定を過ぎて鳴る。この遅れを
 `latenessMs` が示し、閉ループが目標を増やす。詳細は上の jitter buffer の説明を参照。
 
-`AudioPlayoutTimingSnapshot` の `gapCount` / `gapMs` / `gapMaxMs` は、穴として残した回数・
-長さの合計・最大である。穴は、予約できる最も早い時刻 (今 + 余裕) より前だった分、補間が
+`AudioPlayoutTimingSnapshot` の `gapCount` / `gapMs` / `gapMaxMs` は、穴として残した回数、
+長さの合計、最大である。穴は、予約できる最も早い時刻 (今 + 余裕) より前だった分、補間が
 失敗した分、補間の上限 (100 ms) を超えた分からでき、無音へ落ちる側の段差がクリックとして
 聞こえる (無音から戻る側は補間や次の音の先頭を 2 ms フェードインするため段差は小さい)。`gapMs` は「補間で埋まらなかった長さ」であり、補間を予約したときに生成する長さの丸め
 (半サンプル以内) は穴として数えない。2 ms のフェードは補間の長さに数えるため含まない。
-購読の開始からの累積であり、波形を収録して数えた無音 (収録区間だけ) とは範囲が違うため一致しない。
+計器を作り直すまでの累積であり、波形を収録して数えた無音 (収録区間だけ) とは範囲が違うため
+一致しない。
 秒単位の長い途絶 (配信の停止、経路の断) も 1 回の穴として含む。クリックは 0 の長さではなく
 境界の段差で決まるため、`boundaryStepCount` / `boundaryStepMax` と併せて読む。
 `unrecoverableGapCount` / `unrecoverableGapMs` は穴のうち予約できる最も早い時刻より前だった
@@ -1103,19 +1141,21 @@ TIMESTAMP が無い場合、メディア時刻の場合、`useTimeline: false` �
 0.05 (`AUDIO_PLAYOUT_BOUNDARY_STEP_THRESHOLD`。440 Hz の正常な差分 p99.9 = 0.0174 の約
 3 倍) を超えた回数と最大である。すべての境界を測るため、通常の音の切れ目も含む。しきい値は
 440 Hz のトーン基準の絶対値であり、実音声では正常な段差が超えることがある。
-`stretchUnavailableFrames` と同じく累積であり、購読をやり直すと 0 に戻る。
+`stretchUnavailableFrames` と同じく累積であり、購読をやり直しても消えない。
 
 `arrivalPlannedFrames` は、時間軸の再生予定時刻を使えず、到着基準の計画で鳴らした音の数で
 ある。使えないのは壁時計の TIMESTAMP を持たない、jitter buffer が無効、トラックの基準が
-共有されていない (TIMESTAMP が壁時計からずれている) ときである。このときの再生の遅れは
-到着から 100 ms 以下 (`AUDIO_PLAYOUT_ARRIVAL_DELAY_SECONDS`) に抑える。共有の時間軸が学習
-した再生の遅れは、ずれている TIMESTAMP を揺らぎとして学習した値 (実測で 316〜500 ms) に
-なるためである。`unplannedFrames` は、到着基準の計画も持たないまま鳴らした音であり、
-通常は 0 になる。
+共有されていない (TIMESTAMP が壁時計からずれている) ときである。予定を決められても、揃える
+相手がいないために使わなかった音 (音声だけの購読) も数える。このときの再生の遅れは、
+揃える相手がいるときは到着から 100 ms 以下 (`AUDIO_PLAYOUT_ARRIVAL_DELAY_MS`) に抑え、
+音声だけのときは 140 ms を下限に 160 ms まで (`AUDIO_ONLY_ARRIVAL_DELAY_FLOOR_MS` /
+`AUDIO_ONLY_ARRIVAL_DELAY_MAX_MS`) にする。共有の時間軸が学習した再生の遅れは、ずれている
+TIMESTAMP を揺らぎとして学習した値 (実測で 316〜500 ms) になるためである。
+`unplannedFrames` は、到着基準の計画も持たないまま鳴らした音であり、通常は 0 になる。
 
 この遅れは「実際に鳴るまで」の時間である。`AudioContext` の時計 (`currentTime`) は、既に
 出力のバッファへ積まれた分だけ実際に鳴る位置より先に進む。到着基準の目標を `currentTime`
-から数えると、実際に鳴るのは「到着 + 100 ms + バッファの分」になる (実測では
+から数えると、実際に鳴るのは「到着 + 遅れ + バッファの分」になる (実測では
 `startDelayMs` が 100 ms の目標に対して 195.5 ms になり、A/V のずれが約 100 ms 残っていた)。
 音声の `AudioData` を復号した時刻は `AudioClockBridge` で `AudioContext` の秒へ換算し、
 その位置を到着の基準にして「到着 + 遅れに鳴る」時刻を求める。`AudioContext` の対応付けが
@@ -1125,10 +1165,11 @@ TIMESTAMP が無い場合、メディア時刻の場合、`useTimeline: false` �
 のに予定だけが過去にあるとき、ずれているのは予定の方 (TIMESTAMP が壁時計からずれている)
 であり、音は遅れていない。音がまだ鳴っている (キューが空でない) 間は到着基準へ並べ直さず、
 前の音の終わりに繋げて遅れたまま鳴らす。並べ直す (媒体時刻を跳ばす) のは、直前の音が既に
-鳴り終わっているなど、音が本当に途切れていたときだけである。並べ直したときは到着から
-`AUDIO_PLAYOUT_ARRIVAL_DELAY_SECONDS` (100 ms) だけ遅らせる。音が途切れていないときに
-予約できる最も早い時刻へずらすだけの場合は、ずらす幅が `AUDIO_PLAYOUT_RESYNC_MIN_JUMP_SECONDS`
-(10 ms) 未満なら並べ直しとして数えない (媒体時刻が跳ばないため)。
+鳴り終わっているなど、音が本当に途切れていたときだけである。並べ直したときは到着基準の
+再生の遅れ (揃える相手がいるときは 100 ms 以下、音声だけのときは 140 ms を下限に 160 ms
+まで) だけ遅らせる。音が途切れていないときに予約できる最も早い時刻へずらすだけの場合は、
+ずらす幅が `AUDIO_PLAYOUT_RESYNC_MIN_JUMP_SECONDS` (10 ms) 未満なら並べ直しとして数えない
+(媒体時刻が跳ばないため)。
 
 `missedFrames` / `missedMs` は、鳴らすと決めたのに鳴らなかった音の数と長さである。
 `playoutDrops` が件数だけを数えるのに対し、こちらは理由 (`missedByReason`) と長さ、
@@ -1159,371 +1200,710 @@ Object ID の飛びも欠落として扱う。
 
 ---
 
-## 音声の再生の組み立て (AudioPlayoutSession)
+## 再生の入口 (MediaPlayout)
 
-`AudioPlayoutSession` は、復号済みの音声 1 つを「鳴らす」までの組み立てを 1 か所にまとめた
-公開 API である。`createMediaSubscriber` (ライブラリ) と moqt-devtools の音声の再生は
-どちらもこれを使う。同じ組み立てを 2 か所に置くと、到着基準の遅れ・目標遅延の閉ループ・
-計器の修正を毎回 2 か所へ入れることになり、片方だけを直すと挙動がずれるためである。
+`createMediaPlayout` は、復号済みの音声と映像を再生するための共通の入口である。内部では、
+共有の時間軸、音声の再生の組み立て、映像の表示の組み立て、計器、復号へ渡した入力の対応表
+(音声と映像で別の表) を 1 か所にまとめる。
 
-受け取るのは、復号した音 (`AudioData`) と、その音の TIMESTAMP の種類 (LOC の TIMESTAMP と
-TIMESCALE から決める。draft-ietf-moq-loc-04 §2.3.1.1 / §2.3.1.2) である。渡すと次を行う。
+`MediaPlayout` は型としてだけ公開しており、値 (コンストラクタ) は公開していない。生成には
+`createMediaPlayout(options)` を使う。時間軸と組み立てのクラスも公開していない。公開している
+型と値は「公開している型と値」に列挙する。
 
-- 共有の時間軸 (`PlayoutTimeline`) への到着の記録と、目標の表示時刻の決定
-- `AudioPlayoutScheduler` での予約 (遅れて届いた音は波形を詰めて目標へ戻し、並べすぎは捨てる)
-- 欠落した区間の補間 (直前に鳴らした音の末尾を伸ばす)
-- 計器 (`AudioPlayoutTimingStats`) への記録 (鳴るはずの時刻・届いた時刻・鳴り始める時刻と、
-  鳴らなかった量)
-- 目標遅延の閉ループへの観測の引き渡し (常に行う。実測で、渡さないと時間圧縮が止まらない)
-- 受信側の追いつきの判定 (`AudioReceiveCatchUp`)。復号の出力が送られた TIMESTAMP から
-  遅れ続けたら、復号器を作り直す必要があることを結果 (`catchUpStarted`) で知らせる
+`createMediaSubscriber` (ライブラリ) と moqt-devtools はこの入口を使う。音声と映像の時間軸が
+同じであること、目標の開始時刻を守るかどうか、音声だけを購読しているときの到着基準の下限と
+いった判断は、すべて入口の中で行う。呼び出し側が持つのは、復号 (WebCodecs)、受信、購読の
+管理、画面への反映である。
 
-Web Audio (`AudioContext` とその出力) は `AudioPlayoutOutput` として渡す。`AudioContext`
-の時計と `performance.now()` の対応は `AudioClockBridge` が境界になる。再開直後などで
-`getOutputTimestamp().performanceTime` が 0 の間は `currentTime` で代用し、出力の残差を学習しない。
-代用値は現在の 2 時計から取り直す。同じ Context の停止と再開でも古い対応を持ち越さず、
-停止していた時間を未来の予約として扱わない。
-出力との結合は実ブラウザの `AudioData` と Web Audio で検証する。
+### アプリケーションが直接使う API
 
-44.1 kHz の音声も時間圧縮と補間に対応する。周期を探す解析用の信号だけを 48 kHz へ変換し、
-元の音声は元のレートのまま処理する。相関が足りない波形では圧縮しない。96 kHz などの
-非対応レートは加工せず、`stretchUnavailableFrames` に数える。
+毎フレーム使う API は次の 5 つである。
 
-`timestampKind` は、復号へ渡したときに覚えた記録を復号の出力の `AudioData.timestamp` で
-引いて決める。WebCodecs の `AudioDecoder` は出力の timestamp を入力と完全には一致させない
-(実測: Opus、48 kHz、実リレーで 100 マイクロ秒だけ大きい)。完全一致で引くと、種類を失った
-音がこの組み立てへ `none` として渡り、共有の時間軸へ記録されなくなる (音声の基準の遅れが
-更新されず、A/V 同期が到着基準へ落ちる)。そのため、一致する記録が無いときは許容の中では
-最も近い記録を引く。一致が続かなかった後も引けるよう、許容より古くなった記録は捨てる。
-引けないままになることもある (実測: 記録と復号の出力の timestamp の格子が 9.7 ms ずれたまま
-残り、以後の出力がすべて引けなくなる) ため、引けないときは直前に分かっている種類を使う。
-引く処理とその種類の保持は `src/playout/decodeInputTimestamps.ts` が持ち、ライブラリと devtools が
-共有する。
+- `trackAudioDecodeInput` / `trackVideoDecodeInput` — 復号へ渡す直前に入力の情報を記録する
+- `pushAudio` / `pushVideo` — 復号の出力を渡す
+- `getStats` — 統計情報を読む
+
+再生の開始と停止、`AudioContext` の作り直しでは、続く「ライフサイクル」の API を使う。
+`createMediaSubscriber` を使う場合は、この入口の API を直接呼ばない。moqt-devtools は入口を
+直接使い、毎フレームの API とライフサイクルの API の両方を呼ぶ。
+
+### 作成
 
 ```typescript
-import {
-  AudioPlayoutSession,
-  AudioPlayoutTimingStats,
-  AUDIO_PLAYOUT_TIMING_WINDOW_MS,
-  PlayoutTimeline,
-} from "moqt-js";
+import { createMediaPlayout } from "moqt-js";
 
-// 時間軸と計器は呼び出し側が持つ (時間軸は映像と共有し、計器は統計として読む)
-const timeline = new PlayoutTimeline({
-  timeOriginMs: performance.timeOrigin,
-  maxQueuedFrames: 8,
-});
-// 窓と時刻原点は必須である。時刻原点を渡さないと、鳴らなかった音の壁時計が 1970 年になり、
-// relay や publisher のログと突き合わせられない
-const timing = new AudioPlayoutTimingStats(AUDIO_PLAYOUT_TIMING_WINDOW_MS, performance.timeOrigin);
-const session = new AudioPlayoutSession({ timing });
+const audioContext = new AudioContext();
+const generator = new MediaStreamTrackGenerator({ kind: "video" });
+const writer = generator.writable.getWriter();
 
-// 復号の出力ごとに呼ぶ (output は AudioContext と MediaStreamAudioDestinationNode)
-const result = session.handleDecodedAudio({
-  data: audioData,
-  timestampKind: "wallClock",
-  timeline,
-  useTimeline: true,
-  enforceTarget: true,
-  output: { context, destination },
+const playout = createMediaPlayout({
+  // 音声の再生。AudioContext と、予約した音を繋ぐ出力を渡す
+  audio: { context: audioContext, destination: audioContext.destination },
+  // 映像の表示。表示すると決めたフレームの出し先を渡す
+  video: {
+    output: {
+      isAvailable: () => true,
+      present: (frame, presentationMs) => {
+        // 受け取ったフレームはここで表示し、writer へ渡す。所有権は戻り値にかかわらず
+        // writer へ移り、閉じるのは writer の先 (ブラウザ) である。書き込みが失敗した
+        // ときは出し先が閉じないため、ここで閉じる。
+        // presentationMs は時間軸が決めた表示時刻 (performance.now() と同じ軸のミリ秒)。
+        // 届いた順に表示するときは null
+        writer.write(frame).catch(() => {
+          frame.close();
+        });
+        return true;
+      },
+    },
+  },
 });
 ```
+
+戻り値の型は `MediaPlayout` である。`AudioContext` と映像の出し先はブラウザ依存であり、
+利用側の実物を注入する。映像の出し先と表示の周期は「映像の出し先と表示の周期」を参照する
+こと。
+
+`audio` と `video` は少なくとも片方を指定する。両方を省略するか null を渡すと throw する。
+省略した側は構成しないため、後から足すことはできない。
+
+音声だけを再生する場合は `video` を省略する。
+
+```typescript
+import { createMediaPlayout } from "moqt-js";
+
+const audioContext = new AudioContext();
+// 自動再生ポリシーで suspended のまま作られることがある。利用者の操作を受けてから
+// resume() する (suspended の間は currentTime が進まず、予約した音も鳴らない)
+if (audioContext.state === "suspended") {
+  await audioContext.resume();
+}
+const playout = createMediaPlayout({
+  audio: { context: audioContext, destination: audioContext.destination },
+});
+
+// 受信した Object を復号へ渡す直前に呼ぶ (AudioDecoder.decode() の直前)
+function onEncodedObject(decoder: AudioDecoder, chunk: EncodedAudioChunk): void {
+  playout.trackAudioDecodeInput(chunk.timestamp, { timestampKind: "wallClock" });
+  decoder.decode(chunk);
+}
+
+// 復号の出力で呼ぶ (AudioDecoder の output)。push だけを呼ぶ
+function onDecodedFrame(data: AudioData): void {
+  try {
+    playout.pushAudio(data);
+  } finally {
+    // pushAudio は AudioData を閉じない。所有権は呼び出し側に残る
+    data.close();
+  }
+}
+```
+
+映像だけを再生する場合は `audio` を省略する。
+
+```typescript
+import { createMediaPlayout, type Location } from "moqt-js";
+
+const generator = new MediaStreamTrackGenerator({ kind: "video" });
+const writer = generator.writable.getWriter();
+const playout = createMediaPlayout({
+  video: {
+    output: {
+      isAvailable: () => true,
+      present: (frame) => {
+        writer.write(frame).catch(() => {
+          frame.close();
+        });
+        return true;
+      },
+    },
+  },
+});
+
+// 受信した Object を復号へ渡す直前に呼ぶ (VideoDecoder.decode() の直前)。
+// location は受信した Object の位置 (Group ID と Object ID)
+function onEncodedObject(
+  decoder: VideoDecoder,
+  chunk: EncodedVideoChunk,
+  location: Location,
+): void {
+  playout.trackVideoDecodeInput(chunk.timestamp, { timestampKind: "wallClock", location });
+  decoder.decode(chunk);
+}
+
+// 復号の出力で呼ぶ (VideoDecoder の output)。push だけを呼ぶ
+function onDecodedFrame(frame: VideoFrame): void {
+  // present へ渡したフレームの所有権は出し先 (writer) へ移る。表示しないフレームは入口が閉じる
+  playout.pushVideo(frame);
+}
+```
+
+`AudioContext` は自動再生ポリシーにより `suspended` の状態で作られることがある。`suspended` の
+間は `currentTime` が進まず、予約した音は鳴らない。利用者の操作 (クリックなど) を受けた時点で
+`await audioContext.resume()` してから音を渡すこと。`createMediaSubscriber` は購読の開始時に
+内部で `resume()` し、失敗は `onError` で通知する。
 
 ### オプション
 
 ```typescript
-interface AudioPlayoutSessionOptions {
-  // 鳴らした音と鳴らなかった音の記録の入れ先 (計器)
-  timing: AudioPlayoutTimingStats;
+interface MediaPlayoutOptions {
+  // 音声の再生。省略または null で音声を構成しない
+  // (audio と video の両方を省略するか null を渡すと throw する)
+  audio?: MediaPlayoutAudioOptions | null;
+  // 映像の表示。省略または null で映像を構成しない
+  video?: MediaPlayoutVideoOptions | null;
+  // 共有の時間軸 (jitter buffer) を使うか。既定は true。
+  // false のときは TIMESTAMP の対応付けと表示時刻の決定をせず、届いた順に鳴らし / 表示する
+  // (音声の目標遅延の閉ループは動き続ける。admit 用の入力記録は動く)
+  jitterBuffer?: boolean;
+  // catalog から解決した表示の遅れの目標 (ミリ秒)。既定は null。
+  // 購読の途中で変わったときは setTargetLatencyMs で変える。有限数で 0 以上
+  targetLatencyMs?: number | null;
+  // 映像の表示待ちのキューの上限 (枚)。既定は JITTER_BUFFER_MAX_QUEUED_FRAMES (24)。
+  // 時間軸が許す表示の遅れの上限もこの値から決まる。1 以上の整数
+  maxQueuedFrames?: number;
+  // 復号の出力で入力が引けなかったときに使う、意図した復号前の遅延 (ミリ秒)。既定は 0。
+  // 復号前の遅延の段を使う呼び出し側は、その設定値を渡す。有限数で 0 以上
+  intentionalDelayMs?: number;
+  // 復号へ渡した入力の対応表の設定
+  decodeInputs?: MediaPlayoutDecodeInputOptions;
+}
+
+interface MediaPlayoutAudioOptions {
+  // AudioContext と、予約した音を繋ぐ出力。2 つ同時に指定する
+  // (片方だけでは throw する)。鳴らす先が無いときは 2 つとも省略する
+  context?: AudioPlayoutContext;
+  destination?: AudioNode;
+  // 計器。省略すると内部で作る。「鳴らなかった量」を自分の実行周期で画面へ出すときは、
+  // 作ったものを渡して直接読む
+  // (new AudioPlayoutTimingStats(AUDIO_PLAYOUT_TIMING_WINDOW_MS, performance.timeOrigin))
+  timing?: AudioPlayoutTimingStats;
+  // 鳴らすかどうかの選別。false を返すとその音は鳴らさず notAdmitted を返す。
+  // 鳴らす先が無いときも呼ばれ、そのときは skipped が優先される。
+  // throw しない契約であり、throw した場合は pushAudio が status: "error" を返す
+  admit?: (input: MediaPlayoutAudioDecodeInput | null) => boolean;
+  // 揃える相手 (映像) がいるかを返す。省略すると映像の出力が構成されているかで決める。
+  // catalog に映像のトラックが無い購読では、映像の出力があっても揃える相手はいない。
+  // 映像の出力を構成していない (video を省略した) ときは、この値によらず揃える相手はいない。
+  // throw しない契約であり、throw した場合は pushAudio が status: "error" を返す
+  hasCounterpart?: () => boolean;
+}
+
+interface MediaPlayoutVideoOptions {
+  // 表示すると決めたフレームの出し先 (必須)
+  output: VideoPlayoutOutput;
+  // 表示の周期の進め方。省略すると MediaPlayout が
+  // { drainImmediately: true, framesPerDrain: Number.POSITIVE_INFINITY } を渡す
+  // (表示時刻を過ぎたフレームをすべて出す)
+  pacing?: VideoPlayoutPacing;
+  // 捨てたフレームの記録先 (計器)。省略すると記録しない
+  timing?: VideoPlayoutTiming;
+  // 表示するかどうかの選別。false を返すとそのフレームは表示せずに閉じて notAdmitted を返す。
+  // admit と output.isAvailable は throw しない契約であり、throw した場合はフレームを
+  // 閉じて status: "skipped" を返す (表示しない扱いにする)
+  admit?: (input: MediaPlayoutVideoDecodeInput | null) => boolean;
+}
+
+interface MediaPlayoutDecodeInputOptions {
+  // 覚えておく上限 (件)。既定は 256。1 以上の整数。超えたら古い方から忘れる
+  maxTracked?: number;
+  // 同じ TIMESTAMP の入力が重なったときに、その TIMESTAMP の分を忘れるか。既定は false
+  // true は位置 (Object の位置) を選別に使うとき (どちらの位置か決められないため)。
+  // false は後から来た種類で上書きする (種類しか使わないとき)
+  forgetOnDuplicate?: boolean;
 }
 ```
 
-### handleDecodedAudio の依頼
+数値のオプションは入口で検証し、違反は throw する。`maxQueuedFrames` と
+`decodeInputs.maxTracked` は 1 以上の整数、`targetLatencyMs` / `intentionalDelayMs` は
+有限数で 0 以上である。範囲外の値でハングや無音を起こさないよう、構成する前に弾く。
+`drainAudio` の `maxWaitMs` も呼び出し時に検証し、範囲外なら非同期の reject になる
+(`drainAudio` は Promise を返す)。
+
+`targetLatencyMs` の既定は null であり、catalog の `targetLatency`
+(draft-ietf-moq-msf-01 §5.2.8) を解決した値を渡す。同じ render group と alternate group の
+track が同じ値を持つことは MUST だが、音声と映像で同じ値を使うこと自体は MUST ではない。
+この入口は 1 つの値しか持てないため、呼び出し側が同じ group の track に同じ値を載せて渡す
+(ライブラリは catalog から解決した 1 値を渡す)。catalog の `targetLatency` が負や非有限の
+ときは、宣言が無いものとして null を渡す (ライブラリはそう解決する)。
+
+`decodeInputs.maxTracked` の既定 256 は、音声の通常の購読では足りる。relay の cache から
+まとめて復号する購読では、復号へ渡してから復号の出力が届くまでの件数が数百以上に増える
+ため不足し得る。moqt-devtools は 8192 を渡す。
+
+### 音声を構成する場合と省略する場合
+
+`audio` を省略する (または null を渡す) と音声を構成しない。`audio: {}` のように指定すると、
+鳴らす先が無くても音声を構成する。違いは次のとおりである。
+
+| 指定                              | `getStats().audio` | `pushAudio` | `setAudioOutput`       |
+| --------------------------------- | ------------------ | ----------- | ---------------------- |
+| `audio: { context, destination }` | 非 null            | 鳴らす      | 差し替えられる         |
+| `audio: {}`                       | 非 null            | `skipped`   | 後から出力を付けられる |
+| `audio` を省略、または null       | null               | `skipped`   | throw する             |
+
+`audio: {}` の間も、復号へ渡した入力の記録と選別 (`admit`) は行う。`pushAudio` は
+`status: "skipped"` を返し、時間軸へも計器へも記録しない。鳴らし始めるときに
+`setAudioOutput` で出力を付ける (`context` と `destination` は 2 つ同時に指定する)。
+
+`video` を省略する (または null を渡す) と映像を構成しない。`pushVideo` はフレームを閉じて
+`status: "skipped"` を返し、`getStats().video` は null になる。
+
+### 公開している型と値
+
+`src/index.ts` から公開している再生の型と値は次のとおりである。
+
+- 入口: `createMediaPlayout` (値) と `MediaPlayout` (型のみ)
+- オプション: `MediaPlayoutOptions`、`MediaPlayoutAudioOptions`、`MediaPlayoutVideoOptions`、
+  `MediaPlayoutDecodeInputOptions`
+- 復号へ渡した入力: `MediaPlayoutAudioDecodeInput` / `MediaPlayoutVideoDecodeInput`、
+  `PlayoutTimestampKind`
+- 復号の出力を渡した結果: `MediaPlayoutAudioResult` / `MediaPlayoutVideoResult`
+- 停止: `MediaPlayoutDrainOptions` / `MediaPlayoutDrainStats`、
+  `AUDIO_PLAYOUT_DRAIN_MAX_MS` (300 ms) / `AUDIO_PLAYOUT_DRAIN_CLOSE_MAX_MS` (150 ms)
+- 統計情報: `MediaPlayoutStats`、`MediaPlayoutAudioStats`、`MediaPlayoutVideoStats`、
+  `AudioPlayoutTimingSnapshot`、`AudioReceiveCatchUpStats`、`AudioDelayFeedbackSnapshot`、
+  `AudioDelayFeedbackReason`、`AvSyncStats` (MediaSubscriber と共通)、`TimingSummary`、
+  `PlayoutDelayBreakdown`、`PlayoutTrackBreakdown`、`PlayoutUnsharedReason`、
+  `AudioMissEvent`、`AudioMissReason`、`AudioMissTotal`
+- 注入する実物の型: `AudioPlayoutContext` / `AudioPlayoutOutput`、`VideoPlayoutOutput`、
+  `VideoPlayoutPacing`、`VideoPlayoutTiming`
+- 計器: `AudioPlayoutTimingStats` (公開クラス)、`AUDIO_PLAYOUT_TIMING_WINDOW_MS`、
+  `AUDIO_PLAYOUT_BOUNDARY_STEP_THRESHOLD`、`AUDIO_MISS_REASONS`、
+  `EMPTY_AUDIO_PLAYOUT_TIMING`、`formatAudioMissEvent`、`AudioPlayoutBasis`、
+  `AudioPlayoutMiss`、`AudioDelayFeedbackObservation`
+- 受信側の追いつき: `AUDIO_RECEIVE_CATCH_UP_MIN_MS`、`AUDIO_RECEIVE_CATCH_UP_GROWTH_MS`、
+  `AUDIO_RECEIVE_CATCH_UP_JUMP_MS`、`AUDIO_RECEIVE_CATCH_UP_FLOOR_WINDOW_MS`、
+  `AUDIO_RECEIVE_CATCH_UP_CONFIRM_MS`、`AUDIO_RECEIVE_CATCH_UP_COOLDOWN_MS`、
+  `AUDIO_RECEIVE_CATCH_UP_SKIP_MIN_MS`、`EMPTY_AUDIO_RECEIVE_CATCH_UP`
+- 既定値: `JITTER_BUFFER_MAX_QUEUED_FRAMES`
+
+`AudioPlayoutTimingStats` のメソッド引数と戻り値の型 (`AudioPlayoutBasis` /
+`AudioPlayoutMiss` / `AudioDelayFeedbackObservation`) も公開している。
+
+次の型は、音声の再生に注入する実物の型である。`AudioContext` の実物は `AudioPlayoutContext`
+を構造的に満たすため、そのまま渡せる。
 
 ```typescript
-interface AudioPlayoutRequest {
-  // 復号した音。所有権は呼び出し側に残る (この中では close() しない)
-  data: AudioData;
-  // 音の TIMESTAMP の種類。wallClock のときだけ目標の時刻を決める
-  timestampKind: "none" | "wallClock" | "mediaTime";
-  // 意図した復号前の遅延 (ms)。省略時は 0
-  // 購読側が preDecodeDelayMs で復号を遅らせているとき、その分は復号器の詰まりではない。
-  // 受信側の追いつきは、出力の遅れから入力の遅れとこの値を引いて判定する
-  intentionalDelayMs?: number;
-  // 音声と映像で共有する表示時刻の時間軸
-  timeline: PlayoutTimeline;
-  // 時間軸を使って鳴らすか (jitter buffer が有効な購読のとき)。false のときは時間軸へ
-  // 記録せず、到着基準で並べる
-  useTimeline: boolean;
-  // 目標の時刻を守るか (揃える相手がいるとき)。false のときは、鳴らす時刻を過ぎて届いた音は
-  // 基準を取り直して鳴らす
-  enforceTarget: boolean;
-  // 鳴らす先。null のときは鳴らさず、時間軸への記録も計器への記録もしない
-  output: AudioPlayoutOutput | null;
+interface AudioPlayoutContext {
+  // AudioContext.currentTime (秒)。予約の基準であり、時計の対応を作るのにも使う
+  readonly currentTime: number;
+  // AudioContext.getOutputTimestamp()
+  getOutputTimestamp(): AudioTimestamp;
+  // AudioContext.createBuffer。鳴らす音と、欠落した区間の補間の両方に使う
+  createBuffer(numberOfChannels: number, length: number, sampleRate: number): AudioBuffer;
+  // AudioContext.createBufferSource
+  createBufferSource(): AudioBufferSourceNode;
 }
 
 interface AudioPlayoutOutput {
-  context: AudioPlayoutContext; // AudioContext の実物を渡せる
+  context: AudioPlayoutContext;
+  // 予約した音を繋ぐ出力 (MediaStreamAudioDestinationNode など)
   destination: AudioNode;
 }
 ```
 
-### handleDecodedAudio の結果
+`AudioPlayoutTimingStats` は「鳴るはずの時刻、鳴り始める時刻、鳴らなかった量」を記録する
+計器であり、`audio.timing` に渡せる公開クラスである。渡さない場合は入口が内部で作る。
+入口が記録に使う `recordPlay` / `recordMiss` / `recordDrain` などのメソッドと、閉ループの
+観測を返す `audioDelayFeedback` も公開しており、引数と戻り値の型
+(`AudioPlayoutBasis` / `AudioPlayoutMiss` / `AudioDelayFeedbackObservation`) も import できる。
+`record*` は入口が計器へ記録するために呼ぶ API である。アプリケーションが独自に再生を
+組み立てて同じ計器へ記録する場合にも使える (計器へ記録する実装が呼ぶ)。
+自分の実行周期で画面へ出すときは、次のように作って渡し、`snapshot(performance.now())` を
+直接読む。
 
 ```typescript
-type AudioPlayoutResult =
-  | { status: "played"; rebased: boolean; catchUpStarted: boolean }
-  | { status: "dropped"; rebased: boolean; reason: "backlog"; catchUpStarted: boolean }
-  | { status: "error"; rebased: boolean; catchUpStarted: boolean; error: Error }
-  | { status: "skipped" };
+import {
+  AUDIO_PLAYOUT_TIMING_WINDOW_MS,
+  AudioPlayoutTimingStats,
+  createMediaPlayout,
+} from "moqt-js";
+
+const audioContext = new AudioContext();
+const timing = new AudioPlayoutTimingStats(AUDIO_PLAYOUT_TIMING_WINDOW_MS, performance.timeOrigin);
+const playout = createMediaPlayout({
+  audio: { context: audioContext, destination: audioContext.destination, timing },
+});
+
+setInterval(() => {
+  // 入口が記録した観測値を、自分の実行周期で読む
+  const snapshot = timing.snapshot(performance.now());
+  console.log(snapshot.playedFrames, snapshot.missedFrames);
+}, 1_000);
 ```
 
-`rebased` は、この音の予約で鳴らす時刻の基準を取り直したかである (`AudioPlayoutScheduler.rebases`
-が増えたか)。`catchUpStarted` は、この音で受信側の追いつきを始めたかである。true のときは
-復号器を作り直す (`AudioDecoderWrapper.reset()`)。その理由と、鳴らす音を捨てない理由は
-「受信側の追いつき」を参照。`dropped` は並べすぎで捨てた音であり、計器には理由 (`backlog`)
-と長さを記録済みである。`error` は鳴らす準備の途中で失敗した音であり、計器には「鳴らなかった」として記録済みで
-ある (このクラスは throw せず、呼び出し側が `onError` やログへ流す)。`skipped` は鳴らす先が
-無いときである。
+### 映像の出し先と表示の周期
 
-### メソッド
-
-- `handleDecodedAudio(request)` — 復号した音を鳴らす (上の 2 節)
-- `reset()` — 予約の基準・時計の対応・直前の音を消す (`AudioContext` を作り直したとき)。
-  統計の累積 (基準を取り直した回数・捨てた音・詰めた合計・補間した合計) は消さない。
-  受信側の追いつきの観測と累積 (`catchUp`) は消す (再生そのものをやり直すため)
-- `catchUp` — 受信側の追いつきの判定と観測 (`AudioReceiveCatchUp`)。`snapshot()` で
-  `AudioReceiverStats.playoutCatchUp` と同じ値を読める
-- `releaseAudioContext()` — 時計の対応と直前の音だけを消す (`AudioContext` を閉じた後始末)。
-  予約の基準は統計の `playoutLatenessMs` が読むため残す
-- `recordStopped()` — 予約した音のうち、まだ鳴っていない分を鳴らなかった音として計器へ
-  記録する (`AudioContext` を閉じる直前。既に鳴り始めている音は残りの長さだけを数える)
-
-`playout` (予約。基準を取り直した回数と捨てた音の数) と `clock` (`AudioContext` の時計と
-`performance.now()` の対応。`usingFallback` を同期の推定に使う) は読み取り用に公開している。
-
-`enforceTarget` が true でも目標の時刻を決められなかったときは到着基準になる。到着基準の遅れは、
-到着した音が「まだ鳴っていない位置」から数える (「統計情報」の説明を参照)。moqt-devtools も
-ライブラリと同じく目標遅延の閉ループを流す (この組み立てが常に行う)。
-
-### 受信側の追いつき
-
-受信した音声は、復号器 (WebCodecs の `AudioDecoder`) の中に未処理の音が溜まると、溜まった分
-だけ復号の出力が送られた TIMESTAMP から遅れたまま固定される。溜まった分は実時間と同じ速さで
-しか出てこないため、待っても戻らない。鳴らす音を捨てても、捨てた分は復号器から出てきた後の音
-であり、中の分は減らない。
-
-`AudioPlayoutSession` は、復号の出力の遅れ (復号の出力を受け取った壁時計 -
-`AudioData.timestamp`) を `AudioReceiveCatchUp` で観測し、(1) 健全時の遅れ (床) から
-`AUDIO_RECEIVE_CATCH_UP_GROWTH_MS` (40 ms) を超えたまま `AUDIO_RECEIVE_CATCH_UP_CONFIRM_MS`
-(100 ms) 続いたとき、または (2) 床から `AUDIO_RECEIVE_CATCH_UP_JUMP_MS` (100 ms。A/V 同期で
-合わせられる量の上限と同じ) を超えたときに、結果の `catchUpStarted` を true にする。呼び出し側はそれを受けて復号器を作り直す (`AudioDecoderWrapper.reset()`)。復号器を
-作り直すと、中に溜まっていた音が捨てられ、次に復号されるのは最後に届いた Object になる。
-
-購読側が `MediaSubscriberOptions.preDecodeDelayMs` で復号を意図的に遅らせているときは、
-`AudioPlayoutRequest.intentionalDelayMs` にその値を渡す。受信側の追いつきは、出力の遅れから
-入力の遅れと意図した遅延を引いた値で判定するため、意図した遅延を復号器の詰まりと誤判定しない。
-意図した遅延を超えて復号器が遅れた場合は従来どおり `catchUpStarted` が true になる。
+表示の出し先は `VideoPlayoutOutput` として注入する。ライブラリは `MediaStreamTrackGenerator`
+の writer、moqt-devtools は canvas へ出す。`present` は true / false にかかわらず、渡された
+フレームの所有権を受け取り、閉じる責任を負う。false を返したときは、同期の実績として記録
+しないだけで、フレームを閉じるのは出し先である。`isAvailable` が false を返したときは、
+フレームを表示せずに閉じ、表示待ちのフレームも捨てる (出せないままメモリを占め続けない
+ため)。`present` と `isAvailable` は throw しない契約である。throw した場合は、入口が
+フレームを閉じて表示しない扱いにする。
 
 ```typescript
-import { AudioPlayoutSession, AudioPlayoutTimingStats, PlayoutTimeline } from "moqt-js";
-
-const result = session.handleDecodedAudio({/* 上の例と同じ */});
-if (result.status !== "skipped" && result.catchUpStarted) {
-  await audioDecoder.reset();
+interface VideoPlayoutOutput {
+  // フレームを表示する。presentationMs は時間軸が決めた表示時刻
+  // (performance.now() と同じ軸のミリ秒)。届いた順に表示するフレームは null。
+  // true / false にかかわらずフレームの所有権を受け取り、必ず閉じる
+  present(frame: VideoFrame, presentationMs: number | null): boolean;
+  // 今フレームを出せるか
+  isAvailable(): boolean;
 }
 
-// 表示と統計は snapshot() で読める (AudioReceiverStats.playoutCatchUp と同じ値)
-const catchUp = session.catchUp.snapshot();
-```
+interface VideoPlayoutPacing {
+  // フレームを積んだ時点で、表示周期を待たずに表示するか
+  drainImmediately: boolean;
+  // 1 つの表示周期に表示する枚数の上限 (すべて表示するときは Number.POSITIVE_INFINITY)
+  framesPerDrain: number;
+}
 
-鳴らす音は捨てない (鳴らなかった音として数えない)。復号器が捨てた音は鳴らす側へ出てこないため、
-`missedFrames` を「受信側が実時間に追いつけていない証拠」として保つためである。飛んだ音は
-復号の出力の timestamp の跳びから測り、`skippedFrames` / `skippedMs` に出す。遅れが上限へ
-戻るまでは `AUDIO_RECEIVE_CATCH_UP_COOLDOWN_MS` (1 秒) ごとに作り直しを重ねる (1 回で戻らない
-状態があるため)。閾値と根拠は `docs/AV_SYNC_DECISIONS.md` の「10. 受信側の追いつき」にある。
-
-`AudioReceiveCatchUp` と `AUDIO_RECEIVE_CATCH_UP_*` の定数、`AudioReceiveCatchUpStats` は
-`moqt-js` から import できる (`AudioReceiveCatchUp` を単体で使うこともできる。時刻と値は
-呼び出し側が渡すため、ブラウザ API は要らない)。
-
----
-
-## 映像の表示の組み立て (VideoPlayoutSession)
-
-`VideoPlayoutSession` は、復号済みの映像フレーム 1 枚を「表示する」までの組み立てを 1 か所に
-まとめた公開 API である。`createMediaSubscriber` (ライブラリ) と moqt-devtools の映像の表示は
-どちらもこれを使う。同じ組み立てを 2 か所に置くと、表示の遅れ・あふれの扱い・計器の修正を毎回
-2 か所へ入れることになり、片方だけを直すと挙動がずれるためである。
-
-受け取るのは、復号したフレーム (`VideoFrame`) と、そのフレームの TIMESTAMP の種類 (LOC の
-TIMESTAMP と TIMESCALE から決める。draft-ietf-moq-loc-04 §2.3.1.1 / §2.3.1.2) である。渡すと
-次を行う。
-
-- 共有の時間軸 (`PlayoutTimeline`) への到着の記録と、表示時刻の決定
-- 表示待ちのキュー (`PlayoutBuffer`) への積み込みと、あふれた分の破棄
-- 表示周期ごとの選択 (表示時刻を過ぎたフレームのうち最新の 1 枚を表示し、間に合わなかった
-  分を捨てる)
-- 表示の実績 (実際に表示した時刻 - TIMESTAMP) の時間軸への記録
-- 計器 (`VideoPlayoutTiming`) への記録 (あふれて捨てた分と、間に合わなかった分)
-
-表示の出し先は `VideoPlayoutOutput` として注入する。ライブラリは
-`MediaStreamTrackGenerator` の writer、moqt-devtools は canvas へ出す。表示周期の予約
-(`requestAnimationFrame`) も注入できるため、ブラウザ API の無い環境でも記録用の最小
-オブジェクトで検証できる。
-
-```typescript
-import { PlayoutTimeline, VideoDecodeInputs, VideoPlayoutSession } from "moqt-js";
-
-// 時間軸と対応表は呼び出し側が持つ (時間軸は音声と共有する)
-const timeline = new PlayoutTimeline({
-  timeOriginMs: performance.timeOrigin,
-  maxQueuedFrames: 24,
-});
-const decodeInputs = new VideoDecodeInputs({
-  maxTracked: 256,
-  forgetOnDuplicate: false,
-});
-const session = new VideoPlayoutSession({
-  timeline,
-  decodeInputs,
-  output: {
-    isAvailable: () => writer !== null,
-    present: (frame, presentationMs) => {
-      // presentationMs に表示時刻が入る (表示時刻を決められないときは null)
-      void writer?.write(frame);
-      return true;
-    },
-  },
-  pacing: { drainImmediately: true, framesPerDrain: Number.POSITIVE_INFINITY },
-});
-
-// 復号へ渡すときに、TIMESTAMP の種類と Object の位置を覚える
-decodeInputs.remember(timestamp, {
-  timestampKind: "wallClock",
-  location: { group: obj.groupId, object: obj.objectId },
-});
-
-// 復号の出力ごとに呼ぶ
-const input = decodeInputs.take(frame.timestamp);
-session.handleDecodedFrame({
-  frame,
-  timestampKind: input?.timestampKind ?? "none",
-  useTimeline: true,
-});
-```
-
-### オプション
-
-```typescript
-interface VideoPlayoutSessionOptions {
-  // 音声と映像で共有する表示時刻の時間軸
-  timeline: PlayoutTimeline;
-  // 表示すると決めたフレームの出し先
-  output: VideoPlayoutOutput;
-  // 復号へ渡したフレームの情報の対応表 (呼び出し側が持ち、購読ごとに clear() する)
-  decodeInputs: VideoDecodeInputs;
-  // 表示の周期の進め方 (下記)
-  pacing: VideoPlayoutPacing;
-  // 捨てたフレームの記録先 (計器)。映像の計器を持たないときは省略する
-  timing?: VideoPlayoutTiming;
-  // 表示待ちのキューの上限 (枚)。既定は JITTER_BUFFER_MAX_QUEUED_FRAMES (24)
-  maxQueuedFrames?: number;
-  // 表示の周期の予約と取り消し。既定は requestAnimationFrame / cancelAnimationFrame
-  requestFrame?: (callback: () => void) => number;
-  cancelFrame?: (handle: number) => void;
+interface VideoPlayoutTiming {
+  // 表示待ちの上限を超えて捨てたフレーム
+  recordQueueDrop(timestamp: number): void;
+  // 表示時刻を過ぎて間に合わなかったフレーム (presentationMs は表示時刻。決められない
+  // ときは捨てた時刻)
+  recordLateDrop(timestamp: number, presentationMs: number): void;
 }
 ```
 
 `pacing` は出し先によって変える。`drainImmediately` が true なら、フレームを積んだ時点で
 表示時刻を過ぎているフレームを出す (ライブラリ。表示の間隔は `MediaStreamTrackGenerator` の
 先のブラウザが TIMESTAMP から決める)。false なら表示周期まで待つ (moqt-devtools)。
-`framesPerDrain` は 1 つの表示周期に出す枚数の上限であり、devtools は canvas へ直接描くため
-1 にする (まとめて描くと、まとまって届いたフレームが早送りに見える)。
+`framesPerDrain` は 1 つの表示周期に出す枚数の上限である。省略したときに `MediaPlayout` が
+渡す値は `Number.POSITIVE_INFINITY` (表示できる分をすべて出す) であり、devtools は canvas へ
+直接描くため 1 にする (まとめて描くと、まとまって届いたフレームが早送りに見える)。
 
-### VideoDecodeInputs
+`timing` は、捨てたフレームの記録先である。ライブラリは映像の計器を持たないため省略し、
+moqt-devtools は「受信から表示までの時間」の統計へ記録する。
 
-復号の出力 (`VideoFrame`) では Object の位置が分からないため、decoder へ渡したときの
-TIMESTAMP で引けるように覚えておく対応表である。
+### 復号へ渡した入力の記録
+
+復号の出力には TIMESTAMP の種類が無い (`AudioData`) か、Object の位置が分からない
+(`VideoFrame`)。そのため、decoder へ渡す直前に `trackAudioDecodeInput` /
+`trackVideoDecodeInput` で記録し、復号の出力を push したときに対応を引く。
 
 ```typescript
-interface VideoDecodeInput {
-  timestampKind: "none" | "wallClock" | "mediaTime";
-  location: Location; // Group ID と Object ID
+// TIMESTAMP の種類。音声と映像で共通 (draft-ietf-moq-loc-04 §2.3.1.1 / §2.3.1.2)
+// - "wallClock": TIMESCALE が無い TIMESTAMP (Unix epoch マイクロ秒)
+// - "mediaTime": TIMESCALE がある TIMESTAMP (メディア時刻)
+// - "none": TIMESTAMP が無い (decoder へは 0 を渡す)
+type PlayoutTimestampKind = "none" | "wallClock" | "mediaTime";
+
+// 復号へ渡した音声 Object の情報。内部の記録型の別名であり、形は次のとおりである
+interface MediaPlayoutAudioDecodeInput {
+  // "none" の音は記録しない (同じ TIMESTAMP の古い記録は消す)
+  timestampKind: PlayoutTimestampKind;
+  // LOC の Object の位置 (Group ID と Object ID)。音声の選別 (admit) にだけ使う。省略できる
+  location?: Location | null;
+  // 受信の入口で測った入力の遅れ (ミリ秒)。測れないときは省略する
+  inputLagMs?: number | null;
+  // 復号へ渡すまで実際に保持した時間 (ミリ秒)。復号前の遅延の段を使うときは、
+  // 設定値ではなく実際に保持した時間を渡す
+  intentionalDelayMs?: number | null;
 }
 
-interface VideoDecodeInputsOptions {
-  // 覚えておく上限 (件)。超えたら古い方から忘れる
-  maxTracked: number;
-  // 同じ TIMESTAMP の Object が重なったときに、その TIMESTAMP の分を忘れるか
-  forgetOnDuplicate: boolean;
+// 復号へ渡した映像 Object の情報。内部の記録型の別名であり、形は次のとおりである
+interface MediaPlayoutVideoDecodeInput {
+  // "none" の映像は記録しない
+  timestampKind: PlayoutTimestampKind;
+  // LOC の Object の位置 (Group ID と Object ID)。選別 (admit) にだけ使う
+  location: Location;
 }
 ```
 
-`remember(timestamp, input)` で覚え、`take(timestamp)` で 1 回だけ引ける (引くと忘れる)。
-TIMESTAMP を持たない Object は覚えない (decoder へ 0 を渡すため、同じ TIMESTAMP の Object を
-誤って対応づける)。`forgetOnDuplicate` は位置を使うかで決める。位置を relay の cache からの
-追いつきの判定 (`CatchUpGate`) に使うときは true にして、重なった TIMESTAMP の分を忘れる
-(どちらの位置か決められないため)。TIMESTAMP の種類だけを使うときは false にして、後から来た
-種類で上書きする。
+```typescript
+import type { Location, MediaPlayout } from "moqt-js";
 
-### handleDecodedFrame の依頼と結果
+// 受信した Object を復号へ渡す直前に呼ぶ。track と decode をこの関数にまとめる。
+// audioLocation は音声 Object の位置 (音声の admit にだけ使う)、videoLocation は映像
+// Object の位置、inputLagMs と intentionalDelayMs は受信側で測った値である
+function onEncodedObject(
+  playout: MediaPlayout,
+  audioDecoder: AudioDecoder,
+  videoDecoder: VideoDecoder,
+  audioChunk: EncodedAudioChunk,
+  videoChunk: EncodedVideoChunk,
+  audioLocation: Location,
+  videoLocation: Location,
+  inputLagMs: number,
+  intentionalDelayMs: number,
+): void {
+  playout.trackAudioDecodeInput(audioChunk.timestamp, {
+    timestampKind: "wallClock",
+    location: audioLocation,
+    inputLagMs,
+    intentionalDelayMs,
+  });
+  playout.trackVideoDecodeInput(videoChunk.timestamp, {
+    timestampKind: "wallClock",
+    location: videoLocation,
+  });
+  audioDecoder.decode(audioChunk);
+  videoDecoder.decode(videoChunk);
+}
+
+// 復号の出力で呼ぶ。push だけを呼ぶ (track は decode の前である)。
+// 音声と映像の出力が別のコールバックに来る場合は、それぞれで同じ形にする
+function onDecodedFrame(playout: MediaPlayout, audioData: AudioData, videoFrame: VideoFrame): void {
+  try {
+    playout.pushAudio(audioData);
+  } finally {
+    // pushAudio は AudioData を閉じない。所有権は呼び出し側に残る
+    audioData.close();
+  }
+  // present へ渡したフレームの所有権は出し先へ移る。表示しないフレームは入口が閉じる
+  playout.pushVideo(videoFrame);
+}
+```
+
+TIMESTAMP が無い音や映像 (`timestampKind: "none"`) は記録しない (同じ TIMESTAMP の古い記録は
+消す)。復号へ渡した TIMESTAMP と復号の出力の TIMESTAMP は小数だけずれる。引けないときの
+扱いは音声と映像で違う。
+
+- 音声は、完全一致で引けないときも、音 1 つの長さの半分までの許容の中で最も近い記録を
+  引く (実測では 100 マイクロ秒程度ずれる)。それでも引けないときは、直前に分かっている
+  種類で補う (10 秒以内に記録が残っているとき)。種類は TIMESTAMP に TIMESCALE があるかで
+  決まり、ストリームの途中で変わらないためである。補った音は位置と遅れを使わない
+  (どの Object の値か決められないため)
+- 映像は完全一致でしか引かない。引けないフレームは `timestampKind: "none"` として扱う
+  (位置も分からないため、選別には null を渡す)
+
+照合の詳細と根拠は `docs/AV_SYNC_DECISIONS.md` の「8. 復号の出力と投入の対応づけ」を参照
+すること。
+
+### pushAudio の結果
 
 ```typescript
-interface VideoPlayoutRequest {
-  // 復号したフレーム。所有権は呼び出し側に残る (表示すると出し先へ移る)
-  frame: VideoFrame;
-  // フレームの TIMESTAMP の種類。wallClock かつ時間軸を使うときだけ表示時刻を決める
-  timestampKind: "none" | "wallClock" | "mediaTime";
-  // 時間軸を使って表示時刻を決めるか (jitter buffer が有効な購読のとき)。false のときは
-  // 時間軸へ記録せず、届いた順に表示する
-  useTimeline: boolean;
-}
+type MediaPlayoutAudioResult =
+  | {
+      status: "played";
+      rebased: boolean;
+      catchUpStarted: boolean;
+      timestampKind: PlayoutTimestampKind;
+    }
+  | {
+      status: "dropped";
+      reason: "backlog";
+      rebased: boolean;
+      catchUpStarted: boolean;
+      timestampKind: PlayoutTimestampKind;
+    }
+  | {
+      status: "error";
+      error: Error;
+      rebased: boolean;
+      catchUpStarted: boolean;
+      timestampKind: PlayoutTimestampKind;
+    }
+  | { status: "notAdmitted"; timestampKind: PlayoutTimestampKind }
+  | { status: "skipped"; timestampKind: PlayoutTimestampKind };
+```
 
-interface VideoPlayoutOutput {
-  // フレームを表示する。実際に表示したかを返す (false のときは同期の実績を記録しない)
-  present(frame: VideoFrame, presentationMs: number | null): boolean;
-  // 今フレームを出せるか (購読が終わった、書く先が無いときは false)
-  isAvailable(): boolean;
-}
+`played` は鳴らすと決めて予約した音、`dropped` は並べすぎで捨てた音、`error` は鳴らす準備の
+途中で失敗した音 (計器には「鳴らなかった (error)」として記録する) か、`admit` /
+`hasCounterpart` が throw した音 (計器へは記録しない) である。`notAdmitted` は
+`audio.admit` が false を返した音 (時間軸へも計器へも記録しない)、`skipped` は音声を構成して
+いないか、鳴らす先が無い音である。`admit` は鳴らす先が無いときも呼ばれるが、戻り値は
+`skipped` が優先される (`notAdmitted` より先に判定する)。`admit` と `hasCounterpart` は
+throw しない契約であり、throw した場合は `status: "error"` を返す。`catchUpStarted` が true
+のときは、呼び出し側が復号器を作り直す (WebCodecs の `AudioDecoder.reset()` など)。復号器の
+中に溜まった音は実時間と同じ速さでしか出てこないため、鳴らす側で捨てても遅れは戻らない。
+判定の条件は「内部実装」の「音声の再生の組み立て (AudioPlayoutSession)」を参照すること。
 
-interface VideoPlayoutTiming {
-  // 表示待ちの上限を超えて捨てたフレーム
-  recordQueueDrop(timestamp: number): void;
-  // 表示時刻を過ぎて間に合わなかったフレーム
-  recordLateDrop(timestamp: number, presentationMs: number): void;
-}
+### pushVideo の結果
 
-type VideoPlayoutResult =
+```typescript
+type MediaPlayoutVideoResult =
   | { status: "queued"; wallClockTimestamp: number | null }
+  | { status: "notAdmitted" }
   | { status: "skipped" };
 ```
 
-`queued` は表示待ちへ積んだ (表示時刻に使った壁時計の TIMESTAMP を返す。使わなかったときは
-null)。`skipped` は出し先が無いためフレームを閉じた場合である。時間軸へ記録するのは、種類が
-`wallClock` で `useTimeline` が true のときだけであり、それ以外は届いた順に表示する。
+`queued` は表示待ちへ積んだフレームである。`wallClockTimestamp` は表示時刻に使った壁時計の
+TIMESTAMP であり、種類が `wallClock` で時間軸を使うときだけ入る。`notAdmitted` は
+`video.admit` が false を返したフレーム (閉じている)、`skipped` は映像を構成していないか、
+出し先が無いフレーム、または `video.admit` / `output.isAvailable` が throw したフレームで
+ある (閉じている)。`video.admit` と `output.isAvailable` は throw しない契約である。
+`output.present` は表示の周期の中で呼ばれるため戻り値に現れないが、throw しない契約であり、
+throw した場合は入口がフレームを閉じて同期の実績に記録しない。表示すると決めたフレームは
+出し先 (`present`) へ所有権が移り、`present` の戻り値にかかわらず閉じるのは出し先である。
+表示しないと決めたフレームは入口が閉じる。
 
-### メソッド
+閉じた `VideoFrame` を渡してはならない。WebCodecs の仕様では閉じたフレームの `timestamp` を
+読めるため、入口では検出できず、表示待ちへ積んでから `present` に渡すことになる。
 
-- `handleDecodedFrame(request)` — 復号したフレームを表示待ちへ積み、表示周期へ予約する
-- `clear()` — 予約を取り消し、表示待ちのフレームと対応表を捨てる (購読の停止、時間軸と
-  キューを作り直す直前)
-- `inputs` — 対応表 (`VideoDecodeInputs`)。呼び出し側も `remember` に使う
-- `playout` — 表示待ちのキュー (`PlayoutBuffer`)。統計が `playoutDelayMs()` を読む
+閉じた `AudioData` も渡してはならない。WebCodecs の仕様では、`close()` した `AudioData` の
+`sampleRate` / `numberOfFrames` / `numberOfChannels` は 0、`format` は null になり、
+`timestamp` は保持される (実装によっては getter が throw することもある)。`pushAudio` は
+寸法を読めない音を `status: "error"` として返す。寸法が 0 として読める実装では、計器に
+鳴らなかった音として残る (getter が throw する実装では記録できない)。
 
-### 映像の受信の経路で使う公開 API
+### 統計情報
 
-映像の受信から表示までの経路で、ライブラリと moqt-devtools が共有する残りの公開 API である。
+```typescript
+interface MediaPlayoutStats {
+  // 音声の再生の統計 (音声を構成していないときだけ null)
+  audio: {
+    rebases: number; // 鳴らす時刻の基準を取り直した回数
+    drops: number; // 並べすぎなどで鳴らさなかった音の数
+    concealments: number; // 補間した回数
+    compressedMs: number; // 波形を詰めた合計
+    concealedMs: number; // 補間した合計
+    latenessMs: number; // 目標を守る並べ方で最後に並べた音の遅れ
+    timing: AudioPlayoutTimingSnapshot; // 鳴るはずの時刻、鳴り始める時刻、鳴らなかった量
+    catchUp: AudioReceiveCatchUpStats; // 受信側の追いつきの観測値
+    delayFeedback: AudioDelayFeedbackSnapshot; // 音声の目標遅延の閉ループの内訳
+  } | null;
+  // 映像の表示の統計 (映像を構成していないときだけ null)
+  video: {
+    queuedFrames: number; // 表示待ちのフレーム数
+    playoutDelayMs: number | null; // 表示待ちのフレームの遅れ
+  } | null;
+  // 音声と映像の同期の推定値。片方を構成していないとき、時間軸を使わないときは null
+  avSync: AvSyncStats | null;
+}
+```
 
-- `PlayoutTimeline` — 音声と映像で共有する表示時刻の時間軸 (同期の推定と遅延の学習)
-- `PlayoutBuffer` — 復号したフレームを表示時刻に合わせて選ぶキュー。
-  `JITTER_BUFFER_MAX_QUEUED_FRAMES` と `MAX_PRESENTATION_LAG_MS` も公開する
+`getStats().audio` / `video` は、その側を構成していないときだけ null になる。`audio: {}` で
+出力を付けていない間も `audio` は非 null であり、`pushAudio` は `skipped` を返す。`avSync`
+は音声と映像の両方を構成し、時間軸を使うときにだけ値を持つ。壁時計の TIMESTAMP を観測して
+いるかどうかの判断は、購読しているトラックを知っている呼び出し側が行う
+(`createMediaSubscriber` は音声と映像の両方で壁時計の TIMESTAMP を観測するまで null を
+返す)。`AvSyncStats` の定義は「MediaSubscriber」の「統計情報」を参照すること。音声だけを
+使うときは `avSync` が null のため、目標遅延の閉ループの内訳は
+`getStats().audio.delayFeedback` (`AudioDelayFeedbackSnapshot`) から読む。
+
+`AudioDelayFeedbackSnapshot` の `targetMs` / `jitterTargetMs` / `appliedMs` は、閉ループが
+決めた目標、揺らぎだけから求めた目標、実際に使っている目標である。`appliedCeilingMs` は
+実際に適用する値に掛けている上限 (広げていないときは 100 ms、穴や圧縮が続くときは最大
+160 ms) であり、`reason` と `compressionMsPerSecond` から、目標を動かした理由とその判断に
+使った圧縮の速さを読める。定義は「MediaSubscriber」の「統計情報」を参照すること。
+
+### ライフサイクル
+
+- `setAudioOutput(output: AudioPlayoutOutput | null)` — 鳴らす先を差し替える (`AudioContext`
+  を作り直したとき、音声の再生を止めるとき)。null を渡すと鳴らさず、以降の `pushAudio` は
+  `skipped` を返す。null を渡したときは、出力の時計の対応と直前の音も捨てる (閉じた
+  `AudioContext` の時計で次の音を予約しないため)。既に予約した音は `AudioContext` を閉じる
+  まで鳴り続ける。音声を構成していない
+  (`audio` を省略または null にした) 場合は throw する。`AudioContext` を作り直したときは、
+  新しい出力を付けたあとに `resetAudioPlayback()` を呼ぶ (予約の基準を旧 `AudioContext` の
+  秒のまま残さない)
+- `resetAudioPlayback()` — 音声の再生の状態 (予約の基準、出力の時計の対応、追いつきの観測)
+  を取り直す (`AudioContext` を作り直したとき)。計器の累積 (鳴った量、鳴らなかった量、詰め、
+  補間、基準の取り直し、捨て) は購読の統計として引き継ぐため消さない
+- `resetAudioTimeline()` — 時間軸から音声の状態だけを消す (音声の再生を止めたとき)。残すと
+  共有の再生遅延に音声の下限が残り、映像の表示が音声を一度も再生していない購読より遅れた
+  まま固定される
+- `resetPlayout()` — 時間軸の基準と学習を取り直し、映像の表示待ちと復号へ渡した映像入力の
+  対応表を捨てる。音声の追いつきの観測も消す。音声の予約の基準と計器の累積は消さない
+  (`preDecodeDelayMs` の設定を変えたときや、購読を始めるとき)
+- `clearAll()` — 時間軸の基準と学習、復号へ渡した入力の対応表、映像の表示待ちを捨てる
+  (購読の停止)。計器の累積と追いつきの観測は残す (追いつきの観測は次の
+  `resetAudioPlayback()` で消える)
+- `recordAudioStopped()` — 予約済みで鳴り終わっていない音を「切った量」として計器へ残す
+  (出力を閉じる直前)
+- `drainAudio(options)` — 予約済みの音が鳴り終わるまで待つ (停止時)。待ち時間の上限 (既定は
+  `AUDIO_PLAYOUT_DRAIN_MAX_MS` = 300 ms) で鳴り終わらなかった分は「切った量」として計器へ残る
+- `clearVideoQueue()` — 表示待ちの映像を捨て、予約した表示を取り消し、復号へ渡した映像入力
+  の対応表も消す
+- `setTargetLatencyMs(value)` — 表示の遅れの目標を変える (catalog の `targetLatency` が
+  更新されたとき)。0 以上の有限数だけを受け付け、範囲外は throw する。null で目標を
+  使わない。catalog の負の値はライブラリが null に正規化してから渡す
+- `setIntentionalDelayMs(value)` — 復号の出力で入力が引けなかったときに使う、意図した復号
+  前の遅延を変える (`preDecodeDelayMs` の設定が変わったとき)
+- `getStats()` — 統計情報を読む
+
+`drainAudio` は、flush した Object の復号の出力を待つ条件 (`isFlushSettled` など) と、flush
+した件数 (`flushedObjects`) も受け取れる。待っても鳴り終わらなかった分は、計器に「切った
+量」として残る。既定の上限は `AUDIO_PLAYOUT_DRAIN_MAX_MS` = 300 ms (通常の停止) であり、
+終端の停止 (`close()`) では呼び出し側が `AUDIO_PLAYOUT_DRAIN_CLOSE_MAX_MS` = 150 ms を
+`maxWaitMs` に渡す。`maxWaitMs` は呼び出し時に検証し、範囲外なら非同期の reject になる
+(`drainAudio` は Promise を返す)。
+
+```typescript
+interface MediaPlayoutDrainOptions {
+  // drain を待つ上限 (ミリ秒)。既定は AUDIO_PLAYOUT_DRAIN_MAX_MS (300 ms)。
+  // 終端の停止では AUDIO_PLAYOUT_DRAIN_CLOSE_MAX_MS (150 ms) を呼び出し側が渡す。
+  // 有限数で 0 以上 (違反は非同期の reject)
+  maxWaitMs?: number;
+  // 復号前の段から flush した Object の復号出力を待ち終えたか。
+  // false の間は drain を終えない (予約が尽きていても復号の出力がまだ届いていない)
+  isFlushSettled?: () => boolean;
+  // flush した Object の件数 (計器に残す)
+  flushedObjects?: number;
+  // flush したが、まだ復号の出力が届いていない Object の数を返す
+  remainingFlushedObjects?: () => number;
+}
+
+interface MediaPlayoutDrainStats {
+  pendingMsAtStart: number; // drain を始めた時点で予約されていた長さ (ミリ秒)
+  requestedMs: number; // drain で待つと決めた上限の時間 (ミリ秒)
+  waitedMs: number; // 実際に待った時間 (ミリ秒)
+  playedMs: number; // drain で鳴らすことになった合計 (ミリ秒)
+  cutMs: number; // 上限で切った長さ (ミリ秒)
+  flushedObjects: number; // 停止時に復号前の段から flush した Object の件数
+  undecodedFlushedObjects: number; // flush したが、drain の終了までに復号の出力が届かなかった件数
+}
+```
+
+```typescript
+// playout は createMediaPlayout() で作った入口、audioContext は作成に使った AudioContext である
+
+// 停止の例 (音声を鳴らし切ってから、映像は残したまま音声だけを止める)
+await playout.drainAudio({ maxWaitMs: 300 });
+playout.setAudioOutput(null);
+playout.resetAudioTimeline();
+playout.resetAudioPlayback();
+
+// 購読を終える例 (すべてを捨てて、鳴っている音も止める)
+playout.recordAudioStopped();
+playout.setAudioOutput(null);
+playout.clearAll();
+await audioContext.close();
+```
+
+`setAudioOutput(null)` は以降の `pushAudio` を `skipped` にし、出力の時計の対応と直前の音を
+捨てるが、既に `AudioContext` へ予約した音は鳴り続ける。予約済みの音を止めるには
+`AudioContext` を閉じる (ブラウザが予約を破棄する)。`recordAudioStopped()` は閉じる直前の
+残りを計器へ「切った量」として残すだけで、音は止めない。
+
+```typescript
+// AudioContext を作り直す例。oldAudioContext は作り直す前の AudioContext、
+// sampleRate は音声トラックのサンプルレートである
+// 出力を外すと、時計の対応と直前の音も捨てる (閉じる直前に外す)
+playout.setAudioOutput(null);
+await oldAudioContext.close();
+
+const nextAudioContext = new AudioContext({ sampleRate });
+playout.setAudioOutput({
+  context: nextAudioContext,
+  destination: nextAudioContext.createMediaStreamDestination(),
+});
+// 新しい出力を付けたあとに呼ぶ (予約の基準を新しい Context の秒で作り直す)
+playout.resetAudioPlayback();
+```
+
+`createMediaSubscriber` は、購読の停止で `drainAudio` → `setAudioOutput(null)` →
+`clearAll()` を呼び、購読を始めるとき (`AudioContext` を作り直すとき) に
+`setAudioOutput(新しい出力)` → `resetAudioPlayback()` → `resetPlayout()` を呼ぶ。
+
+---
+
+## 受信の経路で使う公開 API
+
+受信から復号へ渡すまでを自分で組み立てるときに使う公開 API である。`createMediaSubscriber`
+はこの経路を内部で組み立てるため、通常は使わない。
+
 - `VideoDecodeOrder` — Object を復号してよいかを Group の順序と参照するフレームの欠落から
   決める (`priorObjectIdGapOf` も公開する)
 - `GroupSwitchGate` — 前の Group の Subgroup の stream が開いている間、次の Group の Object を
   保留する (draft-ietf-moq-transport-22 Section 2.1 の順不同の到着への対応)
 - `CatchUpGate` — relay の cache から追いつく途中の Object を、SUBSCRIBE_OK の
-  LARGEST_OBJECT を境界に選別する (draft-ietf-moq-transport-22 Section 9.20.17)
+  LARGEST_OBJECT を境界に選別する (`CatchUpDecision` も公開する。
+  draft-ietf-moq-transport-22 Section 9.20.17)
 
 ---
 
@@ -1710,14 +2090,122 @@ MediaStream
 ### MediaSubscriber 内部構成
 
 ```
-MOQT Subscriber (audio) ─► AudioDecoder ─► MediaStreamTrackGenerator ─┐
-        │                       │                                      │
-  LOC Properties          AudioData                                    ├─► MediaStream
-        │                                                              │
-MOQT Subscriber (video) ─► VideoDecoder ─► MediaStreamTrackGenerator ─┘
-        │                       │
-  LOC Properties          VideoFrame
+MOQT Subscriber (audio) ─► AudioDecoder ─► AudioData ─┐
+        │                                             │
+  LOC Properties                                      ├─► 再生の入口 (MediaPlayout)
+                                                      │
+MOQT Subscriber (video) ─► VideoDecoder ─► VideoFrame ┘
+        │
+  LOC Properties
 ```
+
+再生の入口は、音声を `AudioContext` とその出力 (`MediaStreamAudioDestinationNode`) へ、映像を
+`MediaStreamTrackGenerator` の writer へ渡す。`createMediaSubscriber` はこの 2 つの出力から
+`MediaStream` を組み立てる。
+
+### 再生の組み立て
+
+`MediaPlayout` の内部は、次のモジュールに分かれる。同じ組み立てを 2 か所に置くと、到着基準の
+遅れ、目標遅延の閉ループ、計器の修正を毎回 2 か所へ入れることになり、片方だけを直すと音声と
+映像で判断がずれて A/V 同期が崩れる。
+
+- `AudioPlayoutSession` / `VideoPlayoutSession` — 音声 1 つを鳴らす組み立てと、映像 1 枚を
+  表示する組み立て (下記)
+- `PlayoutTimeline` — 音声と映像で共有する表示時刻の時間軸。同期の推定と遅延の学習を持つ
+- `PlayoutBuffer` — 復号したフレームを表示時刻に合わせて選ぶキュー
+  (`MAX_PRESENTATION_LAG_MS` を超えて遅れたフレームを late として返す)
+- `VideoDecodeInputs` / `AudioDecodeInputs` — 復号へ渡した入力の対応表 (音声と映像で別)
+- `AudioReceiveCatchUp` — 受信側の音声の追いつきの判定と観測
+
+#### 音声の再生の組み立て (AudioPlayoutSession)
+
+`AudioPlayoutSession` は、復号済みの音声 1 つを鳴らすまでの組み立てを 1 か所にまとめる。
+`MediaPlayout` が `audio` オプションから 1 つ作る。受け取るのは、復号した音 (`AudioData`) と、
+その音の TIMESTAMP の種類 (LOC の TIMESTAMP と TIMESCALE から決める。
+draft-ietf-moq-loc-04 §2.3.1.1 / §2.3.1.2) である。渡すと次を行う。
+
+- 共有の時間軸への到着の記録と、目標の開始時刻の決定
+- `AudioPlayoutScheduler` での予約 (遅れて届いた音は波形を詰めて目標へ戻し、並べすぎは捨てる)
+- 欠落した区間の補間 (直前に鳴らした音の末尾を伸ばす)
+- 計器 (`AudioPlayoutTimingStats`) への記録 (鳴るはずの時刻、届いた時刻、鳴り始める時刻と、
+  鳴らなかった量)
+- 目標遅延の閉ループへの観測の引き渡し (常に行う。実測で、渡さないと時間圧縮が止まらない)
+- 受信側の追いつきの判定 (`AudioReceiveCatchUp`)。復号の出力が送られた TIMESTAMP から
+  遅れ続けたら、復号器を作り直す必要があることを結果 (`catchUpStarted`) で知らせる
+
+Web Audio (`AudioContext` とその出力) は `AudioPlayoutOutput` として渡す。`AudioContext` の
+時計と `performance.now()` の対応は `AudioClockBridge` が境界になる。再開直後などで
+`getOutputTimestamp().performanceTime` が 0 の間は `currentTime` で代用し、出力の残差を学習
+しない。代用値は現在の 2 時計から取り直す。同じ Context の停止と再開でも古い対応を持ち越さ
+ず、停止していた時間を未来の予約として扱わない。
+
+44.1 kHz の音声も時間圧縮と補間に対応する。周期を探す解析用の信号だけを 48 kHz へ変換し、
+元の音声は元のレートのまま処理する。相関が足りない波形では圧縮しない。96 kHz などの非対応
+レートは加工せず、`stretchUnavailableFrames` に数える。
+
+`timestampKind` の対応付け (完全一致で引けないときは許容の中の最も近い記録を引き、引けない
+ときは直前に分かっている種類で補う) は `src/playout/decodeInputTimestamps.ts` が持つ。
+根拠と実測は `docs/AV_SYNC_DECISIONS.md` の「8. 復号の出力と投入の対応づけ」にある。
+
+受信した音声は、復号器 (WebCodecs の `AudioDecoder`) の中に未処理の音が溜まると、溜まった分
+だけ復号の出力が送られた TIMESTAMP から遅れたまま固定される。溜まった分は実時間と同じ速さで
+しか出てこないため、待っても戻らない。鳴らす音を捨てても、捨てた分は復号器から出てきた後の
+音であり、中の分は減らない。
+
+`AudioReceiveCatchUp` は、復号の出力の遅れ (復号の出力を受け取った壁時計 -
+`AudioData.timestamp`) を観測し、(1) 健全時の遅れ (床) から `AUDIO_RECEIVE_CATCH_UP_GROWTH_MS`
+(40 ms) を超えたまま `AUDIO_RECEIVE_CATCH_UP_CONFIRM_MS` (100 ms) 続いたとき、または (2) 床
+から `AUDIO_RECEIVE_CATCH_UP_JUMP_MS` (100 ms。A/V 同期で合わせられる量の上限と同じ) を
+超えたときに、結果の `catchUpStarted` を true にする。復号器を作り直すと、中に溜まっていた
+音が捨てられ、次に復号されるのは最後に届いた Object になる。
+
+購読側が `MediaSubscriberOptions.preDecodeDelayMs` で復号を意図的に遅らせているときは、
+記録する入力の `intentionalDelayMs` に、設定値ではなく復号へ渡すまで実際に保持した時間を
+渡す (保持上限を超えて期限を前倒しした区間があるため、設定値と実際の保持時間は一致しない)。
+追いつきは、出力の遅れから入力の遅れと意図した遅延を引いた値で判定するため、意図した遅延を
+復号器の詰まりと誤判定しない。意図した遅延を超えて復号器が遅れた場合は `catchUpStarted` が
+true になる。
+
+鳴らす音は捨てない (鳴らなかった音として数えない)。復号器が捨てた音は鳴らす側へ出てこない
+ため、`missedFrames` を「受信側が実時間に追いつけていない証拠」として保つためである。飛んだ
+音は復号の出力の timestamp の跳びから測り、`skippedFrames` / `skippedMs` に出す。遅れが上限へ
+戻るまでは `AUDIO_RECEIVE_CATCH_UP_COOLDOWN_MS` (1 秒) ごとに作り直しを重ねる (1 回で戻らない
+状態があるため)。閾値と根拠は `docs/AV_SYNC_DECISIONS.md` の「10. 受信側の追いつき」にある。
+
+`AUDIO_RECEIVE_CATCH_UP_*` の定数と `AudioReceiveCatchUpStats` は `moqt-js` から import できる
+(`AudioReceiveCatchUp` のクラス自体は公開していない)。
+
+`MediaPlayout` は、復号の出力を `handleDecodedAudio` へ渡す。停止と `AudioContext` の
+作り直しの手順は「再生の入口 (MediaPlayout)」の「ライフサイクル」を参照すること。
+
+#### 映像の表示の組み立て (VideoPlayoutSession)
+
+`VideoPlayoutSession` は、復号済みの映像フレーム 1 枚を表示するまでの組み立てを 1 か所に
+まとめる。`MediaPlayout` が `video` オプションから 1 つ作る。受け取るのは、復号したフレーム
+(`VideoFrame`) と、そのフレームの TIMESTAMP の種類 (LOC の TIMESTAMP と TIMESCALE から決める。
+draft-ietf-moq-loc-04 §2.3.1.1 / §2.3.1.2) である。渡すと次を行う。
+
+- 共有の時間軸への到着の記録と、表示時刻の決定
+- 表示待ちのキュー (`PlayoutBuffer`) への積み込みと、あふれた分の破棄
+- 表示周期ごとの選択 (表示時刻を過ぎたフレームを順に表示する。`MediaPlayout` が既定で渡す
+  `framesPerDrain: Number.POSITIVE_INFINITY` では表示できる分をすべて表示し、間に合わなかった
+  分を捨てる。`framesPerDrain: 1` にすると 1 つの表示周期に 1 枚だけ表示する)
+- 表示の実績 (実際に表示した時刻 - TIMESTAMP) の時間軸への記録
+- 計器 (`VideoPlayoutTiming`) への記録 (あふれて捨てた分と、間に合わなかった分)
+
+表示の出し先は `VideoPlayoutOutput` として注入する。表示周期の予約は `requestAnimationFrame`
+を既定に使う。`VideoPlayoutSession` 単体は予約の関数を注入できるため、ブラウザ API の無い
+環境では記録用の最小のオブジェクトで検証できる。
+
+`VideoDecodeInputs` は、復号の出力 (`VideoFrame`) では Object の位置が分からないため、
+decoder へ渡したときの TIMESTAMP で引けるように覚えておく対応表である。`remember` で覚え、
+`take` で 1 回だけ引ける (引くと忘れる)。TIMESTAMP を持たない Object は覚えない (decoder へ 0
+を渡すため、同じ TIMESTAMP の Object を誤って対応づける)。`forgetOnDuplicate` は位置を使う
+かで決める。位置を relay の cache からの追いつきの判定 (`CatchUpGate`) に使うときは true に
+して、重なった TIMESTAMP の分を忘れる (どちらの位置か決められないため)。TIMESTAMP の種類だけ
+を使うときは false にして、後から来た種類で上書きする。
+
+`MediaPlayout` は、復号の出力を `VideoPlayoutSession.handleDecodedFrame` へ渡す。
 
 ### Worker 処理
 
@@ -1767,7 +2255,7 @@ GOP の途中で復号器を再構成することになり、参照フレーム�
 高レベル API は H.264 / H.265 を annexb 形式で設定するため、Chromium のエンコーダーは
 description を返さない (parameter sets は bitstream に含まれる)。VP8 / VP9 / AV1 は
 description を使わないため、この送り直しは canonical 形式 (avc / hev1) の description が
-届く設定・実装で働く。
+届く設定 / 実装で働く。
 
 paused でないまま購読者が接続した場合は変化が起きないため送り直されず、
 Relay のキャッシュに依存する。購読者がいない間に Relay が購読を paused にするかは

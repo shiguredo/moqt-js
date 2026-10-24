@@ -284,13 +284,18 @@ export type {
 // 音声の目標遅延を閉ループで決めた状態 (AvSyncStats.delays.audioDelayFeedback)。
 // 適用中の目標と、その理由
 export type {
+  AudioDelayFeedbackObservation,
   AudioDelayFeedbackReason,
   AudioDelayFeedbackSnapshot,
 } from "./playout/audioDelayFeedback";
 
-// 音声の再生の観測 (鳴るはずの時刻・鳴り始める時刻・鳴らなかった量)。`AudioPlayoutSession` へ
-// 必須で渡す計器であり、利用者が自分で作って統計として読む (docs/HIGH_LEVEL_API.md)。
-// 再生の観測値の型 (AudioReceiverStats.playoutTiming) も同じモジュールが持つ
+// 音声の再生の計器 (AudioPlayoutTimingStats) へ記録するときの型
+export type { AudioPlayoutBasis } from "./playout/audioPlayout";
+
+// 音声の再生の観測 (鳴るはずの時刻・鳴り始める時刻・鳴らなかった量)。再生の入口
+// (MediaPlayout) の `audio.timing` に渡す計器であり、利用者が自分の実行周期で画面へ出す
+// (docs/HIGH_LEVEL_API.md)。再生の観測値の型 (AudioReceiverStats.playoutTiming) も同じ
+// モジュールが持つ
 export {
   AudioPlayoutTimingStats,
   AUDIO_PLAYOUT_TIMING_WINDOW_MS,
@@ -301,13 +306,13 @@ export {
   type AudioMissEvent,
   type AudioMissReason,
   type AudioMissTotal,
+  type AudioPlayoutMiss,
   type AudioPlayoutTimingSnapshot,
 } from "./playout/audioPlayoutTimingStats";
 
-// 受信側の音声が live から遅れたときに、復号器を作り直して追いつく判定と観測
-// (AudioReceiverStats.playoutCatchUp)。遅れが続いたら復号器を作り直す
+// 受信側の音声が live から遅れたときに、復号器を作り直して追いついた観測
+// (AudioReceiverStats.playoutCatchUp)。判定そのものは再生の入口の内部で行う
 export {
-  AudioReceiveCatchUp,
   AUDIO_RECEIVE_CATCH_UP_MIN_MS,
   AUDIO_RECEIVE_CATCH_UP_GROWTH_MS,
   AUDIO_RECEIVE_CATCH_UP_JUMP_MS,
@@ -316,51 +321,54 @@ export {
   AUDIO_RECEIVE_CATCH_UP_COOLDOWN_MS,
   AUDIO_RECEIVE_CATCH_UP_SKIP_MIN_MS,
   EMPTY_AUDIO_RECEIVE_CATCH_UP,
-  type AudioReceiveCatchUpDecision,
-  type AudioReceiveCatchUpObservation,
   type AudioReceiveCatchUpStats,
 } from "./playout/audioReceiveCatchUp";
 
-// 復号した音声の再生の組み立て (時間軸への記録・目標の決定・予約・計器への記録)。
-// ライブラリ (createMediaSubscriber) と moqt-devtools が同じ実装を使う。Web Audio は
-// AudioPlayoutOutput として注入する
-export {
-  AudioPlayoutSession,
-  type AudioPlayoutContext,
-  type AudioPlayoutOutput,
-  type AudioPlayoutRequest,
-  type AudioPlayoutResult,
-  type AudioPlayoutSessionOptions,
-  type AudioPlayoutTimestampKind,
-} from "./playout/audioPlayoutSession";
+// 音声の再生の入口 (MediaPlayout) の型。Web Audio は AudioPlayoutOutput として注入し、
+// 鳴らし切る待ちの設定と結果は drainAudio が受け取る・返す。組み立て (時間軸への記録・
+// 目標の決定・予約・計器への記録) は入口の内部で行う
+export { type AudioPlayoutContext, type AudioPlayoutOutput } from "./playout/audioPlayoutSession";
 
-// 復号した映像フレームの表示の組み立て (対応表・時間軸への記録・表示の選択・計器への記録)。
-// ライブラリ (createMediaSubscriber) と moqt-devtools が同じ実装を使う。表示の出し先
-// (MediaStreamTrackGenerator / canvas) と表示周期は注入する
+// 映像の表示の入口 (MediaPlayout) の型。表示の出し先 (MediaStreamTrackGenerator / canvas)
+// と表示周期、捨てたフレームの記録先は注入し、復号へ渡した入力の情報は
+// trackVideoDecodeInput で記録する。組み立て (対応表・時間軸への記録・表示の選択・計器への
+// 記録) は入口の内部で行う
 export {
-  VideoPlayoutSession,
-  VideoDecodeInputs,
-  type VideoDecodeInput,
-  type VideoDecodeInputsOptions,
   type VideoPlayoutOutput,
   type VideoPlayoutPacing,
-  type VideoPlayoutRequest,
-  type VideoPlayoutResult,
-  type VideoPlayoutSessionOptions,
   type VideoPlayoutTiming,
-  type VideoPlayoutTimestampKind,
 } from "./playout/videoPlayoutSession";
 
-// 復号した映像フレームの表示待ちのキュー (時間軸が決めた表示時刻に合わせて選ぶ)
+// 復号済みの音声と映像の再生の入口。時間軸・音声の再生の組み立て・映像の表示の組み立て・
+// 計器・復号へ渡した入力の対応表を 1 か所にまとめる。AudioContext と映像の出し先を渡し、
+// 復号へ渡す直前に入力を記録して、復号の出力を push するだけで使える。
+// ライブラリ (createMediaSubscriber) と moqt-devtools を含む呼び出し側は、この入口だけを
+// 使う (個々の組み立てを直接使わない)
+export { createMediaPlayout } from "./playout/mediaPlayout";
 export {
-  PlayoutBuffer,
-  JITTER_BUFFER_MAX_QUEUED_FRAMES,
-  MAX_PRESENTATION_LAG_MS,
-  type PlayoutSelection,
-} from "./playout/buffer";
+  AUDIO_PLAYOUT_DRAIN_CLOSE_MAX_MS,
+  AUDIO_PLAYOUT_DRAIN_MAX_MS,
+} from "./playout/audioPlayoutSession";
+export type {
+  MediaPlayout,
+  MediaPlayoutOptions,
+  MediaPlayoutAudioOptions,
+  MediaPlayoutVideoOptions,
+  MediaPlayoutDecodeInputOptions,
+  MediaPlayoutAudioDecodeInput,
+  MediaPlayoutVideoDecodeInput,
+  PlayoutTimestampKind,
+  MediaPlayoutDrainOptions,
+  MediaPlayoutDrainStats,
+  MediaPlayoutAudioResult,
+  MediaPlayoutVideoResult,
+  MediaPlayoutStats,
+  MediaPlayoutAudioStats,
+  MediaPlayoutVideoStats,
+} from "./playout/mediaPlayout";
 
-// 音声と映像で共有する表示時刻の時間軸 (jitter buffer の目標と遅れの学習)
-export { PlayoutTimeline } from "./playout/timeline";
+// 映像の表示待ちのキューの上限の既定値 (MediaPlayoutOptions.maxQueuedFrames)
+export { JITTER_BUFFER_MAX_QUEUED_FRAMES } from "./playout/buffer";
 
 // 購読側の復号前の再生遅延 (MediaSubscriberOptions.preDecodeDelayMs) の上限と保持上限
 export {

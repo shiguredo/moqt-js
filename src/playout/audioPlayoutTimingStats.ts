@@ -96,13 +96,39 @@ export interface AudioPlayoutMiss {
 }
 
 /**
+ * 音声の再生を鳴らし切るときの設定 (`MediaPlayout.drainAudio` が受け取る)
+ *
+ * `MediaPlayoutDrainStats` の `lastDrain` がこのモジュールの計器に載るため、ここに置く。
+ * コールバック (`isFlushSettled` / `remainingFlushedObjects`) は throw しないこと
+ * (throw しても drain は失敗させず、待ち終えた / 残り 0 として扱う)。
+ */
+export interface MediaPlayoutDrainOptions {
+  /**
+   * drain を待つ上限 (ミリ秒)。既定は通常の停止の上限 (300 ms)
+   *
+   * 購読の終端では、呼び出し側が短い上限 (150 ms) を明示して渡す。
+   */
+  readonly maxWaitMs?: number;
+  /**
+   * 復号前の段から flush した Object の復号出力を待ち終えたか
+   *
+   * false の間は drain を終えない (予約が尽きていても復号の出力がまだ届いていない)。
+   */
+  readonly isFlushSettled?: () => boolean;
+  /** flush した Object の件数 (計器に残す) */
+  readonly flushedObjects?: number;
+  /** flush したが、まだ復号の出力が届いていない Object の数を返す */
+  readonly remainingFlushedObjects?: () => number;
+}
+
+/**
  * drain (停止時に予約済みの音を鳴らし切る待ち) の結果
  *
  * 停止の要求から `AudioContext` を閉じるまでに、予約済みの音をどれだけ鳴らせて、
  * どれだけを上限で切ったかを残す。`missedByReason.stopped` は「切った量」だけを持つため、
  * 待って鳴らせた量はこの値で読む。
  */
-export interface AudioPlayoutDrainStats {
+export interface MediaPlayoutDrainStats {
   /** drain を始めた時点で予約されていた長さ (ミリ秒) */
   readonly pendingMsAtStart: number;
   /** drain で待つと決めた上限の時間 (ミリ秒) */
@@ -246,7 +272,7 @@ export interface AudioPlayoutTimingSnapshot {
   /** バッファ境界の段差の最大 (0 から 1 の振幅。記録期間中の最大) */
   readonly boundaryStepMax: number;
   /** 直近の停止で行った drain の結果。まだ停止していなければ null */
-  readonly lastDrain: AudioPlayoutDrainStats | null;
+  readonly lastDrain: MediaPlayoutDrainStats | null;
 }
 
 /** どの理由も 0 件の累積 */
@@ -321,6 +347,10 @@ interface LastPlayRecord {
 
 /**
  * 音声の再生の観測を記録し、観測値を求める
+ *
+ * `record*` は音声の再生の組み立て (`AudioPlayoutSession`) と、計器へ記録する実装
+ * (moqt-devtools) が呼ぶ。アプリケーションが独自に観測を数える場合も同じ API を使える。
+ * 読む側は `snapshot` を使い、購読をやり直すときは `reset` で消す。
  */
 export class AudioPlayoutTimingStats {
   private readonly windowMs: number;
@@ -342,7 +372,7 @@ export class AudioPlayoutTimingStats {
   private missedTotals = emptyMissTotals();
   private recentMisses: AudioMissEvent[] = [];
   // 直近の停止で行った drain の結果 (購読の開始 (reset) で消す)
-  private lastDrain: AudioPlayoutDrainStats | null = null;
+  private lastDrain: MediaPlayoutDrainStats | null = null;
   private stretchUnavailableFrames = 0;
   // 補間で埋まらなかった無音の穴 (回数・合計 ms・最大 ms) と、そのうち予約できなかった分
   private gapCount = 0;
@@ -505,7 +535,7 @@ export class AudioPlayoutTimingStats {
    *
    * @param stats - drain の結果
    */
-  recordDrain(stats: AudioPlayoutDrainStats): void {
+  recordDrain(stats: MediaPlayoutDrainStats): void {
     this.lastDrain = stats;
   }
 
@@ -518,8 +548,8 @@ export class AudioPlayoutTimingStats {
    * 仕事である (`src/playout/audioDelayFeedback.ts`)
    *
    * 揺らぎだけから求めた目標 (NetEq) は時間軸が持っているため、この戻り値には含めない
-   * (`PlayoutTimeline.observeAudioPlayout` が足す)。圧縮の増分も購読側
-   * (`AudioPlayoutSession`) が足す (省略したときは 0 とみなされる)
+   * (`PlayoutTimeline.observeAudioPlayout` が足す)。圧縮の増分も `AudioPlayoutSession` が
+   * 足す (省略したときは 0 とみなされる)
    *
    * @param nowMs - 求める時刻 (ミリ秒)
    * @param sinceMs - 制御へ渡す分布の開始時刻。再開前の実績を除くときに渡す
@@ -558,7 +588,7 @@ export class AudioPlayoutTimingStats {
     for (const series of [this.slacks, this.startDelays, this.latenesses]) {
       series.prune(minAtMs);
     }
-    const missedByReason = {} as Record<AudioMissReason, AudioMissTotal>;
+    const missedByReason = emptyMissTotals();
     for (const reason of AUDIO_MISS_REASONS) {
       const total = this.missedTotals[reason];
       missedByReason[reason] = { count: total.count, ms: total.ms };
