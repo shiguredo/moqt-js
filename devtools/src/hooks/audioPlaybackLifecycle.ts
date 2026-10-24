@@ -65,8 +65,9 @@ export function isAudioPlaybackStartCurrent<T>(
 /**
  * 開始を今の再生として確定するときに注入する処理 (テストでは記録用の関数を渡す)
  *
- * 判定は値で受け取り、後始末だけを関数として注入する。フックでは「今の再生の対象か」を
- * `audioPlaybackRef` で、「停止中か」を `SubscriberAudioStop` で調べる。
+ * 判定は値で受け取り、後始末だけを関数として注入する。`audioPlaybackController` では
+ * 「今の再生の対象か」を現在の audio graph で、「停止中か」を `SubscriberAudioStop` で
+ * 調べる。
  */
 export interface AudioPlaybackStartSettlement {
   /** 開始に使った audio graph が今も再生の対象か */

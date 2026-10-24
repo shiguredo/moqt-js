@@ -315,7 +315,7 @@ test("購読の停止後に購読をやり直しても、音声の再生を続�
   const stopStartedMs = Date.now();
   await page.getByTestId("subscriber-stop-button").click();
   await resubscribe(page);
-  console.log(`停止から再購読までの時間: ${Date.now() - stopStartedMs} ms`);
+  console.log(`停止から再購読の確立までの時間: ${Date.now() - stopStartedMs} ms`);
 
   // 再購読が確立し、音声の Object が届いて復号されることを待つ
   await waitForAudioDecoded(page, "再購読の後も音声の Object が復号されるのを待つ");

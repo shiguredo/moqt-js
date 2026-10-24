@@ -95,12 +95,10 @@ import * as sub from "../signals/subscriber";
 import * as pub from "../signals/publisher";
 import { useRef, useEffect } from "preact/hooks";
 import {
-  discardStaleAudioPlaybackStart,
-  isAudioPlaybackStartCurrent,
-  playoutToKeepAfterStop,
-  settleAudioPlaybackStart,
-  shouldAttachAudioPlayback,
-} from "./audioPlaybackLifecycle.ts";
+  createAudioPlaybackController,
+  type AudioPlaybackController,
+} from "./audioPlaybackController.ts";
+import { playoutToKeepAfterStop } from "./audioPlaybackLifecycle.ts";
 import {
   SUBSCRIBER_AUDIO_STOPPING_STATUS_MESSAGE,
   SubscriberAudioStop,
@@ -383,23 +381,6 @@ export function logPublishDoneEnd(
     statusCode: state.statusLabel,
     reasonPhrase: state.reasonPhrase,
   });
-}
-
-/** 受信した音声を再生するための audio graph */
-interface AudioPlayback {
-  context: AudioContext;
-  destination: MediaStreamAudioDestinationNode;
-}
-
-/** 音声の再生の開始の試行 (開始のたびに作り直すトークン) */
-interface AudioPlaybackStartAttempt {
-  /**
-   * 開始が作った audio graph
-   *
-   * 開始は await の途中で例外を投げることがある。そのときの後始末 (自分の Context だけ
-   * 閉じる) に使うため、トークンにも持たせる。まだ作っていなければ null。
-   */
-  playback: AudioPlayback | null;
 }
 
 /**
@@ -876,20 +857,10 @@ export function useSubscriber(
   const chainRef = useRef<Promise<void>>(Promise.resolve());
   // 音声 object の順次処理用 Promise チェーン (映像とは独立させる)
   const audioChainRef = useRef<Promise<void>>(Promise.resolve());
-  // 受信した音声を再生するための audio graph (トグル有効時のみ非 null)。トグルは購読前から
-  // 押せるため、購読していない間は入口が無いまま AudioContext だけを作れる。
-  //
-  // 不変条件: 再生の入口 (mediaPlayoutRef.current) がある間は、非 null ならその入口に同じ
-  // AudioContext が鳴らす先として付いている。例外は 2 つだけである。再生を始めている途中
-  // (AudioContext を作ってから呼び出し側が setAudioOutput するまで) と、停止の drain の
-  // 途中に入口が作り直された場合で、後者は閉じる Context を新しい入口へ付けないため、非
-  // null でも入口には付いていない期間がある (closeAudioContext が古い入口から外し、drain が
-  // 終わると null に戻る)。
-  const audioPlaybackRef = useRef<AudioPlayback | null>(null);
-  // 音声の再生の開始の試行。開始は await をまたぐため、二重起動の防止と「古い開始が
-  // 新しい開始の後始末をしない」ことをトークンの同一性で判定する。停止はこのトークンを
-  // null にして、進行中の開始を無効にする。
-  const audioPlaybackAttemptRef = useRef<AudioPlaybackStartAttempt | null>(null);
+  // 停止時に音声を鳴らし切る処理 (flush → drain → AudioContext.close)。
+  // 二重呼び出しは同じ Promise を共有し、AudioContext も 1 回だけ閉じる。
+  // 音声の再生のライフサイクル (audioPlaybackController) と、復号の対応付けの両方が使う
+  const audioStopRef = useRef(new SubscriberAudioStop());
   // startSubscribing の中断検知用 AbortController (レンダリング間で安定参照)
   const abortControllerRef = useRef<AbortController | null>(null);
   // 再生先が変わったら、今の <audio> へすぐ反映する。空文字はブラウザの既定
@@ -966,6 +937,62 @@ export function useSubscriber(
   const capturingAudioFlushRef = useRef(false);
   // 音声の再生を始めた時点の累積の計器 (差の求め方は subtractAudioPlayoutCumulative を参照)
   const audioPlayoutStatsBaselineRef = useRef<AudioPlayoutCumulative | null>(null);
+
+  /** 停止 (drain) の flush 用に、復号前の段の保持分を復号へ流す */
+  function flushAudioPreDecode(): number {
+    // 復号前の段の保持分を flush して復号へ流す。flush の通知は
+    // appendAudioPreDecodeRef 経由で復号チェーンへ積まれるため、flush の後に外す
+    const delay = preDecodeDelayRef.current;
+    capturingAudioFlushRef.current = true;
+    let flushed = 0;
+    try {
+      flushed = delay?.flushAudio() ?? 0;
+    } finally {
+      capturingAudioFlushRef.current = false;
+    }
+    appendAudioPreDecodeRef.current = null;
+    return flushed;
+  }
+
+  // 音声の再生のライフサイクル (開始・停止・切り替え)。audio graph と開始の試行を持つため、
+  // フックの再描画では作り直さない (useRef の遅延初期化)。再生の入口・signal・設定・計器は
+  // 依存として渡す
+  const audioPlaybackControllerRef = useRef<AudioPlaybackController | null>(null);
+
+  /**
+   * 音声の再生のライフサイクルを返す (初回の利用時に作る)
+   *
+   * 描画の間に ref を触らないよう、UI の操作や購読の開始など描画の外から呼ぶ。ここで作ると
+   * 再生中の audio graph を参照してしまうため、作るのは最初に使うときだけにする。
+   */
+  function getAudioPlaybackController(): AudioPlaybackController {
+    const existing = audioPlaybackControllerRef.current;
+    if (existing !== null) {
+      return existing;
+    }
+    const controller = createAudioPlaybackController({
+      subscriberId,
+      audioRef,
+      mediaPlayoutRef,
+      audioStopRef,
+      flushAudioPreDecode,
+      getAudioPlaybackEnabledSignal: () =>
+        sub.getSubscriber(subscriberId)?.audioPlaybackEnabled ?? null,
+      playAudioEnabled: settings.playAudioEnabled,
+      getSelectedAudioOutputDeviceId: () => settings.selectedAudioOutputDeviceId.value,
+      restartAudioPlayoutCumulative: () => {
+        // 入口の統計を 1 回だけ読み、基準と表示に共用する
+        const instance = sub.getSubscriber(subscriberId);
+        const audio = mediaPlayoutRef.current?.getStats().audio ?? null;
+        audioPlayoutStatsBaselineRef.current = readAudioPlayoutCumulative(audio);
+        if (instance !== undefined) {
+          publishAudioPlayoutCumulative(instance, audio);
+        }
+      },
+    });
+    audioPlaybackControllerRef.current = controller;
+    return controller;
+  }
 
   /**
    * 復号した音を鳴らすかどうかを、再生の入口から渡される入力の情報で決める
@@ -1076,7 +1103,6 @@ export function useSubscriber(
     mediaPlayoutRef.current?.clearVideoQueue();
     // 累積の計器は作り直した入口の値 (0) から数える
     audioPlayoutStatsBaselineRef.current = null;
-    const playback = audioPlaybackRef.current;
     const playout = createMediaPlayout({
       jitterBuffer: options.jitterBuffer,
       // jitter buffer が無効のときだけ、到着と復号のゆらぎを吸収するだけの小さな上限を
@@ -1122,11 +1148,8 @@ export function useSubscriber(
           }
         : null,
     });
-    // 再生中の AudioContext があれば、作り直した入口へ鳴らす先を付ける。停止の drain の
-    // 途中は付けない (判定と理由は shouldAttachAudioPlayback を参照)
-    if (shouldAttachAudioPlayback(playback, audioStopRef.current.isStopping)) {
-      playout.setAudioOutput({ context: playback.context, destination: playback.destination });
-    }
+    // 再生中の AudioContext があれば、作り直した入口へ鳴らす先を付ける
+    getAudioPlaybackController().attachPlaybackToPlayout(playout);
     mediaPlayoutRef.current = playout;
   }
 
@@ -1485,7 +1508,10 @@ export function useSubscriber(
     instance: sub.SubscriberInstance,
     audio: MediaPlayoutAudioStats | null,
   ): void {
-    if (audioPlaybackRef.current === null) {
+    // 再生の有無を読むだけなので、コントローラが未生成なら生成しない
+    // (音声を再生しない購読で 500 ms ごとに生成するのを避ける)
+    const controller = audioPlaybackControllerRef.current;
+    if (controller === null || !controller.hasPlayback()) {
       instance.audioPlayoutCatchUp.value = EMPTY_AUDIO_RECEIVE_CATCH_UP;
       return;
     }
@@ -1536,307 +1562,6 @@ export function useSubscriber(
       audio: audioCatchUpGateRef.current,
     });
   }
-
-  /**
-   * 音声の再生の audio graph を作る
-   *
-   * 出力先の生成に失敗したときは、作りかけの `AudioContext` を閉じてから throw する。
-   * この時点ではまだ再生の対象に載せていないため停止の経路からは閉じられず、閉じないままに
-   * するとブラウザの音声出力を占有し続ける。閉じる失敗は元の失敗を隠さないよう握り潰す。
-   *
-   * @returns 音声の再生の audio graph
-   * @throws createMediaStreamDestination が失敗した場合 (閉じたあとに rethrow する)
-   */
-  function createAudioPlayback(): AudioPlayback {
-    const context = new AudioContext();
-    try {
-      return { context, destination: context.createMediaStreamDestination() };
-    } catch (error) {
-      // 作りかけの AudioContext を残さない。close の失敗は元の失敗を隠さない
-      void context.close().catch(() => {
-        // 元の失敗を優先する
-      });
-      throw error;
-    }
-  }
-
-  /**
-   * 開始が作った audio graph を閉じ、再生の対象から外す (失敗は握り潰す)
-   *
-   * 開始の途中で停止されるか新しい開始に置き換えられたときに呼ぶ。共有の `<audio>` は
-   * 新しい開始のものになり得るため触らない (停止の経路は closeAudioContext が片付ける)。
-   */
-  async function closeStartedAudioPlayback(playback: AudioPlayback): Promise<void> {
-    if (audioPlaybackRef.current === playback) {
-      audioPlaybackRef.current = null;
-    }
-    if (playback.context.state === "closed") {
-      // 停止側が先に閉じている。閉じる経路を 1 つに保つ (失敗の握り潰しに頼らない)
-      return;
-    }
-    await playback.context.close().catch(() => {
-      // 既に閉じている場合は無視する
-    });
-  }
-
-  /**
-   * 受信した音声を音声出力デバイスへ流す graph を作り、再生を始める
-   *
-   * `audioContext.destination` には繋がず、`MediaStreamAudioDestinationNode` の
-   * トラックを `<audio>` の `srcObject` に設定する (ライブラリの
-   * createMediaSubscriber と同じ構成)。トグルのクリックがユーザー操作になるため、
-   * 自動再生ポリシー下でも `resume()` と `play()` が通る。
-   *
-   * 鳴らす先を再生の入口へ付けるのは呼び出し側である。`audioPlaybackEnabled` を立てる直前に
-   * 付けることで、有効になる前に届いた音を捨てる今の扱いを変えない。
-   *
-   * 開始は AudioContext の生成・`resume()`・`<audio>` の `play()` をまたいで await する。
-   * その途中で停止が始まるか新しい開始が始まることがあるため、各 await の後に対象が
-   * 変わっていないかを確かめる。変わっていたら共有の `<audio>` は触らず、自分が作った
-   * Context だけ閉じて null を返す (停止の drain の途中は停止側が閉じるため閉じない)。
-   *
-   * 停止の drain の途中に呼ばないこと (呼ぶかどうかは `toggleAudioPlayback` が判定する)。
-   *
-   * @param attempt - 開始の試行。作った audio graph を後始末用に記録する
-   * @returns 開始に使った audio graph。開始の途中で対象が変わったときは null
-   */
-  async function startAudioPlayback(
-    attempt: AudioPlaybackStartAttempt,
-  ): Promise<AudioPlayback | null> {
-    const playback = createAudioPlayback();
-    audioPlaybackRef.current = playback;
-    attempt.playback = playback;
-    // 開始の途中で対象が変わっていないかを確かめる。外れていたら自分の Context だけ閉じる
-    const abandonIfStale = async (): Promise<boolean> => {
-      if (
-        isAudioPlaybackStartCurrent(
-          audioPlaybackRef.current,
-          playback,
-          audioStopRef.current.isStopping,
-        )
-      ) {
-        return false;
-      }
-      await discardStaleAudioPlaybackStart(audioStopRef.current.isStopping, () =>
-        closeStartedAudioPlayback(playback),
-      );
-      return true;
-    };
-    if (playback.context.state === "suspended") {
-      await playback.context.resume();
-      if (await abandonIfStale()) return null;
-    }
-    const audioElement = audioRef.current;
-    if (audioElement) {
-      audioElement.srcObject = playback.destination.stream;
-      const outputDeviceId = settings.selectedAudioOutputDeviceId.value;
-      if (outputDeviceId !== "") {
-        await applyAudioOutputSink(audioElement, outputDeviceId);
-        if (await abandonIfStale()) return null;
-      }
-      await audioElement.play();
-      if (await abandonIfStale()) return null;
-    }
-    return playback;
-  }
-
-  // 停止時に音声を鳴らし切る処理 (flush → drain → AudioContext.close)。
-  // 二重呼び出しは同じ Promise を共有し、AudioContext も 1 回だけ閉じる
-  const audioStopRef = useRef(new SubscriberAudioStop());
-
-  /**
-   * 音声出力を止め、`<audio>` からストリームを外す
-   *
-   * 停止の要求を受けたら、新規の音声 Object を復号へ積むのを止め、復号前の段に保持して
-   * いる Object を flush して復号へ流し、予約済みの音が鳴り終わるまで待ってから
-   * `AudioContext` を閉じる (drain)。待ち時間の上限は `AUDIO_PLAYOUT_DRAIN_MAX_MS`。
-   * 復号前の段の flush 分の復号出力は、予約されるまで待つ。
-   *
-   * 二重に呼ばれた場合は同じ Promise を返す。停止の完了を待てない経路 (パネルの削除、
-   * アンマウント、セッションの close 通知) は `void` で呼び、AudioContext はこの処理が
-   * 必ず閉じる。
-   */
-  function stopAudioPlayback(): Promise<void> {
-    // 進行中の再生開始を無効にする (開始は await の後にトークンで自分が今の試行かを確かめる)
-    audioPlaybackAttemptRef.current = null;
-    // 停止の対象の再生の入口。停止の完了 (drain) は非同期であるため、その間に次の購読が
-    // 始まって入口が作り直されても、作り直された入口を触らないよう参照を固定する
-    const stoppingPlayout = mediaPlayoutRef.current;
-    return audioStopRef.current.stop({
-      flushAudio: () => {
-        // 復号前の段の保持分を flush して復号へ流す。flush の通知は
-        // appendAudioPreDecodeRef 経由で復号チェーンへ積まれるため、flush の後に外す
-        const delay = preDecodeDelayRef.current;
-        capturingAudioFlushRef.current = true;
-        let flushed = 0;
-        try {
-          flushed = delay?.flushAudio() ?? 0;
-        } finally {
-          capturingAudioFlushRef.current = false;
-        }
-        appendAudioPreDecodeRef.current = null;
-        return flushed;
-      },
-      drain: async (options) => {
-        const playback = audioPlaybackRef.current;
-        if (playback === null) {
-          // 停止の経路で再生の対象を null にするのは closeAudioContext だけである。
-          // ここで null なら Context は既に閉じられており、鳴らし切る予約も残っていない
-          return;
-        }
-        // 予約済みの音が鳴り終わるまで待つ。flush した分の復号出力が届くまでは
-        // 予約が尽きていても終えない (再生の入口が持つ)
-        await stoppingPlayout?.drainAudio(options);
-      },
-      closeAudioContext: async () => {
-        const playback = audioPlaybackRef.current;
-        audioPlaybackRef.current = null;
-        // 閉じる AudioContext を再生の入口から外し、時計の対応と直前の音を捨てる。
-        // 停止の drain の間に購読がやり直されて入口が作り直されることがあるため、
-        // 作り直された入口からも外す (残すと、閉じた Context へ次の音を予約してしまう)。
-        // 入口が作り直されていなければ、下の 1 回で足りる
-        stoppingPlayout?.setAudioOutput(null);
-        if (mediaPlayoutRef.current !== stoppingPlayout) {
-          mediaPlayoutRef.current?.setAudioOutput(null);
-        }
-        const audioElement = audioRef.current;
-        if (audioElement) {
-          audioElement.pause();
-          audioElement.srcObject = null;
-        }
-        if (playback !== null) {
-          await playback.context.close().catch(() => {
-            // 既に閉じている場合は無視する
-          });
-        }
-      },
-      onStopped: () => {
-        // 時間軸からも音声の基準と学習と実績を消す。残すと共有の再生遅延に音声の下限
-        // (AUDIO_PLAYOUT_DELAY_FLOOR_MS) が残り、映像の表示が音声を一度も再生していない購読より
-        // 遅れたまま固定される。世代は進めない (積んでいる映像フレームを到着順に落とさない)
-        stoppingPlayout?.resetAudioTimeline();
-      },
-    });
-  }
-
-  /**
-   * 音声出力だけを止める (購読は続ける)
-   *
-   * 購読の停止時と違い、復号前の段は flush しない (保持している Object は購読の停止時に
-   * 流す)。復号チェーンへの接続 (`appendAudioPreDecodeRef`) も外さない。外すと、購読を
-   * 続けたまま音声を再度有効にしたときに、復号前の段から流れた Object が復号へ届かない。
-   * 予約済みで鳴り始めていない音は、閉じるときに切った量として計器へ残す。
-   *
-   * 音声の再生の状態 (予約の基準・追いつきの観測) も取り直す。有効に戻したときに、古い
-   * `AudioContext` の基準で並べ直さないためである。映像の表示は止めない
-   * (`resetPlayout` を使うと映像の表示待ちまで消える)。
-   */
-  function pauseAudioPlayback(): void {
-    audioPlaybackAttemptRef.current = null;
-    const playback = audioPlaybackRef.current;
-    audioPlaybackRef.current = null;
-    const playout = mediaPlayoutRef.current;
-    playout?.setAudioOutput(null);
-    const audioElement = audioRef.current;
-    if (audioElement) {
-      audioElement.pause();
-      audioElement.srcObject = null;
-    }
-    if (playback !== null) {
-      // 予約済みで鳴り始めていない音は、閉じると鳴らないまま切り捨てられる
-      playout?.recordAudioStopped();
-      playout?.resetAudioTimeline();
-      // 鳴らす先を外したので、予約の基準・時計の対応・追いつきの観測を取り直す
-      playout?.resetAudioPlayback();
-      void playback.context.close().catch(() => {
-        // 既に閉じている場合は無視する
-      });
-    }
-  }
-
-  /**
-   * 受信した音声を再生するかどうかを切り替える
-   *
-   * 既定は無効。有効にしたときだけ音声出力デバイスへ繋ぐ。
-   */
-  const toggleAudioPlayback = async (): Promise<void> => {
-    const instance = sub.getSubscriber(subscriberId);
-    if (!instance) return;
-    // 購読の停止 (drain) の途中は切り替えない。停止の最後に AudioContext を閉じるため、
-    // 途中で作り直すと参照が失われ、有効のまま無音になる
-    if (audioStopRef.current.isStopping) return;
-
-    if (instance.audioPlaybackEnabled.value) {
-      pauseAudioPlayback();
-      instance.audioPlaybackEnabled.value = false;
-      // URL クエリ (`playAudio`) へ反映する。共有した URL で同じ状態から始められる
-      settings.playAudioEnabled.value = false;
-      return;
-    }
-
-    // 開始の途中にもう一度クリックされると AudioContext が二重に作られ、先に作った方が
-    // 参照を失って解放されない。開始の試行をトークンで持ち、終わった試行だけが後始末する
-    if (audioPlaybackAttemptRef.current !== null) {
-      return;
-    }
-    const attempt: AudioPlaybackStartAttempt = { playback: null };
-    audioPlaybackAttemptRef.current = attempt;
-
-    try {
-      const started = await startAudioPlayback(attempt);
-      if (started === null) {
-        return;
-      }
-      // await の間に停止が始まるか、停止の後に新しい開始が始まることがある。開始に使った
-      // audio graph が今も対象かと停止中かで、今の再生として確定するかを決める。確定しない
-      // ときは共有の `<audio>` を触らず、自分が作った Context だけを閉じる (停止の drain の
-      // 途中は停止側が閉じるため閉じない)。確定したときだけ下の commit が呼ばれる
-      await settleAudioPlaybackStart({
-        isCurrent: audioPlaybackRef.current === started,
-        isStopping: audioStopRef.current.isStopping,
-        commit: () => {
-          // 鳴らす先を再生の入口へ付け、有効にする直前に音声の再生の状態を取り直す。
-          // ここから先は同じタスクで有効にするため、付け直した出力で鳴らす前に
-          // audioPlaybackEnabled が false のままの音は現れない
-          mediaPlayoutRef.current?.setAudioOutput({
-            context: started.context,
-            destination: started.destination,
-          });
-          // 開始の経路は再生が無効なときだけ通るため、AudioContext は必ず作り直している。
-          // 予約の基準と累積の表示の起点を取り直す
-          mediaPlayoutRef.current?.resetAudioPlayback();
-          const audio = mediaPlayoutRef.current?.getStats().audio ?? null;
-          audioPlayoutStatsBaselineRef.current = readAudioPlayoutCumulative(audio);
-          publishAudioPlayoutCumulative(instance, audio);
-          instance.audioPlaybackEnabled.value = true;
-          settings.playAudioEnabled.value = true;
-        },
-        discard: () => closeStartedAudioPlayback(started),
-      });
-    } catch (error) {
-      // 停止や新しい開始に置き換えられていたら、この失敗は想定内である (停止の pause で
-      // play() が中断される AbortError など)。ログにも状態にも出さず、作成済みの graph だけ
-      // 後始末して戻る。共有の `<audio>` は触らない (新しい開始か停止が片付ける)
-      if (audioPlaybackAttemptRef.current !== attempt) {
-        const started = attempt.playback;
-        if (started !== null) {
-          await discardStaleAudioPlaybackStart(audioStopRef.current.isStopping, () =>
-            closeStartedAudioPlayback(started),
-          );
-        }
-        return;
-      }
-      console.error(`[${subscriberId}] failed to start audio playback:`, error);
-      void stopAudioPlayback();
-      instance.audioPlaybackEnabled.value = false;
-    } finally {
-      // 二重起動のガードは、この試行が今の試行であるときだけ外す。古い開始が新しい開始の
-      // ガードを消すと、同じ再生を二重に始められる
-      if (audioPlaybackAttemptRef.current === attempt) {
-        audioPlaybackAttemptRef.current = null;
-      }
-    }
-  };
 
   /**
    * event timeline トラックを購読する
@@ -3385,7 +3110,7 @@ export function useSubscriber(
       // 予約済みの音声を鳴らし切ってから後始末する。drain の間は停止中であることを
       // status に出し、ボタンは isStopping で無効のままにする
       instance.statusMessage.value = SUBSCRIBER_AUDIO_STOPPING_STATUS_MESSAGE;
-      await stopAudioPlayback();
+      await getAudioPlaybackController().stopAudioPlayback();
       teardownSubscriber();
       instance.isStopping.value = false;
       instance.status.value = "disconnected";
@@ -3409,9 +3134,9 @@ export function useSubscriber(
     // 追いつきの境界を消し、画面の「Catching up」も消す
     resetCatchUpGates();
     // 音声を drain してから AudioContext を閉じる。復号前の段の保持分の flush は
-    // stopAudioPlayback が行うため、段を破棄するより先に呼ぶ。await できない経路
-    // (パネルの削除、アンマウント、セッションの close 通知) なので fire-and-forget にし、
-    // AudioContext は stopAudioPlayback が必ず閉じる
+    // 音声の再生のライフサイクル (audioPlaybackController) の停止が行うため、段を破棄する
+    // より先に呼ぶ。await できない経路 (パネルの削除、アンマウント、セッションの close 通知)
+    // なので fire-and-forget にし、AudioContext はこの停止が必ず閉じる
     //
     // 入口の状態 (時間軸・復号へ渡した入力の対応表・表示待ち) は、drain が終わってから
     // 捨てる。drain の前に捨てると、復号前の段から flush した音を鳴らし切るための時間軸の
@@ -3424,7 +3149,9 @@ export function useSubscriber(
       // 判定は playoutToKeepAfterStop が持つ
       mediaPlayoutRef.current = playoutToKeepAfterStop(mediaPlayoutRef.current, stoppingPlayout);
     };
-    void stopAudioPlayback().then(clearStoppedPlayout, clearStoppedPlayout);
+    void getAudioPlaybackController()
+      .stopAudioPlayback()
+      .then(clearStoppedPlayout, clearStoppedPlayout);
     // 復号前の段とタイマーを破棄する (flush 済み。停止後に復号へ流さない)
     resetPreDecodeDelay();
     // 切り捨てられた分 (予約済みで鳴らなかった音) まで反映してから止める
@@ -3502,6 +3229,14 @@ export function useSubscriber(
       teardownSubscriber();
     };
   }, []);
+
+  /**
+   * 受信した音声を再生するかどうかを切り替える (UI から呼ぶ)
+   *
+   * 音声の再生のライフサイクルは初回の呼び出しで作る (描画の間に ref を触らないため)
+   */
+  const toggleAudioPlayback = (): Promise<void> =>
+    getAudioPlaybackController().toggleAudioPlayback();
 
   return {
     startSubscribing,
