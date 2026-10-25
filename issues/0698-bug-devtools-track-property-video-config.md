@@ -3,7 +3,7 @@
 - Created: 2026-09-24
 - Completed: {YYYY-MM-DD}
 - Branch: feature/fix-devtools-track-property-video-config
-- Polished: 2026-09-24
+- Polished: 2026-10-26
 
 ## 目的
 
@@ -11,36 +11,40 @@ closed の `0649-bug-media-subscriber-track-property-config.md` は高レベル 
 
 ## 現状
 
-- `devtools/src/hooks/useSubscriber.ts` の `buildVideoDecoderConfig` (69 行目) は Catalog の `codec` / `width` / `height` と `resolveInitData(catalog, videoTrack)` (84 行目) だけから `VideoDecoderConfig` を組み立てる。`trackProperties` を引数に取らず参照もしない
-- 呼び出しは `startSubscribing` の中で 1 回だけで、`const decoderConfig = buildVideoDecoderConfig(...)` (1049 行目) → `await decoderInstance.configure(decoderConfig)` (1052 行目) → `instance.decoderConfigured.value = true` (1066 行目) → `const subscriberInstance = await session.subscribe(...)` (1095 行目) の順である。configure の時点では SUBSCRIBE_OK の Track Properties が存在しない
-- 同ファイルの `handleObject` (678 行目) は `buildVideoChunkPlan(obj)` (699 行目) の結果で `EncodedVideoChunk` を作り、そのまま `decoderInstance.decode(chunk)` を呼ぶ (729 行目)。VIDEO_CONFIG の変化を見て configure をやり直す経路が無い (映像経路の `configure` 呼び出しは 1052 行目の 1 箇所のみ)
-- 音声経路は `handleAudioObject` が `LOC.resolveAudioProperties(current.audioSubscriber.value?.trackProperties, obj.properties)` を呼び (470-473 行目)、config が変わったときだけ `audioDecoderInstance.configure(...)` をやり直す (481-490 行目)。`AUDIO_CONFIG` は Track Property からも解決される
-- `devtools/src/hooks/useSubscriber.ts` の `buildVideoChunkPlan` (128 行目) は `obj.properties` のみを `LOC.decodeVideoProperties` に渡す (135-143 行目)。`LOC.resolveVideoProperties` は TIMESTAMP / VIDEO_FRAME_MARKING を Object Property からのみ取り、Track Property からは TIMESCALE と VIDEO_CONFIG だけを取る (`src/loc.ts` の `extractLocProperties` 711 行目、`resolveVideoProperties` 764 行目、draft-ietf-moq-loc-04 Table 1) ため、キーフレーム判定と timestamp に Track Property は関与しない
-- `Subscriber.trackProperties` は `src/subscriber.ts` が保持し (102 行目 / 202 行目)、devtools は `subscriberInstance.trackProperties` として参照できる。既存の参照は `supportsDynamicGroups(subscriberInstance.trackProperties)` (1142 行目) の 1 箇所である
+- `devtools/src/hooks/useSubscriber.ts` の `buildVideoDecoderConfig` は Catalog の `codec` / `width` / `height` と `resolveInitData(catalog, videoTrack)` だけから `VideoDecoderConfig` を組み立てる。`trackProperties` を引数に取らず参照もしない
+- 呼び出しは `startSubscribing` の中で 1 回だけで、`buildVideoDecoderConfig(...)` → `await decoderInstance.configure(decoderConfig)` → `instance.decoderConfigured.value = true` → `await session.subscribe(...)` の順である。configure の時点では SUBSCRIBE_OK の Track Properties が存在しない
+- `handleObject` は `buildVideoChunkPlan(instance.subscriber.value?.trackProperties, obj)` の結果で `EncodedVideoChunk` を作り、`decoderInstance.decode(chunk)` を呼ぶ。VIDEO_CONFIG の変化を見て configure をやり直す経路が無い。映像経路の `configure` 呼び出しは `startSubscribing` の 1 箇所のみである
+- 音声経路は `handleAudioObject` が `LOC.resolveAudioProperties(current.audioSubscriber.value?.trackProperties, obj.properties)` を呼び、`requiresAudioSpecificConfig(audioCodec)` のときに config が変わったときだけ `audioDecoderInstance.configure(...)` をやり直す。`AUDIO_CONFIG` は Track Property からも解決される
+- `buildVideoChunkPlan` は `trackProperties` を取り、Object に Properties がある場合に `LOC.resolveVideoProperties(trackProperties, obj.properties)` を呼ぶ。`LOC.resolveVideoProperties` は TIMESTAMP / VIDEO_FRAME_MARKING を Object Property からのみ取り、Track Property からは TIMESCALE と VIDEO_CONFIG を取る (`src/loc.ts` の `extractLocProperties`、`resolveVideoProperties`、draft-ietf-moq-loc-04 Table 1)。そのため `buildVideoChunkPlan` は Track Property の TIMESCALE を timestamp の解釈に使うが、VIDEO_CONFIG は返さないので configure には使われない。キーフレーム判定は Object Property の VIDEO_FRAME_MARKING と Object ID だけで決まる
+- `Subscriber.trackProperties` は `src/subscriber.ts` が保持し、devtools は `subscriberInstance.trackProperties` として参照できる。既存の参照は、映像の `buildVideoChunkPlan` と `recordVideoReceived` が TIMESCALE を、音声の `handleAudioObject` が AUDIO_CONFIG を、`supportsDynamicGroups` が DYNAMIC_GROUPS を参照している。映像の configure は参照していない
 - `devtools/src/signals/subscriber.ts` の `SubscriberInstance` に `trackProperties` フィールドは無く、`subscriber` signal 経由で `Subscriber` を保持する形である
-- 関連する open issue は 0678 (devtools 本体の Worker モード映像エンコーダのバックプレッシャ) と 0677 (ライブラリ側映像デコーダの恒久エラーでの reset ループ) で、どちらも publisher 側または reset の話であり、本件の購読経路とは別である
+- 関連する issue は closed の 0678 (devtools 本体の Worker モード映像エンコーダのバックプレッシャ) と closed の 0677 (ライブラリ側映像デコーダの恒久エラーでの reset ループ) で、どちらも publisher 側または reset の話であり、本件の購読経路とは別である
 
 ## 設計方針
 
-- 映像の Object 処理で Track Property の VIDEO_CONFIG を参照し、値が変わったら configure をやり直す。音声経路 (470-490 行目) と同じ形にする
+- 映像の Object 処理で Track Property の VIDEO_CONFIG を参照し、値が変わったら configure をやり直す。音声経路の `handleAudioObject` と同じ形にする
   - `handleObject` で `LOC.resolveVideoProperties(instance.subscriber.value?.trackProperties, obj.properties)` を呼び、`config` が直前の適用値と異なる場合に `decoderInstance.configure({ ...catalogDerivedConfig, description: new Uint8Array(config) })` を await してから、同じ Object の `decode` に進む
-  - Catalog 由来の `VideoDecoderConfig` は `buildVideoDecoderConfig` の結果をローカルに保持して使い回す。description だけを差し替える
+  - Catalog 由来の `VideoDecoderConfig` はフックのスコープの ref に保持し、購読開始時に `buildVideoDecoderConfig` の結果を設定する。description だけを差し替える
+  - `appliedVideoConfig` はフックのスコープの ref に保持し、購読開始時に初期 configure で渡した description (Catalog の initData がある場合は `Uint8Array` に変換した値) を設定する。購読を開始するたびにリセットする
   - Object Property の VIDEO_CONFIG が優先され、Track Property はフォールバックになる (`resolveVideoProperties` の既存規則)。これにより VIDEO_CONFIG を Object にだけ載せる publisher でも再 configure が効くようになる
-- `session.subscribe` の解決直後にも Track Property の config を適用する。Object のコールバックは `session.subscribe` の呼び出し時に登録されるため、`instance.subscriber.value` の代入 (1123 行目) より前に届いた Object では `trackProperties` が未設定になる。`subscriberInstance.trackProperties` から config を解決し、Catalog 由来の config と異なれば configure をやり直してから `instance.subscriber.value` を代入する (高レベル API の `applyInitialVideoConfig` と同じ形)
+- `session.subscribe` の解決直後にも Track Property の config を適用する。Object のコールバックは `session.subscribe` の呼び出し時に登録されるため、`instance.subscriber.value` の代入より前に届いた Object では `trackProperties` が未設定になる。初期適用の完了を表す Promise を購読要求の前に用意し、`handleObject` は decode の前にその Promise を await する。`instance.subscriber.value` は初期適用の前に代入し、初期適用は `subscriberInstance.trackProperties` から config を解決して行う。これにより、`instance.subscriber.value` の代入前に届いた Object も、Track Property の config が適用されてから decode される
+  - 初期適用の Promise は、購読の失敗・中断時も `finally` で resolve し、待機中の `handleObject` を解放する
 - `buildVideoDecoderConfig` のシグネチャは変えない。configure の時点では Track Properties が存在しないため、引数を足しても初期 configure では使えない。Track Property の反映は上記 2 つの適用経路 (subscribe 直後と Object 処理) に置く
-- 保留キューは導入しない。reconfigure は同じ Object の `decode` の前に await するため、最初の Object から正しい description で復号できる。`handleObject` は既に `chainRef` の Promise チェーンで直列化されており (1104 行目)、reconfigure 中の並行 decode は起きない
-- `buildVideoChunkPlan` は変更しない。TIMESTAMP と VIDEO_FRAME_MARKING は draft-ietf-moq-loc-04 Table 1 で Scope が Object のみであり、Track Property を参照する意味が無い
+- 購読確立前の Object は、初期 config の適用 Promise を await してから decode する。保留キューは持たない。Object は既存の `chainRef` の Promise チェーン上で待つ。`handleObject` は既に `chainRef` の Promise チェーンで直列化されており、初期適用と reconfigure が並行しない
+- `buildVideoChunkPlan` は変更しない。TIMESTAMP と VIDEO_FRAME_MARKING は Object のみ、TIMESCALE は Track, Object であり、Track Property の TIMESCALE は既に `buildVideoChunkPlan` が参照している。VIDEO_CONFIG は `buildVideoChunkPlan` では使わず、`handleObject` で `resolveVideoProperties` を呼んで解決する
 - AUDIO_CONFIG は音声経路が既に `trackProperties` を渡しているため対象外とし、映像経路との非対称の解消だけを行う
-- 適用に失敗した場合は `appliedVideoConfig` を更新せず、`instance.decodeErrors` を増やして次の Object で再試行できるようにする (音声経路と同じ扱い)。`console.error` の文言は英語にする規約に従う
-- `devtools/src/hooks/useSubscriber.test.ts` に、Track Property にのみ VIDEO_CONFIG を載せた購読で (1) 最初の Object の decode 前に description つきの configure が走る、(2) 同じ config では再 configure しない、(3) Object Property の VIDEO_CONFIG が Track Property より優先される、を固定するテストを追加する
+- 初期適用に失敗した場合は `appliedVideoConfig` を更新せず、`instance.decodeErrors` を増やし、`handleObject` が同じ Object の decode 前に再試行する。Object ごとの適用に失敗した場合は `instance.decodeErrors` を増やし、その Object の decode を諦めて次の Object で再試行できるようにする (音声経路と同じ扱い)。`console.error` の文言は英語にする規約に従う
+- config の解決と適用の判断は `handleObject` が呼ぶ関数として切り出し、`devtools/src/hooks/useSubscriber.test.ts` で直接固定できるようにする。configure / decode の順序は、呼び出しを記録する `DecoderWrapper` の派生 (既存の `RecordingDecoderWrapper` と同じ形) で観測する
+- `devtools/src/hooks/useSubscriber.test.ts` に、Track Property にのみ VIDEO_CONFIG を載せた購読で (1) 最初の Object の decode 前に description つきの configure が走る、(2) 同じ config では再 configure しない、(3) Object Property の VIDEO_CONFIG が Track Property より優先される、を固定するテストを追加する。あわせて、`instance.subscriber.value` の代入前に届いた Object が初期適用の完了を待ってから decode されることと、適用失敗時に `instance.decodeErrors` を増やして次の Object で再試行されることを固定する
 
 ## 完了条件
 
 - Track Property (SUBSCRIBE_OK) にのみ VIDEO_CONFIG を載せる publisher に対して、devtools の映像 decoder が description つきで configure され、最初の Object が decode に渡る
-- SUBSCRIBE の解決直後に Track Property の config が適用され、`instance.subscriber.value` の代入前に届いた Object も正しい description で復号される
+- SUBSCRIBE の解決直後に Track Property の config が適用され、`instance.subscriber.value` の代入前に届いた Object も、初期適用の完了を待ってから正しい description で復号される
 - Object Property に VIDEO_CONFIG が無い Object でも Track Property の値が使われる
 - Object Property に VIDEO_CONFIG がある場合は Object Property が優先される
 - 直前と同じ config では configure をやり直さない
+- 初期適用に失敗した場合は `appliedVideoConfig` を更新せず、`instance.decodeErrors` を増やし、`handleObject` が同じ Object の decode 前に再試行する。Object ごとの適用に失敗した場合は `instance.decodeErrors` を増やし、その Object の decode を諦めて次の Object で再試行される
 - Track Property / Object Property のどちらにも VIDEO_CONFIG が無い場合は、従来どおり Catalog の initData だけで configure される
 - `buildVideoChunkPlan` とキーフレーム判定の挙動が変わらない
 - `devtools/src/hooks/useSubscriber.test.ts` に上記を固定するテストが追加されている
@@ -48,10 +52,11 @@ closed の `0649-bug-media-subscriber-track-property-config.md` は高レベル 
 
 ## 参照
 
-- draft-ietf-moq-loc-04 Table 1 (VIDEO_CONFIG 0x0D / AUDIO_CONFIG 0x0F の Scope は Track, Object。TIMESTAMP / VIDEO_FRAME_MARKING は Object のみ) / §2.3.2.1 (Video Config) / §2.3.3.1 (Audio Config)。`refs/moq/draft-ietf-moq-loc-04.txt`
+- draft-ietf-moq-loc-04 Table 1 (VIDEO_CONFIG 0x0D / AUDIO_CONFIG 0x0F の Scope は Track, Object。TIMESTAMP / VIDEO_FRAME_MARKING は Object のみ、TIMESCALE は Track, Object) / §2.3.2.1 (Video Config) / §2.3.3.1 (Audio Config) / §2.3.1.2 (Timescale)。`refs/moq/draft-ietf-moq-loc-04.txt`
 - draft-ietf-moq-transport-22 §9.7 (SUBSCRIBE_OK) / §10 (MOQT Properties)
 - closed `0649-bug-media-subscriber-track-property-config.md` (高レベル API 側の修正。devtools は対象外と明記されている)
-- 0677 (ライブラリ側映像デコーダの reset ループ) / 0678 (devtools の映像エンコーダのバックプレッシャ。publisher 側)
+- closed 0677 (ライブラリ側映像デコーダの reset ループ) / closed 0678 (devtools の映像エンコーダのバックプレッシャ。publisher 側)
+- 高レベル API の `src/createMediaSubscriber.ts` の `applyInitialVideoConfig` / `releasePendingVideoObjects` (購読確立前の Object を保留する実装の参考)
 
 ## 解決方法
 
