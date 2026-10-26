@@ -203,7 +203,7 @@ export interface PublisherStats {
 
 /** Subscriber の音声の統計 */
 export interface SubscriberAudioStats {
-  /** 受信した音声 Object の数 (復号に渡す前のものも数える) */
+  /** 受信した音声 Object の数 (復号に渡す前のものも数える。重複は含まない) */
   objectsReceived: number;
   /**
    * 受信した音声 Object のうち datagram で届いた数
@@ -236,14 +236,15 @@ export interface SubscriberAudioStats {
    * datagram の冗長化などで同じ Object を 2 回以上受け取り、復号へ渡さず捨てた数
    *
    * 配信側が同じ Object を複数回送っているか (冗長度が経路上で効いているか) を確かめる。
-   * `objectsReceived` は受信した回数であり、重複も含む
+   * `objectsReceived` は重複を除いた受信 Object 数であり、冗長化の copy はここには含めない
    */
   duplicateObjectsDropped: number;
   /**
    * 受信した音声 Object の Location が、同じ購読で受信済みの最大 Location より
    * 小さかった数
    *
-   * datagram は順序を保証しない (draft-ietf-moq-transport-22 §2.3.1) ため、順序逆転が
+   * Group が異なる Object の順序は保証されない (draft-ietf-moq-transport-22 §2.3.1)。
+   * 音声は 1 Object = 1 Group なので、datagram でも subgroup でも順序逆転が起き得る。
    * 実際に起きているかを直接測る。relay の cache から replay された Object
    * (SUBSCRIBE_OK の LARGEST_OBJECT 以下) は順序逆転ではないため数えない。同じ Object の
    * 冗長化 copy も 1 回だけ数える
@@ -252,7 +253,8 @@ export interface SubscriberAudioStats {
   /**
    * 順序逆転した Object が、受信済みの最大 Group から何 Group 戻っていたかの最大値
    *
-   * 音声は 1 Object = 1 Group なので、そのまま 20 ms 単位の戻り幅の目安になる。
+   * 音声は 1 Object = 1 Group なので、Group ID の差がそのまま戻り幅の目安になる。
+   * moqt-js の Opus では 1 Object = 20 ms、AAC では約 21.3 ms である。
    * Group ID の差が Number.MAX_SAFE_INTEGER を超える場合はその値で頭打ちにする
    */
   maxOutOfOrderGroupDistance: number;

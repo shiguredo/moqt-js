@@ -89,7 +89,10 @@ import { effectiveTargetLatencyMs, resolveSharedTargetLatencyMs } from "../../..
 import { applyAudioOutputSink } from "../utils/audioOutput";
 import { browserIsChromium, resolvePanelHttpVersion } from "../utils/httpVersion";
 import { formatFullTrackName } from "../../../src/fullTrackName.ts";
-import { compareLocations } from "../../../src/session/params.ts";
+import {
+  AUDIO_RECEIVE_ORDER_WINDOW,
+  AudioReceiveOrderTracker,
+} from "../utils/audioReceiveOrder.ts";
 import { subscribeAuthorizationTokenOptions } from "../utils/trackAuthorization";
 import * as settings from "../signals/connectionSettings";
 import * as sub from "../signals/subscriber";
@@ -297,7 +300,7 @@ export function refreshTrackEndStatus(instance: sub.SubscriberInstance): void {
  * 時点で Object が無い) と、PUBLISH_DONE で終わったトラックは完了として扱う。
  */
 /** 同じ音声 Object を 2 回受け取ったときに、2 回目を捨てるために覚える数 (src と同じ) */
-const AUDIO_RECENT_OBJECT_IDS_MAX = 256;
+const AUDIO_RECENT_OBJECT_IDS_MAX = AUDIO_RECEIVE_ORDER_WINDOW;
 
 export function applyCatchUpPending(instance: sub.SubscriberInstance, gates: CatchUpGates): void {
   // 終わったトラックは境界を越える Object が来ないため、完了していなくても追いつき中としない。
@@ -851,24 +854,6 @@ export function handleDebugMessage(subscriberId: string, message: DebugMessage):
  */
 function nowMs(): number {
   return performance.now();
-}
-
-/** Group ID の差を number へ安全に変換するときの上限 (Number.MAX_SAFE_INTEGER) */
-const MAX_SAFE_GROUP_DISTANCE = BigInt(Number.MAX_SAFE_INTEGER);
-
-/**
- * Group ID の差を、安全に number へ変換する
- *
- * Group ID は varint (最大 2^62-1) であり、number へそのまま変換すると倍精度の整数精度を
- * 超えて値が変わる。順序逆転の戻り幅は目安として読む値であるため、Number.MAX_SAFE_INTEGER
- * を超える差はその値で頭打ちにする。
- *
- * @param largestGroup - 受信済みの最大 Group ID
- * @param group - 順序逆転した Object の Group ID
- */
-function audioGroupDistance(largestGroup: bigint, group: bigint): number {
-  const distance = largestGroup - group;
-  return distance > MAX_SAFE_GROUP_DISTANCE ? Number.MAX_SAFE_INTEGER : Number(distance);
 }
 
 export function useSubscriber(
@@ -1762,72 +1747,30 @@ export function useSubscriber(
     // ことがある。渡すと同じ音を 2 回鳴らし、媒体時刻が実時間より先へ進む
     const recentAudioObjectIds: string[] = [];
     const recentAudioObjectIdSet = new Set<string>();
-    // 受信入口で見た音声の Location。同じ Group の冗長化 copy は同じ Location であり、
-    // 受信入口ではまだ重複排除していない (重複排除は復号チェーンの入口で行う)。そのため
-    // 順序逆転の計器が同じ Object を 2 回 (copy の数だけ) 数えないよう、見た Location を
-    // 別に覚えておく。古い方から忘れる上限は重複判定と同じ件数でよい
-    const recentAudioLocationKeys: string[] = [];
-    const recentAudioLocationKeySet = new Set<string>();
-
-    // 受信した音声 Object の順序逆転を測るための、購読ごとの最大 Location。
-    // 音声は 1 Object = 1 Group であり、datagram は順序を保証しない
+    // 受信した音声 Object の順序逆転を測るための、購読ごとの観測器。
+    // 音声は 1 Object = 1 Group であり、Group が異なる Object の順序は保証されない
     // (draft-ietf-moq-transport-22 §2.3.1)。復号は到着順のままなので、逆順に届いたかを
-    // 計器で読めるようにする
-    let largestAudioLocation: Location | null = null;
-    // SUBSCRIBE_OK の LARGEST_OBJECT。これ以下の位置は relay の cache から replay された
-    // Object であり、順序逆転ではないため out-of-order に数えない。境界が決まるまでは
-    // cache と live を区別できないので、最大 Location の更新だけを行って数えない
-    let audioCacheBoundary: Location | null = null;
-    let audioCacheBoundaryKnown = false;
+    // 計器で読めるようにする。境界の扱いと最近見た Location の窓は観測器が持つ
+    const audioReceiveOrder = new AudioReceiveOrderTracker(AUDIO_RECENT_OBJECT_IDS_MAX);
 
     /**
      * 受信した音声 Object の Location から、順序逆転の計器を更新する
      *
      * 比較は Group ID → Object ID の順である (draft-ietf-moq-transport-22 §8.2 の Location
      * 比較)。同じ Location は重複である。重複は enqueueAudioDecodeDirect が
-     * `duplicateObjectsDropped` として数えるため、順序逆転としては数えない。重複排除は
-     * 復号チェーンの入口で行うため、ここでは見た Location を覚えて 1 回だけ数える。
+     * `duplicateObjectsDropped` として数えるため、順序逆転としては数えない。
      */
     const observeAudioReceiveLocation = (
       current: sub.SubscriberInstance,
       location: Location,
     ): void => {
-      if (!audioCacheBoundaryKnown) {
-        if (largestAudioLocation === null || compareLocations(location, largestAudioLocation) > 0) {
-          largestAudioLocation = location;
-        }
+      const observation = audioReceiveOrder.observe(location);
+      if (!observation.outOfOrder) {
         return;
       }
-      // 境界以下は relay の cache から replay された Object であり、順序逆転ではない
-      if (audioCacheBoundary !== null && compareLocations(location, audioCacheBoundary) <= 0) {
-        return;
-      }
-      // 同じ Location の 2 個目以降 (冗長化の copy) は、同じ Object であるため数えない
-      const locationKey = `${location.group.toString()}:${location.object.toString()}`;
-      if (recentAudioLocationKeySet.has(locationKey)) {
-        return;
-      }
-      recentAudioLocationKeySet.add(locationKey);
-      recentAudioLocationKeys.push(locationKey);
-      if (recentAudioLocationKeys.length > AUDIO_RECENT_OBJECT_IDS_MAX) {
-        const oldest = recentAudioLocationKeys.shift();
-        if (oldest !== undefined) {
-          recentAudioLocationKeySet.delete(oldest);
-        }
-      }
-      if (largestAudioLocation === null || compareLocations(location, largestAudioLocation) > 0) {
-        largestAudioLocation = location;
-        return;
-      }
-      // 同じ Location は重複である。重複は enqueueAudioDecodeDirect が数える
-      if (compareLocations(location, largestAudioLocation) === 0) {
-        return;
-      }
-      // 受信済みの最大 Location より前の Object が届いた (順序逆転)
       current.outOfOrderObjectsReceived.value += 1;
-      const distance = audioGroupDistance(largestAudioLocation.group, location.group);
-      if (distance > current.maxOutOfOrderGroupDistance.value) {
-        current.maxOutOfOrderGroupDistance.value = distance;
+      if (observation.groupDistance > current.maxOutOfOrderGroupDistance.value) {
+        current.maxOutOfOrderGroupDistance.value = observation.groupDistance;
       }
     };
 
@@ -2081,16 +2024,7 @@ export function useSubscriber(
     // 順序逆転の計器にも同じ境界を使う。これ以下の位置は relay の cache から replay された
     // Object であり、順序逆転ではない。境界が決まるまでは cache と live を区別できないため、
     // ここから数え始める
-    audioCacheBoundary = audioLargestLocation ?? null;
-    audioCacheBoundaryKnown = true;
-    // 境界そのものを最大 Location の下限にする (境界以前の cache を比較対象から外すため)
-    if (
-      audioCacheBoundary !== null &&
-      (largestAudioLocation === null ||
-        compareLocations(audioCacheBoundary, largestAudioLocation) > 0)
-    ) {
-      largestAudioLocation = audioCacheBoundary;
-    }
+    audioReceiveOrder.markBoundary(audioLargestLocation ?? null);
     if (audioLargestLocation !== undefined && audioLargestLocation !== null) {
       addLog("info", `[${subscriberId}] audio catch up boundary set`, {
         groupId: audioLargestLocation.group.toString(),

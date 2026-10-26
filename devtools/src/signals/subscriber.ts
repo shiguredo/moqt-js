@@ -209,12 +209,14 @@ export interface SubscriberInstance {
   // 配信側の冗長度が経路上で効いているか (2 個目の copy が届いているか) を確かめる
   duplicateObjectsDropped: Signal<number>;
   // 受信した音声 Object の Location が、同じ購読で受信済みの最大 Location より小さかった数。
-  // datagram は順序を保証しない (draft-ietf-moq-transport-22 §2.3.1) ため、順序逆転が
+  // Group が異なる Object の順序は保証されない (draft-ietf-moq-transport-22 §2.3.1)。
+  // 音声は 1 Object = 1 Group なので、datagram でも subgroup でも順序逆転が起き得る。
   // 実際に起きているかを直接測る。relay の cache から replay された Object は
   // 順序逆転ではないため数えない。同じ Object の冗長化 copy も 1 回だけ数える
   outOfOrderObjectsReceived: Signal<number>;
   // 順序逆転した Object が、受信済みの最大 Group から何 Group 戻っていたかの最大値。
-  // 音声は 1 Object = 1 Group なので、そのまま 20 ms 単位の戻り幅の目安になる
+  // 音声は 1 Object = 1 Group なので、Group ID の差が戻り幅の目安になる
+  // (moqt-js の Opus では 1 Object = 20 ms、AAC では約 21.3 ms)
   maxOutOfOrderGroupDistance: Signal<number>;
   // 受信した音声を音声出力デバイスで再生するか。既定は無効
   audioPlaybackEnabled: Signal<boolean>;

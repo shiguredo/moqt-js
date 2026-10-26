@@ -533,16 +533,18 @@ function SubscriberStats({ statsSignal }: { statsSignal: ReadonlySignal<Subscrib
               },
               {
                 // 受信した Object の Location が、同じ購読で受信済みの最大 Location より
-                // 小さかった数。datagram は順序を保証しないため、順序逆転が起きているかを
-                // 直接測る。relay の cache から replay された Object は数えない
-                label: "outOfOrderObjects",
+                // 小さかった数。Group が異なる Object の順序は保証されないため
+                // (draft-ietf-moq-transport-22 §2.3.1)、順序逆転が起きているかを直接測る。
+                // relay の cache から replay された Object は数えない
+                label: "outOfOrderObjectsReceived",
                 value: stats.audio.outOfOrderObjectsReceived,
                 tone: "warn",
                 testId: "subscriber-audio-out-of-order-objects-received",
               },
               {
                 // 順序逆転した Object が、受信済みの最大 Group から何 Group 戻っていたかの
-                // 最大値。音声は 1 Object = 1 Group なので 20 ms 単位の戻り幅の目安になる
+                // 最大値。音声は 1 Object = 1 Group なので戻り幅の目安になる
+                // (moqt-js の Opus では 1 Object = 20 ms、AAC では約 21.3 ms)
                 label: "maxOutOfOrderGroupDistance",
                 value: stats.audio.maxOutOfOrderGroupDistance,
                 tone: "warn",
