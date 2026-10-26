@@ -36,7 +36,7 @@
 
 - 音声は 1 chunk = 1 Object = 1 Group で送る。`allocateAudioObject()` はフレームごとに Group ID を 1 進め、Object ID は常に 0 を返す (`src/createMediaPublisher.ts:172-184`)。`draft-ietf-moq-loc-04` §4.1 の例 (「each encoded audio chunk ... represents a MOQT Object」「there is one MOQT Object per MOQT Group」) に従っている
 - フレーム長は WebCodecs の既定で 20 ms (`getAudioEncoderConfig()` は `frameDuration` を指定しない。`src/codec/config.ts:156-185`)。符号化は Opus で、サンプルレートとチャンネルの既定は 48 kHz / 2 ch (`src/codec/config.ts:8-9`)。ビットレートは必須で既定値が無く、実測は devtools の既定 64 kbps (`devtools/src/signals/connectionSettings.ts:236`) で行った
-- 送り方は `delivery` で選び、ライブラリの既定は `"subgroup"` (`src/createMedia/settings.ts:113-115`)。Subgroup は Data Stream で再送されるため、実測されている冗長化の効果はすべて datagram 経路のものである
+- 送り方は `delivery` で選び、ライブラリの既定は `"datagram"` (`src/createMedia/settings.ts:108-118`)。Subgroup は Data Stream で再送されるため、実測されている冗長化の効果はすべて datagram 経路のものである
 - datagram は再送されない (RFC 9221)。これが冗長化を配信側で行う理由である (`src/codec/types.ts:167-181`)
 
 ### 2.2 既存の冗長化
@@ -52,7 +52,7 @@
   }
   ```
 
-- `delivery` が `"subgroup"` のときは `sendObject()` を 1 回だけ呼び、`redundancy` は読まれない (`src/createMediaPublisher.ts:2057-2059`)。指定してもエラーにならない
+- `delivery` が `"subgroup"` のときは `sendObject()` を 1 回だけ呼び、`redundancy` は読まれない (`src/createMediaPublisher.ts:2468-2476`)。`redundancy` に 2 以上を指定すると、冗長化できないのに指定されたことを黙って無視せず、設定の解決時 (`start()`) にエラーになる
 - 受信側は入口で `groupId` と `objectId` を `:` で繋いだ文字列をキーにし、直近 256 件の Set で 2 回目以降を捨てる (`src/createMediaSubscriber.ts:2261-2288`)。256 件は音声 50 Object/秒でおよそ 5.1 秒分である
 - devtools は同じ規則を別実装で持つ (`devtools/src/hooks/useSubscriber.ts:278, 1595-1607`)。既定は devtools が 2 回、ライブラリが 1 回 (`devtools/src/signals/connectionSettings.ts:232`)
 
@@ -178,7 +178,7 @@
 
 ### 4.6 配送方式とバッファ (FEC と同じ土俵の代替)
 
-- **subgroup (再送あり) への切替。** ライブラリの既定は `"subgroup"` であり (`src/createMedia/settings.ts:113-115`)、Data Stream は再送されるため欠落そのものが無くなる。代わりに head-of-line 遅延を払う。datagram を既定にして遅延の裾を縮めた経緯があるため (`origin/develop` の実測記録)、損失のある経路でだけ subgroup へ戻す判断は、目標遅延 50〜100 ms との引き換えになる。**実測で比較すべき代替である**
+- **subgroup (再送あり) への切替。** ライブラリの既定は `"datagram"` であり (`src/createMedia/settings.ts:108-118`)、Subgroup は明示した場合に使う。Data Stream は再送されるため欠落そのものが無くなる。代わりに head-of-line 遅延を払う。datagram を既定にして遅延の裾を縮めた経緯があるため (`origin/develop` の実測記録)、損失のある経路でだけ subgroup へ戻す判断は、目標遅延 50〜100 ms との引き換えになる。**実測で比較すべき代替である**
 - **バッファ (目標遅延) の調整。** 目標遅延の上限を 100 → 160 ms にすると時間圧縮が半減するが、遅延が 20〜25 ms 増える (実測)。遅れて届く復旧を待つ余裕を作る方向であり、A/V 同期の補償上限 (`src/playout/timeline.ts:154`) との相談になる
 
 ---

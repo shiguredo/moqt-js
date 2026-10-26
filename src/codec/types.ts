@@ -164,8 +164,7 @@ export interface MediaReceiverStats {
 
 // 音声 Object の送り方 (draft-ietf-moq-transport-22 §11: Data Streams and Datagrams)
 //
-// - "subgroup": Subgroup の Data Stream で送る (既定)。再送され、欠落しない
-// - "datagram": Datagram で送る。再送の有無は下位の transport に依存し、QUIC 上の
+// - "datagram": Datagram で送る (既定)。再送の有無は下位の transport に依存し、QUIC 上の
 //   WebTransport では再送されず (RFC 9221)、経路の欠落がそのまま音の欠落になる。
 //   HTTP/2 上の WebTransport (draft-ietf-webtrans-http2) では datagram も再送され、順序も
 //   保たれる (§6.2)。サイズが上限を超えた Object は明示なく drop される (§11.2)。
@@ -173,6 +172,8 @@ export interface MediaReceiverStats {
 //   指定を黙って戻さず `createMediaPublisher` の start がエラーになる (datagram の意味が
 //   transport で変わるため、呼び出し側に明示させる)。送信の完了を待つ戻り値が無いため、
 //   送信のキューの計器 (`AudioStats.catchUp.sendQueueMs` / `sendQueueFrames`) は 0 のままになる
+// - "subgroup": Subgroup の Data Stream で送る。再送され、欠落しない。reliable-only の
+//   transport で datagram を使わない場合などに明示する
 export type AudioDelivery = "subgroup" | "datagram";
 
 // オーディオ配信オプション
@@ -186,7 +187,7 @@ export interface AudioPublishOptions {
   sampleRate?: number;
   // 音声の取り出し経路へ要求するチャンネル数。省略時は 2。使い道は sampleRate と同じ
   channels?: number;
-  // 音声 Object の送り方 (既定は "subgroup")
+  // 音声 Object の送り方 (既定は "datagram")
   delivery?: AudioDelivery;
   // 音声 Object を 1 つにつき何回送るか (1〜3 の整数。既定は 1)。
   //

@@ -247,6 +247,23 @@ function createLoopTestContext(
   return { publisher, control, errors };
 }
 
+/**
+ * 音声の送信内容を Subgroup で検証するテストのために、解決済みの音声設定を Subgroup で与える
+ *
+ * 音声の配送方式の既定は Datagram である。Subgroup の sendObject へ渡す引数や Audio Config の
+ * 載り方を見るテストは、明示的に Subgroup を選ぶ。Datagram 経路は専用のテストで固定する
+ */
+function setSubgroupAudioDelivery(control: unknown): void {
+  const internal = control as {
+    resolvedAudio: ReturnType<typeof resolveAudioPublishSettings> | null;
+  };
+  internal.resolvedAudio = resolveAudioPublishSettings({
+    codec: "opus",
+    bitrate: 64_000,
+    delivery: "subgroup",
+  });
+}
+
 function createFrameStream(): {
   stream: ReadableStream<TestFrame>;
   controller: ReadableStreamDefaultController<TestFrame>;
@@ -3331,6 +3348,8 @@ test("音声・映像とも初回送信値は初期値である", () => {
     video: { codec: "vp8" as const, bitrate: 1000000 },
   });
   const control = publisher as unknown as PublisherGroupControl;
+  // 音声の送信内容を Subgroup の sendObject で見るため、明示的に Subgroup を選ぶ
+  setSubgroupAudioDelivery(control);
   const { publisher: audioPublisher, sent: audioSent } = createRecordingSendPublisher();
   const { publisher: videoPublisher, sent: videoSent } = createRecordingSendPublisher();
   control.audioPublisher = audioPublisher;
@@ -3785,6 +3804,7 @@ function sendAudioChunk(control: PublisherLifecycleControl, description?: Uint8A
 test("handleAudioEncodedChunk: description が AUDIO_CONFIG として送られる", () => {
   const { control: loopControl } = createLoopTestContext();
   const control = loopControl as unknown as PublisherLifecycleControl;
+  setSubgroupAudioDelivery(control);
   const { publisher: audioPublisher, sent } = createCapturingPublisher();
   control.audioPublisher = audioPublisher;
 
@@ -3800,6 +3820,7 @@ test("handleAudioEncodedChunk: description が AUDIO_CONFIG として送られ�
 test("handleAudioEncodedChunk: 同じ description は再送しない", () => {
   const { control: loopControl } = createLoopTestContext();
   const control = loopControl as unknown as PublisherLifecycleControl;
+  setSubgroupAudioDelivery(control);
   const { publisher: audioPublisher, sent } = createCapturingPublisher();
   control.audioPublisher = audioPublisher;
 
@@ -3818,6 +3839,7 @@ test("handleAudioEncodedChunk: 同じ description は再送しない", () => {
 test("handleAudioEncodedChunk: description が変わったら再送する", () => {
   const { control: loopControl } = createLoopTestContext();
   const control = loopControl as unknown as PublisherLifecycleControl;
+  setSubgroupAudioDelivery(control);
   const { publisher: audioPublisher, sent } = createCapturingPublisher();
   control.audioPublisher = audioPublisher;
 
@@ -3835,6 +3857,7 @@ test("handleAudioEncodedChunk: description が変わったら再送する", () =
 test("handleAudioEncodedChunk: description が無い chunk は AUDIO_CONFIG を載せない", () => {
   const { control: loopControl } = createLoopTestContext();
   const control = loopControl as unknown as PublisherLifecycleControl;
+  setSubgroupAudioDelivery(control);
   const { publisher: audioPublisher, sent } = createCapturingPublisher();
   control.audioPublisher = audioPublisher;
 
@@ -3880,13 +3903,6 @@ test("handleAudioEncodedChunk: delivery が datagram なら Datagram で送る",
   );
 });
 
-/**
- * 完了条件: 指定が無ければ従来どおり Subgroup で送る (既定は "subgroup"。後方互換)
- *
- * あわせて、音声は 1 Object = 1 Group なので送信の時点で Subgroup を閉じる
- * (draft-ietf-moq-transport-22 §11.3.2 の MUST)。落ちても呼び出し回数だけでは緑に
- * なるため、params まで固定する
- */
 /**
  * 完了条件: `redundancy` が 2 のときは、同じ音声 Object を 2 回送る。
  *
@@ -3961,9 +3977,20 @@ test("resolveAudioPublishSettings: redundancy は 1〜3 の整数だけ受理す
     }).redundancy,
     3,
   );
-  // 冗長化は datagram の送信経路でしか実装していないため、subgroup で 2 以上は拒否する
+  // 冗長化は datagram の送信経路でしか実装していないため、subgroup で 2 以上は拒否する。
+  // 既定の配送方式は datagram なので、delivery を省略した場合は受け付ける
+  assert.equal(
+    resolveAudioPublishSettings({ codec: "opus", bitrate: 64_000, redundancy: 2 }).redundancy,
+    2,
+  );
   assert.throws(
-    () => resolveAudioPublishSettings({ codec: "opus", bitrate: 64_000, redundancy: 2 }),
+    () =>
+      resolveAudioPublishSettings({
+        codec: "opus",
+        bitrate: 64_000,
+        delivery: "subgroup",
+        redundancy: 2,
+      }),
     /audio redundancy must be 1 when delivery is "subgroup"/,
   );
   for (const value of [0, 4, 1.5]) {
@@ -3980,7 +4007,15 @@ test("resolveAudioPublishSettings: redundancy は 1〜3 の整数だけ受理す
   }
 });
 
-test("handleAudioEncodedChunk: delivery の既定は Subgroup で送る", () => {
+/**
+ * 完了条件: 指定が無ければ Datagram で送る (既定は "datagram")。
+ *
+ * 音声は 1 Object = 1 Group であり、datagram は再送されない (RFC 9221)。既定を datagram に
+ * することで、損失への備え (冗長化) を既定で使える経路を選ぶ。Subgroup を選ぶ場合は
+ * `delivery: "subgroup"` を明示する。落ちても呼び出し回数だけでは緑にならないよう、
+ * 送った中身も固定する
+ */
+test("handleAudioEncodedChunk: delivery の既定は Datagram で送る", () => {
   const { control: loopControl } = createLoopTestContext();
   const control = loopControl as unknown as PublisherLifecycleControl;
   const { publisher: audioPublisher, sent, datagrams } = createCapturingPublisher();
@@ -3991,11 +4026,17 @@ test("handleAudioEncodedChunk: delivery の既定は Subgroup で送る", () => 
     }
   ).resolvedAudio = resolveAudioPublishSettings({ codec: "opus", bitrate: 64_000 });
 
-  sendAudioChunk(control);
+  sendAudioChunk(control, new Uint8Array([0x11, 0x90]));
 
-  assert.equal(sent.length, 1);
-  assert.equal(datagrams.length, 0);
-  assert.isTrue(sent[0]?.endOfSubgroup);
+  assert.equal(datagrams.length, 1, "Datagram を 1 回送ること");
+  assert.equal(sent.length, 0, "Subgroup へは流さないこと");
+  const params = datagrams[0];
+  assert.isNumber(params?.groupId);
+  assert.isNumber(params?.objectId);
+  assert.deepEqual(
+    LOC.decodeAudioProperties(params?.properties ?? new Uint8Array(0)).config,
+    new Uint8Array([0x11, 0x90]),
+  );
 });
 
 /**
@@ -4029,6 +4070,34 @@ test("start: reliable-only のセッションでは datagram の音声配信を�
 });
 
 /**
+ * 完了条件: delivery を省略した場合も既定が datagram であるため、reliable-only の
+ * セッションでは start がエラーになる。既定だからといって黙って Subgroup へ戻すと、
+ * 送り方を計器や購読側の前提から読めなくなる。Subgroup で配信するには明示する
+ */
+test("start: reliable-only のセッションでは既定 (datagram) の音声配信も拒否する", async () => {
+  const { publisher, errors } = createStartConnectHarness(
+    {},
+    {
+      reliability: "reliable-only",
+      publisherOptions: {
+        namespace: ["live"],
+        audio: { codec: "opus", bitrate: 64_000 },
+      },
+    },
+  );
+
+  const failure = await publisher.start({} as MediaStream).then(
+    () => null,
+    (error: unknown) => error,
+  );
+
+  assert.ok(failure instanceof Error);
+  assert.match((failure as Error).message, /reliable-only/);
+  assert.equal(errors.length, 1);
+  assert.equal(publisher.state, "created");
+});
+
+/**
  * draft-ietf-moq-loc-04 §2.3.3.1 (Audio Config):
  * 後から接続した購読者 (forwardState が 0 から 1 になった時点) のために、
  * 保持している Audio Config を次の Object に載せ直す契約を検証する。
@@ -4037,6 +4106,7 @@ test("start: reliable-only のセッションでは datagram の音声配信を�
 test("handleAudioEncodedChunk: 送り直し要求で保持している Audio Config を 1 Object 載せ直す", () => {
   const { control: loopControl } = createLoopTestContext();
   const control = loopControl as unknown as PublisherLifecycleControl;
+  setSubgroupAudioDelivery(control);
   const { publisher: audioPublisher, sent } = createCapturingPublisher();
   control.audioPublisher = audioPublisher;
 
@@ -4069,6 +4139,7 @@ test("handleAudioEncodedChunk: 保持値が無いまま要求されても次の 
   // 要求を捨てずに次の description で載せられることの検証
   const { control: loopControl } = createLoopTestContext();
   const control = loopControl as unknown as PublisherLifecycleControl;
+  setSubgroupAudioDelivery(control);
   const { publisher: audioPublisher, sent } = createCapturingPublisher();
   control.audioPublisher = audioPublisher;
 
@@ -4096,6 +4167,7 @@ test("handleAudioEncodedChunk: stop 後の再開では同じ description でも 
   // 再開後に同じ description が載ることを確認する
   const { publisher, control: loopControl } = createLoopTestContext();
   const control = loopControl as unknown as PublisherLifecycleControl;
+  setSubgroupAudioDelivery(control);
   const { publisher: firstPublisher, sent: firstSent } = createCapturingPublisher();
   control.audioPublisher = firstPublisher;
 
@@ -4130,6 +4202,7 @@ test("handleAudioEncodedChunk: publisher が active でない間は保持値も�
   // 新しい description を渡すため、ガードが無ければ保持値の更新と要求の解消が起きる
   const { control: loopControl } = createLoopTestContext();
   const control = loopControl as unknown as PublisherLifecycleControl;
+  setSubgroupAudioDelivery(control);
   const { publisher: audioPublisher, sent } = createCapturingPublisher();
   // 送信できない状態 (active 以外) を作る
   (audioPublisher as unknown as { state: string }).state = "closed";
@@ -4222,6 +4295,8 @@ async function driveSendFailure(
 ): Promise<{ callCount: number; errors: Error[]; unhandled: unknown[] }> {
   const { control: loopControl, errors } = createLoopTestContext();
   const control = loopControl as unknown as PublisherGroupControl;
+  // 音声の送信の失敗を Subgroup の sendObject で駆動する (既定は Datagram)
+  setSubgroupAudioDelivery(control);
   const { publisher, callCount } = createFailingSendPublisher(mode, (error) => {
     errors.push(error);
   });
@@ -4389,6 +4464,8 @@ test("createPublishers: forwardState が 1 になると Audio Config の送り�
     codec: "aac",
     bitrate: 64000,
     trackName: "audio",
+    // 送信内容 (sendObject の引数) を Subgroup で見るため、明示的に Subgroup を選ぶ
+    delivery: "subgroup",
   });
   control.resolvedAudio = audioSettings;
   const { publisher: catalogPublisher, sent: catalogSent } = createRecordingSendPublisher();
@@ -5459,6 +5536,8 @@ test("送信する Object の Priority 引数は各定数どおりになる", ()
     video: { codec: "vp8" as const, bitrate: 1000000 },
   });
   const control = publisher as unknown as PublisherGroupControl;
+  // 音声の送信内容を Subgroup の sendObject で見るため、明示的に Subgroup を選ぶ
+  setSubgroupAudioDelivery(control);
   const { publisher: audioPublisher, sent: audioSent } = createRecordingSendPublisher();
   const { publisher: videoPublisher, sent: videoSent } = createRecordingSendPublisher();
   control.audioPublisher = audioPublisher;
@@ -6128,6 +6207,8 @@ test("pause: 捨てた出力の Audio Config は次の送信で載る", () => {
   // なる (AAC は AudioSpecificConfig が必須で、catalog の Track Property にも載せない)
   const { publisher, control: loopControl } = createLoopTestContext();
   const control = loopControl as unknown as PublisherGroupControl;
+  // audioPublisher へ送る経路 (Subgroup の sendObject) を見るため、明示的に Subgroup を選ぶ
+  setSubgroupAudioDelivery(control);
   const { publisher: audioPublisher, sent } = createCapturingPublisher();
   control.audioPublisher = audioPublisher;
 

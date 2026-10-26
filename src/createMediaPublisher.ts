@@ -983,7 +983,8 @@ export class MediaPublisherImpl implements MediaPublisher {
    * (draft-ietf-moq-transport-22 §6.2)。その場合 `delivery: "datagram"` は「再送されない
    * 経路で送る」という意味を失うため、黙って受けない。devtools の実装は Subgroup へ戻すが、
    * 高レベル API が宣言された設定を裏で変えると、送り方を計器や購読側の前提から読めなくなる。
-   * 指定されたら明示的に拒否する
+   * 指定されたら明示的に拒否する。既定の配送方式も datagram であるため、省略した場合も
+   * 同じ理由で拒否する (Subgroup で送るには明示する)
    *
    * 判定は接続の直後に行う (PUBLISH の完了を待つと、relay が PUBLISH を拒否したときに
    * 設定のエラーではなく接続のエラーだけが返る)
@@ -994,7 +995,7 @@ export class MediaPublisherImpl implements MediaPublisher {
     }
     if (this.session?.reliability === "reliable-only") {
       throw new Error(
-        'audio delivery "datagram" requires datagrams, but the session reliability is "reliable-only"',
+        'audio delivery "datagram" requires datagrams, but the session reliability is "reliable-only"; specify delivery: "subgroup" to send audio over subgroups',
       );
     }
   }
@@ -2293,9 +2294,9 @@ export class MediaPublisherImpl implements MediaPublisher {
         durationMs: (chunk.duration ?? 0) / 1_000,
         nowMs: performance.now(),
       },
-      // 送り方は start で解決済みの設定を使う (既定は Subgroup。reliable-only の
+      // 送り方は start で解決済みの設定を使う (既定は Datagram。reliable-only の
       // セッションで datagram が指定されていれば start が失敗している)
-      this.resolvedAudio?.delivery ?? "subgroup",
+      this.resolvedAudio?.delivery ?? "datagram",
     );
   }
 

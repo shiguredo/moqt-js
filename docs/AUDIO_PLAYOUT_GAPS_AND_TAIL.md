@@ -14,9 +14,11 @@ Opus、配送が Datagram、冗長度が 2 であり、実リレーの計測も�
 1 Object = 1 Group = 1 Datagram であり、復号の出力は 20 ms のフレームになる。Datagram は
 再送されない (RFC 9221) ため、損失と到着順の入れ替わりが起き得る。
 
-ライブラリの高レベル API の既定は Subgroup 配送 (`AudioPublishOptions.delivery` の既定は
-`"subgroup"`) であり、この文書の数値はその構成にはそのまま当てはまらない。Subgroup 配送では
-Data Stream の再送と順序保証があるため、Datagram 固有の損失・順序の機序は起きない。
+ライブラリの高レベル API の既定も Datagram 配送 (`AudioPublishOptions.delivery` の既定は
+`"datagram"`) であり、Subgroup 配送は明示した場合に使う。この文書の数値は Datagram 配送の
+構成で測ったものである。Subgroup 配送では Data Stream の再送があるため Datagram 固有の
+損失は起きない (音声は 1 Object = 1 Group = 1 ストリームであり、フレーム間の順序保証は
+元から無い)。
 
 ## 症状の再現
 
