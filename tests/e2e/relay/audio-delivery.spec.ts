@@ -10,7 +10,7 @@ import {
 } from "./support";
 
 /**
- * 実リレー経由で音声を Subgroup (Data Stream) と Datagram の両方で往復し、
+ * 実リレー経由で音声を Subgroup (Data Stream) / Datagram / delivery 省略時の既定で往復し、
  * 「途切れの少なさ」を数値で読めることを確かめる。
  *
  * draft-ietf-moq-transport-22 §11 (Data Streams and Datagrams) / §11.2 (Datagrams)
@@ -183,8 +183,11 @@ function expectDeliveryInvariants(
 async function runDeliveryRound(
   browser: Browser,
   moqtUri: string,
-  delivery: AudioDelivery,
+  delivery: AudioDelivery | undefined,
 ): Promise<void> {
+  // delivery を省略した既定のケースも、Datagram の経路として判定する
+  const expectedDelivery = delivery ?? "datagram";
+  const label = delivery ?? "default";
   const namespace = createTestNamespace();
   const publisherPage = await openRelayPage(browser);
   const subscriberPage = await openRelayPage(browser);
@@ -197,7 +200,11 @@ async function runDeliveryRound(
       {
         url: moqtUri,
         namespace,
-        audio: { codec: "opus" as const, bitrate: 64_000, delivery },
+        audio: {
+          codec: "opus" as const,
+          bitrate: 64_000,
+          ...(delivery === undefined ? {} : { delivery }),
+        },
       },
     );
     const activePublisherId = publisherId;
@@ -212,7 +219,7 @@ async function runDeliveryRound(
             activePublisherId,
           ),
         {
-          message: `Publisher が音声 Object を送信し始めるのを待つ (${delivery})`,
+          message: `Publisher が音声 Object を送信し始めるのを待つ (${label})`,
           timeout: 30_000,
         },
       )
@@ -232,7 +239,7 @@ async function runDeliveryRound(
             activeSubscriberId,
           ),
         {
-          message: `Subscriber が音声 Object を受信し始めるのを待つ (${delivery})`,
+          message: `Subscriber が音声 Object を受信し始めるのを待つ (${label})`,
           timeout: 30_000,
         },
       )
@@ -253,7 +260,7 @@ async function runDeliveryRound(
       subscriberPage,
       activeSubscriberId,
     );
-    expectDeliveryInvariants(delivery, before, after);
+    expectDeliveryInvariants(expectedDelivery, before, after);
   } finally {
     // 後始末は購読 → 配信の順に行う。リレー側から先に切れていることがあるため、
     // 失敗してもテストの結果を変えない
@@ -272,17 +279,18 @@ async function runDeliveryRound(
   }
 }
 
-test("実リレー経由で音声を Subgroup と Datagram の両方で往復し、途切れの指標を経路ごとに読める", async ({
+test("実リレー経由で音声を Subgroup / Datagram / 既定の 3 通りで往復し、途切れの指標を経路ごとに読める", async ({
   browser,
 }) => {
-  // 2 つの経路で、配信と購読の確立・観測 (10 秒)・後始末を繰り返す
-  test.setTimeout(RELAY_TEST_TIMEOUT_MS * 3);
+  // 明示した 2 経路と、delivery を省略した既定 (datagram) で、配信と購読の確立・
+  // 観測 (10 秒)・後始末を繰り返す
+  test.setTimeout(RELAY_TEST_TIMEOUT_MS * 4);
   const moqtUri = requireRelayUri();
   if (moqtUri === null) {
     return;
   }
 
-  for (const delivery of ["subgroup", "datagram"] as const) {
+  for (const delivery of ["subgroup", "datagram", undefined] as const) {
     await runDeliveryRound(browser, moqtUri, delivery);
   }
 });

@@ -77,18 +77,18 @@ const DATAGRAM_JITTER_SPIKE_MS = Number(process.env.MOQT_INVESTIGATION_JITTER_SP
 /**
  * 同じ Group の datagram を遅らせて、Group の順序を入れ替える間隔 (Group 数)
  *
- * 0 なら無効。N > 0 のとき、受信した datagram の Group ID を数え、N 個目の Group に
+ * 0 なら無効。N > 0 のとき、受信した datagram の Group ID を数え、N 個ごとの Group に
  * 属する datagram をすべて遅らせる。既存の recovery 注入は「1 Object = 2 datagram」の
  * 組の並びを仮定しているため、組の先頭がずれると遅らせた copy が重複として捨てられ、
  * 注入が効かないことがある (同じ条件の 2 回で片方だけ効いた)。Group ID を wire から
- * 読めば copy の並びに依存せず、決定的に順序を入れ替えられる
+ * 読めば copy の並びに依存せず、順序を入れ替えられる
  */
 const DATAGRAM_REORDER_EVERY = Number(process.env.MOQT_INVESTIGATION_REORDER_EVERY ?? "0");
 
 /**
  * Group の順序を入れ替えるときに遅らせる長さ (ミリ秒)
  *
- * 音声 1 Object = 20 ms であり、40 ms 遅らせると 2 個後ろの Group より後に復号される
+ * 音声 1 Object = 20 ms であり、40 ms 遅らせると 2 個後ろの Group より後に受信される
  */
 const DATAGRAM_REORDER_MS = Number(process.env.MOQT_INVESTIGATION_REORDER_MS ?? "40");
 
@@ -151,7 +151,7 @@ interface SubscriberStats {
     receiveDelayMs: number;
     maxReceiveDelayMs: number;
     // 受信側の重複排除と順序逆転の計器 (devtools の受信経路が数える累積)。
-    // 重複は配信側の冗長化で届いた 2 個目以降を捨てた数、順序逆転は直前に受信した
+    // 重複は配信側の冗長化で届いた 2 個目以降を捨てた数、順序逆転は受信済みの
     // 最大 Location より古い Location で届いた数である (冗長化の copy は同じ Location なので
     // 1 回だけ数える)。順序逆転の距離は Group ID の差 (`maxOutOfOrderGroupDistance`) で読む。
     // devtools 側は同じ名前で実装している
@@ -164,7 +164,11 @@ interface SubscriberStats {
       gapCount: number;
       gapMs: number;
       unrecoverableGapMs: number;
-      startDelayMs: { p50: number | null } | null;
+      startDelayMs: {
+        p50: number | null;
+        p95: number | null;
+        max: number | null;
+      } | null;
     };
     playoutCatchUp: {
       catchUpStarts: number;
@@ -416,13 +420,13 @@ async function installDatagramJitter(
  * 既存の `installDatagramJitter` の recovery 注入は「1 Object = 2 datagram」の組を仮定して
  * いるため、組の先頭がずれると、遅らせた copy が同じ Object の先着 copy と重複して捨てられ、
  * 注入が効かなくなる (同じ条件の 2 回で片方だけ効いた)。ここでは datagram の wire から
- * Group ID を読み、Group を数えて N 個目の Group に属する全 copy を遅らせる。copy の並びに
- * 依存しないため、どの copy が先に届いてもその Group は後続の Group より後に復号される。
+ * Group ID を読み、Group を数えて N 個ごとの Group に属する全 copy を遅らせる。copy の並びに
+ * 依存しないため、どの copy が先に届いてもその Group は後続の Group より後に受信される。
  *
  * datagram の wire は Type Flags (varint) → Track Alias (varint) → Group ID (varint) の順で
  * ある (draft-ietf-moq-transport-22 §11.2.1。varint は §8.1。エンコードの並びは
  * `src/dataStream/datagram.ts` の `encodeObjectDatagram` を参照)。PADDING datagram
- * (§11.5.2、Type Flags 0x132b3e29) は Track Alias も Group ID も持たないため、そのまま流す。
+ * (§11.5.2、Type 0x132b3e29) は Track Alias も Group ID も持たないため、そのまま流す。
  * 実装 (ライブラリ) には手を入れない
  */
 async function installDatagramReorder(page: Page): Promise<void> {
@@ -514,6 +518,7 @@ async function installDatagramReorder(page: Page): Promise<void> {
                 // copy が複数あるため、どの copy も同じ扱いにする
                 const delayedGroups = new Map<bigint, boolean>();
                 let groupCount = 0;
+                let delayedGroupCount = 0;
                 const pump = async (): Promise<void> => {
                   for (;;) {
                     const { value, done } = await source.read();
@@ -535,6 +540,16 @@ async function installDatagramReorder(page: Page): Promise<void> {
                             groupCount += 1;
                             groupDelayed = groupCount % every === 0;
                             delayedGroups.set(group.value, groupDelayed);
+                            if (groupDelayed) {
+                              delayedGroupCount += 1;
+                              // 注入が実際に動いたかを spec から読めるようにする (no-op を
+                              // 0 件の測定として記録しないため)
+                              (
+                                window as unknown as {
+                                  __moqtDatagramReorderDelayedGroups?: number;
+                                }
+                              ).__moqtDatagramReorderDelayedGroups = delayedGroupCount;
+                            }
                           }
                           shouldDelay = groupDelayed;
                         }
@@ -551,11 +566,22 @@ async function installDatagramReorder(page: Page): Promise<void> {
                         }
                       }, delayMs);
                     } else {
-                      controller.enqueue(value);
+                      try {
+                        controller.enqueue(value);
+                      } catch {
+                        // 読み手が閉じた後は捨てる
+                      }
                     }
                   }
                 };
-                void pump();
+                void pump().catch((error: unknown) => {
+                  // transport の異常終了で unhandled rejection にしない
+                  try {
+                    controller.error(error);
+                  } catch {
+                    // 既に閉じている
+                  }
+                });
               },
             }),
           });
@@ -700,6 +726,8 @@ test("調査: A/V 同期と音声の遅延の内訳を 1 秒ごとに採る", as
         audioPlayoutCorrectionMs: delays.audioPlayoutCorrectionMs ?? 0,
         skewMs: avSync.skewMs,
         startDelayP50Ms: audio.playoutTiming.startDelayMs?.p50 ?? null,
+        startDelayP95Ms: audio.playoutTiming.startDelayMs?.p95 ?? null,
+        startDelayMaxMs: audio.playoutTiming.startDelayMs?.max ?? null,
         compressedMs: audio.playoutCompressedMs,
         concealedMs: audio.playoutConcealedMs,
         concealments: audio.playoutConcealments,
@@ -735,6 +763,20 @@ test("調査: A/V 同期と音声の遅延の内訳を 1 秒ごとに採る", as
     );
     await page.waitForTimeout(SAMPLE_INTERVAL_MS);
   }
+
+  // reorder 条件が no-op のまま 0 件の測定として記録される事故を防ぐ
+  const delayedGroups = await page.evaluate(
+    () =>
+      (
+        window as unknown as {
+          __moqtDatagramReorderDelayedGroups?: number;
+        }
+      ).__moqtDatagramReorderDelayedGroups ?? 0,
+  );
+  if (DATAGRAM_REORDER_EVERY > 0) {
+    expect(delayedGroups, "reorder の注入が Group を遅らせている").toBeGreaterThan(0);
+  }
+  console.log(`遅らせた Group: ${delayedGroups.toString()} 件`);
 
   const outputPath = join(
     process.cwd(),

@@ -75,7 +75,11 @@ test("MediaStreamTrackProcessor が無いブラウザでも実リレー経由で
   try {
     publisherId = await publisherPage.evaluate(
       (options) => window.__moqtE2E.startPublisher(options),
-      { url: moqtUri, namespace, audio: { codec: "opus" as const, bitrate: 64_000 } },
+      {
+        url: moqtUri,
+        namespace,
+        audio: { codec: "opus" as const, bitrate: 64_000, delivery: "subgroup" as const },
+      },
     );
     const activePublisherId = publisherId;
 
