@@ -25,8 +25,9 @@
  * 倍精度で行う (固定小数点の丸めの補正項は、その誤差のためのものであり必要ない)。
  *
  * libwebrtc の `ReorderOptimizer` (並べ替えで届いたパケットの割合からコスト最小の遅延を
- * 求める) は移植していない。音声は 1 つの Subgroup の stream で Group の順に届き、
- * 並べ替えは起きにくいためである。
+ * 求める) は移植していない。音声は 1 Object = 1 Group であり、Group が異なる Object の
+ * 順序は保証されない (draft-ietf-moq-transport-22 §2.3.1)。順序逆転の実測は
+ * `docs/AUDIO_DATAGRAM_ORDERING.md` にある。並べ替えの最適化は現時点では行わない。
  *
  * 単位はミリ秒、時刻は呼び出し側が引数で渡す。ブラウザ API に依存しない。
  */

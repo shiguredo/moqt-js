@@ -108,9 +108,12 @@ export function resolveAudioPublishSettings(
   // 既定は 1 回。datagram は再送されない (RFC 9221) ため、損失に備えるなら 2 にする
   // (src/codec/types.ts の `redundancy` に実測を残す)
   const redundancy = options.redundancy ?? 1;
-  // 既定は Subgroup。datagram を指定できるかはセッションの reliability に依存するため、
-  // ここでは解決するだけで判定しない (createMediaPublisher の start が判定する)
-  const delivery = options.delivery ?? "subgroup";
+  // 既定は Datagram。音声は 1 Object = 1 Group であり、遅延の裾を縮める経路として選ぶ。
+  // datagram は再送されない (RFC 9221) ため、損失に備えるには redundancy を 2 以上にする
+  // 必要がある (既定の冗長度は 1 のまま)。datagram を指定できるかはセッションの
+  // reliability に依存するため、ここでは解決するだけで判定しない
+  // (createMediaPublisher の start が判定する)
+  const delivery = options.delivery ?? "datagram";
   // 冗長化は datagram の送信経路でしか実装していない。subgroup 配送で 2 以上を指定すると
   // 送信回数が増えないまま黙って無視され、利用者が冗長化されていると誤解するため拒否する
   if (delivery !== "datagram" && redundancy > 1) {

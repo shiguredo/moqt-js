@@ -87,7 +87,7 @@ export interface StartPublisherOptions {
      */
     codec: "opus" | "aac";
     bitrate: number;
-    /** 音声 Object の送り方 (未指定なら devtools の既定 "datagram")。draft-ietf-moq-transport-22 §11 */
+    /** 音声 Object の送り方 (未指定ならライブラリの既定 "datagram")。draft-ietf-moq-transport-22 §11 */
     delivery?: AudioDelivery;
     /**
      * 取り出し経路へ要求するサンプルレート。省略時は既定の 48000 Hz

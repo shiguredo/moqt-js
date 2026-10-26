@@ -23,51 +23,66 @@ test("resolveAudioPublishSettings: 省略時は既定値を使う", () => {
   assert.equal(settings.bitrate, 64000);
   assert.equal(settings.sampleRate, DEFAULT_AUDIO_SAMPLE_RATE);
   assert.equal(settings.channels, DEFAULT_AUDIO_CHANNELS);
-  // 音声 Object の送り方の既定は Subgroup (後方互換)
-  assert.equal(settings.delivery, "subgroup");
+  // 音声 Object の送り方の既定は Datagram。datagram は再送されないため、損失に備えるには
+  // redundancy を 2 以上にする必要がある (既定の冗長度は 1 のまま)。datagram が reliable and
+  // ordered になるセッションでの可否はここでは判定せず、createMediaPublisher の start が拒否する
+  assert.equal(settings.delivery, "datagram");
 });
 
 // 音声 Object の送り方 (draft-ietf-moq-transport-22 §11) は指定どおりに解決する。
 // datagram を送れるかはセッションの reliability で決まるため、ここでは判定しない
 test("resolveAudioPublishSettings: delivery を指定どおりに解決する", () => {
-  const settings = resolveAudioPublishSettings({
+  const datagram = resolveAudioPublishSettings({
     codec: "opus",
     bitrate: 64000,
     delivery: "datagram",
   });
-  assert.equal(settings.delivery, "datagram");
+  assert.equal(datagram.delivery, "datagram");
+  const subgroup = resolveAudioPublishSettings({
+    codec: "opus",
+    bitrate: 64000,
+    delivery: "subgroup",
+  });
+  assert.equal(subgroup.delivery, "subgroup");
 });
 
 // 冗長化は datagram の送信経路でしか実装していない。datagram では 2 以上を受け付け、
-// 何回送るかをそのまま解決する。
+// 何回送るかをそのまま解決する。既定の配送方式も datagram なので、delivery の省略でも
+// 2 以上を指定できる。
 test("resolveAudioPublishSettings: datagram では冗長度 2 以上を解決する", () => {
-  for (const redundancy of [2, 3]) {
-    const settings = resolveAudioPublishSettings({
-      codec: "opus",
-      bitrate: 64000,
-      delivery: "datagram",
-      redundancy,
-    });
-    assert.equal(settings.redundancy, redundancy, "指定した冗長度をそのまま返すこと");
+  for (const delivery of ["datagram", undefined] as const) {
+    for (const redundancy of [2, 3]) {
+      const settings = resolveAudioPublishSettings({
+        codec: "opus",
+        bitrate: 64000,
+        ...(delivery === undefined ? {} : { delivery }),
+        redundancy,
+      });
+      assert.equal(settings.redundancy, redundancy, "指定した冗長度をそのまま返すこと");
+      assert.equal(
+        settings.delivery,
+        "datagram",
+        delivery === undefined ? "省略時は Datagram になること" : "指定した delivery を返すこと",
+      );
+    }
   }
 });
 
-// subgroup 配送は Data Stream が再送されるため冗長化の意味が無い。指定を黙って無視すると
+// subgroup 配送は Data Stream が FIN で閉じる限り再送されるため、冗長化の意味が無い
+// (RESET された場合は欠落し得る)。指定を黙って無視すると
 // 利用者が冗長化されていると誤解するため、start() で拒否する。
 test("resolveAudioPublishSettings: subgroup で冗長度 2 以上を指定するとエラーになる", () => {
-  for (const delivery of ["subgroup", undefined] as const) {
-    assert.throws(
-      () =>
-        resolveAudioPublishSettings({
-          codec: "opus",
-          bitrate: 64000,
-          ...(delivery === undefined ? {} : { delivery }),
-          redundancy: 2,
-        }),
-      /redundancy must be 1 when delivery is "subgroup"/,
-      "subgroup 配送では冗長度 2 を拒否すること",
-    );
-  }
+  assert.throws(
+    () =>
+      resolveAudioPublishSettings({
+        codec: "opus",
+        bitrate: 64000,
+        delivery: "subgroup",
+        redundancy: 2,
+      }),
+    /redundancy must be 1 when delivery is "subgroup"/,
+    "subgroup 配送では冗長度 2 を拒否すること",
+  );
 });
 
 // 冗長度 1 はどの配送方式でも受け付ける (既定値でもある)。
@@ -128,7 +143,7 @@ test("withCapturedAudioFormat: 取り出した形式を設定へ写す", () => {
   assert.equal(captured.codec, "opus");
   assert.equal(captured.codecString, "opus");
   assert.equal(captured.bitrate, 64000);
-  assert.equal(captured.delivery, "subgroup");
+  assert.equal(captured.delivery, "datagram");
   // 呼び出し元の設定は書き換えない (写した結果は新しい値として返す)
   assert.equal(requested.sampleRate, DEFAULT_AUDIO_SAMPLE_RATE);
   assert.equal(requested.channels, DEFAULT_AUDIO_CHANNELS);

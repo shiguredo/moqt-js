@@ -164,15 +164,24 @@ export interface MediaReceiverStats {
 
 // 音声 Object の送り方 (draft-ietf-moq-transport-22 §11: Data Streams and Datagrams)
 //
-// - "subgroup": Subgroup の Data Stream で送る (既定)。再送され、欠落しない
-// - "datagram": Datagram で送る。再送の有無は下位の transport に依存し、QUIC 上の
+// - "datagram": Datagram で送る (既定)。再送の有無は下位の transport に依存し、QUIC 上の
 //   WebTransport では再送されず (RFC 9221)、経路の欠落がそのまま音の欠落になる。
 //   HTTP/2 上の WebTransport (draft-ietf-webtrans-http2) では datagram も再送され、順序も
 //   保たれる (§6.2)。サイズが上限を超えた Object は明示なく drop される (§11.2)。
-//   WebTransport が datagram を運べないセッション (reliability が "reliable-only") では、
-//   指定を黙って戻さず `createMediaPublisher` の start がエラーになる (datagram の意味が
-//   transport で変わるため、呼び出し側に明示させる)。送信の完了を待つ戻り値が無いため、
-//   送信のキューの計器 (`AudioStats.catchUp.sendQueueMs` / `sendQueueFrames`) は 0 のままになる
+//   実測で使った 64 kbps / 20 ms では上限に達しないが、高ビットレートや大きな properties では
+//   落ち得る (サイズ上限の事前検査は未実装)。
+//   reliability が "reliable-only" のセッションでは datagram が reliable and ordered に
+//   なり「再送されない経路で送る」という意味が変わるため、音声トラックを渡している場合は
+//   指定を黙って戻さず `createMediaPublisher` の start がエラーになる (呼び出し側に明示
+//   させる)。音声トラックが無い場合はカタログの宣言だけが残る既知の穴は別に扱う。
+//   reliability が undefined の場合は、ブラウザが WebTransport.reliability を公開していない
+//   場合であり、datagram を送れるものとして扱う。送信の完了を
+//   待つ戻り値が無いため、送信のキューの計器 (`AudioStats.catchUp.sendQueueMs` /
+//   `sendQueueFrames`) は 0 のままになる
+//   既定の冗長度は 1 であり、損失に備えるには `redundancy` を 2 以上にする
+// - "subgroup": Subgroup の Data Stream で送る。FIN で閉じる限り再送され、欠落しない
+//   (§11.3.2。RESET された場合は欠落し得る)。reliable-only のセッションで配信する場合や、
+//   再送を優先する場合に明示する
 export type AudioDelivery = "subgroup" | "datagram";
 
 // オーディオ配信オプション
@@ -186,7 +195,7 @@ export interface AudioPublishOptions {
   sampleRate?: number;
   // 音声の取り出し経路へ要求するチャンネル数。省略時は 2。使い道は sampleRate と同じ
   channels?: number;
-  // 音声 Object の送り方 (既定は "subgroup")
+  // 音声 Object の送り方 (既定は "datagram")
   delivery?: AudioDelivery;
   // 音声 Object を 1 つにつき何回送るか (1〜3 の整数。既定は 1)。
   //
@@ -202,7 +211,8 @@ export interface AudioPublishOptions {
   // である。損失の無い経路では品質が変わらない (欠落 0、飛ばし 0)。代わりに音声の帯域と
   // datagram の数が n 倍になる。4 以上は帯域を無駄にするため start() がエラーにする
   //
-  // delivery が "subgroup" のときは Data Stream が再送されるため、2 以上を指定できない
+  // delivery が "subgroup" のときは Data Stream が FIN で閉じる限り再送されるため、2 以上を
+  // 指定できない (RESET された場合は欠落し得る)
   // (冗長化は datagram の送信経路でしか実装しておらず、黙って無視せず start() がエラーにする)
   redundancy?: number;
 }

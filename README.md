@@ -329,6 +329,12 @@ await publisher.start(stream);
 await publisher.close();
 ```
 
+音声の配送は既定で datagram です。datagram は再送されないため、損失に備えるには
+`audio.redundancy` に 2 または 3 を指定してください (1〜3 の整数)。`reliability` が `"reliable-only"` の
+セッションでは、音声トラックを渡している場合に `start()` がエラーになるため、Subgroup で
+送る場合は `audio.delivery` に `"subgroup"` を指定してください (subgroup では
+`redundancy` に 2 または 3 を指定できません)。
+
 #### Subscriber
 
 ```typescript

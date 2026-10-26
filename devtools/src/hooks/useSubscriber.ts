@@ -89,6 +89,10 @@ import { effectiveTargetLatencyMs, resolveSharedTargetLatencyMs } from "../../..
 import { applyAudioOutputSink } from "../utils/audioOutput";
 import { browserIsChromium, resolvePanelHttpVersion } from "../utils/httpVersion";
 import { formatFullTrackName } from "../../../src/fullTrackName.ts";
+import {
+  AUDIO_RECEIVE_ORDER_WINDOW,
+  AudioReceiveOrderTracker,
+} from "../utils/audioReceiveOrder.ts";
 import { subscribeAuthorizationTokenOptions } from "../utils/trackAuthorization";
 import * as settings from "../signals/connectionSettings";
 import * as sub from "../signals/subscriber";
@@ -296,7 +300,7 @@ export function refreshTrackEndStatus(instance: sub.SubscriberInstance): void {
  * 時点で Object が無い) と、PUBLISH_DONE で終わったトラックは完了として扱う。
  */
 /** 同じ音声 Object を 2 回受け取ったときに、2 回目を捨てるために覚える数 (src と同じ) */
-const AUDIO_RECENT_OBJECT_IDS_MAX = 256;
+const AUDIO_RECENT_OBJECT_IDS_MAX = AUDIO_RECEIVE_ORDER_WINDOW;
 
 export function applyCatchUpPending(instance: sub.SubscriberInstance, gates: CatchUpGates): void {
   // 終わったトラックは境界を越える Object が来ないため、完了していなくても追いつき中としない。
@@ -489,6 +493,10 @@ export function resetSubscriberStats(instance: sub.SubscriberInstance): void {
   instance.audioReceiveDelayMs.value = null;
   instance.audioMaxReceiveDelayMs.value = null;
   instance.audioCatchUpObjectsSkipped.value = 0;
+  // 順序逆転と重複の計器も購読ごとに数え直す (前の購読の値を次の購読へ持ち越さない)
+  instance.duplicateObjectsDropped.value = 0;
+  instance.outOfOrderObjectsReceived.value = 0;
+  instance.maxOutOfOrderGroupDistance.value = 0;
   instance.audioLastLevel.value = null;
   instance.audioPeakDbfsLeft.value = null;
   instance.audioPeakDbfsRight.value = null;
@@ -1739,6 +1747,32 @@ export function useSubscriber(
     // ことがある。渡すと同じ音を 2 回鳴らし、媒体時刻が実時間より先へ進む
     const recentAudioObjectIds: string[] = [];
     const recentAudioObjectIdSet = new Set<string>();
+    // 受信した音声 Object の順序逆転を測るための、購読ごとの観測器。
+    // 音声は 1 Object = 1 Group であり、Group が異なる Object の順序は保証されない
+    // (draft-ietf-moq-transport-22 §2.3.1)。復号は到着順のままなので、逆順に届いたかを
+    // 計器で読めるようにする。境界の扱いと最近見た Location の窓は観測器が持つ
+    const audioReceiveOrder = new AudioReceiveOrderTracker(AUDIO_RECENT_OBJECT_IDS_MAX);
+
+    /**
+     * 受信した音声 Object の Location から、順序逆転の計器を更新する
+     *
+     * 比較は Group ID → Object ID の順である (draft-ietf-moq-transport-22 §8.2 の Location
+     * 比較)。同じ Location は重複である。重複は enqueueAudioDecodeDirect が
+     * `duplicateObjectsDropped` として数えるため、順序逆転としては数えない。
+     */
+    const observeAudioReceiveLocation = (
+      current: sub.SubscriberInstance,
+      location: Location,
+    ): void => {
+      const observation = audioReceiveOrder.observe(location);
+      if (!observation.outOfOrder) {
+        return;
+      }
+      current.outOfOrderObjectsReceived.value += 1;
+      if (observation.groupDistance > current.maxOutOfOrderGroupDistance.value) {
+        current.maxOutOfOrderGroupDistance.value = observation.groupDistance;
+      }
+    };
 
     const handleAudioObject = async (
       obj: MoqtObject,
@@ -1872,6 +1906,12 @@ export function useSubscriber(
           // 保留キューからの再投入と同じ Object が 2 度通るため、受信の入口でだけ判定する
           const objectId = `${obj.groupId.toString()}:${obj.objectId.toString()}`;
           if (recentAudioObjectIdSet.has(objectId)) {
+            // 2 回目以降の copy を捨てた。配信側の冗長度が経路上で効いているかを
+            // 読めるよう、捨てた数を数える
+            const current = getCurrentAudioSubscriber(audioDecoderInstance);
+            if (current !== null) {
+              current.duplicateObjectsDropped.value += 1;
+            }
             return;
           }
           recentAudioObjectIdSet.add(objectId);
@@ -1908,6 +1948,15 @@ export function useSubscriber(
       }
       // 到着時刻は復号前の遅延を挟んでも失わないよう、受信の入口で 1 回だけ測る
       const receivedAtMs = performance.now();
+      // 順序逆転の計器を、受信の入口で更新する。復号は到着順のままなので、ここで
+      // 観測しないと逆順に届いたことを後段からは分けられない
+      const currentAudioSubscriber = getCurrentAudioSubscriber(audioDecoderInstance);
+      if (currentAudioSubscriber !== null) {
+        observeAudioReceiveLocation(currentAudioSubscriber, {
+          group: obj.groupId,
+          object: obj.objectId,
+        });
+      }
       // メインスレッドの停止と、その間に待たされた到着の重なりを数える。到着の時刻は
       // ここで測った値を使う (復号前の遅延を挟んだ後の時刻ではない)
       hostDelayTrackerRef.current.recordArrival(receivedAtMs);
@@ -1972,6 +2021,10 @@ export function useSubscriber(
     // どうかの境界にする。この位置以前の音声 Object は復号しても鳴らさない
     const audioLargestLocation = audioSubscriberInstance.largestLocation;
     audioCatchUpGateRef.current.setBoundary(audioLargestLocation ?? null);
+    // 順序逆転の計器にも同じ境界を使う。これ以下の位置は relay の cache から replay された
+    // Object であり、順序逆転ではない。境界が決まるまでは cache と live を区別できないため、
+    // ここから数え始める
+    audioReceiveOrder.markBoundary(audioLargestLocation ?? null);
     if (audioLargestLocation !== undefined && audioLargestLocation !== null) {
       addLog("info", `[${subscriberId}] audio catch up boundary set`, {
         groupId: audioLargestLocation.group.toString(),

@@ -66,7 +66,12 @@ async function publishAndReadCatalogAudioFormat(
       {
         url: moqtUri,
         namespace,
-        audio: { codec: "opus" as const, bitrate: 64_000, ...audioOptions },
+        audio: {
+          codec: "opus" as const,
+          bitrate: 64_000,
+          delivery: "subgroup" as const,
+          ...audioOptions,
+        },
       },
     );
     const activePublisherId = publisherId;

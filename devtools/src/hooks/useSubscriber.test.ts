@@ -534,6 +534,10 @@ test("resetSubscriberStats: 映像と音声の統計を初期値へ戻す", () =
     missedMs: 20,
   };
   instance.audioCatchUpObjectsSkipped.value = 5;
+  // 順序逆転と重複の計器も購読ごとに数え直す (前の購読の値を持ち越さない)
+  instance.duplicateObjectsDropped.value = 9;
+  instance.outOfOrderObjectsReceived.value = 4;
+  instance.maxOutOfOrderGroupDistance.value = 6;
 
   resetSubscriberStats(instance);
 
@@ -571,6 +575,10 @@ test("resetSubscriberStats: 映像と音声の統計を初期値へ戻す", () =
   assert.equal(instance.audioPlayoutConcealments.value, 0);
   assert.deepEqual(instance.audioPlayoutTiming.value, EMPTY_AUDIO_PLAYOUT_TIMING);
   assert.equal(instance.audioCatchUpObjectsSkipped.value, 0);
+  // 順序逆転と重複の計器も前の購読の値を持ち越さない
+  assert.equal(instance.duplicateObjectsDropped.value, 0);
+  assert.equal(instance.outOfOrderObjectsReceived.value, 0);
+  assert.equal(instance.maxOutOfOrderGroupDistance.value, 0);
 });
 
 // ============================================================================
