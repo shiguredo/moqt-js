@@ -524,6 +524,30 @@ function SubscriberStats({ statsSignal }: { statsSignal: ReadonlySignal<Subscrib
                 tone: "warn",
                 testId: "subscriber-audio-catch-up-objects-skipped",
               },
+              {
+                // datagram の冗長化などで同じ Object を 2 回以上受け取り、復号へ渡さず
+                // 捨てた数。配信側の冗長度が経路上で効いているかを確かめる
+                label: "duplicateObjectsDropped",
+                value: stats.audio.duplicateObjectsDropped,
+                testId: "subscriber-audio-duplicate-objects-dropped",
+              },
+              {
+                // 受信した Object の Location が、同じ購読で受信済みの最大 Location より
+                // 小さかった数。datagram は順序を保証しないため、順序逆転が起きているかを
+                // 直接測る。relay の cache から replay された Object は数えない
+                label: "outOfOrderObjects",
+                value: stats.audio.outOfOrderObjectsReceived,
+                tone: "warn",
+                testId: "subscriber-audio-out-of-order-objects-received",
+              },
+              {
+                // 順序逆転した Object が、受信済みの最大 Group から何 Group 戻っていたかの
+                // 最大値。音声は 1 Object = 1 Group なので 20 ms 単位の戻り幅の目安になる
+                label: "maxOutOfOrderGroupDistance",
+                value: stats.audio.maxOutOfOrderGroupDistance,
+                tone: "warn",
+                testId: "subscriber-audio-max-out-of-order-group-distance",
+              },
             ]}
           />
         </StatSection>

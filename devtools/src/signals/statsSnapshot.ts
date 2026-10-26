@@ -232,6 +232,30 @@ export interface SubscriberAudioStats {
    * 再生が有効なときだけ数える
    */
   catchUpObjectsSkipped: number;
+  /**
+   * datagram の冗長化などで同じ Object を 2 回以上受け取り、復号へ渡さず捨てた数
+   *
+   * 配信側が同じ Object を複数回送っているか (冗長度が経路上で効いているか) を確かめる。
+   * `objectsReceived` は受信した回数であり、重複も含む
+   */
+  duplicateObjectsDropped: number;
+  /**
+   * 受信した音声 Object の Location が、同じ購読で受信済みの最大 Location より
+   * 小さかった数
+   *
+   * datagram は順序を保証しない (draft-ietf-moq-transport-22 §2.3.1) ため、順序逆転が
+   * 実際に起きているかを直接測る。relay の cache から replay された Object
+   * (SUBSCRIBE_OK の LARGEST_OBJECT 以下) は順序逆転ではないため数えない。同じ Object の
+   * 冗長化 copy も 1 回だけ数える
+   */
+  outOfOrderObjectsReceived: number;
+  /**
+   * 順序逆転した Object が、受信済みの最大 Group から何 Group 戻っていたかの最大値
+   *
+   * 音声は 1 Object = 1 Group なので、そのまま 20 ms 単位の戻り幅の目安になる。
+   * Group ID の差が Number.MAX_SAFE_INTEGER を超える場合はその値で頭打ちにする
+   */
+  maxOutOfOrderGroupDistance: number;
   /** 音声のデコーダを構成できたか */
   decoderConfigured: boolean;
   /** 受信した音声を音声出力デバイスで再生するか */
@@ -512,6 +536,9 @@ export function buildSubscriberStats(sub: SubscriberInstance): SubscriberStats {
       receiveDelayMs: sub.audioReceiveDelayMs.value,
       maxReceiveDelayMs: sub.audioMaxReceiveDelayMs.value,
       catchUpObjectsSkipped: sub.audioCatchUpObjectsSkipped.value,
+      duplicateObjectsDropped: sub.duplicateObjectsDropped.value,
+      outOfOrderObjectsReceived: sub.outOfOrderObjectsReceived.value,
+      maxOutOfOrderGroupDistance: sub.maxOutOfOrderGroupDistance.value,
       decoderConfigured: sub.audioDecoderConfigured.value,
       playbackEnabled: sub.audioPlaybackEnabled.value,
       peakDbfs: sub.audioPeakDbfsLeft.value,

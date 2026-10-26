@@ -205,6 +205,17 @@ export interface SubscriberInstance {
   // relay の cache から追いつく途中で、復号したが鳴らさなかった音声 Object の数。
   // 再生が有効なときだけ数える (src/catchUpGate.ts)
   audioCatchUpObjectsSkipped: Signal<number>;
+  // datagram の冗長化などで同じ Object を 2 回以上受け取り、復号へ渡さず捨てた数。
+  // 配信側の冗長度が経路上で効いているか (2 個目の copy が届いているか) を確かめる
+  duplicateObjectsDropped: Signal<number>;
+  // 受信した音声 Object の Location が、同じ購読で受信済みの最大 Location より小さかった数。
+  // datagram は順序を保証しない (draft-ietf-moq-transport-22 §2.3.1) ため、順序逆転が
+  // 実際に起きているかを直接測る。relay の cache から replay された Object は
+  // 順序逆転ではないため数えない。同じ Object の冗長化 copy も 1 回だけ数える
+  outOfOrderObjectsReceived: Signal<number>;
+  // 順序逆転した Object が、受信済みの最大 Group から何 Group 戻っていたかの最大値。
+  // 音声は 1 Object = 1 Group なので、そのまま 20 ms 単位の戻り幅の目安になる
+  maxOutOfOrderGroupDistance: Signal<number>;
   // 受信した音声を音声出力デバイスで再生するか。既定は無効
   audioPlaybackEnabled: Signal<boolean>;
   // 受信側の音声の追いつき (復号の出力が送られた TIMESTAMP から遅れ続けたときに、
@@ -308,6 +319,9 @@ export function createSubscriberInstance(id: string): SubscriberInstance {
     audioReceiveDelayMs: signal<number | null>(null),
     audioMaxReceiveDelayMs: signal<number | null>(null),
     audioCatchUpObjectsSkipped: signal(0),
+    duplicateObjectsDropped: signal(0),
+    outOfOrderObjectsReceived: signal(0),
+    maxOutOfOrderGroupDistance: signal(0),
     audioPlaybackEnabled: signal(false),
     audioPlayoutRebases: signal(0),
     audioPlayoutDrops: signal(0),

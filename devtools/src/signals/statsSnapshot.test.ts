@@ -208,6 +208,10 @@ test("buildSubscriberStats: 音声の受信とデコード、再生の状態を�
   instance.audioDatagramObjectsReceived.value = 8;
   instance.audioChunksDecoded.value = 20;
   instance.audioCatchUpObjectsSkipped.value = 6;
+  // datagram の冗長化で届いた 2 個目を捨てた数と、順序逆転の数・戻り幅
+  instance.duplicateObjectsDropped.value = 4;
+  instance.outOfOrderObjectsReceived.value = 3;
+  instance.maxOutOfOrderGroupDistance.value = 7;
   instance.audioDecoderConfigured.value = true;
   instance.audioPlaybackEnabled.value = true;
 
@@ -217,6 +221,10 @@ test("buildSubscriberStats: 音声の受信とデコード、再生の状態を�
   assert.equal(stats.audio.datagramObjectsReceived, 8);
   assert.equal(stats.audio.chunksDecoded, 20);
   assert.equal(stats.audio.catchUpObjectsSkipped, 6);
+  // 重複と順序逆転は、datagram の冗長化と順序保証の無さを直接測る計器である
+  assert.equal(stats.audio.duplicateObjectsDropped, 4);
+  assert.equal(stats.audio.outOfOrderObjectsReceived, 3);
+  assert.equal(stats.audio.maxOutOfOrderGroupDistance, 7);
   assert.equal(stats.audio.decoderConfigured, true);
   assert.equal(stats.audio.playbackEnabled, true);
 });
