@@ -1974,7 +1974,7 @@ function createStartConnectHarness(
     holdSessionClose?: boolean;
     createCatalogPublisher?: () => { publisher: Publisher; doneCount: () => number };
     publisherOptions?: MediaPublisherOptions;
-    // session の reliability。datagram を運べないセッション ("reliable-only") の検証に使う
+    // session の reliability。datagram が reliable and ordered になるセッション ("reliable-only") の検証に使う
     reliability?: string;
   } = {},
 ): {
@@ -2391,7 +2391,7 @@ function createAudioMediaStream(settings: {
  * 音声の配信設定と useWorker: false を持つ publisher と、接続ごとの catalog の送信 payload を
  * 返す (再試行は新しい接続で行うため、接続ごとに分けて記録する)。
  */
-function createAudioStartHarness(): {
+function createAudioStartHarness(options: { reliability?: string } = {}): {
   publisher: MediaPublisherImpl;
   control: PublisherConnectControl & PublisherLifecycleControl & PublisherSessionCloseControl;
   sentByConnection: { payload?: Uint8Array }[][];
@@ -2401,6 +2401,7 @@ function createAudioStartHarness(): {
   const { publisher, control, errors } = createStartConnectHarness(
     {},
     {
+      reliability: options.reliability,
       publisherOptions: {
         namespace: ["live"],
         audio: { codec: "opus", bitrate: 64000 },
@@ -3813,6 +3814,9 @@ test("handleAudioEncodedChunk: description が AUDIO_CONFIG として送られ�
   sendAudioChunk(control, description);
 
   assert.equal(sent.length, 1);
+  // 音声の Object は 1 Object = 1 Group = 1 Subgroup であり、送り終えたら FIN で閉じる
+  // (draft-ietf-moq-transport-22 §11.3.2 の MUST)
+  assert.isTrue(sent[0]?.endOfSubgroup);
   const decoded = LOC.decodeAudioProperties(sent[0].properties ?? new Uint8Array(0));
   assert.deepEqual(decoded.config, description);
 });
@@ -4010,10 +4014,10 @@ test("resolveAudioPublishSettings: redundancy は 1〜3 の整数だけ受理す
 /**
  * 完了条件: 指定が無ければ Datagram で送る (既定は "datagram")。
  *
- * 音声は 1 Object = 1 Group であり、datagram は再送されない (RFC 9221)。既定を datagram に
- * することで、損失への備え (冗長化) を既定で使える経路を選ぶ。Subgroup を選ぶ場合は
- * `delivery: "subgroup"` を明示する。落ちても呼び出し回数だけでは緑にならないよう、
- * 送った中身も固定する
+ * 音声は 1 Object = 1 Group であり、datagram は再送されない (RFC 9221)。既定の datagram は
+ * 遅延の裾を縮めるためのもので、損失に備えるには `redundancy` を 2 以上にする。Subgroup を
+ * 選ぶ場合は `delivery: "subgroup"` を明示する。落ちても呼び出し回数だけでは緑にならない
+ * よう、送った中身も固定する
  */
 test("handleAudioEncodedChunk: delivery の既定は Datagram で送る", () => {
   const { control: loopControl } = createLoopTestContext();
@@ -4058,10 +4062,12 @@ test("start: reliable-only のセッションでは datagram の音声配信を�
     },
   );
 
-  const failure = await publisher.start({} as MediaStream).then(
-    () => null,
-    (error: unknown) => error,
-  );
+  const failure = await publisher
+    .start(createAudioMediaStream({ sampleRate: 48_000, channelCount: 2 }))
+    .then(
+      () => null,
+      (error: unknown) => error,
+    );
 
   assert.ok(failure instanceof Error);
   assert.match((failure as Error).message, /reliable-only/);
@@ -4086,15 +4092,60 @@ test("start: reliable-only のセッションでは既定 (datagram) の音声�
     },
   );
 
-  const failure = await publisher.start({} as MediaStream).then(
-    () => null,
-    (error: unknown) => error,
-  );
+  const failure = await publisher
+    .start(createAudioMediaStream({ sampleRate: 48_000, channelCount: 2 }))
+    .then(
+      () => null,
+      (error: unknown) => error,
+    );
 
   assert.ok(failure instanceof Error);
   assert.match((failure as Error).message, /reliable-only/);
   assert.equal(errors.length, 1);
   assert.equal(publisher.state, "created");
+});
+
+/**
+ * 音声トラックが無い MediaStream では音声 Object を 1 つも送らないため、reliable-only の
+ * セッションでも既定 datagram を理由に start を拒否しない。catalog の宣言だけが残る穴は
+ * 別に扱う
+ */
+test("start: 音声トラックが無ければ reliable-only でも既定 datagram を拒否しない", async () => {
+  const { publisher, errors } = createStartConnectHarness(
+    {},
+    {
+      reliability: "reliable-only",
+      publisherOptions: {
+        namespace: ["live"],
+        audio: { codec: "opus", bitrate: 64_000 },
+      },
+    },
+  );
+
+  await publisher.start(createVideoMediaStream());
+
+  assert.equal(errors.length, 0);
+  assert.equal(publisher.state, "publishing");
+});
+
+/**
+ * 完了条件: reliability が undefined のときは datagram を送れるものとして扱う。
+ * WebTransport.reliability を公開していないブラウザでは undefined になるため、この分岐が
+ * 既定の datagram 経路になり得る。undefined を拒否すると、それらのブラウザで datagram を
+ * 使えなくなる
+ */
+test("start: reliability が undefined でも datagram の音声配信を開始できる", async () => {
+  const boundary = replaceAudioCodecBoundary();
+  try {
+    const { publisher, errors } = createAudioStartHarness({ reliability: undefined });
+    await publisher.start(createAudioMediaStream({ sampleRate: 48_000, channelCount: 2 }));
+
+    assert.equal(errors.length, 0);
+    assert.equal(publisher.state, "publishing");
+    await publisher.close();
+  } finally {
+    boundary.restore();
+  }
 });
 
 /**

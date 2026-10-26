@@ -23,9 +23,9 @@ test("resolveAudioPublishSettings: 省略時は既定値を使う", () => {
   assert.equal(settings.bitrate, 64000);
   assert.equal(settings.sampleRate, DEFAULT_AUDIO_SAMPLE_RATE);
   assert.equal(settings.channels, DEFAULT_AUDIO_CHANNELS);
-  // 音声 Object の送り方の既定は Datagram。datagram は再送されないため、損失への備え
-  // (冗長化) を既定で使える経路を選ぶ。datagram を運べないセッションでの可否はここでは
-  // 判定せず、createMediaPublisher の start が拒否する
+  // 音声 Object の送り方の既定は Datagram。datagram は再送されないため、損失に備えるには
+  // redundancy を 2 以上にする必要がある (既定の冗長度は 1 のまま)。datagram が reliable and
+  // ordered になるセッションでの可否はここでは判定せず、createMediaPublisher の start が拒否する
   assert.equal(settings.delivery, "datagram");
 });
 
@@ -59,12 +59,17 @@ test("resolveAudioPublishSettings: datagram では冗長度 2 以上を解決す
         redundancy,
       });
       assert.equal(settings.redundancy, redundancy, "指定した冗長度をそのまま返すこと");
-      assert.equal(settings.delivery, "datagram", "省略時は Datagram になること");
+      assert.equal(
+        settings.delivery,
+        "datagram",
+        delivery === undefined ? "省略時は Datagram になること" : "指定した delivery を返すこと",
+      );
     }
   }
 });
 
-// subgroup 配送は Data Stream が再送されるため冗長化の意味が無い。指定を黙って無視すると
+// subgroup 配送は Data Stream が FIN で閉じる限り再送されるため、冗長化の意味が無い
+// (RESET された場合は欠落し得る)。指定を黙って無視すると
 // 利用者が冗長化されていると誤解するため、start() で拒否する。
 test("resolveAudioPublishSettings: subgroup で冗長度 2 以上を指定するとエラーになる", () => {
   assert.throws(

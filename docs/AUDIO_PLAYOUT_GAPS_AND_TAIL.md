@@ -17,8 +17,8 @@ Opus、配送が Datagram、冗長度が 2 であり、実リレーの計測も�
 ライブラリの高レベル API の既定も Datagram 配送 (`AudioPublishOptions.delivery` の既定は
 `"datagram"`) であり、Subgroup 配送は明示した場合に使う。この文書の数値は Datagram 配送の
 構成で測ったものである。Subgroup 配送では Data Stream の再送があるため Datagram 固有の
-損失は起きない (音声は 1 Object = 1 Group = 1 ストリームであり、フレーム間の順序保証は
-元から無い)。
+損失は起きにくい (FIN で閉じる限り再送され、RESET された場合は欠落し得る)。音声は
+1 Object = 1 Group = 1 ストリームであり、フレーム間の順序保証は元から無い。
 
 ## 症状の再現
 
@@ -116,8 +116,10 @@ media 時刻が飛ぶと、`schedule` は隙間 0 のまま内容だけを飛ば
 40 ms が 188 %、80 ms が 122 % の段差になる。今回の収録は損失が無く (`playoutDrops` 0、
 `missedFrames` 0)、この形の不連続は観測されなかったが、損失のある経路では出る。
 
-Datagram は到着順も保証されない。受信側は音声を到着順に復号へ渡し、並べ替えをしないため、
-timestamp の順と逆に届くと、隙間 0 のまま内容だけが逆順に鳴る。Datagram の仕様上は成立し得る。
+Group が異なる Object の順序は保証されない (draft-ietf-moq-transport-22 §2.3.1)。音声は
+1 Object = 1 Group なので、datagram でも subgroup でも、受信側が到着順に復号すると
+timestamp の順と逆に届いた Object が隙間 0 のまま逆順に鳴り得る。Datagram では加えて
+再送されない (RFC 9221)。
 2026-10-26 の実リレーの計測では、自然な状態の baseline 3 回 (60 秒、合計 8,921 Object) で
 順序逆転は 0 件だった。注入した順序逆転は計器で検出でき、計測方法と結果は
 `docs/AUDIO_DATAGRAM_ORDERING.md` にある。

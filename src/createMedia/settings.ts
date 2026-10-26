@@ -108,8 +108,9 @@ export function resolveAudioPublishSettings(
   // 既定は 1 回。datagram は再送されない (RFC 9221) ため、損失に備えるなら 2 にする
   // (src/codec/types.ts の `redundancy` に実測を残す)
   const redundancy = options.redundancy ?? 1;
-  // 既定は Datagram。音声は 1 Object = 1 Group であり、datagram は再送されないため、
-  // 損失への備え (冗長化) を既定で使える経路を選ぶ。datagram を指定できるかはセッションの
+  // 既定は Datagram。音声は 1 Object = 1 Group であり、遅延の裾を縮める経路として選ぶ。
+  // datagram は再送されない (RFC 9221) ため、損失に備えるには redundancy を 2 以上にする
+  // 必要がある (既定の冗長度は 1 のまま)。datagram を指定できるかはセッションの
   // reliability に依存するため、ここでは解決するだけで判定しない
   // (createMediaPublisher の start が判定する)
   const delivery = options.delivery ?? "datagram";

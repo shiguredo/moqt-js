@@ -993,9 +993,14 @@ export class MediaPublisherImpl implements MediaPublisher {
     if (this.resolvedAudio?.delivery !== "datagram") {
       return;
     }
+    // 音声トラックが無い場合は音声 Object を 1 つも送らないため、配送方式の判定をしない
+    // (catalog の宣言だけが残る既存の穴は別に扱う)
+    if (this.mediaStream?.getAudioTracks().length === 0) {
+      return;
+    }
     if (this.session?.reliability === "reliable-only") {
       throw new Error(
-        'audio delivery "datagram" requires datagrams, but the session reliability is "reliable-only"; specify delivery: "subgroup" to send audio over subgroups',
+        'audio delivery "datagram" requires unreliable datagrams, but the session reliability is "reliable-only"; specify delivery: "subgroup" to send audio over subgroups',
       );
     }
   }
