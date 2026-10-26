@@ -3,6 +3,7 @@
 - Created: 2026-10-12
 - Completed: {YYYY-MM-DD}
 - Branch: feature/add-catalog-fetch-filter-pbt
+- Polished: 2026-10-27
 
 ## 目的
 
@@ -15,7 +16,7 @@ catalog の FETCH に載せる Location Filter を決める `catalogFetchFilter`
 
 ## 現状
 
-- `src/createMediaSubscriber.test.ts` の `catalogFetchFilter` のテストは 3 例である (Largest Object が Group 7 のとき / Group 0 のとき / 不明なとき)
+- `src/createMediaSubscriber.media.test.ts` の `catalogFetchFilter` のテストは 3 例である (Largest Object が Group 7 のとき / Group 0 のとき / 不明なとき)
 - `src/` の性質テストは `*.prop.ts` に置く規約で、`catalogFetchFilter` の prop ファイルは無い
 - Group ID は `vi64` であり、0 と 2^64 - 1 の近傍が境界になる (draft-ietf-moq-transport-22 §8.1)
 
@@ -33,13 +34,13 @@ catalog の FETCH に載せる Location Filter を決める `catalogFetchFilter`
 
 - `src/createMediaSubscriber.prop.ts` が追加され、`vp test run` の対象になる
 - 反例が出た場合に縮小された入力が読める (`fc.assert` の既定のままでよい)
-- 例示の単体テストは残る
+- 例示の単体テスト (null / Group 0) は残る
 - `vp check` / `tsc --noEmit` / `vp test run` が通る
 
 ## 参照
 
 - `src/createMediaSubscriber.ts` の `catalogFetchFilter`
 - `src/filter.prop.ts` / `src/msf.prop.ts` (prop ファイルの作法)
-- `src/createMediaSubscriber.test.ts` (`catalogFetchFilter` の例示テスト)
+- `src/createMediaSubscriber.media.test.ts` (`catalogFetchFilter` の例示テスト)
 - draft-ietf-moq-transport-22 §9.20.9 (LOCATION FILTER) / §8.1 (Variable-Length Integers)
 - draft-ietf-moq-msf-01 §5 (catalog は Group の先頭 Object)
