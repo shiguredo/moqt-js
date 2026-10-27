@@ -15,6 +15,7 @@ import { AudioTimestampClock } from "../../../src/audioTimestampClock.ts";
 import { AudioPublishCatchUp } from "../../../src/audioPublishCatchUp.ts";
 import type { AudioFormat } from "../utils/microphone";
 import type { PreconditionWarning } from "../utils/preconditionWarnings.ts";
+import { AUTO_CANDIDATE_SELECTION, type CandidateSelection } from "../utils/candidateSelection.ts";
 
 // Publisher の状態
 export const pubSession = signal<Session | null>(null);
@@ -36,6 +37,13 @@ export const pubConnectedNamespace = signal<string[] | null>(null);
  * (次に配信を始めたときに上書きする)。
  */
 export const pubSelectedServerUrl = signal<string | null>(null);
+/**
+ * 配信の接続先の選び方 (自動 / 固定)
+ *
+ * Publisher パネルで選ぶ。自動は接続のたびに候補からランダムに選び、固定は選んだ候補を
+ * 毎回使う。設定ではなくパネルの状態なので Copy URL では別のクエリとして共有する。
+ */
+export const pubCandidateSelection = signal<CandidateSelection>(AUTO_CANDIDATE_SELECTION);
 // Catalog を最後に送った Group ID。Catalog を送り直すたびに進める。
 //
 // 同じ Location を 2 度送ると購読側で重複として扱われるため、送り直しは新しい Group で

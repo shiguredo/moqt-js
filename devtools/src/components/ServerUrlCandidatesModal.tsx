@@ -146,8 +146,9 @@ export function ServerUrlCandidatesModal({ onClose }: ServerUrlCandidatesModalPr
           </div>
         </div>
         <p class="text-sm text-slate-600 mb-4">
-          Checked candidates are used for connections. When two or more are checked, each connection
-          selects one at random. Add candidates from the form below.
+          Checked candidates are used for connections. Each connection selects one at random by
+          default; choose Auto or a fixed candidate in each panel. Add candidates from the form
+          below.
         </p>
 
         {/* 追加フォーム。Enter でも追加できるよう form の submit で扱う */}

@@ -1706,6 +1706,91 @@ test("resolveConnectTarget: 複数の有効な候補から 1 つを選ぶ", () =
   resetMsfFragmentSettings();
 });
 
+// パネルごとの選択が固定なら、その候補をそのまま使う (有効な候補が 2 件以上あるとき)
+test("resolveConnectTarget: 固定した候補があればその候補を使う", () => {
+  resetServerUrlCandidates();
+  resetMsfFragmentSettings();
+  const relayA = "moqt://relay-a.example:4443/";
+  const relayB = "moqt://relay-b.example:4443/";
+  serverUrlCandidates.value = [
+    { url: relayA, enabled: true },
+    { url: relayB, enabled: true },
+  ];
+
+  const target = resolveConnectTarget({ mode: "fixed", url: relayB });
+
+  assert.equal(target.connectUrl, relayB);
+  assert.equal(target.selectedServerUrl, relayB);
+
+  resetServerUrlCandidates();
+  resetMsfFragmentSettings();
+});
+
+// 固定した候補が無効化・削除されていたら、別の候補へ黙って切り替えない。
+// 拒否はほかの検証と同じ順序になるよう connectTargetProblem が行う
+test("resolveConnectTarget: 固定した候補が無効なら接続先の問題として拒否する", () => {
+  resetServerUrlCandidates();
+  resetMsfFragmentSettings();
+  const relayB = "moqt://relay-b.example:4443/";
+  serverUrlCandidates.value = [
+    { url: "moqt://relay-a.example:4443/", enabled: true },
+    { url: "moqt://relay-c.example:4443/", enabled: true },
+  ];
+  const selection = { mode: "fixed", url: relayB } as const;
+
+  const target = resolveConnectTarget(selection);
+
+  // 無効な固定候補でも、パネルには固定した URI を出したまま接続前の検証へ回す
+  assert.equal(target.connectUrl, relayB);
+  assert.equal(target.selectedServerUrl, relayB);
+  assert.equal(
+    connectTargetProblem(target.connectUrl, selection),
+    `the selected MOQT URI candidate is not enabled: ${relayB}`,
+  );
+
+  resetServerUrlCandidates();
+  resetMsfFragmentSettings();
+});
+
+// 有効な候補が 1 件だけのときは選ぶ余地が無いため、固定の指定より有効な候補を使う
+test("resolveConnectTarget: 有効な候補が 1 件なら固定の指定を無視してその候補を使う", () => {
+  resetServerUrlCandidates();
+  resetMsfFragmentSettings();
+  const relayA = "moqt://relay-a.example:4443/";
+  serverUrlCandidates.value = [
+    { url: relayA, enabled: true },
+    { url: "moqt://relay-b.example:4443/", enabled: false },
+  ];
+
+  const target = resolveConnectTarget({ mode: "fixed", url: "moqt://relay-b.example:4443/" });
+
+  assert.equal(target.connectUrl, relayA);
+  assert.equal(target.selectedServerUrl, relayA);
+
+  resetServerUrlCandidates();
+  resetMsfFragmentSettings();
+});
+
+// 共有リンクの接続先を開いている page では、固定の指定より共有の MOQT URI を使う
+test("resolveConnectTarget: 共有リンクの接続先を開いている page では固定の指定を使わない", () => {
+  resetServerUrlCandidates();
+  resetMsfFragmentSettings();
+  url.value = "moqt://shared.example/";
+  serverUrlCandidates.value = [
+    { url: "moqt://relay-a.example:4443/", enabled: true },
+    { url: "moqt://relay-b.example:4443/", enabled: true },
+  ];
+  serverUrlCandidatesSuspended.value = true;
+
+  const target = resolveConnectTarget({ mode: "fixed", url: "moqt://relay-b.example:4443/" });
+
+  assert.equal(target.connectUrl, "moqt://shared.example/");
+  assert.isNull(target.selectedServerUrl);
+
+  resetServerUrlCandidates();
+  resetMsfFragmentSettings();
+});
+
 // 共有リンクの接続先を開いている page では、候補を選ばず URI 欄の接続先を使う
 test("resolveConnectTarget: 候補を止めている page では候補を使わない", () => {
   resetServerUrlCandidates();

@@ -21,6 +21,8 @@ import {
 } from "../../../src/playout/audioDelayFeedback.ts";
 import { AUDIO_DELAY_START_MS } from "../../../src/playout/audioDelayEstimator.ts";
 import type { PreconditionWarning } from "../utils/preconditionWarnings.ts";
+import { AUTO_CANDIDATE_SELECTION, type CandidateSelection } from "../utils/candidateSelection.ts";
+import { takeInitialSubscriberCandidateSelection } from "./candidateSelection.ts";
 
 /**
  * 音声と映像の同期の推定値 (表示とテスト用 API へ出す snapshot)
@@ -124,6 +126,13 @@ export interface SubscriberInstance {
    * (次に購読を始めたときに上書きする)。
    */
   selectedServerUrl: Signal<string | null>;
+  /**
+   * 購読の接続先の選び方 (自動 / 固定)
+   *
+   * 購読パネルで選ぶ。購読ごとに独立して持つ。自動は接続のたびに候補からランダムに選び、
+   * 固定は選んだ候補を毎回使う。
+   */
+  candidateSelection: Signal<CandidateSelection>;
   // 確立した WebTransport が HTTP/2 か HTTP/3 か。未接続、または判別できないときは null
   httpVersion: Signal<PanelHttpVersion | null>;
   codec: Signal<string>;
@@ -293,6 +302,7 @@ export function createSubscriberInstance(id: string): SubscriberInstance {
     status: signal<StatusType>("disconnected"),
     statusMessage: signal("Ready to subscribe"),
     selectedServerUrl: signal<string | null>(null),
+    candidateSelection: signal<CandidateSelection>(AUTO_CANDIDATE_SELECTION),
     httpVersion: signal<PanelHttpVersion | null>(null),
     codec: signal(""),
     isStopping: signal(false),
@@ -401,6 +411,8 @@ export function addSubscriber(): string {
   const existingIds = new Set(subscriberInstances.value.keys());
   const id = generateUniqueSubscriberId(existingIds, defaultSubscriberIdGenerator);
   const instance = createSubscriberInstance(id);
+  // 共有リンクで開いた page では、URL の購読ごとの選択を Subscriber が作られる順に使う
+  instance.candidateSelection.value = takeInitialSubscriberCandidateSelection();
   const newMap = new Map(subscriberInstances.value);
   newMap.set(id, instance);
   subscriberInstances.value = newMap;

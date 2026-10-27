@@ -30,6 +30,7 @@ import { KEYFRAME_INTERVAL_OPTIONS } from "../utils/keyframeInterval";
 import { parseMsfFragmentFromInput } from "../utils/msfFragment";
 import { resolveMsfAuthorizationToken } from "../../../src/msf/c4mAuthorization.ts";
 import { normalizeMoqtUri, type MoqtFragment } from "../../../src/moqtUri.ts";
+import { AUTO_CANDIDATE_SELECTION, type CandidateSelection } from "../utils/candidateSelection";
 import {
   enabledServerUrlUrls,
   formatServerUrlCandidatesParam,
@@ -755,9 +756,12 @@ function candidateFragmentOf(serverUrl: string): MoqtFragment | null {
 /**
  * 接続に使う MOQT URI を決める
  *
- * 有効な候補があり、共有リンクの接続先で候補の使用を止めていなければ、その中から 1 つを
- * ランダムに選ぶ。候補が無いときと、共有リンクの接続先を開いているときは url の値
- * (共有リンクの接続先) を使う。どちらも無ければ空を返し、呼び出し側が接続の前に拒否する。
+ * `selection` はパネルごとの接続先の選び方。自動なら有効な候補から 1 つをランダムに
+ * 選ぶ。固定なら、その候補をそのまま使う (有効な候補が 2 件以上あるときだけ意味を持つ。
+ * 1 件以下のときは選ぶ余地が無いため自動と同じ扱い)。
+ *
+ * 候補が無いときと、共有リンクの接続先を開いているときは url の値 (共有リンクの接続先)
+ * を使う。どちらも無ければ空を返し、呼び出し側が接続の前に拒否する。
  *
  * 選んだ候補は戻り値として返すだけで、接続設定の signal (MOQT URI 欄 / URI Fragment /
  * Namespace / Authorization Token) は変えない。候補の fragment は接続ごとに
@@ -766,12 +770,28 @@ function candidateFragmentOf(serverUrl: string): MoqtFragment | null {
  *
  * 接続の直前に同期で呼ぶ。複数の購読を同時に始めても、それぞれが呼んだ時点の値で
  * 接続 URL と接続オプションを組み立てられる (呼び出し側がすぐに値を控える)。
+ *
+ * 固定した候補が無効化・削除されていた場合も、ほかの検証 (Namespace / 解像度 /
+ * トラック名) と同じ順序で拒否できるよう、ここでは例外を投げず、接続前の
+ * `connectTargetProblem` が理由を返す。
  */
-export function resolveConnectTarget(): ConnectTarget {
+export function resolveConnectTarget(
+  selection: CandidateSelection = AUTO_CANDIDATE_SELECTION,
+): ConnectTarget {
   if (serverUrlCandidatesSuspended.value) {
     return { connectUrl: buildConnectUrl(), selectedServerUrl: null, candidateFragment: null };
   }
-  const picked = pickServerUrlCandidate(enabledServerUrlCandidateUrls.value, randomUint32());
+  const enabledUrls = enabledServerUrlCandidateUrls.value;
+  if (selection.mode === "fixed" && enabledUrls.length > 1) {
+    // 固定した候補が無効化・削除されていても、別の候補へ黙って切り替えない
+    // (どの relay へ繋ぐかを利用者が決めているため)。拒否は connectTargetProblem が行う
+    return {
+      connectUrl: selection.url,
+      selectedServerUrl: selection.url,
+      candidateFragment: candidateFragmentOf(selection.url),
+    };
+  }
+  const picked = pickServerUrlCandidate(enabledUrls, randomUint32());
   if (picked === null) {
     return { connectUrl: buildConnectUrl(), selectedServerUrl: null, candidateFragment: null };
   }
@@ -838,13 +858,25 @@ export function setServerUrlCandidates(entries: readonly ServerUrlEntry[]): Prom
 }
 
 /**
- * 接続先が決まらない理由を返す (決まっていれば null)
+ * 接続先が決まらない理由を返す (問題が無ければ null)
  *
  * MOQT URI 欄は候補の表示欄で手入力は無いため、接続先は有効な候補か共有リンクの url に
  * なる。空白だけの url も接続先が無いものとして扱い、connect() の URL 検証より前に、
- * 何をすればよいか分かるメッセージを出す。
+ * 何をすればよいか分かるメッセージを出す。固定した候補が無効化・削除されている場合も、
+ * ほかの検証と同じ順序でここで拒否する。
  */
-export function connectTargetProblem(connectUrl: string): string | null {
+export function connectTargetProblem(
+  connectUrl: string,
+  selection: CandidateSelection = AUTO_CANDIDATE_SELECTION,
+): string | null {
+  if (
+    selection.mode === "fixed" &&
+    hasEnabledServerUrlCandidates.value &&
+    enabledServerUrlCandidateUrls.value.length > 1 &&
+    !enabledServerUrlCandidateUrls.value.includes(selection.url)
+  ) {
+    return `the selected MOQT URI candidate is not enabled: ${selection.url}`;
+  }
   if (connectUrl.trim() !== "") {
     return null;
   }

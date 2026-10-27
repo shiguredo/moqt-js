@@ -967,7 +967,7 @@ interface PublisherConnectSettings {
  * 拒否したときにも確かめられるよう、検証より先にパネルへ出して Debug ログにも残す。
  */
 function resolvePublisherConnectSettings(): PublisherConnectSettings {
-  const target = settings.resolveConnectTarget();
+  const target = settings.resolveConnectTarget(pub.pubCandidateSelection.value);
   if (target.selectedServerUrl !== null) {
     addLog("info", "[publisher] selected the connection target from the candidates", {
       url: target.selectedServerUrl,
@@ -2002,7 +2002,10 @@ export function usePublisher() {
       assertTrackNames(advertisedTrackNames);
 
       // 接続先が決まっていることを確かめる (MOQT URI 欄は候補の表示欄で、手入力は無い)
-      const connectTargetError = settings.connectTargetProblem(connectUrl);
+      const connectTargetError = settings.connectTargetProblem(
+        connectUrl,
+        pub.pubCandidateSelection.value,
+      );
       if (connectTargetError !== null) {
         throw new Error(connectTargetError);
       }
