@@ -141,6 +141,20 @@ export function PublisherPanel() {
           {pub.pubStatusMessage.value}
         </div>
 
+        {/* 接続先の候補から選んだ MOQT URI。この配信がどこの relay へ繋いだかを
+            パネルだけで分かるようにする。未選択の間も行を描き、値を「-」にする
+            (接続の開始で行が現れると映像の位置が動く) */}
+        <div
+          class="mt-1.5 flex items-baseline gap-2 text-xs text-slate-500 min-w-0"
+          title={pub.pubSelectedServerUrl.value ?? ""}
+          data-testid="publisher-selected-candidate"
+        >
+          <span class="shrink-0">Candidate:</span>
+          <span class="font-mono text-slate-700 truncate min-w-0">
+            {pub.pubSelectedServerUrl.value ?? "-"}
+          </span>
+        </div>
+
         {/* paused 状態 (FORWARD パラメータ)。配信していない間も描き、値を「-」にする (配信の開始で行が
             現れると映像の位置が動く) */}
         <div class={PANEL_OPTION_ROW_CLASS} data-testid="publisher-forward-state">

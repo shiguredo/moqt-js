@@ -41,6 +41,7 @@ import {
   preconditionWarnings,
   pubCodec,
   pubCurrentGroup,
+  pubSelectedServerUrl,
   pubSession,
   pubStatus,
   pubStatusMessage,
@@ -164,6 +165,11 @@ export interface PublisherStats {
   status: StatusType;
   /** 画面に出す状態の説明 */
   statusMessage: string;
+  /**
+   * 配信の接続に使った MOQT URI
+   *
+   * 接続先の候補から選んだときはその URI、候補を使わないときは URI 欄の値。
+   */
   serverUrl: string;
   /** 確立した WebTransport が HTTP/2 か HTTP/3 か。未接続、または判別できないときは null */
   httpVersion: PanelHttpVersion | null;
@@ -354,6 +360,13 @@ export interface SubscriberStats {
   status: StatusType;
   /** 画面に出す状態の説明 */
   statusMessage: string;
+  /**
+   * 購読の接続に使った MOQT URI
+   *
+   * 接続先の候補から選んだときはその URI、候補を使わないときは URI 欄の値。購読ごとに
+   * 選ぶ候補が異なり得るため、購読の値として持つ。
+   */
+  serverUrl: string;
   /** 確立した WebTransport が HTTP/2 か HTTP/3 か。未接続、または判別できないときは null */
   httpVersion: PanelHttpVersion | null;
   codec: string;
@@ -432,7 +445,7 @@ export function buildPublisherStats(): PublisherStats {
   return {
     status: pubStatus.value,
     statusMessage: pubStatusMessage.value,
-    serverUrl: url.value,
+    serverUrl: pubSelectedServerUrl.value ?? url.value,
     httpVersion: httpVersion.value,
     forwardState: forwardState.value,
     codec: pubCodec.value,
@@ -505,6 +518,7 @@ export function buildSubscriberStats(sub: SubscriberInstance): SubscriberStats {
     id: sub.id,
     status: sub.status.value,
     statusMessage: sub.statusMessage.value,
+    serverUrl: sub.selectedServerUrl.value ?? url.value,
     httpVersion: sub.httpVersion.value,
     codec: sub.codec.value,
     dynamicGroupsSupported: sub.dynamicGroupsSupported.value,

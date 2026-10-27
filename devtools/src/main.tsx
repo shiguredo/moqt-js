@@ -1,32 +1,19 @@
 import { render } from "preact";
 import { App } from "./App";
-import {
-  applyRelayUriInput,
-  initFromUrl,
-  mode,
-  savedServerUrl,
-} from "./signals/connectionSettings";
+import { initFromUrl, mode, serverUrlCandidates } from "./signals/connectionSettings";
 import * as sub from "./signals/subscriber";
 import { initTestApi } from "./testApi";
 import { startPreconditionWatch } from "./signals/preconditionWatch";
-import { queryServerUrl, readStoredServerUrl } from "./utils/serverUrlStore";
+import { readServerUrlEntries } from "./utils/serverUrlStore";
 import "./index.css";
 
 async function start(): Promise<void> {
-  const search = window.location.search;
-  // クエリの url が無いときだけ、Save で残した MOQT URI を戻す
-  if (queryServerUrl(search) === null) {
-    const stored = await readStoredServerUrl();
-    if (stored !== null) {
-      // fragment を URI Fragment 欄へ映し、c4m の取り込みと msf fragment の namespace の
-      // 固定も行う
-      applyRelayUriInput(stored);
-      savedServerUrl.value = stored;
-    }
-  }
+  // OPFS に保存した接続先の候補を読む。URI 欄は候補の表示欄なので、ここでは URI 欄へ
+  // 適用しない (接続のたびに候補から選ぶ)
+  serverUrlCandidates.value = await readServerUrlEntries();
 
   // URL のクエリパラメータから設定を読み込む
-  initFromUrl(search);
+  initFromUrl(window.location.search);
 
   // テスト用 API を初期化 (window.moqtDevTools を公開)
   initTestApi();

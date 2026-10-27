@@ -948,6 +948,39 @@ export function applyPublishStartGroupIds(): void {
   pub.eventGroup.value = allocateInitialGroupId();
 }
 
+/** 配信の接続に使う設定 (接続 URL / Track Namespace / 接続オプション) */
+interface PublisherConnectSettings {
+  /** 接続に使う MOQT URI (fragment を含む) */
+  readonly connectUrl: string;
+  /** 接続に使う Track Namespace のフィールド列 */
+  readonly namespaceArray: string[];
+  /** `connect()` に渡すオプション */
+  readonly connectOptions: ReturnType<typeof settings.buildConnectOptions>;
+}
+
+/**
+ * 配信の接続に使う設定を決める
+ *
+ * 有効な接続先の候補があれば、その中から 1 つを選ぶ。接続 URL・Track Namespace・
+ * Authorization Token は候補の fragment から決め、接続設定の signal は変えない
+ * (ほかの接続の設定表示に影響しない)。どの候補を選んだかは、Namespace の検証で接続を
+ * 拒否したときにも確かめられるよう、検証より先にパネルへ出して Debug ログにも残す。
+ */
+function resolvePublisherConnectSettings(): PublisherConnectSettings {
+  const target = settings.resolveConnectTarget();
+  if (target.selectedServerUrl !== null) {
+    addLog("info", "[publisher] selected the connection target from the candidates", {
+      url: target.selectedServerUrl,
+    });
+  }
+  pub.pubSelectedServerUrl.value = target.selectedServerUrl;
+  return {
+    connectUrl: target.connectUrl,
+    namespaceArray: settings.resolveConnectNamespace(target),
+    connectOptions: settings.buildConnectOptions(settings.resolveConnectAuthorizationToken(target)),
+  };
+}
+
 export function usePublisher() {
   /**
    * 音声設定に従って音声のストリームを用意し、取れた音の形式を返す
@@ -1831,7 +1864,10 @@ export function usePublisher() {
     });
     addLog(
       "info",
-      `[publisher] [SEND] OBJECT (${formatFullTrackName(settings.namespaceArray.value, CATALOG_TRACK_NAME)}, updated)`,
+      `[publisher] [SEND] OBJECT (${formatFullTrackName(
+        pub.pubConnectedNamespace.value ?? settings.namespaceArray.value,
+        CATALOG_TRACK_NAME,
+      )}, updated)`,
       {
         source: "publish",
         catalogGroup: groupId,
@@ -1925,10 +1961,10 @@ export function usePublisher() {
       pub.httpVersion.value = null;
       settings.settingsDisabled.value = true;
 
-      // Namespace の欄は §8.8 の namespace-name 文字列で、解析できない値と送信できない値
-      // (§8.7 の構造の制約 / 予約 namespace) では接続に使うフィールド列が無い。入力した
-      // namespace と違う値へ繋がないよう、先に拒否する
-      const namespaceArray = settings.requireConnectNamespace();
+      // 接続先・Namespace・接続オプションを決める。選んだ候補はパネルに出す
+      const { connectUrl, namespaceArray, connectOptions } = resolvePublisherConnectSettings();
+      // 配信中のログに出す、接続時に決めた Track Namespace (候補の fragment が決めることがある)
+      pub.pubConnectedNamespace.value = namespaceArray;
       const videoTrackNameValue = settings.videoTrackName.value;
       const codecValue = settings.codec.value;
       const videoSourceValue = settings.videoSource.value;
@@ -1965,11 +2001,13 @@ export function usePublisher() {
       advertisedTrackNames.push(EVENT_TRACK_NAME);
       assertTrackNames(advertisedTrackNames);
 
-      // 接続オプションを組み立てる
-      const connectOptions = settings.buildConnectOptions();
+      // 接続先が決まっていることを確かめる (MOQT URI 欄は候補の表示欄で、手入力は無い)
+      const connectTargetError = settings.connectTargetProblem(connectUrl);
+      if (connectTargetError !== null) {
+        throw new Error(connectTargetError);
+      }
 
       // MOQT サーバーへ接続する
-      const connectUrl = settings.buildConnectUrl();
       const session = await connect(
         connectUrl,
         {
@@ -2234,7 +2272,10 @@ export function usePublisher() {
         });
         addLog(
           "info",
-          `[publisher] [SEND] OBJECT (${formatFullTrackName(settings.namespaceArray.value, CATALOG_TRACK_NAME)}, complete)`,
+          `[publisher] [SEND] OBJECT (${formatFullTrackName(
+            pub.pubConnectedNamespace.value ?? settings.namespaceArray.value,
+            CATALOG_TRACK_NAME,
+          )}, complete)`,
           {
             source: "publish",
             catalog: completeCatalog,
@@ -2360,6 +2401,7 @@ export function usePublisher() {
   }
 
   const cleanupPublisher = (): void => {
+    pub.pubConnectedNamespace.value = null;
     stopSendingPaths();
     // セッションを閉じたため、配信を止めた状態は残さない
     pub.sendingStopped.value = false;

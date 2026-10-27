@@ -28,7 +28,20 @@ import {
 import { isResolution } from "../utils/codec";
 import { KEYFRAME_INTERVAL_OPTIONS } from "../utils/keyframeInterval";
 import { parseMsfFragmentFromInput } from "../utils/msfFragment";
+import { resolveMsfAuthorizationToken } from "../../../src/msf/c4mAuthorization.ts";
+import { normalizeMoqtUri, type MoqtFragment } from "../../../src/moqtUri.ts";
+import {
+  enabledServerUrlUrls,
+  formatServerUrlCandidatesParam,
+  parseServerUrlCandidatesParam,
+  persistServerUrlEntries,
+  pickServerUrlCandidate,
+  type ServerUrlEntry,
+} from "../utils/serverUrlStore";
 import { isDebugPanelOpen } from "./debug";
+
+/** Copy URL が接続先の候補一覧を載せるクエリパラメータの名前 */
+const URL_CANDIDATES_QUERY_KEY = "urlCandidates";
 
 /** namespace の初期値に使う文字 (a-zA-Z0-9) */
 const NAMESPACE_ALPHABET = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
@@ -47,17 +60,68 @@ function randomNamespaceSuffix(): string {
   return suffix;
 }
 
-// 接続設定。MOQT URI の初期値は空にする (画面には参考値を placeholder で出す)
+// 接続設定。共有リンクの接続先 (url) を保持する。候補を使わない page での接続先であり、
+// 候補だけの page では空のまま。画面には候補の表示を出すため、この値は直接入力しない
 export const url = signal("");
-// Save を押した MOQT URI。Forget するまで OPFS に残す。null は覚えていない
-export const savedServerUrl = signal<string | null>(null);
+/**
+ * 接続先の候補一覧
+ *
+ * モーダルで登録した MOQT URI (fragment を含む接続 URL) を登録順に持つ。有効 (enabled)
+ * な候補が 1 つ以上あるとき、接続のたびにその中から 1 つを選んで使い、MOQT URI 欄は
+ * 使わない。モーダルでの変更はその場で接続設定と OPFS に反映する。
+ */
+export const serverUrlCandidates = signal<readonly ServerUrlEntry[]>([]);
+/** 接続に使う候補 (enabled なもの) の MOQT URI を登録順に持つ */
+export const enabledServerUrlCandidateUrls = computed(() =>
+  enabledServerUrlUrls(serverUrlCandidates.value),
+);
+/**
+ * 有効な候補があるかどうか
+ *
+ * 候補はあるが全部無効のときの接続前のエラー (connectTargetProblem) の判定に使う。
+ * 共有リンクの接続先を開いている page では、この値が true でも候補は使わない。
+ */
+export const hasEnabledServerUrlCandidates = computed(
+  () => enabledServerUrlCandidateUrls.value.length > 0,
+);
+/**
+ * 共有リンクの接続先 (url) が指定されていて、この page では候補を使わないかどうか
+ *
+ * url クエリだけを載せた共有リンクでは、リンクの接続先を使う。OPFS の候補一覧は
+ * 消さずに残すが (モーダルで一覧を編集できる)、この page の接続には
+ * 使わない。モーダルで候補を編集すると解除する。
+ */
+export const serverUrlCandidatesSuspended = signal(false);
+/**
+ * MOQT URI 欄と折りたたみ時の要約に出す表示
+ *
+ * 有効な候補が 1 件ならその URI、複数なら候補から選ぶことを示す。候補が無く、共有リンクの
+ * 接続先を開いている page では url の値。どちらも無ければ空 (欄は placeholder を出す)。
+ */
+export const moqtUriDisplayValue = computed(() => {
+  if (serverUrlCandidatesSuspended.value) {
+    return url.value;
+  }
+  const enabledUrls = enabledServerUrlCandidateUrls.value;
+  if (enabledUrls.length === 1) {
+    return enabledUrls[0] ?? "";
+  }
+  if (enabledUrls.length > 1) {
+    return `Random from ${String(enabledUrls.length)} candidates`;
+  }
+  return serverUrlCandidates.value.length > 0 ? "No candidate enabled" : "";
+});
+/**
+ * 候補一覧を OPFS に保存できなかったかどうか
+ *
+ * 保存できなくても画面の候補は使えるが、再読み込みすると保存前の一覧に戻るため、
+ * 候補を編集しているモーダルに理由を出す。
+ */
+export const serverUrlCandidatesSaveError = signal(false);
 // MOQT URI の Fragment Identifier (draft-ietf-moq-transport-22 §6.1.1)
-// MOQT URI 欄に `#` 以降があれば、その値を映す (先頭の `#` は付けない)。
-// 画面では読み取り専用で、変更するときは MOQT URI 欄を編集する。
+// 共有リンクの url に `#` 以降があれば、その値を映す (先頭の `#` は付けない)。画面では
+// 読み取り専用。登録した候補の fragment は接続ごとに候補から読むため、この欄には映さない。
 export const fragment = signal("");
-// MOQT URI 欄の fragment を URI Fragment 欄へ映しているかどうか
-// true の間は MOQT URI から fragment が消えたら連動して消す
-const fragmentFromRelayUri = signal(false);
 /**
  * Namespace の初期値
  *
@@ -65,13 +129,15 @@ const fragmentFromRelayUri = signal(false);
  * 文字列 (`-` 区切り、literal で書けない byte は `.HH`。§8.8 は draft のため改版で
  * 規則と節番号が変わる可能性がある) で持つ。複数の devtools が同じ relay に繋がっても
  * namespace が衝突しないよう、ページごとにランダムな接尾辞を付ける。共有するときは
- * Copy URL で持ち出す (Save が覚えるのは MOQT URI と fragment だけ)
+ * Copy URL で持ち出す
  */
-export const namespace = signal(`moqt-devtools-${randomNamespaceSuffix()}`);
+const INITIAL_NAMESPACE = `moqt-devtools-${randomNamespaceSuffix()}`;
+export const namespace = signal(INITIAL_NAMESPACE);
 /**
  * msf fragment が指定する Track Namespace のフィールド列
  *
- * MOQT URI / URI Fragment の入力の中の msf fragment から導出する (refreshMsfFragmentSettings)。
+ * 共有リンクの MOQT URI (url / fragment) の中の msf fragment から導出する
+ * (refreshMsfFragmentSettings)。
  * null は msf fragment が無い状態を表す。値がある間は Namespace の欄を編集できず、接続には
  * このフィールド列をそのまま使う (msf fragment の namespace をユーザーの編集で変えて、
  * 認可された namespace から外れないようにする)。各フィールドは §8.7 が 1 バイト以上を
@@ -488,16 +554,16 @@ function applyTrackNamesFromC4m(): void {
 }
 
 /**
- * MOQT URI / URI Fragment の入力から msf fragment の namespace を取り込む
+ * 共有リンクの MOQT URI から msf fragment の namespace を取り込む
  *
  * draft-ietf-moq-msf-01 §11.1.2: msf fragment の track-identifier の `--` より左が
  * Track Namespace のフィールド列 (`-` 区切り) である。msf fragment がある間は namespace を
  * その値に固定する (msfNamespaceFields)。msf fragment が無い入力と解析できない入力では
- * 固定を解除する (入力途中の値で固定が残らないようにする)。
+ * 固定を解除する (解析できない値で固定が残らないようにする)。
  *
- * URI Fragment 欄に値があればそれを使い、無ければ MOQT URI の fragment を使う
- * (MOQT URI の fragment は URI Fragment 欄へ映しているため、通常はどちらも同じ値になる。
- * MOQT URI に fragment が無いときの手入力が Fragment 欄にだけある状態を拾う)。
+ * URI Fragment 欄に値があればそれを使い、無ければ url の fragment を使う
+ * (共有リンクの url の fragment は URI Fragment 欄へ映しているため、通常はどちらも
+ * 同じ値になる)。
  */
 export function refreshMsfFragmentSettings(): void {
   const fragmentValue = fragment.value.trim();
@@ -655,6 +721,139 @@ export function buildConnectUrl(): string {
   return `${withoutFragment}#${fragmentValue}`;
 }
 
+/** 0 以上 2^32 未満のランダムな整数 (接続のたびに候補を選ぶ) */
+function randomUint32(): number {
+  const randomValues = new Uint32Array(1);
+  crypto.getRandomValues(randomValues);
+  return randomValues[0] ?? 0;
+}
+
+/** 接続に使う接続先 (この接続だけの値であり、接続設定の signal とは別) */
+export interface ConnectTarget {
+  /** 接続に使う MOQT URI (fragment を含む) */
+  readonly connectUrl: string;
+  /** 接続先の候補から選んだ MOQT URI。候補を使わないときは null */
+  readonly selectedServerUrl: string | null;
+  /** 選んだ候補の fragment。候補を使わないとき、fragment が無いときは null */
+  readonly candidateFragment: MoqtFragment | null;
+}
+
+/**
+ * 選んだ候補の fragment を取り出す
+ *
+ * 候補は登録時と保存の読み込み時に検証しているため、ここで読めない値は来ない。それでも
+ * 例外で接続を止めないよう、読めない値は fragment 無しとして扱う。
+ */
+function candidateFragmentOf(serverUrl: string): MoqtFragment | null {
+  try {
+    return normalizeMoqtUri(serverUrl).fragment;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 接続に使う MOQT URI を決める
+ *
+ * 有効な候補があり、共有リンクの接続先で候補の使用を止めていなければ、その中から 1 つを
+ * ランダムに選ぶ。候補が無いときと、共有リンクの接続先を開いているときは url の値
+ * (共有リンクの接続先) を使う。どちらも無ければ空を返し、呼び出し側が接続の前に拒否する。
+ *
+ * 選んだ候補は戻り値として返すだけで、接続設定の signal (MOQT URI 欄 / URI Fragment /
+ * Namespace / Authorization Token) は変えない。候補の fragment は接続ごとに
+ * `resolveConnectNamespace` と `resolveConnectAuthorizationToken` が読む。こうすることで、
+ * Publisher と各 Subscriber がそれぞれ選んだ接続先が、ほかの接続の設定表示に影響しない。
+ *
+ * 接続の直前に同期で呼ぶ。複数の購読を同時に始めても、それぞれが呼んだ時点の値で
+ * 接続 URL と接続オプションを組み立てられる (呼び出し側がすぐに値を控える)。
+ */
+export function resolveConnectTarget(): ConnectTarget {
+  if (serverUrlCandidatesSuspended.value) {
+    return { connectUrl: buildConnectUrl(), selectedServerUrl: null, candidateFragment: null };
+  }
+  const picked = pickServerUrlCandidate(enabledServerUrlCandidateUrls.value, randomUint32());
+  if (picked === null) {
+    return { connectUrl: buildConnectUrl(), selectedServerUrl: null, candidateFragment: null };
+  }
+  return {
+    connectUrl: picked,
+    selectedServerUrl: picked,
+    candidateFragment: candidateFragmentOf(picked),
+  };
+}
+
+/**
+ * 接続に使う Track Namespace を決める
+ *
+ * 候補の msf fragment が namespace を指定していればそのフィールド列、指定していなければ
+ * 接続設定の Namespace 欄の値を使う。どちらも送信できない値なら、接続の前に理由を投げる
+ * (送信時の検証はライブラリの `validateTrackNamespaceForSend` に任せる)。
+ *
+ * @throws Error Track Namespace が §8.8 の namespace-name 文字列として読めないとき /
+ *   送信できない値 (§8.7 の構造の制約、§2.4.3 / §6.5 の予約 namespace) のとき
+ */
+export function resolveConnectNamespace(target: ConnectTarget): string[] {
+  const parsed = parseMsfFragmentFromInput(target.connectUrl);
+  if (target.selectedServerUrl === null || parsed === undefined) {
+    return requireConnectNamespace();
+  }
+  validateTrackNamespaceForSend(parsed.trackNamespace);
+  return parsed.trackNamespace;
+}
+
+/**
+ * 接続に使う Authorization Token を決める
+ *
+ * 候補の msf fragment に c4m があればそのトークン (connect() が接続 URL から読むものと
+ * 同じ)、無ければ接続設定の Authorization Token の欄の値を使う。接続設定の signal は
+ * 変えない。
+ */
+export function resolveConnectAuthorizationToken(
+  target: ConnectTarget,
+): AuthorizationToken | undefined {
+  const fromCandidate = resolveMsfAuthorizationToken(target.candidateFragment);
+  if (fromCandidate !== undefined) {
+    return fromCandidate;
+  }
+  return buildAuthorizationToken();
+}
+
+/**
+ * 候補一覧を反映する (モーダルは開いたまま、変更のたびにこれを呼ぶ)
+ *
+ * 候補一覧を signal に写して OPFS に保存する。共有リンクの接続先で候補の使用を止めて
+ * いた page では、利用者が候補を編集した時点で解除する (候補を使う意思表示として扱う)。
+ * MOQT URI 欄は候補の表示欄であり、url は共有リンクの接続先を入れておく値なので
+ * ここでは変えない。保存に失敗しても画面の候補はそのまま使えるが、呼び出し側が
+ * モーダルに理由を出せるよう、保存できたかどうかを返す。
+ */
+export function setServerUrlCandidates(entries: readonly ServerUrlEntry[]): Promise<boolean> {
+  const next = entries.map((entry) => ({ url: entry.url, enabled: entry.enabled }));
+  serverUrlCandidates.value = next;
+  serverUrlCandidatesSuspended.value = false;
+  return persistServerUrlEntries(next).then((saved) => {
+    serverUrlCandidatesSaveError.value = !saved;
+    return saved;
+  });
+}
+
+/**
+ * 接続先が決まらない理由を返す (決まっていれば null)
+ *
+ * MOQT URI 欄は候補の表示欄で手入力は無いため、接続先は有効な候補か共有リンクの url に
+ * なる。空白だけの url も接続先が無いものとして扱い、connect() の URL 検証より前に、
+ * 何をすればよいか分かるメッセージを出す。
+ */
+export function connectTargetProblem(connectUrl: string): string | null {
+  if (connectUrl.trim() !== "") {
+    return null;
+  }
+  if (serverUrlCandidates.value.length > 0 && !hasEnabledServerUrlCandidates.value) {
+    return "no MOQT URI is enabled: enable a MOQT URI candidate";
+  }
+  return "no MOQT URI is set: register a MOQT URI candidate";
+}
+
 /**
  * MOQT URI の入力から fragment を取り出す (draft-ietf-moq-transport-22 §6.1.1)
  *
@@ -672,31 +871,6 @@ function extractRelayUriFragment(input: string): string | null {
 }
 
 /**
- * MOQT URI 欄の入力を反映する
- *
- * MOQT URI は fragment を含めたまま保持する (貼り付けた URL から fragment が消えないように
- * する)。URI Fragment 欄には MOQT URI の fragment を映し、あわせて取り込んだ c4m を
- * Authorization Token へ反映し、msf fragment の namespace を固定する。
- *
- * MOQT URI から fragment が消えたときは、URL から映していた fragment も消す
- * (msf fragment を消して namespace の固定を解除できるようにする)。手入力の fragment
- * (MOQT URI に fragment が無いときに URI Fragment 欄へ入れた値) は消さない。
- */
-export function applyRelayUriInput(input: string): void {
-  url.value = input;
-  const fragmentValue = extractRelayUriFragment(input);
-  if (fragmentValue !== null) {
-    fragment.value = fragmentValue;
-    fragmentFromRelayUri.value = true;
-  } else if (fragmentFromRelayUri.value) {
-    fragment.value = "";
-    fragmentFromRelayUri.value = false;
-  }
-  applyC4mFromUrl(input);
-  refreshMsfFragmentSettings();
-}
-
-/**
  * URL クエリの url / fragment を url / fragment の signal へ反映する
  *
  * c4m の取り込みは Authorization Token のクエリパラメータより後で行うため、ここでは
@@ -708,26 +882,27 @@ function splitRelayUriParams(urlParam: string | null, fragmentParam: string | nu
     url.value = urlParam;
   }
 
-  // MOQT URI の fragment を URI Fragment 欄へ映す。クエリに url が無いときは、
-  // 入力欄の値 (Save で覚えていた MOQT URI や URL 全体) も同じ規則で映す
+  // MOQT URI の fragment を URI Fragment 欄へ映す。url クエリがあるときだけ url の signal
+  // が変わるため、それに合わせて映す
   const fragmentValue = extractRelayUriFragment(url.value);
   if (fragmentValue !== null) {
     fragment.value = fragmentValue;
-    fragmentFromRelayUri.value = true;
   }
 
   if (fragmentParam) {
     // クエリの fragment は MOQT URI の fragment より優先する (共有リンクの値)
     fragment.value = fragmentParam;
-    fragmentFromRelayUri.value = false;
   }
 }
 
 /**
  * `connect()` に渡すオプション群を現在の設定から構築する。
- * certificateHash と authorizationToken は未設定なら省略する。
+ *
+ * Authorization Token は接続先ごとに決まる (候補の c4m が優先) ため、呼び出し側が
+ * `resolveConnectAuthorizationToken` で決めた値を渡す。certificateHash と
+ * authorizationToken は未設定なら省略する。
  */
-export function buildConnectOptions(): {
+export function buildConnectOptions(authorizationToken: AuthorizationToken | undefined): {
   serverCertificateHashes?: CertificateHash[];
   authorizationToken?: AuthorizationToken;
 } {
@@ -743,9 +918,8 @@ export function buildConnectOptions(): {
       },
     ];
   }
-  const authToken = buildAuthorizationToken();
-  if (authToken) {
-    connectOptions.authorizationToken = authToken;
+  if (authorizationToken) {
+    connectOptions.authorizationToken = authorizationToken;
   }
   return connectOptions;
 }
@@ -760,6 +934,17 @@ function buildQueryParams(targetMode: DevtoolsMode): URLSearchParams {
   const params = new URLSearchParams();
 
   params.set("url", url.value);
+
+  // 接続先の候補 (有効なもの) は、共有リンクを開いた相手にも同じ選択肢を渡すため載せる。
+  // url は共有リンクの接続先であり、候補を使う page では空。候補がある間の接続先は
+  // 接続のたびに候補から選ぶ。共有リンクの接続先を開いている page は候補を使っていないため
+  // 載せない (相手の page でも同じく url の接続先を使わせる)
+  const urlCandidatesParam = serverUrlCandidatesSuspended.value
+    ? null
+    : formatServerUrlCandidatesParam(serverUrlCandidates.value);
+  if (urlCandidatesParam !== null) {
+    params.set(URL_CANDIDATES_QUERY_KEY, urlCandidatesParam);
+  }
 
   // both は既定のモードのため載せない。Copy URL で publisher / subscriber の mode を保ち、
   // 副題のリンクでは今の設定のまま対象のモードへ差し替える
@@ -1226,6 +1411,26 @@ function applyOptionNumber(
 }
 
 /**
+ * URL クエリの候補一覧を接続先の候補へ反映する
+ *
+ * urlCandidates が無い、または壊れている共有リンクは、url の接続先を使う。OPFS から
+ * 読んだ候補一覧は消さずに残し (モーダルで一覧を編集できる)、この page
+ * では使わない (serverUrlCandidatesSuspended)。urlCandidates が正しく読めたときだけ、
+ * 共有リンクの候補へ差し替える。
+ */
+function applyServerUrlCandidatesFromUrl(params: URLSearchParams, hasSharedUrl: boolean): void {
+  const urlCandidatesParam = params.get(URL_CANDIDATES_QUERY_KEY);
+  const sharedCandidates =
+    urlCandidatesParam === null ? null : parseServerUrlCandidatesParam(urlCandidatesParam);
+  if (sharedCandidates !== null) {
+    serverUrlCandidates.value = sharedCandidates;
+    serverUrlCandidatesSuspended.value = false;
+    return;
+  }
+  serverUrlCandidatesSuspended.value = hasSharedUrl;
+}
+
+/**
  * URL のクエリパラメータから設定を初期化する
  *
  * c4m の取り込みは Authorization Token のクエリパラメータより後に適用する。
@@ -1233,8 +1438,8 @@ function applyOptionNumber(
  * c4m を優先し、クエリの Token Type / Token Value / Token Alias Type を置き換える。
  * fragment に有効な c4m がある場合は url の c4m より優先し、fragment の c4m が不正な
  * 場合と c4m を持たない入力では何も変更しない (url の c4m が残る)。
- * url に fragment が含まれる場合は、MOQT URI 欄はそのままに fragment を URI Fragment 欄へ
- * 映して復元する (Copy URL も同じ 2 つの値として書き出せる)。
+ * url に fragment が含まれる場合は、url はそのままに fragment を URI Fragment 欄へ映して
+ * 復元する (Copy URL も同じ 2 つの値として書き出せる)。
  *
  * @param search 検索文字列 (`window.location.search`)
  */
@@ -1256,7 +1461,12 @@ export function initFromUrl(search: string): void {
   // (分割だけをここで行い、c4m の取り込みは本文の最後で行う)
   const urlParam = params.get("url");
   const fragmentParam = params.get("fragment");
+  // 共有リンクが接続先を指定しているか (空文字の url は指定なしとして扱う)
+  const hasSharedUrl = urlParam !== null && urlParam.trim() !== "";
   splitRelayUriParams(urlParam, fragmentParam);
+
+  // 共有リンクの候補一覧を反映する (urlCandidates の有無で OPFS の候補を使うか外すかが変わる)
+  applyServerUrlCandidatesFromUrl(params, hasSharedUrl);
 
   // namespace は空文字列 (0 フィールド) も指定として反映する (buildQueryParams が常に
   // 書き出すため、値の有無ではなく key の有無で判定する)
@@ -1406,11 +1616,12 @@ export function initFromUrl(search: string): void {
   // (クエリの Token Type / Token Value / Token Alias Type を置き換える)。
   // url → fragment の順に適用し、fragment の c4m を最優先にする。
   // c4m が無い入力では何も変更しない (applyC4mFromUrl が false を返す)。
-  // MOQT URI は fragment を含んだまま復元するため、fragment 欄にだけある手入力の c4m も見る
+  // MOQT URI は fragment を含んだまま復元するため、fragment パラメータの c4m も見る
   if (urlParam) {
     applyC4mFromUrl(urlParam);
   } else {
-    // クエリに url が無いときは、入力欄の値 (Save で覚えていた MOQT URI) も見る。
+    // クエリに url が無いときは、url の signal の値 (前回の Copy URL や共有リンクで
+    // 復元した MOQT URI) も見る。
     // その URL に msf fragment と c4m があれば namespace の固定 (initFromUrl の
     // refreshMsfFragmentSettings) と Authorization Token の取り込みをそろえる
     applyC4mFromUrl(url.value);

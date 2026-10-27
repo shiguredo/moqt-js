@@ -6,6 +6,7 @@ import { EMPTY_PUBLISH_TIMING } from "../utils/publishTimingStats";
 import { EMPTY_HOST_DELAY } from "../utils/hostDelayTracker.ts";
 import { buildPublisherStats, buildSubscriberStats } from "./statsSnapshot";
 import * as pub from "./publisher";
+import * as settings from "./connectionSettings";
 
 test("buildSubscriberStats: Audio Level の 0 と false を保持する", () => {
   // 公開する統計は「値が無い」を null で表すが、level 0 (最大音量) と
@@ -647,5 +648,31 @@ test("buildPublisherStats: 符号化と送信の累積、状態、音声のメ�
     pub.audioMeterPeakDbfsRight.value = null;
     pub.audioMeterRmsDbfsRight.value = null;
     pub.audioMeterLevel.value = null;
+  }
+});
+
+// 接続先の候補から選んだときはその URI、候補を使わないときは URI 欄の値を出す。
+// Copy for LLM とテスト用 API で、どの relay へ繋いだかを確かめられるようにする
+test("buildSubscriberStats / buildPublisherStats: 接続先の候補があればその URI、無ければ URI 欄の値を出す", () => {
+  const urlBefore = settings.url.value;
+  const selectedBefore = pub.pubSelectedServerUrl.value;
+  try {
+    settings.url.value = "moqt://typed.example:4443/";
+    const instance = createSubscriberInstance("stats-server-url");
+
+    // 候補を使わない接続では URI 欄の値
+    instance.selectedServerUrl.value = null;
+    pub.pubSelectedServerUrl.value = null;
+    assert.equal(buildSubscriberStats(instance).serverUrl, "moqt://typed.example:4443/");
+    assert.equal(buildPublisherStats().serverUrl, "moqt://typed.example:4443/");
+
+    // 候補から選んだ接続では、その候補の URI
+    instance.selectedServerUrl.value = "moqt://candidate.example:4443/";
+    pub.pubSelectedServerUrl.value = "moqt://candidate.example:4443/";
+    assert.equal(buildSubscriberStats(instance).serverUrl, "moqt://candidate.example:4443/");
+    assert.equal(buildPublisherStats().serverUrl, "moqt://candidate.example:4443/");
+  } finally {
+    settings.url.value = urlBefore;
+    pub.pubSelectedServerUrl.value = selectedBefore;
   }
 });

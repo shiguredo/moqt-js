@@ -8,9 +8,9 @@ import {
   buildPublisherCatalogOptionsFromSettings,
   buildPublisherTrackDeclarations,
 } from "../hooks/usePublisher";
-import { persistServerUrl, relayUriMemoryButtons } from "../utils/serverUrlStore";
 import { isConnectionSettingsOpen, toggleConnectionSettings } from "../signals/layout";
 import { TrackDeclaration } from "./TrackDeclaration";
+import { ServerUrlCandidatesModal } from "./ServerUrlCandidatesModal";
 import {
   resolveAudioAdvertisement,
   resolveDeclarationAudioFormat,
@@ -33,6 +33,7 @@ const showMoqtHelp = signal(false);
 const showMsfHelp = signal(false);
 const showLocHelp = signal(false);
 const showC4mHelp = signal(false);
+const showServerUrlCandidates = signal(false);
 
 function MoqtHelpModal() {
   if (!showMoqtHelp.value) return null;
@@ -464,7 +465,7 @@ interface ConnectionSummaryItem {
  */
 function buildConnectionSummary(currentMode: DevtoolsMode): ConnectionSummaryItem[] {
   const summary: ConnectionSummaryItem[] = [
-    { label: "MOQT URI", value: settings.url.value || "-" },
+    { label: "MOQT URI", value: settings.moqtUriDisplayValue.value || "-" },
     { label: "Track Namespace", value: settings.namespace.value || "-" },
   ];
   if (currentMode === "subscriber") {
@@ -616,30 +617,20 @@ export function ConnectionSettings() {
     ...(audioAdvertisement.advertised ? [settings.audioTrackName.value] : []),
     ...(videoAdvertisement.advertised ? [settings.videoTrackName.value] : []),
   ]);
-  // Save / Forget は URL と fragment を合わせた接続 URL で扱う。画面では fragment を
-  // 別の欄に分けて表示するが、覚える値は接続に使う 1 つの URL にする
-  const relayUriMemory = relayUriMemoryButtons(
-    settings.savedServerUrl.value,
-    settings.buildConnectUrl(),
-  );
-  const saveRelayUri = (): void => {
-    if (!relayUriMemory.saveEnabled) {
-      return;
-    }
-    const next = settings.buildConnectUrl().trim();
-    settings.savedServerUrl.value = next;
-    void persistServerUrl(next, true);
-  };
-  const forgetRelayUri = (): void => {
-    if (!relayUriMemory.forgetEnabled) {
-      return;
-    }
-    settings.savedServerUrl.value = null;
-    void persistServerUrl(settings.buildConnectUrl(), false);
-  };
+  // 接続先の候補。MOQT URI 欄は登録済みの候補を表示し、押すと管理モーダルを開く
+  const candidateCount = settings.serverUrlCandidates.value.length;
+  // 共有リンクの接続先を開いた page では、保存済みの候補は残すが接続には使わない
+  const candidatesSuspended = settings.serverUrlCandidatesSuspended.value;
 
   return (
     <div class="bg-white rounded-xl shadow-sm p-5 mb-6">
+      {showServerUrlCandidates.value && (
+        <ServerUrlCandidatesModal
+          onClose={() => {
+            showServerUrlCandidates.value = false;
+          }}
+        />
+      )}
       <MoqtHelpModal />
       <LocHelpModal />
       <MsfHelpModal />
@@ -773,41 +764,43 @@ export function ConnectionSettings() {
           <div class="lg:col-span-2">
             <label for="url" class="block text-sm font-medium text-slate-600 mb-1">
               MOQT URI
+              {/* 共有リンクの接続先を開いている page では候補を使わない。行の高さが変わらない
+                  よう、注記は欄の下ではなく見出しに短く添える (詳しい説明はモーダルに出す) */}
+              {candidatesSuspended && candidateCount > 0 && (
+                <span
+                  class="ml-1 text-xs font-normal text-slate-400"
+                  title="This page uses the shared MOQT URI. Editing the candidates enables them here."
+                  data-testid="moqt-uri-candidates-suspended-note"
+                >
+                  (shared link)
+                </span>
+              )}
             </label>
+            {/* MOQT URI 欄は接続先の表示欄。押すと候補の管理モーダルを開き、
+                登録した候補から接続のたびに 1 つを選ぶ (1 件だけのときはその URI を使う)。
+                接続先の入力はモーダル内で行う */}
             <input
               type="text"
               id="url"
               data-testid="moqt-uri"
-              value={settings.url.value}
-              onInput={(e) => {
-                // MOQT URI の fragment を URI Fragment 欄へ映す。
-                // c4m の取り込みと msf fragment の namespace の固定もここで行う
-                settings.applyRelayUriInput(e.currentTarget.value);
-              }}
-              placeholder="moqt://moq.example.com/"
+              value={settings.moqtUriDisplayValue.value}
+              readOnly
               disabled={settings.settingsDisabled.value}
-              class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors disabled:bg-slate-100 disabled:cursor-not-allowed"
+              aria-haspopup="dialog"
+              aria-label="MOQT URI candidates"
+              onClick={() => {
+                showServerUrlCandidates.value = true;
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  showServerUrlCandidates.value = true;
+                }
+              }}
+              placeholder="No MOQT URI candidate registered"
+              title="Click to manage the MOQT URI candidates"
+              class="w-full px-3 py-2 border border-slate-300 rounded-lg cursor-pointer bg-slate-50 text-slate-700 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors disabled:bg-slate-100 disabled:text-slate-500 disabled:cursor-not-allowed"
             />
-            <div class="mt-1.5 flex items-center gap-1.5">
-              <button
-                type="button"
-                data-testid="moqt-uri-save"
-                disabled={settings.settingsDisabled.value || !relayUriMemory.saveEnabled}
-                onClick={saveRelayUri}
-                class="px-2 py-0.5 text-xs border border-blue-200 rounded bg-blue-50 text-blue-700 hover:bg-blue-100 disabled:bg-slate-100 disabled:text-slate-400 disabled:border-slate-200 disabled:cursor-not-allowed"
-              >
-                Save
-              </button>
-              <button
-                type="button"
-                data-testid="moqt-uri-forget"
-                disabled={settings.settingsDisabled.value || !relayUriMemory.forgetEnabled}
-                onClick={forgetRelayUri}
-                class="px-2 py-0.5 text-xs border border-rose-200 rounded bg-rose-50 text-rose-700 hover:bg-rose-100 disabled:bg-slate-100 disabled:text-slate-400 disabled:border-slate-200 disabled:cursor-not-allowed"
-              >
-                Forget
-              </button>
-            </div>
           </div>
           <div class="lg:col-span-3">
             <label for="certificateHash" class="block text-sm font-medium text-slate-600 mb-1">
@@ -865,7 +858,7 @@ export function ConnectionSettings() {
               URI Fragment
               <span class="ml-1 text-xs text-slate-400">(from the MOQT URI)</span>
             </label>
-            {/* MOQT URI の fragment の表示専用。変えるときは MOQT URI を編集する */}
+            {/* MOQT URI の fragment の表示専用。値は共有リンクの MOQT URI から決まる */}
             <input
               type="text"
               id="fragment"

@@ -237,6 +237,20 @@ export function SubscriberPanel({
           {instance.statusMessage.value}
         </div>
 
+        {/* 接続先の候補から選んだ MOQT URI。購読ごとに選ぶ候補が異なり得るため、この購読が
+            どこの relay へ繋いだかをパネルだけで分かるようにする。未選択の間も行を描き、
+            値を「-」にする (購読の開始で行が現れると映像の位置が動く) */}
+        <div
+          class="mt-1.5 flex items-baseline gap-2 text-xs text-slate-500 min-w-0"
+          title={instance.selectedServerUrl.value ?? ""}
+          data-testid="subscriber-selected-candidate"
+        >
+          <span class="shrink-0">Candidate:</span>
+          <span class="font-mono text-slate-700 truncate min-w-0">
+            {instance.selectedServerUrl.value ?? "-"}
+          </span>
+        </div>
+
         {/* Subscribe Options。Publisher の paused 状態の行と同じ高さの枠で描き、
             映像の上端をそろえる。項目の見出しは、その操作がどのメッセージで効くのか
             (SUBSCRIBE か REQUEST_UPDATE か) を表す */}
