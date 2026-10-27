@@ -3,6 +3,7 @@
 - Created: 2026-10-14
 - Completed: {YYYY-MM-DD}
 - Branch: feature/fix-timeline-non-finite-number
+- Polished: 2026-10-27
 
 ## 目的
 
