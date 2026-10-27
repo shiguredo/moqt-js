@@ -213,6 +213,25 @@ export interface AudioPlayoutTimingSnapshot {
    */
   readonly stretchUnavailableFrames: number;
   /**
+   * 復号フレームのサンプルレートが AudioContext と違った回数 (累積)
+   *
+   * `AudioBufferSourceNode` はバッファのレートが AudioContext のレートと違うとき、
+   * バッファごとにリサンプルする。Chromium はリサンプルのときバッファ末尾を線形外挿する
+   * ため、20 ms のバッファが公称より 1 サンプル長く鳴り、次のフレームの先頭と
+   * 足し合わされて振幅 2 倍 (+6 dB) のスパイクが毎秒 50 回入る (実測。
+   * docs/AUDIO_GLITCH_CAUSES.md の A1)。`boundaryStepCount` は予約したサンプル列の
+   * 段差しか見ないため、この現象を数えない。
+   *
+   * 鳴らす前の 2 つのレートを比べた回数であり、重なりそのものを観測した数ではない
+   * (44.1 kHz の AudioContext と 48 kHz のバッファでは重なりが起きる)。
+   * 0 なら AudioContext と復号フレームのレートは一致している
+   */
+  readonly sampleRateMismatchFrames: number;
+  /** 直近の AudioContext のサンプルレート (Hz)。まだ記録していなければ null */
+  readonly contextSampleRate: number | null;
+  /** 直近の復号フレームのサンプルレート (Hz)。まだ記録していなければ null */
+  readonly decodedSampleRate: number | null;
+  /**
    * 穴として残した回数 (累積)
    *
    * 前の音の終わりと今回の音の開始の間の隙間から、実際に補間で埋めた長さを引いた残りを
@@ -304,6 +323,9 @@ export const EMPTY_AUDIO_PLAYOUT_TIMING: AudioPlayoutTimingSnapshot = {
   missedByReason: emptyMissTotals(),
   recentMisses: [],
   stretchUnavailableFrames: 0,
+  sampleRateMismatchFrames: 0,
+  contextSampleRate: null,
+  decodedSampleRate: null,
   gapCount: 0,
   gapMs: 0,
   gapMaxMs: 0,
@@ -374,6 +396,10 @@ export class AudioPlayoutTimingStats {
   // 直近の停止で行った drain の結果 (購読の開始 (reset) で消す)
   private lastDrain: MediaPlayoutDrainStats | null = null;
   private stretchUnavailableFrames = 0;
+  // AudioContext と復号フレームのサンプルレート (Hz)。違った回数を累積で数える
+  private sampleRateMismatchFrames = 0;
+  private contextSampleRate: number | null = null;
+  private decodedSampleRate: number | null = null;
   // 補間で埋まらなかった無音の穴 (回数・合計 ms・最大 ms) と、そのうち予約できなかった分
   private gapCount = 0;
   private gapMs = 0;
@@ -613,6 +639,9 @@ export class AudioPlayoutTimingStats {
       missedByReason,
       recentMisses: [...this.recentMisses],
       stretchUnavailableFrames: this.stretchUnavailableFrames,
+      sampleRateMismatchFrames: this.sampleRateMismatchFrames,
+      contextSampleRate: this.contextSampleRate,
+      decodedSampleRate: this.decodedSampleRate,
       gapCount: this.gapCount,
       gapMs: this.gapMs,
       gapMaxMs: this.gapMaxMs,
@@ -713,6 +742,32 @@ export class AudioPlayoutTimingStats {
     this.stretchUnavailableFrames++;
   }
 
+  /**
+   * AudioContext と復号フレームのサンプルレートを記録する
+   *
+   * 鳴らす音を `AudioBuffer` にする前に呼ぶ。2 つのレートが違うときだけ
+   * `sampleRateMismatchFrames` を 1 つ数える。直近の値は、レートが同じでも更新する。
+   * 計器の値として意味を持たない値 (非有限・0 以下) は記録しない。
+   *
+   * @param contextSampleRate - AudioContext のサンプルレート (Hz)
+   * @param decodedSampleRate - 復号フレーム (`AudioData`) のサンプルレート (Hz)
+   */
+  recordSampleRate(contextSampleRate: number, decodedSampleRate: number): void {
+    if (
+      !Number.isFinite(contextSampleRate) ||
+      contextSampleRate <= 0 ||
+      !Number.isFinite(decodedSampleRate) ||
+      decodedSampleRate <= 0
+    ) {
+      return;
+    }
+    this.contextSampleRate = contextSampleRate;
+    this.decodedSampleRate = decodedSampleRate;
+    if (contextSampleRate !== decodedSampleRate) {
+      this.sampleRateMismatchFrames++;
+    }
+  }
+
   /** 記録をすべて捨てて初期状態に戻す */
   reset(): void {
     this.slacks.clear();
@@ -730,6 +785,9 @@ export class AudioPlayoutTimingStats {
     this.recentMisses = [];
     this.lastDrain = null;
     this.stretchUnavailableFrames = 0;
+    this.sampleRateMismatchFrames = 0;
+    this.contextSampleRate = null;
+    this.decodedSampleRate = null;
     this.gapCount = 0;
     this.gapMs = 0;
     this.gapMaxMs = 0;

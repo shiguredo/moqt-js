@@ -35,6 +35,13 @@ import type { SubscriberAudioStop } from "./subscriberAudioStop.ts";
 interface AudioPlayback {
   context: AudioContext;
   destination: MediaStreamAudioDestinationNode;
+  /**
+   * `statechange` のリスナー
+   *
+   * Context を閉じるすべての経路で外す。外さないと、閉じた Context が "closed" になった
+   * ときの通知が、後から作った Context の状態を上書きする。
+   */
+  stateChangeListener: () => void;
 }
 
 /** 音声の再生の開始の試行 (開始のたびに作り直すトークン) */
@@ -66,6 +73,29 @@ interface AudioPlaybackControllerDeps {
   readonly playAudioEnabled: Signal<boolean>;
   /** `setSinkId` に渡す、選択中の音声出力デバイスの ID (空文字は既定) */
   getSelectedAudioOutputDeviceId(): string;
+  /**
+   * AudioContext を作るときのサンプルレート (Hz)
+   *
+   * 復号フレームのレートに揃えた値である (`resolveAudioContextSampleRate`)。レートが
+   * 食い違うと、`AudioBufferSourceNode` がバッファごとにリサンプルし、20 ms の境界ごとに
+   * 1 サンプルの重なりが生まれる (docs/AUDIO_GLITCH_CAUSES.md の A1)
+   */
+  getAudioContextSampleRate(): number;
+  /**
+   * AudioContext の状態を通知する
+   *
+   * Context を作った直後の初期状態も同じコールバックで通知する。`suspended` の間は
+   * 予約した音が鳴らないため、状態と、その Context のサンプルレート (Hz) を signal へ
+   * 写して警告の判定に使う (docs/AUDIO_GLITCH_CAUSES.md の B4)。
+   */
+  onAudioContextStateChange(state: AudioContextState, contextSampleRate: number): void;
+  /**
+   * AudioContext を閉じ始めたときに呼ぶ (`statechange` のリスナーを外したあと)
+   *
+   * 閉じた Context の状態を画面に残さない。再生の AudioContext が無いことを null で
+   * 表すため、状態を消す。
+   */
+  onAudioContextClosed(): void;
   /**
    * 再生を始めた時点の累積の計器の基準を取り直し、signal へ写す
    *
@@ -107,7 +137,43 @@ export function createAudioPlaybackController(
   let audioPlaybackAttempt: AudioPlaybackStartAttempt | null = null;
 
   /**
+   * AudioContext の状態の通知を始める
+   *
+   * 生成直後の初期状態も通知する (トグルで作るため、作った時点では suspended のことが
+   * 多い)。以降の `statechange` も同じコールバックで通知する。
+   *
+   * @param context - 監視する AudioContext
+   * @returns `statechange` のリスナー (閉じる経路で外す)
+   */
+  function attachAudioContextStateListener(context: AudioContext): () => void {
+    const listener = (): void => {
+      deps.onAudioContextStateChange(context.state, context.sampleRate);
+    };
+    context.addEventListener("statechange", listener);
+    deps.onAudioContextStateChange(context.state, context.sampleRate);
+    return listener;
+  }
+
+  /**
+   * AudioContext の状態の監視をやめる
+   *
+   * Context を閉じる直前に呼ぶ。閉じると "closed" の `statechange` が届くが、それは
+   * 再生が終わった Context の状態であり、画面に残す値ではない。
+   *
+   * @param playback - 監視をやめる audio graph
+   */
+  function detachAudioContextStateListener(playback: AudioPlayback): void {
+    playback.context.removeEventListener("statechange", playback.stateChangeListener);
+    deps.onAudioContextClosed();
+  }
+
+  /**
    * 音声の再生の audio graph を作る
+   *
+   * AudioContext のサンプルレートは、復号フレームのレートに揃えた値で作る。既定レート
+   * (出力デバイスの preferred sample rate) が復号のレートと違うと、`AudioBufferSourceNode`
+   * がバッファごとにリサンプルし、20 ms の境界ごとに 1 サンプルの重なり (毎秒 50 回の
+   * +6 dB スパイク) が生まれる (docs/AUDIO_GLITCH_CAUSES.md の A1)。
    *
    * 出力先の生成に失敗したときは、作りかけの `AudioContext` を閉じてから throw する。
    * この時点ではまだ再生の対象に載せていないため停止の経路からは閉じられず、閉じないままに
@@ -117,9 +183,18 @@ export function createAudioPlaybackController(
    * @throws createMediaStreamDestination が失敗した場合 (閉じたあとに rethrow する)
    */
   function createAudioPlayback(): AudioPlayback {
-    const context = new AudioContext();
+    let context: AudioContext;
     try {
-      return { context, destination: context.createMediaStreamDestination() };
+      context = new AudioContext({ sampleRate: deps.getAudioContextSampleRate() });
+    } catch {
+      // 指定したレートの AudioContext を作れない環境 (デバイスがレートに対応しない、
+      // ブラウザの制限など) では、既定レートで作る。レートが復号フレームと揃わなくても
+      // 音は鳴る (音質上の問題は残るが、再生できないよりよい)
+      context = new AudioContext();
+    }
+    let destination: MediaStreamAudioDestinationNode;
+    try {
+      destination = context.createMediaStreamDestination();
     } catch (error) {
       // 作りかけの AudioContext を残さない。close の失敗は元の失敗を隠さない
       void context.close().catch(() => {
@@ -127,6 +202,9 @@ export function createAudioPlaybackController(
       });
       throw error;
     }
+    // 出力先まで作れたら、状態の監視を始める。失敗した Context は通知しない
+    const stateChangeListener = attachAudioContextStateListener(context);
+    return { context, destination, stateChangeListener };
   }
 
   /**
@@ -140,9 +218,12 @@ export function createAudioPlaybackController(
       audioPlayback = null;
     }
     if (playback.context.state === "closed") {
-      // 停止側が先に閉じている。閉じる経路を 1 つに保つ (失敗の握り潰しに頼らない)
+      // 停止側が先に閉じている。閉じる経路を 1 つに保つ (失敗の握り潰しに頼らない)。
+      // 状態の監視も停止側が先に外している
       return;
     }
+    // 状態の監視を先に外す。閉じた Context の "closed" を画面へ残さない
+    detachAudioContextStateListener(playback);
     await playback.context.close().catch(() => {
       // 既に閉じている場合は無視する
     });
@@ -250,6 +331,9 @@ export function createAudioPlaybackController(
           audioElement.srcObject = null;
         }
         if (playback !== null) {
+          // 状態の監視を先に外す。閉じると "closed" の statechange が届くが、それは
+          // 再生が終わった Context の状態であり、画面に残す値ではない
+          detachAudioContextStateListener(playback);
           await playback.context.close().catch(() => {
             // 既に閉じている場合は無視する
           });
@@ -293,6 +377,8 @@ export function createAudioPlaybackController(
       playout?.resetAudioTimeline();
       // 鳴らす先を外したので、予約の基準・時計の対応・追いつきの観測を取り直す
       playout?.resetAudioPlayback();
+      // 状態の監視を先に外す。閉じた Context の "closed" を画面へ残さない
+      detachAudioContextStateListener(playback);
       void playback.context.close().catch(() => {
         // 既に閉じている場合は無視する
       });

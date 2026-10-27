@@ -15,6 +15,8 @@ import {
   PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS,
 } from "../../../src/playout/timeline";
 import {
+  AUDIO_CONTEXT_NARROWBAND_SAMPLE_RATES,
+  AUDIO_CONTEXT_NOT_RUNNING_WARN_MS,
   CATCH_UP_STUCK_WARN_MS,
   CATCH_UP_WARN_STARTS,
   CATCH_UP_WARN_WINDOW_MS,
@@ -396,7 +398,17 @@ export const AUDIO_PLAYOUT_TIMING_HELP: SectionHelp = {
     {
       term: "stretchUnavailableFrames",
       description:
-        "Sounds played at a sample rate unsupported by time stretch and concealment, such as 96 kHz. The analysis supports 8, 16, 32 and 48 kHz filters plus conversion of the analysis signal for 44.1 kHz; the original audio keeps its sample rate. Unsupported audio is played without compression or concealment. 0 means the rate is supported, but processing still depends on waveform correlation.",
+        "Sounds played at a sample rate unsupported by time stretch and concealment, such as 24, 22.05, 88.2 or 96 kHz. The analysis supports 8, 16, 32 and 48 kHz filters plus conversion of the analysis signal for 44.1 kHz; the original audio keeps its sample rate. Unsupported audio is played without compression or concealment. 0 means the rate is supported, but processing still depends on waveform correlation.",
+    },
+    {
+      term: "sampleRateMismatchFrames",
+      description:
+        "Decoded frames whose sample rate differs from the AudioContext sample rate, cumulative. When the two differ, AudioBufferSourceNode resamples each buffer and the buffer boundary gets one extra sample, which adds a +6 dB spike 50 times a second (A1 in docs/AUDIO_GLITCH_CAUSES.md). 0 means the rates match; boundaryStepCount does not count this overlap.",
+    },
+    {
+      term: "contextSampleRate / decodedSampleRate",
+      description:
+        "Sample rate (Hz) of the latest AudioContext and of the latest decoded AudioData. - before the first sound is handled. The Opus decoder always returns 48 kHz regardless of the configured rate, so an Opus track with a Catalog samplerate of 44100 shows different values here.",
     },
     {
       term: "gapCount / gapMs / gapMaxMs",
@@ -449,6 +461,41 @@ export const AUDIO_PLAYOUT_TIMING_HELP: SectionHelp = {
   notes: [
     "The start is the time reserved on the AudioContext clock, so the output latency of the device is not included. Use the A/V Sync audioClockFallback to see whether the clock is mapped by getOutputTimestamp() or by currentTime. The A/V Sync skew does include the output latency while getOutputTimestamp() is available: measured on the real relay, the mapped time was the position the device was playing (the audio in flight was 30 ms against a reported outputLatency of 25 ms and a baseLatency of 5.3 ms).",
     "Only the subscriber's own pipeline is measured. A sound that never arrives or never gets decoded does not appear here (compare audio.objectsReceived / chunksDecoded with audio.playoutTiming.playedFrames).",
+  ],
+};
+
+/** subscriber の Audio Output (AudioContext と <audio> 要素) の診断 */
+export const AUDIO_OUTPUT_HELP: SectionHelp = {
+  summary:
+    "State of the AudioContext that plays the received audio and the events of the <audio> element the stream is routed through. The context state and its sample rate are the playback side; the element counters are below the playout pipeline that Audio Playback Timing measures. Read them when the playout instruments stay at 0 but the sound still breaks up.",
+  items: [
+    {
+      term: "contextState",
+      description:
+        "State of the AudioContext: suspended, running or closed. - while no AudioContext exists (before the first Play Audio and after it is stopped). Scheduled sounds do not play while the context is suspended, and the playback toggle does not resume it automatically, so a suspend caused by a Bluetooth connection change, an output device change or an interruption stays until playback is toggled again.",
+    },
+    {
+      term: "contextStateChanges",
+      description: `statechange events since the subscription started (cumulative). Above 0 means the context left or re-entered running while this page was playing, for example a Bluetooth connection change, an output device change or an interruption. The warning audioContextNotRunning appears when playback is enabled and the context stays out of running for ${AUDIO_CONTEXT_NOT_RUNNING_WARN_MS / 1_000} s.`,
+    },
+    {
+      term: "contextSampleRate",
+      description: `Sample rate (Hz) the AudioContext was created with. The browser picks it from the output device, not from the decoded audio; a Bluetooth headset in HFP mode can give ${AUDIO_CONTEXT_NARROWBAND_SAMPLE_RATES.join(" or ")} Hz even though the decoded audio is wideband. The warning audioContextNarrowband appears for those rates.`,
+    },
+    {
+      term: "elementWaitingCount / elementStalledCount",
+      description:
+        "waiting and stalled events of the <audio> element (cumulative, counted from the start of each playback). waiting fires when the element stops to buffer before playing, and stalled when the media data stops arriving. Both happen below the playout pipeline, so they separate an interruption caused by the element, its resampling, the output device or Bluetooth from one inside the playout.",
+    },
+    {
+      term: "elementErrorCount",
+      description:
+        "error events of the <audio> element (cumulative). Above 0 means the element could not play the stream, for example because the output device failed.",
+    },
+  ],
+  notes: [
+    "The AudioContext sample rate is fixed when the context is created. If it does not match the decoded frames, the warning audioSampleRateMismatch appears together with sampleRateMismatchFrames in Audio Playback Timing (A1 in docs/AUDIO_GLITCH_CAUSES.md).",
+    "The playout instruments do not include the output latency of the device or the rebuffering of the element. With the Audio Playback values at 0 and these values moving, the interruption is downstream of the playout (B4 and B7 in docs/AUDIO_GLITCH_CAUSES.md).",
   ],
 };
 

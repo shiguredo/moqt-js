@@ -10,6 +10,7 @@
  */
 
 import { test, assert, beforeEach } from "vite-plus/test";
+import { EMPTY_AUDIO_PLAYOUT_TIMING } from "moqt-js";
 import {
   AUDIO_PUBLISH_CATCH_UP_MIN_MS,
   AUDIO_PUBLISH_CATCH_UP_QUEUE_CONFIRM_FRAMES,
@@ -17,6 +18,7 @@ import {
 } from "../../../src/audioPublishCatchUp.ts";
 import { PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS } from "../../../src/playout/timeline.ts";
 import {
+  AUDIO_CONTEXT_NOT_RUNNING_WARN_MS,
   CATCH_UP_WARN_STARTS,
   CATCH_UP_WARN_WINDOW_MS,
   SYNC_PINNED_MIN_MS,
@@ -145,6 +147,60 @@ test("evaluatePreconditions: 受信側の警告を信号へ入れ、外れた時
     `[${id}] precondition restored: syncExtraDelayPinnedAtLimit`,
   ]);
   assert.equal(getLogBuffer()[1]?.level, "info");
+
+  removeSubscriber(id);
+});
+
+// 音声を鳴らす AudioContext の状態も、購読インスタンスの signal から読んで警告にする。
+// 再生が有効なまま running 以外が続いたときだけ出し、戻ったら消える
+test("evaluatePreconditions: 音声の再生の AudioContext の状態を警告に反映する", () => {
+  const id = addSubscriber();
+  const instance = getSubscriber(id)!;
+  instance.audioPlaybackEnabled.value = true;
+  instance.audioContextState.value = "suspended";
+  instance.audioContextSampleRate.value = 48_000;
+
+  evaluatePreconditions(0);
+  assert.deepEqual(instance.preconditionWarnings.value, []);
+
+  evaluatePreconditions(AUDIO_CONTEXT_NOT_RUNNING_WARN_MS);
+  assert.lengthOf(instance.preconditionWarnings.value, 1);
+  assert.equal(instance.preconditionWarnings.value[0]?.id, "audioContextNotRunning");
+  assert.deepEqual(logMessages(), [`[${id}] precondition broken: audioContextNotRunning`]);
+
+  // resume して running に戻ったら警告を消す
+  instance.audioContextState.value = "running";
+  evaluatePreconditions(AUDIO_CONTEXT_NOT_RUNNING_WARN_MS + 1_000);
+  assert.deepEqual(instance.preconditionWarnings.value, []);
+
+  removeSubscriber(id);
+});
+
+// 音声の再生の計器 (playoutTiming) と AudioContext のレートも警告の判定に渡す。
+// ここで渡し忘れると、実機で A1 のレート不一致と狭帯域の警告が出ない
+test("evaluatePreconditions: 音声の再生の計器のレートと AudioContext のレートを警告に反映する", () => {
+  const id = addSubscriber();
+  const instance = getSubscriber(id)!;
+  instance.audioContextState.value = "running";
+  instance.audioContextSampleRate.value = 16_000;
+  instance.audioPlayoutTiming.value = {
+    ...EMPTY_AUDIO_PLAYOUT_TIMING,
+    // 復号フレームは 48 kHz、AudioContext は 16 kHz。A1 と HFP の疑いの両方に当たる
+    sampleRateMismatchFrames: 2,
+    contextSampleRate: 16_000,
+    decodedSampleRate: 48_000,
+  };
+
+  evaluatePreconditions(0);
+  const ids = instance.preconditionWarnings.value.map((warning) => warning.id);
+  assert.include(ids, "audioSampleRateMismatch");
+  assert.include(ids, "audioContextNarrowband");
+  // 判定に使ったレートが値に入っている
+  const mismatch = instance.preconditionWarnings.value.find(
+    (warning) => warning.id === "audioSampleRateMismatch",
+  );
+  assert.include(mismatch?.values.join(", ") ?? "", "contextSampleRate=16000");
+  assert.include(mismatch?.values.join(", ") ?? "", "decodedSampleRate=48000");
 
   removeSubscriber(id);
 });

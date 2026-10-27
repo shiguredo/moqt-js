@@ -3,7 +3,9 @@
  *
  * 波形が周期的な音ではピッチ周期 1 つ分だけ長さが変わり、切れ目の前後がクロスフェードで
  * 繋がること、波形が繰り返していない音 (相関が足りない音) では操作しないこと、
- * 無音では操作することを固定する。補間は末尾の周期を端数まで求めて繰り返すため、4 kHz の
+ * 無音では操作することを固定する。ピッチ周期は 4 kHz の格子に乗る音では整数周期のまま
+ * 使い、格子に乗らない音ではピークの前後 1 格子の相関を放物線補間して端数まで求める
+ * (時間圧縮と補間で対称)。補間は末尾の周期を端数まで求めて繰り返すため、4 kHz の
  * 格子に乗らない周期でも穴の終わりで位相がずれない。末尾で位相が飛ぶ音や、継ぎ目の段差が
  * 大きい音 (どのチャンネルでも) では操作せず、周期の推定が確かでない音では生成した音の
  * 末尾を短くフェードする。実際の使い方 (遅れて届いた音を目標へ戻す) は audioPlayout.test.ts
@@ -52,35 +54,43 @@ function maxStep(samples: AudioSamples): number {
 }
 
 /** 周波数 `frequencyHz` の純音 (20 ms、48 kHz) */
-function frequencyFrame(frequencyHz: number, amplitude = 0.5): AudioSamples {
+function frequencyFrame(frequencyHz: number, amplitude = 0.5, phase = 0): AudioSamples {
   const samples = new Float32Array(FRAME_SAMPLES);
   for (let index = 0; index < FRAME_SAMPLES; index++) {
-    samples[index] = amplitude * Math.sin((2 * Math.PI * frequencyHz * index) / SAMPLE_RATE);
+    samples[index] =
+      amplitude * Math.sin((2 * Math.PI * frequencyHz * index) / SAMPLE_RATE + phase);
   }
   return samples;
 }
 
 /**
- * 基本周波数 `frequencyHz` の有声 (倍音を 1 / 次数で重ねた周期波) のフレーム
+ * サンプルレート `sampleRate`、長さ `length` サンプルの有声 (倍音を 1 / 次数で重ねた周期波)
  *
- * 実際の声に近づけるため、整数次の倍音を 4 kHz (音声の帯域) まで重ねる。振幅は 0.5 に揃える
+ * 実際の声に近づけるため、整数次の倍音を 4 kHz (音声の帯域) まで重ねる。振幅は 0.5 に揃える。
+ * 44.1 kHz では 20 ms のフレームが 882 サンプルになり、48 kHz の `FRAME_SAMPLES` と長さが
+ * 違うため、レートと長さを指定できるようにしている
  */
-function voicedFrame(frequencyHz: number): AudioSamples {
-  const samples = new Float32Array(FRAME_SAMPLES);
+function voicedSamples(frequencyHz: number, sampleRate: number, length: number): AudioSamples {
+  const samples = new Float32Array(length);
   const maxHarmonicHz = 4_000;
   let norm = 0;
   for (let harmonic = 1; harmonic * frequencyHz < maxHarmonicHz; harmonic++) {
     norm += 1 / harmonic;
   }
-  for (let index = 0; index < FRAME_SAMPLES; index++) {
+  for (let index = 0; index < length; index++) {
     let value = 0;
     for (let harmonic = 1; harmonic * frequencyHz < maxHarmonicHz; harmonic++) {
       value +=
-        (1 / harmonic) * Math.sin((2 * Math.PI * harmonic * frequencyHz * index) / SAMPLE_RATE);
+        (1 / harmonic) * Math.sin((2 * Math.PI * harmonic * frequencyHz * index) / sampleRate);
     }
     samples[index] = (0.5 * value) / norm;
   }
   return samples;
+}
+
+/** 基本周波数 `frequencyHz` の有声 (倍音を 1 / 次数で重ねた周期波) のフレーム (48 kHz) */
+function voicedFrame(frequencyHz: number): AudioSamples {
+  return voicedSamples(frequencyHz, SAMPLE_RATE, FRAME_SAMPLES);
 }
 
 /**
@@ -217,6 +227,142 @@ test("compressSamples: 16 kHz でもピッチ周期 1 つ分だけ短くなる",
   const result = compressSamples([samples], 16_000);
   assert.equal(result.lengthChangeSamples, -80);
   assert.equal(result.channels[0]?.length, 320 - 80);
+});
+
+/**
+ * 4 kHz の格子に乗る F0 では、ピッチの周期が元のサンプルレートで整数になる。このときは
+ * 端数補間を掛けず、従来どおり真の周期ちょうどで削る (格子に乗る周期を放物線の頂点へ
+ * ずらすと、有限窓の前後の相関の非対称で正しい整数周期の位相を壊すためである)。
+ *
+ * 実測 (48 kHz、20 ms のフレーム): 160 Hz は 300 サンプル (4 kHz のラグ 25)、200 Hz は
+ * 240 サンプル (ラグ 20)。純音の位相を 0 から 2π まで変えても削る長さは変わらない
+ */
+test("compressSamples: 格子に乗る F0 は真の周期ちょうどで削る", () => {
+  for (const [frequencyHz, period] of [
+    [160, 300],
+    [200, 240],
+  ] as const) {
+    const result = compressSamples([voicedFrame(frequencyHz)], SAMPLE_RATE);
+    assert.equal(
+      result.lengthChangeSamples,
+      -period,
+      `${frequencyHz} Hz の有声を真の周期 ${period} サンプルで削ること`,
+    );
+    // 完全相関のときは整数ラグを維持するため、波形の位相が変わっても周期は動かない
+    for (const phase of [0, Math.PI / 3, (2 * Math.PI) / 3]) {
+      const shifted = compressSamples([frequencyFrame(frequencyHz, 0.5, phase)], SAMPLE_RATE);
+      assert.equal(
+        shifted.lengthChangeSamples,
+        -period,
+        `${frequencyHz} Hz の位相 ${phase.toFixed(3)} でも真の周期 ${period} で削ること`,
+      );
+    }
+  }
+});
+
+/**
+ * 4 kHz の格子に乗らない F0 では、周期が 48 kHz で 12 サンプル単位に丸められていた。
+ * ピークの前後 1 格子の相関を放物線補間して端数まで求めることで、削る長さが真の周期へ
+ * 近づく。
+ *
+ * 実測 (48 kHz、20 ms のフレーム、有声): 180 Hz は修正前 264 サンプル (真 266.667、
+ * 誤差 -2.667) だったが修正後 267 (誤差 +0.333)、220 Hz は 216 (真 218.182、-2.182) が
+ * 218 (-0.182)、260 Hz は 180 (真 184.615、-4.615) が 185 (+0.385) になる
+ */
+test("compressSamples: 格子に乗らない F0 も真の周期の ±1 サンプルで削る", () => {
+  for (const frequencyHz of [180, 220, 260]) {
+    const truePeriod = SAMPLE_RATE / frequencyHz;
+    const result = compressSamples([voicedFrame(frequencyHz)], SAMPLE_RATE);
+    const removed = -result.lengthChangeSamples;
+    assert.isBelow(result.lengthChangeSamples, 0, `${frequencyHz} Hz を圧縮すること`);
+    assert.isAtMost(
+      Math.abs(removed - truePeriod),
+      1,
+      `${frequencyHz} Hz の削る長さ ${removed} が真の周期 ${truePeriod.toFixed(3)} の ±1 サンプルに入ること`,
+    );
+    // 格子の丸め (12 サンプル単位) のままなら、端数補間が効いていない
+    assert.notEqual(
+      removed % 12,
+      0,
+      `${frequencyHz} Hz が 4 kHz の格子の周期のまま削られていないこと`,
+    );
+    // 端数補間は真の周期に近づく向きに働く (格子へ丸めた周期より誤差が小さい)
+    const gridRounded = Math.round(truePeriod / 12) * 12;
+    assert.isBelow(
+      Math.abs(removed - truePeriod),
+      Math.abs(gridRounded - truePeriod),
+      `${frequencyHz} Hz が格子へ丸めた周期 ${gridRounded} より真の周期に近いこと`,
+    );
+  }
+});
+
+/**
+ * 44.1 kHz は解析用の信号だけを 48 kHz へ換算し、求めたラグに 11.025 を掛けて元のサンプル
+ * レートへ戻す。300 Hz の真の周期は 147 サンプルで、4 kHz の格子では 13.333 ラグになる
+ * (格子のラグ 13 = 143.325 サンプルのままでは 3.7 サンプルずれる)。
+ *
+ * 20 ms (882 サンプル) のフレームでは 2 周期の相関ピーク (26.67 ラグ) も探索範囲に入り、
+ * 300 Hz は既存の高 F0 と同じく 2 周期を削る場合がある。300 Hz の 1 周期の端数推定を
+ * 確かめるため、2 周期が探索範囲に入らない 800 サンプル (18.1 ms) のフレームを使う。
+ *
+ * 実測 (44.1 kHz、800 サンプル、有声): 300 Hz は 147 サンプルちょうど。200 Hz は 4 kHz の
+ * 格子に乗るため、真の周期 220.5 サンプルを丸めた 221 サンプルになる
+ */
+test("compressSamples: 44.1 kHz の 4 kHz 格子に乗らない周期も ±1 サンプルで削る", () => {
+  const result = compressSamples([voicedSamples(300, 44_100, 800)], 44_100, 400);
+  const removed = -result.lengthChangeSamples;
+  assert.isBelow(result.lengthChangeSamples, 0, "300 Hz を圧縮すること");
+  assert.isAtMost(
+    Math.abs(removed - 147),
+    1,
+    `削る長さ ${removed} が真の周期 147 の ±1 サンプルに入ること`,
+  );
+  // 4 kHz の格子のラグ 13 のままなら 143 サンプル (誤差 -4) になる
+  assert.notEqual(removed, 143, "格子へ丸めた 143 サンプルのまま削られていないこと");
+  // 4 kHz の格子に乗る 200 Hz は、元のサンプルレートの端数 (220.5) を丸めた 221 になる
+  const gridResult = compressSamples([voicedSamples(200, 44_100, 882)], 44_100, 441);
+  assert.equal(
+    -gridResult.lengthChangeSamples,
+    221,
+    "200 Hz は真の周期 220.5 サンプルを丸めた 221 サンプルで削ること",
+  );
+});
+
+/**
+ * 端数補間を足しても、既存の拒否条件は変わらない。周期が削ってよい長さの上限を超えるときは
+ * 操作せず、切れ目の前後の相関が足りない音でも操作しない (無音の扱いと短すぎる音の扱いは
+ * 上のテストが担う)。
+ *
+ * 実測 (48 kHz、20 ms のフレーム、180 Hz の有声 = 周期 267 サンプル): 上限なしで 267 サンプル
+ * 削れ、上限を 266 にすると操作せず、267 にすると 267 サンプル削る。後半の位相を反転して
+ * 相関を壊した音は相関が 0.9 未満になり操作しない
+ */
+test("compressSamples: 格子に乗らない音でも既存の拒否条件は変わらない", () => {
+  const frame = voicedFrame(180);
+  // 上限の判定は `samples > maxLengthChangeSamples` である。削る長さを決め打ちせず、上限
+  // なしで求めた長さの前後で確かめる (周期の推定値が変わっても境界の意味は変わらない)
+  const removed = -compressSamples([frame], SAMPLE_RATE).lengthChangeSamples;
+  assert.isAbove(removed, 0, "上限なしでは削ること");
+  assert.equal(
+    compressSamples([frame], SAMPLE_RATE, removed - 1).lengthChangeSamples,
+    0,
+    "上限が周期より 1 サンプル短いときは削らないこと",
+  );
+  assert.equal(
+    compressSamples([frame], SAMPLE_RATE, removed).lengthChangeSamples,
+    -removed,
+    "上限が周期ちょうどのときは削ること",
+  );
+  // 後半の位相を反転すると、切れ目の前後で波形が一致しない (相関が足りない)
+  const inverted = Float32Array.from(frame);
+  for (let index = FRAME_SAMPLES / 2; index < FRAME_SAMPLES; index++) {
+    inverted[index] = -(inverted[index] ?? 0);
+  }
+  assert.equal(
+    compressSamples([inverted], SAMPLE_RATE).lengthChangeSamples,
+    0,
+    "相関が足りない音は操作しないこと",
+  );
 });
 
 /**

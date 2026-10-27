@@ -238,6 +238,37 @@ export interface SubscriberInstance {
   maxOutOfOrderGroupDistance: Signal<number>;
   // 受信した音声を音声出力デバイスで再生するか。既定は無効
   audioPlaybackEnabled: Signal<boolean>;
+  /**
+   * 受信した音声を鳴らす AudioContext の状態
+   *
+   * AudioContext を作った直後の初期状態と、その後の `statechange` を写す。再生の
+   * AudioContext が無いとき (再生を始める前と、止めた後) は null。`suspended` の間は
+   * 予約した音が鳴らないため、警告の判定にも使う
+   * (docs/AUDIO_GLITCH_CAUSES.md の B4)。
+   */
+  audioContextState: Signal<AudioContextState | null>;
+  /**
+   * AudioContext の `statechange` を観測した回数 (累積)
+   *
+   * AudioContext を作った直後の初期状態の通知は数えない。Bluetooth の接続 / 切断や
+   * 出力デバイスの変更で Context が止まって戻った回数であり、鳴らす経路の外の出来事を
+   * 数える (docs/AUDIO_GLITCH_CAUSES.md の B4)
+   */
+  audioContextStateChanges: Signal<number>;
+  /** 再生に使った AudioContext のサンプルレート (Hz)。AudioContext が無いときは null */
+  audioContextSampleRate: Signal<number | null>;
+  /**
+   * 受信した音声を鳴らす `<audio>` 要素の `waiting` の回数 (累積)
+   *
+   * `waiting` は要素がバッファ待ちで再生を止めた回数である。playout の計器が 0 のまま
+   * 音が途切れるとき、要素より下流 (HTMLMediaElement、その先の出力デバイス) で起きている
+   * のかを切り分けるために数える (docs/AUDIO_GLITCH_CAUSES.md の B7)
+   */
+  audioElementWaitingCount: Signal<number>;
+  /** `<audio>` 要素の `stalled` の回数 (累積)。メディアデータの到着が止まった回数 */
+  audioElementStalledCount: Signal<number>;
+  /** `<audio>` 要素の `error` の回数 (累積)。要素がストリームを再生できなかった回数 */
+  audioElementErrorCount: Signal<number>;
   // 受信側の音声の追いつき (復号の出力が送られた TIMESTAMP から遅れ続けたときに、
   // 復号器を作り直して live へ戻した量)。再生の入口が持つ観測値を 500 ms ごとに写す
   // (src/playout/audioReceiveCatchUp.ts)
@@ -345,6 +376,14 @@ export function createSubscriberInstance(id: string): SubscriberInstance {
     outOfOrderObjectsReceived: signal(0),
     maxOutOfOrderGroupDistance: signal(0),
     audioPlaybackEnabled: signal(false),
+    // AudioContext の診断。再生を始めて AudioContext を作るまでは null
+    audioContextState: signal<AudioContextState | null>(null),
+    audioContextStateChanges: signal(0),
+    audioContextSampleRate: signal<number | null>(null),
+    // <audio> 要素のイベントの累積 (再生の開始と購読の開始で数え直す)
+    audioElementWaitingCount: signal(0),
+    audioElementStalledCount: signal(0),
+    audioElementErrorCount: signal(0),
     audioPlayoutRebases: signal(0),
     audioPlayoutDrops: signal(0),
     audioPlayoutCompressedMs: signal(0),

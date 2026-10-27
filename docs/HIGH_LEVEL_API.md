@@ -784,7 +784,8 @@ interface AudioReceiverStats {
   // 音声の再生の観測値。鳴るはずの時刻 (再生予定時刻)、届いた時刻、鳴り始める時刻と、
   // 予定に対する余裕の分布 (直近 10 秒の p50 / p95 / max)、鳴らなかった量 (件数と ms) を
   // 理由ごとに出す。補間で埋まらなかった無音の穴 (回数 / ms / 最大 / 予約できなかった分)、
-  // 予約を currentTime が追い越した回数、バッファ境界の段差も累積で持つ
+  // 予約を currentTime が追い越した回数、バッファ境界の段差も累積で持つ。復号フレームと
+  // AudioContext のサンプルレートが違った回数 (sampleRateMismatchFrames) も持つ
   // (src/playout/audioPlayoutTimingStats.ts)
   playoutTiming: AudioPlayoutTimingSnapshot;
   // 受信側の音声の追いつきの観測値 (src/playout/audioReceiveCatchUp.ts)。復号の出力が送られた
@@ -867,6 +868,14 @@ interface AudioPlayoutTimingSnapshot {
   // 時間圧縮と補間を使えないサンプルレートで鳴らした音の数 (累積)。96 kHz などは加工せず、
   // 「操作しない」を返すため、この数で気付く。0 なら使えている
   stretchUnavailableFrames: number;
+  // 復号フレーム (AudioData) のサンプルレートが AudioContext と違った回数 (累積)。0 なら
+  // 両者は一致している。違うと AudioBufferSourceNode がバッファごとにリサンプルし、
+  // 20 ms の境界ごとに 1 サンプルの重なり (毎秒 50 回の +6 dB スパイク) が生まれる
+  // (docs/AUDIO_GLITCH_CAUSES.md の A1)。boundaryStepCount はこの重なりを数えない
+  sampleRateMismatchFrames: number;
+  // 直近の AudioContext と復号フレームのサンプルレート (Hz)。まだ音を渡していなければ null
+  contextSampleRate: number | null;
+  decodedSampleRate: number | null;
   // 補間で埋まらなかった無音の穴の回数、長さの合計 (ms)、最大 (ms) (累積)。予約できる
   // 最も早い時刻より前だった分、補間が失敗した分、補間の上限 (100 ms) を超えた分を含む
   gapCount: number;
@@ -1152,6 +1161,20 @@ TIMESTAMP が無い場合、メディア時刻の場合、`jitterBuffer: false` 
 3 倍) を超えた回数と最大である。すべての境界を測るため、通常の音の切れ目も含む。しきい値は
 440 Hz のトーン基準の絶対値であり、実音声では正常な段差が超えることがある。
 `stretchUnavailableFrames` と同じく累積であり、購読をやり直しても消えない。
+
+音声の再生に使う `AudioContext` は、復号フレームのサンプルレートに合わせて作る
+(`src/codec/config.ts` の `resolveAudioContextSampleRate`)。Chromium の Opus 復号は
+configure の sampleRate に関係なく常に 48 kHz を返すため、Opus では Catalog の
+`samplerate` が 44100 でも 48 kHz の AudioContext を作る。AAC は Catalog の
+`samplerate` を使う。devtools の再生も購読開始時に同じ値で AudioContext を作る。
+`sampleRateMismatchFrames` は、この前提が崩れた (AudioContext と復号フレームのレートが
+違う) フレームの累積であり、0 が正常である。レートが違うと `AudioBufferSourceNode` が
+バッファごとにリサンプルする。44.1 kHz の AudioContext に 48 kHz のバッファを並べる
+組み合わせでは、20 ms の境界ごとに 1 サンプルの重なり (毎秒 50 回の +6 dB スパイク) が
+生まれる (`docs/AUDIO_GLITCH_CAUSES.md` の A1)。ほかの組み合わせでは重ならないことも
+あるため、`sampleRateMismatchFrames` は「重なりが起きた回数」ではなく「レートが
+食い違ったフレームの回数」である。`contextSampleRate` / `decodedSampleRate` は直近の値で
+あり、食い違いの切り分けに使う。
 
 `arrivalPlannedFrames` は、時間軸の再生予定時刻を使えず、到着基準の計画で鳴らした音の数で
 ある。使えないのは壁時計の TIMESTAMP を持たない、jitter buffer が無効、トラックの基準が
@@ -1497,6 +1520,9 @@ track が同じ値を持つことは MUST だが、音声と映像で同じ値�
 interface AudioPlayoutContext {
   // AudioContext.currentTime (秒)。予約の基準であり、時計の対応を作るのにも使う
   readonly currentTime: number;
+  // AudioContext のサンプルレート (Hz)。復号フレームのレートと違うと、バッファごとの
+  // リサンプルで 20 ms の境界ごとに 1 サンプルの重なりが生まれるため、計器へ記録する
+  readonly sampleRate: number;
   // AudioContext.getOutputTimestamp()
   getOutputTimestamp(): AudioTimestamp;
   // AudioContext.createBuffer。鳴らす音と、欠落した区間の補間の両方に使う

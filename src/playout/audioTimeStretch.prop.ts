@@ -1,6 +1,36 @@
 import { assert, test } from "vite-plus/test";
 import * as fc from "fast-check";
-import { compressSamples, concealSamples, isTimeStretchAvailable } from "./audioTimeStretch";
+import {
+  compressSamples,
+  concealSamples,
+  isTimeStretchAvailable,
+  type AudioSamples,
+} from "./audioTimeStretch";
+
+/** 48 kHz、20 ms のフレームのサンプル数 */
+const FRAME_SAMPLES = 960;
+
+/**
+ * 基本周波数 `frequencyHz` の有声 (倍音を 1 / 次数で重ねた周期波) のフレーム
+ *
+ * 実際の声に近づけるため、整数次の倍音を 4 kHz (音声の帯域) まで重ねる。振幅は 0.5 に揃える
+ */
+function voicedFrame(frequencyHz: number): AudioSamples {
+  const samples = new Float32Array(FRAME_SAMPLES);
+  const maxHarmonicHz = 4_000;
+  let norm = 0;
+  for (let harmonic = 1; harmonic * frequencyHz < maxHarmonicHz; harmonic++) {
+    norm += 1 / harmonic;
+  }
+  for (let index = 0; index < FRAME_SAMPLES; index++) {
+    let value = 0;
+    for (let harmonic = 1; harmonic * frequencyHz < maxHarmonicHz; harmonic++) {
+      value += (1 / harmonic) * Math.sin((2 * Math.PI * harmonic * frequencyHz * index) / 48_000);
+    }
+    samples[index] = (0.5 * value) / norm;
+  }
+  return samples;
+}
 
 // 細探索の範囲を広げても、既存レートの完全一致する整数周期をずらしてはならない。
 // 有限窓の隣接相関は非対称になり得るため、完全相関に放物線補間を掛けると位相が崩れる。
@@ -85,5 +115,38 @@ test("44.1 kHz の有声音を圧縮・補間できる", () => {
       },
     ),
     { numRuns: 50 },
+  );
+});
+
+/**
+ * 格子に乗らない F0 では、4 kHz の格子への丸めで周期が 48 kHz の 12 サンプル単位に
+ * 量子化されていた。ピークの前後 1 格子の相関を放物線補間して端数まで求めることで、
+ * 削る長さが真の周期に近づく。高 F0 では既存どおり周期の整数倍 (2 周期以上) を削る
+ * 場合があるため、削った周期数 k に対して誤差が k サンプル以内であることを確かめる。
+ *
+ * 実測 (48 kHz、20 ms のフレーム、有声): 160 Hz は 300、180 Hz は 267 (真 266.667)、
+ * 200 Hz は 240、220 Hz は 218 (真 218.182)、260 Hz は 185 (真 184.615)、300 Hz は
+ * 322 (真 160 の 2 周期 = 320 に対する誤差 +2)。修正前は 180 / 220 / 260 Hz が
+ * 264 / 216 / 180 で ±1 サンプルを外れていた。
+ *
+ * 失敗例を再現できるよう、修正前の誤差が大きかった F0 と、2 周期を削る F0 を `examples`
+ * に入れる
+ */
+test("圧縮の削る長さは真の周期の ±1 サンプル (±2 周期なら ±2) に入る", () => {
+  fc.assert(
+    fc.property(fc.constantFrom(160, 180, 200, 220, 260, 300), (frequencyHz) => {
+      const result = compressSamples([voicedFrame(frequencyHz)], 48_000, FRAME_SAMPLES / 2);
+      assert.isBelow(result.lengthChangeSamples, 0, `${frequencyHz} Hz を圧縮すること`);
+      const removed = -result.lengthChangeSamples;
+      const truePeriod = 48_000 / frequencyHz;
+      const periods = Math.round(removed / truePeriod);
+      assert.isAtLeast(periods, 1, `${frequencyHz} Hz で 1 周期以上を削ること`);
+      assert.isAtMost(
+        Math.abs(removed - periods * truePeriod),
+        periods,
+        `${frequencyHz} Hz の削る長さ ${removed} が真の周期 ${truePeriod.toFixed(3)} の ${periods} 周期の ±${periods} サンプルに入ること`,
+      );
+    }),
+    { numRuns: 60, examples: [[180], [220], [260], [300]] },
   );
 });

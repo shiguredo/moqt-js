@@ -49,7 +49,11 @@ import {
   AUDIO_PLAYOUT_DRAIN_MAX_MS,
 } from "./playout/audioPlayoutSession";
 import { PreDecodeDelayStage } from "./playout/preDecodeDelayStage";
-import { DEFAULT_AUDIO_SAMPLE_RATE, resolveAudioChannelCount } from "./codec/config";
+import {
+  DEFAULT_AUDIO_SAMPLE_RATE,
+  resolveAudioChannelCount,
+  resolveAudioContextSampleRate,
+} from "./codec/config";
 import type {
   AudioCodecType,
   AudioDelivery,
@@ -1887,12 +1891,47 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     }
   }
 
+  /**
+   * 音声の再生に使う AudioContext と AudioDecoder のサンプルレートを解決する
+   *
+   * AudioContext と復号フレームのレートが食い違うと、`AudioBufferSourceNode` がバッファ
+   * ごとにリサンプルし、20 ms の境界ごとに 1 サンプルの重なり (毎秒 50 回の +6 dB
+   * スパイク) が生まれる (実測。docs/AUDIO_GLITCH_CAUSES.md の A1)。そのため AudioContext
+   * も復号器の configure も、復号が実際に返すレートへ揃える
+   * (`resolveAudioContextSampleRate`)。
+   *
+   * codec は options を Catalog より優先する (setupDecoders / reconfigureAudioDecoder と
+   * 同じ順)。codec が無い / 解決できないときは既定値へフォールバックし、ここでは throw
+   * しない。復号器の configure の失敗は setupDecoders が従来どおりエラーにする。
+   */
+  private resolveAudioPlayoutSampleRate(): number {
+    const catalogSampleRate = this.audioTrackInfo?.samplerate ?? DEFAULT_AUDIO_SAMPLE_RATE;
+    let codec: AudioCodecType | null = null;
+    if (this.options.audio?.codec) {
+      codec = this.options.audio.codec;
+    } else if (this.audioTrackInfo?.codec) {
+      try {
+        codec = parseAudioCodec(this.audioTrackInfo.codec);
+      } catch {
+        // 解決できない codec は setupDecoders が通知する。AudioContext を作る前に購読の
+        // 開始を失敗させないよう、ここでは既定値へ落とす
+        codec = null;
+      }
+    }
+    return codec === null
+      ? DEFAULT_AUDIO_SAMPLE_RATE
+      : resolveAudioContextSampleRate(codec, catalogSampleRate);
+  }
+
   private createOutputStream(): void {
     this.outputStream = new MediaStream();
 
     // Audio 出力の設定
     if (this.audioTrackInfo) {
-      const sampleRate = this.audioTrackInfo.samplerate ?? DEFAULT_AUDIO_SAMPLE_RATE;
+      // Catalog の samplerate ではなく、復号が実際に返すレートで AudioContext を作る。
+      // Catalog が 44100 の Opus でも復号は 48 kHz を返すため、Catalog の値で作ると
+      // バッファ境界ごとに 1 サンプルの重なりが生まれる (docs/AUDIO_GLITCH_CAUSES.md の A1)
+      const sampleRate = this.resolveAudioPlayoutSampleRate();
       const context = new AudioContext({
         sampleRate,
       });
@@ -1965,7 +2004,10 @@ export class MediaSubscriberImpl implements MediaSubscriber {
         throw new Error("audio codec not specified and not found in catalog");
       }
 
-      const sampleRate = this.audioTrackInfo.samplerate ?? DEFAULT_AUDIO_SAMPLE_RATE;
+      // AudioContext の生成と同じ解決値へ揃える。Chromium の Opus 復号は configure の
+      // sampleRate に関係なく 48 kHz を返すため、Catalog の値のままにすると復号フレームと
+      // AudioContext のレートが食い違う (docs/AUDIO_GLITCH_CAUSES.md の A1)
+      const sampleRate = this.resolveAudioPlayoutSampleRate();
       // channelConfig は名前付き値 (mono / stereo) と整数文字列を受け付ける。
       // 解決不能な明示値はここで throw し、NaN をデコーダに渡さない
       const channels = resolveAudioChannelCount(this.audioTrackInfo.channelConfig);
@@ -2644,7 +2686,9 @@ export class MediaSubscriberImpl implements MediaSubscriber {
         return;
       }
 
-      const sampleRate = this.audioTrackInfo.samplerate ?? DEFAULT_AUDIO_SAMPLE_RATE;
+      // AudioContext の生成と同じ解決値へ揃える。Opus の復号は configure の sampleRate に
+      // 関係なく 48 kHz を返す (docs/AUDIO_GLITCH_CAUSES.md の A1)
+      const sampleRate = this.resolveAudioPlayoutSampleRate();
       const channels = resolveAudioChannelCount(this.audioTrackInfo.channelConfig);
 
       await this.audioDecoder.configure(audioCodec, sampleRate, channels, description);

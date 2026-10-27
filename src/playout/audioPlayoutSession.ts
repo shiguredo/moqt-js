@@ -57,6 +57,15 @@ export interface AudioPlayoutContext {
   /** `AudioContext.currentTime` (秒)。予約の基準であり、時計の対応を作るのにも使う */
   readonly currentTime: number;
   /**
+   * `AudioContext` のサンプルレート (Hz)
+   *
+   * 復号フレーム (`AudioData`) のレートと違うときは、`AudioBufferSourceNode` が
+   * バッファごとにリサンプルし、20 ms の境界ごとに 1 サンプルの重なりが生まれる
+   * (docs/AUDIO_GLITCH_CAUSES.md の A1)。計器 (`AudioPlayoutTimingStats`) の
+   * `recordSampleRate` へ渡し、食い違いを数えられるようにする
+   */
+  readonly sampleRate: number;
+  /**
    * `AudioContext.getOutputTimestamp()`
    *
    * まだ音を出していない / 再開直後で performanceTime が 0 のときは対応を作らない
@@ -325,6 +334,14 @@ export class AudioPlayoutSession {
       if (!(numberOfChannels > 0 && sampleRate > 0 && numberOfFrames > 0)) {
         planned = { arrivalMs: performance.now(), targetMs: null, durationMs: 0 };
         throw new Error("AudioData must be open and contain audio frames");
+      }
+      // AudioContext と復号フレームのレートが違うと、AudioBufferSourceNode がバッファごとに
+      // リサンプルし、20 ms の境界ごとに 1 サンプルの重なり (毎秒 50 回の +6 dB スパイク) が
+      // 生まれる (docs/AUDIO_GLITCH_CAUSES.md の A1)。鳴らす前の 2 つのレートを計器へ残す。
+      // AudioContext がレートを持たない (実物には必ずあるが、境界の型を満たすだけの
+      // オブジェクトを渡された) ときは記録しない
+      if (Number.isFinite(context.sampleRate) && context.sampleRate > 0) {
+        this.timing.recordSampleRate(context.sampleRate, sampleRate);
       }
       const durationSeconds = numberOfFrames / sampleRate;
       // 時間圧縮と補間を使えないサンプルレートでは、遅れが目標へ

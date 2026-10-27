@@ -14,6 +14,10 @@
  * - 音声の 1 つのチャンネル (第 1 チャンネル) を 4 kHz へ間引き、その自己相関から
  *   最も強いピーク (ピッチの周期) を探す。ピークの位置が、波形が 1 周期前と一致する
  *   長さである
+ * - ピークは 4 kHz の格子に乗るため、そのままだと周期が 48 kHz で 12 サンプル単位に
+ *   量子化される。ピークの前後 1 格子の相関を放物線で補間し、端数まで周期を求める
+ *   (補間側の `findTailPeriod` は元のサンプルレートで同じことをしており、圧縮側と
+ *   対になる)
  * - その長さだけ離れた 2 つの区間の相関が `TIME_STRETCH_CORRELATION_THRESHOLD` (0.9)
  *   より大きいときだけ操作する。波形が繰り返していない場所で切ると、耳につく
  * - 操作は切れ目の前後 `ピッチ周期` サンプルをクロスフェードして繋ぐ。時間圧縮は
@@ -160,29 +164,119 @@ function downsampleTo4kHz(signal: AudioSamples, samplesPer4kHzSample: number): A
 }
 
 /**
- * ピッチの周期 (4 kHz のサンプル数) を探す
+ * 4 kHz の信号の、ラグ `lag` だけずらした 2 区間の生の相関 (正規化しない内積)
+ *
+ * 窓長は `TIME_STRETCH_CORRELATION_LEN` で固定する。窓長をラグに比例させると、窓が
+ * 短い (= ラグが短い) 候補ほど相関が高く出て、有色雑音で最短のラグを選んでしまう。
+ * 粗い探索も放物線補間も同じ固定長の窓を使うため、3 点の相関を同じ前提で比べられる
+ */
+function lagCorrelation(downsampled: AudioSamples, lag: number): number {
+  let correlation = 0;
+  for (let index = 0; index < TIME_STRETCH_CORRELATION_LEN; index++) {
+    correlation += (downsampled[index] ?? 0) * (downsampled[index + lag] ?? 0);
+  }
+  return correlation;
+}
+
+/**
+ * 窓のエネルギー (2 乗和)
+ *
+ * 生の相関は正規化していないため、値だけでは完全相関かどうか分からない。ピークの相関を
+ * 前後の窓のエネルギーと比べて正規化し、完全相関の判定に使う
+ */
+function windowEnergy(downsampled: AudioSamples, offset: number): number {
+  let energy = 0;
+  for (let index = 0; index < TIME_STRETCH_CORRELATION_LEN; index++) {
+    const value = downsampled[offset + index] ?? 0;
+    energy += value * value;
+  }
+  return energy;
+}
+
+/** 4 kHz の粗い探索の結果 */
+interface CoarseLag {
+  /** 相関が最も強いラグ (4 kHz のサンプル数) */
+  readonly lag: number;
+  /** そのラグの生の相関 (正規化しない内積) */
+  readonly correlation: number;
+}
+
+/**
+ * ピッチの周期 (4 kHz のサンプル数) を粗く探す
  *
  * 自分自身との相関が最も強いずらし幅を `TIME_STRETCH_MIN_LAG` から `maxLag` までで探す。
- * ずらし幅 0 は必ず最大になるため探索に入れない (NetEq も下限 `kMinLag` から探す)
+ * ずらし幅 0 は必ず最大になるため探索に入れない (NetEq も下限 `kMinLag` から探す)。
+ * 生の相関の最大値と、そのときのラグを返す
  */
-function findLag(downsampled: AudioSamples, maxLag: number): number {
+function findLag(downsampled: AudioSamples, maxLag: number): CoarseLag {
   let bestLag = TIME_STRETCH_MIN_LAG;
-  let bestValue = -Infinity;
+  let bestCorrelation = -Infinity;
   for (let lag = TIME_STRETCH_MIN_LAG; lag <= maxLag; lag++) {
-    let correlation = 0;
-    for (let index = 0; index < TIME_STRETCH_CORRELATION_LEN; index++) {
-      correlation += (downsampled[index] ?? 0) * (downsampled[index + lag] ?? 0);
-    }
-    if (correlation > bestValue) {
-      bestValue = correlation;
+    const correlation = lagCorrelation(downsampled, lag);
+    if (correlation > bestCorrelation) {
+      bestCorrelation = correlation;
       bestLag = lag;
     }
   }
-  return bestLag;
+  return { lag: bestLag, correlation: bestCorrelation };
+}
+
+/**
+ * 4 kHz の粗いラグを、ピークの前後 1 格子の相関による放物線補間で端数まで求める
+ *
+ * 4 kHz の格子では 48 kHz の周期が 12 サンプル単位に量子化されるため、格子に乗らない
+ * ピッチの音では位相のずれた 2 区間をクロスフェードすることになり、非調和成分と
+ * 50 Hz の側波帯 (声では粗さ) が増える。補間側の `findTailPeriod` が元のサンプルレートで
+ * 端数まで周期を求めているのに対し、圧縮側は整数ラグのままで非対称だった。
+ *
+ * 放物線には、粗い探索と同じ固定長の窓 (`TIME_STRETCH_CORRELATION_LEN`) の生の相関を
+ * 使う。窓長が固定なので 3 点は同じ前提で比べられ、上に凸なピークなら頂点が端数ラグに
+ * なる。次のときは端数にせず整数ラグを返す (補間しない)。
+ *
+ * - 前後 1 格子を評価できない (探索の上限に高峰が張り付き、窓が信号の外へ出る) とき。
+ *   外挿すると評価していないラグへ頂点が飛ぶため、`findTailPeriod` と同じく格子のままにする
+ * - 上に凸でない (曲率が 0 以上) とき。頂点を求められない
+ * - 丸め誤差の範囲で完全相関のとき。格子に乗る周期まで放物線の頂点へずらすと、有限窓の
+ *   前後の相関の非対称で正しい整数周期の位相を壊す (`findTailPeriod` と同じガード)
+ *
+ * @param downsampled - 4 kHz へ間引いた第 1 チャンネル
+ * @param coarse - 粗い探索の結果
+ */
+function refineLag(downsampled: AudioSamples, coarse: CoarseLag): number {
+  const lag = coarse.lag;
+  // 前後 1 格子のうち、後ろ側が窓ごと信号に収まるか。前側は lag >= TIME_STRETCH_MIN_LAG
+  // なので必ず評価できる (ラグ 0 は相関 1 になるため評価しない)
+  if (lag + 1 + TIME_STRETCH_CORRELATION_LEN > downsampled.length) {
+    return lag;
+  }
+  // 完全相関なら整数ラグを保つ。生の相関は正規化していないため、窓のエネルギーで割って
+  // 正規化した値で判定する (厳密な整数周期では窓のエネルギーが等しく、値はちょうど 1 になる)
+  const baseEnergy = windowEnergy(downsampled, 0);
+  const peakEnergy = windowEnergy(downsampled, lag);
+  const denominator = Math.sqrt(baseEnergy * peakEnergy);
+  const exactPeriod = denominator > 0 && coarse.correlation >= denominator * (1 - 1e-12);
+  if (exactPeriod) {
+    return lag;
+  }
+  const before = lagCorrelation(downsampled, lag - 1);
+  const after = lagCorrelation(downsampled, lag + 1);
+  // f(-1), f(0), f(+1) を通る放物線の頂点の位置 (ラグの端数)
+  const curvature = before - 2 * coarse.correlation + after;
+  if (!(curvature < 0)) {
+    // 上に凸でない (曲率が 0 以上、または NaN) ため頂点を求められない
+    return lag;
+  }
+  const offset = (0.5 * (before - after)) / curvature;
+  // 隣接点より外側に頂点を作らない (外挿しない)
+  return lag + Math.max(-0.5, Math.min(0.5, offset));
 }
 
 /**
  * ピッチの周期と、切れ目の前後での波形の一致の度合いを求める
+ *
+ * 周期は 4 kHz の粗い探索のあと、ピークの前後 1 格子の相関による放物線補間で端数まで
+ * 求める (`refineLag`)。端数の周期は元のサンプルレートへ戻し、整数サンプルへ丸めた値を
+ * 削る長さにする (クロスフェードは整数サンプルのまま行う)。
  *
  * @param reference - 第 1 チャンネルの音声
  * @param sampleRate - サンプルレート (Hz)
@@ -207,7 +301,10 @@ function analyze(
   if (maxLag < TIME_STRETCH_MIN_LAG) {
     return null;
   }
-  const lag = findLag(downsampled, maxLag);
+  const coarse = findLag(downsampled, maxLag);
+  // 4 kHz の格子に乗らない周期を端数まで求める。44.1 kHz はこのラグに 11.025 を掛けると
+  // 元のサンプルレートのサブ格子の周期になる
+  const lag = refineLag(downsampled, coarse);
   // ピッチの周期を元のサンプルレートへ戻す
   const samples = Math.round(lag * samplesPer4kHzSample);
   if (samples <= 0 || samples > spliceSamples || spliceSamples + samples > reference.length) {

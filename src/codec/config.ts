@@ -185,6 +185,38 @@ export function getAudioEncoderConfig(
 }
 
 /**
+ * 音声の再生に使う AudioContext のサンプルレートを決める
+ *
+ * AudioContext のレートと、復号フレーム (`AudioData`) のレートが食い違うと、
+ * `AudioBufferSourceNode` がバッファごとにリサンプルする。Chromium はリサンプルのとき
+ * バッファ末尾を線形外挿するため、20 ms のバッファが公称より 1 サンプル長く鳴り、
+ * 次のフレームの先頭と足し合わされて振幅 2 倍 (+6 dB) のスパイクが毎秒 50 回入る
+ * (実測。docs/AUDIO_GLITCH_CAUSES.md の A1)。
+ *
+ * Chromium の Opus 復号は、WebCodecs の configure に渡した sampleRate に関係なく
+ * 常に 48 kHz の AudioData を返す (実測済み)。そのため、opus のときは Catalog の
+ * samplerate に従わず `DEFAULT_AUDIO_SAMPLE_RATE` を使う。aac は configure の値に
+ * 従ったレートで復号されるため、Catalog の samplerate をそのまま使う。
+ *
+ * @param codec - 購読する音声コーデック
+ * @param catalogSampleRate - Catalog の `samplerate` (Hz)
+ * @returns AudioContext と AudioDecoder の configure に使うサンプルレート (Hz)
+ */
+export function resolveAudioContextSampleRate(
+  codec: AudioCodecType,
+  catalogSampleRate: number,
+): number {
+  if (codec === "opus") {
+    return DEFAULT_AUDIO_SAMPLE_RATE;
+  }
+  // aac は configure の sampleRate で復号される。Catalog の値が無い / 不正なときは、
+  // NaN を configure へ渡さないよう既定値へ落とす
+  return Number.isFinite(catalogSampleRate) && catalogSampleRate > 0
+    ? catalogSampleRate
+    : DEFAULT_AUDIO_SAMPLE_RATE;
+}
+
+/**
  * コーデックが description (AudioSpecificConfig) を必要とするかを返す
  *
  * draft-ietf-moq-loc-04 §2.3.3.1 (Audio Config):

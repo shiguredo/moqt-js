@@ -15,6 +15,8 @@ import {
 } from "../../../src/playout/timeline.ts";
 import { EMPTY_AV_SYNC, type AvSyncSnapshot } from "../signals/subscriber.ts";
 import {
+  AUDIO_CONTEXT_NARROWBAND_SAMPLE_RATES,
+  AUDIO_CONTEXT_NOT_RUNNING_WARN_MS,
   CATCH_UP_STUCK_WARN_MS,
   CATCH_UP_WARN_STARTS,
   CATCH_UP_WARN_WINDOW_MS,
@@ -28,6 +30,7 @@ import {
   detectSubscriberWarnings,
   formatPreconditionWarning,
   type PublisherWarningState,
+  type SubscriberAudioOutputInput,
 } from "./preconditionWarnings";
 
 /** 上限に張り付いている状態の最小の補償量 (ミリ秒) */
@@ -269,6 +272,185 @@ test("detectSubscriberWarnings: 共有できない理由が変わったら数え
   );
   assert.deepEqual(drifted.warnings, []);
   assert.isNull(drifted.state.unsharedHoldSinceMs);
+});
+
+// ============================================================================
+// 音声出力 (AudioContext と <audio> 要素) の警告
+// ============================================================================
+
+/** 音声出力の診断を作り、対象の値だけを上書きする */
+function audioOutputWith(
+  options: Partial<SubscriberAudioOutputInput> = {},
+): SubscriberAudioOutputInput {
+  return {
+    // 再生中で 48 kHz の AudioContext が動いている、健全な状態を既定にする
+    playbackEnabled: true,
+    contextState: "running",
+    contextSampleRate: 48_000,
+    decodedSampleRate: 48_000,
+    sampleRateMismatchFrames: 0,
+    elementWaitingCount: 0,
+    elementStalledCount: 0,
+    ...options,
+  };
+}
+
+// 音声出力の診断を渡さない呼び出し (既存の呼び出し) では、音声出力の警告を出さない。
+// 呼び出し側を直し忘れても、警告が出ないだけで同期の警告は今までどおり動く
+test("detectSubscriberWarnings: 音声出力の診断を渡さなければ音声出力の警告を出さない", () => {
+  const update = detectSubscriberWarnings(null, avSyncWith({}), 5_000);
+  assert.deepEqual(update.warnings, []);
+  assert.isNull(update.state.audioContextNotRunningSinceMs);
+});
+
+// 復号フレームと AudioContext のレートが違えば、バッファ境界ごとに 1 サンプルの重なりが
+// 生まれる (A1)。件数と両方のレートを値に出す
+test("detectSubscriberWarnings: 復号フレームと AudioContext のレートが違えば警告を出す", () => {
+  const update = detectSubscriberWarnings(
+    null,
+    avSyncWith({}),
+    0,
+    audioOutputWith({
+      sampleRateMismatchFrames: 3,
+      contextSampleRate: 44_100,
+      decodedSampleRate: 48_000,
+    }),
+  );
+  assert.lengthOf(update.warnings, 1);
+  const [warning] = update.warnings;
+  assert.equal(warning?.id, "audioSampleRateMismatch");
+  assert.equal(warning?.decision, "AUDIO_GLITCH_CAUSES_A1");
+  const values = warning?.values.join(", ") ?? "";
+  assert.include(values, "sampleRateMismatchFrames=3");
+  assert.include(values, "contextSampleRate=44100");
+  assert.include(values, "decodedSampleRate=48000");
+});
+
+// レートが揃っていれば警告を出さない。復号のレートがまだ分からない (null) だけでも
+// 一致の回数が 0 なら出さない
+test("detectSubscriberWarnings: レートの不一致が 0 の間は警告を出さない", () => {
+  const update = detectSubscriberWarnings(null, avSyncWith({}), 0, audioOutputWith({}));
+  assert.deepEqual(update.warnings, []);
+
+  const unobserved = detectSubscriberWarnings(
+    null,
+    avSyncWith({}),
+    0,
+    audioOutputWith({ contextSampleRate: null, decodedSampleRate: null }),
+  );
+  assert.deepEqual(unobserved.warnings, []);
+});
+
+// AudioContext が running 以外のまま警告の時間続いたら出す。境目の前後で分ける
+test("detectSubscriberWarnings: AudioContext が running 以外のまま続いたら警告を出す", () => {
+  const suspended = audioOutputWith({ contextState: "suspended" });
+  const start = detectSubscriberWarnings(null, avSyncWith({}), 10_000, suspended);
+  assert.deepEqual(start.warnings, []);
+  assert.equal(start.state.audioContextNotRunningSinceMs, 10_000);
+
+  const before = detectSubscriberWarnings(
+    start.state,
+    avSyncWith({}),
+    10_000 + AUDIO_CONTEXT_NOT_RUNNING_WARN_MS - 1,
+    suspended,
+  );
+  assert.deepEqual(before.warnings, []);
+
+  const over = detectSubscriberWarnings(
+    before.state,
+    avSyncWith({}),
+    10_000 + AUDIO_CONTEXT_NOT_RUNNING_WARN_MS,
+    suspended,
+  );
+  assert.lengthOf(over.warnings, 1);
+  const [warning] = over.warnings;
+  assert.equal(warning?.id, "audioContextNotRunning");
+  assert.equal(warning?.decision, "AUDIO_CONTEXT_STATE");
+  const values = warning?.values.join(", ") ?? "";
+  assert.include(values, "contextState=suspended");
+  assert.include(values, `heldMs=${AUDIO_CONTEXT_NOT_RUNNING_WARN_MS}`);
+  assert.include(values, "contextSampleRate=48000");
+  // 自動で resume しないこと (音を鳴らす経路の挙動を変えていないこと) を本文に含める
+  assert.include(warning?.message, "does not resume");
+});
+
+// running に戻ったら数え直す。戻った後にまた suspended になったら、そこから数える
+test("detectSubscriberWarnings: AudioContext が running に戻ったら数え直す", () => {
+  const suspended = audioOutputWith({ contextState: "suspended" });
+  const start = detectSubscriberWarnings(null, avSyncWith({}), 0, suspended);
+  const running = detectSubscriberWarnings(
+    start.state,
+    avSyncWith({}),
+    AUDIO_CONTEXT_NOT_RUNNING_WARN_MS,
+    audioOutputWith({}),
+  );
+  assert.deepEqual(running.warnings, []);
+  assert.isNull(running.state.audioContextNotRunningSinceMs);
+
+  const again = detectSubscriberWarnings(running.state, avSyncWith({}), 20_000, suspended);
+  assert.equal(again.state.audioContextNotRunningSinceMs, 20_000);
+});
+
+// AudioContext が無い (null) 間と、再生が無効な間は、running 以外でも警告にしない。
+// 再生していない Context の状態を、鳴らない音の原因として出さない
+test("detectSubscriberWarnings: AudioContext が無い / 再生が無効な間は状態を警告にしない", () => {
+  const noContext = audioOutputWith({ contextState: null, contextSampleRate: null });
+  const started = detectSubscriberWarnings(null, avSyncWith({}), 0, noContext);
+  const kept = detectSubscriberWarnings(
+    started.state,
+    avSyncWith({}),
+    AUDIO_CONTEXT_NOT_RUNNING_WARN_MS * 2,
+    noContext,
+  );
+  assert.deepEqual(kept.warnings, []);
+  assert.isNull(kept.state.audioContextNotRunningSinceMs);
+
+  const disabled = audioOutputWith({ playbackEnabled: false, contextState: "suspended" });
+  const off = detectSubscriberWarnings(null, avSyncWith({}), 0, disabled);
+  const offKept = detectSubscriberWarnings(
+    off.state,
+    avSyncWith({}),
+    AUDIO_CONTEXT_NOT_RUNNING_WARN_MS * 2,
+    disabled,
+  );
+  assert.deepEqual(offKept.warnings, []);
+  assert.isNull(offKept.state.audioContextNotRunningSinceMs);
+});
+
+// AudioContext のレートが 8 / 16 kHz なら、Bluetooth HFP の可能性を警告に出す。
+// どちらのレートも同じ判定で拾う
+test("detectSubscriberWarnings: AudioContext のレートが狭帯域なら警告を出す", () => {
+  for (const sampleRate of AUDIO_CONTEXT_NARROWBAND_SAMPLE_RATES) {
+    const update = detectSubscriberWarnings(
+      null,
+      avSyncWith({}),
+      0,
+      audioOutputWith({ contextSampleRate: sampleRate, decodedSampleRate: 48_000 }),
+    );
+    assert.lengthOf(update.warnings, 1);
+    const [warning] = update.warnings;
+    assert.equal(warning?.id, "audioContextNarrowband");
+    assert.equal(warning?.decision, "AUDIO_CONTEXT_SAMPLE_RATE");
+    const values = warning?.values.join(", ") ?? "";
+    assert.include(values, `contextSampleRate=${sampleRate}`);
+    assert.include(values, "decodedSampleRate=48000");
+    // 何を疑うか (Bluetooth HFP) を本文に含める
+    assert.include(warning?.message, "Bluetooth");
+  }
+});
+
+// 狭帯域でも running でなければ (止まっている間は) 警告にしない。48 kHz は狭帯域ではない
+test("detectSubscriberWarnings: running でない、または狭帯域でないレートでは警告にしない", () => {
+  const suspended = detectSubscriberWarnings(
+    null,
+    avSyncWith({}),
+    0,
+    audioOutputWith({ contextState: "suspended", contextSampleRate: 16_000 }),
+  );
+  assert.isFalse(suspended.warnings.some((warning) => warning.id === "audioContextNarrowband"));
+
+  const wideband = detectSubscriberWarnings(null, avSyncWith({}), 0, audioOutputWith({}));
+  assert.isFalse(wideband.warnings.some((warning) => warning.id === "audioContextNarrowband"));
 });
 
 // 傾きが閾値の手前のうちは警告を出さない。負の向き (音声の時計が遅れる) も同じ大きさで見る

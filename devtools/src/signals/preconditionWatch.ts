@@ -5,7 +5,9 @@
  * 「どこへ出すか」だけを決める。
  *
  * - 配信側: 音声の TIMESTAMP の補正 (`audioTimestampClock`) と追いつき (`audioCatchUp`)
- * - 受信側: 購読ごとの同期の推定 (`SubscriberInstance.avSync`)
+ * - 受信側: 購読ごとの同期の推定 (`SubscriberInstance.avSync`) と、音声を鳴らす経路の
+ *   診断 (AudioContext の状態とレート、`<audio>` 要素のイベント、復号フレームとの
+ *   サンプルレートの不一致。docs/AUDIO_GLITCH_CAUSES.md の A1 / B4 / B7)
  *
  * 判定に時間が要るものは、前回の状態をここで持ち回る。警告になった時点と、戻った時点は
  * デバッグログにも 1 件だけ残す (`utils/avSyncTransition.ts` と同じ考え方。症状が出た
@@ -132,11 +134,22 @@ export function evaluatePreconditions(nowMs: number): void {
     publisherWarnings = publisherUpdate.warnings;
   }
 
-  // 受信側。購読ごとの同期の推定を読む
+  // 受信側。購読ごとの同期の推定と、音声を鳴らす経路の診断を読む
   const instances = subscriberInstances.value;
   for (const [id, instance] of instances) {
     const previous = subscriberWatches.get(id);
-    const update = detectSubscriberWarnings(previous?.state ?? null, instance.avSync.value, nowMs);
+    const playoutTiming = instance.audioPlayoutTiming.value;
+    const update = detectSubscriberWarnings(previous?.state ?? null, instance.avSync.value, nowMs, {
+      // 再生が有効な間だけ AudioContext の状態を警告にする
+      playbackEnabled: instance.audioPlaybackEnabled.value,
+      contextState: instance.audioContextState.value,
+      contextSampleRate: instance.audioContextSampleRate.value,
+      // レートの不一致と、復号フレームのレートは音声の再生の計器が持つ
+      sampleRateMismatchFrames: playoutTiming.sampleRateMismatchFrames,
+      decodedSampleRate: playoutTiming.decodedSampleRate,
+      elementWaitingCount: instance.audioElementWaitingCount.value,
+      elementStalledCount: instance.audioElementStalledCount.value,
+    });
     subscriberWatches.set(id, { state: update.state, warnings: update.warnings });
     if (!sameWarnings(previous?.warnings ?? [], update.warnings)) {
       logWarningChanges(id, previous?.warnings ?? [], update.warnings);

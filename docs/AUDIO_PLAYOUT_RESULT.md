@@ -11,6 +11,11 @@
   余裕で補正する
 - **鳴らす**: 目標の時刻に予約し、間に合わない分は時間圧縮、欠けた分は波形の繰り返しで
   補間する (`src/playout/audioPlayout.ts` / `src/playout/audioTimeStretch.ts`)
+- **レート**: 再生に使う `AudioContext` は復号フレームのサンプルレートに合わせる。
+  Chromium の Opus 復号は configure にかかわらず常に 48 kHz を返すため、Opus では
+  Catalog の `samplerate` が 44100 でも 48 kHz で作る (`src/codec/config.ts` の
+  `resolveAudioContextSampleRate`)。devtools の再生も購読開始時に同じ値で作る。
+  食い違ったフレームは `playoutTiming.sampleRateMismatchFrames` で読める
 - **A/V 同期**: 音声と映像の「表示時刻 − TIMESTAMP」の差を不感帯 (5 ms) で制御し、映像を
   最大 100 ms まで待たせて音声へ合わせる (決定 1 / 9)
 - **追いつき**: 復号の出力が送られた TIMESTAMP から遅れ続けたら、復号器を作り直して live へ
@@ -104,6 +109,9 @@
   main-thread 符号化経路は停止時も音声ループを止めないため、末尾は切れない
 - **実機のスピーカー遅延・表示遅延は測っていない。** ヘッドレスの `outputLatency` は
   24〜25 ms であり (`getOutputTimestamp` の実測)、実機の値は環境で変わる
+- **44.1 kHz の出力デバイスで起きていた 20 ms ごとの 1 サンプルの重なり (+6 dB スパイク) は、
+  レートを復号フレームに揃える修正で解消する見込みである。** ただし実機の 44.1 kHz 出力
+  デバイスでの聴感と `sampleRateMismatchFrames` は未確認である (実装は 2026-10-27)
 - **音声の購読は LOCATION_FILTER を送らない。** 購読は filter 無しで行い、リレーが
   cache から replay するのは「最新 Group の先頭」= 音声 1 Object (20 ms) に限られる。
   音声購読に絶対位置の LOCATION_FILTER を足すと、リレーは cache が保持する範囲の先頭から

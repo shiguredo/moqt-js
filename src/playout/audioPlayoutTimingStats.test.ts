@@ -231,6 +231,7 @@ test("reset: すべての記録を捨てて初期状態へ戻す", () => {
   stats.recordGap({ uncoveredMs: 5, unrecoverableMs: 2 });
   stats.recordLateStart(3);
   stats.recordBoundaryStep(0.2);
+  stats.recordSampleRate(44_100, 48_000);
   stats.reset();
   assert.deepEqual(stats.snapshot(100), EMPTY_AUDIO_PLAYOUT_TIMING);
 });
@@ -309,9 +310,43 @@ test("recordGap / recordLateStart / recordBoundaryStep: 穴と追い越しと段
 });
 
 /**
- * 完了条件: 停止時の drain が、予約済みの最後の終わり (pendingEndMs) と残りの長さ
- * (pendingMs) を読めること。時刻を過ぎた予約は数えない。
+ * 完了条件: AudioContext と復号フレームのサンプルレートの食い違いを数え、直近の値を残す。
+ * 44.1 kHz の AudioContext に 48 kHz のバッファを並べると、20 ms の境界ごとに 1 サンプルの
+ * 重なり (毎秒 50 回の +6 dB スパイク) が生まれる (docs/AUDIO_GLITCH_CAUSES.md の A1)。
+ * `boundaryStepCount` は予約したサンプル列の段差しか見ないため、この現象を数えない
  */
+test("recordSampleRate: AudioContext と復号フレームのレート不一致を数える", () => {
+  const stats = new AudioPlayoutTimingStats(AUDIO_PLAYOUT_TIMING_WINDOW_MS, 0);
+  // 一致していれば数えない (直近の値だけ更新する)
+  stats.recordSampleRate(48_000, 48_000);
+  let snapshot = stats.snapshot(0);
+  assert.equal(snapshot.sampleRateMismatchFrames, 0, "一致しているフレームを数えないこと");
+  assert.equal(snapshot.contextSampleRate, 48_000, "直近の AudioContext のレートを返すこと");
+  assert.equal(snapshot.decodedSampleRate, 48_000, "直近の復号フレームのレートを返すこと");
+
+  // 食い違ったフレームを数える (44.1 kHz の AudioContext に 48 kHz のバッファ)
+  stats.recordSampleRate(44_100, 48_000);
+  stats.recordSampleRate(44_100, 48_000);
+  snapshot = stats.snapshot(0);
+  assert.equal(snapshot.sampleRateMismatchFrames, 2, "食い違ったフレームを数えること");
+  assert.equal(snapshot.contextSampleRate, 44_100);
+  assert.equal(snapshot.decodedSampleRate, 48_000);
+
+  // 計器の値として意味を持たない値は記録しない (直近の値を壊さない)
+  stats.recordSampleRate(Number.NaN, 48_000);
+  stats.recordSampleRate(44_100, 0);
+  stats.recordSampleRate(Number.POSITIVE_INFINITY, 48_000);
+  stats.recordSampleRate(-1, 48_000);
+  snapshot = stats.snapshot(0);
+  assert.equal(snapshot.sampleRateMismatchFrames, 2, "不正な値で数えないこと");
+  assert.equal(snapshot.contextSampleRate, 44_100, "不正な値で直近の値を壊さないこと");
+  assert.equal(snapshot.decodedSampleRate, 48_000);
+
+  // まだ 1 つも記録していなければ null
+  const empty = new AudioPlayoutTimingStats(AUDIO_PLAYOUT_TIMING_WINDOW_MS, 0);
+  assert.deepEqual(empty.snapshot(0), EMPTY_AUDIO_PLAYOUT_TIMING);
+});
+
 test("pendingEndMs / pendingMs: 鳴り終わっていない予約の最後と残りを返す", (): void => {
   const stats = new AudioPlayoutTimingStats(AUDIO_PLAYOUT_TIMING_WINDOW_MS, 0);
   assert.isNull(stats.pendingEndMs(0), "予約が無ければ null");

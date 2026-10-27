@@ -36,7 +36,13 @@ export type PreconditionWarningId =
   // 配信側の追いつきが繰り返し始まっている
   | "catchUpKeepsStarting"
   // 配信側の追いつきが解除されないまま続いている
-  | "catchUpDoesNotEnd";
+  | "catchUpDoesNotEnd"
+  // 復号フレームと AudioContext のサンプルレートが違う (docs/AUDIO_GLITCH_CAUSES.md の A1)
+  | "audioSampleRateMismatch"
+  // AudioContext が running 以外のまま戻らない (docs/AUDIO_GLITCH_CAUSES.md の B4)
+  | "audioContextNotRunning"
+  // AudioContext のレートが狭帯域 (Bluetooth HFP の疑い。docs/AUDIO_GLITCH_CAUSES.md の B1 / A5)
+  | "audioContextNarrowband";
 
 /**
  * 前提から外れた状態の警告 1 件
@@ -150,12 +156,61 @@ export const CATCH_UP_WARN_STARTS = 3;
  */
 export const CATCH_UP_STUCK_WARN_MS = AUDIO_PUBLISH_CATCH_UP_PENDING_TIMEOUT_MS;
 
+/**
+ * AudioContext のレートが狭帯域だとみなすサンプルレート (Hz)
+ *
+ * Bluetooth のヘッドセットは、マイクも使うと HFP (SCO) へ切り替わり、その間の出力は
+ * 8 / 16 kHz になる。広帯域の音をこのレートの AudioContext で鳴らすと、折り返しと
+ * レート変換の劣化が乗る (docs/AUDIO_GLITCH_CAUSES.md の B3 / A5)
+ */
+export const AUDIO_CONTEXT_NARROWBAND_SAMPLE_RATES: readonly number[] = [8_000, 16_000];
+
+/**
+ * AudioContext が running 以外のまま警告を出すまでの時間 (ミリ秒)
+ *
+ * `suspend` は Bluetooth の接続 / 切断、出力デバイスの変更、Safari の interrupted で
+ * 起きる。短い停止はその後の操作で戻るため、続いているものだけを警告にする。判定は
+ * 1 秒ごとの観測であり、1 回の観測の揺らぎで出さない長さにする
+ * (docs/AUDIO_GLITCH_CAUSES.md の B4)
+ */
+export const AUDIO_CONTEXT_NOT_RUNNING_WARN_MS = 2_000;
+
+/**
+ * 受信側の音声出力 (AudioContext と `<audio>` 要素) の診断
+ *
+ * どれも受信した音声を鳴らす経路が持つ観測値である。この層は playout の計器 (予約・穴・
+ * 段差) からは見えないため、計器が 0 のまま音が途切れたときに下流を疑う材料になる
+ * (docs/AUDIO_GLITCH_CAUSES.md の B4 / B7)
+ */
+export interface SubscriberAudioOutputInput {
+  /** 受信した音声を再生するか。AudioContext の状態の警告は再生中だけ出す */
+  readonly playbackEnabled: boolean;
+  /** 再生の AudioContext の状態。AudioContext が無ければ null */
+  readonly contextState: AudioContextState | null;
+  /** 再生に使った AudioContext のサンプルレート (Hz)。無ければ null */
+  readonly contextSampleRate: number | null;
+  /** 直近に復号したフレーム (AudioData) のサンプルレート (Hz)。まだ復号していなければ null */
+  readonly decodedSampleRate: number | null;
+  /** AudioContext と復号フレームのサンプルレートが違った回数 (累積) */
+  readonly sampleRateMismatchFrames: number;
+  /** `<audio>` 要素の `waiting` の回数 (累積)。警告の値を添えるために使う */
+  readonly elementWaitingCount: number;
+  /** `<audio>` 要素の `stalled` の回数 (累積) */
+  readonly elementStalledCount: number;
+}
+
 /** 受信側の警告の判定の状態 (観測のたびに持ち回る) */
 export interface SubscriberWarningState {
   /** 同期の補償が上限に張り付き始めた時刻 (ミリ秒)。張り付いていなければ null */
   readonly syncPinnedSinceMs: number | null;
   /** 共有の解除の保持が始まった時刻 (ミリ秒)。保持していなければ null */
   readonly unsharedHoldSinceMs: number | null;
+  /**
+   * AudioContext が running 以外になり始めた時刻 (ミリ秒)
+   *
+   * running に戻るか AudioContext が無くなれば null に戻す。続いた時間で警告を出す
+   */
+  readonly audioContextNotRunningSinceMs: number | null;
 }
 
 /** 受信側の判定の結果 */
@@ -214,6 +269,7 @@ export interface PublisherWarningUpdate {
 export const EMPTY_SUBSCRIBER_WARNING_STATE: SubscriberWarningState = {
   syncPinnedSinceMs: null,
   unsharedHoldSinceMs: null,
+  audioContextNotRunningSinceMs: null,
 };
 
 /** 空の状態 (配信を始める前) */
@@ -229,25 +285,33 @@ function formatMs(value: number): string {
 }
 
 /**
- * 受信側 (A/V 同期) の前提から外れた状態を検出する
+ * 受信側 (A/V 同期と音声出力) の前提から外れた状態を検出する
  *
- * 見るのは次の 2 つである。どちらも「合わせる量の上限」と「共有の解除の保持」という、
- * この 1 週間で入れた判断の前提が崩れたことを示す。
+ * 見るのは次のものである。前半の 2 つは「合わせる量の上限」と「共有の解除の保持」という、
+ * この 1 週間で入れた判断の前提が崩れたことを示す。後半の 3 つは、音声を鳴らす経路
+ * (AudioContext と `<audio>` 要素) が playout の想定から外れたことを示す
+ * (docs/AUDIO_GLITCH_CAUSES.md の A1 / B4 / B7)。
  *
  * - 同期の補償 (`syncExtraDelayMs`) が上限に張り付いたまま戻らない。差が上限より大きい
  *   ため、残りは A/V のずれとして残っている
  * - 基準を共有できていない理由 (`unsharedReason`) が `hold` のまま長く続いている。解除の
  *   きっかけが去っていれば 2 秒で解除されるため、続くのは差が戻っていないか、閾値だけが
  *   動いた解除が繰り返されているかである
+ * - 復号フレームと AudioContext のサンプルレートが違う。AudioBufferSourceNode が
+ *   バッファごとにリサンプルし、20 ms の境界ごとに 1 サンプルの重なりが生まれる
+ * - 再生が有効なのに AudioContext が running 以外のまま続いている。予約した音が鳴らない
+ * - AudioContext のレートが狭帯域 (8 / 16 kHz) である。Bluetooth HFP の疑いがある
  *
  * @param previous - 前回の状態。まだ無ければ null
  * @param snapshot - 今の同期の推定値
  * @param nowMs - 今の時刻 (ミリ秒)
+ * @param audioOutput - 音声出力の診断。省略したとき (null) は音声出力の警告を出さない
  */
 export function detectSubscriberWarnings(
   previous: SubscriberWarningState | null,
   snapshot: AvSyncSnapshot,
   nowMs: number,
+  audioOutput: SubscriberAudioOutputInput | null = null,
 ): SubscriberWarningUpdate {
   const state = previous ?? EMPTY_SUBSCRIBER_WARNING_STATE;
   const delays = snapshot.delays;
@@ -323,7 +387,139 @@ export function detectSubscriberWarnings(
     });
   }
 
-  return { state: { syncPinnedSinceMs, unsharedHoldSinceMs }, warnings };
+  // 音声出力 (AudioContext と <audio> 要素) の警告は、判定のまとまりを別の関数に置く。
+  // この関数は同期の推定と音声出力の 2 種類の入力を受けるため、条件を 1 か所に足すと
+  // 複雑度の上限を超える (判定そのものは同じ形で読めるよう、関数を分けている)
+  const audioOutputWarnings =
+    audioOutput === null
+      ? { warnings: [], audioContextNotRunningSinceMs: null }
+      : detectAudioOutputWarnings(audioOutput, state, nowMs);
+
+  return {
+    state: {
+      syncPinnedSinceMs,
+      unsharedHoldSinceMs,
+      audioContextNotRunningSinceMs: audioOutputWarnings.audioContextNotRunningSinceMs,
+    },
+    // 同期の警告の後ろに音声出力の警告を並べる (並びは画面の表示順になる)
+    warnings: [...warnings, ...audioOutputWarnings.warnings],
+  };
+}
+
+/** 音声出力の警告の判定結果 */
+interface AudioOutputWarningUpdate {
+  /** 前提から外れている状態 (外れていなければ空) */
+  readonly warnings: readonly PreconditionWarning[];
+  /** 次の判定に使う、AudioContext が running 以外になり始めた時刻 (ミリ秒) */
+  readonly audioContextNotRunningSinceMs: number | null;
+}
+
+/**
+ * 音声出力 (AudioContext と `<audio>` 要素) の前提から外れた状態を検出する
+ *
+ * 見るのは次の 3 つであり、どれも playout の計器 (予約・穴・段差) からは見えない層の
+ * 出来事である (docs/AUDIO_GLITCH_CAUSES.md の A1 / B4 / B7)。
+ *
+ * - 復号フレームと AudioContext のサンプルレートが違う。AudioBufferSourceNode が
+ *   バッファごとにリサンプルし、20 ms の境界ごとに 1 サンプルの重なりが生まれる
+ * - 再生が有効なのに AudioContext が running 以外のまま続いている。予約した音が鳴らない
+ * - AudioContext のレートが狭帯域 (8 / 16 kHz) である。Bluetooth HFP の疑いがある
+ *
+ * @param audioOutput - 音声出力の診断
+ * @param previous - 前回の状態 (AudioContext が running 以外になり始めた時刻を持つ)
+ * @param nowMs - 今の時刻 (ミリ秒)
+ */
+function detectAudioOutputWarnings(
+  audioOutput: SubscriberAudioOutputInput,
+  previous: SubscriberWarningState,
+  nowMs: number,
+): AudioOutputWarningUpdate {
+  const warnings: PreconditionWarning[] = [];
+
+  // 復号フレームと AudioContext のサンプルレートが違うか。違うと AudioBufferSourceNode が
+  // バッファごとにリサンプルし、20 ms の境界ごとに 1 サンプルの重なり (毎秒 50 回の
+  // +6 dB スパイク) が生まれる。回数は購読の間の累積なので、増えている限り出す
+  // (docs/AUDIO_GLITCH_CAUSES.md の A1)
+  if (audioOutput.sampleRateMismatchFrames > 0) {
+    warnings.push({
+      id: "audioSampleRateMismatch",
+      decision: "AUDIO_GLITCH_CAUSES_A1",
+      message:
+        "The decoded audio and the AudioContext use different sample rates: " +
+        `${audioOutput.sampleRateMismatchFrames} decoded frames did not match. ` +
+        "AudioBufferSourceNode resamples every buffer, and the buffer boundary gets one extra " +
+        "sample, which adds a +6 dB spike 50 times a second (A1 in docs/AUDIO_GLITCH_CAUSES.md). " +
+        "Reconsider the AudioContext sample rate, or whether the decoder returns the " +
+        "configured rate.",
+      values: [
+        `sampleRateMismatchFrames=${audioOutput.sampleRateMismatchFrames}`,
+        `contextSampleRate=${audioOutput.contextSampleRate ?? "-"}`,
+        `decodedSampleRate=${audioOutput.decodedSampleRate ?? "-"}`,
+      ],
+    });
+  }
+
+  // AudioContext が running 以外のまま戻らないか。suspend の間は予約した音が鳴らず、
+  // 復帰すると予約済みの音が飛ぶ / 段差になる (docs/AUDIO_GLITCH_CAUSES.md の B4)
+  const contextState = audioOutput.contextState;
+  const contextSampleRate = audioOutput.contextSampleRate;
+  const notRunning =
+    audioOutput.playbackEnabled && contextState !== null && contextState !== "running";
+  const audioContextNotRunningSinceMs = notRunning
+    ? (previous.audioContextNotRunningSinceMs ?? nowMs)
+    : null;
+  if (
+    audioContextNotRunningSinceMs !== null &&
+    nowMs - audioContextNotRunningSinceMs >= AUDIO_CONTEXT_NOT_RUNNING_WARN_MS
+  ) {
+    warnings.push({
+      id: "audioContextNotRunning",
+      decision: "AUDIO_CONTEXT_STATE",
+      message:
+        `Audio playback is enabled but the AudioContext stayed in state "${contextState ?? "-"}" ` +
+        `(not running) for ${Math.round((nowMs - audioContextNotRunningSinceMs) / 1000)} s. ` +
+        "Scheduled sounds do not play while the context is suspended. The playback toggle does " +
+        "not resume the context automatically, so a suspend caused by a Bluetooth connection " +
+        "change, an output device change or an interruption stays until playback is toggled " +
+        "again. Reconsider whether to resume the context when it leaves running, or how the " +
+        "output device change is handled.",
+      values: [
+        `contextState=${contextState ?? "-"}`,
+        `heldMs=${Math.round(nowMs - audioContextNotRunningSinceMs)}`,
+        `contextSampleRate=${contextSampleRate ?? "-"}`,
+        `elementWaitingCount=${audioOutput.elementWaitingCount}`,
+        `elementStalledCount=${audioOutput.elementStalledCount}`,
+      ],
+    });
+  }
+
+  // AudioContext のレートが狭帯域か。Bluetooth のヘッドセットはマイクも使うと HFP へ
+  // 切り替わり、出力が 8 / 16 kHz になることがある。広帯域の音をこのレートで鳴らすと
+  // 折り返しとレート変換の劣化が乗る (docs/AUDIO_GLITCH_CAUSES.md の B1 / A5)
+  if (
+    contextState === "running" &&
+    contextSampleRate !== null &&
+    AUDIO_CONTEXT_NARROWBAND_SAMPLE_RATES.includes(contextSampleRate)
+  ) {
+    warnings.push({
+      id: "audioContextNarrowband",
+      decision: "AUDIO_CONTEXT_SAMPLE_RATE",
+      message:
+        `The AudioContext is running at ${contextSampleRate} Hz, which is a narrowband rate ` +
+        `(${AUDIO_CONTEXT_NARROWBAND_SAMPLE_RATES.join(" / ")} Hz). Bluetooth headsets switch to ` +
+        "HFP (handsfree) when their microphone is in use, and the default output can become " +
+        `narrowband; wideband audio is then played through this rate (decoded at ` +
+        `${audioOutput.decodedSampleRate ?? "-"} Hz). Check whether the microphone and the ` +
+        "speaker share the same Bluetooth device, or whether the output device is in HFP mode.",
+      values: [
+        `contextSampleRate=${contextSampleRate}`,
+        `decodedSampleRate=${audioOutput.decodedSampleRate ?? "-"}`,
+        `contextState=${contextState}`,
+      ],
+    });
+  }
+
+  return { warnings, audioContextNotRunningSinceMs };
 }
 
 /**

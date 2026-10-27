@@ -287,6 +287,11 @@ function crestDb(peakDbfs: number | null, rmsDbfs: number | null): number | null
   return peakDbfs - rmsDbfs;
 }
 
+/** null を "-"、数値を整数のミリ秒表記にする (失敗メッセージとログ用) */
+function formatNullableMs(value: number | null): string {
+  return value === null ? "-" : value.toFixed(0);
+}
+
 /** 判定に使う値の 1 行 (失敗メッセージとログに残す) */
 function summarizeSubscriber(stats: DevtoolsSubscriberStats): string {
   const { audio, avSync } = stats;
@@ -317,9 +322,9 @@ function summarizeSubscriber(stats: DevtoolsSubscriberStats): string {
     `catchUpStarts=${audio.playoutCatchUp.catchUpStarts}`,
     `catchUpPending=${audio.playoutCatchUp.catchingUp}`,
     `skippedMs=${audio.playoutCatchUp.skippedMs.toFixed(0)}`,
-    `catchUpLagMs=${audio.playoutCatchUp.lagMs.toFixed(0)}`,
-    `receiveDelayMs=${audio.receiveDelayMs.toFixed(0)}`,
-    `maxReceiveDelayMs=${audio.maxReceiveDelayMs.toFixed(0)}`,
+    `catchUpLagMs=${formatNullableMs(audio.playoutCatchUp.lagMs)}`,
+    `receiveDelayMs=${formatNullableMs(audio.receiveDelayMs)}`,
+    `maxReceiveDelayMs=${formatNullableMs(audio.maxReceiveDelayMs)}`,
     `startDelayMs=${audio.playoutTiming.startDelayMs?.p50 === null ? "-" : (audio.playoutTiming.startDelayMs?.p50 ?? "-")}`,
     `videoFrames=${stats.framesDecoded}`,
     `videoCatchUpPending=${stats.catchUpPending}`,
@@ -439,7 +444,7 @@ function summarizeQuality(samples: readonly AudioQualitySample[], label: string)
     `波形が崩れたサンプル=${distorted}`,
     `crest の中央値=${median === null ? "-" : median.toFixed(1)} dB`,
     `peak の最小=${Math.min(...peaks).toFixed(1)} dBFS`,
-    `receiveDelayMs=${last?.receiveDelayMs.toFixed(0) ?? "-"}`,
+    `receiveDelayMs=${formatNullableMs(last?.receiveDelayMs ?? null)}`,
     `skippedMs の増加=${first === undefined || last === undefined ? "-" : (last.skippedMs - first.skippedMs).toFixed(0)}`,
     `rebases の増加=${first === undefined || last === undefined ? "-" : String(last.rebases - first.rebases)}`,
     `missedFrames の増加=${first === undefined || last === undefined ? "-" : String(last.missedFrames - first.missedFrames)}`,
@@ -863,7 +868,7 @@ test("購読をやり直しても、cache から配られた分を飛ばして l
         `/videoCatchUp=${stats.catchUpPending ? "yes" : "no"}` +
         `/videoSkipped=${stats.catchUpFramesSkipped}` +
         `/rebases=${stats.audio.playoutRebases}` +
-        `/receiveDelay=${stats.audio.receiveDelayMs.toFixed(0)}`,
+        `/receiveDelay=${formatNullableMs(stats.audio.receiveDelayMs)}`,
     );
     if (stats.avSync.delays.sharingBases && !stats.catchUpPending) {
       shared = stats;
@@ -937,8 +942,8 @@ test("購読のやり直しを繰り返しても、毎回 live の音声へ戻�
       `回${cycle} (${Date.now() - resumeStartedMs} ms で復帰): ` +
         `objects=${after.audio.objectsReceived - before.audio.objectsReceived}, ` +
         `peakDbfs=${after.audio.peakDbfs === null ? "-" : after.audio.peakDbfs.toFixed(1)}, ` +
-        `receiveDelayMs=${after.audio.receiveDelayMs.toFixed(0)}, ` +
-        `maxReceiveDelayMs=${after.audio.maxReceiveDelayMs.toFixed(0)}, ` +
+        `receiveDelayMs=${formatNullableMs(after.audio.receiveDelayMs)}, ` +
+        `maxReceiveDelayMs=${formatNullableMs(after.audio.maxReceiveDelayMs)}, ` +
         `rebases=${after.audio.playoutRebases}, ` +
         `catchUpStarts=${after.audio.playoutCatchUp.catchUpStarts}, ` +
         `skippedMs=${after.audio.playoutCatchUp.skippedMs.toFixed(0)}, ` +
@@ -1009,8 +1014,8 @@ test("長時間の配信で、送信の遅れと受信の遅れが悪化しな�
         `/max=${publisher.audio.catchUp.maxSendLagMs === null ? "-" : publisher.audio.catchUp.maxSendLagMs.toFixed(0)}` +
         `/queue=${publisher.audio.catchUp.sendQueueMs.toFixed(0)}` +
         `/obj=${publisher.audio.objectsSent}` +
-        ` | recvDelay=${subscriber.audio.receiveDelayMs.toFixed(0)}` +
-        `/max=${subscriber.audio.maxReceiveDelayMs.toFixed(0)}` +
+        ` | recvDelay=${formatNullableMs(subscriber.audio.receiveDelayMs)}` +
+        `/max=${formatNullableMs(subscriber.audio.maxReceiveDelayMs)}` +
         `/rebases=${subscriber.audio.playoutRebases}` +
         `/skip=${subscriber.audio.playoutCatchUp.skippedMs.toFixed(0)}` +
         `/missed=${subscriber.audio.playoutTiming.missedFrames}` +

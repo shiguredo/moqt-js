@@ -11,6 +11,7 @@ import {
   getVideoDecoderConfig,
   getAudioEncoderConfig,
   getAudioDecoderConfig,
+  resolveAudioContextSampleRate,
   resolveAudioChannelCount,
   requiresAudioSpecificConfig,
   DEFAULT_AUDIO_SAMPLE_RATE,
@@ -179,6 +180,59 @@ test("getAudioDecoderConfig: description 省略時は config に載せない", (
 test("requiresAudioSpecificConfig: aac のみ true", () => {
   assert.isTrue(requiresAudioSpecificConfig("aac"));
   assert.isFalse(requiresAudioSpecificConfig("opus"));
+});
+
+// ============================================================================
+// resolveAudioContextSampleRate
+// AudioContext と復号フレームのレートを揃える (docs/AUDIO_GLITCH_CAUSES.md の A1)
+// ============================================================================
+
+/**
+ * 完了条件: opus は Catalog の samplerate に関係なく 48 kHz になる。Chromium の Opus 復号は
+ * configure の sampleRate に従わず常に 48 kHz の AudioData を返すため、Catalog が 44100 の
+ * ときに AudioContext を 44.1 kHz で作ると、20 ms のバッファ境界ごとに 1 サンプルの重なり
+ * (毎秒 50 回の +6 dB スパイク) が生まれる
+ */
+test("resolveAudioContextSampleRate: opus は Catalog の値に関係なく 48 kHz になる", () => {
+  assert.equal(resolveAudioContextSampleRate("opus", 44_100), DEFAULT_AUDIO_SAMPLE_RATE);
+  assert.equal(resolveAudioContextSampleRate("opus", 48_000), DEFAULT_AUDIO_SAMPLE_RATE);
+  // Catalog の samplerate が壊れていても 48 kHz へ落とし、NaN を AudioContext へ渡さない
+  assert.equal(resolveAudioContextSampleRate("opus", Number.NaN), DEFAULT_AUDIO_SAMPLE_RATE);
+  assert.equal(resolveAudioContextSampleRate("opus", 0), DEFAULT_AUDIO_SAMPLE_RATE);
+  assert.equal(resolveAudioContextSampleRate("opus", -1), DEFAULT_AUDIO_SAMPLE_RATE);
+  assert.equal(
+    resolveAudioContextSampleRate("opus", Number.POSITIVE_INFINITY),
+    DEFAULT_AUDIO_SAMPLE_RATE,
+  );
+});
+
+/**
+ * 完了条件: aac は Catalog の samplerate をそのまま使う。aac の復号は configure の
+ * sampleRate に従うため、AudioContext のレートを configure と同じにすればバッファの
+ * レートと一致する
+ */
+test("resolveAudioContextSampleRate: aac は Catalog の samplerate を使う", () => {
+  assert.equal(resolveAudioContextSampleRate("aac", 44_100), 44_100);
+  assert.equal(resolveAudioContextSampleRate("aac", 48_000), 48_000);
+  assert.equal(resolveAudioContextSampleRate("aac", 16_000), 16_000);
+});
+
+/**
+ * 完了条件: aac で Catalog の samplerate が無い (NaN / 0 以下 / 無限大) ときは既定値になる。
+ * 不正な値を AudioContext と decoder の configure へ渡さない
+ */
+test("resolveAudioContextSampleRate: aac の不正な samplerate は既定値になる", () => {
+  assert.equal(resolveAudioContextSampleRate("aac", Number.NaN), DEFAULT_AUDIO_SAMPLE_RATE);
+  assert.equal(resolveAudioContextSampleRate("aac", 0), DEFAULT_AUDIO_SAMPLE_RATE);
+  assert.equal(resolveAudioContextSampleRate("aac", -48_000), DEFAULT_AUDIO_SAMPLE_RATE);
+  assert.equal(
+    resolveAudioContextSampleRate("aac", Number.POSITIVE_INFINITY),
+    DEFAULT_AUDIO_SAMPLE_RATE,
+  );
+  assert.equal(
+    resolveAudioContextSampleRate("aac", Number.NEGATIVE_INFINITY),
+    DEFAULT_AUDIO_SAMPLE_RATE,
+  );
 });
 
 // ============================================================================

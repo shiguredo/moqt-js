@@ -802,6 +802,21 @@ function expectedStartMs(reservation: AudioReservation): number {
 const AV_SYNC_START_TOLERANCE_MS = 50;
 
 /**
+ * 音声を 1 つ鳴らすときに使う、AudioContext と復号フレームのサンプルレート (Hz)
+ *
+ * レート不一致の計器 (`sampleRateMismatchFrames`) の検証に使う。実物の AudioContext は
+ * 必ず `sampleRate` を持つが、このテストの最小オブジェクトは既定で持たせないため、
+ * `context` を省略すると `sampleRate` が undefined になり、「`sampleRate` を持たない
+ * AudioContext」と同じ扱いになる
+ */
+interface PlayAudioFrameSampleRates {
+  /** 偽の AudioContext の `sampleRate`。省略時は undefined にする */
+  readonly context?: number;
+  /** 復号フレーム (`AudioData`) の `sampleRate`。省略時は 48 kHz */
+  readonly decoded?: number;
+}
+
+/**
  * 音声を 1 つ鳴らし、予約のときに測った値と `start(when)` を記録する
  *
  * 音声の出力 (AudioContext / MediaStreamAudioDestinationNode) と track info は
@@ -817,12 +832,15 @@ const AV_SYNC_START_TOLERANCE_MS = 50;
  * @param mapping - この予約のときの `getOutputTimestamp()`。null なら未開始 (0/0)
  * @param currentTimeSeconds - この予約のときの `AudioContext.currentTime` (秒)。
  *   省略時は目標の表示時刻から組み立てる
+ * @param sampleRates - AudioContext と復号フレームのサンプルレート (Hz)。省略時は
+ *   `context` が undefined (レートを持たない AudioContext)、`decoded` が 48 kHz
  */
 function playAudioFrame(
   control: SubscriberAvSyncControl,
   timestampMicros: number,
   mapping: AudioClockMapping | null,
   currentTimeSeconds?: number,
+  sampleRates?: PlayAudioFrameSampleRates,
 ): AudioReservation {
   // 音声のトラックが解決できている状態にする (購読が揃っていることの条件)
   control.audioTrackInfo = makeAudioTrackInfo({
@@ -864,6 +882,9 @@ function playAudioFrame(
     reservation.currentTimeSeconds = targetSeconds / 1_000 - AUDIO_CLOCK_DEADBAND_MS / 2_000;
   }
   const audioContext = {
+    // 実物と同じ位置に sampleRate を持たせる。省略されたときは undefined になり、
+    // AudioContext がレートを持たない環境 (最小オブジェクト) を再現する
+    sampleRate: sampleRates?.context,
     get currentTime() {
       return reservation.currentTimeSeconds;
     },
@@ -901,7 +922,8 @@ function playAudioFrame(
   control.handleAudioDecodedData({
     data: {
       numberOfChannels: 1,
-      sampleRate: 48_000,
+      // 復号フレームのレートは 48 kHz が既定である (Opus の復号は常に 48 kHz を返す)
+      sampleRate: sampleRates?.decoded ?? 48_000,
       numberOfFrames: 960,
       timestamp: timestampMicros,
       copyTo: () => {},
@@ -1773,4 +1795,205 @@ test("handleAudioDecodedData と handleVideoDecodedData: 同じ TIMESTAMP は同
     recording.presentationMs + recording.deviceDelayMs,
     AV_SYNC_START_TOLERANCE_MS,
   );
+});
+
+// ============================================================================
+// AudioContext と復号フレームのサンプルレートの整合 (docs/AUDIO_GLITCH_CAUSES.md の A1)
+//
+// AudioContext のレートと復号フレームのレートが食い違うと、AudioBufferSourceNode が
+// バッファごとにリサンプルし、20 ms の境界ごとに 1 サンプルの重なり (毎秒 50 回の
+// +6 dB スパイク) が生まれる。Opus の復号は configure の sampleRate に関係なく常に
+// 48 kHz を返すため、AudioContext も復号器の configure も復号のレートへ揃える。
+// ============================================================================
+
+/**
+ * 完了条件: AudioContext と復号フレームのサンプルレートが違った回数を統計から読める。
+ * 44.1 kHz の AudioContext に 48 kHz のバッファを並べると、20 ms の境界ごとに 1 サンプルの
+ * 重なりが生まれる組み合わせである (docs/AUDIO_GLITCH_CAUSES.md の A1)。既存の
+ * boundaryStepCount は予約したサンプル列の段差しか見ないため、この現象を数えない
+ */
+test("getStats: AudioContext と復号フレームのサンプルレート不一致を数える", () => {
+  const { control } = createAvSyncSubscriber();
+  // Catalog が 44100 の Opus を購読しても復号は 48 kHz を返す (実測)。AudioContext を
+  // 44.1 kHz で作ってしまうと、この組み合わせになる
+  playAudioFrame(control, 0, null, 10, { context: 44_100, decoded: 48_000 });
+  playAudioFrame(control, 20_000, null, 10.02, { context: 44_100, decoded: 48_000 });
+  const timing = (control as unknown as { getStats(): MediaReceiverStats }).getStats().audio
+    ?.playoutTiming;
+  assert.isNotNull(timing);
+  assert.equal(timing?.sampleRateMismatchFrames, 2, "不一致のフレームを数えること");
+  assert.equal(timing?.contextSampleRate, 44_100, "直近の AudioContext のレートを返すこと");
+  assert.equal(timing?.decodedSampleRate, 48_000, "直近の復号フレームのレートを返すこと");
+});
+
+/**
+ * 完了条件: レートが一致しているときは不一致として数えず、直近の値だけを更新する。
+ * AudioContext が sampleRate を持たない (境界の型を満たすだけのオブジェクト) ときは
+ * 記録しない (計器に意味の無い値を入れない)
+ */
+test("getStats: レートが一致していれば不一致として数えない", () => {
+  const { control } = createAvSyncSubscriber();
+  playAudioFrame(control, 0, null, 10, { context: 48_000, decoded: 48_000 });
+  const timing = (control as unknown as { getStats(): MediaReceiverStats }).getStats().audio
+    ?.playoutTiming;
+  assert.isNotNull(timing);
+  assert.equal(timing?.sampleRateMismatchFrames, 0, "一致しているフレームを数えないこと");
+  assert.equal(timing?.contextSampleRate, 48_000, "直近の AudioContext のレートを返すこと");
+  assert.equal(timing?.decodedSampleRate, 48_000, "直近の復号フレームのレートを返すこと");
+
+  // AudioContext が sampleRate を持たないときは記録しない。実物には必ずあるが、
+  // 境界の型を満たすだけのオブジェクトを渡された場合に備える
+  const missing = createAvSyncSubscriber();
+  playAudioFrame(missing.control, 0, null, 10);
+  const missingTiming = (
+    missing.control as unknown as { getStats(): MediaReceiverStats }
+  ).getStats().audio?.playoutTiming;
+  assert.isNotNull(missingTiming);
+  assert.equal(
+    missingTiming?.sampleRateMismatchFrames,
+    0,
+    "レートを持たない Context で数えないこと",
+  );
+  assert.isNull(missingTiming?.contextSampleRate, "レートを持たない Context では記録しないこと");
+  assert.isNull(missingTiming?.decodedSampleRate, "レートを持たない Context では記録しないこと");
+});
+
+/**
+ * `createOutputStream` が作った AudioContext のオプションを記録する
+ *
+ * AudioContext / MediaStream は node 環境に実物が無いブラウザ専用 API であり、
+ * `createOutputStream` はグローバルから作る。この 2 つだけを差し替えて (モジュール置換は
+ * 行わない) 駆動し、同期の `createOutputStream` の実行中に限定して元に戻す。
+ *
+ * @param control - 駆動する MediaSubscriber (createOutputStream を呼べる状態)
+ * @returns 作られた AudioContext のオプション (作られた順)
+ */
+function createOutputStreamRecordingAudioContext(control: {
+  createOutputStream(): void;
+}): AudioContextOptions[] {
+  const createdOptions: AudioContextOptions[] = [];
+  const target = globalThis as unknown as { AudioContext: unknown; MediaStream: unknown };
+  const originalAudioContext = target.AudioContext;
+  const originalMediaStream = target.MediaStream;
+  target.AudioContext = class {
+    readonly state = "running";
+    constructor(options: AudioContextOptions) {
+      createdOptions.push(options);
+    }
+    createMediaStreamDestination(): MediaStreamAudioDestinationNode {
+      return {
+        stream: { getAudioTracks: () => [] },
+      } as unknown as MediaStreamAudioDestinationNode;
+    }
+  };
+  target.MediaStream = class {
+    addTrack(): void {}
+  };
+  try {
+    control.createOutputStream();
+  } finally {
+    target.AudioContext = originalAudioContext;
+    target.MediaStream = originalMediaStream;
+  }
+  return createdOptions;
+}
+
+/**
+ * 完了条件: opus を購読するとき、AudioContext を Catalog の samplerate ではなく復号が
+ * 実際に返す 48 kHz で作る。Catalog が 44100 の Opus でも復号は 48 kHz を返すため、
+ * Catalog の値で作ると 20 ms の境界ごとに 1 サンプルの重なりが生まれる
+ * (docs/AUDIO_GLITCH_CAUSES.md の A1)
+ */
+test("createOutputStream: opus は Catalog のレートではなく 48 kHz で AudioContext を作る", () => {
+  const subscriber = createTestSubscriber({ audio: {} }).subscriber;
+  const control = subscriber as unknown as SubscriberAvSyncControl;
+  control.audioTrackInfo = makeAudioTrackInfo({
+    codec: "opus",
+    samplerate: 44_100,
+    channelConfig: "2",
+  });
+  const createdOptions = createOutputStreamRecordingAudioContext(control);
+  assert.equal(createdOptions.length, 1, "AudioContext を 1 つ作ること");
+  assert.equal(createdOptions[0]?.sampleRate, 48_000, "復号のレート (48 kHz) で作ること");
+});
+
+/**
+ * 完了条件: aac を購読するとき、AudioContext を Catalog の samplerate で作る。aac の復号は
+ * configure の sampleRate に従うため、Catalog の値で AudioContext と復号フレームのレートが
+ * 一致する
+ */
+test("createOutputStream: aac は Catalog のサンプルレートで AudioContext を作る", () => {
+  const subscriber = createTestSubscriber({ audio: {} }).subscriber;
+  const control = subscriber as unknown as SubscriberAvSyncControl;
+  // Catalog の codec は WebCodecs 形式 (aac は mp4a.40.2)
+  control.audioTrackInfo = makeAudioTrackInfo({
+    codec: "mp4a.40.2",
+    samplerate: 44_100,
+    channelConfig: "2",
+  });
+  const createdOptions = createOutputStreamRecordingAudioContext(control);
+  assert.equal(createdOptions.length, 1, "AudioContext を 1 つ作ること");
+  assert.equal(createdOptions[0]?.sampleRate, 44_100, "Catalog のレートで作ること");
+});
+
+/**
+ * 完了条件: codec を解決できない (options にも Catalog にも無い) ときも、AudioContext は
+ * 既定の 48 kHz で作り、購読の開始をここで失敗させない。復号器の configure の失敗は
+ * setupDecoders が従来どおり通知する
+ */
+test("createOutputStream: codec を解決できなければ既定の 48 kHz で AudioContext を作る", () => {
+  const subscriber = createTestSubscriber({ audio: {} }).subscriber;
+  const control = subscriber as unknown as SubscriberAvSyncControl;
+  // codec を持たない catalog の track (setupDecoders がエラーにする状態)
+  control.audioTrackInfo = { name: "audio", packaging: "loc", isLive: true };
+  const createdOptions = createOutputStreamRecordingAudioContext(control);
+  assert.equal(createdOptions.length, 1, "AudioContext を 1 つ作ること");
+  assert.equal(createdOptions[0]?.sampleRate, 48_000, "既定のレートで作ること");
+});
+
+/**
+ * 完了条件: opus を購読するとき、AudioDecoder の configure にも Catalog の samplerate では
+ * なく復号が実際に返す 48 kHz を渡す。AudioContext の生成と同じ解決値へ揃える
+ * (docs/AUDIO_GLITCH_CAUSES.md の A1)
+ *
+ * AudioDecoderWrapper は WebCodecs の AudioDecoder を作る。node には無いため、その境界
+ * だけを置き換えて configure まで到達させる (useWorker: false にして worker を使わない
+ * 直接実行にする)。
+ */
+test("setupDecoders: opus の configure は Catalog のレートではなく 48 kHz にする", async () => {
+  const subscriber = createTestSubscriber({
+    audio: { codec: "opus" },
+    useWorker: false,
+  }).subscriber;
+  const control = subscriber as unknown as {
+    audioTrackInfo: CatalogTrack | null;
+    sessionGeneration: number;
+    setupDecoders(startGeneration: number): Promise<void>;
+  };
+  control.audioTrackInfo = makeAudioTrackInfo({
+    codec: "opus",
+    samplerate: 44_100,
+    channelConfig: "2",
+  });
+
+  // 差し替えた WebCodecs の AudioDecoder (configure に渡った設定を記録する)
+  const target = globalThis as unknown as { AudioDecoder: unknown };
+  const originalAudioDecoder = target.AudioDecoder;
+  const configured: AudioDecoderConfig[] = [];
+  target.AudioDecoder = class {
+    readonly state = "configured";
+    configure(config: AudioDecoderConfig): void {
+      configured.push(config);
+    }
+    decode(): void {}
+    close(): void {}
+  };
+  try {
+    await control.setupDecoders(control.sessionGeneration);
+  } finally {
+    target.AudioDecoder = originalAudioDecoder;
+  }
+  assert.equal(configured.length, 1, "configure を 1 回呼ぶこと");
+  assert.equal(configured[0]?.codec, "opus");
+  assert.equal(configured[0]?.sampleRate, 48_000, "復号のレート (48 kHz) で configure すること");
 });

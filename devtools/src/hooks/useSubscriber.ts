@@ -59,6 +59,7 @@ import {
   DEFAULT_AUDIO_SAMPLE_RATE,
   requiresAudioSpecificConfig,
   resolveAudioChannelCount,
+  resolveAudioContextSampleRate,
 } from "../../../src/codec/config.ts";
 import { isSameCodecDescription, parseAudioCodec } from "../utils/codec";
 import {
@@ -516,6 +517,18 @@ export function resetSubscriberStats(instance: sub.SubscriberInstance): void {
   instance.audioHostDelay.value = EMPTY_HOST_DELAY;
   instance.audioDelayFeedback.value = sub.EMPTY_AUDIO_DELAY_FEEDBACK;
   instance.audioPlayoutCatchUp.value = EMPTY_AUDIO_RECEIVE_CATCH_UP;
+  // AudioContext と <audio> 要素の診断も、前の購読の値を持ち越さない。ただし再生中の
+  // AudioContext がある場合 (再生を先に有効にしてから購読した場合) は、その状態とレートを
+  // 消さない。AudioContext は購読より長く生き、消したままにすると次の statechange まで
+  // 診断できない (<audio> 要素の回数は、この購読の開始を区切りに数え直す)
+  if (!instance.audioPlaybackEnabled.value) {
+    instance.audioContextState.value = null;
+    instance.audioContextSampleRate.value = null;
+  }
+  instance.audioContextStateChanges.value = 0;
+  instance.audioElementWaitingCount.value = 0;
+  instance.audioElementStalledCount.value = 0;
+  instance.audioElementErrorCount.value = 0;
 }
 
 /**
@@ -919,6 +932,12 @@ export function useSubscriber(
   // 二重呼び出しは同じ Promise を共有し、AudioContext も 1 回だけ閉じる。
   // 音声の再生のライフサイクル (audioPlaybackController) と、復号の対応付けの両方が使う
   const audioStopRef = useRef(new SubscriberAudioStop());
+  // 音声を鳴らす AudioContext のサンプルレート (Hz)。復号器の configure と同じ解決値
+  // (`resolveAudioContextSampleRate`) を、音声の購読を始めるときに保存する。AudioContext は
+  // 再生のトグルで作られるため、購読の開始までに決めた値を ref 経由で渡す
+  // (docs/AUDIO_GLITCH_CAUSES.md の A1: 復号フレームとのレート不一致で 20 ms ごとに
+  // 1 サンプルの重なりが生まれる)
+  const audioContextSampleRateRef = useRef<number>(DEFAULT_AUDIO_SAMPLE_RATE);
   // startSubscribing の中断検知用 AbortController (レンダリング間で安定参照)
   const abortControllerRef = useRef<AbortController | null>(null);
   // 再生先が変わったら、今の <audio> へすぐ反映する。空文字はブラウザの既定
@@ -936,6 +955,46 @@ export function useSubscriber(
       console.error("Failed to set audio output device:", error);
     });
   });
+  // 音声を鳴らす <audio> 要素のイベントを数える。`waiting` は要素がバッファ待ちで
+  // 再生を止めた回数、`stalled` はメディアデータの到着が止まった回数、`error` は要素が
+  // ストリームを再生できなかった回数である。どれも playout より下流
+  // (HTMLMediaElement、その先の出力デバイス) の出来事であり、playout の計器が 0 のまま
+  // 音が途切れるときに、下流で起きているかを切り分けるために使う
+  // (docs/AUDIO_GLITCH_CAUSES.md の B7)。<audio> 要素はパネルの描画で作られるため、
+  // マウント後に 1 回だけ付け、クリーンアップで外す (パネルが消えた後に数えない)
+  useEffect(() => {
+    const audioElement = audioRef.current;
+    if (audioElement === null) {
+      return undefined;
+    }
+    // 購読インスタンスがまだあるときだけ数える。パネルの削除や停止の後は数えない
+    const onWaiting = (): void => {
+      const instance = sub.getSubscriber(subscriberId);
+      if (instance !== undefined) {
+        instance.audioElementWaitingCount.value += 1;
+      }
+    };
+    const onStalled = (): void => {
+      const instance = sub.getSubscriber(subscriberId);
+      if (instance !== undefined) {
+        instance.audioElementStalledCount.value += 1;
+      }
+    };
+    const onError = (): void => {
+      const instance = sub.getSubscriber(subscriberId);
+      if (instance !== undefined) {
+        instance.audioElementErrorCount.value += 1;
+      }
+    };
+    audioElement.addEventListener("waiting", onWaiting);
+    audioElement.addEventListener("stalled", onStalled);
+    audioElement.addEventListener("error", onError);
+    return () => {
+      audioElement.removeEventListener("waiting", onWaiting);
+      audioElement.removeEventListener("stalled", onStalled);
+      audioElement.removeEventListener("error", onError);
+    };
+  }, [subscriberId]);
   // 音声と映像の再生の入口。時間軸 (時間軸への記録・表示時刻の決定)、音声の再生
   // (目標の決定・予約・計器への記録)、映像の表示 (表示待ちのキュー・表示周期の
   // 選択・計器への記録)、復号へ渡した入力の対応表をまとめて持つ (moqt-js の
@@ -1038,6 +1097,37 @@ export function useSubscriber(
         sub.getSubscriber(subscriberId)?.audioPlaybackEnabled ?? null,
       playAudioEnabled: settings.playAudioEnabled,
       getSelectedAudioOutputDeviceId: () => settings.selectedAudioOutputDeviceId.value,
+      // 音声の購読を始めるときに決めた AudioContext のサンプルレート。再生のトグルで
+      // AudioContext を作るときに読む
+      getAudioContextSampleRate: () => audioContextSampleRateRef.current,
+      // AudioContext の状態を signal へ写す。AudioContext を作った直後の初期状態も同じ
+      // コールバックで届く。初期状態は statechange ではないため回数に数えず、
+      // その代わりに新しい再生の始まりとして <audio> 要素のイベントを数え直す
+      onAudioContextStateChange: (state, contextSampleRate) => {
+        const instance = sub.getSubscriber(subscriberId);
+        if (instance === undefined) {
+          return;
+        }
+        // 状態が null なら AudioContext がまだ無い。つまり今の通知は作った直後の初期状態
+        if (instance.audioContextState.value === null) {
+          instance.audioElementWaitingCount.value = 0;
+          instance.audioElementStalledCount.value = 0;
+          instance.audioElementErrorCount.value = 0;
+        } else {
+          instance.audioContextStateChanges.value += 1;
+        }
+        instance.audioContextState.value = state;
+        instance.audioContextSampleRate.value = contextSampleRate;
+      },
+      // AudioContext を閉じた。閉じた Context の状態を画面に残さない
+      onAudioContextClosed: () => {
+        const instance = sub.getSubscriber(subscriberId);
+        if (instance === undefined) {
+          return;
+        }
+        instance.audioContextState.value = null;
+        instance.audioContextSampleRate.value = null;
+      },
       restartAudioPlayoutCumulative: () => {
         // 入口の統計を 1 回だけ読み、基準と表示に共用する
         const instance = sub.getSubscriber(subscriberId);
@@ -1736,7 +1826,14 @@ export function useSubscriber(
       throw new Error("audio track codec is not specified in catalog");
     }
     const audioCodec = parseAudioCodec(audioTrack.codec);
-    const sampleRate = audioTrack.samplerate ?? DEFAULT_AUDIO_SAMPLE_RATE;
+    const catalogSampleRate = audioTrack.samplerate ?? DEFAULT_AUDIO_SAMPLE_RATE;
+    // AudioContext と復号器の configure を、復号が実際に返すレートへ揃える。Chromium の
+    // Opus 復号は configure の sampleRate に関係なく 48 kHz を返すため、Catalog が 44100 の
+    // ときに Catalog の値を使うと復号フレームと AudioContext のレートが食い違う
+    // (docs/AUDIO_GLITCH_CAUSES.md の A1)。AudioContext は再生の開始時に作るため、
+    // 解決値は ref に保存して渡す
+    const sampleRate = resolveAudioContextSampleRate(audioCodec, catalogSampleRate);
+    audioContextSampleRateRef.current = sampleRate;
     // channelConfig は名前付き値 (mono / stereo) と整数文字列を受け付ける。
     // 解決不能な明示値はここで throw し、NaN をデコーダに渡さない
     const channels = resolveAudioChannelCount(audioTrack.channelConfig);
@@ -2085,7 +2182,10 @@ export function useSubscriber(
     addLog("info", `[${subscriberId}] subscribed audio track`, {
       trackName: audioTrack.name,
       codec: audioTrack.codec,
-      sampleRate,
+      // Catalog の宣言値と、実際に AudioContext と復号器へ使う解決値の両方を残す
+      // (opus は Catalog が 44100 でも復号が 48 kHz を返すため、値が異なる)
+      sampleRate: catalogSampleRate,
+      audioContextSampleRate: sampleRate,
       channels,
     });
   }

@@ -15,6 +15,7 @@ import {
   TimingTable,
 } from "./StatsView";
 import {
+  AUDIO_OUTPUT_HELP,
   AUDIO_PLAYOUT_CATCH_UP_HELP,
   AUDIO_PLAYOUT_MISSED_HELP,
   AUDIO_PLAYOUT_TIMING_HELP,
@@ -715,12 +716,33 @@ function SubscriberStats({ statsSignal }: { statsSignal: ReadonlySignal<Subscrib
                 testId: "subscriber-audio-playback-unplanned-frames",
               },
               {
-                // 時間圧縮と補間を使えないサンプルレート (4 kHz へ間引く表に無い 44.1 kHz など)
-                // で鳴らした音。0 なら使えている。増えていると、遅れが目標へ戻らない原因が
-                // これであると分かる
+                // 時間圧縮と補間を使えないサンプルレート (8 / 16 / 32 / 48 kHz と 44.1 kHz 以外。
+                // 24 / 22.05 / 88.2 / 96 kHz など) で鳴らした音。0 なら使えている。増えていると、
+                // 遅れが目標へ戻らない原因がこれであると分かる
                 label: "stretchUnavailableFrames",
                 value: stats.audio.playoutTiming.stretchUnavailableFrames,
                 testId: "subscriber-audio-playback-stretch-unavailable-frames",
+              },
+              {
+                // AudioContext と復号フレームのサンプルレートが違った回数。0 より大きいと、
+                // バッファ境界ごとに 1 サンプルの重なり (毎秒 50 回の +6 dB スパイク) が
+                // 生まれる組み合わせで鳴らしている (docs/AUDIO_GLITCH_CAUSES.md の A1)
+                label: "sampleRateMismatchFrames",
+                value: stats.audio.playoutTiming.sampleRateMismatchFrames,
+                tone: "warn",
+                testId: "subscriber-audio-playback-sample-rate-mismatch-frames",
+              },
+              {
+                // 直近の AudioContext のサンプルレート (Hz)。復号フレームのレートと並べて読む
+                label: "contextSampleRate",
+                value: stats.audio.playoutTiming.contextSampleRate ?? "-",
+                testId: "subscriber-audio-playback-context-sample-rate",
+              },
+              {
+                // 直近の復号フレーム (AudioData) のサンプルレート (Hz)
+                label: "decodedSampleRate",
+                value: stats.audio.playoutTiming.decodedSampleRate ?? "-",
+                testId: "subscriber-audio-playback-decoded-sample-rate",
               },
             ]}
           />
@@ -898,6 +920,58 @@ function SubscriberStats({ statsSignal }: { statsSignal: ReadonlySignal<Subscrib
                 value: stats.audio.hostDelay.overlappedArrivalCount,
                 tone: "warn",
                 testId: "subscriber-audio-host-overlapped-arrivals",
+              },
+            ]}
+          />
+        </StatSection>
+
+        <StatSection title="Output" help={AUDIO_OUTPUT_HELP} testId="subscriber-audio-output">
+          {/* 音声を鳴らす AudioContext の状態と <audio> 要素のイベント。どちらも playout の
+              計器からは見えない層であり、計器が 0 のまま音が途切れるときに、AudioContext が
+              止まっていたのか、要素より下流で起きているのかを切り分ける
+              (docs/AUDIO_GLITCH_CAUSES.md の B4 / B7) */}
+          <StatList
+            items={[
+              {
+                // AudioContext の statechange と、作った直後の初期状態
+                label: "contextState",
+                value: stats.audioOutput.contextState ?? "-",
+                testId: "subscriber-audio-output-context-state",
+              },
+              {
+                // statechange の回数 (累積)。Bluetooth の接続 / 切断や出力デバイスの変更で
+                // Context が止まって戻った回数である
+                label: "contextStateChanges",
+                value: stats.audioOutput.contextStateChanges,
+                tone: "warn",
+                testId: "subscriber-audio-output-context-state-changes",
+              },
+              {
+                // 再生に使った AudioContext のレート (Hz)。復号フレームのレートと並べて読む
+                label: "contextSampleRate",
+                value: stats.audioOutput.contextSampleRate ?? "-",
+                testId: "subscriber-audio-output-context-sample-rate",
+              },
+              {
+                // <audio> 要素がバッファ待ちで再生を止めた回数 (累積)
+                label: "elementWaitingCount",
+                value: stats.audioOutput.elementWaitingCount,
+                tone: "warn",
+                testId: "subscriber-audio-output-element-waiting-count",
+              },
+              {
+                // <audio> 要素でメディアデータの到着が止まった回数 (累積)
+                label: "elementStalledCount",
+                value: stats.audioOutput.elementStalledCount,
+                tone: "warn",
+                testId: "subscriber-audio-output-element-stalled-count",
+              },
+              {
+                // <audio> 要素がストリームを再生できなかった回数 (累積)
+                label: "elementErrorCount",
+                value: stats.audioOutput.elementErrorCount,
+                tone: "error",
+                testId: "subscriber-audio-output-element-error-count",
               },
             ]}
           />
