@@ -179,6 +179,8 @@ const PUBLISHER_COVERAGE: CoverageExpectation = {
     eventMessagesSent: "event.messagesSent",
   },
   excluded: {
+    pubCandidateSelection:
+      "パネルごとの接続先の選び方の UI 状態で、実際に使った接続先は serverUrl として出す",
     pubConnectedNamespace:
       "接続に使った Track Namespace のフィールド列。候補の msf fragment が決める場合は接続設定の namespace と異なるため、配信中のログに出す値として保持する",
     pubSession:
@@ -257,6 +259,8 @@ const SUBSCRIBER_COVERAGE: CoverageExpectation = {
     eventObjectsReceived: "event.objectsReceived",
   },
   excluded: {
+    candidateSelection:
+      "購読ごとの接続先の選び方の UI 状態で、実際に使った接続先は serverUrl として出す",
     session: "Session の実体。制御ストリームとデータストリームの統計は sessionStatistics に出す",
     subscriber: "映像の Subscriber の実体。状態は status / codec に出す",
     catalogSubscriber: "Catalog 用の Subscriber の実体。受けた Catalog は catalog に出す",

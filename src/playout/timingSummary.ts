@@ -34,5 +34,8 @@ export function summarizeTimings(values: readonly number[]): TimingSummary | nul
 
 function nearestRank(sorted: readonly number[], ratio: number): number {
   const index = Math.max(0, Math.ceil(ratio * sorted.length) - 1);
-  return sorted[index] ?? Number.NaN;
+  const value = sorted[index] ?? Number.NaN;
+  // -0 と 0 は数値としては等しいが、deepEqual では区別される。入力に両方が含まれると
+  // 並び順で要約の符号が変わるため、符号付きゼロは 0 に正規化する
+  return value === 0 ? 0 : value;
 }

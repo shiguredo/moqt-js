@@ -21,6 +21,7 @@ import { formatPreconditionWarning } from "../utils/preconditionWarnings";
 import { AudioMeter } from "./AudioMeter";
 import { VideoCard } from "./VideoCard";
 import { HttpVersionBadge } from "./HttpVersionBadge";
+import { CandidatePicker } from "./CandidatePicker";
 import { CatalogTracks } from "./CatalogTracks";
 import { MessageComposer } from "./MessageComposer";
 import { PANEL_OPTION_ROW_CLASS } from "./panelLayout";
@@ -110,8 +111,8 @@ export function PublisherPanel() {
   }, []);
 
   return (
-    <div class="bg-white rounded-xl shadow-sm overflow-hidden">
-      <div class="bg-gradient-to-r from-green-500 to-green-600 px-5 py-3">
+    <div class="bg-white rounded-xl shadow-sm">
+      <div class="bg-gradient-to-r from-green-500 to-green-600 px-5 py-3 rounded-t-xl">
         <div class="flex items-center justify-between">
           <h2 class="text-lg font-semibold text-white flex items-center gap-2">
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -141,18 +142,22 @@ export function PublisherPanel() {
           {pub.pubStatusMessage.value}
         </div>
 
-        {/* 接続先の候補から選んだ MOQT URI。この配信がどこの relay へ繋いだかを
-            パネルだけで分かるようにする。未選択の間も行を描き、値を「-」にする
-            (接続の開始で行が現れると映像の位置が動く) */}
-        <div
-          class="mt-1.5 flex items-baseline gap-2 text-xs text-slate-500 min-w-0"
-          title={pub.pubSelectedServerUrl.value ?? ""}
-          data-testid="publisher-selected-candidate"
-        >
-          <span class="shrink-0">Candidate:</span>
-          <span class="font-mono text-slate-700 truncate min-w-0">
-            {pub.pubSelectedServerUrl.value ?? "-"}
-          </span>
+        {/* 接続先の候補と選び方。この配信がどこの relay へ繋いだかをパネルだけで分かる
+            ようにする。行は常に描き、接続中は選択を変えられない (次の接続から反映する) */}
+        <div class="mb-3" data-testid="publisher-selected-candidate">
+          <CandidatePicker
+            selection={pub.pubCandidateSelection.value}
+            selectedServerUrl={pub.pubSelectedServerUrl.value}
+            enabledCandidates={settings.enabledServerUrlCandidateUrls.value}
+            suspended={settings.serverUrlCandidatesSuspended.value}
+            sharedUrl={settings.url.value}
+            disabled={pub.isStarting.value || pub.isStopping.value || pub.hasActivePublisher.value}
+            testId="publisher-candidate"
+            panelLabel="Publisher"
+            onChange={(selection) => {
+              pub.pubCandidateSelection.value = selection;
+            }}
+          />
         </div>
 
         {/* paused 状態 (FORWARD パラメータ)。配信していない間も描き、値を「-」にする (配信の開始で行が

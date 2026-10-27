@@ -7,6 +7,8 @@ import { DebugPanel } from "./components/DebugPanel";
 import { DebugLogBadge } from "./components/DebugLogBadge";
 import { isDebugPanelOpen, toggleDebugPanel } from "./signals/debug";
 import { buildQueryString, mode } from "./signals/connectionSettings";
+import { appendCandidateSelections } from "./signals/candidateSelection";
+import { AUTO_CANDIDATE_SELECTION, type CandidateSelection } from "./utils/candidateSelection";
 import { useCopyUrlButton } from "./hooks/useCopyUrlButton";
 import * as sub from "./signals/subscriber";
 
@@ -18,12 +20,25 @@ function handleAddSubscriber(): void {
   sub.addSubscriber();
 }
 
+/**
+ * 購読ごとの接続先の選択 (自動 / 固定) を、パネルの並び順に集める
+ *
+ * Copy URL でパネルごとの選択も共有するために使う。Subscriber が作られた順に並べる。
+ */
+function collectSubscriberCandidateSelections(): CandidateSelection[] {
+  return sub.subscriberIds.value.map(
+    (id) =>
+      sub.subscriberInstances.value.get(id)?.candidateSelection.value ?? AUTO_CANDIDATE_SELECTION,
+  );
+}
+
 export function App() {
   const subscriberIdList = sub.subscriberIds.value;
   const debugPanelOpen = isDebugPanelOpen.value;
   const currentMode = mode.value;
-  const { buttonText: copyButtonText, copy: copyUrlToClipboard } =
-    useCopyUrlButton(buildQueryString);
+  const { buttonText: copyButtonText, copy: copyUrlToClipboard } = useCopyUrlButton(() =>
+    appendCandidateSelections(buildQueryString(), collectSubscriberCandidateSelections()),
+  );
 
   return (
     <div class="flex min-h-screen bg-slate-100">

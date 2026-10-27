@@ -21,3 +21,18 @@ test("summarizeTimings: 渡した配列を並べ替えない", () => {
   summarizeTimings(values);
   assert.deepEqual(values, [3, 1, 2]);
 });
+
+// -0 と 0 が混在しても、入力の並び順で要約が変わらず、結果に符号付きゼロを残さない。
+// Node.js 24 の CI で fast-check が [-0, 0] を生成し、deepEqual が -0 と 0 を区別して
+// Property-Based Test が落ちたため、ここで直接固定する
+test("summarizeTimings: -0 と 0 が混在しても同じ要約になり、符号付きゼロを残さない", () => {
+  const forward = summarizeTimings([-0, 0]);
+  const backward = summarizeTimings([0, -0]);
+  assert.deepEqual(forward, backward);
+  assert.deepEqual(forward, { p50: 0, p95: 0, max: 0 });
+  if (forward !== null) {
+    assert.isFalse(Object.is(forward.p50, -0), "p50 に -0 を残さないこと");
+    assert.isFalse(Object.is(forward.p95, -0), "p95 に -0 を残さないこと");
+    assert.isFalse(Object.is(forward.max, -0), "max に -0 を残さないこと");
+  }
+});

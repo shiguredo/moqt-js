@@ -1,6 +1,7 @@
 import { render } from "preact";
 import { App } from "./App";
 import { initFromUrl, mode, serverUrlCandidates } from "./signals/connectionSettings";
+import { applyCandidateSelectionsFromUrl } from "./signals/candidateSelection";
 import * as sub from "./signals/subscriber";
 import { initTestApi } from "./testApi";
 import { startPreconditionWatch } from "./signals/preconditionWatch";
@@ -14,6 +15,9 @@ async function start(): Promise<void> {
 
   // URL のクエリパラメータから設定を読み込む
   initFromUrl(window.location.search);
+  // パネルごとの接続先の選択 (自動 / 固定) は接続設定とは別に復元する。候補の一覧を
+  // 読み込んだ後でないと有効な候補を判定できないため、initFromUrl の後に呼ぶ
+  applyCandidateSelectionsFromUrl(window.location.search);
 
   // テスト用 API を初期化 (window.moqtDevTools を公開)
   initTestApi();

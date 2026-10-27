@@ -45,6 +45,7 @@ import {
   type AudioDelayFeedbackSnapshot,
 } from "moqt-js";
 import { addLog } from "../signals/debugLog";
+import { type CandidateSelection } from "../utils/candidateSelection.ts";
 import type { TrackEndState } from "../types";
 import { logDebugMessage } from "./debugMessageLog";
 import { DecoderWrapper } from "../utils/DecoderWrapper";
@@ -865,7 +866,7 @@ function resolveSubscriberConnectSettings(
   subscriberId: string,
   instance: sub.SubscriberInstance,
 ): SubscriberConnectSettings {
-  const target = settings.resolveConnectTarget();
+  const target = settings.resolveConnectTarget(instance.candidateSelection.value);
   if (target.selectedServerUrl !== null) {
     addLog("info", `[${subscriberId}] selected the connection target from the candidates`, {
       url: target.selectedServerUrl,
@@ -885,8 +886,8 @@ function resolveSubscriberConnectSettings(
  * MOQT URI 欄は登録した候補の表示欄で、手入力は無い。候補も共有リンクの接続先も無ければ
  * 接続先が決まらないため、接続の前に理由を出す。
  */
-function assertConnectUrl(connectUrl: string): void {
-  const problem = settings.connectTargetProblem(connectUrl);
+function assertConnectUrl(connectUrl: string, selection: CandidateSelection): void {
+  const problem = settings.connectTargetProblem(connectUrl, selection);
   if (problem !== null) {
     throw new Error(problem);
   }
@@ -2617,7 +2618,7 @@ export function useSubscriber(
       );
 
       // 接続先が決まっていることを確かめる (MOQT URI 欄は候補の表示欄で、手入力は無い)
-      assertConnectUrl(connectUrl);
+      assertConnectUrl(connectUrl, instance.candidateSelection.value);
 
       // MOQT サーバへ接続する
       const session = await connect(

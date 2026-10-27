@@ -32,6 +32,7 @@ import { formatBytes } from "../utils/logFormatters";
 import { formatDbfsShort } from "../utils/audioLevel";
 import { formatPreconditionWarning } from "../utils/preconditionWarnings";
 import { CatalogTracks } from "./CatalogTracks";
+import { CandidatePicker } from "./CandidatePicker";
 import { MessageList } from "./MessageList";
 import { PANEL_OPTION_CAPTION_CLASS, PANEL_OPTION_ROW_CLASS } from "./panelLayout";
 import { formatLossEvent, formatStallEvent } from "../utils/playoutTimingStats";
@@ -179,8 +180,8 @@ export function SubscriberPanel({
   };
 
   return (
-    <div class="bg-white rounded-xl shadow-sm overflow-hidden">
-      <div class="bg-gradient-to-r from-blue-500 to-blue-600 px-5 py-3">
+    <div class="bg-white rounded-xl shadow-sm">
+      <div class="bg-gradient-to-r from-blue-500 to-blue-600 px-5 py-3 rounded-t-xl">
         <div class="flex items-center justify-between">
           <h2 class="text-lg font-semibold text-white flex items-center gap-2">
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -237,18 +238,22 @@ export function SubscriberPanel({
           {instance.statusMessage.value}
         </div>
 
-        {/* 接続先の候補から選んだ MOQT URI。購読ごとに選ぶ候補が異なり得るため、この購読が
-            どこの relay へ繋いだかをパネルだけで分かるようにする。未選択の間も行を描き、
-            値を「-」にする (購読の開始で行が現れると映像の位置が動く) */}
-        <div
-          class="mt-1.5 flex items-baseline gap-2 text-xs text-slate-500 min-w-0"
-          title={instance.selectedServerUrl.value ?? ""}
-          data-testid="subscriber-selected-candidate"
-        >
-          <span class="shrink-0">Candidate:</span>
-          <span class="font-mono text-slate-700 truncate min-w-0">
-            {instance.selectedServerUrl.value ?? "-"}
-          </span>
+        {/* 接続先の候補と選び方。購読ごとに候補が異なり得るため、この購読がどこの relay へ
+            繋いだかをパネルだけで分かるようにする。行は常に描き、購読中は選択を変えられない */}
+        <div class="mb-3" data-testid="subscriber-selected-candidate">
+          <CandidatePicker
+            selection={instance.candidateSelection.value}
+            selectedServerUrl={instance.selectedServerUrl.value}
+            enabledCandidates={settings.enabledServerUrlCandidateUrls.value}
+            suspended={settings.serverUrlCandidatesSuspended.value}
+            sharedUrl={settings.url.value}
+            disabled={isSubscribing || instance.isStarting.value || instance.isStopping.value}
+            testId="subscriber-candidate"
+            panelLabel="Subscriber"
+            onChange={(selection) => {
+              instance.candidateSelection.value = selection;
+            }}
+          />
         </div>
 
         {/* Subscribe Options。Publisher の paused 状態の行と同じ高さの枠で描き、

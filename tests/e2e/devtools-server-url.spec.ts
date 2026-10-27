@@ -9,6 +9,8 @@ import { DEVTOOLS_URL } from "./urls";
 //   (Save / Cancel のような確定操作は無く、閉じても変更は取り消されない)
 // - 表示値: 有効 1 件はその URI、有効 2 件以上は "Random from N candidates"、候補はあるが
 //   有効 0 件は "No candidate enabled"、候補なしは空。共有リンクの page は url の値
+// - パネルごとに Auto (接続のたびにランダム) と固定 (選んだ候補を毎回使う) を選べる。
+//   固定した候補が無効になったときは Not enabled と表示し、接続の前に拒否する
 // - 起動時は候補を接続設定 (URL signal) へ適用しない
 // - 以前の版は 1 行の MOQT URI を server-url.txt に保存しており、読み込み時に候補 1 件へ
 //   移行する
@@ -179,26 +181,65 @@ async function documentLayout(locator: Locator): Promise<{
   });
 }
 
-/** パネルに出ている "Candidate: <MOQT URI>" の MOQT URI 部分を取り出す */
-async function selectedCandidateUrl(locator: Locator): Promise<string> {
-  const text = (await locator.textContent()) ?? "";
-  const prefix = "Candidate:";
-  if (!text.startsWith(prefix)) {
-    throw new Error(`選んだ候補の行が "Candidate:" で始まっていません: ${text}`);
-  }
-  return text.slice(prefix.length).trim();
+/** パネルの候補行に出ている、選択を変えるチップ (有効な候補が 2 件以上のときだけ) */
+function candidateChip(row: Locator): Locator {
+  return row.locator('[data-testid$="-button"]');
 }
 
-/** パネルの行に出た候補が、登録した候補のどれかであることを確かめ、その URI を返す */
-async function expectSelectedCandidateRow(
-  locator: Locator,
-  urls: readonly string[],
-): Promise<string> {
-  await expect(locator).toBeVisible();
-  await expect(locator).toContainText("Candidate:");
-  const selected = await selectedCandidateUrl(locator);
-  expect(urls).toContain(selected);
-  return selected;
+/**
+ * パネルの候補行の表示を読む
+ *
+ * 有効な候補が 2 件以上のときはチップのラベル (Auto / 固定した URI / 接続で選ばれた URI)
+ * とタグ (Auto / Fixed / Not enabled) を返す。1 件以下のときはチップが無く、URI か "-" を
+ * そのまま出すため、それをラベルとして返す。行の値は候補の変化に追従するため、
+ * Playwright の自動待ちが効くよう `toContainText` で先に待つ。
+ */
+async function readCandidatePicker(row: Locator): Promise<{ label: string; tag: string | null }> {
+  await expect(row).toContainText("Candidate:");
+  const value = row.locator('[data-testid$="-value"]');
+  await expect(value).toHaveCount(1);
+  const label = ((await value.textContent()) ?? "").trim();
+  const tag = row.locator('[data-testid$="-tag"]');
+  const tagText = (await tag.count()) > 0 ? ((await tag.textContent()) ?? "").trim() : null;
+  return { label, tag: tagText };
+}
+
+/** 有効な候補が 2 件以上のとき、まだ接続していない Auto のチップ (タグなし) を確かめる */
+async function expectIdleAutoChip(row: Locator): Promise<void> {
+  await expect(candidateChip(row)).toHaveCount(1);
+  const picker = await readCandidatePicker(row);
+  expect(picker.label).toBe("Auto");
+  expect(picker.tag).toBeNull();
+}
+
+/** Auto のまま接続を試みた後、選ばれた候補が Auto タグ付きで出ていることを確かめる */
+async function expectAutoTaggedCandidate(row: Locator, urls: readonly string[]): Promise<string> {
+  const picker = await readCandidatePicker(row);
+  expect(urls).toContain(picker.label);
+  expect(picker.tag).toBe("Auto");
+  return picker.label;
+}
+
+/** 固定した候補が Fixed タグ付きで出ていることを確かめる */
+async function expectFixedTaggedCandidate(row: Locator, url: string): Promise<void> {
+  const picker = await readCandidatePicker(row);
+  expect(picker.label).toBe(url);
+  expect(picker.tag).toBe("Fixed");
+}
+
+/** パネルの候補チップを開く (選択はモーダルで行う) */
+async function openCandidateModal(row: Locator): Promise<Locator> {
+  await candidateChip(row).click();
+  const modal = row.locator('[data-testid$="-modal"]');
+  await expect(modal).toBeVisible();
+  return modal;
+}
+
+/** パネルの候補チップから Auto か、enabled な候補の並び順で指定した候補を選ぶ */
+async function chooseCandidateSelection(row: Locator, option: "auto" | number): Promise<void> {
+  const modal = await openCandidateModal(row);
+  await modal.locator(`[data-testid$="-option-${option}"]`).click();
+  await expect(modal).toHaveCount(0);
 }
 
 test("MOQT URI 欄は候補の表示欄で、クリックとキーボードで管理モーダルを開ける", async ({
@@ -673,6 +714,9 @@ test("Copy URL は有効な候補を urlCandidates に載せ、url が空でも�
     throw new Error("共有 URL に urlCandidates が含まれていません");
   }
   expect(JSON.parse(candidatesParam)).toEqual([relayA]);
+  // 有効な候補が 1 件だけのときは、パネルごとの選択 (Auto / 固定) を URL に載せない
+  expect(copiedUrl.searchParams.has("publisherCandidate")).toBe(false);
+  expect(copiedUrl.searchParams.has("subscriberCandidates")).toBe(false);
 
   // OPFS を空にした page で開いても、urlCandidates から候補を復元できる
   await clearOpfsServerUrlFiles(page);
@@ -719,9 +763,20 @@ test("url だけの共有リンクは候補を止め、候補を編集すると�
   // モーダルを開いていない間は、モーダル側の説明は出ない
   await expect(page.getByTestId("server-url-candidates-suspended-note")).toHaveCount(0);
 
-  // この page では候補を使っていないため、Copy URL に urlCandidates を載せない
+  // パネルの候補行も、この page では shared MOQT URI をそのまま表示する (チップは出ない)
+  const publisherRow = page.getByTestId("publisher-selected-candidate");
+  const subscriberRow = page.getByTestId("subscriber-selected-candidate");
+  expect(await readCandidatePicker(publisherRow)).toEqual({ label: sharedUrl, tag: null });
+  expect(await readCandidatePicker(subscriberRow)).toEqual({ label: sharedUrl, tag: null });
+  await expect(candidateChip(publisherRow)).toHaveCount(0);
+
+  // この page では候補を使っていないため、Copy URL に urlCandidates もパネルごとの選択も
+  // 載せない
   await page.getByTestId("copy-url").click();
-  expect(new URL(page.url()).searchParams.has("urlCandidates")).toBe(false);
+  const suspendedCopiedUrl = new URL(page.url());
+  expect(suspendedCopiedUrl.searchParams.has("urlCandidates")).toBe(false);
+  expect(suspendedCopiedUrl.searchParams.has("publisherCandidate")).toBe(false);
+  expect(suspendedCopiedUrl.searchParams.has("subscriberCandidates")).toBe(false);
 
   // 共有リンクを開いただけでは OPFS の候補を変更しない
   expect(await readOpfsFile(page, SERVER_URLS_FILE)).toBe(storedBefore);
@@ -738,8 +793,10 @@ test("url だけの共有リンクは候補を止め、候補を編集すると�
   // 編集すると停止が解除され、設定のタグとモーダル内の説明が消える
   await expect(suspendedTag).toHaveCount(0);
   await expect(page.getByTestId("server-url-candidates-suspended-note")).toHaveCount(0);
-  // 停止が解除され、有効な 1 件の URI を表示する
+  // 停止が解除され、有効な 1 件の URI を表示する (チップは 2 件以上でだけ出る)
   await expect(uriField).toHaveValue(relayA);
+  expect(await readCandidatePicker(publisherRow)).toEqual({ label: relayA, tag: null });
+  await expect(candidateChip(publisherRow)).toHaveCount(0);
   // 編集はその場で OPFS にも保存される
   await expectStoredEntries(page, [
     { url: relayA, enabled: true },
@@ -790,7 +847,9 @@ test("壊れた urlCandidates の共有リンクは url の接続先を使い、
   expect(await readOpfsFile(page, SERVER_URLS_FILE)).toBe(storedBefore);
 });
 
-test("Publisher と Subscriber パネルは接続を試みたときに選んだ候補を表示する", async ({ page }) => {
+test("Publisher と Subscriber パネルは接続を試みたときに選ばれた候補を Auto タグ付きで表示する", async ({
+  page,
+}) => {
   await openDevtoolsWithCleanOpfs(page);
 
   const relayA = "moqt://relay-a.example:4443/";
@@ -807,56 +866,53 @@ test("Publisher と Subscriber パネルは接続を試みたときに選んだ�
   await page.reload();
   await expect(uriField).toHaveValue("Random from 2 candidates");
 
-  // 候補の行は接続前から描画され、未選択の間は "-" を出す (接続の開始で映像が動かない)
+  // 有効な候補が 2 件なので、各パネルの候補行には Auto のチップが出る。未接続の間は
+  // ラベルが "Auto" でタグは無い (接続の開始で映像が動かないよう行は常に描く)
   const publisherCandidateRow = page.getByTestId("publisher-selected-candidate");
   const subscriberCandidateRows = page.getByTestId("subscriber-selected-candidate");
   await expect(publisherCandidateRow).toHaveCount(1);
-  await expect(publisherCandidateRow).toHaveText(/Candidate:\s*-/);
+  await expectIdleAutoChip(publisherCandidateRow);
   await expect(subscriberCandidateRows).toHaveCount(1);
-  await expect(subscriberCandidateRows.nth(0)).toHaveText(/Candidate:\s*-/);
+  await expectIdleAutoChip(subscriberCandidateRows.nth(0));
 
   // Namespace を解析できない値にすると、接続の前に拒否される (実リレーには接続しない)
   await page.getByTestId("namespace").fill("invalid/namespace");
   await expect(page.getByTestId("namespace-warning")).toBeVisible();
 
   // 接続を試みても映像の位置と大きさが変わらないことを比べるため、カードの位置を覚える。
-  // 上の設定欄はこの時点で既に Namespace の警告が出た状態であり、これ以降に増えるのは
-  // 候補の行の値と接続の状態だけ
+  // 上の設定欄はこの時点で既に Namespace の警告が出た状態であり、これ以降に変わるのは
+  // 候補行のチップの表示と接続の状態だけ
   const publisherVideoCard = page.getByTestId("publisher-video-card");
   const subscriberVideoCard = page.getByTestId("subscriber-video-card").nth(0);
   const publisherVideoLayout = await documentLayout(publisherVideoCard);
   const subscriberVideoLayout = await documentLayout(subscriberVideoCard);
 
-  // Publisher: Publish を押すと候補が選ばれて行の値が変わる (接続は拒否されるが行は残る)
+  // Publisher: Auto のまま Publish を押すと、選ばれた候補が Auto タグ付きで出る
   await page.getByTestId("publisher-publish-button").click();
-  await expectSelectedCandidateRow(publisherCandidateRow, candidates);
+  await expectAutoTaggedCandidate(publisherCandidateRow, candidates);
   await expect(page.getByTestId("publisher-status-message")).toContainText("Failed:");
 
-  // Subscriber 1 つ目: Start Subscribing を押すと行の値が変わる
+  // Subscriber 1 つ目: Auto のまま Start Subscribing を押すと選ばれた候補が出る
   const subscribeButtons = page.getByTestId("subscriber-subscribe-button");
   await expect(subscribeButtons).toHaveCount(1);
   await subscribeButtons.nth(0).click();
   await expect(subscriberCandidateRows).toHaveCount(1);
-  const firstSelected = await expectSelectedCandidateRow(
-    subscriberCandidateRows.nth(0),
-    candidates,
-  );
+  const firstSelected = await expectAutoTaggedCandidate(subscriberCandidateRows.nth(0), candidates);
   await expect(page.getByTestId("subscriber-status-message").nth(0)).toContainText("Failed:");
 
-  // Subscriber を追加すると、パネルごとに独立した行が出る
+  // Subscriber を追加すると、パネルごとに独立した行 (Auto のチップ) が出る
   await page.getByRole("button", { name: "Add Subscriber" }).click();
   await expect(subscribeButtons).toHaveCount(2);
-  // 追加した Subscriber の行も描画され、まだ接続を試みていないため "-" のまま
   await expect(subscriberCandidateRows).toHaveCount(2);
-  await expect(subscriberCandidateRows.nth(1)).toHaveText(/Candidate:\s*-/);
+  await expectIdleAutoChip(subscriberCandidateRows.nth(1));
   await subscribeButtons.nth(1).click();
   await expect(subscriberCandidateRows).toHaveCount(2);
-  await expectSelectedCandidateRow(subscriberCandidateRows.nth(1), candidates);
+  await expectAutoTaggedCandidate(subscriberCandidateRows.nth(1), candidates);
   // 1 つ目の Subscriber が選んだ候補は、2 つ目の試行で上書きされない
-  const firstSelectedAfter = await selectedCandidateUrl(subscriberCandidateRows.nth(0));
-  expect(firstSelectedAfter).toBe(firstSelected);
+  const firstPicker = await readCandidatePicker(subscriberCandidateRows.nth(0));
+  expect(firstPicker.label).toBe(firstSelected);
 
-  // 行の値が増えても、映像カードの位置と大きさは接続試行の前後で変わらない
+  // チップの表示が変わっても、映像カードの位置と大きさは接続試行の前後で変わらない
   expect(await documentLayout(publisherVideoCard)).toEqual(publisherVideoLayout);
   expect(await documentLayout(subscriberVideoCard)).toEqual(subscriberVideoLayout);
 
@@ -878,12 +934,255 @@ test("Publisher と Subscriber パネルは接続を試みたときに選んだ�
   expect(JSON.parse(candidatesParam)).toEqual(candidates);
 });
 
+test("候補チップから Auto と固定の候補を選び、選択モーダルを閉じられる", async ({ page }) => {
+  await openDevtoolsWithCleanOpfs(page);
+
+  const relayA = "moqt://relay-a.example:4443/";
+  const relayB = "moqt://relay-b.example:4443/";
+  const publisherRow = page.getByTestId("publisher-selected-candidate");
+  const subscriberRow = page.getByTestId("subscriber-selected-candidate").nth(0);
+
+  // 有効な候補を 2 件登録すると、各パネルの候補行に Auto のチップが出る
+  await registerCandidates(page, [relayA, relayB]);
+  await page.reload();
+  await expectIdleAutoChip(publisherRow);
+  await expectIdleAutoChip(subscriberRow);
+
+  // チップを押すと選択モーダルが開き、Auto と有効な候補が並ぶ
+  const modal = await openCandidateModal(publisherRow);
+  const autoOption = modal.locator('[data-testid$="-option-auto"]');
+  await expect(autoOption).toContainText("Auto");
+  await expect(autoOption).toContainText("Random from 2 enabled candidates");
+  await expect(modal.locator('[data-testid$="-option-0"]')).toContainText(relayA);
+  await expect(modal.locator('[data-testid$="-option-1"]')).toContainText(relayB);
+  // Escape で閉じられる
+  await expect(async () => {
+    await page.keyboard.press("Escape");
+    await expect(modal).toHaveCount(0, { timeout: 500 });
+  }).toPass();
+
+  // 外側のクリックでも閉じられる
+  await openCandidateModal(publisherRow);
+  await expect(async () => {
+    await page.mouse.click(20, 10);
+    await expect(modal).toHaveCount(0, { timeout: 500 });
+  }).toPass();
+
+  // 候補を固定すると Fixed タグが付き、Auto に戻すとタグが消える
+  await chooseCandidateSelection(publisherRow, 1);
+  await expectFixedTaggedCandidate(publisherRow, relayB);
+  await chooseCandidateSelection(publisherRow, "auto");
+  await expectIdleAutoChip(publisherRow);
+
+  // Subscriber の選択は Publisher と独立している
+  await chooseCandidateSelection(subscriberRow, 0);
+  await expectFixedTaggedCandidate(subscriberRow, relayA);
+  await expectIdleAutoChip(publisherRow);
+});
+
+test("固定した候補は接続を試みた後も Fixed として残る", async ({ page }) => {
+  await openDevtoolsWithCleanOpfs(page);
+
+  const relayA = "moqt://relay-a.example:4443/";
+  const relayB = "moqt://relay-b.example:4443/";
+  const publisherRow = page.getByTestId("publisher-selected-candidate");
+  const subscriberRow = page.getByTestId("subscriber-selected-candidate").nth(0);
+
+  // 有効な候補を 2 件登録し、Publisher は 1 件目、Subscriber は 2 件目に固定する
+  await registerCandidates(page, [relayA, relayB]);
+  await page.reload();
+  await chooseCandidateSelection(publisherRow, 0);
+  await chooseCandidateSelection(subscriberRow, 1);
+  await expectFixedTaggedCandidate(publisherRow, relayA);
+  await expectFixedTaggedCandidate(subscriberRow, relayB);
+
+  // Namespace を解析できない値にして、接続の前に拒否させる (実リレーには接続しない)
+  await page.getByTestId("namespace").fill("invalid/namespace");
+  await expect(page.getByTestId("namespace-warning")).toBeVisible();
+  await page.getByTestId("publisher-publish-button").click();
+  await expect(page.getByTestId("publisher-status-message")).toContainText("Failed:");
+  // 接続を試みた後も、固定した候補の表示は変わらない
+  await expectFixedTaggedCandidate(publisherRow, relayA);
+
+  const subscribeButtons = page.getByTestId("subscriber-subscribe-button");
+  await subscribeButtons.nth(0).click();
+  await expect(page.getByTestId("subscriber-status-message").nth(0)).toContainText("Failed:");
+  await expectFixedTaggedCandidate(subscriberRow, relayB);
+});
+
+test("固定した候補を無効化すると Not enabled になり、開始前に拒否される", async ({ page }) => {
+  await openDevtoolsWithCleanOpfs(page);
+
+  const relayA = "moqt://relay-a.example:4443/";
+  const relayB = "moqt://relay-b.example:4443/";
+  const relayC = "moqt://relay-c.example:4443/";
+  const publisherRow = page.getByTestId("publisher-selected-candidate");
+  const subscriberRow = page.getByTestId("subscriber-selected-candidate").nth(0);
+
+  // 有効な候補を 3 件登録し、Publisher と Subscriber を 1 件目 (A) に固定する
+  await registerCandidates(page, [relayA, relayB, relayC]);
+  await page.reload();
+  await chooseCandidateSelection(publisherRow, 0);
+  await chooseCandidateSelection(subscriberRow, 0);
+  await expectFixedTaggedCandidate(publisherRow, relayA);
+  await expectFixedTaggedCandidate(subscriberRow, relayA);
+
+  // A を無効にすると、有効な候補は B と C の 2 件のまま。固定した A は Not enabled になる
+  await openCandidatesModal(page);
+  await page.getByTestId("server-url-candidates-enabled-0").click();
+  await expectStoredEntries(page, [
+    { url: relayA, enabled: false },
+    { url: relayB, enabled: true },
+    { url: relayC, enabled: true },
+  ]);
+  await page.getByTestId("server-url-candidates-close-footer").click();
+  for (const row of [publisherRow, subscriberRow]) {
+    const picker = await readCandidatePicker(row);
+    expect(picker.label).toBe(relayA);
+    expect(picker.tag).toBe("Not enabled");
+  }
+
+  // 開始すると接続の前に理由を出して拒否する
+  await page.getByTestId("publisher-publish-button").click();
+  await expect(page.getByTestId("publisher-status-message")).toHaveText(
+    `Failed: the selected MOQT URI candidate is not enabled: ${relayA}`,
+  );
+  const subscribeButtons = page.getByTestId("subscriber-subscribe-button");
+  await subscribeButtons.nth(0).click();
+  await expect(page.getByTestId("subscriber-status-message").nth(0)).toHaveText(
+    `Failed: the selected MOQT URI candidate is not enabled: ${relayA}`,
+  );
+});
+
+test("Copy URL は固定した選択だけを載せ、共有 URL で復元して追加の Subscriber にも順に適用する", async ({
+  page,
+}) => {
+  await openDevtoolsWithCleanOpfs(page);
+
+  const relayA = "moqt://relay-a.example:4443/";
+  const relayB = "moqt://relay-b.example:4443/";
+  const relayC = "moqt://relay-c.example:4443/";
+  const publisherRow = page.getByTestId("publisher-selected-candidate");
+  const subscriberRows = page.getByTestId("subscriber-selected-candidate");
+
+  // 有効な候補を 3 件登録し、Publisher を A、最初の Subscriber を B に固定する
+  await registerCandidates(page, [relayA, relayB, relayC]);
+  await page.reload();
+  await chooseCandidateSelection(publisherRow, 0);
+  await chooseCandidateSelection(subscriberRows.nth(0), 1);
+  // 2 つ目の Subscriber を追加し、C に固定する
+  await page.getByRole("button", { name: "Add Subscriber" }).click();
+  await expect(subscriberRows).toHaveCount(2);
+  await chooseCandidateSelection(subscriberRows.nth(1), 2);
+  await expectFixedTaggedCandidate(subscriberRows.nth(1), relayC);
+
+  // Copy URL には固定した選択だけが載る
+  await page.getByTestId("copy-url").click();
+  await expect(page).toHaveURL(/subscriberCandidates=/);
+  const copiedUrl = new URL(page.url());
+  expect(copiedUrl.searchParams.get("publisherCandidate")).toBe(relayA);
+  const subscribersParam = copiedUrl.searchParams.get("subscriberCandidates");
+  if (subscribersParam === null) {
+    throw new Error("共有 URL に subscriberCandidates が含まれていません");
+  }
+  expect(JSON.parse(subscribersParam)).toEqual([relayB, relayC]);
+
+  // OPFS を空にしても、共有 URL の urlCandidates と選択から復元できる
+  await clearOpfsServerUrlFiles(page);
+  await expect.poll(() => readOpfsFile(page, SERVER_URLS_FILE)).toBeNull();
+  await page.goto(copiedUrl.toString());
+
+  // Publisher と最初の Subscriber の固定選択が復元される
+  await expect(page.getByTestId("moqt-uri")).toHaveValue("Random from 3 candidates");
+  await expectFixedTaggedCandidate(publisherRow, relayA);
+  await expect(subscriberRows).toHaveCount(1);
+  await expectFixedTaggedCandidate(subscriberRows.nth(0), relayB);
+
+  // subscriberCandidates の 2 件目以降は、Subscriber を追加したときに順に適用される
+  await page.getByRole("button", { name: "Add Subscriber" }).click();
+  await expect(subscriberRows).toHaveCount(2);
+  await expectFixedTaggedCandidate(subscriberRows.nth(1), relayC);
+});
+
+test("Auto のままの Copy URL にはパネルごとの選択を載せない", async ({ page }) => {
+  await openDevtoolsWithCleanOpfs(page);
+
+  const relayA = "moqt://relay-a.example:4443/";
+  const relayB = "moqt://relay-b.example:4443/";
+  const publisherRow = page.getByTestId("publisher-selected-candidate");
+
+  // 有効な候補を 2 件登録しても、選択は既定の Auto のまま
+  await registerCandidates(page, [relayA, relayB]);
+  await page.reload();
+  await expectIdleAutoChip(publisherRow);
+
+  // Auto だけのときは、パネルごとの選択のクエリを載せない
+  await page.getByTestId("copy-url").click();
+  await expect(page).toHaveURL(/urlCandidates=/);
+  const copiedUrl = new URL(page.url());
+  expect(copiedUrl.searchParams.has("publisherCandidate")).toBe(false);
+  expect(copiedUrl.searchParams.has("subscriberCandidates")).toBe(false);
+});
+
+test("パネルごとの選択は再読み込みで Auto に戻る", async ({ page }) => {
+  await openDevtoolsWithCleanOpfs(page);
+
+  const relayA = "moqt://relay-a.example:4443/";
+  const relayB = "moqt://relay-b.example:4443/";
+  const publisherRow = page.getByTestId("publisher-selected-candidate");
+  const subscriberRow = page.getByTestId("subscriber-selected-candidate").nth(0);
+
+  // 候補を 2 件登録し、Publisher と Subscriber を固定する
+  await registerCandidates(page, [relayA, relayB]);
+  await page.reload();
+  await chooseCandidateSelection(publisherRow, 0);
+  await chooseCandidateSelection(subscriberRow, 1);
+  await expectFixedTaggedCandidate(publisherRow, relayA);
+  await expectFixedTaggedCandidate(subscriberRow, relayB);
+
+  // 選択は保存しないため、再読み込みすると既定の Auto に戻る
+  await page.reload();
+  await expectIdleAutoChip(publisherRow);
+  await expectIdleAutoChip(subscriberRow);
+});
+
+test("有効な候補が 1 件のときはチップを出さず URI を表示する", async ({ page }) => {
+  await openDevtoolsWithCleanOpfs(page);
+
+  const relayA = "moqt://relay-a.example:4443/";
+  const publisherRow = page.getByTestId("publisher-selected-candidate");
+  const subscriberRow = page.getByTestId("subscriber-selected-candidate");
+
+  // 候補が無いときは "-" を表示し、チップは出ない
+  expect(await readCandidatePicker(publisherRow)).toEqual({ label: "-", tag: null });
+  expect(await readCandidatePicker(subscriberRow)).toEqual({ label: "-", tag: null });
+  await expect(candidateChip(publisherRow)).toHaveCount(0);
+
+  // 有効な候補が 1 件のときは URI をそのまま表示し、チップは出ない
+  await registerCandidates(page, [relayA]);
+  await page.reload();
+  expect(await readCandidatePicker(publisherRow)).toEqual({ label: relayA, tag: null });
+  expect(await readCandidatePicker(subscriberRow)).toEqual({ label: relayA, tag: null });
+  await expect(candidateChip(publisherRow)).toHaveCount(0);
+  await expect(candidateChip(subscriberRow)).toHaveCount(0);
+});
+
 test("接続先が無いまま Start すると MOQT URI の登録を促すエラーになる", async ({ page }) => {
   await openDevtoolsWithCleanOpfs(page);
 
   const uriField = page.getByTestId("moqt-uri");
   // 候補も共有リンクの接続先も無いため、表示欄は空
   await expect(uriField).toHaveValue("");
+
+  // パネルの候補行も候補が無いため "-" を表示する
+  expect(await readCandidatePicker(page.getByTestId("publisher-selected-candidate"))).toEqual({
+    label: "-",
+    tag: null,
+  });
+  expect(await readCandidatePicker(page.getByTestId("subscriber-selected-candidate"))).toEqual({
+    label: "-",
+    tag: null,
+  });
 
   // Publisher: Publish を押すと接続の前に理由を出す (実リレーには接続しない)
   await page.getByTestId("publisher-publish-button").click();
