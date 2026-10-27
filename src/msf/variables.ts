@@ -109,7 +109,7 @@ function substituteString(
   variables: Readonly<Record<string, string>>,
   fieldPath: string,
 ): string {
-  const replaced = value.replace(VARIABLE_REFERENCE_PATTERN, (_match, name: string) => {
+  const replaced = value.replaceAll(VARIABLE_REFERENCE_PATTERN, (_match, name: string) => {
     if (!Object.hasOwn(variables, name)) {
       return "";
     }
