@@ -116,7 +116,18 @@ const CONNECTION_SETTINGS_COVERAGE: CoverageExpectation = {
     authorizationTokenBase64: "authorizationTokenFromC4m",
   },
   excluded: {
-    savedServerUrl: "Save で覚えた MOQT URI で、今の接続に使う値ではない",
+    serverUrlCandidates:
+      "接続先の候補一覧。実際に使った接続先は PublisherStats / SubscriberStats の serverUrl と各パネルに出る",
+    enabledServerUrlCandidateUrls:
+      "接続先の候補のうち有効なもの。一覧は serverUrlCandidates、実際に使った接続先は serverUrl として出す",
+    hasEnabledServerUrlCandidates:
+      "有効な接続先の候補があるかどうかの入力の状態で、設定の値ではない",
+    serverUrlCandidatesSuspended:
+      "共有リンクの接続先を開いた page で候補を使わないかどうかの入力の状態で、設定の値ではない",
+    moqtUriDisplayValue:
+      "MOQT URI 欄と折りたたみ時の要約に出す表示で、候補一覧と url から求まる computed。値の元は serverUrlCandidates と url に出す",
+    serverUrlCandidatesSaveError:
+      "候補一覧を OPFS に保存できなかったかどうかの表示用の状態で、設定の値ではない",
     cameraDevices: "選べるカメラの一覧で、選んだ値は cameraDeviceId として出す",
     microphoneDevices: "選べる音声入力の一覧で、選んだ値は microphoneDeviceId として出す",
     audioOutputDevices: "選べる音声出力の一覧で、選んだ値は audioOutputDeviceId として出す",
@@ -145,6 +156,7 @@ const PUBLISHER_COVERAGE: CoverageExpectation = {
   mapped: {
     pubStatus: "status",
     pubStatusMessage: "statusMessage",
+    pubSelectedServerUrl: "serverUrl",
     pubCodec: "codec",
     pubCurrentGroup: "currentGroup",
     newGroupRequestsReceived: "newGroupRequests",
@@ -167,6 +179,8 @@ const PUBLISHER_COVERAGE: CoverageExpectation = {
     eventMessagesSent: "event.messagesSent",
   },
   excluded: {
+    pubConnectedNamespace:
+      "接続に使った Track Namespace のフィールド列。候補の msf fragment が決める場合は接続設定の namespace と異なるため、配信中のログに出す値として保持する",
     pubSession:
       "Session の実体 (制御ストリームとデータストリームの統計は sessionStatistics に出す)",
     publisher: "Publisher の実体。統計は objectsSent / bytesSent / currentGroup に出す",
@@ -213,6 +227,7 @@ const PUBLISHER_COVERAGE: CoverageExpectation = {
 // Subscriber インスタンスの signal の対応
 const SUBSCRIBER_COVERAGE: CoverageExpectation = {
   mapped: {
+    selectedServerUrl: "serverUrl",
     audioLastLevel: "audio.lastLevel",
     audioObjectsReceived: "audio.objectsReceived",
     audioDatagramObjectsReceived: "audio.datagramObjectsReceived",

@@ -843,6 +843,55 @@ export function handleDebugMessage(subscriberId: string, message: DebugMessage):
   logDebugMessage(`[${subscriberId}]`, message);
 }
 
+/** 購読の接続に使う設定 (接続 URL / Track Namespace / 接続オプション) */
+interface SubscriberConnectSettings {
+  /** 接続に使う MOQT URI (fragment を含む) */
+  readonly connectUrl: string;
+  /** 接続に使う Track Namespace のフィールド列 */
+  readonly namespaceArray: string[];
+  /** `connect()` に渡すオプション */
+  readonly connectOptions: ReturnType<typeof settings.buildConnectOptions>;
+}
+
+/**
+ * 購読の接続に使う設定を決める
+ *
+ * 有効な接続先の候補があれば、その中から 1 つを選ぶ。接続 URL・Track Namespace・
+ * Authorization Token は候補の fragment から決め、接続設定の signal は変えない
+ * (ほかの接続の設定表示に影響しない)。購読ごとに選ぶ候補が変わり得るため、どの候補へ
+ * 繋いだかはこの購読のインスタンスに残してパネルに表示し、Debug ログにも出す。
+ */
+function resolveSubscriberConnectSettings(
+  subscriberId: string,
+  instance: sub.SubscriberInstance,
+): SubscriberConnectSettings {
+  const target = settings.resolveConnectTarget();
+  if (target.selectedServerUrl !== null) {
+    addLog("info", `[${subscriberId}] selected the connection target from the candidates`, {
+      url: target.selectedServerUrl,
+    });
+  }
+  instance.selectedServerUrl.value = target.selectedServerUrl;
+  return {
+    connectUrl: target.connectUrl,
+    namespaceArray: settings.resolveConnectNamespace(target),
+    connectOptions: settings.buildConnectOptions(settings.resolveConnectAuthorizationToken(target)),
+  };
+}
+
+/**
+ * 接続先が決まっていることを確かめる
+ *
+ * MOQT URI 欄は登録した候補の表示欄で、手入力は無い。候補も共有リンクの接続先も無ければ
+ * 接続先が決まらないため、接続の前に理由を出す。
+ */
+function assertConnectUrl(connectUrl: string): void {
+  const problem = settings.connectTargetProblem(connectUrl);
+  if (problem !== null) {
+    throw new Error(problem);
+  }
+}
+
 // preact 11 では useRef<T>(null) の戻り値が RefObject<T | null> になるため、
 // null を許容するシグネチャにしている。実装側は canvasRef.current を
 // null チェックしてから利用する。
@@ -2561,15 +2610,18 @@ export function useSubscriber(
       instance.httpVersion.value = null;
       settings.settingsDisabled.value = true;
 
-      // Namespace の欄は §8.8 の namespace-name 文字列で、解析できない値と送信できない値
-      // (§8.7 の構造の制約 / 予約 namespace) では接続に使うフィールド列が無い。入力した
-      // namespace と違う値へ繋がないよう、先に拒否する
-      const namespaceArray = settings.requireConnectNamespace();
-      const connectOptions = settings.buildConnectOptions();
+      // 接続先・Namespace・接続オプションを決める。選んだ候補はこの購読のパネルに出す
+      const { connectUrl, namespaceArray, connectOptions } = resolveSubscriberConnectSettings(
+        subscriberId,
+        instance,
+      );
+
+      // 接続先が決まっていることを確かめる (MOQT URI 欄は候補の表示欄で、手入力は無い)
+      assertConnectUrl(connectUrl);
 
       // MOQT サーバへ接続する
       const session = await connect(
-        settings.buildConnectUrl(),
+        connectUrl,
         {
           close: (closeInfo) => {
             // shouldApplyStatusUpdate のガード外で addLog を呼び、stop 主導時にも

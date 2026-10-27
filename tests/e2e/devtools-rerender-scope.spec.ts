@@ -66,21 +66,19 @@ test("接続設定を変えても App と子パネルは再描画されず、副
     host.__renderCounters = counters;
   });
 
-  const relayUri = page.getByTestId("moqt-uri");
-  await expect(relayUri).toBeVisible();
-  // MOQT URI の初期値は空のため、接続先を入れてから入力の再描画を数える
-  await relayUri.fill("moqt://127.0.0.1:4443/");
-  await relayUri.click();
+  // MOQT URI 欄は候補の表示欄で手入力できないため、接続設定の文字列入力
+  // (Certificate Hash) を変えて再描画を数える
+  const certificateHashInput = page.locator("#certificateHash");
+  await expect(certificateHashInput).toBeVisible();
+  // 入力欄へ焦点を移してから数え始める (焦点を移すだけでは設定の signal は変わらない)
+  await certificateHashInput.click();
   await page.evaluate(() => {
     const host = window as unknown as { __renderCounters?: { counts: Map<string, number> } };
     host.__renderCounters?.counts.clear();
   });
 
-  // URL の入力欄へ 10 文字入れる (1 文字ごとに url signal が変わる)
-  await relayUri.press("End");
-  for (const character of "abcdefghij") {
-    await relayUri.press(character);
-  }
+  // Certificate Hash へ 10 文字入れる (1 文字ごとに certificateHash signal が変わる)
+  await certificateHashInput.pressSequentially("abcdefghij");
 
   // @preact/signals は描画を requestAnimationFrame でまとめるため、2 フレーム待つ
   const counts = await page.evaluate(
@@ -95,7 +93,7 @@ test("接続設定を変えても App と子パネルは再描画されず、副
       }),
   );
 
-  // 副題は今の設定を読むため再描画される。href も今の設定へ追従する
+  // 副題は今の接続設定を読むため再描画される。href も今の設定へ追従する
   expect(counts.ModeSubtitle ?? 0).toBeGreaterThan(0);
   // App は接続設定の signal を読まないため再描画されない。子パネルも巻き込まれない
   expect(counts.App ?? 0).toBe(0);
@@ -103,6 +101,6 @@ test("接続設定を変えても App と子パネルは再描画されず、副
 
   await expect(page.getByTestId("mode-link-publisher")).toHaveAttribute(
     "href",
-    /url=moqt%3A%2F%2F127\.0\.0\.1%3A4443%2Fabcdefghij/,
+    /certificateHash=abcdefghij/,
   );
 });

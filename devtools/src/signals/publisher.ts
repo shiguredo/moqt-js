@@ -21,6 +21,21 @@ export const pubSession = signal<Session | null>(null);
 export const publisher = signal<Publisher | null>(null);
 export const catalogPublisher = signal<Publisher | null>(null);
 export const catalog = signal<Catalog | null>(null);
+/**
+ * 接続に使った Track Namespace のフィールド列
+ *
+ * 接続先の候補が msf fragment で namespace を指定していると、接続設定の Namespace 欄とは
+ * 異なる値で接続する。配信中のログには接続時に決めた値を出す。null は未接続。
+ */
+export const pubConnectedNamespace = signal<string[] | null>(null);
+/**
+ * 接続先の候補から選んだ MOQT URI
+ *
+ * 配信の開始時に選んだ値をパネルに表示する。候補を使わない配信では null。停止・切断の
+ * 後も最後に選んだ値を残し、どの接続先へ繋ごうとしたかを後から確かめられるようにする
+ * (次に配信を始めたときに上書きする)。
+ */
+export const pubSelectedServerUrl = signal<string | null>(null);
 // Catalog を最後に送った Group ID。Catalog を送り直すたびに進める。
 //
 // 同じ Location を 2 度送ると購読側で重複として扱われるため、送り直しは新しい Group で

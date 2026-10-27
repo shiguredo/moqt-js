@@ -1,4 +1,4 @@
-import { test, type Browser, type Page } from "@playwright/test";
+import { expect, test, type Browser, type Page } from "@playwright/test";
 import { RELAY_PAGE_URL } from "../urls";
 
 /**
@@ -52,6 +52,24 @@ export function requireRelayUri(): string | null {
  */
 export function createTestNamespace(): string[] {
   return ["moqt-js-e2e", crypto.randomUUID()];
+}
+
+/**
+ * MOQT URI を接続先の候補として登録する
+ *
+ * MOQT URI 欄は候補の表示欄であり、手入力はできない。欄をクリックして開く候補の管理
+ * モーダルで登録する。登録はその場で接続設定と OPFS に反映されるため、モーダルを閉じても
+ * 候補は残る (実リレーのテストでは登録後にそのまま接続を始める)。
+ */
+export async function registerMoqtUriCandidate(page: Page, moqtUri: string): Promise<void> {
+  await page.getByTestId("moqt-uri").click();
+  const modal = page.getByTestId("server-url-candidates-modal");
+  await expect(modal).toBeVisible();
+  await page.getByTestId("server-url-candidates-input").fill(moqtUri);
+  await page.getByTestId("server-url-candidates-add").click();
+  await expect(page.getByTestId("server-url-candidates-entry-0")).toContainText(moqtUri);
+  await page.getByTestId("server-url-candidates-close-footer").click();
+  await expect(modal).toHaveCount(0);
 }
 
 /**

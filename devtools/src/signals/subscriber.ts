@@ -115,6 +115,15 @@ export interface SubscriberInstance {
   decoderConfigured: Signal<boolean>;
   status: Signal<StatusType>;
   statusMessage: Signal<string>;
+  /**
+   * 接続先の候補から選んだ MOQT URI
+   *
+   * 購読の開始時に選んだ値をパネルに表示する。購読ごとに選ぶ候補が異なり得るため、
+   * 接続設定の欄ではなくこの購読の値として持つ。候補を使わない購読では null。停止・切断の
+   * 後も最後に選んだ値を残し、どの接続先へ繋ごうとしたかを後から確かめられるようにする
+   * (次に購読を始めたときに上書きする)。
+   */
+  selectedServerUrl: Signal<string | null>;
   // 確立した WebTransport が HTTP/2 か HTTP/3 か。未接続、または判別できないときは null
   httpVersion: Signal<PanelHttpVersion | null>;
   codec: Signal<string>;
@@ -283,6 +292,7 @@ export function createSubscriberInstance(id: string): SubscriberInstance {
     decoderConfigured: signal(false),
     status: signal<StatusType>("disconnected"),
     statusMessage: signal("Ready to subscribe"),
+    selectedServerUrl: signal<string | null>(null),
     httpVersion: signal<PanelHttpVersion | null>(null),
     codec: signal(""),
     isStopping: signal(false),
