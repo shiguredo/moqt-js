@@ -16,11 +16,21 @@ import {
 import { frameAt, opusFrames, loadSpeech } from "./playout-audio-input.mjs";
 import { requireAudioFrame } from "./playout-measurement-guards.mjs";
 
-// 旧 DSP の比較は、その比較を実行するときだけ読み込む。
+// 旧 DSP は調査時にだけ用意する。Vite の静的解決を避け、比較を実行するときに読む。
 async function comparisons() {
   const [before, baseline] = await Promise.all([
-    import("../investigation-logs/playout-quality-2026-10-28/audioTimeStretch.before.ts"),
-    import("../investigation-logs/playout-quality-2026-10-28/audioTimeStretch.baseline.ts"),
+    import(
+      /* @vite-ignore */ new URL(
+        "../investigation-logs/playout-quality-2026-10-28/audioTimeStretch.before.ts",
+        import.meta.url,
+      ).href
+    ),
+    import(
+      /* @vite-ignore */ new URL(
+        "../investigation-logs/playout-quality-2026-10-28/audioTimeStretch.baseline.ts",
+        import.meta.url,
+      ).href
+    ),
   ]);
   return { before, baseline };
 }
