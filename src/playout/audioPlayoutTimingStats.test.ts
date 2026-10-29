@@ -8,6 +8,20 @@ import {
   formatAudioMissEvent,
 } from "./audioPlayoutTimingStats";
 
+// 到着に間に合っているが媒体の一部が欠落した穴は、遅延を増やしても復元できない。
+// 表示用の欠落量は残し、遅延制御へはバッファ不足の分だけを渡す。
+test("recordGap: 媒体欠落を再生遅延の不足として学習しない", () => {
+  const stats = new AudioPlayoutTimingStats(10000, 0);
+  stats.recordGap({ uncoveredMs: 20, unrecoverableMs: 0, delayFeedbackMs: 0 });
+  assert.equal(stats.snapshot(0).gapMs, 20);
+  assert.equal(stats.audioDelayFeedback(0).gapMs, 0);
+  stats.recordGap({ uncoveredMs: 30, unrecoverableMs: 10, delayFeedbackMs: 10 });
+  assert.equal(stats.snapshot(0).gapMs, 50);
+  assert.equal(stats.audioDelayFeedback(0).gapMs, 10);
+  stats.reset();
+  assert.equal(stats.audioDelayFeedback(0).gapMs, 0);
+});
+
 // 完了条件: 鳴らすと決めた音の、再生予定時刻・到着時刻・鳴り始める時刻と、予定に対する
 // 余裕・鳴るまでの時間・予定からの遅れを、直近の値と分布 (p50 / p95 / max) の両方で返す。
 // 音声が聞こえないとき、間に合わなかったのかどうかを数値で読むための値である

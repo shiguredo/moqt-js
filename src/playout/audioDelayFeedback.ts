@@ -259,7 +259,7 @@ export interface AudioDelayFeedbackSnapshot {
   readonly targetMs: number;
   /** 揺らぎだけから求めた目標遅延 (NetEq、ミリ秒)。実際に使う値はこの値との大きい方 */
   readonly jitterTargetMs: number;
-  /** 実際に使う目標遅延 (ミリ秒) */
+  /** 共有の時間軸へ適用する目標遅延 (ミリ秒)。到着基準の予約には別途その経路の上限が掛かる */
   readonly appliedMs: number;
   /** 直前に目標を動かした理由 */
   readonly reason: AudioDelayFeedbackReason;

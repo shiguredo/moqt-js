@@ -19,7 +19,7 @@
  *   (0.983) で古い観測を忘れる。最初の数回は `start_forget_weight` (2) で忘れ方を
  *   速くし、すぐ収束させる
  * - 目標遅延は 0.95 分位のバケットから `(1 + バケット) * 20` ms とする。これは
- *   「途切れの確率が 5% 未満になる遅延」である。まだ観測が無いときは 80 ms
+ *   「途切れの確率が 5% 未満になる遅延」である。まだ観測が無いときは 50 ms
  *
  * 分位点の計算は libwebrtc では固定小数点 (Q15 / Q30) で行うが、ここでは同じ重み付けを
  * 倍精度で行う (固定小数点の丸めの補正項は、その誤差のためのものであり必要ない)。
@@ -69,9 +69,10 @@ export const AUDIO_DELAY_RESAMPLE_INTERVAL_MS = 500;
 /**
  * 観測が無いときの目標遅延 (ミリ秒)
  *
- * libwebrtc の `kStartDelayMs` と同じ値。最初のヒストグラムの更新まではこの値を使う
+ * 最初のヒストグラムの更新までは、playout の下限と同じ深さから始める。
+ * libwebrtc の 80 ms をそのまま使うと、壁時計を持つ経路に常時 30 ms の余分な待ちが残る。
  */
-export const AUDIO_DELAY_START_MS = 80;
+export const AUDIO_DELAY_START_MS = 50;
 
 /** 到着の遅れの観測 */
 interface Arrival {

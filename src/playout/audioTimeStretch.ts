@@ -306,7 +306,26 @@ function analyze(
   // 元のサンプルレートのサブ格子の周期になる
   const lag = refineLag(downsampled, coarse);
   // ピッチの周期を元のサンプルレートへ戻す
-  const samples = Math.round(lag * samplesPer4kHzSample);
+  let samples = Math.round(lag * samplesPer4kHzSample);
+  // 粗い探索の上端や振幅が変わる音でも、4 kHz の格子をそのまま切断位置にしない。
+  // 元のレートで ±1 格子を評価する。候補どうしは同じ長さの窓で正規化して比較する。
+  // 圧縮は整数サンプルを削るため、実際に切れる整数位置の相関を直接最大化する。
+  if (!isSilent([reference])) {
+    const first = Math.max(
+      Math.round(TIME_STRETCH_MIN_LAG * samplesPer4kHzSample),
+      Math.floor(samples - samplesPer4kHzSample),
+    );
+    const last = Math.min(spliceSamples, Math.ceil(samples + samplesPer4kHzSample));
+    const window = reference.length - last;
+    let bestCorrelation = -Infinity;
+    for (let candidate = first; candidate <= last; candidate++) {
+      const correlation = normalizedCorrelation(reference, reference.length, window, candidate);
+      if (correlation > bestCorrelation) {
+        bestCorrelation = correlation;
+        samples = candidate;
+      }
+    }
+  }
   if (samples <= 0 || samples > spliceSamples || spliceSamples + samples > reference.length) {
     // 切れ目の前後が音に収まらない (音が短すぎる)
     return null;
@@ -381,6 +400,19 @@ function pitchPeriodOf(
   // 無音は詰めても伸ばしても聞こえないため、そのまま操作する (NetEq と同じ扱い)
   if (pitch.correlation < TIME_STRETCH_CORRELATION_THRESHOLD && !isSilent(channels)) {
     return null;
+  }
+  // 切れ目の短い 1 周期だけでは、低い声の倍音を基本周期と誤認することがある。
+  // 残りの波形全体でも一致することを確かめる。周期を選ぶ第 1 チャンネルだけでなく、
+  // 全チャンネルへ同じ切断位置を適用できる場合だけ圧縮する。
+  for (const channel of channels) {
+    if (isSilent([channel])) continue;
+    const correlation = normalizedCorrelation(
+      channel,
+      channel.length,
+      channel.length - pitch.samples,
+      pitch.samples,
+    );
+    if (correlation < TIME_STRETCH_CORRELATION_THRESHOLD) return null;
   }
   return pitch;
 }
@@ -483,6 +515,8 @@ interface TailPeriod {
   readonly samples: number;
   /** 末尾で繰り返しているか (-1 から 1)。穴の終わりの段差の大きさの目安でもある */
   readonly correlation: number;
+  /** 候補を評価した、元のレートでの相関窓のサンプル数 */
+  readonly windowSamples: number;
 }
 
 /** 補間した音 (直前の音の末尾を伸ばした分だけ) */
@@ -537,6 +571,19 @@ export function concealSamples(
   }
   if (tail.correlation < TIME_STRETCH_CORRELATION_THRESHOLD && !isSilent(channels)) {
     return { channels: [], generatedSamples: 0 };
+  }
+  // 左の周期で右を繰り返せるとは限らない。先頭の段差が偶然小さい位相でも、
+  // 補間の内部で別の周期音を作らないよう、他のチャンネルの末尾の相関も確かめる。
+  const commonLag = Math.round(tail.samples);
+  for (const channel of channels.slice(1)) {
+    if (isSilent([channel])) continue;
+    const window = Math.min(tail.windowSamples, channel.length - commonLag);
+    if (
+      normalizedCorrelation(channel, channel.length, window, commonLag) <
+      TIME_STRETCH_CORRELATION_THRESHOLD
+    ) {
+      return { channels: [], generatedSamples: 0 };
+    }
   }
   // 継ぎ目の段差の検査は全チャンネルで行う (周期は第 1 チャンネルだけで決める)
   if (!isSeamSmooth(channels, tail.samples)) {
@@ -696,7 +743,7 @@ function findTailPeriod(reference: AudioSamples, samplesPer4kHzSample: number): 
   const lastLag = Math.min(length - fullWindow, Math.ceil(center + samplesPer4kHzSample) + 1);
   if (fullWindow <= 0 || lastLag < firstLag) {
     // 元のサンプルレートで評価できない (音が短すぎる) ときは粗い格子のまま使う
-    return { samples: center, correlation: coarseCorrelation };
+    return { samples: center, correlation: coarseCorrelation, windowSamples: fullWindow };
   }
   const correlations: number[] = [];
   let bestLag = firstLag;
@@ -723,7 +770,7 @@ function findTailPeriod(reference: AudioSamples, samplesPer4kHzSample: number): 
   const offset =
     !exactPeriod && hasBothNeighbors && curvature < 0 ? (0.5 * (before - after)) / curvature : 0;
   const samples = bestLag + Math.max(-0.5, Math.min(0.5, offset));
-  return { samples, correlation: bestCorrelation };
+  return { samples, correlation: bestCorrelation, windowSamples: fullWindow };
 }
 
 /**

@@ -403,6 +403,9 @@ export class AudioPlayoutTimingStats {
   // 補間で埋まらなかった無音の穴 (回数・合計 ms・最大 ms) と、そのうち予約できなかった分
   private gapCount = 0;
   private gapMs = 0;
+  // 媒体の欠落を除いた、遅延を増やすことで防げる穴だけを閉ループへ渡す。
+  private feedbackGapCount = 0;
+  private feedbackGapMs = 0;
   private gapMaxMs = 0;
   private unrecoverableGapCount = 0;
   private unrecoverableGapMs = 0;
@@ -599,8 +602,8 @@ export class AudioPlayoutTimingStats {
       backlogMisses: this.missedTotals.backlog.count,
       backlogMs: this.missedTotals.backlog.ms,
       // 補間で埋まらなかった無音の穴。目標遅延を増やす判断に使う
-      gapCount: this.gapCount,
-      gapMs: this.gapMs,
+      gapCount: this.feedbackGapCount,
+      gapMs: this.feedbackGapMs,
     };
   }
 
@@ -667,8 +670,9 @@ export class AudioPlayoutTimingStats {
    *
    * @param gap.uncoveredMs - 補間で埋まらなかった長さ (ミリ秒。0 以下と非有限は無視する)
    * @param gap.unrecoverableMs - そのうち予約できる最も早い時刻より前だった長さ (ミリ秒)
+   * @param gap.delayFeedbackMs - 待ちを増やす判断に使う長さ (ミリ秒)。省略すると穴の全量
    */
-  recordGap(gap: { uncoveredMs: number; unrecoverableMs: number }): void {
+  recordGap(gap: { uncoveredMs: number; unrecoverableMs: number; delayFeedbackMs?: number }): void {
     if (!Number.isFinite(gap.uncoveredMs) || !Number.isFinite(gap.unrecoverableMs)) {
       return;
     }
@@ -678,6 +682,11 @@ export class AudioPlayoutTimingStats {
     }
     this.gapCount += 1;
     this.gapMs += uncoveredMs;
+    const feedbackMs = Math.min(uncoveredMs, Math.max(0, gap.delayFeedbackMs ?? uncoveredMs));
+    if (Number.isFinite(feedbackMs) && feedbackMs > 0) {
+      this.feedbackGapCount++;
+      this.feedbackGapMs += feedbackMs;
+    }
     this.gapMaxMs = Math.max(this.gapMaxMs, uncoveredMs);
     const unrecoverableMs = Math.min(uncoveredMs, Math.max(0, gap.unrecoverableMs));
     if (unrecoverableMs > 0) {
@@ -790,6 +799,8 @@ export class AudioPlayoutTimingStats {
     this.decodedSampleRate = null;
     this.gapCount = 0;
     this.gapMs = 0;
+    this.feedbackGapCount = 0;
+    this.feedbackGapMs = 0;
     this.gapMaxMs = 0;
     this.unrecoverableGapCount = 0;
     this.unrecoverableGapMs = 0;

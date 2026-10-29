@@ -4,6 +4,7 @@
 
 import { runWorkerInit, workerErrorResponse } from "../workerConfigure";
 import { closeCodecQuiet, isCodecConfigured, replaceCodec } from "../codecLifecycle";
+import { OpusDecoderTimestamps } from "../opusDecoderTimestamps";
 import {
   ignoreUnknownWorkerRequest,
   type WorkerCloseRequest,
@@ -19,6 +20,7 @@ type AudioDecoderWorkerRequest =
   | WorkerCloseRequest;
 
 let audioDecoder: AudioDecoder | null = null;
+let timestamps = new OpusDecoderTimestamps(false);
 
 self.onmessage = (event: MessageEvent<AudioDecoderWorkerRequest>) => {
   const message = event.data;
@@ -28,18 +30,23 @@ self.onmessage = (event: MessageEvent<AudioDecoderWorkerRequest>) => {
       // 初期化失敗時は "error" で応答し "configured" を送らない
       // (Wrapper の configure() が reject してハングしない前提)
       const result = runWorkerInit(() => {
+        const generationTimestamps = new OpusDecoderTimestamps(
+          message.config.codec === "opus" && message.config.description === undefined,
+        );
+        timestamps = generationTimestamps;
         // 再 init では旧コーデックを閉じてから差し替える (解放漏れを防ぐ)
         audioDecoder = replaceCodec(
           audioDecoder,
           new AudioDecoder({
             output: (audioData: AudioData) => {
+              const restored = generationTimestamps.restore(audioData);
               // AudioData は transferable
               self.postMessage(
                 {
                   type: "decoded",
-                  data: audioData,
+                  data: restored,
                 },
-                [audioData] as unknown as StructuredSerializeOptions,
+                [restored] as unknown as StructuredSerializeOptions,
               );
             },
             error: (error: DOMException) => {
@@ -63,8 +70,10 @@ self.onmessage = (event: MessageEvent<AudioDecoderWorkerRequest>) => {
           data: message.data,
         });
         try {
+          timestamps.submit(message.timestamp);
           audioDecoder.decode(chunk);
         } catch (error) {
+          timestamps.rejectLast();
           self.postMessage(workerErrorResponse(error));
         }
       }

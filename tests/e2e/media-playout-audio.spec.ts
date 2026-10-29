@@ -330,8 +330,8 @@ test("実 Web Audio で音の選別、コールバックの失敗、記録の補
         throwingCounterpartData.close();
 
         // 6. 揃える相手 (映像) の有無で、音の並べ方が変わる。揃える相手がいないときは到着基準に
-        //    なり、音声だけの下限 (140 ms) を足す。300 ms 古い壁時計の音を 1 つ渡し、
-        //    到着から鳴り始めるまでの遅れで区別する。呼ばれた回数も数える (push ごとに 1 回)。
+        //    なり、音声だけの下限 (50 ms) を足す。300 ms 古い壁時計の音を 1 つ渡し、
+        //    基準の選択を計器で区別する。呼ばれた回数も数える (push ごとに 1 回)。
         /** 300 ms 古い壁時計の音を 1 つ渡して、その結果を返す */
         const pushOldAudio = (hasCounterpart: () => boolean) => {
           let counterpartCalls = 0;
@@ -356,6 +356,7 @@ test("実 Web Audio で音の選別、コールバックの失敗、記録の補
               status: decision.status,
               counterpartCalls,
               lastStartDelayMs: timing?.lastStartDelayMs ?? -1,
+              arrivalPlannedFrames: timing?.arrivalPlannedFrames ?? -1,
             };
           } finally {
             data.close();
@@ -427,16 +428,15 @@ test("実 Web Audio で音の選別、コールバックの失敗、記録の補
     // 5. 揃える相手の判定が throw しても error として返す
     expect(result.throwingCounterpartStatus).toBe("error");
     expect(result.throwingCounterpartMessage).toBe("hasCounterpart callback must not throw");
-    // 6. 揃える相手がいないときだけ、到着基準の下限 (140 ms) を足す。判定は push ごとに 1 回
+    // 6. 揃える相手がいないときだけ到着基準になる。判定は push ごとに 1 回
     expect(result.withoutCounterpart.status).toBe("played");
     expect(result.withoutCounterpart.counterpartCalls).toBe(1);
-    expect(result.withoutCounterpart.lastStartDelayMs).toBeGreaterThanOrEqual(120);
+    expect(result.withoutCounterpart.lastStartDelayMs).toBeGreaterThanOrEqual(40);
+    expect(result.withoutCounterpart.arrivalPlannedFrames).toBe(1);
     expect(result.withCounterpart.status).toBe("played");
     expect(result.withCounterpart.counterpartCalls).toBe(1);
-    // 揃える相手がいれば目標の開始時刻を守るため、到着基準の下限は足されない
-    expect(result.withCounterpart.lastStartDelayMs).toBeLessThan(
-      result.withoutCounterpart.lastStartDelayMs,
-    );
+    // 揃える相手がいれば目標の開始時刻を守る。
+    expect(result.withCounterpart.arrivalPlannedFrames).toBe(0);
   });
 });
 
@@ -761,11 +761,11 @@ test("実 Web Audio で壊れた音の入力、停止と時計の再開を検証
   });
 });
 
-// 壁時計の観測がない音声でも、無音の穴を観測して閉ループが広げた深さ (上限 160 ms) を
-// 到着基準の再生の遅れへ適用する。穴は実時間を空けて音を届けることで実ブラウザに作らせる。
+// 壁時計の観測がない音声でも、既に遅れた音をさらに待たせない。
+// 穴は実時間を空けて音を届けることで実ブラウザに作らせ、学習した深さと予約を分ける。
 // 待ちは固定の時間ではなく、再生の進みと閉ループの制御間隔という条件を期限付きで待つ。
 for (const gapCase of GAP_CASES) {
-  test(`壁時計の観測がない (${gapCase.label}) 音声にも穴で広げた深さを適用する`, async ({
+  test(`壁時計の観測がない (${gapCase.label}) 音声も到着停滞の後にすぐ再開する`, async ({
     page,
   }) => {
     await test.step("テストページを開く", () => openPlayoutPage(page));
@@ -813,6 +813,7 @@ for (const gapCase of GAP_CASES) {
               () => performance.now() - secondPushedAtMs >= 1_050,
               3_000,
             );
+            const appliedBeforeThird = playout.getStats().audio?.delayFeedback.appliedMs ?? -1;
             const third = push(firstTimestamp + 40_000);
             const stats = playout.getStats();
             const timing = stats.audio?.timing ?? null;
@@ -825,6 +826,7 @@ for (const gapCase of GAP_CASES) {
               second: second.status,
               third: third.status,
               appliedMs: delayFeedback?.appliedMs ?? -1,
+              appliedBeforeThird,
               appliedCeilingMs: delayFeedback?.appliedCeilingMs ?? -1,
               jitterTargetMs: delayFeedback?.jitterTargetMs ?? -1,
               reason: delayFeedback?.reason ?? null,
@@ -839,7 +841,7 @@ for (const gapCase of GAP_CASES) {
         { timestampKind: gapCase.timestampKind, jitterBuffer: gapCase.jitterBuffer },
       ));
 
-    await test.step("穴で広げた深さが到着基準の再生の遅れへ適用されることを検証する", () => {
+    await test.step("欠落を記録しつつ、遅れて届いた音を再び待たせないことを検証する", () => {
       // 実時間の待ちが期限の中で満たされた (穴を作るための再生の進み)
       expect(result.firstPlayedOut).toBe(true);
       expect(result.controlIntervalElapsed).toBe(true);
@@ -854,10 +856,12 @@ for (const gapCase of GAP_CASES) {
       expect(result.gapCount).toBeGreaterThanOrEqual(1);
       expect(result.reason).toBe("gap");
       expect(result.appliedCeilingMs).toBe(160);
-      expect(result.appliedMs).toBe(160);
-      // 到着から鳴り始めるまでの遅れにも、広げた深さが使われる
-      expect(result.lastStartDelayMs).toBeGreaterThanOrEqual(155);
-      expect(result.lastStartDelayMs).toBeLessThan(250);
+      // 50 ms から始め、穴 2 回で 40 ms ずつ広げる。既に遅れた音は、
+      // 目標まで待ち直さず Web Audio が予約できる最も早い位置へ置く。
+      expect(result.appliedMs).toBe(130);
+      expect(result.appliedBeforeThird).toBe(90);
+      expect(result.lastStartDelayMs).toBeGreaterThanOrEqual(0);
+      expect(result.lastStartDelayMs).toBeLessThan(65);
     });
   });
 }

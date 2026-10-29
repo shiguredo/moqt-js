@@ -40,11 +40,11 @@ import { summarizeTimings } from "./timingSummary";
 
 // 音声の再生を有効にした最初の観測で、未観測の固定値を余分に上乗せしない。
 // 到着推定の開始値を保ち、閉ループの初回観測だけでは上乗せしない。以降は実績で学ぶ。
-test("音声の開始時は到着推定の 80 ms を使い、閉ループの観測で跳ね上げない", () => {
+test("音声の開始時は到着推定の 50 ms を使い、閉ループの観測で跳ね上げない", () => {
   const timeline = new PlayoutTimeline({ timeOriginMs: 0, maxQueuedFrames: 24 });
   timeline.observe("video", 1_000, 1_000_000);
   timeline.observe("audio", 1_000, 1_000_000);
-  assert.equal(timeline.playoutDelayMs, 80, "到着の分布が揃うまでは初期の余裕を保つこと");
+  assert.equal(timeline.playoutDelayMs, 50, "到着の分布が揃うまでは初期の余裕を保つこと");
   timeline.observeAudioPlayout({
     atMs: 1_000,
     latenessMs: summarizeTimings([0]),
@@ -53,18 +53,18 @@ test("音声の開始時は到着推定の 80 ms を使い、閉ループの観�
     backlogMisses: 0,
     backlogMs: 0,
   });
-  assert.equal(timeline.playoutDelayMs, 80, "閉ループの開始で目標を跳ね上げないこと");
-  assert.closeTo(timeline.videoDelayMs ?? 0, 75, 0.01, "映像は必要な音声の遅れだけ待つこと");
+  assert.equal(timeline.playoutDelayMs, 50, "閉ループの開始で目標を跳ね上げないこと");
+  assert.closeTo(timeline.videoDelayMs ?? 0, 45, 0.01, "映像は必要な音声の遅れだけ待つこと");
 });
 
 // 基準が 130 ms 違う場合でも、既知のバッファ差と区別する。補償しない基準の差は
-// 30 ms 残す一方、音声に必要な 80 ms は映像にも反映する。
+// 30 ms 残す一方、音声に必要な 50 ms は映像にも反映する。
 test("時計に由来しうる基準の差だけを 100 ms で保護する", () => {
   const timeline = new PlayoutTimeline({ timeOriginMs: 0, maxQueuedFrames: 24 });
   timeline.observe("video", 1_000, 1_000_000);
   timeline.observe("audio", 1_130, 1_000_000);
   assert.isTrue(timeline.sharingBases);
-  assert.equal(timeline.videoDelayMs, 180, "基準の 100 ms とバッファの 80 ms を補償すること");
+  assert.equal(timeline.videoDelayMs, 150, "基準の 100 ms とバッファの 50 ms を補償すること");
   const { audio, video } = timeline.delayBreakdown;
   assert.equal(
     (audio.presentationDelayMs ?? 0) - (video.presentationDelayMs ?? 0),
@@ -85,7 +85,12 @@ test("基準の差とバッファの差が逆向きでも実際に先行する�
   assert.isTrue(timeline.sharingBases);
   assert.equal(video.jitterDelayMs, 160, "映像のバッファが基準の差を部分的に相殺すること");
   assert.equal(audio.syncExtraDelayMs, 0, "実際には遅い音声をさらに遅らせないこと");
-  assert.closeTo((audio.presentationDelayMs ?? 0) - (video.presentationDelayMs ?? 0), 20, 0.01);
+  // 200 + 50 - 160 = 90 ms の先行は保護幅内であり、不感帯 5 ms まで揃う。
+  assert.closeTo(
+    (audio.presentationDelayMs ?? 0) - (video.presentationDelayMs ?? 0),
+    SYNC_MIN_DELTA_MS,
+    0.01,
+  );
 });
 
 test("音声の残差が周期的に上下しても共通の遅延を積み上げない", () => {
@@ -143,7 +148,7 @@ test("音声の目標が広がった呼び出しの中で映像も同期する",
   timeline.resetStream("audio");
   assert.equal(timeline.videoDelayMs, 0, "音声 OFF で補償を解くこと");
   timeline.observe("audio", timeOriginMs + 6_000, (timeOriginMs + 6_000) * 1_000);
-  assert.equal(timeline.playoutDelayMs, 80, "再開時に過去の穴で深くなった目標を持ち込まないこと");
+  assert.equal(timeline.playoutDelayMs, 50, "再開時に過去の穴で深くなった目標を持ち込まないこと");
 });
 
 // 音声は出力の都合で予定より遅く鳴ることがある。予定どうしの差だけを揃えると、
@@ -1642,10 +1647,8 @@ test("observe: 片方のトラックが届かなくなっても保持は満了�
   assert.isTrue(timeline.sharingBases, "映像が届かない間も保持が満了して共有が戻ること");
 });
 
-// 完了条件: 音声だけの購読の到着基準の遅れは、下限を必ず確保したうえで、学習した値
-// (穴を観測して閉ループが広げた目標) を音声だけの上限まで使う。共有の基準があるトラックは
-// 100 ms の上限のまま (TIMESTAMP の時計のずれを揺らぎとして学習するため)
-test("audioOnlyArrivalPlayoutDelayMs: 下限を確保して学習した値を上限まで使う", () => {
+// 完了条件: 音声だけの購読では、過去の穴による学習値で恒常的な待ちを増やさない。
+test("audioOnlyArrivalPlayoutDelayMs: 音声のみの到着基準は低遅延の深さを保つ", () => {
   assert.equal(
     audioOnlyArrivalPlayoutDelayMs(50, AUDIO_ONLY_ARRIVAL_DELAY_FLOOR_MS),
     AUDIO_ONLY_ARRIVAL_DELAY_FLOOR_MS,
@@ -1653,15 +1656,15 @@ test("audioOnlyArrivalPlayoutDelayMs: 下限を確保して学習した値を上
   );
   assert.equal(
     audioOnlyArrivalPlayoutDelayMs(150, AUDIO_ONLY_ARRIVAL_DELAY_FLOOR_MS),
-    150,
-    "学習した値が下限より大きければその値を使うこと",
+    50,
+    "過去の穴で目標が増えても恒常的な待ちを増やさないこと",
   );
   assert.equal(
     audioOnlyArrivalPlayoutDelayMs(300, AUDIO_ONLY_ARRIVAL_DELAY_FLOOR_MS),
     AUDIO_ONLY_ARRIVAL_DELAY_MAX_MS,
-    "音声だけの上限 160 ms で切ること",
+    "音声だけの上限 50 ms で切ること",
   );
   // 映像に合わせる相手がいない音声だけの購読でだけ使う関数である。共有の基準がある
   // トラックは 100 ms の上限 (AUDIO_PLAYOUT_ARRIVAL_DELAY_MS) のままである
-  assert.equal(audioOnlyArrivalPlayoutDelayMs(140, 0), 140, "下限 0 でも学習した値を返すこと");
+  assert.equal(audioOnlyArrivalPlayoutDelayMs(140, 0), 50, "下限 0 でも上限を超えないこと");
 });

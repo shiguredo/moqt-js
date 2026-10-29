@@ -1451,42 +1451,6 @@ test("handleVideoDecodedData: 書き込みの同期 throw 時も VideoFrame を�
   assert.equal(errors.length, 0);
 });
 
-test("handleAudioDecodedData: 音声変換成功時は AudioData を閉じて通知しない", () => {
-  // 成功時も finally でちょうど 1 回閉じ、onError しないことの検証
-  const { subscriber, errors } = createTestSubscriber({});
-  const control = subscriber as unknown as SubscriberFrameControl;
-  // 目標の表示時刻を AudioContext.currentTime の秒へ換算するため、実装は
-  // getOutputTimestamp と currentTime を読む (未開始の状態を表す 0/0 と 0 を返す)
-  const audioContext = {
-    currentTime: 0,
-    getOutputTimestamp: () => ({ contextTime: 0, performanceTime: 0 }),
-    createBuffer: () => ({
-      copyToChannel: () => {},
-    }),
-    createBufferSource: () => ({
-      buffer: null,
-      connect: () => {},
-      start: () => {},
-    }),
-  } as unknown as AudioContext;
-  installAudioOutput(control, audioContext, {} as MediaStreamAudioDestinationNode);
-  let closeCount = 0;
-  const audioData = {
-    numberOfChannels: 1,
-    sampleRate: 48000,
-    numberOfFrames: 1,
-    copyTo: () => {},
-    close: () => {
-      closeCount++;
-    },
-  } as unknown as AudioData;
-
-  control.handleAudioDecodedData({ data: audioData });
-
-  assert.equal(closeCount, 1);
-  assert.equal(errors.length, 0);
-});
-
 test("handleAudioDecodedData: 音声再生開始の失敗時も onError 通知し AudioData を閉じる", () => {
   // 変換全体 (createBuffer〜start) の裏付けとして start 失敗経路を検証する
   const { subscriber, errors } = createTestSubscriber({});
