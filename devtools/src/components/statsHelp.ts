@@ -28,11 +28,6 @@ import {
 } from "../utils/preconditionWarnings";
 import { AUDIO_PUBLISH_CATCH_UP_PENDING_TIMEOUT_MS } from "../../../src/audioPublishCatchUp";
 import {
-  AUDIO_DELAY_FEEDBACK_ARTIFACT_CEILING_MS,
-  AUDIO_DELAY_FEEDBACK_GAP_QUIET_MS,
-  AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS,
-} from "../../../src/playout/audioDelayFeedback.ts";
-import {
   AUDIO_MISS_REASONS,
   AUDIO_PLAYOUT_BOUNDARY_STEP_THRESHOLD,
   MAX_RECENT_AUDIO_MISSES,
@@ -179,12 +174,12 @@ export const AV_SYNC_HELP: SectionHelp = {
     {
       term: "jitterDelayMs",
       description:
-        "Jitter buffer delay of the track (ms). The audio uses the NetEq rule (0.95 quantile of arrival delay), the video the percentile of the jitter that keeps late frames within the budget.",
+        "Jitter buffer delay of the track (ms). Audio uses recent arrival jitter plus measured output lead, within 50–100 ms. Video uses the recent jitter percentile that keeps late frames within the budget.",
     },
     {
       term: "syncExtraDelayMs",
       description:
-        "Extra delay the A/V sync added to this track (ms). The leading track gets the extra so that both presentation times stay within the deadband; it is released at the decay rate.",
+        "Extra delay the A/V sync added to this track (ms). The leading track gets the extra so that both presentation times stay within the deadband; it is recomputed from current arrivals and audio reservations. During clock fallback it is released at the decay rate.",
     },
     {
       term: "presentationDelayMs",
@@ -418,7 +413,7 @@ export const AUDIO_PLAYOUT_TIMING_HELP: SectionHelp = {
     {
       term: "unrecoverableGapCount / unrecoverableGapMs",
       description:
-        "The part of the gaps before the earliest time a buffer can be reserved (now + the lead): already in the past, or still in the future but inside the lead (count and ms, cumulative). That part cannot be concealed. The closed loop raises the target delay for these holes so the same jitter does not become a hole again.",
+        "The part of the gaps before the earliest time a buffer can be reserved (now + the lead): already in the past, or still in the future but inside the lead (count and ms, cumulative). That part cannot be concealed. Arrival jitter and measured output lead determine the next budget; past gaps do not raise a separate delay ceiling.",
     },
     {
       term: "lateStartCount / lateStartMaxMs",
@@ -440,18 +435,9 @@ export const AUDIO_PLAYOUT_TIMING_HELP: SectionHelp = {
         "Result of the last stop (drain), in ms: the reserved sounds played before closing the AudioContext, the part cut at the wait limit, the time actually waited, and the wait limit that was asked for. - before the first stop. drainCutMs matches the increase of missedByReason.stopped; drainPlayedMs includes the sounds that were already reserved at the stop.",
     },
     {
-      term: "appliedMs / jitterTargetMs / delayReason",
+      term: "targetMs / jitterMs / outputLeadMs",
       description:
-        "The target delay actually used (ms), the target derived only from the arrival jitter (NetEq, ms), and the reason the closed loop last moved the target (initial, compression, gap, backlog, and so on). appliedMs is the larger of the jitter target and the closed loop target, capped by the applied ceiling. They are read from the same snapshot as the A/V Sync breakdown when both tracks are subscribed, and from the audio pipeline when only audio is subscribed.",
-    },
-    {
-      term: "appliedCeilingMs",
-      description: `The limit actually applied to the target delay (ms). It is ${AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS} ms normally. A single gap widens it for ${AUDIO_DELAY_FEEDBACK_GAP_QUIET_MS / 1_000} s to what the gap plus the margin needs, and sustained time compression or gaps widen it to ${AUDIO_DELAY_FEEDBACK_ARTIFACT_CEILING_MS} ms, unless the explicit targetLatency caps more tightly. The value actually used is appliedMs in this section (and also in A/V Sync).`,
-    },
-    {
-      term: "compressionMsPerSecond",
-      description:
-        "Speed of the time compression observed in the last control interval (ms/s). Above 0 means the periodic waveform is being shortened to catch up, which is what makes the voice rough. It also widens appliedCeilingMs when it continues.",
+        "The buffering target, recent arrival jitter and the lead required by the output clock (ms). The shared audio target accounts for jitter and output lead together within 50–100 ms. Audio-only playout uses 50 ms. Output lead is unknown until a valid output timestamp is available. Total capture-to-output delay also includes delivery and queued audio.",
     },
     {
       term: "stallCount / stallMs / overlappedArrivals",

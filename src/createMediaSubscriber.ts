@@ -35,7 +35,7 @@ import {
 } from "./playout/audioPlayoutTimingStats";
 // 復号済みの音声と映像の再生の入口。時間軸 (jitter buffer)・音声の再生の組み立て・映像の
 // 表示の組み立て・計器・復号へ渡した入力の対応表を 1 か所にまとめる。組み立てをここへ
-// 置くと、到着基準の遅れ・閉ループ・計器の修正が 1 か所で済む
+// 置くと、到着基準の予算・出力時計の観測・計器の修正が 1 か所で済む
 // (devtools/src/hooks/useSubscriber.ts と共有する)
 import {
   createMediaPlayout,

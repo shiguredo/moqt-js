@@ -219,7 +219,10 @@ for (const timestampKind of ["mediaTime", "wallClock"] as const) {
       (result.timing.startDelayMs?.p95 ?? Infinity) < 65,
       "正常到着の音を 65 ms 以内に再生すること",
     );
-    assert.ok(result.delayFeedback.targetMs <= 50, "パケット欠落で目標遅延を増やさないこと");
+    assert.ok(
+      result.delay.targetMs <= 50,
+      `パケット欠落で目標遅延を増やさないこと: ${JSON.stringify(result)}`,
+    );
   });
 }
 
@@ -492,14 +495,31 @@ for (const { frames, gapMicros } of [
 test("圧縮した音の直後に欠落しても補間の材料が不足しない", async ({ page }) => {
   await openPlayoutPage(page);
   const result = await evaluatePlayout(page, async ({ moduleUrl, harnessUrl }) => {
-    const { createMediaPlayout } = await import(moduleUrl);
     const harness = await import(harnessUrl);
     const output = await harness.createSilentAudioOutput();
-    const playout = createMediaPlayout({
-      audio: { context: output.context, destination: output.destination },
-    });
+    const { AudioPlayoutSession } = await import(
+      new URL("./playout/audioPlayoutSession.ts", moduleUrl).href
+    );
+    const { AudioPlayoutTimingStats } = await import(
+      new URL("./playout/audioPlayoutTimingStats.ts", moduleUrl).href
+    );
+    const timing = new AudioPlayoutTimingStats(10000, performance.timeOrigin);
+    const session = new AudioPlayoutSession({ timing }) as unknown as {
+      playout: import("../../src/playout/audioPlayout").AudioPlayoutScheduler;
+      playSound(
+        output: { context: AudioContext; destination: AudioNode },
+        decision: import("../../src/playout/audioPlayout").AudioPlayoutDecision,
+        data: AudioData,
+        channels: number,
+        rate: number,
+        frames: number,
+      ): unknown;
+    };
     try {
       await output.context.suspend();
+      // 予約の時刻は実クラスへ明示して固定する。performance.now() と停止中の
+      // 出力時計の差によって、圧縮の不感帯 20 ms を偶然下回るテストにしない。
+      const now = output.context.currentTime;
       const statuses = [];
       // まとめて届いた先行フレームを実際に圧縮し、その直後の 20 ms を欠落させる。
       // 170 Hz は圧縮前の 20 ms なら補間でき、圧縮後の約 14 ms では解析窓が不足する。
@@ -510,13 +530,32 @@ test("圧縮した音の直後に欠落しても補間の材料が不足しな�
             (_, sample) => 0.3 * Math.sin((2 * Math.PI * 170 * (index * 960 + sample)) / 48000),
           ),
         });
-        playout.trackAudioDecodeInput(data.timestamp, { timestampKind: "mediaTime" });
-        statuses.push(playout.pushAudio(data).status);
+        const decision = session.playout.schedule(now, data.timestamp, 0.02, {
+          targetStartSeconds: null,
+          arrivalSeconds: now - 0.03,
+          enforceTarget: false,
+          arrivalDelaySeconds: 0.05,
+          delaySeconds: 0.05,
+          presentationDelaySeconds: 0.05,
+        });
+        if (decision.kind !== "play") throw new Error("音を再生する判定であること");
+        session.playSound(output, decision, data, 1, 48000, 960);
+        statuses.push("played");
         data.close();
       }
-      return { statuses, audio: playout.getStats().audio };
+      await output.context.resume();
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 200);
+      });
+      return {
+        statuses,
+        audio: {
+          compressedMs: session.playout.compressed * 1000,
+          concealedMs: session.playout.concealed * 1000,
+          timing: timing.snapshot(performance.now()),
+        },
+      };
     } finally {
-      playout.clearAll();
       await harness.closeSilentAudioOutput(output);
     }
   });

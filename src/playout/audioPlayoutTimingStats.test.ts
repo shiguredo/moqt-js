@@ -10,17 +10,6 @@ import {
 
 // 到着に間に合っているが媒体の一部が欠落した穴は、遅延を増やしても復元できない。
 // 表示用の欠落量は残し、遅延制御へはバッファ不足の分だけを渡す。
-test("recordGap: 媒体欠落を再生遅延の不足として学習しない", () => {
-  const stats = new AudioPlayoutTimingStats(10000, 0);
-  stats.recordGap({ uncoveredMs: 20, unrecoverableMs: 0, delayFeedbackMs: 0 });
-  assert.equal(stats.snapshot(0).gapMs, 20);
-  assert.equal(stats.audioDelayFeedback(0).gapMs, 0);
-  stats.recordGap({ uncoveredMs: 30, unrecoverableMs: 10, delayFeedbackMs: 10 });
-  assert.equal(stats.snapshot(0).gapMs, 50);
-  assert.equal(stats.audioDelayFeedback(0).gapMs, 10);
-  stats.reset();
-  assert.equal(stats.audioDelayFeedback(0).gapMs, 0);
-});
 
 // 完了条件: 鳴らすと決めた音の、再生予定時刻・到着時刻・鳴り始める時刻と、予定に対する
 // 余裕・鳴るまでの時間・予定からの遅れを、直近の値と分布 (p50 / p95 / max) の両方で返す。
@@ -181,53 +170,6 @@ test("snapshot: 窓より古い記録は分布から落ち、累積は残る", (
   assert.equal(snapshot.lastTargetMs, 510, "直近の値は窓に関係なく残ること");
 });
 
-// 完了条件: 目標遅延を閉ループで決めるための観測は、表示用の 10 秒の窓ではなく短い窓
-// (既定 1 秒) の分布を返す。目標を増やした結果が 10 秒の窓へ現れるまでには数秒かかるため、
-// 制御には短い窓を使う。捨てた量は累積のまま返し、差を取るのは使う側の仕事にする
-test("audioDelayFeedback: 短い窓の分布と、累積の捨てた量を返す", () => {
-  const stats = new AudioPlayoutTimingStats(AUDIO_PLAYOUT_TIMING_WINDOW_MS, 0);
-  // 窓 (1 秒) より古い音。余裕 100 / 鳴るまで 110 / 遅れ 10。分布へ入れない
-  stats.recordPlay(1_000, 1_100, 1_110, 20, "timestamp");
-  // 直近 (時刻 5,000〜6,000) の音。余裕 30 / 鳴るまで 40 / 遅れ 10
-  stats.recordPlay(5_100, 5_130, 5_140, 20, "timestamp");
-  // 余裕 10 / 鳴るまで 20 / 遅れ 10
-  stats.recordPlay(5_500, 5_510, 5_520, 20, "timestamp");
-  stats.recordMiss({
-    atMs: 5_600,
-    reason: "backlog",
-    durationMs: 20,
-    targetMs: 5_700,
-    arrivalMs: 5_500,
-  });
-
-  const feedback = stats.audioDelayFeedback(6_000);
-  assert.equal(feedback.atMs, 6_000, "観測した時刻を返すこと");
-  assert.deepEqual(feedback.latenessMs, { p50: 10, p95: 10, max: 10 }, "短い窓の遅れを返すこと");
-  assert.deepEqual(feedback.startDelayMs, { p50: 20, p95: 40, max: 40 });
-  assert.deepEqual(feedback.slackMs, { p50: 10, p95: 30, max: 30 });
-  assert.equal(feedback.backlogMisses, 1, "累積の捨てた数を返すこと");
-  assert.equal(feedback.backlogMs, 20, "累積の捨てた長さを返すこと");
-
-  // 表示用の窓 (10 秒) より外に出れば null になる
-  const later = stats.audioDelayFeedback(20_000);
-  assert.isNull(later.latenessMs, "窓の外の値だけになれば null になること");
-  assert.equal(later.backlogMisses, 1, "累積は窓に関係なく残ること");
-});
-
-test("音声の再開より前の分布を閉ループへ渡さず、表示用の分布は残す", () => {
-  const stats = new AudioPlayoutTimingStats(10_000, 0);
-  stats.recordPlay(100, 100, 200, 20, "timestamp");
-  stats.recordPlay(120, 120, 220, 20, "timestamp");
-  stats.recordPlay(200, 250, 250, 20, "timestamp");
-  assert.equal(stats.audioDelayFeedback(220).latenessMs?.p50, 100);
-  assert.equal(
-    stats.audioDelayFeedback(220, 150).latenessMs?.p50,
-    0,
-    "再開後の分布だけで制御すること",
-  );
-  assert.equal(stats.snapshot(220).latenessMs?.p50, 100, "表示用の過去の実績を消さないこと");
-});
-
 // 完了条件: reset で、すべての記録を捨てて初期状態へ戻す。購読をやり直すときに使う
 test("reset: すべての記録を捨てて初期状態へ戻す", () => {
   const stats = new AudioPlayoutTimingStats(AUDIO_PLAYOUT_TIMING_WINDOW_MS, 0);
@@ -293,7 +235,7 @@ test("recordGap / recordLateStart / recordBoundaryStep: 穴と追い越しと段
   stats.recordGap({ uncoveredMs: 0, unrecoverableMs: 0 });
   // 予約できなかった長さが穴の長さを超えても、穴の長さまでに切り詰める
   stats.recordGap({ uncoveredMs: 4, unrecoverableMs: 10 });
-  // 非有限・負値は記録しない (NaN が集計へ入ると閉ループの目標まで NaN になる)
+  // 非有限値と負値は記録しない (NaN を表示用の分布へ混ぜない)
   stats.recordGap({ uncoveredMs: Number.NaN, unrecoverableMs: 0 });
   stats.recordGap({ uncoveredMs: -1, unrecoverableMs: 0 });
   stats.recordLateStart(2);
@@ -317,10 +259,6 @@ test("recordGap / recordLateStart / recordBoundaryStep: 穴と追い越しと段
   assert.equal(snapshot.lateStartMaxMs, 2, "追い越した最大を残すこと");
   assert.equal(snapshot.boundaryStepCount, 2, "しきい値を超えた段差だけ数えること");
   assert.closeTo(snapshot.boundaryStepMax, 0.3, 1e-9, "段差の最大は残すこと");
-  // 目標遅延の閉ループへ穴の累積を渡す
-  const feedback = stats.audioDelayFeedback(0);
-  assert.equal(feedback.gapCount, 3);
-  assert.equal(feedback.gapMs, 32);
 });
 
 /**

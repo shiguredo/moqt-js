@@ -2,6 +2,10 @@
 
 記録日: 2026-10-29。
 
+本稿は `1c0dbcb9` までの音声波形の修正と計測を記録する。
+続く A/V の低遅延化と旧遅延制御の削除は
+[A/V 再生の低遅延化の計測](AV_LOW_LATENCY_INVESTIGATION.md) を参照すること。
+
 `d6893cb2` の実装を起点に、音源を実際の WebCodecs / Web Audio へ通し、
 圧縮、補間、境界処理、遅延回復の不具合を再現して修正した。
 音声 API のモックやスタブを追加せず、修正前に回帰テストの失敗を確認した。
@@ -413,7 +417,7 @@ vp exec node scripts/investigate-playout-audio.mjs live
 vp exec node scripts/investigate-playout-audio.mjs long
 vp exec node scripts/investigate-playout-audio.mjs datagram
 vp exec node scripts/investigate-playout-audio.mjs datagramLive
-PLAYOUT_RELAY_URI=moqt://sora-moq.shiguredo.co.jp/ vp exec node scripts/investigate-playout-audio.mjs relay
+PLAYOUT_RELAY_URI='<RELAY_URI>' vp exec node scripts/investigate-playout-audio.mjs relay
 vp exec node scripts/investigate-playout-audio.mjs replay
 ```
 

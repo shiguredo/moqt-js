@@ -60,8 +60,9 @@ const AUDIO_PLAYBACK_ITEMS = {
   drainWaitedMs: "subscriber-audio-playback-drain-waited-ms",
   drainRequestedMs: "subscriber-audio-playback-drain-requested-ms",
   // 目標遅延の上限と時間圧縮の速さ
-  appliedCeilingMs: "subscriber-audio-playback-applied-ceiling",
-  compressionMsPerSecond: "subscriber-audio-playback-compression-ms-per-second",
+  targetMs: "subscriber-audio-playback-target-ms",
+  jitterMs: "subscriber-audio-playback-jitter-ms",
+  outputLeadMs: "subscriber-audio-playback-output-lead-ms",
   // 受信側の追いつきの判定に使う値と、参考の生の遅れ
   decodeLagMs: "subscriber-audio-playback-catch-up-decode-lag",
   catchUpLimitMs: "subscriber-audio-playback-catch-up-limit",
@@ -159,8 +160,9 @@ test("subscriber の画面に音声の再生の観測を既定値で出す", asy
   await expect(page.getByTestId(AUDIO_PLAYBACK_ITEMS.drainCutMs)).toHaveText("-");
   await expect(page.getByTestId(AUDIO_PLAYBACK_ITEMS.drainWaitedMs)).toHaveText("-");
   await expect(page.getByTestId(AUDIO_PLAYBACK_ITEMS.drainRequestedMs)).toHaveText("-");
-  await expect(page.getByTestId(AUDIO_PLAYBACK_ITEMS.appliedCeilingMs)).toHaveText("100.0");
-  await expect(page.getByTestId(AUDIO_PLAYBACK_ITEMS.compressionMsPerSecond)).toHaveText("0");
+  await expect(page.getByTestId(AUDIO_PLAYBACK_ITEMS.targetMs)).toHaveText("50.0");
+  await expect(page.getByTestId(AUDIO_PLAYBACK_ITEMS.jitterMs)).toHaveText("-");
+  await expect(page.getByTestId(AUDIO_PLAYBACK_ITEMS.outputLeadMs)).toHaveText("-");
   // 追いつきの判定に使う遅れはまだ観測しておらず、上限は絶対値の下限 (60 ms) になる。
   // 生の遅れ (lagMs) は参考値として別に出す
   await expect(page.getByTestId(AUDIO_PLAYBACK_ITEMS.decodeLagMs)).toHaveText("-");

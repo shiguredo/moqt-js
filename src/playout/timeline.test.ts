@@ -4,11 +4,11 @@
  * 音声と映像の表示時刻を 1 つの式で決める規則を固定する。
  * 表示時刻 = TIMESTAMP + 基準の遅れ + 表示の遅れ であり、基準の遅れはトラックごとの
  * 「復号の出力の時刻 - TIMESTAMP」の窓の最小値、表示の遅れはトラックごとの jitter buffer の
- * 遅延 (音声は NetEq と同じ 0.95 分位、映像は揺らぎの百分位) である。
+ * 遅延 (音声は到着の揺らぎ + 出力の先行量、映像は揺らぎの百分位) である。
  *
  * A/V 同期は 2 つのトラックの表示時刻の差が SYNC_MIN_DELTA_MS を超えたときだけ、先行する
  * 側の表示の遅れを上げる。不感帯の中では 2 つの遅延は独立であり、映像は音声の jitter
- * buffer の遅延に引きずられない。下げるのは毎秒 PLAYOUT_DELAY_DECAY_MS_PER_SECOND まで。
+ * buffer の遅延に引きずられない。過去の補償を、次の必要量へ足し戻さない。
  *
  * PBT (観測の順序と揺らぎの任意の列に対する不変条件) は src/playout/timeline.prop.ts が固定する。
  */
@@ -18,7 +18,6 @@ import {
   AUDIO_PLAYOUT_ARRIVAL_DELAY_MS,
   AUDIO_PLAYOUT_DELAY_FLOOR_MS,
   MAX_PLAYOUT_DELAY_MS,
-  PLAYOUT_DELAY_DECAY_MS_PER_SECOND,
   PLAYOUT_DISCONTINUITY_MS,
   PLAYOUT_BASE_DRIFT_CONFIRM_MS,
   PLAYOUT_BASE_DRIFT_MS,
@@ -29,31 +28,19 @@ import {
   PLAYOUT_QUEUE_HEADROOM_FRAMES,
   PlayoutTimeline,
   SYNC_MIN_DELTA_MS,
-  AUDIO_ONLY_ARRIVAL_DELAY_MAX_MS,
-  AUDIO_ONLY_ARRIVAL_DELAY_FLOOR_MS,
-  audioOnlyArrivalPlayoutDelayMs,
 } from "./timeline";
 import { AUDIO_CLOCK_DEADBAND_MS } from "./audioPlayout";
-import { AUDIO_DELAY_START_MS } from "./audioDelayEstimator";
 import { MAX_PRESENTATION_LAG_MS, PlayoutBuffer } from "./buffer";
-import { summarizeTimings } from "./timingSummary";
 
 // 音声の再生を有効にした最初の観測で、未観測の固定値を余分に上乗せしない。
-// 到着推定の開始値を保ち、閉ループの初回観測だけでは上乗せしない。以降は実績で学ぶ。
-test("音声の開始時は到着推定の 50 ms を使い、閉ループの観測で跳ね上げない", () => {
+// 出力時計の観測が無い開始時は 50 ms の下限を使う。
+test("音声の開始時は 50 ms の下限を使う", () => {
   const timeline = new PlayoutTimeline({ timeOriginMs: 0, maxQueuedFrames: 24 });
   timeline.observe("video", 1_000, 1_000_000);
   timeline.observe("audio", 1_000, 1_000_000);
   assert.equal(timeline.playoutDelayMs, 50, "到着の分布が揃うまでは初期の余裕を保つこと");
-  timeline.observeAudioPlayout({
-    atMs: 1_000,
-    latenessMs: summarizeTimings([0]),
-    startDelayMs: summarizeTimings([50]),
-    slackMs: summarizeTimings([50]),
-    backlogMisses: 0,
-    backlogMs: 0,
-  });
-  assert.equal(timeline.playoutDelayMs, 50, "閉ループの開始で目標を跳ね上げないこと");
+
+  assert.equal(timeline.playoutDelayMs, 50, "出力時計が未観測でも下限を使うこと");
   assert.closeTo(timeline.videoDelayMs ?? 0, 45, 0.01, "映像は必要な音声の遅れだけ待つこと");
 });
 
@@ -103,53 +90,13 @@ test("音声の残差が周期的に上下しても共通の遅延を積み上�
     const target = timeline.presentationWallClockMicros("audio", timestamp) ?? 0n;
     const residualMs = Math.floor(index / 50) % 2 === 0 ? 80 : 0;
     timeline.recordPresentation("audio", timestamp, target + BigInt(residualMs * 1_000), target);
-    timeline.observeAudioPlayout({
-      atMs,
-      latenessMs: summarizeTimings([0]),
-      startDelayMs: summarizeTimings([50]),
-      slackMs: summarizeTimings([50]),
-      backlogMisses: 0,
-      backlogMs: 0,
-    });
+
     // 開始時を含む自然遅延の最大は 80 + 80 ms。過去に加えた補償を入力へ戻すと 370 ms まで増える。
     assert.isAtMost(timeline.videoDelayMs ?? Infinity, 160.01, "補償した遅延を再び足さないこと");
   }
 });
 
-// 20 ms の穴が続いて音声の目標が 100 ms を超えても、既知のバッファの差は全額合わせる。
 // 再生の観測は performance 軸で渡す。Unix epoch と混同すると減衰の時間差が壊れる。
-test("音声の目標が広がった呼び出しの中で映像も同期する", () => {
-  const timeOriginMs = 1_790_000_000_000;
-  const timeline = new PlayoutTimeline({ timeOriginMs, maxQueuedFrames: 24 });
-  for (let index = 0; index < 5; index++) {
-    const atMs = 1_000 + index * 1_000;
-    const timestamp = (timeOriginMs + atMs) * 1_000;
-    timeline.observe("audio", timeOriginMs + atMs, timestamp);
-    timeline.observe("video", timeOriginMs + atMs, timestamp);
-    timeline.observeAudioPlayout({
-      atMs,
-      latenessMs: summarizeTimings([0]),
-      startDelayMs: summarizeTimings([50]),
-      slackMs: summarizeTimings([50]),
-      backlogMisses: 0,
-      backlogMs: 0,
-      gapCount: index,
-      gapMs: index * 20,
-    });
-    const { audio, video } = timeline.delayBreakdown;
-    assert.isAtMost(
-      Math.abs((audio.presentationDelayMs ?? 0) - (video.presentationDelayMs ?? 0)),
-      SYNC_MIN_DELTA_MS + 0.01,
-      "次の復号出力を待たずに表示時刻が揃うこと",
-    );
-  }
-  assert.equal(timeline.playoutDelayMs, 160, "音切れを避ける適応を残すこと");
-  assert.isAbove(timeline.videoDelayMs ?? 0, 100, "既知のバッファ差を 100 ms で打ち切らないこと");
-  timeline.resetStream("audio");
-  assert.equal(timeline.videoDelayMs, 0, "音声 OFF で補償を解くこと");
-  timeline.observe("audio", timeOriginMs + 6_000, (timeOriginMs + 6_000) * 1_000);
-  assert.equal(timeline.playoutDelayMs, 50, "再開時に過去の穴で深くなった目標を持ち込まないこと");
-});
 
 // 音声は出力の都合で予定より遅く鳴ることがある。予定どうしの差だけを揃えると、
 // 実際に鳴る音から映像が先行したままになる。予約の結果を合わせ先として使う。
@@ -164,14 +111,7 @@ test("映像は音声の実際の出力時刻へ追従し、同じ残差で遅�
     assert.isNotNull(target);
     const actual = (target ?? 0n) + 20_000n;
     timeline.recordPresentation("audio", timestamp, actual, target ?? 0n);
-    timeline.observeAudioPlayout({
-      atMs,
-      latenessMs: summarizeTimings([0]),
-      startDelayMs: summarizeTimings([70]),
-      slackMs: summarizeTimings([50]),
-      backlogMisses: 0,
-      backlogMs: 0,
-    });
+
     const video = timeline.presentationWallClockMicros("video", timestamp);
     assert.isAtMost(Math.abs(Number(actual) - Number(video)) / 1_000, 5.01);
     assert.isAtMost(timeline.videoDelayMs ?? Infinity, 100, "残差を繰り返し加算しないこと");
@@ -250,7 +190,7 @@ function observeBothStreams(timeline: PlayoutTimeline, durationMs: number): void
   const arrivals: { stream: "audio" | "video"; atMs: number; mediaMs: number }[] = [];
   for (let index = 0; index * 20 < durationMs; index++) {
     const mediaMs = index * 20;
-    // 音声は 5 個に 1 個が 40 ms 遅れて届く。NetEq の目標遅延は 60 ms になる
+    // 音声は 5 個に 1 個が 40 ms 遅れて届く。出力の先行量が未観測なら予算は下限の 50 ms
     arrivals.push({
       stream: "audio",
       atMs: EPOCH_MS + mediaMs + (index % 5 === 4 ? 40 : 0),
@@ -311,40 +251,37 @@ test("presentationWallClockMicros: まだ観測していなければ表示時刻
 });
 
 // 表示時刻 = TIMESTAMP + 基準の遅れ + 表示の遅れ。1 つ目の観測では基準の遅れが
-// 「観測の時刻 - TIMESTAMP」になる。音声の表示の遅れは NetEq と同じ規則で、観測が無い間は
-// 到着の観測が揃うまでは 80 ms (AUDIO_DELAY_START_MS) を使い、閉ループは 50 ms から始める。
-// 映像はまだ揺らぎを学習していないため 0 ms だが、音声との差が不感帯 (5 ms) を
-// 超えるため、同期の制御が 75 ms を
-// 足して合わせる
+// 「観測の時刻 - TIMESTAMP」になる。音声の予算は開始時に 50 ms の下限を使う。
+
 test("presentationWallClockMicros: 最初の観測で TIMESTAMP + 基準の遅れ + 表示の遅れになる", () => {
   const timeline = createTimeline();
   timeline.observe("audio", EPOCH_MS, timestampOf(0));
   timeline.observe("video", EPOCH_MS, timestampOf(0));
 
   // 基準の遅れ = 0 ms (受信側と送信側の時計が一致)
-  assert.closeTo(timeline.playoutDelayMs ?? 0, AUDIO_DELAY_START_MS, TOLERANCE_MS);
+  assert.closeTo(timeline.playoutDelayMs ?? 0, AUDIO_PLAYOUT_DELAY_FLOOR_MS, TOLERANCE_MS);
   assert.closeTo(
     timeline.videoDelayMs ?? -1,
-    AUDIO_DELAY_START_MS - SYNC_MIN_DELTA_MS,
+    AUDIO_PLAYOUT_DELAY_FLOOR_MS - SYNC_MIN_DELTA_MS,
     TOLERANCE_MS,
     "映像は音声の不感帯の手前まで遅れること",
   );
   assert.closeTo(
     wallClockMsOf(timeline, "video", 0),
-    EPOCH_MS + AUDIO_DELAY_START_MS - SYNC_MIN_DELTA_MS,
+    EPOCH_MS + AUDIO_PLAYOUT_DELAY_FLOOR_MS - SYNC_MIN_DELTA_MS,
     TOLERANCE_MS,
     "映像は音声の不感帯の手前まで遅れること",
   );
   assert.closeTo(
     wallClockMsOf(timeline, "audio", 0),
-    EPOCH_MS + AUDIO_DELAY_START_MS,
+    EPOCH_MS + AUDIO_PLAYOUT_DELAY_FLOOR_MS,
     TOLERANCE_MS,
   );
   // performance.now() の軸では performance.timeOrigin (EPOCH_MS) を引いた値になる
-  assert.closeTo(performanceMsOf(timeline, "audio", 0), AUDIO_DELAY_START_MS, TOLERANCE_MS);
+  assert.closeTo(performanceMsOf(timeline, "audio", 0), AUDIO_PLAYOUT_DELAY_FLOOR_MS, TOLERANCE_MS);
   assert.closeTo(
     performanceMsOf(timeline, "video", 0),
-    AUDIO_DELAY_START_MS - SYNC_MIN_DELTA_MS,
+    AUDIO_PLAYOUT_DELAY_FLOOR_MS - SYNC_MIN_DELTA_MS,
     TOLERANCE_MS,
   );
 });
@@ -366,25 +303,22 @@ test("presentationWallClockMicros: 揺らぎの観測で映像の表示の遅れ
   assert.closeTo(wallClockMsOf(timeline, "video", 0), EPOCH_MS + 100, TOLERANCE_MS);
 });
 
-// 音声の jitter buffer の遅延は NetEq と同じ規則で、500 ms ごとの到着の遅れの最大を
-// 20 ms バケットのヒストグラムへ入れ、0.95 分位から (1 + バケット) * 20 ms とする。
-// 揺らぎが 40 ms の音が続くと 60 ms になる (開始値の 80 ms より下がる)
-test("observe: 音声の表示の遅れは NetEq と同じ規則で決まる", () => {
+// 揺らぎが 40 ms でも、出力の先行量が未観測なら 50 ms の下限が優先される。
+test("observe: 音声は到着の揺らぎと出力の先行量の合計から予算を決める", () => {
   // 20 ms ごとに届き、5 個に 1 個が 40 ms 遅れて届く (経路の最小の遅れを基準にした揺らぎが
-  // 40 ms)。500 ms ごとの最大が 40 ms になり、0.95 分位のバケット 2 から (1 + 2) * 20 = 60 ms
+  // 40 ms)。到着だけの揺らぎを、予約の出力の先行量と混同しない
   const timeline = createTimeline();
   for (let index = 0; index < 200; index++) {
     const jitterMs = index % 5 === 4 ? 40 : 0;
     timeline.observe("audio", EPOCH_MS + index * 20 + jitterMs, timestampOf(index * 20));
   }
-  assert.closeTo(timeline.playoutDelayMs ?? 0, 60, TOLERANCE_MS);
-  // 一定の遅れは揺らぎではないため、目標遅延は上がらない (NetEq と同じで、基準は窓の
-  // 最小の遅れのパケットである)
+  assert.closeTo(timeline.playoutDelayMs ?? 0, 50, TOLERANCE_MS);
+  // 一定の遅れは基準へ入るため、揺らぎの予算は上がらない
   const steady = createTimeline();
   for (let index = 0; index < 200; index++) {
     steady.observe("audio", EPOCH_MS + index * 20 + 40, timestampOf(index * 20));
   }
-  assert.closeTo(steady.playoutDelayMs ?? 0, 20, TOLERANCE_MS);
+  assert.closeTo(steady.playoutDelayMs ?? 0, 50, TOLERANCE_MS);
 });
 
 // ============================================================================
@@ -394,17 +328,15 @@ test("observe: 音声の表示の遅れは NetEq と同じ規則で決まる", (
 // 2 つのトラックのずれが不感帯 (SYNC_MIN_DELTA_MS) の中にある間は、遅延を変えない。
 // 映像は音声の jitter buffer の遅延に引きずられない
 test("同期: ずれが不感帯の中なら映像の遅延を音声に合わせない", () => {
-  // 音声を揺らぎ 0 で先に観測し、NetEq の目標遅延を開始値の 80 ms から 20 ms へ下げる。
-  // そのうえで targetLatency を 20 ms にすると、2 つのトラックの表示の遅れがどちらも
-  // 20 ms になり、ずれが不感帯の中に入るため制御は動かない
+  // 音声の予算と targetLatency をともに 50 ms にし、同期の補償が不要な条件を作る。
   const timeline = createTimeline();
   for (let index = 0; index < 200; index++) {
     timeline.observe("audio", EPOCH_MS + index * 20, timestampOf(index * 20));
   }
-  assert.closeTo(timeline.playoutDelayMs ?? 0, 20, TOLERANCE_MS);
-  timeline.setTargetLatencyMs(20);
+  assert.closeTo(timeline.playoutDelayMs ?? 0, 50, TOLERANCE_MS);
+  timeline.setTargetLatencyMs(50);
   timeline.observe("video", EPOCH_MS + 200 * 20, timestampOf(200 * 20));
-  assert.closeTo(timeline.videoDelayMs ?? -1, 20, TOLERANCE_MS, "映像は 20 ms のままであること");
+  assert.closeTo(timeline.videoDelayMs ?? -1, 50, TOLERANCE_MS, "明示した 50 ms のままであること");
 });
 
 // ずれが不感帯を超えたら、先行する側 (ここでは映像) の遅延を「音声の遅延 - 不感帯」まで
@@ -414,9 +346,9 @@ test("同期: ずれが不感帯を超えたら映像の遅延を不感帯の手
   observeBothStreams(timeline, 12_000);
   const audioDelayMs = timeline.playoutDelayMs ?? 0;
   const videoDelayMs = timeline.videoDelayMs ?? 0;
-  // 音声の遅延は NetEq の規則で 60 ms、映像は 0 ms から始まる。ずれ 60 ms が不感帯を
+  // 音声の予算は 50 ms、映像は 0 ms から始まる。ずれ 50 ms が不感帯を
   // 超えるため、映像の遅延が音声の不感帯の手前 (30 ms) まで上がる
-  assert.closeTo(audioDelayMs, 60, TOLERANCE_MS);
+  assert.closeTo(audioDelayMs, 50, TOLERANCE_MS);
   assert.isAbove(videoDelayMs, 0, "映像の遅延が上がること");
   assert.isBelow(videoDelayMs, audioDelayMs, "映像が音声の遅延を超えないこと (映像が先行してよい)");
   // 同時刻の表示時刻の差は不感帯ちょうどになる
@@ -430,7 +362,7 @@ test("同期: ずれが不感帯を超えたら映像の遅延を不感帯の手
 // 増えるため) は実測で却下した。ここでは、その案を採らないことを固定する。音声が先行して
 // いても、映像と同じく不感帯 (`SYNC_MIN_DELTA_MS`) まで詰める
 test("同期: 音声が先行していても、許す幅は映像と同じ不感帯である", () => {
-  // 音声は揺らぎ 0 (NetEq の目標遅延は 20 ms)、映像は 5 枚に 1 枚が 100 ms 遅れて届く
+  // 音声は揺らぎ 0 (予算は 50 ms)、映像は 5 枚に 1 枚が 100 ms 遅れて届く
   // (映像の表示の遅れは 100 ms)。音声の方が先行する
   const arrivals: { stream: "audio" | "video"; atMs: number; mediaMs: number }[] = [];
   for (let index = 0; index * 20 < 12_000; index++) {
@@ -452,7 +384,7 @@ test("同期: 音声が先行していても、許す幅は映像と同じ不感
 
   const audioDelayMs = timeline.playoutDelayMs ?? 0;
   const videoDelayMs = timeline.videoDelayMs ?? 0;
-  assert.closeTo(audioDelayMs, 20, TOLERANCE_MS);
+  assert.closeTo(audioDelayMs, 50, TOLERANCE_MS);
   assert.isAbove(videoDelayMs, audioDelayMs, "映像の方が遅いこと");
   // 音声へ足す分は「映像の表示の遅れ - 不感帯 - 音声の表示の遅れ」になる
   assert.closeTo(
@@ -487,21 +419,21 @@ test("setTargetLatencyMs: targetLatency が無いときはトラックごとの�
     timeline.observe("video", EPOCH_MS + index * FRAME_MS, timestampOf(index * FRAME_MS));
   }
   assert.isNull(timeline.targetLatencyMs);
-  assert.closeTo(timeline.playoutDelayMs ?? 0, AUDIO_DELAY_START_MS, TOLERANCE_MS);
+  assert.closeTo(timeline.playoutDelayMs ?? 0, AUDIO_PLAYOUT_DELAY_FLOOR_MS, TOLERANCE_MS);
   // 映像は音声の遅延に同期を合わせて不感帯の手前まで遅れる (自分の揺らぎは 0 ms)
   assert.closeTo(
     timeline.videoDelayMs ?? -1,
-    AUDIO_DELAY_START_MS - SYNC_MIN_DELTA_MS,
+    AUDIO_PLAYOUT_DELAY_FLOOR_MS - SYNC_MIN_DELTA_MS,
     TOLERANCE_MS,
   );
   // 再生遅延より小さい targetLatency を渡しても、遅い方 (再生遅延) を使う
   timeline.setTargetLatencyMs(10);
   assert.equal(timeline.targetLatencyMs, 10);
-  assert.closeTo(timeline.playoutDelayMs ?? 0, AUDIO_DELAY_START_MS, TOLERANCE_MS);
+  assert.closeTo(timeline.playoutDelayMs ?? 0, AUDIO_PLAYOUT_DELAY_FLOOR_MS, TOLERANCE_MS);
   // 使わない (isLive が false など) ときは null にする
   timeline.setTargetLatencyMs(null);
   assert.isNull(timeline.targetLatencyMs);
-  assert.closeTo(timeline.playoutDelayMs ?? 0, AUDIO_DELAY_START_MS, TOLERANCE_MS);
+  assert.closeTo(timeline.playoutDelayMs ?? 0, AUDIO_PLAYOUT_DELAY_FLOOR_MS, TOLERANCE_MS);
 });
 
 // targetLatency は 2 つのトラックの表示の遅れの下限になる (libwebrtc の
@@ -529,7 +461,7 @@ test("setTargetLatencyMs: targetLatency と再生遅延の大きい方を使う"
 // 遅れの差が変わる。下限を変えた時点で合わせ直す (次の観測を待つと、その間だけ差が開く)
 test("setTargetLatencyMs: 下限が変わったらその場で表示時刻を合わせ直す", () => {
   const timeline = createTimeline();
-  // 音声の表示の遅れ (NetEq の開始値 80 ms) との差で、映像に不感帯の手前までの 50 ms が
+  // 音声の表示の遅れ (下限の 50 ms) との差で、映像に不感帯の手前までの 50 ms が
   // 足されている
   timeline.observe("audio", EPOCH_MS, timestampOf(0));
   timeline.observe("video", EPOCH_MS, timestampOf(0));
@@ -558,8 +490,8 @@ test("sharingBases: 基準の差が表示の遅れの上限を超えたら共有
   for (let index = 0; index < 30; index++) {
     timeline.observe("video", EPOCH_MS + index * FRAME_MS, timestampOf(index * FRAME_MS));
   }
-  // 閾値は表示の遅れの上限 (500 ms) から音声の表示の遅れ (NetEq の開始値 80 ms) を引いた
-  // 420 ms である。下限の定数 (50 ms) を使った 451 ms ずらすと、確実に閾値を超える
+  // 閾値は表示の遅れの上限 (500 ms) から音声の表示の遅れ (下限の 50 ms) を引いた
+  // 450 ms である。下限の定数 (50 ms) を使った 451 ms ずらすと、確実に閾値を超える
   timeline.observe(
     "audio",
     EPOCH_MS + (MAX_PLAYOUT_DELAY_MS - AUDIO_PLAYOUT_DELAY_FLOOR_MS + 1),
@@ -638,9 +570,9 @@ test("sharingBases: 基準の差が閾値を超えたら共有せず、大きい
   assert.isNull(timeline.presentationWallClockMicros("audio", timestampOf(0)));
   assert.isNull(timeline.presentationPerformanceMs("audio", timestampOf(0)));
   // もう片方の映像は自分の基準 (0 ms) と自分の表示の遅れで表示時刻を返す。基準が共有できない
-  // ときは、映像を音声の到着基準の時刻 (今の遅れは NetEq の開始値の 80 ms) へ不感帯の手前まで
+  // ときは、映像を音声の到着基準の時刻 (今の予算は 50 ms) へ不感帯の手前まで
   // 合わせるため、表示の遅れは 75 ms (80 - 5) になる。ずれた側の基準 (1 秒) は使わない
-  const expectedVideoDelayMs = AUDIO_DELAY_START_MS - SYNC_MIN_DELTA_MS;
+  const expectedVideoDelayMs = AUDIO_PLAYOUT_DELAY_FLOOR_MS - SYNC_MIN_DELTA_MS;
   assert.closeTo(
     wallClockMsOf(timeline, "video", 0),
     EPOCH_MS + expectedVideoDelayMs,
@@ -649,8 +581,8 @@ test("sharingBases: 基準の差が閾値を超えたら共有せず、大きい
 });
 
 // 閾値は「キューが吸収できる長さ - 表示の遅れ」である。フレーム間隔を覚えていない間は
-// キューが吸収できる長さが上限 (500 ms) であり、表示の遅れ (音声の NetEq 開始値 80 ms) を
-// 引いた 420 ms が閾値になる。基準の遅れそのものはキューを消費しないため、引かない
+// キューが吸収できる長さが上限 (500 ms) であり、表示の遅れ (音声の下限 50 ms) を
+// 引いた 450 ms が閾値になる。基準の遅れそのものはキューを消費しないため、引かない
 test("sharingBases: 閾値の内側なら共有し、表示の遅れが上がると共有しなくなる", () => {
   const timeline = createTimeline();
   timeline.observe("video", EPOCH_MS, timestampOf(0));
@@ -726,7 +658,7 @@ test("observe: TIMESTAMP が飛んだら基準を取り直す", () => {
   timeline.observe("audio", EPOCH_MS, timestampOf(0));
   timeline.observe("video", EPOCH_MS, timestampOf(0));
   timeline.observe("video", EPOCH_MS + FRAME_MS, timestampOf(FRAME_MS));
-  assert.closeTo(timeline.playoutDelayMs ?? 0, AUDIO_DELAY_START_MS, TOLERANCE_MS);
+  assert.closeTo(timeline.playoutDelayMs ?? 0, AUDIO_PLAYOUT_DELAY_FLOOR_MS, TOLERANCE_MS);
 
   // TIMESTAMP が 3 秒進んだフレームが届く (1 時間前の TIMESTAMP が届く場合も同じ扱い)
   const jumpMs = 3_000;
@@ -752,36 +684,6 @@ test("observe: TIMESTAMP が飛んだら基準を取り直す", () => {
 
 // 映像の目標が下がったときは毎秒 PLAYOUT_DELAY_DECAY_MS_PER_SECOND ずつ下げる。急に
 // 戻すと表示時刻が前へ飛び、フレームを捨てることになる
-test("observe: 映像の表示の遅れを毎秒 PLAYOUT_DELAY_DECAY_MS_PER_SECOND ずつ下げる", () => {
-  const timeline = createTimeline();
-  let available = 0;
-  const delays: { atMs: number; delayMs: number }[] = [];
-  for (let index = 0; index < 600; index++) {
-    // 200 ms 遅れたフレームが窓の p95 に入り、表示の遅れが 200 ms になる
-    const late = index % 100 === 17 || index % 100 === 67;
-    available = Math.max(available, index * FRAME_MS + (late ? 200 : 0));
-    timeline.observe("video", EPOCH_MS + available, timestampOf(index * FRAME_MS));
-    delays.push({ atMs: available, delayMs: timeline.videoDelayMs ?? 0 });
-  }
-  const last = delays[delays.length - 1];
-  assert.isDefined(last);
-  // 200 ms から 0 まで一気には下げない (下げる速さは毎秒 20 ms まで)
-  assert.isAbove(last?.delayMs ?? 0, 0);
-  // どの 1 枚の間でも、下げ幅は経過時間 × 毎秒の速さを超えない
-  for (let position = 1; position < delays.length; position++) {
-    const previous = delays[position - 1];
-    const current = delays[position];
-    if (previous === undefined || current === undefined || current.delayMs >= previous.delayMs) {
-      continue;
-    }
-    const allowedMs = (PLAYOUT_DELAY_DECAY_MS_PER_SECOND * (current.atMs - previous.atMs)) / 1_000;
-    assert.isAtMost(
-      previous.delayMs - current.delayMs,
-      allowedMs + TOLERANCE_MS,
-      "下げる速さが毎秒 PLAYOUT_DELAY_DECAY_MS_PER_SECOND 以下であること",
-    );
-  }
-});
 
 // ============================================================================
 // 実績と同期ずれ
@@ -877,7 +779,7 @@ test("resetStream: 音声だけを消すと映像だけの値になる", () => {
   for (let index = 0; index < 30; index++) {
     timeline.observe("video", EPOCH_MS + index * FRAME_MS, timestampOf(index * FRAME_MS));
   }
-  assert.closeTo(timeline.playoutDelayMs ?? 0, AUDIO_DELAY_START_MS, TOLERANCE_MS);
+  assert.closeTo(timeline.playoutDelayMs ?? 0, AUDIO_PLAYOUT_DELAY_FLOOR_MS, TOLERANCE_MS);
   // 音声の実績 (同期ずれの推定に使う) も作っておく
   const timestampMicros = timestampOf(1_000);
   const presentedWallClockMicros = timeline.presentationWallClockMicros("video", timestampMicros);
@@ -1221,11 +1123,11 @@ test("observe: 音声の TIMESTAMP が段差でずれても、映像へ足す遅
     const timestampMs = wallMs < stepAtMs ? wallMs : wallMs - stepMs;
     timeline.observe("audio", EPOCH_MS + wallMs, timestampOf(timestampMs));
   }
-  // 入力が実測と同じ機構になっていること (音声の遅延が段差の分だけ育つ)
-  assert.isAbove(
-    timeline.playoutDelayMs ?? 0,
-    AUDIO_PLAYOUT_DELAY_FLOOR_MS,
-    "音声の jitter buffer の遅延が段差で育つこと",
+  // 未来へ進む時計の段差を、恒常的な待ちへ移さない。
+  assert.isAtMost(
+    timeline.playoutDelayMs ?? Infinity,
+    100,
+    "音声の予算が段差で無制限に育たないこと",
   );
   // 映像へ足す分は上限までである (段差の全額ではない)
   assert.isAtMost(
@@ -1549,7 +1451,7 @@ test("observe: 閾値だけが動いた解除も、閾値が戻れば解除を�
   const timeline = createTimeline();
   const observe = createObserver(timeline);
   // 音声の基準だけ 400 ms 遅らせて 10 秒観測する (差 400 ms)。閾値は表示の遅れの上限
-  // (500 ms) から音声の表示の遅れ (NetEq の開始値 80 ms) を引いた 420 ms であり、まだ
+  // (500 ms) から音声の表示の遅れ (下限の 50 ms) を引いた 450 ms であり、まだ
   // 超えていない
   observe(10_000, () => -400);
   assert.isTrue(timeline.sharingBases, "差が閾値の内側なら共有すること");
@@ -1648,23 +1550,19 @@ test("observe: 片方のトラックが届かなくなっても保持は満了�
 });
 
 // 完了条件: 音声だけの購読では、過去の穴による学習値で恒常的な待ちを増やさない。
-test("audioOnlyArrivalPlayoutDelayMs: 音声のみの到着基準は低遅延の深さを保つ", () => {
-  assert.equal(
-    audioOnlyArrivalPlayoutDelayMs(50, AUDIO_ONLY_ARRIVAL_DELAY_FLOOR_MS),
-    AUDIO_ONLY_ARRIVAL_DELAY_FLOOR_MS,
-    "学習した値が下限より小さければ下限を使うこと",
-  );
-  assert.equal(
-    audioOnlyArrivalPlayoutDelayMs(150, AUDIO_ONLY_ARRIVAL_DELAY_FLOOR_MS),
-    50,
-    "過去の穴で目標が増えても恒常的な待ちを増やさないこと",
-  );
-  assert.equal(
-    audioOnlyArrivalPlayoutDelayMs(300, AUDIO_ONLY_ARRIVAL_DELAY_FLOOR_MS),
-    AUDIO_ONLY_ARRIVAL_DELAY_MAX_MS,
-    "音声だけの上限 50 ms で切ること",
-  );
-  // 映像に合わせる相手がいない音声だけの購読でだけ使う関数である。共有の基準がある
-  // トラックは 100 ms の上限 (AUDIO_PLAYOUT_ARRIVAL_DELAY_MS) のままである
-  assert.equal(audioOnlyArrivalPlayoutDelayMs(140, 0), 50, "下限 0 でも上限を超えないこと");
+
+// 経路の基準は保ちつつ、古い揺らぎだけが短い窓から消えることを検証する。
+test("映像の一時的な遅延が消えたら、同期用の待ちを保持せず通常の予算へ戻す", () => {
+  const timeline = createTimeline();
+  let available = 0;
+  let maximumDelayMs = 0;
+  for (let index = 0; index < 400; index++) {
+    const mediaMs = index * FRAME_MS;
+    const extraMs = index >= 100 && index < 150 ? 120 : 0;
+    available = Math.max(available + 0.1, mediaMs + extraMs);
+    timeline.observe("video", EPOCH_MS + available, timestampOf(mediaMs));
+    maximumDelayMs = Math.max(maximumDelayMs, timeline.videoDelayMs ?? 0);
+  }
+  assert.isAtLeast(maximumDelayMs, 100, "実際に遅れている間は到着を待つこと");
+  assert.isAtMost(timeline.videoDelayMs ?? Infinity, 0.01, "過去の遅れを引きずらないこと");
 });

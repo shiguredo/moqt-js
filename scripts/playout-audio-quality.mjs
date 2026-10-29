@@ -16,8 +16,8 @@ import {
 } from "../src/playout/audioPlayout.ts";
 import { encodeObjectDatagram, decodeObjectDatagram } from "../src/dataStream/datagram.ts";
 import { OpusDecoderTimestamps } from "../src/codec/opusDecoderTimestamps.ts";
-import { AudioDelayFeedback } from "../src/playout/audioDelayFeedback.ts";
-import { AudioPlayoutTimingStats } from "../src/playout/audioPlayoutTimingStats.ts";
+import { AudioDelayFeedback } from "../investigation-logs/playout-quality-2026-10-28/audioDelayFeedback.baseline.ts";
+import { AudioPlayoutTimingStats } from "../investigation-logs/playout-quality-2026-10-28/audioPlayoutTimingStats.baseline.ts";
 
 const RATE = 48000;
 const FRAME = 960;
@@ -255,7 +255,12 @@ export async function dsp() {
 }
 
 /** 実 WebCodecs で Opus を一往復させた波形。入力と復号後の timestamp は区別する。 */
-async function opusFrames(frequency = 170, count = 150, inputSamples = null, transport = null) {
+export async function opusFrames(
+  frequency = 170,
+  count = 150,
+  inputSamples = null,
+  transport = null,
+) {
   const encoded = [];
   const decoded = [];
   let failure = null;
@@ -668,7 +673,7 @@ export async function render(speechName = null) {
 }
 
 /** 公開発話 / 日本語読み上げ音源を 6 秒の連続入力にする。短い音源の間には休止を置く。 */
-async function loadSpeech(name, durationSeconds = 6) {
+export async function loadSpeech(name, durationSeconds = 6) {
   const [sourceName, part] = String(name).split(":");
   const offset = Number(part ?? 0) * RATE * 6;
   const url = new URL(

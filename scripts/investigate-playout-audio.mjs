@@ -1,6 +1,6 @@
 /**
  * 合成信号と日本語音声による playout の測定。実ブラウザで出力を保存する。
- * 実行: vp exec node scripts/investigate-playout-audio.mjs [dsp|render|control|speech|live|long|datagram|datagramLive|relay|replay|all]
+ * 実行: vp exec node scripts/investigate-playout-audio.mjs [dsp|render|control|speech|live|long|datagram|datagramLive|relay|replay|av|avRelay|all]
  * 生データと試聴用 WAV は investigation-logs/playout-quality-2026-10-28/ に置く。
  */
 import { execFileSync, spawn } from "node:child_process";
@@ -25,6 +25,8 @@ if (
     "datagramLive",
     "relay",
     "replay",
+    "av",
+    "avRelay",
   ].includes(mode)
 ) {
   throw new Error(`Invalid investigation mode: ${mode}`);
@@ -43,6 +45,17 @@ writeFileSync(
   `${directory}/audioTimeStretch.baseline.ts`,
   execFileSync("git", ["show", "d6893cb2:src/playout/audioTimeStretch.ts"]),
 );
+// 削除した旧閉ループを扱う control モードは、当時の実クラスを Git から読む。
+for (const name of ["audioDelayFeedback", "audioPlayoutTimingStats"]) {
+  const source = execFileSync("git", ["show", `1c0dbcb9:src/playout/${name}.ts`], {
+    encoding: "utf8",
+  })
+    .replaceAll('from "./audioDelayFeedback"', 'from "./audioDelayFeedback.baseline"')
+    .replaceAll('from "./audioPlayout"', 'from "../../src/playout/audioPlayout"')
+    .replaceAll('from "./timedValues"', 'from "../../src/playout/timedValues"')
+    .replaceAll('from "./timingSummary"', 'from "../../src/playout/timingSummary"');
+  writeFileSync(`${directory}/${name}.baseline.ts`, source);
+}
 const port = await new Promise((accept, reject) => {
   const reservation = createServer();
   reservation.on("error", reject);
@@ -80,6 +93,7 @@ try {
   page.on("pageerror", (error) => console.error(error.message));
   await page.goto(origin);
   const harnessUrl = `${origin}/@fs${resolve("scripts/playout-audio-quality.mjs")}`;
+  const sourceRoot = process.env.PLAYOUT_SOURCE_ROOT ?? "src";
   const environment = {
     sourceRevision: execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
     baselineRevision: "d6893cb2",
@@ -89,18 +103,33 @@ try {
     architecture: process.arch,
     capturedAt: new Date().toISOString(),
     mode,
+    runtime: process.version,
+    sourceRoot,
+    variant: process.env.PLAYOUT_VARIANT ?? "current",
     sourceFiles: Object.fromEntries(
       [
-        "src/audioSpliceFade.ts",
-        "src/codec/opusDecoderTimestamps.ts",
-        "src/codec/AudioDecoder.ts",
-        "src/codec/workers/audioDecoder.worker.ts",
-        "src/playout/audioPlayout.ts",
-        "src/playout/audioPlayoutSession.ts",
-        "src/playout/audioPlayoutTimingStats.ts",
-        "src/playout/audioTimeStretch.ts",
-        "src/playout/audioDelayEstimator.ts",
-        "src/playout/timeline.ts",
+        "audioSpliceFade.ts",
+        "codec/opusDecoderTimestamps.ts",
+        "codec/AudioDecoder.ts",
+        "codec/workers/audioDecoder.worker.ts",
+        "playout/audioPlayout.ts",
+        "playout/audioPlayoutSession.ts",
+        "playout/audioPlayoutTimingStats.ts",
+        "playout/audioTimeStretch.ts",
+        "playout/timeline.ts",
+      ].map((path) => [
+        path,
+        createHash("sha256")
+          .update(readFileSync(resolve(sourceRoot, path)))
+          .digest("hex"),
+      ]),
+    ),
+    harnessFiles: Object.fromEntries(
+      [
+        "scripts/investigate-playout-audio.mjs",
+        "scripts/playout-audio-quality.mjs",
+        "scripts/playout-av-latency.mjs",
+        "scripts/playout-av-relay.mjs",
       ].map((path) => [path, createHash("sha256").update(readFileSync(path)).digest("hex")]),
     ),
   };
@@ -117,67 +146,81 @@ try {
     "datagramLive",
     "relay",
     "replay",
+    "av",
+    "avRelay",
   ]) {
-    if ((stage === "relay" || stage === "replay") && mode === "all") continue;
+    if (["relay", "replay", "av", "avRelay"].includes(stage) && mode === "all") continue;
     if (mode !== "all" && mode !== stage) continue;
     // 実時間とオフラインの条件を分け、ケースごとに結果を確定させる。
     const cases =
-      stage === "live"
-        ? [
-            "tone-clean",
-            "voice-clean",
-            "voice-stall",
-            "tone-gap",
-            "rate-mismatch",
-            "av-clean",
-            "av-stall",
-            "japanese-julius-clean",
-            "japanese-kyoko-clean",
-            "japanese-kyoko-stall",
-            "japanese-eddy-stall",
-          ]
-        : stage === "long"
-          ? ["japanese-julius-long-clean", "japanese-kyoko-long-stall"]
-          : stage === "relay" || stage === "replay"
+      stage === "avRelay"
+        ? ["avRelay|kyoko|clean|1", "avRelay|kyoko|random5|2", "avRelay|julius|burst3|1"]
+        : stage === "av"
+          ? [
+              "av|tone|clean",
+              "av|julius|clean",
+              "av|kyoko|audio-stall",
+              "av|julius|both-stall",
+              "av|kyoko|jitter",
+              "av|eddy|loss5",
+              "av|grandpa|video-step",
+            ]
+          : stage === "live"
             ? [
-                "relay|julius|clean|1",
-                "relay|julius|random5|1",
-                "relay|eddy|burst3|1",
-                "relay|kyoko|random5|2",
+                "tone-clean",
+                "voice-clean",
+                "voice-stall",
+                "tone-gap",
+                "rate-mismatch",
+                "av-clean",
+                "av-stall",
+                "japanese-julius-clean",
+                "japanese-kyoko-clean",
+                "japanese-kyoko-stall",
+                "japanese-eddy-stall",
               ]
-            : stage === "datagramLive"
-              ? [
-                  "datagram|julius|clean|1",
-                  "datagram|julius|random5|1",
-                  "datagram|eddy|random5|1",
-                  "datagram|eddy|burst3|1",
-                  "datagram|kyoko|burst5|1",
-                  "datagram|kyoko|random5|2",
-                ]
-              : stage === "speech" || stage === "datagram"
-                ? JSON.parse(readFileSync(`${directory}/speech-input/manifest.json`, "utf8"))
-                    .flatMap((entry) =>
-                      Array.from(
-                        { length: Math.ceil(entry.durationSeconds / 6) },
-                        (_, index) => `${String(entry.name)}:${String(index)}`,
-                      ),
-                    )
-                    .flatMap((name) =>
-                      stage === "speech"
-                        ? [name]
-                        : [
-                            "clean|1",
-                            "random1|1",
-                            "random5|1",
-                            "random10|1",
-                            "burst2|1",
-                            "burst3|1",
-                            "burst5|1",
-                            "random5|2",
-                            "burst3|2",
-                          ].map((pattern) => `${name}|${pattern}`),
-                    )
-                : [stage];
+            : stage === "long"
+              ? ["japanese-julius-long-clean", "japanese-kyoko-long-stall"]
+              : stage === "relay" || stage === "replay"
+                ? [
+                    "relay|julius|clean|1",
+                    "relay|julius|random5|1",
+                    "relay|eddy|burst3|1",
+                    "relay|kyoko|random5|2",
+                  ]
+                : stage === "datagramLive"
+                  ? [
+                      "datagram|julius|clean|1",
+                      "datagram|julius|random5|1",
+                      "datagram|eddy|random5|1",
+                      "datagram|eddy|burst3|1",
+                      "datagram|kyoko|burst5|1",
+                      "datagram|kyoko|random5|2",
+                    ]
+                  : stage === "speech" || stage === "datagram"
+                    ? JSON.parse(readFileSync(`${directory}/speech-input/manifest.json`, "utf8"))
+                        .flatMap((entry) =>
+                          Array.from(
+                            { length: Math.ceil(entry.durationSeconds / 6) },
+                            (_, index) => `${String(entry.name)}:${String(index)}`,
+                          ),
+                        )
+                        .flatMap((name) =>
+                          stage === "speech"
+                            ? [name]
+                            : [
+                                "clean|1",
+                                "random1|1",
+                                "random5|1",
+                                "random10|1",
+                                "burst2|1",
+                                "burst3|1",
+                                "burst5|1",
+                                "random5|2",
+                                "burst3|2",
+                              ].map((pattern) => `${name}|${pattern}`),
+                        )
+                    : [stage];
     for (const caseName of cases) {
       if (process.env.PLAYOUT_CASE_FILTER && !caseName.includes(process.env.PLAYOUT_CASE_FILTER))
         continue;
@@ -185,7 +228,12 @@ try {
       const traceInput =
         stage === "replay" ? readFileSync(`${directory}/${caseName}.json`, "utf8") : null;
       const result = await page.evaluate(
-        async ({ harnessUrl, stage, caseName, relayUrl, arrivalTrace }) => {
+        async ({ harnessUrl, stage, caseName, relayUrl, arrivalTrace, avOptions }) => {
+          if (stage === "av" || stage === "avRelay") {
+            const file = stage === "av" ? "./playout-av-latency.mjs" : "./playout-av-relay.mjs";
+            const harness = await import(new URL(file, harnessUrl).href);
+            return harness.measure(caseName, { ...avOptions, relayUrl });
+          }
           const harness = await import(harnessUrl);
           if (stage === "render") return harness.render();
           if (stage === "replay") return harness.replay(arrivalTrace);
@@ -197,6 +245,12 @@ try {
           caseName,
           relayUrl: process.env.PLAYOUT_RELAY_URI,
           arrivalTrace: traceInput === null ? null : JSON.parse(traceInput).arrivalTrace,
+          avOptions: {
+            moduleUrl: `${origin}/@fs${resolve(process.env.PLAYOUT_SOURCE_ROOT ?? "src")}/playout/mediaPlayout.ts`,
+            variant: process.env.PLAYOUT_VARIANT ?? "current",
+            seconds: Number(process.env.PLAYOUT_AV_SECONDS ?? (stage === "avRelay" ? 20 : 10)),
+            certificateHash: process.env.PLAYOUT_SERVER_CERTIFICATE_HASH,
+          },
         },
       );
       // 空の収録や、別の失敗で音が処理されなかった結果を正常値として残さない。
@@ -253,7 +307,10 @@ try {
           );
         });
         writeFileSync(`${directory}/${recording.name}.wav`, buffer);
+        writeFileSync(`${runDirectory}/${recording.name}.wav`, buffer);
       }
+      if (stage === "avRelay")
+        assert.ok(metrics.valid, "配信中にエラーが無く、十分な音声と映像を収録できたこと");
       console.log(`測定完了: ${caseName}`);
     }
   }

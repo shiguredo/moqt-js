@@ -270,6 +270,8 @@ export interface AudioPlayoutOptions {
 export interface AudioPlayoutTarget {
   /** 目標の開始時刻 (`AudioContext.currentTime` の秒) */
   targetStartSeconds: number | null;
+  /** 到着の観測が揃った経路で使う回復の不感帯。省略時は既存の幅を使う。 */
+  stretchMinSeconds?: number;
   /**
    * 到着した音を「まだ鳴っていない位置」として扱う時刻 (`AudioContext.currentTime` の秒)
    *
@@ -488,6 +490,7 @@ export class AudioPlayoutScheduler {
         target.arrivalDelaySeconds,
       );
     }
+    const stretchMinSeconds = target.stretchMinSeconds ?? this.stretchMinSeconds;
     const targetStartSeconds = target.targetStartSeconds;
     const limit =
       Math.max(target.delaySeconds, target.presentationDelaySeconds) + this.backlogSeconds;
@@ -557,7 +560,7 @@ export class AudioPlayoutScheduler {
     // (時刻は performance.now 系の秒であり、引き算の結果は 1e-15 程度ずれる)
     const compressSeconds =
       queueSlackSeconds > AUDIO_PLAYOUT_STRETCH_MIN_EPSILON_SECONDS &&
-      this.latenessSeconds + AUDIO_PLAYOUT_STRETCH_MIN_EPSILON_SECONDS >= this.stretchMinSeconds
+      this.latenessSeconds + AUDIO_PLAYOUT_STRETCH_MIN_EPSILON_SECONDS >= stretchMinSeconds
         ? Math.min(this.latenessSeconds, durationSeconds / 2, queueSlackSeconds)
         : 0;
     this.requestedSeconds = compressSeconds;
@@ -613,23 +616,6 @@ export class AudioPlayoutScheduler {
     }
     this.concealCount += 1;
     this.concealedSeconds += applied;
-  }
-
-  /**
-   * 直前の音の終わりを、開始を押し直した分だけ遅らせる
-   *
-   * 予約した開始時刻を `AudioContext.currentTime` + 余裕へ押し直すと、その音は押し直した
-   * 分だけ後ろで鳴り終わる。次の音は「前の音の終わり」より前には置かないため、ここを
-   * 同じ分だけ遅らせないと、次に予約する音が押し直した音と重なって足し合わされる。
-   * 押し直した分は開始が遅れるだけで、音の長さは変わらない。
-   *
-   * @param delaySeconds - 押し直した長さ (秒)。0 以下なら何もしない
-   */
-  shiftPlayoutEnd(delaySeconds: number): void {
-    if (!(delaySeconds > 0) || this.lastEnd === null) {
-      return;
-    }
-    this.lastEnd += delaySeconds;
   }
 
   /** サンプルへの丸めと開始の押し直しを含む、実際のバッファの終わりを確定する。 */
@@ -802,7 +788,7 @@ export class AudioPlayoutScheduler {
       // 鳴らせる最も早い時刻へずらす。ずらす幅が無視できるときは基準を取り直さない
       // (取り直すと媒体時刻が跳び、その回数を「並べ直し」として数えてしまう)
       // 既に待ちを使い切った音へ、目標の深さを再度足さない。穴の長さと再生の遅延が
-      // さらに増え、その穴を閉ループが遅延不足として学習する循環を防ぐ。
+      // さらに増えないようにし、回復した音を再び待たせない。
       const resyncedSeconds = earliestSeconds;
       if (resyncedSeconds - startAt >= AUDIO_PLAYOUT_RESYNC_MIN_JUMP_SECONDS) {
         this.rebase(resyncedSeconds, timestampMicroseconds);

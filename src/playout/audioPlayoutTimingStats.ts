@@ -26,10 +26,6 @@
  */
 
 import type { AudioPlayoutBasis } from "./audioPlayout";
-import {
-  AUDIO_DELAY_FEEDBACK_WINDOW_MS,
-  type AudioDelayFeedbackObservation,
-} from "./audioDelayFeedback";
 import { TimedValues } from "./timedValues";
 import { summarizeTimings, type TimingSummary } from "./timingSummary";
 
@@ -403,9 +399,6 @@ export class AudioPlayoutTimingStats {
   // 補間で埋まらなかった無音の穴 (回数・合計 ms・最大 ms) と、そのうち予約できなかった分
   private gapCount = 0;
   private gapMs = 0;
-  // 媒体の欠落を除いた、遅延を増やすことで防げる穴だけを閉ループへ渡す。
-  private feedbackGapCount = 0;
-  private feedbackGapMs = 0;
   private gapMaxMs = 0;
   private unrecoverableGapCount = 0;
   private unrecoverableGapMs = 0;
@@ -569,45 +562,6 @@ export class AudioPlayoutTimingStats {
   }
 
   /**
-   * 目標遅延を閉ループで決めるための観測を求める
-   *
-   * 表示用の分布 (`snapshot`) は直近 10 秒の窓である。目標を増やした結果がそこへ現れる
-   * までには数秒かかるため、制御には短い窓 (`AUDIO_DELAY_FEEDBACK_WINDOW_MS`) の値を使う。
-   * 捨てた量は購読の開始からの累積であり、差を取るのは呼び出し側 (`AudioDelayFeedback`) の
-   * 仕事である (`src/playout/audioDelayFeedback.ts`)
-   *
-   * 揺らぎだけから求めた目標 (NetEq) は時間軸が持っているため、この戻り値には含めない
-   * (`PlayoutTimeline.observeAudioPlayout` が足す)。圧縮の増分も `AudioPlayoutSession` が
-   * 足す (省略したときは 0 とみなされる)
-   *
-   * @param nowMs - 求める時刻 (ミリ秒)
-   * @param sinceMs - 制御へ渡す分布の開始時刻。再開前の実績を除くときに渡す
-   */
-  audioDelayFeedback(
-    nowMs: number,
-    sinceMs = Number.NEGATIVE_INFINITY,
-  ): Omit<AudioDelayFeedbackObservation, "jitterTargetMs"> {
-    // 表示用の分布と同じ長さまでを残し、制御にはその中でも短い窓を使う
-    const minAtMs = nowMs - this.windowMs;
-    for (const series of [this.slacks, this.startDelays, this.latenesses]) {
-      series.prune(minAtMs);
-    }
-    // 表示用の分布と累積は残す一方、再開前の遅れを新しい再生の制御へ混ぜない
-    const controlMinAtMs = Math.max(nowMs - AUDIO_DELAY_FEEDBACK_WINDOW_MS, sinceMs);
-    return {
-      atMs: nowMs,
-      latenessMs: summarizeTimings(this.latenesses.since(controlMinAtMs)),
-      startDelayMs: summarizeTimings(this.startDelays.since(controlMinAtMs)),
-      slackMs: summarizeTimings(this.slacks.since(controlMinAtMs)),
-      backlogMisses: this.missedTotals.backlog.count,
-      backlogMs: this.missedTotals.backlog.ms,
-      // 補間で埋まらなかった無音の穴。目標遅延を増やす判断に使う
-      gapCount: this.feedbackGapCount,
-      gapMs: this.feedbackGapMs,
-    };
-  }
-
-  /**
    * 観測値を求める
    *
    * @param nowMs - 求める時刻 (ミリ秒)。窓はこの時刻から遡る
@@ -670,9 +624,8 @@ export class AudioPlayoutTimingStats {
    *
    * @param gap.uncoveredMs - 補間で埋まらなかった長さ (ミリ秒。0 以下と非有限は無視する)
    * @param gap.unrecoverableMs - そのうち予約できる最も早い時刻より前だった長さ (ミリ秒)
-   * @param gap.delayFeedbackMs - 待ちを増やす判断に使う長さ (ミリ秒)。省略すると穴の全量
    */
-  recordGap(gap: { uncoveredMs: number; unrecoverableMs: number; delayFeedbackMs?: number }): void {
+  recordGap(gap: { uncoveredMs: number; unrecoverableMs: number }): void {
     if (!Number.isFinite(gap.uncoveredMs) || !Number.isFinite(gap.unrecoverableMs)) {
       return;
     }
@@ -682,11 +635,6 @@ export class AudioPlayoutTimingStats {
     }
     this.gapCount += 1;
     this.gapMs += uncoveredMs;
-    const feedbackMs = Math.min(uncoveredMs, Math.max(0, gap.delayFeedbackMs ?? uncoveredMs));
-    if (Number.isFinite(feedbackMs) && feedbackMs > 0) {
-      this.feedbackGapCount++;
-      this.feedbackGapMs += feedbackMs;
-    }
     this.gapMaxMs = Math.max(this.gapMaxMs, uncoveredMs);
     const unrecoverableMs = Math.min(uncoveredMs, Math.max(0, gap.unrecoverableMs));
     if (unrecoverableMs > 0) {
@@ -799,8 +747,6 @@ export class AudioPlayoutTimingStats {
     this.decodedSampleRate = null;
     this.gapCount = 0;
     this.gapMs = 0;
-    this.feedbackGapCount = 0;
-    this.feedbackGapMs = 0;
     this.gapMaxMs = 0;
     this.unrecoverableGapCount = 0;
     this.unrecoverableGapMs = 0;

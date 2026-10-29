@@ -589,11 +589,10 @@ async function readStats(page: Page): Promise<unknown> {
               syncExtraDelayMs: number;
               presentationDelayMs: number | null;
             };
-            audioDelayFeedback: {
+            audioDelay: {
               targetMs: number;
-              jitterTargetMs: number;
-              appliedMs: number;
-              reason: string;
+              jitterMs: number | null;
+              outputLeadMs: number | null;
             };
           };
         };
@@ -931,7 +930,7 @@ interface SubscriberStopRecord {
   stopDurationMs: number;
   beforeStop: unknown;
   afterStop: unknown;
-  /** 停止直前の目標遅延 (appliedMs / feedbackTargetMs / jitterTargetMs) */
+  /** 停止直前の目標遅延 (targetMs / jitterMs / outputLeadMs) */
   targetBefore: unknown;
   /** 停止直前後で増えた「予約済みで鳴らなかった音」 */
   stoppedAdded: { count: number; ms: number };
@@ -1005,7 +1004,7 @@ test("調査: 購読側の Stop の切断量を 3 回測る", async ({ browser }
             audio: {
               playoutTiming: { missedMs: number; playedMs: number };
             };
-            avSync: { delays: { audioDelayFeedback: unknown } };
+            avSync: { delays: { audioDelay: unknown } };
           } | null;
         }
       ).subscriber;
@@ -1032,7 +1031,7 @@ test("調査: 購読側の Stop の切断量を 3 回測る", async ({ browser }
         stopDurationMs,
         beforeStop,
         afterStop,
-        targetBefore: beforeSubscriber?.avSync.delays.audioDelayFeedback ?? null,
+        targetBefore: beforeSubscriber?.avSync.delays.audioDelay ?? null,
         stoppedAdded: {
           count:
             (afterSubscriber?.audio.playoutTiming.missedByReason.stopped.count ?? 0) -
@@ -1066,8 +1065,8 @@ test("調査: 購読側の Stop の切断量を 3 回測る", async ({ browser }
       records.push(record);
       console.log(
         `購読側 Stop ${String(round)} 回目: 完了まで ${stopDurationMs.toFixed(0)} ms / ` +
-          `目標遅延 applied=${String((record.targetBefore as { appliedMs: number } | null)?.appliedMs)} ms / ` +
-          `jitterTarget=${String((record.targetBefore as { jitterTargetMs: number } | null)?.jitterTargetMs)} ms, ` +
+          `目標遅延 target=${String((record.targetBefore as { targetMs: number } | null)?.targetMs)} ms / ` +
+          `jitter=${String((record.targetBefore as { jitterMs: number | null } | null)?.jitterMs)} ms, ` +
           `予約済みで鳴らなかった音 ${String(record.stoppedAdded.count)} 件 / ${record.stoppedAdded.ms.toFixed(1)} ms, ` +
           `lastDrain=${JSON.stringify(record.lastDrain)}, ` +
           `missedMs ${String(record.missedMs.before)} → ${String(record.missedMs.after)}, ` +

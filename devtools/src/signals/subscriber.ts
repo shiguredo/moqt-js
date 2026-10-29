@@ -14,12 +14,8 @@ import {
 } from "../../../src/playout/audioReceiveCatchUp.ts";
 import { EMPTY_HOST_DELAY, type HostDelaySnapshot } from "../utils/hostDelayTracker.ts";
 import { EMPTY_PLAYOUT_TIMING, type PlayoutTimingSnapshot } from "../utils/playoutTimingStats";
-import {
-  AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS,
-  AUDIO_DELAY_FEEDBACK_START_MS,
-  type AudioDelayFeedbackSnapshot,
-} from "../../../src/playout/audioDelayFeedback.ts";
-import { AUDIO_DELAY_START_MS } from "../../../src/playout/audioDelayEstimator.ts";
+import { type AudioPlayoutDelayStats } from "../../../src/playout/timeline.ts";
+import { AUDIO_PLAYOUT_DELAY_FLOOR_MS } from "../../../src/playout/timeline.ts";
 import type { PreconditionWarning } from "../utils/preconditionWarnings.ts";
 import { AUTO_CANDIDATE_SELECTION, type CandidateSelection } from "../utils/candidateSelection.ts";
 import { takeInitialSubscriberCandidateSelection } from "./candidateSelection.ts";
@@ -37,27 +33,11 @@ import { takeInitialSubscriberCandidateSelection } from "./candidateSelection.ts
  */
 export type AvSyncSnapshot = AvSyncStats;
 
-/**
- * 音声の目標遅延の閉ループがまだ動いていないときの値
- *
- * 観測が無い間は、実際に使う値 (`appliedMs`) に揺らぎだけから求めた目標 (NetEq の初期値)
- * をそのまま使う (`src/playout/audioDelayFeedback.ts` の `targetDelayMs`)。閉ループの目標
- * (`targetMs`) は初期値のままである
- */
-export const EMPTY_AUDIO_DELAY_FEEDBACK: AudioDelayFeedbackSnapshot = {
-  targetMs: AUDIO_DELAY_FEEDBACK_START_MS,
-  jitterTargetMs: AUDIO_DELAY_START_MS,
-  appliedMs: AUDIO_DELAY_START_MS,
-  reason: "initial",
-  ceilingMs: null,
-  lastChangeMs: 0,
-  adjustments: 0,
-  latenessP50Ms: null,
-  startDelayP50Ms: null,
-  slackP50Ms: null,
-  // 閉ループがまだ動いていないため、圧縮は 0 で上限も広げていない (既定の 100 ms)
-  appliedCeilingMs: AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS,
-  compressionMsPerSecond: 0,
+/** 音声の到着と出力時計がまだ観測されていないときの再生予算。 */
+export const EMPTY_AUDIO_DELAY: AudioPlayoutDelayStats = {
+  jitterMs: null,
+  outputLeadMs: null,
+  targetMs: AUDIO_PLAYOUT_DELAY_FLOOR_MS,
 };
 
 /** 同期の推定が無いときの値 (未購読、jitter buffer が無効、音声だけの購読) */
@@ -81,7 +61,7 @@ export const EMPTY_AV_SYNC: AvSyncSnapshot = {
     baseDriftLimitMs: 0,
     baseUnsharedReturnMs: null,
     presentationDelayCapMs: 0,
-    audioDelayFeedback: EMPTY_AUDIO_DELAY_FEEDBACK,
+    audioDelay: EMPTY_AUDIO_DELAY,
   },
 };
 
@@ -294,11 +274,11 @@ export interface SubscriberInstance {
   // 更新する。まだ停止を観測していないときは既定値のまま
   // (devtools/src/utils/hostDelayTracker.ts)
   audioHostDelay: Signal<HostDelaySnapshot>;
-  // 音声の jitter buffer の目標遅延の閉ループの内訳 (目標・実際に使う値・上限・圧縮の速さ)。
+  // 音声の jitter buffer の再生予算の内訳 (目標・実際に使う値・上限・圧縮の速さ)。
   // 音声だけを購読するときは A/V 同期の推定を出さないため、目標遅延の内訳はここから読む。
   // useSubscriber が一定間隔で更新する
-  // (src/playout/audioDelayFeedback.ts)
-  audioDelayFeedback: Signal<AudioDelayFeedbackSnapshot>;
+  // (src/playout/timeline.ts)
+  audioDelay: Signal<AudioPlayoutDelayStats>;
   // 復号した音声のレベル (dBFS)。左右のチャンネルを別々に持ち、モノラルのときは右が
   // null のまま。まだ復号していない状態も null
   audioPeakDbfsLeft: Signal<number | null>;
@@ -391,7 +371,7 @@ export function createSubscriberInstance(id: string): SubscriberInstance {
     audioPlayoutConcealments: signal(0),
     audioPlayoutTiming: signal<AudioPlayoutTimingSnapshot>(EMPTY_AUDIO_PLAYOUT_TIMING),
     audioHostDelay: signal<HostDelaySnapshot>(EMPTY_HOST_DELAY),
-    audioDelayFeedback: signal<AudioDelayFeedbackSnapshot>(EMPTY_AUDIO_DELAY_FEEDBACK),
+    audioDelay: signal<AudioPlayoutDelayStats>(EMPTY_AUDIO_DELAY),
     audioPlayoutCatchUp: signal<AudioReceiveCatchUpStats>(EMPTY_AUDIO_RECEIVE_CATCH_UP),
     audioPeakDbfsLeft: signal<number | null>(null),
     audioPeakDbfsRight: signal<number | null>(null),

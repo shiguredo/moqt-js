@@ -1376,31 +1376,5 @@ function arrivalTarget(arrivalSeconds: number): AudioPlayoutTarget {
 }
 
 // 押し直した分だけ次の音の下限を後ろへずらす (押し直した音と次の音を重ねない)
-test("shiftPlayoutEnd: 押し直した分だけ次の音の下限を後ろへずらす", () => {
-  const scheduler = new AudioPlayoutScheduler({ stretchMinSeconds: 0 });
-  const nowSeconds = 10;
-  const target = arrivalTarget(nowSeconds - AUDIO_PLAYOUT_DELAY_SECONDS);
-  const first = startAtOf(scheduler.schedule(nowSeconds, 0, FRAME_SECONDS, target));
-  scheduler.shiftPlayoutEnd(0.05);
-  const second = startAtOf(scheduler.schedule(nowSeconds, 20_000, FRAME_SECONDS, target));
-  assert.closeTo(
-    second,
-    first + FRAME_SECONDS + 0.05,
-    1e-9,
-    "押し直した分だけ次の音の下限を後ろへずらすこと",
-  );
-});
 
 // 0 以下と前の音が無いときは何もしない
-test("shiftPlayoutEnd: 0 以下と前の音が無いときは何もしない", () => {
-  const scheduler = new AudioPlayoutScheduler({ stretchMinSeconds: 0 });
-  // 前の音が無い
-  scheduler.shiftPlayoutEnd(0.05);
-  const nowSeconds = 10;
-  const target = arrivalTarget(nowSeconds - AUDIO_PLAYOUT_DELAY_SECONDS);
-  const first = startAtOf(scheduler.schedule(nowSeconds, 0, FRAME_SECONDS, target));
-  scheduler.shiftPlayoutEnd(0);
-  scheduler.shiftPlayoutEnd(-1);
-  const second = startAtOf(scheduler.schedule(nowSeconds, 20_000, FRAME_SECONDS, target));
-  assert.closeTo(second, first + FRAME_SECONDS, 1e-9, "ずらさないこと");
-});

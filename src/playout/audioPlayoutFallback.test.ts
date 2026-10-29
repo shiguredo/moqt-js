@@ -261,6 +261,10 @@ function runScenario(stepAtMs: number | null, options: ScenarioOptions): Scenari
     // 到着した音がまだ鳴っていない位置。到着の時刻を AudioContext の秒へ換算した値である
     const arrivalSeconds = clock.toAudioSeconds(arrivalMs) ?? contextNowSeconds;
 
+    timeline.observeAudioOutputLead(
+      options.outputLeadMs + AUDIO_PLAYOUT_MIN_LEAD_SECONDS * 1000,
+      arrivalMs,
+    );
     const targetMs = timeline.presentationPerformanceMs("audio", timestampMicros);
     const targetStartSeconds = targetMs === null ? null : clock.toAudioSeconds(targetMs);
     const playoutDelaySeconds =

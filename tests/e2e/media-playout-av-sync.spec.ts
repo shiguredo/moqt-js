@@ -104,7 +104,7 @@ test("実際の音声再生経路と canvas の表示を同期し、音声の停
           playout.resetAudioPlayback();
           const delayStats = playout.getStats().avSync;
           stoppedExtraMs = delayStats?.delays.video.syncExtraDelayMs ?? -1;
-          restartedTargetMs = playout.getStats().audio?.delayFeedback.targetMs ?? -1;
+          restartedTargetMs = playout.getStats().audio?.delay.targetMs ?? -1;
           mediaTimeSeconds += audio.element.currentTime;
           if (phase === 0) {
             // 実際のトグルと同じく Context を閉じ、別の時計原点で作り直す。古い音声の

@@ -8,7 +8,7 @@
  *
  * 同じ組み立てを `src/createMediaSubscriber.ts` (ライブラリ) と
  * `devtools/src/hooks/useSubscriber.ts` (devtools) が別々に持つと、到着基準の遅れ・
- * 閉ループ・計器の修正を 2 か所へ入れる必要があり、片方だけを直すと挙動がずれる。
+ * 出力時計の観測・計器の修正を 2 か所へ入れる必要があり、片方だけを直すと挙動がずれる。
  * 組み立てはここ 1 か所に置き、両方がこれを使う。
  *
  * ブラウザ依存 (Web Audio の `AudioContext` とその時計) は `AudioPlayoutOutput` として
@@ -25,6 +25,8 @@
 import type { PlayoutTimestampKind } from "./decodeInputTimestamps";
 import {
   AUDIO_PLAYOUT_PUSH_START_LEAD_SECONDS,
+  AUDIO_PLAYOUT_MIN_LEAD_SECONDS,
+  AUDIO_PLAYOUT_DELAY_SECONDS,
   AUDIO_PLAYOUT_STRETCH_MIN_SECONDS,
   AudioClockBridge,
   AudioPlayoutScheduler,
@@ -47,11 +49,7 @@ import type {
 } from "./audioPlayoutTimingStats";
 import { AudioReceiveCatchUp } from "./audioReceiveCatchUp";
 import { compressSamples, concealSamples, type AudioSamples } from "./audioTimeStretch";
-import {
-  AUDIO_PLAYOUT_DELAY_FLOOR_MS,
-  audioOnlyArrivalPlayoutDelayMs,
-  type PlayoutTimeline,
-} from "./timeline";
+import { AUDIO_PLAYOUT_DELAY_FLOOR_MS, type PlayoutTimeline } from "./timeline";
 
 /**
  * Web Audio のうち、音声の再生で使う部分
@@ -188,15 +186,6 @@ export interface AudioPlayoutRequest {
    */
   readonly enforceTarget: boolean;
   /**
-   * 到着基準で並べるときの再生の遅れの下限 (ミリ秒)。省略したときは 0
-   *
-   * 音声だけを購読していて揃える相手がいないとき、揺らぎの推定が届いていない周期的な
-   * 停滞を先に吸収するために使う (`src/playout/timeline.ts` の
-   * `AUDIO_ONLY_ARRIVAL_DELAY_FLOOR_MS`)。映像に合わせる相手がいるときは渡さない
-   * (映像とのずれの原因になる)
-   */
-  readonly arrivalDelayFloorMs?: number;
-  /**
    * 鳴らす先。null のときは鳴らさず、時間軸への記録も計器への記録もしない
    * (音声を再生していないとき)
    */
@@ -299,10 +288,12 @@ export class AudioPlayoutSession {
     tailStartSeconds: number;
     endSeconds: number;
   } | null = null;
-  // 閉ループへ渡した圧縮 (時間圧縮) の累積 (ミリ秒)。前回からの増分を渡す
-  private lastCompressedMs = 0;
-  // 計器を再利用しても、この再生の開始より前の分布は閉ループへ渡さない
-  private feedbackStartedAtMs = performance.now();
+  // 音声のみは固定の深さを使う。共有の推定値と実際の適用値を計器で混同しない。
+  private targetDelayValueMs = AUDIO_PLAYOUT_DELAY_FLOOR_MS;
+
+  get targetDelayMs(): number {
+    return this.targetDelayValueMs;
+  }
 
   constructor(options: AudioPlayoutSessionOptions) {
     this.timing = options.timing;
@@ -404,30 +395,7 @@ export class AudioPlayoutSession {
         request.timeline.observe("audio", performance.timeOrigin + arrivalMs, wallClockTimestamp);
       }
 
-      // AudioContext の時計と performance.now() の対応を取り直す。まだ描画が始まって
-      // いない (currentTime が 0 で getOutputTimestamp も 0) ときは対応を作らない
-      const mapping = context.getOutputTimestamp();
-      const contextTime = mapping.contextTime ?? 0;
-      const performanceTime = mapping.performanceTime ?? 0;
-      // 再開直後の Chromium は contextTime だけ非ゼロ、performanceTime は 0 の組を
-      // 返すことがある。これは出力時刻の対応ではなく、採用すると予約がページの経過時間分
-      // だけ未来へ飛ぶ。有効な performance 軸の観測が届くまでは currentTime で代用する。
-      const hasMapping =
-        Number.isFinite(contextTime) &&
-        contextTime >= 0 &&
-        Number.isFinite(performanceTime) &&
-        performanceTime > 0;
-      if (hasMapping || context.currentTime > 0) {
-        // 出力の対応が無い間は現在の 2 時計をそのまま使う。同じ Context の停止中も
-        // performance は進むため、古い offset から徐々に戻すと再開直後の予約が未来へ
-        // 飛んで backlog になる。代用値は出力遅延の推定ではなく、平滑化して引き継がない。
-        if (!hasMapping) this.clock.reset();
-        this.clock.update(
-          hasMapping ? { contextTime, performanceTime } : null,
-          context.currentTime,
-          arrivalMs,
-        );
-      }
+      this.updateOutputClock(context, request.timeline, arrivalMs);
       const targetMs =
         wallClockTimestamp === null
           ? null
@@ -450,15 +418,18 @@ export class AudioPlayoutSession {
         ) / 1_000;
       // 音声だけの購読では、共有の推定値によって常時の待ちを増やさず、
       // 到着基準の深さを音声だけの予算内へ収める。
-      const arrivalDelaySeconds =
-        request.arrivalDelayFloorMs === undefined
-          ? arrivalPlayoutDelaySeconds(playoutDelaySeconds)
-          : audioOnlyArrivalPlayoutDelayMs(
-              playoutDelaySeconds * 1_000,
-              request.arrivalDelayFloorMs,
-            ) / 1_000;
+      const arrivalDelaySeconds = request.enforceTarget
+        ? arrivalPlayoutDelaySeconds(playoutDelaySeconds)
+        : AUDIO_PLAYOUT_DELAY_SECONDS;
+      this.targetDelayValueMs =
+        (targetStartSeconds !== null && request.enforceTarget
+          ? playoutDelaySeconds
+          : arrivalDelaySeconds) * 1000;
       const decision = this.playout.schedule(contextNowSeconds, data.timestamp, durationSeconds, {
         targetStartSeconds,
+        stretchMinSeconds: request.timeline.compressionDeadbandSeconds(
+          AUDIO_PLAYOUT_STRETCH_MIN_SECONDS,
+        ),
         // 到着した音がまだ鳴っていない位置。到着基準の遅れはここから数える
         arrivalSeconds,
         // 揃える相手がいて、目標の開始時刻を決められたときだけ目標を守る。決められなかった
@@ -467,7 +438,7 @@ export class AudioPlayoutSession {
         delaySeconds: playoutDelaySeconds,
         // 目標を使えないとき (到着基準) の再生の遅れ。共有の時間軸が学習した値は、
         // TIMESTAMP が壁時計からずれているトラックではそのずれの分だけ大きく育つため、
-        // 上限で切った小さな値を使う。音声だけの購読では下限を足す
+        // 上限で切った小さな値を使う。音声だけの購読は固定の 50 ms にする
         arrivalDelaySeconds,
         presentationDelaySeconds:
           (request.timeline.presentationExtraDelayMs ?? AUDIO_PLAYOUT_DELAY_FLOOR_MS) / 1_000,
@@ -485,7 +456,6 @@ export class AudioPlayoutSession {
           arrivalMs,
         });
         // 並べすぎで捨てた量は、目標を増やす判断にも使う
-        this.observeDelayFeedback(missedAtMs, request.timeline, request.arrivalDelayFloorMs);
         return { status: "dropped", rebased, reason: decision.reason, catchUpStarted };
       }
       // 鳴らすと決めたが、鳴らし始める前に失敗したら数える (catch 句)
@@ -535,9 +505,6 @@ export class AudioPlayoutSession {
           );
         }
       }
-      // 出力の実績を記録してから目標と同期を更新する。同じ音の予約時の予定を変更後の
-      // 目標と比較すると残差を取り違え、次の復号出力まで待つと映像だけが先行する
-      this.observeDelayFeedback(performance.now(), request.timeline, request.arrivalDelayFloorMs);
       return { status: "played", rebased, catchUpStarted };
     } catch (error) {
       // 鳴らす準備の途中で失敗した音は、これまで onError にしか現れなかった
@@ -556,6 +523,45 @@ export class AudioPlayoutSession {
         catchUpStarted,
         error: error instanceof Error ? error : new Error(String(error)),
       };
+    }
+  }
+
+  /** 出力の実時計を予約の軸へ対応付け、有効な観測だけを再生予算へ渡す。 */
+  private updateOutputClock(
+    context: AudioPlayoutContext,
+    timeline: PlayoutTimeline,
+    arrivalMs: number,
+  ): void {
+    // AudioContext の時計と performance.now() の対応を取り直す。まだ描画が始まって
+    // いない (currentTime が 0 で getOutputTimestamp も 0) ときは対応を作らない
+    const mapping = context.getOutputTimestamp();
+    const contextTime = mapping.contextTime ?? 0;
+    const performanceTime = mapping.performanceTime ?? 0;
+    // 再開直後の Chromium は contextTime だけ非ゼロ、performanceTime は 0 の組を
+    // 返すことがある。これは出力時刻の対応ではなく、採用すると予約がページの経過時間分
+    // だけ未来へ飛ぶ。有効な performance 軸の観測が届くまでは currentTime で代用する。
+    const hasMapping =
+      Number.isFinite(contextTime) &&
+      contextTime >= 0 &&
+      Number.isFinite(performanceTime) &&
+      performanceTime > 0;
+    if (hasMapping || context.currentTime > 0) {
+      // 出力の対応が無い間は現在の 2 時計をそのまま使う。同じ Context の停止中も
+      // performance は進むため、古い offset から徐々に戻すと再開直後の予約が未来へ
+      // 飛んで backlog になる。代用値は出力遅延の推定ではなく、平滑化して引き継がない。
+      if (!hasMapping) this.clock.reset();
+      this.clock.update(
+        hasMapping ? { contextTime, performanceTime } : null,
+        context.currentTime,
+        arrivalMs,
+      );
+    }
+    if (hasMapping) {
+      const arrivalSeconds = this.clock.toAudioSeconds(arrivalMs) ?? context.currentTime;
+      timeline.observeAudioOutputLead(
+        (context.currentTime + AUDIO_PLAYOUT_MIN_LEAD_SECONDS - arrivalSeconds) * 1000,
+        performance.timeOrigin + arrivalMs,
+      );
     }
   }
 
@@ -717,13 +723,7 @@ export class AudioPlayoutSession {
     // 補間の失敗、補間の上限を超えた分) を、無音で出る穴として数える。補間の生成長は
     // 半サンプル以内で丸められる (src/playout/audioTimeStretch.ts の
     // concealSamples の Math.round) ため、その分は補間で埋まったものとして扱う
-    this.recordUncoveredGap(
-      decision,
-      concealedSeconds,
-      concealedScheduled,
-      sampleRate,
-      missingMediaMs,
-    );
+    this.recordUncoveredGap(decision, concealedSeconds, concealedScheduled);
 
     const join = this.joinAfterConcealment(decision.startAt, concealmentEndSeconds, sampleRate);
     // 補間の上限を超えて実音まで届かないときは、補間の続きを無音の後へ持ち込まない。
@@ -813,8 +813,6 @@ export class AudioPlayoutSession {
     decision: Extract<AudioPlayoutDecision, { kind: "play" }>,
     concealedSeconds: number,
     concealedScheduled: boolean,
-    sampleRate: number,
-    missingMediaMs: number,
   ): void {
     const totalGapMs = decision.totalGapSeconds * 1000;
     if (totalGapMs <= 0) return;
@@ -822,13 +820,9 @@ export class AudioPlayoutSession {
       concealedScheduled && this.previousSampleRate > 0 ? 500 / this.previousSampleRate : 0;
     const uncoveredMs = Math.max(0, totalGapMs - concealedSeconds * 1000);
     if (uncoveredMs <= roundToleranceMs) return;
-    const delayFeedbackMs = Math.max(0, uncoveredMs - missingMediaMs);
     this.timing.recordGap({
       uncoveredMs,
       unrecoverableMs: decision.unrecoverableGapSeconds * 1000,
-      // Datagram の媒体欠落は再生を遅らせても復元できない。表示用の穴は残し、
-      // 実際の遅延不足の分だけを学習する。1 サンプル以内の丸めは増加の根拠にしない。
-      delayFeedbackMs: delayFeedbackMs > 1000 / sampleRate ? delayFeedbackMs : 0,
     });
   }
 
@@ -958,51 +952,9 @@ export class AudioPlayoutSession {
     return result;
   }
 
-  /**
-   * 鳴らした結果 (予定をどれだけ過ぎたか、並べすぎで捨てた量) を閉ループへ渡す
-   *
-   * 目標を動かすのは毎秒 1 回までであり、呼ぶ側は間隔を気にしない
-   * (`src/playout/audioDelayFeedback.ts`)。実測 (2026-10-14、実リレー経由の 60 秒) では、
-   * 渡さないと目標が実際の到着に合わず、遅れが数 ms 残って時間圧縮が 58 秒で 1691 ms
-   * 動き続けた (声が粗くなる) ため、常に渡す
-   */
-  private observeDelayFeedback(
-    atMs: number,
-    timeline: PlayoutTimeline,
-    arrivalDelayFloorMs?: number,
-  ): void {
-    const feedback = this.timing.audioDelayFeedback(atMs, this.feedbackStartedAtMs);
-    // 圧縮 (時間圧縮、粗さ) の増分を閉ループへ渡す。閉ループは「圧縮か無音の穴が続く
-    // ときだけ目標の上限を 160 ms へ広げる」判断に使う
-    // (`src/playout/audioDelayFeedback.ts`)。累積ではなく増分を渡すのは、購読のやり直しで
-    // 累積が 0 に戻っても負の差を作らないためである。穴の累積は `feedback` に含まれる
-    // (`AudioPlayoutTimingStats.audioDelayFeedback`)
-    const compressedMs = this.playout.compressed * 1_000;
-    const compressionMs = Math.max(0, compressedMs - this.lastCompressedMs);
-    this.lastCompressedMs = compressedMs;
-    // 不感帯の中の遅れは playout が意図して残す分である (`AUDIO_PLAYOUT_STRETCH_MIN_SECONDS`)。
-    // これを学習へ渡すと、playout は詰めないのに目標だけが上がり続け、遅延が伸びる
-    // (実測: 20 ms の不感帯で 60 秒後に目標 289 ms、遅延 296 ms まで上がった)。不感帯を
-    // 引いた分だけを遅れとして渡す
-    const deadbandMs = AUDIO_PLAYOUT_STRETCH_MIN_SECONDS * 1_000;
-    timeline.observeAudioPlayout({
-      ...feedback,
-      compressionMs,
-      // 音声だけの再生は別の安全下限を持つ。穴への対処を内部目標から増やすだけでは、
-      // 実際の再生の深さが変わらないため、その下限も制御へ渡す
-      ...(arrivalDelayFloorMs === undefined ? {} : { arrivalDelayFloorMs }),
-      // 見るのは p50 (遅れの代表値) だけである。p95 と max は揺らぎの裾であり、
-      // 不感帯を引くと「たまに大きく遅れた」事実まで消えてしまう
-      latenessMs:
-        feedback.latenessMs === null
-          ? null
-          : { ...feedback.latenessMs, p50: Math.max(0, feedback.latenessMs.p50 - deadbandMs) },
-    });
-  }
-
   /** 時計の対応と直前の音を消す (AudioContext を作り直した / 閉じたとき) */
   private forgetAudioContext(): void {
-    this.feedbackStartedAtMs = performance.now();
+    this.targetDelayValueMs = AUDIO_PLAYOUT_DELAY_FLOOR_MS;
     this.clock.reset();
     this.previousChannels = null;
     this.previousSampleRate = 0;

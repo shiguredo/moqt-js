@@ -27,7 +27,6 @@
  */
 
 import type { AvSyncStats } from "../codec/types";
-import type { AudioDelayFeedbackSnapshot } from "./audioDelayFeedback";
 import {
   AUDIO_PLAYOUT_TIMING_WINDOW_MS,
   AudioPlayoutTimingStats,
@@ -49,7 +48,7 @@ import {
   type AudioDecodeInputRecord,
   type PlayoutTimestampKind,
 } from "./decodeInputTimestamps";
-import { AUDIO_ONLY_ARRIVAL_DELAY_FLOOR_MS, PlayoutTimeline } from "./timeline";
+import { PlayoutTimeline, type AudioPlayoutDelayStats } from "./timeline";
 import {
   VideoDecodeInputs,
   VideoPlayoutSession,
@@ -198,7 +197,7 @@ export interface MediaPlayoutOptions {
    * 共有の時間軸 (jitter buffer) を使うか。既定は true
    *
    * false のときは TIMESTAMP の対応付けと表示時刻の決定をせず、届いた順に鳴らし・表示する
-   * (音声の目標遅延の閉ループは動き続ける。時間軸の学習だけを使わない)。
+   * (音声の到着基準の予算は 50 ms。予約と欠落の計器は動き続ける)。
    */
   readonly jitterBuffer?: boolean;
   /**
@@ -318,8 +317,8 @@ export interface MediaPlayoutAudioStats {
   readonly timing: AudioPlayoutTimingSnapshot;
   /** 受信側の追いつきの観測値 */
   readonly catchUp: AudioReceiveCatchUpStats;
-  /** 音声の目標遅延の閉ループの内訳 (音声だけを使うときに読む) */
-  readonly delayFeedback: AudioDelayFeedbackSnapshot;
+  /** 到着と実出力の時計から求めた音声の再生予算の内訳 (音声だけを使うときに読む) */
+  readonly delay: AudioPlayoutDelayStats;
 }
 
 /** 映像の表示の統計 */
@@ -628,7 +627,7 @@ export class MediaPlayout {
     }
 
     // 揃える相手 (映像) がいるときだけ目標の開始時刻を守る。音声だけのときは到着基準で
-    // 並べ、下限を足して周期的な停滞を先に吸収する
+    // 並べ、固定の 50 ms の予算を使う
     let counterpartPresent: boolean;
     try {
       counterpartPresent =
@@ -653,8 +652,6 @@ export class MediaPlayout {
       timeline: this.timeline,
       useTimeline: this.useTimeline,
       enforceTarget: this.useTimeline && counterpartPresent,
-      // 映像に合わせる相手がいるときは渡さない (映像とのずれの原因になる)
-      ...(counterpartPresent ? {} : { arrivalDelayFloorMs: AUDIO_ONLY_ARRIVAL_DELAY_FLOOR_MS }),
       output: this.audioOutput,
     });
     return { ...result, timestampKind };
@@ -874,7 +871,7 @@ export class MediaPlayout {
               latenessMs: audio.session.playout.lateness * 1_000,
               timing: audio.timing.snapshot(performance.now()),
               catchUp: audio.session.catchUp.snapshot(),
-              delayFeedback: this.timeline.audioDelayFeedbackStats(),
+              delay: { ...this.timeline.audioDelayStats(), targetMs: audio.session.targetDelayMs },
             },
       video:
         video === null

@@ -201,11 +201,10 @@ interface SubscriberStats {
         syncExtraDelayMs: number;
         presentationDelayMs: number | null;
       };
-      audioDelayFeedback: {
+      audioDelay: {
         targetMs: number;
-        jitterTargetMs: number;
-        appliedMs: number;
-        reason: string;
+        jitterMs: number | null;
+        outputLeadMs: number | null;
       };
     };
   };
@@ -691,7 +690,7 @@ test("調査: A/V 同期と音声の遅延の内訳を 1 秒ごとに採る", as
     const publisher = await readPublisher(page);
     const { audio, avSync } = stats;
     const delays = avSync.delays;
-    const feedback = delays.audioDelayFeedback;
+    const audioDelay = delays.audioDelay;
     samples.push(
       JSON.stringify({
         t: (Date.now() - startedAtMs) / 1_000,
@@ -713,10 +712,9 @@ test("調査: A/V 同期と音声の遅延の内訳を 1 秒ごとに採る", as
         sharingBases: delays.sharingBases,
         unsharedReason: delays.unsharedReason,
         baseDriftMsPerSecond: delays.baseDriftMsPerSecond,
-        jitterTargetMs: feedback.jitterTargetMs,
-        feedbackTargetMs: feedback.targetMs,
-        appliedMs: feedback.appliedMs,
-        feedbackReason: feedback.reason,
+        jitterMs: audioDelay.jitterMs,
+        targetMs: audioDelay.targetMs,
+        outputLeadMs: audioDelay.outputLeadMs,
         audioJitterDelayMs: delays.audio.jitterDelayMs,
         videoJitterDelayMs: delays.video.jitterDelayMs,
         audioSyncExtraMs: delays.audio.syncExtraDelayMs,

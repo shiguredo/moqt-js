@@ -6,7 +6,7 @@ test.use({ launchOptions: { args: ["--autoplay-policy=no-user-gesture-required"]
 /** 48 kHz の 20 ms の音のサンプル数 */
 const AUDIO_FRAMES = 960;
 
-/** 壁時計の TIMESTAMP でも時間軸へ記録しない入口の、閉ループが観測する穴の待ち */
+/** 壁時計の TIMESTAMP でも時間軸へ記録しない入口で、実際に穴を作る条件 */
 const GAP_CASES = [
   { timestampKind: "none" as const, label: "TIMESTAMP 無し", jitterBuffer: true },
   { timestampKind: "wallClock" as const, label: "壁時計", jitterBuffer: false },
@@ -703,7 +703,7 @@ test("実 Web Audio で壊れた音の入力、停止と時計の再開を検証
           nowMs: performance.now(),
           lastStartDelayMs: resumedStats.audio?.timing.lastStartDelayMs ?? null,
           playedMs: resumedStats.audio?.timing.playedMs ?? null,
-          delayFeedback: resumedStats.audio?.delayFeedback ?? null,
+          delay: resumedStats.audio?.delay ?? null,
         };
         resumed.close();
         await playback.drainAudio();
@@ -763,14 +763,14 @@ test("実 Web Audio で壊れた音の入力、停止と時計の再開を検証
 
 // 壁時計の観測がない音声でも、既に遅れた音をさらに待たせない。
 // 穴は実時間を空けて音を届けることで実ブラウザに作らせ、学習した深さと予約を分ける。
-// 待ちは固定の時間ではなく、再生の進みと閉ループの制御間隔という条件を期限付きで待つ。
+// AudioContext の実時計が進むことと、後続の音が予約されることを期限付きで確認する。
 for (const gapCase of GAP_CASES) {
   test(`壁時計の観測がない (${gapCase.label}) 音声も到着停滞の後にすぐ再開する`, async ({
     page,
   }) => {
     await test.step("テストページを開く", () => openPlayoutPage(page));
 
-    const result = await test.step("実時間を空けて音を届け、閉ループの結果を集める", () =>
+    const result = await test.step("実時間を空けて音を届け、予約と欠落の結果を集める", () =>
       evaluatePlayout(
         page,
         async ({ moduleUrl, harnessUrl, timestampKind, jitterBuffer }) => {
@@ -807,29 +807,27 @@ for (const gapCase of GAP_CASES) {
               5_000,
             );
             const second = push(firstTimestamp + 20_000);
-            // 閉ループは目標を 1 秒に 1 回まで動かす。次の制御が可能になるまで待つ
+            // 次の音を出力した後にも、新たな音を予約できることを確認する
             const secondPushedAtMs = performance.now();
-            const controlIntervalElapsed = await harness.waitUntil(
-              () => performance.now() - secondPushedAtMs >= 1_050,
+            const secondPlayedOut = await harness.waitUntil(
+              () => performance.now() - secondPushedAtMs >= 100,
               3_000,
             );
-            const appliedBeforeThird = playout.getStats().audio?.delayFeedback.appliedMs ?? -1;
+            const appliedBeforeThird = playout.getStats().audio?.delay.targetMs ?? -1;
             const third = push(firstTimestamp + 40_000);
             const stats = playout.getStats();
             const timing = stats.audio?.timing ?? null;
-            // 音声だけの入口でも、計器から目標遅延の閉ループの内訳を読める
-            const delayFeedback = stats.audio?.delayFeedback ?? null;
+            // 音声だけの入口でも、計器から再生予算の内訳を読める
+            const delay = stats.audio?.delay ?? null;
             return {
               firstPlayedOut,
-              controlIntervalElapsed,
+              secondPlayedOut,
               first: first.status,
               second: second.status,
               third: third.status,
-              appliedMs: delayFeedback?.appliedMs ?? -1,
+              appliedMs: delay?.targetMs ?? -1,
               appliedBeforeThird,
-              appliedCeilingMs: delayFeedback?.appliedCeilingMs ?? -1,
-              jitterTargetMs: delayFeedback?.jitterTargetMs ?? -1,
-              reason: delayFeedback?.reason ?? null,
+              jitterMs: delay?.jitterMs ?? null,
               gapCount: timing?.gapCount ?? -1,
               lastStartDelayMs: timing?.lastStartDelayMs ?? -1,
               audioOnly: stats.avSync === null,
@@ -844,22 +842,19 @@ for (const gapCase of GAP_CASES) {
     await test.step("欠落を記録しつつ、遅れて届いた音を再び待たせないことを検証する", () => {
       // 実時間の待ちが期限の中で満たされた (穴を作るための再生の進み)
       expect(result.firstPlayedOut).toBe(true);
-      expect(result.controlIntervalElapsed).toBe(true);
+      expect(result.secondPlayedOut).toBe(true);
       expect(result.first).toBe("played");
       expect(result.second).toBe("played");
       expect(result.third).toBe("played");
       // 壁時計の音声を観測していないため、揺らぎの学習した目標は使われない
-      expect(result.jitterTargetMs).toBe(0);
+      expect(result.jitterMs).toBeNull();
       // 音声だけの入口は A/V 同期の推定を出さない
       expect(result.audioOnly).toBe(true);
-      // 無音の穴を観測し、閉ループが適用する上限を 160 ms へ広げている
+      // 届かなかった区間の穴は記録し、過去の途絶で常時の予算を増やさない
       expect(result.gapCount).toBeGreaterThanOrEqual(1);
-      expect(result.reason).toBe("gap");
-      expect(result.appliedCeilingMs).toBe(160);
-      // 50 ms から始め、穴 2 回で 40 ms ずつ広げる。既に遅れた音は、
-      // 目標まで待ち直さず Web Audio が予約できる最も早い位置へ置く。
-      expect(result.appliedMs).toBe(130);
-      expect(result.appliedBeforeThird).toBe(90);
+      // 予算は 50 ms のまま保つ。既に遅れた音は、Web Audio が予約できる位置へ置く。
+      expect(result.appliedMs).toBe(50);
+      expect(result.appliedBeforeThird).toBe(50);
       expect(result.lastStartDelayMs).toBeGreaterThanOrEqual(0);
       expect(result.lastStartDelayMs).toBeLessThan(65);
     });

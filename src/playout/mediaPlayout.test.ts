@@ -208,42 +208,31 @@ test("getStats: 音声と映像の両方で時間軸を使うときは同期の�
   assert.isNotNull(avSync?.delays);
 });
 
-test("setTargetLatencyMs: 目標の遅延と音声の閉ループの上限へ反映する", () => {
+test("setTargetLatencyMs: catalog の目標を保持し、未観測の出力先行量を捏造しない", () => {
   const playout = createMediaPlayout({
     audio: {},
     video: { output: createVideoOutput() },
     targetLatencyMs: 300,
   });
-  // 構築時に渡した値が同期の推定値と閉ループの上限の両方へ入る
+  // 構築時に渡した値が同期の推定値と表示の下限へ入る
   assert.strictEqual(playout.getStats().avSync?.targetLatencyMs, 300);
-  assert.strictEqual(playout.getStats().audio?.delayFeedback.ceilingMs, 300);
+  assert.isNull(playout.getStats().audio?.delay.outputLeadMs);
 
   // 購読の途中で catalog の値が変わったときも同じ経路で変えられる
   playout.setTargetLatencyMs(500);
   assert.strictEqual(playout.getStats().avSync?.targetLatencyMs, 500);
-  assert.strictEqual(playout.getStats().audio?.delayFeedback.ceilingMs, 500);
+  assert.isNull(playout.getStats().audio?.delay.outputLeadMs);
 
   // null は目標を使わない (宣言が無い) ことを意味する
   playout.setTargetLatencyMs(null);
   assert.isNull(playout.getStats().avSync?.targetLatencyMs);
-  assert.isNull(playout.getStats().audio?.delayFeedback.ceilingMs);
+  assert.equal(playout.getStats().audio?.delay.targetMs, 50);
 
   // 負の値は受け付けない (表示の遅れが負になる)
   assert.throws(
     () => playout.setTargetLatencyMs(-1),
     /targetLatencyMs must be a finite number >= 0, got -1/,
   );
-});
-
-test("getStats: 音声の閉ループの内訳を delayFeedback として返す", () => {
-  const playout = createMediaPlayout({ audio: {} });
-  const feedback = playout.getStats().audio?.delayFeedback;
-  assert.isNotNull(feedback);
-  // 目標を動かした回数は 0、上限の指定は無い
-  assert.strictEqual(feedback?.adjustments, 0);
-  assert.isNull(feedback?.ceilingMs);
-  // 適用する目標は、揺らぎから求めた値以上になる (初期値でも 0 未満にはならない)
-  assert.isAtLeast(feedback?.appliedMs ?? -1, 0);
 });
 
 test("drainAudio: 音声を使わない構成では待たずに 0 を返す", async () => {
@@ -487,4 +476,13 @@ test("setIntentionalDelayMs: 負の値はエラーになる", () => {
   // 0 以上は受け付ける
   assert.doesNotThrow(() => playout.setIntentionalDelayMs(0));
   assert.doesNotThrow(() => playout.setIntentionalDelayMs(250));
+});
+
+test("getStats: 未観測の揺らぎと出力時計は null、音声のみの予算は 50 ms である", () => {
+  const playout = createMediaPlayout({ audio: {} });
+  assert.deepEqual(playout.getStats().audio?.delay, {
+    jitterMs: null,
+    outputLeadMs: null,
+    targetMs: 50,
+  });
 });

@@ -7,8 +7,7 @@
  * - 表示時刻は µs に丸めた TIMESTAMP + 表示の遅れに一致し、表示の遅れから基準の遅れを
  *   引いた追加分は上限 (MAX_PLAYOUT_DELAY_MS とキューが吸収できる長さの小さい方) を超えない
  * - 同じ TIMESTAMP の音声と映像の表示時刻は、不感帯 (SYNC_MIN_DELTA_MS) の範囲で揃う
- * - 共有の再生遅延は 0 以上で、下げる速さは毎秒 PLAYOUT_DELAY_DECAY_MS_PER_SECOND を
- *   超えない
+ * - 共有の再生遅延は 0 以上で、キューの上限を超えない
  * - 基準の差を補償する量は PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS までとし、同じ向きの
  *   既知のバッファ差は別に補償する。時計のずれの証拠を見る前でも基準の保護を掛ける。
  *   過去に差が開いた 120 秒の到着列でも、補償できない分を超えてずれを広げない
@@ -21,37 +20,9 @@
 
 import { test, assert } from "vite-plus/test";
 import * as fc from "fast-check";
-import { summarizeTimings } from "./timingSummary";
 
 // setter の直後にも計器と実際に使う目標が一致する。次の音声観測で直るだけでは、
 // 一時停止中に上限を変更する利用者には古い値が残る。
-test("PlayoutTimeline: 穴で広げた目標を上限の変更時に更新する", () => {
-  fc.assert(
-    fc.property(fc.integer({ min: 100, max: 159 }), (ceilingMs) => {
-      const timeline = new PlayoutTimeline({ timeOriginMs: 0, maxQueuedFrames: 24 });
-      for (let index = 0; index < 4; index++) {
-        const atMs = index * 1_000;
-        timeline.observe("audio", atMs, atMs * 1_000);
-        timeline.observe("video", atMs, atMs * 1_000);
-        timeline.observeAudioPlayout({
-          atMs,
-          latenessMs: null,
-          startDelayMs: null,
-          slackMs: null,
-          backlogMisses: 0,
-          backlogMs: 0,
-          gapCount: index,
-          gapMs: index * 80,
-        });
-      }
-      assert.equal(timeline.playoutDelayMs, 160);
-      timeline.setTargetLatencyMs(ceilingMs);
-      assert.equal(timeline.playoutDelayMs, ceilingMs);
-      assert.equal(timeline.delayBreakdown.audio.jitterDelayMs, ceilingMs);
-      assert.equal(timeline.audioDelayFeedbackStats().appliedMs, ceilingMs);
-    }),
-  );
-});
 
 // 共通の cache 遅延が減った分を同期の待ち時間へ移してはならない。両側の観測順も変え、
 // 片側ずつ更新される実際の入口で、追いつき後に通常の深さへ戻ることを確かめる。
@@ -62,14 +33,6 @@ test("PlayoutTimeline: 共通の基準遅延を解消したら待ち時間へ持
       const observe = (atMs: number, mediaMs: number): void => {
         const streams: PlayoutStream[] = audioFirst ? ["audio", "video"] : ["video", "audio"];
         for (const stream of streams) timeline.observe(stream, atMs, mediaMs * 1_000);
-        timeline.observeAudioPlayout({
-          atMs,
-          latenessMs: summarizeTimings([0]),
-          startDelayMs: null,
-          slackMs: null,
-          backlogMisses: 0,
-          backlogMs: 0,
-        });
       };
       for (let index = 0; index <= frames; index++) observe(frames * 10 + index * 10, index * 20);
       for (let elapsed = 20; elapsed <= 2_000; elapsed += 20) {
@@ -96,29 +59,6 @@ test("PlayoutTimeline: 共通の基準遅延を解消したら待ち時間へ持
 
 // 壁時計 TIMESTAMP が無い音声でも再生結果は観測できる。基準を捏造せず、穴への
 // 適応値を実際の到着基準の再生へ返し、A/V の基準は共有しないことを確かめる。
-test("PlayoutTimeline: 壁時計の観測なしでも音声の閉ループ目標を適用する", () => {
-  fc.assert(
-    fc.property(fc.integer({ min: 100, max: 140 }), (floorMs) => {
-      const timeline = new PlayoutTimeline({ timeOriginMs: 0, maxQueuedFrames: 24 });
-      for (let index = 0; index < 2; index++)
-        timeline.observeAudioPlayout({
-          atMs: index * 1_000,
-          latenessMs: null,
-          startDelayMs: null,
-          slackMs: null,
-          backlogMisses: 0,
-          backlogMs: 0,
-          gapCount: index,
-          gapMs: index * 20,
-          arrivalDelayFloorMs: floorMs,
-        });
-      assert.equal(timeline.playoutDelayMs, timeline.audioDelayFeedbackStats().appliedMs);
-      assert.isAbove(timeline.playoutDelayMs ?? 0, floorMs, "穴を吸収する深さを返すこと");
-      assert.isNull(timeline.delayBreakdown.audio.baseDelayMs);
-      assert.isFalse(timeline.sharingBases);
-    }),
-  );
-});
 
 // 出力の残差を、実際の開始時刻が逆行しない小さな増減で動かす。過去の補償を必要値へ
 // 戻す制御では、残差の上限が一定でも共通の待ち時間だけが増え続ける。
@@ -149,14 +89,7 @@ test("PlayoutTimeline: 残差の任意の増減でも遅延は必要値の最大
             );
           previousActual = actual;
           timeline.recordPresentation("audio", timestamp, actual, target);
-          timeline.observeAudioPlayout({
-            atMs,
-            latenessMs: summarizeTimings([0]),
-            startDelayMs: summarizeTimings([50]),
-            slackMs: summarizeTimings([50]),
-            backlogMisses: 0,
-            backlogMs: 0,
-          });
+
           assert.isAtMost(
             timeline.videoDelayMs ?? Infinity,
             160.01,
@@ -190,23 +123,13 @@ test("PlayoutTimeline: 穴と回復の任意の列でも既知のバッファ差
       fc.array(fc.boolean(), { minLength: 5, maxLength: 40 }),
       (baseDifference, gaps) => {
         const timeline = new PlayoutTimeline({ timeOriginMs: 0, maxQueuedFrames: 24 });
-        let gapCount = 0;
         for (const [index, gap] of gaps.entries()) {
           const atMs = 1_000 + index * 1_000;
           const timestamp = atMs * 1_000;
           timeline.observe("audio", atMs + Math.max(0, baseDifference), timestamp);
           timeline.observe("video", atMs + Math.max(0, -baseDifference), timestamp);
-          if (gap) gapCount += 1;
-          timeline.observeAudioPlayout({
-            atMs: atMs + 80,
-            latenessMs: summarizeTimings([0]),
-            startDelayMs: summarizeTimings([50]),
-            slackMs: summarizeTimings([50]),
-            backlogMisses: 0,
-            backlogMs: 0,
-            gapCount,
-            gapMs: gapCount * 20,
-          });
+          timeline.observeAudioOutputLead(gap ? 80 : 0, atMs + Math.max(0, baseDifference));
+
           const { audio, video } = timeline.delayBreakdown;
           assert.isTrue(timeline.sharingBases);
           assert.isAtMost(
@@ -224,7 +147,6 @@ test("PlayoutTimeline: 穴と回復の任意の列でも既知のバッファ差
 import { JITTER_BUFFER_MAX_QUEUED_FRAMES } from "./buffer";
 import {
   MAX_PLAYOUT_DELAY_MS,
-  PLAYOUT_DELAY_DECAY_MS_PER_SECOND,
   PLAYOUT_WINDOW_MS,
   PLAYOUT_BASE_MAX_DIFFERENCE_MIN_MS,
   PLAYOUT_QUEUE_HEADROOM_FRAMES,
@@ -542,26 +464,6 @@ test("PlayoutTimeline: 表示時刻は TIMESTAMP + 基準の遅れ + 表示の�
           MAX_PLAYOUT_DELAY_MS,
           "jitter buffer の遅延が公開している最大値を超えないこと",
         );
-
-        // 映像の再生遅延が下がった 1 枚では、下げ幅が経過時間 × 毎秒の速さを超えない
-        // (音声は NetEq の規則でヒストグラムの更新ごとに動く)
-        const previous = observations[observations.length - 2];
-        if (stream === "video" && previous !== undefined && previous.videoDelayMs !== null) {
-          if (delayOfStream !== null && delayOfStream < previous.videoDelayMs) {
-            // 上限 (キューが吸収できる長さ) まで下がったときは、フレーム間隔が短くなった分を
-            // 直ちに反映するため、毎秒の速さを超えて下がる
-            const elapsedMs = last.wallClockMs - previous.wallClockMs;
-            const allowedMs = (PLAYOUT_DELAY_DECAY_MS_PER_SECOND * elapsedMs) / 1_000;
-            // 上限は実装が TIMESTAMP の差から測った間隔で決まるため、上限との比較には
-            // 丸めの分 (1 枚あたり `QUEUE_INTERVAL_ROUNDING_MS`) を枚数分だけ足した値を使う
-            assert.isTrue(
-              previous.videoDelayMs - delayOfStream <=
-                allowedMs + MAX_QUEUED_FRAMES / 1_000 + TOLERANCE_MS ||
-                delayOfStream <= queueCapWithRoundingMs,
-              "下げ幅が毎秒の速さ以下か、上限まで下がっていること",
-            );
-          }
-        }
       },
     ),
     { numRuns: 50 },
@@ -730,10 +632,7 @@ test("PlayoutTimeline: 120 秒の到着列でも同時刻の表示時刻の差�
         SYNC_MIN_DELTA_MS,
         naturalDifferenceMs - PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS,
       );
-      // 足すのは即座、戻すのは毎秒 PLAYOUT_DELAY_DECAY_MS_PER_SECOND まで、という設計の
-      // ため、後行側が前の状態で足した分はまだ戻り切っていないことがある。その分は差に
-      // 残る (上限までしか足せない分を、後行側の足し分がさらに広げる)。戻り切っていない
-      // 分は許容へ入れる。上限そのものは下の assert が守る
+      // 基準を共有できない場合の復帰中には、以前の補償が残ることがある。
       const breakdown = timeline.delayBreakdown;
       const audioDelayMs =
         (breakdown.audio.baseDelayMs ?? 0) +
@@ -754,8 +653,13 @@ test("PlayoutTimeline: 120 秒の到着列でも同時刻の表示時刻の差�
         allowedDifferenceMs + trailingExtraMs + ALLOWANCE_MS,
         "同時刻の表示時刻の差が、合わせない分に収まること",
       );
-      assert.isAtMost(breakdown.audio.syncExtraDelayMs, PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS);
-      assert.isAtMost(breakdown.video.syncExtraDelayMs, PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS);
+      // 100 ms は時計の基準の差に対する上限。既知のバッファ差は別に補償する。
+      const bufferDifferenceMs = Math.abs(
+        (breakdown.audio.jitterDelayMs ?? 0) - (breakdown.video.jitterDelayMs ?? 0),
+      );
+      const compensationBudgetMs = PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS + bufferDifferenceMs;
+      assert.isAtMost(breakdown.audio.syncExtraDelayMs, compensationBudgetMs + TOLERANCE_MS);
+      assert.isAtMost(breakdown.video.syncExtraDelayMs, compensationBudgetMs + TOLERANCE_MS);
 
       // 実績から求める同期ずれは、同じ式で決めた音声と映像の表示時刻の差である。合わせない
       // 分が残るため、ずれの予算 (±50 ms) ではなく、合わせない分までになる
@@ -795,16 +699,20 @@ test("PlayoutTimeline: 120 秒の到着列でも同時刻の表示時刻の差�
 test("PlayoutTimeline: 差が開いていた到着列でも映像の表示待ちは自分の揺らぎ + 上限までにする", () => {
   // 722071 は develop の CI が落ちた入力である (fast-check の seed 869714401 が生成した
   // 整数)。修正前は映像へ 102.18 ms 足して上限を超えていた
-  for (const seed of [50, 139, 194, 722071]) {
+  for (const seed of [12, 50, 139, 194, 722071]) {
     const { timeline, maxDifferenceMs } = runArrivals(seed);
     const breakdown = timeline.delayBreakdown;
     const videoNaturalMs =
       (breakdown.video.baseDelayMs ?? 0) + (breakdown.video.jitterDelayMs ?? 0);
-    // 映像へ足すのは上限までである (音声の膨らんだ遅延には合わせない)
+    // 基準の差に対する上限と、既知のバッファ差を分ける。seed 12 は合計が
+    // 100 ms を超えるため、合計そのものに時計の保護を掛けた誤った判定を防ぐ。
+    const compensationBudgetMs =
+      PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS +
+      Math.abs((breakdown.audio.jitterDelayMs ?? 0) - (breakdown.video.jitterDelayMs ?? 0));
     assert.isAtMost(
       breakdown.video.syncExtraDelayMs,
-      PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS,
-      `seed=${seed} の映像へ足す分が上限を超えないこと`,
+      compensationBudgetMs + TOLERANCE_MS,
+      `seed=${seed} の映像へ足す分が基準とバッファの予算を超えないこと`,
     );
     assert.isAtMost(
       timeline.videoDelayMs ?? Infinity,
