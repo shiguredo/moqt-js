@@ -121,8 +121,8 @@ async function captureOutput(subscriber, capture) {
   const tap = new AudioWorkletNode(output.context, "relay-av-capture");
   tap.port.onmessage = (event) => capture.push(event.data);
   tap.connect(output.destination);
-  // 公開 API で実際の出力を接続する。時計と媒体の観測はここで初期化されるため、
-  // 測定の開始前に行い、その後の最初の 1 秒も分布から除く。
+  // 同じ Context の出力先だけを公開 API で差し替え、時計と媒体の観測は保つ。
+  // 測定の開始前に接続し、その後の最初の 1 秒も分布から除く。
   subscriber.playout.setAudioOutput({ context: output.context, destination: tap });
   return tap;
 }

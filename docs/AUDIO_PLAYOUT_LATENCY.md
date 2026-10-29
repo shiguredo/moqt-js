@@ -1,6 +1,13 @@
 # 音声の再生遅延の下限の実測 (調査メモ)
 
-音声再生の現状は `docs/AUDIO_PLAYOUT_RESULT.md` にある (数値・規格との対応・既知の限界)。
+2026-10-29 の更新案内: 以下は主に 2026-10-15〜16 の旧実装の調査記録である。
+80 ms の開始値、NetEq の遅延推定、160 ms へ広げる上限、閉ループの計器は当時のもの。
+現行では到着の揺らぎと出力時計から A/V の音声予算を通常 50〜100 ms に決め、
+音声だけの予算は 50 ms とする。以下の実測表は再計測した値へ書き換えていない。
+現行の仕組みは [音声再生の現状](AUDIO_PLAYOUT_RESULT.md)、採用比較は
+[A/V の低遅延化の計測](AV_LOW_LATENCY_INVESTIGATION.md) を参照すること。
+
+音声再生の現状は [現行のまとめ](AUDIO_PLAYOUT_RESULT.md) にある (再生予算、計器、既知の限界)。
 
 この文書は調査の記録である。決定と根拠は `docs/AV_SYNC_DECISIONS.md` が持つ。ここには
 測り方、生の値、判断に至った理由、未解決のまま残したことを書く。
@@ -14,7 +21,7 @@
 
 ## 方法
 
-- 実リレー `moqt://sora-moq.shiguredo.co.jp/` へ、1 つのブラウザのページから音声と映像を
+- 実リレー `<RELAY_URI>` へ、1 つのブラウザのページから音声と映像を
   配信し、同じページで購読する (`tests/e2e/relay/devtools-both-audio.spec.ts` の
   「長時間の配信で、送信の遅れと受信の遅れが悪化しない」と同じ条件)
 - 観測は 60 秒。`AUDIO_PLAYOUT_DELAY_FLOOR_MS` と `AUDIO_DELAY_FEEDBACK_MIN_MS` の 2 つを

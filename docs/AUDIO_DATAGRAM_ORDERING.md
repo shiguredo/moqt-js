@@ -1,10 +1,16 @@
 # 音声 datagram の順序逆転の実測 (2026-10-26)
 
+2026-10-29 の更新案内: 以下は 2026-10-26 の到着順序の測定記録である。
+表の `jitterTargetMs`、`appliedMs`、上限 160 ms は当時の遅延制御の計器であり、現行には存在しない。
+現行の計器は [音声再生の現状](AUDIO_PLAYOUT_RESULT.md)、日本語と Datagram 欠落を使った
+比較は [A/V の低遅延化の計測](AV_LOW_LATENCY_INVESTIGATION.md) を参照すること。
+順序逆転の過去の実測値を、新しい制御でも同じ結果になったものとして扱わない。
+
 音声を datagram で受けるとき、順序逆転が実際に起きるのか、起きたときに再生へどう効くのかを
 実リレーで測った記録である。計測用の仕込みと計器はこの計測のために追加した。
 
 - 計測日: 2026-10-26 12:11〜12:24 (Asia/Tokyo)
-- 接続先: `moqt://sora-moq.shiguredo.co.jp/`
+- 接続先: `<RELAY_URI>`
 - 条件: 各 60 秒、1 秒ごとに購読側の統計を採る。各条件 3 回
 - 生データ: `investigation-logs/datagram-default-2026-10-26/` (gitignore 対象。計測後、
   条件名を付けて手動で整理した。spec は `investigation-logs/av-sync-samples-<timestamp>.jsonl`

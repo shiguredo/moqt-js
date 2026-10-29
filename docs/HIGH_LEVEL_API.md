@@ -1022,8 +1022,9 @@ jitter buffer の遅れは、音声と映像の直近 2 秒の到着から求め
 2 つの表示時刻の差が 5 ms を超えたときは、先行する側を「後行側 - 5 ms」へ合わせる。
 基準を共有できる間は、現在の到着の分布と音声の予約から補償を毎回引き直す。過去の共有の
 表示時刻を下限として保持しない。窓が回復すると待ちも戻り、既存の音声キューは波形の時間
-圧縮で追従する。圧縮の不感帯は開始後 2 秒まで 20 ms とし、その後は経路の揺らぎに応じて
-5〜20 ms にする。揺らぎのある経路で一律に 5 ms へ下げる変更は、音切れが増えたため採らない。
+圧縮で追従する。A/V の目標時刻を使う予約では、圧縮の不感帯を最初の 2 秒は 20 ms に保ち、
+その後は経路の揺らぎに応じて 5〜20 ms にする。到着基準の予約の不感帯は 20 ms のままである。
+揺らぎのある経路で一律に 5 ms へ下げる変更は、音切れが増えたため採らない。
 計測の比較と採用しなかった案は [低遅延化の調査](AV_LOW_LATENCY_INVESTIGATION.md) を参照すること。
 
 基準の差は「遅い側を待つ」ことでしか合わせられないため、2 つのトラックの基準を共有しない
@@ -1145,9 +1146,9 @@ configure の sampleRate に関係なく常に 48 kHz を返すため、Opus で
 ある。使えないのは壁時計の TIMESTAMP を持たない、jitter buffer が無効、トラックの基準が
 共有されていない (TIMESTAMP が壁時計からずれている) ときである。予定を決められても、揃える
 相手がいないために使わなかった音 (音声だけの購読) も数える。このときの再生の遅れは、
-揃える相手がいるときは到着から 100 ms 以下 (`AUDIO_PLAYOUT_ARRIVAL_DELAY_MS`) に抑え、
-音声だけのときは 50 ms にする。共有の時間軸が学習した再生の遅れは、ずれている
-TIMESTAMP を揺らぎとして学習した値 (実測で 316〜500 ms) になるためである。
+揃える相手がいて時間軸を使うときは予算を 100 ms 以下 (`AUDIO_PLAYOUT_ARRIVAL_DELAY_MS`) にし、
+それ以外は 50 ms にする。出力の先行量や既存の予約が大きいと、実際の待ちはこの値を超える。
+TIMESTAMP が壁時計からずれていても、到着基準の予算をそのずれの分だけ広げない。
 `unplannedFrames` は、到着基準の計画も持たないまま鳴らした音であり、通常は 0 になる。
 
 この遅れは「実際に鳴るまで」の時間である。`AudioContext` の時計 (`currentTime`) は、既に
@@ -1779,6 +1780,42 @@ interface MediaPlayoutStats {
 `jitterMs` と `outputLeadMs` は観測が無ければ null であり、`targetMs` は実際に適用した
 自動予算である。音声だけの購読では 50 ms にする。catalog の下限と同期の補償は別に
 `avSync.delays` で読み、実際の待ちとずれは `audio.timing` と併せて読む。
+
+### 旧音声遅延制御からの移行
+
+2026-10-29 の変更で、`AudioDelayEstimator` と `AudioDelayFeedback` を削除した。
+過去の穴や圧縮量で上限を 160 ms へ広げる制御は行わず、到着の揺らぎと実出力時計の
+先行量から予算を決める。統計を読むアプリケーションは、名前と値の意味を合わせて変更する。
+
+| 旧 API / フィールド                                          | 現行での扱い                                                                           |
+| ------------------------------------------------------------ | -------------------------------------------------------------------------------------- |
+| `MediaPlayout.getStats().audio.delayFeedback`                | `audio.delay` へ変更                                                                   |
+| `AvSyncStats.delays.audioDelayFeedback`                      | `delays.audioDelay` へ変更                                                             |
+| `AudioDelayFeedbackSnapshot`                                 | `AudioPlayoutDelayStats` へ変更                                                        |
+| `appliedMs`                                                  | `MediaPlayout` の `audio.delay.targetMs` で、実際に適用する自動予算を読む              |
+| 旧 `targetMs`                                                | 閉ループの内部目標は削除。新 `targetMs` は適用する自動予算であり、意味が異なる         |
+| `jitterTargetMs`                                             | 新 `jitterMs` は到着の揺らぎそのもの。旧ヒストグラムの目標や下限を含む値とは一致しない |
+| `reason` / `lastChangeMs` / `adjustments`                    | 制御の理由と回数は削除。到着の `jitterMs` と出力の `outputLeadMs` を読む               |
+| `ceilingMs` / `appliedCeilingMs`                             | 上限拡大の計器は削除。catalog の明示下限は `avSync.targetLatencyMs` で別に読む         |
+| `compressionMsPerSecond`                                     | 削除。加工量は `audio.compressedMs` の累積で読む                                       |
+| `AudioDelayFeedbackObservation` / `AudioDelayFeedbackReason` | 型を削除                                                                               |
+| `AudioPlayoutTimingStats.audioDelayFeedback()`               | メソッドを削除。表示用の `snapshot()` は維持                                           |
+| `AudioPlayoutTimingStats.recordGap()` の `delayFeedbackMs`   | 引数を削除。`uncoveredMs` と `unrecoverableMs` を記録する                              |
+
+表の `audio.delay` は `MediaPlayout` の統計である。`MediaSubscriber` の `getStats()` へ同名の
+フィールドは追加していない。`MediaSubscriber` は `audio.playoutTiming` と `avSync.delays`、
+devtools の表示用スナップショットは `audio.audioDelay` を使う。
+
+`avSync.delays.audioDelay` は時間軸が推定した予算であり、`MediaPlayout` の `audio.delay` は
+その音声に適用した予算を持つ。音声だけの購読では後者の `targetMs` は 50 ms になる。
+両者とも `targetMs` に catalog の明示下限や同期の補償は含めず、実際の待ちは `audio.timing` と
+遅延の内訳を併せて読む。
+
+`outputLeadMs` は有効な出力時計で得た観測値である。時計を代用している間も以前の観測値が
+残る場合があるため、A/V の推定があるときは `avSync.audioClockFallback` も確認する。
+予算の観測を消すには `resetAudioTimeline()` または `resetPlayout()` を使う。出力先の差し替えや
+`resetAudioPlayback()` だけでは時間軸の観測は消えない。時間軸を初期化した後は、再び
+有効な時計を観測するまで `outputLeadMs` は null になる。
 
 ### ライフサイクル
 

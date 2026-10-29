@@ -200,6 +200,7 @@ moqt-devtools の Subscriber の設定画面に `Playback Delay (Audio + Video)`
 
 - 表示遅延の合計: `getStats().avSync.presentationDelayMs`
 - 遅延の内訳: `getStats().avSync.delays.*`
+- 音声の自動予算 (A/V 時): `getStats().avSync.delays.audioDelay.*`。意図した保持時間はこの予算と分ける
 - 意図した遅延を含む音声の遅れ: `getStats().audio.playoutCatchUp.lagMs`
 - 意図した遅延を除いた復号の遅れ: `getStats().audio.playoutCatchUp.decodeLagMs`
 - 音声と映像の受信から表示までの時間: `audio.playoutTiming.*` / `video.playoutTiming.*`
@@ -221,7 +222,7 @@ moqt-devtools の Subscriber の設定画面に `Playback Delay (Audio + Video)`
 - **ストリームの読み取りを止める**: QUIC のフロー制御と relay の cache に依存し、遅延を時間で
   安定して制御できない。
 - **`targetLatency` を購読側で上書きする**: `targetLatency` は catalog の宣言であり、総遅延を
-  指定する値ではない。既存の A/V 同期と音声の閉ループの意味を変えずに、加算する遅延として
+  指定する値ではない。既存の A/V 同期と音声の再生予算の意味を変えずに、加算する遅延として
   分けた。
 
 ## 制限と再考の条件
