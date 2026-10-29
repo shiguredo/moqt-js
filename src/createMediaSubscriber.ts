@@ -2612,7 +2612,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     }
 
     // デコード
-    this.audioDecoder.decode(obj.payload, "key", timestamp, 0);
+    this.audioDecoder.decode(obj.payload, "key", timestampKind === "none" ? null : timestamp, 0);
   }
 
   /**

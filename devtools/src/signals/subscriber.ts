@@ -274,7 +274,7 @@ export interface SubscriberInstance {
   // 更新する。まだ停止を観測していないときは既定値のまま
   // (devtools/src/utils/hostDelayTracker.ts)
   audioHostDelay: Signal<HostDelaySnapshot>;
-  // 音声の jitter buffer の再生予算の内訳 (目標・実際に使う値・上限・圧縮の速さ)。
+  // 音声の jitter buffer の再生予算の内訳 (目標・到着の揺らぎ・実出力の先行量)。
   // 音声だけを購読するときは A/V 同期の推定を出さないため、目標遅延の内訳はここから読む。
   // useSubscriber が一定間隔で更新する
   // (src/playout/timeline.ts)

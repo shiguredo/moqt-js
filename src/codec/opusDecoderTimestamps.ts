@@ -5,11 +5,11 @@
  * description 付きの形式と、出力の対応が異なる他の codec には適用しない。
  */
 export class OpusDecoderTimestamps {
-  private readonly pending: number[] = [];
+  private readonly pending: (number | null)[] = [];
 
   constructor(private readonly enabled: boolean) {}
 
-  submit(timestamp: number): void {
+  submit(timestamp: number | null): void {
     if (this.enabled) this.pending.push(timestamp);
   }
 
@@ -20,8 +20,8 @@ export class OpusDecoderTimestamps {
   restore(data: AudioData): AudioData {
     if (!this.enabled) return data;
     const timestamp = this.pending.shift();
-    // LOC TIMESTAMP がない入力も 0 で渡される。そのときは復号器の連続時計を保つ。
-    if (timestamp === undefined || timestamp === 0 || timestamp === data.timestamp) return data;
+    // 時刻なしは null とし、媒体時刻 0 と区別して復号器の連続時計を保つ。
+    if (timestamp === undefined || timestamp === null || timestamp === data.timestamp) return data;
     // 音を待たせず、その出力だけを元の時刻へ戻す。入力の AudioData はここで閉じる。
     try {
       const samples = new Float32Array(data.numberOfFrames * data.numberOfChannels);

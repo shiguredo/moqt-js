@@ -1,5 +1,7 @@
 /** 実 QUIC Datagram、Worker 復号、実音声と canvas で A/V を測る。 */
-import { loadSpeech } from "./playout-audio-quality.mjs";
+import { loadSpeech } from "./playout-audio-input.mjs";
+
+import { hasAvCoverage } from "./playout-measurement-guards.mjs";
 
 const RATE = 48000;
 const sleep = (ms) =>
@@ -319,10 +321,13 @@ export async function measure(
         skewMs: row.presentedMs - (matching.startMs + (row.timestamp - matching.timestamp) / 1000),
       });
     }
-    const enoughOutput =
-      samples.length >= RATE * (seconds - 1) &&
-      activeAudio.length >= seconds * 30 &&
-      videoCallbacks.length >= seconds * 15;
+    const enoughOutput = hasAvCoverage({
+      seconds,
+      capturedSamples: samples.length,
+      audioCount: activeAudio.length,
+      videoCount: activeVideo.length,
+      pairCount: pairs.filter((row) => Number.isFinite(row.skewMs)).length,
+    });
     const age = (row, at) => performance.timeOrigin + at - row.timestamp / 1000;
     return {
       caseName,
@@ -350,7 +355,7 @@ export async function measure(
       video,
       pairs,
       videoCallbacks,
-      valid: activeErrors.length === 0 && enoughOutput && captureMissingMs === 0,
+      valid: activeErrors.length === 0 && enoughOutput && captureMissingMs === 0 && stepMax > 0,
       activeErrors,
       shutdownErrors: errors.slice(activeErrors.length),
       states,

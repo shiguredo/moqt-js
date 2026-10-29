@@ -179,7 +179,7 @@ export const AV_SYNC_HELP: SectionHelp = {
     {
       term: "syncExtraDelayMs",
       description:
-        "Extra delay the A/V sync added to this track (ms). The leading track gets the extra so that both presentation times stay within the deadband; it is recomputed from current arrivals and audio reservations. During clock fallback it is released at the decay rate.",
+        "Extra delay the A/V sync added to this track (ms). The leading track gets the extra so that both presentation times stay within the deadband; it is recomputed from current arrivals and audio reservations. When the track timelines cannot share their bases, it is released at the decay rate.",
     },
     {
       term: "presentationDelayMs",

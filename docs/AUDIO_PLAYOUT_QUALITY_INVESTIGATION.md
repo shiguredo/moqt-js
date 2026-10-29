@@ -190,10 +190,25 @@ Julius の同じ条件で追加の無音はサンプル丸めの誤差以内に�
 raw Opus の入力パケットの時刻を保持し、対応する復号出力に戻すようにした。
 待ち、並べ替え、復号器の再起動は追加しない。PCM は変更しない。
 description 付きの形式と他の codec は対象外である。
-TIMESTAMP がない入力の `0` では、復号器の連続時計を保つ。
+TIMESTAMP がない入力は `null` として復号器の連続時計を保つ。正当な媒体時刻 `0` は
+復元の対象とし、欠落や媒体時刻の巻き戻りの後も `0` へ戻せるように区別する。
 2.5 / 5 / 10 / 20 / 40 / 60 ms の実 Opus と直接 / Worker の 12 条件で、
 連続欠落を含む入力時刻の保持を検証した。別の実 AudioData の検証で、
 ステレオの PCM が完全一致することと所有権の解放も確認した。
+
+### 短い音声の連続予約で先頭のフェードが消える
+
+2026-10-29 の差分レビュー後、公開 API と実 AudioContext / AudioWorklet で再現した。
+振幅 0.3、48 kHz、120 サンプル (2.5 ms) の音声を 2 件続けて予約すると、
+最大隣接段差が 0.300000012 になった。1 件の最大段差は約 0.005 だった。
+短いバッファでは先頭 ramp の終点と末尾フェードの始点が一致し、末尾を取り消す操作で
+先頭 ramp も消えていた。4 ms では時刻の丸め誤差で末尾の始点が先頭の終点より前に入る
+場合もあった。
+
+取り消した終点を ramp として復元し、丸め誤差でも末尾の始点が先頭の終点より前へ
+入らないようにした。先読みや待ちは追加しない。2.5 / 4 / 5 / 20 ms と、開始時 / 再開後 /
+欠落補間後の計 12 条件を 3 回ずつ実行し、全 36 回で最大段差が 0.006 未満になった。
+無音化による見かけの改善を除くため、出力の振幅と有効サンプル数も検査する。
 
 raw Opus のチャンクがパケットを持つこと、description の有無で形式が変わることは
 [W3C の Opus WebCodecs Registration](https://www.w3.org/TR/webcodecs-opus-codec-registration/)
@@ -411,7 +426,6 @@ vp install
 vp exec node scripts/prepare-playout-japanese.mjs
 vp exec node scripts/investigate-playout-audio.mjs dsp
 vp exec node scripts/investigate-playout-audio.mjs render
-vp exec node scripts/investigate-playout-audio.mjs control
 vp exec node scripts/investigate-playout-audio.mjs speech
 vp exec node scripts/investigate-playout-audio.mjs live
 vp exec node scripts/investigate-playout-audio.mjs long
@@ -422,13 +436,16 @@ vp exec node scripts/investigate-playout-audio.mjs replay
 ```
 
 日本語音源の準備は macOS の `say`、`ffmpeg`、`ffprobe` を使う。
-比較用の `d0b944dd` と `d6893cb2` の Git オブジェクトが必要である。
+`dsp` / `render` / `speech` / `datagram` の旧 DSP 比較には、`d0b944dd` と
+`d6893cb2` の Git オブジェクトが必要である。他のモードは旧制御に依存しない。
+削除済みの閉ループを対象とした `control` モードも削除した。当時の測定値は過去の実装の
+記録として残し、現在の実装の測定値として扱わない。
 `replay` は `relay` が保存した 4 条件の JSON を読み、外部リレーへ接続せずに再投入する。
 測定値は JSON、出力波形は PCM16 WAV として、Git の対象外の `investigation-logs/` に保存する。
 解析は WAV への量子化前の Float32 で行う。
 
 再実行で途中の JSON を上書きした問題があったため、現行の測定スクリプトは
-`runs/<実行日時>-<mode>/` に JSON と環境記録の原本も保存する。
+`runs/<実行日時>-<プロセス ID>-<mode>/` に JSON と環境記録の原本も保存する。
 直下の同名ファイルと WAV は最新の実行の結果である。
 最終の実リレーの完全な JSON は `runs/final-relay-before-validation/` にも退避した。
 
@@ -442,10 +459,13 @@ vp exec node scripts/investigate-playout-audio.mjs replay
 - `vp check`: 成功
 - `vp exec tsc --noEmit`: 成功
 - `vp run build`: 成功
-- 単体テストと PBT: 251 ファイル / 4306 件が成功
-- Chromium の全 E2E: 189 件が成功
+- 単体テストと PBT: 250 ファイル / 4,268 件が成功
+- Chromium の全 E2E: 202 件が成功
 - 配布用ビルドの E2E: 10 件が成功
 - 実リレーの接続確認と、上記 4 条件の実配信測定も実行
+- レビュー後の音源経路でも Julius のオフライン比較、実 AudioContext の正常入力と
+  復号前 Datagram 欠落を再確認した。独立 5 % の条件では 301 パケット中 18 件が欠落し、
+  復号出力の不足を合成音で代替せずに完了した
 
 偽の Web Audio 出力を使っていた Node の 22 件は、実 API の E2E へ契約を整理した。
 時計の換算、TIMESTAMP の種類、計器、
@@ -460,6 +480,7 @@ vp exec node scripts/investigate-playout-audio.mjs replay
 | レートの一致と不一致                                  | `tests/e2e/media-playout-rate-mismatch.spec.ts` |
 | 波形の連続性、所有権、drain、明示目標、観測の状態遷移 | `tests/e2e/media-playout-quality.spec.ts`       |
 | 復号前の欠落と直接 / Worker の timestamp              | `tests/e2e/codec-audio-datagram.spec.ts`        |
+| 短フレームの先頭フェードと連続予約                    | `tests/e2e/media-playout-short-frames.spec.ts`  |
 
 ## 確認の範囲
 

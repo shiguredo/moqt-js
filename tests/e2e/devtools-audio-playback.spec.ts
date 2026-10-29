@@ -59,7 +59,7 @@ const AUDIO_PLAYBACK_ITEMS = {
   drainCutMs: "subscriber-audio-playback-drain-cut-ms",
   drainWaitedMs: "subscriber-audio-playback-drain-waited-ms",
   drainRequestedMs: "subscriber-audio-playback-drain-requested-ms",
-  // 目標遅延の上限と時間圧縮の速さ
+  // 再生予算の目標・到着の揺らぎ・実出力の先行量
   targetMs: "subscriber-audio-playback-target-ms",
   jitterMs: "subscriber-audio-playback-jitter-ms",
   outputLeadMs: "subscriber-audio-playback-output-lead-ms",
@@ -155,7 +155,7 @@ test("subscriber の画面に音声の再生の観測を既定値で出す", asy
   await expect(page.getByTestId(AUDIO_PLAYBACK_ITEMS.pushStartMaxMs)).toHaveText("0.0");
   await expect(page.getByTestId(AUDIO_PLAYBACK_ITEMS.boundaryStepCount)).toHaveText("0");
   await expect(page.getByTestId(AUDIO_PLAYBACK_ITEMS.boundaryStepMax)).toHaveText("0");
-  // まだ停止していないため drain の値は "-"、上限は既定の 100 ms、圧縮は 0
+  // まだ停止していないため drain の値は "-"、再生予算は既定の 50 ms
   await expect(page.getByTestId(AUDIO_PLAYBACK_ITEMS.drainPlayedMs)).toHaveText("-");
   await expect(page.getByTestId(AUDIO_PLAYBACK_ITEMS.drainCutMs)).toHaveText("-");
   await expect(page.getByTestId(AUDIO_PLAYBACK_ITEMS.drainWaitedMs)).toHaveText("-");

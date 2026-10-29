@@ -1628,15 +1628,12 @@ export function useSubscriber(
    * 音声の再生予算の内訳を、入口の統計から取り出す
    *
    * 音声だけの購読でも A/V 同期の snapshot は作らないため、再生の入口から直接読む
-   * (音声だけでも到着の観測と予約の計器は動かす)。jitter buffer が無効のときと、
-   * 音声を構成していないときは既定値にする
+   * (音声だけでも到着の観測と予約の計器は動かす)。出力 lead は jitter buffer を
+   * 無効にしても観測される。音声を構成していないときだけ既定値にする
    *
    * @param audio - `getStats()` を 1 回だけ読んだ値 (`getStats().audio`)
    */
   function currentAudioDelay(audio: MediaPlayoutAudioStats | null): AudioPlayoutDelayStats {
-    if (!jitterBufferEnabledRef.current) {
-      return sub.EMPTY_AUDIO_DELAY;
-    }
     // 再生予算の内訳は、再生の入口の統計 (`getStats().audio.delay`) が持つ
     return audio?.delay ?? sub.EMPTY_AUDIO_DELAY;
   }
@@ -2024,7 +2021,12 @@ export function useSubscriber(
         // 復号へ渡した音の通し番号を採番する。停止の flush で流した音は、復号の出力が
         // 届くまで drain の待ちに残る (採番は復号へ渡す直前に同期で行う)
         audioStopRef.current.noteAudioDecode(flushed);
-        audioDecoderInstance.decode(obj.payload, "key", timestamp, 0);
+        audioDecoderInstance.decode(
+          obj.payload,
+          "key",
+          timestampKind === "none" ? null : timestamp,
+          0,
+        );
         current.audioChunksDecoded.value += 1;
       } catch (error) {
         // LOC properties の復号失敗など、この object だけの問題は次で回復し得るため

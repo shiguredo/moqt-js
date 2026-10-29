@@ -1017,7 +1017,7 @@ jitter buffer の遅れは、音声と映像の直近 2 秒の到着から求め
   足した待ちを、別の遅延上限へ戻す制御は持たない
 - 映像は揺らぎの百分位を使い、古い観測が窓から消えたら必要値へ戻す
 - 音声の予算は `AvSyncStats.delays.audioDelay` に出る。実際に適用した音声の予算は
-  `getStats().audio.delay.targetMs` で読む
+  `MediaPlayout.getStats().audio.delay.targetMs` で読む
 
 2 つの表示時刻の差が 5 ms を超えたときは、先行する側を「後行側 - 5 ms」へ合わせる。
 基準を共有できる間は、現在の到着の分布と音声の予約から補償を毎回引き直す。過去の共有の
@@ -1800,7 +1800,6 @@ interface MediaPlayoutStats {
 | `compressionMsPerSecond`                                     | 削除。加工量は `audio.compressedMs` の累積で読む                                       |
 | `AudioDelayFeedbackObservation` / `AudioDelayFeedbackReason` | 型を削除                                                                               |
 | `AudioPlayoutTimingStats.audioDelayFeedback()`               | メソッドを削除。表示用の `snapshot()` は維持                                           |
-| `AudioPlayoutTimingStats.recordGap()` の `delayFeedbackMs`   | 引数を削除。`uncoveredMs` と `unrecoverableMs` を記録する                              |
 
 表の `audio.delay` は `MediaPlayout` の統計である。`MediaSubscriber` の `getStats()` へ同名の
 フィールドは追加していない。`MediaSubscriber` は `audio.playoutTiming` と `avSync.delays`、

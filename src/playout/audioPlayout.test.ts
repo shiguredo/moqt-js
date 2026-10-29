@@ -1374,7 +1374,3 @@ function arrivalTarget(arrivalSeconds: number): AudioPlayoutTarget {
     presentationDelaySeconds: AUDIO_PLAYOUT_DELAY_SECONDS,
   };
 }
-
-// 押し直した分だけ次の音の下限を後ろへずらす (押し直した音と次の音を重ねない)
-
-// 0 以下と前の音が無いときは何もしない

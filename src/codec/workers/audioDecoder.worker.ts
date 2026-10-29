@@ -8,7 +8,7 @@ import { OpusDecoderTimestamps } from "../opusDecoderTimestamps";
 import {
   ignoreUnknownWorkerRequest,
   type WorkerCloseRequest,
-  type WorkerDecodeRequest,
+  type AudioDecoderWorkerDecodeRequest,
   type WorkerInitRequest,
 } from "../workerMessages";
 
@@ -16,7 +16,7 @@ declare const self: DedicatedWorkerGlobalScope;
 
 type AudioDecoderWorkerRequest =
   | WorkerInitRequest<AudioDecoderConfig>
-  | WorkerDecodeRequest
+  | AudioDecoderWorkerDecodeRequest
   | WorkerCloseRequest;
 
 let audioDecoder: AudioDecoder | null = null;
@@ -65,7 +65,7 @@ self.onmessage = (event: MessageEvent<AudioDecoderWorkerRequest>) => {
       if (isCodecConfigured(audioDecoder)) {
         const chunk = new EncodedAudioChunk({
           type: message.chunkType,
-          timestamp: message.timestamp,
+          timestamp: message.timestamp ?? 0,
           duration: message.duration,
           data: message.data,
         });

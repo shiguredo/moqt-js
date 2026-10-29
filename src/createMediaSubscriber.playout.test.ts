@@ -11,15 +11,11 @@ import { MediaSubscriberImpl } from "./createMediaSubscriber";
 
 import { playoutAudioSchedulerOf, playoutTimelineOf } from "./testSupport/mediaPlayoutInternals";
 
-import { type SubscriberAudioOutput } from "./testSupport/mediaSubscriberInternals";
-
 import type { MediaPlayout } from "./playout/mediaPlayout";
 
 import type { MediaReceiverStats } from "./codec/types";
 
 import { type Catalog, type CatalogTrack } from "./msf";
-
-import { type MoqtObject } from "./dataStream";
 
 import {
   AUDIO_PLAYOUT_ARRIVAL_DELAY_SECONDS,
@@ -63,22 +59,14 @@ interface SubscriberAvSyncControl {
   readonly playout: MediaPlayout;
   audioTrackInfo: CatalogTrack | null;
   videoTrackInfo: CatalogTrack | null;
-  audioOutput: SubscriberAudioOutput | null;
   // 映像の表示時刻の検証で使う書き込み先 (実装は write だけを呼ぶ)
   videoWriter: WritableStreamDefaultWriter<VideoFrame> | null;
-  // Object から復号へ渡す時刻を確かめるため、デコーダも制御口に含める
-  audioDecoder: {
-    decode(payload: Uint8Array, type: "key" | "delta", timestamp: number, duration: number): void;
-  } | null;
-  audioDecoderConfigured: boolean;
   audioWallClockSeen: boolean;
   videoWallClockSeen: boolean;
   // トラックを解決できているかを検証するため、extractTrackInfo が読む入力も制御口に含める
   receivedCatalog: Catalog | null;
   extractTrackInfo(): void;
   createOutputStream(): void;
-  handleAudioObject(obj: MoqtObject): void;
-  handleAudioDecodedData(data: { data: AudioData }): void;
   handleVideoDecodedData(data: { frame: VideoFrame }): void;
 }
 
@@ -694,16 +682,6 @@ test("getStats: 詰めと遅れの統計をミリ秒で返す", () => {
   assert.isAbove(updated?.playoutDrops ?? 0, 0);
   assert.equal(updated?.playoutDrops, playoutAudioSchedulerOf(control.playout).drops);
 });
-
-// 完了条件: 音声の再生の観測値 (再生予定時刻・到着時刻・鳴り始める時刻・予定に対する余裕)
-// が getStats から読める。音声の語尾が聞こえないとき、再生予定に間に合っていたのかを
-// この値で切り分ける。累積のカウンタ (playoutDrops) は件数しか持たないため、長さも出す
-
-/**
- * 映像の表示時刻の検証用の制御口
- */
-
-/** 映像の表示時刻の検証で使う制御口 (書き込み先は基底の videoWriter を使う) */
 
 /**
  * write に渡ったフレームを記録する書き込み先

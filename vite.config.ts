@@ -1218,7 +1218,11 @@ export default defineConfig({
     ],
   },
   test: {
-    include: ["src/**/*.{test,prop}.ts", "devtools/src/**/*.{test,prop}.ts"],
+    include: [
+      "src/**/*.{test,prop}.ts",
+      "devtools/src/**/*.{test,prop}.ts",
+      "scripts/**/*.test.mjs",
+    ],
     // CI の runner はローカルより 10 倍程度遅く、Vitest の既定の 5 秒では再生時刻の
     // 計算を回すテストがタイムアウトすることがあった。テストの内容は変えず、遅い
     // runner でも完走できる余裕を持たせる (個別に長いテストはテスト側で指定する)

@@ -33,13 +33,17 @@ test("Opus の timestamp の復元はステレオの PCM と所有権を保ち�
       });
     const timestamp = restored.timestamp;
     const framesAfterRestore = data.numberOfFrames;
-    timestamps.submit(0);
+    timestamps.submit(null);
     const withoutTimestamp = timestamps.restore(restored);
     const unchangedTimestamp = withoutTimestamp.timestamp;
-    withoutTimestamp.close();
+    timestamps.submit(0);
+    const zeroTimestamp = timestamps.restore(withoutTimestamp);
+    const restoredZero = zeroTimestamp.timestamp;
+    zeroTimestamp.close();
     return {
       timestamp,
       unchangedTimestamp,
+      restoredZero,
       framesAfterRestore,
       maxError: actual.reduce(
         (maximum, value, index) => Math.max(maximum, Math.abs(value - (original[index] ?? 0))),
@@ -49,13 +53,14 @@ test("Opus の timestamp の復元はステレオの PCM と所有権を保ち�
   });
   expect(result.timestamp).toBe(60000);
   expect(result.unchangedTimestamp).toBe(60000);
+  expect(result.restoredZero).toBe(0);
   expect(result.framesAfterRestore).toBe(0);
   expect(result.maxError).toBe(0);
 });
 
 for (const useWorker of [false, true]) {
   for (const frameDuration of [2500, 5000, 10000, 20000, 40000, 60000]) {
-    test(`Opus の Datagram 欠落後の timestamp を保つ: Worker=${String(useWorker)}, ${String(frameDuration)} us`, async ({
+    test(`Opus の Datagram 欠落後と時刻 0 への復帰で timestamp を保つ: Worker=${String(useWorker)}, ${String(frameDuration)} us`, async ({
       page,
     }) => {
       await openPlayoutPage(page);
@@ -129,7 +134,8 @@ for (const useWorker of [false, true]) {
               });
               const [object] = decodeObjectDatagram(wire);
               if (object.payload === undefined) throw new Error("音声の payload がないこと");
-              decoder.decode(object.payload, "key", chunk.timestamp, 0);
+              // 途中で媒体時刻が 0 に戻っても、復号器の連続時計と区別して保つ。
+              decoder.decode(object.payload, "key", index === 3 ? 0 : chunk.timestamp, 0);
             }
             const deadline = performance.now() + 3000;
             while (timestamps.length < received.length && performance.now() < deadline) {
@@ -143,7 +149,7 @@ for (const useWorker of [false, true]) {
             if (error !== undefined) throw error;
             return {
               timestamps,
-              expected: received.map((chunk) => chunk.timestamp),
+              expected: received.map((chunk, index) => (index === 3 ? 0 : chunk.timestamp)),
               lengths,
               frames,
             };

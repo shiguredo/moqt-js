@@ -1,5 +1,7 @@
 /** 実音声の予約と canvas の表示を、同じ媒体時刻で照合する A/V の測定。 */
-import { loadSpeech, opusFrames } from "./playout-audio-quality.mjs";
+import { loadSpeech, opusFrames } from "./playout-audio-input.mjs";
+
+import { requireAudioFrame, hasAvCoverage } from "./playout-measurement-guards.mjs";
 
 const RATE = 48000;
 const FRAME = 960;
@@ -41,14 +43,13 @@ export async function measure(caseName, { moduleUrl, variant, seconds }) {
   const count = Math.round(seconds * 50);
   const decoded =
     name === "tone" ? null : await opusFrames(170, count, await loadSpeech(name, seconds));
-  const channels = Array.from(
-    { length: count },
-    (_, index) =>
-      decoded?.[index]?.samples ??
-      Float32Array.from(
-        { length: FRAME },
-        (_, sample) => 0.3 * Math.sin((2 * Math.PI * 170 * (index * FRAME + sample)) / RATE),
-      ),
+  const channels = Array.from({ length: count }, (_, index) =>
+    decoded === null
+      ? Float32Array.from(
+          { length: FRAME },
+          (_, sample) => 0.3 * Math.sin((2 * Math.PI * 170 * (index * FRAME + sample)) / RATE),
+        )
+      : requireAudioFrame(decoded[index], index, FRAME),
   );
   const context = new AudioContext({ sampleRate: RATE, latencyHint: "interactive" });
   const blocks = [];
@@ -219,6 +220,18 @@ export async function measure(caseName, { moduleUrl, variant, seconds }) {
         inputStepMax = Math.max(inputStepMax, Math.abs(channel[index] - channel[index - 1]));
     return {
       caseName,
+      valid:
+        stepMax > 0 &&
+        hasAvCoverage(
+          {
+            seconds,
+            capturedSamples: samples.length,
+            audioCount: activeAudio.length,
+            videoCount: activeVideo.length,
+            pairCount: pairs.filter((row) => Number.isFinite(row.skewMs)).length,
+          },
+          5,
+        ),
       variant,
       seconds,
       moduleUrl,

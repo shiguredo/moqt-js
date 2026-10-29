@@ -1,10 +1,10 @@
 /**
  * 合成信号と日本語音声による playout の測定。実ブラウザで出力を保存する。
- * 実行: vp exec node scripts/investigate-playout-audio.mjs [dsp|render|control|speech|live|long|datagram|datagramLive|relay|replay|av|avRelay|all]
+ * 実行: vp exec node scripts/investigate-playout-audio.mjs [dsp|render|speech|live|long|datagram|datagramLive|relay|replay|av|avRelay|all]
  * 生データと試聴用 WAV は investigation-logs/playout-quality-2026-10-28/ に置く。
  */
 import { execFileSync, spawn } from "node:child_process";
-import { mkdirSync, writeFileSync, readFileSync } from "node:fs";
+import { mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync } from "node:fs";
 import { createServer } from "node:net";
 import { resolve } from "node:path";
 import { chromium } from "@playwright/test";
@@ -17,7 +17,6 @@ if (
     "all",
     "dsp",
     "render",
-    "control",
     "live",
     "speech",
     "long",
@@ -34,49 +33,82 @@ if (
 const directory = resolve("investigation-logs/playout-quality-2026-10-28");
 mkdirSync(directory, { recursive: true });
 // 比較中の再実行で前の観測を失わないよう、JSON は実行ごとの場所にも保存する。
-const runDirectory = `${directory}/runs/${new Date().toISOString().replaceAll(":", "-")}-${mode}`;
+const runDirectory = `${directory}/runs/${new Date().toISOString().replaceAll(":", "-")}-${process.pid}-${mode}`;
 mkdirSync(runDirectory, { recursive: true });
-// 直前の修正を取り消さずに旧実装を読み、同じ入力で改善と回帰を比較する。
-writeFileSync(
-  `${directory}/audioTimeStretch.before.ts`,
-  execFileSync("git", ["show", "d0b944dd:src/playout/audioTimeStretch.ts"]),
-);
-writeFileSync(
-  `${directory}/audioTimeStretch.baseline.ts`,
-  execFileSync("git", ["show", "d6893cb2:src/playout/audioTimeStretch.ts"]),
-);
-// 削除した旧閉ループを扱う control モードは、当時の実クラスを Git から読む。
-for (const name of ["audioDelayFeedback", "audioPlayoutTimingStats"]) {
-  const source = execFileSync("git", ["show", `1c0dbcb9:src/playout/${name}.ts`], {
-    encoding: "utf8",
-  })
-    .replaceAll('from "./audioDelayFeedback"', 'from "./audioDelayFeedback.baseline"')
-    .replaceAll('from "./audioPlayout"', 'from "../../src/playout/audioPlayout"')
-    .replaceAll('from "./timedValues"', 'from "../../src/playout/timedValues"')
-    .replaceAll('from "./timingSummary"', 'from "../../src/playout/timingSummary"');
-  writeFileSync(`${directory}/${name}.baseline.ts`, source);
+// ソース切り替えに対応する A/V モード以外では、実装と記録の食い違いを拒否する。
+const sourceRoot = process.env.PLAYOUT_SOURCE_ROOT ?? "src";
+if (resolve(sourceRoot) !== resolve("src") && !["av", "avRelay"].includes(mode))
+  throw new Error("PLAYOUT_SOURCE_ROOT is supported only by av and avRelay");
+if (["all", "dsp", "render", "speech", "datagram"].includes(mode)) {
+  for (const [label, revision] of [
+    ["before", "d0b944dd"],
+    ["baseline", "d6893cb2"],
+  ])
+    writeFileSync(
+      `${directory}/audioTimeStretch.${label}.ts`,
+      execFileSync("git", ["show", `${revision}:src/playout/audioTimeStretch.ts`]),
+    );
 }
-const port = await new Promise((accept, reject) => {
-  const reservation = createServer();
-  reservation.on("error", reject);
-  reservation.listen(0, "127.0.0.1", () => {
-    const address = reservation.address();
-    if (address === null || typeof address === "string") {
-      reject(new Error("Failed to reserve a TCP port"));
-      return;
+
+/** 相対パスと内容を一緒に記録し、依存先を含むソース全体を識別する。 */
+function fingerprintTree(root) {
+  const files = {};
+  const visit = (prefix) => {
+    for (const entry of readdirSync(resolve(root, prefix), { withFileTypes: true }).sort(
+      (left, right) => left.name.localeCompare(right.name),
+    )) {
+      const name = prefix ? `${prefix}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) visit(name);
+      else if (entry.isFile())
+        files[name] = createHash("sha256")
+          .update(readFileSync(resolve(root, name)))
+          .digest("hex");
+      else throw new Error(`Unsupported measurement input: ${name}`);
     }
-    reservation.close(() => accept(address.port));
-  });
-});
-const server = spawn("vp", ["dev", "tests/e2e", "--host", "127.0.0.1", "--port", String(port)], {
-  stdio: "ignore",
-  detached: true,
-});
-const browser = await chromium.launch({ args: ["--autoplay-policy=no-user-gesture-required"] });
+  };
+  visit("");
+  return { sha256: createHash("sha256").update(JSON.stringify(files)).digest("hex"), files };
+}
+
+/** ブラウザの起動や解放が失敗しても、測定用サーバーのプロセス群を停止する。 */
+function stopServer(server) {
+  if (server?.pid === undefined) return;
+  try {
+    process.kill(-server.pid, "SIGTERM");
+  } catch (error) {
+    if (error.code !== "ESRCH") throw error;
+  }
+}
+
+let server;
+let browser;
 try {
+  const port = await new Promise((accept, reject) => {
+    const reservation = createServer();
+    reservation.on("error", reject);
+    reservation.listen(0, "127.0.0.1", () => {
+      const address = reservation.address();
+      if (address === null || typeof address === "string") {
+        reject(new Error("Failed to reserve a TCP port"));
+        return;
+      }
+      reservation.close(() => accept(address.port));
+    });
+  });
+  server = spawn("vp", ["dev", "tests/e2e", "--host", "127.0.0.1", "--port", String(port)], {
+    stdio: "ignore",
+    detached: true,
+  });
+  let serverFailure;
+  server.on("error", (error) => {
+    serverFailure = error;
+  });
+  browser = await chromium.launch({ args: ["--autoplay-policy=no-user-gesture-required"] });
   const origin = `http://127.0.0.1:${port}`;
   const deadline = Date.now() + 10_000;
   for (;;) {
+    if (serverFailure) throw new Error("Vite failed to spawn", { cause: serverFailure });
+    if (server.exitCode !== null) throw new Error("Vite exited before startup");
     try {
       const response = await fetch(origin);
       if (response.ok) break;
@@ -93,7 +125,6 @@ try {
   page.on("pageerror", (error) => console.error(error.message));
   await page.goto(origin);
   const harnessUrl = `${origin}/@fs${resolve("scripts/playout-audio-quality.mjs")}`;
-  const sourceRoot = process.env.PLAYOUT_SOURCE_ROOT ?? "src";
   const environment = {
     sourceRevision: execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
     baselineRevision: "d6893cb2",
@@ -106,30 +137,20 @@ try {
     runtime: process.version,
     sourceRoot,
     variant: process.env.PLAYOUT_VARIANT ?? "current",
-    sourceFiles: Object.fromEntries(
-      [
-        "audioSpliceFade.ts",
-        "codec/opusDecoderTimestamps.ts",
-        "codec/AudioDecoder.ts",
-        "codec/workers/audioDecoder.worker.ts",
-        "playout/audioPlayout.ts",
-        "playout/audioPlayoutSession.ts",
-        "playout/audioPlayoutTimingStats.ts",
-        "playout/audioTimeStretch.ts",
-        "playout/timeline.ts",
-      ].map((path) => [
-        path,
-        createHash("sha256")
-          .update(readFileSync(resolve(sourceRoot, path)))
-          .digest("hex"),
-      ]),
-    ),
+    sourceTree: fingerprintTree(sourceRoot),
+    inputSourceTree: resolve(sourceRoot) === resolve("src") ? null : fingerprintTree("src"),
+    speechInputs: existsSync(`${directory}/speech-input`)
+      ? fingerprintTree(`${directory}/speech-input`)
+      : null,
     harnessFiles: Object.fromEntries(
       [
         "scripts/investigate-playout-audio.mjs",
         "scripts/playout-audio-quality.mjs",
         "scripts/playout-av-latency.mjs",
         "scripts/playout-av-relay.mjs",
+        "scripts/playout-audio-input.mjs",
+        "scripts/playout-measurement-guards.mjs",
+        "scripts/prepare-playout-japanese.mjs",
       ].map((path) => [path, createHash("sha256").update(readFileSync(path)).digest("hex")]),
     ),
   };
@@ -138,7 +159,6 @@ try {
   for (const stage of [
     "dsp",
     "render",
-    "control",
     "speech",
     "live",
     "long",
@@ -227,32 +247,51 @@ try {
       // 保存した到着列を使う再投入では、実回線へ再接続せずに同じ PCM と時刻を渡す。
       const traceInput =
         stage === "replay" ? readFileSync(`${directory}/${caseName}.json`, "utf8") : null;
-      const result = await page.evaluate(
-        async ({ harnessUrl, stage, caseName, relayUrl, arrivalTrace, avOptions }) => {
-          if (stage === "av" || stage === "avRelay") {
-            const file = stage === "av" ? "./playout-av-latency.mjs" : "./playout-av-relay.mjs";
-            const harness = await import(new URL(file, harnessUrl).href);
-            return harness.measure(caseName, { ...avOptions, relayUrl });
-          }
-          const harness = await import(harnessUrl);
-          if (stage === "render") return harness.render();
-          if (stage === "replay") return harness.replay(arrivalTrace);
-          return harness[stage](caseName, relayUrl);
-        },
-        {
-          harnessUrl,
-          stage,
-          caseName,
-          relayUrl: process.env.PLAYOUT_RELAY_URI,
-          arrivalTrace: traceInput === null ? null : JSON.parse(traceInput).arrivalTrace,
-          avOptions: {
-            moduleUrl: `${origin}/@fs${resolve(process.env.PLAYOUT_SOURCE_ROOT ?? "src")}/playout/mediaPlayout.ts`,
-            variant: process.env.PLAYOUT_VARIANT ?? "current",
-            seconds: Number(process.env.PLAYOUT_AV_SECONDS ?? (stage === "avRelay" ? 20 : 10)),
-            certificateHash: process.env.PLAYOUT_SERVER_CERTIFICATE_HASH,
-          },
-        },
-      );
+      const seconds = Number(process.env.PLAYOUT_AV_SECONDS ?? (stage === "avRelay" ? 20 : 10));
+      if (!Number.isFinite(seconds) || seconds < 2 || seconds > 120)
+        throw new Error("PLAYOUT_AV_SECONDS must be between 2 and 120");
+      let watchdog;
+      let result;
+      try {
+        result = await Promise.race([
+          page.evaluate(
+            async ({ harnessUrl, stage, caseName, relayUrl, arrivalTrace, avOptions }) => {
+              if (stage === "av" || stage === "avRelay") {
+                const file = stage === "av" ? "./playout-av-latency.mjs" : "./playout-av-relay.mjs";
+                const harness = await import(new URL(file, harnessUrl).href);
+                return harness.measure(caseName, { ...avOptions, relayUrl });
+              }
+              const harness = await import(harnessUrl);
+              if (stage === "render") return harness.render();
+              if (stage === "replay") return harness.replay(arrivalTrace);
+              return harness[stage](caseName, relayUrl);
+            },
+            {
+              harnessUrl,
+              stage,
+              caseName,
+              relayUrl: process.env.PLAYOUT_RELAY_URI,
+              arrivalTrace: traceInput === null ? null : JSON.parse(traceInput).arrivalTrace,
+              avOptions: {
+                moduleUrl: `${origin}/@fs${resolve(process.env.PLAYOUT_SOURCE_ROOT ?? "src")}/playout/mediaPlayout.ts`,
+                variant: process.env.PLAYOUT_VARIANT ?? "current",
+                seconds,
+                certificateHash: process.env.PLAYOUT_SERVER_CERTIFICATE_HASH,
+              },
+            },
+          ),
+          new Promise((_, reject) => {
+            watchdog = setTimeout(
+              () => reject(new Error(`Measurement timed out: ${caseName}`)),
+              30000 + (stage === "long" ? 60000 : seconds * 1000) * 2,
+            );
+          }),
+        ]);
+      } finally {
+        clearTimeout(watchdog);
+      }
+      if (stage === "av" || stage === "avRelay")
+        assert.ok(result.valid, "配信中にエラーが無く、十分な音声と映像を収録できたこと");
       // 空の収録や、別の失敗で音が処理されなかった結果を正常値として残さない。
       if (stage === "live" || stage === "long" || stage === "datagramLive") {
         assert.ok(
@@ -309,13 +348,14 @@ try {
         writeFileSync(`${directory}/${recording.name}.wav`, buffer);
         writeFileSync(`${runDirectory}/${recording.name}.wav`, buffer);
       }
-      if (stage === "avRelay")
-        assert.ok(metrics.valid, "配信中にエラーが無く、十分な音声と映像を収録できたこと");
       console.log(`測定完了: ${caseName}`);
     }
   }
   console.log(`測定結果: ${directory}`);
 } finally {
-  await browser.close();
-  if (server.pid !== undefined) process.kill(-server.pid, "SIGTERM");
+  try {
+    await browser?.close();
+  } finally {
+    stopServer(server);
+  }
 }

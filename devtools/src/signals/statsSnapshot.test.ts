@@ -262,10 +262,10 @@ test("buildSubscriberStats: 音声の再生の観測値を返す", () => {
   );
 });
 
-test("buildSubscriberStats: Audio Playback の穴・段差・drain・上限を JSON に出す", () => {
+test("buildSubscriberStats: Audio Playback の穴・段差・drain・再生予算を JSON に出す", () => {
   // 画面の Audio Playback Timing と Audio に出していた値を、Copy for LLM の JSON でも
-  // 同じ名前で読めるようにする。値はスナップショットをそのまま写し、上限と圧縮の速さだけ
-  // A/V 同期の audioDelay から写す
+  // 同じ名前で読めるようにする。値はスナップショットをそのまま写し、再生予算の内訳は
+  // 再生の入口の audioDelay から写す
   const instance = createSubscriberInstance("audio-playout-instruments");
   const playoutTiming = {
     ...EMPTY_AUDIO_PLAYOUT_TIMING,

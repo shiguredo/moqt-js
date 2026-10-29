@@ -1,7 +1,5 @@
 /** 実ブラウザだけで読み込む調査用の音源、解析、収録。モックは使わない。 */
 import { compressSamples, concealSamples } from "../src/playout/audioTimeStretch.ts";
-import * as before from "../investigation-logs/playout-quality-2026-10-28/audioTimeStretch.before.ts";
-import * as baseline from "../investigation-logs/playout-quality-2026-10-28/audioTimeStretch.baseline.ts";
 import {
   crossFadeHead,
   fadeSpliceEdge,
@@ -14,11 +12,18 @@ import {
   AudioPlayoutScheduler,
   concealmentEndGain,
 } from "../src/playout/audioPlayout.ts";
-import { encodeObjectDatagram, decodeObjectDatagram } from "../src/dataStream/datagram.ts";
-import { OpusDecoderTimestamps } from "../src/codec/opusDecoderTimestamps.ts";
-import { AudioDelayFeedback } from "../investigation-logs/playout-quality-2026-10-28/audioDelayFeedback.baseline.ts";
-import { AudioPlayoutTimingStats } from "../investigation-logs/playout-quality-2026-10-28/audioPlayoutTimingStats.baseline.ts";
 
+import { frameAt, opusFrames, loadSpeech } from "./playout-audio-input.mjs";
+import { requireAudioFrame } from "./playout-measurement-guards.mjs";
+
+// 旧 DSP の比較は、その比較を実行するときだけ読み込む。
+async function comparisons() {
+  const [before, baseline] = await Promise.all([
+    import("../investigation-logs/playout-quality-2026-10-28/audioTimeStretch.before.ts"),
+    import("../investigation-logs/playout-quality-2026-10-28/audioTimeStretch.baseline.ts"),
+  ]);
+  return { before, baseline };
+}
 const RATE = 48000;
 const FRAME = 960;
 const db = (ratio) => 10 * Math.log10(Math.max(1e-16, ratio));
@@ -27,31 +32,6 @@ const percentile = (values, fraction) => {
   const sorted = [...values].sort((left, right) => left - right);
   return sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * fraction))] ?? 0;
 };
-
-/** 定常音と、周期推定に都合がよすぎない有声 / 無声混合の合成音声を用意する。 */
-function signal(position, rate, frequency, kind = "sine") {
-  const time = position / rate;
-  const phase = 2 * Math.PI * frequency * time;
-  if (kind === "sine") return 0.3 * Math.sin(phase);
-  let sample = 0;
-  for (let harmonic = 1; harmonic <= 20 && harmonic * frequency < rate / 2; harmonic++) {
-    const formant = 0.2 + Math.exp(-(((harmonic * frequency - 1000) / 650) ** 2));
-    sample += (formant / harmonic) * Math.sin(harmonic * phase);
-  }
-  if (kind === "voiced") return sample * 0.35;
-  // 300 ms の音節と 100 ms の休止。定常トーンより相関が崩れやすい音源である。
-  const syllable = time % 0.4;
-  const envelope = syllable < 0.3 ? Math.sin((Math.PI * syllable) / 0.3) ** 2 : 0;
-  const breath = Math.sin(2 * Math.PI * 3251 * time) * Math.sin(2 * Math.PI * 4789 * time);
-  return envelope * (sample * 0.35 + breath * 0.025);
-}
-
-function frameAt(index, rate, frequency, kind = "sine") {
-  const count = Math.round(rate / 50);
-  return Float32Array.from({ length: count }, (_, offset) =>
-    signal(index * count + offset, rate, frequency, kind),
-  );
-}
 
 /** 同じ媒体位置に対応する波形との差。全体の遅延や伸縮を音質の誤差へ混ぜない。 */
 function frameError(actual, expected) {
@@ -116,6 +96,7 @@ function summarize(samples, rate) {
 }
 
 export async function dsp() {
+  const { before, baseline } = await comparisons();
   const compression = [];
   const concealment = [];
   const stereo = [];
@@ -255,131 +236,6 @@ export async function dsp() {
 }
 
 /** 実 WebCodecs で Opus を一往復させた波形。入力と復号後の timestamp は区別する。 */
-export async function opusFrames(
-  frequency = 170,
-  count = 150,
-  inputSamples = null,
-  transport = null,
-) {
-  const encoded = [];
-  const decoded = [];
-  let failure = null;
-  const encoder = new AudioEncoder({
-    output: (chunk) => encoded.push(chunk),
-    error: (error) => {
-      failure = error;
-    },
-  });
-  encoder.configure({ codec: "opus", sampleRate: RATE, numberOfChannels: 1, bitrate: 64000 });
-  for (let index = 0; index < count; index++) {
-    const data = new AudioData({
-      format: "f32-planar",
-      sampleRate: RATE,
-      numberOfChannels: 1,
-      numberOfFrames: FRAME,
-      timestamp: index * 20000,
-      data:
-        inputSamples === null
-          ? frameAt(index, RATE, frequency, "speech")
-          : inputSamples.slice(index * FRAME, (index + 1) * FRAME),
-    });
-    encoder.encode(data);
-    data.close();
-  }
-  await encoder.flush();
-  encoder.close();
-  const timestamps = new OpusDecoderTimestamps(transport !== null);
-  const rawOutput = [];
-  const decoder = new AudioDecoder({
-    output: (data) => {
-      rawOutput.push(data.timestamp);
-      data = timestamps.restore(data);
-      const samples = new Float32Array(data.numberOfFrames);
-      data.copyTo(samples, { planeIndex: 0, format: "f32-planar" });
-      decoded.push({
-        timestamp: data.timestamp,
-        samples,
-        packetIndex: packetIndices.get(data.timestamp),
-      });
-      data.close();
-    },
-    error: (error) => {
-      failure = error;
-    },
-  });
-  decoder.configure({ codec: "opus", sampleRate: RATE, numberOfChannels: 1 });
-  const packetIndices = new Map(encoded.map((chunk, index) => [chunk.timestamp, index]));
-  const transportStats = {
-    objects: encoded.length,
-    packets: 0,
-    lostPackets: 0,
-    lostObjects: 0,
-    wireBytes: 0,
-    received: [],
-  };
-  let randomState = 0x74219;
-  for (const [index, chunk] of encoded.entries()) {
-    if (transport === null) {
-      decoder.decode(chunk);
-      continue;
-    }
-    const payload = new Uint8Array(chunk.byteLength);
-    chunk.copyTo(payload);
-    const wire = encodeObjectDatagram({
-      type: 0x0c,
-      trackAlias: 1n,
-      groupId: BigInt(index),
-      objectId: 0n,
-      payload,
-    });
-    let received = false;
-    for (let copy = 0; copy < transport.copies; copy++) {
-      transportStats.packets++;
-      transportStats.wireBytes += wire.length;
-      randomState = (randomState * 1664525 + 1013904223) >>> 0;
-      const randomLoss =
-        transport.pattern.startsWith("random") &&
-        randomState / 4294967296 < Number(transport.pattern.slice(6)) / 100;
-      const burstLength = transport.pattern.startsWith("burst")
-        ? Number(transport.pattern.slice(5))
-        : 0;
-      // 同時送信の複製は同じ連続損失に巻き込まれる。先頭と flush の末尾は比較用に残す。
-      const burstLoss = burstLength > 0 && index % 50 >= 20 && index % 50 < 20 + burstLength;
-      if (index > 0 && index < encoded.length - 1 && (randomLoss || burstLoss)) {
-        transportStats.lostPackets++;
-        continue;
-      }
-      if (received) continue;
-      const [object, consumed] = decodeObjectDatagram(wire);
-      if (consumed !== wire.length || object.groupId !== BigInt(index))
-        throw new Error("Datagram round trip failed");
-      timestamps.submit(chunk.timestamp);
-      decoder.decode(
-        new EncodedAudioChunk({
-          type: chunk.type,
-          timestamp: chunk.timestamp,
-          duration: chunk.duration,
-          data: object.payload,
-        }),
-      );
-      transportStats.received.push({ index, timestamp: chunk.timestamp });
-      received = true;
-    }
-    if (!received) transportStats.lostObjects++;
-  }
-  await decoder.flush();
-  decoder.close();
-  if (failure !== null) throw new Error("Opus codec failed", { cause: failure });
-  decoded.transportStats = transportStats;
-  if (transport !== null)
-    transportStats.output = decoded.map((frame) => ({
-      timestamp: frame.timestamp,
-      packetIndex: frame.packetIndex,
-    }));
-  if (transport !== null) transportStats.rawOutput = rawOutput;
-  return decoded;
-}
-
 function isMissingFrame(pattern, index) {
   return (
     (pattern === "loss20" && index > 0 && index % 20 === 0) ||
@@ -398,6 +254,7 @@ async function renderCase(
   recordings,
   inducedLosses,
 ) {
+  const { baseline } = await comparisons();
   const context = new OfflineAudioContext(1, RATE * (speechName === null ? 4 : 8), RATE);
   const scheduler = new AudioPlayoutScheduler(
     treatment === "no-compress" ? { stretchMinSeconds: 10 } : {},
@@ -672,31 +529,6 @@ export async function render(speechName = null) {
   return { speechName, opusFrames: opus.length, cases, resampling, recordings };
 }
 
-/** 公開発話 / 日本語読み上げ音源を 6 秒の連続入力にする。短い音源の間には休止を置く。 */
-export async function loadSpeech(name, durationSeconds = 6) {
-  const [sourceName, part] = String(name).split(":");
-  const offset = Number(part ?? 0) * RATE * 6;
-  const url = new URL(
-    `../investigation-logs/playout-quality-2026-10-28/speech-input/${sourceName}.wav`,
-    import.meta.url,
-  );
-  const response = await fetch(url);
-  if (!response.ok) throw new Error(`Japanese speech source is unavailable: ${String(name)}`);
-  const context = new OfflineAudioContext(1, RATE, RATE);
-  const buffer = await context.decodeAudioData(await response.arrayBuffer());
-  const original = buffer.getChannelData(0);
-  const samples = new Float32Array(RATE * durationSeconds);
-  for (let index = 0; index < samples.length; index++) {
-    samples[index] =
-      original[
-        original.length < samples.length
-          ? index % (original.length + Math.round(RATE * 0.2))
-          : index + offset
-      ] ?? 0;
-  }
-  return samples;
-}
-
 export async function speech(name) {
   return render(name);
 }
@@ -749,113 +581,6 @@ export async function datagram(caseName) {
     cases,
     recordings,
   };
-}
-
-/**
- * 実クラスを合成時計で駆動し、経路が回復した後に制御自身が作る加工量を分ける。
- * ブラウザの時計は差し替えず、時刻を引数に取る制御部分だけを測定する。
- */
-export async function control() {
-  const cases = [];
-  for (const pattern of ["clean", "single-stall"]) {
-    for (const treatment of ["adaptive", "hold-after-5s", "fixed-80", "arrival-only"]) {
-      const scheduler = new AudioPlayoutScheduler();
-      const feedback = new AudioDelayFeedback();
-      const timing = new AudioPlayoutTimingStats(120000, 0);
-      let previous = null;
-      let gapCount = 0;
-      let gapMs = 0;
-      let lastCompressed = 0;
-      let heldTarget = null;
-      let priorTarget = null;
-      let targetChanges = 0;
-      const series = [];
-      const recentDelays = [];
-      for (let index = 0; index < 3000; index++) {
-        const mediaMs = 1000 + index * 20;
-        const arrivalMs = pattern === "single-stall" && index >= 50 && index < 59 ? 2180 : mediaMs;
-        const targetMs = treatment === "fixed-80" ? 80 : (heldTarget ?? feedback.targetDelayMs(50));
-        if (priorTarget !== null && targetMs !== priorTarget) targetChanges++;
-        priorTarget = targetMs;
-        const decision = scheduler.schedule((arrivalMs + 30) / 1000, mediaMs * 1000, 0.02, {
-          targetStartSeconds: (mediaMs + targetMs) / 1000,
-          enforceTarget: treatment !== "arrival-only",
-          arrivalSeconds: arrivalMs / 1000,
-          delaySeconds: targetMs / 1000,
-          arrivalDelaySeconds: treatment === "arrival-only" ? 0.14 : 0.08,
-          presentationDelaySeconds: targetMs / 1000,
-        });
-        if (decision.kind !== "play") throw new Error("Unexpected drop in control experiment");
-        const input = frameAt(index, RATE, 170);
-        const processed =
-          decision.compressSeconds > 0
-            ? compressSamples([input], RATE, Math.round(decision.compressSeconds * RATE))
-            : { channels: [input], lengthChangeSamples: 0 };
-        scheduler.confirmStretch(-processed.lengthChangeSamples / RATE);
-        const concealed =
-          previous !== null && decision.gapSeconds > 0
-            ? concealSamples(previous, RATE, decision.gapSeconds)
-            : { generatedSamples: 0 };
-        scheduler.confirmConcealment(concealed.generatedSamples / RATE);
-        const uncoveredMs = Math.max(
-          0,
-          decision.totalGapSeconds * 1000 - (concealed.generatedSamples / RATE) * 1000,
-        );
-        if (uncoveredMs > 500 / RATE) {
-          gapCount++;
-          gapMs += uncoveredMs;
-          timing.recordGap({
-            uncoveredMs,
-            unrecoverableMs: decision.unrecoverableGapSeconds * 1000,
-          });
-        }
-        const startMs = decision.startAt * 1000;
-        timing.recordPlay(
-          arrivalMs,
-          mediaMs + targetMs,
-          startMs,
-          (processed.channels[0].length / RATE) * 1000,
-          decision.basis,
-        );
-        const observation = timing.audioDelayFeedback(arrivalMs, 1000);
-        const compressionMs = scheduler.compressed * 1000 - lastCompressed;
-        lastCompressed = scheduler.compressed * 1000;
-        if (heldTarget === null)
-          feedback.update({
-            ...observation,
-            jitterTargetMs: 50,
-            compressionMs,
-            latenessMs:
-              observation.latenessMs === null
-                ? null
-                : { ...observation.latenessMs, p50: Math.max(0, observation.latenessMs.p50 - 20) },
-          });
-        if (treatment === "hold-after-5s" && index === 250) heldTarget = feedback.targetDelayMs(50);
-        if (index % 50 === 0)
-          series.push({
-            second: index / 50,
-            targetMs,
-            compressedMs: lastCompressed,
-            gapCount,
-            gapMs,
-            ...feedback.snapshot(50),
-          });
-        if (index >= 2500) recentDelays.push(startMs - arrivalMs);
-        previous = processed.channels;
-      }
-      cases.push({
-        pattern,
-        treatment,
-        targetChanges,
-        compressedMs: scheduler.compressed * 1000,
-        gapCount,
-        gapMs,
-        finalDelayP50Ms: percentile(recentDelays, 0.5),
-        series,
-      });
-    }
-  }
-  return { cases };
 }
 
 export async function live(caseName) {
@@ -950,7 +675,10 @@ export async function live(caseName) {
       if (caseName === "tone-gap" && index > 0 && index % 20 === 0) continue;
       if (caseName.startsWith("datagram") && !decodedByPacket.has(index)) continue;
       const timestamp = epoch + index * 20000;
-      const samples = decodedByPacket?.get(index)?.samples ?? frameAt(index, RATE, 170);
+      const samples =
+        decodedByPacket === null
+          ? frameAt(index, RATE, 170)
+          : requireAudioFrame(decodedByPacket.get(index), index, FRAME);
       const data = new AudioData({
         format: "f32-planar",
         sampleRate: RATE,

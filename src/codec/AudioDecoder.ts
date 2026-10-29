@@ -151,7 +151,12 @@ export class AudioDecoderWrapper {
   /**
    * エンコードされたオーディオチャンクをデコードする
    */
-  decode(data: Uint8Array, type: "key" | "delta", timestamp: number, duration: number): void {
+  decode(
+    data: Uint8Array,
+    type: "key" | "delta",
+    timestamp: number | null,
+    duration: number,
+  ): void {
     if (!this.configured) {
       warnCodecNotConfigured("AudioDecoderWrapper");
       return;
@@ -174,7 +179,7 @@ export class AudioDecoderWrapper {
     } else if (isCodecConfigured(this.decoder)) {
       const chunk = new EncodedAudioChunk({
         type,
-        timestamp,
+        timestamp: timestamp ?? 0,
         duration,
         data,
       });

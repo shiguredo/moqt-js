@@ -1459,8 +1459,8 @@ export class PlayoutTimeline {
   /**
    * 共有する表示時刻の下限から、各トラックへ足す遅延を求め直す
    *
-   * 先行側は `SYNC_MIN_DELTA_MS` だけ手前へ寄せる。共有の下限を戻す速さは
-   * `updateSyncDelays` が制限し、自分の遅延が増えた分は補償から差し引く。
+   * 先行側は `SYNC_MIN_DELTA_MS` だけ手前へ寄せ、現在の自然な表示の遅れから毎回求め直す。
+   * 基準を共有できないときだけ `updateSyncDelays` が残った補償を徐々に戻す。
    *
    * @param naturalMs - 同期が足した分を除いた、トラックごとの表示の遅れ (ミリ秒)
    */

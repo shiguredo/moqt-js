@@ -46,13 +46,18 @@ export interface AudioEncoderWorkerFlushRequest {
   type: "flush";
 }
 
-/** Wrapper → Worker: エンコード済みチャンクのデコード (映像 / 音声で同形) */
+/** Wrapper → Worker: エンコード済み映像チャンクのデコード */
 export interface WorkerDecodeRequest {
   type: "decode";
   data: ArrayBuffer;
   chunkType: "key" | "delta";
   timestamp: number;
   duration: number;
+}
+
+/** 音声は LOC TIMESTAMP の欠如を null で伝え、媒体時刻 0 と区別する。 */
+export interface AudioDecoderWorkerDecodeRequest extends Omit<WorkerDecodeRequest, "timestamp"> {
+  timestamp: number | null;
 }
 
 /** Wrapper → Worker: キーフレーム待ちの再開 */

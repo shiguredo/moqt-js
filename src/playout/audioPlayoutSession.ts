@@ -455,7 +455,6 @@ export class AudioPlayoutSession {
           targetMs,
           arrivalMs,
         });
-        // 並べすぎで捨てた量は、目標を増やす判断にも使う
         return { status: "dropped", rebased, reason: decision.reason, catchUpStarted };
       }
       // 鳴らすと決めたが、鳴らし始める前に失敗したら数える (catch 句)
@@ -568,9 +567,9 @@ export class AudioPlayoutSession {
   /**
    * 時間圧縮・補間・フェードを行い、実際に鳴らすバッファを予約する
    *
-   * 補間で埋める隙間は、補間の末尾を 2 ms で 0 へ落とし、直後の音声の先頭を 2 ms で
-   * フェードインする。予約できる最も早い時刻より前に無音がある場合は、補間の先頭も
-   * フェードインする。
+   * 補間の末尾と実音の先頭はクロスフェードでつなぐ。予約できる最も早い時刻より前に
+   * 無音がある場合は、補間の先頭をフェードインする。後続を連続予約できない末尾は
+   * 出力の envelope で 0 へ落とす。
    * 穴が無い通常の境界にはフェードを入れない (20 ms 周期の振幅変調になるため)。
    * 実際に無音で出る穴、予約の追い越し、バッファ境界の段差は計器へ記録する
    *
@@ -982,7 +981,8 @@ export class AudioPlayoutSession {
     const cancelled = contiguous && output.context.currentTime < previous.tailStartSeconds;
     if (cancelled) {
       previous.gain.gain.cancelScheduledValues(previous.tailStartSeconds);
-      previous.gain.gain.setValueAtTime(1, previous.tailStartSeconds);
+      // 短いバッファでは先頭 ramp の終点も同時に消えるため、ramp として復元する。
+      previous.gain.gain.linearRampToValueAtTime(1, previous.tailStartSeconds);
     } else if (previous !== null) {
       // 取り消せなかった末尾は実際に 0 へ落ちる。計器も生の末尾の値を使わない。
       this.lastScheduledTailSample = 0;
@@ -991,14 +991,16 @@ export class AudioPlayoutSession {
     source.connect(gain);
     gain.connect(output.destination);
     const fadeSeconds = Math.min(AUDIO_SPLICE_FADE_MS / 1000, durationSeconds / 2);
+    const headEndSeconds = startSeconds + fadeSeconds;
     if (previous === null || (contiguous && !cancelled)) {
       // start の端数時刻で source が 1 サンプル早く出ても、既定の gain 1 を通さない。
       gain.gain.value = 0;
       gain.gain.setValueAtTime(0, startSeconds);
-      gain.gain.linearRampToValueAtTime(1, startSeconds + fadeSeconds);
+      gain.gain.linearRampToValueAtTime(1, headEndSeconds);
     }
     const endSeconds = startSeconds + durationSeconds;
-    const tailStartSeconds = endSeconds - fadeSeconds;
+    // 半分ずつのフェードでは丸め誤差で tail が head より前に入らないようにする。
+    const tailStartSeconds = Math.max(headEndSeconds, endSeconds - fadeSeconds);
     gain.gain.setValueAtTime(1, tailStartSeconds);
     gain.gain.linearRampToValueAtTime(0, endSeconds);
     this.lastScheduledEnvelope = { gain, tailStartSeconds, endSeconds };
