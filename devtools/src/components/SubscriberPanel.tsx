@@ -75,11 +75,9 @@ export function SubscriberPanel({
   canRemove = false,
 }: SubscriberPanelProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const audioRef = useRef<HTMLAudioElement>(null);
   const { startSubscribing, stopSubscribing, requestNewGroup, toggleAudioPlayback } = useSubscriber(
     subscriberId,
     canvasRef,
-    audioRef,
   );
 
   // Request New Group を押して送れた直後だけ、送ったことをボタンに出す。押しても何も
@@ -453,9 +451,6 @@ export function SubscriberPanel({
           levelActive={instance.audioSubscriber.value !== null}
           testIdPrefix="audio"
         />
-
-        {/* 受信した音声の再生先。表示せず、srcObject の設定先としてだけ使う */}
-        <audio ref={audioRef} data-testid="subscriber-audio-element" class="hidden" />
 
         {/* Video。Audio と同じ枠で囲み、映像からは読み取れない値 (表示 fps、受信から
             表示までと復号の遅延、捨てたフレーム数) をヘッダーに出す */}
@@ -907,10 +902,7 @@ function SubscriberStats({ statsSignal }: { statsSignal: ReadonlySignal<Subscrib
         </StatSection>
 
         <StatSection title="Output" help={AUDIO_OUTPUT_HELP} testId="subscriber-audio-output">
-          {/* 音声を鳴らす AudioContext の状態と <audio> 要素のイベント。どちらも playout の
-              計器からは見えない層であり、計器が 0 のまま音が途切れるときに、AudioContext が
-              止まっていたのか、要素より下流で起きているのかを切り分ける
-              (docs/AUDIO_GLITCH_CAUSES.md の B4 / B7) */}
+          {/* 再生キューの待ちと、Context および出力機器が報告する遅延を区別する。 */}
           <StatList
             items={[
               {
@@ -934,25 +926,14 @@ function SubscriberStats({ statsSignal }: { statsSignal: ReadonlySignal<Subscrib
                 testId: "subscriber-audio-output-context-sample-rate",
               },
               {
-                // <audio> 要素がバッファ待ちで再生を止めた回数 (累積)
-                label: "elementWaitingCount",
-                value: stats.audioOutput.elementWaitingCount,
-                tone: "warn",
-                testId: "subscriber-audio-output-element-waiting-count",
+                label: "baseLatencyMs",
+                value: formatMs(stats.audioOutput.baseLatencyMs),
+                testId: "subscriber-audio-output-base-latency",
               },
               {
-                // <audio> 要素でメディアデータの到着が止まった回数 (累積)
-                label: "elementStalledCount",
-                value: stats.audioOutput.elementStalledCount,
-                tone: "warn",
-                testId: "subscriber-audio-output-element-stalled-count",
-              },
-              {
-                // <audio> 要素がストリームを再生できなかった回数 (累積)
-                label: "elementErrorCount",
-                value: stats.audioOutput.elementErrorCount,
-                tone: "error",
-                testId: "subscriber-audio-output-element-error-count",
+                label: "outputLatencyMs",
+                value: formatMs(stats.audioOutput.outputLatencyMs),
+                testId: "subscriber-audio-output-output-latency",
               },
             ]}
           />

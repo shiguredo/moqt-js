@@ -445,15 +445,15 @@ export const AUDIO_PLAYOUT_TIMING_HELP: SectionHelp = {
     },
   ],
   notes: [
-    "Start times map scheduled AudioContext positions onto the output clock using getOutputTimestamp() when available. Fallback uses currentTime and performance.now(); check A/V Sync audioClockFallback for the active mapping. These are timing estimates, including the mapped AudioContext output position when available. Buffering in a downstream <audio> element and physical speaker output are not measured.",
+    "Start times map scheduled AudioContext positions onto the output clock using getOutputTimestamp() when available. Fallback uses currentTime and performance.now(); check A/V Sync audioClockFallback for the active mapping. These are timing estimates, including the mapped AudioContext output position when available. DevTools uses direct AudioContext output; physical speaker output is not measured.",
     "Only the subscriber's own pipeline is measured. A sound that never arrives or never gets decoded does not appear here (compare audio.objectsReceived / chunksDecoded with audio.playoutTiming.playedFrames).",
   ],
 };
 
-/** subscriber の Audio Output (AudioContext と <audio> 要素) の診断 */
+/** subscriber の Audio Output (AudioContext と出力機器) の診断 */
 export const AUDIO_OUTPUT_HELP: SectionHelp = {
   summary:
-    "State of the AudioContext that plays the received audio and the events of the <audio> element the stream is routed through. The context state and its sample rate are the playback side; the element counters are below the playout pipeline that Audio Playback Timing measures. Read them when the playout instruments stay at 0 but the sound still breaks up.",
+    "State, sample rate and latency estimates of the AudioContext that plays the received audio directly. Compare output device latency with network and scheduled playout delays when diagnosing slow playback.",
   items: [
     {
       term: "contextState",
@@ -469,19 +469,19 @@ export const AUDIO_OUTPUT_HELP: SectionHelp = {
       description: `Sample rate (Hz) the AudioContext was created with. Playback requests a rate matching the decoded audio; if that context cannot be created, it falls back to the browser's device-default rate. The warning audioContextNarrowband appears at ${AUDIO_CONTEXT_NARROWBAND_SAMPLE_RATES.join(" or ")} Hz. This value does not measure the physical output device's sample rate.`,
     },
     {
-      term: "elementWaitingCount / elementStalledCount",
+      term: "baseLatencyMs",
       description:
-        "waiting and stalled events of the <audio> element (cumulative, counted from the start of each playback). waiting fires when the element stops to buffer before playing, and stalled when the media data stops arriving. Both happen below the playout pipeline, so they separate an interruption caused by the element, its resampling, the output device or Bluetooth from one inside the playout.",
+        "AudioContext.baseLatency in milliseconds: processing delay from the context to the audio subsystem. This is separate from network and playout queue delays.",
     },
     {
-      term: "elementErrorCount",
+      term: "outputLatencyMs",
       description:
-        "error events of the <audio> element (cumulative). Above 0 means the element could not play the stream, for example because the output device failed.",
+        "AudioContext.outputLatency in milliseconds: the browser's estimate of output device latency. - when unavailable or playback is stopped. This is an estimate, not a physical loopback measurement.",
     },
   ],
   notes: [
     "The AudioContext sample rate is fixed when the context is created. If it does not match the decoded frames, the warning audioSampleRateMismatch appears together with sampleRateMismatchFrames in Audio Playback Timing (A1 in docs/AUDIO_GLITCH_CAUSES.md).",
-    "These values observe the AudioContext state and the downstream <audio> element separately from scheduled audio metrics. Element buffering and physical speaker output are not measured by the playout clock mapping. Compare received and decoded frame counts as well when locating an interruption.",
+    "Playback connects directly to AudioContext.destination. Its output timestamp and selected output device refer to the same output path. Device latency is reported separately from received and scheduled audio metrics.",
   ],
 };
 

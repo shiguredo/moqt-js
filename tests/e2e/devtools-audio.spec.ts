@@ -76,32 +76,28 @@ test("不正な音声の設定は既定値のままにし、有効な値は反�
   await expect(page.getByTestId("audio-sample-rate")).toHaveValue("48000");
 });
 
-test("音声再生トグルは既定で無効で、有効にすると audio 要素へ出力を繋ぐ", async ({ page }) => {
+test("音声再生トグルは既定で無効で、有効にすると直接出力を始める", async ({ page }) => {
   await page.goto(DEVTOOLS_URL);
 
   const audioElement = page.getByTestId("subscriber-audio-element");
   const toggle = page.getByTestId("subscriber-audio-playback-toggle");
 
-  // 既定では再生しない (srcObject が未設定でボタンは押されていない)
+  // 既定では再生しない。直接出力のため audio 要素自体を作らない。
   await expect(toggle).toHaveAttribute("aria-pressed", "false");
   await expect(toggle).toHaveText("Play Audio");
-  await expect(audioElement).toHaveJSProperty("paused", true);
-  await expect(audioElement).toHaveJSProperty("srcObject", null);
+  await expect(audioElement).toHaveCount(0);
 
-  // トグルを有効にすると、devtools 側で組んだ MediaStreamAudioDestinationNode の
-  // ストリームが srcObject に設定され、再生状態になる
+  // 別の再生バッファを挟まず Context の destination へ出す。audio 要素には繋がない。
   await toggle.click();
   await expect(toggle).toHaveAttribute("aria-pressed", "true");
   await expect(toggle).toHaveText("Stop Audio");
-  await expect(audioElement).not.toHaveJSProperty("srcObject", null);
-  await expect(audioElement).toHaveJSProperty("paused", false);
+  await expect(audioElement).toHaveCount(0);
 
-  // 無効に戻すと srcObject が外れて停止する
+  // 無効に戻すと Context が閉じられ、トグルも戻る。
   await toggle.click();
   await expect(toggle).toHaveAttribute("aria-pressed", "false");
   await expect(toggle).toHaveText("Play Audio");
-  await expect(audioElement).toHaveJSProperty("srcObject", null);
-  await expect(audioElement).toHaveJSProperty("paused", true);
+  await expect(audioElement).toHaveCount(0);
 });
 
 test("ダミー音声のストリームは指定したチャンネル数で実際にサンプルを流す", async ({ page }) => {

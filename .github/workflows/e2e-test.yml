@@ -89,13 +89,14 @@ jobs:
 
       # 実リレーの E2E は runner の負荷で計測が揺れ、まれに前提から外れて失敗する。
       # ジョブの上限は延ばさず、1 回分の時間に収まる上限で 1 回だけやり直す
+      # 回帰テスト追加後は 8 分を超えるため、20 分のジョブ内で各試行に 9 分を割り当てる。
       - name: 実リレーへ接続する E2E テストを実行する
         id: relay
         if: env.TEST_MOQT_URI != ''
-        timeout-minutes: 8
+        timeout-minutes: 9
         continue-on-error: true
         run: vp run e2e-test:relay
       - name: 実リレーへ接続する E2E テストを再実行する
         if: env.TEST_MOQT_URI != '' && steps.relay.outcome == 'failure'
-        timeout-minutes: 8
+        timeout-minutes: 9
         run: vp run e2e-test:relay

@@ -1,7 +1,7 @@
 /**
- * 音声の再生 (AudioContext と `<audio>`) の開始・停止の判定
+ * 音声の再生 (AudioContext) の開始・停止の判定
  *
- * 音声の再生の開始は AudioContext の生成・`resume()`・`<audio>` の `play()` をまたいで
+ * 音声の再生の開始は AudioContext の生成・`resume()`・出力機器の選択 をまたいで
  * await するため、その間に停止が始まり完了することがある。停止の前後で何を残すか・何を
  * 有効とするかは、フックの中に条件を散らすと経路によってずれる。ここに判定と後始末の形で
  * 置き、ブラウザ API を使わずに検証する。
@@ -84,11 +84,11 @@ export interface AudioPlaybackStartSettlement {
  * await を終えた開始を、今の再生として確定するかを決めて後始末する
  *
  * 開始の途中に停止が始まるか、停止の後に新しい開始が始まることがある。古い開始が新しい
- * 再生の共有の `<audio>` を止めたり、停止の drain が閉じる Context を二重に閉じたりしない
+ * 再生の Context を止めたり、停止の drain が閉じる Context を二重に閉じたりしない
  * よう、判定と後始末をこの 1 か所にまとめる。
  *
  * - 停止の drain の途中: 停止が Context を閉じるため、何もしない (discard も commit もしない)
- * - 新しい開始に置き換えられた: 共有の `<audio>` は触らず、自分が作った Context だけ閉じる
+ * - 新しい開始に置き換えられた: 自分が作った Context だけ閉じる
  * - 今の再生のまま: commit する
  *
  * @param settlement - 判定と後始末
@@ -112,8 +112,7 @@ export async function settleAudioPlaybackStart(
  * 開始の途中で対象が変わったときに、開始が作ったものだけを捨てる
  *
  * 停止の drain の途中は停止が Context を閉じるため何もしない。そうでなければ (新しい開始に
- * 置き換えられた) 自分が作った Context だけを閉じる。共有の `<audio>` は新しい開始のものに
- * なり得るため触らない。
+ * 置き換えられた) 自分が作った Context だけを閉じ、新しい開始のものは触らない。
  *
  * @param isStopping - 停止の drain の途中か
  * @param discard - 開始が作った audio graph を捨てる

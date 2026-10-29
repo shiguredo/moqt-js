@@ -1,7 +1,7 @@
 /**
  * 音声の再生のライフサイクル (開始・停止・切り替え)
  *
- * `useSubscriber` から切り出した、AudioContext と `<audio>` の開始・停止の競合制御である。
+ * `useSubscriber` から切り出した、AudioContext の開始・停止・出力機器の切り替えの競合制御である。
  * このモジュールが持つ状態は「今の audio graph」と「開始の試行のトークン」だけで、購読・
  * 復号・再生の入口・signal は依存として渡してもらう。
  *
@@ -15,8 +15,8 @@
  * - `audioPlayback` を null にするのは `closeStartedAudioPlayback` と `closeAudioContext`
  *   (停止の後始末) と `pauseAudioPlayback` だけである
  * - 停止 (`stopAudioPlayback`) は `audioPlaybackAttempt` を null にして進行中の開始を無効に
- *   する。開始は各 await の後と確定時にトークンの同一性を確かめ、外れていたら共有の
- *   `<audio>` を触らず自分が作った Context だけを閉じる
+ *   する。開始は各 await の後と確定時にトークンの同一性を確かめ、外れていたら
+ *   自分が作った Context だけを閉じる
  */
 
 import type { Signal } from "@preact/signals";
@@ -34,7 +34,7 @@ import type { SubscriberAudioStop } from "./subscriberAudioStop.ts";
 /** 受信した音声を再生するための audio graph */
 interface AudioPlayback {
   context: AudioContext;
-  destination: MediaStreamAudioDestinationNode;
+  destination: AudioDestinationNode;
   /**
    * `statechange` のリスナー
    *
@@ -59,8 +59,6 @@ interface AudioPlaybackStartAttempt {
 interface AudioPlaybackControllerDeps {
   /** ログに使う subscriber の ID */
   readonly subscriberId: string;
-  /** 音声を鳴らす `<audio>` 要素 */
-  readonly audioRef: RefObject<HTMLAudioElement | null>;
   /** 共有の再生の入口 (購読ごとに作り直される) */
   readonly mediaPlayoutRef: RefObject<MediaPlayout | null>;
   /** 停止の二重呼び出しを共有する処理 (復号の対応付けにも使うためフックが持つ) */
@@ -87,7 +85,12 @@ interface AudioPlaybackControllerDeps {
    * 予約した音が鳴らないため、状態と、その Context のサンプルレート (Hz) を signal へ
    * 写して警告の判定に使う (docs/AUDIO_GLITCH_CAUSES.md の B4)。
    */
-  onAudioContextStateChange(state: AudioContextState, contextSampleRate: number): void;
+  onAudioContextStateChange(
+    state: AudioContextState,
+    contextSampleRate: number,
+    baseLatencyMs: number,
+    outputLatencyMs: number | null,
+  ): void;
   /**
    * AudioContext を閉じ始めたときに呼ぶ (`statechange` のリスナーを外したあと)
    *
@@ -109,6 +112,10 @@ export interface AudioPlaybackController {
   attachPlaybackToPlayout(playout: MediaPlayout): void;
   /** 音声の再生 (AudioContext) があるか */
   hasPlayback(): boolean;
+  /** 出力システムと機器が現在報告している遅延 (ms)。未再生なら null */
+  getOutputLatency(): { baseLatencyMs: number; outputLatencyMs: number | null } | null;
+  /** 再生中の Context の出力デバイスを切り替える。未再生なら次回の開始で反映する */
+  setOutputDevice(deviceId: string): Promise<void>;
   /** 音声の再生を切り替える (UI のトグル) */
   toggleAudioPlayback(): Promise<void>;
   /** 音声を鳴らし切ってから止め、AudioContext を閉じる */
@@ -146,10 +153,15 @@ export function createAudioPlaybackController(
    */
   function attachAudioContextStateListener(context: AudioContext): () => void {
     const listener = (): void => {
-      deps.onAudioContextStateChange(context.state, context.sampleRate);
+      deps.onAudioContextStateChange(
+        context.state,
+        context.sampleRate,
+        context.baseLatency * 1000,
+        Number.isFinite(context.outputLatency) ? context.outputLatency * 1000 : null,
+      );
     };
     context.addEventListener("statechange", listener);
-    deps.onAudioContextStateChange(context.state, context.sampleRate);
+    listener();
     return listener;
   }
 
@@ -174,43 +186,31 @@ export function createAudioPlaybackController(
    * がバッファごとにリサンプルする。OfflineAudioContext で再現した境界の重なりと
    * 実出力のクリックの有無は区別し、ここでは不要な変換を避ける。
    *
-   * 出力先の生成に失敗したときは、作りかけの `AudioContext` を閉じてから throw する。
-   * この時点ではまだ再生の対象に載せていないため停止の経路からは閉じられず、閉じないままに
-   * するとブラウザの音声出力を占有し続ける。閉じる失敗は元の失敗を隠さないよう握り潰す。
-   *
    * @returns 音声の再生の audio graph
-   * @throws createMediaStreamDestination が失敗した場合 (閉じたあとに rethrow する)
    */
   function createAudioPlayback(): AudioPlayback {
     let context: AudioContext;
     try {
-      context = new AudioContext({ sampleRate: deps.getAudioContextSampleRate() });
+      context = new AudioContext({
+        sampleRate: deps.getAudioContextSampleRate(),
+        latencyHint: "interactive",
+      });
     } catch {
       // 指定したレートの AudioContext を作れない環境 (デバイスがレートに対応しない、
       // ブラウザの制限など) では、既定レートで作る。レートが復号フレームと揃わなくても
       // 音は鳴る (音質上の問題は残るが、再生できないよりよい)
-      context = new AudioContext();
-    }
-    let destination: MediaStreamAudioDestinationNode;
-    try {
-      destination = context.createMediaStreamDestination();
-    } catch (error) {
-      // 作りかけの AudioContext を残さない。close の失敗は元の失敗を隠さない
-      void context.close().catch(() => {
-        // 元の失敗を優先する
-      });
-      throw error;
+      context = new AudioContext({ latencyHint: "interactive" });
     }
     // 出力先まで作れたら、状態の監視を始める。失敗した Context は通知しない
     const stateChangeListener = attachAudioContextStateListener(context);
-    return { context, destination, stateChangeListener };
+    return { context, destination: context.destination, stateChangeListener };
   }
 
   /**
    * 開始が作った audio graph を閉じ、再生の対象から外す (失敗は握り潰す)
    *
-   * 開始の途中で停止されるか新しい開始に置き換えられたときに呼ぶ。共有の `<audio>` は
-   * 新しい開始のものになり得るため触らない (停止の経路は closeAudioContext が片付ける)。
+   * 開始の途中で停止されるか新しい開始に置き換えられたときに呼ぶ。
+   * 新しい Context を閉じないよう、開始が作ったものだけを対象にする。
    */
   async function closeStartedAudioPlayback(playback: AudioPlayback): Promise<void> {
     if (audioPlayback === playback) {
@@ -231,17 +231,16 @@ export function createAudioPlaybackController(
   /**
    * 受信した音声を音声出力デバイスへ流す graph を作り、再生を始める
    *
-   * `audioContext.destination` には繋がず、`MediaStreamAudioDestinationNode` の
-   * トラックを `<audio>` の `srcObject` に設定する (ライブラリの
-   * createMediaSubscriber と同じ構成)。トグルのクリックがユーザー操作になるため、
-   * 自動再生ポリシー下でも `resume()` と `play()` が通る。
+   * Context の destination へ直接出す。MediaStream と `<audio>` を経由すると別の
+   * 再生バッファを挟み、Context の出力時計だけでは実際の再生位置を追えなくなる。
+   * トグルのクリックを契機に resume し、自動再生ポリシーにも従う。
    *
    * 鳴らす先を再生の入口へ付けるのは呼び出し側である。`audioPlaybackEnabled` を立てる直前に
    * 付けることで、有効になる前に届いた音を捨てる今の扱いを変えない。
    *
-   * 開始は AudioContext の生成・`resume()`・`<audio>` の `play()` をまたいで await する。
+   * 開始は AudioContext の生成・`resume()`・出力機器の選択 をまたいで await する。
    * その途中で停止が始まるか新しい開始が始まることがあるため、各 await の後に対象が
-   * 変わっていないかを確かめる。変わっていたら共有の `<audio>` は触らず、自分が作った
+   * 変わっていないかを確かめる。変わっていたら、自分が作った
    * Context だけ閉じて null を返す (停止の drain の途中は停止側が閉じるため閉じない)。
    *
    * @param attempt - 開始の試行。作った audio graph を後始末用に記録する
@@ -269,22 +268,16 @@ export function createAudioPlaybackController(
       await playback.context.resume();
       if (await abandonIfStale()) return null;
     }
-    const audioElement = deps.audioRef.current;
-    if (audioElement) {
-      audioElement.srcObject = playback.destination.stream;
-      const outputDeviceId = deps.getSelectedAudioOutputDeviceId();
-      if (outputDeviceId !== "") {
-        await applyAudioOutputSink(audioElement, outputDeviceId);
-        if (await abandonIfStale()) return null;
-      }
-      await audioElement.play();
+    const outputDeviceId = deps.getSelectedAudioOutputDeviceId();
+    if (outputDeviceId !== "") {
+      await applyAudioOutputSink(playback.context, outputDeviceId);
       if (await abandonIfStale()) return null;
     }
     return playback;
   }
 
   /**
-   * 音声出力を止め、`<audio>` からストリームを外す
+   * 音声出力を止め、Context を閉じる
    *
    * 停止の要求を受けたら、新規の音声 Object を復号へ積むのを止め、復号前の段に保持して
    * いる Object を flush して復号へ流し、予約済みの音が鳴り終わるまで待ってから
@@ -324,11 +317,6 @@ export function createAudioPlaybackController(
         if (deps.mediaPlayoutRef.current !== stoppingPlayout) {
           deps.mediaPlayoutRef.current?.setAudioOutput(null);
         }
-        const audioElement = deps.audioRef.current;
-        if (audioElement) {
-          audioElement.pause();
-          audioElement.srcObject = null;
-        }
         if (playback !== null) {
           // 状態の監視を先に外す。閉じると "closed" の statechange が届くが、それは
           // 再生が終わった Context の状態であり、画面に残す値ではない
@@ -365,11 +353,6 @@ export function createAudioPlaybackController(
     audioPlayback = null;
     const playout = deps.mediaPlayoutRef.current;
     playout?.setAudioOutput(null);
-    const audioElement = deps.audioRef.current;
-    if (audioElement) {
-      audioElement.pause();
-      audioElement.srcObject = null;
-    }
     if (playback !== null) {
       // 予約済みで鳴り始めていない音は、閉じると鳴らないまま切り捨てられる
       playout?.recordAudioStopped();
@@ -419,7 +402,7 @@ export function createAudioPlaybackController(
       }
       // await の間に停止が始まるか、停止の後に新しい開始が始まることがある。開始に使った
       // audio graph が今も対象かと停止中かで、今の再生として確定するかを決める。確定しない
-      // ときは共有の `<audio>` を触らず、自分が作った Context だけを閉じる (停止の drain の
+      // ときは自分が作った Context だけを閉じる (停止の drain の
       // 途中は停止側が閉じるため閉じない)。確定したときだけ下の commit が呼ばれる
       await settleAudioPlaybackStart({
         isCurrent: audioPlayback === started,
@@ -442,9 +425,9 @@ export function createAudioPlaybackController(
         discard: () => closeStartedAudioPlayback(started),
       });
     } catch (error) {
-      // 停止や新しい開始に置き換えられていたら、この失敗は想定内である (停止の pause で
-      // play() が中断される AbortError など)。ログにも状態にも出さず、作成済みの graph だけ
-      // 後始末して戻る。共有の `<audio>` は触らない (新しい開始か停止が片付ける)
+      // 停止や新しい開始に置き換えられていたら、この失敗は想定内である。
+      // ログや状態には出さず、開始が作った graph だけ
+      // 後始末して戻る。新しい開始が作った Context は触らない
       if (audioPlaybackAttempt !== attempt) {
         const started = attempt.playback;
         if (started !== null) {
@@ -455,8 +438,10 @@ export function createAudioPlaybackController(
         return;
       }
       console.error(`[${deps.subscriberId}] failed to start audio playback:`, error);
-      void stopAudioPlayback();
+      // 開始失敗も出力だけを閉じる。購読中の復号前キューの通知先は保つ。
+      pauseAudioPlayback();
       enabled.value = false;
+      deps.playAudioEnabled.value = false;
     } finally {
       // 二重起動のガードは、この試行が今の試行であるときだけ外す。古い開始が新しい開始の
       // ガードを消すと、同じ再生を二重に始められる
@@ -487,9 +472,41 @@ export function createAudioPlaybackController(
     return audioPlayback !== null;
   }
 
+  /** 初回の running 通知後にも機器の推定値が更新されるため、統計の周期ごとに読む。 */
+  function getOutputLatency(): { baseLatencyMs: number; outputLatencyMs: number | null } | null {
+    const context = audioPlayback?.context;
+    if (context === undefined) return null;
+    return {
+      baseLatencyMs: context.baseLatency * 1000,
+      outputLatencyMs: Number.isFinite(context.outputLatency) ? context.outputLatency * 1000 : null,
+    };
+  }
+
+  /** 出力時計と再生先を同じ Context のデバイスへ揃える。 */
+  async function setOutputDevice(deviceId: string): Promise<void> {
+    const playback = audioPlayback;
+    if (playback === null) return;
+    try {
+      await applyAudioOutputSink(playback.context, deviceId);
+    } catch (error) {
+      // setSinkId は機器の取得前に renderer を止めることがある。失敗後に有効表示と
+      // 予約だけを残さず、現在の再生を閉じる。古い切り替えで新しい Context は止めない。
+      if (audioPlayback === playback) {
+        const enabled = deps.getAudioPlaybackEnabledSignal();
+        if (enabled !== null) enabled.value = false;
+        deps.playAudioEnabled.value = false;
+        // 購読は続くため、復号前キューの通知先を外す購読停止の drain は使わない。
+        pauseAudioPlayback();
+      }
+      throw error;
+    }
+  }
+
   return {
     attachPlaybackToPlayout,
     hasPlayback,
+    getOutputLatency,
+    setOutputDevice,
     toggleAudioPlayback,
     stopAudioPlayback,
   };

@@ -436,36 +436,33 @@ test("buildSubscriberStats: メインスレッドの停止と到着の重なり�
   );
 });
 
-test("buildSubscriberStats: 音声出力 (AudioContext と <audio> 要素) の診断を返す", () => {
-  // 再生の AudioContext の状態とサンプルレート、<audio> 要素のイベントの回数は、
+test("buildSubscriberStats: 音声出力 (AudioContext と出力機器) の診断を返す", () => {
+  // 再生の AudioContext の状態・サンプルレート・機器の遅延は、
   // playout の計器 (audio.playoutTiming) が見ない層の状態である。Play Audio を押す前は
-  // AudioContext が無いため状態とレートは null、回数は 0 になる
+  // AudioContext が無いため状態・レート・遅延は null、状態変化の回数は 0 になる
   const empty = buildSubscriberStats(createSubscriberInstance("audio-output-empty"));
   assert.deepEqual(empty.audioOutput, {
     contextState: null,
     contextStateChanges: 0,
     contextSampleRate: null,
-    elementWaitingCount: 0,
-    elementStalledCount: 0,
-    elementErrorCount: 0,
+    baseLatencyMs: null,
+    outputLatencyMs: null,
   });
 
   const instance = createSubscriberInstance("audio-output-values");
   instance.audioContextState.value = "suspended";
   instance.audioContextStateChanges.value = 3;
   instance.audioContextSampleRate.value = 16_000;
-  instance.audioElementWaitingCount.value = 4;
-  instance.audioElementStalledCount.value = 5;
-  instance.audioElementErrorCount.value = 1;
+  instance.audioContextBaseLatencyMs.value = 4;
+  instance.audioContextOutputLatencyMs.value = 5;
 
   const stats = buildSubscriberStats(instance);
   const expected = {
     contextState: "suspended",
     contextStateChanges: 3,
     contextSampleRate: 16_000,
-    elementWaitingCount: 4,
-    elementStalledCount: 5,
-    elementErrorCount: 1,
+    baseLatencyMs: 4,
+    outputLatencyMs: 5,
   } as const;
   assert.deepEqual(stats.audioOutput, expected);
   // Copy for LLM の JSON にも、画面と同じ値が同じ名前で出る

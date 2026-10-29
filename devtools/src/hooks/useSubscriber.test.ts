@@ -538,13 +538,12 @@ test("resetSubscriberStats: 映像と音声の統計を初期値へ戻す", () =
   instance.duplicateObjectsDropped.value = 9;
   instance.outOfOrderObjectsReceived.value = 4;
   instance.maxOutOfOrderGroupDistance.value = 6;
-  // 音声出力 (AudioContext と <audio> 要素) の診断も購読ごとに数え直す
+  // 音声出力 (AudioContext と出力機器) の診断も購読ごとに数え直す
   instance.audioContextState.value = "suspended";
   instance.audioContextStateChanges.value = 2;
   instance.audioContextSampleRate.value = 16_000;
-  instance.audioElementWaitingCount.value = 3;
-  instance.audioElementStalledCount.value = 4;
-  instance.audioElementErrorCount.value = 1;
+  instance.audioContextBaseLatencyMs.value = 3;
+  instance.audioContextOutputLatencyMs.value = 4;
 
   resetSubscriberStats(instance);
 
@@ -586,13 +585,12 @@ test("resetSubscriberStats: 映像と音声の統計を初期値へ戻す", () =
   assert.equal(instance.duplicateObjectsDropped.value, 0);
   assert.equal(instance.outOfOrderObjectsReceived.value, 0);
   assert.equal(instance.maxOutOfOrderGroupDistance.value, 0);
-  // AudioContext と <audio> 要素の診断も前の購読の値を持ち越さない
+  // AudioContext と出力機器の診断も前の購読の値を持ち越さない
   assert.isNull(instance.audioContextState.value);
   assert.equal(instance.audioContextStateChanges.value, 0);
   assert.isNull(instance.audioContextSampleRate.value);
-  assert.equal(instance.audioElementWaitingCount.value, 0);
-  assert.equal(instance.audioElementStalledCount.value, 0);
-  assert.equal(instance.audioElementErrorCount.value, 0);
+  assert.equal(instance.audioContextBaseLatencyMs.value, null);
+  assert.equal(instance.audioContextOutputLatencyMs.value, null);
 });
 
 // 再生を先に有効にしてから購読する経路がある (Play Audio のトグルは購読前にも押せる)。
@@ -604,11 +602,15 @@ test("resetSubscriberStats: 再生中の AudioContext の状態は消さない",
   instance.audioPlaybackEnabled.value = true;
   instance.audioContextState.value = "running";
   instance.audioContextSampleRate.value = 48_000;
+  instance.audioContextBaseLatencyMs.value = 5;
+  instance.audioContextOutputLatencyMs.value = 32;
 
   resetSubscriberStats(instance);
 
   assert.equal(instance.audioContextState.value, "running");
   assert.equal(instance.audioContextSampleRate.value, 48_000);
+  assert.equal(instance.audioContextBaseLatencyMs.value, 5);
+  assert.equal(instance.audioContextOutputLatencyMs.value, 32);
   // 累積の回数は購読の開始を区切りに数え直す
   assert.equal(instance.audioContextStateChanges.value, 0);
 });

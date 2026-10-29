@@ -49,7 +49,11 @@ import type {
 } from "./codec/types";
 import { createVideoFrameSource, type VideoFrameSource } from "./frameSource";
 import { createAudioFrameSource, type AudioFrameSource } from "./audioSource";
-import { recordEncodeGeneration, shouldSendEncodedChunk } from "./encodeGeneration";
+import {
+  recordEncodeGeneration,
+  shouldSendEncodedChunk,
+  type EncodeGenerationRecords,
+} from "./encodeGeneration";
 
 // デフォルト設定
 
@@ -831,7 +835,7 @@ export class MediaPublisherImpl implements MediaPublisher {
   // WebCodecs は出力の到着順を保証しないため、到着順ではなく timestamp で依頼に対応づける。
   // 配信を止めた時点で閉じた Subgroup へ送らないことと、停止と再開をまたいだ古い出力が
   // 新しい Group の先頭に混ざらないようにするために使う。配信ごとの初期化で消す
-  private readonly videoEncodeGenerations = new Map<number, number>();
+  private readonly videoEncodeGenerations: EncodeGenerationRecords = new Map();
 
   // 現在の Catalog
   private currentCatalog: Catalog | null = null;

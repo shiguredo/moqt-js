@@ -514,7 +514,7 @@ moqt-js を利用した MOQT の動作確認ツールです。
 - デバッグパネル (MOQT プロトコルメッセージのログ表示)
 - 統計情報の表示 (音声 / 映像 / メッセージ / A/V 同期 / セッション)
   - 遅延の内訳 (到着 / 復号 / 表示の待ち)、音声の再生タイミング、追いつき、損失
-  - 音声出力の状態 (AudioContext の state / サンプルレート、`<audio>` の waiting / stalled / error)
+  - 音声出力の状態と遅延 (AudioContext の state / サンプルレート / baseLatency / outputLatency)
 - 統計情報とデバッグログを LLM へ渡すためのコピー (Copy for LLM)
 - 前提から外れた状態の警告の表示 (A/V 同期 / 音声出力 / 再生)
 - カタログ情報の表示

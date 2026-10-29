@@ -75,7 +75,8 @@ export function priorObjectIdGapOf(properties: Uint8Array | undefined): bigint {
 /**
  * 映像 Object の復号順を判定する状態機械
  *
- * 購読 (decoder) ごとに 1 つ持つ。decoder を作り直したら `reset` で初期化する。
+ * 購読ごとに 1 つ持つ。新しい購読は `reset`、同じ購読で decoder を作り直す場合は
+ * `requireKeyFrame` を使い、復号済み位置より古い Object を再び通さない。
  */
 export class VideoDecodeOrder {
   /**
@@ -87,7 +88,7 @@ export class VideoDecodeOrder {
   private decodingGroupId: bigint | null = null;
 
   /**
-   * 復号中の Group で最後に復号した Object ID。キーフレームを待っている間は null
+   * 復号中の Group で最後に復号した Object ID。欠落で連続性を失った場合は null
    */
   private lastDecodedObjectId: bigint | null = null;
 
@@ -151,6 +152,11 @@ export class VideoDecodeOrder {
   reset(): void {
     this.decodingGroupId = null;
     this.lastDecodedObjectId = null;
+    this.awaitingKeyFrame = true;
+  }
+
+  /** 復号器の参照だけを失った場合、位置を保ったままキーフレームを待つ。 */
+  requireKeyFrame(): void {
     this.awaitingKeyFrame = true;
   }
 

@@ -5,6 +5,8 @@
  * `"quality"` であり、実装によっては並べ替わる)。そのため到着順ではなく、**符号化を依頼した
  * 時点の世代**を入力フレームの `timestamp` を鍵にして記録し、出力の `timestamp` で引いて
  * 現在の世代と比べる。
+ * ただし、停止前後の世代で同じ timestamp を再利用した場合は、出力の timestamp だけでは
+ * どちらの世代の入力か区別できない。同一世代内の重複は未出力数として保持する。
  *
  * これは配信を止める経路のために要る。止めた時点で開いている Subgroup を閉じる
  * (draft-ietf-moq-transport-22 §11.3.2) ため、止める前に依頼した出力を閉じた Subgroup へ
@@ -16,6 +18,9 @@
  * 規則はここに 1 つだけ置く。
  */
 
+/** timestamp ごとの世代と未出力数。同じ取得時刻の複数フレームも別々に数える。 */
+export type EncodeGenerationRecords = Map<number, { readonly generation: number; pending: number }>;
+
 /**
  * 符号化を依頼した時点の世代を記録する
  *
@@ -24,17 +29,24 @@
  * @param timestamp - 入力フレームの `timestamp` (`EncodedVideoChunk.timestamp` に写る)
  */
 export function recordEncodeGeneration(
-  records: Map<number, number>,
+  records: EncodeGenerationRecords,
   generation: number,
   timestamp: number,
 ): void {
-  records.set(timestamp, generation);
+  const previous = records.get(timestamp);
+  if (previous?.generation === generation) {
+    // WebCodecs は同じ timestamp の入力も符号化する。後の依頼で上書きすると、片方の
+    // 出力を送らず参照フレームが欠けるため、現在の世代で残っている枚数を増やす。
+    previous.pending += 1;
+  } else {
+    records.set(timestamp, { generation, pending: 1 });
+  }
 }
 
 /**
  * 出力を送るかどうかを決める
  *
- * 取り出した記録は消す (同じ timestamp の出力を 2 度送らない)。記録が無い出力
+ * 取り出した枚数を減らし、すべて出力された timestamp の記録は消す。記録が無い出力
  * (配信を始める前の出力、配信ごとの初期化で記録を消した後の出力) も送らない。
  *
  * @param records - 符号化を依頼した時点の世代の記録
@@ -43,13 +55,19 @@ export function recordEncodeGeneration(
  * @returns 送る場合は true
  */
 export function shouldSendEncodedChunk(
-  records: Map<number, number>,
+  records: EncodeGenerationRecords,
   currentGeneration: number,
   timestamp: number,
 ): boolean {
-  const recordedGeneration = records.get(timestamp);
-  records.delete(timestamp);
-  return recordedGeneration === currentGeneration;
+  const record = records.get(timestamp);
+  if (record === undefined) return false;
+  if (record.generation !== currentGeneration) {
+    records.delete(timestamp);
+    return false;
+  }
+  record.pending -= 1;
+  if (record.pending === 0) records.delete(timestamp);
+  return true;
 }
 
 /**
@@ -62,7 +80,7 @@ export interface EncodeState {
   /** いまの世代。送信を止めるたびに進む */
   generation: number;
   /** 符号化を依頼した時点の世代 (入力フレームの timestamp を鍵にする) */
-  readonly records: Map<number, number>;
+  readonly records: EncodeGenerationRecords;
 }
 
 /**
