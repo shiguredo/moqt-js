@@ -20,6 +20,78 @@ export const AUDIO_SPLICE_FADE_MS = 2;
 export type AudioSpliceEdge = "head" | "tail";
 
 /**
+ * 短い隙間を、直前の末尾から次の先頭への直線で繋ぐ。
+ * 周期性のない子音にも使える。長い欠落の復元には使わず、呼び出し側が長さを制限する。
+ */
+export function interpolateSpliceGap(
+  previous: readonly AudioSamples[],
+  next: readonly AudioSamples[],
+  frames: number,
+): AudioSamples[] {
+  return next.map((channel, channelIndex) => {
+    const from = previous[channelIndex]?.at(-1) ?? 0;
+    const to = channel[0] ?? 0;
+    return Float32Array.from(
+      { length: frames },
+      (_, index) => from + (to - from) * ((index + 1) / (frames + 1)),
+    );
+  });
+}
+
+/**
+ * 補間の続きから実音の先頭へ移る。両方を 0 へ落とす方式と違い、同じ波形なら音量を保つ。
+ * 補間の続きは実音の開始位置に対応するサンプル列であり、遅延や再生する長さは増やさない。
+ * 入力配列の所有権は呼び出し側に残す。
+ */
+export function crossFadeHead(
+  continuation: readonly AudioSamples[],
+  channels: readonly AudioSamples[],
+  sampleRate: number,
+): AudioSamples[] {
+  const fadeSamples = Math.min(
+    channels[0]?.length ?? 0,
+    continuation[0]?.length ?? 0,
+    Math.max(1, Math.round((AUDIO_SPLICE_FADE_MS / 1000) * sampleRate)),
+  );
+  return channels.map((channel, channelIndex) => {
+    const output = new Float32Array(channel);
+    const previous = continuation[channelIndex];
+    if (previous === undefined) return output;
+    for (let index = 0; index < fadeSamples; index++) {
+      const weight = index / fadeSamples;
+      output[index] = (previous[index] ?? 0) * (1 - weight) + (channel[index] ?? 0) * weight;
+    }
+    return output;
+  });
+}
+
+/**
+ * 周期補間の先頭に、直前の音の変化幅を超える段差がある場合だけ接続を滑らかにする。
+ * 通常の波形へ毎回フェードを掛けず、既存の 2 ms 以内で補間波形へ戻す。
+ */
+export function smoothSpliceHead(
+  previous: readonly AudioSamples[],
+  channels: readonly AudioSamples[],
+  sampleRate: number,
+): AudioSamples[] {
+  return channels.map((channel, channelIndex) => {
+    const history = previous[channelIndex];
+    if (history === undefined || history.length === 0 || channel.length === 0) return channel;
+    let naturalStep = 0;
+    for (let index = 1; index < history.length; index++) {
+      naturalStep = Math.max(
+        naturalStep,
+        Math.abs((history[index] ?? 0) - (history[index - 1] ?? 0)),
+      );
+    }
+    const tail = history[history.length - 1] ?? 0;
+    if (Math.abs((channel[0] ?? 0) - tail) <= naturalStep) return channel;
+    const continuation = new Float32Array(channel.length).fill(tail);
+    return crossFadeHead([continuation], [channel], sampleRate)[0] ?? channel;
+  });
+}
+
+/**
  * 端を線形に 0 へ落とす (落とす長さの外は元のまま)
  *
  * 元の配列は変えず、新しい配列を返す。端のサンプルは 0 になり、落とす長さだけ離れた

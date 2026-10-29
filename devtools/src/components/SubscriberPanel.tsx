@@ -724,9 +724,8 @@ function SubscriberStats({ statsSignal }: { statsSignal: ReadonlySignal<Subscrib
                 testId: "subscriber-audio-playback-stretch-unavailable-frames",
               },
               {
-                // AudioContext と復号フレームのサンプルレートが違った回数。0 より大きいと、
-                // バッファ境界ごとに 1 サンプルの重なり (毎秒 50 回の +6 dB スパイク) が
-                // 生まれる組み合わせで鳴らしている (docs/AUDIO_GLITCH_CAUSES.md の A1)
+                // AudioContext と復号フレームのサンプルレートが違った回数。
+                // 実出力の重なりやクリックを観測した数ではなく、リサンプルが入る条件を示す。
                 label: "sampleRateMismatchFrames",
                 value: stats.audio.playoutTiming.sampleRateMismatchFrames,
                 tone: "warn",
@@ -855,41 +854,23 @@ function SubscriberStats({ statsSignal }: { statsSignal: ReadonlySignal<Subscrib
               },
             ]}
           />
-          {/* 目標遅延の閉ループが広げた上限と、直近 1 秒に詰めた長さ。圧縮が続くと声が
-              粗くなるため、上限へ張り付いているかを併せて読む
-              (src/playout/audioDelayFeedback.ts) */}
+          {/* 受信の揺らぎ、出力の先行量、実際に適用する深さを分けて表示する。 */}
           <StatList
             items={[
               {
-                // 実際に使う目標遅延。揺らぎだけから求めた値 (jitterTargetMs) と閉ループの
-                // 目標の大きい方を上限で切った値
-                label: "appliedMs",
-                value: formatMs(stats.audio.audioDelayFeedback.appliedMs),
-                testId: "subscriber-audio-playback-applied-ms",
+                label: "targetMs",
+                value: formatMs(stats.audio.audioDelay.targetMs),
+                testId: "subscriber-audio-playback-target-ms",
               },
               {
-                // 揺らぎだけから求めた目標遅延 (NetEq の移植)
-                label: "jitterTargetMs",
-                value: formatMs(stats.audio.audioDelayFeedback.jitterTargetMs),
-                testId: "subscriber-audio-playback-jitter-target-ms",
+                label: "jitterMs",
+                value: formatMs(stats.audio.audioDelay.jitterMs),
+                testId: "subscriber-audio-playback-jitter-ms",
               },
               {
-                // 直前に目標を動かした理由 (initial / compression / gap / backlog など)
-                label: "delayReason",
-                value: stats.audio.audioDelayFeedback.reason,
-                testId: "subscriber-audio-playback-delay-reason",
-              },
-              {
-                label: "appliedCeilingMs",
-                value: formatMs(stats.audio.appliedCeilingMs),
-                testId: "subscriber-audio-playback-applied-ceiling",
-              },
-              {
-                // 0 より大きい間は時間圧縮が続いている
-                label: "compressionMsPerSecond",
-                value: Number(stats.audio.compressionMsPerSecond.toFixed(1)),
-                tone: "warn",
-                testId: "subscriber-audio-playback-compression-ms-per-second",
+                label: "outputLeadMs",
+                value: formatMs(stats.audio.audioDelay.outputLeadMs),
+                testId: "subscriber-audio-playback-output-lead-ms",
               },
             ]}
           />
@@ -1437,64 +1418,19 @@ function SubscriberStats({ statsSignal }: { statsSignal: ReadonlySignal<Subscrib
           <StatList
             items={[
               {
-                label: "appliedMs",
-                value: formatMs(stats.avSync.delays.audioDelayFeedback.appliedMs),
-                testId: "subscriber-av-sync-audio-target-applied",
-              },
-              {
                 label: "targetMs",
-                value: formatMs(stats.avSync.delays.audioDelayFeedback.targetMs),
+                value: formatMs(stats.avSync.delays.audioDelay.targetMs),
                 testId: "subscriber-av-sync-audio-target",
               },
               {
-                label: "jitterTargetMs",
-                value: formatMs(stats.avSync.delays.audioDelayFeedback.jitterTargetMs),
-                testId: "subscriber-av-sync-audio-jitter-target",
+                label: "jitterMs",
+                value: formatMs(stats.avSync.delays.audioDelay.jitterMs),
+                testId: "subscriber-av-sync-audio-target-jitter",
               },
               {
-                label: "ceilingMs",
-                value:
-                  stats.avSync.delays.audioDelayFeedback.ceilingMs === null
-                    ? "-"
-                    : formatMs(stats.avSync.delays.audioDelayFeedback.ceilingMs),
-                // 明示された上限で自動の目標が止まっていると、遅れが残っていても増えない
-                tone:
-                  stats.avSync.delays.audioDelayFeedback.ceilingMs !== null &&
-                  stats.avSync.delays.audioDelayFeedback.appliedMs >=
-                    stats.avSync.delays.audioDelayFeedback.ceilingMs
-                    ? "warn"
-                    : undefined,
-                testId: "subscriber-av-sync-audio-target-ceiling",
-              },
-              {
-                label: "reason",
-                value: stats.avSync.delays.audioDelayFeedback.reason,
-                testId: "subscriber-av-sync-audio-target-reason",
-              },
-              {
-                label: "lastChangeMs",
-                value: formatMs(stats.avSync.delays.audioDelayFeedback.lastChangeMs),
-                testId: "subscriber-av-sync-audio-target-change",
-              },
-              {
-                label: "adjustments",
-                value: stats.avSync.delays.audioDelayFeedback.adjustments,
-                testId: "subscriber-av-sync-audio-target-adjustments",
-              },
-              {
-                label: "latenessP50Ms",
-                value: formatMs(stats.avSync.delays.audioDelayFeedback.latenessP50Ms),
-                testId: "subscriber-av-sync-audio-target-lateness",
-              },
-              {
-                label: "startDelayP50Ms",
-                value: formatMs(stats.avSync.delays.audioDelayFeedback.startDelayP50Ms),
-                testId: "subscriber-av-sync-audio-target-start-delay",
-              },
-              {
-                label: "slackP50Ms",
-                value: formatMs(stats.avSync.delays.audioDelayFeedback.slackP50Ms),
-                testId: "subscriber-av-sync-audio-target-slack",
+                label: "outputLeadMs",
+                value: formatMs(stats.avSync.delays.audioDelay.outputLeadMs),
+                testId: "subscriber-av-sync-audio-output-lead",
               },
             ]}
           />

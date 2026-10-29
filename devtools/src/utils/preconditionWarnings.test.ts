@@ -303,8 +303,8 @@ test("detectSubscriberWarnings: 音声出力の診断を渡さなければ音声
   assert.isNull(update.state.audioContextNotRunningSinceMs);
 });
 
-// 復号フレームと AudioContext のレートが違えば、バッファ境界ごとに 1 サンプルの重なりが
-// 生まれる (A1)。件数と両方のレートを値に出す
+// 復号フレームと AudioContext のレートが違えば、不要なリサンプルが入る条件として警告する。
+// クリックの観測とは区別し、件数と両方のレートを値に出す。
 test("detectSubscriberWarnings: 復号フレームと AudioContext のレートが違えば警告を出す", () => {
   const update = detectSubscriberWarnings(
     null,

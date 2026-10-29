@@ -29,11 +29,13 @@ test("44.1 kHz でも通信停滞後に音声と映像が通常の遅延へ戻�
           durationMs: 20,
           timestampMicros: mediaMs * 1_000,
         });
+        timeline.observeAudioOutputLead(10, atMs);
         const targetMs = timeline.presentationPerformanceMs("audio", mediaMs * 1_000);
         const delaySeconds = (timeline.playoutDelayMs ?? 50) / 1_000;
         const decision = scheduler.schedule(atMs / 1_000, mediaMs * 1_000, 0.02, {
           targetStartSeconds: targetMs === null ? null : targetMs / 1_000,
           enforceTarget: true,
+          stretchMinSeconds: timeline.compressionDeadbandSeconds(0.02),
           arrivalSeconds: atMs / 1_000,
           delaySeconds,
           arrivalDelaySeconds: arrivalPlayoutDelaySeconds(delaySeconds),
@@ -69,21 +71,13 @@ test("44.1 kHz でも通信停滞後に音声と映像が通常の遅延へ戻�
             BigInt(Math.round(startMs * 1_000)),
             BigInt(Math.round(targetMs * 1_000)),
           );
-        const feedback = timing.audioDelayFeedback(atMs);
-        timeline.observeAudioPlayout({
-          ...feedback,
-          latenessMs:
-            feedback.latenessMs === null
-              ? null
-              : { ...feedback.latenessMs, p50: Math.max(0, feedback.latenessMs.p50 - 20) },
-        });
         lastAudioLagMs = startMs - mediaMs;
       };
       for (let atMs = 1_000; atMs < 3_000; atMs += 20) feed(atMs, atMs - 20);
       const resumedAtMs = 3_000 + burstFrames * 20;
       for (let index = 0; index <= burstFrames; index++) feed(resumedAtMs, 2_980 + index * 20);
-      // 既存の減衰速度 20 ms/秒も通し、レビューで不収束だった 60 秒後を比較する。
-      for (let elapsed = 20; elapsed <= 60_000; elapsed += 20)
+      // 停滞後も 10 秒間送り続け、余分な待ちが通常の予算へ戻ることを確かめる。
+      for (let elapsed = 20; elapsed <= 10_000; elapsed += 20)
         feed(resumedAtMs + elapsed, resumedAtMs + elapsed - 20);
       assert.equal(dropped, 0, "音声を破棄して追いついたことにしないこと");
       assert.equal(
@@ -92,7 +86,7 @@ test("44.1 kHz でも通信停滞後に音声と映像が通常の遅延へ戻�
         "ネットワークの停滞で decoder を作り直さないこと",
       );
       assert.isAbove(scheduler.compressed, 0, "実際に音声を時間圧縮したこと");
-      assert.isBelow(lastAudioLagMs, 200, "正常復帰後は通常の深さへ戻ること");
+      assert.isBelow(lastAudioLagMs, 100, "正常復帰後は通常の深さへ戻ること");
       assert.isBelow(
         Math.abs(lastAudioLagMs - (timeline.delayBreakdown.video.presentationDelayMs ?? 0)),
         30,

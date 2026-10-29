@@ -41,8 +41,8 @@ import {
   // 受信側の追いつきの観測値は、再生の入口の統計から読む。まだ観測が無いときの既定値だけを
   // ここでも使う
   EMPTY_AUDIO_RECEIVE_CATCH_UP,
-  // 音声の目標遅延の閉ループの内訳を signal に持つための型
-  type AudioDelayFeedbackSnapshot,
+  // 音声の再生予算の内訳を signal に持つための型
+  type AudioPlayoutDelayStats,
 } from "moqt-js";
 import { addLog } from "../signals/debugLog";
 import { type CandidateSelection } from "../utils/candidateSelection.ts";
@@ -515,7 +515,7 @@ export function resetSubscriberStats(instance: sub.SubscriberInstance): void {
   instance.audioPlayoutConcealments.value = 0;
   instance.audioPlayoutTiming.value = EMPTY_AUDIO_PLAYOUT_TIMING;
   instance.audioHostDelay.value = EMPTY_HOST_DELAY;
-  instance.audioDelayFeedback.value = sub.EMPTY_AUDIO_DELAY_FEEDBACK;
+  instance.audioDelay.value = sub.EMPTY_AUDIO_DELAY;
   instance.audioPlayoutCatchUp.value = EMPTY_AUDIO_RECEIVE_CATCH_UP;
   // AudioContext と <audio> 要素の診断も、前の購読の値を持ち越さない。ただし再生中の
   // AudioContext がある場合 (再生を先に有効にしてから購読した場合) は、その状態とレートを
@@ -935,8 +935,7 @@ export function useSubscriber(
   // 音声を鳴らす AudioContext のサンプルレート (Hz)。復号器の configure と同じ解決値
   // (`resolveAudioContextSampleRate`) を、音声の購読を始めるときに保存する。AudioContext は
   // 再生のトグルで作られるため、購読の開始までに決めた値を ref 経由で渡す
-  // (docs/AUDIO_GLITCH_CAUSES.md の A1: 復号フレームとのレート不一致で 20 ms ごとに
-  // 1 サンプルの重なりが生まれる)
+  // 復号フレームとの不要なリサンプルを避ける。
   const audioContextSampleRateRef = useRef<number>(DEFAULT_AUDIO_SAMPLE_RATE);
   // startSubscribing の中断検知用 AbortController (レンダリング間で安定参照)
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -1002,7 +1001,6 @@ export function useSubscriber(
   // targetLatency に合わせて作り直す。音声と映像の両方をこの 1 つの時間軸へ observe する
   // ことで、同じ式の表示時刻で揃える
   const mediaPlayoutRef = useRef<MediaPlayout | null>(null);
-  const jitterBufferEnabledRef = useRef(false);
   // 直前の同期の状態 (基準を共有できているかとその理由)。変わったときだけログに残す
   const avSyncStateRef = useRef<AvSyncState | null>(null);
   // relay の cache から追いつく途中かどうかを、SUBSCRIBE_OK の LARGEST_OBJECT を境界に
@@ -1243,9 +1241,6 @@ export function useSubscriber(
     jitterBuffer: boolean;
     targetLatencyMs: number | null;
   }): void {
-    // jitter buffer の真実はここ 1 か所で立てる (購読を始めた時点の設定で決まり、購読中は
-    // 変更できない)。停止したときは stopPlayoutTiming が下ろす
-    jitterBufferEnabledRef.current = options.jitterBuffer;
     // 前の購読の映像の表示 (予約した表示と表示待ち) と、復号へ渡した映像入力の対応表を
     // 捨てる
     mediaPlayoutRef.current?.clearVideoQueue();
@@ -1517,9 +1512,6 @@ export function useSubscriber(
   /**
    * signal への反映を止め、記録を捨てる。signal には最後に反映した値を残す
    * (他の統計と同じく、停止後も直前の購読の値を表示し、次の購読開始で初期化する)
-   *
-   * 時間軸を作り直すまで音声を同期させないため、jitter buffer の状態も下ろす
-   * (音声だけの購読では映像の時間軸が無い)
    */
   function stopPlayoutTiming(): void {
     if (playoutTimingTimerRef.current !== null) {
@@ -1527,7 +1519,6 @@ export function useSubscriber(
       playoutTimingTimerRef.current = null;
     }
     playoutTimingRef.current.reset();
-    jitterBufferEnabledRef.current = false;
     // 次の購読では状態が変わったときとしてログを出し直す (前の購読の状態を持ち越さない)
     avSyncStateRef.current = null;
   }
@@ -1551,9 +1542,9 @@ export function useSubscriber(
       const audio = mediaPlayoutRef.current?.getStats().audio ?? null;
       instance.audioPlayoutTiming.value = audioPlayoutTimingRef.current.snapshot(currentMs);
       instance.audioHostDelay.value = hostDelayTrackerRef.current.snapshot(currentMs);
-      // 目標遅延の閉ループの内訳。音声だけの購読でも A/V 同期の snapshot は作らないため、
-      // 再生の入口から直接読む (音声だけでも jitter buffer と閉ループは動かす)
-      instance.audioDelayFeedback.value = currentAudioDelayFeedback(audio);
+      // 再生予算の内訳。音声だけの購読でも A/V 同期の snapshot は作らないため、
+      // 再生の入口から直接読む (音声だけでも到着の観測と予約の計器は動かす)
+      instance.audioDelay.value = currentAudioDelay(audio);
       publishAudioPlayoutCatchUp(instance, audio);
       // 音声を加工した量 (時間圧縮と補間) も同じ周期で写す (復号の出力ごとには読まない)
       publishAudioPlayoutCumulative(instance, audio);
@@ -1578,7 +1569,7 @@ export function useSubscriber(
     const audio = mediaPlayoutRef.current?.getStats().audio ?? null;
     instance.audioPlayoutTiming.value = audioPlayoutTimingRef.current.snapshot(currentMs);
     instance.audioHostDelay.value = hostDelayTrackerRef.current.snapshot(currentMs);
-    instance.audioDelayFeedback.value = currentAudioDelayFeedback(audio);
+    instance.audioDelay.value = currentAudioDelay(audio);
     publishAudioPlayoutCatchUp(instance, audio);
     publishAudioPlayoutCumulative(instance, audio);
   }
@@ -1625,22 +1616,17 @@ export function useSubscriber(
   }
 
   /**
-   * 音声の目標遅延の閉ループの内訳を、入口の統計から取り出す
+   * 音声の再生予算の内訳を、入口の統計から取り出す
    *
    * 音声だけの購読でも A/V 同期の snapshot は作らないため、再生の入口から直接読む
-   * (音声だけでも jitter buffer と閉ループは動かす)。jitter buffer が無効のときと、
-   * 音声を構成していないときは既定値にする
+   * (音声だけでも到着の観測と予約の計器は動かす)。出力 lead は jitter buffer を
+   * 無効にしても観測される。音声を構成していないときだけ既定値にする
    *
    * @param audio - `getStats()` を 1 回だけ読んだ値 (`getStats().audio`)
    */
-  function currentAudioDelayFeedback(
-    audio: MediaPlayoutAudioStats | null,
-  ): AudioDelayFeedbackSnapshot {
-    if (!jitterBufferEnabledRef.current) {
-      return sub.EMPTY_AUDIO_DELAY_FEEDBACK;
-    }
-    // 目標遅延の閉ループの内訳は、再生の入口の統計 (`getStats().audio.delayFeedback`) が持つ
-    return audio?.delayFeedback ?? sub.EMPTY_AUDIO_DELAY_FEEDBACK;
+  function currentAudioDelay(audio: MediaPlayoutAudioStats | null): AudioPlayoutDelayStats {
+    // 再生予算の内訳は、再生の入口の統計 (`getStats().audio.delay`) が持つ
+    return audio?.delay ?? sub.EMPTY_AUDIO_DELAY;
   }
 
   /**
@@ -2026,7 +2012,12 @@ export function useSubscriber(
         // 復号へ渡した音の通し番号を採番する。停止の flush で流した音は、復号の出力が
         // 届くまで drain の待ちに残る (採番は復号へ渡す直前に同期で行う)
         audioStopRef.current.noteAudioDecode(flushed);
-        audioDecoderInstance.decode(obj.payload, "key", timestamp, 0);
+        audioDecoderInstance.decode(
+          obj.payload,
+          "key",
+          timestampKind === "none" ? null : timestamp,
+          0,
+        );
         current.audioChunksDecoded.value += 1;
       } catch (error) {
         // LOC properties の復号失敗など、この object だけの問題は次で回復し得るため
@@ -2215,7 +2206,7 @@ export function useSubscriber(
     instance.statusMessage.value = "Preparing audio decoder...";
     resetSubscriberStats(instance);
     // 映像は購読しないが、音声の jitter buffer と受信側の追いつきは使う。時間軸を作らないと
-    // 到着の揺らぎの学習 (NetEq) と閉ループが動かず、固定の遅れで再生することになる。
+    // 到着と出力時計の観測、および予約の統計を得られない。音声だけの待ちは 50 ms にする。
     // 同期の推定 (A/V) は映像が無いため出さない。音声の Track だけでも targetLatency は
     // 宣言され得る (draft-ietf-moq-msf-01 §5.2.8)
     const audioOnlyJitterBufferEnabled = settings.jitterBufferEnabled.value;

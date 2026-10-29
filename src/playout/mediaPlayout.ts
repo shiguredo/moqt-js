@@ -27,7 +27,6 @@
  */
 
 import type { AvSyncStats } from "../codec/types";
-import type { AudioDelayFeedbackSnapshot } from "./audioDelayFeedback";
 import {
   AUDIO_PLAYOUT_TIMING_WINDOW_MS,
   AudioPlayoutTimingStats,
@@ -49,7 +48,7 @@ import {
   type AudioDecodeInputRecord,
   type PlayoutTimestampKind,
 } from "./decodeInputTimestamps";
-import { AUDIO_ONLY_ARRIVAL_DELAY_FLOOR_MS, PlayoutTimeline } from "./timeline";
+import { PlayoutTimeline, type AudioPlayoutDelayStats } from "./timeline";
 import {
   VideoDecodeInputs,
   VideoPlayoutSession,
@@ -116,7 +115,7 @@ export interface MediaPlayoutAudioOptions {
    * 揃える相手 (映像) がいるかを返す。省略すると「映像の出力が構成されているか」で決める
    *
    * 揃える相手がいない (音声だけを購読している) ときは、目標の開始時刻を守らずに到着基準で
-   * 並べ、揺らぎの推定が届いていない周期的な停滞を先に吸収する下限を足す。映像の出力を
+   * 並べる。固定 50 ms の予算を使い、過去の停滞で恒常的な待ちを増やさない。映像の出力を
    * 構成していても catalog に映像のトラックが無い購読では揃える相手がいないため、呼び出し側が
    * 実際のトラックの有無を返す (ライブラリは `() => this.videoTrackInfo !== null` を渡す)。
    * 映像の出力を構成していないときは、このコールバックの値によらず揃える相手はいない。
@@ -198,7 +197,7 @@ export interface MediaPlayoutOptions {
    * 共有の時間軸 (jitter buffer) を使うか。既定は true
    *
    * false のときは TIMESTAMP の対応付けと表示時刻の決定をせず、届いた順に鳴らし・表示する
-   * (音声の目標遅延の閉ループは動き続ける。時間軸の学習だけを使わない)。
+   * (音声の到着基準の予算は 50 ms。予約と欠落の計器は動き続ける)。
    */
   readonly jitterBuffer?: boolean;
   /**
@@ -312,14 +311,14 @@ export interface MediaPlayoutAudioStats {
   readonly compressedMs: number;
   /** 補間した合計 (ミリ秒) */
   readonly concealedMs: number;
-  /** 目標を守る並べ方で最後に並べた音の遅れ (ミリ秒) */
+  /** 最後に並べた音の目標時刻または到着基準に対する遅れ (ミリ秒) */
   readonly latenessMs: number;
   /** 再生の観測値 (鳴るはずの時刻・鳴り始める時刻・鳴らなかった量) */
   readonly timing: AudioPlayoutTimingSnapshot;
   /** 受信側の追いつきの観測値 */
   readonly catchUp: AudioReceiveCatchUpStats;
-  /** 音声の目標遅延の閉ループの内訳 (音声だけを使うときに読む) */
-  readonly delayFeedback: AudioDelayFeedbackSnapshot;
+  /** 到着と実出力の時計から求めた音声の再生予算の内訳 (音声だけを使うときに読む) */
+  readonly delay: AudioPlayoutDelayStats;
 }
 
 /** 映像の表示の統計 */
@@ -563,7 +562,7 @@ export class MediaPlayout {
    * 閉じない (所有権は呼び出し側に残る)。
    *
    * 音声だけを使うとき (映像を表示しないとき) は、揃える相手がいないため目標の開始時刻を
-   * 守らず、揺らぎの推定が届いていない周期的な停滞を先に吸収する下限を足す。これは
+   * 守らず、固定 50 ms の予算を使って到着基準で並べる。これは
    * ライブラリと moqt-devtools で同じ規則である。
    *
    * `admit` だけは鳴らす先が無いときも呼ぶ (追いつきの状態を進める副作用を落とさない)。
@@ -628,7 +627,7 @@ export class MediaPlayout {
     }
 
     // 揃える相手 (映像) がいるときだけ目標の開始時刻を守る。音声だけのときは到着基準で
-    // 並べ、下限を足して周期的な停滞を先に吸収する
+    // 並べ、固定の 50 ms の予算を使う
     let counterpartPresent: boolean;
     try {
       counterpartPresent =
@@ -653,8 +652,6 @@ export class MediaPlayout {
       timeline: this.timeline,
       useTimeline: this.useTimeline,
       enforceTarget: this.useTimeline && counterpartPresent,
-      // 映像に合わせる相手がいるときは渡さない (映像とのずれの原因になる)
-      ...(counterpartPresent ? {} : { arrivalDelayFloorMs: AUDIO_ONLY_ARRIVAL_DELAY_FLOOR_MS }),
       output: this.audioOutput,
     });
     return { ...result, timestampKind };
@@ -874,7 +871,7 @@ export class MediaPlayout {
               latenessMs: audio.session.playout.lateness * 1_000,
               timing: audio.timing.snapshot(performance.now()),
               catchUp: audio.session.catchUp.snapshot(),
-              delayFeedback: this.timeline.audioDelayFeedbackStats(),
+              delay: { ...this.timeline.audioDelayStats(), targetMs: audio.session.targetDelayMs },
             },
       video:
         video === null

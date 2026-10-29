@@ -63,6 +63,50 @@ function frequencyFrame(frequencyHz: number, amplitude = 0.5, phase = 0): AudioS
   return samples;
 }
 
+test("concealSamples: 全チャンネルで同じ周期が使えるときだけ補間する", () => {
+  // 左が 200 Hz でも、右の周期が異なれば繰り返しの内部が別の音になる。
+  // 先頭の段差だけが偶然小さくなる位相も含め、100 フレーム分を調べる。
+  for (const rightFrequency of [233, 333, 400]) {
+    let generated = 0;
+    for (let frame = 0; frame < 100; frame++) {
+      const result = concealSamples(
+        [
+          frequencyFrame(200, 0.3),
+          frequencyFrame(rightFrequency, 0.3, 2 * Math.PI * rightFrequency * frame * 0.02),
+        ],
+        SAMPLE_RATE,
+        0.02,
+      );
+      if (result.generatedSamples > 0) generated++;
+    }
+    assert.equal(
+      generated,
+      rightFrequency === 400 ? 100 : 0,
+      `右が ${rightFrequency} Hz の補間で、200 Hz の周期を使える場合だけ生成すること`,
+    );
+  }
+});
+
+test("concealSamples: 同じ音を左右に複製しても補間の可否を変えない", () => {
+  let accepted = 0;
+  for (const rate of [44100, 48000]) {
+    for (const durationMs of [10, 20, 40]) {
+      for (const frequency of [100, 140, 170, 220, 390]) {
+        const channel = voicedSamples(frequency, rate, Math.round((rate * durationMs) / 1000));
+        const mono = concealSamples([channel], rate, 0.02);
+        const stereo = concealSamples([channel, new Float32Array(channel)], rate, 0.02);
+        assert.equal(
+          stereo.generatedSamples,
+          mono.generatedSamples,
+          `${rate} Hz / ${durationMs} ms / ${frequency} Hz で同じ判定になること`,
+        );
+        if (mono.generatedSamples > 0) accepted++;
+      }
+    }
+  }
+  assert.isAbove(accepted, 0, "すべてを拒否して判定を一致させないこと");
+});
+
 /**
  * サンプルレート `sampleRate`、長さ `length` サンプルの有声 (倍音を 1 / 次数で重ねた周期波)
  *
@@ -206,6 +250,47 @@ test("compressSamples: すべてのチャンネルを同じ長さだけ詰める
   assert.equal(result.channels.length, 2);
   assert.equal(result.channels[0]?.length, result.channels[1]?.length);
   assert.equal(result.channels[0]?.length, FRAME_SAMPLES + result.lengthChangeSamples);
+});
+
+// 片側だけに周期がある音で他方まで切ると、クロスフェード中に逆相が混ざって音量が落ちる。
+// 長さの一致だけでなく、すべてのチャンネルで同じ周期を使えることを要求する。
+test("compressSamples: 左右で周期が一致しない音声は圧縮しない", () => {
+  for (const rightFrequency of [233, 333, 440]) {
+    const result = compressSamples(
+      [frequencyFrame(200), frequencyFrame(rightFrequency)],
+      SAMPLE_RATE,
+      FRAME_SAMPLES / 2,
+    );
+    assert.equal(
+      result.lengthChangeSamples,
+      0,
+      `${rightFrequency} Hz の右チャンネルを壊さないこと`,
+    );
+  }
+});
+
+// 共鳴が強い低い声では、短い相関窓だけを見ると 80 Hz の第 5 倍音を周期と誤認する。
+// フレーム全体では一致しないため、2.5 ms を切る操作を受け入れてはならない。
+test("compressSamples: 低い声の倍音を基本周期と誤認して圧縮しない", () => {
+  const frame = Float32Array.from({ length: FRAME_SAMPLES }, (_, index) => {
+    let sample = 0;
+    for (let harmonic = 1; harmonic <= 20; harmonic++) {
+      const formant = 0.2 + Math.exp(-(((harmonic * 80 - 1000) / 650) ** 2));
+      sample +=
+        (formant / harmonic) * Math.sin((2 * Math.PI * harmonic * 80 * index) / SAMPLE_RATE);
+    }
+    return sample * 0.35;
+  });
+  assert.equal(compressSamples([frame], SAMPLE_RATE, FRAME_SAMPLES / 2).lengthChangeSamples, 0);
+});
+
+// 粗い探索の上端に最大値がある場合も、元のレートで評価できる近傍から周期を選ぶ。
+// 348 サンプルのまま切ると、真の周期 342.857 サンプルから 5 サンプルずれる。
+test("compressSamples: 探索の上端付近の 140 Hz も真の周期で圧縮する", () => {
+  const frame = voicedFrame(140);
+  const result = compressSamples([frame], SAMPLE_RATE, FRAME_SAMPLES / 2);
+  assert.isBelow(result.lengthChangeSamples, 0, "周期的な有声音を圧縮すること");
+  assert.isAtMost(Math.abs(-result.lengthChangeSamples - SAMPLE_RATE / 140), 1);
 });
 
 // 空の音では何もしない (境界)

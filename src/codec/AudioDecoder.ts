@@ -20,6 +20,7 @@ import {
   warnCodecNotConfigured,
 } from "./codecLifecycle";
 import type { AudioDecoderWorkerData } from "./workerMessages";
+import { OpusDecoderTimestamps } from "./opusDecoderTimestamps";
 
 /**
  * オーディオデコーダーラッパークラス
@@ -30,6 +31,7 @@ export class AudioDecoderWrapper {
   private worker: Worker | null = null;
   private callbacks: AudioDecoderWrapperCallbacks;
   private configured = false;
+  private timestamps = new OpusDecoderTimestamps(false);
   // 直近に configure() へ渡した設定。追いつきの作り直し (reset) で使い回す
   private lastConfig: AudioDecoderConfig | null = null;
   // configure() 発行ごとの世代管理 (並行 configure の所有権分離用)
@@ -117,12 +119,17 @@ export class AudioDecoderWrapper {
   }
 
   private configureDirect(config: AudioDecoderConfig): void {
+    // 旧世代の出力が新世代の入力記録を消費しないよう、callback は同じ記録を捕捉する。
+    const timestamps = new OpusDecoderTimestamps(
+      config.codec === "opus" && config.description === undefined,
+    );
+    this.timestamps = timestamps;
     this.decoder = replaceCodec(
       this.decoder,
       new AudioDecoder({
         output: (audioData: AudioData) => {
           this.callbacks.output({
-            data: audioData,
+            data: timestamps.restore(audioData),
           });
         },
         error: (error: DOMException) => {
@@ -144,7 +151,12 @@ export class AudioDecoderWrapper {
   /**
    * エンコードされたオーディオチャンクをデコードする
    */
-  decode(data: Uint8Array, type: "key" | "delta", timestamp: number, duration: number): void {
+  decode(
+    data: Uint8Array,
+    type: "key" | "delta",
+    timestamp: number | null,
+    duration: number,
+  ): void {
     if (!this.configured) {
       warnCodecNotConfigured("AudioDecoderWrapper");
       return;
@@ -167,13 +179,15 @@ export class AudioDecoderWrapper {
     } else if (isCodecConfigured(this.decoder)) {
       const chunk = new EncodedAudioChunk({
         type,
-        timestamp,
+        timestamp: timestamp ?? 0,
         duration,
         data,
       });
       try {
+        this.timestamps.submit(timestamp);
         this.decoder.decode(chunk);
       } catch (error) {
+        this.timestamps.rejectLast();
         this.callbacks.error(error instanceof Error ? error : new Error(String(error)));
       }
     }

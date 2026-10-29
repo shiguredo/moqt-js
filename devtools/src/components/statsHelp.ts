@@ -28,11 +28,6 @@ import {
 } from "../utils/preconditionWarnings";
 import { AUDIO_PUBLISH_CATCH_UP_PENDING_TIMEOUT_MS } from "../../../src/audioPublishCatchUp";
 import {
-  AUDIO_DELAY_FEEDBACK_ARTIFACT_CEILING_MS,
-  AUDIO_DELAY_FEEDBACK_GAP_QUIET_MS,
-  AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS,
-} from "../../../src/playout/audioDelayFeedback.ts";
-import {
   AUDIO_MISS_REASONS,
   AUDIO_PLAYOUT_BOUNDARY_STEP_THRESHOLD,
   MAX_RECENT_AUDIO_MISSES,
@@ -179,12 +174,12 @@ export const AV_SYNC_HELP: SectionHelp = {
     {
       term: "jitterDelayMs",
       description:
-        "Jitter buffer delay of the track (ms). The audio uses the NetEq rule (0.95 quantile of arrival delay), the video the percentile of the jitter that keeps late frames within the budget.",
+        "Jitter buffer delay of the track (ms). Audio uses recent arrival jitter plus measured output lead, within 50–100 ms. Video uses the recent jitter percentile that keeps late frames within the budget.",
     },
     {
       term: "syncExtraDelayMs",
       description:
-        "Extra delay the A/V sync added to this track (ms). The leading track gets the extra so that both presentation times stay within the deadband; it is released at the decay rate.",
+        "Extra delay the A/V sync added to this track (ms). The leading track gets the extra so that both presentation times stay within the deadband; it is recomputed from current arrivals and audio reservations. When the track timelines cannot share their bases, it is released at the decay rate.",
     },
     {
       term: "presentationDelayMs",
@@ -403,22 +398,22 @@ export const AUDIO_PLAYOUT_TIMING_HELP: SectionHelp = {
     {
       term: "sampleRateMismatchFrames",
       description:
-        "Decoded frames whose sample rate differs from the AudioContext sample rate, cumulative. When the two differ, AudioBufferSourceNode resamples each buffer and the buffer boundary gets one extra sample, which adds a +6 dB spike 50 times a second (A1 in docs/AUDIO_GLITCH_CAUSES.md). 0 means the rates match; boundaryStepCount does not count this overlap.",
+        "Decoded frames whose sample rate differs from the AudioContext sample rate, cumulative. When the two differ, AudioBufferSourceNode resamples each buffer. This counter identifies the resampling condition; it does not measure output overlap or audible clicks. 0 means the rates match. boundaryStepCount measures the scheduled samples, before resampling.",
     },
     {
       term: "contextSampleRate / decodedSampleRate",
       description:
-        "Sample rate (Hz) of the latest AudioContext and of the latest decoded AudioData. - before the first sound is handled. The Opus decoder always returns 48 kHz regardless of the configured rate, so an Opus track with a Catalog samplerate of 44100 shows different values here.",
+        "Sample rate (Hz) of the latest AudioContext and of the latest decoded AudioData. - before the first sound is handled. Chromium's Opus decoder returns 48 kHz regardless of the configured rate. The subscriber also creates a 48 kHz AudioContext for Opus, even when the Catalog samplerate is 44100, so the values normally match.",
     },
     {
       term: "gapCount / gapMs / gapMaxMs",
       description:
-        "Holes left between two sounds that the concealment could not fill (cumulative): the number, the total ms and the longest ms. A hole is the part before the earliest time a buffer can be reserved (an underrun or a lead shortfall), a concealment that failed, or the part beyond the concealment limit (100 ms). gapMs is the unfilled length; the 2 ms edge fades count as concealment, so they are not included. A difference that is only the rounding of the generated concealment length (within half a sample) is not counted as a hole. It is cumulative since subscribing started while a recorded waveform covers only the capture window, so the two do not match. A long interruption also appears as one large hole. The click is decided by the step, not by the silence length; read boundaryStepCount together with these.",
+        "Holes left between two sounds that the concealment could not fill (cumulative): the number, the total ms and the longest ms. A hole is the part before the earliest time a buffer can be reserved (an underrun or a lead shortfall), a concealment that failed, or the part beyond the concealment limit (100 ms). gapMs is the unfilled length. Generated gap-filling samples count as concealment; output gain fades do not add concealed duration. A difference that is only the rounding of the generated concealment length (within half a sample) is not counted as a hole. It is cumulative since subscribing started while a recorded waveform covers only the capture window, so the two do not match. A long interruption also appears as one large hole. The click is decided by the step, not by the silence length; read boundaryStepCount together with these.",
     },
     {
       term: "unrecoverableGapCount / unrecoverableGapMs",
       description:
-        "The part of the gaps before the earliest time a buffer can be reserved (now + the lead): already in the past, or still in the future but inside the lead (count and ms, cumulative). That part cannot be concealed. The closed loop raises the target delay for these holes so the same jitter does not become a hole again.",
+        "The part of the gaps before the earliest time a buffer can be reserved (now + the lead): already in the past, or still in the future but inside the lead (count and ms, cumulative). That part cannot be concealed. Arrival jitter and measured output lead determine the next budget; past gaps do not raise a separate delay ceiling.",
     },
     {
       term: "lateStartCount / lateStartMaxMs",
@@ -428,11 +423,11 @@ export const AUDIO_PLAYOUT_TIMING_HELP: SectionHelp = {
     {
       term: "pushStartCount / pushStartMaxMs",
       description:
-        "Times the reserved start time was pushed to currentTime + 3 ms, and the longest push (ms). Includes pushes caused only by the 3 ms lead, which lateStartCount does not count. The first 2 ms are faded in, but the previous sound's tail is not, so a boundary created by the push can still appear in boundaryStepCount.",
+        "Times the reserved start time was pushed to currentTime + 3 ms, and the longest push (ms). Includes pushes caused only by the 3 ms lead, which lateStartCount does not count. The first 2 ms are faded in. A provisional tail fade is cancelled only when a contiguous successor is reserved in time; otherwise the tail fades to zero. Inspect the captured waveform to assess the resulting boundary.",
     },
     {
       term: "boundaryStepCount / boundaryStepMax",
-      description: `Buffer boundaries whose step (the difference between the samples that the output actually plays) is above ${AUDIO_PLAYOUT_BOUNDARY_STEP_THRESHOLD} (3 times the normal step of a 440 Hz tone, 0.0174; an absolute value, so normal audio can exceed it). Counts every boundary, including the step where the output cuts to a gap and back and the step of a media-time jump (loss or decoder rebuild). At a gap with no concealment, the step is the amplitude of the sound just before the silence (the previous sound's tail is not faded); when the concealment fills part of the gap, its faded tail keeps the step small.`,
+      description: `Scheduled buffer boundaries whose estimated step is above ${AUDIO_PLAYOUT_BOUNDARY_STEP_THRESHOLD} (3 times the normal step of a 440 Hz tone, 0.0174; an absolute value, so normal audio can exceed it). Counts every boundary, including the step where the output cuts to a gap and back and the step of a media-time jump (loss or decoder rebuild). An uncancelled output tail fade is reflected as zero at the end. The counter does not model the entire gain envelope or browser resampling and does not replace waveform measurement.`,
     },
     {
       term: "drainPlayedMs / drainCutMs / drainWaitedMs / drainRequestedMs",
@@ -440,18 +435,9 @@ export const AUDIO_PLAYOUT_TIMING_HELP: SectionHelp = {
         "Result of the last stop (drain), in ms: the reserved sounds played before closing the AudioContext, the part cut at the wait limit, the time actually waited, and the wait limit that was asked for. - before the first stop. drainCutMs matches the increase of missedByReason.stopped; drainPlayedMs includes the sounds that were already reserved at the stop.",
     },
     {
-      term: "appliedMs / jitterTargetMs / delayReason",
+      term: "targetMs / jitterMs / outputLeadMs",
       description:
-        "The target delay actually used (ms), the target derived only from the arrival jitter (NetEq, ms), and the reason the closed loop last moved the target (initial, compression, gap, backlog, and so on). appliedMs is the larger of the jitter target and the closed loop target, capped by the applied ceiling. They are read from the same snapshot as the A/V Sync breakdown when both tracks are subscribed, and from the audio pipeline when only audio is subscribed.",
-    },
-    {
-      term: "appliedCeilingMs",
-      description: `The limit actually applied to the target delay (ms). It is ${AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS} ms normally. A single gap widens it for ${AUDIO_DELAY_FEEDBACK_GAP_QUIET_MS / 1_000} s to what the gap plus the margin needs, and sustained time compression or gaps widen it to ${AUDIO_DELAY_FEEDBACK_ARTIFACT_CEILING_MS} ms, unless the explicit targetLatency caps more tightly. The value actually used is appliedMs in this section (and also in A/V Sync).`,
-    },
-    {
-      term: "compressionMsPerSecond",
-      description:
-        "Speed of the time compression observed in the last control interval (ms/s). Above 0 means the periodic waveform is being shortened to catch up, which is what makes the voice rough. It also widens appliedCeilingMs when it continues.",
+        "The buffering target, recent arrival jitter and the lead required by the output clock (ms). The shared audio target accounts for jitter and output lead together within 50–100 ms. Audio-only playout uses 50 ms. Output lead is unknown until a valid output timestamp is available. Total capture-to-output delay also includes delivery and queued audio.",
     },
     {
       term: "stallCount / stallMs / overlappedArrivals",
@@ -459,7 +445,7 @@ export const AUDIO_PLAYOUT_TIMING_HELP: SectionHelp = {
     },
   ],
   notes: [
-    "The start is the time reserved on the AudioContext clock, so the output latency of the device is not included. Use the A/V Sync audioClockFallback to see whether the clock is mapped by getOutputTimestamp() or by currentTime. The A/V Sync skew does include the output latency while getOutputTimestamp() is available: measured on the real relay, the mapped time was the position the device was playing (the audio in flight was 30 ms against a reported outputLatency of 25 ms and a baseLatency of 5.3 ms).",
+    "Start times map scheduled AudioContext positions onto the output clock using getOutputTimestamp() when available. Fallback uses currentTime and performance.now(); check A/V Sync audioClockFallback for the active mapping. These are timing estimates, including the mapped AudioContext output position when available. Buffering in a downstream <audio> element and physical speaker output are not measured.",
     "Only the subscriber's own pipeline is measured. A sound that never arrives or never gets decoded does not appear here (compare audio.objectsReceived / chunksDecoded with audio.playoutTiming.playedFrames).",
   ],
 };
@@ -480,7 +466,7 @@ export const AUDIO_OUTPUT_HELP: SectionHelp = {
     },
     {
       term: "contextSampleRate",
-      description: `Sample rate (Hz) the AudioContext was created with. The browser picks it from the output device, not from the decoded audio; a Bluetooth headset in HFP mode can give ${AUDIO_CONTEXT_NARROWBAND_SAMPLE_RATES.join(" or ")} Hz even though the decoded audio is wideband. The warning audioContextNarrowband appears for those rates.`,
+      description: `Sample rate (Hz) the AudioContext was created with. Playback requests a rate matching the decoded audio; if that context cannot be created, it falls back to the browser's device-default rate. The warning audioContextNarrowband appears at ${AUDIO_CONTEXT_NARROWBAND_SAMPLE_RATES.join(" or ")} Hz. This value does not measure the physical output device's sample rate.`,
     },
     {
       term: "elementWaitingCount / elementStalledCount",
@@ -495,7 +481,7 @@ export const AUDIO_OUTPUT_HELP: SectionHelp = {
   ],
   notes: [
     "The AudioContext sample rate is fixed when the context is created. If it does not match the decoded frames, the warning audioSampleRateMismatch appears together with sampleRateMismatchFrames in Audio Playback Timing (A1 in docs/AUDIO_GLITCH_CAUSES.md).",
-    "The playout instruments do not include the output latency of the device or the rebuffering of the element. With the Audio Playback values at 0 and these values moving, the interruption is downstream of the playout (B4 and B7 in docs/AUDIO_GLITCH_CAUSES.md).",
+    "These values observe the AudioContext state and the downstream <audio> element separately from scheduled audio metrics. Element buffering and physical speaker output are not measured by the playout clock mapping. Compare received and decoded frame counts as well when locating an interruption.",
   ],
 };
 

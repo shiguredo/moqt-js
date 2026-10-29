@@ -726,26 +726,6 @@ export function installRecordingVideoDecoder(control: {
   return decoded;
 }
 
-/**
- * 音声の復号器の代役を入れて、復号へ渡った timestamp を記録する
- *
- * @param control - 購読の制御口
- * @returns 復号へ渡った timestamp の記録
- */
-export function installTimestampRecordingAudioDecoder(control: {
-  audioDecoder: unknown;
-  audioDecoderConfigured: boolean;
-}): number[] {
-  const decodedTimestamps: number[] = [];
-  (control as RecordingDecoderControl).audioDecoder = {
-    decode: (_payload: Uint8Array, _type: "key" | "delta", timestamp: number) => {
-      decodedTimestamps.push(timestamp);
-    },
-  };
-  control.audioDecoderConfigured = true;
-  return decodedTimestamps;
-}
-
 /** テストで使う MOQT サーバーの URL (すべての購読で同じものを使う) */
 const TEST_SUBSCRIBER_URL = "moqt://example.com/live";
 

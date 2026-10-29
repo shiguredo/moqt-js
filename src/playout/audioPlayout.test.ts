@@ -22,6 +22,7 @@
  */
 
 import { test, assert } from "vite-plus/test";
+import { compressSamples } from "./audioTimeStretch";
 import {
   AUDIO_CLOCK_DEADBAND_MS,
   AUDIO_CLOCK_MAX_CHANGE_MS,
@@ -49,6 +50,74 @@ const FRAME_MICROSECONDS = 20_000;
 
 /** 浮動小数点の誤差を許す幅 (秒) */
 const EPSILON = 1e-9;
+
+test("confirmPlayoutEnd: サンプルへの丸めで早く終わる音の次にも隙間を残さない", () => {
+  const scheduler = new AudioPlayoutScheduler();
+  const first = startAtOf(scheduler.schedule(0, 0, FRAME_SECONDS, arrivalTarget(0)));
+  scheduler.confirmPlayoutEnd(first + FRAME_SECONDS - 0.000008);
+  const next = startAtOf(
+    scheduler.schedule(0, FRAME_MICROSECONDS, FRAME_SECONDS, arrivalTarget(0)),
+  );
+  assert.closeTo(
+    next,
+    first + FRAME_SECONDS - 0.000008,
+    EPSILON,
+    "実際の前の音の終わりから続けること",
+  );
+});
+
+test("schedule: 到着が遅れた音を再び目標の深さだけ待たせない", () => {
+  const scheduler = new AudioPlayoutScheduler();
+  const target = { ...arrivalTarget(0), arrivalDelaySeconds: 0.05 };
+  scheduler.schedule(0, 0, FRAME_SECONDS, target);
+  const decision = scheduler.schedule(0.11, 20_000, FRAME_SECONDS, {
+    ...target,
+    arrivalSeconds: 0.1,
+  });
+  assert.closeTo(
+    startAtOf(decision),
+    0.11 + AUDIO_PLAYOUT_MIN_LEAD_SECONDS,
+    EPSILON,
+    "既に遅れた音は予約できる最も早い時刻に置き、さらに 50 ms の待ちを足さないこと",
+  );
+});
+
+// 一度の到着の停滞で基準を後ろへ動かしても、回復後まで遅延を残さない。
+// 実際の周期圧縮の結果を返し、圧縮を要求しただけで回復したことにしない。
+test("schedule: 到着基準でも停滞後の余分な遅延を音を捨てずに回復する", () => {
+  const scheduler = new AudioPlayoutScheduler();
+  const samples = Float32Array.from(
+    { length: 960 },
+    (_, index) => 0.3 * Math.sin((2 * Math.PI * 200 * index) / 48000),
+  );
+  let finalDelaySeconds = 0;
+  let gapsAfterRecovery = 0;
+  for (let index = 0; index < 300; index++) {
+    const mediaSeconds = 10 + index * FRAME_SECONDS;
+    const arrivalSeconds = index >= 50 && index < 59 ? 11.18 : mediaSeconds;
+    const decision = playDecisionOf(
+      scheduler.schedule(arrivalSeconds + 0.03, index * FRAME_MICROSECONDS, FRAME_SECONDS, {
+        targetStartSeconds: null,
+        enforceTarget: false,
+        arrivalSeconds,
+        delaySeconds: 0.14,
+        arrivalDelaySeconds: 0.14,
+        presentationDelaySeconds: 0.14,
+      }),
+    );
+    const compressed = compressSamples(
+      [samples],
+      48000,
+      Math.round(decision.compressSeconds * 48000),
+    );
+    scheduler.confirmStretch(-compressed.lengthChangeSamples / 48000);
+    finalDelaySeconds = decision.startAt - arrivalSeconds;
+    if (index > 59 && decision.totalGapSeconds > EPSILON) gapsAfterRecovery++;
+  }
+  assert.isAtMost(finalDelaySeconds, 0.16 + EPSILON, "140 ms の下限と 20 ms の不感帯まで戻ること");
+  assert.equal(gapsAfterRecovery, 0, "追いつくための圧縮で新しい穴を作らないこと");
+  assert.equal(scheduler.drops, 0, "音を捨てて追いつかないこと");
+});
 
 /** 鳴らすと決めた時刻を取り出す (捨てると決めたときは失敗にする) */
 function startAtOf(decision: AudioPlayoutDecision): number {
@@ -889,7 +958,7 @@ test("schedule: 目標を使わないときは過ぎてから届いた音で基�
     startAtOf(scheduler.schedule(10, 0, FRAME_SECONDS, make(10)));
     // 2 つ目の音は 10.10 に鳴らすはずが、10.2 に届く (目標 10.05 はとっくに過ぎている)
     const late = startAtOf(scheduler.schedule(10.2, FRAME_MICROSECONDS, FRAME_SECONDS, make(10.2)));
-    assert.closeTo(late, 10.2 + AUDIO_PLAYOUT_DELAY_SECONDS, EPSILON, label);
+    assert.closeTo(late, 10.2 + AUDIO_PLAYOUT_MIN_LEAD_SECONDS, EPSILON, label);
     assert.equal(scheduler.rebases, 1, label);
     assert.equal(scheduler.drops, 0, label);
     // 取り直した基準から timestamp の間隔どおりに並ぶ
@@ -1029,9 +1098,9 @@ test("schedule: 目標を使わないときの再生の遅れは arrivalDelaySec
     EPSILON,
     "学習した遅れではなく到着基準の遅れで並べること",
   );
-  // 過ぎてから届いたときの取り直し先も、到着基準の再生の遅れになる
+  // 過ぎてから届いた音には初期の待ちを再度足さず、直ちに再開する。
   const late = startAtOf(scheduler.schedule(20, FRAME_MICROSECONDS, FRAME_SECONDS, targetAt(20)));
-  assert.closeTo(late, 20 + arrivalDelaySeconds, EPSILON);
+  assert.closeTo(late, 20 + AUDIO_PLAYOUT_MIN_LEAD_SECONDS, EPSILON);
   assert.equal(scheduler.rebases, 1);
 });
 
@@ -1305,33 +1374,3 @@ function arrivalTarget(arrivalSeconds: number): AudioPlayoutTarget {
     presentationDelaySeconds: AUDIO_PLAYOUT_DELAY_SECONDS,
   };
 }
-
-// 押し直した分だけ次の音の下限を後ろへずらす (押し直した音と次の音を重ねない)
-test("shiftPlayoutEnd: 押し直した分だけ次の音の下限を後ろへずらす", () => {
-  const scheduler = new AudioPlayoutScheduler({ stretchMinSeconds: 0 });
-  const nowSeconds = 10;
-  const target = arrivalTarget(nowSeconds - AUDIO_PLAYOUT_DELAY_SECONDS);
-  const first = startAtOf(scheduler.schedule(nowSeconds, 0, FRAME_SECONDS, target));
-  scheduler.shiftPlayoutEnd(0.05);
-  const second = startAtOf(scheduler.schedule(nowSeconds, 20_000, FRAME_SECONDS, target));
-  assert.closeTo(
-    second,
-    first + FRAME_SECONDS + 0.05,
-    1e-9,
-    "押し直した分だけ次の音の下限を後ろへずらすこと",
-  );
-});
-
-// 0 以下と前の音が無いときは何もしない
-test("shiftPlayoutEnd: 0 以下と前の音が無いときは何もしない", () => {
-  const scheduler = new AudioPlayoutScheduler({ stretchMinSeconds: 0 });
-  // 前の音が無い
-  scheduler.shiftPlayoutEnd(0.05);
-  const nowSeconds = 10;
-  const target = arrivalTarget(nowSeconds - AUDIO_PLAYOUT_DELAY_SECONDS);
-  const first = startAtOf(scheduler.schedule(nowSeconds, 0, FRAME_SECONDS, target));
-  scheduler.shiftPlayoutEnd(0);
-  scheduler.shiftPlayoutEnd(-1);
-  const second = startAtOf(scheduler.schedule(nowSeconds, 20_000, FRAME_SECONDS, target));
-  assert.closeTo(second, first + FRAME_SECONDS, 1e-9, "ずらさないこと");
-});

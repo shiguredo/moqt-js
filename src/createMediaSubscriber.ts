@@ -35,7 +35,7 @@ import {
 } from "./playout/audioPlayoutTimingStats";
 // 復号済みの音声と映像の再生の入口。時間軸 (jitter buffer)・音声の再生の組み立て・映像の
 // 表示の組み立て・計器・復号へ渡した入力の対応表を 1 か所にまとめる。組み立てをここへ
-// 置くと、到着基準の遅れ・閉ループ・計器の修正が 1 か所で済む
+// 置くと、到着基準の予算・出力時計の観測・計器の修正が 1 か所で済む
 // (devtools/src/hooks/useSubscriber.ts と共有する)
 import {
   createMediaPlayout,
@@ -1895,8 +1895,8 @@ export class MediaSubscriberImpl implements MediaSubscriber {
    * 音声の再生に使う AudioContext と AudioDecoder のサンプルレートを解決する
    *
    * AudioContext と復号フレームのレートが食い違うと、`AudioBufferSourceNode` がバッファ
-   * ごとにリサンプルし、20 ms の境界ごとに 1 サンプルの重なり (毎秒 50 回の +6 dB
-   * スパイク) が生まれる (実測。docs/AUDIO_GLITCH_CAUSES.md の A1)。そのため AudioContext
+   * ごとにリサンプルする。境界の重なりは OfflineAudioContext で再現しているが、
+   * 実出力のクリックの有無とは区別する。不要な変換を避けるため AudioContext
    * も復号器の configure も、復号が実際に返すレートへ揃える
    * (`resolveAudioContextSampleRate`)。
    *
@@ -1929,8 +1929,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     // Audio 出力の設定
     if (this.audioTrackInfo) {
       // Catalog の samplerate ではなく、復号が実際に返すレートで AudioContext を作る。
-      // Catalog が 44100 の Opus でも復号は 48 kHz を返すため、Catalog の値で作ると
-      // バッファ境界ごとに 1 サンプルの重なりが生まれる (docs/AUDIO_GLITCH_CAUSES.md の A1)
+      // Catalog が 44100 の Opus でも復号は 48 kHz を返すため、不要なリサンプルを避ける。
       const sampleRate = this.resolveAudioPlayoutSampleRate();
       const context = new AudioContext({
         sampleRate,
@@ -2612,7 +2611,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     }
 
     // デコード
-    this.audioDecoder.decode(obj.payload, "key", timestamp, 0);
+    this.audioDecoder.decode(obj.payload, "key", timestampKind === "none" ? null : timestamp, 0);
   }
 
   /**

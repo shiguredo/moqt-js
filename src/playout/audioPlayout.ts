@@ -187,8 +187,8 @@ export function arrivalPlayoutDelaySeconds(learnedDelaySeconds: number): number 
  * これ以下の隙間は補間せず、無音のまま残す。以前は 5 ms だったが、実リレーの収録では
  * 5 ms 以下の無音が 27 個 (合計 62.9 ms) あり、その両端の段差がクリックとして聞こえていた。
  * 440 Hz のトーンでは補間が失敗しないため、隙間を埋める方がよい。0.5 ms は 48 kHz で
- * 24 サンプルであり、これ以下の段差はサンプル数個で耳につかない。また、これ以下の隙間は
- * 「補間する」のではなく前の音の終わりへ揃えて穴を作らない (`snapToPreviousEnd`)。目標の
+ * 24 サンプルである。これ以下の隙間も無音として残さず、
+ * 前の音の終わりへ揃えて穴を作らない (`snapToPreviousEnd`)。目標の
  * 表示時刻の更新や浮動小数点の丸めで生じる 20 µs〜0.5 ms の前進を連続再生で吸収するため。
  * 前の音の終わりが今より過去で揃えられないときは、実際に無音として出るため
  * `concealmentOf` が隙間として返し、呼び出し側が先頭をフェードする
@@ -270,6 +270,8 @@ export interface AudioPlayoutOptions {
 export interface AudioPlayoutTarget {
   /** 目標の開始時刻 (`AudioContext.currentTime` の秒) */
   targetStartSeconds: number | null;
+  /** 到着の観測が揃った経路で使う回復の不感帯。省略時は既存の幅を使う。 */
+  stretchMinSeconds?: number;
   /**
    * 到着した音を「まだ鳴っていない位置」として扱う時刻 (`AudioContext.currentTime` の秒)
    *
@@ -416,6 +418,8 @@ export class AudioPlayoutScheduler {
   private latenessSeconds = 0;
   // 直前の音に要求した詰める量 (秒)。`confirmStretch` で実際の値に置き換える
   private requestedSeconds = 0;
+  // 到着基準の圧縮では、確定した削減量だけ timestamp と再生時刻の対応も前へ戻す。
+  private requestedByArrival = false;
   // 詰めた合計 (秒)。統計に出す
   private compressedSeconds = 0;
   // 補間した合計 (秒) と回数。統計に出す
@@ -474,8 +478,9 @@ export class AudioPlayoutScheduler {
     durationSeconds: number,
     target: AudioPlayoutTarget,
   ): AudioPlayoutDecision {
-    // 前の音に要求した補間の長さが返ってきていなければ、適用されなかったものとして扱う
+    // 前の音の補間と圧縮の確定が返っていなければ、適用されなかったものとして扱う。
     this.requestedConcealSeconds = 0;
+    this.confirmStretch(0);
     if (target.targetStartSeconds === null || !target.enforceTarget) {
       return this.scheduleByArrival(
         nowSeconds,
@@ -485,9 +490,7 @@ export class AudioPlayoutScheduler {
         target.arrivalDelaySeconds,
       );
     }
-    // 前の音に要求した詰める量が返ってきていなければ、適用されなかったものとして扱う
-    this.confirmStretch(0);
-
+    const stretchMinSeconds = target.stretchMinSeconds ?? this.stretchMinSeconds;
     const targetStartSeconds = target.targetStartSeconds;
     const limit =
       Math.max(target.delaySeconds, target.presentationDelaySeconds) + this.backlogSeconds;
@@ -557,7 +560,7 @@ export class AudioPlayoutScheduler {
     // (時刻は performance.now 系の秒であり、引き算の結果は 1e-15 程度ずれる)
     const compressSeconds =
       queueSlackSeconds > AUDIO_PLAYOUT_STRETCH_MIN_EPSILON_SECONDS &&
-      this.latenessSeconds + AUDIO_PLAYOUT_STRETCH_MIN_EPSILON_SECONDS >= this.stretchMinSeconds
+      this.latenessSeconds + AUDIO_PLAYOUT_STRETCH_MIN_EPSILON_SECONDS >= stretchMinSeconds
         ? Math.min(this.latenessSeconds, durationSeconds / 2, queueSlackSeconds)
         : 0;
     this.requestedSeconds = compressSeconds;
@@ -582,6 +585,10 @@ export class AudioPlayoutScheduler {
       return;
     }
     const applied = Math.max(0, Math.min(appliedSeconds, requestedSeconds));
+    if (this.requestedByArrival && this.anchor !== null) {
+      this.anchor.time -= applied;
+    }
+    this.requestedByArrival = false;
     this.compressedSeconds += applied;
     if (applied < requestedSeconds && this.lastEnd !== null) {
       // 詰められなかった分は音が後ろへ伸びる
@@ -611,21 +618,11 @@ export class AudioPlayoutScheduler {
     this.concealedSeconds += applied;
   }
 
-  /**
-   * 直前の音の終わりを、開始を押し直した分だけ遅らせる
-   *
-   * 予約した開始時刻を `AudioContext.currentTime` + 余裕へ押し直すと、その音は押し直した
-   * 分だけ後ろで鳴り終わる。次の音は「前の音の終わり」より前には置かないため、ここを
-   * 同じ分だけ遅らせないと、次に予約する音が押し直した音と重なって足し合わされる。
-   * 押し直した分は開始が遅れるだけで、音の長さは変わらない。
-   *
-   * @param delaySeconds - 押し直した長さ (秒)。0 以下なら何もしない
-   */
-  shiftPlayoutEnd(delaySeconds: number): void {
-    if (!(delaySeconds > 0) || this.lastEnd === null) {
-      return;
+  /** サンプルへの丸めと開始の押し直しを含む、実際のバッファの終わりを確定する。 */
+  confirmPlayoutEnd(endSeconds: number): void {
+    if (this.lastEnd !== null && Number.isFinite(endSeconds) && endSeconds >= 0) {
+      this.lastEnd = endSeconds;
     }
-    this.lastEnd += delaySeconds;
   }
 
   /**
@@ -754,6 +751,7 @@ export class AudioPlayoutScheduler {
     this.lastTimestampMicroseconds = null;
     this.latenessSeconds = 0;
     this.requestedSeconds = 0;
+    this.requestedByArrival = false;
     this.requestedConcealSeconds = 0;
   }
 
@@ -789,7 +787,9 @@ export class AudioPlayoutScheduler {
       // 過ぎてから届いた (前の音はすべて今より前に終わっているため、重ならない)。今から
       // 鳴らせる最も早い時刻へずらす。ずらす幅が無視できるときは基準を取り直さない
       // (取り直すと媒体時刻が跳び、その回数を「並べ直し」として数えてしまう)
-      const resyncedSeconds = Math.max(earliestSeconds, arrivalSeconds + arrivalDelaySeconds);
+      // 既に待ちを使い切った音へ、目標の深さを再度足さない。穴の長さと再生の遅延が
+      // さらに増えないようにし、回復した音を再び待たせない。
+      const resyncedSeconds = earliestSeconds;
       if (resyncedSeconds - startAt >= AUDIO_PLAYOUT_RESYNC_MIN_JUMP_SECONDS) {
         this.rebase(resyncedSeconds, timestampMicroseconds);
       }
@@ -812,10 +812,25 @@ export class AudioPlayoutScheduler {
     // 前の音の終わりとの差が下限以下なら、前の音の終わりに揃えて穴を作らない
     // (目標の表示時刻の更新や浮動小数点の丸めで生じる 0.5 ms 未満の前進を連続再生で吸収する)
     startAt = this.snapToPreviousEnd(startAt, previousEnd, nowSeconds);
-    this.lastEnd = startAt + durationSeconds;
+    // 停滞で後ろへ動かした基準は、経路が回復しても自然には戻らない。
+    // 到着 + 目標の深さより余分に溜まった分だけを、既存の不感帯とキューの余裕の中で
+    // 圧縮する。隙間を挟む音は詰めない。確定した量は confirmStretch で基準へ反映する。
+    const arrivalTarget = arrivalSeconds + arrivalDelaySeconds;
+    this.latenessSeconds = Math.max(0, startAt - arrivalTarget);
+    const queueSlackSeconds = (previousEnd ?? -Infinity) - earliestSeconds;
+    const compressSeconds =
+      previousEnd !== null &&
+      startAt <= previousEnd + AUDIO_PLAYOUT_STRETCH_MIN_EPSILON_SECONDS &&
+      queueSlackSeconds > AUDIO_PLAYOUT_STRETCH_MIN_EPSILON_SECONDS &&
+      this.latenessSeconds + AUDIO_PLAYOUT_STRETCH_MIN_EPSILON_SECONDS >= this.stretchMinSeconds
+        ? Math.min(this.latenessSeconds, durationSeconds / 2, queueSlackSeconds)
+        : 0;
+    this.requestedSeconds = compressSeconds;
+    this.requestedByArrival = compressSeconds > 0;
+    this.lastEnd = startAt + durationSeconds - compressSeconds;
     this.lastTimestampMicroseconds = timestampMicroseconds;
     const concealment = this.concealmentOf(nowSeconds, previousEnd, startAt);
-    return { kind: "play", startAt, basis: "arrival", compressSeconds: 0, ...concealment };
+    return { kind: "play", startAt, basis: "arrival", compressSeconds, ...concealment };
   }
 
   /**
@@ -882,7 +897,9 @@ export class AudioPlayoutScheduler {
   ): number {
     if (this.anchor === null) {
       this.anchor = {
-        time: arrivalSeconds + arrivalDelaySeconds,
+        // 映像の購読解除などで時刻基準から初めて移るときも、先行予約を追い越さない。
+        // 残った待ちは通常の時間圧縮で減らし、音を重ねて遅延を減らしたことにしない。
+        time: Math.max(arrivalSeconds + arrivalDelaySeconds, this.lastEnd ?? -Infinity),
         timestampMicroseconds,
       };
       return this.anchor.time;

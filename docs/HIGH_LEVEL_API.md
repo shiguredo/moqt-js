@@ -141,11 +141,12 @@ interface MediaPublisherOptions {
 `renderGroup` は同じ group の track を同時に描画する表明であり、音声と映像の両方を配信する
 ときに意味を持つ (片方だけ配信するときは、同時に描画する相手が居ない)。`targetLatency` は
 音声と映像で同じ値にするための宣言 (draft-ietf-moq-msf-01 §5.2.8 の MUST) であり、片方だけ
-配信するときも購読側の表示の遅れの下限として使われる。0 ms を宣言しても、購読側は
+配信するときも同じフィールドを宣言できる。音声だけを再生するときの実装は到着基準の
+50 ms の予算を優先する。A/V と映像の再生では下限として使われ、0 ms を宣言しても、購読側は
 `max(targetLatency, 揺らぎから求めた再生遅延)` を使うため、音声には下限 (実リレーの実測で
-決めた 50 ms。閉ループも 50 ms から始め、到着推定は分布が揃うまで 80 ms) がある。受信側で実際に
-観測した遅れから目標を増やすとき (閉ループ) は、宣言した `targetLatency` を上限にするため、
-指定より遅らせることはない。publisher は `targetLatency` が有限数で
+決めた 50 ms) がある。音声の自動予算は直近の到着の揺らぎと出力時計の先行量から
+50〜100 ms に決める。`targetLatency` はこの予算と別の明示下限であり、経路の遅れや同期の
+補償を含めた実遅延の上限を保証する値ではない。publisher は `targetLatency` が有限数で
 あることと `renderGroup` が有限の整数であることを検証する (非有限値は JSON で null になり
 購読側が復号できなくなる)。それ以外の範囲は呼び出し側の責任になる。節番号は
 draft-ietf-moq-msf-01 由来であり、将来の draft 改版で変わる可能性がある。
@@ -849,8 +850,8 @@ interface AudioPlayoutTimingSnapshot {
   // TIMESTAMP を持たない、jitter buffer が無効、トラックの基準が共有されていない
   // (TIMESTAMP が壁時計からずれている) ときのほか、予定を決められても使わなかった音
   // (揃える相手がいない音声だけの購読のとき) も数える。
-  // このとき startDelayMs は、揃える相手がいるときは到着から 100 ms を超えず (316 ms の
-  // ような遅れを作らない)、音声だけのときは 140 ms を下限に 160 ms までになる
+  // 到着基準の予算は、揃える相手がいて時間軸を使うとき 50〜100 ms、それ以外は 50 ms。
+  // 出力機器の先行量や既存の予約が大きいと、実際の startDelayMs は予算を超える
   arrivalPlannedFrames: number;
   // 到着基準の計画も持たないまま鳴らした音の数 (累積)。呼び出し側が計画を渡していない
   // 取りこぼしであり、通常は 0
@@ -869,9 +870,9 @@ interface AudioPlayoutTimingSnapshot {
   // 「操作しない」を返すため、この数で気付く。0 なら使えている
   stretchUnavailableFrames: number;
   // 復号フレーム (AudioData) のサンプルレートが AudioContext と違った回数 (累積)。0 なら
-  // 両者は一致している。違うと AudioBufferSourceNode がバッファごとにリサンプルし、
-  // 20 ms の境界ごとに 1 サンプルの重なり (毎秒 50 回の +6 dB スパイク) が生まれる
-  // (docs/AUDIO_GLITCH_CAUSES.md の A1)。boundaryStepCount はこの重なりを数えない
+  // 両者は一致している。違うと AudioBufferSourceNode がバッファごとにリサンプルする。
+  // OfflineAudioContext で再現した境界の重なりと、実出力のクリックの有無は別に検証する。
+  // boundaryStepCount はリサンプル後の重なりを数えない
   sampleRateMismatchFrames: number;
   // 直近の AudioContext と復号フレームのサンプルレート (Hz)。まだ音を渡していなければ null
   contextSampleRate: number | null;
@@ -882,7 +883,7 @@ interface AudioPlayoutTimingSnapshot {
   gapMs: number;
   gapMaxMs: number;
   // 穴のうち、予約できる最も早い時刻より前だった回数と長さの合計 (ms) (累積)。
-  // 事後には埋められないため、目標遅延を増やす判断に使う
+  // 事後には埋められなかった量の観測値。再生予算は到着の揺らぎと出力時計から別に求める
   unrecoverableGapCount: number;
   unrecoverableGapMs: number;
   // 予約した開始時刻を AudioContext.currentTime が追い越した回数と最大 (ms) (累積)
@@ -892,7 +893,7 @@ interface AudioPlayoutTimingSnapshot {
   pushStartCount: number;
   pushStartMaxMs: number;
   // バッファ境界の段差が AUDIO_PLAYOUT_BOUNDARY_STEP_THRESHOLD を超えた回数と最大
-  // (0 から 1 の振幅、累積)
+  // (予約サンプルから求める推定値、サンプル振幅単位、累積)
   boundaryStepCount: number;
   boundaryStepMax: number;
   // 直近の停止の drain の結果。停止していなければ null。形は再生の入口が返す
@@ -919,8 +920,9 @@ interface VideoReceiverStats {
 
 interface AvSyncStats {
   // 同期ずれの推定値 (ms)。映像の表示が音声より遅れていれば正。
-  // 音声は予約した時刻、映像は write した時刻の実績から求める (実際に音が出るまでの
-  // 出力遅延と、映像が表示されるまでの表示周期の遅れは含まない)。
+  // 音声は出力時計へ換算した予約時刻、映像は write した時刻から求める。
+  // 有効な getOutputTimestamp が無い場合は currentTime による換算で代用する。
+  // 下流の audio 要素や物理的なスピーカーの出力、画面の発光は実測していない。
   // どちらかの実績が 1 秒より古いときは null。基準を共有できないと保持された側は到着
   // 基準で再生され、その側は実績を作らないため、解除している間も null になる
   skewMs: number | null;
@@ -980,40 +982,18 @@ interface PlayoutDelayBreakdown {
   // 数えていなければ null。PLAYOUT_BASE_UNSHARED_RELEASE_MS に達すると保持を解除する
   baseUnsharedReturnMs: number | null;
   presentationDelayCapMs: number;
-  // 音声の目標遅延を閉ループで決めた状態。目標が収束しているかと、その理由を読む
-  audioDelayFeedback: AudioDelayFeedbackSnapshot;
+  // 到着と実出力の時計から決めた音声の再生予算
+  audioDelay: AudioPlayoutDelayStats;
 }
 
-interface AudioDelayFeedbackSnapshot {
-  // 閉ループが決めた目標遅延 (ms)。実際に使う値は jitterTargetMs との大きい方
-  targetMs: number;
-  // 揺らぎだけから求めた目標遅延 (NetEq、ms)
-  jitterTargetMs: number;
-  // 実際に使っている目標遅延 (ms)。鳴らした結果をまだ観測していない間は jitterTargetMs
-  appliedMs: number;
-  // 直前に目標を動かした理由。"initial" (初期値)、"backlog" (並べすぎで捨てた)、
-  // "gap" (補間で埋まらなかった無音の穴が空いた)、"lateness" (予定を過ぎて鳴った)、
-  // "settled" (遅れが許容の中に収まった)、"waiting" (動かす条件がそろっていない)
-  reason: AudioDelayFeedbackReason;
-  // 明示設定 (catalog の targetLatency) の上限 (ms)。無ければ null
-  ceilingMs: number | null;
-  // 直前の制御で動かした量 (ms)。0 なら動かしていない
-  lastChangeMs: number;
-  // 目標を動かした回数
-  adjustments: number;
-  // 直近 (1 秒) の、予定を過ぎて鳴った量、到着から鳴り始めるまでの時間、予定に対する
-  // 余裕の p50 (ms)。まだ鳴らしていなければ null
-  latenessP50Ms: number | null;
-  startDelayP50Ms: number | null;
-  slackP50Ms: number | null;
-  // 実際に適用する値に掛けている上限 (ms)。広げていないときは 100
-  // (AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS)。穴が空いたときは穴の長さを吸収できる値まで
-  // 一時的に広がり、圧縮か穴が続くと 160 (AUDIO_DELAY_FEEDBACK_ARTIFACT_CEILING_MS) まで
-  // 広がる。明示設定 (catalog の targetLatency) があるときは 160 ms を上限として
-  // その値までに切る (既定の 100 ms は下回らない)
-  appliedCeilingMs: number;
-  // 直近の制御で観測した圧縮の速さ (ms / 秒)。上限を上げる判断に使った値
-  compressionMsPerSecond: number;
+interface AudioPlayoutDelayStats {
+  // 到着の揺らぎ (ms)。直近 2 秒の分布。未観測なら null
+  readonly jitterMs: number | null;
+  // 到着時刻に対応する出力位置から、今予約できる最早位置までの先行量 (ms)。
+  // 有効な出力時計で測った直近 1 秒の p95。未観測なら null
+  readonly outputLeadMs: number | null;
+  // 音声の自動予算 (ms)。catalog の明示下限と A/V 同期の補償は含まない
+  readonly targetMs: number;
 }
 ```
 
@@ -1026,31 +1006,27 @@ jitter buffer の遅れ (`catalog の targetLatency` を下限とする) を足�
 遅延の内訳 (`delays`) の各値の根拠 (何を測ってその値にしたか) と、どうなったら見直すかは
 `docs/AV_SYNC_DECISIONS.md` が持つ。
 
-jitter buffer の遅れは音声と映像で別々に求める。音声は NetEq と同じ規則 (到着の遅れの
-0.95 分位) に加えて、**実際に鳴った結果から閉ループでも目標を決める**。NetEq の規則は
-「直近で最も早く届いた音との差」しか見ないため、到着から鳴り始めるまでの経路 (復号、
-予約、出力のバッファ、まとめて届いた山) の分だけストリーム全体が一様に遅れていることを
-見つけられない。その分を、予定をどれだけ過ぎて鳴ったか (`latenessMs`) と並べすぎで捨てた
-量 (`missedByReason.backlog`) から学ぶ。
+jitter buffer の遅れは、音声と映像の直近 2 秒の到着から求める。基準の遅れを求める
+10 秒の窓とは分け、単発の停滞で増えた待ちを長く保持しない。追いつき中と、停滞後に
+まとめて復号された分は経路の分布へ混ぜない。
 
-- 遅れが続くなら目標を増やし、並べすぎで捨てたなら捨てた長さぶん増やす
-- 遅れが許容 (10 ms) の中に収まり、捨てが無いなら目標を減らす (毎秒 10 ms)
-- 目標を動かすのは毎秒 1 回までであり、1 回の増加は 40 ms までにする。判断には直近 1 秒の
-  分布を使う (表示用の 10 秒の窓は、目標を増やした結果が現れるまでに数秒かかる)
-- 目標は 50 ms から、実際に適用する上限の間に収める。適用する上限は通常 100 ms
-  (`AUDIO_DELAY_FEEDBACK_MAX_TARGET_MS`) であり、穴が空いたときは穴の長さを吸収できる値まで、
-  圧縮か穴が 2 秒続いたときは 160 ms (`AUDIO_DELAY_FEEDBACK_ARTIFACT_CEILING_MS`) まで広がる
-  (下限は実リレーの実測で決めた値)。観測が無い間は増減せず、NetEq の値をそのまま使う
-- `catalog の targetLatency` を宣言したときは、その値を広げる上限に使う (既定の 100 ms は
-  下回らない。NetEq が求めた遅れには掛けない。既存の揺らぎの吸収を変えないため)
-- いま使っている目標とその理由は `AvSyncStats.delays.audioDelayFeedback` に出る。収束して
-  いれば `reason` が `settled` と `lateness` の間を行き来し、`latenessP50Ms` が許容の近くに
-  留まる
+- 揺らぎは「復号の出力時刻 - TIMESTAMP - 基準の遅れ」の百分位で求める。百分位は
+  1 秒あたり 1 フレームの遅着を予算とし、最低 95 % にする (音声 50 fps で 98 %、映像
+  30 fps で約 96.7 %)
+- 音声は揺らぎに実出力の先行量を足し、50〜100 ms に収める。先行量は
+  `getOutputTimestamp()` と `currentTime` から測る。過去の穴、圧縮量、同期のために
+  足した待ちを、別の遅延上限へ戻す制御は持たない
+- 映像は揺らぎの百分位を使い、古い観測が窓から消えたら必要値へ戻す
+- 音声の予算は `AvSyncStats.delays.audioDelay` に出る。実際に適用した音声の予算は
+  `MediaPlayout.getStats().audio.delay.targetMs` で読む
 
-映像の遅れは揺らぎの百分位である。2 つの表示時刻の差 (A/V のずれ) は、差が 5 ms
-未満の間はそのままにし、超えたときだけ先行する側の表示の遅れを「後行側 - 5 ms」まで
-即座に上げて抑える。上げた分は毎秒 20 ms までで戻す。このため不感帯の中では映像の遅延は
-音声の jitter buffer の遅延に引きずられず、補償できる範囲では予定時刻の差を 5 ms 以内に収める。
+2 つの表示時刻の差が 5 ms を超えたときは、先行する側を「後行側 - 5 ms」へ合わせる。
+基準を共有できる間は、現在の到着の分布と音声の予約から補償を毎回引き直す。過去の共有の
+表示時刻を下限として保持しない。窓が回復すると待ちも戻り、既存の音声キューは波形の時間
+圧縮で追従する。A/V の目標時刻を使う予約では、圧縮の不感帯を最初の 2 秒は 20 ms に保ち、
+その後は経路の揺らぎに応じて 5〜20 ms にする。到着基準の予約の不感帯は 20 ms のままである。
+揺らぎのある経路で一律に 5 ms へ下げる変更は、音切れが増えたため採らない。
+計測の比較と採用しなかった案は [低遅延化の調査](AV_LOW_LATENCY_INVESTIGATION.md) を参照すること。
 
 基準の差は「遅い側を待つ」ことでしか合わせられないため、2 つのトラックの基準を共有しない
 場合がある。理由は `AvSyncStats.delays.unsharedReason` に出る。
@@ -1081,14 +1057,13 @@ jitter buffer の遅れは音声と映像で別々に求める。音声は NetEq
 - 音声は「到着 + 到着基準の再生の遅れ」で鳴る。揃える相手 (映像) がいるときは
   `AUDIO_PLAYOUT_ARRIVAL_DELAY_MS` = 100 ms を上限とし、下限は 50 ms にする。この値へ映像の
   到着からの遅れ (jitter buffer の遅延) を合わせる
-- 音声だけを購読しているときは、映像に合わせる相手がいない。揺らぎの推定が届いていない
-  周期的な停滞を先に吸収する `AUDIO_ONLY_ARRIVAL_DELAY_FLOOR_MS` = 140 ms を下限にし、
-  閉ループが穴を観測して広げた目標を `AUDIO_ONLY_ARRIVAL_DELAY_MAX_MS` = 160 ms まで使う
+- 音声だけを購読しているときは、到着基準の予算を 50 ms にする。壁時計の観測が無い音声や
+  `jitterBuffer: false` でも同じ予算を使う
 - 足すのは映像だけである。音声を遅らせると到着から鳴るまでの時間がその分だけ増える。
   映像が音声より遅いときは戻さない (音声を遅らせないと合わせられないため、その分は
   A/V のずれとして残す)
 - 足す量は `PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS` (100 ms) までとし、足すのは即座、
-  戻すのは毎秒 20 ms までにする (共有できる場合と同じ規則)
+  戻すのは毎秒 20 ms までにする (基準を共有できないときの保護)
 - 音声と映像の到着が同じ時刻であることは前提にする (同じ publisher、同じ経路の
   2 つのトラック)。実測では、この合わせを止めていたために音声が 195 ms、映像が 98 ms で
   100 ms のずれが残っていた
@@ -1096,27 +1071,20 @@ jitter buffer の遅れは音声と映像で別々に求める。音声は NetEq
 基準の差を補償する量は `PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS` (100 ms) までにする。
 時計のずれの証拠が見える前でも適用し、片方の TIMESTAMP が大きくずれたときに相手の遅延が
 際限なく伸びるのを防ぐ。自分で決めた jitter buffer の差は別に補償し、最終的な表示待ちは
-キューと表示の上限に収める。音声の目標が 160 ms に広がっても、基準を共有できてキューに
-余裕があれば映像を合わせられる。
+キューと表示の上限に収める。catalog が明示した下限もこの範囲内で尊重する。
 
 音声の出力時計で換算した開始時刻と予約時点の予定の差も、映像の合わせ先へ反映する。
 残差は 250 ms の時定数で平滑化し、`AvSyncStats.delays.audioPlayoutCorrectionMs` に出る。
-出力時計を代用している間は新しい残差を取り込まない。再生結果で目標が変わった呼び出し内で
-同期も更新し、音声の停止では残差と閉ループを初期化する。制御には再開後の分布だけを使い、
-表示用の過去の分布と累積は残す。共有の表示時刻を 1 つ保持して各補償を引き直すため、
-jitter や残差が上下しても、過去の補償を再び足して遅延を積み上げない。
-cache の追いつきで到着基準そのものが下がった分は共有の表示時刻にも反映し、
-古い基準を同期の追加遅延として持ち越さない。
+出力時計を代用している間は新しい残差を取り込まない。予約の記録と同じ呼び出し内で
+同期も更新し、音声の停止では出力の残差と観測した予算を初期化する。
 
 音声の換算は AudioContext の予約までを表す。MediaStream を HTMLAudioElement で再生する
 場合、その後のバッファと選択した音声デバイスの追加遅延は計器に含まれない。
 
-Audio Playback を有効にすると、映像は音声のバッファと出力に必要な分だけ待つ。
-閉ループの初期値だけによる 100 ms への跳ね上げは行わない。到着推定は初期の音切れを
-抑えるため 80 ms を保ち、分布が揃った後は安全下限 50 ms まで観測に適応する。
-音声だけの再生には別の下限があり、穴への対処は実際に使う下限から増やす。
-TIMESTAMP が無い場合、メディア時刻の場合、`jitterBuffer: false` の場合も、この閉ループの
-適用値を到着基準の再生に使う。壁時計の基準は作らない。
+Audio Playback を有効にすると、映像は音声のバッファと出力に必要な分だけ待つ。音声の
+自動予算は 50 ms から始まり、到着と出力時計の観測に適応する。入力が 180 ms 止まる条件では
+途絶自体を無くせず、回復途中の媒体遅延も 100 ms を超える。自動予算の上限と、実遅延の
+上限は区別する必要がある。
 
 どちらの場合も、2 つのトラックはそれぞれの到着と jitter buffer の遅れで並ぶ。A/V のずれは
 基準の差ではなく、2 つの遅れの差 (数十 ms) になる。`delays` はこの判断に使った内訳
@@ -1129,37 +1097,43 @@ TIMESTAMP が無い場合、メディア時刻の場合、`jitterBuffer: false` 
 `AudioReceiverStats.playoutTiming` は、音声が「鳴るはずだった時刻」と「実際に鳴り始める
 時刻」の観測値である。受信した音声の再生予定時刻は LOC の TIMESTAMP から共有の時間軸が
 決め、到着時刻は復号の出力を受け取った時刻、鳴り始める時刻は `AudioContext` の時計へ予約
-した時刻を `performance.now()` の軸へ換算した値である (音声の出力デバイスの遅延は含まない)。
+した時刻を `performance.now()` の軸へ換算した値である。有効な `getOutputTimestamp()` が
+あれば出力時計の対応を使い、fallback では `currentTime` と `performance.now()` から換算する。
+AudioContext の出力位置を含む推定値であり、下流の audio 要素のバッファや物理的な
+スピーカーの出力を実測した値ではない。
 予定に対する余裕 (`slackMs` の分布) が負であれば、届いた時点ですでに予定を過ぎており、その
 音は間に合っていない。
 
-`latenessMs` / `startDelayMs` / `slackMs` の分布は、音声の目標遅延を決める閉ループにも
-使う (`AvSyncStats.delays.audioDelayFeedback`)。鳴らす時刻は
-`max(目標, 今 + 余裕, 直前の音の終わり)` で決まるため、目標が「今 + 余裕」(出力の
-バッファの分だけ先) に届いていないと、どの音も予定を過ぎて鳴る。この遅れを
-`latenessMs` が示し、閉ループが目標を増やす。詳細は上の jitter buffer の説明を参照。
+`latenessMs` / `startDelayMs` / `slackMs` は予約の結果を表す計器であり、別の遅延
+上限を広げる入力には使わない。鳴らす時刻は `max(目標, 今 + 余裕, 直前の音の終わり)`
+で決まるため、予算より実出力の先行量や既存の予約が大きいと予定を過ぎて鳴る。
+その分は `latenessMs` に現れ、A/V 同期では予約の残差として補償する。
 
 `AudioPlayoutTimingSnapshot` の `gapCount` / `gapMs` / `gapMaxMs` は、穴として残した回数、
 長さの合計、最大である。穴は、予約できる最も早い時刻 (今 + 余裕) より前だった分、補間が
-失敗した分、補間の上限 (100 ms) を超えた分からでき、無音へ落ちる側の段差がクリックとして
-聞こえる (無音から戻る側は補間や次の音の先頭を 2 ms フェードインするため段差は小さい)。`gapMs` は「補間で埋まらなかった長さ」であり、補間を予約したときに生成する長さの丸め
-(半サンプル以内) は穴として数えない。2 ms のフェードは補間の長さに数えるため含まない。
+失敗した分、補間の上限 (100 ms) を超えた分からできる。無音との境界に段差が残ると
+クリックの原因になるため、補間と実音の接続や出力の末尾にフェードを適用する。
+`gapMs` は「補間で埋まらなかった長さ」であり、補間を予約したときに生成する長さの丸め
+(半サンプル以内) は穴として数えない。補間バッファ内のフェード区間も生成長に含めるが、
+出力の gain フェード自体で補間の長さを追加することはない。
 計器を作り直すまでの累積であり、波形を収録して数えた無音 (収録区間だけ) とは範囲が違うため
 一致しない。
 秒単位の長い途絶 (配信の停止、経路の断) も 1 回の穴として含む。クリックは 0 の長さではなく
 境界の段差で決まるため、`boundaryStepCount` / `boundaryStepMax` と併せて読む。
 `unrecoverableGapCount` / `unrecoverableGapMs` は穴のうち予約できる最も早い時刻より前だった
 分 (既に過去の分と、未来でも余裕に満たない分を含む。事後には埋められない) であり、
-閉ループが目標遅延を増やす判断に使う。`lateStartCount` / `lateStartMaxMs` は、予約した
+到着と出力時計の不足を切り分けるための計器である。`lateStartCount` / `lateStartMaxMs` は、予約した
 開始時刻を `source.start()` の時点の `AudioContext.currentTime` が追い越した回数と最大で
 ある。追い越し (および余裕 3 ms 未満) のときは開始時刻を `currentTime + 3 ms` へ押し直し、
 先頭 2 ms をフェードインするため、重なりは起きない。追い越した回数だけを数えるため、
 余裕より近かっただけの押し直しは含まない。押し直した回数と最大は `pushStartCount` /
 `pushStartMaxMs` で読む。
-`boundaryStepCount` / `boundaryStepMax` は、バッファ境界で実際に鳴るサンプルの段差が
+`boundaryStepCount` / `boundaryStepMax` は、予約サンプルから求めるバッファ境界の段差が
 0.05 (`AUDIO_PLAYOUT_BOUNDARY_STEP_THRESHOLD`。440 Hz の正常な差分 p99.9 = 0.0174 の約
 3 倍) を超えた回数と最大である。すべての境界を測るため、通常の音の切れ目も含む。しきい値は
 440 Hz のトーン基準の絶対値であり、実音声では正常な段差が超えることがある。
+取り消さなかった末尾のフェードは終端を 0 として反映するが、gain の包絡全体や
+ブラウザのリサンプル後の出力を実測する計器ではない。クリックの有無は収録波形で確認する。
 `stretchUnavailableFrames` と同じく累積であり、購読をやり直しても消えない。
 
 音声の再生に使う `AudioContext` は、復号フレームのサンプルレートに合わせて作る
@@ -1170,20 +1144,19 @@ configure の sampleRate に関係なく常に 48 kHz を返すため、Opus で
 `sampleRateMismatchFrames` は、この前提が崩れた (AudioContext と復号フレームのレートが
 違う) フレームの累積であり、0 が正常である。レートが違うと `AudioBufferSourceNode` が
 バッファごとにリサンプルする。44.1 kHz の AudioContext に 48 kHz のバッファを並べる
-組み合わせでは、20 ms の境界ごとに 1 サンプルの重なり (毎秒 50 回の +6 dB スパイク) が
-生まれる (`docs/AUDIO_GLITCH_CAUSES.md` の A1)。ほかの組み合わせでは重ならないことも
-あるため、`sampleRateMismatchFrames` は「重なりが起きた回数」ではなく「レートが
-食い違ったフレームの回数」である。`contextSampleRate` / `decodedSampleRate` は直近の値で
+組み合わせを一定値の OfflineAudioContext へ通すと、境界の重なりによる振幅 2 倍の
+スパイクを再現した。実時間のクリックの有無は別に出力波形で検証する必要がある。
+`sampleRateMismatchFrames` はレートが食い違ったフレームの回数であり、重なりの観測値では
+ない。`contextSampleRate` / `decodedSampleRate` は直近の値で
 あり、食い違いの切り分けに使う。
 
 `arrivalPlannedFrames` は、時間軸の再生予定時刻を使えず、到着基準の計画で鳴らした音の数で
 ある。使えないのは壁時計の TIMESTAMP を持たない、jitter buffer が無効、トラックの基準が
 共有されていない (TIMESTAMP が壁時計からずれている) ときである。予定を決められても、揃える
 相手がいないために使わなかった音 (音声だけの購読) も数える。このときの再生の遅れは、
-揃える相手がいるときは到着から 100 ms 以下 (`AUDIO_PLAYOUT_ARRIVAL_DELAY_MS`) に抑え、
-音声だけのときは 140 ms を下限に 160 ms まで (`AUDIO_ONLY_ARRIVAL_DELAY_FLOOR_MS` /
-`AUDIO_ONLY_ARRIVAL_DELAY_MAX_MS`) にする。共有の時間軸が学習した再生の遅れは、ずれている
-TIMESTAMP を揺らぎとして学習した値 (実測で 316〜500 ms) になるためである。
+揃える相手がいて時間軸を使うときは予算を 100 ms 以下 (`AUDIO_PLAYOUT_ARRIVAL_DELAY_MS`) にし、
+それ以外は 50 ms にする。出力の先行量や既存の予約が大きいと、実際の待ちはこの値を超える。
+TIMESTAMP が壁時計からずれていても、到着基準の予算をそのずれの分だけ広げない。
 `unplannedFrames` は、到着基準の計画も持たないまま鳴らした音であり、通常は 0 になる。
 
 この遅れは「実際に鳴るまで」の時間である。`AudioContext` の時計 (`currentTime`) は、既に
@@ -1199,8 +1172,8 @@ TIMESTAMP を揺らぎとして学習した値 (実測で 316〜500 ms) にな�
 であり、音は遅れていない。音がまだ鳴っている (キューが空でない) 間は到着基準へ並べ直さず、
 前の音の終わりに繋げて遅れたまま鳴らす。並べ直す (媒体時刻を跳ばす) のは、直前の音が既に
 鳴り終わっているなど、音が本当に途切れていたときだけである。並べ直したときは到着基準の
-再生の遅れ (揃える相手がいるときは 100 ms 以下、音声だけのときは 140 ms を下限に 160 ms
-まで) だけ遅らせる。音が途切れていないときに予約できる最も早い時刻へずらすだけの場合は、
+再生の予算 (時間軸で揃える相手がいるときは 50〜100 ms、それ以外は 50 ms) だけ遅らせる。
+音が途切れていないときに予約できる最も早い時刻へずらすだけの場合は、
 ずらす幅が `AUDIO_PLAYOUT_RESYNC_MIN_JUMP_SECONDS` (10 ms) 未満なら並べ直しとして数えない
 (媒体時刻が跳ばないため)。
 
@@ -1386,7 +1359,7 @@ interface MediaPlayoutOptions {
   video?: MediaPlayoutVideoOptions | null;
   // 共有の時間軸 (jitter buffer) を使うか。既定は true。
   // false のときは TIMESTAMP の対応付けと表示時刻の決定をせず、届いた順に鳴らし / 表示する
-  // (音声の目標遅延の閉ループは動き続ける。admit 用の入力記録は動く)
+  // (音声は到着基準の 50 ms の予算で鳴らす。admit 用の入力記録と予約の計器は動く)
   jitterBuffer?: boolean;
   // catalog から解決した表示の遅れの目標 (ミリ秒)。既定は null。
   // 購読の途中で変わったときは setTargetLatencyMs で変える。有限数で 0 以上
@@ -1494,8 +1467,8 @@ track が同じ値を持つことは MUST だが、音声と映像で同じ値�
 - 停止: `MediaPlayoutDrainOptions` / `MediaPlayoutDrainStats`、
   `AUDIO_PLAYOUT_DRAIN_MAX_MS` (300 ms) / `AUDIO_PLAYOUT_DRAIN_CLOSE_MAX_MS` (150 ms)
 - 統計情報: `MediaPlayoutStats`、`MediaPlayoutAudioStats`、`MediaPlayoutVideoStats`、
-  `AudioPlayoutTimingSnapshot`、`AudioReceiveCatchUpStats`、`AudioDelayFeedbackSnapshot`、
-  `AudioDelayFeedbackReason`、`AvSyncStats` (MediaSubscriber と共通)、`TimingSummary`、
+  `AudioPlayoutTimingSnapshot`、`AudioReceiveCatchUpStats`、`AudioPlayoutDelayStats`、
+  `AvSyncStats` (MediaSubscriber と共通)、`TimingSummary`、
   `PlayoutDelayBreakdown`、`PlayoutTrackBreakdown`、`PlayoutUnsharedReason`、
   `AudioMissEvent`、`AudioMissReason`、`AudioMissTotal`
 - 注入する実物の型: `AudioPlayoutContext` / `AudioPlayoutOutput`、`VideoPlayoutOutput`、
@@ -1503,7 +1476,7 @@ track が同じ値を持つことは MUST だが、音声と映像で同じ値�
 - 計器: `AudioPlayoutTimingStats` (公開クラス)、`AUDIO_PLAYOUT_TIMING_WINDOW_MS`、
   `AUDIO_PLAYOUT_BOUNDARY_STEP_THRESHOLD`、`AUDIO_MISS_REASONS`、
   `EMPTY_AUDIO_PLAYOUT_TIMING`、`formatAudioMissEvent`、`AudioPlayoutBasis`、
-  `AudioPlayoutMiss`、`AudioDelayFeedbackObservation`
+  `AudioPlayoutMiss`
 - 受信側の追いつき: `AUDIO_RECEIVE_CATCH_UP_MIN_MS`、`AUDIO_RECEIVE_CATCH_UP_GROWTH_MS`、
   `AUDIO_RECEIVE_CATCH_UP_JUMP_MS`、`AUDIO_RECEIVE_CATCH_UP_FLOOR_WINDOW_MS`、
   `AUDIO_RECEIVE_CATCH_UP_CONFIRM_MS`、`AUDIO_RECEIVE_CATCH_UP_COOLDOWN_MS`、
@@ -1511,7 +1484,7 @@ track が同じ値を持つことは MUST だが、音声と映像で同じ値�
 - 既定値: `JITTER_BUFFER_MAX_QUEUED_FRAMES`
 
 `AudioPlayoutTimingStats` のメソッド引数と戻り値の型 (`AudioPlayoutBasis` /
-`AudioPlayoutMiss` / `AudioDelayFeedbackObservation`) も公開している。
+`AudioPlayoutMiss`) も公開している。
 
 次の型は、音声の再生に注入する実物の型である。`AudioContext` の実物は `AudioPlayoutContext`
 を構造的に満たすため、そのまま渡せる。
@@ -1520,8 +1493,8 @@ track が同じ値を持つことは MUST だが、音声と映像で同じ値�
 interface AudioPlayoutContext {
   // AudioContext.currentTime (秒)。予約の基準であり、時計の対応を作るのにも使う
   readonly currentTime: number;
-  // AudioContext のサンプルレート (Hz)。復号フレームのレートと違うと、バッファごとの
-  // リサンプルで 20 ms の境界ごとに 1 サンプルの重なりが生まれるため、計器へ記録する
+  // AudioContext のサンプルレート (Hz)。復号フレームのレートと違う場合は、
+  // バッファごとのリサンプルが入る条件を計器へ記録する。実出力のクリックは別に検証する
   readonly sampleRate: number;
   // AudioContext.getOutputTimestamp()
   getOutputTimestamp(): AudioTimestamp;
@@ -1529,6 +1502,8 @@ interface AudioPlayoutContext {
   createBuffer(numberOfChannels: number, length: number, sampleRate: number): AudioBuffer;
   // AudioContext.createBufferSource
   createBufferSource(): AudioBufferSourceNode;
+  // 途絶時の末尾フェードと、後続が届いたときの取り消しに使う
+  createGain(): GainNode;
 }
 
 interface AudioPlayoutOutput {
@@ -1540,9 +1515,8 @@ interface AudioPlayoutOutput {
 
 `AudioPlayoutTimingStats` は「鳴るはずの時刻、鳴り始める時刻、鳴らなかった量」を記録する
 計器であり、`audio.timing` に渡せる公開クラスである。渡さない場合は入口が内部で作る。
-入口が記録に使う `recordPlay` / `recordMiss` / `recordDrain` などのメソッドと、閉ループの
-観測を返す `audioDelayFeedback` も公開しており、引数と戻り値の型
-(`AudioPlayoutBasis` / `AudioPlayoutMiss` / `AudioDelayFeedbackObservation`) も import できる。
+入口が記録に使う `recordPlay` / `recordMiss` / `recordDrain` などのメソッドと、
+引数の型 (`AudioPlayoutBasis` / `AudioPlayoutMiss`) も import できる。
 `record*` は入口が計器へ記録するために呼ぶ API である。アプリケーションが独自に再生を
 組み立てて同じ計器へ記録する場合にも使える (計器へ記録する実装が呼ぶ)。
 自分の実行周期で画面へ出すときは、次のように作って渡し、`snapshot(performance.now())` を
@@ -1790,7 +1764,7 @@ interface MediaPlayoutStats {
     latenessMs: number; // 目標を守る並べ方で最後に並べた音の遅れ
     timing: AudioPlayoutTimingSnapshot; // 鳴るはずの時刻、鳴り始める時刻、鳴らなかった量
     catchUp: AudioReceiveCatchUpStats; // 受信側の追いつきの観測値
-    delayFeedback: AudioDelayFeedbackSnapshot; // 音声の目標遅延の閉ループの内訳
+    delay: AudioPlayoutDelayStats; // 音声へ適用した再生予算の内訳
   } | null;
   // 映像の表示の統計 (映像を構成していないときだけ null)
   video: {
@@ -1808,14 +1782,47 @@ interface MediaPlayoutStats {
 いるかどうかの判断は、購読しているトラックを知っている呼び出し側が行う
 (`createMediaSubscriber` は音声と映像の両方で壁時計の TIMESTAMP を観測するまで null を
 返す)。`AvSyncStats` の定義は「MediaSubscriber」の「統計情報」を参照すること。音声だけを
-使うときは `avSync` が null のため、目標遅延の閉ループの内訳は
-`getStats().audio.delayFeedback` (`AudioDelayFeedbackSnapshot`) から読む。
+使うときは `avSync` が null のため、再生予算の内訳は
+`getStats().audio.delay` (`AudioPlayoutDelayStats`) から読む。
 
-`AudioDelayFeedbackSnapshot` の `targetMs` / `jitterTargetMs` / `appliedMs` は、閉ループが
-決めた目標、揺らぎだけから求めた目標、実際に使っている目標である。`appliedCeilingMs` は
-実際に適用する値に掛けている上限 (広げていないときは 100 ms、穴や圧縮が続くときは最大
-160 ms) であり、`reason` と `compressionMsPerSecond` から、目標を動かした理由とその判断に
-使った圧縮の速さを読める。定義は「MediaSubscriber」の「統計情報」を参照すること。
+`jitterMs` と `outputLeadMs` は観測が無ければ null であり、`targetMs` は実際に適用した
+自動予算である。音声だけの購読では 50 ms にする。catalog の下限と同期の補償は別に
+`avSync.delays` で読み、実際の待ちとずれは `audio.timing` と併せて読む。
+
+### 旧音声遅延制御からの移行
+
+2026-10-29 の変更で、`AudioDelayEstimator` と `AudioDelayFeedback` を削除した。
+過去の穴や圧縮量で上限を 160 ms へ広げる制御は行わず、到着の揺らぎと実出力時計の
+先行量から予算を決める。統計を読むアプリケーションは、名前と値の意味を合わせて変更する。
+
+| 旧 API / フィールド                                          | 現行での扱い                                                                           |
+| ------------------------------------------------------------ | -------------------------------------------------------------------------------------- |
+| `MediaPlayout.getStats().audio.delayFeedback`                | `audio.delay` へ変更                                                                   |
+| `AvSyncStats.delays.audioDelayFeedback`                      | `delays.audioDelay` へ変更                                                             |
+| `AudioDelayFeedbackSnapshot`                                 | `AudioPlayoutDelayStats` へ変更                                                        |
+| `appliedMs`                                                  | `MediaPlayout` の `audio.delay.targetMs` で、実際に適用する自動予算を読む              |
+| 旧 `targetMs`                                                | 閉ループの内部目標は削除。新 `targetMs` は適用する自動予算であり、意味が異なる         |
+| `jitterTargetMs`                                             | 新 `jitterMs` は到着の揺らぎそのもの。旧ヒストグラムの目標や下限を含む値とは一致しない |
+| `reason` / `lastChangeMs` / `adjustments`                    | 制御の理由と回数は削除。到着の `jitterMs` と出力の `outputLeadMs` を読む               |
+| `ceilingMs` / `appliedCeilingMs`                             | 上限拡大の計器は削除。catalog の明示下限は `avSync.targetLatencyMs` で別に読む         |
+| `compressionMsPerSecond`                                     | 削除。加工量は `audio.compressedMs` の累積で読む                                       |
+| `AudioDelayFeedbackObservation` / `AudioDelayFeedbackReason` | 型を削除                                                                               |
+| `AudioPlayoutTimingStats.audioDelayFeedback()`               | メソッドを削除。表示用の `snapshot()` は維持                                           |
+
+表の `audio.delay` は `MediaPlayout` の統計である。`MediaSubscriber` の `getStats()` へ同名の
+フィールドは追加していない。`MediaSubscriber` は `audio.playoutTiming` と `avSync.delays`、
+devtools の表示用スナップショットは `audio.audioDelay` を使う。
+
+`avSync.delays.audioDelay` は時間軸が推定した予算であり、`MediaPlayout` の `audio.delay` は
+その音声に適用した予算を持つ。音声だけの購読では後者の `targetMs` は 50 ms になる。
+両者とも `targetMs` に catalog の明示下限や同期の補償は含めず、実際の待ちは `audio.timing` と
+遅延の内訳を併せて読む。
+
+`outputLeadMs` は有効な出力時計で得た観測値である。時計を代用している間も以前の観測値が
+残る場合があるため、A/V の推定があるときは `avSync.audioClockFallback` も確認する。
+予算の観測を消すには `resetAudioTimeline()` または `resetPlayout()` を使う。出力先の差し替えや
+`resetAudioPlayback()` だけでは時間軸の観測は消えない。時間軸を初期化した後は、再び
+有効な時計を観測するまで `outputLeadMs` は null になる。
 
 ### ライフサイクル
 
@@ -2142,7 +2149,8 @@ MOQT Subscriber (video) ─► VideoDecoder ─► VideoFrame ┘
 ### 再生の組み立て
 
 `MediaPlayout` の内部は、次のモジュールに分かれる。同じ組み立てを 2 か所に置くと、到着基準の
-遅れ、目標遅延の閉ループ、計器の修正を毎回 2 か所へ入れることになり、片方だけを直すと音声と
+遅れ、到着と出力時計からの予算の計算、計器の修正を毎回 2 か所へ入れることになり、
+片方だけを直すと音声と
 映像で判断がずれて A/V 同期が崩れる。
 
 - `AudioPlayoutSession` / `VideoPlayoutSession` — 音声 1 つを鳴らす組み立てと、映像 1 枚を
@@ -2165,7 +2173,7 @@ draft-ietf-moq-loc-04 §2.3.1.1 / §2.3.1.2) である。渡すと次を行う�
 - 欠落した区間の補間 (直前に鳴らした音の末尾を伸ばす)
 - 計器 (`AudioPlayoutTimingStats`) への記録 (鳴るはずの時刻、届いた時刻、鳴り始める時刻と、
   鳴らなかった量)
-- 目標遅延の閉ループへの観測の引き渡し (常に行う。実測で、渡さないと時間圧縮が止まらない)
+- 実出力の先行量の観測と予算の更新、および予約の残差を使った同期の更新
 - 受信側の追いつきの判定 (`AudioReceiveCatchUp`)。復号の出力が送られた TIMESTAMP から
   遅れ続けたら、復号器を作り直す必要があることを結果 (`catchUpStarted`) で知らせる
 

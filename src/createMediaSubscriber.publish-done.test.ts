@@ -7,8 +7,6 @@
  */
 import { test, assert } from "vite-plus/test";
 
-import { installAudioOutput } from "./testSupport/mediaSubscriberInternals";
-
 import type { Session, SubscribeCallbacks } from "./session";
 
 import type { Subscriber } from "./subscriber";
@@ -213,10 +211,7 @@ test("subscribeCatalog: エラー status の PUBLISH_DONE で catalog の購読�
 // ============================================================================
 
 /**
- * 停止時に drain が動くことを確かめるための制御口
- *
- * AudioContext は node に実物が無いため、既存の検証と同じく記録用の最小オブジェクトを
- * 注入する (モジュール置換は行わない)。
+ * 停止時に復号の flush 待ちと破棄が完了することを確かめるための制御口
  */
 interface SubscriberDrainControl extends SubscriberFrameControl {
   currentState: MediaSubscriberState;
@@ -227,142 +222,6 @@ interface SubscriberDrainControl extends SubscriberFrameControl {
   audioDrainFlushedDiscarded: number;
   discardPendingAudioDecodes: () => void;
 }
-
-/**
- * 完了条件: stop は予約済みの音声が鳴り終わるまで待ち、鳴らし切ってから AudioContext を
- * 閉じる。鳴らし切れた分は `missedByReason.stopped` に数えず、drain の結果を計器に残す。
- */
-test("stop: 予約済みの音声を鳴らし切ってから AudioContext を閉じる", async () => {
-  const subscriber = createTestSubscriber({
-    audio: {},
-  }).subscriber;
-  const control = subscriber as unknown as SubscriberDrainControl;
-  control.currentState = "active";
-
-  // `getOutputTimestamp()` の対応から音声の出力遅延を 100 ms にし、到着基準の予約を作る
-  const closesAtMs: number[] = [];
-  const startsAtMs: number[] = [];
-  const audioContext = {
-    get currentTime(): number {
-      return performance.now() / 1_000;
-    },
-    getOutputTimestamp: () => ({
-      contextTime: performance.now() / 1_000 + 0.1,
-      performanceTime: performance.now(),
-    }),
-    createBuffer: () => ({ copyToChannel: () => {} }) as unknown as AudioBuffer,
-    createBufferSource: () =>
-      ({
-        buffer: null,
-        connect: () => {},
-        start: (when: number) => {
-          startsAtMs.push(when * 1_000);
-        },
-      }) as unknown as AudioBufferSourceNode,
-    close: async () => {
-      closesAtMs.push(performance.now());
-    },
-  } as unknown as AudioContext;
-  // 解放では出力先の音声トラックを止めるため、stream と getAudioTracks も持たせる
-  const audioDestination = {
-    stream: { getAudioTracks: () => [] },
-  } as unknown as MediaStreamAudioDestinationNode;
-  installAudioOutput(control, audioContext, audioDestination);
-
-  const audioData = {
-    numberOfChannels: 1,
-    sampleRate: 48_000,
-    numberOfFrames: 960,
-    copyTo: () => {},
-    close: () => {},
-  } as unknown as AudioData;
-  control.handleAudioDecodedData({ data: audioData });
-  assert.equal(startsAtMs.length, 1, "音を 1 つ予約すること");
-
-  const stopStartedAtMs = performance.now();
-  await subscriber.stop();
-  const waitedMs = performance.now() - stopStartedAtMs;
-
-  // AudioContext は停止の要求より後に閉じる (すぐには閉じない)
-  assert.equal(closesAtMs.length, 1);
-  assert.isAbove(closesAtMs[0] ?? 0, stopStartedAtMs);
-  // 予約した音 (到着基準の既定遅延 100 ms + 20 ms) が鳴り終わるのを待つ
-  assert.isAtLeast(waitedMs, 50, "予約が鳴り終わるまで待つこと");
-  assert.isAtMost(waitedMs, 500, "待ち時間の上限 (300 ms) を大きく超えないこと");
-
-  const timing = subscriber.getStats().audio?.playoutTiming;
-  assert.isDefined(timing?.lastDrain, "drain の結果を計器に残すこと");
-  assert.equal(timing?.lastDrain?.cutMs, 0, "鳴らし切れたので切った量は 0");
-  assert.isAbove(timing?.lastDrain?.playedMs ?? 0, 0, "鳴らせた量を残すこと");
-  assert.equal(timing?.missedByReason.stopped.count, 0, "切った音を数えないこと");
-  assert.equal(timing?.missedByReason.stopped.ms, 0);
-});
-
-/**
- * 完了条件: drain が終わった後 (音声の復号を止めた後) に届いた復号の出力は、予約せずに
- * AudioData を閉じて捨てる。閉じる直前の AudioContext に積むと、切った量として数えられない
- * まま閉じたときに消えるためである。flush の復号待ちの減算は捨てる判定より先に行う。
- */
-test("handleAudioDecodedData: drain 終了後に届いた復号出力は予約せず閉じる", () => {
-  const subscriber = createTestSubscriber({
-    audio: {},
-  }).subscriber;
-  const control = subscriber as unknown as SubscriberDrainControl;
-  control.currentState = "active";
-  let starts = 0;
-  const audioContext = {
-    currentTime: 0,
-    getOutputTimestamp: () => ({ contextTime: 0, performanceTime: 0 }),
-    createBuffer: () => ({ copyToChannel: () => {} }) as unknown as AudioBuffer,
-    createBufferSource: () =>
-      ({
-        buffer: null,
-        connect: () => {},
-        start: () => {
-          starts++;
-        },
-      }) as unknown as AudioBufferSourceNode,
-    close: async () => {},
-  } as unknown as AudioContext;
-  const audioDestination = {
-    stream: { getAudioTracks: () => [] },
-  } as unknown as MediaStreamAudioDestinationNode;
-  installAudioOutput(control, audioContext, audioDestination);
-
-  let closeCount = 0;
-  const audioData = {
-    numberOfChannels: 1,
-    sampleRate: 48_000,
-    numberOfFrames: 960,
-    timestamp: 1_000,
-    copyTo: () => {},
-    close: () => {
-      closeCount++;
-    },
-  } as unknown as AudioData;
-
-  // drain 終了相当の状態にする。復号の待ちは 1 件残っている
-  control.audioDecodeStopped = true;
-  control.audioDecodeSubmitSequences.push(0);
-  control.audioDrainFlushedSequences.add(0);
-  control.handleAudioDecodedData({ data: audioData });
-
-  assert.equal(starts, 0, "予約しないこと");
-  assert.equal(closeCount, 1, "AudioData を閉じること");
-  assert.equal(control.audioDrainFlushedSequences.size, 0, "drain の完了判定用の減算は行うこと");
-
-  // 対照: 停止していなければ予約する
-  control.audioDecodeStopped = false;
-  const liveAudioData = {
-    numberOfChannels: 1,
-    sampleRate: 48_000,
-    numberOfFrames: 960,
-    copyTo: () => {},
-    close: () => {},
-  } as unknown as AudioData;
-  control.handleAudioDecodedData({ data: liveAudioData });
-  assert.equal(starts, 1, "停止していなければ予約すること");
-});
 
 /**
  * 完了条件: drain の flush 待ちは、flush した Object の復号出力だけを減らす。停止の前に

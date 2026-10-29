@@ -188,10 +188,9 @@ export function getAudioEncoderConfig(
  * 音声の再生に使う AudioContext のサンプルレートを決める
  *
  * AudioContext のレートと、復号フレーム (`AudioData`) のレートが食い違うと、
- * `AudioBufferSourceNode` がバッファごとにリサンプルする。Chromium はリサンプルのとき
- * バッファ末尾を線形外挿するため、20 ms のバッファが公称より 1 サンプル長く鳴り、
- * 次のフレームの先頭と足し合わされて振幅 2 倍 (+6 dB) のスパイクが毎秒 50 回入る
- * (実測。docs/AUDIO_GLITCH_CAUSES.md の A1)。
+ * `AudioBufferSourceNode` がバッファごとにリサンプルする。一定値の OfflineAudioContext では
+ * 境界の重なりを再現したが、実出力のクリックの有無とは区別する。不要な変換を避ける
+ * ため、復号フレームへ揃えたレートを使う。
  *
  * Chromium の Opus 復号は、WebCodecs の configure に渡した sampleRate に関係なく
  * 常に 48 kHz の AudioData を返す (実測済み)。そのため、opus のときは Catalog の

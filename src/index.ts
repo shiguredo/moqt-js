@@ -279,15 +279,8 @@ export type {
   PlayoutDelayBreakdown,
   PlayoutTrackBreakdown,
   PlayoutUnsharedReason,
+  AudioPlayoutDelayStats,
 } from "./playout/timeline";
-
-// 音声の目標遅延を閉ループで決めた状態 (AvSyncStats.delays.audioDelayFeedback)。
-// 適用中の目標と、その理由
-export type {
-  AudioDelayFeedbackObservation,
-  AudioDelayFeedbackReason,
-  AudioDelayFeedbackSnapshot,
-} from "./playout/audioDelayFeedback";
 
 // 音声の再生の計器 (AudioPlayoutTimingStats) へ記録するときの型
 export type { AudioPlayoutBasis } from "./playout/audioPlayout";

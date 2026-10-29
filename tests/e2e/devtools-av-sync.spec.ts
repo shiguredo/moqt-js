@@ -17,10 +17,9 @@ const AV_SYNC_ITEMS = {
   videoBase: "subscriber-av-sync-video-base",
   videoExtra: "subscriber-av-sync-video-extra",
   videoPresentation: "subscriber-av-sync-video-presentation",
-  audioTargetApplied: "subscriber-av-sync-audio-target-applied",
   audioTarget: "subscriber-av-sync-audio-target",
-  audioTargetReason: "subscriber-av-sync-audio-target-reason",
-  audioTargetLateness: "subscriber-av-sync-audio-target-lateness",
+  audioJitter: "subscriber-av-sync-audio-target-jitter",
+  audioOutputLead: "subscriber-av-sync-audio-output-lead",
   baseDifference: "subscriber-av-sync-base-difference",
   sharing: "subscriber-av-sync-sharing",
   unsharedReason: "subscriber-av-sync-unshared-reason",
@@ -57,23 +56,8 @@ const EMPTY_DELAYS = {
   // 解除を早める条件 (きっかけが去って差が戻った状態) はまだ数えていない
   baseUnsharedReturnMs: null,
   presentationDelayCapMs: 0,
-  // 音声の目標遅延の閉ループはまだ動いていない。実際に使う値は揺らぎだけから求めた目標
-  // (NetEq の初期値) のままである (`devtools/src/signals/subscriber.ts`)
-  audioDelayFeedback: {
-    targetMs: 50,
-    jitterTargetMs: 80,
-    appliedMs: 80,
-    // 圧縮 (粗さ) が続いていないため、適応で広げていないときの上限 (100 ms) のまま
-    appliedCeilingMs: 100,
-    compressionMsPerSecond: 0,
-    reason: "initial",
-    ceilingMs: null,
-    lastChangeMs: 0,
-    adjustments: 0,
-    latenessP50Ms: null,
-    startDelayP50Ms: null,
-    slackP50Ms: null,
-  },
+  // 到着と出力時計が未観測のため、予算は 50 ms、測定値は null とする
+  audioDelay: { targetMs: 50, jitterMs: null, outputLeadMs: null },
 } as const;
 
 test("window.moqtDevTools から同期の推定と遅延の内訳が読め、未購読では既定値になる", async ({
@@ -141,11 +125,10 @@ test("subscriber の画面に同期の推定と遅延の内訳を既定値で出
   await expect(page.getByTestId(AV_SYNC_ITEMS.videoBase)).toHaveText("-");
   await expect(page.getByTestId(AV_SYNC_ITEMS.videoExtra)).toHaveText("0.0");
   await expect(page.getByTestId(AV_SYNC_ITEMS.videoPresentation)).toHaveText("-");
-  // 音声の目標遅延の閉ループ (まだ動いていないため、揺らぎだけの目標と初期値のまま)
-  await expect(page.getByTestId(AV_SYNC_ITEMS.audioTargetApplied)).toHaveText("80.0");
+  // 到着と出力時計の観測が無いときの再生予算
   await expect(page.getByTestId(AV_SYNC_ITEMS.audioTarget)).toHaveText("50.0");
-  await expect(page.getByTestId(AV_SYNC_ITEMS.audioTargetReason)).toHaveText("initial");
-  await expect(page.getByTestId(AV_SYNC_ITEMS.audioTargetLateness)).toHaveText("-");
+  await expect(page.getByTestId(AV_SYNC_ITEMS.audioJitter)).toHaveText("-");
+  await expect(page.getByTestId(AV_SYNC_ITEMS.audioOutputLead)).toHaveText("-");
   // 基準を共有できているかと、できていない理由
   await expect(page.getByTestId(AV_SYNC_ITEMS.baseDifference)).toHaveText("-");
   await expect(page.getByTestId(AV_SYNC_ITEMS.sharing)).toHaveText("false");

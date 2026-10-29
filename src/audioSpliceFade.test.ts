@@ -6,7 +6,14 @@
  */
 
 import { test, assert } from "vite-plus/test";
-import { AUDIO_SPLICE_FADE_MS, fadeSpliceEdge, mergeFadedPlanes } from "./audioSpliceFade";
+import {
+  AUDIO_SPLICE_FADE_MS,
+  crossFadeHead,
+  interpolateSpliceGap,
+  smoothSpliceHead,
+  fadeSpliceEdge,
+  mergeFadedPlanes,
+} from "./audioSpliceFade";
 import type { AudioSamples } from "./playout/audioTimeStretch";
 
 /** Opus の 1 フレーム (8 ms、16 kHz) */
@@ -22,6 +29,51 @@ function constantFrame(value = 0.5): AudioSamples {
 
 // 落とす長さ (2 ms = 32 サンプル)。この分だけ端が 0 へ向かう
 const FADE_SAMPLES = Math.round((AUDIO_SPLICE_FADE_MS / 1_000) * SAMPLE_RATE);
+
+test("smoothSpliceHead: 補間の開始に元の音より大きい段差を作らない", () => {
+  const previous = Float32Array.from({ length: FRAME_SAMPLES }, (_, index) => -0.2 - index * 0.001);
+  const next = constantFrame(-0.1);
+  const result = smoothSpliceHead([previous], [next], SAMPLE_RATE)[0];
+  assert.equal(result?.[0], previous.at(-1), "既知の直前の末尾から接続すること");
+  assert.equal(result?.[FADE_SAMPLES], next[FADE_SAMPLES], "接続後は補間波形へ戻ること");
+  const constant = constantFrame();
+  assert.deepEqual(smoothSpliceHead([constant], [constant], SAMPLE_RATE)[0], constant);
+});
+
+// 周期推定できない子音でも、既知の 2 端点の間にある短い隙間は無音へ落とさずに繋ぐ。
+test("interpolateSpliceGap: 短い隙間を両端の振幅へ滑らかに繋ぐ", () => {
+  const result = interpolateSpliceGap([constantFrame(0.2)], [constantFrame(-0.2)], 16)[0];
+  assert.isDefined(result);
+  if (result === undefined) return;
+  assert.equal(result.length, 16);
+  let previous = 0.2;
+  for (const sample of [...result, -0.2]) {
+    assert.isAtMost(Math.abs(sample - previous), 0.4 / 17 + 1e-7);
+    previous = sample;
+  }
+});
+
+// 補間と実音が同じ波形なら、継ぎ目のために一度 0 へ落とす必要はない。
+// 両側フェードで周期的な音量低下を作らないことを数値で固定する。
+test("crossFadeHead: 連続する音を繋いでも音量を変えない", () => {
+  const frame = constantFrame();
+  const result = crossFadeHead([frame], [frame], SAMPLE_RATE);
+  assert.deepEqual(result[0], frame);
+  assert.equal(frame[0], 0.5, "入力を変更しないこと");
+});
+
+test("crossFadeHead: 位相が異なる音を段差を作らずに繋ぐ", () => {
+  const result = crossFadeHead([constantFrame(0.5)], [constantFrame(-0.5)], SAMPLE_RATE)[0];
+  assert.isDefined(result);
+  if (result === undefined) return;
+  assert.equal(result[0], 0.5, "補間の続きから始めること");
+  assert.equal(result[FADE_SAMPLES], -0.5, "実音へ戻ること");
+  let maximum = 0;
+  for (let index = 1; index <= FADE_SAMPLES; index++) {
+    maximum = Math.max(maximum, Math.abs((result[index] ?? 0) - (result[index - 1] ?? 0)));
+  }
+  assert.isAtMost(maximum, 1 / FADE_SAMPLES + 1e-6, "急な位相飛びを作らないこと");
+});
 
 test("fadeSpliceEdge: 先頭を 0 から立ち上げ、落とす長さの外は元のまま", () => {
   const faded = fadeSpliceEdge([constantFrame()], SAMPLE_RATE, "head")[0] ?? new Float32Array(0);

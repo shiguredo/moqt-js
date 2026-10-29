@@ -258,15 +258,14 @@ MSF-01 §5 は catalog の取得に Joining FETCH を MUST としているが、
 
 - 表示時刻を決める
   - LOC の TIMESTAMP と、トラックごとの「復号の出力の時刻 − TIMESTAMP」の直近 10 秒の最小値から、音声と映像の表示時刻を同じ式で決める (`src/playout/timeline.ts`)
-- 音声の jitter buffer の目標遅延を、到着の遅れの分布から決める
-  - libwebrtc の NetEq (`delay_manager.cc` / `histogram.cc`) を移植し、到着の遅れの 0.95 分位から目標を求める (`src/playout/audioDelayEstimator.ts`)
-  - 実際に鳴った結果 (予定をどれだけ過ぎて鳴ったか、並べすぎで捨てた量) でも目標を補正する (`src/playout/audioDelayFeedback.ts`)
+- 音声の待ちを、到着の揺らぎと実際の出力に必要な時間から決める
+  - 直近 2 秒の揺らぎと出力時計で測った先行量を使い、A/V の音声予算を通常 50〜100 ms、音声だけの再生は 50 ms にする。通信や復号を含めた実遅延の上限を保証する値ではない
 - 間に合わない音を捨てずに詰める
   - 波形の周期性を使った時間圧縮 / 時間伸長 (NetEq の `time_stretch.cc` / `accelerate.cc` / `preemptive_expand.cc` の移植) と、欠けた分の波形の繰り返しによる補間 (`src/playout/audioTimeStretch.ts`)
 - 映像は表示時刻を過ぎた最新のフレームを描く
   - 表示待ちのキューが、時間軸の決めた表示時刻に合わせてフレームを選ぶ (`src/playout/buffer.ts` / `src/playout/videoPlayoutSession.ts`)
 - 映像を音声に合わせる
-  - 「表示時刻 − TIMESTAMP」の差を不感帯 5 ms で制御し、先行する側 (多くの場合 映像) を最大 100 ms まで待たせる
+  - 「表示時刻 − TIMESTAMP」の差を不感帯 5 ms で制御する。時計の基準の差は最大 100 ms まで補償し、既知のバッファ差と出力の残差は別に合わせる。基準を共有できる間は過去の待ちを保持せず、現在の必要量へ戻す
 - live から遅れたら復号器を作り直す
   - 復号器に溜まった音は、鳴らす音を捨てても減らない。遅れが続いたら復号器を作り直して live へ戻す (`src/playout/audioReceiveCatchUp.ts`)
 - パケロスを配信側の冗長化で吸収する
@@ -278,7 +277,7 @@ MSF-01 §5 は catalog の取得に Joining FETCH を MUST としているが、
 
 `createMediaPublisher` と `createMediaSubscriber` が WebCodecs のエンコード / デコードまでを隠蔽するのに対し、`createMediaPlayout` は復号済みのフレームを受け取ります。`createMediaSubscriber` はこの入口を内部で使うため、高レベル API を使う場合は再生を自分で実装する必要はなく、受信と復号を自分で組み立てる場合もこの入口 1 つで完結します。詳細は [高レベル API](docs/HIGH_LEVEL_API.md) にあります。
 
-実測の条件と生の表は [音声の再生遅延の実測](docs/AUDIO_PLAYOUT_LATENCY.md)、現状と既知の限界は [音声再生の現状](docs/AUDIO_PLAYOUT_RESULT.md) にまとめています。
+現状と既知の限界は [音声再生の現状](docs/AUDIO_PLAYOUT_RESULT.md)、最新の実測と採用しなかった調整は [A/V 再生の低遅延化の計測](docs/AV_LOW_LATENCY_INVESTIGATION.md) にまとめています。長い欠落の内容は復元できず、常時 100 ms 未満と完全な無雑音を保証するものではありません。
 
 ## インストール
 
@@ -410,7 +409,8 @@ await subscriber.unsubscribe();
 - [低レベル API](docs/LOW_LEVEL_API.md): `connect()` と `Session` / `Publisher` / `Subscriber` / `Fetcher` の仕様
 - [MOQT Streaming Format](docs/MSF.md): Catalog / Timeline の公開 API
 - [A/V 同期と再生の決定と根拠](docs/AV_SYNC_DECISIONS.md): 値を決めた根拠と、再考する条件
-- [音声再生の現状](docs/AUDIO_PLAYOUT_RESULT.md): 実リレーで測った値、規格との対応、既知の限界
+- [音声再生の現状](docs/AUDIO_PLAYOUT_RESULT.md): 現行の再生予算、統計の読み方、実測値と既知の限界
+- [A/V 再生の低遅延化の計測](docs/AV_LOW_LATENCY_INVESTIGATION.md): 日本語と Datagram 欠落を使った比較、採用しなかった調整と品質の交換条件
 - [ビルド](docs/BUILD.md): Node.js の要件、`vp install` と `vp run build`、git 依存として取り込む場合
 - [テスト](docs/TEST.md): 単体テストの実行方法
 - [E2E テスト](docs/E2E_TEST.md): Playwright による E2E テストの実行方法と、実リレーを使う条件

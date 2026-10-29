@@ -241,16 +241,10 @@ interface DevtoolsSubscriberStats {
       baseDriftLimitMs: number;
       baseUnsharedReturnMs: number | null;
       presentationDelayCapMs: number;
-      audioDelayFeedback: {
+      audioDelay: {
         targetMs: number;
-        jitterTargetMs: number;
-        appliedMs: number;
-        reason: string;
-        ceilingMs: number | null;
-        adjustments: number;
-        latenessP50Ms: number | null;
-        startDelayP50Ms: number | null;
-        slackP50Ms: number | null;
+        jitterMs: number | null;
+        outputLeadMs: number | null;
       };
     };
   };
@@ -1048,12 +1042,10 @@ test("長時間の配信で、送信の遅れと受信の遅れが悪化しな�
   console.log(
     `長時間の観測 (5 秒ごと):\n  ${series.filter((_, index) => index % 5 === 0).join("\n  ")}`,
   );
-  const feedback = finalSubscriber.avSync.delays.audioDelayFeedback;
+  const audioDelay = finalSubscriber.avSync.delays.audioDelay;
   console.log(
-    `目標遅延の学習: target=${feedback.targetMs}, jitter=${feedback.jitterTargetMs}, ` +
-      `applied=${feedback.appliedMs}, reason=${feedback.reason}, ceiling=${feedback.ceilingMs}, ` +
-      `adjustments=${feedback.adjustments}, latenessP50=${feedback.latenessP50Ms}, ` +
-      `startDelayP50=${feedback.startDelayP50Ms}, slackP50=${feedback.slackP50Ms}`,
+    `目標遅延の内訳: target=${audioDelay.targetMs}, jitter=${audioDelay.jitterMs}, ` +
+      `outputLead=${audioDelay.outputLeadMs}`,
   );
   console.log(
     `警告: ${finalSubscriber.warnings.map((warning) => JSON.stringify(warning)).join(", ")}`,
