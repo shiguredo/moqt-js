@@ -342,9 +342,9 @@ export class AudioPlayoutSession {
         planned = { arrivalMs: performance.now(), targetMs: null, durationMs: 0 };
         throw new Error("AudioData must be open and contain audio frames");
       }
-      // AudioContext と復号フレームのレートが違うと、AudioBufferSourceNode がバッファごとに
-      // リサンプルし、20 ms の境界ごとに 1 サンプルの重なり (毎秒 50 回の +6 dB スパイク) が
-      // 生まれる (docs/AUDIO_GLITCH_CAUSES.md の A1)。鳴らす前の 2 つのレートを計器へ残す。
+      // レートが違うと AudioBufferSourceNode がバッファごとにリサンプルする。
+      // 境界の重なりは OfflineAudioContext で再現したが、実出力のクリックとは区別する。
+      // 鳴らす前の 2 つのレートを計器へ残し、波形を調べる条件を特定できるようにする。
       // AudioContext がレートを持たない (実物には必ずあるが、境界の型を満たすだけの
       // オブジェクトを渡された) ときは記録しない
       if (Number.isFinite(context.sampleRate) && context.sampleRate > 0) {
@@ -699,9 +699,8 @@ export class AudioPlayoutSession {
           decision.gapStartSeconds,
         );
         const previousTail = this.lastScheduledTailSample;
-        // 直前のバッファの末尾と補間の先頭の段差。無音を挟むときは無音へ落ちる分だけが
-        // 段差として残る。押し直したときも、前の音の末尾はフェードできないため段差は
-        // 残り得る (数える)
+        // 直前の末尾と補間の先頭の段差。無音を挟むときは 0 との差を見る。
+        // startBuffer が、取り消さなかった末尾フェードの終端を 0 として反映している。
         if (previousTail !== null) {
           const step =
             startsAfterSilence || concealedStart.pushed

@@ -7,8 +7,6 @@
 現行の仕組みは [音声再生の現状](AUDIO_PLAYOUT_RESULT.md)、採用比較は
 [A/V の低遅延化の計測](AV_LOW_LATENCY_INVESTIGATION.md) を参照すること。
 
-音声再生の現状は [現行のまとめ](AUDIO_PLAYOUT_RESULT.md) にある (再生予算、計器、既知の限界)。
-
 この文書は調査の記録である。決定と根拠は `docs/AV_SYNC_DECISIONS.md` が持つ。ここには
 測り方、生の値、判断に至った理由、未解決のまま残したことを書く。
 

@@ -41,14 +41,14 @@ for (const frames of [120, 192, 240, 960]) {
           tap.connect(mute).connect(context.destination);
           const playout = createMediaPlayout({ audio: { context, destination: tap } });
           const statuses: string[] = [];
-          const push = (timestamp: number, count: number) => {
+          const push = (timestamp: number, count: number, amplitude = 0.3) => {
             const data = new AudioData({
               format: "f32-planar",
               sampleRate: 48000,
               numberOfChannels: 1,
               numberOfFrames: count,
               timestamp,
-              data: new Float32Array(count).fill(0.3),
+              data: new Float32Array(count).fill(amplitude),
             });
             playout.trackAudioDecodeInput(timestamp, { timestampKind: "mediaTime" });
             statuses.push(playout.pushAudio(data).status);
@@ -62,7 +62,7 @@ for (const frames of [120, 192, 240, 960]) {
               "出力時計の準備",
             );
             if (scenario === "reset") {
-              push(0, frames);
+              push(0, frames, 0.1);
               await playout.drainAudio();
               // 再開前に旧予約の末尾まで収録し、同じ出力への重なりを検査に混ぜない。
               await waitFor(
@@ -80,7 +80,7 @@ for (const frames of [120, 192, 240, 960]) {
             let timestamp = 0;
             if (scenario === "conceal") {
               // PLC の材料には 20 ms を渡し、その先の短い穴と実音も同じ出力で検査する。
-              push(0, 960);
+              push(0, 960, 0.1);
               timestamp = 21000;
             }
             push(timestamp, frames);
@@ -93,16 +93,17 @@ for (const frames of [120, 192, 240, 960]) {
             let previous = 0;
             let maximumStep = 0;
             let peak = 0;
-            let activeSamples = 0;
+            let targetActiveSamples = 0;
             for (const chunk of chunks) {
               for (const sample of chunk) {
                 maximumStep = Math.max(maximumStep, Math.abs(sample - previous));
                 peak = Math.max(peak, Math.abs(sample));
-                if (sample > 0.001) activeSamples++;
+                // 準備音とその PLC は振幅 0.1 なので、検査対象の短い実音だけを数える。
+                if (sample > 0.2) targetActiveSamples++;
                 previous = sample;
               }
             }
-            return { statuses, maximumStep, peak, activeSamples };
+            return { statuses, maximumStep, peak, targetActiveSamples };
           } finally {
             playout.clearAll();
             tap.disconnect();
@@ -121,7 +122,7 @@ for (const frames of [120, 192, 240, 960]) {
         "全入力を再生すること",
       );
       assert.ok(
-        result.peak > 0.299 && result.activeSamples >= frames,
+        result.peak > 0.299 && result.targetActiveSamples >= frames,
         "無音化して成功させないこと",
       );
       assert.ok(result.maximumStep < 0.006, `先頭 ramp を保つこと: ${JSON.stringify(result)}`);

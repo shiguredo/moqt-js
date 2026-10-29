@@ -211,10 +211,7 @@ test("subscribeCatalog: エラー status の PUBLISH_DONE で catalog の購読�
 // ============================================================================
 
 /**
- * 停止時に drain が動くことを確かめるための制御口
- *
- * AudioContext は node に実物が無いため、既存の検証と同じく記録用の最小オブジェクトを
- * 注入する (モジュール置換は行わない)。
+ * 停止時に復号の flush 待ちと破棄が完了することを確かめるための制御口
  */
 interface SubscriberDrainControl extends SubscriberFrameControl {
   currentState: MediaSubscriberState;

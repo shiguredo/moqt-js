@@ -935,8 +935,7 @@ export function useSubscriber(
   // 音声を鳴らす AudioContext のサンプルレート (Hz)。復号器の configure と同じ解決値
   // (`resolveAudioContextSampleRate`) を、音声の購読を始めるときに保存する。AudioContext は
   // 再生のトグルで作られるため、購読の開始までに決めた値を ref 経由で渡す
-  // (docs/AUDIO_GLITCH_CAUSES.md の A1: 復号フレームとのレート不一致で 20 ms ごとに
-  // 1 サンプルの重なりが生まれる)
+  // 復号フレームとの不要なリサンプルを避ける。
   const audioContextSampleRateRef = useRef<number>(DEFAULT_AUDIO_SAMPLE_RATE);
   // startSubscribing の中断検知用 AbortController (レンダリング間で安定参照)
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -1002,7 +1001,6 @@ export function useSubscriber(
   // targetLatency に合わせて作り直す。音声と映像の両方をこの 1 つの時間軸へ observe する
   // ことで、同じ式の表示時刻で揃える
   const mediaPlayoutRef = useRef<MediaPlayout | null>(null);
-  const jitterBufferEnabledRef = useRef(false);
   // 直前の同期の状態 (基準を共有できているかとその理由)。変わったときだけログに残す
   const avSyncStateRef = useRef<AvSyncState | null>(null);
   // relay の cache から追いつく途中かどうかを、SUBSCRIBE_OK の LARGEST_OBJECT を境界に
@@ -1243,9 +1241,6 @@ export function useSubscriber(
     jitterBuffer: boolean;
     targetLatencyMs: number | null;
   }): void {
-    // jitter buffer の真実はここ 1 か所で立てる (購読を始めた時点の設定で決まり、購読中は
-    // 変更できない)。停止したときは stopPlayoutTiming が下ろす
-    jitterBufferEnabledRef.current = options.jitterBuffer;
     // 前の購読の映像の表示 (予約した表示と表示待ち) と、復号へ渡した映像入力の対応表を
     // 捨てる
     mediaPlayoutRef.current?.clearVideoQueue();
@@ -1517,9 +1512,6 @@ export function useSubscriber(
   /**
    * signal への反映を止め、記録を捨てる。signal には最後に反映した値を残す
    * (他の統計と同じく、停止後も直前の購読の値を表示し、次の購読開始で初期化する)
-   *
-   * 時間軸を作り直すまで音声を同期させないため、jitter buffer の状態も下ろす
-   * (音声だけの購読では映像の時間軸が無い)
    */
   function stopPlayoutTiming(): void {
     if (playoutTimingTimerRef.current !== null) {
@@ -1527,7 +1519,6 @@ export function useSubscriber(
       playoutTimingTimerRef.current = null;
     }
     playoutTimingRef.current.reset();
-    jitterBufferEnabledRef.current = false;
     // 次の購読では状態が変わったときとしてログを出し直す (前の購読の状態を持ち越さない)
     avSyncStateRef.current = null;
   }

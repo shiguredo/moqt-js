@@ -897,7 +897,9 @@ export class AudioPlayoutScheduler {
   ): number {
     if (this.anchor === null) {
       this.anchor = {
-        time: arrivalSeconds + arrivalDelaySeconds,
+        // 映像の購読解除などで時刻基準から初めて移るときも、先行予約を追い越さない。
+        // 残った待ちは通常の時間圧縮で減らし、音を重ねて遅延を減らしたことにしない。
+        time: Math.max(arrivalSeconds + arrivalDelaySeconds, this.lastEnd ?? -Infinity),
         timestampMicroseconds,
       };
       return this.anchor.time;

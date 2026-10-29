@@ -101,4 +101,4 @@ for (const entry of manifest) {
   );
 }
 writeFileSync(`${directory}/manifest.json`, JSON.stringify(manifest, null, 2));
-console.log(`日本語音源を用意しました: ${directory}`);
+console.log(`Prepared Japanese speech inputs: ${directory}`);

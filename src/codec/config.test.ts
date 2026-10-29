@@ -190,8 +190,7 @@ test("requiresAudioSpecificConfig: aac のみ true", () => {
 /**
  * 完了条件: opus は Catalog の samplerate に関係なく 48 kHz になる。Chromium の Opus 復号は
  * configure の sampleRate に従わず常に 48 kHz の AudioData を返すため、Catalog が 44100 の
- * ときに AudioContext を 44.1 kHz で作ると、20 ms のバッファ境界ごとに 1 サンプルの重なり
- * (毎秒 50 回の +6 dB スパイク) が生まれる
+ * ときも AudioContext を 48 kHz で作り、不要なリサンプルを避ける。
  */
 test("resolveAudioContextSampleRate: opus は Catalog の値に関係なく 48 kHz になる", () => {
   assert.equal(resolveAudioContextSampleRate("opus", 44_100), DEFAULT_AUDIO_SAMPLE_RATE);

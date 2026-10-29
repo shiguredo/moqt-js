@@ -235,7 +235,7 @@ export async function dsp() {
   return { compression, concealment, stereo, recordings };
 }
 
-/** 実 WebCodecs で Opus を一往復させた波形。入力と復号後の timestamp は区別する。 */
+/** 波形比較の条件に応じて、意図的に欠落させるフレームを選ぶ。 */
 function isMissingFrame(pattern, index) {
   return (
     (pattern === "loss20" && index > 0 && index % 20 === 0) ||
@@ -266,7 +266,6 @@ async function renderCase(
   let requested = 0;
   let applied = 0;
   let failedConcealments = 0;
-  let previousEnd = 0;
   let finalEnd = 0;
   const boundaries = [];
   let pendingGain = null;
@@ -278,7 +277,7 @@ async function renderCase(
     if (treatment === "current") {
       if (pendingGain !== null && Math.abs(when - pendingGain.end) <= 0.5 / RATE) {
         pendingGain.node.gain.cancelScheduledValues(pendingGain.tailStart);
-        pendingGain.node.gain.setValueAtTime(1, pendingGain.tailStart);
+        pendingGain.node.gain.linearRampToValueAtTime(1, pendingGain.tailStart);
       }
       const gain = context.createGain();
       const duration = samples.length / RATE;
@@ -288,7 +287,7 @@ async function renderCase(
         gain.gain.setValueAtTime(0, when);
         gain.gain.linearRampToValueAtTime(1, when + fade);
       }
-      const tailStart = when + duration - fade;
+      const tailStart = Math.max(when + fade, when + duration - fade);
       gain.gain.setValueAtTime(1, tailStart);
       gain.gain.linearRampToValueAtTime(0, when + duration);
       node.connect(gain).connect(context.destination);
@@ -386,10 +385,9 @@ async function renderCase(
       previous,
     );
     schedule(output[0], startAt);
-    if (index > 0) boundaries.push({ at: startAt, previousEnd });
-    previousEnd = startAt + output[0].length / RATE;
-    if (treatment === "current") scheduler.confirmPlayoutEnd(previousEnd);
-    finalEnd = previousEnd;
+    if (index > 0) boundaries.push({ at: startAt });
+    finalEnd = startAt + output[0].length / RATE;
+    if (treatment === "current") scheduler.confirmPlayoutEnd(finalEnd);
     previous = treatment === "baseline" ? result.channels : [input];
     previousFrameIndex = index;
     if (
@@ -587,9 +585,14 @@ export async function live(caseName) {
   const frameCount = caseName.includes("long") ? 3000 : 300;
   const rate = caseName === "rate-mismatch" ? 44100 : RATE;
   const context = new AudioContext({ sampleRate: rate });
-  const capture = [];
-  // AudioWorklet は source の出力を直接観測する。出力のミュートより手前で収録する。
-  const source = `class Capture extends AudioWorkletProcessor {
+  let tap = null;
+  let mute = null;
+  let canvas = null;
+  let playout = null;
+  try {
+    const capture = [];
+    // AudioWorklet は source の出力を直接観測する。出力のミュートより手前で収録する。
+    const source = `class Capture extends AudioWorkletProcessor {
     process(inputs, outputs) {
       const channel = inputs[0]?.[0];
       this.port.postMessage({ frame: currentFrame, connected: channel !== undefined,
@@ -597,73 +600,75 @@ export async function live(caseName) {
       return true;
     }
   } registerProcessor("playout-quality-capture", Capture);`;
-  const moduleUrl = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
-  await context.audioWorklet.addModule(moduleUrl);
-  URL.revokeObjectURL(moduleUrl);
-  const tap = new AudioWorkletNode(context, "playout-quality-capture");
-  tap.port.onmessage = (event) => capture.push(event.data);
-  const mute = context.createGain();
-  mute.gain.value = 0;
-  tap.connect(mute).connect(context.destination);
-  const canvas = document.createElement("canvas");
-  canvas.width = 16;
-  canvas.height = 16;
-  document.body.append(canvas);
-  const drawing = canvas.getContext("2d");
-  const playout = createMediaPlayout({
-    audio: { context, destination: tap },
-    ...(caseName.startsWith("av")
-      ? {
-          video: {
-            output: {
-              isAvailable: () => canvas.isConnected,
-              present: (frame) => {
-                drawing.drawImage(frame, 0, 0);
-                frame.close();
-                return true;
+    const moduleUrl = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
+    try {
+      await context.audioWorklet.addModule(moduleUrl);
+    } finally {
+      URL.revokeObjectURL(moduleUrl);
+    }
+    tap = new AudioWorkletNode(context, "playout-quality-capture");
+    tap.port.onmessage = (event) => capture.push(event.data);
+    mute = context.createGain();
+    mute.gain.value = 0;
+    tap.connect(mute).connect(context.destination);
+    canvas = document.createElement("canvas");
+    canvas.width = 16;
+    canvas.height = 16;
+    document.body.append(canvas);
+    const drawing = canvas.getContext("2d");
+    playout = createMediaPlayout({
+      audio: { context, destination: tap },
+      ...(caseName.startsWith("av")
+        ? {
+            video: {
+              output: {
+                isAvailable: () => canvas.isConnected,
+                present: (frame) => {
+                  drawing.drawImage(frame, 0, 0);
+                  frame.close();
+                  return true;
+                },
               },
             },
-          },
-        }
-      : {}),
-  });
-  let decoded = null;
-  if (caseName.startsWith("datagram")) {
-    const [, name, pattern, copies] = caseName.split("|");
-    decoded = await opusFrames(170, frameCount, await loadSpeech(name, frameCount / 50), {
-      pattern,
-      copies: Number(copies),
+          }
+        : {}),
     });
-  } else if (caseName.startsWith("japanese")) {
-    const name = caseName.includes("julius")
-      ? "julius"
-      : caseName.includes("eddy")
-        ? "eddy"
-        : "kyoko";
-    decoded = await opusFrames(170, frameCount, await loadSpeech(name, frameCount / 50));
-  } else if (caseName.startsWith("voice")) {
-    decoded = await opusFrames(170, 300);
-  }
-  await context.resume();
-  const sleep = (ms) =>
-    new Promise((accept) => {
-      setTimeout(accept, ms);
-    });
-  // 初期化中の出力時計を再生開始の基準にせず、有効な観測を待つ。
-  const mappingDeadline = performance.now() + 1000;
-  while (!(context.getOutputTimestamp().performanceTime > 0)) {
-    if (performance.now() > mappingDeadline)
-      throw new Error("Output timestamp did not become available");
-    await sleep(10);
-  }
-  await sleep(100);
-  const results = [];
-  const statsSeries = [];
-  const origin = performance.now() + 50;
-  const epoch = Math.round((performance.timeOrigin + origin) * 1000);
-  const decodedByPacket =
-    decoded === null ? null : new Map(decoded.map((frame) => [frame.packetIndex, frame]));
-  try {
+    let decoded = null;
+    if (caseName.startsWith("datagram")) {
+      const [, name, pattern, copies] = caseName.split("|");
+      decoded = await opusFrames(170, frameCount, await loadSpeech(name, frameCount / 50), {
+        pattern,
+        copies: Number(copies),
+      });
+    } else if (caseName.startsWith("japanese")) {
+      const name = caseName.includes("julius")
+        ? "julius"
+        : caseName.includes("eddy")
+          ? "eddy"
+          : "kyoko";
+      decoded = await opusFrames(170, frameCount, await loadSpeech(name, frameCount / 50));
+    } else if (caseName.startsWith("voice")) {
+      decoded = await opusFrames(170, 300);
+    }
+    await context.resume();
+    const sleep = (ms) =>
+      new Promise((accept) => {
+        setTimeout(accept, ms);
+      });
+    // 初期化中の出力時計を再生開始の基準にせず、有効な観測を待つ。
+    const mappingDeadline = performance.now() + 1000;
+    while (!(context.getOutputTimestamp().performanceTime > 0)) {
+      if (performance.now() > mappingDeadline)
+        throw new Error("Output timestamp did not become available");
+      await sleep(10);
+    }
+    await sleep(100);
+    const results = [];
+    const statsSeries = [];
+    const origin = performance.now() + 50;
+    const epoch = Math.round((performance.timeOrigin + origin) * 1000);
+    const decodedByPacket =
+      decoded === null ? null : new Map(decoded.map((frame) => [frame.packetIndex, frame]));
     for (let index = 0; index < frameCount; index++) {
       // 受信コールバックが 180 ms 停滞し、溜まった音が順に届く実入力を与える。
       const cycleIndex = index % 1500;
@@ -740,11 +745,12 @@ export async function live(caseName) {
       recordings: [{ name: `live-${caseName}`, sampleRate: rate, samples: Array.from(active) }],
     };
   } finally {
-    playout.clearAll();
-    playout.setAudioOutput(null);
-    tap.disconnect();
-    mute.disconnect();
-    canvas.remove();
+    playout?.clearAll();
+    playout?.setAudioOutput(null);
+    tap?.port.close();
+    tap?.disconnect();
+    mute?.disconnect();
+    canvas?.remove();
     await context.close();
   }
 }
@@ -764,10 +770,11 @@ export async function relay(caseName, relayUrl) {
   const { createMediaSubscriber } = await import("../src/createMediaSubscriber.ts");
   const { playoutAudioSchedulerOf } = await import("../src/testSupport/mediaPlayoutInternals.ts");
   const [, name, pattern, copies] = caseName.split("|");
+  const speech = await loadSpeech(name);
   const context = new AudioContext({ sampleRate: RATE });
   const destination = context.createMediaStreamDestination();
   const buffer = context.createBuffer(1, RATE * 6, RATE);
-  buffer.copyToChannel(await loadSpeech(name), 0);
+  buffer.copyToChannel(speech, 0);
   const source = context.createBufferSource();
   source.buffer = buffer;
   source.loop = true;
@@ -884,6 +891,8 @@ export async function relay(caseName, relayUrl) {
     }
     const stats = subscriber.getStats();
     const publisherStats = publisher.getStats();
+    // 配信中の失敗と停止通知を分け、close が返却結果の配列を書き換えないようにする。
+    const activeErrors = errors.slice();
     await subscriber.stop();
     const afterStop = subscriber.getStats();
     await reader.cancel();
@@ -906,10 +915,13 @@ export async function relay(caseName, relayUrl) {
     }
     if (samples.length < RATE * 19 || (stats.audio?.datagramFramesReceived ?? 0) < 500)
       throw new Error("Relay did not produce the required measured audio");
+    await Promise.allSettled([subscriber.close(), publisher.close()]);
     return {
       caseName,
       seconds: samples.length / RATE,
-      errors,
+      valid: activeErrors.length === 0,
+      activeErrors,
+      shutdownErrors: errors.slice(activeErrors.length),
       packets,
       droppedPackets,
       lostGroups: [...droppedGroups].filter((group) => !deliveredGroups.has(group)).length,

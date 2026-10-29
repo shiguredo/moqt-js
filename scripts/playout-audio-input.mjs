@@ -6,7 +6,7 @@ import { requireAudioFrame } from "./playout-measurement-guards.mjs";
 const RATE = 48000;
 const FRAME = 960;
 /** 定常音と、周期推定に都合がよすぎない有声 / 無声混合の合成音声を用意する。 */
-export function signal(position, rate, frequency, kind = "sine") {
+function signal(position, rate, frequency, kind = "sine") {
   const time = position / rate;
   const phase = 2 * Math.PI * frequency * time;
   if (kind === "sine") return 0.3 * Math.sin(phase);

@@ -1895,8 +1895,8 @@ export class MediaSubscriberImpl implements MediaSubscriber {
    * 音声の再生に使う AudioContext と AudioDecoder のサンプルレートを解決する
    *
    * AudioContext と復号フレームのレートが食い違うと、`AudioBufferSourceNode` がバッファ
-   * ごとにリサンプルし、20 ms の境界ごとに 1 サンプルの重なり (毎秒 50 回の +6 dB
-   * スパイク) が生まれる (実測。docs/AUDIO_GLITCH_CAUSES.md の A1)。そのため AudioContext
+   * ごとにリサンプルする。境界の重なりは OfflineAudioContext で再現しているが、
+   * 実出力のクリックの有無とは区別する。不要な変換を避けるため AudioContext
    * も復号器の configure も、復号が実際に返すレートへ揃える
    * (`resolveAudioContextSampleRate`)。
    *
@@ -1929,8 +1929,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     // Audio 出力の設定
     if (this.audioTrackInfo) {
       // Catalog の samplerate ではなく、復号が実際に返すレートで AudioContext を作る。
-      // Catalog が 44100 の Opus でも復号は 48 kHz を返すため、Catalog の値で作ると
-      // バッファ境界ごとに 1 サンプルの重なりが生まれる (docs/AUDIO_GLITCH_CAUSES.md の A1)
+      // Catalog が 44100 の Opus でも復号は 48 kHz を返すため、不要なリサンプルを避ける。
       const sampleRate = this.resolveAudioPlayoutSampleRate();
       const context = new AudioContext({
         sampleRate,

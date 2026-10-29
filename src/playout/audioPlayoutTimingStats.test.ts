@@ -260,9 +260,8 @@ test("recordGap / recordLateStart / recordBoundaryStep: 穴と追い越しと段
 
 /**
  * 完了条件: AudioContext と復号フレームのサンプルレートの食い違いを数え、直近の値を残す。
- * 44.1 kHz の AudioContext に 48 kHz のバッファを並べると、20 ms の境界ごとに 1 サンプルの
- * 重なり (毎秒 50 回の +6 dB スパイク) が生まれる (docs/AUDIO_GLITCH_CAUSES.md の A1)。
- * `boundaryStepCount` は予約したサンプル列の段差しか見ないため、この現象を数えない
+ * レートの不一致はブラウザのリサンプルが入る条件であり、この計器はその条件を数える。
+ * OfflineAudioContext で再現した境界の重なりや、実出力のクリックの有無は別に検証する。
  */
 test("recordSampleRate: AudioContext と復号フレームのレート不一致を数える", () => {
   const stats = new AudioPlayoutTimingStats(AUDIO_PLAYOUT_TIMING_WINDOW_MS, 0);

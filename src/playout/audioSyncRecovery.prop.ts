@@ -76,7 +76,7 @@ test("44.1 kHz でも通信停滞後に音声と映像が通常の遅延へ戻�
       for (let atMs = 1_000; atMs < 3_000; atMs += 20) feed(atMs, atMs - 20);
       const resumedAtMs = 3_000 + burstFrames * 20;
       for (let index = 0; index <= burstFrames; index++) feed(resumedAtMs, 2_980 + index * 20);
-      // 既存の減衰速度 20 ms/秒も通し、レビューで不収束だった 60 秒後を比較する。
+      // 停滞後も 10 秒間送り続け、余分な待ちが通常の予算へ戻ることを確かめる。
       for (let elapsed = 20; elapsed <= 10_000; elapsed += 20)
         feed(resumedAtMs + elapsed, resumedAtMs + elapsed - 20);
       assert.equal(dropped, 0, "音声を破棄して追いついたことにしないこと");

@@ -870,9 +870,9 @@ interface AudioPlayoutTimingSnapshot {
   // 「操作しない」を返すため、この数で気付く。0 なら使えている
   stretchUnavailableFrames: number;
   // 復号フレーム (AudioData) のサンプルレートが AudioContext と違った回数 (累積)。0 なら
-  // 両者は一致している。違うと AudioBufferSourceNode がバッファごとにリサンプルし、
-  // 20 ms の境界ごとに 1 サンプルの重なり (毎秒 50 回の +6 dB スパイク) が生まれる
-  // (docs/AUDIO_GLITCH_CAUSES.md の A1)。boundaryStepCount はこの重なりを数えない
+  // 両者は一致している。違うと AudioBufferSourceNode がバッファごとにリサンプルする。
+  // OfflineAudioContext で再現した境界の重なりと、実出力のクリックの有無は別に検証する。
+  // boundaryStepCount はリサンプル後の重なりを数えない
   sampleRateMismatchFrames: number;
   // 直近の AudioContext と復号フレームのサンプルレート (Hz)。まだ音を渡していなければ null
   contextSampleRate: number | null;
@@ -883,7 +883,7 @@ interface AudioPlayoutTimingSnapshot {
   gapMs: number;
   gapMaxMs: number;
   // 穴のうち、予約できる最も早い時刻より前だった回数と長さの合計 (ms) (累積)。
-  // 事後には埋められないため、目標遅延を増やす判断に使う
+  // 事後には埋められなかった量の観測値。再生予算は到着の揺らぎと出力時計から別に求める
   unrecoverableGapCount: number;
   unrecoverableGapMs: number;
   // 予約した開始時刻を AudioContext.currentTime が追い越した回数と最大 (ms) (累積)
@@ -893,7 +893,7 @@ interface AudioPlayoutTimingSnapshot {
   pushStartCount: number;
   pushStartMaxMs: number;
   // バッファ境界の段差が AUDIO_PLAYOUT_BOUNDARY_STEP_THRESHOLD を超えた回数と最大
-  // (0 から 1 の振幅、累積)
+  // (予約サンプルから求める推定値、サンプル振幅単位、累積)
   boundaryStepCount: number;
   boundaryStepMax: number;
   // 直近の停止の drain の結果。停止していなければ null。形は再生の入口が返す
@@ -920,8 +920,9 @@ interface VideoReceiverStats {
 
 interface AvSyncStats {
   // 同期ずれの推定値 (ms)。映像の表示が音声より遅れていれば正。
-  // 音声は予約した時刻、映像は write した時刻の実績から求める (実際に音が出るまでの
-  // 出力遅延と、映像が表示されるまでの表示周期の遅れは含まない)。
+  // 音声は出力時計へ換算した予約時刻、映像は write した時刻から求める。
+  // 有効な getOutputTimestamp が無い場合は currentTime による換算で代用する。
+  // 下流の audio 要素や物理的なスピーカーの出力、画面の発光は実測していない。
   // どちらかの実績が 1 秒より古いときは null。基準を共有できないと保持された側は到着
   // 基準で再生され、その側は実績を作らないため、解除している間も null になる
   skewMs: number | null;
@@ -1096,7 +1097,10 @@ Audio Playback を有効にすると、映像は音声のバッファと出力�
 `AudioReceiverStats.playoutTiming` は、音声が「鳴るはずだった時刻」と「実際に鳴り始める
 時刻」の観測値である。受信した音声の再生予定時刻は LOC の TIMESTAMP から共有の時間軸が
 決め、到着時刻は復号の出力を受け取った時刻、鳴り始める時刻は `AudioContext` の時計へ予約
-した時刻を `performance.now()` の軸へ換算した値である (音声の出力デバイスの遅延は含まない)。
+した時刻を `performance.now()` の軸へ換算した値である。有効な `getOutputTimestamp()` が
+あれば出力時計の対応を使い、fallback では `currentTime` と `performance.now()` から換算する。
+AudioContext の出力位置を含む推定値であり、下流の audio 要素のバッファや物理的な
+スピーカーの出力を実測した値ではない。
 予定に対する余裕 (`slackMs` の分布) が負であれば、届いた時点ですでに予定を過ぎており、その
 音は間に合っていない。
 
@@ -1107,9 +1111,11 @@ Audio Playback を有効にすると、映像は音声のバッファと出力�
 
 `AudioPlayoutTimingSnapshot` の `gapCount` / `gapMs` / `gapMaxMs` は、穴として残した回数、
 長さの合計、最大である。穴は、予約できる最も早い時刻 (今 + 余裕) より前だった分、補間が
-失敗した分、補間の上限 (100 ms) を超えた分からでき、無音へ落ちる側の段差がクリックとして
-聞こえる (無音から戻る側は補間や次の音の先頭を 2 ms フェードインするため段差は小さい)。`gapMs` は「補間で埋まらなかった長さ」であり、補間を予約したときに生成する長さの丸め
-(半サンプル以内) は穴として数えない。2 ms のフェードは補間の長さに数えるため含まない。
+失敗した分、補間の上限 (100 ms) を超えた分からできる。無音との境界に段差が残ると
+クリックの原因になるため、補間と実音の接続や出力の末尾にフェードを適用する。
+`gapMs` は「補間で埋まらなかった長さ」であり、補間を予約したときに生成する長さの丸め
+(半サンプル以内) は穴として数えない。補間バッファ内のフェード区間も生成長に含めるが、
+出力の gain フェード自体で補間の長さを追加することはない。
 計器を作り直すまでの累積であり、波形を収録して数えた無音 (収録区間だけ) とは範囲が違うため
 一致しない。
 秒単位の長い途絶 (配信の停止、経路の断) も 1 回の穴として含む。クリックは 0 の長さではなく
@@ -1122,10 +1128,12 @@ Audio Playback を有効にすると、映像は音声のバッファと出力�
 先頭 2 ms をフェードインするため、重なりは起きない。追い越した回数だけを数えるため、
 余裕より近かっただけの押し直しは含まない。押し直した回数と最大は `pushStartCount` /
 `pushStartMaxMs` で読む。
-`boundaryStepCount` / `boundaryStepMax` は、バッファ境界で実際に鳴るサンプルの段差が
+`boundaryStepCount` / `boundaryStepMax` は、予約サンプルから求めるバッファ境界の段差が
 0.05 (`AUDIO_PLAYOUT_BOUNDARY_STEP_THRESHOLD`。440 Hz の正常な差分 p99.9 = 0.0174 の約
 3 倍) を超えた回数と最大である。すべての境界を測るため、通常の音の切れ目も含む。しきい値は
 440 Hz のトーン基準の絶対値であり、実音声では正常な段差が超えることがある。
+取り消さなかった末尾のフェードは終端を 0 として反映するが、gain の包絡全体や
+ブラウザのリサンプル後の出力を実測する計器ではない。クリックの有無は収録波形で確認する。
 `stretchUnavailableFrames` と同じく累積であり、購読をやり直しても消えない。
 
 音声の再生に使う `AudioContext` は、復号フレームのサンプルレートに合わせて作る
@@ -1136,10 +1144,10 @@ configure の sampleRate に関係なく常に 48 kHz を返すため、Opus で
 `sampleRateMismatchFrames` は、この前提が崩れた (AudioContext と復号フレームのレートが
 違う) フレームの累積であり、0 が正常である。レートが違うと `AudioBufferSourceNode` が
 バッファごとにリサンプルする。44.1 kHz の AudioContext に 48 kHz のバッファを並べる
-組み合わせでは、20 ms の境界ごとに 1 サンプルの重なり (毎秒 50 回の +6 dB スパイク) が
-生まれる (`docs/AUDIO_GLITCH_CAUSES.md` の A1)。ほかの組み合わせでは重ならないことも
-あるため、`sampleRateMismatchFrames` は「重なりが起きた回数」ではなく「レートが
-食い違ったフレームの回数」である。`contextSampleRate` / `decodedSampleRate` は直近の値で
+組み合わせを一定値の OfflineAudioContext へ通すと、境界の重なりによる振幅 2 倍の
+スパイクを再現した。実時間のクリックの有無は別に出力波形で検証する必要がある。
+`sampleRateMismatchFrames` はレートが食い違ったフレームの回数であり、重なりの観測値では
+ない。`contextSampleRate` / `decodedSampleRate` は直近の値で
 あり、食い違いの切り分けに使う。
 
 `arrivalPlannedFrames` は、時間軸の再生予定時刻を使えず、到着基準の計画で鳴らした音の数で
@@ -1485,8 +1493,8 @@ track が同じ値を持つことは MUST だが、音声と映像で同じ値�
 interface AudioPlayoutContext {
   // AudioContext.currentTime (秒)。予約の基準であり、時計の対応を作るのにも使う
   readonly currentTime: number;
-  // AudioContext のサンプルレート (Hz)。復号フレームのレートと違うと、バッファごとの
-  // リサンプルで 20 ms の境界ごとに 1 サンプルの重なりが生まれるため、計器へ記録する
+  // AudioContext のサンプルレート (Hz)。復号フレームのレートと違う場合は、
+  // バッファごとのリサンプルが入る条件を計器へ記録する。実出力のクリックは別に検証する
   readonly sampleRate: number;
   // AudioContext.getOutputTimestamp()
   getOutputTimestamp(): AudioTimestamp;

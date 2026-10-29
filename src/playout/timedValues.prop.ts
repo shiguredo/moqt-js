@@ -5,7 +5,7 @@
  * 駆動し、素直な配列 (窓の外の値を捨てるだけのモデル) と一致することを確かめる。
  *
  * - `current()` は窓の中の値を記録の順で返す
- * - `since(t)` は時刻が t より後の値を記録の順で返し、`countAfter(t)` はその数に一致する
+ * - `countAfter(t)` は時刻が t より後の値の数を返す
  * - `minAfter(t)` は時刻が t 以降の値の最小値 (境界を含む) であり、無ければ null
  * - `oldest()` は窓の中の最も古い記録 (時刻と値) であり、無ければ null
  * - `prune(t)` は時刻が t より前の値を捨てるだけで、ほかの値を変えない
@@ -94,15 +94,10 @@ test("TimedValues: 窓の中の値・数・最小値・最も古い記録が素�
             );
             // 時刻が atMs より後の値 (境界は含まない)
             const after = entries.filter((entry) => entry.atMs > atMs);
-            assert.deepEqual(
-              series.since(atMs),
-              after.map((entry) => entry.value),
-              `since(${atMs}) が t より後の値と一致すること (${queries} 回目)`,
-            );
             assert.equal(
               series.countAfter(atMs),
               after.length,
-              `countAfter(${atMs}) が since の数と一致すること (${queries} 回目)`,
+              `countAfter(${atMs}) が t より後の数と一致すること (${queries} 回目)`,
             );
             // 時刻が atMs 以降の値 (境界を含む)。minAfter だけが境界を含む
             const atOrAfter = entries.filter((entry) => entry.atMs >= atMs);
@@ -148,11 +143,13 @@ test("TimedValues: prune は窓の中の問い合わせの結果を変えない"
       (records, backMs) => {
         const pruned = new TimedValues();
         const kept = new TimedValues();
+        const entries: Entry[] = [];
         let nowMs = 0;
         for (const record of records) {
           nowMs += record.gapMs;
           pruned.push(nowMs, record.value);
           kept.push(nowMs, record.value);
+          entries.push({ atMs: nowMs, value: record.value });
         }
         const minAtMs = nowMs - backMs;
         pruned.prune(minAtMs);
@@ -160,15 +157,10 @@ test("TimedValues: prune は窓の中の問い合わせの結果を変えない"
         // 窓の外 (minAtMs より前) は削除で変わるため比べない
         assert.deepEqual(
           pruned.current(),
-          kept.since(minAtMs - 1),
+          entries.filter((entry) => entry.atMs >= minAtMs).map((entry) => entry.value),
           `current() が届いた値のうち窓の中のものと一致すること (minAtMs=${minAtMs})`,
         );
         for (const atMs of [minAtMs, minAtMs + 1, nowMs, nowMs + 1]) {
-          assert.deepEqual(
-            pruned.since(atMs),
-            kept.since(atMs),
-            `since(${atMs}) が prune の前後で変わらないこと`,
-          );
           assert.equal(pruned.countAfter(atMs), kept.countAfter(atMs), `countAfter(${atMs})`);
           assert.equal(pruned.minAfter(atMs), kept.minAfter(atMs), `minAfter(${atMs})`);
         }

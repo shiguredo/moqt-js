@@ -133,7 +133,7 @@ for (const useWorker of [false, true]) {
                 payload,
               });
               const [object] = decodeObjectDatagram(wire);
-              if (object.payload === undefined) throw new Error("音声の payload がないこと");
+              if (object.payload === undefined) throw new Error("Decoded audio payload is missing");
               // 途中で媒体時刻が 0 に戻っても、復号器の連続時計と区別して保つ。
               decoder.decode(object.payload, "key", index === 3 ? 0 : chunk.timestamp, 0);
             }

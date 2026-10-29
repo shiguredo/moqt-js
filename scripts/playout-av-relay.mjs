@@ -25,10 +25,11 @@ function distribution(values) {
 
 /** 同一の実 MediaStream を配信し、計測後に解放できるよう出力をまとめる。 */
 async function prepareSource(name) {
+  const speech = await loadSpeech(name);
   const context = new AudioContext({ sampleRate: RATE });
   const destination = context.createMediaStreamDestination();
   const buffer = context.createBuffer(1, RATE * 6, RATE);
-  buffer.copyToChannel(await loadSpeech(name), 0);
+  buffer.copyToChannel(speech, 0);
   const source = context.createBufferSource();
   source.buffer = buffer;
   source.loop = true;
@@ -329,6 +330,8 @@ export async function measure(
       pairCount: pairs.filter((row) => Number.isFinite(row.skewMs)).length,
     });
     const age = (row, at) => performance.timeOrigin + at - row.timestamp / 1000;
+    // close 中の通知も停止時の記録へ含めてから、配列の snapshot を返す。
+    await Promise.allSettled([subscriber.close(), publisher.close()]);
     return {
       caseName,
       variant,

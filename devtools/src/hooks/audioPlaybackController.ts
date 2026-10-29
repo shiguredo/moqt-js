@@ -77,8 +77,7 @@ interface AudioPlaybackControllerDeps {
    * AudioContext を作るときのサンプルレート (Hz)
    *
    * 復号フレームのレートに揃えた値である (`resolveAudioContextSampleRate`)。レートが
-   * 食い違うと、`AudioBufferSourceNode` がバッファごとにリサンプルし、20 ms の境界ごとに
-   * 1 サンプルの重なりが生まれる (docs/AUDIO_GLITCH_CAUSES.md の A1)
+   * 食い違うと `AudioBufferSourceNode` がバッファごとにリサンプルするため、不要な変換を避ける。
    */
   getAudioContextSampleRate(): number;
   /**
@@ -172,8 +171,8 @@ export function createAudioPlaybackController(
    *
    * AudioContext のサンプルレートは、復号フレームのレートに揃えた値で作る。既定レート
    * (出力デバイスの preferred sample rate) が復号のレートと違うと、`AudioBufferSourceNode`
-   * がバッファごとにリサンプルし、20 ms の境界ごとに 1 サンプルの重なり (毎秒 50 回の
-   * +6 dB スパイク) が生まれる (docs/AUDIO_GLITCH_CAUSES.md の A1)。
+   * がバッファごとにリサンプルする。OfflineAudioContext で再現した境界の重なりと
+   * 実出力のクリックの有無は区別し、ここでは不要な変換を避ける。
    *
    * 出力先の生成に失敗したときは、作りかけの `AudioContext` を閉じてから throw する。
    * この時点ではまだ再生の対象に載せていないため停止の経路からは閉じられず、閉じないままに

@@ -38,8 +38,6 @@ test("音声の開始時は 50 ms の下限を使う", () => {
   const timeline = new PlayoutTimeline({ timeOriginMs: 0, maxQueuedFrames: 24 });
   timeline.observe("video", 1_000, 1_000_000);
   timeline.observe("audio", 1_000, 1_000_000);
-  assert.equal(timeline.playoutDelayMs, 50, "到着の分布が揃うまでは初期の余裕を保つこと");
-
   assert.equal(timeline.playoutDelayMs, 50, "出力時計が未観測でも下限を使うこと");
   assert.closeTo(timeline.videoDelayMs ?? 0, 45, 0.01, "映像は必要な音声の遅れだけ待つこと");
 });
@@ -91,12 +89,10 @@ test("音声の残差が周期的に上下しても共通の遅延を積み上�
     const residualMs = Math.floor(index / 50) % 2 === 0 ? 80 : 0;
     timeline.recordPresentation("audio", timestamp, target + BigInt(residualMs * 1_000), target);
 
-    // 開始時を含む自然遅延の最大は 80 + 80 ms。過去に加えた補償を入力へ戻すと 370 ms まで増える。
+    // 初期予算 50 ms と最大残差 80 ms の範囲で保ち、過去の補償を入力へ戻さない。
     assert.isAtMost(timeline.videoDelayMs ?? Infinity, 160.01, "補償した遅延を再び足さないこと");
   }
 });
-
-// 再生の観測は performance 軸で渡す。Unix epoch と混同すると減衰の時間差が壊れる。
 
 // 音声は出力の都合で予定より遅く鳴ることがある。予定どうしの差だけを揃えると、
 // 実際に鳴る音から映像が先行したままになる。予約の結果を合わせ先として使う。
@@ -347,7 +343,7 @@ test("同期: ずれが不感帯を超えたら映像の遅延を不感帯の手
   const audioDelayMs = timeline.playoutDelayMs ?? 0;
   const videoDelayMs = timeline.videoDelayMs ?? 0;
   // 音声の予算は 50 ms、映像は 0 ms から始まる。ずれ 50 ms が不感帯を
-  // 超えるため、映像の遅延が音声の不感帯の手前 (30 ms) まで上がる
+  // 超えるため、映像の遅延が音声の不感帯 5 ms の手前 (45 ms) まで上がる
   assert.closeTo(audioDelayMs, 50, TOLERANCE_MS);
   assert.isAbove(videoDelayMs, 0, "映像の遅延が上がること");
   assert.isBelow(videoDelayMs, audioDelayMs, "映像が音声の遅延を超えないこと (映像が先行してよい)");
@@ -448,7 +444,7 @@ test("setTargetLatencyMs: targetLatency と再生遅延の大きい方を使う"
   for (let index = 0; index < 30; index++) {
     timeline.observe("video", EPOCH_MS + index * FRAME_MS, timestampOf(index * FRAME_MS));
   }
-  // 自分の揺らぎ (80 ms) より targetLatency (300 ms) が大きいため、そちらを使う
+  // 自動の音声予算 50 ms より targetLatency (300 ms) が大きいため、そちらを使う
   assert.closeTo(timeline.presentationExtraDelayMs ?? 0, 300, TOLERANCE_MS);
   assert.closeTo(timeline.videoDelayMs ?? 0, 300, TOLERANCE_MS);
   assert.closeTo(timeline.presentationDelayMs ?? 0, 300, TOLERANCE_MS);
@@ -571,7 +567,7 @@ test("sharingBases: 基準の差が閾値を超えたら共有せず、大きい
   assert.isNull(timeline.presentationPerformanceMs("audio", timestampOf(0)));
   // もう片方の映像は自分の基準 (0 ms) と自分の表示の遅れで表示時刻を返す。基準が共有できない
   // ときは、映像を音声の到着基準の時刻 (今の予算は 50 ms) へ不感帯の手前まで
-  // 合わせるため、表示の遅れは 75 ms (80 - 5) になる。ずれた側の基準 (1 秒) は使わない
+  // 合わせるため、表示の遅れは 45 ms (50 - 5) になる。ずれた側の基準 (1 秒) は使わない
   const expectedVideoDelayMs = AUDIO_PLAYOUT_DELAY_FLOOR_MS - SYNC_MIN_DELTA_MS;
   assert.closeTo(
     wallClockMsOf(timeline, "video", 0),
@@ -681,9 +677,6 @@ test("observe: TIMESTAMP が飛んだら基準を取り直す", () => {
   );
   assert.isAtMost(differenceMs, MAX_PLAYOUT_DELAY_MS, "取り直した後のずれが上限を超えないこと");
 });
-
-// 映像の目標が下がったときは毎秒 PLAYOUT_DELAY_DECAY_MS_PER_SECOND ずつ下げる。急に
-// 戻すと表示時刻が前へ飛び、フレームを捨てることになる
 
 // ============================================================================
 // 実績と同期ずれ
@@ -1548,8 +1541,6 @@ test("observe: 片方のトラックが届かなくなっても保持は満了�
   }
   assert.isTrue(timeline.sharingBases, "映像が届かない間も保持が満了して共有が戻ること");
 });
-
-// 完了条件: 音声だけの購読では、過去の穴による学習値で恒常的な待ちを増やさない。
 
 // 経路の基準は保ちつつ、古い揺らぎだけが短い窓から消えることを検証する。
 test("映像の一時的な遅延が消えたら、同期用の待ちを保持せず通常の予算へ戻す", () => {

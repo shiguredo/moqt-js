@@ -37,6 +37,40 @@ function extraDelay(pattern, stream, mediaMs, index) {
   return 0;
 }
 
+/** 媒体時刻から到着列を作り、実際に注入する音声欠落の数を記録する。 */
+function createArrivalEvents(pattern, seconds, originMs, epoch) {
+  const events = [];
+  let randomState = 0x74219;
+  let injectedAudioLoss = 0;
+  for (const stream of ["audio", "video"]) {
+    const frequency = stream === "audio" ? 50 : 30;
+    let previousArrivalMs = -Infinity;
+    for (let index = 0; index < seconds * frequency; index++) {
+      const mediaMs = (index * 1000) / frequency;
+      randomState = (randomState * 1664525 + 1013904223) >>> 0;
+      if (stream === "audio" && pattern === "loss5" && randomState / 4294967296 < 0.05) {
+        injectedAudioLoss++;
+        continue;
+      }
+      // 復号済みの入口ではトラック内の出力順を保つ。復号前の順序逆転とは分ける。
+      const arrivalMs = Math.max(
+        previousArrivalMs + 0.1,
+        originMs + mediaMs + 20 + extraDelay(pattern, stream, mediaMs, index),
+      );
+      previousArrivalMs = arrivalMs;
+      events.push({
+        stream,
+        index,
+        mediaMs,
+        timestamp: epoch + Math.round(mediaMs * 1000),
+        arrivalMs,
+      });
+    }
+  }
+  events.sort((left, right) => left.arrivalMs - right.arrivalMs || left.mediaMs - right.mediaMs);
+  return { events, injectedAudioLoss };
+}
+
 export async function measure(caseName, { moduleUrl, variant, seconds }) {
   const { createMediaPlayout } = await import(moduleUrl);
   const [, name, pattern] = caseName.split("|");
@@ -52,61 +86,69 @@ export async function measure(caseName, { moduleUrl, variant, seconds }) {
       : requireAudioFrame(decoded[index], index, FRAME),
   );
   const context = new AudioContext({ sampleRate: RATE, latencyHint: "interactive" });
-  const blocks = [];
-  const workletUrl = URL.createObjectURL(
-    new Blob(
-      [
-        `class Capture extends AudioWorkletProcessor {
+  let tap = null;
+  let mute = null;
+  let source = null;
+  let destination = null;
+  let playout = null;
+  try {
+    const blocks = [];
+    const workletUrl = URL.createObjectURL(
+      new Blob(
+        [
+          `class Capture extends AudioWorkletProcessor {
       process(inputs, outputs) {
         this.port.postMessage(inputs[0]?.[0]?.slice() ?? new Float32Array(outputs[0][0].length));
         return true;
       }
     } registerProcessor("av-latency-capture", Capture);`,
-      ],
-      { type: "text/javascript" },
-    ),
-  );
-  await context.audioWorklet.addModule(workletUrl);
-  URL.revokeObjectURL(workletUrl);
-  const tap = new AudioWorkletNode(context, "av-latency-capture");
-  tap.port.onmessage = (event) => blocks.push(event.data);
-  const mute = context.createGain();
-  mute.gain.value = 0;
-  tap.connect(mute).connect(context.destination);
-  const source = document.createElement("canvas");
-  const destination = document.createElement("canvas");
-  source.width = 64;
-  destination.width = 64;
-  source.height = 64;
-  destination.height = 64;
-  document.body.append(source, destination);
-  const paint = source.getContext("2d");
-  const drawing = destination.getContext("2d");
-  const audio = [];
-  const video = [];
-  const snapshots = [];
-  let videoLateDrops = 0;
-  let videoQueueDrops = 0;
-  const playout = createMediaPlayout({
-    audio: { context, destination: tap },
-    video: {
-      pacing: { drainImmediately: false, framesPerDrain: 1 },
-      output: {
-        isAvailable: () => destination.isConnected,
-        present: (frame, plannedMs) => {
-          drawing.drawImage(frame, 0, 0);
-          video.push({ timestamp: frame.timestamp, presentedMs: performance.now(), plannedMs });
-          frame.close();
-          return true;
+        ],
+        { type: "text/javascript" },
+      ),
+    );
+    try {
+      await context.audioWorklet.addModule(workletUrl);
+    } finally {
+      URL.revokeObjectURL(workletUrl);
+    }
+    tap = new AudioWorkletNode(context, "av-latency-capture");
+    tap.port.onmessage = (event) => blocks.push(event.data);
+    mute = context.createGain();
+    mute.gain.value = 0;
+    tap.connect(mute).connect(context.destination);
+    source = document.createElement("canvas");
+    destination = document.createElement("canvas");
+    source.width = 64;
+    destination.width = 64;
+    source.height = 64;
+    destination.height = 64;
+    document.body.append(source, destination);
+    const paint = source.getContext("2d");
+    const drawing = destination.getContext("2d");
+    const audio = [];
+    const video = [];
+    const snapshots = [];
+    let videoLateDrops = 0;
+    let videoQueueDrops = 0;
+    playout = createMediaPlayout({
+      audio: { context, destination: tap },
+      video: {
+        pacing: { drainImmediately: false, framesPerDrain: 1 },
+        output: {
+          isAvailable: () => destination.isConnected,
+          present: (frame, plannedMs) => {
+            drawing.drawImage(frame, 0, 0);
+            video.push({ timestamp: frame.timestamp, presentedMs: performance.now(), plannedMs });
+            frame.close();
+            return true;
+          },
+        },
+        timing: {
+          recordLateDrop: () => videoLateDrops++,
+          recordQueueDrop: () => videoQueueDrops++,
         },
       },
-      timing: {
-        recordLateDrop: () => videoLateDrops++,
-        recordQueueDrop: () => videoQueueDrops++,
-      },
-    },
-  });
-  try {
+    });
     await context.resume();
     const deadline = performance.now() + 2000;
     while (context.getOutputTimestamp().performanceTime <= 0) {
@@ -117,35 +159,7 @@ export async function measure(caseName, { moduleUrl, variant, seconds }) {
     await sleep(100);
     const originMs = performance.now() + 50;
     const epoch = Math.round((performance.timeOrigin + originMs) * 1000);
-    const events = [];
-    let randomState = 0x74219;
-    let injectedAudioLoss = 0;
-    for (const stream of ["audio", "video"]) {
-      const frequency = stream === "audio" ? 50 : 30;
-      let previousArrivalMs = -Infinity;
-      for (let index = 0; index < seconds * frequency; index++) {
-        const mediaMs = (index * 1000) / frequency;
-        randomState = (randomState * 1664525 + 1013904223) >>> 0;
-        if (stream === "audio" && pattern === "loss5" && randomState / 4294967296 < 0.05) {
-          injectedAudioLoss++;
-          continue;
-        }
-        // 復号済みの入口ではトラック内の出力順を保つ。復号前の順序逆転とは分ける。
-        const arrivalMs = Math.max(
-          previousArrivalMs + 0.1,
-          originMs + mediaMs + 20 + extraDelay(pattern, stream, mediaMs, index),
-        );
-        previousArrivalMs = arrivalMs;
-        events.push({
-          stream,
-          index,
-          mediaMs,
-          timestamp: epoch + Math.round(mediaMs * 1000),
-          arrivalMs,
-        });
-      }
-    }
-    events.sort((left, right) => left.arrivalMs - right.arrivalMs || left.mediaMs - right.mediaMs);
+    const { events, injectedAudioLoss } = createArrivalEvents(pattern, seconds, originMs, epoch);
     const arrivals = [];
     for (const event of events) {
       const remaining = event.arrivalMs - performance.now();
@@ -275,11 +289,12 @@ export async function measure(caseName, { moduleUrl, variant, seconds }) {
       ],
     };
   } finally {
-    playout.clearAll();
-    source.remove();
-    destination.remove();
-    tap.disconnect();
-    mute.disconnect();
+    playout?.clearAll();
+    source?.remove();
+    destination?.remove();
+    tap?.port.close();
+    tap?.disconnect();
+    mute?.disconnect();
     await context.close();
   }
 }

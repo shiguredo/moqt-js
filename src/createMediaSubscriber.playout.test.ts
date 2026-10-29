@@ -602,18 +602,6 @@ test("handleVideoDecodedData: skipped は壁時計の観測を変えず、mediaT
   assert.equal(errors.length, 0);
 });
 
-// 完了条件: 音が 1 つ抜けたときは、前の音の終わりから次の音の開始までの隙間を
-// 直前の音の時間伸長で埋めて予約する (無音のまま残さない)
-
-// 完了条件 (欠陥 4): Object を復号へ渡す時点で入力の遅れ (Object の到着 - LOC TIMESTAMP) を
-// 測り、復号の出力で同じ TIMESTAMP から引いて、受信側の追いつきへ渡す。経路が遅いだけの
-// 状態 (入力の遅れも出力の遅れも同じだけ大きい) では作り直しを求めない
-
-// 完了条件: TIMESCALE がある TIMESTAMP (メディア時刻) は壁時計と対応しないため、入力の遅れを
-// 測らない。復号の出力では入力の遅れが無いものとして扱い、出力の遅れだけを使う
-
-// 完了条件: 音声の再生の統計が getStats から読める。時間はミリ秒で返る
-
 // 完了条件: 詰めと遅れの統計もミリ秒換算で返る (非 0 の値で固定する)
 test("getStats: 詰めと遅れの統計をミリ秒で返す", () => {
   const { control } = createAvSyncSubscriber();
@@ -799,8 +787,8 @@ test("handleVideoDecodedData: 表示時刻を過ぎたフレームだけを書�
 // AudioContext と復号フレームのサンプルレートの整合 (docs/AUDIO_GLITCH_CAUSES.md の A1)
 //
 // AudioContext のレートと復号フレームのレートが食い違うと、AudioBufferSourceNode が
-// バッファごとにリサンプルし、20 ms の境界ごとに 1 サンプルの重なり (毎秒 50 回の
-// +6 dB スパイク) が生まれる。Opus の復号は configure の sampleRate に関係なく常に
+// バッファごとにリサンプルする。ここでは変換を避ける設定だけを検証し、実出力の
+// クリックの有無とは区別する。Opus の復号は configure の sampleRate に関係なく常に
 // 48 kHz を返すため、AudioContext も復号器の configure も復号のレートへ揃える。
 // ============================================================================
 
@@ -847,8 +835,7 @@ function createOutputStreamRecordingAudioContext(control: {
 /**
  * 完了条件: opus を購読するとき、AudioContext を Catalog の samplerate ではなく復号が
  * 実際に返す 48 kHz で作る。Catalog が 44100 の Opus でも復号は 48 kHz を返すため、
- * Catalog の値で作ると 20 ms の境界ごとに 1 サンプルの重なりが生まれる
- * (docs/AUDIO_GLITCH_CAUSES.md の A1)
+ * Catalog の値で作ると不要なリサンプルが入るため、復号出力へ揃える。
  */
 test("createOutputStream: opus は Catalog のレートではなく 48 kHz で AudioContext を作る", () => {
   const subscriber = createTestSubscriber({ audio: {} }).subscriber;

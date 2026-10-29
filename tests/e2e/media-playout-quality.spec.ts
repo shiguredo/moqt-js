@@ -116,7 +116,7 @@ for (const missingMediaMicros of [8, 20000]) {
               arrivalDelaySeconds: 0.05,
               presentationDelaySeconds: 0.05,
             });
-            if (decision.kind !== "play") throw new Error("音を再生する判定ではないこと");
+            if (decision.kind !== "play") throw new Error("Expected a play decision");
             gaps.push(decision.totalGapSeconds);
             const data = new AudioData({
               format: "f32-planar",
@@ -214,6 +214,9 @@ for (const timestampKind of ["mediaTime", "wallClock"] as const) {
       },
       { timestampKind },
     );
+    // 欠落後の error / drop を少数の正常予約の統計で隠してはならない。
+    assert.equal(result.timing.playedFrames, 135, "欠落させなかった全音声を再生すること");
+    assert.equal(result.timing.missedFrames, 0, "受信済みの音声を失わないこと");
     assert.ok(result.timing.gapMs > 0, "復元できない媒体の欠落も計器には残すこと");
     assert.ok(
       (result.timing.startDelayMs?.p95 ?? Infinity) < 65,
@@ -520,7 +523,6 @@ test("圧縮した音の直後に欠落しても補間の材料が不足しな�
       // 予約の時刻は実クラスへ明示して固定する。performance.now() と停止中の
       // 出力時計の差によって、圧縮の不感帯 20 ms を偶然下回るテストにしない。
       const now = output.context.currentTime;
-      const statuses = [];
       // まとめて届いた先行フレームを実際に圧縮し、その直後の 20 ms を欠落させる。
       // 170 Hz は圧縮前の 20 ms なら補間でき、圧縮後の約 14 ms では解析窓が不足する。
       for (const index of [0, 1, 3]) {
@@ -538,9 +540,8 @@ test("圧縮した音の直後に欠落しても補間の材料が不足しな�
           delaySeconds: 0.05,
           presentationDelaySeconds: 0.05,
         });
-        if (decision.kind !== "play") throw new Error("音を再生する判定であること");
+        if (decision.kind !== "play") throw new Error("Expected a play decision");
         session.playSound(output, decision, data, 1, 48000, 960);
-        statuses.push("played");
         data.close();
       }
       await output.context.resume();
@@ -548,7 +549,6 @@ test("圧縮した音の直後に欠落しても補間の材料が不足しな�
         setTimeout(resolve, 200);
       });
       return {
-        statuses,
         audio: {
           compressedMs: session.playout.compressed * 1000,
           concealedMs: session.playout.concealed * 1000,
@@ -559,7 +559,6 @@ test("圧縮した音の直後に欠落しても補間の材料が不足しな�
       await harness.closeSilentAudioOutput(output);
     }
   });
-  assert.deepEqual(result.statuses, ["played", "played", "played"]);
   assert.ok(result.audio.compressedMs > 0, "圧縮を実際に適用していること");
   assert.ok(result.audio.concealedMs > 0, "欠落を実際に補間していること");
   assert.equal(result.audio.timing.gapCount, 0, "圧縮後の材料不足で無音の穴を作らないこと");

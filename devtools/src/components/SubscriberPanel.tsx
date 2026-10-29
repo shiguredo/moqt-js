@@ -724,9 +724,8 @@ function SubscriberStats({ statsSignal }: { statsSignal: ReadonlySignal<Subscrib
                 testId: "subscriber-audio-playback-stretch-unavailable-frames",
               },
               {
-                // AudioContext と復号フレームのサンプルレートが違った回数。0 より大きいと、
-                // バッファ境界ごとに 1 サンプルの重なり (毎秒 50 回の +6 dB スパイク) が
-                // 生まれる組み合わせで鳴らしている (docs/AUDIO_GLITCH_CAUSES.md の A1)
+                // AudioContext と復号フレームのサンプルレートが違った回数。
+                // 実出力の重なりやクリックを観測した数ではなく、リサンプルが入る条件を示す。
                 label: "sampleRateMismatchFrames",
                 value: stats.audio.playoutTiming.sampleRateMismatchFrames,
                 tone: "warn",
