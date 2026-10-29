@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { loadavg } from "node:os";
@@ -28,12 +29,10 @@ import { DEVTOOLS_URL } from "../urls";
 //
 // 計測の仕組み:
 //
-// - 購読側 devtools の Subscriber は `AudioContext` を作り、`createMediaStreamDestination()`
-//   のトラックを `<audio>` の `srcObject` にして鳴らす (devtools/src/hooks/useSubscriber.ts)。
-//   この `AudioContext.prototype.createMediaStreamDestination` を addInitScript で包み、
-//   返ってきた destination の stream から `createMediaStreamSource` で取り出して
-//   AudioWorklet でサンプル列を集める。gain 0 で `context.destination` へ繋ぎ、処理を回す。
-//   出力デバイスへは流さない (gain 0)。製品コードは変更しない。
+// - 購読側 devtools の Subscriber は `AudioContext.destination` へ直接出力する。
+//   実 AudioNode.connect の呼び出しを観測し、直接出力するノードから AudioWorklet へ
+//   分岐してサンプル列を集める。計測の分岐は gain 0 で同じ destination へ繋ぐ。
+//   元の接続はそのまま実行し、出力経路を MediaStream や audio 要素で増やさない。
 // - 配信側 devtools の Publisher は `AudioEncoder.prototype.encode` を包み、符号化された
 //   AudioData の timestamp / duration / 呼ばれた壁時計を記録する。停止時に capture されて
 //   encode されなかった末尾 (未送信の末尾) を推定するためである。
@@ -114,10 +113,8 @@ interface TapCapture {
 /**
  * 購読側の音声出力を AudioWorklet でタップする仕込みを入れる (ページを開く前に呼ぶ)
  *
- * `AudioContext.prototype.createMediaStreamDestination` を包み、作られた destination の
- * stream から AudioWorklet でサンプル列を集める。製品コードには手を入れない。
- * 複数の AudioContext が作られる (配信側のダミー音声と購読側の再生) ため、タップは
- * destination ごとに作り、どれを録るかは購読側の `<audio>` の srcObject で決める。
+ * 実際の destination へ繋ぐノードを観測し、Context ごとのタップへも分岐する。
+ * 配信側のダミー音声は MediaStream へ出すため対象にならない。
  */
 async function installAudioOutputTap(page: Page): Promise<void> {
   await page.addInitScript(() => {
@@ -162,7 +159,7 @@ async function installAudioOutputTap(page: Page): Promise<void> {
     interface Tap {
       id: number;
       context: AudioContext;
-      destination: MediaStreamAudioDestinationNode;
+      input: GainNode;
       node: AudioWorkletNode | null;
       gain: GainNode | null;
       ready: boolean;
@@ -177,20 +174,20 @@ async function installAudioOutputTap(page: Page): Promise<void> {
     }
 
     const state: { taps: Tap[] } = { taps: [] };
-    (window as unknown as { __moqtAudioTap: { taps: Tap[]; take(): unknown } }).__moqtAudioTap = {
+    (window as unknown as { __moqtAudioTap: { taps: Tap[] } }).__moqtAudioTap = {
       taps: state.taps,
-      take: () => undefined,
     };
 
-    /** タップを 1 つ作る (destination ごと) */
-    const createTap = (
-      context: AudioContext,
-      destination: MediaStreamAudioDestinationNode,
-    ): void => {
+    const originalConnect = Object.getOwnPropertyDescriptor(AudioNode.prototype, "connect")
+      ?.value as AudioNode["connect"] | undefined;
+    if (originalConnect === undefined) throw new Error("AudioNode.connect is not available");
+
+    /** タップを 1 つ作る (Context ごと)。計測用の接続は観測を通さず再帰を防ぐ。 */
+    const createTap = (context: AudioContext): Tap => {
       const tap: Tap = {
         id: state.taps.length,
         context,
-        destination,
+        input: context.createGain(),
         node: null,
         gain: null,
         ready: false,
@@ -210,10 +207,7 @@ async function installAudioOutputTap(page: Page): Promise<void> {
       context.audioWorklet
         .addModule(sourceUrl)
         .then(() => {
-          URL.revokeObjectURL(sourceUrl);
-          // MediaStreamAudioDestinationNode の出力を同じ context へ戻す。直接 destination へ
-          // 繋ぐと音が二重になるため、gain 0 を挟んで処理だけを回す
-          const source = context.createMediaStreamSource(destination.stream);
+          // 元の直接出力は維持し、分岐したサンプルを gain 0 の経路で処理する。
           const node = new AudioWorkletNode(context, "moqt-audio-tap", {
             numberOfInputs: 1,
             numberOfOutputs: 1,
@@ -224,9 +218,9 @@ async function installAudioOutputTap(page: Page): Promise<void> {
           });
           const gain = context.createGain();
           gain.gain.value = 0;
-          source.connect(node);
-          node.connect(gain);
-          gain.connect(context.destination);
+          Reflect.apply(originalConnect, tap.input, [node]);
+          Reflect.apply(originalConnect, node, [gain]);
+          Reflect.apply(originalConnect, gain, [context.destination]);
           node.port.onmessage = (event: MessageEvent) => {
             const data = event.data as {
               audioClockMs: number;
@@ -251,28 +245,31 @@ async function installAudioOutputTap(page: Page): Promise<void> {
         })
         .catch((error: unknown) => {
           tap.error = error instanceof Error ? error.message : String(error);
+        })
+        .finally(() => {
+          URL.revokeObjectURL(sourceUrl);
         });
+      return tap;
     };
 
-    // AudioContext.prototype.createMediaStreamDestination を包む。メソッドの参照をそのまま
-    // 保持すると this を失うため、上書きする前にプロパティ記述子から元の実装を取り出す
-    const originalCreateDescriptor = Object.getOwnPropertyDescriptor(
-      AudioContext.prototype,
-      "createMediaStreamDestination",
-    );
-    const originalCreate = originalCreateDescriptor?.value as
-      | ((this: AudioContext) => MediaStreamAudioDestinationNode)
-      | undefined;
-    if (originalCreate === undefined) {
-      throw new Error("createMediaStreamDestination is not available");
-    }
-    AudioContext.prototype.createMediaStreamDestination = function createMediaStreamDestination(
-      this: AudioContext,
-    ): MediaStreamAudioDestinationNode {
-      const destination = originalCreate.call(this);
-      createTap(this, destination);
-      return destination;
-    };
+    // AudioParam への接続や出力番号も元の実装へ渡す。偽のノードや戻り値は作らない。
+    AudioNode.prototype.connect = function connect(
+      this: AudioNode,
+      destination: AudioNode | AudioParam,
+      output = 0,
+      input = 0,
+    ): AudioNode | undefined {
+      const args =
+        destination instanceof AudioNode ? [destination, output, input] : [destination, output];
+      const result = Reflect.apply(originalConnect, this, args) as AudioNode | undefined;
+      if (this.context instanceof AudioContext && destination === this.context.destination) {
+        const tap =
+          state.taps.find((candidate) => candidate.context === this.context) ??
+          createTap(this.context);
+        Reflect.apply(originalConnect, this, [tap.input, output, 0]);
+      }
+      return result;
+    } as AudioNode["connect"];
   });
 }
 
@@ -326,13 +323,12 @@ async function installPublisherEncodeProbe(page: Page): Promise<void> {
   });
 }
 
-/** 購読側の `<audio>` に繋がっているタップを有効にし、準備できるまで待つ */
+/** 購読側の直接出力に繋がっているタップを有効にし、準備できるまで待つ */
 async function activateSubscriberTap(page: Page): Promise<PageTap> {
-  // 再生用の stream と一致するタップを有効にする。タップは AudioContext が作られるたびに
-  // できるため、<audio> の srcObject と destination.stream の同一性で選ぶ
+  // ダミー音声の生成 Context は直接出力しない。閉じた過去の再生 Context は選ばない。
   await page.evaluate(() => {
     interface TapLike {
-      destination: MediaStreamAudioDestinationNode;
+      context: AudioContext;
       active: boolean;
       activatedAtMs: number | null;
       chunks: unknown[];
@@ -340,16 +336,10 @@ async function activateSubscriberTap(page: Page): Promise<PageTap> {
       concat: unknown;
     }
     const state = (window as unknown as { __moqtAudioTap: { taps: TapLike[] } }).__moqtAudioTap;
-    const element = document.querySelector<HTMLAudioElement>(
-      '[data-testid="subscriber-audio-element"]',
-    );
-    const stream = element?.srcObject;
-    if (!(stream instanceof MediaStream)) {
-      throw new Error("subscriber audio element has no MediaStream");
-    }
-    const tap = state.taps.find((candidate) => candidate.destination.stream === stream);
-    if (tap === undefined) {
-      throw new Error("no audio tap for subscriber playback stream");
+    const candidates = state.taps.filter((candidate) => candidate.context.state === "running");
+    const tap = candidates[0];
+    if (candidates.length !== 1 || tap === undefined) {
+      throw new Error(`Expected one subscriber output tap, received ${candidates.length}`);
     }
     tap.chunks = [];
     tap.chunkMeta = [];
@@ -1148,10 +1138,8 @@ test("調査: pre-decode 遅延ありで購読を止めたときの drain", asyn
   );
 });
 
-// Lead 依頼: タップ経路の対照実験。ネットワークを介さず、同じ AudioContext の中で
-// 440 Hz の連続音を MediaStreamAudioDestinationNode へ流し、同じ AudioWorklet タップで録る。
-// ここで無音 (exact zero) や波形の飛びが出なければ、リレー収録の無音区間はタップ経路
-// (MediaStreamAudioSourceNode のループバック) ではなく、鳴らす側の入力 (playout) の穴である。
+// タップ経路の対照実験。ネットワークを介さず、実際の直接出力と同じ経路へ
+// 440 Hz の連続音を流し、同じ AudioWorklet タップで録る。
 test("調査: タップ経路の対照実験として連続 440 Hz を録る", async ({ page }) => {
   test.skip(process.env.MOQT_INVESTIGATION !== "1", "MOQT_INVESTIGATION=1 のときだけ動かす");
   test.setTimeout(RELAY_TEST_TIMEOUT_MS * 2);
@@ -1159,8 +1147,7 @@ test("調査: タップ経路の対照実験として連続 440 Hz を録る", a
   await page.goto(DEVTOOLS_URL);
   const started = await page.evaluate(async () => {
     const context = new AudioContext({ sampleRate: 48000 });
-    // 包んだ createMediaStreamDestination がタップを作る
-    const destination = context.createMediaStreamDestination();
+    const destination = context.destination;
     const oscillator = context.createOscillator();
     oscillator.frequency.value = 440;
     // ダミー音声と同じ振幅帯 (0.2〜0.3) にする
@@ -1171,7 +1158,7 @@ test("調査: タップ経路の対照実験として連続 440 Hz を録る", a
     oscillator.start();
     await context.resume();
     interface TapLike {
-      destination: MediaStreamAudioDestinationNode;
+      context: AudioContext;
       active: boolean;
       activatedAtMs: number | null;
       chunks: unknown[];
@@ -1179,7 +1166,7 @@ test("調査: タップ経路の対照実験として連続 440 Hz を録る", a
       concat: Float32Array | null;
     }
     const state = (window as unknown as { __moqtAudioTap: { taps: TapLike[] } }).__moqtAudioTap;
-    const tap = state.taps.find((candidate) => candidate.destination.stream === destination.stream);
+    const tap = state.taps.find((candidate) => candidate.context === context);
     if (tap === undefined) {
       throw new Error("no audio tap for control destination");
     }
@@ -1196,6 +1183,15 @@ test("調査: タップ経路の対照実験として連続 440 Hz を録る", a
   );
   await page.waitForTimeout(15_000);
   const capture = await collectTapCapture(page);
+  // タップが存在するだけで成功させず、直接出力した実サンプルを十分な長さだけ読む。
+  assert.ok(capture.totalSamples >= capture.tap.sampleRate * 12, "対照音を 12 秒以上収録すること");
+  let peak = 0;
+  for (let offset = 0; offset < capture.pcm.length; offset += 4) {
+    const value = capture.pcm.readFloatLE(offset);
+    assert.ok(Number.isFinite(value), "収録サンプルが有限値であること");
+    peak = Math.max(peak, Math.abs(value));
+  }
+  assert.ok(peak > 0.2 && peak < 0.3, "振幅 0.25 の対照音を実際に収録すること");
   writeCapture("control-loopback", capture);
   writeFileSync(
     join(OUTPUT_DIR, "control-loopback.json"),

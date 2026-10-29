@@ -322,11 +322,10 @@ export interface SubscriberAudioStats {
 }
 
 /**
- * Subscriber の音声出力 (AudioContext と `<audio>` 要素) の診断
+ * Subscriber の音声出力 (AudioContext と出力機器) の診断
  *
  * 音声を鳴らす経路のうち、playout の計器 (予約・穴・段差) からは見えない層である。
- * 計器が 0 のまま音が途切れるときに、AudioContext が止まっていたのか、`<audio>` 要素
- * 以降 (HTMLMediaElement、その先の出力デバイス) で起きているのかを切り分ける
+ * Context の停止と、出力システム・機器側の遅延を、予約や通信の待ちと区別する
  * (docs/AUDIO_GLITCH_CAUSES.md の B4 / B7)。
  */
 export interface SubscriberAudioOutputStats {
@@ -340,12 +339,10 @@ export interface SubscriberAudioOutputStats {
   contextStateChanges: number;
   /** 再生に使った AudioContext のサンプルレート (Hz)。AudioContext が無ければ null */
   contextSampleRate: number | null;
-  /** `<audio>` 要素の `waiting` の回数 (累積)。要素がバッファ待ちで再生を止めた回数 */
-  elementWaitingCount: number;
-  /** `<audio>` 要素の `stalled` の回数 (累積)。メディアデータの到着が止まった回数 */
-  elementStalledCount: number;
-  /** `<audio>` 要素の `error` の回数 (累積)。要素がストリームを再生できなかった回数 */
-  elementErrorCount: number;
+  /** Context から出力システムへ渡すまでの処理遅延 (ms)。未再生なら null */
+  baseLatencyMs: number | null;
+  /** 出力デバイスが報告する推定遅延 (ms)。未対応または未再生なら null */
+  outputLatencyMs: number | null;
 }
 
 /** Subscriber の Messages (event timeline) の統計 */
@@ -429,7 +426,7 @@ export interface SubscriberStats {
   warnings: readonly PreconditionWarning[];
   audio: SubscriberAudioStats;
   /**
-   * 音声出力 (AudioContext と `<audio>` 要素) の診断
+   * 音声出力 (AudioContext と出力機器) の診断
    *
    * 音声の再生の計器 (audio.playoutTiming) が見ない層の状態であり、鳴らす経路が
    * 前提から外れていないかを読む (docs/AUDIO_GLITCH_CAUSES.md の B4 / B7)
@@ -556,14 +553,13 @@ export function buildSubscriberStats(sub: SubscriberInstance): SubscriberStats {
     avSync: sub.avSync.value,
     // 前提から外れた状態 (signals/preconditionWatch.ts が 1 秒ごとに更新する)
     warnings: sub.preconditionWarnings.value,
-    // 音声出力 (AudioContext と <audio> 要素) の診断。AudioContext が無いことは null で表す
+    // 音声出力 (AudioContext と出力機器) の診断。AudioContext が無いことは null で表す
     audioOutput: {
       contextState: sub.audioContextState.value,
       contextStateChanges: sub.audioContextStateChanges.value,
       contextSampleRate: sub.audioContextSampleRate.value,
-      elementWaitingCount: sub.audioElementWaitingCount.value,
-      elementStalledCount: sub.audioElementStalledCount.value,
-      elementErrorCount: sub.audioElementErrorCount.value,
+      baseLatencyMs: sub.audioContextBaseLatencyMs.value,
+      outputLatencyMs: sub.audioContextOutputLatencyMs.value,
     },
     // level 0 (最大音量) と voiceActivity false (無音) は値があるため null に潰さない
     audio: {

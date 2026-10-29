@@ -6,21 +6,26 @@
  */
 
 import { test, assert } from "vite-plus/test";
-import { recordEncodeGeneration, shouldSendEncodedChunk } from "./encodeGeneration";
+import {
+  recordEncodeGeneration,
+  shouldSendEncodedChunk,
+  type EncodeGenerationRecords,
+} from "./encodeGeneration";
 
 test("shouldSendEncodedChunk: 記録が無い出力は送らない", () => {
   // 配信を始める前の出力、配信ごとの初期化で記録を消した後の出力
-  const records = new Map<number, number>();
+  const records: EncodeGenerationRecords = new Map();
 
   assert.isFalse(shouldSendEncodedChunk(records, 0, 1000));
   assert.isFalse(shouldSendEncodedChunk(records, 3, 1000));
 });
 
-test("shouldSendEncodedChunk: 同じ timestamp の記録は後から来たもので上書きされる", () => {
-  // 入力の timestamp が重複した場合。記録は後から来たものだけが残り、古い世代では送らない。
-  // 本番では入力の timestamp は単調であり、停止をまたいで同じ値は現れない前提である
-  // (現れた場合は、止める前に依頼した出力が現在の世代と一致して送られ得る)
-  const records = new Map<number, number>();
+test("shouldSendEncodedChunk: 異なる世代で同じ timestamp を記録すると新しい記録へ置き換わる", () => {
+  // このテストは記録の置き換えだけを検査する。出力は timestamp しか持たないため、
+  // 停止前後の世代で値を再利用した場合に、旧世代の出力を識別できるという保証ではない。
+  // 異なる世代の上書きは最新の世代だけを保持する。同じ世代で重複する取得時刻は
+  // 複数の入力であり、すべて出力する性質を PBT と実 WebCodecs の検証で確かめる。
+  const records: EncodeGenerationRecords = new Map();
   recordEncodeGeneration(records, 1, 500);
   recordEncodeGeneration(records, 2, 500);
 

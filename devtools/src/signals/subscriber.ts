@@ -237,18 +237,10 @@ export interface SubscriberInstance {
   audioContextStateChanges: Signal<number>;
   /** 再生に使った AudioContext のサンプルレート (Hz)。AudioContext が無いときは null */
   audioContextSampleRate: Signal<number | null>;
-  /**
-   * 受信した音声を鳴らす `<audio>` 要素の `waiting` の回数 (累積)
-   *
-   * `waiting` は要素がバッファ待ちで再生を止めた回数である。playout の計器が 0 のまま
-   * 音が途切れるとき、要素より下流 (HTMLMediaElement、その先の出力デバイス) で起きている
-   * のかを切り分けるために数える (docs/AUDIO_GLITCH_CAUSES.md の B7)
-   */
-  audioElementWaitingCount: Signal<number>;
-  /** `<audio>` 要素の `stalled` の回数 (累積)。メディアデータの到着が止まった回数 */
-  audioElementStalledCount: Signal<number>;
-  /** `<audio>` 要素の `error` の回数 (累積)。要素がストリームを再生できなかった回数 */
-  audioElementErrorCount: Signal<number>;
+  /** Context から出力システムへ渡すまでの処理遅延 (ms)。未再生なら null */
+  audioContextBaseLatencyMs: Signal<number | null>;
+  /** 出力デバイスが報告する推定遅延 (ms)。未対応または未再生なら null */
+  audioContextOutputLatencyMs: Signal<number | null>;
   // 受信側の音声の追いつき (復号の出力が送られた TIMESTAMP から遅れ続けたときに、
   // 復号器を作り直して live へ戻した量)。再生の入口が持つ観測値を 500 ms ごとに写す
   // (src/playout/audioReceiveCatchUp.ts)
@@ -360,10 +352,9 @@ export function createSubscriberInstance(id: string): SubscriberInstance {
     audioContextState: signal<AudioContextState | null>(null),
     audioContextStateChanges: signal(0),
     audioContextSampleRate: signal<number | null>(null),
-    // <audio> 要素のイベントの累積 (再生の開始と購読の開始で数え直す)
-    audioElementWaitingCount: signal(0),
-    audioElementStalledCount: signal(0),
-    audioElementErrorCount: signal(0),
+    // 出力システムと機器が報告する遅延。Context が無い間は null
+    audioContextBaseLatencyMs: signal<number | null>(null),
+    audioContextOutputLatencyMs: signal<number | null>(null),
     audioPlayoutRebases: signal(0),
     audioPlayoutDrops: signal(0),
     audioPlayoutCompressedMs: signal(0),

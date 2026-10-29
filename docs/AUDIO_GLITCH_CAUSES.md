@@ -8,6 +8,12 @@
 現在の計器と未確認事項は [音声再生の現状](AUDIO_PLAYOUT_RESULT.md) を参照すること。
 Bluetooth と実機の聴感、および物理的なリップシンクは引き続き未検証である。
 
+DevTools の出力は、その後 `AudioContext.destination` への直接出力に変更した。
+出力デバイスも同じ Context で選び、旧 `<audio>` 要素のイベント計器は、Context の
+`baseLatencyMs` / `outputLatencyMs` に置き換えた。以下の二段構成と B7 の説明は当時の
+構成であり、現在の DevTools には適用しない。ライブラリの MediaStream 出力と区別すること。
+現在の計測は [DevTools の実出力経路と A/V 遅延](DEVTOOLS_AUDIO_LATENCY.md) を参照する。
+
 2026-10-27 に利用者から届いた次の 2 件のフィードバックについて、起き得る原因を洗い出し、
 可能性の高い順に並べ、切り分け方法を整理した記録である。調査の後、A1 と A2 の一部を
 2026-10-27 に実装した (「実装した変更」の節)。

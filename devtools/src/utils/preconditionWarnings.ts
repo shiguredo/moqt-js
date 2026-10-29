@@ -176,7 +176,7 @@ export const AUDIO_CONTEXT_NARROWBAND_SAMPLE_RATES: readonly number[] = [8_000, 
 export const AUDIO_CONTEXT_NOT_RUNNING_WARN_MS = 2_000;
 
 /**
- * 受信側の音声出力 (AudioContext と `<audio>` 要素) の診断
+ * 受信側の音声出力 (AudioContext と出力機器) の診断
  *
  * どれも受信した音声を鳴らす経路が持つ観測値である。この層は playout の計器 (予約・穴・
  * 段差) からは見えないため、計器が 0 のまま音が途切れたときに下流を疑う材料になる
@@ -193,10 +193,10 @@ export interface SubscriberAudioOutputInput {
   readonly decodedSampleRate: number | null;
   /** AudioContext と復号フレームのサンプルレートが違った回数 (累積) */
   readonly sampleRateMismatchFrames: number;
-  /** `<audio>` 要素の `waiting` の回数 (累積)。警告の値を添えるために使う */
-  readonly elementWaitingCount: number;
-  /** `<audio>` 要素の `stalled` の回数 (累積) */
-  readonly elementStalledCount: number;
+  /** Context から出力システムへ渡すまでの処理遅延 (ms)。未再生なら null */
+  readonly baseLatencyMs: number | null;
+  /** 出力デバイスが報告する推定遅延 (ms)。未対応または未再生なら null */
+  readonly outputLatencyMs: number | null;
 }
 
 /** 受信側の警告の判定の状態 (観測のたびに持ち回る) */
@@ -486,8 +486,8 @@ function detectAudioOutputWarnings(
         `contextState=${contextState ?? "-"}`,
         `heldMs=${Math.round(nowMs - audioContextNotRunningSinceMs)}`,
         `contextSampleRate=${contextSampleRate ?? "-"}`,
-        `elementWaitingCount=${audioOutput.elementWaitingCount}`,
-        `elementStalledCount=${audioOutput.elementStalledCount}`,
+        `baseLatencyMs=${audioOutput.baseLatencyMs}`,
+        `outputLatencyMs=${audioOutput.outputLatencyMs}`,
       ],
     });
   }

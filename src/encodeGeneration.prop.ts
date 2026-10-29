@@ -3,8 +3,9 @@
  *
  * 配信を止めた時点で開いている Subgroup を閉じるため、止める前に依頼した出力は送らない
  * (draft-ietf-moq-transport-22 §11.3.2)。依頼と停止が任意の順で起き、出力の到着順も
- * 保証されない状況で、最後に依頼した世代の出力だけを送ることを確かめる。
- * 個別の境界 (記録が無い出力、同じ timestamp の上書き) は encodeGeneration.test.ts が固定する。
+ * 保証されない状況で、現在の世代の出力を重複 timestamp も含めてすべて送ることを確かめる。
+ * 停止前後の世代で同じ値を再利用した出力の識別は対象外である。
+ * 個別の境界 (記録が無い出力、異なる世代の上書き) は encodeGeneration.test.ts が固定する。
  */
 
 import { test, assert } from "vite-plus/test";
@@ -19,7 +20,7 @@ import {
 /** 符号化の依頼と送信の停止 */
 type Step = { readonly kind: "encode"; readonly timestamp: number } | { readonly kind: "stop" };
 
-test("shouldSendEncodedChunk: 停止を挟んでも、最後に依頼した世代の出力だけを送る", () => {
+test("shouldSendEncodedChunk: 停止を挟んでも、同じ timestamp の複数入力を含め現在の世代の全出力を送る", () => {
   fc.assert(
     fc.property(
       fc.array(
@@ -48,24 +49,23 @@ test("shouldSendEncodedChunk: 停止を挟んでも、最後に依頼した世�
           }
         }
 
-        // 出力は依頼の逆順でも届き得る。同じ timestamp の出力は高々 1 つ届く
+        // 出力は依頼の逆順でも届き得る。同じ timestamp でも入力した枚数分の出力が届く。
+        // 停止時に記録を捨てるため、停止前だけに存在した timestamp の出力は送らない。
+        // 停止後にもある値は現在の世代の出力だけを渡し、識別できない旧世代の同値出力は混ぜない。
         const timestamps = [...new Set(requested.map((item) => item.timestamp))];
+        const expected = requested
+          .filter((item) => item.generation === state.generation)
+          .map((item) => item.timestamp);
         const sent: number[] = [];
         for (const timestamp of timestamps.slice().reverse()) {
-          if (shouldSendEncodedChunk(state.records, state.generation, timestamp)) {
-            sent.push(timestamp);
+          const outputCount = expected.filter((value) => value === timestamp).length;
+          for (let index = 0; index < Math.max(1, outputCount); index++) {
+            if (shouldSendEncodedChunk(state.records, state.generation, timestamp)) {
+              sent.push(timestamp);
+            }
           }
+          assert.isFalse(shouldSendEncodedChunk(state.records, state.generation, timestamp));
         }
-
-        // 送るのは、その timestamp に最後に記録した世代が現在の世代と一致する出力だけである
-        const expected = timestamps.filter((timestamp) => {
-          // その timestamp を最後に依頼した時点の世代 (依頼の順に並んでいる)
-          const last = requested.reduce<{ timestamp: number; generation: number } | undefined>(
-            (found, item) => (item.timestamp === timestamp ? item : found),
-            undefined,
-          );
-          return last !== undefined && last.generation === state.generation;
-        });
         const compare = (left: number, right: number): number => left - right;
         assert.deepEqual(
           sent.slice().sort(compare),

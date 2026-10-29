@@ -44,6 +44,7 @@
  */
 
 import { test, assert } from "vite-plus/test";
+import { recordEncodeGeneration, type EncodeGenerationRecords } from "./encodeGeneration";
 import type { MediaPublisherCallbacks, MediaPublisherOptions } from "./createMediaPublisher";
 import {
   MediaPublisherImpl,
@@ -3137,7 +3138,7 @@ interface PublisherGroupControl {
   audioGroupId: number;
   videoGroupId: number;
   // encode を依頼した時点の世代 (入力フレームの timestamp を鍵にする)
-  videoEncodeGenerations: Map<number, number>;
+  videoEncodeGenerations: EncodeGenerationRecords;
   audioPublisher: Publisher | null;
   videoPublisher: Publisher | null;
   handleAudioEncodedChunk(chunk: {
@@ -3499,10 +3500,10 @@ function createCapturingPublisher(): {
  */
 function recordVideoEncode(control: unknown, timestamp: number): void {
   const internal = control as {
-    videoEncodeGenerations: Map<number, number>;
+    videoEncodeGenerations: EncodeGenerationRecords;
     processingGeneration: number;
   };
-  internal.videoEncodeGenerations.set(timestamp, internal.processingGeneration);
+  recordEncodeGeneration(internal.videoEncodeGenerations, internal.processingGeneration, timestamp);
 }
 
 /**
@@ -6207,7 +6208,7 @@ test("pause → resume: 再開後はキーフレームで新しい Group を始�
   assert.deepEqual(keyFrames, [true], "再開後の最初のフレームがキーフレームになっていない");
   // encode を依頼した時点の世代が記録される (実経路の記録。取り違えると出力を送れない)
   assert.equal(
-    groupControl.videoEncodeGenerations.get(frame.timestamp),
+    groupControl.videoEncodeGenerations.get(frame.timestamp)?.generation,
     control.processingGeneration,
     "encode を依頼した時点の世代が記録されていない",
   );

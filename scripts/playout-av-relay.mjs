@@ -24,7 +24,7 @@ function distribution(values) {
 }
 
 /** 同一の実 MediaStream を配信し、計測後に解放できるよう出力をまとめる。 */
-async function prepareSource(name) {
+export async function prepareSource(name) {
   const speech = await loadSpeech(name);
   const context = new AudioContext({ sampleRate: RATE });
   const destination = context.createMediaStreamDestination();

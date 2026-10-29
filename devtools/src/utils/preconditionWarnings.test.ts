@@ -289,8 +289,8 @@ function audioOutputWith(
     contextSampleRate: 48_000,
     decodedSampleRate: 48_000,
     sampleRateMismatchFrames: 0,
-    elementWaitingCount: 0,
-    elementStalledCount: 0,
+    baseLatencyMs: null,
+    outputLatencyMs: null,
     ...options,
   };
 }

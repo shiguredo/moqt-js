@@ -88,7 +88,6 @@ import {
 } from "./subscriberPreDecodeDelay.ts";
 // targetLatency の解決規則はライブラリと共有する純関数が持つ (規則を 2 か所に書かない)
 import { effectiveTargetLatencyMs, resolveSharedTargetLatencyMs } from "../../../src/msf/tracks.ts";
-import { applyAudioOutputSink } from "../utils/audioOutput";
 import { browserIsChromium, resolvePanelHttpVersion } from "../utils/httpVersion";
 import { formatFullTrackName } from "../../../src/fullTrackName.ts";
 import {
@@ -517,18 +516,15 @@ export function resetSubscriberStats(instance: sub.SubscriberInstance): void {
   instance.audioHostDelay.value = EMPTY_HOST_DELAY;
   instance.audioDelay.value = sub.EMPTY_AUDIO_DELAY;
   instance.audioPlayoutCatchUp.value = EMPTY_AUDIO_RECEIVE_CATCH_UP;
-  // AudioContext と <audio> 要素の診断も、前の購読の値を持ち越さない。ただし再生中の
-  // AudioContext がある場合 (再生を先に有効にしてから購読した場合) は、その状態とレートを
-  // 消さない。AudioContext は購読より長く生き、消したままにすると次の statechange まで
-  // 診断できない (<audio> 要素の回数は、この購読の開始を区切りに数え直す)
+  // 購読より長く生きる Context の状態・レート・出力遅延は、再生中なら保持する。
+  // 消すと次の statechange まで観測できない。イベントの回数だけ購読ごとに数え直す。
   if (!instance.audioPlaybackEnabled.value) {
     instance.audioContextState.value = null;
     instance.audioContextSampleRate.value = null;
+    instance.audioContextBaseLatencyMs.value = null;
+    instance.audioContextOutputLatencyMs.value = null;
   }
   instance.audioContextStateChanges.value = 0;
-  instance.audioElementWaitingCount.value = 0;
-  instance.audioElementStalledCount.value = 0;
-  instance.audioElementErrorCount.value = 0;
 }
 
 /**
@@ -922,7 +918,6 @@ function nowMs(): number {
 export function useSubscriber(
   subscriberId: string,
   canvasRef: RefObject<HTMLCanvasElement | null>,
-  audioRef: RefObject<HTMLAudioElement | null>,
 ) {
   // ライブオブジェクトの順次処理用 Promise チェーン (レンダリング間で安定参照)
   const chainRef = useRef<Promise<void>>(Promise.resolve());
@@ -939,61 +934,6 @@ export function useSubscriber(
   const audioContextSampleRateRef = useRef<number>(DEFAULT_AUDIO_SAMPLE_RATE);
   // startSubscribing の中断検知用 AbortController (レンダリング間で安定参照)
   const abortControllerRef = useRef<AbortController | null>(null);
-  // 再生先が変わったら、今の <audio> へすぐ反映する。空文字はブラウザの既定
-  useSignalEffect(() => {
-    const deviceId = settings.selectedAudioOutputDeviceId.value;
-    const audioElement = audioRef.current;
-    if (audioElement === null) {
-      return;
-    }
-    // 既定のまま再生を始めていないときは setSinkId を呼ばない
-    if (deviceId === "" && audioElement.srcObject === null) {
-      return;
-    }
-    void applyAudioOutputSink(audioElement, deviceId).catch((error: unknown) => {
-      console.error("Failed to set audio output device:", error);
-    });
-  });
-  // 音声を鳴らす <audio> 要素のイベントを数える。`waiting` は要素がバッファ待ちで
-  // 再生を止めた回数、`stalled` はメディアデータの到着が止まった回数、`error` は要素が
-  // ストリームを再生できなかった回数である。どれも playout より下流
-  // (HTMLMediaElement、その先の出力デバイス) の出来事であり、playout の計器が 0 のまま
-  // 音が途切れるときに、下流で起きているかを切り分けるために使う
-  // (docs/AUDIO_GLITCH_CAUSES.md の B7)。<audio> 要素はパネルの描画で作られるため、
-  // マウント後に 1 回だけ付け、クリーンアップで外す (パネルが消えた後に数えない)
-  useEffect(() => {
-    const audioElement = audioRef.current;
-    if (audioElement === null) {
-      return undefined;
-    }
-    // 購読インスタンスがまだあるときだけ数える。パネルの削除や停止の後は数えない
-    const onWaiting = (): void => {
-      const instance = sub.getSubscriber(subscriberId);
-      if (instance !== undefined) {
-        instance.audioElementWaitingCount.value += 1;
-      }
-    };
-    const onStalled = (): void => {
-      const instance = sub.getSubscriber(subscriberId);
-      if (instance !== undefined) {
-        instance.audioElementStalledCount.value += 1;
-      }
-    };
-    const onError = (): void => {
-      const instance = sub.getSubscriber(subscriberId);
-      if (instance !== undefined) {
-        instance.audioElementErrorCount.value += 1;
-      }
-    };
-    audioElement.addEventListener("waiting", onWaiting);
-    audioElement.addEventListener("stalled", onStalled);
-    audioElement.addEventListener("error", onError);
-    return () => {
-      audioElement.removeEventListener("waiting", onWaiting);
-      audioElement.removeEventListener("stalled", onStalled);
-      audioElement.removeEventListener("error", onError);
-    };
-  }, [subscriberId]);
   // 音声と映像の再生の入口。時間軸 (時間軸への記録・表示時刻の決定)、音声の再生
   // (目標の決定・予約・計器への記録)、映像の表示 (表示待ちのキュー・表示周期の
   // 選択・計器への記録)、復号へ渡した入力の対応表をまとめて持つ (moqt-js の
@@ -1074,6 +1014,14 @@ export function useSubscriber(
   // 依存として渡す
   const audioPlaybackControllerRef = useRef<AudioPlaybackController | null>(null);
 
+  // 再生先が変わったら、鳴らしている Context へ反映する。未再生なら次の開始で反映する。
+  useSignalEffect(() => {
+    const deviceId = settings.selectedAudioOutputDeviceId.value;
+    void audioPlaybackControllerRef.current?.setOutputDevice(deviceId).catch((error: unknown) => {
+      console.error("Failed to set audio output device:", error);
+    });
+  });
+
   /**
    * 音声の再生のライフサイクルを返す (初回の利用時に作る)
    *
@@ -1087,7 +1035,6 @@ export function useSubscriber(
     }
     const controller = createAudioPlaybackController({
       subscriberId,
-      audioRef,
       mediaPlayoutRef,
       audioStopRef,
       flushAudioPreDecode,
@@ -1099,23 +1046,20 @@ export function useSubscriber(
       // AudioContext を作るときに読む
       getAudioContextSampleRate: () => audioContextSampleRateRef.current,
       // AudioContext の状態を signal へ写す。AudioContext を作った直後の初期状態も同じ
-      // コールバックで届く。初期状態は statechange ではないため回数に数えず、
-      // その代わりに新しい再生の始まりとして <audio> 要素のイベントを数え直す
-      onAudioContextStateChange: (state, contextSampleRate) => {
+      // コールバックで届く。初期状態は statechange ではないため回数に数えない。
+      onAudioContextStateChange: (state, contextSampleRate, baseLatencyMs, outputLatencyMs) => {
         const instance = sub.getSubscriber(subscriberId);
         if (instance === undefined) {
           return;
         }
         // 状態が null なら AudioContext がまだ無い。つまり今の通知は作った直後の初期状態
-        if (instance.audioContextState.value === null) {
-          instance.audioElementWaitingCount.value = 0;
-          instance.audioElementStalledCount.value = 0;
-          instance.audioElementErrorCount.value = 0;
-        } else {
+        if (instance.audioContextState.value !== null) {
           instance.audioContextStateChanges.value += 1;
         }
         instance.audioContextState.value = state;
         instance.audioContextSampleRate.value = contextSampleRate;
+        instance.audioContextBaseLatencyMs.value = baseLatencyMs;
+        instance.audioContextOutputLatencyMs.value = outputLatencyMs;
       },
       // AudioContext を閉じた。閉じた Context の状態を画面に残さない
       onAudioContextClosed: () => {
@@ -1125,6 +1069,8 @@ export function useSubscriber(
         }
         instance.audioContextState.value = null;
         instance.audioContextSampleRate.value = null;
+        instance.audioContextBaseLatencyMs.value = null;
+        instance.audioContextOutputLatencyMs.value = null;
       },
       restartAudioPlayoutCumulative: () => {
         // 入口の統計を 1 回だけ読み、基準と表示に共用する
@@ -1538,6 +1484,10 @@ export function useSubscriber(
       const instance = sub.getSubscriber(subscriberId);
       if (!instance) return;
       const currentMs = nowMs();
+      // 出力機器の推定値は running 通知の後にも更新される。初期値の 0 を保持しない。
+      const latency = audioPlaybackControllerRef.current?.getOutputLatency() ?? null;
+      instance.audioContextBaseLatencyMs.value = latency?.baseLatencyMs ?? null;
+      instance.audioContextOutputLatencyMs.value = latency?.outputLatencyMs ?? null;
       // 入口の統計は 1 回だけ読み、この周期で写す値へ配る (組み立てを繰り返さない)
       const audio = mediaPlayoutRef.current?.getStats().audio ?? null;
       instance.audioPlayoutTiming.value = audioPlayoutTimingRef.current.snapshot(currentMs);
@@ -3032,6 +2982,17 @@ export function useSubscriber(
           return;
         }
         if (restarted) {
+          // 復号器を作り直すと参照フレームを失うため、キーフレーム待ちへ戻す。
+          // 位置は保ち、復旧中に遅着した古い Group や Object を再び復号しない。
+          // 定期間隔が長い配信で自然な次の Group を待つと、映像が数秒間止まる。
+          videoDecodeOrderRef.current.requireKeyFrame();
+          // draft-ietf-moq-transport-22 §9.20.19: DYNAMIC_GROUPS=1 を広告する Track に限り、
+          // REQUEST_UPDATE で新しい Group を要求できる。仕様はドラフトであり変更され得る。
+          // 要求は復号器の再構成後に送り、届いたキーフレームを再構成中に捨てないようにする。
+          const activeSubscriber = instance.subscriber.value;
+          if (activeSubscriber && supportsDynamicGroups(activeSubscriber.trackProperties)) {
+            await requestNewGroup();
+          }
           return;
         }
         // 再初期化しなかった理由 (予算切れ / 設定無し / close 済み / 対応確認の失敗 /
@@ -3048,8 +3009,16 @@ export function useSubscriber(
           presentFrame(frame);
         },
         error: (error) => {
+          if (signal.aborted) return;
           console.error(`[${subscriberId}] Decoder error:`, error);
           instance.decodeErrors.value += 1;
+          // Console だけでなくコピーするログにも残し、長い表示停止と復号失敗を照合できるようにする。
+          const location = instance.subscriber.value?.largestReceivedLocation;
+          addLog("error", `[${subscriberId}] video decoder error`, {
+            message: error.message,
+            groupId: location?.group.toString() ?? null,
+            objectId: location?.object.toString() ?? null,
+          });
           // デコーダーをリセットして次のキーフレームを待つ
           void restartDecoderAfterError(error);
         },

@@ -145,3 +145,39 @@ test("損失も入れ替えも無ければ、すべての Object を復号する
     }),
   );
 });
+
+test("復号器の再構成後も古い位置を拒否し、新しいキーフレームから復帰する", () => {
+  fc.assert(
+    fc.property(
+      fc.bigInt({ min: 1n, max: 1000n }),
+      fc.bigInt({ min: 0n, max: 1000n }),
+      fc.boolean(),
+      (groupId, objectId, nextGroup) => {
+        const order = new VideoDecodeOrder();
+        const current = { groupId, objectId, isKeyFrame: true, priorObjectIdGap: 0n };
+        assert.isTrue(order.admit(current).decode);
+        // 同じ購読の復旧では参照は失っても、復号済みの位置まで巻き戻してはいけない。
+        order.requireKeyFrame();
+        assert.deepEqual(order.admit({ ...current, groupId: groupId - 1n }), {
+          decode: false,
+          reason: "stale",
+        });
+        assert.deepEqual(order.admit(current), { decode: false, reason: "stale" });
+        assert.deepEqual(order.admit({ ...current, objectId: objectId + 1n, isKeyFrame: false }), {
+          decode: false,
+          reason: "missing-reference",
+        });
+        // 同じ Group の後続 key と、新しい Group の先頭 key の両方で復帰できる。
+        const key = {
+          ...current,
+          groupId: nextGroup ? groupId + 1n : groupId,
+          objectId: nextGroup ? 0n : objectId + 2n,
+        };
+        assert.isTrue(order.admit(key).decode);
+        assert.isTrue(
+          order.admit({ ...key, objectId: key.objectId + 1n, isKeyFrame: false }).decode,
+        );
+      },
+    ),
+  );
+});
