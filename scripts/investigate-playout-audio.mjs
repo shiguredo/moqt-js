@@ -4,15 +4,22 @@
  * 生データと試聴用 WAV は investigation-logs/playout-quality-2026-10-28/ に置く。
  */
 import { execFileSync, spawn } from "node:child_process";
-import { mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync } from "node:fs";
+import { mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { createServer } from "node:net";
 import { resolve } from "node:path";
 import { chromium } from "@playwright/test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { measurePage } from "./playout-measurement-guards.mjs";
+import { fingerprintTree, fingerprintFiles } from "./playout-source-fingerprint.mjs";
 
 const mode = process.argv[2] ?? "all";
+const avTraceFile = process.env.PLAYOUT_AV_TRACE_FILE;
+const comparisonSourceRoot = process.env.PLAYOUT_COMPARE_SOURCE_ROOT;
+if (comparisonSourceRoot !== undefined && mode !== "av")
+  throw new Error("PLAYOUT_COMPARE_SOURCE_ROOT is supported only by av");
+if (avTraceFile !== undefined && mode !== "av")
+  throw new Error("PLAYOUT_AV_TRACE_FILE is supported only by av");
 if (
   ![
     "all",
@@ -53,15 +60,21 @@ for (const stage of [
     stage === "avRelay"
       ? ["avRelay|kyoko|clean|1", "avRelay|kyoko|random5|2", "avRelay|julius|burst3|1"]
       : stage === "av"
-        ? [
-            "av|tone|clean",
-            "av|julius|clean",
-            "av|kyoko|audio-stall",
-            "av|julius|both-stall",
-            "av|kyoko|jitter",
-            "av|eddy|loss5",
-            "av|grandpa|video-step",
-          ]
+        ? avTraceFile !== undefined
+          ? ["av|julius|recorded"]
+          : [
+              "av|tone|clean",
+              "av|julius|clean",
+              "av|kyoko|audio-stall",
+              "av|julius|both-stall",
+              "av|kyoko|jitter",
+              "av|eddy|loss5",
+              "av|grandpa|video-step",
+              "av|kyoko|recurring-jitter",
+              "av|julius|startup-stall",
+              "av|kyoko|recurring-jitter120",
+              "av|kyoko|recurring-jitter180",
+            ]
         : stage === "live"
           ? [
               "tone-clean",
@@ -136,6 +149,8 @@ mkdirSync(runDirectory, { recursive: true });
 const sourceRoot = process.env.PLAYOUT_SOURCE_ROOT ?? "src";
 if (resolve(sourceRoot) !== resolve("src") && !["av", "avRelay"].includes(mode))
   throw new Error("PLAYOUT_SOURCE_ROOT is supported only by av and avRelay");
+const avTraceContent = avTraceFile === undefined ? null : readFileSync(avTraceFile);
+const avTrace = avTraceContent === null ? null : JSON.parse(avTraceContent.toString("utf8"));
 if (["all", "dsp", "render", "speech", "datagram"].includes(mode)) {
   for (const [label, revision] of [
     ["before", "d0b944dd"],
@@ -145,26 +160,6 @@ if (["all", "dsp", "render", "speech", "datagram"].includes(mode)) {
       `${directory}/audioTimeStretch.${label}.ts`,
       execFileSync("git", ["show", `${revision}:src/playout/audioTimeStretch.ts`]),
     );
-}
-
-/** 相対パスと内容を一緒に記録し、依存先を含むソース全体を識別する。 */
-function fingerprintTree(root) {
-  const files = {};
-  const visit = (prefix) => {
-    for (const entry of readdirSync(resolve(root, prefix), { withFileTypes: true }).sort(
-      (left, right) => left.name.localeCompare(right.name),
-    )) {
-      const name = prefix ? `${prefix}/${entry.name}` : entry.name;
-      if (entry.isDirectory()) visit(name);
-      else if (entry.isFile())
-        files[name] = createHash("sha256")
-          .update(readFileSync(resolve(root, name)))
-          .digest("hex");
-      else throw new Error(`Unsupported measurement input: ${name}`);
-    }
-  };
-  visit("");
-  return { sha256: createHash("sha256").update(JSON.stringify(files)).digest("hex"), files };
 }
 
 /** ブラウザの起動や解放が失敗しても、測定用サーバーのプロセス群を停止する。 */
@@ -238,23 +233,34 @@ try {
     selectedCases,
     runtime: process.version,
     sourceRoot,
+    comparisonSourceRoot: comparisonSourceRoot ?? null,
+    comparisonSourceTree:
+      comparisonSourceRoot === undefined ? null : fingerprintTree(comparisonSourceRoot),
     variant: process.env.PLAYOUT_VARIANT ?? "current",
+    arrivalTraceSha256:
+      avTraceContent === null ? null : createHash("sha256").update(avTraceContent).digest("hex"),
     sourceTree: fingerprintTree(sourceRoot),
     inputSourceTree: resolve(sourceRoot) === resolve("src") ? null : fingerprintTree("src"),
     speechInputs: existsSync(`${directory}/speech-input`)
       ? fingerprintTree(`${directory}/speech-input`)
       : null,
-    harnessFiles: Object.fromEntries(
-      [
-        "scripts/investigate-playout-audio.mjs",
-        "scripts/playout-audio-quality.mjs",
-        "scripts/playout-av-latency.mjs",
-        "scripts/playout-av-relay.mjs",
-        "scripts/playout-audio-input.mjs",
-        "scripts/playout-measurement-guards.mjs",
-        "scripts/prepare-playout-japanese.mjs",
-      ].map((path) => [path, createHash("sha256").update(readFileSync(path)).digest("hex")]),
-    ),
+    harnessFiles: fingerprintFiles([
+      "package.json",
+      "pnpm-lock.yaml",
+      "tests/e2e/vite.config.ts",
+      "scripts/investigate-playout-audio.mjs",
+      "scripts/playout-audio-quality.mjs",
+      "scripts/playout-av-latency.mjs",
+      "scripts/playout-arrival-events.mjs",
+      "scripts/devtools-latency-trace.mjs",
+      "scripts/playout-av-relay.mjs",
+      "scripts/playout-audio-input.mjs",
+      "scripts/playout-measurement-guards.mjs",
+      "scripts/playout-delay-estimators.mjs",
+      "scripts/prepare-playout-delay-variants.mjs",
+      "scripts/playout-source-fingerprint.mjs",
+      "scripts/prepare-playout-japanese.mjs",
+    ]),
   };
   writeFileSync(`${directory}/environment-${mode}.json`, JSON.stringify(environment, null, 2));
   writeFileSync(`${runDirectory}/environment.json`, JSON.stringify(environment, null, 2));
@@ -287,8 +293,13 @@ try {
             arrivalTrace: traceInput === null ? null : JSON.parse(traceInput).arrivalTrace,
             avOptions: {
               moduleUrl: `${origin}/@fs${resolve(process.env.PLAYOUT_SOURCE_ROOT ?? "src")}/playout/mediaPlayout.ts`,
+              comparisonModuleUrl:
+                comparisonSourceRoot === undefined
+                  ? undefined
+                  : `${origin}/@fs${resolve(comparisonSourceRoot)}/playout/mediaPlayout.ts`,
               variant: process.env.PLAYOUT_VARIANT ?? "current",
               seconds,
+              arrivalTrace: avTrace?.timingTrace?.arrivals,
               certificateHash: process.env.PLAYOUT_SERVER_CERTIFICATE_HASH,
             },
           },
@@ -303,6 +314,17 @@ try {
     } finally {
       clearTimeout(watchdog);
     }
+    const sourcesUnchanged =
+      environment.sourceTree.sha256 === fingerprintTree(sourceRoot).sha256 &&
+      (environment.comparisonSourceTree === null ||
+        environment.comparisonSourceTree.sha256 === fingerprintTree(comparisonSourceRoot).sha256) &&
+      JSON.stringify(environment.harnessFiles) ===
+        JSON.stringify(fingerprintFiles(Object.keys(environment.harnessFiles))) &&
+      (environment.inputSourceTree === null ||
+        environment.inputSourceTree.sha256 === fingerprintTree("src").sha256) &&
+      (environment.speechInputs === null ||
+        environment.speechInputs.sha256 === fingerprintTree(`${directory}/speech-input`).sha256);
+    result = { ...result, sourcesUnchanged, valid: result.valid !== false && sourcesUnchanged };
     // 空の収録や、別の失敗で音が処理されなかった結果を正常値として残さない。
     if (stage === "live" || stage === "long" || stage === "datagramLive") {
       assert.ok(result.activeSamples > result.contextRate * 5, "有効な音声区間が 5 秒を超えること");

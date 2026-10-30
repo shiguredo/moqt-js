@@ -3,6 +3,51 @@ import { assert } from "vite-plus/test";
 import { test, fc } from "@fast-check/vitest";
 import { PlayoutTimeline } from "./timeline";
 
+test.prop([fc.constantFrom(20, 30, 50, 60, 120), fc.integer({ min: 20, max: 140 })], {
+  numRuns: 40,
+})("起動から周期的な揺らぎが続いても、初期判定で学習を止め続けない", (fps, jitterMs) => {
+  const timeline = new PlayoutTimeline({ timeOriginMs: 0, maxQueuedFrames: 24 });
+  let previousArrivalMs = 0;
+  for (let index = 0; index < fps * 3; index++) {
+    const mediaMs = (index * 1000) / fps;
+    // 遅着の後も出力順と壁時計の単調性を保つ。ピークだけが通常間隔になる場合も含む。
+    const arrivalMs = Math.max(
+      previousArrivalMs + 0.1,
+      mediaMs + 20 + (index % 3 === 2 ? jitterMs : 0),
+    );
+    previousArrivalMs = arrivalMs;
+    timeline.observe("audio", arrivalMs, Math.round(mediaMs * 1000));
+    timeline.observeAudioOutputLead(43, arrivalMs);
+  }
+  assert.closeTo(timeline.audioDelayStats().jitterMs ?? 0, jitterMs, 0.02);
+});
+
+test.prop(
+  [
+    fc.constantFrom(20, 30, 50, 60, 120),
+    fc.integer({ min: 220, max: 800 }),
+    fc.constantFrom("audio" as const, "video" as const),
+  ],
+  { numRuns: 50 },
+)(
+  "起動中の一度の停滞が解消したら、配信周期にかかわらず初期の待ちを保持しない",
+  (fps, stallMs, stream) => {
+    const timeline = new PlayoutTimeline({ timeOriginMs: 0, maxQueuedFrames: 24 });
+    let previousArrivalMs = 0;
+    // 実クラスへの入力時刻だけを変える。復帰時は媒体の順を保って一度に到着する。
+    for (let index = 0; (index * 1000) / fps <= 100 + stallMs + 600; index++) {
+      const mediaMs = (index * 1000) / fps;
+      const extraMs = mediaMs >= 100 && mediaMs < 100 + stallMs ? 100 + stallMs - mediaMs : 0;
+      const arrivalMs = Math.max(previousArrivalMs + 0.1, mediaMs + 20 + extraMs);
+      previousArrivalMs = arrivalMs;
+      timeline.observe(stream, arrivalMs, Math.round(mediaMs * 1000));
+      if (stream === "audio") timeline.observeAudioOutputLead(43, arrivalMs);
+    }
+    if (stream === "audio") assert.closeTo(timeline.audioDelayStats().targetMs, 50, 0.02);
+    else assert.isAtMost(timeline.videoDelayMs ?? Infinity, 0.02);
+  },
+);
+
 test.prop(
   [
     fc.array(

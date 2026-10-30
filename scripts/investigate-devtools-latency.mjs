@@ -1,12 +1,14 @@
 /** 実 DevTools の出力経路を、実 QUIC と日本語音声で計測する。接続先は保存しない。 */
 import { spawn, execFileSync } from "node:child_process";
 import { createServer } from "node:net";
-import { mkdirSync, writeFileSync, readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { createHash } from "node:crypto";
 import { chromium } from "@playwright/test";
 import assert from "node:assert/strict";
 import { measureOutputPath } from "./playout-output-path.mjs";
+import { installTimingTrace, summarizeTimingTrace } from "./devtools-latency-trace.mjs";
+import { fingerprintTree, fingerprintFiles } from "./playout-source-fingerprint.mjs";
 
 const relayUri = process.env.PLAYOUT_RELAY_URI;
 if (!relayUri) throw new Error("PLAYOUT_RELAY_URI is required");
@@ -16,6 +18,51 @@ if (!Number.isInteger(seconds) || seconds < 10 || seconds > 120)
 const speechName = process.env.PLAYOUT_SPEECH_SOURCE ?? "tone";
 if (!["tone", "julius", "kyoko", "eddy", "grandpa"].includes(speechName))
   throw new Error(`Unsupported speech source: ${speechName}`);
+const browserChannel = process.env.PLAYOUT_BROWSER_CHANNEL ?? "chromium";
+if (!["chromium", "chrome"].includes(browserChannel))
+  throw new Error(`Unsupported browser channel: ${browserChannel}`);
+const sourceRoot = resolve(process.env.PLAYOUT_SOURCE_ROOT ?? "src");
+const stallMs = Number(process.env.PLAYOUT_STARTUP_STALL_MS ?? 0);
+if (!Number.isInteger(stallMs) || stallMs < 0 || stallMs > 500)
+  throw new Error("PLAYOUT_STARTUP_STALL_MS must be an integer between 0 and 500");
+const measurementFiles = [
+  "package.json",
+  "pnpm-lock.yaml",
+  "devtools/vite.config.ts",
+  "scripts/investigate-devtools-latency.mjs",
+  "scripts/playout-output-path.mjs",
+  "scripts/playout-av-relay.mjs",
+  "scripts/playout-audio-input.mjs",
+  "scripts/devtools-latency-trace.mjs",
+  "scripts/playout-source-fingerprint.mjs",
+];
+const hashes = fingerprintFiles(measurementFiles);
+const sourceTree = fingerprintTree(sourceRoot);
+const devtoolsSourceTree = fingerprintTree("devtools/src");
+const inputSourceTree = sourceRoot === resolve("src") ? null : fingerprintTree("src");
+const sourceRevision = execFileSync("git", ["rev-parse", "HEAD"], {
+  encoding: "utf8",
+  timeout: 5000,
+}).trim();
+const speechFile =
+  speechName === "tone"
+    ? null
+    : `investigation-logs/playout-quality-2026-10-28/speech-input/${speechName}.wav`;
+const speechSha256 =
+  speechFile === null ? null : createHash("sha256").update(readFileSync(speechFile)).digest("hex");
+let configurationDirectory;
+const serverArguments = ["dev", "devtools", "--host", "127.0.0.1"];
+if (sourceRoot !== resolve("src")) {
+  // 比較用の別ソースを選んだ場合も、購読 UI と配信、時間軸を同じ実装で揃える。
+  mkdirSync("investigation-logs", { recursive: true });
+  configurationDirectory = mkdtempSync(resolve("investigation-logs/devtools-config-"));
+  const configurationPath = `${configurationDirectory}/vite.config.ts`;
+  writeFileSync(
+    configurationPath,
+    `import base from ${JSON.stringify(resolve("devtools/vite.config.ts"))};\nexport default { ...base, resolve: { ...base.resolve, alias: { "moqt-js": ${JSON.stringify(`${sourceRoot}/index.ts`)} } } };\n`,
+  );
+  serverArguments.push("--config", configurationPath);
+}
 const port = await new Promise((accept, reject) => {
   const server = createServer();
   server.on("error", reject);
@@ -24,7 +71,7 @@ const port = await new Promise((accept, reject) => {
     server.close(() => accept(address.port));
   });
 });
-const server = spawn("vp", ["dev", "devtools", "--host", "127.0.0.1", "--port", String(port)], {
+const server = spawn("vp", [...serverArguments, "--port", String(port)], {
   stdio: "ignore",
   detached: true,
 });
@@ -54,6 +101,7 @@ try {
     });
   }
   browser = await chromium.launch({
+    ...(browserChannel === "chrome" ? { channel: "chrome" } : {}),
     timeout: 10000,
     headless: process.env.PLAYOUT_HEADED !== "1",
     args: ["--autoplay-policy=no-user-gesture-required"],
@@ -78,6 +126,10 @@ try {
     `${origin}/?namespace=${namespace}&mode=${speechName === "tone" ? "both" : "subscriber"}`,
   );
   const outputPath = await page.evaluate(measureOutputPath);
+  await page.evaluate(installTimingTrace, {
+    moduleUrl: `${origin}/@fs${sourceRoot}/playout/timeline.ts`,
+    stallMs,
+  });
   await page.getByTestId("moqt-uri").click();
   await page.getByTestId("server-url-candidates-input").fill(relayUri);
   await page.getByTestId("server-url-candidates-add").click();
@@ -121,7 +173,7 @@ try {
         }
       },
       {
-        moduleUrl: `${origin}/@fs${resolve("src/index.ts")}`,
+        moduleUrl: `${origin}/@fs${sourceRoot}/index.ts`,
         sourceUrl: `${origin}/@fs${resolve("scripts/playout-av-relay.mjs")}`,
         relayUri,
         namespace,
@@ -140,6 +192,12 @@ try {
         audio: subscriber.audio.playoutTiming,
         avSync: subscriber.avSync,
         audioOutput: subscriber.audioOutput,
+        audioQuality: {
+          compressedMs: subscriber.audio.playoutCompressedMs,
+          concealedMs: subscriber.audio.playoutConcealedMs,
+          rebases: subscriber.audio.playoutRebases,
+          drops: subscriber.audio.playoutDrops,
+        },
         audioReceiveDelayMs: subscriber.audio.receiveDelayMs,
         framesDecoded: subscriber.framesDecoded,
         decodeErrors: subscriber.decodeErrors,
@@ -148,7 +206,9 @@ try {
       };
     });
   const rows = [];
+  let timingTrace;
   try {
+    await page.evaluate(() => window.devtoolsTimingTrace.start());
     await page.getByTestId("subscriber-subscribe-button").click();
     const deadline = Date.now() + 20000;
     for (;;) {
@@ -170,6 +230,7 @@ try {
       rows.push(await read());
     }
   } finally {
+    timingTrace = await page.evaluate(() => window.devtoolsTimingTrace.stop());
     // 開始に失敗して Stop が無効な場合、終了操作の timeout で元の失敗を隠さない。
     const stopSubscriber = page.getByTestId("subscriber-stop-button");
     if (await stopSubscriber.isEnabled()) await stopSubscriber.click();
@@ -192,6 +253,7 @@ try {
   const first = rows[0];
   const last = rows.at(-1);
   const elapsedSeconds = (last.atMs - first.atMs) / 1000;
+  const traceSummary = summarizeTimingTrace(timingTrace);
   // 起動中の累積値で成功させず、計測中の増分と各区間の進行を確かめる。
   // 表示が止まると遅延分布に新しい標本が入らないため、遅延値だけでは判定しない。
   const intervals = rows.slice(1).map((current, index) => {
@@ -202,7 +264,19 @@ try {
       videoFrames: current.framesDecoded - previous.framesDecoded,
     };
   });
+  const sourcesUnchanged =
+    JSON.stringify(hashes) === JSON.stringify(fingerprintFiles(measurementFiles)) &&
+    sourceTree.sha256 === fingerprintTree(sourceRoot).sha256 &&
+    devtoolsSourceTree.sha256 === fingerprintTree("devtools/src").sha256 &&
+    (inputSourceTree === null || inputSourceTree.sha256 === fingerprintTree("src").sha256) &&
+    (speechFile === null ||
+      speechSha256 === createHash("sha256").update(readFileSync(speechFile)).digest("hex"));
   const valid =
+    sourcesUnchanged &&
+    traceSummary.valid &&
+    (stallMs === 0 || timingTrace.stall?.requestedMs === stallMs) &&
+    traceSummary.audio.whole.count >= last.audio.playedFrames * 0.95 &&
+    traceSummary.video.whole.count >= last.framesDecoded * 0.95 &&
     pageErrors.length === 0 &&
     rows.every((row) => row.visible === "visible" && row.decodeErrors === 0) &&
     intervals.every(
@@ -214,30 +288,6 @@ try {
     ) &&
     last.audio.playedFrames - first.audio.playedFrames >= elapsedSeconds * 30 &&
     last.framesDecoded - first.framesDecoded >= elapsedSeconds * 15;
-  const hashes = Object.fromEntries(
-    [
-      "devtools/src/hooks/audioPlaybackController.ts",
-      "devtools/src/hooks/useSubscriber.ts",
-      "devtools/src/utils/audioOutput.ts",
-      "scripts/investigate-devtools-latency.mjs",
-      "scripts/playout-output-path.mjs",
-      "scripts/playout-av-relay.mjs",
-    ].map((path) => [path, createHash("sha256").update(readFileSync(path)).digest("hex")]),
-  );
-  const sourceRevision = execFileSync("git", ["rev-parse", "HEAD"], {
-    encoding: "utf8",
-    timeout: 5000,
-  }).trim();
-  const speechSha256 =
-    speechName === "tone"
-      ? null
-      : createHash("sha256")
-          .update(
-            readFileSync(
-              `investigation-logs/playout-quality-2026-10-28/speech-input/${speechName}.wav`,
-            ),
-          )
-          .digest("hex");
   mkdirSync("investigation-logs/devtools-audio-latency", { recursive: true });
   const file = `investigation-logs/devtools-audio-latency/${Date.now()}-${speechName}.json`;
   writeFileSync(
@@ -246,6 +296,13 @@ try {
       {
         valid,
         browser: browser.version(),
+        browserChannel,
+        variant: process.env.PLAYOUT_VARIANT ?? "current",
+        sourceTree,
+        devtoolsSourceTree,
+        inputSourceTree,
+        sourcesUnchanged,
+        stallMs,
         runtime: process.version,
         platform: process.platform,
         source: speechName,
@@ -257,6 +314,8 @@ try {
         outputPath,
         intervals,
         rows,
+        timingTrace,
+        traceSummary,
       },
       null,
       2,
@@ -271,6 +330,12 @@ try {
       video: last.video.displayLatency,
       skewMs: last.avSync.skewMs,
       audioOutput: last.audioOutput,
+      file,
+      traceSummary: {
+        audio: traceSummary.audio,
+        video: traceSummary.video,
+        absoluteSkew: traceSummary.absoluteSkew,
+      },
     }),
   );
 } finally {
@@ -278,12 +343,16 @@ try {
   try {
     await browser?.close();
   } finally {
-    if (server.pid) {
-      try {
-        process.kill(-server.pid, "SIGTERM");
-      } catch {
-        /* 既に終了している。 */
+    try {
+      if (server.pid) {
+        try {
+          process.kill(-server.pid, "SIGTERM");
+        } catch {
+          /* 既に終了している。 */
+        }
       }
+    } finally {
+      if (configurationDirectory !== undefined) rmSync(configurationDirectory, { recursive: true });
     }
   }
 }

@@ -428,10 +428,13 @@ test("playoutDelayMs: キューの上限を超えない長さに抑える", () =
   const frameMs = 1_000 / 120;
   const timeline = createTimeline();
   const buffer = new PlayoutBuffer<number>(JITTER_BUFFER_MAX_QUEUED_FRAMES, timeline);
+  let jitterMs = 0;
   for (let index = 0; index < 240; index++) {
     // 2 枚に 1 枚が 100 ms 遅れる。窓の p95 が 100 ms になるが、キューが吸収できる長さは
     // 8.33 ms × 20 枚 = 166.7 ms であり、遅れは上限に収まる
-    observeFrame(timeline, index * frameMs, index % 2 === 0 ? 0 : 100);
+    // 復号の出力の順を保ち、次の観測で壁時計を巻き戻さない。
+    jitterMs = Math.max(jitterMs - frameMs, index % 2 === 0 ? 0 : 100);
+    observeFrame(timeline, index * frameMs, jitterMs);
     buffer.clear();
   }
   assert.closeTo(buffer.playoutDelayMs() ?? 0, 100, TOLERANCE_MS);

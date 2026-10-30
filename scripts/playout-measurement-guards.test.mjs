@@ -5,7 +5,29 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { requireAudioFrame, hasAvCoverage } from "./playout-measurement-guards.mjs";
+import {
+  requireAudioFrame,
+  hasAvCoverage,
+  joinCaptureBlocks,
+} from "./playout-measurement-guards.mjs";
+
+test("音声量子の欠落と重複を検出し、PCM の並びと段差を保存する", () => {
+  // 値だけを連結すると途中の収録欠落が隠れるため、実出力フレームの連続性も調べる。
+  const blocks = [
+    { frame: 128, samples: new Float32Array([0.1, 0.2]) },
+    { frame: 130, samples: new Float32Array([0.4, 0.3]) },
+  ];
+  const complete = joinCaptureBlocks(blocks, 48000);
+  assert.equal(complete.missingFrames, 0);
+  assert.equal(complete.discontinuities, 0);
+  assert.closeTo(complete.stepMax, 0.2, 1e-7);
+  assert.equal(complete.samples.length, 4);
+  assert.equal(
+    joinCaptureBlocks([blocks[0], { ...blocks[1], frame: 132 }], 48000).missingFrames,
+    2,
+  );
+  assert.equal(joinCaptureBlocks([blocks[0], blocks[0]], 48000).discontinuities, 1);
+});
 
 test("欠落、順序ずれ、短い復号出力、非有限のサンプルを拒否する", () => {
   for (const frame of [
@@ -33,6 +55,8 @@ test("収録時間と実再生、実表示、対応する A/V の組をすべて
     assert.equal(hasAvCoverage({ ...complete, [field]: 0 }), false, field);
   assert.equal(hasAvCoverage({ ...complete, seconds: Number.NaN }), false);
   assert.equal(hasAvCoverage({ ...complete, pairCount: Infinity }), false);
+  // 終盤まで十分に収録できても、収録器自身が例外で無音化した測定は採用しない。
+  assert.isFalse(hasAvCoverage({ ...complete, captureErrors: ["AudioWorklet processor failed"] }));
   // 同一時刻だけで照合する 50 fps / 30 fps の測定は、共通する 10 fps の半分を必要とする。
   assert.equal(hasAvCoverage({ ...complete, pairCount: 90 }, 5), true);
   assert.equal(hasAvCoverage({ ...complete, pairCount: 0 }, 5), false);
