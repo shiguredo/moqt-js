@@ -99,3 +99,48 @@ test("音声の再開では旧 Context の出力先行量を捨てる", () => {
   );
   assert.equal(timeline.audioDelayStats().targetMs, 50);
 });
+
+test("起動直後の不規則な遅着の最中に追いつきを完了して待ちを学習しない", () => {
+  const timeline = timelineOf();
+  // Chrome の起動時に観測した、短い正常到着、停止、古い出力、まとめた復帰を相対化する。
+  // 最小経路は 20 ms のままなので、最小値だけを比較すると停止の最中に完了してしまう。
+  const arrivals: [mediaMs: number, arrivalMs: number][] = [
+    [0, 20],
+    [20, 40],
+    [40, 60],
+    [60, 80],
+    [80, 100],
+    [100, 340],
+    [120, 342],
+    [140, 390],
+    [300, 392],
+    [320, 394],
+    [340, 396],
+    [360, 398],
+    [380, 400],
+  ];
+  for (let mediaMs = 400; mediaMs <= 700; mediaMs += 20) arrivals.push([mediaMs, mediaMs + 20]);
+  for (const [mediaMs, arrivalMs] of arrivals) {
+    const wallClockMs = TIME_ORIGIN_MS + arrivalMs;
+    timeline.observe("audio", wallClockMs, (TIME_ORIGIN_MS + mediaMs) * 1000);
+    timeline.observeAudioOutputLead(43, wallClockMs);
+  }
+  assert.closeTo(
+    timeline.audioDelayStats().targetMs,
+    50,
+    0.01,
+    "解消した起動時の停滞を予算に残さないこと",
+  );
+});
+
+test("起動中に経路が遅くなっても、媒体の周期で届く状態は通常の揺らぎとして学習する", () => {
+  const timeline = timelineOf();
+  // 大きな遅れだけを見て初期学習を止め続けると、定常化した新しい経路も学べなくなる。
+  for (let mediaMs = 0; mediaMs <= 1000; mediaMs += 20) {
+    const arrivalMs = mediaMs + (mediaMs < 100 ? 20 : 240);
+    timeline.observe("audio", TIME_ORIGIN_MS + arrivalMs, (TIME_ORIGIN_MS + mediaMs) * 1000);
+    timeline.observeAudioOutputLead(43, TIME_ORIGIN_MS + arrivalMs);
+  }
+  assert.closeTo(timeline.audioDelayStats().jitterMs ?? 0, 220, 0.01, "持続する遅れを学習すること");
+  assert.equal(timeline.audioDelayStats().targetMs, 100);
+});

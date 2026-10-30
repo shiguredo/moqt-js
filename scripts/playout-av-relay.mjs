@@ -1,7 +1,7 @@
 /** 実 QUIC Datagram、Worker 復号、実音声と canvas で A/V を測る。 */
 import { loadSpeech } from "./playout-audio-input.mjs";
 
-import { hasAvCoverage } from "./playout-measurement-guards.mjs";
+import { hasAvCoverage, watchProcessorErrors } from "./playout-measurement-guards.mjs";
 
 const RATE = 48000;
 const sleep = (ms) =>
@@ -122,12 +122,13 @@ async function captureOutput(subscriber, capture) {
     URL.revokeObjectURL(url);
   }
   const tap = new AudioWorkletNode(output.context, "relay-av-capture");
+  const captureErrors = watchProcessorErrors(tap);
   tap.port.onmessage = (event) => capture.push(event.data);
   tap.connect(output.destination);
   // 同じ Context の出力先だけを公開 API で差し替え、時計と媒体の観測は保つ。
   // 測定の開始前に接続し、その後の最初の 1 秒も分布から除く。
   subscriber.playout.setAudioOutput({ context: output.context, destination: tap });
-  return tap;
+  return { tap, captureErrors };
 }
 
 export async function measure(
@@ -268,6 +269,7 @@ export async function measure(
     videoCallback = element.requestVideoFrameCallback(frameCallback);
   };
   let tap = null;
+  let captureErrors = [];
   const capture = [];
   const statsSeries = [];
   let sourceStarted = false;
@@ -280,7 +282,7 @@ export async function measure(
     element.srcObject = subscriber.mediaStream;
     await element.play();
     videoCallback = element.requestVideoFrameCallback(frameCallback);
-    tap = await captureOutput(subscriber, capture);
+    ({ tap, captureErrors } = await captureOutput(subscriber, capture));
     const startedMs = performance.now();
     for (let second = 0; second < seconds; second++) {
       await sleep(1000);
@@ -358,7 +360,13 @@ export async function measure(
       video,
       pairs,
       videoCallbacks,
-      valid: activeErrors.length === 0 && enoughOutput && captureMissingMs === 0 && stepMax > 0,
+      valid:
+        activeErrors.length === 0 &&
+        enoughOutput &&
+        captureMissingMs === 0 &&
+        stepMax > 0 &&
+        captureErrors.length === 0,
+      captureErrors: [...captureErrors],
       activeErrors,
       shutdownErrors: errors.slice(activeErrors.length),
       states,

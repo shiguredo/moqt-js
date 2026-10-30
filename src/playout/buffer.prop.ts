@@ -205,8 +205,15 @@ test("PlayoutBuffer: 揺らぎの p95 が最大の揺らぎのとき、表示間
         // 復号の出力は「メディア時刻 + 揺らぎ」の時刻に出る。揺らぎは到着を後ろへずらす
         // だけであり、表示間隔は TIMESTAMP の間隔のままになる
         const arrivals: number[] = [];
+        let previousArrivalMs = -Infinity;
         for (let index = 0; index < frames; index++) {
-          arrivals.push(LOCAL_ORIGIN_MS + index * frameMs + (pattern[index % pattern.length] ?? 0));
+          // 復号済みの出力は媒体の順を保つ。遅着後に観測の壁時計を巻き戻さない。
+          const arrivalMs = Math.max(
+            previousArrivalMs + 0.1,
+            LOCAL_ORIGIN_MS + index * frameMs + (pattern[index % pattern.length] ?? 0),
+          );
+          arrivals.push(arrivalMs);
+          previousArrivalMs = arrivalMs;
         }
         // 1 ms ごとに選択する (requestAnimationFrame の代わり)。刻みの誤差は 1 ms まで
         const draws: { localMs: number; index: number }[] = [];

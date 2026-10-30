@@ -514,7 +514,7 @@ interface StreamState {
   lastTimestampMs: number | null;
   frameIntervals: number[];
   catchingUp: boolean;
-  catchUpCheckpoint: { atMs: number; baseMs: number } | null;
+  catchUpCheckpoint: { atMs: number; baseMs: number; rechecked: boolean } | null;
 }
 
 /** 昇順に並べた値の nearest-rank 法の百分位 */
@@ -653,6 +653,7 @@ export class PlayoutTimeline {
 
     // 最初のフレームと、まとまって届いたフレームは再生遅延の目標に使わない
     let learns = false;
+    let regularArrival = false;
     if (state.lastTimestampMs !== null && state.lastArrivalMs !== null) {
       const intervalMs = timestampMs - state.lastTimestampMs;
       if (intervalMs > 0) {
@@ -661,7 +662,11 @@ export class PlayoutTimeline {
           state.frameIntervals.shift();
         }
       }
-      learns = wallClockMs - state.lastArrivalMs >= intervalMs / 2;
+      const arrivalIntervalMs = wallClockMs - state.lastArrivalMs;
+      learns = arrivalIntervalMs >= intervalMs / 2;
+      // まとめた出力とは逆に、長い停止の最初の出力も通常の周期とは区別する。
+      // 媒体の欠落で両方の間隔が同じだけ開く場合は、通常の到着として扱う。
+      regularArrival = intervalMs > 0 && learns && arrivalIntervalMs <= intervalMs * 2;
     }
     state.lastTimestampMs = timestampMs;
     state.lastArrivalMs = wallClockMs;
@@ -679,7 +684,7 @@ export class PlayoutTimeline {
     this.recordBaseDifference(wallClockMs);
 
     // 追いつき中の出力と、停滞後にまとめて復号した分を経路の分布へ混ぜない。
-    if (learns && !this.isCatchingUp(state, wallClockMs, baseMs)) {
+    if (learns && !this.isCatchingUp(state, wallClockMs, baseMs, offsetMs, regularArrival)) {
       state.learningOffsets.push(wallClockMs, offsetMs);
     }
     state.learningOffsets.prune(wallClockMs - PLAYOUT_JITTER_WINDOW_MS);
@@ -1771,23 +1776,43 @@ export class PlayoutTimeline {
    * 開始 (と基準の取り直し) の後、live に追いつくまでの間かを決める
    *
    * `CATCH_UP_CHECK_INTERVAL_MS` ごとに基準の遅れの下がり幅を見て、
-   * `CATCH_UP_MIN_BASE_DROP_MS` より小さければ追いついたとみなす。一度追いついたら、
-   * 基準を取り直すまで追いつき中に戻らない (live の経路の揺らぎは学習する)
+   * `CATCH_UP_MIN_BASE_DROP_MS` より小さければ追いついたとみなす。不規則な遅着の最中なら
+   * もう 1 期間だけ確認し、周期的な揺らぎで学習を止め続けることを防ぐ。
+   * 起動直後に処理が止まると、最小値が動かないまま古い出力だけが返ることがある。
+   * その最初の遅着で完了すると、解消した停滞を通常の jitter として保持してしまう。
+   * 一度追いついたら、基準を取り直すまで追いつき中に戻らない (live の揺らぎは学習する)
    */
-  private isCatchingUp(state: StreamState, nowMs: number, baseMs: number): boolean {
+  private isCatchingUp(
+    state: StreamState,
+    nowMs: number,
+    baseMs: number,
+    offsetMs: number,
+    regularArrival: boolean,
+  ): boolean {
     if (!state.catchingUp) {
       return false;
     }
     const checkpoint = state.catchUpCheckpoint;
     if (checkpoint === null) {
-      state.catchUpCheckpoint = { atMs: nowMs, baseMs };
+      state.catchUpCheckpoint = { atMs: nowMs, baseMs, rechecked: false };
       return true;
     }
     if (nowMs - checkpoint.atMs < CATCH_UP_CHECK_INTERVAL_MS) {
       return true;
     }
+    // 最小の経路より 1 フレーム分を超えて古く、到着間隔も長い出力はまだ追いつき中である。
+    // 遅い経路でも媒体の周期で届く場合は、通常の学習へ進める。
+    const delayedArrival =
+      !regularArrival &&
+      offsetMs - baseMs > Math.max(CATCH_UP_MIN_BASE_DROP_MS, this.frameIntervalMs(state) ?? 0);
     if (checkpoint.baseMs - baseMs >= CATCH_UP_MIN_BASE_DROP_MS) {
-      state.catchUpCheckpoint = { atMs: nowMs, baseMs };
+      state.catchUpCheckpoint = { atMs: nowMs, baseMs, rechecked: false };
+      return true;
+    }
+    // 最小値が動かない不規則な遅着では、1 期間だけ確認し直す。周期的な揺らぎしか
+    // 観測できない経路でも、その都度延期して初期学習を止め続けない。
+    if (delayedArrival && !checkpoint.rechecked) {
+      state.catchUpCheckpoint = { atMs: nowMs, baseMs, rechecked: true };
       return true;
     }
     state.catchingUp = false;
