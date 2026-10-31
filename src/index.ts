@@ -287,7 +287,7 @@ export type { AudioPlayoutBasis } from "./playout/audioPlayout";
 
 // 音声の再生の観測 (鳴るはずの時刻・鳴り始める時刻・鳴らなかった量)。再生の入口
 // (MediaPlayout) の `audio.timing` に渡す計器であり、利用者が自分の実行周期で画面へ出す
-// (docs/HIGH_LEVEL_API.md)。再生の観測値の型 (AudioReceiverStats.playoutTiming) も同じ
+// (docs/MEDIA_PLAYOUT.md)。再生の観測値の型 (AudioReceiverStats.playoutTiming) も同じ
 // モジュールが持つ
 export {
   AudioPlayoutTimingStats,

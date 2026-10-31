@@ -742,7 +742,7 @@ function SubscriberStats({ statsSignal }: { statsSignal: ReadonlySignal<Subscrib
           />
           {/* 補間で埋まらなかった無音の穴、予約の追い越しと押し直し、バッファ境界の段差。
               「プチプチ」の原因が無音の穴なのか、段差なのか、予約の遅れなのかを分ける。
-              すべて購読の開始からの累積である (docs/AUDIO_PLAYOUT_GAPS_AND_TAIL.md) */}
+              すべて購読の開始からの累積である (docs/archive/playout/AUDIO_PLAYOUT_GAPS_AND_TAIL.md) */}
           <StatList
             items={[
               {

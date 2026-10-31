@@ -1760,7 +1760,7 @@ export function usePublisher() {
         // 実装して測った (5 個連続で落とす注入で欠落 1.6〜1.8 % → 0.1 %)。ただし、遅れて
         // 届く復旧の分が遅れの推定を膨らませ、交互に各 3 回の比較で鳴り始めの遅れが
         // 64〜67 ms から 120〜122 ms へ上がった。位置の順序で除く案でも改善しなかったため、
-        // 続けて送る (docs/AUDIO_PLAYOUT_LATENCY.md)
+        // 続けて送る (docs/archive/playout/AUDIO_PLAYOUT_LATENCY.md)
         for (let copy = 0; copy < sendCopyPlan.copies; copy++) {
           void audioPublisherInstance.sendDatagram(sendParams);
           pub.audioBytesSent.value += sendCopyPlan.bytesPerCopy;

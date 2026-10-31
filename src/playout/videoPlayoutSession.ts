@@ -19,7 +19,7 @@
  * 途中のフレームを表示しない、購読ごとの統計と画面への反映) を持つ。
  *
  * 内部実装である (src/index.ts からは公開していない)。公開 API は再生の入口
- * (`MediaPlayout`) である。docs/HIGH_LEVEL_API.md の「内部実装」の「映像の表示の組み立て」を
+ * (`MediaPlayout`) である。docs/ARCHITECTURE.md の「映像の表示の組み立て」を
  * 参照。
  */
 

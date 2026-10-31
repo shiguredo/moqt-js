@@ -1,5 +1,8 @@
 # 音声再生の現状
 
+過去の調査記録。本文の実装と「現行」は記録時点のもの。
+現在の説明は [音声と映像の再生](../../PLAYOUT.md)、記録の一覧は [調査記録](../README.md) を参照すること。
+
 本稿は下記の更新日時点の記録である。その後の出力経路の変更とレビューへの修正は
 [playout レビューへの対応](PLAYOUT_REVIEW_FIXES.md) を参照すること。
 
@@ -7,7 +10,7 @@
 確認済みの制約をまとめる。
 `86cdefe1` は作業ブランチ `feature/fix-playout-audio-quality` の識別子であり、
 develop への統合は `c3f36fa4` である。
-公開 API の定義は [高レベル API](HIGH_LEVEL_API.md)、採用案の A/B と棄却した調整は
+公開 API の定義は [高レベル API](../../HIGH_LEVEL_API.md)、採用案の A/B と棄却した調整は
 [A/V 再生の低遅延化の計測](AV_LOW_LATENCY_INVESTIGATION.md)、波形の修正は
 [音声の出力波形の測定と改善](AUDIO_PLAYOUT_QUALITY_INVESTIGATION.md) を参照すること。
 
@@ -73,7 +76,7 @@ Subgroup 配送では冗長度 2 以上を指定できず、`start()` がエラ�
 devtools の表示用スナップショットでは音声の予算は `audio.audioDelay` にある。
 バッファ境界の段差は予約サンプルから求める推定値であり、出力の gain 包絡全体や
 ブラウザのリサンプル後の実測ではない。クリックの有無は収録波形で確認する。
-旧統計からの移行は [高レベル API](HIGH_LEVEL_API.md#旧音声遅延制御からの移行) を参照すること。
+旧統計からの移行は [高レベル API](../../MEDIA_PLAYOUT.md#旧音声遅延制御からの移行) を参照すること。
 
 ## 確認した結果
 

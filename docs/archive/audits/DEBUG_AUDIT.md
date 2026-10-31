@@ -1,5 +1,7 @@
 # moqt-devtools の debug 現状監査 (2026-10-18)
 
+監査時点の記録。現在の構成は [内部構成](../../ARCHITECTURE.md)、検証手順は [開発と検証](../../DEVELOPMENT.md) を参照すること。
+
 「moqt-devtools の debug を整備し直す」の着手前に、現在の実装を読んで把握した結果をまとめる。
 コードは変更していない。debug 関連の単体テスト (9 ファイル 89 件) が通ることは確認した。
 このメモの作成後、ブランチ `feature/add-devtools-debug-panel-usability` で UI の整備を

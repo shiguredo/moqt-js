@@ -1,5 +1,8 @@
 # Chrome の音声の出力側補間と負荷の改善
 
+過去の調査記録。本文の実装と「現行」は記録時点のもの。
+現在の説明は [音声と映像の再生](../../PLAYOUT.md)、記録の一覧は [調査記録](../README.md) を参照すること。
+
 記録日: 2026 年 10 月 31 日。
 
 ## 変更の目的
@@ -218,7 +221,7 @@ PLAYOUT_BROWSER_CHANNEL を chrome、PLAYOUT_AV_SECONDS を 6、PLAYOUT_COMPARE_
 
 低レベルの createMediaPlayout は、実 Context の resume の後、最初の pushAudio の前に prepareAudio を待つ。
 出力を作り直したときも準備を待つ。SDK と DevTools はこの初期化を内部で行う。
-利用手順は [高レベル API](HIGH_LEVEL_API.md#音声出力の準備) に記載する。
+利用手順は [高レベル API](../../MEDIA_PLAYOUT.md#音声出力の準備) に記載する。
 
 実際に描画した補間と、補間できなかった区間は AudioWorklet から非同期に通知される。
 従来の「次の到着時または停止時に使用量を確定する値」と集計時点が異なる。

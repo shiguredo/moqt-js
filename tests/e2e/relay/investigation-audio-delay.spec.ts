@@ -15,7 +15,7 @@ import { DEVTOOLS_URL } from "../urls";
 // 同じ時間帯の条件で比べるために使う。値は判定に使わず、`investigation-logs/` へ
 // JSON Lines で書く。
 //
-// 動かし方は docs/AUDIO_PLAYOUT_LATENCY.md を参照すること。実行例:
+// 動かし方は docs/archive/playout/AUDIO_PLAYOUT_LATENCY.md を参照すること。実行例:
 //
 //   npx vp exec playwright test --project=relay --grep "調査: A/V 同期と音声の遅延の内訳を"
 //

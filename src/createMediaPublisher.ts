@@ -57,7 +57,7 @@ import {
 
 // デフォルト設定
 
-// Publisher Priority (docs/HIGH_LEVEL_API.md の Priority 表に記載)
+// Publisher Priority (docs/ARCHITECTURE.md の Priority 表に記載)
 // draft-ietf-moq-transport-22 §5.1.1: 0-255 の符号無し整数で、数値が小さいほど
 // 高優先である (最高優先は 0)。単体テストから値を固定するため export する
 // (パッケージ公開 API には含めない)。

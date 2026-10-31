@@ -1,5 +1,8 @@
 # 音声再生の無音の穴と末尾の欠落
 
+過去の調査記録。本文の実装と「現行」は記録時点のもの。
+現在の説明は [音声と映像の再生](../../PLAYOUT.md)、記録の一覧は [調査記録](../README.md) を参照すること。
+
 2026-10-29 の更新案内: 以下は 2026-10-20 の調査と実装の記録である。
 穴を理由に 160 ms へ上限を広げる制御と、旧終端補正 API は削除した。
 現行では圧縮前の履歴を PLC に使い、補間と実音をクロスフェードで接続し、
@@ -13,8 +16,8 @@
 収録し、「プチプチノイズ」と「最後が聞こえない」を再現して原因を特定した記録である。数値は
 すべて実リレーの計測、または本番モジュールを直接駆動した再現による。測定に使った生データと
 再現スクリプトは `investigation-logs/` (gitignore 済み) にあり、再現手順はこの文書の
-「検証方法」に書く。方針の決定は `docs/AV_SYNC_DECISIONS.md`、これまでの遅延の計測は
-`docs/AUDIO_PLAYOUT_LATENCY.md` にある。
+「検証方法」に書く。方針の決定は `docs/archive/playout/AV_SYNC_DECISIONS.md`、これまでの遅延の計測は
+`docs/archive/playout/AUDIO_PLAYOUT_LATENCY.md` にある。
 
 ## 前提
 
@@ -131,7 +134,7 @@ timestamp の順と逆に届いた Object が隙間 0 のまま逆順に鳴り�
 再送されない (RFC 9221)。
 2026-10-26 の実リレーの計測では、自然な状態の baseline 3 回 (60 秒、合計 8,921 Object) で
 順序逆転は 0 件だった。注入した順序逆転は計器で検出でき、計測方法と結果は
-`docs/AUDIO_DATAGRAM_ORDERING.md` にある。
+`docs/archive/playout/AUDIO_DATAGRAM_ORDERING.md` にある。
 
 ### 3. 停止で切られる音
 

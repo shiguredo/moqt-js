@@ -1,5 +1,8 @@
 # 音声の再生遅延の下限の実測 (調査メモ)
 
+過去の調査記録。本文の実装と「現行」は記録時点のもの。
+現在の説明は [音声と映像の再生](../../PLAYOUT.md)、記録の一覧は [調査記録](../README.md) を参照すること。
+
 2026-10-29 の更新案内: 以下は主に 2026-10-15〜16 の旧実装の調査記録である。
 80 ms の開始値、NetEq の遅延推定、160 ms へ広げる上限、閉ループの計器は当時のもの。
 現行では到着の揺らぎと出力時計から A/V の音声予算を通常 50〜100 ms に決め、
@@ -8,14 +11,14 @@
 [A/V の低遅延化の計測](AV_LOW_LATENCY_INVESTIGATION.md)、最新の修正は
 [playout レビューへの対応](PLAYOUT_REVIEW_FIXES.md) を参照すること。
 
-この文書は調査の記録である。決定と根拠は `docs/AV_SYNC_DECISIONS.md` が持つ。ここには
+この文書は調査の記録である。決定と根拠は `docs/archive/playout/AV_SYNC_DECISIONS.md` が持つ。ここには
 測り方、生の値、判断に至った理由、未解決のまま残したことを書く。
 
 ## 目的
 
 音声の再生遅延の下限 (`AUDIO_PLAYOUT_DELAY_FLOOR_MS` と `AUDIO_DELAY_FEEDBACK_MIN_MS`) は
 80 ms であり、libwebrtc の NetEq の初期値 (`AUDIO_DELAY_START_MS`) をそのまま採った値で、
-この経路では測られていなかった (`docs/AV_SYNC_DECISIONS.md` 決定 4 の「根拠が薄い点」)。
+この経路では測られていなかった (`docs/archive/playout/AV_SYNC_DECISIONS.md` 決定 4 の「根拠が薄い点」)。
 「超低遅延」を名乗るには、この値を実リレーで測り直す必要がある。
 
 ## 方法
@@ -669,7 +672,7 @@ skippedMs=0, catchUpLagMs=18, receiveDelayMs=19, maxReceiveDelayMs=115, warnings
 | 上限 160 ms 2 回目              | 420 ms           | 155.3 ms     | 140 / 160          | 140 / 160           | 5        | 0    | 0    |
 
 - 時間圧縮は毎秒 3〜26 ms で 60 秒間ほぼ途切れない (圧縮が 0 の秒は 59 秒中 4〜7 秒)。
-  `docs/AUDIO_PLAYOUT_RESULT.md` の静かな経路の値 (32〜65 ms / 60 秒) の 8.5〜15 倍である。
+  `docs/archive/playout/AUDIO_PLAYOUT_RESULT.md` の静かな経路の値 (32〜65 ms / 60 秒) の 8.5〜15 倍である。
   鳴り始めも 114〜116 ms で、docs の「上限に張り付いた回」(110〜115 ms) と同じ領域に常時入る
 - 揺らぎは復号ではなく到着の時点で既にある。WebTransport の datagram の読み出しを包んで測ると、
   Object の間隔 (冗長度 2 の組の先頭同士) は p50 19.2 / p95 27.5 / p99 108.7 / 最大 159.0 ms であり、
@@ -857,4 +860,4 @@ ITU-R BT.1359-1 の許容内である。
   調査用の採取テスト (`investigation-audio-delay.spec.ts`) は既定で skip する
 
 2026-10-20 の追加調査 (受信 playout の無音の穴と、停止時の末尾の欠落) は
-`docs/AUDIO_PLAYOUT_GAPS_AND_TAIL.md` にある。
+`docs/archive/playout/AUDIO_PLAYOUT_GAPS_AND_TAIL.md` にある。

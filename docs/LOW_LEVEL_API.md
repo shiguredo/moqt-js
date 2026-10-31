@@ -6,31 +6,10 @@
 
 公開 API の入口は `connect()` で、返された `Session` から `publish()` / `subscribe()` / `fetch()` / `trackStatus()` / `subscribeNamespace()` / `subscribeTracks()` / `publishNamespace()` を呼び出す。バイナリの encode / decode は `src/message/*`、`src/controlStream.ts`、`src/dataStream.ts` に分離され、`SessionImpl` がそれらを束ねている。
 
-## API 階層
+## 関連する API
 
-```text
-┌──────────────────────────────────────────────────────────────────────┐
-│ 高レベル API (MediaStream / WebCodecs)                              │
-│                                                                      │
-│ createMediaPublisher() / createMediaSubscriber()                     │
-│                                                                      │
-│ 用途: メディア配信を簡単に扱う                                        │
-├──────────────────────────────────────────────────────────────────────┤
-│ 低レベル Session API                                                 │
-│                                                                      │
-│ connect() → Session.publish() / subscribe() / fetch()                │
-│ Publisher.sendObject() / sendDatagram()                              │
-│ Subscriber.object / datagram callback                                │
-│                                                                      │
-│ 用途: MOQT プロトコルを直接扱う                                       │
-├──────────────────────────────────────────────────────────────────────┤
-│ バイナリ codec / utility 層                                           │
-│                                                                      │
-│ controlStream.ts / dataStream.ts / message/* / properties.ts         │
-│                                                                      │
-│ 用途: フレーミング、varint、Properties、Object encode / decode        │
-└──────────────────────────────────────────────────────────────────────┘
-```
+MediaStream を配信、視聴する場合は [高レベル API](HIGH_LEVEL_API.md)、
+各層の責務とモジュールの対応は [内部構成](ARCHITECTURE.md) を参照すること。
 
 ---
 
@@ -233,18 +212,8 @@ interface MoqtObject {
 
 ## モジュール分割
 
-| ファイル               | 役割                                                                          |
-| ---------------------- | ----------------------------------------------------------------------------- |
-| `src/index.ts`         | 公開 API の export と `connect()` の入口                                      |
-| `src/session.ts`       | WebTransport / 制御ストリーム / request stream / data stream を束ねる中心実装 |
-| `src/publisher.ts`     | `Publisher` の状態と callback hook                                            |
-| `src/subscriber.ts`    | `Subscriber` の状態、`largestLocation`、Track Properties の保持               |
-| `src/fetcher.ts`       | `Fetcher` の状態、`endLocation`、Track Properties の保持                      |
-| `src/controlStream.ts` | `Type (varint) + Length (16-bit) + Payload` のフレーミング                    |
-| `src/dataStream.ts`    | Subgroup Header、Fetch Header、Object Datagram の encode / decode             |
-| `src/message/*`        | `SETUP` / `PUBLISH` / `SUBSCRIBE` / `FETCH` など各メッセージの payload codec  |
-
-`PublisherImpl` / `SubscriberImpl` / `FetcherImpl` は薄い状態オブジェクトで、実際のネットワーク I/O はすべて `SessionImpl` が担当する。各ハンドルは `SessionImpl` に callback hook を差し込まれて動く。
+ソースの役割分担は [内部構成の低レベルセッション](ARCHITECTURE.md#低レベルセッション) を参照すること。
+以下は接続確立と各操作の処理手順を説明する。
 
 ---
 

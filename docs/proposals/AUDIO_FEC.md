@@ -1,9 +1,11 @@
 # 音声のパケットロス対策: FEC の導入検討
 
+未実装の候補と調査時点の評価。実装済みの冗長化は [音声と映像の再生](../PLAYOUT.md#欠落と冗長化) を参照すること。
+
 音声は datagram (再送なし) で届き、いまは「同じ音声 Object を 1〜3 回重複送信し、受信側が 2 回目以降を捨てる」独自の冗長化で欠落に備えている。この方式を土台に、FEC (前方誤り訂正) 系の技術を入れてさらに安定させられるかを、実装の読解、一次情報 (RFC、仕様、実装ソース、論文)、ブラウザ実機での検証、数理モデルで検討した記録である。
 
 - 調査日: 2026-10-16
-- 冗長化の実装は `983a4c6c` (PR #492) でマージ済み。実測記録は `docs/AUDIO_PLAYOUT_LATENCY.md` と `docs/AUDIO_PLAYOUT_RESULT.md`、調査用の E2E は `tests/e2e/relay/investigation-audio-delay.spec.ts` にある。調査は `1f45eb40` を基準に行った。コードの参照は行番号ではなくシンボル名で示す (行番号はドラフトや実装の変更でずれるため)
+- 冗長化の実装は `983a4c6c` (PR #492) でマージ済み。実測記録は `docs/archive/playout/AUDIO_PLAYOUT_LATENCY.md` と `docs/archive/playout/AUDIO_PLAYOUT_RESULT.md`、調査用の E2E は `tests/e2e/relay/investigation-audio-delay.spec.ts` にある。調査は `1f45eb40` を基準に行った。コードの参照は行番号ではなくシンボル名で示す (行番号はドラフトや実装の変更でずれるため)
 - 本文の数値は「実測」と「数理モデル」を明示して区別する。モデルの値は実測ではない
 
 2026-10-29 に再生経路の説明を追従した。FEC のブラウザ対応と数理モデルは
@@ -11,7 +13,7 @@
 `AudioDelayEstimator` と `AudioDelayFeedback` は削除済みで、音声だけの予算は 50 ms、
 A/V の自動予算は到着の揺らぎと出力の先行量から通常 50〜100 ms に決める。
 以下の旧遅延制御で得た測定表を、現行でも成立する性能の保証として使わないこと。
-現行の日本語 / Datagram 計測は [A/V の調査](AV_LOW_LATENCY_INVESTIGATION.md) を参照すること。
+現行の日本語 / Datagram 計測は [A/V の調査](../archive/playout/AV_LOW_LATENCY_INVESTIGATION.md) を参照すること。
 
 ---
 
@@ -74,7 +76,7 @@ A/V の自動予算は到着の揺らぎと出力の先行量から通常 50〜1
 
 ### 2.4 旧実装で測った効果と副作用 (2026-10-15〜16)
 
-独立損失 `p` で `n` 回送ると、全ての copy が落ちる確率は `p^n` になる。実測 (実リレー、経路の損失を注入、30〜60 秒) はこの法則どおりである (`docs/AUDIO_PLAYOUT_LATENCY.md` の「2 回送りを既定にするかの判断」「損失が厳しい経路」)。
+独立損失 `p` で `n` 回送ると、全ての copy が落ちる確率は `p^n` になる。実測 (実リレー、経路の損失を注入、30〜60 秒) はこの法則どおりである (`docs/archive/playout/AUDIO_PLAYOUT_LATENCY.md` の「2 回送りを既定にするかの判断」「損失が厳しい経路」)。
 
 | 注入した損失 | 1 回送り (欠落率 / 鳴った割合) | 2 回送り        | 3 回送り       |
 | ------------ | ------------------------------ | --------------- | -------------- |
@@ -86,7 +88,7 @@ A/V の自動予算は到着の揺らぎと出力の先行量から通常 50〜1
 - 表の 0 % と 5 % は 40 秒の実測 (「2 回送りを既定にするかの判断」)、10 % と 20 % は 30 秒の実測 (「損失が厳しい経路」) である。同じ 10 % でも 40 秒側では 1 回 0.108 / 88.7 %、2 回 0.012 / 97.3 % であった。観測時間が違うため、行をまたいだ厳密な比較はしない
 
 - 代価は帯域である。実測で 50 datagram/秒 → 100 datagram/秒、音声の帯域が 2 倍になる
-- バースト損失では共倒れする。5 個連続で落とす注入 (全体 2 %) では、間隔 0 の 2 回送りでも欠落 1.6〜1.8 % が残った (`docs/AUDIO_PLAYOUT_LATENCY.md` の「まとめて落ちる経路 (バースト損失) と、2 個目を送る間隔」)
+- バースト損失では共倒れする。5 個連続で落とす注入 (全体 2 %) では、間隔 0 の 2 回送りでも欠落 1.6〜1.8 % が残った (`docs/archive/playout/AUDIO_PLAYOUT_LATENCY.md` の「まとめて落ちる経路 (バースト損失) と、2 個目を送る間隔」)
 
 | 2 個目を送る間隔 | 欠落率         | 鳴った割合        | 復号器の作り直し | 飛ばした音   |
 | ---------------- | -------------- | ----------------- | ---------------- | ------------ |
@@ -187,7 +189,7 @@ A/V の自動予算は到着の揺らぎと出力の先行量から通常 50〜1
 
 ### 4.6 配送方式とバッファ (FEC と同じ土俵の代替)
 
-- **subgroup (再送あり) への切替。** ライブラリの既定は `"datagram"` であり (`src/createMedia/settings.ts` の `resolveAudioPublishSettings`)、Subgroup は明示した場合に使う。Data Stream は FIN で閉じる限り再送されるため欠落しにくい (RESET された場合は欠落し得る)。代わりに head-of-line 遅延を払う。datagram を既定にして遅延の裾を縮めた経緯があるため (docs/AUDIO_PLAYOUT_LATENCY.md などの実測記録)、損失のある経路でだけ subgroup へ戻す判断は、目標遅延 50〜100 ms との引き換えになる。**実測で比較すべき代替である**
+- **subgroup (再送あり) への切替。** ライブラリの既定は `"datagram"` であり (`src/createMedia/settings.ts` の `resolveAudioPublishSettings`)、Subgroup は明示した場合に使う。Data Stream は FIN で閉じる限り再送されるため欠落しにくい (RESET された場合は欠落し得る)。代わりに head-of-line 遅延を払う。datagram を既定にして遅延の裾を縮めた経緯があるため (docs/archive/playout/AUDIO_PLAYOUT_LATENCY.md などの実測記録)、損失のある経路でだけ subgroup へ戻す判断は、目標遅延 50〜100 ms との引き換えになる。**実測で比較すべき代替である**
 - **バッファ (再生予算) の調整。** 100 → 160 ms で時間圧縮が半減し、遅延が 20〜25 ms 増えた値は旧制御の実測である。現行は上限を自動で 160 ms へ広げず、A/V の予算は通常 50〜100 ms、音声だけは 50 ms にする。FEC の復旧待ちを入れる場合は、この予算で予約に間に合うかを波形、音声と映像の媒体遅延、同期ずれで再評価する
 
 ---
@@ -255,16 +257,16 @@ A/V の自動予算は到着の揺らぎと出力の先行量から通常 50〜1
 
 ### 8.1 リポジトリ内
 
-| 対象                   | 箇所                                                                                                                                                                  |
-| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 冗長化の実装 (送信)    | `src/createMediaPublisher.ts` の `sendAudioFrameFireAndForget`                                                                                                        |
-| 冗長化の実装 (受信)    | `src/createMediaSubscriber.ts` の `isDuplicateAudioObject`                                                                                                            |
-| 冗長度の解決と検証     | `src/createMedia/settings.ts` の `resolveAudioPublishSettings`、`src/codec/types.ts` の `AudioPublishOptions.redundancy`                                              |
-| 音声 Object の割り当て | `src/createMediaPublisher.ts` の `allocateAudioObject`                                                                                                                |
-| 遅延推定               | `PlayoutTimeline` の到着の揺らぎと出力時計からの予算                                                                                                                  |
-| 音声の実測記録         | `docs/AUDIO_PLAYOUT_LATENCY.md` (「パケロス対策: 音声 Object の 2 回送り」「まとめて落ちる経路 (バースト損失) と、2 個目を送る間隔」)、`docs/AUDIO_PLAYOUT_RESULT.md` |
-| 損失の注入 harness     | `tests/e2e/relay/investigation-audio-delay.spec.ts`                                                                                                                   |
-| MoQ 仕様               | `refs/moq/draft-ietf-moq-transport-22.txt` §5.1.1、§10.4、§14.1.2、`refs/moq/draft-ietf-moq-msf-01.txt` §5、`refs/moq/draft-ietf-moq-loc-04.txt` §4.1                 |
+| 対象                   | 箇所                                                                                                                                                                                                  |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 冗長化の実装 (送信)    | `src/createMediaPublisher.ts` の `sendAudioFrameFireAndForget`                                                                                                                                        |
+| 冗長化の実装 (受信)    | `src/createMediaSubscriber.ts` の `isDuplicateAudioObject`                                                                                                                                            |
+| 冗長度の解決と検証     | `src/createMedia/settings.ts` の `resolveAudioPublishSettings`、`src/codec/types.ts` の `AudioPublishOptions.redundancy`                                                                              |
+| 音声 Object の割り当て | `src/createMediaPublisher.ts` の `allocateAudioObject`                                                                                                                                                |
+| 遅延推定               | `PlayoutTimeline` の到着の揺らぎと出力時計からの予算                                                                                                                                                  |
+| 音声の実測記録         | `docs/archive/playout/AUDIO_PLAYOUT_LATENCY.md` (「パケロス対策: 音声 Object の 2 回送り」「まとめて落ちる経路 (バースト損失) と、2 個目を送る間隔」)、`docs/archive/playout/AUDIO_PLAYOUT_RESULT.md` |
+| 損失の注入 harness     | `tests/e2e/relay/investigation-audio-delay.spec.ts`                                                                                                                                                   |
+| MoQ 仕様               | `refs/moq/draft-ietf-moq-transport-22.txt` §5.1.1、§10.4、§14.1.2、`refs/moq/draft-ietf-moq-msf-01.txt` §5、`refs/moq/draft-ietf-moq-loc-04.txt` §4.1                                                 |
 
 ### 8.2 標準
 

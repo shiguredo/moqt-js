@@ -1,5 +1,8 @@
 # 音声 datagram の順序逆転の実測 (2026-10-26)
 
+過去の調査記録。本文の実装と「現行」は記録時点のもの。
+現在の説明は [音声と映像の再生](../../PLAYOUT.md)、記録の一覧は [調査記録](../README.md) を参照すること。
+
 2026-10-29 の更新案内: 以下は 2026-10-26 の到着順序の測定記録である。
 表の `jitterTargetMs`、`appliedMs`、上限 160 ms は当時の遅延制御の計器であり、現行には存在しない。
 現行の計器は [音声再生の現状](AUDIO_PLAYOUT_RESULT.md)、日本語と Datagram 欠落を使った
@@ -23,7 +26,7 @@
   1 Object = 1 Group なので、これは datagram でも subgroup でも Object の順序が保証され
   ないことを意味する (draft-ietf-moq-loc-04 §4.1)。datagram では加えて再送されない
   (RFC 9221)。音声の受信側は到着順に復号するため、順序逆転した Object は逆順に鳴る可能性がある
-  (`docs/AUDIO_PLAYOUT_GAPS_AND_TAIL.md`)。これまで実リレーでの発生は確認しておらず、
+  (`docs/archive/playout/AUDIO_PLAYOUT_GAPS_AND_TAIL.md`)。これまで実リレーでの発生は確認しておらず、
   計器も無かった
 - 実際にどのくらい起きるのか、起きたときに jitter buffer と再生 (穴・遅延・A/V 同期) が
   どう反応するのかを、注入した条件と自然な条件で比べる
@@ -160,7 +163,7 @@ MOQT_INVESTIGATION=1 MOQT_INVESTIGATION_SECONDS=60 MOQT_INVESTIGATION_REDUNDANCY
 - `devtools/src/utils/audioReceiveOrder.ts` の `AudioReceiveOrderTracker`
 - `devtools/src/hooks/useSubscriber.ts` の `observeAudioReceiveLocation`
 - `devtools/src/signals/statsSnapshot.ts` の `SubscriberAudioStats`
-- `docs/AUDIO_PLAYOUT_GAPS_AND_TAIL.md` (順序逆転と逆順再生の機序)
-- `docs/AUDIO_FEC.md` (冗長化と、遅れて届く復旧の遅延推定への影響)
+- `docs/archive/playout/AUDIO_PLAYOUT_GAPS_AND_TAIL.md` (順序逆転と逆順再生の機序)
+- `docs/proposals/AUDIO_FEC.md` (冗長化と、遅れて届く復旧の遅延推定への影響)
 - refs/moq/draft-ietf-moq-transport-22.txt §2.3.1 / §6.2 / §8.1 / §8.2 / §11.2.1 / §11.5.2
 - refs/moq/draft-ietf-moq-loc-04.txt §4.1

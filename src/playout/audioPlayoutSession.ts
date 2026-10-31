@@ -18,7 +18,7 @@
  * 鳴らさない、音声だけを購読している、再生の有効・無効、UI への反映) を持つ。
  *
  * 内部実装である (src/index.ts からは公開していない)。公開 API は再生の入口
- * (`MediaPlayout`) である。docs/HIGH_LEVEL_API.md の「内部実装」の「音声の再生の組み立て」を
+ * (`MediaPlayout`) である。docs/ARCHITECTURE.md の「音声の再生の組み立て」を
  * 参照。
  */
 
@@ -364,7 +364,7 @@ export class AudioPlayoutSession {
       // 測れる (メディア時刻は壁時計と対応しない)
       //
       // 後から届いた復旧の分を推定から除く案は、TIMESTAMP の古さでも位置の順序でも
-      // 改善しなかった (docs/AUDIO_PLAYOUT_LATENCY.md)
+      // 改善しなかった (docs/archive/playout/AUDIO_PLAYOUT_LATENCY.md)
       if (wallClockTimestamp !== null) {
         catchUpStarted = this.catchUp.observe({
           nowMs: arrivalMs,

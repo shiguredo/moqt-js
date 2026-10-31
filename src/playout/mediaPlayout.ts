@@ -14,7 +14,7 @@
  * すべてこの中で行う。
  *
  * 使い方 (作成・入力の記録・復号の出力の push・統計の読み方) と、停止や `AudioContext`
- * の作り直しの手順は docs/HIGH_LEVEL_API.md の「再生の入口 (MediaPlayout)」を参照。
+ * の作り直しの手順は docs/MEDIA_PLAYOUT.mdを参照。
  *
  * ブラウザ依存 (Web Audio、表示の出し先) は注入する (表示の周期は `requestAnimationFrame`
  * を使う)。ライブラリ
@@ -22,7 +22,7 @@
  * 再生の修正はこの 1 か所 (と配下の各モジュール) へ入れる。呼び出し側が持つのは、復号
  * (WebCodecs)・受信・購読の管理・画面への反映である。
  *
- * 公開 API である (src/index.ts)。docs/HIGH_LEVEL_API.md の「再生の入口 (MediaPlayout)」を
+ * 公開 API である (src/index.ts)。docs/MEDIA_PLAYOUT.mdを
  * 参照。
  */
 

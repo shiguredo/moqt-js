@@ -101,7 +101,7 @@ drain の完了を待つ非同期の処理になる。
 `flushedObjects` が flush した件数、`undecodedFlushedObjects` が復号されなかった件数である。
 `close()` とピア起点の close も drain するが、上限は 150 ms
 (`AUDIO_PLAYOUT_DRAIN_CLOSE_MAX_MS`) である。映像は drain の対象外であり、停止時に破棄する
-(詳細は `docs/AUDIO_PLAYOUT_GAPS_AND_TAIL.md` にある)。
+(詳細は `docs/archive/playout/AUDIO_PLAYOUT_GAPS_AND_TAIL.md` にある)。
 
 ## A/V 同期と受信側の追いつき
 

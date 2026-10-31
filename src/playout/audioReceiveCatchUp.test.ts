@@ -264,7 +264,7 @@ test("observe: 遅れが上限へ戻ったら追いつきをやめる", () => {
  * 変わらなかった (40 秒に 30〜31 回)。穴の直後を 60 秒間始めないようにすると作り直しは
  * 1 回になるが、遅れが 1458 ms まで育ち、鳴らした長さも 30 秒で 27835 ms へ落ちた。
  * 作り直しは、損失下でも live を保つ役目を果たしている (詳細は
- * `docs/AUDIO_PLAYOUT_LATENCY.md`)
+ * `docs/archive/playout/AUDIO_PLAYOUT_LATENCY.md`)
  */
 test("observe: 戻らない間はクールダウンごとに始め直す", () => {
   const catchUp = new AudioReceiveCatchUp();

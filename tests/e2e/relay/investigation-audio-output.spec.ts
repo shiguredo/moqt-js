@@ -21,7 +21,7 @@ import { DEVTOOLS_URL } from "../urls";
 // 測定の待ち時間 (1 テストあたり 60 秒以上) を CI へ持ち込まないため、
 // `MOQT_INVESTIGATION=1` のときだけ動かす。既定では skip する。
 //
-// 動かし方 (docs/AUDIO_PLAYOUT_LATENCY.md の方法と同じく、devtools とテストページの
+// 動かし方 (docs/archive/playout/AUDIO_PLAYOUT_LATENCY.md の方法と同じく、devtools とテストページの
 // webServer は playwright.config.ts が自動で起動する):
 //
 //   MOQT_INVESTIGATION=1 npx vp exec playwright test --project=relay \

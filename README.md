@@ -252,32 +252,13 @@ MSF-01 §5 は catalog の取得に Joining FETCH を MUST としているが、
 
 ## 再生 (playout)
 
-受信した音声と映像を、決められた時刻に鳴らす / 表示するまでの処理をライブラリが持ちます。経路の揺らぎで音が途切れる、音声と映像がずれる、といった問題への対処をアプリケーションごとに実装する必要はありません。
+受信した音声と映像の再生、到着の揺らぎへの対応、A/V 同期をライブラリが扱います。
+`createMediaSubscriber` は受信と復号も含めて組み立てます。復号を自分で扱う場合は、
+`createMediaPlayout` に AudioData / VideoFrame を渡します。
 
-### 仕組み
-
-- 表示時刻を決める
-  - LOC の TIMESTAMP と、トラックごとの「復号の出力の時刻 − TIMESTAMP」の直近 10 秒の最小値から、音声と映像の表示時刻を同じ式で決める (`src/playout/timeline.ts`)
-- 音声の待ちを、到着の揺らぎと実際の出力に必要な時間から決める
-  - 直近 2 秒の揺らぎと出力時計で測った先行量を使い、A/V の音声予算を通常 50〜100 ms、音声だけの再生は 50 ms にする。通信や復号を含めた実遅延の上限を保証する値ではない
-- 間に合わない音を捨てずに詰める
-  - 波形の周期性を使った時間圧縮 / 時間伸長 (NetEq の `time_stretch.cc` / `accelerate.cc` / `preemptive_expand.cc` の仕組みを採用) と、欠けた分の波形の繰り返しによる補間 (`src/playout/audioTimeStretch.ts`)
-- 映像は表示時刻を過ぎた最新のフレームを描く
-  - 表示待ちのキューが、時間軸の決めた表示時刻に合わせてフレームを選ぶ (`src/playout/buffer.ts` / `src/playout/videoPlayoutSession.ts`)
-- 映像を音声に合わせる
-  - 「表示時刻 − TIMESTAMP」の差を不感帯 5 ms で制御する。時計の基準の差は最大 100 ms まで補償し、既知のバッファ差と出力の残差は別に合わせる。基準を共有できる間は過去の待ちを保持せず、現在の必要量へ戻す
-- live から遅れたら復号器を作り直す
-  - 復号器に溜まった音は、鳴らす音を捨てても減らない。遅れが続いたら復号器を作り直して live へ戻す (`src/playout/audioReceiveCatchUp.ts`)
-- パケロスを配信側の冗長化で吸収する
-  - 同じ音声 Object を最大 3 回送り、受信側は同じ識別子 (`groupId` と `objectId`) の 2 回目以降を捨てる。同じ音が重なって鳴ることはない
-- 購読側の再生遅延を指定する
-  - `MediaSubscriberOptions.preDecodeDelayMs` で、受信した Object を復号前に時間で保持する。2 秒以上の遅延でも復号済みフレームを溜めず、受信バッファの上限も変えない (`src/playout/preDecodeDelay.ts`)。保持上限を超えた場合は古い Object を落として残りの期限を前倒しし、実際の遅延を短くする。詳細は [購読側の再生遅延](docs/PLAYOUT_DELAY.md)
-
-再生の入口は `createMediaPlayout(options)` (`src/playout/mediaPlayout.ts`) です。復号へ渡す直前に `trackAudioDecodeInput` / `trackVideoDecodeInput` で TIMESTAMP の種類と Object の位置を記録し、復号の出力を `pushAudio` / `pushVideo` へ渡すだけで、共有の時間軸、音声の予約、映像の表示、A/V 同期、計器がそろいます。
-
-`createMediaPublisher` と `createMediaSubscriber` が WebCodecs のエンコード / デコードまでを隠蔽するのに対し、`createMediaPlayout` は復号済みのフレームを受け取ります。`createMediaSubscriber` はこの入口を内部で使うため、高レベル API を使う場合は再生を自分で実装する必要はなく、受信と復号を自分で組み立てる場合もこの入口 1 つで完結します。詳細は [高レベル API](docs/HIGH_LEVEL_API.md) にあります。
-
-現状と既知の限界は [音声再生の現状](docs/AUDIO_PLAYOUT_RESULT.md)、レビュー後の修正と Chrome の再計測は [playout レビューへの対応](docs/PLAYOUT_REVIEW_FIXES.md) にまとめています。過去の比較と採用しなかった調整は [A/V 再生の低遅延化の計測](docs/AV_LOW_LATENCY_INVESTIGATION.md) にあります。長い欠落の内容は復元できず、常時 100 ms 未満と完全な無雑音を保証するものではありません。
+現在の経路、遅延の予算、欠落の補間と既知の制約は [音声と映像の再生](docs/PLAYOUT.md)、
+呼び出し手順と型は [再生 API](docs/MEDIA_PLAYOUT.md) を参照してください。
+数秒の意図した遅延を指定する場合は [購読側の再生遅延](docs/PLAYOUT_DELAY.md) を使います。
 
 ## インストール
 
@@ -405,20 +386,16 @@ await subscriber.unsubscribe();
 
 ## ドキュメント
 
-- [高レベル API](docs/HIGH_LEVEL_API.md): `createMediaPublisher` / `createMediaSubscriber` / `createMediaPlayout` と、A/V 同期と再生の入口 (MediaPlayout) の仕様
-- [低レベル API](docs/LOW_LEVEL_API.md): `connect()` と `Session` / `Publisher` / `Subscriber` / `Fetcher` の仕様
-- [MOQT Streaming Format](docs/MSF.md): Catalog / Timeline の公開 API
-- [A/V 同期と再生の決定と根拠](docs/AV_SYNC_DECISIONS.md): 値を決めた根拠と、再考する条件
-- [音声再生の現状](docs/AUDIO_PLAYOUT_RESULT.md): 現行の再生予算、統計の読み方、実測値と既知の限界
-- [A/V 再生の低遅延化の計測](docs/AV_LOW_LATENCY_INVESTIGATION.md): 日本語と Datagram 欠落を使った比較、採用しなかった調整と品質の交換条件
-- [playout レビューへの対応](docs/PLAYOUT_REVIEW_FIXES.md): 再生準備、復旧、出力切替、再同期後の深さの修正と Chrome / WebRTC の比較
-- [遅延制御アルゴリズムの比較](docs/PLAYOUT_DELAY_ALGORITHM_COMPARISON.md): ブラウザーの再生制御と NetEq の構造の比較
-- [DevTools の音声遅延](docs/DEVTOOLS_AUDIO_LATENCY.md): 出力機器の遅延と再生統計の読み方
-- [映像停止の調査](docs/VIDEO_FREEZE_INVESTIGATION.md): 重複 timestamp と復旧時の停止の切り分け
-- [音声再生品質の調査](docs/AUDIO_PLAYOUT_QUALITY_INVESTIGATION.md): PCM 波形、再生出力、WebRTC との比較の測定方法と結果
-- [ビルド](docs/BUILD.md): Node.js の要件、`vp install` と `vp run build`、git 依存として取り込む場合
-- [テスト](docs/TEST.md): 単体テストの実行方法
-- [E2E テスト](docs/E2E_TEST.md): Playwright による E2E テストの実行方法と、実リレーを使う条件
+[ドキュメント一覧](docs/README.md) から、利用、診断、開発の目的に応じて選べます。
+
+- [高レベル API](docs/HIGH_LEVEL_API.md): MediaStream の配信と視聴
+- [再生 API](docs/MEDIA_PLAYOUT.md): AudioData / VideoFrame の再生とライフサイクル
+- [低レベル API](docs/LOW_LEVEL_API.md): MOQT Object の送受信
+- [MOQT Streaming Format](docs/MSF.md): Catalog、Timeline、認可の入口
+- [音声と映像の再生](docs/PLAYOUT.md): 現在の予算、補間、A/V 同期と制約
+- [開発と検証](docs/DEVELOPMENT.md): ビルド、単体テスト、E2E、実リレーの設定
+- [調査記録](docs/archive/README.md): 測定時点の実装、比較と監査
+- [検討中の設計](docs/proposals/README.md): FEC と欠落回復の案
 
 ## 動作環境
 
@@ -432,14 +409,14 @@ await subscriber.unsubscribe();
 > Apple Safari 26.4 での動作確認を行っています。Safari 26.4 の WebTransport には単方向ストリームへの `write()` がフラッシュされない WebKit のバグがあり、Safari からの配信は動作しません (購読は動作します)。
 
 > [!NOTE]
-> Safari と Firefox は `MediaStreamTrackProcessor` をメインスレッドに公開していないため、音声の取り出しに Web Audio の `AudioWorklet` を使います。2 つの経路が要る理由は [高レベル API](docs/HIGH_LEVEL_API.md) にあります。
+> Safari と Firefox は `MediaStreamTrackProcessor` をメインスレッドに公開していないため、音声の取り出しに Web Audio の `AudioWorklet` を使います。2 つの経路の役割は [内部構成](docs/ARCHITECTURE.md#mediapublisher-内部構成) にあります。
 
 > [!NOTE]
 > `AudioWorklet` の経路は Safari 相当の WebKit でも動作を確認しています (`vp exec playwright test --project=webkit`)。
 
 ## サンプル
 
-[examples/](examples/) ディレクトリにサンプルコードがあります。
+[examples/](examples) ディレクトリにサンプルコードがあります。
 
 ```bash
 vp run dev:examples
@@ -451,7 +428,7 @@ vp run dev:examples
 
 ## DevTools
 
-[devtools/](devtools/) ディレクトリに開発ツールがあります。画面の文言は英語です。
+[devtools/](devtools) ディレクトリに開発ツールがあります。画面の文言は英語です。
 
 ```bash
 # 開発サーバーを起動する (http://localhost:5173/)
