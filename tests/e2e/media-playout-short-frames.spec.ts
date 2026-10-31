@@ -22,6 +22,8 @@ for (const frames of [120, 192, 240, 960]) {
           );
           const context = new AudioContext({ sampleRate: 48000 });
           const chunks: Float32Array[] = [];
+          const captureEnds: number[] = [];
+          const reservations: { timestamp: number; inputFrames: number; endSeconds: number }[] = [];
           let reservedEndSeconds = 0;
           let capturedUntil = 0;
           const url = URL.createObjectURL(
@@ -45,6 +47,7 @@ for (const frames of [120, 192, 240, 960]) {
             event: MessageEvent<{ samples: Float32Array; endFrame: number }>,
           ) => {
             chunks.push(event.data.samples);
+            captureEnds.push(event.data.endFrame);
             capturedUntil = event.data.endFrame;
           };
           const mute = context.createGain();
@@ -68,6 +71,12 @@ for (const frames of [120, 192, 240, 960]) {
               lastRenderEndSeconds: number;
             };
             reservedEndSeconds = session.lastRenderEndSeconds;
+            // 伸縮後の開始は入力長から推定せず、入力時刻と実際に予約した終端を残す。
+            reservations.push({
+              timestamp,
+              inputFrames: count,
+              endSeconds: reservedEndSeconds,
+            });
             data.close();
           };
           try {
@@ -103,7 +112,10 @@ for (const frames of [120, 192, 240, 960]) {
             push(timestamp + (frames / 48000) * 1000000, frames);
             // 停止中に積んだ制御の受理を確認してから、実際の時計を再開する。
             await playout.prepareAudio();
+            const suspendedTime = context.currentTime;
             await context.resume();
+            // resume の解決だけでは出力時計の再始動を保証しない。実際の描画を確認する。
+            await waitFor(() => context.currentTime > suspendedTime, 2000, "出力時計の再始動");
             const drain = await playout.drainAudio();
             const endAtDrain = context.currentTime;
             // 実出力と MessagePort の配送が検査位置を越えるまで待ち、固定 sleep で推測しない。
@@ -115,17 +127,31 @@ for (const frames of [120, 192, 240, 960]) {
             let maximumStep = 0;
             let peak = 0;
             let targetActiveSamples = 0;
+            const steps: { frame: number; previous: number; sample: number }[] = [];
+            let chunkIndex = 0;
             for (const chunk of chunks) {
+              let offset = 0;
               for (const sample of chunk) {
+                if (Math.abs(sample - previous) >= 0.006 && steps.length < 8) {
+                  steps.push({
+                    frame: (captureEnds[chunkIndex] ?? 0) - chunk.length + offset,
+                    previous,
+                    sample,
+                  });
+                }
+                offset++;
                 maximumStep = Math.max(maximumStep, Math.abs(sample - previous));
                 peak = Math.max(peak, Math.abs(sample));
                 // 準備音とその PLC は振幅 0.1 なので、検査対象の短い実音だけを数える。
                 if (sample > 0.2) targetActiveSamples++;
                 previous = sample;
               }
+              chunkIndex++;
             }
             return {
               statuses,
+              reservations,
+              steps,
               maximumStep,
               peak,
               targetActiveSamples,
@@ -152,9 +178,12 @@ for (const frames of [120, 192, 240, 960]) {
         result.statuses.every((status) => status === "played"),
         "全入力を再生すること",
       );
+      // drain は上限で打ち切る契約であり、出力時計が止まった間は未描画分を cut として返す。
+      // 打ち切り自体を誤検出せず、未描画分を再生済みと報告する退行は 1 サンプルの誤差で防ぐ。
       assert.ok(
-        result.endAtDrain >= result.reservedEndSeconds,
-        "実音の予約終端を描画する前に drain を完了しないこと",
+        result.drain.cutMs + 1000 / 48000 >=
+          Math.max(0, result.reservedEndSeconds - result.endAtDrain) * 1000,
+        `予約の描画前に完了する場合は切った量を報告すること: ${JSON.stringify(result)}`,
       );
       assert.ok(
         result.peak > 0.299 && result.targetActiveSamples >= frames,

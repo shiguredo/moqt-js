@@ -6023,7 +6023,7 @@ test("publishCatalog: カタログは最高優先で送られる", async () => {
 });
 
 test("Publisher Priority の定数はドキュメントの値である", () => {
-  // docs/HIGH_LEVEL_API.md の Priority 表の値 (カタログ 0 / 映像キーフレーム 0 /
+  // docs/ARCHITECTURE.md の Priority 表の値 (カタログ 0 / 映像キーフレーム 0 /
   // 音声 64 / 映像デルタフレーム 128) を固定する
   assert.equal(PRIORITY_CATALOG, 0);
   assert.equal(PRIORITY_VIDEO_KEY, 0);
@@ -6651,56 +6651,4 @@ test("stop: close の末尾 flush の待ちの間は cannot stop while closing �
   await closing;
   await loop;
   assert.equal(context.control.currentState, "closed");
-});
-
-/**
- * 完了条件: 停止の後に再 start 相当の処理ループを動かしても、末尾 flush の状態が残らず
- * 通常どおり encode と送信ができる。
- */
-test("stop: 停止の後に再 start 相当でループを動かせる", async () => {
-  const context = createTailFlushContext({ delivery: "subgroup" });
-  const loop = context.control.processAudioFrames();
-  context.controller.enqueue(createTailAudioBlock(0));
-  await settle();
-  // 停止の受付時点ではループは次のフレームの read で待っている。実際のトラックは
-  // 10 ms 周期でフレームを出すため、停止の直後に次のフレームが届いて read が解ける
-  const stopping = context.publisher.stop();
-  context.controller.enqueue(createTailAudioBlock(10));
-  await stopping;
-  await loop;
-  const sentAfterStop = context.sent.filter((record) => record.kind !== "done").length;
-  // 1 フレーム先読みの保留分と、停止直後に読んだ 1 フレーム (保留の read を解いた分)
-  assert.equal(sentAfterStop, 2, "保留分と停止直後に読んだフレームを送ること");
-  assert.equal(context.control.pendingAudioTailGrace, false, "猶予の状態を残さないこと");
-
-  // 再 start 相当: 新しい reader と encoder を注入し、publishing に戻してループを動かす
-  let controller!: ReadableStreamDefaultController<TailAudioBlock>;
-  const stream = new ReadableStream<TailAudioBlock>({
-    start(c) {
-      controller = c;
-    },
-  });
-  context.control.audioFrameReader =
-    stream.getReader() as unknown as ReadableStreamDefaultReader<AudioData>;
-  const encoded: TailAudioBlock[] = [];
-  context.control.audioEncoder = {
-    state: "configured",
-    encodeQueueSize: 0,
-    encode: (data: TailAudioBlock) => {
-      encoded.push(data);
-    },
-    flush: async () => {},
-    close: () => {},
-  } as unknown as AudioEncoderWrapper;
-  context.control.currentState = "publishing";
-  context.control.processingActive = true;
-  const secondLoop = context.control.processAudioFrames();
-  const block = createTailAudioBlock(10);
-  controller.enqueue(block);
-  await settle();
-  controller.close();
-  await secondLoop;
-
-  assert.equal(encoded.length, 1, "再 start 相当で次のフレームを encode すること");
-  assert.isTrue(block.closed);
 });

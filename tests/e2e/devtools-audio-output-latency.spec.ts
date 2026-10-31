@@ -1,5 +1,5 @@
 /// <reference types="node" />
-import { test } from "@playwright/test";
+import { expect, test } from "@playwright/test";
 import assert from "node:assert/strict";
 import { DEVTOOLS_URL } from "./urls";
 
@@ -51,7 +51,10 @@ test("実出力先の切り替えに失敗したら再生を無効にして Cont
 
 test("音声再生の出力時計を直接出力より余分に先行させない", async ({ page }) => {
   await page.goto(DEVTOOLS_URL);
-  await page.getByTestId("subscriber-audio-playback-toggle").click();
+  const toggle = page.getByTestId("subscriber-audio-playback-toggle");
+  await toggle.click();
+  // click の完了と非同期の再生開始は別である。開始の確定前に Context を列挙しない。
+  await expect(toggle).toHaveAttribute("aria-pressed", "true");
   const session = await page.context().newCDPSession(page);
   try {
     // 実アプリが作った Context をブラウザ本体から列挙する。生成や時計の API は置き換えない。

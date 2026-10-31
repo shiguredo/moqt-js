@@ -55,7 +55,9 @@ function resolveBuildLabel(): string {
 }
 
 const config: UserConfig = {
-  plugins: [...preact(), ...tailwindcss()],
+  // UI の更新コードを SDK の AudioWorklet へ注入しない。Worklet には Vite client が
+  // 要求する URL などの Window / Worker 用 API がなく、プロセッサー登録前に失敗する。
+  plugins: [...preact({ include: [resolve(__dirname, "src/**/*.{ts,tsx}")] }), ...tailwindcss()],
   base: "/",
   // Playwright E2E テストから dev サーバーへ安定してアクセスするためポートを固定する
   server: {
