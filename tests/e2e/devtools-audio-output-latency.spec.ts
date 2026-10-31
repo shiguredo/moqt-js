@@ -74,7 +74,17 @@ test("音声再生の出力時計を直接出力より余分に先行させな�
       functionDeclaration: async function measureAudioOutput(this: AudioContext[]) {
         const running = this.filter((context) => context.state === "running");
         const application = running[0];
-        if (application === undefined) throw new Error("Running audio output is unavailable");
+        if (application === undefined) {
+          throw new Error(
+            `再生中の音声出力を取得できない: ${JSON.stringify(
+              this.map((context) => ({
+                state: context.state,
+                currentTime: context.currentTime,
+                sampleRate: context.sampleRate,
+              })),
+            )}`,
+          );
+        }
         // 同じブラウザ・同じ機器の直接出力を対照にし、機器固有の遅延を失敗扱いしない。
         const direct = new AudioContext({ sampleRate: 48000, latencyHint: "interactive" });
         const source = direct.createConstantSource();
@@ -94,6 +104,9 @@ test("音声再生の出力時計を直接出力より余分に先行させな�
               [application, applicationLeads],
               [direct, directLeads],
             ] as const) {
+              if (context.state !== "running") {
+                throw new Error(`計測中に音声出力が停止した: ${context.state}`);
+              }
               const mapping = context.getOutputTimestamp();
               const contextTime = mapping.contextTime ?? 0;
               const performanceTime = mapping.performanceTime ?? 0;

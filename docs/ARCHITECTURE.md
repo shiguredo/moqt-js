@@ -70,6 +70,10 @@ MediaSubscriber と DevTools は `MediaPlayout` を共通の入口として使�
 実音は Web Audio の標準レート変換を通し、出力側の AudioWorklet で未着と復帰を接続する。
 補間のために到着側で続き音を毎フレーム生成する旧経路は持たない。
 
+DevTools の出力機器は `AudioContext.sinkId` と比較し、変更があるときだけ `setSinkId` で
+選択する。生成時点で選ばれている既定出力もそのまま使い、機器の一覧が変わったときの
+ブラウザーの既定出力への追従を保つ。
+
 ### 映像の表示の組み立て (VideoPlayoutSession)
 
 時間軸で決めた表示時刻を PlayoutBuffer へ渡し、出力と pacing の設定に従って選ぶ。

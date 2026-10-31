@@ -36,10 +36,17 @@ export function toAudioOutputDevices(
  */
 export async function applyAudioOutputSink(context: AudioContext, deviceId: string): Promise<void> {
   // Web Audio API 1.1 の追加機能は DOM の型定義にまだ無いため、実ブラウザで存在を調べる。
-  const output = context as AudioContext & { setSinkId?: (id: string) => Promise<void> };
+  const output = context as AudioContext & {
+    readonly sinkId?: string | { readonly type: string };
+    setSinkId?: (id: string) => Promise<void>;
+  };
   if (typeof output.setSinkId !== "function") {
     if (deviceId !== "") throw new Error("AudioContext output device selection is unavailable");
     return;
   }
+  // 生成時点の既定出力も含め、選択済みの機器へは切り替え直さない。
+  // Chrome は setSinkId 後に明示選択として扱うため、機器一覧が空の環境では
+  // 同じ既定出力の再指定だけでも devicechange 後に再生を停止する。
+  if (context.state !== "closed" && output.sinkId === deviceId) return;
   await output.setSinkId(deviceId);
 }
