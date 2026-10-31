@@ -643,6 +643,7 @@ export async function live(caseName) {
           }
         : {}),
     });
+    await playout.prepareAudio?.();
     let decoded = null;
     if (caseName.startsWith("datagram")) {
       const [, name, pattern, copies] = caseName.split("|");

@@ -203,9 +203,9 @@ export interface AudioPlayoutTimingSnapshot {
    * 時間圧縮と補間を使えないサンプルレートで鳴らした音の数 (累積)
    *
    * フィルタの表 (8 / 16 / 32 / 48 kHz) と解析信号の変換 (44.1 kHz) のどちらにも
-   * 対応しないレート (96 kHz など) では、時間圧縮も補間も働かない。落ちずに
-   * 「操作しない」を返すので、この数が増えていることで気付く
-   * (`src/playout/audioTimeStretch.ts` の `isTimeStretchAvailable`)。0 なら使えている
+   * 対応しない復号レート (96 kHz など) では、時間圧縮を適用しない。
+   * 補間はレート変換後の出力側で別に判断するため、この値だけで補間の可否は決めない
+   * (`src/playout/audioTimeStretch.ts` の `isTimeStretchAvailable`)
    */
   readonly stretchUnavailableFrames: number;
   /**
@@ -214,8 +214,8 @@ export interface AudioPlayoutTimingSnapshot {
    * `AudioBufferSourceNode` はバッファのレートが AudioContext のレートと違うとき、
    * バッファごとにリサンプルする。一定値の OfflineAudioContext では、公称より長く
    * 鳴る末尾と次の先頭が重なり、振幅 2 倍 (+6 dB) のスパイクを再現した。
-   * 実出力のクリックの有無は別に波形で検査する必要がある。`boundaryStepCount` は
-   * 予約したサンプル列の段差しか見ず、実際のリサンプル後の重なりは数えない。
+   * この重なりは旧予約経路の観測である。現行出力の `boundaryStepCount` は変換後の
+   * 切り替え位置を測るが、クリックの有無は収録波形でも検査する必要がある。
    *
    * 鳴らす前の 2 つのレートを比べた回数であり、重なりそのものを観測した数ではない
    * 0 なら AudioContext と復号フレームのレートは一致している
@@ -226,44 +226,30 @@ export interface AudioPlayoutTimingSnapshot {
   /** 直近の復号フレームのサンプルレート (Hz)。まだ記録していなければ null */
   readonly decodedSampleRate: number | null;
   /**
-   * 穴として残した回数 (累積)
+   * 出力側の補間で埋まらなかった区間の回数 (累積)
    *
-   * 前の音の終わりと今回の音の開始の間の隙間から、実際に補間で埋めた長さを引いた残りを
-   * 1 回として数える。予約できる最も早い時刻より前だった分 (アンダーランと余裕不足)、
-   * 補間が失敗した分、補間の上限 (100 ms) を超えた分を含む。補間の生成長は半サンプル以内で
-   * 丸められるため、その範囲の差は補間で埋まったものとして数えない。購読の開始からの累積で
-   * あり、波形を収録して数えた無音の区間 (収録区間だけ) とは範囲が違うため一致しない
+   * AudioWorklet が実際に描画した区間を非同期に通知する。初期の無音は含まないが、
+   * DTX、配信の終了後や長い途絶は区別せず含む。発話中の音切れの回数とは異なる。
+   * 旧予約経路の比較計測では、予約の隙間から補間長を引いた値を記録する
    */
   readonly gapCount: number;
-  /**
-   * 穴として残した長さの合計 (ミリ秒、累積)
-   *
-   * 「補間で埋まらなかった長さ」である。補間バッファ内のフェード区間も生成長に含める。
-   * 出力の gain フェード自体で補間の長さを追加することはない。
-   * 補間を予約したときに生成する長さの丸め (半サンプル以内) は穴として数えない。秒単位の
-   * 長い途絶 (配信の停止、
-   * 経路の断) も 1 回の穴として含む。購読の開始からの累積であり、波形を収録して数えた無音
-   * (収録区間だけ) とは範囲が違うため一致しない。クリックは 0 の長さではなく境界の段差で
-   * 決まるため、`boundaryStepCount` / `boundaryStepMax` と併せて読む
-   */
+  /** 出力側の補間で埋まらなかった長さ (ミリ秒、累積)。発話中の無音とは範囲が異なる */
   readonly gapMs: number;
-  /** 穴として残した 1 回の最大 (ミリ秒。記録期間中の最大であり、最初の音より前の無音は含まない) */
+  /** 未補間の連続区間の最大 (ミリ秒)。継続中の区間も通知のたびに更新する */
   readonly gapMaxMs: number;
   /**
-   * 予約できる最も早い時刻より前だった無音の回数 (累積)
-   *
-   * `gapCount` のうち、前の音の終わりが「今 + 余裕」より前だったために補間バッファを
-   * 置けなかった回数である。既に過去の分だけでなく、今より未来でも余裕に満たない分も含む。
-   * 事後には埋められなかった量を観測する。再生予算は到着の揺らぎと出力時計から別に求める
+   * 未補間区間の回数 (累積)。現行の出力側補間では gapCount と同じである。
+   * 旧予約経路の比較計測では、先行予約できなかった区間だけを数える。
+   * 過去の計測との互換のため残す。再生予算を増やす入力には使わない
    */
   readonly unrecoverableGapCount: number;
-  /** 予約できなかった無音の合計 (ミリ秒、累積)。`gapMs` に含まれる */
+  /** 未補間の長さ (ミリ秒、累積)。現行出力では gapMs と同じ。旧予約計測ではその部分集合 */
   readonly unrecoverableGapMs: number;
   /**
    * 予約した時刻を `AudioContext.currentTime` が追い越した回数 (累積)
    *
    * `source.start(when)` の直前に読んだ `currentTime` が `when` を過ぎていた回数である。
-   * 追い越し (および余裕 3 ms 未満) のときは開始時刻を `currentTime + 3 ms` へ押し直して
+   * 追い越し (および余裕 2 ms 未満) のときは開始時刻を `currentTime + 2 ms` へ押し直して
    * 先頭をフェードインするため、重なりは起きない。0 より大きいことは、予約の処理の間に
    * メインスレッドが遅れた証拠として読む (重なりそのものはこの計器では分からない)
    */
@@ -275,14 +261,10 @@ export interface AudioPlayoutTimingSnapshot {
   /** 押し直した最大の長さ (ミリ秒。記録期間中の最大) */
   readonly pushStartMaxMs: number;
   /**
-   * バッファ境界の段差が `AUDIO_PLAYOUT_BOUNDARY_STEP_THRESHOLD` を超えた回数 (累積)
+   * 出力の切り替え位置の段差がしきい値を超えた回数 (累積)
    *
-   * 予約サンプルの境界の段差 (直前のバッファの末尾と次のバッファの先頭の差) を求め、
-   * しきい値を超えた回数を数える。無音の穴の前後と、media 時刻が飛んだ境界 (損失・復号器の
-   * 作り直し) のほか、通常の音の切れ目も含む。しきい値は 440 Hz のトーンの正常な 1 階差分
-   * から決めた絶対値であり、実音声では正常な段差がこれを超えることがある。
-   * 取り消さなかった末尾のフェードは終端を 0 として反映するが、gain の包絡全体や
-   * ブラウザのリサンプル後の出力を実測する計器ではない。クリックの有無は波形で検証する
+   * 現行出力ではレート変換後の実 PCM を測る。フェード全体や発話の音質を評価する
+   * 値ではなく、正常な音声でも超えることがある。旧予約経路では予約サンプルの推定値
    */
   readonly boundaryStepCount: number;
   /** バッファ境界の段差の最大 (サンプル振幅単位。記録期間中の最大) */
@@ -643,6 +625,25 @@ export class AudioPlayoutTimingStats {
       this.unrecoverableGapCount += 1;
       this.unrecoverableGapMs += unrecoverableMs;
     }
+  }
+
+  /** 出力済みの未補間区間を反映する。到着時点の予約空白では判定しない。 */
+  recordRenderedGap(milliseconds: number, count: number, maximumMs = 0): void {
+    if (!Number.isFinite(maximumMs) || maximumMs < 0) return;
+    if (!Number.isFinite(milliseconds) || milliseconds < 0 || !Number.isInteger(count) || count < 0)
+      return;
+    this.gapMs += Math.max(0, milliseconds);
+    this.gapCount += Math.max(0, count);
+    this.gapMaxMs = Math.max(this.gapMaxMs, maximumMs);
+    this.unrecoverableGapMs += Math.max(0, milliseconds);
+    this.unrecoverableGapCount += Math.max(0, count);
+  }
+
+  /** 描画済みの境界だけを計上し、予約 PCM の差を実出力の差として扱わない。 */
+  recordRenderedBoundary(maximum: number, count: number): void {
+    if (!Number.isFinite(maximum) || maximum < 0 || !Number.isInteger(count) || count < 0) return;
+    this.boundaryStepMax = Math.max(this.boundaryStepMax, maximum);
+    this.boundaryStepCount += count;
   }
 
   /**

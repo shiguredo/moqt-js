@@ -43,6 +43,7 @@ test("映像との同期から音声だけへ移っても予約順序と出力�
       },
       video: { output: video.output },
     });
+    await playout.prepareAudio();
     const starts: number[] = [];
     const durations: number[] = [];
     const statuses: string[] = [];

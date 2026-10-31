@@ -6,6 +6,7 @@
 
 import { connectMediaSession, type MediaConnectSettings } from "./createMedia/connect";
 import { supportsDynamicGroups } from "./properties";
+import { resumeAudioOutput } from "./playout/audioOutputRenderer";
 import {
   CatalogSubscription,
   type CatalogSubscriptionState,
@@ -1162,7 +1163,14 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       this.extractTrackInfo();
 
       // 出力 MediaStream を作成
-      this.createOutputStream();
+      try {
+        await this.createOutputStream();
+      } catch (error) {
+        // 出力の準備中に解放が先行した場合は、初期化エラーとして通知しない。
+        this.assertStartNotDisposed(startGeneration);
+        throw error;
+      }
+      this.assertStartNotDisposed(startGeneration);
 
       // デコーダーを設定
       await this.setupDecoders(startGeneration);
@@ -1923,7 +1931,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       : resolveAudioContextSampleRate(codec, catalogSampleRate);
   }
 
-  private createOutputStream(): void {
+  private async createOutputStream(): Promise<void> {
     this.outputStream = new MediaStream();
 
     // Audio 出力の設定
@@ -1938,15 +1946,8 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       // 放置すると未処理の rejection になるため onError へ 1 回流す。
       // 通知の失敗でもこの経路を reject させない (返値の Promise を捨てるため、
       // reject を残すと未処理の rejection になる)
-      if (context.state === "suspended") {
-        void context.resume().catch((error: unknown) => {
-          try {
-            this.callbacks.onError?.(error instanceof Error ? error : new Error(String(error)));
-          } catch {
-            // 通知の失敗を伝える経路がこれ以上無い
-          }
-        });
-      }
+      if (context.state === "suspended")
+        resumeAudioOutput(context, (error) => this.callbacks.onError?.(error));
       const output = this.createAudioOutput(context);
       // AudioContext と出力先は 1 つの組として持ち、入口へも同じ組を渡す
       this.audioOutput = output;
@@ -1960,6 +1961,8 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       // 対応表も捨てるため、前の Context で観測した遅れを次の購読へ引きずらない。停止の
       // 解放が失敗して start をやり直す場合も、前の購読の状態が残っていればここで捨てられる
       this.playout.resetPlayout();
+      // 最初の媒体を購読する前に、出力側の欠落補間を準備する。
+      await this.playout.prepareAudio();
       // 復号器はこのあとの setupDecoders が作り直す。前の復号器へ渡したまま出力が
       // 来なかった音の対応を残さない (この明示的な discardPendingAudioDecodes で投入順の
       // 対応もクリアする)

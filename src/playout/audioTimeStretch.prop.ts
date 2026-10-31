@@ -1,5 +1,5 @@
 import { assert, test } from "vite-plus/test";
-import * as fc from "fast-check";
+import { fc } from "@fast-check/vitest";
 import {
   compressSamples,
   concealSamples,
@@ -9,6 +9,50 @@ import {
 
 /** 48 kHz、20 ms のフレームのサンプル数 */
 const FRAME_SAMPLES = 960;
+
+// 中央をまたぐ音量変化を、先に受信済みの一定振幅の区間へ圧縮位置を移して保つ。
+// 位相・音量・発声位置を変え、音量の小さい第 2 チャンネルも同時に検証する。
+test("時間圧縮は音量が強まる区間を保ち、長さやフレームの端を変えない", () => {
+  fc.assert(
+    fc.property(
+      fc.constantFrom(8000, 16000, 32000, 48000),
+      fc.integer({ min: 55, max: 70 }),
+      fc.integer({ min: 0, max: 99 }),
+      fc.integer({ min: 10, max: 40 }),
+      (sampleRate, attackPercent, phase, amplitudePercent) => {
+        const period = sampleRate / 200;
+        const length = sampleRate / 50;
+        const attack = Math.round((length * attackPercent) / 100);
+        const samples = Float32Array.from({ length }, (_, index) => {
+          const amplitude = (amplitudePercent / 100) * (index < attack ? 1 : 1.2);
+          return amplitude * Math.sin(2 * Math.PI * (index / period + phase / 100));
+        });
+        const quiet = samples.map((sample) => sample / 10);
+        const original = [samples.slice(), quiet.slice()];
+        const result = compressSamples([samples, quiet], sampleRate, period);
+        assert.equal(result.lengthChangeSamples, -period, "同じ 1 周期だけ削ること");
+        for (const [index, channel] of result.channels.entries()) {
+          const input = original[index];
+          assert.isDefined(input);
+          if (input === undefined) return;
+          assert.equal(channel.length, length - period);
+          assert.equal(channel[0], input[0], "隣接フレームへ繋がる先頭を保つこと");
+          assert.equal(channel.at(-1), input.at(-1), "隣接フレームへ繋がる末尾を保つこと");
+          const error = channel
+            .subarray(attack - period)
+            .reduce(
+              (maximum, value, offset) =>
+                Math.max(maximum, Math.abs(value - (input[attack + offset] ?? 0))),
+              0,
+            );
+          assert.isBelow(error, 1e-7, "強まりを弱い音との混合で潰さないこと");
+        }
+        assert.deepEqual([samples, quiet], original, "入力を変更しないこと");
+      },
+    ),
+    { numRuns: 100 },
+  );
+});
 
 /**
  * 基本周波数 `frequencyHz` の有声 (倍音を 1 / 次数で重ねた周期波) のフレーム

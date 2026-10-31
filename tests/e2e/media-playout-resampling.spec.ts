@@ -33,6 +33,11 @@ for (const [contextRate, decodedRate] of [
             const session = new AudioPlayoutSession({
               timing: new AudioPlayoutTimingStats(10000, performance.timeOrigin),
             }) as unknown as {
+              prepareOutput(output: {
+                context: BaseAudioContext;
+                destination: AudioNode;
+              }): Promise<void>;
+              copyChannels(data: AudioData): Float32Array[];
               playSound(
                 output: { context: OfflineAudioContext; destination: AudioNode },
                 decision: Extract<
@@ -40,11 +45,10 @@ for (const [contextRate, decodedRate] of [
                   { kind: "play" }
                 >,
                 data: AudioData,
-                channels: number,
-                rate: number,
-                frames: number,
+                channels: Float32Array[],
               ): { playedSeconds: number; startAtSeconds: number };
             };
+            await session.prepareOutput({ context, destination: context.destination });
             const firstStart = 0.12 + fractionalStart / contextRate;
             let startAt = firstStart;
             let timestamp = 0;
@@ -74,9 +78,7 @@ for (const [contextRate, decodedRate] of [
                     unrecoverableGapSeconds: 0,
                   },
                   data,
-                  1,
-                  decodedRate,
-                  frames,
+                  session.copyChannels(data),
                 );
                 startAt = played.startAtSeconds + played.playedSeconds;
                 timestamp += (frames / decodedRate) * 1000000;
@@ -84,6 +86,8 @@ for (const [contextRate, decodedRate] of [
                 data.close();
               }
             }
+            // 実時間より速い描画の前に、予約が出力側へ届いたことを確認する。
+            await session.prepareOutput({ context, destination: context.destination });
             const buffer = await context.startRendering();
             // 開始と途絶の正当なフェードを除き、連続する 99 境界を含めて検査する。
             const samples = buffer
@@ -98,6 +102,9 @@ for (const [contextRate, decodedRate] of [
               minimum: Math.min(...samples),
               maximum: Math.max(...samples),
               anomalousSamples: samples.filter((sample) => Math.abs(sample - 0.25) > 0.001).length,
+              firstAnomalies: [...samples.entries()]
+                .filter(([, sample]) => Math.abs(sample - 0.25) > 0.001)
+                .slice(0, 8),
               endSeconds: startAt,
             });
           }
@@ -111,7 +118,10 @@ for (const [contextRate, decodedRate] of [
       });
       for (const metrics of result) {
         assert.ok(metrics.activeSamples > contextRate * 1.5, "有効な音を 1.5 秒以上収録すること");
-        assert.ok(metrics.minimum > 0.249, "境界に無音の穴を作らないこと");
+        assert.ok(
+          metrics.minimum > 0.249,
+          `境界に無音の穴を作らないこと: ${JSON.stringify(metrics)}`,
+        );
         assert.ok(
           metrics.maximum < 0.251,
           `境界で振幅を加算しないこと: ${JSON.stringify(metrics)}`,

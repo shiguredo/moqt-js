@@ -87,3 +87,7 @@ interface VideoFrameCallbackMetadata {
   receiveTime?: DOMHighResTimeStamp;
   rtpTimestamp?: number;
 }
+declare module "*?worker&url" {
+  const url: string;
+  export default url;
+}

@@ -104,6 +104,7 @@ const pushRateMismatchFramesInBrowser = async ({
     const playout = createMediaPlayout({
       audio: { context: audio.context, destination: audio.destination },
     });
+    await playout.prepareAudio();
     // 復号の出力と同じ形 (48 kHz / 20 ms / f32) の実 AudioData を 3 つ作って鳴らす。
     // TIMESTAMP は 20 ms ずつ進め、時刻の種類は none (時間軸を使わない) にする
     const baseTimestampMicros = harness.wallClockNowMicros();

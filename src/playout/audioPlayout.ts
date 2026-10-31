@@ -599,6 +599,9 @@ export class AudioPlayoutScheduler {
   /**
    * 実際に補間した長さを記録する (呼び出し側が補間を予約した後に呼ぶ)
    *
+   * 旧来の到着時予約を再現する比較計測用。現行の出力はこの確認経路を使わず、
+   * recordRenderedConcealment に AudioWorklet が実際に描画した量を渡す。
+   *
    * 要求した長さより長い分は要求までに切り、0 のときは数えない (相関が足りない、
    * 上限を超えた、予約できない場合に数えないため)
    *
@@ -616,6 +619,13 @@ export class AudioPlayoutScheduler {
     }
     this.concealCount += 1;
     this.concealedSeconds += applied;
+  }
+
+  /** 出力側が実際に補間した量と、補間を始めた回数を反映する。 */
+  recordRenderedConcealment(seconds: number, count: number): void {
+    if (!Number.isFinite(seconds) || seconds < 0 || !Number.isInteger(count) || count < 0) return;
+    this.concealedSeconds += Math.max(0, seconds);
+    this.concealCount += Math.max(0, count);
   }
 
   /** サンプルへの丸めと開始の押し直しを含む、実際のバッファの終わりを確定する。 */

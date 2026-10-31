@@ -400,6 +400,9 @@ export function createAudioPlaybackController(
       if (started === null) {
         return;
       }
+      const playout = deps.mediaPlayoutRef.current;
+      playout?.resetAudioPlayback();
+      await playout?.prepareAudio({ context: started.context, destination: started.destination });
       // await の間に停止が始まるか、停止の後に新しい開始が始まることがある。開始に使った
       // audio graph が今も対象かと停止中かで、今の再生として確定するかを決める。確定しない
       // ときは自分が作った Context だけを閉じる (停止の drain の
@@ -417,7 +420,6 @@ export function createAudioPlaybackController(
           });
           // 開始の経路は再生が無効なときだけ通るため、AudioContext は必ず作り直している。
           // 予約の基準と累積の表示の起点を取り直す
-          deps.mediaPlayoutRef.current?.resetAudioPlayback();
           deps.restartAudioPlayoutCumulative();
           enabled.value = true;
           deps.playAudioEnabled.value = true;

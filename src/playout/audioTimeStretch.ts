@@ -2,14 +2,14 @@
  * 復号した音声を、波形の周期性を使って時間圧縮・補間する
  *
  * NetEq (`modules/audio_coding/neteq/time_stretch.cc` と `accelerate.cc`) の時間圧縮を
- * 移植したものである。遅れて届いた音を捨てると音が途切れるため、届いた音を目標の時刻に
+ * 参考にしたものである。遅れて届いた音を捨てると音が途切れるため、届いた音を目標の時刻に
  * 間に合わせるために、音の長さをわずかに詰める (時間圧縮) ために使う。
  *
  * NetEq の時間伸長 (`preemptive_expand.cc`) は移植していない。この再生は音を伸ばす場面を
  * 持たないためである (目標より早く届いた音は、前の音の終わりより後ろに置けばよく、足りない
  * 区間は補間 (`concealSamples`) が埋める)。
  *
- * 規則 (NetEq と同じ):
+ * 規則 (周期の解析とクロスフェードは NetEq を参考にする):
  *
  * - 音声の 1 つのチャンネル (第 1 チャンネル) を 4 kHz へ間引き、その自己相関から
  *   最も強いピーク (ピッチの周期) を探す。ピークの位置が、波形が 1 周期前と一致する
@@ -22,8 +22,9 @@
  *   より大きいときだけ操作する。波形が繰り返していない場所で切ると、耳につく
  * - 操作は切れ目の前後 `ピッチ周期` サンプルをクロスフェードして繋ぐ。時間圧縮は
  *   ピッチ周期 1 つ分を削る
- * - 操作する位置は音の中央にする (NetEq は 30 ms の入力の 15 ms の位置 = 中央で行う。
- *   ここへ渡す音は Opus の 1 フレーム = 20 ms であるため、中央は 10 ms になる)
+ * - 削る周期は中央で検証する。その長さを保ったまま、クロスフェードで波形を打ち消す量が
+ *   中央より小さい位置を探す。全チャンネルで悪化せず、その位置でも相関が十分な場合だけ
+ *   移す (この位置の選択は NetEq の移植ではない)
  * - 欠落した区間の補間 (`concealSamples`) は末尾の周期を求め、その周期を繰り返す。周期は
  *   4 kHz へ間引いた信号で粗く探し、その周辺を元のサンプルレートの相関で評価して端数まで
  *   求める (4 kHz の格子では 48 kHz で 12 サンプル単位に量子化され、格子に乗らない音で
@@ -417,6 +418,76 @@ function pitchPeriodOf(
   return pitch;
 }
 
+/** クロスフェードする 2 区間の一致度と、混ぜることで失われるエネルギー */
+function compressionSpliceScore(channel: AudioSamples, start: number, period: number) {
+  let loss = 0;
+  let dot = 0;
+  let beforeEnergy = 0;
+  let afterEnergy = 0;
+  let peak = 0;
+  for (let index = 0; index < period; index++) {
+    const before = channel[start + index] ?? 0;
+    const after = channel[start + period + index] ?? 0;
+    const weight = (index + 1) / (period + 1);
+    const difference = before - after;
+    // 線形混合のエネルギーは、元の重み付きエネルギーより w(1-w)(a-b)^2 だけ小さい。
+    // 絶対量を比べることで、声の強まりを潰す位置より一致した弱い音の位置を優先する。
+    loss += weight * (1 - weight) * difference * difference;
+    dot += before * after;
+    beforeEnergy += before * before;
+    afterEnergy += after * after;
+    peak = Math.max(peak, Math.abs(before), Math.abs(after));
+  }
+  const denominator = Math.sqrt(beforeEnergy * afterEnergy);
+  return {
+    loss,
+    correlated: denominator > 0 && dot >= TIME_STRETCH_CORRELATION_THRESHOLD * denominator,
+    silent: 20 * Math.log10(Math.max(peak, 1e-10)) < TIME_STRETCH_SILENCE_DBFS,
+  };
+}
+
+/** 削る時間を保ち、中央より波形を打ち消さない切断位置を選ぶ。追加の入力は待たない。 */
+function compressionSplice(channels: readonly AudioSamples[], period: number, center: number) {
+  const length = channels[0]?.length ?? 0;
+  // 先頭と末尾は隣接フレームへ繋がるため、移動先ではどちらも原音を 1 サンプル以上残す。
+  const first = 1;
+  const last = length - 2 * period - 1;
+  const originalStart = center - period;
+  if (first > originalStart || last < originalStart) return center;
+  const baseline = channels.map((channel) =>
+    compressionSpliceScore(channel, originalStart, period),
+  );
+  let bestLoss = baseline.reduce((sum, score) => sum + score.loss, 0);
+  let bestStart = originalStart;
+  // 全サンプルを候補にすると長いフレームで処理量が増える。中央と左右 4 点ずつに制限し、
+  // 最大 9 周期分の比較で済ませる。同点や丸め誤差程度の差では中央を保つ。
+  for (let step = 1; step <= 4; step++) {
+    for (const start of [
+      Math.round(originalStart - ((originalStart - first) * step) / 4),
+      Math.round(originalStart + ((last - originalStart) * step) / 4),
+    ]) {
+      if (start === originalStart) continue;
+      let loss = 0;
+      let eligible = true;
+      for (const [index, channel] of channels.entries()) {
+        const score = compressionSpliceScore(channel, start, period);
+        // 大きいチャンネルの改善で、静かなチャンネルの劣化を隠さない。
+        // 全体の周期が正しくても、移動先の短い区間が逆相なら混ぜない。
+        if (score.loss > (baseline[index]?.loss ?? 0) || (!score.silent && !score.correlated)) {
+          eligible = false;
+          break;
+        }
+        loss += score.loss;
+      }
+      if (eligible && bestLoss - loss > Math.max(1e-18, bestLoss * 1e-6)) {
+        bestLoss = loss;
+        bestStart = start;
+      }
+    }
+  }
+  return bestStart + period;
+}
+
 /**
  * 音声を時間圧縮する (ピッチ周期 1 つ分を削る)
  *
@@ -440,9 +511,9 @@ export function compressSamples(
   if (length === 0) {
     return { channels: [...channels], lengthChangeSamples: 0 };
   }
-  // 操作する位置は音の中央 (NetEq は 30 ms の入力の 15 ms で行う)
-  const splice = length >> 1;
-  const pitch = pitchPeriodOf(channels, sampleRate, splice);
+  // 圧縮の可否と削る周期は従来どおり中央で決める。位置の選択で遅延制御を変えない。
+  const center = length >> 1;
+  const pitch = pitchPeriodOf(channels, sampleRate, center);
   if (pitch === null) {
     return { channels: [...channels], lengthChangeSamples: 0 };
   }
@@ -451,6 +522,7 @@ export function compressSamples(
     // 遅れより長い周期しか無い。削ると行き過ぎるため、この音では詰めない
     return { channels: [...channels], lengthChangeSamples: 0 };
   }
+  const splice = compressionSplice(channels, removed, center);
   const output: AudioSamples[] = [];
   for (const channel of channels) {
     const compressed = new Float32Array(length - removed);

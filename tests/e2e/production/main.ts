@@ -14,7 +14,7 @@
  * モックやスタブは使わない。Worker は本物の DedicatedWorker、応答は worker 自身が
  * 実装するプロトコル ({type: "init"} に対する "configured" / "error") を使う。
  */
-import { createMediaPublisher, version, type MediaPublisher } from "moqt-js";
+import { createMediaPublisher, createMediaPlayout, version, type MediaPublisher } from "moqt-js";
 
 /**
  * worker プローブの応答
@@ -273,10 +273,63 @@ async function stopPublisher(id: string): Promise<void> {
   }
 }
 
+/** 配布物の AudioWorklet を実 Context に読み込み、PCM の出力まで確認する。 */
+async function probeAudioOutput(sampleRate: number): Promise<{ played: number; peak: number }> {
+  const context = new AudioContext({ sampleRate, latencyHint: "interactive" });
+  let peak = 0;
+  const url = URL.createObjectURL(
+    new Blob(
+      [
+        `class Capture extends AudioWorkletProcessor { process(inputs){this.port.postMessage(inputs[0][0]?.slice()??new Float32Array(128));return true;} } registerProcessor('production-audio-capture',Capture);`,
+      ],
+      { type: "text/javascript" },
+    ),
+  );
+  const playout = createMediaPlayout({ audio: { context, destination: context.destination } });
+  try {
+    await context.audioWorklet.addModule(url);
+    const capture = new AudioWorkletNode(context, "production-audio-capture");
+    capture.port.onmessage = (event: MessageEvent<Float32Array>) => {
+      for (const value of event.data) peak = Math.max(peak, Math.abs(value));
+    };
+    capture.connect(context.destination);
+    playout.setAudioOutput({ context, destination: capture });
+    await context.resume();
+    await playout.prepareAudio();
+    for (let index = 0; index < 5; index++) {
+      const data = new AudioData({
+        format: "f32",
+        sampleRate: 48000,
+        numberOfFrames: 960,
+        numberOfChannels: 1,
+        timestamp: index * 20000,
+        data: new Float32Array(960).fill(0.2),
+      });
+      try {
+        playout.trackAudioDecodeInput(data.timestamp, { timestampKind: "mediaTime" });
+        const result = playout.pushAudio(data);
+        if (result.status === "error") throw result.error;
+      } finally {
+        data.close();
+      }
+    }
+    await playout.drainAudio();
+    await new Promise((resolve) => {
+      setTimeout(resolve, 30);
+    });
+    return { played: playout.getStats().audio?.timing.playedFrames ?? 0, peak };
+  } finally {
+    playout.setAudioOutput(null);
+    await context.close();
+    URL.revokeObjectURL(url);
+  }
+}
+
 /** Playwright へ公開するテスト API */
 export interface ProductionPageApi {
   /** 読み込んだ moqt-js の版 (dist から来る) */
   moqtVersion: string;
+  probeAudioOutput(sampleRate: number): Promise<{ played: number; peak: number }>;
   probeWorkerModule(url: string, config: unknown): Promise<WorkerProbeResult>;
   startPublisher(options: { url: string; namespace: string[] }): Promise<string>;
   getPublisherState(id: string): PublisherProbeResult;
@@ -285,6 +338,7 @@ export interface ProductionPageApi {
 
 window.__moqtProduction = {
   moqtVersion: version,
+  probeAudioOutput,
   probeWorkerModule,
   startPublisher,
   getPublisherState,

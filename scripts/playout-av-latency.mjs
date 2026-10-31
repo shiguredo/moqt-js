@@ -129,6 +129,7 @@ export async function measure(
       });
     }
     await context.resume();
+    for (const state of states) await state.playout.prepareAudio?.();
     const deadline = performance.now() + 2000;
     while (context.getOutputTimestamp().performanceTime <= 0) {
       if (performance.now() >= deadline)

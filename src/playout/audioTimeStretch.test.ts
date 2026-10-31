@@ -227,6 +227,53 @@ test("compressSamples: 周期的な音はピッチ周期 1 つ分だけ短くな
   assert.isAtMost(maxStep(compressed), maxStep(frame) * 1.2, "波形が飛ばないこと");
 });
 
+test("compressSamples: 発声の強まりを避けて同じ周期を削る", () => {
+  // 中央のクロスフェードは、後半で強まる音を前半の弱い音と混ぜて潰す。
+  // 前半には完全に同じ周期が続くため、そこで削れば強まりをそのまま残せる。
+  const attack = 600;
+  const frame = Float32Array.from({ length: FRAME_SAMPLES }, (_, index) => {
+    const amplitude = index < attack ? 0.3 : 0.36;
+    return amplitude * Math.sin((2 * Math.PI * index) / 240);
+  });
+  const original = frame.slice();
+  const result = compressSamples([frame], SAMPLE_RATE, 240);
+  assert.equal(result.lengthChangeSamples, -240, "削る時間を増減しないこと");
+  const output = result.channels[0];
+  assert.isDefined(output);
+  if (output === undefined) return;
+  assert.deepEqual(frame, original, "入力を変更しないこと");
+  const maximumError = output
+    .subarray(attack - 240)
+    .reduce(
+      (maximum, sample, index) =>
+        Math.max(maximum, Math.abs(sample - (frame[attack + index] ?? 0))),
+      0,
+    );
+  assert.isBelow(maximumError, 1e-7, "既に受信した音の強まりを潰さないこと");
+  assert.equal(output[0], frame[0], "フレームの先頭を変更しないこと");
+  assert.equal(output.at(-1), frame.at(-1), "フレームの末尾を変更しないこと");
+});
+
+test("compressSamples: 大きいチャンネルの改善のために小さいチャンネルを潰さない", () => {
+  // 左の後半の強まりを避けると、右の前半の強まりへクロスフェードが移る。
+  // 右を 40 dB 小さくしても、それを犠牲にした位置を選んではならない。
+  const left = Float32Array.from(
+    { length: FRAME_SAMPLES },
+    (_, index) => (index < 600 ? 0.3 : 0.36) * Math.sin((2 * Math.PI * index) / 240),
+  );
+  const right = Float32Array.from(
+    { length: FRAME_SAMPLES },
+    (_, index) => (index < 200 ? 0.003 : 0.0036) * Math.sin((2 * Math.PI * index) / 240),
+  );
+  const result = compressSamples([left, right], SAMPLE_RATE, 240);
+  assert.equal(result.lengthChangeSamples, -240, "圧縮量を変えないこと");
+  assert.deepEqual(
+    result.channels[1]?.subarray(0, 240),
+    right.subarray(0, 240),
+    "右の強まりを中央の切断より悪化させないこと",
+  );
+});
+
 // 波形が繰り返していない音 (相関が足りない音) では操作しない。切ると耳につくためである
 test("compressSamples: 相関が足りない音は操作しない", () => {
   const frame = noiseFrame(7);

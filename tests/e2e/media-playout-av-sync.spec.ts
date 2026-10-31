@@ -37,6 +37,7 @@ test("実際の音声再生経路と canvas の表示を同期し、音声の停
         maxQueuedFrames: 24,
         decodeInputs: { maxTracked: 24, forgetOnDuplicate: true },
       });
+      await playout.prepareAudio();
       const skews: number[] = [];
       let played = 0;
       let dropped = 0;
@@ -142,6 +143,7 @@ test("実際の音声再生経路と canvas の表示を同期し、音声の停
             // 取り直す (この順でないと、旧 Context の秒で残った予約の基準が混ざる)
             playout.setAudioOutput({ context: audio.context, destination: audio.destination });
             playout.resetAudioPlayback();
+            await playout.prepareAudio();
           }
         }
         skews.sort((left, right) => left - right);
@@ -216,6 +218,7 @@ test.describe("実 VideoFrame の表示経路", () => {
               video: { output: videoOutput.output },
               jitterBuffer,
             });
+            await playout.prepareAudio();
             /** 表示が現れるまで期限付きで待つ (表示周期は requestAnimationFrame) */
             const waitForPresentations = (count: number) =>
               harness.waitUntil(() => videoOutput.presentations().length >= count, 3_000);
@@ -288,6 +291,7 @@ test.describe("実 VideoFrame の表示経路", () => {
         )) as typeof import("../../src/index");
         const harness = (await import(harnessUrl)) as typeof import("./playoutBrowserHarness");
         const playout = createMediaPlayout({ audio: {} });
+        await playout.prepareAudio();
         const frame = harness.createI420Frame(harness.wallClockNowMicros());
         const decision = playout.pushVideo(frame);
         const stats = playout.getStats();
@@ -451,6 +455,7 @@ test.describe("実 VideoFrame の表示経路", () => {
               pacing: { drainImmediately: false, framesPerDrain: 1 },
             },
           });
+          await playout.prepareAudio();
           const now = harness.wallClockNowMicros();
           // 2 枚をまとめて (表示周期が来る前に) 積む。1 枚目で基準が決まり、2 枚目は
           // 20 ms 先の表示時刻になるため、表示周期が来るまで表示待ちに残る
@@ -510,6 +515,7 @@ test.describe("実 VideoFrame の表示経路", () => {
             pacing: { drainImmediately: false, framesPerDrain: 1 },
           },
         });
+        await playout.prepareAudio();
         const now = harness.wallClockNowMicros();
         // 表示周期が来る前にまとめて積む。1 枚目で基準が決まり、2 枚目以降は 20 ms ずつ
         // 先の表示時刻になるため、表示待ちに積まれたままになる
@@ -564,6 +570,7 @@ test("出し先が throw した実フレームは表示の実績に記録しな�
         audio: { context: audio.context, destination: audio.destination },
         video: { output: videoOutput.output },
       });
+      await playout.prepareAudio();
       /** 壁時計の音を 1 つ鳴らし、音声の表示の実績を作る */
       const playAudio = () => {
         const timestamp = harness.wallClockNowMicros();

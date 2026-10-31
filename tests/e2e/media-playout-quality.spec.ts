@@ -18,6 +18,7 @@ test("明示した 500 ms の A/V 目標は実 AudioContext の時計へ換算�
       audio: { context: audio.context, destination: audio.destination },
       video: { output: video.output },
     });
+    await playout.prepareAudio();
     try {
       await harness.waitFor(
         () => audio.context.getOutputTimestamp().performanceTime > 0,
@@ -90,15 +91,19 @@ for (const missingMediaMicros of [8, 20000]) {
           timing: new AudioPlayoutTimingStats(10000, performance.timeOrigin),
         }) as unknown as {
           playout: import("../../src/playout/audioPlayout").AudioPlayoutScheduler;
+          prepareOutput(output: {
+            context: BaseAudioContext;
+            destination: AudioNode;
+          }): Promise<void>;
+          copyChannels(data: AudioData): Float32Array[];
           playSound(
             output: { context: AudioContext; destination: AudioNode },
             decision: import("../../src/playout/audioPlayout").AudioPlayoutDecision,
             data: AudioData,
-            channels: number,
-            rate: number,
-            frames: number,
+            channels: Float32Array[],
           ): unknown;
         };
+        await session.prepareOutput({ context, destination: tap });
         try {
           const now = context.currentTime;
           const gaps: number[] = [];
@@ -126,7 +131,12 @@ for (const missingMediaMicros of [8, 20000]) {
               timestamp,
               data: new Float32Array(960).fill(index === 0 ? 0.3 : -0.3),
             });
-            session.playSound({ context, destination: tap }, decision, data, 1, 48000, 960);
+            session.playSound(
+              { context, destination: tap },
+              decision,
+              data,
+              session.copyChannels(data),
+            );
             data.close();
           }
           await context.resume();
@@ -169,7 +179,7 @@ for (const missingMediaMicros of [8, 20000]) {
 for (const timestampKind of ["mediaTime", "wallClock"] as const) {
   test(`Datagram 相当の周期的な媒体欠落で音声の再生遅延を増やさない: ${timestampKind}`, async ({
     page,
-  }) => {
+  }, testInfo) => {
     await openPlayoutPage(page);
     const result = await evaluatePlayout(
       page,
@@ -180,12 +190,14 @@ for (const timestampKind of ["mediaTime", "wallClock"] as const) {
         const playout = createMediaPlayout({
           audio: { context: output.context, destination: output.destination },
         });
+        await playout.prepareAudio();
         try {
           await harness.waitFor(
             () => output.context.getOutputTimestamp().performanceTime > 0,
             2000,
             "出力時計の準備",
           );
+          const clocks: object[] = [];
           const origin = performance.now() + 30;
           const epoch =
             timestampKind === "wallClock"
@@ -203,10 +215,20 @@ for (const timestampKind of ["mediaTime", "wallClock"] as const) {
             });
             const data = harness.createAudioData(epoch + index * 20000, { data: samples });
             playout.trackAudioDecodeInput(data.timestamp, { timestampKind });
+            const clock = output.context.getOutputTimestamp();
+            const now = performance.now();
             playout.pushAudio(data);
+            if (index < 20)
+              clocks.push({
+                index,
+                now,
+                contextTime: output.context.currentTime,
+                clock,
+                planned: playout.getStats().audio?.timing.lastStartMs,
+              });
             data.close();
           }
-          return playout.getStats().audio;
+          return { ...playout.getStats().audio, clocks };
         } finally {
           playout.clearAll();
           await harness.closeSilentAudioOutput(output);
@@ -214,13 +236,20 @@ for (const timestampKind of ["mediaTime", "wallClock"] as const) {
       },
       { timestampKind },
     );
+    await testInfo.attach("arrival-clocks.json", {
+      body: JSON.stringify(result),
+      contentType: "application/json",
+    });
     // 欠落後の error / drop を少数の正常予約の統計で隠してはならない。
     assert.equal(result.timing.playedFrames, 135, "欠落させなかった全音声を再生すること");
     assert.equal(result.timing.missedFrames, 0, "受信済みの音声を失わないこと");
-    assert.ok(result.timing.gapMs > 0, "復元できない媒体の欠落も計器には残すこと");
+    // 元の音声は届いていないが、事前に用意した補間が出力の空白を埋める。
+    // 受信済み 135 フレームと合成した長さを分け、欠落が無かったことにはしない。
+    assert.ok(result.concealedMs > 0, "未着区間を埋めた長さを計器に残すこと");
+    assert.equal(result.timing.gapMs, 0, "周期のない音でも未着区間に無音を残さないこと");
     assert.ok(
       (result.timing.startDelayMs?.p95 ?? Infinity) < 65,
-      "正常到着の音を 65 ms 以内に再生すること",
+      `正常到着の音を 65 ms 以内に再生すること: ${JSON.stringify(result.timing.startDelayMs)}`,
     );
     assert.ok(
       result.delay.targetMs <= 50,
@@ -238,6 +267,7 @@ test("周期のない子音に 1 ms の隙間が空いても無音と周期フ�
     const playout = createMediaPlayout({
       audio: { context: output.context, destination: output.destination },
     });
+    await playout.prepareAudio();
     try {
       await output.context.suspend();
       for (const timestamp of [0, 21000]) {
@@ -251,6 +281,14 @@ test("周期のない子音に 1 ms の隙間が空いても無音と周期フ�
         playout.pushAudio(data);
         data.close();
       }
+      const draining = playout.drainAudio();
+      await output.context.resume();
+      await draining;
+      await harness.waitFor(
+        () => (playout.getStats().audio?.concealedMs ?? 0) > 0.9,
+        2000,
+        "出力済みの補間の通知",
+      );
       return playout.getStats().audio;
     } finally {
       playout.clearAll();
@@ -290,6 +328,7 @@ test("購読者の実音声出力で所有権、入力時刻、停止時の drai
     const destination = context.createMediaStreamDestination();
     control.audioOutput = { context, destination };
     control.playout.setAudioOutput(control.audioOutput);
+    await control.playout.prepareAudio();
     control.currentState = "active";
     const timestamp = Math.round((performance.timeOrigin + performance.now()) * 1000);
     const deliverFrame = (frameTimestamp: number, timestampKind: "wallClock" | "mediaTime") => {
@@ -309,6 +348,7 @@ test("購読者の実音声出力で所有権、入力時刻、停止時の drai
     const skippedWallClosedFrames = deliverFrame(timestamp - 20000, "wallClock");
     const seenAfterSkippedWall = control.audioWallClockSeen;
     control.playout.setAudioOutput(control.audioOutput);
+    await control.playout.prepareAudio();
     const data = new AudioData({
       format: "f32-planar",
       sampleRate: 48000,
@@ -329,6 +369,7 @@ test("購読者の実音声出力で所有権、入力時刻、停止時の drai
     const skippedMediaClosedFrames = deliverFrame(timestamp + 20000, "mediaTime");
     const seenAfterSkippedMedia = control.audioWallClockSeen;
     control.playout.setAudioOutput(control.audioOutput);
+    await control.playout.prepareAudio();
     deliverFrame(timestamp + 40000, "mediaTime");
     const seenAfterPlayedMedia = control.audioWallClockSeen;
     await subscriber.stop();
@@ -423,6 +464,7 @@ for (const { frames, gapMicros } of [
         mute.gain.value = 0;
         tap.connect(mute).connect(context.destination);
         const playout = createMediaPlayout({ audio: { context, destination: tap } });
+        await playout.prepareAudio();
         try {
           await context.resume();
           let status = "";
@@ -509,15 +551,16 @@ test("圧縮した音の直後に欠落しても補間の材料が不足しな�
     const timing = new AudioPlayoutTimingStats(10000, performance.timeOrigin);
     const session = new AudioPlayoutSession({ timing }) as unknown as {
       playout: import("../../src/playout/audioPlayout").AudioPlayoutScheduler;
+      prepareOutput(output: { context: BaseAudioContext; destination: AudioNode }): Promise<void>;
+      copyChannels(data: AudioData): Float32Array[];
       playSound(
         output: { context: AudioContext; destination: AudioNode },
         decision: import("../../src/playout/audioPlayout").AudioPlayoutDecision,
         data: AudioData,
-        channels: number,
-        rate: number,
-        frames: number,
+        channels: Float32Array[],
       ): unknown;
     };
+    await session.prepareOutput(output);
     try {
       await output.context.suspend();
       // 予約の時刻は実クラスへ明示して固定する。performance.now() と停止中の
@@ -541,7 +584,7 @@ test("圧縮した音の直後に欠落しても補間の材料が不足しな�
           presentationDelaySeconds: 0.05,
         });
         if (decision.kind !== "play") throw new Error("Expected a play decision");
-        session.playSound(output, decision, data, 1, 48000, 960);
+        session.playSound(output, decision, data, session.copyChannels(data));
         data.close();
       }
       await output.context.resume();

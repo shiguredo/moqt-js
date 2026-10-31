@@ -730,6 +730,15 @@ export class MediaPlayout {
   }
 
   /**
+   * 最初の音から欠落補間を使うため、pushAudio の前に出力側の初期化を待つ。
+   * 実 AudioContext は resume の後に呼ぶと、起動時の実出力時計も確認する。
+   * output を渡す場合は準備だけを行い、鳴らす先の付け替えは setAudioOutput で行う。
+   */
+  async prepareAudio(output: AudioPlayoutOutput | null = this.audioOutput): Promise<void> {
+    if (output !== null) await this.audio?.session.prepareOutput(output);
+  }
+
+  /**
    * 表示の遅れの目標を変える
    *
    * 購読の途中で catalog の `targetLatency` が変わったときに呼ぶ。

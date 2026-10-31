@@ -40,6 +40,7 @@ for (const frames of [120, 192, 240, 960]) {
           mute.gain.value = 0;
           tap.connect(mute).connect(context.destination);
           const playout = createMediaPlayout({ audio: { context, destination: tap } });
+          await playout.prepareAudio();
           const statuses: string[] = [];
           const push = (timestamp: number, count: number, amplitude = 0.3) => {
             const data = new AudioData({
@@ -85,6 +86,8 @@ for (const frames of [120, 192, 240, 960]) {
             }
             push(timestamp, frames);
             push(timestamp + (frames / 48000) * 1000000, frames);
+            // 停止中に積んだ制御の受理を確認してから、実際の時計を再開する。
+            await playout.prepareAudio();
             await context.resume();
             await playout.drainAudio();
             await new Promise<void>((resolve) => {

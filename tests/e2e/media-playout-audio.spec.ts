@@ -31,6 +31,7 @@ test("実 Web Audio で音声の入口、TIMESTAMP の種類、統計を検証�
         // 1. 鳴らす先が無い入口では鳴らさず、計器へも記録しない。復号の入力の記録も無いため
         //    種類は none になる。AudioData は入口が閉じない (所有権は呼び出し側に残る)。
         const silentPlayout = createMediaPlayout({ audio: {} });
+        await silentPlayout.prepareAudio();
         const silentData = harness.createAudioData(harness.wallClockNowMicros());
         const skipped = silentPlayout.pushAudio(silentData);
         const skippedStatus = skipped.status;
@@ -51,6 +52,7 @@ test("実 Web Audio で音声の入口、TIMESTAMP の種類、統計を検証�
           const playout = createMediaPlayout({
             audio: { context: audio.context, destination: audio.destination },
           });
+          await playout.prepareAudio();
           const data = harness.createAudioData(harness.wallClockNowMicros());
           playout.trackAudioDecodeInput(data.timestamp, { timestampKind });
           const decision = playout.pushAudio(data);
@@ -66,6 +68,7 @@ test("実 Web Audio で音声の入口、TIMESTAMP の種類、統計を検証�
         const fractionalPlayout = createMediaPlayout({
           audio: { context: audio.context, destination: audio.destination },
         });
+        await fractionalPlayout.prepareAudio();
         const fractionalData = harness.createAudioData(harness.wallClockNowMicros(), {
           sampleRate: 44_100,
         });
@@ -93,6 +96,7 @@ test("実 Web Audio で音声の入口、TIMESTAMP の種類、統計を検証�
             },
           },
         });
+        await unoutputPlayout.prepareAudio();
         const unoutputData = harness.createAudioData(harness.wallClockNowMicros());
         unoutputPlayout.trackAudioDecodeInput(unoutputData.timestamp, {
           timestampKind: "wallClock",
@@ -109,6 +113,7 @@ test("実 Web Audio で音声の入口、TIMESTAMP の種類、統計を検証�
         const videoOnlyPlayout = createMediaPlayout({
           video: { output: harness.createCanvasVideoOutput().output },
         });
+        await videoOnlyPlayout.prepareAudio();
         const videoOnlyData = harness.createAudioData(harness.wallClockNowMicros());
         const videoOnlyDecision = videoOnlyPlayout.pushAudio(videoOnlyData);
         const videoOnlyStatus = videoOnlyDecision.status;
@@ -195,6 +200,7 @@ test("実 Web Audio で音の選別、コールバックの失敗、記録の補
           audio: { context: audio.context, destination: audio.destination },
           video: { output: harness.createCanvasVideoOutput().output },
         });
+        await avPlayout.prepareAudio();
         const avData = harness.createAudioData(harness.wallClockNowMicros());
         avPlayout.trackAudioDecodeInput(avData.timestamp, { timestampKind: "wallClock" });
         const avDecision = avPlayout.pushAudio(avData);
@@ -224,6 +230,7 @@ test("実 Web Audio で音の選別、コールバックの失敗、記録の補
             },
           },
         });
+        await selectingPlayout.prepareAudio();
         const selectingData = harness.createAudioData(harness.wallClockNowMicros());
         selectingPlayout.trackAudioDecodeInput(selectingData.timestamp, {
           timestampKind: "wallClock",
@@ -264,6 +271,7 @@ test("実 Web Audio で音の選別、コールバックの失敗、記録の補
             },
           },
         });
+        await fallbackPlayout.prepareAudio();
         const fallbackBaseData = harness.createAudioData(harness.wallClockNowMicros());
         const fallbackBaseTimestamp = fallbackBaseData.timestamp;
         fallbackPlayout.trackAudioDecodeInput(fallbackBaseTimestamp, {
@@ -290,6 +298,7 @@ test("実 Web Audio で音の選別、コールバックの失敗、記録の補
             },
           },
         });
+        await throwingAdmitPlayout.prepareAudio();
         const throwingAdmitData = harness.createAudioData(harness.wallClockNowMicros());
         throwingAdmitPlayout.trackAudioDecodeInput(throwingAdmitData.timestamp, {
           timestampKind: "wallClock",
@@ -316,6 +325,7 @@ test("実 Web Audio で音の選別、コールバックの失敗、記録の補
           },
           video: { output: harness.createCanvasVideoOutput().output },
         });
+        await throwingCounterpartPlayout.prepareAudio();
         const throwingCounterpartData = harness.createAudioData(harness.wallClockNowMicros());
         throwingCounterpartPlayout.trackAudioDecodeInput(throwingCounterpartData.timestamp, {
           timestampKind: "wallClock",
@@ -333,7 +343,7 @@ test("実 Web Audio で音の選別、コールバックの失敗、記録の補
         //    なり、音声だけの下限 (50 ms) を足す。300 ms 古い壁時計の音を 1 つ渡し、
         //    基準の選択を計器で区別する。呼ばれた回数も数える (push ごとに 1 回)。
         /** 300 ms 古い壁時計の音を 1 つ渡して、その結果を返す */
-        const pushOldAudio = (hasCounterpart: () => boolean) => {
+        const pushOldAudio = async (hasCounterpart: () => boolean) => {
           let counterpartCalls = 0;
           const playout = createMediaPlayout({
             audio: {
@@ -346,6 +356,7 @@ test("実 Web Audio で音の選別、コールバックの失敗、記録の補
             },
             video: { output: harness.createCanvasVideoOutput().output },
           });
+          await playout.prepareAudio();
           const timestamp = harness.wallClockNowMicros(-300);
           const data = harness.createAudioData(timestamp);
           try {
@@ -362,8 +373,8 @@ test("実 Web Audio で音の選別、コールバックの失敗、記録の補
             data.close();
           }
         };
-        const withoutCounterpart = pushOldAudio(() => false);
-        const withCounterpart = pushOldAudio(() => true);
+        const withoutCounterpart = await pushOldAudio(() => false);
+        const withCounterpart = await pushOldAudio(() => true);
 
         return {
           avDecisionStatus: avDecision.status,
@@ -461,6 +472,7 @@ test("実 Web Audio で復号へ渡した入力の対応の許容を検証する
             },
           },
         });
+        await playout.prepareAudio();
 
         // 1. 記録した TIMESTAMP から音 1 つの半分 (10 ms) 以内の出力は、その記録と対応する。
         //    出力は 5 ms だけ後ろにずらす (実ブラウザの復号の出力と同じ程度のずれ)。
@@ -540,6 +552,7 @@ test("setIntentionalDelayMs が受信側の追いつきの判定を変える", a
         const playout = createMediaPlayout({
           audio: { context: audio.context, destination: audio.destination },
         });
+        await playout.prepareAudio();
         playout.setIntentionalDelayMs(intentionalDelayMs);
         // 1. 20 ms 前の壁時計の音を 1 つ通して、健全時の遅れ (床) を作る
         const warmupTimestamp = harness.wallClockNowMicros(-20);
@@ -628,6 +641,7 @@ test("実 Web Audio で壊れた音の入力、停止と時計の再開を検証
         audio: { context: audio.context, destination: audio.destination },
         video: { output: videoOutput.output },
       });
+      await playback.prepareAudio();
 
       try {
         // 1. 壁時計の観測を 1 つ作り、時間軸の遅延の内訳に観測値が入った状態にする。
@@ -785,6 +799,7 @@ for (const gapCase of GAP_CASES) {
             audio: { context: audio.context, destination: audio.destination },
             jitterBuffer,
           });
+          await playout.prepareAudio();
           // 音の TIMESTAMP。none は decoder へ 0 を渡す経路と同じく 0 のままにする。
           const firstTimestamp = timestampKind === "wallClock" ? harness.wallClockNowMicros() : 0;
           /** 復号の入力の記録を作り、復号の出力として渡す */
@@ -863,7 +878,7 @@ for (const gapCase of GAP_CASES) {
 
 // Context の実際の一時停止を使って、予約中に時計が進まない条件を作る。
 // AudioBuffer へのコピー、補間、フェードと計器への配線を同時に通す。
-test("実バッファの補間、通常の境界、並べすぎと停止の記録を検証する", async ({ page }) => {
+test("未再生の補間を計上せず、並べすぎと停止の記録を検証する", async ({ page }) => {
   await test.step("テストページを開く", () => openPlayoutPage(page));
 
   const result = await test.step("Context を止めたまま実バッファへ予約し、結果を集める", () =>
@@ -874,6 +889,7 @@ test("実バッファの補間、通常の境界、並べすぎと停止の記�
       const playout = createMediaPlayout({
         audio: { context: audio.context, destination: audio.destination },
       });
+      await playout.prepareAudio();
       const play = (timestamp: number, sampleRate = 48_000) => {
         const data = harness.createAudioData(timestamp, {
           sampleRate,
@@ -937,11 +953,11 @@ test("実バッファの補間、通常の境界、並べすぎと停止の記�
     expect(result.continuous).toBe("played");
     expect(result.gap).toBe("played");
     expect(result.normalBoundary).toBe(0);
-    expect(result.concealed).toBeCloseTo(0.02, 5);
+    expect(result.concealed).toBe(0);
     expect(result.gapCount).toBe(0);
-    // 補間全体の緩い減衰による 1 サンプル分の差だけを許す。継ぎ目の段差は作らない。
+    // Context を停止したままなので、準備した量を出力済みの補間として計上しない。
     expect(result.fadedBoundary).toBeLessThan(0.0001);
-    expect(result.afterResetConcealed).toBeCloseTo(0.04, 5);
+    expect(result.afterResetConcealed).toBe(0);
     expect(result.statuses).toContain("dropped");
     expect(result.backlog).toBeGreaterThan(0);
     expect(result.stopped).toBeGreaterThan(0);
@@ -970,6 +986,7 @@ for (const sampleRate of [44_100, 48_000]) {
             audio: { context: audio.context, destination: audio.destination },
             video: { output: videoOutput.output },
           });
+          await playout.prepareAudio();
           try {
             // 出力の時計の対応ができるまで待つ (対応が無いと予約の基準が決まらない)
             await harness.waitFor(
@@ -1044,6 +1061,7 @@ test("受信側の追いつきは復号だけが足した遅延で決める", as
           jitterBuffer: kind !== "disabled",
         }),
       );
+      await Promise.all(playouts.map((playout) => playout.prepareAudio()));
       const origin = harness.wallClockNowMicros(-20);
       const play = (timestamp: number, second: boolean) =>
         cases.map((kind, index) => {

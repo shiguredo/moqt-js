@@ -866,24 +866,22 @@ interface AudioPlayoutTimingSnapshot {
   missedByReason: Readonly<Record<AudioMissReason, AudioMissTotal>>;
   // 直近に鳴らさなかった音 (古い順、最大 30 件)
   recentMisses: readonly AudioMissEvent[];
-  // 時間圧縮と補間を使えないサンプルレートで鳴らした音の数 (累積)。96 kHz などは加工せず、
-  // 「操作しない」を返すため、この数で気付く。0 なら使えている
+  // 時間圧縮を使えない復号レートで鳴らした音の数 (累積)。補間は変換後の出力レートで別に判断する
   stretchUnavailableFrames: number;
   // 復号フレーム (AudioData) のサンプルレートが AudioContext と違った回数 (累積)。0 なら
   // 両者は一致している。違うと AudioBufferSourceNode がバッファごとにリサンプルする。
   // OfflineAudioContext で再現した境界の重なりと、実出力のクリックの有無は別に検証する。
-  // boundaryStepCount はリサンプル後の重なりを数えない
+  // 現行の boundaryStepCount はリサンプル後の切り替え位置を測る
   sampleRateMismatchFrames: number;
   // 直近の AudioContext と復号フレームのサンプルレート (Hz)。まだ音を渡していなければ null
   contextSampleRate: number | null;
   decodedSampleRate: number | null;
-  // 補間で埋まらなかった無音の穴の回数、長さの合計 (ms)、最大 (ms) (累積)。予約できる
-  // 最も早い時刻より前だった分、補間が失敗した分、補間の上限 (100 ms) を超えた分を含む
+  // 出力側の補間で埋まらなかった区間の回数、長さの合計 (ms)、最大 (ms) (累積)。
+  // 非同期の実描画の通知に基づく。DTX、終端後や経路の断も含み、発話中の無音とは範囲が異なる
   gapCount: number;
   gapMs: number;
   gapMaxMs: number;
-  // 穴のうち、予約できる最も早い時刻より前だった回数と長さの合計 (ms) (累積)。
-  // 事後には埋められなかった量の観測値。再生予算は到着の揺らぎと出力時計から別に求める
+  // 現行の出力側補間では gapCount / gapMs と同じ。旧予約計測との互換のため保持する
   unrecoverableGapCount: number;
   unrecoverableGapMs: number;
   // 予約した開始時刻を AudioContext.currentTime が追い越した回数と最大 (ms) (累積)
@@ -893,7 +891,7 @@ interface AudioPlayoutTimingSnapshot {
   pushStartCount: number;
   pushStartMaxMs: number;
   // バッファ境界の段差が AUDIO_PLAYOUT_BOUNDARY_STEP_THRESHOLD を超えた回数と最大
-  // (予約サンプルから求める推定値、サンプル振幅単位、累積)
+  // (現行出力ではレート変換後の実 PCM、サンプル振幅単位、累積)
   boundaryStepCount: number;
   boundaryStepMax: number;
   // 直近の停止の drain の結果。停止していなければ null。形は再生の入口が返す
@@ -1109,32 +1107,27 @@ AudioContext の出力位置を含む推定値であり、下流の audio 要素
 で決まるため、予算より実出力の先行量や既存の予約が大きいと予定を過ぎて鳴る。
 その分は `latenessMs` に現れ、A/V 同期では予約の残差として補償する。
 
-`AudioPlayoutTimingSnapshot` の `gapCount` / `gapMs` / `gapMaxMs` は、穴として残した回数、
-長さの合計、最大である。穴は、予約できる最も早い時刻 (今 + 余裕) より前だった分、補間が
-失敗した分、補間の上限 (100 ms) を超えた分からできる。無音との境界に段差が残ると
-クリックの原因になるため、補間と実音の接続や出力の末尾にフェードを適用する。
-`gapMs` は「補間で埋まらなかった長さ」であり、補間を予約したときに生成する長さの丸め
-(半サンプル以内) は穴として数えない。補間バッファ内のフェード区間も生成長に含めるが、
-出力の gain フェード自体で補間の長さを追加することはない。
-計器を作り直すまでの累積であり、波形を収録して数えた無音 (収録区間だけ) とは範囲が違うため
-一致しない。
-秒単位の長い途絶 (配信の停止、経路の断) も 1 回の穴として含む。クリックは 0 の長さではなく
-境界の段差で決まるため、`boundaryStepCount` / `boundaryStepMax` と併せて読む。
-`unrecoverableGapCount` / `unrecoverableGapMs` は穴のうち予約できる最も早い時刻より前だった
-分 (既に過去の分と、未来でも余裕に満たない分を含む。事後には埋められない) であり、
-到着と出力時計の不足を切り分けるための計器である。`lateStartCount` / `lateStartMaxMs` は、予約した
-開始時刻を `source.start()` の時点の `AudioContext.currentTime` が追い越した回数と最大で
-ある。追い越し (および余裕 3 ms 未満) のときは開始時刻を `currentTime + 3 ms` へ押し直し、
-先頭 2 ms をフェードインするため、重なりは起きない。追い越した回数だけを数えるため、
-余裕より近かっただけの押し直しは含まない。押し直した回数と最大は `pushStartCount` /
-`pushStartMaxMs` で読む。
-`boundaryStepCount` / `boundaryStepMax` は、予約サンプルから求めるバッファ境界の段差が
-0.05 (`AUDIO_PLAYOUT_BOUNDARY_STEP_THRESHOLD`。440 Hz の正常な差分 p99.9 = 0.0174 の約
-3 倍) を超えた回数と最大である。すべての境界を測るため、通常の音の切れ目も含む。しきい値は
-440 Hz のトーン基準の絶対値であり、実音声では正常な段差が超えることがある。
-取り消さなかった末尾のフェードは終端を 0 として反映するが、gain の包絡全体や
-ブラウザのリサンプル後の出力を実測する計器ではない。クリックの有無は収録波形で確認する。
-`stretchUnavailableFrames` と同じく累積であり、購読をやり直しても消えない。
+`AudioPlayoutTimingSnapshot` の `gapCount` / `gapMs` / `gapMaxMs` は、出力側の補間で
+埋まらなかった区間の回数、長さの合計、最大である。AudioWorklet が実際に描画した量を非同期に
+通知する。最初の音より前の無音は含まず、DTX、終端後や配信の途絶は区別せず含む。
+発話中の音切れを検出した値ではなく、収録した波形の活動中の無音とも範囲が異なる。
+継続中の未補間区間も、通知のたびに長さと最大を更新する。
+
+`unrecoverableGapCount` / `unrecoverableGapMs` は旧予約計測との互換のため保持する。
+現行の出力側補間では `gapCount` / `gapMs` と同じ値である。
+旧予約計測では先行予約できなかった区間だけを数えたため、過去の結果とは意味を分けて読む。
+再生予算は到着の揺らぎと出力時計から別に求める。
+
+`lateStartCount` / `lateStartMaxMs` は、予約した開始を source.start の直前の currentTime が
+追い越した回数と最大である。開始は currentTime + 2 ms 以降へ押し直す。
+余裕が足りなかっただけの押し直しを含む回数と最大は `pushStartCount` / `pushStartMaxMs` で読む。
+
+`boundaryStepCount` / `boundaryStepMax` は、出力の切り替え位置の段差が 0.05
+(`AUDIO_PLAYOUT_BOUNDARY_STEP_THRESHOLD`) を超えた回数と最大である。
+現行出力ではレート変換後の実 PCM を測る。フェード全体や発話の音質を評価する値ではなく、
+正常な音声でもしきい値を超えることがある。クリックの有無は収録波形でも確認する。
+旧予約経路の比較計測では、予約サンプルから求めた推定値である。
+これらは計器の累積であり、購読をやり直しても消えない。
 
 音声の再生に使う `AudioContext` は、復号フレームのサンプルレートに合わせて作る
 (`src/codec/config.ts` の `resolveAudioContextSampleRate`)。Chromium の Opus 復号は
@@ -1263,6 +1256,9 @@ const playout = createMediaPlayout({
     },
   },
 });
+// 利用者の操作を受けてから、出力時計と出力側の処理を準備する。
+await audioContext.resume();
+await playout.prepareAudio();
 ```
 
 戻り値の型は `MediaPlayout` である。`AudioContext` と映像の出し先はブラウザ依存であり、
@@ -1286,6 +1282,7 @@ if (audioContext.state === "suspended") {
 const playout = createMediaPlayout({
   audio: { context: audioContext, destination: audioContext.destination },
 });
+await playout.prepareAudio();
 
 // 受信した Object を復号へ渡す直前に呼ぶ (AudioDecoder.decode() の直前)
 function onEncodedObject(decoder: AudioDecoder, chunk: EncodedAudioChunk): void {
@@ -1789,6 +1786,24 @@ interface MediaPlayoutStats {
 自動予算である。音声だけの購読では 50 ms にする。catalog の下限と同期の補償は別に
 `avSync.delays` で読み、実際の待ちとずれは `audio.timing` と併せて読む。
 
+### 音声出力の準備
+
+`createMediaPlayout` へ音声の出力を渡した場合は、最初の `pushAudio` より前に
+`await playout.prepareAudio()` を呼ぶ。AudioContext を作り直したときも、出力の付け替えと
+`resetAudioPlayback()` の後に準備を待つ。準備前の投入は `status: "error"` を返す。
+実 AudioContext は `resume()` → `prepareAudio()` の順で呼ぶと、起動時の実出力時計も確認する。
+意図的に停止した Context と OfflineAudioContext では、モジュールと制御の受理を確認する。
+OfflineAudioContext に予約を先行投入して描画する場合は、予約後にも prepareAudio を待ってから startRendering を呼ぶ。
+
+CSP でスクリプトの実行を制限する場合は、AudioWorklet の読み込みと、同梱する数値カーネルの
+WebAssembly コンパイルを許可する。`script-src` を指定する構成では `'wasm-unsafe-eval'` を含める
+([CSP の WebAssembly 制御](https://www.w3.org/TR/CSP3/))。
+
+欠落時の補間と実音への復帰は AudioWorklet が出力時計で判断する。
+正常到着のたびに 100 ms 分の予測音を作る処理は行わない。
+補間量と未補間区間は出力スレッドから非同期に通知されるため、投入直後の統計値を
+再生済みの実績と同一視しない。`createMediaSubscriber` は媒体の購読前に準備を行う。
+
 ### 旧音声遅延制御からの移行
 
 2026-10-29 の変更で、`AudioDelayEstimator` と `AudioDelayFeedback` を削除した。
@@ -1826,6 +1841,10 @@ devtools の表示用スナップショットは `audio.audioDelay` を使う。
 
 ### ライフサイクル
 
+- `prepareAudio(output?: AudioPlayoutOutput | null)` — 音声の投入前に出力側の初期化を待つ。
+  引数を省略すると、現在の出力を準備する。出力を渡す場合は、音声の投入を止めた状態で準備を先行する。
+  準備中に別の出力へ投入しない。出力先の付け替えは setAudioOutput で行う。
+  AudioContext を作り直した場合も再度待つ。音声を構成していない場合と出力が null の場合は何もしない
 - `setAudioOutput(output: AudioPlayoutOutput | null)` — 鳴らす先を差し替える (`AudioContext`
   を作り直したとき、音声の再生を止めるとき)。null を渡すと鳴らさず、以降の `pushAudio` は
   `skipped` を返す。null を渡したときは、出力の時計の対応と直前の音も捨てる (閉じた
@@ -1900,6 +1919,8 @@ await playout.drainAudio({ maxWaitMs: 300 });
 playout.setAudioOutput(null);
 playout.resetAudioTimeline();
 playout.resetAudioPlayback();
+await nextAudioContext.resume();
+await playout.prepareAudio();
 
 // 購読を終える例 (すべてを捨てて、鳴っている音も止める)
 playout.recordAudioStopped();

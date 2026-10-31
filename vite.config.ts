@@ -37,7 +37,7 @@ const importMetaUrlReference = /new URL\([^)]*,\s*import\.meta\.url\s*\)/;
  * - target は tsconfig.json の target と同じ ESNext 相当にする (変換しない)
  *
  * この入れ子ビルドは本体ビルドの define / alias / plugin を引き継がない。worker の
- * 依存グラフは現状 src/codec 配下のモジュールだけで __MOQT_JS_VERSION__ 等を
+ * 依存グラフは src/codec と src/playout 配下で __MOQT_JS_VERSION__ 等を
  * 参照しないが、将来 worker から参照する定数を増やす場合は、本体の define に
  * 頼らずここで define を渡す必要がある (渡さないと実行時に ReferenceError になる)。
  */
@@ -93,8 +93,8 @@ async function bundleWorker(workerPath: string): Promise<string> {
  * Vite の ?worker インポートを tsdown / Rolldown でも扱えるようにするプラグイン。
  *
  * ?worker で import されたワーカーは Rolldown で単独バンドルし、自己完結した
- * ES module を asset として dist/codec/workers/ へ出力する。default export は
- * 出力した asset の URL で初期化する Worker コンストラクタに置き換える。
+ * ES module を asset として出力する。?worker は Worker コンストラクタ、
+ * AudioWorklet が使う ?worker&url は出力した asset の URL に置き換える。
  */
 function moqtWorkerPlugin(): {
   name: string;
@@ -104,27 +104,31 @@ function moqtWorkerPlugin(): {
   return {
     name: "moqt-worker",
     resolveId(source, importer) {
-      if (!source.endsWith("?worker")) {
+      if (!source.endsWith("?worker") && !source.endsWith("?worker&url")) {
         return null;
       }
       if (importer === undefined) {
         return null;
       }
-      const base = source.slice(0, -"?worker".length);
-      return resolve(dirname(importer), base) + "?worker";
+      const query = source.endsWith("?worker&url") ? "?worker&url" : "?worker";
+      const base = source.slice(0, -query.length);
+      return resolve(dirname(importer), base) + query;
     },
     async load(id) {
-      if (!id.endsWith("?worker")) {
+      if (!id.endsWith("?worker") && !id.endsWith("?worker&url")) {
         return null;
       }
-      const workerPath = id.slice(0, -"?worker".length);
+      const asUrl = id.endsWith("?worker&url");
+      const workerPath = id.slice(0, -(asUrl ? "?worker&url" : "?worker").length);
       const name = basename(workerPath, extname(workerPath));
       const code = await bundleWorker(workerPath);
       const ref = this.emitFile({
         type: "asset",
         source: code,
-        fileName: `codec/workers/${name}.js`,
+        fileName: asUrl ? `playout/${name}.js` : `codec/workers/${name}.js`,
       });
+      // AudioWorklet は Worker のコンストラクターではなく、自己完結したスクリプトの URL を使う。
+      if (asUrl) return `export default import.meta.ROLLUP_FILE_URL_${ref};`;
       return `export default class extends Worker {
   constructor() {
     super(import.meta.ROLLUP_FILE_URL_${ref}, { type: "module" });

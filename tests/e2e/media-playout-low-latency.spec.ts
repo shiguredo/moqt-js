@@ -40,6 +40,7 @@ test("A/V の到着が 180 ms 停滞しても、回復後に待ちを保持せ�
         },
       },
     });
+    await playout.prepareAudio();
     try {
       await harness.waitFor(
         () => output.context.getOutputTimestamp().performanceTime > 0,

@@ -12,6 +12,8 @@ async function render(moduleUrl, contextRate, sampleRate, frames, firstStart) {
   const session = new AudioPlayoutSession({
     timing: new AudioPlayoutTimingStats(10000, performance.timeOrigin),
   });
+  const output = { context, destination: context.destination };
+  await session.prepareOutput?.(output);
   let actualEnd = 0;
   for (const { timestamp, samples } of frames) {
     const data = new AudioData({
@@ -38,22 +40,21 @@ async function render(moduleUrl, contextRate, sampleRate, frames, firstStart) {
         },
       );
       if (decision.kind !== "play") throw new Error("Audio was dropped before rendering");
-      const played = session.playSound(
-        { context, destination: context.destination },
-        decision,
-        data,
-        1,
-        sampleRate,
-        samples.length,
-      );
+      // 新しい経路は検証済みの PCM を受け取る。固定した旧版は元の引数で駆動する。
+      const played =
+        typeof session.copyChannels === "function"
+          ? session.playSound(output, decision, data, session.copyChannels(data))
+          : session.playSound(output, decision, data, 1, sampleRate, samples.length);
       actualEnd = played.startAtSeconds + played.playedSeconds;
     } finally {
       data.close();
     }
   }
-  const output = await context.startRendering();
+  // Offline の描画を始める前に、全予約の受理を確認する。
+  await session.prepareOutput?.(output);
+  const rendered = await context.startRendering();
   return {
-    samples: output.getChannelData(0),
+    samples: rendered.getChannelData(0),
     endSeconds: actualEnd,
     expectedEndSeconds: end,
     concealedMs: session.playout.concealed * 1000,
