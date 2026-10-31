@@ -48,7 +48,13 @@ import type {
   MediaPlayoutDrainStats,
 } from "./audioPlayoutTimingStats";
 import { AudioReceiveCatchUp } from "./audioReceiveCatchUp";
-import { compressSamples, concealSamples, type AudioSamples } from "./audioTimeStretch";
+import { AudioConcealmentHistory } from "./audioConcealmentHistory";
+import {
+  compressSamples,
+  concealSamples,
+  type AudioSamples,
+  type ConcealResult,
+} from "./audioTimeStretch";
 import { AUDIO_PLAYOUT_DELAY_FLOOR_MS, type PlayoutTimeline } from "./timeline";
 
 /**
@@ -277,6 +283,8 @@ export class AudioPlayoutSession {
   // 直前に鳴らした音のサンプルとサンプルレート。欠落した区間の補間を作るために保持する
   private previousChannels: AudioSamples[] | null = null;
   private previousSampleRate = 0;
+  // 低い声の周期と相関窓は 20 ms の 1 フレームに収まらないため、連続する過去も解析へ使う。
+  private readonly concealmentHistory = new AudioConcealmentHistory();
   // 直前に再生した媒体の終端。未到着の媒体と、到着の遅れによる穴を区別する。
   private previousMediaEndTimestampMicros: number | null = null;
   // 直前に予約したバッファ (補間を含む) の末尾のサンプル。境界の段差を測るために保持する。
@@ -626,7 +634,7 @@ export class AudioPlayoutSession {
       const canMerge =
         this.previousSampleRate === sampleRate && this.previousChannels.length === numberOfChannels;
       const mergeSeconds = canMerge ? AUDIO_SPLICE_FADE_MS / 1000 : 0;
-      let concealed = concealSamples(
+      let concealed = this.concealGap(
         this.previousChannels,
         this.previousSampleRate,
         decision.gapSeconds + mergeSeconds,
@@ -763,11 +771,28 @@ export class AudioPlayoutSession {
     // 圧縮前のフレームで末尾の周期を推定できる。次の欠落時に必要な長さを保持する。
     this.previousChannels = channels;
     this.previousSampleRate = sampleRate;
+    this.concealmentHistory.append(channels, sampleRate, data.timestamp);
     this.previousMediaEndTimestampMicros = data.timestamp + (numberOfFrames / sampleRate) * 1000000;
     return {
       playedSeconds: (playChannels[0]?.length ?? numberOfFrames) / sampleRate,
       startAtSeconds: started.startAtSeconds,
     };
+  }
+
+  /** 直前の音で補間できないときだけ、連続する過去を足して周期を解析する。 */
+  private concealGap(
+    channels: readonly AudioSamples[],
+    sampleRate: number,
+    seconds: number,
+    endGain: number,
+  ): ConcealResult {
+    const concealed = concealSamples(channels, sampleRate, seconds, endGain);
+    const history = this.concealmentHistory.channels;
+    // 長い窓は非定常音で別の周期を選び得るため、既に補間できる音は加工し直さない。
+    if (concealed.generatedSamples > 0 || (history[0]?.length ?? 0) <= (channels[0]?.length ?? 0)) {
+      return concealed;
+    }
+    return concealSamples(history, sampleRate, seconds, endGain);
   }
 
   /** 予約上の隙間と、遅れたキューに吸収された媒体の欠落の両方を接続する。 */
@@ -956,6 +981,7 @@ export class AudioPlayoutSession {
     this.clock.reset();
     this.previousChannels = null;
     this.previousSampleRate = 0;
+    this.concealmentHistory.clear();
     this.previousMediaEndTimestampMicros = null;
     // 予約済みのバッファは AudioContext と一緒に捨てられるため、境界の段差の基準も消す
     this.lastScheduledTailSample = null;
@@ -1048,6 +1074,9 @@ export class AudioPlayoutSession {
       // 大きなコピーを挟まず、出力の端の予約だけを済ませて開始する。
       this.connectWithEnvelope(output, source, whenSeconds, frames / sampleRate, sampleRate);
       source.start(whenSeconds);
+      // Chromium はレート変換したバッファの末尾を出力側の 1 サンプル分長く鳴らす
+      // 場合がある。実際の終端で停止し、次の予約の先頭との加算を防ぐ。
+      source.stop(whenSeconds + frames / sampleRate);
       return { startAtSeconds: whenSeconds, pushed: false };
     }
 
@@ -1073,6 +1102,7 @@ export class AudioPlayoutSession {
     this.timing.recordPushStart((startAtSeconds - whenSeconds) * 1_000);
     this.connectWithEnvelope(output, source, startAtSeconds, frames / sampleRate, sampleRate);
     source.start(startAtSeconds);
+    source.stop(startAtSeconds + frames / sampleRate);
     return { startAtSeconds, pushed: true };
   }
 }

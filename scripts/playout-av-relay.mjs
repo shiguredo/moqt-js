@@ -190,6 +190,8 @@ export async function measure(
   );
   const audio = [];
   const video = [];
+  // 実際の復号出力の到着を保存し、同じ列を修正前後の playout へ再投入できるようにする。
+  const decodedArrivals = [];
   let inputStepMax = 0;
   let previousInput = null;
   const pushAudio = subscriber.playout.pushAudio.bind(subscriber.playout);
@@ -207,15 +209,32 @@ export async function measure(
       tail: samples.at(-1),
     };
     const receivedMs = performance.now();
+    decodedArrivals.push({
+      stream: "audio",
+      timestampMs: data.timestamp / 1000,
+      wallClockMs: performance.timeOrigin + receivedMs,
+    });
+    const playoutBeforeMs = performance.now();
     const result = pushAudio(data, ...args);
+    const playoutHandlingMs = performance.now() - playoutBeforeMs;
     const timing = subscriber.playout.getStats().audio.timing;
     audio.push({
       timestamp: data.timestamp,
       receivedMs,
       status: result.status,
       startMs: timing.lastStartMs,
+      playoutHandlingMs,
     });
     return result;
+  };
+  const pushVideo = subscriber.playout.pushVideo.bind(subscriber.playout);
+  subscriber.playout.pushVideo = (frame, ...args) => {
+    decodedArrivals.push({
+      stream: "video",
+      timestampMs: frame.timestamp / 1000,
+      wallClockMs: performance.timeOrigin + performance.now(),
+    });
+    return pushVideo(frame, ...args);
   };
   const videoOutput = subscriber.playout.video.session.output;
   const present = videoOutput.present.bind(videoOutput);
@@ -339,6 +358,8 @@ export async function measure(
       variant,
       seconds,
       moduleUrl,
+      timeOriginMs: performance.timeOrigin,
+      timingTrace: { arrivals: decodedArrivals },
       packets,
       droppedPackets,
       lostGroups: [...droppedGroups].filter((group) => !deliveredGroups.has(group)).length,

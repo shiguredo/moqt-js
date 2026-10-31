@@ -1,6 +1,6 @@
 /**
  * 合成信号と日本語音声による playout の測定。実ブラウザで出力を保存する。
- * 実行: vp exec node scripts/investigate-playout-audio.mjs [dsp|render|speech|live|long|datagram|datagramLive|relay|replay|av|avRelay|all]
+ * 実行: vp exec node scripts/investigate-playout-audio.mjs [dsp|render|speech|live|long|datagram|datagramLive|relay|replay|av|avRelay|waveform|all]
  * 生データと試聴用 WAV は investigation-logs/playout-quality-2026-10-28/ に置く。
  */
 import { execFileSync, spawn } from "node:child_process";
@@ -16,8 +16,12 @@ import { fingerprintTree, fingerprintFiles } from "./playout-source-fingerprint.
 const mode = process.argv[2] ?? "all";
 const avTraceFile = process.env.PLAYOUT_AV_TRACE_FILE;
 const comparisonSourceRoot = process.env.PLAYOUT_COMPARE_SOURCE_ROOT;
-if (comparisonSourceRoot !== undefined && mode !== "av")
-  throw new Error("PLAYOUT_COMPARE_SOURCE_ROOT is supported only by av");
+// 手元の Google Chrome でも同じ測定を再現する。未指定時は従来の Chromium を使う。
+const browserChannel = process.env.PLAYOUT_BROWSER_CHANNEL;
+if (browserChannel !== undefined && browserChannel !== "chrome")
+  throw new Error("PLAYOUT_BROWSER_CHANNEL must be chrome when specified");
+if (comparisonSourceRoot !== undefined && !["av", "waveform"].includes(mode))
+  throw new Error("PLAYOUT_COMPARE_SOURCE_ROOT is supported only by av and waveform");
 if (avTraceFile !== undefined && mode !== "av")
   throw new Error("PLAYOUT_AV_TRACE_FILE is supported only by av");
 if (
@@ -34,6 +38,7 @@ if (
     "replay",
     "av",
     "avRelay",
+    "waveform",
   ].includes(mode)
 ) {
   throw new Error(`Invalid investigation mode: ${mode}`);
@@ -52,8 +57,9 @@ for (const stage of [
   "replay",
   "av",
   "avRelay",
+  "waveform",
 ]) {
-  if (["relay", "replay", "av", "avRelay"].includes(stage) && mode === "all") continue;
+  if (["relay", "replay", "av", "avRelay", "waveform"].includes(stage) && mode === "all") continue;
   if (mode !== "all" && mode !== stage) continue;
   // 実時間とオフラインの条件を分け、ケースごとに結果を確定させる。
   const cases =
@@ -130,7 +136,9 @@ for (const stage of [
                               "burst3|2",
                             ].map((pattern) => `${name}|${pattern}`),
                       )
-                  : [stage];
+                  : stage === "waveform"
+                    ? ["resampling", "low-pitch"]
+                    : [stage];
   for (const caseName of cases) {
     if (!process.env.PLAYOUT_CASE_FILTER || caseName.includes(process.env.PLAYOUT_CASE_FILTER))
       selectedCases.push({ stage, caseName });
@@ -145,10 +153,10 @@ mkdirSync(directory, { recursive: true });
 // 比較中の再実行で前の観測を失わないよう、JSON は実行ごとの場所にも保存する。
 const runDirectory = `${directory}/runs/${new Date().toISOString().replaceAll(":", "-")}-${process.pid}-${mode}`;
 mkdirSync(runDirectory, { recursive: true });
-// ソース切り替えに対応する A/V モード以外では、実装と記録の食い違いを拒否する。
+// ソース切り替えに対応しないモードでは、実装と記録の食い違いを拒否する。
 const sourceRoot = process.env.PLAYOUT_SOURCE_ROOT ?? "src";
-if (resolve(sourceRoot) !== resolve("src") && !["av", "avRelay"].includes(mode))
-  throw new Error("PLAYOUT_SOURCE_ROOT is supported only by av and avRelay");
+if (resolve(sourceRoot) !== resolve("src") && !["av", "avRelay", "waveform"].includes(mode))
+  throw new Error("PLAYOUT_SOURCE_ROOT is supported only by av, avRelay and waveform");
 const avTraceContent = avTraceFile === undefined ? null : readFileSync(avTraceFile);
 const avTrace = avTraceContent === null ? null : JSON.parse(avTraceContent.toString("utf8"));
 if (["all", "dsp", "render", "speech", "datagram"].includes(mode)) {
@@ -195,7 +203,10 @@ try {
   server.on("error", (error) => {
     serverFailure = error;
   });
-  browser = await chromium.launch({ args: ["--autoplay-policy=no-user-gesture-required"] });
+  browser = await chromium.launch({
+    ...(browserChannel === undefined ? {} : { channel: browserChannel }),
+    args: ["--autoplay-policy=no-user-gesture-required"],
+  });
   const origin = `http://127.0.0.1:${port}`;
   const deadline = Date.now() + 10_000;
   for (;;) {
@@ -226,6 +237,7 @@ try {
     baselineRevision: "d6893cb2",
     coarseRevision: "d0b944dd",
     browser: browser.version(),
+    browserChannel: browserChannel ?? "chromium",
     platform: process.platform,
     architecture: process.arch,
     capturedAt: new Date().toISOString(),
@@ -250,6 +262,7 @@ try {
       "tests/e2e/vite.config.ts",
       "scripts/investigate-playout-audio.mjs",
       "scripts/playout-audio-quality.mjs",
+      "scripts/playout-audio-waveforms.mjs",
       "scripts/playout-av-latency.mjs",
       "scripts/playout-arrival-events.mjs",
       "scripts/devtools-latency-trace.mjs",
@@ -275,6 +288,12 @@ try {
         measurePage(
           page,
           async ({ harnessUrl, stage, caseName, relayUrl, arrivalTrace, avOptions }) => {
+            if (stage === "waveform") {
+              const harness = await import(
+                new URL("./playout-audio-waveforms.mjs", harnessUrl).href
+              );
+              return harness.measure(caseName, avOptions);
+            }
             if (stage === "av" || stage === "avRelay") {
               const file = stage === "av" ? "./playout-av-latency.mjs" : "./playout-av-relay.mjs";
               const harness = await import(new URL(file, harnessUrl).href);
