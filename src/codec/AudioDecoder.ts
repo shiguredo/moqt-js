@@ -19,7 +19,7 @@ import {
   replaceCodec,
   warnCodecNotConfigured,
 } from "./codecLifecycle";
-import type { AudioDecoderWorkerData } from "./workerMessages";
+import type { AudioDecoderWorkerData, AudioDecoderWorkerDecodeRequest } from "./workerMessages";
 import { OpusDecoderTimestamps } from "./opusDecoderTimestamps";
 
 /**
@@ -120,16 +120,18 @@ export class AudioDecoderWrapper {
 
   private configureDirect(config: AudioDecoderConfig): void {
     // 旧世代の出力が新世代の入力記録を消費しないよう、callback は同じ記録を捕捉する。
-    const timestamps = new OpusDecoderTimestamps(
-      config.codec === "opus" && config.description === undefined,
-    );
+    const timestamps = new OpusDecoderTimestamps(config.codec === "opus");
     this.timestamps = timestamps;
     this.decoder = replaceCodec(
       this.decoder,
       new AudioDecoder({
         output: (audioData: AudioData) => {
+          const data = timestamps.restoreOrReport(audioData, (error) =>
+            this.callbacks.error(error),
+          );
+          if (data === null) return;
           this.callbacks.output({
-            data: timestamps.restore(audioData),
+            data,
           });
         },
         error: (error: DOMException) => {
@@ -165,7 +167,8 @@ export class AudioDecoderWrapper {
     // 公開中の最新世代に送る (待機中の未公開世代には送らない)。
     // 再 configure() 待機中は旧公開が受け、公開切り替え後に新世代へ切り替わる。
     if (this.useWorker && this.worker) {
-      const buffer = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+      // SharedArrayBuffer のビューも、transfer できる独立した ArrayBuffer へコピーする。
+      const buffer = Uint8Array.from(data).buffer;
       this.worker.postMessage(
         {
           type: "decode",
@@ -173,7 +176,7 @@ export class AudioDecoderWrapper {
           chunkType: type,
           timestamp,
           duration,
-        },
+        } satisfies AudioDecoderWorkerDecodeRequest,
         [buffer],
       );
     } else if (isCodecConfigured(this.decoder)) {

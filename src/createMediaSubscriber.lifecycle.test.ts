@@ -15,7 +15,7 @@ import {
   playoutAudioOf,
   playoutAudioTimingOf,
   playoutTimelineOf,
-  playoutVideoInputMapOf,
+  playoutVideoInputsOf,
 } from "./testSupport/mediaPlayoutInternals";
 
 import {
@@ -199,7 +199,7 @@ test("stop: 全参照を解放し unsubscribe と close を 1 回ずつ呼ぶ", 
       "停止前は音声の対応表に記録があること",
     );
     assert.equal(
-      playoutVideoInputMapOf(control.playout).size,
+      playoutVideoInputsOf(control.playout).size,
       1,
       "停止前は映像の対応表に記録があること",
     );
@@ -270,7 +270,7 @@ test("stop: 全参照を解放し unsubscribe と close を 1 回ずつ呼ぶ", 
   );
   // 復号へ渡した入力の対応表・時間軸・映像の表示待ちが捨てられていること
   assert.equal(playoutAudioInputMapOf(control.playout).size, 0, "音声の対応表を捨てること");
-  assert.equal(playoutVideoInputMapOf(control.playout).size, 0, "映像の対応表を捨てること");
+  assert.equal(playoutVideoInputsOf(control.playout).size, 0, "映像の対応表を捨てること");
   assert.isNull(playoutTimelineOf(control.playout).presentationDelayMs, "時間軸を捨てること");
   assert.equal(control.playout.getStats().video?.queuedFrames, 0, "映像の表示待ちを捨てること");
   // 予約済みの音声は drain の上限 (stop は 300 ms) で打ち切る

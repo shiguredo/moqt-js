@@ -13,7 +13,7 @@
  *
  * 位置を進める実装 (先頭から捨てて、半分を超えたらまとめて詰め直す) は観測できない内部の
  * 都合であるため、外から見た値だけを比べる。境界の細かい規則 (ちょうど窓の境目の時刻、
- * 空の列) は src/playout/timedValues.test.ts の単体テストが固定する。
+ * 空の列) は timedValues.test.ts の単体テストが固定する。
  */
 
 import { test, assert } from "vite-plus/test";

@@ -76,7 +76,7 @@ class AudioRenderProcessor extends AudioWorkletProcessor {
 
   process(inputs: Float32Array[][], outputs: Float32Array[][]): boolean {
     this.concealer.process(inputs[0] ?? [], outputs[0] ?? [], currentFrame);
-    const finished = currentFrame >= this.disposeFrame;
+    const finished = currentFrame >= this.disposeFrame && !this.concealer.fadingStop;
     if (currentFrame >= this.nextReport || finished) {
       this.port.postMessage({
         type: "rendered",

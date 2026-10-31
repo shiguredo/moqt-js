@@ -180,7 +180,7 @@ export const AUDIO_CONTEXT_NOT_RUNNING_WARN_MS = 2_000;
  *
  * どれも受信した音声を鳴らす経路が持つ観測値である。この層は playout の計器 (予約・穴・
  * 段差) からは見えないため、計器が 0 のまま音が途切れたときに下流を疑う材料になる
- * (docs/AUDIO_GLITCH_CAUSES.md の B4 / B7)
+ * (docs/AUDIO_GLITCH_CAUSES.md の B4)
  */
 export interface SubscriberAudioOutputInput {
   /** 受信した音声を再生するか。AudioContext の状態の警告は再生中だけ出す */
@@ -289,8 +289,8 @@ function formatMs(value: number): string {
  *
  * 見るのは次のものである。前半の 2 つは「合わせる量の上限」と「共有の解除の保持」という、
  * この 1 週間で入れた判断の前提が崩れたことを示す。後半の 3 つは、音声を鳴らす経路
- * (AudioContext と `<audio>` 要素) が playout の想定から外れたことを示す
- * (docs/AUDIO_GLITCH_CAUSES.md の A1 / B4 / B7)。
+ * (AudioContext と実出力機器) が playout の想定から外れたことを示す
+ * (docs/AUDIO_GLITCH_CAUSES.md の A1 / B4)。
  *
  * - 同期の補償 (`syncExtraDelayMs`) が上限に張り付いたまま戻らない。差が上限より大きい
  *   ため、残りは A/V のずれとして残っている
@@ -387,7 +387,7 @@ export function detectSubscriberWarnings(
     });
   }
 
-  // 音声出力 (AudioContext と <audio> 要素) の警告は、判定のまとまりを別の関数に置く。
+  // 音声出力 (AudioContext と実出力機器) の警告は、判定のまとまりを別の関数に置く。
   // この関数は同期の推定と音声出力の 2 種類の入力を受けるため、条件を 1 か所に足すと
   // 複雑度の上限を超える (判定そのものは同じ形で読めるよう、関数を分けている)
   const audioOutputWarnings =
@@ -415,10 +415,10 @@ interface AudioOutputWarningUpdate {
 }
 
 /**
- * 音声出力 (AudioContext と `<audio>` 要素) の前提から外れた状態を検出する
+ * 音声出力 (AudioContext と実出力機器) の前提から外れた状態を検出する
  *
  * 見るのは次の 3 つであり、どれも playout の計器 (予約・穴・段差) からは見えない層の
- * 出来事である (docs/AUDIO_GLITCH_CAUSES.md の A1 / B4 / B7)。
+ * 出来事である (docs/AUDIO_GLITCH_CAUSES.md の A1 / B4)。
  *
  * - 復号フレームと AudioContext のサンプルレートが違う。AudioBufferSourceNode が
  *   バッファごとにリサンプルする。実出力のクリックの有無は別に検査する

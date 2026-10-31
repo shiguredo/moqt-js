@@ -84,6 +84,8 @@ interface AudioPlaybackControllerDeps {
    * Context を作った直後の初期状態も同じコールバックで通知する。`suspended` の間は
    * 予約した音が鳴らないため、状態と、その Context のサンプルレート (Hz) を signal へ
    * 写して警告の判定に使う (docs/AUDIO_GLITCH_CAUSES.md の B4)。
+   * baseLatencyMs と outputLatencyMs は秒から ms に換算した機器の報告値である。
+   * outputLatencyMs は未報告の場合に null とする。
    */
   onAudioContextStateChange(
     state: AudioContextState,
@@ -109,7 +111,7 @@ interface AudioPlaybackControllerDeps {
 /** 音声の再生のライフサイクル */
 export interface AudioPlaybackController {
   /** 購読の入口を作り直したときに、再生中の AudioContext を鳴らす先として付ける */
-  attachPlaybackToPlayout(playout: MediaPlayout): void;
+  attachPlaybackToPlayout(playout: MediaPlayout): Promise<void>;
   /** 音声の再生 (AudioContext) があるか */
   hasPlayback(): boolean;
   /** 出力システムと機器が現在報告している遅延 (ms)。未再生なら null */
@@ -141,6 +143,43 @@ export function createAudioPlaybackController(
   // 新しい開始の後始末をしない」ことをトークンの同一性で判定する。停止はこのトークンを
   // null にして、進行中の開始を無効にする
   let audioPlaybackAttempt: AudioPlaybackStartAttempt | null = null;
+  // Context が同じでも機器の選択は別の要求である。順序を保ち、古い失敗は最新の選択へ持ち越さない。
+  let sinkGeneration = 0;
+  let sinkQueue: Promise<void> = Promise.resolve();
+
+  function outputLatencyOf(context: AudioContext) {
+    return {
+      baseLatencyMs: context.baseLatency * 1000,
+      outputLatencyMs: Number.isFinite(context.outputLatency) ? context.outputLatency * 1000 : null,
+    };
+  }
+
+  function requestAudioSink(playback: AudioPlayback, deviceId: string) {
+    const generation = ++sinkGeneration;
+    const completion = sinkQueue
+      .catch(() => {})
+      .then(async () => {
+        if (
+          generation !== sinkGeneration ||
+          audioPlayback !== playback ||
+          deps.audioStopRef.current.isStopping
+        )
+          return;
+        try {
+          await applyAudioOutputSink(playback.context, deviceId);
+        } catch (error) {
+          if (
+            generation !== sinkGeneration ||
+            audioPlayback !== playback ||
+            deps.audioStopRef.current.isStopping
+          )
+            return;
+          throw error;
+        }
+      });
+    sinkQueue = completion;
+    return { generation, completion };
+  }
 
   /**
    * AudioContext の状態の通知を始める
@@ -153,11 +192,12 @@ export function createAudioPlaybackController(
    */
   function attachAudioContextStateListener(context: AudioContext): () => void {
     const listener = (): void => {
+      const latency = outputLatencyOf(context);
       deps.onAudioContextStateChange(
         context.state,
         context.sampleRate,
-        context.baseLatency * 1000,
-        Number.isFinite(context.outputLatency) ? context.outputLatency * 1000 : null,
+        latency.baseLatencyMs,
+        latency.outputLatencyMs,
       );
     };
     context.addEventListener("statechange", listener);
@@ -268,10 +308,17 @@ export function createAudioPlaybackController(
       await playback.context.resume();
       if (await abandonIfStale()) return null;
     }
-    const outputDeviceId = deps.getSelectedAudioOutputDeviceId();
-    if (outputDeviceId !== "") {
-      await applyAudioOutputSink(playback.context, outputDeviceId);
+    // 開始中に選択が変わったら最後の選択を適用し終えてから公開する。
+    while (true) {
+      const deviceId = deps.getSelectedAudioOutputDeviceId();
+      const request = requestAudioSink(playback, deviceId);
+      await request.completion;
       if (await abandonIfStale()) return null;
+      if (
+        request.generation === sinkGeneration &&
+        deviceId === deps.getSelectedAudioOutputDeviceId()
+      )
+        break;
     }
     return playback;
   }
@@ -400,9 +447,18 @@ export function createAudioPlaybackController(
       if (started === null) {
         return;
       }
-      const playout = deps.mediaPlayoutRef.current;
+      let playout = deps.mediaPlayoutRef.current;
       playout?.resetAudioPlayback();
-      await playout?.prepareAudio({ context: started.context, destination: started.destination });
+      // 準備中にも購読の入口は作り直され得る。現在の入口を準備し終えるまで有効にしない。
+      while (playout !== null) {
+        await playout.prepareAudio({ context: started.context, destination: started.destination });
+        if (
+          !isAudioPlaybackStartCurrent(audioPlayback, started, deps.audioStopRef.current.isStopping)
+        )
+          break;
+        if (deps.mediaPlayoutRef.current === playout) break;
+        playout = deps.mediaPlayoutRef.current;
+      }
       // await の間に停止が始まるか、停止の後に新しい開始が始まることがある。開始に使った
       // audio graph が今も対象かと停止中かで、今の再生として確定するかを決める。確定しない
       // ときは自分が作った Context だけを閉じる (停止の drain の
@@ -460,13 +516,24 @@ export function createAudioPlaybackController(
    * 付けない場合、閉じる Context を新しい入口が掴んだままになり、次の音を閉じた
    * Context へ予約してしまうためである。
    */
-  function attachPlaybackToPlayout(playout: MediaPlayout): void {
-    if (shouldAttachAudioPlayback(audioPlayback, deps.audioStopRef.current.isStopping)) {
-      playout.setAudioOutput({
-        context: audioPlayback.context,
-        destination: audioPlayback.destination,
-      });
+  async function attachPlaybackToPlayout(playout: MediaPlayout): Promise<void> {
+    const playback = audioPlayback;
+    if (!shouldAttachAudioPlayback(playback, deps.audioStopRef.current.isStopping)) return;
+    const output = { context: playback.context, destination: playback.destination };
+    const isCurrent = () =>
+      deps.mediaPlayoutRef.current === playout &&
+      isAudioPlaybackStartCurrent(audioPlayback, playback, deps.audioStopRef.current.isStopping);
+    try {
+      await playout.prepareAudio(output);
+    } catch (error) {
+      if (isCurrent()) throw error;
     }
+    if (!isCurrent()) {
+      // Context は次の入口と共有し得るため閉じず、この入口の graph だけ解放する。
+      playout.setAudioOutput(null);
+      return;
+    }
+    playout.setAudioOutput(output);
   }
 
   /** 音声の再生 (AudioContext) があるか */
@@ -478,22 +545,24 @@ export function createAudioPlaybackController(
   function getOutputLatency(): { baseLatencyMs: number; outputLatencyMs: number | null } | null {
     const context = audioPlayback?.context;
     if (context === undefined) return null;
-    return {
-      baseLatencyMs: context.baseLatency * 1000,
-      outputLatencyMs: Number.isFinite(context.outputLatency) ? context.outputLatency * 1000 : null,
-    };
+    return outputLatencyOf(context);
   }
 
   /** 出力時計と再生先を同じ Context のデバイスへ揃える。 */
   async function setOutputDevice(deviceId: string): Promise<void> {
     const playback = audioPlayback;
-    if (playback === null) return;
+    if (playback === null || deps.audioStopRef.current.isStopping) return;
+    const request = requestAudioSink(playback, deviceId);
     try {
-      await applyAudioOutputSink(playback.context, deviceId);
+      await request.completion;
     } catch (error) {
       // setSinkId は機器の取得前に renderer を止めることがある。失敗後に有効表示と
       // 予約だけを残さず、現在の再生を閉じる。古い切り替えで新しい Context は止めない。
-      if (audioPlayback === playback) {
+      if (
+        audioPlayback === playback &&
+        request.generation === sinkGeneration &&
+        !deps.audioStopRef.current.isStopping
+      ) {
         const enabled = deps.getAudioPlaybackEnabledSignal();
         if (enabled !== null) enabled.value = false;
         deps.playAudioEnabled.value = false;

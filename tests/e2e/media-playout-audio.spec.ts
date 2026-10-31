@@ -823,9 +823,9 @@ for (const gapCase of GAP_CASES) {
             );
             const second = push(firstTimestamp + 20_000);
             // 次の音を出力した後にも、新たな音を予約できることを確認する
-            const secondPushedAtMs = performance.now();
+            const secondContextSeconds = audio.context.currentTime;
             const secondPlayedOut = await harness.waitUntil(
-              () => performance.now() - secondPushedAtMs >= 100,
+              () => audio.context.currentTime - secondContextSeconds >= 0.1,
               3_000,
             );
             const appliedBeforeThird = playout.getStats().audio?.delay.targetMs ?? -1;

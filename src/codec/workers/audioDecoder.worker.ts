@@ -30,16 +30,17 @@ self.onmessage = (event: MessageEvent<AudioDecoderWorkerRequest>) => {
       // 初期化失敗時は "error" で応答し "configured" を送らない
       // (Wrapper の configure() が reject してハングしない前提)
       const result = runWorkerInit(() => {
-        const generationTimestamps = new OpusDecoderTimestamps(
-          message.config.codec === "opus" && message.config.description === undefined,
-        );
+        const generationTimestamps = new OpusDecoderTimestamps(message.config.codec === "opus");
         timestamps = generationTimestamps;
         // 再 init では旧コーデックを閉じてから差し替える (解放漏れを防ぐ)
         audioDecoder = replaceCodec(
           audioDecoder,
           new AudioDecoder({
             output: (audioData: AudioData) => {
-              const restored = generationTimestamps.restore(audioData);
+              const restored = generationTimestamps.restoreOrReport(audioData, (error) =>
+                self.postMessage(workerErrorResponse(error)),
+              );
+              if (restored === null) return;
               // AudioData は transferable
               self.postMessage(
                 {

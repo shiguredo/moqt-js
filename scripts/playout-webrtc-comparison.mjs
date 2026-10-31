@@ -229,6 +229,10 @@ async function replaySharedClock(events, frames, moduleUrl, comparisonModuleUrl)
       return {
         scheduler: new schedulerModule.AudioPlayoutScheduler(),
         compress: stretchModule.compressSamples,
+        expand: stretchModule.preemptivelyExpandSamples,
+        previous: [],
+        previousEnd: null,
+        expandedSamples: 0,
       };
     }),
   );
@@ -238,7 +242,8 @@ async function replaySharedClock(events, frames, moduleUrl, comparisonModuleUrl)
     const event = events[index],
       frame = frames[index];
     if (event.timestamp !== frame.timestamp) throw new Error("Clock replay timestamp mismatch");
-    const results = modules.map(({ scheduler, compress }) => {
+    const results = modules.map((module) => {
+      const { scheduler, compress, expand } = module;
       const decision = scheduler.schedule(event.now, event.timestamp, event.duration, event.target);
       if (decision.kind !== "play") throw new Error("Unexpected clock replay drop");
       const samples = Float32Array.from(frame.samples);
@@ -249,12 +254,27 @@ async function replaySharedClock(events, frames, moduleUrl, comparisonModuleUrl)
               frame.sampleRate,
               Math.round(decision.compressSeconds * frame.sampleRate),
             )
-          : { lengthChangeSamples: 0 };
+          : { channels: [samples], lengthChangeSamples: 0 };
       scheduler.confirmStretch(-result.lengthChangeSamples / frame.sampleRate);
-      scheduler.confirmPlayoutEnd(
-        decision.startAt + (samples.length + result.lengthChangeSamples) / frame.sampleRate,
-      );
-      return { start: decision.startAt, change: result.lengthChangeSamples };
+      const expanded =
+        (decision.expandSeconds ?? 0) > 0 && typeof expand === "function"
+          ? expand(
+              result.channels,
+              frame.sampleRate,
+              Math.floor(decision.expandSeconds * frame.sampleRate),
+              module.previousEnd !== null && Math.abs(frame.timestamp - module.previousEnd) <= 1
+                ? module.previous
+                : [],
+            )
+          : result;
+      const added = Math.max(0, expanded.lengthChangeSamples);
+      scheduler.confirmExpansion?.(added / frame.sampleRate);
+      module.expandedSamples += added;
+      module.previous = [samples];
+      module.previousEnd = frame.timestamp + (samples.length / frame.sampleRate) * 1000000;
+      const change = (expanded.channels[0]?.length ?? samples.length) - samples.length;
+      scheduler.confirmPlayoutEnd(decision.startAt + (samples.length + change) / frame.sampleRate);
+      return { start: decision.startAt, change };
     });
     maximumStartDifferenceSeconds = Math.max(
       maximumStartDifferenceSeconds,
@@ -265,7 +285,12 @@ async function replaySharedClock(events, frames, moduleUrl, comparisonModuleUrl)
       Math.abs(results[0].change - results[1].change),
     );
   }
-  return { frames: events.length, maximumStartDifferenceSeconds, maximumLengthDifferenceSamples };
+  return {
+    frames: events.length,
+    maximumStartDifferenceSeconds,
+    maximumLengthDifferenceSamples,
+    expandedSamples: modules.map((module) => module.expandedSamples),
+  };
 }
 
 /** リモート受信が実際に音を取り出したことを、PCM と受信統計の両方で検証する。 */
@@ -386,9 +411,16 @@ async function withEncodedReplay(result) {
   }
 }
 
+function expansionStats(playout, comparison) {
+  return {
+    current: (playout.audio.session.playout.expanded ?? 0) * 1000,
+    comparison: (comparison?.audio.session.playout.expanded ?? 0) * 1000,
+  };
+}
+
 export async function measure(caseName, { moduleUrl, comparisonModuleUrl, seconds = 6 } = {}) {
   const [, name, pattern, rateString] = caseName.split("|");
-  if (!["clean", "recurring60", "jitter30"].includes(pattern))
+  if (!["clean", "recurring60", "jitter30", "step60"].includes(pattern))
     throw new Error(`Unknown packet pattern: ${pattern}`);
   const contextRate = Number(rateString);
   if (![44100, 48000].includes(contextRate))
@@ -516,7 +548,7 @@ export async function measure(caseName, { moduleUrl, comparisonModuleUrl, second
         const data=frame.data.slice(0);const timestamp=frame.timestamp;const pts=frame.getMetadata().timestamp;
         if(firstTimestamp===null){firstTimestamp=timestamp;baseMs=performance.now();}
         const mediaMs=((timestamp-firstTimestamp)>>>0)/48;
-        const speechMs=mediaMs-startMediaMs;const extra=pattern==='recurring60'&&speechMs>=1000&&speechMs%1200>=400&&speechMs%1200<480?60:pattern==='jitter30'&&speechMs>=1000?(sequence*37%31):0;
+        const speechMs=mediaMs-startMediaMs;const extra=pattern==='step60'&&speechMs>=2000?60:pattern==='recurring60'&&speechMs>=1000&&speechMs%1200>=400&&speechMs%1200<480?60:pattern==='jitter30'&&speechMs>=1000?(sequence*37%31):0;
         const due=baseMs+mediaMs+extra;
         if(extra>0&&due>performance.now())await new Promise(resolve=>setTimeout(resolve,due-performance.now()));
         const releasedAtMs=performance.timeOrigin+performance.now();
@@ -670,6 +702,7 @@ export async function measure(caseName, { moduleUrl, comparisonModuleUrl, second
         moduleUrl,
         comparisonModuleUrl,
       ),
+      preemptiveExpansionMs: expansionStats(playout, comparison),
       decodedFrames,
       peaks,
       contextPlayback: contextPlaybackStats(outputPlayback.before, outputPlayback.after),

@@ -484,13 +484,6 @@ test("resolveAuthorizationToken: authInfo が無ければ SETUP のトークン�
   assert.equal(await resolveAuthorizationToken({}, undefined, useValueToken()), undefined);
 });
 
-/** 再構成 (fire-and-forget) の完了を待つ */
-async function waitForConfigured(control: SubscriberInitialConfigControl): Promise<void> {
-  for (let i = 0; i < 10 && !control.videoDecoderConfigured; i++) {
-    await Promise.resolve();
-  }
-}
-
 /**
  * 音声の cache 境界の検証用の制御口
  *
@@ -857,55 +850,6 @@ test("applyInitialVideoConfig: 適用後に同じ config の Object では再構
   control.handleVideoObject(makeIdentifiedObject(0n, 0x33));
   assert.equal(configureCount, 1);
   assert.deepEqual(decoded, [0x33]);
-});
-
-/**
- * draft-ietf-moq-loc-04 §2.3.2.1:
- * 初期 configure の適用に失敗した場合は onError を通知し、後続の Object で再試行して復号を続ける。
- */
-test("applyInitialVideoConfig: 適用失敗は onError を通知し後続の Object で再試行する", async () => {
-  const { subscriber, errors } = createTestSubscriber({ video: {} });
-  const control = subscriber as unknown as SubscriberInitialConfigControl;
-  let configureCount = 0;
-  const decoded: number[] = [];
-  control.videoDecoder = {
-    configure: async () => {
-      configureCount++;
-      // 1 回目だけ失敗させる (初期 configure の失敗)
-      if (configureCount === 1) {
-        throw new Error("configure failed");
-      }
-    },
-    decode: (payload) => {
-      decoded.push(payload[0] ?? -1);
-    },
-  };
-  control.videoDecoderConfigured = true;
-  control.videoTrackInfo = makeVideoTrackInfo({ codec: "av01.0.04M.08" });
-  control.videoInitialConfigPending = true;
-  const config = new Uint8Array([7, 7]);
-  control.videoSubscriber = {
-    trackProperties: [{ id: LOC.LOCPropertyId.VIDEO_CONFIG, data: config }],
-  };
-
-  control.handleVideoObject(makeIdentifiedObject(0n, 0x44));
-  await control.applyInitialVideoConfig();
-
-  // 失敗は onError で通知される
-  assert.ok(errors[0] instanceof Error);
-  assert.isTrue(errors[0].message.includes("configure failed"));
-  // 保留分の解放で再構成が 1 回起動し、その Object は再構成のため捨てられる
-  assert.equal(configureCount, 2);
-  assert.deepEqual(decoded, []);
-  // 再構成した decoder はキーフレームから始める。捨てた Object 0 を参照する Object 1 は
-  // 復号せず (参照先の欠落)、次の Group の先頭 (キーフレーム) から復号を続ける
-  await waitForConfigured(control);
-  control.handleVideoObject(makeIdentifiedObject(1n, 0x55));
-  assert.equal(configureCount, 2);
-  assert.deepEqual(decoded, []);
-  assert.equal(subscriber.getStats().video?.missingReferenceFramesDropped, 1);
-  control.handleVideoObject({ ...makeIdentifiedObject(0n, 0x66), groupId: 2n });
-  assert.deepEqual(decoded, [0x66]);
 });
 
 /**

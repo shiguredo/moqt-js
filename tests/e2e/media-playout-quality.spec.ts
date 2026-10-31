@@ -437,16 +437,19 @@ for (const { frames, gapMicros } of [
     await openPlayoutPage(page);
     const result = await evaluatePlayout(
       page,
-      async ({ moduleUrl, frames, gapMicros }) => {
+      async ({ moduleUrl, harnessUrl, frames, gapMicros }) => {
         const { createMediaPlayout } = await import(moduleUrl);
+        const { waitFor } = await import(harnessUrl);
         const context = new AudioContext({ sampleRate: 48000 });
         const chunks: Float32Array[] = [];
+        let capturedUntil = 0;
         const module = URL.createObjectURL(
           new Blob(
             [
               `class Capture extends AudioWorkletProcessor {
         process(inputs, outputs) {
-          this.port.postMessage(inputs[0]?.[0]?.slice() ?? new Float32Array(outputs[0][0].length));
+          const samples = inputs[0]?.[0]?.slice() ?? new Float32Array(outputs[0][0].length);
+          this.port.postMessage({ samples, endFrame: currentFrame + samples.length });
           return true;
         }
       } registerProcessor("quality-capture", Capture);`,
@@ -457,8 +460,9 @@ for (const { frames, gapMicros } of [
         await context.audioWorklet.addModule(module);
         URL.revokeObjectURL(module);
         const tap = new AudioWorkletNode(context, "quality-capture");
-        tap.port.onmessage = (event: MessageEvent<Float32Array>) => {
-          chunks.push(event.data);
+        tap.port.onmessage = (event: MessageEvent<{ samples: Float32Array; endFrame: number }>) => {
+          chunks.push(event.data.samples);
+          capturedUntil = event.data.endFrame;
         };
         const mute = context.createGain();
         mute.gain.value = 0;
@@ -483,9 +487,8 @@ for (const { frames, gapMicros } of [
             data.close();
           }
           await playout.drainAudio({ maxWaitMs: 500 });
-          await new Promise<void>((resolve) => {
-            setTimeout(resolve, 100);
-          });
+          const captureFrame = Math.ceil(context.currentTime * context.sampleRate) + 384;
+          await waitFor(() => capturedUntil >= captureFrame, 2000, "停止後の出力の収録完了");
           const samples = chunks.flatMap((chunk) => Array.from(chunk));
           let previous = 0;
           let maximumStep = 0;
@@ -552,6 +555,7 @@ test("圧縮した音の直後に欠落しても補間の材料が不足しな�
     const session = new AudioPlayoutSession({ timing }) as unknown as {
       playout: import("../../src/playout/audioPlayout").AudioPlayoutScheduler;
       prepareOutput(output: { context: BaseAudioContext; destination: AudioNode }): Promise<void>;
+      drainReserved(): Promise<unknown>;
       copyChannels(data: AudioData): Float32Array[];
       playSound(
         output: { context: AudioContext; destination: AudioNode },
@@ -587,10 +591,11 @@ test("圧縮した音の直後に欠落しても補間の材料が不足しな�
         session.playSound(output, decision, data, session.copyChannels(data));
         data.close();
       }
+      // 停止中に積んだ制御の受理を確認し、既知の終端より後の無送信を欠落へ混ぜない。
+      await session.prepareOutput(output);
       await output.context.resume();
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 200);
-      });
+      await session.drainReserved();
+      await harness.waitFor(() => session.playout.concealed > 0, 2000, "補間実績の通知");
       return {
         audio: {
           compressedMs: session.playout.compressed * 1000,

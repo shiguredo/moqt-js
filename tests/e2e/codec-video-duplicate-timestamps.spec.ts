@@ -11,6 +11,11 @@ test("同じ timestamp の実 VP9 出力を落とさず、参照フレームを�
   const result = await page.evaluate(
     async (generationUrl) => {
       const { recordEncodeGeneration, shouldSendEncodedChunk } = await import(generationUrl);
+      const { VideoDecodeInputs } = await import(
+        new URL("./playout/videoPlayoutSession.ts", generationUrl).href
+      );
+      const inputs = new VideoDecodeInputs({ maxTracked: 256 });
+      let missingInputs = 0;
       const records = new Map();
       const errors: string[] = [];
       const counts = { encoded: 0, sent: 0, control: 0, filtered: 0 };
@@ -25,6 +30,7 @@ test("同じ timestamp の実 VP9 出力を落とさず、参照フレームを�
       const filtered = new VideoDecoder({
         output: (frame) => {
           counts.filtered++;
+          if (inputs.take(frame.timestamp)?.timestampKind !== "wallClock") missingInputs++;
           frame.close();
         },
         error: (error) => errors.push(`filtered: ${error.message}`),
@@ -37,6 +43,10 @@ test("同じ timestamp の実 VP9 出力を落とさず、参照フレームを�
           control.decode(chunk);
           if (shouldSendEncodedChunk(records, 0, chunk.timestamp)) {
             counts.sent++;
+            inputs.remember(chunk.timestamp, {
+              timestampKind: "wallClock",
+              location: { group: 0n, object: BigInt(counts.sent) },
+            });
             if (filtered.state === "configured") filtered.decode(chunk);
           }
         },
@@ -77,7 +87,7 @@ test("同じ timestamp の実 VP9 出力を落とさず、参照フレームを�
         await encoder.flush();
         await control.flush();
         if (filtered.state === "configured") await filtered.flush();
-        return { counts, errors };
+        return { counts, errors, missingInputs, remainingInputs: inputs.size };
       } finally {
         if (encoder.state !== "closed") encoder.close();
         if (control.state !== "closed") control.close();
@@ -95,4 +105,6 @@ test("同じ timestamp の実 VP9 出力を落とさず、参照フレームを�
   assert.deepEqual(result.errors, [], "送信前処理を通しても復号エラーがないこと");
   assert.equal(result.counts.sent, 120, "同じ timestamp の符号化出力もすべて送ること");
   assert.equal(result.counts.filtered, 120, "送信前処理を通した全フレームを復号すること");
+  assert.equal(result.missingInputs, 0, "同じ timestamp の受信側メタデータもすべて対応すること");
+  assert.equal(result.remainingInputs, 0);
 });

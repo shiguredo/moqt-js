@@ -1019,6 +1019,9 @@ export function useSubscriber(
     const deviceId = settings.selectedAudioOutputDeviceId.value;
     void audioPlaybackControllerRef.current?.setOutputDevice(deviceId).catch((error: unknown) => {
       console.error("Failed to set audio output device:", error);
+      addLog("error", `[${subscriberId}] failed to set audio output device`, {
+        message: error instanceof Error ? error.message : String(error),
+      });
     });
   });
 
@@ -1182,11 +1185,11 @@ export function useSubscriber(
    * @param options.jitterBuffer - jitter buffer (共有の時間軸) を使うか
    * @param options.targetLatencyMs - catalog から解決した表示の遅れの目標 (ミリ秒)
    */
-  function createSubscriberMediaPlayout(options: {
+  async function createSubscriberMediaPlayout(options: {
     video: boolean;
     jitterBuffer: boolean;
     targetLatencyMs: number | null;
-  }): void {
+  }): Promise<MediaPlayout> {
     // 前の購読の映像の表示 (予約した表示と表示待ち) と、復号へ渡した映像入力の対応表を
     // 捨てる
     mediaPlayoutRef.current?.clearVideoQueue();
@@ -1201,9 +1204,8 @@ export function useSubscriber(
       // 復号の出力で入力が引けなかった音に使う、意図した復号前の遅延。購読中に設定が
       // 変わったときは setIntentionalDelayMs で更新する
       intentionalDelayMs: preDecodeDelayRef.current?.delayMs ?? 0,
-      // 復号の出力で位置を引くため、同じ TIMESTAMP の Object が重なったらその TIMESTAMP の
-      // 分は忘れる (どちらの位置か決められない)。relay の cache から追いつく分を覚えられる
-      // 上限にする
+      // 音声の同じ TIMESTAMP は位置が一意でないため忘れ、映像は入力順で複数件を保持する。
+      // relay の cache から追いつく分を覚えられる上限にする。
       decodeInputs: {
         forgetOnDuplicate: true,
         maxTracked: MAX_TRACKED_DECODE_INPUTS,
@@ -1238,8 +1240,9 @@ export function useSubscriber(
         : null,
     });
     // 再生中の AudioContext があれば、作り直した入口へ鳴らす先を付ける
-    getAudioPlaybackController().attachPlaybackToPlayout(playout);
     mediaPlayoutRef.current = playout;
+    await getAudioPlaybackController().attachPlaybackToPlayout(playout);
+    return playout;
   }
 
   /**
@@ -1428,17 +1431,21 @@ export function useSubscriber(
    * 時間軸へ渡し、音声と映像で同じ表示時刻の式を使う (draft-ietf-moq-msf-01 §5.2.8)。
    * 音声だけを購読するときは映像の時間軸を作らないため、この関数は呼ばない
    */
-  function startPlayoutTiming(tracks: CatalogMediaTracks): void {
+  async function startPlayoutTiming(
+    tracks: CatalogMediaTracks,
+    signal: AbortSignal,
+  ): Promise<boolean> {
     stopPlayoutTiming();
     playoutTimingRef.current.reset();
     const enabled = settings.jitterBufferEnabled.value;
     // キューの上限が変わるため、時間軸も作り直す (表示の遅れの上限がキューから決まる)。
     // 作り直した時間軸にも同じ targetLatency を渡す (無いときは null でフォールバック)
-    createSubscriberMediaPlayout({
+    const playout = await createSubscriberMediaPlayout({
       video: true,
       jitterBuffer: enabled,
       targetLatencyMs: resolveTargetLatencyMs(tracks),
     });
+    if (signal.aborted || mediaPlayoutRef.current !== playout) return false;
     playoutTimingTimerRef.current = setInterval(() => {
       const instance = sub.getSubscriber(subscriberId);
       if (!instance) return;
@@ -1453,6 +1460,7 @@ export function useSubscriber(
       instance.avSync.value = avSync;
       logAvSyncTransition(avSync);
     }, PLAYOUT_TIMING_PUBLISH_INTERVAL_MS);
+    return true;
   }
 
   /**
@@ -2160,12 +2168,13 @@ export function useSubscriber(
     // 同期の推定 (A/V) は映像が無いため出さない。音声の Track だけでも targetLatency は
     // 宣言され得る (draft-ietf-moq-msf-01 §5.2.8)
     const audioOnlyJitterBufferEnabled = settings.jitterBufferEnabled.value;
-    createSubscriberMediaPlayout({
+    await createSubscriberMediaPlayout({
       // 揃える相手の映像がいないため、映像の表示の組み立ては含めない
       video: false,
       jitterBuffer: audioOnlyJitterBufferEnabled,
       targetLatencyMs: effectiveTargetLatencyMs(audioTrack),
     });
+    if (signal.aborted) return;
     await startAudioSubscription(
       session,
       namespaceArray,
@@ -2981,6 +2990,8 @@ export function useSubscriber(
         if (signal.aborted) {
           return;
         }
+        // 復旧で破棄された入力を、新しい同一 timestamp の出力と取り違えない。
+        mediaPlayoutRef.current?.clearVideoDecodeInputs();
         if (restarted) {
           // 復号器を作り直すと参照フレームを失うため、キーフレーム待ちへ戻す。
           // 位置は保ち、復旧中に遅着した古い Group や Object を再び復号しない。
@@ -3068,7 +3079,7 @@ export function useSubscriber(
       instance.statusMessage.value = "Subscribing...";
       resetSubscriberStats(instance);
       // 購読する音声と映像のトラックから targetLatency を解決して時間軸へ渡す
-      startPlayoutTiming(tracksFromCatalog);
+      if (!(await startPlayoutTiming(tracksFromCatalog, signal))) return;
       resetVideoGroupGate();
 
       // Subscriber オプションを構築する

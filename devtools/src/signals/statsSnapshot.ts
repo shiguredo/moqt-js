@@ -326,7 +326,7 @@ export interface SubscriberAudioStats {
  *
  * 音声を鳴らす経路のうち、playout の計器 (予約・穴・段差) からは見えない層である。
  * Context の停止と、出力システム・機器側の遅延を、予約や通信の待ちと区別する
- * (docs/AUDIO_GLITCH_CAUSES.md の B4 / B7)。
+ * (docs/AUDIO_GLITCH_CAUSES.md の B4)。
  */
 export interface SubscriberAudioOutputStats {
   /**
@@ -429,7 +429,7 @@ export interface SubscriberStats {
    * 音声出力 (AudioContext と出力機器) の診断
    *
    * 音声の再生の計器 (audio.playoutTiming) が見ない層の状態であり、鳴らす経路が
-   * 前提から外れていないかを読む (docs/AUDIO_GLITCH_CAUSES.md の B4 / B7)
+   * 前提から外れていないかを読む (docs/AUDIO_GLITCH_CAUSES.md の B4)
    */
   audioOutput: SubscriberAudioOutputStats;
   event: SubscriberEventStats;

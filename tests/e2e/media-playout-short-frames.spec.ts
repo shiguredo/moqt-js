@@ -17,14 +17,20 @@ for (const frames of [120, 192, 240, 960]) {
         async ({ moduleUrl, harnessUrl, frames, scenario }) => {
           const { createMediaPlayout } = await import(moduleUrl);
           const { waitFor } = await import(harnessUrl);
+          const { playoutAudioOf } = await import(
+            new URL("./testSupport/mediaPlayoutInternals.ts", moduleUrl).href
+          );
           const context = new AudioContext({ sampleRate: 48000 });
           const chunks: Float32Array[] = [];
+          let reservedEndSeconds = 0;
+          let capturedUntil = 0;
           const url = URL.createObjectURL(
             new Blob(
               [
                 `class Capture extends AudioWorkletProcessor {
-                  process(inputs) {
-                    this.port.postMessage(inputs[0]?.[0]?.slice() ?? new Float32Array(128));
+                  process(inputs, outputs) {
+                    const samples = inputs[0]?.[0]?.slice() ?? new Float32Array(outputs[0][0].length);
+                    this.port.postMessage({ samples, endFrame: currentFrame + samples.length });
                     return true;
                   }
                 } registerProcessor("short-frame-capture", Capture);`,
@@ -35,7 +41,12 @@ for (const frames of [120, 192, 240, 960]) {
           await context.audioWorklet.addModule(url);
           URL.revokeObjectURL(url);
           const tap = new AudioWorkletNode(context, "short-frame-capture");
-          tap.port.onmessage = (event: MessageEvent<Float32Array>) => chunks.push(event.data);
+          tap.port.onmessage = (
+            event: MessageEvent<{ samples: Float32Array; endFrame: number }>,
+          ) => {
+            chunks.push(event.data.samples);
+            capturedUntil = event.data.endFrame;
+          };
           const mute = context.createGain();
           mute.gain.value = 0;
           tap.connect(mute).connect(context.destination);
@@ -53,6 +64,10 @@ for (const frames of [120, 192, 240, 960]) {
             });
             playout.trackAudioDecodeInput(timestamp, { timestampKind: "mediaTime" });
             statuses.push(playout.pushAudio(data).status);
+            const session = playoutAudioOf(playout) as unknown as {
+              lastRenderEndSeconds: number;
+            };
+            reservedEndSeconds = session.lastRenderEndSeconds;
             data.close();
           };
           try {
@@ -89,10 +104,13 @@ for (const frames of [120, 192, 240, 960]) {
             // 停止中に積んだ制御の受理を確認してから、実際の時計を再開する。
             await playout.prepareAudio();
             await context.resume();
-            await playout.drainAudio();
-            await new Promise<void>((resolve) => {
-              setTimeout(resolve, 50);
-            });
+            const drain = await playout.drainAudio();
+            const endAtDrain = context.currentTime;
+            // 実出力と MessagePort の配送が検査位置を越えるまで待ち、固定 sleep で推測しない。
+            const captureFrame =
+              Math.ceil(Math.max(context.currentTime, reservedEndSeconds) * context.sampleRate) +
+              384;
+            await waitFor(() => capturedUntil >= captureFrame, 2000, "停止後の出力の収録完了");
             let previous = 0;
             let maximumStep = 0;
             let peak = 0;
@@ -106,7 +124,17 @@ for (const frames of [120, 192, 240, 960]) {
                 previous = sample;
               }
             }
-            return { statuses, maximumStep, peak, targetActiveSamples };
+            return {
+              statuses,
+              maximumStep,
+              peak,
+              targetActiveSamples,
+              reservedEndSeconds,
+              drain,
+              endAtDrain,
+              captureFrame,
+              capturedUntil,
+            };
           } finally {
             playout.clearAll();
             tap.disconnect();
@@ -123,6 +151,10 @@ for (const frames of [120, 192, 240, 960]) {
       assert.ok(
         result.statuses.every((status) => status === "played"),
         "全入力を再生すること",
+      );
+      assert.ok(
+        result.endAtDrain >= result.reservedEndSeconds,
+        "実音の予約終端を描画する前に drain を完了しないこと",
       );
       assert.ok(
         result.peak > 0.299 && result.targetActiveSamples >= frames,

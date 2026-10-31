@@ -343,6 +343,8 @@ export type AudioPlayoutDecision =
        * 実際に詰められるかは波形しだいであり、適用した結果を `confirmStretch` で返す
        */
       compressSeconds: number;
+      /** 到着基準の深さを戻す伸長の上限。実際に適用した量を confirmExpansion へ返す。 */
+      expandSeconds?: number;
       /**
        * 補間する隙間の開始時刻 (`AudioContext.currentTime` の秒)。
        *
@@ -420,6 +422,26 @@ export class AudioPlayoutScheduler {
   private requestedSeconds = 0;
   // 到着基準の圧縮では、確定した削減量だけ timestamp と再生時刻の対応も前へ戻す。
   private requestedByArrival = false;
+  private requestedExpansionSeconds = 0;
+  private expandedSeconds = 0;
+  private arrivalDepthRecovery = false;
+
+  /** 再同期後の深さの回復で実際に伸ばした合計 (秒)。欠落の補間とは区別する。 */
+  get expanded(): number {
+    return this.expandedSeconds;
+  }
+
+  confirmExpansion(appliedSeconds: number): void {
+    const applied = Number.isFinite(appliedSeconds)
+      ? Math.max(0, Math.min(appliedSeconds, this.requestedExpansionSeconds))
+      : 0;
+    this.requestedExpansionSeconds = 0;
+    if (this.anchor !== null && this.lastEnd !== null) {
+      this.anchor.time += applied;
+      this.lastEnd += applied;
+      this.expandedSeconds += applied;
+    }
+  }
   // 詰めた合計 (秒)。統計に出す
   private compressedSeconds = 0;
   // 補間した合計 (秒) と回数。統計に出す
@@ -480,6 +502,7 @@ export class AudioPlayoutScheduler {
   ): AudioPlayoutDecision {
     // 前の音の補間と圧縮の確定が返っていなければ、適用されなかったものとして扱う。
     this.requestedConcealSeconds = 0;
+    this.requestedExpansionSeconds = 0;
     this.confirmStretch(0);
     if (target.targetStartSeconds === null || !target.enforceTarget) {
       return this.scheduleByArrival(
@@ -490,6 +513,7 @@ export class AudioPlayoutScheduler {
         target.arrivalDelaySeconds,
       );
     }
+    this.arrivalDepthRecovery = false;
     const stretchMinSeconds = target.stretchMinSeconds ?? this.stretchMinSeconds;
     const targetStartSeconds = target.targetStartSeconds;
     const limit =
@@ -763,6 +787,8 @@ export class AudioPlayoutScheduler {
     this.requestedSeconds = 0;
     this.requestedByArrival = false;
     this.requestedConcealSeconds = 0;
+    this.requestedExpansionSeconds = 0;
+    this.arrivalDepthRecovery = false;
   }
 
   /**
@@ -802,6 +828,7 @@ export class AudioPlayoutScheduler {
       const resyncedSeconds = earliestSeconds;
       if (resyncedSeconds - startAt >= AUDIO_PLAYOUT_RESYNC_MIN_JUMP_SECONDS) {
         this.rebase(resyncedSeconds, timestampMicroseconds);
+        this.arrivalDepthRecovery = true;
       }
       startAt = resyncedSeconds;
     } else if (startAt > nowSeconds + limitSeconds) {
@@ -837,10 +864,24 @@ export class AudioPlayoutScheduler {
         : 0;
     this.requestedSeconds = compressSeconds;
     this.requestedByArrival = compressSeconds > 0;
+    // 再開は遅らせず、伸長できる波形だけで目標の深さへ戻す。圧縮とは同時に要求しない。
+    if (startAt >= arrivalTarget - AUDIO_PLAYOUT_STRETCH_MIN_EPSILON_SECONDS)
+      this.arrivalDepthRecovery = false;
+    const expandSeconds = this.arrivalDepthRecovery
+      ? Math.min(durationSeconds, Math.max(0, arrivalTarget - startAt))
+      : 0;
+    this.requestedExpansionSeconds = expandSeconds;
     this.lastEnd = startAt + durationSeconds - compressSeconds;
     this.lastTimestampMicroseconds = timestampMicroseconds;
     const concealment = this.concealmentOf(nowSeconds, previousEnd, startAt);
-    return { kind: "play", startAt, basis: "arrival", compressSeconds, ...concealment };
+    return {
+      kind: "play",
+      startAt,
+      basis: "arrival",
+      compressSeconds,
+      ...(expandSeconds > AUDIO_PLAYOUT_STRETCH_MIN_EPSILON_SECONDS ? { expandSeconds } : {}),
+      ...concealment,
+    };
   }
 
   /**

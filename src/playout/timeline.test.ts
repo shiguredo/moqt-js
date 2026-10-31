@@ -1094,12 +1094,8 @@ test("observe: 基準の差が大きくても相手側へ足す分は上限ま�
   );
 });
 
-// 完了条件 (実測): 音声の TIMESTAMP が 600 ms 段差でずれても、映像を音声の膨らんだ遅延に
-// 合わせない。段差は「到着 - TIMESTAMP」に現れるため、音声の jitter buffer の遅延 (NetEq の
-// 目標) が 600 ms へ育つ。基準 (窓の最小値) は 10 秒間動かないため、2 つのトラックは
-// 共有されたまま差だけが開く。修正前は、時計のずれの証拠を見る前に上限が掛からず、この差の
-// 全額 (497 ms) を映像へ足して表示待ちが 512 ms になった (実測では syncExtraDelayMs 600.5、
-// displayWait 496 ms、そこから毎秒 20 ms でしか戻らなかった)
+// 音声の TIMESTAMP に 600 ms の段差があっても、時計のずれを映像の待ちへ移さない。
+// 10 秒の基準窓が段差前の値を持つ間も、音声予算と同期の補償上限を別々に適用する。
 test("observe: 音声の TIMESTAMP が段差でずれても、映像へ足す遅延は上限までにする", () => {
   const timeline = createTimeline();
   // 音声は 20 ms ごと (Opus)、映像は 30 fps で、どちらも揺らぎ 0 で届く
@@ -1543,6 +1539,51 @@ test("observe: 片方のトラックが届かなくなっても保持は満了�
 });
 
 // 経路の基準は保ちつつ、古い揺らぎだけが短い窓から消えることを検証する。
+test("映像の学習分布が上限超過だけになっても、空を遅延 0 として適用しない", () => {
+  const timeline = new PlayoutTimeline({ timeOriginMs: 0, maxQueuedFrames: 24 });
+  for (let index = 0; index < 160; index++) {
+    const mediaMs = index * 50;
+    // 基準の 0 ms は 10 秒窓へ残すが、2 秒の学習窓は 40 ms だけにしておく。
+    const jitterMs = index < 40 ? 0 : index < 100 ? 40 : 600;
+    timeline.observe("video", mediaMs + 20 + jitterMs, mediaMs * 1000);
+    if (index >= 100)
+      assert.equal(timeline.videoDelayMs, 40, "有効な観測が無い間は直前値を保つこと");
+  }
+});
+
+test("圧縮の不感帯は有効な学習の 1,999 ms まで保ち、2,000 ms で下限へ移る", () => {
+  const timeline = new PlayoutTimeline({ timeOriginMs: 0, maxQueuedFrames: 24 });
+  assert.equal(timeline.compressionDeadbandSeconds(0.02), 0.02, "未観測なら初期値を保つこと");
+  let learnedAt = 0;
+  for (let at = 0; at < 1000; at += 20) {
+    timeline.observe("audio", at, at * 1000);
+    if (timeline.audioDelayStats().jitterMs !== null) {
+      learnedAt = at;
+      break;
+    }
+  }
+  assert.isAbove(learnedAt, 0, "実際に初期学習を終えてから窓を測ること");
+  for (let at = learnedAt + 20; at < learnedAt + 1999; at += 20)
+    timeline.observe("audio", at, at * 1000);
+  timeline.observe("audio", learnedAt + 1999, (learnedAt + 1999) * 1000);
+  assert.equal(timeline.compressionDeadbandSeconds(0.02), 0.02);
+  timeline.observe("audio", learnedAt + 2000, (learnedAt + 2000) * 1000);
+  assert.equal(timeline.compressionDeadbandSeconds(0.02), 0.005);
+});
+
+test("到着基準の同期先は目標値で代用せず、実際の深さとその回復に追従する", () => {
+  const timeline = new PlayoutTimeline({ timeOriginMs: 0, maxQueuedFrames: 24 });
+  timeline.observe("audio", 1000, 1000000);
+  timeline.observe("video", 1000, 1000000);
+  assert.equal(timeline.audioArrivalDelayMs, 50);
+  timeline.observeAudioArrivalDelay(10, 1000);
+  assert.equal(timeline.audioArrivalDelayMs, 10, "再同期直後の浅い実出力を隠さないこと");
+  timeline.observeAudioArrivalDelay(50, 1100);
+  assert.equal(timeline.audioArrivalDelayMs, 50, "深さが戻った後は実値を使うこと");
+  timeline.resetStream("audio");
+  assert.equal(timeline.audioArrivalDelayMs, null, "出力を止めた後へ古い実値を持ち越さないこと");
+});
+
 test("映像の一時的な遅延が消えたら、同期用の待ちを保持せず通常の予算へ戻す", () => {
   const timeline = createTimeline();
   let available = 0;

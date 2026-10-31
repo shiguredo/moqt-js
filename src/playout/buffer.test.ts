@@ -592,7 +592,7 @@ function enqueueJoinCatchUp(
 // 購読の開始では、relay の cache から古いフレームが実時間より速く届いて live に追いつく。
 // 追いつく途中のフレームの遅れは経路の揺らぎではない。まとまって届いたとみなせない間隔
 // (フレーム間隔の半分以上) で届くものも、再生遅延の目標に使わない。使うと再生遅延が
-// 数百ミリ秒になり、窓 (10 秒) から抜けた後も毎秒 20 ms でしか下がらない
+// 数百 ms になり、本来待つ必要のない live の表示まで遅れる
 test("playoutDelayMs: 購読の開始に cache から追いつく途中のフレームの遅れを再生遅延に使わない", () => {
   const timeline = createTimeline();
   const buffer = new PlayoutBuffer<number>(JITTER_BUFFER_MAX_QUEUED_FRAMES, timeline);

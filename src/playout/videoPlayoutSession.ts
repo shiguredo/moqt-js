@@ -24,11 +24,7 @@
  */
 
 import type { Location } from "../message";
-import {
-  storeDecodeInput,
-  type DecodeInputsOptions,
-  type PlayoutTimestampKind,
-} from "./decodeInputTimestamps";
+import { type DecodeInputsOptions, type PlayoutTimestampKind } from "./decodeInputTimestamps";
 import type { PlayoutTimeline } from "./timeline";
 import { JITTER_BUFFER_MAX_QUEUED_FRAMES, PlayoutBuffer } from "./buffer";
 
@@ -50,50 +46,44 @@ export interface VideoDecodeInput {
  * 復号へ渡した Object の情報を、復号の出力で引けるように覚えておく対応表
  *
  * TIMESTAMP を持たない Object は、同じ TIMESTAMP (0) を共有しうる。位置を追いつきの判定に
- * 使うときは、種類が `none` の入力と、重なった TIMESTAMP の入力を覚えない
- * (`forgetOnDuplicate`)。復号の出力では位置が分からないものとして扱う。
+ * 使うときは、種類が `none` の入力は覚えない。同じ TIMESTAMP の入力は FIFO で保持し、
+ * 復号器が返す複数のフレームをそれぞれ対応させる。
  *
  * 1 つの再生のまとまりに対して 1 つ作る。購読を始めるとき (`MediaPlayout.resetPlayout`) と
  * 停止するとき (`MediaPlayout.clearAll`) に `clear()` して再利用する。
  */
 export class VideoDecodeInputs {
-  private readonly inputs = new Map<number, VideoDecodeInput>();
-  private readonly options: DecodeInputsOptions;
+  private inputs: { timestamp: number; input: VideoDecodeInput }[] = [];
+  private readonly maxTracked: number;
 
-  constructor(options: DecodeInputsOptions) {
-    this.options = options;
+  constructor(options: Pick<DecodeInputsOptions, "maxTracked">) {
+    this.maxTracked = options.maxTracked;
   }
 
-  /** 覚えている件数 */
+  /** 保持している入力の件数。同じ timestamp の入力も別々に数える。 */
   get size(): number {
-    return this.inputs.size;
+    return this.inputs.length;
   }
 
-  /**
-   * 復号へ渡した Object の情報を覚える
-   *
-   * @param timestamp - decoder へ渡した TIMESTAMP (マイクロ秒)
-   * @param input - TIMESTAMP の種類と Object の位置
-   */
+  /** 同じ timestamp の複数出力に備え、上書きせず投入順で保持する。 */
   remember(timestamp: number, input: VideoDecodeInput): void {
-    storeDecodeInput(this.inputs, timestamp, input, this.options);
+    if (input.timestampKind === "none") {
+      this.inputs = this.inputs.filter((entry) => entry.timestamp !== timestamp);
+      return;
+    }
+    this.inputs.push({ timestamp, input });
+    while (this.inputs.length > this.maxTracked) this.inputs.shift();
   }
 
-  /**
-   * 復号の出力の TIMESTAMP で引く (引いた分は忘れる)
-   *
-   * 1 つの TIMESTAMP につき 1 回だけ引ける。覚えていない (TIMESTAMP を持たない、重なった)
-   * フレームは undefined であり、呼び出し側は種類 `none` として扱う。
-   */
+  /** 同じ timestamp の先頭の入力だけを取り出す。 */
   take(timestamp: number): VideoDecodeInput | undefined {
-    const input = this.inputs.get(timestamp);
-    this.inputs.delete(timestamp);
-    return input;
+    const index = this.inputs.findIndex((entry) => entry.timestamp === timestamp);
+    return index === -1 ? undefined : this.inputs.splice(index, 1)[0]?.input;
   }
 
-  /** すべて忘れる (購読を始めるとき) */
+  /** 購読を終えるときは全件を解放する。 */
   clear(): void {
-    this.inputs.clear();
+    this.inputs = [];
   }
 }
 

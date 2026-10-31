@@ -42,8 +42,11 @@ import type {
 } from "./audioPlayoutTimingStats";
 import { AudioReceiveCatchUp } from "./audioReceiveCatchUp";
 import { AudioOutputRenderer } from "./audioOutputRenderer";
-import { compressSamples, type AudioSamples } from "./audioTimeStretch";
+import { compressSamples, preemptivelyExpandSamples, type AudioSamples } from "./audioTimeStretch";
 import { AUDIO_PLAYOUT_DELAY_FLOOR_MS, type PlayoutTimeline } from "./timeline";
+
+/** フレーム長の半分以上の媒体欠落は、予約が連続していても実音の継ぎ目を接続する。 */
+const MEDIA_GAP_SPLICE_FRAME_RATIO = 0.5;
 
 /**
  * Web Audio のうち、音声の再生で使う部分
@@ -466,6 +469,14 @@ export class AudioPlayoutSession {
         playResult.playedSeconds * 1_000,
         decision.basis,
       );
+      if (!this.clock.usingFallback) {
+        const presentedMs = this.clock.toPerformanceMs(playResult.startAtSeconds);
+        if (presentedMs !== null)
+          request.timeline.observeAudioArrivalDelay(
+            decision.basis === "arrival" ? presentedMs - arrivalMs : null,
+            performance.timeOrigin + arrivalMs,
+          );
+      }
       // 実際に鳴らす時刻を実績として記録する (同期ずれの推定に使う)。捨てた音は鳴らない
       // ため記録しない。目標の表示時刻を決められなかった音 (基準を共有できず到着基準で
       // 並べた音) も記録しない。同期ずれの推定は共有している間のずれを読むための値で
@@ -586,18 +597,32 @@ export class AudioPlayoutSession {
     // 届いた音を捨てると音が途切れるため、鳴らす時刻をずらした分だけ詰めて目標へ戻す
     // 詰めてよい長さは、目標に対して遅れている分までにする (削りすぎて「早すぎる」側へ
     // 振れ、詰める操作が往復するのを防ぐ。src/playout/audioTimeStretch.ts の compressSamples)
-    const stretched =
+    const compressed =
       decision.compressSeconds > 0
         ? compressSamples(channels, sampleRate, Math.round(decision.compressSeconds * sampleRate))
         : { channels, lengthChangeSamples: 0 };
     // 実際に詰められた長さを返す (詰められなかった分は遅れとして残る)
-    this.playout.confirmStretch(-stretched.lengthChangeSamples / sampleRate);
+    this.playout.confirmStretch(-compressed.lengthChangeSamples / sampleRate);
+    const history =
+      Math.abs(mediaGapMicros) <= 1 && this.previousSampleRate === sampleRate
+        ? (this.previousChannels ?? [])
+        : [];
+    const stretched =
+      (decision.expandSeconds ?? 0) > 0
+        ? preemptivelyExpandSamples(
+            compressed.channels,
+            sampleRate,
+            Math.floor((decision.expandSeconds ?? 0) * sampleRate),
+            history,
+          )
+        : compressed;
+    this.playout.confirmExpansion(Math.max(0, stretched.lengthChangeSamples) / sampleRate);
 
     // 欠落は出力側が判断する。未着に備えた補間を毎フレーム作らず、実音の予約を先に済ませる。
     // 媒体が飛んでも予約に穴が無い場合は、その波形の非連続だけを短く接続する。
     const playChannels =
       decision.totalGapSeconds <= 1e-9 &&
-      missingMediaMs >= (500 * numberOfFrames) / sampleRate &&
+      missingMediaMs >= (1000 * MEDIA_GAP_SPLICE_FRAME_RATIO * numberOfFrames) / sampleRate &&
       this.previousChannels !== null &&
       this.previousChannels.length === channels.length &&
       this.previousSampleRate === sampleRate
@@ -699,6 +724,24 @@ export class AudioPlayoutSession {
   }
 
   /**
+   * 停止中も進む壁時計だけで予約の完了を判定しない。
+   * resume の完了直後には出力時計がまだ止まっていることがあるため、実出力位置を
+   * 予約に使った performance 軸へ戻す。対応が無い場合は従来の壁時計を使う。
+   */
+  private drainPositionMs(nowMs: number): number {
+    const context = this.renderer?.output.context;
+    if (context === undefined) return nowMs;
+    const timestamp = context.getOutputTimestamp();
+    const seconds =
+      Number.isFinite(timestamp.contextTime) &&
+      (timestamp.contextTime ?? -1) >= 0 &&
+      (timestamp.performanceTime ?? 0) > 0
+        ? (timestamp.contextTime ?? context.currentTime)
+        : context.currentTime;
+    return Math.min(nowMs, this.clock.toPerformanceMs(seconds) ?? nowMs);
+  }
+
+  /**
    * 予約済みの音を鳴らし切ってから止める (停止時の drain)
    *
    * 停止の要求時点で予約されている音の最後が鳴り終わるまで待ち、そのあとに
@@ -735,8 +778,9 @@ export class AudioPlayoutSession {
       }
     };
     const startMs = performance.now();
-    const pendingMsAtStart = this.timing.pendingMs(startMs);
-    const pendingEndMs = this.timing.pendingEndMs(startMs);
+    const startPositionMs = this.drainPositionMs(startMs);
+    const pendingMsAtStart = this.timing.pendingMs(startPositionMs);
+    const pendingEndMs = this.timing.pendingEndMs(startPositionMs);
     const playedMsAtStart = this.timing.snapshot(startMs).playedMs;
     // 最後の予約が鳴り終わるまでの時間に余裕を足す。flush した Object があるときは、
     // その復号出力の予約がこれから増えるため、余裕の分は必ず待つ (復号の速さに依存させない)
@@ -754,8 +798,12 @@ export class AudioPlayoutSession {
     for (;;) {
       const nowMs = performance.now();
       const elapsedMs = nowMs - startMs;
-      const endMs = this.timing.pendingEndMs(nowMs);
-      const reservedDone = endMs === null || endMs <= nowMs;
+      const positionMs = this.drainPositionMs(nowMs);
+      const endMs = this.timing.pendingEndMs(positionMs);
+      const renderedDone =
+        this.renderer === null ||
+        this.renderer.output.context.currentTime >= this.lastRenderEndSeconds;
+      const reservedDone = (endMs === null || endMs <= positionMs) && renderedDone;
       if (isFlushSettled()) this.stopContinuation();
       if (reservedDone && isFlushSettled()) {
         break;
@@ -767,15 +815,16 @@ export class AudioPlayoutSession {
     }
 
     const finishedMs = performance.now();
+    const finishedPositionMs = this.drainPositionMs(finishedMs);
     // 待っても鳴り終わらなかった予約が、切った量である (`recordStopped` が数える)
-    const cutMs = this.timing.pendingMs(finishedMs);
+    const cutMs = this.timing.pendingMs(finishedPositionMs);
     // 鳴らせた量 = 停止時に予約されていた長さ + drain 中に増えた予約 - 切った長さ
     const reservedDuringDrainMs = Math.max(
       0,
       this.timing.snapshot(finishedMs).playedMs - playedMsAtStart,
     );
     const playedMs = Math.max(0, pendingMsAtStart + reservedDuringDrainMs - cutMs);
-    this.timing.recordStopped(finishedMs);
+    this.timing.recordStopped(finishedPositionMs);
     const result: MediaPlayoutDrainStats = {
       pendingMsAtStart,
       requestedMs,

@@ -120,12 +120,16 @@ for (const stage of ["live", "relay", "avRelay", "av"] as const) {
           setTimeout(resolve, 10);
         });
       }
-      if (stage === "live" || stage === "av")
+      if (stage === "live" || stage === "av") {
         assert.ok(contexts.size > 0, "実 Context を生成して検査すること");
-      assert.ok(
-        [...contexts.values()].every((state) => state === "closed"),
-        `初期化に失敗した Context を閉じること: ${JSON.stringify([...contexts])}`,
-      );
+        assert.ok(
+          [...contexts.values()].every((state) => state === "closed"),
+          `初期化に失敗した Context を閉じること: ${JSON.stringify([...contexts])}`,
+        );
+      } else {
+        // relay 系は入力を読んでから出力を作る。未作成を cleanup の成功と取り違えない。
+        assert.equal(contexts.size, 0, "入力読み込み失敗では実出力をまだ作らないこと");
+      }
     } finally {
       await session.detach();
     }

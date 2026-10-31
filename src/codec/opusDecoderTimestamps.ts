@@ -17,6 +17,21 @@ export class OpusDecoderTimestamps {
     if (this.enabled) this.pending.pop();
   }
 
+  /** 復元に失敗した出力を渡さず、direct / Worker の同じ通知経路へ流す。 */
+  restoreOrReport(data: AudioData, notifyError: (error: Error) => void): AudioData | null {
+    try {
+      return this.restore(data);
+    } catch (error) {
+      data.close();
+      try {
+        notifyError(error instanceof Error ? error : new Error(String(error)));
+      } catch {
+        // 失敗通知の例外で、ネイティブ decoder の出力 callback へ例外を戻さない。
+      }
+      return null;
+    }
+  }
+
   restore(data: AudioData): AudioData {
     if (!this.enabled) return data;
     const timestamp = this.pending.shift();

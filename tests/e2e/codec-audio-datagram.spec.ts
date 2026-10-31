@@ -1,5 +1,6 @@
 /** 復号前の Datagram 欠落でも、実 Opus の出力が媒体の時刻を保つことを検証する。 */
 import { test, expect } from "@playwright/test";
+import assert from "node:assert/strict";
 import { evaluatePlayout, openPlayoutPage } from "./playoutTestPage";
 
 test("Opus の timestamp の復元はステレオの PCM と所有権を保ち、時刻なしの連続時計を変えない", async ({
@@ -56,6 +57,30 @@ test("Opus の timestamp の復元はステレオの PCM と所有権を保ち�
   expect(result.restoredZero).toBe(0);
   expect(result.framesAfterRestore).toBe(0);
   expect(result.maxError).toBe(0);
+});
+
+test("timestamp の復元失敗は通知し、閉じた実 AudioData を出力へ渡さない", async ({ page }) => {
+  await openPlayoutPage(page);
+  const result = await evaluatePlayout(page, async ({ moduleUrl }) => {
+    const { OpusDecoderTimestamps } = await import(
+      new URL("./codec/opusDecoderTimestamps.ts", moduleUrl).href
+    );
+    const timestamps = new OpusDecoderTimestamps(true);
+    const data = new AudioData({
+      format: "f32",
+      sampleRate: 48000,
+      numberOfChannels: 1,
+      numberOfFrames: 960,
+      timestamp: 0,
+      data: new Float32Array(960),
+    });
+    data.close();
+    timestamps.submit(20000);
+    const errors: string[] = [];
+    const output = timestamps.restoreOrReport(data, (error: Error) => errors.push(error.message));
+    return { hasOutput: output !== null, errors: errors.length, frames: data.numberOfFrames };
+  });
+  assert.deepEqual(result, { hasOutput: false, errors: 1, frames: 0 });
 });
 
 for (const useWorker of [false, true]) {

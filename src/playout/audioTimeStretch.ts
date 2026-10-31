@@ -310,7 +310,7 @@ function analyze(
   let samples = Math.round(lag * samplesPer4kHzSample);
   // 粗い探索の上端や振幅が変わる音でも、4 kHz の格子をそのまま切断位置にしない。
   // 元のレートで ±1 格子を評価する。候補どうしは同じ長さの窓で正規化して比較する。
-  // 圧縮は整数サンプルを削るため、実際に切れる整数位置の相関を直接最大化する。
+  // 圧縮は整数サンプルを削るため、整数周期で重なる全区間の相関を直接最大化する。
   if (!isSilent([reference])) {
     const first = Math.max(
       Math.round(TIME_STRETCH_MIN_LAG * samplesPer4kHzSample),
@@ -536,6 +536,69 @@ export function compressSamples(
     output.push(compressed);
   }
   return { channels: output, lengthChangeSamples: -removed };
+}
+
+/**
+ * 再同期で浅くなった到着基準の深さを、音を止めずに 1 周期ずつ戻す。
+ * NetEq PreemptiveExpand::CheckCriteriaAndStretch の 15 ms の位置での overlap-add を採用する。
+ * 根拠: WebRTC 031cc215615895d7ae039d4098c2716d7acf2dc3 の preemptive_expand.cc。
+ * 上流全体の移植ではなく、浮動小数点 PCM と既存の周期判定を使う。上流の方式は将来変わり得る。
+ * 直前の実音 10 ms と今回の実音を使い、追加の入力やタイマーは待たない。
+ */
+export function preemptivelyExpandSamples(
+  channels: readonly AudioSamples[],
+  sampleRate: number,
+  maxLengthChangeSamples: number,
+  history: readonly AudioSamples[] = [],
+): TimeStretchResult {
+  const length = channels[0]?.length ?? 0;
+  const unchanged = { channels: [...channels], lengthChangeSamples: 0 };
+  const limit = Math.max(0, Math.floor(maxLengthChangeSamples));
+  if (length === 0 || limit === 0 || !Number.isFinite(limit) || !isTimeStretchAvailable(sampleRate))
+    return unchanged;
+  if (isSilent(channels)) {
+    const added = Math.min(length, limit);
+    return {
+      channels: channels.map((channel) => {
+        const output = new Float32Array(length + added);
+        output.set(channel);
+        output.fill(channel.at(-1) ?? 0, length);
+        return output;
+      }),
+      lengthChangeSamples: added,
+    };
+  }
+  if (history.length !== channels.length) return unchanged;
+  const oldLength = Math.min(history[0]?.length ?? 0, Math.round(sampleRate * 0.01));
+  const splice = Math.round(sampleRate * 0.015);
+  if (oldLength + length < Math.round(sampleRate * 0.03)) return unchanged;
+  const combined = channels.map((channel, index) => {
+    const output = new Float32Array(oldLength + length);
+    output.set(history[index]?.subarray(-oldLength) ?? []);
+    output.set(channel, oldLength);
+    return output;
+  });
+  const pitch = pitchPeriodOf(combined, sampleRate, splice);
+  if (pitch === null || pitch.samples > limit || splice + pitch.samples > oldLength + length)
+    return unchanged;
+  const period = pitch.samples;
+  if (
+    combined.some((channel) => {
+      const score = compressionSpliceScore(channel, splice - period, period);
+      return !score.silent && !score.correlated;
+    })
+  )
+    return unchanged;
+  return {
+    channels: combined.map((channel) => {
+      const output = new Float32Array(channel.length + period);
+      output.set(channel.subarray(0, splice + period));
+      crossFade(output, splice, channel, splice - period, period);
+      output.set(channel.subarray(splice), splice + period);
+      return output.slice(oldLength);
+    }),
+    lengthChangeSamples: period,
+  };
 }
 
 /**

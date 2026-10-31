@@ -9,8 +9,10 @@
  * 下限は実時間と同じ速さで進むため遅れは減らず、削った分が無音の穴になるためである。
  * 捨てるのは並べすぎの音だけである。
  * 目標を使わないとき (壁時計の TIMESTAMP を持たない音、音声だけを購読しているとき) は、
- * 到着基準の小さな遅れ (`arrivalDelaySeconds`) で並べる。目標から離れすぎたときも、音が
- * まだ鳴っている (連続している) 間は到着基準へ並べ直さず、遅れたまま鳴らし続ける。並べ直す
+ * 到着基準の小さな遅れ (`arrivalDelaySeconds`) で並べる。
+ * 遅着で基準を取り直した後は、再開を待たせず、実適用した時間伸長で目標の深さへ戻す。
+ * 目標から離れすぎたときも、音がまだ鳴っている (連続している) 間は到着基準へ並べ直さず、
+ * 遅れたまま鳴らし続ける。並べ直す
  * (媒体時刻を跳ばす) のは、音が本当に途切れたときだけである。AudioClockBridge は
  * AudioContext の時計と performance.now() の対応を保つ。
  *
@@ -1364,6 +1366,40 @@ test("AudioClockBridge: reset で対応と代用の印を消す", () => {
  *
  * 目標の開始時刻を持たないため、前の音の終わりや到着 + 再生の遅れで並ぶ。
  */
+test("到着基準の復帰は即座に再開し、実際に伸ばした長さだけ定常の深さへ戻す", () => {
+  const scheduler = new AudioPlayoutScheduler();
+  scheduler.schedule(0, 0, 0.02, arrivalTarget(0));
+  let previousEnd = 0;
+  for (let index = 1; index <= 12; index++) {
+    const arrival = 0.18 + index * 0.02;
+    const decision = playDecisionOf(
+      scheduler.schedule(arrival, index * 20000, 0.02, arrivalTarget(arrival)),
+    );
+    const added = Math.min(decision.expandSeconds ?? 0, 0.005);
+    scheduler.confirmExpansion(added);
+    if (index === 1)
+      assert.closeTo(decision.startAt - arrival, 0.01, EPSILON, "回復した音を待たせ直さないこと");
+    else assert.closeTo(decision.startAt, previousEnd, EPSILON, "伸長中にも穴を作らないこと");
+    assert.isAtMost(decision.startAt - arrival, 0.05 + EPSILON, "目標の深さを越えないこと");
+    previousEnd = decision.startAt + 0.02 + added;
+    if (index >= 10)
+      assert.closeTo(
+        decision.startAt - arrival,
+        0.05,
+        EPSILON,
+        "再同期で浅くなったままにしないこと",
+      );
+  }
+});
+
+test("キューの深さで吸収できる通常の揺らぎには予備的な伸長を要求しない", () => {
+  const scheduler = new AudioPlayoutScheduler();
+  scheduler.schedule(0, 0, 0.02, arrivalTarget(0));
+  const jitter = playDecisionOf(scheduler.schedule(0.05, 20000, 0.02, arrivalTarget(0.05)));
+  assert.closeTo(jitter.startAt, 0.07, EPSILON);
+  assert.equal(jitter.expandSeconds ?? 0, 0, "正常な jitter のたびに圧縮と伸長を往復しないこと");
+});
+
 function arrivalTarget(arrivalSeconds: number): AudioPlayoutTarget {
   return {
     targetStartSeconds: null,

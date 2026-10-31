@@ -170,11 +170,12 @@ export interface MediaPlayoutDecodeInputOptions {
    */
   readonly maxTracked?: number;
   /**
-   * 同じ TIMESTAMP の入力が重なったときに、その TIMESTAMP の分を忘れるか。既定は false
+   * 音声の同じ TIMESTAMP の入力が重なったときに、その分を忘れるか。既定は false
    *
    * true のとき、位置 (Object の位置) を選別に使う呼び出し側向けである。同じ TIMESTAMP の
    * Object が重なったらどちらの位置か決められないため忘れる。false のときは後から来た
    * 種類で上書きする (種類しか使わないとき)。moqt-devtools は true を渡す。
+   * 映像はこの設定によらず、同じ timestamp の複数フレームを入力順で対応させる。
    */
   readonly forgetOnDuplicate?: boolean;
 }
@@ -457,7 +458,7 @@ export class MediaPlayout {
     const maxTracked = decodeInputOptions.maxTracked ?? DEFAULT_MAX_TRACKED_DECODE_INPUTS;
     const forgetOnDuplicate = decodeInputOptions.forgetOnDuplicate ?? false;
     this.audioInputs = new AudioDecodeInputs({ maxTracked, forgetOnDuplicate });
-    this.videoInputs = new VideoDecodeInputs({ maxTracked, forgetOnDuplicate });
+    this.videoInputs = new VideoDecodeInputs({ maxTracked });
 
     if (audioOptions !== null) {
       const context = audioOptions.context;
@@ -553,6 +554,15 @@ export class MediaPlayout {
       return;
     }
     this.videoInputs.remember(timestampMicros, input);
+  }
+
+  /**
+   * decoder が破棄した未出力の映像入力だけを忘れる。
+   * 復旧・再構成の完了後、次の入力を渡す前に呼ぶ。同じ timestamp の新しい出力を
+   * 旧位置と取り違えないためであり、既に復号した表示待ちフレームと時間軸は維持する。
+   */
+  clearVideoDecodeInputs(): void {
+    this.videoInputs.clear();
   }
 
   /**

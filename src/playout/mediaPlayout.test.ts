@@ -160,8 +160,7 @@ test("drainAudio: 待ちの条件と flush の件数をセッションへ渡す"
 });
 
 test("decodeInputs: 上限と重複の扱いを音声と映像の対応表へ渡す", () => {
-  // 既定値を固定する変異で全テストが通らないよう、上限と forgetOnDuplicate が両方の
-  // 対応表へ届くことを固定する
+  // 上限は両方へ適用する。音声の重複破棄と、映像の FIFO は区別する。
   const playout = createMediaPlayout({
     audio: {},
     video: { output: createVideoOutput() },
@@ -180,14 +179,16 @@ test("decodeInputs: 上限と重複の扱いを音声と映像の対応表へ渡
   // 上限 2 件を超えた分は古い方から忘れる
   assert.strictEqual(internals.audioInputs.size, 2);
   assert.strictEqual(internals.videoInputs.size, 2);
-  // 同じ TIMESTAMP の記録が重なったら、その TIMESTAMP の分を忘れる (音声・映像とも)
+  // 音声は位置を特定できない重複を忘れ、映像は同じ timestamp の複数出力へ対応させる。
   playout.trackAudioDecodeInput(1_000_002, { timestampKind: "mediaTime" });
   assert.strictEqual(internals.audioInputs.size, 1);
   playout.trackVideoDecodeInput(2_000_002, {
     timestampKind: "mediaTime",
     location: { group: 2n, object: 2n },
   });
-  assert.strictEqual(internals.videoInputs.size, 1);
+  assert.strictEqual(internals.videoInputs.size, 2);
+  assert.equal(internals.videoInputs.take(2_000_002)?.timestampKind, "wallClock");
+  assert.equal(internals.videoInputs.take(2_000_002)?.timestampKind, "mediaTime");
 });
 
 test("getStats: 音声と映像の両方で時間軸を使うときは同期の推定値を返す", () => {

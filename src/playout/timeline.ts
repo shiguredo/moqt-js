@@ -391,6 +391,10 @@ const FRAME_INTERVAL_SAMPLES = 32;
 // 実績を同期の推定に使う期間 (ミリ秒)
 const SKEW_SAMPLE_WINDOW_MS = 1_000;
 
+// 出力先行量の百分位と到着基準の深さは、同期実績とは独立した鮮度として扱う。
+const AUDIO_OUTPUT_LEAD_WINDOW_MS = 1_000;
+const AUDIO_ARRIVAL_DELAY_WINDOW_MS = 1_000;
+
 // 出力の残差を平滑化する時定数 (ミリ秒)。単発の予約の揺れを抑え、数フレームで追従する
 const AUDIO_PLAYOUT_CORRECTION_SMOOTHING_MS = 250;
 
@@ -571,6 +575,9 @@ export class PlayoutTimeline {
   private readonly streams: Record<PlayoutStream, StreamState>;
   // 到着の揺らぎと、実際に予約できる最早時刻の先行量を直接足して音声の予算を作る。
   private audioJitterMs: number | null = null;
+  // 有効な学習が続き始めた時刻。10 秒の基準窓の古さとは区別する。
+  private audioLearningSinceMs: number | null = null;
+  private audioArrivalDelayObservation: { delayMs: number; atMs: number } | null = null;
   private audioOutputLeadMs: number | null = null;
   private readonly audioOutputLeads = new TimedValues();
   // 同期の制御が各トラックへ足した遅延 (ミリ秒)。0 以上
@@ -683,6 +690,9 @@ export class PlayoutTimeline {
     state.baseMs = baseMs;
     this.recordBaseDifference(wallClockMs);
 
+    state.learningOffsets.prune(wallClockMs - PLAYOUT_JITTER_WINDOW_MS);
+    if (stream === "audio" && state.learningOffsets.oldest() === null)
+      this.audioLearningSinceMs = null;
     // 追いつき中の出力と、停滞後にまとめて復号した分を経路の分布へ混ぜない。
     if (learns && !this.isCatchingUp(state, wallClockMs, baseMs, offsetMs, regularArrival)) {
       state.learningOffsets.push(wallClockMs, offsetMs);
@@ -696,11 +706,17 @@ export class PlayoutTimeline {
     const jitterMs = percentile(jitters, playoutDelayPercentile(this.frameIntervalMs(state)));
     if (stream === "audio") {
       this.audioJitterMs = jitters.length === 0 ? null : jitterMs;
+      if (this.audioJitterMs === null) this.audioLearningSinceMs = null;
+      else this.audioLearningSinceMs ??= wallClockMs;
       this.updateAudioDelay();
     } else {
       // 古い分布が窓から消えたら必要値へ戻す。音声は実際の予約の残差から追従し、
       // 映像の不要な待ちを音声の目標へ何段階にも移さない。
-      state.delayMs = Math.min(jitterMs, this.delayCapMs(this.frameIntervalMs(state)));
+      // 上限超過しか残らない空の分布は、正常な 0 ms の観測ではない。
+      state.delayMs = Math.min(
+        jitters.length === 0 ? (state.delayMs ?? 0) : jitterMs,
+        this.delayCapMs(this.frameIntervalMs(state)),
+      );
     }
 
     this.updateSyncDelays(wallClockMs);
@@ -711,7 +727,7 @@ export class PlayoutTimeline {
   observeAudioOutputLead(leadMs: number, wallClockMs: number): void {
     if (!Number.isFinite(leadMs) || !Number.isFinite(wallClockMs)) return;
     this.audioOutputLeads.push(wallClockMs, Math.max(0, leadMs));
-    this.audioOutputLeads.prune(wallClockMs - SKEW_SAMPLE_WINDOW_MS);
+    this.audioOutputLeads.prune(wallClockMs - AUDIO_OUTPUT_LEAD_WINDOW_MS);
     this.audioOutputLeadMs = percentile(
       this.audioOutputLeads.current().sort((left, right) => left - right),
       0.95,
@@ -720,14 +736,26 @@ export class PlayoutTimeline {
     this.updateSyncDelays(wallClockMs);
   }
 
+  /** 到着基準で予約した実出力の深さ。目標の予算と混同せず、映像の同期先へ使う。 */
+  observeAudioArrivalDelay(delayMs: number | null, wallClockMs: number): void {
+    if (!Number.isFinite(wallClockMs) || (delayMs !== null && !Number.isFinite(delayMs))) return;
+    this.audioArrivalDelayObservation =
+      delayMs === null
+        ? null
+        : {
+            delayMs: Math.max(0, Math.min(MAX_PLAYOUT_DELAY_MS, delayMs)),
+            atMs: wallClockMs,
+          };
+    this.updateSyncDelays(wallClockMs);
+  }
+
   /** 到着の分布が揃うまでは既存の不感帯を保ち、静かな経路だけ細かく回復する。 */
   compressionDeadbandSeconds(defaultSeconds: number): number {
     const state = this.streams.audio;
-    const oldest = state.offsets.oldest();
     if (
-      oldest === null ||
+      this.audioLearningSinceMs === null ||
       state.lastArrivalMs === null ||
-      state.lastArrivalMs - oldest.atMs < PLAYOUT_JITTER_WINDOW_MS ||
+      state.lastArrivalMs - this.audioLearningSinceMs < PLAYOUT_JITTER_WINDOW_MS ||
       this.audioJitterMs === null
     ) {
       return defaultSeconds;
@@ -738,12 +766,8 @@ export class PlayoutTimeline {
   /** 既に届く音の揺らぎに、出力バッファの先行量を一度だけ足す。 */
   private updateAudioDelay(): void {
     if (this.streams.audio.baseMs === null) return;
-    this.streams.audio.delayMs = Math.max(
-      AUDIO_PLAYOUT_DELAY_FLOOR_MS,
-      Math.min(
-        AUDIO_PLAYOUT_ARRIVAL_DELAY_MS,
-        (this.audioJitterMs ?? 0) + (this.audioOutputLeadMs ?? 0),
-      ),
+    this.streams.audio.delayMs = audioArrivalPlayoutDelayMs(
+      (this.audioJitterMs ?? 0) + (this.audioOutputLeadMs ?? 0),
     );
   }
 
@@ -1257,6 +1281,8 @@ export class PlayoutTimeline {
       this.audioPlayoutCorrectionMs = 0;
       this.audioPlayoutCorrectionAtMs = null;
       this.audioJitterMs = null;
+      this.audioLearningSinceMs = null;
+      this.audioArrivalDelayObservation = null;
       this.audioOutputLeadMs = null;
       this.audioOutputLeads.clear();
     } else {
@@ -1419,10 +1445,17 @@ export class PlayoutTimeline {
    * 音声を到着基準で並べるときの再生の遅れ (ミリ秒)。まだ観測していなければ null
    *
    * 音声の TIMESTAMP が信用できないとき (基準を共有できないとき) に、映像を合わせる先の
-   * 時刻である。呼び出し側が音声を鳴らすときに使う値と同じ規則で求める
-   * (`audioArrivalPlayoutDelayMs`)。値がずれると A/V の合わせ先がずれる
+   * 時刻である。有効な実出力時計による新鮮な予約の深さを使う。まだ実値が無い場合だけ
+   * 予定の予算 (`audioArrivalPlayoutDelayMs`) へフォールバックする。
    */
   get audioArrivalDelayMs(): number | null {
+    const observation = this.audioArrivalDelayObservation;
+    const nowMs = Math.max(
+      this.streams.audio.lastArrivalMs ?? -Infinity,
+      this.streams.video.lastArrivalMs ?? -Infinity,
+    );
+    if (observation !== null && nowMs - observation.atMs <= AUDIO_ARRIVAL_DELAY_WINDOW_MS)
+      return observation.delayMs;
     const playoutDelayMs = this.playoutDelayMs;
     if (playoutDelayMs === null) {
       return null;

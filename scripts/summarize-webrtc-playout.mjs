@@ -24,7 +24,9 @@ const actual = readdirSync(directory).filter(
 assert.equal(actual.length, cases.length, "全条件の収録が終了していること");
 const rows = [];
 for (const { caseName } of cases) {
-  if (!/^webrtc\|(julius|kyoko)\|(clean|recurring60|jitter30)\|(44100|48000)$/.test(caseName))
+  if (
+    !/^webrtc\|(julius|kyoko)\|(clean|recurring60|jitter30|step60)\|(44100|48000)$/.test(caseName)
+  )
     throw new Error(`Unexpected comparison case: ${caseName}`);
   const bytes = readFileSync(join(directory, `${caseName}.json`));
   const result = JSON.parse(bytes);
@@ -118,6 +120,7 @@ for (const { caseName } of cases) {
     calibratedLatency,
     nativeStats: result.inbound,
     commonClockReplay: result.commonClockReplay ?? null,
+    preemptiveExpansionMs: result.preemptiveExpansionMs ?? null,
     contextPlayback: result.contextPlayback ?? null,
     sdkStats: result.playout,
     comparisonStats: result.comparisonPlayout,

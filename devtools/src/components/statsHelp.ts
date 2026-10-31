@@ -9,6 +9,8 @@
 import type { SectionHelp } from "./StatsView";
 import { LATENCY_SEGMENTS, type LatencySegment } from "../utils/latencyBreakdown";
 import {
+  AUDIO_PLAYOUT_DELAY_FLOOR_MS,
+  AUDIO_PLAYOUT_ARRIVAL_DELAY_MS,
   PLAYOUT_BASE_DRIFT_CONFIRM_MS,
   PLAYOUT_BASE_DRIFT_MS,
   PLAYOUT_BASE_UNSHARED_RELEASE_MS,
@@ -159,12 +161,12 @@ export const AV_SYNC_HELP: SectionHelp = {
     {
       term: "skewMs",
       description:
-        "Measured A/V skew (ms). Positive when the video is presented later than the audio. Uses the recorded video presentation and the audio reservation converted through the AudioContext output clock. It does not measure additional HTMLAudioElement buffering, its selected output device, speaker latency, or display scanout.",
+        "Measured A/V skew (ms). Positive when the video is presented later than the audio. Uses the recorded video presentation and the audio reservation converted through the AudioContext output clock. It does not acoustically measure speaker latency or display scanout, and unreported device buffering may remain.",
     },
     {
       term: "audioPlayoutCorrectionMs",
       description:
-        "Smoothed difference between the AudioContext reservation converted through its output clock and the target captured when reserving it (ms). Used to align the audio and video presentation targets. Fallback clock samples do not update it; it expires after 1 s without a valid output-clock sample. Downstream HTMLAudioElement and device latency are not measured.",
+        "Smoothed difference between the AudioContext reservation converted through its output clock and the target captured when reserving it (ms). Used to align the audio and video presentation targets. Fallback clock samples do not update it; it expires after 1 s without a valid output-clock sample. Unreported device buffering and acoustic output latency are not measured.",
     },
     {
       term: "baseDelayMs",
@@ -173,8 +175,7 @@ export const AV_SYNC_HELP: SectionHelp = {
     },
     {
       term: "jitterDelayMs",
-      description:
-        "Jitter buffer delay of the track (ms). Audio uses recent arrival jitter plus measured output lead, within 50–100 ms. Video uses the recent jitter percentile that keeps late frames within the budget.",
+      description: `Jitter buffer delay of the track (ms). Audio uses recent arrival jitter plus measured output lead, within ${AUDIO_PLAYOUT_DELAY_FLOOR_MS}–${AUDIO_PLAYOUT_ARRIVAL_DELAY_MS} ms. This is the timeline estimate; Audio Playback shows the budget applied to its scheduling mode. Video uses the recent jitter percentile that keeps late frames within the budget.`,
     },
     {
       term: "syncExtraDelayMs",
@@ -436,8 +437,7 @@ export const AUDIO_PLAYOUT_TIMING_HELP: SectionHelp = {
     },
     {
       term: "targetMs / jitterMs / outputLeadMs",
-      description:
-        "The buffering target, recent arrival jitter and the lead required by the output clock (ms). The shared audio target accounts for jitter and output lead together within 50–100 ms. Audio-only playout uses 50 ms. Output lead is unknown until a valid output timestamp is available. Total capture-to-output delay also includes delivery and queued audio.",
+      description: `The configured buffering target for the current scheduling mode, recent arrival jitter and output-clock lead (ms). Shared audio uses ${AUDIO_PLAYOUT_DELAY_FLOOR_MS}–${AUDIO_PLAYOUT_ARRIVAL_DELAY_MS} ms; audio-only playout uses ${AUDIO_PLAYOUT_DELAY_FLOOR_MS} ms. A resynchronization can temporarily reduce actual depth while it recovers. This target does not report that transient depth. Output lead is unknown without a valid output timestamp. Total capture-to-output delay also includes delivery and queued audio.`,
     },
     {
       term: "stallCount / stallMs / overlappedArrivals",

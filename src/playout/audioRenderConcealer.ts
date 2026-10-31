@@ -48,6 +48,13 @@ export class AudioRenderConcealer {
   private uncovered = false;
   private uncoveredRunFrames = 0;
   private lastOutput = new Float32Array(0);
+  private stopFadeValues = new Float32Array(0);
+  private stopFadeRemaining = 0;
+
+  /** 遅れて受け取った停止を滑らかに終えるまで、プロセッサーを破棄しない。 */
+  get fadingStop(): boolean {
+    return this.stopFadeRemaining > 0;
+  }
 
   constructor(
     readonly sampleRate: number,
@@ -64,8 +71,20 @@ export class AudioRenderConcealer {
       this.ranges.push(message);
       // drain 中に届いた実音も鳴らし切るが、その後に新しい予測音は足さない。
       if (Number.isFinite(this.stopFrame)) this.stopFrame = Math.max(this.stopFrame, message.end);
-    } else if (message.type === "stop") this.stopFrame = Math.min(this.stopFrame, message.frame);
-    else {
+    } else if (message.type === "stop") {
+      const stopFrame = Math.min(this.stopFrame, message.frame);
+      if (
+        stopFrame < this.stopFrame &&
+        this.started &&
+        stopFrame < this.nextFrame + this.fadeFrames
+      ) {
+        // メインスレッドから届く停止が遅い場合、過去へフェードを予約することはできない。
+        // 最後に出した値から短く下げ、途中の予測音をゼロへ切り替えない。
+        this.stopFadeValues = this.lastOutput.slice();
+        this.stopFadeRemaining = this.fadeFrames;
+      }
+      this.stopFrame = stopFrame;
+    } else {
       this.ranges = [];
       this.stopFrame = Infinity;
       this.historyFrames = 0;
@@ -77,6 +96,7 @@ export class AudioRenderConcealer {
       this.expansionIndex = 0;
       this.headRemaining = 0;
       this.mergeRemaining = 0;
+      this.stopFadeRemaining = 0;
       this.uncoveredRunFrames = 0;
     }
   }
@@ -145,7 +165,13 @@ export class AudioRenderConcealer {
       const range = this.ranges[0];
       const real = range !== undefined && frame >= range.start && frame < this.stopFrame;
       const boundary = real !== this.wasReal || (real && frame === range.start);
-      if (real) {
+      if (this.stopFadeRemaining > 0) {
+        const gain = --this.stopFadeRemaining / this.fadeFrames;
+        for (let channel = 0; channel < output.length; channel++) {
+          const samples = output[channel];
+          if (samples !== undefined) samples[index] = (this.stopFadeValues[channel] ?? 0) * gain;
+        }
+      } else if (real) {
         this.beginReal(range, output.length);
         const headGain = this.headRemaining > 0 ? 1 - this.headRemaining / this.headFrames : 1;
         const realGain = this.mergeRemaining > 0 ? 1 - this.mergeRemaining / this.fadeFrames : 1;

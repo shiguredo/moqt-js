@@ -99,7 +99,7 @@ test("直前に復号した Object 以前の Object ID は重複として捨て�
 });
 
 test("reset の後はキーフレームから復号を始め、以前の Group より古い Group も古いとしない", () => {
-  // decoder を作り直したときは復号の状態を持ち越さない
+  // 新しい購読では以前の購読の位置を持ち越さない
   const decodeOrder = new VideoDecodeOrder();
   assert.deepEqual(decodeOrder.admit(key(7)), DECODE);
   assert.deepEqual(decodeOrder.admit(delta(7, 1)), DECODE);
@@ -110,4 +110,16 @@ test("reset の後はキーフレームから復号を始め、以前の Group �
   // reset の前に復号していた Group 7 より古い Group 2 から始められる
   assert.deepEqual(decodeOrder.admit(key(2)), DECODE);
   assert.deepEqual(decodeOrder.admit(delta(2, 1)), DECODE);
+});
+
+test("同じ購読の復号器を失っても位置を保ち、同 Group の後続キーから復帰する", () => {
+  const order = new VideoDecodeOrder();
+  assert.deepEqual(order.admit(key(7)), DECODE);
+  assert.deepEqual(order.admit(delta(7, 1)), DECODE);
+  order.requireKeyFrame();
+  assert.deepEqual(order.admit(key(2)), STALE);
+  assert.deepEqual(order.admit(key(7)), STALE);
+  assert.deepEqual(order.admit(delta(7, 2)), MISSING_REFERENCE);
+  assert.deepEqual(order.admit({ ...key(7), objectId: 3n }), DECODE);
+  assert.deepEqual(order.admit(delta(7, 4)), DECODE);
 });

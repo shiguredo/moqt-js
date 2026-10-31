@@ -242,7 +242,7 @@ const SUBSCRIBER_COVERAGE: CoverageExpectation = {
     maxOutOfOrderGroupDistance: "audio.maxOutOfOrderGroupDistance",
     audioDecoderConfigured: "audio.decoderConfigured",
     audioPlaybackEnabled: "audio.playbackEnabled",
-    // 音声出力 (AudioContext と <audio> 要素) の診断
+    // 音声出力 (AudioContext と実出力機器) の診断
     audioContextState: "audioOutput.contextState",
     audioContextStateChanges: "audioOutput.contextStateChanges",
     audioContextSampleRate: "audioOutput.contextSampleRate",

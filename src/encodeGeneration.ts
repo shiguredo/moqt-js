@@ -11,7 +11,7 @@
  * これは配信を止める経路のために要る。止めた時点で開いている Subgroup を閉じる
  * (draft-ietf-moq-transport-22 §11.3.2) ため、止める前に依頼した出力を閉じた Subgroup へ
  * 送ってはならない。停止と再開をまたいだ古い出力が、新しい Group の先頭 Object として
- * 送られるのも防ぐ (Group の先頭はキーフレームでなければならない)。
+ * 送られるのも防ぐ (この publisher は Group の先頭をキーフレームとして採番する)。
  *
  * ライブラリ (src/createMediaPublisher.ts) と moqt-devtools
  * (devtools/src/hooks/usePublisher.ts) が同じ規則を使う。片方だけ直すと静かに食い違うため、

@@ -16,6 +16,12 @@ test("実出力先の切り替えに失敗したら再生を無効にして Cont
   try {
     const toggle = page.getByTestId("subscriber-audio-playback-toggle");
     await toggle.click();
+    await page.waitForFunction(
+      () =>
+        document
+          .querySelector('[data-testid="subscriber-audio-playback-toggle"]')
+          ?.getAttribute("aria-pressed") === "true",
+    );
     // 存在しない実デバイス ID を選び、ブラウザ本体の setSinkId の拒否を通す。
     // API の置換や偽の AudioContext は使わない。
     await page.evaluate(async () => {

@@ -87,6 +87,9 @@ test.prop([fc.array(fc.boolean(), { minLength: 100, maxLength: 300 })], { numRun
       if (!lost) {
         timeline.observe("audio", mediaMs + 20, mediaMs * 1000);
         timeline.observeAudioOutputLead(43, mediaMs + 20);
+      }
+      // 音声が一度観測された後は、欠落している各区間も含めて検証する。
+      if (timeline.playoutDelayMs !== null) {
         assert.closeTo(timeline.audioDelayStats().targetMs, 50, 0.01);
         const { audio, video } = timeline.delayBreakdown;
         assert.isAtMost(

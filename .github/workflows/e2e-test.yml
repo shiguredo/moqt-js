@@ -25,6 +25,11 @@ permissions:
 
 jobs:
   relay:
+    # 実リレーの試験を分割し、失敗した場合も各試行が完了して結果を残せる時間を確保する。
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
     # 実リレーへ接続する E2E テスト。判定は絶対値 (音声の基準の遅れが 10〜30 ms に収まる)
     # ではなく、実装が保証する不変条件に切り替えた (tests/e2e/relay/audio-timestamp.spec.ts)。
     # 基準の遅れの値そのものは runner の処理能力で変わるため判定には使わず、失敗したときに
@@ -87,16 +92,19 @@ jobs:
         if: env.TEST_MOQT_URI != ''
         run: vp exec playwright install --with-deps chromium
 
-      # 実リレーの E2E は runner の負荷で計測が揺れ、まれに前提から外れて失敗する。
-      # ジョブの上限は延ばさず、1 回分の時間に収まる上限で 1 回だけやり直す
-      # 回帰テスト追加後は 8 分を超えるため、20 分のジョブ内で各試行に 9 分を割り当てる。
+      - name: SDK をビルドする
+        if: env.TEST_MOQT_URI != ''
+        run: vp run build
+
+      # 手動調査を除く試験をテスト単位で分割する。1 worker を保ち、媒体の計測を並行しない。
+      # 各 8 分、再試行を含め 16 分を割り当て、準備と終了処理の余裕を残す。
       - name: 実リレーへ接続する E2E テストを実行する
         id: relay
         if: env.TEST_MOQT_URI != ''
-        timeout-minutes: 9
+        timeout-minutes: 8
         continue-on-error: true
-        run: vp run e2e-test:relay
+        run: vp exec playwright test --project=relay --project=chromium-production-relay --fully-parallel --workers=1 --grep-invert='調査:' --shard=${{ matrix.shard }}/2
       - name: 実リレーへ接続する E2E テストを再実行する
         if: env.TEST_MOQT_URI != '' && steps.relay.outcome == 'failure'
-        timeout-minutes: 9
-        run: vp run e2e-test:relay
+        timeout-minutes: 8
+        run: vp exec playwright test --project=relay --project=chromium-production-relay --fully-parallel --workers=1 --grep-invert='調査:' --shard=${{ matrix.shard }}/2

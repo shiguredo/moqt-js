@@ -690,6 +690,15 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   /** `recentAudioObjectIds` と同じ内容の集合 (重複の判定を速くする) */
   private readonly recentAudioObjectIdSet = new Set<string>();
   private videoDecoderConfigured = false;
+  // 復旧と再構成が交錯しても、古い完了で入力を再開しない。
+  private videoDecoderGeneration = 0;
+  private videoDecoderReconfiguring = false;
+  private failedVideoConfig: {
+    codec: string;
+    width: number;
+    height: number;
+    description: Uint8Array;
+  } | null = null;
   // 直前に VideoDecoder へ渡した description。
   // draft-ietf-moq-loc-04 §2.3.2.1: config が変化したらデコーダを再構成する。
   private lastAppliedVideoConfig: Uint8Array | null = null;
@@ -746,7 +755,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     missingReferenceFramesDropped: 0,
   };
   // 映像 Object を復号してよいかを Group の順序と欠落から決める。decoder を構成し直した
-  // ときと decoder のエラー後は、キーフレームから始め直すため初期化する
+  // ときと decoder のエラー後は、位置を保持してキーフレーム待ちへ戻す
   private readonly videoDecodeOrder = new VideoDecodeOrder();
   // 前の Group の Subgroup の stream が開いている間、次の Group の映像 Object を保留する
   // (groupSwitchGate.ts)。Object は Group ごとに別の stream で届き、前の Group の末尾が
@@ -1701,6 +1710,8 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     this.audioDecoderConfigured = false;
     this.videoDecoderConfigured = false;
     this.lastAppliedVideoConfig = null;
+    this.failedVideoConfig = null;
+    this.videoDecoderReconfiguring = false;
     this.lastAppliedAudioConfig = null;
     // 出力の参照を切り離す (次の start で新しい MediaStream を作る)
     this.outputStream = null;
@@ -2215,9 +2226,8 @@ export class MediaSubscriberImpl implements MediaSubscriber {
    *
    * draft-ietf-moq-loc-04 §2.3.2.1: VIDEO_CONFIG は Track Property でも届く。
    * 適用に失敗した場合は onError を通知し、lastAppliedVideoConfig は更新しない
-   * (videoDecoderConfigured は true のままにし、後続 Object の reconfigure 経路で再試行する)。
-   * 成否にかかわらず保留中の Object は到着順に処理する (失敗時は保留していた最初の Object が
-   * 再構成で捨てられ、その再構成が成功すれば以降の Object が復号される)。
+   * 同じ失敗した構成は繰り返さず、異なる構成なら再試行する。
+   * 成否にかかわらず保留中の Object を解放し、再構成に成功した最初のキーも復号へ渡す。
    * 閉じた購読 (close() の同期部分で立つ closed) では configure を発行せず、保留分の解放だけを
    * 行う (解放は await を挟むため、購読の確立が close() の後に解決すると閉じた後にここへ来る)。
    */
@@ -2739,47 +2749,53 @@ export class MediaSubscriberImpl implements MediaSubscriber {
    * reject させない。
    */
   private async reconfigureVideoDecoder(description: Uint8Array): Promise<void> {
+    const decoder = this.videoDecoder;
+    const track = this.videoTrackInfo;
+    if (this.closed || decoder === null || track === null) return;
+    const codec = this.options.video?.codec ?? track.codec;
+    if (codec === undefined) return;
+    const width = track.width ?? 640;
+    const height = track.height ?? 480;
+    const failed = this.failedVideoConfig;
+    if (
+      failed !== null &&
+      failed.codec === codec &&
+      failed.width === width &&
+      failed.height === height &&
+      failed.description.length === description.length &&
+      failed.description.every((value, index) => value === description[index])
+    )
+      return;
+    const generation = ++this.videoDecoderGeneration;
+    this.videoDecoderReconfiguring = true;
+    this.videoDecoderConfigured = false;
     try {
-      // 閉じた後は configure を発行しない (閉じた後に復号器を作り直さない)。解放は await を
-      // 挟むため、state の "closed" だけでは解放の途中を判定できない
-      if (this.closed) return;
-      if (!this.videoDecoder || !this.videoTrackInfo) return;
-
-      let videoCodec: VideoCodecType;
-      if (this.options.video?.codec) {
-        videoCodec = this.options.video.codec;
-      } else if (this.videoTrackInfo.codec) {
-        videoCodec = parseVideoCodec(this.videoTrackInfo.codec);
-      } else {
+      const videoCodec = this.options.video?.codec ?? parseVideoCodec(codec);
+      await decoder.configure(videoCodec, width, height, description);
+      if (
+        this.closed ||
+        this.videoDecoder !== decoder ||
+        generation !== this.videoDecoderGeneration
+      )
         return;
-      }
-
-      const width = this.videoTrackInfo.width ?? 640;
-      const height = this.videoTrackInfo.height ?? 480;
-
-      await this.videoDecoder.configure(videoCodec, width, height, description);
-      // configure の await の間に閉じていれば、成功した configure の結果を捨てる
-      // (解放の後に呼ばれると decoder の参照は切れているが、await の前後で閉じたかを
-      //  判定しないと閉じた購読が「構成済み」に戻る)
-      if (this.closed) return;
-      // 構成し直した decoder はキーフレームから始める
-      this.videoDecodeOrder.reset();
-      // 成功して初めて「適用済み」とする。失敗時は未適用のまま残し、
-      // 同じ config を持つ後続 Object で再試行できるようにする。
+      // 同じ購読の位置は保ち、参照を失った decoder だけ次のキーフレームを待つ。
+      this.videoDecodeOrder.requireKeyFrame();
+      this.playout.clearVideoDecodeInputs();
       this.lastAppliedVideoConfig = description;
+      this.failedVideoConfig = null;
       this.videoDecoderConfigured = true;
     } catch (error) {
-      // close() が復号器を破棄すると世代が無効化され、待機中の configure が中止 (reject)
-      // する。購読の終了に伴う中止を失敗として利用者に通知しない (利用者が終了を要求した
-      // 結果であり、この経路の configure は解放の後に結果を反映しないため対処も要らない)
-      if (this.closed) return;
-      // 通知の失敗でこの経路を reject させない (呼び出し側は `void` で呼ぶため、
-      // reject を残すと未処理の rejection になる)
+      if (this.closed || generation !== this.videoDecoderGeneration) return;
+      // 同じ恒久エラーを Object ごとに繰り返さない。異なる構成では再試行できる。
+      this.failedVideoConfig = { codec, width, height, description: description.slice() };
+      this.videoDecoderConfigured = decoder.state === "configured";
       try {
         this.callbacks.onError?.(error instanceof Error ? error : new Error(String(error)));
       } catch {
-        // 通知の失敗を伝える経路がこれ以上無い
+        // 通知の失敗で未処理の rejection を残さない。
       }
+    } finally {
+      if (generation === this.videoDecoderGeneration) this.videoDecoderReconfiguring = false;
     }
   }
 
@@ -2851,7 +2867,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       this.holdPendingObject("video", obj, "subgroup");
       return;
     }
-    if (!this.videoDecoder || !this.videoDecoderConfigured) return;
+    if (!this.videoDecoder || this.videoDecoderReconfiguring) return;
     if (this.videoPreDecodeStage === null) {
       this.decodeVideoObject(obj);
       return;
@@ -2871,7 +2887,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     // 閉じた後は統計も decode も進めない。解放は await を挟むため、state の "closed" だけでは
     // 解放の途中 (decoder の参照を切る前) に届いた Object を判定できない
     if (this.closed) return;
-    if (!this.videoDecoder || !this.videoDecoderConfigured) return;
+    if (!this.videoDecoder || this.videoDecoderReconfiguring) return;
 
     // LOC から情報を取得
     // Track Property（SUBSCRIBE_OK 由来）と Object Property の両方を探索し、Object を優先する
@@ -2880,15 +2896,6 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       obj.properties,
     );
     const timestamp = decoderTimestampOf(locProperties);
-    // 復号の出力 (VideoFrame) では Object の位置が分からないため、復号へ渡す前に記録する。
-    // TIMESTAMP が無い Object は decoder へ 0 を渡すため記録しない (同じ TIMESTAMP の
-    // Object が重なり、種類も位置も一意に引けない)
-    if (locProperties.timestamp !== undefined) {
-      this.playout.trackVideoDecodeInput(timestamp, {
-        timestampKind: locProperties.timescale === undefined ? "wallClock" : "mediaTime",
-        location: { group: obj.groupId, object: obj.objectId },
-      });
-    }
     // VIDEO_FRAME_MARKING が無い publisher の映像も復号できるようにする
     // (Group 先頭をキーフレームとして扱う)。購読が Group の途中から始まった場合は
     // 次の Group 先頭まで VideoDecoderWrapper がキーフレームを待つ。
@@ -2898,19 +2905,31 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     //  Track では送れず throw する)
     const isKeyFrame = isVideoKeyFrameObject(obj.objectId, locProperties.frameMarking);
 
+    if (this.videoDecodeOrder.isStale({ groupId: obj.groupId, objectId: obj.objectId })) {
+      this.videoStats.framesReceived++;
+      this.videoStats.bytesReceived += moqtObjectBufferedBytes(obj);
+      if (isKeyFrame) this.videoStats.keyFramesReceived++;
+      this.videoStats.staleFramesDropped++;
+      return;
+    }
+
     // draft-ietf-moq-loc-04 §2.3.2.1 (Video Config):
     // Object Property の VIDEO_CONFIG が直前と変わったらデコーダを再構成する。
     // 解像度変更や canonical 形式への切替で description が変わった場合に必要。
     // 再構成は非同期のため、失敗は error コールバックへ通知して以降のデコードを止める。
-    // 再構成中 (videoDecoderConfigured=false) は先頭の早期 return でここへ到達しない
+    // 再構成中は videoDecoderReconfiguring で入力を止める。失敗後の新しい構成は再試行できる。
     if (
       locProperties.config !== undefined &&
       !this.isSameAppliedVideoConfig(locProperties.config)
     ) {
-      // 適用済みの更新は configure 成功後に行う。失敗時に更新すると
-      // 同じ config が再試行されず、以降の Object をデコードできなくなる。
-      this.videoDecoderConfigured = false;
-      void this.reconfigureVideoDecoder(new Uint8Array(locProperties.config));
+      // 適用済みの更新は configure 成功後に行い、失敗した構成とは区別する。
+      const config = new Uint8Array(locProperties.config);
+      void this.reconfigureVideoDecoder(config).then(() => {
+        // 構成を開始したキーフレームも使う。次のキーまで映像を止めない。
+        if (!this.closed && this.videoDecoderConfigured && this.isSameAppliedVideoConfig(config))
+          this.decodeVideoObject(obj);
+      });
+      return;
     }
 
     // 再構成中は decode に渡さない (VideoDecoder の configure は非同期)
@@ -2942,6 +2961,15 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       return;
     }
 
+    // 復号の出力 (VideoFrame) では Object の位置が分からないため、復号へ渡す前に記録する。
+    // TIMESTAMP が無い Object は decoder へ 0 を渡すため記録しない (同じ TIMESTAMP の
+    // Object が重なり、種類も位置も一意に引けない)
+    if (locProperties.timestamp !== undefined) {
+      this.playout.trackVideoDecodeInput(timestamp, {
+        timestampKind: locProperties.timescale === undefined ? "wallClock" : "mediaTime",
+        location: { group: obj.groupId, object: obj.objectId },
+      });
+    }
     // デコード
     this.videoDecoder.decode(obj.payload, isKeyFrame ? "key" : "delta", timestamp, 0);
   }
@@ -3090,13 +3118,10 @@ export class MediaSubscriberImpl implements MediaSubscriber {
    * 映像デコーダーのエラーを受けて復帰を試みる
    *
    * 通知は 1 回だけ行い、通知の失敗で復帰を止めない。通知したあとデコーダーを
-   * リセットし、リセットした decoder はキーフレームから始めるため復号順の判定も
-   * 初期化する。reset() は例外を投げない Promise<boolean> を返し、再初期化できない
-   * 場合の打ち切り (Worker と VideoDecoder の破棄、以降の decode() の抑止) まで
-   * その中で完結するため、ここでは戻り値を見ない (契約は VideoDecoderWrapper.reset の
-   * JSDoc を参照)。
+   * リセットする。購読位置を保持して次のキーフレームを待ち、復旧の完了まで入力を通さない。
+   * reset() が false を返した場合は未構成のままとし、同じ失敗を繰り返し通知しない。
    */
-  private handleVideoDecoderError(error: Error): void {
+  private async handleVideoDecoderError(error: Error): Promise<void> {
     // 通知の失敗で復帰 (復号順の初期化と reset()) を止めない。通知の失敗を
     // 伝える経路が他に無いため握り潰す
     try {
@@ -3104,12 +3129,25 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     } catch {
       // 通知の失敗を伝える経路がこれ以上無い
     }
+    if (this.closed) return;
+    const decoder = this.videoDecoder;
+    const generation = ++this.videoDecoderGeneration;
+    this.videoDecoderConfigured = false;
+    this.videoDecoderReconfiguring = true;
     // 復号前の段に残っている入力を捨てる。復号器を作り直した後に古い入力を渡すと、
     // 同じエラーを繰り返す
     this.videoPreDecodeStage?.stop();
-    this.videoDecodeOrder.reset();
-    // catch は置かない。reject しない契約であり、戻り値も見ない
-    void this.videoDecoder?.reset();
+    this.videoDecodeOrder.requireKeyFrame();
+    const configured = (await decoder?.reset()) ?? false;
+    if (
+      !this.closed &&
+      this.videoDecoder === decoder &&
+      generation === this.videoDecoderGeneration
+    ) {
+      this.playout.clearVideoDecodeInputs();
+      this.videoDecoderConfigured = configured;
+      this.videoDecoderReconfiguring = false;
+    }
   }
 
   /**

@@ -93,9 +93,11 @@ for (const stage of [
         ).flat()
       : stage === "webrtc"
         ? ["julius", "kyoko"].flatMap((name) =>
-            ["clean", "recurring60", "jitter30"].flatMap((pattern) =>
-              [44100, 48000].map((rate) => `webrtc|${name}|${pattern}|${rate}`),
-            ),
+            (process.env.PLAYOUT_WEBRTC_PATTERNS ?? "clean,recurring60,jitter30")
+              .split(",")
+              .flatMap((pattern) =>
+                [44100, 48000].map((rate) => `webrtc|${name}|${pattern}|${rate}`),
+              ),
           )
         : stage === "avRelay"
           ? ["avRelay|kyoko|clean|1", "avRelay|kyoko|random5|2", "avRelay|julius|burst3|1"]

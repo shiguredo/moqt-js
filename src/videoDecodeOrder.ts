@@ -103,19 +103,8 @@ export class VideoDecodeOrder {
   admit(position: VideoObjectPosition): VideoObjectAdmission {
     const { groupId, objectId } = position;
 
-    // 復号中の Group より古い Group の Object は、どれも復号しない
-    if (this.decodingGroupId !== null && groupId < this.decodingGroupId) {
-      return { decode: false, reason: "stale" };
-    }
-
-    // 同じ Group で直前に復号した Object 以前の Object ID は、重複か遅着である
-    if (
-      groupId === this.decodingGroupId &&
-      this.lastDecodedObjectId !== null &&
-      objectId <= this.lastDecodedObjectId
-    ) {
-      return { decode: false, reason: "stale" };
-    }
+    // 古い Group と、同じ Group の復号済み位置以前の Object は通さない。
+    if (this.isStale(position)) return { decode: false, reason: "stale" };
 
     if (position.isKeyFrame) {
       // キーフレームは参照を持たないため、ここまで来れば復号を始められる
@@ -158,6 +147,17 @@ export class VideoDecodeOrder {
   /** 復号器の参照だけを失った場合、位置を保ったままキーフレームを待つ。 */
   requireKeyFrame(): void {
     this.awaitingKeyFrame = true;
+  }
+
+  /** 設定の変更を適用する前にも、購読位置より古い Object を副作用無しで判定する。 */
+  isStale({ groupId, objectId }: Pick<VideoObjectPosition, "groupId" | "objectId">): boolean {
+    return (
+      this.decodingGroupId !== null &&
+      (groupId < this.decodingGroupId ||
+        (groupId === this.decodingGroupId &&
+          this.lastDecodedObjectId !== null &&
+          objectId <= this.lastDecodedObjectId))
+    );
   }
 
   private startDecoding(groupId: bigint, objectId: bigint): void {

@@ -33,8 +33,8 @@ test("出力した欠落だけを数え、停止を繰り返しても予測音�
   const stopped = new Float32Array(480);
   renderer.process([], [stopped], 2400);
   assert.isTrue(
-    stopped.every((value) => value === 0),
-    "停止位置を後から延長しないこと",
+    stopped.subarray(renderer.fadeFrames).every((value) => value === 0),
+    "停止が届くまでに出した音の短いフェードだけで終了すること",
   );
 });
 
@@ -46,6 +46,32 @@ test("reset 後は古い声を補間せず、次の実音まで無音にする",
   renderer.process([], [output], 1440);
   assert.isTrue(output.every((value) => value === 0));
   assert.equal(renderer.concealedFrames, 0);
+});
+
+test("停止の制御が出力より遅れても、途中の予測音を段差で切らない", () => {
+  const renderer = new AudioRenderConcealer(48000, { ranges: [{ start: 0, end: 120 }] });
+  const first = new Float32Array(128);
+  renderer.process([new Float32Array(128).fill(0.3)], [first], 0);
+  // 実音は既に終わり、予測音を出力中に過去の停止時刻が届いた場合を固定する。
+  renderer.control({ type: "stop", frame: 120 });
+  const tail = new Float32Array(256);
+  renderer.process([], [tail], 128);
+  let previous = first.at(-1) ?? 0;
+  for (const value of tail) {
+    assert.isBelow(Math.abs(value - previous), 0.006, "停止通知の遅れでクリックを作らないこと");
+    previous = value;
+  }
+  assert.isTrue(
+    tail.subarray(96).every((value) => value === 0),
+    "停止後は短いフェードだけで終了すること",
+  );
+  renderer.control({ type: "stop", frame: 120 });
+  const after = new Float32Array(128);
+  renderer.process([], [after], 384);
+  assert.isTrue(
+    after.every((value) => value === 0),
+    "停止の再通知で音を再開しないこと",
+  );
 });
 
 test("チャンネル形式の変更は欠落に数えず、後続の実音へ接続する", () => {

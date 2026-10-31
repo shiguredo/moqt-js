@@ -7,7 +7,7 @@
  *
  * - フレームを並べ替えない (描く・捨てる順は積んだ順であり、各フレームは 1 回だけ出る)
  * - 壁時計の TIMESTAMP を持つフレームは表示時刻より前に描かない
- * - 再生遅延は 0 以上で上限を超えず、下げる速さは上限を超えない
+ * - 再生遅延は 0 以上で上限を超えず、表示時刻は現在の学習結果に従う
  * - 揺らぎの p95 が最大の揺らぎと一致する到着列では、表示間隔が TIMESTAMP の間隔どおりになる
  *
  * 個別の規則 (最新を残して 1 つ前を描き、古いものを捨てる、TIMESTAMP の飛び、キューの上限、
@@ -17,12 +17,7 @@
 import { test, assert } from "vite-plus/test";
 import * as fc from "fast-check";
 import { JITTER_BUFFER_MAX_QUEUED_FRAMES, PlayoutBuffer } from "./buffer";
-import {
-  MAX_PLAYOUT_DELAY_MS,
-  PLAYOUT_DELAY_DECAY_MS_PER_SECOND,
-  PLAYOUT_WINDOW_MS,
-  PlayoutTimeline,
-} from "./timeline";
+import { MAX_PLAYOUT_DELAY_MS, PLAYOUT_WINDOW_MS, PlayoutTimeline } from "./timeline";
 
 // 送信側の壁時計 (Unix epoch ミリ秒)。メディア時刻 0 のフレームの TIMESTAMP にする
 const EPOCH_MS = 1_790_263_445_000;
@@ -110,7 +105,7 @@ test("PlayoutBuffer: 描く・捨てる順は積んだ順であり、各フレ�
   );
 });
 
-test("PlayoutBuffer: 表示時刻より前に描かず、再生遅延の範囲と下げる速さを守る", () => {
+test("PlayoutBuffer: 表示時刻より前に描かず、再生遅延の範囲を守る", () => {
   fc.assert(
     fc.property(
       operationsArbitrary(false),
@@ -120,7 +115,6 @@ test("PlayoutBuffer: 表示時刻より前に描かず、再生遅延の範囲�
         const buffer = new PlayoutBuffer<number>(JITTER_BUFFER_MAX_QUEUED_FRAMES, timeline);
         let enqueued = 0;
         let localMs = LOCAL_ORIGIN_MS;
-        let previousDelay: { atMs: number; delayMs: number } | null = null;
         for (const operation of operations) {
           if (operation.kind === "enqueue") {
             const mediaMs = enqueued * frameMs;
@@ -140,17 +134,6 @@ test("PlayoutBuffer: 表示時刻より前に描かず、再生遅延の範囲�
             // (MAX_PLAYOUT_DELAY_MS) を超えず、基準の遅れは `LOCAL_ORIGIN_MS` に揺らぎと
             // 上限 (キューが吸収できる長さ) を足した値になる
             assert.isAtMost(presentationMs ?? Infinity, localMs + MAX_PLAYOUT_DELAY_MS + 0.1);
-            // 下げる速さは毎秒 PLAYOUT_DELAY_DECAY_MS_PER_SECOND まで。
-            // 再生遅延の上限 (キューの枚数分のフレーム間隔) は TIMESTAMP をマイクロ秒に
-            // 丸めた差から求めるため、フレーム間隔が 1 マイクロ秒動くと上限が
-            // (キューの上限 - 余裕) マイクロ秒動く。その分は許す
-            if (previousDelay !== null && delay < previousDelay.delayMs) {
-              const allowedMs =
-                (PLAYOUT_DELAY_DECAY_MS_PER_SECOND * (localMs - previousDelay.atMs)) / 1_000;
-              const roundingMs = JITTER_BUFFER_MAX_QUEUED_FRAMES / 1_000;
-              assert.isAtMost(previousDelay.delayMs - delay, allowedMs + roundingMs + TOLERANCE_MS);
-            }
-            previousDelay = { atMs: localMs, delayMs: delay };
           } else {
             localMs += operation.elapsedMs;
             const selection = buffer.select(localMs);

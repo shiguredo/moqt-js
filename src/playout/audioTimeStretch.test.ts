@@ -3,18 +3,18 @@
  *
  * 波形が周期的な音ではピッチ周期 1 つ分だけ長さが変わり、切れ目の前後がクロスフェードで
  * 繋がること、波形が繰り返していない音 (相関が足りない音) では操作しないこと、
- * 無音では操作することを固定する。ピッチ周期は 4 kHz の格子に乗る音では整数周期のまま
- * 使い、格子に乗らない音ではピークの前後 1 格子の相関を放物線補間して端数まで求める
- * (時間圧縮と補間で対称)。補間は末尾の周期を端数まで求めて繰り返すため、4 kHz の
+ * 無音では操作することを固定する。圧縮と伸長は 4 kHz の粗い推定の近傍を元のレートで
+ * 比較し、強く相関する整数周期を選ぶ。補間は末尾の周期を端数まで求めて繰り返すため、4 kHz の
  * 格子に乗らない周期でも穴の終わりで位相がずれない。末尾で位相が飛ぶ音や、継ぎ目の段差が
  * 大きい音 (どのチャンネルでも) では操作せず、周期の推定が確かでない音では生成した音の
  * 末尾を短くフェードする。実際の使い方 (遅れて届いた音を目標へ戻す) は audioPlayout.test.ts
- * が、隙間の補間の予約は createMediaSubscriber.test.ts が固定する。
+ * が、実出力の補間と復帰は tests/e2e/media-playout-quality.spec.ts が固定する。
  */
 
 import { test, assert } from "vite-plus/test";
 import {
   compressSamples,
+  preemptivelyExpandSamples,
   concealSamples,
   TIME_STRETCH_CONCEAL_FADE_MS,
   type AudioSamples,
@@ -23,6 +23,58 @@ import {
 /** Opus の 1 フレーム (20 ms、48 kHz) */
 const SAMPLE_RATE = 48_000;
 const FRAME_SAMPLES = 960;
+
+for (const sampleRate of [44100, 48000]) {
+  for (const frequency of [80, 170, 440]) {
+    test(`不足した深さを周期の伸長で戻し、先頭と末尾の実音を保つ: ${sampleRate} Hz / ${frequency} Hz`, () => {
+      const length = Math.round(sampleRate * 0.02);
+      const oldLength = Math.round(sampleRate * 0.01);
+      const sine = (index: number) =>
+        0.2 * Math.sin((2 * Math.PI * frequency * index) / sampleRate);
+      const input = Float32Array.from({ length }, (_, index) => sine(index));
+      const history = Float32Array.from({ length: oldLength }, (_, index) =>
+        sine(index - oldLength),
+      );
+      const result = preemptivelyExpandSamples(
+        [input],
+        sampleRate,
+        Math.round(sampleRate * 0.015),
+        [history],
+      );
+      assert.isAbove(result.lengthChangeSamples, 0, "低い声も含めて実際に伸ばすこと");
+      assert.isAtMost(result.lengthChangeSamples, sampleRate * 0.015);
+      const output = result.channels[0];
+      assert.isDefined(output);
+      if (output === undefined) return;
+      assert.equal(output.length, input.length + result.lengthChangeSamples);
+      assert.deepEqual(output.subarray(0, 32), input.subarray(0, 32));
+      assert.deepEqual(output.subarray(-32), input.subarray(-32));
+      assert.isAtMost(
+        maxStep(output),
+        maxStep(input) * 1.05,
+        "周期の追加で新しい段差を作らないこと",
+      );
+      const limited = preemptivelyExpandSamples(
+        [input],
+        sampleRate,
+        result.lengthChangeSamples - 1,
+        [history],
+      );
+      assert.equal(limited.lengthChangeSamples, 0, "目標の深さを越える周期を足さないこと");
+    });
+  }
+}
+
+test("予備的な伸長は非周期音を変更せず、無音だけは要求の長さまで足せる", () => {
+  const noise = noiseFrame(12);
+  const unchanged = preemptivelyExpandSamples([noise], SAMPLE_RATE, 480, [noise]);
+  assert.equal(unchanged.lengthChangeSamples, 0);
+  assert.strictEqual(unchanged.channels[0], noise);
+  const silence = new Float32Array(960);
+  const expanded = preemptivelyExpandSamples([silence], SAMPLE_RATE, 240);
+  assert.equal(expanded.lengthChangeSamples, 240);
+  assert.isTrue(expanded.channels[0]?.every((sample) => sample === 0));
+});
 
 /** 周期 `periodMs` の正弦波を作る (20 ms のフレーム) */
 function sineFrame(periodMs: number, amplitude = 0.5, phase = 0): AudioSamples {

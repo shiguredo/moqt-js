@@ -1,7 +1,12 @@
 # 音声再生の現状
 
+本稿は下記の更新日時点の記録である。その後の出力経路の変更とレビューへの修正は
+[playout レビューへの対応](PLAYOUT_REVIEW_FIXES.md) を参照すること。
+
 更新日: 2026-10-29。`86cdefe1` の再生経路と、その後の差分レビューで修正した実装、計器、
 確認済みの制約をまとめる。
+`86cdefe1` は作業ブランチ `feature/fix-playout-audio-quality` の識別子であり、
+develop への統合は `c3f36fa4` である。
 公開 API の定義は [高レベル API](HIGH_LEVEL_API.md)、採用案の A/B と棄却した調整は
 [A/V 再生の低遅延化の計測](AV_LOW_LATENCY_INVESTIGATION.md)、波形の修正は
 [音声の出力波形の測定と改善](AUDIO_PLAYOUT_QUALITY_INVESTIGATION.md) を参照すること。

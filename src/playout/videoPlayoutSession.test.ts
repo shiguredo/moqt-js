@@ -374,7 +374,7 @@ function recordAudioPresentation(timeline: PlayoutTimeline, timestampMicros: num
 // ============================================================================
 
 test("VideoDecodeInputs: TIMESTAMP の種類と位置を覚え、引くと忘れる", () => {
-  const inputs = new VideoDecodeInputs({ maxTracked: 8, forgetOnDuplicate: true });
+  const inputs = new VideoDecodeInputs({ maxTracked: 8 });
   inputs.remember(1_000, {
     timestampKind: "wallClock",
     location: { group: 3n, object: 7n },
@@ -391,7 +391,7 @@ test("VideoDecodeInputs: TIMESTAMP の種類と位置を覚え、引くと忘れ
 });
 
 test("VideoDecodeInputs: TIMESTAMP を持たない Object は覚えず、覚えていた分も忘れる", () => {
-  const inputs = new VideoDecodeInputs({ maxTracked: 8, forgetOnDuplicate: true });
+  const inputs = new VideoDecodeInputs({ maxTracked: 8 });
   // TIMESTAMP を持たない Object は decoder へ 0 を渡すため、0 で引けると誤って対応づける
   inputs.remember(0, { timestampKind: "none", location: { group: 0n, object: 0n } });
   assert.isUndefined(inputs.take(0));
@@ -401,26 +401,27 @@ test("VideoDecodeInputs: TIMESTAMP を持たない Object は覚えず、覚え�
   assert.isUndefined(inputs.take(1_000));
 });
 
-test("VideoDecodeInputs: 同じ TIMESTAMP が重なったら、位置を使うときは忘れる", () => {
-  const inputs = new VideoDecodeInputs({ maxTracked: 8, forgetOnDuplicate: true });
+test("VideoDecodeInputs: 同じ TIMESTAMP の出力も入力順に位置を引く", () => {
+  const inputs = new VideoDecodeInputs({ maxTracked: 8 });
   inputs.remember(1_000, { timestampKind: "wallClock", location: { group: 1n, object: 1n } });
   inputs.remember(1_000, { timestampKind: "wallClock", location: { group: 2n, object: 1n } });
 
-  // どちらの位置か決められないため、復号の出力では位置が分からないものとして扱う
+  assert.equal(inputs.take(1_000)?.location.group, 1n);
+  assert.equal(inputs.take(1_000)?.location.group, 2n);
   assert.isUndefined(inputs.take(1_000));
 });
 
-test("VideoDecodeInputs: 同じ TIMESTAMP が重なったら、位置を使わないときは上書きする", () => {
-  const inputs = new VideoDecodeInputs({ maxTracked: 8, forgetOnDuplicate: false });
+test("VideoDecodeInputs: 同じ TIMESTAMP の異なる種類を上書きしない", () => {
+  const inputs = new VideoDecodeInputs({ maxTracked: 8 });
   inputs.remember(1_000, { timestampKind: "mediaTime", location: { group: 1n, object: 1n } });
   inputs.remember(1_000, { timestampKind: "wallClock", location: { group: 2n, object: 1n } });
 
-  // 後から来た種類で上書きする (表示時刻を決められるかどうかだけを見る)
+  assert.equal(inputs.take(1_000)?.timestampKind, "mediaTime");
   assert.equal(inputs.take(1_000)?.timestampKind, "wallClock");
 });
 
 test("VideoDecodeInputs: 上限を超えたら古い方から忘れる", () => {
-  const inputs = new VideoDecodeInputs({ maxTracked: 2, forgetOnDuplicate: true });
+  const inputs = new VideoDecodeInputs({ maxTracked: 2 });
   inputs.remember(1_000, { timestampKind: "wallClock", location: { group: 1n, object: 1n } });
   inputs.remember(2_000, { timestampKind: "wallClock", location: { group: 1n, object: 2n } });
   inputs.remember(3_000, { timestampKind: "wallClock", location: { group: 1n, object: 3n } });
@@ -433,7 +434,7 @@ test("VideoDecodeInputs: 上限を超えたら古い方から忘れる", () => {
 });
 
 test("VideoDecodeInputs: clear() ですべて忘れる", () => {
-  const inputs = new VideoDecodeInputs({ maxTracked: 8, forgetOnDuplicate: true });
+  const inputs = new VideoDecodeInputs({ maxTracked: 8 });
   inputs.remember(1_000, { timestampKind: "wallClock", location: { group: 1n, object: 1n } });
   inputs.clear();
   assert.equal(inputs.size, 0);

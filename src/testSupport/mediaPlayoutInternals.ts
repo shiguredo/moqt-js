@@ -17,11 +17,7 @@ import type { AudioPlayoutTimingStats } from "../playout/audioPlayoutTimingStats
 import type { AudioDecodeInput, AudioDecodeInputs } from "../playout/decodeInputTimestamps";
 import type { MediaPlayout } from "../playout/mediaPlayout";
 import type { PlayoutTimeline } from "../playout/timeline";
-import type {
-  VideoDecodeInput,
-  VideoDecodeInputs,
-  VideoPlayoutSession,
-} from "../playout/videoPlayoutSession";
+import type { VideoDecodeInputs, VideoPlayoutSession } from "../playout/videoPlayoutSession";
 
 /** 再生の入口の内部形状 (テストの中だけで使う) */
 export interface MediaPlayoutInternals {
@@ -102,10 +98,7 @@ export function playoutAudioInputMapOf(playout: MediaPlayout): Map<number, Audio
   return inputs.inputs;
 }
 
-/** 復号へ渡した映像 Object の対応表の Map を読む (テストの中だけで使う) */
-export function playoutVideoInputMapOf(playout: MediaPlayout): Map<number, VideoDecodeInput> {
-  const inputs = playoutInternalsOf(playout).videoInputs as unknown as {
-    readonly inputs: Map<number, VideoDecodeInput>;
-  };
-  return inputs.inputs;
+/** 復号へ渡した映像 Object の対応表を読む。内部の格納形式には依存しない。 */
+export function playoutVideoInputsOf(playout: MediaPlayout): VideoDecodeInputs {
+  return playoutInternalsOf(playout).videoInputs;
 }

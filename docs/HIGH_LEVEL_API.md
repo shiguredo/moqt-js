@@ -1170,6 +1170,16 @@ TIMESTAMP が壁時計からずれていても、到着基準の予算をその�
 ずらす幅が `AUDIO_PLAYOUT_RESYNC_MIN_JUMP_SECONDS` (10 ms) 未満なら並べ直しとして数えない
 (媒体時刻が跳ばないため)。
 
+上記の時間軸の予定を使わず、到着基準で連続再生している場合は、遅着した音を予約できる
+最も早い時刻で再開する。再開時に 50〜100 ms の待ちを追加すると音切れが長くなるためである。
+その結果、目標より浅くなった分は、後続音声の周期性が十分な区間を時間伸長して戻す。
+直前の実音 10 ms と今回の実音を使い、強く相関する周期を重ね合わせる。
+無音はその長さを延ばし、周期性が弱い音は加工せずに次の適用可能な音を待つ。
+1 回の伸長は今回の音の長さと不足分の小さい方までとし、実際に延びた長さだけを予約基準へ
+反映する。通常の到着の揺れでは伸長を始めず、再同期後の回復に限る。
+映像との同期には、時計の対応付けが有効な間は目標値ではなく音声の実際の予約深さを渡す。
+音声の回復中に、映像だけを回復後の深さへ先行させないためである。
+
 `missedFrames` / `missedMs` は、鳴らすと決めたのに鳴らなかった音の数と長さである。
 `playoutDrops` が件数だけを数えるのに対し、こちらは理由 (`missedByReason`) と長さ、
 直近の一覧 (`recentMisses`) を持つ。鳴り遅れでは捨てないため、鳴らなかった理由は
@@ -1409,9 +1419,9 @@ interface MediaPlayoutVideoOptions {
 interface MediaPlayoutDecodeInputOptions {
   // 覚えておく上限 (件)。既定は 256。1 以上の整数。超えたら古い方から忘れる
   maxTracked?: number;
-  // 同じ TIMESTAMP の入力が重なったときに、その TIMESTAMP の分を忘れるか。既定は false
+  // 音声の同じ TIMESTAMP の入力が重なったときに、その分を忘れるか。既定は false
   // true は位置 (Object の位置) を選別に使うとき (どちらの位置か決められないため)。
-  // false は後から来た種類で上書きする (種類しか使わないとき)
+  // false は後から来た種類で上書きする (種類しか使わないとき)。映像は常に FIFO で対応する
   forgetOnDuplicate?: boolean;
 }
 ```
@@ -1421,6 +1431,10 @@ interface MediaPlayoutDecodeInputOptions {
 有限数で 0 以上である。範囲外の値でハングや無音を起こさないよう、構成する前に弾く。
 `drainAudio` の `maxWaitMs` も呼び出し時に検証し、範囲外なら非同期の reject になる
 (`drainAudio` は Promise を返す)。
+
+resume の Promise が解決しても実出力時計がまだ止まっている場合があるため、壁時計が
+予定時刻を過ぎただけでは完了しない。実出力位置を予約と同じ軸へ戻して残りを確認し、
+予約終端の描画も待つ。待機の上限はこの場合にも適用する。
 
 `targetLatencyMs` の既定は null であり、catalog の `targetLatency`
 (draft-ietf-moq-msf-01 §5.2.8) を解決した値を渡す。同じ render group と alternate group の
@@ -1758,7 +1772,7 @@ interface MediaPlayoutStats {
     concealments: number; // 補間した回数
     compressedMs: number; // 波形を詰めた合計
     concealedMs: number; // 補間した合計
-    latenessMs: number; // 目標を守る並べ方で最後に並べた音の遅れ
+    latenessMs: number; // 最後の予約の目標超過。到着基準では到着 + 予算からの超過
     timing: AudioPlayoutTimingSnapshot; // 鳴るはずの時刻、鳴り始める時刻、鳴らなかった量
     catchUp: AudioReceiveCatchUpStats; // 受信側の追いつきの観測値
     delay: AudioPlayoutDelayStats; // 音声へ適用した再生予算の内訳
@@ -1871,6 +1885,8 @@ devtools の表示用スナップショットは `audio.audioDelay` を使う。
   `AUDIO_PLAYOUT_DRAIN_MAX_MS` = 300 ms) で鳴り終わらなかった分は「切った量」として計器へ残る
 - `clearVideoQueue()` — 表示待ちの映像を捨て、予約した表示を取り消し、復号へ渡した映像入力
   の対応表も消す
+- `clearVideoDecodeInputs()` — decoder の復旧・再構成後、未出力の映像入力の対応だけを消す。
+  復号済みの表示待ちと時間軸は維持する。次の入力を渡す前に呼ぶ
 - `setTargetLatencyMs(value)` — 表示の遅れの目標を変える (catalog の `targetLatency` が
   更新されたとき)。0 以上の有限数だけを受け付け、範囲外は throw する。null で目標を
   使わない。catalog の負の値はライブラリが null に正規化してから渡す
@@ -2264,11 +2280,10 @@ draft-ietf-moq-loc-04 §2.3.1.1 / §2.3.1.2) である。渡すと次を行う�
 
 `VideoDecodeInputs` は、復号の出力 (`VideoFrame`) では Object の位置が分からないため、
 decoder へ渡したときの TIMESTAMP で引けるように覚えておく対応表である。`remember` で覚え、
-`take` で 1 回だけ引ける (引くと忘れる)。TIMESTAMP を持たない Object は覚えない (decoder へ 0
-を渡すため、同じ TIMESTAMP の Object を誤って対応づける)。`forgetOnDuplicate` は位置を使う
-かで決める。位置を relay の cache からの追いつきの判定 (`CatchUpGate`) に使うときは true に
-して、重なった TIMESTAMP の分を忘れる (どちらの位置か決められないため)。TIMESTAMP の種類だけ
-を使うときは false にして、後から来た種類で上書きする。
+`take` で同じ TIMESTAMP の先頭を 1 件だけ引く。同じ TIMESTAMP の実フレームが複数ある場合も、
+入力順でそれぞれの種類と位置を対応させる。TIMESTAMP を持たない Object は覚えない
+(decoder へ 0 を渡すため、同じ値の Object を誤って対応づける)。
+`forgetOnDuplicate` は音声の対応表だけに適用し、映像の FIFO は変更しない。
 
 `MediaPlayout` は、復号の出力を `VideoPlayoutSession.handleDecodedFrame` へ渡す。
 

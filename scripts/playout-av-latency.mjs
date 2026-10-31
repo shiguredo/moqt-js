@@ -277,7 +277,6 @@ export async function measure(
         epochMicros: epoch,
         timeOriginMs: performance.timeOrigin,
         injectedAudioLoss,
-        orderedDecoderOutput: true,
         audioAgeMs: distribution(activeAudio.map((row) => age(row, row.startMs))),
         videoAgeMs: distribution(activeVideo.map((row) => age(row, row.presentedMs))),
         pairedSkewMs: distribution(pairs.map((row) => row.skewMs)),

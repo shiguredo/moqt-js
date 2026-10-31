@@ -2,7 +2,12 @@
 import assert from "node:assert/strict";
 import { test, type Page } from "@playwright/test";
 import { DEVTOOLS_URL } from "../urls";
-import { createTestNamespace, registerMoqtUriCandidate, requireRelayUri } from "./support";
+import {
+  createTestNamespace,
+  registerMoqtUriCandidate,
+  requireRelayUri,
+  RELAY_TEST_TIMEOUT_MS,
+} from "./support";
 import { formatTrackNamespace } from "../../../src/fullTrackName";
 import type { MoqtDevToolsApi } from "../../../devtools/src/testApi";
 import type { SubscriberInstance } from "../../../devtools/src/signals/subscriber";
@@ -95,7 +100,7 @@ async function startBoth(
     mode: "both",
     namespace,
     codec: "vp9",
-    resolution: "1280x720",
+    resolution: "640x360",
     keyframeInterval: "10",
     audioSource,
     ...extraParams,
@@ -128,7 +133,7 @@ for (const phase of ["starting", "playing"] as const) {
   test(`出力機器の選択失敗後も復号前遅延の接続を保ち、音声と映像を再生する (${phase === "starting" ? "開始時" : "再生中"})`, async ({
     page,
   }) => {
-    test.setTimeout(60000);
+    test.setTimeout(RELAY_TEST_TIMEOUT_MS);
     if (!(await startBoth(page, "dummy", { preDecodeDelayMs: "500" }))) return;
     try {
       const configuredDelay = await page.evaluate(async () => {
@@ -276,7 +281,7 @@ test("音声を無音化・復帰・停止しても映像の配信と表示を�
 test("映像の実復号エラー後は新しい Group を要求し、次の定期キーフレームまで待たない", async ({
   page,
 }) => {
-  test.setTimeout(60000);
+  test.setTimeout(RELAY_TEST_TIMEOUT_MS);
   if (!(await startBoth(page, "dummy"))) return;
   try {
     await page.getByTestId("subscriber-audio-playback-toggle").click();

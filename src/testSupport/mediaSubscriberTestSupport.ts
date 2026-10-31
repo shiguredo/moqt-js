@@ -90,7 +90,12 @@ export interface SubscriberInitialConfigControl {
       channels: unknown,
       description?: Uint8Array,
     ): Promise<void>;
-    decode(payload: Uint8Array, type: "key" | "delta", timestamp: number, duration: number): void;
+    decode(
+      payload: Uint8Array,
+      type: "key" | "delta",
+      timestamp: number | null,
+      duration: number,
+    ): void;
   } | null;
   videoDecoderConfigured: boolean;
   audioDecoderConfigured: boolean;
