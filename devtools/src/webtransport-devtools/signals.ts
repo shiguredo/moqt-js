@@ -7,7 +7,7 @@ import {
   type StreamMessage,
 } from "./messageLog";
 import { toHttpVersionLabel } from "moqt-js";
-import { base64ToArrayBuffer } from "../utils/base64";
+import { detectStaticApiPresence, type StaticApiGroup } from "./staticApiSupport";
 import {
   buildRejectedClosedOutcome,
   buildResolvedClosedOutcome,
@@ -23,6 +23,8 @@ import {
   parseMaxBufferedDatagrams,
   parseSendOrder,
   parseCloseCode,
+  parseCertificateHash,
+  truncateCloseReason,
   validateConnectionSettings,
   type CongestionControl,
   type DatagramsReadableType,
@@ -112,346 +114,9 @@ export interface ApiSupportNode {
 export type ApiSupport = Record<string, ApiSupportNode>;
 export const wtApiSupport = signal<ApiSupport | null>(null);
 
-// 静的な WebTransport API 対応状況 (接続前チェック)
-// 評価は WebTransport.prototype 等のグローバル / プロトタイプ上で行い、
-// ブラウザ実装そのものを判定する。ページロード時に 1 回だけ評価する。
-// 仕様: https://www.w3.org/TR/webtransport/
-export interface StaticApiCheck {
-  name: string;
-  supported: boolean;
-  // 仕様上 deprecated とされ、後継 API に置き換えられた項目を true にする
-  // 新ブラウザでは消えているのが期待されるため、未対応でも赤表示にしない
-  deprecated?: boolean;
-  // 補足注記 (「use createWritable」などの移行先案内に利用する)
-  note?: string;
-  // 機能の 1 行解説 (日本語)
-  description?: string;
-}
-export interface StaticApiGroup {
-  name: string;
-  items: StaticApiCheck[];
-}
-
-function detectStaticApiSupport(): StaticApiGroup[] {
-  const globalObj = self as unknown as Record<string, unknown>;
-
-  const hasGlobal = (name: string): boolean => name in globalObj;
-
-  // biome-ignore lint/suspicious/noExplicitAny: 静的チェック対象の型定義が不完全
-  const hasOnProto = (ctor: any, member: string): boolean => {
-    // null と undefined の双方を弾く (未実装ブラウザでは global 自体が存在しない)
-    if (ctor === null || ctor === undefined) return false;
-    const proto = ctor.prototype;
-    if (proto === null || proto === undefined) return false;
-    return member in proto;
-  };
-
-  // biome-ignore lint/suspicious/noExplicitAny: 静的チェック対象の型定義が不完全
-  const hasOnStatic = (ctor: any, member: string): boolean => {
-    // null と undefined の双方を弾く (未実装ブラウザでは global 自体が存在しない)
-    if (ctor === null || ctor === undefined) return false;
-    return member in ctor;
-  };
-
-  // noPropertyAccessFromIndexSignature が有効なため、index signature 経由の
-  // アクセスはブラケット記法で行う
-  const WT = globalObj["WebTransport"];
-  const DDuplex = globalObj["WebTransportDatagramDuplexStream"];
-  const BidiStream = globalObj["WebTransportBidirectionalStream"];
-  const SendStream = globalObj["WebTransportSendStream"];
-  const RecvStream = globalObj["WebTransportReceiveStream"];
-  const SendGroup = globalObj["WebTransportSendGroup"];
-  const WTError = globalObj["WebTransportError"];
-
-  return [
-    // Global interfaces の存在確認
-    // 各インターフェースは W3C WebTransport 仕様で定義されている
-    // https://www.w3.org/TR/webtransport/
-    {
-      name: "Global",
-      items: [
-        {
-          name: "WebTransport",
-          supported: hasGlobal("WebTransport"),
-          description: "Main class representing a WebTransport session",
-        },
-        {
-          name: "WebTransportError",
-          supported: hasGlobal("WebTransportError"),
-          description: "DOMException subclass carrying WebTransport-specific error details",
-        },
-        {
-          name: "WebTransportBidirectionalStream",
-          supported: hasGlobal("WebTransportBidirectionalStream"),
-          description: "Bidirectional stream (a readable / writable pair)",
-        },
-        {
-          name: "WebTransportReceiveStream",
-          supported: hasGlobal("WebTransportReceiveStream"),
-          description: "Receive-only ReadableStream subclass (with getStats)",
-        },
-        {
-          name: "WebTransportSendStream",
-          supported: hasGlobal("WebTransportSendStream"),
-          description: "Send-only WritableStream subclass (with sendOrder / getStats)",
-        },
-        {
-          name: "WebTransportSendGroup",
-          supported: hasGlobal("WebTransportSendGroup"),
-          description: "Group that coordinates the send order of multiple streams",
-        },
-        {
-          name: "WebTransportDatagramDuplexStream",
-          supported: hasGlobal("WebTransportDatagramDuplexStream"),
-          description: "Duplex stream for sending and receiving datagrams",
-        },
-      ],
-    },
-    // WebTransport インターフェースのメンバー
-    // 仕様: https://www.w3.org/TR/webtransport/#web-transport
-    // MDN: https://developer.mozilla.org/en-US/docs/Web/API/WebTransport
-    {
-      name: "WebTransport",
-      items: [
-        {
-          name: "WebTransport.prototype.ready",
-          supported: hasOnProto(WT, "ready"),
-          description: "Promise fulfilled when the session is established",
-        },
-        {
-          name: "WebTransport.prototype.closed",
-          supported: hasOnProto(WT, "closed"),
-          description: "Promise fulfilled on graceful close, rejected on abnormal termination",
-        },
-        {
-          name: "WebTransport.prototype.close",
-          supported: hasOnProto(WT, "close"),
-          description: "Closes the session (closeCode / reason can be given)",
-        },
-        {
-          name: "WebTransport.prototype.draining",
-          supported: hasOnProto(WT, "draining"),
-          description: "Promise fulfilled when the server requests draining",
-        },
-        {
-          name: "WebTransport.prototype.reliability",
-          supported: hasOnProto(WT, "reliability"),
-          description: "Reliability mode (pending / supports-unreliable / supports-reliable-only)",
-        },
-        {
-          name: "WebTransport.prototype.congestionControl",
-          supported: hasOnProto(WT, "congestionControl"),
-          description: "Congestion control in effect (default / throughput / low-latency)",
-        },
-        {
-          name: "WebTransport.prototype.protocol",
-          supported: hasOnProto(WT, "protocol"),
-          description: "Application protocol selected by the server",
-        },
-        {
-          name: "WebTransport.prototype.responseHeaders",
-          supported: hasOnProto(WT, "responseHeaders"),
-          description: "HTTP response headers from the server after the session is established",
-        },
-        {
-          name: "WebTransport.prototype.anticipatedConcurrentIncomingUnidirectionalStreams",
-          supported: hasOnProto(WT, "anticipatedConcurrentIncomingUnidirectionalStreams"),
-          description: "Hint for the expected number of concurrent incoming unidirectional streams",
-        },
-        {
-          name: "WebTransport.prototype.anticipatedConcurrentIncomingBidirectionalStreams",
-          supported: hasOnProto(WT, "anticipatedConcurrentIncomingBidirectionalStreams"),
-          description: "Hint for the expected number of concurrent incoming bidirectional streams",
-        },
-        {
-          name: "WebTransport.prototype.datagrams",
-          supported: hasOnProto(WT, "datagrams"),
-          description:
-            "Accessor for sending and receiving datagrams (WebTransportDatagramDuplexStream)",
-        },
-        {
-          name: "WebTransport.prototype.createBidirectionalStream",
-          supported: hasOnProto(WT, "createBidirectionalStream"),
-          description: "Creates a new bidirectional stream",
-        },
-        {
-          name: "WebTransport.prototype.createUnidirectionalStream",
-          supported: hasOnProto(WT, "createUnidirectionalStream"),
-          description: "Creates a new send-only (unidirectional) stream",
-        },
-        {
-          name: "WebTransport.prototype.incomingBidirectionalStreams",
-          supported: hasOnProto(WT, "incomingBidirectionalStreams"),
-          description: "ReadableStream of bidirectional streams received from the server",
-        },
-        {
-          name: "WebTransport.prototype.incomingUnidirectionalStreams",
-          supported: hasOnProto(WT, "incomingUnidirectionalStreams"),
-          description: "ReadableStream of unidirectional streams received from the server",
-        },
-        {
-          name: "WebTransport.prototype.createSendGroup",
-          supported: hasOnProto(WT, "createSendGroup"),
-          description: "Creates a new WebTransportSendGroup",
-        },
-        {
-          name: "WebTransport.prototype.getStats",
-          supported: hasOnProto(WT, "getStats"),
-          description: "Gets session statistics asynchronously",
-        },
-        {
-          name: "WebTransport.supportsReliableOnly",
-          supported: hasOnStatic(WT, "supportsReliableOnly"),
-          description: "Static flag indicating support for reliable-only mode",
-        },
-      ],
-    },
-    // WebTransportDatagramDuplexStream の属性群
-    // 仕様: https://www.w3.org/TR/webtransport/#web-transport-datagram-duplex-stream
-    // MDN: https://developer.mozilla.org/en-US/docs/Web/API/WebTransportDatagramDuplexStream
-    {
-      name: "Datagrams",
-      items: [
-        {
-          name: "WebTransportDatagramDuplexStream.prototype.readable",
-          supported: hasOnProto(DDuplex, "readable"),
-          description: "ReadableStream for incoming datagrams",
-        },
-        {
-          // writable は W3C 現行仕様からは削除済み。MDN では Deprecated かつ Non-standard 扱い
-          // https://developer.mozilla.org/en-US/docs/Web/API/WebTransportDatagramDuplexStream/writable
-          // 現行仕様では createWritable() が正規の代替
-          // https://www.w3.org/TR/webtransport/#dom-webtransportdatagramduplexstream-createwritable
-          name: "WebTransportDatagramDuplexStream.prototype.writable",
-          supported: hasOnProto(DDuplex, "writable"),
-          deprecated: true,
-          note: "use createWritable",
-          description:
-            "WritableStream for outgoing datagrams (deprecated because it is a single shared stream)",
-        },
-        {
-          name: "WebTransportDatagramDuplexStream.prototype.createWritable",
-          supported: hasOnProto(DDuplex, "createWritable"),
-          description:
-            "Creates a WritableStream for sending on each call (concurrent sending, send order can be given)",
-        },
-        {
-          name: "WebTransportDatagramDuplexStream.prototype.maxDatagramSize",
-          supported: hasOnProto(DDuplex, "maxDatagramSize"),
-          description: "Maximum datagram size that can be sent (bytes)",
-        },
-        {
-          name: "WebTransportDatagramDuplexStream.prototype.incomingMaxAge",
-          supported: hasOnProto(DDuplex, "incomingMaxAge"),
-          description: "Maximum age before incoming datagrams are discarded (ms)",
-        },
-        {
-          name: "WebTransportDatagramDuplexStream.prototype.outgoingMaxAge",
-          supported: hasOnProto(DDuplex, "outgoingMaxAge"),
-          description: "Maximum age before outgoing datagrams are discarded (ms)",
-        },
-        {
-          name: "WebTransportDatagramDuplexStream.prototype.incomingMaxBufferedDatagrams",
-          supported: hasOnProto(DDuplex, "incomingMaxBufferedDatagrams"),
-          description: "Threshold at which the incoming queue discards from the head",
-        },
-        {
-          name: "WebTransportDatagramDuplexStream.prototype.outgoingMaxBufferedDatagrams",
-          supported: hasOnProto(DDuplex, "outgoingMaxBufferedDatagrams"),
-          description: "Threshold at which the outgoing queue applies backpressure",
-        },
-      ],
-    },
-    // WebTransportBidirectionalStream は readable / writable の対を持つ
-    // 仕様: https://www.w3.org/TR/webtransport/#web-transport-bidirectional-stream
-    // MDN: https://developer.mozilla.org/en-US/docs/Web/API/WebTransportBidirectionalStream
-    {
-      name: "Bidirectional Stream",
-      items: [
-        {
-          name: "WebTransportBidirectionalStream.prototype.readable",
-          supported: hasOnProto(BidiStream, "readable"),
-          description: "Receiving side (WebTransportReceiveStream)",
-        },
-        {
-          name: "WebTransportBidirectionalStream.prototype.writable",
-          supported: hasOnProto(BidiStream, "writable"),
-          description: "Sending side (WebTransportSendStream)",
-        },
-      ],
-    },
-    // WebTransportSendStream は WritableStream を継承
-    // 仕様: https://www.w3.org/TR/webtransport/#web-transport-send-stream
-    // MDN: https://developer.mozilla.org/en-US/docs/Web/API/WebTransportSendStream
-    {
-      name: "Send Stream",
-      items: [
-        {
-          name: "WebTransportSendStream.prototype.sendOrder",
-          supported: hasOnProto(SendStream, "sendOrder"),
-          description: "Send priority (integer, higher is sent first)",
-        },
-        {
-          name: "WebTransportSendStream.prototype.sendGroup",
-          supported: hasOnProto(SendStream, "sendGroup"),
-          description: "WebTransportSendGroup this stream belongs to",
-        },
-        {
-          name: "WebTransportSendStream.prototype.getStats",
-          supported: hasOnProto(SendStream, "getStats"),
-          description: "Gets statistics of this send stream",
-        },
-      ],
-    },
-    // WebTransportReceiveStream は ReadableStream を継承
-    // 仕様: https://www.w3.org/TR/webtransport/#web-transport-receive-stream
-    // MDN: https://developer.mozilla.org/en-US/docs/Web/API/WebTransportReceiveStream
-    {
-      name: "Receive Stream",
-      items: [
-        {
-          name: "WebTransportReceiveStream.prototype.getStats",
-          supported: hasOnProto(RecvStream, "getStats"),
-          description: "Gets statistics of this receive stream",
-        },
-      ],
-    },
-    // WebTransportSendGroup は送信順序の協調単位
-    // 仕様: https://www.w3.org/TR/webtransport/#web-transport-send-group
-    // MDN: https://developer.mozilla.org/en-US/docs/Web/API/WebTransportSendGroup
-    {
-      name: "Send Group",
-      items: [
-        {
-          name: "WebTransportSendGroup.prototype.getStats",
-          supported: hasOnProto(SendGroup, "getStats"),
-          description: "Gets aggregated statistics of all streams in the group",
-        },
-      ],
-    },
-    // WebTransportError は DOMException を継承したエラー型
-    // 仕様: https://www.w3.org/TR/webtransport/#web-transport-error-interface
-    // MDN: https://developer.mozilla.org/en-US/docs/Web/API/WebTransportError
-    {
-      name: "Error",
-      items: [
-        {
-          name: "WebTransportError.prototype.source",
-          supported: hasOnProto(WTError, "source"),
-          description: 'Source of the error ("session" or "stream")',
-        },
-        {
-          name: "WebTransportError.prototype.streamErrorCode",
-          supported: hasOnProto(WTError, "streamErrorCode"),
-          description: "Application error code when a stream is closed (only when applicable)",
-        },
-      ],
-    },
-  ];
-}
-
-// ページロード時に 1 回評価する
-export const wtStaticApiSupport = signal<StaticApiGroup[]>(detectStaticApiSupport());
+// 静的な API 存在確認の結果 (接続前にネットワーク I/O なしで評価する)
+// 判定の実体は staticApiSupport.ts。ここでは signal として保持するだけ
+export const wtStaticApiPresence = signal<StaticApiGroup[]>(detectStaticApiPresence());
 
 // 双方向ストリーム
 export interface BidiStreamInfo extends MessageLogFields {
@@ -493,8 +158,17 @@ let bidiStreamCounter = 0;
 let uniSendStreamCounter = 0;
 let uniRecvStreamCounter = 0;
 
-// 接続中は設定を無効化する
-export const settingsDisabled = computed(() => connectionStatus.value !== "disconnected");
+// セッション世代
+// 接続ごとに増やし、古いセッションの Promise ハンドラが新しいセッションの
+// transport / ストリーム / 状態を書き換えないようにする
+let sessionGeneration = 0;
+
+// 接続中と接続済みの間だけ設定を無効化する
+// error 状態は入力検証の失敗でも設定されるため、設定を無効化すると不正な入力を
+// 直せず復帰できなくなる
+export const settingsDisabled = computed(
+  () => connectionStatus.value === "connecting" || connectionStatus.value === "connected",
+);
 
 // 接続後設定 (接続中のみ適用可能)
 // 入力値は仕様の setter 制約 (§5.3 / §6.10) に従って検証し、切断時にリセットする
@@ -559,12 +233,38 @@ export function applyDatagramSettings(): void {
 }
 
 /**
+ * WebTransport.supportsReliableOnly を読む
+ *
+ * W3C §6.3 の IDL は `static readonly attribute boolean supportsReliableOnly` であり、
+ * インスタンスには生えない。未実装のブラウザでは "N/A" を返す。
+ */
+function readStaticSupportsReliableOnly(): string {
+  const ctor = (globalThis as Record<string, unknown>)["WebTransport"] as
+    | { supportsReliableOnly?: unknown }
+    | undefined;
+  const value = ctor?.supportsReliableOnly;
+  // 仕様上は boolean である。未実装のブラウザでは undefined なので N/A にする
+  return typeof value === "boolean" ? String(value) : "N/A";
+}
+
+/**
  * WebTransport サーバーへ接続する
  */
 export async function connect(): Promise<void> {
   if (transport.value) {
     return;
   }
+
+  // 前回のセッション結果の表示をクリアし、今回の接続試行だけを表示する。
+  // 入力検証で早期に return する場合も前回の rejected 表示を残さない
+  wtClosedOutcome.value = null;
+  wtReadyState.value = "pending";
+  wtClosedState.value = "pending";
+  wtDrainingState.value = "pending";
+
+  // 前回セッションの Promise ハンドラを無効化する。入力検証で早期に return する
+  // 場合も世代を進め、古いハンドラから状態を守る
+  const generation = ++sessionGeneration;
 
   // 接続時設定の排他・入力検証
   // §6.9 の allowPooling と serverCertificateHashes の排他、§6.2 の headers /
@@ -617,6 +317,17 @@ export async function connect(): Promise<void> {
     connectionError.value = anticipatedBidiResult.error;
     return;
   }
+  // §6.9 serverCertificateHashes の value は SHA-256 (32 byte) の Base64 である。
+  // 空白だけの入力は未指定として扱う
+  const certificateHashText = certificateHash.value.trim();
+  const certificateHashResult = certificateHashText
+    ? parseCertificateHash(certificateHashText)
+    : null;
+  if (certificateHashResult !== null && !certificateHashResult.ok) {
+    connectionStatus.value = "error";
+    connectionError.value = certificateHashResult.error;
+    return;
+  }
 
   connectionStatus.value = "connecting";
   connectionError.value = "";
@@ -624,11 +335,11 @@ export async function connect(): Promise<void> {
   try {
     const options: WebTransportOptions = {};
 
-    if (certificateHash.value) {
+    if (certificateHashResult !== null && certificateHashResult.ok) {
       options.serverCertificateHashes = [
         {
           algorithm: "sha-256",
-          value: base64ToArrayBuffer(certificateHash.value),
+          value: certificateHashResult.value,
         },
       ];
     }
@@ -666,33 +377,29 @@ export async function connect(): Promise<void> {
 
     const wt = new WebTransport(url.value, options);
 
-    wtReadyState.value = "pending";
-    wtClosedState.value = "pending";
-    wtDrainingState.value = "pending";
-    // 前回のセッションの close info をクリアする (新しい接続の結果だけを表示する)
-    wtClosedOutcome.value = null;
-
+    // 古いセッションのハンドラが新しいセッションの表示を書き換えないよう、
+    // 世代が一致する場合だけ状態を更新する
     wt.ready
       .then(() => {
+        if (generation !== sessionGeneration) return;
         wtReadyState.value = "resolved";
       })
       .catch((err: unknown) => {
+        if (generation !== sessionGeneration) return;
         wtReadyState.value = `rejected: ${(err as Error).message}`;
       });
 
     wt.closed
       .then((closeInfo) => {
+        if (generation !== sessionGeneration) return;
         wtClosedState.value = "resolved";
-        // 受け取った closeInfo (closeCode / reason) を記録する。
-        // 直後の disconnect() が一時表示をリセットしても close info は残る
-        wtClosedOutcome.value = buildResolvedClosedOutcome(closeInfo);
-        disconnect();
+        // 受け取った closeInfo (closeCode / reason) は handleSessionClosed が記録する
+        handleSessionClosed(buildResolvedClosedOutcome(closeInfo));
       })
       .catch((err: unknown) => {
+        if (generation !== sessionGeneration) return;
         wtClosedState.value = `rejected: ${(err as Error).message}`;
-        wtClosedOutcome.value = buildRejectedClosedOutcome(err);
-        connectionError.value = (err as Error).message;
-        disconnect();
+        handleSessionClosed(buildRejectedClosedOutcome(err));
       });
 
     // TypeScript の型定義が最新仕様に追従していないため any 経由でアクセスする
@@ -702,9 +409,11 @@ export async function connect(): Promise<void> {
     if (wtAny.draining) {
       (wtAny.draining as Promise<undefined>)
         .then(() => {
+          if (generation !== sessionGeneration) return;
           wtDrainingState.value = "resolved";
         })
         .catch((err: unknown) => {
+          if (generation !== sessionGeneration) return;
           wtDrainingState.value = `rejected: ${(err as Error).message}`;
         });
     } else {
@@ -713,13 +422,27 @@ export async function connect(): Promise<void> {
 
     await wt.ready;
 
+    // 接続待ちの間に次の接続試行が始まった場合は、このセッションを閉じて終了する
+    if (generation !== sessionGeneration) {
+      try {
+        wt.close();
+      } catch {
+        // 無視する
+      }
+      return;
+    }
+    // ready の解決直後に closed が確定した場合は、閉じたセッションを connected にしない
+    if (wtClosedState.value !== "pending") {
+      return;
+    }
+
     transport.value = wt;
     connectionStatus.value = "connected";
 
     // セッション確立後のプロパティを取得する
     wtReliability.value = String(wtAny.reliability ?? "N/A");
     wtCongestionControl.value = String(wtAny.congestionControl ?? "N/A");
-    wtSupportsReliableOnly.value = String(wtAny.supportsReliableOnly ?? "N/A");
+    wtSupportsReliableOnly.value = readStaticSupportsReliableOnly();
     wtProtocol.value = String(wtAny.protocol ?? "");
     const responseHeaders = wtAny.responseHeaders as Headers | null | undefined;
     if (responseHeaders) {
@@ -792,24 +515,20 @@ export async function connect(): Promise<void> {
     // 受信側の単方向ストリームの受信を開始する
     void receiveIncomingStreams(wt);
   } catch (err) {
+    if (generation !== sessionGeneration) return;
     connectionStatus.value = "error";
     connectionError.value = (err as Error).message;
   }
 }
 
 /**
- * WebTransport サーバーから切断する
- * ユーザー操作による切断の場合のみ closeInfo を渡す（サーバー起因の切断では渡さない）
+ * セッションに紐づくリソースと接続後設定を初期化する
+ *
+ * ready / closed / draining の Promise 状態は呼び出し側で扱う。接続失敗時は
+ * 失敗理由を表示に残す必要があるため、ここでは触らない。
  */
-export function disconnect(closeInfo?: WebTransportCloseInfo): void {
-  if (transport.value) {
-    try {
-      transport.value.close(closeInfo);
-    } catch {
-      // 無視する
-    }
-    transport.value = null;
-  }
+function resetSessionResources(): void {
+  transport.value = null;
 
   // ストリーム一覧をクリアする
   bidiStreams.value = [];
@@ -828,19 +547,59 @@ export function disconnect(closeInfo?: WebTransportCloseInfo): void {
   closeCode.value = "";
   closeReason.value = "";
 
-  // wtClosedOutcome (closed Promise の close info) は意図的にリセットしない。
-  // セッション終了後もピアから受け取った closeCode / reason を UI と
-  // ブラウザ E2E から確認できるようにするため。クリアは次回の connect() が行う
-  connectionStatus.value = "disconnected";
-  wtReadyState.value = "pending";
-  wtClosedState.value = "pending";
-  wtDrainingState.value = "pending";
   wtReliability.value = "";
   wtCongestionControl.value = "";
   wtSupportsReliableOnly.value = "";
   wtProtocol.value = "";
   wtResponseHeaders.value = "";
   wtApiSupport.value = null;
+}
+
+/**
+ * WebTransport.closed が確定したときの後始末
+ *
+ * ハンドシェイク失敗などの異常終了では connectionStatus を error にして失敗を明示する。
+ * ready / closed / draining の状態表示は、失敗理由を UI に残すため触らない。
+ */
+function handleSessionClosed(outcome: ClosedOutcome): void {
+  // closed が確定した時点でセッションは閉じているため close() は呼ばない
+  resetSessionResources();
+  wtClosedOutcome.value = outcome;
+
+  if (outcome.state === "rejected") {
+    connectionStatus.value = "error";
+    connectionError.value = outcome.errorMessage ?? "WebTransport session failed";
+    return;
+  }
+
+  // 正常終了 (利用者操作またはサーバー主導) は切断として扱う
+  connectionStatus.value = "disconnected";
+  connectionError.value = "";
+}
+
+/**
+ * WebTransport サーバーから切断する
+ * ユーザー操作による切断の場合のみ closeInfo を渡す（サーバー起因の切断では渡さない）
+ */
+export function disconnect(closeInfo?: WebTransportCloseInfo): void {
+  if (transport.value) {
+    try {
+      transport.value.close(closeInfo);
+    } catch {
+      // 無視する
+    }
+  }
+
+  resetSessionResources();
+  connectionStatus.value = "disconnected";
+  connectionError.value = "";
+  wtReadyState.value = "pending";
+  wtClosedState.value = "pending";
+  wtDrainingState.value = "pending";
+
+  // wtClosedOutcome (closed Promise の close info) は意図的にリセットしない。
+  // セッション終了後もピアから受け取った closeCode / reason を UI と
+  // ブラウザ E2E から確認できるようにするため。クリアは次回の connect() が行う
 }
 
 /**
@@ -856,8 +615,10 @@ export function buildCloseInfo(): WebTransportCloseInfo | null {
   if (codeResult.value !== undefined) {
     closeInfo.closeCode = codeResult.value;
   }
-  if (closeReason.value.trim()) {
-    closeInfo.reason = closeReason.value.trim();
+  const reason = closeReason.value.trim();
+  if (reason) {
+    // W3C §6.4 step 6: UTF-8 で 1024 byte を超えない最大の code unit prefix を渡す
+    closeInfo.reason = truncateCloseReason(reason).text;
   }
   if (closeInfo.closeCode === undefined && closeInfo.reason === undefined) {
     return null;

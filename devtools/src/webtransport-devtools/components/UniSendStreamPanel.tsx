@@ -2,6 +2,7 @@ import { useSignal } from "@preact/signals";
 import * as store from "../signals";
 import { useAutoScroll } from "../hooks/useAutoScroll";
 import { ActionButton } from "./ActionButton";
+import { BcdBadges } from "./BcdBadges";
 import { MessageItem } from "./MessageItem";
 import { OutgoingStreamIcon, ClearIcon, StopIcon, CloseIcon } from "./Icons";
 import { shouldSendOnEnter } from "../../utils/messageInput";
@@ -134,6 +135,9 @@ export function UniSendStreamPanel() {
         <div>
           <label for="uniSendOrder" class="block text-xs font-medium text-slate-600 mb-1">
             sendOrder
+            <span class="ml-2">
+              <BcdBadges name="sendOrder" />
+            </span>
           </label>
           <input
             type="number"

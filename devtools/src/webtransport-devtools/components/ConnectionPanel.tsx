@@ -1,3 +1,4 @@
+import type { HttpVersionLabel } from "moqt-js";
 import * as store from "../signals";
 import type { ApiSupportNode } from "../signals";
 import { formatClosedOutcomeField } from "../closedOutcome";
@@ -27,13 +28,16 @@ function apiSupportValueClass(value: string): string {
  * HTTP バージョンバッジ
  * draft-ietf-webtrans-http2 / draft-ietf-webtrans-http3 の判別表示
  */
-function HttpVersionBadge({ label }: { label: "HTTP/2" | "HTTP/3" | "--" }) {
+function HttpVersionBadge({ label }: { label: HttpVersionLabel }) {
+  // "--" はセッション未確立、"N/A" は reliability が無く判定不能を表す
   const color =
     label === "HTTP/3"
       ? "bg-green-100 text-green-700"
       : label === "HTTP/2"
         ? "bg-blue-100 text-blue-700"
-        : "bg-slate-100 text-slate-500";
+        : label === "N/A"
+          ? "bg-amber-100 text-amber-700"
+          : "bg-slate-100 text-slate-500";
   return <span class={`px-2 py-0.5 text-xs font-medium rounded-full ${color}`}>{label}</span>;
 }
 
@@ -117,6 +121,8 @@ export function ConnectionPanel() {
     switch (store.connectionStatus.value) {
       case "connected":
         return "text-green-600";
+      case "connecting":
+        return "text-yellow-600";
       case "error":
         return "text-red-600";
       default:
@@ -128,6 +134,9 @@ export function ConnectionPanel() {
     switch (store.connectionStatus.value) {
       case "connected":
         return "Connected";
+      case "connecting":
+        // 接続待ちの間を Disconnected と表示すると、接続中であることが分からない
+        return "Connecting...";
       case "error":
         return `Error: ${store.connectionError.value}`;
       default:
@@ -160,7 +169,9 @@ export function ConnectionPanel() {
         <div>
           <label for="certificateHash" class="block text-sm font-medium text-slate-600 mb-1">
             Certificate Hash (Base64)
-            <span class="ml-1 text-xs text-slate-400">for self-signed certs</span>
+            <span class="ml-1 text-xs text-slate-400">
+              SHA-256, 32 bytes, for self-signed certs
+            </span>
             <span class="ml-2">
               <SpecSectionBadge section="§6.9" />
             </span>
@@ -285,6 +296,9 @@ export function ConnectionPanel() {
               <span class="ml-2">
                 <SpecSectionBadge section="§6.9" />
               </span>
+              <span class="ml-2">
+                <BcdBadges name="protocols" />
+              </span>
             </label>
             <input
               type="text"
@@ -297,7 +311,8 @@ export function ConnectionPanel() {
               class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors disabled:bg-slate-100 disabled:cursor-not-allowed text-sm"
             />
             <div class="text-xs text-slate-400">
-              Duplicate, empty, and longer than 512 characters are rejected
+              Comma-separated. Duplicate, empty, non-printable ASCII, and longer than 512 characters
+              are rejected. A comma cannot be part of a protocol name.
             </div>
           </div>
 
@@ -403,7 +418,9 @@ export function ConnectionPanel() {
           >
             {getButtonText()}
           </button>
-          <span class={`text-sm ${getStatusClass()}`}>{getStatusText()}</span>
+          <span data-testid="connection-status" class={`text-sm ${getStatusClass()}`}>
+            {getStatusText()}
+          </span>
         </div>
         {/* WebTransport.closed Promise の最終結果 (W3C §6.5 / §6.6)
             disconnect() 後も保持され、ピアから受け取った closeCode / reason を
