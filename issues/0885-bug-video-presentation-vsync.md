@@ -74,7 +74,7 @@ Chromium 156.0.8078.4 (Playwright 1.64.1 の `channel: "chromium"`、新しい h
 以下では、rAF のコールバック時刻を「書き込み tick W」、フレームの推定表示時刻を「D = W + `presentationLatencyTicks` × R」、表示周期を R と書く。canvas は `D = W`、`MediaStreamTrackGenerator` は `D = W + R` である。
 
 - `VideoPlayoutSession` が rAF のタイムスタンプから表示周期 R を実測する。直近 16 tick の間隔の中央値を使い、tick 間隔のサンプルが 2 つ未満の間は 60 Hz (16.667 ms) を仮定する。4 tick 分 (約 66.7 ms) を超える間隔は外れ値としてサンプルを捨てて 60 Hz に戻し、古いフレームは後述の規則で捨てる
-- 各書き込み tick W で目標表示時刻 D = W + `presentationLatencyTicks` × R を求める。キューから「表示時刻が D に最も近いフレーム」を許容幅 R / 2 で 1 枚だけ選び、1 tick に 1 枚だけ出す。選ばれなければ次の tick へ予約を続ける。これを `PlayoutBuffer` の新しい選択 API (`selectNearest(targetMs, toleranceMs)`) として追加し、戻り値は「描くフレーム、表示せずに捨てるフレーム、描くフレームの表示時刻」を持つ型にする
+- 各書き込み tick W で目標表示時刻 D = W + `presentationLatencyTicks` × R を求める。キューから「表示時刻が D に最も近いフレーム」を許容幅 R / 2 で 1 枚だけ選び、1 tick に 1 枚だけ出す。選ばれなければ次の tick へ予約を続ける。これを `PlayoutBuffer` の新しい選択 API (`selectNearest(targetMs, toleranceMs, maxLateMs)`) として追加し、戻り値は「描くフレーム、表示せずに捨てるフレーム、描くフレームの表示時刻、遅れて描いたか」を持つ型にする
 - 表示時刻が `D - R / 2` より前のフレームは、原則としてその tick では選択せずに捨てる。遅れて提示すると、次のフレームを早く出して表示間隔が半分になるためである
   - 例外として、目標表示時刻に合うフレームがキューに無く、フレームの遅れが `MAX_PRESENTATION_LAG_MS` (20 ms) 以内なら、表示を止めないため 1 枚だけ遅れて提示する。遅れて提示したときは `drawLate` を返し、捨てたフレームとは区別する。`presentationLatencyTicks` が 1 以上の出し先は、書き込みの次の vsync まで待てないフレームを拾えるよう、遅れてよい上限を提示遅延の分だけ広げる
 - 同じ表示時刻の近傍に 2 枚が入り、1 枚しか選べない場合 (60 fps を 60 Hz で表示し、位相が揺れた場合など) は、D に近い方を選ぶ。もう片方は、次の target の許容幅に入れば残し、入らなければ捨てる。捨てたフレームは、`VideoPlayoutTiming` が渡されているときは `recordLateDrop` に記録する。これにより表示間隔が半分になることはない

@@ -10,7 +10,7 @@
  * - 再生遅延は 0 以上で上限を超えず、表示時刻は現在の学習結果に従う
  * - 揺らぎの p95 が最大の揺らぎと一致する到着列では、表示間隔が TIMESTAMP の間隔どおりになる
  *
- * 個別の規則 (最新を残して 1 つ前を描き、古いものを捨てる、TIMESTAMP の飛び、キューの上限、
+ * 個別の規則 (同じ tick に重なったフレームの扱い、TIMESTAMP の飛び、キューの上限、
  * TIMESTAMP を持たないフレームの到着順の再生) は src/playout/buffer.test.ts の単体テストが固定する。
  */
 
@@ -143,7 +143,7 @@ test("PlayoutBuffer: 目標表示時刻の許容幅以内のフレームだけ�
                 timestampOf(selection.draw * frameMs),
               );
               // 目標の許容幅に入らないフレームは、遅れが上限以内のときだけ遅れて描く
-              const allowedLateMs = selection.drawLate ? MAX_PRESENTATION_LAG_MS : frameMs / 2;
+              const allowedLateMs = selection.drawLate ? MAX_PRESENTATION_LAG_MS : frameMs / 4;
               assert.isAtMost(
                 Math.abs((presentationMs ?? Infinity) - localMs),
                 allowedLateMs + 0.1,
@@ -171,14 +171,14 @@ const jitterPatternArbitrary = fc
     const late = seed.slice(0, length).map((value, index) => index >= 2 && value);
     // 周期の 1 割以上を最大の揺らぎにする (窓の中で p95 が最大になる枚数。先頭の 2 枚を
     // 除く末尾から埋める)
-    const required = Math.max(2, Math.ceil(length * 0.1));
-    for (let index = length - 1; late.filter(Boolean).length < required; index--) {
+    const required = Math.min(Math.max(1, Math.ceil(length * 0.1)), Math.max(0, length - 2));
+    for (let index = length - 1; index >= 2 && late.filter(Boolean).length < required; index--) {
       late[index] = true;
     }
     return { pattern: late.map((value) => (value ? jitterMs : 0)), jitterMs };
   });
 
-test("PlayoutBuffer: 揺らぎの p95 が最大の揺らぎのとき、表示間隔は TIMESTAMP の間隔どおりになる", () => {
+test("PlayoutBuffer: 揺らぎの p95 が最大の揺らぎのとき、表示間隔が半分にならない", () => {
   fc.assert(
     fc.property(
       jitterPatternArbitrary,
@@ -214,7 +214,7 @@ test("PlayoutBuffer: 揺らぎの p95 が最大の揺らぎのとき、表示間
             buffer.enqueue(next, timestampOf(mediaMs));
             next++;
           }
-          const selection = buffer.selectNearest(nowMs, frameMs / 4);
+          const selection = buffer.selectNearest(nowMs, frameMs / 8);
           late.push(...selection.dropped);
           if (selection.draw !== null) {
             draws.push({ localMs: nowMs, index: selection.draw });
@@ -229,7 +229,7 @@ test("PlayoutBuffer: 揺らぎの p95 が最大の揺らぎのとき、表示間
           assert.equal((current?.index ?? 0) - (previous?.index ?? 0), 1);
           const intervalMs = (current?.localMs ?? 0) - (previous?.localMs ?? 0);
           // 選択の刻みは 1 ms で、許容幅 (frameMs / 4) の分だけ前後し得る
-          assert.isAtLeast(intervalMs, frameMs / 2 - 1 - TOLERANCE_MS);
+          assert.isAtLeast(intervalMs, frameMs / 2 + 1 - TOLERANCE_MS);
           assert.isAtMost(intervalMs, (frameMs * 3) / 2 + 1 + TOLERANCE_MS);
         }
         assert.deepEqual(

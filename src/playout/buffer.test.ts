@@ -2,7 +2,7 @@
  * PlayoutBuffer の単体テスト
  *
  * 復号したフレームを積み、共有の時間軸 (PlayoutTimeline) が決めた表示時刻で選ぶ。
- * 個々の規則 (表示時刻より前に描かない、表示時刻を過ぎたフレームの捨て方、TIMESTAMP を
+ * 個々の規則 (目標表示時刻に最も近いフレームの選択、遅れて提示してよい上限、TIMESTAMP を
  * 持たないフレームの到着順の再生、キューの上限、clear) をここで固定する。
  *
  * 表示時刻の式と学習 (基準の遅れ、再生遅延、フレーム間隔) は src/playout/timeline.test.ts が
@@ -217,18 +217,31 @@ test("selectNearest: 同じ target に入った 2 枚は 1 tick に 1 枚ずつ�
 
 // 許容幅の中でも、選ばれたフレームより前にあるフレームは提示できないため捨てる
 test("selectNearest: 選ばなかった窓内のフレームを捨てる", () => {
+  const frameMs = 1_000 / 60;
   const timeline = createSharedTimeline();
   const buffer = new PlayoutBuffer<number>(JITTER_BUFFER_MAX_QUEUED_FRAMES, timeline);
   observeFrame(timeline, 0, 0);
-  observeFrame(timeline, FRAME_MS, 0);
+  observeFrame(timeline, frameMs, 0);
   buffer.enqueue(0, timestampOf(0));
-  buffer.enqueue(1, timestampOf(FRAME_MS));
-  const secondMs = buffer.presentationTimeMs(timestampOf(FRAME_MS)) ?? 0;
-  // 2 枚目の表示時刻に近い目標にする。1 枚目は許容幅の中だが、2 枚目より古いため捨てる
-  const targetMs = secondMs - 1;
-  const selection = buffer.selectNearest(targetMs, FRAME_MS / 2);
+  buffer.enqueue(1, timestampOf(frameMs));
+  const firstMs = buffer.presentationTimeMs(timestampOf(0)) ?? 0;
+  const secondMs = buffer.presentationTimeMs(timestampOf(frameMs)) ?? 0;
+  const toleranceMs = frameMs / 2;
+  // 2 枚目から 6.67 ms 前を目標にする。1 枚目は 10 ms 遅れで maxLateMs (20 ms) 以内、
+  // 許容幅 (8.33 ms) の外側。2 枚目が選ばれ、1 枚目は窓内だが古いため捨てられる
+  const targetMs = secondMs - 6.67;
+  assert.isBelow(firstMs, targetMs - toleranceMs);
+  const selection = buffer.selectNearest(targetMs, toleranceMs);
   assert.equal(selection.draw, 1);
   assert.deepEqual(selection.dropped, [0]);
+});
+
+// 目標表示時刻と遅れてよい上限の不正値は受け付けない
+test("selectNearest: 目標表示時刻と遅れの上限の不正値を拒否する", () => {
+  const buffer = new PlayoutBuffer<number>(JITTER_BUFFER_MAX_QUEUED_FRAMES, createTimeline());
+  assert.throws(() => buffer.selectNearest(Number.NaN, 1), "targetMs");
+  assert.throws(() => buffer.selectNearest(0, 1, Number.NaN), "maxLateMs");
+  assert.throws(() => buffer.selectNearest(0, 1, -1), "maxLateMs");
 });
 
 // 遅れの境界: 20 ms 以内は遅れて描き、超えたら捨てる
@@ -253,6 +266,70 @@ test("selectNearest: 遅れが 20 ms 以内なら描き、超えたら捨てる"
   const beyond = buffer2.selectNearest(presentation2Ms + 20.1, 1);
   assert.isNull(beyond.draw);
   assert.deepEqual(beyond.dropped, [0]);
+});
+
+// 30 秒の tick 列で、30 / 60 / 120 fps のフレームを、実際の tick のうち表示時刻に最も
+// 近いものへ 1 回ずつ出す。tick には ±3 ms の揺れを与え、累積した表示時刻で参照する
+test("selectNearest: 30 秒・複数の fps と表示周期・位相揺れでも近い vsync に出す", () => {
+  const durationMs = 30_000;
+  const jitters = [0, 3, -3];
+  for (const fps of [30, 60, 120]) {
+    for (const refreshHz of [60, 120]) {
+      const frameMs = 1_000 / fps;
+      const refreshMs = 1_000 / refreshHz;
+      const frames = Math.floor(durationMs / frameMs);
+      const timeline = createTimeline();
+      timeline.setTargetLatencyMs(120);
+      const buffer = new PlayoutBuffer<number>(frames, timeline);
+      for (let index = 0; index < frames; index++) {
+        const mediaMs = index * frameMs;
+        timeline.observe("video", EPOCH_MS + LOCAL_ORIGIN_MS + mediaMs, timestampOf(mediaMs));
+        buffer.enqueue(index, timestampOf(mediaMs));
+      }
+      // 30 秒分の tick を、±3 ms の揺れを与えて作る
+      const ticks: number[] = [];
+      for (let index = 0; index < Math.ceil((durationMs + 500) / refreshMs); index++) {
+        ticks.push(LOCAL_ORIGIN_MS + index * refreshMs + (jitters[index % jitters.length] ?? 0));
+      }
+      const draws: { index: number; tickMs: number }[] = [];
+      for (const tickMs of ticks) {
+        const selection = buffer.selectNearest(tickMs, refreshMs / 2);
+        if (selection.draw !== null) {
+          draws.push({ index: selection.draw, tickMs });
+        }
+      }
+      if (fps * 2 <= refreshHz) {
+        // 表示周期に十分収まる fps では、すべてのフレームを 1 回ずつ出す
+        assert.deepEqual(
+          draws.map((draw) => draw.index),
+          Array.from({ length: frames }, (_, index) => index),
+          `${fps} fps / ${refreshHz} Hz でフレームを落とした`,
+        );
+      } else {
+        // 表示周期と近い、または速い fps では、位相の揺れで表示周期に重なったフレームが
+        // 間引かれる。順序は保ち、表示周期の回数程度は出す
+        assert.isAbove(draws.length, frames * 0.5);
+        for (let position = 1; position < draws.length; position++) {
+          assert.isAbove(
+            draws[position]?.index ?? 0,
+            draws[position - 1]?.index ?? 0,
+            `${fps} fps / ${refreshHz} Hz で順序が逆転した`,
+          );
+        }
+      }
+      // 各フレームの提示 tick が、その表示時刻に最も近い実際の tick であること
+      for (const draw of draws) {
+        const presentationMs = buffer.presentationTimeMs(timestampOf(draw.index * frameMs)) ?? 0;
+        let nearestTickMs = ticks[0] ?? 0;
+        for (const tickMs of ticks) {
+          if (Math.abs(tickMs - presentationMs) < Math.abs(nearestTickMs - presentationMs)) {
+            nearestTickMs = tickMs;
+          }
+        }
+        assert.isAtMost(Math.abs(draw.tickMs - nearestTickMs), 1, `${fps} fps / ${refreshHz} Hz`);
+      }
+    }
+  }
 });
 
 // 位相を変えた 60 Hz の tick 列で、30 fps のフレームをすべて 1 回ずつ出す
@@ -722,7 +799,7 @@ test("enqueue: TIMESTAMP が大きく進んだら基準を取り直す", () => {
 
 // 30 fps で 3 枚に 1 枚が 40 ms 遅れて届く。到着のタイミングのまま描くと表示間隔が
 // 揺れるが、再生遅延 40 ms で TIMESTAMP の間隔どおりに描く (1 ms の選択の刻みの誤差のみ)
-test("selectNearest: 揺らぎのある到着を TIMESTAMP の間隔どおりに描く", () => {
+test("selectNearest: 揺らぎのある到着でも表示間隔が半分にならない", () => {
   // 音声の下限を外し、映像の揺らぎ (40 ms) がそのまま再生遅延になるようにする
   const timeline = createTimeline();
   const buffer = new PlayoutBuffer<number>(JITTER_BUFFER_MAX_QUEUED_FRAMES, timeline);
@@ -753,15 +830,16 @@ test("selectNearest: 揺らぎのある到着を TIMESTAMP の間隔どおりに
       draws.push({ localMs: nowMs, index: selection.draw });
     }
   }
-  // 最初の 1 秒 (揺らぎを覚えるまで) を除いて、表示間隔は 1 フレーム ± 1 ms で、捨てない。
-  // 選択の時刻は表示時刻の軸ではなく 1 ms ごとの実時間であるため、間隔の誤差は 1 ms 以内
+  // 最初の 1 秒 (揺らぎを覚えるまで) を除いて、表示間隔は 1 フレームの近傍で、捨てない。
+  // 1 ms ごとの選択と許容幅 (FRAME_MS / 4) により、間隔は前後に揺れ得る
   const steady = draws.filter((draw) => draw.index >= 30);
   assert.isAbove(steady.length, 30 * 3);
   for (let position = 1; position < steady.length; position++) {
     const interval = (steady[position]?.localMs ?? 0) - (steady[position - 1]?.localMs ?? 0);
-    // 選択の刻みは 1 ms で、許容幅 (FRAME_MS / 4) の分だけ前後し得る
-    assert.isAtLeast(interval, FRAME_MS - FRAME_MS / 2 - 1);
-    assert.isAtMost(interval, FRAME_MS + FRAME_MS / 2 + 1);
+    // 表示間隔が半分 (FRAME_MS / 2) になっていないこと。1 ms ごとの選択と許容幅
+    // (FRAME_MS / 4) により、間隔は前後に揺れ得る
+    assert.isAtLeast(interval, FRAME_MS - 9);
+    assert.isAtMost(interval, FRAME_MS + 9);
   }
   assert.deepEqual(
     dropped.filter((index) => index >= 30),

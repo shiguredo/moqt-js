@@ -17,7 +17,7 @@
  * 時刻は呼び出し側が引数で渡す。ブラウザ API に依存しない。
  */
 
-import type { PlayoutStream, PlayoutTimeline } from "./timeline";
+import type { PlayoutTimeline } from "./timeline";
 
 /**
  * 表示待ちのキューの上限 (枚)
@@ -52,8 +52,8 @@ export interface PlayoutNearestSelection<T> {
   /**
    * 提示せずに捨てるフレーム
    *
-   * 目標表示時刻から `MAX_PRESENTATION_LAG_MS` より古いフレームと、同じ目標表示時刻に
-   * 重なったため選ばれなかったフレームである。呼び出し側が閉じ、計器へ記録する。
+   * 目標表示時刻から `maxLateMs` より古いフレームと、同じ目標表示時刻に重なったため
+   * 選ばれなかったフレームである。呼び出し側が閉じ、計器へ記録する。
    */
   readonly dropped: T[];
   /**
@@ -73,18 +73,15 @@ export interface PlayoutNearestSelection<T> {
 export class PlayoutBuffer<T> {
   private readonly maxQueuedFrames: number;
   private readonly timeline: PlayoutTimeline;
-  private readonly stream: PlayoutStream;
   private queue: QueuedFrame<T>[] = [];
 
   /**
    * @param maxQueuedFrames - 表示待ちのキューの上限 (枚)。超えたら古い方から捨てる
    * @param timeline - 表示時刻を決める共有の時間軸
-   * @param stream - このキューのトラック (既定は video)
    */
-  constructor(maxQueuedFrames: number, timeline: PlayoutTimeline, stream: PlayoutStream = "video") {
+  constructor(maxQueuedFrames: number, timeline: PlayoutTimeline) {
     this.maxQueuedFrames = maxQueuedFrames;
     this.timeline = timeline;
-    this.stream = stream;
   }
 
   /** 表示待ちのフレーム数 */
@@ -117,22 +114,25 @@ export class PlayoutBuffer<T> {
    *
    * 先頭が表示時刻を決められないフレームなら、それを描く (届いた順に 1 枚ずつ)。
    * 表示時刻を決められるフレームでは、目標表示時刻から許容幅以内で最も近いものを描く。
-   * 許容幅を超えて古いフレームでも、遅れが `MAX_PRESENTATION_LAG_MS` 以内なら 1 枚だけ
-   * 遅れて描く (`drawLate`)。それより古いフレームは捨てるフレームとして返す。許容幅より
-   * 未来のフレームしかない場合は何も描かない。
+   * 許容幅を超えて古いフレームでも、遅れが `maxLateMs` 以内なら 1 枚だけ遅れて描く
+   * (`drawLate`)。それより古いフレームは捨てるフレームとして返す。許容幅より未来の
+   * フレームしかない場合は何も描かない。
    *
    * @param targetMs - この選択で表示したい時刻 (`performance.now()` の時間軸、ミリ秒)
    * @param toleranceMs - 目標表示時刻からの許容幅 (ミリ秒)。負の値は受け付けない
    * @param maxLateMs - 遅れて提示してよい上限 (ミリ秒)。既定は `MAX_PRESENTATION_LAG_MS`。
    *   `presentationLatencyTicks` が 1 以上の出し先は、書き込みの次の vsync まで待てない
    *   フレームを拾うため、この値を提示遅延の分だけ広げる
-   * @returns 描くフレーム、捨てるフレーム、描くフレームの表示時刻
+   * @returns 描くフレーム、捨てるフレーム、描くフレームの表示時刻、遅れて描いたか
    */
   selectNearest(
     targetMs: number,
     toleranceMs: number,
     maxLateMs = MAX_PRESENTATION_LAG_MS,
   ): PlayoutNearestSelection<T> {
+    if (!Number.isFinite(targetMs)) {
+      throw new RangeError(`targetMs must be a finite number, got ${targetMs}`);
+    }
     if (!Number.isFinite(toleranceMs) || toleranceMs < 0) {
       throw new RangeError(`toleranceMs must be a non-negative finite number, got ${toleranceMs}`);
     }
@@ -208,7 +208,7 @@ export class PlayoutBuffer<T> {
     if (timestampMicros === null) {
       return null;
     }
-    return this.timeline.presentationPerformanceMs(this.stream, timestampMicros);
+    return this.timeline.presentationPerformanceMs("video", timestampMicros);
   }
 
   /** 現在の再生遅延 (ミリ秒)。壁時計の TIMESTAMP のフレームをまだ積んでいなければ null */

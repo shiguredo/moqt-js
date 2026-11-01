@@ -357,9 +357,10 @@ setInterval(() => {
 
 ```typescript
 interface VideoPlayoutOutput {
-  // 表示先の提示遅延 (表示周期の tick 数、0 以上の整数)。present() を呼んでから実際に
-  // 表示されるまでの遅延を表す。canvas への描画は rAF のコールバック内でその vsync に
-  // 含まれるため 0、MediaStreamTrackGenerator は書き込みの次の vsync で表示されるため 1
+  // 表示先の提示遅延 (表示周期の tick 数、0〜4 の整数。実用値は 0〜2)。present() を
+  // 呼んでから実際に表示されるまでの遅延を表す。canvas への描画は rAF のコールバック内で
+  // その vsync に含まれるため 0、MediaStreamTrackGenerator は書き込みの次の vsync で
+  // 表示されるため 1
   presentationLatencyTicks: number;
   // フレームを表示する。presentationMs は時間軸が決めた表示時刻
   // (performance.now() と同じ軸のミリ秒)。届いた順に表示するフレームは null。

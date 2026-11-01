@@ -232,6 +232,7 @@ function makeSession(options: {
   output: RecordedOutput;
   timing?: VideoPlayoutTiming;
   maxQueuedFrames?: number;
+  now?: () => number;
 }): { session: VideoPlayoutSession; scheduler: RecordedFrameScheduler } {
   const scheduler = makeFrameScheduler();
   const session = new VideoPlayoutSession({
@@ -239,6 +240,7 @@ function makeSession(options: {
     output: options.output.output,
     ...(options.timing === undefined ? {} : { timing: options.timing }),
     ...(options.maxQueuedFrames === undefined ? {} : { maxQueuedFrames: options.maxQueuedFrames }),
+    ...(options.now === undefined ? {} : { now: options.now }),
     requestFrame: scheduler.requestFrame,
     cancelFrame: scheduler.cancelFrame,
   });
@@ -273,6 +275,8 @@ interface DefaultSessionOptions {
   readonly timing?: VideoPlayoutTiming;
   /** 表示待ちの上限 (省略すると時間軸の既定値) */
   readonly maxQueuedFrames?: number;
+  /** 現在時刻 (省略すると実時間) */
+  readonly now?: () => number;
 }
 
 /**
@@ -297,6 +301,7 @@ function makeDefaultSession(options: DefaultSessionOptions = {}): {
     output,
     ...(options.timing === undefined ? {} : { timing: options.timing }),
     ...(options.maxQueuedFrames === undefined ? {} : { maxQueuedFrames: options.maxQueuedFrames }),
+    ...(options.now === undefined ? {} : { now: options.now }),
   });
   return { timeline, output, session, scheduler };
 }
@@ -786,18 +791,25 @@ test("handleDecodedFrame: 提示遅延の tick 数が不正なら例外にする
       }),
     "presentationLatencyTicks",
   );
+  assert.throws(
+    () =>
+      new VideoPlayoutSession({
+        ...options,
+        output: { ...options.output, presentationLatencyTicks: 5 },
+      }),
+    "presentationLatencyTicks",
+  );
 });
 
-test("handleDecodedFrame: 最後の表示から 250 ms たつと表示周期の予約を止める", async () => {
-  const { session, scheduler } = makeDefaultSession();
+test("handleDecodedFrame: 最後の表示から 250 ms たつと表示周期の予約を止める", () => {
+  let clockMs = 1_000;
+  const { session, scheduler } = makeDefaultSession({ now: () => clockMs });
   handleArrivalOrderFrame(session, 1_000);
-  scheduler.runNext(nowMs());
+  scheduler.runNext(clockMs);
   assert.isTrue(scheduler.pending, "表示直後は表示周期の予約を続けること");
 
-  await new Promise((resolve) => {
-    setTimeout(resolve, 300);
-  });
-  scheduler.runNext(performance.now());
+  clockMs += 300;
+  scheduler.runNext(clockMs);
   assert.isFalse(scheduler.pending, "アイドルが続いても予約を止めていない");
 });
 

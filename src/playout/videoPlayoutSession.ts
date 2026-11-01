@@ -108,7 +108,7 @@ export interface VideoPlayoutTiming {
    *
    * この関数は throw しないこと。throw してもフレームは閉じ、表示周期は続ける。
    *
-   * @param presentationMs - このフレームの表示時刻。決められないときは捨てた時刻
+   * @param presentationMs - このフレームの表示時刻。決められないときは選択の目標時刻
    */
   recordLateDrop(timestamp: number, presentationMs: number): void;
 }
@@ -212,6 +212,8 @@ export interface VideoPlayoutSessionOptions {
    * コールバックは rAF のタイムスタンプ (vsync の時刻、`performance.now()` の軸) を受け取る。
    */
   readonly requestFrame?: (callback: (timestampMs: number) => void) => number;
+  /** 現在時刻 (`performance.now()` の軸)。テストで時計を注入するときに使う */
+  readonly now?: () => number;
   /** 表示の周期の予約の取り消し。既定は `cancelAnimationFrame` */
   readonly cancelFrame?: (handle: number) => void;
 }
@@ -245,6 +247,7 @@ export class VideoPlayoutSession {
   // 表示の周期の予約 (ブラウザ依存は注入する)
   private readonly requestFrame: (callback: (timestampMs: number) => void) => number;
   private readonly cancelFrame: (handle: number) => void;
+  private readonly now: () => number;
   // 予約済みの表示周期。予約済みの間は積み増さない
   private frameRequest: number | null = null;
   // 表示周期の実測値と、rAF の間隔の窓
@@ -256,9 +259,13 @@ export class VideoPlayoutSession {
 
   constructor(options: VideoPlayoutSessionOptions) {
     const presentationLatencyTicks = options.output.presentationLatencyTicks;
-    if (!Number.isInteger(presentationLatencyTicks) || presentationLatencyTicks < 0) {
+    if (
+      !Number.isInteger(presentationLatencyTicks) ||
+      presentationLatencyTicks < 0 ||
+      presentationLatencyTicks > 4
+    ) {
       throw new RangeError(
-        `presentationLatencyTicks must be a non-negative integer, got ${presentationLatencyTicks}`,
+        `presentationLatencyTicks must be an integer between 0 and 4, got ${presentationLatencyTicks}`,
       );
     }
     this.timeline = options.timeline;
@@ -271,6 +278,7 @@ export class VideoPlayoutSession {
     // 表示周期の予約はブラウザ依存である。テストは記録用の関数を注入する
     this.requestFrame = options.requestFrame ?? ((callback) => requestAnimationFrame(callback));
     this.cancelFrame = options.cancelFrame ?? ((handle) => cancelAnimationFrame(handle));
+    this.now = options.now ?? (() => performance.now());
   }
 
   /**
@@ -317,8 +325,8 @@ export class VideoPlayoutSession {
       dropped.close();
     }
 
-    this.lastActivityMs = performance.now();
-    this.scheduleDrain();
+    this.lastActivityMs = this.now();
+    this.scheduleTick();
     return { status: "queued", wallClockTimestamp };
   }
 
@@ -450,7 +458,7 @@ export class VideoPlayoutSession {
    * 間隔が到着の間隔に引き伸ばされ、表示周期の推定が壊れるため)。予約は 1 つだけ持ち、
    * 予約済みの間は積み増さない。出し先が無くなったときは表示待ちを捨てる。
    */
-  private scheduleDrain(): void {
+  private scheduleTick(): void {
     if (this.frameRequest !== null) {
       return;
     }
@@ -458,7 +466,9 @@ export class VideoPlayoutSession {
       // 表示待ちが無くても、最後の表示からしばらくは予約を続ける。止めると、届いた
       // フレームの間隔が rAF の間隔として観測され、表示周期の推定が壊れる
       const lastActivityMs = this.lastActivityMs;
-      if (lastActivityMs === null || performance.now() - lastActivityMs >= IDLE_STOP_MS) {
+      if (lastActivityMs === null || this.now() - lastActivityMs >= IDLE_STOP_MS) {
+        // 次にフレームが届いた最初の tick を外れ値にしない
+        this.lastTickMs = null;
         return;
       }
     }
@@ -469,7 +479,7 @@ export class VideoPlayoutSession {
         return;
       }
       this.onTick(timestampMs);
-      this.scheduleDrain();
+      this.scheduleTick();
     });
   }
 

@@ -2399,7 +2399,7 @@ export function useSubscriber(
    * jitter buffer が有効で、フレームの TIMESTAMP が壁時計 (Timescale 無し) のときは、
    * TIMESTAMP の間隔どおりの表示時刻に表示し、到着の揺らぎを吸収する
    * (src/playout/buffer.ts)。表示待ちのキュー、表示時刻に合わせた選択、あふれた分と
-   * 間に合わなかった分の計器への記録、表示周期の予約は再生の入口 (MediaPlayout) が持つ。
+   * 提示しなかった分の計器への記録、表示周期の予約は再生の入口 (MediaPlayout) が持つ。
    *
    * jitter buffer が無効のとき、または TIMESTAMP を壁時計として使えないフレームは、
    * 届いた順に 1 周期に 1 枚ずつ表示する。

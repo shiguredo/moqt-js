@@ -368,7 +368,7 @@ export function createTimestampedRecordingFrame(timestamp: number): {
 /**
  * 表示周期 (`requestAnimationFrame`) の予約を捕まえておく入れ物
  *
- * 実装は表示時刻を過ぎたフレームをその場で書き、残っていれば表示周期で次を選ぶ。
+ * 実装は表示周期 (rAF) ごとに 1 枚を書き、表示待ちが残っていれば次の周期でも選ぶ。
  * node 環境に表示周期は無いため、予約されたコールバックをテスト側で実行する
  * (フレームの選択と書き込みは実装を通す)。
  */

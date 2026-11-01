@@ -957,8 +957,8 @@ test("observe: ドリフトで基準を共有しなくなったら映像を音�
 });
 
 // 完了条件: 同期ずれの予算は、時計の対応付けの不感帯 (30 ms) と、映像の表示実績の推定誤差
-// (表示周期の半分以下) の合計である。映像は write の時刻ではなく、提示する vsync の
-// 推定時刻を実績に記録するため、write の遅れは実績に含まれない
+// (表示周期の半分以下) の合計である。このテストは映像側のずらしを 0 にして、不感帯だけを
+// 確認する (映像側の vsync 量子化誤差は src/playout/buffer.test.ts と E2E が確認する)
 test("recordPresentation: 不感帯を含めても skewMs が予算内に収まる", () => {
   const timeline = createTimeline();
   const arrivals = buildArrivals();
