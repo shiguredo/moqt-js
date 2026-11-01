@@ -617,7 +617,9 @@ test("handleDecodedFrame: 表示待ちの上限を超えたフレームは計器
 });
 
 test("handleDecodedFrame: 表示周期に 1 枚だけ出す", () => {
-  const { output, session, scheduler } = makeDefaultSession();
+  // アイドル判定も注入した時計で進める (実時間に依存させない)
+  let clockMs = 1_000;
+  const { output, session, scheduler } = makeDefaultSession({ now: () => clockMs });
 
   handleArrivalOrderFrame(session, 1_000);
   handleArrivalOrderFrame(session, 2_000);
@@ -627,14 +629,15 @@ test("handleDecodedFrame: 表示周期に 1 枚だけ出す", () => {
   assert.isTrue(scheduler.pending);
   assert.equal(scheduler.requestedCount, 1, "表示周期の予約を積み増した");
 
-  scheduler.runNext(0);
+  scheduler.runNext(clockMs);
   assert.deepEqual(
     output.presented.map((present) => present.timestamp),
     [1_000],
   );
   // まだ表示待ちが残っているため、次の表示周期を予約する
   assert.isTrue(scheduler.pending);
-  scheduler.runNext(16.667);
+  clockMs = 1_016.667;
+  scheduler.runNext(clockMs);
   assert.deepEqual(
     output.presented.map((present) => present.timestamp),
     [1_000, 2_000],
