@@ -360,7 +360,7 @@ interface VideoPlayoutOutput {
   // 表示先の提示遅延 (表示周期の tick 数、0〜4 の整数。実用値は 0〜2)。present() を
   // 呼んでから実際に表示されるまでの遅延を表す。canvas への描画は rAF のコールバック内で
   // その vsync に含まれるため 0、MediaStreamTrackGenerator は書き込みの次の vsync で
-  // 表示されるため 1
+  // 表示されるため 1 (Chromium 156 の実測。ブラウザの仕様として保証された値ではない)
   presentationLatencyTicks: number;
   // フレームを表示する。presentationMs は時間軸が決めた表示時刻
   // (performance.now() と同じ軸のミリ秒)。届いた順に表示するフレームは null。
@@ -387,8 +387,8 @@ interface VideoPlayoutTiming {
 遅れて提示する。`presentationLatencyTicks` が 1 の `MediaStreamTrackGenerator` は、
 書き込みの次の vsync で表示されるため、表示時刻の 1 tick 前に書き、遅れてよい上限も
 1 tick の分だけ広げる。時間軸の映像の表示の遅れが 1 tick 未満のときは、書き込みの次の
-vsync より前に表示できないため、最も近い vsync ではなく次の vsync に表示される
-(フレームは捨てない)。
+vsync より前に表示できないため、最も近い vsync ではなく次の vsync 以降に表示される
+(到着の位相により 1〜2 tick 遅れる。フレームは捨てない)。
 
 `timing` は、捨てたフレームの記録先である。ライブラリは映像の計器を持たないため省略し、
 moqt-devtools は「受信から表示までの時間」の統計へ記録する。

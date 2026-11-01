@@ -121,12 +121,13 @@ export interface VideoPlayoutTiming {
  */
 export interface VideoPlayoutOutput {
   /**
-   * 表示先の提示遅延 (表示周期の tick 数)
+   * 表示先の提示遅延 (表示周期の tick 数、0〜4 の整数)
    *
    * `present()` を呼んでからフレームが実際に表示されるまでの遅延を、表示周期の tick 数で
    * 表す。canvas への描画は rAF のコールバック内で行われ、その vsync のフレームに含まれる
    * ため 0 とする。`MediaStreamTrackGenerator` は書き込みの次の vsync で表示されるため 1 と
-   * する (Chromium 156 の実測。ブラウザの仕様として保証された値ではない)。
+   * する (Chromium 156 の実測。ブラウザの仕様として保証された値ではない)。実用値は 0〜2。
+   * 範囲外の値は生成時に `RangeError` になる。
    */
   readonly presentationLatencyTicks: number;
   /**
@@ -226,6 +227,8 @@ export interface VideoPlayoutSessionOptions {
  * サンプルを捨てて取り直す。
  */
 const DEFAULT_REFRESH_MS = 1_000 / 60;
+// 表示先の提示遅延として受け付ける tick 数の上限。実用値は 0 (canvas) と 1 (generator)
+const MAX_PRESENTATION_LATENCY_TICKS = 4;
 const REFRESH_SAMPLE_COUNT = 16;
 // 表示待ちが空でも、最後の表示からこの時間までは表示周期の予約を続ける。30 fps のように
 // 表示周期より長い間隔でフレームが届くとき、予約を毎回止めると rAF の間隔が届いた間隔に
@@ -262,7 +265,7 @@ export class VideoPlayoutSession {
     if (
       !Number.isInteger(presentationLatencyTicks) ||
       presentationLatencyTicks < 0 ||
-      presentationLatencyTicks > 4
+      presentationLatencyTicks > MAX_PRESENTATION_LATENCY_TICKS
     ) {
       throw new RangeError(
         `presentationLatencyTicks must be an integer between 0 and 4, got ${presentationLatencyTicks}`,
@@ -364,8 +367,11 @@ export class VideoPlayoutSession {
     // generator は書き込みの次の vsync で表示されるため、遅れて提示してよい上限を
     // 提示遅延の分だけ広げる。これが無いと、時間軸の表示の遅れが小さいときに、到着の
     // 位相によっては書き込みの tick に間に合わずフレームを捨ててしまう
+    // 表示周期が 20 ms より長い (30 Hz 以下) ときは、到着位相によっては 1 tick 遅れが
+    // 20 ms を超えるため、R も下限にする
     const maxLateMs =
-      MAX_PRESENTATION_LAG_MS + this.output.presentationLatencyTicks * this.refreshMs;
+      Math.max(MAX_PRESENTATION_LAG_MS, this.refreshMs) +
+      this.output.presentationLatencyTicks * this.refreshMs;
     const selection = this.playout.selectNearest(targetMs, this.refreshMs / 2, maxLateMs);
     for (const dropped of selection.dropped) {
       // 提示しなかったフレームの表示時刻は、止まりの原因 (間に合わなかった段) を決めるのに
@@ -426,8 +432,8 @@ export class VideoPlayoutSession {
       return;
     }
     if (intervalMs > 4 * DEFAULT_REFRESH_MS) {
-      // メインスレッドの停止などで 1 tick 分より大きく外れた間隔は、表示周期の推定に
-      // 使わない。1 つ混ざるだけで中央値が大きくずれるためである
+      // メインスレッドの停止や非表示タブの復帰で 1 tick 分より大きく外れた間隔は、
+      // 表示周期が変わった可能性があるため、サンプルを捨てて取り直す
       this.tickIntervalsMs.length = 0;
       this.refreshMs = DEFAULT_REFRESH_MS;
       return;

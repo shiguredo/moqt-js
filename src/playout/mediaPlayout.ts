@@ -135,7 +135,8 @@ export interface MediaPlayoutVideoOptions {
    * 表示すると決めたフレームの出し先
    *
    * `presentationLatencyTicks` は、`present()` を呼んでからフレームが実際に表示されるまでの
-   * 遅延を表示周期の tick 数で表す。canvas は 0、`MediaStreamTrackGenerator` は 1 とする。
+   * 遅延を表示周期の tick 数 (0〜4 の整数、実用値は 0〜2) で表す。canvas は 0、
+   * `MediaStreamTrackGenerator` は 1 とする。
    */
   readonly output: VideoPlayoutOutput;
   /** 捨てたフレームの記録先 (計器)。省略すると記録しない */

@@ -196,7 +196,7 @@ const frameFateArbitrary = fc.record({
     { weight: 4, arbitrary: fc.integer({ min: 0, max: 17 }) },
     { weight: 1, arbitrary: fc.integer({ min: 17, max: 300 }) },
   ),
-  // 表示せずに捨てる (表示キューのあふれ / jitter buffer が間に合わずに捨てる)
+  // 表示せずに捨てる (表示キューのあふれ / 提示しなかったフレームを数える)
   dropped: fc.constantFrom(null, null, null, "queue" as const, "late" as const),
   // jitter buffer の表示時刻 (受け取りの遅れの基準からのずれ、ミリ秒)。null は jitter buffer 無し
   presentationOffsetMs: fc.option(fc.integer({ min: 0, max: 200 }), { nil: null }),

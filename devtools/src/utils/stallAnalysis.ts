@@ -103,7 +103,7 @@ interface FrameRecord {
   readonly receivedAtMs: number;
   releasedAtMs: number | null;
   decodedAtMs: number | null;
-  // jitter buffer の表示時刻 (表示したとき、間に合わずに捨てたとき)。無ければ null
+  // jitter buffer の表示時刻 (表示したとき、提示しなかったとき)。無ければ null
   presentationMs: number | null;
   fate: FrameFate;
 }

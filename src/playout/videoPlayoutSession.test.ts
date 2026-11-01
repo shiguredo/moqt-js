@@ -799,6 +799,14 @@ test("handleDecodedFrame: 提示遅延の tick 数が不正なら例外にする
       }),
     "presentationLatencyTicks",
   );
+  // 上限の 4 は受け付ける
+  assert.doesNotThrow(
+    () =>
+      new VideoPlayoutSession({
+        ...options,
+        output: { ...options.output, presentationLatencyTicks: 4 },
+      }),
+  );
 });
 
 test("handleDecodedFrame: 最後の表示から 250 ms たつと表示周期の予約を止める", () => {
