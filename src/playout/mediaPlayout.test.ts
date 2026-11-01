@@ -26,6 +26,7 @@ import type { VideoPlayoutOutput } from "./videoPlayoutSession";
  */
 function createVideoOutput(): VideoPlayoutOutput {
   return {
+    presentationLatencyTicks: 0,
     isAvailable: () => false,
     present: () => {
       throw new Error("video output must not be used in unit tests");

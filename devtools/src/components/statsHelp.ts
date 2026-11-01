@@ -330,7 +330,7 @@ export const PLAYOUT_TIMING_HELP: SectionHelp = {
     {
       term: "lateFramesDropped",
       description:
-        "Frames the jitter buffer dropped because they missed their display time. When 3 or more frames are past due, all but the newest 2 are dropped.",
+        "Frames not presented because they missed their display time or another frame was chosen for the same display period.",
     },
   ],
   notes: [`latency: ${CLOCK_OFFSET_NOTE}`],

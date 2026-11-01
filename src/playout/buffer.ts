@@ -6,12 +6,10 @@
  * 共有の基準の遅れ・再生遅延から決める (音声と同じ式)。学習 (基準の遅れ、再生遅延、
  * フレーム間隔) は時間軸が持つ。
  *
- * - 表示時刻を過ぎたフレームのうち最新の 1 枚を描き、それより古いものを捨てる
- * - 表示時刻を過ぎたフレームが 2 枚以上あるときは、最新を次の選択に残してその 1 つ前を
- *   描く。配信 fps と表示周期が近いとき、位相の揺れで重なった周期と空の周期が続いても
- *   両方の周期で 1 枚ずつ描ける
- * - 表示時刻を過ぎたフレームのうち `MAX_PRESENTATION_LAG_MS` を超えて遅れたものは捨てる
- *   (最新の 1 枚は遅れていても残す)
+ * - 表示周期ごとに `selectNearest` を 1 回呼び、目標表示時刻に最も近いフレームを 1 枚選ぶ
+ * - 目標表示時刻から許容幅より古いフレームは提示せず、捨てるフレームとして返す。遅れて
+ *   提示すると、次のフレームを早く出して表示間隔が半分になるためである
+ * - 提示しないフレームは呼び出し側が閉じ、計器へ記録する
  * - 表示時刻を決められないフレーム (壁時計の TIMESTAMP を持たない、または時間軸が
  *   そのトラックの TIMESTAMP を使わない) は、届いた順に 1 回の選択で 1 枚ずつ描く
  *
@@ -21,22 +19,20 @@
 import type { PlayoutStream, PlayoutTimeline } from "./timeline";
 
 /**
- * 表示時刻を過ぎたフレームを捨てずに描く、表示時刻からの遅れの上限 (ミリ秒)
- *
- * 60 Hz の表示周期 (16.7 ms) 程度にする。この範囲の遅れは目で分からず、配信 fps と
- * 表示周期が近いときに位相や取得の間隔の揺れで重なったフレームを捨てずに、後の周期で
- * 追いつける。30 fps では 2 枚が表示時刻を過ぎると古い方は 1 フレーム (33.3 ms) 遅れて
- * いるため捨て、最新を描く
- */
-export const MAX_PRESENTATION_LAG_MS = 20;
-
-/**
  * 表示待ちのキューの上限 (枚)
  *
  * 保持している VideoFrame は decoder のメモリを占める。30 fps で再生遅延の上限 (500 ms)
  * を保持できる枚数に余裕を足した値にする
  */
 export const JITTER_BUFFER_MAX_QUEUED_FRAMES = 24;
+
+/**
+ * 表示時刻を過ぎたフレームを、表示できるフレームが無いときに限って遅れて提示する上限 (ミリ秒)
+ *
+ * 目標表示時刻に合うフレームがキューに無く、かつ遅れがこの範囲なら、1 枚だけ遅れて提示する。
+ * 表示を止めないための逃げ道であり、通常は目標に最も近いフレームを提示する。
+ */
+export const MAX_PRESENTATION_LAG_MS = 20;
 
 /** 表示待ちのフレーム */
 interface QueuedFrame<T> {
@@ -49,20 +45,27 @@ interface QueuedFrame<T> {
 }
 
 /** 1 回の選択の結果 */
-export interface PlayoutSelection<T> {
+export interface PlayoutNearestSelection<T> {
   /** 描くフレーム (無ければ null) */
   readonly draw: T | null;
-  /** 表示時刻を過ぎたが、より新しいフレームが 2 枚以上表示時刻を過ぎていたため捨てるフレーム */
-  readonly late: T[];
+  /**
+   * 提示せずに捨てるフレーム
+   *
+   * 目標表示時刻から許容幅より古いフレームと、同じ目標表示時刻に重なったため選ばれなかった
+   * フレームである。呼び出し側が閉じ、計器へ記録する。
+   */
+  readonly dropped: T[];
   /**
    * 描くフレームの表示時刻 (`performance.now()` の時間軸、ミリ秒)。表示時刻を決めずに
    * 届いた順に描く (壁時計の TIMESTAMP を持たない) フレームと、描くフレームが無いときは null
    */
   readonly drawPresentationMs: number | null;
+  /** 目標表示時刻を過ぎたフレームを、表示できるフレームが無いため遅れて提示したか */
+  readonly drawLate: boolean;
 }
 
 /**
- * 復号したフレームを積み、表示時刻に合わせて選ぶ
+ * 復号したフレームを積み、目標表示時刻に最も近い 1 枚を選ぶ
  *
  * フレームは積んだ順に並べたまま扱い、並べ替えない (復号の出力は TIMESTAMP の順である)。
  */
@@ -109,52 +112,79 @@ export class PlayoutBuffer<T> {
   }
 
   /**
-   * 表示するフレームを選ぶ (表示周期ごとに呼ぶ)
+   * 目標表示時刻に最も近いフレームを 1 枚選ぶ (表示周期ごとに呼ぶ)
    *
    * 先頭が表示時刻を決められないフレームなら、それを描く (届いた順に 1 枚ずつ)。
-   * 先頭が表示時刻前なら何も描かずに待つ。
+   * 表示時刻を決められるフレームでは、目標表示時刻から許容幅以内で最も近いものを描く。
+   * 許容幅より古いフレームは、そのフレームを提示できた表示周期を過ぎているため、捨てる
+   * フレームとして返す。許容幅より未来のフレームしかない場合は何も描かない。
    *
-   * @param nowMs - 現在の時刻 (`performance.now()`)
+   * @param targetMs - この選択で表示したい時刻 (`performance.now()` の時間軸、ミリ秒)
+   * @param toleranceMs - 目標表示時刻からの許容幅 (ミリ秒)。負の値は受け付けない
+   * @returns 描くフレーム、捨てるフレーム、描くフレームの表示時刻
    */
-  select(nowMs: number): PlayoutSelection<T> {
+  selectNearest(targetMs: number, toleranceMs: number): PlayoutNearestSelection<T> {
+    if (!(toleranceMs >= 0)) {
+      throw new RangeError(`toleranceMs must be a non-negative finite number, got ${toleranceMs}`);
+    }
     const head = this.queue[0];
     if (head === undefined) {
-      return { draw: null, late: [], drawPresentationMs: null };
+      return { draw: null, dropped: [], drawPresentationMs: null, drawLate: false };
     }
     if (this.framePresentationMs(head) === null) {
       this.queue.shift();
-      return { draw: head.item, late: [], drawPresentationMs: null };
+      return { draw: head.item, dropped: [], drawPresentationMs: null, drawLate: false };
     }
-    let lastDue = -1;
+
+    // 表示時刻を過ぎて久しいフレームは、目標表示時刻に合うフレームが無いときの逃げ道
+    // (MAX_PRESENTATION_LAG_MS) にも使えないため、先に捨てる
+    const dropped: T[] = [];
+    while (this.queue.length > 0) {
+      const frame = this.queue[0];
+      if (frame === undefined) {
+        break;
+      }
+      const presentationMs = this.framePresentationMs(frame);
+      if (presentationMs === null || presentationMs >= targetMs - MAX_PRESENTATION_LAG_MS) {
+        break;
+      }
+      this.queue.shift();
+      dropped.push(frame.item);
+    }
+
+    let bestIndex = -1;
+    let bestDistanceMs = Number.POSITIVE_INFINITY;
+    let bestPresentationMs: number | null = null;
     for (const [index, frame] of this.queue.entries()) {
       const presentationMs = this.framePresentationMs(frame);
-      if (presentationMs === null || presentationMs > nowMs) {
+      if (presentationMs === null || presentationMs > targetMs + toleranceMs) {
         break;
       }
-      lastDue = index;
-    }
-    if (lastDue < 0) {
-      return { draw: null, late: [], drawPresentationMs: null };
-    }
-    // 表示時刻から上限を超えて遅れたフレームを捨てる (最新の lastDue は残す)
-    let drawIndex = 0;
-    while (drawIndex < lastDue) {
-      const frame = this.queue[drawIndex];
-      const presentationMs = frame === undefined ? null : this.framePresentationMs(frame);
-      if (presentationMs === null || presentationMs >= nowMs - MAX_PRESENTATION_LAG_MS) {
-        break;
+      const distanceMs = Math.abs(presentationMs - targetMs);
+      if (distanceMs < bestDistanceMs) {
+        bestIndex = index;
+        bestDistanceMs = distanceMs;
+        bestPresentationMs = presentationMs;
       }
-      drawIndex++;
     }
-    const late = this.queue.splice(0, drawIndex).map((frame) => frame.item);
+    if (bestIndex < 0 || bestPresentationMs === null) {
+      // 目標表示時刻に合うフレームは無い。未来のフレームだけなら待つ
+      return { draw: null, dropped, drawPresentationMs: null, drawLate: false };
+    }
+
+    // 選んだフレームより前のフレームは、この表示周期でも次の表示周期でも提示できない
+    const skipped = this.queue.splice(0, bestIndex).map((frame) => frame.item);
+    dropped.push(...skipped);
     const drawn = this.queue.shift();
     if (drawn === undefined) {
-      return { draw: null, late, drawPresentationMs: null };
+      return { draw: null, dropped, drawPresentationMs: null, drawLate: false };
     }
+    const drawLate = bestPresentationMs < targetMs - toleranceMs;
     return {
       draw: drawn.item,
-      late,
-      drawPresentationMs: this.framePresentationMs(drawn),
+      dropped,
+      drawPresentationMs: bestPresentationMs,
+      drawLate,
     };
   }
 
@@ -169,29 +199,29 @@ export class PlayoutBuffer<T> {
     return this.timeline.presentationPerformanceMs(this.stream, timestampMicros);
   }
 
+  /** 現在の再生遅延 (ミリ秒)。壁時計の TIMESTAMP のフレームをまだ積んでいなければ null */
+  playoutDelayMs(): number | null {
+    return this.timeline.videoDelayMs;
+  }
+
+  /** キューを空にする */
+  clear(): T[] {
+    const cleared = this.queue.map((frame) => frame.item);
+    this.queue = [];
+    return cleared;
+  }
+
   /**
    * 積んだときの世代が今と同じフレームの表示時刻
    *
    * 基準を取り直した後に残っているフレームは、新しい基準では表示時刻が飛びの分だけ未来に
    * なる。決められないものとして null を返し、届いた順に描く (取り直し前の `PlayoutBuffer`
-   * が積んでいたフレームの timestamp を消していたのと同じ扱い)。
+   * が積んでいたフレームの timestamp を消していたのと同じ扱い)
    */
   private framePresentationMs(frame: QueuedFrame<T>): number | null {
     if (frame.generation !== this.timeline.generation) {
       return null;
     }
     return this.presentationTimeMs(frame.timestampMicros);
-  }
-
-  /** 現在の再生遅延 (ミリ秒)。壁時計の TIMESTAMP のフレームをまだ積んでいなければ null */
-  playoutDelayMs(): number | null {
-    return this.timeline.videoDelayMs;
-  }
-
-  /** 表示待ちのフレームをすべて取り出す (呼び出し側が閉じる) */
-  clear(): T[] {
-    const items = this.queue.map((frame) => frame.item);
-    this.queue = [];
-    return items;
   }
 }

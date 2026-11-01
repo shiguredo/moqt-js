@@ -326,11 +326,7 @@ export { type AudioPlayoutContext, type AudioPlayoutOutput } from "./playout/aud
 // と表示周期、捨てたフレームの記録先は注入し、復号へ渡した入力の情報は
 // trackVideoDecodeInput で記録する。組み立て (対応表・時間軸への記録・表示の選択・計器への
 // 記録) は入口の内部で行う
-export {
-  type VideoPlayoutOutput,
-  type VideoPlayoutPacing,
-  type VideoPlayoutTiming,
-} from "./playout/videoPlayoutSession";
+export { type VideoPlayoutOutput, type VideoPlayoutTiming } from "./playout/videoPlayoutSession";
 
 // 復号済みの音声と映像の再生の入口。時間軸・音声の再生の組み立て・映像の表示の組み立て・
 // 計器・復号へ渡した入力の対応表を 1 か所にまとめる。AudioContext と映像の出し先を渡し、

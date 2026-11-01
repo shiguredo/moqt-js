@@ -75,7 +75,8 @@ Chromium 156.0.8078.4 (Playwright 1.64.1 の `channel: "chromium"`、新しい h
 
 - `VideoPlayoutSession` が rAF のタイムスタンプから表示周期 R を実測する。直近 16 tick の間隔の中央値を使い、tick 間隔のサンプルが 2 つ未満の間は 60 Hz (16.667 ms) を仮定する。250 ms 以上の間隔が空いたら (非表示タブの復帰など) R を取り直し、古いフレームは後述の規則で捨てる
 - 各書き込み tick W で目標表示時刻 D = W + `presentationLatencyTicks` × R を求める。キューから「表示時刻が D に最も近いフレーム」を許容幅 R / 2 で 1 枚だけ選び、1 tick に 1 枚だけ出す。選ばれなければ次の tick へ予約を続ける。これを `PlayoutBuffer` の新しい選択 API (`selectNearest(targetMs, toleranceMs)`) として追加し、戻り値は「描くフレーム、表示せずに捨てるフレーム、描くフレームの表示時刻」を持つ型にする
-- 表示時刻が `D - R / 2` より前のフレームは、その tick では選択せずに捨てる。**遅れて提示はしない**。遅れて提示すると、次のフレームを早く出して表示間隔が半分になるためである。これは従来の `MAX_PRESENTATION_LAG_MS` (20 ms 以内なら遅れて描く) を置き換える規則であり、`MAX_PRESENTATION_LAG_MS` の定数、`PlayoutBuffer` のコメント、PBT、docs を更新する
+- 表示時刻が `D - R / 2` より前のフレームは、原則としてその tick では選択せずに捨てる。遅れて提示すると、次のフレームを早く出して表示間隔が半分になるためである
+  - 例外として、目標表示時刻に合うフレームがキューに無く、最新のフレームの遅れが `MAX_PRESENTATION_LAG_MS` (20 ms) 以内なら、表示を止めないため 1 枚だけ遅れて提示する。遅れて提示したときは `drawLate` を返し、捨てたフレームとは区別する。`MAX_PRESENTATION_LAG_MS` の定数、`PlayoutBuffer` のコメント、PBT、docs を更新する
 - 同じ表示時刻の近傍に 2 枚が入り、1 枚しか選べない場合 (60 fps を 60 Hz で表示し、位相が揺れた場合など) は、D に近い方を選ぶ。もう片方は、次の target の許容幅に入れば残し、入らなければ捨てる。捨てたフレームは、`VideoPlayoutTiming` が渡されているときは `recordLateDrop` に記録する。これにより表示間隔が半分になることはない
   - `recordLateDrop` / `lateFramesDropped` の意味は「表示時刻を過ぎて間に合わなかったフレーム」から「表示周期に重なったため、または表示時刻を過ぎたために提示しなかったフレーム」へ広げる。devtools の help、`stallAnalysis` の `lateDropped` の説明も同じ意味に更新する
 - `presentationMs === null` のフレーム (壁時計の TIMESTAMP を持たない) は従来どおり 1 tick に 1 枚出す
@@ -103,7 +104,7 @@ Chromium 156.0.8078.4 (Playwright 1.64.1 の `channel: "chromium"`、新しい h
   - 系統的な遅れがないこと。提示したフレームについて、推定表示時刻 D と表示時刻の差の平均が 1 ms 以内、最大が R / 2 + 1 ms 以内であること。平均は、位相を 0 から R まで均等に掃引した tick 列で取る
   - 1 tick に 1 枚だけ出し、同じフレームを 2 回出さないこと
   - `presentationLatencyTicks` が 1 のとき、書き込み tick W に対して W + R が推定表示時刻 D になること
-  - 目標を過ぎたフレームを遅れて提示せず、`recordLateDrop` に記録して捨てること
+  - 目標を過ぎたフレームを原則として遅れて提示せず、`recordLateDrop` に記録して捨てること。目標に合うフレームが無く遅れが 20 ms 以内のときだけ 1 枚を遅れて提示し、`drawLate` を返すこと
   - `presentationMs === null` のフレームを 1 tick 1 枚で出すこと
   - `present` が false を返したフレームの実績を `recordPresentation` に記録しないこと
   - 60 Hz から 120 Hz への R の変化、250 ms 以上の tick 間隔の後の取り直し

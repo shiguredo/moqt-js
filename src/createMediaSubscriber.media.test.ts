@@ -65,6 +65,10 @@ import {
   makeAudioTrackInfo,
   installRecordingAudioDecoder,
   installRecordingVideoDecoder,
+  installAnimationFrameRecorder,
+  runPendingAnimationFrame,
+  clearPendingAnimationFrame,
+  restoreAnimationFrame,
 } from "./testSupport/mediaSubscriberTestSupport";
 
 /**
@@ -1211,7 +1215,14 @@ test("handleVideoDecodedData: 書き込み失敗時に VideoFrame を閉じる",
   };
   const { frame, isClosed } = createRecordingFrame();
 
-  control.handleVideoDecodedData({ frame });
+  installAnimationFrameRecorder();
+  try {
+    control.handleVideoDecodedData({ frame });
+    runPendingAnimationFrame();
+  } finally {
+    clearPendingAnimationFrame();
+    restoreAnimationFrame();
+  }
   // 非同期 catch の完了を microtask の flush で待つ (タイマー不使用)
   await Promise.resolve();
   await Promise.resolve();
@@ -1229,7 +1240,14 @@ test("handleVideoDecodedData: 書き込み成功時は VideoFrame を閉じな�
   };
   const { frame, isClosed } = createRecordingFrame();
 
-  control.handleVideoDecodedData({ frame });
+  installAnimationFrameRecorder();
+  try {
+    control.handleVideoDecodedData({ frame });
+    runPendingAnimationFrame();
+  } finally {
+    clearPendingAnimationFrame();
+    restoreAnimationFrame();
+  }
   // 非同期 catch の完了を microtask の flush で待つ (タイマー不使用)
   await Promise.resolve();
   await Promise.resolve();
@@ -1308,7 +1326,14 @@ test("handleVideoDecodedData: 書き込みの同期 throw 時も VideoFrame を�
   } as unknown as { write: (frame: unknown) => Promise<void> };
   const { frame, isClosed } = createRecordingFrame();
 
-  control.handleVideoDecodedData({ frame });
+  installAnimationFrameRecorder();
+  try {
+    control.handleVideoDecodedData({ frame });
+    runPendingAnimationFrame();
+  } finally {
+    clearPendingAnimationFrame();
+    restoreAnimationFrame();
+  }
 
   assert.isTrue(isClosed());
   assert.equal(errors.length, 0);

@@ -119,6 +119,15 @@ export interface VideoPlayoutTiming {
  */
 export interface VideoPlayoutOutput {
   /**
+   * 表示先の提示遅延 (表示周期の tick 数)
+   *
+   * `present()` を呼んでからフレームが実際に表示されるまでの遅延を、表示周期の tick 数で
+   * 表す。canvas への描画は rAF のコールバック内で行われ、その vsync のフレームに含まれる
+   * ため 0 とする。`MediaStreamTrackGenerator` は書き込みの次の vsync で表示されるため 1 と
+   * する (Chromium 156 の実測。ブラウザの仕様として保証された値ではない)。
+   */
+  readonly presentationLatencyTicks: number;
+  /**
    * フレームを表示する
    *
    * 所有権は true / false にかかわらず出し先へ移る。閉じる責任も出し先が負う
@@ -143,20 +152,6 @@ export interface VideoPlayoutOutput {
    * として扱う。
    */
   isAvailable(): boolean;
-}
-
-/**
- * 表示の周期の進め方
- *
- * 出し先によって変える。ライブラリは `MediaStreamTrackGenerator` へ書くだけであり、
- * 表示の間隔はブラウザが TIMESTAMP から決める。devtools は canvas へ直接描くため、
- * 表示周期に 1 枚ずつに絞らないと、まとまって届いたフレームを早送りで描いてしまう。
- */
-export interface VideoPlayoutPacing {
-  /** フレームを積んだ時点で、表示周期を待たずに表示するか */
-  readonly drainImmediately: boolean;
-  /** 1 つの表示周期に表示する枚数の上限 (すべて表示するときは `Number.POSITIVE_INFINITY`) */
-  readonly framesPerDrain: number;
 }
 
 /** 復号したフレーム 1 枚の表示の依頼 */
@@ -205,17 +200,33 @@ export interface VideoPlayoutSessionOptions {
   readonly timeline: PlayoutTimeline;
   /** 表示すると決めたフレームの出し先 */
   readonly output: VideoPlayoutOutput;
-  /** 表示の周期の進め方 */
-  readonly pacing: VideoPlayoutPacing;
   /** 捨てたフレームの記録先 (計器)。映像の計器を持たないときは省略する */
   readonly timing?: VideoPlayoutTiming;
   /** 表示待ちのキューの上限 (枚)。既定は `JITTER_BUFFER_MAX_QUEUED_FRAMES` */
   readonly maxQueuedFrames?: number;
-  /** 表示の周期の予約。既定は `requestAnimationFrame` */
-  readonly requestFrame?: (callback: () => void) => number;
+  /**
+   * 表示の周期の予約。既定は `requestAnimationFrame`
+   *
+   * コールバックは rAF のタイムスタンプ (vsync の時刻、`performance.now()` の軸) を受け取る。
+   */
+  readonly requestFrame?: (callback: (timestampMs: number) => void) => number;
   /** 表示の周期の予約の取り消し。既定は `cancelAnimationFrame` */
   readonly cancelFrame?: (handle: number) => void;
 }
+
+/**
+ * 表示周期 R の初期値と、rAF の間隔を測り直す条件
+ *
+ * rAF の間隔のサンプルが 2 つ未満の間は 60 Hz を仮定する。250 ms 以上の間隔が空いた回は、
+ * 非表示タブの復帰などで表示周期が変わった可能性があるため、サンプルを捨てて取り直す。
+ */
+const DEFAULT_REFRESH_MS = 1_000 / 60;
+const REFRESH_SAMPLE_COUNT = 16;
+const REFRESH_RESET_GAP_MS = 250;
+// 表示待ちが空でも、最後の表示からこの時間までは表示周期の予約を続ける。30 fps のように
+// 表示周期より長い間隔でフレームが届くとき、予約を毎回止めると rAF の間隔が届いた間隔に
+// 引き伸ばされ、表示周期の推定が壊れるためである
+const IDLE_STOP_MS = 250;
 
 /**
  * 復号した映像フレームの表示
@@ -228,18 +239,28 @@ export class VideoPlayoutSession {
   readonly playout: PlayoutBuffer<VideoFrame>;
   private readonly timeline: PlayoutTimeline;
   private readonly output: VideoPlayoutOutput;
-  private readonly pacing: VideoPlayoutPacing;
   private readonly timing: VideoPlayoutTiming | null;
   // 表示の周期の予約 (ブラウザ依存は注入する)
-  private readonly requestFrame: (callback: () => void) => number;
+  private readonly requestFrame: (callback: (timestampMs: number) => void) => number;
   private readonly cancelFrame: (handle: number) => void;
   // 予約済みの表示周期。予約済みの間は積み増さない
   private frameRequest: number | null = null;
+  // 表示周期の実測値と、rAF の間隔の窓
+  private refreshMs = DEFAULT_REFRESH_MS;
+  private readonly tickIntervalsMs: number[] = [];
+  private lastTickMs: number | null = null;
+  // 最後にフレームを積んだ、または表示した時刻 (`performance.now()` の軸)
+  private lastActivityMs: number | null = null;
 
   constructor(options: VideoPlayoutSessionOptions) {
+    const presentationLatencyTicks = options.output.presentationLatencyTicks;
+    if (!Number.isInteger(presentationLatencyTicks) || presentationLatencyTicks < 0) {
+      throw new RangeError(
+        `presentationLatencyTicks must be a non-negative integer, got ${presentationLatencyTicks}`,
+      );
+    }
     this.timeline = options.timeline;
     this.output = options.output;
-    this.pacing = options.pacing;
     this.timing = options.timing ?? null;
     this.playout = new PlayoutBuffer<VideoFrame>(
       options.maxQueuedFrames ?? JITTER_BUFFER_MAX_QUEUED_FRAMES,
@@ -294,10 +315,7 @@ export class VideoPlayoutSession {
       dropped.close();
     }
 
-    if (this.pacing.drainImmediately) {
-      // 表示時刻を既に過ぎているフレームは、次の表示周期を待たずに出す
-      this.drain();
-    }
+    this.lastActivityMs = performance.now();
     this.scheduleDrain();
     return { status: "queued", wallClockTimestamp };
   }
@@ -317,59 +335,101 @@ export class VideoPlayoutSession {
     for (const frame of this.playout.clear()) {
       frame.close();
     }
+    this.lastTickMs = null;
+    this.lastActivityMs = null;
+    this.tickIntervalsMs.length = 0;
+    this.refreshMs = DEFAULT_REFRESH_MS;
   }
 
   /**
-   * 表示時刻を過ぎたフレームを表示する
+   * 表示周期ごとに、目標表示時刻に最も近いフレームを 1 枚提示する
    *
-   * 表示周期に 1 枚に絞るときは 1 枚で止め、続きは次の周期へ任せる。
+   * 目標表示時刻は、書き込み tick の時刻に表示先の提示遅延を足した時刻である。generator は
+   * 書き込みの次の vsync で表示されるため、この時刻を目標にすると表示時刻に最も近い vsync
+   * で提示できる。
    */
-  private drain(): void {
-    let presentedFrames = 0;
-    for (;;) {
-      const nowMs = performance.now();
-      const selection = this.playout.select(nowMs);
-      for (const late of selection.late) {
-        // 間に合わなかったフレームの表示時刻は、止まりの原因 (間に合わなかった段) を決めるのに
-        // 使う。表示時刻は選択と同じ基準で求まる
-        try {
-          this.timing?.recordLateDrop(
-            late.timestamp,
-            this.playout.presentationTimeMs(late.timestamp) ?? nowMs,
-          );
-        } catch {
-          // 記録の失敗でフレームを閉じ損ねない
-        }
-        late.close();
-      }
-      const draw = selection.draw;
-      if (draw === null) {
-        return;
-      }
-      // 表示すると出し先へ所有権が移る (devtools は閉じる) ため、記録に使う値は先に読む
-      const timestamp = draw.timestamp;
-      // 出し先は throw しない契約である。それでも表示が止まらないよう、throw したときは
-      // フレームを閉じて表示の実績に記録せずに次のフレームへ進む
-      let presented: boolean;
+  private onTick(timestampMs: number): void {
+    this.observeTick(timestampMs);
+    const targetMs = timestampMs + this.output.presentationLatencyTicks * this.refreshMs;
+    const selection = this.playout.selectNearest(targetMs, this.refreshMs / 2);
+    for (const dropped of selection.dropped) {
+      // 提示しなかったフレームの表示時刻は、止まりの原因 (間に合わなかった段) を決めるのに
+      // 使う。表示時刻は選択と同じ基準で求まる
       try {
-        presented = this.output.present(draw, selection.drawPresentationMs);
-      } catch {
-        draw.close();
-        presented = false;
-      }
-      if (presented && selection.drawPresentationMs !== null) {
-        // 実際に表示した時刻を実績として記録する (同期ずれの推定に使う)。表示時刻を決めずに
-        // 表示したフレームは音声と対応づけられないため記録しない。第 3 引数は Unix epoch マイクロ秒
-        this.timeline.recordPresentation(
-          "video",
-          timestamp,
-          BigInt(Math.round((performance.timeOrigin + performance.now()) * 1_000)),
+        this.timing?.recordLateDrop(
+          dropped.timestamp,
+          this.playout.presentationTimeMs(dropped.timestamp) ?? targetMs,
         );
+      } catch {
+        // 記録の失敗でフレームを閉じ損ねない
       }
-      presentedFrames++;
-      if (presentedFrames >= this.pacing.framesPerDrain) {
-        return;
-      }
+      dropped.close();
+    }
+    const draw = selection.draw;
+    if (draw === null) {
+      return;
+    }
+    this.lastActivityMs = timestampMs;
+    // 表示すると出し先へ所有権が移る (devtools は閉じる) ため、記録に使う値は先に読む
+    const timestamp = draw.timestamp;
+    // 出し先は throw しない契約である。それでも表示が止まらないよう、throw したときは
+    // フレームを閉じて表示の実績に記録せずに次のフレームへ進む
+    let presented: boolean;
+    try {
+      presented = this.output.present(draw, selection.drawPresentationMs);
+    } catch {
+      draw.close();
+      presented = false;
+    }
+    if (presented && selection.drawPresentationMs !== null) {
+      // 実際に表示される vsync の時刻を実績として記録する (同期ずれの推定に使う)。表示時刻を
+      // 決めずに表示したフレームは音声と対応づけられないため記録しない。
+      // 第 3 引数は Unix epoch マイクロ秒
+      this.timeline.recordPresentation(
+        "video",
+        timestamp,
+        BigInt(Math.round((performance.timeOrigin + targetMs) * 1_000)),
+      );
+    }
+  }
+
+  /**
+   * rAF のタイムスタンプから表示周期 R を実測する
+   *
+   * 直近 `REFRESH_SAMPLE_COUNT` 個の間隔の中央値を使う。サンプルが 2 つ未満の間は 60 Hz を
+   * 仮定する。250 ms 以上の間隔が空いた回は、非表示タブの復帰などで表示周期が変わった
+   * 可能性があるため、サンプルを捨てて取り直す。
+   */
+  private observeTick(timestampMs: number): void {
+    const previousMs = this.lastTickMs;
+    this.lastTickMs = timestampMs;
+    if (previousMs === null) {
+      return;
+    }
+    const intervalMs = timestampMs - previousMs;
+    if (intervalMs >= REFRESH_RESET_GAP_MS) {
+      this.tickIntervalsMs.length = 0;
+      this.refreshMs = DEFAULT_REFRESH_MS;
+      return;
+    }
+    if (!(intervalMs > 0)) {
+      return;
+    }
+    this.tickIntervalsMs.push(intervalMs);
+    if (this.tickIntervalsMs.length > REFRESH_SAMPLE_COUNT) {
+      this.tickIntervalsMs.shift();
+    }
+    if (this.tickIntervalsMs.length < 2) {
+      return;
+    }
+    const sorted = [...this.tickIntervalsMs].sort((left, right) => left - right);
+    const middle = Math.floor(sorted.length / 2);
+    if (sorted.length % 2 === 0) {
+      const left = sorted[middle - 1] ?? DEFAULT_REFRESH_MS;
+      const right = sorted[middle] ?? DEFAULT_REFRESH_MS;
+      this.refreshMs = (left + right) / 2;
+    } else {
+      this.refreshMs = sorted[middle] ?? DEFAULT_REFRESH_MS;
     }
   }
 
@@ -380,16 +440,24 @@ export class VideoPlayoutSession {
    * 捨てる (出せないフレームが decoder のメモリを占め続けないため)。
    */
   private scheduleDrain(): void {
-    if (this.playout.size === 0 || this.frameRequest !== null) {
+    if (this.frameRequest !== null) {
       return;
     }
-    this.frameRequest = this.requestFrame(() => {
+    if (this.playout.size === 0) {
+      // 表示待ちが無くても、最後の表示からしばらくは予約を続ける。止めると、届いた
+      // フレームの間隔が rAF の間隔として観測され、表示周期の推定が壊れる
+      const lastActivityMs = this.lastActivityMs;
+      if (lastActivityMs === null || performance.now() - lastActivityMs >= IDLE_STOP_MS) {
+        return;
+      }
+    }
+    this.frameRequest = this.requestFrame((timestampMs) => {
       this.frameRequest = null;
       if (!this.isOutputAvailable()) {
         this.clear();
         return;
       }
-      this.drain();
+      this.onTick(timestampMs);
       this.scheduleDrain();
     });
   }

@@ -32,7 +32,6 @@ test("実際の音声再生経路と canvas の表示を同期し、音声の停
         audio: { context: audio.context, destination: audio.destination },
         video: {
           output: videoOutput.output,
-          pacing: { drainImmediately: false, framesPerDrain: 1 },
         },
         maxQueuedFrames: 24,
         decodeInputs: { maxTracked: 24, forgetOnDuplicate: true },
@@ -452,7 +451,6 @@ test.describe("実 VideoFrame の表示経路", () => {
             video: {
               output: videoOutput.output,
               // 表示周期に 1 枚だけ出す。積んだ時点では出さず、表示周期 (rAF) で出す
-              pacing: { drainImmediately: false, framesPerDrain: 1 },
             },
           });
           await playout.prepareAudio();
@@ -512,7 +510,6 @@ test.describe("実 VideoFrame の表示経路", () => {
           video: {
             output: videoOutput.output,
             // 表示周期が来るまで表示待ちに残すため、積んだ時点では出さない設定にする
-            pacing: { drainImmediately: false, framesPerDrain: 1 },
           },
         });
         await playout.prepareAudio();

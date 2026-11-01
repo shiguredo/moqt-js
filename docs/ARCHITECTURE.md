@@ -76,9 +76,10 @@ DevTools の出力機器は `AudioContext.sinkId` と比較し、変更がある
 
 ### 映像の表示の組み立て (VideoPlayoutSession)
 
-時間軸で決めた表示時刻を PlayoutBuffer へ渡し、出力と pacing の設定に従って選ぶ。
+時間軸で決めた表示時刻に最も近い vsync を、表示先の提示遅延 (canvas は 0 tick、
+MediaStreamTrackGenerator は 1 tick) を補って選ぶ。表示は rAF の tick ごとに 1 枚だけ行う。
 ライブラリは MediaStreamTrackGenerator、DevTools は canvas を出し先として使う。
-表示した実績、あふれ、遅れたフレームの計器を記録する。
+表示した実績、あふれ、提示しなかったフレームの計器を記録する。
 
 ## 復号入力と出力の対応
 

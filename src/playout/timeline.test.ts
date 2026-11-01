@@ -30,7 +30,7 @@ import {
   SYNC_MIN_DELTA_MS,
 } from "./timeline";
 import { AUDIO_CLOCK_DEADBAND_MS } from "./audioPlayout";
-import { MAX_PRESENTATION_LAG_MS, PlayoutBuffer } from "./buffer";
+import { PlayoutBuffer } from "./buffer";
 
 // 音声の再生を有効にした最初の観測で、未観測の固定値を余分に上乗せしない。
 // 出力時計の観測が無い開始時は 50 ms の下限を使う。
@@ -810,9 +810,12 @@ test("resetStream: 世代を進めず、映像の積んだフレームの扱い�
   timeline.resetStream("audio");
 
   assert.equal(timeline.generation, generationBefore, "世代を進めないこと");
-  // 表示時刻を過ぎたフレームは、表示時刻どおりに描かれる (到着順に落ちない)。音声を消すと
-  // 同期が足していた分も消えるため、表示時刻は映像だけの値 (メディア時刻 + 0 ms) になる
-  const selection = buffer.select((presentationMs ?? 0) + 1);
+  // 表示時刻どおりの tick では、表示時刻を決めたフレームが描かれる (到着順に落ちない)。
+  // 音声を消すと同期が足していた分も消えるため、表示時刻は映像だけの値
+  // (メディア時刻 + 0 ms) になる
+  const presentationAfterResetMs = buffer.presentationTimeMs(timestampMicros);
+  assert.isNotNull(presentationAfterResetMs, "表示時刻を使い続けること");
+  const selection = buffer.selectNearest(presentationAfterResetMs ?? 0, TOLERANCE_MS);
   assert.equal(selection.draw, "frame");
   assert.isNotNull(selection.drawPresentationMs, "表示時刻を使い続けること");
   assert.closeTo(selection.drawPresentationMs ?? -1, 1_000, TOLERANCE_MS);
@@ -953,10 +956,10 @@ test("observe: ドリフトで基準を共有しなくなったら映像を音�
   }
 });
 
-// 完了条件: 同期ずれの予算は、時計の対応付けの不感帯 (30 ms) と映像の write の遅れ
-// (MAX_PRESENTATION_LAG_MS = 20 ms) の合計である。120 秒の到着列で、音声は対応付けの
-// 不感帯まで、映像は write の遅れまでずらして実績を記録し、skewMs が ±50 ms に収まる
-test("recordPresentation: 不感帯と write の遅れを含めても skewMs が ±50 ms に収まる", () => {
+// 完了条件: 同期ずれの予算は、時計の対応付けの不感帯 (30 ms) と、映像の表示実績の推定誤差
+// (表示周期の半分以下) の合計である。映像は write の時刻ではなく、提示する vsync の
+// 推定時刻を実績に記録するため、write の遅れは実績に含まれない
+test("recordPresentation: 不感帯を含めても skewMs が予算内に収まる", () => {
   const timeline = createTimeline();
   const arrivals = buildArrivals();
   let maxSkewMs = 0;
@@ -967,11 +970,9 @@ test("recordPresentation: 不感帯と write の遅れを含めても skewMs が
     timeline.observe(arrival.stream, wallClockMs, timestampMicros);
     const presentationMs = timeline.presentationPerformanceMs(arrival.stream, timestampMicros);
     assert.isNotNull(presentationMs, "表示時刻が決まること");
-    // 音声は時計の対応付けの不感帯 (30 ms) まで、映像は write の遅れ (20 ms) までずらす
-    const deviationMs =
-      arrival.stream === "audio"
-        ? AUDIO_CLOCK_DEADBAND_MS * (index % 2)
-        : MAX_PRESENTATION_LAG_MS * ((index % 3) / 2);
+    // 音声は時計の対応付けの不感帯 (30 ms) までずらす。映像は推定表示時刻を記録するため
+    // ずらさない
+    const deviationMs = arrival.stream === "audio" ? AUDIO_CLOCK_DEADBAND_MS * (index % 2) : 0;
     const presentedMicros = Math.round((EPOCH_MS + (presentationMs ?? 0) + deviationMs) * 1_000);
     timeline.recordPresentation(arrival.stream, timestampMicros, BigInt(presentedMicros));
     const skewMs = timeline.skewMs();
@@ -981,12 +982,12 @@ test("recordPresentation: 不感帯と write の遅れを含めても skewMs が
     }
   }
   // 音声の目標遅延が段差で上がった直後は、次の観測で同期の制御が合わせるまで映像が
-  // 先行する。定常状態では不感帯と write の遅れの予算に収まる
+  // 先行する。定常状態では不感帯の予算に収まる
   assert.isNotNull(lastSkewMs, "最後の同期ずれが求められること");
   assert.isAtMost(
     Math.abs(lastSkewMs ?? 0),
-    MAX_PRESENTATION_LAG_MS + AUDIO_CLOCK_DEADBAND_MS + SYNC_MIN_DELTA_MS,
-    "定常状態のずれの予算 (write の遅れ + 不感帯)",
+    AUDIO_CLOCK_DEADBAND_MS + SYNC_MIN_DELTA_MS,
+    "定常状態のずれの予算 (不感帯)",
   );
   assert.isAtMost(maxSkewMs, MAX_PLAYOUT_DELAY_MS, "推移中のずれも上限を超えないこと");
 });

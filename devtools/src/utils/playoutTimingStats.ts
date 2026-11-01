@@ -115,8 +115,8 @@ export interface PlayoutTimingSnapshot {
    */
   readonly playoutDelayMs: number | null;
   /**
-   * jitter buffer が間に合わずに捨てたフレーム数 (累積)。表示時刻を過ぎたフレームが
-   * 3 枚以上あるとき、最新とその 1 つ前より古いものを捨てる
+   * 提示しなかったフレーム数 (累積)。表示時刻を過ぎたフレームと、同じ表示周期に重なって
+   * 提示できなかったフレームを含む
    */
   readonly lateFramesDropped: number;
   /** 原因ごとの止まりの回数と時間 (累積)。和は displayStalls / displayStallMs に一致する */

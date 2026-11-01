@@ -1219,15 +1219,11 @@ export function useSubscriber(
       video: options.video
         ? {
             output: {
+              // rAF のコールバック内に canvas へ描くため、その vsync で表示される
+              presentationLatencyTicks: 0,
               // 購読が終わったら描かない (canvas は描くときに引く)
               isAvailable: () => sub.getSubscriber(subscriberId) !== undefined,
               present: (frame, presentationMs) => drawFrame(frame, presentationMs),
-            },
-            pacing: {
-              // canvas へ直接描くため、表示周期を待って 1 枚ずつ描く。まとめて描くと、
-              // まとまって届いたフレームが早送りに見える
-              drainImmediately: false,
-              framesPerDrain: 1,
             },
             timing: {
               recordQueueDrop: (timestamp) => playoutTimingRef.current.recordQueueDrop(timestamp),
@@ -2408,11 +2404,9 @@ export function useSubscriber(
    * jitter buffer が無効のとき、または TIMESTAMP を壁時計として使えないフレームは、
    * 届いた順に 1 周期に 1 枚ずつ表示する。
    *
-   * 表示は表示周期に 1 枚に絞る (入口へ渡す pacing)。これをしないと 2 つの問題が起きる。
-   * - 120 fps の映像では 1 周期に複数枚の復号が完了し、すべて描画すると表示周期
-   *   より多く描くことになってかくつく
-   * - cache replay の追い上げ中は復号が表示より速いため、すべて描画すると早送りに
-   *   見える
+   * 表示は入口が表示周期ごとに 1 枚に絞る。120 fps の映像で 1 周期に複数枚の復号が
+   * 完了しても、1 周期に 1 枚だけを描く。cache replay の追い上げ中に復号が表示より
+   * 速くても、早送りにはならない。
    *
    * relay の cache から届いたフレーム (SUBSCRIBE_OK の LARGEST_OBJECT 以前の位置) は、
    * 位置を入口の admit へ渡して描かない (入口が閉じる)。復号はしているため参照は壊れない

@@ -54,7 +54,6 @@ import {
   VideoPlayoutSession,
   type VideoDecodeInput,
   type VideoPlayoutOutput,
-  type VideoPlayoutPacing,
   type VideoPlayoutSessionOptions,
   type VideoPlayoutTiming,
 } from "./videoPlayoutSession";
@@ -132,15 +131,13 @@ export interface MediaPlayoutAudioOptions {
  * `VideoPlayoutOutput` を参照)。
  */
 export interface MediaPlayoutVideoOptions {
-  /** 表示すると決めたフレームの出し先 */
-  readonly output: VideoPlayoutOutput;
   /**
-   * 表示の周期の進め方。省略すると、表示時刻を過ぎたフレームをすべて出す
+   * 表示すると決めたフレームの出し先
    *
-   * `MediaStreamTrackGenerator` へ書くだけのライブラリは省略でき、canvas へ直接描く
-   * moqt-devtools は `{ drainImmediately: false, framesPerDrain: 1 }` を渡す。
+   * `presentationLatencyTicks` は、`present()` を呼んでからフレームが実際に表示されるまでの
+   * 遅延を表示周期の tick 数で表す。canvas は 0、`MediaStreamTrackGenerator` は 1 とする。
    */
-  readonly pacing?: VideoPlayoutPacing;
+  readonly output: VideoPlayoutOutput;
   /** 捨てたフレームの記録先 (計器)。省略すると記録しない */
   readonly timing?: VideoPlayoutTiming;
   /**
@@ -501,19 +498,13 @@ export class MediaPlayout {
   /**
    * 映像の表示の組み立ての設定を組み立てる
    *
-   * 既定はライブラリの使い方 (書いた時点では表示されず、表示の間隔はブラウザが TIMESTAMP から
-   * 決める) にする。exactOptionalPropertyTypes のため、省略された値は載せない。
+   * exactOptionalPropertyTypes のため、省略された値は載せない。
    */
   private buildVideoSessionOptions(options: MediaPlayoutVideoOptions): VideoPlayoutSessionOptions {
     const base: VideoPlayoutSessionOptions = {
       timeline: this.timeline,
       output: options.output,
       maxQueuedFrames: this.maxQueuedFrames,
-      // 既定はライブラリの使い方 (書いた時点では表示せず、表示の間隔はブラウザが決める)
-      pacing: options.pacing ?? {
-        drainImmediately: true,
-        framesPerDrain: Number.POSITIVE_INFINITY,
-      },
     };
     if (options.timing === undefined) {
       return base;

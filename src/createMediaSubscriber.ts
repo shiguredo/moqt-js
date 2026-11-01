@@ -875,6 +875,8 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       video: this.options.video
         ? {
             output: {
+              // 書いたフレームは次の vsync で表示される (Chromium 156 の実測)
+              presentationLatencyTicks: 1,
               // 出し先は writer の有無だけで判定する (購読の停止では writer を先に外す)
               isAvailable: () => this.videoWriter !== null,
               present: (frame) => this.presentVideoFrame(frame),
@@ -884,8 +886,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       // 復号の出力で入力が引けなかった音に使う、復号前の遅延の設定値。記録から引けた音は、
       // 復号へ渡すまで実際に保持した時間を使う
       intentionalDelayMs: this.preDecodeDelayMs,
-      // pacing (表示の周期) と decodeInputs (復号へ渡した入力の対応表) は入口の既定を使う。
-      // どちらもライブラリの使い方と同じ値であり、ここで同じ値を書き写さない
+      // decodeInputs (復号へ渡した入力の対応表) は入口の既定を使う
     });
     // catalog 購読フェーズへ、購読と解決に必要なものだけを明示的に渡す
     this.catalogSubscription = new CatalogSubscription({

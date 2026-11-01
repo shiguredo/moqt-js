@@ -6,7 +6,7 @@
  * 性質を確かめる。
  *
  * - フレームを並べ替えない (描く・捨てる順は積んだ順であり、各フレームは 1 回だけ出る)
- * - 壁時計の TIMESTAMP を持つフレームは表示時刻より前に描かない
+ * - 描くフレームは目標表示時刻から許容幅以内であり、許容幅より古いフレームは描かない
  * - 再生遅延は 0 以上で上限を超えず、表示時刻は現在の学習結果に従う
  * - 揺らぎの p95 が最大の揺らぎと一致する到着列では、表示間隔が TIMESTAMP の間隔どおりになる
  *
@@ -16,7 +16,7 @@
 
 import { test, assert } from "vite-plus/test";
 import * as fc from "fast-check";
-import { JITTER_BUFFER_MAX_QUEUED_FRAMES, PlayoutBuffer } from "./buffer";
+import { JITTER_BUFFER_MAX_QUEUED_FRAMES, MAX_PRESENTATION_LAG_MS, PlayoutBuffer } from "./buffer";
 import { MAX_PLAYOUT_DELAY_MS, PLAYOUT_WINDOW_MS, PlayoutTimeline } from "./timeline";
 
 // 送信側の壁時計 (Unix epoch ミリ秒)。メディア時刻 0 のフレームの TIMESTAMP にする
@@ -88,8 +88,8 @@ test("PlayoutBuffer: 描く・捨てる順は積んだ順であり、各フレ�
             assert.isAtMost(buffer.size, maxQueuedFrames);
           } else {
             localMs += operation.elapsedMs;
-            const selection = buffer.select(localMs);
-            removed.push(...selection.late);
+            const selection = buffer.selectNearest(localMs, frameMs / 4);
+            removed.push(...selection.dropped);
             if (selection.draw !== null) {
               removed.push(selection.draw);
             }
@@ -105,7 +105,7 @@ test("PlayoutBuffer: 描く・捨てる順は積んだ順であり、各フレ�
   );
 });
 
-test("PlayoutBuffer: 表示時刻より前に描かず、再生遅延の範囲を守る", () => {
+test("PlayoutBuffer: 目標表示時刻の許容幅以内のフレームだけを描き、再生遅延の範囲を守る", () => {
   fc.assert(
     fc.property(
       operationsArbitrary(false),
@@ -136,14 +136,18 @@ test("PlayoutBuffer: 表示時刻より前に描かず、再生遅延の範囲�
             assert.isAtMost(presentationMs ?? Infinity, localMs + MAX_PLAYOUT_DELAY_MS + 0.1);
           } else {
             localMs += operation.elapsedMs;
-            const selection = buffer.select(localMs);
-            // 描いたフレームは表示時刻を過ぎている (選択は時間軸を変えない)
+            const selection = buffer.selectNearest(localMs, frameMs / 4);
+            // 描いたフレームは、目標表示時刻から許容幅以内である (選択は時間軸を変えない)
             if (selection.draw !== null) {
               const presentationMs = buffer.presentationTimeMs(
                 timestampOf(selection.draw * frameMs),
               );
-              // 表示時刻 (performance.now() の軸) を過ぎたフレームだけを描く
-              assert.isAtMost(presentationMs ?? Infinity, localMs + 0.1);
+              // 目標の許容幅に入らないフレームは、遅れが上限以内のときだけ遅れて描く
+              const allowedLateMs = selection.drawLate ? MAX_PRESENTATION_LAG_MS : frameMs / 2;
+              assert.isAtMost(
+                Math.abs((presentationMs ?? Infinity) - localMs),
+                allowedLateMs + 0.1,
+              );
             }
           }
         }
@@ -210,8 +214,8 @@ test("PlayoutBuffer: 揺らぎの p95 が最大の揺らぎのとき、表示間
             buffer.enqueue(next, timestampOf(mediaMs));
             next++;
           }
-          const selection = buffer.select(nowMs);
-          late.push(...selection.late);
+          const selection = buffer.selectNearest(nowMs, frameMs / 4);
+          late.push(...selection.dropped);
           if (selection.draw !== null) {
             draws.push({ localMs: nowMs, index: selection.draw });
           }
@@ -224,8 +228,9 @@ test("PlayoutBuffer: 揺らぎの p95 が最大の揺らぎのとき、表示間
           const current = steady[position];
           assert.equal((current?.index ?? 0) - (previous?.index ?? 0), 1);
           const intervalMs = (current?.localMs ?? 0) - (previous?.localMs ?? 0);
-          assert.isAtLeast(intervalMs, frameMs - 1 - TOLERANCE_MS);
-          assert.isAtMost(intervalMs, frameMs + 1 + TOLERANCE_MS);
+          // 選択の刻みは 1 ms で、許容幅 (frameMs / 4) の分だけ前後し得る
+          assert.isAtLeast(intervalMs, frameMs / 2 - 1 - TOLERANCE_MS);
+          assert.isAtMost(intervalMs, (frameMs * 3) / 2 + 1 + TOLERANCE_MS);
         }
         assert.deepEqual(
           late.filter((index) => index >= warmupFrames),
