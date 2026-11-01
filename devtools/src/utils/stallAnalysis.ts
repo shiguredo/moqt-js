@@ -254,7 +254,7 @@ export class StallAnalyzer {
   }
 
   /**
-   * 提示しなかった (表示周期に間に合わなかった) ことを記録する
+   * 提示しなかった (表示時刻を過ぎた、または同じ表示周期に重なった) ことを記録する
    *
    * @param presentationMs - 捨てたフレームの表示時刻 (`performance.now()` の時間軸)
    */

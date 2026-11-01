@@ -213,10 +213,33 @@ export interface VideoPlayoutSessionOptions {
    * コールバックは rAF のタイムスタンプ (vsync の時刻、`performance.now()` の軸) を受け取る。
    */
   readonly requestFrame?: (callback: (timestampMs: number) => void) => number;
-  /** 現在時刻 (`performance.now()` の軸)。テストで時計を注入するときに使う */
+  /**
+   * 現在時刻 (`performance.now()` の軸)。アイドル判定にだけ使う。テストで時計を注入する
+   * ときに使う
+   */
   readonly now?: () => number;
   /** 表示の周期の予約の取り消し。既定は `cancelAnimationFrame` */
   readonly cancelFrame?: (handle: number) => void;
+}
+
+/**
+ * rAF の間隔から表示周期 R を推定する
+ *
+ * 中央値ではなく下位 25% を使う。メインスレッドが間に合わずコールバックが 1 フレーム
+ * 飛ぶと、その間隔は 2 倍になる。中央値だと飛んだ間隔に引っ張られて R が 2 倍になり、
+ * 提示遅延の補償 (1 tick) と表示実績が 1 表示周期ずれる。下位 25% なら、飛んだ回が
+ * 混ざっても通常の間隔を拾える。
+ *
+ * @param intervalsMs - rAF の間隔 (ミリ秒)。空なら 60 Hz を返す
+ * @returns 表示周期 (ミリ秒)
+ */
+export function estimateRefreshMs(intervalsMs: readonly number[]): number {
+  if (intervalsMs.length === 0) {
+    return DEFAULT_REFRESH_MS;
+  }
+  const sorted = [...intervalsMs].sort((left, right) => left - right);
+  const index = Math.floor((sorted.length - 1) * 0.25);
+  return sorted[index] ?? DEFAULT_REFRESH_MS;
 }
 
 /**
@@ -268,7 +291,7 @@ export class VideoPlayoutSession {
       presentationLatencyTicks > MAX_PRESENTATION_LATENCY_TICKS
     ) {
       throw new RangeError(
-        `presentationLatencyTicks must be an integer between 0 and 4, got ${presentationLatencyTicks}`,
+        `presentationLatencyTicks must be an integer between 0 and ${MAX_PRESENTATION_LATENCY_TICKS}, got ${presentationLatencyTicks}`,
       );
     }
     this.timeline = options.timeline;
@@ -417,9 +440,9 @@ export class VideoPlayoutSession {
   /**
    * rAF のタイムスタンプから表示周期 R を実測する
    *
-   * 直近 `REFRESH_SAMPLE_COUNT` 個の間隔の中央値を使う。サンプルが 2 つ未満の間は 60 Hz を
-   * 仮定する。4 tick 分 (約 66.7 ms) を超える間隔は、非表示タブの復帰やメインスレッドの
-   * 停止で表示周期が乱れた可能性があるため、サンプルを捨てて取り直す。
+   * 直近 `REFRESH_SAMPLE_COUNT` 個の間隔の下位 25% を使う。サンプルが 2 つ未満の間は
+   * 60 Hz を仮定する。4 tick 分 (約 66.7 ms) を超える間隔は、非表示タブの復帰やメイン
+   * スレッドの停止で表示周期が乱れた可能性があるため、サンプルを捨てて取り直す。
    */
   private observeTick(timestampMs: number): void {
     const previousMs = this.lastTickMs;
@@ -445,15 +468,7 @@ export class VideoPlayoutSession {
     if (this.tickIntervalsMs.length < 2) {
       return;
     }
-    const sorted = [...this.tickIntervalsMs].sort((left, right) => left - right);
-    const middle = Math.floor(sorted.length / 2);
-    if (sorted.length % 2 === 0) {
-      const left = sorted[middle - 1] ?? DEFAULT_REFRESH_MS;
-      const right = sorted[middle] ?? DEFAULT_REFRESH_MS;
-      this.refreshMs = (left + right) / 2;
-    } else {
-      this.refreshMs = sorted[middle] ?? DEFAULT_REFRESH_MS;
-    }
+    this.refreshMs = estimateRefreshMs(this.tickIntervalsMs);
   }
 
   /**

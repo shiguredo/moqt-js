@@ -8,7 +8,7 @@
  * - フレームを並べ替えない (描く・捨てる順は積んだ順であり、各フレームは 1 回だけ出る)
  * - 描くフレームは目標表示時刻から許容幅以内であり、許容幅より古いフレームは描かない
  * - 再生遅延は 0 以上で上限を超えず、表示時刻は現在の学習結果に従う
- * - 揺らぎの p95 が最大の揺らぎと一致する到着列では、表示間隔が TIMESTAMP の間隔どおりになる
+ * - 揺らぎの p95 が最大の揺らぎと一致する到着列でも、表示間隔が半分にならない
  *
  * 個別の規則 (同じ tick に重なったフレームの扱い、TIMESTAMP の飛び、キューの上限、
  * TIMESTAMP を持たないフレームの到着順の再生) は src/playout/buffer.test.ts の単体テストが固定する。
@@ -228,7 +228,7 @@ test("PlayoutBuffer: 揺らぎの p95 が最大の揺らぎのとき、表示間
           const current = steady[position];
           assert.equal((current?.index ?? 0) - (previous?.index ?? 0), 1);
           const intervalMs = (current?.localMs ?? 0) - (previous?.localMs ?? 0);
-          // 選択の刻みは 1 ms で、許容幅 (frameMs / 4) の分だけ前後し得る
+          // 選択の刻みは 1 ms で、許容幅 (frameMs / 8) の分だけ前後し得る
           assert.isAtLeast(intervalMs, frameMs / 2 + 1 - TOLERANCE_MS);
           assert.isAtMost(intervalMs, (frameMs * 3) / 2 + 1 + TOLERANCE_MS);
         }

@@ -11,6 +11,7 @@
 
 import { test, assert } from "vite-plus/test";
 import {
+  estimateRefreshMs,
   VideoDecodeInputs,
   VideoPlayoutSession,
   type VideoPlayoutOutput,
@@ -371,6 +372,16 @@ function recordAudioPresentation(timeline: PlayoutTimeline, timestampMicros: num
 // VideoDecodeInputs (復号へ渡したフレームの対応表)
 // ============================================================================
 
+test("estimateRefreshMs: コールバックが飛んでも通常の間隔を拾う", () => {
+  // 60 Hz の 16.7 ms と、1 フレーム飛んだ 33.3 ms が交互に並ぶ
+  const alternating = Array.from({ length: 16 }, (_, index) => (index % 2 === 0 ? 16.7 : 33.3));
+  assert.closeTo(estimateRefreshMs(alternating), 16.7, 0.1);
+  // 120 Hz の 8.3 ms
+  assert.closeTo(estimateRefreshMs(Array.from({ length: 16 }, () => 8.3)), 8.3, 0.1);
+  // 空なら 60 Hz
+  assert.closeTo(estimateRefreshMs([]), 1_000 / 60, 0.01);
+});
+
 test("VideoDecodeInputs: TIMESTAMP の種類と位置を覚え、引くと忘れる", () => {
   const inputs = new VideoDecodeInputs({ maxTracked: 8 });
   inputs.remember(1_000, {
@@ -717,7 +728,7 @@ test("handleDecodedFrame: 時間軸の表示の遅れが小さくても、提示
 test("handleDecodedFrame: tick の位相が変わっても推定表示時刻が近い vsync になる", () => {
   // 時間軸の表示の遅れが提示遅延より十分大きい条件では、書き込み tick + R が、表示時刻に
   // 最も近い vsync になる
-  for (const refreshMs of [1_000 / 60, 1_000 / 120]) {
+  for (const refreshMs of [1_000 / 30, 1_000 / 60, 1_000 / 120]) {
     for (const phaseMs of [0, 4, 8.3]) {
       const { timeline, timestampMicros } = makeTimeline(nowMs(), 120);
       const output = makeRecordingOutput(1);

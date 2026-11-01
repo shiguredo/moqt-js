@@ -740,8 +740,8 @@ async function waitForDueMs(targetMs: number): Promise<number> {
  * フレームだけが `videoWriter.write` に渡る。`MediaStreamTrackGenerator` は書き込みの
  * 次の vsync で表示されるため、表示時刻の 1 tick 前に書く。
  *
- * 表示時刻は `performance.now()` の軸で決まるため、書き込みは表示時刻の到来を実時間で
- * 待って確かめる。値そのものは時間軸の式 (表示時刻 - TIMESTAMP = 表示の遅れ) と突き合わせる。
+ * 表示時刻は `performance.now()` の軸で決まるため、書き込みは表示時刻の 1 tick 前になるのを
+ * 実時間で待って確かめる。値そのものは時間軸の式 (表示時刻 - TIMESTAMP = 表示の遅れ) と突き合わせる。
  */
 test("handleVideoDecodedData: 表示時刻の 1 tick 前に書く", async () => {
   const { control, errors } = createAvSyncSubscriber();
@@ -773,8 +773,10 @@ test("handleVideoDecodedData: 表示時刻の 1 tick 前に書く", async () => 
 
     // 表示時刻の 1 tick 前になったら、予約された表示周期の選択が書く
     const refreshMs = 1_000 / 60;
-    await waitForDueMs((presentationMs ?? 0) - refreshMs);
-    assert.isAtLeast(performance.now(), (presentationMs ?? 0) - refreshMs);
+    // 目標の 1 tick 前を少し過ぎるまで待つ。待ちの刻み (5 ms) が目標を超えても
+    // 許容幅 (R / 2) に収まるよう、余裕を残す
+    await waitForDueMs((presentationMs ?? 0) - refreshMs - 3);
+    assert.isAtLeast(performance.now(), (presentationMs ?? 0) - refreshMs - 3);
     runPendingAnimationFrame();
     assert.equal(written.length, 1);
     assert.equal(written[0]?.timestamp, timestampMicros);

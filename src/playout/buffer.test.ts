@@ -255,12 +255,8 @@ test("selectNearest: 遅れが 20 ms 以内なら描き、超えたら捨てる"
   assert.equal(within.draw, 0);
   assert.isTrue(within.drawLate);
 
-  const buffer2 = new PlayoutBuffer<number>(
-    JITTER_BUFFER_MAX_QUEUED_FRAMES,
-    createSharedTimeline(),
-  );
   const timeline2 = createSharedTimeline();
-  observeFrame(timeline2, 0, 0);
+  const buffer2 = new PlayoutBuffer<number>(JITTER_BUFFER_MAX_QUEUED_FRAMES, timeline2);
   buffer2.enqueue(0, timestampOf(0));
   const presentation2Ms = buffer2.presentationTimeMs(timestampOf(0)) ?? 0;
   const beyond = buffer2.selectNearest(presentation2Ms + 20.1, 1);

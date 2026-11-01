@@ -29,7 +29,7 @@
 - `src/playout/videoPlayoutSession.ts` の `VideoPlayoutSession.handleDecodedFrame` は、`drainImmediately` が true (ライブラリの既定) なら積んだ時点で `drain` を呼び、表示時刻を過ぎたフレームをすぐに書く。false (devtools) なら rAF のコールバックで `drain` を呼び、`PlayoutBuffer.select(nowMs)` で表示時刻を過ぎたフレームを出す。どちらの経路も「表示時刻を過ぎた後の最初の tick」であり、表示時刻に最も近い tick ではない
 - `PlayoutBuffer.select` は、表示時刻を過ぎたフレームのうち `MAX_PRESENTATION_LAG_MS` (20 ms) 以内のものを描き、それより古いものを捨てる。20 ms 以内なら次の tick でも遅れて描くため、配信 fps と表示周期が近いときに表示間隔が半分になる組み合わせを作り得る
 - `VideoPlayoutPacing` は `drainImmediately` と `framesPerDrain` だけを持ち、表示先が何 vsync 後に表示するかを表す情報を持たない。この型は `src/index.ts` で公開されており、`createMediaPlayout` の `video.pacing` として利用者が指定できる
-- ライブラリは `src/createMediaSubscriber.ts` の `presentVideoFrame` で `MediaStreamTrackGenerator` に書く。書いたフレームは次の vsync で表示される。フレームの `timestamp` は LOC の壁時計マイクロ秒のままで、表示周期には使われない (下記の実測。Chrome 156 の測定であり仕様の保証ではない)
+- ライブラリは `src/createMediaSubscriber.ts` の `presentVideoFrame` で `MediaStreamTrackGenerator` に書く。書いたフレームは次の vsync で表示される。フレームの `timestamp` は LOC の壁時計マイクロ秒のままで、表示周期には使われない (下記の実測。Chromium 156 の測定であり仕様の保証ではない)
 - devtools は `devtools/src/hooks/useSubscriber.ts` の `drawFrame` で rAF のコールバック内に canvas へ描く。canvas への描画はその vsync のフレームに含まれるため、rAF の位相ずれだけが問題になる
 - `src/playout/timeline.ts` の `PlayoutTimeline.recordPresentation` は `present` を呼んだ時刻を表示実績として記録する。generator は実際の表示が約 1 vsync 後なので、A/V 同期の推定が片側にずれる
 - `src/codec/types.ts` の `AvSyncStats.skewMs` と `docs/HIGH_LEVEL_API.md` は、映像の表示時刻を「write した時刻」と定義している。この定義は映像の提示方式を変えると実態と合わなくなる
@@ -44,13 +44,13 @@ Chromium 156.0.8078.4 (Playwright 1.64.1 の `channel: "chromium"`、新しい h
 - 20 枚を約 6 ms で書き込むと (各 timestamp は 33.3 ms 間隔)、`requestVideoFrameCallback` は 1 回だけ呼ばれ、`presentedFrames` は 20 になる。中間のフレームは表示されない
 - timestamp を 100 ms 過去にしても、表示周期は書き込みの周期に従う
 
-この結果から、少なくとも Chrome 156 の新しい headless では、`MediaStreamTrackGenerator` は書き込みの次の vsync で最新フレームを表示し、`VideoFrame.timestamp` は表示周期を決めない。この挙動はブラウザの仕様として保証されたものではないため、実装では測定条件をコメントと docs に残す。この実測は一時的な probe で行ったものであり、同じ条件を完了条件の実ブラウザ試験で固定する。
+この結果から、少なくとも Chromium 156 の新しい headless では、`MediaStreamTrackGenerator` は書き込みの次の vsync で最新フレームを表示し、`VideoFrame.timestamp` は表示周期を決めない。この挙動はブラウザの仕様として保証されたものではないため、実装では測定条件をコメントと docs に残す。この実測は一時的な probe で行ったものであり、同じ条件を完了条件の実ブラウザ試験で固定する。
 
 ### 実リレー CI の計測
 
 実リレーの 60 秒の長時間試験 (`tests/e2e/relay/devtools-both-audio.spec.ts` の「長時間の配信で、送信の遅れと受信の遅れが悪化しない」、640x360 / VP8 / 30 fps、moqt-devtools の購読) で、`window.moqtDevTools.getSubscribers()[0].playoutTiming` を読む計測を別途行った。
 
-- `render` 停止は 8 回 / 60 秒の回と、25 回 / 60 秒の回があった
+- `render` 停止は 60 秒あたり 8 回の回と 25 回の回があった
 - 停止の表示間隔は平均 50.4 ms、最大 51.2 ms である一方、同時点の media step は 33.1〜34.5 ms だった
 - 表示間隔の p50 は 33.3 ms、p95 の最大は 50.7 ms
 - メインスレッドの停止は最大 22〜23 ms で、長いタスクは無かった
@@ -112,7 +112,7 @@ Chromium 156.0.8078.4 (Playwright 1.64.1 の `channel: "chromium"`、新しい h
 - `PlayoutBuffer` の新しい選択 API を単体テストと PBT で固定する。描くフレームの表示時刻と目標表示時刻の差が許容幅以内であること、許容幅を超えたフレームを描かないこと、各フレームを 2 回出さないことを検証する。`MAX_PRESENTATION_LAG_MS` を削除または意味を変える場合は、関連する `buffer.test.ts` / `buffer.prop.ts` / `videoPlayoutSession.test.ts` を更新する
 - 既存テストを新しい契約に合わせて更新する。少なくとも `src/playout/videoPlayoutSession.test.ts` の「1 つの表示周期ですべて出す」と「表示時刻を過ぎたフレームを出す」、`src/createMediaSubscriber.playout.test.ts` の「表示時刻を過ぎたフレームだけを書く」、`src/playout/buffer.test.ts`、`src/playout/buffer.prop.ts`、`src/playout/timeline.test.ts` (`MAX_PRESENTATION_LAG_MS` の import と A/V 同期の予算)、`src/playout/mediaPlayout.test.ts` (`VideoPlayoutOutput` の必須項目)、`tests/e2e/playoutBrowserHarness.ts`、`tests/e2e/media-playout-*.spec.ts` の `pacing` 利用、devtools の `useSubscriber` まわりのテストを更新する
 - 実ブラウザ (Playwright、Chromium、モックなし) の試験を追加する
-  - `MediaStreamTrackGenerator` + `<video>` + `createMediaPlayout` に合成した壁時計 TIMESTAMP のフレームを 30 fps で流す。`requestAnimationFrame` をラップして tick の時刻 W と表示周期 R を記録し、`requestVideoFrameCallback` のコールバック時刻と W + R (generator の推定表示時刻 D) の差の p95 が 3 ms 以下 (rAF と rVFC の軸差を含む) で、平均の偏りが 2 ms 以下であること
+  - `MediaStreamTrackGenerator` + `<video>` + `createMediaPlayout` に合成した壁時計 TIMESTAMP のフレームを 30 fps で流す。`requestAnimationFrame` をラップして tick の時刻 W と表示周期 R を記録し、`requestVideoFrameCallback` のコールバック時刻と W + R (generator の推定表示時刻 D) の差の p95 が 3 ms 以下 (rAF と rVFC の軸差を含む) で、平均の偏りが 3 ms 以下であること
   - canvas の出し先で `present` の呼び出し時刻 (= 書き込み tick W) を記録し、W が表示時刻に最も近い vsync であること、表示間隔が累積量子化の参照列と一致することを確認する。計測は `present` をラップするか、テスト用の出力を注入して行う
 - 実リレー CI (secret がある環境) の長時間試験に、映像の `playoutTiming` の読み出しと記録を追加する。secret が無い環境では従来どおり skip する。映像の遅延と停止は判定に使わず、記録のみとする (判定は単体テストと実ブラウザ試験で行う)
 - `AvSyncStats` の回帰がないこと。既存の実リレー A/V 同期試験 (`tests/e2e/relay/audio-timestamp.spec.ts` など) が通り、`skewMs` が既存の許容内であること。音声の欠落、鳴り始めの遅れ、`missedFrames` / `gapMs` に回帰がないこと
