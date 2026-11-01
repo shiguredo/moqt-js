@@ -132,7 +132,9 @@ export interface MediaStats {
 // 受信側の音声と映像の同期の推定値
 export interface AvSyncStats {
   // 同期ずれの推定値 (ms)。映像の表示が音声より遅れていれば正。
-  // 音声は出力時計へ換算した予約時刻、映像は write した時刻から求める。
+  // 音声は出力時計へ換算した予約時刻、映像は提示した vsync の推定表示時刻から求める。
+  // MediaStreamTrackGenerator は書き込みの次の vsync で表示されるため、write した時刻
+  // ではなく、書き込み tick + 提示遅延を表示時刻として使う (Chromium 156 の実測)。
   // 有効な getOutputTimestamp が無い場合は currentTime による換算で代用する。
   // 下流の audio 要素や物理的なスピーカーの出力、画面の発光は実測していない。
   // どちらかの実績が 1 秒より古いときは null。基準を共有できないと保持された側は到着

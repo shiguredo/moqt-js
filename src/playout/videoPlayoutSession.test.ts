@@ -11,6 +11,7 @@
 
 import { test, assert } from "vite-plus/test";
 import {
+  estimateRefreshMs,
   VideoDecodeInputs,
   VideoPlayoutSession,
   type VideoPlayoutOutput,
@@ -35,10 +36,10 @@ function nowMs(): number {
 
 /** 表示の周期の予約を記録する入れ物 (node 環境に requestAnimationFrame が無いため注入する) */
 interface RecordedFrameScheduler {
-  readonly requestFrame: (callback: () => void) => number;
+  readonly requestFrame: (callback: (timestampMs: number) => void) => number;
   readonly cancelFrame: (handle: number) => void;
-  /** 予約されたコールバックを 1 つ実行する (予約が無ければ何もしない) */
-  runNext(): void;
+  /** 予約されたコールバックを 1 つ、指定した vsync の時刻で実行する */
+  runNext(timestampMs: number): void;
   /** 予約した回数 */
   readonly requestedCount: number;
   /** 取り消された予約の番号 */
@@ -49,7 +50,7 @@ interface RecordedFrameScheduler {
 
 /** 表示の周期の予約を記録する入れ物を作る */
 function makeFrameScheduler(): RecordedFrameScheduler {
-  const callbacks = new Map<number, () => void>();
+  const callbacks = new Map<number, (timestampMs: number) => void>();
   const cancelled: number[] = [];
   let nextHandle = 1;
   let requestedCount = 0;
@@ -64,14 +65,14 @@ function makeFrameScheduler(): RecordedFrameScheduler {
       cancelled.push(handle);
       callbacks.delete(handle);
     },
-    runNext: () => {
+    runNext: (timestampMs) => {
       const first = callbacks.entries().next();
       if (first.done === true) {
         return;
       }
       const [handle, callback] = first.value;
       callbacks.delete(handle);
-      callback();
+      callback(timestampMs);
     },
     get requestedCount() {
       return requestedCount;
@@ -125,14 +126,19 @@ interface RecordedOutput {
   readonly presented: RecordedPresent[];
 }
 
-/** 表示の出し先を作る */
-function makeRecordingOutput(): RecordedOutput {
+/**
+ * 表示の出し先を作る
+ *
+ * @param presentationLatencyTicks - 表示先の提示遅延 (表示周期の tick 数)。既定は 0 (canvas)
+ */
+function makeRecordingOutput(presentationLatencyTicks = 0): RecordedOutput {
   let available = true;
   let presented = true;
   const requested: RecordedPresent[] = [];
   const presentedFrames: RecordedPresent[] = [];
   return {
     output: {
+      presentationLatencyTicks,
       isAvailable: () => available,
       present: (frame, presentationMs) => {
         const record = { timestamp: frame.timestamp, presentationMs };
@@ -227,19 +233,15 @@ function makeSession(options: {
   output: RecordedOutput;
   timing?: VideoPlayoutTiming;
   maxQueuedFrames?: number;
-  drainImmediately: boolean;
-  framesPerDrain: number;
+  now?: () => number;
 }): { session: VideoPlayoutSession; scheduler: RecordedFrameScheduler } {
   const scheduler = makeFrameScheduler();
   const session = new VideoPlayoutSession({
     timeline: options.timeline,
     output: options.output.output,
-    pacing: {
-      drainImmediately: options.drainImmediately,
-      framesPerDrain: options.framesPerDrain,
-    },
     ...(options.timing === undefined ? {} : { timing: options.timing }),
     ...(options.maxQueuedFrames === undefined ? {} : { maxQueuedFrames: options.maxQueuedFrames }),
+    ...(options.now === undefined ? {} : { now: options.now }),
     requestFrame: scheduler.requestFrame,
     cancelFrame: scheduler.cancelFrame,
   });
@@ -274,17 +276,15 @@ interface DefaultSessionOptions {
   readonly timing?: VideoPlayoutTiming;
   /** 表示待ちの上限 (省略すると時間軸の既定値) */
   readonly maxQueuedFrames?: number;
-  /** 表示の周期で、積んだ時点で出すか (既定は true = ライブラリの進め方) */
-  readonly drainImmediately?: boolean;
-  /** 1 つの表示周期に出す枚数 (既定はすべて) */
-  readonly framesPerDrain?: number;
+  /** 現在時刻 (省略すると実時間) */
+  readonly now?: () => number;
 }
 
 /**
  * 既定の組み立てを作る
  *
- * 空の時間軸と記録用の出し先を使い、表示の周期は「積んだ時点で表示時刻を過ぎた
- * フレームをすべて出す」(ライブラリの進め方) にする。テストは変えたい項目だけを渡す。
+ * 空の時間軸と記録用の出し先を使い、表示は rAF の予約を注入して進める。テストは
+ * 変えたい項目だけを渡す。
  *
  * @param options - 変えたい項目
  * @returns 時間軸・出し先・セッション・表示周期の記録
@@ -300,10 +300,9 @@ function makeDefaultSession(options: DefaultSessionOptions = {}): {
   const { session, scheduler } = makeSession({
     timeline,
     output,
-    drainImmediately: options.drainImmediately ?? true,
-    framesPerDrain: options.framesPerDrain ?? Number.POSITIVE_INFINITY,
     ...(options.timing === undefined ? {} : { timing: options.timing }),
     ...(options.maxQueuedFrames === undefined ? {} : { maxQueuedFrames: options.maxQueuedFrames }),
+    ...(options.now === undefined ? {} : { now: options.now }),
   });
   return { timeline, output, session, scheduler };
 }
@@ -372,6 +371,16 @@ function recordAudioPresentation(timeline: PlayoutTimeline, timestampMicros: num
 // ============================================================================
 // VideoDecodeInputs (復号へ渡したフレームの対応表)
 // ============================================================================
+
+test("estimateRefreshMs: コールバックが飛んでも通常の間隔を拾う", () => {
+  // 60 Hz の 16.7 ms と、1 フレーム飛んだ 33.3 ms が交互に並ぶ
+  const alternating = Array.from({ length: 16 }, (_, index) => (index % 2 === 0 ? 16.7 : 33.3));
+  assert.closeTo(estimateRefreshMs(alternating), 16.7, 0.1);
+  // 120 Hz の 8.3 ms
+  assert.closeTo(estimateRefreshMs(Array.from({ length: 16 }, () => 8.3)), 8.3, 0.1);
+  // 空なら 60 Hz
+  assert.closeTo(estimateRefreshMs([]), 1_000 / 60, 0.01);
+});
 
 test("VideoDecodeInputs: TIMESTAMP の種類と位置を覚え、引くと忘れる", () => {
   const inputs = new VideoDecodeInputs({ maxTracked: 8 });
@@ -444,6 +453,13 @@ test("VideoDecodeInputs: clear() ですべて忘れる", () => {
 // handleDecodedFrame (復号したフレームの表示)
 // ============================================================================
 
+/** 表示時刻 (`performance.now()` の軸) を取り出す */
+function presentationOf(timeline: PlayoutTimeline, timestampMicros: number): number {
+  const presentationMs = timeline.presentationPerformanceMs("video", timestampMicros);
+  assert.isNotNull(presentationMs, "表示時刻が決まること");
+  return presentationMs ?? 0;
+}
+
 test("handleDecodedFrame: 出し先が無いときは表示せずに閉じ、時間軸へも記録しない", () => {
   const output = makeRecordingOutput();
   output.setAvailable(false);
@@ -459,63 +475,64 @@ test("handleDecodedFrame: 出し先が無いときは表示せずに閉じ、時
   assert.isFalse(scheduler.pending);
 });
 
-test("handleDecodedFrame: 壁時計の TIMESTAMP を時間軸へ記録し、表示時刻を過ぎたフレームを出す", () => {
-  // 1 秒前に観測した TIMESTAMP は、表示時刻 (観測時刻 + 表示の遅れ) を既に過ぎている
-  const { timeline, timestampMicros } = makeTimeline(nowMs() - 1_000);
+test("handleDecodedFrame: 壁時計の TIMESTAMP を時間軸へ記録し、表示周期で表示する", () => {
+  // targetLatency を下限にして、表示時刻が未来に残るフレームを積む
+  const { timeline, timestampMicros } = makeTimeline(nowMs(), 120);
   const { output, session, scheduler } = makeDefaultSession({ timeline });
 
   const { recorded, result } = handleWallClockFrame(session, timestampMicros);
 
   assert.equal(result.status, "queued");
   assert.equal(result.status === "queued" ? result.wallClockTimestamp : null, timestampMicros);
-  // 表示時刻を過ぎたフレームは、その場で出し先へ渡る
+  // 積んだ時点では出さず、表示周期の予約だけを残す
+  assert.equal(output.requested.length, 0);
+  assert.isTrue(scheduler.pending, "表示周期へ予約していない");
+  assert.equal(session.playout.size, 1);
+
+  const presentationMs = presentationOf(timeline, timestampMicros);
+  scheduler.runNext(presentationMs);
+
   assert.deepEqual(
     output.presented.map((present) => present.timestamp),
     [timestampMicros],
   );
-  assert.equal(
-    output.presented[0]?.presentationMs,
-    timeline.presentationPerformanceMs("video", timestampMicros),
-  );
-  // キューが空になったため、表示周期の予約は残らない
-  assert.isFalse(scheduler.pending);
-  assert.equal(scheduler.requestedCount, 0);
+  assert.equal(output.presented[0]?.presentationMs, presentationMs);
   assert.equal(session.playout.size, 0);
+  // 表示待ちは空になったが、最後の表示から間もないため予約は続ける
+  assert.isTrue(scheduler.pending);
+  session.clear();
+  assert.isFalse(scheduler.pending);
   // 出し先へ所有権が移る (この中では閉じない)
   assert.isFalse(recorded.isClosed());
 });
 
-test("handleDecodedFrame: 表示時刻を過ぎていないフレームはキューに残し、表示周期へ予約する", async () => {
+test("handleDecodedFrame: 目標表示時刻の前の tick では出さず、近い tick で出す", () => {
   // targetLatency を下限にすると、観測した直後のフレームの表示時刻も未来に残る
   const targetLatencyMs = 120;
   const { timeline, timestampMicros } = makeTimeline(nowMs(), targetLatencyMs);
   const { output, session, scheduler } = makeDefaultSession({ timeline });
 
   handleWallClockFrame(session, timestampMicros);
+  const presentationMs = presentationOf(timeline, timestampMicros);
 
-  const presentationMs = timeline.presentationPerformanceMs("video", timestampMicros);
-  assert.isNotNull(presentationMs);
-  assert.isAbove(presentationMs ?? 0, nowMs(), "表示時刻を過ぎたフレームを積んだ");
+  // 表示時刻より十分前の tick では、目標表示時刻に近いフレームが無いため描かない
+  scheduler.runNext(presentationMs - 100);
   assert.equal(output.requested.length, 0);
   assert.equal(session.playout.size, 1);
-  assert.isTrue(scheduler.pending, "表示周期へ予約していない");
+  assert.isTrue(scheduler.pending, "続きの表示周期へ予約していない");
 
-  // 表示時刻が来たら、予約した表示周期がそのフレームを出す
-  while (nowMs() < (presentationMs ?? 0)) {
-    await new Promise((resolve) => {
-      setTimeout(resolve, 5);
-    });
-  }
-  scheduler.runNext();
+  // 表示時刻に近い tick では描く
+  scheduler.runNext(presentationMs);
   assert.deepEqual(
     output.presented.map((present) => present.timestamp),
     [timestampMicros],
   );
+  assert.equal(output.presented[0]?.presentationMs, presentationMs);
 });
 
 test("handleDecodedFrame: メディア時刻と時間軸を使わないときは、届いた順に表示する", () => {
   const { timeline, timestampMicros } = makeTimeline(nowMs() - 1_000);
-  const { output, session } = makeDefaultSession({ timeline });
+  const { output, session, scheduler } = makeDefaultSession({ timeline });
 
   // メディア時刻 (Timescale あり) は映像の表示時刻と対応しない
   const mediaTime = makeVideoFrame(timestampMicros);
@@ -525,10 +542,6 @@ test("handleDecodedFrame: メディア時刻と時間軸を使わないときは
     useTimeline: true,
   });
   assert.equal(mediaTimeResult.status === "queued" ? mediaTimeResult.wallClockTimestamp : 1, null);
-  assert.deepEqual(
-    output.presented.map((present) => present.presentationMs),
-    [null],
-  );
 
   // 時間軸を使わない (jitter buffer が無効) ときも、壁時計の TIMESTAMP は使わない
   const disabled = makeVideoFrame(timestampMicros + 1_000);
@@ -538,6 +551,14 @@ test("handleDecodedFrame: メディア時刻と時間軸を使わないときは
     useTimeline: false,
   });
   assert.equal(disabledResult.status === "queued" ? disabledResult.wallClockTimestamp : 1, null);
+
+  // 表示周期ごとに 1 枚ずつ、届いた順に描く
+  scheduler.runNext(0);
+  assert.deepEqual(
+    output.presented.map((present) => present.presentationMs),
+    [null],
+  );
+  scheduler.runNext(16.667);
   assert.deepEqual(
     output.presented.map((present) => present.presentationMs),
     [null, null],
@@ -545,10 +566,13 @@ test("handleDecodedFrame: メディア時刻と時間軸を使わないときは
 });
 
 test("handleDecodedFrame: 表示時刻を決めたフレームだけ、表示の実績を時間軸へ記録する", () => {
-  const { timeline, timestampMicros } = makeTimeline(nowMs() - 1_000);
-  const { session } = makeDefaultSession({ timeline });
+  // 表示時刻が直近になるように観測し、表示周期の tick で描く
+  const observedMs = nowMs() - 10;
+  const { timeline, timestampMicros } = makeTimeline(observedMs);
+  const { session, scheduler } = makeDefaultSession({ timeline });
 
   handleWallClockFrame(session, timestampMicros);
+  scheduler.runNext(presentationOf(timeline, timestampMicros));
   // 音声の実績も同じ TIMESTAMP で記録する。両方の実績が揃ったときだけ同期ずれの推定が出る
   // (`PlayoutTimeline.skewMs` の JSDoc) ため、推定が出ることで映像の実績が記録されたと分かる
   recordAudioPresentation(timeline, timestampMicros);
@@ -560,13 +584,15 @@ test("handleDecodedFrame: 表示時刻を決めたフレームだけ、表示の
 });
 
 test("handleDecodedFrame: 実際に表示できなかったフレームの実績は記録しない", () => {
-  const { timeline, timestampMicros } = makeTimeline(nowMs() - 1_000);
+  const observedMs = nowMs() - 10;
+  const { timeline, timestampMicros } = makeTimeline(observedMs);
   const output = makeRecordingOutput();
   // canvas が無い (出し先が出せない) 状態
   output.setPresented(false);
-  const { session } = makeDefaultSession({ timeline, output });
+  const { session, scheduler } = makeDefaultSession({ timeline, output });
 
   handleWallClockFrame(session, timestampMicros);
+  scheduler.runNext(presentationOf(timeline, timestampMicros));
   assert.equal(output.requested.length, 1);
   assert.equal(output.presented.length, 0);
   // 音声の実績だけを記録しても、映像の実績が無いため同期ずれの推定は出ない
@@ -579,8 +605,6 @@ test("handleDecodedFrame: 表示待ちの上限を超えたフレームは計器
   const { session } = makeDefaultSession({
     timing: timing.timing,
     maxQueuedFrames: 1,
-    // 積んだ時点では出さない (あふれを作る)
-    drainImmediately: false,
   });
 
   const first = handleArrivalOrderFrame(session, 1_000);
@@ -592,11 +616,10 @@ test("handleDecodedFrame: 表示待ちの上限を超えたフレームは計器
   assert.isFalse(second.isClosed());
 });
 
-test("handleDecodedFrame: 表示周期に 1 枚だけ出す (devtools の進め方)", () => {
-  const { output, session, scheduler } = makeDefaultSession({
-    drainImmediately: false,
-    framesPerDrain: 1,
-  });
+test("handleDecodedFrame: 表示周期に 1 枚だけ出す", () => {
+  // アイドル判定も注入した時計で進める (実時間に依存させない)
+  let clockMs = 1_000;
+  const { output, session, scheduler } = makeDefaultSession({ now: () => clockMs });
 
   handleArrivalOrderFrame(session, 1_000);
   handleArrivalOrderFrame(session, 2_000);
@@ -606,46 +629,31 @@ test("handleDecodedFrame: 表示周期に 1 枚だけ出す (devtools の進め�
   assert.isTrue(scheduler.pending);
   assert.equal(scheduler.requestedCount, 1, "表示周期の予約を積み増した");
 
-  scheduler.runNext();
+  scheduler.runNext(clockMs);
   assert.deepEqual(
     output.presented.map((present) => present.timestamp),
     [1_000],
   );
   // まだ表示待ちが残っているため、次の表示周期を予約する
   assert.isTrue(scheduler.pending);
-  scheduler.runNext();
+  clockMs = 1_016.667;
+  scheduler.runNext(clockMs);
   assert.deepEqual(
     output.presented.map((present) => present.timestamp),
     [1_000, 2_000],
   );
+  // 表示待ちは空になったが、最後の表示から間もないため表示周期の予約は続ける
+  assert.isTrue(scheduler.pending);
+  session.clear();
   assert.isFalse(scheduler.pending);
 });
 
-test("handleDecodedFrame: 1 つの表示周期ですべて出す (ライブラリの進め方)", () => {
-  const { output, session, scheduler } = makeDefaultSession();
-
-  handleArrivalOrderFrame(session, 1_000);
-  handleArrivalOrderFrame(session, 2_000);
-
-  // 表示時刻を決められないフレームは、積んだ時点で順に出す
-  assert.deepEqual(
-    output.presented.map((present) => present.timestamp),
-    [1_000, 2_000],
-  );
-  assert.equal(session.playout.size, 0);
-  assert.isFalse(scheduler.pending);
-});
-
-test("handleDecodedFrame: 間に合わなかったフレームは計器へ記録して閉じる", () => {
-  // 1 秒前に観測した TIMESTAMP を持つ 3 枚を積む。古い 2 枚は表示時刻から 20 ms を超えて
-  // 遅れているため捨てられ、最新の 1 枚だけが描かれる
+test("handleDecodedFrame: 目標表示時刻から許容幅を超えて外れたフレームは計器へ記録して閉じる", () => {
   const { timeline, timestampMicros } = makeTimeline(nowMs() - 1_000);
   const timing = makeRecordingTiming();
   const { output, session, scheduler } = makeDefaultSession({
     timeline,
     timing: timing.timing,
-    drainImmediately: false,
-    framesPerDrain: 1,
   });
 
   const frames = handleWallClockFrames(session, [
@@ -655,24 +663,25 @@ test("handleDecodedFrame: 間に合わなかったフレームは計器へ記録
   ]);
   assert.equal(session.playout.size, 3);
 
-  scheduler.runNext();
+  // 3 枚目の表示時刻を目標にすると、1 枚目と 2 枚目は許容幅 (表示周期の半分) より古い
+  const thirdPresentationMs = presentationOf(timeline, timestampMicros + 66_000);
+  scheduler.runNext(thirdPresentationMs);
   assert.deepEqual(
     timing.lateDrops.map((late) => late.timestamp),
     [timestampMicros, timestampMicros + 33_000],
   );
   for (const late of timing.lateDrops) {
-    assert.isNotNull(late.presentationMs, "間に合わなかったフレームの表示時刻を記録していない");
+    assert.isNotNull(late.presentationMs, "捨てたフレームの表示時刻を記録していない");
   }
-  assert.isTrue(frames[0]?.isClosed(), "間に合わなかったフレームを閉じていない");
-  assert.isTrue(frames[1]?.isClosed(), "間に合わなかったフレームを閉じていない");
+  assert.isTrue(frames[0]?.isClosed(), "捨てたフレームを閉じていない");
+  assert.isTrue(frames[1]?.isClosed(), "捨てたフレームを閉じていない");
   assert.deepEqual(
     output.presented.map((present) => present.timestamp),
     [timestampMicros + 66_000],
   );
 });
 
-test("計器の recordLateDrop が throw しても、遅れたフレームを閉じて表示を続ける", () => {
-  // 表示時刻を過ぎたフレームの記録が失敗しても、フレームを閉じて表示周期を止めない
+test("計器の recordLateDrop が throw しても、捨てたフレームを閉じて表示を続ける", () => {
   const { timeline, timestampMicros } = makeTimeline(nowMs() - 1_000);
   const throwing: VideoPlayoutTiming = {
     recordQueueDrop: () => undefined,
@@ -683,8 +692,6 @@ test("計器の recordLateDrop が throw しても、遅れたフレームを閉
   const { output, session, scheduler } = makeDefaultSession({
     timeline,
     timing: throwing,
-    drainImmediately: false,
-    framesPerDrain: 1,
   });
   const frames = handleWallClockFrames(session, [
     timestampMicros,
@@ -692,19 +699,145 @@ test("計器の recordLateDrop が throw しても、遅れたフレームを閉
     timestampMicros + 66_000,
   ]);
 
-  scheduler.runNext();
+  scheduler.runNext(presentationOf(timeline, timestampMicros + 66_000));
 
-  assert.isTrue(frames[0]?.isClosed(), "間に合わなかったフレームを閉じていない");
-  assert.isTrue(frames[1]?.isClosed(), "間に合わなかったフレームを閉じていない");
+  assert.isTrue(frames[0]?.isClosed(), "捨てたフレームを閉じていない");
+  assert.isTrue(frames[1]?.isClosed(), "捨てたフレームを閉じていない");
   assert.deepEqual(
     output.presented.map((present) => present.timestamp),
     [timestampMicros + 66_000],
   );
 });
 
+test("handleDecodedFrame: 時間軸の表示の遅れが小さくても、提示遅延の分だけ先に書く", () => {
+  // targetLatency の無い購読では、時間軸の映像の表示の遅れは 0 に近い。generator は書き込みの
+  // 次の vsync で表示されるため、遅れに提示遅延 (1 tick) の下限が無いと、到着位相によっては
+  // 書き込みの tick に間に合わず全フレームを捨ててしまう
+  const { timeline, timestampMicros } = makeTimeline(nowMs());
+  const output = makeRecordingOutput(1);
+  const { session, scheduler } = makeDefaultSession({ timeline, output });
+  handleWallClockFrame(session, timestampMicros);
+
+  // 到着から 10 ms 後の tick では、下限が無ければ遅れが 1 tick + 10 ms になり捨てられる
+  scheduler.runNext(nowMs() + 10);
+
+  assert.deepEqual(
+    output.presented.map((present) => present.timestamp),
+    [timestampMicros],
+    "提示遅延の下限が無いとフレームを捨てている",
+  );
+});
+
+test("handleDecodedFrame: tick の位相が変わっても推定表示時刻が近い vsync になる", () => {
+  // 時間軸の表示の遅れが提示遅延より十分大きい条件では、書き込み tick + R が、表示時刻に
+  // 最も近い vsync になる
+  for (const refreshMs of [1_000 / 30, 1_000 / 60, 1_000 / 120]) {
+    for (const phaseMs of [0, 4, 8.3]) {
+      const { timeline, timestampMicros } = makeTimeline(nowMs(), 120);
+      const output = makeRecordingOutput(1);
+      const { session, scheduler } = makeDefaultSession({ timeline, output });
+      handleWallClockFrame(session, timestampMicros);
+      const presentationMs = presentationOf(timeline, timestampMicros);
+
+      let presentedTickMs: number | null = null;
+      const gridOriginMs = nowMs() + phaseMs;
+      for (let index = 0; index < 40; index++) {
+        const tickMs = gridOriginMs + index * refreshMs;
+        const before = output.presented.length;
+        scheduler.runNext(tickMs);
+        if (output.presented.length > before) {
+          presentedTickMs = tickMs;
+          break;
+        }
+      }
+      assert.isNotNull(presentedTickMs, `${refreshMs} ms の tick で表示されなかった`);
+      const estimatedDisplayMs = (presentedTickMs ?? 0) + refreshMs;
+      // 推定表示時刻が、表示時刻に最も近い vsync であること
+      const nearestMs =
+        gridOriginMs + Math.round((presentationMs - gridOriginMs) / refreshMs) * refreshMs;
+      assert.isAtMost(
+        Math.abs(estimatedDisplayMs - nearestMs),
+        1,
+        `${refreshMs} ms / 位相 ${phaseMs} ms で近い vsync になっていない`,
+      );
+      assert.isAtMost(Math.abs(estimatedDisplayMs - presentationMs), refreshMs / 2 + 1);
+    }
+  }
+});
+
+test("handleDecodedFrame: 推定表示時刻を同期の実績として記録する", () => {
+  // 観測から 10 ms 前のフレームを、表示時刻の 1 tick 前の tick で書く。実績は write の時刻では
+  // なく write の次の vsync でなければ、音声の実績と揃わない
+  const { timeline, timestampMicros } = makeTimeline(nowMs() - 10);
+  const output = makeRecordingOutput(1);
+  const { session, scheduler } = makeDefaultSession({ timeline, output });
+  handleWallClockFrame(session, timestampMicros);
+  const presentationMs = presentationOf(timeline, timestampMicros);
+  scheduler.runNext(presentationMs - 1_000 / 60);
+
+  // 音声も同じ表示時刻で記録する
+  timeline.recordPresentation(
+    "audio",
+    timestampMicros,
+    BigInt(Math.round((TIME_ORIGIN_MS + presentationMs) * 1_000)),
+  );
+  const skewMs = timeline.skewMs();
+  assert.isNotNull(skewMs, "映像の実績が記録されていない");
+  assert.isBelow(Math.abs(skewMs ?? Number.NaN), 1, "write の時刻を表示の実績にしている");
+});
+
+test("handleDecodedFrame: 提示遅延の tick 数が不正なら例外にする", () => {
+  const timeline = makeEmptyTimeline();
+  const options = {
+    timeline,
+    output: {
+      presentationLatencyTicks: -1,
+      isAvailable: () => true,
+      present: () => true,
+    },
+  };
+  assert.throws(() => new VideoPlayoutSession(options), "presentationLatencyTicks");
+  assert.throws(
+    () =>
+      new VideoPlayoutSession({
+        ...options,
+        output: { ...options.output, presentationLatencyTicks: 1.5 },
+      }),
+    "presentationLatencyTicks",
+  );
+  assert.throws(
+    () =>
+      new VideoPlayoutSession({
+        ...options,
+        output: { ...options.output, presentationLatencyTicks: 5 },
+      }),
+    "presentationLatencyTicks",
+  );
+  // 上限の 4 は受け付ける
+  assert.doesNotThrow(
+    () =>
+      new VideoPlayoutSession({
+        ...options,
+        output: { ...options.output, presentationLatencyTicks: 4 },
+      }),
+  );
+});
+
+test("handleDecodedFrame: 最後の表示から 250 ms たつと表示周期の予約を止める", () => {
+  let clockMs = 1_000;
+  const { session, scheduler } = makeDefaultSession({ now: () => clockMs });
+  handleArrivalOrderFrame(session, 1_000);
+  scheduler.runNext(clockMs);
+  assert.isTrue(scheduler.pending, "表示直後は表示周期の予約を続けること");
+
+  clockMs += 300;
+  scheduler.runNext(clockMs);
+  assert.isFalse(scheduler.pending, "アイドルが続いても予約を止めていない");
+});
+
 test("clear(): 予約を取り消し、表示待ちを捨てる", () => {
   // 復号へ渡した入力の対応表は呼び出し側 (MediaPlayout) が持つため、ここでは消さない
-  const { session, scheduler } = makeDefaultSession({ drainImmediately: false });
+  const { session, scheduler } = makeDefaultSession();
 
   const recorded = handleArrivalOrderFrame(session, 1_000);
   assert.equal(session.playout.size, 1);
@@ -718,7 +851,7 @@ test("clear(): 予約を取り消し、表示待ちを捨てる", () => {
   assert.isFalse(scheduler.pending);
 });
 
-test("計器が throw しても、捨てたフレームを閉じて表示周期を続ける", () => {
+test("計器が throw しても、あふれたフレームを閉じて表示周期を続ける", () => {
   // 計器は throw しない契約だが、実装が失敗してもフレームを閉じ損ねないことを固定する
   const throwing: VideoPlayoutTiming = {
     recordQueueDrop: () => {
@@ -731,7 +864,6 @@ test("計器が throw しても、捨てたフレームを閉じて表示周期�
   const { session } = makeDefaultSession({
     timing: throwing,
     maxQueuedFrames: 1,
-    drainImmediately: false,
   });
 
   // 1 枚目で上限に達し、2 枚目の到着で 1 枚目があふれる
@@ -743,7 +875,7 @@ test("計器が throw しても、捨てたフレームを閉じて表示周期�
 });
 
 test("clear(): 表示している間に出し先が無くなったら、表示待ちを捨てる", () => {
-  const { output, session, scheduler } = makeDefaultSession({ drainImmediately: false });
+  const { output, session, scheduler } = makeDefaultSession();
 
   const recorded = handleArrivalOrderFrame(session, 1_000);
   assert.equal(session.playout.size, 1);
@@ -751,7 +883,7 @@ test("clear(): 表示している間に出し先が無くなったら、表示�
   // 購読が終わった (出し先が無くなった) 後に表示周期が来た場合、出せないフレームを
   // 残さない
   output.setAvailable(false);
-  scheduler.runNext();
+  scheduler.runNext(0);
   assert.equal(session.playout.size, 0);
   assert.isTrue(recorded.isClosed(), "出せないフレームを閉じていない");
   assert.isFalse(scheduler.pending);
@@ -760,21 +892,90 @@ test("clear(): 表示している間に出し先が無くなったら、表示�
 test("handleDecodedFrame: 基準を取り直した後に残ったフレームは表示時刻を決めずに出す", () => {
   // targetLatency を下限にして、表示時刻が未来に残るフレームを積む
   const { timeline, timestampMicros } = makeTimeline(nowMs(), 120);
-  const { output, session, scheduler } = makeDefaultSession({
-    timeline,
-    drainImmediately: false,
-    framesPerDrain: 1,
-  });
+  const { output, session, scheduler } = makeDefaultSession({ timeline });
 
   handleWallClockFrame(session, timestampMicros);
   // 基準を取り直す (世代が進む)。積んだときの世代と違うフレームは、新しい基準では表示時刻を
   // 決められないため、届いた順に出す
   timeline.reset();
 
-  scheduler.runNext();
+  scheduler.runNext(nowMs());
   assert.deepEqual(
     output.presented.map((present) => present.timestamp),
     [timestampMicros],
   );
   assert.isNull(output.presented[0]?.presentationMs ?? null);
+});
+
+test("handleDecodedFrame: 提示遅延が 1 tick の表示先には 1 tick 前に書く", () => {
+  // generator は書き込みの次の vsync で表示される。表示時刻 P のフレームは P - R の tick で
+  // 書き込むと、推定表示時刻 P に表示される
+  const { timeline, timestampMicros } = makeTimeline(nowMs(), 120);
+  const output = makeRecordingOutput(1);
+  const { session, scheduler } = makeDefaultSession({ timeline, output });
+  handleWallClockFrame(session, timestampMicros);
+  const presentationMs = presentationOf(timeline, timestampMicros);
+  const refreshMs = 1_000 / 60;
+
+  // 1 tick 前の書き込み tick で書く
+  scheduler.runNext(presentationMs - refreshMs);
+  assert.deepEqual(
+    output.presented.map((present) => present.timestamp),
+    [timestampMicros],
+  );
+  assert.equal(output.presented[0]?.presentationMs, presentationMs);
+});
+
+test("handleDecodedFrame: 120 Hz の tick を観測すると表示周期を取り直す", () => {
+  const refresh120Ms = 1_000 / 120;
+  const observedMs = nowMs() - 10;
+  const { timeline, timestampMicros } = makeTimeline(observedMs);
+  const output = makeRecordingOutput();
+  const { session, scheduler } = makeDefaultSession({ timeline, output });
+  handleWallClockFrame(session, timestampMicros);
+  const presentationMs = presentationOf(timeline, timestampMicros);
+
+  // 120 Hz の tick を 16 回観測し、表示周期の推定を 8.33 ms にする。フレームの表示時刻から
+  // 十分離れた tick だけを使う (まだ描かない)
+  // 120 Hz の tick を 16 回観測する。最後の tick と次の検証 tick の間が 66.7 ms を超えると、
+  // 外れ値として表示周期を取り直してしまうため、表示時刻の近くまで詰めて観測する
+  const warmupStartMs = presentationMs - 140;
+  for (let index = 0; index < 16; index++) {
+    scheduler.runNext(warmupStartMs + index * refresh120Ms);
+  }
+  assert.equal(output.presented.length, 0);
+
+  // 表示時刻の 4.2 ms 前の tick では、許容幅 (R / 2 = 4.17 ms) を超えるため描かない
+  scheduler.runNext(presentationMs - 4.2);
+  assert.equal(output.presented.length, 0, "120 Hz の許容幅を超えて描いた");
+
+  // 次の tick (8.33 ms 後) では、目標が表示時刻の 4.13 ms 後になり、許容幅に入る
+  scheduler.runNext(presentationMs - 4.2 + refresh120Ms);
+  assert.deepEqual(
+    output.presented.map((present) => present.timestamp),
+    [timestampMicros],
+  );
+});
+
+test("handleDecodedFrame: 66.7 ms を超える間隔が空いたら表示周期を 60 Hz に戻す", () => {
+  const refresh120Ms = 1_000 / 120;
+  const observedMs = nowMs() - 10;
+  const { timeline, timestampMicros } = makeTimeline(observedMs);
+  const output = makeRecordingOutput();
+  const { session, scheduler } = makeDefaultSession({ timeline, output });
+  handleWallClockFrame(session, timestampMicros);
+  const presentationMs = presentationOf(timeline, timestampMicros);
+
+  // 120 Hz を 16 回観測した後、66.7 ms を超える間隔を空ける
+  for (let index = 0; index < 16; index++) {
+    scheduler.runNext(presentationMs - 500 + index * refresh120Ms);
+  }
+  scheduler.runNext(presentationMs - 100);
+
+  // 表示周期は 60 Hz に戻る。表示時刻の 8 ms 前の tick は許容幅 (8.33 ms) に入るため描く
+  scheduler.runNext(presentationMs - 8);
+  assert.deepEqual(
+    output.presented.map((present) => present.timestamp),
+    [timestampMicros],
+  );
 });

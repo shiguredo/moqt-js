@@ -521,12 +521,12 @@ function prepareVideo() {
     lateDrops: 0,
     queueDrops: 0,
     options: {
-      pacing: { drainImmediately: false, framesPerDrain: 1 },
       timing: {
         recordLateDrop: () => state.lateDrops++,
         recordQueueDrop: () => state.queueDrops++,
       },
       output: {
+        presentationLatencyTicks: 0,
         isAvailable: () => output.isConnected,
         present: (frame, plannedMs) => {
           drawing.drawImage(frame, 0, 0);

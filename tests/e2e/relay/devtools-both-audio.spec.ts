@@ -229,6 +229,19 @@ interface DevtoolsSubscriberStats {
       boundaryStepMax: number;
     };
   };
+  /**
+   * 映像の表示の統計 (テストでは記録のみ。判定には使わない)
+   *
+   * 実リレーの 60 秒試験で、表示間隔と止まりの原因を残す。不可避な vsync 量子化の
+   * 3 tick 間隔と、位相ずれによる余分な待ちを後から区別できるようにする。
+   */
+  playoutTiming: {
+    displayIntervalMs: { p50: number | null; p95: number | null; max: number | null } | null;
+    displayStalls: number;
+    displayStallMs: number;
+    stallCauses: Readonly<Record<string, { count: number; ms: number }>>;
+    recentStalls: readonly { cause: string; durationMs: number; mediaStepMs: number }[];
+  };
   avSync: {
     delays: {
       sharingBases: boolean;
@@ -284,6 +297,23 @@ function crestDb(peakDbfs: number | null, rmsDbfs: number | null): number | null
 /** null を "-"、数値を整数のミリ秒表記にする (失敗メッセージとログ用) */
 function formatNullableMs(value: number | null): string {
   return value === null ? "-" : value.toFixed(0);
+}
+
+/** 映像の表示の計器を 1 行にする (記録用。判定には使わない) */
+function summarizeVideoPlayout(stats: DevtoolsSubscriberStats): string {
+  const timing = stats.playoutTiming;
+  const display = timing.displayIntervalMs;
+  const causes = Object.entries(timing.stallCauses)
+    .filter(([, value]) => value.count > 0)
+    .map(([cause, value]) => `${cause}=${value.count}(${value.ms.toFixed(0)}ms)`)
+    .join("/");
+  return [
+    `displayIntervalMs=${display === null ? "-" : `${display.p50?.toFixed(1)}/${display.p95?.toFixed(1)}/${display.max?.toFixed(1)}`}`,
+    `displayStalls=${timing.displayStalls}`,
+    `displayStallMs=${timing.displayStallMs.toFixed(0)}`,
+    `stallCauses=${causes === "" ? "-" : causes}`,
+    `recentStalls=${timing.recentStalls.length}`,
+  ].join(", ");
 }
 
 /** 判定に使う値の 1 行 (失敗メッセージとログに残す) */
@@ -1057,6 +1087,9 @@ test("長時間の配信で、送信の遅れと受信の遅れが悪化しな�
       `受信の遅れの最大=${worstReceiveDelayMs.toFixed(0)} ms, ` +
       `購読=${summarizeSubscriber(finalSubscriber)}`,
   );
+  // 映像は判定に使わず、表示間隔と止まりの原因を記録だけする (不可避な vsync 量子化の
+  // 3 tick 間隔と、位相ずれによる余分な待ちを後から区別するため)
+  console.log(`映像の表示の計器: ${summarizeVideoPlayout(finalSubscriber)}`);
 
   // 送信の遅れが育っていない (手元の実測は 2146 ms だった)
   expect(
