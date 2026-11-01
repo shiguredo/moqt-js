@@ -1,7 +1,7 @@
 # 映像の表示を表示時刻に最も近い vsync に合わせ、表示先の提示遅延を補償する
 
 - Created: 2026-11-02
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-02
 - Branch: feature/fix-video-presentation-vsync
 - Polished: 2026-11-02
 - Reporter: @voluntas
@@ -119,3 +119,12 @@ Chromium 156.0.8078.4 (Playwright 1.64.1 の `channel: "chromium"`、新しい h
 - `vp check`、`tsc --noEmit`、`vp test run`、Playwright の chromium / relay が通る
 - `devtools/src/utils/playoutTimingStats.ts` の `lateFramesDropped`、`devtools/src/components/statsHelp.ts` の説明、`devtools/src/utils/stallAnalysis.ts` の `lateDropped` の意味を新しい選択規則 (表示時刻を過ぎたフレームと、同じ表示周期に重なって提示しなかったフレームを含む) に合わせて更新する
 - `docs/MEDIA_PLAYOUT.md` (pacing の削除、`presentationLatencyTicks`、選択規則、TIMESTAMP の記述の修正)、`docs/HIGH_LEVEL_API.md` (`AvSyncStats` の映像側の基準)、`docs/ARCHITECTURE.md` (pacing の記述の削除)、該当コードのコメントが実装と一致している
+
+## 解決方法
+
+- `VideoPlayoutOutput.presentationLatencyTicks` を必須にし、canvas は 0、`MediaStreamTrackGenerator` は 1 を渡すようにした。`VideoPlayoutPacing` (`drainImmediately` / `framesPerDrain`) と `MediaPlayoutVideoOptions.pacing` を削除し、表示は rAF の tick ごとに 1 枚に統一した
+- `VideoPlayoutSession` が rAF のタイムスタンプから表示周期 R を推定し (下位 25% を使い、コールバックが飛んでも 2 倍にならない)、書き込み tick + 提示遅延を目標表示時刻として `PlayoutBuffer.selectNearest` で最も近いフレームを 1 枚選ぶ。遅れて提示してよい上限は `max(20 ms, R) + 提示遅延` とした。表示待ちが空でも最後の表示から 250 ms までは rAF を続け、R の推定が到着間隔に引き伸ばされないようにした
+- `PlayoutTimeline.recordPresentation` へ write 時刻ではなく推定表示時刻 (Unix epoch マイクロ秒) を記録し、`AvSyncStats.skewMs`、`docs/HIGH_LEVEL_API.md`、`docs/MEDIA_PLAYOUT.md` の記述を更新した。時間軸の映像の表示の遅れが提示遅延未満のときは 1〜2 tick 遅れることを docs に明記した
+- 実ブラウザ試験を追加した。`MediaStreamTrackGenerator` は `requestVideoFrameCallback` の表示時刻と書き込み tick + R の差、canvas は提示 tick と表示時刻の差を検証する。実リレーの 60 秒試験には映像の `playoutTiming` を記録する行を追加し、判定には使わない
+- 30 / 60 / 120 fps × 60 / 120 Hz、位相 ±3 ms、30 秒の単体テストと PBT、A/V 同期の回帰、`scripts/` の測定スクリプト、docs のコード例を更新した
+- 検証: `vp check`、`tsc --noEmit`、単体 4385 件、Playwright の chromium 275 件、実リレーの A/V 同期・長時間試験を確認した。実リレーの長時間試験では `displayIntervalMs` が p50 33.3 ms / p95 34.1 ms / max 35.5 ms で、`render` 停止は記録のみとした
