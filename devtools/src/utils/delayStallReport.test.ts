@@ -42,6 +42,7 @@ const EMPTY_TIMING: DelayStallStatsInput["playoutTiming"] = {
   missingObjects: 0,
   missingGroups: 0,
   subgroupStreamResets: 0,
+  displayIntervalMs: null,
   recentStalls: [],
 };
 
@@ -115,9 +116,24 @@ test("readDelayStallSample: 映像と音声の遅延と停止の値を取り出�
       missingObjects: 2,
       missingGroups: 1,
       subgroupStreamResets: 3,
+      displayIntervalMs: { p50: 32.6, p95: 50.4, max: 51.2 },
       recentStalls: [
-        { cause: "arrival", durationMs: 280 },
-        { cause: "decode", durationMs: 150 },
+        {
+          cause: "arrival",
+          durationMs: 280,
+          mediaStepMs: 33.3,
+          groupId: "12",
+          objectId: "3",
+          wallClockMs: Date.UTC(2026, 10, 1, 12, 0, 0),
+        },
+        {
+          cause: "decode",
+          durationMs: 150,
+          mediaStepMs: 66.7,
+          groupId: null,
+          objectId: null,
+          wallClockMs: Date.UTC(2026, 10, 1, 12, 0, 1),
+        },
       ],
     },
     audio: {
@@ -163,6 +179,11 @@ test("readDelayStallSample: 映像と音声の遅延と停止の値を取り出�
   assert.equal(sample.video.displayStalls, 2);
   assert.equal(sample.video.displayStallMs, 950);
   assert.equal(sample.video.maxRecentStallMs, 280);
+  assert.equal(sample.video.displayIntervalP50Ms, 32.6);
+  assert.equal(sample.video.displayIntervalP95Ms, 50.4);
+  assert.equal(sample.video.displayIntervalMaxMs, 51.2);
+  assert.equal(sample.video.recentStalls[0]?.mediaStepMs, 33.3);
+  assert.equal(sample.video.recentStalls[0]?.groupId, "12");
   assert.deepEqual(sample.video.stallCauses, {
     arrival: { count: 1, ms: 300 },
     decode: { count: 1, ms: 200 },
@@ -196,7 +217,16 @@ test("readDelayStallSample: 音声を購読していなければ audio を null 
 // 観測の最初と最後の差で、観測の間の停止と欠落を数える
 test("summarizeDelayStall: 累積値の差から、観測の間の停止と欠落をまとめる", () => {
   const samples = [
-    readDelayStallSample(createStats({ framesDecoded: 0 }), 0),
+    readDelayStallSample(
+      createStats({
+        framesDecoded: 0,
+        playoutTiming: {
+          ...EMPTY_TIMING,
+          displayIntervalMs: { p50: 32.6, p95: 33.3, max: 33.3 },
+        },
+      }),
+      0,
+    ),
     readDelayStallSample(
       createStats({
         framesDecoded: 120,
@@ -210,7 +240,17 @@ test("summarizeDelayStall: 累積値の差から、観測の間の停止と欠�
           displayStalls: 1,
           displayStallMs: 300,
           stallCauses: createStallCauses({ arrival: { count: 1, ms: 300 } }),
-          recentStalls: [{ cause: "arrival", durationMs: 280 }],
+          displayIntervalMs: { p50: 32.6, p95: 50.4, max: 50.4 },
+          recentStalls: [
+            {
+              cause: "arrival",
+              durationMs: 280,
+              mediaStepMs: 33.3,
+              groupId: "12",
+              objectId: "3",
+              wallClockMs: Date.UTC(2026, 10, 1, 12, 0, 0),
+            },
+          ],
         },
         audio: {
           ...EMPTY_AUDIO,
@@ -247,7 +287,17 @@ test("summarizeDelayStall: 累積値の差から、観測の間の停止と欠�
           missingObjects: 2,
           missingGroups: 1,
           subgroupStreamResets: 3,
-          recentStalls: [{ cause: "decode", durationMs: 150 }],
+          displayIntervalMs: { p50: 32.6, p95: 51.2, max: 51.2 },
+          recentStalls: [
+            {
+              cause: "decode",
+              durationMs: 150,
+              mediaStepMs: 50.1,
+              groupId: "13",
+              objectId: "7",
+              wallClockMs: Date.UTC(2026, 10, 1, 12, 0, 1),
+            },
+          ],
         },
         audio: {
           ...EMPTY_AUDIO,
@@ -294,6 +344,11 @@ test("summarizeDelayStall: 累積値の差から、観測の間の停止と欠�
   assert.equal(report.video.missingGroups, 1);
   assert.equal(report.video.streamResets, 3);
   assert.equal(report.video.framesDecodedGrowth, 240);
+  assert.equal(report.video.displayIntervalP50Ms, 32.6);
+  assert.equal(report.video.maxDisplayIntervalP95Ms, 51.2);
+  assert.equal(report.video.maxDisplayIntervalMs, 51.2);
+  assert.equal(report.video.recentStalls.length, 1);
+  assert.equal(report.video.recentStalls[0]?.mediaStepMs, 50.1);
   assert.equal(report.audio?.maxReceiveDelayMs, 80);
   assert.equal(report.audio?.maxLatenessP95Ms, 3);
   assert.equal(report.audio?.maxStartDelayP95Ms, 110);
@@ -314,6 +369,10 @@ test("summarizeDelayStall: 累積値の差から、観測の間の停止と欠�
   const lines = report.lines.join("\n");
   assert.include(lines, "遅延と停止の内訳 (2 秒の観測)");
   assert.include(lines, "映像の停止: 2 回 950.0 ms");
+  assert.include(lines, "映像の表示間隔: p50 32.6 ms");
+  assert.include(lines, "直近の停止 (古い順、最大 10 件)");
+  assert.include(lines, "media step 50.1 ms");
+  assert.include(lines, "Group 13 / Object 7");
   assert.include(lines, "到着 1 回 300.0 ms");
   assert.include(lines, "復号 1 回 200.0 ms");
   assert.include(lines, "音声の欠落: 鳴らさなかった 2 件 40.0 ms");

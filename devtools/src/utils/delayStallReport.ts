@@ -66,8 +66,17 @@ export interface DelayStallStatsInput {
     readonly missingGroups: number;
     /** RESET_STREAM で終わった Subgroup の stream の数 (累積) */
     readonly subgroupStreamResets: number;
-    /** 直近の止まり (古い順)。最大の停止時間を読む */
-    readonly recentStalls: readonly { readonly cause: string; readonly durationMs: number }[];
+    /** 表示間隔 (ミリ秒) の分布 */
+    readonly displayIntervalMs: TimingSummary | null;
+    /** 直近の止まり (古い順)。mediaStepMs は前後に描いたフレームの TIMESTAMP の差 */
+    readonly recentStalls: readonly {
+      readonly cause: string;
+      readonly durationMs: number;
+      readonly mediaStepMs: number;
+      readonly groupId: string | null;
+      readonly objectId: string | null;
+      readonly wallClockMs: number;
+    }[];
   };
   /** 音声の統計 (音声を購読していなければ null) */
   readonly audio: {
@@ -134,6 +143,19 @@ export interface DelayStallSample {
     readonly stallCauses: Readonly<Record<string, DelayStallCauseTotal>>;
     /** 直近の止まりの最大時間 (ミリ秒) */
     readonly maxRecentStallMs: number | null;
+    /** 表示間隔 (ミリ秒) の分布 */
+    readonly displayIntervalP50Ms: number | null;
+    readonly displayIntervalP95Ms: number | null;
+    readonly displayIntervalMaxMs: number | null;
+    /** 直近の止まり (古い順) */
+    readonly recentStalls: readonly {
+      readonly cause: string;
+      readonly durationMs: number;
+      readonly mediaStepMs: number;
+      readonly groupId: string | null;
+      readonly objectId: string | null;
+      readonly wallClockMs: number;
+    }[];
   };
   readonly audio: {
     readonly receiveDelayMs: number | null;
@@ -210,6 +232,21 @@ export interface DelayStallReport {
     readonly missingGroups: number;
     readonly streamResets: number;
     readonly framesDecodedGrowth: number;
+    /** 最後の観測点の表示間隔 (直近 10 秒の分布) */
+    readonly displayIntervalP50Ms: number | null;
+    /** 観測した各点の表示間隔 p95 の最大 */
+    readonly maxDisplayIntervalP95Ms: number | null;
+    /** 観測した各点の表示間隔の最大 */
+    readonly maxDisplayIntervalMs: number | null;
+    /** 最後の観測点の直近の停止 (古い順) */
+    readonly recentStalls: readonly {
+      readonly cause: string;
+      readonly durationMs: number;
+      readonly mediaStepMs: number;
+      readonly groupId: string | null;
+      readonly objectId: string | null;
+      readonly wallClockMs: number;
+    }[];
   };
   readonly audio: {
     readonly maxReceiveDelayMs: number | null;
@@ -271,6 +308,17 @@ export function readDelayStallSample(stats: DelayStallStatsInput, tMs: number): 
       subgroupStreamResets: timing.subgroupStreamResets,
       stallCauses,
       maxRecentStallMs,
+      displayIntervalP50Ms: timing.displayIntervalMs?.p50 ?? null,
+      displayIntervalP95Ms: timing.displayIntervalMs?.p95 ?? null,
+      displayIntervalMaxMs: timing.displayIntervalMs?.max ?? null,
+      recentStalls: timing.recentStalls.map((stall) => ({
+        cause: stall.cause,
+        durationMs: stall.durationMs,
+        mediaStepMs: stall.mediaStepMs,
+        groupId: stall.groupId,
+        objectId: stall.objectId,
+        wallClockMs: stall.wallClockMs,
+      })),
     },
     audio:
       stats.audio === null
@@ -325,6 +373,8 @@ export function summarizeDelayStall(samples: readonly DelayStallSample[]): Delay
   let maxDisplayWaitP95Ms: number | null = null;
   let maxDisplayLatencyP95Ms: number | null = null;
   let maxSingleStallMs: number | null = null;
+  let maxDisplayIntervalP95Ms: number | null = null;
+  let maxDisplayIntervalMs: number | null = null;
   let maxSkewMs: number | null = null;
   let minSkewMs: number | null = null;
   for (const sample of samples) {
@@ -335,6 +385,11 @@ export function summarizeDelayStall(samples: readonly DelayStallSample[]): Delay
     maxDisplayWaitP95Ms = maxNullable(maxDisplayWaitP95Ms, sample.video.displayWaitP95Ms);
     maxDisplayLatencyP95Ms = maxNullable(maxDisplayLatencyP95Ms, sample.video.displayLatencyP95Ms);
     maxSingleStallMs = maxNullable(maxSingleStallMs, sample.video.maxRecentStallMs);
+    maxDisplayIntervalP95Ms = maxNullable(
+      maxDisplayIntervalP95Ms,
+      sample.video.displayIntervalP95Ms,
+    );
+    maxDisplayIntervalMs = maxNullable(maxDisplayIntervalMs, sample.video.displayIntervalMaxMs);
     maxSkewMs = maxNullable(maxSkewMs, sample.avSync.skewMs);
     minSkewMs = minNullable(minSkewMs, sample.avSync.skewMs);
   }
@@ -391,6 +446,10 @@ export function summarizeDelayStall(samples: readonly DelayStallSample[]): Delay
       missingGroups: last.video.missingGroups - first.video.missingGroups,
       streamResets: last.video.subgroupStreamResets - first.video.subgroupStreamResets,
       framesDecodedGrowth: last.video.framesDecoded - first.video.framesDecoded,
+      displayIntervalP50Ms: last.video.displayIntervalP50Ms,
+      maxDisplayIntervalP95Ms,
+      maxDisplayIntervalMs,
+      recentStalls: last.video.recentStalls,
     },
     audio,
     avSync: {
@@ -414,6 +473,12 @@ function formatDelayStallReportLines(report: DelayStallReport, observedMs: numbe
       ` / 表示待ち p95 最大 ${formatMs(report.video.maxDisplayWaitP95Ms)} ms` +
       ` / 表示遅延 p95 最大 ${formatMs(report.video.maxDisplayLatencyP95Ms)} ms`,
   );
+  lines.push(
+    `映像の表示間隔: p50 ${formatMs(report.video.displayIntervalP50Ms)} ms` +
+      ` / p95 最大 ${formatMs(report.video.maxDisplayIntervalP95Ms)} ms` +
+      ` / max 最大 ${formatMs(report.video.maxDisplayIntervalMs)} ms` +
+      ` (フレーム間隔の 1.5 倍を超えた回を停止とする)`,
+  );
   const causes =
     report.video.stallCauses.length === 0
       ? "原因なし"
@@ -431,6 +496,18 @@ function formatDelayStallReportLines(report: DelayStallReport, observedMs: numbe
       `、欠落 Object ${report.video.missingObjects} / Group ${report.video.missingGroups}` +
       `、reset ${report.video.streamResets}`,
   );
+  if (report.video.recentStalls.length === 0) {
+    lines.push("直近の停止: なし");
+  } else {
+    lines.push(`直近の停止 (古い順、最大 ${MAX_REPORTED_STALLS} 件):`);
+    for (const stall of report.video.recentStalls.slice(-MAX_REPORTED_STALLS)) {
+      lines.push(
+        `  ${formatWallClock(stall.wallClockMs)} ${STALL_CAUSE_LABELS[stall.cause] ?? stall.cause}` +
+          ` ${formatMs(stall.durationMs)} ms (media step ${formatMs(stall.mediaStepMs)} ms)` +
+          ` Group ${stall.groupId ?? "-"} / Object ${stall.objectId ?? "-"}`,
+      );
+    }
+  }
   if (report.audio === null) {
     lines.push("音声: 購読していない");
   } else {
@@ -499,6 +576,14 @@ function formatAttribution(report: DelayStallReport): string {
     }
   }
   return `遅延の主因: ${parts.length === 0 ? "値なし" : parts.join("、")}`;
+}
+
+/** レポートに並べる直近の停止の最大件数 */
+const MAX_REPORTED_STALLS = 10;
+
+/** 壁時計 (Unix epoch ミリ秒) を UTC の時刻にする */
+function formatWallClock(wallClockMs: number): string {
+  return new Date(wallClockMs).toISOString();
 }
 
 /** 分布の p95 (値が無ければ null) */
