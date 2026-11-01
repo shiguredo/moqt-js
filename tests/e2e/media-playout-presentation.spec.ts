@@ -59,13 +59,16 @@ test("MediaStreamTrackGenerator は書き込み tick の次の vsync で表示�
     // フレームが届く前の play() は解決しないことがあるため、待たない
     void video.play().catch(() => undefined);
 
-    const writes: { tickMs: number; presentationMs: number | null }[] = [];
+    const writes: { tickMs: number }[] = [];
     const displays: number[] = [];
     let lastPresentedFrames = -1;
-    const recordVideoFrame = (_nowMs: number, metadata: { presentedFrames: number }): void => {
+    const recordVideoFrame = (
+      _nowMs: number,
+      metadata: { presentedFrames: number; expectedDisplayTime: number },
+    ): void => {
       if (metadata.presentedFrames !== lastPresentedFrames) {
         lastPresentedFrames = metadata.presentedFrames;
-        displays.push(performance.now());
+        displays.push(metadata.expectedDisplayTime);
       }
       requestVideoFrameCallback();
     };
@@ -86,9 +89,11 @@ test("MediaStreamTrackGenerator は書き込み tick の次の vsync で表示�
     const output: import("../../src/index").VideoPlayoutOutput = {
       presentationLatencyTicks: 1,
       isAvailable: () => true,
-      present: (frame, presentationMs) => {
-        writes.push({ tickMs: lastTick, presentationMs });
-        void writer.write(frame);
+      present: (frame) => {
+        writes.push({ tickMs: lastTick });
+        void writer.write(frame).catch(() => {
+          frame.close();
+        });
         return true;
       },
     };
@@ -138,29 +143,26 @@ test("MediaStreamTrackGenerator は書き込み tick の次の vsync で表示�
         ? ((intervals[middle - 1] ?? 0) + (intervals[middle] ?? 0)) / 2
         : (intervals[middle] ?? 0);
     })();
-    // 書き込み tick の次の rAF tick が、generator が表示する vsync である
-    const expectedDisplays = writes.slice(warmup).map((write) => {
-      const index = ticks.indexOf(write.tickMs);
-      return index !== -1
-        ? (ticks[index + 1] ?? write.tickMs + refreshMs)
-        : write.tickMs + refreshMs;
-    });
+    // generator は書き込み tick の次の vsync で表示される。presentationLatencyTicks = 1 を
+    // 使って、書き込み tick + 1 表示周期を期待値にする
+    const expectedDisplays = writes.slice(warmup).map((write) => write.tickMs + refreshMs);
     const measuredDisplays = displays.slice(warmup);
-    const displayErrorMs = measuredDisplays.map((displayMs) => {
+    const signedErrors = measuredDisplays.map((displayMs) => {
       const nearest = expectedDisplays.reduce(
-        (best, expected) => Math.min(best, Math.abs(expected - displayMs)),
-        Number.POSITIVE_INFINITY,
+        (best, expected) =>
+          Math.abs(expected - displayMs) < Math.abs(best - displayMs) ? expected : best,
+        Number.NaN,
       );
-      return nearest;
+      return Number.isNaN(nearest) ? 0 : displayMs - nearest;
     });
     return {
       refreshMs,
       writes: writes.length,
       displays: displays.length,
       tickCount: ticks.length,
-      displayErrorMs,
-      canvasErrorMs: [] as number[],
-      canvasIntervalsMs: [] as number[],
+      displayErrorMs: signedErrors.map((error) => Math.abs(error)),
+      meanSignedErrorMs:
+        signedErrors.reduce((sum, error) => sum + error, 0) / Math.max(1, signedErrors.length),
     };
   });
 
@@ -171,6 +173,8 @@ test("MediaStreamTrackGenerator は書き込み tick の次の vsync で表示�
   const p95 = sortedErrors[Math.floor(sortedErrors.length * 0.95)] ?? Number.NaN;
   // rAF の tick の時刻と expectedDisplayTime の軸差、および位相の揺れを含む
   expect(p95).toBeLessThanOrEqual(3);
+  // 系統的な遅れ (期待値より遅い側への偏り) がない
+  expect(Math.abs(measurement.meanSignedErrorMs)).toBeLessThanOrEqual(2);
 });
 
 test("canvas は表示時刻に最も近い vsync で描く", async ({ page }) => {
@@ -181,20 +185,22 @@ test("canvas は表示時刻に最も近い vsync で描く", async ({ page }) =
 
     const originalRequestAnimationFrame = window.requestAnimationFrame.bind(window);
     const ticks: number[] = [];
+    let lastTick = performance.now();
     window.requestAnimationFrame = (callback: FrameRequestCallback) => {
       return originalRequestAnimationFrame((timestampMs) => {
         ticks.push(timestampMs);
+        lastTick = timestampMs;
         callback(timestampMs);
       });
     };
 
-    const draws: { atMs: number; presentationMs: number | null }[] = [];
+    const draws: { tickMs: number; presentationMs: number | null }[] = [];
     const output: import("../../src/index").VideoPlayoutOutput = {
       presentationLatencyTicks: 0,
       isAvailable: () => true,
-      present: (_frame, presentationMs) => {
-        draws.push({ atMs: performance.now(), presentationMs });
-        _frame.close();
+      present: (frame, presentationMs) => {
+        draws.push({ tickMs: lastTick, presentationMs });
+        frame.close();
         return true;
       },
     };
@@ -225,15 +231,14 @@ test("canvas は表示時刻に最も近い vsync で描く", async ({ page }) =
     const measured = draws.slice(warmup);
     const canvasErrorMs = measured
       .filter((draw) => draw.presentationMs !== null)
-      .map((draw) => Math.abs(draw.atMs - (draw.presentationMs ?? draw.atMs)));
+      .map((draw) => Math.abs(draw.tickMs - (draw.presentationMs ?? draw.tickMs)));
     const canvasIntervalsMs = measured
       .slice(1)
-      .map((draw, index) => draw.atMs - (measured[index]?.atMs ?? draw.atMs));
+      .map((draw, index) => draw.tickMs - (measured[index]?.tickMs ?? draw.tickMs));
     return {
       refreshMs: 1_000 / 60,
       writes: draws.length,
       displays: draws.length,
-      displayErrorMs: [] as number[],
       canvasErrorMs,
       canvasIntervalsMs,
     };

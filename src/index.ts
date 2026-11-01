@@ -323,7 +323,7 @@ export {
 export { type AudioPlayoutContext, type AudioPlayoutOutput } from "./playout/audioPlayoutSession";
 
 // 映像の表示の入口 (MediaPlayout) の型。表示の出し先 (MediaStreamTrackGenerator / canvas)
-// と表示周期、捨てたフレームの記録先は注入し、復号へ渡した入力の情報は
+// と、その提示遅延 (presentationLatencyTicks)、捨てたフレームの記録先は注入し、復号へ渡した入力の情報は
 // trackVideoDecodeInput で記録する。組み立て (対応表・時間軸への記録・表示の選択・計器への
 // 記録) は入口の内部で行う
 export { type VideoPlayoutOutput, type VideoPlayoutTiming } from "./playout/videoPlayoutSession";

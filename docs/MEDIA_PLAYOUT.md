@@ -43,6 +43,8 @@ const playout = createMediaPlayout({
   // 映像の表示。表示すると決めたフレームの出し先を渡す
   video: {
     output: {
+      // 書き込みの次の vsync で表示されるため 1
+      presentationLatencyTicks: 1,
       isAvailable: () => true,
       present: (frame, presentationMs) => {
         // 受け取ったフレームはここで表示し、writer へ渡す。所有権は戻り値にかかわらず
@@ -113,6 +115,8 @@ const writer = generator.writable.getWriter();
 const playout = createMediaPlayout({
   video: {
     output: {
+      // 書き込みの次の vsync で表示されるため 1
+      presentationLatencyTicks: 1,
       isAvailable: () => true,
       present: (frame) => {
         writer.write(frame).catch(() => {
@@ -353,9 +357,9 @@ setInterval(() => {
 
 ```typescript
 interface VideoPlayoutOutput {
-  // 表示先の提示遅延 (表示周期の tick 数)。present() を呼んでから実際に表示されるまでの
-  // 遅延を表す。canvas への描画は rAF のコールバック内でその vsync に含まれるため 0、
-  // MediaStreamTrackGenerator は書き込みの次の vsync で表示されるため 1
+  // 表示先の提示遅延 (表示周期の tick 数、0 以上の整数)。present() を呼んでから実際に
+  // 表示されるまでの遅延を表す。canvas への描画は rAF のコールバック内でその vsync に
+  // 含まれるため 0、MediaStreamTrackGenerator は書き込みの次の vsync で表示されるため 1
   presentationLatencyTicks: number;
   // フレームを表示する。presentationMs は時間軸が決めた表示時刻
   // (performance.now() と同じ軸のミリ秒)。届いた順に表示するフレームは null。
@@ -377,10 +381,13 @@ interface VideoPlayoutTiming {
 表示は rAF の tick ごとに 1 枚だけ行う。書き込み tick の時刻に `presentationLatencyTicks` を
 足した時刻を目標の表示時刻とし、その時刻に最も近いフレームを表示周期の半分の許容幅で選ぶ。
 目標より古いフレームは原則として提示せずに捨てる (遅れて提示すると、次のフレームを早く
-出して表示間隔が半分になるため)。ただし、目標に合うフレームがキューに無く、最新の
+出して表示間隔が半分になるため)。ただし、目標に合うフレームがキューに無く、目標に最も近い
 フレームの遅れが `MAX_PRESENTATION_LAG_MS` (20 ms) 以内なら、表示を止めないため 1 枚だけ
 遅れて提示する。`presentationLatencyTicks` が 1 の `MediaStreamTrackGenerator` は、
-書き込みの次の vsync で表示されるため、表示時刻の 1 tick 前に書く。
+書き込みの次の vsync で表示されるため、表示時刻の 1 tick 前に書き、遅れてよい上限も
+1 tick の分だけ広げる。時間軸の映像の表示の遅れが 1 tick 未満のときは、書き込みの次の
+vsync より前に表示できないため、最も近い vsync ではなく次の vsync に表示される
+(フレームは捨てない)。
 
 `timing` は、捨てたフレームの記録先である。ライブラリは映像の計器を持たないため省略し、
 moqt-devtools は「受信から表示までの時間」の統計へ記録する。

@@ -7,8 +7,9 @@
  * フレーム間隔) は時間軸が持つ。
  *
  * - 表示周期ごとに `selectNearest` を 1 回呼び、目標表示時刻に最も近いフレームを 1 枚選ぶ
- * - 目標表示時刻から許容幅より古いフレームは提示せず、捨てるフレームとして返す。遅れて
- *   提示すると、次のフレームを早く出して表示間隔が半分になるためである
+ * - 目標表示時刻から `MAX_PRESENTATION_LAG_MS` より古いフレームは提示せず、捨てる
+ *   フレームとして返す。20 ms 以内の遅れは、目標に合うフレームが無いときだけ遅れて提示する
+ *   (表示を止めないための逃げ道)
  * - 提示しないフレームは呼び出し側が閉じ、計器へ記録する
  * - 表示時刻を決められないフレーム (壁時計の TIMESTAMP を持たない、または時間軸が
  *   そのトラックの TIMESTAMP を使わない) は、届いた順に 1 回の選択で 1 枚ずつ描く
@@ -51,8 +52,8 @@ export interface PlayoutNearestSelection<T> {
   /**
    * 提示せずに捨てるフレーム
    *
-   * 目標表示時刻から許容幅より古いフレームと、同じ目標表示時刻に重なったため選ばれなかった
-   * フレームである。呼び出し側が閉じ、計器へ記録する。
+   * 目標表示時刻から `MAX_PRESENTATION_LAG_MS` より古いフレームと、同じ目標表示時刻に
+   * 重なったため選ばれなかったフレームである。呼び出し側が閉じ、計器へ記録する。
    */
   readonly dropped: T[];
   /**
@@ -116,16 +117,27 @@ export class PlayoutBuffer<T> {
    *
    * 先頭が表示時刻を決められないフレームなら、それを描く (届いた順に 1 枚ずつ)。
    * 表示時刻を決められるフレームでは、目標表示時刻から許容幅以内で最も近いものを描く。
-   * 許容幅より古いフレームは、そのフレームを提示できた表示周期を過ぎているため、捨てる
-   * フレームとして返す。許容幅より未来のフレームしかない場合は何も描かない。
+   * 許容幅を超えて古いフレームでも、遅れが `MAX_PRESENTATION_LAG_MS` 以内なら 1 枚だけ
+   * 遅れて描く (`drawLate`)。それより古いフレームは捨てるフレームとして返す。許容幅より
+   * 未来のフレームしかない場合は何も描かない。
    *
    * @param targetMs - この選択で表示したい時刻 (`performance.now()` の時間軸、ミリ秒)
    * @param toleranceMs - 目標表示時刻からの許容幅 (ミリ秒)。負の値は受け付けない
+   * @param maxLateMs - 遅れて提示してよい上限 (ミリ秒)。既定は `MAX_PRESENTATION_LAG_MS`。
+   *   `presentationLatencyTicks` が 1 以上の出し先は、書き込みの次の vsync まで待てない
+   *   フレームを拾うため、この値を提示遅延の分だけ広げる
    * @returns 描くフレーム、捨てるフレーム、描くフレームの表示時刻
    */
-  selectNearest(targetMs: number, toleranceMs: number): PlayoutNearestSelection<T> {
-    if (!(toleranceMs >= 0)) {
+  selectNearest(
+    targetMs: number,
+    toleranceMs: number,
+    maxLateMs = MAX_PRESENTATION_LAG_MS,
+  ): PlayoutNearestSelection<T> {
+    if (!Number.isFinite(toleranceMs) || toleranceMs < 0) {
       throw new RangeError(`toleranceMs must be a non-negative finite number, got ${toleranceMs}`);
+    }
+    if (!Number.isFinite(maxLateMs) || maxLateMs < 0) {
+      throw new RangeError(`maxLateMs must be a non-negative finite number, got ${maxLateMs}`);
     }
     const head = this.queue[0];
     if (head === undefined) {
@@ -137,7 +149,7 @@ export class PlayoutBuffer<T> {
     }
 
     // 表示時刻を過ぎて久しいフレームは、目標表示時刻に合うフレームが無いときの逃げ道
-    // (MAX_PRESENTATION_LAG_MS) にも使えないため、先に捨てる
+    // (maxLateMs) にも使えないため、先に捨てる
     const dropped: T[] = [];
     while (this.queue.length > 0) {
       const frame = this.queue[0];
@@ -145,7 +157,7 @@ export class PlayoutBuffer<T> {
         break;
       }
       const presentationMs = this.framePresentationMs(frame);
-      if (presentationMs === null || presentationMs >= targetMs - MAX_PRESENTATION_LAG_MS) {
+      if (presentationMs === null || presentationMs >= targetMs - maxLateMs) {
         break;
       }
       this.queue.shift();

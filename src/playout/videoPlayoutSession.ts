@@ -26,7 +26,7 @@
 import type { Location } from "../message";
 import { type DecodeInputsOptions, type PlayoutTimestampKind } from "./decodeInputTimestamps";
 import type { PlayoutTimeline } from "./timeline";
-import { JITTER_BUFFER_MAX_QUEUED_FRAMES, PlayoutBuffer } from "./buffer";
+import { JITTER_BUFFER_MAX_QUEUED_FRAMES, MAX_PRESENTATION_LAG_MS, PlayoutBuffer } from "./buffer";
 
 /**
  * 復号へ渡した映像 Object の情報
@@ -102,7 +102,9 @@ export interface VideoPlayoutTiming {
    */
   recordQueueDrop(timestamp: number): void;
   /**
-   * 表示時刻を過ぎて間に合わなかったフレーム
+   * 提示しなかったフレーム
+   *
+   * 表示時刻を過ぎたフレームと、同じ表示周期に重なって提示できなかったフレームを含む。
    *
    * この関数は throw しないこと。throw してもフレームは閉じ、表示周期は続ける。
    *
@@ -217,12 +219,12 @@ export interface VideoPlayoutSessionOptions {
 /**
  * 表示周期 R の初期値と、rAF の間隔を測り直す条件
  *
- * rAF の間隔のサンプルが 2 つ未満の間は 60 Hz を仮定する。250 ms 以上の間隔が空いた回は、
- * 非表示タブの復帰などで表示周期が変わった可能性があるため、サンプルを捨てて取り直す。
+ * rAF の間隔のサンプルが 2 つ未満の間は 60 Hz を仮定する。4 tick 分 (約 66.7 ms) を
+ * 超える間隔は、非表示タブの復帰やメインスレッドの停止で表示周期が乱れた可能性があるため、
+ * サンプルを捨てて取り直す。
  */
 const DEFAULT_REFRESH_MS = 1_000 / 60;
 const REFRESH_SAMPLE_COUNT = 16;
-const REFRESH_RESET_GAP_MS = 250;
 // 表示待ちが空でも、最後の表示からこの時間までは表示周期の予約を続ける。30 fps のように
 // 表示周期より長い間隔でフレームが届くとき、予約を毎回止めると rAF の間隔が届いた間隔に
 // 引き伸ばされ、表示周期の推定が壊れるためである
@@ -351,7 +353,12 @@ export class VideoPlayoutSession {
   private onTick(timestampMs: number): void {
     this.observeTick(timestampMs);
     const targetMs = timestampMs + this.output.presentationLatencyTicks * this.refreshMs;
-    const selection = this.playout.selectNearest(targetMs, this.refreshMs / 2);
+    // generator は書き込みの次の vsync で表示されるため、遅れて提示してよい上限を
+    // 提示遅延の分だけ広げる。これが無いと、時間軸の表示の遅れが小さいときに、到着の
+    // 位相によっては書き込みの tick に間に合わずフレームを捨ててしまう
+    const maxLateMs =
+      MAX_PRESENTATION_LAG_MS + this.output.presentationLatencyTicks * this.refreshMs;
+    const selection = this.playout.selectNearest(targetMs, this.refreshMs / 2, maxLateMs);
     for (const dropped of selection.dropped) {
       // 提示しなかったフレームの表示時刻は、止まりの原因 (間に合わなかった段) を決めるのに
       // 使う。表示時刻は選択と同じ基準で求まる
@@ -397,8 +404,8 @@ export class VideoPlayoutSession {
    * rAF のタイムスタンプから表示周期 R を実測する
    *
    * 直近 `REFRESH_SAMPLE_COUNT` 個の間隔の中央値を使う。サンプルが 2 つ未満の間は 60 Hz を
-   * 仮定する。250 ms 以上の間隔が空いた回は、非表示タブの復帰などで表示周期が変わった
-   * 可能性があるため、サンプルを捨てて取り直す。
+   * 仮定する。4 tick 分 (約 66.7 ms) を超える間隔は、非表示タブの復帰やメインスレッドの
+   * 停止で表示周期が乱れた可能性があるため、サンプルを捨てて取り直す。
    */
   private observeTick(timestampMs: number): void {
     const previousMs = this.lastTickMs;
@@ -407,12 +414,14 @@ export class VideoPlayoutSession {
       return;
     }
     const intervalMs = timestampMs - previousMs;
-    if (intervalMs >= REFRESH_RESET_GAP_MS) {
-      this.tickIntervalsMs.length = 0;
-      this.refreshMs = DEFAULT_REFRESH_MS;
+    if (!(intervalMs > 0)) {
       return;
     }
-    if (!(intervalMs > 0)) {
+    if (intervalMs > 4 * DEFAULT_REFRESH_MS) {
+      // メインスレッドの停止などで 1 tick 分より大きく外れた間隔は、表示周期の推定に
+      // 使わない。1 つ混ざるだけで中央値が大きくずれるためである
+      this.tickIntervalsMs.length = 0;
+      this.refreshMs = DEFAULT_REFRESH_MS;
       return;
     }
     this.tickIntervalsMs.push(intervalMs);
@@ -434,10 +443,12 @@ export class VideoPlayoutSession {
   }
 
   /**
-   * 表示待ちが残っている間、表示周期ごとに表示を続ける
+   * 表示周期の予約を続ける
    *
-   * 予約は 1 つだけ持ち、予約済みの間は積み増さない。出し先が無くなったときは表示待ちを
-   * 捨てる (出せないフレームが decoder のメモリを占め続けないため)。
+   * 表示待ちがある間は毎周期続ける。表示待ちが空でも、最後の表示から `IDLE_STOP_MS` までは
+   * 続ける (30 fps のようにフレームの到着が表示周期より遅いとき、予約を止めると rAF の
+   * 間隔が到着の間隔に引き伸ばされ、表示周期の推定が壊れるため)。予約は 1 つだけ持ち、
+   * 予約済みの間は積み増さない。出し先が無くなったときは表示待ちを捨てる。
    */
   private scheduleDrain(): void {
     if (this.frameRequest !== null) {

@@ -632,6 +632,7 @@ export async function live(caseName) {
         ? {
             video: {
               output: {
+                presentationLatencyTicks: 0,
                 isAvailable: () => canvas.isConnected,
                 present: (frame) => {
                   drawing.drawImage(frame, 0, 0);

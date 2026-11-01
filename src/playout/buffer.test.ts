@@ -176,6 +176,119 @@ test("selectNearest: 未来のフレームしかなければ描かず、古い�
   });
 });
 
+// 許容幅の中に複数の候補があるときは、目標表示時刻に最も近い 1 枚を選ぶ
+test("selectNearest: 許容幅の中では目標に最も近いフレームを選ぶ", () => {
+  const timeline = createSharedTimeline();
+  const buffer = new PlayoutBuffer<number>(JITTER_BUFFER_MAX_QUEUED_FRAMES, timeline);
+  observeFrame(timeline, 0, 0);
+  observeFrame(timeline, FRAME_MS, 0);
+  buffer.enqueue(0, timestampOf(0));
+  buffer.enqueue(1, timestampOf(FRAME_MS));
+  const firstMs = buffer.presentationTimeMs(timestampOf(0)) ?? 0;
+  const secondMs = buffer.presentationTimeMs(timestampOf(FRAME_MS)) ?? 0;
+  // 2 枚の表示時刻の中間より 1 ms だけ 1 枚目寄りの目標にする
+  const targetMs = (firstMs + secondMs) / 2 - 1;
+  const selection = buffer.selectNearest(targetMs, FRAME_MS / 2);
+  assert.equal(selection.draw, 0, "近い方のフレームを選んでいない");
+  assert.deepEqual(selection.dropped, []);
+  // 続けて次の表示周期では 2 枚目を選ぶ
+  const next = buffer.selectNearest(targetMs + FRAME_MS, FRAME_MS / 2);
+  assert.equal(next.draw, 1);
+});
+
+// 60 fps のフレームが 60 Hz の同じ目標表示周期に入ったときも、1 tick に 1 枚ずつ出し、
+// 2 枚を同じ tick に出さない
+test("selectNearest: 同じ target に入った 2 枚は 1 tick に 1 枚ずつ出す", () => {
+  const timeline = createSharedTimeline();
+  const buffer = new PlayoutBuffer<number>(JITTER_BUFFER_MAX_QUEUED_FRAMES, timeline);
+  observeFrame(timeline, 0, 0);
+  observeFrame(timeline, FRAME_MS / 2, 0);
+  buffer.enqueue(0, timestampOf(0));
+  buffer.enqueue(1, timestampOf(FRAME_MS / 2));
+  const firstMs = buffer.presentationTimeMs(timestampOf(0)) ?? 0;
+  const secondMs = buffer.presentationTimeMs(timestampOf(FRAME_MS / 2)) ?? 0;
+  const targetMs = (firstMs + secondMs) / 2;
+  const first = buffer.selectNearest(targetMs, FRAME_MS / 2);
+  assert.isNotNull(first.draw);
+  const second = buffer.selectNearest(targetMs + 1_000 / 60, FRAME_MS / 2);
+  assert.isNotNull(second.draw);
+  assert.notEqual(first.draw, second.draw, "同じフレームを 2 回出している");
+});
+
+// 許容幅の中でも、選ばれたフレームより前にあるフレームは提示できないため捨てる
+test("selectNearest: 選ばなかった窓内のフレームを捨てる", () => {
+  const timeline = createSharedTimeline();
+  const buffer = new PlayoutBuffer<number>(JITTER_BUFFER_MAX_QUEUED_FRAMES, timeline);
+  observeFrame(timeline, 0, 0);
+  observeFrame(timeline, FRAME_MS, 0);
+  buffer.enqueue(0, timestampOf(0));
+  buffer.enqueue(1, timestampOf(FRAME_MS));
+  const secondMs = buffer.presentationTimeMs(timestampOf(FRAME_MS)) ?? 0;
+  // 2 枚目の表示時刻に近い目標にする。1 枚目は許容幅の中だが、2 枚目より古いため捨てる
+  const targetMs = secondMs - 1;
+  const selection = buffer.selectNearest(targetMs, FRAME_MS / 2);
+  assert.equal(selection.draw, 1);
+  assert.deepEqual(selection.dropped, [0]);
+});
+
+// 遅れの境界: 20 ms 以内は遅れて描き、超えたら捨てる
+test("selectNearest: 遅れが 20 ms 以内なら描き、超えたら捨てる", () => {
+  const timeline = createSharedTimeline();
+  const buffer = new PlayoutBuffer<number>(JITTER_BUFFER_MAX_QUEUED_FRAMES, timeline);
+  observeFrame(timeline, 0, 0);
+  buffer.enqueue(0, timestampOf(0));
+  const presentationMs = buffer.presentationTimeMs(timestampOf(0)) ?? 0;
+  const within = buffer.selectNearest(presentationMs + 19.9, 1);
+  assert.equal(within.draw, 0);
+  assert.isTrue(within.drawLate);
+
+  const buffer2 = new PlayoutBuffer<number>(
+    JITTER_BUFFER_MAX_QUEUED_FRAMES,
+    createSharedTimeline(),
+  );
+  const timeline2 = createSharedTimeline();
+  observeFrame(timeline2, 0, 0);
+  buffer2.enqueue(0, timestampOf(0));
+  const presentation2Ms = buffer2.presentationTimeMs(timestampOf(0)) ?? 0;
+  const beyond = buffer2.selectNearest(presentation2Ms + 20.1, 1);
+  assert.isNull(beyond.draw);
+  assert.deepEqual(beyond.dropped, [0]);
+});
+
+// 位相を変えた 60 Hz の tick 列で、30 fps のフレームをすべて 1 回ずつ出す
+test("selectNearest: tick の位相が変わっても 30 fps のフレームを落とさない", () => {
+  const refreshMs = 1_000 / 60;
+  const frameMs = 1_000 / 30;
+  for (const phaseMs of [0, 4, 8.33]) {
+    const timeline = createTimeline();
+    timeline.setTargetLatencyMs(0);
+    const frames = 60;
+    const buffer = new PlayoutBuffer<number>(frames, timeline);
+    const draws: number[] = [];
+    for (let index = 0; index < frames; index++) {
+      const mediaMs = index * frameMs;
+      const localMs = LOCAL_ORIGIN_MS + mediaMs;
+      timeline.observe("video", EPOCH_MS + localMs, timestampOf(mediaMs));
+      buffer.enqueue(index, timestampOf(mediaMs));
+    }
+    for (
+      let tickMs = LOCAL_ORIGIN_MS + phaseMs;
+      tickMs < LOCAL_ORIGIN_MS + frames * frameMs + 100;
+      tickMs += refreshMs
+    ) {
+      const selection = buffer.selectNearest(tickMs, refreshMs / 2);
+      if (selection.draw !== null) {
+        draws.push(selection.draw);
+      }
+    }
+    assert.deepEqual(
+      draws,
+      Array.from({ length: frames }, (_, index) => index),
+      `位相 ${phaseMs} ms でフレームを落とした`,
+    );
+  }
+});
+
 // 目標表示時刻に合うフレームが無いときは、遅れが上限 (20 ms) 以内なら 1 枚だけ遅れて描く
 // (表示を止めないための逃げ道)
 test("selectNearest: 目標に合うフレームが無く、遅れが上限以内なら遅れて描く", () => {
