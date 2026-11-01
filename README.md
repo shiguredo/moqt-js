@@ -556,7 +556,7 @@ WebCodecs API の動作確認ツールです。moqt-js とは独立していま�
 
 WebTransport API の動作確認ツールです。moqt-js とは独立しています。
 
-- WebTransport API 対応状況の表示 (静的チェック)
+- WebTransport API の存在チェック (静的、接続不要。WebTransportError のコンストラクタの既定値以外の動作は保証しない)
 - MDN Browser Compat Data に基づくブラウザ対応バージョンの表示
 - WebTransport 接続 / 切断
 - 自己署名証明書のハッシュ指定
@@ -564,9 +564,9 @@ WebTransport API の動作確認ツールです。moqt-js とは独立してい�
 - WebTransport の接続状態とプロパティの表示
   - ready / closed / draining の Promise 状態
   - closed が受け取った closeInfo (closeCode / reason) の表示 (切断後も保持)
-  - reliability / congestionControl / supportsReliableOnly
+  - reliability / congestionControl (インスタンス) / supportsReliableOnly (静的プロパティ)
   - protocol / responseHeaders
-- HTTP/2 / HTTP/3 接続判別表示
+- HTTP/2 / HTTP/3 接続判別表示 (reliability 未実装のブラウザは N/A と表示)
 - 双方向ストリームの作成と送受信
 - 送信専用単方向ストリームの作成と送信
 - 受信専用単方向ストリームの受信
