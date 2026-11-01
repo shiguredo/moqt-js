@@ -3,6 +3,13 @@ import { writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { formatTrackNamespace } from "../../../src/fullTrackName";
+import type { SubscriberStats } from "../../../devtools/src/testApi";
+import {
+  formatDelayStallSampleLine,
+  readDelayStallSample,
+  summarizeDelayStall,
+  type DelayStallSample,
+} from "../../../devtools/src/utils/delayStallReport";
 import { RELAY_TEST_TIMEOUT_MS, createTestNamespace, requireRelayUri } from "./support";
 import { DEVTOOLS_URL } from "../urls";
 
@@ -183,72 +190,13 @@ interface DevtoolsPublisherStats {
   } | null;
 }
 
-/** devtools の subscriber の統計 (必要な部分) */
-interface DevtoolsSubscriberStats {
-  id: string;
-  status: string;
-  warnings: readonly unknown[];
-  framesDecoded: number;
-  catchUpPending: boolean;
-  catchUpFramesSkipped: number;
-  audio: {
-    objectsReceived: number;
-    datagramObjectsReceived: number;
-    chunksDecoded: number;
-    playbackEnabled: boolean;
-    peakDbfs: number | null;
-    rmsDbfs: number | null;
-    playoutRebases: number;
-    playoutCompressedMs: number;
-    playoutConcealedMs: number;
-    playoutConcealments: number;
-    playoutCatchUp: {
-      catchUpStarts: number;
-      skippedMs: number;
-      catchingUp: boolean;
-      lagMs: number;
-      floorMs: number;
-      maxLagMs: number;
-    };
-    receiveDelayMs: number;
-    maxReceiveDelayMs: number;
-    playoutTiming: {
-      playedMs: number;
-      missedFrames: number;
-      missedByReason: Record<string, { count: number; ms: number }>;
-      startDelayMs: { p50: number | null; p95: number | null; max: number | null } | null;
-      // 補間で埋まらなかった無音の穴と、実際に段差が残ったバッファ境界
-      gapCount: number;
-      gapMs: number;
-      gapMaxMs: number;
-      unrecoverableGapCount: number;
-      unrecoverableGapMs: number;
-      lateStartCount: number;
-      lateStartMaxMs: number;
-      boundaryStepCount: number;
-      boundaryStepMax: number;
-    };
-  };
-  avSync: {
-    delays: {
-      sharingBases: boolean;
-      unsharedReason: string;
-      baseDifferenceMs: number | null;
-      baseDifferenceRecentMs: number | null;
-      baseDifferenceSettledMs: number | null;
-      baseDifferenceDeviationMs: number | null;
-      baseDriftMsPerSecond: number | null;
-      baseDriftLimitMs: number;
-      baseUnsharedReturnMs: number | null;
-      presentationDelayCapMs: number;
-      audioDelay: {
-        targetMs: number;
-        jitterMs: number | null;
-        outputLeadMs: number | null;
-      };
-    };
-  };
-}
+/**
+ * devtools の subscriber の統計
+ *
+ * 遅延と停止のレポート (devtools/src/utils/delayStallReport.ts) が読む値を含むため、
+ * devtools が公開している型をそのまま使う (ページからは同じ形が返る)。
+ */
+type DevtoolsSubscriberStats = SubscriberStats;
 
 /** 統計を読む */
 async function readPublisher(page: Page): Promise<DevtoolsPublisherStats> {
@@ -360,7 +308,7 @@ function summarizeBaseSharing(stats: DevtoolsSubscriberStats): string {
  */
 function expectLive(stats: DevtoolsSubscriberStats, label: string): void {
   expect(
-    stats.audio.receiveDelayMs,
+    stats.audio.receiveDelayMs ?? Number.POSITIVE_INFINITY,
     `${label}: 受信の遅れが大きい (live ではなく遅れて鳴っている) (${summarizeSubscriber(stats)})`,
   ).toBeLessThan(300);
   expect(
@@ -385,7 +333,7 @@ interface AudioQualitySample {
   readonly rebases: number;
   readonly missedFrames: number;
   readonly catchUpStarts: number;
-  readonly receiveDelayMs: number;
+  readonly receiveDelayMs: number | null;
   readonly playedMs: number;
 }
 
@@ -924,7 +872,7 @@ test("購読のやり直しを繰り返しても、毎回 live の音声へ戻�
         stats.audio.objectsReceived > before.audio.objectsReceived &&
         (stats.audio.peakDbfs ?? -100) > AUDIBLE_PEAK_DBFS &&
         stats.audio.playbackEnabled &&
-        stats.audio.receiveDelayMs < 300
+        (stats.audio.receiveDelayMs ?? Number.POSITIVE_INFINITY) < 300
       ) {
         recovered = stats;
         break;
@@ -963,7 +911,7 @@ test("購読のやり直しを繰り返しても、毎回 live の音声へ戻�
   console.log(`購読のやり直しの繰り返し:\n  ${report.join("\n  ")}`);
 });
 
-test("長時間の配信で、送信の遅れと受信の遅れが悪化しない", async ({ page }) => {
+test("長時間の配信で、送信の遅れと受信の遅れが悪化しない", async ({ page }, testInfo) => {
   test.setTimeout(TEST_TIMEOUT_MS);
   const moqtUri = requireRelayUri();
   if (moqtUri === null) {
@@ -977,7 +925,12 @@ test("長時間の配信で、送信の遅れと受信の遅れが悪化しな�
   // 手元の実測 (2026-10-14) では、配信側の送信が 2.1 秒詰まり (maxSendLagMs)、受信側の
   // 追いつきが 3.2 秒を飛ばし、A/V の基準が共有されないまま残った。時間とともに遅れが
   // 育つのか、途中で詰まるのかを、1 秒ごとに観測して見る
+  //
+  // 音声だけでなく映像の遅延と停止も同じ点で採り、経路 (publisher・sora-moq・経路) と
+  // 受信側 (復号・playout) のどちらで起きたかを後から切り分けられるようにする
   const series: string[] = [];
+  const delayStallSamples: DelayStallSample[] = [];
+  const startedAtMs = Date.now();
   // メインスレッドが止まった長さを測る。音を鳴らす予約はメインスレッドで行うため、ここが
   // 止まると予約が遅れ、基準の取り直し (playoutRebases) が起きる。環境の停止と実装の
   // 不具合を切り分けるために測る (詳細は下の判定)
@@ -1001,18 +954,19 @@ test("長時間の配信で、送信の遅れと受信の遅れが悪化しな�
     const publisher = await readPublisher(page);
     const subscriber = await readSubscriber(page);
     worstSendLagMs = Math.max(worstSendLagMs, publisher.audio.catchUp.maxSendLagMs ?? 0);
-    worstReceiveDelayMs = Math.max(worstReceiveDelayMs, subscriber.audio.maxReceiveDelayMs);
+    worstReceiveDelayMs = Math.max(worstReceiveDelayMs, subscriber.audio.maxReceiveDelayMs ?? 0);
+    // 映像の遅延 (到着・表示待ち・表示遅延) と停止、音声の遅延と欠落を 1 点にまとめる
+    const delayStallSample = readDelayStallSample(subscriber, Date.now() - startedAtMs);
+    delayStallSamples.push(delayStallSample);
     series.push(
       `t=${((Date.now() - (endMs - SOAK_MS)) / 1000).toFixed(0)}s` +
         ` sendLag=${publisher.audio.catchUp.sendLagMs === null ? "-" : publisher.audio.catchUp.sendLagMs.toFixed(0)}` +
         `/max=${publisher.audio.catchUp.maxSendLagMs === null ? "-" : publisher.audio.catchUp.maxSendLagMs.toFixed(0)}` +
         `/queue=${publisher.audio.catchUp.sendQueueMs.toFixed(0)}` +
         `/obj=${publisher.audio.objectsSent}` +
-        ` | recvDelay=${formatNullableMs(subscriber.audio.receiveDelayMs)}` +
-        `/max=${formatNullableMs(subscriber.audio.maxReceiveDelayMs)}` +
+        ` | ${formatDelayStallSampleLine(delayStallSample)}` +
         `/rebases=${subscriber.audio.playoutRebases}` +
         `/skip=${subscriber.audio.playoutCatchUp.skippedMs.toFixed(0)}` +
-        `/missed=${subscriber.audio.playoutTiming.missedFrames}` +
         `/peak=${subscriber.audio.peakDbfs === null ? "-" : subscriber.audio.peakDbfs.toFixed(1)}`,
     );
     await page.waitForTimeout(SAMPLE_INTERVAL_MS);
@@ -1023,6 +977,14 @@ test("長時間の配信で、送信の遅れと受信の遅れが悪化しな�
     () =>
       (window as unknown as { __stallProbe?: { maxGapMs: number } }).__stallProbe?.maxGapMs ?? 0,
   );
+  // 遅延と停止の内訳を、経路と受信側に分けた形でログへ出し、1 秒ごとの値は添付ファイルに
+  // 残す。失敗したときに、遅かったのか止まったのか、どちらの層かがログだけで分かる
+  const delayStallReport = summarizeDelayStall(delayStallSamples);
+  console.log(delayStallReport.lines.join("\n"));
+  await testInfo.attach("av-delay-stall-samples.jsonl", {
+    body: delayStallSamples.map((sample) => JSON.stringify(sample)).join("\n"),
+    contentType: "application/x-ndjson",
+  });
   console.log(`メインスレッドが止まった最大の長さ: ${mainThreadStallMs.toFixed(0)} ms`);
   // 基準の取り直しと、追いつきが飛ばす音は、経路の跳ねとメインスレッドの停止で決まる。
   // 環境が乱れた回は「設計どおりに戻ったか」だけを見て、静かな回だけ厳しく見る。
@@ -1058,6 +1020,16 @@ test("長時間の配信で、送信の遅れと受信の遅れが悪化しな�
       `購読=${summarizeSubscriber(finalSubscriber)}`,
   );
 
+  // 映像が復号され続けている (この試験は音声と映像の両方を配信・購読している)
+  expect(
+    delayStallReport.video.framesDecodedGrowth,
+    `映像の復号が進んでいない (${delayStallReport.lines.join(" / ")})`,
+  ).toBeGreaterThan(0);
+  // 映像が長時間止まっていない。止まった場合は原因 (到着・復号・描画など) を内訳に残す
+  expect(
+    delayStallReport.video.maxSingleStallMs ?? 0,
+    `映像が長時間止まった (${delayStallReport.lines.join(" / ")})`,
+  ).toBeLessThan(5_000);
   // 送信の遅れが育っていない (手元の実測は 2146 ms だった)
   expect(
     worstSendLagMs,
