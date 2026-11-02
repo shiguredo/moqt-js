@@ -1,7 +1,7 @@
 # createMediaPublisher が PUBLISH_NAMESPACE を送らない
 
 - Created: 2026-11-02
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-02
 - Branch: feature/add-media-publisher-namespace-announcement
 - Polished: 2026-11-02
 
@@ -46,7 +46,7 @@
 - `announceNamespace` を指定しない場合と `false` の場合に `publishNamespace` を呼ばない
 - `announceNamespace: true` で、`namespace` と同じ配列と SETUP のトークン付きで `publishNamespace` を 1 回呼び、PUBLISH の往復の後に告知する (呼び出し順も固定する)
 - 告知の `REQUEST_OK` を待って `namespacePublication` が `"active"` になり、`stop()` / `close()` の後に `null` になる
-- 告知の確立前の失敗 (`REQUEST_ERROR`、読み取りエラー (ただし `REQUEST_OK` の decode が `ProtocolViolationError` を投げる経路は除く。この経路は Session エラーと `start()` の失敗で 2 回通知し得る)、`PUBLISH_NAMESPACE_OK` のスコープ違反と Track Properties 違反) で `start()` が失敗し、`onError` は 1 回だけ通知され、確保済みのリソースが残らない
+- 告知の確立前の失敗 (`REQUEST_ERROR`、読み取りエラー (ただし `REQUEST_OK` の decode が `ProtocolViolationError` を投げる経路は除く)、`PUBLISH_NAMESPACE_OK` のスコープ違反と Track Properties 違反) で `start()` が失敗し、`onError` は 1 回だけ通知され、確保済みのリソースが残らない。実装では start 中に Session エラーを通知したかを記録するため、`REQUEST_OK` の decode の経路も 1 回になる (解決方法を参照)
 - 告知の確立前に `close()` またはピア起点の close が重なった場合に、`start()` が失敗して publication の参照が残らない
 - `stop()` / `close()` で `done()` を 1 回呼び、それが catalog / 音声 / 映像の publisher の `done()` より前である (呼び出し順も固定する)。`stop()` からの再 `start()` で再度告知する
 - `pause()` / `resume()` で `done()` も再告知もしない
@@ -67,7 +67,16 @@
 
 ## 解決方法
 
-{未着手}
+`MediaPublisherOptions.announceNamespace` (`boolean`、既定 false) と `MediaPublisher.namespacePublication` を追加した。`start()` は PUBLISH の確立後に `Session.publishNamespace` で `PUBLISH_NAMESPACE` を送り、`REQUEST_OK` を待ってから続行する。認可トークンは `SETUP` に載せたものを `PUBLISH` と共用する (`setupAuthorizationTokenOptions()` に集約)。
+
+- 低レベル: Session 終了時に未確立の `publishNamespace()` の Promise が settle しない穴を修正した。`NamespacePublicationState` に確立前の reject を保持し、`sessionRejectPendingRequests` が reject する (エントリの削除は専用ループが行う)。確立時に `namespaceStartPublicationStreamLoop` が reject を外す。`done()` 後も `NamespacePublication.namespace` を読めるよう、生成時に namespace を固定した
+- 高レベルのライフサイクル: 告知は `stop()` / `close()` の解放で publisher の `done()` より前に `done()` する。`pause()` / `resume()` は維持する。利用者の `done()` は配信を継続する。`start()` の実行中は `namespacePublication` が null を返す。告知の失敗は `start()` の失敗にし、`onError` は 1 回だけ通知する (Session エラーが `start()` の失敗としても届く経路は、start 中に Session エラーを通知したかで抑止する)
+- E2E: `tests/e2e/main.ts` に namespace 系の操作を露出し、`tests/e2e/relay/namespace-announcement.spec.ts` を追加した。実リレーで `PUBLISH_NAMESPACE` の受理 (`REQUEST_OK`)、`SUBSCRIBE_NAMESPACE` での `NAMESPACE` 受信、`close()` 後の `NAMESPACE_DONE` を確認した (2026-11-02、1 passed)
+- 確認: `npx vp check`、`npx vp test run` (4414 tests)、`npx vp run build`、実リレー E2E が通る
+- 設計からの変更: issue の設計方針は `REQUEST_OK` の decode の `ProtocolViolationError` 経路を「対象外・2 回通知し得る」としていたが、実装では start 中に Session エラーを通知したかで抑止するため 1 回になった。テストでも固定した。確立後の protocol violation (2 通目の `REQUEST_OK` の構造破損、確立後の `REQUEST_ERROR` の不正 redirect など) は、低レベルが per-request コールバックと Session エラーの両方に通知するため 2 回通知し得る。この経路は今回の対象外として残し、follow-up issue 候補として報告する
+- 確認できなかったこと: 音声・映像の `PUBLISH` と告知の順序は catalog の `PUBLISH` との順序だけを単体テストで固定し、音声・映像は await の位置で保証している。Session 終了が `publishNamespace` のストリーム作成 / write の await 中に重なった場合は、登録前のため reject の対象外であり、settle はストリームの読み取りエラーに依存する (既知の窓。follow-up 候補)
+- 未検証: 発見した namespace の track を `SUBSCRIBE` して受信する経路は実リレー未検証。今回の往復確認とは分けた
+- `CHANGES.md` は MOQT RFC ドラフト期間中のため更新していない
 
 ## 参照
 
