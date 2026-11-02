@@ -74,9 +74,14 @@ interface AacEncoderProbe {
  * CI の runner は Linux のため、AAC の実リレー配信を確かめる前に、実行環境で符号化
  * できるかを判定する。判定規則を二重に持たないよう、devtools が読み込んだ
  * src/codec/configSupport.ts の実体を performance の取得結果から探して import する
+ *
+ * 符号化できるサンプルレートはプラットフォームで異なる (Chrome は 44100 / 48000 Hz
+ * だけ、macOS の AudioToolbox はより広い) ため、確かめるサンプルレートを引数で渡す。
+ *
+ * @param sampleRate - 確かめるサンプルレート (Hz)
  */
-async function probeAacEncoding(page: Page): Promise<AacEncoderProbe> {
-  return page.evaluate(async () => {
+async function probeAacEncoding(page: Page, sampleRate: number): Promise<AacEncoderProbe> {
+  return page.evaluate(async (probeSampleRate) => {
     const moduleUrl = performance
       .getEntriesByType("resource")
       .map((entry) => entry.name)
@@ -94,11 +99,11 @@ async function probeAacEncoding(page: Page): Promise<AacEncoderProbe> {
     };
     return module.probeAudioEncoderConfig({
       codec: "mp4a.40.2",
-      sampleRate: 48_000,
+      sampleRate: probeSampleRate,
       numberOfChannels: 2,
       bitrate: 96_000,
     });
-  });
+  }, sampleRate);
 }
 
 test("MediaStreamTrackProcessor が無いブラウザでも moqt-devtools のダミー音声が実リレー経由で届く", async ({
@@ -253,7 +258,7 @@ test("moqt-devtools のダミー音声を AAC で符号化して実リレー経�
     await expect(publisherPage.getByTestId("moqt-uri")).toHaveValue(moqtUri);
     // AAC を符号化できない環境 (CI の Linux など) では、この経路を確かめずに skip する。
     // 配信を始めてからでは、失敗した理由が対象の不具合か環境の制約かを切り分けられない
-    const aacEncoding = await probeAacEncoding(publisherPage);
+    const aacEncoding = await probeAacEncoding(publisherPage, 48_000);
     if (!aacEncoding.supported) {
       const reason = aacEncoding.reason === undefined ? "" : `: ${aacEncoding.reason}`;
       test.skip(
@@ -350,7 +355,12 @@ test("moqt-devtools は AAC で符号化できない形式のとき、配信開�
   // Chromium の AAC エンコーダーは 44100 / 48000 Hz だけに対応する (実測。
   // isConfigSupported は 16000 Hz を非対応と報告する)。対応の申告だけで配信を
   // 始めると、音声 Object が 1 つも送られないまま catalog だけが音声トラックを
-  // 広告するため、配信開始前に失敗することを固定する
+  // 広告するため、配信開始前に失敗することを固定する。
+  //
+  // 符号化できるサンプルレートはプラットフォームのエンコーダーで異なり、macOS の
+  // WebKit (AudioToolbox) は 16000 Hz も符号化できる。その環境では devtools の
+  // 事前判定が通ってしまうため、この試験の前提が成り立たない。前提が成り立たない
+  // 環境では、対象の不具合か環境の制約かを切り分けられないので skip する。
   test.setTimeout(TEST_TIMEOUT_MS);
   const moqtUri = requireRelayUri();
   if (moqtUri === null) {
@@ -373,6 +383,17 @@ test("moqt-devtools は AAC で符号化できない形式のとき、配信開�
 
   try {
     await publisherPage.goto(`${DEVTOOLS_URL}?${params.toString()}`);
+    // devtools の事前判定が 16000 Hz を符号化できると答える環境では、配信開始前の
+    // 失敗を確かめられないため skip する
+    const aacEncoding = await probeAacEncoding(publisherPage, 16_000);
+    if (aacEncoding.supported) {
+      const reason = aacEncoding.reason === undefined ? "" : `: ${aacEncoding.reason}`;
+      test.skip(
+        true,
+        `このブラウザは AAC を 16000 Hz で符号化できるため、符号化できない設定での失敗を確かめない${reason}`,
+      );
+      return;
+    }
     await publisherPage.getByTestId("publisher-publish-button").click();
 
     await expect
