@@ -43,6 +43,8 @@ const playout = createMediaPlayout({
   // 映像の表示。表示すると決めたフレームの出し先を渡す
   video: {
     output: {
+      // 書き込みの次の vsync で表示されるため 1
+      presentationLatencyTicks: 1,
       isAvailable: () => true,
       present: (frame, presentationMs) => {
         // 受け取ったフレームはここで表示し、writer へ渡す。所有権は戻り値にかかわらず
@@ -113,6 +115,8 @@ const writer = generator.writable.getWriter();
 const playout = createMediaPlayout({
   video: {
     output: {
+      // 書き込みの次の vsync で表示されるため 1
+      presentationLatencyTicks: 1,
       isAvailable: () => true,
       present: (frame) => {
         writer.write(frame).catch(() => {
@@ -194,12 +198,8 @@ interface MediaPlayoutAudioOptions {
 }
 
 interface MediaPlayoutVideoOptions {
-  // 表示すると決めたフレームの出し先 (必須)
+  // 表示すると決めたフレームの出し先 (必須)。presentationLatencyTicks も指定する
   output: VideoPlayoutOutput;
-  // 表示の周期の進め方。省略すると MediaPlayout が
-  // { drainImmediately: true, framesPerDrain: Number.POSITIVE_INFINITY } を渡す
-  // (表示時刻を過ぎたフレームをすべて出す)
-  pacing?: VideoPlayoutPacing;
   // 捨てたフレームの記録先 (計器)。省略すると記録しない
   timing?: VideoPlayoutTiming;
   // 表示するかどうかの選別。false を返すとそのフレームは表示せずに閉じて notAdmitted を返す。
@@ -275,7 +275,7 @@ track が同じ値を持つことは MUST だが、音声と映像で同じ値�
   `PlayoutDelayBreakdown`、`PlayoutTrackBreakdown`、`PlayoutUnsharedReason`、
   `AudioMissEvent`、`AudioMissReason`、`AudioMissTotal`
 - 注入する実物の型: `AudioPlayoutContext` / `AudioPlayoutOutput`、`VideoPlayoutOutput`、
-  `VideoPlayoutPacing`、`VideoPlayoutTiming`
+  `VideoPlayoutTiming`
 - 計器: `AudioPlayoutTimingStats` (公開クラス)、`AUDIO_PLAYOUT_TIMING_WINDOW_MS`、
   `AUDIO_PLAYOUT_BOUNDARY_STEP_THRESHOLD`、`AUDIO_MISS_REASONS`、
   `EMPTY_AUDIO_PLAYOUT_TIMING`、`formatAudioMissEvent`、`AudioPlayoutBasis`、
@@ -357,6 +357,11 @@ setInterval(() => {
 
 ```typescript
 interface VideoPlayoutOutput {
+  // 表示先の提示遅延 (表示周期の tick 数、0〜4 の整数。実用値は 0〜2)。present() を
+  // 呼んでから実際に表示されるまでの遅延を表す。canvas への描画は rAF のコールバック内で
+  // その vsync に含まれるため 0、MediaStreamTrackGenerator は書き込みの次の vsync で
+  // 表示されるため 1 (Chromium 156 の実測。ブラウザの仕様として保証された値ではない)
+  presentationLatencyTicks: number;
   // フレームを表示する。presentationMs は時間軸が決めた表示時刻
   // (performance.now() と同じ軸のミリ秒)。届いた順に表示するフレームは null。
   // true / false にかかわらずフレームの所有権を受け取り、必ず閉じる
@@ -365,28 +370,25 @@ interface VideoPlayoutOutput {
   isAvailable(): boolean;
 }
 
-interface VideoPlayoutPacing {
-  // フレームを積んだ時点で、表示周期を待たずに表示するか
-  drainImmediately: boolean;
-  // 1 つの表示周期に表示する枚数の上限 (すべて表示するときは Number.POSITIVE_INFINITY)
-  framesPerDrain: number;
-}
-
 interface VideoPlayoutTiming {
   // 表示待ちの上限を超えて捨てたフレーム
   recordQueueDrop(timestamp: number): void;
-  // 表示時刻を過ぎて間に合わなかったフレーム (presentationMs は表示時刻。決められない
-  // ときは捨てた時刻)
+  // 提示しなかったフレーム (表示時刻を過ぎたフレームと、同じ表示周期に重なって
+  // 提示できなかったフレーム)。presentationMs は表示時刻。決められないときは捨てた時刻
   recordLateDrop(timestamp: number, presentationMs: number): void;
 }
 ```
 
-`pacing` は出し先によって変える。`drainImmediately` が true なら、フレームを積んだ時点で
-表示時刻を過ぎているフレームを出す (ライブラリ。表示の間隔は `MediaStreamTrackGenerator` の
-先のブラウザが TIMESTAMP から決める)。false なら表示周期まで待つ (moqt-devtools)。
-`framesPerDrain` は 1 つの表示周期に出す枚数の上限である。省略したときに `MediaPlayout` が
-渡す値は `Number.POSITIVE_INFINITY` (表示できる分をすべて出す) であり、devtools は canvas へ
-直接描くため 1 にする (まとめて描くと、まとまって届いたフレームが早送りに見える)。
+表示は rAF の tick ごとに 1 枚だけ行う。書き込み tick の時刻に `presentationLatencyTicks` を
+足した時刻を目標の表示時刻とし、その時刻に最も近いフレームを表示周期の半分の許容幅で選ぶ。
+目標より古いフレームは原則として提示せずに捨てる (遅れて提示すると、次のフレームを早く
+出して表示間隔が半分になるため)。ただし、目標に合うフレームがキューに無く、目標に最も近い
+フレームの遅れが `MAX_PRESENTATION_LAG_MS` (20 ms) 以内なら、表示を止めないため 1 枚だけ
+遅れて提示する。`presentationLatencyTicks` が 1 の `MediaStreamTrackGenerator` は、
+書き込みの次の vsync で表示されるため、表示時刻の 1 tick 前に書き、遅れてよい上限も
+1 tick の分だけ広げる。時間軸の映像の表示の遅れが 1 tick 未満のときは、書き込みの次の
+vsync より前に表示できないため、最も近い vsync ではなく次の vsync 以降に表示される
+(到着の位相により 1〜2 tick 遅れる。フレームは捨てない)。
 
 `timing` は、捨てたフレームの記録先である。ライブラリは映像の計器を持たないため省略し、
 moqt-devtools は「受信から表示までの時間」の統計へ記録する。

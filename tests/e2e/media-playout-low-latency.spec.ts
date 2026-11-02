@@ -28,8 +28,8 @@ test("A/V の到着が 180 ms 停滞しても、回復後に待ちを保持せ�
     const playout = createMediaPlayout({
       audio: { context: output.context, destination: output.destination },
       video: {
-        pacing: { drainImmediately: false, framesPerDrain: 1 },
         output: {
+          presentationLatencyTicks: 0,
           isAvailable: () => canvas.isConnected,
           present: (frame: VideoFrame) => {
             drawing.drawImage(frame, 0, 0);

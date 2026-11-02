@@ -107,8 +107,8 @@ export async function measure(
       state.playout = createMediaPlayout({
         audio: { context, destination: state.tap },
         video: {
-          pacing: { drainImmediately: false, framesPerDrain: 1 },
           output: {
+            presentationLatencyTicks: 0,
             isAvailable: () => state.destination.isConnected,
             present: (frame, plannedMs) => {
               drawing.drawImage(frame, 0, 0);

@@ -18,7 +18,7 @@
  * 2. N を受け取ったが、今回表示したフレームより前で表示しなかった
  *    - Group の切り替えの保留から出ていない: `groupSwitchHold`
  *    - 復号せずに捨てた: `discarded`
- *    - 表示に間に合わずに捨てた、表示キューのあふれで捨てた: N の表示の時刻に間に合わなかった段
+ *    - 提示しなかった、表示キューのあふれで捨てた: N の表示の時刻に間に合わなかった段
  *      (3 と同じ判定。ただし `playout` は今回表示したフレームにだけ使う)
  * 3. N が今回表示したフレーム: N の表示の時刻に間に合わなかった段
  *    - 表示の時刻は jitter buffer の表示時刻。無ければ P の表示の時刻 + P と N の TIMESTAMP の差
@@ -103,7 +103,7 @@ interface FrameRecord {
   readonly receivedAtMs: number;
   releasedAtMs: number | null;
   decodedAtMs: number | null;
-  // jitter buffer の表示時刻 (表示したとき、間に合わずに捨てたとき)。無ければ null
+  // jitter buffer の表示時刻 (表示したとき、提示しなかったとき)。無ければ null
   presentationMs: number | null;
   fate: FrameFate;
 }
@@ -254,7 +254,7 @@ export class StallAnalyzer {
   }
 
   /**
-   * jitter buffer が間に合わずに捨てたことを記録する
+   * 提示しなかった (表示時刻を過ぎた、または同じ表示周期に重なった) ことを記録する
    *
    * @param presentationMs - 捨てたフレームの表示時刻 (`performance.now()` の時間軸)
    */

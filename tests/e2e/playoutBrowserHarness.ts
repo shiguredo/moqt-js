@@ -194,6 +194,7 @@ export interface CanvasVideoOutput {
   readonly canvas: HTMLCanvasElement;
   /** 再生の入口へ渡す出し先 */
   readonly output: {
+    presentationLatencyTicks: number;
     isAvailable(): boolean;
     present(frame: VideoFrame, presentationMs: number | null): boolean;
   };
@@ -211,6 +212,8 @@ export interface CanvasVideoOutputOptions {
   readonly height?: number;
   /** 出し先を使えるかの判定。省略すると canvas が DOM に繋がっているか */
   readonly isAvailable?: () => boolean;
+  /** 表示先の提示遅延 (表示周期の tick 数)。canvas は 0 (既定) */
+  readonly presentationLatencyTicks?: number;
   /**
    * `present` の振る舞い。省略すると canvas へ描いてフレームを閉じる
    *
@@ -245,6 +248,7 @@ export function createCanvasVideoOutput(options: CanvasVideoOutputOptions = {}):
   return {
     canvas,
     output: {
+      presentationLatencyTicks: options.presentationLatencyTicks ?? 0,
       isAvailable,
       present: (frame, presentationMs) => {
         presentCallCount++;

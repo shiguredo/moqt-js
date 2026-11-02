@@ -234,6 +234,23 @@ function formatNullableMs(value: number | null): string {
   return value === null ? "-" : value.toFixed(0);
 }
 
+/** 映像の表示の計器を 1 行にする (記録用。判定には使わない) */
+function summarizeVideoPlayout(stats: DevtoolsSubscriberStats): string {
+  const timing = stats.playoutTiming;
+  const display = timing.displayIntervalMs;
+  const causes = Object.entries(timing.stallCauses)
+    .filter(([, value]) => value.count > 0)
+    .map(([cause, value]) => `${cause}=${value.count}(${value.ms.toFixed(0)}ms)`)
+    .join("/");
+  return [
+    `displayIntervalMs=${display === null ? "-" : `${display.p50?.toFixed(1)}/${display.p95?.toFixed(1)}/${display.max?.toFixed(1)}`}`,
+    `displayStalls=${timing.displayStalls}`,
+    `displayStallMs=${timing.displayStallMs.toFixed(0)}`,
+    `stallCauses=${causes === "" ? "-" : causes}`,
+    `recentStalls=${timing.recentStalls.length}`,
+  ].join(", ");
+}
+
 /** 判定に使う値の 1 行 (失敗メッセージとログに残す) */
 function summarizeSubscriber(stats: DevtoolsSubscriberStats): string {
   const { audio, avSync } = stats;
@@ -1019,6 +1036,9 @@ test("長時間の配信で、送信の遅れと受信の遅れが悪化しな�
       `受信の遅れの最大=${worstReceiveDelayMs.toFixed(0)} ms, ` +
       `購読=${summarizeSubscriber(finalSubscriber)}`,
   );
+  // 映像は判定に使わず、表示間隔と止まりの原因を記録だけする (不可避な vsync 量子化の
+  // 3 tick 間隔と、位相ずれによる余分な待ちを後から区別するため)
+  console.log(`映像の表示の計器: ${summarizeVideoPlayout(finalSubscriber)}`);
 
   // 映像が復号され続けている (この試験は音声と映像の両方を配信・購読している)
   expect(
