@@ -1,7 +1,7 @@
 # 高レベル購読で publisher の出現待ちを表現できない
 
 - Created: 2026-11-02
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-02
 - Branch: feature/add-media-subscriber-rendezvous-timeout
 - Polished: 2026-11-02
 
@@ -63,7 +63,18 @@
 
 ## 解決方法
 
-{未着手}
+`MediaSubscriberOptions.rendezvousTimeout` (`number`、ミリ秒) を追加した。0 以上 `Number.MAX_SAFE_INTEGER` 以下の整数だけを受け付け、負数・小数・非有限・上限超は `createMediaSubscriber()` の生成時に拒否する。値は `bigint` に変換して catalog / 音声 / 映像の `SUBSCRIBE` の `SubscribeOptions.rendezvousTimeout` として渡す。`0` を指定した場合は 0 のパラメータを載せ、未指定の場合は載せない (relay の既定も 0 だが、明示と省略を区別する)。
+
+- catalog の受信タイムアウト (5000 ms) は `SUBSCRIBE_OK` を受けた後に数え始めるようにした。従来は `session.subscribe` の前にタイマーを張っており、relay が publisher の出現を待って `SUBSCRIBE_OK` を保留すると、購読確立の直後に `catalog receive timeout` で失敗し、待ちの間にハンドラの無い rejection も残り得た
+- `start()` の失敗の契約を `docs/HIGH_LEVEL_API.md` に定めた。relay の `REQUEST_ERROR` は `RequestError` で届き、`code` と `retryInterval` (§9.4.2 の Retry Interval の生値、「ミリ秒 + 1」、0 はそのままでは再試行しない) を読める。`DOES_NOT_EXIST` / `TIMEOUT`、`UNAUTHORIZED` / `EXPIRED_AUTH_TOKEN`、`MALFORMED_AUTH_TOKEN`、`NOT_SUPPORTED`、`GOING_AWAY` / `EXCESSIVE_LOAD` / `INTERNAL_ERROR` の再試行の判断を表にした。接続・セッションの失敗 (`SessionError` / `WebTransportError` / `DOMException` / 素の `Error`) と、それ以外の `Error` (`catalog receive timeout`、`MalformedTrackError`、解放による打ち切り) も分類した
+- GOAWAY の扱いを `docs/HIGH_LEVEL_API.md` に書いた。高レベル API は新しい Session URI を取得できず、§9.2 の「URI が提供されたら新しいセッションに使う MUST」を満たせない。URI を使う再接続は低レベル API の `ConnectCallbacks.goaway` / `SubscribeCallbacks.goaway` を使う必要があり、高レベル対応は対象外とした
+- `docs/LOW_LEVEL_API.md` に `SubscribeOptions.rendezvousTimeout` の意味 (SUBSCRIBE のみ、既定 0、relay が短縮し得る、publisher 不在のときの `DOES_NOT_EXIST` と期限切れの `TIMEOUT`、Retry Interval との関係) を追加した
+- `tests/e2e/main.ts` に `rendezvousTimeout` と、開始失敗の観測 (`RequestError` の `code` / `retryInterval`) を露出し、`tests/e2e/relay/rendezvous-timeout.spec.ts` を追加した。実リレー (2026-11-02) で、publisher 不在の namespace への購読が `rendezvousTimeout` 付きで `RequestError` (`TIMEOUT` / `DOES_NOT_EXIST`) として失敗すること、publisher が居る購読が `rendezvousTimeout` を指定しても購読確立することを確認した (2 passed)
+- 待ちを表す状態は追加していない。`start()` が解決しない時間として待ち、`"subscribing"` のままであることは既存の状態遷移のままである
+- 待ちの間の `close()` / ピア起点の close による打ち切りは、既存の `session.subscribe` の待ち中の close と catalog の受信待ち中の close のテストで固定されている (新しい reject 経路は無い)
+- 確認: `npx vp check`、`npx vp test run` (4425 tests)、`npx vp run build`、実リレー E2E (`--project=relay`) 2 passed
+- 対象外: GOAWAY の新しい Session URI を使う高レベル API の再接続、自動のバックオフ再試行、複数 namespace を購読するプール
+- `CHANGES.md` は MOQT RFC ドラフト期間中のため更新していない
 
 ## 参照
 

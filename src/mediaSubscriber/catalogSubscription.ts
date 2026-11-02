@@ -2,8 +2,9 @@
  * Catalog 購読フェーズ
  *
  * `MediaSubscriberImpl` から切り出した、catalog トラックの SUBSCRIBE / FETCH と、
- * 受信した catalog からのトラック解決を受け持つ。受信タイムアウト・エラー通知・
- * 解決の順序は `MediaSubscriberImpl` に置いていたときと同じであり、挙動は変えない。
+ * 受信した catalog からのトラック解決を受け持つ。受信タイムアウトの起点は
+ * SUBSCRIBE_OK の後であり、エラー通知と解決の順序は `MediaSubscriberImpl` に置いていた
+ * ときと同じである。
  *
  * catalog の受信状態 (`CatalogSubscriptionState`) は `MediaSubscriberImpl` が持ち、
  * このクラスは getter / setter を通して読み書きする。状態を実装クラスに残すのは、
@@ -80,6 +81,8 @@ interface CatalogSubscriptionDependencies {
   readonly state: CatalogSubscriptionState;
   /** 購読の設定 (namespace / 音声・映像の要求) */
   readonly options: Pick<MediaSubscriberOptions, "namespace" | "audio" | "video">;
+  /** SUBSCRIBE に載せる RENDEZVOUS_TIMEOUT (ミリ秒、未指定は undefined) */
+  readonly rendezvousTimeout: bigint | undefined;
   /** 接続済みの Session (未接続なら null) */
   readonly session: () => Session | null;
   /** 利用者の onError への通知。通知の例外は呼び出し元の経路へそのまま伝わる */
@@ -189,39 +192,11 @@ export class CatalogSubscription {
     const namespace = this.deps.options.namespace;
     const catalogAuthorizationToken = this.catalogAuthorizationToken();
 
-    // Catalog 受信を待つ Promise を作成
-    // タイムアウトは「未 resolve」で reject する。FETCH フェーズ中にフルが来ても
-    // その場では resolve しない契約のため、`!receivedCatalog` だけではフェーズ未完了時に
-    // ハングする。フェーズが終わらないまま期限に達したときは、ドレインしてから判定する。
-    const catalogPromise = new Promise<Catalog>((resolve, reject) => {
-      this.state.catalogResolve = resolve;
-      this.state.catalogReject = reject;
-
-      this.state.catalogTimer = setTimeout(() => {
-        this.state.catalogTimer = null;
-        if (this.state.catalogResolve === null) {
-          return;
-        }
-        try {
-          // FETCH の応答が end も error も通知されないまま期限に達しても、live の
-          // SUBSCRIBE で届いていた catalog は破棄しない。まずバッファをドレインし、
-          // フル catalog があれば resolve する (FETCH に応答しない、または応答が
-          // 終わらないリレーでは、受信済みの catalog が使われないまま期限に達していた)
-          this.finishCatalogFetchPhase();
-        } catch (error) {
-          // ドレインは利用者コールバック (onCatalog) を呼ぶ。live 配送経路と同じく
-          // 例外は onError へ流し、タイマーコールバックの外へは出さない
-          // (呼び出し元がライブラリ内に無く、未処理例外になるため)
-          try {
-            this.deps.reportError(error instanceof Error ? error : new Error(String(error)));
-          } catch {
-            // 通知の失敗を伝える経路がこれ以上無い
-          }
-        }
-        // ドレインで resolve 済みなら何もしない
-        this.rejectCatalogReceiveTimeout();
-      }, timeoutMs);
-    });
+    // Catalog 受信を待つ Promise は SUBSCRIBE_OK の後で作る。SUBSCRIBE_OK より前に
+    // タイマーを張ると、relay が publisher の出現を待って SUBSCRIBE_OK を保留する間
+    // (rendezvousTimeout) に受信タイマーが進み、購読確立の直後に timeout で失敗する。
+    // Promise を先に作ると、購読失敗時にハンドラの無い rejection も残る
+    let catalogPromise: Promise<Catalog>;
 
     // FETCH フェーズ用フラグは session.subscribe 呼び出し前に立てる
     // (SUBSCRIBE_OK までの race で live がバッファを迂回するのを防ぐ)
@@ -253,6 +228,11 @@ export class CatalogSubscription {
         {
           // Next Object (Location Filter Type 0x05): live は現在の最新 catalog の次から受信する
           filter: { nextObject: true },
+          // draft-ietf-moq-transport-22 §9.20.6 (RENDEZVOUS_TIMEOUT): publisher の出現を
+          // 待つ上限 (SUBSCRIBE ごと)。0 は明示的な即時要求、未指定は載せない
+          ...(this.deps.rendezvousTimeout === undefined
+            ? {}
+            : { rendezvousTimeout: this.deps.rendezvousTimeout }),
           // draft-ietf-moq-msf-01 §11.4.3: catalog に紐づくトークンは SUBSCRIBE にも MUST 付与
           ...(catalogAuthorizationToken === undefined
             ? {}
@@ -273,6 +253,40 @@ export class CatalogSubscription {
     // 購読の await 中に解放が先行していれば、FETCH の発行も受信待ちもしない
     // (確保した購読は start の巻き戻しが解放する)
     this.deps.assertStartNotDisposed(startGeneration);
+
+    // SUBSCRIBE_OK を受けたので、ここから catalog Object の受信タイムアウトを数える。
+    // タイマーは「未 resolve」で reject する。FETCH フェーズ中にフルが来ても
+    // その場では resolve しない契約のため、`!receivedCatalog` だけではフェーズ未完了時に
+    // ハングする。フェーズが終わらないまま期限に達したときは、ドレインしてから判定する
+    catalogPromise = new Promise<Catalog>((resolve, reject) => {
+      this.state.catalogResolve = resolve;
+      this.state.catalogReject = reject;
+
+      this.state.catalogTimer = setTimeout(() => {
+        this.state.catalogTimer = null;
+        if (this.state.catalogResolve === null) {
+          return;
+        }
+        try {
+          // FETCH の応答が end も error も通知されないまま期限に達しても、live の
+          // SUBSCRIBE で届いていた catalog は破棄しない。まずバッファをドレインし、
+          // フル catalog があれば resolve する (FETCH に応答しない、または応答が
+          // 終わらないリレーでは、受信済みの catalog が使われないまま期限に達していた)
+          this.finishCatalogFetchPhase();
+        } catch (error) {
+          // ドレインは利用者コールバック (onCatalog) を呼ぶ。live 配送経路と同じく
+          // 例外は onError へ流し、タイマーコールバックの外へは出さない
+          // (呼び出し元がライブラリ内に無く、未処理例外になるため)
+          try {
+            this.deps.reportError(error instanceof Error ? error : new Error(String(error)));
+          } catch {
+            // 通知の失敗を伝える経路がこれ以上無い
+          }
+        }
+        // ドレインで resolve 済みなら何もしない
+        this.rejectCatalogReceiveTimeout();
+      }, timeoutMs);
+    });
 
     // 既存 catalog を FETCH で取得する。要求範囲と Location Filter は
     // catalogFetchFilter が決める (フィルタは常に載り、フィルタ無しの FETCH は送らない)。

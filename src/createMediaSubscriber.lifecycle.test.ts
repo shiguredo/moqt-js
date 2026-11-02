@@ -33,6 +33,8 @@ import type { MediaSubscriberCallbacks, MediaSubscriberState } from "./codec/typ
 
 import { encodeCatalog } from "./msf";
 
+import { RequestError, RequestErrorCode } from "./error";
+
 import * as LOC from "./loc";
 import { type MoqtObject } from "./dataStream";
 
@@ -51,6 +53,7 @@ import {
   makeIdentifiedObject,
   makeStreamVideoObject,
   createCatalogTestSession,
+  makeCatalog,
   makeVideoCatalog,
   sleep,
   AV_SYNC_TARGET_LATENCY_MS,
@@ -2370,12 +2373,13 @@ test("close: subscribing 中の close は catalog の受信待ちを打ち切る
 
   // SUBSCRIBE は確立するが catalog は届かない (受信待ちが残る)
   const subscribePromise = control.subscribeCatalog(control.sessionGeneration, 60_000);
-  assert.isNotNull(control.catalogResolve);
   // 購読の await を解決させ、受信待ちに入れてから close する。解放は購読の await の直後の
   // 検査にも掛かるため、待ちに入る前に解放すると中止の検査で終わってしまう
   await new Promise<void>((resolve) => {
     setTimeout(resolve, 0);
   });
+  // 受信待ちとタイマーは SUBSCRIBE_OK の後に始まる
+  assert.isNotNull(control.catalogResolve);
 
   await subscriber.close();
 
@@ -2423,6 +2427,141 @@ test("close: session.subscribe の待ちの間に close しても購読要求の
   const thrown = await captureThrown(subscribePromise);
   assert.instanceOf(thrown, Error);
   assert.match((thrown as Error).message, /session closed/);
+});
+
+/**
+ * 完了条件: rendezvousTimeout を指定すると、catalog の SUBSCRIBE に
+ * RENDEZVOUS_TIMEOUT が載る。0 の明示も区別して 0 を載せる。
+ */
+test("subscribeCatalog: rendezvousTimeout を SUBSCRIBE に載せる", async () => {
+  const cases: Array<{ given: number; expected: bigint }> = [
+    { given: 1500, expected: 1500n },
+    { given: 0, expected: 0n },
+  ];
+  for (const { given, expected } of cases) {
+    const subscriber = createTestSubscriber({
+      video: {},
+      rendezvousTimeout: given,
+    }).subscriber;
+    const control = subscriber as unknown as SubscriberLifecycleControl & {
+      subscribeCatalog(startGeneration: number, timeoutMs?: number): Promise<void>;
+    };
+    const { session, subscribeOptions } = createCatalogTestSession({
+      subscribeError: new Error("does not exist"),
+    });
+    control.session = session;
+    control.currentState = "subscribing";
+
+    const thrown = await captureThrown(control.subscribeCatalog(control.sessionGeneration, 60_000));
+    assert.instanceOf(thrown, Error);
+    assert.equal(subscribeOptions()?.rendezvousTimeout, expected);
+  }
+});
+
+/**
+ * 完了条件: rendezvousTimeout を指定しない場合は RENDEZVOUS_TIMEOUT を載せない。
+ */
+test("subscribeCatalog: rendezvousTimeout 未指定は SUBSCRIBE に載せない", async () => {
+  const subscriber = createTestSubscriber({ video: {} }).subscriber;
+  const control = subscriber as unknown as SubscriberLifecycleControl & {
+    subscribeCatalog(startGeneration: number, timeoutMs?: number): Promise<void>;
+  };
+  const { session, subscribeOptions } = createCatalogTestSession({
+    subscribeError: new Error("does not exist"),
+  });
+  control.session = session;
+  control.currentState = "subscribing";
+
+  const thrown = await captureThrown(control.subscribeCatalog(control.sessionGeneration, 60_000));
+  assert.instanceOf(thrown, Error);
+  assert.isUndefined(subscribeOptions()?.rendezvousTimeout);
+});
+
+/**
+ * 完了条件: catalog の受信タイムアウトは SUBSCRIBE_OK の後から数える。
+ * SUBSCRIBE_OK が受信タイムアウト (20 ms) より遅れても、購読確立の前に timeout せず、
+ * 未処理の rejection も出さない。
+ */
+test("subscribeCatalog: 受信タイマーは SUBSCRIBE_OK の後に始まる", async () => {
+  const { subscriber, errors } = createTestSubscriber({ video: {} });
+  const control = subscriber as unknown as SubscriberLifecycleControl & {
+    subscribeCatalog(startGeneration: number, timeoutMs?: number): Promise<void>;
+  };
+  let releaseSubscribe: () => void = () => {};
+  const subscribeGate = new Promise<void>((resolve) => {
+    releaseSubscribe = resolve;
+  });
+  let liveObject: (obj: MoqtObject) => void = () => {};
+  control.session = {
+    subscribe: async (...args: Parameters<Session["subscribe"]>) => {
+      liveObject = args[2].object;
+      await subscribeGate;
+      // SUBSCRIBE_OK の LARGEST_OBJECT だけを持つ最小の Subscriber
+      return { largestLocation: null } as Subscriber;
+    },
+    // FETCH は即座に失敗させ、FETCH 終了処理を済ませておく
+    fetch: () => Promise.reject(new Error("no catalog")),
+  } as unknown as Session;
+  control.currentState = "subscribing";
+
+  const pending = control.subscribeCatalog(control.sessionGeneration, 20);
+  // SUBSCRIBE_OK を待つ間はタイマーが動かず、受信タイムアウトも起きない
+  await sleep(60);
+  assert.isNull(control.catalogTimer);
+  assert.isNull(control.catalogResolve);
+  assert.equal(errors.length, 0);
+
+  // SUBSCRIBE_OK の後からタイマーが動く
+  releaseSubscribe();
+  await sleep(0);
+  assert.isNotNull(control.catalogTimer);
+
+  // catalog を届けて待ちを解決し、タイマーが解除されること
+  liveObject({
+    groupId: 0n,
+    objectId: 0n,
+    status: 0,
+    payload: encodeCatalog(makeCatalog([{ name: "video", packaging: "loc", isLive: true }])),
+  });
+  await pending;
+  assert.isNull(control.catalogTimer);
+  assert.equal(errors.length, 0);
+});
+
+/**
+ * 完了条件: relay が publisher の不在を DOES_NOT_EXIST で返したとき、start() の失敗は
+ * RequestError で届き、code と retryInterval を読める。
+ */
+test("start: 購読の REQUEST_ERROR は RequestError として届く", async () => {
+  const { subscriber, errors } = createTestSubscriber({ video: {} });
+  const control = subscriber as unknown as SubscriberLifecycleControl & SubscriberConnectControl;
+  const requestError = new RequestError(
+    "track does not exist",
+    RequestErrorCode.DOES_NOT_EXIST,
+    1000n,
+  );
+  control.openSession = async () =>
+    ({
+      subscribe: async () => {
+        throw requestError;
+      },
+      fetch: async () => {
+        throw new Error("must not fetch");
+      },
+      close: async () => {},
+    }) as unknown as Session;
+
+  const rejected = await subscriber.start().then(
+    () => null,
+    (error: unknown) => error,
+  );
+  assert.strictEqual(rejected, requestError);
+  assert.instanceOf(rejected, RequestError);
+  assert.equal((rejected as RequestError).code, RequestErrorCode.DOES_NOT_EXIST);
+  assert.equal((rejected as RequestError).retryInterval, 1000n);
+  assert.deepEqual(errors, [requestError]);
+  // 失敗した start は "subscribing" に固定されず、再試行できる状態に戻る
+  assert.equal(subscriber.state, "created");
 });
 
 /**
