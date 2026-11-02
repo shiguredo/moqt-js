@@ -80,9 +80,9 @@ draft-ietf-moq-msf-01 §11.4.3: track に紐づくトークンは、そのトラ
 - `subscribeNamespace` / `subscribeTracks` に渡したトークンは、それぞれの購読の
   `update()` が送る `REQUEST_UPDATE` にも同じ値で付与する (`REGISTER` は初回要求で
   送信済みのため `USE_ALIAS` に変換する)。更新時にトークンを差し替える手段は無い
-- `createMediaPublisher` は catalog / 音声 / 映像の `PUBLISH` にこのトークンを付与する
-  (`PublishOptions.authorizationToken`)。`publishNamespace` は
-  `PublishNamespaceOptions.authorizationToken` に渡せば同じになる
+- `createMediaPublisher` は catalog / 音声 / 映像の `PUBLISH` と、`announceNamespace` を
+  有効にしたときの `PUBLISH_NAMESPACE` にこのトークンを付与する
+  (`PublishOptions.authorizationToken` / `PublishNamespaceOptions.authorizationToken`)
 
 低レベル API では、`Session.subscribe(options.authorizationToken)` /
 `Session.fetch(options.authorizationToken)` / `Session.publish(options.authorizationToken)` などに

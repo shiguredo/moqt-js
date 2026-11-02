@@ -69,7 +69,8 @@ draft-ietf-moq-transport-22 §4 (Publisher and Namespace Discovery) より。
 - `MediaPublisherImpl` は session を private フィールドで保持し、
   公開インターフェース (`MediaPublisher`) に session を読む入口が無い (`src/createMediaPublisher.ts`)
 - `start()` は接続、音声の配送方式の検査、catalog と音声と映像の `PUBLISH`、音声の取り出し経路、
-  catalog の送信、encoder の設定、処理ループの起動の順に進む。`PUBLISH_NAMESPACE` を送る段は無い
+  catalog の送信、encoder の設定、処理ループの起動の順に進む (調査時点では
+  `PUBLISH_NAMESPACE` を送る段が無かった。実装後は `PUBLISH` の後に告知する)
 - `stop()` と `close()` は `disposeAllResources()` で publisher の `done()` と session の `close()` を行い、
   session を破棄する
 - `pause()` と `resume()` は session を維持したまま処理ループだけを止める

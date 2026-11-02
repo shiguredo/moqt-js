@@ -246,6 +246,10 @@ created / stopped ───────────────┬────�
 の柱へ向かう辺は `start()` の失敗 (遷移前の state に戻る) と `stop()` の成功 (`"stopped"` に
 なる) の 2 つであり、図では別の線で描いている。
 
+`start()` は `announceNamespace` が有効なとき、catalog と媒体トラックの `PUBLISH` の後に
+`PUBLISH_NAMESPACE` を送り、`REQUEST_OK` を待ってから `"publishing"` になる。待っている間は
+`start()` の実行中であり、`namespacePublication` は null を返す。
+
 `stop()` は `close()` と同じ解放を行い、state を `"stopped"` にする (`"paused"` からの
 `stop()` も同じである)。解放の前に、停止の受付時に capture 済みの音声を flush して
 送り切る (datagram 配送では PUBLISH_DONE の前に 50 ms の猶予を待つ)。そのため `stop()` /

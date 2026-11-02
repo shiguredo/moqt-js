@@ -2409,6 +2409,30 @@ test("namespacePublication: 利用者の done で告知だけ終了し 配信は
 });
 
 /**
+ * 完了条件: 利用者が done() を呼んだ後に stop() と再 start() をしても、新しい Session で
+ * 告知し直す。
+ */
+test("namespacePublication: 利用者の done 後の再 start で告知し直す", async () => {
+  const { publisher, opened, publishNamespaceCalls } = createStartConnectHarness(undefined, {
+    publisherOptions: { namespace: ["live"], announceNamespace: true },
+  });
+  await publisher.start({} as MediaStream);
+  const publication = publisher.namespacePublication;
+  assert.isNotNull(publication);
+  await publication!.done();
+
+  await publisher.stop();
+  await publisher.start({} as MediaStream);
+
+  assert.equal(publishNamespaceCalls.length, 2);
+  assert.equal(opened.length, 2);
+  const reannounced = publisher.namespacePublication as NamespacePublication | null;
+  assert.isNotNull(reannounced);
+  assert.equal(reannounced.state, "active");
+  await publisher.close();
+});
+
+/**
  * 完了条件: pause() / resume() は告知を維持する (done も再告知もしない)。
  */
 test("pause/resume: namespace の告知を維持する", async () => {
