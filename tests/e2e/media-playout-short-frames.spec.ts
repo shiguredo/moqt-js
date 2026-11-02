@@ -17,13 +17,18 @@ for (const frames of [120, 192, 240, 960]) {
         async ({ moduleUrl, harnessUrl, frames, scenario }) => {
           const { createMediaPlayout } = await import(moduleUrl);
           const { waitFor } = await import(harnessUrl);
-          const { playoutAudioOf } = await import(
+          const { playoutAudioOf, playoutAudioClockOf, playoutAudioTimingOf } = await import(
             new URL("./testSupport/mediaPlayoutInternals.ts", moduleUrl).href
           );
           const context = new AudioContext({ sampleRate: 48000 });
           const chunks: Float32Array[] = [];
           const captureEnds: number[] = [];
-          const reservations: { timestamp: number; inputFrames: number; endSeconds: number }[] = [];
+          const reservations: {
+            timestamp: number;
+            inputFrames: number;
+            startSeconds: number | null;
+            endSeconds: number;
+          }[] = [];
           let reservedEndSeconds = 0;
           let capturedUntil = 0;
           const url = URL.createObjectURL(
@@ -56,6 +61,11 @@ for (const frames of [120, 192, 240, 960]) {
           const playout = createMediaPlayout({ audio: { context, destination: tap } });
           await playout.prepareAudio();
           const statuses: string[] = [];
+          const session = playoutAudioOf(playout) as unknown as {
+            lastRenderEndSeconds: number;
+          };
+          const clock = playoutAudioClockOf(playout);
+          const timing = playoutAudioTimingOf(playout);
           const push = (timestamp: number, count: number, amplitude = 0.3) => {
             const data = new AudioData({
               format: "f32-planar",
@@ -66,15 +76,20 @@ for (const frames of [120, 192, 240, 960]) {
               data: new Float32Array(count).fill(amplitude),
             });
             playout.trackAudioDecodeInput(timestamp, { timestampKind: "mediaTime" });
-            statuses.push(playout.pushAudio(data).status);
-            const session = playoutAudioOf(playout) as unknown as {
-              lastRenderEndSeconds: number;
-            };
+            const pushResult = playout.pushAudio(data);
+            statuses.push(pushResult.status);
             reservedEndSeconds = session.lastRenderEndSeconds;
-            // 伸縮後の開始は入力長から推定せず、入力時刻と実際に予約した終端を残す。
+            // 伸縮後の開始は入力長から推定せず、実際に予約した開始と終端を残す。
+            // 開始は再生の記録に残った performance 軸の値を、同じ時計の対応で audio 軸へ戻す。
+            // 伸縮で長さが変わっても開始は変わらないため、未描画の予約長を計算できる。
+            const lastStartMs =
+              pushResult.status === "played"
+                ? timing.snapshot(performance.now()).lastStartMs
+                : null;
             reservations.push({
               timestamp,
               inputFrames: count,
+              startSeconds: lastStartMs === null ? null : clock.toAudioSeconds(lastStartMs),
               endSeconds: reservedEndSeconds,
             });
             data.close();
@@ -178,11 +193,21 @@ for (const frames of [120, 192, 240, 960]) {
         result.statuses.every((status) => status === "played"),
         "全入力を再生すること",
       );
-      // drain は上限で打ち切る契約であり、出力時計が止まった間は未描画分を cut として返す。
-      // 打ち切り自体を誤検出せず、未描画分を再生済みと報告する退行は 1 サンプルの誤差で防ぐ。
+      // drain の cutMs は「鳴らせなかった予約の長さ」を返す。予約開始前の lead
+      // (予約開始 - endAtDrain) は予約の長さではないため cutMs に含まれない。出力時計が
+      // 止まった間は予約開始が未来のまま打ち切られ、reservedEndSeconds - endAtDrain と
+      // cutMs の差がその lead の分だけ開く。未描画の予約の長さと比べる。
+      // 予約の描画が済んでいれば cutMs は 0 になり、この比較も 0 対 0 で通る。
+      const lastReservation = result.reservations.at(-1);
+      assert.ok(lastReservation !== undefined, "予約を記録していること");
+      assert.ok(lastReservation.startSeconds !== null, "予約の開始時刻を読めること");
+      const unplayedReservedMs =
+        Math.max(
+          0,
+          result.reservedEndSeconds - Math.max(result.endAtDrain, lastReservation.startSeconds),
+        ) * 1000;
       assert.ok(
-        result.drain.cutMs + 1000 / 48000 >=
-          Math.max(0, result.reservedEndSeconds - result.endAtDrain) * 1000,
+        result.drain.cutMs + 1000 / 48000 >= unplayedReservedMs,
         `予約の描画前に完了する場合は切った量を報告すること: ${JSON.stringify(result)}`,
       );
       assert.ok(
