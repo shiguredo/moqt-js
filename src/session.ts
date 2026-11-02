@@ -283,6 +283,10 @@ export interface Session {
    *
    * Publisher が Track Namespace 内にトラックがあることを通知する。
    * Subscriber は SUBSCRIBE_NAMESPACE でこの通知を受け取れる。
+   * 公開の終了は `NamespacePublication.done()` が request のキャンセル
+   * (RESET_STREAM と STOP_SENDING、§4.1 / §6.4.2.3) で行う。
+   * Session の終了時は、登録済みの未確立の `publishNamespace()` の Promise を reject する
+   * (§6.6。根拠の仕様はドラフトであり将来変更される可能性がある)。
    */
   publishNamespace(
     namespace: string[],
@@ -1002,18 +1006,20 @@ export class SessionImpl implements Session {
    * markClosed() を使用する。end コールバックは PUBLISH_DONE 専用。
    * request 系オブジェクトの handleEnd / handleError は呼ばない。
    * 通知 (ConnectCallbacks.close) や pending の reject は本ヘルパーの範囲外
-   * (呼び出し元が担う。transport.closed 時の pending 掃除は現状は行わない)。
+   * (呼び出し元が担う。transport.closed でも呼び出し元が rejectPendingRequests を呼ぶ)。
    */
   private markRequestObjectsClosed(): void {
     sessionMarkRequestObjectsClosed(this as unknown as SessionLifecycleInternal);
   }
 
   /**
-   * 保留中のリクエスト Promise をすべて reject してエントリを削除する
+   * 保留中のリクエスト Promise を reject する
    *
    * draft-ietf-moq-transport-22 §6.6 (Termination):
    * セッション終了 (自前 close() / ピア起点の transport.closed) のいずれでも
    * アプリが未解決の Promise を待ち続けないようにする共通後始末。
+   * pending 系のエントリは reject して削除し、PUBLISH_NAMESPACE の publication は
+   * reject のみ行う (エントリは専用ループが削除する)。
    */
   private rejectPendingRequests(error: Error): void {
     sessionRejectPendingRequests(this as unknown as SessionLifecycleInternal, error);

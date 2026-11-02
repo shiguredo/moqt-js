@@ -27,6 +27,8 @@ MediaStreamTrackProcessor を使える場合は優先し、使えない音声で
 codec wrapper は直接実行と Worker 実行の共通の入口である。
 
 `src/createMediaPublisher.ts` が Catalog と媒体トラックを公開し、停止時の flush と世代を管理する。
+`announceNamespace` を有効にすると、`PUBLISH` の後に `PUBLISH_NAMESPACE` を送って namespace を
+告知し (`Session.publishNamespace`)、停止時は publisher の `done()` より前に撤回する。
 状態と再開の契約は [MediaPublisher](HIGH_LEVEL_API.md#mediapublisher) を参照すること。
 
 ## MediaSubscriber 内部構成

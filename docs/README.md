@@ -1,7 +1,7 @@
 # ドキュメント
 
 目的に応じて次の文書から読む。API の契約と現在の再生方式はこのディレクトリに置き、
-過去の調査は [調査記録](archive/README.md)、未実装の案は [検討中の設計](proposals/README.md) に分ける。
+過去の調査は [調査記録](archive/README.md)、検討中の案と設計の記録は [検討中の設計](proposals/README.md) に分ける。
 
 ## 利用する
 

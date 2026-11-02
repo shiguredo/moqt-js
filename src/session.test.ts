@@ -9440,6 +9440,99 @@ test("publishNamespace: write 失敗時にストリームリソースを掃除�
   );
 });
 
+/**
+ * 未確立の PUBLISH_NAMESPACE を保持するための WebTransport の代わり
+ *
+ * 双方向ストリームの readable は何も流さないため、publishNamespace は応答を待ち続ける。
+ * closed はテストから解決でき、ピア起点の close を再現できる。
+ */
+function createPendingNamespaceTransport(): {
+  transport: WebTransport;
+  closeFromPeer: (info: WebTransportCloseInfo) => void;
+} {
+  const readable = new ReadableStream<Uint8Array>({});
+  const writable = new WritableStream<Uint8Array>({
+    write: async () => {},
+  });
+  let closeFromPeer: (info: WebTransportCloseInfo) => void = () => {};
+  const closed = new Promise<WebTransportCloseInfo>((resolve) => {
+    closeFromPeer = resolve;
+  });
+  const transport = {
+    closed,
+    createBidirectionalStream: async (): Promise<WebTransportBidirectionalStream> =>
+      ({ readable, writable }) as unknown as WebTransportBidirectionalStream,
+  } as unknown as WebTransport;
+  return { transport, closeFromPeer };
+}
+
+/**
+ * publishNamespace が namespacePublications にエントリを登録するまで待つ
+ *
+ * publishNamespace は双方向ストリームの作成と PUBLISH_NAMESPACE の write を await して
+ * からエントリを登録するため、登録前に Session を終了すると reject の対象が無い。
+ * テストでは登録を待ってから終了させる。
+ */
+async function waitForNamespacePublicationRegistered(session: SessionImpl): Promise<void> {
+  const internal = session as unknown as {
+    namespacePublications: Map<bigint, unknown>;
+  };
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (internal.namespacePublications.size > 0) {
+      return;
+    }
+    await Promise.resolve();
+  }
+  throw new Error("namespace publication was not registered");
+}
+
+/**
+ * draft-ietf-moq-transport-22 §6.6 (Termination):
+ * Session の終了時に、未確立の PUBLISH_NAMESPACE の Promise を reject して
+ * アプリを待たせ続けない。状態の closed 化だけでは Promise は settled にならない。
+ */
+test("publishNamespace: Session の close で未確立の待ちが reject する", async () => {
+  const { transport } = createPendingNamespaceTransport();
+  const session = new SessionImpl(transport, {});
+
+  // close の解放より先に reject が届いても未処理の rejection にしないよう、
+  // 先に結果を受け取る Promise を組み立てる
+  const settled = session.publishNamespace(["live"], {}).then(
+    () => null,
+    (error: unknown) => (error instanceof Error ? error : new Error(String(error))),
+  );
+  // エントリを登録する前に close すると reject の対象が無いため、登録を待つ
+  await waitForNamespacePublicationRegistered(session);
+
+  await session.close();
+
+  const rejected = await settled;
+  assert.instanceOf(rejected, Error);
+  assert.equal(rejected?.message, "session closed");
+});
+
+/**
+ * draft-ietf-moq-transport-22 §6.6 (Termination):
+ * ピア起点の close でも、未確立の PUBLISH_NAMESPACE の Promise を reject する。
+ */
+test("publishNamespace: ピア起点の close で未確立の待ちが reject する", async () => {
+  const { transport, closeFromPeer } = createPendingNamespaceTransport();
+  const session = new SessionImpl(transport, {});
+
+  const settled = session.publishNamespace(["live"], {}).then(
+    () => null,
+    (error: unknown) => (error instanceof Error ? error : new Error(String(error))),
+  );
+  await waitForNamespacePublicationRegistered(session);
+
+  // ピア起点の close は transport.closed の解決で通知される
+  closeFromPeer({ closeCode: 0, reason: "" });
+
+  const rejected = await settled;
+  assert.instanceOf(rejected, Error);
+  assert.equal(rejected?.message, "session closed by peer");
+});
+
 test("subscribeNamespace: 送信前の throw でもストリームリソースを掃除する", async () => {
   // encode / build ではなく debug コールバックの throw で送信前失敗を起こす
   const { transport, readable, writable, cancelled, aborted, closed } =
@@ -10182,11 +10275,15 @@ test("publishNamespace の done() は送信方向 abort と受信方向 cancel �
     writer,
   });
 
-  await session.createNamespacePublication(1n).done();
+  const publication = session.createNamespacePublication(1n);
+  await publication.done();
 
   assert.deepEqual(cancelled, ["namespace publication cancelled"]);
   assert.deepEqual(aborted, ["namespace publication cancelled"]);
   assert.isFalse(internal.namespacePublications.has(1n));
+  // done() はエントリを削除するが、生成時の namespace を返し続ける
+  assert.equal(publication.state, "closed");
+  assert.deepEqual(publication.namespace, ["live"]);
 });
 
 /**

@@ -251,6 +251,16 @@ export interface VideoSubscribeOptions {
 // MediaPublisher オプション
 export interface MediaPublisherOptions {
   namespace: string[];
+  // namespace discovery への告知 (PUBLISH_NAMESPACE)
+  // draft-ietf-moq-transport-22 §4.1 (Publishing Namespaces):
+  // true のとき、catalog と媒体トラックの PUBLISH の後に PUBLISH_NAMESPACE を送り、
+  // start() の解決までに REQUEST_OK を待つ。既定は false (opt-in)。
+  // relay が PUBLISH_NAMESPACE を拒否する場合に既存の呼び出しへ影響しないよう、
+  // 既存の呼び出しの挙動を変えない opt-in である。
+  // namespace が空配列の場合は start() を入口で拒否する (§2.4.2 の prefix 一致では
+  // 0 フィールドの prefix が全 namespace に一致するため)
+  // 根拠の仕様はドラフトであり将来変更される可能性がある
+  announceNamespace?: boolean;
   audio?: AudioPublishOptions;
   video?: VideoPublishOptions;
   // 音声が live から遅れたときの追いつき方 (src/audioPublishCatchUp.ts)。
@@ -367,6 +377,22 @@ export interface MediaSubscriberCallbacks {
 // MediaPublisher インターフェース
 export interface MediaPublisher {
   readonly state: MediaPublisherState;
+  /**
+   * 現在の namespace 公開 (PUBLISH_NAMESPACE)
+   *
+   * `announceNamespace` を有効にして `start()` したときだけ値を持つ。
+   * 次の場合は null である。
+   * - `announceNamespace` を指定しない、または false
+   * - `start()` の完了前 (実行中。告知の確立後も `start()` の解決までは null)
+   * - `start()` が失敗した後
+   * - `stop()` / `close()` の後、ピア起点の close の後
+   *
+   * 利用者が `done()` を呼んだ後は、撤回済みの ("closed" の) publication を返す。
+   * 告知だけを先に終えたい場合に使う (draft-ietf-moq-transport-22 §4.1 は告知だけを
+   * 終えることを許す)。その場合も配信は続く。確立後にピアが RESET_STREAM / FIN で
+   * 終了した場合も null にせず "closed" を返す。
+   */
+  readonly namespacePublication: import("../session").NamespacePublication | null;
   /**
    * 配信を開始する
    *

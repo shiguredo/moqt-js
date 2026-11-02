@@ -295,7 +295,7 @@ interface MoqtObject {
 - `publishNamespace()` は専用双方向ストリームで `PUBLISH_NAMESPACE` を送り、専用ループで `REQUEST_OK` / `REQUEST_ERROR` を待つ
 - `subscribeNamespace()` は専用双方向ストリームを別実装で開き、`REQUEST_OK` の後も `NAMESPACE` / `NAMESPACE_DONE` を受け続ける
 - `subscribeTracks()` も専用双方向ストリームを別実装で開き、`REQUEST_OK` の後は prefix に一致する `PUBLISH` / `PUBLISH_SKIPPED` を受け続ける
-- `PUBLISH_NAMESPACE` の終了を通知する専用メッセージは draft-22 に存在しないため、公開終了はローカル状態の cleanup のみで表現している
+- `PUBLISH_NAMESPACE` の終了を通知する専用メッセージは draft-22 に存在しない。公開の終了は request のキャンセル (`RESET_STREAM` と `STOP_SENDING`、§4.1 / §6.4.2.3) で行う。`NamespacePublication.done()` がこの撤回を行う。Session の終了時は、未確立の `publishNamespace()` の Promise を reject してアプリを待たせ続けない
 - 接続の前に `validateTrackNamespaceForSend(namespace, trackName?)` で送信できる Track Namespace かを検証できる。§8.7 の構造の制約 (33 フィールド以上、空のフィールド、4,096 バイト超) と、§2.4.3 の予約 namespace (先頭フィールドが `.` で始まる値、`.` 単体)、§6.5 の `.session` (Application は publish できない) と `.session` と空 Track Name の組み合わせ (DOES_NOT_EXIST) を拒否する
   - Request の送信時にも同じ検証が走り、失敗は同期の `Error` になる (アプリケーションの入力ミスとして扱い、セッションは閉じない)。Full Track Name (Track Namespace と Track Name の合計) の 4,096 バイト上限は Track Name を含めて判定するため、送信時に検証する
 

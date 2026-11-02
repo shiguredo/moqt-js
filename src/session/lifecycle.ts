@@ -127,7 +127,7 @@ export interface SessionLifecycleInternal {
  * markClosed() を使用する。end コールバックは PUBLISH_DONE 専用。
  * request 系オブジェクトの handleEnd / handleError は呼ばない。
  * 通知 (ConnectCallbacks.close) や pending の reject は本ヘルパーの範囲外
- * (呼び出し元が担う。transport.closed 時の pending 掃除は現状は行わない)。
+ * (呼び出し元が担う。transport.closed でも呼び出し元が rejectPendingRequests を呼ぶ)。
  */
 export function sessionMarkRequestObjectsClosed(session: SessionLifecycleInternal): void {
   // すべてのパブリッシャー、サブスクライバー、フェッチャーを閉じる
@@ -153,11 +153,14 @@ export function sessionMarkRequestObjectsClosed(session: SessionLifecycleInterna
 }
 
 /**
- * 保留中のリクエスト Promise をすべて reject してエントリを削除する
+ * 保留中のリクエスト Promise を reject する
  *
  * draft-ietf-moq-transport-22 §6.6 (Termination):
  * セッション終了 (自前 close() / ピア起点の transport.closed) のいずれでも
  * アプリが未解決の Promise を待ち続けないようにする共通後始末。
+ * pending 系のエントリは reject して削除し、PUBLISH_NAMESPACE の publication は
+ * reject のみ行う (エントリは専用ループが削除する。根拠の仕様はドラフトであり
+ * 将来変更される可能性がある)。
  */
 export function sessionRejectPendingRequests(
   session: SessionLifecycleInternal,
@@ -183,6 +186,18 @@ export function sessionRejectPendingRequests(
     pending.reject(error);
   }
   session.pendingTrackStatus.clear();
+  // PUBLISH_NAMESPACE は専用ループが settle するまで Promise を保持しており、
+  // 上の pending 系とは別に namespacePublications にある。確立前の publication だけを
+  // reject して、Session 終了時に await が残らないようにする。state は
+  // sessionMarkRequestObjectsClosed が先に "closed" にするため判定に使えない
+  for (const [, publication] of session.namespacePublications) {
+    const reject = publication.reject;
+    if (reject === undefined) {
+      continue;
+    }
+    publication.reject = undefined;
+    reject(error);
+  }
 }
 
 /**

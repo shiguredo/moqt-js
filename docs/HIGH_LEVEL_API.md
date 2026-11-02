@@ -35,6 +35,13 @@ const publisher = await createMediaPublisher(url, options, callbacks?)
 ```typescript
 interface MediaPublisherOptions {
   namespace: string[];
+  // namespace の告知 (PUBLISH_NAMESPACE)。default: false
+  // draft-ietf-moq-transport-22 §4.1: true のとき、catalog と媒体トラックの PUBLISH の後、
+  // start() の解決までに PUBLISH_NAMESPACE を送って REQUEST_OK を待つ。relay は
+  // namespace discovery (SUBSCRIBE_NAMESPACE) で告知された namespace を列挙する (§4.2)。
+  // namespace が空配列の場合は start() を入口で reject する (§2.4.2 の prefix 一致では
+  // 0 フィールドの prefix が全 namespace に一致するため)
+  announceNamespace?: boolean;
   audio?: {
     trackName?: string; // default: "audio"
     codec: "opus" | "aac";
@@ -180,9 +187,35 @@ interface MediaPublisherCallbacks {
 
 ### プロパティ
 
-| プロパティ | 型                    | 説明       |
-| ---------- | --------------------- | ---------- |
-| `state`    | `MediaPublisherState` | 現在の状態 |
+| プロパティ             | 型                             | 説明                                                         |
+| ---------------------- | ------------------------------ | ------------------------------------------------------------ |
+| `state`                | `MediaPublisherState`          | 現在の状態                                                   |
+| `namespacePublication` | `NamespacePublication \| null` | 現在の namespace の告知。null の条件と `done()` の扱いは下記 |
+
+#### namespace の告知 (announceNamespace)
+
+`announceNamespace: true` のとき、`start()` は catalog と媒体トラックの `PUBLISH` の後に
+`PUBLISH_NAMESPACE` を送り、`REQUEST_OK` を待ってから `"publishing"` になる
+(draft-ietf-moq-transport-22 §4.1)。relay は `SUBSCRIBE_NAMESPACE` で告知された namespace を
+列挙する (§4.2)。認可トークンは `SETUP` に載せたものを `PUBLISH` と共用する
+(draft-ietf-moq-msf-01 §11.4.3)。
+
+- `namespacePublication` は告知の確立後に `"active"` の publication を返し、
+  `stop()` / `close()` の解放で撤回して null になる。`start()` の前と実行中、
+  `announceNamespace` が無効なとき、`start()` の失敗後、ピア起点の close の後も null。
+  確立後にピアが `RESET_STREAM` / FIN で終了した場合は null にせず `"closed"` を返す
+- 告知の確立前の失敗は `start()` の失敗になり、`onError` は 1 回だけ通知される
+  (Session のエラーと `start()` の失敗に同じ原因が載る経路も重複しない)。
+  確立後にプロトコル違反の応答を受けた場合は、低レベルの per-request コールバックと
+  Session エラーの両方が通知されるため `onError` が 2 回呼ばれ得る (既知の制約)
+- `pause()` / `resume()` は告知を維持する
+- 告知だけを先に終えたい場合は `namespacePublication.done()` を呼ぶ。配信は続き、
+  `namespacePublication` は `"closed"` の publication を返す
+- 告知の確立後に `RESET_STREAM` を受けると `onError` を通知し、配信は続ける。
+  ピアの FIN は graceful な終了であり `onError` を通知せず、`state` が `"closed"` になる
+- ピアが FIN で要求を完了した後に `done()` を呼んでも何もしない (要求ストリームは既に
+  閉じており、低レベル API は publication を破棄している)。撤回を先に行いたい場合は
+  FIN を待たずに `done()` を呼ぶ
 
 ### 状態
 
@@ -588,7 +621,7 @@ MediaPublisherOptions も `audio` / `video` / `useWorker` / `serverCertificateHa
 - catalog の `authInfo` (§5.2.42) を持つトラックの `SUBSCRIBE` に付与する。
   `getAuthorizationToken` を指定した場合はそちらが優先される
 - `REQUEST_UPDATE` は `SUBSCRIBE` と同じトークンを `Subscriber` が保持して送る
-- `createMediaPublisher` は catalog / 音声 / 映像の `PUBLISH` に付与する
+- `createMediaPublisher` は catalog / 音声 / 映像の `PUBLISH` と `PUBLISH_NAMESPACE` に付与する
 
 ### コールバック
 

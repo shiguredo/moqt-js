@@ -99,6 +99,15 @@ export interface NamespacePublicationState {
   streamReader: ReadableStreamDefaultReader<Uint8Array>;
   controlReader: ControlStreamReader;
   writer: WritableStreamDefaultWriter<Uint8Array>;
+  /**
+   * 確立前の Promise の reject
+   *
+   * PUBLISH_NAMESPACE の REQUEST_OK / REQUEST_ERROR を待つ Promise の reject を保持する。
+   * Session の終了時に、確立していない publication の await を残さないために使う
+   * (src/session/lifecycle.ts の sessionRejectPendingRequests)。
+   * REQUEST_OK を受けて確立したら undefined に戻す (確立後の終了は state で観測できる)。
+   */
+  reject?: ((error: Error) => void) | undefined;
 }
 
 export interface PublisherStreamState {

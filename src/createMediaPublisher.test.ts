@@ -82,7 +82,14 @@ import type { VideoFrameSource } from "./frameSource";
 import type { AudioFrameSource } from "./audioSource";
 import { CATALOG_TRACK_NAME, decodeCatalogMessage, type Catalog } from "./msf";
 import { PublisherImpl, isErrorNotifiedByPublisher, type Publisher } from "./publisher";
-import type { PublishCallbacks, PublishOptions, Session } from "./session";
+import type {
+  NamespacePublication,
+  NamespacePublicationCallbacks,
+  PublishCallbacks,
+  PublishNamespaceOptions,
+  PublishOptions,
+  Session,
+} from "./session";
 import { ProtocolViolationError } from "./error";
 import { ObjectStatus } from "./message/types";
 import { AuthorizationTokenAliasType } from "./message/authorizationToken";
@@ -1933,10 +1940,16 @@ test("stop: paused から停止しても stopped になり onClose は通知し�
 interface OpenedPublisherConnection {
   // 実装が onSessionClose に渡した閉包 (接続時点の世代番号を捕捉している)
   notifyClose: () => void;
+  // 実装が onSessionError に渡した閉包 (Session の error 通知を再現する)
+  notifySessionError: (error: Error) => void;
   // 保留している publish が await に入るまで待つ
   publishing: () => Promise<void>;
   // 保留している publish の await を解放する (保留していない場合は何もしない)
   resolvePublish: () => void;
+  // 保留している publishNamespace が await に入るまで待つ
+  namespacePublicationPublishing: () => Promise<void>;
+  // 保留している publishNamespace をテストが失敗させる
+  rejectNamespacePublication: (error: Error) => void;
   // 保留している session の close が呼ばれた時点で解決する (解放がそこで止まったことの観測)
   sessionClosing: () => Promise<void>;
   // 保留している session の close の await を解放する (保留していない場合は何もしない)
@@ -1946,6 +1959,12 @@ interface OpenedPublisherConnection {
   isSessionClosed: () => boolean;
   // この接続が作った catalog Publisher の done の呼び出し回数 (解放で破棄されたか)
   catalogDoneCount: () => number;
+  // この接続の NamespacePublication の done の呼び出し回数
+  namespacePublicationDoneCount: () => number;
+  // 告知の確立後の stream エラー (RESET_STREAM 相当) を再現する
+  notifyNamespacePublicationError: (error: Error) => void;
+  // 告知の確立後の FIN を再現する (低レベルは error を通知しない)
+  finishNamespacePublicationFromPeer: () => void;
 }
 
 /**
@@ -1977,12 +1996,28 @@ function createStartConnectHarness(
     publisherOptions?: MediaPublisherOptions;
     // session の reliability。datagram が reliable and ordered になるセッション ("reliable-only") の検証に使う
     reliability?: string;
+    // namespace の告知 (PUBLISH_NAMESPACE) の検証用
+    announce?: {
+      // publishNamespace の完了をテストが決める (rejectNamespacePublication で失敗させる)
+      hold?: boolean;
+      // publishNamespace をこの error で失敗させる (start の失敗経路)
+      failWith?: Error;
+      // SETUP に載せたトークンとして session.setupAuthorizationToken が返す値
+      setupAuthorizationToken?: AuthorizationToken;
+      // publish / publishNamespace / done の呼び出し順の記録先
+      eventLog?: string[];
+    };
   } = {},
 ): {
   publisher: MediaPublisherImpl;
   control: PublisherConnectControl & PublisherLifecycleControl & PublisherSessionCloseControl;
   errors: Error[];
   opened: OpenedPublisherConnection[];
+  // publishNamespace の呼び出し (namespace と options)
+  publishNamespaceCalls: {
+    namespace: string[];
+    options: { authorizationToken?: AuthorizationToken } | undefined;
+  }[];
 } {
   const errors: Error[] = [];
   const publisher = new MediaPublisherImpl(
@@ -1999,8 +2034,21 @@ function createStartConnectHarness(
     PublisherLifecycleControl &
     PublisherSessionCloseControl;
   const opened: OpenedPublisherConnection[] = [];
+  const publishNamespaceCalls: {
+    namespace: string[];
+    options: { authorizationToken?: AuthorizationToken } | undefined;
+  }[] = [];
   control.openSession = (settings: MediaConnectSettings) => {
     const catalog = options.createCatalogPublisher?.() ?? createRecordingSendPublisher();
+    const eventLog = options.announce?.eventLog;
+    // catalog Publisher の done も操作順に記録できるよう、記録先があるときだけ包む
+    if (eventLog !== undefined) {
+      const baseDone = catalog.publisher.done.bind(catalog.publisher);
+      catalog.publisher.done = async () => {
+        eventLog.push("publisher:done:catalog");
+        await baseDone();
+      };
+    }
     let closed = false;
     let notifyPublishing: () => void = () => {};
     const publishing = new Promise<void>((resolve) => {
@@ -2026,15 +2074,47 @@ function createStartConnectHarness(
       : null;
     let sessionCloseCalls = 0;
     const holdPublishTrack = options.holdPublishTrack ?? CATALOG_TRACK_NAME;
+    // 未確立の publishNamespace の reject。実 Session と同じく、Session の終了
+    // (自前の close / ピア起点の close) で未解決の Promise を reject する
+    const pendingNamespacePublicationRejects: ((error: Error) => void)[] = [];
+    const rejectPendingNamespacePublications = (error: Error): void => {
+      while (pendingNamespacePublicationRejects.length > 0) {
+        pendingNamespacePublicationRejects.pop()?.(error);
+      }
+    };
+    let notifyNamespacePublicationPublishing: () => void = () => {};
+    const namespacePublicationPublishing = new Promise<void>((resolve) => {
+      notifyNamespacePublicationPublishing = resolve;
+    });
+    let namespacePublicationState: "active" | "closed" = "active";
+    let namespacePublicationDone = 0;
+    let namespacePublicationNamespace: string[] = [];
+    let namespacePublicationCallbacks: NamespacePublicationCallbacks | undefined;
+    const namespacePublication: NamespacePublication = {
+      get state() {
+        return namespacePublicationState;
+      },
+      get namespace() {
+        return namespacePublicationNamespace;
+      },
+      done: async () => {
+        namespacePublicationDone += 1;
+        namespacePublicationState = "closed";
+        eventLog?.push("namespace-publication:done");
+      },
+    };
     const session = {
       // datagram の可否は reliability で決まる (start の音声の送り方の判定が読む)。
       // 実際の Session は WebTransport の reliability をそのまま返す
       reliability: options.reliability,
+      // 告知の認可は SETUP のトークンを共用する (PUBLISH と同じ値)
+      setupAuthorizationToken: options.announce?.setupAuthorizationToken,
       publish: async (
         _namespace: string[],
         trackName: string,
         _callbacks?: PublishCallbacks,
       ): Promise<Publisher> => {
+        eventLog?.push(`publish:${trackName}`);
         // 保留する publish だけテストが完了を決める
         if (publishGate !== null && trackName === holdPublishTrack) {
           notifyPublishing();
@@ -2047,29 +2127,520 @@ function createStartConnectHarness(
         // harness で createPublishers を通すため)
         return createRecordingSendPublisher().publisher;
       },
+      publishNamespace: async (
+        namespace: string[],
+        callbacks?: NamespacePublicationCallbacks,
+        publishNamespaceOptions?: PublishNamespaceOptions,
+      ): Promise<NamespacePublication> => {
+        eventLog?.push("publishNamespace");
+        namespacePublicationCallbacks = callbacks;
+        publishNamespaceCalls.push({
+          namespace: [...namespace],
+          options: publishNamespaceOptions,
+        });
+        namespacePublicationNamespace = [...namespace];
+        if (options.announce?.failWith !== undefined) {
+          throw options.announce.failWith;
+        }
+        // 保留する間はテストが rejectNamespacePublication で失敗させる
+        if (options.announce?.hold === true) {
+          notifyNamespacePublicationPublishing();
+          await new Promise<void>((_resolve, reject) => {
+            pendingNamespacePublicationRejects.push(reject);
+          });
+        }
+        return namespacePublication;
+      },
       close: async () => {
         closed = true;
         sessionCloseCalls++;
         notifySessionClosing();
+        rejectPendingNamespacePublications(new Error("session closed"));
+        // 実 Session は終了時に publication の state を closed にする
+        namespacePublicationState = "closed";
         if (sessionCloseGate !== null) {
           await sessionCloseGate;
         }
       },
     } as unknown as Session;
     opened.push({
-      notifyClose: () => settings.onSessionClose(),
+      notifyClose: () => {
+        // ピア起点の close でも未確立の Request の Promise は reject される
+        rejectPendingNamespacePublications(new Error("session closed by peer"));
+        // 実 Session は終了時に publication の state を closed にする
+        namespacePublicationState = "closed";
+        settings.onSessionClose();
+      },
+      notifySessionError: (error) => settings.onSessionError(error),
       publishing: () => publishing,
       resolvePublish: () => releasePublish(),
+      namespacePublicationPublishing: () => namespacePublicationPublishing,
+      rejectNamespacePublication: (error) => rejectPendingNamespacePublications(error),
       sessionClosing: () => sessionClosing,
       resolveSessionClose: () => releaseSessionClose(),
       sessionCloseCalls: () => sessionCloseCalls,
       isSessionClosed: () => closed,
       catalogDoneCount: catalog.doneCount,
+      namespacePublicationDoneCount: () => namespacePublicationDone,
+      notifyNamespacePublicationError: (error) => namespacePublicationCallbacks?.error?.(error),
+      finishNamespacePublicationFromPeer: () => {
+        // 確立後の FIN は低レベルの error コールバックを呼ばず、state だけが closed になる
+        namespacePublicationState = "closed";
+      },
     });
     return Promise.resolve(session);
   };
-  return { publisher, control, errors, opened };
+  return { publisher, control, errors, opened, publishNamespaceCalls };
 }
+
+/**
+ * 完了条件: announceNamespace を指定しない場合と false の場合は PUBLISH_NAMESPACE を
+ * 送らず、namespacePublication は null のままである。
+ */
+test("start: announceNamespace が無効なら namespace を告知しない", async () => {
+  const disabled = createStartConnectHarness();
+  await disabled.publisher.start({} as MediaStream);
+  assert.equal(disabled.publishNamespaceCalls.length, 0);
+  assert.isNull(disabled.publisher.namespacePublication);
+  await disabled.publisher.close();
+
+  const explicitFalse = createStartConnectHarness(undefined, {
+    publisherOptions: { namespace: ["live"], announceNamespace: false },
+  });
+  await explicitFalse.publisher.start({} as MediaStream);
+  assert.equal(explicitFalse.publishNamespaceCalls.length, 0);
+  assert.isNull(explicitFalse.publisher.namespacePublication);
+  await explicitFalse.publisher.close();
+});
+
+/**
+ * 完了条件: announceNamespace: true で、PUBLISH の往復の後に namespace と同じ配列と
+ * SETUP のトークン付きで 1 回告知し、REQUEST_OK の後に namespacePublication が
+ * "active" になる。stop() の解放では告知の done() を catalog Publisher の done() より
+ * 前に 1 回呼び、その後に null になる。
+ */
+test("start/stop: namespace の告知は PUBLISH の後に行い 停止で撤回する", async () => {
+  const token: AuthorizationToken = {
+    aliasType: AuthorizationTokenAliasType.USE_VALUE,
+    tokenType: 1n,
+    tokenValue: new Uint8Array([0x01]),
+  };
+  const eventLog: string[] = [];
+  const { publisher, opened, publishNamespaceCalls } = createStartConnectHarness(undefined, {
+    publisherOptions: { namespace: ["live", "room"], announceNamespace: true },
+    announce: { setupAuthorizationToken: token, eventLog },
+  });
+
+  await publisher.start({} as MediaStream);
+
+  // PUBLISH (catalog) の後に告知する (draft-ietf-moq-transport-22 §4.1 の prefix の表明)
+  assert.deepEqual(eventLog, ["publish:catalog", "publishNamespace"]);
+  assert.equal(publishNamespaceCalls.length, 1);
+  assert.deepEqual(publishNamespaceCalls[0].namespace, ["live", "room"]);
+  assert.deepEqual(publishNamespaceCalls[0].options, { authorizationToken: token });
+  assert.equal(publisher.namespacePublication?.state, "active");
+
+  await publisher.stop();
+
+  // 告知の done() は publisher の done() より前 (停止中の配信を新規の購読者に発見させない)
+  assert.deepEqual(eventLog, [
+    "publish:catalog",
+    "publishNamespace",
+    "namespace-publication:done",
+    "publisher:done:catalog",
+  ]);
+  assert.equal(opened[0].namespacePublicationDoneCount(), 1);
+  assert.isNull(publisher.namespacePublication);
+});
+
+/**
+ * 完了条件: 告知の確立前に失敗したら start() が失敗し、onError は 1 回だけ通知される。
+ * 確保済みのリソースは巻き戻され、namespacePublication は null のままである。
+ */
+test("start: 告知の失敗で start が失敗し onError を 1 回だけ通知する", async () => {
+  const failure = new Error("publish namespace failed");
+  const { publisher, errors, opened } = createStartConnectHarness(undefined, {
+    publisherOptions: { namespace: ["live"], announceNamespace: true },
+    announce: { failWith: failure },
+  });
+
+  const rejected = await publisher.start({} as MediaStream).then(
+    () => null,
+    (error: unknown) => error,
+  );
+  assert.equal(rejected, failure);
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0], failure);
+  assert.isNull(publisher.namespacePublication);
+  // 巻き戻しで session は閉じられている
+  assert.isTrue(opened[0].isSessionClosed());
+});
+
+/**
+ * 完了条件: Session の error と start() の失敗に同じ error が載る経路でも、
+ * onError を二重に通知しない。
+ */
+test("start: Session error と同じ error の start 失敗は onError を二重に通知しない", async () => {
+  const failure = new Error("scope violation");
+  const { publisher, errors, opened } = createStartConnectHarness(undefined, {
+    publisherOptions: { namespace: ["live"], announceNamespace: true },
+    announce: { hold: true },
+  });
+
+  const startResult = publisher.start({} as MediaStream).then(
+    () => null,
+    (error: unknown) => error,
+  );
+  await opened[0].namespacePublicationPublishing();
+  // Session の error コールバックが先に通知し、そのあと start() が同じ error で失敗する
+  opened[0].notifySessionError(failure);
+  opened[0].rejectNamespacePublication(failure);
+
+  const rejected = await startResult;
+  assert.equal(rejected, failure);
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0], failure);
+  assert.isNull(publisher.namespacePublication);
+});
+
+/**
+ * 完了条件: 告知の確立前に close() が重なった場合、start() がハングせず失敗し、
+ * publication の参照を残さない。
+ */
+test("start: 告知の確立前の close で start が失敗し参照を残さない", async () => {
+  const { publisher, opened } = createStartConnectHarness(undefined, {
+    publisherOptions: { namespace: ["live"], announceNamespace: true },
+    announce: { hold: true },
+  });
+
+  const startResult = publisher.start({} as MediaStream).then(
+    () => null,
+    (error: unknown) => (error instanceof Error ? error : new Error(String(error))),
+  );
+  await opened[0].namespacePublicationPublishing();
+  await publisher.close();
+
+  const rejected = await startResult;
+  assert.instanceOf(rejected, Error);
+  assert.isNull(publisher.namespacePublication);
+  assert.isTrue(opened[0].isSessionClosed());
+});
+
+/**
+ * 完了条件: 告知の確立前にピア起点の close が重なった場合、start() がハングせず失敗し、
+ * publication の参照を残さない。
+ */
+test("start: 告知の確立前のピア起点 close で start が失敗し参照を残さない", async () => {
+  const { publisher, errors, opened } = createStartConnectHarness(undefined, {
+    publisherOptions: { namespace: ["live"], announceNamespace: true },
+    announce: { hold: true },
+  });
+
+  const startResult = publisher.start({} as MediaStream).then(
+    () => null,
+    (error: unknown) => (error instanceof Error ? error : new Error(String(error))),
+  );
+  await opened[0].namespacePublicationPublishing();
+  opened[0].notifyClose();
+
+  const rejected = await startResult;
+  assert.instanceOf(rejected, Error);
+  assert.isNull(publisher.namespacePublication);
+  // ピア起点の close は graceful な終了であり、start() の失敗として 1 回だけ通知する
+  assert.equal(errors.length, 1);
+  // Session の終了で publication は closed になるため done() は呼ばない
+  assert.equal(opened[0].namespacePublicationDoneCount(), 0);
+});
+
+/**
+ * 完了条件: 告知の確立後に start() が失敗した場合も、巻き戻しで告知の done() を 1 回呼び、
+ * publication と確保済みリソースの参照を残さない。
+ */
+test("start: 告知の確立後の失敗でも done を 1 回呼び参照を残さない", async () => {
+  const sendFailure = new Error("catalog send failed");
+  const { publisher, errors, opened } = createStartConnectHarness(undefined, {
+    publisherOptions: { namespace: ["live"], announceNamespace: true },
+    createCatalogPublisher: () => {
+      const catalog = createRecordingSendPublisher();
+      catalog.publisher.sendObject = async () => {
+        throw sendFailure;
+      };
+      return { publisher: catalog.publisher, doneCount: catalog.doneCount };
+    },
+  });
+
+  const rejected = await publisher.start({} as MediaStream).then(
+    () => null,
+    (error: unknown) => error,
+  );
+  assert.equal(rejected, sendFailure);
+  assert.deepEqual(errors, [sendFailure]);
+  assert.isNull(publisher.namespacePublication);
+  // 巻き戻しで告知と catalog publisher の両方を done する
+  assert.equal(opened[0].namespacePublicationDoneCount(), 1);
+  assert.equal(opened[0].catalogDoneCount(), 1);
+  assert.isTrue(opened[0].isSessionClosed());
+});
+
+/**
+ * 完了条件: 利用者が namespacePublication.done() を呼ぶと告知だけが終了して配信は
+ * 続き、getter は "closed" の publication を返す。stop() は失敗せず、done() を
+ * 二重に呼ばない。
+ */
+test("namespacePublication: 利用者の done で告知だけ終了し 配信は続く", async () => {
+  const { publisher, opened } = createStartConnectHarness(undefined, {
+    publisherOptions: { namespace: ["live"], announceNamespace: true },
+  });
+  await publisher.start({} as MediaStream);
+  const publication = publisher.namespacePublication;
+  assert.isNotNull(publication);
+
+  await publication!.done();
+  assert.equal(publication!.state, "closed");
+  assert.equal(publisher.state, "publishing");
+  // 告知の有無を観測できるよう、closed の publication を返し続ける
+  assert.equal(publisher.namespacePublication, publication);
+  assert.equal(opened[0].namespacePublicationDoneCount(), 1);
+
+  // stop() は失敗せず、告知の done() を二重に呼ばない
+  await publisher.stop();
+  assert.equal(opened[0].namespacePublicationDoneCount(), 1);
+  assert.isNull(publisher.namespacePublication);
+});
+
+/**
+ * 完了条件: pause() / resume() は告知を維持する (done も再告知もしない)。
+ */
+test("pause/resume: namespace の告知を維持する", async () => {
+  const { publisher, opened, publishNamespaceCalls } = createStartConnectHarness(undefined, {
+    publisherOptions: { namespace: ["live"], announceNamespace: true },
+  });
+  await publisher.start({} as MediaStream);
+  publisher.pause();
+  publisher.resume();
+
+  assert.equal(publishNamespaceCalls.length, 1);
+  assert.equal(opened[0].namespacePublicationDoneCount(), 0);
+  assert.equal(publisher.namespacePublication?.state, "active");
+  await publisher.close();
+});
+
+/**
+ * 完了条件: stop() からの再 start() は新しい Session なので告知し直す。
+ */
+test("start: stop からの再 start で namespace を告知し直す", async () => {
+  const { publisher, opened, publishNamespaceCalls } = createStartConnectHarness(undefined, {
+    publisherOptions: { namespace: ["live"], announceNamespace: true },
+  });
+  await publisher.start({} as MediaStream);
+  await publisher.stop();
+  await publisher.start({} as MediaStream);
+
+  assert.equal(publishNamespaceCalls.length, 2);
+  assert.equal(opened.length, 2);
+  assert.equal(publisher.namespacePublication?.state, "active");
+  await publisher.close();
+});
+
+/**
+ * 完了条件: namespace が空配列で announceNamespace: true の場合は start() の入口で
+ * 拒否し、onError を通知しない (接続もしない)。
+ */
+test("start: 空 namespace の告知は入口で拒否する", async () => {
+  const { publisher, errors, opened } = createStartConnectHarness(undefined, {
+    publisherOptions: { namespace: [], announceNamespace: true },
+  });
+
+  const rejected = await publisher.start({} as MediaStream).then(
+    () => null,
+    (error: unknown) => (error instanceof Error ? error : new Error(String(error))),
+  );
+  assert.instanceOf(rejected, Error);
+  assert.match(rejected!.message, /non-empty namespace/);
+  assert.equal(errors.length, 0);
+  assert.equal(opened.length, 0);
+});
+
+/**
+ * 完了条件: 告知の確立後の stream エラー (RESET_STREAM) は onError に流し、配信は続く。
+ * ピアの FIN は graceful な終了であり onError を通知せず、publication の state が
+ * "closed" になることで観測する。
+ */
+test("namespacePublication: 確立後の RESET は通知し FIN は state で観測する", async () => {
+  const resetError = new Error("stream reset");
+  const { publisher, errors, opened } = createStartConnectHarness(undefined, {
+    publisherOptions: { namespace: ["live"], announceNamespace: true },
+  });
+  await publisher.start({} as MediaStream);
+
+  // RESET_STREAM 相当の stream エラーは onError に流し、配信は続ける
+  opened[0].notifyNamespacePublicationError(resetError);
+  assert.deepEqual(errors, [resetError]);
+  assert.equal(publisher.state, "publishing");
+
+  // FIN 相当の終了は error を通知せず、publication の state だけが closed になる
+  opened[0].finishNamespacePublicationFromPeer();
+  await sleep(0);
+  assert.deepEqual(errors, [resetError]);
+  assert.equal(publisher.namespacePublication?.state, "closed");
+  assert.equal(publisher.state, "publishing");
+
+  await publisher.close();
+});
+
+/**
+ * 完了条件: 告知の確立前の失敗は onError を 1 回だけ通知する。原因が
+ * ProtocolViolationError から SessionError へ変換されて Session の error と
+ * start() の失敗の両方に載る経路でも、別インスタンスであることを理由に二重通知しない。
+ */
+test("start: SessionError へ変換された原因でも onError を二重に通知しない", async () => {
+  const rawError = new ProtocolViolationError(
+    "REQUEST_ERROR redirect must have an empty track name",
+  );
+  const convertedError = new Error("converted session error");
+  const { publisher, errors, opened } = createStartConnectHarness(undefined, {
+    publisherOptions: { namespace: ["live"], announceNamespace: true },
+    announce: { hold: true },
+  });
+
+  const startResult = publisher.start({} as MediaStream).then(
+    () => null,
+    (error: unknown) => error,
+  );
+  await opened[0].namespacePublicationPublishing();
+  // 実際の読み取りループは raw error で待ちを reject してから、変換した SessionError で
+  // Session を閉じる (この順序で再現する)
+  opened[0].rejectNamespacePublication(rawError);
+  opened[0].notifySessionError(convertedError);
+
+  const rejected = await startResult;
+  assert.equal(rejected, rawError);
+  assert.deepEqual(errors, [convertedError]);
+  assert.isNull(publisher.namespacePublication);
+});
+
+/**
+ * 完了条件: 告知の確立前は NamespacePublicationCallbacks.error を通知せず、
+ * start() の失敗として 1 回だけ通知する。
+ */
+test("start: 確立前の告知 error コールバックは onError に流さない", async () => {
+  const failure = new Error("request error");
+  const { publisher, errors, opened } = createStartConnectHarness(undefined, {
+    publisherOptions: { namespace: ["live"], announceNamespace: true },
+    announce: { hold: true },
+  });
+
+  const startResult = publisher.start({} as MediaStream).then(
+    () => null,
+    (error: unknown) => error,
+  );
+  await opened[0].namespacePublicationPublishing();
+  // 低レベルの publishNamespace は REQUEST_ERROR でコールバックを呼んでから reject する
+  opened[0].notifyNamespacePublicationError(failure);
+  opened[0].rejectNamespacePublication(failure);
+
+  const rejected = await startResult;
+  assert.equal(rejected, failure);
+  assert.deepEqual(errors, [failure]);
+});
+
+/**
+ * 完了条件: namespacePublication は start() の実行中 (告知の確立後を含む) は null で、
+ * start() の解決後に active になる。
+ */
+test("namespacePublication: 告知の確立後も start の完了までは null を返す", async () => {
+  // publishCatalog の送信を保留し、告知の確立後かつ start() 完了前の窓で getter を読む。
+  // 告知自体は保留しないため、ガードが無ければ active の publication が見える
+  let notifyCatalogSendStarted: () => void = () => {};
+  const catalogSendStarted = new Promise<void>((resolve) => {
+    notifyCatalogSendStarted = resolve;
+  });
+  let releaseCatalogSend: () => void = () => {};
+  const catalogSendGate = new Promise<void>((resolve) => {
+    releaseCatalogSend = resolve;
+  });
+  const eventLog: string[] = [];
+  const gatedCatalog = createRecordingSendPublisher();
+  const originalSendObject = gatedCatalog.publisher.sendObject.bind(gatedCatalog.publisher);
+  gatedCatalog.publisher.sendObject = async (params) => {
+    notifyCatalogSendStarted();
+    await catalogSendGate;
+    await originalSendObject(params);
+  };
+  // onStateChange("publishing") の中で getter を読み、start() の完了前は null であることを
+  // 固定する (state の通知と start() の解決の間の契約)
+  const publicationDuringStateChange: (NamespacePublication | null)[] = [];
+  let publisher: MediaPublisherImpl;
+  const harness = createStartConnectHarness(
+    {
+      onStateChange: (state) => {
+        if (state === "publishing") {
+          publicationDuringStateChange.push(publisher.namespacePublication);
+        }
+      },
+    },
+    {
+      publisherOptions: { namespace: ["live"], announceNamespace: true },
+      createCatalogPublisher: () => ({
+        publisher: gatedCatalog.publisher,
+        doneCount: gatedCatalog.doneCount,
+      }),
+      announce: { eventLog },
+    },
+  );
+  publisher = harness.publisher;
+
+  const startPromise = publisher.start({} as MediaStream);
+  await catalogSendStarted;
+  // 告知は既に確立している (PUBLISH の後、catalog の送信より前に告知する)
+  assert.deepEqual(eventLog, ["publish:catalog", "publishNamespace"]);
+  assert.isNull(publisher.namespacePublication);
+
+  releaseCatalogSend();
+  await startPromise;
+  assert.deepEqual(publicationDuringStateChange, [null]);
+  // start の実行中に null で narrow されるため、解決後はローカルで読み直す
+  const publicationAfterStart = publisher.namespacePublication as NamespacePublication | null;
+  assert.isNotNull(publicationAfterStart);
+  assert.equal(publicationAfterStart.state, "active");
+  await publisher.close();
+});
+
+/**
+ * 完了条件: 告知の確立後にピア起点の close が起きた場合、namespacePublication は null に
+ * なり、解放に伴う done() の失敗を onError に通知しない。
+ */
+test("namespacePublication: 告知の確立後のピア起点 close で null になる", async () => {
+  const { publisher, errors, opened } = createStartConnectHarness(undefined, {
+    publisherOptions: { namespace: ["live"], announceNamespace: true },
+  });
+  await publisher.start({} as MediaStream);
+
+  opened[0].notifyClose();
+  await sleep(0);
+
+  assert.equal(publisher.state, "closed");
+  assert.isNull(publisher.namespacePublication);
+  assert.deepEqual(errors, []);
+  // Session の終了で publication は closed になるため done() は呼ばない
+  assert.equal(opened[0].namespacePublicationDoneCount(), 0);
+});
+
+/**
+ * 完了条件: close() の解放でも告知の done() を 1 回だけ呼ぶ。
+ */
+test("close: 告知の done を 1 回だけ呼ぶ", async () => {
+  const { publisher, opened } = createStartConnectHarness(undefined, {
+    publisherOptions: { namespace: ["live"], announceNamespace: true },
+  });
+  await publisher.start({} as MediaStream);
+
+  await publisher.close();
+
+  assert.equal(publisher.state, "closed");
+  assert.equal(opened[0].namespacePublicationDoneCount(), 1);
+  assert.isNull(publisher.namespacePublication);
+});
 
 /**
  * 完了条件: connectToServer が作る onSessionClose の閉包は接続時点の世代番号を捕捉し、

@@ -1152,11 +1152,16 @@ export interface NamespacePublication {
   readonly state: "active" | "closed";
   /**
    * 公開している Namespace
+   *
+   * `done()` の後も、生成時点の値を返す。
    */
   readonly namespace: string[];
   /**
    * 公開を終了する
-   * draft-ietf-moq-transport-22: ストリームの close で終了を通知する。
+   *
+   * draft-ietf-moq-transport-22 §4.1 / §6.4.2.3: 公開の終了を通知する専用メッセージは
+   * 無く、request のキャンセル (RESET_STREAM と STOP_SENDING) で行う。
+   * 根拠の仕様はドラフトであり将来変更される可能性がある。
    */
   done(): Promise<void>;
 }

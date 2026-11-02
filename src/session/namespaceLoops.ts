@@ -1558,6 +1558,13 @@ export async function namespaceStartPublicationStreamLoop(
     return;
   }
 
+  // REQUEST_OK を受けて確立したら、Session 終了時の reject を外す。未確立のまま
+  // Session が終了した場合だけ sessionRejectPendingRequests が Promise を reject する
+  const resolveEstablished = (established: NamespacePublication): void => {
+    publication.reject = undefined;
+    resolve(established);
+  };
+
   await runNamespaceStreamLoop(
     session,
     requestId,
@@ -1572,6 +1579,6 @@ export async function namespaceStartPublicationStreamLoop(
       },
     },
     reject,
-    createPublicationStreamHandlers(resolve),
+    createPublicationStreamHandlers(resolveEstablished),
   );
 }
