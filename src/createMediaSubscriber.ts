@@ -212,6 +212,29 @@ function resolvePreDecodeDelayMs(value: number | undefined): number {
 }
 
 /**
+ * `MediaSubscriberOptions.rendezvousTimeout` を検証して bigint のミリ秒にする
+ *
+ * draft-ietf-moq-transport-22 §9.20.6 (RENDEZVOUS_TIMEOUT): SUBSCRIBE ごとに publisher の
+ * 出現を待つ上限である。0 は即時応答の要求であり、未指定の既定も 0 になる。0 以上
+ * Number.MAX_SAFE_INTEGER 以下の整数だけを受け付ける (負数・小数・非有限・上限超は
+ * 生成時にエラーにする)。根拠の仕様はドラフトであり将来変更される可能性がある。
+ *
+ * @param value - 利用者が指定した値 (ミリ秒)
+ * @returns 検証済みの値 (未指定は undefined。SUBSCRIBE にパラメータを載せない)
+ */
+function resolveRendezvousTimeout(value: number | undefined): bigint | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Number.isInteger(value) || value < 0 || value > Number.MAX_SAFE_INTEGER) {
+    throw new Error(
+      `rendezvousTimeout must be an integer between 0 and ${Number.MAX_SAFE_INTEGER}, got ${value}`,
+    );
+  }
+  return BigInt(value);
+}
+
+/**
  * Object が占めるバイト数
  *
  * 受信統計の `bytesReceived` と同じ定義 (payload と properties の長さの合計) で数える。
@@ -726,6 +749,8 @@ export class MediaSubscriberImpl implements MediaSubscriber {
 
   // 復号前の追加遅延 (ミリ秒)。0 のときは段を作らず、既存の経路をそのまま通す
   private readonly preDecodeDelayMs: number;
+  // SUBSCRIBE に載せる RENDEZVOUS_TIMEOUT (ミリ秒)。未指定は undefined
+  private readonly rendezvousTimeout: bigint | undefined;
   // 復号前の Object を時間で保持する段 (音声と映像で別々)。0 のときは null
   private readonly audioPreDecodeStage: PreDecodeDelayStage<PendingAudioObject> | null;
   private readonly videoPreDecodeStage: PreDecodeDelayStage<MoqtObject> | null;
@@ -777,6 +802,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       ...options.pendingObjectQueue,
     };
     this.preDecodeDelayMs = resolvePreDecodeDelayMs(options.preDecodeDelayMs);
+    this.rendezvousTimeout = resolveRendezvousTimeout(options.rendezvousTimeout);
     this.audioPreDecodeStage = this.createAudioPreDecodeStage();
     this.videoPreDecodeStage = this.createVideoPreDecodeStage();
     // catalog 購読フェーズの状態は単体テストが制御口として直接読み書きするため、この
@@ -892,6 +918,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     this.catalogSubscription = new CatalogSubscription({
       state: catalogState,
       options: this.options,
+      rendezvousTimeout: this.rendezvousTimeout,
       session: () => this.session,
       reportError: (error) => this.callbacks.onError?.(error),
       handlePublishDone: (publishDone) => this.handlePublishDone(publishDone),
@@ -2070,6 +2097,17 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   }
 
   /**
+   * SUBSCRIBE に載せる RENDEZVOUS_TIMEOUT のオプション
+   *
+   * draft-ietf-moq-transport-22 §9.20.6: 0 を指定した場合も値を載せ、未指定の場合は
+   * 載せない (relay の既定も 0 だが、明示と省略を区別する)。
+   */
+  private rendezvousTimeoutOptions(): { rendezvousTimeout?: bigint } {
+    const timeout = this.rendezvousTimeout;
+    return timeout === undefined ? {} : { rendezvousTimeout: timeout };
+  }
+
+  /**
    * メディアトラックを subscribe する
    *
    * @param startGeneration start の開始時に捕捉した世代番号 (解放が先行していないかの検査用)
@@ -2119,9 +2157,12 @@ export class MediaSubscriberImpl implements MediaSubscriber {
           },
           error: (error) => this.callbacks.onError?.(error),
         },
-        // exactOptionalPropertyTypes では optional な authorizationToken に undefined を渡せないため、
+        // exactOptionalPropertyTypes では optional な値に undefined を渡せないため、
         // 値がある場合だけ載せる
-        authorizationToken === undefined ? {} : { authorizationToken },
+        {
+          ...(authorizationToken === undefined ? {} : { authorizationToken }),
+          ...this.rendezvousTimeoutOptions(),
+        },
       );
       this.audioSubscriber = audioSubscriber;
       // 購読の await 中に解放が先行していれば、初期 configure の適用も映像側の購読も行わない
@@ -2156,12 +2197,14 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       );
       // 解放が先行していれば、購読要求も出さない (解放で session は切り離し済み)
       this.assertStartNotDisposed(startGeneration);
-      // exactOptionalPropertyTypes では optional な authorizationToken に undefined を渡せないため、
+      // exactOptionalPropertyTypes では optional な値に undefined を渡せないため、
       // 値がある場合だけ載せる
-      const subscribeOptions: SubscribeOptions =
-        videoAuthorizationToken === undefined
+      const subscribeOptions: SubscribeOptions = {
+        ...(videoAuthorizationToken === undefined
           ? {}
-          : { authorizationToken: videoAuthorizationToken };
+          : { authorizationToken: videoAuthorizationToken }),
+        ...this.rendezvousTimeoutOptions(),
+      };
 
       this.videoSubscriber = await this.session.subscribe(
         namespace,

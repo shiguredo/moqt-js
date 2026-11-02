@@ -285,10 +285,11 @@ export function createCatalogTestSession(
   const session = {
     subscribe: async (...args: Parameters<Session["subscribe"]>): Promise<Subscriber> => {
       calls.push("subscribe");
+      // 失敗時もテストが渡した options を確かめられるよう、throw の前に記録する
+      subscribeOptions = args[3];
       if (hooks.subscribeError) {
         throw hooks.subscribeError;
       }
-      subscribeOptions = args[3];
       liveObject = args[2].object;
       // SUBSCRIBE_OK の LARGEST_OBJECT だけを持つ最小の Subscriber を返す
       return {

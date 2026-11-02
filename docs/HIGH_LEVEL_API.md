@@ -575,6 +575,12 @@ interface MediaSubscriberOptions {
   // 実際の表示遅延は、この値に経路、復号、jitter buffer の遅れが加わる。
   // catalog の targetLatency とは加算される
   preDecodeDelayMs?: number;
+  // 各 SUBSCRIBE に載せる RENDEZVOUS_TIMEOUT (ms、default: 未指定でパラメータを載せない)
+  // draft-ietf-moq-transport-22 §9.20.6: relay が publisher の出現を待つ上限。
+  // 0 以上 Number.MAX_SAFE_INTEGER 以下の整数だけを受け付け、それ以外は生成時に拒否する。
+  // 0 を指定した場合は 0 のパラメータを載せ、即時応答を要求することを明示する。
+  // SUBSCRIBE ごとの上限であるため、start() は catalog・音声・映像の最大 3 回分待つ
+  rendezvousTimeout?: number;
 }
 ```
 
@@ -612,6 +618,17 @@ MediaPublisherOptions も `audio` / `video` / `useWorker` / `serverCertificateHa
 高レベル API には無い。moqt-devtools は共有の復号前の遅延の段 (`PreDecodeDelayStage` /
 `SubscriberPreDecodeDelay`) を使い、接続中に Playback Delay を変更できる。詳細は
 [再生遅延](PLAYOUT_DELAY.md) を参照すること。
+
+`rendezvousTimeout` は、各 `SUBSCRIBE` に載せる `RENDEZVOUS_TIMEOUT` (ミリ秒) である
+(draft-ietf-moq-transport-22 §9.20.6)。relay が publisher の出現を待つ上限であり、
+0 以上 `Number.MAX_SAFE_INTEGER` 以下の整数だけを受け付ける (負数・小数・非有限・上限超は
+`createMediaSubscriber()` が拒否する)。未指定の場合はパラメータを載せない (relay の既定も
+0)。0 を指定した場合は 0 のパラメータを載せ、即時応答を要求することを明示する。relay は
+要求より短い時間で `TIMEOUT` を返し得る (MAY)。publisher が居ない場合、relay は即
+`REQUEST_ERROR` (`DOES_NOT_EXIST`) を返す MUST であり、その失敗は `RequestError` として
+`start()` から届く。`rendezvousTimeout` は `SUBSCRIBE` ごとの上限であるため、`start()` は
+catalog・音声・映像の最大 3 回分待ち得る。catalog の受信タイムアウト (5000 ms) は
+`SUBSCRIBE_OK` を受けてから数える別の上限である。
 
 `authorizationToken` を省略した場合、接続先の MOQT URI の msf fragment に `c4m` があれば、
 `connect()` がその値を復号して `SETUP` の `AUTHORIZATION TOKEN` (`0x03`) として送る
@@ -760,6 +777,49 @@ session も閉じる。`start()` が失敗した場合は確保済みを解放�
 解放が途中で失敗した場合も `"subscribing"` のまま取り残さない (ピア起点の close は
 解放のあとに `"closed"` にするため、戻した state は上書きされる)。巻き戻しの遷移で
 `onStateChange` が throw しても `onError` の通知と元のエラーは失われない。
+
+### start() の失敗
+
+`start()` の reject に載る値は `RequestError` だけではない。再試行の可否は次の 3 分類で判断する。
+
+#### relay の REQUEST_ERROR (RequestError)
+
+`instanceof RequestError` で判定できる。`code` (`RequestErrorCode`) と `retryInterval` を
+読める。`retryInterval` は draft-ietf-moq-transport-22 §9.4.2 の Retry Interval の生値
+(「ミリ秒 + 1」) であり、0 は「そのままでは再試行しない」を意味する (§12.3)。
+
+| code                                               | 再試行の判断                                                                                                                                                                                          |
+| -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DOES_NOT_EXIST` / `TIMEOUT`                       | publisher が居ない典型。再試行の対象。ただし `retryInterval` が 0 ならそのままでは再試行しない                                                                                                        |
+| `UNAUTHORIZED` / `EXPIRED_AUTH_TOKEN`              | トークンを取り直して再試行する。媒体トラックは `getAuthorizationToken` の呼び直しでよいが、catalog は SETUP のトークンを使うため `authorizationToken` を更新して `createMediaSubscriber` から作り直す |
+| `MALFORMED_AUTH_TOKEN`                             | トークンの生成を直すまで再試行しない                                                                                                                                                                  |
+| `NOT_SUPPORTED`                                    | 恒久の失敗                                                                                                                                                                                            |
+| `GOING_AWAY` / `EXCESSIVE_LOAD` / `INTERNAL_ERROR` | `retryInterval` に従って再試行する                                                                                                                                                                    |
+| その他                                             | `code` と `retryInterval` でアプリが判断する                                                                                                                                                          |
+
+#### 接続・セッションの失敗
+
+`RequestError` ではない (`SessionError` / `WebTransportError` / `DOMException` / 素の
+`Error`)。セッションが切断された場合、`onClose` は `start()` の失敗の後 (または前) に
+呼ばれ、`onError` と `onClose` が続けて呼ばれ得る。接続先・証明書・relay の状態を確かめて
+再接続する。
+
+#### それ以外の Error
+
+`catalog receive timeout`、`MalformedTrackError`、解放による打ち切りなどは型で再試行可否を
+区別できないため、この契約には含めない。アプリは再試行の前に購読要求
+(namespace / track / 認可) を見直す。`MalformedTrackError` はパッケージから export されて
+いない。
+
+#### GOAWAY の扱い
+
+GOAWAY 由来の失敗は素の `Error` (`request stream goaway`) で届き、新しい Session URI は
+高レベル API では取得できない (`MediaSubscriberCallbacks` に goaway が無く、
+`session.subscribe` の goaway コールバックも設定していない)。draft-ietf-moq-transport-22
+§9.2 は、URI が提供された場合にその URI を新しいセッションに使うことをクライアントへ MUST
+とする。高レベル API ではこの MUST を満たせない。URI を使う再接続が必要な場合は、低レベル
+API の `ConnectCallbacks.goaway` / `SubscribeCallbacks.goaway` を使う。URI を使う再接続の
+高レベル対応は現時点の対象外である。
 
 ### 統計情報
 
@@ -1348,8 +1408,9 @@ const published = publisher.getCatalog();
 (`LARGEST_OBJECT` が不明なときも絶対位置 `{0, 0}` を明示する)。Location Filter を
 省略した FETCH は送らない。FETCH の応答が期限内に終わらない場合も、SUBSCRIBE で
 届いた完全なカタログは破棄せず、受信タイムアウトの時点で適用して開始する。
-カタログを受け取れないまま受信タイムアウト (5000 ms) を過ぎると `start()` は
-`catalog receive timeout` で失敗する。
+カタログを受け取れないまま、`SUBSCRIBE_OK` を受けてから 5000 ms を過ぎると `start()` は
+`catalog receive timeout` で失敗する (このタイマーは `SUBSCRIBE_OK` の後に数え始めるため、
+relay が publisher の出現を待って `SUBSCRIBE_OK` を保留している間は進まない)。
 
 ### 認可トークン
 

@@ -728,7 +728,10 @@ test("subscribeMediaTracks: 音声も SUBSCRIBE_OK の Track Property を購読�
  * 音声トラックを 1 本だけ購読し、`session.subscribe` に渡された options を記録する。
  * `authInfo` を渡すと認可が必要な track になる (§5.2.42)。
  */
-function createMediaTrackSubscribeCapture(authInfo?: CatalogTrack["authInfo"]): {
+function createMediaTrackSubscribeCapture(
+  authInfo?: CatalogTrack["authInfo"],
+  rendezvousTimeout?: number,
+): {
   control: SubscriberInitialConfigControl & {
     session: Session | null;
     audioTrackInfo: CatalogTrack | null;
@@ -739,6 +742,7 @@ function createMediaTrackSubscribeCapture(authInfo?: CatalogTrack["authInfo"]): 
 } {
   const subscriber = createTestSubscriber({
     audio: { codec: "opus" },
+    ...(rendezvousTimeout === undefined ? {} : { rendezvousTimeout }),
   }).subscriber;
   const control = subscriber as unknown as SubscriberInitialConfigControl & {
     session: Session | null;
@@ -814,6 +818,86 @@ test("subscribeMediaTracks: authInfo があり SETUP にもトークンが無け
 
   assert.ok(error instanceof Error);
   assert.ok(error.message.includes("no getAuthorizationToken callback was provided"));
+});
+
+/**
+ * draft-ietf-moq-transport-22 §9.20.6:
+ * rendezvousTimeout を指定すると音声の SUBSCRIBE に RENDEZVOUS_TIMEOUT が載る。
+ * 0 の明示も 0 として載せる。
+ */
+test("subscribeMediaTracks: rendezvousTimeout を音声の SUBSCRIBE に載せる", async () => {
+  const cases: Array<{ given: number; expected: bigint }> = [
+    { given: 1500, expected: 1500n },
+    { given: 0, expected: 0n },
+  ];
+  for (const { given, expected } of cases) {
+    const { control, captured } = createMediaTrackSubscribeCapture(undefined, given);
+    await control.subscribeMediaTracks(control.sessionGeneration);
+    assert.equal(captured.length, 1);
+    assert.equal(captured[0]?.rendezvousTimeout, expected);
+  }
+});
+
+// 未指定の場合はパラメータを載せない (relay の既定も 0 だが、明示と省略を区別する)
+test("subscribeMediaTracks: rendezvousTimeout 未指定は SUBSCRIBE に載せない", async () => {
+  const { control, captured } = createMediaTrackSubscribeCapture();
+  await control.subscribeMediaTracks(control.sessionGeneration);
+
+  assert.equal(captured.length, 1);
+  assert.isUndefined(captured[0]?.rendezvousTimeout);
+});
+
+/**
+ * draft-ietf-moq-transport-22 §9.20.6:
+ * 映像の SUBSCRIBE にも RENDEZVOUS_TIMEOUT を載せる (音声と同じ経路を使う)。
+ */
+test("subscribeMediaTracks: rendezvousTimeout を映像の SUBSCRIBE に載せる", async () => {
+  const subscriber = createTestSubscriber({
+    video: { codec: "av1" },
+    rendezvousTimeout: 250,
+  }).subscriber;
+  const control = subscriber as unknown as SubscriberInitialConfigControl & {
+    session: Session | null;
+    videoTrackInfo: CatalogTrack | null;
+    sessionGeneration: number;
+    subscribeMediaTracks(startGeneration: number): Promise<void>;
+  };
+  control.videoDecoder = {
+    configure: async () => {},
+    decode: () => {},
+  };
+  control.videoDecoderConfigured = true;
+  control.videoTrackInfo = makeVideoTrackInfo({ codec: "av01.0.04M.08" });
+  const captured: Array<SubscribeOptions | undefined> = [];
+  control.session = {
+    subscribe: async (...args: Parameters<Session["subscribe"]>): Promise<Subscriber> => {
+      captured.push(args[3]);
+      return { largestLocation: null, trackProperties: [] } as unknown as Subscriber;
+    },
+  } as unknown as Session;
+
+  await control.subscribeMediaTracks(control.sessionGeneration);
+
+  assert.equal(captured.length, 1);
+  assert.equal(captured[0]?.rendezvousTimeout, 250n);
+});
+
+/**
+ * 完了条件: rendezvousTimeout は 0 以上 Number.MAX_SAFE_INTEGER 以下の整数だけを受け付け、
+ * 負数・小数・非有限・上限超は生成時に拒否する。
+ */
+test("rendezvousTimeout: 不正な値を生成時に拒否する", () => {
+  const invalid = [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 1];
+  for (const value of invalid) {
+    assert.throws(
+      () => createTestSubscriber({ rendezvousTimeout: value }),
+      /rendezvousTimeout must be an integer/,
+    );
+  }
+  // 境界値は受け付ける
+  for (const value of [0, Number.MAX_SAFE_INTEGER]) {
+    assert.doesNotThrow(() => createTestSubscriber({ rendezvousTimeout: value }));
+  }
 });
 
 /**

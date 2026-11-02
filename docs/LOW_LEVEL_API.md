@@ -377,6 +377,16 @@ Safari 系の `WebTransport` では `writer.close()` が resolve しない場合
 4. `trackAlias` / `largestLocation` / `trackProperties` を反映する
 5. `subscribers` と `subscribersByAlias` に登録する
 
+#### `RENDEZVOUS_TIMEOUT`
+
+`SubscribeOptions.rendezvousTimeout` (ミリ秒、`bigint`) を指定すると、`SUBSCRIBE` に
+`RENDEZVOUS_TIMEOUT` (draft-ietf-moq-transport-22 §9.20.6) を載せる。省略した場合の既定は
+0 であり、publisher が居なければ relay は即 `REQUEST_ERROR` (`DOES_NOT_EXIST`) を返す MUST。
+relay は要求より短い時間で `TIMEOUT` を返し得る (MAY)。0 を指定した場合も 0 のパラメータを
+載せる。この値は `SUBSCRIBE` のみに意味を持ち、catalog 取得の `FETCH` には載せない。
+`REQUEST_ERROR` は `RequestError` で reject され、`code` と Retry Interval (§9.4.2) の生値で
+ある `retryInterval` (「ミリ秒 + 1」、0 は「そのままでは再試行しない」) を読める。
+
 #### `REQUEST_UPDATE`
 
 `Subscriber.update()` は新しい `Request ID` を採番するが、メッセージ自体は元の subscription と同じ双方向ストリームに送る。成功時の `REQUEST_OK` は `bidiHandleRequestUpdateOk()` が処理し、`LARGEST_OBJECT` が含まれていれば `Subscriber.largestLocation` も更新する。

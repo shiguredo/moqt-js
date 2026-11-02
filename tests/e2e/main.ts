@@ -17,6 +17,7 @@ import {
   connect,
   createMediaPublisher,
   createMediaSubscriber,
+  RequestError,
   type AudioDelivery,
   type Fetcher,
   type FetchOptions,
@@ -177,6 +178,25 @@ export interface StartSubscriberOptions {
    * 失敗し、音声だけを見たいテストがそのエラーに巻き込まれる
    */
   video?: boolean;
+  /**
+   * SUBSCRIBE に載せる RENDEZVOUS_TIMEOUT (ms)
+   *
+   * draft-ietf-moq-transport-22 §9.20.6: publisher の出現を待つ上限。省略すると
+   * パラメータを載せない (relay の既定 0)
+   */
+  rendezvousTimeout?: number;
+}
+
+/** Subscriber の開始失敗の観測結果 */
+export interface SubscriberStartFailure {
+  /** relay の REQUEST_ERROR (RequestError) として届いたか */
+  isRequestError: boolean;
+  /** RequestError の code (RequestErrorCode の値。RequestError でなければ null) */
+  code: number | null;
+  /** Retry Interval の生値 (「ミリ秒 + 1」。bigint は運べないため文字列。無ければ null) */
+  retryInterval: string | null;
+  /** 失敗のメッセージ (接続先は伏せたもの) */
+  message: string;
 }
 
 /**
@@ -763,6 +783,11 @@ async function startSubscriber(options: StartSubscriberOptions): Promise<HandleI
         ...(options.audio === true
           ? { audio: { codec: options.audioCodec === "aac" ? "aac" : "opus" } }
           : {}),
+        // exactOptionalPropertyTypes では optional な値に undefined を渡せないため、
+        // 値がある場合だけ載せる
+        ...(options.rendezvousTimeout === undefined
+          ? {}
+          : { rendezvousTimeout: options.rendezvousTimeout }),
       },
       {
         onError: (error) => {
@@ -1079,6 +1104,56 @@ async function stopSubscribeNamespace(id: HandleId): Promise<SubscribeNamespaceS
   return { ...status, state: handle.subscription.state, errors: [...handle.errors] };
 }
 
+/**
+ * publisher が居ない namespace の購読を開始し、start() の失敗を観測する
+ *
+ * rendezvousTimeout を渡して SUBSCRIBE に RENDEZVOUS_TIMEOUT を載せ、relay が
+ * REQUEST_ERROR (TIMEOUT / DOES_NOT_EXIST) を返すかを確かめる spec が使う。
+ * start() が成功した場合も、失敗の観測結果としてその旨を返す。
+ */
+async function startSubscriberFailure(
+  options: StartSubscriberOptions,
+): Promise<SubscriberStartFailure> {
+  rememberRelayUri(options.url);
+  try {
+    const subscriber = await createMediaSubscriber(
+      options.url,
+      {
+        namespace: options.namespace,
+        // createMediaSubscriber は音声か映像のどちらかを要求する。この経路では
+        // catalog の SUBSCRIBE の結果だけを見るため、映像を要求しておく
+        video: { codec: "vp8" },
+        // exactOptionalPropertyTypes では optional な値に undefined を渡せないため、
+        // 値がある場合だけ載せる
+        ...(options.rendezvousTimeout === undefined
+          ? {}
+          : { rendezvousTimeout: options.rendezvousTimeout }),
+      },
+      {
+        onError: () => {
+          // start() の失敗として観測するため、ここでは記録しない
+        },
+      },
+    );
+    await subscriber.start();
+    await subscriber.close();
+    return {
+      isRequestError: false,
+      code: null,
+      retryInterval: null,
+      message: "start succeeded",
+    };
+  } catch (error) {
+    const requestError = error instanceof RequestError ? error : null;
+    return {
+      isRequestError: requestError !== null,
+      code: requestError?.code ?? null,
+      retryInterval: requestError?.retryInterval?.toString() ?? null,
+      message: toErrorMessage(error),
+    };
+  }
+}
+
 /** テストページが露出する API */
 export interface MoqtE2EApi {
   connectRelay(options: ConnectRelayOptions): Promise<ConnectRelayResult>;
@@ -1088,6 +1163,7 @@ export interface MoqtE2EApi {
   startSubscriber(options: StartSubscriberOptions): Promise<HandleId>;
   getSubscriber(id: HandleId): SubscriberStatus;
   stopSubscriber(id: HandleId): Promise<SubscriberStatus>;
+  startSubscriberFailure(options: StartSubscriberOptions): Promise<SubscriberStartFailure>;
   startFetch(options: StartFetchOptions): Promise<HandleId>;
   getFetch(id: HandleId): FetchStatus;
   stopFetch(id: HandleId): Promise<FetchStatus>;
@@ -1107,6 +1183,7 @@ window.__moqtE2E = {
   startSubscriber,
   getSubscriber,
   stopSubscriber,
+  startSubscriberFailure,
   startFetch,
   getFetch,
   stopFetch,

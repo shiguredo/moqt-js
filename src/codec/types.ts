@@ -364,6 +364,16 @@ export interface MediaSubscriberOptions {
   // catalog の targetLatency とは加算される。受信バッファの上限
   // (ConnectOptions.dataStreamMaxBufferBytes) とは無関係であり、その値は変えない
   preDecodeDelayMs?: number;
+  // SUBSCRIBE に載せる RENDEZVOUS_TIMEOUT (ms、default: 未指定でパラメータを載せない)
+  // draft-ietf-moq-transport-22 §9.20.6: publisher の出現を待つ上限。0 以上
+  // Number.MAX_SAFE_INTEGER 以下の整数だけを受け付け、それ以外は生成時にエラーになる。
+  // 0 は即時応答の要求であり、指定すれば 0 のパラメータを載せる。
+  // SUBSCRIBE ごとの上限であるため、start() は catalog・音声・映像の最大 3 回分待つ。
+  // relay は要求より短い時間で TIMEOUT を返し得る (MAY)。
+  // relay が publisher の不在で DOES_NOT_EXIST / TIMEOUT を返した場合、start() は
+  // RequestError で失敗し、code と retryInterval を読める。根拠の仕様はドラフトであり
+  // 将来変更される可能性がある
+  rendezvousTimeout?: number;
 }
 
 // MediaSubscriber コールバック
