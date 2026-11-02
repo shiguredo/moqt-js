@@ -193,7 +193,7 @@ export interface SubscriberStartFailure {
   isRequestError: boolean;
   /** RequestError の code (RequestErrorCode の値。RequestError でなければ null) */
   code: number | null;
-  /** Retry Interval の生値 (「ミリ秒 + 1」。bigint は運べないため文字列。無ければ null) */
+  /** Retry Interval の生値 (「ミリ秒 + 1」)。bigint は精度を保つため文字列で返す。無ければ null */
   retryInterval: string | null;
   /** 失敗のメッセージ (接続先は伏せたもの) */
   message: string;

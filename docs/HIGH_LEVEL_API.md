@@ -623,11 +623,13 @@ MediaPublisherOptions も `audio` / `video` / `useWorker` / `serverCertificateHa
 (draft-ietf-moq-transport-22 §9.20.6)。relay が publisher の出現を待つ上限であり、
 0 以上 `Number.MAX_SAFE_INTEGER` 以下の整数だけを受け付ける (負数・小数・非有限・上限超は
 `createMediaSubscriber()` が拒否する)。未指定の場合はパラメータを載せない (relay の既定も
-0)。0 を指定した場合は 0 のパラメータを載せ、即時応答を要求することを明示する。relay は
-要求より短い時間で `TIMEOUT` を返し得る (MAY)。publisher が居ない場合、relay は即
-`REQUEST_ERROR` (`DOES_NOT_EXIST`) を返す MUST であり、その失敗は `RequestError` として
-`start()` から届く。`rendezvousTimeout` は `SUBSCRIBE` ごとの上限であるため、`start()` は
-catalog・音声・映像の最大 3 回分待ち得る。catalog の受信タイムアウト (5000 ms) は
+0)。0 を指定した場合は 0 のパラメータを載せ、即時応答を要求することを明示する。
+0 または未指定 (既定 0) の場合、publisher が居なければ relay は即 `REQUEST_ERROR`
+(`DOES_NOT_EXIST`) を返す MUST。0 より大きい場合は relay は期限まで publisher を待つ SHOULD
+であり、期限切れでは `TIMEOUT` を返す SHOULD (relay は要求より短い時間で `TIMEOUT` を返し
+得る MAY)。どちらの失敗も `RequestError` として `start()` から届く。`rendezvousTimeout` は
+`SUBSCRIBE` ごとの上限であるため、`start()` は catalog・音声・映像の最大 3 回分待ち得る。
+待ちの間も状態は `"subscribing"` のままである。catalog の受信タイムアウト (5000 ms) は
 `SUBSCRIBE_OK` を受けてから数える別の上限である。
 
 `authorizationToken` を省略した場合、接続先の MOQT URI の msf fragment に `c4m` があれば、
@@ -786,7 +788,8 @@ session も閉じる。`start()` が失敗した場合は確保済みを解放�
 
 `instanceof RequestError` で判定できる。`code` (`RequestErrorCode`) と `retryInterval` を
 読める。`retryInterval` は draft-ietf-moq-transport-22 §9.4.2 の Retry Interval の生値
-(「ミリ秒 + 1」) であり、0 は「そのままでは再試行しない」を意味する (§12.3)。
+(「ミリ秒 + 1」) であり、0 は「そのままでは再試行しない」を意味する (REDIRECT の追従は
+§12.3 により妨げられない)。
 
 | code                                               | 再試行の判断                                                                                                                                                                                          |
 | -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

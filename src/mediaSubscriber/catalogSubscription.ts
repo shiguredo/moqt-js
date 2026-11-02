@@ -2,8 +2,9 @@
  * Catalog 購読フェーズ
  *
  * `MediaSubscriberImpl` から切り出した、catalog トラックの SUBSCRIBE / FETCH と、
- * 受信した catalog からのトラック解決を受け持つ。受信タイムアウト・エラー通知・
- * 解決の順序は `MediaSubscriberImpl` に置いていたときと同じであり、挙動は変えない。
+ * 受信した catalog からのトラック解決を受け持つ。受信タイムアウトの起点は
+ * SUBSCRIBE_OK の後であり、エラー通知と解決の順序は `MediaSubscriberImpl` に置いていた
+ * ときと同じである。
  *
  * catalog の受信状態 (`CatalogSubscriptionState`) は `MediaSubscriberImpl` が持ち、
  * このクラスは getter / setter を通して読み書きする。状態を実装クラスに残すのは、

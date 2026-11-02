@@ -41,6 +41,8 @@ test("実リレーで publisher 不在の購読に RENDEZVOUS_TIMEOUT を載せ�
     expect(failure.isRequestError).toBe(true);
     expect([0x02, 0x10]).toContain(failure.code); // TIMEOUT / DOES_NOT_EXIST
     expect(failure.message.length).toBeGreaterThan(0);
+    // REQUEST_ERROR の Retry Interval も読めること
+    expect(failure.retryInterval).not.toBeNull();
   } finally {
     await closeRelayPage(page);
   }

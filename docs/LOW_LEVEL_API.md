@@ -381,11 +381,13 @@ Safari 系の `WebTransport` では `writer.close()` が resolve しない場合
 
 `SubscribeOptions.rendezvousTimeout` (ミリ秒、`bigint`) を指定すると、`SUBSCRIBE` に
 `RENDEZVOUS_TIMEOUT` (draft-ietf-moq-transport-22 §9.20.6) を載せる。省略した場合の既定は
-0 であり、publisher が居なければ relay は即 `REQUEST_ERROR` (`DOES_NOT_EXIST`) を返す MUST。
-relay は要求より短い時間で `TIMEOUT` を返し得る (MAY)。0 を指定した場合も 0 のパラメータを
-載せる。この値は `SUBSCRIBE` のみに意味を持ち、catalog 取得の `FETCH` には載せない。
-`REQUEST_ERROR` は `RequestError` で reject され、`code` と Retry Interval (§9.4.2) の生値で
-ある `retryInterval` (「ミリ秒 + 1」、0 は「そのままでは再試行しない」) を読める。
+0 であり、0 または未指定 (既定 0) の場合は publisher が居なければ relay は即
+`REQUEST_ERROR` (`DOES_NOT_EXIST`) を返す MUST。0 より大きい場合は relay は期限まで
+publisher を待つ SHOULD であり、期限切れでは `TIMEOUT` を返す SHOULD (relay は要求より
+短い時間で `TIMEOUT` を返し得る MAY)。0 を指定した場合も 0 のパラメータを載せる。この値は
+`SUBSCRIBE` のみに意味を持ち、catalog 取得の `FETCH` には載せない。`REQUEST_ERROR` は
+`RequestError` で reject され、`code` と Retry Interval (§9.4.2) の生値である
+`retryInterval` (「ミリ秒 + 1」、0 は「そのままでは再試行しない」) を読める。
 
 #### `REQUEST_UPDATE`
 
