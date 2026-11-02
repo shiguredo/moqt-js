@@ -1,0 +1,263 @@
+# 高レベル API の namespace 告知 (PUBLISH_NAMESPACE)
+
+`createMediaPublisher` は catalog と媒体トラックの `PUBLISH` だけを送り、`PUBLISH_NAMESPACE` を送らない。
+relay の namespace discovery は `PUBLISH_NAMESPACE` で登録された namespace だけを列挙するため、
+高レベル API で作った配信は `SUBSCRIBE_NAMESPACE` で発見できない。
+会議アプリは発見のためだけに制御プレーンの `Session` を低レベル API で別に張り、
+そこで `PUBLISH_NAMESPACE` と `SUBSCRIBE_NAMESPACE` を行っている。
+
+この文書は、`createMediaPublisher` に namespace を告知するオプション (例 `announce: true`) と、
+告知のライフサイクル (`done`) を持たせるための調査結果と設計案をまとめる。
+実装はまだ無く、公開 API の契約でもない。
+
+- 調査日: 2026-11-02
+- 調査基準: `74e4a8bb`
+
+## 結論
+
+- 高レベル API は接続した `Session` を内部に保持し、外から `publishNamespace` を呼ぶ入口が無い。
+  このため会議アプリは別セッションを張っている
+- 低レベル API には `Session.publishNamespace()` と `NamespacePublication.done()` があり、
+  draft-22 の `PUBLISH_NAMESPACE` と撤回 (request のキャンセル) に対応している。
+  高レベル API が同じセッションで呼べば、追加のセッションは要らない
+- 告知の生存期間は session に紐づく。高レベル API の `stop()` と `close()` は session ごと閉じるため、
+  告知は `start()` で作成し、解放で `done()` する。`pause()` と `resume()` では維持する。
+  `stop()` からの再 `start()` は新しい session なので告知し直す
+- 告知を外から観測し、告知だけを先に終えられるようにするなら、
+  `MediaPublisher.namespacePublication` を公開する。告知だけを終えて配信を続けることは
+  draft-22 §4.1 が許す
+- 既定値、告知失敗時の扱い、`PUBLISH` との順序、空 namespace の拒否は決める必要がある (未決事項)
+
+## 期待の解釈
+
+依頼は「`createMediaPublisher` に namespace を告知するオプションと、そのライフサイクル (`done`) を持たせる」である。
+ここでは次の 2 つに分けて扱う。
+
+- 告知の開始: `MediaPublisherOptions.announce` で指定し、`start()` が同一セッションで `PUBLISH_NAMESPACE` を送る
+- 告知の終了: `NamespacePublication.done()` を返し、`stop()` と `close()` の解放で呼ぶ。
+  利用者が明示的に `done()` を呼ぶ経路も残す
+
+購読側の `SUBSCRIBE_NAMESPACE` を高レベル API に足すことは本提案の範囲外とする。
+会議アプリは発見の購読を制御プレーンの session で続ける。
+
+## 仕様の根拠
+
+draft-ietf-moq-transport-22 §4 (Publisher and Namespace Discovery) より。
+
+- §4.1: publisher は `PUBLISH_NAMESPACE` を送ってよい (MAY)。
+  `PUBLISH_NAMESPACE` は prefix に一致する namespace にトラックがあることを示す
+- §4.1: `PUBLISH_NAMESPACE` の撤回は request のキャンセル (§6.4.2.3 の RESET_STREAM と STOP_SENDING) で行う。
+  draft-22 に `PUBLISH_NAMESPACE_DONE` は無い
+- §4.2: publisher が namespace を知っている条件は「その namespace の 1 つ以上のトラックの
+  Original Publisher である」または「relay が権限のある `PUBLISH_NAMESPACE` を受けた」ことである。
+  relay は上流から `PUBLISH` を受けただけでは Original Publisher ではないため、
+  上流 publisher の `PUBLISH_NAMESPACE` が discovery の登録条件になる
+- §4.2: 撤回した namespace は `NAMESPACE_DONE` として `SUBSCRIBE_NAMESPACE` の購読者へ伝わる。
+  `PUBLISH` で確立した購読は `SUBSCRIBE_NAMESPACE` の stream の終了に影響されない
+- §9.14: `PUBLISH_NAMESPACE` に載せられるパラメータは `AUTHORIZATION_TOKEN` だけである
+- draft-ietf-moq-msf-01 §11.4.3: original publisher のトークンは `PUBLISH` と
+  `PUBLISH_NAMESPACE` の両方へ MUST 付与する
+
+会議での観測 (relay は `PUBLISH_NAMESPACE` で登録された namespace だけを列挙する) は、
+この §4.2 の条件と整合する。relay が `PUBLISH` から namespace を推測して列挙することは
+仕様上求められていない。
+
+## 現状の実装
+
+### 高レベル API
+
+- `MediaPublisherImpl` は session を private フィールドで保持し、
+  公開インターフェース (`MediaPublisher`) に session を読む入口が無い (`src/createMediaPublisher.ts`)
+- `start()` は接続、音声の配送方式の検査、catalog と音声と映像の `PUBLISH`、音声の取り出し経路、
+  catalog の送信、encoder の設定、処理ループの起動の順に進む。`PUBLISH_NAMESPACE` を送る段は無い
+- `stop()` と `close()` は `disposeAllResources()` で publisher の `done()` と session の `close()` を行い、
+  session を破棄する
+- `pause()` と `resume()` は session を維持したまま処理ループだけを止める
+- `start()` の失敗時も `disposeAllResources()` で巻き戻す
+
+### 低レベル API
+
+- `Session.publishNamespace(namespace, callbacks?, options?)` は専用の双方向ストリームで
+  `PUBLISH_NAMESPACE` を送り、`REQUEST_OK` で `NamespacePublication` を返す
+  (`src/session.ts`、`src/session/namespaces.ts`)
+- `NamespacePublication` は `state` (active / closed)、`namespace`、`done()` を持つ
+  (`src/session/publicTypes.ts`)
+- `done()` は RESET_STREAM と STOP_SENDING で request をキャンセルし、状態を閉じる。
+  `PUBLISH_NAMESPACE_DONE` は送らない
+- session の終了時は publication の state を閉じ、`namespacePublications` を clear する
+  (`src/session/lifecycle.ts`)。そのため終了済み session の `done()` は何もしない
+- `REQUEST_ERROR` では Promise が reject する前に `error` コールバックも呼ばれる
+  (`src/session/namespaceLoops.ts`)。高レベル API からコールバックを渡す場合、
+  `start()` の失敗通知と二重にならないようにする必要がある
+- 認可トークンは `PublishNamespaceOptions.authorizationToken` で渡す。
+  SETUP の登録状況に応じて USE_ALIAS / USE_VALUE へ正規化される
+
+### 実リレーでの検証状況
+
+- このリポジトリに relay の実装は無い (クライアント専用。`CODEBASE.md`)
+- リレー実装側は `PUBLISH_NAMESPACE` / `SUBSCRIBE_NAMESPACE` / `NAMESPACE` / `NAMESPACE_DONE`
+  に対応していることを 2026-11-02 に確認した
+- 2026-10-03 に実リレーで試したときは `SUBSCRIBE_NAMESPACE` に応答が無かった。
+  その後のリレー実装の更新で解消している可能性がある
+- 会議環境では discovery が動作している。配備版での往復は未確認であり、
+  実装前に実リレーで `PUBLISH_NAMESPACE` と `SUBSCRIBE_NAMESPACE` の往復を確かめる
+
+## 設計案
+
+### API
+
+```typescript
+interface MediaPublisherOptions {
+  // 既存のフィールドは省略
+  // namespace を PUBLISH_NAMESPACE で告知する (既定値は未決事項)
+  announce?: boolean;
+}
+
+interface MediaPublisher {
+  // 既存のメンバーは省略
+  // 現在の namespace 公開。announce が無効、start 前、stop / close 後は null
+  readonly namespacePublication: NamespacePublication | null;
+}
+```
+
+`NamespacePublication` は低レベル API の公開型をそのまま使う。
+`state` と `namespace` を読め、`done()` で告知だけを終えられる。
+
+### ライフサイクル
+
+| 契機                     | 告知の扱い                                                                                                         |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------ |
+| `start()`                | 接続し、`PUBLISH` の確立後に `PUBLISH_NAMESPACE` を送り、`REQUEST_OK` を待って保持する。失敗したら開始を失敗させる |
+| `pause()` / `resume()`   | 変更しない (トラックは在り、購読は継続できる)                                                                      |
+| `stop()` / `close()`     | 解放で `done()` を 1 回呼ぶ。`stop()` からの再 `start()` は新しい session で告知し直す                             |
+| ピア起点の close         | session の終了で publication は閉じる。ローカルの参照は解放で切る。`done()` は状態が closed のため何もしない       |
+| `start()` の失敗         | 巻き戻しの解放で `done()` を呼ぶ。告知の確立前に失敗した場合は告知が無いため何もしない                             |
+| 利用者が `done()` を呼ぶ | 告知だけを終え、配信は続ける。再 `start()` では再告知する                                                          |
+
+解放では告知の `done()` を publisher の `done()` より前に置く。
+新規の購読者に停止中の配信を発見させないためである。
+リレー実装によっては、セッションの切断だけでは購読者へ `NAMESPACE_DONE` が届かないため、
+告知の撤回は `done()` で明示的に送る。
+`NAMESPACE_DONE` は既存の `PUBLISH` 購読に影響しない (§4.2)。
+
+### 告知の位置
+
+`createPublishers()` の後、`prepareAudioFrameSource()` の前に置く案を推奨する。
+
+- 推奨案: `PUBLISH` を確立してから告知する。§4.1 の「prefix に一致する namespace にトラックがある」という
+  表明と一致し、告知の失敗で `start()` が失敗する場合も PUBLISH の巻き戻しは既存の解放経路に乗る
+- 代替案: `PUBLISH` より前に告知する。relay が `PUBLISH_NAMESPACE` を拒否する場合に PUBLISH を送らずに
+  失敗できる。反面、トラックが確立する前に namespace を告知する短い窓ができる。
+  規格上の順序要求は無い
+
+どちらの順序も規格に違反しないため、実リレーで `PUBLISH_NAMESPACE` と `PUBLISH` の
+両方の順序を受け付けることを確認してから決める。
+
+### 実装箇所
+
+- `src/codec/types.ts`: `MediaPublisherOptions.announce` と `MediaPublisher.namespacePublication`
+- `src/createMediaPublisher.ts`: `namespacePublication` フィールド、`start()` の告知、
+  `disposeAllResources()` の `done()`、getter
+- `src/session.ts`、`src/session/namespaces.ts`、`src/session/publicTypes.ts`: 変更不要
+
+告知を `start()` に足すと await の窓が 1 つ増える。
+告知の await 中に `close()` またはピア起点の close が先行する場合があるため、
+既存の `assertStartNotDisposed(startGeneration)` と同じ検査を告知の後にも置く。
+告知の Promise が解決したあとに解放が先行していたら、その publication を `done()` してから
+`START_ABORTED_DISPOSED` で失敗し、ローカルの参照を残さない。
+解放が既に完了していても session の close で stream は閉じているため、wire 上の後始末は済んでいる。
+
+### エラーと認可
+
+- 告知の確立失敗は `start()` の失敗にする。指定した機能を黙って落とさない
+  (音声の `delivery` の検査と同じ方針)
+- 確立後の stream エラー (RESET など) は `onError` に流し、配信は続ける
+- `error` コールバックは確立前の `REQUEST_ERROR` でも呼ばれる。
+  告知の確立前はコールバックの通知を抑止するか、reject と同一のエラーを一度だけ通知する仕組みを入れる
+- SETUP に載せたトークン (`Session.setupAuthorizationToken`) を `publishNamespace` の
+  `authorizationToken` に渡す。既存の `authorizationTokenOptions` を PUBLISH と共用する
+- 高レベル API の `namespace` は 0 フィールドを許す。`PUBLISH_NAMESPACE` の 0 フィールド prefix は
+  全 namespace に一致するため、`announce: true` かつ `namespace` が空配列なら `start()` を拒否する
+  (黙って全 namespace を告知しない)
+
+### 代替案
+
+- 高レベル API が制御プレーン用の session を別に張り、そこで告知する。
+  会議の現状をライブラリ化した形だが、session が 2 本になりライフサイクルが複雑になる。
+  配信の session と告知の session を relay が関連付けるかも実装依存になる
+- 現状どおりアプリが低レベル API で制御プレーンを張る。高レベル API と告知の二重管理が残る
+- `MediaPublisher` から内部の `Session` を公開し、アプリが `publishNamespace` を呼ぶ。
+  解放の責務がアプリへ漏れ、`stop()` と `close()` のライフサイクルと一致しなくなるため採らない
+- 同一 session で告知する (推奨)。セッションが 1 本で、開始と停止のライフサイクルが一致する
+
+## 未決事項
+
+1. 既定値を `false` (opt-in) にするか `true` にするか
+   - `false`: 既存の呼び出しの挙動が変わらない。relay が `PUBLISH_NAMESPACE` を拒否する場合の影響も opt-in に限られる
+   - `true`: 高レベル API の配信が既定で discovery に出る。relay の対応と失敗時の扱いを先に固定する必要がある
+   - 推奨: 最初は `false`。実リレーで `announce: true` の E2E が通ってから既定を再検討する
+2. 告知失敗を `start()` の失敗にするか、`onError` で通知して配信を続けるか
+   - 推奨: `start()` の失敗
+3. `namespacePublication` を公開するか、自動ライフサイクルだけにするか
+   - 「ライフサイクル (`done`)」を API で表すなら公開する。告知だけを先に終えたい場合に要る
+4. 告知を `PUBLISH` の前と後のどちらに置くか (推奨は後)
+5. オプション名を `announce` にするか `announceNamespace` にするか
+   - 低レベル API の `publishNamespace` に合わせるなら `announceNamespace`。依頼の例は `announce`
+
+## テスト計画
+
+単体テスト (既存の接続境界の差し替えを使う。モジュール置換はしない)。
+
+- `announce` を指定しない場合に `publishNamespace` を呼ばない
+- `announce: true` で `namespace` と同じ配列、SETUP のトークン付きで 1 回呼ぶ
+- PUBLISH がすべて成功した後に告知する (呼び出し順)
+- 告知の `REQUEST_OK` 前に `stop()` または `close()` が重なった場合に `start()` が失敗し、
+  リソースが残らない
+- 告知の失敗で `start()` が失敗し、`onError` は 1 回だけ
+- `stop()` と `close()` で `done()` が 1 回、再 `start()` で再度告知する
+- `pause()` と `resume()` で `done()` も再告知もしない
+- ピア起点の close で `done()` の失敗通知が起きない
+- 確立後の stream エラーで `onError` が 1 回だけ (配信は継続)
+- `namespacePublication` の参照 (start 前 null / publishing 中 active / stop 後 null)
+- `namespace: []` と `announce: true` で `start()` が失敗する
+
+E2E (実リレー)。
+
+- 前提: relay が `SUBSCRIBE_NAMESPACE` に対応していること。
+  2026-10-03 の試行では応答が無かった。会議環境では discovery が動作しているため、
+  relay の版を確認する
+- `tests/e2e/main.ts` に `publishNamespace` と `subscribeNamespace` を露出する
+- `announce: true` で `start()` し、`SUBSCRIBE_NAMESPACE` で `NAMESPACE` を受信し、
+  その namespace の track を `SUBSCRIBE` して受信する
+- `stop()` で `NAMESPACE_DONE` を受信する
+- relay が未対応ならテストを追加しない (失敗を隠さない)
+
+ドキュメント。
+
+- `docs/HIGH_LEVEL_API.md` のオプション、プロパティ、認可の付与先一覧、状態遷移
+- `docs/ARCHITECTURE.md` の MediaPublisher 内部構成
+- 実装後、この文書には採否と移行先を残す
+- `CHANGES.md` は draft 期間中なので更新しない (`CODEBASE.md`)
+
+## 過去の API 削除との関係
+
+draft-17 期には `NamespaceAnnouncement` を含む namespace 系 API があったが、
+peer 起点の request 受信の削除に伴い 2026-04-22 に削除された。
+その後、低レベル API の namespace 系が再実装され、現行の `publishNamespace` と
+`NamespacePublication` になった。高レベル API はこの API を使っていない。
+今回の提案は削除前の API を戻すのではなく、現行の低レベル API を高レベル API の session で使う。
+
+## 参照
+
+- draft-ietf-moq-transport-22 §4.1 (Publishing Namespaces) / §4.2 (Subscribing to Namespaces) /
+  §6.4.2.3 (Request Cancellation and Rejection) / §9.14 (PUBLISH_NAMESPACE) /
+  §9.15 (SUBSCRIBE_NAMESPACE) / §9.16 (NAMESPACE) / §9.17 (NAMESPACE_DONE)
+- draft-ietf-moq-msf-01 §11.4.3 (Presenting Authorization)
+- `src/createMediaPublisher.ts` の `MediaPublisherImpl.start` / `createPublishers` / `disposeAllResources`
+- `src/codec/types.ts` の `MediaPublisherOptions` / `MediaPublisher`
+- `src/session.ts` の `Session.publishNamespace` / `Session.setupAuthorizationToken`
+- `src/session/namespaces.ts` の `namespacesPublishNamespace` / `namespacesCloseNamespacePublication`
+- `src/session/publicTypes.ts` の `NamespacePublication` / `PublishNamespaceOptions`
+- `src/session/namespaceLoops.ts` の PUBLISH_NAMESPACE stream の受信ループ
+- `src/session/lifecycle.ts` の session 終了時の namespace publication の後始末
+- 実リレーでの namespace discovery の試行結果 (2026-10-03)

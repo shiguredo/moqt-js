@@ -395,7 +395,7 @@ await subscriber.unsubscribe();
 - [音声と映像の再生](docs/PLAYOUT.md): 現在の予算、補間、A/V 同期と制約
 - [開発と検証](docs/DEVELOPMENT.md): ビルド、単体テスト、E2E、実リレーの設定
 - [調査記録](docs/archive/README.md): 測定時点の実装、比較と監査
-- [検討中の設計](docs/proposals/README.md): FEC と欠落回復の案
+- [検討中の設計](docs/proposals/README.md): FEC、欠落回復、高レベル API の namespace 告知の案
 
 ## 動作環境
 
