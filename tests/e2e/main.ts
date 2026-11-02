@@ -951,7 +951,8 @@ async function startPublishNamespace(options: StartPublishNamespaceOptions): Pro
         : { authorizationToken: session.setupAuthorizationToken },
     );
   } catch (error) {
-    await session.close();
+    // close の失敗で元のエラーを隠さない
+    await session.close().catch(() => {});
     throw new Error(toErrorMessage(error), { cause: error });
   }
 
@@ -1027,7 +1028,8 @@ async function startSubscribeNamespace(options: StartSubscribeNamespaceOptions):
       },
     });
   } catch (error) {
-    await session.close();
+    // close の失敗で元のエラーを隠さない
+    await session.close().catch(() => {});
     throw new Error(toErrorMessage(error), { cause: error });
   }
 

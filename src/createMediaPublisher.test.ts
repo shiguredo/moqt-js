@@ -1056,7 +1056,8 @@ test("start 失敗時は巻き戻し・通知・再 throw を行い state を変
  * catalog 送信の reject を catch まで運ぶテストが検証している。
  */
 interface PublisherStartFailureControl extends PublisherLifecycleControl {
-  notifyStartFailure(error: unknown): void;
+  // start 中の Session エラーを通知済みかも渡せるようにする (省略時は未通知として扱う)
+  notifyStartFailure(error: unknown, sessionErrorNotified?: boolean): void;
 }
 
 /**

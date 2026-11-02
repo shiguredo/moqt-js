@@ -2708,8 +2708,9 @@ export class MediaPublisherImpl implements MediaPublisher {
     // 新規の購読者に発見させない (draft-ietf-moq-transport-22 §4.1 の撤回は request の
     // キャンセル §6.4.2.3 で行う。根拠の仕様はドラフトであり将来変更される可能性がある)。
     // 利用者が先に done() を呼んでいる場合は state が "closed" のため二重には呼ばない。
-    // 音声の末尾 flush はこの解放の前に済ませているため、停止の受付から告知の撤回までは
-    // flush の待ち (最大およそ 200 ms) だけ遅れる
+    // 音声の末尾 flush とフレームリーダー / フレームソース / エンコーダーの解放はこの段より
+    // 前に済ませているため、停止の受付から告知の撤回まではそれらの待ち
+    // (flush は最大およそ 200 ms) だけ遅れる
     const namespacePublication = this.currentNamespacePublication;
     this.currentNamespacePublication = null;
     await guard(async () => {
