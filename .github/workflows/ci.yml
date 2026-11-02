@@ -114,6 +114,26 @@ jobs:
       # 利用側 Vite の production ビルドで worker が起動することを検証する。
       # dist を消費するアプリのため、vp run build を含むスクリプトで実行する
       - run: vp run e2e-test:production
+      # 失敗時だけ、Playwright が残した診断情報を artifact として保存する。
+      # playwright.config.ts は trace: retain-on-failure のため、失敗したテストの
+      # trace.zip と error-context.md がリポジトリ直下の test-results/ に残る。
+      # testInfo.attach に body で渡した attachment (waveform-metrics.json など) は
+      # test-results/ に単体のファイルとしては出ないが、trace を記録する project では
+      # trace.zip の中に含まれる。
+      # 成功時はこの step を実行しないので、CI の時間は増えない。
+      # テストより前の step (install など) が失敗して test-results/ が無い場合でも、
+      # if-no-files-found: ignore によりこの step ではジョブを落とさない。
+      # retention-days は既定の 90 日ではなく 7 日にする。フレーキー調査に必要なのは
+      # 直近の失敗であり、trace.zip は失敗 1 件あたり数 MB になるため、長期保存しても
+      # ストレージを圧迫するだけになる。
+      - name: 失敗時のテスト結果をアップロードする
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: e2e-test-results-node22
+          path: test-results/
+          retention-days: 7
+          if-no-files-found: ignore
 
   slack-notify:
     needs: [lint, build, typecheck, e2e]

@@ -91,6 +91,21 @@ CI の通常の実リレー試験は、1 worker を維持してテスト単位�
 `調査:` で始まる手動計測は通常の CI から除く。設定の正本は
 [e2e-test.yml](../.github/workflows/e2e-test.yml) である。
 
+### CI で失敗したときの診断情報
+
+CI の e2e job が失敗したときは、Playwright が残した `test-results/` を artifact
+`e2e-test-results-node22` として 7 日間保存する。失敗したテストの `trace.zip` と
+`error-context.md` が入っている。artifact を取得して展開し、次のコマンドで trace を開ける。
+
+```bash
+vp exec playwright show-trace test-results/<テスト名>/trace.zip
+```
+
+実リレーの e2e-test は失敗時に 1 回だけ再実行する。診断情報は再実行で上書きされるため、
+1 回目の結果を `e2e-relay-test-results-shard<N>-attempt1`、再実行の結果を
+`e2e-relay-test-results-shard<N>-attempt2` として別々に保存する。relay project は
+trace を記録しないため、artifact に含まれるのは `error-context.md` だけである。
+
 ### WebKit の確認
 
 WebKit の確認は macOS の開発機で実行する。
