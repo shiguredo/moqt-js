@@ -72,7 +72,7 @@
 - 低レベル: Session 終了時に未確立の `publishNamespace()` の Promise が settle しない穴を修正した。`NamespacePublicationState` に確立前の reject を保持し、`sessionRejectPendingRequests` が reject する (エントリの削除は専用ループが行う)。確立時に `namespaceStartPublicationStreamLoop` が reject を外す。`done()` 後も `NamespacePublication.namespace` を読めるよう、生成時に namespace を固定した
 - 高レベルのライフサイクル: 告知は `stop()` / `close()` の解放で publisher の `done()` より前に `done()` する。`pause()` / `resume()` は維持する。利用者の `done()` は配信を継続する。`start()` の実行中は `namespacePublication` が null を返す。告知の失敗は `start()` の失敗にし、`onError` は 1 回だけ通知する (Session エラーが `start()` の失敗としても届く経路は、start 中に Session エラーを通知したかで抑止する)
 - E2E: `tests/e2e/main.ts` に namespace 系の操作を露出し、`tests/e2e/relay/namespace-announcement.spec.ts` を追加した。実リレーで `PUBLISH_NAMESPACE` の受理 (`REQUEST_OK`)、`SUBSCRIBE_NAMESPACE` での `NAMESPACE` 受信、`close()` 後の `NAMESPACE_DONE` を確認した (2026-11-02、1 passed)
-- 確認: `npx vp check`、`npx vp test run` (4414 tests)、`npx vp run build`、実リレー E2E が通る
+- 確認: `npx vp check`、`npx vp test run` (4417 tests)、`npx vp run build`、実リレー E2E が通る
 - 設計からの変更: issue の設計方針は `REQUEST_OK` の decode の `ProtocolViolationError` 経路を「対象外・2 回通知し得る」としていたが、実装では start 中に Session エラーを通知したかで抑止するため 1 回になった。テストでも固定した。確立後の protocol violation (2 通目の `REQUEST_OK` の構造破損、確立後の `REQUEST_ERROR` の不正 redirect など) は、低レベルが per-request コールバックと Session エラーの両方に通知するため 2 回通知し得る。この経路は今回の対象外として残し、follow-up issue 候補として報告する
 - 確認できなかったこと: 音声・映像の `PUBLISH` と告知の順序は catalog の `PUBLISH` との順序だけを単体テストで固定し、音声・映像は await の位置で保証している。Session 終了が `publishNamespace` のストリーム作成 / write の await 中に重なった場合は、登録前のため reject の対象外であり、settle はストリームの読み取りエラーに依存する (既知の窓。follow-up 候補)
 - 未検証: 発見した namespace の track を `SUBSCRIBE` して受信する経路は実リレー未検証。今回の往復確認とは分けた
