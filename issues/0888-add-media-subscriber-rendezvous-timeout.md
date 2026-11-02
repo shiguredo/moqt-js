@@ -30,7 +30,7 @@
   - `RequestErrorCode.UNAUTHORIZED` / `MALFORMED_AUTH_TOKEN` / `EXPIRED_AUTH_TOKEN` / `NOT_SUPPORTED`: 恒久の失敗
   - その他の `RequestError`: `retryInterval` とあわせてアプリが判断する
   - `SessionError` と GOAWAY 由来の失敗: 接続を作り直す
-  新しいエラー型は作らない。`RequestError` は既に `code` / `retryInterval` / `redirect` を持ち、`moqt-js` から import できる。
+    新しいエラー型は作らない。`RequestError` は既に `code` / `retryInterval` / `redirect` を持ち、`moqt-js` から import できる。
 - 待ちを表す状態は追加しない。待ちは `start()` が解決しない時間として表し、`"subscribing"` のまま待つことを文書化する。状態を増やすと状態遷移と既存の利用者の分岐を壊すためである。
 - `close()` とピア起点の close は Session の終了で `session.subscribe` を reject させ、待ちを打ち切る (待ちが残って `start()` がハングしないことをテストで固定する)。
 - 自動のバックオフ再試行と、複数 namespace を購読するプールは本 issue の範囲外とする。

@@ -30,16 +30,44 @@ import type { SessionInternal } from "./types";
 import type { BidiSessionInternal } from "./bidi";
 
 /**
+ * datagram 送信用の WritableStream を取得する
+ *
+ * WebTransport の datagram 送信 API は移行期にあり、実装によって持つ API が異なる。
+ *
+ * - 現行仕様の `datagrams.createWritable()`: WebKit (Safari 26.4 以降) / Firefox 155 以降
+ * - 旧仕様の `datagrams.writable`: Chrome / Firefox 155 以降 (移行期のため両方を持つ)
+ *
+ * `writable` は現行仕様 (W3C WebTransport CR) から削除済みであり、MDN でも非推奨 +
+ * 非標準とされている。そのため現行仕様の `createWritable()` を優先し、持たない実装
+ * (Chrome) だけ旧 API の `writable` へフォールバックする。Chrome が `createWritable()`
+ * を実装すれば、フォールバックを使わずに現行 API へ切り替わる。
+ * どちらも無い実装は datagram を送れないため、原因の分かるエラーを返す。
+ *
+ * https://w3c.github.io/webtransport/#dom-webtransportdatagramduplexstream-createwritable
+ */
+function publishGetDatagramSendStream(transport: WebTransport): WritableStream<Uint8Array> {
+  const datagrams = transport.datagrams;
+  if (typeof datagrams.createWritable === "function") {
+    return datagrams.createWritable();
+  }
+  if (datagrams.writable !== undefined) {
+    return datagrams.writable as WritableStream<Uint8Array>;
+  }
+  throw new Error(
+    "WebTransport does not support sending datagrams: neither datagrams.createWritable() nor datagrams.writable is available",
+  );
+}
+
+/**
  * datagram 送信用 writer を取得する
  *
- * WebTransport の `datagrams.writable` は単一の WritableStream であり、writer は
- * 1 つだけロックを保持できる。最初の呼び出しで getWriter() して保持し、以降は同じ
- * writer を返す。
+ * datagram の送信経路は単一の WritableStream であり、writer は 1 つだけロックを
+ * 保持できる。最初の呼び出しで getWriter() して保持し、以降は同じ writer を返す。
  */
 function publishGetDatagramWriter(
   session: SessionInternal,
 ): WritableStreamDefaultWriter<Uint8Array> {
-  session.datagramWriter ??= session.transport.datagrams.writable.getWriter();
+  session.datagramWriter ??= publishGetDatagramSendStream(session.transport).getWriter();
   return session.datagramWriter;
 }
 
