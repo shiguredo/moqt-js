@@ -25,6 +25,18 @@ export interface AudioRenderStatistics {
   readonly boundaryStepMax: number;
   readonly boundaryStepCount: number;
 }
+
+/**
+ * 準備で実出力の時計が動き出すまで待つ上限 (ミリ秒)
+ *
+ * 通常は数ミリ秒で動き出すが、headless Chrome を CPU 負荷の高い環境で動かすと、出力の
+ * レンダリングが始まるまで 1 秒を超えることがある (Apple Silicon のローカルで E2E 全体を
+ * 1 ブラウザーで連続実行し、CPU 負荷を 8 本かけたときに 1000 ms では足りず失敗した)。
+ * CI の runner はさらに遅いため余裕を持たせる。動き出した時点で待ちを抜けるため、通常の
+ * 待ち時間は増えない
+ */
+const AUDIO_OUTPUT_CLOCK_START_WAIT_MS = 3_000;
+
 const preparations = new WeakMap<BaseAudioContext, { promise: Promise<void>; ready: boolean }>();
 
 /** 同じ Context にモジュールを重複登録しない。失敗も共有し、無限に再試行しない。 */
@@ -133,12 +145,14 @@ export class AudioOutputRenderer {
       return;
     // 動き始めの暫定時計で最初の予約を固定すると、実時計への切り替え分が後続にも残る。
     // 音声を投入する前の準備でだけ待つ。再生中の取り出しにタイマーは使わない。
-    const deadline = performance.now() + 1000;
+    const deadline = performance.now() + AUDIO_OUTPUT_CLOCK_START_WAIT_MS;
     while (this.context.state === "running") {
       const timestamp = this.output.context.getOutputTimestamp();
       if ((timestamp.contextTime ?? 0) > 0 && (timestamp.performanceTime ?? 0) > 0) return;
       if (performance.now() >= deadline)
-        throw new Error("Audio output clock did not start within 1000 ms");
+        throw new Error(
+          `Audio output clock did not start within ${AUDIO_OUTPUT_CLOCK_START_WAIT_MS} ms`,
+        );
       await new Promise<void>((resolve) => {
         setTimeout(resolve, 4);
       });
