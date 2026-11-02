@@ -660,6 +660,23 @@ export class AudioPlayoutScheduler {
   }
 
   /**
+   * 予約した開始時刻を「今 + 余裕」へ押し直した分だけ、timestamp と鳴る時刻の対応をずらす
+   *
+   * `startBuffer` は予約した開始時刻が今 + 余裕より近いと、重なりを避けるため開始を
+   * 押し直す。対応を古いまま残すと、次の音の予想開始が古い対応で計算され、前の音の
+   * 終わりへ揃えられて媒体の隙間 (補間で埋めるべき穴) が消える。押し直した分だけ対応も
+   * 後ろへずらし、以降の音を媒体の間隔どおりに並べる。
+   *
+   * @param seconds - 押し直した長さ (秒)。0 以下と非有限の値は無視する
+   */
+  confirmStartPush(seconds: number): void {
+    if (!Number.isFinite(seconds) || seconds <= 0 || this.anchor === null) {
+      return;
+    }
+    this.anchor.time += seconds;
+  }
+
+  /**
    * 前の音の終わりとの差が下限 (0.5 ms) 以下なら、開始時刻を前の音の終わりへ揃える
    *
    * 目標の表示時刻は、時間軸の基準 (直近 10 秒の最小値) の更新や浮動小数点の丸めで、
@@ -818,7 +835,17 @@ export class AudioPlayoutScheduler {
     // 予約できる最も早い時刻。到着から再生の遅れだけ後ろに置いた時刻がこれより前なら、
     // その時刻にはもう予約できない (出力のバッファが先に進んでいる)
     const earliestSeconds = nowSeconds + this.minLeadSeconds;
-    let startAt = this.expectedStartAt(timestampMicroseconds, arrivalSeconds, arrivalDelaySeconds);
+    // 基準 (timestamp と鳴る時刻の対応) から求めた開始時刻。予約できる最も早い時刻へ
+    // 動かしたときは、対応もその分ずらす (下のコメントを参照)
+    const expectedStartAt = this.expectedStartAt(
+      timestampMicroseconds,
+      arrivalSeconds,
+      arrivalDelaySeconds,
+    );
+    let startAt = expectedStartAt;
+    // ここで基準を取り直したか。取り直したときは対応そのものを作り直しているため、
+    // 後段の「動かした分を対応へ足す」処理は要らない
+    let rebasedHere = false;
     if (startAt < earliestSeconds) {
       // 過ぎてから届いた (前の音はすべて今より前に終わっているため、重ならない)。今から
       // 鳴らせる最も早い時刻へずらす。ずらす幅が無視できるときは基準を取り直さない
@@ -829,6 +856,7 @@ export class AudioPlayoutScheduler {
       if (resyncedSeconds - startAt >= AUDIO_PLAYOUT_RESYNC_MIN_JUMP_SECONDS) {
         this.rebase(resyncedSeconds, timestampMicroseconds);
         this.arrivalDepthRecovery = true;
+        rebasedHere = true;
       }
       startAt = resyncedSeconds;
     } else if (startAt > nowSeconds + limitSeconds) {
@@ -845,10 +873,19 @@ export class AudioPlayoutScheduler {
       }
       startAt = earliest;
       this.rebase(startAt, timestampMicroseconds);
+      rebasedHere = true;
     }
     // 前の音の終わりとの差が下限以下なら、前の音の終わりに揃えて穴を作らない
     // (目標の表示時刻の更新や浮動小数点の丸めで生じる 0.5 ms 未満の前進を連続再生で吸収する)
     startAt = this.snapToPreviousEnd(startAt, previousEnd, nowSeconds);
+    // 実際に置いた開始時刻が対応から動いた分だけ、timestamp と鳴る時刻の対応もずらす。
+    // 「今 + 余裕」へ動かしたのに古い対応を残すと、次の音の予想開始が古い対応のまま
+    // 計算され、前の音の終わりへ揃えられて媒体の隙間 (補間で埋めるべき穴) が消える。
+    // 隙間が消えると出力側は連続した実音として扱い、波形の継ぎ目を接続しないため、
+    // 段差 (クリック) が残る。基準を取り直したときは対応を作り直しているので何もしない。
+    if (!rebasedHere && this.anchor !== null) {
+      this.anchor.time += startAt - expectedStartAt;
+    }
     // 停滞で後ろへ動かした基準は、経路が回復しても自然には戻らない。
     // 到着 + 目標の深さより余分に溜まった分だけを、既存の不感帯とキューの余裕の中で
     // 圧縮する。隙間を挟む音は詰めない。確定した量は confirmStretch で基準へ反映する。

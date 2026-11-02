@@ -971,6 +971,68 @@ test("schedule: 目標を使わないときは過ぎてから届いた音で基�
   }
 });
 
+// 目標を使わないとき: 開始を「今 + 余裕」へ押し戻したら、timestamp と鳴る時刻の対応も
+// 実際に置いた開始へ合わせる。合わせないと次の音の予想開始が古い対応で計算され、前の音の
+// 終わりに揃えられて媒体の隙間 (補間で埋めるべき穴) が消え、出力側が波形の継ぎ目を
+// 接続できなくなる (段差がクリックになる)
+test("schedule: 到着基準で開始を今 + 余裕へ押し戻した後も媒体の隙間を保つ", () => {
+  const scheduler = new AudioPlayoutScheduler({ stretchMinSeconds: 0 });
+  // 出力の位置が今より 45 ms 遅れている。到着基準の開始 (到着 + 50 ms) は今 + 5 ms に
+  // なるが、予約できる最も早い時刻 (今 + 余裕 = 今 + 10 ms) へ押し戻される。
+  // ずらす幅は 5 ms であり、基準を取り直す境目 (10 ms) より小さいため取り直さない
+  const nowSeconds = 10;
+  const arrivalSeconds = nowSeconds - 0.045;
+  const first = startAtOf(
+    scheduler.schedule(nowSeconds, 0, FRAME_SECONDS, arrivalTarget(arrivalSeconds)),
+  );
+  assert.closeTo(first, nowSeconds + AUDIO_PLAYOUT_MIN_LEAD_SECONDS, EPSILON);
+  assert.equal(scheduler.rebases, 0);
+  // 前の音の終わりから 1 ms 空いた (媒体の隙間がある) 音。押し戻した 5 ms を対応へ
+  // 反映していれば、この隙間は前の音の終わりから 1 ms 後ろに残る
+  const second = playDecisionOf(
+    scheduler.schedule(
+      nowSeconds,
+      FRAME_MICROSECONDS + 1_000,
+      FRAME_SECONDS,
+      arrivalTarget(arrivalSeconds),
+    ),
+  );
+  assert.closeTo(second.startAt, first + FRAME_SECONDS + 0.001, EPSILON, "媒体の隙間を保つこと");
+  assert.closeTo(second.gapSeconds, 0.001, EPSILON, "隙間を補間する穴として返すこと");
+  assert.closeTo(second.totalGapSeconds, 0.001, EPSILON);
+  assert.equal(second.unrecoverableGapSeconds, 0);
+  assert.equal(scheduler.rebases, 0);
+});
+
+// 目標を使わないとき: startBuffer が開始を「今 + 余裕」へ押し直した分も、timestamp と
+// 鳴る時刻の対応へ反映する。押し直した開始の情報が基準へ届かないと、次の音の予想開始が
+// 実際に鳴る位置より前のまま計算され、前の音の終わりへ揃えられて媒体の隙間が消える
+test("confirmStartPush: 開始を押し直した分だけ到着基準を後ろへずらす", () => {
+  const scheduler = new AudioPlayoutScheduler({ stretchMinSeconds: 0 });
+  const first = startAtOf(scheduler.schedule(10, 0, FRAME_SECONDS, arrivalTarget(10)));
+  // startBuffer が開始を 5 ms 押し直した (実際に鳴るのは first + 5 ms から)
+  const pushedSeconds = 0.005;
+  scheduler.confirmPlayoutEnd(first + pushedSeconds + FRAME_SECONDS);
+  scheduler.confirmStartPush(pushedSeconds);
+  // 押し直した後の終わりから 1 ms 空いた音。対応が追随していれば隙間が残る
+  const second = playDecisionOf(
+    scheduler.schedule(
+      first + pushedSeconds,
+      FRAME_MICROSECONDS + 1_000,
+      FRAME_SECONDS,
+      arrivalTarget(first + pushedSeconds),
+    ),
+  );
+  assert.closeTo(
+    second.startAt,
+    first + pushedSeconds + FRAME_SECONDS + 0.001,
+    EPSILON,
+    "押し直した開始から媒体の隙間を保つこと",
+  );
+  assert.closeTo(second.gapSeconds, 0.001, EPSILON, "隙間を補間する穴として返すこと");
+  assert.equal(scheduler.rebases, 0);
+});
+
 // 目標を使わないとき: 並べすぎの音は捨てる。捨てた音の枠に次の音を入れて基準を前に寄せる
 // 旧挙動はやめた (timestamp の間隔どおりの位置を保つ)。捨てるときは取り直しもしない
 test("schedule: 目標を使わないときは並べすぎの音を捨て、捨てた音の枠に前に寄せない", () => {

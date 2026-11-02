@@ -638,6 +638,12 @@ export class AudioPlayoutSession {
       decision.startAt,
     );
     this.playout.confirmPlayoutEnd(started.startAtSeconds + frames / sampleRate);
+    // 予約した開始を「今 + 余裕」へ押し直した分だけ、timestamp と鳴る時刻の対応もずらす。
+    // ずらさないと、次の音の予想開始が古い対応のまま計算され、前の音の終わりへ揃えられて
+    // 媒体の隙間 (補間で埋めるべき穴) が消え、波形の継ぎ目を接続できなくなる。
+    if (started.pushed) {
+      this.playout.confirmStartPush(started.startAtSeconds - decision.startAt);
+    }
     this.previousChannels = channels;
     this.previousSampleRate = sampleRate;
     this.previousMediaEndTimestampMicros = data.timestamp + (numberOfFrames / sampleRate) * 1000000;
