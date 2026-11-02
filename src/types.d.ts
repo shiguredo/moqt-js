@@ -63,6 +63,29 @@ declare class MediaStreamTrackGenerator<T extends VideoFrame | AudioData> extend
 }
 
 /**
+ * WebTransport の datagram 送信 API (現行仕様) の型定義
+ *
+ * TypeScript 7.0.2 の lib.dom は旧 API の `datagrams.writable` だけを宣言しており、
+ * 現行仕様の `createWritable()` が無い。WebKit (Safari) は `writable` を廃止して
+ * `createWritable()` だけを実装しており、Chrome はその逆である。ライブラリは
+ * どちらでも datagram を送れるようにするため、宣言を補う。
+ *
+ * `createWritable()` を持たない実装では undefined になるため optional にする。
+ * TypeScript の lib.dom が `createWritable()` を宣言したら、この宣言は削除すること。
+ *
+ * https://w3c.github.io/webtransport/#webtransportdatagramduplexstream
+ */
+interface WebTransportDatagramDuplexStream {
+  /**
+   * datagram 送信用の WritableStream を作る (現行仕様 §5.2)
+   *
+   * 旧 API の `writable` を持たない実装 (WebKit) はこれを提供する。
+   * 両方を持つ実装ではどちらを使っても同じ送信キューに入る。
+   */
+  createWritable?(): WritableStream<Uint8Array>;
+}
+
+/**
  * HTMLVideoElement.requestVideoFrameCallback の型定義
  *
  * MediaStreamTrackProcessor が利用できないブラウザ (Safari) で

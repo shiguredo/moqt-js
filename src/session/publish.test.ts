@@ -16,7 +16,7 @@ import {
   publishSendObjectInternal,
 } from "./publish";
 import type { SessionInternal } from "./types";
-import { encodeObjectFields, SubgroupHeaderType } from "../dataStream";
+import { encodeObjectFields, decodeObjectDatagram, SubgroupHeaderType } from "../dataStream";
 import { ObjectStatus } from "../message";
 import { calculateObjectIdDelta } from "./params";
 import { mergeDeliveryTimeoutObjectProperties } from "../properties";
@@ -63,6 +63,54 @@ function createSessionForPublish(): {
     unidirectionalStreamCreated: () => unidirectionalStreamCreatedCount,
     closedWithError: () => closedWithError,
   };
+}
+
+/**
+ * datagram 送信 API を指定して publish 用のセッションを構築する
+ *
+ * WebTransport の datagram 送信 API は実装によって持つものが異なるため、
+ * `datagrams` に載せる API だけを切り替える。WritableStream はモックではなく
+ * WHATWG Streams の実物を使い、sink に渡された chunk を記録する。
+ *
+ * @param apis.writable - 旧 API (datagrams.writable) の WritableStream。持たせない場合は未指定
+ * @param apis.createWritable - 現行 API (datagrams.createWritable()) が返す WritableStream の
+ *   ファクトリ。持たせない場合は未指定
+ */
+function createSessionWithDatagramApis(apis: {
+  writable?: WritableStream<Uint8Array>;
+  createWritable?: () => WritableStream<Uint8Array>;
+}): SessionInternal {
+  const datagrams: Record<string, unknown> = {};
+  if (apis.writable !== undefined) {
+    datagrams.writable = apis.writable;
+  }
+  if (apis.createWritable !== undefined) {
+    datagrams.createWritable = apis.createWritable;
+  }
+  return {
+    transport: { datagrams } as unknown as WebTransport,
+    publisherStreams: new Map(),
+    closedSubgroups: new Set<string>(),
+    publisherSendQueues: new Map(),
+    publisherPendingCloses: new Map(),
+    grease: false,
+    sessionState: "connected",
+    statsUnidirectionalStreamsOpened: 0,
+    closeWithError: () => {},
+  } as unknown as SessionInternal;
+}
+
+/**
+ * write された chunk を到着順に記録する実 WritableStream を作る
+ */
+function createRecordingWritable(): { writable: WritableStream<Uint8Array>; chunks: Uint8Array[] } {
+  const chunks: Uint8Array[] = [];
+  const writable = new WritableStream<Uint8Array>({
+    write(chunk) {
+      chunks.push(chunk);
+    },
+  });
+  return { writable, chunks };
 }
 
 /**
@@ -614,6 +662,105 @@ test("publishSendDatagram: -1 / 非整数の priority で通知して throw す�
     assert.isUndefined(closedWithError());
     assert.isUndefined(session.datagramWriter);
   }
+});
+
+/**
+ * WebKit (Safari) は datagram の送信に現行仕様の `datagrams.createWritable()` だけを
+ * 持ち、旧仕様の `datagrams.writable` を持たない。createWritable() 経由で datagram を
+ * 送れることを検証する。この経路が無いと Safari では datagram 配送の音声が必ず
+ * 失敗する (映像は単方向ストリームなので影響を受けない)。
+ *
+ * https://w3c.github.io/webtransport/#dom-webtransportdatagramduplexstream-createwritable
+ */
+test("publishSendDatagram: createWritable() だけを持つ実装でも datagram を送信できる", async () => {
+  const { writable, chunks } = createRecordingWritable();
+  const session = createSessionWithDatagramApis({
+    createWritable: () => writable,
+  });
+  const errors: Error[] = [];
+  const publisher = new PublisherImpl(["test"], "track", 0n, 1n, (error) => {
+    errors.push(error);
+  });
+
+  await publishSendDatagram(session, publisher, {
+    groupId: 0,
+    objectId: 0,
+    payload: new Uint8Array([1, 2, 3]),
+  });
+
+  assert.equal(errors.length, 0);
+  assert.equal(chunks.length, 1);
+  // noUncheckedIndexedAccess のため、件数の確認後も undefined を排除してから読む
+  const encoded = chunks[0];
+  assert.isDefined(encoded);
+  if (encoded === undefined) {
+    return;
+  }
+  const [decoded, consumed] = decodeObjectDatagram(encoded);
+  assert.equal(consumed, encoded.length);
+  assert.deepEqual(decoded.payload, new Uint8Array([1, 2, 3]));
+  assert.isDefined(session.datagramWriter);
+});
+
+/**
+ * 旧 API (`writable`) と現行 API (`createWritable()`) の両方を持つ実装 (Firefox) では、
+ * 現行仕様の `createWritable()` を使うことを検証する。`writable` は仕様から削除済みで
+ * あるため、両方を持つ実装では現行 API を選ぶ。
+ */
+test("publishSendDatagram: 両方の API を持つ実装では createWritable() を使う", async () => {
+  const legacy = createRecordingWritable();
+  const current = createRecordingWritable();
+  const session = createSessionWithDatagramApis({
+    writable: legacy.writable,
+    createWritable: () => current.writable,
+  });
+  const errors: Error[] = [];
+  const publisher = new PublisherImpl(["test"], "track", 0n, 1n, (error) => {
+    errors.push(error);
+  });
+
+  await publishSendDatagram(session, publisher, {
+    groupId: 0,
+    objectId: 0,
+    payload: new Uint8Array([4, 5, 6]),
+  });
+
+  assert.equal(errors.length, 0);
+  // 旧 API の経路には 1 つも書かれない
+  assert.equal(legacy.chunks.length, 0);
+  assert.equal(current.chunks.length, 1);
+});
+
+/**
+ * datagram 送信 API をどちらも持たない実装では、原因の分かるエラーで失敗することを
+ * 検証する。旧実装は `datagrams.writable` を無条件に参照していたため、API を持たない
+ * 実装では TypeError (undefined の getWriter) になっていた。
+ */
+test("publishSendDatagram: datagram 送信 API が無い場合は理由の分かるエラーで throw する", () => {
+  // どちらの API も持たない実装を作る
+  const session = createSessionWithDatagramApis({});
+  const errors: Error[] = [];
+  const publisher = new PublisherImpl(["test"], "track", 0n, 1n, (error) => {
+    errors.push(error);
+  });
+
+  let thrown: Error | undefined;
+  try {
+    void publishSendDatagram(session, publisher, {
+      groupId: 0,
+      objectId: 0,
+      payload: new Uint8Array([1, 2, 3]),
+    });
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.isDefined(thrown);
+  assert.isTrue(thrown!.message.includes("does not support sending datagrams"));
+  // writer の取得に失敗したため保持しない
+  assert.isUndefined(session.datagramWriter);
+  // 送信経路の取得は通知経路 (handleError) を通らない
+  assert.equal(errors.length, 0);
 });
 
 /**
