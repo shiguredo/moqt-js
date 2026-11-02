@@ -5,7 +5,7 @@
  */
 
 import { connectMediaSession, type MediaConnectSettings } from "./createMedia/connect";
-import type { PublishOptions, Session } from "./session";
+import type { NamespacePublication, PublishOptions, Session } from "./session";
 import { isErrorNotifiedByPublisher, type Publisher, type SendObjectParams } from "./publisher";
 import * as LOC from "./loc";
 import { WallClockMapper } from "./mediaClock";
@@ -709,6 +709,16 @@ export class MediaPublisherImpl implements MediaPublisher {
   // あり、pause() では進まない (進めると pause のあとのピア起点の close 通知が捨てられる)
   private sessionGeneration = 0;
   private catalogPublisher: Publisher | null = null;
+  // namespace の告知 (PUBLISH_NAMESPACE)。announceNamespace が無効なとき、start() の
+  // 完了前 (実行中)、stop / close / ピア起点の close の後は null
+  private currentNamespacePublication: NamespacePublication | null = null;
+  // start() の実行中か。開始の成功・失敗のどちらでも必ず戻す
+  private startInFlight = false;
+  // start() の実行中に Session の error コールバックが error を通知したか。
+  // 同じ原因が start() の失敗としても届く経路 (PUBLISH_NAMESPACE_OK のスコープ違反、
+  // ProtocolViolationError の SessionError への変換など) で onError を二重に通知しない。
+  // 変換で別インスタンスになる経路があるため、error の同一性比較ではなくこのフラグで判定する
+  private sessionErrorNotifiedDuringStart = false;
   // 送信済みの catalog の Group ID。初期送信は start のたびに払い出し、送り直しのたびに +1 する。
   // catalog の更新は必ず新しい Group の先頭 Object (Object ID 0) に置き、同じ Location に
   // 別の payload を載せない (draft-ietf-moq-transport-22 §2.1 / §7.1、draft-ietf-moq-msf-01 §5)。
@@ -869,6 +879,11 @@ export class MediaPublisherImpl implements MediaPublisher {
     return this.currentState;
   }
 
+  get namespacePublication(): NamespacePublication | null {
+    // start() の実行中は確立していても null を返す (公開契約)
+    return this.startInFlight ? null : this.currentNamespacePublication;
+  }
+
   private setState(newState: MediaPublisherState): void {
     this.currentState = newState;
     this.callbacks.onStateChange?.(newState);
@@ -902,6 +917,12 @@ export class MediaPublisherImpl implements MediaPublisher {
     if (this.currentState !== "created" && this.currentState !== "stopped") {
       throw new Error(`cannot start in state: ${this.currentState}`);
     }
+    // draft-ietf-moq-transport-22 §2.4.2 (Namespace Prefix Matching): 0 フィールドの
+    // prefix は全 namespace に一致するため、空 namespace の告知は接続前に拒否する。
+    // 入口の拒否は onError を通知せず、mediaStream も保持しない (他の入口の検査と同じ扱い)
+    if (this.options.announceNamespace === true && this.options.namespace.length === 0) {
+      throw new Error("announceNamespace requires a non-empty namespace");
+    }
 
     this.mediaStream = stream;
 
@@ -919,6 +940,11 @@ export class MediaPublisherImpl implements MediaPublisher {
       ? resolveVideoPublishSettings(this.options.video, this.mediaStream.getVideoTracks()[0])
       : null;
 
+    // start の実行中であることを記録する (getter の null 契約と Session エラーの
+    // 二重通知の抑止に使う)。開始の成功・失敗のどちらでも戻す
+    this.startInFlight = true;
+    this.sessionErrorNotifiedDuringStart = false;
+
     try {
       // サーバーに接続
       await this.connectToServer(startGeneration);
@@ -932,6 +958,13 @@ export class MediaPublisherImpl implements MediaPublisher {
       // 切り離すため音声の取り出し経路も setupEncoders も素通りするが、解放が進行中
       // (切り離しの前) でもここで止める。進めると、作ったフレームリーダーとエンコーダーが
       // 巻き戻しまで残る
+      this.assertStartNotDisposed(startGeneration);
+
+      // namespace を告知する (announceNamespace が true のときだけ送る)。PUBLISH の
+      // 確立後に行うのは、draft-ietf-moq-transport-22 §4.1 の「prefix に一致する
+      // namespace にトラックがある」という表明と一致させるためである。告知の
+      // 失敗は start() の失敗にする (指定した機能を黙って落とさない)
+      await this.announceNamespace(startGeneration);
       this.assertStartNotDisposed(startGeneration);
 
       // 音声の取り出し経路を作り、Catalog とエンコーダーが使う形式を確定する。
@@ -960,7 +993,10 @@ export class MediaPublisherImpl implements MediaPublisher {
       this.lastKeyFrameTimestampUs = null;
       this.startProcessingLoops();
 
+      // 状態の通知の中で getter を読む利用者には、start() の完了前なので null を
+      // 返し続ける。通知のあとに解除する (onStateChange が throw した場合も catch が解除する)
       this.setState("publishing");
+      this.startInFlight = false;
     } catch (error) {
       // 確保済みを逆順に巻き戻す。state は変えず再 start 可能にする。
       // 解放が先行していても、参照は既に切り離し済みでこの呼び出しは no-op になり、
@@ -974,9 +1010,59 @@ export class MediaPublisherImpl implements MediaPublisher {
       // 通知の抑止 (二重通知の防止) は notifyStartFailure が担う。start() の catch まで
       // 失敗を運ぶ配線は接続の境界 (openSession) を置き換えれば node でも駆動できるため、
       // 配線を変えるときは catalog 送信の reject を catch まで運ぶテストを先に用意すること。
-      this.notifyStartFailure(error);
+      // onError が throw してもフラグを残さないよう、通知の前に解除する
+      const sessionErrorNotified = this.sessionErrorNotifiedDuringStart;
+      this.startInFlight = false;
+      this.sessionErrorNotifiedDuringStart = false;
+      this.notifyStartFailure(error, sessionErrorNotified);
       throw error;
     }
+  }
+
+  /**
+   * namespace を告知する (PUBLISH_NAMESPACE)
+   *
+   * `announceNamespace` が true のときだけ、接続済みの Session で namespace を告知し、
+   * REQUEST_OK を待って publication を保持する。告知の確立前の失敗は
+   * `NamespacePublicationCallbacks.error` を通知せず、この await の reject として
+   * start() の catch に届ける (start() の失敗として onError を 1 回通知する)。
+   * 確立後の stream エラーは onError に流す。ピアの FIN は graceful な終了であり、
+   * 低レベルは FIN で error を通知しないため、state が "closed" になることで観測する。
+   *
+   * 認可トークンは SETUP に載せたものを PUBLISH と共用する
+   * (draft-ietf-moq-msf-01 §11.4.3)。
+   * 根拠の仕様はドラフトであり将来変更される可能性がある。
+   *
+   * @param startGeneration start() の開始時に捕捉した世代番号
+   */
+  private async announceNamespace(startGeneration: number): Promise<void> {
+    if (this.options.announceNamespace !== true) {
+      return;
+    }
+    const session = this.session;
+    if (session === null) {
+      throw new Error("session not connected");
+    }
+    // 確立前の error コールバックは抑止し、start() の失敗としてだけ通知する
+    // (低レベルの publishNamespace は REQUEST_ERROR でコールバックを呼んでから
+    // Promise を reject するため、そのまま流すと onError が二重になる)
+    let established = false;
+    const publication = await session.publishNamespace(
+      this.options.namespace,
+      {
+        error: (error) => {
+          if (established) {
+            this.callbacks.onError?.(error);
+          }
+        },
+      },
+      this.setupAuthorizationTokenOptions(),
+    );
+    established = true;
+    // 解放が先行していれば、解決済みの publication を保持しない。disposeAllResources は
+    // 解放の対象として参照を切り離して done() する
+    this.currentNamespacePublication = publication;
+    this.assertStartNotDisposed(startGeneration);
   }
 
   /**
@@ -1349,14 +1435,39 @@ export class MediaPublisherImpl implements MediaPublisher {
    * (isErrorNotifiedByPublisher) では通知しない。ここで通知し直すと 1 件の失敗で
    * onError が 2 回呼ばれる。catalog 送信 (publishCatalog) の await の reject は
    * start() の catch に届く (catalog だけ await するため)。
+   * start() の実行中に Session の error コールバックが error を通知していれば通知しない
+   * (PUBLISH_NAMESPACE_OK のスコープ違反や ProtocolViolationError の SessionError への
+   * 変換など、同じ原因が Session エラーと start() の失敗の両方に載る経路がある。
+   * 変換で別インスタンスになる経路も含めるため、error の同一性ではなく start 中の通知で判定する)。
    * 通知を伴わない失敗 (接続失敗、closed の同期 throw など) は 1 回だけ通知する。
    * throw される値は Error に限らないため unknown で受け、Error 以外は文字列化して通知する。
+   *
+   * @param sessionErrorNotified start() の実行中に Session の error コールバックが
+   *   error を通知したか (start の失敗としての通知を抑止する)
    */
-  private notifyStartFailure(error: unknown): void {
+  private notifyStartFailure(error: unknown, sessionErrorNotified: boolean): void {
     if (isErrorNotifiedByPublisher(error)) {
       return;
     }
+    if (sessionErrorNotified) {
+      return;
+    }
     this.callbacks.onError?.(error instanceof Error ? error : new Error(String(error)));
+  }
+
+  /**
+   * SETUP に載せたトークンを要求のオプションへ載せる
+   *
+   * draft-ietf-moq-msf-01 §11.4.3: original publisher は track に紐づくトークンを
+   * PUBLISH と PUBLISH_NAMESPACE の両方へ MUST 付与する。SETUP に載せたトークンを
+   * そのまま使う。exactOptionalPropertyTypes では optional なフィールドに undefined を
+   * 渡せないため、値がある場合だけ載せる。
+   */
+  private setupAuthorizationTokenOptions(): {
+    authorizationToken?: import("./message").AuthorizationToken;
+  } {
+    const token = this.session?.setupAuthorizationToken;
+    return token === undefined ? {} : { authorizationToken: token };
   }
 
   /**
@@ -1395,6 +1506,13 @@ export class MediaPublisherImpl implements MediaPublisher {
       },
       // onSessionError は void を返す必要があるため、block body で undefined を返さないようにする
       onSessionError: (error) => {
+        // start() の実行中は、同じ原因が start() の失敗としても届く経路があるため、
+        // start 中の Session エラーを記録して notifyStartFailure の二重通知を防ぐ。
+        // ProtocolViolationError は SessionError へ変換されて届くため、error の
+        // 同一性ではなくこのフラグで判定する
+        if (this.startInFlight) {
+          this.sessionErrorNotifiedDuringStart = true;
+        }
         this.callbacks.onError?.(error);
       },
     });
@@ -1542,13 +1660,8 @@ export class MediaPublisherImpl implements MediaPublisher {
 
     const namespace = this.options.namespace;
     // draft-ietf-moq-msf-01 §11.4.3: publisher は track に紐づくトークンを PUBLISH に MUST 付与する。
-    // SETUP に載せたトークン (MOQT URI の msf fragment の c4m を含む) をそのまま使う。
-    // exactOptionalPropertyTypes では optional なフィールドに undefined を渡せないため、
-    // 値がある場合だけ載せる
-    const authorizationTokenOptions: PublishOptions =
-      this.session.setupAuthorizationToken === undefined
-        ? {}
-        : { authorizationToken: this.session.setupAuthorizationToken };
+    // SETUP に載せたトークン (MOQT URI の msf fragment の c4m を含む) をそのまま使う
+    const authorizationTokenOptions: PublishOptions = this.setupAuthorizationTokenOptions();
 
     // Catalog パブリッシャー
     // maxCacheDuration を指定して relay の cache に残す
@@ -2590,6 +2703,21 @@ export class MediaPublisherImpl implements MediaPublisher {
     const videoEncoder = this.videoEncoder;
     this.videoEncoder = null;
     await guard(() => videoEncoder?.close());
+
+    // namespace の告知を終了する。publisher の done() より前に置き、停止中の配信を
+    // 新規の購読者に発見させない (draft-ietf-moq-transport-22 §4.1 の撤回は request の
+    // キャンセル §6.4.2.3 で行う。根拠の仕様はドラフトであり将来変更される可能性がある)。
+    // 利用者が先に done() を呼んでいる場合は state が "closed" のため二重には呼ばない。
+    // 音声の末尾 flush とフレームリーダー / フレームソース / エンコーダーの解放はこの段より
+    // 前に済ませているため、停止の受付から告知の撤回まではそれらの待ち
+    // (flush は最大およそ 200 ms) だけ遅れる
+    const namespacePublication = this.currentNamespacePublication;
+    this.currentNamespacePublication = null;
+    await guard(async () => {
+      if (namespacePublication !== null && namespacePublication.state === "active") {
+        await namespacePublication.done();
+      }
+    });
 
     // Publisher を終了
     const catalogPublisher = this.catalogPublisher;

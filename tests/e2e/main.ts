@@ -23,6 +23,8 @@ import {
   type LocationFilter,
   type MediaPublisher,
   type MediaSubscriber,
+  type NamespacePublication,
+  type NamespaceSubscription,
   type Session,
 } from "moqt-js";
 
@@ -99,6 +101,13 @@ export interface StartPublisherOptions {
     /** 取り出し経路へ要求するチャンネル数。省略時は既定の 2。使い道は `sampleRate` と同じ */
     channels?: number;
   };
+  /**
+   * namespace を PUBLISH_NAMESPACE で告知する (既定は false)
+   *
+   * draft-ietf-moq-transport-22 §4.1: true のとき、PUBLISH の後に PUBLISH_NAMESPACE を
+   * 送って REQUEST_OK を待つ。relay の SUBSCRIBE_NAMESPACE で発見できるかを確かめる spec が使う
+   */
+  announceNamespace?: boolean;
 }
 
 /** Publisher の音声の観測結果 (音声を配信していなければ null) */
@@ -288,6 +297,37 @@ export interface FetchStatus {
   errors: string[];
 }
 
+/** Namespace の告知 (PUBLISH_NAMESPACE) を開始する操作の入力 */
+export interface StartPublishNamespaceOptions {
+  url: string;
+  namespace: string[];
+}
+
+/** Namespace の告知の観測結果 */
+export interface PublishNamespaceStatus {
+  /** "active" / "closed" */
+  state: string;
+  namespace: string[];
+  errors: string[];
+}
+
+/** Namespace の購読 (SUBSCRIBE_NAMESPACE) を開始する操作の入力 */
+export interface StartSubscribeNamespaceOptions {
+  url: string;
+  /** 購読する Track Namespace Prefix。空配列は全 namespace を意味する (§4.2) */
+  namespacePrefix: string[];
+}
+
+/** Namespace の購読の観測結果 */
+export interface SubscribeNamespaceStatus {
+  state: string;
+  /** NAMESPACE で受信した namespace (要求した prefix と suffix を連結したもの) */
+  namespaces: string[][];
+  /** NAMESPACE_DONE で受信した namespace */
+  done: string[][];
+  errors: string[];
+}
+
 /**
  * テストページが保持するハンドルの ID
  *
@@ -330,9 +370,27 @@ interface FetchHandle {
   observation: FetchObservation;
 }
 
+/** Namespace の告知のハンドル */
+interface PublishNamespaceHandle {
+  session: Session;
+  publication: NamespacePublication;
+  errors: string[];
+}
+
+/** Namespace の購読のハンドル */
+interface SubscribeNamespaceHandle {
+  session: Session;
+  subscription: NamespaceSubscription;
+  namespaces: string[][];
+  done: string[][];
+  errors: string[];
+}
+
 const publishers = new Map<HandleId, PublisherHandle>();
 const subscribers = new Map<HandleId, SubscriberHandle>();
 const fetchers = new Map<HandleId, FetchHandle>();
+const publishNamespaces = new Map<HandleId, PublishNamespaceHandle>();
+const subscribeNamespaces = new Map<HandleId, SubscribeNamespaceHandle>();
 
 let nextHandleId = 0;
 
@@ -608,8 +666,6 @@ async function startPublisher(options: StartPublisherOptions): Promise<HandleId>
       {
         namespace: options.namespace,
         video: { codec: "vp8", bitrate: 500_000 },
-        // exactOptionalPropertyTypes では optional な値に undefined を渡せないため、
-        // 値がある場合だけ載せる
         ...(options.audio === undefined
           ? {}
           : {
@@ -629,6 +685,11 @@ async function startPublisher(options: StartPublisherOptions): Promise<HandleId>
                   : { channels: options.audio.channels }),
               },
             }),
+        // exactOptionalPropertyTypes では optional な値に undefined を渡せないため、
+        // 値がある場合だけ載せる
+        ...(options.announceNamespace === undefined
+          ? {}
+          : { announceNamespace: options.announceNamespace }),
       },
       {
         onError: (error) => {
@@ -860,6 +921,164 @@ async function stopFetch(id: HandleId): Promise<FetchStatus> {
   return readFetchStatus(handle);
 }
 
+/**
+ * namespace の告知 (PUBLISH_NAMESPACE) を開始する
+ *
+ * REQUEST_OK まで待つため、解決した時点で告知は確立している。relay が
+ * PUBLISH_NAMESPACE を受理するかを確かめる spec が使う。
+ */
+async function startPublishNamespace(options: StartPublishNamespaceOptions): Promise<HandleId> {
+  rememberRelayUri(options.url);
+  const errors: string[] = [];
+  const session = await connect(options.url, {
+    error: (error) => {
+      errors.push(toErrorMessage(error));
+    },
+  });
+
+  let publication: NamespacePublication;
+  try {
+    publication = await session.publishNamespace(
+      options.namespace,
+      {
+        error: (error) => {
+          errors.push(toErrorMessage(error));
+        },
+      },
+      // 高レベル API と同じく SETUP に載せたトークンを PUBLISH_NAMESPACE にも付与する
+      session.setupAuthorizationToken === undefined
+        ? {}
+        : { authorizationToken: session.setupAuthorizationToken },
+    );
+  } catch (error) {
+    // close の失敗で元のエラーを隠さない
+    await session.close().catch(() => {});
+    throw new Error(toErrorMessage(error), { cause: error });
+  }
+
+  const id = createHandleId("publish-namespace");
+  publishNamespaces.set(id, { session, publication, errors });
+  return id;
+}
+
+function getPublishNamespace(id: HandleId): PublishNamespaceStatus {
+  const handle = publishNamespaces.get(id);
+  if (!handle) {
+    throw new Error(`unknown publish namespace handle: ${id}`);
+  }
+  return {
+    state: handle.publication.state,
+    namespace: [...handle.publication.namespace],
+    errors: [...handle.errors],
+  };
+}
+
+/** Namespace の告知を撤回し、セッションも閉じる */
+async function stopPublishNamespace(id: HandleId): Promise<PublishNamespaceStatus> {
+  const handle = publishNamespaces.get(id);
+  if (!handle) {
+    throw new Error(`unknown publish namespace handle: ${id}`);
+  }
+  publishNamespaces.delete(id);
+
+  try {
+    await handle.publication.done();
+  } catch (error) {
+    handle.errors.push(toErrorMessage(error));
+  }
+  try {
+    await handle.session.close();
+  } catch (error) {
+    handle.errors.push(toErrorMessage(error));
+  }
+  return {
+    state: handle.publication.state,
+    namespace: [...handle.publication.namespace],
+    errors: [...handle.errors],
+  };
+}
+
+/**
+ * namespace の購読 (SUBSCRIBE_NAMESPACE) を開始する
+ *
+ * REQUEST_OK まで待つ。NAMESPACE / NAMESPACE_DONE は到着のたびに記録する。
+ */
+async function startSubscribeNamespace(options: StartSubscribeNamespaceOptions): Promise<HandleId> {
+  rememberRelayUri(options.url);
+  const errors: string[] = [];
+  const namespaces: string[][] = [];
+  const done: string[][] = [];
+  const session = await connect(options.url, {
+    error: (error) => {
+      errors.push(toErrorMessage(error));
+    },
+  });
+
+  let subscription: NamespaceSubscription;
+  try {
+    subscription = await session.subscribeNamespace(options.namespacePrefix, {
+      onNamespace: (namespaceSuffix) => {
+        namespaces.push([...options.namespacePrefix, ...namespaceSuffix]);
+      },
+      onNamespaceDone: (namespaceSuffix) => {
+        done.push([...options.namespacePrefix, ...namespaceSuffix]);
+      },
+      error: (error) => {
+        errors.push(toErrorMessage(error));
+      },
+    });
+  } catch (error) {
+    // close の失敗で元のエラーを隠さない
+    await session.close().catch(() => {});
+    throw new Error(toErrorMessage(error), { cause: error });
+  }
+
+  const id = createHandleId("subscribe-namespace");
+  subscribeNamespaces.set(id, {
+    session,
+    subscription,
+    namespaces,
+    done,
+    errors,
+  });
+  return id;
+}
+
+function getSubscribeNamespace(id: HandleId): SubscribeNamespaceStatus {
+  const handle = subscribeNamespaces.get(id);
+  if (!handle) {
+    throw new Error(`unknown subscribe namespace handle: ${id}`);
+  }
+  return {
+    state: handle.subscription.state,
+    namespaces: handle.namespaces.map((namespace) => [...namespace]),
+    done: handle.done.map((namespace) => [...namespace]),
+    errors: [...handle.errors],
+  };
+}
+
+/** Namespace の購読を解除し、セッションも閉じる */
+async function stopSubscribeNamespace(id: HandleId): Promise<SubscribeNamespaceStatus> {
+  const handle = subscribeNamespaces.get(id);
+  if (!handle) {
+    throw new Error(`unknown subscribe namespace handle: ${id}`);
+  }
+  const status = getSubscribeNamespace(id);
+  subscribeNamespaces.delete(id);
+
+  try {
+    await handle.subscription.unsubscribe();
+  } catch (error) {
+    handle.errors.push(toErrorMessage(error));
+  }
+  try {
+    await handle.session.close();
+  } catch (error) {
+    handle.errors.push(toErrorMessage(error));
+  }
+  return { ...status, state: handle.subscription.state, errors: [...handle.errors] };
+}
+
 /** テストページが露出する API */
 export interface MoqtE2EApi {
   connectRelay(options: ConnectRelayOptions): Promise<ConnectRelayResult>;
@@ -872,6 +1091,12 @@ export interface MoqtE2EApi {
   startFetch(options: StartFetchOptions): Promise<HandleId>;
   getFetch(id: HandleId): FetchStatus;
   stopFetch(id: HandleId): Promise<FetchStatus>;
+  startPublishNamespace(options: StartPublishNamespaceOptions): Promise<HandleId>;
+  getPublishNamespace(id: HandleId): PublishNamespaceStatus;
+  stopPublishNamespace(id: HandleId): Promise<PublishNamespaceStatus>;
+  startSubscribeNamespace(options: StartSubscribeNamespaceOptions): Promise<HandleId>;
+  getSubscribeNamespace(id: HandleId): SubscribeNamespaceStatus;
+  stopSubscribeNamespace(id: HandleId): Promise<SubscribeNamespaceStatus>;
 }
 
 window.__moqtE2E = {
@@ -885,6 +1110,12 @@ window.__moqtE2E = {
   startFetch,
   getFetch,
   stopFetch,
+  startPublishNamespace,
+  getPublishNamespace,
+  stopPublishNamespace,
+  startSubscribeNamespace,
+  getSubscribeNamespace,
+  stopSubscribeNamespace,
 };
 
 declare global {

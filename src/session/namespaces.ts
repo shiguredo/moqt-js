@@ -417,6 +417,9 @@ export async function namespacesPublishNamespace(
       streamReader,
       controlReader,
       writer,
+      // Session の終了時に未確立の Promise を reject するために保持する
+      // (src/session/lifecycle.ts の sessionRejectPendingRequests)
+      reject,
     });
 
     // 専用ストリームの受信ループを開始
@@ -497,10 +500,8 @@ export function namespacesCreateNamespacePublication(
     return pub.state === "active" ? "active" : "closed";
   };
 
-  const getNamespace = (): string[] => {
-    const pub = session.namespacePublications.get(requestId);
-    return pub?.namespace ?? [];
-  };
+  // done() は最後にエントリを削除するため、生成時点の値で固定する
+  const namespace = [...(session.namespacePublications.get(requestId)?.namespace ?? [])];
 
   const done = async (): Promise<void> => {
     await namespacesCloseNamespacePublication(session, requestId);
@@ -511,7 +512,7 @@ export function namespacesCreateNamespacePublication(
       return getState();
     },
     get namespace() {
-      return getNamespace();
+      return namespace;
     },
     done,
   };
