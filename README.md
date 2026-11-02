@@ -404,9 +404,11 @@ await subscriber.unsubscribe();
 - Google Chrome 最新版
 - Microsoft Edge 最新版
 - Mozilla Firefox 最新版
+- Apple Safari 27.2
 
 > [!NOTE]
-> Apple Safari 26.4 での動作確認を行っています。Safari 26.4 の WebTransport には単方向ストリームへの `write()` がフラッシュされない WebKit のバグがあり、Safari からの配信は動作しません (購読は動作します)。
+> Safari 26.4 の WebTransport には単方向ストリームへの `write()` がフラッシュされない WebKit のバグがありましたが、Safari 27.2 では解消していることを確認しています (配信と購読の両方が動作します)。
+> Safari は datagram の送信に現行仕様の `datagrams.createWritable()` だけを実装しており、旧仕様の `datagrams.writable` を持ちません。moqt-js は `createWritable()` を優先し、持たないブラウザでは `writable` へフォールバックするため、Safari でも datagram 配送の音声を配信できます。
 
 > [!NOTE]
 > Safari と Firefox は `MediaStreamTrackProcessor` をメインスレッドに公開していないため、音声の取り出しに Web Audio の `AudioWorklet` を使います。2 つの経路の役割は [内部構成](docs/ARCHITECTURE.md#mediapublisher-内部構成) にあります。

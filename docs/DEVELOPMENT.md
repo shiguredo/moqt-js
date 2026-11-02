@@ -116,6 +116,14 @@ vp exec playwright install webkit
 vp exec playwright test --project=webkit
 ```
 
+実リレーへ配信する経路も WebKit で確かめる場合は、接続先 (`TEST_MOQT_URI`) を設定して
+`--project=webkit-relay` を実行する。この project も macOS の開発機だけで実行する
+(CI の runner は WebKit に WebTransport と音声デバイスを持たない)。
+
+```bash
+vp exec playwright test --project=webkit-relay
+```
+
 ## 再生品質を測る場合
 
 E2E の合格件数と実際の発話の品質は分けて評価する。

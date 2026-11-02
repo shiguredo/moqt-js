@@ -351,7 +351,7 @@ Subgroup Header の `Properties Present` ビットはストリーム全体に効
 - `properties` の有無
 - `endOfGroup` の有無
 
-その後 `encodeObjectDatagram()` でバイト列にして `transport.datagrams.writable` へ送る。同一トラックで Stream と Datagram の混在を許可している。
+その後 `encodeObjectDatagram()` でバイト列にして datagram 送信用の `WritableStream` へ送る。送信経路は実装が持つ API に合わせ、現行仕様の `datagrams.createWritable()` を優先し、無ければ旧仕様の `datagrams.writable` を使う (Chrome は後者だけを持つ)。同一トラックで Stream と Datagram の混在を許可している。
 
 ### `done()` の内部実装
 
