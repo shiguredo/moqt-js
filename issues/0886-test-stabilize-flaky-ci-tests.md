@@ -1,7 +1,7 @@
 # CI で間欠的に失敗するテストを安定させる
 
 - Created: 2026-11-02
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-02
 - Branch: feature/fix-flaky-tests
 - Polished: {YYYY-MM-DD}
 
@@ -46,4 +46,22 @@ CI の e2e job と build job が間欠的に失敗し、develop が赤くなる�
 
 ## 解決方法
 
-{未着手}
+- 到着基準の予約を実際に置いた開始時刻へ揃えた。`AudioPlayoutScheduler.scheduleByArrival` は、開始時刻を `nowSeconds + minLeadSeconds` へ押し戻したときと `snapToPreviousEnd` で動かしたときに、`PlayoutAnchor` を動かした分だけずらす。`AudioPlayoutSession.playSound` は `startBuffer` が開始を押し直した分を `AudioPlayoutScheduler.confirmStartPush` で返す。これで押し戻した後も次の音が媒体の間隔どおりに並び、1 ms の穴が補間の穴として残る
+- 押し戻しと押し直しを `src/playout/audioPlayout.test.ts` の単体テスト 2 件で固定した。修正を無効化すると 2 件とも失敗することを確認した
+- `tests/e2e/media-playout-short-frames.spec.ts` の drain の検査は、予約の実際の開始時刻と終端から未描画の予約長を求め、`cutMs` と比べる形に直した。`cutMs` が 0 なのに未描画が残る退行は引き続き検出する
+- `AudioOutputRenderer.prepare` の実出力時計の開始待ちを 1000 ms から 3000 ms へ広げた。CPU 負荷時に 1000 ms を超える実測があり、動き出した時点で待ちを抜けるため通常の待ち時間は増えない
+- `.github/workflows/ci.yml` の e2e job は、失敗時に `test-results/` を artifact `e2e-test-results-node22` として保存する。`.github/workflows/e2e-test.yml` の relay job は再実行の前に 1 回目の結果を `...-attempt1` として退避し、再実行の結果を `...-attempt2` として保存する。診断情報の確認手順を `docs/DEVELOPMENT.md` に追記した
+- 過去の build job のフレーキーは develop 上で修正済みであることを再現試行で確認した。`media-playout-quality.spec.ts`、`devtools-audio-output-latency.spec.ts`、`playout-measurement-guards.spec.ts` の 2026-10-31 の失敗は現行コードで再現しなかったため変更していない
+
+### 検証
+
+- `media-playout-short-frames.spec.ts` の 12 テストを `--repeat-each=20` で 240/240 pass を 3 回、CPU 負荷時に `--repeat-each=25` で 300/300 pass
+- 実 `AudioContext` を `latencyHint: "playback"` で動かした再現ケースは修正前 10/10 失敗、修正後 10/10 で `maximumStep` 0.0031
+- 音声時計の開始待ちは CPU 負荷 8 本で修正前 78 回中 1 回失敗、修正後は同じ負荷で 130/130 pass と E2E 全体 275/275 pass
+- `vp test run` 266 files / 4394 tests pass、`vp exec tsc --noEmit` pass、`vp check` pass、`vp run e2e-test` 275/275 pass、`vp run e2e-test:production` 12/12 pass
+
+### 残るリスク
+
+- relay job は trace を記録しないため、artifact に含まれる診断情報は `error-context.md` だけである
+- ジョブが timeout で cancelled された場合、artifact のアップロードは実行されない
+- headless Chrome の音声時計が停止する系統のフレークは別に残る (高負荷時に `media-playout-av-sync.spec.ts` で 1 回観測)
