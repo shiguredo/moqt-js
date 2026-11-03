@@ -1026,7 +1026,9 @@ export class MediaPublisherImpl implements MediaPublisher {
    * REQUEST_OK を待って publication を保持する。告知の確立前の失敗は
    * `NamespacePublicationCallbacks.error` を通知せず、この await の reject として
    * start() の catch に届ける (start() の失敗として onError を 1 回通知する)。
-   * 確立後の stream エラーは onError に流す。ピアの FIN は graceful な終了であり、
+   * 確立後のリクエスト単位の stream エラー (RESET_STREAM など) は onError に流す。
+   * セッションを閉じる原因は ConnectCallbacks.error 経由で 1 回だけ onError に届く
+   * (同じ原因を 2 回通知しない)。ピアの FIN は graceful な終了であり、
    * 低レベルは FIN で error を通知しないため、state が "closed" になることで観測する。
    *
    * 認可トークンは SETUP に載せたものを PUBLISH と共用する

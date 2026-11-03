@@ -206,13 +206,16 @@ interface MediaPublisherCallbacks {
   確立後にピアが `RESET_STREAM` / FIN で終了した場合は null にせず `"closed"` を返す
 - 告知の確立前の失敗は `start()` の失敗になり、`onError` は 1 回だけ通知される
   (Session のエラーと `start()` の失敗に同じ原因が載る経路も重複しない)。
-  確立後にプロトコル違反の応答を受けた場合は、低レベルの per-request コールバックと
-  Session エラーの両方が通知されるため `onError` が 2 回呼ばれ得る (既知の制約)
+  確立後にプロトコル違反の応答を受けた場合も、Session を閉じる原因では Session の
+  エラーだけが通知されるため `onError` は 1 回だけ通知される
 - `pause()` / `resume()` は告知を維持する
 - 告知だけを先に終えたい場合は `namespacePublication.done()` を呼ぶ。配信は続き、
   `namespacePublication` は `"closed"` の publication を返す
-- 告知の確立後に `RESET_STREAM` を受けると `onError` を通知し、配信は続ける。
-  ピアの FIN は graceful な終了であり `onError` を通知せず、`state` が `"closed"` になる
+- 告知の確立後に `RESET_STREAM` を受けると `onError` を通知し、配信は続ける
+  (要求ストリームで GOAWAY を受信した後の `RESET_STREAM` は通知しない)。
+  ピアの FIN は graceful な終了であり `onError` を通知せず、`state` が `"closed"` になる。
+  ピア起点のセッション終了では、セッション終了処理との順序により `onError` が
+  呼ばれることがある (`onClose` と続けて呼ばれ得る)
 - ピアが FIN で要求を完了した後に `done()` を呼んでも何もしない (要求ストリームは既に
   閉じており、低レベル API は publication を破棄している)。撤回を先に行いたい場合は
   FIN を待たずに `done()` を呼ぶ

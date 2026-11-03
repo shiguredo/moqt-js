@@ -939,6 +939,10 @@ export interface NamespaceSubscriptionCallbacks {
   onNamespaceDone?: (namespaceSuffix: string[]) => void;
   /**
    * エラー時のコールバック
+   *
+   * セッション終了起源の読み取りエラー (`source: "session"`) では呼ばない。
+   * セッションを閉じるプロトコル違反 (`ProtocolViolationError` など) でも呼び、
+   * `ConnectCallbacks.error` と重複して届き得る。
    */
   error?: (error: Error) => void;
   /**
@@ -1056,6 +1060,10 @@ export interface TracksSubscriptionCallbacks {
   onPublishSkipped?: (namespaceSuffix: string[], trackName: string) => void;
   /**
    * エラー時のコールバック
+   *
+   * セッション終了起源の読み取りエラー (`source: "session"`) では呼ばない。
+   * セッションを閉じるプロトコル違反 (`ProtocolViolationError` など) でも呼び、
+   * `ConnectCallbacks.error` と重複して届き得る。
    */
   error?: (error: Error) => void;
   /**
@@ -1115,6 +1123,27 @@ export interface TracksSubscription {
 export interface NamespacePublicationCallbacks {
   /**
    * エラー時のコールバック
+   *
+   * 次の場合に呼ばれる。
+   *
+   * - デコードと namespace-scoped Redirect の検証を通った `REQUEST_ERROR` を
+   *   受けたとき。ただしこの `PUBLISH_NAMESPACE` の要求ストリームで GOAWAY を
+   *   受信した後の `REQUEST_ERROR` は無視するため呼ばない
+   * - 読み取りが失敗したとき (確立前後を問わない)。ただしこの
+   *   `PUBLISH_NAMESPACE` の要求ストリームで GOAWAY を受信した後、または
+   *   対象の publication が既に closed のとき (セッション終了処理が先に
+   *   閉じた場合や `done()` の後) は呼ばない。ピア起点のセッション終了
+   *   (`source: "session"`) はセッション終了処理との順序により呼ばれることが
+   *   ある
+   *
+   * ライブラリが `closeWithError` でセッションを閉じる原因 (`SessionError` /
+   * `ProtocolViolationError` / `IncompleteDataError`) では呼ばず、
+   * `ConnectCallbacks.error` だけが通知する (2 つのコールバックで重複して
+   * 届けないため)。確立前の未解決の返値の Promise は失敗で settle する。
+   * ループが先に settle する場合は、受信した要求の失敗理由 (`RequestError` /
+   * `ProtocolViolationError` など。要求ストリームの GOAWAY はマイグレーション
+   * 理由の `Error`) で reject する。セッション終了が先行した場合は
+   * セッション終了理由で settle する。
    */
   error?: (error: Error) => void;
   /**

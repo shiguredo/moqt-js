@@ -22,7 +22,13 @@ import {
   encodeRequestOkPayload,
 } from "../message/session";
 import { ControlStreamReader, ControlStreamWriter } from "../controlStream";
-import { RequestError, RequestErrorCode, SessionError, SessionErrorCode } from "../error";
+import {
+  ProtocolViolationError,
+  RequestError,
+  RequestErrorCode,
+  SessionError,
+  SessionErrorCode,
+} from "../error";
 import { createTrackNamespace } from "../message/parameter";
 import { encodeParameterTrackNamespace } from "../message";
 import { encodeRequestUpdatePayload } from "../message/subscribe";
@@ -95,13 +101,21 @@ interface LoopCase {
   kind: LoopKind;
   /** createNamespaceLoopTestContext / startLoop へ渡すループ種別 */
   loop: LoopKind;
+  /**
+   * 読み取り失敗が Session を閉じる原因だったときに、リクエスト単位の
+   * error コールバックへ通知される回数。namespace / tracks は既存契約として
+   * 通知し、publication は ConnectCallbacks.error へ一本化するため通知しない。
+   * 未知メッセージやスコープ違反のように、Session を閉じても読み取り失敗が
+   * 原因でない経路はこの値の対象外である。
+   */
+  errorNotificationCount: number;
 }
 
 /** namespace 系 3 ループを回すシナリオ (失敗時のテスト名にループ種別が入る) */
 const LOOP_CASES: readonly LoopCase[] = [
-  { kind: "namespace", loop: "namespace" },
-  { kind: "tracks", loop: "tracks" },
-  { kind: "publication", loop: "publication" },
+  { kind: "namespace", loop: "namespace", errorNotificationCount: 1 },
+  { kind: "tracks", loop: "tracks", errorNotificationCount: 1 },
+  { kind: "publication", loop: "publication", errorNotificationCount: 0 },
 ];
 
 /** subscription 系 2 ループを回すシナリオ (publication は subscription を持たない) */
@@ -133,6 +147,8 @@ function createNamespaceLoopTestContext(kind: LoopKind): {
   writerClosed: () => Promise<void>;
   isReadableCancelled: () => boolean;
   getClosedWithError: () => SessionError | undefined;
+  /** セッション単位の error コールバックへ通知されたエラー (closeWithError 経由) */
+  getSessionNotifiedErrors: () => Error[];
   debugRecords: DebugRecord[];
 } {
   const requestId = 10n;
@@ -169,6 +185,10 @@ function createNamespaceLoopTestContext(kind: LoopKind): {
   };
 
   let closedWithError: SessionError | undefined;
+  // 本番の SessionImpl.closeWithError は Session の error コールバックを呼ぶ。
+  // publication ループが「Session を閉じる原因をリクエスト単位で通知しない」ことを、
+  // リクエスト単位の通知 0 件と Session 側の通知 1 件の組で検証できるようにする。
+  const sessionNotifiedErrors: Error[] = [];
   const debugRecords: DebugRecord[] = [];
   const session = {
     namespaceSubscriptions: new Map(kind === "namespace" ? [[requestId, target]] : []),
@@ -181,9 +201,20 @@ function createNamespaceLoopTestContext(kind: LoopKind): {
       debug: (message: DebugRecord) => {
         debugRecords.push(message);
       },
+      error: (error: Error) => {
+        sessionNotifiedErrors.push(error);
+      },
     },
     closeWithError: (error: SessionError) => {
       closedWithError = error;
+      // 本番の SessionImpl.closeWithError は Session の error コールバックを呼んでから
+      // セッションを閉じる。コールバックの throw は握り潰す
+      // (src/session/lifecycle.ts の sessionCloseWithError)。
+      try {
+        session.callbacks.error?.(error);
+      } catch {
+        // アプリの error コールバックの例外は本番と同じく無視する
+      }
       // 本番の SessionImpl.closeWithError は close() 内で保留中の更新を
       // 汎用エラーで reject する。テストでも同じ順序を再現する
       // (publication ループは REQUEST_UPDATE を扱わないため対象は常に空)。
@@ -242,6 +273,7 @@ function createNamespaceLoopTestContext(kind: LoopKind): {
     writerClosed: () => writer.closed,
     isReadableCancelled: () => readableCancelled,
     getClosedWithError: () => closedWithError,
+    getSessionNotifiedErrors: () => sessionNotifiedErrors,
     debugRecords,
   };
 }
@@ -391,15 +423,27 @@ test("namespaceStartNamespaceStreamLoop: 非空 Track Name の Redirect は PROT
  * PUBLISH_NAMESPACE (publication ループ) の初回応答 REQUEST_ERROR でも、Redirect の
  * Track Name が非空なら PROTOCOL_VIOLATION でセッションを閉じる
  * (namespace 系リクエストは Track Name を空にする MUST)。
+ * Session を閉じる原因のためリクエスト単位の error コールバックは呼ばず、
+ * 未確立の publishNamespace() の待ちは受信した ProtocolViolationError のまま reject する
+ * (Session の error コールバックへ通知を一本化しても reject の経路は失わない)。
  */
 test("namespaceStartPublicationStreamLoop: 非空 Track Name の Redirect は PROTOCOL_VIOLATION", async () => {
   const ctx = createNamespaceLoopTestContext("publication");
+  const notifiedErrors: Error[] = [];
+  Object.assign(ctx.publication.callbacks, {
+    error: (error: Error): void => {
+      notifiedErrors.push(error);
+    },
+  });
+  let rejectedError: Error | undefined;
   const readPromise = startLoop(
     "publication",
     ctx.session,
     ctx.requestId,
     () => {},
-    () => {},
+    (error) => {
+      rejectedError = error;
+    },
   );
 
   const payload = encodeRequestErrorPayload({
@@ -417,7 +461,366 @@ test("namespaceStartPublicationStreamLoop: 非空 Track Name の Redirect は PR
   ctx.readableController.close();
   await readPromise;
 
+  // Session を閉じる原因はリクエスト単位の error コールバックで通知しない
+  assert.equal(notifiedErrors.length, 0);
+  // ConnectCallbacks.error だけが 1 回通知する
+  assert.equal(ctx.getSessionNotifiedErrors().length, 1);
+  // 確立前の待ちは受信した ProtocolViolationError のまま reject される
+  assert.instanceOf(rejectedError, ProtocolViolationError);
+  assert.match(rejectedError?.message ?? "", /empty track name/);
+  // Session は PROTOCOL_VIOLATION で閉じられる
   assert.equal(ctx.getClosedWithError()?.code, SessionErrorCode.PROTOCOL_VIOLATION);
+});
+
+/**
+ * draft-ietf-moq-transport-22 §6.4.2.3:
+ * RESET_STREAM は request のキャンセルである。ライブラリはセッションを閉じず、
+ * 公開の確立前に読み取りが失敗した場合はリクエスト単位の error コールバックで
+ * 1 回通知し、未確立の待ちも同じエラーで reject する (アプリが終了を検知できる
+ * ようにする実用上の対応)。
+ */
+test("namespaceStartPublicationStreamLoop: 確立前の RESET_STREAM は通知し reject する", async () => {
+  const ctx = createNamespaceLoopTestContext("publication");
+  const notifiedErrors: Error[] = [];
+  Object.assign(ctx.publication.callbacks, {
+    error: (error: Error): void => {
+      notifiedErrors.push(error);
+    },
+  });
+  let rejectedError: Error | undefined;
+  const readPromise = startLoop(
+    "publication",
+    ctx.session,
+    ctx.requestId,
+    () => {},
+    (error) => {
+      rejectedError = error;
+    },
+  );
+
+  const resetError = Object.assign(new Error("stream reset by peer"), { source: "stream" });
+  ctx.readableController.error(resetError);
+  await readPromise;
+
+  // セッションを閉じない原因はリクエスト単位の error コールバックで 1 回通知する
+  assert.deepEqual(notifiedErrors, [resetError]);
+  // 未確立の待ちは同じエラーで reject される
+  assert.strictEqual(rejectedError, resetError);
+  assert.isUndefined(ctx.getClosedWithError());
+  assert.equal(ctx.publication.state, "closed");
+});
+
+/**
+ * draft-ietf-moq-transport-22 §6.4.2.3:
+ * RESET_STREAM は request のキャンセルである。ライブラリはセッションを閉じず、
+ * 公開の確立後の読み取りエラーはリクエスト単位の error コールバックで 1 回
+ * 通知する (アプリが終了を検知できるようにする実用上の対応)。
+ * セッションを閉じる原因の通知を抑止しても、この経路の通知は失わない。
+ * 確立後の経路であることを確かめるため、REQUEST_OK の resolve を待ってから
+ * 読み取りを失敗させる (確立前に落ちても assert が通る構造にしない)。
+ */
+test("namespaceStartPublicationStreamLoop: 確立後の RESET_STREAM はリクエスト単位の error で通知する", async () => {
+  const ctx = createNamespaceLoopTestContext("publication");
+  const notifiedErrors: Error[] = [];
+  Object.assign(ctx.publication.callbacks, {
+    error: (error: Error): void => {
+      notifiedErrors.push(error);
+    },
+  });
+  // 確立 (resolve) と reject を記録し、確立前の経路にすり替わっていないことを確かめる
+  let resolveCount = 0;
+  let rejectCount = 0;
+  let notifyEstablished: () => void = () => {};
+  const established = new Promise<void>((resolve) => {
+    notifyEstablished = resolve;
+  });
+  const readPromise = startLoop(
+    "publication",
+    ctx.session,
+    ctx.requestId,
+    () => {
+      resolveCount += 1;
+      notifyEstablished();
+    },
+    () => {
+      rejectCount += 1;
+    },
+  );
+
+  // 1 通目の REQUEST_OK で公開を確立してから、ピアの RESET_STREAM 相当で失敗させる
+  ctx.readableController.enqueue(requestOkMessage(ctx.controlWriter));
+  await established;
+  assert.equal(resolveCount, 1);
+  assert.equal(rejectCount, 0);
+
+  const resetError = Object.assign(new Error("stream reset by peer"), { source: "stream" });
+  ctx.readableController.error(resetError);
+  await readPromise;
+
+  // セッションを閉じない原因はリクエスト単位の error コールバックで通知する
+  assert.deepEqual(notifiedErrors, [resetError]);
+  assert.isUndefined(ctx.getClosedWithError());
+  // 読み取り失敗で publication の state は closed になる
+  assert.equal(ctx.publication.state, "closed");
+});
+
+/**
+ * draft-ietf-moq-transport-22 §8.3 (Key-Value-Pair Formatting):
+ * 公開の確立後に 2 通目の REQUEST_OK として壊れた Track Properties を受けると、
+ * decode が KEY_VALUE_FORMATTING_ERROR を throw してセッションを閉じる。
+ * この経路でもリクエスト単位の error コールバックは呼ばず、ConnectCallbacks.error
+ * だけが通知する。確立済みの待ちは解決済みのため reject しない。
+ * 確立前の同じ経路は LOOP_CASES の「破損 REQUEST_OK」テストが固定する
+ * (通知の判定は確立状態に依存しないが、この issue の再現経路は確立後である)。
+ */
+test("namespaceStartPublicationStreamLoop: 確立後の 2 通目の REQUEST_OK の Track Properties 破損ではリクエスト単位の error コールバックを呼ばない", async () => {
+  const ctx = createNamespaceLoopTestContext("publication");
+  const notifiedErrors: Error[] = [];
+  Object.assign(ctx.publication.callbacks, {
+    error: (error: Error): void => {
+      notifiedErrors.push(error);
+    },
+  });
+  // 確立 (resolve) を待つことで、確立後の経路であることを保証する
+  let resolveCount = 0;
+  let rejectCount = 0;
+  let notifyEstablished: () => void = () => {};
+  const established = new Promise<void>((resolve) => {
+    notifyEstablished = resolve;
+  });
+  const readPromise = startLoop(
+    "publication",
+    ctx.session,
+    ctx.requestId,
+    () => {
+      resolveCount += 1;
+      notifyEstablished();
+    },
+    () => {
+      rejectCount += 1;
+    },
+  );
+
+  // 1 通目の REQUEST_OK で公開を確立する
+  ctx.readableController.enqueue(requestOkMessage(ctx.controlWriter));
+  await established;
+  assert.equal(resolveCount, 1);
+
+  // 2 通目の REQUEST_OK を壊れた Track Properties にして構造破損を起こす
+  const malformedPayload = appendMalformedTrackProperties(
+    encodeRequestOkPayload({
+      type: MessageType.REQUEST_OK,
+      parameters: [],
+      trackProperties: [],
+    }),
+  );
+  ctx.readableController.enqueue(
+    ctx.controlWriter.encode(MessageType.REQUEST_OK, malformedPayload),
+  );
+  ctx.readableController.close();
+  await readPromise;
+
+  // Session を閉じる原因はリクエスト単位の error コールバックで通知しない
+  assert.equal(notifiedErrors.length, 0);
+  // ConnectCallbacks.error だけが 1 回通知する
+  assert.equal(ctx.getSessionNotifiedErrors().length, 1);
+  // 確立済みの待ちは解決済みのため reject も呼ばない
+  assert.equal(rejectCount, 0);
+  // Session は KEY_VALUE_FORMATTING_ERROR で閉じられる
+  assert.equal(ctx.getClosedWithError()?.code, SessionErrorCode.KEY_VALUE_FORMATTING_ERROR);
+});
+
+/**
+ * draft-ietf-moq-transport-22 §9.2 (GOAWAY):
+ * 要求ストリームで GOAWAY を受信した後の REQUEST_ERROR は無視する。
+ * リクエスト単位の error コールバックでも通知せず、セッションも閉じない。
+ */
+test("namespaceStartPublicationStreamLoop: GOAWAY 後の REQUEST_ERROR は通知しない", async () => {
+  const ctx = createNamespaceLoopTestContext("publication");
+  let notifyCount = 0;
+  Object.assign(ctx.publication.callbacks, {
+    error: (): void => {
+      notifyCount += 1;
+    },
+  });
+  let rejectCount = 0;
+  const readPromise = startLoop(
+    "publication",
+    ctx.session,
+    ctx.requestId,
+    () => {},
+    () => {
+      rejectCount += 1;
+    },
+  );
+
+  // 公開を確立してから GOAWAY を受信し、その後 REQUEST_ERROR を受ける
+  ctx.readableController.enqueue(requestOkMessage(ctx.controlWriter));
+  const goawayPayload = encodeGoawayPayload({
+    type: MessageType.GOAWAY,
+    newSessionUri: "https://example.com/new",
+    timeout: 0n,
+  });
+  ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.GOAWAY, goawayPayload));
+  ctx.readableController.enqueue(
+    requestErrorMessage(ctx.controlWriter, RequestErrorCode.PREFIX_OVERLAP),
+  );
+  ctx.readableController.close();
+  await readPromise;
+
+  assert.equal(notifyCount, 0);
+  assert.equal(rejectCount, 0);
+  assert.isUndefined(ctx.getClosedWithError());
+});
+
+/**
+ * draft-ietf-moq-transport-22 §9.2 (GOAWAY):
+ * 要求ストリームで GOAWAY を受信した後の読み取り失敗は、リクエスト単位の
+ * error コールバックで通知しない (GOAWAY に伴う正常な終了として扱う)。
+ */
+test("namespaceStartPublicationStreamLoop: GOAWAY 後の読み取り失敗は通知しない", async () => {
+  const ctx = createNamespaceLoopTestContext("publication");
+  let notifyCount = 0;
+  Object.assign(ctx.publication.callbacks, {
+    error: (): void => {
+      notifyCount += 1;
+    },
+  });
+  let notifyEstablished: () => void = () => {};
+  const established = new Promise<void>((resolve) => {
+    notifyEstablished = resolve;
+  });
+  const readPromise = startLoop(
+    "publication",
+    ctx.session,
+    ctx.requestId,
+    () => {
+      notifyEstablished();
+    },
+    () => {},
+  );
+
+  ctx.readableController.enqueue(requestOkMessage(ctx.controlWriter));
+  await established;
+  const goawayPayload = encodeGoawayPayload({
+    type: MessageType.GOAWAY,
+    newSessionUri: "https://example.com/new",
+    timeout: 0n,
+  });
+  ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.GOAWAY, goawayPayload));
+  // GOAWAY 処理 (writer の FIN) を待ってから読み取りを失敗させる
+  await ctx.writerClosed();
+  ctx.readableController.error(new Error("stream reset by peer"));
+  await readPromise;
+
+  assert.equal(notifyCount, 0);
+  assert.isUndefined(ctx.getClosedWithError());
+});
+
+/**
+ * draft-ietf-moq-transport-22 §6.4.2.3:
+ * 対象の publication が既に closed のとき (done() による撤回など) は、
+ * 読み取り失敗をリクエスト単位の error コールバックで通知しない。
+ */
+test("namespaceStartPublicationStreamLoop: publication が closed のときの読み取り失敗は通知しない", async () => {
+  const ctx = createNamespaceLoopTestContext("publication");
+  let notifyCount = 0;
+  Object.assign(ctx.publication.callbacks, {
+    error: (): void => {
+      notifyCount += 1;
+    },
+  });
+  let notifyEstablished: () => void = () => {};
+  const established = new Promise<void>((resolve) => {
+    notifyEstablished = resolve;
+  });
+  const readPromise = startLoop(
+    "publication",
+    ctx.session,
+    ctx.requestId,
+    () => {
+      notifyEstablished();
+    },
+    () => {},
+  );
+
+  ctx.readableController.enqueue(requestOkMessage(ctx.controlWriter));
+  await established;
+  // ループが次の読み取りの await に入るまで待つ。先に state を閉じると while の
+  // ループ条件で終了してしまい、onReadError の state ガードを通らない
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, 0);
+  });
+  // done() による撤回相当: 対象を closed にしてから読み取りを失敗させる
+  ctx.publication.state = "closed";
+  ctx.readableController.error(new Error("stream reset by peer"));
+  await readPromise;
+
+  // 対象が closed のため onReadError の state ガードで通知が抑止される
+  assert.equal(notifyCount, 0);
+  assert.isUndefined(ctx.getClosedWithError());
+});
+
+/**
+ * draft-ietf-moq-transport-22 §6.4.2.3 / §6.6:
+ * ピア起点のセッション終了 (source: "session") は、publication では順序により
+ * リクエスト単位の error コールバックで通知され得る (公開契約に明記している)。
+ */
+test("namespaceStartPublicationStreamLoop: セッション終了起源の読み取り失敗は通知し得る", async () => {
+  const ctx = createNamespaceLoopTestContext("publication");
+  const notifiedErrors: Error[] = [];
+  Object.assign(ctx.publication.callbacks, {
+    error: (error: Error): void => {
+      notifiedErrors.push(error);
+    },
+  });
+  const readPromise = startLoop(
+    "publication",
+    ctx.session,
+    ctx.requestId,
+    () => {},
+    () => {},
+  );
+
+  const sessionClosedError = new Error("session is closed");
+  Object.assign(sessionClosedError, { source: "session" });
+  ctx.readableController.error(sessionClosedError);
+  await readPromise;
+
+  // publication は source: "session" を抑止しないため通知される
+  assert.deepEqual(notifiedErrors, [sessionClosedError]);
+  assert.isUndefined(ctx.getClosedWithError());
+});
+
+/**
+ * draft-ietf-moq-transport-22 §6.6:
+ * 購読系のループはセッション終了起源 (source: "session") の読み取り失敗を
+ * 通知しない (セッション終了は ConnectCallbacks.close が通知する)。
+ * publication の扱いとの非対称は公開契約に明記している。
+ */
+test("namespaceStartNamespaceStreamLoop: セッション終了起源の読み取り失敗は通知しない", async () => {
+  const ctx = createNamespaceLoopTestContext("namespace");
+  let notifyCount = 0;
+  Object.assign(ctx.subscription.callbacks, {
+    error: (): void => {
+      notifyCount += 1;
+    },
+  });
+  const readPromise = startLoop(
+    "namespace",
+    ctx.session,
+    ctx.requestId,
+    () => {},
+    () => {},
+  );
+
+  const sessionClosedError = new Error("session is closed");
+  Object.assign(sessionClosedError, { source: "session" });
+  ctx.readableController.error(sessionClosedError);
+  await readPromise;
+
+  assert.equal(notifyCount, 0);
+  assert.isUndefined(ctx.getClosedWithError());
 });
 
 /**
@@ -1990,10 +2393,19 @@ test("namespaceStartPublicationStreamLoop: 確立後の 2 通目 REQUEST_OK の�
  * 閉じることを検証する。変換は toSessionCloseError
  * (受信メッセージのデコード失敗は PROTOCOL_VIOLATION として扱うリポジトリ
  * 共通解釈) が行うため、デコーダの短縮ペイロードを feed すればよい。
+ * Session を閉じる原因の通知は、publication はリクエスト単位の error コールバックへ
+ * 通知せず ConnectCallbacks.error だけが通知する。namespace / tracks は既存の契約
+ * として両方に届く。ループ種別ごとの回数で検証する。
  */
-LOOP_CASES.forEach(({ kind, loop }) => {
+LOOP_CASES.forEach(({ kind, loop, errorNotificationCount }) => {
   test(`破損 REQUEST_OK は PROTOCOL_VIOLATION で閉じる: ${kind} ループ`, async () => {
     const ctx = createNamespaceLoopTestContext(loop);
+    let notifyCount = 0;
+    Object.assign(ctx.target.callbacks, {
+      error: (): void => {
+        notifyCount += 1;
+      },
+    });
 
     const readPromise = startLoop(
       loop,
@@ -2014,6 +2426,10 @@ LOOP_CASES.forEach(({ kind, loop }) => {
     assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
     // IncompleteDataError のメッセージが引き継がれる (デコード破損経由であることの証憑)
     assert.isTrue(ctx.getClosedWithError()!.message.includes("insufficient data"));
+    // Session を閉じる原因の通知はループ種別ごとの回数になる (publication は 0)
+    assert.equal(notifyCount, errorNotificationCount);
+    // ConnectCallbacks.error は 1 回だけ通知される
+    assert.equal(ctx.getSessionNotifiedErrors().length, 1);
     // finally で対象が掃除される
     assert.isFalse(ctx.targetMap.has(ctx.requestId));
   });
@@ -2153,21 +2569,26 @@ test("namespaceStartTracksStreamLoop: 初期 SUBSCRIBE_TRACKS_OK の未知 Manda
 });
 
 // ============================================================================
-// error コールバックの例外で後始末が止まらないこと
+// リクエスト単位の error コールバックの例外で後始末が止まらないこと
 //
 // 購読 / 公開単位の callbacks.error が throw しても、通知の失敗で後始末
 // (確立前 Promise の reject・保留中 REQUEST_UPDATE の reject・
 // 該当時の session.closeWithError) が中断されないこと。
+// publication は Session を閉じる原因ではリクエスト単位の通知自体を行わないため、
+// 通知の回数と REQUEST_CALLBACK_ERROR の記録はループ種別で分けて検証する。
 // ============================================================================
 
 /**
  * draft-ietf-moq-transport-22 §8.3 / §9.3:
- * error コールバックが throw しても、malformed な Track Properties の通知後に
- * 確立前 Promise の reject とセッションクローズが実行されることを検証する。
- * 通知は 1 回だけで、二重通知にならない。
+ * malformed な Track Properties によるセッションクローズで、確立前 Promise の
+ * reject と session.closeWithError が実行されることを検証する。
+ * namespace / tracks はリクエスト単位の error コールバックへも通知するため、
+ * その throw が後始末を止めないことまで確かめる。publication は Session を閉じる
+ * 原因をリクエスト単位で通知しないため、通知されないことと
+ * REQUEST_CALLBACK_ERROR が記録されないことを確かめる。
  */
-LOOP_CASES.forEach(({ kind, loop }) => {
-  test(`error コールバックの throw を無視して reject とセッションクローズが実行される: ${kind} ループ`, async () => {
+LOOP_CASES.forEach(({ kind, loop, errorNotificationCount }) => {
+  test(`malformed な Track Properties で後始末が完了する: ${kind} ループ`, async () => {
     const ctx = createNamespaceLoopTestContext(loop);
     const notifiedMessages: string[] = [];
     Object.assign(ctx.target.callbacks, {
@@ -2200,22 +2621,33 @@ LOOP_CASES.forEach(({ kind, loop }) => {
     ctx.readableController.close();
     await readPromise;
 
-    // 通知は 1 回だけ (コールバックの throw で二重通知にならない)
-    assert.equal(notifiedMessages.length, 1);
+    // ループ種別ごとの通知回数 (namespace / tracks は 1、publication は 0)
+    assert.equal(notifiedMessages.length, errorNotificationCount);
+    // Session を閉じる原因は ConnectCallbacks.error では必ず 1 回通知される
+    // (publication がリクエスト単位の通知を抑止しても、通知自体が失われない)
+    assert.equal(ctx.getSessionNotifiedErrors().length, 1);
     // throw しても reject が実行され、close に渡す値と同一オブジェクトである
     assert.isDefined(rejectedError);
     assert.isDefined(ctx.getClosedWithError());
     assert.strictEqual(rejectedError, ctx.getClosedWithError());
     assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.KEY_VALUE_FORMATTING_ERROR);
-    // 通知されたエラーは close に渡した SessionError と同じである
-    assert.equal(notifiedMessages[0], ctx.getClosedWithError()!.message);
     // finally で対象が掃除される
     assert.isFalse(ctx.targetMap.has(ctx.requestId));
-    // アプリの error コールバックの throw は REQUEST_CALLBACK_ERROR として記録される
-    assertRequestCallbackErrorRecord(ctx.debugRecords, {
-      requestId: ctx.requestId,
-      message: "app error callback failure",
-    });
+    if (errorNotificationCount === 0) {
+      // 通知を抑止したため REQUEST_CALLBACK_ERROR は記録されない
+      assert.equal(
+        ctx.debugRecords.filter((record) => record.typeName === "REQUEST_CALLBACK_ERROR").length,
+        0,
+      );
+    } else {
+      // 通知されたエラーは close に渡した SessionError と同じである
+      assert.equal(notifiedMessages[0], ctx.getClosedWithError()!.message);
+      // アプリの error コールバックの throw は REQUEST_CALLBACK_ERROR として記録される
+      assertRequestCallbackErrorRecord(ctx.debugRecords, {
+        requestId: ctx.requestId,
+        message: "app error callback failure",
+      });
+    }
   });
 });
 
