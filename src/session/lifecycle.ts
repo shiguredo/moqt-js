@@ -77,6 +77,8 @@ export interface SessionLifecycleInternal {
   readonly pendingFetch: Map<bigint, { reject: (err: Error) => void }>;
   readonly pendingRequestUpdate: Map<bigint, { reject: (err: Error) => void }>;
   readonly pendingTrackStatus: Map<bigint, { reject: (err: Error) => void }>;
+  // PUBLISH_NAMESPACE の送信待ち (ストリーム作成 / write の await) の reject
+  readonly pendingNamespacePublication: Map<bigint, { reject: (err: Error) => void }>;
 
   // 確立済みリクエスト (state を閉じる対象)
   readonly publishers: Map<bigint, { markClosed(): void }>;
@@ -160,7 +162,7 @@ export function sessionMarkRequestObjectsClosed(session: SessionLifecycleInterna
  * アプリが未解決の Promise を待ち続けないようにする共通後始末。
  * pending 系のエントリは reject して削除し、PUBLISH_NAMESPACE の publication は
  * reject のみ行う (エントリは専用ループが削除する。根拠の仕様はドラフトであり
- * 将来変更される可能性がある)。
+ * 将来変更される可能性がある)。送信待ちの PUBLISH_NAMESPACE も reject して clear する。
  */
 export function sessionRejectPendingRequests(
   session: SessionLifecycleInternal,
@@ -198,6 +200,13 @@ export function sessionRejectPendingRequests(
     publication.reject = undefined;
     reject(error);
   }
+  // ストリームの作成と PUBLISH_NAMESPACE の書き込みを待っている間の Promise は
+  // namespacePublications にまだ登録されていない。登録前の await 中に Session が
+  // 終了しても呼び出し元を待たせ続けないよう、送信待ちの reject も対象にする
+  for (const [, pending] of session.pendingNamespacePublication) {
+    pending.reject(error);
+  }
+  session.pendingNamespacePublication.clear();
 }
 
 /**
