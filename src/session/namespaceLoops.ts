@@ -182,7 +182,9 @@ function namespaceRejectAndCloseWithError(
  *
  * アプリのコールバック例外は握り潰す (後始末を止めない)。
  * createNamespaceActiveTracker.emitAll / namespaceHandleGoaway と同じ方針で、
- * 確立前の失敗も含めて同じ callbacks へ通知する。
+ * 確立前の失敗も含めて同じ callbacks へ通知する。ただし呼び出し側が通知すると
+ * 判断した場合だけ呼ばれる (publication ループはセッションを閉じる原因や
+ * GOAWAY 受信後には呼ばない)。
  * 通知先は NamespaceSubscriptionCallbacks / TracksSubscriptionCallbacks /
  * NamespacePublicationCallbacks の callbacks.error であり、
  * SessionImpl.closeWithError が debug 記録に残すセッション単位の
@@ -887,7 +889,7 @@ interface NamespaceLoopHandlers<S> {
     messageType: number,
     payload: Uint8Array,
   ): Promise<NamespaceLoopStep>;
-  /** 読み取り失敗時の後始末 (state を閉じ、通知し、確立前なら reject する) */
+  /** 読み取り失敗時の後始末 (state を閉じ、必要に応じて通知し、確立前なら reject する) */
   onReadError(ctx: NamespaceLoopContext<S>, error: Error): void;
 }
 
@@ -1530,8 +1532,19 @@ function createPublicationStreamHandlers(
       // spurious error 通知を抑止する
       if (ctx.target.state !== "closed" && !ctx.progress.goawayReceived) {
         ctx.target.state = "closed";
-        namespaceNotifyError(ctx.session, ctx.requestId, ctx.callbacks, error);
+        // セッションを閉じる原因 (toSessionCloseError が non-null を返すエラー) は
+        // リクエスト単位の error コールバックで通知しない。共通ループの catch が
+        // 同じ判定で closeWithError を呼ぶため、ConnectCallbacks.error だけが通知を
+        // 担う (bidi の handleRequestStreamReadError もセッションを閉じる原因では
+        // 通知しない)。両方へ届けると、高レベル API の onError が同じ原因で 2 回
+        // 呼ばれる。セッションを閉じない読み取りエラーは従来どおり通知する。
+        if (toSessionCloseError(error) === null) {
+          namespaceNotifyError(ctx.session, ctx.requestId, ctx.callbacks, error);
+        }
         // 確立前 GOAWAY の reject を読み取り失敗で上書きしない。
+        // 通知を抑止した場合も reject は維持する (未確立の publishNamespace() の
+        // 待ちを sessionRejectPendingRequests の汎用エラーではなく、受信した
+        // 具体的なエラーで settle させるため)。
         if (!ctx.progress.resolved && !ctx.progress.requestMigrated) {
           ctx.reject(error);
         }

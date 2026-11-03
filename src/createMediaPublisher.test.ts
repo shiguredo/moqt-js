@@ -2514,6 +2514,27 @@ test("namespacePublication: 確立後の RESET は通知し FIN は state で観
 });
 
 /**
+ * 完了条件: 告知の確立後に Session エラーが 1 回届いたとき、onError も 1 回だけ
+ * 通知する。低レベルは Session を閉じる原因をリクエスト単位の error コールバック
+ * では通知せず、Session の error だけに載せるため、高レベル側の配線も 1 回になる。
+ * ハーネスは読み取りループを回さないため、このテストが確認するのは配線
+ * (Session エラー → onError) だけである。二重通知の回帰の検出は
+ * namespaceLoops.test.ts の低レベルテストが担う。
+ */
+test("namespacePublication: 確立後の Session エラーは onError を 1 回だけ通知する", async () => {
+  const sessionError = new Error("protocol violation");
+  const { publisher, errors, opened } = createStartConnectHarness(undefined, {
+    publisherOptions: { namespace: ["live"], announceNamespace: true },
+  });
+  await publisher.start({} as MediaStream);
+
+  opened[0].notifySessionError(sessionError);
+  assert.deepEqual(errors, [sessionError]);
+
+  await publisher.close();
+});
+
+/**
  * 完了条件: 告知の確立前の失敗は onError を 1 回だけ通知する。原因が
  * ProtocolViolationError から SessionError へ変換されて Session の error と
  * start() の失敗の両方に載る経路でも、別インスタンスであることを理由に二重通知しない。
