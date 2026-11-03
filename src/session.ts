@@ -5,7 +5,11 @@
 
 import { type MoqtObject } from "./dataStream";
 import { SessionError, SessionErrorCode, normalizeSessionErrorCode } from "./error";
-import { type AuthorizationToken, type Location } from "./message";
+import {
+  DEFAULT_MAX_CONTROL_MESSAGE_SIZE,
+  type AuthorizationToken,
+  type Location,
+} from "./message";
 import {
   type Publisher,
   PublisherImpl,
@@ -419,6 +423,12 @@ export class SessionImpl implements Session {
   // MAX_REQUEST_UPDATES（未広告時は 0 = 無制限。§9.1.6 の MAX_FILTER_RANGES の
   // 0 が「Range Filter 受信拒否」なのとは意味が逆である）
   localMaxRequestUpdates = 0;
+  // draft-ietf-moq-transport-23 §9.1.8: ピアの MAX_CONTROL_MESSAGE_SIZE
+  // （SETUP 受信前は既定値 65535。送信する制御メッセージの Message Length の上限）
+  peerMaxControlMessageSize = DEFAULT_MAX_CONTROL_MESSAGE_SIZE;
+  // draft-ietf-moq-transport-23 §9.1.8: 自 endpoint が SETUP で広告した
+  // MAX_CONTROL_MESSAGE_SIZE（未広告時は既定値 65535。受信する Message Length の上限）
+  localMaxControlMessageSize = DEFAULT_MAX_CONTROL_MESSAGE_SIZE;
   /**
    * ピアが REGISTER した Authorization Token のキャッシュ
    *

@@ -27,6 +27,7 @@
 import { IncompleteDataError, ProtocolViolationError } from "./error";
 import { encodeVarint, decodeVarint } from "./varint";
 import {
+  assertPropertyValueLength,
   encodeProperties,
   decodeObjectPropertiesTolerant,
   isLocAudioLevelValueInRange,
@@ -479,6 +480,8 @@ export function decodeAudioLevel(data: Uint8Array): AudioLevel {
  * encodeVideoProperties を使うこと。
  */
 export function encodeVideoConfig(description: Uint8Array): Uint8Array {
+  // draft-ietf-moq-transport-23 §8.3: 奇数 ID の Value 上限 (2^16-1) を検査する
+  assertPropertyValueLength(description.length);
   const idBytes = encodeVarint(LOCPropertyId.VIDEO_CONFIG);
   const lengthBytes = encodeVarint(BigInt(description.length));
   const result = new Uint8Array(idBytes.length + lengthBytes.length + description.length);
@@ -525,6 +528,8 @@ export function decodeVideoConfig(data: Uint8Array): Uint8Array {
  * encodeAudioProperties を使うこと。
  */
 export function encodeAudioConfig(description: Uint8Array): Uint8Array {
+  // draft-ietf-moq-transport-23 §8.3: 奇数 ID の Value 上限 (2^16-1) を検査する
+  assertPropertyValueLength(description.length);
   const idBytes = encodeVarint(LOCPropertyId.AUDIO_CONFIG);
   const lengthBytes = encodeVarint(BigInt(description.length));
   const result = new Uint8Array(idBytes.length + lengthBytes.length + description.length);

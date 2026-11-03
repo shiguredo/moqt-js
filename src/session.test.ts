@@ -65,6 +65,7 @@ import {
   decodeSetupPayload,
   encodeSetupPayload,
   getSetupMaxAuthTokenCacheSize,
+  getSetupMaxControlMessageSize,
   getSetupMaxFilterRanges,
   getSetupMaxRequestUpdates,
 } from "./message/setup";
@@ -95,6 +96,7 @@ import {
   type BidiSessionInternal,
 } from "./session/bidi";
 import { REQUEST_UPDATE_STREAM_CLOSED_MESSAGE } from "./session/namespaceLoops";
+import { sessionHandleFieldLengthExceeded } from "./session/lifecycle";
 import { incomingHandleFirstBidiMessage } from "./session/incoming";
 import type { PriorGapTracking } from "./session/priorGapTracking";
 import type { EndOfGroupTracking } from "./session/endOfGroupTracking";
@@ -4055,15 +4057,19 @@ function createFetchGroupOrderContext(
 /**
  * session.fetch() が送った FETCH メッセージをデコードする
  *
- * 制御メッセージと同一のフレーム形式 (Type + Length(16) + Payload) をほどいて
- * FETCH ペイロードをデコードし、FETCH データストリームの FETCH_HEADER が運ぶ
- * Request ID と、送信した GROUP_ORDER を検証できるようにする。
+ * 制御メッセージと同一のフレーム形式 (Type (vi64) + Message Length (vi64) + Payload)
+ * をほどいて FETCH ペイロードをデコードし、FETCH データストリームの FETCH_HEADER が
+ * 運ぶ Request ID と、送信した GROUP_ORDER を検証できるようにする
+ * (draft-ietf-moq-transport-23 §9)。
  */
 function decodeSentFetch(frame: Uint8Array): Fetch {
   const [type, typeConsumed] = decodeVarint(frame, 0);
   assert.equal(Number(type), MessageType.FETCH);
-  const length = ((frame[typeConsumed] ?? 0) << 8) | (frame[typeConsumed + 1] ?? 0);
-  const payload = frame.slice(typeConsumed + 2, typeConsumed + 2 + length);
+  const [length, lengthConsumed] = decodeVarint(frame, typeConsumed);
+  const payload = frame.slice(
+    typeConsumed + lengthConsumed,
+    typeConsumed + lengthConsumed + Number(length),
+  );
   return decodeFetchPayload(payload);
 }
 
@@ -4176,15 +4182,23 @@ test("fetch: groupOrder 省略時は Ascending として FETCH 応答の Group I
  * セッションを構築する。
  */
 function createControlLoopContext(controlMessageTimeoutMs = 10_000): {
+  session: SessionImpl;
   sessionError: { current: Error | undefined };
+  closeCalls: WebTransportCloseInfo[];
   errorControl: (error: unknown) => void;
   enqueue: (data: Uint8Array) => void;
   start: () => void;
   setSessionState: (state: string) => void;
 } {
   const sessionError: { current: Error | undefined } = { current: undefined };
+  const closeCalls: WebTransportCloseInfo[] = [];
   const transport = {
     closed: new Promise<WebTransportCloseInfo>(() => {}),
+    close: (info?: WebTransportCloseInfo): void => {
+      if (info !== undefined) {
+        closeCalls.push(info);
+      }
+    },
   } as unknown as WebTransport;
   const session = new SessionImpl(transport, {
     error: (error) => {
@@ -4209,7 +4223,9 @@ function createControlLoopContext(controlMessageTimeoutMs = 10_000): {
   internal.controlReader = new ControlStreamReader();
   internal.sessionState = "connected";
   return {
+    session,
     sessionError,
+    closeCalls,
     errorControl: (error) => {
       controller.error(error);
     },
@@ -4232,8 +4248,8 @@ function createControlLoopContext(controlMessageTimeoutMs = 10_000): {
 test("startControlMessageLoop: 半端な制御メッセージは CONTROL_MESSAGE_TIMEOUT で閉じる", async () => {
   const ctx = createControlLoopContext(20);
   ctx.start();
-  // Type (0x40) + Length 宣言 5 + 本体 1 バイトのみの半端なメッセージ
-  ctx.enqueue(new Uint8Array([0x40, 0x00, 0x05, 0xaa]));
+  // Type (0x40) + Message Length 宣言 5 (vi64 の [0x05]) + 本体 1 バイトのみの半端なメッセージ
+  ctx.enqueue(new Uint8Array([0x40, 0x05, 0xaa]));
   await new Promise((resolve) => {
     setTimeout(resolve, 80);
   });
@@ -4255,9 +4271,9 @@ test("startControlMessageLoop: 半端な制御メッセージは CONTROL_MESSAGE
 test("startControlMessageLoop: 分割到着した制御メッセージはタイムアウトしない", async () => {
   const ctx = createControlLoopContext(60);
   ctx.start();
-  // GOAWAY (0x10) + Length 宣言 2 + 本体を 1 バイトずつ分割して送る。
+  // GOAWAY (0x10) + Message Length 宣言 2 (vi64 の [0x02]) + 本体を 1 バイトずつ分割して送る。
   // 本体は New Session URI Length 0 + Timeout 0 の正当な GOAWAY payload。
-  ctx.enqueue(new Uint8Array([0x10, 0x00, 0x02]));
+  ctx.enqueue(new Uint8Array([0x10, 0x02]));
   await new Promise((resolve) => {
     setTimeout(resolve, 20);
   });
@@ -4285,15 +4301,17 @@ test("startControlMessageLoop: 制御ストリームの RESET_STREAM で PROTOCO
   const ctx = createControlLoopContext();
   ctx.start();
   ctx.errorControl(Object.assign(new Error("reset by peer"), { source: "stream" }));
-  await new Promise((resolve) => {
-    setTimeout(resolve, 0);
-  });
+  await waitForMacrotask();
 
   assert.isDefined(ctx.sessionError.current);
   assert.equal(
     (ctx.sessionError.current as SessionError).code,
     SessionErrorCode.PROTOCOL_VIOLATION,
   );
+  // 通知だけでなくセッション終了まで到達していること
+  assert.equal(ctx.session.state, "closed");
+  assert.equal(ctx.closeCalls.length, 1);
+  assert.equal(ctx.closeCalls[0]?.closeCode, SessionErrorCode.PROTOCOL_VIOLATION);
 });
 
 /**
@@ -11805,4 +11823,500 @@ test("fetch: 送信失敗時に REGISTER の予約が取り消される", async 
   assert.equal(session.peerRegisteredAuthTokenSize, 0n);
   session.reserveAuthorizationTokenForSend(token);
   assert.equal(session.peerRegisteredAuthTokenSize, 18n);
+});
+
+// ============================================================================
+// draft-ietf-moq-transport-23 §9.1.8: MAX_CONTROL_MESSAGE_SIZE の交渉
+// ============================================================================
+
+/**
+ * initialize() の SETUP 交換を最後まで駆動する WebTransport の代役を作る
+ *
+ * connect.test.ts / 既存の initialize テストと同じ方式で、connect() と
+ * initialize() が使う API だけを持つ WebTransport の代役を組み立てる
+ * (モックライブラリは使わない)。サーバーの制御ストリームには、呼び出し側が
+ * 組み立てたバイト列 (ストリームタイプ + SETUP のフレーミング) を 1 回だけ流す。
+ * transport.close で渡された終了コードは closeCalls に記録する。
+ */
+function createSetupExchangeTransport(serverControlBytes: Uint8Array): {
+  transport: WebTransport;
+  sentChunks: Uint8Array[];
+  closeCalls: WebTransportCloseInfo[];
+} {
+  const sentChunks: Uint8Array[] = [];
+  const closeCalls: WebTransportCloseInfo[] = [];
+  const clientControlStream = new WritableStream<Uint8Array>({
+    write(chunk) {
+      sentChunks.push(chunk);
+    },
+  });
+  const serverControlStream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(serverControlBytes);
+    },
+  });
+  const transport = {
+    closed: new Promise<WebTransportCloseInfo>(() => {}),
+    createUnidirectionalStream: async () => clientControlStream,
+    incomingUnidirectionalStreams: new ReadableStream<ReadableStream<Uint8Array>>({
+      start(controller) {
+        controller.enqueue(serverControlStream);
+      },
+    }),
+    incomingBidirectionalStreams: new ReadableStream<WebTransportBidirectionalStream>({
+      start() {},
+    }),
+    datagrams: {
+      readable: new ReadableStream<Uint8Array>({ start() {} }),
+      writable: new WritableStream<Uint8Array>(),
+    },
+    close: (info?: WebTransportCloseInfo) => {
+      if (info !== undefined) {
+        closeCalls.push(info);
+      }
+    },
+  } as unknown as WebTransport;
+  return { transport, sentChunks, closeCalls };
+}
+
+/**
+ * サーバーの制御ストリームのバイト列 (ストリームタイプ + SETUP) を組み立てる
+ */
+function buildServerSetupControlBytes(serverSetupPayload: Uint8Array): Uint8Array {
+  const serverControlWriter = new ControlStreamWriter();
+  return concatUint8Arrays([
+    encodeVarint(MessageType.SETUP),
+    serverControlWriter.encode(MessageType.SETUP, serverSetupPayload),
+  ]);
+}
+
+/**
+ * クライアントが送信した SETUP のペイロードを復号する
+ */
+function decodeSentSetupPayload(sentChunks: Uint8Array[]): ReturnType<typeof decodeSetupPayload> {
+  const sent = concatUint8Arrays(sentChunks);
+  const [streamType, consumed] = decodeVarint(sent, 0);
+  assert.equal(Number(streamType), MessageType.SETUP);
+  const messages = new ControlStreamReader().feed(sent.slice(consumed));
+  assert.equal(messages.length, 1);
+  const message = messages[0];
+  if (message === undefined) {
+    throw new Error("送信した SETUP メッセージが見つからない");
+  }
+  assert.equal(message.type, MessageType.SETUP);
+  return decodeSetupPayload(message.payload);
+}
+
+/**
+ * draft-ietf-moq-transport-23 §9.1.8:
+ * MAX_CONTROL_MESSAGE_SIZE の既定値は送受信とも 65535 である。
+ * ピアの SETUP を受信する前から既定値を適用するため、initialize() 前の
+ * SessionImpl のフィールドも既定値で初期化される。
+ */
+test("SessionImpl: MAX_CONTROL_MESSAGE_SIZE の既定値は送受信とも 65535", () => {
+  const session = createSessionImpl();
+  assert.equal(session.localMaxControlMessageSize, 65535);
+  assert.equal(session.peerMaxControlMessageSize, 65535);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.1.8:
+ * ローカル受信上限は SETUP Option 0x09 で広告し、自 endpoint の受信上限として
+ * 保持する。ピアが広告しない場合の送信上限は既定値 65535 のままである。
+ * 送信側 writer はピアの上限 (65535) を超えるメッセージを送信前に拒否する。
+ */
+test("initialize: MAX_CONTROL_MESSAGE_SIZE を広告してローカル上限と writer 上限を保持する", async () => {
+  const serverSetupPayload = encodeSetupPayload(createSetup({ moqtImplementation: false }));
+  const { transport, sentChunks } = createSetupExchangeTransport(
+    buildServerSetupControlBytes(serverSetupPayload),
+  );
+  const session = new SessionImpl(transport, {});
+
+  await session.initialize({ maxControlMessageSize: 131072 });
+
+  // 自 endpoint の受信上限は広告値、ピアの送信上限は未広告の既定値になる
+  assert.equal(session.localMaxControlMessageSize, 131072);
+  assert.equal(session.peerMaxControlMessageSize, 65535);
+  assert.equal(session.controlWriter?.maxMessageSize, 65535);
+
+  // 送信した SETUP の Option 0x09 に広告値が載る
+  const sentSetup = decodeSentSetupPayload(sentChunks);
+  assert.equal(getSetupMaxControlMessageSize(sentSetup), 131072);
+
+  // ピアの上限 (65535) を超えるメッセージは送信前に拒否する
+  assert.throws(
+    () => session.controlWriter?.encode(0x10, new Uint8Array(65536)),
+    "exceeds peer maximum 65535",
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.1.8:
+ * ピアの SETUP が広告した MAX_CONTROL_MESSAGE_SIZE を送信上限として保持し、
+ * writer の上限を SETUP 受信後に更新する。ローカル受信上限とピア送信上限は
+ * 独立して保持できる (非対称な上限)。
+ */
+test("initialize: ピアの MAX_CONTROL_MESSAGE_SIZE を交渉して送信上限を更新する", async () => {
+  const serverSetupPayload = encodeSetupPayload(
+    createSetup({ maxControlMessageSize: 131072, moqtImplementation: false }),
+  );
+  const { transport, sentChunks } = createSetupExchangeTransport(
+    buildServerSetupControlBytes(serverSetupPayload),
+  );
+  const session = new SessionImpl(transport, {});
+
+  await session.initialize({ maxControlMessageSize: 200000 });
+
+  // ローカル受信上限とピア送信上限が非対称に保持される
+  assert.equal(session.localMaxControlMessageSize, 200000);
+  assert.equal(session.peerMaxControlMessageSize, 131072);
+  assert.equal(session.controlWriter?.maxMessageSize, 131072);
+
+  // 自 endpoint の広告値も送信した SETUP に載る
+  const sentSetup = decodeSentSetupPayload(sentChunks);
+  assert.equal(getSetupMaxControlMessageSize(sentSetup), 200000);
+
+  // ピアの上限ちょうどは送信でき、1 バイト超えると拒否される
+  assert.equal(session.controlWriter?.encode(0x10, new Uint8Array(131072)).length, 131072 + 4);
+  assert.throws(
+    () => session.controlWriter?.encode(0x10, new Uint8Array(131073)),
+    "exceeds peer maximum 131072",
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.1.8:
+ * MAX_CONTROL_MESSAGE_SIZE は 65535 以上でなければならない。ピアが最小値未満を
+ * 広告した場合は Setup Option の Value が定義に一致しないため
+ * MALFORMED_KEY_VALUE (0x6) でセッションを閉じる。
+ */
+test("initialize: ピアの MAX_CONTROL_MESSAGE_SIZE が最小値未満なら MALFORMED_KEY_VALUE で閉じる", async () => {
+  // createSetup は最小値未満を拒否するため、ピアのワイヤを直接組み立てる
+  const serverSetupPayload = encodeSetupPayload({
+    type: MessageType.SETUP,
+    parameters: [
+      { type: SetupOptionType.MAX_CONTROL_MESSAGE_SIZE, value: encodeVarint(65534) },
+      { type: SetupOptionType.MOQT_IMPLEMENTATION, value: new TextEncoder().encode("peer") },
+    ],
+  });
+  const { transport, closeCalls } = createSetupExchangeTransport(
+    buildServerSetupControlBytes(serverSetupPayload),
+  );
+  const session = new SessionImpl(transport, {});
+
+  let rejected: unknown;
+  try {
+    await session.initialize();
+  } catch (error) {
+    rejected = error;
+  }
+
+  assert.instanceOf(rejected, SessionError);
+  assert.equal((rejected as SessionError).code, SessionErrorCode.KEY_VALUE_FORMATTING_ERROR);
+  await waitForMacrotask();
+  assert.equal(closeCalls.length, 1);
+  assert.equal(closeCalls[0]?.closeCode, SessionErrorCode.KEY_VALUE_FORMATTING_ERROR);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9:
+ * SETUP 自身も受信上限の対象である。ピアの SETUP が宣言した Message Length が
+ * ローカル上限 (既定値 65535) を超えた場合は FIELD_LENGTH_EXCEEDED でセッションを閉じる。
+ */
+test("initialize: SETUP の Message Length がローカル上限を超えたら FIELD_LENGTH_EXCEEDED で閉じる", async () => {
+  // ストリームタイプ + SETUP の Type + 上限を超える Message Length (本文なし) だけを流す。
+  // 本文が揃う前でも宣言時点で FIELD_LENGTH_EXCEEDED になる。
+  const serverControlBytes = concatUint8Arrays([
+    encodeVarint(MessageType.SETUP),
+    encodeVarint(MessageType.SETUP),
+    encodeVarint(65536),
+  ]);
+  const { transport, closeCalls } = createSetupExchangeTransport(serverControlBytes);
+  const session = new SessionImpl(transport, {});
+
+  let rejected: unknown;
+  try {
+    await session.initialize();
+  } catch (error) {
+    rejected = error;
+  }
+
+  assert.instanceOf(rejected, SessionError);
+  assert.equal((rejected as SessionError).code, SessionErrorCode.FIELD_LENGTH_EXCEEDED);
+  await waitForMacrotask();
+  assert.equal(closeCalls.length, 1);
+  assert.equal(closeCalls[0]?.closeCode, SessionErrorCode.FIELD_LENGTH_EXCEEDED);
+});
+
+/**
+ * 送信上限超過のテスト用に、65535 バイトを超える要求 payload を作る
+ *
+ * 仕様上有効なピア上限 (65535 以上) のままフレーミングを失敗させるため、
+ * Message Parameter の length-prefixed 値に収まる大きな REGISTER トークンと
+ * 長い namespace を組み合わせる。tokenValue 65500 + token 構造 + namespace で
+ * 確実に 65535 バイトを超える。
+ */
+const LARGE_TOKEN_NAMESPACE = ["live", "p".repeat(100)];
+
+function largeRegisterToken(): AuthorizationToken {
+  return {
+    aliasType: AuthorizationTokenAliasType.REGISTER,
+    tokenAlias: 9n,
+    tokenType: 1n,
+    tokenValue: new Uint8Array(65500).fill(0x01),
+  };
+}
+
+/**
+ * 送信上限超過のテスト用セッションを作る (ピア上限は仕様どおり既定値 65535)
+ */
+function createEncodeFailureSession(): { session: SessionImpl; createdStreamCount: () => number } {
+  let createdStreamCount = 0;
+  const transport = {
+    closed: new Promise<WebTransportCloseInfo>(() => {}),
+    createBidirectionalStream: async () => {
+      createdStreamCount++;
+      throw new Error("呼ばれてはいけない処理が呼ばれた");
+    },
+  } as unknown as WebTransport;
+  const session = new SessionImpl(transport, {});
+  // REGISTER の予約が成立する上限を広告済みの状態にする
+  session.peerMaxAuthTokenCacheSize = 200000n;
+  // initialize() を経由しないため、既定上限 65535 の writer を明示的に用意する
+  session.controlWriter = new ControlStreamWriter();
+  return { session, createdStreamCount: () => createdStreamCount };
+}
+
+/**
+ * draft-ietf-moq-transport-23 §9:
+ * 送信する制御メッセージの Message Length がピアの MAX_CONTROL_MESSAGE_SIZE を
+ * 超える場合、フレーミング (ControlStreamWriter.encode) で送信前に失敗する。
+ * このとき双方向ストリームを開かず、pending と REGISTER のトークン予約を残さない
+ * ことを検証する (失敗経路の後始末)。
+ */
+test("subscribe: ピアの MAX_CONTROL_MESSAGE_SIZE を超える送信失敗で pending と予約を残さない", async () => {
+  const { session, createdStreamCount } = createEncodeFailureSession();
+  const token = largeRegisterToken();
+
+  let rejected: unknown;
+  try {
+    await session.subscribe(
+      LARGE_TOKEN_NAMESPACE,
+      "video",
+      { object: () => {} },
+      {
+        authorizationToken: token,
+      },
+    );
+  } catch (error) {
+    rejected = error;
+  }
+
+  // フレーミングで失敗したことを確認する (ストリーム作成より前)
+  assert.isDefined(rejected);
+  assert.instanceOf(rejected, Error);
+  assert.isTrue((rejected as Error).message.includes("exceeds peer maximum 65535"));
+  assert.equal(createdStreamCount(), 0);
+  // pending と REGISTER の予約を取り消している
+  assert.equal(session.pendingSubscribe.size, 0);
+  assert.equal(session.peerRegisteredAuthTokenSize, 0n);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9:
+ * PUBLISH でも送信上限超過は送信前に失敗し、pending とトークン予約、
+ * 双方向ストリームを残さない。
+ */
+test("publish: ピアの MAX_CONTROL_MESSAGE_SIZE を超える送信失敗で pending と予約を残さない", async () => {
+  const { session, createdStreamCount } = createEncodeFailureSession();
+  const token = largeRegisterToken();
+
+  let rejected: unknown;
+  try {
+    await session.publish(LARGE_TOKEN_NAMESPACE, "video", {}, { authorizationToken: token });
+  } catch (error) {
+    rejected = error;
+  }
+
+  assert.isDefined(rejected);
+  assert.instanceOf(rejected, Error);
+  assert.isTrue((rejected as Error).message.includes("exceeds peer maximum 65535"));
+  assert.equal(createdStreamCount(), 0);
+  assert.equal(session.pendingPublish.size, 0);
+  assert.equal(session.peerRegisteredAuthTokenSize, 0n);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9:
+ * FETCH でも送信上限超過は送信前に失敗し、pending とトークン予約、
+ * 双方向ストリームを残さない。
+ */
+test("fetch: ピアの MAX_CONTROL_MESSAGE_SIZE を超える送信失敗で pending と予約を残さない", async () => {
+  const { session, createdStreamCount } = createEncodeFailureSession();
+  const token = largeRegisterToken();
+
+  let rejected: unknown;
+  try {
+    await session.fetch(
+      LARGE_TOKEN_NAMESPACE,
+      "video",
+      { filter: { startGroup: 0n, startObject: 0n }, authorizationToken: token },
+      { object: () => {} },
+    );
+  } catch (error) {
+    rejected = error;
+  }
+
+  assert.isDefined(rejected);
+  assert.instanceOf(rejected, Error);
+  assert.isTrue((rejected as Error).message.includes("exceeds peer maximum 65535"));
+  assert.equal(createdStreamCount(), 0);
+  assert.equal(session.pendingFetch.size, 0);
+  assert.equal(session.peerRegisteredAuthTokenSize, 0n);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9:
+ * TRACK_STATUS でも送信上限超過は送信前に失敗し、pending とトークン予約、
+ * 双方向ストリームを残さない。
+ */
+test("trackStatus: ピアの MAX_CONTROL_MESSAGE_SIZE を超える送信失敗で pending と予約を残さない", async () => {
+  const { session, createdStreamCount } = createEncodeFailureSession();
+  const token = largeRegisterToken();
+
+  let rejected: unknown;
+  try {
+    await session.trackStatus(LARGE_TOKEN_NAMESPACE, "video", { authorizationToken: token });
+  } catch (error) {
+    rejected = error;
+  }
+
+  assert.isDefined(rejected);
+  assert.instanceOf(rejected, Error);
+  assert.isTrue((rejected as Error).message.includes("exceeds peer maximum 65535"));
+  assert.equal(createdStreamCount(), 0);
+  assert.equal(session.pendingTrackStatus.size, 0);
+  assert.equal(session.peerRegisteredAuthTokenSize, 0n);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.1.8:
+ * ローカルに指定する MAX_CONTROL_MESSAGE_SIZE が 65535 未満、または安全な整数で
+ * ない場合は、制御ストリームを開く前に初期化を失敗させる (公開設定の誤り)。
+ * WebTransport 接続を開いた後に検出すると、connect() が reject しても接続が
+ * 残るため、initialize の先頭で検証する。
+ */
+test("initialize: ローカルの MAX_CONTROL_MESSAGE_SIZE が最小値未満なら制御ストリームを開かずに失敗する", async () => {
+  const session = createSessionImpl();
+  let rejected: unknown;
+  try {
+    await session.initialize({ maxControlMessageSize: 65534 });
+  } catch (error) {
+    rejected = error;
+  }
+
+  assert.instanceOf(rejected, Error);
+  assert.isTrue((rejected as Error).message.includes("maxControlMessageSize"));
+  // 制御ストリームを開く前 (initialize の冒頭) で失敗するため、状態は connected のまま
+  assert.equal(session.state, "connected");
+});
+
+/**
+ * draft-ietf-moq-transport-23 §8.3 / §9.1.8:
+ * MAX_CONTROL_MESSAGE_SIZE の Length 0 は vi64 として解釈できない Value であり、
+ * SETUP のデコード検証で MALFORMED_KEY_VALUE (0x6) としてセッションを閉じる。
+ */
+test("initialize: 空の MAX_CONTROL_MESSAGE_SIZE で MALFORMED_KEY_VALUE として閉じる", async () => {
+  const serverSetupPayload = encodeSetupPayload({
+    type: MessageType.SETUP,
+    parameters: [{ type: SetupOptionType.MAX_CONTROL_MESSAGE_SIZE, value: new Uint8Array(0) }],
+  });
+  const { transport, closeCalls } = createSetupExchangeTransport(
+    buildServerSetupControlBytes(serverSetupPayload),
+  );
+  const session = new SessionImpl(transport, {});
+
+  let rejected: unknown;
+  try {
+    await session.initialize();
+  } catch (error) {
+    rejected = error;
+  }
+
+  assert.instanceOf(rejected, SessionError);
+  assert.equal((rejected as SessionError).code, SessionErrorCode.KEY_VALUE_FORMATTING_ERROR);
+  await waitForMacrotask();
+  assert.equal(closeCalls.length, 1);
+  assert.equal(closeCalls[0]?.closeCode, SessionErrorCode.KEY_VALUE_FORMATTING_ERROR);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9:
+ * 制御ストリームの受信ループでも、Message Length がローカル上限
+ * (既定値 65535) を超えたら FIELD_LENGTH_EXCEEDED でセッションを閉じる。
+ * 本文が揃う前の宣言時点で判定する。error コールバックの通知だけでなく、
+ * セッションが閉じ、そのコードが peer に伝わることまで検証する。
+ */
+test("startControlMessageLoop: ローカル上限を超える制御メッセージで FIELD_LENGTH_EXCEEDED で閉じる", async () => {
+  const ctx = createControlLoopContext(20);
+  ctx.start();
+  // Type 0x10 + Message Length 65536 (vi64 の [0xc1, 0x00, 0x00]) を本文なしで流す
+  ctx.enqueue(new Uint8Array([0x10, 0xc1, 0x00, 0x00]));
+  await waitForMacrotask();
+
+  assert.isDefined(ctx.sessionError.current);
+  assert.instanceOf(ctx.sessionError.current, SessionError);
+  assert.equal(
+    (ctx.sessionError.current as SessionError).code,
+    SessionErrorCode.FIELD_LENGTH_EXCEEDED,
+  );
+  // MUST のセッション終了まで到達していること (通知だけでは通らない)
+  assert.equal(ctx.session.state, "closed");
+  assert.equal(ctx.closeCalls.length, 1);
+  assert.equal(ctx.closeCalls[0]?.closeCode, SessionErrorCode.FIELD_LENGTH_EXCEEDED);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9:
+ * FIELD_LENGTH_EXCEEDED の処理ヘルパーの契約を検証する。
+ * セッションを閉じるのは connected のときの 1 回だけだが、戻り値は閉鎖済みでも
+ * 「FLE として処理済み」を返す (呼び出し側を汎用 close 経路へフォールバックさせず、
+ * error コールバックの二重通知を防ぐ)。
+ */
+test("sessionHandleFieldLengthExceeded: FLE は閉鎖済みでも処理済みとして扱う", () => {
+  const closedWith: SessionError[] = [];
+  let state: "connected" | "closed" = "connected";
+  const session = {
+    get sessionState() {
+      return state;
+    },
+  };
+  const closeWithError = (error: SessionError): void => {
+    closedWith.push(error);
+    state = "closed";
+  };
+  const fieldLengthExceeded = new SessionError(
+    "control message too long",
+    SessionErrorCode.FIELD_LENGTH_EXCEEDED,
+  );
+
+  // 1 回目は同じエラーでセッションを閉じる
+  assert.isTrue(sessionHandleFieldLengthExceeded(session, closeWithError, fieldLengthExceeded));
+  assert.equal(closedWith.length, 1);
+  assert.equal(closedWith[0], fieldLengthExceeded);
+  // 閉鎖済みでも「処理済み」を返し、呼び出し側を汎用の close 経路へ
+  // フォールバックさせない (error コールバックの二重通知を防ぐ)
+  assert.isTrue(sessionHandleFieldLengthExceeded(session, closeWithError, fieldLengthExceeded));
+  assert.equal(closedWith.length, 1);
+
+  // FIELD_LENGTH_EXCEEDED 以外のエラーでは閉じない
+  state = "connected";
+  const protocolViolation = new SessionError(
+    "protocol violation",
+    SessionErrorCode.PROTOCOL_VIOLATION,
+  );
+  assert.isFalse(sessionHandleFieldLengthExceeded(session, closeWithError, protocolViolation));
+  // SessionError でない値でも閉じない
+  assert.isFalse(sessionHandleFieldLengthExceeded(session, closeWithError, new Error("boom")));
+  assert.equal(closedWith.length, 1);
 });

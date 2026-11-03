@@ -13,6 +13,7 @@
 
 import { test, assert } from "vite-plus/test";
 import { connect } from "./connect";
+import { SessionErrorCode } from "./error";
 import { ControlStreamReader, ControlStreamWriter } from "./controlStream";
 import { concatUint8Arrays } from "./testSupport/helpers";
 import { decodeVarint, encodeVarint } from "./varint";
@@ -23,7 +24,12 @@ import {
   MessageType,
   getSetupAuthorizationTokens,
 } from "./message";
-import { createSetup, decodeSetupPayload, encodeSetupPayload } from "./message/setup";
+import {
+  createSetup,
+  decodeSetupPayload,
+  encodeSetupPayload,
+  getSetupMaxControlMessageSize,
+} from "./message/setup";
 
 /**
  * クライアントの SETUP 送信まで connect() を駆動する WebTransport の代役を差し込む
@@ -40,9 +46,11 @@ function installSetupHandshakeTransport(): {
   restore(): void;
   createdUrls: string[];
   sentChunks: Uint8Array[];
+  closeCalls: WebTransportCloseInfo[];
 } {
   const createdUrls: string[] = [];
   const sentChunks: Uint8Array[] = [];
+  const closeCalls: WebTransportCloseInfo[] = [];
   const clientControlStream = new WritableStream<Uint8Array>({
     write(chunk) {
       sentChunks.push(chunk);
@@ -66,6 +74,11 @@ function installSetupHandshakeTransport(): {
   const transport = {
     closed: new Promise<WebTransportCloseInfo>(() => {}),
     ready: Promise.resolve(),
+    close: (info?: WebTransportCloseInfo): void => {
+      if (info !== undefined) {
+        closeCalls.push(info);
+      }
+    },
     createUnidirectionalStream: async () => clientControlStream,
     incomingUnidirectionalStreams: new ReadableStream<ReadableStream<Uint8Array>>({
       start(controller) {
@@ -97,16 +110,17 @@ function installSetupHandshakeTransport(): {
     },
     createdUrls,
     sentChunks,
+    closeCalls,
   };
 }
 
 /**
- * クライアントが送った制御ストリームのバイト列から SETUP の Authorization Token を取り出す
+ * クライアントが送った制御ストリームのバイト列から SETUP のペイロードをデコードする
  *
- * ストリームタイプ (0x2F00 = SETUP) とフレーミングを外し、Setup Options の
- * AUTHORIZATION TOKEN (0x03) をデコードする (draft-ietf-moq-transport-22 §9.1.4 / §8.9)。
+ * ストリームタイプ (0x2F00 = SETUP) と制御メッセージのフレーミング
+ * (Type (vi64) + Message Length (vi64) + Body、draft-ietf-moq-transport-23 §9) を外す。
  */
-function decodeSentAuthorizationTokens(sentChunks: Uint8Array[]): AuthorizationToken[] {
+function decodeSentSetup(sentChunks: Uint8Array[]): ReturnType<typeof decodeSetupPayload> {
   const sent = concatUint8Arrays(sentChunks);
   const [streamType, streamTypeConsumed] = decodeVarint(sent, 0);
   assert.strictEqual(Number(streamType), MessageType.SETUP);
@@ -117,7 +131,17 @@ function decodeSentAuthorizationTokens(sentChunks: Uint8Array[]): AuthorizationT
   assert.isDefined(message);
   assert.strictEqual(message.type, MessageType.SETUP);
 
-  return getSetupAuthorizationTokens(decodeSetupPayload(message.payload));
+  return decodeSetupPayload(message.payload);
+}
+
+/**
+ * クライアントが送った制御ストリームのバイト列から SETUP の Authorization Token を取り出す
+ *
+ * Setup Options の AUTHORIZATION TOKEN (0x03) をデコードする
+ * (draft-ietf-moq-transport-22 §9.1.4 / §8.9)。
+ */
+function decodeSentAuthorizationTokens(sentChunks: Uint8Array[]): AuthorizationToken[] {
+  return getSetupAuthorizationTokens(decodeSentSetup(sentChunks));
 }
 
 /**
@@ -222,4 +246,90 @@ test("connect: 復号できない c4m は WebTransport を作る前に throw す
   // 接続を始めない (WebTransport を作らない)
   assert.deepEqual(fake.createdUrls, []);
   assert.deepEqual(fake.sentChunks, []);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.1.8:
+ * ConnectOptions.maxControlMessageSize が SETUP Option 0x09 として広告されること
+ * (connect から initialize への配線) を検証する。
+ */
+test("connect: maxControlMessageSize を SETUP で広告する", async () => {
+  const fake = installSetupHandshakeTransport();
+  try {
+    await connect("moqt://example.com/moqt", {}, { maxControlMessageSize: 131072 });
+  } finally {
+    fake.restore();
+  }
+
+  const setup = decodeSentSetup(fake.sentChunks);
+  assert.strictEqual(getSetupMaxControlMessageSize(setup), 131072);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.1.8:
+ * 65535 未満の MAX_CONTROL_MESSAGE_SIZE は、WebTransport 接続を作る前に拒否する。
+ * 接続を確立してから initialize() で検出すると、connect() が reject しても
+ * 接続が開いたまま残るためである。
+ */
+test("connect: maxControlMessageSize が安全な整数でなければ WebTransport を作る前に throw する", async () => {
+  const fake = installSetupHandshakeTransport();
+  let thrown: Error | undefined;
+  try {
+    await connect("moqt://example.com/moqt", {}, { maxControlMessageSize: 1.5 });
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  } finally {
+    fake.restore();
+  }
+
+  assert.isDefined(thrown);
+  assert.isTrue(
+    thrown?.message.includes("maxControlMessageSize must be a safe integer of at least 65535"),
+  );
+  assert.deepEqual(fake.createdUrls, []);
+});
+
+test("connect: 不正な maxControlMessageSize は WebTransport を作る前に throw する", async () => {
+  const fake = installSetupHandshakeTransport();
+  let thrown: Error | undefined;
+  try {
+    await connect("moqt://example.com/moqt", {}, { maxControlMessageSize: 65534 });
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  } finally {
+    fake.restore();
+  }
+
+  assert.isDefined(thrown);
+  assert.isTrue(
+    thrown?.message.includes("maxControlMessageSize must be a safe integer of at least 65535"),
+  );
+  // 接続を始めない (WebTransport を作らない)
+  assert.deepEqual(fake.createdUrls, []);
+  assert.deepEqual(fake.sentChunks, []);
+});
+
+/**
+ * SETUP の生成がローカル設定の誤りで失敗した場合 (ここでは KVP の値上限を超える
+ * moqtImplementation)、connect() は Session を返せない。WebTransport を開いたまま
+ * 残さないよう、初期化失敗時に transport を閉じることを検証する。
+ */
+test("connect: 初期化に失敗したら WebTransport を閉じて reject する", async () => {
+  const fake = installSetupHandshakeTransport();
+  let thrown: Error | undefined;
+  try {
+    // moqtImplementation は SETUP Option の Value になる。65535 バイト超は
+    // §8.3 の KVP 上限違反であり、SETUP の生成時に送信前拒否される。
+    await connect("moqt://example.com/moqt", {}, { moqtImplementation: "x".repeat(65536) });
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  } finally {
+    fake.restore();
+  }
+
+  assert.isDefined(thrown);
+  assert.isTrue(thrown?.message.includes("exceeds maximum 65535"));
+  // Session を返せないため、接続を開いたままにせず閉じている
+  assert.equal(fake.closeCalls.length, 1);
+  assert.equal(fake.closeCalls[0]?.closeCode, SessionErrorCode.INTERNAL_ERROR);
 });

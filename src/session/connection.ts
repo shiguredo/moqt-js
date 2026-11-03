@@ -14,12 +14,15 @@
 import { ControlStreamReader, ControlStreamWriter, type ControlMessage } from "../controlStream";
 import { IncompleteDataError, SessionError, SessionErrorCode } from "../error";
 import {
+  DEFAULT_MAX_CONTROL_MESSAGE_SIZE,
   MessageType,
+  assertMaxControlMessageSize,
   createSetup,
   decodeSetupPayload,
   encodeSetupPayload,
   getSetupAuthority,
   getSetupMaxAuthTokenCacheSize,
+  getSetupMaxControlMessageSize,
   getSetupMaxFilterRanges,
   getSetupMaxRequestUpdates,
   getSetupPath,
@@ -34,6 +37,7 @@ import {
   setupTokenRegistration,
 } from "./authTokenCache";
 import { toSessionCloseError } from "./errors";
+import { sessionHandleFieldLengthExceeded } from "./lifecycle";
 import { concatChunks } from "./stream";
 import type { SessionState } from "./publicTypes";
 
@@ -89,6 +93,20 @@ export interface ConnectionInitializeOptions {
    */
   maxFilterRanges?: number;
   /**
+   * SETUP で広告する MAX_CONTROL_MESSAGE_SIZE (draft-ietf-moq-transport-23 §9.1.8)。
+   *
+   * 自 endpoint が受信を許す制御メッセージの Message Length (本文長) の上限。
+   * 省略時は Option を送信せず、既定値 65535 を使う。65535 以上、
+   * Number.MAX_SAFE_INTEGER 以下の安全な整数を指定する。範囲外は制御ストリームを
+   * 開く前にエラーになる。
+   *
+   * draft-ietf-moq-transport-23 §15.5 (Resource Exhaustion):
+   * 完成した制御メッセージをバッファする実装は、その上限ぶんのメモリを
+   * ストリームごとに確保する。メッセージ全体を受け取れるだけのフロー制御を
+   * 確保できない場合はデッドロックし得るため、大きくしすぎないこと。
+   */
+  maxControlMessageSize?: number;
+  /**
    * 制御メッセージの受信タイムアウト (§12.2 CONTROL_MESSAGE_TIMEOUT)。
    * 0 以下でタイムアウトしない。
    */
@@ -139,10 +157,16 @@ export interface ConnectionSessionInternal {
   localMaxFilterRanges: number;
   localMaxRequestUpdates: number;
   localMaxAuthTokenCacheSize: number;
+  // draft-ietf-moq-transport-23 §9.1.8: 自 endpoint が広告した MAX_CONTROL_MESSAGE_SIZE
+  // (受信する制御メッセージの Message Length の上限)
+  localMaxControlMessageSize: number;
   // draft-ietf-moq-transport-22 §9.1.6 / §9.1.7 / §9.1.3: ピアが広告した上限
   peerMaxFilterRanges: number;
   peerMaxRequestUpdates: number;
   peerMaxAuthTokenCacheSize: bigint;
+  // draft-ietf-moq-transport-23 §9.1.8: ピアが広告した MAX_CONTROL_MESSAGE_SIZE
+  // (送信する制御メッセージの Message Length の上限。SETUP 受信前は既定値)
+  peerMaxControlMessageSize: number;
   // draft-ietf-moq-transport-22 §8.9 / §9.1.4: 自 SETUP の REGISTER の登録成否
   setupTokenRegistration: { tokenAlias: bigint; registered: boolean } | undefined;
   // SETUP に載せたトークン (登録失敗時に USE_VALUE へ戻す値の出典)
@@ -226,6 +250,25 @@ export function connectionResolveLocalMaxRequestUpdates(options?: {
 }): number {
   return options?.maxRequestUpdates ?? 0;
 }
+
+/**
+ * SETUP で広告する MAX_CONTROL_MESSAGE_SIZE の保持値を解決する
+ *
+ * draft-ietf-moq-transport-23 §9.1.8:
+ * 省略時は既定値 65535 を自 endpoint の受信上限として扱う。65535 未満は仕様違反の
+ * 広告値であるため、ローカル設定の誤りとして接続前に拒否する。
+ */
+export function connectionResolveLocalMaxControlMessageSize(options?: {
+  maxControlMessageSize?: number;
+}): number {
+  const maxControlMessageSize = options?.maxControlMessageSize;
+  if (maxControlMessageSize === undefined) {
+    return DEFAULT_MAX_CONTROL_MESSAGE_SIZE;
+  }
+  assertMaxControlMessageSize(maxControlMessageSize);
+  return maxControlMessageSize;
+}
+
 export async function connectionInitialize(
   session: ConnectionSessionInternal,
   options?: {
@@ -247,6 +290,15 @@ export async function connectionInitialize(
      * 省略時は送信しない (既定値 0 = Range Filter 受信拒否)。
      */
     maxFilterRanges?: number;
+    /**
+     * SETUP で広告する MAX_CONTROL_MESSAGE_SIZE (draft-ietf-moq-transport-23 §9.1.8)。
+     *
+     * 自 endpoint が受信を許す制御メッセージの Message Length (本文長) の上限。
+     * 省略時は Option を送信せず、既定値 65535 を使う。65535 以上、
+     * Number.MAX_SAFE_INTEGER 以下の安全な整数を指定する。範囲外は制御ストリームを
+     * 開く前にエラーになる。詳細は ConnectionInitializeOptions を参照する。
+     */
+    maxControlMessageSize?: number;
     /**
      * 制御メッセージの受信タイムアウト (§12.2 CONTROL_MESSAGE_TIMEOUT)。
      * 0 以下でタイムアウトしない。
@@ -277,8 +329,13 @@ export async function connectionInitialize(
   // 制御ストリームは単方向ストリームのペアに変更された。
   // クライアントは送信用単方向ストリームを開き、サーバーの単方向ストリームを受信する。
 
-  session.controlReader = new ControlStreamReader();
-  session.controlWriter = new ControlStreamWriter();
+  // draft-ietf-moq-transport-23 §9.1.8:
+  // ローカル受信上限と peer 送信上限を別々に保持する。ピアの SETUP を受信する前は
+  // 送信上限に既定値 65535 を使い、SETUP 自身にも受信上限を適用する。
+  session.localMaxControlMessageSize = connectionResolveLocalMaxControlMessageSize(options);
+  session.peerMaxControlMessageSize = DEFAULT_MAX_CONTROL_MESSAGE_SIZE;
+  session.controlReader = new ControlStreamReader(session.localMaxControlMessageSize);
+  session.controlWriter = new ControlStreamWriter(session.peerMaxControlMessageSize);
 
   // 送信用単方向ストリームを開く
   session.controlSendStream = await session.transport.createUnidirectionalStream();
@@ -335,6 +392,9 @@ export async function connectionInitialize(
       ? { maxRequestUpdates: options.maxRequestUpdates }
       : {}),
     ...(options?.maxFilterRanges !== undefined ? { maxFilterRanges: options.maxFilterRanges } : {}),
+    ...(options?.maxControlMessageSize !== undefined
+      ? { maxControlMessageSize: options.maxControlMessageSize }
+      : {}),
   });
   const setupPayload = encodeSetupPayload(setup);
   const setupMessage = session.controlWriter.encode(MessageType.SETUP, setupPayload);
@@ -433,10 +493,11 @@ export async function connectionInitialize(
   // 先頭メッセージ種別の検証・SETUP のデコードと検証・AUTHORIZATION TOKEN の処理で
   // 検出した違反は「セッションを閉じる」MUST の対象である。詳細は
   // decodeAndValidateSetupClosingOnViolation を参照する。
-  const { message: msg, decoded: decodedSetup } = connectionDecodeAndValidateSetup(
-    session,
-    messages,
-  );
+  const {
+    message: msg,
+    decoded: decodedSetup,
+    peerMaxControlMessageSize,
+  } = connectionDecodeAndValidateSetup(session, messages);
 
   // draft-ietf-moq-transport-22 §9.1.3:
   // ピアの MAX_AUTH_TOKEN_CACHE_SIZE を取得（デフォルト 0 = Alias 使用禁止）
@@ -470,10 +531,20 @@ export async function connectionInitialize(
   // ピアの MAX_FILTER_RANGES を取得（デフォルト 0 = Range Filter 送信禁止）
   session.peerMaxFilterRanges = getSetupMaxFilterRanges(decodedSetup);
 
+  // draft-ietf-moq-transport-23 §9.1.8:
+  // ピアの MAX_CONTROL_MESSAGE_SIZE (SETUP 受信前は既定値 65535) を、以後の
+  // すべての制御メッセージ送信に適用する。値の検証は
+  // connectionDecodeAndValidateSetup で済んでいる。
+  session.peerMaxControlMessageSize = peerMaxControlMessageSize;
+  if (session.controlWriter) {
+    session.controlWriter.setMaxMessageSize(session.peerMaxControlMessageSize);
+  }
+
   session.emitDebug("recv", MessageType.SETUP, msg.payload, {
     peerMaxAuthTokenCacheSize: peerMaxAuthTokenCacheSize.toString(),
     peerMaxRequestUpdates: session.peerMaxRequestUpdates.toString(),
     peerMaxFilterRanges: session.peerMaxFilterRanges.toString(),
+    peerMaxControlMessageSize: session.peerMaxControlMessageSize.toString(),
   });
 
   // SETUP 確立後の受信ループを開始する
@@ -498,7 +569,8 @@ export async function connectionInitialize(
  * 正規化できない例外 (ピア起因の終了など) は閉じずにそのまま伝播させる。
  *
  * @param messages - readSetupMessages が返した制御メッセージ列 (先頭が SETUP)
- * @returns 検証済みの先頭メッセージとデコード結果
+ * @returns 検証済みの先頭メッセージ、デコード結果、ピアが広告した
+ *   MAX_CONTROL_MESSAGE_SIZE (SETUP 受信後の送信上限)
  */
 export function connectionDecodeAndValidateSetup(
   session: ConnectionSessionInternal,
@@ -506,6 +578,7 @@ export function connectionDecodeAndValidateSetup(
 ): {
   message: ControlMessage;
   decoded: ReturnType<typeof decodeSetupPayload>;
+  peerMaxControlMessageSize: number;
 } {
   try {
     const msg = messages[0];
@@ -543,6 +616,12 @@ export function connectionDecodeAndValidateSetup(
       );
     }
 
+    // draft-ietf-moq-transport-23 §9.1.8:
+    // MAX_CONTROL_MESSAGE_SIZE は 65535 以上でなければならず、値は vi64 として
+    // 宣言 Length と一致しなければならない。違反は仕様違反としてセッションを閉じる。
+    // ここで値を確定させ、SETUP 受信後の送信上限として呼び出し元へ返す。
+    const peerMaxControlMessageSize = getSetupMaxControlMessageSize(decoded);
+
     // draft-ietf-moq-transport-22 §9.1.4 / §8.9:
     // 受信 SETUP の AUTHORIZATION TOKEN オプションを処理する。DELETE / USE_ALIAS は
     // §9.1.4 の MUST に基づく防御的検査として PROTOCOL_VIOLATION、登録済み Alias の
@@ -551,7 +630,7 @@ export function connectionDecodeAndValidateSetup(
     // Token 構造がデコードできない場合は KEY_VALUE_FORMATTING_ERROR になる。
     processSetupAuthorizationTokens(session.receivedAuthTokens, decoded.parameters);
 
-    return { message: msg, decoded };
+    return { message: msg, decoded, peerMaxControlMessageSize };
   } catch (error) {
     const sessionError = toSessionCloseError(error);
     if (sessionError !== null) {
@@ -570,6 +649,8 @@ export function connectionDecodeAndValidateSetup(
  * @param controlStream - サーバーが開いた制御ストリーム (単方向)
  * @param controlBuffer - ストリームタイプ varint を読み飛ばした後の残りバイト列
  * @returns 1 件以上の制御メッセージ列 (先頭が SETUP)
+ * @throws SessionError - SETUP の Message Length がローカル上限を超えた場合。
+ *   FIELD_LENGTH_EXCEEDED でセッションを閉じてから reject する。
  */
 export async function connectionReadSetupMessages(
   session: ConnectionSessionInternal,
@@ -593,6 +674,19 @@ export async function connectionReadSetupMessages(
       messages = controlReader.feed(chunk);
     }
     return messages;
+  } catch (error) {
+    // draft-ietf-moq-transport-23 §9:
+    // SETUP 自身の Message Length がローカル上限を超えた場合は FIELD_LENGTH_EXCEEDED で
+    // セッションを閉じる。initialize() の reject だけではピアに終了コードが伝わらない。
+    // それ以外の SessionError (接続断など) は呼び出し元の reject に委ねる。
+    sessionHandleFieldLengthExceeded(
+      session,
+      (sessionError) => {
+        session.closeWithError(sessionError);
+      },
+      error,
+    );
+    throw error;
   } finally {
     reader.releaseLock();
   }

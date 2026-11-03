@@ -1,6 +1,9 @@
 /**
  * MOQT Subscribe Messages
  * draft-ietf-moq-transport-22 Section 9.6 (SUBSCRIBE) — 9.7 (SUBSCRIBE_OK) — 9.5 (REQUEST_UPDATE)
+ *
+ * 制御メッセージのフレーミング (Type / Message Length) は
+ * draft-ietf-moq-transport-23 §9 に従う。
  */
 
 import { decodeVarint, encodeVarint } from "../varint";
@@ -67,13 +70,13 @@ export interface RequestUpdate {
  *
  * draft-ietf-moq-transport-22 Section 9.6 (SUBSCRIBE):
  * SUBSCRIBE Message {
- *   Type (i) = 0x3,
- *   Length (16),
- *   Request ID (i),
+ *   Type (vi64) = 0x3,
+ *   Length (vi64),
+ *   Request ID (vi64),
  *   Track Namespace (..),
- *   Track Name Length (i),
+ *   Track Name Length (vi64),
  *   Track Name (..),
- *   Number of Parameters (i),
+ *   Number of Parameters (vi64),
  *   Parameters (..) ...
  * }
  */
@@ -153,10 +156,10 @@ export function decodeSubscribePayload(data: Uint8Array, offset = 0): Subscribe 
  *
  * draft-ietf-moq-transport-22 Section 9.7 (SUBSCRIBE_OK):
  * SUBSCRIBE_OK Message {
- *   Type (i) = 0x4,
- *   Length (16),
- *   Track Alias (i),
- *   Number of Parameters (i),
+ *   Type (vi64) = 0x4,
+ *   Length (vi64),
+ *   Track Alias (vi64),
+ *   Number of Parameters (vi64),
  *   Parameters (..) ...,
  *   Track Properties (..)
  * }
@@ -211,8 +214,8 @@ export function decodeSubscribeOkPayload(data: Uint8Array, offset = 0): Subscrib
  *
  * draft-ietf-moq-transport-22 Section 9.5 (REQUEST_UPDATE):
  * REQUEST_UPDATE Message {
- *   Type (i) = 0x2,
- *   Length (16),
+ *   Type (vi64) = 0x2,
+ *   Length (vi64),
  *   Request ID (vi64),
  *   Number of Parameters (vi64),
  *   Parameters (..) ...

@@ -1,6 +1,9 @@
 /**
  * MOQT Session Messages
  * draft-ietf-moq-transport-22 Section 9.2 (GOAWAY) — 9.4 (REQUEST_ERROR)
+ *
+ * 制御メッセージのフレーミング (Type / Message Length) は
+ * draft-ietf-moq-transport-23 §9 に従う。
  */
 
 import { decodeVarint, encodeVarint } from "../varint";
@@ -26,7 +29,7 @@ import { type Property, decodeProperties, encodeProperties } from "../properties
  *
  * GOAWAY Message {
  *   Type (vi64) = 0x10,
- *   Length (16),
+ *   Length (vi64),
  *   New Session URI Length (vi64),
  *   New Session URI (..),
  *   Timeout (vi64),
@@ -55,7 +58,7 @@ export interface Goaway {
  *
  * REQUEST_OK Message {
  *   Type (vi64) = 0x7,
- *   Length (16),
+ *   Length (vi64),
  *   Number of Parameters (vi64),
  *   Parameters (..),
  *   Track Properties (..),
@@ -163,7 +166,7 @@ export function decodeRedirect(data: Uint8Array, offset: number): [Redirect, num
  *
  * REQUEST_ERROR Message {
  *   Type (vi64) = 0x5,
- *   Length (16),
+ *   Length (vi64),
  *   Error Code (vi64),
  *   Retry Interval (vi64),
  *   Error Reason (Reason Phrase),
@@ -260,7 +263,7 @@ export function decodeGoawayPayload(data: Uint8Array, offset = 0): Goaway {
  *
  * PUBLISH_STATE_NOTIFY Message {
  *   Type (vi64) = 0x22,
- *   Length (16),
+ *   Length (vi64),
  *   Number of Parameters (vi64),
  *   Parameters (..),
  * }

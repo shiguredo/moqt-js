@@ -16,6 +16,7 @@ import {
   type LocationFilter,
   encodeParameters,
   decodeParameters,
+  encodeKeyValuePairs,
   assertNoDuplicateMessageParameterTypes,
   isRepeatableMessageParameterType,
   decodeKeyValuePairs,
@@ -1699,4 +1700,87 @@ test("isSameLocationFilter: フィールドの有無または値が違えば非�
       { startGroup: 1n, startObject: 0n, endGroupDelta: 0n, endObject: 6n },
     ),
   );
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.19 / §15.5:
+ * Message Parameter の個々の Value 長に上限はなく、制御メッセージ全体の長さ
+ * (MAX_CONTROL_MESSAGE_SIZE) だけが上限である。§8.3 の 2^16-1 上限は
+ * Key-Value-Pair の規則であり、Message Parameter には適用しない。
+ */
+test("Message Parameter: 65535 バイトを超える length-prefixed 値を往復できる", () => {
+  // AUTHORIZATION TOKEN (0x03) は length-prefixed。70000 バイトの Value を往復する
+  const value = new Uint8Array(70000).fill(0x5a);
+  const encoded = encodeParameters([{ type: 0x03, value }]);
+  const [decoded, consumed] = decodeParameters(encoded);
+
+  assert.equal(decoded.length, 1);
+  assert.equal(decoded[0]?.type, 0x03);
+  assert.deepEqual(decoded[0]?.value, value);
+  assert.equal(consumed, encoded.length);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.19 / §15.5:
+ * self-length-prefixed な Value (内側に Length を持つ) も同じく、メッセージ全体長
+ * だけが上限である。
+ */
+test("Message Parameter: 65535 バイトを超える self-length-prefixed 値を往復できる", () => {
+  // SUBGROUP_FILTER (0x25) は self-length-prefixed。内側 Length 70000 の Value を往復する
+  const inner = new Uint8Array(70000).fill(0x33);
+  const value = new Uint8Array(encodeVarint(70000).length + inner.length);
+  value.set(encodeVarint(70000), 0);
+  value.set(inner, encodeVarint(70000).length);
+  const encoded = encodeParameters([{ type: 0x25, value }]);
+  const [decoded, consumed] = decodeParameters(encoded);
+
+  assert.equal(decoded.length, 1);
+  assert.equal(decoded[0]?.type, 0x25);
+  assert.deepEqual(decoded[0]?.value, value);
+  assert.equal(consumed, encoded.length);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §8.3:
+ * Key-Value-Pair (Setup Option / Property) の Value 上限 2^16-1 は維持する。
+ * 超過する値を送信しようとした場合は、受信側が FIELD_LENGTH_EXCEEDED で
+ * セッションを閉じるため、送信前に拒否する。
+ */
+test("Key-Value-Pair: 65535 バイトを超える奇数型の Value は送信できない", () => {
+  let thrown: Error | undefined;
+  try {
+    encodeKeyValuePairs([{ type: 0x0f, value: new Uint8Array(65536) }]);
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.isDefined(thrown);
+  assert.match(thrown?.message ?? "", /exceeds maximum 65535/);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §8.3:
+ * 受信側でも Key-Value-Pair の Value 上限 2^16-1 を検査する。
+ * 65536 バイトを宣言する Setup Option は受信時に拒否する。
+ * (現行のエラーコードは PROTOCOL_VIOLATION。draft-23 の FIELD_LENGTH_EXCEEDED への
+ *  分類移行は別 issue で扱う)
+ */
+test("Key-Value-Pair: 65535 バイトを超える Value は受信できない", () => {
+  // 奇数型 (0x0f) の Length 65536 を宣言する KVP を手組みする
+  // (Setup Options はカウントプレフィックスを持たない)
+  const encoded = concatUint8Arrays([
+    encodeVarint(0x0f),
+    encodeVarint(65536),
+    new Uint8Array(65536),
+  ]);
+
+  let thrown: Error | undefined;
+  try {
+    decodeKeyValuePairs(encoded);
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.isDefined(thrown);
+  assert.instanceOf(thrown, ProtocolViolationError);
 });

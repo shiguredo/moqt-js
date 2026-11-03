@@ -286,6 +286,25 @@ function isPropertyLengthOverLimit(length: bigint): boolean {
 }
 
 /**
+ * 送信する Property の Value 長を検査する
+ *
+ * draft-ietf-moq-transport-23 §8.3:
+ * Key-Value-Pair の Value の最大長は 2^16-1 バイトである。超過する値を送ると
+ * ピアが FIELD_LENGTH_EXCEEDED でセッションを閉じる (現行の受信実装は
+ * PROTOCOL_VIOLATION。分類の移行は別 issue) ため、送信前に拒否する。
+ *
+ * @param dataLength - Value のバイト長
+ * @throws Error - 最大長を超える場合
+ */
+export function assertPropertyValueLength(dataLength: number): void {
+  if (dataLength > Number(MAX_PROPERTY_VALUE_LENGTH)) {
+    throw new Error(
+      `property value length ${dataLength} exceeds maximum ${MAX_PROPERTY_VALUE_LENGTH}`,
+    );
+  }
+}
+
+/**
  * 既知 Type の Length 宣言超過が serialization 不一致に当たるか判定する
  *
  * draft-ietf-moq-transport-22 §8.3:
@@ -529,6 +548,7 @@ export function encodeProperty(header: Property): Uint8Array {
   if (header.data === undefined) {
     throw new Error(`odd extension ID ${header.id} requires data`);
   }
+  assertPropertyValueLength(header.data.length);
   const lengthBytes = encodeVarint(BigInt(header.data.length));
   const result = new Uint8Array(idBytes.length + lengthBytes.length + header.data.length);
   result.set(idBytes, 0);
@@ -636,6 +656,7 @@ function encodePropertyWithDelta(header: Property, previousId: bigint): Uint8Arr
   if (header.data === undefined) {
     throw new Error(`odd extension ID ${header.id} requires data`);
   }
+  assertPropertyValueLength(header.data.length);
   const lengthBytes = encodeVarint(BigInt(header.data.length));
   const result = new Uint8Array(deltaBytes.length + lengthBytes.length + header.data.length);
   result.set(deltaBytes, 0);
@@ -687,6 +708,8 @@ export function encodeProperties(headers: Property[]): Uint8Array {
 export function encodeImmutableProperties(immutable: ImmutableProperties): Uint8Array {
   // 内部の拡張を全てエンコードして結合（delta encoding 使用）
   const innerBytes = encodeProperties(immutable.extensions);
+  // 内側の連結も 1 つの奇数 ID Property の Value になるため、§8.3 の上限を検査する
+  assertPropertyValueLength(innerBytes.length);
 
   // ID + length + innerBytes
   const idBytes = encodeVarint(MOQTPropertyId.IMMUTABLE_PROPERTIES);

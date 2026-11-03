@@ -5,7 +5,9 @@
  */
 
 import { type ConnectCallbacks, type ConnectOptions, type Session, SessionImpl } from "./session";
+import { SessionErrorCode } from "./error";
 import { normalizeMoqtUri } from "./moqtUri";
+import { assertMaxControlMessageSize } from "./message";
 import { assertMsfConnectionSupported } from "./msf";
 import { resolveMsfAuthorizationToken } from "./msf/c4mAuthorization";
 
@@ -65,6 +67,13 @@ export async function connect(
   // (?? は左辺が undefined のときだけ右辺を評価するため、明示時は c4m を読まない)。
   const authorizationToken = options?.authorizationToken ?? resolveMsfAuthorizationToken(fragment);
 
+  // draft-ietf-moq-transport-23 §9.1.8:
+  // 広告値の検証を WebTransport 接続の確立前に行う。接続後に initialize() で
+  // 検出すると、connect() が reject しても接続が開いたまま残るためである。
+  if (options?.maxControlMessageSize !== undefined) {
+    assertMaxControlMessageSize(options.maxControlMessageSize);
+  }
+
   // Create WebTransport connection
   const transportOptions: WebTransportOptions = {};
 
@@ -104,32 +113,51 @@ export async function connect(
   // grease: true は GREASE Setup Option (§13) を追加する
   // exactOptionalPropertyTypes では optional なフィールドに undefined を渡せないため、
   // 値がある場合だけ載せる
-  await session.initialize({
-    ...(authorizationToken !== undefined ? { authorizationToken } : {}),
-    ...(options?.moqtImplementation !== undefined
-      ? { moqtImplementation: options.moqtImplementation }
-      : {}),
-    ...(options?.grease !== undefined ? { grease: options.grease } : {}),
-    ...(options?.maxAuthTokenCacheSize !== undefined
-      ? { maxAuthTokenCacheSize: options.maxAuthTokenCacheSize }
-      : {}),
-    ...(options?.maxRequestUpdates !== undefined
-      ? { maxRequestUpdates: options.maxRequestUpdates }
-      : {}),
-    ...(options?.maxFilterRanges !== undefined ? { maxFilterRanges: options.maxFilterRanges } : {}),
-    ...(options?.controlMessageTimeoutMs !== undefined
-      ? { controlMessageTimeoutMs: options.controlMessageTimeoutMs }
-      : {}),
-    ...(options?.dataStreamTimeoutMs !== undefined
-      ? { dataStreamTimeoutMs: options.dataStreamTimeoutMs }
-      : {}),
-    ...(options?.dataStreamMaxBufferBytes !== undefined
-      ? { dataStreamMaxBufferBytes: options.dataStreamMaxBufferBytes }
-      : {}),
-    ...(options?.dataStreamMaxTotalBufferBytes !== undefined
-      ? { dataStreamMaxTotalBufferBytes: options.dataStreamMaxTotalBufferBytes }
-      : {}),
-  });
+  try {
+    await session.initialize({
+      ...(authorizationToken !== undefined ? { authorizationToken } : {}),
+      ...(options?.moqtImplementation !== undefined
+        ? { moqtImplementation: options.moqtImplementation }
+        : {}),
+      ...(options?.grease !== undefined ? { grease: options.grease } : {}),
+      ...(options?.maxAuthTokenCacheSize !== undefined
+        ? { maxAuthTokenCacheSize: options.maxAuthTokenCacheSize }
+        : {}),
+      ...(options?.maxRequestUpdates !== undefined
+        ? { maxRequestUpdates: options.maxRequestUpdates }
+        : {}),
+      ...(options?.maxFilterRanges !== undefined
+        ? { maxFilterRanges: options.maxFilterRanges }
+        : {}),
+      ...(options?.maxControlMessageSize !== undefined
+        ? { maxControlMessageSize: options.maxControlMessageSize }
+        : {}),
+      ...(options?.controlMessageTimeoutMs !== undefined
+        ? { controlMessageTimeoutMs: options.controlMessageTimeoutMs }
+        : {}),
+      ...(options?.dataStreamTimeoutMs !== undefined
+        ? { dataStreamTimeoutMs: options.dataStreamTimeoutMs }
+        : {}),
+      ...(options?.dataStreamMaxBufferBytes !== undefined
+        ? { dataStreamMaxBufferBytes: options.dataStreamMaxBufferBytes }
+        : {}),
+      ...(options?.dataStreamMaxTotalBufferBytes !== undefined
+        ? { dataStreamMaxTotalBufferBytes: options.dataStreamMaxTotalBufferBytes }
+        : {}),
+    });
+  } catch (error) {
+    // 初期化に失敗すると Session を返せず、呼び出し元は WebTransport を閉じられない。
+    // 接続を開いたまま残さないよう、ここで閉じる (閉鎖済みなら close は no-op)。
+    try {
+      transport.close({
+        closeCode: SessionErrorCode.INTERNAL_ERROR,
+        reason: error instanceof Error ? error.message : String(error),
+      });
+    } catch {
+      // 既に閉じている場合は無視する
+    }
+    throw error;
+  }
 
   return session;
 }

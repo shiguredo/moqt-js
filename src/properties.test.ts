@@ -1504,3 +1504,46 @@ test("assertPriorIdGapInObjectProperties: IMMUTABLE_PROPERTIES 内の gap も検
     /prior group id gap exceeds group id/,
   );
 });
+
+/**
+ * draft-ietf-moq-transport-23 §8.3:
+ * Property の Value 上限 2^16-1 は維持する。超過する値を送信しようとした場合は、
+ * ピアが FIELD_LENGTH_EXCEEDED でセッションを閉じるため、送信前に拒否する。
+ * 実際の送信経路 (delta encoding を行う encodeProperties) で検証する。
+ */
+test("encodeProperties: 65535 バイトを超える奇数 ID の Value は送信できない", () => {
+  let thrown: Error | undefined;
+  try {
+    encodeProperties([{ id: 0x0fn, data: new Uint8Array(65536) }]);
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.isDefined(thrown);
+  assert.match(thrown?.message ?? "", /exceeds maximum 65535/);
+  // 境界値 65535 は送信できる
+  const boundary = encodeProperties([{ id: 0x0fn, data: new Uint8Array(65535) }]);
+  assert.isAbove(boundary.length, 65535);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §8.3:
+ * Immutable Properties は内側の連結を 1 つの奇数 ID Property の Value として
+ * 格納するため、内側の合計も 2^16-1 バイト以下でなければならない。
+ */
+test("encodeImmutableProperties: 内側の合計が 65535 バイトを超えると送信できない", () => {
+  let thrown: Error | undefined;
+  try {
+    encodeImmutableProperties({
+      extensions: [
+        { id: 0x01n, data: new Uint8Array(40000) },
+        { id: 0x03n, data: new Uint8Array(40000) },
+      ],
+    });
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.isDefined(thrown);
+  assert.match(thrown?.message ?? "", /exceeds maximum 65535/);
+});

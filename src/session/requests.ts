@@ -10,6 +10,9 @@
  * draft-ietf-moq-transport-22 Section 6.3:
  * リクエスト (SUBSCRIBE, PUBLISH, FETCH, TRACK_STATUS) は双方向ストリーム上で
  * 送受信される。受信側の処理は bidi.ts / incoming.ts が担当する。
+ *
+ * 制御メッセージのフレーミング (Type / Message Length) は
+ * draft-ietf-moq-transport-23 §9 に従う。
  */
 
 import { ControlStreamReader } from "../controlStream";
@@ -852,9 +855,9 @@ export function requestsCancelFetch(
  * REQUEST_UPDATE はリクエストと同じ双方向ストリーム上で送信する。
  *
  * REQUEST_UPDATE Message {
- *   Type (i) = 0x2,
- *   Length (16),
- *   Request ID (i),
+ *   Type (vi64) = 0x2,
+ *   Length (vi64),
+ *   Request ID (vi64),
  *   Parameters (..) ...
  * }
  */

@@ -8,6 +8,7 @@
 
 import { test, assert } from "vite-plus/test";
 import { MessageType, encodeTrackNamespace, createTrackNamespace } from "../message";
+import { DEFAULT_MAX_CONTROL_MESSAGE_SIZE } from "../message/types";
 import { decodeRequestErrorPayload } from "../message/session";
 import { MalformedTrackError, RequestErrorCode, SessionError, SessionErrorCode } from "../error";
 import {
@@ -76,6 +77,7 @@ test("incomingSendRequestErrorAndClose: REQUEST_ERROR を書き込み、FIN で�
     stream,
     RequestErrorCode.NOT_SUPPORTED,
     "request type not supported",
+    DEFAULT_MAX_CONTROL_MESSAGE_SIZE,
   );
 
   // REQUEST_ERROR 書き込み → FIN (close) の順序
@@ -116,6 +118,7 @@ test("incomingSendRequestErrorAndClose: write 失敗時も受信方向をキャ�
     stream,
     RequestErrorCode.NOT_SUPPORTED,
     "request type not supported",
+    DEFAULT_MAX_CONTROL_MESSAGE_SIZE,
   );
 
   assert.isTrue(cancelled);
@@ -144,6 +147,7 @@ test("incomingSendRequestErrorAndClose: close 失敗時も受信方向をキャ�
     stream,
     RequestErrorCode.NOT_SUPPORTED,
     "request type not supported",
+    DEFAULT_MAX_CONTROL_MESSAGE_SIZE,
   );
 
   assert.isTrue(cancelled);
@@ -1622,4 +1626,38 @@ test("incomingProcessFetchObjects: trackKey の追跡状態で Prior Object ID G
     fullTrackNameKey(["test"], "other"),
   );
   assert.equal(delivered.length, 2);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.1.8:
+ * REQUEST_ERROR の送信にも、ピアが広告した MAX_CONTROL_MESSAGE_SIZE を適用する。
+ * 上限を超えるメッセージはフレーミングで送信前に失敗し、write されない。
+ * 送信は失敗しても例外を外に漏らさず、受信方向のキャンセルだけを行う。
+ */
+test("incomingSendRequestErrorAndClose: ピアの MAX_CONTROL_MESSAGE_SIZE を超えると write しない", async () => {
+  let written = false;
+  let cancelled = false;
+  const writable = new WritableStream<Uint8Array>({
+    write() {
+      written = true;
+    },
+  });
+  const readable = new ReadableStream<Uint8Array>({
+    cancel() {
+      cancelled = true;
+    },
+  });
+  const stream = { readable, writable } as unknown as WebTransportBidirectionalStream;
+
+  // テスト専用の小さな上限 (仕様の最小値 65535 未満) を渡し、固定文言でも
+  // フレーミングが失敗する状態にする
+  await incomingSendRequestErrorAndClose(
+    stream,
+    RequestErrorCode.NOT_SUPPORTED,
+    "request type not supported",
+    8,
+  );
+
+  assert.isFalse(written);
+  assert.isTrue(cancelled);
 });

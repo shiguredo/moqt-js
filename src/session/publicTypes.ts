@@ -186,6 +186,27 @@ export interface ConnectOptions {
   maxFilterRanges?: number;
 
   /**
+   * SETUP Option (Option Type 0x09) として広告する MAX_CONTROL_MESSAGE_SIZE
+   * draft-ietf-moq-transport-23 §9.1.8 (MAX_CONTROL_MESSAGE_SIZE)
+   *
+   * 自 endpoint が受信を許す制御メッセージの Message Length (本文長) の上限 (バイト)。
+   * 制御ストリームとすべてのリクエストストリームに適用する。
+   * 65535 以上を指定する。省略時は SETUP Option を送信せず、既定値 65535 を使う。
+   *
+   * draft-ietf-moq-transport-23 §15.5 (Resource Exhaustion):
+   * 完成した制御メッセージをバッファする実装は、その上限ぶんのメモリを
+   * ストリームごとに確保する。また、メッセージ全体を受け取れるだけの
+   * フロー制御を確保できない場合はデッドロックし得るため、大きくしすぎないこと。
+   * この上限は Message Parameter 個々の値の上限ではなく、大きな
+   * Authorization Token などもメッセージ全体に収まれば受け取れる。
+   *
+   * 65535 未満の値、Number.MAX_SAFE_INTEGER を超える値、整数でない値を指定すると、
+   * connect() では接続を確立する前に、initialize() を直接呼ぶ場合は制御ストリームを
+   * 開く前にエラーになる。
+   */
+  maxControlMessageSize?: number;
+
+  /**
    * Pending Subgroup Stream の buffer 設定
    * draft-ietf-moq-transport-22 §3.1.3.1 (Unknown Track Alias) の "MAY drop the data
    * or buffer it briefly to handle reordering with the control message that

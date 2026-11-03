@@ -16,6 +16,7 @@ import { SessionError } from "../error";
 import { FetcherImpl } from "../fetcher";
 import { encodeVarint, MAX_VARINT } from "../varint";
 import { ControlStreamReader, ControlStreamWriter } from "../controlStream";
+import { DEFAULT_MAX_CONTROL_MESSAGE_SIZE } from "../message/types";
 import { PublisherImpl } from "../publisher";
 // draft-ietf-moq-transport-22 §11.3.1:
 // SUBSCRIBE_OK 受理経路は pendingSubgroupBuffer.notifyAlias() を必ず呼ぶ。
@@ -83,6 +84,9 @@ export function createBidiSession(): {
     // draft-ietf-moq-transport-22 §9.1.7 (MAX_REQUEST_UPDATES):
     // 既定は未広告 (0 = 無制限) と未応答数なし
     localMaxRequestUpdates: 0,
+    // draft-ietf-moq-transport-23 §9.1.8: 制御メッセージの受信・送信上限は既定値
+    localMaxControlMessageSize: DEFAULT_MAX_CONTROL_MESSAGE_SIZE,
+    peerMaxControlMessageSize: DEFAULT_MAX_CONTROL_MESSAGE_SIZE,
     receivedRequestUpdateCounts: new Map(),
     namespaceSubscriptions: new Map(),
     tracksSubscriptions: new Map(),
@@ -247,6 +251,9 @@ export function createPublishReadTestContext(
     // draft-ietf-moq-transport-22 §9.1.7 (MAX_REQUEST_UPDATES):
     // 既定は未広告 (0 = 無制限) と未応答数なし
     localMaxRequestUpdates: 0,
+    // draft-ietf-moq-transport-23 §9.1.8: 制御メッセージの受信・送信上限は既定値
+    localMaxControlMessageSize: DEFAULT_MAX_CONTROL_MESSAGE_SIZE,
+    peerMaxControlMessageSize: DEFAULT_MAX_CONTROL_MESSAGE_SIZE,
     receivedRequestUpdateCounts: new Map(),
     // draft-ietf-moq-transport-22 §8.9 / §9.1.3:
     // 受信 AUTHORIZATION TOKEN のキャッシュ。既定は上限 0 (未広告 = Alias 使用禁止) で、
@@ -401,6 +408,9 @@ export function createPublishOkValidationContext(
     // draft-ietf-moq-transport-22 §9.1.7 (MAX_REQUEST_UPDATES):
     // 既定は未広告 (0 = 無制限) と未応答数なし
     localMaxRequestUpdates: 0,
+    // draft-ietf-moq-transport-23 §9.1.8: 制御メッセージの受信・送信上限は既定値
+    localMaxControlMessageSize: DEFAULT_MAX_CONTROL_MESSAGE_SIZE,
+    peerMaxControlMessageSize: DEFAULT_MAX_CONTROL_MESSAGE_SIZE,
     receivedRequestUpdateCounts: new Map(),
     tracksSubscriptions: new Map(),
     publisherStreams: new Map(),
@@ -436,6 +446,7 @@ export function createOkResponseReadTestContext(): {
   controlReader: ControlStreamReader;
   controlWriter: ControlStreamWriter;
   getClosedWithError: () => SessionError | undefined;
+  getClosedWithErrorCount: () => number;
   order: string[];
   requestId: bigint;
 } {
@@ -453,11 +464,20 @@ export function createOkResponseReadTestContext(): {
   const controlReader = new ControlStreamReader();
 
   let closedWithError: SessionError | undefined;
+  let closedWithErrorCount = 0;
   // reject → closeWithError の順序を記録する
   const order: string[] = [];
   const controlWriter = new ControlStreamWriter();
+  // forceSessionClosed と closeWithError の双方から遷移できるよう、
+  // getter / setter で状態を保持する
+  const sessionState: { current: "connected" | "closed" } = { current: "connected" };
   const session = {
-    sessionState: "connected",
+    get sessionState() {
+      return sessionState.current;
+    },
+    set sessionState(value: "connected" | "closed") {
+      sessionState.current = value;
+    },
     transport: {},
     controlWriter,
     nextRequestId: 100n,
@@ -481,6 +501,9 @@ export function createOkResponseReadTestContext(): {
     // draft-ietf-moq-transport-22 §9.1.7 (MAX_REQUEST_UPDATES):
     // 既定は未広告 (0 = 無制限) と未応答数なし
     localMaxRequestUpdates: 0,
+    // draft-ietf-moq-transport-23 §9.1.8: 制御メッセージの受信・送信上限は既定値
+    localMaxControlMessageSize: DEFAULT_MAX_CONTROL_MESSAGE_SIZE,
+    peerMaxControlMessageSize: DEFAULT_MAX_CONTROL_MESSAGE_SIZE,
     receivedRequestUpdateCounts: new Map(),
     namespaceSubscriptions: new Map(),
     tracksSubscriptions: new Map(),
@@ -491,7 +514,12 @@ export function createOkResponseReadTestContext(): {
     statsControlMessagesSent: 0,
     emitDebug: () => {},
     closeWithError: (error: SessionError) => {
+      // 本番の sessionClose と同じく、close 時に同期的に state を closed にする。
+      // これにより「既に閉じたセッションでは error コールバックを増やさない」
+      // ガードの退行をテストで検出できる。
       order.push("close");
+      sessionState.current = "closed";
+      closedWithErrorCount++;
       closedWithError = error;
     },
   } as unknown as BidiSessionInternal;
@@ -504,6 +532,7 @@ export function createOkResponseReadTestContext(): {
     controlWriter,
     // 値コピーではなく getter で返す (closeWithError 呼び出し後の代入を反映する)
     getClosedWithError: () => closedWithError,
+    getClosedWithErrorCount: () => closedWithErrorCount,
     order,
     requestId,
   };
@@ -574,6 +603,9 @@ export function createCancelObservableResponseContext(): {
     // draft-ietf-moq-transport-22 §9.1.7 (MAX_REQUEST_UPDATES):
     // 既定は未広告 (0 = 無制限) と未応答数なし
     localMaxRequestUpdates: 0,
+    // draft-ietf-moq-transport-23 §9.1.8: 制御メッセージの受信・送信上限は既定値
+    localMaxControlMessageSize: DEFAULT_MAX_CONTROL_MESSAGE_SIZE,
+    peerMaxControlMessageSize: DEFAULT_MAX_CONTROL_MESSAGE_SIZE,
     receivedRequestUpdateCounts: new Map(),
     namespaceSubscriptions: new Map(),
     tracksSubscriptions: new Map(),
@@ -695,6 +727,9 @@ export function createFetchReadTestContext(additionalMessages: Uint8Array[] = []
     // draft-ietf-moq-transport-22 §9.1.7 (MAX_REQUEST_UPDATES):
     // 既定は未広告 (0 = 無制限) と未応答数なし
     localMaxRequestUpdates: 0,
+    // draft-ietf-moq-transport-23 §9.1.8: 制御メッセージの受信・送信上限は既定値
+    localMaxControlMessageSize: DEFAULT_MAX_CONTROL_MESSAGE_SIZE,
+    peerMaxControlMessageSize: DEFAULT_MAX_CONTROL_MESSAGE_SIZE,
     receivedRequestUpdateCounts: new Map(),
     // draft-ietf-moq-transport-22 §8.9 / §9.1.3:
     // 受信 AUTHORIZATION TOKEN のキャッシュ。既定は上限 0 (未広告 = Alias 使用禁止)。

@@ -45,6 +45,15 @@ function encodeKeyValuePair(param: Parameter, previousType: number): Uint8Array 
 
   if (param.type % 2 === 1) {
     // 奇数型: Length プレフィックス付き
+    // draft-ietf-moq-transport-23 §8.3:
+    // Value の最大長は 2^16-1 バイトであり、超過する値は送信できない。
+    // 仕様では受信側は FIELD_LENGTH_EXCEEDED でセッションを閉じる。
+    // 現行の受信実装は PROTOCOL_VIOLATION を返す (エラー分類の移行は別 issue)。
+    if (param.value.length > MAX_KVP_VALUE_LENGTH) {
+      throw new Error(
+        `key-value-pair value length ${param.value.length} exceeds maximum ${MAX_KVP_VALUE_LENGTH}`,
+      );
+    }
     const lengthBytes = encodeVarint(param.value.length);
     return concatUint8Arrays([deltaBytes, lengthBytes, param.value]);
   }

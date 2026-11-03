@@ -5,6 +5,7 @@
 
 // 型定義
 export {
+  DEFAULT_MAX_CONTROL_MESSAGE_SIZE,
   GroupOrder,
   type Location,
   MessageParameterType,
@@ -71,12 +72,14 @@ export {
 // Setup メッセージ
 export {
   type Setup,
+  assertMaxControlMessageSize,
   createSetup,
   decodeSetupPayload,
   encodeSetupPayload,
   getSetupAuthority,
   getSetupAuthorizationTokens,
   getSetupMaxAuthTokenCacheSize,
+  getSetupMaxControlMessageSize,
   getSetupMaxFilterRanges,
   getSetupMaxRequestUpdates,
   getSetupMoqtImplementation,

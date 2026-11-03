@@ -1,6 +1,9 @@
 /**
  * MOQT Publish Messages
  * draft-ietf-moq-transport-22 Section 9.8 (PUBLISH) — 9.3 (REQUEST_OK / PUBLISH_OK) — 9.9 (PUBLISH_DONE)
+ *
+ * 制御メッセージのフレーミング (Type / Message Length) は
+ * draft-ietf-moq-transport-23 §9 に従う。
  */
 
 import { decodeVarint, encodeVarint } from "../varint";
@@ -54,14 +57,14 @@ export interface PublishDone {
  *
  * draft-ietf-moq-transport-22 Section 9.8 (PUBLISH):
  * PUBLISH Message {
- *   Type (i) = 0x1D,
- *   Length (16),
- *   Request ID (i),
+ *   Type (vi64) = 0x1D,
+ *   Length (vi64),
+ *   Request ID (vi64),
  *   Track Namespace (..),
- *   Track Name Length (i),
+ *   Track Name Length (vi64),
  *   Track Name (..),
- *   Track Alias (i),
- *   Number of Parameters (i),
+ *   Track Alias (vi64),
+ *   Number of Parameters (vi64),
  *   Parameters (..) ...,
  *   Track Properties (..)
  * }
@@ -147,7 +150,7 @@ export function decodePublishPayload(data: Uint8Array, offset = 0): Publish {
  * draft-ietf-moq-transport-22 Section 9.9 (PUBLISH_DONE):
  * PUBLISH_DONE Message {
  *   Type (vi64) = 0xB,
- *   Length (16),
+ *   Length (vi64),
  *   Status Code (vi64),
  *   Stream Count (vi64),
  *   Error Reason (Reason Phrase)

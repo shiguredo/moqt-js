@@ -1,6 +1,9 @@
 /**
  * MOQT Namespace Messages
  * draft-ietf-moq-transport-22 Section 9.14 (PUBLISH_NAMESPACE) — 9.19 (PUBLISH_SKIPPED)
+ *
+ * 制御メッセージのフレーミング (Type / Message Length) は
+ * draft-ietf-moq-transport-23 §9 に従う。
  */
 
 import { decodeVarint, encodeVarint } from "../varint";
@@ -35,8 +38,8 @@ export interface PublishNamespace {
  * Track Namespace Prefix を除いた Suffix のみを含む。
  *
  * NAMESPACE Message {
- *   Type (i) = 0x8,
- *   Length (16),
+ *   Type (vi64) = 0x8,
+ *   Length (vi64),
  *   Track Namespace Suffix (..)
  * }
  */
@@ -52,8 +55,8 @@ export interface Namespace {
  * Track Namespace Prefix を除いた Suffix のみを含む。
  *
  * NAMESPACE_DONE Message {
- *   Type (i) = 0xE,
- *   Length (16),
+ *   Type (vi64) = 0xE,
+ *   Length (vi64),
  *   Track Namespace Suffix (..)
  * }
  */
@@ -75,7 +78,7 @@ export interface NamespaceDone {
  *
  * SUBSCRIBE_NAMESPACE Message {
  *   Type (vi64) = 0x50,
- *   Length (16),
+ *   Length (vi64),
  *   Request ID (vi64),
  *   Track Namespace Prefix (..),
  *   Number of Parameters (vi64),
@@ -108,7 +111,7 @@ export interface SubscribeNamespace {
  *
  * SUBSCRIBE_TRACKS Message {
  *   Type (vi64) = 0x51,
- *   Length (16),
+ *   Length (vi64),
  *   Request ID (vi64),
  *   Track Namespace Prefix (..),
  *   Number of Parameters (vi64),
@@ -183,8 +186,8 @@ export function decodePublishNamespacePayload(data: Uint8Array, offset = 0): Pub
  *
  * draft-ietf-moq-transport-22 Section 9.16 (NAMESPACE):
  * NAMESPACE Message {
- *   Type (i) = 0x8,
- *   Length (16),
+ *   Type (vi64) = 0x8,
+ *   Length (vi64),
  *   Track Namespace Suffix (..)
  * }
  */
@@ -220,8 +223,8 @@ export function decodeNamespacePayload(data: Uint8Array, offset = 0): Namespace 
  *
  * draft-ietf-moq-transport-22 Section 9.17 (NAMESPACE_DONE):
  * NAMESPACE_DONE Message {
- *   Type (i) = 0xE,
- *   Length (16),
+ *   Type (vi64) = 0xE,
+ *   Length (vi64),
  *   Track Namespace Suffix (..)
  * }
  */
@@ -258,7 +261,7 @@ export function decodeNamespaceDonePayload(data: Uint8Array, offset = 0): Namesp
  * draft-ietf-moq-transport-22 Section 9.15 (SUBSCRIBE_NAMESPACE):
  * SUBSCRIBE_NAMESPACE Message {
  *   Type (vi64) = 0x50,
- *   Length (16),
+ *   Length (vi64),
  *   Request ID (vi64),
  *   Track Namespace Prefix (..),
  *   Number of Parameters (vi64),
@@ -324,7 +327,7 @@ export function decodeSubscribeNamespacePayload(data: Uint8Array, offset = 0): S
  * draft-ietf-moq-transport-22 Section 9.18 (SUBSCRIBE_TRACKS):
  * SUBSCRIBE_TRACKS Message {
  *   Type (vi64) = 0x51,
- *   Length (16),
+ *   Length (vi64),
  *   Request ID (vi64),
  *   Track Namespace Prefix (..),
  *   Number of Parameters (vi64),
@@ -394,7 +397,7 @@ export function decodeSubscribeTracksPayload(data: Uint8Array, offset = 0): Subs
  *
  * PUBLISH_SKIPPED Message {
  *   Type (vi64) = 0xF,
- *   Length (16),
+ *   Length (vi64),
  *   Track Namespace Suffix (..),
  *   Track Name Length (vi64),
  *   Track Name (..),
