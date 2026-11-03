@@ -1,7 +1,7 @@
 # 購読と namespace 告知の実装に残った小さな重複と検証不足を整理する
 
 - Created: 2026-11-02
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-03
 - Branch: feature/refactor-subscriber-announcement-cleanup
 - Polished: 2026-11-03
 
@@ -46,7 +46,19 @@
 
 ## 解決方法
 
-{未着手}
+動作を変えない整理を 7 項目すべて行った。テストの期待値は変えていない。
+
+- `src/mediaSubscriber/catalogSubscription.ts` の `subscribe` の catch から、no-op だった `clearCatalogTimer()` と `catalogResolve` / `catalogReject` のクリアを削除した。受信タイマーと受信待ちは `SUBSCRIBE_OK` の後 (\`session.subscribe\` の await の後) にしか作らないため、この時点では存在しない。catch は `resetCatalogFetchPhase()` と `throw` だけにし、その理由をコメントに書いた。JSDoc の異常系契約も、実装と矛盾していた「即時掃除する」から「この時点では未生成のため解除不要」に直した
+- `CATALOG_RECEIVE_TIMEOUT` の JSDoc と `subscribe` の `@param timeoutMs` に、受信タイマーが `SUBSCRIBE_OK` から数える起点であることを書いた
+- `src/createMediaSubscriber.catalog.test.ts` の音声用と映像用のテストヘルパーを `createMediaTrackSubscribeCapture(track, options)` に統合し、映像の `rendezvousTimeout` テストが約 30 行のセットアップを再実装する状態を解消した。購読したトラック名 (`capturedTracks`) も記録し、音声・映像の各テストで分岐の取り違えを検出できるようにした
+- `rendezvousTimeout` の不正値テストを `src/createMediaSubscriber.media.test.ts` へ移し、`preDecodeDelayMs` の検証テストと同じ配置にした。`createMediaSubscriber` 経由の reject も `captureThrown` で固定した
+- `src/createMediaSubscriber.lifecycle.test.ts` の「受信タイマーは SUBSCRIBE_OK の後に始まる」テストを `withUnhandledRejectionWatch` で包み、`waitForUnhandledRejectionDetection` を挟んでから未処理 rejection を判定するようにした
+- `tests/e2e/main.ts` の subscriber のオプション構築を `buildMediaSubscriberOptions` に集約し、`startSubscriber` と `startSubscriberFailure` で共有した。`startSubscriberFailure` が受け取る型を `StartSubscriberFailureOptions` (実際に使うフィールドだけ) に絞り、公開する `MoqtE2EApi` の型も揃えた
+- `src/createMediaPublisher.ts` の `announceNamespace` の `session === null` ガードは、呼び出し経路 (start の段階で `connectToServer` がセッションを設定済み) からは到達しない防御である。残す判断とし、`createPublishers` と同じガードであることをコメントに書いた
+
+relay の `rendezvous-timeout.spec.ts` に、この E2E が RENDEZVOUS_TIMEOUT の有無を区別しない (パラメータが SUBSCRIBE に載ることは単体テストが固定する) 旨を注記した。
+
+`vp check` と `vp test --run` (全 4450 テスト) が通ることを確認している。relay の `rendezvous-timeout.spec.ts` 2 本も実リレーで通した。CHANGES.md は CODEBASE.md の「MOQT RFC ドラフト中の特別ルール」により更新していない。
 
 ## 参照
 

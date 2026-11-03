@@ -1051,6 +1051,8 @@ export class MediaPublisherImpl implements MediaPublisher {
     }
     const session = this.session;
     if (session === null) {
+      // 呼び出し経路 (start の段階) では connectToServer がセッションを設定済みの
+      // ため到達しない。createPublishers と同じガードである
       throw new Error("session not connected");
     }
     // 確立前の error コールバックは抑止し、start() の失敗としてだけ通知する
