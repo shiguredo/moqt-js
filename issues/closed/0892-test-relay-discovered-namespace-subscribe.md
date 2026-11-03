@@ -1,8 +1,8 @@
 # 発見した namespace の track を SUBSCRIBE して受信する経路が実リレー未検証
 
 - Created: 2026-11-02
-- Completed: {YYYY-MM-DD}
-- Branch: feature/test-relay-discovered-namespace-subscribe
+- Completed: 2026-11-03
+- Branch: feature/add-relay-discovered-namespace-subscribe
 - Polished: 2026-11-03
 
 ## 目的
@@ -35,7 +35,7 @@
 
 E2E のハーネスに不足があれば足す。`startSubscriber` は namespace を渡すだけなので、既存の露出で足りる見込みである。ただし `tests/e2e/main.ts` の `startSubscriber` は `video` を既定で要求するため、告知した配信が映像を持つことを前提にする (publisher は `video: { codec: "vp8" }` で開始する)。
 
-CI の relay ジョブは `timeout-minutes: 20` で、2 shard (`--shard=N/2`) に分けて `--project=relay --project=chromium-production-relay --grep-invert='調査:'` を実行する。実行されるのは relay project の spec 18 本 (調査専用 2 本は grep で除外) と `chromium-production-relay` の 1 本である。各実行 step の `timeout-minutes` は 8 分で、失敗時にもう 8 分の再実行が入る (実効の制限は job の 20 分ではなく、この 8 分 / shard)。追加する 1 本は 30 秒以内 (接続・告知・購読・数フレームの受信) に収まる見込みだが、実行時間が伸びる場合は既存 spec との統合を検討する。
+CI の relay ジョブは `timeout-minutes: 20` で、2 shard (`--shard=N/2`) に分けて `--project=relay --project=chromium-production-relay --grep-invert='調査:'` を実行する。実行されるのは relay project の spec 19 本 (追加前は 18 本。調査専用 2 本は grep で除外) と `chromium-production-relay` の 1 本である。各実行 step の `timeout-minutes` は 8 分で、失敗時にもう 8 分の再実行が入る (実効の制限は job の 20 分ではなく、この 8 分 / shard)。追加する 1 本は 30 秒以内 (接続・告知・購読・数フレームの受信) に収まる見込みだが、実行時間が伸びる場合は既存 spec との統合を検討する。
 
 ## 完了条件
 
@@ -49,7 +49,23 @@ CI の relay ジョブは `timeout-minutes: 20` で、2 shard (`--shard=N/2`) �
 
 ## 解決方法
 
-{未着手}
+`tests/e2e/relay/namespace-discovery-subscribe.spec.ts` を追加し、実リレーで告知から発見、購読、映像の受信までを通した。
+
+流れは次のとおりである。
+
+1. `announceNamespace: true` で publisher を開始し、PUBLISH_NAMESPACE の REQUEST_OK が返って `"publishing"` になるまで待つ
+2. 別ページで `SUBSCRIBE_NAMESPACE` を開始し、告知された namespace が NAMESPACE で届くのを待つ
+3. 発見した namespace (`namespaces.find` で取り出した配列) をそのまま `startSubscriber` に渡し、`framesReceived` と `keyFramesReceived` が 0 より大きくなるまで待つ。その後に `"active"`、`hasCatalog`、`hasVideoTrack`、`bytesReceived > 0` を検査する
+4. 購読の間、告知が撤回されていない (対象 namespace の NAMESPACE_DONE を受けていない) ことも確認する
+5. 後始末で subscriber、namespace の購読、publisher を止め、ページを閉じる
+
+既存の `namespace-announcement.spec.ts` に足さず新しい spec に分けた。既存 spec は告知と発見の往復だけを見ており、購読を足すと 1 本のテストが 2 つの契約 (往復と視聴の通し) を持ち、失敗時にどちらが壊れたかを切り分けにくくなるためである。
+
+テストハーネス (`tests/e2e/main.ts` の `window.__moqtE2E`) の追加は不要だった。`startPublisher` の `announceNamespace`、`startSubscribeNamespace` の `namespacePrefix`、`startSubscriber` の既存の露出で足りる。
+
+ローカルで実リレー (TEST_MOQT_URI) に対して実行し、1 本 1.1 秒で通過した。CI の relay プロジェクトは `relay/.*\.spec\.ts` を実行するため、追加した spec も 2 shard のいずれかで実行される。実行時間は各 shard の step の `timeout-minutes` (8 分、失敗時の再実行を含め 16 分) に十分収まる。
+
+`vp check` と `vp test --run` が通ることを確認している。CHANGES.md は CODEBASE.md の「MOQT RFC ドラフト中の特別ルール」により更新していない。
 
 ## 参照
 

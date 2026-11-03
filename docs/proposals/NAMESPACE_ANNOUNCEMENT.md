@@ -104,7 +104,10 @@ draft-ietf-moq-transport-22 §4 (Publisher and Namespace Discovery) より。
 - 2026-11-02 に実装後の実リレーで往復を確認した。
   `tests/e2e/relay/namespace-announcement.spec.ts` が `PUBLISH_NAMESPACE` →
   `SUBSCRIBE_NAMESPACE` → `NAMESPACE` → 撤回 → `NAMESPACE_DONE` を通す (1 passed)
-- 発見した namespace の track を `SUBSCRIBE` して受信する経路は未検証である
+- 2026-11-03 に、発見した namespace の track を `SUBSCRIBE` して映像を受信する経路を
+  実リレーで確認した。`tests/e2e/relay/namespace-discovery-subscribe.spec.ts` が
+  `PUBLISH_NAMESPACE` → `SUBSCRIBE_NAMESPACE` → `NAMESPACE` → 発見した namespace の
+  `SUBSCRIBE` → 映像の受信を通す (1 passed)
 
 ## 設計案
 
@@ -246,7 +249,8 @@ E2E (実リレー)。2026-11-02 に実装後に確認し、
   namespace 系の操作を露出する
 - `announceNamespace: true` で `start()` し、`SUBSCRIBE_NAMESPACE` で `NAMESPACE` を受信する
 - `close()` (ハーネスの `stopPublisher`) で `NAMESPACE_DONE` を受信する
-- 発見した namespace の track を `SUBSCRIBE` して受信する経路は未検証
+- 発見した namespace の track を `SUBSCRIBE` して受信する経路は 2026-11-03 に
+  実リレーで確認した (`tests/e2e/relay/namespace-discovery-subscribe.spec.ts`)
 - relay が未対応ならテストを追加しない (失敗を隠さない)
 
 ドキュメント。

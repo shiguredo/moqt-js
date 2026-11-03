@@ -14,7 +14,7 @@
 - `tests/e2e/relay/namespace-announcement.spec.ts` は低レベルの `PUBLISH_NAMESPACE` の受理と `NAMESPACE` / `NAMESPACE_DONE` を確認する
 - `tests/e2e/main.ts` の `window.__moqtE2E` は Publisher / Subscriber / Fetch / namespace の告知 (低レベル) / namespace の購読をハンドルとして露出している
 - 高レベルの `createMediaPublisher` の `announceNamespace` と `rendezvousTimeout` は個別の E2E で検証しているが、`onError` の回数は検証していない
-- `issues/0892-test-relay-discovered-namespace-subscribe.md` は発見した namespace の購読経路を扱う。本 issue は `onError` の回数と失敗経路に限定する
+- `issues/closed/0892-test-relay-discovered-namespace-subscribe.md` は発見した namespace の購読経路を扱う。本 issue は `onError` の回数と失敗経路に限定する
 - `issues/0817-add-relay-tests.md` は実リレーの E2E を増やす横断的な issue である
 
 ## 設計方針
