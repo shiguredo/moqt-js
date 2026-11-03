@@ -620,6 +620,13 @@ export class MediaSubscriberImpl implements MediaSubscriber {
 
   // 接続関連
   private session: Session | null = null;
+  /**
+   * 直前に onGoaway へ渡した新しい Session URI
+   *
+   * 同じ GOAWAY が Session の制御ストリームとリクエストストリームの両方で
+   * 届くと 2 回呼ばれ得るため、直前と同じ URI の連続通知を抑止する。
+   */
+  private lastGoawayUri: string | null = null;
   private catalogSubscriber: Subscriber | null = null;
   private audioSubscriber: Subscriber | null = null;
   /**
@@ -921,6 +928,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       rendezvousTimeout: this.rendezvousTimeout,
       session: () => this.session,
       reportError: (error) => this.callbacks.onError?.(error),
+      reportGoaway: (newSessionUri) => this.notifyGoaway(newSessionUri),
       handlePublishDone: (publishDone) => this.handlePublishDone(publishDone),
       assertStartNotDisposed: (startGeneration) => this.assertStartNotDisposed(startGeneration),
       applyTargetLatencyMs: (latencyMs) => this.playout.setTargetLatencyMs(latencyMs),
@@ -1075,6 +1083,34 @@ export class MediaSubscriberImpl implements MediaSubscriber {
 
   get catalog(): Catalog | null {
     return this.receivedCatalog;
+  }
+
+  /**
+   * GOAWAY をアプリへ通知する
+   *
+   * draft-ietf-moq-transport-22 §9.2 (根拠の仕様はドラフトであり将来変更される
+   * 可能性がある):
+   * "The client MUST use this URI for the new session if provided. If the URI
+   *  is zero bytes long, the current URI is reused instead."
+   * ライブラリは自動で再接続しないため、URI をアプリへ渡して再接続を委ねる。
+   * 同じ GOAWAY が Session の制御ストリームとリクエストストリームの両方で届くと
+   * 2 回呼ばれ得るため、直前と同じ URI の連続通知は抑止する。
+   * 通知の throw は呼び出し元 (低レベルの GOAWAY 通知) の経路へ伝えない。
+   * 新しい Session URI が 0 バイトのときは空文字列が渡る。この場合、現在の URI を
+   * 再利用する (§9.2)。空文字列を接続先に指定することはできない。
+   *
+   * @param newSessionUri - GOAWAY が示した新しい Session URI
+   */
+  private notifyGoaway(newSessionUri: string): void {
+    if (this.lastGoawayUri === newSessionUri) {
+      return;
+    }
+    this.lastGoawayUri = newSessionUri;
+    try {
+      this.callbacks.onGoaway?.(newSessionUri);
+    } catch {
+      // アプリの onGoaway の例外で後始末を止めない
+    }
   }
 
   private setState(newState: MediaSubscriberState): void {
@@ -1830,6 +1866,9 @@ export class MediaSubscriberImpl implements MediaSubscriber {
    * @throws 解放が先行した場合 (受け取った session をその場で閉じてから)
    */
   private async connectToServer(startGeneration: number): Promise<void> {
+    // 新しい接続では前の session の GOAWAY の抑止を引き継がない。接続中の
+    // GOAWAY (SETUP と同じチャンクで届く) を消さないよう、接続の開始前に戻す
+    this.lastGoawayUri = null;
     // exactOptionalPropertyTypes では optional なフィールドに undefined を渡せないため、
     // 値がある場合だけ載せる
     const session = await this.openSession({
@@ -1860,6 +1899,8 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       onSessionError: (error) => {
         this.callbacks.onError?.(error);
       },
+      // Session の制御ストリーム由来の GOAWAY をアプリへ渡す
+      onSessionGoaway: (newSessionUri) => this.notifyGoaway(newSessionUri),
     });
 
     // 接続の await 中に解放 (stop / close / ピア起点の close) が先行していれば、受け取った
@@ -2156,6 +2197,8 @@ export class MediaSubscriberImpl implements MediaSubscriber {
             this.handlePublishDone(publishDone);
           },
           error: (error) => this.callbacks.onError?.(error),
+          // リクエストストリームの GOAWAY もアプリへ渡す (直前と同じ URI のときだけ抑止する)
+          goaway: (newSessionUri) => this.notifyGoaway(newSessionUri),
         },
         // exactOptionalPropertyTypes では optional な値に undefined を渡せないため、
         // 値がある場合だけ載せる
@@ -2221,6 +2264,8 @@ export class MediaSubscriberImpl implements MediaSubscriber {
             this.handlePublishDone(publishDone);
           },
           error: (error) => this.callbacks.onError?.(error),
+          // リクエストストリームの GOAWAY もアプリへ渡す (直前と同じ URI のときだけ抑止する)
+          goaway: (newSessionUri) => this.notifyGoaway(newSessionUri),
         },
         subscribeOptions,
       );

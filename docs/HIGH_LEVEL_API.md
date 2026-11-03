@@ -167,6 +167,9 @@ catalog を publish する前に `AudioEncoder.isConfigSupported()` で符号化
 ```typescript
 interface MediaPublisherCallbacks {
   onStateChange?: (state: MediaPublisherState) => void;
+  // GOAWAY を受信したときに呼ばれる。新しい Session URI が 0 バイトなら空文字列が
+  // 渡り、現在の URI の再利用を意味する。再接続はアプリが行う (下記「GOAWAY の扱い」)
+  onGoaway?: (newSessionUri: string) => void;
   onError?: (error: Error) => void;
   onClose?: () => void;
 }
@@ -656,6 +659,9 @@ interface MediaSubscriberCallbacks {
   onStateChange?: (state: MediaSubscriberState) => void;
   // カタログを受信するたびに呼ばれる (更新時も呼ばれる)
   onCatalog?: (catalog: Catalog) => void;
+  // GOAWAY を受信したときに呼ばれる。新しい Session URI が 0 バイトなら空文字列が
+  // 渡り、現在の URI の再利用を意味する。再接続はアプリが行う (下記「GOAWAY の扱い」)
+  onGoaway?: (newSessionUri: string) => void;
   // 購読の失敗。低レベル API の error とは異なり、エラーを示す Status Code の PUBLISH_DONE
   // (draft-ietf-moq-transport-22 §9.9 / §12.4) でも呼ばれる。正常な PUBLISH_DONE
   // (TRACK_ENDED 等) では呼ばれず、状態も変わらない
@@ -819,13 +825,36 @@ session も閉じる。`start()` が失敗した場合は確保済みを解放�
 
 #### GOAWAY の扱い
 
-GOAWAY 由来の失敗は素の `Error` (`request stream goaway`) で届き、新しい Session URI は
-高レベル API では取得できない (`MediaSubscriberCallbacks` に goaway が無く、
-`session.subscribe` の goaway コールバックも設定していない)。draft-ietf-moq-transport-22
-§9.2 は、URI が提供された場合にその URI を新しいセッションに使うことをクライアントへ MUST
-とする。高レベル API ではこの MUST を満たせない。URI を使う再接続が必要な場合は、低レベル
-API の `ConnectCallbacks.goaway` / `SubscribeCallbacks.goaway` を使う。URI を使う再接続の
-高レベル対応は現時点の対象外である。
+GOAWAY を受信すると、`MediaSubscriberCallbacks.onGoaway` /
+`MediaPublisherCallbacks.onGoaway` に新しい Session URI が渡る。draft-ietf-moq-transport-22 §9.2 は
+「The client MUST use this URI for the new session if provided. If the URI is zero bytes
+long, the current URI is reused instead.」と定める。ライブラリは**自動で再接続しない**。
+
+- 再接続するアプリは、既存インスタンスを `stop()` / `close()` してから、`onGoaway` の
+  URI を第 1 引数に渡して `createMediaSubscriber` / `createMediaPublisher` を作り直し、
+  購読 / 配信をやり直す。既存インスタンスの `start()` は元の URL にしか接続しないため、
+  再接続にはならない。制御ストリームの GOAWAY はセッション全体の移行対象になり、
+  リクエストストリームの GOAWAY はセッションと他の購読 / 配信が残るため、既存
+  インスタンスを止めずに作り直すと二重になる。start() の実行中 (購読は "subscribing"、
+  配信は "created" / "stopped" の開始途中) は stop() が拒否されるため、close() を使う
+- URI が 0 バイトの GOAWAY では空文字列が渡る。この場合、現在の URI を再利用する (§9.2)。
+  空文字列を `createMediaSubscriber` / `createMediaPublisher` の第 1 引数にそのまま渡すと
+  失敗するため、元の URL を使う
+- `onGoaway` は Session の制御ストリーム由来と、リクエストストリーム由来の両方で
+  呼ばれ得る。リクエストストリームは subscriber が SUBSCRIBE / FETCH、publisher が
+  PUBLISH / PUBLISH_NAMESPACE である。直前と同じ URI の連続通知は抑止する
+- 制御ストリームの GOAWAY はセッションを即座には閉じない (draft-ietf-moq-transport-22
+  §6.6.1)。確立済みのセッションでは、購読の終了またはピアのクローズに伴って `onClose` が
+  続くことがある。`start()` の実行中に GOAWAY が届いた場合、start の結果と `onClose` は
+  保証されない。リクエストストリームの GOAWAY はそのリクエストだけが影響を受け
+  (移行はアプリが行う)、セッションと `onClose` は変わらない
+- `onGoaway` を省略した場合の挙動は変わらない。GOAWAY 由来の失敗は素の `Error`
+  (`request stream goaway`) として `start()` の失敗や `onError` に届く。`onGoaway` を
+  指定した場合も、確立前のリクエストストリームの GOAWAY では `start()` が失敗し
+  `onError` が呼ばれ得る
+- 低レベル API では `ConnectCallbacks.goaway` / `SubscribeCallbacks.goaway` /
+  `NamespacePublicationCallbacks.goaway` / `FetchCallbacks.goaway` /
+  `PublishCallbacks.goaway` を直接使える
 
 ### 統計情報
 

@@ -704,6 +704,14 @@ export class MediaPublisherImpl implements MediaPublisher {
 
   // 接続関連
   private session: Session | null = null;
+  /**
+   * 直前に onGoaway へ渡した新しい Session URI
+   *
+   * 同じ GOAWAY が Session の制御ストリームと PUBLISH / PUBLISH_NAMESPACE の
+   * リクエストストリームの両方で届くと 2 回呼ばれ得るため、直前と同じ URI の
+   * 連続通知を抑止する。
+   */
+  private lastGoawayUri: string | null = null;
   // session close 通知の世代番号。解放 (disposeAllResources) のたびに進み、接続時に捕捉した
   // 値と一致しない通知は自己起点の解放によるものとして捨てる。処理ループの世代とは独立で
   // あり、pause() では進まない (進めると pause のあとのピア起点の close 通知が捨てられる)
@@ -1057,6 +1065,8 @@ export class MediaPublisherImpl implements MediaPublisher {
             this.callbacks.onError?.(error);
           }
         },
+        // リクエストストリームの GOAWAY もアプリへ渡す (直前と同じ URI のときだけ抑止する)
+        goaway: (newSessionUri) => this.notifyGoaway(newSessionUri),
       },
       this.setupAuthorizationTokenOptions(),
     );
@@ -1430,6 +1440,35 @@ export class MediaPublisherImpl implements MediaPublisher {
   // 内部メソッド
 
   /**
+   * GOAWAY をアプリへ通知する
+   *
+   * draft-ietf-moq-transport-22 §9.2 (根拠の仕様はドラフトであり将来変更される
+   * 可能性がある):
+   * "The client MUST use this URI for the new session if provided. If the URI
+   *  is zero bytes long, the current URI is reused instead."
+   * ライブラリは自動で再接続しないため、URI をアプリへ渡して再接続を委ねる。
+   * 同じ GOAWAY が Session の制御ストリームと PUBLISH / PUBLISH_NAMESPACE の
+   * リクエストストリームの両方で届くと 2 回呼ばれ得るため、直前と同じ URI の
+   * 連続通知は抑止する。
+   * 通知の throw は呼び出し元 (低レベルの GOAWAY 通知) の経路へ伝えない。
+   * 新しい Session URI が 0 バイトのときは空文字列が渡る。この場合、現在の URI を
+   * 再利用する (§9.2)。空文字列を接続先に指定することはできない。
+   *
+   * @param newSessionUri - GOAWAY が示した新しい Session URI
+   */
+  private notifyGoaway(newSessionUri: string): void {
+    if (this.lastGoawayUri === newSessionUri) {
+      return;
+    }
+    this.lastGoawayUri = newSessionUri;
+    try {
+      this.callbacks.onGoaway?.(newSessionUri);
+    } catch {
+      // アプリの onGoaway の例外で後始末を止めない
+    }
+  }
+
+  /**
    * start 失敗の通知
    *
    * 送信の失敗の通知の担い手は publisher 層に固定する。事前検証の違反は publisher 層が
@@ -1480,6 +1519,9 @@ export class MediaPublisherImpl implements MediaPublisher {
    * @throws 解放が先行した場合 (受け取った session をその場で閉じてから)
    */
   private async connectToServer(startGeneration: number): Promise<void> {
+    // 新しい接続では前の session の GOAWAY の抑止を引き継がない。接続中の
+    // GOAWAY (SETUP と同じチャンクで届く) を消さないよう、接続の開始前に戻す
+    this.lastGoawayUri = null;
     // exactOptionalPropertyTypes では optional なフィールドに undefined を渡せないため、
     // 値がある場合だけ載せる
     const session = await this.openSession({
@@ -1517,6 +1559,8 @@ export class MediaPublisherImpl implements MediaPublisher {
         }
         this.callbacks.onError?.(error);
       },
+      // Session の制御ストリーム由来の GOAWAY をアプリへ渡す
+      onSessionGoaway: (newSessionUri) => this.notifyGoaway(newSessionUri),
     });
 
     // 接続の await 中に解放 (ピア起点の close / 利用者の close) が先行していれば、受け取った
@@ -1678,6 +1722,8 @@ export class MediaPublisherImpl implements MediaPublisher {
       CATALOG_TRACK_NAME,
       {
         error: (error) => this.callbacks.onError?.(error),
+        // PUBLISH のリクエストストリームの GOAWAY もアプリへ渡す
+        goaway: (newSessionUri) => this.notifyGoaway(newSessionUri),
         // relay は購読者が居ない間 upstream の購読を pause してよい (MAY。
         // draft-ietf-moq-transport-22 §7.6。pause するかは §7.2 の裁量)。paused の間は
         // publisher が Object を送らないため (§3.1.1)、配信の開始時に送った catalog は
@@ -1703,6 +1749,8 @@ export class MediaPublisherImpl implements MediaPublisher {
         audio.trackName,
         {
           error: (error) => this.callbacks.onError?.(error),
+          // PUBLISH のリクエストストリームの GOAWAY もアプリへ渡す
+          goaway: (newSessionUri) => this.notifyGoaway(newSessionUri),
           // 音声にはキーフレームが無く Audio Config は最初の chunk にしか現れないため、
           // 同じ値の再送を抑止したままだと後から接続した購読者が AAC を復号できない。
           // forwardState が 1 になった時点で保持値の送り直しを要求する
@@ -1725,6 +1773,8 @@ export class MediaPublisherImpl implements MediaPublisher {
         video.trackName,
         {
           error: (error) => this.callbacks.onError?.(error),
+          // PUBLISH のリクエストストリームの GOAWAY もアプリへ渡す
+          goaway: (newSessionUri) => this.notifyGoaway(newSessionUri),
           // draft-ietf-moq-transport-22 §9.20.19: 新しい Group の要求には、次のフレームを
           // キーフレームにして新しい Group を始めることで応える。次のフレームまでに届いた
           // 複数の要求は、直前のキーフレームの記録を消すだけなので 1 つの Group にまとまる

@@ -25,7 +25,7 @@ import {
 
 import type { MediaConnectSettings } from "./createMedia/connect";
 
-import type { Session } from "./session";
+import type { Session, SubscribeCallbacks } from "./session";
 
 import type { Subscriber } from "./subscriber";
 
@@ -1460,6 +1460,12 @@ interface OpenedSubscriberConnection {
   sessionCloseCalls: () => number;
   // 確立した購読の unsubscribe が呼ばれた回数 (start の巻き戻しが解放したか)
   unsubscribeCalls: () => number;
+  // Session の制御ストリーム由来の GOAWAY を再現する
+  notifySessionGoaway: (newSessionUri: string) => void;
+  // 購読のリクエストストリーム由来の GOAWAY を再現する (最後の購読の callbacks を使う)
+  notifySubscribeGoaway: (newSessionUri: string) => void;
+  // 保留中の購読要求を reject する (pre-establishment GOAWAY の再現)
+  rejectSubscribe: (error: Error) => void;
 }
 
 /**
@@ -1518,6 +1524,15 @@ function createStartConnectHarness(
           releaseSubscribe = resolve;
         })
       : null;
+    let rejectSubscribe: (error: Error) => void = () => {};
+    // holdSubscribe のときだけ、保留中の購読を reject できるようにする
+    // (使わない場合に未観測の rejection を残さないため)
+    const subscribeFailure =
+      options.holdSubscribe === true
+        ? new Promise<never>((_, reject) => {
+            rejectSubscribe = reject;
+          })
+        : null;
     // session の close の保留。解放は session の参照を切り離してから close を await するため、
     // 止めている間も解放は進行中のまま (state は遷移前のまま) になる
     let notifySessionClosing: () => void = () => {};
@@ -1532,12 +1547,18 @@ function createStartConnectHarness(
       : null;
     let sessionCloseCalls = 0;
     let unsubscribeCalls = 0;
+    let subscribeCallbacks: SubscribeCallbacks | undefined;
     const session = {
-      subscribe: async (): Promise<Subscriber> => {
+      subscribe: async (
+        _namespace: string[],
+        _trackName: string,
+        callbacks?: SubscribeCallbacks,
+      ): Promise<Subscriber> => {
+        subscribeCallbacks = callbacks;
         // 保留する購読だけテストが完了を決める
         if (subscribeGate !== null) {
           notifySubscribing();
-          await subscribeGate;
+          await Promise.race([subscribeGate, subscribeFailure!]);
         }
         return createRecordingSubscriber(() => {
           unsubscribeCalls++;
@@ -1563,11 +1584,116 @@ function createStartConnectHarness(
       resolveSessionClose: () => releaseSessionClose(),
       sessionCloseCalls: () => sessionCloseCalls,
       unsubscribeCalls: () => unsubscribeCalls,
+      notifySessionGoaway: (newSessionUri) => settings.onSessionGoaway(newSessionUri),
+      notifySubscribeGoaway: (newSessionUri) => subscribeCallbacks?.goaway?.(newSessionUri),
+      rejectSubscribe: (error) => rejectSubscribe(error),
     });
     return Promise.resolve(session);
   };
   return { subscriber, control, errors, opened, connectAttempts: () => connectAttempts };
 }
+
+/**
+ * 完了条件: GOAWAY で新しい Session URI が示されたとき、onGoaway がその URI を受け取る。
+ * Session の制御ストリーム由来と購読のリクエストストリーム由来の両方を確認し、
+ * 直前と同じ URI の連続通知が抑止されることも確認する。
+ */
+test("GOAWAY: onGoaway が Session と購読の GOAWAY の URI を受け取る", async () => {
+  const goawayUris: string[] = [];
+  const { subscriber, opened } = createStartConnectHarness(
+    {
+      onGoaway: (newSessionUri) => {
+        goawayUris.push(newSessionUri);
+      },
+    },
+    { holdSubscribe: true },
+  );
+  // 購読の要求が保留されている間に GOAWAY を駆動する。start は購読の解放後に
+  // ハーネスの fetch で失敗するが、GOAWAY の通知は接続直後から観測できる
+  const startResult = subscriber.start().then(
+    () => null,
+    (error: unknown) => (error instanceof Error ? error : new Error(String(error))),
+  );
+  await opened[0].subscribing();
+
+  // 購読のリクエストストリーム由来
+  opened[0].notifySubscribeGoaway("https://example.com/from-subscribe");
+  assert.deepEqual(goawayUris, ["https://example.com/from-subscribe"]);
+
+  // 同じ URI が制御ストリームでも届く (同じ GOAWAY が両方の経路に載る)
+  opened[0].notifySessionGoaway("https://example.com/from-subscribe");
+  assert.deepEqual(goawayUris, ["https://example.com/from-subscribe"]);
+
+  // 別の URI は通知する
+  opened[0].notifySessionGoaway("https://example.com/from-session");
+  assert.deepEqual(goawayUris, [
+    "https://example.com/from-subscribe",
+    "https://example.com/from-session",
+  ]);
+
+  // 非連続の同一 URI は抑止しない (抑止するのは直前と同じ URI の連続通知だけ)
+  opened[0].notifySessionGoaway("https://example.com/from-subscribe");
+  assert.deepEqual(goawayUris, [
+    "https://example.com/from-subscribe",
+    "https://example.com/from-session",
+    "https://example.com/from-subscribe",
+  ]);
+
+  opened[0].resolveSubscribe();
+  // ハーネスの fetch は必ず throw するため start は失敗する (GOAWAY の通知とは独立)
+  const startError = await startResult;
+  assert.instanceOf(startError, Error);
+  await subscriber.close();
+});
+
+/**
+ * 完了条件: onGoaway を省略した場合の既存の挙動 (GOAWAY 由来の失敗が素の Error で
+ * onError に届く) が変わらない。
+ */
+test("GOAWAY: onGoaway を省略しても GOAWAY 由来の失敗は onError に届く", async () => {
+  const { subscriber, errors, opened } = createStartConnectHarness(undefined, {
+    holdSubscribe: true,
+  });
+  const startResult = subscriber.start().then(
+    () => null,
+    (error: unknown) => (error instanceof Error ? error : new Error(String(error))),
+  );
+  await opened[0].subscribing();
+
+  // 低レベルの pre-establishment GOAWAY (goaway 通知 + 購読の reject) を再現する
+  const goawayError = new Error("request stream goaway: https://example.com/new");
+  opened[0].notifySubscribeGoaway("https://example.com/new");
+  opened[0].rejectSubscribe(goawayError);
+  const startError = await startResult;
+  assert.equal(startError?.message, goawayError.message);
+  // 購読の失敗は従来どおり onError に流れる
+  assert.deepEqual(errors, [goawayError]);
+
+  await subscriber.close();
+});
+
+/**
+ * 完了条件: onGoaway を省略しても、GOAWAY の通知そのもので start が壊れない。
+ */
+test("GOAWAY: onGoaway を省略しても GOAWAY の通知で start が壊れない", async () => {
+  const { subscriber, errors, opened } = createStartConnectHarness(undefined, {
+    holdSubscribe: true,
+  });
+  const startResult = subscriber.start().then(
+    () => null,
+    (error: unknown) => (error instanceof Error ? error : new Error(String(error))),
+  );
+  await opened[0].subscribing();
+
+  // onGoaway が無くても GOAWAY の通知は throw せず、onError も呼ばない
+  opened[0].notifySessionGoaway("https://example.com/from-session");
+  opened[0].notifySubscribeGoaway("https://example.com/from-subscribe");
+  assert.deepEqual(errors, []);
+
+  opened[0].resolveSubscribe();
+  await startResult;
+  await subscriber.close();
+});
 
 /**
  * 完了条件: ピア起点の close の解放が進行中のまま利用者が start() を呼び直すと、

@@ -307,6 +307,25 @@ export interface MediaPublisherOptions {
 // MediaPublisher コールバック
 export interface MediaPublisherCallbacks {
   onStateChange?: (state: MediaPublisherState) => void;
+  /**
+   * GOAWAY を受信したときに呼ばれる (新しい Session URI が 0 バイトなら空文字列)
+   *
+   * draft-ietf-moq-transport-22 §9.2 (根拠の仕様はドラフトであり将来変更される
+   * 可能性がある):
+   * "The client MUST use this URI for the new session if provided. If the URI
+   *  is zero bytes long, the current URI is reused instead."
+   * Session の制御ストリーム由来と、PUBLISH / PUBLISH_NAMESPACE のリクエスト
+   * ストリーム由来の両方で呼ばれ得る。直前と同じ URI の連続通知は抑止する。
+   * ライブラリは自動で再接続しないため、アプリがこの URI を使って新しい Session を張る。
+   * 新しい Session URI が 0 バイトのときは空文字列が渡る。この場合、現在の URI を
+   * 再利用する (§9.2)。空文字列を接続先に指定することはできない。
+   * 制御ストリームの GOAWAY はセッションを即座には閉じない。確立済みのセッションでは、
+   * 購読の終了またはピアのクローズに伴って onClose が続くことがある。start() の実行中に
+   * GOAWAY が届いた場合、start の結果と onClose は保証されない。リクエストストリームの
+   * GOAWAY はそのリクエストだけが影響を受け (移行はアプリが行う)、セッションと
+   * onClose は変わらない。
+   */
+  onGoaway?: (newSessionUri: string) => void;
   onError?: (error: Error) => void;
   onClose?: () => void;
 }
@@ -380,6 +399,24 @@ export interface MediaSubscriberOptions {
 export interface MediaSubscriberCallbacks {
   onStateChange?: (state: MediaSubscriberState) => void;
   onCatalog?: (catalog: import("../msf").Catalog) => void;
+  /**
+   * GOAWAY を受信したときに呼ばれる (新しい Session URI が 0 バイトなら空文字列)
+   *
+   * draft-ietf-moq-transport-22 §9.2 (根拠の仕様はドラフトであり将来変更される
+   * 可能性がある):
+   * "The client MUST use this URI for the new session if provided. If the URI
+   *  is zero bytes long, the current URI is reused instead."
+   * Session の制御ストリーム由来と、SUBSCRIBE / FETCH のリクエストストリーム由来の
+   * 両方で呼ばれ得る。直前と同じ URI の連続通知は抑止する。ライブラリは自動で
+   * 再接続しないため、アプリがこの URI を使って新しい Session を張る。
+   * 新しい Session URI が 0 バイトのときは空文字列が渡る (現在の URI を再利用する)。
+   * 制御ストリームの GOAWAY はセッションを即座には閉じない。確立済みのセッションでは、
+   * 購読の終了またはピアのクローズに伴って onClose が続くことがある。start() の実行中に
+   * GOAWAY が届いた場合、start の結果と onClose は保証されない。リクエストストリームの
+   * GOAWAY はそのリクエストだけが影響を受け (移行はアプリが行う)、セッションと
+   * onClose は変わらない。
+   */
+  onGoaway?: (newSessionUri: string) => void;
   onError?: (error: Error) => void;
   onClose?: () => void;
 }
