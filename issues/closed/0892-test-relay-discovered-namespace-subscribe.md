@@ -2,7 +2,7 @@
 
 - Created: 2026-11-02
 - Completed: 2026-11-03
-- Branch: feature/test-relay-discovered-namespace-subscribe
+- Branch: feature/add-relay-discovered-namespace-subscribe
 - Polished: 2026-11-03
 
 ## 目的
