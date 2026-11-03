@@ -1,7 +1,7 @@
 # 制御メッセージ長を varint にし MAX_CONTROL_MESSAGE_SIZE を交渉する
 
 - Created: 2026-11-03
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-03
 - Branch: feature/change-control-message-framing
 - Polished: 2026-11-03
 
@@ -38,4 +38,18 @@ draft-ietf-moq-transport-23 §9 / §9.1.8 は Message Length を 16 bit 固定�
 
 ## 解決方法
 
-{未着手}
+- `ControlStreamReader` / `ControlStreamWriter` を Type (vi64) + Message Length (vi64) + Message Body のフレーミングに変更した。Message Length は本文長で、受信側は宣言長を bigint で比較してから本文を読む。1 / 2 / 3 / 4 / 5 / 9 バイトの Length、チャンク分割、連結メッセージ、非最小 varint を検証するテストと PBT を追加した。
+- SETUP Option 0x09 `MAX_CONTROL_MESSAGE_SIZE` を追加し、`createSetup` の `maxControlMessageSize` で広告、`getSetupMaxControlMessageSize` でピア広告値を取り出して送信上限に設定するようにした。省略時と最小値は 65535、SETUP 自身の送信にも既定値 65535 を適用する。SETUP の値が vi64 として不正、または 65535 未満の場合は MALFORMED_KEY_VALUE (0x6、現行の `KEY_VALUE_FORMATTING_ERROR`) として扱う。
+- `ConnectOptions.maxControlMessageSize` を追加し、`connect()` では WebTransport を生成する前に値を検証する。ローカル受信上限とピア送信上限を `localMaxControlMessageSize` / `peerMaxControlMessageSize` に分けて保持し、制御ストリームと全リクエストストリームの reader / writer へ配線した。`initialize()` 失敗時に WebTransport を閉じる後始末も追加した。
+- 受信した Message Length がローカル上限を超えた場合は `FIELD_LENGTH_EXCEEDED` (0x401) でセッションを閉じる。エラー終了は `sessionHandleFieldLengthExceeded` に集約し、閉鎖済みのセッションでの error コールバック二重通知を防ぐ。
+- 送信する Message Length がピア上限を超える場合は、双方向ストリームを開く前にフレーミングで失敗させ、pending・トークン予約・fill の関連付けを残さないようにした。SUBSCRIBE / PUBLISH / FETCH / TRACK_STATUS / REQUEST_UPDATE の各経路で検証する。
+- draft-23 §9.19 に合わせ、Message Parameter の個別 Value 長上限を撤廃して制御メッセージ全体長のみの制限とした。§8.3 の KVP (Setup Option / Property) の 2^16-1 上限は受信側・送信側の両方で維持し、Property / Immutable Properties / LOC Config の単体エンコーダにも送信前検査を追加した。
+- `docs/LOW_LEVEL_API.md` の `ConnectOptions` 表に `maxControlMessageSize` を追加し、既存の誤り (MOQT_IMPLEMENTATION の Option 番号) も修正した。制御メッセージ形式図の `Length (16)` / `Type (i)` を vi64 に追従させた。
+- CHANGES.md は CODEBASE.md の「MOQT RFC ドラフト中の特別ルール」により更新しない。
+
+### 残課題 (別 issue で扱う)
+
+- `ControlStreamReader.feed` の逐次 concat が O(n²) である点
+- 交渉後の大きな上限で 65535 バイト超の制御メッセージを Session 経由で受理する end-to-end テスト
+- namespaces 系 3 経路の reader / writer 上限配線テスト
+- KVP 長超過時のエラーコードを FIELD_LENGTH_EXCEEDED へ移行する作業 (セッションエラー分類の移行)
