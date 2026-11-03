@@ -1,7 +1,7 @@
 # 高レベル API で確立後のプロトコル違反が onError に 2 回通知される
 
 - Created: 2026-11-02
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-03
 - Branch: feature/fix-high-level-double-on-error
 - Polished: 2026-11-03
 
@@ -66,7 +66,25 @@
 
 ## 解決方法
 
-{未着手}
+`src/session/namespaceLoops.ts` の `createPublicationStreamHandlers` の `onReadError` で、`toSessionCloseError(error)` が non-null を返す (ライブラリがセッションを閉じる) 原因では `namespaceNotifyError` を呼ばないようにした。通知は `ConnectCallbacks.error` だけが担うため、高レベル API の `onError` は 1 回になる。`ctx.reject(error)` は維持し、確立前の `publishNamespace()` の待ちは受信した `ProtocolViolationError` などのまま settle する。namespace / tracks の購読の条件 (`isSessionClosedError`) は変えていない。
+
+テストは `src/session/namespaceLoops.test.ts` に次を追加・更新した。
+
+- 確立前の不正 Redirect でリクエスト単位の通知が 0 件、`ProtocolViolationError` での reject、`PROTOCOL_VIOLATION` での close、`ConnectCallbacks.error` 1 回を固定する
+- `LOOP_CASES` の malformed Track Properties / 破損 REQUEST_OK で、読み取り失敗がセッションを閉じる原因だったときの通知回数をループ種別ごとに固定する (publication は 0 回、namespace / tracks は 1 回、`ConnectCallbacks.error` は 1 回)
+- 確立前と確立後の `RESET_STREAM` (セッションを閉じない読み取りエラー) でリクエスト単位の通知が 1 回だけであること、確立前は同じエラーで reject することを、確立を待ってから固定する
+- 確立後の 2 通目の REQUEST_OK の Track Properties 破損でもリクエスト単位の通知が 0 回であることを固定する
+- GOAWAY 後の REQUEST_ERROR / 読み取り失敗、対象の publication が closed のときの読み取り失敗を通知しないことを固定する
+- セッション終了起源 (`source: "session"`) は publication では通知され得ること、購読系では通知しないことを固定する
+- テストハーネスの `closeWithError` が `ConnectCallbacks.error` を呼ぶようにし、通知の 2 経路を 1 つのテストで観測できるようにした
+
+`src/createMediaPublisher.test.ts` に、確立後に Session エラーが届いたとき `onError` が 1 回だけ通知されるテストを追加した。
+
+契約の記述は `src/session/publicTypes.ts` の `NamespacePublicationCallbacks.error` を正本とし、呼ばれる条件 (デコードと namespace-scoped Redirect の検証を通った `REQUEST_ERROR`、読み取り失敗)、抑止する条件 (ライブラリが `closeWithError` で閉じる原因、要求ストリームの GOAWAY 後、対象の publication が closed のとき)、確立前の Promise の settle を明記した。`docs/LOW_LEVEL_API.md` と `docs/HIGH_LEVEL_API.md` を同じ内容に揃え、`HIGH_LEVEL_API.md` の「2 回呼ばれ得る (既知の制約)」を削除した。namespace / tracks の `error` にも同じ観点の契約を追記した。
+
+`CHANGES.md` は CODEBASE.md の「MOQT RFC ドラフト中の特別ルール」により更新していない。
+
+`vp check` と `vp test --run` が通ることを確認している。
 
 ## 参照
 
