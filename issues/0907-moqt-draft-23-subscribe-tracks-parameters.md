@@ -3,7 +3,7 @@
 - Created: 2026-11-03
 - Completed: {YYYY-MM-DD}
 - Branch: feature/change-subscribe-tracks-parameters
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-11-03
 
 ## 目的
 
@@ -29,7 +29,7 @@ draft 23 §3.6.2 / §9.17 は SUBSCRIBE_TRACKS の許可パラメータを明示
 - 新しい各初期条件を送信でき、未指定時の既定値を変えない
 - 禁止される単一 Track 専用パラメータを送らない
 - 外側 + fill 内側の範囲数の境界を検証する
-- builder / 公開型 / callback に渡す購読条件 / API 文書の一覧が一致する
+- 公開 SubscribeTracksOptions / builder / 送信される Parameters / API 文書の一覧が一致する
 
 ## 参照
 
