@@ -35,7 +35,7 @@
 
 E2E のハーネスに不足があれば足す。`startSubscriber` は namespace を渡すだけなので、既存の露出で足りる見込みである。ただし `tests/e2e/main.ts` の `startSubscriber` は `video` を既定で要求するため、告知した配信が映像を持つことを前提にする (publisher は `video: { codec: "vp8" }` で開始する)。
 
-CI の relay ジョブは `timeout-minutes: 20` で、2 shard (`--shard=N/2`) に分けて `--project=relay --project=chromium-production-relay --grep-invert='調査:'` を実行する。実行されるのは relay project の spec 18 本 (調査専用 2 本は grep で除外) と `chromium-production-relay` の 1 本である。各実行 step の `timeout-minutes` は 8 分で、失敗時にもう 8 分の再実行が入る (実効の制限は job の 20 分ではなく、この 8 分 / shard)。追加する 1 本は 30 秒以内 (接続・告知・購読・数フレームの受信) に収まる見込みだが、実行時間が伸びる場合は既存 spec との統合を検討する。
+CI の relay ジョブは `timeout-minutes: 20` で、2 shard (`--shard=N/2`) に分けて `--project=relay --project=chromium-production-relay --grep-invert='調査:'` を実行する。実行されるのは relay project の spec 19 本 (追加前は 18 本。調査専用 2 本は grep で除外) と `chromium-production-relay` の 1 本である。各実行 step の `timeout-minutes` は 8 分で、失敗時にもう 8 分の再実行が入る (実効の制限は job の 20 分ではなく、この 8 分 / shard)。追加する 1 本は 30 秒以内 (接続・告知・購読・数フレームの受信) に収まる見込みだが、実行時間が伸びる場合は既存 spec との統合を検討する。
 
 ## 完了条件
 
@@ -55,7 +55,7 @@ CI の relay ジョブは `timeout-minutes: 20` で、2 shard (`--shard=N/2`) �
 
 1. `announceNamespace: true` で publisher を開始し、PUBLISH_NAMESPACE の REQUEST_OK が返って `"publishing"` になるまで待つ
 2. 別ページで `SUBSCRIBE_NAMESPACE` を開始し、告知された namespace が NAMESPACE で届くのを待つ
-3. 発見した namespace (`namespaces.find` で取り出した配列) をそのまま `startSubscriber` に渡し、`"active"` かつ `framesReceived > 0`、`keyFramesReceived > 0`、`hasCatalog` / `hasVideoTrack` / `bytesReceived > 0` になるまで待つ
+3. 発見した namespace (`namespaces.find` で取り出した配列) をそのまま `startSubscriber` に渡し、`framesReceived` と `keyFramesReceived` が 0 より大きくなるまで待つ。その後に `"active"`、`hasCatalog`、`hasVideoTrack`、`bytesReceived > 0` を検査する
 4. 購読の間、告知が撤回されていない (対象 namespace の NAMESPACE_DONE を受けていない) ことも確認する
 5. 後始末で subscriber、namespace の購読、publisher を止め、ページを閉じる
 

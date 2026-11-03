@@ -23,7 +23,8 @@ import {
  *
  * 告知と発見の往復 (namespace-announcement.spec.ts) と、既知の namespace の購読
  * (pubsub.spec.ts) を組み合わせ、本来の用途 (発見した配信を視聴する) の全体を
- * 実ブラウザの WebTransport と実リレーだけで確かめる。低レベルの probe は使わない。
+ * 実ブラウザの WebTransport と実リレーだけで確かめる。低レベル API の
+ * `PUBLISH_NAMESPACE` 単体の probe は使わない。
  */
 test("実リレーで発見した namespace の track を購読して映像を受信できる", async ({ browser }) => {
   test.setTimeout(RELAY_TEST_TIMEOUT_MS);
@@ -110,10 +111,12 @@ test("実リレーで発見した namespace の track を購読して映像を�
           ) ?? null,
       { id: activeSubscriptionId, expected: namespace },
     );
-    expect(discovered).not.toBeNull();
+    if (discovered === null) {
+      throw new Error("発見した namespace を取り出せなかった");
+    }
     subscriberId = await observerPage.evaluate(
       (options) => window.__moqtE2E.startSubscriber(options),
-      { url: moqtUri, namespace: discovered! },
+      { url: moqtUri, namespace: discovered },
     );
     const activeSubscriberId = subscriberId;
     await expect
@@ -165,7 +168,7 @@ test("実リレーで発見した namespace の track を購読して映像を�
     expect(publisherStatus.errors).toEqual([]);
     expect(publisherStatus.state).toBe("publishing");
 
-    // 告知は購読の間も維持されている (NAMESPACE_DONE を受けていない)
+    // 告知は購読の間も維持されている (対象の namespace の NAMESPACE_DONE を受けていない)
     const subscriptionStatus = await observerPage.evaluate(
       (id) => window.__moqtE2E.getSubscribeNamespace(id),
       activeSubscriptionId,
@@ -181,7 +184,7 @@ test("実リレーで発見した namespace の track を購読して映像を�
     ).toBe(false);
   } finally {
     // 停止時に relay が control stream を RESET_STREAM することがあるため、
-    // 後始末の失敗で元の失敗を上書きしない
+    // 停止とページ close の失敗で元の失敗を上書きしない
     if (subscriberId !== undefined) {
       await observerPage
         .evaluate((id) => window.__moqtE2E.stopSubscriber(id), subscriberId)
@@ -197,7 +200,7 @@ test("実リレーで発見した namespace の track を購読して映像を�
         .evaluate((id) => window.__moqtE2E.stopPublisher(id), publisherId)
         .catch(() => {});
     }
-    await closeRelayPage(observerPage);
-    await closeRelayPage(publisherPage);
+    await closeRelayPage(observerPage).catch(() => {});
+    await closeRelayPage(publisherPage).catch(() => {});
   }
 });
