@@ -5,6 +5,10 @@
 - Branch: feature/fix-msf-empty-track-name
 - Polished: 2026-10-07
 
+## draft 23 移行時の扱い
+
+2026-11-03 に取得した draft-ietf-moq-transport-23 §2.4.1 は Track Name に最低 1 バイトを要求する。本 issue は draft 22 の前提で起票したものであり、draft 23 への移行では以下の受理方針を実装しない。通常の Track Name を非空に揃える作業は `0911-moqt-draft-23-nonempty-track-names.md` を優先する。空 namespace と namespace-scoped Redirect の空 Track Name は別の扱いである。
+
 ## 目的
 
 draft-ietf-moq-transport-22 §2.4.1 は Track Name を "a sequence of bytes, possibly empty" と定め、draft-ietf-moq-msf-01 §11.1.2 は `--` の区切りとエスケープ規則のみを定めて Track Name の非空を要求しない。`parseMsfFragmentValue` は空の Track Name を拒否しており、仕様に根拠が無い。この関数を公開 API にしたため、制限が利用者に見える契約になった。
