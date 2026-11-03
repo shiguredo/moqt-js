@@ -15,7 +15,8 @@ import {
  * publisher は PUBLISH_NAMESPACE で namespace を告知する。
  *
  * draft-ietf-moq-transport-22 §4.2 (Subscribing to Namespaces):
- * relay は告知された namespace を SUBSCRIBE_NAMESPACE の購読者へ NAMESPACE として列挙する。
+ * relay は告知された namespace を SUBSCRIBE_NAMESPACE の購読者へ NAMESPACE として列挙し、
+ * 告知が撤回されると NAMESPACE_DONE を送る。
  *
  * draft-ietf-moq-transport-22 §9.6 (SUBSCRIBE) — §9.7 (SUBSCRIBE_OK)
  * draft-ietf-moq-msf-01 Section 5 (Catalog)
@@ -86,21 +87,33 @@ test("実リレーで発見した namespace の track を購読して映像を�
             (args) =>
               window.__moqtE2E
                 .getSubscribeNamespace(args.id)
-                .namespaces.some(
+                .namespaces.find(
                   (candidate) =>
                     candidate.length === args.expected.length &&
                     candidate.every((field, index) => field === args.expected[index]),
-                ),
+                ) ?? null,
             { id: activeSubscriptionId, expected: namespace },
           ),
         { message: "SUBSCRIBE_NAMESPACE で告知された namespace を観測する", timeout: 30_000 },
       )
-      .toBe(true);
+      .not.toBeNull();
 
-    // 発見した namespace をそのまま購読へ渡し、映像が届くまで待つ
+    // 発見した namespace を取り出し、そのまま購読へ渡す
+    const discovered = await observerPage.evaluate(
+      (args) =>
+        window.__moqtE2E
+          .getSubscribeNamespace(args.id)
+          .namespaces.find(
+            (candidate) =>
+              candidate.length === args.expected.length &&
+              candidate.every((field, index) => field === args.expected[index]),
+          ) ?? null,
+      { id: activeSubscriptionId, expected: namespace },
+    );
+    expect(discovered).not.toBeNull();
     subscriberId = await observerPage.evaluate(
       (options) => window.__moqtE2E.startSubscriber(options),
-      { url: moqtUri, namespace },
+      { url: moqtUri, namespace: discovered! },
     );
     const activeSubscriberId = subscriberId;
     await expect
@@ -117,6 +130,22 @@ test("実リレーで発見した namespace の track を購読して映像を�
       )
       .toBeGreaterThan(0);
 
+    // キーフレームの到着も待つ。デルタフレームだけでは復号が始まらず、受信した
+    // Object 数を数えているだけでは「映像が届いた」ことにならない
+    await expect
+      .poll(
+        () =>
+          observerPage.evaluate(
+            (id) => window.__moqtE2E.getSubscriber(id).keyFramesReceived,
+            activeSubscriberId,
+          ),
+        {
+          message: "発見した namespace の購読でキーフレームを受信するのを待つ",
+          timeout: 30_000,
+        },
+      )
+      .toBeGreaterThan(0);
+
     // 失敗を握り潰していないことと、購読が active であることを確かめる
     const subscriberStatus = await observerPage.evaluate(
       (id) => window.__moqtE2E.getSubscriber(id),
@@ -128,11 +157,20 @@ test("実リレーで発見した namespace の track を購読して映像を�
     expect(subscriberStatus.hasVideoTrack).toBe(true);
     expect(subscriberStatus.bytesReceived).toBeGreaterThan(0);
 
+    // 告知側のセッションも失敗を握り潰していない
+    const publisherStatus = await publisherPage.evaluate(
+      (id) => window.__moqtE2E.getPublisher(id),
+      activePublisherId,
+    );
+    expect(publisherStatus.errors).toEqual([]);
+    expect(publisherStatus.state).toBe("publishing");
+
     // 告知は購読の間も維持されている (NAMESPACE_DONE を受けていない)
     const subscriptionStatus = await observerPage.evaluate(
       (id) => window.__moqtE2E.getSubscribeNamespace(id),
       activeSubscriptionId,
     );
+    expect(subscriptionStatus.errors).toEqual([]);
     expect(subscriptionStatus.state).toBe("active");
     expect(
       subscriptionStatus.done.some(
@@ -142,17 +180,22 @@ test("実リレーで発見した namespace の track を購読して映像を�
       ),
     ).toBe(false);
   } finally {
+    // 停止時に relay が control stream を RESET_STREAM することがあるため、
+    // 後始末の失敗で元の失敗を上書きしない
     if (subscriberId !== undefined) {
-      await observerPage.evaluate((id) => window.__moqtE2E.stopSubscriber(id), subscriberId);
+      await observerPage
+        .evaluate((id) => window.__moqtE2E.stopSubscriber(id), subscriberId)
+        .catch(() => {});
     }
     if (subscriptionId !== undefined) {
-      await observerPage.evaluate(
-        (id) => window.__moqtE2E.stopSubscribeNamespace(id),
-        subscriptionId,
-      );
+      await observerPage
+        .evaluate((id) => window.__moqtE2E.stopSubscribeNamespace(id), subscriptionId)
+        .catch(() => {});
     }
     if (publisherId !== undefined) {
-      await publisherPage.evaluate((id) => window.__moqtE2E.stopPublisher(id), publisherId);
+      await publisherPage
+        .evaluate((id) => window.__moqtE2E.stopPublisher(id), publisherId)
+        .catch(() => {});
     }
     await closeRelayPage(observerPage);
     await closeRelayPage(publisherPage);
