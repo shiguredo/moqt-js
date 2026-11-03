@@ -9172,8 +9172,8 @@ test("受信 PUBLISH の不正なパラメータでセッションが閉じる",
 });
 
 // ============================================================================
-// namespace 系 3 API の送信失敗時の後始末
-// 取得済み streamReader / writer のロックを残さない (Map 登録は成功時のみ)
+// namespace 系 3 API の送信失敗時の後始末と、publishNamespace の未確立待ち
+// 取得済み streamReader / writer のロックを残さず、確立前の登録も残さない
 // ============================================================================
 
 /**
@@ -9229,7 +9229,14 @@ function createNamespaceSendFailureTransport(failWrites: boolean): {
     createBidirectionalStream: async (): Promise<WebTransportBidirectionalStream> =>
       ({ readable, writable }) as unknown as WebTransportBidirectionalStream,
   } as unknown as WebTransport;
-  return { transport, readable, writable, cancelled, aborted, closed };
+  return {
+    transport,
+    readable,
+    writable,
+    cancelled,
+    aborted,
+    closed,
+  };
 }
 
 test("subscribeNamespace: write 失敗時にストリームリソースを掃除して Map に登録しない", async () => {
@@ -9395,7 +9402,8 @@ test("subscribeTracks: write 失敗時にストリームリソースを掃除し
   }
 
   assert.isDefined(thrown);
-  assert.isTrue(thrown!.message.includes("write failed"));
+  assert.isTrue((thrown?.message ?? "").includes("write failed"));
+  // subscribeTracks は後始末を完了してから throw するため、待ちは不要
   assert.isFalse(readable.locked);
   assert.isFalse(writable.locked);
   // RESET 相当 (cancel / abort) で閉じ、FIN である close は使わない
@@ -9410,7 +9418,7 @@ test("subscribeTracks: write 失敗時にストリームリソースを掃除し
   );
 });
 
-test("publishNamespace: write 失敗時にストリームリソースを掃除して Map に登録しない", async () => {
+test("publishNamespace: write 失敗時にストリームリソースを掃除して Map に残さない", async () => {
   // 送信失敗時は reader / writer のロックを残さず、登録も行わない
   const { transport, readable, writable, cancelled, aborted, closed } =
     createNamespaceSendFailureTransport(true);
@@ -9424,7 +9432,9 @@ test("publishNamespace: write 失敗時にストリームリソースを掃除�
   }
 
   assert.isDefined(thrown);
-  assert.isTrue(thrown!.message.includes("write failed"));
+  assert.isTrue((thrown?.message ?? "").includes("write failed"));
+  // 後始末は reject の後に続くため、解放が完了するまで待つ
+  await waitForMacrotask();
   assert.isFalse(readable.locked);
   assert.isFalse(writable.locked);
   // RESET 相当 (cancel / abort) で閉じ、FIN である close は使わない
@@ -9433,11 +9443,47 @@ test("publishNamespace: write 失敗時にストリームリソースを掃除�
   assert.deepEqual(closed, []);
   readable.getReader().releaseLock();
   writable.getWriter().releaseLock();
-  assert.equal(
-    (session as unknown as { namespacePublications: Map<bigint, unknown> }).namespacePublications
-      .size,
-    0,
+  const internal = session as unknown as {
+    namespacePublications: Map<bigint, unknown>;
+    pendingNamespacePublication: Map<bigint, unknown>;
+  };
+  assert.equal(internal.namespacePublications.size, 0);
+  // 送信待ちの登録も残らない
+  assert.equal(internal.pendingNamespacePublication.size, 0);
+});
+
+/**
+ * 送信に失敗した REGISTER トークンの予約は取り消され、後続の REGISTER が送れる。
+ * publishNamespace の write 失敗経路でも予約が残らないことを固定する。
+ */
+test("publishNamespace: write 失敗時に REGISTER の予約を取り消す", async () => {
+  // write を保留して、予約されたことを観測してから失敗させる
+  const { transport, releaseWrite } = createHeldNamespaceTransport({ failWrite: true });
+  const session = new SessionImpl(transport, {});
+  session.peerMaxAuthTokenCacheSize = 18n;
+  const token = {
+    aliasType: AuthorizationTokenAliasType.REGISTER,
+    tokenAlias: 1n,
+    tokenType: 1n,
+    tokenValue: new Uint8Array(2).fill(0x01),
+  };
+
+  const settled = session.publishNamespace(["live"], {}, { authorizationToken: token }).then(
+    () => null,
+    (error: unknown) => (error instanceof Error ? error : new Error(String(error))),
   );
+  await waitForMacrotask();
+  // 送信前に予約されている
+  assert.equal(session.peerRegisteredAuthTokenSize, 18n);
+
+  // write を失敗させると予約が取り消され、同じ Alias を再予約できる
+  releaseWrite();
+  const rejected = await settled;
+  assert.instanceOf(rejected, Error);
+  await waitForMacrotask();
+  assert.equal(session.peerRegisteredAuthTokenSize, 0n);
+  session.reserveAuthorizationTokenForSend(token);
+  assert.equal(session.peerRegisteredAuthTokenSize, 18n);
 });
 
 /**
@@ -9467,11 +9513,92 @@ function createPendingNamespaceTransport(): {
 }
 
 /**
+ * PUBLISH_NAMESPACE の書き込みを保留できる transport
+ *
+ * publishNamespace は Promise の reject を登録してからストリームの作成と
+ * PUBLISH_NAMESPACE の書き込みを await する。既定では write をテストが解放するまで
+ * 保留し、送信待ちの間の Session 終了を再現する。holdCreate を指定するとストリームの
+ * 作成も保留し、failWrite を指定すると解放後に write を失敗させる。
+ */
+function createHeldNamespaceTransport(
+  options: { holdCreate?: boolean; failWrite?: boolean } = {},
+): {
+  transport: WebTransport;
+  readable: ReadableStream<Uint8Array>;
+  writable: WritableStream<Uint8Array>;
+  cancelled: unknown[];
+  aborted: unknown[];
+  releaseWrite: () => void;
+  releaseCreate: () => void;
+  writeStarted: Promise<void>;
+  closeFromPeer: (info: WebTransportCloseInfo) => void;
+} {
+  const cancelled: unknown[] = [];
+  const aborted: unknown[] = [];
+  const readable = new ReadableStream<Uint8Array>({
+    cancel: (reason?: unknown) => {
+      cancelled.push(reason);
+    },
+  });
+  let releaseWrite: () => void = () => {};
+  const writeGate = new Promise<void>((resolve) => {
+    releaseWrite = resolve;
+  });
+  let notifyWriteStarted: () => void = () => {};
+  const writeStarted = new Promise<void>((resolve) => {
+    notifyWriteStarted = resolve;
+  });
+  const writable = new WritableStream<Uint8Array>({
+    write: async () => {
+      notifyWriteStarted();
+      await writeGate;
+      if (options.failWrite === true) {
+        throw new Error("write failed");
+      }
+    },
+    abort: (reason?: unknown) => {
+      aborted.push(reason);
+    },
+  });
+  let releaseCreate: () => void = () => {};
+  const createGate =
+    options.holdCreate === true
+      ? new Promise<void>((resolve) => {
+          releaseCreate = resolve;
+        })
+      : null;
+  let closeFromPeer: (info: WebTransportCloseInfo) => void = () => {};
+  const closed = new Promise<WebTransportCloseInfo>((resolve) => {
+    closeFromPeer = resolve;
+  });
+  const transport = {
+    closed,
+    createBidirectionalStream: async (): Promise<WebTransportBidirectionalStream> => {
+      if (createGate !== null) {
+        await createGate;
+      }
+      return { readable, writable } as unknown as WebTransportBidirectionalStream;
+    },
+  } as unknown as WebTransport;
+  return {
+    transport,
+    readable,
+    writable,
+    cancelled,
+    aborted,
+    releaseWrite,
+    releaseCreate,
+    writeStarted,
+    closeFromPeer,
+  };
+}
+
+/**
  * publishNamespace が namespacePublications にエントリを登録するまで待つ
  *
- * publishNamespace は双方向ストリームの作成と PUBLISH_NAMESPACE の write を await して
- * からエントリを登録するため、登録前に Session を終了すると reject の対象が無い。
- * テストでは登録を待ってから終了させる。
+ * 登録済みの未確立 publication の reject 経路 (sessionRejectPendingRequests) を
+ * 固定するため、テストは登録を待ってから Session を終了させる。送信前の reject は
+ * pendingNamespacePublication が別に担う。
  */
 async function waitForNamespacePublicationRegistered(session: SessionImpl): Promise<void> {
   const internal = session as unknown as {
@@ -9501,8 +9628,13 @@ test("publishNamespace: Session の close で未確立の待ちが reject する
     () => null,
     (error: unknown) => (error instanceof Error ? error : new Error(String(error))),
   );
-  // エントリを登録する前に close すると reject の対象が無いため、登録を待つ
+  // 登録済みの未確立 publication の reject 経路を固定するため、登録を待つ
   await waitForNamespacePublicationRegistered(session);
+  // handoff が完了しており、送信待ちの登録は残っていない
+  const pendingInternal = session as unknown as {
+    pendingNamespacePublication: Map<bigint, unknown>;
+  };
+  assert.equal(pendingInternal.pendingNamespacePublication.size, 0);
 
   await session.close();
 
@@ -9531,6 +9663,247 @@ test("publishNamespace: ピア起点の close で未確立の待ちが reject �
   const rejected = await settled;
   assert.instanceOf(rejected, Error);
   assert.equal(rejected?.message, "session closed by peer");
+});
+
+/**
+ * draft-ietf-moq-transport-22 §6.6 (Termination):
+ * 送信待ち (ストリーム作成 / write の await) の間に Session を close しても、
+ * publishNamespace の Promise が reject して待ち続けない。
+ */
+test("publishNamespace: 送信待ちの間の close でも reject する", async () => {
+  const { transport, readable, writable, releaseWrite, writeStarted } =
+    createHeldNamespaceTransport();
+  const session = new SessionImpl(transport, {});
+
+  const settled = session.publishNamespace(["live"], {}).then(
+    () => null,
+    (error: unknown) => (error instanceof Error ? error : new Error(String(error))),
+  );
+
+  // write が開始されて保留されるまで待ってから close する
+  await writeStarted;
+  await session.close();
+
+  const rejected = await settled;
+  assert.instanceOf(rejected, Error);
+  assert.equal(rejected?.message, "session closed");
+
+  // write の await が解けたら、Session が終了しているためストリームを解放する
+  releaseWrite();
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (!readable.locked && !writable.locked) {
+      break;
+    }
+    await waitForMacrotask();
+  }
+  assert.isFalse(readable.locked);
+  assert.isFalse(writable.locked);
+});
+
+/**
+ * draft-ietf-moq-transport-22 §6.6 (Termination):
+ * ピア起点の close でも、送信待ちの間の publishNamespace の Promise を reject する。
+ */
+test("publishNamespace: 送信待ちの間のピア起点の close でも reject する", async () => {
+  const { transport, readable, writable, releaseWrite, closeFromPeer } =
+    createHeldNamespaceTransport();
+  const session = new SessionImpl(transport, {});
+
+  const settled = session.publishNamespace(["live"], {}).then(
+    () => null,
+    (error: unknown) => (error instanceof Error ? error : new Error(String(error))),
+  );
+
+  // ピア起点の close は transport.closed の解決で通知される
+  closeFromPeer({ closeCode: 0, reason: "" });
+
+  const rejected = await settled;
+  assert.instanceOf(rejected, Error);
+  assert.equal(rejected?.message, "session closed by peer");
+
+  // write の await が解けたら、Session が終了しているためストリームを解放する
+  releaseWrite();
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (!readable.locked && !writable.locked) {
+      break;
+    }
+    await waitForMacrotask();
+  }
+  assert.isFalse(readable.locked);
+  assert.isFalse(writable.locked);
+});
+
+/**
+ * draft-ietf-moq-transport-22 §6.6 (Termination):
+ * 送信待ちの間に Session が終了したら、完了した write のあとにストリームを解放し、
+ * 送信前の登録を残さない。
+ */
+test("publishNamespace: close 後に write が完了したらストリームを解放する", async () => {
+  const { transport, readable, writable, cancelled, aborted, releaseWrite, writeStarted } =
+    createHeldNamespaceTransport();
+  const session = new SessionImpl(transport, {});
+
+  const settled = session.publishNamespace(["live"], {}).then(
+    () => null,
+    (error: unknown) => (error instanceof Error ? error : new Error(String(error))),
+  );
+
+  // write が開始されて保留されるまで待ってから close する
+  await writeStarted;
+  await session.close();
+  const rejected = await settled;
+  assert.instanceOf(rejected, Error);
+
+  // write の await が解けたら、Session が終了しているためストリームを解放する。
+  // 解放は非同期に進むため、ロックが解けるまでマクロタスクを回す
+  releaseWrite();
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (!readable.locked && !writable.locked) {
+      break;
+    }
+    await waitForMacrotask();
+  }
+
+  assert.isFalse(readable.locked, "reader のロックが解放されていない");
+  assert.isFalse(writable.locked, "writer のロックが解放されていない");
+  // RESET 相当 (cancel / abort) で閉じ、FIN である close は使わない。
+  // write が完了した時点で Session が終了しているため、理由は session closed になる
+  assert.deepEqual(cancelled, ["session closed"]);
+  assert.deepEqual(aborted, ["session closed"]);
+  const internal = session as unknown as {
+    namespacePublications: Map<bigint, unknown>;
+    pendingNamespacePublication: Map<bigint, unknown>;
+  };
+  assert.equal(internal.namespacePublications.size, 0);
+  assert.equal(internal.pendingNamespacePublication.size, 0);
+});
+
+/**
+ * デバッグコールバックが同期的に Session を閉じても、publishNamespace の Promise は
+ * reject する。送信前の登録より前に閉じるため、登録しないまま settle させる必要がある。
+ */
+test("publishNamespace: debug コールバックの同期 close でも reject する", async () => {
+  const { transport, getCreatedCount } = createCountingBidirectionalStreamTransport();
+  let session: SessionImpl | undefined;
+  const created = new SessionImpl(transport, {
+    debug: () => {
+      void session?.close();
+    },
+  });
+  session = created;
+
+  const settled = created.publishNamespace(["live"], {}).then(
+    () => null,
+    (error: unknown) => (error instanceof Error ? error : new Error(String(error))),
+  );
+
+  const rejected = await settled;
+  assert.instanceOf(rejected, Error);
+  assert.equal(rejected?.message, "session closed");
+  // executor の再確認で閉じていると判定し、ストリームを作らない
+  assert.equal(getCreatedCount(), 0);
+  const internal = created as unknown as {
+    pendingNamespacePublication: Map<bigint, unknown>;
+  };
+  assert.equal(internal.pendingNamespacePublication.size, 0);
+});
+
+/**
+ * ストリーム作成の await 中に Session を close すると、publishNamespace の Promise が
+ * reject し、作成されたストリームはロックを取らずに解放される。
+ */
+test("publishNamespace: ストリーム作成待ちの間の close でも reject しストリームを解放する", async () => {
+  const { transport, cancelled, aborted, releaseCreate } = createHeldNamespaceTransport({
+    holdCreate: true,
+  });
+  const session = new SessionImpl(transport, {});
+
+  const settled = session.publishNamespace(["live"], {}).then(
+    () => null,
+    (error: unknown) => (error instanceof Error ? error : new Error(String(error))),
+  );
+
+  // ストリーム作成が保留されている間に close する
+  await session.close();
+  const rejected = await settled;
+  assert.instanceOf(rejected, Error);
+  assert.equal(rejected?.message, "session closed");
+
+  // ストリーム作成が解決すると、ロックを取らずに解放される
+  releaseCreate();
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (cancelled.length > 0 && aborted.length > 0) {
+      break;
+    }
+    await waitForMacrotask();
+  }
+  assert.deepEqual(cancelled, ["session closed"]);
+  assert.deepEqual(aborted, ["session closed"]);
+  const internal = session as unknown as {
+    namespacePublications: Map<bigint, unknown>;
+    pendingNamespacePublication: Map<bigint, unknown>;
+  };
+  assert.equal(internal.namespacePublications.size, 0);
+  assert.equal(internal.pendingNamespacePublication.size, 0);
+});
+
+/**
+ * getReader 自体が失敗した場合も、作成済みの raw ストリームを解放して
+ * 元のエラーで reject する。
+ */
+test("publishNamespace: getReader 失敗時に raw ストリームを解放する", async () => {
+  const { transport, readable, aborted } = createHeldNamespaceTransport();
+  // readable を事前にロックして getReader を失敗させる
+  const lockedReader = readable.getReader();
+  const session = new SessionImpl(transport, {});
+
+  let thrown: Error | undefined;
+  try {
+    await session.publishNamespace(["live"], {});
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.isDefined(thrown);
+  assert.match(thrown?.message ?? "", /lock/i);
+  await waitForMacrotask();
+  // 取得済みでない raw ストリームも abort される
+  assert.deepEqual(aborted, ["namespace request send failed"]);
+  const internal = session as unknown as {
+    pendingNamespacePublication: Map<bigint, unknown>;
+  };
+  assert.equal(internal.pendingNamespacePublication.size, 0);
+  lockedReader.releaseLock();
+});
+
+/**
+ * reader を取得した後に writer の取得が失敗したら、取得済みの reader を解放し、
+ * 元のエラーで reject する。
+ */
+test("publishNamespace: writer 取得失敗時に reader を解放して reject する", async () => {
+  const { transport, readable, writable, cancelled } = createHeldNamespaceTransport();
+  // writable を先にロックして getWriter を失敗させる
+  const lockedWriter = writable.getWriter();
+  const session = new SessionImpl(transport, {});
+
+  let thrown: Error | undefined;
+  try {
+    await session.publishNamespace(["live"], {});
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.isDefined(thrown);
+  assert.match(thrown?.message ?? "", /lock/i);
+  await waitForMacrotask();
+  // 取得済みの reader は解放され、元のエラーで reject される
+  assert.isFalse(readable.locked);
+  assert.deepEqual(cancelled, ["namespace request send failed"]);
+  const internal = session as unknown as {
+    pendingNamespacePublication: Map<bigint, unknown>;
+  };
+  assert.equal(internal.pendingNamespacePublication.size, 0);
+  lockedWriter.releaseLock();
 });
 
 test("subscribeNamespace: 送信前の throw でもストリームリソースを掃除する", async () => {
@@ -9602,10 +9975,9 @@ test("subscribeTracks: 送信前の throw でもストリームリソースを�
   );
 });
 
-test("publishNamespace: 送信前の throw でもストリームリソースを掃除する", async () => {
+test("publishNamespace: 送信前の throw ではストリームを作らない", async () => {
   // debug コールバックの throw で送信前失敗を起こす (encode / build 失敗の代理)
-  const { transport, readable, writable, cancelled, aborted, closed } =
-    createNamespaceSendFailureTransport(false);
+  const { transport, getCreatedCount } = createCountingBidirectionalStreamTransport();
   const session = new SessionImpl(transport, {
     debug: () => {
       throw new Error("debug boom");
@@ -9620,20 +9992,17 @@ test("publishNamespace: 送信前の throw でもストリームリソースを�
   }
 
   assert.isDefined(thrown);
-  assert.isTrue(thrown!.message.includes("debug boom"));
-  assert.isFalse(readable.locked);
-  assert.isFalse(writable.locked);
-  // RESET 相当 (cancel / abort) で閉じ、FIN である close は使わない
-  assert.deepEqual(cancelled, ["namespace request send failed"]);
-  assert.deepEqual(aborted, ["namespace request send failed"]);
-  assert.deepEqual(closed, []);
-  readable.getReader().releaseLock();
-  writable.getWriter().releaseLock();
-  assert.equal(
-    (session as unknown as { namespacePublications: Map<bigint, unknown> }).namespacePublications
-      .size,
-    0,
-  );
+  assert.isTrue((thrown?.message ?? "").includes("debug boom"));
+  // 検証・encode・デバッグコールバックは Promise の作成と送信より前に行うため、
+  // ストリーム自体を作らない
+  assert.equal(getCreatedCount(), 0);
+  const internal = session as unknown as {
+    namespacePublications: Map<bigint, unknown>;
+    pendingNamespacePublication: Map<bigint, unknown>;
+  };
+  assert.equal(internal.namespacePublications.size, 0);
+  // 送信待ちの登録も残らない
+  assert.equal(internal.pendingNamespacePublication.size, 0);
 });
 
 /**

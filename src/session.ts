@@ -62,6 +62,7 @@ import type { PriorGapTracking } from "./session/priorGapTracking";
 import type { EndOfGroupTracking } from "./session/endOfGroupTracking";
 import type { FullTrackNameKey } from "./fullTrackName";
 import type {
+  NamespacePublicationState,
   NamespaceSubscriptionState,
   PublisherStreamState,
   SessionInternal,
@@ -285,7 +286,8 @@ export interface Session {
    * Subscriber は SUBSCRIBE_NAMESPACE でこの通知を受け取れる。
    * 公開の終了は `NamespacePublication.done()` が request のキャンセル
    * (RESET_STREAM と STOP_SENDING、§4.1 / §6.4.2.3) で行う。
-   * Session の終了時は、登録済みの未確立の `publishNamespace()` の Promise を reject する
+   * Session の終了時は、送信待ち (ストリーム作成 / write の await) の間を含めて、
+   * 未確立の `publishNamespace()` の Promise を reject する
    * (§6.6。根拠の仕様はドラフトであり将来変更される可能性がある)。
    */
   publishNamespace(
@@ -508,6 +510,15 @@ export class SessionImpl implements Session {
   // 型は bidi.PendingTrackStatus に集約する (trackKey の追加が片側だけにならないようにする)
   pendingTrackStatus = new Map<bigint, bidi.PendingTrackStatus>();
   /**
+   * 送信待ちの PUBLISH_NAMESPACE の reject
+   *
+   * publishNamespace は Promise の reject を登録してからストリームの作成と
+   * PUBLISH_NAMESPACE の書き込みを待つ。その await の間に Session が終了しても
+   * 呼び出し元を待たせ続けないよう、送信待ちの reject を保持する
+   * (src/session/lifecycle.ts の sessionRejectPendingRequests)。
+   */
+  pendingNamespacePublication = new Map<bigint, { reject: (err: Error) => void }>();
+  /**
    * SUBSCRIBE_NAMESPACE の状態管理
    *
    * draft-ietf-moq-transport-22 §9.15 (SUBSCRIBE_NAMESPACE):
@@ -532,19 +543,7 @@ export class SessionImpl implements Session {
    * REQUEST_OK / REQUEST_ERROR が同じ双方向ストリームで応答される。
    * https://www.ietf.org/archive/id/draft-ietf-moq-transport-22.html#section-9.14
    */
-  namespacePublications = new Map<
-    bigint,
-    {
-      // セッション内部の状態オブジェクトで、callbacks 未指定時に undefined を保持するため `| undefined` を付ける
-      callbacks?: NamespacePublicationCallbacks | undefined;
-      state: "pending" | "active" | "closed";
-      namespace: string[];
-      stream: WebTransportBidirectionalStream;
-      streamReader: ReadableStreamDefaultReader<Uint8Array>;
-      controlReader: ControlStreamReader;
-      writer: WritableStreamDefaultWriter<Uint8Array>;
-    }
-  >();
+  namespacePublications = new Map<bigint, NamespacePublicationState>();
 
   // Publisher ごとのストリーム状態
   // draft-ietf-moq-transport-22 Section 2.2:

@@ -104,6 +104,14 @@ export interface NamespacesSessionInternal {
   readonly namespaceSubscriptions: Map<bigint, NamespaceSubscriptionState>;
   readonly tracksSubscriptions: Map<bigint, TracksSubscriptionState>;
   readonly namespacePublications: Map<bigint, NamespacePublicationState>;
+  /**
+   * 送信待ちの PUBLISH_NAMESPACE の reject
+   *
+   * ストリームの作成と PUBLISH_NAMESPACE の書き込みの await 中は
+   * namespacePublications に登録されていないため、Session 終了時の reject 対象
+   * (sessionRejectPendingRequests) として別に保持する。
+   */
+  readonly pendingNamespacePublication: Map<bigint, { reject: (err: Error) => void }>;
 }
 export async function namespacesSubscribeNamespace(
   session: NamespacesSessionInternal,
@@ -324,7 +332,152 @@ export async function namespacesSubscribeTracks(
   });
 }
 
-export async function namespacesPublishNamespace(
+/**
+ * PUBLISH_NAMESPACE の送信処理に必要な入力
+ *
+ * 引数が多くなり取り違えやすいため 1 つのオブジェクトにまとめる。
+ */
+interface NamespacePublishSendRequest {
+  requestId: bigint;
+  namespace: string[];
+  framed: Uint8Array;
+  normalizedOptions: PublishNamespaceOptions | undefined;
+  callbacks: NamespacePublicationCallbacks | undefined;
+  resolve: (publication: NamespacePublication) => void;
+  reject: (error: Error) => void;
+}
+
+/**
+ * Session の状態を読む
+ *
+ * await を挟んでも TypeScript はプロパティの narrowing を保持するため、
+ * 送信の各段階での状態確認は関数経由で行い、narrowing の影響を受けないようにする。
+ */
+function namespacesReadSessionState(session: NamespacesSessionInternal): SessionState {
+  return session.sessionState;
+}
+
+/**
+ * reader / writer を取得する前の双方向ストリームを解放する
+ *
+ * ストリーム作成の await 中に Session が終了した場合、ロックを取らずに
+ * 両方向を解放する。reader / writer を取得済みなら namespacesCleanupSendFailure を
+ * 使うが、この段階では取得していないため raw のストリームを直接閉じる。
+ */
+async function namespacesCancelRawStreamQuiet(
+  stream: WebTransportBidirectionalStream,
+  reason: string,
+): Promise<void> {
+  try {
+    await stream.readable.cancel(reason);
+  } catch {
+    // 閉じかけのストリーム操作の失敗は無視する
+  }
+  try {
+    await stream.writable.abort(reason);
+  } catch {
+    // 閉じかけのストリーム操作の失敗は無視する
+  }
+}
+
+/**
+ * PUBLISH_NAMESPACE を送信し、結果を呼び出し元の Promise に届ける
+ *
+ * 呼び出し元の Promise は送信より先に作って pendingNamespacePublication に登録する
+ * (送信待ちの間の Session 終了でも settle させるため)。送信が完了したら
+ * namespacePublications に登録して受信ループを開始する。失敗したら元のエラーで
+ * reject したあと、取得済みのリソースを解放する。
+ */
+async function namespacesSendPublishNamespace(
+  session: NamespacesSessionInternal,
+  request: NamespacePublishSendRequest,
+): Promise<void> {
+  const { requestId, namespace, framed, normalizedOptions, callbacks, resolve, reject } = request;
+  let stream: WebTransportBidirectionalStream | undefined;
+  let streamReader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  let controlReader: ControlStreamReader | undefined;
+  let writer: WritableStreamDefaultWriter<Uint8Array> | undefined;
+  try {
+    stream = await session.transport.createBidirectionalStream();
+    // ストリーム作成の await 中に Session が終了した場合は、ロックを取らずに
+    // ストリームを解放して reject する。終了済みのセッションへ書き込まない
+    if (namespacesReadSessionState(session) === "closed") {
+      session.pendingNamespacePublication.delete(requestId);
+      reject(new Error("session closed"));
+      await namespacesCancelRawStreamQuiet(stream, "session closed");
+      return;
+    }
+    // reader / writer の取得も同じ try に含める。ロック済みのストリームを返す
+    // transport では getReader / getWriter が throw するため、detached な
+    // async 処理で未処理 rejection を残さないようにする
+    streamReader = stream.readable.getReader();
+    controlReader = new ControlStreamReader();
+    writer = stream.writable.getWriter();
+  } catch (error) {
+    // 取得済みのリソースだけを掃除する (getWriter の失敗で reader を残さない)。
+    // 後始末の await 中に Session が終了して sessionRejectPendingRequests が
+    // 汎用エラーで reject するのを避けるため、登録の削除と元のエラーでの reject を
+    // 後始末より先に行う (write 失敗側と同じ順序)
+    session.pendingNamespacePublication.delete(requestId);
+    reject(error instanceof Error ? error : new Error(String(error)));
+    if (streamReader !== undefined) {
+      try {
+        await streamReader.cancel("namespace request send failed");
+      } catch {
+        // 閉じかけのストリーム操作の失敗は無視する
+      }
+      streamReader.releaseLock();
+    } else if (stream !== undefined) {
+      // getReader 自体が失敗した場合も、作成済みのストリームを解放する
+      await namespacesCancelRawStreamQuiet(stream, "namespace request send failed");
+    }
+    return;
+  }
+
+  let reservedAuthToken = false;
+  try {
+    reservedAuthToken = requestsReserveAuthorizationToken(session, normalizedOptions);
+    await writer.write(framed);
+  } catch (error) {
+    // 送信失敗時は予約を取り消し、取得済みリソースを掃除する。後始末の await 中に
+    // Session が終了して sessionRejectPendingRequests が汎用エラーで reject するのを
+    // 避けるため、登録の削除と元のエラーでの reject を後始末より先に行う
+    if (reservedAuthToken) {
+      requestsReleaseAuthorizationToken(session, normalizedOptions);
+    }
+    session.pendingNamespacePublication.delete(requestId);
+    reject(error instanceof Error ? error : new Error(String(error)));
+    await namespacesCleanupSendFailure(streamReader, writer);
+    return;
+  }
+
+  // 送信が完了した。Session が既に終了している場合は登録せず、呼び出し元の
+  // Promise を reject する。sessionRejectPendingRequests が既に reject している
+  // 場合でも Promise の settle は 1 回だけなので no-op になる
+  session.pendingNamespacePublication.delete(requestId);
+  if (namespacesReadSessionState(session) === "closed") {
+    reject(new Error("session closed"));
+    await namespacesCleanupSendFailure(streamReader, writer, "session closed");
+    return;
+  }
+
+  // 状態を登録して受信ループを開始する
+  session.namespacePublications.set(requestId, {
+    callbacks,
+    state: "pending",
+    namespace,
+    stream,
+    streamReader,
+    controlReader,
+    writer,
+    // Session の終了時に未確立の Promise を reject するために保持する
+    // (src/session/lifecycle.ts の sessionRejectPendingRequests)
+    reject,
+  });
+  void namespacesStartPublicationStreamLoop(session, requestId, resolve, reject);
+}
+
+export function namespacesPublishNamespace(
   session: NamespacesSessionInternal,
   namespace: string[],
   callbacks?: NamespacePublicationCallbacks,
@@ -347,83 +500,64 @@ export async function namespacesPublishNamespace(
   // draft-ietf-moq-transport-22 §2.4.3 / §6.5: 予約 namespace / .session の送信拒否
   validateTrackNamespaceForSend(namespace);
 
-  // 専用の双方向ストリームを作成
-  const stream = await session.transport.createBidirectionalStream();
-  const streamReader = stream.readable.getReader();
-  const controlReader = new ControlStreamReader();
-  const writer = stream.writable.getWriter();
-
-  // draft-ietf-moq-transport-22 §8.9 / §9.1.4: SETUP の登録成否に応じて正規化する。
-  // 送信に失敗した場合は予約を取り消す (catch を参照)
+  // 送信前に throw し得る処理はすべて済ませ、Promise を作る前に失敗させる
+  // (認可トークンの正規化・メッセージの構築・encode・デバッグコールバック)
   const normalizedOptions = requestsNormalizeAuthorizationToken(session, options);
-  let reservedAuthToken = false;
+  const publishNamespaceMsg = {
+    type: MessageType.PUBLISH_NAMESPACE,
+    requestId,
+    trackNamespace,
+    // AUTHORIZATION_TOKEN (0x03) - draft-ietf-moq-transport-22 Section 9.20.2
+    // draft-ietf-moq-transport-22 §8.9 / §9.1.4: SETUP の登録成否に応じて
+    // 正規化する (登録成功 → USE_ALIAS、登録失敗 → USE_VALUE)
+    parameters:
+      normalizedOptions?.authorizationToken !== undefined
+        ? [encodeAuthorizationTokenParameter(normalizedOptions.authorizationToken)]
+        : [],
+  };
 
-  try {
-    // PUBLISH_NAMESPACE メッセージを構築
-    const publishNamespaceMsg = {
-      type: MessageType.PUBLISH_NAMESPACE,
-      requestId,
-      trackNamespace,
-      // AUTHORIZATION_TOKEN (0x03) - draft-ietf-moq-transport-22 Section 9.20.2
-      // draft-ietf-moq-transport-22 §8.9 / §9.1.4: SETUP の登録成否に応じて
-      // 正規化する (登録成功 → USE_ALIAS、登録失敗 → USE_VALUE)
-      parameters:
-        normalizedOptions?.authorizationToken !== undefined
-          ? [encodeAuthorizationTokenParameter(normalizedOptions.authorizationToken)]
-          : [],
-    };
+  // メッセージをエンコードする
+  // draft-ietf-moq-transport-22 Section 9.14 (PUBLISH_NAMESPACE):
+  // Type (vi64) + Length (16-bit big-endian) + Payload のフレーミングを
+  // ControlStreamWriter に委譲する。
+  // https://www.ietf.org/archive/id/draft-ietf-moq-transport-22.html#section-9.14
+  const payload = encodePublishNamespacePayload(publishNamespaceMsg);
+  const controlWriter = new ControlStreamWriter();
+  const framed = controlWriter.encode(MessageType.PUBLISH_NAMESPACE, payload);
 
-    // メッセージをエンコードして送信
-    // draft-ietf-moq-transport-22 Section 9.14 (PUBLISH_NAMESPACE):
-    // Type (vi64) + Length (16-bit big-endian) + Payload のフレーミングを
-    // ControlStreamWriter に委譲する。
-    // https://www.ietf.org/archive/id/draft-ietf-moq-transport-22.html#section-9.14
-    const payload = encodePublishNamespacePayload(publishNamespaceMsg);
-    const controlWriter = new ControlStreamWriter();
-    const framed = controlWriter.encode(MessageType.PUBLISH_NAMESPACE, payload);
+  // デバッグコールバック
+  session.callbacks.debug?.({
+    direction: "send",
+    type: MessageType.PUBLISH_NAMESPACE,
+    typeName: getMessageTypeName(MessageType.PUBLISH_NAMESPACE),
+    payload,
+    decoded: {
+      requestId: requestId.toString(),
+      trackNamespace: namespace,
+    },
+    timestamp: Date.now(),
+  });
 
-    // デバッグコールバック
-    session.callbacks.debug?.({
-      direction: "send",
-      type: MessageType.PUBLISH_NAMESPACE,
-      typeName: getMessageTypeName(MessageType.PUBLISH_NAMESPACE),
-      payload,
-      decoded: {
-        requestId: requestId.toString(),
-        trackNamespace: namespace,
-      },
-      timestamp: Date.now(),
-    });
-
-    reservedAuthToken = requestsReserveAuthorizationToken(session, normalizedOptions);
-    await writer.write(framed);
-  } catch (error) {
-    // 送信失敗時は予約を取り消し、取得済みリソースを掃除して throw する
-    if (reservedAuthToken) {
-      requestsReleaseAuthorizationToken(session, normalizedOptions);
-    }
-    await namespacesCleanupSendFailure(streamReader, writer);
-    throw error;
-  }
-
-  // REQUEST_OK / REQUEST_ERROR を待つ Promise
+  // REQUEST_OK / REQUEST_ERROR を待つ Promise を送信より先に作り、その reject を
+  // pendingNamespacePublication に登録する。送信は detached に行い、呼び出し元へは
+  // Promise をすぐ返す
   return new Promise<NamespacePublication>((resolve, reject) => {
-    // 状態を登録
-    session.namespacePublications.set(requestId, {
-      callbacks,
-      state: "pending",
+    // デバッグコールバックが同期的に Session を閉じることがあるため、登録前に
+    // 状態を再確認する。閉じていれば登録せず reject する
+    if (session.sessionState === "closed") {
+      reject(new Error("session closed"));
+      return;
+    }
+    session.pendingNamespacePublication.set(requestId, { reject });
+    void namespacesSendPublishNamespace(session, {
+      requestId,
       namespace,
-      stream,
-      streamReader,
-      controlReader,
-      writer,
-      // Session の終了時に未確立の Promise を reject するために保持する
-      // (src/session/lifecycle.ts の sessionRejectPendingRequests)
+      framed,
+      normalizedOptions,
+      callbacks,
+      resolve,
       reject,
     });
-
-    // 専用ストリームの受信ループを開始
-    void namespacesStartPublicationStreamLoop(session, requestId, resolve, reject);
   });
 }
 
@@ -662,16 +796,17 @@ export async function namespacesSendNamespaceRequestUpdate(
 export async function namespacesCleanupSendFailure(
   streamReader: ReadableStreamDefaultReader<Uint8Array>,
   writer: WritableStreamDefaultWriter<Uint8Array>,
+  reason = "namespace request send failed",
 ): Promise<void> {
   try {
-    await streamReader.cancel("namespace request send failed");
+    await streamReader.cancel(reason);
   } catch {
     // 閉じかけのストリーム操作の失敗は無視する
   } finally {
     streamReader.releaseLock();
   }
   try {
-    await writer.abort("namespace request send failed");
+    await writer.abort(reason);
   } catch {
     // 閉じかけのストリーム操作の失敗は無視する
   } finally {
