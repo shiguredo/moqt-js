@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import {
   RELAY_TEST_TIMEOUT_MS,
   closeRelayPage,
@@ -53,27 +53,30 @@ test("実リレーで発見した namespace の track を購読して映像を�
   // フィールドだけにし、NAMESPACE の suffix と連結して自分の namespace を探す
   const namespace = createTestNamespace();
   const subscribedPrefix = [namespace[0]];
-  const publisherPage = await openRelayPage(browser);
-  const observerPage = await openRelayPage(browser);
+  // 2 ページ目の生成が失敗しても 1 ページ目を閉じられるよう、生成も try の中で行う
+  let publisherPage: Page | undefined;
+  let observerPage: Page | undefined;
   let publisherId: string | undefined;
   let subscriptionId: string | undefined;
   let subscriberId: string | undefined;
 
   try {
+    publisherPage = await openRelayPage(browser);
+    observerPage = await openRelayPage(browser);
+    const publisher = publisherPage;
+    const observer = observerPage;
     // 告知する publisher を開始する。start() は PUBLISH_NAMESPACE の REQUEST_OK を
     // 待つため、relay が告知を拒否すればこの evaluate で失敗する
-    publisherId = await publisherPage.evaluate(
-      (options) => window.__moqtE2E.startPublisher(options),
-      { url: moqtUri, namespace, announceNamespace: true },
-    );
+    publisherId = await publisher.evaluate((options) => window.__moqtE2E.startPublisher(options), {
+      url: moqtUri,
+      namespace,
+      announceNamespace: true,
+    });
     const activePublisherId = publisherId;
     await expect
       .poll(
         () =>
-          publisherPage.evaluate(
-            (id) => window.__moqtE2E.getPublisher(id).state,
-            activePublisherId,
-          ),
+          publisher.evaluate((id) => window.__moqtE2E.getPublisher(id).state, activePublisherId),
         { message: "告知が受理されて Publisher が publishing になるのを待つ", timeout: 30_000 },
       )
       .toBe("publishing");
@@ -84,7 +87,7 @@ test("実リレーで発見した namespace の track を購読して映像を�
     await expect
       .poll(
         () =>
-          publisherPage.evaluate(
+          publisher.evaluate(
             (id) => window.__moqtE2E.getPublisher(id).framesSent,
             activePublisherId,
           ),
@@ -93,7 +96,7 @@ test("実リレーで発見した namespace の track を購読して映像を�
       .toBeGreaterThan(0);
 
     // 別セッションで prefix を購読し、告知された namespace を発見する
-    subscriptionId = await observerPage.evaluate(
+    subscriptionId = await observer.evaluate(
       (options) => window.__moqtE2E.startSubscribeNamespace(options),
       { url: moqtUri, namespacePrefix: subscribedPrefix },
     );
@@ -101,7 +104,7 @@ test("実リレーで発見した namespace の track を購読して映像を�
     await expect
       .poll(
         () =>
-          observerPage.evaluate(
+          observer.evaluate(
             (args) =>
               window.__moqtE2E
                 .getSubscribeNamespace(args.id)
@@ -117,7 +120,7 @@ test("実リレーで発見した namespace の track を購読して映像を�
       .not.toBeNull();
 
     // 発見した namespace を取り出し、そのまま購読へ渡す
-    const discovered = await observerPage.evaluate(
+    const discovered = await observer.evaluate(
       (args) =>
         window.__moqtE2E
           .getSubscribeNamespace(args.id)
@@ -131,15 +134,15 @@ test("実リレーで発見した namespace の track を購読して映像を�
     if (discovered === null) {
       throw new Error("発見した namespace を取り出せなかった");
     }
-    subscriberId = await observerPage.evaluate(
-      (options) => window.__moqtE2E.startSubscriber(options),
-      { url: moqtUri, namespace: discovered },
-    );
+    subscriberId = await observer.evaluate((options) => window.__moqtE2E.startSubscriber(options), {
+      url: moqtUri,
+      namespace: discovered,
+    });
     const activeSubscriberId = subscriberId;
     await expect
       .poll(
         () =>
-          observerPage.evaluate(
+          observer.evaluate(
             (id) => window.__moqtE2E.getSubscriber(id).framesReceived,
             activeSubscriberId,
           ),
@@ -155,7 +158,7 @@ test("実リレーで発見した namespace の track を購読して映像を�
     await expect
       .poll(
         () =>
-          observerPage.evaluate(
+          observer.evaluate(
             (id) => window.__moqtE2E.getSubscriber(id).keyFramesReceived,
             activeSubscriberId,
           ),
@@ -167,7 +170,7 @@ test("実リレーで発見した namespace の track を購読して映像を�
       .toBeGreaterThan(0);
 
     // 失敗を握り潰していないことと、購読が active であることを確かめる
-    const subscriberStatus = await observerPage.evaluate(
+    const subscriberStatus = await observer.evaluate(
       (id) => window.__moqtE2E.getSubscriber(id),
       activeSubscriberId,
     );
@@ -178,7 +181,7 @@ test("実リレーで発見した namespace の track を購読して映像を�
     expect(subscriberStatus.bytesReceived).toBeGreaterThan(0);
 
     // 告知側のセッションも失敗を握り潰していない
-    const publisherStatus = await publisherPage.evaluate(
+    const publisherStatus = await publisher.evaluate(
       (id) => window.__moqtE2E.getPublisher(id),
       activePublisherId,
     );
@@ -186,7 +189,7 @@ test("実リレーで発見した namespace の track を購読して映像を�
     expect(publisherStatus.state).toBe("publishing");
 
     // 告知は購読の間も維持されている (対象の namespace の NAMESPACE_DONE を受けていない)
-    const subscriptionStatus = await observerPage.evaluate(
+    const subscriptionStatus = await observer.evaluate(
       (id) => window.__moqtE2E.getSubscribeNamespace(id),
       activeSubscriptionId,
     );
@@ -198,22 +201,26 @@ test("実リレーで発見した namespace の track を購読して映像を�
   } finally {
     // 停止時に relay が control stream を RESET_STREAM することがあるため、
     // 停止とページ close の失敗で元の失敗を上書きしない
-    if (subscriberId !== undefined) {
+    if (subscriberId !== undefined && observerPage !== undefined) {
       await observerPage
         .evaluate((id) => window.__moqtE2E.stopSubscriber(id), subscriberId)
         .catch(() => {});
     }
-    if (subscriptionId !== undefined) {
+    if (subscriptionId !== undefined && observerPage !== undefined) {
       await observerPage
         .evaluate((id) => window.__moqtE2E.stopSubscribeNamespace(id), subscriptionId)
         .catch(() => {});
     }
-    if (publisherId !== undefined) {
+    if (publisherId !== undefined && publisherPage !== undefined) {
       await publisherPage
         .evaluate((id) => window.__moqtE2E.stopPublisher(id), publisherId)
         .catch(() => {});
     }
-    await closeRelayPage(observerPage).catch(() => {});
-    await closeRelayPage(publisherPage).catch(() => {});
+    if (observerPage !== undefined) {
+      await closeRelayPage(observerPage).catch(() => {});
+    }
+    if (publisherPage !== undefined) {
+      await closeRelayPage(publisherPage).catch(() => {});
+    }
   }
 });
