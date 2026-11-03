@@ -1,7 +1,7 @@
 /**
  * MOQT Message Parameter の PBT 用 arbitrary
  *
- * draft-ietf-moq-transport-22 Section 9.20
+ * draft-ietf-moq-transport-23 Section 9.19 (Control Message Parameters)
  *
  * `src/message/*.prop.ts` の各ファイルが同じ arbitrary を再定義していたため、
  * ここに集約する。このファイルは vitest の `test.include`
@@ -21,6 +21,7 @@ import {
   encodeRangeFilter,
   decodeRangeFilter,
   type LocationFilter,
+  type Parameter,
 } from "./parameter";
 import { encodeVarint } from "../varint";
 import { type Property, MOQTPropertyId, TrackPropertyId } from "../properties";
@@ -269,6 +270,48 @@ export const parametersArb = fc
       }
     }
     return true;
+  });
+
+/**
+ * FILL_PARAMETERS の内側 Parameters 列の arbitrary
+ *
+ * draft-ietf-moq-transport-23 §9.19.15 Table 7:
+ * 内側に載せられるのは FILL_TIMEOUT (0x0A) / SUBSCRIBER_PRIORITY (0x20) /
+ * LOCATION_FILTER (0x21) / GROUP_ORDER (0x22) / Range Filters (0x25-0x28) のみ。
+ * 異常系 (一覧外の型・入れ子・切り詰め) は単体テストが担うため、
+ * ここでは Round-trip 用に各種類を高々 1 件ずつ生成する。Range Filter は
+ * §3.3.2 が複数回の出現を許すため、異なる型を最大 2 件生成する
+ * (TRACK_PROPERTY_FILTER 0x29 は SUBSCRIBE_TRACKS 専用のため生成しない)。
+ */
+export const fillParametersArb: fc.Arbitrary<Parameter[]> = fc
+  .record({
+    fillTimeout: fc.option(fc.bigInt({ min: 0n, max: 1000000n }), { nil: undefined }),
+    subscriberPriority: fc.option(fc.integer({ min: 0, max: 255 }), { nil: undefined }),
+    locationFilter: fc.option(locationFilterArb, { nil: undefined }),
+    groupOrder: fc.option(fc.constantFrom(0x01, 0x02), { nil: undefined }),
+    rangeFilters: fc.uniqueArray(
+      rangeFilterParameterArb.filter((parameter) => parameter.type !== 0x29),
+      { maxLength: 2, selector: (parameter) => parameter.type },
+    ),
+  })
+  .map(({ fillTimeout, subscriberPriority, locationFilter, groupOrder, rangeFilters }) => {
+    const parameters: Parameter[] = [];
+    if (fillTimeout !== undefined) {
+      parameters.push({ type: 0x0a, value: encodeVarint(fillTimeout) });
+    }
+    if (subscriberPriority !== undefined) {
+      parameters.push({ type: 0x20, value: new Uint8Array([subscriberPriority]) });
+    }
+    if (locationFilter !== undefined) {
+      parameters.push(encodeLocationFilterParameter(locationFilter));
+    }
+    if (groupOrder !== undefined) {
+      parameters.push({ type: 0x22, value: new Uint8Array([groupOrder]) });
+    }
+    for (const rangeFilter of rangeFilters) {
+      parameters.push(rangeFilter);
+    }
+    return parameters;
   });
 
 // ============================================================================

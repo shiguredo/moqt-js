@@ -1,6 +1,6 @@
 /**
  * MOQT Parameter Unit Tests
- * draft-ietf-moq-transport-22 Section 9.20 (Message Parameter)
+ * draft-ietf-moq-transport-23 Section 9.19 (Control Message Parameters)
  */
 
 import { test, assert } from "vite-plus/test";
@@ -1429,51 +1429,376 @@ test("isRejectedReceiveNamespace: .session の類似バイト列は拒否しな�
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.15:
- * FILL_PARAMETERS の encode / decode ラウンドトリップを検証する。
- * 内側は別メッセージの Parameters 列 (count-prefixed) として扱う。
+ * draft-ietf-moq-transport-23 §9.19.15:
+ * "Its value is a Number of Parameters (vi64) followed by that many Parameters".
+ * 空の fill は Number of Parameters 0 のみで表現され、draft-22 の外側 Length を
+ * 含まない。外側 Length が残ると後続フィールドを誤読するため、固定ワイヤで形式を
+ * 固定する。
  */
-test("encodeFillParameters / decodeFillParameters: ラウンドトリップする", () => {
-  const inner = [
-    { type: 0x0a, value: encodeVarint(100n) },
-    { type: 0x20, value: new Uint8Array([10]) },
-    encodeLocationFilterParameter({ startGroup: 10n, startObject: 2n }),
-    { type: 0x22, value: new Uint8Array([0x01]) },
-  ];
+test("encodeFillParameters: 空の fill は count 0 のみで外側 Length を含まない", () => {
+  const encoded = encodeParameters([encodeFillParameters([])]);
+  // Number of Parameters (外側) = 1 / Type Delta = 0x23 / 内側 count = 0
+  assert.deepEqual(encoded, new Uint8Array([0x01, 0x23, 0x00]));
 
-  const param = encodeFillParameters(inner);
-  assert.equal(param.type, 0x23);
-  // Value は count-prefixed の Parameters 列そのもの
-  // (外側 Length はワイヤエンコード時に付加される)
-  assert.deepEqual(param.value, encodeParameters(inner));
+  const [decoded, consumed] = decodeParameters(encoded);
+  assert.equal(consumed, encoded.length);
+  assert.equal(decoded.length, 1);
+  assert.equal(decoded[0].type, 0x23);
+  // Value は内側 count 0 の 1 バイトのみ (外側 Length のバイトは存在しない)
+  assert.deepEqual(decoded[0].value, new Uint8Array([0x00]));
+  assert.deepEqual(decodeFillParameters(decoded[0]), []);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.19.15:
+ * 内側に複数型を載せた場合も Value は Number of Parameters + Parameters のみであり、
+ * draft-22 の外側 Length を付加しないことを固定ワイヤで検証する。
+ * 内側の Type Delta は内側の先頭を 0 基準とし、昇順に並ぶ。
+ */
+test("encodeFillParameters: 複数型の内側を外側 Length なしでエンコードする", () => {
+  const encoded = encodeParameters([
+    encodeFillParameters([
+      // FILL_TIMEOUT (0x0A)
+      { type: 0x0a, value: encodeVarint(100n) },
+      // SUBSCRIBER_PRIORITY (0x20)
+      { type: 0x20, value: new Uint8Array([10]) },
+      // LOCATION_FILTER (0x21) Type 0x01 (Relative Start) StartGroup 3
+      encodeLocationFilterParameter({ startGroup: 3n }),
+      // GROUP_ORDER (0x22) Descending
+      { type: 0x22, value: new Uint8Array([0x02]) },
+    ]),
+  ]);
+
+  // ワイヤの並び:
+  // [0x01] 外側 Number of Parameters = 1
+  // [0x23] Type Delta = FILL_PARAMETERS
+  // [0x04] 内側 Number of Parameters = 4
+  // [0x0a 0x64] FILL_TIMEOUT (delta 0x0A) / 100
+  // [0x16 0x0a] SUBSCRIBER_PRIORITY (delta 0x16) / 10
+  // [0x01 0x01 0x03] LOCATION_FILTER (delta 0x01) / Type 0x01 / StartGroup 3
+  // [0x01 0x02] GROUP_ORDER (delta 0x01) / Descending
+  assert.deepEqual(
+    encoded,
+    new Uint8Array([0x01, 0x23, 0x04, 0x0a, 0x64, 0x16, 0x0a, 0x01, 0x01, 0x03, 0x01, 0x02]),
+  );
+
+  const [decoded, consumed] = decodeParameters(encoded);
+  assert.equal(consumed, encoded.length);
+  assert.equal(decoded.length, 1);
+  assert.equal(decodeFillParameters(decoded[0]).length, 4);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.19.15:
+ * 内側の Type Delta は外側の直前 Type ではなく内側の先頭を 0 基準とする。
+ * 外側の直前 Type (0x20) を基準にすると内側先頭の delta 0x0A は 0x2A に
+ * なってしまうため、この固定ワイヤで基準の独立性を検証する。
+ */
+test("decodeParameters: 内側の Type Delta は 0 基準である", () => {
+  // ワイヤの並び:
+  // [0x02] 外側 Number of Parameters = 2
+  // [0x20 0x0a] SUBSCRIBER_PRIORITY (delta 0x20) / 10
+  // [0x03] FILL_PARAMETERS の Type Delta (0x23 - 0x20)
+  // [0x01] 内側 Number of Parameters = 1
+  // [0x0a 0x64] FILL_TIMEOUT (内側先頭 = delta 0x0A そのもの) / 100
+  const encoded = new Uint8Array([0x02, 0x20, 0x0a, 0x03, 0x01, 0x0a, 0x64]);
+
+  const [decoded, consumed] = decodeParameters(encoded);
+  assert.equal(consumed, encoded.length);
+  assert.equal(decoded.length, 2);
+  const inner = decodeFillParameters(decoded[1]);
+  assert.equal(inner.length, 1);
+  assert.equal(inner[0].type, 0x0a);
+  assert.deepEqual(inner[0].value, encodeVarint(100n));
+
+  // エンコード結果も同じ固定ワイヤになる (送信側も 0 基準で delta を付ける)
+  assert.deepEqual(
+    encodeParameters([
+      { type: 0x20, value: new Uint8Array([0x0a]) },
+      encodeFillParameters([{ type: 0x0a, value: encodeVarint(100n) }]),
+    ]),
+    encoded,
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.19.15 Table 7:
+ * FILL_PARAMETERS の入れ子は内側の一覧に無いため拒否する。
+ * 受信側は ProtocolViolationError、送信側はローカル API 誤用の Error とする。
+ */
+test("FILL_PARAMETERS: 入れ子の FILL_PARAMETERS は拒否される", () => {
+  // 外側 count 1 / 0x23 / 内側 count 1 / 内側の型 delta 0x23 (入れ子)
+  const nested = new Uint8Array([0x01, 0x23, 0x01, 0x23]);
+  assert.throws(
+    () => decodeParameters(nested),
+    ProtocolViolationError,
+    /FILL_PARAMETERS must not be nested inside FILL_PARAMETERS/,
+  );
+  // 送信側はローカル API 誤用の generic Error (プロトコル違反ではない)
+  let thrown: Error | undefined;
+  try {
+    encodeFillParameters([{ type: 0x23, value: new Uint8Array([0x00]) }]);
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+  assert.isDefined(thrown);
+  assert.match(thrown?.message ?? "", /FILL_PARAMETERS must not be nested inside FILL_PARAMETERS/);
+  assert.notInstanceOf(thrown, ProtocolViolationError);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.19.15:
+ * "An endpoint that receives a parameter inside FILL_PARAMETERS that is not
+ *  listed above MUST close the session with INVALID_PARAMETER."
+ * 一覧外の型は受信時に拒否する。未知型も Value 長を解釈せず、一覧外として
+ * Type Delta の時点で拒否する。
+ */
+test("FILL_PARAMETERS: 一覧外の型を含む内側は受信時に ProtocolViolationError", () => {
+  // FORWARD (0x10) は Table 7 に無い
+  assert.throws(
+    () => decodeParameters(new Uint8Array([0x01, 0x23, 0x01, 0x10, 0x01])),
+    /unsupported parameter inside FILL_PARAMETERS: 0x10/,
+  );
+  // 未知型 (0x24) も一覧外として拒否する (Value のエンコーディングは解釈しない)
+  assert.throws(
+    () => decodeParameters(new Uint8Array([0x01, 0x23, 0x01, 0x24])),
+    /unsupported parameter inside FILL_PARAMETERS: 0x24/,
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.19.15:
+ * 一覧外の型を内側に載せたワイヤはピアのセッションを閉じさせるため、送信側でも
+ * ローカル API 誤用として拒否する。
+ */
+test("encodeFillParameters: 一覧外の型は送信前に拒否する", () => {
+  assert.throws(
+    () => encodeFillParameters([{ type: 0x10, value: new Uint8Array([1]) }]),
+    /parameter type 0x10 is not allowed inside FILL_PARAMETERS/,
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.19.15 Table 7:
+ * TRACK_PROPERTY_FILTER (0x29) は SUBSCRIBE_TRACKS 専用のため、fill の内側には
+ * 載せられない。
+ */
+test("FILL_PARAMETERS: TRACK_PROPERTY_FILTER は内側に載せられない", () => {
+  assert.throws(
+    () => decodeParameters(new Uint8Array([0x01, 0x23, 0x01, 0x29])),
+    ProtocolViolationError,
+    /unsupported parameter inside FILL_PARAMETERS: 0x29/,
+  );
+  assert.throws(
+    () => encodeFillParameters([{ type: 0x29, value: new Uint8Array([0x01, 0x00, 0x00]) }]),
+    /parameter type 0x29 is not allowed inside FILL_PARAMETERS/,
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.19:
+ * "Senders MUST NOT repeat the same Parameter Type in a message unless the
+ *  parameter definition explicitly allows multiple instances of that type to be
+ *  sent in a single message."
+ * 内側は独立した parameter scope のため、内側の列で同じ型が 2 回現れると
+ * 受信時に ProtocolViolationError になる (外側の型の出現状況とは無関係)。
+ */
+test("FILL_PARAMETERS: 内側の重複パラメータは ProtocolViolationError", () => {
+  // 内側 count 2 / SUBSCRIBER_PRIORITY 5 / delta 0 (同じ型) 6
+  const encoded = new Uint8Array([0x01, 0x23, 0x02, 0x20, 0x05, 0x00, 0x06]);
+  assert.throws(
+    () => decodeParameters(encoded),
+    ProtocolViolationError,
+    /duplicate message parameter type inside FILL_PARAMETERS: 0x20/,
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.19.15:
+ * 内側の Type Delta 加算も外側と同じく 2^64-1 を超えると拒否する。
+ */
+test("FILL_PARAMETERS: 内側の Type Delta 加算超過は ProtocolViolationError", () => {
+  // 内側 count 2 / SUBSCRIBER_PRIORITY 5 / 2 件目の delta = 2^64-1
+  const encoded = concatUint8Arrays([
+    new Uint8Array([0x01, 0x23, 0x02, 0x20, 0x05]),
+    encodeVarint(MAX_VARINT),
+  ]);
+  assert.throws(
+    () => decodeParameters(encoded),
+    ProtocolViolationError,
+    /delta type addition exceeds maximum/,
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.19.15:
+ * Number of Parameters より内側が不足する切り詰めは、データ末尾に達した時点で
+ * IncompleteDataError になる。制御メッセージ受信経路ではフレーム長で
+ * バッファが揃っているため、この IncompleteDataError は PROTOCOL_VIOLATION に
+ * 変換されてセッションが閉じる。
+ */
+test("FILL_PARAMETERS: count より内側が不足する切り詰めは IncompleteDataError", () => {
+  // 内側 count 2 だが内側パラメータは 1 件しかない (データ末尾)
+  const truncated = new Uint8Array([0x01, 0x23, 0x02, 0x20, 0x05]);
+  assert.throws(() => decodeParameters(truncated), IncompleteDataError);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.19.15:
+ * 異常に大きな Number of Parameters でも、内側パラメータの読み取りがデータ末尾に
+ * 達した時点で IncompleteDataError となり、無限ループや過剰な走査にならない。
+ */
+test("FILL_PARAMETERS: 2^64-1 の Number of Parameters は IncompleteDataError", () => {
+  // 外側 count 1 / 0x23 / 内側 count = 2^64-1 (内側パラメータは存在しない)
+  const encoded = concatUint8Arrays([new Uint8Array([0x01, 0x23]), encodeVarint(MAX_VARINT)]);
+  assert.throws(() => decodeParameters(encoded), IncompleteDataError);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.19.15:
+ * fill の内側 count が実際より大きい場合、外側の次の Type Delta を内側として
+ * 読み進める。この例では内側の許可型に一致しない型に着地するため、一覧外検証が
+ * 拒否して外側パラメータを黙って取り込まない。fill は独立した Length を持たず
+ * count 自体が境界を定義するため、後続バイトが偶然すべて許可型として解釈できる
+ * 切り詰めは原理的に判別できない (仕様上 Length が無いことの帰結)。
+ */
+test("FILL_PARAMETERS: 不許可型に着地する切り詰めは拒否する", () => {
+  // 外側 count 2: FILL_PARAMETERS (内側 count 2 だが 1 件のみ) + INCLUDE_PROPERTIES
+  // (0x35)。fill の 2 件目として外側の Type Delta 0x12 を読むが、内側の
+  // 直前 Type 0x20 との加算で 0x32 になり、Table 7 に無いため
+  // ProtocolViolationError になる。
+  const encoded = new Uint8Array([0x02, 0x23, 0x02, 0x20, 0x05, 0x12, 0x01]);
+  assert.throws(
+    () => decodeParameters(encoded),
+    /unsupported parameter inside FILL_PARAMETERS: 0x32/,
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.19.15:
+ * FILL_PARAMETERS の内側 count が破損して大きくなった場合、後続の外側
+ * パラメータのバイトが内側の許可型として解釈され得る。fill は独立した Length を
+ * 持たず count 自体が境界を定義するため、count の下で妥当な wire として
+ * 受理されるこのケースは受信側だけでは切り詰めと判別できない (仕様上 Length が
+ * 無いことの帰結)。ここでは「拒否できない既知の制限」として再解釈の構造まで固定する。
+ */
+test("FILL_PARAMETERS: count 過大で許可型に着地する wire は切り詰めと判別できない", () => {
+  // 意図: 外側 2 件 = fill (内側 count 1、SUBSCRIBER_PRIORITY=5) +
+  //       SUBGROUP_FILTER (外側 delta 0x02、Length 2、body 0x02 0x00)
+  // 破損: 内側 count 2。内側 2 件目は本来の外側 Type Delta (0x02) と外側 Length
+  //       (0x02) を GROUP_ORDER=2 として消費し、残った body の 0x02 0x00 が
+  //       次の外側 Type Delta (0x02 -> 0x25) と self-length-prefixed の Length 0
+  //       になる。内側は許可型として整合するため受信側ではエラーにならない。
+  const wire = new Uint8Array([0x02, 0x23, 0x02, 0x20, 0x05, 0x02, 0x02, 0x02, 0x00]);
+  const [decoded] = decodeParameters(wire);
+
+  assert.equal(decoded.length, 2);
+  assert.equal(decoded[0].type, 0x23);
+  // 内側は SUBSCRIBER_PRIORITY と GROUP_ORDER として読まれる
+  const inner = decodeFillParameters(decoded[0]);
+  assert.equal(inner.length, 2);
+  assert.equal(inner[0].type, 0x20);
+  assert.equal(inner[1].type, 0x22);
+  // 外側 2 件目は SUBGROUP_FILTER (0x25) の Length 0 (remove) として再解釈される
+  assert.equal(decoded[1]?.type, 0x25);
+  assert.deepEqual(decoded[1]?.value, new Uint8Array([0x00]));
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.19.15:
+ * draft-22 の外側 Length 形式はこの実装では自動判別せず、draft-23 の
+ * Number of Parameters として読むため復号に失敗する (後方互換を追加しない)。
+ */
+test("FILL_PARAMETERS: draft-22 の外側 Length 形式は自動判別せず拒否する", () => {
+  // draft-22 形式: 外側 count 1 / 0x23 / Length 4 / 内側 count 1 / LOCATION_FILTER...
+  // draft-23 では Length 4 を内側 count 4 と読むため、内側 1 件目の Type Delta
+  // 0x01 (本来の内側 count) が Table 7 に無い型として拒否される
+  const draft22Wire = new Uint8Array([0x01, 0x23, 0x04, 0x01, 0x21, 0x01, 0x03]);
+  assert.throws(() => decodeParameters(draft22Wire), ProtocolViolationError);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.19.15:
+ * Value の終端は Number of Parameters と内側 Parameters で決まるため、残余バイトを
+ * 持つ Value は構築不正として ProtocolViolationError で拒否する。受信した
+ * param.value は外側のデコーダが消費バイト数で正確に切り出すため通常は到達しないが、
+ * 不変条件が崩れた場合にセッション終了へ倒せるようプロトコル違反として扱う
+ * (decodeLocationFilterParameter の残余バイトと同方針)。
+ */
+test("decodeFillParameters: Value の末尾残余バイトは ProtocolViolationError", () => {
+  // 空の fill ([count 0]) に残余バイトを付加する
+  const trailing = new Uint8Array([0x00, 0x00]);
+  assert.throws(
+    () => decodeFillParameters({ type: 0x23, value: trailing }),
+    ProtocolViolationError,
+    /malformed fill parameters/,
+  );
+});
+
+/**
+ * encodeFillParameters は内側の重複を encodeParameters の重複検査で拒否する。
+ */
+test("encodeFillParameters: 内側の重複は Error", () => {
+  let thrown: Error | undefined;
+  try {
+    encodeFillParameters([
+      { type: 0x20, value: new Uint8Array([1]) },
+      { type: 0x20, value: new Uint8Array([2]) },
+    ]);
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+  assert.isDefined(thrown);
+  assert.match(thrown?.message ?? "", /duplicate message parameter type/);
+  // 送信側のローカル API 誤用であり、プロトコル違反ではない
+  assert.notInstanceOf(thrown, ProtocolViolationError);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §3.3.2 / §9.19.15:
+ * Range Filter は同一 Parameter Type の複数出現を許す (§3.3.2)。fill の内側でも
+ * 同型で SetID が異なる 2 件は受理し、同一 (Parameter Type, SetID) の重複は
+ * InvalidFilterError で拒否する。
+ */
+test("decodeFillParameters: 内側の同型 Range Filter は SetID 違いなら受理する", () => {
+  const setIdOne = encodeRangeFilter({
+    type: "subgroup",
+    setId: 1,
+    ranges: [{ start: 0n, end: 10n }],
+  });
+  const setIdTwo = encodeRangeFilter({
+    type: "subgroup",
+    setId: 2,
+    ranges: [{ start: 20n, end: 30n }],
+  });
+  const param = encodeFillParameters([
+    { type: 0x25, value: setIdOne },
+    { type: 0x25, value: setIdTwo },
+  ]);
 
   const decoded = decodeFillParameters(param);
-  assert.equal(decoded.length, 4);
-  assert.equal(decoded[0].type, 0x0a);
-  assert.equal(decoded[1].type, 0x20);
-  assert.equal(decoded[2].type, 0x21);
-  assert.equal(decoded[3].type, 0x22);
+  assert.equal(decoded.length, 2);
+  assert.equal(decoded[0]?.type, 0x25);
+  assert.equal(decoded[1]?.type, 0x25);
 });
 
-/**
- * draft-ietf-moq-transport-22 §9.20.15:
- * Table 7 の一覧に無いパラメータを内側に含む FILL_PARAMETERS は
- * PROTOCOL_VIOLATION で拒否される。
- */
-test("decodeFillParameters: 一覧外のパラメータを含むと ProtocolViolationError", () => {
-  // FORWARD (0x10) は内側の一覧に無い
-  const param = encodeFillParameters([{ type: 0x10, value: new Uint8Array([1]) }]);
-  assert.throws(() => decodeFillParameters(param), ProtocolViolationError);
-});
+test("decodeFillParameters: 内側の同型 Range Filter が同一 SetID なら InvalidFilterError", () => {
+  const first = encodeRangeFilter({
+    type: "subgroup",
+    setId: 1,
+    ranges: [{ start: 0n, end: 10n }],
+  });
+  const second = encodeRangeFilter({
+    type: "subgroup",
+    setId: 1,
+    ranges: [{ start: 20n, end: 30n }],
+  });
+  const param = encodeFillParameters([
+    { type: 0x25, value: first },
+    { type: 0x25, value: second },
+  ]);
 
-/**
- * draft-ietf-moq-transport-22 §9.20.15:
- * TRACK_PROPERTY_FILTER (0x29) は SUBSCRIBE_TRACKS 専用のため、fill の内側には
- * 載せられず PROTOCOL_VIOLATION で拒否される。
- */
-test("decodeFillParameters: TRACK_PROPERTY_FILTER を含むと ProtocolViolationError", () => {
-  const param = encodeFillParameters([{ type: 0x29, value: new Uint8Array([0x01, 0x00, 0x00]) }]);
-  assert.throws(() => decodeFillParameters(param), ProtocolViolationError);
+  assert.throws(() => decodeFillParameters(param), InvalidFilterError);
 });
 
 /**
@@ -1487,7 +1812,7 @@ test("decodeFillParameters: 型不一致は Error", () => {
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.15:
+ * draft-ietf-moq-transport-23 §9.19.15:
  * 内側の除去 (Length=0) は一回限りの fill に意味を持たないため
  * InvalidFilterError で拒否される。
  */
@@ -1576,12 +1901,33 @@ test("decodeMessageParameter: uint8 分岐の残量不足で ProtocolViolationEr
 });
 
 test("decodeMessageParameter: length-prefixed 分岐の Length 宣言超過で ProtocolViolationError", () => {
-  // FILL_PARAMETERS (0x23) + Length 5 宣言 + Value 2 バイトの切り詰め
-  const truncated = new Uint8Array([0x23, 0x05, 0xaa, 0xbb]);
+  // AUTHORIZATION_TOKEN (0x03) + Length 5 宣言 + Value 2 バイトの切り詰め
+  // (FILL_PARAMETERS は draft-23 で外側 Length を持たないため length-prefixed
+  //  分岐の境界検証は Length を持つ AUTHORIZATION_TOKEN で固定する)
+  const truncated = new Uint8Array([0x03, 0x05, 0xaa, 0xbb]);
   assert.throws(
     () => decodeMessageParameter(truncated, 0, 0n),
     /message parameter value length exceeds remaining data/,
   );
+});
+
+test("decodeMessageParameter: FILL_PARAMETERS を外側 Length なしでデコードする", () => {
+  // Type Delta 0x23 / 内側 Number of Parameters 1 / SUBSCRIBER_PRIORITY 5
+  const wire = new Uint8Array([0x23, 0x01, 0x20, 0x05]);
+  const [param, consumed, paramType] = decodeMessageParameter(wire, 0, 0n);
+
+  assert.equal(param.type, 0x23);
+  assert.equal(paramType, 0x23n);
+  // 内側 count と内側パラメータの bytes がそのまま Value になる
+  assert.deepEqual(param.value, new Uint8Array([0x01, 0x20, 0x05]));
+  // 外側 Length を読んでいないため、消費バイト数はワイヤ長と一致する
+  assert.equal(consumed, wire.length);
+});
+
+test("decodeMessageParameter: FILL_PARAMETERS の内側 count 切り詰めは IncompleteDataError", () => {
+  // Type Delta 0x23 のみで内側 Number of Parameters が存在しない
+  const truncated = new Uint8Array([0x23]);
+  assert.throws(() => decodeMessageParameter(truncated, 0, 0n), IncompleteDataError);
 });
 
 test("decodeMessageParameter: self-length-prefixed 分岐の Length 宣言超過で ProtocolViolationError", () => {

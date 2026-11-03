@@ -25,7 +25,7 @@ import {
   buildOverflowingLocationFilterParameter,
 } from "../testSupport/bidi";
 import { concatUint8Arrays } from "../testSupport/helpers";
-import { encodeVarint, MAX_VARINT } from "../varint";
+import { MAX_VARINT } from "../varint";
 import { ControlStreamReader } from "../controlStream";
 import { bidiReadRequestStreamMessages, FILL_NOT_SUPPORTED_REASON } from "./bidi";
 
@@ -290,10 +290,12 @@ test("bidiReadRequestStreamMessages: 正常な LOCATION_FILTER を含む REQUEST
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.15:
+ * draft-ietf-moq-transport-23 §9.19.15:
  * role=publish の受信 REQUEST_UPDATE に一覧外のパラメータを含む
- * FILL_PARAMETERS が含まれる場合、PROTOCOL_VIOLATION でセッションを閉じることを
- * 検証する。REQUEST_OK は応答されない。
+ * FILL_PARAMETERS が含まれる場合、セッションを閉じることを検証する。
+ * 仕様は INVALID_PARAMETER でのクローズを MUST とするが、現行の受信経路は
+ * SessionErrorCode への変換都合で PROTOCOL_VIOLATION として扱う
+ * (具体的なエラー分類への移行は別途対応する)。REQUEST_OK は応答されない。
  */
 test("bidiReadRequestStreamMessages: 一覧外を含む FILL_PARAMETERS の REQUEST_UPDATE (publish ロール) でセッションが閉じる", async () => {
   const ctx = createPublishReadTestContext({});
@@ -305,12 +307,13 @@ test("bidiReadRequestStreamMessages: 一覧外を含む FILL_PARAMETERS の REQU
     ctx.controlReader,
     "publish",
   );
-  // FORWARD (0x10) は Table 7 の一覧に無いため、内側に含めると違反になる
-  const inner = encodeParameters([
+  // FORWARD (0x10) は Table 7 の一覧に無いため、内側に含めると違反になる。
+  // draft-23 の FILL_PARAMETERS の Value は外側 Length を持たない
+  // (Number of Parameters + Parameters) ため、encodeParameters の出力を
+  // そのまま Value にする。
+  const fillValue = encodeParameters([
     { type: MessageParameterType.FORWARD, value: new Uint8Array([1]) },
   ]);
-  const lengthBytes = encodeVarint(BigInt(inner.length));
-  const fillValue = new Uint8Array([...lengthBytes, ...inner]);
   const updatePayload = encodeRequestUpdatePayload({
     type: MessageType.REQUEST_UPDATE,
     requestId: 101n,
@@ -324,6 +327,41 @@ test("bidiReadRequestStreamMessages: 一覧外を含む FILL_PARAMETERS の REQU
   // PROTOCOL_VIOLATION でセッションが閉じ、REQUEST_OK は応答されない
   assert.isDefined(ctx.closedWithError);
   assert.equal(ctx.closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.written.length, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.19.15:
+ * role=publish の受信 REQUEST_UPDATE で FILL_PARAMETERS の内側 count が
+ * 実際の内側 Parameters より大きく、データ末尾に達する場合は
+ * IncompleteDataError となり、受信経路で PROTOCOL_VIOLATION に変換されて
+ * セッションが閉じる。REQUEST_OK は応答されない。
+ */
+test("bidiReadRequestStreamMessages: 切り詰めた FILL_PARAMETERS の REQUEST_UPDATE (publish ロール) でセッションが閉じる", async () => {
+  const ctx = createPublishReadTestContext({});
+
+  const readPromise = bidiReadRequestStreamMessages(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+    "publish",
+  );
+  // 内側 count 2 だが内側 Parameters は 1 件しかない (データ末尾に達する)
+  const fillValue = new Uint8Array([0x02, 0x20, 0x05]);
+  const updatePayload = encodeRequestUpdatePayload({
+    type: MessageType.REQUEST_UPDATE,
+    requestId: 101n,
+    parameters: [{ type: MessageParameterType.FILL_PARAMETERS, value: fillValue }],
+  });
+  const message = ctx.session.controlWriter!.encode(MessageType.REQUEST_UPDATE, updatePayload);
+  ctx.readableController.enqueue(message);
+  ctx.readableController.close();
+  await readPromise;
+
+  // PROTOCOL_VIOLATION でセッションが閉じ、REQUEST_OK は応答されない
+  assert.isDefined(ctx.closedWithError);
+  assert.equal(ctx.closedWithError?.code, SessionErrorCode.PROTOCOL_VIOLATION);
   assert.equal(ctx.written.length, 0);
 });
 

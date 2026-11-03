@@ -1,5 +1,10 @@
 /**
- * PUBLISH / PUBLISH_DONE の異常系・境界値テスト
+ * PUBLISH / PUBLISH_DONE の異常系・境界値テストと FILL_PARAMETERS の配置テスト
+ *
+ * draft-ietf-moq-transport-23 §9.8 (PUBLISH) / §9.19.15 (FILL PARAMETERS):
+ * PUBLISH の Parameters に FILL_PARAMETERS が含まれても、後続の Track Properties の
+ * 位置がずれないことを統合確認する (外側 Length の不在そのものは
+ * parameter.test.ts の固定ワイヤが検証する)。
  *
  * draft-ietf-moq-transport-22 §8.5 (Reason Phrase) / §9.9 (PUBLISH_DONE):
  * Reason Phrase の最大長は 1,024 バイトであり、超過は PROTOCOL_VIOLATION。
@@ -13,8 +18,15 @@
  */
 
 import { test, assert } from "vite-plus/test";
+import { ControlStreamReader, ControlStreamWriter } from "../controlStream";
 import { MessageType } from "./types";
-import { MAX_REASON_PHRASE_LENGTH, createTrackNamespace } from "./parameter";
+import {
+  MAX_REASON_PHRASE_LENGTH,
+  createTrackNamespace,
+  decodeFillParameters,
+  encodeFillParameters,
+  encodeLocationFilterParameter,
+} from "./parameter";
 import {
   type Publish,
   decodePublishDonePayload,
@@ -80,4 +92,87 @@ test("decodePublishPayload: Track Properties は残りバイトすべてとし�
     0,
   );
   assert.deepEqual(withProperties.trackProperties, properties);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.19.15 / §9.8:
+ * PUBLISH は Parameters の後ろに Track Properties が続く。FILL_PARAMETERS の
+ * Value は Number of Parameters + Parameters の自己区切り構造で外側 Length を
+ * 持たないため、fill を含む Parameters を復号しても後続の Track Properties の
+ * 位置がずれないことを検証する。
+ */
+test("decodePublishPayload: FILL_PARAMETERS を含んでも Track Properties を誤読しない", () => {
+  const base = {
+    type: MessageType.PUBLISH,
+    requestId: 1n,
+    trackNamespace: createTrackNamespace(["live"]),
+    trackName: new TextEncoder().encode("video"),
+    trackAlias: 7n,
+  } satisfies Omit<Publish, "parameters" | "trackProperties">;
+
+  // 内側 2 件 (LOCATION_FILTER と SUBSCRIBER_PRIORITY) の fill と、
+  // fill の前に置く外側パラメータ SUBSCRIBER_PRIORITY (0x20、PUBLISH の許可型)
+  const fillParameter = encodeFillParameters([
+    encodeLocationFilterParameter({ startGroup: 1n, startObject: 2n }),
+    { type: 0x20, value: new Uint8Array([10]) },
+  ]);
+  const parameters = [{ type: 0x20, value: new Uint8Array([0x07]) }, fillParameter];
+  const properties = [{ id: 0x02n, value: 5n }];
+
+  const encoded = encodePublishPayload({ ...base, parameters, trackProperties: properties });
+  const decoded = decodePublishPayload(encoded, 0);
+
+  // fill の前の外側パラメータと fill が 2 件として読まれる
+  assert.equal(decoded.parameters.length, 2);
+  assert.equal(decoded.parameters[0].type, 0x20);
+  assert.deepEqual(decoded.parameters[0].value, new Uint8Array([0x07]));
+  assert.equal(decoded.parameters[1].type, 0x23);
+  // fill の内側は 2 件のまま保たれる
+  assert.equal(decodeFillParameters(decoded.parameters[1]).length, 2);
+  // 後続の Track Properties が正しい位置から読まれる
+  assert.deepEqual(decoded.trackProperties, properties);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.19.15 / §9:
+ * 制御メッセージは Message Length でフレーミングされ、ControlStreamReader は
+ * フレームが揃った時点で完全な payload を返す。このテストは 1 バイトずつ供給した
+ * 場合でも、フレーム再構成後の PUBLISH payload で FILL_PARAMETERS の消費長が
+ * 正しく、後続の Track Properties の位置がずれないことをエンドツーエンドで確認する
+ * (fill 固有のチャンク処理ではなく、reader の再構成 + payload 復号の結合を固定する)。
+ */
+test("decodePublishPayload: チャンク境界で分割されても FILL_PARAMETERS を復号できる", () => {
+  const base = {
+    type: MessageType.PUBLISH,
+    requestId: 1n,
+    trackNamespace: createTrackNamespace(["live"]),
+    trackName: new TextEncoder().encode("video"),
+    trackAlias: 7n,
+  } satisfies Omit<Publish, "parameters" | "trackProperties">;
+
+  const fillParameter = encodeFillParameters([
+    encodeLocationFilterParameter({ startGroup: 1n, startObject: 2n }),
+    { type: 0x20, value: new Uint8Array([10]) },
+  ]);
+  const properties = [{ id: 0x02n, value: 5n }];
+  const payload = encodePublishPayload({
+    ...base,
+    parameters: [fillParameter],
+    trackProperties: properties,
+  });
+  const frame = new ControlStreamWriter().encode(MessageType.PUBLISH, payload);
+
+  // 1 バイトずつチャンクとして流し、フレームが揃った時点で 1 通になる
+  const reader = new ControlStreamReader();
+  const messages: { type: number; payload: Uint8Array }[] = [];
+  for (let offset = 0; offset < frame.length; offset += 1) {
+    messages.push(...reader.feed(frame.slice(offset, offset + 1)));
+  }
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].type, MessageType.PUBLISH);
+
+  const decoded = decodePublishPayload(messages[0].payload, 0);
+  assert.equal(decoded.parameters.length, 1);
+  assert.equal(decodeFillParameters(decoded.parameters[0]).length, 2);
+  assert.deepEqual(decoded.trackProperties, properties);
 });

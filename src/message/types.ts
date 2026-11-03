@@ -232,12 +232,15 @@ export const MessageParameterType = {
    */
   GROUP_ORDER: 0x22,
   /**
-   * FILL_PARAMETERS (Section 9.20.15 FILL PARAMETERS Parameter)
+   * FILL_PARAMETERS (draft-ietf-moq-transport-23 Section 9.19.15)
    *
-   * SUBSCRIBE / REQUEST_UPDATE (for a subscription) で fill fetch ストリームを
-   * 要求する。値は fill fetch ストリームに適用する Parameters 列を
-   * length-prefixed で格納する。
-   * draft-ietf-moq-transport-22 Section 9.20.15 (FILL PARAMETERS Parameter)
+   * draft-ietf-moq-transport-23 §9.19.15:
+   * SUBSCRIBE / SUBSCRIBE_TRACKS / PUBLISH / REQUEST_UPDATE (for a subscription)
+   * で fill fetch ストリームを要求する。値は Number of Parameters (vi64) +
+   * その個数の Parameters の自己区切り構造で、外側 Length を持たない
+   * (内側は別メッセージの Parameters として符号化する)。
+   * 現行実装が送信に使うのは SUBSCRIBE と REQUEST_UPDATE であり、
+   * SUBSCRIBE_TRACKS / PUBLISH での利用は受信側の許可集合と合わせて別途対応する。
    */
   FILL_PARAMETERS: 0x23,
   /**
