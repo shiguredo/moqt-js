@@ -3,7 +3,7 @@
 - Created: 2026-11-03
 - Completed: {YYYY-MM-DD}
 - Branch: feature/change-specific-session-errors
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-11-03
 
 ## 目的
 
@@ -35,7 +35,7 @@ draft 23 §12.2 は PROTOCOL_VIOLATION を残しつつ、データ・制御・�
 | DELTA_ENCODING_OVERFLOW 0x400 | delta 復元結果の負数・64 bit 上限超過                    |
 | FIELD_LENGTH_EXCEEDED 0x401   | フィールド・構造の最大長超過                             |
 
-- 生の Token 構造の decode 失敗は §8.9 に従い MALFORMED_AUTH_TOKEN とする。Setup Option / Property の型と Value の不整合は MALFORMED_KEY_VALUE と区別する
+- 既知の Setup Option / Property の Value / Length が Type の定義する serialization に一致しない場合は、§8.3 に従い MALFORMED_KEY_VALUE とする。外側から切り出した Token 構造自体が decode できない場合は、未知 Alias Type を含めて §8.9 の MALFORMED_AUTH_TOKEN とする。Message Parameter は KVP ではないため、AUTHORIZATION_TOKEN パラメータの外側構造の破損まで MALFORMED_KEY_VALUE にまとめず、制御本文の構造不正として分類する
 - DELTA_ENCODING_OVERFLOW / FIELD_LENGTH_EXCEEDED を他の該当コードより優先する。受信途中のデータ不足は直ちにエラーにせず、完全な制御本文の decode 不足や FIN 時に文脈を確定させる
 - 新コードを normalizer / デバッグ表示 / 公開型に反映する。未知コードの §13 の扱いは維持し、範囲によるカテゴリ識別を認証や回復の意味に置き換えない
 - 空 Track Name と要求受信者への GOAWAY は、§2.4.1 / §9.2 が明示する PROTOCOL_VIOLATION を維持する。文字列置換で全例外を一括変更しない
