@@ -2,7 +2,7 @@
 
 - Created: 2026-11-03
 - Completed: 2026-11-03
-- Branch: feature/change-control-message-framing
+- Branch: feature/change-moqt-draft-23
 - Polished: 2026-11-03
 
 ## 目的
