@@ -24,6 +24,7 @@ import {
   type LocationFilter,
   type MediaPublisher,
   type MediaSubscriber,
+  type MediaSubscriberOptions,
   type NamespacePublication,
   type NamespaceSubscription,
   type Session,
@@ -186,6 +187,12 @@ export interface StartSubscriberOptions {
    */
   rendezvousTimeout?: number;
 }
+
+/** startSubscriberFailure が受け取るオプション (実際に使うフィールドだけ) */
+export type StartSubscriberFailureOptions = Pick<
+  StartSubscriberOptions,
+  "url" | "namespace" | "rendezvousTimeout"
+>;
 
 /** Subscriber の開始失敗の観測結果 */
 export interface SubscriberStartFailure {
@@ -762,10 +769,37 @@ async function stopPublisher(id: HandleId): Promise<PublisherStatus> {
 }
 
 /**
+ * createMediaSubscriber に渡すオプションを組み立てる
+ *
+ * startSubscriber と startSubscriberFailure で同じ形にする (exactOptionalPropertyTypes
+ * では optional な値に undefined を渡せないため、購読するトラックだけを載せる)。
+ * video を省略した場合は常に映像トラックを要求する。createMediaSubscriber は音声か
+ * 映像のどちらかを要求するため、呼び出し元が audio / video を指定できない経路
+ * (startSubscriberFailure) でもこの既定に頼る。
+ */
+function buildMediaSubscriberOptions(
+  options: Pick<
+    StartSubscriberOptions,
+    "namespace" | "video" | "audio" | "audioCodec" | "rendezvousTimeout"
+  >,
+): MediaSubscriberOptions {
+  return {
+    namespace: options.namespace,
+    ...(options.video === false ? {} : { video: { codec: "vp8" } }),
+    ...(options.audio === true
+      ? { audio: { codec: options.audioCodec === "aac" ? "aac" : "opus" } }
+      : {}),
+    ...(options.rendezvousTimeout === undefined
+      ? {}
+      : { rendezvousTimeout: options.rendezvousTimeout }),
+  };
+}
+
+/**
  * 同一 namespace を subscribe する Subscriber を開始する
  *
- * `start()` はカタログの受信まで待つ。Publisher が先に動いていないとカタログが
- * 見つからず失敗するため、spec は Publisher のフレーム送信を確認してから呼ぶ。
+ * spec は Publisher のフレーム送信を確認してから呼ぶ (catalog が届かないと
+ * 受信タイムアウト (5 秒) で start() が失敗する)。
  */
 async function startSubscriber(options: StartSubscriberOptions): Promise<HandleId> {
   rememberRelayUri(options.url);
@@ -773,28 +807,11 @@ async function startSubscriber(options: StartSubscriberOptions): Promise<HandleI
 
   let subscriber: MediaSubscriber;
   try {
-    subscriber = await createMediaSubscriber(
-      options.url,
-      {
-        namespace: options.namespace,
-        // exactOptionalPropertyTypes では optional な値に undefined を渡せないため、
-        // 購読するトラックだけを載せる
-        ...(options.video === false ? {} : { video: { codec: "vp8" } }),
-        ...(options.audio === true
-          ? { audio: { codec: options.audioCodec === "aac" ? "aac" : "opus" } }
-          : {}),
-        // exactOptionalPropertyTypes では optional な値に undefined を渡せないため、
-        // 値がある場合だけ載せる
-        ...(options.rendezvousTimeout === undefined
-          ? {}
-          : { rendezvousTimeout: options.rendezvousTimeout }),
+    subscriber = await createMediaSubscriber(options.url, buildMediaSubscriberOptions(options), {
+      onError: (error) => {
+        errors.push(toErrorMessage(error));
       },
-      {
-        onError: (error) => {
-          errors.push(toErrorMessage(error));
-        },
-      },
-    );
+    });
     await subscriber.start();
   } catch (error) {
     throw new Error(toErrorMessage(error), { cause: error });
@@ -1112,23 +1129,13 @@ async function stopSubscribeNamespace(id: HandleId): Promise<SubscribeNamespaceS
  * start() が成功した場合も、失敗の観測結果としてその旨を返す。
  */
 async function startSubscriberFailure(
-  options: StartSubscriberOptions,
+  options: StartSubscriberFailureOptions,
 ): Promise<SubscriberStartFailure> {
   rememberRelayUri(options.url);
   try {
     const subscriber = await createMediaSubscriber(
       options.url,
-      {
-        namespace: options.namespace,
-        // createMediaSubscriber は音声か映像のどちらかを要求する。この経路では
-        // catalog の SUBSCRIBE の結果だけを見るため、映像を要求しておく
-        video: { codec: "vp8" },
-        // exactOptionalPropertyTypes では optional な値に undefined を渡せないため、
-        // 値がある場合だけ載せる
-        ...(options.rendezvousTimeout === undefined
-          ? {}
-          : { rendezvousTimeout: options.rendezvousTimeout }),
-      },
+      buildMediaSubscriberOptions(options),
       {
         onError: () => {
           // start() の失敗として観測するため、ここでは記録しない
@@ -1163,7 +1170,7 @@ export interface MoqtE2EApi {
   startSubscriber(options: StartSubscriberOptions): Promise<HandleId>;
   getSubscriber(id: HandleId): SubscriberStatus;
   stopSubscriber(id: HandleId): Promise<SubscriberStatus>;
-  startSubscriberFailure(options: StartSubscriberOptions): Promise<SubscriberStartFailure>;
+  startSubscriberFailure(options: StartSubscriberFailureOptions): Promise<SubscriberStartFailure>;
   startFetch(options: StartFetchOptions): Promise<HandleId>;
   getFetch(id: HandleId): FetchStatus;
   stopFetch(id: HandleId): Promise<FetchStatus>;

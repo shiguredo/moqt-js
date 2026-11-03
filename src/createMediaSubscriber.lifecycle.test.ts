@@ -2609,49 +2609,53 @@ test("subscribeCatalog: rendezvousTimeout 未指定は SUBSCRIBE に載せない
  * 未処理の rejection も出さない。
  */
 test("subscribeCatalog: 受信タイマーは SUBSCRIBE_OK の後に始まる", async () => {
-  const { subscriber, errors } = createTestSubscriber({ video: {} });
-  const control = subscriber as unknown as SubscriberLifecycleControl & {
-    subscribeCatalog(startGeneration: number, timeoutMs?: number): Promise<void>;
-  };
-  let releaseSubscribe: () => void = () => {};
-  const subscribeGate = new Promise<void>((resolve) => {
-    releaseSubscribe = resolve;
+  await withUnhandledRejectionWatch(async (unhandled) => {
+    const { subscriber, errors } = createTestSubscriber({ video: {} });
+    const control = subscriber as unknown as SubscriberLifecycleControl & {
+      subscribeCatalog(startGeneration: number, timeoutMs?: number): Promise<void>;
+    };
+    let releaseSubscribe: () => void = () => {};
+    const subscribeGate = new Promise<void>((resolve) => {
+      releaseSubscribe = resolve;
+    });
+    let liveObject: (obj: MoqtObject) => void = () => {};
+    control.session = {
+      subscribe: async (...args: Parameters<Session["subscribe"]>) => {
+        liveObject = args[2].object;
+        await subscribeGate;
+        // SUBSCRIBE_OK の LARGEST_OBJECT だけを持つ最小の Subscriber
+        return { largestLocation: null } as Subscriber;
+      },
+      // FETCH は即座に失敗させ、FETCH 終了処理を済ませておく
+      fetch: () => Promise.reject(new Error("no catalog")),
+    } as unknown as Session;
+    control.currentState = "subscribing";
+
+    const pending = control.subscribeCatalog(control.sessionGeneration, 20);
+    // SUBSCRIBE_OK を待つ間はタイマーが動かず、受信タイムアウトも起きない
+    await sleep(60);
+    assert.isNull(control.catalogTimer);
+    assert.isNull(control.catalogResolve);
+    assert.equal(errors.length, 0);
+
+    // SUBSCRIBE_OK の後からタイマーが動く
+    releaseSubscribe();
+    await sleep(0);
+    assert.isNotNull(control.catalogTimer);
+
+    // catalog を届けて待ちを解決し、タイマーが解除されること
+    liveObject({
+      groupId: 0n,
+      objectId: 0n,
+      status: 0,
+      payload: encodeCatalog(makeCatalog([{ name: "video", packaging: "loc", isLive: true }])),
+    });
+    await pending;
+    assert.isNull(control.catalogTimer);
+    assert.equal(errors.length, 0);
+    await waitForUnhandledRejectionDetection();
+    assert.deepEqual(unhandled, []);
   });
-  let liveObject: (obj: MoqtObject) => void = () => {};
-  control.session = {
-    subscribe: async (...args: Parameters<Session["subscribe"]>) => {
-      liveObject = args[2].object;
-      await subscribeGate;
-      // SUBSCRIBE_OK の LARGEST_OBJECT だけを持つ最小の Subscriber
-      return { largestLocation: null } as Subscriber;
-    },
-    // FETCH は即座に失敗させ、FETCH 終了処理を済ませておく
-    fetch: () => Promise.reject(new Error("no catalog")),
-  } as unknown as Session;
-  control.currentState = "subscribing";
-
-  const pending = control.subscribeCatalog(control.sessionGeneration, 20);
-  // SUBSCRIBE_OK を待つ間はタイマーが動かず、受信タイムアウトも起きない
-  await sleep(60);
-  assert.isNull(control.catalogTimer);
-  assert.isNull(control.catalogResolve);
-  assert.equal(errors.length, 0);
-
-  // SUBSCRIBE_OK の後からタイマーが動く
-  releaseSubscribe();
-  await sleep(0);
-  assert.isNotNull(control.catalogTimer);
-
-  // catalog を届けて待ちを解決し、タイマーが解除されること
-  liveObject({
-    groupId: 0n,
-    objectId: 0n,
-    status: 0,
-    payload: encodeCatalog(makeCatalog([{ name: "video", packaging: "loc", isLive: true }])),
-  });
-  await pending;
-  assert.isNull(control.catalogTimer);
-  assert.equal(errors.length, 0);
 });
 
 /**

@@ -17,6 +17,11 @@ import {
  * 高レベル API の rendezvousTimeout が SUBSCRIBE に載り、publisher 不在のときに
  * RequestError (code と retryInterval) として start() の失敗に届くことと、
  * publisher が居る購読が待ちの指定で壊れないことを確かめる。
+ *
+ * この spec は RENDEZVOUS_TIMEOUT の有無で結果が変わらない (省略時の既定も 0 で、
+ * publisher 不在なら relay は即 DOES_NOT_EXIST を返す)。パラメータが実際に SUBSCRIBE に
+ * 載ることは単体テストが固定しており、ここでは実リレーで RequestError になることだけを
+ * 確かめる。
  */
 test("実リレーで publisher 不在の購読に RENDEZVOUS_TIMEOUT を載せると RequestError で失敗する", async ({
   browser,

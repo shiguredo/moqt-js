@@ -725,53 +725,65 @@ test("subscribeMediaTracks: 音声も SUBSCRIBE_OK の Track Property を購読�
 /**
  * subscribeMediaTracks の購読オプションを捕捉する制御口
  *
- * 音声トラックを 1 本だけ購読し、`session.subscribe` に渡された options を記録する。
- * `authInfo` を渡すと認可が必要な track になる (§5.2.42)。
+ * 音声または映像のトラックを 1 本だけ購読し、`session.subscribe` に渡された
+ * options と購読したトラック名を記録する。`authInfo` を渡すと認可が必要な track に
+ * なる (§5.2.42)。
  */
 function createMediaTrackSubscribeCapture(
-  authInfo?: CatalogTrack["authInfo"],
-  rendezvousTimeout?: number,
+  track: "audio" | "video",
+  options: { authInfo?: CatalogTrack["authInfo"]; rendezvousTimeout?: number } = {},
 ): {
   control: SubscriberInitialConfigControl & {
     session: Session | null;
-    audioTrackInfo: CatalogTrack | null;
     sessionGeneration: number;
     subscribeMediaTracks(startGeneration: number): Promise<void>;
   };
   captured: Array<SubscribeOptions | undefined>;
+  capturedTracks: string[];
 } {
-  const subscriber = createTestSubscriber({
-    audio: { codec: "opus" },
-    ...(rendezvousTimeout === undefined ? {} : { rendezvousTimeout }),
-  }).subscriber;
+  const { authInfo, rendezvousTimeout } = options;
+  // exactOptionalPropertyTypes では optional な値に undefined を渡せないため、
+  // 値がある場合だけ載せる
+  const timeoutOptions = rendezvousTimeout === undefined ? {} : { rendezvousTimeout };
+  const subscriber =
+    track === "audio"
+      ? createTestSubscriber({ audio: { codec: "opus" }, ...timeoutOptions }).subscriber
+      : createTestSubscriber({ video: { codec: "av1" }, ...timeoutOptions }).subscriber;
   const control = subscriber as unknown as SubscriberInitialConfigControl & {
     session: Session | null;
-    audioTrackInfo: CatalogTrack | null;
     sessionGeneration: number;
     subscribeMediaTracks(startGeneration: number): Promise<void>;
   };
-  control.audioDecoder = {
-    configure: async () => {},
-    decode: () => {},
-  };
-  control.audioDecoderConfigured = true;
-  control.audioTrackInfo = {
-    name: "audio",
-    packaging: "loc",
-    isLive: true,
-    codec: "opus",
-    samplerate: 48000,
-    channelConfig: "2",
-    ...(authInfo === undefined ? {} : { authInfo }),
-  };
+  if (track === "audio") {
+    control.audioDecoder = { configure: async () => {}, decode: () => {} };
+    control.audioDecoderConfigured = true;
+    control.audioTrackInfo = {
+      name: "audio",
+      packaging: "loc",
+      isLive: true,
+      codec: "opus",
+      samplerate: 48000,
+      channelConfig: "2",
+      ...(authInfo === undefined ? {} : { authInfo }),
+    };
+  } else {
+    control.videoDecoder = { configure: async () => {}, decode: () => {} };
+    control.videoDecoderConfigured = true;
+    control.videoTrackInfo = makeVideoTrackInfo({
+      codec: "av01.0.04M.08",
+      ...(authInfo === undefined ? {} : { authInfo }),
+    });
+  }
   const captured: Array<SubscribeOptions | undefined> = [];
+  const capturedTracks: string[] = [];
   control.session = {
     subscribe: async (...args: Parameters<Session["subscribe"]>): Promise<Subscriber> => {
+      capturedTracks.push(args[1]);
       captured.push(args[3]);
       return { largestLocation: null, trackProperties: [] } as unknown as Subscriber;
     },
   } as unknown as Session;
-  return { control, captured };
+  return { control, captured, capturedTracks };
 }
 
 /**
@@ -780,7 +792,9 @@ function createMediaTrackSubscribeCapture(
  * getAuthorizationToken コールバックが無い場合の既定のトークンになる。
  */
 test("subscribeMediaTracks: authInfo を持つ track に SETUP のトークンを付与する", async () => {
-  const { control, captured } = createMediaTrackSubscribeCapture({ cat: {} });
+  const { control, captured } = createMediaTrackSubscribeCapture("audio", {
+    authInfo: { cat: {} },
+  });
   const token = useValueToken();
   (
     control.session as unknown as { setupAuthorizationToken: AuthorizationToken | undefined }
@@ -794,7 +808,7 @@ test("subscribeMediaTracks: authInfo を持つ track に SETUP のトークン�
 
 // authInfo を持たない track は認可が不要なため、SETUP のトークンを付与しない (§5.2.42)
 test("subscribeMediaTracks: authInfo を持たない track には SETUP のトークンを付与しない", async () => {
-  const { control, captured } = createMediaTrackSubscribeCapture();
+  const { control, captured } = createMediaTrackSubscribeCapture("audio");
   (
     control.session as unknown as { setupAuthorizationToken: AuthorizationToken | undefined }
   ).setupAuthorizationToken = useValueToken();
@@ -807,7 +821,7 @@ test("subscribeMediaTracks: authInfo を持たない track には SETUP のト�
 
 // authInfo があり SETUP にもトークンが無い場合は、購読前にエラーにする (§11.4.4)
 test("subscribeMediaTracks: authInfo があり SETUP にもトークンが無ければ throw する", async () => {
-  const { control } = createMediaTrackSubscribeCapture({ cat: {} });
+  const { control } = createMediaTrackSubscribeCapture("audio", { authInfo: { cat: {} } });
 
   let error: unknown;
   try {
@@ -831,16 +845,20 @@ test("subscribeMediaTracks: rendezvousTimeout を音声の SUBSCRIBE に載せ�
     { given: 0, expected: 0n },
   ];
   for (const { given, expected } of cases) {
-    const { control, captured } = createMediaTrackSubscribeCapture(undefined, given);
+    const { control, captured, capturedTracks } = createMediaTrackSubscribeCapture("audio", {
+      rendezvousTimeout: given,
+    });
     await control.subscribeMediaTracks(control.sessionGeneration);
     assert.equal(captured.length, 1);
+    // ヘルパーの分岐が壊れて映像を購読しても通らないよう、トラック名も確認する
+    assert.equal(capturedTracks[0], "audio");
     assert.equal(captured[0]?.rendezvousTimeout, expected);
   }
 });
 
 // 未指定の場合はパラメータを載せない (relay の既定も 0 だが、明示と省略を区別する)
 test("subscribeMediaTracks: rendezvousTimeout 未指定は SUBSCRIBE に載せない", async () => {
-  const { control, captured } = createMediaTrackSubscribeCapture();
+  const { control, captured } = createMediaTrackSubscribeCapture("audio");
   await control.subscribeMediaTracks(control.sessionGeneration);
 
   assert.equal(captured.length, 1);
@@ -852,52 +870,16 @@ test("subscribeMediaTracks: rendezvousTimeout 未指定は SUBSCRIBE に載せ�
  * 映像の SUBSCRIBE にも RENDEZVOUS_TIMEOUT を載せる (音声と同じ経路を使う)。
  */
 test("subscribeMediaTracks: rendezvousTimeout を映像の SUBSCRIBE に載せる", async () => {
-  const subscriber = createTestSubscriber({
-    video: { codec: "av1" },
+  const { control, captured, capturedTracks } = createMediaTrackSubscribeCapture("video", {
     rendezvousTimeout: 250,
-  }).subscriber;
-  const control = subscriber as unknown as SubscriberInitialConfigControl & {
-    session: Session | null;
-    videoTrackInfo: CatalogTrack | null;
-    sessionGeneration: number;
-    subscribeMediaTracks(startGeneration: number): Promise<void>;
-  };
-  control.videoDecoder = {
-    configure: async () => {},
-    decode: () => {},
-  };
-  control.videoDecoderConfigured = true;
-  control.videoTrackInfo = makeVideoTrackInfo({ codec: "av01.0.04M.08" });
-  const captured: Array<SubscribeOptions | undefined> = [];
-  control.session = {
-    subscribe: async (...args: Parameters<Session["subscribe"]>): Promise<Subscriber> => {
-      captured.push(args[3]);
-      return { largestLocation: null, trackProperties: [] } as unknown as Subscriber;
-    },
-  } as unknown as Session;
+  });
 
   await control.subscribeMediaTracks(control.sessionGeneration);
 
   assert.equal(captured.length, 1);
+  // ヘルパーの track 分岐が壊れて音声を購読しても通らないよう、トラック名も確認する
+  assert.equal(capturedTracks[0], "video");
   assert.equal(captured[0]?.rendezvousTimeout, 250n);
-});
-
-/**
- * 完了条件: rendezvousTimeout は 0 以上 Number.MAX_SAFE_INTEGER 以下の整数だけを受け付け、
- * 負数・小数・非有限・上限超は生成時に拒否する。
- */
-test("rendezvousTimeout: 不正な値を生成時に拒否する", () => {
-  const invalid = [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 1];
-  for (const value of invalid) {
-    assert.throws(
-      () => createTestSubscriber({ rendezvousTimeout: value }),
-      /rendezvousTimeout must be an integer/,
-    );
-  }
-  // 境界値は受け付ける
-  for (const value of [0, Number.MAX_SAFE_INTEGER]) {
-    assert.doesNotThrow(() => createTestSubscriber({ rendezvousTimeout: value }));
-  }
 });
 
 /**

@@ -34,7 +34,12 @@ import { compareLocations } from "../session/params";
 import type { PublishDoneInfo, Session } from "../session";
 import type { Subscriber } from "../subscriber";
 
-/** Catalog の受信タイムアウト (ミリ秒) */
+/**
+ * Catalog の受信タイムアウト (ミリ秒)
+ *
+ * SUBSCRIBE_OK を受けた時点から数える (relay が publisher の出現を待って
+ * SUBSCRIBE_OK を保留する間は進めない)。
+ */
 const CATALOG_RECEIVE_TIMEOUT = 5000;
 
 /**
@@ -176,15 +181,17 @@ export class CatalogSubscription {
    *
    * 異常系契約: 受信タイムアウトで失敗した後は catalogReceiveFailed で以降の
    * オブジェクトを破棄する (ドレインでフル catalog を resolve した場合は破棄せず、
-   * 以降の live 更新も適用する)。session.subscribe 失敗時は即時掃除して
-   * throw する。成功時を含めタイマーは解除する。
+   * 以降の live 更新も適用する)。session.subscribe の失敗時点では受信タイマーも
+   * catalogResolve / catalogReject もまだ作られていないため、解除は不要である
+   * (FETCH フェーズの状態だけを戻して throw する)。成功時はタイマーを解除する。
    * FETCH の応答が期限までに終わらない場合も、live で届いていたフル catalog は
    * 破棄せずドレインして resolve する (FETCH が end も error も通知しないリレーでも
    * 受信済みの catalog を使い切る)。この場合 FETCH は FETCH_OK を受ける前に
    * 保留のまま残る (Fetcher を取得できないため取り消す経路が無い)。
    *
    * @param startGeneration start の開始時に捕捉した世代番号 (解放が先行していないかの検査用)
-   * @param timeoutMs Catalog 受信タイムアウト (ミリ秒、省略時は CATALOG_RECEIVE_TIMEOUT)
+   * @param timeoutMs Catalog 受信タイムアウト (ミリ秒、省略時は CATALOG_RECEIVE_TIMEOUT)。
+   *   SUBSCRIBE_OK を受けた時点から数える
    */
   async subscribe(
     startGeneration: number,
@@ -247,11 +254,8 @@ export class CatalogSubscription {
         },
       );
     } catch (error) {
-      // session.subscribe 失敗時はタイマー発火を待たず即時掃除する。
-      // catalogSubscriber は未登録のため unsubscribe 不要である。
-      this.clearCatalogTimer();
-      this.state.catalogResolve = null;
-      this.state.catalogReject = null;
+      // 受信タイマーと受信待ちは SUBSCRIBE_OK の後に作るため、この時点では存在しない。
+      // 購読も未登録なので unsubscribe も不要である。FETCH フェーズの状態だけを戻す
       this.resetCatalogFetchPhase();
       throw error;
     }

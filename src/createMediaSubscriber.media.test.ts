@@ -912,6 +912,36 @@ test("receiveVideoObject: 前の Group の stream が終わらなくても上限
 });
 
 /**
+ * 完了条件: rendezvousTimeout は 0 以上 Number.MAX_SAFE_INTEGER 以下の整数だけを受け付け、
+ * 負数・小数・非有限・上限超は生成時に拒否する。
+ */
+test("MediaSubscriberImpl: rendezvousTimeout の不正値を拒否する", async () => {
+  const invalid = [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 1];
+  for (const value of invalid) {
+    assert.throws(
+      () => createTestSubscriber({ rendezvousTimeout: value }),
+      /rendezvousTimeout must be an integer/,
+      `不正な値 ${value} を拒否すること`,
+    );
+  }
+  // 境界値は受け付ける
+  for (const value of [0, Number.MAX_SAFE_INTEGER]) {
+    assert.doesNotThrow(() => createTestSubscriber({ rendezvousTimeout: value }));
+  }
+
+  // 公開 API の生成経路でも reject する
+  const factoryError = await captureThrown(
+    createMediaSubscriber("moqt://example.com/live", {
+      namespace: ["live"],
+      video: {},
+      rendezvousTimeout: -1,
+    }),
+  );
+  assert.ok(factoryError instanceof Error);
+  assert.match(factoryError.message, /rendezvousTimeout/);
+});
+
+/**
  * 完了条件: `preDecodeDelayMs` は 0 と上限を受け付け、負数・非有限数・上限超過は拒否する。
  * 0 のときは遅延の段を作らず、既存の経路をそのまま通す。
  */
@@ -1533,8 +1563,9 @@ test("FETCH の応答が終わらないまま期限に達し live がフル cata
   assert.isNull(control.catalogResolve);
 });
 
-test("session.subscribe throw 後に即時掃除されタイマー副作用がない", async () => {
-  // throw 直後にフェーズ状態が掃除され、後続のタイマー発火で副作用がないこと
+test("session.subscribe の失敗時に受信タイマーが作られない", async () => {
+  // throw 直後にフェーズ状態が掃除されること。受信タイマーを作らないため、
+  // timeout を超えて待っても受信タイムアウトは起きない
   const subscriber = createTestSubscriber({}).subscriber;
   const control = subscriber as unknown as SubscriberCatalogControl;
   const subscribeError = new Error("subscribe failed");
@@ -1543,14 +1574,15 @@ test("session.subscribe throw 後に即時掃除されタイマー副作用が�
 
   const thrown = await captureThrown(control.subscribeCatalog(control.sessionGeneration, 10));
   assert.strictEqual(thrown, subscribeError);
-  // 即時掃除されていること
+  // 失敗後に受信タイマーと待ちが残らないこと (タイマーの作成順序は
+  // lifecycle の「受信タイマーは SUBSCRIBE_OK の後に始まる」テストが固定する)
   assert.isFalse(control.catalogFetchInProgress);
   assert.equal(control.pendingCatalogObjects.length, 0);
   assert.isNull(control.catalogFetchLastLocation);
   assert.isNull(control.catalogResolve);
   assert.isNull(control.catalogTimer);
 
-  // タイマー発火待ち後も副作用がないこと。
+  // 実装が誤ってタイマーを作った場合に備え、timeout を超えて待っても副作用がないこと。
   // 30 ms は timeout (10 ms) を上回る実時間待機 (fake timers 禁止のため実時間で駆動する)
   await sleep(30);
   assert.isFalse(control.catalogFetchInProgress);
