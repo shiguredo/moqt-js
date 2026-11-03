@@ -31,7 +31,7 @@ draft-ietf-moq-transport-22 §9.2 は、GOAWAY で新しい Session URI が提�
 
 - `MediaConnectSettings` に `onSessionGoaway?: (newSessionUri: string) => void` を足し、`connectMediaSession` で `ConnectCallbacks.goaway` に配線する。高レベル API の callbacks (`MediaSubscriberCallbacks.onGoaway` / `MediaPublisherCallbacks.onGoaway`) へ流す
 - リクエストストリーム上の GOAWAY は、`session.subscribe` の `SubscribeCallbacks.goaway` と `publishNamespace` の `NamespacePublicationCallbacks.goaway` にも渡し、同じ `onGoaway` へ流す。同じ GOAWAY が Session とリクエストストリームの両方で届くと 2 回呼ばれ得るため、高レベル側では同じ URI の通知を 1 回に抑止する (低レベルは `session.receivedGoaway` とリクエストストリームの重複チェックを別々に持つ)
-- Session の GOAWAY はセッションを即座には閉じない (§6.6.1 の NO_ERROR クローズは購読の終了を待つ)。`onGoaway` の通知後に `onClose` が続くことを契約に書く
+- Session の GOAWAY はセッションを即座には閉じない (§6.6.1 の NO_ERROR クローズは購読の終了を待つ)。`onGoaway` の通知後に `onClose` が続くことがあることを契約に書く
 - 再接続はアプリが `onGoaway` の URI を使って行う。ライブラリは自動で再接続しない
 
 `docs/HIGH_LEVEL_API.md` の「GOAWAY の扱い」を、「`onGoaway` で新しい Session URI を受け取り、アプリが再接続する。ライブラリは自動移行しない」という契約に書き直す。「§9.2 の MUST を高レベル API では満たせない」という現在の記述は、`onGoaway` の追加で解消する。
@@ -50,18 +50,23 @@ draft-ietf-moq-transport-22 §9.2 は、GOAWAY で新しい Session URI が提�
 
 高レベル API に GOAWAY の通知だけを追加した。自動移行 (新しい Session を張り直して購読 / PUBLISH を引き継ぐ) は issue の設計方針どおり対象外とした。
 
-- `src/codec/types.ts` の `MediaSubscriberCallbacks` / `MediaPublisherCallbacks` に `onGoaway?: (newSessionUri: string) => void` を追加した。Session の制御ストリーム由来とリクエストストリーム由来の両方で呼ばれ得ること、同じ URI の通知は 1 回に抑止すること、`onGoaway` の後に `onClose` が続くことを JSDoc に書いた
+- `src/codec/types.ts` の `MediaSubscriberCallbacks` / `MediaPublisherCallbacks` に `onGoaway?: (newSessionUri: string) => void` を追加した。Session の制御ストリーム由来とリクエストストリーム由来の両方で呼ばれ得ること、直前と同じ URI の連続通知は抑止すること、`onGoaway` の後に `onClose` が続くことを JSDoc に書いた
 - `src/createMedia/connect.ts` の `MediaConnectSettings` に `onSessionGoaway` を追加し、`connectMediaSession` で `ConnectCallbacks.goaway` に配線した
-- `src/createMediaSubscriber.ts` に `notifyGoaway` を追加し、Session の GOAWAY、catalog の購読、音声・映像の購読の `SubscribeCallbacks.goaway` を `onGoaway` へ流すようにした。同じ URI は 1 回に抑止する。`src/mediaSubscriber/catalogSubscription.ts` の `CatalogSubscriptionDependencies` に `reportGoaway` を追加した
-- `src/createMediaPublisher.ts` に `notifyGoaway` を追加し、Session の GOAWAY と `announceNamespace` の `NamespacePublicationCallbacks.goaway` を `onGoaway` へ流すようにした。同じ URI は 1 回に抑止する
+- `src/createMediaSubscriber.ts` に `notifyGoaway` を追加し、Session の GOAWAY、catalog の購読、音声・映像の購読の `SubscribeCallbacks.goaway` を `onGoaway` へ流すようにした。直前と同じ URI の連続通知は抑止する。`src/mediaSubscriber/catalogSubscription.ts` の `CatalogSubscriptionDependencies` に `reportGoaway` を追加した
+- `src/createMediaPublisher.ts` に `notifyGoaway` を追加し、Session の GOAWAY、`announceNamespace` の `NamespacePublicationCallbacks.goaway`、catalog / 音声 / 映像の `PublishCallbacks.goaway` を `onGoaway` へ流すようにした。直前と同じ URI の連続通知は抑止する
+- `src/mediaSubscriber/catalogSubscription.ts` の catalog の FETCH の `FetchCallbacks.goaway` も `onGoaway` へ流すようにした
 - `docs/HIGH_LEVEL_API.md` の「GOAWAY の扱い」を、「`onGoaway` で新しい Session URI を受け取り、アプリが再接続する。ライブラリは自動移行しない」という契約に書き換えた。「§9.2 の MUST を高レベル API では満たせない」という記述を削除し、`onGoaway` と `onClose` の順序、省略時の挙動を書いた
 
 テストは `src/createMediaSubscriber.lifecycle.test.ts` と `src/createMediaPublisher.test.ts` に追加した。
 
-- subscriber: Session の制御ストリーム由来と購読のリクエストストリーム由来の GOAWAY で `onGoaway` が URI を受け取り、同じ URI は 1 回に抑止される
-- subscriber: `onGoaway` を省略しても、購読の `error` コールバックの失敗が従来どおり `onError` に届く
-- publisher: Session の制御ストリーム由来と PUBLISH_NAMESPACE のリクエストストリーム由来の GOAWAY で `onGoaway` が URI を受け取り、同じ URI は 1 回に抑止される
-- publisher: `onGoaway` を省略しても、告知の確立前の失敗が従来どおり `onError` に届く
+- subscriber: 購読のリクエストストリーム由来の GOAWAY で `onGoaway` が URI を受け取り、続く同じ URI の制御ストリーム由来の GOAWAY は抑止され、別の URI は通知される
+- subscriber: `onGoaway` を省略しても、購読の `error` コールバックの失敗 (`request stream goaway` 相当) が従来どおり `onError` に届く
+- publisher: PUBLISH_NAMESPACE のリクエストストリーム由来の GOAWAY で `onGoaway` が URI を受け取り、続く同じ URI の制御ストリーム由来の GOAWAY は抑止され、別の URI は通知される
+- publisher: `onGoaway` を省略しても、告知の確立前の失敗 (`request stream goaway` 相当) が従来どおり `onError` に届く
+
+`connectMediaSession` の `ConnectCallbacks.goaway` から `MediaConnectSettings.onSessionGoaway` への橋渡しは、高レベルのテストが `openSession` を差し替えるため駆動されない。`onSessionGoaway` を必須の設定にして両呼び出し元が渡していること (型検査) と、低レベルの制御ストリームで新しい Session URI が `goaway` コールバックに渡ることのテストで、両端を固定している。橋渡しの 1 行自体は変異実験で検出できないため、将来のリファクタで無音に壊れるリスクが残る (issue 化候補)。
+
+配線のテスト被覆は経路ごとに差がある。catalog の SUBSCRIBE、PUBLISH_NAMESPACE、catalog の PUBLISH は固定している。音声・映像の SUBSCRIBE と catalog の FETCH は、高レベルのハーネスが `fetch` で必ず失敗するため start の完了まで駆動できず、未固定である (低レベルの `SubscribeCallbacks.goaway` / `FetchCallbacks.goaway` の単体テストは別途ある)。
 
 実リレー E2E は追加していない。`tests/e2e/` には GOAWAY を送らせる経路 (`tests/e2e/main.ts` の `window.__moqtE2E` にも、リレーへ GOAWAY を発生させる操作にも) が無く、実リレーに GOAWAY を出させる制御はテスト側からできないためである。GOAWAY の通知は低レベルの単体テストで担う。
 
