@@ -3,7 +3,7 @@
 - Created: 2026-11-03
 - Completed: {YYYY-MM-DD}
 - Branch: feature/change-request-done-reset-codes
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-11-03
 
 ## 目的
 
@@ -22,7 +22,7 @@ draft 23 §12.3〜§12.5 は UNAVAILABLE を追加し、PUBLISH_DONE に EXPIRED
 - PREFIX_OVERLAP と UNKNOWN_OBJECT_STATUS を定数・既知集合・説明から除く。受信時は §13 の未知コードとして扱う
 - EXPIRED_AUTH_TOKEN は Session / Request / PUBLISH_DONE / reset で異なる文脈を持つ。同じ名前だからと共通の数値・normalizer を使わない
 - UNAVAILABLE の Retry Interval を失わずアプリへ渡す。クライアントに relay の stream credit 管理を追加しない
-- publisher が明示的に token expiry で購読を終了するときは新しい PUBLISH_DONE status を使えるようにする。トークンの有効期限を自動検証する認可サーバーは追加しない
+- 公開 `Publisher.done` に任意の status 引数を追加し、許可する値を TRACK_ENDED と EXPIRED_AUTH_TOKEN にする。省略時は従来どおり TRACK_ENDED、`done(PublishDoneStatusCode.EXPIRED_AUTH_TOKEN)` は 0x07 を送る。許可外の値は状態変更より前に拒否し、実際の終了は既存の PublisherImpl.terminate に委譲して、排他・重複呼出し・送信と cleanup の契約を保つ。トークンの有効期限を自動検証する認可サーバーは追加しない
 - 0906 の overlap 削除、0899 の Unknown Range 継続と矛盾する旧記述を取り除く。セッション終了コードは 0902 が担当する
 
 ## 完了条件
@@ -31,11 +31,13 @@ draft 23 §12.3〜§12.5 は UNAVAILABLE を追加し、PUBLISH_DONE に EXPIRED
 - 削除された 0x30 / 0x06 と GREASE はそれぞれの文脈で INTERNAL_ERROR と同等に扱われる
 - 既存の EXPIRED_AUTH_TOKEN 各コードを混同しない
 - 新 status を持つ正常な PUBLISH_DONE で不要な Session エラーにしない
+- 公開 Publisher 型の done から 0x07 が送信され、引数省略時の TRACK_ENDED と既存の終了・cleanup が維持される。許可外 status は副作用前に拒否される
 
 ## 参照
 
 - `refs/moq/draft-ietf-moq-transport-23.txt` §7.4 / §9.9 / §12.3〜§12.5 / §13 / §16.12
 - `src/error.ts`、`src/message/types.ts`、`src/message/publish.ts`、`src/session/bidi.ts`、`src/session/publish.ts`
+- `src/publisher.ts` の `Publisher.done` / `PublisherImpl.done` / `PublisherImpl.terminate`、公開 API 文書
 
 ## 解決方法
 
