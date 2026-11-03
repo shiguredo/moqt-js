@@ -51,7 +51,7 @@ import {
   toSessionCloseError,
 } from "./errors";
 import { sessionHandleFieldLengthExceeded } from "./lifecycle";
-import { extractForwardState, extractLargestLocation, matchNamespacePrefix } from "./params";
+import { extractLargestLocation, extractPaused, matchNamespacePrefix } from "./params";
 import type { SessionInternal, TracksSubscriptionState } from "./types";
 import { type AuthTokenProcessResult, processMessageAuthorizationTokens } from "./authTokenCache";
 import type {
@@ -982,13 +982,13 @@ export function incomingPublishCleanupIncomingPublish(
 /**
  * 受信 PUBLISH の初期パラメータを購読に反映する
  *
- * draft-ietf-moq-transport-22 §9.8 (PUBLISH) / §9.20.18:
- * FORWARD (省略時はデフォルト 1) を forwardState として保持する。
- * 値域外は PROTOCOL_VIOLATION でセッションを閉じる。
+ * draft-ietf-moq-transport-23 §9.8 (PUBLISH) / §9.19.18:
+ * PAUSED (省略時は既定値 0 = unpaused) を paused 状態として保持する。
+ * 値域外はセッションを閉じる (現行の受信経路は PROTOCOL_VIOLATION として扱う)。
  * OBJECT_DELIVERY_TIMEOUT / SUBGROUP_DELIVERY_TIMEOUT /
  * SUBSCRIBER_PRIORITY / GROUP_ORDER は publisher の初期値の通知であり
  * 受理のみで状態反映はしない。この関数では再検証しない
- * (FORWARD / GROUP_ORDER の uint8 値域は decode 時に検証済み。
+ * (PAUSED / GROUP_ORDER の uint8 値域は decode 時に検証済み。
  * varint 系 timeouts / PRIORITY は範囲外で閉じる規定がないため検証しない)。
  * draft-ietf-moq-transport-22 §9.8 / §9.20.9 / §3.6.2:
  * LOCATION_FILTER は購読の初期フィルタとして反映する
@@ -1007,9 +1007,9 @@ export function incomingPublishApplyParameters(
   impl: SubscriberImpl,
   parameters: Parameter[],
 ): boolean {
-  let forwardState: boolean;
+  let paused: boolean;
   try {
-    forwardState = extractForwardState(parameters);
+    paused = extractPaused(parameters);
   } catch (error) {
     const sessionError = toProtocolViolationSessionError(error);
     if (sessionError !== null) {
@@ -1048,7 +1048,7 @@ export function incomingPublishApplyParameters(
     }
   }
 
-  impl.setForwardState(forwardState);
+  impl.setPaused(paused);
   // LARGEST_OBJECT を先に設定し、setLocationFilter 内の解決に反映させる
   if (largestLocation !== undefined) {
     impl.setLargestLocation(largestLocation);

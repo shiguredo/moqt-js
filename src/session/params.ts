@@ -30,7 +30,7 @@ import {
   encodeLocationFilterParameter,
   encodeRangeFilter,
   encodeUint8ParameterValue,
-  validateForwardValue,
+  validatePausedValue,
   getParameterLocationValue,
   isNextObjectLocationFilter,
 } from "../message";
@@ -376,12 +376,13 @@ export function buildPublishParameters(options?: PublishOptions): Parameter[] {
     });
   }
 
-  // FORWARD (0x10) - draft-ietf-moq-transport-22 Section 9.20.18 (FORWARD Parameter)
-  // デフォルトは 1 なので、明示的に false (0) が指定された場合のみ送信
-  if (options?.forward === false) {
+  // PAUSED (0x11) - draft-ietf-moq-transport-23 Section 9.19.18 (PAUSED Parameter)
+  // 既定値は 0 (unpaused) のため、明示的に true (1 = paused) のときだけ送信する。
+  // draft-22 の FORWARD (0x10) は 1 = 転送するだったため、値の意味が反転している。
+  if (options?.paused === true) {
     parameters.push({
-      type: MessageParameterType.FORWARD,
-      value: encodeUint8ParameterValue(0, "FORWARD"),
+      type: MessageParameterType.PAUSED,
+      value: encodeUint8ParameterValue(1, "PAUSED"),
     });
   }
 
@@ -644,7 +645,7 @@ export function buildIncludePropertiesParameter(includeProperties?: boolean): Pa
 /**
  * 純粋関数: SUBSCRIBE の Message Parameters を構築する
  *
- * draft-ietf-moq-transport-22 Section 9.20
+ * draft-ietf-moq-transport-23 §9.19 (Control Message Parameters)
  */
 export function buildSubscribeParameters(options?: SubscribeOptions): Parameter[] {
   const parameters: Parameter[] = [];
@@ -712,12 +713,12 @@ export function buildSubscribeParameters(options?: SubscribeOptions): Parameter[
     });
   }
 
-  // FORWARD (0x10) - draft-ietf-moq-transport-22 Section 9.20.18 (uint8)
-  // デフォルトは 1 なので、明示的に false (0) が指定された場合のみ送信
-  if (options?.forward === false) {
+  // PAUSED (0x11) - draft-ietf-moq-transport-23 Section 9.19.18 (uint8)
+  // 既定値は 0 (unpaused) のため、明示的に true (1 = paused) のときだけ送信する。
+  if (options?.paused === true) {
     parameters.push({
-      type: MessageParameterType.FORWARD,
-      value: encodeUint8ParameterValue(0, "FORWARD"),
+      type: MessageParameterType.PAUSED,
+      value: encodeUint8ParameterValue(1, "PAUSED"),
     });
   }
 
@@ -870,19 +871,18 @@ export function buildSubscribeNamespaceParameters(options?: {
 /**
  * 純粋関数: SUBSCRIBE_TRACKS のパラメータを構築する
  *
- * draft-ietf-moq-transport-22 Section 3.6.2 (Parameters on SUBSCRIBE_TRACKS):
- * "Any Parameter that can be specified on a Subscription (ie: in SUBSCRIBE) is
- *  valid in SUBSCRIBE_TRACKS, unless otherwise specified."
+ * draft-ietf-moq-transport-23 §9.17 (SUBSCRIBE_TRACKS) / §3.6.2 (Parameters on
+ * SUBSCRIBE_TRACKS): §9.17 は SUBSCRIBER_PRIORITY / LOCATION_FILTER /
+ * FILL_PARAMETERS なども許可するが、現行の SubscribeTracksOptions は未対応のため
+ * 対応済みの型だけを送る (SubscribeTracksOptions の JSDoc を参照)。
  *
- * draft-ietf-moq-transport-22 Section 3.6.1 (Filtering SUBSCRIBE_TRACKS):
+ * draft-ietf-moq-transport-23 §3.6.1 (Filtering SUBSCRIBE_TRACKS):
  * "Range Filters Section 3.3.2 can be used in SUBSCRIBE_TRACKS to filter
  *  Tracks in a namespace using the Track Property Filter."
  */
 export function buildSubscribeTracksParameters(options?: SubscribeTracksOptions): Parameter[] {
-  // draft-ietf-moq-transport-22 §9.18 (SUBSCRIBE_TRACKS) が列挙する許可パラメータ
-  // のみを送る。§3.6.2 の「SUBSCRIBE に指定できるパラメータは SUBSCRIBE_TRACKS でも
-  // 有効」という記述とは矛盾するが、§9.18 の列挙と §9.20.1 の MUST を正とする
-  // (SubscribeTracksOptions の JSDoc を参照)。
+  // draft-ietf-moq-transport-23 §9.17 の許可一覧のうち、現行の
+  // SubscribeTracksOptions が対応している型だけを送る。
   const parameters: Parameter[] = [];
 
   // GROUP_ORDER (0x22) - draft-ietf-moq-transport-22 Section 9.20.8 (uint8)
@@ -899,12 +899,12 @@ export function buildSubscribeTracksParameters(options?: SubscribeTracksOptions)
     });
   }
 
-  // FORWARD (0x10) - draft-ietf-moq-transport-22 Section 9.20.18 (uint8)
-  // デフォルトは 1 なので、明示的に false (0) が指定された場合のみ送信
-  if (options?.forward === false) {
+  // PAUSED (0x11) - draft-ietf-moq-transport-23 Section 9.19.18 (uint8)
+  // 既定値は 0 (unpaused) のため、明示的に true (1 = paused) のときだけ送信する。
+  if (options?.paused === true) {
     parameters.push({
-      type: MessageParameterType.FORWARD,
-      value: encodeUint8ParameterValue(0, "FORWARD"),
+      type: MessageParameterType.PAUSED,
+      value: encodeUint8ParameterValue(1, "PAUSED"),
     });
   }
 
@@ -974,25 +974,29 @@ export function extractLargestLocation(parameters: Parameter[]): Location | unde
 }
 
 /**
- * 純粋関数: パラメータから FORWARD 状態を抽出する
+ * 純粋関数: パラメータから paused 状態を抽出する
  *
- * draft-ietf-moq-transport-22 Section 9.20.18 (FORWARD Parameter)
- * FORWARD がない場合はデフォルト値 true を返す。
+ * draft-ietf-moq-transport-23 Section 9.19.18 (PAUSED Parameter)
+ * 0 = unpaused / 1 = paused。PAUSED がない場合は既定値の false (unpaused) を返す。
+ * REQUEST_UPDATE / PUBLISH_STATE_NOTIFY での省略は「状態維持」であり、本関数は
+ * 存在しない場合を既定値として返すため、呼び出し側は存在判定を別に行うこと。
+ *
+ * 戻り値は wire の値 (1 = paused) と同じ意味で、反転は行わない。
  */
-export function extractForwardState(parameters: Parameter[]): boolean {
+export function extractPaused(parameters: Parameter[]): boolean {
   for (const param of parameters) {
-    if (param.type === MessageParameterType.FORWARD) {
-      const forwardValue = param.value[0];
-      if (forwardValue === undefined) {
-        // FORWARD は uint8 のため値 1 バイトが必ず存在するが、
+    if (param.type === MessageParameterType.PAUSED) {
+      const pausedValue = param.value[0];
+      if (pausedValue === undefined) {
+        // PAUSED は uint8 のため値 1 バイトが必ず存在するが、
         // noUncheckedIndexedAccess で型上 undefined を含むため防御する
-        throw new ProtocolViolationError("FORWARD parameter is missing its value");
+        throw new ProtocolViolationError("PAUSED parameter is missing its value");
       }
-      validateForwardValue(forwardValue);
-      return forwardValue !== 0;
+      validatePausedValue(pausedValue);
+      return pausedValue === 1;
     }
   }
-  return true;
+  return false;
 }
 
 /**

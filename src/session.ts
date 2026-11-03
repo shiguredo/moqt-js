@@ -275,7 +275,7 @@ export interface Session {
    *
    * @param namespacePrefix - Track Namespace Prefix
    * @param callbacks - コールバック関数
-   * @param options - サブスクリプションパラメータ（groupOrder / forward）
+   * @param options - サブスクリプションパラメータ（groupOrder / paused）
    */
   subscribeTracks(
     namespacePrefix: string[],

@@ -39,13 +39,13 @@ export const varintParameterArb = fc
   })
   .map(({ type, varintValue }) => ({ type, value: encodeVarint(varintValue) }));
 
-// draft-ietf-moq-transport-22 §9.20.7 / §9.20.18: 値域制約に従う arbitrary
-//   - FORWARD (0x10): 0 / 1
+// draft-ietf-moq-transport-23 §9.19.7 / §9.19.8 / §9.19.18: 値域制約に従う arbitrary
+//   - PAUSED (0x11): 0 (unpaused) / 1 (paused)
 //   - SUBSCRIBER_PRIORITY (0x20): 0-255
 //   - GROUP_ORDER (0x22): 0x1 / 0x2
 export const uint8ParameterArb = fc.oneof(
   fc
-    .record({ type: fc.constant(0x10), byteValue: fc.constantFrom(0, 1) })
+    .record({ type: fc.constant(0x11), byteValue: fc.constantFrom(0, 1) })
     .map(({ type, byteValue }) => ({ type, value: new Uint8Array([byteValue]) })),
   fc
     .record({ type: fc.constant(0x20), byteValue: fc.integer({ min: 0, max: 255 }) })

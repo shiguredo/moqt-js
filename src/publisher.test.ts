@@ -560,25 +560,25 @@ test("getLargestLocation: 非整数 ID は記録しない", async () => {
 });
 
 // ============================================================================
-// draft-22 適合監査 D-10: forwardState が 0 では Object を送信しない
-// draft-ietf-moq-transport-22 §3.1.1 (Pausing Subscriptions)
+// draft-23 適合: paused (PAUSED=1) では Object を送信しない
+// draft-ietf-moq-transport-23 §3.1.1 (Pausing Subscriptions) / §9.19.18
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-22 §3.1.1:
+ * draft-ietf-moq-transport-23 §3.1.1 / §9.19.18:
  * "An Established subscription is either paused or not paused.  The publisher
  *  does not send Objects on a paused subscription, and does send them when it
  *  is not paused.  Control messages, such as PUBLISH_DONE (Section 9.9), are
  *  sent regardless of whether the subscription is paused."
- * forwardState が 0 のとき sendObject は委譲先を呼ばず resolve する。
+ * paused (PAUSED=1) のとき sendObject は委譲先を呼ばず resolve する。
  */
-test("forwardState=false の sendObject は送信しない", async () => {
+test("paused の sendObject は送信しない", async () => {
   const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n);
   let sent = 0;
   publisher.onSendObject = async () => {
     sent++;
   };
-  publisher.setForwardState(false);
+  publisher.setPaused(true);
 
   await publisher.sendObject({ groupId: 0, objectId: 0, payload: new Uint8Array([1]) });
 
@@ -588,17 +588,17 @@ test("forwardState=false の sendObject は送信しない", async () => {
 });
 
 /**
- * forwardState を 1 に戻すと再び送信されることを検証する。
+ * paused を解除する (PAUSED=0) と再び送信されることを検証する。
  */
-test("forwardState=false から true に戻すと sendObject は送信する", async () => {
+test("paused を解除すると sendObject は送信する", async () => {
   const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n);
   let sent = 0;
   publisher.onSendObject = async () => {
     sent++;
   };
-  publisher.setForwardState(false);
+  publisher.setPaused(true);
   await publisher.sendObject({ groupId: 0, objectId: 0, payload: new Uint8Array([1]) });
-  publisher.setForwardState(true);
+  publisher.setPaused(false);
   await publisher.sendObject({ groupId: 0, objectId: 1, payload: new Uint8Array([2]) });
 
   assert.equal(sent, 1);
@@ -606,16 +606,16 @@ test("forwardState=false から true に戻すと sendObject は送信する", a
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.1.1:
- * Datagram も Object であるため、forwardState が 0 では送信しない。
+ * draft-ietf-moq-transport-23 §3.1.1:
+ * Datagram も Object であるため、paused (PAUSED=1) では送信しない。
  */
-test("forwardState=false の sendDatagram は送信しない", () => {
+test("paused の sendDatagram は送信しない", () => {
   const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n);
   let sent = 0;
   publisher.onSendDatagram = () => {
     sent++;
   };
-  publisher.setForwardState(false);
+  publisher.setPaused(true);
 
   void publisher.sendDatagram({ groupId: 0, objectId: 0, payload: new Uint8Array([1]) });
 
@@ -624,18 +624,18 @@ test("forwardState=false の sendDatagram は送信しない", () => {
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.1.1:
+ * draft-ietf-moq-transport-23 §3.1.1:
  * "Control messages, such as PUBLISH_DONE (Section 9.9), are sent regardless
  *  of whether the subscription is paused."
- * forwardState が 0 (paused) でも done() は onDoneInternal を呼ぶ。
+ * paused (PAUSED=1) でも done() は onDoneInternal を呼ぶ。
  */
-test("forwardState=false でも done は onDoneInternal を呼ぶ", async () => {
+test("paused でも done は onDoneInternal を呼ぶ", async () => {
   const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n);
   let doneCalled = false;
   publisher.onDoneInternal = async () => {
     doneCalled = true;
   };
-  publisher.setForwardState(false);
+  publisher.setPaused(true);
 
   await publisher.done();
 

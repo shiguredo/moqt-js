@@ -31,7 +31,7 @@ import {
   encoderState,
   eventMessagesSent,
   eventPublisher,
-  forwardState,
+  paused,
   framesEncoded,
   httpVersion,
   keyFramesEncoded,
@@ -173,8 +173,8 @@ export interface PublisherStats {
   serverUrl: string;
   /** 確立した WebTransport が HTTP/2 か HTTP/3 か。未接続、または判別できないときは null */
   httpVersion: PanelHttpVersion | null;
-  /** 購読が paused かどうか。未確立のときは null (draft-ietf-moq-transport-22 §3.1.1) */
-  forwardState: boolean | null;
+  /** 購読が paused かどうか。未確立のときは null (draft-ietf-moq-transport-23 §3.1.1) */
+  paused: boolean | null;
   codec: string;
   encoderState: string;
   framesEncoded: number;
@@ -457,7 +457,7 @@ export function buildPublisherStats(): PublisherStats {
     statusMessage: pubStatusMessage.value,
     serverUrl: pubSelectedServerUrl.value ?? url.value,
     httpVersion: httpVersion.value,
-    forwardState: forwardState.value,
+    paused: paused.value,
     codec: pubCodec.value,
     encoderState: encoderState.value,
     framesEncoded: framesEncoded.value,

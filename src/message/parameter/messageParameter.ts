@@ -65,16 +65,17 @@ export function validateGroupOrderValue(value: number): void {
 }
 
 /**
- * FORWARD パラメータの値を検証する
+ * PAUSED パラメータの値を検証する
  *
- * draft-ietf-moq-transport-22 Section 9.20.18:
- * "The allowed values are 0 (don't forward) or 1 (forward).
+ * draft-ietf-moq-transport-23 Section 9.19.18:
+ * "The allowed values are 0 (unpaused) or 1 (paused).
  *  If an endpoint receives a value outside this range, it MUST close
- *  the session with PROTOCOL_VIOLATION."
+ *  the session with INVALID_PARAMETER."
+ * 現行の受信経路は SessionErrorCode への変換都合で PROTOCOL_VIOLATION として扱う。
  */
-export function validateForwardValue(value: number): void {
+export function validatePausedValue(value: number): void {
   if (value !== 0 && value !== 1) {
-    throw new ProtocolViolationError(`invalid FORWARD value: ${value}, expected 0 or 1`);
+    throw new ProtocolViolationError(`invalid PAUSED value: ${value}, expected 0 or 1`);
   }
 }
 
@@ -97,10 +98,8 @@ export function validateIncludePropertiesValue(value: number): void {
 /**
  * uint8 型の Message Parameter Value をエンコードする
  *
- * draft-ietf-moq-transport-23 §9.19.7 / §9.19.8:
- * SUBSCRIBER_PRIORITY / GROUP_ORDER は varint ではなく uint8。
- * FORWARD (0x10) は draft-ietf-moq-transport-22 §9.20.18 の型を
- * 移行完了まで保持しており、同じく uint8 である。
+ * draft-ietf-moq-transport-23 §9.19.7 / §9.19.8 / §9.19.18:
+ * SUBSCRIBER_PRIORITY / GROUP_ORDER / PAUSED は varint ではなく uint8。
  */
 export function encodeUint8ParameterValue(
   value: number | bigint,
@@ -186,10 +185,11 @@ const MESSAGE_PARAMETER_VALUE_ENCODING: Record<number, MessageParameterValueEnco
   0x09: "location",
   // FILL_TIMEOUT (Section 9.19.5)
   0x0a: "varint",
-  // FORWARD (draft-ietf-moq-transport-22 Section 9.20.18)
-  // draft-23 では FORWARD が PAUSED (0x11) に置き換わる (§9.19.18)。この型の移行は
-  // 本変更の範囲外のため、ここでは draft-22 の型番号とエンコーディング (uint8) を保つ。
-  0x10: "uint8",
+  // PAUSED (draft-ietf-moq-transport-23 Section 9.19.18)
+  // draft-22 の FORWARD (0x10) を置き換えた型。0 = unpaused / 1 = paused で、
+  // draft-22 FORWARD とは値の意味が反転している。0x10 は draft-23 に定義が無く、
+  // 受信すると未知パラメータとして拒否される (draft-22 との自動判別は行わない)。
+  0x11: "uint8",
   // SUBSCRIBER_PRIORITY (Section 9.19.7)
   0x20: "uint8",
   // LOCATION_FILTER (draft-ietf-moq-transport-23 Section 9.19.9)
@@ -383,14 +383,14 @@ function decodeMessageParameterInScope(
           `uint8 parameter value is missing: type 0x${paramTypeNumber.toString(16)}`,
         );
       }
-      // draft-ietf-moq-transport-22 §9.20.18 (FORWARD) /
+      // draft-ietf-moq-transport-23 §9.19.18 (PAUSED) /
       // draft-ietf-moq-transport-23 §9.19.8 (GROUP_ORDER):
-      // FORWARD (0x10) / GROUP_ORDER (0x22) は受信時に値域 MUST 検証
+      // PAUSED (0x11) / GROUP_ORDER (0x22) は受信時に値域 MUST 検証
       // draft-ietf-moq-transport-23 §9.19.22:
       // INCLUDE_PROPERTIES (0x35) も 0/1 以外は INVALID_PARAMETER
       // (現行の受信経路は PROTOCOL_VIOLATION に変換する)
-      if (paramTypeNumber === 0x10) {
-        validateForwardValue(valueByte);
+      if (paramTypeNumber === 0x11) {
+        validatePausedValue(valueByte);
       } else if (paramTypeNumber === 0x22) {
         validateGroupOrderValue(valueByte);
       } else if (paramTypeNumber === 0x35) {

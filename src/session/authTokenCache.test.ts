@@ -522,7 +522,7 @@ test("processMessageAuthorizationTokens: AUTHORIZATION TOKEN 以外のパラメ�
 
   const result = processMessageAuthorizationTokens(cache, [
     { type: MessageParameterType.EXPIRES, value: new Uint8Array([0x01]) },
-    { type: MessageParameterType.FORWARD, value: new Uint8Array([0x01]) },
+    { type: MessageParameterType.PAUSED, value: new Uint8Array([0x01]) },
   ]);
 
   assert.deepEqual(result, { status: "ok" });

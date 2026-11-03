@@ -179,18 +179,18 @@ test("publishSendObject: endOfSubgroup を付けない Object では閉じない
  *
  * draft-ietf-moq-transport-22 §11.3.2: "If a sender closes the stream before
  * delivering all such objects to the QUIC stream, it MUST reset the stream."
- * forwardState が 0 で見送った Object がある Subgroup は、Object を書き終えていても
+ * paused (PAUSED=1) 中に見送った Object がある Subgroup は、Object を書き終えていても
  * FIN ではなく RESET で閉じる。
  */
 test("publishSendObject: 見送った Object がある Subgroup を endOfSubgroup で閉じると RESET になる", async () => {
   const { publisher, records, errors } = createHarness();
 
   await publisher.sendObject({ groupId: 0, objectId: 0, payload: new Uint8Array([1, 2, 3]) });
-  // forwardState 0 の Object は送信されず、省略として記録される
-  publisher.setForwardState(false);
+  // paused (PAUSED=1) 中の Object は送信されず、省略として記録される
+  publisher.setPaused(true);
   await publisher.sendObject({ groupId: 0, objectId: 1, payload: new Uint8Array([4]) });
   // 全 Object を渡し切っていないため、endOfSubgroup で閉じても FIN ではなく RESET
-  publisher.setForwardState(true);
+  publisher.setPaused(false);
   await publisher.sendObject({
     groupId: 0,
     objectId: 2,
@@ -236,12 +236,12 @@ test("publishSendObject: endOfSubgroup で閉じた Group への後続送信は 
  * draft-ietf-moq-transport-22 §11.3.2: FIN で閉じてよいのは「Subgroup の全 Object を
  * QUIC stream へ渡し切った」場合に限る。見送られた Object は書き込み自体が行われないため、
  * 閉じる契機は Group の切り替えか done() になる。
- * catalog の初期送信が forwardState 0 で見送られた場合、この経路に入る。
+ * catalog の初期送信が paused (PAUSED=1) 中に見送られた場合、この経路に入る。
  */
 test("publishSendObject: 見送られた endOfSubgroup の Object では閉じない", async () => {
   const { session, publisher, records, errors } = createHarness();
 
-  publisher.setForwardState(false);
+  publisher.setPaused(true);
   await publisher.sendObject({
     groupId: 0,
     objectId: 0,

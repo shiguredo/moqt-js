@@ -181,7 +181,7 @@ export async function requestsPublish(
     requestId,
     trackAlias,
     callbacks?.error,
-    callbacks?.onForwardStateChange,
+    callbacks?.onPausedChange,
   );
 
   // GOAWAY コールバックを設定（セッション内部コールバック）
@@ -191,17 +191,17 @@ export async function requestsPublish(
   impl.dynamicGroups = options?.dynamicGroups === true;
   impl.newGroupRequestCallback = callbacks?.onNewGroupRequest;
 
-  // draft-ietf-moq-transport-22 §3.1.1 (Pausing Subscriptions):
+  // draft-ietf-moq-transport-23 §3.1.1 (Pausing Subscriptions):
   // "The initiator of the subscription sets the initial state by including
-  //  the FORWARD parameter (Section 9.20.18) in PUBLISH or SUBSCRIBE."
-  // PUBLISH 送信時の options.forward (省略時は §9.20.18 のデフォルト 1)
-  // を forwardState として保持する。subscribe() と同パターン。
-  impl.setForwardState(options?.forward ?? true);
+  //  the PAUSED parameter (Section 9.19.18) in PUBLISH or SUBSCRIBE."
+  // PUBLISH 送信時の options.paused (省略時は §9.19.18 のデフォルト 0 = unpaused)
+  // を paused 状態として保持する。subscribe() と同パターン。
+  impl.setPaused(options?.paused ?? false);
 
   // 送信コールバックを設定
   impl.onSendObject = (params: SendObjectParams) => requestsSendObject(session, impl, params);
   // draft-ietf-moq-transport-22 §11.3.2 (Closing Subgroup Streams):
-  // forwardState が 0 または Location Filter の範囲外で見送った Object がある Subgroup は、
+  // paused 中または Location Filter の範囲外で見送った Object がある Subgroup は、
   // 閉じる時に reset を MUST とする。見送りの事実を見送りの時点で記録する (閉じる時点では
   // 最後に送信した Object より後の見送りを検出できない)。記録の規則は
   // publishMarkStreamOmitted を参照。
@@ -363,12 +363,12 @@ export async function requestsSubscribe(
   // （セッション内部コールバック）
   impl.setSessionCallbacks(callbacks);
 
-  // draft-ietf-moq-transport-22 §3.1.1 (Pausing Subscriptions):
+  // draft-ietf-moq-transport-23 §3.1.1 (Pausing Subscriptions):
   // "The initiator of the subscription sets the initial state by including
-  //  the FORWARD parameter (Section 9.20.18) in PUBLISH or SUBSCRIBE."
-  // SUBSCRIBE 送信時の options.forward (省略時は §9.20.18 のデフォルト 1)
-  // を forwardState として保持する。
-  impl.setForwardState(options?.forward ?? true);
+  //  the PAUSED parameter (Section 9.19.18) in PUBLISH or SUBSCRIBE."
+  // SUBSCRIBE 送信時の options.paused (省略時は §9.19.18 のデフォルト 0 = unpaused)
+  // を paused 状態として保持する。
+  impl.setPaused(options?.paused ?? false);
 
   // draft-ietf-moq-transport-22 §9.20.8 / §9.20.15:
   // SUBSCRIBE 送信時の options.groupOrder を保持する。fill 要求時の

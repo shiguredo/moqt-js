@@ -504,20 +504,20 @@ test("bidiHandlePublishRequestUpdate: SUBSCRIBER_PRIORITY を含む REQUEST_UPDA
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.5 / §9.20.18:
- * ケース 1 の REQUEST_UPDATE で FORWARD=1 が含まれる場合も REQUEST_OK で
- * 受理され、forwardState に true が反映されることを検証する。
+ * draft-ietf-moq-transport-23 §9.5 / §9.19.18:
+ * ケース 1 の REQUEST_UPDATE で PAUSED=0 (unpaused) が含まれる場合も
+ * REQUEST_OK で受理され、paused が false に反映されることを検証する。
  */
-test("bidiHandlePublishRequestUpdate: FORWARD=1 を含む REQUEST_UPDATE で forwardState が true に反映される", async () => {
+test("bidiHandlePublishRequestUpdate: PAUSED=0 を含む REQUEST_UPDATE で paused が false に反映される", async () => {
   const ctx = createPublishReadTestContext({});
   const subscriber = new SubscriberImpl(["test"], "track", ctx.requestId, 1n, () => {});
-  subscriber.setForwardState(false);
+  subscriber.setPaused(true);
   ctx.session.subscribers.set(ctx.requestId, subscriber);
 
   const updatePayload = encodeRequestUpdatePayload({
     type: MessageType.REQUEST_UPDATE,
     requestId: 101n,
-    parameters: [{ type: MessageParameterType.FORWARD, value: new Uint8Array([1]) }],
+    parameters: [{ type: MessageParameterType.PAUSED, value: new Uint8Array([0]) }],
   });
   await bidiHandlePublishRequestUpdate(ctx.session, ctx.requestId, updatePayload);
 
@@ -525,7 +525,7 @@ test("bidiHandlePublishRequestUpdate: FORWARD=1 を含む REQUEST_UPDATE で for
   assert.equal(messages.length, 1);
   assert.equal(messages[0].type, MessageType.REQUEST_OK);
   assert.isUndefined(ctx.closedWithError);
-  assert.equal(subscriber.forwardState, true);
+  assert.equal(subscriber.paused, false);
 });
 
 /**
@@ -663,22 +663,22 @@ test("bidiHandlePublishRequestUpdate: 上限超過 REGISTER は AUTH_TOKEN_CACHE
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.5 / §9.20.18:
- * ケース 1 (受信 PUBLISH の publisher による REQUEST_UPDATE) で FORWARD
+ * draft-ietf-moq-transport-23 §9.5 / §9.19.18:
+ * ケース 1 (受信 PUBLISH の publisher による REQUEST_UPDATE) で PAUSED
  * パラメータが含まれる場合、REQUEST_OK で受理され、受信 PUBLISH から生成
- * された SubscriberImpl の forwardState に反映されることを検証する。
+ * された SubscriberImpl の paused に反映されることを検証する。
  */
-test("bidiHandlePublishRequestUpdate: FORWARD を含む REQUEST_UPDATE で REQUEST_OK が応答され forwardState に反映される", async () => {
+test("bidiHandlePublishRequestUpdate: PAUSED を含む REQUEST_UPDATE で REQUEST_OK が応答され paused に反映される", async () => {
   const ctx = createPublishReadTestContext({});
-  // 受信 PUBLISH から生成された SubscriberImpl を登録する (初期 forwardState が 1)
+  // 受信 PUBLISH から生成された SubscriberImpl を登録する (初期状態は unpaused)
   const subscriber = new SubscriberImpl(["test"], "track", ctx.requestId, 1n, () => {});
   ctx.session.subscribers.set(ctx.requestId, subscriber);
 
   const updatePayload = encodeRequestUpdatePayload({
     type: MessageType.REQUEST_UPDATE,
     requestId: 101n,
-    // FORWARD=0: オブジェクトを送信しない宣言
-    parameters: [{ type: MessageParameterType.FORWARD, value: new Uint8Array([0]) }],
+    // PAUSED=1: オブジェクトを送信しない宣言
+    parameters: [{ type: MessageParameterType.PAUSED, value: new Uint8Array([1]) }],
   });
   await bidiHandlePublishRequestUpdate(ctx.session, ctx.requestId, updatePayload);
 
@@ -687,21 +687,21 @@ test("bidiHandlePublishRequestUpdate: FORWARD を含む REQUEST_UPDATE で REQUE
   assert.equal(messages.length, 1);
   assert.equal(messages[0].type, MessageType.REQUEST_OK);
   assert.isUndefined(ctx.closedWithError);
-  // FORWARD=0 が SubscriberImpl の forwardState に反映される
-  assert.equal(subscriber.forwardState, false);
+  // PAUSED=1 が SubscriberImpl の paused に反映される
+  assert.isTrue(subscriber.paused);
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.18:
+ * draft-ietf-moq-transport-23 §9.19.18:
  * "If the parameter is omitted from REQUEST_UPDATE or PUBLISH_STATE_NOTIFY, the
  *  subscription remains unchanged."
- * FORWARD を含まないケース 1 の REQUEST_UPDATE は REQUEST_OK で受理されるが、
- * forwardState は変化しないことを検証する。
+ * PAUSED を含まないケース 1 の REQUEST_UPDATE は REQUEST_OK で受理されるが、
+ * paused は変化しないことを検証する。
  */
-test("bidiHandlePublishRequestUpdate: FORWARD 省略の REQUEST_UPDATE で forwardState は不変", async () => {
+test("bidiHandlePublishRequestUpdate: PAUSED 省略の REQUEST_UPDATE で paused は不変", async () => {
   const ctx = createPublishReadTestContext({});
   const subscriber = new SubscriberImpl(["test"], "track", ctx.requestId, 1n, () => {});
-  subscriber.setForwardState(false);
+  subscriber.setPaused(true);
   ctx.session.subscribers.set(ctx.requestId, subscriber);
 
   const updatePayload = encodeRequestUpdatePayload({
@@ -715,17 +715,17 @@ test("bidiHandlePublishRequestUpdate: FORWARD 省略の REQUEST_UPDATE で forwa
   assert.equal(messages.length, 1);
   assert.equal(messages[0].type, MessageType.REQUEST_OK);
   assert.isUndefined(ctx.closedWithError);
-  // FORWARD 省略時は不変 (§9.20.18)
-  assert.equal(subscriber.forwardState, false);
+  // PAUSED 省略時は不変 (§9.19.18)
+  assert.isTrue(subscriber.paused);
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.1 / §9.20.18:
- * FORWARD と他の許可パラメータ (例: SUBSCRIBER_PRIORITY) の混合
- * REQUEST_UPDATE もメッセージ単位で受理され、FORWARD が forwardState に
+ * draft-ietf-moq-transport-23 §9.19.1 / §9.19.18:
+ * PAUSED と他の許可パラメータ (例: SUBSCRIBER_PRIORITY) の混合
+ * REQUEST_UPDATE もメッセージ単位で受理され、PAUSED が paused に
  * 反映されることを検証する。
  */
-test("bidiHandlePublishRequestUpdate: FORWARD + 他の許可パラメータの混合で REQUEST_OK が応答され FORWARD が反映される", async () => {
+test("bidiHandlePublishRequestUpdate: PAUSED + 他の許可パラメータの混合で REQUEST_OK が応答され PAUSED が反映される", async () => {
   const ctx = createPublishReadTestContext({});
   const subscriber = new SubscriberImpl(["test"], "track", ctx.requestId, 1n, () => {});
   ctx.session.subscribers.set(ctx.requestId, subscriber);
@@ -734,7 +734,7 @@ test("bidiHandlePublishRequestUpdate: FORWARD + 他の許可パラメータの�
     type: MessageType.REQUEST_UPDATE,
     requestId: 101n,
     parameters: [
-      { type: MessageParameterType.FORWARD, value: new Uint8Array([0]) },
+      { type: MessageParameterType.PAUSED, value: new Uint8Array([1]) },
       { type: MessageParameterType.SUBSCRIBER_PRIORITY, value: new Uint8Array([1]) },
     ],
   });
@@ -745,8 +745,8 @@ test("bidiHandlePublishRequestUpdate: FORWARD + 他の許可パラメータの�
   assert.equal(messages.length, 1);
   assert.equal(messages[0].type, MessageType.REQUEST_OK);
   assert.isUndefined(ctx.closedWithError);
-  // FORWARD=0 が反映される
-  assert.equal(subscriber.forwardState, false);
+  // PAUSED=1 が反映される
+  assert.equal(subscriber.paused, true);
 });
 
 /**

@@ -304,7 +304,7 @@ test("bidiSendRequestUpdate: 解除競合で保留が無い場合の write 失�
   const subscriber = new SubscriberImpl(["test"], "track", 0n, 0n, () => {});
 
   // write 待ちの間に解除競合を再現する (保留の reject + 削除)
-  const updatePromise = bidiSendRequestUpdate(session, subscriber, { forward: true });
+  const updatePromise = bidiSendRequestUpdate(session, subscriber, { paused: false });
   assert.equal(session.pendingRequestUpdate.size, 1);
   for (const [updateId, pending] of session.pendingRequestUpdate) {
     pending.reject(new Error(REQUEST_UPDATE_STREAM_CLOSED_MESSAGE));

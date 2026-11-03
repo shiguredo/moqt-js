@@ -7,7 +7,7 @@
  * Location の順序、Track Namespace の前方一致、setTimeout 遅延のクランプである。
  *
  * buildPublishParameters / buildPublishTrackProperties / buildSubscribeParameters の
- * 基本オプション / extractLargestLocation / extractForwardState /
+ * 基本オプション / extractLargestLocation / extractPaused /
  * classifyIncomingStreamType / calculateObjectIdDelta は src/session.prop.ts で
  * 検証済みのため、本ファイルでは重複して扱わない。
  *
@@ -308,7 +308,7 @@ const subscribeOptionsArb: fc.Arbitrary<SubscribeOptions> = fc.record({
   groupOrder: optionalArbitrary(groupOrderArb),
   newGroupRequest: optionalArbitrary(varintValueArb),
   rendezvousTimeout: optionalArbitrary(varintValueArb),
-  forward: optionalArbitrary(fc.boolean()),
+  paused: optionalArbitrary(fc.boolean()),
   rangeFilters: optionalArbitrary(uniqueNonTrackRangeFilterParamsArb),
   authorizationToken: optionalArbitrary(authorizationTokenArb),
   fill: optionalArbitrary(fillRequestOptionsArb),
@@ -330,7 +330,7 @@ const fetchOptionsArb: fc.Arbitrary<FetchOptions> = fc.record({
 const subscribeTracksOptionsArb: fc.Arbitrary<SubscribeTracksOptions> = fc.record({
   // §9.18 の一覧に対応する (filter / subscriberPriority / fill は送らない)
   groupOrder: optionalArbitrary(groupOrderArb),
-  forward: optionalArbitrary(fc.boolean()),
+  paused: optionalArbitrary(fc.boolean()),
   rangeFilters: optionalArbitrary(uniqueRangeFilterParamsArb),
   authorizationToken: optionalArbitrary(authorizationTokenArb),
   includeProperties: optionalArbitrary(fc.boolean()),
@@ -624,7 +624,7 @@ test("validateRangeFilterSpecs: Property Type が違えば重複にならない"
 
 // ============================================================================
 // PBT 4: buildRangeFilterParameters / build*Parameters の round-trip
-// draft-ietf-moq-transport-22 §3.3.2 / §9.20
+// draft-ietf-moq-transport-23 §3.3.2 / §9.19
 // ============================================================================
 
 test("buildRangeFilterParameters: 各パラメータが decodeRangeFilter で元の指定に戻る", () => {
@@ -675,8 +675,8 @@ test("buildSubscribeParameters: 全フィールドの指定が round-trip し、
       if (options.rendezvousTimeout !== undefined) {
         assert.isTrue(types.has(MessageParameterType.RENDEZVOUS_TIMEOUT));
       }
-      // FORWARD は既定値 1 のため false のときだけ送る (§9.20.18)
-      assert.equal(types.has(MessageParameterType.FORWARD), options.forward === false);
+      // PAUSED は既定値 0 (unpaused) のため true (paused) のときだけ送る (§9.19.18)
+      assert.equal(types.has(MessageParameterType.PAUSED), options.paused === true);
       if (options.rangeFilters !== undefined) {
         for (const spec of options.rangeFilters) {
           assert.isTrue(types.has(rangeFilterParameterTypeOf(spec.type)));
@@ -739,7 +739,7 @@ test("buildSubscribeTracksParameters: 全フィールドの指定が round-trip 
       assert.isFalse(types.has(MessageParameterType.SUBSCRIBER_PRIORITY));
       assert.isFalse(types.has(MessageParameterType.FILL_PARAMETERS));
       assert.equal(types.has(MessageParameterType.GROUP_ORDER), options.groupOrder !== undefined);
-      assert.equal(types.has(MessageParameterType.FORWARD), options.forward === false);
+      assert.equal(types.has(MessageParameterType.PAUSED), options.paused === true);
       // TRACK_PROPERTY_FILTER (0x29) は SUBSCRIBE_TRACKS でのみ許可される (§3.3.2)
       if (options.rangeFilters !== undefined) {
         for (const spec of options.rangeFilters) {

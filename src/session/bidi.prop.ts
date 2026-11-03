@@ -38,7 +38,7 @@
  *   記録用の情報を返す
  * - bidiHandlePublishStateNotify: subscribe ロールでは許可パラメータを検証通過後にまとめて
  *   反映し、省略されたパラメータは不変に保つ
- * - bidiHandlePublishStateNotify: subscribe ロール以外・許可外パラメータ・FORWARD の
+ * - bidiHandlePublishStateNotify: subscribe ロール以外・許可外パラメータ・PAUSED の
  *   値域外では反映を行わない
  *
  * 対応する単体テストから削除した固定値ケース:
@@ -175,7 +175,7 @@ const rangeFiltersArb: fc.Arbitrary<RangeFilterSpec[]> = fc.constant<RangeFilter
 interface PendingUpdateSpec {
   updateId: bigint;
   targetRequestId: bigint;
-  forward: boolean | undefined;
+  paused: boolean | undefined;
   rangeFilters: RangeFilterSpec[] | undefined;
   locationFilter: LocationFilter | undefined;
 }
@@ -185,7 +185,7 @@ const pendingUpdateSpecsArb: fc.Arbitrary<PendingUpdateSpec[]> = fc.uniqueArray(
   fc.record({
     updateId: fc.bigInt({ min: 0n, max: 64n }),
     targetRequestId: fc.bigInt({ min: 0n, max: 4n }),
-    forward: fc.option(fc.boolean(), { nil: undefined }),
+    paused: fc.option(fc.boolean(), { nil: undefined }),
     rangeFilters: fc.option(rangeFiltersArb, { nil: undefined }),
     locationFilter: fc.option(locationFilterArb, { nil: undefined }),
   }),
@@ -223,7 +223,7 @@ function installPendingUpdates(
         rejected.push({ updateId: spec.updateId, error });
       },
       targetRequestId: spec.targetRequestId,
-      forward: spec.forward,
+      paused: spec.paused,
       rangeFilters: spec.rangeFilters,
       locationFilter: spec.locationFilter,
     });
@@ -258,14 +258,14 @@ function observeCloseWithError(session: BidiSessionInternal): {
 /** PUBLISH_STATE_NOTIFY で運ぶ状態変化 (省略は undefined) */
 interface StateNotifyCase {
   largest: Location | undefined;
-  forward: boolean | undefined;
+  paused: boolean | undefined;
   filter: LocationFilter | undefined;
 }
 
 /** 許可パラメータのみで構成した PUBLISH_STATE_NOTIFY の状態変化 */
 const stateNotifyCaseArb: fc.Arbitrary<StateNotifyCase> = fc.record({
   largest: fc.option(locationArb, { nil: undefined }),
-  forward: fc.option(fc.boolean(), { nil: undefined }),
+  paused: fc.option(fc.boolean(), { nil: undefined }),
   filter: fc.option(locationFilterArb, { nil: undefined }),
 });
 
@@ -278,10 +278,10 @@ function buildStateNotifyParameters(state: StateNotifyCase): Parameter[] {
       value: encodeLocation(state.largest),
     });
   }
-  if (state.forward !== undefined) {
+  if (state.paused !== undefined) {
     parameters.push({
-      type: MessageParameterType.FORWARD,
-      value: encodeUint8ParameterValue(state.forward ? 1 : 0, "FORWARD"),
+      type: MessageParameterType.PAUSED,
+      value: encodeUint8ParameterValue(state.paused ? 1 : 0, "PAUSED"),
     });
   }
   if (state.filter !== undefined) {
@@ -799,7 +799,7 @@ test("hasPendingRequestUpdate: 対象 Request ID の pending の有無と一致�
  * draft-ietf-moq-transport-22 §9.5.1 (Updating Subscriptions):
  * "The receiver MUST still send a REQUEST_UPDATE_OK for each successful update"
  * 1 通の REQUEST_OK は 1 件だけを解決する。解決では pending から消え、送信時の
- * FORWARD / Range Filters / LOCATION_FILTER のうち値があるものだけが返る。
+ * PAUSED / Range Filters / LOCATION_FILTER のうち値があるものだけが返る。
  * 同じ対象の残りは pending に残り、他の Request ID は影響を受けない。
  */
 test("resolvePendingRequestUpdate: 対象の先頭 1 件だけを解決して送信時の値を返し、残りは pending に残る", () => {
@@ -831,8 +831,8 @@ test("resolvePendingRequestUpdate: 対象の先頭 1 件だけを解決して送
       assert.isFalse(session.pendingRequestUpdate.has(first.updateId));
       assert.equal(session.pendingRequestUpdate.size, specs.length - 1);
       // 送信時の値がそのまま返る (省略したフィールドは載せない)
-      assert.equal(resolved?.forward, first.forward);
-      assert.equal("forward" in (resolved ?? {}), first.forward !== undefined);
+      assert.equal(resolved?.paused, first.paused);
+      assert.equal("paused" in (resolved ?? {}), first.paused !== undefined);
       assert.deepEqual(resolved?.rangeFilters, first.rangeFilters);
       assert.equal("rangeFilters" in (resolved ?? {}), first.rangeFilters !== undefined);
       assert.deepEqual(resolved?.locationFilter, first.locationFilter);
@@ -1320,7 +1320,7 @@ test("bidiHandlePublishDone: 購読が無い requestId では通知せず記録�
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-22 §9.10 (PUBLISH_STATE_NOTIFY) / §9.20.1:
+ * draft-ietf-moq-transport-23 §9.10 (PUBLISH_STATE_NOTIFY) / §9.19.1:
  * subscribe ロールで受信した許可パラメータは検証通過後にまとめて反映する。
  * 省略されたパラメータは不変であり (「If a parameter is not present, its value is
  * unchanged.」)、応答は送信しない (返り値 true / セッションを閉じない)。
@@ -1350,11 +1350,11 @@ test("bidiHandlePublishStateNotify: subscribe ロールでは許可パラメー�
       } else {
         assert.isNull(subscriber.largestLocation);
       }
-      if (state.forward !== undefined) {
-        assert.equal(subscriber.forwardState, state.forward);
+      if (state.paused !== undefined) {
+        assert.equal(subscriber.paused, state.paused);
       } else {
-        // 省略時は不変 (SubscriberImpl の初期値 true)
-        assert.isTrue(subscriber.forwardState);
+        // 省略時は不変 (SubscriberImpl の初期値 false = unpaused)
+        assert.isFalse(subscriber.paused);
       }
       if (state.filter !== undefined) {
         assert.deepEqual(subscriber.getLocationFilter(), state.filter);
@@ -1366,13 +1366,13 @@ test("bidiHandlePublishStateNotify: subscribe ロールでは許可パラメー�
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.10:
+ * draft-ietf-moq-transport-23 §9.10:
  * "If a parameter is not present, its value is unchanged."
- * LARGEST_OBJECT だけを運ぶ通知では forwardState と Location Filter を変更しない。
+ * LARGEST_OBJECT だけを運ぶ通知では paused と Location Filter を変更しない。
  */
-test("bidiHandlePublishStateNotify: LARGEST_OBJECT だけの通知では forwardState と Location Filter を変えない", () => {
+test("bidiHandlePublishStateNotify: LARGEST_OBJECT だけの通知では paused と Location Filter を変えない", () => {
   const initialStateArb = fc.record({
-    forward: fc.boolean(),
+    paused: fc.boolean(),
     filter: fc.option(locationFilterArb, { nil: undefined }),
     largest: fc.option(locationArb, { nil: undefined }),
   });
@@ -1383,7 +1383,7 @@ test("bidiHandlePublishStateNotify: LARGEST_OBJECT だけの通知では forward
       const closeObserver = observeCloseWithError(session);
       const requestId = 10n;
       const subscriber = new SubscriberImpl(["live"], "video", requestId, 1n, () => {});
-      subscriber.setForwardState(initial.forward);
+      subscriber.setPaused(initial.paused);
       if (initial.filter !== undefined) {
         subscriber.setLocationFilter(initial.filter);
       }
@@ -1396,7 +1396,7 @@ test("bidiHandlePublishStateNotify: LARGEST_OBJECT だけの通知では forward
         session,
         buildStateNotifyPayload({
           largest: nextLargest,
-          forward: undefined,
+          paused: undefined,
           filter: undefined,
         }),
         requestId,
@@ -1407,14 +1407,14 @@ test("bidiHandlePublishStateNotify: LARGEST_OBJECT だけの通知では forward
       assert.isUndefined(closeObserver.closed());
       // LARGEST_OBJECT だけが反映される
       assert.deepEqual(subscriber.largestLocation, nextLargest);
-      assert.equal(subscriber.forwardState, initial.forward);
+      assert.equal(subscriber.paused, initial.paused);
       assert.deepEqual(subscriber.getLocationFilter(), initial.filter);
     }),
   );
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.10 / §3.3.1:
+ * draft-ietf-moq-transport-23 §9.10 / §3.3.1:
  * 保持値と等価な LOCATION_FILTER が再報告されても再適用しない。相対指定の再解決で
  * 開始位置が前進し、受信済み範囲の Object を破棄することを防ぐ。
  * 相対フィルタ { startGroup: 1 } は largest = {g0, 0} で開始 Group g0 に解決されるため、
@@ -1442,7 +1442,7 @@ test("bidiHandlePublishStateNotify: 同じ LOCATION_FILTER の再報告では相
           session,
           buildStateNotifyPayload({
             largest: { group: startGroup + groupDelta, object: nextObject },
-            forward: undefined,
+            paused: undefined,
             filter: { startGroup: 1n },
           }),
           requestId,
@@ -1469,10 +1469,13 @@ test("bidiHandlePublishStateNotify: 同じ LOCATION_FILTER の再報告では相
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.10:
- * "An endpoint that receives a PUBLISH_STATE_NOTIFY for any other request type, or from
- *  the subscriber, MUST close the session with a PROTOCOL_VIOLATION."
- * subscribe ロール以外では、購読の状態を一切変更せずにセッションを閉じる。
+ * draft-ietf-moq-transport-23 §9.10:
+ * "An endpoint that receives a PUBLISH_STATE_NOTIFY for any other request type
+ *  MUST close the session with UNEXPECTED_MESSAGE. A publisher that receives a
+ *  PUBLISH_STATE_NOTIFY MUST close the session with ROLE_VIOLATION."
+ * 現行の受信経路は SessionErrorCode への変換都合で PROTOCOL_VIOLATION として扱う
+ * (エラー分類の移行は別途対応する)。subscribe ロール以外では、購読の状態を
+ * 一切変更せずにセッションを閉じる。
  */
 test("bidiHandlePublishStateNotify: subscribe ロール以外では状態を変えずに PROTOCOL_VIOLATION で閉じる", () => {
   fc.assert(
@@ -1499,9 +1502,9 @@ test("bidiHandlePublishStateNotify: subscribe ロール以外では状態を変�
           assert.fail("subscribe ロール以外でセッションが閉じなかった");
         }
         assert.equal(closed.code, SessionErrorCode.PROTOCOL_VIOLATION);
-        // 違反確定後の部分反映は起きない
+        // 違反確定後の部分反映は起きない (初期値 false = unpaused のまま)
         assert.isNull(subscriber.largestLocation);
-        assert.isTrue(subscriber.forwardState);
+        assert.isFalse(subscriber.paused);
         assert.isUndefined(subscriber.getLocationFilter());
       },
     ),
@@ -1509,7 +1512,7 @@ test("bidiHandlePublishStateNotify: subscribe ロール以外では状態を変�
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.1 (Parameter Scope):
+ * draft-ietf-moq-transport-23 §9.19.1 (Parameter Scope):
  * 許可外パラメータを含む PUBLISH_STATE_NOTIFY は PROTOCOL_VIOLATION で閉じる。
  * 反映は検証通過後にまとめて行うため、同時に正当な LARGEST_OBJECT が載っていても
  * 部分反映は起きない。購読が無い場合も検証は行い、不正ワイヤを見逃さない。
@@ -1548,23 +1551,23 @@ test("bidiHandlePublishStateNotify: 許可外パラメータでは部分反映�
       assert.equal(closed.code, SessionErrorCode.PROTOCOL_VIOLATION);
       // 許可外の型番号がメッセージから読み取れる
       assert.isTrue(closed.message.includes("not allowed in PUBLISH_STATE_NOTIFY"));
-      // 正当な LARGEST_OBJECT も反映されない
+      // 正当な LARGEST_OBJECT も反映されない (初期値 false = unpaused のまま)
       assert.isNull(subscriber.largestLocation);
-      assert.isTrue(subscriber.forwardState);
+      assert.isFalse(subscriber.paused);
       assert.isUndefined(subscriber.getLocationFilter());
     }),
   );
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.18 (FORWARD Parameter):
+ * draft-ietf-moq-transport-23 §9.19.18 (PAUSED Parameter):
  * 値域は 0 / 1 であり、範囲外は PROTOCOL_VIOLATION になる。検証は購読への書き込みより
  * 前に全パラメータで行うため、同時に載った LARGEST_OBJECT も反映されない。
  * 呼び出し元 (受信ループ) がセッション終了へ変換するため、ここでは throw を確認する。
  */
-test("bidiHandlePublishStateNotify: FORWARD の値域外では部分反映せず ProtocolViolationError になる", () => {
+test("bidiHandlePublishStateNotify: PAUSED の値域外では部分反映せず ProtocolViolationError になる", () => {
   fc.assert(
-    fc.property(stateNotifyCaseArb, fc.integer({ min: 2, max: 255 }), (state, forwardValue) => {
+    fc.property(stateNotifyCaseArb, fc.integer({ min: 2, max: 255 }), (state, pausedValue) => {
       const { session } = createBidiSession();
       const closeObserver = observeCloseWithError(session);
       const requestId = 10n;
@@ -1572,10 +1575,10 @@ test("bidiHandlePublishStateNotify: FORWARD の値域外では部分反映せず
       session.subscribers.set(requestId, subscriber);
 
       const parameters: Parameter[] = [
-        ...buildStateNotifyParameters({ ...state, forward: undefined }),
+        ...buildStateNotifyParameters({ ...state, paused: undefined }),
         {
-          type: MessageParameterType.FORWARD,
-          value: encodeUint8ParameterValue(forwardValue, "FORWARD"),
+          type: MessageParameterType.PAUSED,
+          value: encodeUint8ParameterValue(pausedValue, "PAUSED"),
         },
       ];
       const payload = encodePublishStateNotifyPayload({
@@ -1590,14 +1593,14 @@ test("bidiHandlePublishStateNotify: FORWARD の値域外では部分反映せず
       // 値検証は書き込みより前に行われるため、部分反映もセッション終了も起きない
       assert.isUndefined(closeObserver.closed());
       assert.isNull(subscriber.largestLocation);
-      assert.isTrue(subscriber.forwardState);
+      assert.isFalse(subscriber.paused);
       assert.isUndefined(subscriber.getLocationFilter());
     }),
   );
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.10:
+ * draft-ietf-moq-transport-23 §9.10:
  * 購読が存在しない場合でも受理判定 (true) を返し、状態遷移は行わない。
  * ペイロードの検証自体は購読の有無に依存しない。
  */

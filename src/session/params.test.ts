@@ -101,18 +101,15 @@ test("buildFetchParameters: 不正な groupOrder で throw する", () => {
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.18 (SUBSCRIBE_TRACKS) / §9.20.1 (Parameter Scope):
- * SUBSCRIBE_TRACKS が運べるパラメータは §9.18 の列挙が正であり、
- * SUBSCRIBER_PRIORITY / LOCATION_FILTER / FILL_PARAMETERS は送らない。
- *
- * §3.6.2 には「SUBSCRIBE に指定できるパラメータは SUBSCRIBE_TRACKS でも有効」と
- * Location Filter / FILL_PARAMETERS に触れる記述が残り矛盾するが、§9.18 の列挙と
- * §9.20.1 の MUST (許可外メッセージへの出現は受信側で PROTOCOL_VIOLATION) を正とする。
+ * draft-ietf-moq-transport-23 §9.17 (SUBSCRIBE_TRACKS):
+ * §9.17 は SUBSCRIBER_PRIORITY / LOCATION_FILTER / FILL_PARAMETERS などの
+ * 出現も許可しているが、現行の SubscribeTracksOptions は未対応のため、
+ * 対応済みの型 (PAUSED / GROUP_ORDER / INCLUDE_PROPERTIES) だけを送る。
  */
-test("buildSubscribeTracksParameters: §9.18 の一覧に無いパラメータを送らない", () => {
+test("buildSubscribeTracksParameters: 対応済みのパラメータだけを送る", () => {
   const parameters = buildSubscribeTracksParameters({
     groupOrder: "Ascending",
-    forward: false,
+    paused: true,
     includeProperties: true,
   });
 
@@ -120,12 +117,12 @@ test("buildSubscribeTracksParameters: §9.18 の一覧に無いパラメータ�
   assert.deepEqual(
     parameters.map((p) => p.type).sort((a, b) => a - b),
     [
-      MessageParameterType.FORWARD,
+      MessageParameterType.PAUSED,
       MessageParameterType.GROUP_ORDER,
       MessageParameterType.INCLUDE_PROPERTIES,
     ].sort((a, b) => a - b),
   );
-  // §9.18 の一覧に無い 3 つは、型の上でも指定できない (空オブジェクトで確認)
+  // 未対応の型は型の上でも指定できない (空オブジェクトで確認)
   assert.deepEqual(buildSubscribeTracksParameters({}), []);
 });
 
@@ -458,7 +455,7 @@ test("buildTrackStatusParameters: includeProperties が INCLUDE_PROPERTIES に�
 test("extractNewGroupRequest: varint の値を返し、無ければ undefined、不正な値は ProtocolViolationError", () => {
   assert.isUndefined(extractNewGroupRequest([]));
   assert.isUndefined(
-    extractNewGroupRequest([{ type: MessageParameterType.FORWARD, value: new Uint8Array([1]) }]),
+    extractNewGroupRequest([{ type: MessageParameterType.PAUSED, value: new Uint8Array([1]) }]),
   );
   assert.equal(
     extractNewGroupRequest([
@@ -487,6 +484,32 @@ test("extractNewGroupRequest: varint の値を返し、無ければ undefined、
       extractNewGroupRequest([{ type: MessageParameterType.NEW_GROUP_REQUEST, value: trailing }]),
     ProtocolViolationError,
   );
+});
+
+// ============================================================================
+// PAUSED (draft-ietf-moq-transport-23 §9.19.18)
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-23 §9.19.18:
+ * PAUSED は 0 = unpaused / 1 = paused で、省略時の既定値は 0。
+ * SUBSCRIBE / PUBLISH / SUBSCRIBE_TRACKS の builder は paused 指定時のみ
+ * PAUSED=1 を載せ、false の明示と省略では載せない。
+ */
+test("buildSubscribeParameters / buildPublishParameters / buildSubscribeTracksParameters: PAUSED のワイヤ値", () => {
+  const builders = [
+    buildSubscribeParameters,
+    buildPublishParameters,
+    buildSubscribeTracksParameters,
+  ];
+  for (const build of builders) {
+    const pausedValueOf = (options: { paused?: boolean }): Uint8Array | undefined =>
+      build(options).find((parameter) => parameter.type === MessageParameterType.PAUSED)?.value;
+
+    assert.deepEqual(pausedValueOf({ paused: true }), new Uint8Array([1]));
+    assert.isUndefined(pausedValueOf({ paused: false }));
+    assert.isUndefined(pausedValueOf({}));
+  }
 });
 
 /**

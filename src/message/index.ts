@@ -60,7 +60,7 @@ export {
   encodeUint8ParameterValue,
   getParameterLocationValue,
   isRejectedReceiveNamespace,
-  validateForwardValue,
+  validatePausedValue,
   validateGroupOrderValue,
   validateIncludePropertiesValue,
   validateRangeFilterCombination,

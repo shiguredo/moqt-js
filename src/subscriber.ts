@@ -39,14 +39,18 @@ export interface RequestUpdateOptions {
   parameters?: Parameter[];
 
   /**
-   * forwardState を変更する
-   * draft-ietf-moq-transport-22 Section 9.20.18 (FORWARD Parameter)
+   * 購読を paused にするかどうかを変更する
+   * draft-ietf-moq-transport-23 §9.19.18 (PAUSED Parameter) / §3.1.1 (Pausing Subscriptions)
    *
-   * - true: paused を解除する (オブジェクトの送信を再開する)
-   * - false: paused にする (オブジェクトの送信を止める)
-   * - undefined: 変更しない（REQUEST_UPDATE に FORWARD を含めない）
+   * wire の PAUSED と同じ意味である。
+   *
+   * - true: paused にする (PAUSED=1 を送る。オブジェクトの送信が止まる)
+   * - false: paused を解除する (PAUSED=0 を送る。オブジェクトの送信が再開する)
+   * - undefined: 変更しない (PAUSED を含めない = 現在の状態を維持する)
+   *
+   * draft-22 の FORWARD は 1 = 転送するだったため、値の意味が反転している。
    */
-  forward?: boolean;
+  paused?: boolean;
 
   /**
    * Range Filters
@@ -116,18 +120,19 @@ export interface Subscriber {
    */
   readonly trackProperties: ReadonlyArray<Property>;
   /**
-   * forwardState
-   * draft-ietf-moq-transport-22 Section 9.20.18 (FORWARD Parameter)
+   * 購読が paused かどうか
+   * draft-ietf-moq-transport-23 §9.19.18 (PAUSED Parameter) / §3.1.1 (Pausing Subscriptions)
    *
-   * - SUBSCRIBE 送信時の options.forward の宣言値 (省略時は 1)
-   * - 自 subscriber.update({ forward }) の REQUEST_OK 確認値
+   * wire の PAUSED と同じ意味で、true = paused (1)、false = unpaused (0)。
+   * - SUBSCRIBE 送信時の options.paused の宣言値 (省略時は false = unpaused)
+   * - 自 subscriber.update({ paused }) の REQUEST_OK 確認値
    *
    * を反映したものであり、PUBLISH 送信時初期値と REQUEST_UPDATE 受信値を
-   * 反映する Publisher.forwardState とは更新経路が異なる点に注意。
+   * 反映する Publisher.paused とは更新経路が異なる点に注意。
    * 受信 PUBLISH から生成される SubscriberImpl には、ピアが PUBLISH /
-   * REQUEST_UPDATE で宣言した forwardState が設定される。
+   * REQUEST_UPDATE で宣言した paused が設定される。
    */
-  readonly forwardState: boolean;
+  readonly paused: boolean;
   /**
    * サブスクリプションを更新する（REQUEST_UPDATE を送信）
    * draft-ietf-moq-transport-22 Section 9.5 (REQUEST_UPDATE)
@@ -163,10 +168,12 @@ export class SubscriberImpl implements Subscriber {
   // 購読の既定 Publisher Priority。Track Properties 未受信時は 128。
   // setTrackProperties で再解決する。
   private subscriberDefaultPublisherPriority = 128;
-  // draft-ietf-moq-transport-22 §9.20.18 (FORWARD Parameter):
-  // forwardState。SUBSCRIBE 送信時の宣言値・受信 PUBLISH / ケース 1 の
-  // REQUEST_UPDATE / 自 update() の REQUEST_OK で更新される。
-  private subscriberForwardState = true;
+  // draft-ietf-moq-transport-23 §9.19.18 (PAUSED Parameter):
+  // 購読が paused かどうか (true = paused / false = unpaused)。wire の値と
+  // 同じ意味で保持し、境界での反転は行わない。SUBSCRIBE 送信時の宣言値・
+  // 受信 PUBLISH / ケース 1 の REQUEST_UPDATE / 自 update() の REQUEST_OK で
+  // 更新される。
+  private subscriberPaused = false;
   // draft-ietf-moq-transport-22 §9.20.8 (GROUP ORDER Parameter):
   // SUBSCRIBE 送信時の宣言値。fill 要求時の Group Order 解決
   // (FILL_PARAMETERS 内の指定が無ければ subscription の値) に使う。
@@ -234,24 +241,25 @@ export class SubscriberImpl implements Subscriber {
   }
 
   /**
-   * forwardState
-   * draft-ietf-moq-transport-22 Section 9.20.18 (FORWARD Parameter)
+   * 購読が paused かどうか
+   * draft-ietf-moq-transport-23 Section 9.19.18 (PAUSED Parameter)
    */
-  get forwardState(): boolean {
-    return this.subscriberForwardState;
+  get paused(): boolean {
+    return this.subscriberPaused;
   }
 
   /**
-   * forwardState を設定する (セッション内部コールバック)
+   * paused 状態を設定する (セッション内部コールバック)
    *
-   * draft-ietf-moq-transport-22 §9.20.18:
-   * SUBSCRIBE 送信時 (options.forward) / 受信 PUBLISH / ケース 1 の
+   * draft-ietf-moq-transport-23 §9.19.18:
+   * SUBSCRIBE 送信時 (options.paused) / 受信 PUBLISH / ケース 1 の
    * REQUEST_UPDATE / 自 update() の REQUEST_OK の各経路から設定される。
+   * 引数は wire の PAUSED と同じ意味 (true = paused) で、反転は行わない。
    * アプリケーションへの変化通知コールバックは持たない (Publisher の
-   * onForwardStateChange とは非対称。必要になったら別途追加する)。
+   * onPausedChange とは非対称。必要になったら別途追加する)。
    */
-  setForwardState(forward: boolean): void {
-    this.subscriberForwardState = forward;
+  setPaused(paused: boolean): void {
+    this.subscriberPaused = paused;
   }
 
   /**

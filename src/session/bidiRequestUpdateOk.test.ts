@@ -2,7 +2,7 @@
  * session/bidi.ts の単体テスト: bidiHandleRequestUpdateOk と PUBLISH_OK の Track Properties 検証
  *
  * REQUEST_OK / PUBLISH_OK の Track Properties が空であることの検証と、
- * REQUEST_OK による forwardState / Range Filters の反映を検証する。
+ * REQUEST_OK による paused / Range Filters の反映を検証する。
  * 実ストリームと実 Map でセッションを構築し、モックやスタブは使わない。
  */
 
@@ -89,7 +89,7 @@ test("bidiHandleRequestUpdateOk: rangeFilters が SubscriberImpl に反映され
           resolve: () => {},
           reject: () => {},
           targetRequestId: 0n,
-          forward: undefined,
+          paused: undefined,
           rangeFilters: [{ type: "objectId", setId: 0, ranges: [{ start: 8n, end: 9n }] }],
         },
       ],
@@ -261,7 +261,7 @@ test("bidiHandleRequestUpdateOk: 2 通目の REQUEST_OK で PROTOCOL_VIOLATION �
           },
           reject: () => {},
           targetRequestId: 0n,
-          forward: false,
+          paused: true,
         },
       ],
     ]),
@@ -289,29 +289,30 @@ test("bidiHandleRequestUpdateOk: 2 通目の REQUEST_OK で PROTOCOL_VIOLATION �
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.18:
+ * draft-ietf-moq-transport-23 §9.19.18:
  * "If the parameter is omitted from REQUEST_UPDATE or PUBLISH_STATE_NOTIFY, the
  *  subscription remains unchanged."
- * 自 update({ forward }) の REQUEST_OK 受信時に、送信時の FORWARD 値が
- * SubscriberImpl の forwardState に反映されることを表駆動で検証する。
- * SUBSCRIBE 直後の既定値 true からの false 反映と、false からの true 反映の
- * 両方向を確認し、初期値と期待値がたまたま一致する偽陽性を防ぐ。
+ * 自 update({ paused }) の REQUEST_OK 受信時に、送信時の PAUSED 値が
+ * SubscriberImpl の paused に反映されることを表駆動で検証する。
+ * SUBSCRIBE 直後の既定値 false (unpaused) からの paused 反映と、paused から
+ * unpaused への反映の両方向を確認し、初期値と期待値がたまたま一致する
+ * 偽陽性を防ぐ。
  */
-test("bidiHandleRequestUpdateOk: 自 update({ forward }) の REQUEST_OK で forwardState が送信値に反映される", () => {
+test("bidiHandleRequestUpdateOk: 自 update({ paused }) の REQUEST_OK で paused が送信値に反映される", () => {
   const cases: {
     name: string;
     initial: boolean | undefined;
-    forward: boolean;
+    paused: boolean;
     expected: boolean;
   }[] = [
-    { name: "既定値 true → FORWARD=0 の反映", initial: undefined, forward: false, expected: false },
-    { name: "false → FORWARD=1 の反映", initial: false, forward: true, expected: true },
+    { name: "既定値 false → PAUSED=1 の反映", initial: undefined, paused: true, expected: true },
+    { name: "paused から PAUSED=0 の反映", initial: true, paused: false, expected: false },
   ];
 
   for (const testCase of cases) {
     const subscriber = new SubscriberImpl(["test"], "track", 0n, 1n, () => {});
     if (testCase.initial !== undefined) {
-      subscriber.setForwardState(testCase.initial);
+      subscriber.setPaused(testCase.initial);
     }
     const session = {
       closeWithError: () => {},
@@ -319,7 +320,7 @@ test("bidiHandleRequestUpdateOk: 自 update({ forward }) の REQUEST_OK で forw
       pendingRequestUpdate: new Map([
         [
           100n,
-          { resolve: () => {}, reject: () => {}, targetRequestId: 0n, forward: testCase.forward },
+          { resolve: () => {}, reject: () => {}, targetRequestId: 0n, paused: testCase.paused },
         ],
       ]),
       goawayReceivedOnRequestStreams: new Set(),
@@ -334,20 +335,20 @@ test("bidiHandleRequestUpdateOk: 自 update({ forward }) の REQUEST_OK で forw
 
     bidiHandleRequestUpdateOk(session, payload, 0n);
 
-    // 送信時の FORWARD 値が反映され、pending エントリは解決・削除される
-    assert.equal(subscriber.forwardState, testCase.expected);
+    // 送信時の PAUSED 値が反映され、pending エントリは解決・削除される
+    assert.equal(subscriber.paused, testCase.expected);
     assert.equal(session.pendingRequestUpdate.size, 0);
   }
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.18:
- * 自 update() で FORWARD を省略した場合 (undefined)、REQUEST_OK 受信時に
- * forwardState は変化しないことを検証する。
+ * draft-ietf-moq-transport-23 §9.19.18:
+ * 自 update() で PAUSED を省略した場合 (undefined)、REQUEST_OK 受信時に
+ * paused は変化しないことを検証する。
  */
-test("bidiHandleRequestUpdateOk: FORWARD 省略の update の REQUEST_OK で forwardState は不変", () => {
+test("bidiHandleRequestUpdateOk: PAUSED 省略の update の REQUEST_OK で paused は不変", () => {
   const subscriber = new SubscriberImpl(["test"], "track", 0n, 1n, () => {});
-  subscriber.setForwardState(false);
+  subscriber.setPaused(true);
   const session = {
     closeWithError: () => {},
     subscribers: new Map([[0n, subscriber]]),
@@ -366,8 +367,8 @@ test("bidiHandleRequestUpdateOk: FORWARD 省略の update の REQUEST_OK で for
 
   bidiHandleRequestUpdateOk(session, payload, 0n);
 
-  // FORWARD 省略時は不変 (§9.20.18)
-  assert.equal(subscriber.forwardState, false);
+  // PAUSED 省略時は不変 (§9.19.18)
+  assert.isTrue(subscriber.paused);
   assert.equal(session.pendingRequestUpdate.size, 0);
 });
 

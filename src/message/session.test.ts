@@ -18,7 +18,7 @@ import { getMessageTypeName } from "./debug";
 import { ProtocolViolationError } from "../error";
 
 /**
- * draft-ietf-moq-transport-22 §9.10:
+ * draft-ietf-moq-transport-23 §9.10:
  * PUBLISH_STATE_NOTIFY の encode / decode ラウンドトリップを検証する。
  * ペイロードは Number of Parameters + Parameters のみ (Request ID なし)。
  */
@@ -27,7 +27,8 @@ test("encodePublishStateNotifyPayload / decodePublishStateNotifyPayload: ラウ�
     type: MessageType.PUBLISH_STATE_NOTIFY,
     parameters: [
       { type: MessageParameterType.LARGEST_OBJECT, value: new Uint8Array([0x01, 0x02]) },
-      { type: MessageParameterType.FORWARD, value: new Uint8Array([0]) },
+      // PAUSED = 0 (unpaused) / 1 (paused)。0 も正当な値である
+      { type: MessageParameterType.PAUSED, value: new Uint8Array([0]) },
     ],
   });
 
@@ -36,7 +37,7 @@ test("encodePublishStateNotifyPayload / decodePublishStateNotifyPayload: ラウ�
   assert.equal(decoded.parameters.length, 2);
   assert.equal(decoded.parameters[0].type, MessageParameterType.LARGEST_OBJECT);
   assert.deepEqual(decoded.parameters[0].value, new Uint8Array([0x01, 0x02]));
-  assert.equal(decoded.parameters[1].type, 0x10);
+  assert.equal(decoded.parameters[1].type, 0x11);
 });
 
 /**

@@ -62,7 +62,7 @@ export {
 export {
   getParameterLocationValue,
   validateGroupOrderValue,
-  validateForwardValue,
+  validatePausedValue,
   validateIncludePropertiesValue,
   encodeUint8ParameterValue,
   encodeLocation,

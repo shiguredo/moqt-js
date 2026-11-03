@@ -22,6 +22,26 @@ import { calculateObjectIdDelta } from "./params";
 import { mergeDeliveryTimeoutObjectProperties } from "../properties";
 
 /**
+ * createUnidirectionalStream を差し替えた publishSendObjectInternal 用の session を作る
+ *
+ * 実ストリームを返す factory を渡し、await 中の状態変化を再現するテストで使う。
+ */
+function createSessionWithStreamFactory(
+  createUnidirectionalStream: () => Promise<WritableStream<Uint8Array>>,
+): SessionInternal {
+  return {
+    transport: { createUnidirectionalStream },
+    publisherStreams: new Map(),
+    closedSubgroups: new Set<string>(),
+    publisherSendQueues: new Map(),
+    publisherPendingCloses: new Map(),
+    grease: false,
+    statsUnidirectionalStreamsOpened: 0,
+    closeWithError: () => {},
+  } as unknown as SessionInternal;
+}
+
+/**
  * publishSendObjectInternal を駆動するための session を構築する。
  *
  * createUnidirectionalStream は呼び出し回数を記録してから実ストリームを返す。
@@ -202,16 +222,7 @@ test("publishSendObjectInternal: createUnidirectionalStream の await 中に clo
   const streamPromise = new Promise<WritableStream<Uint8Array>>((resolve) => {
     resolveStream = resolve;
   });
-  const session = {
-    transport: { createUnidirectionalStream: () => streamPromise },
-    publisherStreams: new Map(),
-    closedSubgroups: new Set<string>(),
-    publisherSendQueues: new Map(),
-    publisherPendingCloses: new Map(),
-    grease: false,
-    statsUnidirectionalStreamsOpened: 0,
-    closeWithError: () => {},
-  } as unknown as SessionInternal;
+  const session = createSessionWithStreamFactory(() => streamPromise);
   const publisher = new PublisherImpl(["test"], "track", 0n, 1n);
 
   const sendPromise = publishSendObjectInternal(session, publisher, {
@@ -233,6 +244,87 @@ test("publishSendObjectInternal: createUnidirectionalStream の await 中に clo
   assert.equal(session.statsUnidirectionalStreamsOpened, 0);
   assert.equal(session.publisherStreams.size, 0);
   assert.deepEqual(aborted, ["peer cancelled subscription"]);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §3.1.1 (Pausing Subscriptions):
+ * createUnidirectionalStream の await 中に paused (PAUSED=1) になった場合、
+ * 開いたストリームを reset し、統計・publisherStreams に登録しない。
+ */
+test("publishSendObjectInternal: createUnidirectionalStream の await 中に paused になった場合は登録しない", async () => {
+  const aborted: unknown[] = [];
+  let resolveStream!: (stream: WritableStream<Uint8Array>) => void;
+  const streamPromise = new Promise<WritableStream<Uint8Array>>((resolve) => {
+    resolveStream = resolve;
+  });
+  const session = createSessionWithStreamFactory(() => streamPromise);
+  const publisher = new PublisherImpl(["test"], "track", 0n, 1n);
+
+  const sendPromise = publishSendObjectInternal(session, publisher, {
+    groupId: 0,
+    objectId: 0,
+    payload: new Uint8Array([1, 2, 3]),
+  });
+  // createUnidirectionalStream の await 中に PAUSED=1 へ変わる
+  publisher.setPaused(true);
+  resolveStream(
+    new WritableStream<Uint8Array>({
+      abort(reason) {
+        aborted.push(reason);
+      },
+    }),
+  );
+  await sendPromise;
+
+  assert.equal(session.statsUnidirectionalStreamsOpened, 0);
+  assert.equal(session.publisherStreams.size, 0);
+  assert.deepEqual(aborted, ["subscription paused"]);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §3.1.1 (Pausing Subscriptions):
+ * Subgroup Header の write の await 中に paused (PAUSED=1) になった場合、
+ * Object を送らずにストリームを reset し、統計・publisherStreams に登録しない。
+ */
+test("publishSendObjectInternal: header write の await 中に paused になった場合は登録しない", async () => {
+  const aborted: unknown[] = [];
+  let resolveWrite!: () => void;
+  const writeGate = new Promise<void>((resolve) => {
+    resolveWrite = resolve;
+  });
+  let resolveWriteStarted!: () => void;
+  const writeStarted = new Promise<void>((resolve) => {
+    resolveWriteStarted = resolve;
+  });
+  const stream = new WritableStream<Uint8Array>({
+    write() {
+      resolveWriteStarted();
+      return writeGate;
+    },
+    abort(reason) {
+      aborted.push(reason);
+    },
+  });
+  const session = createSessionWithStreamFactory(async () => stream);
+  const publisher = new PublisherImpl(["test"], "track", 0n, 1n);
+
+  const sendPromise = publishSendObjectInternal(session, publisher, {
+    groupId: 0,
+    objectId: 0,
+    payload: new Uint8Array([1, 2, 3]),
+  });
+  // header の write が始まるまで待ち、その await 中に PAUSED=1 へ変わる
+  await writeStarted;
+  publisher.setPaused(true);
+  resolveWrite();
+  await sendPromise;
+
+  // header は送信済みのため、空 Subgroup としてデータストリーム数を計上する
+  assert.equal(session.statsUnidirectionalStreamsOpened, 1);
+  // 空 Subgroup も PUBLISH_DONE の Stream Count に含まれる
+  assert.equal(publisher.getDataStreamCount(), 1n);
+  assert.equal(session.publisherStreams.size, 0);
+  assert.deepEqual(aborted, ["subscription paused"]);
 });
 
 /**
@@ -1105,19 +1197,19 @@ test("publishClosePublisherStream: 詰まった close は短い timeout で打�
 });
 
 // ============================================================================
-// draft-22 適合監査 D-10: 送信関数の forwardState 参照
-// draft-ietf-moq-transport-22 §3.1.1 (Pausing Subscriptions)
+// draft-23 適合: 送信関数の paused 参照
+// draft-ietf-moq-transport-23 §3.1.1 (Pausing Subscriptions) / §9.19.18 (PAUSED)
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-22 §3.1.1:
+ * draft-ietf-moq-transport-23 §3.1.1:
  * "The publisher does not send Objects on a paused subscription"
- * 内部送信関数を直接呼んでも forwardState が 0 ではストリームを生成しない。
+ * 内部送信関数を直接呼んでも paused (PAUSED=1) ではストリームを生成しない。
  */
-test("publishSendObject: forwardState=false ではストリームを生成しない", async () => {
+test("publishSendObject: paused ではストリームを生成しない", async () => {
   const { session, unidirectionalStreamCreated } = createSessionForPublish();
   const publisher = new PublisherImpl(["test"], "track", 0n, 1n);
-  publisher.setForwardState(false);
+  publisher.setPaused(true);
 
   await publishSendObject(session, publisher, {
     groupId: 0,
@@ -1130,13 +1222,45 @@ test("publishSendObject: forwardState=false ではストリームを生成しな
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.1.1:
- * Datagram も Object であるため、forwardState が 0 では送信経路に入らない。
+ * draft-ietf-moq-transport-23 §9.19.18 / §3.1.1:
+ * キュー投入時には unpaused でも、待機中に PAUSED=1 (paused) へ変わると
+ * 送信せず、§11.3.2 の省略として扱う (送信キューでの再確認)。
  */
-test("publishSendDatagram: forwardState=false では datagram writer を取得しない", () => {
+test("publishSendObject: キュー待機中に paused になると送信しない", async () => {
+  const { session, unidirectionalStreamCreated } = createSessionForPublish();
+  const publisher = new PublisherImpl(["test"], "track", 0n, 1n);
+
+  // 同一トラックの先行送信をキューに残したままにする
+  let releaseFirst!: () => void;
+  const firstSend = new Promise<void>((resolve) => {
+    releaseFirst = resolve;
+  });
+  session.publisherSendQueues.set(1n, firstSend);
+
+  const sendPromise = publishSendObject(session, publisher, {
+    groupId: 0,
+    objectId: 0,
+    payload: new Uint8Array([1]),
+  });
+
+  // キュー待機中に paused へ変える
+  publisher.setPaused(true);
+  releaseFirst();
+  await sendPromise;
+
+  // paused 中に実行されたためストリームは生成されない
+  assert.equal(unidirectionalStreamCreated(), 0);
+  assert.equal(session.publisherStreams.size, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §3.1.1:
+ * Datagram も Object であるため、paused (PAUSED=1) では送信経路に入らない。
+ */
+test("publishSendDatagram: paused では datagram writer を取得しない", () => {
   const { session } = createSessionForPublish();
   const publisher = new PublisherImpl(["test"], "track", 0n, 1n);
-  publisher.setForwardState(false);
+  publisher.setPaused(true);
 
   void publishSendDatagram(session, publisher, {
     groupId: 0,

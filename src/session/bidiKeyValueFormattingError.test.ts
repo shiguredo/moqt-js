@@ -371,10 +371,10 @@ test("bidiHandleRequestUpdateOk: スコープ違反で保留中の更新が違�
   session.fillFetchTargets.set(101n, { subscriber, groupOrder: GroupOrder.ASCENDING });
   session.fillFetchTargets.set(102n, { subscriber, groupOrder: GroupOrder.ASCENDING });
 
-  // FORWARD は REQUEST_UPDATE_OK (LARGEST_OBJECT / EXPIRES のみ許可) のスコープ違反である
+  // PAUSED は REQUEST_UPDATE_OK (LARGEST_OBJECT / EXPIRES のみ許可) のスコープ違反である
   const payload = encodeRequestOkPayload({
     type: MessageType.REQUEST_OK,
-    parameters: [{ type: MessageParameterType.FORWARD, value: new Uint8Array([1]) }],
+    parameters: [{ type: MessageParameterType.PAUSED, value: new Uint8Array([1]) }],
     trackProperties: [],
   });
   bidiHandleRequestUpdateOk(session, payload, 7n);
@@ -386,7 +386,7 @@ test("bidiHandleRequestUpdateOk: スコープ違反で保留中の更新が違�
   assert.strictEqual(rejected[1], closedWithError);
   assert.equal(closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
   assert.isTrue(
-    closedWithError!.message.includes("parameter type 0x10 not allowed in REQUEST_UPDATE_OK"),
+    closedWithError!.message.includes("parameter type 0x11 not allowed in REQUEST_UPDATE_OK"),
   );
   assert.deepEqual(order, ["reject", "reject", "close"]);
   assert.isFalse(session.pendingRequestUpdate.has(101n));

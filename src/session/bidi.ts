@@ -88,7 +88,7 @@ import { SubscriberImpl, type Subscriber, type RequestUpdateOptions } from "../s
 import type { TracksUpdateOptions, SessionState, TrackStatusResult } from "./publicTypes";
 import {
   compareLocations,
-  extractForwardState,
+  extractPaused,
   extractNewGroupRequest,
   extractLargestLocation,
   validateFetchOkEndLocation,
@@ -198,16 +198,17 @@ interface PendingRequestUpdate {
   reject: (err: Error) => void;
   targetRequestId: bigint;
   /**
-   * REQUEST_UPDATE 送信時に指定された FORWARD 値。
-   * draft-ietf-moq-transport-22 §9.20.18:
+   * REQUEST_UPDATE 送信時に指定された paused 値。
+   * draft-ietf-moq-transport-23 §9.19.18:
    * "If the parameter is omitted from REQUEST_UPDATE or PUBLISH_STATE_NOTIFY, the
    *  subscription remains unchanged."
-   * 省略時 (undefined) は REQUEST_OK 受信時に forwardState を更新しない。
+   * 省略時 (undefined) は REQUEST_OK 受信時に paused 状態を更新しない。
+   * 値は wire の PAUSED と同じ意味 (true = paused) で保持する。
    *
    * 内部の pending 状態オブジェクトで、省略を明示的に undefined として保持するため
    * `| undefined` を付ける
    */
-  forward?: boolean | undefined;
+  paused?: boolean | undefined;
   /**
    * REQUEST_UPDATE 送信時に指定された Range Filters。
    * draft-ietf-moq-transport-22 §3.3.2:
@@ -247,7 +248,7 @@ interface PendingRequestUpdate {
  * 省略されたフィールドは載せない (呼び出し側は undefined を「反映しない」として扱う)。
  */
 interface PendingRequestUpdateValues {
-  forward?: boolean;
+  paused?: boolean;
   rangeFilters?: RangeFilterSpec[];
   locationFilter?: LocationFilter;
 }
@@ -1033,9 +1034,9 @@ export async function bidiReadPublishResponse(
       session.pendingPublish.delete(requestId);
       session.publishers.set(requestId, pending.impl);
 
-      // draft-ietf-moq-transport-22 §9.20.16:
-      // PUBLISH_OK に出現できるのは EXPIRES のみであり、FORWARD 等の
-      // Subscription Parameters は運ばれない。Publisher の forwardState は
+      // draft-ietf-moq-transport-23 §9.3 (PUBLISH_OK) / §9.19.16 (EXPIRES):
+      // PUBLISH_OK に出現できるのは EXPIRES のみであり、PAUSED 等の
+      // Subscription Parameters は運ばれない。Publisher の paused 状態は
       // PUBLISH 送信時の指定値のままにし、更新は REQUEST_UPDATE 経路で扱う。
       pending.resolve(pending.impl);
 
@@ -1974,8 +1975,8 @@ async function bidiPreflightRequestUpdate(
  *     Range Filter も同じく INVALID_FILTER で拒否する (§9.1.6)。
  *     許可パラメータ (SUBSCRIBER_PRIORITY / LOCATION_FILTER /
  *     NEW_GROUP_REQUEST / FILL_PARAMETERS / Range Filters 等) は受理する。
- * (5) 受理した FORWARD を受信 PUBLISH から生成された SubscriberImpl の
- *     forwardState に反映し (FORWARD 省略時は不変)、REQUEST_OK を応答する
+ * (5) 受理した PAUSED を受信 PUBLISH から生成された SubscriberImpl の
+ *     paused 状態に反映し (PAUSED 省略時は不変)、REQUEST_OK を応答する
  *     (ペイロードは空 parameters / 空 trackProperties)。
  *
  * 応答の書き込み失敗 (writer が閉じている等) は黙殺する。
@@ -1984,7 +1985,7 @@ async function bidiPreflightRequestUpdate(
  * (応答は同一 bidi ストリーム上に書き込まれることでリクエストが特定される。
  * 既存 role=publish ハンドラと同様)。
  *
- * 受理した FORWARD 以外のパラメータは状態として保持しない
+ * 受理した PAUSED 以外のパラメータは状態として保持しない
  * (accept-then-ignore。更新の反映を前提とするピアと意味論が乖離する点は
  * 残余リスクとして残る)。
  */
@@ -2097,12 +2098,13 @@ export async function bidiHandlePublishRequestUpdate(
 
   // 判定順序 (4): Range Filter / LOCATION_FILTER / FILL_PARAMETERS の値検証と
   // 自 endpoint の MAX_FILTER_RANGES (未広告時 0) の上限検証。
-  // draft-ietf-moq-transport-22 §3.3.2 / §9.20.12-14 / §9.1.6:
+  // draft-ietf-moq-transport-23 §3.3.2 / §9.19.12-14 / §9.1.6:
   // 不正なフィルタ・上限超過は REQUEST_ERROR (INVALID_FILTER) で応答する。
   // LOCATION_FILTER / FILL_PARAMETERS 内側の一覧外・値違反
-  // (ProtocolViolationError) は §9.20.1 / §9.20.15 の MUST に従い
-  // PROTOCOL_VIOLATION でセッションを閉じる。検証は状態変更
-  // (setForwardState) より前に配置し、拒否時に forwardState が反映される
+  // (ProtocolViolationError) は §9.19.1 / §9.19.15 の MUST に従い
+  // セッションを閉じる (現行の受信経路は SessionErrorCode への変換都合で
+  // PROTOCOL_VIOLATION として扱う)。検証は状態変更
+  // (setPaused) より前に配置し、拒否時に paused 状態が反映される
   // 不整合を防ぐ。
   try {
     validateRangeFilterCombination(decoded.parameters);
@@ -2130,18 +2132,18 @@ export async function bidiHandlePublishRequestUpdate(
     throw error;
   }
 
-  // draft-ietf-moq-transport-22 §9.5 / §9.20.18:
+  // draft-ietf-moq-transport-23 §9.5 / §9.19.18:
   // "If the parameter is omitted from REQUEST_UPDATE or PUBLISH_STATE_NOTIFY, the
   //  subscription remains unchanged."
-  // FORWARD パラメータが存在する場合のみ、受信 PUBLISH から生成された
-  // SubscriberImpl の forwardState に反映する (省略時は不変)。
-  const forwardParam = decoded.parameters.find(
-    (param) => param.type === MessageParameterType.FORWARD,
+  // PAUSED パラメータが存在する場合のみ、受信 PUBLISH から生成された
+  // SubscriberImpl の paused 状態に反映する (省略時は不変)。
+  const pausedParam = decoded.parameters.find(
+    (param) => param.type === MessageParameterType.PAUSED,
   );
-  if (forwardParam !== undefined) {
+  if (pausedParam !== undefined) {
     const subscriber = session.subscribers.get(requestId);
     if (subscriber) {
-      subscriber.setForwardState(extractForwardState(decoded.parameters));
+      subscriber.setPaused(extractPaused(decoded.parameters));
     }
   }
 
@@ -2828,8 +2830,8 @@ async function bidiHandleRequestUpdateMessage(
   // Range Filter の値域・構造・組み合わせ重複検証
   // draft-ietf-moq-transport-22 §3.3.2 / §9.20.12-14:
   // 不正な Range Filter は REQUEST_ERROR (INVALID_FILTER) で応答する。
-  // 検証は状態変更 (setForwardState) より前に配置し、違反で
-  // REQUEST_ERROR を応答したにも関わらず forwardState が反映される
+  // 検証は状態変更 (setPaused) より前に配置し、違反で
+  // REQUEST_ERROR を応答したにも関わらず paused 状態が反映される
   // 不整合を防ぐ。
   // LOCATION_FILTER / FILL_PARAMETERS 内側の値違反
   // (InvalidFilterError) も同一経路で REQUEST_ERROR にする。
@@ -2936,15 +2938,15 @@ async function bidiHandleRequestStreamGoaway(
 /**
  * 受理した REQUEST_UPDATE に REQUEST_OK / REQUEST_ERROR を応答する
  *
- * draft-ietf-moq-transport-22 §9.5 / §9.5.1 / §9.20.18:
+ * draft-ietf-moq-transport-23 §9.5 / §9.5.1 / §9.19.18:
  * 検証を通過した REQUEST_UPDATE について、購読状態への反映と応答送信を行う。
- * - LOCATION_FILTER / FORWARD を購読状態へ反映し、FILL_PARAMETERS が fill fetch
+ * - LOCATION_FILTER / PAUSED を購読状態へ反映し、FILL_PARAMETERS が fill fetch
  *   ストリームを必要とする場合は REQUEST_ERROR (NOT_SUPPORTED) で拒否する。
  *   moqt-js は fill fetch ストリームを開けないためである (詳細は
  *   applyPublishRequestUpdate を参照)。拒否時は §9.5.1 の PUBLISH_DONE
  *   (UPDATE_FAILED) で購読を終了する。
  * - 受理時は REQUEST_OK を送信する (§9.5 MUST)。publish 済み Object がある場合は
- *   LARGEST_OBJECT を必ず含める (§9.20.17 MUST)。
+ *   LARGEST_OBJECT を必ず含める (§9.19.17 MUST)。
  * - publisher が存在しない場合は REQUEST_ERROR (INTERNAL_ERROR) で拒否する。
  *   書き込み失敗は黙殺し、後続の PUBLISH_DONE 送信に進む (GOING_AWAY /
  *   INVALID_FILTER 経路と同一の回復力にする)。
@@ -2974,8 +2976,8 @@ async function respondToPublishRequestUpdate(
     return;
   }
 
-  // draft-ietf-moq-transport-22 §3.4 / §3.4.1 / §9.5 / §9.20.18:
-  // LOCATION_FILTER / FORWARD を購読状態へ反映し、FILL_PARAMETERS が
+  // draft-ietf-moq-transport-23 §3.4 / §3.4.1 / §9.5 / §9.19.18:
+  // LOCATION_FILTER / PAUSED を購読状態へ反映し、FILL_PARAMETERS が
   // fill fetch ストリームを必要とするかを判定する。moqt-js は
   // fill fetch ストリームを開けないため、必要な場合は
   // REQUEST_ERROR (NOT_SUPPORTED) で拒否する。詳細は
@@ -3083,9 +3085,9 @@ function validateLocationAndFillParameters(parameters: Parameter[]): DecodedLoca
  * - LOCATION_FILTER が存在する場合のみ購読の Location Filter を更新する。
  *   更新後は送信中の Subgroup の次の Object が範囲外になるかを省略として記録する
  *   (markOmittedNextObject)。
- * - FORWARD が存在する場合のみ forwardState を更新する (省略時に
- *   extractForwardState がデフォルト true を返すため無条件反映はしない)。
- * - FILL_PARAMETERS を含み forwardState が 1 で fill 範囲が空でない場合、
+ * - PAUSED が存在する場合のみ paused 状態を更新する (省略時に
+ *   extractPaused が既定値 false = unpaused を返すため無条件反映はしない)。
+ * - FILL_PARAMETERS を含み paused 中でなく (unpaused)、fill 範囲が空でない場合、
  *   publisher は fill fetch ストリームを開く必要がある。moqt-js は開けない
  *   ため拒否対象として true を返す。
  *
@@ -3097,14 +3099,14 @@ function applyPublishRequestUpdate(
   parameters: Parameter[],
   decodedFill: DecodedLocationAndFill,
 ): boolean {
-  const forwardParam = parameters.find((param) => param.type === MessageParameterType.FORWARD);
+  const pausedParam = parameters.find((param) => param.type === MessageParameterType.PAUSED);
   const fillParam = parameters.find((param) => param.type === MessageParameterType.FILL_PARAMETERS);
   // draft-ietf-moq-transport-22 §9.20.19: NEW_GROUP_REQUEST は状態を変える前に読む
   // (読めない値は PROTOCOL_VIOLATION)
   const newGroupRequest = extractNewGroupRequest(parameters);
 
   // 更新適用後の有効値 (省略時は現在値) で fill 範囲を判定する。拒否する更新を
-  // 先に状態へ反映すると、アプリの onForwardStateChange が誤って呼ばれ、
+  // 先に状態へ反映すると、アプリの onPausedChange が誤って呼ばれ、
   // 終了処理中の publisher へ送信を再開させてしまう。反映は受理が確定してから
   // 行う (検証を状態変更より先に行う既存方針と同じ)。
   const largestLocation = publisher.getLargestLocation();
@@ -3115,11 +3117,10 @@ function applyPublishRequestUpdate(
     decodedLocationFilter !== undefined
       ? resolveFilter(decodedLocationFilter, largestLocation)
       : publisher.getResolvedLocationFilter();
-  const effectiveForwardState =
-    forwardParam !== undefined ? extractForwardState(parameters) : publisher.forwardState;
+  const effectivePaused = pausedParam !== undefined ? extractPaused(parameters) : publisher.paused;
 
   let rejectForFill = false;
-  if (fillParam !== undefined && effectiveForwardState) {
+  if (fillParam !== undefined && !effectivePaused) {
     const fillFilter = resolveFillRangeFilter(
       decodedFill.fillInnerLocationFilter,
       effectiveSubscriptionFilter,
@@ -3139,8 +3140,8 @@ function applyPublishRequestUpdate(
     // アプリの送信を待たずに省略として記録する
     markOmittedNextObject(session, publisher);
   }
-  if (forwardParam !== undefined) {
-    publisher.setForwardState(effectiveForwardState);
+  if (pausedParam !== undefined) {
+    publisher.setPaused(effectivePaused);
   }
   // draft-ietf-moq-transport-22 §9.20.19: 受理した更新の NEW_GROUP_REQUEST をアプリへ知らせる
   // (DYNAMIC_GROUPS の広告と値の条件は handleNewGroupRequest が見る)
@@ -3428,6 +3429,48 @@ function registerRawFillFetchTarget(
 }
 
 /**
+ * REQUEST_UPDATE の PAUSED 値を解決する
+ *
+ * draft-ietf-moq-transport-23 §9.19.18:
+ * raw parameters の PAUSED が指定された場合は、REQUEST_OK 後に
+ * Subscriber.paused へ反映できるよう値を取り出す。raw と型付きオプション
+ * `paused` の重複は、後段の assertNoDuplicateMessageParameterTypes が
+ * 送信前に拒否する。
+ *
+ * @returns 送信する paused 値 (true = paused)。指定が無ければ undefined
+ * @throws Error raw PAUSED の値が 0/1 以外、または Value が 1 バイトでない場合
+ */
+function resolveRequestUpdatePaused(options: RequestUpdateOptions): boolean | undefined {
+  const rawPausedParameters = (options.parameters ?? []).filter(
+    (param) => param.type === MessageParameterType.PAUSED,
+  );
+  if (options.paused !== undefined) {
+    return options.paused;
+  }
+  if (rawPausedParameters.length === 1) {
+    const rawPaused = rawPausedParameters[0];
+    if (rawPaused === undefined) {
+      throw new Error("invalid raw PAUSED in REQUEST_UPDATE: missing value");
+    }
+    // PAUSED は uint8 のため、Value が 1 バイトでないワイヤは作らせない。
+    if (rawPaused.value.length !== 1) {
+      throw new Error(
+        `invalid raw PAUSED in REQUEST_UPDATE: expected 1 byte but got ${rawPaused.value.length}`,
+      );
+    }
+    try {
+      return extractPaused(rawPausedParameters);
+    } catch (error) {
+      throw new Error(
+        `invalid raw PAUSED in REQUEST_UPDATE: ${error instanceof Error ? error.message : String(error)}`,
+        { cause: error },
+      );
+    }
+  }
+  return undefined;
+}
+
+/**
  * raw FILL_PARAMETERS の送信前検証と合算用データの準備
  *
  * - 重複検査: draft-ietf-moq-transport-22 §9.20 / §9.20.15
@@ -3625,10 +3668,15 @@ export async function bidiSendRequestUpdate(
     parameters.push(...buildRangeFilterParameters(options.rangeFilters));
   }
 
-  if (options.forward !== undefined) {
+  // PAUSED (0x11) - draft-ietf-moq-transport-23 Section 9.19.18:
+  // true = paused (1) / false = unpaused (0) を明示送信する。省略時は不変。
+  // raw parameters で PAUSED を直接指定した場合も、REQUEST_OK 後に
+  // Subscriber.paused へ反映できるよう pending に同じ値を保持する。
+  const sendPaused = resolveRequestUpdatePaused(options);
+  if (options.paused !== undefined) {
     parameters.push({
-      type: MessageParameterType.FORWARD,
-      value: encodeUint8ParameterValue(options.forward ? 1 : 0, "FORWARD"),
+      type: MessageParameterType.PAUSED,
+      value: encodeUint8ParameterValue(options.paused ? 1 : 0, "PAUSED"),
     });
   }
 
@@ -3693,8 +3741,8 @@ export async function bidiSendRequestUpdate(
   // "Senders MUST NOT repeat the same Parameter Type in a message unless the parameter
   //  definition explicitly allows multiple instances of that type to be sent in a single
   //  message."
-  // 型付きオプションと raw パラメータの合算で重複が生じ得る (例: parameters の FORWARD と
-  // forward オプション)。FILL_PARAMETERS / NEW_GROUP_REQUEST は個別ガードを持つが、
+  // 型付きオプションと raw パラメータの合算で重複が生じ得る (例: parameters の PAUSED と
+  // paused オプション)。FILL_PARAMETERS / NEW_GROUP_REQUEST は個別ガードを持つが、
   // それ以外の型はここで送信前に拒否する。pendingRequestUpdate と fillFetchTargets への
   // 登録より前に失敗させるため、エンコードの直前ではなくここで検査する。
   assertNoDuplicateMessageParameterTypes(parameters);
@@ -3722,10 +3770,10 @@ export async function bidiSendRequestUpdate(
       resolve,
       reject,
       targetRequestId,
-      // draft-ietf-moq-transport-22 §9.20.18:
-      // REQUEST_OK 受信時に forwardState へ反映するため、送信時の FORWARD
+      // draft-ietf-moq-transport-23 §9.19.18:
+      // REQUEST_OK 受信時に paused 状態へ反映するため、送信時の paused
       // 値を保持する (省略時は undefined = 不変)。
-      forward: options.forward,
+      paused: sendPaused,
       // draft-ietf-moq-transport-22 §3.3.2:
       // REQUEST_OK 受信時に Range Filters へ反映するため、送信時の値を保持する
       // (省略時は undefined = 不変)。
@@ -3834,7 +3882,7 @@ export async function bidiSendRequestUpdate(
  * @param session - セッション内部状態
  * @param requestId - 更新対象の SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS の Request ID
  * @param streamWriter - サブスクリプションの双方向ストリーム writer
- * @param options - 更新内容 (TRACK_NAMESPACE_PREFIX + Tracks のみ FORWARD)
+ * @param options - 更新内容 (TRACK_NAMESPACE_PREFIX + Tracks のみ PAUSED)
  * @returns REQUEST_OK 受信で resolve、REQUEST_ERROR / ストリームクローズで reject する Promise
  */
 export async function bidiSendNamespaceRequestUpdate(
@@ -3938,18 +3986,18 @@ export async function bidiSendNamespaceRequestUpdate(
     });
   }
 
-  // FORWARD (0x10) - draft-ietf-moq-transport-22 Section 9.20.18:
+  // PAUSED (0x11) - draft-ietf-moq-transport-23 Section 9.19.18:
   // SUBSCRIBE_TRACKS の REQUEST_UPDATE にのみ許可され、 prefix に一致する
-  // 将来の subscription が paused かどうか (FORWARD パラメータ) を指定する (既存購読には影響しない)。
+  // 将来の subscription が paused かどうか (PAUSED パラメータ) を指定する (既存購読には影響しない)。
   // SUBSCRIBE_NAMESPACE 向け REQUEST_UPDATE では許可されないため送らない。
-  // 型上は TracksUpdateOptions のみが forward を持つが、実行時に
+  // 型上は TracksUpdateOptions のみが paused を持つが、実行時に
   // namespace 系へ混入しても黙って落とす (誤送信による仕様違反を防ぐ)。
   // 省略時は不変のため、指定時のみ 0/1 を明示送信する
-  // (bidiSendRequestUpdate の forward !== undefined → 0/1 表現に揃える)。
-  if (!isNamespaceSubscription && options.forward !== undefined) {
+  // (bidiSendRequestUpdate の paused !== undefined → 0/1 表現に揃える)。
+  if (!isNamespaceSubscription && options.paused !== undefined) {
     parameters.push({
-      type: MessageParameterType.FORWARD,
-      value: encodeUint8ParameterValue(options.forward ? 1 : 0, "FORWARD"),
+      type: MessageParameterType.PAUSED,
+      value: encodeUint8ParameterValue(options.paused ? 1 : 0, "PAUSED"),
     });
   }
 
@@ -4356,12 +4404,12 @@ export function bidiHandlePublishStateNotify(
   // 失敗は呼び出し元の catch でセッションを閉じる。
   const locationFilter =
     locationParam !== undefined ? decodeLocationFilterParameter(locationParam) : undefined;
-  const forwardParam = msg.parameters.find((param) => param.type === MessageParameterType.FORWARD);
-  // draft-ietf-moq-transport-22 §9.20.18:
+  const pausedParam = msg.parameters.find((param) => param.type === MessageParameterType.PAUSED);
+  // draft-ietf-moq-transport-23 §9.19.18:
   // PUBLISH_STATE_NOTIFY では報告値をそのまま反映する (省略時は不変)。
-  // extractForwardState は省略時にデフォルト true を返すため、存在時のみ呼ぶ。
+  // extractPaused は省略時に既定値 false (unpaused) を返すため、存在時のみ呼ぶ。
   // 値域検証は内部で行い、範囲外は ProtocolViolationError になる。
-  const forwardState = forwardParam !== undefined ? extractForwardState(msg.parameters) : undefined;
+  const paused = pausedParam !== undefined ? extractPaused(msg.parameters) : undefined;
 
   if (!subscriber) {
     return true;
@@ -4383,8 +4431,8 @@ export function bidiHandlePublishStateNotify(
   ) {
     subscriber.setLocationFilter(locationFilter);
   }
-  if (forwardState !== undefined) {
-    subscriber.setForwardState(forwardState);
+  if (paused !== undefined) {
+    subscriber.setPaused(paused);
   }
   return true;
 }
@@ -4396,22 +4444,22 @@ export function bidiHandlePublishStateNotify(
 /**
  * PUBLISH_STATE_NOTIFY を購読の双方向ストリームへ送信する
  *
- * draft-ietf-moq-transport-22 §9.10 (PUBLISH_STATE_NOTIFY):
+ * draft-ietf-moq-transport-23 §9.10 (PUBLISH_STATE_NOTIFY):
  * publisher が購読状態の変化を購読者へ片方向で通知する。購読者は REQUEST_OK /
  * REQUEST_ERROR を返さないため、pending 登録も応答待ちも行わない。また
  * §9.10 により MAX_REQUEST_UPDATES (§9.1.7) の対象外である。
  *
- * 載せるパラメータは §9.20.1 が本メッセージに許可する 3 種のみとする。
- * - LARGEST_OBJECT (§9.20.17): 「The publisher MUST include the LARGEST_OBJECT
+ * 載せるパラメータは §9.10 が本メッセージに許可する 3 種のみとする。
+ * - LARGEST_OBJECT (§9.19.17): 「The publisher MUST include the LARGEST_OBJECT
  *   parameter ..., if known, in PUBLISH_STATE_NOTIFY so the subscriber can
  *   determine the point in the Track at which the change took effect.」に従い、
  *   送信済み Object がある場合は必ず載せる。
- * - FORWARD (§9.20.18) / LOCATION_FILTER (draft-ietf-moq-transport-22 §9.20.9):
+ * - PAUSED (§9.19.18) / LOCATION_FILTER (draft-ietf-moq-transport-23 §9.19.9):
  *   「A PUBLISH_STATE_NOTIFY
  *   carries the parameters whose values have changed.」に従い、現在値から
  *   変化した場合のみ載せる。変化が無ければ送信しない (重複送信の抑止)。
  *
- * 購読状態 (forwardState / Location Filter) の反映は write 成功後に行う。
+ * 購読状態 (paused / Location Filter) の反映は write 成功後に行う。
  * 送信できなかった変更を反映すると、購読者が受け取った値と publisher が
  * 実際に使う値が食い違うためである。
  *
@@ -4427,7 +4475,7 @@ export async function bidiSendPublishStateNotify(
   const requestId = publisher.getRequestId();
 
   // 変化したパラメータだけを集める。LARGEST_OBJECT は「変化したか」に依らず
-  // 既知なら必ず載せる (§9.20.17 の MUST) ため、変化の有無の判定には数えない。
+  // 既知なら必ず載せる (§9.19.17 の MUST) ため、変化の有無の判定には数えない。
   const parameters: Parameter[] = [];
   const largestLocation = publisher.getLargestLocation();
   if (largestLocation !== null) {
@@ -4437,20 +4485,19 @@ export async function bidiSendPublishStateNotify(
     });
   }
 
-  const forward = options.forward;
-  let changedForward: boolean | undefined;
-  // draft-ietf-moq-transport-22 §9.20.18:
-  // PUBLISH_STATE_NOTIFY の FORWARD は「reports whether the subscription is
+  const paused = options.paused;
+  let changedPaused: boolean | undefined;
+  // draft-ietf-moq-transport-23 §9.19.18:
+  // PUBLISH_STATE_NOTIFY の PAUSED は「reports whether the subscription is
   //  paused at the publisher」であり、省略時は不変である。現在値と同じ値は
   // 変化していないため載せない。
-  if (forward !== undefined && forward !== publisher.forwardState) {
-    // 値域は 0 (転送しない) / 1 (転送する) のみであり、範囲外は受信側が
-    // PROTOCOL_VIOLATION で閉じるため送信前に検証する。
+  if (paused !== undefined && paused !== publisher.paused) {
+    // boolean を 0 (unpaused) / 1 (paused) に変換するため値域外は生じない。
     parameters.push({
-      type: MessageParameterType.FORWARD,
-      value: encodeUint8ParameterValue(forward ? 1 : 0, "FORWARD"),
+      type: MessageParameterType.PAUSED,
+      value: encodeUint8ParameterValue(paused ? 1 : 0, "PAUSED"),
     });
-    changedForward = forward;
+    changedPaused = paused;
   }
 
   const filter = options.filter;
@@ -4465,7 +4512,7 @@ export async function bidiSendPublishStateNotify(
 
   // draft-ietf-moq-transport-22 §9.10:
   // 値の変化したパラメータが無ければ購読者へ伝える情報が無いため送信しない。
-  if (changedForward === undefined && changedFilter === undefined) {
+  if (changedPaused === undefined && changedFilter === undefined) {
     return;
   }
 
@@ -4502,8 +4549,8 @@ export async function bidiSendPublishStateNotify(
   });
 
   // 送信できた変更のみ購読状態へ反映する
-  if (changedForward !== undefined) {
-    publisher.setForwardState(changedForward);
+  if (changedPaused !== undefined) {
+    publisher.setPaused(changedPaused);
   }
   if (changedFilter !== undefined) {
     publisher.setLocationFilter(changedFilter);
@@ -4740,7 +4787,7 @@ export function bidiHandleRequestUpdateOk(
   // "If the parameter is omitted from REQUEST_UPDATE or PUBLISH_STATE_NOTIFY, the
   //  subscription remains unchanged."
   // (§9.20.9 / §3.3.2 も同趣旨の規定を持つ。文言は各反映箇所のコメントを参照。)
-  // 自 update() の REQUEST_OK 受信時に、送信時の FORWARD / LOCATION_FILTER /
+  // 自 update() の REQUEST_OK 受信時に、送信時の PAUSED / LOCATION_FILTER /
   // Range Filters 値 (pendingRequestUpdate エントリに保持) を反映する。
   // 省略時 (undefined) は反映しない。
   const resolved = resolvePendingRequestUpdate(session, streamRequestId);
@@ -4754,8 +4801,8 @@ export function bidiHandleRequestUpdateOk(
       if (resolved.locationFilter !== undefined) {
         subscriber.setLocationFilter(resolved.locationFilter);
       }
-      if (resolved.forward !== undefined) {
-        subscriber.setForwardState(resolved.forward);
+      if (resolved.paused !== undefined) {
+        subscriber.setPaused(resolved.paused);
       }
       // draft-ietf-moq-transport-22 §3.3.2:
       // 自 update({ rangeFilters }) の REQUEST_OK 受信時に、送信時の Range Filters
@@ -4797,7 +4844,7 @@ export function hasPendingRequestUpdate(
  * "The receiver MUST still send a REQUEST_UPDATE_OK for each successful update"
  * REQUEST_OK は各更新につき 1 通送られるため、1 件のみ解決する。
  *
- * @returns 解決した更新の FORWARD / Range Filters / LOCATION_FILTER 送信値 (省略時は undefined = 反映しない)
+ * @returns 解決した更新の PAUSED / Range Filters / LOCATION_FILTER 送信値 (省略時は undefined = 反映しない)
  */
 export function resolvePendingRequestUpdate(
   session: BidiSessionInternal,
@@ -4810,8 +4857,8 @@ export function resolvePendingRequestUpdate(
       // exactOptionalPropertyTypes では optional なフィールドに undefined を渡せないため、
       // 値がある場合だけ載せる
       const resolved: PendingRequestUpdateValues = {};
-      if (pending.forward !== undefined) {
-        resolved.forward = pending.forward;
+      if (pending.paused !== undefined) {
+        resolved.paused = pending.paused;
       }
       if (pending.rangeFilters !== undefined) {
         resolved.rangeFilters = pending.rangeFilters;

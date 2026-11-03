@@ -109,12 +109,12 @@ test("bidiSendNamespaceRequestUpdate: TRACK_NAMESPACE_PREFIX が REQUEST_UPDATE 
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.18:
- * SUBSCRIBE_TRACKS の REQUEST_UPDATE で FORWARD=0 / FORWARD=1 の両方が
- * ワイヤに載ることを検証する。将来の購読向けであり既存購読には影響しない。
+ * draft-ietf-moq-transport-23 §9.19.18:
+ * SUBSCRIBE_TRACKS の REQUEST_UPDATE で PAUSED=0 (unpaused) / PAUSED=1 (paused) の
+ * 両方がワイヤに載ることを検証する。将来の購読向けであり既存購読には影響しない。
  */
-test("bidiSendNamespaceRequestUpdate: Tracks 更新の FORWARD がワイヤに載る", async () => {
-  for (const forward of [false, true]) {
+test("bidiSendNamespaceRequestUpdate: Tracks 更新の PAUSED がワイヤに載る", async () => {
+  for (const paused of [false, true]) {
     const { session, written } = createNamespaceUpdateSession("tracks", ["live"]);
     const writer = {
       write: async (data: Uint8Array): Promise<void> => {
@@ -124,34 +124,34 @@ test("bidiSendNamespaceRequestUpdate: Tracks 更新の FORWARD がワイヤに�
 
     const updatePromise = bidiSendNamespaceRequestUpdate(session, 0n, writer, {
       trackNamespacePrefix: ["live", "sports"],
-      forward,
+      paused,
     });
     for (const [, pending] of session.pendingRequestUpdate) {
       pending.resolve();
     }
     await updatePromise;
 
-    // FORWARD パラメータが指定値どおりにエンコードされる
+    // PAUSED パラメータが指定値どおりにエンコードされる
     // 直前で isDefined を検証済みのため非 null アサーションで参照する
     const messages = new ControlStreamReader().feed(concatUint8Arrays(written));
-    assert.equal(messages.length, 1, `forward=${forward}`);
+    assert.equal(messages.length, 1, `paused=${paused}`);
     const decoded = decodeRequestUpdatePayload(messages[0].payload);
-    const forwardParam = decoded.parameters.find((p) => p.type === MessageParameterType.FORWARD);
-    assert.isDefined(forwardParam, `forward=${forward}`);
-    assert.deepEqual(forwardParam!.value, new Uint8Array([forward ? 1 : 0]), `forward=${forward}`);
+    const pausedParam = decoded.parameters.find((p) => p.type === MessageParameterType.PAUSED);
+    assert.isDefined(pausedParam, `paused=${paused}`);
+    assert.deepEqual(pausedParam!.value, new Uint8Array([paused ? 1 : 0]), `paused=${paused}`);
     // 同梱の TRACK_NAMESPACE_PREFIX も新 prefix で存在する
     const prefixParam = decoded.parameters.find(
       (p) => p.type === MessageParameterType.TRACK_NAMESPACE_PREFIX,
     );
-    assert.isDefined(prefixParam, `forward=${forward}`);
+    assert.isDefined(prefixParam, `paused=${paused}`);
   }
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.18:
- * FORWARD 省略時は不変のため送らないことを検証する。
+ * draft-ietf-moq-transport-23 §9.19.18:
+ * PAUSED 省略時は不変のため送らないことを検証する。
  */
-test("bidiSendNamespaceRequestUpdate: Tracks 更新の FORWARD 省略時は送らない", async () => {
+test("bidiSendNamespaceRequestUpdate: Tracks 更新の PAUSED 省略時は送らない", async () => {
   const { session, written } = createNamespaceUpdateSession("tracks", ["live"]);
   const writer = {
     write: async (data: Uint8Array): Promise<void> => {
@@ -169,15 +169,15 @@ test("bidiSendNamespaceRequestUpdate: Tracks 更新の FORWARD 省略時は送�
 
   const messages = new ControlStreamReader().feed(concatUint8Arrays(written));
   const decoded = decodeRequestUpdatePayload(messages[0].payload);
-  assert.isUndefined(decoded.parameters.find((p) => p.type === MessageParameterType.FORWARD));
+  assert.isUndefined(decoded.parameters.find((p) => p.type === MessageParameterType.PAUSED));
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.18:
- * SUBSCRIBE_NAMESPACE 向け REQUEST_UPDATE では FORWARD が許可されないため、
+ * draft-ietf-moq-transport-23 §9.19.18:
+ * SUBSCRIBE_NAMESPACE 向け REQUEST_UPDATE では PAUSED が許可されないため、
  * Namespace 更新では実行時に混入しても送らないことを検証する。
  */
-test("bidiSendNamespaceRequestUpdate: Namespace 更新では FORWARD を送らない", async () => {
+test("bidiSendNamespaceRequestUpdate: Namespace 更新では PAUSED を送らない", async () => {
   const { session, written } = createNamespaceUpdateSession("namespace", ["live"]);
   const writer = {
     write: async (data: Uint8Array): Promise<void> => {
@@ -188,7 +188,7 @@ test("bidiSendNamespaceRequestUpdate: Namespace 更新では FORWARD を送ら�
   // 型上は露出させないが、実行時に混入しても黙って落とす
   const updatePromise = bidiSendNamespaceRequestUpdate(session, 0n, writer, {
     trackNamespacePrefix: ["live", "sports"],
-    forward: true,
+    paused: false,
   } as unknown as { trackNamespacePrefix: string[] });
   for (const [, pending] of session.pendingRequestUpdate) {
     pending.resolve();
@@ -197,8 +197,8 @@ test("bidiSendNamespaceRequestUpdate: Namespace 更新では FORWARD を送ら�
 
   const messages = new ControlStreamReader().feed(concatUint8Arrays(written));
   const decoded = decodeRequestUpdatePayload(messages[0].payload);
-  assert.isUndefined(decoded.parameters.find((p) => p.type === MessageParameterType.FORWARD));
-  // FORWARD のみ落とし、TRACK_NAMESPACE_PREFIX は新 prefix で残る
+  assert.isUndefined(decoded.parameters.find((p) => p.type === MessageParameterType.PAUSED));
+  // PAUSED のみ落とし、TRACK_NAMESPACE_PREFIX は新 prefix で残る
   const prefixParam = decoded.parameters.find(
     (p) => p.type === MessageParameterType.TRACK_NAMESPACE_PREFIX,
   );
@@ -600,4 +600,38 @@ test("bidiSendNamespaceRequestUpdate: トークンの無い購読では AUTHORIZ
     decoded.parameters.some((p) => p.type === MessageParameterType.AUTHORIZATION_TOKEN),
     false,
   );
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.19.18:
+ * SUBSCRIBE_TRACKS の REQUEST_UPDATE の PAUSED は将来の購読に作用するものであり、
+ * 既存の Subscriber の paused を変えない。
+ */
+test("bidiSendNamespaceRequestUpdate: Tracks 更新の PAUSED は既存購読を変えない", async () => {
+  const { session, written } = createNamespaceUpdateSession("tracks", ["live"]);
+  const subscriber = new SubscriberImpl(["live"], "video", 10n, 1n, () => {});
+  session.subscribers.set(10n, subscriber);
+  const writer = {
+    write: async (data: Uint8Array): Promise<void> => {
+      written.push(data);
+    },
+  } as unknown as WritableStreamDefaultWriter<Uint8Array>;
+
+  const updatePromise = bidiSendNamespaceRequestUpdate(session, 0n, writer, {
+    trackNamespacePrefix: ["live", "sports"],
+    paused: true,
+  });
+  for (const [, pending] of session.pendingRequestUpdate) {
+    pending.resolve();
+  }
+  await updatePromise;
+
+  // ワイヤには PAUSED=1 が載るが、既存購読の paused は変わらない
+  const messages = new ControlStreamReader().feed(concatUint8Arrays(written));
+  const decoded = decodeRequestUpdatePayload(messages[0]!.payload);
+  const pausedParam = decoded.parameters.find(
+    (param) => param.type === MessageParameterType.PAUSED,
+  );
+  assert.deepEqual(pausedParam?.value, new Uint8Array([1]));
+  assert.isFalse(subscriber.paused);
 });

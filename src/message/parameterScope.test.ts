@@ -94,7 +94,7 @@ test("EXPIRES + 許可外パラメータの混合は PROTOCOL_VIOLATION のエ�
 /**
  * draft-ietf-moq-transport-22 §9.20.16 / §9.20.1:
  * Subscription Parameters は PUBLISH_OK に出現できない。
- * GROUP_ORDER / FORWARD / LOCATION_FILTER 等がスコープ検証で拒否されることを検証する。
+ * GROUP_ORDER / PAUSED / LOCATION_FILTER 等がスコープ検証で拒否されることを検証する。
  */
 test("GROUP_ORDER 付き PUBLISH_OK は PROTOCOL_VIOLATION のエラーを返す", () => {
   const error = validateParameterScope(
@@ -107,13 +107,13 @@ test("GROUP_ORDER 付き PUBLISH_OK は PROTOCOL_VIOLATION のエラーを返す
 
 /**
  * draft-ietf-moq-transport-22 §9.20.16 / §9.20.1:
- * FORWARD / LOCATION_FILTER 等の Subscription Parameters は PUBLISH_OK に
- * 出現できない。代表として FORWARD / LOCATION_FILTER と Range Filter
+ * PAUSED / LOCATION_FILTER 等の Subscription Parameters は PUBLISH_OK に
+ * 出現できない。代表として PAUSED / LOCATION_FILTER と Range Filter
  * (SUBGROUP_FILTER) がスコープ検証で拒否されることを検証する。
  */
 test("Subscription Parameters 付き PUBLISH_OK は PROTOCOL_VIOLATION のエラーを返す", () => {
   for (const type of [
-    MessageParameterType.FORWARD,
+    MessageParameterType.PAUSED,
     MessageParameterType.LOCATION_FILTER,
     MessageParameterType.SUBSCRIBER_PRIORITY,
     MessageParameterType.NEW_GROUP_REQUEST,
@@ -159,7 +159,7 @@ test("GROUP_ORDER 付き PUBLISH は検証を通過する", () => {
 
 /**
  * draft-ietf-moq-transport-22 §9.8:
- * PUBLISH は初期 Subscription Parameters として FORWARD / GROUP_ORDER /
+ * PUBLISH は初期 Subscription Parameters として PAUSED / GROUP_ORDER /
  * SUBSCRIBER_PRIORITY / SUBGROUP_DELIVERY_TIMEOUT / OBJECT_DELIVERY_TIMEOUT /
  * LOCATION_FILTER を運べる。既存 5 種に加えた 4 種がスコープ検証で受理されることを
  * 検証する。
@@ -170,6 +170,7 @@ test("Subscription Parameters 付き PUBLISH は検証を通過する", () => {
     MessageParameterType.SUBGROUP_DELIVERY_TIMEOUT,
     MessageParameterType.SUBSCRIBER_PRIORITY,
     MessageParameterType.LOCATION_FILTER,
+    MessageParameterType.PAUSED,
   ]) {
     const error = validateParameterScope([{ type }], PUBLISH_ALLOWED_PARAMS, "PUBLISH");
     assert.isNull(error);

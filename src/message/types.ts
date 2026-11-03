@@ -212,9 +212,21 @@ export const MessageParameterType = {
    */
   FILL_TIMEOUT: 0x0a,
   /**
-   * FORWARD (Section 9.20.18 FORWARD Parameter)
+   * PAUSED (draft-ietf-moq-transport-23 Section 9.19.18 PAUSED Parameter)
+   *
+   * draft-ietf-moq-transport-23 §9.19.18:
+   * uint8。0 = unpaused (オブジェクトを送る)、1 = paused (送らない)。
+   * SUBSCRIBE / REQUEST_UPDATE (for a subscription or a SUBSCRIBE_TRACKS request) /
+   * PUBLISH / SUBSCRIBE_TRACKS / PUBLISH_STATE_NOTIFY に出現可能。
+   * REQUEST_UPDATE と PUBLISH_STATE_NOTIFY で省略した場合は状態維持、
+   * それ以外のメッセージで省略した場合は既定値 0 (unpaused)。
+   * 値域外を受信した endpoint は INVALID_PARAMETER でセッションを閉じる
+   * (現行の受信経路は SessionErrorCode への変換都合で PROTOCOL_VIOLATION として扱う)。
+   *
+   * draft-22 の FORWARD (0x10) を置き換えた型であり、ID と値の意味が反転している
+   * (draft-22 FORWARD: 1 = 転送する / draft-23 PAUSED: 1 = 停止)。
    */
-  FORWARD: 0x10,
+  PAUSED: 0x11,
   /**
    * SUBSCRIBER_PRIORITY (Section 9.20.7 SUBSCRIBER PRIORITY Parameter)
    */

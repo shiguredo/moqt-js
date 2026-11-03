@@ -372,19 +372,19 @@ test("goawayCallback が設定できる", () => {
   assert.equal(calledUri, "moqt://new.example.com");
 });
 
-// draft-ietf-moq-transport-22 §9.20.18 (FORWARD Parameter):
-// setForwardState で forwardState が更新され、forwardState で取得できることを検証する。
-test("setForwardState で forwardState が更新される", () => {
+// draft-ietf-moq-transport-23 §9.19.18 (PAUSED Parameter):
+// setPaused で paused が更新され、paused で取得できることを検証する。
+test("setPaused で paused が更新される", () => {
   const subscriber = new SubscriberImpl(["namespace"], "track", 0n, 0n, () => {});
 
-  // 初期値はデフォルト 1 (§10.2.18)
-  assert.equal(subscriber.forwardState, true);
+  // 初期値は既定値 0 (unpaused)
+  assert.isFalse(subscriber.paused);
 
-  subscriber.setForwardState(false);
-  assert.equal(subscriber.forwardState, false);
+  subscriber.setPaused(true);
+  assert.isTrue(subscriber.paused);
 
-  subscriber.setForwardState(true);
-  assert.equal(subscriber.forwardState, true);
+  subscriber.setPaused(false);
+  assert.isFalse(subscriber.paused);
 });
 
 // ============================================================================

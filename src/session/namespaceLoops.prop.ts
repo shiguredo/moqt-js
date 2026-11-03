@@ -173,13 +173,13 @@ function requestOkSpec(): ControlMessageSpec {
   };
 }
 
-/** FORWARD パラメータ付き REQUEST_OK (初期 OK のスコープ違反) */
-function requestOkWithForwardSpec(): ControlMessageSpec {
+/** PAUSED パラメータ付き REQUEST_OK (初期 OK のスコープ違反) */
+function requestOkWithPausedSpec(): ControlMessageSpec {
   return {
     type: MessageType.REQUEST_OK,
     payload: encodeRequestOkPayload({
       type: MessageType.REQUEST_OK,
-      parameters: [{ type: MessageParameterType.FORWARD, value: new Uint8Array([1]) }],
+      parameters: [{ type: MessageParameterType.PAUSED, value: new Uint8Array([1]) }],
       trackProperties: [],
     }),
   };
@@ -257,7 +257,7 @@ function publishSkippedSpec(suffix: string[], trackName: string): ControlMessage
  */
 const controlMessageArb: fc.Arbitrary<ControlMessageSpec> = fc.oneof(
   { weight: 3, arbitrary: fc.constant(requestOkSpec()) },
-  { weight: 1, arbitrary: fc.constant(requestOkWithForwardSpec()) },
+  { weight: 1, arbitrary: fc.constant(requestOkWithPausedSpec()) },
   { weight: 1, arbitrary: fc.constant(requestOkWithTrackPropertiesSpec()) },
   {
     weight: 1,

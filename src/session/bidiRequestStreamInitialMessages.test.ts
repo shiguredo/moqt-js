@@ -60,65 +60,65 @@ function buildPublishOk(ctx: ReturnType<typeof createPublishReadTestContext>): U
 }
 
 /**
- * FORWARD パラメータ付きの REQUEST_UPDATE を組み立てる
+ * PAUSED パラメータ付きの REQUEST_UPDATE を組み立てる
  *
- * draft-ietf-moq-transport-22 §9.5 / §9.20.18:
+ * draft-ietf-moq-transport-23 §9.5 / §9.19.18:
  * REQUEST_UPDATE の Request ID は新規に消費される (§6.4.2.1) ため、
  * ストリーム紐付け ID とは別の値を載せる。
  */
 function buildRequestUpdate(
   ctx: ReturnType<typeof createPublishReadTestContext>,
-  forward: 0 | 1,
+  paused: 0 | 1,
 ): Uint8Array {
   const payload = encodeRequestUpdatePayload({
     type: MessageType.REQUEST_UPDATE,
     requestId: 101n,
-    parameters: [{ type: MessageParameterType.FORWARD, value: new Uint8Array([forward]) }],
+    parameters: [{ type: MessageParameterType.PAUSED, value: new Uint8Array([paused]) }],
   });
   return ctx.session.controlWriter!.encode(MessageType.REQUEST_UPDATE, payload);
 }
 
 /**
- * draft-ietf-moq-transport-22 §9.3 / §9.5 / §9.20.18 / §3.1.1:
+ * draft-ietf-moq-transport-23 §9.3 / §9.5 / §9.19.18 / §3.1.1:
  * 送信 PUBLISH の PUBLISH_OK と同一チャンクに REQUEST_UPDATE が連結されている
  * 場合も取りこぼさず処理することを検証する。
  *
  * publisher (自 endpoint) はピア subscriber からの REQUEST_UPDATE に対して
- * REQUEST_OK を 1 通返し (MUST)、FORWARD パラメータの値を自 endpoint の
- * forwardState へ反映しなければならない (§9.20.18「It specifies whether affected
+ * REQUEST_OK を 1 通返し (MUST)、PAUSED パラメータの値を自 endpoint の
+ * paused へ反映しなければならない (§9.19.18「It specifies whether affected
  *  subscriptions are paused (see Section 3.1.1).」)。連結分を処理しないと publisher は
  * paused のままとなり、REQUEST_OK も返らないため、購読は Objects を受け取れない。
- * 逆に active のままだと購読者が居ないのに送り続ける。
+ * 逆に unpaused のままだと購読者が居ないのに送り続ける。
  *
- * sora-moq リレーは購読者が居ない間 FORWARD=0 (paused) を要求し、購読者が現れると
- * REQUEST_UPDATE (FORWARD=1) を PUBLISH_OK の直後に送る。この経路が壊れると
- * 配信が開始されない。FORWARD=0 / 1 の両方向を表駆動 1 本で検証する。
+ * sora-moq リレーは購読者が居ない間 PAUSED=1 (paused) を要求し、購読者が現れると
+ * REQUEST_UPDATE (PAUSED=0) を PUBLISH_OK の直後に送る。この経路が壊れると
+ * 配信が開始されない。PAUSED=1 / 0 の両方向を表駆動 1 本で検証する。
  */
-test("bidiReadPublishResponse: PUBLISH_OK と同一チャンクの REQUEST_UPDATE (FORWARD=0 / 1) も処理される", async () => {
+test("bidiReadPublishResponse: PUBLISH_OK と同一チャンクの REQUEST_UPDATE (PAUSED=1 / 0) も処理される", async () => {
   const cases: {
     name: string;
-    initialForwardState: boolean;
-    forward: 0 | 1;
-    expectedForwardState: boolean;
+    initialPaused: boolean;
+    paused: 0 | 1;
+    expectedPaused: boolean;
   }[] = [
     {
-      name: "paused から FORWARD=1 で再開する",
-      initialForwardState: false,
-      forward: 1,
-      expectedForwardState: true,
+      name: "paused から PAUSED=0 で再開する",
+      initialPaused: true,
+      paused: 0,
+      expectedPaused: false,
     },
     {
-      name: "active から FORWARD=0 で paused に戻す",
-      initialForwardState: true,
-      forward: 0,
-      expectedForwardState: false,
+      name: "unpaused から PAUSED=1 で paused にする",
+      initialPaused: false,
+      paused: 1,
+      expectedPaused: true,
     },
   ];
 
   for (const testCase of cases) {
     const ctx = createPublishReadTestContext({});
-    // 受信 PUBLISH を受理する前の forwardState を用意する
-    ctx.publisher.setForwardState(testCase.initialForwardState);
+    // 受信 PUBLISH を受理する前の paused を用意する
+    ctx.publisher.setPaused(testCase.initialPaused);
 
     let resolved = false;
     ctx.session.pendingPublish.set(ctx.requestId, {
@@ -135,7 +135,7 @@ test("bidiReadPublishResponse: PUBLISH_OK と同一チャンクの REQUEST_UPDAT
       ctx.stream,
       ctx.controlReader,
     );
-    enqueueCoalesced(ctx, buildPublishOk(ctx), [buildRequestUpdate(ctx, testCase.forward)]);
+    enqueueCoalesced(ctx, buildPublishOk(ctx), [buildRequestUpdate(ctx, testCase.paused)]);
     await readPromise;
     // REQUEST_UPDATE の処理は応答の書き込みを await するため、読み取りループの
     // 初期メッセージ処理が終わるまで待つ。ここを待たずに検証すると、連結分が
@@ -147,8 +147,8 @@ test("bidiReadPublishResponse: PUBLISH_OK と同一チャンクの REQUEST_UPDAT
     // PUBLISH_OK が最初の応答として処理される
     assert.isTrue(resolved);
     assert.isTrue(ctx.session.publishers.has(ctx.requestId));
-    // 連結された REQUEST_UPDATE が処理され、FORWARD の値が forwardState に変わる
-    assert.equal(ctx.publisher.forwardState, testCase.expectedForwardState);
+    // 連結された REQUEST_UPDATE が処理され、PAUSED の値が paused に変わる
+    assert.equal(ctx.publisher.paused, testCase.expectedPaused);
     // §9.5 の MUST により REQUEST_OK がちょうど 1 通応答される
     const written = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
     assert.equal(written.length, 1);

@@ -131,7 +131,8 @@ function resetVideoPublishState(): void {
  * 映像トラックの購読の確立で下りるのとそろえる。
  */
 function markVideoPublisherEstablished(publisherInstance: Publisher): void {
-  pub.forwardState.value = publisherInstance.forwardState;
+  // ライブラリの Publisher.paused は true = paused。devtools の paused signal も同じ意味で保持する。
+  pub.paused.value = publisherInstance.paused;
   pub.publisher.value = publisherInstance;
   pub.isStarting.value = false;
 }
@@ -866,7 +867,7 @@ export interface PublishStopPlan {
   stopSending: boolean;
   /** event timeline の PUBLISH を外すか (送信を再開させない) */
   detachEventPublisher: boolean;
-  /** catalog の PUBLISH を外すか (購読者の FORWARD で送り直しが再開しないようにする) */
+  /** catalog の PUBLISH を外すか (購読者の PAUSED 変化で送り直しが再開しないようにする) */
   detachCatalogPublisher: boolean;
   /** 停止後に出す Status の文言 */
   statusMessage: string;
@@ -1473,10 +1474,10 @@ export function usePublisher() {
           pub.pubStatus.value = "error";
           pub.pubStatusMessage.value = `Publish error: ${error.message}`;
         },
-        // draft-ietf-moq-transport-22 §3.1.1:
-        // 購読の paused 状態 (FORWARD パラメータ) の変化を追跡する
-        onForwardStateChange: (forward) => {
-          pub.forwardState.value = forward;
+        // draft-ietf-moq-transport-23 §3.1.1 / §9.19.18:
+        // 購読の paused 状態 (PAUSED パラメータ) の変化を追跡する。
+        onPausedChange: (paused) => {
+          pub.paused.value = paused;
         },
         // draft-ietf-moq-transport-22 Section 9.20.19:
         // 新しい Group の要求を受けたら、次に符号化するフレームをキーフレームにする
@@ -1587,11 +1588,11 @@ export function usePublisher() {
         // 同じ値を再送しない方針のままだと後から接続した購読者が AAC を復号できない。
         // Catalog の送り直しと同じく、購読が paused でなくなった時点で
         // 保持している Audio Config を次の Object に載せ直す
-        onForwardStateChange: (forward) => {
+        onPausedChange: (paused) => {
           if (options.audioOnly) {
-            pub.forwardState.value = forward;
+            pub.paused.value = paused;
           }
-          if (forward) {
+          if (!paused) {
             pub.audioConfigResendRequested.value = true;
           }
         },
@@ -1604,7 +1605,7 @@ export function usePublisher() {
     );
     pub.audioPublisher.value = audioPublisherInstance;
     if (options.audioOnly) {
-      pub.forwardState.value = audioPublisherInstance.forwardState;
+      pub.paused.value = audioPublisherInstance.paused;
       pub.isStarting.value = false;
     }
 
@@ -1837,7 +1838,7 @@ export function usePublisher() {
   // ため 0 にする (§6.2)。Catalog Publisher が active でなければ何もしない
   // (送り直しの予約もしない)。
   const sendCatalogUpdate = async (): Promise<void> => {
-    // 配信だけを止めた後は、購読者の FORWARD で送り直しを再開しない
+    // 配信だけを止めた後は、購読者の PAUSED 変化 (unpaused 復帰) で送り直しを再開しない
     if (pub.sendingStopped.value) {
       return;
     }
@@ -2058,13 +2059,13 @@ export function usePublisher() {
           },
           // 購読者が付いて Catalog の購読が paused でなくなったら送り直す。
           //
-          // draft-ietf-moq-transport-22 §3.1.1: publisher は購読が paused の間 Object を
-          // 送らない。relay は購読者が居ない間 FORWARD=0 を伝えるため、配信開始時に送った
-          // Catalog は送信が見送られるか、購読者へ届く前に捨てられる。後から視聴を始めた
-          // 相手にもトラック構成を知らせるため、paused でなくなった時点で新しい Group と
-          // して送り直す
-          onForwardStateChange: (forward) => {
-            if (forward) {
+          // draft-ietf-moq-transport-23 §3.1.1 / §9.19.18: publisher は購読が paused の間
+          // Object を送らない。relay は購読者が居ない間 PAUSED=1 を伝えるため、配信開始時に
+          // 送った Catalog は送信が見送られるか、購読者へ届く前に捨てられる。後から視聴を
+          // 始めた相手にもトラック構成を知らせるため、paused でなくなった時点で新しい Group
+          // として送り直す
+          onPausedChange: (paused) => {
+            if (!paused) {
               void sendCatalogUpdate();
             }
           },
@@ -2306,7 +2307,8 @@ export function usePublisher() {
       } else if (plan.stopSending) {
         // セッションと PUBLISH は維持したまま、送信の経路だけを止める。購読者には何も届かない
         // 状態が続く。PUBLISH_DONE を送らない止め方のため、event timeline の購読を外し、
-        // 購読者の FORWARD で catalog の送り直しが再開しないよう catalog の PUBLISH も外す
+        // 購読者の PAUSED 変化 (unpaused 復帰) で catalog の送り直しが再開しないよう
+        // catalog の PUBLISH も外す
         stopSendingPaths();
         if (plan.detachEventPublisher) {
           pub.eventPublisher.value = null;
@@ -2425,7 +2427,7 @@ export function usePublisher() {
     // catalogGroup は次回の startPublishing が allocateInitialGroupId で払い出し直す。
     // 送信済みの最大値は単調ガード (noteGroupId) が覚えているため、ここでは触らない。
     pub.pubCodec.value = "";
-    pub.forwardState.value = null;
+    pub.paused.value = null;
     pub.httpVersion.value = null;
     // 配信を始めている途中だった場合も、後始末で終わる
     pub.isStarting.value = false;

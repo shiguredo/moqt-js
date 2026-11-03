@@ -114,7 +114,7 @@ const FIRE_FORGET_REJECT_CASES: FireForgetRejectCase[] = [
         "subscribe",
       );
       // fire-and-forget: 返り値の Promise を観測しない
-      void subscriber.update({ forward: true });
+      void subscriber.update({ paused: false });
       // REQUEST_ERROR を応答する
       const errorPayload = encodeRequestErrorPayload({
         type: MessageType.REQUEST_ERROR,
@@ -144,7 +144,7 @@ const FIRE_FORGET_REJECT_CASES: FireForgetRejectCase[] = [
         "subscribe",
       );
       // fire-and-forget: 返り値の Promise を観測しない
-      void subscriber.update({ forward: true });
+      void subscriber.update({ paused: false });
       const goawayPayload = encodeGoawayPayload({
         type: MessageType.GOAWAY,
         newSessionUri: "moqt://new.example.com",
@@ -170,7 +170,7 @@ const FIRE_FORGET_REJECT_CASES: FireForgetRejectCase[] = [
         "subscribe",
       );
       // fire-and-forget: 返り値の Promise を観測しない
-      void subscriber.update({ forward: true });
+      void subscriber.update({ paused: false });
       // ピアの FIN を再現する
       readableController.close();
       await readPromise;
@@ -191,7 +191,7 @@ const FIRE_FORGET_REJECT_CASES: FireForgetRejectCase[] = [
         "subscribe",
       );
       // fire-and-forget: 返り値の Promise を観測しない
-      void subscriber.update({ forward: true });
+      void subscriber.update({ paused: false });
       // ピアの RESET_STREAM 相当 (source: "stream" の reject) を再現する
       readableController.error(
         Object.assign(new Error("stream reset by peer"), { source: "stream" }),
@@ -206,7 +206,7 @@ const FIRE_FORGET_REJECT_CASES: FireForgetRejectCase[] = [
       const { session, subscriber } = createFireForgetUpdateContext();
 
       // fire-and-forget: 返り値の Promise を観測しない
-      void subscriber.update({ forward: true });
+      void subscriber.update({ paused: false });
       // 応答が届かないまま unsubscribe() して update() の reject を発生させる
       await bidiCancelSubscription(session, subscriber);
       assert.equal(session.pendingRequestUpdate.size, 0);
@@ -243,7 +243,7 @@ test("SubscriberImpl.update: await した場合は reject が Promise で伝播�
     controlReader,
     "subscribe",
   );
-  const updatePromise = subscriber.update({ forward: true });
+  const updatePromise = subscriber.update({ paused: false });
   assert.instanceOf(updatePromise, Promise);
   // REQUEST_ERROR を応答する
   const errorPayload = encodeRequestErrorPayload({
@@ -286,7 +286,7 @@ test("SubscriberImpl.update: await した場合は GOAWAY の reject が Promise
     controlReader,
     "subscribe",
   );
-  const updatePromise = subscriber.update({ forward: true });
+  const updatePromise = subscriber.update({ paused: false });
   const goawayPayload = encodeGoawayPayload({
     type: MessageType.GOAWAY,
     newSessionUri: "moqt://new.example.com",
@@ -317,7 +317,7 @@ test("SubscriberImpl.update: await した場合は GOAWAY の reject が Promise
 test("SubscriberImpl.update: await した場合は unsubscribe の reject が Promise で伝播する", async () => {
   const { session, subscriber } = createFireForgetUpdateContext();
 
-  const updatePromise = subscriber.update({ forward: true });
+  const updatePromise = subscriber.update({ paused: false });
   await bidiCancelSubscription(session, subscriber);
 
   // 共通文言の Error が伝播し、誤って resolve として解決されるのではない

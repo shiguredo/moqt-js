@@ -466,9 +466,10 @@ test("Parameters の delta encoding で type が昇順でない場合もソー�
  * (受信側の PROTOCOL_VIOLATION と区別する)。
  */
 test("encodeParameters: 同一 Parameter Type の重複は Error になる", () => {
+  // PAUSED (0x11) は反復を許可されない型
   const params = [
-    { type: 0x10, value: new Uint8Array([0x01]) },
-    { type: 0x10, value: new Uint8Array([0x00]) },
+    { type: 0x11, value: new Uint8Array([0x01]) },
+    { type: 0x11, value: new Uint8Array([0x00]) },
   ];
 
   let thrown: unknown;
@@ -478,7 +479,7 @@ test("encodeParameters: 同一 Parameter Type の重複は Error になる", () 
     thrown = error;
   }
   assert.instanceOf(thrown, Error);
-  assert.isTrue((thrown as Error).message.includes("duplicate message parameter type: 0x10"));
+  assert.isTrue((thrown as Error).message.includes("duplicate message parameter type: 0x11"));
 });
 
 /**
@@ -519,7 +520,7 @@ test("isRepeatableMessageParameterType: 0x03 と 0x25-0x29 のみ反復可能", 
     // 反復可能な型は重複しても throw しない
     assertNoDuplicateMessageParameterTypes([{ type }, { type }]);
   }
-  for (const type of [0x10, 0x20, 0x24, 0x2a]) {
+  for (const type of [0x11, 0x20, 0x24, 0x2a]) {
     assert.isFalse(isRepeatableMessageParameterType(type));
     let thrown: unknown;
     try {
@@ -547,14 +548,17 @@ test("空の Parameters リストのエンコード・デコード", () => {
 
 test("uint8 Message Parameter Value を 1 バイトでエンコードする", () => {
   const params = [
-    { type: 0x10, value: encodeUint8ParameterValue(1, "FORWARD") },
+    // PAUSED は 0x11 (draft-23 で FORWARD 0x10 を置き換えた型)
+    { type: 0x11, value: encodeUint8ParameterValue(1, "PAUSED") },
     { type: 0x20, value: encodeUint8ParameterValue(255, "SUBSCRIBER_PRIORITY") },
     { type: 0x22, value: encodeUint8ParameterValue(2, "GROUP_ORDER") },
   ];
 
   const encoded = encodeParameters(params);
 
-  assert.deepEqual([...encoded], [3, 0x10, 1, 0x10, 255, 0x02, 2]);
+  // count 3 / PAUSED delta 0x11 + 値 1 / SUBSCRIBER_PRIORITY delta 0x0F + 255 /
+  // GROUP_ORDER delta 0x02 + 2
+  assert.deepEqual([...encoded], [3, 0x11, 1, 0x0f, 255, 0x02, 2]);
 });
 
 test("uint8 Message Parameter Value は範囲外を拒否する", () => {
@@ -562,6 +566,58 @@ test("uint8 Message Parameter Value は範囲外を拒否する", () => {
     () => encodeUint8ParameterValue(256, "SUBSCRIBER_PRIORITY"),
     /invalid SUBSCRIBER_PRIORITY value: 256, expected 0\.\.255/,
   );
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.19.18:
+ * PAUSED は uint8 で 0 = unpaused / 1 = paused。固定ワイヤで往復し、
+ * 送受信で値が反転しないこと (二重反転しないこと) を検証する。
+ */
+test("PAUSED パラメータ: 0 / 1 がワイヤ上そのままで round-trip する", () => {
+  for (const value of [0, 1]) {
+    const encoded = encodeParameters([
+      {
+        type: MessageParameterType.PAUSED,
+        value: encodeUint8ParameterValue(value, "PAUSED"),
+      },
+    ]);
+
+    // count 1 / Type Delta 0x11 / 値 (0 = unpaused、1 = paused)
+    assert.deepEqual(encoded, new Uint8Array([0x01, 0x11, value]));
+
+    const [decoded, consumed] = decodeParameters(encoded);
+    assert.equal(consumed, encoded.length);
+    assert.equal(decoded.length, 1);
+    assert.equal(decoded[0].type, MessageParameterType.PAUSED);
+    assert.deepEqual(decoded[0].value, new Uint8Array([value]));
+
+    // 復号結果をそのまま再エンコードしても同じワイヤになる (値の反転を再度適用しない)
+    assert.deepEqual(encodeParameters(decoded), encoded);
+  }
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.19.18:
+ * 値域は 0 / 1 のみで、範囲外を受信すると ProtocolViolationError になる
+ * (現行の受信経路はセッション終了コードへ変換する)。
+ */
+test("PAUSED パラメータ: 値域外 (2-255) は ProtocolViolationError", () => {
+  for (const value of [2, 128, 255]) {
+    const wire = new Uint8Array([0x01, 0x11, value]);
+    assert.throws(() => decodeParameters(wire), /invalid PAUSED value/);
+  }
+});
+
+/**
+ * draft-ietf-moq-transport-23 Appendix A.1:
+ * draft-22 の FORWARD (0x10) は PAUSED (0x11) に置き換わり、0x10 は draft-23 に
+ * 定義が無い。旧 0x10 を受信すると未知の Message Parameter として拒否し、
+ * draft-22 との自動判別は行わない。
+ */
+test("旧 FORWARD (0x10) は未知の Message Parameter として拒否する", () => {
+  // count 1 / Type Delta 0x10 (旧 FORWARD) / 値 1
+  const wire = new Uint8Array([0x01, 0x10, 0x01]);
+  assert.throws(() => decodeParameters(wire), /unknown message parameter type: 0x10/);
 });
 
 /**
@@ -1554,10 +1610,10 @@ test("FILL_PARAMETERS: 入れ子の FILL_PARAMETERS は拒否される", () => {
  * Type Delta の時点で拒否する。
  */
 test("FILL_PARAMETERS: 一覧外の型を含む内側は受信時に ProtocolViolationError", () => {
-  // FORWARD (0x10) は Table 7 に無い
+  // PAUSED (0x11) は Table 7 に無い (FILL_PARAMETERS の内側には置けない)
   assert.throws(
-    () => decodeParameters(new Uint8Array([0x01, 0x23, 0x01, 0x10, 0x01])),
-    /unsupported parameter inside FILL_PARAMETERS: 0x10/,
+    () => decodeParameters(new Uint8Array([0x01, 0x23, 0x01, 0x11, 0x01])),
+    /unsupported parameter inside FILL_PARAMETERS: 0x11/,
   );
   // 未知型 (0x24) も一覧外として拒否する (Value のエンコーディングは解釈しない)
   assert.throws(
@@ -1572,9 +1628,10 @@ test("FILL_PARAMETERS: 一覧外の型を含む内側は受信時に ProtocolVio
  * ローカル API 誤用として拒否する。
  */
 test("encodeFillParameters: 一覧外の型は送信前に拒否する", () => {
+  // PAUSED (0x11) は Table 7 の一覧に無い既知の型
   assert.throws(
-    () => encodeFillParameters([{ type: 0x10, value: new Uint8Array([1]) }]),
-    /parameter type 0x10 is not allowed inside FILL_PARAMETERS/,
+    () => encodeFillParameters([{ type: 0x11, value: new Uint8Array([1]) }]),
+    /parameter type 0x11 is not allowed inside FILL_PARAMETERS/,
   );
 });
 
@@ -1891,9 +1948,9 @@ test("decodeKeyValuePairs: 奇数型の Length 宣言超過で ProtocolViolation
 });
 
 test("decodeMessageParameter: uint8 分岐の残量不足で ProtocolViolationError", () => {
-  // FORWARD (0x10) の delta のみで Value 1 バイトが存在しない切り詰め。
+  // PAUSED (0x11) の delta のみで Value 1 バイトが存在しない切り詰め。
   // 宣言時点で拒否するため、値域検証由来ではない文言で固定する
-  const truncated = new Uint8Array([0x10]);
+  const truncated = new Uint8Array([0x11]);
   assert.throws(
     () => decodeMessageParameter(truncated, 0, 0n),
     /uint8 parameter value length exceeds remaining data/,

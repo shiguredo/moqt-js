@@ -116,11 +116,11 @@ export interface SendObjectParams {
    * true のときは Object の書き込み完了後に Subgroup を FIN で閉じる。Subgroup に載せる
    * Object が残っていないことを送信側が知っている場合に使う (catalog は 1 Group に
    * 1 Object だけを載せるため、常にこれに当たる)。閉じた Group への後続の `sendObject()`
-   * は error 通知になり、返値の Promise は解決する (forwardState が 0 の場合は
+   * は error 通知になり、返値の Promise は解決する (paused 中は
    * 送信前に見送られるため通知も出ない)。FIN の完了がタイムアウトして RESET に
    * 切り替わった場合は「渡し切っていない」ため、同じ Group へ再び送信できる (§11.3.2)。
    *
-   * 送信が見送られた場合 (forwardState が 0、または購読の Location Filter の範囲外) は
+   * 送信が見送られた場合 (paused 中、または購読の Location Filter の範囲外) は
    * 閉じない。その Group の Subgroup が既に開いていれば省略として記録され、後の Group
    * 切り替えで RESET になる (§11.3.2)。
    *
@@ -177,15 +177,16 @@ export interface SendDatagramParams {
  */
 export interface PublishStateNotifyOptions {
   /**
-   * 通知する FORWARD パラメータの値 (購読が paused かどうか)
-   * draft-ietf-moq-transport-22 §9.20.18 (FORWARD Parameter)
+   * 通知する PAUSED パラメータの値 (購読が paused かどうか)
+   * draft-ietf-moq-transport-23 §9.19.18 (PAUSED Parameter)
    *
+   * wire の PAUSED と同じ意味で、true = paused (1)、false = unpaused (0)。
    * 「When sent in PUBLISH_STATE_NOTIFY, it reports whether the subscription is
    *  paused at the publisher.」現在値と同じ値では通知しない。送信できた場合は
-   * この値を publisher の forwardState として反映する (購読者が受け取る値と
+   * この値を publisher の paused 状態として反映する (購読者が受け取る値と
    * publisher が実際に配信する状態を一致させるため)。
    */
-  forward?: boolean;
+  paused?: boolean;
 
   /**
    * 通知する Location Filter
@@ -210,19 +211,20 @@ export interface PublishStateNotifyOptions {
 export interface Publisher {
   readonly state: PublisherState;
   /**
-   * forwardState
-   * draft-ietf-moq-transport-22 Section 9.20.18 (FORWARD Parameter)
+   * 購読が paused かどうか
+   * draft-ietf-moq-transport-23 Section 9.19.18 (PAUSED Parameter) / §3.1.1
    *
-   * PUBLISH 送信時の options.forward (省略時は true) を初期値として返す。
-   * PUBLISH_OK は EXPIRES のみを運び forwardState を変更しない。
-   * - true (1): paused でない。オブジェクトを送る
-   * - false (0): paused。オブジェクトを送らない
+   * wire の PAUSED と同じ意味で、true = paused (1)、false = unpaused (0)。
+   * PUBLISH 送信時の options.paused (省略時は false = unpaused) を初期値として返す。
+   * PUBLISH_OK は EXPIRES のみを運び paused を変更しない。
+   * - true (1): paused。オブジェクトを送らない
+   * - false (0): paused でない。オブジェクトを送る
    *
-   * REQUEST_UPDATE で状態が変更された場合、onForwardStateChange が呼ばれる。
+   * REQUEST_UPDATE で状態が変更された場合、onPausedChange が呼ばれる。
    * PUBLISH 送信時の初期設定と REQUEST_UPDATE 受信時による変化でも呼ばれる。
    * notifyStateChange で通知した値の反映でも呼ばれる。
    */
-  readonly forwardState: boolean;
+  readonly paused: boolean;
   /**
    * Subgroup ストリームでオブジェクトを送信する
    *
@@ -318,19 +320,19 @@ export interface Publisher {
    * subscriber 発の REQUEST_UPDATE への応答ではなく、publisher 側の理由で
    * 購読状態が変化したことを片方向で通知する。購読者は REQUEST_OK /
    * REQUEST_ERROR を返さないため、返値は送信の完了のみを表す。
-   * 通知に載せるパラメータは許可された LARGEST_OBJECT (既知時は §9.20.17 の
-   * MUST により必須) / FORWARD / LOCATION_FILTER のみであり、現在値から
+   * 通知に載せるパラメータは許可された LARGEST_OBJECT (既知時は §9.19.17 の
+   * MUST により必須) / PAUSED / LOCATION_FILTER のみであり、現在値から
    * 変化していないパラメータは載せない。載せるパラメータが無い場合は
    * 送信せず resolve する (重複送信の抑止)。
-   * 送信できた変更のみ forwardState / Location Filter として反映する。
+   * 送信できた変更のみ paused 状態 / Location Filter として反映する。
    *
    * 購読が既に終了している場合 (done() 済み・ピアのキャンセル後・セッション
    * 終了後) は送信せず resolve する。送信できない場合 (ストリーム終了等) は
    * reject する。セッションは閉じない。
    *
-   * forward: false を通知した場合、購読者が REQUEST_UPDATE で FORWARD=1 を送る
-   * まで Object を送信しない (Section 9.8 の PUBLISH 時の FORWARD=0 と同じ扱い。
-   * 送信の抑止は forwardState を参照する sendObject / sendDatagram が行う)。
+   * paused: true を通知した場合、購読者が REQUEST_UPDATE で PAUSED=0 を送る
+   * まで Object を送信しない (Section 9.8 の PUBLISH 時の PAUSED=1 と同じ扱い。
+   * 送信の抑止は paused 状態を参照する sendObject / sendDatagram が行う)。
    */
   notifyStateChange(options?: PublishStateNotifyOptions): Promise<void>;
   /**
@@ -375,11 +377,14 @@ function validateSendStatusPayload(params: SendObjectParams): ProtocolViolationE
  */
 export class PublisherImpl implements Publisher {
   private publisherState: PublisherState = "active";
-  private publisherForwardState = true;
+  // draft-ietf-moq-transport-23 §9.19.18 (PAUSED Parameter):
+  // 購読が paused かどうか (true = paused / false = unpaused)。wire の値と
+  // 同じ意味で保持し、境界での反転は行わない。
+  private publisherPaused = false;
   // 未指定の場合は明示的に undefined を代入する (呼び出し側は `?.` で呼ぶ) ため
   // `| undefined` を付ける
   private readonly errorCallback?: ((error: Error) => void) | undefined;
-  private readonly forwardStateChangeCallback?: ((forward: boolean) => void) | undefined;
+  private readonly pausedChangeCallback?: ((paused: boolean) => void) | undefined;
   private readonly requestId: bigint;
   private readonly trackAlias: bigint;
 
@@ -438,7 +443,7 @@ export class PublisherImpl implements Publisher {
   dynamicGroups = false;
   onSendObject?: (params: SendObjectParams) => Promise<void>;
   /**
-   * forwardState が 0 または Location Filter の範囲外で Object の送信を見送ったときに呼ばれる
+   * paused 中または Location Filter の範囲外で Object の送信を見送ったときに呼ばれる
    *
    * draft-ietf-moq-transport-22 §11.3.2 (Closing Subgroup Streams):
    * "If a sender closes the stream before delivering all such objects to the QUIC
@@ -497,20 +502,20 @@ export class PublisherImpl implements Publisher {
     requestId: bigint,
     trackAlias: bigint,
     onError?: (error: Error) => void,
-    onForwardStateChange?: (forward: boolean) => void,
+    onPausedChange?: (paused: boolean) => void,
   ) {
     this.requestId = requestId;
     this.trackAlias = trackAlias;
     this.errorCallback = onError;
-    this.forwardStateChangeCallback = onForwardStateChange;
+    this.pausedChangeCallback = onPausedChange;
   }
 
   get state(): PublisherState {
     return this.publisherState;
   }
 
-  get forwardState(): boolean {
-    return this.publisherForwardState;
+  get paused(): boolean {
+    return this.publisherPaused;
   }
 
   getRequestId(): bigint {
@@ -616,7 +621,7 @@ export class PublisherImpl implements Publisher {
    *
    * moqt-js は sendObject / sendDatagram の受け付け時に記録する。書き込みは送信
    * キューを経て走るため、記録時点は「最初のバイト」より早い。待機中に paused
-   * (FORWARD=0)・購読のクローズ・Subgroup のクローズが起きると書き込みは行われず、
+   * (PAUSED=1)・購読のクローズ・Subgroup のクローズが起きると書き込みは行われず、
    * 記録だけが残る。したがって報告する LARGEST_OBJECT は、到着中の Object だけで
    * なく今後送らない Location を指し得る (受信側は §3.1.4 の「到着中」と同じ前提で
    * 扱い、配送の有無はデータストリーム側で判断する)。
@@ -699,7 +704,7 @@ export class PublisherImpl implements Publisher {
     if (this.publisherState === "closed") {
       throw new Error("Publisher is closed");
     }
-    if (!this.publisherForwardState) {
+    if (this.publisherPaused) {
       return "skip";
     }
     if (this.endOfTrackSent) {
@@ -747,7 +752,7 @@ export class PublisherImpl implements Publisher {
     // 戻り値は通常経路と同じ Promise<void> とし、呼び出し側の await を壊さない。
     const guard = this.guardSend("object", params.groupId);
     if (guard === "skip") {
-      // draft-ietf-moq-transport-22 §11.3.2: forwardState が 0 で見送った Object が
+      // draft-ietf-moq-transport-23 §11.3.2: paused 中に送信しなかった Object が
       // ある Subgroup は、閉じる時に FIN ではなく RESET が必要になる。
       this.onSendObjectSkipped?.(params.groupId);
       return Promise.resolve();
@@ -769,7 +774,7 @@ export class PublisherImpl implements Publisher {
     // 購読の Location Filter の範囲外 Object は送信しない (paused と
     // 同様に送信も LARGEST_OBJECT の記録もしない。範囲外は正常なフィルタ動作であり
     // error 通知は行わない)。
-    // draft-ietf-moq-transport-22 §11.3.2: 範囲外で見送った Object も forwardState が 0 の
+    // draft-ietf-moq-transport-23 §11.3.2: 範囲外で見送った Object も paused 中の
     // 見送りと同じく「届かない Object を残したまま閉じる」ため、閉じる時は RESET が必要。
     // 見送りの事実をここで記録する (閉じる時点では検出できない)。
     if (this.isOutsideLocationFilter(params.groupId, params.objectId)) {
@@ -853,7 +858,7 @@ export class PublisherImpl implements Publisher {
    * (§11.1.2 の EOT / END_OF_GROUP の各定義による解釈。END_OF_GROUP 済みの判定は
    * sendObject が END_OF_GROUP を受理した Group による。Datagram 自身の
    * endOfGroup は記録しないため、後続の送信は妨げない)。
-   * forwardState が 0 (subscription が paused) の間は送信せず、通知もなく return する
+   * paused (subscription が paused) の間は送信せず、通知もなく return する
    * (§3.1.1)。
    * Publisher が closed の場合は検証の前に同期 throw する (この経路は通知を伴わない)。
    * 委譲先 (onSendDatagram) の ID / priority 検証も自分で error 通知してから throw する。
@@ -921,7 +926,7 @@ export class PublisherImpl implements Publisher {
    * 「A publisher sends PUBLISH_STATE_NOTIFY on a subscription's bidirectional
    *  stream to notify the subscriber that the state of the subscription has
    *  changed for a reason other than a subscriber sent REQUEST_UPDATE.」
-   * moqt-js は購読状態を自力で変化させない (forwardState は PUBLISH 送信時の
+   * moqt-js は購読状態を自力で変化させない (paused は PUBLISH 送信時の
    * 指定と REQUEST_UPDATE 受信、Location Filter は REQUEST_UPDATE 受信で
    * 変わる) ため、アプリが変化後の値を指定して呼ぶ明示 API とする。
    *
@@ -969,19 +974,20 @@ export class PublisherImpl implements Publisher {
   }
 
   /**
-   * Internal: Set the FORWARD parameter value (called by session)
-   * draft-ietf-moq-transport-22 Section 9.20.18 (FORWARD Parameter)
+   * Internal: paused 状態を設定する (called by session)
+   * draft-ietf-moq-transport-23 Section 9.19.18 (PAUSED Parameter)
    *
-   * REQUEST_UPDATE で受信した FORWARD パラメータを反映する。
-   * PUBLISH 送信時の options.forward による初期設定でも呼ぶ。
-   * PUBLISH_OK は EXPIRES のみを運び FORWARD を反映しない。
-   * 状態が変化した場合、onForwardStateChange コールバックを呼ぶ。
+   * REQUEST_UPDATE で受信した PAUSED パラメータを反映する。
+   * PUBLISH 送信時の options.paused による初期設定でも呼ぶ。
+   * PUBLISH_OK は EXPIRES のみを運び PAUSED を反映しない。
+   * 引数は wire の PAUSED と同じ意味 (true = paused) で、反転は行わない。
+   * 状態が変化した場合、onPausedChange コールバックを呼ぶ。
    */
-  setForwardState(forward: boolean): void {
-    const previousState = this.publisherForwardState;
-    this.publisherForwardState = forward;
-    if (previousState !== forward) {
-      this.forwardStateChangeCallback?.(forward);
+  setPaused(paused: boolean): void {
+    const previousState = this.publisherPaused;
+    this.publisherPaused = paused;
+    if (previousState !== paused) {
+      this.pausedChangeCallback?.(paused);
     }
   }
 

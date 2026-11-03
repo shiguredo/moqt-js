@@ -140,7 +140,7 @@ test("bidiSendRequestUpdate: Immutable Properties 配下の DYNAMIC_GROUPS=1 で
 test("bidiSendRequestUpdate: NEW_GROUP_REQUEST を含まない更新は DYNAMIC_GROUPS 無しでも送信できる", async () => {
   const { session, subscriber, written } = createUpdateContext([]);
 
-  const promise = subscriber.update({ forward: false });
+  const promise = subscriber.update({ paused: true });
   await new Promise((resolve) => {
     setTimeout(resolve, 0);
   });

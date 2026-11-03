@@ -21,7 +21,7 @@
  *   状態だけを掃除し、二重呼び出しや対象外 track に対して安全である
  * - publishSendDatagram が書き出した datagram が Object ID / payload / priority /
  *   END_OF_GROUP ビットでラウンドトリップする
- * - publishSendObject の公開経路が、任意の forwardState 切替と Group 送信の列に
+ * - publishSendObject の公開経路が、任意の paused 切替と Group 送信の列に
  *   対して省略の有無どおりに FIN / RESET を選ぶ
  *
  * 対応する単体テスト (src/session/publish.test.ts /
@@ -1178,13 +1178,13 @@ test("publishSendDatagram: 書き出した datagram がラウンドトリップ�
 });
 
 // ============================================================================
-// PBT 11: 公開経路の FIN / RESET 選択 (forwardState と Group 送信の任意列)
+// PBT 11: 公開経路の FIN / RESET 選択 (paused と Group 送信の任意列)
 // ============================================================================
 
 /**
  * 公開経路 (publishSendObject) の操作の任意構築
  *
- * forward は購読の forwardState 切替、send は次の Object の送信である。
+ * paused 操作は購読の paused 切替、send は次の Object の送信である。
  * advanceGroup が真のときは Group ID を進めるため、Group の再訪
  * (Closed Subgroup のエラーパス) は生成しない。
  * sendEndOfSubgroup は新しい Group の先頭 Object を endOfSubgroup 付きで送る操作であり
@@ -1193,15 +1193,15 @@ test("publishSendDatagram: 書き出した datagram がラウンドトリップ�
  * 対応が単純になる。
  */
 const publisherOperationArb = fc.oneof(
-  fc.record({ kind: fc.constant("forward" as const), forward: fc.boolean() }),
+  fc.record({ kind: fc.constant("paused" as const), paused: fc.boolean() }),
   fc.record({ kind: fc.constant("send" as const), advanceGroup: fc.boolean() }),
   fc.record({ kind: fc.constant("sendEndOfSubgroup" as const) }),
 );
 
 /**
- * draft-ietf-moq-transport-22 §3.1.1 / §11.3.2:
- * 任意の forwardState 切替と Group 送信の列に対して、閉じる Subgroup が
- * 「forwardState が 0 (paused) による見送り (省略) が同じ Group の Subgroup に記録されているなら
+ * draft-ietf-moq-transport-23 §3.1.1 / §11.3.2:
+ * 任意の paused 切替と Group 送信の列に対して、閉じる Subgroup が
+ * 「paused (PAUSED=1) による見送り (省略) が同じ Group の Subgroup に記録されているなら
  * RESET、なければ FIN」に従うことを検証する。見送りは見送った Object と同じ Group の
  * 開いている Subgroup に記録されるため、省略の有無は送信順序から決まる。endOfSubgroup を
  * 付けた送信も同じ判定でその場で閉じ、done() も同じ判定で開いている Subgroup を閉じ、
@@ -1215,7 +1215,7 @@ test("publishSendObject: 任意の操作列で省略の有無に応じて FIN / 
         const { session, publisher, streams, errors } = createPublisherHarness();
         const trackAlias = publisher.getTrackAlias();
 
-        // 期待する Subgroup ストリームのモデル。omitted は forwardState が 0 の
+        // 期待する Subgroup ストリームのモデル。omitted は paused (PAUSED=1) の
         // 見送りが「同じ Group の開いているストリーム」へ記録された事実を表し、
         // closed は後続の Group 送信または endOfSubgroup で閉じられた事実を表す。
         const expected: { groupId: number; omitted: boolean; closed: boolean }[] = [];
@@ -1226,8 +1226,8 @@ test("publishSendObject: 任意の操作列で省略の有無に応じて FIN / 
         let currentGroupClosed = false;
 
         for (const operation of operations) {
-          if (operation.kind === "forward") {
-            publisher.setForwardState(operation.forward);
+          if (operation.kind === "paused") {
+            publisher.setPaused(operation.paused);
             continue;
           }
           // sendEndOfSubgroup は新しい Group の先頭 Object を endOfSubgroup 付きで送る
@@ -1247,11 +1247,11 @@ test("publishSendObject: 任意の操作列で省略の有無に応じて FIN / 
           nextObjectId += 1;
 
           // 送信前に捕捉する (endOfSubgroup の閉じる判定は送信が受け付けられたときの状態で決まる)
-          const forwardStateBeforeSend = publisher.forwardState;
+          const pausedBeforeSend = publisher.paused;
 
           const opened: { groupId: number; omitted: boolean; closed: boolean } | undefined =
             expected[expected.length - 1];
-          if (forwardStateBeforeSend) {
+          if (!pausedBeforeSend) {
             // 新しい Group の送信は前の Subgroup を閉じて新しいストリームを開く
             if (opened === undefined || opened.groupId !== groupId) {
               if (opened !== undefined) {
@@ -1276,7 +1276,7 @@ test("publishSendObject: 任意の操作列で省略の有無に応じて FIN / 
           // endOfSubgroup を付けた送信は、書き込み完了後にその Subgroup を閉じる。
           // 見送られた場合は閉じない (Subgroup を開いていないため閉じる対象も無い)
           currentGroupClosed = false;
-          if (sendsEndOfSubgroup && forwardStateBeforeSend) {
+          if (sendsEndOfSubgroup && !pausedBeforeSend) {
             const sent: { groupId: number; omitted: boolean; closed: boolean } | undefined =
               expected[expected.length - 1];
             if (sent !== undefined && sent.groupId === groupId) {

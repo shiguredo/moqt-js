@@ -23,10 +23,10 @@
  * (resolveKeyframeInterval / shouldSendKeyFrame)、Publisher Priority の定数と送信値、
  * Audio Config / Video Config の再送判断 (resolveAudioConfigToSend /
  * resolveVideoConfigToSend) は純関数として切り出しており、固定値で直接駆動する。
- * Audio Config / Video Config の再送は forwardState 変化のコールバック登録から
+ * Audio Config / Video Config の再送は paused 変化のコールバック登録から
  * handleAudioEncodedChunk / handleVideoEncodedChunk までを、publish 呼び出しを記録する
  * 最小セッションを注入して結合で検証する。
- * catalog の送り直しは、forwardState 変化のコールバック登録から新しい Group の先頭 Object の
+ * catalog の送り直しは、paused 変化のコールバック登録から新しい Group の先頭 Object の
  * 送信までと、定期送り直しの予約 (実時間のタイマー) と解放による取り消しを検証する。
  * encode キューの閾値超過による破棄と droppedFrames の加算、破棄したフレームの
  * 新しい Group の開始が次に encode するフレームへ移ることも検証する。
@@ -819,11 +819,11 @@ interface PublisherLifecycleControl extends PublisherLoopControl {
   catalogPublisher: Publisher | null;
   audioPublisher: Publisher | null;
   videoPublisher: Publisher | null;
-  // forwardState が 0 から 1 になった時点で立つ Audio Config の送り直し要求
+  // paused が 1 から 0 になった時点で立つ Audio Config の送り直し要求
   audioConfigResendRequested: boolean;
   // 直前に AUDIO_CONFIG として送った description (session を跨いで保持しない)
   lastSentAudioConfig: Uint8Array | null;
-  // forwardState が 0 から 1 になった時点で立つ Video Config の送り直し要求
+  // paused が 1 から 0 になった時点で立つ Video Config の送り直し要求
   videoConfigResendRequested: boolean;
   // 直前に VIDEO_CONFIG として送った description (session を跨いで保持しない)
   lastSentVideoConfig: Uint8Array | null;
@@ -3334,7 +3334,7 @@ test("start: 取り出した形式の実符号化が失敗したら catalog を�
 test("start: 初期 catalog の送信時に publisher が active でなければ publishing に進まない", async () => {
   const closedCatalogPublisher = {
     state: "closed",
-    forwardState: false,
+    paused: true,
     sendObject: async () => {},
     done: async () => {},
   } as unknown as Publisher;
@@ -3934,9 +3934,9 @@ function createRecordingSendPublisher(): {
   let closeSubgroup = 0;
   const publisher = {
     state: "active",
-    // 実物の PublisherImpl と同じ既定 (FORWARD は 1) にする。送り直しの経路が見送りの
-    // 判定に使う
-    forwardState: true,
+    // 実物の PublisherImpl と同じ既定 (paused は false = unpaused) にする。
+    // 送り直しの経路が見送りの判定に使う
+    paused: false,
     closeSubgroup: async () => {
       closeSubgroup++;
     },
@@ -3977,7 +3977,7 @@ function createRepublishFailingSendPublisher(createFailure: () => Error): {
   let count = 0;
   const publisher = {
     state: "active",
-    forwardState: true,
+    paused: false,
     sendObject: async (): Promise<void> => {
       count++;
       if (count > 1) {
@@ -4400,7 +4400,7 @@ test("handleVideoEncodedChunk: description が無い chunk は VIDEO_CONFIG を�
 
 /**
  * draft-ietf-moq-loc-04 §2.3.2.1 (Video Config):
- * 後から接続した購読者 (forwardState が 0 から 1 になった時点) のために、
+ * 後から接続した購読者 (paused が 1 から 0 になった時点) のために、
  * 保持している Video Config を次のキーフレームの Object に載せ直す契約を検証する。
  * Chromium の VideoEncoder は description を configure 後の最初の出力と構成変更時に
  * しか付けないため、キーフレームごとに再出現することを前提にできない。GOP の途中の
@@ -4417,7 +4417,7 @@ test("handleVideoEncodedChunk: 送り直し要求は次のキーフレームで�
   const description = new Uint8Array([0x01, 0x42, 0xc0, 0x1f]);
   sendVideoChunk(control, description);
 
-  // forwardState が 1 になった時点で立つ要求を再現する。
+  // paused が 0 (unpaused) になった時点で立つ要求を再現する。
   // 以降のキーフレームに description は再出現しない (Chromium の実挙動)
   control.videoConfigResendRequested = true;
   sendVideoChunk(control);
@@ -4464,7 +4464,7 @@ test("handleVideoEncodedChunk: キーフレーム以外の chunk では要求を
 });
 
 test("handleVideoEncodedChunk: 保持値が無いまま要求されたら、次の description 付きキーフレームで載せる", () => {
-  // forwardState が 1 になった時点で Video Config をまだ持っていない場合でも、
+  // paused が 0 (unpaused) になった時点で Video Config をまだ持っていない場合でも、
   // 要求を捨てずに次の description で載せられることの検証
   const { control: loopControl } = createLoopTestContext();
   const control = loopControl as unknown as PublisherLifecycleControl;
@@ -4526,7 +4526,7 @@ test("handleVideoEncodedChunk: stop 後の再開では同じ description でも 
 /**
  * draft-ietf-moq-loc-04 §2.3.3.1 (Audio Config):
  * encoder が返す description (AAC の AudioSpecificConfig) が AUDIO_CONFIG として
- * 送られることを検証する。同じ値の重複送出は避けるが、forwardState が 0 から 1 に
+ * 送られることを検証する。同じ値の重複送出は避けるが、paused が 1 から 0 に
  * なった時点の送り直し要求には同じ値でも 1 度だけ応じる。
  */
 function sendAudioChunk(control: PublisherLifecycleControl, description?: Uint8Array): void {
@@ -4900,7 +4900,7 @@ test("start: reliability が undefined でも datagram の音声配信を開始�
 
 /**
  * draft-ietf-moq-loc-04 §2.3.3.1 (Audio Config):
- * 後から接続した購読者 (forwardState が 0 から 1 になった時点) のために、
+ * 後から接続した購読者 (paused が 1 から 0 になった時点) のために、
  * 保持している Audio Config を次の Object に載せ直す契約を検証する。
  * 音声にはキーフレームが無いため、description の再出現では送り直せない。
  */
@@ -4915,7 +4915,7 @@ test("handleAudioEncodedChunk: 送り直し要求で保持している Audio Con
   const description = new Uint8Array([0x11, 0x90]);
   sendAudioChunk(control, description);
 
-  // forwardState が 1 になった時点で立つ要求を再現する
+  // paused が 0 (unpaused) になった時点で立つ要求を再現する
   control.audioConfigResendRequested = true;
   sendAudioChunk(control);
 
@@ -4936,7 +4936,7 @@ test("handleAudioEncodedChunk: 送り直し要求で保持している Audio Con
 });
 
 test("handleAudioEncodedChunk: 保持値が無いまま要求されても次の description で載せる", () => {
-  // forwardState が 1 になった時点で Audio Config をまだ持っていない場合でも、
+  // paused が 0 (unpaused) になった時点で Audio Config をまだ持っていない場合でも、
   // 要求を捨てずに次の description で載せられることの検証
   const { control: loopControl } = createLoopTestContext();
   const control = loopControl as unknown as PublisherLifecycleControl;
@@ -5190,14 +5190,14 @@ test("handleVideoEncodedChunk: 送信の同期 throw は onError に 1 回届く
 });
 
 /**
- * forwardState 変化の登録を検証するための制御口
+ * paused 変化の登録を検証するための制御口
  *
  * Publisher の作成と catalog の送信は接続を要する start() からしか呼べないため、publish
  * 呼び出しを記録する最小セッションを注入して駆動する (モジュール置換は行わない)。
  * start() と同じ順序にするため、Publisher の作成 → catalog の送信を順に呼ぶ
  * (start() は両者の間で音声の取り出し経路を作るが、この制御口は音声を使わない)
  */
-interface PublisherForwardControl extends PublisherLifecycleControl {
+interface PublisherPausedControl extends PublisherLifecycleControl {
   resolvedAudio: ResolvedAudioPublishSettings | null;
   resolvedVideo: ResolvedVideoPublishSettings | null;
   createPublishers(): Promise<void>;
@@ -5210,7 +5210,7 @@ interface PublisherForwardControl extends PublisherLifecycleControl {
  * 送り直しの予約は実時間のタイマーであり、テストが 30 秒待たずに済むよう間隔を
  * 短く差し替えられるようにする。Group ID と予約の有無も実装の内部状態として見る。
  */
-interface PublisherCatalogRepublishControl extends PublisherForwardControl {
+interface PublisherCatalogRepublishControl extends PublisherPausedControl {
   catalogGroupId: number;
   catalogInitialSent: boolean;
   currentCatalog: Catalog | null;
@@ -5224,7 +5224,7 @@ interface PublisherCatalogRepublishControl extends PublisherForwardControl {
  * publish 呼び出しを記録する最小セッション
  *
  * track 名で引く Publisher を返し、渡されたコールバックを記録する。
- * createPublishers() が forwardState 変化のコールバックを音声 / 映像 Publisher に
+ * createPublishers() が paused 変化のコールバックを音声 / 映像 Publisher に
  * 登録しているかを、実装の内部状態を経由せずに検証できるようにする。
  */
 function createPublishRecordingSession(publishers: Map<string, Publisher>): {
@@ -5255,12 +5255,12 @@ function createPublishRecordingSession(publishers: Map<string, Publisher>): {
   return { session, callbacksByTrack, optionsByTrack };
 }
 
-test("createPublishers: forwardState が 1 になると Audio Config の送り直しを要求する", async () => {
+test("createPublishers: paused が 0 (unpaused) になると Audio Config の送り直しを要求する", async () => {
   // 購読者が居ない状態から購読者が接続した場合の結合の検証。
-  // createPublishers() が音声 Publisher に onForwardStateChange を登録し、
+  // createPublishers() が音声 Publisher に onPausedChange を登録し、
   // それが handleAudioEncodedChunk の載せ直しに繋がることを確認する
   const { control: loopControl } = createLoopTestContext();
-  const control = loopControl as unknown as PublisherForwardControl;
+  const control = loopControl as unknown as PublisherPausedControl;
   const audioSettings = resolveAudioPublishSettings({
     codec: "aac",
     bitrate: 64000,
@@ -5286,19 +5286,19 @@ test("createPublishers: forwardState が 1 になると Audio Config の送り�
   assert.equal(catalogSent.length, 1);
   assert.equal(catalogSent[0].objectId, 0);
 
-  // 音声 Publisher に forwardState 変化のコールバックが登録されていること
+  // 音声 Publisher に paused 変化のコールバックが登録されていること
   const audioCallbacks = callbacksByTrack.get(audioSettings.trackName);
   assert.isDefined(audioCallbacks);
-  assert.isDefined(audioCallbacks?.onForwardStateChange);
+  assert.isDefined(audioCallbacks?.onPausedChange);
 
-  // forwardState が 0 (購読者なし) では要求が立たない
-  audioCallbacks?.onForwardStateChange?.(false);
+  // paused (PAUSED=1、購読者なし) では要求が立たない
+  audioCallbacks?.onPausedChange?.(true);
   assert.isFalse(control.audioConfigResendRequested);
 
-  // Audio Config を送って保持したあと、forwardState が 1 で要求が立つ
+  // Audio Config を送って保持したあと、paused が 1 から 0 (購読者の出現) で要求が立つ
   const description = new Uint8Array([0x11, 0x90]);
   sendAudioChunk(control, description);
-  audioCallbacks?.onForwardStateChange?.(true);
+  audioCallbacks?.onPausedChange?.(false);
   assert.isTrue(control.audioConfigResendRequested);
 
   // 要求に従って次の Object に保持値が載る
@@ -5309,19 +5309,19 @@ test("createPublishers: forwardState が 1 になると Audio Config の送り�
   );
   assert.isFalse(control.audioConfigResendRequested);
 
-  // 要求の寿命は送信で決まる。forwardState が 0 に戻っても保留中の要求は消さない
-  // (消すと、次に 1 になったときの送り直しを取りこぼす)
-  audioCallbacks?.onForwardStateChange?.(true);
-  audioCallbacks?.onForwardStateChange?.(false);
+  // 要求の寿命は送信で決まる。paused が 1 に戻っても保留中の要求は消さない
+  // (消すと、次に 0 になったときの送り直しを取りこぼす)
+  audioCallbacks?.onPausedChange?.(false);
+  audioCallbacks?.onPausedChange?.(true);
   assert.isTrue(control.audioConfigResendRequested);
 });
 
-test("createPublishers: forwardState が 1 になると Video Config の送り直しを要求する", async () => {
+test("createPublishers: paused が 0 (unpaused) になると Video Config の送り直しを要求する", async () => {
   // 購読者が居ない状態から購読者が接続した場合の結合の検証。
-  // createPublishers() が映像 Publisher に onForwardStateChange を登録し、
+  // createPublishers() が映像 Publisher に onPausedChange を登録し、
   // それが handleVideoEncodedChunk の載せ直しに繋がることを確認する
   const { control: loopControl } = createLoopTestContext();
-  const control = loopControl as unknown as PublisherForwardControl;
+  const control = loopControl as unknown as PublisherPausedControl;
   const videoSettings = resolveVideoPublishSettings(
     { codec: "vp8", bitrate: 1_000_000, trackName: "video" },
     undefined,
@@ -5344,19 +5344,19 @@ test("createPublishers: forwardState が 1 になると Video Config の送り�
   assert.equal(catalogSent.length, 1);
   assert.equal(catalogSent[0].objectId, 0);
 
-  // 映像 Publisher に forwardState 変化のコールバックが登録されていること
+  // 映像 Publisher に paused 変化のコールバックが登録されていること
   const videoCallbacks = callbacksByTrack.get(videoSettings.trackName);
   assert.isDefined(videoCallbacks);
-  assert.isDefined(videoCallbacks?.onForwardStateChange);
+  assert.isDefined(videoCallbacks?.onPausedChange);
 
-  // forwardState が 0 (購読者なし) では要求が立たない
-  videoCallbacks?.onForwardStateChange?.(false);
+  // paused (PAUSED=1、購読者なし) では要求が立たない
+  videoCallbacks?.onPausedChange?.(true);
   assert.isFalse(control.videoConfigResendRequested);
 
-  // Video Config を送って保持したあと、forwardState が 1 で要求が立つ
+  // Video Config を送って保持したあと、paused が 1 から 0 (購読者の出現) で要求が立つ
   const description = new Uint8Array([0x01, 0x42, 0xc0, 0x1f]);
   sendVideoChunk(control, description);
-  videoCallbacks?.onForwardStateChange?.(true);
+  videoCallbacks?.onPausedChange?.(false);
   assert.isTrue(control.videoConfigResendRequested);
 
   // 要求に従って次のキーフレームの Object に保持値が載る
@@ -5368,18 +5368,18 @@ test("createPublishers: forwardState が 1 になると Video Config の送り�
   );
   assert.isFalse(control.videoConfigResendRequested);
 
-  // 要求の寿命は送信で決まる。forwardState が 0 に戻っても保留中の要求は消さない
-  // (消すと、次に 1 になったときの送り直しを取りこぼす)
-  videoCallbacks?.onForwardStateChange?.(true);
-  videoCallbacks?.onForwardStateChange?.(false);
+  // 要求の寿命は送信で決まる。paused が 1 に戻っても保留中の要求は消さない
+  // (消すと、次に 0 になったときの送り直しを取りこぼす)
+  videoCallbacks?.onPausedChange?.(false);
+  videoCallbacks?.onPausedChange?.(true);
   assert.isTrue(control.videoConfigResendRequested);
 });
 
-test("createPublishers: catalog の forwardState が 1 になると新しい Group の先頭 Object として送り直す", async () => {
+test("createPublishers: catalog の paused が 0 (unpaused) になると新しい Group の先頭 Object として送り直す", async () => {
   // 配信の開始後に購読を始めた相手への結合の検証。relay は購読者が居ない間 upstream の購読を
   // pause してよい (paused の間は publisher が Object を送らない) ため、開始時に送った catalog
   // は後着の購読者へ届かない。createPublishers() が catalog Publisher に
-  // onForwardStateChange を登録し、FORWARD が 1 になった時点で直前より大きい Group ID の
+  // onPausedChange を登録し、PAUSED が 0 になった時点で直前より大きい Group ID の
   // 先頭 Object として同じ payload を送り直すことを確認する
   const { publisher, control: loopControl } = createLoopTestContext();
   const control = loopControl as unknown as PublisherCatalogRepublishControl;
@@ -5405,19 +5405,20 @@ test("createPublishers: catalog の forwardState が 1 になると新しい Gro
     BigInt(CATALOG_MAX_CACHE_DURATION_MS),
   );
 
-  // catalog Publisher に forwardState 変化のコールバックが登録されていること
+  // catalog Publisher に paused 変化のコールバックが登録されていること
   const catalogCallbacks = callbacksByTrack.get(CATALOG_TRACK_NAME);
   assert.isDefined(catalogCallbacks);
-  assert.isDefined(catalogCallbacks?.onForwardStateChange);
+  assert.isDefined(catalogCallbacks?.onPausedChange);
 
-  // forwardState が 0 に変わっただけでは送らない
-  catalogCallbacks?.onForwardStateChange?.(false);
+  // paused が 1 (paused) に変わっただけでは送らない
+  catalogCallbacks?.onPausedChange?.(true);
   await settle();
   assert.equal(catalogSent.length, 1);
 
-  // forwardState が 1 になると新しい Group の先頭 Object として同じ payload を送り直す
+  // paused が 0 (unpaused、購読者の出現) になると新しい Group の先頭 Object として
+  // 同じ payload を送り直す
   const catalogBeforeRepublish = control.currentCatalog;
-  catalogCallbacks?.onForwardStateChange?.(true);
+  catalogCallbacks?.onPausedChange?.(false);
   await settle();
   assert.equal(catalogSent.length, 2);
   assert.isAbove(catalogSent[1]?.groupId ?? 0, catalogSent[0]?.groupId ?? 0);
@@ -5433,10 +5434,10 @@ test("createPublishers: catalog の forwardState が 1 になると新しい Gro
   // (draft-ietf-moq-msf-01 §6.1。allocateInitialGroupId は候補より前回値を優先する)
   assert.isAbove(allocateInitialGroupId(1), control.catalogGroupId);
 
-  // 1 → 0 → 1 でも送る (変化のたびに送り直す)
-  catalogCallbacks?.onForwardStateChange?.(false);
+  // 0 → 1 → 0 でも送る (unpaused に戻るたびに送り直す)
+  catalogCallbacks?.onPausedChange?.(true);
   await settle();
-  catalogCallbacks?.onForwardStateChange?.(true);
+  catalogCallbacks?.onPausedChange?.(false);
   await settle();
   assert.equal(catalogSent.length, 3);
   assert.isAbove(catalogSent[2]?.groupId ?? 0, catalogSent[1]?.groupId ?? 0);
@@ -5445,7 +5446,7 @@ test("createPublishers: catalog の forwardState が 1 になると新しい Gro
 });
 
 test("createPublishers: catalog の送り直しの reject は onError へ 1 回届き未処理にしない", async () => {
-  // forwardState 変化のコールバックは同期であり送信の完了を待てない。送り直しの失敗を
+  // paused 変化のコールバックは同期であり送信の完了を待てない。送り直しの失敗を
   // 握り潰さず onError へ流し、未処理の rejection にしないことを確認する
   const { publisher: catalogPublisher, sendCount } = createRepublishFailingSendPublisher(
     () => new Error("catalog resend failed"),
@@ -5459,7 +5460,7 @@ test("createPublishers: catalog の送り直しの reject は onError へ 1 回�
   await withUnhandledRejectionWatch(async (unhandled) => {
     await control.createPublishers();
     await control.publishCatalog();
-    callbacksByTrack.get(CATALOG_TRACK_NAME)?.onForwardStateChange?.(true);
+    callbacksByTrack.get(CATALOG_TRACK_NAME)?.onPausedChange?.(false);
     await waitForUnhandledRejectionDetection();
 
     assert.equal(sendCount(), 2);
@@ -5487,7 +5488,7 @@ test("createPublishers: catalog の送り直しでは publisher 層が通知済�
   await withUnhandledRejectionWatch(async (unhandled) => {
     await control.createPublishers();
     await control.publishCatalog();
-    callbacksByTrack.get(CATALOG_TRACK_NAME)?.onForwardStateChange?.(true);
+    callbacksByTrack.get(CATALOG_TRACK_NAME)?.onPausedChange?.(false);
     await waitForUnhandledRejectionDetection();
 
     assert.equal(sendCount(), 2);
@@ -5499,7 +5500,7 @@ test("createPublishers: catalog の送り直しでは publisher 層が通知済�
 });
 
 test("createPublishers: catalog の送り直しで onError が throw しても未処理の rejection にしない", async () => {
-  // 通知の担い手はこの経路であり、呼び出し元が居ない (forwardState 変化とタイマー)。
+  // 通知の担い手はこの経路であり、呼び出し元が居ない (paused 変化とタイマー)。
   // 利用者の onError が throw しても、通知の失敗を伝える経路が無いため握って未処理の
   // rejection にしないことを確認する (handleSessionClose と同じ形)
   let errors = 0;
@@ -5525,7 +5526,7 @@ test("createPublishers: catalog の送り直しで onError が throw しても�
   await withUnhandledRejectionWatch(async (unhandled) => {
     await control.createPublishers();
     await control.publishCatalog();
-    callbacksByTrack.get(CATALOG_TRACK_NAME)?.onForwardStateChange?.(true);
+    callbacksByTrack.get(CATALOG_TRACK_NAME)?.onPausedChange?.(false);
     await waitForUnhandledRejectionDetection();
 
     assert.equal(errors, 1);
@@ -5573,17 +5574,17 @@ test("publishCatalog: catalog の送り直しを間隔ごとに予約し直し�
   assert.equal(catalogSent.length, sentBeforeDisposeWait);
 });
 
-test("publishCatalog: FORWARD が 0 でも初期送信は完了として扱い予約を残す", async () => {
-  // 初期送信の時点で FORWARD が 0 のときも publisher は Object を送らない
-  // (draft-ietf-moq-transport-22 §3.1.1)。publishCatalog の検査は publisher の state だけを
-  // 見るため active なら失敗せず、初期送信の完了として扱って次の FORWARD 0→1 に備える。
-  // 見送りそのものは publisher が行う (「FORWARD が 0 の間の送り直しは見送られ Group ID を
+test("publishCatalog: PAUSED が 1 (paused) でも初期送信は完了として扱い予約を残す", async () => {
+  // 初期送信の時点で PAUSED が 1 (paused) のときも publisher は Object を送らない
+  // (draft-ietf-moq-transport-23 §3.1.1)。publishCatalog の検査は publisher の state だけを
+  // 見るため active なら失敗せず、初期送信の完了として扱って次の PAUSED 1→0 に備える。
+  // 見送りそのものは publisher が行う (「PAUSED が 1 の間の送り直しは見送られ Group ID を
   // 消費しない」のテストが駆動する)
   const { publisher, control: loopControl } = createLoopTestContext();
   const control = loopControl as unknown as PublisherCatalogRepublishControl;
   const { publisher: catalogPublisher, sent: catalogSent } = createRecordingSendPublisher();
-  // 送信の可否は publisher が決めるため、初期送信の前から FORWARD を 0 にしておく
-  (catalogPublisher as unknown as { forwardState: boolean }).forwardState = false;
+  // 送信の可否は publisher が決めるため、初期送信の前から PAUSED=1 (paused) にしておく
+  (catalogPublisher as unknown as { paused: boolean }).paused = true;
   const publishers = new Map<string, Publisher>([[CATALOG_TRACK_NAME, catalogPublisher]]);
   const { session } = createPublishRecordingSession(publishers);
   control.session = session;
@@ -5593,15 +5594,16 @@ test("publishCatalog: FORWARD が 0 でも初期送信は完了として扱い�
   await control.publishCatalog();
 
   // active なので例外にはならない。Object を実際に送るかは publisher が決めるため
-  // (FORWARD が 0 の間は送らない。draft-ietf-moq-transport-22 §3.1.1)、記録した stand-in には
+  // (PAUSED が 1 の間は送らない。draft-ietf-moq-transport-23 §3.1.1)、記録した stand-in には
   // 送信の呼び出しだけが残る。見送りでも初期送信の完了として扱い、予約を残す
   assert.equal(catalogSent.length, 1);
   assert.isTrue(control.catalogInitialSent);
   assert.isNotNull(control.catalogRepublishTimer);
   const groupIdAfterStart = control.catalogGroupId;
 
-  // FORWARD が 1 になれば、予約の満了で新しい Group の先頭 Object として送り直される
-  (catalogPublisher as unknown as { forwardState: boolean }).forwardState = true;
+  // PAUSED が 0 (unpaused) になれば、予約の満了で新しい Group の先頭 Object として
+  // 送り直される
+  (catalogPublisher as unknown as { paused: boolean }).paused = false;
   await sleep(50);
   assert.isAtLeast(catalogSent.length, 2);
   assert.isAbove(catalogSent[1]?.groupId ?? 0, groupIdAfterStart);
@@ -5610,8 +5612,8 @@ test("publishCatalog: FORWARD が 0 でも初期送信は完了として扱い�
   await publisher.close();
 });
 
-test("createPublishers: FORWARD が 0 の間の送り直しは見送られ Group ID を消費しない", async () => {
-  // publisher は paused の間 Object を送らない (draft-ietf-moq-transport-22 §3.1.1)。
+test("createPublishers: PAUSED が 1 (paused) の間の送り直しは見送られ Group ID を消費しない", async () => {
+  // publisher は paused の間 Object を送らない (draft-ietf-moq-transport-23 §3.1.1)。
   // 見送られる送り直しで Group ID と、同一プロセスの開始 Group ID の下限を進めないこと
   // (音声・映像が encode した分だけ Group を進めるのと同じ扱い) と、予約が維持されることを
   // 確認する
@@ -5629,16 +5631,16 @@ test("createPublishers: FORWARD が 0 の間の送り直しは見送られ Group
   assert.equal(catalogSent.length, 1);
   const groupIdAfterStart = control.catalogGroupId;
 
-  // FORWARD が 1 の間は送り直しで Group ID が進むこと
-  callbacksByTrack.get(CATALOG_TRACK_NAME)?.onForwardStateChange?.(true);
+  // PAUSED が 0 (unpaused) の間は送り直しで Group ID が進むこと
+  callbacksByTrack.get(CATALOG_TRACK_NAME)?.onPausedChange?.(false);
   await settle();
   assert.equal(catalogSent.length, 2);
   const groupIdAfterRepublish = control.catalogGroupId;
   assert.isAbove(groupIdAfterRepublish, groupIdAfterStart);
 
-  // FORWARD が 0 の間は送らず、Group ID も進めないこと
-  (catalogPublisher as unknown as { forwardState: boolean }).forwardState = false;
-  callbacksByTrack.get(CATALOG_TRACK_NAME)?.onForwardStateChange?.(true);
+  // PAUSED が 1 (paused) の間は送らず、Group ID も進めないこと
+  (catalogPublisher as unknown as { paused: boolean }).paused = true;
+  callbacksByTrack.get(CATALOG_TRACK_NAME)?.onPausedChange?.(false);
   await settle();
   assert.equal(catalogSent.length, 2);
   assert.equal(control.catalogGroupId, groupIdAfterRepublish);
@@ -5652,9 +5654,9 @@ test("createPublishers: FORWARD が 0 の間の送り直しは見送られ Group
   await publisher.close();
 });
 
-test("createPublishers: catalog Publisher が closed になったら FORWARD が 1 でも送り直さない", async () => {
-  // ピアが catalog の PUBLISH を cancel すると (STOP_SENDING。draft-ietf-moq-transport-22
-  // §3.1.2) publisher は closed になり、配送する相手が居なくなる。FORWARD 0→1 の入口で
+test("createPublishers: catalog Publisher が closed になったら PAUSED が 0 でも送り直さない", async () => {
+  // ピアが catalog の PUBLISH を cancel すると (STOP_SENDING。draft-ietf-moq-transport-23
+  // §3.1.2) publisher は closed になり、配送する相手が居なくなる。PAUSED 1→0 の入口で
   // 送らず、Group ID も進めず、予約も残さないことを確認する
   const { publisher, control: loopControl } = createLoopTestContext();
   const control = loopControl as unknown as PublisherCatalogRepublishControl;
@@ -5671,7 +5673,7 @@ test("createPublishers: catalog Publisher が closed になったら FORWARD が
   assert.isNotNull(control.catalogRepublishTimer);
 
   (catalogPublisher as unknown as { state: string }).state = "closed";
-  callbacksByTrack.get(CATALOG_TRACK_NAME)?.onForwardStateChange?.(true);
+  callbacksByTrack.get(CATALOG_TRACK_NAME)?.onPausedChange?.(false);
   await settle();
   assert.equal(catalogSent.length, 1);
   assert.equal(control.catalogGroupId, groupIdBeforeClose);
@@ -5706,11 +5708,11 @@ test("createPublishers: catalog Publisher が closed になったら予約の満
   await publisher.close();
 });
 
-test("publishCatalog: 初期 catalog の送信前に FORWARD が 1 になっても送り直さない", async () => {
+test("publishCatalog: 初期 catalog の送信前に PAUSED が 0 になっても送り直さない", async () => {
   // stop() → start() の窓。前回 start の currentCatalog は解放で消さないため、新しい
   // catalog Publisher を作ってから初期 catalog を送るまでの間 (音声・映像の PUBLISH の往復と
   // 音声の取り出し経路の準備) に
-  // FORWARD 0→1 が届くと、前回の catalog を新しい Group ID で送ってしまい、直後の初期送信が
+  // PAUSED 1→0 が届くと、前回の catalog を新しい Group ID で送ってしまい、直後の初期送信が
   // 同じ Location に別の payload を載せる (draft-ietf-moq-transport-22 §2.1 / §7.1)。
   // 初期送信が済むまでは送り直さないことを確認する
   const { publisher, control: loopControl } = createLoopTestContext();
@@ -5725,8 +5727,8 @@ test("publishCatalog: 初期 catalog の送信前に FORWARD が 1 になって�
   const { publisher: audioPublisher } = createCapturingPublisher();
   const callbacksByTrack = new Map<string, PublishCallbacks>();
   // 音声の PUBLISH の応答中 (catalog の Publisher は作成済み、初期 catalog は未送信) に
-  // FORWARD 1 を届かせる
-  let notifyForwardDuringMediaPublish = false;
+  // PAUSED 0 を届かせる
+  let notifyPausedDuringMediaPublish = false;
   const session = {
     publish: async (
       _namespace: string[],
@@ -5737,8 +5739,8 @@ test("publishCatalog: 初期 catalog の送信前に FORWARD が 1 になって�
       if (trackName === CATALOG_TRACK_NAME) {
         return catalogPublisher;
       }
-      if (notifyForwardDuringMediaPublish) {
-        callbacksByTrack.get(CATALOG_TRACK_NAME)?.onForwardStateChange?.(true);
+      if (notifyPausedDuringMediaPublish) {
+        callbacksByTrack.get(CATALOG_TRACK_NAME)?.onPausedChange?.(false);
       }
       return audioPublisher;
     },
@@ -5746,8 +5748,8 @@ test("publishCatalog: 初期 catalog の送信前に FORWARD が 1 になって�
   } as unknown as Session;
   control.session = session;
 
-  // 1 回目の start 相当。初期送信より前の FORWARD 1 は currentCatalog が null のため送らない
-  notifyForwardDuringMediaPublish = true;
+  // 1 回目の start 相当。初期送信より前の PAUSED 0 は currentCatalog が null のため送らない
+  notifyPausedDuringMediaPublish = true;
   await control.createPublishers();
   await control.publishCatalog();
   assert.equal(catalogSent.length, 1);
@@ -5768,7 +5770,7 @@ test("publishCatalog: 初期 catalog の送信前に FORWARD が 1 になって�
 });
 
 test("createPublishers: 解放が進行中の送り直しは送らない", async () => {
-  // 解放はカタログ Publisher を切り離す前に await を挟む。その間に FORWARD 0→1 が届いても
+  // 解放はカタログ Publisher を切り離す前に await を挟む。その間に PAUSED 1→0 が届いても
   // 送らないことを確認する (切り離し後に届いた場合は catalogPublisher の null ガードで止まる)
   const { publisher, control: loopControl } = createLoopTestContext();
   const control = loopControl as unknown as PublisherCatalogRepublishControl;
@@ -5785,7 +5787,7 @@ test("createPublishers: 解放が進行中の送り直しは送らない", async
 
   // 解放が進行中の状態を作る
   control.disposalInFlight = Promise.resolve();
-  callbacksByTrack.get(CATALOG_TRACK_NAME)?.onForwardStateChange?.(true);
+  callbacksByTrack.get(CATALOG_TRACK_NAME)?.onPausedChange?.(false);
   await settle();
   assert.equal(catalogSent.length, 1);
   assert.equal(control.catalogGroupId, groupIdBeforeDisposal);
@@ -5796,8 +5798,8 @@ test("createPublishers: 解放が進行中の送り直しは送らない", async
 
 test("createPublishers: start 失敗の巻き戻し中は送り直さない", async () => {
   // start() の失敗時の巻き戻しは runDisposal を通さず disposeAllResources を直に await する
-  // ため、その間 disposalInFlight は null のままである。この窓で FORWARD 0→1 が届いても
-  // 破棄中の catalog Publisher へ送らないことを catalogInitialSent で止めている
+  // ため、その間 disposalInFlight は null のままである。この窓で PAUSED 1→0 が届いても
+  // catalog Publisher が null になっているため送らない (破棄中の publisher へ送らない)
   const { publisher, control: loopControl } = createLoopTestContext();
   const control = loopControl as unknown as PublisherCatalogRepublishControl;
   const { publisher: catalogPublisher, sent: catalogSent } = createRecordingSendPublisher();
@@ -5811,9 +5813,9 @@ test("createPublishers: start 失敗の巻き戻し中は送り直さない", as
   assert.equal(catalogSent.length, 1);
   const groupIdBeforeDisposal = control.catalogGroupId;
 
-  // 解放 (巻き戻し) の直後に FORWARD 0→1 が届く窓
+  // 解放 (巻き戻し) の直後に PAUSED 1→0 が届く窓
   await control.disposeAllResources();
-  callbacksByTrack.get(CATALOG_TRACK_NAME)?.onForwardStateChange?.(true);
+  callbacksByTrack.get(CATALOG_TRACK_NAME)?.onPausedChange?.(false);
   await settle();
   assert.equal(catalogSent.length, 1);
   assert.equal(control.catalogGroupId, groupIdBeforeDisposal);
@@ -5865,7 +5867,7 @@ test("publishCatalog: catalog 送信の事前検証 reject は印付きで 1 回
   // 受ける位置 (publishCatalog() の await) までを駆動し、通知の抑止は
   // start 失敗の通知のテストで確認する
   const { control: loopControl, errors } = createLoopTestContext();
-  const control = loopControl as unknown as PublisherForwardControl;
+  const control = loopControl as unknown as PublisherPausedControl;
   // 高レベル API と同じ配線にする (publisher の error コールバックが onError に直結する)
   const catalogPublisher = new PublisherImpl(["live"], CATALOG_TRACK_NAME, 0n, 0n, (error) => {
     errors.push(error);
@@ -5965,7 +5967,7 @@ test("resolveAudioConfigToSend: 空の description は値なしとして扱う",
 });
 
 test("resolveAudioConfigToSend: 送り直し要求で保持している Audio Config を載せ直す", () => {
-  // forwardState が 0 から 1 になった時点 (後着購読者の出現) の要求に、
+  // paused が 1 から 0 になった時点 (後着購読者の出現) の要求に、
   // 保持値を 1 Object だけ載せ直して応える
   const description = new Uint8Array([0x11, 0x90]);
   const sent = resolveAudioConfigToSend(null, description, false);
@@ -5988,7 +5990,7 @@ test("resolveAudioConfigToSend: 送り直し要求で保持している Audio Co
 });
 
 test("resolveAudioConfigToSend: 保持値が無いまま要求されたら要求を残す", () => {
-  // 初回の description が現れる前に forwardState が 1 になった場合は載せる値が無いため、
+  // 初回の description が現れる前に paused が 0 (unpaused) になった場合は載せる値が無いため、
   // 要求だけを残す (要求を消すと、次に description が現れても送り直しの意図が失われる)
   const pending = resolveAudioConfigToSend(null, undefined, true);
 
@@ -6087,7 +6089,7 @@ test("resolveVideoConfigToSend: 空の description は値なしとして扱う",
 });
 
 test("resolveVideoConfigToSend: 送り直し要求はキーフレームで保持している Video Config を 1 Object 載せ直す", () => {
-  // forwardState が 0 から 1 になった時点 (後着購読者の出現) の要求に、
+  // paused が 1 から 0 になった時点 (後着購読者の出現) の要求に、
   // 次のキーフレームで保持値を 1 Object だけ載せ直して応える。キーフレーム以外では
   // 要求を残す (GOP の途中で購読側に復号器を再構成させない)
   const description = new Uint8Array([0x01, 0x42, 0xc0, 0x1f]);
@@ -6117,7 +6119,7 @@ test("resolveVideoConfigToSend: 送り直し要求はキーフレームで保持
 });
 
 test("resolveVideoConfigToSend: 保持値が無いまま要求されたら要求を残す", () => {
-  // 初回の description が現れる前に forwardState が 1 になった場合は載せる値が無いため、
+  // 初回の description が現れる前に paused が 0 (unpaused) になった場合は載せる値が無いため、
   // 要求だけを残す (要求を消すと、次に description が現れても送り直しの意図が失われる)。
   // 保持値が無い間はキーフレームでも載せられない
   const onDelta = resolveVideoConfigToSend(null, undefined, false, true);
@@ -6796,7 +6798,7 @@ test("Publisher Priority は数値が小さいほど高優先になる順に並�
  */
 test("createPublishers: SETUP に載せたトークンを PUBLISH に付与する", async () => {
   const { control: loopControl } = createLoopTestContext();
-  const control = loopControl as unknown as PublisherForwardControl;
+  const control = loopControl as unknown as PublisherPausedControl;
   const audioSettings = resolveAudioPublishSettings({
     codec: "aac",
     bitrate: 64000,
@@ -6827,7 +6829,7 @@ test("createPublishers: SETUP に載せたトークンを PUBLISH に付与す�
 // SETUP にトークンを送っていない場合は、PUBLISH にも AUTHORIZATION TOKEN を載せない
 test("createPublishers: SETUP にトークンが無ければ PUBLISH に付与しない", async () => {
   const { control: loopControl } = createLoopTestContext();
-  const control = loopControl as unknown as PublisherForwardControl;
+  const control = loopControl as unknown as PublisherPausedControl;
   const audioSettings = resolveAudioPublishSettings({
     codec: "aac",
     bitrate: 64000,
@@ -7197,7 +7199,7 @@ function createTailFlushContext(options: {
   const order: string[] = [];
   const audioPublisher = {
     state: "active",
-    forwardState: true,
+    paused: false,
     closeSubgroup: async () => {},
     sendObject: async () => {
       sent.push({ kind: "subgroup", atMs: performance.now() });

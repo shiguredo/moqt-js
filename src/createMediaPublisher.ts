@@ -513,13 +513,14 @@ export interface CodecConfigResolution {
  * (実装依存であり将来変わり得る)、音声にはキーフレームが無いため、配信開始後に
  * 接続した購読者へ届けるには送り直しが要る。
  *
- * 送り直しは forwardState が 0 から 1 になった時点 (購読者の出現を
- * draft-ietf-moq-transport-22 §7.6 の REQUEST_UPDATE の FORWARD パラメータで
+ * 送り直しは paused が 1 から 0 になった時点 (購読者の出現を
+ * draft-ietf-moq-transport-23 §7.7 (Publisher Interactions) の REQUEST_UPDATE の
+ * PAUSED パラメータで
  * 知った時点) に要求され、保持している値を次の Object に 1 度だけ載せ直す。
  * 載せた時点で要求は解消し、保持値は消さない (消すと次の要求に応えられない)。
- * forwardState が 1 のまま購読者が接続した場合は変化が起きないため送り直されない
- * (購読者が居ない間に relay が forwardState を 0 にするかは §7.2 により relay の
- * 裁量であり、1 のまま維持する relay では 1 人目の購読者でも送り直されない)。
+ * unpaused (paused = 0) のまま購読者が接続した場合は変化が起きないため送り直されない
+ * (購読者が居ない間に relay が PAUSED=1 にするかは §7.2 により relay の
+ * 裁量であり、unpaused のまま維持する relay では 1 人目の購読者でも送り直されない)。
  * 本リポジトリの購読実装 (`createMediaSubscriber`) は同じ description では decoder を
  * 再構成しないため、この再送は自前の購読経路に対して冪等である。
  *
@@ -583,15 +584,16 @@ export function selectCodecDescription(
  * (Chromium の実装。実装依存であり将来変わり得る)。キーフレームごとに再出現しないため、
  * description の再出現を待つと後着の購読者へ送り直せない。
  *
- * 送り直しは forwardState が 0 から 1 になった時点 (購読者の出現を
- * draft-ietf-moq-transport-22 §7.6 の REQUEST_UPDATE の FORWARD パラメータで
+ * 送り直しは paused が 1 から 0 になった時点 (購読者の出現を
+ * draft-ietf-moq-transport-23 §7.7 (Publisher Interactions) の REQUEST_UPDATE の
+ * PAUSED パラメータで
  * 知った時点) に要求され、次に届くキーフレームの Object に保持している値を 1 度だけ
  * 載せ直す。キーフレーム以外の Object に保持値を載せると、購読側が GOP の途中で
  * 復号器を再構成することになり、参照フレームも揃わないため、要求はキーフレームまで
  * 保留する。載せた時点で要求は解消し、保持値は消さない (消すと次の要求に応えられない)。
- * forwardState が 1 のまま購読者が接続した場合は変化が起きないため送り直されない
- * (購読者が居ない間に relay が forwardState を 0 にするかは §7.2 により relay の
- * 裁量であり、1 のまま維持する relay では 1 人目の購読者でも送り直されない)。
+ * unpaused (paused = 0) のまま購読者が接続した場合は変化が起きないため送り直されない
+ * (購読者が居ない間に relay が PAUSED=1 にするかは §7.2 により relay の
+ * 裁量であり、unpaused のまま維持する relay では 1 人目の購読者でも送り直されない)。
  * 本リポジトリの購読実装 (`createMediaSubscriber`) は同じ description では decoder を
  * 再構成しないため、この再送は自前の購読経路に対して冪等である。
  *
@@ -730,11 +732,11 @@ export class MediaPublisherImpl implements MediaPublisher {
   // 送信済みの catalog の Group ID。初期送信は start のたびに払い出し、送り直しのたびに +1 する。
   // catalog の更新は必ず新しい Group の先頭 Object (Object ID 0) に置き、同じ Location に
   // 別の payload を載せない (draft-ietf-moq-transport-22 §2.1 / §7.1、draft-ietf-moq-msf-01 §5)。
-  // §6.1 の単調増加 MUST も満たす。FORWARD=0 で見送った送り直しでは消費しない (音声・映像が
-  // encode した分だけ Group を進めるのと同じ扱い)。送信の失敗では消費する
+  // §6.1 の単調増加 MUST も満たす。paused 中 (PAUSED=1) で見送った送り直しでは消費しない
+  // (音声・映像が encode した分だけ Group を進めるのと同じ扱い)。送信の失敗では消費する
   private catalogGroupId = 0;
   // この start で初期の catalog を送り終えたか。前回 start の currentCatalog は解放で消さない
-  // ため、初期送信より前に FORWARD 0→1 が届くと前回の catalog を新しい Group ID で送ってしまい、
+  // ため、初期送信より前に PAUSED 1→0 が届くと前回の catalog を新しい Group ID で送ってしまい、
   // 直後の初期送信と同じ Location に別の payload が載る。初期送信が済むまでは送り直さない
   private catalogInitialSent = false;
   // catalog を送り直す予約 (MAX_CACHE_DURATION に基づく間隔)。stop / close / ピア起点の
@@ -744,9 +746,9 @@ export class MediaPublisherImpl implements MediaPublisher {
   // インスタンスフィールドにする (既定は MAX_CACHE_DURATION から導出した値)
   private catalogRepublishInterval = CATALOG_REPUBLISH_DEFAULT_INTERVAL_MS;
   // 直前に VIDEO_CONFIG として送信した description。同じ値の重複送出を避けつつ、
-  // forwardState が 1 になった時点の送り直しの材料にもする
+  // paused が 1 から 0 になった時点の送り直しの材料にもする
   private lastSentVideoConfig: Uint8Array | null = null;
-  // forwardState が 0 から 1 になった時点で立てる Video Config の送り直し要求。
+  // paused が 1 から 0 になった時点で立てる Video Config の送り直し要求。
   // 映像の description はキーフレームごとには再出現しないため、次のキーフレームの
   // Object に保持値を 1 度だけ載せ直し、載せた時点で解消する
   private videoConfigResendRequested = false;
@@ -755,9 +757,9 @@ export class MediaPublisherImpl implements MediaPublisher {
   // と同じ (canonical 形式の description は configure 後の最初の出力にしか載らない)
   private pendingVideoConfig: Uint8Array | null = null;
   // 直前に AUDIO_CONFIG として送った description。同じ値の重複送出を避けつつ、
-  // forwardState が 1 になった時点の送り直しの材料にもする
+  // paused が 1 から 0 になった時点の送り直しの材料にもする
   private lastSentAudioConfig: Uint8Array | null = null;
-  // forwardState が 0 から 1 になった時点で立てる Audio Config の送り直し要求。
+  // paused が 1 から 0 になった時点で立てる Audio Config の送り直し要求。
   // 次の Object に保持値を 1 度だけ載せ直し、載せた時点で解消する
   private audioConfigResendRequested = false;
 
@@ -1727,12 +1729,12 @@ export class MediaPublisherImpl implements MediaPublisher {
         // PUBLISH のリクエストストリームの GOAWAY もアプリへ渡す
         goaway: (newSessionUri) => this.notifyGoaway(newSessionUri),
         // relay は購読者が居ない間 upstream の購読を pause してよい (MAY。
-        // draft-ietf-moq-transport-22 §7.6。pause するかは §7.2 の裁量)。paused の間は
+        // draft-ietf-moq-transport-23 §7.7 (Publisher Interactions)。pause するかは §7.2 の裁量)。paused の間は
         // publisher が Object を送らないため (§3.1.1)、配信の開始時に送った catalog は
-        // 後から購読を始めた相手へ届かない。FORWARD が 1 になった時点で送り直す
+        // 後から購読を始めた相手へ届かない。paused が 1 から 0 になった時点で送り直す
         // (送り直しの契約と残りの根拠は republishCatalog の JSDoc を参照)
-        onForwardStateChange: (forward) => {
-          if (forward) {
+        onPausedChange: (paused) => {
+          if (!paused) {
             this.republishCatalog();
           }
         },
@@ -1755,10 +1757,10 @@ export class MediaPublisherImpl implements MediaPublisher {
           goaway: (newSessionUri) => this.notifyGoaway(newSessionUri),
           // 音声にはキーフレームが無く Audio Config は最初の chunk にしか現れないため、
           // 同じ値の再送を抑止したままだと後から接続した購読者が AAC を復号できない。
-          // forwardState が 1 になった時点で保持値の送り直しを要求する
+          // paused が 1 から 0 になった時点で保持値の送り直しを要求する
           // (判断の詳細は resolveAudioConfigToSend の JSDoc を参照)
-          onForwardStateChange: (forward) => {
-            if (forward) {
+          onPausedChange: (paused) => {
+            if (!paused) {
               this.audioConfigResendRequested = true;
             }
           },
@@ -1782,11 +1784,11 @@ export class MediaPublisherImpl implements MediaPublisher {
           // 複数の要求は、直前のキーフレームの記録を消すだけなので 1 つの Group にまとまる
           onNewGroupRequest: () => this.startNewGroup(),
           // 映像の description は configure 後の最初の出力と構成変更時にしか現れない
-          // ため、forwardState が 1 になった時点で保持値の送り直しを要求し、
+          // ため、paused が 1 から 0 になった時点で保持値の送り直しを要求し、
           // handleVideoEncodedChunk が次のキーフレームの Object に載せ直す
           // (判断の詳細は resolveVideoConfigToSend の JSDoc を参照)
-          onForwardStateChange: (forward) => {
-            if (forward) {
+          onPausedChange: (paused) => {
+            if (!paused) {
               this.videoConfigResendRequested = true;
             }
           },
@@ -1833,7 +1835,7 @@ export class MediaPublisherImpl implements MediaPublisher {
     // 先頭 Object)。Priority は購読開始の前提になるため最高優先で送る
     await this.sendCatalogObject(catalog, this.catalogGroupId);
 
-    // 初期送信が済んだ。以後の FORWARD 0→1 は送り直しとして扱う
+    // 初期送信が済んだ。以後の PAUSED 1→0 は送り直しとして扱う
     this.catalogInitialSent = true;
 
     // 配信の開始から MAX_CACHE_DURATION を過ぎた後で購読を始めた相手にも catalog を
@@ -1899,12 +1901,12 @@ export class MediaPublisherImpl implements MediaPublisher {
   /**
    * 保持している Catalog を新しい Group で送り直す
    *
-   * FORWARD が 0 から 1 になった時点 (forwardState 変化のコールバック) と、送り直しの
+   * paused が 1 から 0 になった時点 (paused 変化のコールバック) と、送り直しの
    * 予約の満了時に呼ぶ。Group ID を +1 して Group の先頭 Object として送る
    * (draft-ietf-moq-msf-01 §5 / §6.1。草案の改訂でこれらの規定が変わる可能性がある)。
-   * FORWARD が 1 のまま 2 人目以降の購読者が接続した場合は変化が起きないため送り直さない
+   * unpaused のまま 2 人目以降の購読者が接続した場合は変化が起きないため送り直さない
    * (音声・映像の config の送り直しと同じ制約)。
-   * forwardState 変化のコールバックは同期であり送信の完了を待てないため、送信は void で
+   * paused 変化のコールバックは同期であり送信の完了を待てないため、送信は void で
    * 起動する。実物の session 層の送信失敗は publisher の error コールバック経由で onError に
    * 届き、事前検証の reject には publisher が通知済みの印を付けるため通知しない
    * (start 失敗の通知と同じ扱いであり、1 件の失敗で onError が 2 回呼ばれるのを防ぐ)。
@@ -1914,7 +1916,7 @@ export class MediaPublisherImpl implements MediaPublisher {
   private republishCatalog(): void {
     const catalog = this.currentCatalog;
     const publisher = this.catalogPublisher;
-    // 解放が進行中なら送らない (解放は await を挟むため、その間に FORWARD 0→1 が届く窓がある)
+    // 解放が進行中なら送らない (解放は await を挟むため、その間に PAUSED 1→0 が届く窓がある)
     if (catalog === null || publisher === null || this.disposalInFlight !== null) {
       return;
     }
@@ -1927,15 +1929,15 @@ export class MediaPublisherImpl implements MediaPublisher {
     }
     // この start の初期 catalog を送る前は送り直さない (理由は catalogInitialSent の宣言を参照)。
     // 初期送信は start() が publishCatalog で行い (active でなければ start が失敗する)、
-    // publisher が FORWARD=0 で見送った場合は初期送信の完了として扱うため、次の FORWARD 0→1 で
-    // 改めて送り直す
+    // publisher が paused 中 (PAUSED=1) で見送った場合は初期送信の完了として扱うため、
+    // 次の PAUSED 1→0 で改めて送り直す
     if (!this.catalogInitialSent) {
       return;
     }
-    // FORWARD=0 の間は publisher が見送るため、送らない場合は Group ID を消費しない
-    // (理由は catalogGroupId の宣言を参照)。予約は維持し、FORWARD が 1 になった時点の
+    // paused 中 (PAUSED=1) は publisher が見送るため、送らない場合は Group ID を消費しない
+    // (理由は catalogGroupId の宣言を参照)。予約は維持し、PAUSED が 0 になった時点の
     // 送り直しに備える
-    if (!publisher.forwardState) {
+    if (publisher.paused) {
       this.scheduleCatalogRepublish();
       return;
     }

@@ -241,11 +241,11 @@ test("bidiReadSubscribeResponse: SUBSCRIBE_OK のスコープ違反で具体エ�
     ctx.stream,
     ctx.controlReader,
   );
-  // FORWARD は SUBSCRIBE_OK (EXPIRES / LARGEST_OBJECT のみ許可) のスコープ違反である
+  // PAUSED は SUBSCRIBE_OK (EXPIRES / LARGEST_OBJECT のみ許可) のスコープ違反である
   const okPayload = encodeSubscribeOkPayload({
     type: MessageType.SUBSCRIBE_OK,
     trackAlias: 1n,
-    parameters: [{ type: MessageParameterType.FORWARD, value: new Uint8Array([1]) }],
+    parameters: [{ type: MessageParameterType.PAUSED, value: new Uint8Array([1]) }],
     trackProperties: [],
   });
   ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.SUBSCRIBE_OK, okPayload));
@@ -260,7 +260,7 @@ test("bidiReadSubscribeResponse: SUBSCRIBE_OK のスコープ違反で具体エ�
   assert.deepEqual(ctx.order, ["reject", "close"]);
   assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
   assert.isTrue(
-    ctx.getClosedWithError()!.message.includes("parameter type 0x10 not allowed in SUBSCRIBE_OK"),
+    ctx.getClosedWithError()!.message.includes("parameter type 0x11 not allowed in SUBSCRIBE_OK"),
   );
   // 削除集合 (pendingSubscribe + requestStreams + fillFetchTargets) が掃除される
   assert.isFalse(ctx.session.pendingSubscribe.has(ctx.requestId));
@@ -359,12 +359,12 @@ test("bidiReadFetchResponse: FETCH_OK のスコープ違反で具体エラーが
     ctx.stream,
     ctx.controlReader,
   );
-  // FORWARD は FETCH_OK (許可なし) のスコープ違反である
+  // PAUSED は FETCH_OK (許可なし) のスコープ違反である
   const okPayload = encodeFetchOkPayload({
     type: MessageType.FETCH_OK,
     endOfTrack: false,
     endLocation: { group: 0n, object: 0n },
-    parameters: [{ type: MessageParameterType.FORWARD, value: new Uint8Array([1]) }],
+    parameters: [{ type: MessageParameterType.PAUSED, value: new Uint8Array([1]) }],
     trackProperties: [],
   });
   ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.FETCH_OK, okPayload));
@@ -379,7 +379,7 @@ test("bidiReadFetchResponse: FETCH_OK のスコープ違反で具体エラーが
   assert.deepEqual(ctx.order, ["reject", "close"]);
   assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
   assert.isTrue(
-    ctx.getClosedWithError()!.message.includes("parameter type 0x10 not allowed in FETCH_OK"),
+    ctx.getClosedWithError()!.message.includes("parameter type 0x11 not allowed in FETCH_OK"),
   );
   // 削除集合 (pendingFetch + requestStreams) が掃除される
   assert.isFalse(ctx.session.pendingFetch.has(ctx.requestId));
@@ -406,10 +406,10 @@ test("bidiReadTrackStatusResponse: TRACK_STATUS_OK のスコープ違反で具�
     ctx.stream,
     ctx.controlReader,
   );
-  // FORWARD は TRACK_STATUS_OK (LARGEST_OBJECT のみ許可) のスコープ違反である
+  // PAUSED は TRACK_STATUS_OK (LARGEST_OBJECT のみ許可) のスコープ違反である
   const okPayload = encodeRequestOkPayload({
     type: MessageType.REQUEST_OK,
-    parameters: [{ type: MessageParameterType.FORWARD, value: new Uint8Array([1]) }],
+    parameters: [{ type: MessageParameterType.PAUSED, value: new Uint8Array([1]) }],
     trackProperties: [],
   });
   ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.REQUEST_OK, okPayload));
@@ -426,7 +426,7 @@ test("bidiReadTrackStatusResponse: TRACK_STATUS_OK のスコープ違反で具�
   assert.isTrue(
     ctx
       .getClosedWithError()!
-      .message.includes("parameter type 0x10 not allowed in TRACK_STATUS_OK"),
+      .message.includes("parameter type 0x11 not allowed in TRACK_STATUS_OK"),
   );
   // 削除集合 (pendingTrackStatus + requestStreams) が掃除される
   assert.isFalse(ctx.session.pendingTrackStatus.has(ctx.requestId));

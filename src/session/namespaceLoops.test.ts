@@ -1228,10 +1228,10 @@ test("namespaceStartNamespaceStreamLoop: REQUEST_UPDATE 応答のスコープ違
   );
 
   ctx.readableController.enqueue(requestOkMessage(ctx.controlWriter));
-  // FORWARD は REQUEST_UPDATE_OK_ALLOWED_PARAMS (LARGEST_OBJECT / EXPIRES) に含まれない
+  // PAUSED は REQUEST_UPDATE_OK_ALLOWED_PARAMS (LARGEST_OBJECT / EXPIRES) に含まれない
   ctx.readableController.enqueue(
     requestOkMessageWithParameters(ctx.controlWriter, [
-      { type: MessageParameterType.FORWARD, value: new Uint8Array([1]) },
+      { type: MessageParameterType.PAUSED, value: new Uint8Array([1]) },
     ]),
   );
   ctx.readableController.close();
@@ -1695,10 +1695,10 @@ test("namespaceStartTracksStreamLoop: 初期 REQUEST_OK のスコープ違反で
     },
   );
 
-  // FORWARD は SUBSCRIBE_TRACKS_OK (EXPIRES のみ許可) のスコープ違反である
+  // PAUSED は SUBSCRIBE_TRACKS_OK (EXPIRES のみ許可) のスコープ違反である
   ctx.readableController.enqueue(
     requestOkMessageWithParameters(ctx.controlWriter, [
-      { type: MessageParameterType.FORWARD, value: new Uint8Array([1]) },
+      { type: MessageParameterType.PAUSED, value: new Uint8Array([1]) },
     ]),
   );
   ctx.readableController.close();
@@ -2134,7 +2134,7 @@ LOOP_CASES.forEach(({ kind, loop }) => {
 /**
  * 初期 REQUEST_OK のパラメータスコープ違反で reject し同一オブジェクトで閉じるケース
  *
- * FORWARD は *_OK (EXPIRES のみ許可) のスコープ違反であり、期待するエラー文言に
+ * PAUSED は *_OK (EXPIRES のみ許可) のスコープ違反であり、期待するエラー文言に
  * ループ種別ごとのメッセージ名が入る。
  */
 const INITIAL_SCOPE_VIOLATION_CASES: readonly { loop: LoopKind; okTypeName: string }[] = [
@@ -2160,7 +2160,7 @@ INITIAL_SCOPE_VIOLATION_CASES.forEach(({ loop, okTypeName }) => {
 
     ctx.readableController.enqueue(
       requestOkMessageWithParameters(ctx.controlWriter, [
-        { type: MessageParameterType.FORWARD, value: new Uint8Array([1]) },
+        { type: MessageParameterType.PAUSED, value: new Uint8Array([1]) },
       ]),
     );
     ctx.readableController.close();
@@ -2343,7 +2343,7 @@ test("namespaceStartPublicationStreamLoop: 確立後の 2 通目 REQUEST_OK は�
   ctx.readableController.enqueue(requestOkMessage(ctx.controlWriter));
   ctx.readableController.enqueue(
     requestOkMessageWithParameters(ctx.controlWriter, [
-      { type: MessageParameterType.FORWARD, value: new Uint8Array([1]) },
+      { type: MessageParameterType.PAUSED, value: new Uint8Array([1]) },
     ]),
   );
   ctx.readableController.close();

@@ -576,7 +576,7 @@ test("buildPublisherStats: 符号化と送信の累積、状態、音声のメ�
   pub.pubStatus.value = "connected";
   pub.pubStatusMessage.value = "Publishing";
   pub.httpVersion.value = "H2";
-  pub.forwardState.value = true;
+  pub.paused.value = true;
   pub.pubCodec.value = "vp8";
   pub.encoderState.value = "configured";
   pub.framesEncoded.value = 31;
@@ -604,7 +604,7 @@ test("buildPublisherStats: 符号化と送信の累積、状態、音声のメ�
     assert.equal(stats.status, "connected");
     assert.equal(stats.statusMessage, "Publishing");
     assert.equal(stats.httpVersion, "H2");
-    assert.equal(stats.forwardState, true);
+    assert.equal(stats.paused, true);
     assert.equal(stats.codec, "vp8");
     assert.equal(stats.encoderState, "configured");
     assert.equal(stats.framesEncoded, 31);
@@ -632,7 +632,7 @@ test("buildPublisherStats: 符号化と送信の累積、状態、音声のメ�
     pub.pubStatus.value = "disconnected";
     pub.pubStatusMessage.value = "Ready to publish";
     pub.httpVersion.value = null;
-    pub.forwardState.value = null;
+    pub.paused.value = null;
     pub.pubCodec.value = "";
     pub.encoderState.value = "unconfigured";
     pub.framesEncoded.value = 0;

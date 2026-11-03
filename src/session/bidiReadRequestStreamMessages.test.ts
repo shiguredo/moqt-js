@@ -197,7 +197,7 @@ test("bidiReadPublishResponse: PUBLISH_OK 受信前のピア FIN でリクエス
 });
 
 /**
- * PUBLISH_OK 応答の FORWARD 反映を検証するためのセッションを構築する
+ * PUBLISH_OK 応答の PAUSED 反映を検証するためのセッションを構築する
  *
  * 応答ストリームに指定パラメータの PUBLISH_OK を 1 通だけ feed し、
  * 解決された Publisher を返す。PUBLISH_OK 受信後の挙動の検証に使う。
@@ -275,12 +275,13 @@ async function readPublishOkWithParameters(
 }
 
 /**
- * draft-ietf-moq-transport-22 §9.20.16:
+ * draft-ietf-moq-transport-23 §9.3 (PUBLISH_OK) / §9.19.16 (EXPIRES):
  * PUBLISH_OK に出現できるのは EXPIRES のみである。パラメータ無しと EXPIRES 付きの
  * どちらもスコープ違反にならず、保留中の発行が同一オブジェクトで解決され、
- * FORWARD 省略のため forwardState は初期値 true のままであることを表駆動で検証する。
+ * PAUSED 省略のため paused は初期値 false (unpaused) のままであることを
+ * 表駆動で検証する。
  */
-test("bidiReadPublishResponse: パラメータ無し / EXPIRES のみの PUBLISH_OK は forwardState を変えずに解決される", async () => {
+test("bidiReadPublishResponse: パラメータ無し / EXPIRES のみの PUBLISH_OK は paused を変えずに解決される", async () => {
   const cases: { name: string; parameters: { type: number; value: Uint8Array }[] }[] = [
     { name: "パラメータ無し", parameters: [] },
     {
@@ -292,27 +293,27 @@ test("bidiReadPublishResponse: パラメータ無し / EXPIRES のみの PUBLISH
   for (const testCase of cases) {
     const { publisher, resolved } = await readPublishOkWithParameters(testCase.parameters);
 
-    // 解決された Publisher は保留中のものと同一であり、状態は true になる
+    // 解決された Publisher は保留中のものと同一であり、状態は false (unpaused) になる
     assert.equal(resolved, publisher);
-    assert.isTrue(publisher.forwardState);
+    assert.isFalse(publisher.paused);
   }
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.16 / §9.20.1:
- * FORWARD は PUBLISH_OK に出現できない。FORWARD=1 / FORWARD=0 のいずれの値でも
+ * draft-ietf-moq-transport-23 §9.19.16 / §9.19.1:
+ * PAUSED は PUBLISH_OK に出現できない。PAUSED=0 / PAUSED=1 のいずれの値でも
  * スコープ違反として PROTOCOL_VIOLATION でセッションを閉じ、保留中の発行を
  * 残さず reject することを表駆動で検証する。
  */
-test("bidiReadPublishResponse: FORWARD を含む PUBLISH_OK は値によらず PROTOCOL_VIOLATION", async () => {
-  const cases: { name: string; forwardValue: number }[] = [
-    { name: "FORWARD=1", forwardValue: 1 },
-    { name: "FORWARD=0", forwardValue: 0 },
+test("bidiReadPublishResponse: PAUSED を含む PUBLISH_OK は値によらず PROTOCOL_VIOLATION", async () => {
+  const cases: { name: string; pausedValue: number }[] = [
+    { name: "PAUSED=0", pausedValue: 0 },
+    { name: "PAUSED=1", pausedValue: 1 },
   ];
 
   for (const testCase of cases) {
     const ctx = createPublishOkValidationContext([
-      { type: MessageParameterType.FORWARD, value: new Uint8Array([testCase.forwardValue]) },
+      { type: MessageParameterType.PAUSED, value: new Uint8Array([testCase.pausedValue]) },
     ]);
     const stream = ctx.session.requestStreams.get(ctx.requestId) as unknown as {
       stream: WebTransportBidirectionalStream;

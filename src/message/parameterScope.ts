@@ -13,7 +13,11 @@ import { SessionError, SessionErrorCode } from "../error";
 // 許可パラメータ集合
 // ============================================================================
 
-/** SUBSCRIBE_OK メッセージの許可パラメータ */
+/**
+ * SUBSCRIBE_OK メッセージの許可パラメータ
+ *
+ * draft-ietf-moq-transport-23 §9.7: EXPIRES / LARGEST_OBJECT のみ。
+ */
 export const SUBSCRIBE_OK_ALLOWED_PARAMS = new Set<number>([
   MessageParameterType.EXPIRES,
   MessageParameterType.LARGEST_OBJECT,
@@ -22,11 +26,11 @@ export const SUBSCRIBE_OK_ALLOWED_PARAMS = new Set<number>([
 /**
  * REQUEST_OK (PUBLISH_OK) の許可パラメータ
  *
- * draft-ietf-moq-transport-22 §9.20.16 (EXPIRES Parameter):
+ * draft-ietf-moq-transport-23 §9.3 (PUBLISH_OK) / §9.19.16 (EXPIRES Parameter):
  * EXPIRES のみが PUBLISH_OK に出現できる。Subscription Parameters
- * (LOCATION_FILTER / FORWARD / timeouts / SUBSCRIBER_PRIORITY /
+ * (LOCATION_FILTER / PAUSED / timeouts / SUBSCRIBER_PRIORITY /
  * NEW_GROUP_REQUEST / Range Filters 等) は REQUEST_UPDATE 側で扱い、
- * PUBLISH_OK では §9.20.1 に従い PROTOCOL_VIOLATION で拒否する。
+ * PUBLISH_OK では §9.19.1 に従いセッションを閉じる。
  */
 export const PUBLISH_OK_ALLOWED_PARAMS = new Set<number>([MessageParameterType.EXPIRES]);
 
@@ -39,15 +43,14 @@ export const REQUEST_UPDATE_OK_ALLOWED_PARAMS = new Set<number>([
 /**
  * PUBLISH_STATE_NOTIFY の許可パラメータ
  *
- * draft-ietf-moq-transport-22 §9.10 (§9.20.17 LARGEST_OBJECT /
- * §9.20.18 FORWARD / §9.20.9 LOCATION_FILTER の各定義):
- * LARGEST_OBJECT (0x09) / FORWARD (0x10) / LOCATION_FILTER (0x21) のみ。
- * 上記以外を受信した場合は §9.20.1 の MUST に従い PROTOCOL_VIOLATION で
- * セッションを閉じる。
+ * draft-ietf-moq-transport-23 §9.10 / §9.19.18:
+ * LARGEST_OBJECT (0x09) / PAUSED (0x11) / LOCATION_FILTER (0x21) のみ。
+ * 上記以外を受信した場合は §9.19.1 の MUST に従いセッションを閉じる
+ * (現行の受信経路は PROTOCOL_VIOLATION として扱う)。
  */
 export const PUBLISH_STATE_NOTIFY_ALLOWED_PARAMS = new Set<number>([
   MessageParameterType.LARGEST_OBJECT,
-  MessageParameterType.FORWARD,
+  MessageParameterType.PAUSED,
   MessageParameterType.LOCATION_FILTER,
 ]);
 
@@ -93,7 +96,7 @@ export const NAMESPACE_OK_ALLOWED_PARAMS = new Set<number>([MessageParameterType
  * - OBJECT_DELIVERY_TIMEOUT (§9.20.4) / SUBGROUP_DELIVERY_TIMEOUT (§9.20.3):
  *   REQUEST_UPDATE に出現可能。
  * - SUBSCRIBER_PRIORITY (§9.20.7): REQUEST_UPDATE (for a subscription or FETCH)。
- * - FORWARD (§9.20.18): REQUEST_UPDATE (for a subscription or a
+ * - PAUSED (§9.19.18): REQUEST_UPDATE (for a subscription or a
  *   SUBSCRIBE_TRACKS request)。
  * - LOCATION_FILTER (§9.20.9): REQUEST_UPDATE (for a subscription)。
  * - NEW_GROUP_REQUEST (§9.20.19): REQUEST_UPDATE for a subscription。
@@ -116,7 +119,7 @@ export const REQUEST_UPDATE_ALLOWED_PARAMS = new Set<number>([
   MessageParameterType.OBJECT_DELIVERY_TIMEOUT,
   MessageParameterType.SUBGROUP_DELIVERY_TIMEOUT,
   MessageParameterType.SUBSCRIBER_PRIORITY,
-  MessageParameterType.FORWARD,
+  MessageParameterType.PAUSED,
   MessageParameterType.LOCATION_FILTER,
   MessageParameterType.NEW_GROUP_REQUEST,
   // draft-ietf-moq-transport-22 §9.20.15: FILL_PARAMETERS (subscription の REQUEST_UPDATE)
@@ -133,9 +136,9 @@ export const REQUEST_UPDATE_ALLOWED_PARAMS = new Set<number>([
  *
  * draft-ietf-moq-transport-22 §9.5 (REQUEST_UPDATE) の SUBSCRIBE_NAMESPACE /
  * SUBSCRIBE_TRACKS 向け一覧に対応する。
- * - SUBSCRIBE_NAMESPACE: AUTHORIZATION_TOKEN (§9.20.2) / TRACK_NAMESPACE_PREFIX (§9.20.20)
- * - SUBSCRIBE_TRACKS: AUTHORIZATION_TOKEN / FORWARD (§9.20.18) /
- *   TRACK_PROPERTY_FILTER (§9.20.14) / TRACK_NAMESPACE_PREFIX
+ * - SUBSCRIBE_NAMESPACE: AUTHORIZATION_TOKEN (§9.19.2) / TRACK_NAMESPACE_PREFIX (§9.19.20)
+ * - SUBSCRIBE_TRACKS: AUTHORIZATION_TOKEN / PAUSED (§9.19.18) /
+ *   TRACK_PROPERTY_FILTER (§9.19.14) / TRACK_NAMESPACE_PREFIX
  *
  * moqt-js は SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS を送信するため、送信経路
  * (bidiSendNamespaceRequestUpdate) の防御的検証に使う。TRACK_PROPERTY_FILTER は
@@ -145,24 +148,25 @@ export const REQUEST_UPDATE_ALLOWED_PARAMS = new Set<number>([
 export const NAMESPACE_REQUEST_UPDATE_ALLOWED_PARAMS = new Set<number>([
   MessageParameterType.TRACK_NAMESPACE_PREFIX,
   MessageParameterType.AUTHORIZATION_TOKEN,
-  MessageParameterType.FORWARD,
+  MessageParameterType.PAUSED,
   MessageParameterType.TRACK_PROPERTY_FILTER,
 ]);
 
 /**
  * PUBLISH メッセージの許可パラメータ
  *
- * draft-ietf-moq-transport-22 §9.8 (PUBLISH):
- * FORWARD / GROUP_ORDER / SUBSCRIBER_PRIORITY / SUBGROUP_DELIVERY_TIMEOUT /
+ * draft-ietf-moq-transport-23 §9.8 (PUBLISH):
+ * PAUSED / GROUP_ORDER / SUBSCRIBER_PRIORITY / SUBGROUP_DELIVERY_TIMEOUT /
  * OBJECT_DELIVERY_TIMEOUT / LOCATION_FILTER を初期 Subscription Parameters
  * として運べる。§3.6.2 により SUBSCRIBE_TRACKS 由来の PUBLISH でも明示される。
- * NEW_GROUP_REQUEST / Range Filters / FILL_PARAMETERS は PUBLISH に出現できない。
+ * NEW_GROUP_REQUEST / Range Filters は PUBLISH に出現できない
+ * (FILL_PARAMETERS は未対応のため PUBLISH では受理しない)。
  */
 export const PUBLISH_ALLOWED_PARAMS = new Set<number>([
   MessageParameterType.AUTHORIZATION_TOKEN,
   MessageParameterType.EXPIRES,
   MessageParameterType.LARGEST_OBJECT,
-  MessageParameterType.FORWARD,
+  MessageParameterType.PAUSED,
   MessageParameterType.GROUP_ORDER,
   MessageParameterType.OBJECT_DELIVERY_TIMEOUT,
   MessageParameterType.SUBGROUP_DELIVERY_TIMEOUT,
@@ -180,12 +184,14 @@ export const FETCH_OK_ALLOWED_PARAMS = new Set<number>();
 /**
  * パラメータスコープを検証する
  *
- * draft-ietf-moq-transport-22 §9.20.1:
+ * draft-ietf-moq-transport-23 §9.19.1:
  * "Each Message Parameter definition indicates the message types in
  *  which it can appear, and each control message definition lists the
  *  parameters it allows.  If a parameter appears in some other type of
- *  message, the receiving endpoint MUST close the connection with a
- *  PROTOCOL_VIOLATION."
+ *  message, the receiving endpoint MUST close the connection with
+ *  INVALID_PARAMETER."
+ * 現行の受信経路は SessionErrorCode への変換都合で PROTOCOL_VIOLATION として
+ * 扱う (エラー分類の移行は別途対応する)。
  *
  * @param params - 検証するパラメータ配列
  * @param allowed - 許可パラメータ集合

@@ -353,6 +353,45 @@ test("trackStatus: 送信失敗時に throw し pendingTrackStatus が残らな�
 });
 
 /**
+ * draft-ietf-moq-transport-23 §3.1.1 / §9.19.18:
+ * SUBSCRIBE の paused オプションが Subscriber.paused の初期値になる。
+ * 省略時は既定値 0 (unpaused) になる。
+ */
+test("subscribe: paused オプションが Subscriber.paused の初期値になる", async () => {
+  const transport = {
+    closed: new Promise<WebTransportCloseInfo>(() => {}),
+    createBidirectionalStream: async (): Promise<WebTransportBidirectionalStream> =>
+      ({
+        readable: new ReadableStream<Uint8Array>({ start() {} }),
+        writable: new WritableStream<Uint8Array>({ write() {} }),
+      }) as unknown as WebTransportBidirectionalStream,
+  } as unknown as WebTransport;
+  const session = new SessionImpl(transport, {});
+  (session as unknown as { controlWriter: ControlStreamWriter }).controlWriter =
+    new ControlStreamWriter();
+
+  const cases = [
+    { options: { paused: true }, expected: true },
+    { options: { paused: false }, expected: false },
+    { options: {}, expected: false },
+  ] as const;
+  for (const { options, expected } of cases) {
+    const promise = session.subscribe(["live"], "video", { object: () => {} }, options);
+    // SUBSCRIBE 送信と pendingSubscribe 登録が終わるまで待つ
+    await waitForMacrotask();
+    const pending = [...session.pendingSubscribe.values()][0];
+    assert.isDefined(pending);
+    assert.equal(pending!.impl.paused, expected);
+    // REQUEST_OK 待ちの promise を解放して後始末する
+    pending!.reject(new Error("test cleanup"));
+    await promise.catch(() => {});
+    session.pendingSubscribe.clear();
+  }
+
+  await session.close();
+});
+
+/**
  * controlWriter 未初期化のセッションで subscribe() を呼んでも
  * pendingSubscribe にエントリが残らないことを検証する (対応済みの回帰ガード)。
  */
@@ -940,15 +979,15 @@ function getPendingPublisher(session: SessionImpl): PublisherImpl {
 }
 
 /**
- * draft-ietf-moq-transport-22 §3.1.1 (Pausing Subscriptions):
+ * draft-ietf-moq-transport-23 §3.1.1 (Pausing Subscriptions):
  * "The initiator of the subscription sets the initial state by including the
- *  FORWARD parameter (Section 9.20.18) in PUBLISH or SUBSCRIBE."
- * publish({ forward: false }) の場合、PUBLISH_OK 受信前の時点で
- * Publisher の forwardState が false になることを検証する。
+ *  PAUSED parameter (Section 9.19.18) in PUBLISH or SUBSCRIBE."
+ * publish({ paused: true }) の場合、PUBLISH_OK 受信前の時点で
+ * Publisher の paused が true (paused) になることを検証する。
  */
-test("publish: forward false 指定時は PUBLISH_OK 受信前の forwardState が false になる", async () => {
+test("publish: paused true 指定時は PUBLISH_OK 受信前の paused が true になる", async () => {
   const { session, readableController } = createPublishSession();
-  const forwardChanges: boolean[] = [];
+  const pausedChanges: boolean[] = [];
 
   // 応答が返らないため Promise は未解決のまま残る。close 時の reject が
   // unhandled rejection にならないよう catch を付ける
@@ -956,18 +995,18 @@ test("publish: forward false 指定時は PUBLISH_OK 受信前の forwardState �
     ["live"],
     "track",
     {
-      onForwardStateChange: (forward: boolean) => {
-        forwardChanges.push(forward);
+      onPausedChange: (paused: boolean) => {
+        pausedChanges.push(paused);
       },
     },
-    { forward: false },
+    { paused: true },
   );
   promise.catch(() => {});
 
   // PUBLISH_OK 受信前の観測では指定値が反映される
-  assert.isFalse(getPendingPublisher(session).forwardState);
-  // 初期値 true からの変化のため、初期設定でもコールバックが発火する
-  assert.deepEqual(forwardChanges, [false]);
+  assert.isTrue(getPendingPublisher(session).paused);
+  // 初期値 false (unpaused) からの変化のため、初期設定でもコールバックが発火する
+  assert.deepEqual(pausedChanges, [true]);
 
   // 実解体を模倣して読み取り側を閉じてからセッションを閉じる
   readableController.close();
@@ -975,13 +1014,13 @@ test("publish: forward false 指定時は PUBLISH_OK 受信前の forwardState �
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.1.1 (Pausing Subscriptions):
- * publish({ forward: true }) の場合、PUBLISH_OK 受信前の時点で
- * Publisher の forwardState が true になることを検証する (回帰ガード)。
+ * draft-ietf-moq-transport-23 §3.1.1 (Pausing Subscriptions):
+ * publish({ paused: false }) の場合、PUBLISH_OK 受信前の時点で
+ * Publisher の paused が false (unpaused) になることを検証する (回帰ガード)。
  */
-test("publish: forward true 指定時は PUBLISH_OK 受信前の forwardState が true になる", async () => {
+test("publish: paused false 指定時は PUBLISH_OK 受信前の paused が false になる", async () => {
   const { session, readableController } = createPublishSession();
-  const forwardChanges: boolean[] = [];
+  const pausedChanges: boolean[] = [];
 
   // 応答が返らないため Promise は未解決のまま残る。close 時の reject が
   // unhandled rejection にならないよう catch を付ける
@@ -989,18 +1028,18 @@ test("publish: forward true 指定時は PUBLISH_OK 受信前の forwardState �
     ["live"],
     "track",
     {
-      onForwardStateChange: (forward: boolean) => {
-        forwardChanges.push(forward);
+      onPausedChange: (paused: boolean) => {
+        pausedChanges.push(paused);
       },
     },
-    { forward: true },
+    { paused: false },
   );
   promise.catch(() => {});
 
   // PUBLISH_OK 受信前の観測では指定値が反映される
-  assert.isTrue(getPendingPublisher(session).forwardState);
-  // 初期値 true からの変化がないため、コールバックは発火しない
-  assert.deepEqual(forwardChanges, []);
+  assert.isFalse(getPendingPublisher(session).paused);
+  // 初期値 false からの変化がないため、コールバックは発火しない
+  assert.deepEqual(pausedChanges, []);
 
   // 実解体を模倣して読み取り側を閉じてからセッションを閉じる
   readableController.close();
@@ -1008,29 +1047,29 @@ test("publish: forward true 指定時は PUBLISH_OK 受信前の forwardState �
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.18 (FORWARD Parameter):
+ * draft-ietf-moq-transport-23 §9.19.18 (PAUSED Parameter):
  * "If the parameter is omitted from any other message, the default
- *  value is 1."
- * forward を省略した publish() の場合、PUBLISH_OK 受信前の時点で
- * Publisher の forwardState が true になることを検証する (回帰ガード)。
+ *  value is 0."
+ * paused を省略した publish() の場合、PUBLISH_OK 受信前の時点で
+ * Publisher の paused が false (unpaused) になることを検証する (回帰ガード)。
  */
-test("publish: forward 省略時は PUBLISH_OK 受信前の forwardState が true になる", async () => {
+test("publish: paused 省略時は PUBLISH_OK 受信前の paused が false になる", async () => {
   const { session, readableController } = createPublishSession();
-  const forwardChanges: boolean[] = [];
+  const pausedChanges: boolean[] = [];
 
   // 応答が返らないため Promise は未解決のまま残る。close 時の reject が
   // unhandled rejection にならないよう catch を付ける
   const promise = session.publish(["live"], "track", {
-    onForwardStateChange: (forward: boolean) => {
-      forwardChanges.push(forward);
+    onPausedChange: (paused: boolean) => {
+      pausedChanges.push(paused);
     },
   });
   promise.catch(() => {});
 
-  // 省略時はデフォルト 1 (true) が反映される
-  assert.isTrue(getPendingPublisher(session).forwardState);
-  // 初期値 true からの変化がないため、コールバックは発火しない
-  assert.deepEqual(forwardChanges, []);
+  // 省略時は既定値 0 (unpaused) が反映される
+  assert.isFalse(getPendingPublisher(session).paused);
+  // 初期値 false からの変化がないため、コールバックは発火しない
+  assert.deepEqual(pausedChanges, []);
 
   // 実解体を模倣して読み取り側を閉じてからセッションを閉じる
   readableController.close();
@@ -1038,31 +1077,31 @@ test("publish: forward 省略時は PUBLISH_OK 受信前の forwardState が tru
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.16 (EXPIRES) / §9.20.18 (FORWARD Parameter):
- * PUBLISH_OK に出現できるのは EXPIRES のみであり、FORWARD は運ばれない。
- * publish({ forward: false }) の後に FORWARD 省略の PUBLISH_OK を受信した場合、
- * 初期値 false のまま維持され、更新は REQUEST_UPDATE 経路で扱うことを検証する。
+ * draft-ietf-moq-transport-23 §9.19.16 (EXPIRES) / §9.19.18 (PAUSED Parameter):
+ * PUBLISH_OK に出現できるのは EXPIRES のみであり、PAUSED は運ばれない。
+ * publish({ paused: true }) の後に PAUSED 省略の PUBLISH_OK を受信した場合、
+ * 初期値 true のまま維持され、更新は REQUEST_UPDATE 経路で扱うことを検証する。
  */
-test("publish: forward false で開始後に FORWARD 省略の PUBLISH_OK で forwardState は false のまま", async () => {
+test("publish: paused true で開始後に PAUSED 省略の PUBLISH_OK で paused は true のまま", async () => {
   const { session, readableController } = createPublishSession();
-  const forwardChanges: boolean[] = [];
+  const pausedChanges: boolean[] = [];
 
   const promise = session.publish(
     ["live"],
     "track",
     {
-      onForwardStateChange: (forward: boolean) => {
-        forwardChanges.push(forward);
+      onPausedChange: (paused: boolean) => {
+        pausedChanges.push(paused);
       },
     },
-    { forward: false },
+    { paused: true },
   );
   promise.catch(() => {});
 
   // PUBLISH_OK 受信前の観測では指定値が反映される
-  assert.isFalse(getPendingPublisher(session).forwardState);
+  assert.isTrue(getPendingPublisher(session).paused);
 
-  // FORWARD 省略の PUBLISH_OK を応答する
+  // PAUSED 省略の PUBLISH_OK を応答する
   const writer = new ControlStreamWriter();
   const okPayload = encodeRequestOkPayload({
     type: MessageType.REQUEST_OK,
@@ -1072,45 +1111,45 @@ test("publish: forward false で開始後に FORWARD 省略の PUBLISH_OK で fo
   readableController.enqueue(writer.encode(MessageType.REQUEST_OK, okPayload));
   readableController.close();
 
-  // PUBLISH_OK では forwardState を上書きせず、初期値 false のまま解決される
+  // PUBLISH_OK では paused を上書きせず、初期値 true のまま解決される
   const publisher = await promise;
-  assert.isFalse(publisher.forwardState);
+  assert.isTrue(publisher.paused);
   // 発火は初期設定の 1 回のみになる
-  assert.deepEqual(forwardChanges, [false]);
+  assert.deepEqual(pausedChanges, [true]);
 
   await session.close();
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.16 / §9.20.1:
- * FORWARD は PUBLISH_OK に出現できない。FORWARD=0 の PUBLISH_OK を受信した場合、
+ * draft-ietf-moq-transport-23 §9.19.16 / §9.19.1:
+ * PAUSED は PUBLISH_OK に出現できない。PAUSED=1 の PUBLISH_OK を受信した場合、
  * スコープ違反として PROTOCOL_VIOLATION でセッションが閉じ、発行が
  * 失敗することを検証する。
  */
-test("publish: forward false で開始後に FORWARD=0 の PUBLISH_OK でセッションが閉じる", async () => {
+test("publish: paused true で開始後に PAUSED=1 の PUBLISH_OK でセッションが閉じる", async () => {
   const { session, readableController } = createPublishSession();
-  const forwardChanges: boolean[] = [];
+  const pausedChanges: boolean[] = [];
 
   const promise = session.publish(
     ["live"],
     "track",
     {
-      onForwardStateChange: (forward: boolean) => {
-        forwardChanges.push(forward);
+      onPausedChange: (paused: boolean) => {
+        pausedChanges.push(paused);
       },
     },
-    { forward: false },
+    { paused: true },
   );
   promise.catch(() => {});
 
   // PUBLISH_OK 受信前の観測では指定値が反映される
-  assert.isFalse(getPendingPublisher(session).forwardState);
+  assert.isTrue(getPendingPublisher(session).paused);
 
-  // FORWARD=0 の PUBLISH_OK を応答する (スコープ違反)
+  // PAUSED=1 の PUBLISH_OK を応答する (スコープ違反)
   const writer = new ControlStreamWriter();
   const okPayload = encodeRequestOkPayload({
     type: MessageType.REQUEST_OK,
-    parameters: [{ type: MessageParameterType.FORWARD, value: new Uint8Array([0]) }],
+    parameters: [{ type: MessageParameterType.PAUSED, value: new Uint8Array([1]) }],
     trackProperties: [],
   });
   readableController.enqueue(writer.encode(MessageType.REQUEST_OK, okPayload));
@@ -1129,7 +1168,7 @@ test("publish: forward false で開始後に FORWARD=0 の PUBLISH_OK でセッ�
   assert.isTrue(rejected instanceof SessionError);
   assert.equal((rejected as SessionError).code, SessionErrorCode.PROTOCOL_VIOLATION);
   assert.equal((session as unknown as { sessionState: string }).sessionState, "closed");
-  assert.deepEqual(forwardChanges, [false]);
+  assert.deepEqual(pausedChanges, [true]);
 
   await session.close();
 });
@@ -1145,7 +1184,7 @@ test("publish: notifyStateChange が LARGEST_OBJECT 付きの PUBLISH_STATE_NOTI
 
   const promise = session.publish(["live"], "track");
   promise.catch(() => {});
-  // FORWARD 省略の PUBLISH_OK を応答して購読を確立する
+  // PAUSED 省略の PUBLISH_OK を応答して購読を確立する
   const writer = new ControlStreamWriter();
   const okPayload = encodeRequestOkPayload({
     type: MessageType.REQUEST_OK,
@@ -1157,8 +1196,8 @@ test("publish: notifyStateChange が LARGEST_OBJECT 付きの PUBLISH_STATE_NOTI
 
   // Object を送信して LARGEST_OBJECT を既知にする
   await publisher.sendObject({ groupId: 3, objectId: 4, payload: new Uint8Array([1, 2, 3]) });
-  // 変化した forwardState を購読者へ通知する
-  await publisher.notifyStateChange({ forward: false });
+  // 変化した paused を購読者へ通知する
+  await publisher.notifyStateChange({ paused: true });
 
   // リクエストストリームへ write されたメッセージ列から PUBLISH_STATE_NOTIFY を取り出す
   const messages = new ControlStreamReader().feed(concatUint8Arrays(written));
@@ -1172,14 +1211,14 @@ test("publish: notifyStateChange が LARGEST_OBJECT 付きの PUBLISH_STATE_NOTI
   );
   assert.isDefined(largestParam);
   assert.deepEqual(getParameterLocationValue(largestParam!), { group: 3n, object: 4n });
-  // FORWARD は変化後の値 (0) を報告する
-  const forwardParam = decoded.parameters.find(
-    (param) => param.type === MessageParameterType.FORWARD,
+  // PAUSED は変化後の値 (1 = paused) を報告する
+  const pausedParam = decoded.parameters.find(
+    (param) => param.type === MessageParameterType.PAUSED,
   );
-  assert.isDefined(forwardParam);
-  assert.deepEqual([...forwardParam!.value], [0]);
-  // 送信できた変更は publisher の forwardState へ反映される
-  assert.isFalse(publisher.forwardState);
+  assert.isDefined(pausedParam);
+  assert.deepEqual([...pausedParam!.value], [1]);
+  // 送信できた変更は publisher の paused へ反映される
+  assert.isTrue(publisher.paused);
 
   readableController.close();
   await session.close();
@@ -1550,7 +1589,7 @@ function buildIncomingPublishChunks(
  *   RESET_STREAM なら source: "stream" を持つ reject、内部例外なら source なし reject、
  *   セッション終了なら source: "session" を持つ reject、FIN なら close
  * @param extraFrames - PUBLISH の後に enqueue する追加フレーム (GOAWAY / PUBLISH_DONE など)
- * @param parameters - PUBLISH の初期パラメータ (FORWARD 等の検証用)
+ * @param parameters - PUBLISH の初期パラメータ (PAUSED 等の検証用)
  * @param writable - PUBLISH_OK 書き込み先。失敗を再現する場合は reject する sink を渡す
  * @param trackName - PUBLISH の Track Name (alias 再利用の検証用)
  * @param requestId - PUBLISH の Request ID (受信 ID は使い捨てのため再利用時は別値を使う)
@@ -5689,7 +5728,7 @@ test("ピア起点の終了後は Subscriber.update() が reject する", async 
 
   let thrown: Error | undefined;
   try {
-    await subscriber.update({ forward: false });
+    await subscriber.update({ paused: true });
   } catch (error) {
     thrown = error instanceof Error ? error : new Error(String(error));
   }
@@ -8679,7 +8718,7 @@ test("受信 PUBLISH ストリーム上の PUBLISH_STATE_NOTIFY で subscriber �
     },
   });
 
-  // LARGEST_OBJECT ({7, 2}) + FORWARD=0 を通知し、その後 FIN する
+  // LARGEST_OBJECT ({7, 2}) + PAUSED=1 (paused) を通知し、その後 FIN する
   const writer = new ControlStreamWriter();
   const notifyFramed = writer.encode(
     MessageType.PUBLISH_STATE_NOTIFY,
@@ -8690,7 +8729,7 @@ test("受信 PUBLISH ストリーム上の PUBLISH_STATE_NOTIFY で subscriber �
           type: MessageParameterType.LARGEST_OBJECT,
           value: new Uint8Array([0x07, 0x02]),
         },
-        { type: MessageParameterType.FORWARD, value: new Uint8Array([0]) },
+        { type: MessageParameterType.PAUSED, value: new Uint8Array([1]) },
       ],
     }),
   );
@@ -8706,7 +8745,7 @@ test("受信 PUBLISH ストリーム上の PUBLISH_STATE_NOTIFY で subscriber �
   // 通知内容が反映される。後続 FIN による error 通知は別経路の既存挙動
   assert.isDefined(subscriber);
   assert.deepEqual(subscriber!.largestLocation, { group: 7n, object: 2n });
-  assert.isFalse(subscriber!.forwardState);
+  assert.isTrue(subscriber!.paused);
   assert.isDefined(notifiedError);
   assert.equal(internal.sessionState, "connected");
 });
@@ -8862,7 +8901,7 @@ test("受信 PUBLISH ストリーム上の REQUEST_OK で閉じた後は同一�
 
 /**
  * draft-ietf-moq-transport-22 §9.8:
- * 受信 PUBLISH に Subscription Parameters (FORWARD / timeouts /
+ * 受信 PUBLISH に Subscription Parameters (PAUSED / timeouts /
  * SUBSCRIBER_PRIORITY / LOCATION_FILTER) が含まれても、スコープ検証を通過し
  * セッションが閉じないことを検証する。
  */
@@ -8877,10 +8916,10 @@ test("受信 PUBLISH の Subscription Parameters は PROTOCOL_VIOLATION にな�
     },
   });
 
-  // FORWARD + 新規 4 種 (timeouts 2 種 / PRIORITY / LOCATION_FILTER) を
+  // PAUSED + 新規 4 種 (timeouts 2 種 / PRIORITY / LOCATION_FILTER) を
   // 含む PUBLISH を注入し、その後 FIN する
   const parameters = [
-    { type: MessageParameterType.FORWARD, value: new Uint8Array([1]) },
+    { type: MessageParameterType.PAUSED, value: new Uint8Array([1]) },
     { type: MessageParameterType.OBJECT_DELIVERY_TIMEOUT, value: new Uint8Array([0x05]) },
     { type: MessageParameterType.SUBGROUP_DELIVERY_TIMEOUT, value: new Uint8Array([0x06]) },
     { type: MessageParameterType.SUBSCRIBER_PRIORITY, value: new Uint8Array([10]) },
@@ -8898,7 +8937,7 @@ test("受信 PUBLISH の Subscription Parameters は PROTOCOL_VIOLATION にな�
 
   // スコープ違反ではないためセッションは閉じず、購読が確立する
   assert.isDefined(subscriber);
-  assert.isTrue(subscriber!.forwardState);
+  assert.isTrue(subscriber!.paused);
   assert.equal(internal.sessionState, "connected");
 });
 
@@ -9157,12 +9196,12 @@ test("受信 PUBLISH の許可外パラメータでセッションが閉じる",
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.17 (LARGEST OBJECT) / §9.20.8 (GROUP ORDER) /
- * §9.20.18 (FORWARD) / §3.3.1:
- * 受信 PUBLISH に値域外の FORWARD / GROUP_ORDER、End Group 超過の
+ * draft-ietf-moq-transport-23 §9.19.17 (LARGEST OBJECT) / §9.19.8 (GROUP ORDER) /
+ * §9.19.18 (PAUSED) / §3.3.1:
+ * 受信 PUBLISH に値域外の PAUSED / GROUP_ORDER、End Group 超過の
  * LOCATION_FILTER、Location 構造が不正な LARGEST_OBJECT が含まれる場合、
  * PROTOCOL_VIOLATION でセッションを閉じることを検証する。
- * FORWARD / GROUP_ORDER / LARGEST_OBJECT はデコード層で先に検出され、
+ * PAUSED / GROUP_ORDER / LARGEST_OBJECT はデコード層で先に検出され、
  * LOCATION_FILTER 超過は初期パラメータ反映時に検出される。
  * いずれも PROTOCOL_VIOLATION で閉じ、どの検証で落ちたかをメッセージで固定する。
  */
@@ -9175,9 +9214,9 @@ test("受信 PUBLISH の不正なパラメータでセッションが閉じる",
     message: string;
   }> = [
     {
-      name: "FORWARD の値域外",
-      parameters: [{ type: MessageParameterType.FORWARD, value: new Uint8Array([2]) }],
-      message: "invalid FORWARD value",
+      name: "PAUSED の値域外",
+      parameters: [{ type: MessageParameterType.PAUSED, value: new Uint8Array([2]) }],
+      message: "invalid PAUSED value",
     },
     {
       name: "GROUP_ORDER の値域外",
