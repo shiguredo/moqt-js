@@ -55,9 +55,9 @@ CI の relay ジョブは `timeout-minutes: 20` で、2 shard (`--shard=N/2`) �
 
 1. `announceNamespace: true` で publisher を開始し、PUBLISH_NAMESPACE の REQUEST_OK が返って `"publishing"` になるまで待つ
 2. 別ページで `SUBSCRIBE_NAMESPACE` を開始し、告知された namespace が NAMESPACE で届くのを待つ
-3. 発見した namespace をそのまま `startSubscriber` に渡し、`"active"` かつ `framesReceived > 0`、`hasCatalog` / `hasVideoTrack` / `bytesReceived > 0` になるまで待つ
+3. 発見した namespace (`namespaces.find` で取り出した配列) をそのまま `startSubscriber` に渡し、`"active"` かつ `framesReceived > 0`、`keyFramesReceived > 0`、`hasCatalog` / `hasVideoTrack` / `bytesReceived > 0` になるまで待つ
 4. 購読の間、告知が撤回されていない (対象 namespace の NAMESPACE_DONE を受けていない) ことも確認する
-5. 後始末で購読、subscriber、publisher を止め、ページを閉じる
+5. 後始末で subscriber、namespace の購読、publisher を止め、ページを閉じる
 
 既存の `namespace-announcement.spec.ts` に足さず新しい spec に分けた。既存 spec は告知と発見の往復だけを見ており、購読を足すと 1 本のテストが 2 つの契約 (往復と視聴の通し) を持ち、失敗時にどちらが壊れたかを切り分けにくくなるためである。
 
