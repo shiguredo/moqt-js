@@ -3,7 +3,7 @@
 - Created: 2026-11-03
 - Completed: {YYYY-MM-DD}
 - Branch: feature/change-goaway-request-direction
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-11-03
 
 ## 目的
 
@@ -34,7 +34,7 @@ draft 23 §9.2 は request stream の GOAWAY を元の要求の受信者だけ�
 - `refs/moq/draft-ietf-moq-transport-23.txt` §9.2
 - `src/session/incomingPublish.ts` の `incomingPublishRunStreamSubLoop`
 - `src/session/bidi.ts` の `bidiHandleRequestStreamGoaway`、`src/session/namespaceLoops.ts`
-- `issues/0891-add-high-level-goaway-migration.md`
+- `issues/closed/0891-add-high-level-goaway-migration.md`
 
 ## 解決方法
 
