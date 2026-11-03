@@ -169,6 +169,15 @@ test("実リレーで発見した namespace の track を購読して映像を�
       )
       .toBeGreaterThan(0);
 
+    // キーフレームの受信後にも、対象の namespace の NAMESPACE_DONE を受けていない
+    const midSubscriptionStatus = await observer.evaluate(
+      (id) => window.__moqtE2E.getSubscribeNamespace(id),
+      activeSubscriptionId,
+    );
+    expect(
+      midSubscriptionStatus.done.some((candidate) => matchesNamespace(candidate, namespace)),
+    ).toBe(false);
+
     // 失敗を握り潰していないことと、購読が active であることを確かめる
     const subscriberStatus = await observer.evaluate(
       (id) => window.__moqtE2E.getSubscriber(id),
