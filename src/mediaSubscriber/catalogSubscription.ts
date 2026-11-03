@@ -87,7 +87,11 @@ interface CatalogSubscriptionDependencies {
   readonly session: () => Session | null;
   /** 利用者の onError への通知。通知の例外は呼び出し元の経路へそのまま伝わる */
   readonly reportError: (error: Error) => void;
-  /** 利用者の onGoaway への通知 (リクエストストリームの GOAWAY の新しい Session URI) */
+  /**
+   * 利用者の onGoaway への通知 (リクエストストリームの GOAWAY の新しい Session URI)
+   *
+   * 通知の例外は呼び出し元へ伝えない (後始末を止めないため)。
+   */
   readonly reportGoaway: (newSessionUri: string) => void;
   /** PUBLISH_DONE の終了通知 (購読の失敗として扱うかの判定は MediaSubscriberImpl が持つ) */
   readonly handlePublishDone: (publishDone: PublishDoneInfo) => void;
@@ -335,6 +339,7 @@ export class CatalogSubscription {
             // FETCH 失敗時もバッファを破棄せずドレインする（Catalog は初回待ちのため）
             this.finishCatalogFetchPhase();
           },
+          goaway: (newSessionUri) => this.deps.reportGoaway(newSessionUri),
         },
       )
       .catch(() => {

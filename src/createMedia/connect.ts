@@ -3,7 +3,7 @@
  *
  * 2 クラスが一字一句同一だった接続処理を 1 箇所に集約する。
  * 接続オプションの組み立て (証明書ハッシュ / 認可トークン / pending subgroup) と、
- * セッションの close / error を各クラスのコールバックへ橋渡しする。
+ * セッションの close / error / goaway を各クラスのコールバックへ橋渡しする。
  */
 
 import { connect } from "../connect";
@@ -28,12 +28,14 @@ export interface MediaConnectSettings {
   /**
    * GOAWAY 受信の通知 (新しい Session URI)
    *
-   * draft-ietf-moq-transport-22 §9.2:
-   * "If the GOAWAY includes a new Session URI, the client MUST use that URI
-   *  for the new session."
+   * draft-ietf-moq-transport-22 §9.2 (根拠の仕様はドラフトであり将来変更される
+   * 可能性がある):
+   * "The client MUST use this URI for the new session if provided. If the URI
+   *  is zero bytes long, the current URI is reused instead."
    * 高レベル API は再接続を自動で行わないため、URI をアプリへ渡す。
+   * 新しい Session URI が 0 バイトのときは空文字列が渡る (現在の URI を再利用する)。
    */
-  onSessionGoaway?(newSessionUri: string): void;
+  onSessionGoaway(newSessionUri: string): void;
 }
 
 /**
@@ -46,7 +48,7 @@ export async function connectMediaSession(settings: MediaConnectSettings): Promi
   const connectCallbacks: ConnectCallbacks = {
     close: () => settings.onSessionClose(),
     error: (error) => settings.onSessionError(error),
-    goaway: (newSessionUri) => settings.onSessionGoaway?.(newSessionUri),
+    goaway: (newSessionUri) => settings.onSessionGoaway(newSessionUri),
   };
 
   const connectOptions: ConnectOptions = {};

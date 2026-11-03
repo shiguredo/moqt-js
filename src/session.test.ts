@@ -4380,6 +4380,47 @@ test("startControlMessageLoop: アプリコールバックの throw ではセッ
 });
 
 /**
+ * 完了条件: 制御ストリームの GOAWAY の新しい Session URI がアプリの goaway
+ * コールバックへそのまま渡る。
+ */
+test("startControlMessageLoop: GOAWAY の新しい Session URI を goaway コールバックへ渡す", async () => {
+  const goawayUris: string[] = [];
+  const transport = {
+    closed: new Promise<WebTransportCloseInfo>(() => {}),
+  } as unknown as WebTransport;
+  const session = new SessionImpl(transport, {
+    goaway: (newSessionUri) => {
+      goawayUris.push(newSessionUri);
+    },
+  });
+  const internal = session as unknown as {
+    sessionState: SessionState;
+    controlReceiveStream?: ReadableStream<Uint8Array>;
+    controlReader?: ControlStreamReader;
+    startControlMessageLoop(): void;
+  };
+  let controller!: ReadableStreamDefaultController<Uint8Array>;
+  internal.controlReceiveStream = new ReadableStream<Uint8Array>({
+    start(c) {
+      controller = c;
+    },
+  });
+  internal.controlReader = new ControlStreamReader();
+  internal.sessionState = "connected";
+  internal.startControlMessageLoop();
+
+  const goawayPayload = encodeGoawayPayload({
+    type: MessageType.GOAWAY,
+    newSessionUri: "moqt://new.example.com",
+    timeout: 0n,
+  });
+  controller.enqueue(new ControlStreamWriter().encode(MessageType.GOAWAY, goawayPayload));
+  await yieldToMacrotask();
+
+  assert.deepEqual(goawayUris, ["moqt://new.example.com"]);
+});
+
+/**
  * draft-ietf-moq-transport-22 §12.1:
  * FETCH 応答で同一 Group・同一 Subgroup の Publisher Priority 不一致を検出しても
  * セッションが閉じず、対象 FETCH がキャンセルされることを検証する。

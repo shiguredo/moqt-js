@@ -687,7 +687,8 @@ export function sessionHandleGoaway(
 
   session.receivedGoaway = true;
 
-  // GOAWAY コールバックを呼び出す
+  // GOAWAY コールバックを呼び出す。アプリのコールバック例外は制御ループの catch が
+  // callbacks.error へ流し、セッションは閉じない (startControlMessageLoop の契約)
   session.callbacks.goaway?.(msg.newSessionUri);
 
   // draft-ietf-moq-transport-22 Section 6.6.1:
