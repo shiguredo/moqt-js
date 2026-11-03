@@ -3,7 +3,7 @@
 - Created: 2026-11-03
 - Completed: {YYYY-MM-DD}
 - Branch: feature/change-moqt-draft-23
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-11-03
 
 ## 目的
 
@@ -111,7 +111,9 @@ MSF-01 自体は今回更新されておらず、§§9 / 10 と normative refere
 
 ## 設計方針
 
-- transport の必須変更 0894〜0915 を終えてから `src/connect.ts` を moqt-23 に切り替える。新しいワイヤを旧識別子で送らない
+- `CODEBASE.md` のクライアント用途に限定する根拠の仕様引用は、最初に `shiguredo-git` の特別ルールに従い、`develop` 上で単独の「整備」コミットとして同期する
+- そのコミットを含む `develop` から `feature/change-moqt-draft-23` を作り、transport の必須変更 0894〜0915 をその上に積む。各 issue を `develop` へ先行マージ・配布せず、必須変更、`src/connect.ts` の moqt-23 への切替、`CODEBASE.md` を除く関連する仕様参照の更新を揃えた単一 PR で `develop` へ一括反映する
+- 移行途中の統合ブランチでは codec / Session の単体検証を行い、実ピアへ接続しない。実リレー接続・E2E は必須変更と識別子の切替を揃えた後に行い、新しいワイヤを旧識別子で送らない
 - companion の対応範囲は 0916〜0924 の実装状況と一致させる。未実装の任意拡張まで一括で対応済みとしない
 - README、CODEBASE、API 文書とソース・テストの参照を新版の根拠へ更新する。§9.12 以降、§9.20 → §9.19、§7.4 以降、§16.11 → §16.12 などは本文の意味とともに確認する
 - 既存 0669 / 0670 の一般的な誤記・API 文書修正、0865 の catalog fill 変更、0891 の高レベル GOAWAY 通知を重複実装しない。移行に直接必要な前提は相互参照して更新する
@@ -121,7 +123,8 @@ MSF-01 自体は今回更新されておらず、§§9 / 10 と normative refere
 
 ## 完了条件
 
-- transport 必須変更を満たし、接続時に moqt-23 を提示する
+- transport 必須変更を満たし、接続時に moqt-23 を提示する。必須変更・識別子切替・`CODEBASE.md` を除く関連する仕様参照の更新を単一 PR で一括反映し、旧識別子のまま新ワイヤを配布しない
+- `CODEBASE.md` の単独同期を先に完了し、そのコミットを統合ブランチに含める。解決方法の記録と closed への移動を作業ブランチ上で PR マージ前に行えるよう、マージ後にしか満たせない作業を残さない
 - ソース・公開型・README / API 文書が同じ対応版と制限を説明する
 - 上表の既存対応と対象外の判断を再確認し、実装で前提が変わった項目を放置しない
 - `vp check` / `vp run typecheck` / `vp test run` / `vp run build` / `vp run build:devtools` が通る
