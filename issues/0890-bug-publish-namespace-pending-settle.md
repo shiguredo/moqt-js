@@ -1,7 +1,7 @@
 # publishNamespace の送信待ちの間に Session が終了すると待ちが settle しない
 
 - Created: 2026-11-02
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-03
 - Branch: feature/fix-publish-namespace-pending-settle
 - Polished: 2026-11-03
 
@@ -64,7 +64,32 @@
 
 ## 解決方法
 
-{未着手}
+`src/session/namespaces.ts` の `namespacesPublishNamespace` を `async` 関数から同期関数に変え、Promise を送信より先に作って返すようにした。ストリームの作成と `PUBLISH_NAMESPACE` の書き込みは detached な `namespacesSendPublishNamespace` が行う。これにより、送信待ちの間に Session が終了しても呼び出し元の Promise が settle する。
+
+- `src/session.ts` の `SessionImpl` に `pendingNamespacePublication: Map<bigint, { reject }>` を追加した。`namespacesPublishNamespace` は Promise の作成時に `reject` を登録し、送信が完了したら削除して `namespacePublications` に登録する
+- `src/session/lifecycle.ts` の `sessionRejectPendingRequests` が `pendingNamespacePublication` を走査して reject するようにした
+- 送信の失敗 (ストリーム作成 / reader / writer の取得 / 認可トークンの予約 / write) では、元のエラーで reject してから取得済みリソースを解放する。後始末の await 中に Session が終了して汎用エラーで reject されるのを避けるためである
+- ストリーム作成の await を抜けた直後と write の完了後に Session の状態を再確認し、終了していれば登録せずに reject してストリームを解放する
+- Promise の executor でも Session の状態を再確認し、デバッグコールバックが同期的に Session を閉じた場合は登録せず reject する
+- `sessionHasOpenSubscriptionsOrFetches` には `pendingNamespacePublication` を加えなかった。加えると GOAWAY 受信後の drain 判定が送信待ちで保留されるが、送信完了後に close 条件を再評価する経路が無く、セッションが開いたまま残る経路を新たに作るためである
+- 送信中の GOAWAY の再確認は issue の完了条件外のため実装していない (API 呼び出し時点で開始済みと解釈する)。入口の `receivedGoaway` 検査は既存のまま
+
+テストは `src/session.test.ts` に次を追加・更新した。
+
+- 送信待ち (write の await 中) の自前 close / ピア起点 close で Promise が reject する
+- ストリーム作成待ちの間に close した場合も reject し、作成されたストリームをロックを取らずに解放する
+- write が完了した時点で Session が終了していれば、`"session closed"` を理由にストリームを解放する
+- getReader / getWriter の取得失敗で、取得済みの reader と作成済みの raw ストリームを解放し、元のエラーで reject する
+- デバッグコールバックが同期的に close した場合に、ストリームを作らず reject する
+- write 失敗時に `pendingNamespacePublication` が残らず、REGISTER トークンの予約が取り消される (予約後の 18n を観測してから失敗させる)
+- 送信前の throw (デバッグコールバック) ではストリームを作らない
+- 既存の「送信前の throw でもストリームリソースを掃除する」を、新しい契約 (ストリームを作らない) に合わせて更新した
+
+`docs/LOW_LEVEL_API.md` の「Namespace 系の扱い」と `src/session.ts` の `Session.publishNamespace` の JSDoc を、送信待ちの間の Session 終了でも reject する契約に書き換えた。`src/session/types.ts` の `NamespacePublicationState.reject` の JSDoc も更新した。
+
+`CHANGES.md` は CODEBASE.md の「MOQT RFC ドラフト中の特別ルール」により更新していない。
+
+`vp check` と `vp test --run` が通ることを確認している。
 
 ## 参照
 
