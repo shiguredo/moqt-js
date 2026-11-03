@@ -2625,6 +2625,33 @@ test("GOAWAY: onGoaway を省略しても告知の確立前の失敗は onError 
 /**
  * 完了条件: onGoaway を省略しても、GOAWAY の通知そのもので start が壊れない。
  */
+/**
+ * 完了条件: stop() -> start() で新しい接続を張ったとき、前の接続で抑止した
+ * 同じ URI の GOAWAY を再度通知する (抑止の状態を接続に引き継がない)。
+ */
+test("GOAWAY: 再接続後は前の接続で抑止した URI を再度通知する", async () => {
+  const goawayUris: string[] = [];
+  const { publisher, opened } = createStartConnectHarness(
+    {
+      onGoaway: (newSessionUri) => {
+        goawayUris.push(newSessionUri);
+      },
+    },
+    { publisherOptions: { namespace: ["live"], announceNamespace: true } },
+  );
+  await publisher.start({} as MediaStream);
+  opened[0].notifySessionGoaway("https://example.com/shared");
+  assert.deepEqual(goawayUris, ["https://example.com/shared"]);
+
+  await publisher.stop();
+  await publisher.start({} as MediaStream);
+  // 2 回目の接続でも同じ URI を通知する
+  opened[1].notifySessionGoaway("https://example.com/shared");
+  assert.deepEqual(goawayUris, ["https://example.com/shared", "https://example.com/shared"]);
+
+  await publisher.close();
+});
+
 test("GOAWAY: onGoaway を省略しても GOAWAY の通知で start が壊れない", async () => {
   const { publisher, errors, opened } = createStartConnectHarness(undefined, {
     publisherOptions: { namespace: ["live"], announceNamespace: true },
