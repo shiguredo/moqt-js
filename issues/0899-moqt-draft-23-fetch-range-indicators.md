@@ -3,7 +3,7 @@
 - Created: 2026-11-03
 - Completed: {YYYY-MM-DD}
 - Branch: feature/change-fetch-range-indicators
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-11-03
 
 ## 目的
 
@@ -17,7 +17,7 @@ draft 23 §11.4.2 は End of Range の Group / Object ID を文脈依存の delt
 
 ## 設計方針
 
-- 先頭 indicator は絶対値、後続は Group Order に応じた Group Delta を使う。Group Delta=0 の Object ID は prior + delta + 1、Group 変更時は絶対 Object ID とする
+- FETCH_HEADER 直後の先頭エントリーが indicator の場合だけ、Group / Object ID を絶対値とする。通常 Object の後で初めて現れる indicator も含め、それ以外では直前の Object / indicator を基準にする。Group ID は Ascending で prior + Group Delta、Descending で prior - Group Delta とし、通常 Object の Group Delta の +1 を加えない。Group Delta=0 の Object ID は prior + Object Delta + 1、Group 変更時は絶対 Object ID とする
 - 直前の Object だけでなく直前の indicator も ID の基準にする。Priority / Subgroup ID は最後の実 Object から保持し、実 Object が無い継承参照を拒否する
 - Gone (0x40C) を Unknown / Timed-Out / Does Not Exist と区別する。Gone は別の配信元から後で Object が届いても矛盾にならない
 - indicator に Payload Length やダミー Object を追加しない。負数・上限超過は DELTA_ENCODING_OVERFLOW にする
@@ -25,7 +25,7 @@ draft 23 §11.4.2 は End of Range の Group / Object ID を文脈依存の delt
 
 ## 完了条件
 
-- 4 種の indicator、先頭、連続、Group Delta=0 / 非 0、両 Group Order を固定ワイヤで検証する
+- 4 種の indicator、FETCH_HEADER 直後、通常 Object の後に初めて現れる indicator、連続、Group Delta=0 / 非 0、両 Group Order を固定ワイヤで検証する
 - indicator 後の通常 Object の ID / Priority / Subgroup が正しく復元される
 - Gone 後の実 Object を受理し、非存在との矛盾は 0901 の判定へ接続する
 - 不完全な indicator と arithmetic overflow を検証する
