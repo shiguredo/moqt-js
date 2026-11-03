@@ -3,7 +3,7 @@
 - Created: 2026-11-03
 - Completed: {YYYY-MM-DD}
 - Branch: feature/change-fetch-request-ok
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-11-03
 
 ## 目的
 
@@ -19,8 +19,9 @@ draft 23 §3.2 / §9.3 は FETCH 成功応答を REQUEST_OK (0x07) に統合し�
 ## 設計方針
 
 - FETCH の応答を REQUEST_OK として decode し、EXPIRES / LARGEST_OBJECT と Track Properties を受け取る。旧 0x18 は予約値として扱う
-- 終端は FETCH の要求 End Location と、応答に存在する LARGEST_OBJECT から §3.2 に従って確定する。要求に上限が無い場合も扱い、Largest Object が「到着中」である意味を保つ
-- 応答から削除された End Of Track を仮定しない。0900 の End of Track indicator と接続し、Fetcher の公開情報をいつ確定できるか定義する
+- 終端は FETCH の要求 End Location と、応答に存在する LARGEST_OBJECT から §3.2 に従って応答受理時に確定する。Largest Object が要求範囲内ならその位置、範囲外なら要求 End を使う。None / 終端なしの要求では LARGEST_OBJECT が必要になる。Largest Object が「到着中」である意味を保つ
+- `Fetcher.endLocation: Location` は応答がカバーする範囲の inclusive な上限とする。Type 0x03 で LARGEST_OBJECT による終端が得られない場合は `{ group: StartGroup + EndGroupDelta, object: 2^64-1 }` に正規化する。この Object ID は Group 全体を含む境界値であり、実在する最後の Object ID だとは説明しない。後続データの最後の実 Object に合わせて書き換えない
+- `Fetcher.endOfTrack` は「Track 終端を確認済み」の boolean とし、応答受理時は false とする。false は Track が今後も続くことを保証しない。0900 で End of Track indicator を処理した時に true に更新し、単なる FETCH FIN では変更しない。応答から削除された End Of Track を仮定しない
 - 相対 Location Filter (Type 0x01) の FETCH は §3.2 で INVALID_RANGE になったため、公開送信 API では副作用前に拒否する。Type 0x05 (Next Object) も既存 Object の範囲にならないため拒否する。None と絶対指定を扱い、この制約を共用 codec や fill 内側に適用しない。fill の相対指定は §3.4 / §3.5 が引き続き使う
 - fill fetch は REQUEST_OK の FETCH 応答を持たない別経路であるため、初期購読の LARGEST_OBJECT からの範囲解決を混同しない
 
@@ -29,7 +30,8 @@ draft 23 §3.2 / §9.3 は FETCH 成功応答を REQUEST_OK (0x07) に統合し�
 - REQUEST_OK 成功、旧 0x18、EXPIRES / LARGEST_OBJECT、Track Properties と未知 Mandatory Property を検証する
 - 終端が要求内 / 要求外 / 未指定のケース、1 Object の範囲、到着中の Largest Object を検証する
 - 相対指定の送信拒否と絶対指定の受理を検証する
-- Fetcher の公開型と API 文書が削除済みフィールドを必須としない
+- Type 0x03 と LARGEST_OBJECT 省略の成功応答で Group 上限の endLocation が得られ、実 Object の最終位置と混同されない
+- Fetcher の公開型と API 文書が削除済みフィールドを必須とせず、endLocation の境界値と endOfTrack の確認時点を説明する
 
 ## 参照
 
