@@ -1,7 +1,7 @@
 # 高レベル API で GOAWAY の新しい Session URI を使った再接続ができない
 
 - Created: 2026-11-02
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-03
 - Branch: feature/add-high-level-goaway-migration
 - Polished: 2026-11-03
 
@@ -48,7 +48,26 @@ draft-ietf-moq-transport-22 §9.2 は、GOAWAY で新しい Session URI が提�
 
 ## 解決方法
 
-{未着手}
+高レベル API に GOAWAY の通知だけを追加した。自動移行 (新しい Session を張り直して購読 / PUBLISH を引き継ぐ) は issue の設計方針どおり対象外とした。
+
+- `src/codec/types.ts` の `MediaSubscriberCallbacks` / `MediaPublisherCallbacks` に `onGoaway?: (newSessionUri: string) => void` を追加した。Session の制御ストリーム由来とリクエストストリーム由来の両方で呼ばれ得ること、同じ URI の通知は 1 回に抑止すること、`onGoaway` の後に `onClose` が続くことを JSDoc に書いた
+- `src/createMedia/connect.ts` の `MediaConnectSettings` に `onSessionGoaway` を追加し、`connectMediaSession` で `ConnectCallbacks.goaway` に配線した
+- `src/createMediaSubscriber.ts` に `notifyGoaway` を追加し、Session の GOAWAY、catalog の購読、音声・映像の購読の `SubscribeCallbacks.goaway` を `onGoaway` へ流すようにした。同じ URI は 1 回に抑止する。`src/mediaSubscriber/catalogSubscription.ts` の `CatalogSubscriptionDependencies` に `reportGoaway` を追加した
+- `src/createMediaPublisher.ts` に `notifyGoaway` を追加し、Session の GOAWAY と `announceNamespace` の `NamespacePublicationCallbacks.goaway` を `onGoaway` へ流すようにした。同じ URI は 1 回に抑止する
+- `docs/HIGH_LEVEL_API.md` の「GOAWAY の扱い」を、「`onGoaway` で新しい Session URI を受け取り、アプリが再接続する。ライブラリは自動移行しない」という契約に書き換えた。「§9.2 の MUST を高レベル API では満たせない」という記述を削除し、`onGoaway` と `onClose` の順序、省略時の挙動を書いた
+
+テストは `src/createMediaSubscriber.lifecycle.test.ts` と `src/createMediaPublisher.test.ts` に追加した。
+
+- subscriber: Session の制御ストリーム由来と購読のリクエストストリーム由来の GOAWAY で `onGoaway` が URI を受け取り、同じ URI は 1 回に抑止される
+- subscriber: `onGoaway` を省略しても、購読の `error` コールバックの失敗が従来どおり `onError` に届く
+- publisher: Session の制御ストリーム由来と PUBLISH_NAMESPACE のリクエストストリーム由来の GOAWAY で `onGoaway` が URI を受け取り、同じ URI は 1 回に抑止される
+- publisher: `onGoaway` を省略しても、告知の確立前の失敗が従来どおり `onError` に届く
+
+実リレー E2E は追加していない。`tests/e2e/` には GOAWAY を送らせる経路 (`tests/e2e/main.ts` の `window.__moqtE2E` にも、リレーへ GOAWAY を発生させる操作にも) が無く、実リレーに GOAWAY を出させる制御はテスト側からできないためである。GOAWAY の通知は低レベルの単体テストで担う。
+
+`CHANGES.md` は CODEBASE.md の「MOQT RFC ドラフト中の特別ルール」により更新していない。
+
+`vp check` と `vp test --run` が通ることを確認している。
 
 ## 参照
 
