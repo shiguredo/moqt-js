@@ -819,13 +819,21 @@ session も閉じる。`start()` が失敗した場合は確保済みを解放�
 
 #### GOAWAY の扱い
 
-GOAWAY 由来の失敗は素の `Error` (`request stream goaway`) で届き、新しい Session URI は
-高レベル API では取得できない (`MediaSubscriberCallbacks` に goaway が無く、
-`session.subscribe` の goaway コールバックも設定していない)。draft-ietf-moq-transport-22
-§9.2 は、URI が提供された場合にその URI を新しいセッションに使うことをクライアントへ MUST
-とする。高レベル API ではこの MUST を満たせない。URI を使う再接続が必要な場合は、低レベル
-API の `ConnectCallbacks.goaway` / `SubscribeCallbacks.goaway` を使う。URI を使う再接続の
-高レベル対応は現時点の対象外である。
+GOAWAY を受信して新しい Session URI が示されたとき、`MediaSubscriberCallbacks.onGoaway` /
+`MediaPublisherCallbacks.onGoaway` にその URI が渡る。draft-ietf-moq-transport-22 §9.2 は、
+URI が提供された場合にその URI を新しいセッションに使うことをクライアントへ MUST とする。
+ライブラリは**自動で再接続しない**。アプリが `onGoaway` の URI を使って新しい Session を張り、
+購読 / 配信をやり直す。
+
+- `onGoaway` は Session の制御ストリーム由来と、購読 (SUBSCRIBE) / 告知
+  (PUBLISH_NAMESPACE) のリクエストストリーム由来の両方で呼ばれ得る。同じ URI の通知は
+  1 回に抑止する
+- GOAWAY はセッションを即座には閉じない (draft-ietf-moq-transport-22 §6.6.1 の NO_ERROR
+  クローズは購読の終了を待つ)。`onGoaway` の通知の後に `onClose` が続く
+- `onGoaway` を省略した場合の挙動は変わらない。GOAWAY 由来の失敗は素の `Error`
+  (`request stream goaway`) として `start()` の失敗や `onError` に届く
+- 低レベル API では `ConnectCallbacks.goaway` / `SubscribeCallbacks.goaway` /
+  `NamespacePublicationCallbacks.goaway` を直接使える
 
 ### 統計情報
 

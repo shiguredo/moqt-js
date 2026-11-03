@@ -25,6 +25,15 @@ export interface MediaConnectSettings {
   onSessionClose(): void;
   /** セッションのエラー通知 */
   onSessionError(error: Error): void;
+  /**
+   * GOAWAY 受信の通知 (新しい Session URI)
+   *
+   * draft-ietf-moq-transport-22 §9.2:
+   * "If the GOAWAY includes a new Session URI, the client MUST use that URI
+   *  for the new session."
+   * 高レベル API は再接続を自動で行わないため、URI をアプリへ渡す。
+   */
+  onSessionGoaway?(newSessionUri: string): void;
 }
 
 /**
@@ -37,6 +46,7 @@ export async function connectMediaSession(settings: MediaConnectSettings): Promi
   const connectCallbacks: ConnectCallbacks = {
     close: () => settings.onSessionClose(),
     error: (error) => settings.onSessionError(error),
+    goaway: (newSessionUri) => settings.onSessionGoaway?.(newSessionUri),
   };
 
   const connectOptions: ConnectOptions = {};

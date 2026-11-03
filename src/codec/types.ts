@@ -307,6 +307,18 @@ export interface MediaPublisherOptions {
 // MediaPublisher コールバック
 export interface MediaPublisherCallbacks {
   onStateChange?: (state: MediaPublisherState) => void;
+  /**
+   * GOAWAY を受信して新しい Session URI が示されたときに呼ばれる
+   *
+   * draft-ietf-moq-transport-22 §9.2:
+   * "If the GOAWAY includes a new Session URI, the client MUST use that URI
+   *  for the new session."
+   * Session の制御ストリーム由来と PUBLISH_NAMESPACE のリクエストストリーム由来の
+   * 両方で呼ばれ得る。同じ URI の通知は 1 回に抑止する。ライブラリは自動で
+   * 再接続しないため、アプリがこの URI を使って新しい Session を張る。
+   * GOAWAY はセッションを即座には閉じないため、この通知の後に onClose が続く。
+   */
+  onGoaway?: (newSessionUri: string) => void;
   onError?: (error: Error) => void;
   onClose?: () => void;
 }
@@ -380,6 +392,18 @@ export interface MediaSubscriberOptions {
 export interface MediaSubscriberCallbacks {
   onStateChange?: (state: MediaSubscriberState) => void;
   onCatalog?: (catalog: import("../msf").Catalog) => void;
+  /**
+   * GOAWAY を受信して新しい Session URI が示されたときに呼ばれる
+   *
+   * draft-ietf-moq-transport-22 §9.2:
+   * "If the GOAWAY includes a new Session URI, the client MUST use that URI
+   *  for the new session."
+   * Session の制御ストリーム由来とリクエストストリーム由来の両方で呼ばれ得る。
+   * 同じ URI の通知は 1 回に抑止する。ライブラリは自動で再接続しないため、
+   * アプリがこの URI を使って新しい Session を張る。
+   * GOAWAY はセッションを即座には閉じないため、この通知の後に onClose が続く。
+   */
+  onGoaway?: (newSessionUri: string) => void;
   onError?: (error: Error) => void;
   onClose?: () => void;
 }

@@ -704,6 +704,13 @@ export class MediaPublisherImpl implements MediaPublisher {
 
   // 接続関連
   private session: Session | null = null;
+  /**
+   * 直前に onGoaway へ渡した新しい Session URI
+   *
+   * 同じ GOAWAY が Session の制御ストリームと PUBLISH_NAMESPACE のリクエスト
+   * ストリームの両方で届くと 2 回呼ばれ得るため、同じ URI の通知を 1 回に抑止する。
+   */
+  private lastGoawayUri: string | null = null;
   // session close 通知の世代番号。解放 (disposeAllResources) のたびに進み、接続時に捕捉した
   // 値と一致しない通知は自己起点の解放によるものとして捨てる。処理ループの世代とは独立で
   // あり、pause() では進まない (進めると pause のあとのピア起点の close 通知が捨てられる)
@@ -1057,6 +1064,8 @@ export class MediaPublisherImpl implements MediaPublisher {
             this.callbacks.onError?.(error);
           }
         },
+        // リクエストストリームの GOAWAY もアプリへ渡す (Session の経路と同じ URI は抑止する)
+        goaway: (newSessionUri) => this.notifyGoaway(newSessionUri),
       },
       this.setupAuthorizationTokenOptions(),
     );
@@ -1447,6 +1456,31 @@ export class MediaPublisherImpl implements MediaPublisher {
    * @param sessionErrorNotified start() の実行中に Session の error コールバックが
    *   error を通知したか (start の失敗としての通知を抑止する)
    */
+  /**
+   * GOAWAY をアプリへ通知する
+   *
+   * draft-ietf-moq-transport-22 §9.2:
+   * "If the GOAWAY includes a new Session URI, the client MUST use that URI
+   *  for the new session."
+   * ライブラリは自動で再接続しないため、URI をアプリへ渡して再接続を委ねる。
+   * 同じ GOAWAY が Session の制御ストリームと PUBLISH_NAMESPACE のリクエスト
+   * ストリームの両方で届くと 2 回呼ばれ得るため、同じ URI の通知は 1 回に抑止する。
+   * 通知の throw は呼び出し元 (低レベルの GOAWAY 通知) の経路へ伝えない。
+   *
+   * @param newSessionUri - GOAWAY が示した新しい Session URI
+   */
+  private notifyGoaway(newSessionUri: string): void {
+    if (this.lastGoawayUri === newSessionUri) {
+      return;
+    }
+    this.lastGoawayUri = newSessionUri;
+    try {
+      this.callbacks.onGoaway?.(newSessionUri);
+    } catch {
+      // アプリの onGoaway の例外で後始末を止めない
+    }
+  }
+
   private notifyStartFailure(error: unknown, sessionErrorNotified: boolean): void {
     if (isErrorNotifiedByPublisher(error)) {
       return;
@@ -1517,6 +1551,8 @@ export class MediaPublisherImpl implements MediaPublisher {
         }
         this.callbacks.onError?.(error);
       },
+      // Session の制御ストリーム由来の GOAWAY をアプリへ渡す
+      onSessionGoaway: (newSessionUri) => this.notifyGoaway(newSessionUri),
     });
 
     // 接続の await 中に解放 (ピア起点の close / 利用者の close) が先行していれば、受け取った

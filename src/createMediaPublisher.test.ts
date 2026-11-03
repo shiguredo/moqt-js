@@ -1943,6 +1943,8 @@ interface OpenedPublisherConnection {
   notifyClose: () => void;
   // 実装が onSessionError に渡した閉包 (Session の error 通知を再現する)
   notifySessionError: (error: Error) => void;
+  // 実装が onSessionGoaway に渡した閉包 (Session の GOAWAY 通知を再現する)
+  notifySessionGoaway: (newSessionUri: string) => void;
   // 保留している publish が await に入るまで待つ
   publishing: () => Promise<void>;
   // 保留している publish の await を解放する (保留していない場合は何もしない)
@@ -1964,6 +1966,8 @@ interface OpenedPublisherConnection {
   namespacePublicationDoneCount: () => number;
   // 告知の確立後の stream エラー (RESET_STREAM 相当) を再現する
   notifyNamespacePublicationError: (error: Error) => void;
+  // 告知のリクエストストリーム由来の GOAWAY を再現する
+  notifyNamespacePublicationGoaway: (newSessionUri: string) => void;
   // 告知の確立後の FIN を再現する (低レベルは error を通知しない)
   finishNamespacePublicationFromPeer: () => void;
 }
@@ -2173,6 +2177,7 @@ function createStartConnectHarness(
         settings.onSessionClose();
       },
       notifySessionError: (error) => settings.onSessionError(error),
+      notifySessionGoaway: (newSessionUri) => settings.onSessionGoaway?.(newSessionUri),
       publishing: () => publishing,
       resolvePublish: () => releasePublish(),
       namespacePublicationPublishing: () => namespacePublicationPublishing,
@@ -2184,6 +2189,8 @@ function createStartConnectHarness(
       catalogDoneCount: catalog.doneCount,
       namespacePublicationDoneCount: () => namespacePublicationDone,
       notifyNamespacePublicationError: (error) => namespacePublicationCallbacks?.error?.(error),
+      notifyNamespacePublicationGoaway: (newSessionUri) =>
+        namespacePublicationCallbacks?.goaway?.(newSessionUri),
       finishNamespacePublicationFromPeer: () => {
         // 確立後の FIN は低レベルの error コールバックを呼ばず、state だけが closed になる
         namespacePublicationState = "closed";
@@ -2532,6 +2539,62 @@ test("namespacePublication: 確立後の Session エラーは onError を 1 回�
   assert.deepEqual(errors, [sessionError]);
 
   await publisher.close();
+});
+
+/**
+ * 完了条件: GOAWAY で新しい Session URI が示されたとき、onGoaway がその URI を
+ * 受け取る。Session の制御ストリーム由来と PUBLISH_NAMESPACE のリクエスト
+ * ストリーム由来の両方を確認し、同じ URI の通知が 1 回に抑止されることも確認する。
+ */
+test("GOAWAY: onGoaway が Session と PUBLISH_NAMESPACE の GOAWAY の URI を受け取る", async () => {
+  const goawayUris: string[] = [];
+  const { publisher, opened } = createStartConnectHarness(
+    {
+      onGoaway: (newSessionUri) => {
+        goawayUris.push(newSessionUri);
+      },
+    },
+    { publisherOptions: { namespace: ["live"], announceNamespace: true } },
+  );
+  await publisher.start({} as MediaStream);
+
+  // Session の制御ストリーム由来
+  opened[0].notifySessionGoaway("https://example.com/from-session");
+  // PUBLISH_NAMESPACE のリクエストストリーム由来
+  opened[0].notifyNamespacePublicationGoaway("https://example.com/from-publish-namespace");
+  assert.deepEqual(goawayUris, [
+    "https://example.com/from-session",
+    "https://example.com/from-publish-namespace",
+  ]);
+
+  // 同じ URI の通知は 1 回に抑止する
+  opened[0].notifySessionGoaway("https://example.com/from-publish-namespace");
+  assert.deepEqual(goawayUris, [
+    "https://example.com/from-session",
+    "https://example.com/from-publish-namespace",
+  ]);
+
+  await publisher.close();
+});
+
+/**
+ * 完了条件: onGoaway を省略した場合の既存の挙動 (GOAWAY 由来の失敗が素の Error で
+ * 届く) が変わらない。
+ */
+test("GOAWAY: onGoaway を省略しても告知の確立前の失敗は onError に届く", async () => {
+  const failure = new Error("request stream goaway: https://example.com/new");
+  const { publisher, errors, opened } = createStartConnectHarness(undefined, {
+    publisherOptions: { namespace: ["live"], announceNamespace: true },
+    announce: { hold: true },
+  });
+  const startResult = publisher.start({} as MediaStream).then(
+    () => null,
+    (error: unknown) => error,
+  );
+  await opened[0].namespacePublicationPublishing();
+  opened[0].rejectNamespacePublication(failure);
+  await startResult;
+  assert.deepEqual(errors, [failure]);
 });
 
 /**

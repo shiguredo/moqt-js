@@ -25,7 +25,7 @@ import {
 
 import type { MediaConnectSettings } from "./createMedia/connect";
 
-import type { Session } from "./session";
+import type { Session, SubscribeCallbacks } from "./session";
 
 import type { Subscriber } from "./subscriber";
 
@@ -1460,6 +1460,12 @@ interface OpenedSubscriberConnection {
   sessionCloseCalls: () => number;
   // 確立した購読の unsubscribe が呼ばれた回数 (start の巻き戻しが解放したか)
   unsubscribeCalls: () => number;
+  // Session の制御ストリーム由来の GOAWAY を再現する
+  notifySessionGoaway: (newSessionUri: string) => void;
+  // 購読のリクエストストリーム由来の GOAWAY を再現する (最後の購読の callbacks を使う)
+  notifySubscribeGoaway: (newSessionUri: string) => void;
+  // 購読のリクエスト単位の error を再現する (最後の購読の callbacks を使う)
+  notifySubscribeError: (error: Error) => void;
 }
 
 /**
@@ -1532,8 +1538,14 @@ function createStartConnectHarness(
       : null;
     let sessionCloseCalls = 0;
     let unsubscribeCalls = 0;
+    let subscribeCallbacks: SubscribeCallbacks | undefined;
     const session = {
-      subscribe: async (): Promise<Subscriber> => {
+      subscribe: async (
+        _namespace: string[],
+        _trackName: string,
+        callbacks?: SubscribeCallbacks,
+      ): Promise<Subscriber> => {
+        subscribeCallbacks = callbacks;
         // 保留する購読だけテストが完了を決める
         if (subscribeGate !== null) {
           notifySubscribing();
@@ -1563,11 +1575,82 @@ function createStartConnectHarness(
       resolveSessionClose: () => releaseSessionClose(),
       sessionCloseCalls: () => sessionCloseCalls,
       unsubscribeCalls: () => unsubscribeCalls,
+      notifySessionGoaway: (newSessionUri) => settings.onSessionGoaway?.(newSessionUri),
+      notifySubscribeGoaway: (newSessionUri) => subscribeCallbacks?.goaway?.(newSessionUri),
+      notifySubscribeError: (error) => subscribeCallbacks?.error?.(error),
     });
     return Promise.resolve(session);
   };
   return { subscriber, control, errors, opened, connectAttempts: () => connectAttempts };
 }
+
+/**
+ * 完了条件: GOAWAY で新しい Session URI が示されたとき、onGoaway がその URI を受け取る。
+ * Session の制御ストリーム由来と購読のリクエストストリーム由来の両方を確認し、
+ * 同じ URI の通知が 1 回に抑止されることも確認する。
+ */
+test("GOAWAY: onGoaway が Session と購読の GOAWAY の URI を受け取る", async () => {
+  const goawayUris: string[] = [];
+  const { subscriber, opened } = createStartConnectHarness(
+    {
+      onGoaway: (newSessionUri) => {
+        goawayUris.push(newSessionUri);
+      },
+    },
+    { holdSubscribe: true },
+  );
+  // 購読の要求が保留されている間に GOAWAY を駆動する。start は FETCH に進めず
+  // 失敗するが、GOAWAY の通知は接続直後から観測できる
+  const startResult = subscriber.start().then(
+    () => null,
+    (error: unknown) => (error instanceof Error ? error : new Error(String(error))),
+  );
+  await opened[0].subscribing();
+
+  // Session の制御ストリーム由来
+  opened[0].notifySessionGoaway("https://example.com/from-session");
+  // 購読のリクエストストリーム由来
+  opened[0].notifySubscribeGoaway("https://example.com/from-subscribe");
+  assert.deepEqual(goawayUris, [
+    "https://example.com/from-session",
+    "https://example.com/from-subscribe",
+  ]);
+
+  // 同じ URI の通知は 1 回に抑止する
+  opened[0].notifySessionGoaway("https://example.com/from-subscribe");
+  assert.deepEqual(goawayUris, [
+    "https://example.com/from-session",
+    "https://example.com/from-subscribe",
+  ]);
+
+  opened[0].resolveSubscribe();
+  await startResult;
+  await subscriber.close();
+});
+
+/**
+ * 完了条件: onGoaway を省略しても、GOAWAY 由来の失敗が素の Error として
+ * onError に届く既存の挙動が変わらない。
+ */
+test("GOAWAY: onGoaway を省略しても GOAWAY 由来の失敗は onError に届く", async () => {
+  const { subscriber, errors, opened } = createStartConnectHarness(undefined, {
+    holdSubscribe: true,
+  });
+  const startResult = subscriber.start().then(
+    () => null,
+    (error: unknown) => (error instanceof Error ? error : new Error(String(error))),
+  );
+  await opened[0].subscribing();
+
+  // 購読のリクエスト単位の error は従来どおり onError に流れる
+  const goawayError = new Error("request stream goaway: https://example.com/new");
+  opened[0].notifySubscribeError(goawayError);
+  assert.deepEqual(errors, [goawayError]);
+
+  opened[0].resolveSubscribe();
+  await startResult;
+  await subscriber.close();
+});
 
 /**
  * 完了条件: ピア起点の close の解放が進行中のまま利用者が start() を呼び直すと、
