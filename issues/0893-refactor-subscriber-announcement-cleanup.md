@@ -3,7 +3,7 @@
 - Created: 2026-11-02
 - Completed: {YYYY-MM-DD}
 - Branch: feature/refactor-subscriber-announcement-cleanup
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-11-03
 
 ## 目的
 
@@ -16,10 +16,12 @@
 - `src/createMediaSubscriber.catalog.test.ts` の映像の `rendezvousTimeout` テストが、音声用の `createMediaTrackSubscribeCapture` と同じセットアップ (decoder / trackInfo / session の差し替え) を約 30 行再実装している
 - `src/createMediaSubscriber.catalog.test.ts` の `rendezvousTimeout` の不正値テストが、catalog 専用ファイルにあり、`createTestSubscriber` (コンストラクタ直) だけを見ている。`preDecodeDelayMs` の検証テスト (`src/createMediaSubscriber.media.test.ts`) と同じ配置に揃え、公開ファクトリ経由の reject も固定したい
 - `src/createMediaSubscriber.lifecycle.test.ts` の「受信タイマーは SUBSCRIBE_OK の後に始まる」テストは JSDoc で「未処理の rejection も出さない」と書くが、`withUnhandledRejectionWatch` を使っていない (同ファイルの既存テストは使っている)
-- `tests/e2e/main.ts` の `startSubscriber` と `startSubscriberFailure` が、`rendezvousTimeout` の spread と `video` / `audio` の組み立てを重複して持つ。`startSubscriberFailure` は `StartSubscriberOptions` 全体を受けるのに audio / video / audioCodec を無視している
+- `tests/e2e/main.ts` の `startSubscriber` と `startSubscriberFailure` が、`rendezvousTimeout` の spread を重複して持つ (`video` の組み立ても、前者は `options.video` に応じて変え、後者は `video: { codec: "vp8" }` 固定で重なる)。`startSubscriberFailure` は `StartSubscriberOptions` 全体を受けるのに audio / video / audioCodec を無視している
 - `src/createMediaPublisher.ts` の `announceNamespace` の `session === null` ガードは、呼び出し経路から到達しない防御である (他のメソッドにも同種のガードはあるため、残す判断でもよい)
 
 ## 設計方針
+
+いずれも動作を変えない整理であり、テストの期待値は変えない。`preDecodeDelayMs` の検証テストが既に `MediaSubscriberImpl` の直接構築と公開ファクトリ (`createMediaSubscriber`) の両方を固定しているため、`rendezvousTimeout` も同じ形に揃える。
 
 - catalog の catch の no-op なクリアは削除するか、防御であることをコメントで明示する。タイマーが `SUBSCRIBE_OK` の後にしか存在しないことを前提にしたコメントへ直す
 - `subscribe` の JSDoc と `CATALOG_RECEIVE_TIMEOUT` に「`SUBSCRIBE_OK` から数える」起点を書く
@@ -28,7 +30,7 @@
 - `tests/e2e/main.ts` の option 構築を 1 つの関数に寄せる (両方の入口で同じ形にする)。`startSubscriberFailure` の型は実際に使うフィールドだけに絞る
 - 到達しないガードは、残すなら「防御」とコメントし、消すなら消す。判断をコードに残す
 
-いずれも動作を変えない整理であり、テストの期待値は変えない。1 issue = 1 目的の原則から、バグ修正は含めない (見つけたら別 issue にする)。
+1 issue = 1 目的の原則から、バグ修正は含めない。整理の途中でバグを見つけたら別 issue にする。
 
 ## 完了条件
 
