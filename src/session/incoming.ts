@@ -102,6 +102,7 @@ export async function incomingSendRequestErrorAndClose(
   stream: WebTransportBidirectionalStream,
   errorCode: RequestErrorCode,
   reasonPhrase: string,
+  peerMaxControlMessageSize: number,
 ): Promise<void> {
   let writer: WritableStreamDefaultWriter<Uint8Array> | null = null;
   try {
@@ -112,16 +113,20 @@ export async function incomingSendRequestErrorAndClose(
       retryInterval: 0n,
       reasonPhrase,
     });
-    const controlWriter = new ControlStreamWriter();
+    // 送信上限はピアが広告した MAX_CONTROL_MESSAGE_SIZE に合わせる
+    // (draft-ietf-moq-transport-23 §9.1.8)。
+    const controlWriter = new ControlStreamWriter(peerMaxControlMessageSize);
     const framed = controlWriter.encode(MessageType.REQUEST_ERROR, errorPayload);
     await writer.write(framed);
     await writer.close();
   } catch {
-    // ストリームが既に閉じている場合は無視。
-    // write が失敗するのは writable がエラー状態 (ピアの RESET_STREAM /
-    // セッション終了等) の場合であり、その場合は close() を試行しても
-    // 失敗するだけのため FIN は送信しない。ストリームは QUIC レベルで
-    // 既にクローズされており、リソースリークは発生しない。
+    // 失敗の原因ごとに後始末が異なる。
+    // - write 失敗: writable がエラー状態 (ピアの RESET_STREAM / セッション終了等)。
+    //   close() を試行しても失敗するだけのため FIN は送信しない。ストリームは
+    //   QUIC レベルで既にクローズされており、リソースリークは発生しない。
+    // - フレーミング失敗: ピアの MAX_CONTROL_MESSAGE_SIZE を超える REQUEST_ERROR は
+    //   仕様上送信できない (MUST NOT)。送信方向は開いたままにせず、受信方向の
+    //   cancel のみ行う (writer は finally で releaseLock する)。
   } finally {
     if (writer !== null) {
       try {
@@ -264,6 +269,7 @@ export async function incomingHandleFirstBidiMessage(
         stream,
         RequestErrorCode.DOES_NOT_EXIST,
         "request references reserved namespace",
+        session.peerMaxControlMessageSize,
       );
       return true;
     }
@@ -274,6 +280,7 @@ export async function incomingHandleFirstBidiMessage(
       stream,
       RequestErrorCode.NOT_SUPPORTED,
       "request type not supported",
+      session.peerMaxControlMessageSize,
     );
     return true;
   }

@@ -50,6 +50,7 @@ import {
   toProtocolViolationSessionError,
   toSessionCloseError,
 } from "./errors";
+import { sessionHandleFieldLengthExceeded } from "./lifecycle";
 import { extractForwardState, extractLargestLocation, matchNamespacePrefix } from "./params";
 import type { SessionInternal, TracksSubscriptionState } from "./types";
 import { type AuthTokenProcessResult, processMessageAuthorizationTokens } from "./authTokenCache";
@@ -91,6 +92,16 @@ export interface IncomingPublishSessionInternal {
   readonly receivedAuthTokens: AuthTokenCache;
   readonly receivedRequestUpdateCounts: Map<bigint, number>;
   readonly goawayReceivedOnRequestStreams: Set<bigint>;
+  /**
+   * 自 endpoint が SETUP で広告した MAX_CONTROL_MESSAGE_SIZE
+   * (draft-ietf-moq-transport-23 §9.1.8)。受信 PUBLISH ストリームの受信上限に使う。
+   */
+  readonly localMaxControlMessageSize: number;
+  /**
+   * ピアが SETUP で広告した MAX_CONTROL_MESSAGE_SIZE
+   * (draft-ietf-moq-transport-23 §9.1.8)。受信 PUBLISH ストリームの送信上限に使う。
+   */
+  readonly peerMaxControlMessageSize: number;
 
   closeWithError(error: SessionError): void;
   notifyErrorIfActive(error: Error): void;
@@ -474,10 +485,22 @@ export async function incomingPublishRunStreamSubLoop(
         }
       }
     }
-    // SessionError はそのコードのまま、ProtocolViolationError / IncompleteDataError は PROTOCOL_VIOLATION で閉じる
-    const sessionError = toSessionCloseError(err);
-    if (sessionError !== null) {
-      session.closeWithError(sessionError);
+    // draft-ietf-moq-transport-23 §9:
+    // FIELD_LENGTH_EXCEEDED は共通ヘルパーで 1 回だけ閉じる (既に閉じていれば何もしない)。
+    // それ以外の SessionError はそのコードのまま、ProtocolViolationError /
+    // IncompleteDataError は PROTOCOL_VIOLATION で閉じる。
+    const handledFieldLengthExceeded = sessionHandleFieldLengthExceeded(
+      session,
+      (sessionError) => {
+        session.closeWithError(sessionError);
+      },
+      err,
+    );
+    if (!handledFieldLengthExceeded) {
+      const sessionError = toSessionCloseError(err);
+      if (sessionError !== null) {
+        session.closeWithError(sessionError);
+      }
     }
   }
 }
@@ -572,7 +595,7 @@ export async function incomingPublishHandleBidirectionalStream(
   }
   // 先頭読み取りに使う reader をサブループと共有する (PUBLISH 以外のメッセージ
   // だった場合はこのまま破棄される)
-  const subControlReader = new ControlStreamReader();
+  const subControlReader = new ControlStreamReader(session.localMaxControlMessageSize);
   const firstBidiMessage = await incomingPublishReadFirstBidiMessage(
     session,
     stream,
@@ -606,6 +629,7 @@ export async function incomingPublishHandleBidirectionalStream(
         stream,
         RequestErrorCode.UNSUPPORTED_EXTENSION,
         err.message,
+        session.peerMaxControlMessageSize,
       );
       return;
     }
@@ -664,6 +688,7 @@ export async function incomingPublishHandleBidirectionalStream(
       stream,
       RequestErrorCode.DOES_NOT_EXIST,
       "request references reserved namespace",
+      session.peerMaxControlMessageSize,
     );
     return;
   }
@@ -684,7 +709,12 @@ export async function incomingPublishHandleBidirectionalStream(
   const match = incomingPublishMatchToSubscription(session, publishTrackNamespace);
   if (match === null) {
     // draft-ietf-moq-transport-22 §9.8 (SHOULD): マッチしない PUBLISH は UNINTERESTED
-    await incomingSendRequestErrorAndClose(stream, RequestErrorCode.UNINTERESTED, "uninterested");
+    await incomingSendRequestErrorAndClose(
+      stream,
+      RequestErrorCode.UNINTERESTED,
+      "uninterested",
+      session.peerMaxControlMessageSize,
+    );
     return;
   }
 
@@ -727,7 +757,12 @@ export async function incomingPublishHandleBidirectionalStream(
     match.rangeFilters !== undefined &&
     !trackPropertyFiltersMatch(match.rangeFilters, decodedPublish.trackProperties)
   ) {
-    await incomingSendRequestErrorAndClose(stream, RequestErrorCode.UNINTERESTED, "uninterested");
+    await incomingSendRequestErrorAndClose(
+      stream,
+      RequestErrorCode.UNINTERESTED,
+      "uninterested",
+      session.peerMaxControlMessageSize,
+    );
     return;
   }
 
@@ -840,7 +875,7 @@ export async function incomingPublishHandleBidirectionalStream(
       parameters: [],
       trackProperties: [],
     });
-    const controlWriter = new ControlStreamWriter();
+    const controlWriter = new ControlStreamWriter(session.peerMaxControlMessageSize);
     const framed = controlWriter.encode(MessageType.REQUEST_OK, publishOkPayload);
     await subWriter.write(framed);
 
@@ -1101,6 +1136,17 @@ export async function incomingPublishReadFirstBidiMessage(
       firstMsgReader.releaseLock();
     }
   } catch (err) {
+    // draft-ietf-moq-transport-23 §9:
+    // 制御メッセージの Message Length がローカル上限を超えた場合は
+    // FIELD_LENGTH_EXCEEDED でセッションを閉じる。それ以外の読み取り失敗
+    // (RESET_STREAM / セッション終了) は従来どおり通知に留める。
+    sessionHandleFieldLengthExceeded(
+      session,
+      (sessionError) => {
+        session.closeWithError(sessionError);
+      },
+      err,
+    );
     session.notifyErrorIfActive(err instanceof Error ? err : new Error(String(err)));
     return null;
   }

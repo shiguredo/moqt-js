@@ -108,6 +108,7 @@ import {
   toSessionCloseError,
   toTrackPropertiesViolationSessionError,
 } from "./errors";
+import { isFieldLengthExceededError, sessionHandleFieldLengthExceeded } from "./lifecycle";
 import { MAX_VARINT, encodeVarint } from "../varint";
 import {
   publishMarkStreamOmitted,
@@ -271,6 +272,12 @@ export interface BidiSessionInternal {
   readonly sessionState: SessionState;
   readonly transport: WebTransport;
   controlWriter: ControlStreamWriter | undefined;
+  // draft-ietf-moq-transport-23 §9.1.8: リクエストストリーム用の受信上限
+  // (自 endpoint が SETUP で広告した MAX_CONTROL_MESSAGE_SIZE)
+  readonly localMaxControlMessageSize: number;
+  // draft-ietf-moq-transport-23 §9.1.8: リクエストストリーム用の送信上限
+  // (ピアが SETUP で広告した MAX_CONTROL_MESSAGE_SIZE。SETUP 受信前は既定値)
+  readonly peerMaxControlMessageSize: number;
   nextRequestId: bigint;
 
   /**
@@ -507,11 +514,16 @@ export async function bidiSendRequestOnBidiStream(
     throw new Error("Control writer not initialized");
   }
 
+  // ピアの MAX_CONTROL_MESSAGE_SIZE を超えるメッセージは、双方向ストリームを
+  // 開く前に拒否する。ストリームを開かずに済み、write 失敗時の後始末を
+  // フレーミング失敗のために二重に用意しなくて済むためである
+  // (pending とトークン予約は呼び出し元が失敗経路で取り消す)。
+  const message = session.controlWriter.encode(type, payload);
+
   const stream = await session.transport.createBidirectionalStream();
   const writer = stream.writable.getWriter();
-  const controlReader = new ControlStreamReader();
+  const controlReader = new ControlStreamReader(session.localMaxControlMessageSize);
 
-  const message = session.controlWriter.encode(type, payload);
   session.statsControlMessagesSent++;
   session.emitDebug("send", type, payload, decoded);
   try {
@@ -637,7 +649,17 @@ export async function bidiContinueReadingForDuplicateGoaway(
         return;
       }
     }
-  } catch {
+  } catch (error) {
+    // draft-ietf-moq-transport-23 §9:
+    // 重複 GOAWAY を待つ間でも、制御メッセージの Message Length がローカル上限を
+    // 超えたら FIELD_LENGTH_EXCEEDED でセッションを閉じる (他の受信ループと同じ扱い)。
+    sessionHandleFieldLengthExceeded(
+      session,
+      (sessionError) => {
+        session.closeWithError(sessionError);
+      },
+      error,
+    );
     // セッション終了 / RESET_STREAM は重複検出の対象外として読み取りを終える
   } finally {
     try {
@@ -901,6 +923,13 @@ async function bidiDispatchResponse<TPending extends BidiPendingRejectable>(
       await handleUnexpected(context, msg.type);
     }
   } catch (error) {
+    // draft-ietf-moq-transport-23 §9:
+    // 他の受信ループが FIELD_LENGTH_EXCEEDED で既にセッションを閉じている場合、
+    // handleCloseError が再度 closeWithError を呼んで error コールバックを
+    // 二重通知するため、ここでは処理済みとして扱う。
+    if (session.sessionState !== "connected" && isFieldLengthExceededError(error)) {
+      return;
+    }
     // SessionError はそのコードのまま、ProtocolViolationError / IncompleteDataError は PROTOCOL_VIOLATION で閉じる
     const sessionError = toSessionCloseError(error);
     if (sessionError !== null) {
@@ -1508,6 +1537,7 @@ export const FILL_NOT_SUPPORTED_REASON = "publisher does not support fill fetch 
  * 以下の場合は黙殺する (送信されていないため emitDebug は呼ばない):
  * - controlWriter が未設定
  * - requestStreams に requestId のエントリが無い
+ * - フレーミングに失敗した (ピアの MAX_CONTROL_MESSAGE_SIZE 超過など)
  * - write に失敗した (送信方向が FIN 済みなど)
  * 応答送信はベストエフォートであり、失敗しても受信方向の読み取りを継続する
  * (リクエスト送信側の bidiSendRequestOnBidiStream が controlWriter 不在で
@@ -1521,15 +1551,17 @@ async function bidiSendRequestMessage(
   decoded?: Record<string, unknown>,
 ): Promise<void> {
   if (session.controlWriter) {
-    const message = session.controlWriter.encode(type, payload);
     const streamInfo = session.requestStreams.get(requestId);
     if (streamInfo) {
       try {
+        const message = session.controlWriter.encode(type, payload);
         await streamInfo.writer.write(message);
         session.emitDebug("send", type, payload, decoded);
       } catch {
-        // ストリームが既に閉じている場合は無視 (実際には送信されていないため
-        // emitDebug は呼ばない)
+        // ストリームが既に閉じている場合と、ピアの MAX_CONTROL_MESSAGE_SIZE を
+        // 超える payload でフレーミングできない場合は無視する (応答送信は
+        // ベストエフォートであり、受信方向の読み取りは継続する)。
+        // 実際には送信されていないため emitDebug は呼ばない。
       }
     }
   }
@@ -2341,6 +2373,18 @@ function handleRequestStreamReadError(
   error: unknown,
   role: BidiRequestStreamRole,
 ): void {
+  // draft-ietf-moq-transport-23 §9:
+  // FIELD_LENGTH_EXCEEDED は共通ヘルパーで 1 回だけ閉じる (閉鎖済みなら何もしない)
+  const handledFieldLengthExceeded = sessionHandleFieldLengthExceeded(
+    session,
+    (sessionError) => {
+      session.closeWithError(sessionError);
+    },
+    error,
+  );
+  if (handledFieldLengthExceeded) {
+    return;
+  }
   const sessionError = toSessionCloseError(error);
   if (sessionError !== null) {
     session.closeWithError(sessionError);
@@ -3724,13 +3768,15 @@ export async function bidiSendRequestUpdate(
     }
   }
 
-  const message = session.controlWriter.encode(MessageType.REQUEST_UPDATE, payload);
-  session.statsControlMessagesSent++;
-  session.emitDebug("send", MessageType.REQUEST_UPDATE, payload, {
-    requestId: updateRequestId.toString(),
-    targetRequestId: targetRequestId.toString(),
-  });
+  // ピアの MAX_CONTROL_MESSAGE_SIZE を超える payload はフレーミングで throw する。
+  // pendingRequestUpdate / fillFetchTargets を残さないよう、encode も try の内側で行う。
   try {
+    const message = session.controlWriter.encode(MessageType.REQUEST_UPDATE, payload);
+    session.statsControlMessagesSent++;
+    session.emitDebug("send", MessageType.REQUEST_UPDATE, payload, {
+      requestId: updateRequestId.toString(),
+      targetRequestId: targetRequestId.toString(),
+    });
     await streamInfo.writer.write(message);
   } catch (err) {
     // write 失敗時はエントリを削除して残留を防ぐ。削除しないと、後続の

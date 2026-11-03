@@ -45,6 +45,7 @@ import {
   toSessionCloseError,
   toTrackPropertiesViolationSessionError,
 } from "./errors";
+import { sessionHandleFieldLengthExceeded } from "./lifecycle";
 import { cancelStreamQuiet } from "./stream";
 import type { ControlStreamReader } from "../controlStream";
 import type {
@@ -975,11 +976,22 @@ async function runNamespaceStreamLoop<S>(
     }
   } catch (error) {
     handlers.onReadError(ctx, error instanceof Error ? error : new Error(String(error)));
-    // SessionError はそのコードのまま、ProtocolViolationError / IncompleteDataError は
-    // PROTOCOL_VIOLATION で閉じる
-    const sessionError = toSessionCloseError(error);
-    if (sessionError !== null) {
-      session.closeWithError(sessionError);
+    // draft-ietf-moq-transport-23 §9:
+    // FIELD_LENGTH_EXCEEDED は共通ヘルパーで 1 回だけ閉じる (既に閉じていれば何もしない)。
+    // それ以外の SessionError はそのコードのまま、ProtocolViolationError /
+    // IncompleteDataError は PROTOCOL_VIOLATION で閉じる。
+    const handledFieldLengthExceeded = sessionHandleFieldLengthExceeded(
+      session,
+      (sessionError) => {
+        session.closeWithError(sessionError);
+      },
+      error,
+    );
+    if (!handledFieldLengthExceeded) {
+      const sessionError = toSessionCloseError(error);
+      if (sessionError !== null) {
+        session.closeWithError(sessionError);
+      }
     }
   } finally {
     handlers.closeTarget(target);

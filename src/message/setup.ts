@@ -18,6 +18,7 @@
  * - 0x06 MAX_FILTER_RANGES (§9.1.6)
  * - 0x07 MOQT_IMPLEMENTATION (§9.1.5)
  * - 0x08 MAX_REQUEST_UPDATES (§9.1.7)
+ * - 0x09 MAX_CONTROL_MESSAGE_SIZE (§9.1.8)
  * - GREASE (未使用域を擦る。§13)
  * AUTHORITY (0x05) / PATH (0x01) は WebTransport 利用時の MUST NOT
  * (§9.1.1 / §9.1.2) のため送る手段を持たない。
@@ -35,8 +36,14 @@ import {
   encodeAuthorizationToken,
 } from "./authorizationToken";
 import { type Parameter, decodeKeyValuePairs, encodeKeyValuePairs } from "./parameter";
-import { MessageType, SetupOptionType } from "./types";
+import {
+  DEFAULT_MAX_CONTROL_MESSAGE_SIZE,
+  MessageType,
+  MIN_MAX_CONTROL_MESSAGE_SIZE,
+  SetupOptionType,
+} from "./types";
 import { decodeVarint, encodeVarint } from "../varint";
+import { IncompleteDataError, SessionError, SessionErrorCode } from "../error";
 
 /**
  * SETUP メッセージ
@@ -66,6 +73,12 @@ export interface Setup {
  * 広告する。未指定時は Option を送信せず、各節の既定値を用いる
  * (順に 0 = Alias 禁止 / 0 = 無制限 / 0 = Range Filter 受信拒否)。
  *
+ * maxControlMessageSize を指定すると draft-ietf-moq-transport-23 §9.1.8
+ * (MAX_CONTROL_MESSAGE_SIZE) を Option Type 0x09 で広告する。値は vi64 として
+ * 符号化し、65535 以上 Number.MAX_SAFE_INTEGER 以下の安全な整数でなければ
+ * ならない。未指定時は Option を送信せず、
+ * 既定値 65535 を用いる。
+ *
  * moqtImplementation で §9.1.5 (MOQT IMPLEMENTATION) の送信を制御する。
  * draft-ietf-moq-transport-22 §15.8 (Implementation Identification Fingerprinting)
  * のプライバシー緩和策に対応する。
@@ -82,6 +95,7 @@ export function createSetup(options?: {
   maxAuthTokenCacheSize?: number;
   maxRequestUpdates?: number;
   maxFilterRanges?: number;
+  maxControlMessageSize?: number;
   moqtImplementation?: string | false;
   grease?: boolean;
 }): Setup {
@@ -120,6 +134,19 @@ export function createSetup(options?: {
     parameters.push({
       type: SetupOptionType.MAX_FILTER_RANGES,
       value: encodeVarint(BigInt(options.maxFilterRanges)),
+    });
+  }
+
+  // draft-ietf-moq-transport-23 §9.1.8 (MAX_CONTROL_MESSAGE_SIZE):
+  // 値は vi64。65535 未満は仕様違反であり、65535 は既定値と同じ値だが、
+  // 明示指定された場合は他の上限 Option と同じく送信する。
+  // Option Type 0x09 は奇数型のため、Key-Value-Pair 規則により Length と
+  // vi64 の値が続く (値のバイト列は encodeVarint の結果)。
+  if (options?.maxControlMessageSize !== undefined) {
+    assertMaxControlMessageSize(options.maxControlMessageSize);
+    parameters.push({
+      type: SetupOptionType.MAX_CONTROL_MESSAGE_SIZE,
+      value: encodeVarint(BigInt(options.maxControlMessageSize)),
     });
   }
 
@@ -287,5 +314,83 @@ export function getSetupMaxFilterRanges(msg: Setup): number {
   const param = getSetupParameter(msg, SetupOptionType.MAX_FILTER_RANGES);
   if (!param) return 0;
   const [value] = decodeVarint(param.value);
+  return Number(value);
+}
+
+/**
+ * MAX_CONTROL_MESSAGE_SIZE として広告・保持してよい値かを検証する
+ *
+ * draft-ietf-moq-transport-23 §9.1.8:
+ * 65535 以上であり、本文長を JS の数値で比較するため
+ * Number.MAX_SAFE_INTEGER 以下の安全な整数でなければならない。
+ * ローカル設定の誤りはプロトコル違反ではないため、SessionError ではなく
+ * 通常の Error を投げる。この検証は接続経路 (公開設定) 用であり、フレーミング層の
+ * ControlStreamReader / ControlStreamWriter は低レベル API として 0 以上を
+ * 受け付ける (SETUP 交渉を経由しない低レベル利用や、上限を小さくした境界テストのため)。
+ *
+ * @throws Error - 値が安全な整数でない、または最小値未満の場合
+ */
+export function assertMaxControlMessageSize(maxControlMessageSize: number): void {
+  if (
+    !Number.isSafeInteger(maxControlMessageSize) ||
+    maxControlMessageSize < MIN_MAX_CONTROL_MESSAGE_SIZE
+  ) {
+    throw new Error(
+      `maxControlMessageSize must be a safe integer of at least ${MIN_MAX_CONTROL_MESSAGE_SIZE}, got ${maxControlMessageSize}`,
+    );
+  }
+}
+
+/**
+ * SETUP メッセージから MAX_CONTROL_MESSAGE_SIZE を取得する
+ *
+ * draft-ietf-moq-transport-23 §9.1.8:
+ * 省略時の既定値は 65535 であり、65535 未満を広告することは仕様違反である。
+ * 値は vi64 として読み、宣言された Length が vi64 のバイト数と一致しない場合も
+ * 不正な serialization として扱う。
+ *
+ * 不正な serialization と、値が Type の定義 (65535 以上) に一致しない場合の
+ * コードは、draft-ietf-moq-transport-23 §8.3 / §12.2 の MALFORMED_KEY_VALUE で
+ * ある。現行の SessionErrorCode では draft-22 名の
+ * KEY_VALUE_FORMATTING_ERROR が同じ値 (0x6) を持つため、それを使う。
+ *
+ * JS の配列長は Number.MAX_SAFE_INTEGER 未満なので、それを超える広告値は
+ * Number.MAX_SAFE_INTEGER に丸める (実質的に上限なしとして扱う)。
+ *
+ * @throws SessionError - 値が最小値未満、または vi64 として読めない場合
+ *   (KEY_VALUE_FORMATTING_ERROR)
+ */
+export function getSetupMaxControlMessageSize(msg: Setup): number {
+  const param = getSetupParameter(msg, SetupOptionType.MAX_CONTROL_MESSAGE_SIZE);
+  if (!param) return DEFAULT_MAX_CONTROL_MESSAGE_SIZE;
+  let value: bigint;
+  let consumed: number;
+  try {
+    [value, consumed] = decodeVarint(param.value);
+  } catch (error) {
+    // 空の値や途中で切れた vi64 は §8.3 の serialization 不一致として扱う
+    if (error instanceof IncompleteDataError) {
+      throw new SessionError(
+        `MAX_CONTROL_MESSAGE_SIZE is not a complete vi64: ${error.message}`,
+        SessionErrorCode.KEY_VALUE_FORMATTING_ERROR,
+      );
+    }
+    throw error;
+  }
+  if (consumed !== param.value.length) {
+    throw new SessionError(
+      `MAX_CONTROL_MESSAGE_SIZE length ${param.value.length} does not match vi64 length ${consumed}`,
+      SessionErrorCode.KEY_VALUE_FORMATTING_ERROR,
+    );
+  }
+  if (value < BigInt(MIN_MAX_CONTROL_MESSAGE_SIZE)) {
+    throw new SessionError(
+      `MAX_CONTROL_MESSAGE_SIZE ${value} is below the minimum ${MIN_MAX_CONTROL_MESSAGE_SIZE}`,
+      SessionErrorCode.KEY_VALUE_FORMATTING_ERROR,
+    );
+  }
+  if (value > BigInt(Number.MAX_SAFE_INTEGER)) {
+    return Number.MAX_SAFE_INTEGER;
+  }
   return Number(value);
 }

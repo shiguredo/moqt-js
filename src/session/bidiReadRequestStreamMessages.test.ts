@@ -20,8 +20,9 @@ import type { PublishDoneInfo } from "../session";
 import { encodeRequestUpdatePayload } from "../message/subscribe";
 import { createTrackNamespace, encodeParameterTrackNamespace } from "../message";
 import { encodeAuthorizationToken, AuthorizationTokenAliasType } from "../message";
-import { RequestError, SessionErrorCode, RequestErrorCode } from "../error";
+import { RequestError, SessionError, SessionErrorCode, RequestErrorCode } from "../error";
 import {
+  createOkResponseReadTestContext,
   createPublishReadTestContext,
   forceSessionClosed,
   createPublishOkValidationContext,
@@ -31,6 +32,7 @@ import { MAX_VARINT } from "../varint";
 import { ControlStreamReader, ControlStreamWriter } from "../controlStream";
 import { PublisherImpl } from "../publisher";
 import {
+  bidiContinueReadingForDuplicateGoaway,
   bidiHandlePublishDone,
   bidiReadPublishResponse,
   bidiReadRequestStreamMessages,
@@ -1261,4 +1263,136 @@ test("bidiReadRequestStreamMessages: 未登録 Alias の REQUEST_UPDATE (subscri
   assert.equal(messages.length, 0);
   assert.isDefined(ctx.closedWithError);
   assert.equal(ctx.closedWithError.code, SessionErrorCode.UNKNOWN_AUTH_TOKEN_ALIAS);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9:
+ * リクエストストリームで受信する制御メッセージの Message Length が
+ * 自 endpoint の MAX_CONTROL_MESSAGE_SIZE (既定値 65535) を超えたら、
+ * FIELD_LENGTH_EXCEEDED でセッションを閉じる (本文が揃う前の宣言時点で判定)。
+ * reader の生成側への配線は bidiSendRequestOnBidiStream.test.ts で検証する。
+ */
+test("bidiReadRequestStreamMessages: MAX_CONTROL_MESSAGE_SIZE 超過で FIELD_LENGTH_EXCEEDED で閉じる", async () => {
+  const ctx = createOkResponseReadTestContext();
+  // Type 0x10 + Message Length 65536 (vi64 の [0xc1, 0x00, 0x00]) を本文なしで流す
+  const readPromise = bidiReadRequestStreamMessages(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+    "publish",
+  );
+  ctx.readableController.enqueue(new Uint8Array([0x10, 0xc1, 0x00, 0x00]));
+  await readPromise;
+
+  const sessionError = ctx.getClosedWithError();
+  assert.isDefined(sessionError);
+  assert.equal(sessionError?.code, SessionErrorCode.FIELD_LENGTH_EXCEEDED);
+  // 二重通知しない: 閉鎖は 1 回だけ
+  assert.equal(ctx.getClosedWithErrorCount(), 1);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9:
+ * 重複 GOAWAY を待つ読み取りループでも、制御メッセージの Message Length が
+ * ローカル上限を超えたら FIELD_LENGTH_EXCEEDED でセッションを閉じる。
+ * 重複検出だけを行って読み取りを終える退行を防ぐ。
+ */
+test("bidiContinueReadingForDuplicateGoaway: 上限超過で FIELD_LENGTH_EXCEEDED で閉じる", async () => {
+  const closedWithError: SessionError[] = [];
+  const sessionState: { current: "connected" | "closed" } = { current: "connected" };
+  const session = {
+    get sessionState() {
+      return sessionState.current;
+    },
+    goawayReceivedOnRequestStreams: new Set<bigint>(),
+    closeWithError: (error: SessionError): void => {
+      closedWithError.push(error);
+      sessionState.current = "closed";
+    },
+  } as unknown as BidiSessionInternal;
+  const readable = new ReadableStream<Uint8Array>({
+    start(controller) {
+      // Type 0x10 + Message Length 65536 (vi64 の [0xc1, 0x00, 0x00]) を本文なしで流す
+      controller.enqueue(new Uint8Array([0x10, 0xc1, 0x00, 0x00]));
+    },
+  });
+  const stream = { readable } as unknown as WebTransportBidirectionalStream;
+
+  await bidiContinueReadingForDuplicateGoaway(session, 0n, stream, new ControlStreamReader());
+
+  assert.equal(closedWithError.length, 1);
+  assert.equal(closedWithError[0]?.code, SessionErrorCode.FIELD_LENGTH_EXCEEDED);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9:
+ * 既に閉鎖済みのセッションで応答読み取り中に FIELD_LENGTH_EXCEEDED が起きた場合、
+ * handleCloseError 経由で再度 closeWithError を呼ばない (error コールバックの
+ * 二重通知防止)。本番では sessionClose が同期的に pending を reject 済みであり、
+ * ここで cleanup を改めて行う必要も無い。本テストは forceSessionClosed で
+ * state だけを閉じ、ガードが cleanup を呼ばないことを確認する。
+ */
+test("bidiReadPublishResponse: 閉鎖済みセッションの FLE では closeWithError を再度呼ばない", async () => {
+  const ctx = createOkResponseReadTestContext();
+  const publisher = new PublisherImpl(["test"], "track", ctx.requestId, 1n, () => {});
+  let rejected: Error | undefined;
+  ctx.session.pendingPublish.set(ctx.requestId, {
+    resolve: () => {},
+    reject: (error: Error) => {
+      rejected = error;
+    },
+    impl: publisher,
+  });
+  // transport 終了などで先に閉じた状態を作る
+  forceSessionClosed(ctx.session);
+
+  const readPromise = bidiReadPublishResponse(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+  );
+  // Type 0x10 + Message Length 65536 (vi64 の [0xc1, 0x00, 0x00]) を本文なしで流す
+  ctx.readableController.enqueue(new Uint8Array([0x10, 0xc1, 0x00, 0x00]));
+  await readPromise;
+
+  // 閉鎖済みのため closeWithError も pending の reject も増えない
+  assert.equal(ctx.getClosedWithErrorCount(), 0);
+  assert.isUndefined(rejected);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9:
+ * 接続中に応答読み取りで FIELD_LENGTH_EXCEEDED が起きた場合、handleCloseError 経由で
+ * セッションを 1 回だけ閉じ、pending を FLE で reject する。
+ * 閉鎖済みガードの条件 (sessionState !== "connected") を落とす退行を検出する。
+ */
+test("bidiReadPublishResponse: 接続中の FLE でセッションを閉じて pending を reject する", async () => {
+  const ctx = createOkResponseReadTestContext();
+  const publisher = new PublisherImpl(["test"], "track", ctx.requestId, 1n, () => {});
+  let rejected: Error | undefined;
+  ctx.session.pendingPublish.set(ctx.requestId, {
+    resolve: () => {},
+    reject: (error: Error) => {
+      rejected = error;
+    },
+    impl: publisher,
+  });
+
+  const readPromise = bidiReadPublishResponse(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+  );
+  // Type 0x10 + Message Length 65536 (vi64 の [0xc1, 0x00, 0x00]) を本文なしで流す
+  ctx.readableController.enqueue(new Uint8Array([0x10, 0xc1, 0x00, 0x00]));
+  await readPromise;
+
+  // セッション終了は 1 回だけ、pending は同じ FLE で reject される
+  assert.equal(ctx.getClosedWithErrorCount(), 1);
+  assert.equal(ctx.getClosedWithError()?.code, SessionErrorCode.FIELD_LENGTH_EXCEEDED);
+  assert.isDefined(rejected);
+  assert.equal((rejected as SessionError).code, SessionErrorCode.FIELD_LENGTH_EXCEEDED);
 });

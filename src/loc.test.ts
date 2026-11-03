@@ -867,3 +867,32 @@ test("decodeAudioConfig: 返却値は入力から独立している", () => {
   audioWire[audioWire.length - 1] = 0xff;
   assert.equal(audioDecoded[audioDecoded.length - 1], 0x05);
 });
+
+/**
+ * draft-ietf-moq-transport-23 §8.3:
+ * 単体エンコーダが返す奇数 ID Property も Value 上限 2^16-1 に従う。
+ * 超過する description は送信前に拒否する。
+ */
+test("encodeVideoConfig: 65535 バイトを超える description は送信できない", () => {
+  let thrown: Error | undefined;
+  try {
+    encodeVideoConfig(new Uint8Array(65536));
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.isDefined(thrown);
+  assert.match(thrown?.message ?? "", /exceeds maximum 65535/);
+});
+
+test("encodeAudioConfig: 65535 バイトを超える description は送信できない", () => {
+  let thrown: Error | undefined;
+  try {
+    encodeAudioConfig(new Uint8Array(65536));
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.isDefined(thrown);
+  assert.match(thrown?.message ?? "", /exceeds maximum 65535/);
+});

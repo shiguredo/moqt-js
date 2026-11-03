@@ -88,7 +88,8 @@ test("PublishNamespace のエンコード・デコードがラウンドトリッ
 /**
  * draft-ietf-moq-transport-22 Section 9.14:
  * PUBLISH_NAMESPACE は新しい双方向ストリームの先頭メッセージとして送信される。
- * フレーミングは Type (vi64) + Length (16-bit big-endian) + Payload。
+ * フレーミングは Type (vi64) + Message Length (vi64) + Payload
+ * (draft-ietf-moq-transport-23 §9)。
  * ControlStreamWriter でフレーミングしたバイト列が ControlStreamReader で
  * 正しくパースできることを検証する。
  */
@@ -207,8 +208,8 @@ test("SubscribeNamespace のエンコード・デコードがラウンドトリ�
 
 /**
  * draft-ietf-moq-transport-22 Section 9.15:
- * SUBSCRIBE_NAMESPACE Message のフレーミングは Type (vi64) + Length (16-bit big-endian) + Payload。
- * Length が可変長整数でエンコードされていると受信側で misparse されるため、
+ * SUBSCRIBE_NAMESPACE Message のフレーミングは Type (vi64) + Message Length (vi64)
+ * + Payload (draft-ietf-moq-transport-23 §9)。
  * ControlStreamWriter でフレーミングしたバイト列が ControlStreamReader で正しくパースできることを検証する。
  */
 test("SubscribeNamespace のフレーミングが ControlStreamReader で復元できる", () => {
@@ -326,7 +327,8 @@ test("SubscribeTracks のエンコード・デコードがラウンドトリッ�
 
 /**
  * draft-ietf-moq-transport-22 Section 9.18:
- * SUBSCRIBE_TRACKS Message のフレーミングは Type (vi64) + Length (16-bit big-endian) + Payload。
+ * SUBSCRIBE_TRACKS Message のフレーミングは Type (vi64) + Message Length (vi64)
+ * + Payload (draft-ietf-moq-transport-23 §9)。
  */
 test("SubscribeTracks のフレーミングが ControlStreamReader で復元できる", () => {
   fc.assert(

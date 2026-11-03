@@ -77,6 +77,24 @@ export const MessageType = {
 export type MessageType = (typeof MessageType)[keyof typeof MessageType];
 
 /**
+ * MAX_CONTROL_MESSAGE_SIZE の既定値 (バイト)
+ *
+ * draft-ietf-moq-transport-23 §9.1.8:
+ * 制御メッセージの Message Length (本文長) の上限。SETUP Option 0x09 を
+ * 送らない場合はこの値を既定値として扱い、広告してよい値の最小値も同じ 65535 である。
+ */
+export const DEFAULT_MAX_CONTROL_MESSAGE_SIZE = 65535;
+
+/**
+ * MAX_CONTROL_MESSAGE_SIZE の最小値 (バイト)
+ *
+ * draft-ietf-moq-transport-23 §9.1.8: 広告してよい値の下限は 65535 であり、
+ * 省略時の既定値と同じ値である。仕様で両者が同じ値と定められているため、
+ * ずれないよう既定値から導出する。
+ */
+export const MIN_MAX_CONTROL_MESSAGE_SIZE = DEFAULT_MAX_CONTROL_MESSAGE_SIZE;
+
+/**
  * Setup Option Types (Section 9.1 Setup Options)
  *
  * draft-ietf-moq-transport-22 §9.1, §16.4 (IANA registry)
@@ -113,6 +131,14 @@ export const SetupOptionType = {
    * ピアが送信可能な Range Filter の最大数。デフォルト 0（送信禁止）。
    */
   MAX_FILTER_RANGES: 0x06,
+  /**
+   * MAX_CONTROL_MESSAGE_SIZE (Section 9.1.8)
+   *
+   * draft-ietf-moq-transport-23 §9.1.8:
+   * 自 endpoint が受信を許す制御メッセージの Message Length (本文長) の上限。
+   * 値は vi64 で符号化し、65535 未満は仕様違反である。省略時の既定値も 65535。
+   */
+  MAX_CONTROL_MESSAGE_SIZE: 0x09,
 } as const;
 
 export type SetupOptionType = (typeof SetupOptionType)[keyof typeof SetupOptionType];

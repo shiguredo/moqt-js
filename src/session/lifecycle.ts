@@ -496,6 +496,49 @@ export function sessionCloseWithError(
 }
 
 /**
+ * FIELD_LENGTH_EXCEEDED によるセッション終了を 1 回だけ実行する
+ *
+ * draft-ietf-moq-transport-23 §9:
+ * 制御メッセージの Message Length がローカル上限を超えた場合、受信ループは
+ * FIELD_LENGTH_EXCEEDED でセッションを閉じる。
+ *
+ * 呼び出し側が「FIELD_LENGTH_EXCEEDED を処理済み」かどうかで汎用の close 経路への
+ * フォールバックを止められるよう、戻り値は「閉じたか」ではなく「FLE として処理したか」
+ * を返す。閉鎖済みのセッションでは何もしないが true を返す。これにより、複数の
+ * 受信ループが同じ終了を検知しても error コールバックの二重通知を防げる
+ * (sessionCloseWithError 自体は冪等ではない)。
+ *
+ * @returns FIELD_LENGTH_EXCEEDED として処理したなら true。
+ *   セッションが閉鎖済みで閉じなかった場合も true。それ以外は false。
+ */
+/**
+ * FIELD_LENGTH_EXCEEDED の SessionError か判定する
+ *
+ * 制御メッセージの Message Length 超過を表す唯一のエラーコードであり、
+ * 受信ループの close 判定で共通に使う。
+ */
+export function isFieldLengthExceededError(error: unknown): error is SessionError {
+  return error instanceof SessionError && error.code === SessionErrorCode.FIELD_LENGTH_EXCEEDED;
+}
+
+export function sessionHandleFieldLengthExceeded(
+  session: {
+    readonly sessionState: SessionState;
+  },
+  closeWithError: (error: SessionError) => void,
+  error: unknown,
+): boolean {
+  if (!isFieldLengthExceededError(error)) {
+    return false;
+  }
+  if (session.sessionState === "connected") {
+    closeWithError(error);
+  }
+  // 閉鎖済みでも FLE は処理済みとして true を返す (呼び出し側の汎用 close を抑止する)
+  return true;
+}
+
+/**
  * read loop で発生したエラーを必要なときだけ callbacks.error に通知する
  *
  * draft-ietf-moq-transport-22 Section 6.6:
@@ -843,6 +886,23 @@ export function sessionStartControlMessageLoop(session: SessionLifecycleInternal
         }
       }
     } catch (err) {
+      // draft-ietf-moq-transport-23 §9:
+      // 受信した制御メッセージの Message Length がローカル上限を超えた場合、
+      // ControlStreamReader.feed は FIELD_LENGTH_EXCEEDED の SessionError を投げる。
+      // そのコードでセッションを閉じる。
+      if (
+        sessionHandleFieldLengthExceeded(
+          session,
+          (sessionError) => {
+            sessionCloseWithError(session, sessionError);
+          },
+          err,
+        )
+      ) {
+        // FIELD_LENGTH_EXCEEDED として処理済み (閉鎖済みの場合を含む)。
+        // 以降の通知は行わない。
+        return;
+      }
       // draft-ietf-moq-transport-22 §6.3:
       // 制御ストリームの RESET_STREAM (ピア起因の stream error) は
       // PROTOCOL_VIOLATION でセッションを閉じる。セッション終了起源

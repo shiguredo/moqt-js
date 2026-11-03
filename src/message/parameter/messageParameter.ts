@@ -26,7 +26,7 @@ import { decodeVarint, encodeVarint, MAX_VARINT } from "../../varint";
 import { assertLengthWithinData } from "../../length";
 import { MessageParameterType, type Location } from "../types";
 import { concatUint8Arrays } from "../../bytes";
-import { MAX_KVP_VALUE_LENGTH, type Parameter } from "./types";
+import { type Parameter } from "./types";
 import { decodeTrackNamespace } from "./trackNamespace";
 import { decodeLocationFilterParameter, locationFilterEncodedLength } from "./locationFilter";
 import {
@@ -345,13 +345,15 @@ export function decodeMessageParameter(
       break;
     }
     case "length-prefixed": {
+      // draft-ietf-moq-transport-23 §9.19:
+      // Message Parameter の個々の Value 長に上限はなく、制御メッセージ全体の長さが
+      // MAX_CONTROL_MESSAGE_SIZE で制限される (§15.5 も、より大きな
+      // MAX_CONTROL_MESSAGE_SIZE がより大きな Authorization Token を許すと明記する)。
+      // §8.3 の 2^16-1 上限は Key-Value-Pair (Setup Option / Property) の規則であり、
+      // Message Parameter には適用しない。宣言長が残りバイト数を超える場合は
+      // assertLengthWithinData が PROTOCOL_VIOLATION で拒否する。
       const [length, lengthConsumed] = decodeVarint(data, offset + totalConsumed);
       totalConsumed += lengthConsumed;
-      if (Number(length) > MAX_KVP_VALUE_LENGTH) {
-        throw new ProtocolViolationError(
-          `message parameter value length exceeds maximum: ${length} > ${MAX_KVP_VALUE_LENGTH}`,
-        );
-      }
       assertLengthWithinData(
         "message parameter value",
         length,
@@ -370,14 +372,9 @@ export function decodeMessageParameter(
       // 入力形式に合わせる。Length を剥がすと先頭フィールドを Length と誤読する)。
       const [length, lengthConsumed] = decodeVarint(data, offset + totalConsumed);
       totalConsumed += lengthConsumed;
-      // 既存 length-prefixed 分岐と同じ上限を維持する (防御的制限。
-      // フィルタの Length は仕様で上限が明記されていないが、
-      // 6 万バイト超のフィルタは実用上存在せず、過大宣言の DoS を防ぐ)
-      if (Number(length) > MAX_KVP_VALUE_LENGTH) {
-        throw new ProtocolViolationError(
-          `message parameter value length exceeds maximum: ${length} > ${MAX_KVP_VALUE_LENGTH}`,
-        );
-      }
+      // draft-ietf-moq-transport-23 §9.19 / §15.5:
+      // Message Parameter の Value 長の上限は制御メッセージ全体の長さのみであり、
+      // 内側 Length も同じ扱いとする (§8.3 の KVP 上限は適用しない)。
       // 内側 Length が残りバイト数を超える場合はフレーミング破損として
       // PROTOCOL_VIOLATION で扱う (短い slice を作らない)
       assertLengthWithinData("filter value", length, offset + totalConsumed, data.length);

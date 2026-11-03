@@ -9,7 +9,7 @@
 import { test, assert } from "vite-plus/test";
 import { SubscriberImpl } from "../subscriber";
 import { type MoqtObject } from "../dataStream";
-import { ObjectStatus } from "../message";
+import { AuthorizationTokenAliasType, ObjectStatus, encodeAuthorizationToken } from "../message";
 import { MessageType, MessageParameterType, GroupOrder } from "../message/types";
 import { encodeParameters, decodeFillParameters } from "../message";
 import { decodeRequestUpdatePayload } from "../message/subscribe";
@@ -825,4 +825,42 @@ test("bidiSendRequestUpdate: 削除を含む update は削除後の状態で検�
   assert.isUndefined(thrown);
 });
 
-/** Uint8Array 配列を連結するヘルパー */
+/**
+ * draft-ietf-moq-transport-23 §9:
+ * REQUEST_UPDATE の本文長がピアの MAX_CONTROL_MESSAGE_SIZE を超える場合、
+ * フレーミング (ControlStreamWriter.encode) で送信前に失敗する (ピア上限は既定値)。このとき
+ * pendingRequestUpdate と fillFetchTargets を残さないことを検証する
+ * (送信失敗時に後続の REQUEST_OK で未送信の状態が反映されないようにするため)。
+ */
+test("bidiSendRequestUpdate: フレーミング失敗時に pending と fill の関連付けを残さない", async () => {
+  const { session } = createBidiSession();
+  const subscriber = new SubscriberImpl(["test"], "track", 0n, 0n, () => {});
+  // 仕様上有効なピア上限 (既定値 65535) のまま、65535 バイトを超える
+  // REQUEST_UPDATE を作る。AUTHORIZATION_TOKEN は Message Parameter の
+  // length-prefixed 値であり、65535 バイト以下に収まるトークンを使う
+  // (メッセージ全体の長さは MAX_CONTROL_MESSAGE_SIZE で制限される)。
+  let rejected: unknown;
+  try {
+    await bidiSendRequestUpdate(session, subscriber, {
+      fill: { filter: { startGroup: 10n, startObject: 2n }, fillTimeout: 100n },
+      parameters: [
+        {
+          type: MessageParameterType.AUTHORIZATION_TOKEN,
+          value: encodeAuthorizationToken({
+            aliasType: AuthorizationTokenAliasType.USE_VALUE,
+            tokenType: 1n,
+            tokenValue: new Uint8Array(65530).fill(0x01),
+          }),
+        },
+      ],
+    });
+  } catch (error) {
+    rejected = error;
+  }
+
+  assert.instanceOf(rejected, Error);
+  assert.isTrue((rejected as Error).message.includes("exceeds peer maximum 65535"));
+  // 送信に至らなかった更新の pending と fill 関連付けを取り消している
+  assert.equal(session.pendingRequestUpdate.size, 0);
+  assert.equal(session.fillFetchTargets.size, 0);
+});

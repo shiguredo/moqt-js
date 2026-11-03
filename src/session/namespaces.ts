@@ -100,6 +100,16 @@ export interface NamespacesSessionInternal {
   nextRequestId: bigint;
   receivedGoaway: boolean;
   peerMaxFilterRanges: number;
+  /**
+   * 自 endpoint が SETUP で広告した MAX_CONTROL_MESSAGE_SIZE
+   * (draft-ietf-moq-transport-23 §9.1.8)。リクエストストリームの受信上限に使う。
+   */
+  readonly localMaxControlMessageSize: number;
+  /**
+   * ピアが SETUP で広告した MAX_CONTROL_MESSAGE_SIZE
+   * (draft-ietf-moq-transport-23 §9.1.8)。リクエストストリームの送信上限に使う。
+   */
+  readonly peerMaxControlMessageSize: number;
 
   readonly namespaceSubscriptions: Map<bigint, NamespaceSubscriptionState>;
   readonly tracksSubscriptions: Map<bigint, TracksSubscriptionState>;
@@ -144,7 +154,7 @@ export async function namespacesSubscribeNamespace(
   // 専用の双方向ストリームを作成
   const stream = await session.transport.createBidirectionalStream();
   const streamReader = stream.readable.getReader();
-  const controlReader = new ControlStreamReader();
+  const controlReader = new ControlStreamReader(session.localMaxControlMessageSize);
   const writer = stream.writable.getWriter();
 
   try {
@@ -158,11 +168,11 @@ export async function namespacesSubscribeNamespace(
     };
 
     // メッセージをエンコードして送信
-    // draft-ietf-moq-transport-22 §9.15 (SUBSCRIBE_NAMESPACE):
-    // Type (vi64) + Length (16-bit big-endian) + Payload のフレーミングを
+    // draft-ietf-moq-transport-23 §9 (Control Messages):
+    // Type (vi64) + Message Length (vi64) + Payload のフレーミングを
     // ControlStreamWriter に委譲する。
     const payload = encodeSubscribeNamespacePayload(subscribeNamespaceMsg);
-    const controlWriter = new ControlStreamWriter();
+    const controlWriter = new ControlStreamWriter(session.peerMaxControlMessageSize);
     const framed = controlWriter.encode(MessageType.SUBSCRIBE_NAMESPACE, payload);
 
     // デバッグコールバック
@@ -252,7 +262,7 @@ export async function namespacesSubscribeTracks(
   // 専用の双方向ストリームを作成
   const stream = await session.transport.createBidirectionalStream();
   const streamReader = stream.readable.getReader();
-  const controlReader = new ControlStreamReader();
+  const controlReader = new ControlStreamReader(session.localMaxControlMessageSize);
   const writer = stream.writable.getWriter();
 
   // draft-ietf-moq-transport-22 §8.9 / §9.1.4: SETUP の REGISTER の登録成否に応じて
@@ -274,11 +284,11 @@ export async function namespacesSubscribeTracks(
     };
 
     // メッセージをエンコードして送信
-    // draft-ietf-moq-transport-22 §9.18 (SUBSCRIBE_TRACKS):
-    // Type (vi64) + Length (16-bit big-endian) + Payload のフレーミングを
+    // draft-ietf-moq-transport-23 §9 (Control Messages):
+    // Type (vi64) + Message Length (vi64) + Payload のフレーミングを
     // ControlStreamWriter に委譲する。
     const payload = encodeSubscribeTracksPayload(subscribeTracksMsg);
-    const controlWriter = new ControlStreamWriter();
+    const controlWriter = new ControlStreamWriter(session.peerMaxControlMessageSize);
     const framed = controlWriter.encode(MessageType.SUBSCRIBE_TRACKS, payload);
 
     // デバッグコールバック
@@ -411,7 +421,7 @@ async function namespacesSendPublishNamespace(
     // transport では getReader / getWriter が throw するため、detached な
     // async 処理で未処理 rejection を残さないようにする
     streamReader = stream.readable.getReader();
-    controlReader = new ControlStreamReader();
+    controlReader = new ControlStreamReader(session.localMaxControlMessageSize);
     writer = stream.writable.getWriter();
   } catch (error) {
     // 取得済みのリソースだけを掃除する (getWriter の失敗で reader を残さない)。
@@ -517,12 +527,11 @@ export function namespacesPublishNamespace(
   };
 
   // メッセージをエンコードする
-  // draft-ietf-moq-transport-22 Section 9.14 (PUBLISH_NAMESPACE):
-  // Type (vi64) + Length (16-bit big-endian) + Payload のフレーミングを
+  // draft-ietf-moq-transport-23 §9 (Control Messages):
+  // Type (vi64) + Message Length (vi64) + Payload のフレーミングを
   // ControlStreamWriter に委譲する。
-  // https://www.ietf.org/archive/id/draft-ietf-moq-transport-22.html#section-9.14
   const payload = encodePublishNamespacePayload(publishNamespaceMsg);
-  const controlWriter = new ControlStreamWriter();
+  const controlWriter = new ControlStreamWriter(session.peerMaxControlMessageSize);
   const framed = controlWriter.encode(MessageType.PUBLISH_NAMESPACE, payload);
 
   // デバッグコールバック

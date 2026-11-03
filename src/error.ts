@@ -44,6 +44,15 @@ export const SessionErrorCode = {
    * MAX_REQUEST_UPDATES で広告した上限を超える REQUEST_UPDATE を受信した。
    */
   TOO_MANY_REQUEST_UPDATES: 0x1b,
+  /**
+   * FIELD_LENGTH_EXCEEDED (Section 12.2)
+   *
+   * draft-ietf-moq-transport-23 §12.2:
+   * フィールドまたは構造が許される最大長を超えた。制御メッセージの
+   * Message Length が自 endpoint の MAX_CONTROL_MESSAGE_SIZE を超えた場合にも使う
+   * (§9)。複数のコードが該当する場合はこのコードを優先する。
+   */
+  FIELD_LENGTH_EXCEEDED: 0x401,
 } as const;
 
 export type SessionErrorCode = (typeof SessionErrorCode)[keyof typeof SessionErrorCode];

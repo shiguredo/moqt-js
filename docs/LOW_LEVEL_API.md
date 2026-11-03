@@ -34,15 +34,16 @@ const session = await connect(url, callbacks?, options?)
 
 #### `ConnectOptions`
 
-| 名前                            | 説明                                                                                                                                                            |
-| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `serverCertificateHashes`       | 自己署名証明書用の `WebTransportOptions.serverCertificateHashes`                                                                                                |
-| `authorizationToken`            | `SETUP` Option `0x03` として送る認証トークン。省略時は MOQT URI の msf fragment の `c4m` を使う                                                                 |
-| `pendingSubgroup`               | `PendingSubgroupBuffer` のオプション (上限バイト数 / タイムアウト)                                                                                              |
-| `moqtImplementation`            | `SETUP` Option `0x0A` (MOQT_IMPLEMENTATION) として送る実装名                                                                                                    |
-| `grease`                        | 送受信に GREASE 拡張を注入するか                                                                                                                                |
-| `dataStreamMaxBufferBytes`      | 受信データストリーム 1 本が保持してよいバッファの上限。超過時はそのストリームを打ち切り (セッションは閉じない)、0 以下で上限なし (既定 32 MiB)                  |
-| `dataStreamMaxTotalBufferBytes` | 受信データストリーム全体が保持してよいバッファの合計上限。超過時は超過の原因になったストリームを打ち切り (セッションは閉じない)、0 以下で上限なし (既定 64 MiB) |
+| 名前                            | 説明                                                                                                                                                                                             |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `serverCertificateHashes`       | 自己署名証明書用の `WebTransportOptions.serverCertificateHashes`                                                                                                                                 |
+| `authorizationToken`            | `SETUP` Option `0x03` として送る認証トークン。省略時は MOQT URI の msf fragment の `c4m` を使う                                                                                                  |
+| `maxControlMessageSize`         | `SETUP` Option `0x09` として広告する受信上限 (バイト、Message Length)。65535 以上 Number.MAX_SAFE_INTEGER 以下の整数。省略時は Option を送らず 65535。送信はピアの広告値 (受信前は 65535) に従う |
+| `pendingSubgroup`               | `PendingSubgroupBuffer` のオプション (上限バイト数 / タイムアウト)                                                                                                                               |
+| `moqtImplementation`            | `SETUP` Option `0x07` (MOQT_IMPLEMENTATION) として送る実装名                                                                                                                                     |
+| `grease`                        | 送受信に GREASE 拡張を注入するか                                                                                                                                                                 |
+| `dataStreamMaxBufferBytes`      | 受信データストリーム 1 本が保持してよいバッファの上限。超過時はそのストリームを打ち切り (セッションは閉じない)、0 以下で上限なし (既定 32 MiB)                                                   |
+| `dataStreamMaxTotalBufferBytes` | 受信データストリーム全体が保持してよいバッファの合計上限。超過時は超過の原因になったストリームを打ち切り (セッションは閉じない)、0 以下で上限なし (既定 64 MiB)                                  |
 
 #### MSF URI Fragment の `c4m`
 
@@ -500,6 +501,8 @@ Datagram 受信時は `decodeObjectDatagram()` で decode し、`trackAlias` か
 ### 制御ストリーム
 
 `startControlMessageLoop()` はセッション期間中ずっと制御ストリームを読み続ける。制御ストリームが途中で閉じた場合は `PROTOCOL_VIOLATION` とする。
+
+制御メッセージの `Message Length` が自 endpoint の受信上限 (`maxControlMessageSize`、既定 65535) を超えた場合は `FIELD_LENGTH_EXCEEDED` (0x401) でセッションを閉じる (draft-ietf-moq-transport-23 §9)。
 
 制御ストリームで処理するメッセージは `GOAWAY` のみである (SETUP の後、制御ストリームで送られるメッセージは `GOAWAY` だけ。draft-ietf-moq-transport-22 §9 のメッセージ表 / §9.2)。リクエスト / レスポンスは双方向ストリームで送る (§6.3 / §6.4.2)。
 

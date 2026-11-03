@@ -1,6 +1,9 @@
 /**
  * MOQT Fetch Messages
  * draft-ietf-moq-transport-22 Section 9.11 (FETCH) — 9.12 (FETCH_OK)
+ *
+ * 制御メッセージのフレーミング (Type / Message Length) は
+ * draft-ietf-moq-transport-23 §9 に従う。
  */
 
 import { decodeVarint, encodeVarint } from "../varint";
@@ -26,7 +29,7 @@ import { type Location, MessageType } from "./types";
  * draft-ietf-moq-transport-22:
  * FETCH Message {
  *   Type (vi64) = 0x16,
- *   Length (16),
+ *   Length (vi64),
  *   Request ID (vi64),
  *   Track Namespace (..),
  *   Track Name Length (vi64),
@@ -150,11 +153,11 @@ export function decodeFetchPayload(data: Uint8Array, offset = 0): Fetch {
  *
  * draft-ietf-moq-transport-22 Section 9.12 (FETCH_OK):
  * FETCH_OK Message {
- *   Type (i) = 0x18,
- *   Length (16),
+ *   Type (vi64) = 0x18,
+ *   Length (vi64),
  *   End of Track (8),
  *   End Location (Location),
- *   Number of Parameters (i),
+ *   Number of Parameters (vi64),
  *   Parameters (..) ...,
  *   Track Properties (..)
  * }
