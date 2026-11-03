@@ -1,11 +1,5 @@
 import { expect, test } from "@playwright/test";
-import {
-  RELAY_TEST_TIMEOUT_MS,
-  closeRelayPage,
-  createTestNamespace,
-  openRelayPage,
-  requireRelayUri,
-} from "./support";
+import { closeRelayPage, createTestNamespace, openRelayPage, requireRelayUri } from "./support";
 
 /**
  * 実リレーで、告知された namespace を発見し、その namespace の track を購読して
@@ -27,7 +21,10 @@ import {
  * `PUBLISH_NAMESPACE` 単体の probe は使わない。
  */
 test("実リレーで発見した namespace の track を購読して映像を受信できる", async ({ browser }) => {
-  test.setTimeout(RELAY_TEST_TIMEOUT_MS);
+  // この spec は 5 段階を待つ (publishing / framesSent / NAMESPACE / framesReceived /
+  // keyFramesReceived)。各 poll の上限は 30 秒で、合計 150 秒が既定の
+  // RELAY_TEST_TIMEOUT_MS (90 秒) を超えるため、全体の timeout だけを延ばす
+  test.setTimeout(180_000);
   const moqtUri = requireRelayUri();
   if (moqtUri === null) {
     return;
