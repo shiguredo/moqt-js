@@ -1,5 +1,24 @@
 import { expect, test } from "@playwright/test";
-import { closeRelayPage, createTestNamespace, openRelayPage, requireRelayUri } from "./support";
+import {
+  RELAY_TEST_TIMEOUT_MS,
+  closeRelayPage,
+  createTestNamespace,
+  openRelayPage,
+  requireRelayUri,
+} from "./support";
+
+/**
+ * namespace のフィールド列が完全一致するかを判定する
+ *
+ * SUBSCRIBE_NAMESPACE の prefix は共有のため、他のテストの namespace も届く。
+ * 対象の namespace だけを見るために完全一致で比較する。
+ */
+function matchesNamespace(candidate: string[], expected: string[]): boolean {
+  return (
+    candidate.length === expected.length &&
+    candidate.every((field, index) => field === expected[index])
+  );
+}
 
 /**
  * 実リレーで、告知された namespace を発見し、その namespace の track を購読して
@@ -23,8 +42,8 @@ import { closeRelayPage, createTestNamespace, openRelayPage, requireRelayUri } f
 test("実リレーで発見した namespace の track を購読して映像を受信できる", async ({ browser }) => {
   // この spec は 5 段階を待つ (publishing / framesSent / NAMESPACE / framesReceived /
   // keyFramesReceived)。各 poll の上限は 30 秒で、合計 150 秒が既定の
-  // RELAY_TEST_TIMEOUT_MS (90 秒) を超えるため、全体の timeout だけを延ばす
-  test.setTimeout(180_000);
+  // RELAY_TEST_TIMEOUT_MS を超えるため、全体の timeout だけを延ばす
+  test.setTimeout(RELAY_TEST_TIMEOUT_MS * 2);
   const moqtUri = requireRelayUri();
   if (moqtUri === null) {
     return;
@@ -59,8 +78,9 @@ test("実リレーで発見した namespace の track を購読して映像を�
       )
       .toBe("publishing");
 
-    // 購読は catalog と映像が送られている状態で開始する (固定の sleep で待つと、
-    // 遅い runner で catalog が届く前に購読してしまい flaky になる)
+    // 後続の startSubscriber が catalog を受信できるよう、publisher の送信開始を
+    // 先に待つ (固定の sleep で待つと、遅い runner で catalog が届く前に購読して
+    // しまい flaky になる)
     await expect
       .poll(
         () =>
@@ -173,11 +193,7 @@ test("実リレーで発見した namespace の track を購読して映像を�
     expect(subscriptionStatus.errors).toEqual([]);
     expect(subscriptionStatus.state).toBe("active");
     expect(
-      subscriptionStatus.done.some(
-        (candidate) =>
-          candidate.length === namespace.length &&
-          candidate.every((field, index) => field === namespace[index]),
-      ),
+      subscriptionStatus.done.some((candidate) => matchesNamespace(candidate, namespace)),
     ).toBe(false);
   } finally {
     // 停止時に relay が control stream を RESET_STREAM することがあるため、

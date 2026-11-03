@@ -25,14 +25,16 @@ namespace discovery のテストを試作して実リレーに対して実行し
 
 - `PUBLISH_NAMESPACE` は受理され、`NamespacePublication` は `active` になった (エラーなし)
 - `SUBSCRIBE_NAMESPACE` は**応答が返らない**。送受信の記録は `send:SETUP` → `recv:SETUP` → `send:SUBSCRIBE_NAMESPACE` で止まり、15 秒待っても `REQUEST_OK` / `REQUEST_ERROR` のどちらも届かず、`subscribeNamespace()` の Promise は解決しない
-- つまり現在のリレーは `SUBSCRIBE_NAMESPACE` (§9.15) に未対応である。テストをそのまま追加すると CI がタイムアウトで落ちるため、試作したテストとハーネス拡張は破棄した
+- つまり当時のリレーは `SUBSCRIBE_NAMESPACE` (§9.15) に未対応だった。テストをそのまま追加すると CI がタイムアウトで落ちるため、試作したテストとハーネス拡張は破棄した
+- 2026-11-02 のリレー実装の更新後、`tests/e2e/relay/namespace-announcement.spec.ts` が実リレーで通った (PUBLISH_NAMESPACE -> SUBSCRIBE_NAMESPACE -> NAMESPACE -> 撤回 -> NAMESPACE_DONE)
+- 2026-11-03 に、発見した namespace の track を SUBSCRIBE して映像を受信する経路も `tests/e2e/relay/namespace-discovery-subscribe.spec.ts` で通った
 
 ## 設計方針
 
 - 実リレーに対して**通ることを確認できたテストだけ**を追加する。リレーが未対応の経路を、スキップや緩い条件で追加しない (失敗を隠すため)
-- namespace discovery は、リレーが `SUBSCRIBE_NAMESPACE` に対応してから追加する。それまでは本 issue にリレー側の要件として記録する
+- namespace discovery は 2026-11-02 / 2026-11-03 に実リレーで通ることを確認し、`tests/e2e/relay/namespace-announcement.spec.ts` と `tests/e2e/relay/namespace-discovery-subscribe.spec.ts` として追加済みである
 - 追加する経路の優先順は次のとおり。いずれもユニットテストでは相互接続 (クライアントとリレーの間の実ワイヤ) を確認できない経路である。draft-22 で再構成されたのは namespace discovery (§4.2 / §9.15〜9.17) と SUBSCRIBE_TRACKS の意味論 (§3.6) であり、その他は draft-22 以前から存在するが実リレーで未検証のまま残っている経路である
-  1. namespace discovery (`SUBSCRIBE_NAMESPACE` / `NAMESPACE` / `NAMESPACE_DONE`、§4.2 / §9.15〜9.17): **リレー未対応のため保留**
+  1. namespace discovery (`SUBSCRIBE_NAMESPACE` / `NAMESPACE` / `NAMESPACE_DONE`、§4.2 / §9.15〜9.17): 2026-11-02 / 2026-11-03 に追加済み
   2. `SUBSCRIBE_TRACKS` と `PUBLISH_SKIPPED` (意味論は §3.6 / §3.6.3、メッセージは §9.18 / §9.19)
   3. namespace 系 `REQUEST_UPDATE` (prefix 更新は §9.5.2、`SUBSCRIBE_TRACKS` では FORWARD も §9.5 / §9.20.18)。`update()` の経路は最近になって実装・改修された (namespace / tracks 購読へのトークン付与、closed 0810)
   4. `FETCH` の fill (`FILL_PARAMETERS`)、Joining FETCH 廃止後の置換経路 (§3.4)
