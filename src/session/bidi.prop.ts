@@ -612,12 +612,16 @@ test("clearPriorGapTrackingIfUnused: 対象 Track の購読と FETCH が尽き�
       fc.array(fc.boolean(), { minLength: 3, maxLength: 3 }),
       fc.nat({ max: 2 }),
       fc.nat({ max: 2 }),
+      fc.nat({ max: 2 }),
+      fc.nat({ max: 2 }),
       fc.array(fc.boolean(), { minLength: 3, maxLength: 3 }),
       (
         hasTargetEntry,
         otherEntryPresence,
         targetSubscriberCount,
         targetFetcherCount,
+        targetPendingSubscribeCount,
+        targetPendingFetchCount,
         hasOtherPeer,
       ) => {
         const { session } = createBidiSession();
@@ -652,6 +656,30 @@ test("clearPriorGapTrackingIfUnused: 対象 Track の購読と FETCH が尽き�
           const fetcher = new FetcherImpl(["live"], "video", BigInt(100 + index), () => {});
           session.fetchers.set(BigInt(100 + index), fetcher);
         }
+        // 対象 Track の応答待ち SUBSCRIBE / FETCH も「利用中」として数える
+        for (let index = 0; index < targetPendingSubscribeCount; index += 1) {
+          const subscriber = new SubscriberImpl(
+            ["live"],
+            "video",
+            BigInt(300 + index),
+            BigInt(300 + index),
+            () => {},
+          );
+          (
+            session as unknown as {
+              pendingSubscribe: Map<bigint, { impl: SubscriberImpl }>;
+            }
+          ).pendingSubscribe.set(BigInt(300 + index), { impl: subscriber });
+        }
+        for (let index = 0; index < targetPendingFetchCount; index += 1) {
+          const fetcher = new FetcherImpl(["live"], "video", BigInt(400 + index), () => {});
+          (
+            session as unknown as {
+              pendingFetch: Map<bigint, { impl: FetcherImpl }>;
+            }
+          ).pendingFetch.set(BigInt(400 + index), { impl: fetcher });
+        }
+
         // 別 Track の購読と FETCH (対象 Track の生存判定に数えてはならない)
         if (hasOtherPeer) {
           const otherSubscriber = new SubscriberImpl(["live"], "audio", 200n, 200n, () => {});
@@ -662,7 +690,12 @@ test("clearPriorGapTrackingIfUnused: 対象 Track の購読と FETCH が尽き�
 
         clearPriorGapTrackingIfUnused(session, targetKey);
 
-        const shouldKeep = hasTargetEntry && (targetSubscriberCount > 0 || targetFetcherCount > 0);
+        const shouldKeep =
+          hasTargetEntry &&
+          (targetSubscriberCount > 0 ||
+            targetFetcherCount > 0 ||
+            targetPendingSubscribeCount > 0 ||
+            targetPendingFetchCount > 0);
         assert.equal(tracking.has(targetKey), shouldKeep);
         // 他の Track の追跡エントリは消えない
         otherKeys.forEach((key, index) => {
