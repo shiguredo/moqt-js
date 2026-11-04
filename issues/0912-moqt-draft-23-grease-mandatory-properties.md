@@ -1,8 +1,8 @@
 # Mandatory Track Property の判定から GREASE 値を除外する
 
 - Created: 2026-11-03
-- Completed: {YYYY-MM-DD}
-- Branch: feature/change-grease-mandatory-properties
+- Completed: 2026-11-04
+- Branch: feature/change-moqt-draft-23
 - Polished: 2026-11-03
 
 ## 目的
@@ -36,4 +36,13 @@ draft 23 §3.7 は 0x4000〜0x7FFF の GREASE 値を Mandatory Track Properties 
 
 ## 解決方法
 
-{未着手}
+- `src/properties.ts` の `isMandatoryTrackPropertyId` を「値域内かつ GREASE でない」判定に変更した。draft-23 §3.7 は 0x4000-0x7FFF の GREASE 値を Mandatory Track Property ではないと定めており、`src/grease.ts` の `isGreaseValue` (0x7f * N + 0x9D) で除外する。
+- 判定を 1 箇所に集約しているため、`decodeProperties` / `parseProperties` / `decodeImmutableProperties` / Object Property 検証のすべての経路に同じ規則が適用される。各 decoder の判定は個別に変更していない。
+- GREASE Property は未知 Property として扱い、既知型の意味論や一意性を適用しない。
+- JSDoc を draft-23 §3.7 の内容に更新し、GREASE を除外する理由を明記した。
+- テストは 0x4000-0x7FFF に入る GREASE 値が `isMandatoryTrackPropertyId` で false になり、同範囲の GREASE でない値 (0x4000 / 0x7FFF) は true のまま、範囲外の GREASE 値 (0x9D) も false になることを検証する。
+- docs は 0925 で一括更新するため触っていない。
+
+### 既知の制限
+
+- 実リレー E2E は統合ブランチの制約 (ALPN は移行完了まで moqt-22) のため未実施である。
