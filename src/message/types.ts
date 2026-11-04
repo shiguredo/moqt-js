@@ -379,6 +379,14 @@ export const PublishDoneStatusCode = {
   GOING_AWAY: 0x4,
   TOO_FAR_BEHIND: 0x5,
   EXPIRED: 0x6,
+  /**
+   * EXPIRED_AUTH_TOKEN (Section 12.4)
+   *
+   * 購読を認可したトークンの有効期限切れ。Session Termination の
+   * EXPIRED_AUTH_TOKEN (0x18) / REQUEST_ERROR の 0x5 / Stream Reset の 0x7 とは
+   * 文脈ごとに異なるコード空間であり、共通の数値・normalizer は使わない。
+   */
+  EXPIRED_AUTH_TOKEN: 0x7,
   UPDATE_FAILED: 0x8,
   EXCESSIVE_LOAD: 0x9,
   MALFORMED_TRACK: 0x12,
@@ -393,8 +401,9 @@ export type PublishDoneStatusCode =
  * draft-ietf-moq-transport-22 Section 9.9 (PUBLISH_DONE):
  * "The Status Code indicates why the subscription ended, and whether it was an error."
  * どの code がエラーかの判断は Section 12.4 (Publish Done Codes) の説明に基づく。
- * INTERNAL_ERROR (0x0), UNAUTHORIZED (0x1), TOO_FAR_BEHIND (0x5), UPDATE_FAILED (0x8),
- * EXCESSIVE_LOAD (0x9), MALFORMED_TRACK (0x12) をエラーとみなす。
+ * INTERNAL_ERROR (0x0), UNAUTHORIZED (0x1), TOO_FAR_BEHIND (0x5),
+ * EXPIRED_AUTH_TOKEN (0x7), UPDATE_FAILED (0x8), EXCESSIVE_LOAD (0x9),
+ * MALFORMED_TRACK (0x12) をエラーとみなす。
  * TRACK_ENDED (0x2), GOING_AWAY (0x4), EXPIRED (0x6) は購読の正常な終わりであり、
  * エラーとみなさない (§12.4 にエラーを示す記述が無い)。
  *
@@ -409,6 +418,7 @@ export function isPublishDoneErrorStatus(statusCode: PublishDoneStatusCode): boo
     case PublishDoneStatusCode.INTERNAL_ERROR:
     case PublishDoneStatusCode.UNAUTHORIZED:
     case PublishDoneStatusCode.TOO_FAR_BEHIND:
+    case PublishDoneStatusCode.EXPIRED_AUTH_TOKEN:
     case PublishDoneStatusCode.UPDATE_FAILED:
     case PublishDoneStatusCode.EXCESSIVE_LOAD:
     case PublishDoneStatusCode.MALFORMED_TRACK:

@@ -291,9 +291,9 @@ test("bidiReadSubscribeResponse: REQUEST_ERROR で fillFetchTargets も削除さ
   );
   const errorPayload = encodeRequestErrorPayload({
     type: MessageType.REQUEST_ERROR,
-    errorCode: BigInt(RequestErrorCode.PREFIX_OVERLAP),
+    errorCode: BigInt(RequestErrorCode.UNAVAILABLE),
     reasonPhrase: "prefix overlap",
-    retryInterval: 0n,
+    retryInterval: 1500n,
   });
   ctx.readableController.enqueue(
     ctx.session.controlWriter!.encode(MessageType.REQUEST_ERROR, errorPayload),
@@ -302,9 +302,11 @@ test("bidiReadSubscribeResponse: REQUEST_ERROR で fillFetchTargets も削除さ
   await readPromise;
 
   assert.instanceOf(rejected, RequestError);
-  assert.equal((rejected as RequestError).code, RequestErrorCode.PREFIX_OVERLAP);
+  // draft-ietf-moq-transport-23 §12.3 (UNAVAILABLE):
+  // 既知コードとして保持し、Retry Interval を失わずアプリへ渡す
+  assert.equal((rejected as RequestError).code, RequestErrorCode.UNAVAILABLE);
   // REDIRECT 以外のコードでは Retry Interval だけが載り、Redirect は付かない
-  assert.equal((rejected as RequestError).retryInterval, 0n);
+  assert.equal((rejected as RequestError).retryInterval, 1500n);
   assert.isUndefined((rejected as RequestError).redirect);
   assert.isUndefined(ctx.getClosedWithError());
   assert.isFalse(ctx.session.pendingSubscribe.has(ctx.requestId));

@@ -240,13 +240,13 @@ function namespaceWithDisallowedParameterSpec(suffix: string[]): ControlMessageS
   };
 }
 
-/** REQUEST_ERROR (PREFIX_OVERLAP) */
+/** REQUEST_ERROR (INTERNAL_ERROR) */
 function requestErrorSpec(reasonPhrase: string): ControlMessageSpec {
   return {
     type: MessageType.REQUEST_ERROR,
     payload: encodeRequestErrorPayload({
       type: MessageType.REQUEST_ERROR,
-      errorCode: BigInt(RequestErrorCode.PREFIX_OVERLAP),
+      errorCode: BigInt(RequestErrorCode.INTERNAL_ERROR),
       reasonPhrase,
       retryInterval: 0n,
     }),

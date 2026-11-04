@@ -33,6 +33,59 @@ test("done は onDoneInternal を呼んで closed にする", async () => {
   assert.equal(publisher.state, "closed");
 });
 
+/**
+ * draft-ietf-moq-transport-23 §12.4 (Publish Done Codes):
+ * 省略時は TRACK_ENDED (0x2)、EXPIRED_AUTH_TOKEN 指定時は 0x7 を PUBLISH_DONE の
+ * status として送る。許可外の status は状態変更・送信より前に拒否する。
+ */
+test("done: 省略時は TRACK_ENDED、EXPIRED_AUTH_TOKEN 指定時は 0x7 を送る", async () => {
+  const sentStatuses: PublishDoneStatusCode[] = [];
+  const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n);
+  publisher.onDoneInternal = async (status) => {
+    sentStatuses.push(status);
+  };
+
+  await publisher.done();
+  assert.equal(publisher.state, "closed");
+  assert.deepEqual(sentStatuses, [PublishDoneStatusCode.TRACK_ENDED]);
+});
+
+test("done: EXPIRED_AUTH_TOKEN を指定すると 0x7 を送って closed になる", async () => {
+  const sentStatuses: PublishDoneStatusCode[] = [];
+  const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n);
+  publisher.onDoneInternal = async (status) => {
+    sentStatuses.push(status);
+  };
+
+  await publisher.done(PublishDoneStatusCode.EXPIRED_AUTH_TOKEN);
+  assert.deepEqual(sentStatuses, [PublishDoneStatusCode.EXPIRED_AUTH_TOKEN]);
+  assert.equal(publisher.state, "closed");
+});
+
+test("done: 許可外 status は onDoneInternal を呼ばず状態も変えない", async () => {
+  let doneCallCount = 0;
+  const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n);
+  publisher.onDoneInternal = async () => {
+    doneCallCount++;
+  };
+
+  for (const status of [
+    PublishDoneStatusCode.INTERNAL_ERROR,
+    PublishDoneStatusCode.UNAUTHORIZED,
+    PublishDoneStatusCode.GOING_AWAY,
+    PublishDoneStatusCode.UPDATE_FAILED,
+  ]) {
+    assert.throws(() => publisher.done(status), /unsupported publish done status/);
+  }
+  assert.equal(doneCallCount, 0);
+  assert.equal(publisher.state, "active");
+
+  // 拒否後も通常の done() は使える
+  await publisher.done();
+  assert.equal(doneCallCount, 1);
+  assert.equal(publisher.state, "closed");
+});
+
 test("done は closed 状態では onDoneInternal を呼ばない", async () => {
   let doneCallCount = 0;
   const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n);

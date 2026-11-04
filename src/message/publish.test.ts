@@ -35,6 +35,7 @@ import {
   encodePublishPayload,
 } from "./publish";
 import { MalformedTrackError } from "../error";
+import { PublishDoneStatusCode } from "./types";
 
 test("decodePublishDonePayload: Reason Phrase が上限ちょうどなら通過する", () => {
   const reasonPhrase = "a".repeat(MAX_REASON_PHRASE_LENGTH);
@@ -206,4 +207,21 @@ test("decodePublishPayload: Track Properties の scope 違反で MalformedTrackE
     trackProperties: [{ id: 0x02n, value: 1n }],
   });
   assert.deepEqual(decodePublishPayload(bothScopes).trackProperties, [{ id: 0x02n, value: 1n }]);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.9 (PUBLISH_DONE) / §12.4:
+ * EXPIRED_AUTH_TOKEN (0x7) は既知 status として codec で保持され、未知コードや
+ * 不要な Session エラーにならない。TRACK_ENDED (0x2) の既存経路も維持する。
+ */
+test("PUBLISH_DONE: EXPIRED_AUTH_TOKEN (0x7) をエンコード・デコードで保持する", () => {
+  const encoded = encodePublishDonePayload({
+    type: MessageType.PUBLISH_DONE,
+    statusCode: BigInt(PublishDoneStatusCode.EXPIRED_AUTH_TOKEN),
+    streamCount: 0n,
+    reasonPhrase: "auth token expired",
+  });
+  const decoded = decodePublishDonePayload(encoded);
+  assert.equal(decoded.statusCode, BigInt(PublishDoneStatusCode.EXPIRED_AUTH_TOKEN));
+  assert.equal(decoded.reasonPhrase, "auth token expired");
 });

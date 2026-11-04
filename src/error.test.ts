@@ -22,6 +22,7 @@ import {
   SessionError,
   SessionErrorCode,
 } from "./error";
+import { isPublishDoneErrorStatus } from "./message/types";
 
 test("SessionError は MoqtError として code を保持する", () => {
   const error = new SessionError("protocol violation", SessionErrorCode.PROTOCOL_VIOLATION);
@@ -253,4 +254,54 @@ test("ClosedSubgroupError は Error を継承し name/trackAlias/groupId を保�
   assert.equal(error.message, "subgroup is closed: trackAlias=1 groupId=3");
   assert.equal(error.trackAlias, 1n);
   assert.equal(error.groupId, 3n);
+});
+
+// ============================================================================
+// draft-ietf-moq-transport-23 §12.3-§12.5 / §13 の登録コード同期
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-23 §12.3: REQUEST_ERROR に UNAVAILABLE (0x0A) が
+ * 追加された。既知コードとして保持し、INTERNAL_ERROR に正規化しない。
+ * draft-22 の PREFIX_OVERLAP (0x30) は削除されたため、受信時は §13 の
+ * 未知コードとして INTERNAL_ERROR になる。
+ */
+test("normalizeRequestErrorCode: UNAVAILABLE を保持し、削除された PREFIX_OVERLAP は未知名", () => {
+  assert.equal(RequestErrorCode.UNAVAILABLE, 0x0a);
+  assert.equal(normalizeRequestErrorCode(0x0a), RequestErrorCode.UNAVAILABLE);
+  // 削除された 0x30
+  assert.equal(normalizeRequestErrorCode(0x30), RequestErrorCode.INTERNAL_ERROR);
+  // GREASE も未知扱い
+  assert.equal(normalizeRequestErrorCode(0x1f), RequestErrorCode.INTERNAL_ERROR);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §12.4: PUBLISH_DONE に EXPIRED_AUTH_TOKEN (0x7) が
+ * 追加された。同じ名前でも Session Termination (0x18) / REQUEST_ERROR (0x5) /
+ * Stream Reset (0x7) は別のコード空間であり、共通化しない。
+ */
+test("正常系: PUBLISH_DONE の EXPIRED_AUTH_TOKEN は各文脈で独立したコード", () => {
+  assert.equal(PublishDoneStatusCode.EXPIRED_AUTH_TOKEN, 0x7);
+  // 認可トークン期限切れは購読のエラー終了として扱う
+  assert.isTrue(isPublishDoneErrorStatus(PublishDoneStatusCode.EXPIRED_AUTH_TOKEN));
+  assert.equal(normalizePublishDoneCode(0x7), PublishDoneStatusCode.EXPIRED_AUTH_TOKEN);
+  // 各文脈の EXPIRED_AUTH_TOKEN は異なる
+  assert.equal(RequestErrorCode.EXPIRED_AUTH_TOKEN, 0x5);
+  assert.equal(SessionErrorCode.EXPIRED_AUTH_TOKEN, 0x18);
+  assert.equal(DataStreamErrorCode.EXPIRED_AUTH_TOKEN, 0x7);
+  // 文脈違いの数値を混同しない: PUBLISH_DONE 0x7 を Request の 0x7 として扱わない
+  assert.equal(normalizeRequestErrorCode(0x7), RequestErrorCode.INTERNAL_ERROR);
+  // PUBLISH_DONE に存在しない 0x3 (draft-22 の削除済みコード) は未知扱い
+  assert.equal(normalizePublishDoneCode(0x3), PublishDoneStatusCode.INTERNAL_ERROR);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §12.5 / §13: Stream Reset から
+ * UNKNOWN_OBJECT_STATUS (0x6) が削除された。0x6 は未知コードとして
+ * INTERNAL_ERROR に正規化する。
+ */
+test("normalizeDataStreamErrorCode: 削除された UNKNOWN_OBJECT_STATUS は未知名", () => {
+  assert.equal(normalizeDataStreamErrorCode(0x6), DataStreamErrorCode.INTERNAL_ERROR);
+  assert.equal(normalizeDataStreamErrorCode(0x7), DataStreamErrorCode.EXPIRED_AUTH_TOKEN);
+  assert.equal(normalizeDataStreamErrorCode(0x12), DataStreamErrorCode.MALFORMED_TRACK);
 });

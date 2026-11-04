@@ -97,3 +97,36 @@ test("bidiHandlePublishDone: closed 状態では endCallback が呼ばれない"
   assert.equal(endCalled, false);
   assert.equal(errorCalled, undefined);
 });
+
+/**
+ * draft-ietf-moq-transport-23 §9.9 / §12.4:
+ * 受信した PUBLISH_DONE の EXPIRED_AUTH_TOKEN (0x7) は正規化で失われず、
+ * 終了通知の status code として保持される (errorCallback は呼ばない)。
+ */
+test("PUBLISH_DONE: EXPIRED_AUTH_TOKEN (0x7) を終了通知に保持する", () => {
+  let received: PublishDoneInfo | undefined;
+  let errorCalled: Error | undefined;
+
+  const subscriber = new SubscriberImpl(
+    ["test"],
+    "track",
+    0n,
+    1n,
+    () => {},
+    undefined,
+    (publishDone) => {
+      received = publishDone;
+    },
+    (e) => {
+      errorCalled = e;
+    },
+  );
+
+  subscriber.handleEnd(PublishDoneStatusCode.EXPIRED_AUTH_TOKEN, "auth token expired");
+
+  assert.deepEqual(received, {
+    statusCode: PublishDoneStatusCode.EXPIRED_AUTH_TOKEN,
+    reasonPhrase: "auth token expired",
+  });
+  assert.equal(errorCalled, undefined);
+});

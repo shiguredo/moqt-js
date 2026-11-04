@@ -358,7 +358,10 @@ export const propertyArb: fc.Arbitrary<Property> = fc.oneof(evenPropertyArb, odd
 
 export const trackPropertiesArb = fc
   .array(propertyArb, { minLength: 0, maxLength: 3 })
-  .filter((properties) => findDuplicateSupportedProperty(properties) === undefined);
+  .filter(
+    (properties) =>
+      findDuplicateSupportedProperty(properties, new Map<bigint, number>(), true) === undefined,
+  );
 
 /**
  * Track Properties として合法な Property の arbitrary
@@ -369,13 +372,18 @@ export const trackPropertiesArb = fc
  * する PBT では、Track scope を持たない既知 Property を生成しない。
  * 未知 Property は scope を知らないため許可する。
  */
-export const trackScopePropertiesArb = fc.array(
-  propertyArb.filter((property) => {
-    const scope = getPropertyScope(property.id);
-    return scope === undefined || isPropertyScopeAllowed(scope, "track");
-  }),
-  { minLength: 0, maxLength: 3 },
-);
+export const trackScopePropertiesArb = fc
+  .array(
+    propertyArb.filter((property) => {
+      const scope = getPropertyScope(property.id);
+      return scope === undefined || isPropertyScopeAllowed(scope, "track");
+    }),
+    { minLength: 0, maxLength: 3 },
+  )
+  .filter(
+    (properties) =>
+      findDuplicateSupportedProperty(properties, new Map<bigint, number>(), true) === undefined,
+  );
 
 // ============================================================================
 // メッセージ間で共有する名前系の arbitrary

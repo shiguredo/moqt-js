@@ -169,12 +169,26 @@ export const RequestErrorCode = {
   MALFORMED_AUTH_TOKEN: 0x4,
   EXPIRED_AUTH_TOKEN: 0x5,
   GOING_AWAY: 0x6,
+  /**
+   * EXCESSIVE_LOAD (Section 12.3)
+   * draft-ietf-moq-transport-22: 応答側が過負荷。Retry Interval で再試行時期を示す。
+   */
   EXCESSIVE_LOAD: 0x9,
+  /**
+   * UNAVAILABLE (Section 12.3)
+   *
+   * "The responder cannot fulfill this request at this time, but might be able
+   *  to later; for example, a relay lacks stream credit to forward it upstream
+   *  (see Section 7.4).  The sender SHOULD use the Retry Interval to indicate
+   *  when the request can be retried."
+   * クライアント (requester) は relay の stream credit 管理を追加せず、受信時に
+   * Retry Interval をアプリへ渡すだけにする (Section 7.4)。
+   */
+  UNAVAILABLE: 0x0a,
   DOES_NOT_EXIST: 0x10,
   INVALID_RANGE: 0x11,
   MALFORMED_TRACK: 0x12,
   UNINTERESTED: 0x20,
-  PREFIX_OVERLAP: 0x30,
   NAMESPACE_TOO_LARGE: 0x31,
   UNSUPPORTED_EXTENSION: 0x33,
   REDIRECT: 0x34,
@@ -248,12 +262,16 @@ export function normalizeSessionErrorCode(code: number): SessionErrorCode {
 /**
  * Stream Reset Error Codes (Section 16.11.4)
  *
- * draft-ietf-moq-transport-22 Section 16.11.4 (Stream Reset Error Codes):
- * - GOING_AWAY (0x4) を追加
- * - UNKNOWN_OBJECT_STATUS (0x6) を追加
- * - EXPIRED_AUTH_TOKEN (0x7) を追加
- * - EXCESSIVE_LOAD (0x9) を追加
- * - MALFORMED_TRACK (0x12) を追加
+ * draft-ietf-moq-transport-23 Section 12.5 (Stream Reset Error Codes):
+ * - GOING_AWAY (0x4)
+ * - TOO_FAR_BEHIND (0x5)
+ * - EXPIRED_AUTH_TOKEN (0x7)
+ * - EXCESSIVE_LOAD (0x9)
+ * - MALFORMED_TRACK (0x12)
+ *
+ * draft-ietf-moq-transport-23 では draft-22 の UNKNOWN_OBJECT_STATUS (0x6) が
+ * 削除された。受信した 0x6 は Section 13 (Grease) の未知コードとして
+ * INTERNAL_ERROR に正規化する。
  */
 export const DataStreamErrorCode = {
   INTERNAL_ERROR: 0x0,
@@ -262,7 +280,6 @@ export const DataStreamErrorCode = {
   SESSION_CLOSED: 0x3,
   GOING_AWAY: 0x4,
   TOO_FAR_BEHIND: 0x5,
-  UNKNOWN_OBJECT_STATUS: 0x6,
   EXPIRED_AUTH_TOKEN: 0x7,
   EXCESSIVE_LOAD: 0x9,
   MALFORMED_TRACK: 0x12,

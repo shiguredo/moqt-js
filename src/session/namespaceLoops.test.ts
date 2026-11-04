@@ -666,7 +666,7 @@ test("namespaceStartPublicationStreamLoop: GOAWAY 後の REQUEST_ERROR は通知
   });
   ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.GOAWAY, goawayPayload));
   ctx.readableController.enqueue(
-    requestErrorMessage(ctx.controlWriter, RequestErrorCode.PREFIX_OVERLAP),
+    requestErrorMessage(ctx.controlWriter, RequestErrorCode.INTERNAL_ERROR),
   );
   ctx.readableController.close();
   await readPromise;
@@ -1099,7 +1099,7 @@ SUBSCRIPTION_LOOP_CASES.forEach(({ kind, loop }) => {
     ctx.readableController.enqueue(requestOkMessage(ctx.controlWriter));
     // pending が無い状態の REQUEST_ERROR (不正)
     ctx.readableController.enqueue(
-      requestErrorMessage(ctx.controlWriter, RequestErrorCode.PREFIX_OVERLAP),
+      requestErrorMessage(ctx.controlWriter, RequestErrorCode.INTERNAL_ERROR),
     );
     ctx.readableController.close();
     await readPromise;
@@ -1240,7 +1240,7 @@ SUBSCRIPTION_LOOP_CASES.forEach(({ kind, loop }) => {
     // unsubscribe 相当で state を closed にしてから、遅延 REQUEST_ERROR を feed する
     ctx.target.state = "closed";
     ctx.readableController.enqueue(
-      requestErrorMessage(ctx.controlWriter, RequestErrorCode.PREFIX_OVERLAP),
+      requestErrorMessage(ctx.controlWriter, RequestErrorCode.INTERNAL_ERROR),
     );
     ctx.readableController.close();
     await readPromise;
@@ -1922,7 +1922,7 @@ test("namespaceStartNamespaceStreamLoop: prefix 更新失敗では active namesp
     ),
   );
   ctx.readableController.enqueue(
-    requestErrorMessage(ctx.controlWriter, RequestErrorCode.PREFIX_OVERLAP),
+    requestErrorMessage(ctx.controlWriter, RequestErrorCode.INTERNAL_ERROR),
   );
   ctx.readableController.close();
   await readPromise;
@@ -3252,7 +3252,7 @@ LOOP_CASES.forEach(({ kind, loop }) => {
 
     // REQUEST_OK を挟まずに REQUEST_ERROR (リクエスト失敗) を受信する
     ctx.readableController.enqueue(
-      requestErrorMessage(ctx.controlWriter, RequestErrorCode.PREFIX_OVERLAP),
+      requestErrorMessage(ctx.controlWriter, RequestErrorCode.INTERNAL_ERROR),
     );
     ctx.readableController.close();
     await readPromise;
@@ -3294,7 +3294,7 @@ LOOP_CASES.forEach(({ kind, loop }) => {
     // REQUEST_OK を挟まずに REQUEST_ERROR (リクエスト失敗) を受信する。
     // readable を close すると cancel を観測できないため FIN はしない。
     ctx.readableController.enqueue(
-      requestErrorMessage(ctx.controlWriter, RequestErrorCode.PREFIX_OVERLAP),
+      requestErrorMessage(ctx.controlWriter, RequestErrorCode.INTERNAL_ERROR),
     );
     await readPromise;
 

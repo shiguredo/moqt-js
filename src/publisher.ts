@@ -337,13 +337,19 @@ export interface Publisher {
   notifyStateChange(options?: PublishStateNotifyOptions): Promise<void>;
   /**
    * パブリッシングを終了し、PUBLISH_DONE を送信してストリームを閉じる
-   * draft-ietf-moq-transport-22 §9.9 (PUBLISH_DONE)
+   * draft-ietf-moq-transport-23 §9.9 (PUBLISH_DONE) / §12.4 (Publish Done Codes)
+   *
+   * status を省略した場合は従来どおり TRACK_ENDED (0x2) を送る。
+   * 指定できるのは購読の正常終了として送信できる TRACK_ENDED と、
+   * 認可トークンの期限切れを通知する EXPIRED_AUTH_TOKEN (0x7) のみである。
+   * それ以外の値は PUBLISH_DONE の status として送信できず、状態変更や
+   * 送信より前に throw する。
    *
    * 並行して呼ばれた場合も PUBLISH_DONE は 1 回だけ送信され、
    * 2 回目の呼び出しは 1 回目の完了まで待つ。
    * セッションが閉じられた後は PUBLISH_DONE を送信せず即 resolve する。
    */
-  done(): Promise<void>;
+  done(status?: PublishDoneStatusCode): Promise<void>;
 }
 
 /**
@@ -1004,8 +1010,17 @@ export class PublisherImpl implements Publisher {
    * 失敗時は以後の done() で再試行を許す (reject 後も publisherState が
    * "active" のままの意味論を維持する)。
    */
-  done(): Promise<void> {
-    return this.terminate(PublishDoneStatusCode.TRACK_ENDED);
+  done(status: PublishDoneStatusCode = PublishDoneStatusCode.TRACK_ENDED): Promise<void> {
+    // draft-ietf-moq-transport-23 §12.4: アプリが PUBLISH_DONE で送れる status を
+    // TRACK_ENDED (正常終了) と EXPIRED_AUTH_TOKEN (認可トークン期限切れ) に限る。
+    // 許可外の値は状態変更や PUBLISH_DONE 送信より前に拒否する。
+    if (
+      status !== PublishDoneStatusCode.TRACK_ENDED &&
+      status !== PublishDoneStatusCode.EXPIRED_AUTH_TOKEN
+    ) {
+      throw new Error(`unsupported publish done status: 0x${status.toString(16)}`);
+    }
+    return this.terminate(status);
   }
 
   /**
