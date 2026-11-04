@@ -1,6 +1,6 @@
 /**
  * MOQT Subscriber
- * draft-ietf-moq-transport-22 §3.1 (Subscriptions) / §3.1.1 (Pausing Subscriptions)
+ * draft-ietf-moq-transport-23 §3.1 (Subscriptions) / §3.1.1 (Pausing Subscriptions)
  */
 
 import type { Parameter } from "./message/parameter";
@@ -26,11 +26,11 @@ export type SubscriberState = "active" | "closed";
 
 /**
  * REQUEST_UPDATE のオプション
- * draft-ietf-moq-transport-22 Section 9.5 (REQUEST_UPDATE)
+ * draft-ietf-moq-transport-23 Section 9.5 (REQUEST_UPDATE)
  *
- * draft-ietf-moq-transport-22:
+ * draft-ietf-moq-transport-23:
  * Start Location は任意の値に減少可能（以前は増加のみ許可されていた）。
- * draft-ietf-moq-transport-22 Section 9.5
+ * draft-ietf-moq-transport-23 Section 9.5
  */
 export interface RequestUpdateOptions {
   /**
@@ -54,7 +54,7 @@ export interface RequestUpdateOptions {
 
   /**
    * Range Filters
-   * draft-ietf-moq-transport-22 Section 3.3.2 (Range Filters)
+   * draft-ietf-moq-transport-23 Section 3.3.2 (Range Filters)
    *
    * Length=0 で削除、省略で不変。
    */
@@ -62,8 +62,8 @@ export interface RequestUpdateOptions {
 
   /**
    * fill fetch の要求
-   * draft-ietf-moq-transport-22 §3.4 (Fill Semantics) /
-   * §9.20.15 (FILL PARAMETERS Parameter)
+   * draft-ietf-moq-transport-23 §3.4 (Fill Semantics) /
+   * §9.19.15 (FILL PARAMETERS Parameter)
    *
    * FILL_PARAMETERS (0x23) として送信し、fill fetch ストリームを要求する。
    * FILL_PARAMETERS は subscription 状態として保持されず、載せたメッセージに
@@ -74,7 +74,7 @@ export interface RequestUpdateOptions {
 
   /**
    * 新規 Group 開始の要求値
-   * draft-ietf-moq-transport-22 Section 9.20.19 (NEW_GROUP_REQUEST Parameter)
+   * draft-ietf-moq-transport-23 Section 9.19.19 (NEW_GROUP_REQUEST Parameter)
    *
    * subscriber が知る最大 Group ID + 1 (情報なし時は 0) を送る。
    * NEW_GROUP_REQUEST (0x32) として送信する。
@@ -90,31 +90,31 @@ export interface Subscriber {
   /**
    * SUBSCRIBE_OK / PUBLISH / REQUEST_UPDATE_OK / PUBLISH_STATE_NOTIFY で
    * 受信した LARGEST_OBJECT パラメータ
-   * draft-ietf-moq-transport-22 Section 9.20.17 (LARGEST OBJECT Parameter)
+   * draft-ietf-moq-transport-23 Section 9.19.17 (LARGEST OBJECT Parameter)
    *
    * Publisher/Relay が知っている最大の Location を示す。
    * 相対指定 (Location Filter Type 0x01) の Location Filter と Next Object (0x05) の
-   * 解決に使用する (draft-ietf-moq-transport-22 §3.3.1)。
+   * 解決に使用する (draft-ietf-moq-transport-23 §3.3.1)。
    */
   readonly largestLocation: Location | null;
   /**
    * 購読で受信した Object のうち最大の Location (1 件も受け取っていなければ null)
    *
-   * draft-ietf-moq-transport-22 §3.1.4 (Largest Object):
+   * draft-ietf-moq-transport-23 §3.1.4 (Largest Object):
    * "Largest Object updates when the first byte of an Object with a Location larger
    *  than the previous value is published or received through a subscription."
    * 購読の Object 経路 (Subgroup / Datagram / fill fetch) から届いた Object で進む。
    * 購読のフィルタで配送しないと決めた Object でも、受信していれば進める。
    *
-   * `largestLocation` がピアの LARGEST_OBJECT パラメータ (§9.20.17) の値であるのに対し、
+   * `largestLocation` がピアの LARGEST_OBJECT パラメータ (§9.19.17) の値であるのに対し、
    * こちらは購読者が自分で観測した値である。NEW_GROUP_REQUEST の値
-   * (§9.20.19 の「購読者が知る最大 Group ID + 1」) は、両者の大きい方から
+   * (§9.19.19 の「購読者が知る最大 Group ID + 1」) は、両者の大きい方から
    * `resolveNewGroupRequestValue` が解決する。
    */
   readonly largestReceivedLocation: Location | null;
   /**
    * SUBSCRIBE_OK で受信した Track Properties
-   * draft-ietf-moq-transport-22 Section 9.7 (SUBSCRIBE_OK):
+   * draft-ietf-moq-transport-23 Section 9.7 (SUBSCRIBE_OK):
    * OBJECT_DELIVERY_TIMEOUT, MAX_CACHE_DURATION, DEFAULT_PUBLISHER_PRIORITY,
    * DEFAULT_PUBLISHER_GROUP_ORDER, DYNAMIC_GROUPS 等。
    */
@@ -135,7 +135,7 @@ export interface Subscriber {
   readonly paused: boolean;
   /**
    * サブスクリプションを更新する（REQUEST_UPDATE を送信）
-   * draft-ietf-moq-transport-22 Section 9.5 (REQUEST_UPDATE)
+   * draft-ietf-moq-transport-23 Section 9.5 (REQUEST_UPDATE)
    */
   update(options?: RequestUpdateOptions): Promise<void>;
   unsubscribe(): Promise<void>;
@@ -157,13 +157,13 @@ export class SubscriberImpl implements Subscriber {
   private readonly requestId: bigint;
   private trackAlias: bigint;
   private subscriberLargestLocation: Location | null = null;
-  // draft-ietf-moq-transport-22 §3.1.4 (Largest Object):
+  // draft-ietf-moq-transport-23 §3.1.4 (Largest Object):
   // 購読で受信した Object の最大 Location。LARGEST_OBJECT で報告された値
   // (subscriberLargestLocation) とは別に、自分が受信した Object でも進める。
-  // NEW_GROUP_REQUEST の値 (§9.20.19) を古い snapshot から作らないために持つ
+  // NEW_GROUP_REQUEST の値 (§9.19.19) を古い snapshot から作らないために持つ
   private subscriberLargestReceivedLocation: Location | null = null;
   private subscriberTrackProperties: Property[] = [];
-  // draft-ietf-moq-transport-22 §10.4 (DEFAULT PUBLISHER_PRIORITY):
+  // draft-ietf-moq-transport-23 §10.4 (DEFAULT PUBLISHER_PRIORITY):
   // Subgroup Header / Object Datagram で Priority が省略された場合に継承する
   // 購読の既定 Publisher Priority。Track Properties 未受信時は 128。
   // setTrackProperties で再解決する。
@@ -174,16 +174,16 @@ export class SubscriberImpl implements Subscriber {
   // 受信 PUBLISH / ケース 1 の REQUEST_UPDATE / 自 update() の REQUEST_OK で
   // 更新される。
   private subscriberPaused = false;
-  // draft-ietf-moq-transport-22 §9.20.8 (GROUP ORDER Parameter):
+  // draft-ietf-moq-transport-23 §9.19.8 (GROUP ORDER Parameter):
   // SUBSCRIBE 送信時の宣言値。fill 要求時の Group Order 解決
   // (FILL_PARAMETERS 内の指定が無ければ subscription の値) に使う。
   private subscriberGroupOrder: "Ascending" | "Descending" | undefined;
   // draft-ietf-moq-msf-01 §11.4.3: track に関連するトークンは REQUEST_UPDATE にも MUST 付与。
   private subscriberAuthorizationToken: AuthorizationToken | undefined;
-  // draft-ietf-moq-transport-22 Section 3.3.1: Location Filter の再適用に使用
+  // draft-ietf-moq-transport-23 Section 3.3.1: Location Filter の再適用に使用
   private locationFilter: LocationFilter | undefined;
   private resolvedFilterCache: ResolvedFilter | undefined;
-  // draft-ietf-moq-transport-22 Section 3.3.2: Range Filter の再適用に使用
+  // draft-ietf-moq-transport-23 Section 3.3.2: Range Filter の再適用に使用
   private rangeFilters: RangeFilterSpec[] = [];
 
   // セッションが利用する内部コールバック
@@ -265,7 +265,7 @@ export class SubscriberImpl implements Subscriber {
   /**
    * SUBSCRIBE 送信時の Group Order を設定する (セッション内部コールバック)
    *
-   * draft-ietf-moq-transport-22 §9.20.8 (GROUP ORDER Parameter):
+   * draft-ietf-moq-transport-23 §9.19.8 (GROUP ORDER Parameter):
    * fill 要求時の Group Order 解決に使う。
    */
   setGroupOrder(groupOrder: "Ascending" | "Descending" | undefined): void {
@@ -290,7 +290,7 @@ export class SubscriberImpl implements Subscriber {
   /**
    * SUBSCRIBE_OK / PUBLISH / REQUEST_UPDATE_OK / PUBLISH_STATE_NOTIFY から
    * LARGEST_OBJECT パラメータを設定
-   * draft-ietf-moq-transport-22 §9.20.17 (LARGEST OBJECT Parameter) / §3.1.4
+   * draft-ietf-moq-transport-23 §9.19.17 (LARGEST OBJECT Parameter) / §3.1.4
    * (Largest Object)
    *
    * §3.1.4 は「以前より大きい Location の Object の最初のバイトを送受信した時点で
@@ -310,12 +310,12 @@ export class SubscriberImpl implements Subscriber {
    * 保持済みの Location Filter を最新の LARGEST_OBJECT で再解決する
    *
    * 解決に使う LARGEST_OBJECT は到着中の Object を指し得る (§3.1.4)。
-   * §3.1.4 / §3.3.1 は「相対指定 (§9.20.9 の 0x01 / 0x05) をどの時点の
+   * §3.1.4 / §3.3.1 は「相対指定 (§9.19.9 の 0x01 / 0x05) をどの時点の
    * Largest Object で解決するか」を定めないため、moqt-js は SUBSCRIBE_OK の
    * 受信時の 1 回に固定する (LARGEST_OBJECT を省略した SUBSCRIBE_OK でも呼ぶ。
    * 以降の LARGEST_OBJECT 更新では解釈を変えない)。
    *
-   * draft-ietf-moq-transport-22 §3.3.1:
+   * draft-ietf-moq-transport-23 §3.3.1:
    * SUBSCRIBE 送信時の setLocationFilter では LARGEST_OBJECT が未受信のため、
    * SUBSCRIBE_OK で LARGEST_OBJECT を設定した直後に一度だけ呼ぶ。
    * REQUEST_UPDATE_OK / PUBLISH_STATE_NOTIFY の LARGEST_OBJECT 更新では呼ばない
@@ -327,11 +327,11 @@ export class SubscriberImpl implements Subscriber {
 
   /**
    * SUBSCRIBE_OK から Track Properties を設定
-   * draft-ietf-moq-transport-22 Section 9.7 (SUBSCRIBE_OK)
+   * draft-ietf-moq-transport-23 Section 9.7 (SUBSCRIBE_OK)
    */
   setTrackProperties(properties: Property[]): void {
     this.subscriberTrackProperties = properties;
-    // draft-ietf-moq-transport-22 §10.4:
+    // draft-ietf-moq-transport-23 §10.4:
     // Priority 省略時の継承値を Track Properties から再解決する
     this.subscriberDefaultPublisherPriority = resolveDefaultPublisherPriority(properties);
   }
@@ -354,7 +354,7 @@ export class SubscriberImpl implements Subscriber {
   /**
    * Set track alias (called when SUBSCRIBE_OK is received)
    *
-   * draft-ietf-moq-transport-22 Section 9.7 (SUBSCRIBE_OK):
+   * draft-ietf-moq-transport-23 Section 9.7 (SUBSCRIBE_OK):
    * Track Alias is returned by the publisher in SUBSCRIBE_OK.
    */
   setTrackAlias(alias: bigint): void {
@@ -364,7 +364,7 @@ export class SubscriberImpl implements Subscriber {
   /**
    * Location Filter を設定する
    *
-   * draft-ietf-moq-transport-22 Section 3.3.1:
+   * draft-ietf-moq-transport-23 Section 3.3.1:
    * SUBSCRIBE 送信時の options.filter または REQUEST_UPDATE 成功後の更新で設定される。
    * 設定時点の LARGEST_OBJECT で解決した結果を保持するため、呼び出し側は
    * 同じ内容のフィルタで再設定しないこと (同じ内容でも再解決で開始位置が
@@ -417,7 +417,7 @@ export class SubscriberImpl implements Subscriber {
   /**
    * Full Track Name の比較キーを取得する（Track 同一性判定用）
    *
-   * draft-ietf-moq-transport-22 Section 2.4.1: Track の同一性は Full Track Name
+   * draft-ietf-moq-transport-23 Section 2.4.1: Track の同一性は Full Track Name
    * (Track Namespace + Track Name) で判定する。
    * 戻り値は fullTrackNameKey が生成する長さ付きキーであり、Full Track Name
    * そのものではない。Track の同一性判定は完全一致でのみ行う。
@@ -429,11 +429,11 @@ export class SubscriberImpl implements Subscriber {
   /**
    * Priority 省略時の Publisher Priority を解決して Object に設定する
    *
-   * draft-ietf-moq-transport-22 §10.4 (DEFAULT PUBLISHER PRIORITY):
+   * draft-ietf-moq-transport-23 §10.4 (DEFAULT PUBLISHER PRIORITY):
    * "Subgroups and Datagrams for this subscription inherit this priority, unless
    *  they specifically override it." / "If omitted, the Default Publisher Priority
    *  is 128."
-   * draft-ietf-moq-transport-22 §11.3.1 / §11.2.1:
+   * draft-ietf-moq-transport-23 §11.3.1 / §11.2.1:
    * DEFAULT_PRIORITY ビットが 1 のとき Priority フィールドは省略され、購読を
    * 確立した control message の Publisher Priority を継承する。
    *
@@ -448,7 +448,7 @@ export class SubscriberImpl implements Subscriber {
   /**
    * Handle incoming object from data stream
    *
-   * draft-ietf-moq-transport-22 §3.1:
+   * draft-ietf-moq-transport-23 §3.1:
    * 同一 Track の複数 subscription に対して、各 subscription の filter を再適用する。
    *
    * 1 Group = 1 Subgroup = 1 Stream のため、QUIC がストリーム内の順序を保証する。
@@ -470,7 +470,7 @@ export class SubscriberImpl implements Subscriber {
   /**
    * 受信した Object の Location で、購読で受信した最大 Location を進める
    *
-   * draft-ietf-moq-transport-22 §3.1.4 (Largest Object):
+   * draft-ietf-moq-transport-23 §3.1.4 (Largest Object):
    * "Largest Object updates when the first byte of an Object with a Location larger
    *  than the previous value is published or received through a subscription."
    * 進めるだけで戻さない (Group ID / Object ID が小さい Object や、Location Filter の
@@ -489,7 +489,7 @@ export class SubscriberImpl implements Subscriber {
   /**
    * 受信 Object に購読のフィルタを再適用し、配送してよいかを判定する
    *
-   * draft-ietf-moq-transport-22 Section 3.3.1 / Section 3.3.2:
+   * draft-ietf-moq-transport-23 Section 3.3.1 / Section 3.3.2:
    * Subgroup 経路と Datagram 経路で同じ規則を適用する。判定の副作用として
    * Priority 省略時の継承値を object へ設定するため、配送前に必ず通す。
    *
@@ -497,10 +497,10 @@ export class SubscriberImpl implements Subscriber {
    * @returns 配送してよければ true
    */
   private passesObjectFilters(object: MoqtObject): boolean {
-    // draft-ietf-moq-transport-22 §10.4 / §11.3.1 / §11.2.1:
+    // draft-ietf-moq-transport-23 §10.4 / §11.3.1 / §11.2.1:
     // Priority 省略時は購読の DEFAULT_PUBLISHER_PRIORITY を継承する
     this.applyDefaultPublisherPriority(object);
-    // draft-ietf-moq-transport-22 Section 3.3.1: Location Filter 再適用
+    // draft-ietf-moq-transport-23 Section 3.3.1: Location Filter 再適用
     if (
       !objectMatchesFilter(
         { group: object.groupId, object: object.objectId },
@@ -509,7 +509,7 @@ export class SubscriberImpl implements Subscriber {
     ) {
       return false;
     }
-    // draft-ietf-moq-transport-22 Section 3.3.2: Range Filter 再適用
+    // draft-ietf-moq-transport-23 Section 3.3.2: Range Filter 再適用
     // datagram 経路では subgroupId は常に undefined であり、SUBGROUP_FILTER は
     // 不通過になる。Priority が明示されていない datagram は PRIORITY_FILTER で
     // 不通過になる (publisherPriority = 0 は評価値として使わない)
@@ -528,7 +528,7 @@ export class SubscriberImpl implements Subscriber {
 
   /**
    * Handle incoming datagram
-   * draft-ietf-moq-transport-22 Section 11.2 (Datagrams) / §2.1:
+   * draft-ietf-moq-transport-23 Section 11.2 (Datagrams) / §2.1:
    * Group または Track の中で Subgroup と Datagram の両方を使える。
    * Subscriber は両方のコールバックを設定することで混在配信を受け取れる。
    */
@@ -554,7 +554,7 @@ export class SubscriberImpl implements Subscriber {
   /**
    * fill fetch ストリームから届いたオブジェクトを受け取る
    *
-   * draft-ietf-moq-transport-22 §3.1 (Subscriptions) / §3.4 (Fill Semantics):
+   * draft-ietf-moq-transport-23 §3.1 (Subscriptions) / §3.4 (Fill Semantics):
    * fill-delivered のオブジェクトは fill 範囲 (FILL_PARAMETERS 内のフィルタ)
    * に従属するため、subscription の Location Filter / Range Filter 再適用
    * (handleObject) を通さず、fillDelivered を true にして object
@@ -579,7 +579,7 @@ export class SubscriberImpl implements Subscriber {
   /**
    * fill fetch ストリームの失敗をアプリへ通知する
    *
-   * draft-ietf-moq-transport-22 §3.4.1 (Opening and Closing Fill Fetch Streams):
+   * draft-ietf-moq-transport-23 §3.4.1 (Opening and Closing Fill Fetch Streams):
    * "Because there is no REQUEST_ERROR associated with a fill fetch stream, the
    *  publisher signals a fill failure by resetting the stream" および
    * "Resetting or cancelling a fill fetch stream, by either endpoint, does not
@@ -589,7 +589,7 @@ export class SubscriberImpl implements Subscriber {
    * ではなく fill 専用の fillErrorCallback へ通知する。アプリはこれで fill が
    * 欠けたことを検知し、再取得を判断できる。
    *
-   * draft-ietf-moq-transport-22 §12.1 (Malformed Tracks) の
+   * draft-ietf-moq-transport-23 §12.1 (Malformed Tracks) の
    * "SHOULD deliver an error to the application" は Malformed Track 検出が
    * 購読自体の cancel を伴うため handleError 側で満たす。ここでは通知しない
    * (cancelMalformedTrackPeers と二重にならないようにする)。
@@ -623,7 +623,7 @@ export class SubscriberImpl implements Subscriber {
   /**
    * 購読の Subgroup の stream の終わりをアプリへ通知する
    *
-   * draft-ietf-moq-transport-22 Section 2.1: Object は順不同で届きうる。アプリは stream の
+   * draft-ietf-moq-transport-23 Section 2.1: Object は順不同で届きうる。アプリは stream の
    * 終わりで、それ以上その Subgroup の Object が届かないと判断できる。
    * state が closed の場合は通知しない (object コールバックと同じ)。
    */
@@ -637,11 +637,11 @@ export class SubscriberImpl implements Subscriber {
   /**
    * Handle track end (from PUBLISH_DONE)
    *
-   * draft-ietf-moq-transport-22 §3.1 (Subscriptions):
+   * draft-ietf-moq-transport-23 §3.1 (Subscriptions):
    * "The publisher terminates a subscription in the Pending (Publisher) or Established
    *  states by sending PUBLISH_DONE and closing the stream."
    *
-   * draft-ietf-moq-transport-22 §9.9 (PUBLISH_DONE):
+   * draft-ietf-moq-transport-23 §9.9 (PUBLISH_DONE):
    * 終了の理由 (Status Code と Reason Phrase) を endCallback に渡す。エラーかどうかは
    * §12.4 (Publish Done Codes) の Status Code が表し、エラーを示す場合 (INTERNAL_ERROR,
    * UPDATE_FAILED 等) も endCallback だけを呼ぶ。
@@ -668,7 +668,7 @@ export class SubscriberImpl implements Subscriber {
   /**
    * Mark as closed (called by session on session close)
    *
-   * draft-ietf-moq-transport-22 Section 6.6:
+   * draft-ietf-moq-transport-23 Section 6.6:
    * "The Transport Session can be terminated at any point."
    *
    * Note: endCallback is NOT called here because session close is
@@ -682,7 +682,7 @@ export class SubscriberImpl implements Subscriber {
   /**
    * サブスクリプションを更新する
    *
-   * draft-ietf-moq-transport-22 Section 9.5 (REQUEST_UPDATE):
+   * draft-ietf-moq-transport-23 Section 9.5 (REQUEST_UPDATE):
    * "A subscriber sends a REQUEST_UPDATE to a publisher to modify an existing subscription."
    *
    * fire-and-forget で呼び出しても、GOAWAY / REQUEST_ERROR / FIN / RESET 等に
@@ -721,7 +721,7 @@ export class SubscriberImpl implements Subscriber {
   /**
    * Unsubscribe from the track
    *
-   * draft-ietf-moq-transport-22 §3.1 (Subscriptions):
+   * draft-ietf-moq-transport-23 §3.1 (Subscriptions):
    * "The subscriber terminates a subscription in the Pending (Subscriber) or Established states
    * by sending STOP_SENDING."
    *

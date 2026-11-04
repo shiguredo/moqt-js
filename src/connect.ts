@@ -1,7 +1,7 @@
 /**
  * MOQT サーバーへの接続
  *
- * draft-ietf-moq-transport-22 Section 6.2 (Session establishment)
+ * draft-ietf-moq-transport-23 Section 6.2 (Session establishment)
  */
 
 import { type ConnectCallbacks, type ConnectOptions, type Session, SessionImpl } from "./session";
@@ -42,7 +42,7 @@ import { resolveMsfAuthorizationToken } from "./msf/c4mAuthorization";
  *   "video",
  *   {
  *     object: (obj) => console.log(obj),
- *     // PUBLISH_DONE による購読の終了。statusCode が終了の理由 (draft-ietf-moq-transport-22 §12.4)
+ *     // PUBLISH_DONE による購読の終了。statusCode が終了の理由 (draft-ietf-moq-transport-23 §12.4)
  *     end: (publishDone) => console.log(`track ended: 0x${publishDone.statusCode.toString(16)}`),
  *     error: (e) => console.error(e),
  *   }
@@ -81,18 +81,18 @@ export async function connect(
     transportOptions.serverCertificateHashes = options.serverCertificateHashes;
   }
 
-  // draft-ietf-moq-transport-22 §6.2 (Session establishment) / §6.2.1 (WebTransport):
+  // draft-ietf-moq-transport-23 §6.2 (Session establishment) / §6.2.1 (WebTransport):
   // "The client includes MOQT protocol identifiers in the WT-Available-Protocols
   //  header." ドラフト版の識別子は、同節の "ALPNs used to identify IETF drafts are
   //  created by appending the draft number to moqt-." に従い "moqt-" + ドラフト番号
   // になる (最終版の ALPN は "moqt"。この規則は RFC 編集者向けの注記の直後にあり、
   // 出版時に削除される箇所である)。
-  // 実装が準拠するドラフトは draft-22 であるため "moqt-22" を提示する。ピアが
-  // draft-22 の識別子に対応していない場合は接続できない。複数の draft を優先順で
+  // 実装が準拠するドラフトは draft-23 であるため "moqt-23" を提示する。ピアが
+  // draft-23 の識別子に対応していない場合は接続できない。複数の draft を優先順で
   // 提示する運用が必要になった場合はここに追加する。
   // WebTransport API の protocols オプションが WT-Available-Protocols に相当する。
   // protocols は TypeScript 6.0 の DOM 型で追加されたため、5.x でも通るようキャストする。
-  (transportOptions as WebTransportOptions & { protocols?: string[] }).protocols = ["moqt-22"];
+  (transportOptions as WebTransportOptions & { protocols?: string[] }).protocols = ["moqt-23"];
 
   const transport = new WebTransport(httpsUrl, transportOptions);
   await transport.ready;
@@ -107,9 +107,9 @@ export async function connect(
 
   // MOQT セッションを初期化する (SETUP メッセージの交換)
   // authorizationToken は SETUP Option (0x03) として送出する
-  // draft-ietf-moq-transport-22 Section 9.1.4 (AUTHORIZATION TOKEN Setup Option)
+  // draft-ietf-moq-transport-23 Section 9.1.4 (AUTHORIZATION TOKEN Setup Option)
   // moqtImplementation は SETUP Option (0x07) の送信を制御する
-  // draft-ietf-moq-transport-22 §9.1.5 / §15.8
+  // draft-ietf-moq-transport-23 §9.1.5 / §15.8
   // grease: true は GREASE Setup Option (§13) を追加する
   // exactOptionalPropertyTypes では optional なフィールドに undefined を渡せないため、
   // 値がある場合だけ載せる

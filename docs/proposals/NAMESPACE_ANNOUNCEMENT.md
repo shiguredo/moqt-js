@@ -42,7 +42,7 @@ relay の namespace discovery は `PUBLISH_NAMESPACE` で登録された namespa
 
 ## 仕様の根拠
 
-draft-ietf-moq-transport-22 §4 (Publisher and Namespace Discovery) より。
+draft-ietf-moq-transport-23 §4 (Publisher and Namespace Discovery) より。
 
 - §4.1: publisher は `PUBLISH_NAMESPACE` を送ってよい (MAY)。
   `PUBLISH_NAMESPACE` は prefix に一致する namespace にトラックがあることを示す
@@ -270,7 +270,7 @@ peer 起点の request 受信の削除に伴い 2026-04-22 に削除された。
 
 ## 参照
 
-- draft-ietf-moq-transport-22 §4.1 (Publishing Namespaces) / §4.2 (Subscribing to Namespaces) /
+- draft-ietf-moq-transport-23 §4.1 (Publishing Namespaces) / §4.2 (Subscribing to Namespaces) /
   §6.4.2.3 (Request Cancellation and Rejection) / §9.14 (PUBLISH_NAMESPACE) /
   §9.15 (SUBSCRIBE_NAMESPACE) / §9.16 (NAMESPACE) / §9.17 (NAMESPACE_DONE)
 - draft-ietf-moq-msf-01 §11.4.3 (Presenting Authorization)

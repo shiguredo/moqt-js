@@ -98,7 +98,7 @@ fill から FETCH への切替を行う場合も、両方の要求と通常購�
 
 ## 参照
 
-- [MOQT draft-22](../../refs/moq/draft-ietf-moq-transport-22.txt): §3.2 FETCH、§3.4 fill、§9.20.15 FILL_PARAMETERS
+- [MOQT draft-23](../../refs/moq/draft-ietf-moq-transport-23.txt): §3.2 FETCH、§3.4 fill、§9.19.15 FILL_PARAMETERS
 - [MSF draft-01](../../refs/moq/draft-ietf-moq-msf-01.txt): トラックと Group の構造
 - [低レベル API](../LOW_LEVEL_API.md): 実装済みの要求と通知
 - [購読側の再生遅延](../PLAYOUT_DELAY.md): 意図した保持と再生期限

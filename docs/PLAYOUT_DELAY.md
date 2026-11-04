@@ -23,7 +23,7 @@
 ## 受信バッファサイズではない理由
 
 `ConnectOptions.dataStreamMaxBufferBytes` と `dataStreamMaxTotalBufferBytes` は、
-draft-ietf-moq-transport-22 §12.5 の `EXCESSIVE_LOAD` に対応するメモリ保護の上限である。
+draft-ietf-moq-transport-23 §12.5 の `EXCESSIVE_LOAD` に対応するメモリ保護の上限である。
 未完成の Object の payload 全長を受けられる値を指定するものであり、超過したストリームは
 打ち切られる。値を大きくしても、完成した Object をいつ復号するかは変わらないため、
 再生遅延は制御できない。

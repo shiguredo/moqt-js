@@ -14,9 +14,9 @@ import { concatUint8Arrays } from "../../bytes";
 import { type Parameter } from "./types";
 
 /**
- * Location Filter (Section 3.3.1, Section 9.20.9)
+ * Location Filter (Section 3.3.1, Section 9.19.9)
  *
- * draft-ietf-moq-transport-22 §9.20.9 の構造:
+ * draft-ietf-moq-transport-23 §9.19.9 の構造:
  *
  *   LOCATION_FILTER Parameter {
  *     Parameter Type (vi64) = 0x21,
@@ -61,7 +61,7 @@ export type LocationFilter =
   // 0x05 (Next Object): Largest Object の次の Object から
   | { nextObject: true };
 
-/** 0x00 (None): フィルタなし (draft-ietf-moq-transport-22 §9.20.9 Table 6) */
+/** 0x00 (None): フィルタなし (draft-ietf-moq-transport-23 §9.19.9 Table 6) */
 const LOCATION_FILTER_TYPE_NONE = 0x00n;
 /** 0x01 (Relative Start): Largest Object 基準の相対開始 */
 const LOCATION_FILTER_TYPE_RELATIVE_START = 0x01n;
@@ -151,7 +151,7 @@ export function validateLocationFilterEndGroup(startGroup: bigint, endGroupDelta
 /**
  * Next Object 形式 (0x05) の Location Filter かどうかを判定する
  *
- * draft-ietf-moq-transport-22 §9.20.9 Table 6: Next Object は専用の
+ * draft-ietf-moq-transport-23 §9.19.9 Table 6: Next Object は専用の
  * Location Filter Type 0x05 が表す。v21 の「2 フィールドで
  * StartGroup = StartObject = 0」という特例は廃止されたため、絶対位置 {0, 0} の
  * 指定 (0x02) は Next Object と判定しない。
@@ -163,7 +163,7 @@ export function isNextObjectLocationFilter(filter: LocationFilter): filter is { 
 /**
  * Location Filter の構造等価を判定する
  *
- * draft-ietf-moq-transport-22 §9.10 (PUBLISH_STATE_NOTIFY):
+ * draft-ietf-moq-transport-23 §9.10 (PUBLISH_STATE_NOTIFY):
  * "If a parameter is not present, its value is unchanged."
  * 値の変化したパラメータのみを運ぶため、同じ内容の LOCATION_FILTER が
  * 再報告されることはない。しかし再報告された場合に再解決すると、
@@ -198,13 +198,13 @@ export function isSameLocationFilter(
 
 /**
  * Location Filter をエンコードする
- * draft-ietf-moq-transport-22 §9.20.9 (LOCATION FILTER Parameter)
+ * draft-ietf-moq-transport-23 §9.19.9 (LOCATION FILTER Parameter)
  *
  * 先頭に Location Filter Type (vi64) を書き、型が定める個数の vi64 を続ける。
  * フィールド数は型で決まるため、Value の長さは自己区切りになる。
  *
  * 3 / 4 フィールド表現は End Group (StartGroup + EndGroupDelta) の 2^64-1 超過を
- * 送信前に検証し、InvalidFilterError で拒否する (§9.20.9 の MUST)。負値 (startGroup /
+ * 送信前に検証し、InvalidFilterError で拒否する (§9.19.9 の MUST)。負値 (startGroup /
  * startObject / endGroupDelta / endObject のいずれ) と、和の検証に捕捉されない
  * startObject / endObject の単体超過は encodeVarint 由来の Error として throw
  * される。節番号は仕様将来版で変わる可能性がある。
@@ -231,7 +231,7 @@ export function encodeLocationFilter(filter: LocationFilter): Uint8Array {
 
 /**
  * Location Filter をデコードする
- * draft-ietf-moq-transport-22 §9.20.9 (LOCATION FILTER Parameter)
+ * draft-ietf-moq-transport-23 §9.19.9 (LOCATION FILTER Parameter)
  *
  * 先頭の Location Filter Type (vi64) を読み、型が定める個数の vi64 を読む。
  * Type 0x00 / 0x05 はフィールドを持たないため Type のみを消費する。
@@ -340,7 +340,7 @@ function scanLocationFilter(
 /**
  * Location Filter のフレーミングが占めるバイト数を返す
  *
- * draft-ietf-moq-transport-22 §9.20.9: Location Filter は Length を持たず、
+ * draft-ietf-moq-transport-23 §9.19.9: Location Filter は Length を持たず、
  * Location Filter Type (vi64) と型が定める個数の vi64 で自己区切りになる。
  * Message Parameter の層で次のパラメータの位置を確定するために、値の意味論
  * (End Group の超過検証など) は行わずバイト数だけを求める。意味論の検証は
@@ -431,7 +431,7 @@ function requireLocationField(field: bigint | undefined, label: string): bigint 
 /**
  * Location Filter を LOCATION_FILTER パラメータとしてエンコードする
  *
- * draft-ietf-moq-transport-22 §9.20.9 (LOCATION FILTER Parameter):
+ * draft-ietf-moq-transport-23 §9.19.9 (LOCATION FILTER Parameter):
  * Parameter Type 0x21 の値は Location Filter Type (vi64) で始まる自己区切り構造で、
  * Length フィールドを持たない。外側 Length を付けるとピアが Type を Length と
  * 誤読するため、encodeLocationFilter の出力をそのまま value にする。

@@ -28,7 +28,7 @@ export interface MediaConnectSettings {
   /**
    * GOAWAY 受信の通知 (新しい Session URI)
    *
-   * draft-ietf-moq-transport-22 §9.2 (根拠の仕様はドラフトであり将来変更される
+   * draft-ietf-moq-transport-23 §9.2 (根拠の仕様はドラフトであり将来変更される
    * 可能性がある):
    * "The client MUST use this URI for the new session if provided. If the URI
    *  is zero bytes long, the current URI is reused instead."

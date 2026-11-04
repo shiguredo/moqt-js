@@ -1,6 +1,6 @@
 /**
  * MOQT Publish Messages
- * draft-ietf-moq-transport-22 Section 9.8 (PUBLISH) — 9.3 (REQUEST_OK / PUBLISH_OK) — 9.9 (PUBLISH_DONE)
+ * draft-ietf-moq-transport-23 Section 9.8 (PUBLISH) — 9.3 (REQUEST_OK / PUBLISH_OK) — 9.9 (PUBLISH_DONE)
  *
  * 制御メッセージのフレーミング (Type / Message Length) は
  * draft-ietf-moq-transport-23 §9 に従う。
@@ -26,9 +26,9 @@ import { MessageType } from "./types";
 /**
  * PUBLISH メッセージ (Section 9.8 PUBLISH)
  *
- * draft-ietf-moq-transport-22:
+ * draft-ietf-moq-transport-23:
  * Track Properties が追加された。
- * draft-ietf-moq-transport-22 Section 9 (Control Messages)
+ * draft-ietf-moq-transport-23 Section 9 (Control Messages)
  */
 export interface Publish {
   type: typeof MessageType.PUBLISH;
@@ -43,7 +43,7 @@ export interface Publish {
 /**
  * PUBLISH_DONE メッセージ (Section 9.9 PUBLISH_DONE)
  *
- * draft-ietf-moq-transport-22:
+ * draft-ietf-moq-transport-23:
  * 双方向ストリーム上で送信されるため Request ID フィールドはない。
  */
 export interface PublishDone {
@@ -56,7 +56,7 @@ export interface PublishDone {
 /**
  * Publish のペイロードをエンコード
  *
- * draft-ietf-moq-transport-22 Section 9.8 (PUBLISH):
+ * draft-ietf-moq-transport-23 Section 9.8 (PUBLISH):
  * PUBLISH Message {
  *   Type (vi64) = 0x1D,
  *   Length (vi64),
@@ -80,7 +80,7 @@ export function encodePublishPayload(msg: Publish): Uint8Array {
   parts.push(encodeVarint(msg.trackAlias));
   parts.push(encodeParameters(msg.parameters));
 
-  // draft-ietf-moq-transport-22 Section 9.8 (PUBLISH):
+  // draft-ietf-moq-transport-23 Section 9.8 (PUBLISH):
   // Track Properties は length プレフィックスなしでシリアライズされる。
   // Message の Length フィールドで終端が決まる。
   parts.push(encodeProperties(msg.trackProperties));
@@ -98,7 +98,7 @@ export function encodePublishPayload(msg: Publish): Uint8Array {
 /**
  * Publish のペイロードをデコード
  *
- * draft-ietf-moq-transport-22 Section 9.8 (PUBLISH)
+ * draft-ietf-moq-transport-23 Section 9.8 (PUBLISH)
  */
 export function decodePublishPayload(data: Uint8Array, offset = 0): Publish {
   let totalConsumed = 0;
@@ -128,7 +128,7 @@ export function decodePublishPayload(data: Uint8Array, offset = 0): Publish {
   const [parameters, parametersConsumed] = decodeParameters(data, offset + totalConsumed);
   totalConsumed += parametersConsumed;
 
-  // draft-ietf-moq-transport-22 Section 9.8 (PUBLISH):
+  // draft-ietf-moq-transport-23 Section 9.8 (PUBLISH):
   // Track Properties は残りバイトすべて
   const propertiesData = data.slice(offset + totalConsumed);
   const trackProperties = decodeProperties(propertiesData, "track");
@@ -150,7 +150,7 @@ export function decodePublishPayload(data: Uint8Array, offset = 0): Publish {
  * Session では個別にエンコードしているため、ランタイムでは使用しない。
  * PBT（Property-Based Testing）でのラウンドトリップテストで使用。
  *
- * draft-ietf-moq-transport-22 Section 9.9 (PUBLISH_DONE):
+ * draft-ietf-moq-transport-23 Section 9.9 (PUBLISH_DONE):
  * PUBLISH_DONE Message {
  *   Type (vi64) = 0xB,
  *   Length (vi64),

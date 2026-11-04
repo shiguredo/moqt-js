@@ -1,6 +1,6 @@
 /**
  * MOQT Namespace Messages Property-Based Tests
- * draft-ietf-moq-transport-22 Section 9.14 (PUBLISH_NAMESPACE) — 9.19 (PUBLISH_SKIPPED)
+ * draft-ietf-moq-transport-23 Section 9.14 (PUBLISH_NAMESPACE) — 9.19 (PUBLISH_SKIPPED)
  */
 
 import { test, assert } from "vite-plus/test";
@@ -34,9 +34,9 @@ import { parametersArb, namespaceStringsArb } from "./parameterArb";
 /**
  * SUBSCRIBE_NAMESPACE 用のネームスペース arbitrary
  *
- * draft-ietf-moq-transport-22:
+ * draft-ietf-moq-transport-23:
  * Track Namespace Prefix は 0〜32 タプルを許可する（空のネームスペースも可）。
- * draft-ietf-moq-transport-22 Section 9.15
+ * draft-ietf-moq-transport-23 Section 9.15
  */
 const namespacePrefixStringsArb = fc.array(fc.string({ minLength: 1, maxLength: 20 }), {
   minLength: 0,
@@ -46,7 +46,7 @@ const namespacePrefixStringsArb = fc.array(fc.string({ minLength: 1, maxLength: 
 /**
  * NAMESPACE/NAMESPACE_DONE 用の Track Namespace Suffix arbitrary
  *
- * draft-ietf-moq-transport-22 Section 9.16 (NAMESPACE):
+ * draft-ietf-moq-transport-23 Section 9.16 (NAMESPACE):
  * Track Namespace Suffix は Track Namespace Prefix を除いた残りの部分。
  * 空も許容される。
  */
@@ -86,7 +86,7 @@ test("PublishNamespace のエンコード・デコードがラウンドトリッ
 });
 
 /**
- * draft-ietf-moq-transport-22 Section 9.14:
+ * draft-ietf-moq-transport-23 Section 9.14:
  * PUBLISH_NAMESPACE は新しい双方向ストリームの先頭メッセージとして送信される。
  * フレーミングは Type (vi64) + Message Length (vi64) + Payload
  * (draft-ietf-moq-transport-23 §9)。
@@ -174,7 +174,7 @@ test("Namespace: 空 Parameters の count がワイヤに含まれる", () => {
 });
 
 /**
- * draft-ietf-moq-transport-22 Section 9.17:
+ * draft-ietf-moq-transport-23 Section 9.17:
  * NAMESPACE_DONE は SUBSCRIBE_NAMESPACE への応答として専用ストリームで送信される。
  * Track Namespace Prefix を除いた Suffix のみを含む。
  */
@@ -196,7 +196,7 @@ test("NamespaceDone のエンコード・デコードがラウンドトリップ
 });
 
 /**
- * draft-ietf-moq-transport-22 Section 9.15:
+ * draft-ietf-moq-transport-23 Section 9.15:
  * SUBSCRIBE_NAMESPACE は新しい双方向ストリームで送信される (0x50)。
  * Subscribe Options フィールドは draft-18 で廃止された。
  * 空のネームスペース（ワイルドカード）も許可される。
@@ -232,7 +232,7 @@ test("SubscribeNamespace のエンコード・デコードがラウンドトリ�
 });
 
 /**
- * draft-ietf-moq-transport-22 Section 9.15:
+ * draft-ietf-moq-transport-23 Section 9.15:
  * SUBSCRIBE_NAMESPACE Message のフレーミングは Type (vi64) + Message Length (vi64)
  * + Payload (draft-ietf-moq-transport-23 §9)。
  * ControlStreamWriter でフレーミングしたバイト列が ControlStreamReader で正しくパースできることを検証する。
@@ -271,7 +271,7 @@ test("SubscribeNamespace のフレーミングが ControlStreamReader で復元�
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.15:
+ * draft-ietf-moq-transport-23 §9.15:
  * encodeSubscribeNamespacePayload は Subscribe Options をエンコードしない。
  * 想定: requestId / trackNamespacePrefix / parameters のみが直列化される。
  */
@@ -316,7 +316,7 @@ test("encodeSubscribeNamespacePayload は Subscribe Options を含まない", ()
 });
 
 /**
- * draft-ietf-moq-transport-22 Section 9.18:
+ * draft-ietf-moq-transport-23 Section 9.18:
  * SUBSCRIBE_TRACKS (0x51) は新しい双方向ストリームで送信される。
  * SUBSCRIBE_NAMESPACE と同構造で Subscribe Options を持たない。
  */
@@ -351,7 +351,7 @@ test("SubscribeTracks のエンコード・デコードがラウンドトリッ�
 });
 
 /**
- * draft-ietf-moq-transport-22 Section 9.18:
+ * draft-ietf-moq-transport-23 Section 9.18:
  * SUBSCRIBE_TRACKS Message のフレーミングは Type (vi64) + Message Length (vi64)
  * + Payload (draft-ietf-moq-transport-23 §9)。
  */
@@ -389,7 +389,7 @@ test("SubscribeTracks のフレーミングが ControlStreamReader で復元で�
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.18:
+ * draft-ietf-moq-transport-23 §9.18:
  * encodeSubscribeTracksPayload は Subscribe Options をエンコードしない。
  */
 test("encodeSubscribeTracksPayload は Subscribe Options を含まない", () => {
@@ -427,7 +427,7 @@ test("encodeSubscribeTracksPayload は Subscribe Options を含まない", () =>
 });
 
 /**
- * draft-ietf-moq-transport-22 Section 9.19 (PUBLISH_SKIPPED):
+ * draft-ietf-moq-transport-23 Section 9.19 (PUBLISH_SKIPPED):
  * PUBLISH_SKIPPED のエンコード・デコードがラウンドトリップすることを検証する。
  * コードポイント 0x0f は不変。
  */

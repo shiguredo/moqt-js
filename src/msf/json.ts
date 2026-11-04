@@ -6,13 +6,13 @@
  * reject する共通処理と、JSON では表現できない非有限数 (NaN / ±Infinity) を拒否する
  * 共通処理をまとめる。
  *
- * 参照: draft-ietf-moq-msf-01 §5.1.2 / §5.2 / §7.4.1 / draft-ietf-moq-transport-22 §8
+ * 参照: draft-ietf-moq-msf-01 §5.1.2 / §5.2 / §7.4.1 / draft-ietf-moq-transport-23 §8
  */
 
 /**
  * MOQT Location 由来の JSON number を bigint に変換する共通 helper。
  *
- * draft-ietf-moq-transport-22 §8 で Group ID / Object ID は vi64 (unsigned 64bit) と
+ * draft-ietf-moq-transport-23 §8 で Group ID / Object ID は vi64 (unsigned 64bit) と
  * 規定される。JSON wire format で値を載せる場合、`Number.MAX_SAFE_INTEGER` を超える領域は
  * `JSON.parse` の段階で既に丸められているため、安全側に倒して reject する。負数も unsigned
  * 値域違反として reject する。

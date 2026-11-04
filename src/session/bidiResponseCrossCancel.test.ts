@@ -23,7 +23,7 @@ import {
 } from "../testSupport/bidi";
 
 /**
- * draft-ietf-moq-transport-22 §3.1.3 (Track Alias) / §2.4.1:
+ * draft-ietf-moq-transport-23 §3.1.3 (Track Alias) / §2.4.1:
  * Track Alias の重複判定は Full Track Name の比較キーで行う。namespace ["a"] +
  * trackName "b/c" と namespace ["a","b"] + trackName "c" は "/" 連結では同じ
  * "a/b/c" になるため、区切り文字の曖昧さで別 Track を同一とみなすと
@@ -72,7 +72,7 @@ test("bidiReadSubscribeResponse: 区切り文字が衝突する別 Track の同�
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.1.3 (Track Alias):
+ * draft-ietf-moq-transport-23 §3.1.3 (Track Alias):
  * DUPLICATE_TRACK_ALIAS 経路で pendingSubscribe + requestStreams +
  * fillFetchTargets が掃除されることを検証する。
  */
@@ -238,7 +238,7 @@ test("bidiReadFetchResponse: 非違反失敗で削除集合が掃除される", 
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.7 (Mandatory to Understand Track Properties) / §6.4.2.3:
+ * draft-ietf-moq-transport-23 §3.7 (Mandatory to Understand Track Properties) / §6.4.2.3:
  * 未知の Mandatory Track Property を含む SUBSCRIBE_OK を受信した subscriber は
  * 購読を cancel する MUST。bidi リクエストストリームが RESET_STREAM (abort) /
  * STOP_SENDING (cancel) で終了し、state が残留しないことを検証する。
@@ -294,7 +294,7 @@ test("bidiReadSubscribeResponse: 未知 Mandatory Track Property で購読が ca
 });
 
 /**
- * draft-ietf-moq-transport-22 §12.1 (Malformed Tracks):
+ * draft-ietf-moq-transport-23 §12.1 (Malformed Tracks):
  * 未知の Mandatory Track Property を含む SUBSCRIBE_OK で malformed Track を
  * 検出したとき、pending の購読だけでなく同一 Full Track Name の既存購読 /
  * FETCH も cancel する。別 Track の購読 / FETCH は触らない。

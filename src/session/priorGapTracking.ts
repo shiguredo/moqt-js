@@ -1,7 +1,7 @@
 /**
  * Track 単位の Prior Group ID Gap / Prior Object ID Gap と Object 状態の追跡
  *
- * draft-ietf-moq-transport-22 §10.8 (Prior Group ID Gap) / §10.9 (Prior Object
+ * draft-ietf-moq-transport-23 §10.8 (Prior Group ID Gap) / §10.9 (Prior Object
  * ID Gap) の malformed Track 条件のうち、同一 Track の複数 Object と過去の受信
  * 状態を必要とする次の 5 条件を判定する。単一 Object の情報だけで判定できる
  * 「同一 Object 内の複数出現」と「gap が Group ID / Object ID より大きい」は
@@ -126,7 +126,7 @@ interface FetchTrackEnd {
 /**
  * 通知済み Prior Group ID Gap の範囲
  *
- * draft-ietf-moq-transport-22 §10.8:
+ * draft-ietf-moq-transport-23 §10.8:
  * Prior Group ID Gap = gap を持つ Group G の Object は「Group
  * [G - gap, G - 1] が存在しない」ことを通知する。1 次元の範囲と 2 要素の
  * Location を比較しないよう、Group ID の閉区間として保持する。
@@ -139,7 +139,7 @@ export interface PriorGroupIdGapRange {
 /**
  * 通知済み Prior Object ID Gap の範囲
  *
- * draft-ietf-moq-transport-22 §10.9:
+ * draft-ietf-moq-transport-23 §10.9:
  * Prior Object ID Gap = gap を持つ Object O は「同じ Group の Object
  * [O - gap, O - 1] が存在しない」ことを通知する。Object ID の範囲は通知元の
  * Group の中でだけ意味を持つため、通知元の Group ID と対応付けて保持する。
@@ -153,7 +153,7 @@ export interface PriorObjectIdGapRange {
 /**
  * Track 単位の追跡状態
  *
- * draft-ietf-moq-transport-22 §10.8 / §10.9 の Prior ID Gap 条件を判定する
+ * draft-ietf-moq-transport-23 §10.8 / §10.9 の Prior ID Gap 条件を判定する
  * 受信済み Group / Object と通知済み gap に加え、次の状態も同じ Track 単位で
  * 保持する。すべての判定が同じ Track の履歴を共有することで、購読 / Subgroup /
  * Datagram / FETCH の受信経路をまたいだ矛盾を検出できる。
@@ -354,7 +354,7 @@ export function assertNoPriorIdGapTrackViolation(
   const nonExistentRange = nonExistentRangeOfStatus(status, groupId, objectId);
 
   // 条件 1: 同一 Group 内で異なる Prior Group ID Gap 値
-  // draft-ietf-moq-transport-22 §10.8:
+  // draft-ietf-moq-transport-23 §10.8:
   // "A Group contains more than one Object with different values for
   //  Prior Group ID Gap."
   if (gaps.priorGroupIdGap !== undefined) {
@@ -367,7 +367,7 @@ export function assertNoPriorIdGapTrackViolation(
   }
 
   // 条件 2: 過去に受信した Object を覆う Prior Group ID Gap
-  // draft-ietf-moq-transport-22 §10.8:
+  // draft-ietf-moq-transport-23 §10.8:
   // "An endpoint receives an Object with a Prior Group ID Gap covering
   //  an Object it previously received."
   // gap が覆う範囲は [現在の Group ID - gap, 現在の Group ID - 1] である。
@@ -384,7 +384,7 @@ export function assertNoPriorIdGapTrackViolation(
   }
 
   // 条件 3: 同じ Group で過去に受信した Object を覆う Prior Object ID Gap
-  // draft-ietf-moq-transport-22 §10.9:
+  // draft-ietf-moq-transport-23 §10.9:
   // "An endpoint receives an Object with a Prior Object ID Gap covering
   //  an Object it previously received."
   // gap が覆う範囲は [現在の Object ID - gap, 現在の Object ID - 1] であり、
@@ -406,7 +406,7 @@ export function assertNoPriorIdGapTrackViolation(
   }
 
   // 条件 4: 過去に通知された gap 内の Group ID
-  // draft-ietf-moq-transport-22 §10.8:
+  // draft-ietf-moq-transport-23 §10.8:
   // "An endpoint receives an Object with a Group ID within a previously
   //  communicated gap."
   for (const range of tracking.priorGroupIdGapRanges) {
@@ -418,7 +418,7 @@ export function assertNoPriorIdGapTrackViolation(
   }
 
   // 条件 5: 過去に通知された gap 内の Object ID
-  // draft-ietf-moq-transport-22 §10.9:
+  // draft-ietf-moq-transport-23 §10.9:
   // "An endpoint receives an Object with an Object ID within a
   //  previously communicated gap."
   // 通知元の Group と一致する場合だけ比較する。
@@ -650,7 +650,7 @@ export function assertNoObjectAfterFetchEnd(
 /**
  * Object Property 列から Prior Group ID Gap / Prior Object ID Gap を取り出す
  *
- * draft-ietf-moq-transport-22 §10.7 (Immutable Properties):
+ * draft-ietf-moq-transport-23 §10.7 (Immutable Properties):
  * "When looking for the value of a property, processors MUST search both the
  *  mutable properties and the contents of Immutable Properties."
  * mutable list と IMMUTABLE_PROPERTIES 配下の双方を探索する。同一 Object 内の
@@ -682,7 +682,7 @@ function collectPriorIdGaps(
     } else if (property.id === MOQTPropertyId.PRIOR_OBJECT_ID_GAP && property.value !== undefined) {
       collected.priorObjectIdGap ??= property.value;
     } else if (property.id === MOQTPropertyId.IMMUTABLE_PROPERTIES && property.data !== undefined) {
-      // draft-ietf-moq-transport-22 §10.7 の「双方を検索する」に従い、
+      // draft-ietf-moq-transport-23 §10.7 の「双方を検索する」に従い、
       // IMMUTABLE_PROPERTIES (0x0B) の内側も探索する。内側の 0x0B は
       // 再帰ネストとして先に malformed になるため、深さは 1 段で足りる。
       collectPriorIdGaps(decodeObjectPropertiesTolerant(property.data).properties, collected);

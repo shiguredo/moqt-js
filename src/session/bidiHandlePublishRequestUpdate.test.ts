@@ -41,7 +41,7 @@ import {
 } from "./bidi";
 
 /**
- * draft-ietf-moq-transport-22 §9.20.16 / §9.20.1:
+ * draft-ietf-moq-transport-23 §9.19.16 / §9.19.1:
  * Range Filters は PUBLISH_OK に出現できない。許可外パラメータを含む
  * PUBLISH_OK を受信した場合、PROTOCOL_VIOLATION でセッションが閉じることを検証する。
  */
@@ -129,7 +129,7 @@ test("bidiReadPublishResponse: 不正な Range Filter を含む PUBLISH_OK で P
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.3:
+ * draft-ietf-moq-transport-23 §9.3:
  * 受信 PUBLISH_OK のペイロードが不完全 (メッセージ構造の破損) な場合、
  * PROTOCOL_VIOLATION でセッションが閉じることを検証する。IncompleteDataError
  * は toSessionCloseError で変換され、閉鎖前に当該リクエストの
@@ -204,7 +204,7 @@ test("bidiReadPublishResponse: 破損 PUBLISH_OK で PROTOCOL_VIOLATION でセ�
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.16 / §9.20.1:
+ * draft-ietf-moq-transport-23 §9.19.16 / §9.19.1:
  * LOCATION_FILTER は PUBLISH_OK に出現できない。値の正否に関わらず
  * スコープ違反として PROTOCOL_VIOLATION でセッションを閉じることを検証する。
  * pendingPublish と requestStreams の該当エントリは残らない。
@@ -242,7 +242,7 @@ test("bidiReadPublishResponse: End Group 超過の LOCATION_FILTER を含む PUB
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.16 / §9.20.1:
+ * draft-ietf-moq-transport-23 §9.19.16 / §9.19.1:
  * 正常な値の LOCATION_FILTER であっても PUBLISH_OK ではスコープ違反になる。
  * Subscription Parameters の更新は REQUEST_UPDATE 経路で扱う。
  */
@@ -285,7 +285,7 @@ test("bidiReadPublishResponse: 正常な LOCATION_FILTER を含む PUBLISH_OK �
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.5:
+ * draft-ietf-moq-transport-23 §9.5:
  * 受信 PUBLISH ストリーム上で無限定 3 種 (AUTHORIZATION_TOKEN /
  * OBJECT_DELIVERY_TIMEOUT / SUBGROUP_DELIVERY_TIMEOUT) のみを含む
  * REQUEST_UPDATE を受信した場合、REQUEST_OK が 1 通応答され、セッションが
@@ -327,7 +327,7 @@ test("bidiHandlePublishRequestUpdate: 受理パラメータのみの REQUEST_UPD
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.4.1:
+ * draft-ietf-moq-transport-23 §3.4.1:
  * 受信 PUBLISH 経路で FILL_PARAMETERS を処理するのは moqt-js (subscriber) で
  * あり、fill fetch ストリームを開く主体 (publisher) ではない。FILL_PARAMETERS は
  * 検証後に受理して REQUEST_OK を返し、fillFetchTargets へは登録しない。
@@ -354,7 +354,7 @@ test("bidiHandlePublishRequestUpdate: FILL_PARAMETERS は受理して REQUEST_OK
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.5:
+ * draft-ietf-moq-transport-23 §9.5:
  * パラメータを含まない REQUEST_UPDATE でも REQUEST_OK が 1 通応答され、
  * セッションが閉じないことを検証する (§9.5 MUST)。パラメータ無しは
  * 文脈限定パラメータの判定を通過する空集合として扱われる。
@@ -376,7 +376,7 @@ test("bidiHandlePublishRequestUpdate: パラメータ無しの REQUEST_UPDATE �
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.1.7 (MAX_REQUEST_UPDATES):
+ * draft-ietf-moq-transport-23 §9.1.7 (MAX_REQUEST_UPDATES):
  * 自 endpoint が広告した上限 (2) と同数の未応答 REQUEST_UPDATE が残っている状態で
  * さらに 1 通受信した場合、加算後の件数 (3) が上限を超えるため
  * TOO_MANY_REQUEST_UPDATES でセッションを閉じる MUST を検証する。
@@ -407,7 +407,7 @@ test("bidiHandlePublishRequestUpdate: 未応答数が上限に達した状態の
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.1.7 (MAX_REQUEST_UPDATES):
+ * draft-ietf-moq-transport-23 §9.1.7 (MAX_REQUEST_UPDATES):
  * 加算後の件数が上限と等しいだけでは閉じない (N 件目までは受理する) ことを
  * 検証する。上限 2 に対して未応答数 1 の状態で受信すると加算後は 2 になり、
  * REQUEST_OK が応答されてセッションは閉じない。
@@ -433,7 +433,7 @@ test("bidiHandlePublishRequestUpdate: 加算後が上限と等しい受信は RE
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.1.7 (MAX_REQUEST_UPDATES):
+ * draft-ietf-moq-transport-23 §9.1.7 (MAX_REQUEST_UPDATES):
  * 「A value of 0 means the endpoint does not limit REQUEST_UPDATE concurrency.」
  * 未広告 (既定値 0) では未応答数がいくつ残っていても上限判定を行わないことを
  * 検証する。§9.1.6 の MAX_FILTER_RANGES の 0 が「受信拒否」なのとは意味が逆で
@@ -459,9 +459,9 @@ test("bidiHandlePublishRequestUpdate: 未広告 (0 = 無制限) では未応答�
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.1 (Parameter Scope):
+ * draft-ietf-moq-transport-23 §9.19.1 (Parameter Scope):
  * REQUEST_UPDATE に出現できないパラメータ (スコープ違反) を含む
- * REQUEST_UPDATE を受信した場合、§9.20.1 の MUST に従い REQUEST_ERROR で
+ * REQUEST_UPDATE を受信した場合、§9.19.1 の MUST に従い REQUEST_ERROR で
  * 応答せず PROTOCOL_VIOLATION でセッションが閉じることを検証する。
  */
 test("bidiHandlePublishRequestUpdate: スコープ違反のパラメータで PROTOCOL_VIOLATION でセッションが閉じる", async () => {
@@ -482,7 +482,7 @@ test("bidiHandlePublishRequestUpdate: スコープ違反のパラメータで PR
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.1 / §9.20.7:
+ * draft-ietf-moq-transport-23 §9.19.1 / §9.19.7:
  * SUBSCRIBER_PRIORITY は REQUEST_UPDATE (for a subscription) に出現できるため、
  * 受信 PUBLISH ストリーム上の REQUEST_UPDATE で受理され REQUEST_OK が応答される
  * ことを検証する (accept-then-ignore。NOT_SUPPORTED で拒否しない)。
@@ -529,7 +529,7 @@ test("bidiHandlePublishRequestUpdate: PAUSED=0 を含む REQUEST_UPDATE で paus
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.1 / §9.20.2 / §9.20.7:
+ * draft-ietf-moq-transport-23 §9.19.1 / §9.19.2 / §9.19.7:
  * REQUEST_UPDATE に出現可能な複数パラメータ (AUTHORIZATION_TOKEN +
  * SUBSCRIBER_PRIORITY) の混合はメッセージ単位で受理され、REQUEST_OK が
  * 応答されることを検証する。
@@ -564,7 +564,7 @@ test("bidiHandlePublishRequestUpdate: 許可パラメータの混合 REQUEST_UPD
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.2 / §8.9:
+ * draft-ietf-moq-transport-23 §9.19.2 / §8.9:
  * 受信 REQUEST_UPDATE の AUTHORIZATION TOKEN の REGISTER がトークンキャッシュへ
  * 登録され、REQUEST_OK が応答されることを検証する。
  */
@@ -601,10 +601,10 @@ test("bidiHandlePublishRequestUpdate: AUTHORIZATION TOKEN の REGISTER がキャ
 });
 
 /**
- * draft-ietf-moq-transport-22 §8.9 / §6.6 / §12.2:
+ * draft-ietf-moq-transport-23 §8.9 / §6.6 / §12.2:
  * 未登録 Alias を参照する USE_ALIAS を含む REQUEST_UPDATE は Session Termination の
  * UNKNOWN_AUTH_TOKEN_ALIAS (0x17) でセッションを閉じることを検証する。0x17 は
- * §16.11.2 (REQUEST_ERROR Codes) に収載されていないため REQUEST_ERROR では送らない。
+ * §16.12.2 (REQUEST_ERROR Codes) に収載されていないため REQUEST_ERROR では送らない。
  * 本経路は元から PUBLISH_DONE を送らないため、REQUEST_ERROR も PUBLISH_DONE も
  * 書かれない。
  */
@@ -633,7 +633,7 @@ test("bidiHandlePublishRequestUpdate: 未登録 Alias の USE_ALIAS は UNKNOWN_
 });
 
 /**
- * draft-ietf-moq-transport-22 §8.9 / §9.1.3:
+ * draft-ietf-moq-transport-23 §8.9 / §9.1.3:
  * Message Parameter の REGISTER が MAX_AUTH_TOKEN_CACHE_SIZE を超える場合は
  * AUTH_TOKEN_CACHE_OVERFLOW でセッションを閉じる MUST を検証する。
  * SETUP 経路 (§9.1.4) と異なり USE_VALUE へ降格しない。
@@ -750,7 +750,7 @@ test("bidiHandlePublishRequestUpdate: PAUSED + 他の許可パラメータの混
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.2 / §12.5 / §9.5:
+ * draft-ietf-moq-transport-23 §9.2 / §12.5 / §9.5:
  * GOAWAY 受信後 (writer オープン時) の REQUEST_UPDATE には REQUEST_ERROR
  * (GOING_AWAY) が応答され、セッションが閉じないことを検証する。
  */
@@ -776,7 +776,7 @@ test("bidiHandlePublishRequestUpdate: GOAWAY 受信後の REQUEST_UPDATE に REQ
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.2 / §9.20.1 / §9.5:
+ * draft-ietf-moq-transport-23 §9.2 / §9.19.1 / §9.5:
  * GOAWAY 受信後 + パラメータスコープ違反が同時に発生した REQUEST_UPDATE は、
  * GOING_AWAY 応答が優先され (PROTOCOL_VIOLATION で閉じずに)、セッションが
  * 閉じないことを検証する。
@@ -803,7 +803,7 @@ test("bidiHandlePublishRequestUpdate: GOAWAY 受信後 + スコープ違反の�
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.5:
+ * draft-ietf-moq-transport-23 §9.5:
  * 応答の書き込みに失敗した場合 (writer が閉じている等) は黙殺され、
  * PROTOCOL_VIOLATION への昇格も callbacks.error の発火も行われず、
  * セッションが閉じない。GOING_AWAY 応答 (判定順序 1) と REQUEST_OK 応答
@@ -845,7 +845,7 @@ test("bidiHandlePublishRequestUpdate: 応答の書き込み失敗はどの経路
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.5:
+ * draft-ietf-moq-transport-23 §9.5:
  * REQUEST_UPDATE のペイロードのデコードに失敗した場合 (メッセージ構造の
  * 破損)、本関数内で PROTOCOL_VIOLATION としてセッションが閉じることを
  * 検証する。ここで閉じることで、「invalid REQUEST_UPDATE payload」の文脈を
@@ -866,7 +866,7 @@ test("bidiHandlePublishRequestUpdate: デコード失敗は PROTOCOL_VIOLATION �
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.5:
+ * draft-ietf-moq-transport-23 §9.5:
  * requestStreams に存在しない requestId (エントリ削除後など) への REQUEST_UPDATE
  * は、応答の書き込み先が無いため黙殺され、セッションが閉じないことを
  * 検証する。
@@ -888,7 +888,7 @@ test("bidiHandlePublishRequestUpdate: requestStreams に存在しない requestI
 });
 
 /**
- * draft-ietf-moq-transport-22 §6.4.2.2 / §9.9:
+ * draft-ietf-moq-transport-23 §6.4.2.2 / §9.9:
  * ピアの FIN により requestStreams のエントリが保持された状態から、セッション
  * close 相当 (requestStreams.clear) で破棄された場合、その後の done() は
  * PUBLISH_DONE を送信せずセッションも閉じないことを検証する
@@ -921,7 +921,7 @@ test("bidiReadRequestStreamMessages: FIN 保持後のセッション close 相�
 });
 
 /**
- * draft-ietf-moq-transport-22 §6.4.2.3:
+ * draft-ietf-moq-transport-23 §6.4.2.3:
  * ピアが STOP_SENDING で当方の送信方向をキャンセルした場合、write / close は
  * WebTransportError (source: "stream") で reject する (W3C WebTransport の
  * 実装挙動)。ピア起因のキャンセルは PROTOCOL_VIOLATION に昇格させないことを
@@ -954,7 +954,7 @@ test("publishSendPublishDone: STOP_SENDING (write 失敗 source: 'stream') で�
 });
 
 /**
- * draft-ietf-moq-transport-22 §12.5 (Stream Reset Error Codes):
+ * draft-ietf-moq-transport-23 §12.5 (Stream Reset Error Codes):
  * エラーコードは SHOULD 推奨であり、ピアが STOP_SENDING にどのコード
  * (CANCELLED 0x1 / DELIVERY_TIMEOUT 0x2 / その他) を載せるかは任意のため、
  * コード集合で判定すると合法的なキャンセルを再昇格し得る。
@@ -984,7 +984,7 @@ test("publishSendPublishDone: STOP_SENDING (DELIVERY_TIMEOUT 0x2) でも非昇�
 });
 
 /**
- * draft-ietf-moq-transport-22 §6.4.2.3:
+ * draft-ietf-moq-transport-23 §6.4.2.3:
  * STOP_SENDING の到着は非同期のため、write() が成功した後に close() が失敗する
  * レースが実 WebTransport で起こり得る。close 失敗エラー自体の source が
  * "stream" の場合も PROTOCOL_VIOLATION に昇格させないことを検証する。
@@ -1074,7 +1074,7 @@ test("publishSendPublishDone: write 失敗 (source なし) は黙殺され、clo
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.9:
+ * draft-ietf-moq-transport-23 §9.9:
  * 並行 done() 呼び出しで二重 PUBLISH_DONE 送信と close 失敗の
  * PROTOCOL_VIOLATION 昇格が起きないことを検証する。
  *
@@ -1102,7 +1102,7 @@ test("publishSendPublishDone: 並行 done で PUBLISH_DONE が 1 回だけ送信
 });
 
 /**
- * draft-ietf-moq-transport-22 §6.6 (Termination):
+ * draft-ietf-moq-transport-23 §6.6 (Termination):
  * session.close() と publisher.done() の並行実行で、セッションクローズに伴う
  * close 失敗 (source なし) が PROTOCOL_VIOLATION に誤昇格して
  * callbacks.error に誤報が流れるのを防ぐことを検証する。
@@ -1134,7 +1134,7 @@ test("publishSendPublishDone: close() と並行実行 (close 失敗時に sessio
 });
 
 /**
- * draft-ietf-moq-transport-22 §6.6 (Termination):
+ * draft-ietf-moq-transport-23 §6.6 (Termination):
  * ピア起因のセッション終了 (transport.closed) と done() の並行実行でも、
  * close 失敗が PROTOCOL_VIOLATION に誤昇格しないことを検証する。
  *

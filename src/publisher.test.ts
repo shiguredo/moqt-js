@@ -1,6 +1,6 @@
 /**
  * Publisher Unit Tests
- * draft-ietf-moq-transport-22 Section 3 (Publishing and Receiving Tracks)
+ * draft-ietf-moq-transport-23 Section 3 (Publishing and Receiving Tracks)
  */
 
 import { test, assert } from "vite-plus/test";
@@ -100,7 +100,7 @@ test("done は closed 状態では onDoneInternal を呼ばない", async () => 
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.9:
+ * draft-ietf-moq-transport-23 §9.9:
  * 並行 done() 呼び出しで二重 PUBLISH_DONE 送信が起きないよう、
  * 進行中の done() を再利用して onDoneInternal を 1 回だけ実行することを検証する。
  */
@@ -223,7 +223,7 @@ test("done 実行中に markClosed されても onDoneInternal は 1 回だけ�
   assert.equal(publisher.state, "closed");
 });
 
-// draft-ietf-moq-transport-22 §9.2 (GOAWAY):
+// draft-ietf-moq-transport-23 §9.2 (GOAWAY):
 // "A GOAWAY MAY also be sent on a request stream to initiate migration
 //  of that individual request."
 // goawayCallback が設定され、GOAWAY 受信時に呼び出されることを検証する。
@@ -241,7 +241,7 @@ test("goawayCallback が設定できる", () => {
 });
 
 /**
- * draft-ietf-moq-transport-22 §11.1.1 / §11.1.2:
+ * draft-ietf-moq-transport-23 §11.1.1 / §11.1.2:
  * status / payload 整合と END_OF_TRACK 後送信の検証。
  * 違反は委譲前に検出し、通知と返値の reject (sendObject) または
  * 通知と同期 throw (sendDatagram) で呼び出し側へ返す。
@@ -452,7 +452,7 @@ test("明示 NORMAL の非空 payload と空 payload の END_OF_GROUP は送信�
 });
 
 test("END_OF_GROUP 送信後の同一 Group への sendObject は失敗する", async () => {
-  // draft-ietf-moq-transport-22 §11.1.1 (Object Status):
+  // draft-ietf-moq-transport-23 §11.1.1 (Object Status):
   // END_OF_GROUP は Group の最終 Object を宣言するため、同じ Group への後続送信は
   // guard で拒否され、通知してから返値の reject になることを単体層で固定する。
   // 委譲先へ渡さないことと、別の Group への送信は妨げないことも合わせて確認する
@@ -554,7 +554,7 @@ test("未 await の連続 sendObject も 2 件目が塞がれる", async () => {
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-22 §9.20.17 (LARGEST OBJECT Parameter):
+ * draft-ietf-moq-transport-23 §9.19.17 (LARGEST OBJECT Parameter):
  * 未送信の Publisher の最大 Location は null であることを検証する。
  */
 test("getLargestLocation: 未送信は null", () => {
@@ -563,7 +563,7 @@ test("getLargestLocation: 未送信は null", () => {
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.17:
+ * draft-ietf-moq-transport-23 §9.19.17:
  * sendObject で送信した最大 Location を保持することを検証する。
  * Group が大きい方、同一 Group では Object が大きい方を最大とする。
  */
@@ -588,7 +588,7 @@ test("getLargestLocation: sendObject で最大 Location を更新する", async 
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.17:
+ * draft-ietf-moq-transport-23 §9.19.17:
  * sendDatagram でも最大 Location を更新することを検証する。
  */
 test("getLargestLocation: sendDatagram で最大 Location を更新する", () => {
@@ -600,7 +600,7 @@ test("getLargestLocation: sendDatagram で最大 Location を更新する", () =
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.17:
+ * draft-ietf-moq-transport-23 §9.19.17:
  * 非整数の Group / Object ID は送信経路で fail-fast 拒否されるため、
  * 最大 Location には記録しないことを検証する。
  */
@@ -697,7 +697,7 @@ test("paused でも done は onDoneInternal を呼ぶ", async () => {
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.3.1 (Location Filters):
+ * draft-ietf-moq-transport-23 §3.3.1 (Location Filters):
  * 「A publisher MUST NOT send objects from outside the
  *  requested range.」
  * 購読の Location Filter の範囲外 Object は送信せず、Largest Object も更新しない。
@@ -729,7 +729,7 @@ test("sendObject: 購読の Location Filter の範囲外は送信せず Largest 
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.3.1:
+ * draft-ietf-moq-transport-23 §3.3.1:
  * 範囲外の END_OF_TRACK は送信も記録もされないため、後続の送信が可能なままになる。
  */
 test("sendObject: 範囲外の END_OF_TRACK は記録せず後続送信を許可する", async () => {
@@ -754,7 +754,7 @@ test("sendObject: 範囲外の END_OF_TRACK は記録せず後続送信を許可
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.3.1:
+ * draft-ietf-moq-transport-23 §3.3.1:
  * 購読の Location Filter の範囲外 Datagram は送信せず、Largest Object も更新しない。
  */
 test("sendDatagram: 購読の Location Filter の範囲外は送信せず Largest Object も更新しない", () => {
@@ -779,7 +779,7 @@ test("sendDatagram: 購読の Location Filter の範囲外は送信せず Larges
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.9 / §9.5.1:
+ * draft-ietf-moq-transport-23 §9.9 / §9.5.1:
  * done() (TRACK_ENDED) と REQUEST_UPDATE 拒否経路 (UPDATE_FAILED) が並行しても、
  * 同じ donePromise 排他を通るため PUBLISH_DONE は 1 回だけ送られる。
  * 先に排他を取得した done() の TRACK_ENDED が勝つ。
@@ -806,7 +806,7 @@ test("terminate: done() が先なら TRACK_ENDED を 1 回だけ送る", async (
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.9 / §9.5.1:
+ * draft-ietf-moq-transport-23 §9.9 / §9.5.1:
  * 拒否経路が排他を先に取得した場合は UPDATE_FAILED を 1 回だけ送り、
  * 並行する done() は何も送らない。
  */
@@ -825,7 +825,7 @@ test("terminate: 拒否経路が先なら UPDATE_FAILED を 1 回だけ送る", 
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.19 (NEW GROUP REQUEST Parameter):
+ * draft-ietf-moq-transport-23 §9.19.19 (NEW GROUP REQUEST Parameter):
  * "When an Original Publisher that supports dynamic Groups receives a NEW_GROUP_REQUEST
  *  with a value of 0 or a value larger than the current Group, it SHOULD end the current
  *  Group and begin a new Group as soon as practical."

@@ -93,7 +93,7 @@ export interface Fetcher {
   readonly trackProperties: ReadonlyArray<Property>;
   /**
    * Fetch をキャンセルする
-   * draft-ietf-moq-transport-22 §3.2.4 (Fetch State Management)
+   * draft-ietf-moq-transport-23 §3.2.4 (Fetch State Management)
    *
    * 「It MUST send STOP_SENDING for the bidi request stream.」
    * データストリームへの STOP_SENDING は MAY であり、この cancel() では送らない
@@ -143,7 +143,7 @@ export class FetcherImpl implements Fetcher {
 
   /**
    * Fetch リクエストの Group Order
-   * draft-ietf-moq-transport-22 Section 9.20.8 (GROUP ORDER Parameter)
+   * draft-ietf-moq-transport-23 Section 9.19.8 (GROUP ORDER Parameter)
    * 省略時は Ascending (0x1)。
    */
   private fetchGroupOrder: GroupOrder = GroupOrder.ASCENDING;
@@ -176,7 +176,7 @@ export class FetcherImpl implements Fetcher {
   /**
    * Full Track Name の比較キーを取得する（Track 同一性判定用）
    *
-   * draft-ietf-moq-transport-22 §2.4.1: Track の同一性は Full Track Name
+   * draft-ietf-moq-transport-23 §2.4.1: Track の同一性は Full Track Name
    * (Track Namespace + Track Name) で判定する。
    * 戻り値は fullTrackNameKey が生成する長さ付きキーであり、Full Track Name
    * そのものではない。Track の同一性判定は完全一致でのみ行う。
@@ -275,7 +275,7 @@ export class FetcherImpl implements Fetcher {
   /**
    * Fetch リクエストの Group Order を設定する (セッション内部コールバック)
    *
-   * draft-ietf-moq-transport-22 §11.4.1.1 (Flags): FETCH 応答の Group ID の
+   * draft-ietf-moq-transport-23 §11.4.1.1 (Flags): FETCH 応答の Group ID の
    * 計算式は Group Order で変わるため、要求時に確定した値を保持する。
    */
   setGroupOrder(groupOrder: GroupOrder): void {
@@ -362,7 +362,7 @@ export class FetcherImpl implements Fetcher {
   /**
    * Fetch をキャンセル
    *
-   * draft-ietf-moq-transport-22 Section 3.2.4 (Fetch State Management):
+   * draft-ietf-moq-transport-23 Section 3.2.4 (Fetch State Management):
    * "It MUST send STOP_SENDING for the bidi request stream."
    * FETCH_CANCEL は削除され、キャンセルは bidi リクエストストリームへの
    * STOP_SENDING (WebTransport では readable の cancel) で行う。

@@ -31,11 +31,11 @@ import { bidiReadRequestStreamMessages, FILL_NOT_SUPPORTED_REASON } from "./bidi
 
 // ============================================================================
 // bidiHandlePublishRequestUpdate のテスト
-// draft-ietf-moq-transport-22 §9.5 ケース 1 (受信 PUBLISH 上の REQUEST_UPDATE)
+// draft-ietf-moq-transport-23 §9.5 ケース 1 (受信 PUBLISH 上の REQUEST_UPDATE)
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-22 §3.3.2:
+ * draft-ietf-moq-transport-23 §3.3.2:
  * role=publish の受信 REQUEST_UPDATE に不正な Range Filter (値域違反) が
  * 含まれる場合、REQUEST_ERROR (INVALID_FILTER) で応答されることを検証する。
  * 検証は paused の反映より前に配置されるため、状態は変更されない。
@@ -82,7 +82,7 @@ test("bidiReadRequestStreamMessages: 不正な Range Filter を含む REQUEST_UP
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.9 / §9.20.15:
+ * draft-ietf-moq-transport-23 §9.19.9 / §9.19.15:
  * role=publish の受信 REQUEST_UPDATE の FILL_PARAMETERS 内側 LOCATION_FILTER が
  * End Group 超過の場合、PROTOCOL_VIOLATION でセッションを閉じることを検証する。
  */
@@ -118,7 +118,7 @@ test("bidiReadRequestStreamMessages: FILL 内側の LOCATION_FILTER 超過の RE
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.3.2 / §9.20.15:
+ * draft-ietf-moq-transport-23 §3.3.2 / §9.19.15:
  * role=publish の受信 REQUEST_UPDATE の FILL_PARAMETERS 内側 Range Filter が
  * 値違反の場合、外側と同様に REQUEST_ERROR (INVALID_FILTER) で応答されることを
  * 検証する。
@@ -160,7 +160,7 @@ test("bidiReadRequestStreamMessages: FILL 内側の Range Filter 値違反の RE
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.15:
+ * draft-ietf-moq-transport-23 §9.19.15:
  * role=publish の受信 REQUEST_UPDATE の FILL_PARAMETERS 内側に除去が含まれる
  * 場合、一回限りの fill に意味を持たないため REQUEST_ERROR (INVALID_FILTER)
  * で応答されることを検証する。
@@ -200,7 +200,7 @@ test("bidiReadRequestStreamMessages: FILL 内側の除去を含む REQUEST_UPDAT
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.9:
+ * draft-ietf-moq-transport-23 §9.19.9:
  * role=publish の受信 REQUEST_UPDATE に End Group 超過の LOCATION_FILTER が
  * 含まれる場合、PROTOCOL_VIOLATION でセッションを閉じることを検証する。
  * REQUEST_OK は応答されない。
@@ -239,7 +239,7 @@ test("bidiReadRequestStreamMessages: End Group 超過の LOCATION_FILTER を含�
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.9:
+ * draft-ietf-moq-transport-23 §9.19.9:
  * role=publish の受信 REQUEST_UPDATE に正常な LOCATION_FILTER が含まれる場合、
  * 従来どおり REQUEST_OK が応答されセッションが閉じないことを検証する
  * (回帰ガード)。
@@ -366,7 +366,7 @@ test("bidiReadRequestStreamMessages: 切り詰めた FILL_PARAMETERS の REQUEST
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.4.1 / §9.5.1:
+ * draft-ietf-moq-transport-23 §3.4.1 / §9.5.1:
  * role=publish の受信 REQUEST_UPDATE に fill 範囲が空でない FILL_PARAMETERS が
  * 含まれる場合、moqt-js は fill fetch ストリームを開けないため黙殺せず
  * REQUEST_ERROR (NOT_SUPPORTED) で拒否し、PUBLISH_DONE (UPDATE_FAILED) で
@@ -426,7 +426,7 @@ test("bidiReadRequestStreamMessages: fill 範囲が空でない FILL_PARAMETERS 
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.4:
+ * draft-ietf-moq-transport-23 §3.4:
  * 「the fill range never extends beyond Largest Object」ため、Largest Object を
  * まだ送信していない (null) 場合は fill 範囲が常に空になり、fill fetch
  * ストリームは開かれない。REQUEST_OK で受理される。
@@ -510,7 +510,7 @@ test("bidiReadRequestStreamMessages: paused (PAUSED=1) 中の FILL_PARAMETERS �
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.4:
+ * draft-ietf-moq-transport-23 §3.4:
  * 「If the fill range is empty, or starts after Largest Object, the publisher
  *  does not open a fill fetch stream.」fill 範囲の開始が Largest Object より
  * 後を指す場合は fill ストリームを開かないため REQUEST_OK で受理される。
@@ -549,7 +549,7 @@ test("bidiReadRequestStreamMessages: Largest Object より後の FILL_PARAMETERS
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.4:
+ * draft-ietf-moq-transport-23 §3.4:
  * fill 範囲は「FILL_PARAMETERS 内の LOCATION_FILTER、省略時は購読の
  * Location Filter」で決まる。内側の LOCATION_FILTER が購読の Location Filter
  * より優先されることを検証する (内側のみ範囲内 -> 拒否)。
@@ -595,7 +595,7 @@ test("bidiReadRequestStreamMessages: FILL_PARAMETERS 内側の LOCATION_FILTER �
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.4:
+ * draft-ietf-moq-transport-23 §3.4:
  * FILL_PARAMETERS 内に LOCATION_FILTER が無い場合、購読の Location Filter を
  * 使って fill 範囲を評価する。購読の Location Filter は REQUEST_UPDATE 間で
  * 保持される (§9.5「If a parameter ... is not present in REQUEST_UPDATE, its
@@ -648,7 +648,7 @@ test("bidiReadRequestStreamMessages: 内側 LOCATION_FILTER 省略時は保持�
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.3.1:
+ * draft-ietf-moq-transport-23 §3.3.1:
  * 相対指定の Location Filter は設定時点の LARGEST_OBJECT で解決して固定する。
  * 設定後に Largest Object が進んでも保持した解決済みフィルタを再解決しない
  * ことを検証する (再解決すると fill 範囲が空に化けて REQUEST_OK になる)。
@@ -700,7 +700,7 @@ test("bidiReadRequestStreamMessages: 保持した相対 Location Filter を Larg
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.4:
+ * draft-ietf-moq-transport-23 §3.4:
  * 購読の Location Filter も FILL_PARAMETERS 内の LOCATION_FILTER も無い場合、
  * fill 範囲はトラック全体 (Largest Object まで) になる。Largest Object が
  * あるため空でなく、REQUEST_ERROR (NOT_SUPPORTED) で拒否される。
@@ -741,7 +741,7 @@ test("bidiReadRequestStreamMessages: フィルタ指定なしの FILL_PARAMETERS
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.4 / §9.20.9:
+ * draft-ietf-moq-transport-23 §3.4 / §9.19.9:
  * 4 フィールド指定で End Object が Start Object より小さい場合、フィルタ自身が
  * 空になり配信できる Object が無い。fill fetch ストリームは開かれないため
  * REQUEST_OK で受理される。
@@ -877,7 +877,7 @@ test("bidiReadRequestStreamMessages: PAUSED=1 から PAUSED=0 に更新しつつ
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.4:
+ * draft-ietf-moq-transport-23 §3.4:
  * 「When the subscription has no Location filter, or the LOCATION_FILTER inside
  *  FILL_PARAMETERS is zero-length, the fill range is the entire track up to
  *  Largest Object.」v22 の LOCATION_FILTER は Length を持たないため、ここでの
@@ -917,7 +917,7 @@ test("bidiReadRequestStreamMessages: FILL_PARAMETERS 内側 LOCATION_FILTER が 
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.15:
+ * draft-ietf-moq-transport-23 §9.19.15:
  * 「A parameter that is omitted from FILL_PARAMETERS takes the value it has for
  *  the subscription」ため、内側 LOCATION_FILTER 省略時は同一 REQUEST_UPDATE の
  * top-level LOCATION_FILTER (更新後の購読値) を使って fill 範囲を評価する。
@@ -958,7 +958,7 @@ test("bidiReadRequestStreamMessages: 同一更新の LOCATION_FILTER を内側�
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.3.1 / §3.4:
+ * draft-ietf-moq-transport-23 §3.3.1 / §3.4:
  * Next Object フィルタ (Location Filter Type 0x05) は
  * {Largest Object.Group, Largest Object.Object + 1} に解決される。Largest
  * Object {5, 0} に対して {5, 1} は後方のため fill 範囲が空になり REQUEST_OK。
@@ -992,7 +992,7 @@ test("bidiReadRequestStreamMessages: Next Object の FILL_PARAMETERS の REQUEST
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.3.2:
+ * draft-ietf-moq-transport-23 §3.3.2:
  * role=publish の受信 REQUEST_UPDATE に同一組み合わせの重複 Range Filter が
  * 含まれる場合、REQUEST_ERROR (INVALID_FILTER) で応答されることを検証する。
  */
@@ -1033,7 +1033,7 @@ test("bidiReadRequestStreamMessages: 重複組み合わせの Range Filter を�
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.5 / §9:
+ * draft-ietf-moq-transport-23 §9.5 / §9:
  * role=publish の受信 REQUEST_UPDATE のペイロードが不完全 (メッセージ構造の
  * 破損) な場合、黙殺せず PROTOCOL_VIOLATION でセッションが閉じることを
  * 検証する。ControlStreamReader が Length 分の完全なメッセージのみ渡す
@@ -1172,7 +1172,7 @@ test("bidiReadRequestStreamMessages: PAUSED=0 の REQUEST_UPDATE (publish ロー
 });
 
 /**
- * draft-ietf-moq-transport-22 §8.9 / §6.6 / §12.2 / §9.5.1:
+ * draft-ietf-moq-transport-23 §8.9 / §6.6 / §12.2 / §9.5.1:
  * role=publish の受信 REQUEST_UPDATE が未登録 Alias を参照する場合、
  * Session Termination の UNKNOWN_AUTH_TOKEN_ALIAS (0x17) でセッションを閉じることを
  * 検証する。セッションが閉じるため §9.5 の REQUEST_OK / REQUEST_ERROR と
@@ -1214,7 +1214,7 @@ test("bidiReadRequestStreamMessages: 未登録 Alias の REQUEST_UPDATE (publish
 });
 
 /**
- * draft-ietf-moq-transport-22 §8.9 / §6.6 / §12.2:
+ * draft-ietf-moq-transport-23 §8.9 / §6.6 / §12.2:
  * 同一チャンクに REQUEST_UPDATE が 2 通連結され先頭が未登録 Alias を参照する場合、
  * セッション終了後に残りのメッセージを処理しないことを検証する。処理を続けると
  * 再びセッション終了を検出して error コールバックが二重に通知される。

@@ -37,13 +37,13 @@ import { appendMalformedTrackProperties } from "../testSupport/helpers";
 
 // ============================================================================
 // 既知 Type の serialization 不一致 (MALFORMED_KEY_VALUE) で閉じる
-// draft-ietf-moq-transport-22 §8.3 (Key-Value-Pair Structure)
+// draft-ietf-moq-transport-23 §8.3 (Key-Value-Pair Structure)
 // ============================================================================
 
 /**
  * malformed な Track Properties を含む応答の受信ケース (reader ごとの設定と後始末検証)。
  *
- * draft-ietf-moq-transport-22 §8.3:
+ * draft-ietf-moq-transport-23 §8.3:
  * "If a receiver understands a Type, and the following Value or Length/Value
  *  does not match the serialization defined by that Type, the receiver MUST
  *  close the session with error code MALFORMED_KEY_VALUE."
@@ -229,7 +229,7 @@ const MALFORMED_TRACK_PROPERTY_CASES: MalformedTrackPropertyCase[] = [
 ];
 
 /**
- * draft-ietf-moq-transport-22 §8.3 / §9.3 / §9.7 / §9.12 / §9.13:
+ * draft-ietf-moq-transport-23 §8.3 / §9.3 / §9.7 / §9.12 / §9.13:
  * malformed な Track Properties を含む OK 応答は、どの reader でも
  * MALFORMED_KEY_VALUE でセッションを閉じる。pending には close と同一の
  * SessionError オブジェクトが reject され、reader ごとの削除集合が掃除される。
@@ -254,7 +254,7 @@ test("malformed な Track Properties を含む OK 応答はどの reader でも 
 });
 
 /**
- * draft-ietf-moq-transport-22 §8.3 / §9.3:
+ * draft-ietf-moq-transport-23 §8.3 / §9.3:
  * subscribe ロールのリクエストストリームで malformed な Track Properties を
  * 含む REQUEST_UPDATE_OK を受信したら MALFORMED_KEY_VALUE でセッションを
  * 閉じる (bidiReadRequestStreamMessages の catch 経由。handleRequestStreamReadError
@@ -322,7 +322,7 @@ test("bidiReadTrackStatusResponse: 非違反失敗で削除集合が掃除され
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.1 / §9.5.1:
+ * draft-ietf-moq-transport-23 §9.19.1 / §9.5.1:
  * REQUEST_UPDATE_OK のパラメータスコープ違反で、当該購読の保留分全件が
  * 違反 SessionError 自体で reject され、fill 関連付けも掃除されることを検証する。
  */
@@ -394,7 +394,7 @@ test("bidiHandleRequestUpdateOk: スコープ違反で保留中の更新が違�
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.3 / §9.5.1:
+ * draft-ietf-moq-transport-23 §9.3 / §9.5.1:
  * REQUEST_UPDATE_OK の Track Properties 空検証違反でも同様に
  * 違反 SessionError 自体で reject されることを検証する。
  */
@@ -452,7 +452,7 @@ test("bidiHandleRequestUpdateOk: Track Properties 違反で保留中の更新が
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.2.4 / §9.11:
+ * draft-ietf-moq-transport-23 §3.2.4 / §9.11:
  * 失敗確定時に待機中の fetcher 取得が即時解決することを検証する。
  * 待機の解決値は fetchers 不在のため null になる。
  */
@@ -507,7 +507,7 @@ function createFetchWaiterContext(): ReturnType<typeof createOkResponseReadTestC
 /**
  * 待機中の fetcher 取得が即時解決する終了経路の表。
  *
- * draft-ietf-moq-transport-22 §3.2.4 / §9.11:
+ * draft-ietf-moq-transport-23 §3.2.4 / §9.11:
  * 応答が FETCH_OK (REQUEST_OK) 以外で確定した場合 (エラー応答・読み取り失敗・FIN) は
  * 失敗確定として待機中の fetcher 取得を即時解決し、fetcherReadyCallbacks の
  * 登録を掃除する。経路ごとに入力メッセージ / 読み取り結果だけが異なり、
@@ -689,7 +689,7 @@ async function runInvalidRequestIdCase(testCase: InvalidRequestIdCase): Promise<
 }
 
 /**
- * draft-ietf-moq-transport-22 §6.4.2.1:
+ * draft-ietf-moq-transport-23 §6.4.2.1:
  * 受信 PUBLISH 上の REQUEST_UPDATE で偶数 Request ID を受けると
  * INVALID_REQUEST_ID で閉じる。直接呼出と読み取りループ経由、publish /
  * subscribe ロール、GOAWAY 受信済みの各組合せは同一の性質であるため
@@ -736,7 +736,7 @@ test("REQUEST_UPDATE: 偶数 Request ID はどの経路でも INVALID_REQUEST_ID
 });
 
 /**
- * draft-ietf-moq-transport-22 §6.4.2.1:
+ * draft-ietf-moq-transport-23 §6.4.2.1:
  * 受信 PUBLISH 上の REQUEST_UPDATE で重複 Request ID を受けると
  * INVALID_REQUEST_ID で閉じる。直接呼出と読み取りループ経由は同一の性質で
  * あるため表駆動 1 本で検証する。
@@ -770,7 +770,7 @@ test("REQUEST_UPDATE: 重複 Request ID はどの経路でも INVALID_REQUEST_ID
 });
 
 /**
- * draft-ietf-moq-transport-22 §6.4.2.1:
+ * draft-ietf-moq-transport-23 §6.4.2.1:
  * 新規の奇数 Request ID は検証を通過して REQUEST_OK が応答され、
  * 同一 ID の 2 回目は重複として閉じることを検証する。
  * 検証通過時の ID 消費 (received への記録) の裏付けになる。

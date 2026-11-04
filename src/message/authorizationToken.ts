@@ -1,7 +1,7 @@
 /**
  * MOQT Authorization Token
- * draft-ietf-moq-transport-22 Section 9.20.2 (AUTHORIZATION TOKEN Parameter)
- * https://datatracker.ietf.org/doc/html/draft-ietf-moq-transport-22#section-9.20.2
+ * draft-ietf-moq-transport-23 Section 9.19.2 (AUTHORIZATION TOKEN Parameter)
+ * https://datatracker.ietf.org/doc/html/draft-ietf-moq-transport-23#section-9.20.2
  *
  * Token {
  *   Alias Type (vi64),
@@ -16,7 +16,7 @@ import { decodeVarint, encodeVarint } from "../varint";
 
 /**
  * Authorization Token Alias Type
- * draft-ietf-moq-transport-22 Section 9.20.2 / Section 8.9 (Figure 4) / Section 16.5
+ * draft-ietf-moq-transport-23 Section 9.19.2 / Section 8.9 (Figure 4) / Section 16.5
  *
  * - DELETE: There is an Alias but no Type or Value.
  * - REGISTER: There is an Alias, a Type and a Value.
@@ -74,7 +74,7 @@ export interface AuthorizationTokenUseValue {
 
 /**
  * Authorization Token の discriminated union
- * draft-ietf-moq-transport-22 Section 9.20.2
+ * draft-ietf-moq-transport-23 Section 9.19.2
  */
 export type AuthorizationToken =
   | AuthorizationTokenDelete
@@ -84,7 +84,7 @@ export type AuthorizationToken =
 
 /**
  * Authorization Token をエンコードする
- * draft-ietf-moq-transport-22 Section 9.20.2
+ * draft-ietf-moq-transport-23 Section 9.19.2
  */
 export function encodeAuthorizationToken(token: AuthorizationToken): Uint8Array {
   const parts: Uint8Array[] = [];
@@ -205,7 +205,7 @@ export function decodeAuthorizationToken(data: Uint8Array): AuthorizationToken {
 
 /**
  * SETUP メッセージ用の Authorization Token Alias Type を検証する
- * draft-ietf-moq-transport-22 Section 9.1.4:
+ * draft-ietf-moq-transport-23 Section 9.1.4:
  * "If a server receives Alias Type DELETE (0x0) or USE_ALIAS (0x2)
  *  in a SETUP message, it MUST close the session with a PROTOCOL_VIOLATION."
  *

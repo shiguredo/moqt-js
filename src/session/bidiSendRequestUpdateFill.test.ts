@@ -27,11 +27,11 @@ import {
 
 // ============================================================================
 // bidiSendRequestUpdate の FILL_PARAMETERS テスト
-// draft-ietf-moq-transport-22 §3.4 / §9.20.15
+// draft-ietf-moq-transport-23 §3.4 / §9.19.15
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-22 §9.20.15:
+ * draft-ietf-moq-transport-23 §9.19.15:
  * update({ fill }) で FILL_PARAMETERS (0x23) が REQUEST_UPDATE に載り、
  * 内側に指定内容が入ることを検証する。fill 要求元の Request ID は購読に
  * 関連付けられる。
@@ -77,7 +77,7 @@ test("bidiSendRequestUpdate: fill が FILL_PARAMETERS として REQUEST_UPDATE �
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.9 / §9.20.15:
+ * draft-ietf-moq-transport-23 §9.19.9 / §9.19.15:
  * fill 内の LOCATION_FILTER が End Group 超過の場合は送信前に throw する。
  */
 test("bidiSendRequestUpdate: fill 内の LOCATION_FILTER が End Group 超過の場合は throw する", async () => {
@@ -102,7 +102,7 @@ test("bidiSendRequestUpdate: fill 内の LOCATION_FILTER が End Group 超過の
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.1.6:
+ * draft-ietf-moq-transport-23 §9.1.6:
  * fill 内側の Range Filters も購読単位の上限に含め、上限超過では送信前に
  * throw することを検証する。
  */
@@ -139,7 +139,7 @@ test("bidiSendRequestUpdate: fill 内側の Range Filters が上限超過の場�
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.1.6:
+ * draft-ietf-moq-transport-23 §9.1.6:
  * in-flight 中の fill 内側 Range Filters も上限合算に含め、合計超過では
  * 送信前に throw することを検証する。
  */
@@ -190,7 +190,7 @@ test("bidiSendRequestUpdate: in-flight の fill と合計で上限超過の場�
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.15:
+ * draft-ietf-moq-transport-23 §9.19.15:
  * update の fill で GROUP_ORDER を省略した場合、subscription の指定を継承して
  * 関連付けられることを検証する。
  */
@@ -272,7 +272,7 @@ test("bidiSendRequestUpdate: Range Filters が MAX_FILTER_RANGES 以内なら th
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.1.6 / §3.3.2:
+ * draft-ietf-moq-transport-23 §9.1.6 / §3.3.2:
  * MAX_FILTER_RANGES は「マージ後のフィルタ状態」に対して適用される。
  * 既存フィルタ (2 Range) と update (1 Range) のマージ後 (3 Range) が
  * 上限 2 を超える場合、update 単体では合法でも送信前に throw することを
@@ -315,7 +315,7 @@ test("bidiSendRequestUpdate: 既存フィルタとマージすると MAX_FILTER_
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.9:
+ * draft-ietf-moq-transport-23 §9.19.9:
  * raw パラメータ経路の LOCATION_FILTER (0x21) も型付き経路と同じ
  * End Group 検証の対象にする。超過時は InvalidFilterError で送信前に
  * 拒否し、pending エントリを残さない。
@@ -342,7 +342,7 @@ test("bidiSendRequestUpdate: raw LOCATION_FILTER の End Group 超過で Invalid
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.9:
+ * draft-ietf-moq-transport-23 §9.19.9:
  * トップレベルの LOCATION_FILTER が複数ある場合も全件検証し、
  * 2 件目以降の超過を見逃さない。
  */
@@ -366,7 +366,7 @@ test("bidiSendRequestUpdate: 2 件目の raw LOCATION_FILTER 超過も InvalidFi
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.9:
+ * draft-ietf-moq-transport-23 §9.19.9:
  * 正常な raw LOCATION_FILTER は従来どおり送信でき、
  * LOCATION_FILTER 以外の raw パラメータは検証対象にしない。
  */
@@ -396,7 +396,7 @@ test("bidiSendRequestUpdate: 正常な raw LOCATION_FILTER は送信できる", 
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.9 / §9.20.15:
+ * draft-ietf-moq-transport-23 §9.19.9 / §9.19.15:
  * 手組みの raw FILL_PARAMETERS 内側の LOCATION_FILTER が End Group 超過の
  * 場合は送信前に InvalidFilterError で拒否し、pending エントリを残さない。
  */
@@ -428,7 +428,7 @@ test("bidiSendRequestUpdate: raw FILL_PARAMETERS 内側の End Group 超過で I
 // 検証済みである。4 フィールド表現の内側超過は別分岐のため次のテストで検証する。
 
 /**
- * draft-ietf-moq-transport-22 §9.20.9 / §9.20.15:
+ * draft-ietf-moq-transport-23 §9.19.9 / §9.19.15:
  * 4 フィールド表現 (EndObject 付き) の内側超過も送信前に拒否する。
  * 3 フィールドとは別分岐のため到達を確認する。
  */
@@ -456,7 +456,7 @@ test("bidiSendRequestUpdate: raw FILL_PARAMETERS 内側の 4 フィールド超�
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.15:
+ * draft-ietf-moq-transport-23 §9.19.15:
  * 正常な raw FILL_PARAMETERS は従来どおり送信でき、
  * ワイヤ上の parameters に FILL_PARAMETERS が残る (回帰ガード)。
  */
@@ -488,7 +488,7 @@ test("bidiSendRequestUpdate: 正常な raw FILL_PARAMETERS は送信できる", 
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.9:
+ * draft-ietf-moq-transport-23 §9.19.9:
  * bidiSendRequestUpdate は送信時の LOCATION_FILTER (先頭 1 件のデコード値) を
  * pending に保持し、REQUEST_OK 受信時の反映に使うことを検証する。
  */
@@ -508,7 +508,7 @@ test("bidiSendRequestUpdate: 送信時の LOCATION_FILTER が pending に保持�
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.5.1:
+ * draft-ietf-moq-transport-23 §9.5.1:
  * REQUEST_ERROR (coalescing による reject) では送信時の LOCATION_FILTER が
  * 反映されないことを検証する。
  */
@@ -577,7 +577,7 @@ test("bidiSendRequestUpdate: マージ後の状態が上限以内なら throw �
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.5.1:
+ * draft-ietf-moq-transport-23 §9.5.1:
  * 「Parameter values from later REQUEST_UPDATE messages override values from
  *  earlier ones.」により、in-flight の update (送信順) もマージに含めて
  * 検証する。in-flight の削除 update が反映されない場合は
@@ -622,7 +622,7 @@ test("bidiSendRequestUpdate: in-flight の削除 update がマージに反映さ
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.5.1:
+ * draft-ietf-moq-transport-23 §9.5.1:
  * in-flight の update は送信順 (挿入順) で適用され、後からの値が前の値を
  * 上書きする。同じ型を 3 → 2 に置換する 2 件の in-flight を登録し、
  * 最後の値 (2 Range) でマージされることを検証する (先発が勝つ順序なら
@@ -729,7 +729,7 @@ test("bidiSendRequestUpdate: in-flight の update でマージ後が上限超過
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.1.6:
+ * draft-ietf-moq-transport-23 §9.1.6:
  * ピアの MAX_FILTER_RANGES = 0 (未広告) の場合は §9.1.6 により送信禁止。
  * マージ後が空になる削除のみの update でも throw することを検証する
  * (既存ガードの維持)。
@@ -754,7 +754,7 @@ test("bidiSendRequestUpdate: MAX_FILTER_RANGES が 0 のとき削除のみの up
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.1.6:
+ * draft-ietf-moq-transport-23 §9.1.6:
  * 空配列の rangeFilters (フィルタ指定なしの no-op メッセージ) は、ピアの
  * MAX_FILTER_RANGES が 0 (未広告) でも送信できる (フィルタパラメータ自体が
  * 送信されないため。旧実装でも送信可能だった挙動の維持)。
@@ -786,7 +786,7 @@ test("bidiSendRequestUpdate: 空配列の rangeFilters は MAX_FILTER_RANGES が
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.3.2:
+ * draft-ietf-moq-transport-23 §3.3.2:
  * 削除を含む update は削除後の状態で検証される (既存の同型フィルタは
  * マージで取り除かれ、Ranges 数に数えられない)。本テストが検出するのは
  * 「update をマージせず連結する」誤実装のみである (削除後の Ranges 数と

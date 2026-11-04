@@ -44,11 +44,11 @@ import {
 // bidiReadRequestStreamMessages / publishSendPublishDone の統合テスト
 
 // (実 W3C ストリーム注入方式)
-// draft-ietf-moq-transport-22 §6.4.2.2 / §6.4.2.3 / §9.8
+// draft-ietf-moq-transport-23 §6.4.2.2 / §6.4.2.3 / §9.8
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-22 §9.4 / §9.4.2 / §9.5:
+ * draft-ietf-moq-transport-23 §9.4 / §9.4.2 / §9.5:
  * 確立後の REQUEST_ERROR (REQUEST_UPDATE の失敗) でも、Retry Interval と Redirect を
  * reject する RequestError に載せる。coalescing で複数の pending を失敗させる場合も
  * 同じ値を載せ、同じインスタンスを共有する。reasonPhrase が空のときは Error Code を
@@ -82,7 +82,7 @@ test("bidiReadRequestStreamMessages: 確立後の REQUEST_ERROR の retryInterva
   );
   const errorPayload = encodeRequestErrorPayload({
     type: MessageType.REQUEST_ERROR,
-    // draft-ietf-moq-transport-22 §9.4.2: Redirect は Error Code が REDIRECT のときだけ載る
+    // draft-ietf-moq-transport-23 §9.4.2: Redirect は Error Code が REDIRECT のときだけ載る
     errorCode: BigInt(RequestErrorCode.REDIRECT),
     reasonPhrase: "",
     retryInterval: 13n,
@@ -176,7 +176,7 @@ test("bidiReadRequestStreamMessages: 確立後の UNSUPPORTED_PROPERTY の Type 
 });
 
 /**
- * draft-ietf-moq-transport-22 §6.4.2.2:
+ * draft-ietf-moq-transport-23 §6.4.2.2:
  * PUBLISH_OK 受信前 (Established 前) にピアが FIN を送った場合、リクエストは
  * 失敗として処理される。bidiReadResponseFromBidiStream の throw が
  * bidiReadPublishResponse の内部で使う共通ディスパッチャ bidiDispatchResponse の catch で
@@ -229,7 +229,7 @@ test("bidiReadPublishResponse: PUBLISH_OK 受信前のピア FIN でリクエス
     unmatchedRequestOkAllowances: new Map(),
     peerMaxRequestUpdates: 0,
     peerMaxFilterRanges: 0,
-    // draft-ietf-moq-transport-22 §9.1.7 (MAX_REQUEST_UPDATES):
+    // draft-ietf-moq-transport-23 §9.1.7 (MAX_REQUEST_UPDATES):
     // 既定は未広告 (0 = 無制限) と未応答数なし
     localMaxRequestUpdates: 0,
     receivedRequestUpdateCounts: new Map(),
@@ -311,7 +311,7 @@ async function readPublishOkWithParameters(
     unmatchedRequestOkAllowances: new Map(),
     peerMaxRequestUpdates: 0,
     peerMaxFilterRanges: 0,
-    // draft-ietf-moq-transport-22 §9.1.7 (MAX_REQUEST_UPDATES):
+    // draft-ietf-moq-transport-23 §9.1.7 (MAX_REQUEST_UPDATES):
     // 既定は未広告 (0 = 無制限) と未応答数なし
     localMaxRequestUpdates: 0,
     receivedRequestUpdateCounts: new Map(),
@@ -389,7 +389,7 @@ test("bidiReadPublishResponse: PAUSED を含む PUBLISH_OK は値によらず PR
 });
 
 /**
- * draft-ietf-moq-transport-22 §6.4.2.2:
+ * draft-ietf-moq-transport-23 §6.4.2.2:
  * ピアが送信方向を FIN で閉じた (graceful closure) 場合でも、publisher は
  * done() で PUBLISH_DONE を送信してから自方向を FIN で閉じる必要がある (MUST)。
  * requestStreams のエントリが FIN 後も保持され、PUBLISH_DONE → FIN の
@@ -430,7 +430,7 @@ test("bidiReadRequestStreamMessages: ピア FIN 後の done() で PUBLISH_DONE �
 });
 
 /**
- * draft-ietf-moq-transport-22 §6.4.2.3:
+ * draft-ietf-moq-transport-23 §6.4.2.3:
  * ピアが RESET_STREAM で自方向をリセットした場合、reader.read() は reject する。
  * RESET は FIN (graceful) ではないため requestStreams のエントリは保持されず、
  * その後の done() は PUBLISH_DONE を送信せずセッションも閉じないことを検証する。
@@ -462,7 +462,7 @@ test("bidiReadRequestStreamMessages: RESET_STREAM 後の done() で PUBLISH_DONE
 });
 
 /**
- * draft-ietf-moq-transport-22 §6.4.2.2:
+ * draft-ietf-moq-transport-23 §6.4.2.2:
  * ピア起因のセッション終了後 (sessionState: "closed") に done() を呼んだ場合、
  * publishSendPublishDone は write / close を試行しない。試行するとセッション
  * 終了起因のエラーで reject し、誤って PROTOCOL_VIOLATION に昇格して
@@ -497,7 +497,7 @@ test("publishSendPublishDone: ピア FIN 後のセッション終了 (sessionSta
 // done() 完了後まで保持される点はその次のテストで検証する)。ここでは重複して検証しない。
 
 /**
- * draft-ietf-moq-transport-22 §6.4.2.2:
+ * draft-ietf-moq-transport-23 §6.4.2.2:
  * subscribe ロールでピア (publisher) の FIN を検出した場合、自方向の FIN
  * (writer.close()) を送信して graceful closure を完了することを検証する。
  * 0374 で追加された notifySubscriberFailure (error 通知) に加えて、自方向 FIN が
@@ -543,7 +543,7 @@ test("bidiReadRequestStreamMessages: subscribe ロールのピア FIN で自方�
 });
 
 /**
- * draft-ietf-moq-transport-22 §6.4.2.2:
+ * draft-ietf-moq-transport-23 §6.4.2.2:
  * publish ロールでは requester の FIN は正常完了シグナルであり、自方向の
  * FIN は送信しない (アプリの done() に委ねる)。0370 の保持経路が維持される
  * ことを検証する。
@@ -568,7 +568,7 @@ test("bidiReadRequestStreamMessages: publish ロールのピア FIN では自方
 });
 
 /**
- * draft-ietf-moq-transport-22 §6.4.2.2:
+ * draft-ietf-moq-transport-23 §6.4.2.2:
  * 正常な PUBLISH_DONE → FIN 経路でも自方向の FIN (writer.close()) が送信され、
  * 通知挙動 (end コールバックのみ呼ばれ error コールバックは呼ばれず state が
  * closed) が変わらないことを検証する。
@@ -626,7 +626,7 @@ test("bidiReadRequestStreamMessages: 正常な PUBLISH_DONE → FIN で自方向
 });
 
 /**
- * draft-ietf-moq-transport-22 §6.4.2.2:
+ * draft-ietf-moq-transport-23 §6.4.2.2:
  * subscribe ロールのピア FIN で、同一 Track Alias に他 subscription が残っている
  * 場合は subscribersByAlias のエントリが保持される (該当 subscriber のみ除去)
  * ことを検証する。
@@ -658,7 +658,7 @@ test("bidiReadRequestStreamMessages: subscribe ロールのピア FIN で alias 
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.2 (GOAWAY) / §6.4.2.2:
+ * draft-ietf-moq-transport-23 §9.2 (GOAWAY) / §6.4.2.2:
  * GOAWAY 受信 (publish ロール) 後は読み取りを継続し、requestStreams が保持
  * される。その後ピアが FIN した場合、readRequestStreamMessages の finally の
  * 「publish ロール && receivedFin」経路に合流してエントリが保持され、アプリの
@@ -701,7 +701,7 @@ test("bidiReadRequestStreamMessages: GOAWAY 受信 (publish ロール) 後も読
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.2 (GOAWAY):
+ * draft-ietf-moq-transport-23 §9.2 (GOAWAY):
  * 「The endpoint MUST close the session with a PROTOCOL_VIOLATION (Section 12.2)
  * if it receives more than one GOAWAY on the control stream or on a single
  * request stream.」
@@ -741,7 +741,7 @@ test("bidiReadRequestStreamMessages: 重複 GOAWAY (同一チャンク) で PROT
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.2 (GOAWAY):
+ * draft-ietf-moq-transport-23 §9.2 (GOAWAY):
  * チャンク境界をまたぐ 2 通目の GOAWAY でも PROTOCOL_VIOLATION でセッションが
  * 閉じることを検証する。
  */
@@ -778,7 +778,7 @@ test("bidiReadRequestStreamMessages: 重複 GOAWAY (チャンク境界) で PROT
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.2 (GOAWAY):
+ * draft-ietf-moq-transport-23 §9.2 (GOAWAY):
  * GOAWAY 受信 (subscribe ロール) で送信方向が FIN (writer.close()) で閉じられ、
  * 受信方向は読み取りが継続されることを検証する。1 通目 GOAWAY ではセッション
  * が閉じない。
@@ -816,7 +816,7 @@ test("bidiReadRequestStreamMessages: GOAWAY 受信 (subscribe ロール) で送�
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.2 / §12.5 / §9.5:
+ * draft-ietf-moq-transport-23 §9.2 / §12.5 / §9.5:
  * GOAWAY 受信後の旧リクエストに対する REQUEST_UPDATE は、publish ロールでは
  * REQUEST_ERROR (GOING_AWAY) で応答される (§9.5 MUST) ことを検証する。
  */
@@ -862,7 +862,7 @@ test("bidiReadRequestStreamMessages: GOAWAY 後の REQUEST_UPDATE に REQUEST_ER
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.5.1:
+ * draft-ietf-moq-transport-23 §9.5.1:
  * publish ロールの REQUEST_UPDATE 拒否 (INVALID_FILTER) では、REQUEST_ERROR の
  * 後に PUBLISH_DONE (UPDATE_FAILED) が送出される。
  */
@@ -914,7 +914,7 @@ test("bidiReadRequestStreamMessages: 不正 Range Filter の REQUEST_UPDATE 拒�
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.5.1 / §9.9:
+ * draft-ietf-moq-transport-23 §9.5.1 / §9.9:
  * publisher がない REQUEST_UPDATE 拒否では、REQUEST_ERROR (INTERNAL_ERROR) の
  * 後に PUBLISH_DONE (UPDATE_FAILED) が送出される。開設数を確定できないため
  * Stream Count は 2^64 - 1 になる。
@@ -959,7 +959,7 @@ test("bidiReadRequestStreamMessages: publisher がない REQUEST_UPDATE 拒否�
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.5.1:
+ * draft-ietf-moq-transport-23 §9.5.1:
  * REQUEST_ERROR の書き込みに失敗しても PUBLISH_DONE 送信に進み、
  * 購読状態を掃除してセッションを閉じない
  * (INVALID_FILTER 経路の回復力。他 2 経路と同一ヘルパー共有)。
@@ -1120,7 +1120,7 @@ test("bidiReadRequestStreamMessages: セッションが閉じない REQUEST_UPDA
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.9:
+ * draft-ietf-moq-transport-23 §9.9:
  * PUBLISH_DONE 送信前にデータストリームを閉じる (done() 経路と同形)。
  * 書き込み順序でデータストリーム close 先行を検証する。
  */
@@ -1171,7 +1171,7 @@ test("bidiReadRequestStreamMessages: REQUEST_UPDATE 拒否でデータストリ�
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.5.1 / §9.9:
+ * draft-ietf-moq-transport-23 §9.5.1 / §9.9:
  * 拒否で送出した PUBLISH_DONE (UPDATE_FAILED) のワイヤペイロードを
  * 受信デコーダに流すと、購読側の終了通知に正規化された status code が載る
  * (ワイヤペイロード単位の round-trip)。
@@ -1240,7 +1240,7 @@ test("bidiReadRequestStreamMessages: 送出した PUBLISH_DONE (UPDATE_FAILED) �
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.2 / §12.5 / §9.5:
+ * draft-ietf-moq-transport-23 §9.2 / §12.5 / §9.5:
  * GOAWAY 受信後の REQUEST_UPDATE は subscribe ロールでは無視されることを
  * 検証する。subscribe ロールは GOAWAY 処理で送信方向を FIN (writer.close())
  * で閉じており、GOING_AWAY 応答を書き込むことができないためである。
@@ -1277,7 +1277,7 @@ test("bidiReadRequestStreamMessages: GOAWAY 後の REQUEST_UPDATE は無視さ�
 });
 
 /**
- * draft-ietf-moq-transport-22 §8.9 / §6.6 / §12.2 / §9.5.1:
+ * draft-ietf-moq-transport-23 §8.9 / §6.6 / §12.2 / §9.5.1:
  * subscribe ロールの受信 REQUEST_UPDATE が未登録 Alias を参照する場合、
  * Session Termination の UNKNOWN_AUTH_TOKEN_ALIAS (0x17) でセッションを閉じることを
  * 検証する。セッションが閉じるため §9.5 の REQUEST_OK / REQUEST_ERROR は送らず、

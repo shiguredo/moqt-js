@@ -124,7 +124,7 @@ test("decodeFetchPayload: 末尾に後続データがあると ProtocolViolation
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.11:
+ * draft-ietf-moq-transport-23 §9.11:
  * Track Name Length 宣言が残りバイトを超える切り詰めは破損であり、
  * 短い slice を返さず宣言時点で ProtocolViolationError とする。
  */

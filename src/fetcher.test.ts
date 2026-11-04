@@ -38,7 +38,7 @@ test("handleEnd は endCallback を呼んで closed にする", () => {
   assert.equal(fetcher.state, "closed");
 });
 
-// draft-ietf-moq-transport-22 Section 3.2.4:
+// draft-ietf-moq-transport-23 Section 3.2.4:
 // cancel() は onCancel コールバックを呼ぶ
 test("cancel は onCancel コールバックを呼んで closed にする", async () => {
   let cancelCalled = false;
@@ -171,7 +171,7 @@ test("handleEndOfTrack は endOfTrack を true にし、その後の FIN でも�
   assert.isTrue(fetcher.endOfTrack);
 });
 
-// draft-ietf-moq-transport-22 Section 3.2.4:
+// draft-ietf-moq-transport-23 Section 3.2.4:
 // キャンセル済みの fetcher では End of Track indicator も記録しない
 test("handleEndOfTrack は closed 状態では endOfTrack を変更しない", () => {
   const fetcher = new FetcherImpl(["namespace"], "track", 0n, () => {});
@@ -213,7 +213,7 @@ test("setFetchRequestRange / getFetchRequestRange で要求範囲を保持する
   assert.isUndefined(fetcher.getFetchRequestRange().endLocation);
 });
 
-// draft-ietf-moq-transport-22 Section 3.2.4 / Section 12.1:
+// draft-ietf-moq-transport-23 Section 3.2.4 / Section 12.1:
 // cancel() は onCancel の完了を待たずに state を closed にし、Object の配信と
 // end / error の通知を止める。キャンセル中の重複した malformed 検出で error
 // コールバックが二重に呼ばれないための前提である。
@@ -249,7 +249,7 @@ test("cancel 開始後は onCancel の完了を待たずに closed になり通�
   void cancelPromise;
 });
 
-// draft-ietf-moq-transport-22 Section 3.2.4:
+// draft-ietf-moq-transport-23 Section 3.2.4:
 // onCancel (実運用は bidiCancelFetch) の後始末が失敗しても state は closed のまま
 // とし、失敗は呼び出し元へ伝播させる。cancelMalformedTrackPeers は .catch で
 // 握り潰し、キャンセルを再試行しない (bidiCancelFetch は内部でストリームの

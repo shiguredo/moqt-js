@@ -363,16 +363,16 @@ test("isVideoKeyFrameObject: Frame Marking がある場合は isIndependent を�
 });
 
 // ============================================================================
-// resolveNewGroupRequestValue（draft-ietf-moq-transport-22 §9.20.19）
+// resolveNewGroupRequestValue（draft-ietf-moq-transport-23 §9.19.19）
 // ============================================================================
 
 /**
- * §9.20.19 (NEW GROUP REQUEST Parameter):
+ * §9.19.19 (NEW GROUP REQUEST Parameter):
  * "It represents the largest Group ID in the Track known by the subscriber, plus 1.
  *  A value of 0 indicates that the subscriber has no Group information for the Track."
  *
  * 購読者が知る最大 Group ID は、購読で受信した Object の最大 Location (§3.1.4) と
- * LARGEST_OBJECT で報告された最大 Location (§9.20.17) の大きい方である。
+ * LARGEST_OBJECT で報告された最大 Location (§9.19.17) の大きい方である。
  */
 test("resolveNewGroupRequestValue: 受信と LARGEST_OBJECT の大きい方の次の Group になる", () => {
   // 受信した Object の方が進んでいる場合
@@ -394,7 +394,7 @@ test("resolveNewGroupRequestValue: 受信と LARGEST_OBJECT の大きい方の�
 
 /**
  * 片方だけ分かっていればその値を使い、Group 情報がまったく無ければ 0 を送る
- * (§9.20.19 の「購読者は Group 情報を持たない」)。
+ * (§9.19.19 の「購読者は Group 情報を持たない」)。
  */
 test("resolveNewGroupRequestValue: 片方だけでも使う", () => {
   assert.equal(resolveNewGroupRequestValue({ group: 7n, object: 0n }, null), 8n);
@@ -835,7 +835,7 @@ test("subscribeMediaTracks: authInfo があり SETUP にもトークンが無け
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.6:
+ * draft-ietf-moq-transport-23 §9.19.6:
  * rendezvousTimeout を指定すると音声の SUBSCRIBE に RENDEZVOUS_TIMEOUT が載る。
  * 0 の明示も 0 として載せる。
  */
@@ -866,7 +866,7 @@ test("subscribeMediaTracks: rendezvousTimeout 未指定は SUBSCRIBE に載せ�
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.6:
+ * draft-ietf-moq-transport-23 §9.19.6:
  * 映像の SUBSCRIBE にも RENDEZVOUS_TIMEOUT を載せる (音声と同じ経路を使う)。
  */
 test("subscribeMediaTracks: rendezvousTimeout を映像の SUBSCRIBE に載せる", async () => {

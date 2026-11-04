@@ -8,7 +8,7 @@
  * matchPublishToSubscription / cleanupIncomingPublish を free function として
  * 抽出する。
  *
- * draft-ietf-moq-transport-22 §3.6 (Subscribing to Tracks by Prefix) のとおり、購読側が
+ * draft-ietf-moq-transport-23 §3.6 (Subscribing to Tracks by Prefix) のとおり、購読側が
  * PUBLISH を新規双方向ストリームで受信し、REQUEST_UPDATE の応答
  * (REQUEST_OK / REQUEST_ERROR) と PUBLISH_DONE を同じストリームで受信する
  * 経路をまとめる。受信データストリームは dataStreamIncoming.ts が担当する。
@@ -162,7 +162,7 @@ export async function incomingPublishRunStreamSubLoop(
   /**
    * 1 チャンク分のメッセージ列を処理する
    *
-   * draft-ietf-moq-transport-22 §9.1.7 (MAX_REQUEST_UPDATES):
+   * draft-ietf-moq-transport-23 §9.1.7 (MAX_REQUEST_UPDATES):
    * このチャンクの先頭の未応答数を記録し、メッセージ列の処理を終えた時点で
    * 記録した値へ戻す (チャンク単位の減算。加算は受信 1 通ごとに
    * bidiHandlePublishRequestUpdate が行う)。1 通ごとに減算すると、応答の
@@ -184,7 +184,7 @@ export async function incomingPublishRunStreamSubLoop(
             msg.payload,
             publishRequestId,
           );
-          // draft-ietf-moq-transport-22 §6.4.2.2 / §9.9:
+          // draft-ietf-moq-transport-23 §6.4.2.2 / §9.9:
           // PUBLISH_DONE は publisher が方向を閉じる前の最終メッセージであり、受信後は
           // 将来の REQUEST_UPDATE に応答する必要が無い。送るものが無いため応答方向を
           // FIN で閉じる (SHOULD。await の扱いは closeRequestStreamWriter を参照)。
@@ -197,7 +197,7 @@ export async function incomingPublishRunStreamSubLoop(
           continue;
         }
         if (msg.type === MessageType.PUBLISH_STATE_NOTIFY) {
-          // draft-ietf-moq-transport-22 §9.10:
+          // draft-ietf-moq-transport-23 §9.10:
           // 受信 PUBLISH で確立した購読への publisher 発の状態通知を受理する。
           // 応答は送信しない。受信 PUBLISH 経路は subscriber 側のため
           // ロールは subscribe として扱う。閉鎖後は打ち切る。
@@ -235,7 +235,7 @@ export async function incomingPublishRunStreamSubLoop(
           return false;
         }
         if (msg.type === MessageType.REQUEST_UPDATE) {
-          // draft-ietf-moq-transport-22 §9.5 ケース 1:
+          // draft-ietf-moq-transport-23 §9.5 ケース 1:
           // 「The sender of a request (SUBSCRIBE, PUBLISH, FETCH,
           // PUBLISH_NAMESPACE, SUBSCRIBE_NAMESPACE, SUBSCRIBE_TRACKS) can
           // later send a REQUEST_UPDATE on the same bidi stream as the
@@ -266,7 +266,7 @@ export async function incomingPublishRunStreamSubLoop(
             msg.payload,
             publishRequestId,
           );
-          // draft-ietf-moq-transport-22 §9.5:
+          // draft-ietf-moq-transport-23 §9.5:
           // bidiHandleRequestUpdateOk は REQUEST_UPDATE_OK のパラメータスコープ違反、
           // 未知の Mandatory Track Property、未応答の REQUEST_UPDATE が無い
           // REQUEST_OK の 3 箇所でセッションを閉じ得る。
@@ -281,7 +281,7 @@ export async function incomingPublishRunStreamSubLoop(
         }
         if (msg.type === MessageType.REQUEST_ERROR) {
           const error = bidi.buildRequestErrorFromDecoded(decodeRequestErrorPayload(msg.payload));
-          // draft-ietf-moq-transport-22 §9.5: coalescing により単一 REQUEST_ERROR で
+          // draft-ietf-moq-transport-23 §9.5: coalescing により単一 REQUEST_ERROR で
           // 複数の REQUEST_UPDATE が失敗し得る。該当 pending をすべて reject する。
           // 失敗が確定した更新の fill 関連付けも消す (確定済みの fill は残す)。
           bidi.deleteFillTargetsForPendingUpdates(
@@ -337,7 +337,7 @@ export async function incomingPublishRunStreamSubLoop(
     while (impl.state === "active") {
       const { value, done } = await subReader.read();
       if (done) {
-        // draft-ietf-moq-transport-22 §6.4.2.2:
+        // draft-ietf-moq-transport-23 §6.4.2.2:
         // ピアが FIN で方向を閉じた後は将来の REQUEST_UPDATE が到着し得ないため、
         // 送るものが無い応答方向も FIN で閉じる (SHOULD)。通知より先に呼び、
         // アプリのコールバックに FIN の発行を遅らせない。
@@ -345,7 +345,7 @@ export async function incomingPublishRunStreamSubLoop(
           session as unknown as bidi.BidiSessionInternal,
           publishRequestId,
         );
-        // draft-ietf-moq-transport-22 §9.5.1:
+        // draft-ietf-moq-transport-23 §9.5.1:
         // 応答を待たずにストリームが閉じた場合は保留中の更新の失敗として、
         // アプリの update() の Promise を reject する (bidiReadRequestStreamMessages
         // の FIN ケースと同じ。GOAWAY 掃除と二重 reject にならないよう、
@@ -356,7 +356,7 @@ export async function incomingPublishRunStreamSubLoop(
           publishRequestId,
           new Error(REQUEST_UPDATE_STREAM_CLOSED_MESSAGE),
         );
-        // draft-ietf-moq-transport-22 §6.4.2.2:
+        // draft-ietf-moq-transport-23 §6.4.2.2:
         // 受信 PUBLISH の subscriber (impl) が、ピア (publisher) の
         // PUBLISH_DONE を送らない FIN を受けた場合は失敗扱いであり、
         // subscriber に通知する (通知のガードは free function 内で行う)。
@@ -373,7 +373,7 @@ export async function incomingPublishRunStreamSubLoop(
       }
     }
   } catch (err) {
-    // draft-ietf-moq-transport-22 §6.4.2.2:
+    // draft-ietf-moq-transport-23 §6.4.2.2:
     // 購読が終了済み (state が active でない) でセッションが生きている場合、応答方向に
     // 送るものは無く将来の REQUEST_UPDATE に応答する必要も無いため FIN で閉じる。
     // 主な経路は PUBLISH_DONE を処理する途中でアプリのコールバックが throw した場合で、
@@ -413,7 +413,7 @@ export async function incomingPublishRunStreamSubLoop(
         // にはならない)。
         impl.markClosed();
       } else if (isPeerStreamError(err)) {
-        // draft-ietf-moq-transport-22 §6.4.2.3:
+        // draft-ietf-moq-transport-23 §6.4.2.3:
         // ピアの RESET_STREAM で readable がエラー終了した場合 (source: "stream") は、
         // subscribe ロール側と同じく error 通知 + state closed にする。仕様は
         // ピアの RESET_STREAM を受けた側のアプリへの通知内容も subscription state
@@ -426,7 +426,7 @@ export async function incomingPublishRunStreamSubLoop(
         // エントリが削除された窓では通知しない (subscribe ロール側と同じ)。
         // 通知メッセージは subscribe ロール側と同一の組み立てを使う
         // (ピアのエラーコード付き、取得不可時は固定文言)。
-        // draft-ietf-moq-transport-22 §6.4.2.2 / §9.5.1:
+        // draft-ietf-moq-transport-23 §6.4.2.2 / §9.5.1:
         // RESET_STREAM は FIN よりも強い終了であり、応答未達の REQUEST_UPDATE は
         // FIN 経路と同様に失敗として扱う (上記の先行 reject)。
         // 内側に try/catch が必要なのは、catch ブロック内で throw すると戻り値の
@@ -486,7 +486,7 @@ export async function incomingPublishRunStreamSubLoop(
 /**
  * 受信 PUBLISH の AUTHORIZATION TOKEN パラメータを処理する
  *
- * draft-ietf-moq-transport-22 §9.20.2 / §8.9:
+ * draft-ietf-moq-transport-23 §9.19.2 / §8.9:
  * §8.9 の MUST により REGISTER はメッセージが他の理由 (UNINTERESTED 等) で
  * 失敗しても登録を維持するため、購読マッチング判定より前に処理する。
  * デコード不能 (MALFORMED_KEY_VALUE)・登録済み Alias の再 REGISTER
@@ -619,7 +619,7 @@ async function incomingPublishCancelRequestStream(
 /**
  * PUBLISH ペイロードの Parameters までを読み出す
  *
- * draft-ietf-moq-transport-22 §9.8: PUBLISH は Request ID / Track Namespace /
+ * draft-ietf-moq-transport-23 §9.8: PUBLISH は Request ID / Track Namespace /
  * Track Name / Track Alias / Parameters / Track Properties の順に並ぶ。
  * Track Properties の意味検証が失敗しても Parameters は復元できるため、
  * §8.9 の AUTHORIZATION TOKEN の REGISTER をセッションエラーにならない拒否でも
@@ -819,7 +819,7 @@ export async function incomingPublishHandleBidirectionalStream(
     decodedPublish.parameters,
   );
   if (match === null) {
-    // draft-ietf-moq-transport-22 §9.8 (SHOULD): マッチしない PUBLISH は UNINTERESTED
+    // draft-ietf-moq-transport-23 §9.8 (SHOULD): マッチしない PUBLISH は UNINTERESTED
     await incomingSendRequestErrorAndClose(
       stream,
       RequestErrorCode.UNINTERESTED,
@@ -830,9 +830,9 @@ export async function incomingPublishHandleBidirectionalStream(
     return;
   }
 
-  // draft-ietf-moq-transport-22 §3.1.3 (Track Alias):
+  // draft-ietf-moq-transport-23 §3.1.3 (Track Alias):
   // 同一 Track Alias が異なる Track に使われている場合は DUPLICATE_TRACK_ALIAS でセッション終了。
-  // 同一 Track への複数 PUBLISH は draft-ietf-moq-transport-22 §3.1 で許可される。
+  // 同一 Track への複数 PUBLISH は draft-ietf-moq-transport-23 §3.1 で許可される。
   // TRACK_PROPERTY_FILTER 評価より先に検証する (フィルタ不通過で UNINTERESTED 応答すると
   // alias 重複というセッション違反が検出されず隠れるため)。
   const existingSubscribers = session.subscribersByAlias.get(publishTrackAlias);
@@ -862,7 +862,7 @@ export async function incomingPublishHandleBidirectionalStream(
     }
   }
 
-  // draft-ietf-moq-transport-22 §3.3.2:
+  // draft-ietf-moq-transport-23 §3.3.2:
   // TRACK_PROPERTY_FILTER の評価 (受信 PUBLISH の Track Properties に対する検索)。
   // 通過しない PUBLISH は onPublish を呼ばず、§9.8 の SHOULD に従い
   // REQUEST_ERROR (UNINTERESTED) で応答してストリームの読み取りを放棄する。
@@ -941,7 +941,7 @@ export async function incomingPublishHandleBidirectionalStream(
   );
   impl.setSessionCallbacks(subscribeCallbacks);
 
-  // draft-ietf-moq-transport-22 §10.4:
+  // draft-ietf-moq-transport-23 §10.4:
   // 受信 PUBLISH の Track Properties から DEFAULT_PUBLISHER_PRIORITY を解決し、
   // Priority 省略時の Subgroup / Datagram に継承させる
   impl.setTrackProperties(decodedPublish.trackProperties);
@@ -952,7 +952,7 @@ export async function incomingPublishHandleBidirectionalStream(
     return;
   }
 
-  // draft-ietf-moq-transport-22 §3.3.2:
+  // draft-ietf-moq-transport-23 §3.3.2:
   // SUBSCRIBE_TRACKS 由来のオブジェクトレベル Range Filter (0x25-0x28) を
   // SubscriberImpl に設定し、handleObject / handleDatagram で評価する。
   // TRACK_PROPERTY_FILTER (0x29) は track 単位の評価として既に通過しており、
@@ -1022,7 +1022,7 @@ export async function incomingPublishHandleBidirectionalStream(
   );
   settleFillWaiters();
 
-  // PUBLISH_OK を送信 (draft-ietf-moq-transport-22 §3.1 MUST) して
+  // PUBLISH_OK を送信 (draft-ietf-moq-transport-23 §3.1 MUST) して
   // 後続メッセージのサブループを回す。
   // 登録以後の一連の処理は try/finally で守り、PUBLISH_OK 書き込み失敗・
   // サブループ脱出のいずれの exit 経路でも後始末 (3 マップの削除 + fill
@@ -1185,7 +1185,7 @@ async function incomingPublishDecodeAndValidate(
   // デコード経路でセッションを閉じる)。
   const earlyRequestId = incomingPublishPeekRequestId(payload);
 
-  // draft-ietf-moq-transport-22 §6.4.2.1 (Request ID):
+  // draft-ietf-moq-transport-23 §6.4.2.1 (Request ID):
   // 受信 PUBLISH の Request ID のパリティ (奇数) と重複は、Track Properties の
   // 検証 (未知 Mandatory / scope / 重複) より先に検証する。両方に違反する
   // PUBLISH で INVALID_REQUEST_ID が失われ、ID が重複検出から漏れるのを防ぐ。
@@ -1233,7 +1233,7 @@ async function incomingPublishDecodeAndValidate(
     incomingSettlePublishFillWaiters(session as unknown as SessionInternal, publishRequestId);
   };
 
-  // draft-ietf-moq-transport-22 §9.20.2 / §8.9:
+  // draft-ietf-moq-transport-23 §9.19.2 / §8.9:
   // PUBLISH の AUTHORIZATION TOKEN パラメータを処理する。§8.9 の MUST は
   // 「セッションエラーにならない限り REGISTER した Alias をキャッシュへ登録する」
   // であるため、セッションエラーにならない拒否 (予約 namespace による
@@ -1244,7 +1244,7 @@ async function incomingPublishDecodeAndValidate(
     return null;
   }
 
-  // draft-ietf-moq-transport-22 §2.4.3 / §6.5:
+  // draft-ietf-moq-transport-23 §2.4.3 / §6.5:
   // 受信 PUBLISH の Track Namespace 先頭フィールドが "." 単体または
   // ".session" の場合、REQUEST_ERROR (DOES_NOT_EXIST) で拒否してアプリへ
   // 渡さない (§2.4.3 / §6.5 の MUST)。それ以外の予約名前空間
@@ -1420,7 +1420,7 @@ export function incomingPublishCleanupIncomingPublish(
   // publisher が fill fetch ストリームを reset する)。
   session.fillFetchTargets.delete(publishRequestId);
   session.publishingRequestIds.delete(publishRequestId);
-  // draft-ietf-moq-transport-22 §9.1.7:
+  // draft-ietf-moq-transport-23 §9.1.7:
   // ストリーム終了時にストリーム単位の未応答 REQUEST_UPDATE 数を破棄する。
   // 残すと、以後に同じ Request ID のストリームが張られた場合 (および
   // 同一ストリームの残りメッセージ) に古い件数で超過と誤判定する。
@@ -1452,7 +1452,7 @@ export function incomingPublishCleanupIncomingPublish(
     session as unknown as bidi.BidiSessionInternal,
     impl.getFullTrackNameKey(),
   );
-  // draft-ietf-moq-transport-22 §6.6.1:
+  // draft-ietf-moq-transport-23 §6.6.1:
   // GOAWAY 受信後に受信 PUBLISH の購読が無くなった時点で NO_ERROR で閉じる。
   session.onRequestDrained();
 }
@@ -1468,10 +1468,10 @@ export function incomingPublishCleanupIncomingPublish(
  * 受理のみで状態反映はしない。この関数では再検証しない
  * (PAUSED / GROUP_ORDER の uint8 値域は decode 時に検証済み。
  * varint 系 timeouts / PRIORITY は範囲外で閉じる規定がないため検証しない)。
- * draft-ietf-moq-transport-22 §9.8 / §9.20.9 / §3.6.2:
+ * draft-ietf-moq-transport-23 §9.8 / §9.19.9 / §3.6.2:
  * LOCATION_FILTER は購読の初期フィルタとして反映する
  * (省略時は既定値 = 無制限)。End Group 超過は DELTA_ENCODING_OVERFLOW で閉じる。
- * draft-ietf-moq-transport-22 §9.20.17 / §3.3.1:
+ * draft-ietf-moq-transport-23 §9.19.17 / §3.3.1:
  * LARGEST_OBJECT は LOCATION_FILTER より先に設定する。相対 Location Filter は
  * 「フィルタ適用時点の LARGEST_OBJECT」で解決されるため、この順序で
  * 受信 PUBLISH が運ぶ LARGEST_OBJECT 基準の開始位置に一度だけ確定する。

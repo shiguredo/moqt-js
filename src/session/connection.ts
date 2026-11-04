@@ -5,7 +5,7 @@
  * readSetupMessages / startPostSetupLoops / applyTimeoutOptions /
  * sendControlMessage を free function として抽出する。
  *
- * draft-ietf-moq-transport-22 Section 6.2 (Session establishment) /
+ * draft-ietf-moq-transport-23 Section 6.2 (Session establishment) /
  * Section 6.3 (Session initialization) / §9.1 (SETUP) の接続確立、
  * 制御ストリームの開設、SETUP の送受信と検証、SETUP 後の受信ループ起動を
  * 1 か所にまとめる。接続後のライフサイクルは lifecycle.ts が担当する。
@@ -42,14 +42,14 @@ import { concatChunks } from "./stream";
 import type { SessionState } from "./publicTypes";
 
 /**
- * draft-ietf-moq-transport-22 §12.2:
+ * draft-ietf-moq-transport-23 §12.2:
  * 半端な制御メッセージ / データストリームを保持し続けるピアを打ち切る既定の期限。
  */
 export const DEFAULT_CONTROL_MESSAGE_TIMEOUT_MS = 10_000;
 export const DEFAULT_DATA_STREAM_TIMEOUT_MS = 30_000;
 
 /**
- * draft-ietf-moq-transport-22 §12.5 (EXCESSIVE_LOAD 0x9):
+ * draft-ietf-moq-transport-23 §12.5 (EXCESSIVE_LOAD 0x9):
  * 確立後の受信データストリームが保持してよいバッファの既定上限。
  *
  * 媒体フレームは通常 1 MiB 未満であり、16 MiB の Object を受ける余裕を持たせた値。
@@ -59,7 +59,7 @@ export const DEFAULT_DATA_STREAM_TIMEOUT_MS = 30_000;
 export const DEFAULT_DATA_STREAM_MAX_BUFFER_BYTES = 32 << 20;
 
 /**
- * draft-ietf-moq-transport-22 §12.5 (EXCESSIVE_LOAD 0x9):
+ * draft-ietf-moq-transport-23 §12.5 (EXCESSIVE_LOAD 0x9):
  * 確立後の受信データストリームがセッション全体で保持してよいバッファの合計の既定上限。
  *
  * ストリーム単位の既定 (32 MiB) を 2 本ぶん同時に受けられる値である。媒体フレームは
@@ -119,7 +119,7 @@ export interface ConnectionInitializeOptions {
   /**
    * 確立後の受信データストリームが保持してよいバッファの上限 (バイト)
    *
-   * draft-ietf-moq-transport-22 §12.5 (EXCESSIVE_LOAD 0x9)。
+   * draft-ietf-moq-transport-23 §12.5 (EXCESSIVE_LOAD 0x9)。
    * 既定は DEFAULT_DATA_STREAM_MAX_BUFFER_BYTES (32 MiB)。0 以下で上限なし。
    * 詳細は ConnectOptions.dataStreamMaxBufferBytes を参照。
    */
@@ -127,7 +127,7 @@ export interface ConnectionInitializeOptions {
   /**
    * 確立後の受信データストリームがセッション全体で保持してよいバッファの合計上限 (バイト)
    *
-   * draft-ietf-moq-transport-22 §12.5 (EXCESSIVE_LOAD 0x9)。
+   * draft-ietf-moq-transport-23 §12.5 (EXCESSIVE_LOAD 0x9)。
    * 既定は DEFAULT_DATA_STREAM_MAX_TOTAL_BUFFER_BYTES (64 MiB)。0 以下で上限なし。
    * 詳細は ConnectOptions.dataStreamMaxTotalBufferBytes を参照。
    */
@@ -148,39 +148,39 @@ export interface ConnectionSessionInternal {
   controlReader?: ControlStreamReader | undefined;
   controlWriter?: ControlStreamWriter | undefined;
 
-  // draft-ietf-moq-transport-22 §13 (Grease): Track / Object Properties への注入
+  // draft-ietf-moq-transport-23 §13 (Grease): Track / Object Properties への注入
   grease: boolean;
   // draft-ietf-moq-msf-01 §11.4.3: SETUP に載せたトークン。
   // track に紐づくトークンは SUBSCRIBE / FETCH などへも MUST 付与するため保持する
   setupAuthToken: AuthorizationToken | undefined;
-  // draft-ietf-moq-transport-22 §9.1.6 / §9.1.7 / §9.1.3: SETUP で広告する上限
+  // draft-ietf-moq-transport-23 §9.1.6 / §9.1.7 / §9.1.3: SETUP で広告する上限
   localMaxFilterRanges: number;
   localMaxRequestUpdates: number;
   localMaxAuthTokenCacheSize: number;
   // draft-ietf-moq-transport-23 §9.1.8: 自 endpoint が広告した MAX_CONTROL_MESSAGE_SIZE
   // (受信する制御メッセージの Message Length の上限)
   localMaxControlMessageSize: number;
-  // draft-ietf-moq-transport-22 §9.1.6 / §9.1.7 / §9.1.3: ピアが広告した上限
+  // draft-ietf-moq-transport-23 §9.1.6 / §9.1.7 / §9.1.3: ピアが広告した上限
   peerMaxFilterRanges: number;
   peerMaxRequestUpdates: number;
   peerMaxAuthTokenCacheSize: bigint;
   // draft-ietf-moq-transport-23 §9.1.8: ピアが広告した MAX_CONTROL_MESSAGE_SIZE
   // (送信する制御メッセージの Message Length の上限。SETUP 受信前は既定値)
   peerMaxControlMessageSize: number;
-  // draft-ietf-moq-transport-22 §8.9 / §9.1.4: 自 SETUP の REGISTER の登録成否
+  // draft-ietf-moq-transport-23 §8.9 / §9.1.4: 自 SETUP の REGISTER の登録成否
   setupTokenRegistration: { tokenAlias: bigint; registered: boolean } | undefined;
   // SETUP に載せたトークン (登録失敗時に USE_VALUE へ戻す値の出典)
   readonly setupAuthorizationToken: AuthorizationToken | undefined;
-  // draft-ietf-moq-transport-22 §9.1.3: ピアに登録済みのトークンサイズの総和
+  // draft-ietf-moq-transport-23 §9.1.3: ピアに登録済みのトークンサイズの総和
   peerRegisteredAuthTokenSize: bigint;
   receivedAuthTokens: AuthTokenCache;
 
-  // draft-ietf-moq-transport-22 §12.2: 受信タイムアウト
+  // draft-ietf-moq-transport-23 §12.2: 受信タイムアウト
   controlMessageTimeoutMs: number;
   dataStreamTimeoutMs: number;
-  // draft-ietf-moq-transport-22 §12.5: データストリーム単位の受信バッファ上限
+  // draft-ietf-moq-transport-23 §12.5: データストリーム単位の受信バッファ上限
   dataStreamMaxBufferBytes: number;
-  // draft-ietf-moq-transport-22 §12.5: 受信データストリーム全体の合計バッファ上限
+  // draft-ietf-moq-transport-23 §12.5: 受信データストリーム全体の合計バッファ上限
   dataStreamMaxTotalBufferBytes: number;
   statsControlMessagesSent: number;
 
@@ -206,7 +206,7 @@ export interface ConnectionSessionInternal {
  * (ストリームタイプ varint を含む) を消費する。SETUP 完了後に
  * handleIncomingStream が通常のストリームとして処理できるよう、
  * 消費済みバイトを先頭に持つ ReadableStream を作り直す
- * (draft-ietf-moq-transport-22 §6.3 のデータストリーム先着バッファリング)。
+ * (draft-ietf-moq-transport-23 §6.3 のデータストリーム先着バッファリング)。
  */
 export function connectionPrependBytesToStream(
   prefix: Uint8Array,
@@ -241,7 +241,7 @@ export function connectionPrependBytesToStream(
 /**
  * SETUP で広告する MAX_REQUEST_UPDATES の保持値を解決する
  *
- * draft-ietf-moq-transport-22 §9.1.7:
+ * draft-ietf-moq-transport-23 §9.1.7:
  * 未広告 (undefined) は 0 (無制限) として扱う。§9.1.6 の MAX_FILTER_RANGES の
  * 0 が「Range Filter 受信拒否」なのとは意味が逆である。
  */
@@ -312,20 +312,20 @@ export async function connectionInitialize(
     /**
      * 確立後の受信データストリームが保持してよいバッファの上限 (バイト)
      *
-     * draft-ietf-moq-transport-22 §12.5 (EXCESSIVE_LOAD 0x9)。
+     * draft-ietf-moq-transport-23 §12.5 (EXCESSIVE_LOAD 0x9)。
      * 既定は DEFAULT_DATA_STREAM_MAX_BUFFER_BYTES (32 MiB)。0 以下で上限なし。
      */
     dataStreamMaxBufferBytes?: number;
     /**
      * 確立後の受信データストリームがセッション全体で保持してよいバッファの合計上限 (バイト)
      *
-     * draft-ietf-moq-transport-22 §12.5 (EXCESSIVE_LOAD 0x9)。
+     * draft-ietf-moq-transport-23 §12.5 (EXCESSIVE_LOAD 0x9)。
      * 既定は DEFAULT_DATA_STREAM_MAX_TOTAL_BUFFER_BYTES (64 MiB)。0 以下で上限なし。
      */
     dataStreamMaxTotalBufferBytes?: number;
   },
 ): Promise<void> {
-  // draft-ietf-moq-transport-22 §6.3 (Session initialization):
+  // draft-ietf-moq-transport-23 §6.3 (Session initialization):
   // 制御ストリームは単方向ストリームのペアに変更された。
   // クライアントは送信用単方向ストリームを開き、サーバーの単方向ストリームを受信する。
 
@@ -340,14 +340,14 @@ export async function connectionInitialize(
   // 送信用単方向ストリームを開く
   session.controlSendStream = await session.transport.createUnidirectionalStream();
 
-  // draft-ietf-moq-transport-22 Section 6.4.1:
+  // draft-ietf-moq-transport-23 Section 6.4.1:
   // All unidirectional MOQT streams start with a variable-length integer
   // indicating the type of the stream.
   // 制御ストリームのストリームタイプは 0x2F00 (Table 2)
   const streamTypeBytes = encodeVarint(MessageType.SETUP);
 
   // SETUP を送信
-  // draft-ietf-moq-transport-22 §9.1.1 / §9.1.2:
+  // draft-ietf-moq-transport-23 §9.1.1 / §9.1.2:
   // AUTHORITY (0x05) / PATH (0x01) は WebTransport 使用時には MUST NOT 送信。
   // moqt-js は WebTransport 専用クライアントのため `createSetup` には渡さない。
   // grease は SETUP 送信だけでなく、Track / Object Properties への注入にも使うため
@@ -357,19 +357,19 @@ export async function connectionInitialize(
   // AUTHORIZATION TOKEN パラメータを受け付ける制御メッセージ (SUBSCRIBE / FETCH など)
   // へも MUST 付与する。高レベル API とアプリが再利用できるようセッションに保持する。
   session.setupAuthToken = options?.authorizationToken;
-  // draft-ietf-moq-transport-22 §9.1.6 (MAX FILTER RANGES):
+  // draft-ietf-moq-transport-23 §9.1.6 (MAX FILTER RANGES):
   // 自 endpoint が広告する上限を保持し、受信 Range Filter の検証に使う。
   // 未広告 (undefined) の既定値は 0（Range Filter 受信拒否）。
   session.localMaxFilterRanges = options?.maxFilterRanges ?? 0;
-  // draft-ietf-moq-transport-22 §12.2:
+  // draft-ietf-moq-transport-23 §12.2:
   // 半端な制御メッセージ / データストリームを保持し続けるピアを打ち切る期限。
   connectionApplyTimeoutOptions(session, options);
-  // draft-ietf-moq-transport-22 §9.1.3 (MAX_AUTH_TOKEN_CACHE_SIZE):
+  // draft-ietf-moq-transport-23 §9.1.3 (MAX_AUTH_TOKEN_CACHE_SIZE):
   // 自 endpoint が広告する上限を保持し、受信 REGISTER の上限判定に使う。
   // 未広告 (undefined) の既定値は 0（Alias の使用禁止）。
   session.localMaxAuthTokenCacheSize = options?.maxAuthTokenCacheSize ?? 0;
   session.receivedAuthTokens = new AuthTokenCache(session.localMaxAuthTokenCacheSize);
-  // draft-ietf-moq-transport-22 §9.1.7 (MAX_REQUEST_UPDATES):
+  // draft-ietf-moq-transport-23 §9.1.7 (MAX_REQUEST_UPDATES):
   // 自 endpoint が広告する上限を保持し、受信 REQUEST_UPDATE の未応答数の
   // 上限判定に使う。未広告 (undefined) の既定値は 0（無制限）。
   // §9.1.6 の MAX_FILTER_RANGES の 0 = 受信拒否とは意味が逆であるため、
@@ -407,7 +407,7 @@ export async function connectionInitialize(
   writer.releaseLock();
 
   // サーバーからの単方向ストリームを受信する
-  // draft-ietf-moq-transport-22 §6.3 (Session initialization):
+  // draft-ietf-moq-transport-23 §6.3 (Session initialization):
   // "Unidirectional streams containing Objects or bidirectional stream(s)
   //  beginning with a request message could arrive prior to the control
   //  streams, in which case the data SHOULD be buffered until both control
@@ -428,7 +428,7 @@ export async function connectionInitialize(
         );
       }
 
-      // draft-ietf-moq-transport-22 Section 6.4.1:
+      // draft-ietf-moq-transport-23 Section 6.4.1:
       // 単方向ストリームの先頭にストリームタイプ varint が含まれる。
       // WebTransport の read() はチャンク境界を保証しないため、
       // タイプ varint が揃うまで read + 連結を繰り返す。
@@ -483,7 +483,7 @@ export async function connectionInitialize(
   }
   session.controlReceiveStream = controlStream;
 
-  // draft-ietf-moq-transport-22 §9.1 (SETUP):
+  // draft-ietf-moq-transport-23 §9.1 (SETUP):
   // SETUP は制御ストリーム上で最初に送られる制御メッセージである。
   // SETUP メッセージが揃うまで read + feed を繰り返す。
   // ControlStreamReader.feed は部分データを内部バッファに蓄積し、
@@ -499,11 +499,11 @@ export async function connectionInitialize(
     peerMaxControlMessageSize,
   } = connectionDecodeAndValidateSetup(session, messages);
 
-  // draft-ietf-moq-transport-22 §9.1.3:
+  // draft-ietf-moq-transport-23 §9.1.3:
   // ピアの MAX_AUTH_TOKEN_CACHE_SIZE を取得（デフォルト 0 = Alias 使用禁止）
   const peerMaxAuthTokenCacheSize = getSetupMaxAuthTokenCacheSize(decodedSetup);
   session.peerMaxAuthTokenCacheSize = BigInt(peerMaxAuthTokenCacheSize);
-  // draft-ietf-moq-transport-22 §8.9 / §9.1.4:
+  // draft-ietf-moq-transport-23 §8.9 / §9.1.4:
   // §8.9 の AUTH_TOKEN_CACHE_OVERFLOW は SETUP 以外の登録が対象であり、SETUP の
   // 登録は §9.1.4 のとおり失敗させず USE_VALUE として扱う。送信側はピアの上限が
   // 判明したここで、自 SETUP の REGISTER が登録されたかを確定し、後続メッセージ
@@ -512,7 +512,7 @@ export async function connectionInitialize(
     session.setupAuthorizationToken,
     BigInt(peerMaxAuthTokenCacheSize),
   );
-  // draft-ietf-moq-transport-22 §9.1.3: 登録に成功した SETUP の REGISTER は
+  // draft-ietf-moq-transport-23 §9.1.3: 登録に成功した SETUP の REGISTER は
   // 「Session initiation 以降に登録したサイズ」として総和の初期値にする。
   // 登録に失敗した場合はピアに登録されていないため 0 のままにする (§9.1.4)。
   const setupAuthorizationToken = session.setupAuthorizationToken;
@@ -523,11 +523,11 @@ export async function connectionInitialize(
       ? authTokenRegisterEntrySize(setupAuthorizationToken.tokenValue)
       : 0n;
 
-  // draft-ietf-moq-transport-22 §9.1.7:
+  // draft-ietf-moq-transport-23 §9.1.7:
   // ピアの MAX_REQUEST_UPDATES を取得（デフォルト 0 = 無制限）
   session.peerMaxRequestUpdates = getSetupMaxRequestUpdates(decodedSetup);
 
-  // draft-ietf-moq-transport-22 §9.1.6:
+  // draft-ietf-moq-transport-23 §9.1.6:
   // ピアの MAX_FILTER_RANGES を取得（デフォルト 0 = Range Filter 送信禁止）
   session.peerMaxFilterRanges = getSetupMaxFilterRanges(decodedSetup);
 
@@ -599,7 +599,7 @@ export function connectionDecodeAndValidateSetup(
     // MALFORMED_MESSAGE へ正規化される)
     const decoded = decodeSetupPayload(msg.payload);
 
-    // draft-ietf-moq-transport-22 §9.1.1 / §9.1.2:
+    // draft-ietf-moq-transport-23 §9.1.1 / §9.1.2:
     // AUTHORITY (0x05) / PATH (0x01) は server から送信されてはならない。
     // また WebTransport 使用時には MUST NOT 送信されるため、moqt-js は受信したら
     // INVALID_AUTHORITY / INVALID_PATH でセッションを閉じなければならない。
@@ -622,7 +622,7 @@ export function connectionDecodeAndValidateSetup(
     // ここで値を確定させ、SETUP 受信後の送信上限として呼び出し元へ返す。
     const peerMaxControlMessageSize = getSetupMaxControlMessageSize(decoded);
 
-    // draft-ietf-moq-transport-22 §9.1.4 / §8.9:
+    // draft-ietf-moq-transport-23 §9.1.4 / §8.9:
     // 受信 SETUP の AUTHORIZATION TOKEN オプションを処理する。DELETE / USE_ALIAS は
     // §9.1.4 の MUST に基づく防御的検査として PROTOCOL_VIOLATION (仕様の MUST は
     // server 受信時のコードで、client 受信時はより specific なコードが無い)、
@@ -697,7 +697,7 @@ export async function connectionReadSetupMessages(
 /**
  * SETUP 確立後に受信ループを開始する
  *
- * draft-ietf-moq-transport-22 §9.1 (SETUP) / Section 6.3 (Session initialization):
+ * draft-ietf-moq-transport-23 §9.1 (SETUP) / Section 6.3 (Session initialization):
  * SETUP は制御ストリーム上の最初の制御メッセージであり、後続メッセージが同一 read
  * チャンクに相乗りして届くことがある。ControlStreamReader.feed は揃った全メッセージを
  * 返し内部バッファから削除するため、messages[0] (SETUP) 以外を処理しないと、後続の
@@ -724,7 +724,7 @@ export function connectionStartPostSetupLoops(
   session.startIncomingStreamLoop();
 
   // SETUP 完了前に到着したデータストリームを処理する
-  // draft-ietf-moq-transport-22 §6.3:
+  // draft-ietf-moq-transport-23 §6.3:
   // 制御ストリーム確立までバッファリングした Object ストリームを、
   // 読み取り済みバイト列 (ストリームタイプ varint を含む) ごと渡す。
   for (const buffered of bufferedDataStreams) {
@@ -735,7 +735,7 @@ export function connectionStartPostSetupLoops(
   session.startDatagramLoop();
 
   // 受信双方向ストリームの監視を開始
-  // draft-ietf-moq-transport-22 §3.6: SUBSCRIBE_TRACKS への応答として
+  // draft-ietf-moq-transport-23 §3.6: SUBSCRIBE_TRACKS への応答として
   // サーバーが新規双方向ストリームを開き PUBLISH を送信する
   session.startIncomingBidirectionalStreamLoop();
 }
@@ -743,14 +743,14 @@ export function connectionStartPostSetupLoops(
 /**
  * 受信タイムアウトの設定を反映する
  *
- * draft-ietf-moq-transport-22 §12.2:
+ * draft-ietf-moq-transport-23 §12.2:
  * CONTROL_MESSAGE_TIMEOUT (0x11) / DATA_STREAM_TIMEOUT (0x12) は、ピアが
  * 制御メッセージへの応答・データストリームの送信に時間をかけすぎたことを
  * 示すコードである。半端なメッセージや Object を保持したまま待ち続ける
  * ピアにメモリとコネクションを占有され続けないよう、期限を設ける。
  * 0 以下を指定するとタイムアウトしない。
  *
- * draft-ietf-moq-transport-22 §12.5 (EXCESSIVE_LOAD 0x9):
+ * draft-ietf-moq-transport-23 §12.5 (EXCESSIVE_LOAD 0x9):
  * あわせて受信データストリームが保持してよいバッファの上限も反映する。
  * ストリーム単位 (1 本) と、セッション全体の合計の 2 つがある。
  * 0 以下を指定すると上限を設けない。
@@ -767,7 +767,7 @@ export function connectionApplyTimeoutOptions(
   session.controlMessageTimeoutMs =
     options?.controlMessageTimeoutMs ?? DEFAULT_CONTROL_MESSAGE_TIMEOUT_MS;
   session.dataStreamTimeoutMs = options?.dataStreamTimeoutMs ?? DEFAULT_DATA_STREAM_TIMEOUT_MS;
-  // draft-ietf-moq-transport-22 §12.5 (EXCESSIVE_LOAD 0x9):
+  // draft-ietf-moq-transport-23 §12.5 (EXCESSIVE_LOAD 0x9):
   // 確立後の受信データストリームが無制限にメモリを消費しないようにする上限。
   session.dataStreamMaxBufferBytes =
     options?.dataStreamMaxBufferBytes ?? DEFAULT_DATA_STREAM_MAX_BUFFER_BYTES;

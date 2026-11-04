@@ -7,7 +7,7 @@
  * sendRequestUpdate / readPublishResponse / readSubscribeResponse /
  * readFetchResponse / readTrackStatusResponse を free function として抽出する。
  *
- * draft-ietf-moq-transport-22 Section 6.3:
+ * draft-ietf-moq-transport-23 Section 6.3:
  * リクエスト (SUBSCRIBE, PUBLISH, FETCH, TRACK_STATUS) は双方向ストリーム上で
  * 送受信される。受信側の処理は bidi.ts / incoming.ts が担当する。
  *
@@ -88,17 +88,17 @@ import type {
 export interface RequestsSessionInternal {
   /**
    * 後続メッセージへ付与する Authorization Token を正規化する
-   * (draft-ietf-moq-transport-22 §8.9 / §9.1.4)
+   * (draft-ietf-moq-transport-23 §8.9 / §9.1.4)
    */
   normalizeAuthorizationTokenForSend(token: AuthorizationToken): AuthorizationToken;
   /**
    * 送信直前の登録サイズを判定して予約する
-   * (draft-ietf-moq-transport-22 §9.1.3 の登録サイズの総和)
+   * (draft-ietf-moq-transport-23 §9.1.3 の登録サイズの総和)
    */
   reserveAuthorizationTokenForSend(token: AuthorizationToken | undefined): boolean;
   /**
    * 送信に至らなかった REGISTER の予約を取り消す
-   * (draft-ietf-moq-transport-22 §9.1.3 の登録サイズの総和)
+   * (draft-ietf-moq-transport-23 §9.1.3 の登録サイズの総和)
    */
   releaseAuthorizationTokenForSend(token: AuthorizationToken | undefined): void;
 
@@ -154,7 +154,7 @@ export async function requestsPublish(
   }
 
   // GOAWAY 受信後は新規リクエストを拒否
-  // draft-ietf-moq-transport-22 Section 9.2 (GOAWAY)
+  // draft-ietf-moq-transport-23 Section 9.2 (GOAWAY)
   if (session.receivedGoaway) {
     throw new Error("Cannot publish after receiving GOAWAY");
   }
@@ -165,13 +165,13 @@ export async function requestsPublish(
   const trackNameBytes = encodeTrackName(trackName);
 
   const requestId = session.nextRequestId;
-  // draft-ietf-moq-transport-22 Section 6.4.2.1: クライアントは偶数の Request ID を使うため 2 ずつ加算する
+  // draft-ietf-moq-transport-23 Section 6.4.2.1: クライアントは偶数の Request ID を使うため 2 ずつ加算する
   session.nextRequestId += 2n;
 
   const trackAlias = session.nextTrackAlias++;
-  // draft-ietf-moq-transport-22 §8.7: Full Track Name 合計長検証
+  // draft-ietf-moq-transport-23 §8.7: Full Track Name 合計長検証
   validateFullTrackName(trackNamespace, trackName);
-  // draft-ietf-moq-transport-22 §2.4.3 / §6.5: 予約 namespace / .session の送信拒否
+  // draft-ietf-moq-transport-23 §2.4.3 / §6.5: 予約 namespace / .session の送信拒否
   validateTrackNamespaceForSend(namespace, trackName);
 
   // パブリッシャー実装を作成
@@ -186,7 +186,7 @@ export async function requestsPublish(
 
   // GOAWAY コールバックを設定（セッション内部コールバック）
   impl.goawayCallback = callbacks?.goaway;
-  // draft-ietf-moq-transport-22 §9.20.19 / §10.6: DYNAMIC_GROUPS を広告した PUBLISH だけが
+  // draft-ietf-moq-transport-23 §9.19.19 / §10.6: DYNAMIC_GROUPS を広告した PUBLISH だけが
   // 受信した NEW_GROUP_REQUEST をアプリへ知らせる
   impl.dynamicGroups = options?.dynamicGroups === true;
   impl.newGroupRequestCallback = callbacks?.onNewGroupRequest;
@@ -200,7 +200,7 @@ export async function requestsPublish(
 
   // 送信コールバックを設定
   impl.onSendObject = (params: SendObjectParams) => requestsSendObject(session, impl, params);
-  // draft-ietf-moq-transport-22 §11.3.2 (Closing Subgroup Streams):
+  // draft-ietf-moq-transport-23 §11.3.2 (Closing Subgroup Streams):
   // paused 中または Location Filter の範囲外で見送った Object がある Subgroup は、
   // 閉じる時に reset を MUST とする。見送りの事実を見送りの時点で記録する (閉じる時点では
   // 最後に送信した Object より後の見送りを検出できない)。記録の規則は
@@ -208,7 +208,7 @@ export async function requestsPublish(
   impl.onSendObjectSkipped = (groupId) => {
     publishMarkStreamOmitted(session, impl.getTrackAlias(), groupId);
   };
-  // draft-ietf-moq-transport-22 §11.3.2 (Closing Subgroup Streams):
+  // draft-ietf-moq-transport-23 §11.3.2 (Closing Subgroup Streams):
   // Object を送らずに、その track で開いている Subgroup を閉じる。FIN / RESET の選択は
   // publishCloseSubgroup が既存の省略の記録から決める
   impl.onCloseSubgroup = () => requestsCloseSubgroup(session, impl.getTrackAlias());
@@ -224,9 +224,9 @@ export async function requestsPublish(
   impl.onDoneInternal = async (status) => {
     // まずデータストリーム（subgroup 単方向ストリーム）を閉じる（FIN 送信）
     await requestsClosePublisherStream(session, impl.getTrackAlias());
-    // その後 PUBLISH_DONE を送信（リクエストストリーム（PUBLISH の bidi ストリーム）の FIN は sendPublishDone 内で送信、draft-ietf-moq-transport-22 §9.9）
+    // その後 PUBLISH_DONE を送信（リクエストストリーム（PUBLISH の bidi ストリーム）の FIN は sendPublishDone 内で送信、draft-ietf-moq-transport-23 §9.9）
     await requestsSendPublishDone(session, impl, status);
-    // draft-ietf-moq-transport-22 §6.6.1:
+    // draft-ietf-moq-transport-23 §6.6.1:
     // GOAWAY 受信後に Established 購読が無くなった時点で NO_ERROR で閉じる。
     session.onRequestDrained();
   };
@@ -236,7 +236,7 @@ export async function requestsPublish(
   // が throw する場合、pendingPublish.set より前で失敗させるため、
   // 構築・encode は Promise 作成より前に行う (subscribe() の
   // buildSubscribeParameters / fetch() の buildFetchParameters と同じ手順)。
-  // draft-ietf-moq-transport-22 §8.9 / §9.1.4: SETUP の REGISTER の登録成否に応じて
+  // draft-ietf-moq-transport-23 §8.9 / §9.1.4: SETUP の REGISTER の登録成否に応じて
   // 後続メッセージへ付与するトークンを正規化する (登録成功 → USE_ALIAS、
   // 登録失敗 → USE_VALUE)。詳細は normalizeAuthorizationTokenForSend の JSDoc。
   const normalizedOptions = requestsNormalizeAuthorizationToken(session, options);
@@ -244,10 +244,10 @@ export async function requestsPublish(
   const trackProperties = buildPublishTrackProperties(options, session.grease);
 
   // PUBLISH メッセージを双方向ストリームで送信
-  // draft-ietf-moq-transport-22 Section 9.8 (PUBLISH):
+  // draft-ietf-moq-transport-23 Section 9.8 (PUBLISH):
   // "The publisher sends PUBLISH as the first message on a new
   //  bidirectional stream to initiate a subscription for a Track."
-  // draft-ietf-moq-transport-22 Section 6.3
+  // draft-ietf-moq-transport-23 Section 6.3
   const publishMsg = {
     type: MessageType.PUBLISH,
     requestId,
@@ -324,12 +324,12 @@ export async function requestsSubscribe(
   }
 
   // GOAWAY 受信後は新規リクエストを拒否
-  // draft-ietf-moq-transport-22 Section 9.2 (GOAWAY)
+  // draft-ietf-moq-transport-23 Section 9.2 (GOAWAY)
   if (session.receivedGoaway) {
     throw new Error("Cannot subscribe after receiving GOAWAY");
   }
 
-  // draft-ietf-moq-transport-22 §8.9 / §9.1.4: SETUP の REGISTER の登録成否に応じて
+  // draft-ietf-moq-transport-23 §8.9 / §9.1.4: SETUP の REGISTER の登録成否に応じて
   // 後続メッセージへ付与するトークンを正規化する (登録成功 → USE_ALIAS、
   // 登録失敗 → USE_VALUE)。詳細は normalizeAuthorizationTokenForSend の JSDoc。
   const normalizedOptions = requestsNormalizeAuthorizationToken(session, options);
@@ -340,11 +340,11 @@ export async function requestsSubscribe(
   const trackNameBytes = encodeTrackName(trackName);
 
   const requestId = session.nextRequestId;
-  // draft-ietf-moq-transport-22 Section 6.4.2.1: クライアントは偶数の Request ID を使うため 2 ずつ加算する
+  // draft-ietf-moq-transport-23 Section 6.4.2.1: クライアントは偶数の Request ID を使うため 2 ずつ加算する
   session.nextRequestId += 2n;
-  // draft-ietf-moq-transport-22 §8.7: Full Track Name 合計長検証
+  // draft-ietf-moq-transport-23 §8.7: Full Track Name 合計長検証
   validateFullTrackName(trackNamespace, trackName);
-  // draft-ietf-moq-transport-22 §2.4.3 / §6.5: 予約 namespace / .session の送信拒否
+  // draft-ietf-moq-transport-23 §2.4.3 / §6.5: 予約 namespace / .session の送信拒否
   validateTrackNamespaceForSend(namespace, trackName);
 
   // サブスクライバー実装を作成
@@ -372,19 +372,19 @@ export async function requestsSubscribe(
   // を paused 状態として保持する。
   impl.setPaused(options?.paused ?? false);
 
-  // draft-ietf-moq-transport-22 §9.20.8 / §9.20.15:
+  // draft-ietf-moq-transport-23 §9.19.8 / §9.19.15:
   // SUBSCRIBE 送信時の options.groupOrder を保持する。fill 要求時の
   // Group Order 解決 (FILL 内の指定が無ければ subscription の値) に使う。
   impl.setGroupOrder(options?.groupOrder);
 
-  // draft-ietf-moq-transport-22 Section 3.3.1: Location Filter を設定
+  // draft-ietf-moq-transport-23 Section 3.3.1: Location Filter を設定
   impl.setLocationFilter(options?.filter);
 
-  // draft-ietf-moq-transport-22 Section 3.3.2: Range Filters を設定
+  // draft-ietf-moq-transport-23 Section 3.3.2: Range Filters を設定
   impl.setRangeFilters(options?.rangeFilters);
 
   // draft-ietf-moq-msf-01 §11.4.3: 後続の REQUEST_UPDATE に同じトークンを付与するため保持
-  // draft-ietf-moq-transport-22 §8.9: SUBSCRIBE で登録した Alias を REQUEST_UPDATE で
+  // draft-ietf-moq-transport-23 §8.9: SUBSCRIBE で登録した Alias を REQUEST_UPDATE で
   // 再 REGISTER すると、ピアは DUPLICATE_AUTH_TOKEN_ALIAS でセッションを閉じる。
   // 保持する値は REQUEST_UPDATE 用に正規化する (登録済み Alias は USE_ALIAS で参照する)
   impl.setAuthorizationToken(requestsTokenForRequestUpdate(normalizedOptions?.authorizationToken));
@@ -399,7 +399,7 @@ export async function requestsSubscribe(
     await requestsSendRequestUpdate(session, impl, updateOptions);
   };
 
-  // draft-ietf-moq-transport-22 §9.1.6: ピアの MAX_FILTER_RANGES が 0 のとき、および
+  // draft-ietf-moq-transport-23 §9.1.6: ピアの MAX_FILTER_RANGES が 0 のとき、および
   // 購読単位の Ranges 合計が上限を超えるときは Range Filter を送信できない。
   // pendingSubscribe.set より前に配置し、throw 時に pending エントリが残らないようにする
   // fill 内側の Range Filters も購読単位の上限に含める (§9.1.6)。
@@ -409,7 +409,7 @@ export async function requestsSubscribe(
     "SUBSCRIBE",
   );
 
-  // draft-ietf-moq-transport-22 §3.3.2:
+  // draft-ietf-moq-transport-23 §3.3.2:
   // SUBSCRIBE の Range Filter 送信ガード (削除は REQUEST_UPDATE のみ・0x29 は
   // SUBSCRIBE_TRACKS のみ・組み合わせ重複禁止)。buildSubscribeParameters 内でも
   // 検証されるが、pendingSubscribe.set より前に throw させるため明示的に呼ぶ。
@@ -435,9 +435,9 @@ export async function requestsSubscribe(
   });
 
   // SUBSCRIBE メッセージを双方向ストリームで送信
-  // draft-ietf-moq-transport-22 Section 9.6 (SUBSCRIBE):
+  // draft-ietf-moq-transport-23 Section 9.6 (SUBSCRIBE):
   // SUBSCRIBE は新しい双方向ストリームで送信される。
-  // draft-ietf-moq-transport-22 Section 6.3
+  // draft-ietf-moq-transport-23 Section 6.3
   const subscribeMsg = {
     type: MessageType.SUBSCRIBE,
     requestId,
@@ -446,7 +446,7 @@ export async function requestsSubscribe(
     parameters,
   };
 
-  // draft-ietf-moq-transport-22 §3.4 (Fill Semantics):
+  // draft-ietf-moq-transport-23 §3.4 (Fill Semantics):
   // fill を要求した SUBSCRIBE の Request ID を購読に関連付ける。
   // SUBSCRIBE_OK 受理で pending は消えるが、fill ストリーム到着まで保持する。
   if (options?.fill !== undefined) {
@@ -541,12 +541,12 @@ export async function requestsFetch(
 
   const requestId = session.nextRequestId;
   session.nextRequestId += 2n;
-  // draft-ietf-moq-transport-22 §8.7: Full Track Name 合計長検証
+  // draft-ietf-moq-transport-23 §8.7: Full Track Name 合計長検証
   validateFullTrackName(trackNamespace, trackName);
-  // draft-ietf-moq-transport-22 §2.4.3 / §6.5: 予約 namespace / .session の送信拒否
+  // draft-ietf-moq-transport-23 §2.4.3 / §6.5: 予約 namespace / .session の送信拒否
   validateTrackNamespaceForSend(namespace, trackName);
 
-  // draft-ietf-moq-transport-22 §9.1.6: ピアの MAX_FILTER_RANGES を超える Range Filter 送信をガード
+  // draft-ietf-moq-transport-23 §9.1.6: ピアの MAX_FILTER_RANGES を超える Range Filter 送信をガード
   // pendingFetch.set より前に配置し、throw 時に pending エントリが残らないようにする
   validateRangeFilterLimits(options?.rangeFilters, session.peerMaxFilterRanges, "FETCH");
 
@@ -581,16 +581,16 @@ export async function requestsFetch(
   // Object を示す。非存在と誤認しないよう、要求時の有無を Fetcher に保持する。
   impl.setFetchRequestRangeFiltersPresent((options?.rangeFilters?.length ?? 0) > 0);
 
-  // draft-ietf-moq-transport-22 Section 3.2.4:
+  // draft-ietf-moq-transport-23 Section 3.2.4:
   // キャンセルは bidi リクエストストリームへ STOP_SENDING を送ることで行う (MUST)。
   impl.onCancel = async () => {
     await requestsCancelFetch(session, impl);
   };
 
   // FETCH メッセージを構築する
-  // draft-ietf-moq-transport-22 Section 9.11 (FETCH):
+  // draft-ietf-moq-transport-23 Section 9.11 (FETCH):
   // FETCH は新しい双方向ストリームで送信される。
-  // draft-ietf-moq-transport-22 Section 6.3
+  // draft-ietf-moq-transport-23 Section 6.3
   // buildFetchParameters (buildRangeFilterParameters / encodeLocationFilter を含む)
   // が throw する場合、pendingFetch.set より前で失敗させるため、
   // 構築は Promise 作成より前に行う。
@@ -685,13 +685,13 @@ export async function requestsTrackStatus(
 
   const requestId = session.nextRequestId;
   session.nextRequestId += 2n;
-  // draft-ietf-moq-transport-22 §8.7: Full Track Name 合計長検証
+  // draft-ietf-moq-transport-23 §8.7: Full Track Name 合計長検証
   validateFullTrackName(trackNamespace, trackName);
-  // draft-ietf-moq-transport-22 §2.4.3 / §6.5: 予約 namespace / .session の送信拒否
+  // draft-ietf-moq-transport-23 §2.4.3 / §6.5: 予約 namespace / .session の送信拒否
   validateTrackNamespaceForSend(namespace, trackName);
 
   // REQUEST_OK を待つ Promise
-  // draft-ietf-moq-transport-22 §12.1: malformed Track の検出時に同一 Track の
+  // draft-ietf-moq-transport-23 §12.1: malformed Track の検出時に同一 Track の
   // 購読 / FETCH を cross-cancel するため、比較キーを pending に保持する。
   const promise = new Promise<TrackStatusResult>((resolve, reject) => {
     session.pendingTrackStatus.set(requestId, {
@@ -702,10 +702,10 @@ export async function requestsTrackStatus(
   });
 
   // TRACK_STATUS メッセージを双方向ストリームで送信
-  // draft-ietf-moq-transport-22 Section 9.13 (TRACK_STATUS):
+  // draft-ietf-moq-transport-23 Section 9.13 (TRACK_STATUS):
   // TRACK_STATUS は新しい双方向ストリームで送信される。
-  // draft-ietf-moq-transport-22 Section 6.3
-  // draft-ietf-moq-transport-22 Section 9.20.21:
+  // draft-ietf-moq-transport-23 Section 6.3
+  // draft-ietf-moq-transport-23 Section 9.19.22:
   // INCLUDE_PROPERTIES は buildTrackStatusParameters で載せる (省略時は送らない)。
   const normalizedOptions = requestsNormalizeAuthorizationToken(session, options);
   const trackStatusMsg = {
@@ -758,10 +758,10 @@ export async function requestsTrackStatus(
 /**
  * リクエストを双方向ストリーム上で送信する
  *
- * draft-ietf-moq-transport-22 Section 6.3:
+ * draft-ietf-moq-transport-23 Section 6.3:
  * リクエスト (SUBSCRIBE, PUBLISH, FETCH, TRACK_STATUS 等) は
  * 双方向ストリーム上で送受信される。
- * draft-ietf-moq-transport-22 Section 6.3
+ * draft-ietf-moq-transport-23 Section 6.3
  *
  * @param requestId - リクエスト ID
  * @param type - メッセージタイプ
@@ -830,7 +830,7 @@ export function requestsSendDatagram(
 /**
  * PUBLISH_STATE_NOTIFY を送信する
  *
- * draft-ietf-moq-transport-22 §9.10 (PUBLISH_STATE_NOTIFY):
+ * draft-ietf-moq-transport-23 §9.10 (PUBLISH_STATE_NOTIFY):
  * 購読の双方向ストリーム上で送信し、応答は受け取らない。
  */
 export function requestsSendPublishStateNotify(
@@ -846,7 +846,7 @@ export function requestsSendPublishStateNotify(
 }
 
 /**
- * draft-ietf-moq-transport-22 Section 9.9 (PUBLISH_DONE):
+ * draft-ietf-moq-transport-23 Section 9.9 (PUBLISH_DONE):
  * PUBLISH_DONE は双方向ストリーム上で送信される。
  * Request ID フィールドはない（bidi stream で特定可能）。
  */
@@ -861,7 +861,7 @@ export function requestsSendPublishDone(
 /**
  * サブスクリプションをキャンセルする
  *
- * draft-ietf-moq-transport-22 Section 6.4.2.3:
+ * draft-ietf-moq-transport-23 Section 6.4.2.3:
  * subscription のキャンセルは双方向ストリームの close で行う。
  */
 export function requestsCancelSubscription(
@@ -874,7 +874,7 @@ export function requestsCancelSubscription(
 /**
  * Fetch をキャンセルする
  *
- * draft-ietf-moq-transport-22 Section 3.2.4:
+ * draft-ietf-moq-transport-23 Section 3.2.4:
  * "It MUST send STOP_SENDING for the bidi request stream."
  */
 export function requestsCancelFetch(
@@ -887,7 +887,7 @@ export function requestsCancelFetch(
 /**
  * REQUEST_UPDATE を送信する
  *
- * draft-ietf-moq-transport-22 Section 9.5 (REQUEST_UPDATE):
+ * draft-ietf-moq-transport-23 Section 9.5 (REQUEST_UPDATE):
  * REQUEST_UPDATE はリクエストと同じ双方向ストリーム上で送信する。
  *
  * REQUEST_UPDATE Message {
@@ -912,10 +912,10 @@ export function requestsSendRequestUpdate(
 /**
  * PUBLISH リクエストの双方向ストリームからレスポンスを読み取る
  *
- * draft-ietf-moq-transport-22 Section 9.3 (REQUEST_OK):
+ * draft-ietf-moq-transport-23 Section 9.3 (REQUEST_OK):
  * PUBLISH_OK は双方向ストリーム上の最初のレスポンスとして送信される。
  * その後、同じストリームで REQUEST_UPDATE の応答も受信する。
- * draft-ietf-moq-transport-22 Section 6.3
+ * draft-ietf-moq-transport-23 Section 6.3
  */
 export function requestsReadPublishResponse(
   session: RequestsSessionInternal,
@@ -934,9 +934,9 @@ export function requestsReadPublishResponse(
 /**
  * SUBSCRIBE リクエストの双方向ストリームからレスポンスを読み取る
  *
- * draft-ietf-moq-transport-22 Section 9.7 (SUBSCRIBE_OK):
+ * draft-ietf-moq-transport-23 Section 9.7 (SUBSCRIBE_OK):
  * SUBSCRIBE_OK は双方向ストリーム上の最初のレスポンスとして送信される。
- * draft-ietf-moq-transport-22 Section 6.3
+ * draft-ietf-moq-transport-23 Section 6.3
  */
 export function requestsReadSubscribeResponse(
   session: RequestsSessionInternal,
@@ -976,9 +976,9 @@ export function requestsReadFetchResponse(
 /**
  * TRACK_STATUS リクエストの双方向ストリームからレスポンスを読み取る
  *
- * draft-ietf-moq-transport-22 Section 9.13 (TRACK_STATUS):
+ * draft-ietf-moq-transport-23 Section 9.13 (TRACK_STATUS):
  * TRACK_STATUS へのレスポンスは REQUEST_OK で返される。
- * draft-ietf-moq-transport-22 Section 6.3
+ * draft-ietf-moq-transport-23 Section 6.3
  */
 export function requestsReadTrackStatusResponse(
   session: RequestsSessionInternal,
@@ -997,7 +997,7 @@ export function requestsReadTrackStatusResponse(
 /**
  * Location Filter をデバッグログ用の文字列に要約する
  *
- * Location Filter Type ごとの表現 (draft-ietf-moq-transport-22 §9.20.9 Table 6) を
+ * Location Filter Type ごとの表現 (draft-ietf-moq-transport-23 §9.19.9 Table 6) を
  * そのまま書き出す。Next Object (0x05) はフィールドを持たないため種別名だけを返す。
  */
 export function requestsDescribeLocationFilter(
@@ -1028,7 +1028,7 @@ export function requestsDescribeLocationFilter(
 /**
  * options の Authorization Token を送信用に正規化する
  *
- * draft-ietf-moq-transport-22 §8.9 / §9.1.4: SETUP の REGISTER の登録成否に応じて、
+ * draft-ietf-moq-transport-23 §8.9 / §9.1.4: SETUP の REGISTER の登録成否に応じて、
  * 後続メッセージへ付与するトークンを USE_ALIAS (登録成功) / USE_VALUE (登録失敗) に
  * 正規化する。Authorization Token を運ばない options はそのまま返す。
  */
@@ -1050,7 +1050,7 @@ export function requestsNormalizeAuthorizationToken<
 /**
  * DELETE (Alias Type 0x00) の Authorization Token を落とす
  *
- * draft-ietf-moq-transport-22 §8.9:
+ * draft-ietf-moq-transport-23 §8.9:
  * DELETE は Alias の退役を指示するものであり、後続の制御メッセージで繰り返すと
  * UNKNOWN_AUTH_TOKEN_ALIAS と解され得る。購読状態に保持して REQUEST_UPDATE へ
  * 引き継ぐ対象からは外す。
@@ -1067,7 +1067,7 @@ export function requestsTokenUnlessDelete(
 /**
  * REQUEST_UPDATE に付与する Authorization Token を求める
  *
- * draft-ietf-moq-transport-22 §8.9: 既に登録した Alias を同じセッションで
+ * draft-ietf-moq-transport-23 §8.9: 既に登録した Alias を同じセッションで
  * 再 REGISTER すると、ピアは DUPLICATE_AUTH_TOKEN_ALIAS でセッションを閉じる。
  * SUBSCRIBE などの要求で REGISTER を送った Alias は、同じストリームの
  * REQUEST_UPDATE では USE_ALIAS で参照する (§9.1.4 も Alias の再利用を前提とする)。
@@ -1084,7 +1084,7 @@ export function requestsTokenForRequestUpdate(
 /**
  * 送信直前の Authorization Token の登録サイズを判定して予約する
  *
- * draft-ietf-moq-transport-22 §9.1.3: 登録サイズの総和がピアの上限を超える場合は
+ * draft-ietf-moq-transport-23 §9.1.3: 登録サイズの総和がピアの上限を超える場合は
  * 送信前にローカルエラーにする。判定と予約は送信の直前 (await の手前) で行い、
  * 並行する REGISTER が互いの加算を見落とさないようにする。
  */
@@ -1098,7 +1098,7 @@ export function requestsReserveAuthorizationToken(
 /**
  * 送信に至らなかった Authorization Token の予約を取り消す
  *
- * draft-ietf-moq-transport-22 §9.1.3: 予約したまま送信しなかった場合は減算する。
+ * draft-ietf-moq-transport-23 §9.1.3: 予約したまま送信しなかった場合は減算する。
  */
 export function requestsReleaseAuthorizationToken(
   session: { releaseAuthorizationTokenForSend(token: AuthorizationToken | undefined): void },

@@ -1,6 +1,6 @@
 /**
  * Subscriber Property-Based Tests
- * draft-ietf-moq-transport-22 Section 3.1
+ * draft-ietf-moq-transport-23 Section 3.1
  */
 
 import { test, assert } from "vite-plus/test";

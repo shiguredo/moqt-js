@@ -25,13 +25,13 @@ import { createOkResponseReadTestContext } from "../testSupport/bidi";
 
 // ============================================================================
 // 応答読み取りの未カバー分岐 (REQUEST_ERROR / GOAWAY)
-// draft-ietf-moq-transport-22 §9.4 (REQUEST_ERROR) / §9.2 (GOAWAY)
+// draft-ietf-moq-transport-23 §9.4 (REQUEST_ERROR) / §9.2 (GOAWAY)
 // ============================================================================
 
 /**
  * REQUEST_ERROR の Retry Interval / Redirect を RequestError に載せる経路の表。
  *
- * draft-ietf-moq-transport-22 §9.4 (REQUEST_ERROR) / §9.4.2 (Redirect):
+ * draft-ietf-moq-transport-23 §9.4 (REQUEST_ERROR) / §9.4.2 (Redirect):
  * "Retry Interval" と "Redirect" は応答経路 (PUBLISH / SUBSCRIBE / FETCH /
  * TRACK_STATUS) によらずアプリへ渡す。経路ごとに付け忘れないことを、
  * reader ごとの設定と期待値の組で固定する。
@@ -62,7 +62,7 @@ function encodeRedirectRequestError(
 ): Uint8Array {
   return encodeRequestErrorPayload({
     type: MessageType.REQUEST_ERROR,
-    // draft-ietf-moq-transport-22 §9.4.2: Redirect は Error Code が REDIRECT のときだけ載る
+    // draft-ietf-moq-transport-23 §9.4.2: Redirect は Error Code が REDIRECT のときだけ載る
     errorCode: BigInt(RequestErrorCode.REDIRECT),
     reasonPhrase,
     retryInterval,
@@ -187,7 +187,7 @@ const REDIRECT_ERROR_CASES: RedirectErrorCase[] = [
 ];
 
 /**
- * draft-ietf-moq-transport-22 §9.4 / §9.4.2 / §12.3:
+ * draft-ietf-moq-transport-23 §9.4 / §9.4.2 / §12.3:
  * REQUEST_ERROR の Retry Interval と Redirect は、どの応答 reader でも
  * RequestError に保持してアプリへ渡す。pending と requestStreams のエントリは
  * 残さず、セッションは閉じない (リクエスト単位の失敗である)。
@@ -262,7 +262,7 @@ test("UNSUPPORTED_PROPERTY の Type 一覧はどの応答 reader でも RequestE
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.4:
+ * draft-ietf-moq-transport-23 §9.4:
  * SUBSCRIBE の REQUEST_ERROR では pending と requestStreams に加えて、
  * 初回 fill の関連付け (fillFetchTargets) も残さない。
  */
@@ -315,7 +315,7 @@ test("bidiReadSubscribeResponse: REQUEST_ERROR で fillFetchTargets も削除さ
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.2:
+ * draft-ietf-moq-transport-23 §9.2:
  * 確立前の GOAWAY は当該リクエストのマイグレーションであり、購読の
  * goawayCallback へ新しい URI を通知する。pending と requestStreams に加えて
  * 初回 fill の関連付けも削除し、同一ストリームの 2 通目検出のために
@@ -371,7 +371,7 @@ test("bidiReadSubscribeResponse: 確立前 GOAWAY で goawayCallback と削除�
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.2:
+ * draft-ietf-moq-transport-23 §9.2:
  * TRACK_STATUS は単発リクエストであり ongoing loop を持たないため、
  * 確立前 GOAWAY で goawayCallback は呼ばない。新しい URI は reject する
  * Error のメッセージに含めて通知する。セッションは閉じない。

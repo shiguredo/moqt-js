@@ -152,7 +152,7 @@ export type SessionErrorCode = (typeof SessionErrorCode)[keyof typeof SessionErr
 /**
  * REQUEST_ERROR Codes (Section 12.3 Request Error Codes)
  *
- * draft-ietf-moq-transport-22:
+ * draft-ietf-moq-transport-23:
  * - GOING_AWAY (0x6) を追加
  * - EXCESSIVE_LOAD (0x9) を追加
  * - DUPLICATE_SUBSCRIPTION を削除（draft-22 §3.1 で同一 Track への複数サブスクリプションが許可）
@@ -171,7 +171,7 @@ export const RequestErrorCode = {
   GOING_AWAY: 0x6,
   /**
    * EXCESSIVE_LOAD (Section 12.3)
-   * draft-ietf-moq-transport-22: 応答側が過負荷。Retry Interval で再試行時期を示す。
+   * draft-ietf-moq-transport-23: 応答側が過負荷。Retry Interval で再試行時期を示す。
    */
   EXCESSIVE_LOAD: 0x9,
   /**
@@ -194,12 +194,12 @@ export const RequestErrorCode = {
   REDIRECT: 0x34,
   /**
    * CONFLICTING_FILTERS (Section 12.3)
-   * draft-ietf-moq-transport-22: SUBSCRIBE_TRACKS 応答専用
+   * draft-ietf-moq-transport-23: SUBSCRIBE_TRACKS 応答専用
    */
   CONFLICTING_FILTERS: 0x35,
   /**
    * INVALID_FILTER (Section 12.3)
-   * draft-ietf-moq-transport-22: フィルタ不正・上限超過
+   * draft-ietf-moq-transport-23: フィルタ不正・上限超過
    */
   INVALID_FILTER: 0x36,
 } as const;
@@ -207,13 +207,13 @@ export const RequestErrorCode = {
 export type RequestErrorCode = (typeof RequestErrorCode)[keyof typeof RequestErrorCode];
 
 /**
- * draft-ietf-moq-transport-22 §13 (Grease):
+ * draft-ietf-moq-transport-23 §13 (Grease):
  * 未知のエラーコードは INTERNAL_ERROR として扱う。
  * Receipt of an unknown error code MUST be treated as equivalent to
  * INTERNAL_ERROR for that context.
  *
- * draft-ietf-moq-transport-22 §16.11.2 (REQUEST_ERROR Codes) に 0x17 は
- * 収載されていない。UNKNOWN_AUTH_TOKEN_ALIAS (0x17) は §16.11.1 (Session
+ * draft-ietf-moq-transport-23 §16.12.2 (REQUEST_ERROR Codes) に 0x17 は
+ * 収載されていない。UNKNOWN_AUTH_TOKEN_ALIAS (0x17) は §16.12.1 (Session
  * Termination Error Codes) にのみ収載されるコードであり、§8.9 が未登録
  * Alias の参照に指名するコードでもある。本実装はそのコードを Session
  * Termination として送るため、受理集合は RequestErrorCode の値だけで組み立てる。
@@ -230,7 +230,7 @@ export function normalizeRequestErrorCode(code: number): RequestErrorCode {
 }
 
 /**
- * draft-ietf-moq-transport-22 §13 (Grease):
+ * draft-ietf-moq-transport-23 §13 (Grease):
  * 未知の PUBLISH_DONE コードは INTERNAL_ERROR として扱う。
  * 削除された 0x3 SUBSCRIPTION_ENDED も未知扱いで正規化される。
  */
@@ -260,7 +260,7 @@ export function normalizeSessionErrorCode(code: number): SessionErrorCode {
 }
 
 /**
- * Stream Reset Error Codes (Section 16.11.4)
+ * Stream Reset Error Codes (Section 16.12.4)
  *
  * draft-ietf-moq-transport-23 Section 12.5 (Stream Reset Error Codes):
  * - GOING_AWAY (0x4)
@@ -288,7 +288,7 @@ export const DataStreamErrorCode = {
 export type DataStreamErrorCode = (typeof DataStreamErrorCode)[keyof typeof DataStreamErrorCode];
 
 /**
- * draft-ietf-moq-transport-22 §13 (Grease):
+ * draft-ietf-moq-transport-23 §13 (Grease):
  * 未知の Data Stream Reset エラーコードは INTERNAL_ERROR として扱う。
  */
 const DATA_STREAM_ERROR_CODE_SET = new Set(Object.values(DataStreamErrorCode));
@@ -305,7 +305,7 @@ export function normalizeDataStreamErrorCode(code: number): DataStreamErrorCode 
  * 取り出す
  *
  * WebTransport は失敗値 (WebTransportError) の `streamErrorCode` に code を載せる。
- * draft-ietf-moq-transport-22 Section 12.5 の code に正規化し、未知の code は
+ * draft-ietf-moq-transport-23 Section 12.5 の code に正規化し、未知の code は
  * INTERNAL_ERROR として扱う (Section 13)。数値の code を持たない失敗値からは取り出さない。
  *
  * @param rawError - read / write の失敗値
@@ -429,7 +429,7 @@ export class RequestError extends MoqtError {
 /**
  * decode 関数がバッファ不足を検出したときに投げるエラー
  *
- * draft-ietf-moq-transport-22 のデータストリーム / 制御メッセージ decode は、
+ * draft-ietf-moq-transport-23 のデータストリーム / 制御メッセージ decode は、
  * バッファに必要なバイト数が揃っていない時点で例外を投げる。
  * 受信ループはこのエラーを受けて次のチャンクを待つ。
  */
@@ -505,7 +505,7 @@ export class MalformedTrackError extends Error {
  * 不正な Range Filter および Location Filter (値域・Property Type 偶数・
  * 組み合わせ重複・構造不正・End Group の 2^64-1 超過) を検出したときに投げるエラー
  *
- * draft-ietf-moq-transport-22 §3.3.1 / §3.3.2 / §9.20.12-14:
+ * draft-ietf-moq-transport-23 §3.3.1 / §3.3.2 / §9.19.12-14:
  * 受信側ではフィルタ不正は REQUEST_ERROR (INVALID_FILTER) で応答するか、応答不能な
  * 経路 (PUBLISH_OK 受信等) では PROTOCOL_VIOLATION でセッションを閉じる。
  * 送信側 (encodeRangeFilter) ではローカル API 誤用 (SetID 範囲外・奇数 Property
@@ -531,7 +531,7 @@ export class InvalidFilterError extends Error {
 /**
  * 閉じた Subgroup への送信を拒否するときに投げるエラー
  *
- * draft-ietf-moq-transport-22 §11.3.2 (Closing Subgroup Streams):
+ * draft-ietf-moq-transport-23 §11.3.2 (Closing Subgroup Streams):
  * "A publisher that receives a STOP_SENDING on a Subgroup stream SHOULD NOT
  *  attempt to open a new stream to deliver additional Objects in that Subgroup."
  *

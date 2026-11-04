@@ -58,7 +58,7 @@ import {
 // デフォルト設定
 
 // Publisher Priority (docs/ARCHITECTURE.md の Priority 表に記載)
-// draft-ietf-moq-transport-22 §5.1.1: 0-255 の符号無し整数で、数値が小さいほど
+// draft-ietf-moq-transport-23 §5.1.1: 0-255 の符号無し整数で、数値が小さいほど
 // 高優先である (最高優先は 0)。単体テストから値を固定するため export する
 // (パッケージ公開 API には含めない)。
 
@@ -71,7 +71,7 @@ export const PRIORITY_VIDEO_KEY = 0;
 /** 音声オブジェクトの優先度 (音声は途切れると違和感が大きいためデルタフレームより高優先) */
 export const PRIORITY_AUDIO = 64;
 
-/** 映像デルタフレームの優先度 (破棄されても次のキーフレームで回復可能。draft-ietf-moq-transport-22 §10.4 の既定と同じ) */
+/** 映像デルタフレームの優先度 (破棄されても次のキーフレームで回復可能。draft-ietf-moq-transport-23 §10.4 の既定と同じ) */
 export const PRIORITY_VIDEO_DELTA = 128;
 
 /**
@@ -107,7 +107,7 @@ export const AUDIO_TAIL_FLUSH_MAX_MS = 150;
  * datagram 配送の停止時に、末尾の datagram を書いてから PUBLISH_DONE を送るまでの猶予
  * (ミリ秒)
  *
- * draft-ietf-moq-transport-22 では datagram と control stream の間に順序保証が無い。
+ * draft-ietf-moq-transport-23 では datagram と control stream の間に順序保証が無い。
  * 購読者は PUBLISH_DONE を受けた時点で購読を閉じ、後から届いた datagram を捨てるため、
  * 末尾の datagram が PUBLISH_DONE より後に届くと失われる。実リレーの経路の遅れは
  * 17〜23 ms であり、その約 2 倍を待つ。subgroup 配送では `done()` が送信キューを
@@ -224,7 +224,7 @@ async function waitWithTimeout<T>(
  * catalog の MAX_CACHE_DURATION (ミリ秒)
  *
  * relay はこの時間を過ぎた Object を cache から配れない (MUST NOT。
- * draft-ietf-moq-transport-22 §10.3)。1 時間とする。
+ * draft-ietf-moq-transport-23 §10.3)。1 時間とする。
  * 送り直しの間隔の根拠は catalogRepublish.ts にまとめる。
  * 単体テストから値を固定するため export する (パッケージ公開 API には含めない)。
  */
@@ -429,7 +429,7 @@ export function resolveKeyframeInterval(video: VideoPublishOptions | undefined):
 /**
  * 映像トラックの PUBLISH の設定
  *
- * draft-ietf-moq-transport-22 §10.6 (DYNAMIC GROUPS) / §9.20.19 (NEW GROUP REQUEST Parameter):
+ * draft-ietf-moq-transport-23 §10.6 (DYNAMIC GROUPS) / §9.19.19 (NEW GROUP REQUEST Parameter):
  * DYNAMIC_GROUPS=1 を広告し、購読者が NEW_GROUP_REQUEST で新しい Group を要求できるように
  * する。後から視聴を始めた購読者は Group の先頭 (キーフレーム) を受け取るまで映像を出せない
  * ため、要求を受けたら次に encode するフレームをキーフレームにして新しい Group を始める
@@ -731,7 +731,7 @@ export class MediaPublisherImpl implements MediaPublisher {
   private sessionErrorNotifiedDuringStart = false;
   // 送信済みの catalog の Group ID。初期送信は start のたびに払い出し、送り直しのたびに +1 する。
   // catalog の更新は必ず新しい Group の先頭 Object (Object ID 0) に置き、同じ Location に
-  // 別の payload を載せない (draft-ietf-moq-transport-22 §2.1 / §7.1、draft-ietf-moq-msf-01 §5)。
+  // 別の payload を載せない (draft-ietf-moq-transport-23 §2.1 / §7.1、draft-ietf-moq-msf-01 §5)。
   // §6.1 の単調増加 MUST も満たす。paused 中 (PAUSED=1) で見送った送り直しでは消費しない
   // (音声・映像が encode した分だけ Group を進めるのと同じ扱い)。送信の失敗では消費する
   private catalogGroupId = 0;
@@ -927,7 +927,7 @@ export class MediaPublisherImpl implements MediaPublisher {
     if (this.currentState !== "created" && this.currentState !== "stopped") {
       throw new Error(`cannot start in state: ${this.currentState}`);
     }
-    // draft-ietf-moq-transport-22 §2.4.2 (Namespace Prefix Matching): 0 フィールドの
+    // draft-ietf-moq-transport-23 §2.4.2 (Namespace Prefix Matching): 0 フィールドの
     // prefix は全 namespace に一致するため、空 namespace の告知は接続前に拒否する。
     // 入口の拒否は onError を通知せず、mediaStream も保持しない (他の入口の検査と同じ扱い)
     if (this.options.announceNamespace === true && this.options.namespace.length === 0) {
@@ -971,7 +971,7 @@ export class MediaPublisherImpl implements MediaPublisher {
       this.assertStartNotDisposed(startGeneration);
 
       // namespace を告知する (announceNamespace が true のときだけ送る)。PUBLISH の
-      // 確立後に行うのは、draft-ietf-moq-transport-22 §4.1 の「prefix に一致する
+      // 確立後に行うのは、draft-ietf-moq-transport-23 §4.1 の「prefix に一致する
       // namespace にトラックがある」という表明と一致させるためである。告知の
       // 失敗は start() の失敗にする (指定した機能を黙って落とさない)
       await this.announceNamespace(startGeneration);
@@ -1086,7 +1086,7 @@ export class MediaPublisherImpl implements MediaPublisher {
    *
    * reliability が "reliable-only" のセッション (HTTP/2 上の WebTransport、
    * draft-ietf-webtrans-http2) では datagram も再送され、順序も保たれる
-   * (draft-ietf-moq-transport-22 §6.2)。その場合 `delivery: "datagram"` は「再送されない
+   * (draft-ietf-moq-transport-23 §6.2)。その場合 `delivery: "datagram"` は「再送されない
    * 経路で送る」という意味を失うため、黙って受けない。devtools の実装は Subgroup へ戻すが、
    * 高レベル API が宣言された設定を裏で変えると、送り方を計器や購読側の前提から読めなくなる。
    * 指定されたら明示的に拒否する。既定の配送方式も datagram であるため、省略した場合も
@@ -1192,7 +1192,7 @@ export class MediaPublisherImpl implements MediaPublisher {
    * フレーム到着がない間の待機は残留し、stop / close の cancel で回収される。
    *
    * 開いている Subgroup ストリームを閉じる (理由と契約は codec/types.ts の
-   * MediaPublisher.pause() を参照)。draft-ietf-moq-transport-22 §11.3.2。
+   * MediaPublisher.pause() を参照)。draft-ietf-moq-transport-23 §11.3.2。
    */
   pause(): void {
     // close() は末尾 flush の間も state を "publishing" のままにするため、世代を進めると
@@ -1446,7 +1446,7 @@ export class MediaPublisherImpl implements MediaPublisher {
   /**
    * GOAWAY をアプリへ通知する
    *
-   * draft-ietf-moq-transport-22 §9.2 (根拠の仕様はドラフトであり将来変更される
+   * draft-ietf-moq-transport-23 §9.2 (根拠の仕様はドラフトであり将来変更される
    * 可能性がある):
    * "The client MUST use this URI for the new session if provided. If the URI
    *  is zero bytes long, the current URI is reused instead."
@@ -1779,7 +1779,7 @@ export class MediaPublisherImpl implements MediaPublisher {
           error: (error) => this.callbacks.onError?.(error),
           // PUBLISH のリクエストストリームの GOAWAY もアプリへ渡す
           goaway: (newSessionUri) => this.notifyGoaway(newSessionUri),
-          // draft-ietf-moq-transport-22 §9.20.19: 新しい Group の要求には、次のフレームを
+          // draft-ietf-moq-transport-23 §9.19.19: 新しい Group の要求には、次のフレームを
           // キーフレームにして新しい Group を始めることで応える。次のフレームまでに届いた
           // 複数の要求は、直前のキーフレームの記録を消すだけなので 1 つの Group にまとまる
           onNewGroupRequest: () => this.startNewGroup(),
@@ -1827,7 +1827,7 @@ export class MediaPublisherImpl implements MediaPublisher {
     const catalog = this.buildCatalog();
 
     // Catalog object が WebTransport stream に書き込み完了するまで await する。
-    // draft-ietf-moq-transport-22 §3.2: FETCH は object が publish されていなければ
+    // draft-ietf-moq-transport-23 §3.2: FETCH は object が publish されていなければ
     // INVALID_RANGE で FETCH_ERROR を返す MUST。fire-and-forget だと publisher.start() の
     // return 後すぐに subscriber が join した場合に race を踏むため、catalog だけは確実に
     // 書き込み完了してから return する。
@@ -1877,7 +1877,7 @@ export class MediaPublisherImpl implements MediaPublisher {
    * (draft-ietf-moq-msf-01 §5 は同じ Group の Object ID 1 以降を delta update とする MUST を
    * 定めるが、本ライブラリは delta を送らない)。この Object を書き終えた時点で Subgroup に
    * 続く Object は無いため、endOfSubgroup を渡してその場で FIN で閉じる
-   * (draft-ietf-moq-transport-22 §11.3.2 の MUST)。閉じないと次の送り直し (既定 30 秒後)
+   * (draft-ietf-moq-transport-23 §11.3.2 の MUST)。閉じないと次の送り直し (既定 30 秒後)
    * まで Subgroup が開いたままになる。開いた Subgroup で次の Object を待つ購読側は、
    * §12.2 の DATA_STREAM_TIMEOUT でセッションを閉じうる (同節は STOP_SENDING か購読の終了を
    * MAY とするが、moqt-rs の moq-sub はセッションごと閉じる)。
@@ -1920,7 +1920,7 @@ export class MediaPublisherImpl implements MediaPublisher {
     if (catalog === null || publisher === null || this.disposalInFlight !== null) {
       return;
     }
-    // ピアが catalog の PUBLISH を cancel すると (STOP_SENDING。draft-ietf-moq-transport-22
+    // ピアが catalog の PUBLISH を cancel すると (STOP_SENDING。draft-ietf-moq-transport-23
     // §3.1.2) publisher は closed になり、配送する相手が居なくなる。送り直しを止め、予約も残さない
     // (docs/HIGH_LEVEL_API.md の「カタログの送り直し」を参照)
     if (publisher.state !== "active") {
@@ -2453,7 +2453,7 @@ export class MediaPublisherImpl implements MediaPublisher {
     // 送信キューに入れてから送信が終わるまでの遅れを測る (audioPublishCatchUp.ts)
     // 音声は 1 chunk = 1 Object = 1 Group であり (allocateAudioObject)、この Object を
     // 書き終えた時点でその Subgroup に続く Object は無い。endOfSubgroup を渡して閉じる
-    // (draft-ietf-moq-transport-22 §11.3.2 の MUST)。datagram で送る場合は
+    // (draft-ietf-moq-transport-23 §11.3.2 の MUST)。datagram で送る場合は
     // sendAudioFrameFireAndForget がこのフィールドを渡さない (Datagram の endOfGroup とは
     // 別のもの。§11.2.1)
     this.sendAudioFrameFireAndForget(
@@ -2761,7 +2761,7 @@ export class MediaPublisherImpl implements MediaPublisher {
     await guard(() => videoEncoder?.close());
 
     // namespace の告知を終了する。publisher の done() より前に置き、停止中の配信を
-    // 新規の購読者に発見させない (draft-ietf-moq-transport-22 §4.1 の撤回は request の
+    // 新規の購読者に発見させない (draft-ietf-moq-transport-23 §4.1 の撤回は request の
     // キャンセル §6.4.2.3 で行う。根拠の仕様はドラフトであり将来変更される可能性がある)。
     // 利用者が先に done() を呼んでいる場合は state が "closed" のため二重には呼ばない。
     // 音声の末尾 flush とフレームリーダー / フレームソース / エンコーダーの解放はこの段より

@@ -60,7 +60,7 @@ MOQT URI が `msf` fragment を持ち、その parameter に `c4m` がある場�
 - fragment はサーバーへ送信されないため、`c4m` がそのまま URL として送られることはない
 
 根拠は draft-ietf-moq-msf-01 §11.1.1 / §11.4.2 / §11.4.3、draft-ietf-moq-c4m-01 §2 / §7.1 Table 4 /
-§7.1.1、draft-ietf-moq-transport-22 §6.1.1 / §9.1.4 / §8.9。いずれも draft 版であり、
+§7.1.1、draft-ietf-moq-transport-23 §6.1.1 / §9.1.4 / §8.9。いずれも draft 版であり、
 将来の改版で変わる可能性がある。
 
 #### SETUP に載せたトークンの制御メッセージへの付与
@@ -108,7 +108,7 @@ draft-ietf-moq-msf-01 §11.4.3: track に紐づくトークンは、そのトラ
 | `close()`                                                  | セッション内部状態と保留中 Promise をクリーンアップする                                 |
 | `getStatistics()`                                          | セッション統計を取得する                                                                |
 
-`fragment` は draft-ietf-moq-transport-22 §6.1.1 の Fragment Identifier である。
+`fragment` は draft-ietf-moq-transport-23 §6.1.1 の Fragment Identifier である。
 
 > Fragment identifiers MAY be used with moqt URIs. The fragment is not
 > transmitted to the server; it is processed locally by the client
@@ -131,14 +131,14 @@ draft-ietf-moq-msf-01 §11.4.3: track に紐づくトークンは、そのトラ
 
 `sendObject()` / `sendDatagram()` の送信パラメータは `number` ベースだが、受信した `MoqtObject` は `bigint` ベースで返る。
 
-`sendObject()` の `endOfSubgroup` に `true` を渡すと、その Object の書き込み完了後に Subgroup を `FIN` で閉じる (draft-ietf-moq-transport-22 §11.3.2)。Subgroup に載せる Object が残っていないことを送信側が知っている場合に使う (catalog は 1 Group に 1 Object だけを載せるため常にこれに当たる)。
+`sendObject()` の `endOfSubgroup` に `true` を渡すと、その Object の書き込み完了後に Subgroup を `FIN` で閉じる (draft-ietf-moq-transport-23 §11.3.2)。Subgroup に載せる Object が残っていないことを送信側が知っている場合に使う (catalog は 1 Group に 1 Object だけを載せるため常にこれに当たる)。
 
 - 送信が見送られた場合 (`forwardState` が `0`、または購読の `LOCATION_FILTER` の範囲外) は閉じない。その Group の Subgroup が既に開いていれば省略として記録され、後の Group 切り替えで `RESET` になる
 - 閉じた Group への後続の `sendObject()` は error 通知になる (返値の Promise は解決する)。`forwardState` が `0` の場合は送信前に見送られるため通知も出ない。`FIN` の完了がタイムアウトして `RESET` に切り替わった場合は、同じ Group へ再び送信できる
 - `SubgroupHeader` の `END_OF_GROUP` ビット (§11.3.1) は立てない。`FIN` の受信で相手側の `DATA_STREAM_TIMEOUT` は解除できるため、同ビットの「FIN から Group の最終 Object を推論する」経路は使わない
 - `sendDatagram()` の `endOfGroup` とは別のものである。あちらは Datagram の wire で Group の最後を示すビット (§11.2.1) を立てる。同じパラメータオブジェクトを使い回さないこと
 
-`closeSubgroup()` は、送信を止める時点で「その Subgroup に続く Object は無い」と分かったときに、Object を送らずに開いている Subgroup を閉じる (draft-ietf-moq-transport-22 §11.3.2)。`sendObject()` の `endOfSubgroup` は「送信する Object が Subgroup の最後である」ことを示す経路であり、送る Object が無い場合は使えない。
+`closeSubgroup()` は、送信を止める時点で「その Subgroup に続く Object は無い」と分かったときに、Object を送らずに開いている Subgroup を閉じる (draft-ietf-moq-transport-23 §11.3.2)。`sendObject()` の `endOfSubgroup` は「送信する Object が Subgroup の最後である」ことを示す経路であり、送る Object が無い場合は使えない。
 
 - 開いている Subgroup が無い場合と、Publisher が既に `"closed"` の場合は何もしない (例外も投げない)
 - `FIN` と `RESET` は §11.3.2 の判定に従う。見送った Object がある Subgroup は `RESET` になる
@@ -163,7 +163,7 @@ draft-ietf-moq-msf-01 §11.4.3: track に紐づくトークンは、そのトラ
 
 #### 購読の終了通知
 
-`SubscribeCallbacks.end` は、publisher が PUBLISH_DONE を送って購読を終えたときに呼ばれる (draft-ietf-moq-transport-22 §3.1 / §9.9)。引数の `PublishDoneInfo` が終了の理由を運ぶ。
+`SubscribeCallbacks.end` は、publisher が PUBLISH_DONE を送って購読を終えたときに呼ばれる (draft-ietf-moq-transport-23 §3.1 / §9.9)。引数の `PublishDoneInfo` が終了の理由を運ぶ。
 
 ```typescript
 import type { PublishDoneInfo } from "moqt-js";
@@ -296,7 +296,7 @@ interface MoqtObject {
 - `publishNamespace()` は専用双方向ストリームで `PUBLISH_NAMESPACE` を送り、専用ループで `REQUEST_OK` / `REQUEST_ERROR` を待つ
 - `subscribeNamespace()` は専用双方向ストリームを別実装で開き、`REQUEST_OK` の後も `NAMESPACE` / `NAMESPACE_DONE` を受け続ける
 - `subscribeTracks()` も専用双方向ストリームを別実装で開き、`REQUEST_OK` の後は prefix に一致する `PUBLISH` / `PUBLISH_SKIPPED` を受け続ける
-- `PUBLISH_NAMESPACE` の終了を通知する専用メッセージは draft-22 に存在しない。公開の終了は request のキャンセル (`RESET_STREAM` と `STOP_SENDING`、§4.1 / §6.4.2.3) で行う。`NamespacePublication.done()` がこの撤回を行う。Session の終了時は、送信待ち (ストリーム作成 / write の await) の間を含めて、未確立の `publishNamespace()` の Promise を reject してアプリを待たせ続けない
+- `PUBLISH_NAMESPACE` の終了を通知する専用メッセージは draft-23 に存在しない。公開の終了は request のキャンセル (`RESET_STREAM` と `STOP_SENDING`、§4.1 / §6.4.2.3) で行う。`NamespacePublication.done()` がこの撤回を行う。Session の終了時は、送信待ち (ストリーム作成 / write の await) の間を含めて、未確立の `publishNamespace()` の Promise を reject してアプリを待たせ続けない
 - `publishNamespace()` の `NamespacePublicationCallbacks.error` は、ライブラリが `closeWithError` でセッションを閉じる原因 (`SessionError` / `ProtocolViolationError` / `IncompleteDataError`) では呼ばず、`ConnectCallbacks.error` だけが通知する。それ以外の `REQUEST_ERROR` と読み取り失敗では呼ぶ (要求ストリームの GOAWAY 後と、対象の publication が既に closed のとき (セッション終了処理が先に閉じた場合や `done()` の後) は呼ばない)。詳しい条件は `NamespacePublicationCallbacks.error` の JSDoc を正本とする。確立前の未解決の返値の Promise は失敗で settle する
 - 接続の前に `validateTrackNamespaceForSend(namespace, trackName?)` で送信できる Track Namespace かを検証できる。§8.7 の構造の制約 (33 フィールド以上、空のフィールド、4,096 バイト超) と、§2.4.3 の予約 namespace (先頭フィールドが `.` で始まる値、`.` 単体)、§6.5 の `.session` (Application は publish できない) と `.session` と空 Track Name の組み合わせ (DOES_NOT_EXIST) を拒否する
   - Request の送信時にも同じ検証が走り、失敗は同期の `Error` になる (アプリケーションの入力ミスとして扱い、セッションは閉じない)。Full Track Name (Track Namespace と Track Name の合計) の 4,096 バイト上限は Track Name を含めて判定するため、送信時に検証する
@@ -382,7 +382,7 @@ Safari 系の `WebTransport` では `writer.close()` が resolve しない場合
 #### `RENDEZVOUS_TIMEOUT`
 
 `SubscribeOptions.rendezvousTimeout` (ミリ秒、`bigint`) を指定すると、`SUBSCRIBE` に
-`RENDEZVOUS_TIMEOUT` (draft-ietf-moq-transport-22 §9.20.6) を載せる。省略した場合の既定は
+`RENDEZVOUS_TIMEOUT` (draft-ietf-moq-transport-23 §9.19.6) を載せる。省略した場合の既定は
 0 であり、0 または未指定 (既定 0) の場合は publisher が居なければ relay は即
 `REQUEST_ERROR` (`DOES_NOT_EXIST`) を返す MUST。0 より大きい場合は relay は期限まで
 publisher を待つ SHOULD であり、期限切れでは `TIMEOUT` を返す SHOULD (relay は要求より
@@ -425,7 +425,7 @@ publisher を待つ SHOULD であり、期限切れでは `TIMEOUT` を返す SH
 
 成功時は `FetcherImpl` に `endLocation` と `trackProperties` を保存する。`endOfTrack` は FETCH 応答では変更せず `false` のままとする。FETCH データストリームの End of Track indicator (0x81) を受信したときだけ `true` になり、単なる FIN では変わらない。`Fetcher.cancel()` も subscription と同様に双方向ストリームを close して終了する。
 
-Joining FETCH は draft-20 で削除された (draft-ietf-moq-transport-22 §A.3)。draft-22 では `FILL_PARAMETERS` (§9.20.15) を持つ SUBSCRIBE が fill fetch stream (§3.4) を開かせる形が正式な置換であり、MSF の catalog 取得 (draft-ietf-moq-msf-01 §5 の Joining FETCH (offset = 0)) も draft-22 前提ではこの fill fetch として解釈する。現状の実装は `subscribe()` (Next Object (`{ nextObject: true }`、Location Filter Type 0x05) の Location Filter) + `fetch()` (絶対開始の Location Filter) の 2 リクエストで代替しており (`createMediaSubscriber` の catalog 取得が該当し、要求範囲は `catalogFetchFilter` が決める)、catalog の fill fetch 化は未実装である。
+Joining FETCH は draft-20 で削除された (draft-ietf-moq-transport-23 §A.3)。draft-23 では `FILL_PARAMETERS` (§9.19.15) を持つ SUBSCRIBE が fill fetch stream (§3.4) を開かせる形が正式な置換であり、MSF の catalog 取得 (draft-ietf-moq-msf-01 §5 の Joining FETCH (offset = 0)) も draft-23 前提ではこの fill fetch として解釈する。現状の実装は `subscribe()` (Next Object (`{ nextObject: true }`、Location Filter Type 0x05) の Location Filter) + `fetch()` (絶対開始の Location Filter) の 2 リクエストで代替しており (`createMediaSubscriber` の catalog 取得が該当し、要求範囲は `catalogFetchFilter` が決める)、catalog の fill fetch 化は未実装である。
 
 成功応答 (`REQUEST_OK`。`FETCH_OK` は別名) が返る前にデータストリームが先着する可能性があるため、受信側は `waitForFetcher()` で待機する。
 
@@ -459,7 +459,7 @@ MOQT / QUIC ではレスポンスとデータストリームの順序が保証�
 
 #### Graceful 終了 (FIN) と未完成 Object
 
-FIN (ピアの graceful 終了) 検出時点で残バッファが非空、つまりシリアライズされた Object の途中なら、draft-ietf-moq-transport-22 §11.3 に従い `PROTOCOL_VIOLATION` でセッションを閉じる。
+FIN (ピアの graceful 終了) 検出時点で残バッファが非空、つまりシリアライズされた Object の途中なら、draft-ietf-moq-transport-23 §11.3 に従い `PROTOCOL_VIOLATION` でセッションを閉じる。
 失効範囲は Object 1 個ではなくセッション全体 (全 Track・全 Fetch) であり、アプリは再接続が必要になる。
 早期終了が RESET_STREAM で行われた場合は read が reject されるだけで本判定には該当しない (§11.3.2 は配信途中での終了を reset と規定している)。
 
@@ -511,7 +511,7 @@ Datagram 受信時は `decodeObjectDatagram()` で decode し、`trackAlias` か
 
 制御メッセージの `Message Length` が自 endpoint の受信上限 (`maxControlMessageSize`、既定 65535) を超えた場合は `FIELD_LENGTH_EXCEEDED` (0x401) でセッションを閉じる (draft-ietf-moq-transport-23 §9)。
 
-制御ストリームで処理するメッセージは `GOAWAY` のみである (SETUP の後、制御ストリームで送られるメッセージは `GOAWAY` だけ。draft-ietf-moq-transport-22 §9 のメッセージ表 / §9.2)。リクエスト / レスポンスは双方向ストリームで送る (§6.3 / §6.4.2)。
+制御ストリームで処理するメッセージは `GOAWAY` のみである (SETUP の後、制御ストリームで送られるメッセージは `GOAWAY` だけ。draft-ietf-moq-transport-23 §9 のメッセージ表 / §9.2)。リクエスト / レスポンスは双方向ストリームで送る (§6.3 / §6.4.2)。
 
 - `PUBLISH_DONE` を制御ストリームで受け取った場合は仕様違反としてセッションを閉じる。`PUBLISH_DONE` は request 双方向ストリーム側でのみ処理する。
 - `PUBLISH_NAMESPACE` / `REQUEST_OK` / `REQUEST_ERROR` は制御ストリーム上で受け取った場合も仕様違反としてセッションを閉じる。これらは専用の双方向ストリームで送受信される。

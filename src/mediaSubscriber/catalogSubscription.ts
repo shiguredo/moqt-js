@@ -160,7 +160,7 @@ export class CatalogSubscription {
    * Catalog を subscribe して受信を待つ
    *
    * 既存の catalog と live の catalog 更新をまとめて受信する。Joining FETCH は
-   * draft-20 で削除された (draft-ietf-moq-transport-22 §A.3「Replace Joining FETCH
+   * draft-20 で削除された (draft-ietf-moq-transport-23 §A.3「Replace Joining FETCH
    * with fill fetch streams」)。MSF-01 §5 は Joining FETCH を MUST とするが、
    * draft-22 前提では §3.4 の FILL_PARAMETERS による fill fetch として解釈する。
    * 本実装では以下の 2 リクエストで代替しており、fill fetch 化は未実装である:
@@ -242,7 +242,7 @@ export class CatalogSubscription {
         {
           // Next Object (Location Filter Type 0x05): live は現在の最新 catalog の次から受信する
           filter: { nextObject: true },
-          // draft-ietf-moq-transport-22 §9.20.6 (RENDEZVOUS_TIMEOUT): publisher の出現を
+          // draft-ietf-moq-transport-23 §9.19.6 (RENDEZVOUS_TIMEOUT): publisher の出現を
           // 待つ上限 (SUBSCRIBE ごと)。0 は明示的な即時要求、未指定は載せない
           ...(this.deps.rendezvousTimeout === undefined
             ? {}

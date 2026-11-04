@@ -1,7 +1,7 @@
 /**
  * session/publish.ts の単体テスト: endOfSubgroup による Subgroup の終端
  *
- * draft-ietf-moq-transport-22 §11.3.2 (Closing Subgroup Streams):
+ * draft-ietf-moq-transport-23 §11.3.2 (Closing Subgroup Streams):
  * "If a sender has delivered all objects in a Subgroup to the QUIC stream,
  *  except any Objects with Locations smaller than the subscription's Start
  *  Location, it MUST close the stream with a FIN."
@@ -129,7 +129,7 @@ function hasTerminated(record: StreamRecord): boolean {
  * catalog と同じ形 (Group 1 つに Object 1 つ、Object ID 0) を送り、次の Group を
  * 送らなくても閉じることを確認する。閉じない場合、購読側は次の送り直し (既定 30 秒後)
  * まで開いた Subgroup で次の Object を待ち、DATA_STREAM_TIMEOUT でセッションを閉じる
- * (draft-ietf-moq-transport-22 §12.2)。
+ * (draft-ietf-moq-transport-23 §12.2)。
  */
 test("publishSendObject: endOfSubgroup の Object は書き込み完了直後に FIN で閉じる", async () => {
   const { session, publisher, records, errors } = createHarness();
@@ -177,7 +177,7 @@ test("publishSendObject: endOfSubgroup を付けない Object では閉じない
 /**
  * 省略がある Subgroup を endOfSubgroup で閉じる場合は RESET になる
  *
- * draft-ietf-moq-transport-22 §11.3.2: "If a sender closes the stream before
+ * draft-ietf-moq-transport-23 §11.3.2: "If a sender closes the stream before
  * delivering all such objects to the QUIC stream, it MUST reset the stream."
  * paused (PAUSED=1) 中に見送った Object がある Subgroup は、Object を書き終えていても
  * FIN ではなく RESET で閉じる。
@@ -233,7 +233,7 @@ test("publishSendObject: endOfSubgroup で閉じた Group への後続送信は 
 /**
  * 見送られた Object に endOfSubgroup を付けても閉じない
  *
- * draft-ietf-moq-transport-22 §11.3.2: FIN で閉じてよいのは「Subgroup の全 Object を
+ * draft-ietf-moq-transport-23 §11.3.2: FIN で閉じてよいのは「Subgroup の全 Object を
  * QUIC stream へ渡し切った」場合に限る。見送られた Object は書き込み自体が行われないため、
  * 閉じる契機は Group の切り替えか done() になる。
  * catalog の初期送信が paused (PAUSED=1) 中に見送られた場合、この経路に入る。
@@ -290,7 +290,7 @@ test("publishSendObject: Location Filter の範囲外の endOfSubgroup では閉
 /**
  * FIN の完了が失敗して RESET に切り替わると、同じ Group へ再び送信できる
  *
- * draft-ietf-moq-transport-22 §11.3.2: 渡し切っていない Subgroup は reset であり、
+ * draft-ietf-moq-transport-23 §11.3.2: 渡し切っていない Subgroup は reset であり、
  * 購読者からの再送を FIN 済みとして拒否してはならない。FIN を諦めて RESET に切り替わった
  * 場合は closedSubgroups の登録を取り消す (省略がある場合と同じ扱い)。
  * close の失敗は sink の close を reject させて作る (実時間を待たない)。

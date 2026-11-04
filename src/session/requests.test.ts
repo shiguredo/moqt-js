@@ -11,7 +11,7 @@ import {
 } from "./requests";
 
 /**
- * draft-ietf-moq-transport-22 §9.20.9 Table 6:
+ * draft-ietf-moq-transport-23 §9.19.9 Table 6:
  * Location Filter Type ごとの表現をデバッグログ用の文字列に要約する。
  * 0x00 (None) は reset、0x05 (Next Object) はフィールドを持たないため種別名だけ、
  * それ以外は Type に続くフィールドを列挙する。
@@ -41,7 +41,7 @@ test("requestsDescribeLocationFilter: Location Filter Type ごとに要約する
 });
 
 /**
- * draft-ietf-moq-transport-22 §8.9:
+ * draft-ietf-moq-transport-23 §8.9:
  * DELETE (Alias Type 0x00) は Alias の退役を指示するもので、後続の制御メッセージで
  * 繰り返すと UNKNOWN_AUTH_TOKEN_ALIAS と解され得る。購読状態に保持して
  * REQUEST_UPDATE へ引き継ぐ対象からは外す。

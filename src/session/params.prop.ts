@@ -1,7 +1,7 @@
 /**
  * session/params.ts の純粋関数の Property-Based Tests
- * draft-ietf-moq-transport-22 Section 3.3.2 (Range Filters) / Section 8.2 (Location) /
- * Section 8.7 (Track Namespace) / Section 9.20 (Message Parameter)
+ * draft-ietf-moq-transport-23 Section 3.3.2 (Range Filters) / Section 8.2 (Location) /
+ * Section 8.7 (Track Namespace) / Section 9.19 (Message Parameter)
  *
  * 対象は Range Filter のマージ・送信前検証、Message Parameter 構築の round-trip、
  * Location の順序、Track Namespace の前方一致、setTimeout 遅延のクランプである。
@@ -121,7 +121,7 @@ function optionalArbitrary<T>(arbitrary: fc.Arbitrary<T>): fc.Arbitrary<T | unde
 /**
  * Location Filter の任意構築
  *
- * draft-ietf-moq-transport-22 §9.20.9 の Location Filter Type 0x00〜0x05 を網羅する。
+ * draft-ietf-moq-transport-23 §9.19.9 の Location Filter Type 0x00〜0x05 を網羅する。
  * 3 / 4 フィールドの End Group 超過は送信前に拒否される仕様のため、
  * 値は小さく抑えて常にエンコード可能にする。
  */
@@ -153,7 +153,7 @@ const authorizationTokenArb: fc.Arbitrary<AuthorizationToken> = fc.record({
 /**
  * Range Filter の 1 Range 列を生成する arbitrary を作る
  *
- * draft-ietf-moq-transport-22 §8.6 の delta エンコーディングが成立するよう、
+ * draft-ietf-moq-transport-23 §8.6 の delta エンコーディングが成立するよう、
  * 前の Range の End 以降から次の Start を積み上げる。末尾 Range だけは
  * End 省略 (open-ended) を許す。
  *
@@ -207,7 +207,7 @@ const rangeFilterParamArb: fc.Arbitrary<RangeFilterParam> = fc.oneof(
   fc.record({
     type: fc.constantFrom("objectProperty" as const, "trackProperty" as const),
     setId: uint8Arb,
-    // Property Type は偶数でなければならない (§9.20.13 / §9.20.14)
+    // Property Type は偶数でなければならない (§9.19.13 / §9.19.14)
     propertyType: fc.bigInt({ min: 0n, max: 500000n }).map((value) => value * 2n),
     ranges: filterRangesArbitrary(1000n, 5),
   }),
@@ -238,7 +238,7 @@ const rangeFilterSpecArb: fc.Arbitrary<RangeFilterSpec> = fc.oneof(
 /**
  * Range Filter の同一性キー (Parameter Type, SetID, Property Type)
  *
- * draft-ietf-moq-transport-22 §3.3.2:
+ * draft-ietf-moq-transport-23 §3.3.2:
  * "the same combination of Parameter Type, SetID, and Property Type
  *  (only in the Track and Object Property Filters) repeat in any message"
  * の組み合わせを表す。削除エントリは SetID / Property Type を持たない。
@@ -253,7 +253,7 @@ function filterKeyOf(spec: RangeFilterSpec): string {
 
 /**
  * Range Filter の種別を Message Parameter Type に対応させる
- * draft-ietf-moq-transport-22 §9.20.10〜§9.20.14
+ * draft-ietf-moq-transport-23 §9.19.10〜§9.19.14
  */
 function rangeFilterParameterTypeOf(
   type: "subgroup" | "objectId" | "priority" | "objectProperty" | "trackProperty",
@@ -432,7 +432,7 @@ function isRangeFilterParameterType(type: number): boolean {
 
 // ============================================================================
 // PBT 1: mergeRangeFilters
-// draft-ietf-moq-transport-22 §3.3.2 (Range Filters)
+// draft-ietf-moq-transport-23 §3.3.2 (Range Filters)
 // ============================================================================
 
 test("mergeRangeFilters: 残存する現在のエントリの後ろに update の追加エントリが並ぶ", () => {
@@ -499,7 +499,7 @@ test("mergeRangeFilters: 同一 update に remove と追加が混在すると追
 
 // ============================================================================
 // PBT 2: validateRangeFilterLimits
-// draft-ietf-moq-transport-22 §9.1.6 (MAX FILTER RANGES)
+// draft-ietf-moq-transport-23 §9.1.6 (MAX FILTER RANGES)
 // ============================================================================
 
 test("validateRangeFilterLimits: undefined と空配列は常に throw しない", () => {
@@ -558,7 +558,7 @@ test("validateRangeFilterLimits: 削除エントリは Ranges 総数に数えな
 
 // ============================================================================
 // PBT 3: validateRangeFilterSpecs
-// draft-ietf-moq-transport-22 §3.3.2 (Range Filters)
+// draft-ietf-moq-transport-23 §3.3.2 (Range Filters)
 // ============================================================================
 
 test("validateRangeFilterSpecs: undefined と空配列は常に throw しない", () => {
@@ -876,7 +876,7 @@ test("buildTrackStatusParameters: authorizationToken と includeProperties の�
 test("compareLocations: 仕様の辞書式順序と一致する", () => {
   fc.assert(
     fc.property(locationArb, locationArb, (a, b) => {
-      // draft-ietf-moq-transport-22 §8.2:
+      // draft-ietf-moq-transport-23 §8.2:
       // "Location A < Location B if: A.Group < B.Group ||
       //  (A.Group == B.Group && A.Object < B.Object)"
       let expected = 0;
@@ -1004,7 +1004,7 @@ test("resolveFetchResponseEndLocation: 要求範囲と LARGEST_OBJECT から終�
 
 // ============================================================================
 // PBT 6: Track Namespace の前方一致
-// draft-ietf-moq-transport-22 §2.4.2 / §3.6 (SUBSCRIBE_TRACKS) / §9.5.2
+// draft-ietf-moq-transport-23 §2.4.2 / §3.6 (SUBSCRIBE_TRACKS) / §9.5.2
 // ============================================================================
 
 test("matchNamespacePrefix: 一致した場合は prefix と suffix の連結が元に戻る", () => {
@@ -1040,7 +1040,7 @@ test("matchNamespacePrefix: prefix が空なら常に全体を suffix として�
 
 // ============================================================================
 // PBT 7: validateTrackNamespaceForSend
-// draft-ietf-moq-transport-22 §2.4.3 / §6.5 / §8.7
+// draft-ietf-moq-transport-23 §2.4.3 / §6.5 / §8.7
 // ============================================================================
 
 test("validateTrackNamespaceForSend: 構造の制約を満たし予約 prefix でもない場合は throw しない", () => {
@@ -1137,7 +1137,7 @@ test("clampTimeoutMs: 2^31 - 1 を超える値だけが上限に張り付く", (
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.19: NEW_GROUP_REQUEST の値は varint である。
+ * draft-ietf-moq-transport-23 §9.19.19: NEW_GROUP_REQUEST の値は varint である。
  * 任意の値 (0 から 2^62 - 1) を varint にしたパラメータから同じ値を読み取る
  */
 test("extractNewGroupRequest: 任意の varint の値を往復で読み取る", () => {

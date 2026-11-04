@@ -17,7 +17,7 @@ import { createPublishReadTestContext, createOkResponseReadTestContext } from ".
 
 // ============================================================================
 // 空必須メッセージの未知 Mandatory Track Property
-// draft-ietf-moq-transport-22 §9.3 (REQUEST_OK) / §3.7 (Mandatory to Understand Track Properties)
+// draft-ietf-moq-transport-23 §9.3 (REQUEST_OK) / §3.7 (Mandatory to Understand Track Properties)
 // ============================================================================
 
 /**
@@ -27,7 +27,7 @@ import { createPublishReadTestContext, createOkResponseReadTestContext } from ".
  */
 
 /**
- * draft-ietf-moq-transport-22 §9.3:
+ * draft-ietf-moq-transport-23 §9.3:
  * 「they are empty in PUBLISH_OK, REQUEST_UPDATE_OK, SUBSCRIBE_NAMESPACE_OK and
  *  PUBLISH_NAMESPACE_OK.  If an endpoint receives Track Properties in one of
  *  these messages it MUST close the session with a PROTOCOL_VIOLATION.」
@@ -76,7 +76,7 @@ test("bidiReadPublishResponse: 未知 Mandatory Track Property で PROTOCOL_VIOL
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.3 / §3.7:
+ * draft-ietf-moq-transport-23 §9.3 / §3.7:
  * subscribe ロールの確立後 REQUEST_OK (REQUEST_UPDATE_OK) に未知 Mandatory
  * Track Property (0x4000-0x7FFF) を含めた場合も PROTOCOL_VIOLATION で閉じ、
  * 保留中の更新を同一の SessionError で reject する (update() のハング防止)。

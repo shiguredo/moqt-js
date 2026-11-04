@@ -48,12 +48,12 @@ import { fullTrackNameKey } from "../fullTrackName";
 
 // ============================================================================
 // 応答スコープ違反で具体エラーが reject される
-// draft-ietf-moq-transport-22 §9.20.1 (Parameter Scope)
+// draft-ietf-moq-transport-23 §9.19.1 (Parameter Scope)
 // PUBLISH 応答経路と同一パターン (削除・reject・close の順序と同一オブジェクト)
 // ============================================================================
 
 test("bidiReadTrackStatusResponse: REQUEST_OK 受信後に自方向を FIN する", async () => {
-  // draft-ietf-moq-transport-22 §9.13 / §6.4.2.2:
+  // draft-ietf-moq-transport-23 §9.13 / §6.4.2.2:
   // TRACK_STATUS_OK / REQUEST_ERROR の送受信後に bidi ストリームは FIN で閉じる。
   const ctx = createOkResponseReadTestContext();
   let resolved = false;
@@ -91,7 +91,7 @@ test("bidiReadTrackStatusResponse: REQUEST_OK 受信後に自方向を FIN す�
 });
 
 test("bidiReadTrackStatusResponse: REQUEST_ERROR 受信後に自方向を FIN する", async () => {
-  // draft-ietf-moq-transport-22 §9.13 / §6.4.2.2: 失敗応答後も FIN で閉じる。
+  // draft-ietf-moq-transport-23 §9.13 / §6.4.2.2: 失敗応答後も FIN で閉じる。
   const ctx = createOkResponseReadTestContext();
   let rejected: Error | undefined;
   ctx.session.pendingTrackStatus.set(ctx.requestId, {
@@ -128,7 +128,7 @@ test("bidiReadTrackStatusResponse: REQUEST_ERROR 受信後に自方向を FIN �
 });
 
 /**
- * draft-ietf-moq-transport-22 §9 (Message Length) / §8.5 (Reason Phrase):
+ * draft-ietf-moq-transport-23 §9 (Message Length) / §8.5 (Reason Phrase):
  * Reason Phrase Length が残りバイトを超える不完全な REQUEST_ERROR を受信した
  * 場合、共通リーダの catch が PROTOCOL_VIOLATION の SessionError に変換し、
  * pending を reject してからセッションを閉じる。TRACK_STATUS の
@@ -181,7 +181,7 @@ test("bidiReadTrackStatusResponse: 不完全な REQUEST_ERROR で PROTOCOL_VIOLA
 });
 
 test("bidiReadPublishResponse: 確立前 GOAWAY 後の 2 通目 GOAWAY で PROTOCOL_VIOLATION で閉じる", async () => {
-  // draft-ietf-moq-transport-22 §9.2:
+  // draft-ietf-moq-transport-23 §9.2:
   // 確立前 GOAWAY 後も読み取りを継続し、同一ストリームの 2 通目を検出する。
   const ctx = createOkResponseReadTestContext();
   const publisher = new PublisherImpl(["test"], "track", ctx.requestId, 1n, () => {});
@@ -301,7 +301,7 @@ test("bidiReadSubscribeResponse: SUBSCRIBE_OK の LARGEST_OBJECT で Next Object
     trackProperties: [],
   });
   ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.SUBSCRIBE_OK, okPayload));
-  // ストリームは閉じない。draft-ietf-moq-transport-22 §6.4.2.2 (MUST) により、
+  // ストリームは閉じない。draft-ietf-moq-transport-23 §6.4.2.2 (MUST) により、
   // publisher は PUBLISH_DONE を送る前に FIN を送ってはならない。ここで閉じると
   // 読み取りループが FIN を「PUBLISH_DONE 無しの終了」として検出し
   // notifySubscriberFailure で購読が closed になるため、以降の handleObject が
@@ -521,14 +521,14 @@ test("bidiReadFetchResponse: FETCH_OK で複数の待機者が全員解決する
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.19:
+ * draft-ietf-moq-transport-23 §9.19.19:
  * update({ newGroupRequest }) で NEW_GROUP_REQUEST (0x32) が REQUEST_UPDATE に
  * varint 符号化で載ることを検証する。
  */
 test("bidiSendRequestUpdate: newGroupRequest が NEW_GROUP_REQUEST としてエンコードされる", async () => {
   const { session, written } = createBidiSession();
   const subscriber = new SubscriberImpl(["test"], "track", 0n, 0n, () => {});
-  // §9.20.19 の MUST NOT により DYNAMIC_GROUPS=1 を受けている購読だけが送信できる
+  // §9.19.19 の MUST NOT により DYNAMIC_GROUPS=1 を受けている購読だけが送信できる
   subscriber.setTrackProperties([{ id: TrackPropertyId.DYNAMIC_GROUPS, value: 1n }]);
 
   const updatePromise = bidiSendRequestUpdate(session, subscriber, {
@@ -548,13 +548,13 @@ test("bidiSendRequestUpdate: newGroupRequest が NEW_GROUP_REQUEST としてエ�
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.19:
+ * draft-ietf-moq-transport-23 §9.19.19:
  * 規定値 0 の NEW_GROUP_REQUEST が varint 単一バイトで載ることを検証する。
  */
 test("bidiSendRequestUpdate: newGroupRequest の 0 がエンコードされる", async () => {
   const { session, written } = createBidiSession();
   const subscriber = new SubscriberImpl(["test"], "track", 0n, 0n, () => {});
-  // §9.20.19 の MUST NOT により DYNAMIC_GROUPS=1 を受けている購読だけが送信できる
+  // §9.19.19 の MUST NOT により DYNAMIC_GROUPS=1 を受けている購読だけが送信できる
   subscriber.setTrackProperties([{ id: TrackPropertyId.DYNAMIC_GROUPS, value: 1n }]);
 
   const updatePromise = bidiSendRequestUpdate(session, subscriber, {
@@ -575,7 +575,7 @@ test("bidiSendRequestUpdate: newGroupRequest の 0 がエンコードされる",
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20:
+ * draft-ietf-moq-transport-23 §9.19:
  * raw NEW_GROUP_REQUEST と型付きの併用は送信前に拒否されることを検証する。
  */
 test("bidiSendRequestUpdate: raw と型付きの NEW_GROUP_REQUEST 重複は拒否される", async () => {
@@ -598,7 +598,7 @@ test("bidiSendRequestUpdate: raw と型付きの NEW_GROUP_REQUEST 重複は拒�
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20:
+ * draft-ietf-moq-transport-23 §9.19:
  * raw NEW_GROUP_REQUEST 同士の重複も送信前に拒否されることを検証する。
  */
 test("bidiSendRequestUpdate: raw の NEW_GROUP_REQUEST 重複は拒否される", async () => {
@@ -623,7 +623,7 @@ test("bidiSendRequestUpdate: raw の NEW_GROUP_REQUEST 重複は拒否される"
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.19:
+ * draft-ietf-moq-transport-23 §9.19.19:
  * 負の newGroupRequest は送信前に拒否されることを検証する。
  */
 test("bidiSendRequestUpdate: 負の newGroupRequest は送信前に拒否される", async () => {
@@ -645,7 +645,7 @@ test("bidiSendRequestUpdate: 負の newGroupRequest は送信前に拒否され�
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20 / §9.20.15:
+ * draft-ietf-moq-transport-23 §9.19 / §9.19.15:
  * raw FILL_PARAMETERS が 2 件の update() は送信前に拒否され、
  * pendingRequestUpdate に entry が残らないことを検証する。
  */
@@ -674,7 +674,7 @@ test("bidiSendRequestUpdate: raw FILL_PARAMETERS の重複は送信前に拒否�
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20 / §9.20.15:
+ * draft-ietf-moq-transport-23 §9.19 / §9.19.15:
  * 型付き fill と raw FILL_PARAMETERS の併用は送信前に拒否されることを検証する。
  */
 test("bidiSendRequestUpdate: 型付き fill と raw FILL_PARAMETERS の併用は送信前に拒否される", async () => {
@@ -701,7 +701,7 @@ test("bidiSendRequestUpdate: 型付き fill と raw FILL_PARAMETERS の併用は
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20 / §9.20.15:
+ * draft-ietf-moq-transport-23 §9.19 / §9.19.15:
  * 重複検査は内側デコード検証より先に行われ、二重不正入力では
  * 重複エラーが優先されることを検証する。
  */
@@ -728,7 +728,7 @@ test("bidiSendRequestUpdate: 重複と内側不正の二重不正では重複エ
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.4 / §9.20.15:
+ * draft-ietf-moq-transport-23 §3.4 / §9.19.15:
  * 単一の raw FILL_PARAMETERS の fill 要求が updateRequestId で購読に
  * 関連付けられることを検証する。内側に GROUP_ORDER がなければ
  * 購読の指定を継承する。
@@ -764,7 +764,7 @@ test("bidiSendRequestUpdate: 単一 raw FILL は購読に関連付けられる",
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.4 / §9.20.15:
+ * draft-ietf-moq-transport-23 §3.4 / §9.19.15:
  * raw FILL 内側の GROUP_ORDER が登録に使われることを検証する。
  */
 test("bidiSendRequestUpdate: raw FILL 内側の GROUP_ORDER が登録される", async () => {
@@ -791,7 +791,7 @@ test("bidiSendRequestUpdate: raw FILL 内側の GROUP_ORDER が登録される",
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.4 / §9.20.15:
+ * draft-ietf-moq-transport-23 §3.4 / §9.19.15:
  * raw FILL 内側の GROUP_ORDER 0x01 は Ascending として登録され、
  * 内側指定が購読指定より優先されることを検証する。
  */
@@ -820,7 +820,7 @@ test("bidiSendRequestUpdate: raw FILL 内側の GROUP_ORDER 0x01 は Ascending �
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.4 / §9.20.15:
+ * draft-ietf-moq-transport-23 §3.4 / §9.19.15:
  * 内側と購読の両方に GROUP_ORDER がなければ Ascending になることを検証する。
  */
 test("bidiSendRequestUpdate: GROUP_ORDER 両省略時は Ascending になる", async () => {
@@ -846,7 +846,7 @@ test("bidiSendRequestUpdate: GROUP_ORDER 両省略時は Ascending になる", a
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.4:
+ * draft-ietf-moq-transport-23 §3.4:
  * FILL なしの update() では関連付けが登録されないことを検証する。
  */
 test("bidiSendRequestUpdate: FILL なしでは関連付けを登録しない", async () => {
@@ -876,7 +876,7 @@ function buildRawFillWithRanges(ranges: { start: bigint; end: bigint }[]): Param
 }
 
 /**
- * draft-ietf-moq-transport-22 §9.1.6:
+ * draft-ietf-moq-transport-23 §9.1.6:
  * raw FILL 内側 Range が上限検証に含まれ、超過時は送信前に
  * throw することを検証する。
  */
@@ -908,7 +908,7 @@ test("bidiSendRequestUpdate: raw FILL 内側 Range の上限超過は throw す�
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.1.6:
+ * draft-ietf-moq-transport-23 §9.1.6:
  * in-flight 中の raw FILL 内側 Range も上限合算に含めることを検証する。
  */
 test("bidiSendRequestUpdate: in-flight の raw FILL と合計で上限超過の場合は throw する", async () => {
@@ -953,7 +953,7 @@ test("bidiSendRequestUpdate: in-flight の raw FILL と合計で上限超過の�
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.1.6:
+ * draft-ietf-moq-transport-23 §9.1.6:
  * 上限以内の raw FILL 内側 Range は送信できることを検証する。
  */
 test("bidiSendRequestUpdate: 上限以内の raw FILL 内側 Range は送信できる", async () => {
@@ -973,7 +973,7 @@ test("bidiSendRequestUpdate: 上限以内の raw FILL 内側 Range は送信で�
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.1.6:
+ * draft-ietf-moq-transport-23 §9.1.6:
  * 複数種別の内側 Range Filter も合算されることを検証する。
  */
 test("bidiSendRequestUpdate: 複数種別の raw FILL 内側 Range も合算される", async () => {
@@ -1015,7 +1015,7 @@ test("bidiSendRequestUpdate: 複数種別の raw FILL 内側 Range も合算さ�
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.1.6:
+ * draft-ietf-moq-transport-23 §9.1.6:
  * 外側 Range と raw FILL 内側 Range の同一メッセージ合算で
  * 上限超過の場合は throw することを検証する。
  */
@@ -1047,7 +1047,7 @@ test("bidiSendRequestUpdate: 外側と raw FILL 内側の合算で上限超過�
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.1.6:
+ * draft-ietf-moq-transport-23 §9.1.6:
  * in-flight 中の型付き fill と新規 raw FILL の合計で上限超過の場合は
  * throw することを検証する (逆方向の合算)。
  */

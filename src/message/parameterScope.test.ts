@@ -1,6 +1,6 @@
 /**
  * Parameter Scope 検証の単体テスト
- * draft-ietf-moq-transport-22 §9.20.1 (Parameter Scope) / §9.20.16 (EXPIRES Parameter)
+ * draft-ietf-moq-transport-23 §9.19.1 (Parameter Scope) / §9.19.16 (EXPIRES Parameter)
  */
 
 import { test, assert } from "vite-plus/test";
@@ -37,7 +37,7 @@ function assertProtocolViolation(error: SessionError | null, expectedMessage?: s
 }
 
 /**
- * draft-ietf-moq-transport-22 §9.20.1:
+ * draft-ietf-moq-transport-23 §9.19.1:
  * 許可パラメータ集合に含まれるパラメータは検証を通過する。
  * EXPIRES のみを含むパラメータ配列が NAMESPACE_OK_ALLOWED_PARAMS で通過することを検証する。
  */
@@ -84,7 +84,7 @@ test("NAMESPACE に定義の無いパラメータは INVALID_PARAMETER のエラ
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.1:
+ * draft-ietf-moq-transport-23 §9.19.1:
  * "Each Message Parameter definition indicates the message types in
  *  which it can appear, and each control message definition lists the
  *  parameters it allows.  If a parameter appears in some other type of
@@ -118,7 +118,7 @@ test("EXPIRES + 許可外パラメータの混合は INVALID_PARAMETER のエラ
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-22 §9.20.16 / §9.20.1:
+ * draft-ietf-moq-transport-23 §9.19.16 / §9.19.1:
  * Subscription Parameters は PUBLISH_OK に出現できない。
  * GROUP_ORDER / PAUSED / LOCATION_FILTER 等がスコープ検証で拒否されることを検証する。
  */
@@ -132,7 +132,7 @@ test("GROUP_ORDER 付き PUBLISH_OK は INVALID_PARAMETER のエラーを返す"
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.16 / §9.20.1:
+ * draft-ietf-moq-transport-23 §9.19.16 / §9.19.1:
  * PAUSED / LOCATION_FILTER 等の Subscription Parameters は PUBLISH_OK に
  * 出現できない。代表として PAUSED / LOCATION_FILTER と Range Filter
  * (SUBGROUP_FILTER) がスコープ検証で拒否されることを検証する。
@@ -153,7 +153,7 @@ test("Subscription Parameters 付き PUBLISH_OK は INVALID_PARAMETER のエラ�
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.16:
+ * draft-ietf-moq-transport-23 §9.19.16:
  * EXPIRES 付き PUBLISH_OK はスコープ検証を通過する。
  */
 test("EXPIRES 付き PUBLISH_OK は検証を通過する", () => {
@@ -170,7 +170,7 @@ test("EXPIRES 付き PUBLISH_OK は検証を通過する", () => {
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-22 §3.6.2:
+ * draft-ietf-moq-transport-23 §3.6.2:
  * SUBSCRIBE_TRACKS の結果 PUBLISH に GROUP_ORDER が載るため許可する。
  * GROUP_ORDER 付き PUBLISH がスコープ検証で受理されることを検証する。
  */
@@ -184,7 +184,7 @@ test("GROUP_ORDER 付き PUBLISH は検証を通過する", () => {
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.8:
+ * draft-ietf-moq-transport-23 §9.8:
  * PUBLISH は初期 Subscription Parameters として PAUSED / GROUP_ORDER /
  * SUBSCRIBER_PRIORITY / SUBGROUP_DELIVERY_TIMEOUT / OBJECT_DELIVERY_TIMEOUT /
  * LOCATION_FILTER を運べる。既存 5 種に加えた 4 種がスコープ検証で受理されることを
@@ -204,7 +204,7 @@ test("Subscription Parameters 付き PUBLISH は検証を通過する", () => {
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.8:
+ * draft-ietf-moq-transport-23 §9.8:
  * NEW_GROUP_REQUEST / Range Filters / FILL_PARAMETERS は PUBLISH に
  * 出現できない。スコープ検証で拒否されることを検証する。
  */
@@ -286,7 +286,7 @@ test("FETCH_OK の許可パラメータは EXPIRES と LARGEST_OBJECT のみ", (
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.21 / §9.20.1:
+ * draft-ietf-moq-transport-23 §9.19.22 / §9.19.1:
  * INCLUDE_PROPERTIES (0x35) は SUBSCRIBE / TRACK_STATUS / FETCH /
  * SUBSCRIBE_TRACKS にのみ出現でき、応答側の許可集合には含まれない。
  * 応答文脈への混入は INVALID_PARAMETER で拒否されることを検証する。
@@ -366,7 +366,7 @@ test("EXPIRES はすべての OK 文脈で受理される", () => {
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-22 §9.20.20 / §9.20.1:
+ * draft-ietf-moq-transport-23 §9.19.20 / §9.19.1:
  * TRACK_NAMESPACE_PREFIX を subscription 系 REQUEST_UPDATE のスコープ検証に
  * かけると INVALID_PARAMETER の SessionError が返ることを検証する。
  */

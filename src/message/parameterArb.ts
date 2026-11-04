@@ -36,7 +36,7 @@ import {
 /**
  * Message Parameter の arbitrary
  *
- * draft-ietf-moq-transport-22 Section 9.20:
+ * draft-ietf-moq-transport-23 Section 9.19:
  * 各パラメータ型が独自の Value エンコーディングを定義する。
  */
 export const varintParameterArb = fc
@@ -86,7 +86,7 @@ export const lengthPrefixedParameterArb = fc
 /**
  * Track Namespace のフィールド列を生成する共通 arbitrary
  *
- * draft-ietf-moq-transport-22 §2.3:
+ * draft-ietf-moq-transport-23 §2.3:
  * "Each Track Namespace Field Value MUST contain at least one byte."
  * 各フィールドは 1 バイト以上必要なため minLength: 1 とする。
  *
@@ -102,7 +102,7 @@ export const namespacePartsArb = fc.array(fc.string({ minLength: 1, maxLength: 2
 /**
  * TRACK_NAMESPACE_PREFIX (0x34) パラメータの arbitrary
  *
- * draft-ietf-moq-transport-22 §9.20.20:
+ * draft-ietf-moq-transport-23 §9.19.20:
  * Value は §8.7 の Track Namespace エンコーディング (自己区切り)。
  * encodeParameterTrackNamespace の出力で構築する
  * (生バイト列の任意生成はフィールド数・Length の検証と衝突する)。
@@ -114,7 +114,7 @@ export const trackNamespaceParameterArb = namespacePartsArb.map((parts) =>
 /**
  * LocationFilter の任意構築
  *
- * draft-ietf-moq-transport-22 §9.20.9: Location Filter Type 0x00〜0x05 の union。
+ * draft-ietf-moq-transport-23 §9.19.9: Location Filter Type 0x00〜0x05 の union。
  * 0x05 (Next Object) はフィールドを持たない。
  */
 export const locationFilterArb: fc.Arbitrary<LocationFilter> = fc.oneof(
@@ -141,7 +141,7 @@ export const locationFilterArb: fc.Arbitrary<LocationFilter> = fc.oneof(
 /**
  * LOCATION_FILTER (0x21) パラメータの arbitrary
  *
- * draft-ietf-moq-transport-22 §9.20.9: Value は Location Filter Type (vi64) と
+ * draft-ietf-moq-transport-23 §9.19.9: Value は Location Filter Type (vi64) と
  * 型ごとの vi64 フィールドで自己区切りになる。encodeLocationFilter の出力
  * (Type とフィールドが整合したバイト列) で構築する。
  */
@@ -202,7 +202,7 @@ export const rangeFilterParameterArb = fc
       // OBJECT_PROPERTY_FILTER / TRACK_PROPERTY_FILTER は propertyType 必須
       ((filter.filterType !== "objectProperty" && filter.filterType !== "trackProperty") ||
         propertyType !== undefined) &&
-      // PRIORITY_FILTER は 255 以下の値のみ (§9.20.12)
+      // PRIORITY_FILTER は 255 以下の値のみ (§9.19.12)
       (filter.filterType !== "priority" ||
         ranges.every((r) => r.start <= 255n && (r.end === undefined || r.end <= 255n))),
   )
@@ -398,7 +398,7 @@ export const trackNameArb = fc
 /**
  * Track Namespace の arbitrary
  *
- * フィールドは 1 バイト以上 (draft-ietf-moq-transport-22 §2.3) のため minLength: 1。
+ * フィールドは 1 バイト以上 (draft-ietf-moq-transport-23 §2.3) のため minLength: 1。
  */
 export const namespaceArb = fc
   .array(fc.string({ minLength: 1, maxLength: 20 }), { minLength: 0, maxLength: 5 })

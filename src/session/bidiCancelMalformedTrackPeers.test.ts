@@ -13,11 +13,11 @@ import { fullTrackNameKey } from "../fullTrackName";
 
 // ============================================================================
 // cancelMalformedTrackPeers の二重通知防止
-// draft-ietf-moq-transport-22 §12.1 (Malformed Tracks) / §3.2.4 (Fetch State Management)
+// draft-ietf-moq-transport-23 §12.1 (Malformed Tracks) / §3.2.4 (Fetch State Management)
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-22 §12.1 / §3.2.4:
+ * draft-ietf-moq-transport-23 §12.1 / §3.2.4:
  * 最初の malformed 検出のキャンセルが await で保留されている間に同一 Track の
  * 2 回目の検出が届いても、error コールバックは 1 回だけ呼ばれる。state を
  * キャンセル開始と同期に closed にするため、bidiCancelFetch の完了を待たずに

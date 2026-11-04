@@ -23,7 +23,7 @@ import { createPublishReadTestContext } from "../testSupport/bidi";
 
 // ============================================================================
 // SubscriberImpl.update() の fire-and-forget 抑制テスト
-// draft-ietf-moq-transport-22 §9.5 / §9.5.1:
+// draft-ietf-moq-transport-23 §9.5 / §9.5.1:
 // SubscriberImpl.update を非 async 化し catch 付き Promise を直接返すことで、
 // 各 reject 経路でも unhandled rejection にならないことを検証する。
 // ============================================================================
@@ -89,7 +89,7 @@ async function assertNoUnhandledRejection(callback: () => Promise<void>): Promis
 /**
  * fire-and-forget の update() を各 reject 経路で駆動するケース。
  *
- * draft-ietf-moq-transport-22 §9.5 / §9.5.1 / §9.2 / §6.4.2.2 / §6.4.2.3 / §3.1:
+ * draft-ietf-moq-transport-23 §9.5 / §9.5.1 / §9.2 / §6.4.2.2 / §6.4.2.3 / §3.1:
  * 経路ごとに update() の reject 原因 (REQUEST_ERROR / GOAWAY / FIN /
  * RESET_STREAM / unsubscribe) は異なるが、返り値を観測しない呼び出しでも
  * unhandled rejection にならず、保留中の更新が掃除される点は共通である。
@@ -215,7 +215,7 @@ const FIRE_FORGET_REJECT_CASES: FireForgetRejectCase[] = [
 ];
 
 /**
- * draft-ietf-moq-transport-22 §9.5 / §9.5.1 / §9.2 / §6.4.2.2 / §6.4.2.3 / §3.1:
+ * draft-ietf-moq-transport-23 §9.5 / §9.5.1 / §9.2 / §6.4.2.2 / §6.4.2.3 / §3.1:
  * fire-and-forget の update() は、どの reject 経路でも unhandled rejection に
  * ならず、保留中の更新が掃除されることを表駆動 1 本で検証する。
  * 50ms の壁時計待ちは 1 回に抑え、経路ごとの差 (入力メッセージ) だけを表に持つ。

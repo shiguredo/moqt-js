@@ -30,7 +30,7 @@ import {
 
 // ============================================================================
 // bidiSendNamespaceRequestUpdate のテスト
-// draft-ietf-moq-transport-22 §9.5.2 (Updating Namespace Subscriptions)
+// draft-ietf-moq-transport-23 §9.5.2 (Updating Namespace Subscriptions)
 // ============================================================================
 
 /**

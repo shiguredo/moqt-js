@@ -97,7 +97,7 @@ export function parseMsfFragmentValue(value: string): MsfFragmentValue {
       : namespacePart.split("-").map((field, index) => {
           if (field.length === 0) {
             throw new Error(
-              `invalid msf fragment value: track namespace field at index ${index} must not be empty per draft-ietf-moq-transport-22 §8.7`,
+              `invalid msf fragment value: track namespace field at index ${index} must not be empty per draft-ietf-moq-transport-23 §8.7`,
             );
           }
           return parseFullTrackNameSegment(field, `msf fragment namespace field at index ${index}`);

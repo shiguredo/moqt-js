@@ -78,11 +78,11 @@ test("bidiReadTrackStatusResponse: TRACK_STATUS_OK の EXPIRES と LARGEST_OBJEC
 
 // ============================================================================
 // bidiReadTrackStatusResponse の malformed 検出 (未知 Mandatory Track Property)
-// draft-ietf-moq-transport-22 §9.13 (TRACK_STATUS) / §12.1 (Malformed Tracks)
+// draft-ietf-moq-transport-23 §9.13 (TRACK_STATUS) / §12.1 (Malformed Tracks)
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-22 §9.13 / §12.1 / §2.4.1:
+ * draft-ietf-moq-transport-23 §9.13 / §12.1 / §2.4.1:
  * TRACK_STATUS_OK の malformed 検出による cross-cancel も Full Track Name の比較
  * キーで対象を決める。namespace ["a"] + trackName "b/c" と namespace ["a","b"] +
  * trackName "c" は "/" 連結では同じ "a/b/c" になるため、区切り文字の曖昧さで
@@ -152,7 +152,7 @@ test("bidiReadTrackStatusResponse: 区切り文字が衝突する別 Track を c
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.13 / §12.1:
+ * draft-ietf-moq-transport-23 §9.13 / §12.1:
  * TRACK_STATUS_OK は SUBSCRIBE_OK と同じ Track Properties を運ぶため、未知 Mandatory
  * Track Property (0x4000-0x7FFF) の受信は malformed Track の検出に当たる。pending を
  * reject して自方向を FIN し、同一 Full Track Name の購読 / FETCH を cross-cancel する。

@@ -1,6 +1,6 @@
 /**
  * MOQT Session Messages Property-Based Tests
- * draft-ietf-moq-transport-22 Section 9.2 (GOAWAY) — 9.4 (REQUEST_ERROR)
+ * draft-ietf-moq-transport-23 Section 9.2 (GOAWAY) — 9.4 (REQUEST_ERROR)
  */
 
 import { test, assert } from "vite-plus/test";
@@ -26,7 +26,7 @@ import { ProtocolViolationError } from "../error";
 import { parametersArb, propertyArb } from "./parameterArb";
 
 /**
- * draft-ietf-moq-transport-22 Section 9.2:
+ * draft-ietf-moq-transport-23 Section 9.2:
  * GOAWAY のワイヤフォーマットは New Session URI Length + New Session URI + Timeout。
  * draft-19 で Request ID フィールドが削除された。
  */
@@ -54,7 +54,7 @@ test("Goaway のエンコード・デコードがラウンドトリップする"
 });
 
 /**
- * draft-ietf-moq-transport-22 Section 9:
+ * draft-ietf-moq-transport-23 Section 9:
  * "If the length does not match the length of the Message Body,
  *  the receiver MUST close the session with a PROTOCOL_VIOLATION."
  * Timeout は GOAWAY ペイロードの最後のフィールドであり、
@@ -88,9 +88,9 @@ test("GOAWAY の Timeout 後ろに後続データがあると ProtocolViolationE
 });
 
 /**
- * draft-ietf-moq-transport-22 Section 9.3:
+ * draft-ietf-moq-transport-23 Section 9.3:
  * REQUEST_OK に Track Properties が追加された。
- * draft-ietf-moq-transport-22 Section 9.3
+ * draft-ietf-moq-transport-23 Section 9.3
  */
 test("RequestOk のエンコード・デコードがラウンドトリップする（空 Track Properties）", () => {
   fc.assert(
@@ -116,7 +116,7 @@ test("RequestOk のエンコード・デコードがラウンドトリップす�
 });
 
 /**
- * draft-ietf-moq-transport-22 Section 9.3 (REQUEST_OK):
+ * draft-ietf-moq-transport-23 Section 9.3 (REQUEST_OK):
  * REQUEST_OK に Track Properties が追加された。
  * 非空 Track Properties のエンコード・デコードが正しくラウンドトリップすることを検証する。
  */
@@ -161,7 +161,7 @@ test("RequestOk のエンコード・デコードがラウンドトリップす�
 });
 
 /**
- * draft-ietf-moq-transport-22 Section 9.4.2:
+ * draft-ietf-moq-transport-23 Section 9.4.2:
  * REQUEST_ERROR に Redirect が含まれる場合（REDIRECT エラーコード）
  */
 test("REQUEST_ERROR with Redirect のエンコード・デコードがラウンドトリップする", () => {
@@ -202,9 +202,9 @@ test("REQUEST_ERROR with Redirect のエンコード・デコードがラウン�
 });
 
 /**
- * draft-ietf-moq-transport-22 Section 9.4:
+ * draft-ietf-moq-transport-23 Section 9.4:
  * REQUEST_ERROR から Request ID が削除された。
- * draft-ietf-moq-transport-22 Section 6.4.2.1
+ * draft-ietf-moq-transport-23 Section 6.4.2.1
  *
  * Retry Interval: 再試行までに待つべきミリ秒 + 1
  * - 0: 再試行すべきではない
@@ -213,7 +213,7 @@ test("REQUEST_ERROR with Redirect のエンコード・デコードがラウン�
 test("RequestError のエンコード・デコードがラウンドトリップする", () => {
   fc.assert(
     fc.property(
-      // draft-ietf-moq-transport-22 Section 9.4.2:
+      // draft-ietf-moq-transport-23 Section 9.4.2:
       // REDIRECT (0x34) は Redirect 構造を必ず伴うため、Redirect なしの一般
       // ラウンドトリップ対象から除外する (Redirect 付きは専用のプロパティで検証する)
       fc.bigInt({ min: 0n, max: 1000n }).filter((n) => n !== 0x34n),
@@ -446,7 +446,7 @@ test("REDIRECT Detail の後ろに未知の Error Detail が続いてもラウ�
 });
 
 /**
- * draft-ietf-moq-transport-22 Section 8.5:
+ * draft-ietf-moq-transport-23 Section 8.5:
  * "If an endpoint receives a length exceeding the maximum, it MUST close
  *  the session with a PROTOCOL_VIOLATION"
  * Reason Phrase Length が上限 (1024) を超える REQUEST_ERROR を受信すると
@@ -465,7 +465,7 @@ test("REQUEST_ERROR の Reason Phrase 長が上限超過だと ProtocolViolation
 });
 
 /**
- * draft-ietf-moq-transport-22 Section 9.4.1 (Redirect Structure):
+ * draft-ietf-moq-transport-23 Section 9.4.1 (Redirect Structure):
  * Connect URI に最大長の規定はない (8,192 バイト上限は GOAWAY の New Session URI
  * §9.2 にのみ存在する)。8,192 バイトを超える Connect URI を含む Redirect が
  * デコードできることを固定バイト列で検証する。
@@ -488,7 +488,7 @@ test("Redirect の 8,192 バイト超 Connect URI がデコードできる", () 
 });
 
 /**
- * draft-ietf-moq-transport-22 §8.7:
+ * draft-ietf-moq-transport-23 §8.7:
  * Full Track Name (Namespace + Track Name 合計) が 4,096 バイトを超える
  * Redirect (REQUEST_ERROR) がデコード時に ProtocolViolationError になることを
  * 検証する (decodeRedirect 経由の統合テスト)。
@@ -512,7 +512,7 @@ test("REQUEST_ERROR (REDIRECT) の Full Track Name 4,096 バイト超過で Prot
 });
 
 /**
- * draft-ietf-moq-transport-22 Section 9.4.1 (Redirect Structure):
+ * draft-ietf-moq-transport-23 Section 9.4.1 (Redirect Structure):
  * 8,192 バイトを超える Connect URI を含む REQUEST_ERROR (REDIRECT) が
  * デコード経路 (encodeRequestErrorPayload → decodeRequestErrorPayload) で
  * ラウンドトリップし、trailing 検査と干渉しないことを検証する。

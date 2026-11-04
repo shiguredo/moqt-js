@@ -770,9 +770,9 @@ await playout.prepareAudio();
 - `VideoDecodeOrder` — Object を復号してよいかを Group の順序と参照するフレームの欠落から
   決める (`priorObjectIdGapOf` も公開する)
 - `GroupSwitchGate` — 前の Group の Subgroup の stream が開いている間、次の Group の Object を
-  保留する (draft-ietf-moq-transport-22 Section 2.1 の順不同の到着への対応)
+  保留する (draft-ietf-moq-transport-23 Section 2.1 の順不同の到着への対応)
 - `CatchUpGate` — relay の cache から追いつく途中の Object を、SUBSCRIBE_OK の
   LARGEST_OBJECT を境界に選別する (`CatchUpDecision` も公開する。
-  draft-ietf-moq-transport-22 Section 9.20.17)
+  draft-ietf-moq-transport-23 Section 9.19.17)
 
 ---

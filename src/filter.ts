@@ -1,7 +1,7 @@
 /**
  * Location Filter マッチング
  *
- * draft-ietf-moq-transport-22 Section 3.3.1 (Location Filters):
+ * draft-ietf-moq-transport-23 Section 3.3.1 (Location Filters):
  * Object の Location が Subscription の Location Filter にマッチするかどうかを判定する。
  *
  * 通過条件: Object Location >= Start Location。
@@ -26,7 +26,7 @@ import { MAX_VARINT } from "./varint";
  * 相対指定 (0x01 の StartGroup、および 0x05 の Next Object) は Largest Object から
  * 具体的な Start Location に解決される（詳細は resolveFilter を参照）。
  * Largest Object 未確定（コンテンツ未配信）時は {0, 0} から開始する
- * (draft-ietf-moq-transport-22 Section 3.3.1)。
+ * (draft-ietf-moq-transport-23 Section 3.3.1)。
  */
 export interface ResolvedFilter {
   /** 開始 Location（この Location 以上の Object が通過） */
@@ -40,7 +40,7 @@ export interface ResolvedFilter {
 /**
  * LocationFilter を具体的な ResolvedFilter に解決する
  *
- * draft-ietf-moq-transport-22 Section 9.20.9 (Table 6):
+ * draft-ietf-moq-transport-23 Section 9.19.9 (Table 6):
  * - 0x01 (startGroup): 相対指定。Start Location =
  *   {LARGEST_OBJECT の Group + 1 - startGroup, 0}。未配信時は {0, 0} から開始。
  *   計算結果は 0 未満なら 0、2^64-1 超なら 2^64-1 にクランプする
@@ -69,10 +69,10 @@ export function resolveFilter(
   }
 
   // 0x05 (Next Object) は {Largest Object.Group, Largest Object.Object + 1} を意味する
-  // (§9.20.9 Table 6 / §3.1.4)。§3.1.4 は Largest Object の Object が 2^64-1 の
+  // (§9.19.9 Table 6 / §3.1.4)。§3.1.4 は Largest Object の Object が 2^64-1 の
   // 場合を定義しないため、その場合だけ Object が 2^64 になり得る (Group 内で
   // これ以上 Object が無いため、比較上は次の Group の先頭から開始するのと同じ)。
-  // クランプの規定は相対指定 (0x01) の Start Group にのみある (§9.20.9)
+  // クランプの規定は相対指定 (0x01) の Start Group にのみある (§9.19.9)
   if (isNextObjectLocationFilter(filter)) {
     // 相対指定と同様に、未配信時は {0, 0} から開始する
     if (largestLocation === null) {
@@ -92,7 +92,7 @@ export function resolveFilter(
     if (largestLocation === null) {
       return { start: { group: 0n, object: 0n }, endGroup: undefined };
     }
-    // draft-ietf-moq-transport-22 Section 9.20.9:
+    // draft-ietf-moq-transport-23 Section 9.19.9:
     // "the start Location is {Largest Object.Group + 1 - StartGroup, 0}"。
     // 相対の計算結果が負値になる group は 0、2^64-1 を超える group は 2^64-1
     // にクランプする
@@ -126,7 +126,7 @@ export function resolveFilter(
 /**
  * Object の Location が ResolvedFilter にマッチするかどうかを判定する
  *
- * draft-ietf-moq-transport-22 Section 3.3.1:
+ * draft-ietf-moq-transport-23 Section 3.3.1:
  * 通過条件: Object Location >= Start。End Group があるときは Group <= End Group、
  * End Object があるときは End Group 内で Object <= EndObject。
  *
@@ -157,7 +157,7 @@ export function objectMatchesFilter(
   if (filter.endGroup !== undefined && objectLocation.group > filter.endGroup) {
     return false;
   }
-  // End Object があるときは、End Group 内で Object <= End Object のみ通過 (§9.20.9
+  // End Object があるときは、End Group 内で Object <= End Object のみ通過 (§9.19.9
   // "When EndObject is omitted, the filter includes all objects in the End Group.")
   // endGroup が無いのに endObject だけ指定された ResolvedFilter に対しては
   // 適用しない (endObject は endGroup に従属する設計。不変条件の防御)
@@ -175,7 +175,7 @@ export function objectMatchesFilter(
 
 // ============================================================================
 // Range Filter マッチング
-// draft-ietf-moq-transport-22 Section 3.3.2
+// draft-ietf-moq-transport-23 Section 3.3.2
 // ============================================================================
 
 /**
@@ -199,7 +199,7 @@ export interface RangeFilterValues {
 /**
  * Range Filter の評価 (マッチング) を行う
  *
- * draft-ietf-moq-transport-22 Section 3.3.2:
+ * draft-ietf-moq-transport-23 Section 3.3.2:
  * - 同一 SetID のフィルタは AND、異なる SetID の結果は OR で結合する
  * - Range の包含判定は両端含む (inclusive)
  * - 終端省略 (End なし) は open-ended (上限なし)
@@ -312,7 +312,7 @@ function rangeContainsValue(ranges: FilterRange[], value: bigint): boolean {
 /**
  * Object Properties バイト列から対象 Property Type の値を寛容デコードで抽出する
  *
- * draft-ietf-moq-transport-22 §10.7:
+ * draft-ietf-moq-transport-23 §10.7:
  * 「When looking for the value of a property, processors MUST search both the
  *  mutable properties and the contents of Immutable Properties.」
  * IMMUTABLE_PROPERTIES (0x0B) のネスト内も検索する。
@@ -333,7 +333,7 @@ function extractObjectPropertyValue(
 /**
  * Property 列から対象 Type の varint 値を検索する (IMMUTABLE_PROPERTIES ネスト内も含む)
  *
- * draft-ietf-moq-transport-22 §10.7:
+ * draft-ietf-moq-transport-23 §10.7:
  * 「When looking for the value of a property, processors MUST search both the
  *  mutable properties and the contents of Immutable Properties.」
  * IMMUTABLE_PROPERTIES (0x0B) のネスト内も検索する。
@@ -369,7 +369,7 @@ function findPropertyValueRecursive(
       }
       return undefined;
     }
-    // draft-ietf-moq-transport-22 §10.7: IMMUTABLE_PROPERTIES のネスト内も検索する
+    // draft-ietf-moq-transport-23 §10.7: IMMUTABLE_PROPERTIES のネスト内も検索する
     if (property.id === 0x0bn && property.data !== undefined) {
       const inner = decodeObjectPropertiesTolerant(property.data);
       const innerValue = findPropertyValueRecursive(inner.properties, targetType, depth + 1);
@@ -387,7 +387,7 @@ const MAX_PROPERTY_NESTING_DEPTH = 8;
 /**
  * TRACK_PROPERTY_FILTER の評価 (受信 PUBLISH の Track Properties に対する検索)
  *
- * draft-ietf-moq-transport-22 §3.3.2:
+ * draft-ietf-moq-transport-23 §3.3.2:
  * 「The Track Property Filter can be used in SUBSCRIBE_TRACKS to filter
  *  PUBLISH messages with required Track Property types and values. PUBLISH
  *  messages which pass the filter will be forwarded」
@@ -458,7 +458,7 @@ function trackPropertyFilterParamMatches(
 /**
  * Track Properties から対象 Type の varint 値を検索する
  *
- * draft-ietf-moq-transport-22 §10.7:
+ * draft-ietf-moq-transport-23 §10.7:
  * IMMUTABLE_PROPERTIES のネスト内も検索する (共通ヘルパ findPropertyValueInList を使用)。
  */
 function findTrackPropertyValue(properties: Property[], targetType: bigint): bigint | undefined {

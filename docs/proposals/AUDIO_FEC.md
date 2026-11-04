@@ -178,7 +178,7 @@ A/V の自動予算は到着の揺らぎと出力の先行量から通常 50〜1
 1. **復旧用 copy のマーカー。** `SendDatagramParams` に役割 (本体か復旧か) を持たせ、受信側で遅延推定から除外する。4.3 の前提でもある。既存の `redundancy` と同じく `AudioPublishOptions` の拡張で足りる
 2. **適応冗長度。** 損失率に応じて 1〜3 を動かす。WebRTC は Opus を `useinbandfec=1` で登録し、Audio Network Adaptor が損失率と帯域の 2 軸のしきい値曲線 (有効化と無効化で別の曲線 = ヒステリシス) で FEC を on/off している (`modules/audio_coding/audio_network_adaptor/fec_controller_plr_based.cc`)。ただし MoQ には RTCP 相当が無いため、損失率は受信側の `datagramFramesReceived` と Group ID の飛びから推定してフィードバックする仕組みが要る
 3. **計器。** 送信した copy 数、受信した重複数、復旧までの遅延を統計に足す (ライブラリの統計には未追加。devtools には `duplicateObjectsDropped` を追加した)
-4. **優先度。** 冗長 datagram の publisher priority を本体より下げ、輻輳時に本体を守る (draft-ietf-moq-transport-22 §5.1.1 が優先度の意味とスケジューリングを、§10.4 が既定の publisher priority を定める)。ただし下げすぎると冗長が常に捨てられるため、実測で決める
+4. **優先度。** 冗長 datagram の publisher priority を本体より下げ、輻輳時に本体を守る (draft-ietf-moq-transport-23 §5.1.1 が優先度の意味とスケジューリングを、§10.4 が既定の publisher priority を定める)。ただし下げすぎると冗長が常に捨てられるため、実測で決める
 
 ### 4.5 採用しない候補
 
@@ -266,7 +266,7 @@ A/V の自動予算は到着の揺らぎと出力の先行量から通常 50〜1
 | 遅延推定               | `PlayoutTimeline` の到着の揺らぎと出力時計からの予算                                                                                                                                                  |
 | 音声の実測記録         | `docs/archive/playout/AUDIO_PLAYOUT_LATENCY.md` (「パケロス対策: 音声 Object の 2 回送り」「まとめて落ちる経路 (バースト損失) と、2 個目を送る間隔」)、`docs/archive/playout/AUDIO_PLAYOUT_RESULT.md` |
 | 損失の注入 harness     | `tests/e2e/relay/investigation-audio-delay.spec.ts`                                                                                                                                                   |
-| MoQ 仕様               | `refs/moq/draft-ietf-moq-transport-22.txt` §5.1.1、§10.4、§14.1.2、`refs/moq/draft-ietf-moq-msf-01.txt` §5、`refs/moq/draft-ietf-moq-loc-04.txt` §4.1                                                 |
+| MoQ 仕様               | `refs/moq/draft-ietf-moq-transport-23.txt` §5.1.1、§10.4、§14.1.2、`refs/moq/draft-ietf-moq-msf-01.txt` §5、`refs/moq/draft-ietf-moq-loc-04.txt` §4.1                                                 |
 
 ### 8.2 標準
 
@@ -281,7 +281,7 @@ A/V の自動予算は到着の揺らぎと出力の先行量から通常 50〜1
 | RFC 6330 (RaptorQ) / RFC 6363 (FEC Framework)                            | 抄録                                                                                                 |
 | RFC 9221 (QUIC の DATAGRAM 拡張)                                         | datagram が再送されないこと                                                                          |
 | W3C WebCodecs Opus 登録                                                  | §6.1 (`OpusEncoderConfig.useinbandfec`、`packetlossperc`)                                            |
-| draft-ietf-moq-transport-22                                              | §5.1.1 (優先度の意味とスケジューリング)、§14.1.2 (FEC の唯一の言及)                                  |
+| draft-ietf-moq-transport-23                                              | §5.1.1 (優先度の意味とスケジューリング)、§14.1.2 (FEC の唯一の言及)                                  |
 | MoQ WG issue #320 (`https://github.com/moq-wg/moq-transport/issues/320`) | `NotTransport` ラベルと FEC を仕様に入れない方針。issue 自体は datagram の導入で解決として閉じられた |
 
 ### 8.3 論文

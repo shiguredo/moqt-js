@@ -30,7 +30,7 @@ import { type Property, decodeProperties, encodeProperties } from "../properties
 /**
  * GOAWAY メッセージ (Section 9.2)
  *
- * draft-ietf-moq-transport-22 Section 9.2 (GOAWAY):
+ * draft-ietf-moq-transport-23 Section 9.2 (GOAWAY):
  *
  * GOAWAY Message {
  *   Type (vi64) = 0x10,
@@ -56,10 +56,10 @@ export interface Goaway {
 /**
  * REQUEST_OK メッセージ (Section 9.3)
  *
- * draft-ietf-moq-transport-22:
+ * draft-ietf-moq-transport-23:
  * リクエストへの成功応答。双方向ストリーム上で送信されるため、
  * ストリーム自体がリクエストを特定し、Request ID は不要。
- * draft-ietf-moq-transport-22 Section 6.4.2.1
+ * draft-ietf-moq-transport-23 Section 6.4.2.1
  *
  * REQUEST_OK Message {
  *   Type (vi64) = 0x7,
@@ -174,14 +174,14 @@ export function decodeRedirect(data: Uint8Array, offset: number): [Redirect, num
 }
 
 /**
- * Error Detail Types (Section 16.11)
+ * Error Detail Types (Section 16.12)
  *
- * draft-ietf-moq-transport-23 Section 16.11 (Error Detail Types):
+ * draft-ietf-moq-transport-23 Section 16.12 (Error Detail Types):
  * REQUEST_ERROR の末尾は §8.3 の Key-Value-Pair 列 (Error Details) であり、
  * Message Parameters とは別の型空間・処理規則を持つ (§9.4.2)。未登録の型、
  * および登録済みでも当該 Error Code に適用されない型は無視し、未知の型の重複は
  * 拒否しない。GREASE 用の予約値 (0x7f * N + 0x9D) も未登録型として同じ規則で
- * 扱う (§13 / §16.11 に REQUEST_ERROR の Error Details としての予約がある)。
+ * 扱う (§13 / §16.12 に REQUEST_ERROR の Error Details としての予約がある)。
  */
 export const ErrorDetailType = {
   /**
@@ -259,7 +259,7 @@ export interface RequestError {
 /**
  * Goaway のペイロードをエンコード
  *
- * draft-ietf-moq-transport-22 Section 9.2:
+ * draft-ietf-moq-transport-23 Section 9.2:
  * New Session URI Length + New Session URI + Timeout
  */
 export function encodeGoawayPayload(msg: Goaway): Uint8Array {
@@ -332,7 +332,7 @@ export function decodeGoawayPayload(data: Uint8Array, offset = 0): Goaway {
 /**
  * PUBLISH_STATE_NOTIFY メッセージ (Section 9.10)
  *
- * draft-ietf-moq-transport-22 Section 9.10 (PUBLISH_STATE_NOTIFY):
+ * draft-ietf-moq-transport-23 Section 9.10 (PUBLISH_STATE_NOTIFY):
  *
  * PUBLISH_STATE_NOTIFY Message {
  *   Type (vi64) = 0x22,
@@ -352,7 +352,7 @@ export interface PublishStateNotify {
 /**
  * PUBLISH_STATE_NOTIFY のペイロードをエンコードする
  *
- * draft-ietf-moq-transport-22 Section 9.10:
+ * draft-ietf-moq-transport-23 Section 9.10:
  * Number of Parameters + Parameters (delta encoding の Parameters 列)。
  */
 export function encodePublishStateNotifyPayload(msg: PublishStateNotify): Uint8Array {
@@ -384,9 +384,9 @@ export function decodePublishStateNotifyPayload(data: Uint8Array, offset = 0): P
 /**
  * RequestOk のペイロードをエンコード
  *
- * draft-ietf-moq-transport-22 Section 9.3:
+ * draft-ietf-moq-transport-23 Section 9.3:
  * Number of Parameters + Parameters
- * draft-ietf-moq-transport-22 Section 6.4.2.1
+ * draft-ietf-moq-transport-23 Section 6.4.2.1
  *
  * 以下の REQUEST_OK 送信経路で使用する:
  * - 受信 PUBLISH 受理時 (SessionImpl.handleIncomingBidirectionalStream)
@@ -413,7 +413,7 @@ export function encodeRequestOkPayload(msg: RequestOk): Uint8Array {
 /**
  * RequestOk のペイロードをデコード
  *
- * draft-ietf-moq-transport-22 Section 9.3:
+ * draft-ietf-moq-transport-23 Section 9.3:
  * Number of Parameters + Parameters + Track Properties
  * - Track Properties は残りバイトすべて
  */

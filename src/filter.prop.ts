@@ -1,8 +1,8 @@
 /**
  * Location Filter 解決の Property-Based Tests
  *
- * draft-ietf-moq-transport-22 Section 3.3.1 (Location Filters) /
- * Section 9.20.9 (LOCATION FILTER Parameter)
+ * draft-ietf-moq-transport-23 Section 3.3.1 (Location Filters) /
+ * Section 9.19.9 (LOCATION FILTER Parameter)
  *
  * resolveFilter は「LocationFilter の種別 × LARGEST_OBJECT の有無 × Location 値」の
  * 有限な離散パターンを扱う純粋関数であるため、任意の Location に対して
@@ -126,7 +126,7 @@ const absoluteRangeWithEndObjectArb: fc.Arbitrary<AbsoluteRangeWithEndObjectFilt
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-22 §9.20.9:
+ * draft-ietf-moq-transport-23 §9.19.9:
  * フィルタ未指定と Type 0x00 (None / reset) はどちらも「フィルタなし = 全 Object 通過」
  * (undefined) に解決される。LARGEST_OBJECT の有無に依存しない。
  */
@@ -144,7 +144,7 @@ test("resolveFilter: 未指定と reset は LARGEST_OBJECT に依存せず undef
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-22 §9.20.9:
+ * draft-ietf-moq-transport-23 §9.19.9:
  * startObject を持つ表現 (0x02 / 0x03 / 0x04) は絶対指定であり、LARGEST_OBJECT に依存しない。
  * 同じフィルタを未配信 (null) と配信済みで解決した結果が一致することを固定する。
  */
@@ -164,7 +164,7 @@ test("resolveFilter: 絶対系は LARGEST_OBJECT に依存しない (PBT)", () =
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.9:
+ * draft-ietf-moq-transport-23 §9.19.9:
  * 2 フィールド (0x02 / startObject あり / endGroupDelta なし) は指定された絶対 Location を
  * そのまま start にし、終端を持たない。
  */
@@ -182,7 +182,7 @@ test("resolveFilter: 2 フィールドは絶対 Location を start にし終端�
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.9:
+ * draft-ietf-moq-transport-23 §9.19.9:
  * 3 フィールド (0x03) の End Group は StartGroup + EndGroupDelta であり、End Object を持たない
  * (End Group 全件が対象)。
  */
@@ -200,7 +200,7 @@ test("resolveFilter: 3 フィールドの End Group は StartGroup + Delta (PBT)
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.9:
+ * draft-ietf-moq-transport-23 §9.19.9:
  * 2 フィールドの 0:0 は絶対位置 {0, 0} の指定 (Type 0x02) であり、Next Object
  * (0x05) ではない。LARGEST_OBJECT の値に関わらず {0, 0} から開始する。
  * v21 の「2 フィールド 0:0 は Next Object」という特例の復活 (退行) を検出する。
@@ -219,7 +219,7 @@ test("resolveFilter: 2 フィールド 0:0 は絶対位置 {0, 0} のまま解�
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.9:
+ * draft-ietf-moq-transport-23 §9.19.9:
  * 4 フィールド (0x04) は 3 フィールドの解決結果に End Object を加えたものである。
  */
 test("resolveFilter: 4 フィールドは End Object を保持する (PBT)", () => {
@@ -240,7 +240,7 @@ test("resolveFilter: 4 フィールドは End Object を保持する (PBT)", () 
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-22 §9.20.9:
+ * draft-ietf-moq-transport-23 §9.19.9:
  * 1 フィールド (0x01) は Next Group 基準の相対指定であり、Start Location は
  * {Largest Object.Group + 1 - StartGroup, 0}。Object は常に 0 から始まる。
  *
@@ -270,7 +270,7 @@ test("resolveFilter: 1 フィールドは Next Group 基準で Object 0 から�
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.9:
+ * draft-ietf-moq-transport-23 §9.19.9:
  * 1 フィールドで LARGEST_OBJECT 未受信のときは {0, 0} から開始する。
  * フォールバック値に +1 を適用する退行 (未配信時に {0, 1}) を検出する。
  */
@@ -287,7 +287,7 @@ test("resolveFilter: 1 フィールドで未配信時は {0, 0} になる (PBT)"
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.9:
+ * draft-ietf-moq-transport-23 §9.19.9:
  * Location Filter Type 0x05 (Next Object) は
  * {Largest Object.Group, Largest Object.Object + 1} から開始する。
  * LARGEST_OBJECT の +1 漏れ (Largest Object 自身から開始する退行) を検出する。
@@ -359,7 +359,7 @@ const noEndGroupFilterArb: fc.Arbitrary<{
 );
 
 /**
- * draft-ietf-moq-transport-22 §3.3.1:
+ * draft-ietf-moq-transport-23 §3.3.1:
  * フィルタ未指定は全 Object 通過。任意の Location で成り立つ。
  */
 test("objectMatchesFilter: filter 未指定は任意の Location を通過する (PBT)", () => {
@@ -371,7 +371,7 @@ test("objectMatchesFilter: filter 未指定は任意の Location を通過する
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.3.1:
+ * draft-ietf-moq-transport-23 §3.3.1:
  * "Start Location 以上" が通過条件である。Start より小さい Location は
  * 終端の内側でも不通過になる。
  */
@@ -406,7 +406,7 @@ test("objectMatchesFilter: Start より小さい Location は不通過 (PBT)", (
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.3.1:
+ * draft-ietf-moq-transport-23 §3.3.1:
  * End Group を持つフィルタは End Group より大きい Group を不通過にする。
  * End Object を持つ場合は End Group 内で End Object より大きい Object も不通過。
  */
@@ -442,7 +442,7 @@ test("objectMatchesFilter: End Group / End Object の外側は不通過 (PBT)", 
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.3.1:
+ * draft-ietf-moq-transport-23 §3.3.1:
  * 終端を持たないフィルタは Start 以降で単調である。通過した Location より
  * 大きい Location も必ず通過する (上限が無いため)。
  */
@@ -469,7 +469,7 @@ test("objectMatchesFilter: 終端なしフィルタは Start 以降で単調 (PB
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.3.1:
+ * draft-ietf-moq-transport-23 §3.3.1:
  * Group が Start Group より大きければ、Object の値に関わらず通過する
  * (End Group がある場合は End Group まで)。
  */
@@ -498,7 +498,7 @@ test("objectMatchesFilter: Start Group より大きい Group は通過する (PB
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.9:
+ * draft-ietf-moq-transport-23 §9.19.9:
  * "When EndObject is omitted, the filter includes all objects in the End Group."
  * End Object は End Group 内でのみ上限として働き、End Group より前の Group は
  * Object の値に関わらず通過する。
@@ -576,7 +576,7 @@ const rangeFilterValuesArb: fc.Arbitrary<RangeFilterValues> = fc.record({
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.3.2:
+ * draft-ietf-moq-transport-23 §3.3.2:
  * フィルタなし (空配列) と削除エントリのみは全通過。
  */
 test("rangeFiltersMatch: フィルタなしと削除のみは全通過 (PBT)", () => {
@@ -598,7 +598,7 @@ test("rangeFiltersMatch: フィルタなしと削除のみは全通過 (PBT)", (
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.3.2:
+ * draft-ietf-moq-transport-23 §3.3.2:
  * SetID ごとの AND / 異なる SetID 間の OR は順序に依存しない。
  */
 test("rangeFiltersMatch: 指定の並び順を変えても結果が変わらない (PBT)", () => {
@@ -615,7 +615,7 @@ test("rangeFiltersMatch: 指定の並び順を変えても結果が変わらな�
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.3.2:
+ * draft-ietf-moq-transport-23 §3.3.2:
  * Length=0 の削除エントリは評価対象から除外されるため、加えても結果が変わらない。
  */
 test("rangeFiltersMatch: 削除エントリを加えても結果が変わらない (PBT)", () => {
@@ -633,7 +633,7 @@ test("rangeFiltersMatch: 削除エントリを加えても結果が変わらな�
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.3.2:
+ * draft-ietf-moq-transport-23 §3.3.2:
  * 同一 SetID は AND で結合するため、同じ SetID の指定を足しても
  * 不通過が通過に変わることはない (単調)。
  */
@@ -670,7 +670,7 @@ test("rangeFiltersMatch: 同一 SetID の追加で通過に変わらない (PBT)
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.3.2:
+ * draft-ietf-moq-transport-23 §3.3.2:
  * 異なる SetID 間は OR で結合するため、新しい SetID の指定を足しても
  * 通過が不通過に変わることはない (単調)。
  */

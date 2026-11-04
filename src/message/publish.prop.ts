@@ -1,6 +1,6 @@
 /**
  * MOQT Publish Messages Property-Based Tests
- * draft-ietf-moq-transport-22 Section 9.8-9.9
+ * draft-ietf-moq-transport-23 Section 9.8-9.9
  */
 
 import { test, assert } from "vite-plus/test";
@@ -23,9 +23,9 @@ import {
 } from "./parameterArb";
 
 /**
- * draft-ietf-moq-transport-22:
+ * draft-ietf-moq-transport-23:
  * PUBLISH に Track Properties が追加された。
- * draft-ietf-moq-transport-22 Section 9 (Control Messages)
+ * draft-ietf-moq-transport-23 Section 9 (Control Messages)
  */
 test("Publish のエンコード・デコードがラウンドトリップする", () => {
   fc.assert(
@@ -80,7 +80,7 @@ test("Publish のエンコード・デコードがラウンドトリップする
 });
 
 /**
- * draft-ietf-moq-transport-22 Section 9.9:
+ * draft-ietf-moq-transport-23 Section 9.9:
  * PUBLISH_DONE は双方向ストリーム上で送信されるため Request ID フィールドはない。
  */
 test("PublishDone のエンコード・デコードがラウンドトリップする", () => {
@@ -110,7 +110,7 @@ test("PublishDone のエンコード・デコードがラウンドトリップ�
 });
 
 /**
- * draft-ietf-moq-transport-22 Section 8.5:
+ * draft-ietf-moq-transport-23 Section 8.5:
  * "If an endpoint receives a length exceeding the maximum, it MUST close
  *  the session with a PROTOCOL_VIOLATION"
  * Reason Phrase Length が上限 (1024) を超える PUBLISH_DONE を受信すると

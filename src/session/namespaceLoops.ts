@@ -10,9 +10,9 @@
  * 差 (ループ条件・追加メッセージ・先頭メッセージガード・done 時の後始末・
  * 読み取り失敗時の後始末) だけを create*StreamHandlers から注入する。
  *
- * draft-ietf-moq-transport-22 §9.15 (SUBSCRIBE_NAMESPACE)
- * draft-ietf-moq-transport-22 §9.18 (SUBSCRIBE_TRACKS)
- * draft-ietf-moq-transport-22 §9.14 (PUBLISH_NAMESPACE)
+ * draft-ietf-moq-transport-23 §9.15 (SUBSCRIBE_NAMESPACE)
+ * draft-ietf-moq-transport-23 §9.18 (SUBSCRIBE_TRACKS)
+ * draft-ietf-moq-transport-23 §9.14 (PUBLISH_NAMESPACE)
  */
 
 import {
@@ -257,7 +257,7 @@ function namespaceInvokeCallbackQuiet(invoke: () => void): void {
 /**
  * namespace 系ストリームの送信方向を FIN で閉じる (失敗は無視)
  *
- * draft-ietf-moq-transport-22 §6.4.2.2:
+ * draft-ietf-moq-transport-23 §6.4.2.2:
  * "A FIN sent by the responder after its response and any subsequent messages
  *  for the request signals that the request is complete; if it has not already
  *  done so, the requester SHOULD then send a FIN on its direction, gracefully
@@ -281,11 +281,11 @@ async function namespaceCloseWriterQuiet(
 /**
  * 確立前に要求が失敗したとき、専用ストリームの両方向を閉じる
  *
- * draft-ietf-moq-transport-22 §6.4.2.2 (Graceful Request Stream Closure):
+ * draft-ietf-moq-transport-23 §6.4.2.2 (Graceful Request Stream Closure):
  * "An endpoint SHOULD send a FIN promptly after a message when it has nothing
  *  further to send on that direction and will not need to respond to a future
  *  REQUEST_UPDATE."
- * draft-ietf-moq-transport-22 §6.4.2.3 (Request Cancellation and Rejection):
+ * draft-ietf-moq-transport-23 §6.4.2.3 (Request Cancellation and Rejection):
  * "Implementations cancel a request by abruptly terminating any directions of
  *  the stream that are still open, using RESET_STREAM for a direction they are
  *  sending and STOP_SENDING for a direction they are receiving."
@@ -312,7 +312,7 @@ async function namespaceCloseRequestStreamQuiet(
 /**
  * SUBSCRIBE_NAMESPACE の active namespace を追跡する
  *
- * draft-ietf-moq-transport-22 §9.15:
+ * draft-ietf-moq-transport-23 §9.15:
  * NAMESPACE 受信で active に追加し、NAMESPACE_DONE 受信で削除する。
  * ストリームの FIN / RESET 検出時に emitAll() で残りへ NAMESPACE_DONE を補完する。
  * 二重補完は emitted フラグで防ぐ。
@@ -421,7 +421,7 @@ function createNamespaceActiveTracker(
  * 確立前 GOAWAY でマイグレーション扱いになったリクエストで、
  * 当該メッセージを処理せず読み飛ばすべきかを判定する
  *
- * draft-ietf-moq-transport-22 §9.2:
+ * draft-ietf-moq-transport-23 §9.2:
  * 2 通目 GOAWAY の検出のため読み取りは継続し、それ以外のメッセージは無視する。
  */
 function namespaceShouldSkipAfterMigration(requestMigrated: boolean, messageType: number): boolean {
@@ -440,7 +440,7 @@ function namespaceShouldSkipAfterMigration(requestMigrated: boolean, messageType
  * 確立前の検証失敗は呼び出し元 Promise を reject してから閉じる
  * (PUBLISH 応答経路と同一パターン)。
  *
- * @param contextName - 検証コンテキスト名。draft-ietf-moq-transport-22 §1.5 の
+ * @param contextName - 検証コンテキスト名。draft-ietf-moq-transport-23 §1.5 の
  *   REQUEST_OK の別名 (SUBSCRIBE_NAMESPACE_OK / SUBSCRIBE_TRACKS_OK) をそのまま
  *   使う。ワイヤ上はどちらも REQUEST_OK (Type 0x07) である
  * @returns 継続可なら true、違反で閉じたなら false (呼び出し側は return する)
@@ -480,7 +480,7 @@ function namespaceValidateInitialOk(
  * - 確立前: 応答未達の reject (確立前 GOAWAY 済みなら上書きしない)
  * - 確立後: 保留中の REQUEST_UPDATE を失敗させる
  * - active namespace への NAMESPACE_DONE 補完
- *   (draft-ietf-moq-transport-22 §4.2.2 (Namespace Subscription State Management):
+ *   (draft-ietf-moq-transport-23 §4.2.2 (Namespace Subscription State Management):
  *   "When a subscriber receives a stream reset or FIN on a SUBSCRIBE_NAMESPACE response
  *    stream, it SHOULD treat this as though each active namespace received a
  *    NAMESPACE_DONE." / §9.15 (NAMESPACE_DONE))
@@ -502,7 +502,7 @@ async function namespaceHandleNamespaceStreamDone(
       reject(new Error("stream closed before receiving response"));
     }
   } else {
-    // draft-ietf-moq-transport-22 §9.5:
+    // draft-ietf-moq-transport-23 §9.5:
     // 応答を待たずにストリームが閉じた場合は保留中の更新を暗黙の失敗とする
     handleNamespaceRequestUpdateStreamClosed(session, requestId, subscription);
   }
@@ -610,7 +610,7 @@ export function rejectPendingNamespaceUpdates(
 /**
  * namespace 系ループの REQUEST_OK を処理する
  *
- * draft-ietf-moq-transport-22 §9.3 (REQUEST_OK):
+ * draft-ietf-moq-transport-23 §9.3 (REQUEST_OK):
  * Track Properties が空必須のメッセージ (PUBLISH_OK / REQUEST_UPDATE_OK /
  * SUBSCRIBE_NAMESPACE_OK / PUBLISH_NAMESPACE_OK) で Track Properties を受信したら
  * INVALID_FIELD でセッションを閉じる MUST。未知 Mandatory Track Property
@@ -660,7 +660,7 @@ function namespaceHandleRequestOkMessage(
     return "closed";
   }
   if (resolved) {
-    // draft-ietf-moq-transport-22 §9.5.2 (Updating Namespace Subscriptions):
+    // draft-ietf-moq-transport-23 §9.5.2 (Updating Namespace Subscriptions):
     // 確立後の REQUEST_OK は REQUEST_UPDATE への応答 (REQUEST_UPDATE_OK)
     if (
       !handleNamespaceRequestUpdateOk(
@@ -677,7 +677,7 @@ function namespaceHandleRequestOkMessage(
     return "continue";
   }
   // 初期 OK のパラメータスコープ / Track Properties 検証
-  // (draft-ietf-moq-transport-22 §9.20.1 / §9.3)。SUBSCRIBE_TRACKS_OK は §9.3 の
+  // (draft-ietf-moq-transport-23 §9.19.1 / §9.3)。SUBSCRIBE_TRACKS_OK は §9.3 の
   // 空必須一覧に含まれないため Track Properties を検証しない。
   const contextName = streamKind === "namespace" ? "SUBSCRIBE_NAMESPACE_OK" : "SUBSCRIBE_TRACKS_OK";
   if (
@@ -697,7 +697,7 @@ function namespaceHandleRequestOkMessage(
 /**
  * Track Properties が空必須の REQUEST_OK をデコードする (確立前の経路用)
  *
- * draft-ietf-moq-transport-22 §9.3 (REQUEST_OK):
+ * draft-ietf-moq-transport-23 §9.3 (REQUEST_OK):
  * Track Properties が空必須のメッセージで Track Properties を受信したら
  * INVALID_FIELD でセッションを閉じる MUST。未知 Mandatory Track Property
  * (0x4000-0x7FFF) は decodeRequestOkPayload が MalformedTrackError を throw するため、
@@ -734,7 +734,7 @@ export { REQUEST_UPDATE_STREAM_CLOSED_MESSAGE } from "./errors";
 /**
  * 確立後の REQUEST_OK (REQUEST_UPDATE 応答) を処理する
  *
- * draft-ietf-moq-transport-22 §9.5.2 (Updating Namespace Subscriptions):
+ * draft-ietf-moq-transport-23 §9.5.2 (Updating Namespace Subscriptions):
  * 確立後の REQUEST_OK は REQUEST_UPDATE への応答 (REQUEST_UPDATE_OK) であり、
  * 保留中の更新を解決して新 prefix をサブスクリプション状態へ反映する。
  *
@@ -747,7 +747,7 @@ export { REQUEST_UPDATE_STREAM_CLOSED_MESSAGE } from "./errors";
  *   汎用 reject で違反エラーが上書きされる)
  *
  * @param onPrefixApplied - 新 prefix を反映した直後に呼ばれるコールバック。
- *   draft-ietf-moq-transport-22 §9.5.2:
+ *   draft-ietf-moq-transport-23 §9.5.2:
  *   "NAMESPACE and NAMESPACE_DONE messages following the REQUEST_OK will contain
  *    Track Namespace suffixes relative to the updated prefix."
  *   SUBSCRIBE_NAMESPACE ループは NAMESPACE_DONE の重複検証キーを新 prefix 基準に
@@ -791,7 +791,7 @@ function handleNamespaceRequestUpdateOk(
     "REQUEST_UPDATE_OK",
   );
   if (trackPropertiesError !== null) {
-    // draft-ietf-moq-transport-22 §9.3 (REQUEST_OK):
+    // draft-ietf-moq-transport-23 §9.3 (REQUEST_OK):
     // REQUEST_UPDATE_OK の Track Properties は空が必須であり、非空は
     // INVALID_FIELD でセッションを閉じる MUST。スコープ違反と同じ順序に揃える。
     rejectPendingNamespaceUpdates(session, requestId, subscription, trackPropertiesError);
@@ -811,12 +811,12 @@ function handleNamespaceRequestUpdateOk(
 /**
  * 確立後の REQUEST_ERROR (REQUEST_UPDATE の失敗応答) を処理する
  *
- * draft-ietf-moq-transport-22 §9.5.2:
+ * draft-ietf-moq-transport-23 §9.5.2:
  * 確立後の REQUEST_ERROR は REQUEST_UPDATE の失敗応答であり、
  * 保留中の更新をすべて reject する (coalescing 対応)。prefix は反映せず
  * pendingPrefix をクリアする。
  *
- * draft-ietf-moq-transport-22 §9.5.1:
+ * draft-ietf-moq-transport-23 §9.5.1:
  * "When a REQUEST_UPDATE fails for a SUBSCRIBE_NAMESPACE, SUBSCRIBE_TRACKS or
  *  PUBLISH_NAMESPACE, the responder MUST close the bidi stream"
  * に従い、ピアがストリームを閉じるまで読み取りを継続する (done 検出でループが
@@ -852,7 +852,7 @@ function handleNamespaceRequestUpdateError(
 /**
  * ストリームクローズ (done) 時の保留中 REQUEST_UPDATE を処理する
  *
- * draft-ietf-moq-transport-22 §9.5.1:
+ * draft-ietf-moq-transport-23 §9.5.1:
  * REQUEST_UPDATE 失敗時はピアが bidi ストリームを閉じるため、応答
  * (REQUEST_OK / REQUEST_ERROR) を待たずに閉じた場合は保留中の更新を
  * 暗黙の失敗として reject する。
@@ -884,7 +884,7 @@ interface NamespaceLoopProgress {
   /** 初期 REQUEST_OK を受理して購読 / 公開を確立したか */
   resolved: boolean;
   /**
-   * draft-ietf-moq-transport-22 §9.2:
+   * draft-ietf-moq-transport-23 §9.2:
    * GOAWAY 受信後も読み取りを継続して 2 通目以降の GOAWAY を検出するための
    * フラグ。GOAWAY 受信時は state 遷移をピアの FIN 検出時 (ループ自然終了時)
    * まで遅延するため、メッセージ処理判断専用に使う。
@@ -966,7 +966,7 @@ interface NamespaceLoopHandlers<S> {
 /**
  * namespace 系 3 ループ共通の受信ループ
  *
- * draft-ietf-moq-transport-22 §9.2:
+ * draft-ietf-moq-transport-23 §9.2:
  * GOAWAY は 3 ループで完全に同一の処理 (確立前はマイグレーション扱いで reject し
  * 読み取りを継続、確立後は送信方向を FIN して読み取りを継続、重複は
  * UNEXPECTED_MESSAGE) のため共通ループが受け持つ。REQUEST_OK / REQUEST_ERROR と
@@ -1108,7 +1108,7 @@ async function namespaceHandleGoawayStep<S>(
 /**
  * namespace / tracks 共通の REQUEST_ERROR ケース
  *
- * draft-ietf-moq-transport-22 §9.2:
+ * draft-ietf-moq-transport-23 §9.2:
  * GOAWAY 受信後の REQUEST_ERROR は無視して読み取りを継続する (spurious
  * UNEXPECTED_MESSAGE「received REQUEST_ERROR after REQUEST_OK」を防ぐ)。
  * §9.5.2: 確立後の REQUEST_ERROR は REQUEST_UPDATE の失敗応答。
@@ -1157,11 +1157,11 @@ async function namespaceHandleSubscriptionRequestError<
 /**
  * namespace / tracks 共通の読み取り失敗時の後始末
  *
- * draft-ietf-moq-transport-22 §9.2:
+ * draft-ietf-moq-transport-23 §9.2:
  * GOAWAY 受信後 (goawayReceived) は state が active のままのため、
  * spurious error 通知を抑止する。
  *
- * draft-ietf-moq-transport-22 §9.5.1:
+ * draft-ietf-moq-transport-23 §9.5.1:
  * RESET_STREAM 等で read が失敗した場合も、ピアによるストリームクローズの
  * 一種として保留中の更新を暗黙の失敗として reject する。goawayReceived の
  * 有無に関わらず実行する (reject しないと update() が永不解決になる。
@@ -1200,7 +1200,7 @@ function namespaceRejectUnestablishedOnStreamDone<S>(ctx: NamespaceLoopContext<S
 /**
  * SUBSCRIBE_NAMESPACE 専用ストリームの受信ループ
  *
- * draft-ietf-moq-transport-22 §9.15 (SUBSCRIBE_NAMESPACE):
+ * draft-ietf-moq-transport-23 §9.15 (SUBSCRIBE_NAMESPACE):
  * REQUEST_OK / REQUEST_ERROR、NAMESPACE、NAMESPACE_DONE のみを処理する。
  */
 /**
@@ -1217,7 +1217,7 @@ function createNamespaceStreamHandlers(
   const seenNamespaceSuffixes = new Set<string>();
   const namespaceSuffixKey = (suffix: string[]): string => JSON.stringify(suffix);
   // 有効な名前空間 (NAMESPACE 受信済みで NAMESPACE_DONE 未受信) を追跡する。
-  // draft-ietf-moq-transport-22 §9.15:
+  // draft-ietf-moq-transport-23 §9.15:
   // "When a subscriber receives a stream reset or FIN on a SUBSCRIBE_NAMESPACE
   //  response stream, it SHOULD treat this as though each active namespace
   //  received a NAMESPACE_DONE."
@@ -1235,7 +1235,7 @@ function createNamespaceStreamHandlers(
     validateFirstMessage: (ctx, messageType) =>
       namespaceValidateFirstMessage(ctx.progress.resolved, messageType, "namespace"),
     onStreamDone: async (ctx) => {
-      // draft-ietf-moq-transport-22 §9.15 / §6.4.2.2:
+      // draft-ietf-moq-transport-23 §9.15 / §6.4.2.2:
       // ピアの FIN を検出したら active namespace に NAMESPACE_DONE を補完し、
       // 自方向も FIN で閉じて graceful closure を完了する。
       await namespaceHandleNamespaceStreamDone(
@@ -1249,7 +1249,7 @@ function createNamespaceStreamHandlers(
       );
     },
     onRequestOk: async (ctx, payload) => {
-      // draft-ietf-moq-transport-22 §9.3 (REQUEST_OK) / §9.5.2:
+      // draft-ietf-moq-transport-23 §9.3 (REQUEST_OK) / §9.5.2:
       // SUBSCRIBE_NAMESPACE_OK と確立後の REQUEST_UPDATE_OK は Track Properties が
       // 空必須であり、未知 Mandatory Track Property を受信したら INVALID_FIELD で
       // セッションを閉じる MUST (処理はヘルパーに集約する)。
@@ -1341,7 +1341,7 @@ function createNamespaceStreamHandlers(
         }
 
         default:
-          // draft-ietf-moq-transport-22 §9.5 (REQUEST_UPDATE):
+          // draft-ietf-moq-transport-23 §9.5 (REQUEST_UPDATE):
           // "The sender of a request (SUBSCRIBE, PUBLISH, FETCH, PUBLISH_NAMESPACE,
           //  SUBSCRIBE_NAMESPACE, SUBSCRIBE_TRACKS) can later send REQUEST_UPDATE on
           //  the same bidi stream as the request to modify it. ... An endpoint that
@@ -1363,7 +1363,7 @@ function createNamespaceStreamHandlers(
       }
     },
     onReadError: (ctx, error) => {
-      // draft-ietf-moq-transport-22 §9.15:
+      // draft-ietf-moq-transport-23 §9.15:
       // RESET_STREAM 等の読み取り失敗も FIN と同様に、active namespace に
       // NAMESPACE_DONE を補完したものとして扱う。
       if (ctx.target.state === "active") {
@@ -1377,7 +1377,7 @@ function createNamespaceStreamHandlers(
 /**
  * SUBSCRIBE_NAMESPACE 専用ストリームの受信ループ
  *
- * draft-ietf-moq-transport-22 §9.15 (SUBSCRIBE_NAMESPACE):
+ * draft-ietf-moq-transport-23 §9.15 (SUBSCRIBE_NAMESPACE):
  * REQUEST_OK / REQUEST_ERROR、NAMESPACE、NAMESPACE_DONE のみを処理する。
  */
 export async function namespaceStartNamespaceStreamLoop(
@@ -1428,13 +1428,13 @@ function createTracksStreamHandlers(
       namespaceValidateFirstMessage(ctx.progress.resolved, messageType, "tracks"),
     onStreamDone: async (ctx) => {
       if (ctx.progress.resolved) {
-        // draft-ietf-moq-transport-22 §9.5:
+        // draft-ietf-moq-transport-23 §9.5:
         // 応答を待たずにストリームが閉じた場合は保留中の更新を暗黙の失敗とする
         handleNamespaceRequestUpdateStreamClosed(ctx.session, ctx.requestId, ctx.target);
       } else {
         namespaceRejectUnestablishedOnStreamDone(ctx);
       }
-      // draft-ietf-moq-transport-22 §6.4.2.2:
+      // draft-ietf-moq-transport-23 §6.4.2.2:
       // ピアの FIN を検出したら自方向も FIN で閉じて graceful closure を完了する。
       if (ctx.target.state === "active") {
         await namespaceCloseWriterQuiet(ctx.writer);
@@ -1499,7 +1499,7 @@ function createTracksStreamHandlers(
 /**
  * SUBSCRIBE_TRACKS 専用ストリームの受信ループ
  *
- * draft-ietf-moq-transport-22 §3.6 / §9.18 (SUBSCRIBE_TRACKS):
+ * draft-ietf-moq-transport-23 §3.6 / §9.18 (SUBSCRIBE_TRACKS):
  * REQUEST_OK / REQUEST_ERROR、PUBLISH_SKIPPED のみを処理する。
  */
 export async function namespaceStartTracksStreamLoop(
@@ -1552,12 +1552,12 @@ function createPublicationStreamHandlers(
     skipMessagesWhenInactive: false,
     onStreamDone: async (ctx) => {
       namespaceRejectUnestablishedOnStreamDone(ctx);
-      // draft-ietf-moq-transport-22 §6.4.2.2:
+      // draft-ietf-moq-transport-23 §6.4.2.2:
       // ピアの FIN を検出したら自方向も FIN で閉じて graceful closure を完了する。
       await namespaceCloseWriterQuiet(ctx.writer);
     },
     onRequestOk: async (ctx, payload) => {
-      // draft-ietf-moq-transport-22 §9.3 (REQUEST_OK):
+      // draft-ietf-moq-transport-23 §9.3 (REQUEST_OK):
       // PUBLISH_NAMESPACE_OK は Track Properties が空必須であり、未知 Mandatory
       // Track Property を受信したら INVALID_FIELD でセッションを閉じる MUST
       // (publication ストリームは REQUEST_UPDATE を扱わないため確立前のみ)。
@@ -1580,7 +1580,7 @@ function createPublicationStreamHandlers(
         );
         return "return";
       }
-      // draft-ietf-moq-transport-22 §9.20.1 (Parameter Scope):
+      // draft-ietf-moq-transport-23 §9.19.1 (Parameter Scope):
       // 初期 PUBLISH_NAMESPACE_OK に出現できるパラメータ以外は
       // INVALID_PARAMETER でセッションを閉じる。確立前の検証失敗は
       // 呼び出し元の Promise を reject してから閉じる
@@ -1594,7 +1594,7 @@ function createPublicationStreamHandlers(
         namespaceRejectAndCloseWithError(ctx.session, ctx.reject, scopeError);
         return "return";
       }
-      // draft-ietf-moq-transport-22 §9.3 (REQUEST_OK):
+      // draft-ietf-moq-transport-23 §9.3 (REQUEST_OK):
       // Track Properties は PUBLISH_NAMESPACE_OK では空が必須であり、
       // 非空は INVALID_FIELD でセッションを閉じる。確立前の検証失敗は
       // 呼び出し元の Promise を reject してから閉じる。
@@ -1612,7 +1612,7 @@ function createPublicationStreamHandlers(
       return "continue";
     },
     onRequestError: async (ctx, payload) => {
-      // draft-ietf-moq-transport-22 §9.2:
+      // draft-ietf-moq-transport-23 §9.2:
       // GOAWAY 受信後の REQUEST_ERROR は無視して読み取りを継続する
       if (ctx.progress.goawayReceived) {
         return "continue";
@@ -1647,7 +1647,7 @@ function createPublicationStreamHandlers(
       return "return";
     },
     onReadError: (ctx, error) => {
-      // draft-ietf-moq-transport-22 §9.2:
+      // draft-ietf-moq-transport-23 §9.2:
       // GOAWAY 受信後 (goawayReceived) は state が active のままのため、
       // spurious error 通知を抑止する
       if (ctx.target.state !== "closed" && !ctx.progress.goawayReceived) {
@@ -1676,7 +1676,7 @@ function createPublicationStreamHandlers(
 /**
  * PUBLISH_NAMESPACE 専用ストリームの受信ループ
  *
- * draft-ietf-moq-transport-22 Section 9.14 (PUBLISH_NAMESPACE):
+ * draft-ietf-moq-transport-23 Section 9.14 (PUBLISH_NAMESPACE):
  * 応答は REQUEST_OK / REQUEST_ERROR のみが想定される。
  */
 export async function namespaceStartPublicationStreamLoop(

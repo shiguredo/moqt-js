@@ -1,7 +1,7 @@
 /**
  * Parameter Scope 検証
  *
- * draft-ietf-moq-transport-22 §9.20.1 (Parameter Scope) に基づき、
+ * draft-ietf-moq-transport-23 §9.19.1 (Parameter Scope) に基づき、
  * 各メッセージ種別ごとに許可パラメータ集合を定義し、
  * 受信時にパラメータ型をチェックする。
  */
@@ -78,7 +78,7 @@ export const TRACK_STATUS_OK_ALLOWED_PARAMS = new Set<number>([
 /**
  * REQUEST_OK (SUBSCRIBE_NAMESPACE_OK / SUBSCRIBE_TRACKS_OK / PUBLISH_NAMESPACE_OK) の許可パラメータ
  *
- * draft-ietf-moq-transport-22 §9.20.16 (EXPIRES Parameter):
+ * draft-ietf-moq-transport-23 §9.19.16 (EXPIRES Parameter):
  * "It MAY appear in SUBSCRIBE_OK, PUBLISH, PUBLISH_OK, SUBSCRIBE_NAMESPACE_OK,
  *  SUBSCRIBE_TRACKS_OK, PUBLISH_NAMESPACE_OK, or REQUEST_UPDATE_OK."
  */
@@ -111,24 +111,24 @@ export const NAMESPACE_ALLOWED_PARAMS = new Set<number>();
 /**
  * subscription 系 REQUEST_UPDATE の許可パラメータ
  *
- * draft-ietf-moq-transport-22 §9.20 の各パラメータ定義が、通常の
+ * draft-ietf-moq-transport-23 §9.19 の各パラメータ定義が、通常の
  * subscription (SUBSCRIBE / PUBLISH / FETCH) を対象とする REQUEST_UPDATE で
  * 出現を許可する型の集合である。
  *
- * - AUTHORIZATION_TOKEN (§9.20.2): REQUEST_UPDATE に出現可能。
- * - OBJECT_DELIVERY_TIMEOUT (§9.20.4) / SUBGROUP_DELIVERY_TIMEOUT (§9.20.3):
+ * - AUTHORIZATION_TOKEN (§9.19.2): REQUEST_UPDATE に出現可能。
+ * - OBJECT_DELIVERY_TIMEOUT (§9.19.4) / SUBGROUP_DELIVERY_TIMEOUT (§9.19.3):
  *   REQUEST_UPDATE に出現可能。
- * - SUBSCRIBER_PRIORITY (§9.20.7): REQUEST_UPDATE (for a subscription or FETCH)。
+ * - SUBSCRIBER_PRIORITY (§9.19.7): REQUEST_UPDATE (for a subscription or FETCH)。
  * - PAUSED (§9.19.18): REQUEST_UPDATE (for a subscription or a
  *   SUBSCRIBE_TRACKS request)。
- * - LOCATION_FILTER (§9.20.9): REQUEST_UPDATE (for a subscription)。
- * - NEW_GROUP_REQUEST (§9.20.19): REQUEST_UPDATE for a subscription。
- * - FILL_PARAMETERS (§9.20.15): REQUEST_UPDATE (for a subscription)。
+ * - LOCATION_FILTER (§9.19.9): REQUEST_UPDATE (for a subscription)。
+ * - NEW_GROUP_REQUEST (§9.19.19): REQUEST_UPDATE for a subscription。
+ * - FILL_PARAMETERS (§9.19.15): REQUEST_UPDATE (for a subscription)。
  * - Range Filters (§3.3.2): SUBGROUP_FILTER / OBJECTID_FILTER /
  *   PRIORITY_FILTER / OBJECT_PROPERTY_FILTER は REQUEST_UPDATE (on a
  *   subscription, from the subscriber only)。
  *
- * TRACK_NAMESPACE_PREFIX (§9.20.20) は namespace 系
+ * TRACK_NAMESPACE_PREFIX (§9.19.20) は namespace 系
  * (SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS) の REQUEST_UPDATE にのみ出現可能な
  * ため、本集合には含めない。通常の PUBLISH / SUBSCRIBE 系 REQUEST_UPDATE で
  * 受信した場合は §9.19.1 の MUST により INVALID_PARAMETER でセッションを
@@ -145,9 +145,9 @@ export const REQUEST_UPDATE_ALLOWED_PARAMS = new Set<number>([
   MessageParameterType.PAUSED,
   MessageParameterType.LOCATION_FILTER,
   MessageParameterType.NEW_GROUP_REQUEST,
-  // draft-ietf-moq-transport-22 §9.20.15: FILL_PARAMETERS (subscription の REQUEST_UPDATE)
+  // draft-ietf-moq-transport-23 §9.19.15: FILL_PARAMETERS (subscription の REQUEST_UPDATE)
   MessageParameterType.FILL_PARAMETERS,
-  // draft-ietf-moq-transport-22 §3.3.2: Range Filters (subscription の REQUEST_UPDATE)
+  // draft-ietf-moq-transport-23 §3.3.2: Range Filters (subscription の REQUEST_UPDATE)
   MessageParameterType.SUBGROUP_FILTER,
   MessageParameterType.OBJECTID_FILTER,
   MessageParameterType.PRIORITY_FILTER,
@@ -157,7 +157,7 @@ export const REQUEST_UPDATE_ALLOWED_PARAMS = new Set<number>([
 /**
  * namespace 系 REQUEST_UPDATE の許可パラメータ
  *
- * draft-ietf-moq-transport-22 §9.5 (REQUEST_UPDATE) の SUBSCRIBE_NAMESPACE /
+ * draft-ietf-moq-transport-23 §9.5 (REQUEST_UPDATE) の SUBSCRIBE_NAMESPACE /
  * SUBSCRIBE_TRACKS 向け一覧に対応する。
  * - SUBSCRIBE_NAMESPACE: AUTHORIZATION_TOKEN (§9.19.2) / TRACK_NAMESPACE_PREFIX (§9.19.20)
  * - SUBSCRIBE_TRACKS: AUTHORIZATION_TOKEN / PAUSED (§9.19.18) /

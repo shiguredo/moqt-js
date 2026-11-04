@@ -6,7 +6,7 @@
  * 短い slice / subarray を返さず宣言時点で拒否する
  * (切り詰めを黙って通すと、後続フィールドの解釈がずれて誤った値を受け入れる)。
  *
- * draft-ietf-moq-transport-22 §8.3:
+ * draft-ietf-moq-transport-23 §8.3:
  * "If a receiver understands a Type, and the following Value or Length/Value
  *  does not match the serialization defined by that Type, the receiver MUST
  *  close the session with error code MALFORMED_KEY_VALUE."

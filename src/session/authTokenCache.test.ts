@@ -1,7 +1,7 @@
 /**
  * session/authTokenCache.ts のテスト
  *
- * draft-ietf-moq-transport-22 §8.9 / §9.1.3 / §9.1.4 / §9.20.2 が定める
+ * draft-ietf-moq-transport-23 §8.9 / §9.1.3 / §9.1.4 / §9.19.2 が定める
  * 受信 Authorization Token キャッシュの登録・解決・退役と、SETUP 経路 /
  * メッセージパラメータ経路で異なる上限超過の扱いを検証する。
  */
@@ -49,7 +49,7 @@ test("AuthTokenCache: REGISTER で登録され、サイズは 16 バイト + Tok
   const result = cache.register(1n, 7n, new Uint8Array([1, 2, 3]));
 
   assert.deepEqual(result, { status: "registered" });
-  // draft-ietf-moq-transport-22 §9.1.3: token size = 16 + Token Value 長
+  // draft-ietf-moq-transport-23 §9.1.3: token size = 16 + Token Value 長
   assert.equal(cache.size, 16 + 3);
 });
 
@@ -67,7 +67,7 @@ test("AuthTokenCache: 同一 Alias の再 REGISTER は duplicate-alias になり
   cache.register(5n, 1n, new Uint8Array([9]));
   const before = cache.size;
 
-  // draft-ietf-moq-transport-22 §8.9: 一度登録した Alias は delete されるまで再登録できない
+  // draft-ietf-moq-transport-23 §8.9: 一度登録した Alias は delete されるまで再登録できない
   const result = cache.register(5n, 2n, new Uint8Array([7, 7]));
 
   assert.deepEqual(result, { status: "duplicate-alias" });
@@ -580,7 +580,7 @@ test("processMessageAuthorizationTokens: 未登録 Alias の参照を検出し�
 
 // ============================================================================
 // 送信側の正規化
-// draft-ietf-moq-transport-22 §8.9 (Authorization Token Compression) /
+// draft-ietf-moq-transport-23 §8.9 (Authorization Token Compression) /
 // §9.1.3 (MAX_AUTH_TOKEN_CACHE_SIZE) / §9.1.4 (AUTHORIZATION TOKEN)
 // ============================================================================
 
@@ -592,7 +592,7 @@ const setupRegister: AuthorizationToken = {
 };
 
 /**
- * draft-ietf-moq-transport-22 §9.1.3 / §9.1.4:
+ * draft-ietf-moq-transport-23 §9.1.3 / §9.1.4:
  * SETUP の登録は上限を超えてもセッションを失敗させない (§8.9 の
  * AUTH_TOKEN_CACHE_OVERFLOW は SETUP 以外が対象)。送信側は 16 バイト +
  * Token Value 長がピアの上限に収まるかで登録成否を判定する。
@@ -627,7 +627,7 @@ test("setupTokenRegistration: ピアの上限とエントリサイズで登録�
 });
 
 /**
- * draft-ietf-moq-transport-22 §8.9:
+ * draft-ietf-moq-transport-23 §8.9:
  * "Once a Token Alias has been registered, it cannot be re-registered by the
  *  same endpoint in the Session without first being deleted." 登録に成功した
  * エイリアスの再 REGISTER は DUPLICATE_AUTH_TOKEN_ALIAS になるため USE_ALIAS に
@@ -653,7 +653,7 @@ test("normalizeAuthorizationTokenForSend: 登録成功した Alias の再 REGIST
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.1.4:
+ * draft-ietf-moq-transport-23 §9.1.4:
  * SETUP の登録に失敗した Alias はピアに登録されていないため、値を手元に持つ
  * 送信側は USE_VALUE に変換する (purge)。
  */
@@ -680,7 +680,7 @@ test("normalizeAuthorizationTokenForSend: 登録失敗した Alias は USE_VALUE
 });
 
 /**
- * draft-ietf-moq-transport-22 §8.9 / §9.1.4:
+ * draft-ietf-moq-transport-23 §8.9 / §9.1.4:
  * 正規化の対象は自 SETUP の Alias だけである。USE_VALUE と別 Alias の
  * REGISTER / USE_ALIAS はそのまま送る。
  */

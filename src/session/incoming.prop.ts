@@ -1,7 +1,7 @@
 /**
  * session/incoming.ts の Property-Based Tests
  *
- * draft-ietf-moq-transport-22 §6.3 (Session initialization) / §6.4.2.1 (Request ID) /
+ * draft-ietf-moq-transport-23 §6.3 (Session initialization) / §6.4.2.1 (Request ID) /
  * §9.12 (FETCH_OK) / §10.8 (Prior Group ID Gap) / §10.9 (Prior Object ID Gap) /
  * §11.2.1 (Object Datagram) / §11.3 (Subgroup Streams) / §11.4.1 (Fetch Streams) /
  * §11.5.2 (Padding Datagrams) / §12.1 (Malformed Track)
@@ -121,13 +121,13 @@ function copyBytes(bytes: Uint8Array): Uint8Array {
 
 // ============================================================================
 // 受信 bidi ストリーム先頭メッセージの 3 分類
-// draft-ietf-moq-transport-22 §6.3 (Session initialization)
+// draft-ietf-moq-transport-23 §6.3 (Session initialization)
 // ============================================================================
 
 /**
  * 仕様が受信 bidi ストリームの先頭として許可する 7 種と分類の対応表
  *
- * draft-ietf-moq-transport-22 §6.3:
+ * draft-ietf-moq-transport-23 §6.3:
  * 「Bidirectional streams MUST NOT begin with any other message type unless
  *  negotiated. If they do, the peer MUST close the Session with a
  *  PROTOCOL_VIOLATION.」
@@ -197,7 +197,7 @@ test("incomingClassifyFirstBidiMessage: 任意の型値の分類が 7 種対応�
 
 // ============================================================================
 // 受信 Request ID のパリティ・重複検証
-// draft-ietf-moq-transport-22 §6.4.2.1 (Request ID)
+// draft-ietf-moq-transport-23 §6.4.2.1 (Request ID)
 // ============================================================================
 
 /**
@@ -330,7 +330,7 @@ test("incomingValidateRequestId: 受理した Request ID は再出現で必ず�
 
 // ============================================================================
 // Subgroup オブジェクト処理の委譲
-// draft-ietf-moq-transport-22 §11.3 (Subgroup Streams) / §10.8 / §10.9
+// draft-ietf-moq-transport-23 §11.3 (Subgroup Streams) / §10.8 / §10.9
 // ============================================================================
 
 /** Subgroup 経路で観測するセッション状態 */
@@ -350,9 +350,9 @@ function createSubgroupSession(): SessionInternal & SubgroupSessionState {
     callbacks: { debug: () => {} },
     statsObjectsReceivedViaSubscribe: 0,
     statsBytesReceivedViaSubscribe: 0,
-    // draft-ietf-moq-transport-22 §12.1 条件 4: Group 単位の最終 Object 追跡
+    // draft-ietf-moq-transport-23 §12.1 条件 4: Group 単位の最終 Object 追跡
     receivedEndOfGroupFinalObjectIds: new Map<bigint, Map<bigint, bigint>>(),
-    // draft-ietf-moq-transport-22 §10.8 / §10.9: Track 単位の Prior ID Gap 追跡
+    // draft-ietf-moq-transport-23 §10.8 / §10.9: Track 単位の Prior ID Gap 追跡
     priorGapTrackingByTrack: new Map(),
   } as unknown as SessionInternal & SubgroupSessionState;
 }
@@ -516,7 +516,7 @@ test("incomingProcessSubgroupObjects: 一括 feed と 1 バイトずつ feed で
       const splitResult = feedSubgroupByteWise(splitSession, wire, [splitSubscriber], header);
 
       // 期待値: 生成した Object ID / payload が入力順に配送される。
-      // draft-ietf-moq-transport-22 §10.4: Subgroup Header で Priority が省略された
+      // draft-ietf-moq-transport-23 §10.4: Subgroup Header で Priority が省略された
       // Object は購読の既定値 (Track Property 未受信時の 128) を継承する。継承は
       // 配送前 (SubscriberImpl) に行われるため、観測値は 128 になる
       const expected: DeliveredObjectSummary[] = stream.objects.map((object) => ({
@@ -625,7 +625,7 @@ test("incomingProcessSubgroupObjects: 購読の比較キーで Track 単位の�
 
 // ============================================================================
 // Fetch オブジェクト処理の委譲
-// draft-ietf-moq-transport-22 §11.4.1 (Fetch Streams) / §10.8 / §10.9
+// draft-ietf-moq-transport-23 §11.4.1 (Fetch Streams) / §10.8 / §10.9
 // ============================================================================
 
 /** Fetch 経路で観測するセッション状態 */
@@ -648,7 +648,7 @@ function createFetchSession(): SessionInternal & FetchSessionState {
     statsObjectsReceivedViaFill: 0,
     statsBytesReceivedViaFetch: 0,
     statsBytesReceivedViaFill: 0,
-    // draft-ietf-moq-transport-22 §10.8 / §10.9: Track 単位の Prior ID Gap 追跡
+    // draft-ietf-moq-transport-23 §10.8 / §10.9: Track 単位の Prior ID Gap 追跡
     priorGapTrackingByTrack: new Map(),
   } as unknown as SessionInternal & FetchSessionState;
 }
@@ -1026,11 +1026,11 @@ test("incomingProcessFetchObjects: 呼び出し側が渡す比較キーごとに
 
 // ============================================================================
 // Object Datagram の配送
-// draft-ietf-moq-transport-22 §11.2.1 (Object Datagram) / §11.5.2 (Padding) /
+// draft-ietf-moq-transport-23 §11.2.1 (Object Datagram) / §11.5.2 (Padding) /
 // §10.8 / §10.9 / §12.1
 // ============================================================================
 
-/** PADDING datagram の Type (draft-ietf-moq-transport-22 §11.5.2) */
+/** PADDING datagram の Type (draft-ietf-moq-transport-23 §11.5.2) */
 const PADDING_DATAGRAM_TYPE = 0x132b3e29n;
 
 /** datagram 経路で観測するセッション状態 */
@@ -1068,9 +1068,9 @@ function createDatagramSession(): {
     pendingFetch: new Map(),
     pendingRequestUpdate: new Map(),
     fillFetchTargets: new Map(),
-    // draft-ietf-moq-transport-22 §12.1 条件 4: Group 単位の最終 Object 追跡
+    // draft-ietf-moq-transport-23 §12.1 条件 4: Group 単位の最終 Object 追跡
     receivedEndOfGroupFinalObjectIds: new Map<bigint, Map<bigint, bigint>>(),
-    // draft-ietf-moq-transport-22 §10.8 / §10.9: Track 単位の Prior ID Gap 追跡
+    // draft-ietf-moq-transport-23 §10.8 / §10.9: Track 単位の Prior ID Gap 追跡
     priorGapTrackingByTrack: new Map(),
     closeWithError: (error: SessionError) => {
       closedErrors.push(error);
@@ -1267,7 +1267,7 @@ test("incomingHandleDatagram: 通知済み gap 内の datagram で購読を canc
         assert.instanceOf(notified, MalformedTrackError);
         assert.equal(subscriber.state, "closed");
         assert.equal((session.subscribersByAlias.get(trackAlias) ?? []).length, 0);
-        // draft-ietf-moq-transport-22 §12.1: malformed track は Track 単位の失敗であり
+        // draft-ietf-moq-transport-23 §12.1: malformed track は Track 単位の失敗であり
         // セッションは閉じない
         assert.equal(closedErrors.length, 0);
 
@@ -1302,7 +1302,7 @@ test("incomingHandleDatagram: Padding datagram は配送も追跡更新もせず
       );
       session.subscribersByAlias.set(trackAlias, [subscriber]);
 
-      // draft-ietf-moq-transport-22 §11.5.2:
+      // draft-ietf-moq-transport-23 §11.5.2:
       // "The receiver MUST discard all data received in a padding datagram."
       // 後続バイトが何であっても配送も追跡更新もしない
       incomingHandleDatagram(
@@ -1319,7 +1319,7 @@ test("incomingHandleDatagram: Padding datagram は配送も追跡更新もせず
 
 // ============================================================================
 // Fetcher 登録待ち
-// draft-ietf-moq-transport-22 §9.12 (FETCH_OK)
+// draft-ietf-moq-transport-23 §9.12 (FETCH_OK)
 // ============================================================================
 
 /** fetcher 待機で観測するセッション状態 */

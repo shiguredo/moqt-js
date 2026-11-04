@@ -181,7 +181,7 @@ function recordMarkedNonExistentRange(
 
 /**
  * @param groupOrder - Group Order (GroupOrder.ASCENDING or GroupOrder.DESCENDING)
- *   draft-ietf-moq-transport-22 §11.4.1.1 / §9.20.8
+ *   draft-ietf-moq-transport-23 §11.4.1.1 / §9.19.8
  * @param priorGap - Track 単位の追跡対象。Prior ID Gap の 5 条件に加え、FETCH の
  *   End of Group / End of Track indicator が確定した終端の記録と検証、End of
  *   Non-Existent Range と暗黙 gap の非存在範囲の記録に使う。
@@ -292,7 +292,7 @@ export function processFetchObjects(
         continue;
       }
 
-      // draft-ietf-moq-transport-22 §10.8 / §10.9:
+      // draft-ietf-moq-transport-23 §10.8 / §10.9:
       // Prior Group ID Gap / Prior Object ID Gap のうち、同一 Track の複数 Object と
       // 過去の受信状態を必要とする条件を配送前に検証する。単一 Object の条件は
       // decodeFetchObjectFields が先に検証しており、ここでは重複して呼ばない。
@@ -322,7 +322,7 @@ export function processFetchObjects(
         }
       }
 
-      // draft-ietf-moq-transport-22 Section 11.1.1:
+      // draft-ietf-moq-transport-23 Section 11.1.1:
       // Fetch Object には Object Status が存在しないため NORMAL として扱う
       // exactOptionalPropertyTypes では optional な properties に undefined を渡せないため、
       // 値がある場合だけ載せる
@@ -400,13 +400,13 @@ export function processSubgroupObjects(
 } {
   let offset = 0;
   let currentPreviousObjectId = previousObjectId;
-  // draft-ietf-moq-transport-22 Section 11.3.1:
+  // draft-ietf-moq-transport-23 Section 11.3.1:
   // Subgroup ID = First Object ID の場合、最初のオブジェクトの Object ID を
   // Subgroup ID として使用する。呼び出し側で保持した値を優先し、
   // 未保持時のみヘッダ由来値から初期化する (feed 間の状態引き継ぎ)。
   // 同一ストリームの同一 header の連続 feed を前提とする。
   let currentResolvedSubgroupId = resolvedSubgroupId ?? header.subgroupId;
-  // draft-ietf-moq-transport-22 §12.1 条件 4:
+  // draft-ietf-moq-transport-23 §12.1 条件 4:
   // Object Status が END_OF_GROUP の Object は Group の最終 Object である。
   // 既知の最終 Object ID はセッションが Group 単位で保持し、呼び出し側から
   // 受け取る。これにより Subgroup ストリーム (呼び出し) をまたいだ追跡ができる。
@@ -419,7 +419,7 @@ export function processSubgroupObjects(
     // 仮引数 previousObjectId (バッチ先頭値) を使うとバッチ全体が先頭扱いになる。
     // 送信側 src/session/publish.ts の isFirstInSubgroup と対称。
     // 呼び出し側が previousObjectId を feed 間で引き継ぐことが前提。
-    // draft-ietf-moq-transport-22 §5.2 / §10.1 / §10.2:
+    // draft-ietf-moq-transport-23 §5.2 / §10.1 / §10.2:
     // 先頭オブジェクトのみ上書きし、先頭以外は無視する。
     const isFirstInSubgroup = currentPreviousObjectId < 0n;
     try {
@@ -454,16 +454,16 @@ export function processSubgroupObjects(
         );
       }
 
-      // draft-ietf-moq-transport-22 §10.8 / §10.9:
+      // draft-ietf-moq-transport-23 §10.8 / §10.9:
       // Prior Group ID Gap / Prior Object ID Gap のうち単一 Object で判定できる
       // malformed 条件 (gap が Group ID / Object ID より大きい) を検証する。
       assertPriorIdGapInObjectProperties(header.groupId, objectId, fields.properties);
 
-      // draft-ietf-moq-transport-22 §10.8 / §10.9:
+      // draft-ietf-moq-transport-23 §10.8 / §10.9:
       // Prior Group ID Gap / Prior Object ID Gap のうち、同一 Track の複数 Object と
       // 過去の受信状態を必要とする 5 条件を配送前に検証する。単一 Object の条件は
       // 上の assertPriorIdGapInObjectProperties が先に検証しており、重複して呼ばない。
-      // draft-ietf-moq-transport-22 §12.1 条件 4:
+      // draft-ietf-moq-transport-23 §12.1 条件 4:
       // "An Object is received in a Group whose Object ID is larger than the
       //  final Object in the Group. The final Object in a Group is the Object
       //  with Status END_OF_GROUP, or the last Object before a FIN in a
@@ -537,7 +537,7 @@ export function processSubgroupObjects(
         ...(fields.properties.length > 0 ? { properties: fields.properties } : {}),
       };
 
-      // draft-ietf-moq-transport-22 Section 5.2 / §10.1 / §10.2:
+      // draft-ietf-moq-transport-23 Section 5.2 / §10.1 / §10.2:
       // Object Property による delivery timeout の上書きは「subgroup の最初の
       // Object」にのみ適用され、それ以外の Object では ignore する
       // (PROTOCOL_VIOLATION にはしない)。§2.2 の FIRST_OBJECT ビット (0x40) は
@@ -558,7 +558,7 @@ export function processSubgroupObjects(
       stats.incrementObjectsReceived(true);
       stats.incrementBytesReceived(true, payload.byteLength);
 
-      // draft-ietf-moq-transport-22 §3.1: 同一 alias の全 subscription に配送
+      // draft-ietf-moq-transport-23 §3.1: 同一 alias の全 subscription に配送
       // (filter 再適用は各 handleObject 内)。
       // アプリ例外は当該 subscriber の error コールバックへ通知し、
       // 残りの配送と同一ストリームの後続処理を継続する。セッションは閉じない。

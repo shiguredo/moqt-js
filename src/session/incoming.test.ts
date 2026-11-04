@@ -51,7 +51,7 @@ import { recordFetchObjectEnd } from "./priorGapTracking";
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-22 §6.4.2.3 / §9.15:
+ * draft-ietf-moq-transport-23 §6.4.2.3 / §9.15:
  * REQUEST_ERROR を送信し、送信方向を FIN (writer.close()) で閉じ、受信方向を
  * cancel() で閉じることを検証する。
  */
@@ -285,7 +285,7 @@ test("incomingHandleFirstBidiMessage: 未対応リクエストの Full Track Nam
 });
 
 /**
- * draft-ietf-moq-transport-22 §1.6 (Modularity):
+ * draft-ietf-moq-transport-23 §1.6 (Modularity):
  * 「Limited endpoints SHOULD respond to any unsupported messages with the
  * appropriate NOT_SUPPORTED error code, rather than ignoring them.」
  * 未対応リクエストに REQUEST_ERROR (NOT_SUPPORTED) を応答して FIN で閉じ、
@@ -335,7 +335,7 @@ test("incomingHandleFirstBidiMessage: 未対応リクエストに NOT_SUPPORTED 
 });
 
 /**
- * draft-ietf-moq-transport-22 §2.4.3 (Reserved Namespaces) / §6.5
+ * draft-ietf-moq-transport-23 §2.4.3 (Reserved Namespaces) / §6.5
  * (Session-Level Tracks and Namespaces):
  * "An endpoint that receives a request for an unrecognized session-level track or
  *  namespace MUST reject it with REQUEST_ERROR using error code DOES_NOT_EXIST
@@ -412,7 +412,7 @@ test("incomingHandleFirstBidiMessage: 未対応トラック要求の空 Track Na
 });
 
 /**
- * draft-ietf-moq-transport-22 §2.4.3:
+ * draft-ietf-moq-transport-23 §2.4.3:
  * "." 単体の namespace も同じく DOES_NOT_EXIST で拒否する。
  */
 test("incomingHandleFirstBidiMessage: 未対応リクエストの単一ピリオド namespace は DOES_NOT_EXIST", async () => {
@@ -450,7 +450,7 @@ test("incomingHandleFirstBidiMessage: 未対応リクエストの単一ピリオ
 });
 
 /**
- * draft-ietf-moq-transport-22 §2.4.3 (Reserved Namespaces) / §6.5
+ * draft-ietf-moq-transport-23 §2.4.3 (Reserved Namespaces) / §6.5
  * (Session-Level Tracks and Namespaces):
  * 未対応 6 種はいずれも Request ID の直後に Track Namespace (SUBSCRIBE_NAMESPACE /
  * SUBSCRIBE_TRACKS は Track Namespace Prefix) を置く。種類によらず先頭の
@@ -560,7 +560,7 @@ test("incomingHandleFirstBidiMessage: Namespace が読めない未対応リク�
 });
 
 /**
- * draft-ietf-moq-transport-22 §6.4.2.1 (Request ID):
+ * draft-ietf-moq-transport-23 §6.4.2.1 (Request ID):
  * 未対応リクエストの先頭メッセージでもパリティを検証し、偶数 Request ID は
  * INVALID_REQUEST_ID でセッションを閉じることを検証する。
  * NOT_SUPPORTED 応答は行わない。
@@ -598,7 +598,7 @@ test("incomingHandleFirstBidiMessage: 未対応リクエストの偶数 Request 
 });
 
 /**
- * draft-ietf-moq-transport-22 §6.4.2.1 (Request ID):
+ * draft-ietf-moq-transport-23 §6.4.2.1 (Request ID):
  * 未対応経路で消費済みの Request ID を持つ未対応リクエストで重複検出して
  * INVALID_REQUEST_ID で閉じることを検証する (未対応→未対応)。
  */
@@ -636,7 +636,7 @@ test("incomingHandleFirstBidiMessage: 消費済み Request ID の未対応リク
 });
 
 /**
- * draft-ietf-moq-transport-22 §6.4.2.1 (Request ID):
+ * draft-ietf-moq-transport-23 §6.4.2.1 (Request ID):
  * PUBLISH 経路相当として同一検証関数で消費した ID を未対応受信に当てると
  * 重複検出することを検証する (同一関数・同一 Set の単位確認。
  * 生産の Set 共有は session.test.ts の cross-path テストで検証する)。
@@ -684,7 +684,7 @@ test("incomingHandleFirstBidiMessage: 空ペイロードの未対応リクエス
 });
 
 /**
- * draft-ietf-moq-transport-22 §6.4.2.1 (Request ID):
+ * draft-ietf-moq-transport-23 §6.4.2.1 (Request ID):
  * 未対応リクエストの先頭 varint が多バイト宣言の途中終端で取れない場合は、
  * ペイロード破損として PROTOCOL_VIOLATION で閉じることを検証する。
  * 空ペイロード版と対称な独立ケースである。
@@ -708,7 +708,7 @@ test("incomingHandleFirstBidiMessage: 切詰め varint の未対応リクエス�
 });
 
 /**
- * draft-ietf-moq-transport-22 §6.3:
+ * draft-ietf-moq-transport-23 §6.3:
  * 7 種以外のメッセージタイプで始まる双方向ストリームは PROTOCOL_VIOLATION
  * でセッションを閉じ、true を返すことを検証する。
  */
@@ -740,7 +740,7 @@ test("incomingHandleFirstBidiMessage: 7 種以外の先頭メッセージで PRO
 });
 
 /**
- * draft-ietf-moq-transport-22 §6.3:
+ * draft-ietf-moq-transport-23 §6.3:
  * 先頭が PUBLISH の場合、false を返して呼び出し側 (SessionImpl) の従来の
  * 受信 PUBLISH 処理を継続させることを検証する。
  */
@@ -767,11 +767,11 @@ test("incomingHandleFirstBidiMessage: PUBLISH は false を返し従来処理を
 
 // ============================================================================
 // incomingHandleDatagram のテスト
-// draft-ietf-moq-transport-22 §11.2.1 (Object Datagram)
+// draft-ietf-moq-transport-23 §11.2.1 (Object Datagram)
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-22 §11.2.1:
+ * draft-ietf-moq-transport-23 §11.2.1:
  * 不完全な Object Datagram (varint が途中終端する構造破損) は、黙殺せず
  * PROTOCOL_VIOLATION でセッションが閉じることを検証する。datagram は
  * Length フレーミングを持たないが、原子配信のため不完全なフィールド構造は
@@ -813,7 +813,7 @@ test("incomingHandleDatagram: 不正な Object Status は INVALID_OBJECT_STATUS 
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.7 / §12.1:
+ * draft-ietf-moq-transport-23 §3.7 / §12.1:
  * Object Property に Mandatory Track Property (0x4000-0x7FFF) を含む datagram は
  * malformed であり、当該購読を cancel してセッションは閉じないことを検証する。
  */
@@ -861,7 +861,7 @@ test("incomingHandleDatagram: Mandatory Track Property で購読を cancel し�
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.7 / §12.1 / §2.4.1:
+ * draft-ietf-moq-transport-23 §3.7 / §12.1 / §2.4.1:
  * datagram の malformed 検出は trackAlias から得た購読の比較キーで対象 Track を
  * 決める。namespace ["a"] + trackName "b/c" と namespace ["a","b"] + trackName "c"
  * は "/" 連結では同じ "a/b/c" になるため、区切り文字の曖昧さで同一 alias に
@@ -926,7 +926,7 @@ test("incomingHandleDatagram: 同一 alias の区切り文字が衝突する別 
 });
 
 /**
- * draft-ietf-moq-transport-22 §8.3:
+ * draft-ietf-moq-transport-23 §8.3:
  * "If a receiver understands a Type, and the following Value or Length/Value
  *  does not match the serialization defined by that Type, the receiver MUST
  *  close the session with error code MALFORMED_KEY_VALUE."
@@ -976,7 +976,7 @@ function createDatagramDeliveryTestContext(): {
     pendingFetch: new Map(),
     pendingRequestUpdate: new Map(),
     fillFetchTargets: new Map(),
-    // draft-ietf-moq-transport-22 §10.8 / §10.9: Track 単位の Prior ID Gap 追跡
+    // draft-ietf-moq-transport-23 §10.8 / §10.9: Track 単位の Prior ID Gap 追跡
     priorGapTrackingByTrack: new Map(),
     closeWithError: (error: SessionError) => {
       closedWithError = error;
@@ -1020,7 +1020,7 @@ function trackingDatagramWire(
 }
 
 /**
- * draft-ietf-moq-transport-22 §10.8 / §10.9 / §12.1:
+ * draft-ietf-moq-transport-23 §10.8 / §10.9 / §12.1:
  * datagram 経路でも Track 横断の Prior ID Gap 条件を検出する。検出した Object は
  * 配送せず、同一 Track の購読を cancel し、セッションは閉じない。
  */
@@ -1062,7 +1062,7 @@ test("incomingHandleDatagram: 通知済み Prior Group ID Gap 内の Group ID �
 });
 
 /**
- * draft-ietf-moq-transport-22 §10.8 / §10.9:
+ * draft-ietf-moq-transport-23 §10.8 / §10.9:
  * datagram は Track Alias から購読を特定できた場合だけ追跡検証の対象になる。
  * 購読の無い alias の datagram は検証も追跡状態の作成もしない。
  */
@@ -1479,9 +1479,9 @@ function createSubgroupDeliveryTestContext(hooks: { debugError?: Error } = {}): 
     },
     statsObjectsReceivedViaSubscribe: 0,
     statsBytesReceivedViaSubscribe: 0,
-    // draft-ietf-moq-transport-22 §12.1 条件 4: Group 単位の最終 Object 追跡
+    // draft-ietf-moq-transport-23 §12.1 条件 4: Group 単位の最終 Object 追跡
     receivedEndOfGroupFinalObjectIds: new Map<bigint, Map<bigint, bigint>>(),
-    // draft-ietf-moq-transport-22 §10.8 / §10.9: Track 単位の Prior ID Gap 追跡
+    // draft-ietf-moq-transport-23 §10.8 / §10.9: Track 単位の Prior ID Gap 追跡
     priorGapTrackingByTrack: new Map(),
   } as unknown as SessionInternal;
   return { session, debugRecords };
@@ -1617,7 +1617,7 @@ test("incomingProcessSubgroupObjects: debug 自体の throw でも継続する",
 
 // ============================================================================
 // Track 横断の Prior ID Gap 追跡
-// draft-ietf-moq-transport-22 §10.8 (Prior Group ID Gap) / §10.9 (Prior Object ID Gap)
+// draft-ietf-moq-transport-23 §10.8 (Prior Group ID Gap) / §10.9 (Prior Object ID Gap)
 // ============================================================================
 
 /** 追跡検証用の subgroup 単一オブジェクト 1 件分のワイヤを組み立てる */
@@ -1644,7 +1644,7 @@ function subgroupTrackingHeader(groupId: bigint, propertiesPresent: boolean): Su
 }
 
 /**
- * draft-ietf-moq-transport-22 §10.8 / §10.9:
+ * draft-ietf-moq-transport-23 §10.8 / §10.9:
  * Subgroup は Full Track Name を直接持たないため、Track Alias から引いた購読の
  * 比較キーで追跡状態を更新する。Subgroup ストリームをまたいだ 2 件目で、1 件目が
  * 通知した不在 Group の受信を検出する。
@@ -1685,7 +1685,7 @@ test("incomingProcessSubgroupObjects: 購読の比較キーで追跡状態を更
 });
 
 /**
- * draft-ietf-moq-transport-22 §12.1 条件 4:
+ * draft-ietf-moq-transport-23 §12.1 条件 4:
  * セッションの追跡マップ (Track Alias と Group ID の 2 段 Map) に別 Subgroup で
  * 確定した最終 Object ID があるとき、それより大きい Object ID の Object を
  * malformed として検出する。既知の最終 Object ちょうどまでは malformed にしない。
@@ -1774,7 +1774,7 @@ function fetchTrackingWire(
 }
 
 /**
- * draft-ietf-moq-transport-22 §10.8 / §10.9:
+ * draft-ietf-moq-transport-23 §10.8 / §10.9:
  * FETCH 経路は呼び出し側が渡す Track の比較キーで追跡状態を更新する。
  * 同じ Track の 2 件目で、1 件目が通知した不在 Object の受信を検出し、
  * 別 Track のキーでは追跡状態を共有しない。

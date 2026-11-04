@@ -565,7 +565,7 @@ test("processVideoFrames: encode が同期 throw するとフレームを閉じ�
 });
 
 /**
- * draft-ietf-moq-transport-22 §10.6 / §9.20.19: 映像トラックは DYNAMIC_GROUPS=1 を広告し、
+ * draft-ietf-moq-transport-23 §10.6 / §9.19.19: 映像トラックは DYNAMIC_GROUPS=1 を広告し、
  * 購読者が NEW_GROUP_REQUEST で新しい Group を要求できるようにする
  */
 test("VIDEO_PUBLISH_OPTIONS: 映像トラックは DYNAMIC_GROUPS を広告する", () => {
@@ -573,7 +573,7 @@ test("VIDEO_PUBLISH_OPTIONS: 映像トラックは DYNAMIC_GROUPS を広告す�
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.19: NEW_GROUP_REQUEST を受けた publisher は、現在の Group を
+ * draft-ietf-moq-transport-23 §9.19.19: NEW_GROUP_REQUEST を受けた publisher は、現在の Group を
  * 終えて新しい Group をできるだけ早く始める SHOULD。映像は onNewGroupRequest から
  * startNewGroup() を呼び、次に符号化するフレームをキーフレーム (新しい Group の先頭) にする。
  * 間隔 10 秒の途中 (3 枚目、timestamp 2 秒) で要求を受けると、4 枚目がキーフレームになり、
@@ -2247,7 +2247,7 @@ test("start/stop: namespace の告知は PUBLISH の後に行い 停止で撤回
 
   await publisher.start({} as MediaStream);
 
-  // PUBLISH (catalog) の後に告知する (draft-ietf-moq-transport-22 §4.1 の prefix の表明)
+  // PUBLISH (catalog) の後に告知する (draft-ietf-moq-transport-23 §4.1 の prefix の表明)
   assert.deepEqual(eventLog, ["publish:catalog", "publishNamespace"]);
   assert.equal(publishNamespaceCalls.length, 1);
   assert.deepEqual(publishNamespaceCalls[0].namespace, ["live", "room"]);
@@ -2918,7 +2918,7 @@ test("start: catalog の Group ID は stop 後の再 start で前回を上回る
 /**
  * catalog の送信に endOfSubgroup を付ける
  *
- * draft-ietf-moq-transport-22 §11.3.2: Subgroup の全 Object を QUIC stream へ出し終えたら
+ * draft-ietf-moq-transport-23 §11.3.2: Subgroup の全 Object を QUIC stream へ出し終えたら
  * FIN で閉じる MUST。catalog は delta を送らない (draft-ietf-moq-msf-01 §5) ため、Group の
  * 先頭 Object 1 つでその Subgroup は完結する。閉じないと次の送り直し (既定 30 秒後) まで
  * 開いたままになる。ここでは記録用 Publisher で送信パラメータを検証し、実際に FIN が
@@ -4565,7 +4565,7 @@ test("handleAudioEncodedChunk: description が AUDIO_CONFIG として送られ�
 
   assert.equal(sent.length, 1);
   // 音声の Object は 1 Object = 1 Group = 1 Subgroup であり、送り終えたら FIN で閉じる
-  // (draft-ietf-moq-transport-22 §11.3.2 の MUST)
+  // (draft-ietf-moq-transport-23 §11.3.2 の MUST)
   assert.isTrue(sent[0]?.endOfSubgroup);
   const decoded = LOC.decodeAudioProperties(sent[0].properties ?? new Uint8Array(0));
   assert.deepEqual(decoded.config, description);
@@ -4621,7 +4621,7 @@ test("handleAudioEncodedChunk: description が無い chunk は AUDIO_CONFIG を�
 });
 
 /**
- * draft-ietf-moq-transport-22 §11 (Data Streams and Datagrams):
+ * draft-ietf-moq-transport-23 §11 (Data Streams and Datagrams):
  * delivery が "datagram" なら Datagram で送り、Subgroup (sendObject) へは流さない。
  * 経路は Object 単位で選べるが、moqt-js の音声は 1 つの設定で統一する
  */
@@ -4795,7 +4795,7 @@ test("handleAudioEncodedChunk: delivery の既定は Datagram で送る", () => 
 
 /**
  * 完了条件: datagram が再送されない経路でなくなるセッション (HTTP/2 上の WebTransport。
- * draft-ietf-moq-transport-22 §6.2 は datagram も reliable and ordered とする) で音声の
+ * draft-ietf-moq-transport-23 §6.2 は datagram も reliable and ordered とする) で音声の
  * delivery に "datagram" を指定したら、start がエラーになる。宣言された設定を黙って
  * Subgroup へ戻すと、送り方を計器や購読側の前提から読めなくなるためである。エラーは onError
  * にも 1 回通知され、state は created のまま (再 start できる)
@@ -5713,7 +5713,7 @@ test("publishCatalog: 初期 catalog の送信前に PAUSED が 0 になって�
   // catalog Publisher を作ってから初期 catalog を送るまでの間 (音声・映像の PUBLISH の往復と
   // 音声の取り出し経路の準備) に
   // PAUSED 1→0 が届くと、前回の catalog を新しい Group ID で送ってしまい、直後の初期送信が
-  // 同じ Location に別の payload を載せる (draft-ietf-moq-transport-22 §2.1 / §7.1)。
+  // 同じ Location に別の payload を載せる (draft-ietf-moq-transport-23 §2.1 / §7.1)。
   // 初期送信が済むまでは送り直さないことを確認する
   const { publisher, control: loopControl } = createLoopTestContext();
   const control = loopControl as unknown as PublisherCatalogRepublishControl;
@@ -6326,7 +6326,7 @@ test("allocateVideoObject: 差分フレームが先行した場合の初回キ�
 });
 
 /**
- * draft-ietf-moq-transport-22 §5.1.1:
+ * draft-ietf-moq-transport-23 §5.1.1:
  * `sendObject` に渡す Priority が定数どおりであることを固定する (大小関係は
  * 並び順テストが固定する)。Publisher Priority は Subgroup 単位で 1 つに決まるため、
  * 実際に送信される値はキーフレームで開いた Subgroup の 0 になる (デルタフレームの
@@ -6751,7 +6751,7 @@ test("publishCatalog: targetLatency と renderGroup の 0 は検証を通り cat
 });
 
 /**
- * draft-ietf-moq-transport-22 §5.1.1 / draft-ietf-moq-msf-01 §5:
+ * draft-ietf-moq-transport-23 §5.1.1 / draft-ietf-moq-msf-01 §5:
  * カタログはトラック構成を知らせる制御情報であり、届かないと購読が始まらないため
  * 最高優先 (0) で送ることを固定する。
  */
@@ -6783,9 +6783,9 @@ test("Publisher Priority の定数はドキュメントの値である", () => {
 });
 
 test("Publisher Priority は数値が小さいほど高優先になる順に並ぶ", () => {
-  // draft-ietf-moq-transport-22 §5.1.1: 0-255 の符号無し整数で数値が小さいほど
+  // draft-ietf-moq-transport-23 §5.1.1: 0-255 の符号無し整数で数値が小さいほど
   // 高優先である。キーフレーム < 音声 < デルタフレームの順になることを固定する
-  // (デルタフレームは draft-ietf-moq-transport-22 §10.4 の既定 128 のまま据え置く)
+  // (デルタフレームは draft-ietf-moq-transport-23 §10.4 の既定 128 のまま据え置く)
   assert.isTrue(PRIORITY_CATALOG <= PRIORITY_VIDEO_KEY);
   assert.isTrue(PRIORITY_VIDEO_KEY < PRIORITY_AUDIO);
   assert.isTrue(PRIORITY_AUDIO < PRIORITY_VIDEO_DELTA);
@@ -6853,7 +6853,7 @@ test("createPublishers: SETUP にトークンが無ければ PUBLISH に付与�
 });
 
 test("pause: 開いている Subgroup を閉じる", async () => {
-  // draft-ietf-moq-transport-22 §11.3.2: 配信を止めた時点で「その Subgroup に続く Object は
+  // draft-ietf-moq-transport-23 §11.3.2: 配信を止めた時点で「その Subgroup に続く Object は
   // 無い」ため、開いている Subgroup を FIN で閉じる MUST を満たせる。閉じないと、次の
   // Object を待つ購読側が DATA_STREAM_TIMEOUT (0x12) でセッションを閉じうる
   const { publisher, control: loopControl } = createLoopTestContext();

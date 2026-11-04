@@ -1,9 +1,9 @@
 /**
  * 受信 Authorization Token キャッシュ
  *
- * draft-ietf-moq-transport-22 §8.9 (Authorization Token Compression) /
+ * draft-ietf-moq-transport-23 §8.9 (Authorization Token Compression) /
  * §9.1.3 (MAX_AUTH_TOKEN_CACHE_SIZE) / §9.1.4 (AUTHORIZATION TOKEN) /
- * §9.20.2 (AUTHORIZATION TOKEN Parameter)
+ * §9.19.2 (AUTHORIZATION TOKEN Parameter)
  *
  * ピアが REGISTER した Token Alias を保持し、USE_ALIAS を解決し、
  * DELETE で退役させる。Alias 空間は送信元ごとに独立するため、
@@ -21,7 +21,7 @@ import { MessageParameterType, SetupOptionType } from "../message/types";
 /**
  * キャッシュエントリ 1 件あたりの固定オーバーヘッド
  *
- * draft-ietf-moq-transport-22 §9.1.3:
+ * draft-ietf-moq-transport-23 §9.1.3:
  * "The token size is calculated as 16 bytes + the size of the Token Value field"
  */
 const AUTH_TOKEN_CACHE_ENTRY_OVERHEAD = 16;
@@ -29,7 +29,7 @@ const AUTH_TOKEN_CACHE_ENTRY_OVERHEAD = 16;
 /**
  * Token Value 長からキャッシュエントリ 1 件のサイズを求める
  *
- * draft-ietf-moq-transport-22 §9.1.3: 1 件のサイズは
+ * draft-ietf-moq-transport-23 §9.1.3: 1 件のサイズは
  * "16 bytes + the size of the Token Value field" である。
  * 送信側がピアの MAX_AUTH_TOKEN_CACHE_SIZE と比較するときにも使う。
  */
@@ -108,7 +108,7 @@ export class AuthTokenCache {
   /**
    * Token Alias を登録する
    *
-   * draft-ietf-moq-transport-22 §8.9:
+   * draft-ietf-moq-transport-23 §8.9:
    * "Once a Token Alias has been registered, it cannot be re-registered by the
    *  same endpoint in the Session without first being deleted."
    * §9.1.3 の上限判定は「REGISTER のトークンサイズの総和 − DELETE の総和」で行う。
@@ -132,7 +132,7 @@ export class AuthTokenCache {
   /**
    * Token Alias を解決する
    *
-   * draft-ietf-moq-transport-22 §8.9:
+   * draft-ietf-moq-transport-23 §8.9:
    * "The receiver of a message referencing an Alias that is not currently
    *  registered MUST reject the message with UNKNOWN_AUTH_TOKEN_ALIAS."
    *
@@ -150,7 +150,7 @@ export class AuthTokenCache {
   /**
    * Token Alias を退役させる
    *
-   * draft-ietf-moq-transport-22 §8.9 (DELETE):
+   * draft-ietf-moq-transport-23 §8.9 (DELETE):
    * "This Alias and the Token Value it was previously associated with MUST be
    *  retired." 未登録 Alias への DELETE は減算対象が無いため何もしない。
    */
@@ -224,7 +224,7 @@ function processSetupAuthorizationToken(cache: AuthTokenCache, token: Authorizat
 /**
  * 受信 SETUP の AUTHORIZATION TOKEN オプションをすべて処理する
  *
- * draft-ietf-moq-transport-22 §9.1.4: オプション値は §8.9 の Token 構造。
+ * draft-ietf-moq-transport-23 §9.1.4: オプション値は §8.9 の Token 構造。
  *
  * @throws SessionError Token 構造がデコード不能 (MALFORMED_AUTH_TOKEN)、
  *   DELETE / USE_ALIAS (PROTOCOL_VIOLATION)、登録済み Alias の再 REGISTER
@@ -235,7 +235,7 @@ export function processSetupAuthorizationTokens(
   parameters: Array<{ type: number; value: Uint8Array }>,
 ): void {
   for (const parameter of parameters) {
-    // Setup Options と Message Parameters は別のレジストリ (§9.1 / §9.20) であり、
+    // Setup Options と Message Parameters は別のレジストリ (§9.1 / §9.19) であり、
     // SETUP 経路では SetupOptionType で判定する。
     if (parameter.type !== SetupOptionType.AUTHORIZATION_TOKEN) {
       continue;
@@ -248,7 +248,7 @@ export function processSetupAuthorizationTokens(
 /**
  * 受信メッセージパラメータの Authorization Token を 1 件処理する
  *
- * draft-ietf-moq-transport-22 §8.9:
+ * draft-ietf-moq-transport-23 §8.9:
  * "The receiver of a message attempting to register an Alias which is already
  *  registered MUST close the Session with DUPLICATE_AUTH_TOKEN_ALIAS."
  * "If a registration outside of SETUP is attempted that would cause this limit
@@ -311,7 +311,7 @@ function processMessageAuthorizationToken(
 /**
  * 受信メッセージの AUTHORIZATION TOKEN パラメータをすべて処理する
  *
- * draft-ietf-moq-transport-22 §8.9:
+ * draft-ietf-moq-transport-23 §8.9:
  * "An Authorization Token MAY be repeated within a message as long as the
  *  combination of Token Type and Token Value are unique after resolving any
  *  aliases." 複数出現し得るため、順に処理する。
@@ -357,7 +357,7 @@ export function processMessageAuthorizationTokens(
 /**
  * SETUP の REGISTER がピアの上限に収まるかを判定する
  *
- * draft-ietf-moq-transport-22 §9.1.3 (MAX_AUTH_TOKEN_CACHE_SIZE):
+ * draft-ietf-moq-transport-23 §9.1.3 (MAX_AUTH_TOKEN_CACHE_SIZE):
  * "16 bytes + the size of the Token Value field" が 1 エントリのサイズである。
  * §8.9 (Authorization Token Compression) は「SETUP 以外での登録が上限を超えると
  * AUTH_TOKEN_CACHE_OVERFLOW でセッションを終了する」と定めるが、SETUP の登録は
@@ -388,7 +388,7 @@ export function setupTokenRegistration(
 /**
  * 後続メッセージへ付与する Authorization Token を正規化する
  *
- * draft-ietf-moq-transport-22 §8.9 / §9.1.4:
+ * draft-ietf-moq-transport-23 §8.9 / §9.1.4:
  * - 自 SETUP の REGISTER で登録に成功した Alias を REGISTER のまま再送すると、
  *   ピアは登録済み Alias の再 REGISTER として DUPLICATE_AUTH_TOKEN_ALIAS で
  *   セッションを閉じる (§8.9)。同じ Alias を参照する USE_ALIAS に変換する

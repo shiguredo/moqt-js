@@ -53,13 +53,13 @@ import type { SessionInternal } from "./types";
 /**
  * 受信 bidi ストリームの先頭メッセージを 3 分類する
  *
- * draft-ietf-moq-transport-22 §6.3 (Session initialization):
+ * draft-ietf-moq-transport-23 §6.3 (Session initialization):
  * リクエストストリームの先頭として許可されるメッセージは 7 種
  * (TRACK_STATUS / SUBSCRIBE / PUBLISH / FETCH / PUBLISH_NAMESPACE /
  * SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS)。
  * - "publish": 対応済み (moqt-js はクライアントのため受信 PUBLISH のみ処理する)
  * - "unsupported-request": 7 種のうち未対応の 6 種。
- *   draft-ietf-moq-transport-22 §1.6 (Modularity):
+ *   draft-ietf-moq-transport-23 §1.6 (Modularity):
  *   「Limited endpoints SHOULD respond to any unsupported messages with the
  *   appropriate NOT_SUPPORTED error code, rather than ignoring them.」
  * - "protocol-violation": 7 種以外 (未知タイプ等)。
@@ -109,10 +109,10 @@ export interface IncomingRequestErrorOptions {
 /**
  * REQUEST_ERROR を送信し、送信方向を FIN で閉じた後に受信方向をキャンセルする
  *
- * draft-ietf-moq-transport-22 §6.4.2.3 (Request Cancellation and Rejection):
+ * draft-ietf-moq-transport-23 §6.4.2.3 (Request Cancellation and Rejection):
  * 「When an endpoint rejects a request without performing any application
  * processing, it SHOULD send a REQUEST_ERROR and FIN the stream.」
- * draft-ietf-moq-transport-22 §3.6 (Subscribing to Tracks by Prefix):
+ * draft-ietf-moq-transport-23 §3.6 (Subscribing to Tracks by Prefix):
  * 「If it is an error, the stream will be closed via FIN after SUBSCRIBE_TRACKS_ERROR
  * is sent.」
  *
@@ -120,7 +120,7 @@ export interface IncomingRequestErrorOptions {
  * releaseLock 後の close() は WHATWG Streams 仕様上、ロック非保持時に
  * TypeError で reject する Promise を返すため、try ブロック内で await し
  * catch で吸収する。受信方向 (readable) は FIN 送信後に cancel() で閉じる
- * (draft-ietf-moq-transport-22 §6.4.2.3 の STOP_SENDING 相当)。
+ * (draft-ietf-moq-transport-23 §6.4.2.3 の STOP_SENDING 相当)。
  *
  * @param options - Error Details として載せる構造情報 (省略時は Detail なし)
  */
@@ -177,7 +177,7 @@ export async function incomingSendRequestErrorAndClose(
 /**
  * 受信 Request ID のパリティ・重複検証を行う
  *
- * draft-ietf-moq-transport-22 §6.4.2.1 (Request ID):
+ * draft-ietf-moq-transport-23 §6.4.2.1 (Request ID):
  * "The client generates even numbered Request IDs, starting at 0, and the
  *  server generates odd numbered Request IDs, starting at 1. Each endpoint
  *  increments its Request ID by 2 for each new request."
@@ -204,7 +204,7 @@ export function incomingValidateRequestId(
   requestId: bigint,
   receivedRequestIds: Set<bigint>,
 ): SessionError | null {
-  // draft-ietf-moq-transport-22 §6.4.2.1:
+  // draft-ietf-moq-transport-23 §6.4.2.1:
   // moqt-js はクライアントロールのため、受信 Request ID は奇数 (サーバー発) が期待値。
   // LSB が 0 (偶数) はパリティ違反。
   if ((requestId & 1n) === 0n) {
@@ -214,7 +214,7 @@ export function incomingValidateRequestId(
     );
   }
 
-  // draft-ietf-moq-transport-22 §6.4.2.1:
+  // draft-ietf-moq-transport-23 §6.4.2.1:
   // 同一 Request ID の再出現は INVALID_REQUEST_ID。
   // add は検証と同じ同期ブロック内で行い、拒否経路で return されるリクエストも
   // Request ID を消費したものとして記録する (§6.4.2.1「Each SUBSCRIBE, PUBLISH,
@@ -258,7 +258,7 @@ export async function incomingHandleFirstBidiMessage(
     // 受信メッセージをデバッグ出力する (moqlog / debug コールバックで
     // 未対応リクエストの受信を観測できるようにする)
     session.emitDebug("recv", firstMsg.type, firstMsg.payload);
-    // draft-ietf-moq-transport-22 §6.4.2.1 (Request ID):
+    // draft-ietf-moq-transport-23 §6.4.2.1 (Request ID):
     // 未対応 6 種の先頭は Request ID であり、分類 3 (先頭許可 7 種外)
     // は Request ID としては扱わない。PUBLISH 経路と同一の検証でパリティ・重複を検証し、
     // NOT_SUPPORTED 応答でも ID を消費して記録する (検証→応答の順)。
@@ -301,7 +301,7 @@ export async function incomingHandleFirstBidiMessage(
     if (prefixResult === null) {
       return true;
     }
-    // draft-ietf-moq-transport-22 §2.4.3 (Reserved Namespaces) / §6.5
+    // draft-ietf-moq-transport-23 §2.4.3 (Reserved Namespaces) / §6.5
     // (Session-Level Tracks and Namespaces):
     // "An endpoint that receives a request for an unrecognized session-level track
     //  or namespace MUST reject it with REQUEST_ERROR using error code DOES_NOT_EXIST
@@ -316,7 +316,7 @@ export async function incomingHandleFirstBidiMessage(
       );
       return true;
     }
-    // draft-ietf-moq-transport-22 §1.6 (Modularity):
+    // draft-ietf-moq-transport-23 §1.6 (Modularity):
     // 未対応メッセージには NOT_SUPPORTED を応答する (SHOULD。引用は
     // incomingClassifyFirstBidiMessage の docstring 参照)。
     await incomingSendRequestErrorAndClose(
@@ -435,17 +435,17 @@ function incomingUnsupportedRequestHasTrackName(type: number): boolean {
 /**
  * 受信した datagram を処理する
  *
- * draft-ietf-moq-transport-22 §11.5.2 (Padding Datagrams):
+ * draft-ietf-moq-transport-23 §11.5.2 (Padding Datagrams):
  * "The receiver MUST discard all data received in a padding datagram."
  *
- * draft-ietf-moq-transport-22 §11.2.1 (Object Datagram):
+ * draft-ietf-moq-transport-23 §11.2.1 (Object Datagram):
  * Track Alias で Subscriber を検索し、filter 再適用して配送する。
  *
  * アプリ例外は当該 subscriber の error コールバックへ通知し、
  * 残りの配送を継続する。セッションもストリームも閉じない
  * (subgroup 経路も同様に継続する)。
  *
- * draft-ietf-moq-transport-22 §10.8 / §10.9:
+ * draft-ietf-moq-transport-23 §10.8 / §10.9:
  * Track 横断の Prior ID Gap 条件 (過去に受信した Object を覆う gap、過去に通知
  * された gap 内の Location、同一 Group 内で異なる gap 値) は Track 単位の追跡が
  * 必要であり、この経路で検証する。検証は Object の decode 後・配送前に行い、
@@ -453,7 +453,7 @@ function incomingUnsupportedRequestHasTrackName(type: number): boolean {
  */
 export function incomingHandleDatagram(session: SessionInternal, data: Uint8Array): void {
   let datagram: ObjectDatagram;
-  // draft-ietf-moq-transport-22 §10.8 / §10.9:
+  // draft-ietf-moq-transport-23 §10.8 / §10.9:
   // 追跡検証に使う比較キーは decode の前に解決する。購読の解決後まで遅らせると
   // MalformedTrackError が下の catch を素通りし、SessionImpl の datagram 受信
   // ループごと終了して §12.1 の cancel まで到達しない。キーを解決できない
@@ -513,7 +513,7 @@ export function incomingHandleDatagram(session: SessionInternal, data: Uint8Arra
       return;
     }
     if (err instanceof MalformedTrackError) {
-      // draft-ietf-moq-transport-22 §12.1:
+      // draft-ietf-moq-transport-23 §12.1:
       // malformed track を検出したら同一 Track の全購読と全 FETCH を cancel し、
       // セッションは閉じない。比較キーは trackAlias から購読を特定して得る。
       const trackAlias = decodeDatagramTrackAlias(data);
@@ -528,7 +528,7 @@ export function incomingHandleDatagram(session: SessionInternal, data: Uint8Arra
     return;
   }
 
-  // Track Alias で Subscriber を検索（draft-ietf-moq-transport-22 §3.1: 同一 alias に複数 subscription あり得る）
+  // Track Alias で Subscriber を検索（draft-ietf-moq-transport-23 §3.1: 同一 alias に複数 subscription あり得る）
   const subscribers = session.subscribersByAlias.get(datagram.trackAlias);
   if (!subscribers || subscribers.length === 0) {
     return;
@@ -738,7 +738,7 @@ export function incomingSettlePublishFillWaiters(
 /**
  * Fetcher の登録を待つ
  *
- * draft-ietf-moq-transport-22 §3.2 (Fetch):
+ * draft-ietf-moq-transport-23 §3.2 (Fetch):
  * "The publisher MAY send Objects in response to a FETCH before the
  *  FETCH_OK message is sent."
  * FETCH_OK より先にデータストリームが到着した場合に使用。
@@ -813,7 +813,7 @@ export function incomingWaitForFetcher(
  * SessionImpl.handleIncomingStream から呼ばれる。
  *
  * 計上先は受信経路で分ける。fill fetch ストリームのオブジェクトは
- * fill-delivered (draft-ietf-moq-transport-22 §3.4)、通常 FETCH のオブジェクトは fetch 側であり、
+ * fill-delivered (draft-ietf-moq-transport-23 §3.4)、通常 FETCH のオブジェクトは fetch 側であり、
  * 配送経路の区別 (MoqtObject.fillDelivered) と統計区分を一致させる。
  * 購読側 (subscribe) へは合算しない。購読の Location Filter と fill 範囲が
  * 重なる Object は publisher が両経路で別々に送るため、受信したストリームの
@@ -897,7 +897,7 @@ export function incomingProcessSubgroupObjects(
   resolvedSubgroupId: bigint | undefined;
   updatedEndOfGroupFinalObjectId: bigint | undefined;
 } {
-  // draft-ietf-moq-transport-22 §12.1 条件 4:
+  // draft-ietf-moq-transport-23 §12.1 条件 4:
   // Group の最終 Object は Group 単位で既知になる。Subgroup ストリームをまたいだ
   // 検出のためセッションが Track Alias と Group ID の 2 段 Map で保持する。
   // 上限を超えて追跡から外れた Track Alias / Group は未登録として undefined に
@@ -907,7 +907,7 @@ export function incomingProcessSubgroupObjects(
     header.trackAlias,
     header.groupId,
   );
-  // draft-ietf-moq-transport-22 §10.8 / §10.9:
+  // draft-ietf-moq-transport-23 §10.8 / §10.9:
   // Subgroup は Full Track Name を直接持たないため、Track Alias から購読を引き、
   // その購読が持つ比較キー (fullTrackNameKey の戻り値) を追跡対象のキーにする。
   const trackKey = subscribers[0]?.getFullTrackNameKey();
@@ -952,7 +952,7 @@ export function incomingProcessSubgroupObjects(
     // exactOptionalPropertyTypes では optional な finalObjectId に undefined を渡せないため、
     // 既知の最終 Object ID がある場合だけ載せる
     endOfGroupFinalObjectId === undefined ? {} : { finalObjectId: endOfGroupFinalObjectId },
-    // draft-ietf-moq-transport-22 §10.8 / §10.9:
+    // draft-ietf-moq-transport-23 §10.8 / §10.9:
     // Track 横断の追跡検証に使う比較キーは、購読が特定できた場合だけ解決できる。
     // 購読が特定できないと Object の decode 自体を行わないため、キーは必ず解決できる。
     trackKey === undefined

@@ -1,7 +1,7 @@
 /**
  * session/bidi.ts の単体テスト: publish ロールで受信した REQUEST_UPDATE の NEW_GROUP_REQUEST
  *
- * draft-ietf-moq-transport-22 §9.20.19 (NEW GROUP REQUEST Parameter):
+ * draft-ietf-moq-transport-23 §9.19.19 (NEW GROUP REQUEST Parameter):
  * relay は下流の NEW_GROUP_REQUEST を REQUEST_UPDATE で publisher へ伝える。dynamic Groups に
  * 対応する publisher は、値が 0 か現在の Group より大きければ新しい Group を始める SHOULD。
  * moqt-js はアプリへ PublishCallbacks.onNewGroupRequest で知らせる。
@@ -54,7 +54,7 @@ async function receiveNewGroupRequest(
 }
 
 /**
- * draft-ietf-moq-transport-22 §9.20.19 (NEW GROUP REQUEST Parameter):
+ * draft-ietf-moq-transport-23 §9.19.19 (NEW GROUP REQUEST Parameter):
  * "If the original publisher does not support dynamic Groups, it ignores the parameter"
  * DYNAMIC_GROUPS の広告有無で NEW_GROUP_REQUEST の扱いが変わることを表駆動で検証する。
  * どちらの場合も更新自体は受理して REQUEST_OK を 1 通返し、セッションは閉じない。

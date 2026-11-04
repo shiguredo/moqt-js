@@ -18,7 +18,7 @@ import { encodeVarint, MAX_VARINT } from "../varint";
 import { ControlStreamReader, ControlStreamWriter } from "../controlStream";
 import { DEFAULT_MAX_CONTROL_MESSAGE_SIZE } from "../message/types";
 import { PublisherImpl } from "../publisher";
-// draft-ietf-moq-transport-22 §11.3.1:
+// draft-ietf-moq-transport-23 §11.3.1:
 // SUBSCRIBE_OK 受理経路は pendingSubgroupBuffer.notifyAlias() を必ず呼ぶ。
 // 実物を渡さないと TypeError になり、defaultBidiHandleError に握り潰されて
 // pending.resolve と読み取りループ起動に到達しないままテストが通ってしまう。
@@ -81,7 +81,7 @@ export function createBidiSession(): {
     unmatchedRequestOkAllowances: new Map(),
     peerMaxRequestUpdates: 0,
     peerMaxFilterRanges: 2,
-    // draft-ietf-moq-transport-22 §9.1.7 (MAX_REQUEST_UPDATES):
+    // draft-ietf-moq-transport-23 §9.1.7 (MAX_REQUEST_UPDATES):
     // 既定は未広告 (0 = 無制限) と未応答数なし
     localMaxRequestUpdates: 0,
     // draft-ietf-moq-transport-23 §9.1.8: 制御メッセージの受信・送信上限は既定値
@@ -248,14 +248,14 @@ export function createPublishReadTestContext(
     unmatchedRequestOkAllowances: new Map(),
     peerMaxRequestUpdates: 0,
     peerMaxFilterRanges: 0,
-    // draft-ietf-moq-transport-22 §9.1.7 (MAX_REQUEST_UPDATES):
+    // draft-ietf-moq-transport-23 §9.1.7 (MAX_REQUEST_UPDATES):
     // 既定は未広告 (0 = 無制限) と未応答数なし
     localMaxRequestUpdates: 0,
     // draft-ietf-moq-transport-23 §9.1.8: 制御メッセージの受信・送信上限は既定値
     localMaxControlMessageSize: DEFAULT_MAX_CONTROL_MESSAGE_SIZE,
     peerMaxControlMessageSize: DEFAULT_MAX_CONTROL_MESSAGE_SIZE,
     receivedRequestUpdateCounts: new Map(),
-    // draft-ietf-moq-transport-22 §8.9 / §9.1.3:
+    // draft-ietf-moq-transport-23 §8.9 / §9.1.3:
     // 受信 AUTHORIZATION TOKEN のキャッシュ。既定は上限 0 (未広告 = Alias 使用禁止) で、
     // Alias を使うテストは authTokenCacheSize を指定する。
     receivedAuthTokens: new AuthTokenCache(authTokenCacheSize),
@@ -309,7 +309,7 @@ export function forceSessionClosed(session: BidiSessionInternal): void {
 /**
  * End Group が 2^64-1 を超える LOCATION_FILTER パラメータを組み立てる
  *
- * draft-ietf-moq-transport-22 §9.20.9 の Location Filter Type ベース表現で、
+ * draft-ietf-moq-transport-23 §9.19.9 の Location Filter Type ベース表現で、
  * StartGroup + EndGroupDelta が超過する値を手組みする。
  * encodeLocationFilterParameter は送信前に throw するためエンコーダでは
  * 組み立てられない。4 フィールド表現 (EndObject 付き) も対象にする。
@@ -405,7 +405,7 @@ export function createPublishOkValidationContext(
     unmatchedRequestOkAllowances: new Map(),
     peerMaxRequestUpdates: 0,
     peerMaxFilterRanges: 0,
-    // draft-ietf-moq-transport-22 §9.1.7 (MAX_REQUEST_UPDATES):
+    // draft-ietf-moq-transport-23 §9.1.7 (MAX_REQUEST_UPDATES):
     // 既定は未広告 (0 = 無制限) と未応答数なし
     localMaxRequestUpdates: 0,
     // draft-ietf-moq-transport-23 §9.1.8: 制御メッセージの受信・送信上限は既定値
@@ -498,7 +498,7 @@ export function createOkResponseReadTestContext(): {
     unmatchedRequestOkAllowances: new Map(),
     peerMaxRequestUpdates: 0,
     peerMaxFilterRanges: 0,
-    // draft-ietf-moq-transport-22 §9.1.7 (MAX_REQUEST_UPDATES):
+    // draft-ietf-moq-transport-23 §9.1.7 (MAX_REQUEST_UPDATES):
     // 既定は未広告 (0 = 無制限) と未応答数なし
     localMaxRequestUpdates: 0,
     // draft-ietf-moq-transport-23 §9.1.8: 制御メッセージの受信・送信上限は既定値
@@ -600,7 +600,7 @@ export function createCancelObservableResponseContext(): {
     unmatchedRequestOkAllowances: new Map(),
     peerMaxRequestUpdates: 0,
     peerMaxFilterRanges: 0,
-    // draft-ietf-moq-transport-22 §9.1.7 (MAX_REQUEST_UPDATES):
+    // draft-ietf-moq-transport-23 §9.1.7 (MAX_REQUEST_UPDATES):
     // 既定は未広告 (0 = 無制限) と未応答数なし
     localMaxRequestUpdates: 0,
     // draft-ietf-moq-transport-23 §9.1.8: 制御メッセージの受信・送信上限は既定値
@@ -726,14 +726,14 @@ export function createFetchReadTestContext(additionalMessages: Uint8Array[] = []
     unmatchedRequestOkAllowances: new Map(),
     peerMaxRequestUpdates: 0,
     peerMaxFilterRanges: 0,
-    // draft-ietf-moq-transport-22 §9.1.7 (MAX_REQUEST_UPDATES):
+    // draft-ietf-moq-transport-23 §9.1.7 (MAX_REQUEST_UPDATES):
     // 既定は未広告 (0 = 無制限) と未応答数なし
     localMaxRequestUpdates: 0,
     // draft-ietf-moq-transport-23 §9.1.8: 制御メッセージの受信・送信上限は既定値
     localMaxControlMessageSize: DEFAULT_MAX_CONTROL_MESSAGE_SIZE,
     peerMaxControlMessageSize: DEFAULT_MAX_CONTROL_MESSAGE_SIZE,
     receivedRequestUpdateCounts: new Map(),
-    // draft-ietf-moq-transport-22 §8.9 / §9.1.3:
+    // draft-ietf-moq-transport-23 §8.9 / §9.1.3:
     // 受信 AUTHORIZATION TOKEN のキャッシュ。既定は上限 0 (未広告 = Alias 使用禁止)。
     receivedAuthTokens: new AuthTokenCache(0),
     namespaceSubscriptions: new Map(),

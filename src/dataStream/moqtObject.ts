@@ -1,6 +1,6 @@
 /**
  * MOQT Object の型と、その値の検証
- * draft-ietf-moq-transport-22 Section 11 (Data Streams and Datagrams)
+ * draft-ietf-moq-transport-23 Section 11 (Data Streams and Datagrams)
  *
  * Subgroup (Section 11.3) / Datagram (Section 11.2) / Fetch (Section 11.4) の
  * 各エンコーダ・デコーダが共有する型と検証を置く。特定の転送形態に依存する
@@ -18,7 +18,7 @@ export const ERR_PUBLISHER_PRIORITY_REQUIRED =
 /**
  * Publisher Priority の値域を検証する
  *
- * draft-ietf-moq-transport-22 §11.1 / §11.2 / §11.3.1 / §11.4.1:
+ * draft-ietf-moq-transport-23 §11.1 / §11.2 / §11.3.1 / §11.4.1:
  * Publisher Priority は 8 bit (0〜255) である。範囲外・非整数は
  * Uint8Array 化で黙って丸められるため、変換前に throw する。
  * 仕様の将来版で値域が変わる可能性がある。
@@ -34,7 +34,7 @@ export function validatePublisherPriority(priority: number): void {
 /**
  * Object Status の値を検証する
  *
- * draft-ietf-moq-transport-22 §11.1.1:
+ * draft-ietf-moq-transport-23 §11.1.1:
  * "Any other value SHOULD be treated as a protocol error and the session
  *  SHOULD be closed with a PROTOCOL_VIOLATION."
  */
@@ -60,7 +60,7 @@ export interface MoqtObject {
   objectId: bigint;
   /**
    * Publisher Priority
-   * draft-ietf-moq-transport-22 §10.4 / §11.3.1 / §11.2.1
+   * draft-ietf-moq-transport-23 §10.4 / §11.3.1 / §11.2.1
    *
    * Subgroup Header / Object Datagram で Priority が省略された場合 (DEFAULT_PRIORITY
    * ビットが 1) は、購読を確立した control message の DEFAULT_PUBLISHER_PRIORITY
@@ -75,7 +75,7 @@ export interface MoqtObject {
   payload: Uint8Array;
   /**
    * Object Delivery Timeout（ミリ秒）
-   * draft-ietf-moq-transport-22 Section 10.2 / Section 5.2
+   * draft-ietf-moq-transport-23 Section 10.2 / Section 5.2
    *
    * subgroup 先頭オブジェクトの Object Property から抽出される。
    * 先頭以外・Fetch・Datagram では設定されない。
@@ -83,7 +83,7 @@ export interface MoqtObject {
   objectDeliveryTimeout?: bigint;
   /**
    * Subgroup Delivery Timeout（ミリ秒）
-   * draft-ietf-moq-transport-22 Section 10.1 / Section 5.2
+   * draft-ietf-moq-transport-23 Section 10.1 / Section 5.2
    *
    * subgroup 先頭オブジェクトの Object Property から抽出される。
    * 先頭以外・Fetch・Datagram では設定されない。
@@ -91,7 +91,7 @@ export interface MoqtObject {
   subgroupDeliveryTimeout?: bigint;
   /**
    * fill fetch ストリーム経由で届いたかどうか
-   * draft-ietf-moq-transport-22 §3.1 (Subscriptions) / §3.4 (Fill Semantics)
+   * draft-ietf-moq-transport-23 §3.1 (Subscriptions) / §3.4 (Fill Semantics)
    *
    * §3.1 が「An object published or received in a subgroup or datagram is
    * *subscription-delivered*.」、§3.4 が「An object delivered on the fill fetch

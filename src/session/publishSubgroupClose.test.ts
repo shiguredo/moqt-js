@@ -1,7 +1,7 @@
 /**
  * session/publish.ts の単体テスト: Subgroup ストリームの閉じ方 (FIN / RESET)
  *
- * draft-ietf-moq-transport-22 §11.3.2 (Closing Subgroup Streams):
+ * draft-ietf-moq-transport-23 §11.3.2 (Closing Subgroup Streams):
  * "If a sender closes the stream before delivering all such objects to the QUIC
  *  stream, it MUST reset the stream.  This includes, but is not limited to:
  *  ... Omitting a Subgroup Object because the subscription is paused"
@@ -129,7 +129,7 @@ test("publishSendObject: 省略した Subgroup は done() で RESET される", 
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.3.1 / §11.3.2:
+ * draft-ietf-moq-transport-23 §3.3.1 / §11.3.2:
  * 購読の Location Filter の範囲外として送らなかった Object がある Subgroup は、
  * paused (PAUSED=1) 中の見送りと同じく省略として記録され、閉じる時に RESET される。
  */
@@ -353,7 +353,7 @@ test("publishResetPublisherStream: peer cancel の RESET は従来どおり", as
 /**
  * closeSubgroup: Object を送らずに、開いている Subgroup を閉じる
  *
- * draft-ietf-moq-transport-22 §11.3.2 (Closing Subgroup Streams):
+ * draft-ietf-moq-transport-23 §11.3.2 (Closing Subgroup Streams):
  * 配信を止める経路 (pause / devtools の stop-sending) から呼ばれる。止めた時点で
  * 「その Subgroup に続く Object は無い」ため FIN の MUST を満たせる。
  */

@@ -20,7 +20,7 @@ import { bidiHandleRequestUpdateOk, type BidiSessionInternal } from "./bidi";
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-22 Section 9.3 (REQUEST_OK):
+ * draft-ietf-moq-transport-23 Section 9.3 (REQUEST_OK):
  * "Track Properties are populated in TRACK_STATUS_OK; they are empty in
  *  PUBLISH_OK, REQUEST_UPDATE_OK, SUBSCRIBE_NAMESPACE_OK and PUBLISH_NAMESPACE_OK.
  *  If an endpoint receives Track Properties in one of these messages it MUST
@@ -64,7 +64,7 @@ test("bidiHandleRequestUpdateOk: 非空 Track Properties で closeWithError が�
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.3.2:
+ * draft-ietf-moq-transport-23 §3.3.2:
  * 自 update({ rangeFilters }) の REQUEST_OK 受信時に、送信時の Range Filters が
  * SubscriberImpl に反映されることを検証する。
  * REQUEST_UPDATE で省略された型は不変 (「If a filter parameter is omitted from
@@ -164,7 +164,7 @@ test("bidiHandleRequestUpdateOk: 空 Track Properties では closeWithError が�
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.1 (Subscriptions):
+ * draft-ietf-moq-transport-23 §3.1 (Subscriptions):
  * "A publisher MUST send exactly one SUBSCRIBE_OK or REQUEST_ERROR in response
  *  to a SUBSCRIBE. ... The peer SHOULD close the session with a protocol error
  *  if it receives more than one."
@@ -204,7 +204,7 @@ test("bidiHandleRequestUpdateOk: 未応答の REQUEST_UPDATE が無い REQUEST_O
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.2 (GOAWAY):
+ * draft-ietf-moq-transport-23 §9.2 (GOAWAY):
  * GOAWAY 受信時点で未応答の REQUEST_UPDATE は失敗として reject され
  * pendingRequestUpdate から削除される。その後に届く REQUEST_OK は削除済みの
  * 更新への正当な応答でありうるため、違反としてセッションを閉じない
@@ -373,7 +373,7 @@ test("bidiHandleRequestUpdateOk: PAUSED 省略の update の REQUEST_OK で paus
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.9:
+ * draft-ietf-moq-transport-23 §9.19.9:
  * "If omitted from REQUEST_UPDATE or PUBLISH_STATE_NOTIFY,
  *  the value is unchanged."
  * 自 update() で送信した LOCATION_FILTER が REQUEST_OK 受信時に
@@ -458,7 +458,7 @@ test("bidiHandleRequestUpdateOk: 送信時の LOCATION_FILTER が反映され新
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.9:
+ * draft-ietf-moq-transport-23 §9.19.9:
  * LOCATION_FILTER を送らなかった update() の REQUEST_OK では
  * フィルタが不変であることを検証する。
  */
@@ -484,7 +484,7 @@ test("bidiHandleRequestUpdateOk: LOCATION_FILTER 省略の update の REQUEST_OK
 
   bidiHandleRequestUpdateOk(session, payload, 0n);
 
-  // 省略時は不変 (§9.20.9) のため group 1 以降が従来どおり届く
+  // 省略時は不変 (§9.19.9) のため group 1 以降が従来どおり届く
   subscriber.handleObject({
     groupId: 0n,
     subgroupId: 0n,
@@ -505,7 +505,7 @@ test("bidiHandleRequestUpdateOk: LOCATION_FILTER 省略の update の REQUEST_OK
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.3.1:
+ * draft-ietf-moq-transport-23 §3.3.1:
  * LARGEST_OBJECT のみを含む REQUEST_UPDATE_OK では Next Object (0x05) の
  * 開始位置を再解決しないことを検証する。
  */
@@ -552,7 +552,7 @@ test("bidiHandleRequestUpdateOk: LARGEST_OBJECT のみの REQUEST_OK では Next
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.3.1:
+ * draft-ietf-moq-transport-23 §3.3.1:
  * LARGEST_OBJECT を運ぶ REQUEST_UPDATE_OK を受信したとき、送信時に指定した
  * Next Object (Location Filter Type 0x05) が更新後の LARGEST_OBJECT で
  * 解決されることを検証する。
@@ -608,10 +608,10 @@ test("bidiHandleRequestUpdateOk: Next Object が更新後の LARGEST_OBJECT で�
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.9 / §3.3.1:
+ * draft-ietf-moq-transport-23 §9.19.9 / §3.3.1:
  * { reset: true } (Location Filter Type 0x00 = None) は除去として反映され、
  * 反映後はフィルタなしで全オブジェクトが通過することを検証する。
- * (§9.20.9: Location Filter Type 0x00 は "no fields follow and there is no
+ * (§9.19.9: Location Filter Type 0x00 は "no fields follow and there is no
  *  Location Filter" であり、REQUEST_UPDATE でのフィルタ除去に使う)
  */
 test("bidiHandleRequestUpdateOk: reset フィルタが反映され全オブジェクトが通過する", () => {
@@ -661,7 +661,7 @@ test("bidiHandleRequestUpdateOk: reset フィルタが反映され全オブジ�
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-22 §9.3 (REQUEST_OK):
+ * draft-ietf-moq-transport-23 §9.3 (REQUEST_OK):
  * PUBLISH_OK で非空 Track Properties を含む REQUEST_OK を受信した場合、
  * PROTOCOL_VIOLATION でセッションが閉じられることを検証する。
  */

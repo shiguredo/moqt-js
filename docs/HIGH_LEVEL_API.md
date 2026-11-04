@@ -36,7 +36,7 @@ const publisher = await createMediaPublisher(url, options, callbacks?)
 interface MediaPublisherOptions {
   namespace: string[];
   // namespace の告知 (PUBLISH_NAMESPACE)。default: false
-  // draft-ietf-moq-transport-22 §4.1: true のとき、catalog と媒体トラックの PUBLISH の後、
+  // draft-ietf-moq-transport-23 §4.1: true のとき、catalog と媒体トラックの PUBLISH の後、
   // start() の解決までに PUBLISH_NAMESPACE を送って REQUEST_OK を待つ。relay は
   // namespace discovery (SUBSCRIBE_NAMESPACE) で告知された namespace を列挙する (§4.2)。
   // namespace が空配列の場合は start() を入口で reject する (§2.4.2 の prefix 一致では
@@ -56,7 +56,7 @@ interface MediaPublisherOptions {
     // AudioEncoder の sampleRate / numberOfChannels には、経路が実際に流す値を使う
     sampleRate?: number; // default: 48000
     channels?: number; // default: 2
-    // 音声 Object の送り方 (draft-ietf-moq-transport-22 §11)。default: "datagram"
+    // 音声 Object の送り方 (draft-ietf-moq-transport-23 §11)。default: "datagram"
     // "datagram": Datagram で送る。QUIC 上の WebTransport では再送されず、経路の欠落が
     // そのまま音の欠落になる (HTTP/2 上の WebTransport では datagram も再送される。§6.2)。
     // サイズが上限を超えた Object は明示通知なく drop される (§11.2)。実測で使った 64 kbps / 20 ms
@@ -199,7 +199,7 @@ interface MediaPublisherCallbacks {
 
 `announceNamespace: true` のとき、`start()` は catalog と媒体トラックの `PUBLISH` の後に
 `PUBLISH_NAMESPACE` を送り、`REQUEST_OK` を待ってから `"publishing"` になる
-(draft-ietf-moq-transport-22 §4.1)。relay は `SUBSCRIBE_NAMESPACE` で告知された namespace を
+(draft-ietf-moq-transport-23 §4.1)。relay は `SUBSCRIBE_NAMESPACE` で告知された namespace を
 列挙する (§4.2)。認可トークンは `SETUP` に載せたものを `PUBLISH` と共用する
 (draft-ietf-moq-msf-01 §11.4.3)。
 
@@ -264,7 +264,7 @@ created / stopped ───────────────┬────�
 `stop()` の成功時に `onClose` は通知しない (停止であり終端ではない)。
 
 `pause()` はエンコードを止めるだけでなく、開いている Subgroup ストリームを閉じる
-(draft-ietf-moq-transport-22 §11.3.2)。止めた時点で「その Subgroup に続く Object は無い」
+(draft-ietf-moq-transport-23 §11.3.2)。止めた時点で「その Subgroup に続く Object は無い」
 ため FIN の MUST を満たせる。§11.3.2 は Group 境界での終了を SHOULD とするが、`pause()` は
 境界を待てないため途中で閉じる。送らないと決めた Object は wire 上に存在せず
 (Object ID は送信する時点で払い出す)、早期終了の MUST reset には当たらない。閉じないと、
@@ -307,13 +307,13 @@ state だけでは重なりを判定できない)。
 新しい Group の先頭 Object として送り直す (draft-ietf-moq-msf-01 §5)。
 
 - `FORWARD` が 0 から 1 になった時点。Relay は購読者が居ない間、upstream の購読を paused
-  にしてよい (draft-ietf-moq-transport-22 §7.6 の MAY)。paused にするかは Relay の裁量で
+  にしてよい (draft-ietf-moq-transport-23 §7.6 の MAY)。paused にするかは Relay の裁量で
   ある (§7.2)。paused の間は Publisher が Object を送らないため (§3.1.1)、配信の開始時に
   送った catalog は後から購読を始めた相手へ届かない
 - catalog を送るたびに予約する 30 秒後の送り直し。値は `MAX_CACHE_DURATION` (この実装では
   1 時間) の半分を上限 30 秒で頭打ちにしたものであり、下限 1 秒と合わせて 1 秒以上 30 秒
   以下になる。Relay は `MAX_CACHE_DURATION` を過ぎた Object をキャッシュから配れないため
-  (draft-ietf-moq-transport-22 §10.3)、配信の開始から時間が経った後に購読を始めた相手には
+  (draft-ietf-moq-transport-23 §10.3)、配信の開始から時間が経った後に購読を始めた相手には
   この予約が catalog を届ける (draft-ietf-moq-msf-01 §5)
 
 catalog の Group ID は送り直しのたびに +1 し、`stop()` → `start()` を跨いでも単調に
@@ -582,7 +582,7 @@ interface MediaSubscriberOptions {
   // catalog の targetLatency とは加算される
   preDecodeDelayMs?: number;
   // 各 SUBSCRIBE に載せる RENDEZVOUS_TIMEOUT (ms、default: 未指定でパラメータを載せない)
-  // draft-ietf-moq-transport-22 §9.20.6: relay が publisher の出現を待つ上限。
+  // draft-ietf-moq-transport-23 §9.19.6: relay が publisher の出現を待つ上限。
   // 0 以上 Number.MAX_SAFE_INTEGER 以下の整数だけを受け付け、それ以外は生成時に拒否する。
   // 0 を指定した場合は 0 のパラメータを載せ、即時応答を要求することを明示する。
   // SUBSCRIBE ごとの上限であるため、start() は catalog・音声・映像の最大 3 回分待つ
@@ -626,7 +626,7 @@ MediaPublisherOptions も `audio` / `video` / `useWorker` / `serverCertificateHa
 [再生遅延](PLAYOUT_DELAY.md) を参照すること。
 
 `rendezvousTimeout` は、各 `SUBSCRIBE` に載せる `RENDEZVOUS_TIMEOUT` (ミリ秒) である
-(draft-ietf-moq-transport-22 §9.20.6)。relay が publisher の出現を待つ上限であり、
+(draft-ietf-moq-transport-23 §9.19.6)。relay が publisher の出現を待つ上限であり、
 0 以上 `Number.MAX_SAFE_INTEGER` 以下の整数だけを受け付ける (負数・小数・非有限・上限超は
 `createMediaSubscriber()` が拒否する)。未指定の場合はパラメータを載せない (relay の既定も
 0)。0 を指定した場合は 0 のパラメータを載せ、即時応答を要求することを明示する。
@@ -663,7 +663,7 @@ interface MediaSubscriberCallbacks {
   // 渡り、現在の URI の再利用を意味する。再接続はアプリが行う (下記「GOAWAY の扱い」)
   onGoaway?: (newSessionUri: string) => void;
   // 購読の失敗。低レベル API の error とは異なり、エラーを示す Status Code の PUBLISH_DONE
-  // (draft-ietf-moq-transport-22 §9.9 / §12.4) でも呼ばれる。正常な PUBLISH_DONE
+  // (draft-ietf-moq-transport-23 §9.9 / §12.4) でも呼ばれる。正常な PUBLISH_DONE
   // (TRACK_ENDED 等) では呼ばれず、状態も変わらない
   onError?: (error: Error) => void;
   onClose?: () => void;
@@ -796,7 +796,7 @@ session も閉じる。`start()` が失敗した場合は確保済みを解放�
 #### relay の REQUEST_ERROR (RequestError)
 
 `instanceof RequestError` で判定できる。`code` (`RequestErrorCode`) と `retryInterval` を
-読める。`retryInterval` は draft-ietf-moq-transport-22 §9.4.2 の Retry Interval の生値
+読める。`retryInterval` は draft-ietf-moq-transport-23 §9.4.2 の Retry Interval の生値
 (「ミリ秒 + 1」) であり、0 は「そのままでは再試行しない」を意味する (REDIRECT の追従は
 §12.3 により妨げられない)。
 
@@ -826,7 +826,7 @@ session も閉じる。`start()` が失敗した場合は確保済みを解放�
 #### GOAWAY の扱い
 
 GOAWAY を受信すると、`MediaSubscriberCallbacks.onGoaway` /
-`MediaPublisherCallbacks.onGoaway` に新しい Session URI が渡る。draft-ietf-moq-transport-22 §9.2 は
+`MediaPublisherCallbacks.onGoaway` に新しい Session URI が渡る。draft-ietf-moq-transport-23 §9.2 は
 「The client MUST use this URI for the new session if provided. If the URI is zero bytes
 long, the current URI is reused instead.」と定める。ライブラリは**自動で再接続しない**。
 
@@ -843,7 +843,7 @@ long, the current URI is reused instead.」と定める。ライブラリは**�
 - `onGoaway` は Session の制御ストリーム由来と、リクエストストリーム由来の両方で
   呼ばれ得る。リクエストストリームは subscriber が SUBSCRIBE / FETCH、publisher が
   PUBLISH / PUBLISH_NAMESPACE である。直前と同じ URI の連続通知は抑止する
-- 制御ストリームの GOAWAY はセッションを即座には閉じない (draft-ietf-moq-transport-22
+- 制御ストリームの GOAWAY はセッションを即座には閉じない (draft-ietf-moq-transport-23
   §6.6.1)。確立済みのセッションでは、購読の終了またはピアのクローズに伴って `onClose` が
   続くことがある。`start()` の実行中に GOAWAY が届いた場合、start の結果と `onClose` は
   保証されない。リクエストストリームの GOAWAY はそのリクエストだけが影響を受け
@@ -870,7 +870,7 @@ interface MediaReceiverStats {
 interface AudioReceiverStats {
   // 復号へ渡した音声 Object の数。subgroupFramesReceived と datagramFramesReceived の和
   framesReceived: number;
-  // Subgroup (Data Stream) で届いた数 (draft-ietf-moq-transport-22 §11)
+  // Subgroup (Data Stream) で届いた数 (draft-ietf-moq-transport-23 §11)
   subgroupFramesReceived: number;
   // Datagram で届いた数 (§11.2)。Datagram は再送されないため、経路の欠落がそのまま
   // この数の不足になる。補間と捨ての割合を経路ごとに比べるのに使う
@@ -1314,7 +1314,7 @@ relay の cache から届いた分として復号へ渡さず捨てた数であ�
 (src/catchUpGate.ts)。
 
 受信した映像は Group の順序と欠落を見て、参照するフレームを復号済みの Object だけを
-復号する。Object は順不同で届きうる (draft-ietf-moq-transport-22 Section 2.1) ため、
+復号する。Object は順不同で届きうる (draft-ietf-moq-transport-23 Section 2.1) ため、
 次の Group のキーフレームを復号した後に届いた前の Group の Object は復号せず
 `staleFramesDropped` に数える。Group 内で Object ID が欠けた場合は、Prior Object ID Gap
 (Section 10.9) が非存在を示す分を除き欠落として扱い、次のキーフレームまでの Object を

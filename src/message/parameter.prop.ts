@@ -27,7 +27,7 @@ import {
 import { fillParametersArb, locationFilterArb, parametersArb } from "./parameterArb";
 
 test("TrackNamespace のエンコード・デコードがラウンドトリップする", () => {
-  // draft-ietf-moq-transport-22 §2.3:
+  // draft-ietf-moq-transport-23 §2.3:
   // "Each Track Namespace Field Value MUST contain at least one byte."
   // 各フィールドは 1 バイト以上必要なため minLength: 1 とする
   fc.assert(
@@ -67,7 +67,7 @@ test("Location のエンコード・デコードがラウンドトリップす�
 /**
  * Parameters リストのエンコード・デコードがラウンドトリップする
  *
- * draft-ietf-moq-transport-22 Section 9.20:
+ * draft-ietf-moq-transport-23 Section 9.19:
  * delta encoding を使用するため、type は昇順である必要がある。
  * テストでは生成されたパラメータを type でソートしてから使用する。
  */
@@ -112,7 +112,7 @@ test("LocationFilter パラメータのエンコード・デコードがラウ�
 });
 
 /**
- * draft-ietf-moq-transport-22 Section 3.3.2 (Range Filters):
+ * draft-ietf-moq-transport-23 Section 3.3.2 (Range Filters):
  * Range Filter の encode/decode がラウンドトリップすることを検証する。
  * delta エンコーディング（例: ranges 3–5 と 10–15 → Start=3, End=2, Start=5, End=5）。
  */

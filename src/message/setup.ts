@@ -1,6 +1,6 @@
 /**
  * MOQT Setup Messages
- * draft-ietf-moq-transport-22 §9.1 (SETUP)
+ * draft-ietf-moq-transport-23 §9.1 (SETUP)
  *
  * §6.3 (Session initialization): 制御ストリームは単方向ストリームのペアになり、
  * SETUP はその先頭で交換される。CLIENT_SETUP と SERVER_SETUP が単一の SETUP に
@@ -11,7 +11,7 @@
  * 将来の拡張を足すときも、汎用形式を仮定せず、その拡張仕様が定める Setup Option を定義する。
  *
  * Setup Option は §16.4 (Setup Options) の IANA レジストリで管理され、
- * Message Parameter (§9.20) とは別の名前空間である (§9.20.1: SETUP に Message
+ * Message Parameter (§9.19) とは別の名前空間である (§9.19.1: SETUP に Message
  * Parameter は出現しない)。moqt-js が送る Option は次のとおり。
  * - 0x03 AUTHORIZATION_TOKEN (§9.1.4)
  * - 0x04 MAX_AUTH_TOKEN_CACHE_SIZE (§9.1.3)
@@ -48,7 +48,7 @@ import { IncompleteDataError, SessionError, SessionErrorCode } from "../error";
 /**
  * SETUP メッセージ
  *
- * draft-ietf-moq-transport-22 §9.1 (SETUP):
+ * draft-ietf-moq-transport-23 §9.1 (SETUP):
  * CLIENT_SETUP と SERVER_SETUP は単一の SETUP メッセージに統合された。
  */
 export interface Setup {
@@ -59,7 +59,7 @@ export interface Setup {
 /**
  * Setup を作成
  *
- * draft-ietf-moq-transport-22 §9.1.1 / §9.1.2:
+ * draft-ietf-moq-transport-23 §9.1.1 / §9.1.2:
  * AUTHORITY (0x05) / PATH (0x01) は WebTransport 使用時には MUST NOT 送信。
  * moqt-js は WebTransport 専用クライアントのため、これらは作成手段を持たない。
  *
@@ -80,7 +80,7 @@ export interface Setup {
  * 既定値 65535 を用いる。
  *
  * moqtImplementation で §9.1.5 (MOQT IMPLEMENTATION) の送信を制御する。
- * draft-ietf-moq-transport-22 §15.8 (Implementation Identification Fingerprinting)
+ * draft-ietf-moq-transport-23 §15.8 (Implementation Identification Fingerprinting)
  * のプライバシー緩和策に対応する。
  * - 未指定（既定）: MOQT_IMPLEMENTATION_VALUE（`moqt-js/${version}`）を送信する。
  * - false: MOQT_IMPLEMENTATION Option を送信しない（opt-out）。
@@ -110,7 +110,7 @@ export function createSetup(options?: {
     });
   }
 
-  // draft-ietf-moq-transport-22 §9.1.3 (MAX_AUTH_TOKEN_CACHE_SIZE):
+  // draft-ietf-moq-transport-23 §9.1.3 (MAX_AUTH_TOKEN_CACHE_SIZE):
   // 送信しない場合のデフォルトは 0（Alias の使用禁止）
   if (options?.maxAuthTokenCacheSize !== undefined) {
     parameters.push({
@@ -119,7 +119,7 @@ export function createSetup(options?: {
     });
   }
 
-  // draft-ietf-moq-transport-22 §9.1.7 (MAX_REQUEST_UPDATES):
+  // draft-ietf-moq-transport-23 §9.1.7 (MAX_REQUEST_UPDATES):
   // 送信しない場合のデフォルトは 0（無制限）
   if (options?.maxRequestUpdates !== undefined) {
     parameters.push({
@@ -128,7 +128,7 @@ export function createSetup(options?: {
     });
   }
 
-  // draft-ietf-moq-transport-22 §9.1.6 (MAX FILTER RANGES):
+  // draft-ietf-moq-transport-23 §9.1.6 (MAX FILTER RANGES):
   // 送信しない場合のデフォルトは 0（Range Filter の受信拒否）
   if (options?.maxFilterRanges !== undefined) {
     parameters.push({
@@ -151,7 +151,7 @@ export function createSetup(options?: {
   }
 
   // MOQT_IMPLEMENTATION (0x07) - §9.1.5 (MOQT IMPLEMENTATION)
-  // draft-ietf-moq-transport-22 §15.8 のプライバシー緩和策として opt-out / override を受け付ける。
+  // draft-ietf-moq-transport-23 §15.8 のプライバシー緩和策として opt-out / override を受け付ける。
   // false のときは送信を抑止する。文字列のときはその値を、未指定のときは既定値を送信する。
   if (options?.moqtImplementation !== false) {
     const moqtImplementation =
@@ -164,7 +164,7 @@ export function createSetup(options?: {
     });
   }
 
-  // GREASE Setup Option - draft-ietf-moq-transport-22 §13 (Grease)
+  // GREASE Setup Option - draft-ietf-moq-transport-23 §13 (Grease)
   // 0x7f * N + 0x9D パターンの予約値を送信し、対向が未知の Option を gracefully に
   // 扱えることを保証する（RFC 9170 §3.3 由来の SHOULD 推奨）。opt-in のとき 1 つ追加する。
   if (options?.grease) {
@@ -183,7 +183,7 @@ export function createSetup(options?: {
 /**
  * GREASE Setup Option の Option Type を生成する
  *
- * draft-ietf-moq-transport-22 §13: GREASE 値は 0x7f * N + 0x9D（N は非負整数）のパターン。
+ * draft-ietf-moq-transport-23 §13: GREASE 値は 0x7f * N + 0x9D（N は非負整数）のパターン。
  * Key-Value-Pairs 規則（parameter.ts）では奇数 Type は Length プレフィックス付きバイト列、
  * 偶数 Type は varint 値としてエンコードされる。任意のバイト列を安全に送信するため、
  * N を偶数に固定して Option Type を奇数にする（0x9D は奇数、0x7f * 偶数は偶数、合計は奇数）。
@@ -199,7 +199,7 @@ function generateGreaseSetupOptionType(): number {
 /**
  * Setup のペイロードをエンコード
  *
- * draft-ietf-moq-transport-22 §9.1 (SETUP):
+ * draft-ietf-moq-transport-23 §9.1 (SETUP):
  * Setup Options は Key-Value-Pairs (Figure 3) としてシリアライズされ、
  * カウントプレフィックスを持たない。Length フィールドで終端が決まる。
  * delta encoding を使用するため、パラメータは type の昇順でソートしてからエンコードする。
@@ -213,7 +213,7 @@ export function encodeSetupPayload(msg: Setup): Uint8Array {
 /**
  * Setup のペイロードをデコード
  *
- * draft-ietf-moq-transport-22 §9.1 (SETUP) / §16.4 (Setup Options):
+ * draft-ietf-moq-transport-23 §9.1 (SETUP) / §16.4 (Setup Options):
  * Setup Options は Key-Value-Pairs (Figure 3) としてシリアライズされ、
  * カウントプレフィックスを持たない。データ末尾まで KVP を読む。
  *
@@ -267,7 +267,7 @@ export function getSetupMoqtImplementation(msg: Setup): string | undefined {
 
 /**
  * Setup メッセージから AUTHORIZATION_TOKEN を取得する
- * draft-ietf-moq-transport-22 §9.1.4 (AUTHORIZATION TOKEN)
+ * draft-ietf-moq-transport-23 §9.1.4 (AUTHORIZATION TOKEN)
  *
  * Setup Option の値は Section 8.9 の Token 構造。
  * 複数の Authorization Token を一つの SETUP に載せられるため、配列で返す。
@@ -280,7 +280,7 @@ export function getSetupAuthorizationTokens(msg: Setup): AuthorizationToken[] {
 
 /**
  * Setup メッセージから MAX_AUTH_TOKEN_CACHE_SIZE を取得する
- * draft-ietf-moq-transport-22 §9.1.3
+ * draft-ietf-moq-transport-23 §9.1.3
  *
  * デフォルト値は 0（Alias の使用禁止）。
  */
@@ -294,7 +294,7 @@ export function getSetupMaxAuthTokenCacheSize(msg: Setup): number {
 /**
  * SETUP メッセージから MAX_REQUEST_UPDATES を取得する
  *
- * draft-ietf-moq-transport-22 §9.1.7:
+ * draft-ietf-moq-transport-23 §9.1.7:
  * 欠落時のデフォルトは 0（無制限）。
  */
 export function getSetupMaxRequestUpdates(msg: Setup): number {
@@ -307,7 +307,7 @@ export function getSetupMaxRequestUpdates(msg: Setup): number {
 /**
  * SETUP メッセージから MAX_FILTER_RANGES を取得する
  *
- * draft-ietf-moq-transport-22 §9.1.6:
+ * draft-ietf-moq-transport-23 §9.1.6:
  * 欠落時のデフォルトは 0（Range Filter 送信禁止）。
  */
 export function getSetupMaxFilterRanges(msg: Setup): number {

@@ -35,7 +35,7 @@ import { useValueToken } from "../testSupport/helpers";
 // AUTHORIZATION_TOKEN 付与（draft-ietf-moq-msf-01 §11.4.3）
 // ============================================================================
 
-// USE_VALUE スキームのトークン（draft-ietf-moq-transport-22 §8.9 Alias Type 0x3）
+// USE_VALUE スキームのトークン（draft-ietf-moq-transport-23 §8.9 Alias Type 0x3）
 test("encodeAuthorizationTokenParameter: 0x03 パラメータを構築し round-trip する", () => {
   const param = encodeAuthorizationTokenParameter(useValueToken());
   assert.equal(param.type, MessageParameterType.AUTHORIZATION_TOKEN);
@@ -48,7 +48,7 @@ test("encodeAuthorizationTokenParameter: 0x03 パラメータを構築し round-
 });
 
 // draft-ietf-moq-msf-01 §11.4.3: publisher は track に紐づくトークンを PUBLISH へ MUST 付与する。
-// draft-ietf-moq-transport-22 §9.20.2: AUTHORIZATION TOKEN は PUBLISH に出現できる。
+// draft-ietf-moq-transport-23 §9.19.2: AUTHORIZATION TOKEN は PUBLISH に出現できる。
 test("buildPublishParameters: authorizationToken が AUTHORIZATION_TOKEN パラメータになる", () => {
   const token = useValueToken();
   const parameters = buildPublishParameters({ authorizationToken: token });
@@ -70,12 +70,12 @@ test("buildPublishParameters: authorizationToken 省略時は AUTHORIZATION_TOKE
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-22 §9.20.7 (SUBSCRIBER PRIORITY Parameter):
+ * draft-ietf-moq-transport-23 §9.19.7 (SUBSCRIBER PRIORITY Parameter):
  * "It MAY appear in a SUBSCRIBE, PUBLISH, FETCH, or REQUEST_UPDATE"。
  * FETCH でも送信できることを検証する。
  */
 /**
- * draft-ietf-moq-transport-22 §9.20.8 (GROUP ORDER Parameter):
+ * draft-ietf-moq-transport-23 §9.19.8 (GROUP ORDER Parameter):
  * "It MAY appear in a SUBSCRIBE, PUBLISH, SUBSCRIBE_TRACKS, or FETCH"。
  * FETCH の応答順序を要求できることを検証する。
  */
@@ -182,7 +182,7 @@ test("buildSubscribeTracksParameters: §9.17 の初期購読条件をすべて�
 
 // ============================================================================
 // buildPublishTrackProperties (GREASE)
-// draft-ietf-moq-transport-22 §13 (Grease) / §3.7 (Mandatory to Understand Track Properties)
+// draft-ietf-moq-transport-23 §13 (Grease) / §3.7 (Mandatory to Understand Track Properties)
 // ============================================================================
 
 test("buildPublishTrackProperties: grease 未指定は GREASE Property を含まない", () => {
@@ -220,11 +220,11 @@ test("buildPublishTrackProperties: grease: true でも他の Track Property は�
 
 // ============================================================================
 // buildSubscribeTracksParameters (Range Filters)
-// draft-ietf-moq-transport-22 §3.6.2 / §3.6.1 / §3.3.2
+// draft-ietf-moq-transport-23 §3.6.2 / §3.6.1 / §3.3.2
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-22 §3.3.2:
+ * draft-ietf-moq-transport-23 §3.3.2:
  * 削除 (Length=0) は REQUEST_UPDATE のみに定義されるため、
  * SUBSCRIBE_TRACKS で削除を指定すると throw することを検証する。
  */
@@ -240,7 +240,7 @@ test("buildSubscribeTracksParameters: 削除指定 (remove: true) で throw す�
 
 // ============================================================================
 // buildSubscribeParameters / buildFetchParameters (送信ガード)
-// draft-ietf-moq-transport-22 §3.3.1 / §3.3.2
+// draft-ietf-moq-transport-23 §3.3.1 / §3.3.2
 // ============================================================================
 
 test("buildSubscribeParameters: 削除指定で throw する", () => {
@@ -263,7 +263,7 @@ test("buildSubscribeParameters: TRACK_PROPERTY_FILTER で throw する", () => {
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.9 (LOCATION FILTER Parameter):
+ * draft-ietf-moq-transport-23 §9.19.9 (LOCATION FILTER Parameter):
  * SUBSCRIBE 送信経路 (buildSubscribeParameters → encodeLocationFilterParameter)
  * でも End Group の 2^64-1 超過検証が効き、InvalidFilterError が throw される
  * ことを検証する。境界値 (ちょうど 2^64-1) は過剰拒否せず LOCATION_FILTER
@@ -548,11 +548,11 @@ test("resolveFetchResponseEndLocation: 閉端の要求で LARGEST_OBJECT が無�
 
 // ============================================================================
 // buildFillParameters / FILL_PARAMETERS
-// draft-ietf-moq-transport-22 §3.4 / §9.20.15
+// draft-ietf-moq-transport-23 §3.4 / §9.19.15
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-22 §9.20.9 / §9.20.15:
+ * draft-ietf-moq-transport-23 §9.19.9 / §9.19.15:
  * fill 内の LOCATION_FILTER が End Group 超過の場合は送信前に throw する。
  */
 test("buildSubscribeParameters: fill 内の LOCATION_FILTER が End Group 超過の場合は throw する", () => {
@@ -572,7 +572,7 @@ test("buildSubscribeParameters: fill 内の LOCATION_FILTER が End Group 超過
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.8:
+ * draft-ietf-moq-transport-23 §9.19.8:
  * fill 内の GROUP_ORDER が不正値の場合は送信前に throw する。
  */
 test("buildSubscribeParameters: fill 内の GROUP_ORDER が不正値の場合は throw する", () => {
@@ -592,7 +592,7 @@ test("buildSubscribeParameters: fill 内の GROUP_ORDER が不正値の場合は
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.4 / §9.20.15:
+ * draft-ietf-moq-transport-23 §3.4 / §9.19.15:
  * fill の Group Order 解決は FILL 内の指定を優先し、無ければ subscription の
  * 値を継承し、どちらも無ければ Ascending になることを検証する。
  */
@@ -608,7 +608,7 @@ test("resolveFillGroupOrder: fill・subscription・既定値の優先順位で�
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.21:
+ * draft-ietf-moq-transport-23 §9.19.22:
  * SUBSCRIBE / TRACK_STATUS / FETCH / SUBSCRIBE_TRACKS から
  * INCLUDE_PROPERTIES を送れることを検証する。true は 1、false は 0 になる。
  */
@@ -625,7 +625,7 @@ test("buildSubscribeParameters: includeProperties が INCLUDE_PROPERTIES にな�
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.21:
+ * draft-ietf-moq-transport-23 §9.19.22:
  * FETCH から INCLUDE_PROPERTIES を送れることを検証する。
  * true / false / 省略の 3 状態を網羅する。
  */
@@ -651,7 +651,7 @@ test("buildFetchParameters: includeProperties が INCLUDE_PROPERTIES になる",
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.21:
+ * draft-ietf-moq-transport-23 §9.19.22:
  * SUBSCRIBE_TRACKS から INCLUDE_PROPERTIES を送れることを検証する。
  * true / false / 省略の 3 状態を網羅する。
  */
@@ -671,7 +671,7 @@ test("buildSubscribeTracksParameters: includeProperties が INCLUDE_PROPERTIES �
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.21:
+ * draft-ietf-moq-transport-23 §9.19.22:
  * TRACK_STATUS から INCLUDE_PROPERTIES を送れることを検証する。
  * true / false / 省略の 3 状態を網羅する。
  */
@@ -691,7 +691,7 @@ test("buildTrackStatusParameters: includeProperties が INCLUDE_PROPERTIES に�
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.19 (NEW GROUP REQUEST Parameter):
+ * draft-ietf-moq-transport-23 §9.19.19 (NEW GROUP REQUEST Parameter):
  * "The NEW_GROUP_REQUEST parameter (Parameter Type 0x32) is a varint."
  * 値は varint 1 つである。パラメータが無ければ undefined、値 0 はそのまま 0 を返す。
  * 読み切れない値と、varint の後ろに余りのある値は PROTOCOL_VIOLATION にする。
@@ -758,7 +758,7 @@ test("buildSubscribeParameters / buildPublishParameters / buildSubscribeTracksPa
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.9 / §3.4:
+ * draft-ietf-moq-transport-23 §9.19.9 / §3.4:
  * FILL_PARAMETERS の内側には Type 0x00 (None) と Type 0x05 (Next Object) の
  * どちらも載せられる。ワイヤ上は Type のみの 1 バイトになる。
  */
@@ -780,7 +780,7 @@ test("buildFillParameters: reset (0x00) と Next Object (0x05) を内側に載�
 
 // ============================================================================
 // matchNamespacePrefix
-// draft-ietf-moq-transport-22 §2.4.2 (Namespace Prefix Matching) / §3.6
+// draft-ietf-moq-transport-23 §2.4.2 (Namespace Prefix Matching) / §3.6
 // ============================================================================
 
 // §2.4.2 の例をそのまま固定する。直列化した名前は §8.8 の形式であり、
@@ -808,7 +808,7 @@ test("matchNamespacePrefix: §2.4.2 の例どおりフィールド単位で前�
 });
 
 // ============================================================================
-// Track Namespace 送信検証（draft-ietf-moq-transport-22 §8.7 / §2.4.3 / §6.5）
+// Track Namespace 送信検証（draft-ietf-moq-transport-23 §8.7 / §2.4.3 / §6.5）
 // ============================================================================
 
 // §8.7 の構造の制約は送信時のエンコードと同じ実装で判定する。境界値 (32/33 フィールド、

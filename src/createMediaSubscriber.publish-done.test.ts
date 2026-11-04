@@ -34,7 +34,7 @@ import {
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-22 §9.9 (PUBLISH_DONE) / §12.4 (Publish Done Codes):
+ * draft-ietf-moq-transport-23 §9.9 (PUBLISH_DONE) / §12.4 (Publish Done Codes):
  * エラーを示す Status Code の PUBLISH_DONE だけを購読の失敗として扱い、
  * 正常終了 (TRACK_ENDED 等) では失敗にしないことを検証する。
  */

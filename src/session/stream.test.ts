@@ -38,7 +38,7 @@ import { recordFetchObjectEnd, type PriorGapTrackingTarget } from "./priorGapTra
 
 // ============================================================================
 // processSubgroupObjects の先頭オブジェクト判定
-// draft-ietf-moq-transport-22 §5.2 / §10.1 / §10.2
+// draft-ietf-moq-transport-23 §5.2 / §10.1 / §10.2
 // ============================================================================
 
 /** delivery timeout 付きの Object Property バイト列を組み立てる */
@@ -135,7 +135,7 @@ function firstObjectWire(objectIdDelta: bigint, payload: number): Uint8Array {
   return subgroupObjectWire(SubgroupHeaderType.FIRST_OBJ, objectIdDelta, payload);
 }
 
-// draft-ietf-moq-transport-22 §10.4 (DEFAULT PUBLISHER_PRIORITY) / §11.3.1:
+// draft-ietf-moq-transport-23 §10.4 (DEFAULT PUBLISHER_PRIORITY) / §11.3.1:
 // Subgroup Header で Priority が省略された場合 (DEFAULT_PRIORITY ビットが 1)、
 // 購読の DEFAULT_PUBLISHER_PRIORITY を継承した値が配送されることを検証する。
 test("processSubgroupObjects: Priority 省略時は購読の DEFAULT_PUBLISHER_PRIORITY を継承する", () => {
@@ -294,15 +294,15 @@ test("processSubgroupObjects: 通知中の除去でも後続に配送される",
 
 // ============================================================================
 // draft-22 適合監査 D-9: delivery timeout 上書きは FIRST_OBJECT ビット時のみ
-// draft-ietf-moq-transport-22 §5.2 / §2.2
+// draft-ietf-moq-transport-23 §5.2 / §2.2
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-22 §2.2:
+ * draft-ietf-moq-transport-23 §2.2:
  * "When the Original Publisher opens a new subgroup, it MUST set the
  *  FIRST_OBJECT bit ... to indicate that the first object in the subgroup
  *  stream is the first object ever published in that subgroup."
- * draft-ietf-moq-transport-22 §5.2:
+ * draft-ietf-moq-transport-23 §5.2:
  * "Either timeout value can also be set as an Object Property on the first
  *  object in a subgroup ... If either timeout is set as an Object Property on
  *  any object other than the first in a subgroup, it is ignored."
@@ -337,7 +337,7 @@ test("processSubgroupObjects: FIRST_OBJECT ビットなしでは timeout を抽�
 
 // ============================================================================
 // draft-22 適合監査 D-7: Prior Group ID Gap / Prior Object ID Gap
-// draft-ietf-moq-transport-22 §10.8 / §10.9
+// draft-ietf-moq-transport-23 §10.8 / §10.9
 // ============================================================================
 
 /** 単一 Object の fields + payload 1 バイトを組み立てる */
@@ -353,7 +353,7 @@ function objectWireWithProperties(objectIdDelta: bigint, properties: Uint8Array)
 }
 
 /**
- * draft-ietf-moq-transport-22 §10.8:
+ * draft-ietf-moq-transport-23 §10.8:
  * "An Object has a Prior Group ID Gap larger than the Group ID."
  * Group 0 の Object に Prior Group ID Gap = 1 を付けると malformed となる。
  */
@@ -377,7 +377,7 @@ test("processSubgroupObjects: Prior Group ID Gap が Group ID より大きいと
 });
 
 /**
- * draft-ietf-moq-transport-22 §10.9:
+ * draft-ietf-moq-transport-23 §10.9:
  * "An Object has a Prior Object ID Gap larger than the Object ID."
  * Object 0 に Prior Object ID Gap = 1 を付けると malformed となる。
  */
@@ -401,7 +401,7 @@ test("processSubgroupObjects: Prior Object ID Gap が Object ID より大きい�
 });
 
 /**
- * draft-ietf-moq-transport-22 §10.8 / §10.9:
+ * draft-ietf-moq-transport-23 §10.8 / §10.9:
  * gap が Group ID / Object ID 以下なら malformed ではない (誤検出しない)。
  */
 test("processSubgroupObjects: gap が Group ID / Object ID 以下なら配信する", () => {
@@ -424,7 +424,7 @@ test("processSubgroupObjects: gap が Group ID / Object ID 以下なら配信す
 });
 
 /**
- * draft-ietf-moq-transport-22 §10.7 / §10.8:
+ * draft-ietf-moq-transport-23 §10.7 / §10.8:
  * "When looking for the value of a property, processors MUST search both the
  *  mutable properties and the contents of Immutable Properties."
  * mutable list と IMMUTABLE_PROPERTIES 配下を合わせて 2 回現れる場合も
@@ -455,11 +455,11 @@ test("processSubgroupObjects: mutable と IMMUTABLE_PROPERTIES の合算 2 回�
 
 // ============================================================================
 // draft-22 適合監査 D-8: END_OF_GROUP による Group 最終 Object の検出
-// draft-ietf-moq-transport-22 §12.1
+// draft-ietf-moq-transport-23 §12.1
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-22 §12.1 条件 4:
+ * draft-ietf-moq-transport-23 §12.1 条件 4:
  * "An Object is received in a Group whose Object ID is larger than the final
  *  Object in the Group. The final Object in a Group is the Object with Status
  *  END_OF_GROUP ..."
@@ -489,7 +489,7 @@ test("processSubgroupObjects: END_OF_GROUP ステータス後の Object は Malf
  * malformed にならないことを検証する (誤検出防止)。
  */
 /**
- * draft-ietf-moq-transport-22 §12.1 条件 4 の Group 単位追跡:
+ * draft-ietf-moq-transport-23 §12.1 条件 4 の Group 単位追跡:
  * 既知の最終 Object (他 Subgroup で確定済み) を `endOfGroup.finalObjectId` で
  * 受け取り、それより大きい Object ID を持つ Object を malformed として検出する。
  * Subgroup ストリーム (呼び出し) をまたいだ検出を検証する。
@@ -528,7 +528,7 @@ test("processSubgroupObjects: 既知の Group 最終 Object ちょうどまで�
 });
 
 /**
- * draft-ietf-moq-transport-22 §12.1 条件 3 / 条件 4:
+ * draft-ietf-moq-transport-23 §12.1 条件 3 / 条件 4:
  * 同じ Group について既知の最終 Object より小さい Object が END_OF_GROUP を
  * 主張したら malformed とする。Group の最終 Object が二者に分かれる矛盾である。
  */

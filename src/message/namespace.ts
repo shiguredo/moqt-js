@@ -1,6 +1,6 @@
 /**
  * MOQT Namespace Messages
- * draft-ietf-moq-transport-22 Section 9.14 (PUBLISH_NAMESPACE) — 9.19 (PUBLISH_SKIPPED)
+ * draft-ietf-moq-transport-23 Section 9.14 (PUBLISH_NAMESPACE) — 9.19 (PUBLISH_SKIPPED)
  *
  * 制御メッセージのフレーミング (Type / Message Length) は
  * draft-ietf-moq-transport-23 §9 に従う。
@@ -84,7 +84,7 @@ export interface NamespaceDone {
 /**
  * SUBSCRIBE_NAMESPACE メッセージ (Section 9.15 SUBSCRIBE_NAMESPACE)
  *
- * draft-ietf-moq-transport-22:
+ * draft-ietf-moq-transport-23:
  * 旧 SUBSCRIBE_NAMESPACE (0x11) が SUBSCRIBE_NAMESPACE (0x50) と
  * SUBSCRIBE_TRACKS (0x51) に分割された。Subscribe Options フィールドは
  * 廃止され、各メッセージの責務が明確化された。
@@ -104,7 +104,7 @@ export interface NamespaceDone {
  * Track Namespace Prefix は 0〜32 タプルを許可する（空のネームスペースも可）。
  * 空のネームスペースはワイルドカードとして機能し、全てのネームスペースにマッチする。
  *
- * draft-ietf-moq-transport-22 §9.15
+ * draft-ietf-moq-transport-23 §9.15
  */
 export interface SubscribeNamespace {
   type: typeof MessageType.SUBSCRIBE_NAMESPACE;
@@ -116,7 +116,7 @@ export interface SubscribeNamespace {
 /**
  * SUBSCRIBE_TRACKS メッセージ (Section 9.18 SUBSCRIBE_TRACKS)
  *
- * draft-ietf-moq-transport-22:
+ * draft-ietf-moq-transport-23:
  * 旧 SUBSCRIBE_NAMESPACE (0x11) が SUBSCRIBE_NAMESPACE (0x50) と
  * SUBSCRIBE_TRACKS (0x51) に分割された。
  *
@@ -134,7 +134,7 @@ export interface SubscribeNamespace {
  *   Parameters (..) ...
  * }
  *
- * draft-ietf-moq-transport-22 §9.18
+ * draft-ietf-moq-transport-23 §9.18
  */
 export interface SubscribeTracks {
   type: typeof MessageType.SUBSCRIBE_TRACKS;
@@ -267,7 +267,7 @@ export function decodeNamespacePayload(data: Uint8Array, offset = 0): Namespace 
 /**
  * NamespaceDone のペイロードをエンコード
  *
- * draft-ietf-moq-transport-22 Section 9.17 (NAMESPACE_DONE):
+ * draft-ietf-moq-transport-23 Section 9.17 (NAMESPACE_DONE):
  * NAMESPACE_DONE Message {
  *   Type (vi64) = 0xE,
  *   Length (vi64),
@@ -305,7 +305,7 @@ export function decodeNamespaceDonePayload(data: Uint8Array, offset = 0): Namesp
 /**
  * SubscribeNamespace のペイロードをエンコード
  *
- * draft-ietf-moq-transport-22 Section 9.15 (SUBSCRIBE_NAMESPACE):
+ * draft-ietf-moq-transport-23 Section 9.15 (SUBSCRIBE_NAMESPACE):
  * SUBSCRIBE_NAMESPACE Message {
  *   Type (vi64) = 0x50,
  *   Length (vi64),
@@ -335,7 +335,7 @@ export function encodeSubscribeNamespacePayload(msg: SubscribeNamespace): Uint8A
 /**
  * SubscribeNamespace のペイロードをデコード
  *
- * draft-ietf-moq-transport-22 Section 9.15 (SUBSCRIBE_NAMESPACE)
+ * draft-ietf-moq-transport-23 Section 9.15 (SUBSCRIBE_NAMESPACE)
  */
 export function decodeSubscribeNamespacePayload(data: Uint8Array, offset = 0): SubscribeNamespace {
   let totalConsumed = 0;
@@ -372,7 +372,7 @@ export function decodeSubscribeNamespacePayload(data: Uint8Array, offset = 0): S
 /**
  * SubscribeTracks のペイロードをエンコード
  *
- * draft-ietf-moq-transport-22 Section 9.18 (SUBSCRIBE_TRACKS):
+ * draft-ietf-moq-transport-23 Section 9.18 (SUBSCRIBE_TRACKS):
  * SUBSCRIBE_TRACKS Message {
  *   Type (vi64) = 0x51,
  *   Length (vi64),
@@ -404,7 +404,7 @@ export function encodeSubscribeTracksPayload(msg: SubscribeTracks): Uint8Array {
 /**
  * SubscribeTracks のペイロードをデコード
  *
- * draft-ietf-moq-transport-22 Section 9.18 (SUBSCRIBE_TRACKS)
+ * draft-ietf-moq-transport-23 Section 9.18 (SUBSCRIBE_TRACKS)
  */
 export function decodeSubscribeTracksPayload(data: Uint8Array, offset = 0): SubscribeTracks {
   let totalConsumed = 0;
@@ -441,7 +441,7 @@ export function decodeSubscribeTracksPayload(data: Uint8Array, offset = 0): Subs
 /**
  * PUBLISH_SKIPPED メッセージ (Section 9.19 PUBLISH_SKIPPED)
  *
- * draft-ietf-moq-transport-22 Section 9.19 (PUBLISH_SKIPPED):
+ * draft-ietf-moq-transport-23 Section 9.19 (PUBLISH_SKIPPED):
  * Publisher が Track に対する PUBLISH を送信しないことを示す。
  *
  * PUBLISH_SKIPPED Message {
@@ -452,7 +452,7 @@ export function decodeSubscribeTracksPayload(data: Uint8Array, offset = 0): Subs
  *   Track Name (..),
  * }
  *
- * draft-ietf-moq-transport-22 Section 3.6.3:
+ * draft-ietf-moq-transport-23 Section 3.6.3:
  * "or any other reason" — 理由はストリーム不足に限定されない。
  * MUST NOT send a PUBLISH for a Track after PUBLISH_SKIPPED, scoped to a single PUBLISH.
  */

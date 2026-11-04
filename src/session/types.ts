@@ -47,7 +47,7 @@ export interface NamespaceSubscriptionState {
   authorizationToken?: AuthorizationToken | undefined;
   /**
    * REQUEST_UPDATE で送信中 (REQUEST_OK 未受信) の新 Track Namespace Prefix。
-   * draft-ietf-moq-transport-22 §9.5.2:
+   * draft-ietf-moq-transport-23 §9.5.2:
    * REQUEST_OK 受信時に namespacePrefix へ反映し、REQUEST_ERROR 時は反映せずクリアする。
    */
   // セッション内部の状態オブジェクトで、解放時に明示的に undefined を代入するため `| undefined` を付ける
@@ -73,14 +73,14 @@ export interface TracksSubscriptionState {
   authorizationToken?: AuthorizationToken | undefined;
   /**
    * SUBSCRIBE_TRACKS 送信時に指定された Range Filters。
-   * draft-ietf-moq-transport-22 §3.3.2:
+   * draft-ietf-moq-transport-23 §3.3.2:
    * TRACK_PROPERTY_FILTER は受信 PUBLISH の評価に使用する。
    */
   // セッション内部の状態オブジェクトで、解放時に明示的に undefined を代入するため `| undefined` を付ける
   rangeFilters?: RangeFilterSpec[] | undefined;
   /**
    * REQUEST_UPDATE で送信中 (REQUEST_OK 未受信) の新 Track Namespace Prefix。
-   * draft-ietf-moq-transport-22 §9.5.2:
+   * draft-ietf-moq-transport-23 §9.5.2:
    * REQUEST_OK 受信時に namespacePrefix へ反映し、REQUEST_ERROR 時は反映せずクリアする。
    */
   pendingPrefix?: string[] | undefined;
@@ -117,7 +117,7 @@ export interface PublisherStreamState {
   /**
    * 送信見送り (省略) が発生したか
    *
-   * draft-ietf-moq-transport-22 §11.3.2 (Closing Subgroup Streams):
+   * draft-ietf-moq-transport-23 §11.3.2 (Closing Subgroup Streams):
    * "If a sender closes the stream before delivering all such objects to the QUIC
    *  stream, it MUST reset the stream.  This includes, but is not limited to: ...
    *  Omitting a Subgroup Object because the subscription is paused"
@@ -184,7 +184,7 @@ export interface SessionInternal extends BidiSessionInternal {
   // ============================================================
   // その他 (incoming.ts / namespaceLoops.ts / publish.ts / session.ts)
   // ============================================================
-  // draft-ietf-moq-transport-22 §13 (Grease): true のとき Track / Object Properties に
+  // draft-ietf-moq-transport-23 §13 (Grease): true のとき Track / Object Properties に
   // GREASE Property を 1 つ注入する。ConnectOptions.grease を initialize() で受け渡す。
   readonly grease: boolean;
 

@@ -1,6 +1,6 @@
 /**
  * MOQT PUBLISH_STATE_NOTIFY Unit Tests
- * draft-ietf-moq-transport-22 Section 9.10 (PUBLISH_STATE_NOTIFY)
+ * draft-ietf-moq-transport-23 Section 9.10 (PUBLISH_STATE_NOTIFY)
  */
 
 import { test, assert } from "vite-plus/test";
@@ -63,7 +63,7 @@ test("encodePublishStateNotifyPayload / decodePublishStateNotifyPayload: ラウ�
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.10:
+ * draft-ietf-moq-transport-23 §9.10:
  * 空パラメータの PUBLISH_STATE_NOTIFY も正当な通知として扱う。
  */
 test("decodePublishStateNotifyPayload: 空パラメータをデコードできる", () => {
@@ -77,7 +77,7 @@ test("decodePublishStateNotifyPayload: 空パラメータをデコードでき�
 });
 
 /**
- * draft-ietf-moq-transport-22 §9:
+ * draft-ietf-moq-transport-23 §9:
  * Message Body 長と消費バイト数が一致しない場合は PROTOCOL_VIOLATION。
  */
 test("decodePublishStateNotifyPayload: 余剰バイトがあると ProtocolViolationError", () => {
@@ -91,7 +91,7 @@ test("decodePublishStateNotifyPayload: 余剰バイトがあると ProtocolViola
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.10:
+ * draft-ietf-moq-transport-23 §9.10:
  * Type 0x22 が PUBLISH_STATE_NOTIFY として名前解決される。
  */
 test("getMessageTypeName: 0x22 は PUBLISH_STATE_NOTIFY", () => {
@@ -113,7 +113,7 @@ test("getMessageTypeName: 旧 FETCH_OK (0x18) は予約値として UNKNOWN に�
 /**
  * Length 宣言 slice の境界検証 (切り詰め入力の宣言時点拒否)。
  *
- * draft-ietf-moq-transport-22 §9.4.1 / §9.2 / §9.4.2:
+ * draft-ietf-moq-transport-23 §9.4.1 / §9.2 / §9.4.2:
  * 制御ストリームは外側でフレーミング済みのため、Length 宣言が
  * 残りバイトを超える内側の不足は破損であり、短い slice を返さず
  * 宣言時点で ProtocolViolationError とする。
@@ -255,7 +255,7 @@ test("decodeRequestErrorPayload: REDIRECT の後に未知の Error Detail が続
  * draft-ietf-moq-transport-23 §9.4.2:
  * "Receivers MUST ignore unknown Error Detail types, and MUST ignore a known Error
  *  Detail type that accompanies an Error Code it is not defined for."
- * GREASE 用の予約値 (0x7f * N + 0x9D) も未登録型として無視する (§13 / §16.11)。
+ * GREASE 用の予約値 (0x7f * N + 0x9D) も未登録型として無視する (§13 / §16.12)。
  */
 test("decodeRequestErrorPayload: 未知の Error Detail (GREASE 含む) を無視する", () => {
   // Error Code INTERNAL_ERROR + Error Details に GREASE 値 0x9D の詳細だけを載せる
@@ -456,7 +456,7 @@ test("decodeRequestErrorPayload: Error Detail の Length が上限超過だと F
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.3 / §9.4:
+ * draft-ietf-moq-transport-23 §9.3 / §9.4:
  * REDIRECT コードと REDIRECT Error Detail の roundtrip (回帰ガード)。
  */
 test("decodeRequestErrorPayload: REDIRECT コードと REDIRECT Detail の roundtrip", () => {

@@ -1,7 +1,7 @@
 /**
  * session/stream.ts の Property-Based Tests
  *
- * draft-ietf-moq-transport-22 §5.2 / §10.1 / §10.2 / §11.3.1 / §11.4.1 / §12.1:
+ * draft-ietf-moq-transport-23 §5.2 / §10.1 / §10.2 / §11.3.1 / §11.4.1 / §12.1:
  * 受信データストリーム処理の純粋関数が持つ不変条件を検証する。
  *
  * 検証する性質:
@@ -144,7 +144,7 @@ test("concatChunks: 連結結果の長さと内容が入力順の連結と一致
 /**
  * Subgroup Header の形
  *
- * draft-ietf-moq-transport-22 §11.3.1:
+ * draft-ietf-moq-transport-23 §11.3.1:
  * - subgroupIdSource: "zero" (Subgroup ID = 0) / "firstObject" (Subgroup ID = First Object ID) /
  *   "field" (明示的な Subgroup ID フィールド) の 3 形態
  * - hasPriority: Priority Present の有無 (0x10 系は Yes、0x30 系は No)
@@ -253,7 +253,7 @@ interface SubgroupFeed {
 /**
  * delivery timeout の Object Property を組み立てる
  *
- * draft-ietf-moq-transport-22 §10.1 / §10.2 / §5.2:
+ * draft-ietf-moq-transport-23 §10.1 / §10.2 / §5.2:
  * subgroup 先頭 Object の Object Property としてのみ意味を持つ値。
  * Properties Present を持たない Type と非 NORMAL ステータスでは wire に載せない
  * (§11.1.2 は非 Normal ステータスの properties を禁止する)。
@@ -273,7 +273,7 @@ function buildTimeoutProperties(shape: SubgroupShape, spec: SubgroupObjectSpec):
 /**
  * 1 Object 分のワイヤを組み立てる
  *
- * draft-ietf-moq-transport-22 §11.3.1 Figure 27:
+ * draft-ietf-moq-transport-23 §11.3.1 Figure 27:
  * Object ID Delta / [Properties] / Object Payload Length / [Object Status] / [Object Payload]
  */
 function encodeSubgroupObject(
@@ -300,7 +300,7 @@ function encodeSubgroupObject(
 /**
  * 最後の Object だけを END_OF_GROUP に差し替える
  *
- * draft-ietf-moq-transport-22 §11.1.1 / §11.1.2:
+ * draft-ietf-moq-transport-23 §11.1.1 / §11.1.2:
  * END_OF_GROUP は Object Payload Length 0 のときのみエンコードされ、
  * properties を持つ非 Normal ステータスは禁止される。
  * また §12.1 条件 4 により、Group 内で END_OF_GROUP より大きい Object ID は malformed
@@ -327,7 +327,7 @@ function buildStatusedSpecs(
 /**
  * previousObjectId から Object ID の連鎖を計算する
  *
- * draft-ietf-moq-transport-22 §11.3.1:
+ * draft-ietf-moq-transport-23 §11.3.1:
  * - subgroup 先頭 Object (previousObjectId < 0) の Object ID は Object ID Delta そのもの
  * - 2 件目以降は直前の Object ID + Object ID Delta + 1
  */
@@ -623,7 +623,7 @@ function interiorChunkLength(wire: Uint8Array, seed: number): number {
 /**
  * delivery timeout が subgroup 先頭 Object のみから抽出されていることを表明する
  *
- * draft-ietf-moq-transport-22 §5.2:
+ * draft-ietf-moq-transport-23 §5.2:
  * "If either timeout is set as an Object Property on any object other than the first
  *  in a subgroup, it is ignored."
  */
@@ -724,7 +724,7 @@ test("processSubgroupObjects: Object ID の連鎖と解決済み Subgroup ID が
           feed.specs.map((spec) => [...spec.payload]),
         );
 
-        // draft-ietf-moq-transport-22 §11.3.1:
+        // draft-ietf-moq-transport-23 §11.3.1:
         // Subgroup ID = 0 / 明示フィールドはヘッダ値で確定し、
         // Subgroup ID = First Object ID は最初の Object ID で確定する
         const firstObjectId = expectedIds[0];
@@ -958,7 +958,7 @@ test("processSubgroupObjects: END_OF_GROUP は最終 Object ID を確定し引�
 /**
  * Fetch Object 1 件分の仕様
  *
- * draft-ietf-moq-transport-22 §11.4.1:
+ * draft-ietf-moq-transport-23 §11.4.1:
  * Fetch Object は Object Status を持たず、Group ID / Subgroup ID / Object ID /
  * Publisher Priority / Object Payload Length / Object Payload を運ぶ。
  */

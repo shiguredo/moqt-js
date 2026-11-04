@@ -8,7 +8,7 @@
  * processFetchObjects / processSubgroupObjects / createDataStreamTimeout
  * を free function として抽出する。
  *
- * draft-ietf-moq-transport-22 §11.3 (Subgroup Streams) / §11.4 (Fetch Streams) /
+ * draft-ietf-moq-transport-23 §11.3 (Subgroup Streams) / §11.4 (Fetch Streams) /
  * §3.4 (Fill Semantics) の受信経路を 1 か所にまとめる。
  * 受信 bidi ストリーム (受信 PUBLISH) の処理は incoming.ts と
  * 受信専用モジュールに残す。
@@ -61,13 +61,13 @@ export interface DataStreamSessionInternal {
   sessionState: SessionState;
   readonly callbacks: ConnectCallbacks;
 
-  // draft-ietf-moq-transport-22 §12.2: データストリームの受信タイムアウト
+  // draft-ietf-moq-transport-23 §12.2: データストリームの受信タイムアウト
   dataStreamTimeoutMs: number;
-  // draft-ietf-moq-transport-22 §12.5 (EXCESSIVE_LOAD 0x9):
+  // draft-ietf-moq-transport-23 §12.5 (EXCESSIVE_LOAD 0x9):
   // 確立後の受信データストリームが保持してよいバッファの上限 (バイト)。
   // 0 以下は上限なし。
   dataStreamMaxBufferBytes: number;
-  // draft-ietf-moq-transport-22 §12.5 (EXCESSIVE_LOAD 0x9):
+  // draft-ietf-moq-transport-23 §12.5 (EXCESSIVE_LOAD 0x9):
   // 確立後の受信データストリームがセッション全体で保持してよいバッファの合計上限
   // (バイト)。0 以下は上限なし。
   dataStreamMaxTotalBufferBytes: number;
@@ -174,7 +174,7 @@ export async function dataStreamHandleIncomingStream(
   let headerParsed = false;
   let isFetchStream = false;
 
-  // draft-ietf-moq-transport-22 §12.5 (EXCESSIVE_LOAD 0x9):
+  // draft-ietf-moq-transport-23 §12.5 (EXCESSIVE_LOAD 0x9):
   // このストリームがセッションの合計へ計上しているバイト数。チャンクを追記した
   // バイト数を加算し、バッファから消費したバイト数と、ストリームの終了
   // (FIN / peer reset / cancel / 例外) の finally で残りを減算する。
@@ -186,7 +186,7 @@ export async function dataStreamHandleIncomingStream(
   let fetchContext: FetchObjectContext | null = null;
   let isFirstFetchObject = true;
 
-  // draft-ietf-moq-transport-22 §12.2 (DATA_STREAM_TIMEOUT):
+  // draft-ietf-moq-transport-23 §12.2 (DATA_STREAM_TIMEOUT):
   // ヘッダーまたは Object の途中バイトを保持したまま待ち続けるピアを期限で
   // 打ち切る。バッファが空になった時点で期限を解除する。
   const timeout = dataStreamCreateDataStreamTimeout(session, reader, () => buffer.byteLength);
@@ -195,7 +195,7 @@ export async function dataStreamHandleIncomingStream(
 
   try {
     while (true) {
-      // draft-ietf-moq-transport-22 §12.2 (DATA_STREAM_TIMEOUT):
+      // draft-ietf-moq-transport-23 §12.2 (DATA_STREAM_TIMEOUT):
       // 途中バイトを保持したまま次のチャンクを待つ間だけ期限を張る。
       // バッファを消費しきったら解除する。ループ先頭で行うのは、
       // データ不足で continue する経路 (半端なヘッダー / Object) でも
@@ -287,11 +287,11 @@ export async function dataStreamHandleIncomingStream(
 
             // Subgroup ストリーム本体は専用ハンドラに委譲する
             // pending mode (subscriber 未登録) と subscriber mode を一貫して扱う
-            // draft-ietf-moq-transport-22 §11.3.1 の buffer 経路はこのハンドラ内に集約
+            // draft-ietf-moq-transport-23 §11.3.1 の buffer 経路はこのハンドラ内に集約
             await dataStreamHandleSubgroupStream(session, reader, header, initialPayloadBuffer);
             return;
           } else if (streamTypeNum === 0x132b3e28) {
-            // draft-ietf-moq-transport-22 §11.5.1 (Padding Streams):
+            // draft-ietf-moq-transport-23 §11.5.1 (Padding Streams):
             // "The receiver MUST discard all data received on a padding stream."
             // PADDING stream のデータはすべて読み捨てる。§12.5: 保持しないため、
             // 計上したバイトはここで解放する (drain は FIN まで続きうるため、
@@ -364,7 +364,7 @@ export async function dataStreamHandleIncomingStream(
       if (headerParsed) {
         if (isFetchStream && fetcher && fetchHeader) {
           // Fetch オブジェクトをストリーミング処理
-          // draft-ietf-moq-transport-22 Section 11.4.1.1 (Flags):
+          // draft-ietf-moq-transport-23 Section 11.4.1.1 (Flags):
           // FETCH オブジェクトは prior context (前オブジェクトの groupId / subgroupId / publisherPriority)
           // を参照するシリアライゼーションフラグを持つため、複数チャンクに分割された場合に備えて
           // context と isFirst を caller 側で永続化する必要がある
@@ -418,7 +418,7 @@ type DataStreamParsedFetchHeaderOutcome =
 /**
  * FETCH ヘッダー解析後の受信処理
  *
- * draft-ietf-moq-transport-22 §3.2 (Fetch) / §3.4 (Fill Semantics) /
+ * draft-ietf-moq-transport-23 §3.2 (Fetch) / §3.4 (Fill Semantics) /
  * §12.5 (EXCESSIVE_LOAD 0x9):
  * 統計の更新、Fetcher の解決 (FETCH_OK 待ちを含む)、fill fetch への委譲、
  * 上限超過の判定と打ち切りを 1 か所にまとめる。
@@ -443,11 +443,11 @@ async function dataStreamHandleParsedFetchHeader(
   session.statsFetchHeadersReceived++;
 
   // Fetcher を検索
-  // draft-ietf-moq-transport-22 §3.2 (Fetch):
+  // draft-ietf-moq-transport-23 §3.2 (Fetch):
   // FETCH_OK より先にデータストリームが到着する可能性がある
   const registered = session.fetchers.get(header.requestId) ?? null;
 
-  // draft-ietf-moq-transport-22 §3.4 (Fill Semantics):
+  // draft-ietf-moq-transport-23 §3.4 (Fill Semantics):
   // fill fetch ストリームの FETCH_HEADER は fill を要求した
   // SUBSCRIBE / REQUEST_UPDATE の Request ID を運ぶ。購読に
   // 紐付けて受信する。どちらにも該当しない Request ID は
@@ -510,7 +510,7 @@ async function dataStreamHandleParsedFetchHeader(
   if (!fetcher) {
     // タイムアウトで Fetcher が登録されなかった場合は、
     // peer に STOP_SENDING (cancel) を送って受信を打ち切る。
-    // draft-ietf-moq-transport-22 Section 3.2.4 (Fetch State Management) に倣ってストリームを reset する。
+    // draft-ietf-moq-transport-23 Section 3.2.4 (Fetch State Management) に倣ってストリームを reset する。
     void reader.cancel(`unknown fetcher: requestId=${header.requestId}`);
     return { returned: true, streamBufferedBytes };
   }
@@ -520,7 +520,7 @@ async function dataStreamHandleParsedFetchHeader(
 /**
  * PADDING ストリームの残りのデータを読み捨てる
  *
- * draft-ietf-moq-transport-22 §11.5.1 (Padding Streams):
+ * draft-ietf-moq-transport-23 §11.5.1 (Padding Streams):
  * "The receiver MUST discard all data received on a padding stream."
  * FIN まで読み切ってから呼び出し元が終了する。§12.5 で計上したバイトは保持しない
  * ため、呼び出し元が drain の前に解放する (FIN しないピアに合計を占有させない)。
@@ -608,14 +608,14 @@ function dataStreamFinishFetchStream(
   }
   fetcher.handleEnd();
   session.fetchers.delete(fetchHeader.requestId);
-  // draft-ietf-moq-transport-22 §10.8 / §10.9:
+  // draft-ietf-moq-transport-23 §10.8 / §10.9:
   // FETCH の終了に伴い、購読も尽きた Track の Prior ID Gap 追跡を捨てる
   // (bidiCancelFetch と同じ後始末)。
   bidi.clearPriorGapTrackingIfUnused(
     session as unknown as SessionInternal,
     fetcher.getFullTrackNameKey(),
   );
-  // draft-ietf-moq-transport-22 §6.6.1:
+  // draft-ietf-moq-transport-23 §6.6.1:
   // GOAWAY 受信後に Established fetch が無くなった時点で NO_ERROR で閉じる。
   session.onRequestDrained();
 }
@@ -623,7 +623,7 @@ function dataStreamFinishFetchStream(
 /**
  * fill fetch ストリームを受信する
  *
- * draft-ietf-moq-transport-22 §3.4 (Fill Semantics) / §3.4.1:
+ * draft-ietf-moq-transport-23 §3.4 (Fill Semantics) / §3.4.1:
  * fill fetch ストリームは FETCH と同じオブジェクト framing で届き、
  * FIN は fill 完了 (関連付けを消す)、reset は fill 失敗として扱う。
  * オブジェクトは fillDelivered を true にして購読の object コールバックに
@@ -642,7 +642,7 @@ export async function dataStreamHandleFillFetchStream(
   let buffer = initialBuffer;
   let context: FetchObjectContext | null = null;
   let isFirst = true;
-  // draft-ietf-moq-transport-22 §12.5 (EXCESSIVE_LOAD 0x9):
+  // draft-ietf-moq-transport-23 §12.5 (EXCESSIVE_LOAD 0x9):
   // このストリームがセッションの合計へ計上しているバイト数。呼び出し元の
   // handleIncomingStream がヘッダー解析後の残バッファを計上済みのため、その分から
   // 引き継ぐ。チャンクを追記したバイト数を加算し、バッファから消費したバイト数と
@@ -758,7 +758,7 @@ export async function dataStreamHandleFillFetchStream(
     if (sessionError !== null) {
       session.closeWithError(sessionError);
     } else if (err instanceof MalformedTrackError) {
-      // draft-ietf-moq-transport-22 §12.1:
+      // draft-ietf-moq-transport-23 §12.1:
       // malformed track の検出は §3.4.1 の「fill 失敗は購読に波及しない」
       // より優先し、同一 Track の全購読と全 FETCH を cancel する。
       // アプリへの通知は cancelMalformedTrackPeers が購読の error
@@ -773,7 +773,7 @@ export async function dataStreamHandleFillFetchStream(
         `malformed fill track: requestId=${fillRequestId}, reason=${err instanceof Error ? err.message : String(err)}`,
       );
     } else if (!isSessionClosedError(normalizedError)) {
-      // draft-ietf-moq-transport-22 §3.4.1:
+      // draft-ietf-moq-transport-23 §3.4.1:
       // "Because there is no REQUEST_ERROR associated with a fill fetch
       //  stream, the publisher signals a fill failure by resetting the
       //  stream" および "Resetting or cancelling a fill fetch stream, by
@@ -803,13 +803,13 @@ export async function dataStreamHandleFillFetchStream(
 /**
  * Malformed Track 検出時の FETCH キャンセル処理
  *
- * draft-ietf-moq-transport-22 §12.1 (Malformed Tracks):
+ * draft-ietf-moq-transport-23 §12.1 (Malformed Tracks):
  * Malformed Track 検出時は「cancel any corresponding subscription or fetches
  * for that Track from that publisher」であり、セッションを閉じない。
  * まず受信データストリームを STOP_SENDING 相当 (cancelStreamQuiet) で打ち切る。
  * fetcher が存在する場合 (FETCH データストリーム)、fetcher の error コールバックで
  * アプリへ通知し (§12.1 SHOULD)、FetcherImpl.cancel() 経由で
- * draft-ietf-moq-transport-22 §3.2.4 の MUST「It MUST send STOP_SENDING for
+ * draft-ietf-moq-transport-23 §3.2.4 の MUST「It MUST send STOP_SENDING for
  * the bidi request stream.」に従い bidi リクエストストリームへ STOP_SENDING
  * を送り、fetchers Map から削除する。
  *
@@ -834,7 +834,7 @@ export async function dataStreamHandleMalformedFetchTrack(
     `malformed track: code=${DataStreamErrorCode.MALFORMED_TRACK}, reason=${error.message}`,
   );
   if (fetcher) {
-    // draft-ietf-moq-transport-22 §12.1:
+    // draft-ietf-moq-transport-23 §12.1:
     // 同一 Track の全購読と全 FETCH を cancel する (該当 requestId の FETCH の
     // みではない)。比較キー (fullTrackNameKey の戻り値) で引く。
     bidi.cancelMalformedTrackPeers(
@@ -874,7 +874,7 @@ export async function dataStreamHandleIncomingStreamError(
     return;
   }
   if (fetchHeader !== null && isPeerStreamError(err)) {
-    // draft-ietf-moq-transport-22 §3.2.4:
+    // draft-ietf-moq-transport-23 §3.2.4:
     // FETCH データストリームの reset で subscriber は FETCH state を破棄する。
     // fetchHeader が無い場合 (FETCH_HEADER 読取前の reset) は fetcher を
     // 特定できないため何もしない。
@@ -889,7 +889,7 @@ export async function dataStreamHandleIncomingStreamError(
  * fetchers から削除、Prior ID Gap 追跡の掃除、onRequestDrained まで行う (正常終了の
  * handleEnd は通知しない)。セッションは閉じない。
  *
- * draft-ietf-moq-transport-22 §3.2.4:
+ * draft-ietf-moq-transport-23 §3.2.4:
  * 「If the data stream is already open, the subscriber wishing to cancel the FETCH
  *  MAY send STOP_SENDING for the data stream as well as the bidi request stream.
  *  It MUST send STOP_SENDING for the bidi request stream.」
@@ -901,7 +901,7 @@ export async function dataStreamHandleIncomingStreamError(
  * cancel() が fetchers / requestStreams の削除と Prior ID Gap 追跡の掃除、
  * onRequestDrained まで行う。
  *
- * draft-ietf-moq-transport-22 §12.5 (EXCESSIVE_LOAD 0x9):
+ * draft-ietf-moq-transport-23 §12.5 (EXCESSIVE_LOAD 0x9):
  * 呼び出し元が上限超過を判定し、打ち切りの await の前にこのストリームの計上分を
  * 解放してから呼ぶ (dataStreamReleaseStreamBytesOnAbort を参照)。FETCH_OK より
  * 先にデータストリームが届き、Fetcher が未登録のまま超過した場合は通知先が無い
@@ -934,7 +934,7 @@ async function dataStreamAbortFetchOnBufferOverflow(
 /**
  * peer の RESET_STREAM で FETCH データストリームが終了したときの後始末
  *
- * draft-ietf-moq-transport-22 §3.2.4:
+ * draft-ietf-moq-transport-23 §3.2.4:
  * 「A subscriber keeps FETCH state until it cancels the request (see
  *  Section 6.4.2.3), receives FETCH_ERROR, or the FETCH data stream
  *  receives a FIN or is reset.」
@@ -962,7 +962,7 @@ export function dataStreamHandlePeerFetchStreamReset(
   }
   if (fetchHeader !== null) {
     session.fetchers.delete(fetchHeader.requestId);
-    // draft-ietf-moq-transport-22 §10.8 / §10.9:
+    // draft-ietf-moq-transport-23 §10.8 / §10.9:
     // peer の RESET_STREAM による FETCH の終了でも、購読も尽きた Track の
     // Prior ID Gap 追跡を捨てる (FIN 経路と同じ後始末)。
     if (fetcher) {
@@ -971,7 +971,7 @@ export function dataStreamHandlePeerFetchStreamReset(
         fetcher.getFullTrackNameKey(),
       );
     }
-    // draft-ietf-moq-transport-22 §6.6.1:
+    // draft-ietf-moq-transport-23 §6.6.1:
     // GOAWAY 受信後に Established fetch が無くなった時点で NO_ERROR で閉じる。
     session.onRequestDrained();
   }
@@ -1053,7 +1053,7 @@ export function dataStreamProcessSubgroupObjects(
  * Malformed Track (Object Property の Mandatory Track Property) を検出した
  * 同一 Track の全購読と全 FETCH を §12.1 に従って cancel する
  *
- * draft-ietf-moq-transport-22 §12.1:
+ * draft-ietf-moq-transport-23 §12.1:
  * "it MUST cancel any corresponding subscription or fetches for that Track
  *  from that publisher"
  * データストリームを打ち切り、同一 Full Track Name の購読 / FETCH を cancel する。
@@ -1066,7 +1066,7 @@ export async function dataStreamHandleMalformedSubgroupTrack(
   subscribers: SubscriberImpl[],
   error: MalformedTrackError,
 ): Promise<void> {
-  // draft-ietf-moq-transport-22 §12.1:
+  // draft-ietf-moq-transport-23 §12.1:
   // 同一 Track の全購読と全 FETCH を cancel する。比較キーは
   // trackAlias から購読を特定して得る (購読が未特定なら cancel 対象が無い)。
   const trackKey = subscribers[0]?.getFullTrackNameKey();
@@ -1084,7 +1084,7 @@ export async function dataStreamHandleMalformedSubgroupTrack(
  *
  * ピアの RESET_STREAM 以外 (セッション終了など) は呼び出し元へ投げ直す。
  *
- * draft-ietf-moq-transport-22 §11.3.2 (Closing Subgroup Streams): 送信側は Subgroup の
+ * draft-ietf-moq-transport-23 §11.3.2 (Closing Subgroup Streams): 送信側は Subgroup の
  * 残りを配らずに閉じるとき MUST で RESET_STREAM する。購読が未登録の間は Object を
  * decode しておらず配る相手も居ないため、溜めた chunk を捨ててこの stream の処理を
  * 終える (セッションは閉じない)。この仕様はドラフトであり将来変更されうる。
@@ -1107,7 +1107,7 @@ async function dataStreamHandlePendingSubgroupReadError(
 /**
  * Subgroup ストリームの読み取りがエラーで終わったときの判定
  *
- * draft-ietf-moq-transport-22 §11.3.2 (Closing Subgroup Streams): 送信側は Subgroup の
+ * draft-ietf-moq-transport-23 §11.3.2 (Closing Subgroup Streams): 送信側は Subgroup の
  * 残りを配らずに閉じるとき MUST で RESET_STREAM する。受信済みの Object は配信済みで
  * あり、続きは別の Subgroup / Group の stream で届く。セッションは閉じず、途中まで
  * 受けた Object の残りバイトだけを捨ててこの stream の処理を終える (未完成 Object で
@@ -1123,7 +1123,7 @@ function dataStreamHandleSubgroupReadError(error: unknown): void {
 /**
  * pending mode (Track Alias 未確立) の Subgroup ストリームを購読が登録されるまで読む
  *
- * draft-ietf-moq-transport-22 §3.1.3.1 (Unknown Track Alias):
+ * draft-ietf-moq-transport-23 §3.1.3.1 (Unknown Track Alias):
  * "When an endpoint receives a datagram or a new stream with a Track Alias that is
  *  not yet associated with an Established subscription, it MAY drop the data or
  *  buffer it briefly to handle reordering with the control message that
@@ -1132,7 +1132,7 @@ function dataStreamHandleSubgroupReadError(error: unknown): void {
  * timeout / overflow / session-close / end-of-stream / ピアの reset のいずれかでは
  * abandon して null を返す (呼び出し元はそのストリームの処理を終える)。
  *
- * draft-ietf-moq-transport-22 §12.5 (EXCESSIVE_LOAD 0x9):
+ * draft-ietf-moq-transport-23 §12.5 (EXCESSIVE_LOAD 0x9):
  * pending mode のバイトは pendingSubgroupBuffer の per-session 上限が管理するため
  * セッションの合計には載せない。呼び出し元が計上済みのヘッダー解析後の payload を
  * ここで解放し、subscriber mode へ合流した時点で改めて計上する。
@@ -1281,7 +1281,7 @@ async function dataStreamHandlePendingSubgroupStream(
 /**
  * pending mode に溜めた chunk を 1 本に結合し、セッションの合計へ計上する
  *
- * draft-ietf-moq-transport-22 §3.1.3.1 (Unknown Track Alias) /
+ * draft-ietf-moq-transport-23 §3.1.3.1 (Unknown Track Alias) /
  * §12.5 (EXCESSIVE_LOAD 0x9):
  * 合流した直後の同期区間で上限を判定し、超過していれば計上分を解放して
  * Subgroup の打ち切り手順を行う。判定を呼び出し元の Subgroup ループ先頭まで
@@ -1316,7 +1316,7 @@ async function dataStreamMergePendingSubgroupChunks(
 /**
  * Subgroup ストリームを処理する
  *
- * draft-ietf-moq-transport-22 §3.1.3.1 (Unknown Track Alias):
+ * draft-ietf-moq-transport-23 §3.1.3.1 (Unknown Track Alias):
  * "When an endpoint receives a datagram or a new stream with a Track Alias that is
  *  not yet associated with an Established subscription, it MAY drop the data or
  *  buffer it briefly to handle reordering with the control message that
@@ -1328,7 +1328,7 @@ async function dataStreamMergePendingSubgroupChunks(
  * timeout / overflow / session-close / end-of-stream のいずれかで abandon する。
  * pending mode の読み取りは dataStreamHandlePendingSubgroupStream が担う。
  *
- * draft-ietf-moq-transport-22 §12.5 (EXCESSIVE_LOAD 0x9):
+ * draft-ietf-moq-transport-23 §12.5 (EXCESSIVE_LOAD 0x9):
  * 呼び出し元の handleIncomingStream がヘッダー解析後の残バッファを計上済みである。
  * この関数はその計上を引き継ぎ、subscriber mode のループで増減する。
  */
@@ -1348,7 +1348,7 @@ export async function dataStreamHandleSubgroupStream(
   //  read を破棄せず、subscriber mode の最初の read として使い切る)
   let pendingRead: Promise<ReadableStreamReadResult<Uint8Array>> | null = null;
 
-  // draft-ietf-moq-transport-22 §12.5 (EXCESSIVE_LOAD 0x9):
+  // draft-ietf-moq-transport-23 §12.5 (EXCESSIVE_LOAD 0x9):
   // subscriber mode でこのストリームがセッションの合計へ計上しているバイト数。
   // 呼び出し元の handleIncomingStream がヘッダー解析後の残バッファを計上済みのため
   // その分から引き継ぐ。pending mode のバイトは pendingSubgroupBuffer の
@@ -1379,7 +1379,7 @@ export async function dataStreamHandleSubgroupStream(
 
   // subscriber mode: 通常の Subgroup ストリーム処理ループ
   // pendingRead が pending mode から持ち越されている場合はそれを最初の read として消費する
-  // draft-ietf-moq-transport-22 §12.2 (DATA_STREAM_TIMEOUT):
+  // draft-ietf-moq-transport-23 §12.2 (DATA_STREAM_TIMEOUT):
   // 途中バイトを保持したまま次のチャンクを待つ間だけ期限を張る。
   const timeout = dataStreamCreateDataStreamTimeout(session, reader, () => buffer.byteLength);
   // ピアの FIN を検出したか。残バッファを処理し終えてからループを抜ける
@@ -1426,7 +1426,7 @@ export async function dataStreamHandleSubgroupStream(
           dataStreamBufferBytesRelease(session, before - buffer.byteLength);
           previousObjectId = processResult.previousObjectId;
           resolvedSubgroupId = processResult.resolvedSubgroupId;
-          // draft-ietf-moq-transport-22 §12.1 条件 4:
+          // draft-ietf-moq-transport-23 §12.1 条件 4:
           // 確定した Group 最終 Object を Group 単位で記録する。Subgroup ストリームを
           // またいだ後続 Object の malformed 検出に使う。上限を超えた分は追跡から
           // 外れるため、外れた Track Alias / Group では超過を検出できない
@@ -1441,7 +1441,7 @@ export async function dataStreamHandleSubgroupStream(
           }
         } catch (err) {
           if (err instanceof MalformedTrackError) {
-            // draft-ietf-moq-transport-22 §12.1:
+            // draft-ietf-moq-transport-23 §12.1:
             // malformed track を検出した購読を cancel し、セッションは閉じない
             await dataStreamHandleMalformedSubgroupTrack(session, reader, header, subscribers, err);
             return;
@@ -1454,7 +1454,7 @@ export async function dataStreamHandleSubgroupStream(
       // FIN 済みなら、残バッファを処理し終えた時点で抜ける
       if (finished) break;
 
-      // draft-ietf-moq-transport-22 §12.2 (DATA_STREAM_TIMEOUT):
+      // draft-ietf-moq-transport-23 §12.2 (DATA_STREAM_TIMEOUT):
       // 途中バイトを保持したまま次のチャンクを待つ間だけ期限を張る。
       if (buffer.byteLength > 0) {
         timeout.arm();
@@ -1623,7 +1623,7 @@ function dataStreamRecordSubgroupEndOfGroup(
 /**
  * 購読の Subgroup の stream の終わりを、その stream の Object を受け取っていた購読へ知らせる
  *
- * draft-ietf-moq-transport-22 Section 2.1: Object は順不同で届きうる。Group ごとに別の
+ * draft-ietf-moq-transport-23 Section 2.1: Object は順不同で届きうる。Group ごとに別の
  * stream で届くため、アプリは stream の終わりで、それ以上その Subgroup の Object が
  * 届かないと判断できる (SubscribeCallbacks.subgroupEnd)。Subgroup ID は Object から
  * 確定した値を優先し、無ければ Subgroup Header の値を使う。RESET_STREAM で終わった場合は、
@@ -1662,7 +1662,7 @@ function dataStreamNotifySubgroupEnd(
 /**
  * Subgroup ストリームを上限超過として打ち切る
  *
- * draft-ietf-moq-transport-22 §12.5 (EXCESSIVE_LOAD 0x9):
+ * draft-ietf-moq-transport-23 §12.5 (EXCESSIVE_LOAD 0x9):
  * 残バッファを破棄し、該当 Track Alias に登録された購読を失敗させる。セッションは
  * 閉じない。呼び出し元が上限超過を判定し、打ち切りの await の前にこのストリームの
  * 計上分を解放してから呼ぶ (dataStreamReleaseStreamBytesOnAbort を参照)。
@@ -1697,7 +1697,7 @@ async function dataStreamAbortSubgroupStreamOnOverflow(
 /**
  * fill fetch ストリームを上限超過として打ち切る
  *
- * draft-ietf-moq-transport-22 §12.5 (EXCESSIVE_LOAD 0x9) / §3.4.1:
+ * draft-ietf-moq-transport-23 §12.5 (EXCESSIVE_LOAD 0x9) / §3.4.1:
  * 残バッファを破棄し、関連付けを消してアプリへ fillError で失敗を伝える
  * (購読は継続する)。FIN 時の未完成 Object 判定や正常終了の後始末へは到達させない。
  * 呼び出し元が上限超過を判定し、打ち切りの await の前にこのストリームの計上分を
@@ -1726,7 +1726,7 @@ async function dataStreamAbortFillOnBufferOverflow(
 /**
  * 受信バッファへチャンクを追記し、追記したバイト数をセッションの合計へ計上する
  *
- * draft-ietf-moq-transport-22 §12.5 (EXCESSIVE_LOAD 0x9):
+ * draft-ietf-moq-transport-23 §12.5 (EXCESSIVE_LOAD 0x9):
  * FETCH / fill fetch / Subgroup の各受信ループの追記処理をこの 1 箇所にまとめ、
  * 計上の呼び出し漏れを防ぐ。
  *
@@ -1748,7 +1748,7 @@ function dataStreamAppendChunk(
 /**
  * 受信データストリームが保持するバイト数をセッションの合計へ加算する
  *
- * draft-ietf-moq-transport-22 §12.5 (EXCESSIVE_LOAD 0x9):
+ * draft-ietf-moq-transport-23 §12.5 (EXCESSIVE_LOAD 0x9):
  * 受信ループがチャンクをバッファへ追記した直後に、追記したバイト数だけ呼ぶ。
  * pending mode から subscriber mode へ合流するときは、pending に溜めていたバイトを
  * 合計へ載せるため、追記せずに呼ぶ (dataStreamMergePendingSubgroupChunks)。
@@ -1763,7 +1763,7 @@ function dataStreamBufferBytesAdd(session: DataStreamSessionInternal, bytes: num
 /**
  * 受信データストリームがバッファから消費したバイト数をセッションの合計から減算する
  *
- * draft-ietf-moq-transport-22 §12.5 (EXCESSIVE_LOAD 0x9):
+ * draft-ietf-moq-transport-23 §12.5 (EXCESSIVE_LOAD 0x9):
  * Object の配信とヘッダーの解析で消費した分に加え、ストリームの終了
  * (FIN / peer reset / cancel / 例外) ではそのストリームが保持していた残りを
  * finally で必ずこの関数へ渡す。減算漏れがあると合計が単調増加し、無関係な
@@ -1776,7 +1776,7 @@ function dataStreamBufferBytesRelease(session: DataStreamSessionInternal, bytes:
 /**
  * 受信バッファが上限を超えたかを判定する
  *
- * draft-ietf-moq-transport-22 §12.5 (EXCESSIVE_LOAD 0x9):
+ * draft-ietf-moq-transport-23 §12.5 (EXCESSIVE_LOAD 0x9):
  * 壊れた / 悪意あるピアがデータストリームで無制限にメモリを消費するのを防ぐ。
  * ストリーム単位の上限 (bufferedBytes) に加え、セッション全体の合計
  * (session.dataStreamBufferedBytesTotal) も見る。ストリーム単位の上限だけでは、
@@ -1817,7 +1817,7 @@ function isDataStreamBufferOverLimit(
 /**
  * 打ち切りを決めたストリームの計上分を、打ち切りの await の前に解放する
  *
- * draft-ietf-moq-transport-22 §12.5 (EXCESSIVE_LOAD 0x9):
+ * draft-ietf-moq-transport-23 §12.5 (EXCESSIVE_LOAD 0x9):
  * 打ち切り手順 (cancelStreamQuiet / fetcher.cancel) は await を挟むため、解放を
  * ストリーム終了の finally まで待つと、その間も合計は上限超過のままになる。その
  * 間に別のストリームが追記すると、そのストリームも超過と判定されて巻き添えで
@@ -1912,7 +1912,7 @@ function createDataStreamBufferOverflowError(
 /**
  * データストリームの受信待ちタイマーを作る
  *
- * draft-ietf-moq-transport-22 §12.2:
+ * draft-ietf-moq-transport-23 §12.2:
  * DATA_STREAM_TIMEOUT (0x12) は「ピアが開いたデータストリームで送るべき
  * データを送るのに時間をかけすぎた」ことを示す。半端なヘッダー / Object を
  * 保持したまま待ち続けるピアにメモリとコネクションを占有され続けないよう、

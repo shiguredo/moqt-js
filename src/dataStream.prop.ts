@@ -1,7 +1,7 @@
 /**
  * MOQT Data Stream - Property-Based Tests
  *
- * Subgroup Header (draft-ietf-moq-transport-22 Section 11.3.1) と
+ * Subgroup Header (draft-ietf-moq-transport-23 Section 11.3.1) と
  * Fetch Object Fields (Section 11.4.1) の encode→decode ラウンドトリップを検証する。
  */
 import { test, assert } from "vite-plus/test";
@@ -61,7 +61,7 @@ const firstFetchObjectFieldsArb = fc
 /**
  * Subgroup Header の形 (Type Flags と後続フィールドの有無) の一覧
  *
- * draft-ietf-moq-transport-22 §11.3.1:
+ * draft-ietf-moq-transport-23 §11.3.1:
  * Type Flags は Priority Present (0x10-0x1D は Yes / 0x30-0x3D は No) と
  * SUBGROUP_ID_MODE (Subgroup ID = 0 / First Object ID / 明示フィールド) の
  * 組み合わせで後続フィールドの有無が変わる。FIRST_OBJECT ビット (0x40) は
@@ -141,7 +141,7 @@ const subgroupHeaderArb = fc
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-22 §11.4.1.1:
+ * draft-ietf-moq-transport-23 §11.4.1.1:
  * DATAGRAM ビットが立つ先頭オブジェクトの encode→decode がラウンドトリップし、
  * Subgroup ID フィールドを消費しない (subgroupId = 0n) ことを検証する。
  */
@@ -988,7 +988,7 @@ test("FetchObjectFields: Object → End of Group → End of Track は同じ終�
 });
 
 // ============================================================================
-// Subgroup Header (draft-ietf-moq-transport-22 Section 11.3.1) の PBT
+// Subgroup Header (draft-ietf-moq-transport-23 Section 11.3.1) の PBT
 // ============================================================================
 
 /**
