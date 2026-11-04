@@ -700,6 +700,21 @@ async function incomingPublishDecodeOrReject(
       // 上限超過は受信側が FIELD_LENGTH_EXCEEDED でセッションを閉じる。
       // 未対応 Type の一覧は Reason に埋めず UNSUPPORTED_PROPERTY Detail だけに
       // 載せ、Reason は固定の短い文言にする (1 件でも 1024 バイトを超えない)。
+      // draft-ietf-moq-transport-23 §8.9: REGISTER した Alias は、メッセージが
+      // セッションエラー以外の理由で失敗してもキャッシュへ登録する MUST。
+      // 未知 Mandatory Track Property による拒否でも Parameters からトークンを
+      // 処理する。malformed Token 構造の検出もこの経路で行う。
+      const earlyParameters = incomingPublishPeekParameters(payload);
+      if (earlyParameters !== undefined) {
+        incomingPublishProcessAuthorizationTokens(
+          session,
+          incomingPublishPeekRequestId(payload) ?? 0n,
+          earlyParameters,
+        );
+        if (session.sessionState !== "connected") {
+          return null;
+        }
+      }
       await incomingSendRequestErrorAndClose(
         stream,
         RequestErrorCode.UNSUPPORTED_EXTENSION,

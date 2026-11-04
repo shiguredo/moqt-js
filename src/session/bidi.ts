@@ -2560,7 +2560,11 @@ export function handleRequestUpdateOkMessage(
 ): boolean {
   try {
     bidiHandleRequestUpdateOk(session, payload, requestId);
-    return true;
+    // bidiHandleRequestUpdateOk はセッションを閉じる経路 (未応答 REQUEST_UPDATE なし /
+    // パラメータスコープ違反 / 既知の非空 Track Properties) で throw せず return する。
+    // 閉じた後に同一チャンクの残りメッセージを処理すると error コールバックが
+    // 二重通知されるため、呼び出し側が打ち切れるよう false を返す。
+    return session.sessionState === "connected";
   } catch (err) {
     if (!(err instanceof MalformedTrackError)) {
       throw err;
