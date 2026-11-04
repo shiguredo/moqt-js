@@ -1,8 +1,8 @@
 # SUBSCRIBE_TRACKS の初期パラメータを draft 23 の明示一覧に揃える
 
 - Created: 2026-11-03
-- Completed: {YYYY-MM-DD}
-- Branch: feature/change-subscribe-tracks-parameters
+- Completed: 2026-11-04
+- Branch: feature/change-moqt-draft-23
 - Polished: 2026-11-03
 
 ## 目的
@@ -39,4 +39,21 @@ draft 23 §3.6.2 / §9.17 は SUBSCRIBE_TRACKS の許可パラメータを明示
 
 ## 解決方法
 
-{未着手}
+- `src/session/publicTypes.ts` の `SubscribeTracksOptions` に LOCATION_FILTER (`filter`)、OBJECT_DELIVERY_TIMEOUT (`deliveryTimeout`)、SUBGROUP_DELIVERY_TIMEOUT (`subgroupDeliveryTimeout`)、SUBSCRIBER_PRIORITY (`subscriberPriority`)、FILL_PARAMETERS (`fill`) を追加した。§3.6.2 の扱い (AUTHORIZATION_TOKEN / TRACK_PROPERTY_FILTER は要求自体に適用し、それ以外は結果 PUBLISH の初期条件) と、RENDEZVOUS_TIMEOUT / NEW_GROUP_REQUEST を追加しない理由 (単一 Track 専用) を JSDoc に明記した。
+- `src/session/params.ts` の `buildSubscribeTracksParameters` が上記に加え、既存の GROUP_ORDER / PAUSED / Range Filters / AUTHORIZATION_TOKEN / INCLUDE_PROPERTIES と合わせて §9.17 の明示一覧を構築するようにした。FILL_PARAMETERS のワイヤは count-prefixed の実装をそのまま使い、内側のパラメータは §9.19.15 の制限に従う。
+- 未指定の項目はパラメータを送らず、既存の既定値を変えない。PAUSED (true のときだけ送る) / GROUP_ORDER / INCLUDE_PROPERTIES の扱いも変更していない。
+- `src/session/namespaces.ts` で Range Filter の上限検証を外側と fill 内側の合計に変え、peer の MAX_FILTER_RANGES 超過をストリーム生成前に拒否するようにした。
+- 受信 PUBLISH の許可集合は §9.8 の明示一覧を優先し、§3.6.2 の一般文だけでは広げない判断を `src/message/parameterScope.ts` に記録した (集合自体は変更なし)。
+- テストは §9.17 の初期購読条件をすべて送れること、各値のワイヤ (varint / uint8 / Location Filter / FILL_PARAMETERS 内側)、RENDEZVOUS_TIMEOUT / NEW_GROUP_REQUEST を送らないこと、未指定時に空 Parameters になること、外側 + fill 内側の Range Filter 合計が上限超過ならストリーム未生成で throw し上限ちょうどなら生成されることを検証する。
+- docs は 0925 で一括更新するため触っていない。
+
+### 既知の制限
+
+- §3.6.2 の一般文と §9.8 の明示一覧の不整合は spec 側に残っており、受信 PUBLISH の許可集合は明示一覧を優先している。
+- `TracksSubscriptionState` は fill を保持していないため、受信 PUBLISH の FILL_PARAMETERS の関連付けは別 issue で扱う。
+- 実リレー E2E は統合ブランチの制約 (ALPN は移行完了まで moqt-22) のため未実施である。
+
+### 残課題 (別 issue で扱う)
+
+- 受信 PUBLISH の fill 関連付け (0908)
+- docs の一括更新 (0925)
