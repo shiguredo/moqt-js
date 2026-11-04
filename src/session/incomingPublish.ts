@@ -54,7 +54,7 @@ import {
   extractLargestLocation,
   extractPaused,
   matchNamespacePrefix,
-  resolveFillGroupOrder,
+  resolveFillGroupOrderFromParameters,
 } from "./params";
 import type { SessionInternal, TracksSubscriptionState } from "./types";
 import { type AuthTokenProcessResult, processMessageAuthorizationTokens } from "./authTokenCache";
@@ -1283,19 +1283,9 @@ function incomingPublishRegisterFillTarget(
   if (fill === undefined || paused) {
     return;
   }
-  const innerGroupOrder = fill.innerParameters.find(
-    (parameter) => parameter.type === MessageParameterType.GROUP_ORDER,
-  );
   session.fillFetchTargets.set(publishRequestId, {
     subscriber: impl,
-    groupOrder: resolveFillGroupOrder(
-      innerGroupOrder === undefined
-        ? undefined
-        : innerGroupOrder.value[0] === 0x02
-          ? "Descending"
-          : "Ascending",
-      publishGroupOrder,
-    ),
+    groupOrder: resolveFillGroupOrderFromParameters(fill.innerParameters, publishGroupOrder),
   });
 }
 

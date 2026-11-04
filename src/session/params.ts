@@ -635,6 +635,34 @@ export function resolveFillGroupOrder(
 }
 
 /**
+ * パラメータ列から fill 内側の GROUP_ORDER を解釈して解決する
+ *
+ * draft-ietf-moq-transport-23 §9.19.8 / §9.19.15:
+ * FILL_PARAMETERS の内側の GROUP_ORDER は uint8 (0x01 = Ascending /
+ * 0x02 = Descending) で、省略時は要求側の GROUP_ORDER を継承する。
+ * 値域は decode 時に検証済みであるため、ここでは解釈だけを行う。
+ * 受信 PUBLISH と REQUEST_UPDATE の両経路がこの 1 箇所を使う。
+ */
+export function resolveFillGroupOrderFromParameters(
+  parameters: readonly Parameter[],
+  subscriptionGroupOrder: "Ascending" | "Descending" | undefined,
+): GroupOrder {
+  const groupOrder = parameters.find(
+    (candidate) => candidate.type === MessageParameterType.GROUP_ORDER,
+  );
+  const fillGroupOrder =
+    groupOrder === undefined
+      ? undefined
+      : groupOrder.value[0] === GROUP_ORDER_DESCENDING_VALUE
+        ? "Descending"
+        : "Ascending";
+  return resolveFillGroupOrder(fillGroupOrder, subscriptionGroupOrder);
+}
+
+/** GROUP_ORDER の Descending を表す uint8 値 */
+const GROUP_ORDER_DESCENDING_VALUE = 0x02;
+
+/**
  * 純粋関数: INCLUDE_PROPERTIES Message Parameter を構築する
  *
  * draft-ietf-moq-transport-22 Section 9.20.21 (INCLUDE_PROPERTIES Parameter):

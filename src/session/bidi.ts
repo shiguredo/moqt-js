@@ -95,6 +95,7 @@ import {
   buildRangeFilterParameters,
   mergeRangeFilters,
   resolveFillGroupOrder,
+  resolveFillGroupOrderFromParameters,
   validateRangeFilterLimits,
   validateRangeFilterSpecs,
   validateNonNegative,
@@ -3532,17 +3533,9 @@ function registerRawFillFetchTarget(
   updateRequestId: bigint,
   inner: Parameter[],
 ): void {
-  const innerGroupOrder = inner.find((param) => param.type === MessageParameterType.GROUP_ORDER);
   session.fillFetchTargets.set(updateRequestId, {
     subscriber,
-    groupOrder: resolveFillGroupOrder(
-      innerGroupOrder === undefined
-        ? undefined
-        : innerGroupOrder.value[0] === 0x02
-          ? "Descending"
-          : "Ascending",
-      subscriber.getGroupOrder(),
-    ),
+    groupOrder: resolveFillGroupOrderFromParameters(inner, subscriber.getGroupOrder()),
   });
 }
 
