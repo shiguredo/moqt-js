@@ -2553,7 +2553,7 @@ function handleRequestStreamReadError(
  *
  * @returns 読み取りを継続するなら true、違反で閉じたなら false (呼び出し側は return する)
  */
-function handleRequestUpdateOkMessage(
+export function handleRequestUpdateOkMessage(
   session: BidiSessionInternal,
   payload: Uint8Array,
   requestId: bigint,

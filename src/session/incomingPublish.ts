@@ -256,7 +256,11 @@ export async function incomingPublishRunStreamSubLoop(
           continue;
         }
         if (msg.type === MessageType.REQUEST_OK) {
-          bidi.bidiHandleRequestUpdateOk(
+          // draft-ietf-moq-transport-23 §9.3: REQUEST_UPDATE_OK の Track Properties は
+          // 空が必須であり、未知 Mandatory Track Property を含む場合は
+          // INVALID_FIELD でセッションを閉じる。MalformedTrackError を
+          // Session エラーへ変換する共通経路を使う。
+          bidi.handleRequestUpdateOkMessage(
             session as unknown as bidi.BidiSessionInternal,
             msg.payload,
             publishRequestId,
