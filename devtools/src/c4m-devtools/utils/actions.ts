@@ -1,9 +1,10 @@
 /**
  * C4M DevTools のアクションの表示
  *
- * draft-17 は CLIENT_SETUP と SERVER_SETUP を 1 つの SETUP メッセージに
- * 統合した。claim (draft-ietf-moq-c4m-01 Table 1) は 0 と 1 を別のアクションとして持つため、
- * 画面では 1 つの `SETUP` にまとめて表示し、認可判定もどちらかが許可されていれば許可とする。
+ * draft-17 は CLIENT_SETUP と SERVER_SETUP を 1 つの SETUP メッセージに統合し、
+ * claim も draft-ietf-moq-c4m-02 Table 1 で SETUP (1) に統一された。
+ * 画面では同じ表示名のアクションを 1 つにまとめ、認可判定はいずれかが許可されていれば
+ * 許可とする。
  */
 
 import { C4M } from "moqt-js";
@@ -12,7 +13,7 @@ import { C4M } from "moqt-js";
 export interface ActionGroup {
   /** 表示名 (例: "SETUP") */
   name: string;
-  /** この表示に対応する claim のアクション (SETUP は ClientSetup と ServerSetup) */
+  /** この表示に対応する claim のアクション (同じ表示名のアクションをまとめたもの) */
   actions: readonly C4M.MoqtAction[];
 }
 

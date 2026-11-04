@@ -179,7 +179,7 @@ test("extractC4mTrackNames: prefix / suffix の track match は取り出さな�
 
 // track match を持たないスコープ (すべての track にマッチする) からも名前は取り出さない。
 test("extractC4mTrackNames: track match の無いスコープからは取り出さない", async () => {
-  const scope = C4M.createMoqtScope(["ClientSetup"]);
+  const scope = C4M.createMoqtScope(["Setup"]);
   const base64 = await buildCat([scope]);
 
   assert.deepEqual(extractC4mTrackNames(base64), []);
@@ -252,9 +252,9 @@ test("decodeC4mTokenInfo: クレームが無いトークンでも形式だけを
 });
 
 // track の無いスコープは "any"、namespace の無いスコープは "-" として出す。
-// ClientSetup の表示名は draft-ietf-moq-transport-23 の 1 つの SETUP メッセージに合わせる
+// SETUP の表示名は draft-ietf-moq-transport-23 の 1 つの SETUP メッセージに合わせる
 test("decodeC4mTokenInfo: track と namespace の無いスコープを any / - で出す", async () => {
-  const scope = C4M.createMoqtScope(["ClientSetup"]);
+  const scope = C4M.createMoqtScope(["Setup"]);
   const base64 = await buildCat([scope]);
 
   const info = decodeC4mTokenInfo(base64);

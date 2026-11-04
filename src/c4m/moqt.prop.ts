@@ -618,6 +618,8 @@ const C4M_ERROR_CODES: readonly C4mErrorCode[] = [
   "invalidScopeLength",
   "trackWithoutNamespace",
   "nonFiniteNumber",
+  "unknownClaimKey",
+  "missingScopes",
 ];
 
 /**

@@ -16,9 +16,9 @@ import {
 
 const TEXT_ENCODER = new TextEncoder();
 
-test("ACTION_GROUPS: ClientSetup と ServerSetup を 1 つの SETUP にまとめる", () => {
+test("ACTION_GROUPS: 同じ表示名のアクションを 1 つにまとめる", () => {
   const setup = ACTION_GROUPS.find((group) => group.name === "SETUP");
-  assert.deepEqual(setup?.actions, ["ClientSetup", "ServerSetup"]);
+  assert.deepEqual(setup?.actions, ["Setup"]);
   // 並びは MOQT_ACTIONS の順で、同名の表示は 1 つにまとめる
   assert.deepEqual(
     ACTION_GROUPS.map((group) => group.name),
@@ -31,23 +31,25 @@ test("ACTION_GROUPS: ClientSetup と ServerSetup を 1 つの SETUP にまとめ
       "PUBLISH",
       "FETCH",
       "TRACK_STATUS",
+      "SUBSCRIBE_TRACKS",
     ],
   );
 });
 
 test("actionDisplayNames: 同じ表示名は 1 つにまとめ、表に無い値は数値のままにする", () => {
-  // claim の 0 (ClientSetup) と 1 (ServerSetup) はどちらも SETUP になる
-  assert.deepEqual(actionDisplayNames([0, 1]), ["SETUP"]);
+  // C4M 02 の SETUP は 1。0 は旧 ClientSetup で表示名を持たず数値のまま
+  assert.deepEqual(actionDisplayNames([1]), ["SETUP"]);
+  assert.deepEqual(actionDisplayNames([0]), ["0"]);
   assert.deepEqual(actionDisplayNames([4, 6, 7]), ["SUBSCRIBE", "PUBLISH", "FETCH"]);
   assert.equal(actionDisplayName(99), "99");
 });
 
-test("isActionAllowedByName: SETUP はどちらかの claim アクションで許可されていれば許可する", () => {
+test("isActionAllowedByName: SETUP は claim アクションで許可されていれば許可する", () => {
   const namespace = [TEXT_ENCODER.encode("15551")];
   const track = TEXT_ENCODER.encode("catalog");
   const claims = C4M.createCatClaims();
-  // ClientSetup (0) だけを許可するスコープ
-  claims.moqt = { scopes: [C4M.createMoqtScope(["ClientSetup"])] };
+  // SETUP (1) を許可するスコープ
+  claims.moqt = { scopes: [C4M.createMoqtScope(["Setup"])] };
 
   assert.isTrue(isActionAllowedByName(claims, "SETUP", namespace, track));
   assert.isFalse(isActionAllowedByName(claims, "SUBSCRIBE", namespace, track));

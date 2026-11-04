@@ -29,20 +29,26 @@ import {
 /**
  * `moqt` クレームの claim key
  *
- * draft-ietf-moq-c4m-01 付録 A.5 のテストベクタが使う値 (327) を採用する。本文の
- * IANA Considerations は TBD_MOQT のままであり、確定したら追従する。
+ * draft-ietf-moq-c4m-02 付録 A のテストベクタが使う Private Use の値 (-65537) を
+ * 採用する。本文の IANA Considerations は TBD_MOQT のままであり、確定したら追従する。
  */
-export const CLAIM_MOQT = 327;
+export const CLAIM_MOQT = -65537;
 
 /**
  * `moqt-reval` クレームの claim key
  *
- * draft-ietf-moq-c4m-01 付録 A.5 のテストベクタが使う値 (328) を採用する。
+ * draft-ietf-moq-c4m-02 付録 A のテストベクタが使う Private Use の値 (-65538) を
+ * 採用する。
  */
-export const CLAIM_MOQT_REVAL = 328;
+export const CLAIM_MOQT_REVAL = -65538;
 
 /**
- * `bin-match` の prefix マッチを表す match-type (draft-ietf-moq-c4m-01 Section 2.1)
+ * `moqt` claim map の scope 配列を表す key (draft-ietf-moq-c4m-02 Section 2.1)
+ */
+export const MOQT_SCOPES_KEY = 0;
+
+/**
+ * `bin-match` の prefix マッチを表す match-type (draft-ietf-moq-c4m-02 Section 2.1)
  */
 export const MATCH_TYPE_PREFIX = 1;
 
@@ -55,22 +61,21 @@ export const MATCH_TYPE_SUFFIX = 2;
  * MOQT のアクション (draft-ietf-moq-c4m-01 Section 2.1 Table 1)
  */
 export type MoqtAction =
-  | "ClientSetup"
-  | "ServerSetup"
+  | "Setup"
   | "PublishNamespace"
   | "SubscribeNamespace"
   | "Subscribe"
   | "RequestUpdate"
   | "Publish"
   | "Fetch"
-  | "TrackStatus";
+  | "TrackStatus"
+  | "SubscribeTracks";
 
 /**
  * すべてのアクション (Table 1 の順)
  */
 export const MOQT_ACTIONS: readonly MoqtAction[] = [
-  "ClientSetup",
-  "ServerSetup",
+  "Setup",
   "PublishNamespace",
   "SubscribeNamespace",
   "Subscribe",
@@ -78,6 +83,7 @@ export const MOQT_ACTIONS: readonly MoqtAction[] = [
   "Publish",
   "Fetch",
   "TrackStatus",
+  "SubscribeTracks",
 ];
 
 /**
@@ -85,9 +91,7 @@ export const MOQT_ACTIONS: readonly MoqtAction[] = [
  */
 export function moqtActionKey(action: MoqtAction): number {
   switch (action) {
-    case "ClientSetup":
-      return 0;
-    case "ServerSetup":
+    case "Setup":
       return 1;
     case "PublishNamespace":
       return 2;
@@ -103,6 +107,8 @@ export function moqtActionKey(action: MoqtAction): number {
       return 7;
     case "TrackStatus":
       return 8;
+    case "SubscribeTracks":
+      return 9;
     default:
       return unreachableValue(action);
   }
@@ -113,10 +119,8 @@ export function moqtActionKey(action: MoqtAction): number {
  */
 export function moqtActionFromKey(key: number): MoqtAction | undefined {
   switch (key) {
-    case 0:
-      return "ClientSetup";
     case 1:
-      return "ServerSetup";
+      return "Setup";
     case 2:
       return "PublishNamespace";
     case 3:
@@ -131,7 +135,10 @@ export function moqtActionFromKey(key: number): MoqtAction | undefined {
       return "Fetch";
     case 8:
       return "TrackStatus";
+    case 9:
+      return "SubscribeTracks";
     default:
+      // 0 は C4M 01 の ClientSetup であり、C4M 02 のアクションではない。
       return undefined;
   }
 }
@@ -146,8 +153,7 @@ export function moqtActionFromKey(key: number): MoqtAction | undefined {
  */
 export function moqtActionName(action: MoqtAction): string {
   switch (action) {
-    case "ClientSetup":
-    case "ServerSetup":
+    case "Setup":
       return "SETUP";
     case "PublishNamespace":
       return "PUBLISH_NAMESPACE";
@@ -163,6 +169,8 @@ export function moqtActionName(action: MoqtAction): string {
       return "FETCH";
     case "TrackStatus":
       return "TRACK_STATUS";
+    case "SubscribeTracks":
+      return "SUBSCRIBE_TRACKS";
     default:
       return unreachableValue(action);
   }
@@ -173,8 +181,7 @@ export function moqtActionName(action: MoqtAction): string {
  */
 export function moqtAuthorizationContext(action: MoqtAction): string {
   switch (action) {
-    case "ClientSetup":
-    case "ServerSetup":
+    case "Setup":
       return "SETUP";
     case "PublishNamespace":
       return "PUB_NS";
@@ -190,6 +197,8 @@ export function moqtAuthorizationContext(action: MoqtAction): string {
       return "FETCH";
     case "TrackStatus":
       return "TRK_STATUS";
+    case "SubscribeTracks":
+      return "SUB_TRACKS";
     default:
       return unreachableValue(action);
   }
@@ -527,13 +536,17 @@ export function encodeMoqtScope(scope: MoqtScope): CborValue {
 }
 
 /**
- * `moqt` クレーム (draft-ietf-moq-c4m-01 Section 2.1)
+ * `moqt` クレーム (draft-ietf-moq-c4m-02 Section 2.1)
  *
- * アクションスコープの配列を持つ。いずれかのスコープが認可すれば許可となり、
- * 評価順は問わない (Section 2.1.2)。
+ * CBOR map の key 0 に認可スコープの配列を持つ。いずれかのスコープが認可すれば
+ * 許可となり、評価順は問わない。
+ *
+ * draft-ietf-moq-c4m-02 §2.1.1 (Extensibility): key 0 以外は将来の改訂のために
+ * 予約されており、未知の key を持つ claim は受理してはならない (fail-closed)。
+ * そのためこの型は key 0 以外の要素を保持しない。
  */
 export interface MoqtClaim {
-  /** 認可スコープ */
+  /** 認可スコープ (CBOR map の key 0) */
   scopes: MoqtScope[];
 }
 
@@ -560,11 +573,31 @@ export function moqtClaimAuthorize(
 
 /**
  * `moqt` クレームをデコードする
+ *
+ * draft-ietf-moq-c4m-02 §2.1: claim の値は CBOR map で、key 0 が scope 配列である。
+ * §2.1.1 に従い、key 0 以外の key を持つ claim は受理しない (fail-closed)。
+ * 旧形式の配列 (C4M 01) も受理しない。
  */
 export function decodeMoqtClaim(value: CborValue): MoqtClaim {
-  const items = cborAsArray(value);
-  if (items === undefined) {
+  const entries = cborAsMap(value);
+  if (entries === undefined) {
     throw new C4mError("unexpectedType", "moqt claim");
+  }
+  let scopesValue: CborValue | undefined;
+  for (const [key, entryValue] of entries) {
+    const mapKey = cborAsInt64(key);
+    // draft-ietf-moq-c4m-02 §2.1.1: 未知の key を持つ claim set は受理しない
+    if (mapKey !== 0n) {
+      throw new C4mError("unknownClaimKey", mapKey === undefined ? undefined : Number(mapKey));
+    }
+    scopesValue = entryValue;
+  }
+  if (scopesValue === undefined) {
+    throw new C4mError("missingScopes");
+  }
+  const items = cborAsArray(scopesValue);
+  if (items === undefined) {
+    throw new C4mError("unexpectedType", "moqt scopes");
   }
   if (items.length === 0) {
     throw new C4mError("emptyScopes");
@@ -574,12 +607,16 @@ export function decodeMoqtClaim(value: CborValue): MoqtClaim {
 
 /**
  * `moqt` クレームをエンコードする
+ *
+ * draft-ietf-moq-c4m-02 §2.1: CBOR map の key 0 に scope 配列を置く。
  */
 export function encodeMoqtClaim(claim: MoqtClaim): CborValue {
   if (claim.scopes.length === 0) {
     throw new C4mError("emptyScopes");
   }
-  return cborArray(claim.scopes.map((scope) => encodeMoqtScope(scope)));
+  return cborMap([
+    [cborInteger(MOQT_SCOPES_KEY), cborArray(claim.scopes.map((scope) => encodeMoqtScope(scope)))],
+  ]);
 }
 
 /**
@@ -730,7 +767,9 @@ export type C4mErrorCode =
   | "emptyNamespaceMatch"
   | "invalidScopeLength"
   | "trackWithoutNamespace"
-  | "nonFiniteNumber";
+  | "nonFiniteNumber"
+  | "unknownClaimKey"
+  | "missingScopes";
 
 export class C4mError extends Error {
   readonly code: C4mErrorCode;
@@ -765,6 +804,10 @@ function buildC4mErrorMessage(code: C4mErrorCode, detail: string | number | unde
       return "nil must be the last namespace match";
     case "emptyNamespaceMatch":
       return "moqt-ns-match array is empty";
+    case "unknownClaimKey":
+      return `moqt claim has an unknown map key: ${String(detail)}`;
+    case "missingScopes":
+      return "moqt claim has no scopes key (0)";
     case "invalidScopeLength":
       return `moqt-scope must have 1 to 3 elements, got ${String(detail)}`;
     case "trackWithoutNamespace":
