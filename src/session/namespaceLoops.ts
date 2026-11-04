@@ -27,6 +27,7 @@ import {
   trackNamespaceToStrings,
 } from "../message";
 import {
+  NAMESPACE_ALLOWED_PARAMS,
   NAMESPACE_OK_ALLOWED_PARAMS,
   REQUEST_UPDATE_OK_ALLOWED_PARAMS,
   validateParameterScope,
@@ -235,8 +236,8 @@ function namespaceNotifyError(
 /**
  * 通知系コールバックの例外を握り潰して呼び出す
  *
- * draft-ietf-moq-transport-22 §9.16 (NAMESPACE) / §9.17 (NAMESPACE_DONE) /
- * §9.19 (PUBLISH_SKIPPED) の通知はアプリへの配信である。仕様はアプリ
+ * draft-ietf-moq-transport-23 §9.15 (NAMESPACE) / §9.16 (NAMESPACE_DONE) /
+ * §9.18 (PUBLISH_SKIPPED) の通知はアプリへの配信である。仕様はアプリ
  * コールバックの例外を規定しないため、ライブラリの方針として
  * namespaceNotifyError と同じく「アプリのコールバック例外で後始末を止めない」
  * 扱いにし、createNamespaceActiveTracker.emitAll の補完通知とも揃える。
@@ -314,6 +315,19 @@ async function namespaceCloseRequestStreamQuiet(
  * NAMESPACE 受信で active に追加し、NAMESPACE_DONE 受信で削除する。
  * ストリームの FIN / RESET 検出時に emitAll() で残りへ NAMESPACE_DONE を補完する。
  * 二重補完は emitted フラグで防ぐ。
+ *
+ * draft-ietf-moq-transport-23 §9.15 (NAMESPACE):
+ * "When Parameters of a NAMESPACE change, the NAMESPACE message is sent again with
+ *  the updated Parameters."
+ * 同じ suffix の再通知は Parameters の更新であり、新しい namespace の追加ではない。
+ * activeNamespaces は suffix の JSON 文字列をキーにした Map のため、再通知しても
+ * エントリは増えない (二重登録されない)。終了通知は NAMESPACE_DONE または
+ * FIN / RESET 時の emitAll() のどちらか 1 回だけになる。
+ *
+ * 追跡キーは prefix を除いた suffix のみである。REQUEST_UPDATE で Track Namespace
+ * Prefix が変わったときに active namespace を新しい prefix 基準へ組み替える処理
+ * (新 prefix に一致しない namespace の終了通知と残る suffix の付け替え) は、
+ * Full Namespace を復元できるようこの tracker を拡張する接続点である。
  */
 interface NamespaceActiveTracker {
   add(suffix: string[]): void;
@@ -1141,7 +1155,8 @@ function namespaceRejectUnestablishedOnStreamDone<S>(ctx: NamespaceLoopContext<S
  * SUBSCRIBE_NAMESPACE 専用ストリームのハンドラ群
  *
  * NAMESPACE / NAMESPACE_DONE の追加メッセージと、active namespace の追跡
- * (NAMESPACE_DONE 補完) を担う。
+ * (NAMESPACE_DONE 補完) を担う。NAMESPACE の Parameters は §9.19.1 の
+ * parameter scope で検証してから onNamespace へ渡す。
  */
 function createNamespaceStreamHandlers(
   subscription: NamespaceSubscriptionState,
@@ -1191,6 +1206,11 @@ function createNamespaceStreamHandlers(
         ctx.progress.resolved,
         ctx.reject,
         "namespace",
+        // draft-ietf-moq-transport-23 §9.5.2: prefix 更新が受理された後 (REQUEST_OK) の
+        // NAMESPACE / NAMESPACE_DONE は新しい prefix 基準の suffix を持つ。
+        // REQUEST_UPDATE_OK の時点で active namespace を新 prefix 基準へ組み替える
+        // 処理 (新 prefix に一致しない namespace への NAMESPACE_DONE と残る suffix の
+        // 付け替え) は、ここから activeTracker を再構成する接続点である。
         () => seenNamespaceSuffixes.clear(),
       );
       if (result === "closed") {
@@ -1208,12 +1228,36 @@ function createNamespaceStreamHandlers(
       switch (messageType) {
         case MessageType.NAMESPACE: {
           const decodedMsg = decodeNamespacePayload(payload);
+          // draft-ietf-moq-transport-23 §9.19.1 (Parameter Scope):
+          // 各 Message Parameter の定義は出現できるメッセージ種別を定め、メッセージ
+          // 定義も受け付けるパラメータを列挙する。NAMESPACE (§9.15) は Parameters を
+          // §9.19 に委ねるが、§9.19 のどの定義も NAMESPACE を出現先に挙げていないため、
+          // NAMESPACE で既知のパラメータを受信したら INVALID_PARAMETER でセッションを
+          // 閉じる MUST。未知の型は decodeParameters が同じ INVALID_PARAMETER で拒否する
+          // (未知 Detail のように読み飛ばす経路は無い)。
+          const scopeError = validateParameterScope(
+            decodedMsg.parameters,
+            NAMESPACE_ALLOWED_PARAMS,
+            "NAMESPACE",
+          );
+          if (scopeError !== null) {
+            ctx.session.closeWithError(scopeError);
+            return "return";
+          }
           const suffixStrings = trackNamespaceToStrings(decodedMsg.trackNamespaceSuffix);
           seenNamespaceSuffixes.add(namespaceSuffixKey(suffixStrings));
+          // draft-ietf-moq-transport-23 §9.15:
+          // "When Parameters of a NAMESPACE change, the NAMESPACE message is sent again
+          //  with the updated Parameters."
+          // 同じ suffix の再通知でもコールバックを呼ぶ (アプリは同 suffix の 2 回目
+          // 以降を Parameters の更新として扱う)。activeTracker.add は Map の上書き
+          // なので active namespace は二重登録されず、終了通知も 1 回だけになる。
           activeTracker.add(suffixStrings);
           // 通知の throw を握り潰しても追跡状態は更新済みのため、
           // 対応する NAMESPACE_DONE は onNamespaceDone として届き得る
-          namespaceInvokeCallbackQuiet(() => ctx.target.callbacks.onNamespace?.(suffixStrings));
+          namespaceInvokeCallbackQuiet(() =>
+            ctx.target.callbacks.onNamespace?.(suffixStrings, decodedMsg.parameters),
+          );
           return "continue";
         }
 

@@ -5,6 +5,7 @@
 
 import { test, assert } from "vite-plus/test";
 import {
+  NAMESPACE_ALLOWED_PARAMS,
   NAMESPACE_OK_ALLOWED_PARAMS,
   PUBLISH_OK_ALLOWED_PARAMS,
   PUBLISH_ALLOWED_PARAMS,
@@ -55,6 +56,31 @@ test("EXPIRES パラメータは NAMESPACE_OK_ALLOWED_PARAMS で検証を通過�
 test("空パラメータ配列は NAMESPACE_OK_ALLOWED_PARAMS で検証を通過する", () => {
   const error = validateParameterScope([], NAMESPACE_OK_ALLOWED_PARAMS, "SUBSCRIBE_TRACKS_OK");
   assert.isNull(error);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.15 (NAMESPACE) / §9.19.1 (Parameter Scope):
+ * NAMESPACE に出現できるパラメータは §9.19 のどの定義にも列挙が無いため、
+ * 空の Parameters だけが通過する。
+ */
+test("空パラメータ配列は NAMESPACE_ALLOWED_PARAMS で検証を通過する", () => {
+  const error = validateParameterScope([], NAMESPACE_ALLOWED_PARAMS, "NAMESPACE");
+  assert.isNull(error);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.19.1:
+ * NAMESPACE に定義の無い既知の Message Parameter (EXPIRES) は、パラメータ型が
+ * 定義されていてもスコープ違反として INVALID_PARAMETER になる。
+ * 未知の型を拒否する decodeParameters とは別に、scope でも拒否することを固定する。
+ */
+test("NAMESPACE に定義の無いパラメータは INVALID_PARAMETER のエラーを返す", () => {
+  const error = validateParameterScope(
+    [{ type: MessageParameterType.EXPIRES }],
+    NAMESPACE_ALLOWED_PARAMS,
+    "NAMESPACE",
+  );
+  assertProtocolViolation(error, "parameter type 0x8 not allowed in NAMESPACE");
 });
 
 /**

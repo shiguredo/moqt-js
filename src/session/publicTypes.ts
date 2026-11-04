@@ -950,18 +950,41 @@ export interface TrackStatusResult {
  * SUBSCRIBE_NAMESPACE への応答として、NAMESPACE / NAMESPACE_DONE が送信される。
  * draft-18 で旧 SUBSCRIBE_NAMESPACE (0x11) が SUBSCRIBE_NAMESPACE (0x50) と
  * SUBSCRIBE_TRACKS (0x51) に分割され、PUBLISH_SKIPPED は SUBSCRIBE_TRACKS 応答に移動した。
+ *
+ * draft-ietf-moq-transport-23 §9.15 で NAMESPACE は Track Namespace Suffix の
+ * 後ろに Message Parameters を持つようになった。
  */
 export interface NamespaceSubscriptionCallbacks {
   /**
    * NAMESPACE を受信したときに呼ばれる
-   * draft-ietf-moq-transport-22 §9.16 (NAMESPACE)
+   * draft-ietf-moq-transport-23 §9.15 (NAMESPACE)
+   *
+   * "When Parameters of a NAMESPACE change, the NAMESPACE message is sent again
+   *  with the updated Parameters."
+   * そのため同じ suffix で複数回呼ばれ得る。active な期間の 2 回目以降は、
+   * 新しい namespace の追加ではなく同じ namespace の Parameters の更新として
+   * 扱う。onNamespaceDone は active 期間ごとに 1 回通知し、FIN / RESET による
+   * 補完は明示的な NAMESPACE_DONE と重複しない。NAMESPACE_DONE の後に同じ
+   * suffix の NAMESPACE を受けた場合は再追加として扱う。
+   *
+   * Parameters は draft-ietf-moq-transport-23 §9.19 (Control Message Parameters) の
+   * Message Parameter である。現在の draft は NAMESPACE に出現できるパラメータを
+   * 定義しておらず、拡張が NAMESPACE 用のパラメータを定義した場合だけ載る。
+   * そのため現在は常に空配列である。§9.19 は受信側が理解できない Message Parameter
+   * を INVALID_PARAMETER で拒否することを MUST とし、NAMESPACE に定義の無い
+   * パラメータを受信した場合はセッションを閉じるため、このコールバックへは届かない。
    *
    * @param namespaceSuffix - Track Namespace Prefix を除いた Suffix
+   * @param parameters - NAMESPACE の Message Parameters (§9.19、現在は常に空)
    */
-  onNamespace?: (namespaceSuffix: string[]) => void;
+  onNamespace?: (namespaceSuffix: string[], parameters: Parameter[]) => void;
   /**
    * NAMESPACE_DONE を受信したときに呼ばれる
    * draft-ietf-moq-transport-22 §9.17 (NAMESPACE_DONE)
+   *
+   * NAMESPACE_DONE を受信していない active namespace は、応答ストリームの
+   * FIN / RESET 検出時に補完して 1 回だけ呼ばれる
+   * (draft-ietf-moq-transport-22 §4.2.2 Namespace Subscription State Management)。
    *
    * @param namespaceSuffix - Track Namespace Prefix を除いた Suffix
    */

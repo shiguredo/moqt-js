@@ -62,7 +62,7 @@ import {
   encodeNamespacePayload,
   encodePublishSkippedPayload,
 } from "../message/namespace";
-import { createTrackNamespace } from "../message/parameter";
+import { createTrackNamespace, type Parameter } from "../message/parameter";
 import { ControlStreamReader, ControlStreamWriter } from "../controlStream";
 import { RequestErrorCode, SessionErrorCode, type SessionError } from "../error";
 import {
@@ -211,7 +211,33 @@ function namespaceSpec(suffix: string[], done: boolean): ControlMessageSpec {
   }
   return {
     type: MessageType.NAMESPACE,
-    payload: encodeNamespacePayload({ type: MessageType.NAMESPACE, trackNamespaceSuffix }),
+    // draft-ietf-moq-transport-23 §9.15: NAMESPACE は suffix の後に
+    // Number of Parameters と Parameters を持つ。現在の draft は NAMESPACE に
+    // 出現できるパラメータを定義していないため、正常系は空 Parameters を送る。
+    payload: encodeNamespacePayload({
+      type: MessageType.NAMESPACE,
+      trackNamespaceSuffix,
+      parameters: [],
+    }),
+  };
+}
+
+/**
+ * NAMESPACE に定義の無い Message Parameter を載せた NAMESPACE
+ *
+ * draft-ietf-moq-transport-23 §9.15 は Parameters を §9.19 に委ねるが、§9.19 の
+ * どのパラメータ定義も NAMESPACE を出現先に挙げていない。§9.19.1 の MUST により
+ * INVALID_PARAMETER でセッションを閉じる経路 (既知の型のスコープ違反) を
+ * 任意のメッセージ列へ混ぜて検証する。
+ */
+function namespaceWithDisallowedParameterSpec(suffix: string[]): ControlMessageSpec {
+  return {
+    type: MessageType.NAMESPACE,
+    payload: encodeNamespacePayload({
+      type: MessageType.NAMESPACE,
+      trackNamespaceSuffix: createTrackNamespace(suffix),
+      parameters: [{ type: MessageParameterType.EXPIRES, value: new Uint8Array([0x01]) }],
+    }),
   };
 }
 
@@ -279,6 +305,10 @@ const controlMessageArb: fc.Arbitrary<ControlMessageSpec> = fc.oneof(
   },
   {
     weight: 1,
+    arbitrary: namespaceSuffixArb.map((suffix) => namespaceWithDisallowedParameterSpec(suffix)),
+  },
+  {
+    weight: 1,
     arbitrary: fc
       .tuple(namespaceSuffixArb, trackNameArb)
       .map(([suffix, trackName]) => publishSkippedSpec(suffix, trackName)),
@@ -302,7 +332,7 @@ const controlMessageArb: fc.Arbitrary<ControlMessageSpec> = fc.oneof(
 /** ループ対象 (購読 / 公開) の構造。3 ループの対象を 1 つの形で扱う */
 interface LoopTargetState {
   callbacks: {
-    onNamespace?: (suffix: string[]) => void;
+    onNamespace?: (suffix: string[], parameters: readonly Parameter[]) => void;
     onNamespaceDone?: (suffix: string[]) => void;
     onPublishSkipped?: (suffix: string[], trackName: string) => void;
     goaway?: (uri: string) => void;

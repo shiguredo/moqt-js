@@ -86,6 +86,30 @@ export const TRACK_STATUS_OK_ALLOWED_PARAMS = new Set<number>([
 export const NAMESPACE_OK_ALLOWED_PARAMS = new Set<number>([MessageParameterType.EXPIRES]);
 
 /**
+ * NAMESPACE メッセージの許可パラメータ
+ *
+ * draft-ietf-moq-transport-23 §9.15 (NAMESPACE):
+ * "Parameters: The parameters are defined in Section 9.19."
+ * §9.15 は PUBLISH_NAMESPACE (§9.13) / SUBSCRIBE_NAMESPACE (§9.14) のように
+ * 「出現できるパラメータ」を列挙していないが、§9.19 の各パラメータ定義の
+ * "It MAY appear in ..." のいずれにも NAMESPACE は含まれていない。つまり現在の
+ * draft が NAMESPACE に定義するパラメータは存在せず、Parameters フィールドは
+ * 拡張が NAMESPACE 用のパラメータを定義するための枠である。
+ *
+ * draft-ietf-moq-transport-23 §9.19.1 (Parameter Scope):
+ * "Each Message Parameter definition indicates the message types in which it can
+ *  appear, and each control message definition lists the parameters it allows.
+ *  If a parameter appears in some other type of message, the receiving endpoint
+ *  MUST close the session with INVALID_PARAMETER."
+ * したがって現在は空集合であり、NAMESPACE で既知の Message Parameter を受信した
+ * 場合はスコープ違反として INVALID_PARAMETER でセッションを閉じる (未知の型は
+ * decodeParameters が同じ INVALID_PARAMETER で拒否する)。拡張が NAMESPACE 用の
+ * パラメータを定義し、本実装がその拡張を交渉できるようになった場合は、この集合へ
+ * 追加する。
+ */
+export const NAMESPACE_ALLOWED_PARAMS = new Set<number>();
+
+/**
  * subscription 系 REQUEST_UPDATE の許可パラメータ
  *
  * draft-ietf-moq-transport-22 §9.20 の各パラメータ定義が、通常の

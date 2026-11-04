@@ -127,16 +127,18 @@ test("PublishNamespace のフレーミングが ControlStreamReader で復元で
 });
 
 /**
- * draft-ietf-moq-transport-22 Section 9.16:
+ * draft-ietf-moq-transport-23 Section 9.15:
  * NAMESPACE は SUBSCRIBE_NAMESPACE への応答として専用ストリームで送信される。
- * Track Namespace Prefix を除いた Suffix のみを含む。
+ * Track Namespace Prefix を除いた Suffix の後ろに Number of Parameters と
+ * Parameters を持つ。
  */
 test("Namespace のエンコード・デコードがラウンドトリップする", () => {
   fc.assert(
-    fc.property(namespaceSuffixStringsArb, (suffixParts) => {
+    fc.property(namespaceSuffixStringsArb, parametersArb, (suffixParts, parameters) => {
       const original: Namespace = {
         type: MessageType.NAMESPACE,
         trackNamespaceSuffix: createTrackNamespace(suffixParts),
+        parameters,
       };
 
       const encoded = encodeNamespacePayload(original);
@@ -144,8 +146,31 @@ test("Namespace のエンコード・デコードがラウンドトリップす�
 
       assert.equal(decoded.type, MessageType.NAMESPACE);
       assert.deepEqual(trackNamespaceToStrings(decoded.trackNamespaceSuffix), suffixParts);
+      // Parameters の個数と各 Type / Value が往復する
+      // (Parameters の型・値は §9.19 のエンコーディングで保存される)
+      assert.equal(decoded.parameters.length, parameters.length);
+      for (let index = 0; index < parameters.length; index++) {
+        assert.equal(decoded.parameters[index].type, parameters[index].type);
+        assert.deepEqual(decoded.parameters[index].value, parameters[index].value);
+      }
     }),
   );
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.15:
+ * NAMESPACE の Parameters が空でも Number of Parameters (= 0) がワイヤに載る。
+ * 空の suffix と空の Parameters では Track Namespace のフィールド数 0 と
+ * Number of Parameters 0 の 2 バイトだけになる。
+ */
+test("Namespace: 空 Parameters の count がワイヤに含まれる", () => {
+  const encoded = encodeNamespacePayload({
+    type: MessageType.NAMESPACE,
+    trackNamespaceSuffix: createTrackNamespace([]),
+    parameters: [],
+  });
+
+  assert.deepEqual(Array.from(encoded), [0x00, 0x00]);
 });
 
 /**

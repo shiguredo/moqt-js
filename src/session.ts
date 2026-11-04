@@ -243,6 +243,13 @@ export interface Session {
    * SUBSCRIBE_NAMESPACE は新しい双方向ストリームで送信される。
    * 応答として NAMESPACE / NAMESPACE_DONE が送られる。
    *
+   * draft-ietf-moq-transport-23 §9.15 (NAMESPACE):
+   * NAMESPACE は Track Namespace Suffix の後ろに Parameters を持ち、Parameters が
+   * 変化すると同じ suffix の NAMESPACE が再送される。onNamespace は同じ suffix で
+   * 複数回呼ばれ得るため、active な期間の 2 回目以降は Parameters の更新として
+   * 扱う。NAMESPACE_DONE の後に同じ suffix の NAMESPACE を受けた場合は再追加で
+   * ある。
+   *
    * @param namespacePrefix - Track Namespace Prefix
    * @param callbacks - コールバック関数
    * Authorization Token を渡した場合、draft-ietf-moq-msf-01 §11.4.3 の MUST に従い、
@@ -907,6 +914,10 @@ export class SessionImpl implements Session {
    * SUBSCRIBE_NAMESPACE (0x50) は新しい双方向ストリームで送信される。
    * REQUEST_OK または REQUEST_ERROR が最初のレスポンスとして返され、
    * 以降は NAMESPACE / NAMESPACE_DONE のみが応答ストリーム上で送られる。
+   *
+   * draft-ietf-moq-transport-23 §9.15 (NAMESPACE):
+   * NAMESPACE は Parameters を持ち、値が変化すると同じ suffix で再送される。
+   * onNamespace の呼び出しは同一 namespace の更新通知を表す。
    *
    * draft-18 で旧 SUBSCRIBE_NAMESPACE (0x11) が 0x50 と SUBSCRIBE_TRACKS (0x51)
    * に分割され、Subscribe Options フィールドは廃止された。

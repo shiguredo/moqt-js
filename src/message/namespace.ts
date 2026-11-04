@@ -4,10 +4,14 @@
  *
  * 制御メッセージのフレーミング (Type / Message Length) は
  * draft-ietf-moq-transport-23 §9 に従う。
+ *
+ * NAMESPACE は draft-ietf-moq-transport-23 §9.15 で suffix の後ろに
+ * Number of Parameters と Parameters を持つ形になった。
  */
 
 import { decodeVarint, encodeVarint } from "../varint";
 import { assertLengthWithinData } from "../length";
+import { concatUint8Arrays } from "../bytes";
 import { ProtocolViolationError, SessionErrorCode } from "../error";
 import {
   type Parameter,
@@ -32,20 +36,31 @@ export interface PublishNamespace {
 }
 
 /**
- * NAMESPACE メッセージ (Section 9.16 NAMESPACE)
+ * NAMESPACE メッセージ (draft-ietf-moq-transport-23 §9.15 NAMESPACE)
  *
  * SUBSCRIBE_NAMESPACE への応答として専用ストリームで送信される。
- * Track Namespace Prefix を除いた Suffix のみを含む。
+ * Track Namespace Prefix を除いた Suffix と Parameters を含む。
  *
+ * draft-ietf-moq-transport-23 §9.15:
  * NAMESPACE Message {
  *   Type (vi64) = 0x8,
  *   Length (vi64),
- *   Track Namespace Suffix (..)
+ *   Track Namespace Suffix (..),
+ *   Number of Parameters (vi64),
+ *   Parameters (..) ...
  * }
+ *
+ * "When Parameters of a NAMESPACE change, the NAMESPACE message is sent again
+ *  with the updated Parameters."
+ * 同じ suffix の再通知は Parameters の更新を表す (新しい namespace の追加では
+ * ない)。§9.19 は受信側が理解できない Message Parameter を INVALID_PARAMETER
+ * で拒否することを MUST とする。NAMESPACE に出現できるパラメータは §9.19 の
+ * 各定義に列挙が無く、現在の draft では拡張が専用のパラメータを定義して使う。
  */
 export interface Namespace {
   type: typeof MessageType.NAMESPACE;
   trackNamespaceSuffix: TrackNamespace;
+  parameters: Parameter[];
 }
 
 /**
@@ -185,31 +200,58 @@ export function decodePublishNamespacePayload(data: Uint8Array, offset = 0): Pub
 /**
  * Namespace のペイロードをエンコード
  *
- * draft-ietf-moq-transport-22 Section 9.16 (NAMESPACE):
+ * draft-ietf-moq-transport-23 §9.15 (NAMESPACE):
  * NAMESPACE Message {
  *   Type (vi64) = 0x8,
  *   Length (vi64),
- *   Track Namespace Suffix (..)
+ *   Track Namespace Suffix (..),
+ *   Number of Parameters (vi64),
+ *   Parameters (..) ...
  * }
+ *
+ * 空の Parameters でも Number of Parameters (= 0) を必ず含める。
+ * これが無い旧ワイヤは受信側で切り詰めとして扱われる。
  */
 export function encodeNamespacePayload(msg: Namespace): Uint8Array {
-  return encodeTrackNamespace(msg.trackNamespaceSuffix);
+  return concatUint8Arrays([
+    encodeTrackNamespace(msg.trackNamespaceSuffix),
+    encodeParameters(msg.parameters),
+  ]);
 }
 
 /**
  * Namespace のペイロードをデコード
+ *
+ * draft-ietf-moq-transport-23 §9.15 (NAMESPACE):
+ * Track Namespace Suffix の直後の Number of Parameters と Parameters を
+ * §9.19 (Control Message Parameters) の規則でデコードする。未知の
+ * Message Parameter 型は decodeParameters が INVALID_PARAMETER で拒否するため、
+ * 未知 Detail のように読み飛ばすことはしない。
+ *
+ * パラメータ型が NAMESPACE に出現してよいか (§9.19.1 Parameter Scope) は
+ * メッセージ定義側の規則であり、このコードでは検証しない。session の
+ * namespace ループが NAMESPACE_ALLOWED_PARAMS で検証する。
  */
 export function decodeNamespacePayload(data: Uint8Array, offset = 0): Namespace {
-  const [trackNamespaceSuffix, namespaceConsumed] = decodeTrackNamespace(data, offset);
+  let totalConsumed = 0;
+
+  const [trackNamespaceSuffix, namespaceConsumed] = decodeTrackNamespace(
+    data,
+    offset + totalConsumed,
+  );
+  totalConsumed += namespaceConsumed;
+
+  const [parameters, parametersConsumed] = decodeParameters(data, offset + totalConsumed);
+  totalConsumed += parametersConsumed;
 
   // draft-ietf-moq-transport-23 §9:
   // "If the length does not match the length of the Message Body,
   //  the receiver MUST close the session with a MALFORMED_MESSAGE."
-  // Track Namespace Suffix は NAMESPACE ペイロードの最後のフィールドであり、
+  // Parameters は NAMESPACE ペイロードの最後のフィールドであり、
   // その後ろに後続データがあると消費バイト数が Message Body 長と一致しないため違反となる
-  if (offset + namespaceConsumed !== data.length) {
+  if (offset + totalConsumed !== data.length) {
     throw new ProtocolViolationError(
-      `trailing data in NAMESPACE: expected ${data.length} bytes, consumed ${offset + namespaceConsumed}`,
+      `trailing data in NAMESPACE: expected ${data.length} bytes, consumed ${offset + totalConsumed}`,
       SessionErrorCode.MALFORMED_MESSAGE,
     );
   }
@@ -217,6 +259,7 @@ export function decodeNamespacePayload(data: Uint8Array, offset = 0): Namespace 
   return {
     type: MessageType.NAMESPACE,
     trackNamespaceSuffix,
+    parameters,
   };
 }
 

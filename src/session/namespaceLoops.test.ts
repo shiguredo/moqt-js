@@ -15,7 +15,7 @@
  */
 
 import { test, assert } from "vite-plus/test";
-import { MessageType, MessageParameterType } from "../message";
+import { type Parameter, MessageType, MessageParameterType } from "../message";
 import {
   encodeGoawayPayload,
   encodeRequestErrorPayload,
@@ -29,9 +29,11 @@ import {
   SessionError,
   SessionErrorCode,
 } from "../error";
-import { createTrackNamespace } from "../message/parameter";
+import { createTrackNamespace, encodeTrackNamespace } from "../message/parameter";
 import { encodeParameterTrackNamespace } from "../message";
 import { encodeRequestUpdatePayload } from "../message/subscribe";
+import { encodeVarint } from "../varint";
+import { concatUint8Arrays } from "../bytes";
 import {
   encodeNamespaceDonePayload,
   encodeNamespacePayload,
@@ -381,6 +383,7 @@ function firstUnexpectedMessage(kind: LoopKind, controlWriter: ControlStreamWrit
     encodeNamespacePayload({
       type: MessageType.NAMESPACE,
       trackNamespaceSuffix: createTrackNamespace(["sports"]),
+      parameters: [],
     }),
   );
 }
@@ -1351,13 +1354,21 @@ test("namespaceStartNamespaceStreamLoop: onNamespace の throw で購読が終�
   ctx.readableController.enqueue(
     ctx.controlWriter.encode(
       MessageType.NAMESPACE,
-      encodeNamespacePayload({ type: MessageType.NAMESPACE, trackNamespaceSuffix: suffix }),
+      encodeNamespacePayload({
+        type: MessageType.NAMESPACE,
+        trackNamespaceSuffix: suffix,
+        parameters: [],
+      }),
     ),
   );
   ctx.readableController.enqueue(
     ctx.controlWriter.encode(
       MessageType.NAMESPACE,
-      encodeNamespacePayload({ type: MessageType.NAMESPACE, trackNamespaceSuffix: suffix }),
+      encodeNamespacePayload({
+        type: MessageType.NAMESPACE,
+        trackNamespaceSuffix: suffix,
+        parameters: [],
+      }),
     ),
   );
   ctx.readableController.close();
@@ -1393,7 +1404,11 @@ test("namespaceStartNamespaceStreamLoop: onNamespace の this が callbacks を�
   ctx.readableController.enqueue(
     ctx.controlWriter.encode(
       MessageType.NAMESPACE,
-      encodeNamespacePayload({ type: MessageType.NAMESPACE, trackNamespaceSuffix: suffix }),
+      encodeNamespacePayload({
+        type: MessageType.NAMESPACE,
+        trackNamespaceSuffix: suffix,
+        parameters: [],
+      }),
     ),
   );
   ctx.readableController.close();
@@ -1433,7 +1448,11 @@ test("namespaceStartNamespaceStreamLoop: onNamespaceDone の throw で購読が�
   ctx.readableController.enqueue(
     ctx.controlWriter.encode(
       MessageType.NAMESPACE,
-      encodeNamespacePayload({ type: MessageType.NAMESPACE, trackNamespaceSuffix: suffix }),
+      encodeNamespacePayload({
+        type: MessageType.NAMESPACE,
+        trackNamespaceSuffix: suffix,
+        parameters: [],
+      }),
     ),
   );
   ctx.readableController.enqueue(
@@ -1449,7 +1468,11 @@ test("namespaceStartNamespaceStreamLoop: onNamespaceDone の throw で購読が�
   ctx.readableController.enqueue(
     ctx.controlWriter.encode(
       MessageType.NAMESPACE,
-      encodeNamespacePayload({ type: MessageType.NAMESPACE, trackNamespaceSuffix: nextSuffix }),
+      encodeNamespacePayload({
+        type: MessageType.NAMESPACE,
+        trackNamespaceSuffix: nextSuffix,
+        parameters: [],
+      }),
     ),
   );
   ctx.readableController.close();
@@ -1490,7 +1513,11 @@ test("namespaceStartNamespaceStreamLoop: onNamespaceDone の throw 後も FIN �
   ctx.readableController.enqueue(
     ctx.controlWriter.encode(
       MessageType.NAMESPACE,
-      encodeNamespacePayload({ type: MessageType.NAMESPACE, trackNamespaceSuffix: suffix }),
+      encodeNamespacePayload({
+        type: MessageType.NAMESPACE,
+        trackNamespaceSuffix: suffix,
+        parameters: [],
+      }),
     ),
   );
   ctx.readableController.enqueue(
@@ -1509,6 +1536,184 @@ test("namespaceStartNamespaceStreamLoop: onNamespaceDone の throw 後も FIN �
   // 明示的な NAMESPACE_DONE の 1 回だけで、FIN の補完通知は発生しない
   assert.equal(namespaceDoneCalls, 1);
   assert.isUndefined(ctx.getClosedWithError());
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.15 (NAMESPACE):
+ * "When Parameters of a NAMESPACE change, the NAMESPACE message is sent again
+ *  with the updated Parameters."
+ * 同じ suffix の再通知は Parameters の更新であり、新しい namespace の追加では
+ * ない。active namespace は suffix 単位で 1 件のままで、FIN の補完を含めても
+ * 終了通知は 1 回だけ届くことを検証する。
+ *
+ * 現在の draft は NAMESPACE に出現できるパラメータを定義していないため、
+ * 再通知が運ぶ Parameters は空配列である (拡張が NAMESPACE 用のパラメータを
+ * 定義した場合も、同じ経路でコールバックの第 2 引数に載る)。
+ */
+test("namespaceStartNamespaceStreamLoop: 同じ suffix の NAMESPACE 再通知を onNamespace に渡し、終了通知は 1 回だけにする", async () => {
+  const ctx = createNamespaceLoopTestContext("namespace");
+  const received: { suffix: string[]; parameters: Parameter[] }[] = [];
+  const doneSuffixes: string[][] = [];
+  Object.assign(ctx.target.callbacks, {
+    onNamespace: (suffix: string[], parameters: Parameter[]): void => {
+      received.push({ suffix, parameters });
+    },
+    onNamespaceDone: (suffix: string[]): void => {
+      doneSuffixes.push(suffix);
+    },
+  });
+
+  const readPromise = startLoop(
+    "namespace",
+    ctx.session,
+    ctx.requestId,
+    () => {},
+    () => {},
+  );
+
+  const firstSuffix = createTrackNamespace(["live", "sports"]);
+  const secondSuffix = createTrackNamespace(["live", "news"]);
+  ctx.readableController.enqueue(requestOkMessage(ctx.controlWriter));
+  // 同じ suffix で 2 回 NAMESPACE を送る (Parameters の更新通知)。
+  // firstSuffix は NAMESPACE_DONE で、secondSuffix は FIN の補完で終了させ、
+  // どちらの経路でも終了通知が 1 回だけになることを確かめる。
+  for (const suffix of [firstSuffix, firstSuffix, secondSuffix, secondSuffix]) {
+    ctx.readableController.enqueue(
+      ctx.controlWriter.encode(
+        MessageType.NAMESPACE,
+        encodeNamespacePayload({
+          type: MessageType.NAMESPACE,
+          trackNamespaceSuffix: suffix,
+          parameters: [],
+        }),
+      ),
+    );
+  }
+  ctx.readableController.enqueue(
+    ctx.controlWriter.encode(
+      MessageType.NAMESPACE_DONE,
+      encodeNamespaceDonePayload({
+        type: MessageType.NAMESPACE_DONE,
+        trackNamespaceSuffix: firstSuffix,
+      }),
+    ),
+  );
+  // FIN の補完通知経路に入る。firstSuffix は NAMESPACE_DONE 済みのため追加通知は
+  // なく、secondSuffix だけがここで 1 回通知される
+  ctx.readableController.close();
+  await readPromise;
+
+  // 再通知も含めて 4 回コールバックへ届き、Parameters は空配列
+  assert.equal(received.length, 4);
+  assert.deepEqual(
+    received.map((entry) => entry.suffix),
+    [
+      ["live", "sports"],
+      ["live", "sports"],
+      ["live", "news"],
+      ["live", "news"],
+    ],
+  );
+  for (const entry of received) {
+    assert.deepEqual(entry.parameters, []);
+  }
+  // active namespace は suffix 単位で 1 件のままで、終了通知は
+  // 明示的な NAMESPACE_DONE 1 回 + FIN の補完 1 回の計 2 回だけになる
+  assert.deepEqual(doneSuffixes, [
+    ["live", "sports"],
+    ["live", "news"],
+  ]);
+  assert.isUndefined(ctx.getClosedWithError());
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.15 / §9.19.1:
+ * NAMESPACE の Parameters は §9.19 に委ねられるが、§9.19 のどのパラメータ定義も
+ * NAMESPACE を出現先に挙げていない。§9.19.1 は定義外のメッセージに現れた
+ * パラメータを INVALID_PARAMETER で拒否する MUST を定めるため、既知の
+ * パラメータ (EXPIRES) でもセッションを閉じ、アプリへは通知しない。
+ */
+test("namespaceStartNamespaceStreamLoop: NAMESPACE に定義の無い Parameters は INVALID_PARAMETER で閉じる", async () => {
+  const ctx = createNamespaceLoopTestContext("namespace");
+  let namespaceCalls = 0;
+  ctx.target.callbacks.onNamespace = () => {
+    namespaceCalls++;
+  };
+
+  const readPromise = startLoop(
+    "namespace",
+    ctx.session,
+    ctx.requestId,
+    () => {},
+    () => {},
+  );
+
+  ctx.readableController.enqueue(requestOkMessage(ctx.controlWriter));
+  ctx.readableController.enqueue(
+    ctx.controlWriter.encode(
+      MessageType.NAMESPACE,
+      encodeNamespacePayload({
+        type: MessageType.NAMESPACE,
+        trackNamespaceSuffix: createTrackNamespace(["live"]),
+        // EXPIRES (0x08) は NAMESPACE に出現できない (§9.15 が参照する §9.19 の
+        // どのパラメータ定義にも NAMESPACE は無い)
+        parameters: [{ type: MessageParameterType.EXPIRES, value: encodeVarint(1000n) }],
+      }),
+    ),
+  );
+  ctx.readableController.close();
+  await readPromise;
+
+  // スコープ違反はセッションを閉じるため、通知はコールバックへ届かない
+  assert.equal(namespaceCalls, 0);
+  assert.isDefined(ctx.getClosedWithError());
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.INVALID_PARAMETER);
+  assert.include(ctx.getClosedWithError()!.message, "not allowed in NAMESPACE");
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.19:
+ * "An endpoint that receives an unknown Message Parameter MUST close the session
+ *  with INVALID_PARAMETER."
+ * 未知の Parameter Type を NAMESPACE で受信しても、未知 Detail のように読み飛ばさず
+ * セッションを閉じ、アプリへは通知しないことを検証する。
+ */
+test("namespaceStartNamespaceStreamLoop: NAMESPACE の未知 Parameter 型は INVALID_PARAMETER で閉じる", async () => {
+  const ctx = createNamespaceLoopTestContext("namespace");
+  let namespaceCalls = 0;
+  ctx.target.callbacks.onNamespace = () => {
+    namespaceCalls++;
+  };
+
+  const readPromise = startLoop(
+    "namespace",
+    ctx.session,
+    ctx.requestId,
+    () => {},
+    () => {},
+  );
+
+  // 未知の Parameter Type (0x1f) を 1 件だけ持つ NAMESPACE ペイロードを組み立てる
+  // (encodeParameters は未知の型を送信できないため、ワイヤを直接構築する)
+  const unknownParameterPayload = concatUint8Arrays([
+    encodeTrackNamespace(createTrackNamespace(["live"])),
+    // Number of Parameters = 1
+    new Uint8Array([0x01]),
+    // Type Delta = 0x1f (どの Message Parameter 定義にも無い型)
+    encodeVarint(0x1f),
+  ]);
+  ctx.readableController.enqueue(requestOkMessage(ctx.controlWriter));
+  ctx.readableController.enqueue(
+    ctx.controlWriter.encode(MessageType.NAMESPACE, unknownParameterPayload),
+  );
+  ctx.readableController.close();
+  await readPromise;
+
+  // 未知の型は decodeParameters が INVALID_PARAMETER で拒否し、セッションが閉じる
+  assert.equal(namespaceCalls, 0);
+  assert.isDefined(ctx.getClosedWithError());
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.INVALID_PARAMETER);
+  assert.include(ctx.getClosedWithError()!.message, "unknown message parameter type: 0x1f");
 });
 
 test("namespaceStartNamespaceStreamLoop: 対応する NAMESPACE に先立つ NAMESPACE_DONE は UNEXPECTED_MESSAGE で閉じる", async () => {
@@ -1593,6 +1798,7 @@ test("namespaceStartNamespaceStreamLoop: 先頭に想定外メッセージ (NAME
   const namespacePayload = encodeNamespacePayload({
     type: MessageType.NAMESPACE,
     trackNamespaceSuffix: createTrackNamespace(["sports"]),
+    parameters: [],
   });
   ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.NAMESPACE, namespacePayload));
   ctx.readableController.close();
@@ -1633,6 +1839,7 @@ test("namespaceStartNamespaceStreamLoop: RESET_STREAM でも active namespace �
       encodeNamespacePayload({
         type: MessageType.NAMESPACE,
         trackNamespaceSuffix: createTrackNamespace(["sports"]),
+        parameters: [],
       }),
     ),
   );
@@ -1862,7 +2069,11 @@ test("namespaceStartNamespaceStreamLoop: unsubscribe 後の遅延 NAMESPACE / NA
   ctx.readableController.enqueue(
     ctx.controlWriter.encode(
       MessageType.NAMESPACE,
-      encodeNamespacePayload({ type: MessageType.NAMESPACE, trackNamespaceSuffix: suffix }),
+      encodeNamespacePayload({
+        type: MessageType.NAMESPACE,
+        trackNamespaceSuffix: suffix,
+        parameters: [],
+      }),
     ),
   );
   ctx.readableController.enqueue(
@@ -2311,6 +2522,7 @@ test("namespaceStartPublicationStreamLoop: 想定外の先頭メッセージで 
   const namespacePayload = encodeNamespacePayload({
     type: MessageType.NAMESPACE,
     trackNamespaceSuffix: createTrackNamespace(["sports"]),
+    parameters: [],
   });
   ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.NAMESPACE, namespacePayload));
   ctx.readableController.close();
@@ -2346,6 +2558,7 @@ test("namespaceStartPublicationStreamLoop: 確立後の想定外メッセージ�
   const namespacePayload = encodeNamespacePayload({
     type: MessageType.NAMESPACE,
     trackNamespaceSuffix: createTrackNamespace(["sports"]),
+    parameters: [],
   });
   ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.NAMESPACE, namespacePayload));
   ctx.readableController.close();
