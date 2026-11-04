@@ -52,7 +52,7 @@ draft 23 §8.4 / §12.1 は、対応済み Property を定義外の scope で受
 
 ### 既知の制限 (未実装)
 
-- scope 違反の PUBLISH は `decodePublishPayload` の段階で `MalformedTrackError` になるため、Track を同定して同じ Track の既存購読 / FETCH を `cancelMalformedTrackPeers` で取消す経路は、レビュー指摘を受けて `incomingPublishPeekTrackKey` と `cancelMalformedTrackPeers` の配線で実装した。現状は既存の malformed 経路で受信要求ストリームを cancel するのみ (Session は閉じない)。
-- SUBSCRIBE_OK / FETCH_OK / TRACK_STATUS_OK / REQUEST_UPDATE_OK の Track Properties scope 検証は未対応である。空必須 OK の INVALID_FIELD 優先を壊さないため、各応答ハンドラでの配置と malformed 時の同 Track 取消し配線が別途必要になる。
+- scope 違反の PUBLISH は `decodePublishPayload` の段階で `MalformedTrackError` になり、`incomingPublishDecodeOrReject` が `incomingPublishPeekTrackKey` で Track を復元して `cancelMalformedTrackPeers` を呼ぶ (実装済み)。受信要求ストリームも cancel し、Session は閉じない。
+- SUBSCRIBE_OK / FETCH_OK / TRACK_STATUS_OK の Track Properties scope 検証は実装済み (`decodeProperties(..., "track")` と応答ハンドラの malformed cancel 配線)。空必須の PUBLISH_OK / REQUEST_UPDATE_OK は §9.3 の INVALID_FIELD 優先を維持するため scope を渡さない。
 - `CODEC_STRING` (0x11) は scope だけ登録済みで、値の意味論が未対応のため対応済み集合には含めていない。
 - 実リレー E2E は統合ブランチの制約 (ALPN は移行完了まで moqt-22) のため未実施である。
