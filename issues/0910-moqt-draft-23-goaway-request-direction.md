@@ -1,8 +1,8 @@
 # 受信 PUBLISH の要求受信者に届いた GOAWAY を拒否する
 
 - Created: 2026-11-03
-- Completed: {YYYY-MM-DD}
-- Branch: feature/change-goaway-request-direction
+- Completed: 2026-11-04
+- Branch: feature/change-moqt-draft-23
 - Polished: 2026-11-03
 
 ## 目的
@@ -38,4 +38,14 @@ draft 23 §9.2 は request stream の GOAWAY を元の要求の受信者だけ�
 
 ## 解決方法
 
-{未着手}
+- 判定を「元の要求の送信者 / 受信者」の区別で行うようにした。publisher / subscriber やクライアント / サーバーでの代用はしていない。
+- `src/session/incomingPublish.ts` の受信 PUBLISH サブループで GOAWAY を受けた場合、移行受理ではなく draft-23 §9.2 の方向制約違反として PROTOCOL_VIOLATION でセッションを閉じるようにした。移行 callback の通知、送信方向の FIN、未応答 REQUEST_UPDATE の GOING_AWAY reject は行わない。旧 `goawayReceived` 状態とその抑止分岐、不要になった import・interface フィールドを削除した。
+- 自側が送信した PUBLISH / SUBSCRIBE / FETCH / TRACK_STATUS / namespace 要求への request stream GOAWAY は従来どおり受理する。重複 GOAWAY は UNEXPECTED_MESSAGE のまま。Session 制御ストリームの GOAWAY はこの方向制約の対象外である。
+- `src/session/bidi.ts` の `bidiHandleRequestStreamGoaway` の JSDoc に、自側が要求送信者のストリームからのみ呼ぶこと、受信 PUBLISH など要求受信者側では PROTOCOL_VIOLATION になることを明記した。
+- 高レベル通知は、合法な GOAWAY のみを通知する前提に整理された (既存の配線は変更不要)。
+- テストは受信 PUBLISH 上の GOAWAY が PROTOCOL_VIOLATION でセッションを閉じ goaway callback を呼ばないこと、自側送信要求への GOAWAY が受理されること、重複 GOAWAY が UNEXPECTED_MESSAGE になることを検証する。旧・移行受理前提の 4 テストは削除した。
+- docs は 0925 で一括更新するため触っていない。
+
+### 既知の制限
+
+- 実リレー E2E は統合ブランチの制約 (ALPN は移行完了まで moqt-22) のため未実施である。
