@@ -1294,6 +1294,10 @@ export async function bidiReadSubscribeResponse(
       session.pendingSubscribe.delete(requestId);
       session.requestStreams.delete(requestId);
       session.fillFetchTargets.delete(requestId);
+      // draft-ietf-moq-transport-23 §12.1 条件 10 の検出に使う Track 単位の状態は、
+      // その Track の利用者がいなくなった時点で解放する (解放時期は §12.1 の規定
+      // ではなく実装判断)。応答待ちの要求が失敗する経路でも解放する。
+      clearPriorGapTrackingIfUnused(session, pending.impl.getFullTrackNameKey());
       pending.reject(buildRequestErrorFromDecoded(decoded));
     },
     handleGoaway: (context, payload) => {
@@ -1303,6 +1307,7 @@ export async function bidiReadSubscribeResponse(
       session.pendingSubscribe.delete(requestId);
       session.requestStreams.delete(requestId);
       session.fillFetchTargets.delete(requestId);
+      clearPriorGapTrackingIfUnused(session, pending.impl.getFullTrackNameKey());
       pending.impl.goawayCallback?.(decoded.newSessionUri);
       pending.reject(new Error("request stream goaway"));
       // draft-ietf-moq-transport-22 §9.2:
@@ -1481,6 +1486,9 @@ export async function bidiReadFetchResponse(
       session.pendingFetch.delete(requestId);
       session.requestStreams.delete(requestId);
       fireFetcherReadyCallbacks(session, requestId);
+      // draft-ietf-moq-transport-23 §12.1 条件 10 の検出に使う Track 単位の状態は、
+      // その Track の利用者がいなくなった時点で解放する (実装判断)。
+      clearPriorGapTrackingIfUnused(session, pending.impl.getFullTrackNameKey());
       pending.reject(buildRequestErrorFromDecoded(decoded));
     },
     handleGoaway: (context, payload) => {
@@ -1490,6 +1498,7 @@ export async function bidiReadFetchResponse(
       session.pendingFetch.delete(requestId);
       session.requestStreams.delete(requestId);
       fireFetcherReadyCallbacks(session, requestId);
+      clearPriorGapTrackingIfUnused(session, pending.impl.getFullTrackNameKey());
       pending.impl.goawayCallback?.(decoded.newSessionUri);
       pending.reject(new Error("request stream goaway"));
       // draft-ietf-moq-transport-22 §9.2:
