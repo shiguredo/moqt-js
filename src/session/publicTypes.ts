@@ -963,9 +963,11 @@ export interface NamespaceSubscriptionCallbacks {
    *  with the updated Parameters."
    * そのため同じ suffix で複数回呼ばれ得る。active な期間の 2 回目以降は、
    * 新しい namespace の追加ではなく同じ namespace の Parameters の更新として
-   * 扱う。onNamespaceDone は active 期間ごとに 1 回通知し、FIN / RESET による
-   * 補完は明示的な NAMESPACE_DONE と重複しない。NAMESPACE_DONE の後に同じ
-   * suffix の NAMESPACE を受けた場合は再追加として扱う。
+   * 扱う。onNamespaceDone は FIN / RESET による補完が明示的な NAMESPACE_DONE と
+   * 重複しないことを保証する。同じ suffix の NAMESPACE_DONE を重複して受けた
+   * 場合の呼び出し回数は仕様が定めておらず、この保証の対象外である。
+   * NAMESPACE_DONE の後に同じ suffix の NAMESPACE を受けた場合は再追加として
+   * 扱う。
    *
    * Parameters は draft-ietf-moq-transport-23 §9.19 (Control Message Parameters) の
    * Message Parameter である。現在の draft は NAMESPACE に出現できるパラメータを
