@@ -1890,6 +1890,54 @@ test("namespaceStartNamespaceStreamLoop: prefix 拡大の ACK では暗黙の NA
 
 /**
  * draft-ietf-moq-transport-23 §9.5.2:
+ * prefix を別枝へ移動する場合、旧 prefix に一致する active namespace はすべて
+ * 暗黙の NAMESPACE_DONE として旧 suffix で通知され、新 prefix の namespace は
+ * 保持されない (retained 0 件)。FIN 補完は発生しない。
+ */
+test("namespaceStartNamespaceStreamLoop: prefix を別枝へ移動すると旧 namespace を暗黙終了する", async () => {
+  const ctx = createNamespaceLoopTestContext("namespace");
+  // 旧 prefix ["live","sports"] から ["live","news"] へ別枝へ移動する
+  ctx.subscription.namespacePrefix = ["live", "sports"];
+  const doneCalls: string[][] = [];
+  ctx.target.callbacks.onNamespaceDone = (suffix: string[]) => {
+    doneCalls.push(suffix);
+  };
+  const pending = registerPendingUpdate(ctx.session, ctx.requestId);
+  ctx.subscription.pendingPrefix = ["live", "news"];
+
+  const readPromise = startLoop(
+    "namespace",
+    ctx.session,
+    ctx.requestId,
+    () => {},
+    () => {},
+  );
+
+  ctx.readableController.enqueue(requestOkMessage(ctx.controlWriter));
+  // 旧 prefix の active namespace (suffix ["races"]) を登録してから ACK する
+  ctx.readableController.enqueue(
+    ctx.controlWriter.encode(
+      MessageType.NAMESPACE,
+      encodeNamespacePayload({
+        type: MessageType.NAMESPACE,
+        trackNamespaceSuffix: createTrackNamespace(["races"]),
+        parameters: [],
+      }),
+    ),
+  );
+  ctx.readableController.enqueue(requestOkMessage(ctx.controlWriter));
+  ctx.readableController.close();
+  await readPromise;
+
+  assert.equal(pending.resolved, true);
+  // 別枝移動では保持される namespace が無く、旧 suffix で 1 回だけ終了通知が届く。
+  // FIN 補完は active が空のため追加の通知を出さない。
+  assert.deepEqual(doneCalls, [["races"]]);
+  assert.isUndefined(ctx.getClosedWithError());
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.5.2:
  * REQUEST_UPDATE が失敗 (REQUEST_ERROR) した場合は旧 prefix と active namespace を
  * 維持する。FIN の補完は旧 prefix 基準の suffix で 1 回だけ通知する。
  */
