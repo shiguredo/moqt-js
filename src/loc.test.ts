@@ -1125,3 +1125,41 @@ test("CODEC_STRING: 実ワイヤで mutable list と Immutable 内側が並ぶ�
   const resolved = resolveVideoProperties(trackProperties, undefined);
   assert.equal(resolved.codecString, "mutable-codec");
 });
+
+// Object の Immutable Properties 内側だけにある VIDEO_FRAME_MARKING / AUDIO_LEVEL も解決する。
+// loc-05 §3.1.2 は Immutable への配置を SHOULD とするため、内側だけに置く publisher は実在し得る。
+test("resolve: Object の Immutable 内側の VIDEO_FRAME_MARKING と AUDIO_LEVEL を解決する", () => {
+  const inner = encodeProperties([
+    { id: LOCPropertyId.VIDEO_FRAME_MARKING, data: new Uint8Array([0x88]) },
+    { id: LOCPropertyId.AUDIO_LEVEL, value: 0x80n },
+  ]);
+  const objectWire = encodeProperties([{ id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: inner }]);
+
+  const video = resolveVideoProperties(undefined, objectWire);
+  assert.isDefined(video.frameMarking, "Immutable 内側の VIDEO_FRAME_MARKING が解決される");
+
+  const audio = resolveAudioProperties(undefined, objectWire);
+  assert.isDefined(audio.audioLevel, "Immutable 内側の AUDIO_LEVEL が解決される");
+});
+
+// Object スコープ専用の Property は Track の Immutable 内側にあっても抽出しない。
+// mutable list だけでなく Immutable 内側でも scope 規則を守ることを固定する。
+test("resolve: Track の Immutable 内側にある Object スコープ専用 Property は抽出しない", () => {
+  const inner = encodeProperties([
+    { id: LOCPropertyId.TIMESTAMP, value: 1234n },
+    { id: LOCPropertyId.VIDEO_FRAME_MARKING, data: new Uint8Array([0x88]) },
+    { id: LOCPropertyId.AUDIO_LEVEL, value: 0x80n },
+  ]);
+  const trackProperties: Property[] = [{ id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: inner }];
+
+  const video = resolveVideoProperties(trackProperties, undefined);
+  assert.isUndefined(
+    video.timestamp,
+    "TIMESTAMP は Object スコープ専用なので Track からは抽出しない",
+  );
+  assert.isUndefined(video.frameMarking, "VIDEO_FRAME_MARKING は Object スコープ専用");
+  assert.isUndefined(video.codecString);
+
+  const audio = resolveAudioProperties(trackProperties, undefined);
+  assert.isUndefined(audio.audioLevel, "AUDIO_LEVEL は Object スコープ専用");
+});

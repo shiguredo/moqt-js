@@ -646,6 +646,11 @@ export function encodeVideoProperties(properties: VideoProperties): Uint8Array {
  *
  * VIDEO_FRAME_MARKING の Value が不正 (Length 1-4 外) な場合は frameMarking を未設定として
  * 扱う。
+ *
+ * draft-ietf-moq-transport-23 §10.7 (Immutable Properties): "When looking for the value
+ *  of a property, processors MUST search both the mutable properties and the contents
+ *  of Immutable Properties." のため、mutable list に加えて IMMUTABLE_PROPERTIES の内側も
+ * 1 段探索する (mutable を優先)。
  */
 export function decodeVideoProperties(data: Uint8Array): VideoProperties {
   const decoded = decodeObjectPropertiesTolerant(data);

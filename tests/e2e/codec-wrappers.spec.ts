@@ -894,7 +894,7 @@ function expectAudioEncoderContract(result: AudioEncoderTestResult): void {
     expect(chunk.duration).not.toBeNull();
     expect(chunk.firstByte).toBeGreaterThanOrEqual(0);
     // opus は AudioSpecificConfig を運ばない (Chromium の opus encoder は OpusHead を
-    // 返すが、Wrapper が運ばない判断をする)。aac は draft-ietf-moq-loc-04 §2.3.3.1 の
+    // 返すが、Wrapper が運ばない判断をする)。aac は draft-ietf-moq-loc-05 §2.3.3.1 の
     // Audio Config として decoderConfig.description を運ぶが、Chromium が返すのは最初の
     // chunk だけであり、以降の chunk は description を持たない (headless shell 156 で
     // 実測)。48 kHz ステレオの AAC-LC の AudioSpecificConfig は 2 バイトである
