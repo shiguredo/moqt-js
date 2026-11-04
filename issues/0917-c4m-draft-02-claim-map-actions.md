@@ -1,8 +1,8 @@
 # C4M 02 の moqt claim を map にし SETUP と SUBSCRIBE_TRACKS を反映する
 
 - Created: 2026-11-03
-- Completed: {YYYY-MM-DD}
-- Branch: feature/change-c4m-claim-map-actions
+- Completed: 2026-11-05
+- Branch: feature/change-c4m-draft-02
 - Polished: 2026-11-03
 
 ## 目的
@@ -39,4 +39,19 @@ draft-ietf-moq-c4m-02 §2.1 は moqt claim を scope 配列そのものから ke
 
 ## 解決方法
 
-{未着手}
+- `src/c4m/moqt.ts` の `decodeMoqtClaim` / `encodeMoqtClaim` を draft-ietf-moq-c4m-02 §2.1 の CBOR map 形式にした。key 0 (`MOQT_SCOPES_KEY`) に scope 配列を置き、旧形式の配列は受理しない。
+- §2.1.1 (Extensibility) に従い、key 0 以外の map key を持つ claim は `unknownClaimKey` で拒否する (fail-closed)。key 0 が無い場合は `missingScopes` で拒否する。`C4mErrorCode` と PBT の既知コード一覧にも両方を追加した。
+- `MoqtAction` を draft-ietf-moq-c4m-02 Table 1 に合わせて作り直した。`ClientSetup` / `ServerSetup` を廃止して `Setup` (1) に統合し、`SubscribeTracks` (9) を追加した。`moqtActionKey` / `moqtActionFromKey` / `moqtActionName` / `moqtAuthorizationContext` を対応させ、0 は C4M 02 のアクションではないため `moqtActionFromKey(0)` は undefined を返す。
+- DPoP の Authorization Context の文字列 helper は残しているが、新仕様の action は整数であり、この helper を新しい proof 形式として案内しない (JSDoc で従来の経路であることを示す)。CWT proof 全体の実装は対象外とした。
+- scope 内の bytewise matching、namespace 終端条件 (`nil` は末尾のみ)、scope の OR 評価は変更していない。
+- テストベクタを draft-ietf-moq-c4m-02 付録 A の moqt ベクタ 5 件 (publisher_exact / subscriber_prefix / multi_scope / admin_wildcard / suffix_match) に差し替えた。付録 A の `admin_wildcard` は actions に旧 C4M 01 の 0 を含むが、Table 1 に 0 は無いため、認可判定テストでは未定義アクションを判定せずスキップする (コメントで理由を明記)。
+- 付録 A のベクタが Private Use の claim key (-65537 / -65538) を使うため、`CLAIM_MOQT` / `CLAIM_MOQT_REVAL` を 327 / 328 から -65537 / -65538 に更新した。claim label の設定可能化 (0918) と COSE バイナリのテストベクタ整備 (0920) は別 issue のままである。
+- devtools の `ACTION_GROUPS` は同じ表示名のアクションをまとめる汎用実装へ整理し、SETUP が 1 件になったことと SUBSCRIBE_TRACKS の追加に追随した。
+- `vp check` / `vp run typecheck` / `vp test run` (272 ファイル / 4843 テスト) / `vp run build` / `vp run build:devtools` が通る。
+
+### 既知の制限
+
+- Composite Claims の完全な評価エンジンは追加していない (issue の設計方針どおり)。
+- claim label は引き続き固定値であり、peer と合意した暫定値を明示する設定型は 0918 で扱う。
+- C4M 02 の COSE バイナリ形式のテストベクタ全体は 0920 で扱う。
+- 実リレー E2E は未実施である。
