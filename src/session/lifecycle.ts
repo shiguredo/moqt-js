@@ -1,4 +1,3 @@
-import { incomingSettlePublishFillWaiters } from "./incoming";
 /**
  * セッションのライフサイクル free function 群
  *
@@ -23,6 +22,10 @@ import {
   getMessageTypeName,
 } from "../message";
 import { clampTimeoutMs } from "./params";
+// 循環参照を避けるため、待機者の解放は incoming の free function を直接呼ぶ
+// のではなく、SessionInternal のメソッド経由にできないかを検討する余地がある。
+// 現状は runtime 循環 (lifecycle → incoming → bidi → lifecycle) を受け入れている。
+import { incomingSettlePublishFillWaiters } from "./incoming";
 import { isPeerStreamError, isSessionClosedError, toProtocolViolationSessionError } from "./errors";
 import { publishCloseSubgroupStream } from "./publish";
 import type { EndOfGroupTracking } from "./endOfGroupTracking";

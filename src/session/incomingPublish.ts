@@ -603,6 +603,15 @@ async function incomingPublishCancelRequestStream(
  * @returns デコードに成功した PUBLISH。拒否・取消しを行った場合は null
  */
 /**
+ * 受信 PUBLISH のペイロードをデコードし、拒否・取消しの後始末まで行う
+ *
+ * デコードに失敗した場合は §12.2 の分類に従ってセッションを閉じるか要求を
+ * 取り消し、初期 fill の待機者を解放する。malformed track の場合は同じ
+ * Full Track Name の既存購読 / FETCH も cancel する (§12.1)。
+ *
+ * @returns デコードに成功した PUBLISH。拒否・取消しを行った場合は null
+ */
+/**
  * PUBLISH ペイロードの先頭から Full Track Name を復元する
  *
  * PUBLISH の先頭は Request ID / Track Namespace / Track Name の順に並ぶため、

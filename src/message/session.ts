@@ -426,10 +426,10 @@ export function decodeRequestOkPayload(
   offset += paramsConsumed;
 
   const propertiesData = data.slice(offset);
-  // draft-ietf-moq-transport-23 §8.4: Track Properties を運ぶ応答
-  // (FETCH_OK / TRACK_STATUS_OK / PUBLISH_OK) では scope と重複の検証を行う。
-  // 空必須の応答 (REQUEST_UPDATE_OK など) は scope を渡さず、§9.3 の
-  // INVALID_FIELD 優先を維持する。
+  // draft-ietf-moq-transport-23 §8.4: Track Properties を運ぶ応答のうち、
+  // 非空が正当な FETCH_OK / TRACK_STATUS_OK は scope を渡して scope 違反と
+  // 重複を malformed track とする。空必須の応答 (PUBLISH_OK / REQUEST_UPDATE_OK
+  // など) は scope を渡さず、§9.3 の INVALID_FIELD による Session 終了を優先する。
   const trackProperties = decodeProperties(propertiesData, propertyScope);
 
   return {
