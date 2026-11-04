@@ -169,7 +169,7 @@ test("対応していないアルゴリズムを拒否する", () => {
   const bytes = encodeCbor(
     coseArray(protectedHeader(42), new TextEncoder().encode("p"), new TextEncoder().encode("s")),
   );
-  assertCoseError(() => decodeCoseMessage(bytes), "unsupportedAlgorithm", 42);
+  assertCoseError(() => decodeCoseMessage(bytes), "unsupportedAlgorithm", 42n);
 });
 
 test("C4M ドラフトの HMAC の別名 (-4) を受理する", () => {
@@ -235,7 +235,7 @@ test("unprotected ヘッダに alg / typ を置けない", () => {
       cborByteString(new TextEncoder().encode("signature")),
     ]),
   );
-  assertCoseError(() => decodeCoseMessage(bytesWithBoth), "duplicateHeaderParameter", 1);
+  assertCoseError(() => decodeCoseMessage(bytesWithBoth), "duplicateHeaderParameter", 1n);
 
   // typ は unprotected ヘッダに置けない (RFC 9596 Section 2)
   const bytesWithUnprotectedType = encodeCbor(

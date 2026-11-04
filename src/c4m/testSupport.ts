@@ -109,7 +109,9 @@ export function assertCborError(
   );
   assert.equal(error.code, code);
   if (detail !== undefined) {
-    assert.equal(error.detail, detail);
+    // detail は string | number で、緩比較だと 1 と "1" を区別できない。
+    // 型の取り違えを検出できるよう厳密比較にする。
+    assert.strictEqual(error.detail, detail);
   }
   return error;
 }
@@ -141,7 +143,9 @@ export function assertCoseError(
   );
   assert.equal(error.code, code);
   if (detail !== undefined) {
-    assert.equal(error.detail, detail);
+    // detail は string | number で、緩比較だと 1 と "1" を区別できない。
+    // 型の取り違えを検出できるよう厳密比較にする。
+    assert.strictEqual(error.detail, detail);
   }
   return error;
 }
@@ -161,7 +165,9 @@ export function assertCatError(
   );
   assert.equal(error.code, code);
   if (detail !== undefined) {
-    assert.equal(error.detail, detail);
+    // detail は string | number で、緩比較だと 1 と "1" を区別できない。
+    // 型の取り違えを検出できるよう厳密比較にする。
+    assert.strictEqual(error.detail, detail);
   }
   return error;
 }
@@ -181,7 +187,9 @@ export function assertC4mError(
   );
   assert.equal(error.code, code);
   if (detail !== undefined) {
-    assert.equal(error.detail, detail);
+    // detail は string | number で、緩比較だと 1 と "1" を区別できない。
+    // 型の取り違えを検出できるよう厳密比較にする。
+    assert.strictEqual(error.detail, detail);
   }
   return error;
 }
