@@ -250,6 +250,41 @@ function buildUnsupportedRequestPrefix(
 }
 
 /**
+ * draft-ietf-moq-transport-23 §8.7:
+ * Full Track Name の合計長 (Track Namespace 全フィールド長 + Track Name 長) が
+ * 4,096 バイトを超えたら FIELD_LENGTH_EXCEEDED でセッションを閉じる。
+ * 未対応リクエストでも共通 prefix を検証するため、NOT_SUPPORTED にはしない。
+ */
+test("incomingHandleFirstBidiMessage: 未対応リクエストの Full Track Name 上限超過は FIELD_LENGTH_EXCEEDED", async () => {
+  const written: Uint8Array[] = [];
+  const writable = new WritableStream<Uint8Array>({
+    write(chunk) {
+      written.push(chunk);
+    },
+  });
+  const readable = new ReadableStream<Uint8Array>({});
+  const stream = { readable, writable } as unknown as WebTransportBidirectionalStream;
+
+  const ctx = createUnsupportedRequestTestContext();
+  const session = ctx.session;
+
+  // Track Namespace 4,096 バイト (namespace 上限ちょうど) + Track Name 1 バイト
+  // → Full Track Name は 4,097 バイトで上限超過
+  const firstMsg: ControlMessage = {
+    type: MessageType.SUBSCRIBE,
+    payload: buildUnsupportedRequestPrefix(MessageType.SUBSCRIBE, 1n, ["n".repeat(4096)], "t"),
+  };
+
+  const result = await incomingHandleFirstBidiMessage(session, stream, firstMsg);
+
+  // prefix 検証でセッションを閉じた場合も、呼び出し側は「処理済み」として true を返す
+  assert.isTrue(result);
+  // NOT_SUPPORTED は応答せず、セッションを FIELD_LENGTH_EXCEEDED で閉じる
+  assert.equal(written.length, 0);
+  assert.equal(ctx.closed.error?.code, SessionErrorCode.FIELD_LENGTH_EXCEEDED);
+});
+
+/**
  * draft-ietf-moq-transport-22 §1.6 (Modularity):
  * 「Limited endpoints SHOULD respond to any unsupported messages with the
  * appropriate NOT_SUPPORTED error code, rather than ignoring them.」
