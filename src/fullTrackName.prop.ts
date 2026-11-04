@@ -149,7 +149,8 @@ test("getFullTrackNameKey は fullTrackNameKey と同じ比較キーを返す", 
  * §8.8 の文字列表現の round-trip に使う Track Namespace Field / Track Name の Arbitrary
  *
  * Track Namespace Field は §8.7 が 1 バイト以上を MUST とするため空を生成しない。
- * Track Name も MSF fragment (§11.1.2) が空を許さないため 1 文字以上にする。
+ * Track Name も通常メッセージでは draft-ietf-moq-transport-23 §2.4.1 が
+ * 1 バイト以上を MUST とするため 1 文字以上にする。
  * エスケープ対象の構造文字 (`-` / `--` / `&` / `.` / `?` など) と、非 ASCII を
  * 含む valid な Unicode (`unit: "grapheme"` は孤立サロゲートを生成しない) を混ぜる。
  * 孤立サロゲートは TextEncoder が U+FFFD に置換する (§8.8 の形式はバイト列に対する

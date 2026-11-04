@@ -54,6 +54,7 @@ export {
   encodeFillParameters,
   encodeRangeFilter,
   encodeTrackName,
+  validateTrackNameNonEmpty,
   isNextObjectLocationFilter,
   isSameLocationFilter,
   validateLocationFilterEndGroup,

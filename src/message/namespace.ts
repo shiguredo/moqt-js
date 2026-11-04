@@ -18,6 +18,7 @@ import {
   type TrackNamespace,
   decodeParameters,
   decodeTrackNamespace,
+  validateTrackNameNonEmpty,
   encodeParameters,
   encodeTrackNamespace,
 } from "./parameter";
@@ -500,6 +501,9 @@ export function decodePublishSkippedPayload(data: Uint8Array, offset = 0): Publi
   );
   const trackName = data.slice(offset + totalConsumed, offset + totalConsumed + Number(nameLen));
   totalConsumed += Number(nameLen);
+
+  // draft-ietf-moq-transport-23 §2.4.1: 通常の Track Name は 1 バイト以上
+  validateTrackNameNonEmpty(trackName, "publish skipped");
 
   // draft-ietf-moq-transport-23 §9:
   // "If the length does not match the length of the Message Body,

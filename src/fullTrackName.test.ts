@@ -31,7 +31,10 @@ test("fullTrackNameKey: 区切り文字の曖昧さで衝突する Full Track Na
 
 /**
  * draft-ietf-moq-transport-22 §2.4.1:
- * Track Namespace は 0 フィールド、Track Name は空を許す。境界が消えないよう
+ * Track Namespace は 0 フィールドを許す。Track Name は通常メッセージでは
+ * draft-ietf-moq-transport-23 §2.4.1 が 1 バイト以上を MUST とするが、
+ * namespace-scoped Redirect (§9.4.2.1) の空 Track Name も比較キーとして表現できる
+ * 必要がある。境界が消えないよう
  * 空フィールドにも長さ ("0:") を付ける (空の Track Namespace Field は §8.7 が
  * 1 バイト以上を MUST とするため wire 上は現れないが、キー生成は任意の入力で
  * 境界を保つ)。
@@ -80,7 +83,9 @@ test("formatFullTrackName: 予約文字と非 ASCII をエスケープする", (
  */
 test("formatFullTrackName: 空の Track Namespace と空の Track Name を扱う", () => {
   assert.equal(formatFullTrackName([], "video"), "--video");
-  // Track Name は §8.7 が空を許す (カタログでは §5.2.3 が空を拒否する)
+  // 通常メッセージの Track Name は §2.4.1 が 1 バイト以上を MUST とする。
+  // namespace-scoped Redirect (§9.4.2.1) の空 Track Name を表示できることだけを
+  // ここでは確認する (カタログでは §5.2.3 が空を拒否する)。
   assert.equal(formatFullTrackName(["room"], ""), "room--");
   assert.throws(
     () => formatFullTrackName(["room", "", "123"], "video"),

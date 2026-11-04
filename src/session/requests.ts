@@ -159,14 +159,16 @@ export async function requestsPublish(
     throw new Error("Cannot publish after receiving GOAWAY");
   }
 
+  // fail-fast: 空 Track Name はストリーム生成・認証トークン予約・Request ID
+  // 消費より前に拒否する (draft-ietf-moq-transport-23 §2.4.1)。
+  const trackNamespace = createTrackNamespace(namespace);
+  const trackNameBytes = encodeTrackName(trackName);
+
   const requestId = session.nextRequestId;
   // draft-ietf-moq-transport-22 Section 6.4.2.1: クライアントは偶数の Request ID を使うため 2 ずつ加算する
   session.nextRequestId += 2n;
 
   const trackAlias = session.nextTrackAlias++;
-
-  const trackNamespace = createTrackNamespace(namespace);
-  const trackNameBytes = encodeTrackName(trackName);
   // draft-ietf-moq-transport-22 §8.7: Full Track Name 合計長検証
   validateFullTrackName(trackNamespace, trackName);
   // draft-ietf-moq-transport-22 §2.4.3 / §6.5: 予約 namespace / .session の送信拒否
@@ -332,12 +334,14 @@ export async function requestsSubscribe(
   // 登録失敗 → USE_VALUE)。詳細は normalizeAuthorizationTokenForSend の JSDoc。
   const normalizedOptions = requestsNormalizeAuthorizationToken(session, options);
 
+  // fail-fast: 空 Track Name はストリーム生成・認証トークン予約・Request ID
+  // 消費より前に拒否する (draft-ietf-moq-transport-23 §2.4.1)。
+  const trackNamespace = createTrackNamespace(namespace);
+  const trackNameBytes = encodeTrackName(trackName);
+
   const requestId = session.nextRequestId;
   // draft-ietf-moq-transport-22 Section 6.4.2.1: クライアントは偶数の Request ID を使うため 2 ずつ加算する
   session.nextRequestId += 2n;
-
-  const trackNamespace = createTrackNamespace(namespace);
-  const trackNameBytes = encodeTrackName(trackName);
   // draft-ietf-moq-transport-22 §8.7: Full Track Name 合計長検証
   validateFullTrackName(trackNamespace, trackName);
   // draft-ietf-moq-transport-22 §2.4.3 / §6.5: 予約 namespace / .session の送信拒否
@@ -520,11 +524,13 @@ export async function requestsFetch(
   // FILL_PARAMETERS の内側の相対指定には適用しない。
   const fetchRequestRange = resolveFetchRequestRange(options?.filter);
 
-  const requestId = session.nextRequestId;
-  session.nextRequestId += 2n;
-
+  // fail-fast: 空 Track Name はストリーム生成・認証トークン予約・Request ID
+  // 消費より前に拒否する (draft-ietf-moq-transport-23 §2.4.1)。
   const trackNamespace = createTrackNamespace(namespace);
   const trackNameBytes = encodeTrackName(trackName);
+
+  const requestId = session.nextRequestId;
+  session.nextRequestId += 2n;
   // draft-ietf-moq-transport-22 §8.7: Full Track Name 合計長検証
   validateFullTrackName(trackNamespace, trackName);
   // draft-ietf-moq-transport-22 §2.4.3 / §6.5: 予約 namespace / .session の送信拒否
@@ -653,11 +659,13 @@ export async function requestsTrackStatus(
     throw new Error("Cannot query track status after receiving GOAWAY");
   }
 
-  const requestId = session.nextRequestId;
-  session.nextRequestId += 2n;
-
+  // fail-fast: 空 Track Name はストリーム生成・認証トークン予約・Request ID
+  // 消費より前に拒否する (draft-ietf-moq-transport-23 §2.4.1)。
   const trackNamespace = createTrackNamespace(namespace);
   const trackNameBytes = encodeTrackName(trackName);
+
+  const requestId = session.nextRequestId;
+  session.nextRequestId += 2n;
   // draft-ietf-moq-transport-22 §8.7: Full Track Name 合計長検証
   validateFullTrackName(trackNamespace, trackName);
   // draft-ietf-moq-transport-22 §2.4.3 / §6.5: 予約 namespace / .session の送信拒否

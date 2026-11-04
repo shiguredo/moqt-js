@@ -137,7 +137,10 @@ export function formatTrackNamespace(trackNamespace: readonly string[]): string 
  * 境界と Track Name の境界が一意に読める (fullTrackNameKey の doc コメントが
  * 挙げる曖昧さが無い)。
  *
- * Track Name は §8.7 が空を許すため、空でも描画する。
+ * Track Name は、通常のメッセージ (SUBSCRIBE / PUBLISH / FETCH / TRACK_STATUS /
+ * PUBLISH_SKIPPED) では draft-ietf-moq-transport-23 §2.4.1 が 1 バイト以上を MUST と
+ * する。一方、namespace-scoped Redirect (§9.4.2.1) の Track Name は空を MUST と
+ * するため、表示・比較キーの生成では空も扱えるようにする。
  *
  * @throws Error 空の Track Namespace Field を渡したとき
  */

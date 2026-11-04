@@ -294,16 +294,50 @@ export function isRejectedReceiveNamespace(tuple: Uint8Array[]): boolean {
 }
 
 /**
+ * 通常のメッセージの Track Name が 1 バイト以上であることを検証する (受信側)
+ *
+ * draft-ietf-moq-transport-23 §2.4.1 (Track Naming):
+ * "Each Track Name MUST contain at least one byte.  If an endpoint receives a
+ *  Track Name with a length of 0, it MUST close the session with a
+ *  PROTOCOL_VIOLATION."
+ *
+ * この検証は Track Name を持つ通常メッセージ (SUBSCRIBE / PUBLISH / FETCH /
+ * TRACK_STATUS / PUBLISH_SKIPPED) の受信にだけ使う。namespace-scoped Redirect の
+ * Track Name は §9.4.2.1 が空を MUST とするため、共用の長さ検証
+ * (validateFullTrackNameBytes) には非空制約を入れない。
+ *
+ * @param trackName - ワイヤから読み取った Track Name のバイト列
+ * @param contextName - エラーメッセージ用のメッセージ名
+ * @throws ProtocolViolationError 0 バイトの場合
+ */
+export function validateTrackNameNonEmpty(trackName: Uint8Array, contextName: string): void {
+  if (trackName.length === 0) {
+    throw new ProtocolViolationError(
+      `${contextName} track name must not be empty`,
+      SessionErrorCode.PROTOCOL_VIOLATION,
+    );
+  }
+}
+
+/**
  * Track Name をエンコードする（サイズ検証付き）
  *
+ * draft-ietf-moq-transport-23 §2.4.1 (Track Naming):
+ * "Each Track Name MUST contain at least one byte."
+ * 空の Track Name は送信 API の誤用として、ストリーム生成と認証トークンの予約より
+ * 前に throw する。UTF-8 の文字数ではなくバイト数で判定する。
+ *
  * draft-ietf-moq-transport-22:
- * Full Track Name は最大 4,096 バイト。
- * draft-ietf-moq-transport-22 Section 8.7
+ * Full Track Name は最大 4,096 バイト (draft-ietf-moq-transport-22 Section 8.7)。
+ * 上限超過は既存の Error 契約を保つ。
  */
 export function encodeTrackName(trackName: string): Uint8Array {
   const encoder = new TextEncoder();
   const bytes = encoder.encode(trackName);
 
+  if (bytes.length === 0) {
+    throw new Error("track name must not be empty");
+  }
   if (bytes.length > MAX_TRACK_NAME_SIZE) {
     throw new Error(`track name exceeds maximum size: ${bytes.length} > ${MAX_TRACK_NAME_SIZE}`);
   }

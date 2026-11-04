@@ -18,6 +18,7 @@ import {
   encodeParameters,
   encodeTrackNamespace,
   validateFullTrackNameBytes,
+  validateTrackNameNonEmpty,
 } from "./parameter";
 import { MessageType } from "./types";
 
@@ -124,6 +125,7 @@ export function decodeSubscribePayload(data: Uint8Array, offset = 0): Subscribe 
   // Full Track Name (Namespace + Track Name 合計) が 4096 バイト超過は
   // FIELD_LENGTH_EXCEEDED でセッションを閉じる
   // ワイヤバイト長で計測する (不正 UTF-8 の置換による誤計測を防ぐ)
+  validateTrackNameNonEmpty(trackName, "subscribe");
   validateFullTrackNameBytes(trackNamespace, trackName);
 
   const [parameters, paramsConsumed] = decodeParameters(data, offset + totalConsumed);

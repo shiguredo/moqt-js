@@ -15,11 +15,13 @@ import {
   encodeRequestOkPayload,
   encodeRequestErrorPayload,
   encodeGoawayPayload,
+  decodeRequestErrorPayload,
 } from "../message/session";
 import { MessageType, MessageParameterType, GroupOrder } from "../message/types";
 import { encodeLocation, encodeParameters, encodeRangeFilter, type Parameter } from "../message";
 import { decodeRequestUpdatePayload, encodeSubscribeOkPayload } from "../message/subscribe";
-import { encodeLocationFilterParameter } from "../message/parameter";
+import { encodeLocationFilterParameter, createTrackNamespace } from "../message/parameter";
+import { ProtocolViolationError } from "../error";
 import { SessionError, SessionErrorCode, RequestErrorCode, InvalidFilterError } from "../error";
 import {
   createBidiSession,
@@ -39,6 +41,7 @@ import {
   bidiReadSubscribeResponse,
   bidiReadTrackStatusResponse,
   bidiSendRequestUpdate,
+  buildRequestErrorFromDecoded,
 } from "./bidi";
 import { FetcherImpl } from "../fetcher";
 import { fullTrackNameKey } from "../fullTrackName";
@@ -381,6 +384,47 @@ test("bidiReadFetchResponse: FETCH_OK のスコープ違反で具体エラーが
   // 削除集合 (pendingFetch + requestStreams) が掃除される
   assert.isFalse(ctx.session.pendingFetch.has(ctx.requestId));
   assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));
+});
+
+/**
+ * draft-ietf-moq-transport-23 §2.4.1 / §9.4.2.1 (REDIRECT):
+ * Track-scoped 要求への Redirect の Track Name は 1 バイト以上でなければならない。
+ * 空の場合は PROTOCOL_VIOLATION でセッションを閉じる。
+ * namespace-scoped 要求 (SUBSCRIBE_NAMESPACE / PUBLISH_NAMESPACE /
+ * SUBSCRIBE_TRACKS) は逆に空を MUST とし、空 Redirect は受理する。
+ */
+test("Redirect の Track Name は track scope で非空必須・namespace scope で空必須", () => {
+  const redirectTarget = {
+    connectUri: "moqt://new.example.com",
+    trackNamespace: createTrackNamespace(["live"]),
+    trackName: new Uint8Array(0),
+  };
+
+  // track scope: 空 Track Name は PROTOCOL_VIOLATION
+  const trackScopeError = decodeRequestErrorPayload(
+    encodeRequestErrorPayload({
+      type: MessageType.REQUEST_ERROR,
+      errorCode: BigInt(RequestErrorCode.REDIRECT),
+      reasonPhrase: "redirect",
+      retryInterval: 0n,
+      redirect: redirectTarget,
+    }),
+  );
+  // 例外の型と code は捕捉して検証する (chai の throws は述語関数を受け付けない)
+  let thrown: unknown;
+  try {
+    buildRequestErrorFromDecoded(trackScopeError, "track");
+  } catch (error) {
+    thrown = error;
+  }
+  assert.instanceOf(thrown, ProtocolViolationError);
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.PROTOCOL_VIOLATION);
+
+  // namespace scope: 空 Track Name は受理し、RequestError に Redirect が載る
+  const namespaceScope = buildRequestErrorFromDecoded(trackScopeError, "namespace");
+  assert.isDefined(namespaceScope.redirect);
+  assert.deepEqual(namespaceScope.redirect?.trackNamespace, [new TextEncoder().encode("live")]);
+  assert.equal(namespaceScope.redirect?.trackName.length, 0);
 });
 
 test("bidiReadTrackStatusResponse: TRACK_STATUS_OK のスコープ違反で具体エラーが reject される", async () => {

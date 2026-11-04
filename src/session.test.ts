@@ -4355,6 +4355,40 @@ test("tracks の update() を fire-and-forget で呼び出しても unsubscribe(
   }
 });
 
+/**
+ * draft-ietf-moq-transport-23 §2.4.1 (Track Naming):
+ * "Each Track Name MUST contain at least one byte."
+ * 送信 API は空の Track Name を、ストリーム生成・認証トークン予約・Request ID 消費より
+ * 前に fail-fast する。
+ */
+test("送信 API: 空 Track Name はストリーム生成も Request ID 消費もせずに throw する", async () => {
+  const { transport, getCreatedCount } = createCountingBidirectionalStreamTransport();
+  const session = new SessionImpl(transport, {});
+  const internals = session as unknown as { nextRequestId: bigint };
+  const requestIdBefore = internals.nextRequestId;
+
+  const attempts: (() => Promise<unknown>)[] = [
+    () => session.subscribe(["live"], "", { object: () => {} }),
+    () => session.fetch(["live"], "", {}, { object: () => {} }),
+    () => session.trackStatus(["live"], ""),
+    () => session.publish(["live"], "", {}),
+  ];
+  for (const attempt of attempts) {
+    let thrown: Error | undefined;
+    try {
+      await attempt();
+    } catch (error) {
+      thrown = error instanceof Error ? error : new Error(String(error));
+    }
+    assert.isDefined(thrown);
+    assert.isTrue(thrown!.message.includes("track name must not be empty"), thrown!.message);
+  }
+
+  // ストリームを開かず、Request ID も消費しない
+  assert.equal(getCreatedCount(), 0);
+  assert.equal(internals.nextRequestId, requestIdBefore);
+});
+
 /** Uint8Array 配列を連結するヘルパー */
 /** SessionImpl.requestStreams のエントリ型 (テストから注入するための複製) */
 interface RequestStreamEntry {

@@ -55,6 +55,7 @@ export {
   trackNamespaceToStrings,
   isRejectedReceiveNamespace,
   encodeTrackName,
+  validateTrackNameNonEmpty,
   encodeParameterTrackNamespace,
 } from "./parameter/trackNamespace";
 

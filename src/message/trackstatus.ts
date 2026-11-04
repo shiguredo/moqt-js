@@ -35,6 +35,7 @@ import {
   encodeParameters,
   encodeTrackNamespace,
   validateFullTrackNameBytes,
+  validateTrackNameNonEmpty,
 } from "./parameter";
 import { MessageType } from "./types";
 
@@ -106,6 +107,7 @@ export function decodeTrackStatusPayload(data: Uint8Array, offset = 0): TrackSta
   // Full Track Name (Namespace + Track Name 合計) が 4096 バイト超過は
   // FIELD_LENGTH_EXCEEDED でセッションを閉じる
   // ワイヤバイト長で計測する (不正 UTF-8 の置換による誤計測を防ぐ)
+  validateTrackNameNonEmpty(trackName, "track status");
   validateFullTrackNameBytes(trackNamespace, trackName);
 
   const [parameters, parametersConsumed] = decodeParameters(data, offset + totalConsumed);

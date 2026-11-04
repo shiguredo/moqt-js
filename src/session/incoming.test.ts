@@ -10,6 +10,7 @@ import { test, assert } from "vite-plus/test";
 import { MessageType, encodeTrackNamespace, createTrackNamespace } from "../message";
 import { DEFAULT_MAX_CONTROL_MESSAGE_SIZE } from "../message/types";
 import { decodeRequestErrorPayload } from "../message/session";
+import { encodeVarint } from "../varint";
 import { MalformedTrackError, RequestErrorCode, SessionError, SessionErrorCode } from "../error";
 import {
   concatUint8Arrays,
@@ -215,6 +216,40 @@ function createUnsupportedRequestTestContext(receivedRequestIds = new Set<bigint
 }
 
 /**
+ * 未対応リクエストの共通 prefix を組み立てる
+ *
+ * draft-ietf-moq-transport-23 §9.6 (SUBSCRIBE) / §9.11 (FETCH) / §9.12
+ * (TRACK_STATUS) は Request ID + Track Namespace + Track Name Length + Track Name、
+ * namespace 系 3 種 (PUBLISH_NAMESPACE / SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS) は
+ * Request ID + Track Namespace を持つ。
+ *
+ * @param type - メッセージ Type
+ * @param requestId - 先頭の Request ID
+ * @param namespace - Track Namespace のフィールド列
+ * @param trackName - Track Name (Track Name を持つ種別だけ使う)
+ */
+function buildUnsupportedRequestPrefix(
+  type: number,
+  requestId: bigint,
+  namespace: string[],
+  trackName = "track",
+): Uint8Array {
+  const parts: Uint8Array[] = [
+    encodeVarint(requestId),
+    encodeTrackNamespace(createTrackNamespace(namespace)),
+  ];
+  if (
+    type === MessageType.SUBSCRIBE ||
+    type === MessageType.FETCH ||
+    type === MessageType.TRACK_STATUS
+  ) {
+    const nameBytes = new TextEncoder().encode(trackName);
+    parts.push(encodeVarint(nameBytes.length), nameBytes);
+  }
+  return concatUint8Arrays(parts);
+}
+
+/**
  * draft-ietf-moq-transport-22 §1.6 (Modularity):
  * 「Limited endpoints SHOULD respond to any unsupported messages with the
  * appropriate NOT_SUPPORTED error code, rather than ignoring them.」
@@ -247,7 +282,7 @@ test("incomingHandleFirstBidiMessage: 未対応リクエストに NOT_SUPPORTED 
 
   const firstMsg: ControlMessage = {
     type: MessageType.SUBSCRIBE,
-    payload: new Uint8Array([0x01]),
+    payload: buildUnsupportedRequestPrefix(MessageType.SUBSCRIBE, 1n, ["live"]),
   };
 
   const result = await incomingHandleFirstBidiMessage(session, stream, firstMsg);
@@ -294,10 +329,7 @@ test("incomingHandleFirstBidiMessage: 未対応リクエストの .session names
   const stream = { readable, writable } as unknown as WebTransportBidirectionalStream;
 
   const ctx = createUnsupportedRequestTestContext();
-  const payload = concatUint8Arrays([
-    new Uint8Array([0x01]),
-    encodeTrackNamespace(createTrackNamespace([".session"])),
-  ]);
+  const payload = buildUnsupportedRequestPrefix(MessageType.SUBSCRIBE, 1n, [".session"]);
   const firstMsg: ControlMessage = { type: MessageType.SUBSCRIBE, payload };
 
   const result = await incomingHandleFirstBidiMessage(ctx.session, stream, firstMsg);
@@ -310,6 +342,38 @@ test("incomingHandleFirstBidiMessage: 未対応リクエストの .session names
   assert.equal(messages.length, 1);
   const decoded = decodeRequestErrorPayload(messages[0].payload);
   assert.equal(decoded.errorCode, BigInt(RequestErrorCode.DOES_NOT_EXIST));
+});
+
+/**
+ * draft-ietf-moq-transport-23 §2.4.1:
+ * 未対応 SUBSCRIBE / FETCH / TRACK_STATUS の Track Name も 1 バイト以上でなければ
+ * ならない。空の場合は NOT_SUPPORTED で処理せず PROTOCOL_VIOLATION でセッションを
+ * 閉じる。
+ */
+test("incomingHandleFirstBidiMessage: 未対応トラック要求の空 Track Name は PROTOCOL_VIOLATION", async () => {
+  for (const type of [MessageType.SUBSCRIBE, MessageType.FETCH, MessageType.TRACK_STATUS]) {
+    const written: Uint8Array[] = [];
+    const writable = new WritableStream<Uint8Array>({
+      write(chunk) {
+        written.push(chunk);
+      },
+    });
+    const readable = new ReadableStream<Uint8Array>({});
+    const stream = { readable, writable } as unknown as WebTransportBidirectionalStream;
+    const ctx = createUnsupportedRequestTestContext();
+
+    const payload = buildUnsupportedRequestPrefix(type, 1n, ["live"], "");
+    await incomingHandleFirstBidiMessage(ctx.session, stream, { type, payload });
+
+    assert.isDefined(ctx.closed.error, `type=0x${type.toString(16)}`);
+    assert.equal(
+      ctx.closed.error.code,
+      SessionErrorCode.PROTOCOL_VIOLATION,
+      `type=0x${type.toString(16)}`,
+    );
+    // NOT_SUPPORTED 応答は書き込まない
+    assert.equal(written.length, 0, `type=0x${type.toString(16)}`);
+  }
 });
 
 /**
@@ -336,10 +400,7 @@ test("incomingHandleFirstBidiMessage: 未対応リクエストの単一ピリオ
   const stream = { readable, writable } as unknown as WebTransportBidirectionalStream;
 
   const ctx = createUnsupportedRequestTestContext();
-  const payload = concatUint8Arrays([
-    new Uint8Array([0x01]),
-    encodeTrackNamespace(createTrackNamespace(["."])),
-  ]);
+  const payload = buildUnsupportedRequestPrefix(MessageType.TRACK_STATUS, 1n, ["."]);
   const firstMsg: ControlMessage = { type: MessageType.TRACK_STATUS, payload };
 
   const result = await incomingHandleFirstBidiMessage(ctx.session, stream, firstMsg);
@@ -392,10 +453,7 @@ test("incomingHandleFirstBidiMessage: 未対応 6 種すべてで予約名前空
 
     // ctx は種類ごとに作るため、Request ID は同じ値を使い回せる
     const ctx = createUnsupportedRequestTestContext();
-    const payload = concatUint8Arrays([
-      new Uint8Array([0x01]),
-      encodeTrackNamespace(createTrackNamespace([".session"])),
-    ]);
+    const payload = buildUnsupportedRequestPrefix(type, 1n, [".session"]);
 
     const result = await incomingHandleFirstBidiMessage(ctx.session, stream, { type, payload });
 
@@ -428,10 +486,7 @@ test("incomingHandleFirstBidiMessage: 未対応リクエストの通常 namespac
   const stream = { readable, writable } as unknown as WebTransportBidirectionalStream;
 
   const ctx = createUnsupportedRequestTestContext();
-  const payload = concatUint8Arrays([
-    new Uint8Array([0x01]),
-    encodeTrackNamespace(createTrackNamespace(["live"])),
-  ]);
+  const payload = buildUnsupportedRequestPrefix(MessageType.SUBSCRIBE, 1n, ["live"]);
   const firstMsg: ControlMessage = { type: MessageType.SUBSCRIBE, payload };
 
   await incomingHandleFirstBidiMessage(ctx.session, stream, firstMsg);
@@ -443,12 +498,12 @@ test("incomingHandleFirstBidiMessage: 未対応リクエストの通常 namespac
 });
 
 /**
- * Track Namespace をデコードできない未対応リクエスト (Request ID のみ) は、
- * 予約名前空間の判定を行わず NOT_SUPPORTED を返す。
- * 未対応メッセージの本体が本実装の想定と異なっていても、判定の例外で
- * セッションを閉じたり応答を変えたりしない。
+ * draft-ietf-moq-transport-23 §2.4.1 / §8.7 / §9:
+ * 未対応リクエストでも Request ID 直後の共通 prefix を検証する。Track Namespace が
+ * 切詰められている場合は、NOT_SUPPORTED ではなく MALFORMED_MESSAGE でセッションを
+ * 閉じる (未対応であることを理由に本文の破損を隠さない)。
  */
-test("incomingHandleFirstBidiMessage: Namespace が読めない未対応リクエストは NOT_SUPPORTED", async () => {
+test("incomingHandleFirstBidiMessage: Namespace が読めない未対応リクエストは MALFORMED_MESSAGE で閉じる", async () => {
   const written: Uint8Array[] = [];
   const writable = new WritableStream<Uint8Array>({
     write(chunk) {
@@ -464,11 +519,9 @@ test("incomingHandleFirstBidiMessage: Namespace が読めない未対応リク�
 
   await incomingHandleFirstBidiMessage(ctx.session, stream, firstMsg);
 
-  assert.isUndefined(ctx.closed.error);
-  const messages = new ControlStreamReader().feed(concatUint8Arrays(written));
-  assert.equal(messages.length, 1);
-  const decoded = decodeRequestErrorPayload(messages[0].payload);
-  assert.equal(decoded.errorCode, BigInt(RequestErrorCode.NOT_SUPPORTED));
+  assert.isDefined(ctx.closed.error);
+  assert.equal(ctx.closed.error.code, SessionErrorCode.MALFORMED_MESSAGE);
+  assert.equal(written.length, 0);
 });
 
 /**
@@ -498,7 +551,7 @@ test("incomingHandleFirstBidiMessage: 未対応リクエストの偶数 Request 
 
   const result = await incomingHandleFirstBidiMessage(session, stream, {
     type: MessageType.SUBSCRIBE,
-    payload: new Uint8Array([0x02]),
+    payload: buildUnsupportedRequestPrefix(MessageType.SUBSCRIBE, 2n, ["live"]),
   });
 
   assert.isTrue(result);
@@ -525,7 +578,7 @@ test("incomingHandleFirstBidiMessage: 消費済み Request ID の未対応リク
   const firstCtx = createUnsupportedRequestTestContext();
   const firstResult = await incomingHandleFirstBidiMessage(firstCtx.session, makeStream(), {
     type: MessageType.SUBSCRIBE,
-    payload: new Uint8Array([0x01]),
+    payload: buildUnsupportedRequestPrefix(MessageType.SUBSCRIBE, 1n, ["live"]),
   });
 
   // 1 件目は NOT_SUPPORTED 応答でセッション継続し、ID が記録される
@@ -538,7 +591,7 @@ test("incomingHandleFirstBidiMessage: 消費済み Request ID の未対応リク
   // 2 件目は同一セッションの別ストリーム受信で重複検出する
   const secondResult = await incomingHandleFirstBidiMessage(firstCtx.session, makeStream(), {
     type: MessageType.SUBSCRIBE,
-    payload: new Uint8Array([0x01]),
+    payload: buildUnsupportedRequestPrefix(MessageType.SUBSCRIBE, 1n, ["live"]),
   });
 
   // 2 件目は重複で INVALID_REQUEST_ID で閉じる
@@ -565,7 +618,7 @@ test("incomingHandleFirstBidiMessage: 同一検証関数・同一 Set では重�
 
   const result = await incomingHandleFirstBidiMessage(ctx.session, stream, {
     type: MessageType.SUBSCRIBE,
-    payload: new Uint8Array([0x01]),
+    payload: buildUnsupportedRequestPrefix(MessageType.SUBSCRIBE, 1n, ["live"]),
   });
 
   assert.isTrue(result);
