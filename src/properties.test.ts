@@ -21,6 +21,7 @@ import {
   assertKnownPropertyValueInObjectProperties,
   assertPriorIdGapInObjectProperties,
   resolveDefaultPublisherPriority,
+  isMandatoryTrackPropertyId,
   MOQTPropertyId,
   TrackPropertyId,
   type Property,
@@ -1205,6 +1206,34 @@ test("generateGreaseProperty: GREASE 予約値の奇数 ID で空バイト列を
     // 値は空バイト列であること
     assert.equal(property.data?.length, 0);
   }
+});
+
+/**
+ * draft-ietf-moq-transport-23 §3.7:
+ * "Grease values (Section 13) in this range are not Mandatory Track Properties."
+ * 0x4000-0x7FFF の値域にあっても GREASE 値は Mandatory Track Property ではない。
+ * 未知 Mandatory として Track を拒否せず、未知 Property として扱う。
+ */
+test("isMandatoryTrackPropertyId: 値域内の GREASE 値は Mandatory Track Property ではない", () => {
+  // 0x7f * N + 0x9d が 0x4000-0x7fff に入る N を探す
+  const greaseInRange: bigint[] = [];
+  for (let n = 0n; n < 1024n; n++) {
+    const value = 0x7fn * n + 0x9dn;
+    if (value >= 0x4000n && value <= 0x7fffn) {
+      greaseInRange.push(value);
+    }
+  }
+  assert.isTrue(greaseInRange.length > 0);
+  for (const value of greaseInRange) {
+    assert.isTrue(isGreaseValue(value));
+    assert.isFalse(isMandatoryTrackPropertyId(value));
+  }
+
+  // GREASE でない同じ範囲の値は Mandatory のまま
+  assert.isTrue(isMandatoryTrackPropertyId(0x4000n));
+  assert.isTrue(isMandatoryTrackPropertyId(0x7fffn));
+  // 範囲外の GREASE 値も Mandatory ではない
+  assert.isFalse(isMandatoryTrackPropertyId(0x9dn));
 });
 
 test("appendGreaseObjectProperty: 空の入力には GREASE Property のみ返す", () => {

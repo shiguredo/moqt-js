@@ -182,11 +182,14 @@ const MANDATORY_TRACK_PROPERTY_ID_MIN = 0x4000n;
 const MANDATORY_TRACK_PROPERTY_ID_MAX = 0x7fffn;
 
 /**
- * ID が Mandatory Track Property の範囲 (0x4000-0x7FFF) にあるかを判定する
+ * ID が Mandatory Track Property か (範囲 0x4000-0x7FFF かつ GREASE でない) を判定する
  *
- * draft-ietf-moq-transport-22 §3.7 (Mandatory to Understand Track Properties): この範囲は Track scope 専用であり、
- * 受信側が未知なら track を拒否する (Track Properties) か malformed とする
- * (Object Properties)。値域の定義を 1 箇所に集約する。
+ * draft-ietf-moq-transport-23 §3.7 (Mandatory to Understand Track Properties):
+ * この範囲は Track scope 専用であり、受信側が未知なら track を拒否する
+ * (Track Properties) か malformed とする (Object Properties)。同節はこの範囲の
+ * GREASE 値 (§13) を Mandatory Track Property ではないと定めるため、GREASE は
+ * 未知 Property として扱い、既知型の意味論や一意性を適用しない。
+ * 判定を 1 箇所に集約し、各 decoder が個別に値域を比較しないようにする。
  */
 export function isMandatoryTrackPropertyId(id: bigint): boolean {
   if (isGreaseValue(id)) {
