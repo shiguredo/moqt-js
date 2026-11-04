@@ -58,4 +58,3 @@ draft 23 §2.4.1 は Track Name に最低 1 バイトを要求し、長さ 0 の
 
 - 0823 / 0824 の issue 本文は更新していない (issues/ は編集対象外)。コード側では msf fragment の空 Track Name 拒否を維持し、fullTrackName のコメントのみ更新した。
 - 実リレー E2E は統合ブランチの制約 (ALPN は移行完了まで moqt-22) のため未実施である。
-

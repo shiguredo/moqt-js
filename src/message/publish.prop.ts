@@ -17,7 +17,7 @@ import { encodeVarint } from "../varint";
 import { ProtocolViolationError } from "../error";
 import {
   parametersArb,
-  trackPropertiesArb,
+  trackScopePropertiesArb,
   namespaceStringsArb,
   trackNameArb,
 } from "./parameterArb";
@@ -35,7 +35,7 @@ test("Publish のエンコード・デコードがラウンドトリップする
       trackNameArb,
       fc.bigInt({ min: 0n, max: 1000000n }),
       parametersArb,
-      trackPropertiesArb,
+      trackScopePropertiesArb,
       (requestId, namespaceParts, trackName, trackAlias, parameters, trackProperties) => {
         const original = {
           type: MessageType.PUBLISH as typeof MessageType.PUBLISH,

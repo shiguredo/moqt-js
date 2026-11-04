@@ -34,6 +34,7 @@ import {
   encodePublishDonePayload,
   encodePublishPayload,
 } from "./publish";
+import { MalformedTrackError } from "../error";
 
 test("decodePublishDonePayload: Reason Phrase が上限ちょうどなら通過する", () => {
   const reasonPhrase = "a".repeat(MAX_REASON_PHRASE_LENGTH);
@@ -175,4 +176,34 @@ test("decodePublishPayload: チャンク境界で分割されても FILL_PARAMET
   assert.equal(decoded.parameters.length, 1);
   assert.equal(decodeFillParameters(decoded.parameters[0]).length, 2);
   assert.deepEqual(decoded.trackProperties, properties);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §8.4 / §12.1 条件 8:
+ * PUBLISH の Track Properties に Object-only Property (LOC TIMESTAMP) が含まれると
+ * Track を malformed とする。MalformedTrackError を投げ、セッション終了
+ * (ProtocolViolationError) にはしない。両 scope の Property は受理する。
+ */
+test("decodePublishPayload: Track Properties の scope 違反で MalformedTrackError", () => {
+  const base = {
+    type: MessageType.PUBLISH as typeof MessageType.PUBLISH,
+    requestId: 1n,
+    trackNamespace: createTrackNamespace(["live"]),
+    trackName: new TextEncoder().encode("track"),
+    trackAlias: 1n,
+    parameters: [],
+  };
+  // LOC TIMESTAMP (0x10) は Object scope のみ
+  const objectOnly = encodePublishPayload({
+    ...base,
+    trackProperties: [{ id: 0x10n, value: 1n }],
+  });
+  assert.throws(() => decodePublishPayload(objectOnly), MalformedTrackError);
+
+  // OBJECT_DELIVERY_TIMEOUT (0x02) は Track / Object 両 scope
+  const bothScopes = encodePublishPayload({
+    ...base,
+    trackProperties: [{ id: 0x02n, value: 1n }],
+  });
+  assert.deepEqual(decodePublishPayload(bothScopes).trackProperties, [{ id: 0x02n, value: 1n }]);
 });

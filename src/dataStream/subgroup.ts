@@ -13,6 +13,7 @@ import { ObjectStatus } from "../message/types";
 import { IncompleteDataError, ProtocolViolationError, SessionErrorCode } from "../error";
 import {
   assertKnownPropertyValueInObjectProperties,
+  assertPropertyScopesInObjectProperties,
   assertNoMandatoryTrackPropertyInObjectProperties,
 } from "../properties";
 import { concatUint8Arrays } from "../bytes";
@@ -640,6 +641,9 @@ export function decodeObjectFields(
   // (non-Normal status の properties 検証より後に判定する)
   if (propertiesLength > 0) {
     assertNoMandatoryTrackPropertyInObjectProperties(properties);
+    // draft-ietf-moq-transport-23 §8.4 / §12.1 条件 8:
+    // 対応済み Property が Object scope 外 (Track-only) なら Track を malformed とする
+    assertPropertyScopesInObjectProperties(properties);
     // draft-ietf-moq-transport-22 §8.3:
     // 既知 Type の Value が serialization に一致しない場合は
     // MALFORMED_KEY_VALUE でセッションを閉じる

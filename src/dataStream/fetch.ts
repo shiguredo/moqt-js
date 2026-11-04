@@ -42,6 +42,7 @@ import {
 } from "../error";
 import {
   assertKnownPropertyValueInObjectProperties,
+  assertPropertyScopesInObjectProperties,
   assertNoMandatoryTrackPropertyInObjectProperties,
   assertPriorIdGapInObjectProperties,
 } from "../properties";
@@ -1415,6 +1416,12 @@ export function decodeFetchObjectFields(
       // draft-ietf-moq-transport-22 §3.7:
       // Mandatory Track Property を Object Property として含む Object は malformed
       assertNoMandatoryTrackPropertyInObjectProperties(properties);
+      // draft-ietf-moq-transport-23 §8.4 / §12.1 条件 8:
+      // 対応済み Property が Object scope 外 (Track-only) なら Track を malformed とする
+      assertPropertyScopesInObjectProperties(properties);
+      // draft-ietf-moq-transport-23 §8.4 / §12.1 条件 8:
+      // 対応済み Property が Object scope 外 (Track-only) なら Track を malformed とする
+      assertPropertyScopesInObjectProperties(properties);
       // draft-ietf-moq-transport-22 §8.3:
       // 既知 Type の Value が serialization に一致しない場合は
       // MALFORMED_KEY_VALUE でセッションを閉じる

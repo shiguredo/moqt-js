@@ -131,7 +131,7 @@ export function decodePublishPayload(data: Uint8Array, offset = 0): Publish {
   // draft-ietf-moq-transport-22 Section 9.8 (PUBLISH):
   // Track Properties は残りバイトすべて
   const propertiesData = data.slice(offset + totalConsumed);
-  const trackProperties = decodeProperties(propertiesData);
+  const trackProperties = decodeProperties(propertiesData, "track");
 
   return {
     type: MessageType.PUBLISH,

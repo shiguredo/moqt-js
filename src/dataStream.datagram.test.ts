@@ -19,7 +19,12 @@ import {
   SessionErrorCode,
 } from "./error";
 import { ObjectStatus } from "./message/types";
-import { appendGreaseObjectProperty, encodeProperties, MOQTPropertyId } from "./properties";
+import {
+  appendGreaseObjectProperty,
+  encodeProperties,
+  MOQTPropertyId,
+  TrackPropertyId,
+} from "./properties";
 import { isGreaseValue } from "./grease";
 import { captureThrownError, parseObjectPropertyIds } from "./testSupport/helpers";
 import { encodeVarint, MAX_VARINT } from "./varint";
@@ -844,4 +849,29 @@ test("ObjectDatagram: PROPERTIES ビットありで Properties Length 0 はエ�
       }),
     /Properties Length must not be 0/,
   );
+});
+
+/**
+ * draft-ietf-moq-transport-23 §8.4 / §12.1 条件 8:
+ * 対応済みの Track-only Property (MAX_CACHE_DURATION) を Object Property として
+ * 受信した Object は malformed (MalformedTrackError) になる。両 scope を持つ
+ * OBJECT_DELIVERY_TIMEOUT は受理する。
+ */
+test("ObjectDatagram: Track-only Property を Object Property として受信すると MalformedTrackError", () => {
+  const trackOnly: ObjectDatagram = {
+    type: DatagramType.PAYLOAD_OBJ_EXT,
+    trackAlias: 5n,
+    groupId: 10n,
+    objectId: 3n,
+    publisherPriority: 128,
+    properties: encodeProperties([{ id: TrackPropertyId.MAX_CACHE_DURATION, value: 1000n }]),
+    payload: new Uint8Array([0xaa]),
+  };
+  assert.throws(() => decodeObjectDatagram(encodeObjectDatagram(trackOnly)), MalformedTrackError);
+
+  const bothScopes: ObjectDatagram = {
+    ...trackOnly,
+    properties: encodeProperties([{ id: TrackPropertyId.OBJECT_DELIVERY_TIMEOUT, value: 1000n }]),
+  };
+  assert.doesNotThrow(() => decodeObjectDatagram(encodeObjectDatagram(bothScopes)));
 });

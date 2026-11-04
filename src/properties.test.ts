@@ -20,6 +20,10 @@ import {
   assertNoMandatoryTrackPropertyInObjectProperties,
   assertKnownPropertyValueInObjectProperties,
   assertPriorIdGapInObjectProperties,
+  assertPropertyScopes,
+  assertPropertyScopesInObjectProperties,
+  getPropertyScope,
+  isPropertyScopeAllowed,
   resolveDefaultPublisherPriority,
   isMandatoryTrackPropertyId,
   MOQTPropertyId,
@@ -1693,4 +1697,98 @@ test("encodeImmutableProperties: 内側の合計が 65535 バイトを超える�
 
   assert.isDefined(thrown);
   assert.match(thrown?.message ?? "", /exceeds maximum 65535/);
+});
+
+// ============================================================================
+// Property の Track / Object scope 検証
+// draft-ietf-moq-transport-23 §8.4 / §12.1 (Malformed Tracks) 条件 8
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-23 §16.8 / draft-ietf-moq-loc-05 §6.1:
+ * 対応済み Property の scope を一覧で固定する。OBJECT_DELIVERY_TIMEOUT など
+ * 両 scope を持つ Property を誤って Track-only にしない。
+ */
+test("getPropertyScope: transport と LOC の登録 scope を返す", () => {
+  // 両 scope
+  assert.equal(getPropertyScope(TrackPropertyId.OBJECT_DELIVERY_TIMEOUT), "both");
+  assert.equal(getPropertyScope(TrackPropertyId.SUBGROUP_DELIVERY_TIMEOUT), "both");
+  assert.equal(getPropertyScope(0x08n), "both"); // LOC TIMESCALE
+  assert.equal(getPropertyScope(0x0dn), "both"); // LOC VIDEO_CONFIG
+  // Track only
+  assert.equal(getPropertyScope(TrackPropertyId.MAX_CACHE_DURATION), "track");
+  assert.equal(getPropertyScope(TrackPropertyId.DEFAULT_PUBLISHER_PRIORITY), "track");
+  assert.equal(getPropertyScope(TrackPropertyId.DYNAMIC_GROUPS), "track");
+  // Object only
+  assert.equal(getPropertyScope(0x3cn), "object"); // PRIOR_GROUP_ID_GAP
+  assert.equal(getPropertyScope(0x3en), "object"); // PRIOR_OBJECT_ID_GAP
+  assert.equal(getPropertyScope(0x10n), "object"); // LOC TIMESTAMP
+  // 未知 Type は scope を知らない
+  assert.isUndefined(getPropertyScope(0xffffn));
+  assert.isTrue(isPropertyScopeAllowed("both", "track"));
+  assert.isTrue(isPropertyScopeAllowed("both", "object"));
+  assert.isFalse(isPropertyScopeAllowed("track", "object"));
+});
+
+/**
+ * draft-ietf-moq-transport-23 §8.4 / §12.1 条件 8:
+ * 対応済みの Track-only Property を Object として受信したら malformed。
+ * Object-only Property を Track として受信した場合も同じ。両 scope と未知 Type は
+ * 拒否しない。
+ */
+test("assertPropertyScopes: Track / Object の scope 違反を MalformedTrackError にする", () => {
+  // Track-only を Object として受信
+  assert.throws(
+    () =>
+      assertPropertyScopes([{ id: TrackPropertyId.MAX_CACHE_DURATION, value: 1000n }], "object"),
+    MalformedTrackError,
+  );
+  // Object-only を Track として受信
+  assert.throws(
+    () => assertPropertyScopes([{ id: 0x10n, value: 1n }], "track"),
+    MalformedTrackError,
+  );
+  // 両 scope はどちらでも通過
+  assert.doesNotThrow(() =>
+    assertPropertyScopes([{ id: TrackPropertyId.OBJECT_DELIVERY_TIMEOUT, value: 1n }], "track"),
+  );
+  assert.doesNotThrow(() =>
+    assertPropertyScopes([{ id: TrackPropertyId.OBJECT_DELIVERY_TIMEOUT, value: 1n }], "object"),
+  );
+  // 未知 Type は scope を知らないため拒否しない
+  assert.doesNotThrow(() => assertPropertyScopes([{ id: 0xffffn, value: 1n }], "track"));
+});
+
+/**
+ * draft-ietf-moq-transport-23 §8.4 / §10.7:
+ * IMMUTABLE_PROPERTIES (0x0B) の内側の Property は周囲の scope を継承する。
+ * Track 文脈の Immutable 内側に Object-only Property があれば malformed。
+ */
+test("assertPropertyScopes: Immutable Properties 内側も周囲の scope で検証する", () => {
+  const inner = encodeProperties([{ id: 0x10n, value: 1n }]); // LOC TIMESTAMP (Object only)
+  const properties: Property[] = [{ id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: inner }];
+  assert.throws(() => assertPropertyScopes(properties, "track"), MalformedTrackError);
+  // 両 scope の Property なら Track 文脈でも通過
+  const bothInner = encodeProperties([{ id: 0x08n, value: 1n }]); // LOC TIMESCALE
+  assert.doesNotThrow(() =>
+    assertPropertyScopes([{ id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: bothInner }], "track"),
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-23 §8.4 / §12.1 条件 8:
+ * Object Properties の KVP 列でも Track-only Property を malformed にする。
+ * decodeProperties(data, "track") は Track Properties の scope を検証する。
+ */
+test("Object Properties と Track Properties の decoder が scope を検証する", () => {
+  const trackOnly = encodeProperties([{ id: TrackPropertyId.MAX_CACHE_DURATION, value: 5n }]);
+  assert.throws(() => assertPropertyScopesInObjectProperties(trackOnly), MalformedTrackError);
+
+  const objectOnly = encodeProperties([{ id: 0x10n, value: 5n }]);
+  assert.throws(() => decodeProperties(objectOnly, "track"), MalformedTrackError);
+
+  // 両 scope はどちらも通過する
+  const both = encodeProperties([{ id: TrackPropertyId.OBJECT_DELIVERY_TIMEOUT, value: 5n }]);
+  assert.doesNotThrow(() => assertPropertyScopesInObjectProperties(both));
+  assert.doesNotThrow(() => decodeProperties(both, "track"));
 });

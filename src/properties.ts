@@ -298,6 +298,143 @@ const KNOWN_PROPERTY_TYPES: ReadonlySet<bigint> = new Set<bigint>([
 ]);
 
 /**
+ * Property の scope (Track / Object / 両方)
+ *
+ * draft-ietf-moq-transport-23 §8.4 (Track and Object Properties):
+ * "An endpoint that supports a Property and receives it outside its scope
+ *  (e.g. a Track-only Property as an Object Property) MUST treat the Track as
+ *  malformed (see Section 12.1)."
+ */
+export type PropertyScope = "track" | "object" | "both";
+
+/**
+ * 既知 Property の scope 一覧
+ *
+ * draft-ietf-moq-transport-23 §16.8 Table 15 (MOQ Properties) と、
+ * draft-ietf-moq-loc-05 §6.1 Table 1 (LOC Properties の暫定登録) に基づく。
+ * 0x0B (IMMUTABLE_PROPERTIES) は Track / Object の両 scope を持ち、内側の
+ * Property は周囲の scope を継承する (§10.7)。
+ *
+ * 0x11 (CODEC_STRING) は LOC-05 で Track, Object の両 scope だが、本実装の
+ * 値の意味論は未対応のため SUPPORTED_PROPERTY_TYPES には含めない。対応時は
+ * 同じ scope 定義をそのまま使える。
+ */
+const PROPERTY_SCOPES: ReadonlyMap<bigint, PropertyScope> = new Map<bigint, PropertyScope>([
+  // draft-ietf-moq-transport-23 §16.8 Table 15
+  [0x02n, "both"], // OBJECT_DELIVERY_TIMEOUT
+  [0x04n, "track"], // MAX_CACHE_DURATION
+  [0x06n, "both"], // SUBGROUP_DELIVERY_TIMEOUT
+  [0x0bn, "both"], // IMMUTABLE_PROPERTIES (内側は周囲の scope を継承)
+  [0x0en, "track"], // DEFAULT_PUBLISHER_PRIORITY
+  [0x22n, "track"], // DEFAULT_PUBLISHER_GROUP_ORDER
+  [0x30n, "track"], // DYNAMIC_GROUPS
+  [0x3cn, "object"], // PRIOR_GROUP_ID_GAP
+  [0x3en, "object"], // PRIOR_OBJECT_ID_GAP
+  // draft-ietf-moq-loc-05 §6.1 Table 1
+  [0x08n, "both"], // TIMESCALE
+  [0x09n, "object"], // VIDEO_FRAME_MARKING
+  [0x0cn, "object"], // AUDIO_LEVEL
+  [0x0dn, "both"], // VIDEO_CONFIG
+  [0x0fn, "both"], // AUDIO_CONFIG
+  [0x10n, "object"], // TIMESTAMP
+  [0x11n, "both"], // CODEC_STRING (値の意味論は未対応)
+]);
+
+/**
+ * 本実装が意味論を解釈できる (対応済み) Property Type の集合
+ *
+ * draft-ietf-moq-transport-23 §8.4:
+ * scope 違反を malformed とする MUST は「endpoint that supports a Property」に
+ * 適用される。未知 Property は scope を知らないため、この規則だけでは拒否しない。
+ *
+ * MOQT 本体の Track / Object Property に加え、LOC-05 の Property のうち本実装が
+ * 解釈するものを含める。CODEC_STRING (0x11) は値の意味論が未対応のため含めない
+ * (0916 で追加したときに対応済み集合へ加える)。
+ */
+const SUPPORTED_PROPERTY_TYPES: ReadonlySet<bigint> = new Set<bigint>([
+  ...Object.values(MOQTPropertyId),
+  ...Object.values(TrackPropertyId),
+  0x08n, // TIMESCALE
+  0x09n, // VIDEO_FRAME_MARKING
+  0x0cn, // AUDIO_LEVEL
+  0x0dn, // VIDEO_CONFIG
+  0x0fn, // AUDIO_CONFIG
+  0x10n, // TIMESTAMP
+]);
+
+/**
+ * Property Type の scope を返す (未登録・未知 Type は undefined)
+ *
+ * draft-ietf-moq-transport-23 §16.8 / draft-ietf-moq-loc-05 §6.1 の登録に基づく。
+ */
+export function getPropertyScope(id: bigint): PropertyScope | undefined {
+  return PROPERTY_SCOPES.get(id);
+}
+
+/**
+ * Property scope が受信文脈 (Track / Object) で許されるかを判定する
+ */
+export function isPropertyScopeAllowed(
+  propertyScope: PropertyScope,
+  receivedAs: "track" | "object",
+): boolean {
+  return propertyScope === "both" || propertyScope === receivedAs;
+}
+
+/**
+ * 対応済み Property が受信文脈の scope に収まっていることを検証する
+ *
+ * draft-ietf-moq-transport-23 §8.4 / §12.1 (Malformed Tracks) 条件 8:
+ * "A supported Property is received outside its scope, such as a Track-only
+ *  Property received as an Object Property."
+ * 違反は Track を malformed とする (MalformedTrackError)。セッションは閉じない。
+ *
+ * 未知 Property は scope を知らないため拒否しない (§8.4)。IMMUTABLE_PROPERTIES
+ * (0x0B) の内側は周囲の scope を継承するため、内側も同じ scope で検証する。
+ *
+ * @param properties - delta 復元済みの Property 列
+ * @param receivedAs - 受信文脈 ("track" | "object")
+ * @throws MalformedTrackError 対応済み Property が scope 外の場合
+ */
+export function assertPropertyScopes(
+  properties: readonly Property[],
+  receivedAs: "track" | "object",
+): void {
+  for (const property of properties) {
+    const propertyScope = PROPERTY_SCOPES.get(property.id);
+    if (
+      propertyScope !== undefined &&
+      !isPropertyScopeAllowed(propertyScope, receivedAs) &&
+      SUPPORTED_PROPERTY_TYPES.has(property.id)
+    ) {
+      throw new MalformedTrackError(
+        `supported ${propertyScope}-scoped property received as ${receivedAs} property: type 0x${property.id.toString(16)}`,
+      );
+    }
+    if (property.id === MOQTPropertyId.IMMUTABLE_PROPERTIES && property.data !== undefined) {
+      // draft-ietf-moq-transport-23 §10.7: 内側の Property は周囲の scope を継承する。
+      // 内側の KVP は decodeProperties が同じ規則で decode する。
+      assertPropertyScopes(decodeProperties(property.data), receivedAs);
+    }
+  }
+}
+
+/**
+ * Object Properties の対応済み Property が scope に収まっていることを検証する
+ *
+ * decodeObjectPropertiesTolerant の寛容デコーダで読めた範囲を検証する
+ * (不完全データでの打ち切り契約は維持する)。既存の
+ * assertNoMandatoryTrackPropertyInObjectProperties /
+ * assertKnownPropertyValueInObjectProperties と同じ階層の検証である。
+ *
+ * @param data - Object Properties の KVP 列
+ * @throws MalformedTrackError 対応済み Property が Object scope 外の場合
+ */
+export function assertPropertyScopesInObjectProperties(data: Uint8Array): void {
+  assertPropertyScopes(decodeObjectPropertiesTolerant(data).properties, "object");
+}
+
+/**
  * Length に書ける値の最大値 (2^16-1)
  *
  * draft-ietf-moq-transport-23 §8.3 (Key-Value-Pair Structure):
@@ -1230,7 +1367,7 @@ export function parseProperties(data: Uint8Array): ParsedProperties {
  * @throws MalformedTrackError 未知の Mandatory Track Property を含む場合
  *   (unsupportedPropertyTypes に Type 一覧を載せる)
  */
-export function decodeProperties(data: Uint8Array): Property[] {
+export function decodeProperties(data: Uint8Array, scope?: "track" | "object"): Property[] {
   const extensions: Property[] = [];
   // 未知の Mandatory Track Property は 1 件目で打ち切らず、
   // 構造全体の検証を終えてから Type 一覧を持つエラーで通知する。
@@ -1378,6 +1515,13 @@ export function decodeProperties(data: Uint8Array): Property[] {
   // malformed。1 件目で打ち切らず構造全体を検証した後、Type 一覧を構造情報として渡す。
   if (mandatoryPropertyTypes.length > 0) {
     throw unknownMandatoryTrackPropertiesError(mandatoryPropertyTypes);
+  }
+
+  // draft-ietf-moq-transport-23 §8.4 / §12.1:
+  // 受信文脈が分かる呼び出し元は、対応済み Property の scope 違反を
+  // MalformedTrackError として検出できる (未指定なら従来どおり検証しない)。
+  if (scope !== undefined) {
+    assertPropertyScopes(extensions, scope);
   }
 
   return extensions;

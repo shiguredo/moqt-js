@@ -24,7 +24,13 @@ import {
   type Parameter,
 } from "./parameter";
 import { encodeVarint } from "../varint";
-import { type Property, MOQTPropertyId, TrackPropertyId } from "../properties";
+import {
+  type Property,
+  MOQTPropertyId,
+  TrackPropertyId,
+  getPropertyScope,
+  isPropertyScopeAllowed,
+} from "../properties";
 
 /**
  * Message Parameter の arbitrary
@@ -350,6 +356,23 @@ export const oddPropertyArb = fc
 export const propertyArb: fc.Arbitrary<Property> = fc.oneof(evenPropertyArb, oddPropertyArb);
 
 export const trackPropertiesArb = fc.array(propertyArb, { minLength: 0, maxLength: 3 });
+
+/**
+ * Track Properties として合法な Property の arbitrary
+ *
+ * draft-ietf-moq-transport-23 §8.4:
+ * 対応済み Property を scope 外 (Track-only を Object として等) で受信すると Track が
+ * malformed になる。PUBLISH / SUBSCRIBE_OK などの Track Properties を round-trip
+ * する PBT では、Track scope を持たない既知 Property を生成しない。
+ * 未知 Property は scope を知らないため許可する。
+ */
+export const trackScopePropertiesArb = fc.array(
+  propertyArb.filter((property) => {
+    const scope = getPropertyScope(property.id);
+    return scope === undefined || isPropertyScopeAllowed(scope, "track");
+  }),
+  { minLength: 0, maxLength: 3 },
+);
 
 // ============================================================================
 // メッセージ間で共有する名前系の arbitrary
