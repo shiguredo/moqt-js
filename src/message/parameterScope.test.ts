@@ -216,7 +216,6 @@ test("PUBLISH に許可されないパラメータは INVALID_PARAMETER のエ�
     MessageParameterType.PRIORITY_FILTER,
     MessageParameterType.OBJECT_PROPERTY_FILTER,
     MessageParameterType.TRACK_PROPERTY_FILTER,
-    MessageParameterType.FILL_PARAMETERS,
   ]) {
     const error = validateParameterScope([{ type }], PUBLISH_ALLOWED_PARAMS, "PUBLISH");
     assertProtocolViolation(error);
@@ -233,6 +232,15 @@ test("SUBSCRIBE_TRACKS_ID は PUBLISH でのみ許可される", () => {
   assert.isNull(
     validateParameterScope(
       [{ type: MessageParameterType.SUBSCRIBE_TRACKS_ID }],
+      PUBLISH_ALLOWED_PARAMS,
+      "PUBLISH",
+    ),
+  );
+
+  // PUBLISH の FILL_PARAMETERS は §3.4 の初期 fill fetch を要求するため許可される
+  assert.isNull(
+    validateParameterScope(
+      [{ type: MessageParameterType.FILL_PARAMETERS }],
       PUBLISH_ALLOWED_PARAMS,
       "PUBLISH",
     ),

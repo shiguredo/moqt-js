@@ -183,8 +183,11 @@ export const NAMESPACE_REQUEST_UPDATE_ALLOWED_PARAMS = new Set<number>([
  * PAUSED / GROUP_ORDER / SUBSCRIBER_PRIORITY / SUBGROUP_DELIVERY_TIMEOUT /
  * OBJECT_DELIVERY_TIMEOUT / LOCATION_FILTER を初期 Subscription Parameters
  * として運べる。§3.6.2 により SUBSCRIBE_TRACKS 由来の PUBLISH でも明示される。
- * NEW_GROUP_REQUEST / Range Filters は PUBLISH に出現できない
- * (FILL_PARAMETERS は未対応のため PUBLISH では受理しない)。
+ * NEW_GROUP_REQUEST / Range Filters は PUBLISH に出現できない。
+ *
+ * draft-ietf-moq-transport-23 §3.4 / §9.8:
+ * PUBLISH の FILL_PARAMETERS は PUBLISH による初期 fill fetch を要求する。
+ * 内側の Parameter は §9.19.15 Table 7 の許可型と decodeParameters が検証する。
  *
  * draft-ietf-moq-transport-23 §9.19.21 (SUBSCRIBE_TRACKS_ID):
  * SUBSCRIBE_TRACKS の結果として送信された PUBLISH にだけ出現する。受信側は
@@ -209,6 +212,7 @@ export const PUBLISH_ALLOWED_PARAMS = new Set<number>([
   MessageParameterType.SUBSCRIBER_PRIORITY,
   MessageParameterType.LOCATION_FILTER,
   MessageParameterType.SUBSCRIBE_TRACKS_ID,
+  MessageParameterType.FILL_PARAMETERS,
 ]);
 
 /**

@@ -359,6 +359,29 @@ export interface BidiSessionInternal {
    */
   readonly fillFetchTargets: Map<bigint, FillFetchTarget>;
 
+  /**
+   * PUBLISH 初期 fill の待機登録
+   *
+   * draft-ietf-moq-transport-23 §3.4 / §3.4.1:
+   * PUBLISH の FILL_PARAMETERS による初期 fill fetch ストリームは PUBLISH の
+   * Request ID を運ぶ。FETCH_HEADER が PUBLISH より先に到着した場合に備え、
+   * Request ID ごとに待機者を登録する。PUBLISH の受理・拒否が確定した時点で
+   * 起こし、fill の受信先があれば渡す (無ければ null で失敗させる)。
+   * 保持バイトは待機中もデータストリームの受信バッファ計上 (§12.5) に含まれる。
+   */
+  readonly publishFillReadyCallbacks: Map<bigint, Array<() => void>>;
+
+  /**
+   * 受信 PUBLISH の処理中の Request ID
+   *
+   * 処理中の PUBLISH 宛ての fill fetch ストリームは、受理・拒否の確定まで
+   * 待機させる。処理済み (拒否・非 fill) の Request ID は待機対象にしない。
+   */
+  readonly publishingRequestIds: Set<bigint>;
+
+  /** 受信済み Request ID (パリティ・重複検証で登録済み。fill 待機判定に使う) */
+  readonly receivedRequestIds: ReadonlySet<bigint>;
+
   // draft-ietf-moq-transport-22 §9.1.7: ピアの MAX_REQUEST_UPDATES（0 = 無制限）
   readonly peerMaxRequestUpdates: number;
 

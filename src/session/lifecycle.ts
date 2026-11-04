@@ -98,6 +98,8 @@ export interface SessionLifecycleInternal {
   >;
   readonly publisherStreams: Map<bigint, unknown>;
   readonly fetcherReadyCallbacks: Map<bigint, Array<() => void>>;
+  readonly publishFillReadyCallbacks: Map<bigint, Array<() => void>>;
+  readonly publishingRequestIds: Set<bigint>;
   readonly pendingSubgroupBuffer: PendingSubgroupBuffer;
 
   // draft-ietf-moq-transport-22 §12.2: 制御メッセージの受信タイムアウト
@@ -339,6 +341,16 @@ export async function sessionClose(
     }
   }
   session.fetcherReadyCallbacks.clear();
+
+  // PUBLISH 初期 fill の待機者もセッション終了で解放する。待機中の
+  // データストリームは cancel され、保持バイトは各ストリームの finally が解放する。
+  for (const callbacks of session.publishFillReadyCallbacks.values()) {
+    for (const cb of callbacks.slice()) {
+      cb();
+    }
+  }
+  session.publishFillReadyCallbacks.clear();
+  session.publishingRequestIds.clear();
 
   // 保持している双方向 / 単方向ストリームの writer / reader を閉じる。
   // peer 側に FIN / RESET_STREAM を送って受信ループを解除させる。

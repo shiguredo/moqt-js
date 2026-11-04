@@ -24,6 +24,7 @@ import {
   encodeAuthorizationToken,
   encodeGoawayPayload,
   encodePublishDonePayload,
+  encodeFillParameters,
   decodeLocationFilterParameter,
   type AuthorizationToken,
 } from "./message";
@@ -3008,6 +3009,175 @@ test("PUBLISH_OK 失敗後の同一 alias 再利用で DUPLICATE_TRACK_ALIAS に
     (internal as unknown as { subscribersByAlias: Map<bigint, unknown[]> }).subscribersByAlias.size,
     0,
   );
+});
+
+// ============================================================================
+// 受信 PUBLISH の FILL_PARAMETERS (初期 fill fetch)
+// draft-ietf-moq-transport-23 §3.4 / §3.4.1 / §9.8 / §9.19.15
+// ============================================================================
+
+/**
+ * fill fetch データストリーム (FETCH_HEADER + 0 長 payload の Object 1 件) を
+ * 1 チャンクで組み立てる
+ *
+ * @param requestId - FETCH_HEADER が運ぶ Request ID (初期 fill は PUBLISH のもの)
+ */
+function buildInitialFillStreamChunk(requestId: bigint): Uint8Array {
+  const first: FetchObjectFields = {
+    serializationFlags: createFirstFetchObjectFlags(),
+    groupId: 5n,
+    subgroupId: 0n,
+    objectId: 0n,
+    publisherPriority: 100,
+    payloadLength: 0n,
+  };
+  return concatUint8Arrays([
+    encodeFetchHeader({ type: FetchHeaderType, requestId }),
+    encodeFetchObjectFields(first),
+  ]);
+}
+
+/**
+ * draft-ietf-moq-transport-23 §3.4 / §9.8:
+ * PUBLISH の FILL_PARAMETERS を正規のパラメータとして受理し、PUBLISH の
+ * Request ID で初期 fill fetch の受信先を登録する。fill fetch の Object は
+ * 通常購読と同じ Subscriber へ fillDelivered として届く。
+ */
+test("受信 PUBLISH の FILL_PARAMETERS で初期 fill を受信して Subscriber へ渡す", async () => {
+  const session = createSessionImpl();
+  const delivered: MoqtObject[] = [];
+  const internal = setupIncomingPublishStreamSession(session, {
+    object: (object) => {
+      delivered.push(object);
+    },
+  });
+  const dataInternal = session as unknown as {
+    fillFetchTargets: Map<bigint, unknown>;
+    handleIncomingStream(stream: ReadableStream<Uint8Array>): Promise<void>;
+  };
+
+  const handle = internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream(() => {}, [], [encodeFillParameters([])]),
+  );
+  const subscriber = await waitForIncomingPublishSubscriber(internal);
+
+  // PUBLISH の Request ID で初期 fill の受信先が登録されている
+  assert.isTrue(dataInternal.fillFetchTargets.has(INCOMING_PUBLISH_REQUEST_ID));
+
+  // fill fetch データストリームを渡すと fillDelivered の Object が届く
+  let controller!: ReadableStreamDefaultController<Uint8Array>;
+  const dataStream = new ReadableStream<Uint8Array>({
+    start(streamController) {
+      controller = streamController;
+    },
+  });
+  const dataPromise = dataInternal.handleIncomingStream(dataStream);
+  controller.enqueue(buildInitialFillStreamChunk(INCOMING_PUBLISH_REQUEST_ID));
+  controller.close();
+  await dataPromise;
+  await yieldToMacrotask();
+
+  assert.equal(delivered.length, 1);
+  assert.isTrue(delivered[0]?.fillDelivered === true);
+  // FIN 後は fill の関連付けが消え、購読は継続する
+  assert.isFalse(dataInternal.fillFetchTargets.has(INCOMING_PUBLISH_REQUEST_ID));
+  assert.equal(subscriber.state, "active");
+  assert.equal(internal.sessionState, "connected");
+
+  await subscriber.unsubscribe();
+  await handle;
+});
+
+/**
+ * draft-ietf-moq-transport-23 §3.4 / §3.4.1:
+ * fill fetch データストリームが PUBLISH より先に到着しても、PUBLISH の受理で
+ * 受信先が登録された時点で待機を解除し、fill のハンドラへ渡す。
+ */
+test("受信 PUBLISH より先に届いた初期 fill fetch を PUBLISH 受理後に振り分ける", async () => {
+  const session = createSessionImpl();
+  const delivered: MoqtObject[] = [];
+  const internal = setupIncomingPublishStreamSession(session, {
+    object: (object) => {
+      delivered.push(object);
+    },
+  });
+  const dataInternal = session as unknown as {
+    handleIncomingStream(stream: ReadableStream<Uint8Array>): Promise<void>;
+  };
+
+  // 先に fill fetch データストリームを流す (PUBLISH はまだ処理していない)
+  let controller!: ReadableStreamDefaultController<Uint8Array>;
+  const dataStream = new ReadableStream<Uint8Array>({
+    start(streamController) {
+      controller = streamController;
+    },
+  });
+  const dataPromise = dataInternal.handleIncomingStream(dataStream);
+  controller.enqueue(buildInitialFillStreamChunk(INCOMING_PUBLISH_REQUEST_ID));
+  controller.close();
+
+  // PUBLISH を注入して受理させる
+  const handle = internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream(() => {}, [], [encodeFillParameters([])]),
+  );
+  const subscriber = await waitForIncomingPublishSubscriber(internal);
+  await dataPromise;
+  await yieldToMacrotask();
+
+  // 待機が解除され、fill の Object が Subscriber へ届く
+  assert.equal(delivered.length, 1);
+  assert.isTrue(delivered[0]?.fillDelivered === true);
+  assert.equal(internal.sessionState, "connected");
+
+  await subscriber.unsubscribe();
+  await handle;
+});
+
+/**
+ * draft-ietf-moq-transport-23 §3.4.1:
+ * paused 中の PUBLISH は初期 fill fetch を開かない。受信先を登録せず、
+ * 先に到着して待機していた fill fetch ストリームは失敗 (cancel) させる。
+ */
+test("paused の PUBLISH は初期 fill を登録せず待機中の fill fetch を cancel する", async () => {
+  const session = createSessionImpl();
+  const internal = setupIncomingPublishStreamSession(session, { object: () => {} });
+  const dataInternal = session as unknown as {
+    fillFetchTargets: Map<bigint, unknown>;
+    handleIncomingStream(stream: ReadableStream<Uint8Array>): Promise<void>;
+  };
+
+  let cancelled = false;
+  let controller!: ReadableStreamDefaultController<Uint8Array>;
+  const dataStream = new ReadableStream<Uint8Array>({
+    start(streamController) {
+      controller = streamController;
+    },
+    cancel() {
+      cancelled = true;
+    },
+  });
+  const dataPromise = dataInternal.handleIncomingStream(dataStream);
+  controller.enqueue(buildInitialFillStreamChunk(INCOMING_PUBLISH_REQUEST_ID));
+
+  // paused = 1 の PUBLISH を注入する
+  const handle = internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream(
+      () => {},
+      [],
+      [encodeFillParameters([]), { type: MessageParameterType.PAUSED, value: new Uint8Array([1]) }],
+    ),
+  );
+  const subscriber = await waitForIncomingPublishSubscriber(internal);
+  await dataPromise;
+  await yieldToMacrotask();
+
+  // 受信先は登録されず、待機していた fill fetch ストリームは cancel される
+  assert.isFalse(dataInternal.fillFetchTargets.has(INCOMING_PUBLISH_REQUEST_ID));
+  assert.isTrue(cancelled);
+  assert.equal(internal.sessionState, "connected");
+
+  await subscriber.unsubscribe();
+  await handle;
 });
 
 // ============================================================================
@@ -10038,14 +10208,15 @@ test("受信 PUBLISH の LARGEST_OBJECT のみが購読に反映される", asyn
 /**
  * draft-ietf-moq-transport-22 §9.8 / §9.20.1:
  * 受信 PUBLISH に許可外パラメータ (NEW_GROUP_REQUEST / Range Filters /
- * FILL_PARAMETERS) が含まれる場合、INVALID_PARAMETER でセッションを
- * 閉じることを検証する。
+ * TRACK_NAMESPACE_PREFIX) が含まれる場合、INVALID_PARAMETER でセッションを
+ * 閉じることを検証する。FILL_PARAMETERS は §3.4 の初期 fill を要求するため
+ * 許可される (別テストで受理を検証する)。
  */
 test("受信 PUBLISH の許可外パラメータでセッションが閉じる", async () => {
   const prohibited = [
     [{ type: MessageParameterType.NEW_GROUP_REQUEST, value: new Uint8Array([0x01]) }],
     [{ type: MessageParameterType.SUBGROUP_FILTER, value: new Uint8Array([0x00]) }],
-    [{ type: MessageParameterType.FILL_PARAMETERS, value: new Uint8Array([0x00]) }],
+    [{ type: MessageParameterType.TRACK_NAMESPACE_PREFIX, value: new Uint8Array([0x00]) }],
   ];
   for (const parameters of prohibited) {
     const errors: Error[] = [];

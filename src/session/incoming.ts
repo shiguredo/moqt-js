@@ -29,7 +29,7 @@ import type { GroupOrder } from "../message/types";
 import { RequestErrorCode, SessionError, SessionErrorCode, MalformedTrackError } from "../error";
 import { ControlStreamWriter, type ControlMessage } from "../controlStream";
 import { toSessionCloseError } from "./errors";
-import { cancelMalformedTrackPeers } from "./bidi";
+import { cancelMalformedTrackPeers, type FillFetchTarget } from "./bidi";
 import { getEndOfGroupFinalObjectId } from "./endOfGroupTracking";
 import { assertNoObjectAfterFetchEnd, assertNoPriorIdGapTrackViolation } from "./priorGapTracking";
 import {
@@ -551,6 +551,113 @@ function incomingResolveDatagramTrackKey(
     return undefined;
   }
   return session.subscribersByAlias.get(trackAlias)?.[0]?.getFullTrackNameKey();
+}
+
+/**
+ * 待機する PUBLISH 初期 fill ストリーム数の上限
+ *
+ * draft-ietf-moq-transport-23 §3.4.1 の fill fetch は Request ID ごとに待機する。
+ * 悪意あるピアが未確定の Request ID の FETCH_HEADER を大量に送るのを防ぐため、
+ * Session 単位で待機 stream 数を制限する (超過分は待機せず cancel する)。
+ */
+const MAX_WAITING_PUBLISH_FILL_STREAMS = 1024;
+
+/** PUBLISH 初期 fill の待機タイムアウト (ミリ秒) */
+const PUBLISH_FILL_WAIT_TIMEOUT_MS = 5000;
+
+/**
+ * PUBLISH 初期 fill の受信先登録を待つ
+ *
+ * draft-ietf-moq-transport-23 §3.4 / §3.4.1:
+ * PUBLISH の FILL_PARAMETERS による初期 fill fetch ストリームの FETCH_HEADER は
+ * PUBLISH の Request ID を運ぶ。PUBLISH の到着が遅れることがあるため、
+ * fillFetchTargets への登録を短時間待つ。
+ *
+ * 次の ID は待たずに null を返す:
+ * - 既に fill target がある (待機不要)
+ * - 通常 FETCH として判明している (pendingFetch / fetchers)
+ * - 受信 PUBLISH の処理が完了している (拒否済み・fill を開かないと確定済み)
+ * 上限超過とタイムアウトも null とし、呼び出し側が stream を cancel する。
+ *
+ * @param timeoutMs - 待機時間 (テスト用の短縮用)
+ * @returns 登録された fill target、登録されなかった場合は null
+ */
+export function incomingWaitForPublishFillTarget(
+  session: SessionInternal,
+  requestId: bigint,
+  timeoutMs = PUBLISH_FILL_WAIT_TIMEOUT_MS,
+): Promise<FillFetchTarget | null> {
+  return new Promise<FillFetchTarget | null>((resolve) => {
+    const existing = session.fillFetchTargets.get(requestId);
+    if (existing !== undefined) {
+      resolve(existing);
+      return;
+    }
+    if (session.pendingFetch.has(requestId) || session.fetchers.has(requestId)) {
+      resolve(null);
+      return;
+    }
+    if (session.receivedRequestIds.has(requestId) && !session.publishingRequestIds.has(requestId)) {
+      // 処理済み (拒否済み・fill を開かない) の PUBLISH 宛て。待機しない
+      resolve(null);
+      return;
+    }
+    if (session.publishFillReadyCallbacks.size >= MAX_WAITING_PUBLISH_FILL_STREAMS) {
+      resolve(null);
+      return;
+    }
+
+    let resolved = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const doResolve = () => {
+      if (resolved) return;
+      resolved = true;
+      if (timer !== undefined) {
+        clearTimeout(timer);
+        timer = undefined;
+      }
+      const registered = session.publishFillReadyCallbacks.get(requestId);
+      if (registered !== undefined) {
+        const index = registered.indexOf(doResolve);
+        if (index !== -1) {
+          registered.splice(index, 1);
+        }
+        if (registered.length === 0) {
+          session.publishFillReadyCallbacks.delete(requestId);
+        }
+      }
+      resolve(session.fillFetchTargets.get(requestId) ?? null);
+    };
+
+    const callbacks = session.publishFillReadyCallbacks.get(requestId) ?? [];
+    callbacks.push(doResolve);
+    session.publishFillReadyCallbacks.set(requestId, callbacks);
+    timer = setTimeout(doResolve, timeoutMs);
+  });
+}
+
+/**
+ * PUBLISH の受理・拒否が確定した時点で、同じ Request ID の fill 待機者を起こす
+ *
+ * draft-ietf-moq-transport-23 §3.4.1:
+ * 拒否・paused・fill 不提示など fill fetch ストリームを開かないと確定した場合も、
+ * 待機している stream を失敗させる (呼び出し側が cancel する)。
+ * 処理中フラグも落とし、以降の待機を「処理済み」として即時失敗させる。
+ */
+export function incomingSettlePublishFillWaiters(
+  session: SessionInternal,
+  requestId: bigint,
+): void {
+  session.publishingRequestIds.delete(requestId);
+  const callbacks = session.publishFillReadyCallbacks.get(requestId);
+  if (callbacks === undefined) {
+    return;
+  }
+  session.publishFillReadyCallbacks.delete(requestId);
+  // doResolve は自分の登録解除 (splice) を行うため、複製して反復する
+  for (const callback of callbacks.slice()) {
+    callback();
+  }
 }
 
 /**

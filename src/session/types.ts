@@ -10,7 +10,7 @@
  * 値レベル（実行時）での循環依存は発生しない。
  */
 
-import type { BidiSessionInternal } from "./bidi";
+import type { BidiSessionInternal, FillFetchTarget } from "./bidi";
 import type { ControlStreamReader } from "../controlStream";
 import type { AuthorizationToken } from "../message/authorizationToken";
 import type { RangeFilterSpec } from "../message/parameter";
@@ -145,6 +145,17 @@ export interface SessionInternal extends BidiSessionInternal {
   createNamespaceSubscription(requestId: bigint): NamespaceSubscription;
   createTracksSubscription(requestId: bigint): TracksSubscription;
   createNamespacePublication(requestId: bigint): NamespacePublication;
+
+  // ============================================================
+  // incomingPublish.ts / dataStreamIncoming.ts 用 (PUBLISH 初期 fill)
+  // ============================================================
+  /**
+   * PUBLISH 初期 fill の受信先登録を待つ
+   *
+   * draft-ietf-moq-transport-23 §3.4: PUBLISH の FILL_PARAMETERS による
+   * 初期 fill fetch ストリームは PUBLISH の Request ID を運ぶ。
+   */
+  waitForPublishFillTarget(requestId: bigint): Promise<FillFetchTarget | null>;
 
   // ============================================================
   // publish.ts 用

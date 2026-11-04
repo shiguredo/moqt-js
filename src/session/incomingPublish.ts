@@ -28,7 +28,7 @@ import {
   type Parameter,
   type LocationFilter,
 } from "../message";
-import type { RangeFilterSpec } from "../message/parameter";
+import { decodeFillParameters, type RangeFilterSpec } from "../message/parameter";
 import {
   MalformedTrackError,
   RequestError,
@@ -43,7 +43,11 @@ import { type RequestUpdateOptions, SubscriberImpl } from "../subscriber";
 import { fullTrackNameKey } from "../fullTrackName";
 import { trackPropertyFiltersMatch } from "../filter";
 import * as bidi from "./bidi";
-import { incomingHandleFirstBidiMessage, incomingSendRequestErrorAndClose } from "./incoming";
+import {
+  incomingHandleFirstBidiMessage,
+  incomingSendRequestErrorAndClose,
+  incomingSettlePublishFillWaiters,
+} from "./incoming";
 import { REQUEST_UPDATE_STREAM_CLOSED_MESSAGE } from "./namespaceLoops";
 import {
   isPeerStreamError,
@@ -52,7 +56,12 @@ import {
   toSessionCloseError,
 } from "./errors";
 import { sessionHandleFieldLengthExceeded } from "./lifecycle";
-import { extractLargestLocation, extractPaused, matchNamespacePrefix } from "./params";
+import {
+  extractLargestLocation,
+  extractPaused,
+  matchNamespacePrefix,
+  resolveFillGroupOrder,
+} from "./params";
 import type { SessionInternal, TracksSubscriptionState } from "./types";
 import { type AuthTokenProcessResult, processMessageAuthorizationTokens } from "./authTokenCache";
 import type {
@@ -89,6 +98,10 @@ export interface IncomingPublishSessionInternal {
   readonly subscribers: Map<bigint, SubscriberImpl>;
   readonly subscribersByAlias: Map<bigint, SubscriberImpl[]>;
   readonly tracksSubscriptions: Map<bigint, TracksSubscriptionState>;
+  /** PUBLISH 初期 fill の受信先 (PUBLISH の Request ID をキーとする) */
+  readonly fillFetchTargets: Map<bigint, bidi.FillFetchTarget>;
+  /** 処理中の受信 PUBLISH の Request ID */
+  readonly publishingRequestIds: Set<bigint>;
   readonly pendingSubgroupBuffer: PendingSubgroupBuffer;
   readonly receivedAuthTokens: AuthTokenCache;
   readonly receivedRequestUpdateCounts: Map<bigint, number>;
@@ -695,75 +708,20 @@ export async function incomingPublishHandleBidirectionalStream(
     return;
   }
 
-  // PUBLISH ペイロードをデコードする。失敗時は拒否・取消しまで済ませて null を返す
-  const decodedPublish = await incomingPublishDecodeOrReject(session, stream, firstMsg.payload);
-  if (decodedPublish === null) {
+  // PUBLISH ペイロードのデコードと検証 (失敗時は拒否・取消しまで済ませて null)
+  const validated = await incomingPublishDecodeAndValidate(session, stream, firstMsg.payload);
+  if (validated === null) {
     return;
   }
-
-  const publishRequestId = decodedPublish.requestId;
-  const publishTrackAlias = decodedPublish.trackAlias;
-  const publishTrackNamespace = trackNamespaceToStrings(decodedPublish.trackNamespace);
-  const publishTrackName = new TextDecoder().decode(decodedPublish.trackName);
-
-  session.emitDebug("recv", MessageType.PUBLISH, firstMsg.payload, {
-    requestId: publishRequestId.toString(),
-    trackAlias: publishTrackAlias.toString(),
-    trackNamespace: publishTrackNamespace,
-    trackName: publishTrackName,
-  });
-
-  // draft-ietf-moq-transport-22 §6.4.2.1 (Request ID):
-  // 受信 PUBLISH の Request ID のパリティ (奇数) と重複を検証する。
-  // 違反時は INVALID_REQUEST_ID でセッションを閉じる。
-  const requestIdError = session.validateIncomingRequestId(publishRequestId);
-  if (requestIdError !== null) {
-    session.closeWithError(requestIdError);
-    return;
-  }
-
-  // draft-ietf-moq-transport-22 §9.20.2 / §8.9:
-  // PUBLISH の AUTHORIZATION TOKEN パラメータを処理する。§8.9 の MUST は
-  // 「セッションエラーにならない限り REGISTER した Alias をキャッシュへ登録する」
-  // であるため、セッションエラーにならない拒否 (予約 namespace による
-  // DOES_NOT_EXIST 応答等) より前に処理する。
-  if (
-    !incomingPublishProcessAuthorizationTokens(session, publishRequestId, decodedPublish.parameters)
-  ) {
-    return;
-  }
-
-  // draft-ietf-moq-transport-22 §2.4.3 / §6.5:
-  // 受信 PUBLISH の Track Namespace 先頭フィールドが "." 単体または
-  // ".session" の場合、REQUEST_ERROR (DOES_NOT_EXIST) で拒否してアプリへ
-  // 渡さない (§2.4.3 / §6.5 の MUST)。それ以外の予約名前空間
-  // (例: ".foo") は §2.4.3 によりアプリへ渡す。
-  // 拒否時は §6.4.2.3 の SHOULD に従い REQUEST_ERROR 送信後に送信方向を
-  // FIN で閉じ、受信方向を cancel する。パラメータスコープ検証より
-  // 先に判定し、両方違反の場合は DOES_NOT_EXIST 拒否を優先する。
-  // なお、デコード失敗 (MalformedTrackError 等) はデコード時に先に
-  // 検出されるため、この判定に到達するのはデコード成功時のみ。
-  if (isRejectedReceiveNamespace(decodedPublish.trackNamespace.tuple)) {
-    await incomingSendRequestErrorAndClose(
-      stream,
-      RequestErrorCode.DOES_NOT_EXIST,
-      "request references reserved namespace",
-      session.peerMaxControlMessageSize,
-    );
-    return;
-  }
-
-  // draft-ietf-moq-transport-23 §9.19.1 (Parameter Scope):
-  // PUBLISH に許可されていないパラメータは INVALID_PARAMETER
-  const scopeError = validateParameterScope(
-    decodedPublish.parameters,
-    PUBLISH_ALLOWED_PARAMS,
-    "PUBLISH",
-  );
-  if (scopeError !== null) {
-    session.closeWithError(scopeError);
-    return;
-  }
+  const {
+    decodedPublish,
+    publishRequestId,
+    publishTrackAlias,
+    publishTrackNamespace,
+    publishTrackName,
+    fill,
+    settleFillWaiters,
+  } = validated;
 
   // trackNamespace が PUBLISH の指定先 (SUBSCRIBE_TRACKS_ID) または興味のある
   // active な tracksSubscriptions に一致するか検証する
@@ -781,6 +739,7 @@ export async function incomingPublishHandleBidirectionalStream(
       "uninterested",
       session.peerMaxControlMessageSize,
     );
+    settleFillWaiters();
     return;
   }
 
@@ -811,6 +770,7 @@ export async function incomingPublishHandleBidirectionalStream(
           SessionErrorCode.DUPLICATE_TRACK_ALIAS,
         ),
       );
+      settleFillWaiters();
       return;
     }
   }
@@ -820,15 +780,14 @@ export async function incomingPublishHandleBidirectionalStream(
   // 通過しない PUBLISH は onPublish を呼ばず、§9.8 の SHOULD に従い
   // REQUEST_ERROR (UNINTERESTED) で応答してストリームの読み取りを放棄する。
   if (
-    match.rangeFilters !== undefined &&
-    !trackPropertyFiltersMatch(match.rangeFilters, decodedPublish.trackProperties)
-  ) {
-    await incomingSendRequestErrorAndClose(
+    await incomingPublishRejectByTrackPropertyFilter(
+      session,
       stream,
-      RequestErrorCode.UNINTERESTED,
-      "uninterested",
-      session.peerMaxControlMessageSize,
-    );
+      match,
+      decodedPublish.trackProperties,
+    )
+  ) {
+    settleFillWaiters();
     return;
   }
 
@@ -849,6 +808,7 @@ export async function incomingPublishHandleBidirectionalStream(
     } catch {
       /* ignore */
     }
+    settleFillWaiters();
     return;
   }
 
@@ -865,17 +825,19 @@ export async function incomingPublishHandleBidirectionalStream(
     decodedPublish.parameters,
   );
   if (
-    revalidatedMatch === null ||
-    revalidatedMatch.subscription !== match.subscription ||
-    (revalidatedMatch.rangeFilters !== undefined &&
-      !trackPropertyFiltersMatch(revalidatedMatch.rangeFilters, decodedPublish.trackProperties))
-  ) {
-    await incomingSendRequestErrorAndClose(
+    await incomingPublishRejectIfMatchInvalidated(
+      session,
       stream,
-      RequestErrorCode.UNINTERESTED,
-      "uninterested",
-      session.peerMaxControlMessageSize,
-    );
+      revalidatedMatch,
+      match,
+      decodedPublish.trackProperties,
+    )
+  ) {
+    settleFillWaiters();
+    return;
+  }
+  if (revalidatedMatch === null) {
+    // 上の helper が false を返した時点で non-null だが、型を絞るための防御
     return;
   }
 
@@ -899,6 +861,7 @@ export async function incomingPublishHandleBidirectionalStream(
 
   // 受信 PUBLISH の初期パラメータを反映する。違反時はセッションを閉じ false を返す。
   if (!incomingPublishApplyParameters(session, impl, decodedPublish.parameters)) {
+    settleFillWaiters();
     return;
   }
 
@@ -923,6 +886,7 @@ export async function incomingPublishHandleBidirectionalStream(
   } catch {
     // ストリームのロックが取得できない場合
     impl.markClosed();
+    settleFillWaiters();
     return;
   }
 
@@ -954,6 +918,22 @@ export async function incomingPublishHandleBidirectionalStream(
   };
 
   session.pendingSubgroupBuffer.notifyAlias(publishTrackAlias, "subscriber");
+
+  // draft-ietf-moq-transport-23 §3.4 / §3.4.1:
+  // FILL_PARAMETERS が載り、subscriber が paused でない PUBLISH は初期 fill fetch
+  // ストリームを開く。FETCH_HEADER は PUBLISH の Request ID を運ぶため、その ID で
+  // 受信先を登録して待機中の fill stream を起こす。fill 内側の GROUP_ORDER が
+  // 無ければ PUBLISH の GROUP_ORDER (subscription の初期値) を継承する。
+  // paused / FILL_PARAMETERS 無しでは登録せず、待機者を失敗させる。
+  incomingPublishRegisterFillTarget(
+    session,
+    publishRequestId,
+    impl,
+    fill,
+    validated.paused,
+    incomingPublishExtractGroupOrder(decodedPublish.parameters),
+  );
+  settleFillWaiters();
 
   // PUBLISH_OK を送信 (draft-ietf-moq-transport-22 §3.1 MUST) して
   // 後続メッセージのサブループを回す。
@@ -1023,6 +1003,301 @@ export async function incomingPublishHandleBidirectionalStream(
 }
 
 /**
+ * TRACK_PROPERTY_FILTER の不通過を UNINTERESTED で拒否する
+ *
+ * draft-ietf-moq-transport-23 §3.6.1 / §9.8: 受信 PUBLISH の Track Properties が
+ * 指定フィルタに合致しない場合は onPublish を呼ばず、REQUEST_ERROR
+ * (UNINTERESTED) で応答して受信方向を cancel する。
+ *
+ * @returns 拒否した場合は true (呼び出し側は return する)
+ */
+async function incomingPublishRejectByTrackPropertyFilter(
+  session: IncomingPublishSessionInternal,
+  stream: WebTransportBidirectionalStream,
+  match: IncomingPublishSubscriptionMatch,
+  trackProperties: ReturnType<typeof decodePublishPayload>["trackProperties"],
+): Promise<boolean> {
+  if (
+    match.rangeFilters === undefined ||
+    trackPropertyFiltersMatch(match.rangeFilters, trackProperties)
+  ) {
+    return false;
+  }
+  await incomingSendRequestErrorAndClose(
+    stream,
+    RequestErrorCode.UNINTERESTED,
+    "uninterested",
+    session.peerMaxControlMessageSize,
+  );
+  return true;
+}
+
+/**
+ * onPublish 待機後の再検証で不一致になった PUBLISH を UNINTERESTED で拒否する
+ *
+ * draft-ietf-moq-transport-23 §3.6 / §9.19.21:
+ * 待機中に元の要求が取消・prefix 更新・フィルタ変更された場合は、callback の
+ * 設定を使わず通常の興味なし経路へ進む (Subscriber を残さない)。
+ *
+ * @returns 拒否した場合は true (呼び出し側は return する)
+ */
+async function incomingPublishRejectIfMatchInvalidated(
+  session: IncomingPublishSessionInternal,
+  stream: WebTransportBidirectionalStream,
+  revalidatedMatch: IncomingPublishSubscriptionMatch | null,
+  match: IncomingPublishSubscriptionMatch,
+  trackProperties: ReturnType<typeof decodePublishPayload>["trackProperties"],
+): Promise<boolean> {
+  const stillMatches =
+    revalidatedMatch !== null &&
+    revalidatedMatch.subscription === match.subscription &&
+    (revalidatedMatch.rangeFilters === undefined ||
+      trackPropertyFiltersMatch(revalidatedMatch.rangeFilters, trackProperties));
+  if (stillMatches) {
+    return false;
+  }
+  await incomingSendRequestErrorAndClose(
+    stream,
+    RequestErrorCode.UNINTERESTED,
+    "uninterested",
+    session.peerMaxControlMessageSize,
+  );
+  return true;
+}
+
+/** 受信 PUBLISH のデコードと検証結果 */
+interface IncomingPublishValidated {
+  decodedPublish: ReturnType<typeof decodePublishPayload>;
+  publishRequestId: bigint;
+  publishTrackAlias: bigint;
+  publishTrackNamespace: string[];
+  publishTrackName: string;
+  fill: IncomingPublishFill | undefined;
+  paused: boolean;
+  settleFillWaiters: () => void;
+}
+
+/**
+ * 受信 PUBLISH のペイロードをデコードして検証する
+ *
+ * draft-ietf-moq-transport-23 §6.4.2.1 / §8.9 / §2.4.3 / §6.5 / §9.19.1 /
+ * §3.4: デコード、Request ID 検証、認証トークン処理、予約 namespace 拒否、
+ * パラメータスコープ検証、FILL_PARAMETERS の解析と paused 解決を行う。
+ * 拒否・セッション終了の経路では、初期 fill の待機者を失敗させる。
+ *
+ * @returns 検証済みの情報。拒否・セッション終了で処理を打ち切る場合は null
+ */
+async function incomingPublishDecodeAndValidate(
+  session: IncomingPublishSessionInternal,
+  stream: WebTransportBidirectionalStream,
+  payload: Uint8Array,
+): Promise<IncomingPublishValidated | null> {
+  // PUBLISH ペイロードをデコードする。失敗時は拒否・取消しまで済ませて null を返す
+  const decodedPublish = await incomingPublishDecodeOrReject(session, stream, payload);
+  if (decodedPublish === null) {
+    return null;
+  }
+
+  const publishRequestId = decodedPublish.requestId;
+  const publishTrackAlias = decodedPublish.trackAlias;
+  const publishTrackNamespace = trackNamespaceToStrings(decodedPublish.trackNamespace);
+  const publishTrackName = new TextDecoder().decode(decodedPublish.trackName);
+
+  session.emitDebug("recv", MessageType.PUBLISH, payload, {
+    requestId: publishRequestId.toString(),
+    trackAlias: publishTrackAlias.toString(),
+    trackNamespace: publishTrackNamespace,
+    trackName: publishTrackName,
+  });
+
+  // draft-ietf-moq-transport-22 §6.4.2.1 (Request ID):
+  // 受信 PUBLISH の Request ID のパリティ (奇数) と重複を検証する。
+  // 違反時は INVALID_REQUEST_ID でセッションを閉じる。
+  const requestIdError = session.validateIncomingRequestId(publishRequestId);
+  if (requestIdError !== null) {
+    session.closeWithError(requestIdError);
+    return null;
+  }
+
+  // draft-ietf-moq-transport-23 §3.4.1: PUBLISH の受理・拒否が確定するまで、
+  // 同じ Request ID の初期 fill fetch ストリームを待機させる。
+  session.publishingRequestIds.add(publishRequestId);
+  const settlePublishFillWaiters = (): void => {
+    incomingSettlePublishFillWaiters(session as unknown as SessionInternal, publishRequestId);
+  };
+
+  // draft-ietf-moq-transport-22 §9.20.2 / §8.9:
+  // PUBLISH の AUTHORIZATION TOKEN パラメータを処理する。§8.9 の MUST は
+  // 「セッションエラーにならない限り REGISTER した Alias をキャッシュへ登録する」
+  // であるため、セッションエラーにならない拒否 (予約 namespace による
+  // DOES_NOT_EXIST 応答等) より前に処理する。
+  if (
+    !incomingPublishProcessAuthorizationTokens(session, publishRequestId, decodedPublish.parameters)
+  ) {
+    return null;
+  }
+
+  // draft-ietf-moq-transport-22 §2.4.3 / §6.5:
+  // 受信 PUBLISH の Track Namespace 先頭フィールドが "." 単体または
+  // ".session" の場合、REQUEST_ERROR (DOES_NOT_EXIST) で拒否してアプリへ
+  // 渡さない (§2.4.3 / §6.5 の MUST)。それ以外の予約名前空間
+  // (例: ".foo") は §2.4.3 によりアプリへ渡す。
+  // 拒否時は §6.4.2.3 の SHOULD に従い REQUEST_ERROR 送信後に送信方向を
+  // FIN で閉じ、受信方向を cancel する。パラメータスコープ検証より
+  // 先に判定し、両方違反の場合は DOES_NOT_EXIST 拒否を優先する。
+  // なお、デコード失敗 (MalformedTrackError 等) はデコード時に先に
+  // 検出されるため、この判定に到達するのはデコード成功時のみ。
+  if (isRejectedReceiveNamespace(decodedPublish.trackNamespace.tuple)) {
+    await incomingSendRequestErrorAndClose(
+      stream,
+      RequestErrorCode.DOES_NOT_EXIST,
+      "request references reserved namespace",
+      session.peerMaxControlMessageSize,
+    );
+    settlePublishFillWaiters();
+    return null;
+  }
+
+  // draft-ietf-moq-transport-23 §9.19.1 (Parameter Scope):
+  // PUBLISH に許可されていないパラメータは INVALID_PARAMETER
+  const scopeError = validateParameterScope(
+    decodedPublish.parameters,
+    PUBLISH_ALLOWED_PARAMS,
+    "PUBLISH",
+  );
+  if (scopeError !== null) {
+    session.closeWithError(scopeError);
+    settlePublishFillWaiters();
+    return null;
+  }
+
+  // draft-ietf-moq-transport-23 §3.4 / §9.19.15:
+  // PUBLISH の FILL_PARAMETERS は初期 fill fetch を要求する。解析と
+  // paused の解決は helper にまとめ、違反時は INVALID_PARAMETER で閉じる。
+  const fillResolution = incomingPublishResolveFillParameters(
+    session,
+    decodedPublish.parameters,
+    settlePublishFillWaiters,
+  );
+  if (fillResolution === null) {
+    return null;
+  }
+  const fill = fillResolution.fill;
+
+  return {
+    decodedPublish,
+    publishRequestId,
+    publishTrackAlias,
+    publishTrackNamespace,
+    publishTrackName,
+    fill,
+    paused: fillResolution.paused,
+    settleFillWaiters: settlePublishFillWaiters,
+  };
+}
+
+/** PUBLISH の FILL_PARAMETERS の解析結果 */
+interface IncomingPublishFill {
+  parameter: Parameter;
+  innerParameters: Parameter[];
+}
+
+/**
+ * 受信 PUBLISH の FILL_PARAMETERS を解析する
+ *
+ * draft-ietf-moq-transport-23 §9.19.15:
+ * 内側の Parameter は decode 時に Table 7 / 重複を検証済みだが、Range Filter の
+ * 組合せや remove 指定などの意味検証を decodeFillParameters で行う。違反は
+ * INVALID_PARAMETER としてセッションを閉じる。
+ *
+ * @param settleWaiters - セッションを閉じる前に fill 待機者を失敗させる処理
+ * @returns fill の解析結果と paused 状態。違反でセッションを閉じた場合は null
+ */
+function incomingPublishResolveFillParameters(
+  session: IncomingPublishSessionInternal,
+  parameters: Parameter[],
+  settleWaiters: () => void,
+): { fill: IncomingPublishFill | undefined; paused: boolean } | null {
+  // draft-ietf-moq-transport-23 §3.4.1: paused 中の PUBLISH は fill fetch を開かない
+  const paused = extractPaused(parameters);
+  const parameter = parameters.find(
+    (candidate) => candidate.type === MessageParameterType.FILL_PARAMETERS,
+  );
+  if (parameter === undefined) {
+    return { fill: undefined, paused };
+  }
+  try {
+    return { fill: { parameter, innerParameters: decodeFillParameters(parameter) }, paused };
+  } catch (error) {
+    const sessionError =
+      toSessionCloseError(error) ??
+      new SessionError(
+        `invalid FILL_PARAMETERS in PUBLISH: ${error instanceof Error ? error.message : String(error)}`,
+        SessionErrorCode.INVALID_PARAMETER,
+      );
+    session.closeWithError(sessionError);
+    settleWaiters();
+    return null;
+  }
+}
+
+/**
+ * PUBLISH の初期 fill の受信先を登録する
+ *
+ * draft-ietf-moq-transport-23 §3.4 / §3.4.1:
+ * FILL_PARAMETERS が載り、subscriber が paused でない PUBLISH は初期 fill fetch
+ * ストリームを開く。FETCH_HEADER は PUBLISH の Request ID を運ぶため、その ID で
+ * 受信先を登録する。fill 内側の GROUP_ORDER が無ければ PUBLISH の GROUP_ORDER
+ * (subscription の初期値) を継承する。paused / FILL_PARAMETERS 無しでは登録しない。
+ */
+function incomingPublishRegisterFillTarget(
+  session: IncomingPublishSessionInternal,
+  publishRequestId: bigint,
+  impl: SubscriberImpl,
+  fill: IncomingPublishFill | undefined,
+  paused: boolean,
+  publishGroupOrder: "Ascending" | "Descending" | undefined,
+): void {
+  if (fill === undefined || paused) {
+    return;
+  }
+  const innerGroupOrder = fill.innerParameters.find(
+    (parameter) => parameter.type === MessageParameterType.GROUP_ORDER,
+  );
+  session.fillFetchTargets.set(publishRequestId, {
+    subscriber: impl,
+    groupOrder: resolveFillGroupOrder(
+      innerGroupOrder === undefined
+        ? undefined
+        : innerGroupOrder.value[0] === 0x02
+          ? "Descending"
+          : "Ascending",
+      publishGroupOrder,
+    ),
+  });
+}
+
+/**
+ * 受信 PUBLISH の GROUP_ORDER (uint8) を解決する
+ *
+ * draft-ietf-moq-transport-23 §9.19.8:
+ * 値域 (0x01 / 0x02) は decode 時に検証済みであるため、ここでは解釈だけ行う。
+ *
+ * @returns Ascending / Descending。省略時は undefined
+ */
+function incomingPublishExtractGroupOrder(
+  parameters: Parameter[],
+): "Ascending" | "Descending" | undefined {
+  const parameter = parameters.find(
+    (candidate) => candidate.type === MessageParameterType.GROUP_ORDER,
+  );
+  if (parameter === undefined) {
+    return undefined;
+  }
+  return parameter.value[0] === 0x02 ? "Descending" : "Ascending";
+}
+
+/**
  * 受信 PUBLISH の後始末を行う
  *
  * subscribers / subscribersByAlias / requestStreams の削除と fill 関連付けの
@@ -1044,6 +1319,10 @@ export function incomingPublishCleanupIncomingPublish(
 ): void {
   session.requestStreams.delete(publishRequestId);
   session.subscribers.delete(publishRequestId);
+  // 購読の終了で初期 fill の受信先も不要になる (§3.4.1: 購読の取消し時は
+  // publisher が fill fetch ストリームを reset する)。
+  session.fillFetchTargets.delete(publishRequestId);
+  session.publishingRequestIds.delete(publishRequestId);
   // draft-ietf-moq-transport-22 §9.1.7:
   // ストリーム終了時にストリーム単位の未応答 REQUEST_UPDATE 数を破棄する。
   // 残すと、以後に同じ Request ID のストリームが張られた場合 (および

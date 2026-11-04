@@ -75,6 +75,7 @@ export interface DataStreamSessionInternal {
   // 増減は dataStreamBufferBytesAdd / dataStreamBufferBytesRelease に閉じる。
   dataStreamBufferedBytesTotal: number;
 
+  readonly pendingFetch: ReadonlyMap<bigint, unknown>;
   readonly fetchers: Map<bigint, FetcherImpl>;
   readonly fillFetchTargets: Map<bigint, bidi.FillFetchTarget>;
   readonly subscribersByAlias: Map<bigint, SubscriberImpl[]>;
@@ -95,6 +96,7 @@ export interface DataStreamSessionInternal {
   onRequestDrained(): void;
   handleIncomingDatagram(data: Uint8Array): void;
   waitForFetcher(requestId: bigint): Promise<FetcherImpl | null>;
+  waitForPublishFillTarget(requestId: bigint): Promise<bidi.FillFetchTarget | null>;
 }
 export function dataStreamStartIncomingStreamLoop(session: DataStreamSessionInternal): void {
   void (async () => {
@@ -475,6 +477,33 @@ async function dataStreamHandleParsedFetchHeader(
 
   if (registered) {
     return { returned: false, fetcher: registered, streamBufferedBytes };
+  }
+
+  // draft-ietf-moq-transport-23 §3.4 / §3.4.1:
+  // サーバー起点 PUBLISH の初期 fill fetch は PUBLISH の Request ID (サーバー発の
+  // 奇数) を運ぶ。通常 FETCH (クライアント発の偶数 Request ID) とは待機先が
+  // 異なるため、pendingFetch に無い奇数 ID は PUBLISH 初期 fill として待つ。
+  if (header.requestId % 2n === 1n && !session.pendingFetch.has(header.requestId)) {
+    const waitedTarget = await session.waitForPublishFillTarget(header.requestId);
+    // 待機解除後は fillFetchTargets を再検索する (登録と data stream の順序は
+    // 保証されない。通常 Fetcher だけを検索して打ち切らない)
+    const lateFillTarget = session.fillFetchTargets.get(header.requestId);
+    if (lateFillTarget !== undefined) {
+      await dataStreamHandleFillFetchStream(
+        session,
+        reader,
+        header.requestId,
+        lateFillTarget,
+        buffer,
+      );
+      return { returned: true, streamBufferedBytes: 0 };
+    }
+    if (waitedTarget === null) {
+      void reader.cancel(`unknown publish fill: requestId=${header.requestId}`);
+      return { returned: true, streamBufferedBytes };
+    }
+    await dataStreamHandleFillFetchStream(session, reader, header.requestId, waitedTarget, buffer);
+    return { returned: true, streamBufferedBytes: 0 };
   }
 
   const fetcher = await session.waitForFetcher(header.requestId);

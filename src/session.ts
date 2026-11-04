@@ -71,6 +71,7 @@ import type {
 import {
   incomingHandleDatagram,
   incomingWaitForFetcher,
+  incomingWaitForPublishFillTarget,
   incomingValidateRequestId,
 } from "./session/incoming";
 import {
@@ -467,6 +468,8 @@ export class SessionImpl implements Session {
   //  FETCH_OK message is sent."
   // FETCH_OK より先にデータストリームが到着する可能性がある
   fetcherReadyCallbacks = new Map<bigint, Array<() => void>>();
+  publishFillReadyCallbacks = new Map<bigint, Array<() => void>>();
+  publishingRequestIds = new Set<bigint>();
 
   // fill 要求元の Request ID から購読への関連付け
   // draft-ietf-moq-transport-22 §3.4 (Fill Semantics):
@@ -1323,6 +1326,17 @@ export class SessionImpl implements Session {
    */
   waitForFetcher(requestId: bigint): Promise<FetcherImpl | null> {
     return incomingWaitForFetcher(this as unknown as SessionInternal, requestId);
+  }
+
+  /**
+   * PUBLISH 初期 fill の受信先登録を待つ
+   *
+   * draft-ietf-moq-transport-23 §3.4 / §3.4.1:
+   * PUBLISH の FILL_PARAMETERS による初期 fill fetch の FETCH_HEADER が
+   * PUBLISH より先に到着した場合に使用する。
+   */
+  waitForPublishFillTarget(requestId: bigint): Promise<bidi.FillFetchTarget | null> {
+    return incomingWaitForPublishFillTarget(this as unknown as SessionInternal, requestId);
   }
 
   /**

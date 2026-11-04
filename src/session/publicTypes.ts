@@ -327,6 +327,12 @@ export interface PublishCallbacks {
 
 /**
  * パブリッシュオプション
+ *
+ * draft-ietf-moq-transport-23 §3.4 / §3.4.1 (Fill Semantics):
+ * PUBLISH の FILL_PARAMETERS による初期 fill は、購読側 (本ライブラリの
+ * 受信経路) が受理して購読へ関連付ける。moqt-js の publisher は履歴 Object を
+ * 保持せず、送信側として fill fetch を提供する機能を持たないため、この
+ * インターフェースに fill 指定は無い (受信対応のみ)。
  */
 export interface PublishOptions {
   /**
