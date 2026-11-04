@@ -59,6 +59,7 @@ draft 23 §9.4 は REQUEST_ERROR の末尾を汎用の Error Details KVP 列へ�
 - GREASE の Error Detail を送る機構は既存に無いため送信は未実装。受信時は未登録 Type として読み飛ばすことをテストしている。
 - 未対応 Mandatory 以外の malformed PUBLISH の取消しは、CANCELLED コード付き取消しを扱う issue で再検討する。
 - `ErrorDetailType` は非公開のまま。UNSUPPORTED_PROPERTY の値域検証は行っていない。
+- track-scoped の Redirect で空 Track Name を受けた場合は §2.4.1 に従い PROTOCOL_VIOLATION で閉じる実装を `buildRequestErrorFromDecoded` に追加したが、その経路の統合テストは未追加である (空 Track Name の Redirect は制御ストリーム読み取りループで例外として扱われる)。namespace-scoped の空許容と非空の INVALID_FIELD 検証は維持している。
 - 実リレー E2E は統合ブランチの制約 (ALPN は移行完了まで moqt-22) のため未実施である。
 
 ### 残課題 (別 issue で扱う)
