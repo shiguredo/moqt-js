@@ -601,6 +601,23 @@ async function incomingPublishCancelRequestStream(
  *
  * @returns デコードに成功した PUBLISH。拒否・取消しを行った場合は null
  */
+/**
+ * PUBLISH ペイロードの先頭から Request ID だけを読む
+ *
+ * PUBLISH の先頭フィールドは Request ID (vi64) であり、デコード全体が失敗しても
+ * 先頭が揃っていれば復元できる。初期 fill の待機者を失敗させるために使う。
+ *
+ * @returns Request ID。先頭が不完全な場合は undefined
+ */
+function incomingPublishPeekRequestId(payload: Uint8Array): bigint | undefined {
+  try {
+    const [requestId] = decodeVarint(payload, 0);
+    return requestId;
+  } catch {
+    return undefined;
+  }
+}
+
 async function incomingPublishDecodeOrReject(
   session: IncomingPublishSessionInternal,
   stream: WebTransportBidirectionalStream,
@@ -1050,9 +1067,18 @@ async function incomingPublishDecodeAndValidate(
   stream: WebTransportBidirectionalStream,
   payload: Uint8Array,
 ): Promise<IncomingPublishValidated | null> {
+  // draft-ietf-moq-transport-23 §3.4.1: PUBLISH が拒否された場合、同じ Request ID の
+  // 初期 fill 待機者を失敗させる必要がある。デコードが失敗すると Request ID を
+  // 復元できないため、先頭の Request ID だけを先に読む (失敗時は従来どおり
+  // デコード経路でセッションを閉じる)。
+  const earlyRequestId = incomingPublishPeekRequestId(payload);
+
   // PUBLISH ペイロードをデコードする。失敗時は拒否・取消しまで済ませて null を返す
   const decodedPublish = await incomingPublishDecodeOrReject(session, stream, payload);
   if (decodedPublish === null) {
+    if (earlyRequestId !== undefined) {
+      incomingSettlePublishFillWaiters(session as unknown as SessionInternal, earlyRequestId);
+    }
     return null;
   }
 
