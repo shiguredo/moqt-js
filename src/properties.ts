@@ -509,8 +509,9 @@ export function assertNoDuplicatePropertiesForSend(headers: readonly Property[])
 
 /**
  * Property scope が受信文脈 (Track / Object) で許されるかを判定する
- *//**
- * Property scope が受信文脈 (Track / Object) で許されるかを判定する
+ *
+ * "both" の Property は両方の文脈で許される。未知の Property は scope を
+ * 持たないため、この判定の対象外である。
  */
 export function isPropertyScopeAllowed(
   propertyScope: PropertyScope,
@@ -1128,7 +1129,7 @@ export function decodeImmutableProperties(data: Uint8Array): ImmutableProperties
     previousId = extId;
 
     // draft-ietf-moq-transport-22 §3.7:
-    // 未知の Mandatory Track Property (0x4000-0x7FFF) を含む Track は
+    // 未知の Mandatory Track Property (0x4000-0x7FFF かつ GREASE でない) を含む Track は
     // 処理・転送してはならない (MUST NOT process or forward)。
     // Immutable Properties 配下でも同様に malformed とする。Type は後段で
     // 一覧として通知するため、ここでは記録して値の解析を続ける。
@@ -1393,7 +1394,7 @@ export function parseProperties(data: Uint8Array): ParsedProperties {
         innerPreviousId = extId;
 
         // draft-ietf-moq-transport-22 §3.7:
-        // 未知の Mandatory Track Property (0x4000-0x7FFF) を含む Track は
+        // 未知の Mandatory Track Property (0x4000-0x7FFF かつ GREASE でない) を含む Track は
         // 処理・転送してはならない。Immutable Properties 配下でも malformed。
         // Type は後段で一覧として通知するため、ここでは記録して値の解析を続ける。
         if (isMandatoryTrackPropertyId(extId)) {
@@ -1544,7 +1545,7 @@ export function decodeProperties(data: Uint8Array, scope?: "track" | "object"): 
     previousId = id;
 
     // draft-ietf-moq-transport-22 §3.7:
-    // 未知の Mandatory Track Property (0x4000-0x7FFF) を含む Track は
+    // 未知の Mandatory Track Property (0x4000-0x7FFF かつ GREASE でない) を含む Track は
     // 処理・転送してはならない (MUST NOT process or forward)。
     // Type は後段で一覧として通知するため、ここでは記録して値の解析を続ける。
     if (isMandatoryTrackPropertyId(id)) {
@@ -1606,7 +1607,7 @@ export function decodeProperties(data: Uint8Array, scope?: "track" | "object"): 
 
             innerPreviousId = innerId;
             // draft-ietf-moq-transport-22 §3.7:
-            // 未知の Mandatory Track Property (0x4000-0x7FFF) を含む Track は
+            // 未知の Mandatory Track Property (0x4000-0x7FFF かつ GREASE でない) を含む Track は
             // 処理・転送してはならない。Immutable Properties 配下でも malformed。
             // Type は後段で一覧として通知するため、ここでは記録して走査を続ける。
             if (isMandatoryTrackPropertyId(innerId)) {
