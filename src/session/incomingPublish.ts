@@ -1120,6 +1120,18 @@ async function incomingPublishDecodeAndValidate(
   // デコード経路でセッションを閉じる)。
   const earlyRequestId = incomingPublishPeekRequestId(payload);
 
+  // draft-ietf-moq-transport-22 §6.4.2.1 (Request ID):
+  // 受信 PUBLISH の Request ID のパリティ (奇数) と重複は、Track Properties の
+  // 検証 (未知 Mandatory / scope / 重複) より先に検証する。両方に違反する
+  // PUBLISH で INVALID_REQUEST_ID が失われ、ID が重複検出から漏れるのを防ぐ。
+  if (earlyRequestId !== undefined) {
+    const earlyRequestIdError = session.validateIncomingRequestId(earlyRequestId);
+    if (earlyRequestIdError !== null) {
+      session.closeWithError(earlyRequestIdError);
+      return null;
+    }
+  }
+
   // PUBLISH ペイロードをデコードする。失敗時は拒否・取消しまで済ませて null を返す
   const decodedPublish = await incomingPublishDecodeOrReject(session, stream, payload);
   if (decodedPublish === null) {
@@ -1141,14 +1153,8 @@ async function incomingPublishDecodeAndValidate(
     trackName: publishTrackName,
   });
 
-  // draft-ietf-moq-transport-22 §6.4.2.1 (Request ID):
-  // 受信 PUBLISH の Request ID のパリティ (奇数) と重複を検証する。
-  // 違反時は INVALID_REQUEST_ID でセッションを閉じる。
-  const requestIdError = session.validateIncomingRequestId(publishRequestId);
-  if (requestIdError !== null) {
-    session.closeWithError(requestIdError);
-    return null;
-  }
+  // Request ID の検証はデコード前に済ませている (上の earlyRequestId)。
+  // ここで再度呼ぶと受信済み ID の二重登録になるため行わない。
 
   // draft-ietf-moq-transport-23 §3.4.1: PUBLISH の受理・拒否が確定するまで、
   // 同じ Request ID の初期 fill fetch ストリームを待機させる。
