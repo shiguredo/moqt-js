@@ -514,7 +514,7 @@ function decodeRequestErrorToRequestError(messagePayload: Uint8Array): RequestEr
   }
   // 構築は bidi.buildRequestErrorFromDecoded に集約する (reasonPhrase が空のときの
   // 固定文言も含めて共通。namespace 系だけ異なる文言にならないようにする)。
-  return bidi.buildRequestErrorFromDecoded(decodedMsg);
+  return bidi.buildRequestErrorFromDecoded(decodedMsg, "namespace");
 }
 
 /**

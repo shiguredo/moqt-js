@@ -995,7 +995,26 @@ async function bidiDispatchResponse<TPending extends BidiPendingRejectable>(
  * - UNSUPPORTED_PROPERTY Error Detail の Type 一覧は、適用外の Error Code では
  *   デコーダが既に無視しているため、そのままアプリへ渡す (§9.4.2.2)。
  */
-export function buildRequestErrorFromDecoded(decoded: DecodedRequestError): RequestError {
+export function buildRequestErrorFromDecoded(
+  decoded: DecodedRequestError,
+  scope: "track" | "namespace" | "update" = "track",
+): RequestError {
+  // draft-ietf-moq-transport-23 §2.4.1:
+  // "Each Track Name MUST contain at least one byte. If an endpoint receives a
+  //  Track Name with a length of 0, it MUST close the session with a
+  //  PROTOCOL_VIOLATION."
+  // §9.4.2.1 は namespace-scoped の Redirect だけ空 Track Name を許容する。
+  // Track scope の Redirect で空 Track Name を受けたらセッションを閉じる。
+  if (
+    scope === "track" &&
+    decoded.redirect !== undefined &&
+    decoded.redirect.trackName.length === 0
+  ) {
+    throw new ProtocolViolationError(
+      "redirect for a track-scoped request requires a non-empty track name",
+      SessionErrorCode.PROTOCOL_VIOLATION,
+    );
+  }
   return new RequestError(
     decoded.reasonPhrase || `Request failed with code ${decoded.errorCode}`,
     normalizeRequestErrorCode(Number(decoded.errorCode)),
