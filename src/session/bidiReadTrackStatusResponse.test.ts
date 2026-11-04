@@ -9,12 +9,72 @@
 import { test, assert } from "vite-plus/test";
 import { SubscriberImpl } from "../subscriber";
 import { encodeRequestOkPayload } from "../message/session";
-import { MessageType } from "../message/types";
+import { MessageParameterType, MessageType } from "../message/types";
+import { decodeVarint, encodeVarint } from "../varint";
+import type { TrackStatusResult } from "./publicTypes";
 import { MalformedTrackError } from "../error";
 import { bidiReadTrackStatusResponse } from "./bidi";
 import { FetcherImpl } from "../fetcher";
 import { fullTrackNameKey } from "../fullTrackName";
 import { createOkResponseReadTestContext } from "../testSupport/bidi";
+
+/**
+ * draft-ietf-moq-transport-23 §9.3 (REQUEST_OK) / §9.19.16 (EXPIRES Parameter):
+ * TRACK_STATUS_OK で EXPIRES と LARGEST_OBJECT が受理され、公開 API の
+ * TrackStatusResult.parameters にそのまま載ることを検証する。
+ * EXPIRES は同じ Track の SUBSCRIBE_OK に入る値であり、TRACK_STATUS 自体の
+ * 存続期限ではない。0 は期限無し / 期限不明、正値は advisory な終了時期である。
+ */
+test("bidiReadTrackStatusResponse: TRACK_STATUS_OK の EXPIRES と LARGEST_OBJECT を受理する", async () => {
+  for (const expires of [0n, 5000n]) {
+    const ctx = createOkResponseReadTestContext();
+    const resolved: TrackStatusResult[] = [];
+    let rejected: Error | undefined;
+    ctx.session.pendingTrackStatus.set(ctx.requestId, {
+      trackKey: fullTrackNameKey(["test"], "track"),
+      resolve: (result) => {
+        resolved.push(result);
+      },
+      reject: (error: Error) => {
+        rejected = error;
+      },
+    });
+
+    const readPromise = bidiReadTrackStatusResponse(
+      ctx.session,
+      ctx.requestId,
+      ctx.stream,
+      ctx.controlReader,
+    );
+    const okPayload = encodeRequestOkPayload({
+      type: MessageType.REQUEST_OK,
+      parameters: [
+        { type: MessageParameterType.EXPIRES, value: encodeVarint(expires) },
+        // LARGEST_OBJECT は Location (Group 0, Object 0)
+        { type: MessageParameterType.LARGEST_OBJECT, value: new Uint8Array([0x00, 0x00]) },
+      ],
+      trackProperties: [],
+    });
+    ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.REQUEST_OK, okPayload));
+    ctx.readableController.close();
+    await readPromise;
+
+    // スコープ違反で拒否されず、両パラメータが公開 API に載る
+    assert.isUndefined(rejected);
+    assert.isUndefined(ctx.getClosedWithError());
+    assert.equal(resolved.length, 1);
+    const parameters = resolved[0]?.parameters ?? [];
+    const expiresParam = parameters.find(
+      (parameter) => parameter.type === MessageParameterType.EXPIRES,
+    );
+    assert.isDefined(expiresParam);
+    assert.equal(decodeVarint(expiresParam!.value, 0)[0], expires);
+    assert.isDefined(
+      parameters.find((parameter) => parameter.type === MessageParameterType.LARGEST_OBJECT),
+    );
+    assert.isFalse(ctx.session.pendingTrackStatus.has(ctx.requestId));
+  }
+});
 
 // ============================================================================
 // bidiReadTrackStatusResponse の malformed 検出 (未知 Mandatory Track Property)

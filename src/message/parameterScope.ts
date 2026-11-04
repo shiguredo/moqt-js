@@ -57,22 +57,21 @@ export const PUBLISH_STATE_NOTIFY_ALLOWED_PARAMS = new Set<number>([
 /**
  * REQUEST_OK (TRACK_STATUS_OK) の許可パラメータ
  *
- * draft-ietf-moq-transport-22 §9.13 (TRACK_STATUS) は TRACK_STATUS への応答を
- * 「SUBSCRIBE_OK で設定したのと同じ parameters と Track Properties を返す」と定め、
- * §9.20.16 (EXPIRES Parameter) は EXPIRES が SUBSCRIBE_OK に出現できるとするため、
- * 字義通りに読むと EXPIRES を TRACK_STATUS_OK でも受理すべきに見える。
+ * draft-ietf-moq-transport-23 §9.3 (REQUEST_OK):
+ * "TRACK_STATUS_OK: EXPIRES, LARGEST_OBJECT"
+ * 成功応答に出現できるのはこの 2 つだけであり、それ以外は §9.19.1 の MUST により
+ * INVALID_PARAMETER でセッションを閉じる。
  *
- * 本実装は §9.20.16 の出現先一覧 (SUBSCRIBE_OK / PUBLISH / PUBLISH_OK /
- * SUBSCRIBE_NAMESPACE_OK / SUBSCRIBE_TRACKS_OK / PUBLISH_NAMESPACE_OK /
- * REQUEST_UPDATE_OK) に TRACK_STATUS_OK が無いことを根拠に、EXPIRES を
- * スコープ違反 (§9.19.1 の MUST により INVALID_PARAMETER) として扱う。
- * 一覧を優先するのは、パラメータごとの出現先を列挙している §9.20.16 の方が
- * 応答の内容を述べる §9.13 より具体的であり、また TRACK_STATUS は購読を
- * 確立しないため EXPIRES (購読の有効期限) の意味が定まらないためである。
- * 相互運用を優先して EXPIRES を許容する判断に変える場合は、本集合に
- * MessageParameterType.EXPIRES を追加する。
+ * draft-ietf-moq-transport-23 §9.19.16 (EXPIRES Parameter):
+ * "EXPIRES in TRACK_STATUS_OK indicates the value the sender would have
+ *  included in a SUBSCRIBE_OK for the same Track."
+ * EXPIRES は同じ Track の購読を確立した場合に送る値であり、TRACK_STATUS という
+ * 1 回限りの問い合わせ自体の存続期限ではない。値はミリ秒単位で、送信者が request
+ * を終了する時期の通知である。0 または省略は「期限無し / 期限不明」を表し、
+ * advisory な値であるため、受信側の自動取消しや自動再認証の必須機構として扱わない。
  */
 export const TRACK_STATUS_OK_ALLOWED_PARAMS = new Set<number>([
+  MessageParameterType.EXPIRES,
   MessageParameterType.LARGEST_OBJECT,
 ]);
 

@@ -403,7 +403,7 @@ test("bidiReadTrackStatusResponse: TRACK_STATUS_OK のスコープ違反で具�
     ctx.stream,
     ctx.controlReader,
   );
-  // PAUSED は TRACK_STATUS_OK (LARGEST_OBJECT のみ許可) のスコープ違反である
+  // PAUSED は TRACK_STATUS_OK (EXPIRES と LARGEST_OBJECT のみ許可) のスコープ違反である
   const okPayload = encodeRequestOkPayload({
     type: MessageType.REQUEST_OK,
     parameters: [{ type: MessageParameterType.PAUSED, value: new Uint8Array([1]) }],

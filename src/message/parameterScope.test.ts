@@ -311,23 +311,54 @@ test("INCLUDE_PROPERTIES の応答への混入は INVALID_PARAMETER のエラー
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.13 (TRACK_STATUS) / §9.20.16 (EXPIRES Parameter):
- * §9.13 は TRACK_STATUS_OK を「SUBSCRIBE_OK で設定したのと同じ parameters と
- * Track Properties を返す」と定め、§9.20.16 は EXPIRES を SUBSCRIBE_OK の
- * 出現先に挙げるため、字義通りなら EXPIRES を受理すべきに見える。本実装は
- * §9.20.16 の出現先一覧に TRACK_STATUS_OK が無いことを根拠に拒否する
- * (判断の詳細は parameterScope.ts の TRACK_STATUS_OK_ALLOWED_PARAMS の doc を参照)。
- * この解釈がコードに固定されていることを検証する。
+ * draft-ietf-moq-transport-23 §9.3 (REQUEST_OK) / §9.19.16:
+ * TRACK_STATUS_OK には EXPIRES と LARGEST_OBJECT が出現できる。TRACK_STATUS_OK の
+ * EXPIRES は同じ Track の SUBSCRIBE_OK に入れる値であり、TRACK_STATUS 自体の
+ * 存続期限ではない (期間の意味は TrackStatusResult の JSDoc を参照)。
  */
-test("TRACK_STATUS_OK の EXPIRES は INVALID_PARAMETER のエラーを返す", () => {
-  const error = validateParameterScope(
-    [{ type: MessageParameterType.EXPIRES }],
-    TRACK_STATUS_OK_ALLOWED_PARAMS,
-    "TRACK_STATUS_OK",
+test("TRACK_STATUS_OK の許可パラメータは EXPIRES と LARGEST_OBJECT のみ", () => {
+  assert.deepEqual(
+    [...TRACK_STATUS_OK_ALLOWED_PARAMS].sort((a, b) => a - b),
+    [MessageParameterType.EXPIRES, MessageParameterType.LARGEST_OBJECT].sort((a, b) => a - b),
   );
-  assertProtocolViolation(error);
-  // 相互運用を優先して許容する判断に変える場合は、この assert と doc を更新する
-  assert.isFalse(TRACK_STATUS_OK_ALLOWED_PARAMS.has(MessageParameterType.EXPIRES));
+  for (const type of [MessageParameterType.EXPIRES, MessageParameterType.LARGEST_OBJECT]) {
+    assert.isNull(
+      validateParameterScope([{ type }], TRACK_STATUS_OK_ALLOWED_PARAMS, "TRACK_STATUS_OK"),
+    );
+  }
+  // 購読専用のパラメータは TRACK_STATUS_OK でもスコープ違反
+  for (const type of [
+    MessageParameterType.PAUSED,
+    MessageParameterType.GROUP_ORDER,
+    MessageParameterType.SUBSCRIBER_PRIORITY,
+  ]) {
+    const error = validateParameterScope(
+      [{ type }],
+      TRACK_STATUS_OK_ALLOWED_PARAMS,
+      "TRACK_STATUS_OK",
+    );
+    assertProtocolViolation(error);
+  }
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.3 / §9.19.16:
+ * EXPIRES は任意の REQUEST_OK で受理される。OK の文脈ごとの許可集合が
+ * 一貫していることを固定する (PUBLISH_OK / FETCH_OK / REQUEST_UPDATE_OK /
+ * TRACK_STATUS_OK / SUBSCRIBE_NAMESPACE_OK)。
+ */
+test("EXPIRES はすべての OK 文脈で受理される", () => {
+  for (const [allowed, contextName] of [
+    [PUBLISH_OK_ALLOWED_PARAMS, "PUBLISH_OK"],
+    [FETCH_OK_ALLOWED_PARAMS, "FETCH_OK"],
+    [REQUEST_UPDATE_OK_ALLOWED_PARAMS, "REQUEST_UPDATE_OK"],
+    [TRACK_STATUS_OK_ALLOWED_PARAMS, "TRACK_STATUS_OK"],
+    [NAMESPACE_OK_ALLOWED_PARAMS, "SUBSCRIBE_NAMESPACE_OK"],
+  ] as const) {
+    assert.isNull(
+      validateParameterScope([{ type: MessageParameterType.EXPIRES }], allowed, contextName),
+    );
+  }
 });
 
 // ============================================================================

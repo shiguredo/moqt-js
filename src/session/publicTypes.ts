@@ -995,11 +995,18 @@ export interface TrackStatusOptions {
 
 /**
  * TRACK_STATUS の結果
- * draft-ietf-moq-transport-22 Section 9.13 (TRACK_STATUS)
+ * draft-ietf-moq-transport-23 §9.12 (TRACK_STATUS) / §9.3 (REQUEST_OK)
  */
 export interface TrackStatusResult {
   /**
-   * 応答パラメータ（SUBSCRIBE_OK と同様）
+   * 応答パラメータ (TRACK_STATUS_OK の許可一覧は EXPIRES と LARGEST_OBJECT のみ)
+   *
+   * draft-ietf-moq-transport-23 §9.19.16 (EXPIRES Parameter):
+   * EXPIRES は同じ Track の購読を確立した場合に送る値 (SUBSCRIBE_OK に入れる値)
+   * であり、TRACK_STATUS という 1 回限りの問い合わせ自体の存続期限ではない。
+   * ミリ秒単位で送信者が request を終了する時期を通知するが、値は advisory で
+   * あり、送信者は期限の前後で終了し得る。0 または省略は期限無し / 期限不明を
+   * 表す。受信側はこれを自動取消しや自動再認証の必須の契機にしない。
    */
   parameters: Parameter[];
 }
