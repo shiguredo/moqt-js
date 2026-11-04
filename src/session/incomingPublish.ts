@@ -1368,6 +1368,14 @@ export function incomingPublishCleanupIncomingPublish(
   } catch {
     /* ignore */
   }
+  // draft-ietf-moq-transport-23 §12.1:
+  // この Track の購読と FETCH が尽きたら Track 単位の追跡状態を解放する。
+  // 正常終了経路でも解放しないと、上限 1024 Track を圧迫して活動中 Track の
+  // 検出漏れを招く。
+  bidi.clearPriorGapTrackingIfUnused(
+    session as unknown as bidi.BidiSessionInternal,
+    impl.getFullTrackNameKey(),
+  );
   // draft-ietf-moq-transport-22 §6.6.1:
   // GOAWAY 受信後に受信 PUBLISH の購読が無くなった時点で NO_ERROR で閉じる。
   session.onRequestDrained();
