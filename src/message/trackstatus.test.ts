@@ -33,7 +33,7 @@ test("decodeTrackStatusPayload: 末尾に後続データがあると PROTOCOL_VI
 });
 
 /**
- * draft-ietf-moq-transport-23 §9.13:
+ * draft-ietf-moq-transport-23 §9.12:
  * TRACK_STATUS のメッセージ形式は SUBSCRIBE と同一である。Track Name の直後に
  * Parameters が続き、後続データは無い。
  */

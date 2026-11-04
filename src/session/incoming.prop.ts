@@ -2,8 +2,8 @@
  * session/incoming.ts の Property-Based Tests
  *
  * draft-ietf-moq-transport-23 §6.3 (Session initialization) / §6.4.2.1 (Request ID) /
- * §9.12 (FETCH_OK) / §10.8 (Prior Group ID Gap) / §10.9 (Prior Object ID Gap) /
- * §11.2.1 (Object Datagram) / §11.3 (Subgroup Streams) / §11.4.1 (Fetch Streams) /
+ * §9.3 (REQUEST_OK) / §10.8 (Prior Group ID Gap) / §10.9 (Prior Object ID Gap) /
+ * §11.2.1 (Object Datagram) / §11.3 (Subgroup Streams) / §11.4 (Fetch Streams) /
  * §11.5.2 (Padding Datagrams) / §12.1 (Malformed Track)
  *
  * 対象とする性質:
@@ -625,7 +625,7 @@ test("incomingProcessSubgroupObjects: 購読の比較キーで Track 単位の�
 
 // ============================================================================
 // Fetch オブジェクト処理の委譲
-// draft-ietf-moq-transport-23 §11.4.1 (Fetch Streams) / §10.8 / §10.9
+// draft-ietf-moq-transport-23 §11.4 (Fetch Streams) / §10.8 / §10.9
 // ============================================================================
 
 /** Fetch 経路で観測するセッション状態 */
@@ -1319,7 +1319,7 @@ test("incomingHandleDatagram: Padding datagram は配送も追跡更新もせず
 
 // ============================================================================
 // Fetcher 登録待ち
-// draft-ietf-moq-transport-23 §9.12 (FETCH_OK)
+// draft-ietf-moq-transport-23 §9.3 (REQUEST_OK)
 // ============================================================================
 
 /** fetcher 待機で観測するセッション状態 */

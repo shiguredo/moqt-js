@@ -275,6 +275,31 @@ test("ObjectDatagram: STATUS_OBJ タイプをデコード", () => {
 });
 
 /**
+ * draft-ietf-moq-transport-23 §11.2.1 (Object Datagram):
+ * "The *STATUS* bit (0x20) indicates whether the datagram contains an Object
+ *  Status or Object Payload.  When set to 1, the Object Status field is present
+ *  and there is no Object Payload."
+ * draft-ietf-moq-transport-23 §11.1.1 (Object Status):
+ * "An Object MUST have an empty payload unless its Object Status value is
+ *  registered as permitting a payload in the Object Status registry
+ *  (Section 16.9).  Of the values defined in this document, only Normal (0x0)
+ *  permits a payload."
+ * STATUS 付き datagram の Status の後ろに残るバイトは Object Payload であり、
+ * 存在してはならない。受信経路 (incomingHandleDatagram) は返る consumed を
+ * 無視して payload を空として配送するため、デコーダが拒否しないと余剰バイトが
+ * 黙って捨てられる。MALFORMED_OBJECT で拒否することを固定する。
+ */
+test("ObjectDatagram: STATUS 付き datagram の余剰バイトは MALFORMED_OBJECT になる", () => {
+  // Type 0x20 (STATUS_OBJ) / Track Alias 7 / Group ID 8 / Object ID 9 /
+  // Priority 50 / Status END_OF_TRACK の後ろに Object Payload 1 バイトを付ける
+  const wire = new Uint8Array([0x20, 0x07, 0x08, 0x09, 0x32, ObjectStatus.END_OF_TRACK, 0xaa]);
+  const thrown = captureThrownError(() => decodeObjectDatagram(wire));
+  assert.instanceOf(thrown, ProtocolViolationError);
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.MALFORMED_OBJECT);
+  assert.match((thrown as ProtocolViolationError).message, /status datagram has trailing bytes/);
+});
+
+/**
  * draft-ietf-moq-transport-23 §11.2.1:
  * Priority Present の型で Priority バイトがバッファの最後で切れている場合、
  * 範囲外アクセス (undefined 取得) による誤配信を避け、IncompleteDataError を

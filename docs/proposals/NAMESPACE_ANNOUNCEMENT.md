@@ -54,7 +54,7 @@ draft-ietf-moq-transport-23 §4 (Publisher and Namespace Discovery) より。
   上流 publisher の `PUBLISH_NAMESPACE` が discovery の登録条件になる
 - §4.2: 撤回した namespace は `NAMESPACE_DONE` として `SUBSCRIBE_NAMESPACE` の購読者へ伝わる。
   `PUBLISH` で確立した購読は `SUBSCRIBE_NAMESPACE` の stream の終了に影響されない
-- §9.14: `PUBLISH_NAMESPACE` に載せられるパラメータは `AUTHORIZATION_TOKEN` だけである
+- §9.13: `PUBLISH_NAMESPACE` に載せられるパラメータは `AUTHORIZATION_TOKEN` だけである
 - draft-ietf-moq-msf-01 §11.4.3: original publisher のトークンは `PUBLISH` と
   `PUBLISH_NAMESPACE` の両方へ MUST 付与する
 
@@ -271,8 +271,8 @@ peer 起点の request 受信の削除に伴い 2026-04-22 に削除された。
 ## 参照
 
 - draft-ietf-moq-transport-23 §4.1 (Publishing Namespaces) / §4.2 (Subscribing to Namespaces) /
-  §6.4.2.3 (Request Cancellation and Rejection) / §9.14 (PUBLISH_NAMESPACE) /
-  §9.15 (SUBSCRIBE_NAMESPACE) / §9.16 (NAMESPACE) / §9.17 (NAMESPACE_DONE)
+  §6.4.2.3 (Request Cancellation and Rejection) / §9.13 (PUBLISH_NAMESPACE) /
+  §9.14 (SUBSCRIBE_NAMESPACE) / §9.15 (NAMESPACE) / §9.16 (NAMESPACE_DONE)
 - draft-ietf-moq-msf-01 §11.4.3 (Presenting Authorization)
 - `src/createMediaPublisher.ts` の `MediaPublisherImpl.start` / `createPublishers` / `disposeAllResources`
 - `src/codec/types.ts` の `MediaPublisherOptions` / `MediaPublisher`

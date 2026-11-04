@@ -53,7 +53,7 @@ import { fullTrackNameKey } from "../fullTrackName";
 // ============================================================================
 
 test("bidiReadTrackStatusResponse: REQUEST_OK 受信後に自方向を FIN する", async () => {
-  // draft-ietf-moq-transport-23 §9.13 / §6.4.2.2:
+  // draft-ietf-moq-transport-23 §9.12 / §6.4.2.2:
   // TRACK_STATUS_OK / REQUEST_ERROR の送受信後に bidi ストリームは FIN で閉じる。
   const ctx = createOkResponseReadTestContext();
   let resolved = false;
@@ -91,7 +91,7 @@ test("bidiReadTrackStatusResponse: REQUEST_OK 受信後に自方向を FIN す�
 });
 
 test("bidiReadTrackStatusResponse: REQUEST_ERROR 受信後に自方向を FIN する", async () => {
-  // draft-ietf-moq-transport-23 §9.13 / §6.4.2.2: 失敗応答後も FIN で閉じる。
+  // draft-ietf-moq-transport-23 §9.12 / §6.4.2.2: 失敗応答後も FIN で閉じる。
   const ctx = createOkResponseReadTestContext();
   let rejected: Error | undefined;
   ctx.session.pendingTrackStatus.set(ctx.requestId, {

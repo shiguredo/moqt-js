@@ -13,7 +13,7 @@ export type VideoSourceType = "none" | "dummy" | "camera";
 export type AudioSourceType = "none" | "dummy" | "microphone";
 
 // 音声 Object の送り方。既定は datagram。subgroup はストリームで送る。
-// datagram は draft-ietf-moq-transport-22 §11.2 で、reliable-only (WT-H2) では使えない
+// datagram は draft-ietf-moq-transport-23 §11.2 で、reliable-only (WT-H2) では使えない
 export type AudioDelivery = "subgroup" | "datagram";
 
 // Stop Publish の止め方。publisher の止め方によって購読者に届く終了通知が変わるため、

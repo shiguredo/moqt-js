@@ -233,7 +233,7 @@ test("buildObjectSendPlan: デルタフレームは同じ Group の続きとし�
 });
 
 // キーフレームは即時配送を優先し、デルタフレームは既定優先度にする。
-// draft-ietf-moq-transport-22 §5.1.1: 数値が小さいほど高優先であるため、
+// draft-ietf-moq-transport-23 §5.1.1: 数値が小さいほど高優先であるため、
 // 優先度を入れ替えると滞留時にキーフレームが捨てられる。
 test("buildObjectSendPlan: キーフレームは優先度 0、デルタフレームは 128 にする", () => {
   const keyPlan = buildObjectSendPlan(
@@ -382,7 +382,7 @@ test("buildAudioSendCopyPlan: subgroup と datagram を運べない経路は 1 �
 // 間隔を無視して全フレームをキーフレームにすると帯域を浪費し、
 // 要求が一度も出ないと購読開始時に復号を始められない。
 // 間隔そのものの判定 (境界値と無効値) は utils/keyframeInterval.test.ts が固定する。
-// NEW_GROUP_REQUEST (draft-ietf-moq-transport-22 §9.20.19) を受けたら、次に符号化するフレームを
+// NEW_GROUP_REQUEST (draft-ietf-moq-transport-23 §9.19.19) を受けたら、次に符号化するフレームを
 // キーフレームにして新しい Group を始め、そこから keyframeInterval を数え直す。
 // 次のフレームまでに複数の要求が届いても、キーフレームは 1 枚にまとまる
 test("decideKeyFrame: 要求を受けると次のフレームをキーフレームにし、そこから間隔を数え直す", () => {
@@ -1495,7 +1495,7 @@ test("buildPublisherTrackDeclarations: 画面の設定と実際に取れた音�
 
 /**
  * 完了条件: 3 つの止め方で送るメッセージが変わる。
- * draft-ietf-moq-transport-22 §7.4 (A subscriber remains subscribed to a Track at a Relay until
+ * draft-ietf-moq-transport-23 §7.5 (A subscriber remains subscribed to a Track at a Relay until
  * it unsubscribes, the upstream publisher terminates the subscription, or the subscription
  * expires.): 止め方によって購読者に届く終了通知が変わるため、段取りをここで固定する。
  */
@@ -1672,7 +1672,7 @@ function createCloseRecordingPublisher(): { publisher: Publisher; closeCount: ()
 /**
  * 配信だけを止めるとき (stop-sending) は、セッションと PUBLISH を維持したまま各 track の
  * 開いている Subgroup を閉じる。閉じないと、次の Object を待つ購読側が
- * DATA_STREAM_TIMEOUT (0x12) でセッションを閉じうる (draft-ietf-moq-transport-22 §11.3.2)
+ * DATA_STREAM_TIMEOUT (0x12) でセッションを閉じうる (draft-ietf-moq-transport-23 §11.3.2)
  */
 test("stopPublishing: 配信だけを止めるときは各 Publisher の Subgroup を閉じる", async () => {
   resetPublisherSignals();

@@ -29,7 +29,7 @@ test("publisher が受けた新しい Group の要求の数を画面と window.m
 // 同じ項目の行に置く。主要な操作の行 (Start Subscribing / Stop) には置かない。同じ
 // NEW_GROUP_REQUEST がどのメッセージで届くのかを読み取れるよう、行の中の各項目は
 // メッセージ名の見出し (SUBSCRIBE / REQUEST_UPDATE) を出す。DYNAMIC_GROUPS=1 を
-// 広告しない Track では要求できないため (§9.20.19 の MUST NOT)、購読していない間は
+// 広告しない Track では要求できないため (§9.19.19 の MUST NOT)、購読していない間は
 // 押せない
 test("NEW_GROUP_REQUEST は SUBSCRIBE と同じ行に置き、購読していない間は押せない", async ({
   page,

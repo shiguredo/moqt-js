@@ -24,14 +24,14 @@ function matchesNamespace(candidate: string[], expected: string[]): boolean {
  * 実リレーで、告知された namespace を発見し、その namespace の track を購読して
  * 映像が届くまでの通しを検証する
  *
- * draft-ietf-moq-transport-22 §4.1 (Publishing Namespaces):
+ * draft-ietf-moq-transport-23 §4.1 (Publishing Namespaces):
  * publisher は PUBLISH_NAMESPACE で namespace を告知する。
  *
- * draft-ietf-moq-transport-22 §4.2 (Subscribing to Namespaces):
+ * draft-ietf-moq-transport-23 §4.2 (Subscribing to Namespaces):
  * relay は告知された namespace を SUBSCRIBE_NAMESPACE の購読者へ NAMESPACE として列挙し、
  * 告知が撤回されると NAMESPACE_DONE を送る。
  *
- * draft-ietf-moq-transport-22 §9.6 (SUBSCRIBE) — §9.7 (SUBSCRIBE_OK)
+ * draft-ietf-moq-transport-23 §9.6 (SUBSCRIBE) — §9.7 (SUBSCRIBE_OK)
  * draft-ietf-moq-msf-01 Section 5 (Catalog)
  *
  * 告知と発見の往復 (namespace-announcement.spec.ts) と、既知の namespace の購読

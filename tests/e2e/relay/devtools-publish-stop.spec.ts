@@ -3,7 +3,7 @@
  *
  * moqt-devtools の Stop Publish は 3 通りの止め方を持つ (URL クエリ `publishStop`)。
  * publisher の止め方によって購読者に届く終了通知は変わり、どちらになるかは止め方と relay の
- * 実装で決まる (draft-ietf-moq-transport-22 §7.4: 購読は unsubscribe するか、上流の publisher
+ * 実装で決まる (draft-ietf-moq-transport-23 §7.5: 購読は unsubscribe するか、上流の publisher
  * が購読を終えるか、購読の期限が切れるまで残る)。ここでは実リレーに対して次の 2 つを観測し、
  * 結果をログに残す。差が出なかった場合はその事実を issue に記録する。
  *

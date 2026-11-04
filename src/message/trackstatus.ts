@@ -1,11 +1,11 @@
 /**
  * MOQT Track Status Message
- * draft-ietf-moq-transport-23 §9.13 (TRACK_STATUS)
+ * draft-ietf-moq-transport-23 §9.12 (TRACK_STATUS)
  *
  * TRACK_STATUS のメッセージフォーマットは SUBSCRIBE と同一。
  * トラックの状態を問い合わせるために使用し、実際にサブスクライブはしない。
  *
- * draft-ietf-moq-transport-23 §9.13 (TRACK_STATUS):
+ * draft-ietf-moq-transport-23 §9.12 (TRACK_STATUS):
  * "The TRACK_STATUS message format is identical to the SUBSCRIBE message
  *  (Section 9.6), but subscriber parameters related to Track delivery
  *  (e.g. SUBSCRIBER_PRIORITY) are not included."
@@ -16,7 +16,7 @@
  *  SUBSCRIBE_NAMESPACE_OK, SUBSCRIBE_TRACKS_OK and PUBLISH_NAMESPACE_OK to refer to a
  *  REQUEST_OK sent in response to the corresponding request type."
  *
- * draft-ietf-moq-transport-23 §9.13 (TRACK_STATUS):
+ * draft-ietf-moq-transport-23 §9.12 (TRACK_STATUS):
  * "If successful, the publisher responds with a TRACK_STATUS_OK with the same
  *  parameters and Track Properties it would have set in a SUBSCRIBE_OK."
  * 応答に載りうる LARGEST_OBJECT は §9.19.17 (LARGEST OBJECT Parameter) が
@@ -40,12 +40,12 @@ import {
 import { MessageType } from "./types";
 
 /**
- * TRACK_STATUS メッセージ (Section 9.13 TRACK_STATUS)
+ * TRACK_STATUS メッセージ (Section 9.12 TRACK_STATUS)
  *
  * SUBSCRIBE と同じフォーマットだが、トラックの状態照会用。
  * サブスクリプション状態を作成せず、オブジェクトも送信しない。
  *
- * draft-ietf-moq-transport-23 §9.13 (TRACK_STATUS):
+ * draft-ietf-moq-transport-23 §9.12 (TRACK_STATUS):
  * "The TRACK_STATUS message format is identical to the SUBSCRIBE message
  *  (Section 9.6), but subscriber parameters related to Track delivery
  *  (e.g. SUBSCRIBER_PRIORITY) are not included."
@@ -63,7 +63,7 @@ export interface TrackStatus {
 /**
  * TrackStatus のペイロードをエンコード
  *
- * draft-ietf-moq-transport-23 Section 9.13 (TRACK_STATUS):
+ * draft-ietf-moq-transport-23 Section 9.12 (TRACK_STATUS):
  * TRACK_STATUS message format is identical to the SUBSCRIBE message.
  */
 export function encodeTrackStatusPayload(msg: TrackStatus): Uint8Array {

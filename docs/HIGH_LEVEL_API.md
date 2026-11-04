@@ -307,7 +307,7 @@ state だけでは重なりを判定できない)。
 新しい Group の先頭 Object として送り直す (draft-ietf-moq-msf-01 §5)。
 
 - `FORWARD` が 0 から 1 になった時点。Relay は購読者が居ない間、upstream の購読を paused
-  にしてよい (draft-ietf-moq-transport-23 §7.6 の MAY)。paused にするかは Relay の裁量で
+  にしてよい (draft-ietf-moq-transport-23 §7.7 の MAY)。paused にするかは Relay の裁量で
   ある (§7.2)。paused の間は Publisher が Object を送らないため (§3.1.1)、配信の開始時に
   送った catalog は後から購読を始めた相手へ届かない
 - catalog を送るたびに予約する 30 秒後の送り直し。値は `MAX_CACHE_DURATION` (この実装では
@@ -796,7 +796,7 @@ session も閉じる。`start()` が失敗した場合は確保済みを解放�
 #### relay の REQUEST_ERROR (RequestError)
 
 `instanceof RequestError` で判定できる。`code` (`RequestErrorCode`) と `retryInterval` を
-読める。`retryInterval` は draft-ietf-moq-transport-23 §9.4.2 の Retry Interval の生値
+読める。`retryInterval` は draft-ietf-moq-transport-23 §9.4.1 の Retry Interval の生値
 (「ミリ秒 + 1」) であり、0 は「そのままでは再試行しない」を意味する (REDIRECT の追従は
 §12.3 により妨げられない)。
 

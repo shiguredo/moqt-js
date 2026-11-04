@@ -10,12 +10,12 @@ import {
 /**
  * 実リレーで namespace の告知と発見の往復を検証する
  *
- * draft-ietf-moq-transport-22 §4.1 (Publishing Namespaces):
+ * draft-ietf-moq-transport-23 §4.1 (Publishing Namespaces):
  * publisher は PUBLISH_NAMESPACE で namespace を告知する。高レベル API は
  * `announceNamespace: true` のとき、PUBLISH の後に PUBLISH_NAMESPACE を送って
  * REQUEST_OK を待つ。
  *
- * draft-ietf-moq-transport-22 §4.2 (Subscribing to Namespaces):
+ * draft-ietf-moq-transport-23 §4.2 (Subscribing to Namespaces):
  * relay は告知された namespace を SUBSCRIBE_NAMESPACE の購読者へ NAMESPACE として列挙し、
  * 告知が撤回されると NAMESPACE_DONE を送る。
  *

@@ -1014,7 +1014,7 @@ export interface TrackStatusResult {
 /**
  * Namespace サブスクリプションのコールバック
  *
- * draft-ietf-moq-transport-23 §9.15 (SUBSCRIBE_NAMESPACE):
+ * draft-ietf-moq-transport-23 §9.14 (SUBSCRIBE_NAMESPACE):
  * SUBSCRIBE_NAMESPACE への応答として、NAMESPACE / NAMESPACE_DONE が送信される。
  * draft-18 で旧 SUBSCRIBE_NAMESPACE (0x11) が SUBSCRIBE_NAMESPACE (0x50) と
  * SUBSCRIBE_TRACKS (0x51) に分割され、PUBLISH_SKIPPED は SUBSCRIBE_TRACKS 応答に移動した。
@@ -1050,7 +1050,7 @@ export interface NamespaceSubscriptionCallbacks {
   onNamespace?: (namespaceSuffix: string[], parameters: Parameter[]) => void;
   /**
    * NAMESPACE_DONE を受信したときに呼ばれる
-   * draft-ietf-moq-transport-23 §9.17 (NAMESPACE_DONE)
+   * draft-ietf-moq-transport-23 §9.16 (NAMESPACE_DONE)
    *
    * NAMESPACE_DONE を受信していない active namespace は、応答ストリームの
    * FIN / RESET 検出時に補完して 1 回だけ呼ばれる
@@ -1164,7 +1164,7 @@ export interface NamespaceSubscription {
 export interface TracksSubscriptionCallbacks {
   /**
    * サーバーから PUBLISH メッセージを受信したときに呼ばれる
-   * draft-ietf-moq-transport-23 §3.6 / §9.18 / §9.8
+   * draft-ietf-moq-transport-23 §3.6 / §9.17 / §9.8
    *
    * @param namespaceSuffix - Track Namespace Prefix を除いた Suffix
    * @param trackName - PUBLISH に含まれる Track Name
@@ -1176,7 +1176,7 @@ export interface TracksSubscriptionCallbacks {
   ) => SubscribeCallbacks | Promise<SubscribeCallbacks>;
   /**
    * PUBLISH_SKIPPED を受信したときに呼ばれる
-   * draft-ietf-moq-transport-23 §9.19 (PUBLISH_SKIPPED) / §3.6.3 (Skipped Tracks):
+   * draft-ietf-moq-transport-23 §9.18 (PUBLISH_SKIPPED) / §3.6.3 (Skipped Tracks):
    *
    * > The publisher sends the PUBLISH_SKIPPED control message to indicate
    * > it will not send a PUBLISH message to initiate a new Subscription for a
@@ -1208,7 +1208,7 @@ export interface TracksSubscriptionCallbacks {
 /**
  * Tracks サブスクリプション
  *
- * draft-ietf-moq-transport-23 §3.6 / §9.18 (SUBSCRIBE_TRACKS)
+ * draft-ietf-moq-transport-23 §3.6 / §9.17 (SUBSCRIBE_TRACKS)
  */
 export interface TracksSubscription {
   readonly state: "active" | "closed";
@@ -1249,7 +1249,7 @@ export interface TracksSubscription {
 
 /**
  * Namespace 公開のコールバック
- * draft-ietf-moq-transport-23 Section 9.14 (PUBLISH_NAMESPACE)
+ * draft-ietf-moq-transport-23 Section 9.13 (PUBLISH_NAMESPACE)
  */
 export interface NamespacePublicationCallbacks {
   /**
@@ -1290,7 +1290,7 @@ export interface NamespacePublicationCallbacks {
 
 /**
  * Namespace 公開のオプション
- * draft-ietf-moq-transport-23 Section 9.14 (PUBLISH_NAMESPACE)
+ * draft-ietf-moq-transport-23 Section 9.13 (PUBLISH_NAMESPACE)
  */
 export interface PublishNamespaceOptions {
   /**
@@ -1306,7 +1306,7 @@ export interface PublishNamespaceOptions {
 
 /**
  * Namespace 公開
- * draft-ietf-moq-transport-23 Section 9.14 (PUBLISH_NAMESPACE)
+ * draft-ietf-moq-transport-23 Section 9.13 (PUBLISH_NAMESPACE)
  */
 export interface NamespacePublication {
   readonly state: "active" | "closed";

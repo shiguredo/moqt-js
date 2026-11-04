@@ -370,7 +370,7 @@ const fetchOptionsArb: fc.Arbitrary<FetchOptions> = fc.record({
 
 /** SUBSCRIBE_TRACKS の任意構築（0x29 を含む Range Filter を許す） */
 const subscribeTracksOptionsArb: fc.Arbitrary<SubscribeTracksOptions> = fc.record({
-  // §9.18 の一覧に対応する (filter / subscriberPriority / fill は送らない)
+  // §9.17 の一覧に対応する (filter / subscriberPriority / fill は送らない)
   groupOrder: optionalArbitrary(groupOrderArb),
   paused: optionalArbitrary(fc.boolean()),
   rangeFilters: optionalArbitrary(uniqueRangeFilterParamsArb),
@@ -774,7 +774,7 @@ test("buildSubscribeTracksParameters: 全フィールドの指定が round-trip 
     fc.property(subscribeTracksOptionsArb, (options) => {
       const decoded = assertParameterRoundTrip(buildSubscribeTracksParameters(options));
       const types = parameterTypesOf(decoded);
-      // §9.18 の一覧に無い LOCATION_FILTER / SUBSCRIBER_PRIORITY / FILL_PARAMETERS は
+      // §9.17 の一覧に無い LOCATION_FILTER / SUBSCRIBER_PRIORITY / FILL_PARAMETERS は
       // 指定できず、常に現れない (§3.6.2 の記述との矛盾は SubscribeTracksOptions の
       // JSDoc を参照)
       assert.isFalse(types.has(MessageParameterType.LOCATION_FILTER));
@@ -843,7 +843,7 @@ test("buildFetchParameters: 全フィールドの指定が round-trip し、未�
 test("buildSubscribeNamespaceParameters: authorizationToken の有無だけを反映する", () => {
   fc.assert(
     fc.property(optionalArbitrary(authorizationTokenArb), (authorizationToken) => {
-      // SUBSCRIBE_NAMESPACE は AUTHORIZATION_TOKEN のみを載せる (§9.15)
+      // SUBSCRIBE_NAMESPACE は AUTHORIZATION_TOKEN のみを載せる (§9.14)
       const parameters = buildSubscribeNamespaceParameters({ authorizationToken });
       assertParameterRoundTrip(parameters);
       assert.equal(parameters.length, authorizationToken === undefined ? 0 : 1);

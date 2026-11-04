@@ -465,7 +465,7 @@ test("REQUEST_ERROR の Reason Phrase 長が上限超過だと ProtocolViolation
 });
 
 /**
- * draft-ietf-moq-transport-23 Section 9.4.1 (Redirect Structure):
+ * draft-ietf-moq-transport-23 Section 9.4.2.1 (REDIRECT):
  * Connect URI に最大長の規定はない (8,192 バイト上限は GOAWAY の New Session URI
  * §9.2 にのみ存在する)。8,192 バイトを超える Connect URI を含む Redirect が
  * デコードできることを固定バイト列で検証する。
@@ -512,7 +512,7 @@ test("REQUEST_ERROR (REDIRECT) の Full Track Name 4,096 バイト超過で Prot
 });
 
 /**
- * draft-ietf-moq-transport-23 Section 9.4.1 (Redirect Structure):
+ * draft-ietf-moq-transport-23 Section 9.4.2.1 (REDIRECT):
  * 8,192 バイトを超える Connect URI を含む REQUEST_ERROR (REDIRECT) が
  * デコード経路 (encodeRequestErrorPayload → decodeRequestErrorPayload) で
  * ラウンドトリップし、trailing 検査と干渉しないことを検証する。

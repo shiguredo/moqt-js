@@ -1007,7 +1007,7 @@ test("resetSubscriberState: 音声 object の処理チェーンを巻き戻す",
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-22 §9.9 (PUBLISH_DONE) / §12.4 (Publish Done Codes):
+ * draft-ietf-moq-transport-23 §9.9 (PUBLISH_DONE) / §12.4 (Publish Done Codes):
  * 終了の記録はエラー status かどうかでレベルを分ける。判定は表示
  * (applySubscribedStatus) と同じ resolveTrackEndState を使い、判定源を増やさない。
  */
@@ -1039,7 +1039,7 @@ test("logPublishDoneEnd: 正常な終わりは info、エラー status は error
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-22 §9.9 (PUBLISH_DONE) / §12.4 (Publish Done Codes):
+ * draft-ietf-moq-transport-23 §9.9 (PUBLISH_DONE) / §12.4 (Publish Done Codes):
  * 終了の理由 (Status Code と Reason Phrase) をトラックごとの状態にする。
  */
 test("resolveTrackEndState: Status Code と Reason Phrase を終了状態にする", () => {
@@ -1055,7 +1055,7 @@ test("resolveTrackEndState: Status Code と Reason Phrase を終了状態にす�
 
 /**
  * 完了条件: トラック 1 本の終了で、他のトラックの状態は変わらない。
- * draft-ietf-moq-transport-22 §3.1 / §9.9: PUBLISH_DONE はトラック単位の購読の終了であり、
+ * draft-ietf-moq-transport-23 §3.1 / §9.9: PUBLISH_DONE はトラック単位の購読の終了であり、
  * 他のトラックの購読とセッションは維持する。
  */
 test("applyTrackEnd: 終わったトラックだけを終了にし、他のトラックの状態は変えない", () => {
@@ -1207,7 +1207,7 @@ test("subscribedStatusMessage: 終了したトラックがあれば理由も足�
 /**
  * 完了条件: 購読中のトラックが PUBLISH_DONE で正常に終わっても、他のトラックの購読と subscriber
  * のセッションが維持される。
- * draft-ietf-moq-transport-22 §9.9 (PUBLISH_DONE) の終了はトラック単位であり、セッションは
+ * draft-ietf-moq-transport-23 §9.9 (PUBLISH_DONE) の終了はトラック単位であり、セッションは
  * 明示的に閉じるまで維持する (§6.6 Termination)。後始末をすると、無関係な購読とセッションまで
  * 道連れになり、relay の切り分けで誤った結論を導く。
  */

@@ -26,7 +26,7 @@ export const SUBSCRIBE_OK_ALLOWED_PARAMS = new Set<number>([
 /**
  * REQUEST_OK (PUBLISH_OK) の許可パラメータ
  *
- * draft-ietf-moq-transport-23 §9.3 (PUBLISH_OK) / §9.19.16 (EXPIRES Parameter):
+ * draft-ietf-moq-transport-23 §9.3 (REQUEST_OK) / §9.19.16 (EXPIRES Parameter):
  * EXPIRES のみが PUBLISH_OK に出現できる。Subscription Parameters
  * (LOCATION_FILTER / PAUSED / timeouts / SUBSCRIBER_PRIORITY /
  * NEW_GROUP_REQUEST / Range Filters 等) は REQUEST_UPDATE 側で扱い、
@@ -79,8 +79,7 @@ export const TRACK_STATUS_OK_ALLOWED_PARAMS = new Set<number>([
  * REQUEST_OK (SUBSCRIBE_NAMESPACE_OK / SUBSCRIBE_TRACKS_OK / PUBLISH_NAMESPACE_OK) の許可パラメータ
  *
  * draft-ietf-moq-transport-23 §9.19.16 (EXPIRES Parameter):
- * "It MAY appear in SUBSCRIBE_OK, PUBLISH, PUBLISH_OK, SUBSCRIBE_NAMESPACE_OK,
- *  SUBSCRIBE_TRACKS_OK, PUBLISH_NAMESPACE_OK, or REQUEST_UPDATE_OK."
+ * "It MAY appear in PUBLISH, SUBSCRIBE_OK, FETCH_OK, or any REQUEST_OK."
  */
 export const NAMESPACE_OK_ALLOWED_PARAMS = new Set<number>([MessageParameterType.EXPIRES]);
 

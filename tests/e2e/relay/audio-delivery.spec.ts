@@ -13,7 +13,7 @@ import {
  * 実リレー経由で音声を Subgroup (Data Stream) / Datagram / delivery 省略時の既定で往復し、
  * 「途切れの少なさ」を数値で読めることを確かめる。
  *
- * draft-ietf-moq-transport-22 §11 (Data Streams and Datagrams) / §11.2 (Datagrams)
+ * draft-ietf-moq-transport-23 §11 (Data Streams and Datagrams) / §11.2 (Datagrams)
  *
  * 音声 Object の配送経路は Subgroup と Datagram の 2 つがあり、再送の有無が途切れに
  * 与える影響が異なる。同じ spec の中で両方の往復を行い、経路別の受信数・欠落率・補間率・

@@ -540,7 +540,7 @@ function displayMatch(token: MatchToken): string {
 /**
  * アクションの表示名
  *
- * draft-ietf-moq-transport-22 のメッセージ名で出し、SETUP は 2 つの claim をまとめる。
+ * draft-ietf-moq-transport-23 のメッセージ名で出し、SETUP は 2 つの claim をまとめる。
  * 表に無い番号は数値の文字列になる。
  */
 function displayAction(token: ActionToken): string {

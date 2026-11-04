@@ -958,7 +958,7 @@ test("namespace の初期値は moqt-devtools- + ランダム 16 文字", () => 
   assert.match(INITIAL_NAMESPACE, /^moqt-devtools-[a-zA-Z0-9]{16}$/);
 });
 
-// --- Namespace の欄の表記 (draft-ietf-moq-transport-22 §8.8) ---
+// --- Namespace の欄の表記 (draft-ietf-moq-transport-23 §8.8) ---
 
 // 欄は namespace-name 文字列であり、Track Namespace のフィールドは "-" で並ぶ
 test("namespaceArray: Namespace の欄を - 区切りで分解する", () => {

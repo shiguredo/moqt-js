@@ -214,7 +214,7 @@ export interface SubscriberAudioStats {
   /**
    * 受信した音声 Object のうち datagram で届いた数
    *
-   * draft-ietf-moq-transport-22 §2.1 は同じ Track での Subgroup と Datagram の併用を許す。
+   * draft-ietf-moq-transport-23 §2.1 は同じ Track での Subgroup と Datagram の併用を許す。
    * objectsReceived との差が Subgroup (stream) で届いた数になり、publisher が datagram を
    * 選べたかどうかを確かめられる
    */
@@ -249,7 +249,7 @@ export interface SubscriberAudioStats {
    * 受信した音声 Object の Location が、同じ購読で受信済みの最大 Location より
    * 小さかった数
    *
-   * Group が異なる Object の順序は保証されない (draft-ietf-moq-transport-22 §2.3.1)。
+   * Group が異なる Object の順序は保証されない (draft-ietf-moq-transport-23 §2.3.1)。
    * 音声は 1 Object = 1 Group なので、datagram でも subgroup でも順序逆転が起き得る。
    * 実際に起きているかを直接測る。relay の cache から replay された Object
    * (SUBSCRIBE_OK の LARGEST_OBJECT 以下) は順序逆転ではないため数えない。同じ Object の

@@ -10,8 +10,8 @@
  * (startNamespaceStreamLoop / startTracksStreamLoop /
  * startNamespacePublicationStreamLoop) を free function として抽出する。
  *
- * draft-ietf-moq-transport-23 §9.15 (SUBSCRIBE_NAMESPACE) /
- * §9.18 (SUBSCRIBE_TRACKS) / §9.14 (PUBLISH_NAMESPACE) は、いずれも専用の
+ * draft-ietf-moq-transport-23 §9.14 (SUBSCRIBE_NAMESPACE) /
+ * §9.17 (SUBSCRIBE_TRACKS) / §9.13 (PUBLISH_NAMESPACE) は、いずれも専用の
  * 双方向ストリームを開く namespace 系の要求である。ストリーム上のメッセージ処理は
  * namespaceLoops.ts が担当する。
  */

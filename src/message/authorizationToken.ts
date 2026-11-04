@@ -1,7 +1,7 @@
 /**
  * MOQT Authorization Token
  * draft-ietf-moq-transport-23 Section 9.19.2 (AUTHORIZATION TOKEN Parameter)
- * https://datatracker.ietf.org/doc/html/draft-ietf-moq-transport-23#section-9.20.2
+ * https://datatracker.ietf.org/doc/html/draft-ietf-moq-transport-23#section-9.19.2
  *
  * Token {
  *   Alias Type (vi64),

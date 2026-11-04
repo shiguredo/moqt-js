@@ -1196,7 +1196,7 @@ function readFetchObjectPublisherPriority(data: Uint8Array, priorityOffset: numb
  * 0x10 未設定は「直近の実オブジェクト (Datagram を含む) の Priority を
  * 継承する」ことを意味する。
  *
- * draft-ietf-moq-transport-23 §11.4.2.2 (End of Range):
+ * draft-ietf-moq-transport-23 §11.4.2.2 (Prior Object Fields):
  * "Prior Priority: The Priority from the last actual Object before the End of
  *  Range indicator. If there was no prior Object, an endpoint that receives a
  *  flag referencing the prior Priority MUST close the session with

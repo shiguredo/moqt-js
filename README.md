@@ -147,7 +147,7 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
 - SUBSCRIBE_NAMESPACE (Namespace 発見)
 - SUBSCRIBE_TRACKS (Track 購読)
 - TRACK_STATUS
-- Parameter Scope 検証 (draft-ietf-moq-transport-23 §9.19.1 の許可パラメータ集合に無い Message Parameter を PROTOCOL_VIOLATION で拒否する)
+- Parameter Scope 検証 (draft-ietf-moq-transport-23 §9.19.1 の許可パラメータ集合に無い Message Parameter を INVALID_PARAMETER で拒否する)
 
 #### データストリーム
 

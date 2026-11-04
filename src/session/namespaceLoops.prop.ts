@@ -13,7 +13,7 @@
  *   他の Request ID の保留中更新は pending のまま残る (連鎖不変条件)
  * - NAMESPACE / NAMESPACE_DONE の追跡と FIN 時の NAMESPACE_DONE 補完が
  *   active namespace 集合のモデルと一致する (対応する NAMESPACE の無い
- *   NAMESPACE_DONE は PROTOCOL_VIOLATION)
+ *   NAMESPACE_DONE は UNEXPECTED_MESSAGE)
  * - 同一メッセージ列はチャンク分割を変えても同じ結果になる
  * - 任意のメッセージ列でループが終了し、対象 Map のエントリと保留中の更新が
  *   残らない (リーク検査)
@@ -39,9 +39,9 @@
  *
  * draft-ietf-moq-transport-23 §6.4.2.2 (Graceful Request Stream Closure) /
  * §9.2 (GOAWAY) / §9.3 (REQUEST_OK) / §9.5.1 (応答前にストリームが閉じた場合) /
- * §9.5.2 (Updating Namespace Subscriptions) / §9.14 (PUBLISH_NAMESPACE) /
- * §9.15 (SUBSCRIBE_NAMESPACE) / §9.16 (NAMESPACE) / §9.17 (NAMESPACE_DONE) /
- * §9.18 (SUBSCRIBE_TRACKS) / §9.19 (PUBLISH_SKIPPED)
+ * §9.5.2 (Updating Namespace Subscriptions) / §9.13 (PUBLISH_NAMESPACE) /
+ * §9.14 (SUBSCRIBE_NAMESPACE) / §9.15 (NAMESPACE) / §9.16 (NAMESPACE_DONE) /
+ * §9.17 (SUBSCRIBE_TRACKS) / §9.18 (PUBLISH_SKIPPED)
  *
  * 前方一致 (matchNamespacePrefix) は本モジュールの namespace 追跡でも使うが、
  * SUBSCRIBE_TRACKS の PUBLISH マッチングは bidi 側の責務であり、性質の検証は
@@ -675,7 +675,7 @@ function namespaceEventFrames(
  * ループ種別ごとの正常なメッセージ列
  *
  * 先頭は確立応答の REQUEST_OK、以降はそのループが確立後に受理する通知メッセージ。
- * PUBLISH_NAMESPACE は REQUEST_OK 以外の応答メッセージを持たない (§9.14)。
+ * PUBLISH_NAMESPACE は REQUEST_OK 以外の応答メッセージを持たない (§9.13)。
  */
 function validSequenceArb(kind: LoopKind): fc.Arbitrary<ControlMessageSpec[]> {
   if (kind === "tracks") {
@@ -815,7 +815,7 @@ test("namespaceStartNamespaceStreamLoop: NAMESPACE / NAMESPACE_DONE の追跡と
           const suffix = suffixAt(pool, event.suffixIndex);
           const key = JSON.stringify(suffix);
           if (!event.done) {
-            // §9.16: NAMESPACE は active へ追加し、アプリへ通知する
+            // §9.15: NAMESPACE は active へ追加し、アプリへ通知する
             seenKeys.add(key);
             if (!activeEntries.some((entry) => entry.key === key)) {
               activeEntries.push({ key, suffix });
@@ -823,7 +823,7 @@ test("namespaceStartNamespaceStreamLoop: NAMESPACE / NAMESPACE_DONE の追跡と
             expectedNamespaceSuffixes.push(suffix);
             continue;
           }
-          // §9.17: 対応する NAMESPACE の無い NAMESPACE_DONE は PROTOCOL_VIOLATION
+          // §9.16: 対応する NAMESPACE の無い NAMESPACE_DONE は UNEXPECTED_MESSAGE
           // であり、その時点でループが終了する (以降のメッセージは処理されない)
           if (!seenKeys.has(key)) {
             violationSuffix = suffix;
@@ -931,7 +931,7 @@ LOOP_KINDS.forEach((kind) => {
         // 確立前に保留中更新を持つ状態は update() の契約上あり得ないため、
         // 保留中更新は「先頭が REQUEST_OK」のときだけ登録する。
         const establishesFirst = messages[0]?.type === MessageType.REQUEST_OK;
-        // publication は REQUEST_UPDATE を扱わない (§9.14)
+        // publication は REQUEST_UPDATE を扱わない (§9.13)
         const registersPendingUpdate = establishesFirst && kind !== "publication";
 
         const outcome = await runNamespaceLoop(kind, framesOf(messages), {

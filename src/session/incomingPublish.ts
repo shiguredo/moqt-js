@@ -592,31 +592,6 @@ async function incomingPublishCancelRequestStream(
 }
 
 /**
- * 受信 PUBLISH のペイロードをデコードし、失敗時の拒否・取消しまで行う
- *
- * draft-ietf-moq-transport-23 §3.7 / §9.4.2.2:
- * 未知の Mandatory Track Property を含む PUBLISH には
- * REQUEST_ERROR(UNSUPPORTED_EXTENSION) を返し、理解できなかった各 Type を
- * UNSUPPORTED_PROPERTY Error Detail に載せる (SHOULD)。Type 一覧は
- * MalformedTrackError の構造情報から取り出し、理由文字列は解析しない。
- *
- * 未知 Mandatory Track Property 以外の理由で malformed になった PUBLISH は、
- * UNSUPPORTED_PROPERTY を載せられず、PUBLISH への応答に使えるエラーコードも無い。
- * 既知 KVP の不整合を UNSUPPORTED_EXTENSION に置き換えず、要求の取消しとして
- * 送受信の方向を abruptly 終了する (§6.4.2.3 / §12.1)。
- *
- * @returns デコードに成功した PUBLISH。拒否・取消しを行った場合は null
- */
-/**
- * 受信 PUBLISH のペイロードをデコードし、拒否・取消しの後始末まで行う
- *
- * デコードに失敗した場合は §12.2 の分類に従ってセッションを閉じるか要求を
- * 取り消し、初期 fill の待機者を解放する。malformed track の場合は同じ
- * Full Track Name の既存購読 / FETCH も cancel する (§12.1)。
- *
- * @returns デコードに成功した PUBLISH。拒否・取消しを行った場合は null
- */
-/**
  * PUBLISH ペイロードの Parameters までを読み出す
  *
  * draft-ietf-moq-transport-23 §9.8: PUBLISH は Request ID / Track Namespace /
@@ -687,6 +662,26 @@ function incomingPublishPeekRequestId(payload: Uint8Array): bigint | undefined {
   }
 }
 
+/**
+ * 受信 PUBLISH のペイロードをデコードし、失敗時の拒否・取消しまで行う
+ *
+ * draft-ietf-moq-transport-23 §3.7 / §9.4.2.2:
+ * 未知の Mandatory Track Property を含む PUBLISH には
+ * REQUEST_ERROR(UNSUPPORTED_EXTENSION) を返し、理解できなかった各 Type を
+ * UNSUPPORTED_PROPERTY Error Detail に載せる (SHOULD)。Type 一覧は
+ * MalformedTrackError の構造情報から取り出し、理由文字列は解析しない。
+ *
+ * 未知 Mandatory Track Property 以外の理由で malformed になった PUBLISH は、
+ * UNSUPPORTED_PROPERTY を載せられず、PUBLISH への応答に使えるエラーコードも無い。
+ * 既知 KVP の不整合を UNSUPPORTED_EXTENSION に置き換えず、要求の取消しとして
+ * 送受信の方向を abruptly 終了する (§6.4.2.3 / §12.1)。
+ *
+ * デコードに失敗した場合は §12.2 の分類に従ってセッションを閉じるか要求を
+ * 取り消し、初期 fill の待機者を解放する。malformed track の場合は同じ
+ * Full Track Name の既存購読 / FETCH も cancel する (§12.1)。
+ *
+ * @returns デコードに成功した PUBLISH。拒否・取消しを行った場合は null
+ */
 async function incomingPublishDecodeOrReject(
   session: IncomingPublishSessionInternal,
   stream: WebTransportBidirectionalStream,

@@ -22,6 +22,8 @@ import {
   createTrackNamespace,
   encodeParameters,
   encodeTrackNamespace,
+  MAX_TRACK_NAMESPACE_FIELDS,
+  MAX_TRACK_NAMESPACE_SIZE,
   trackNamespaceToStrings,
 } from "./parameter";
 import {
@@ -329,5 +331,180 @@ test("decodeNamespacePayload: count 0 の後ろの余剰 Parameter バイトは 
   assert.throws(
     () => decodeNamespacePayload(payload, 0),
     /trailing data in NAMESPACE: expected \d+ bytes, consumed \d+/,
+  );
+});
+
+// ============================================================================
+// prefix と suffix を合成した §8.7 の上限検証
+// ============================================================================
+
+/**
+ * 32 フィールドの Track Namespace を組み立てる
+ *
+ * draft-ietf-moq-transport-23 §8.7 の上限は 32 フィールドであり、
+ * prefix に使うと suffix を 1 フィールド足しただけで超過する。
+ */
+function createThirtyTwoFieldNamespace(): ReturnType<typeof createTrackNamespace> {
+  return createTrackNamespace(
+    Array.from({ length: MAX_TRACK_NAMESPACE_FIELDS }, (_, index) => `p${index}`),
+  );
+}
+
+/**
+ * draft-ietf-moq-transport-23 §9.15 (NAMESPACE) / §8.7 (Track Namespace Structure):
+ * NAMESPACE の Track Namespace Suffix は SUBSCRIBE_NAMESPACE の Track Namespace
+ * Prefix の後ろに連結されて 1 つの Track Namespace を成す。
+ * "If an endpoint receives a Track Namespace consisting of greater than 32 Track
+ *  Namespace Fields, it MUST close the session with INVALID_TRACK_NAMESPACE."
+ * suffix 単体 (1 フィールド) では上限内であるため、prefix を合成しないと
+ * 検出できない違反である。
+ */
+test("decodeNamespacePayload: prefix 32 フィールド + suffix 1 フィールドは INVALID_TRACK_NAMESPACE", () => {
+  const prefix = createThirtyTwoFieldNamespace();
+  const payload = encodeNamespacePayload({
+    type: MessageType.NAMESPACE,
+    trackNamespaceSuffix: createTrackNamespace(["sports"]),
+    parameters: [],
+  });
+
+  const error = assert.throws(() => decodeNamespacePayload(payload, 0, prefix));
+  assert.instanceOf(error, ProtocolViolationError);
+  assert.equal((error as ProtocolViolationError).code, SessionErrorCode.INVALID_TRACK_NAMESPACE);
+  assert.match(
+    (error as ProtocolViolationError).message,
+    /NAMESPACE track namespace fields exceeds maximum: 33 > 32/,
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.15 (NAMESPACE) / §8.7:
+ * "The length of a Track Namespace is the sum of the Track Namespace Field
+ *  Length fields." / "If an endpoint receives a Track Namespace or a Full Track
+ *  Name exceeding 4,096 bytes, it MUST close the session with FIELD_LENGTH_EXCEEDED."
+ * prefix 4,096 バイト + suffix 1 バイトの合成後 4,097 バイトは、suffix 単体では
+ * 検出できない上限超過である。
+ */
+test("decodeNamespacePayload: prefix と suffix の合計が 4,097 バイトで FIELD_LENGTH_EXCEEDED", () => {
+  const prefix = createTrackNamespace(["a".repeat(MAX_TRACK_NAMESPACE_SIZE)]);
+  const payload = encodeNamespacePayload({
+    type: MessageType.NAMESPACE,
+    trackNamespaceSuffix: createTrackNamespace(["b"]),
+    parameters: [],
+  });
+
+  const error = assert.throws(() => decodeNamespacePayload(payload, 0, prefix));
+  assert.instanceOf(error, ProtocolViolationError);
+  assert.equal((error as ProtocolViolationError).code, SessionErrorCode.FIELD_LENGTH_EXCEEDED);
+  assert.match(
+    (error as ProtocolViolationError).message,
+    /NAMESPACE track namespace exceeds maximum size: 4097 > 4096/,
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-23 §8.7:
+ * "The maximum total length of a Full Track Name is 4,096 bytes."
+ * 4,096 バイトちょうどは許容される境界値であり、合成後の長さで判定しても
+ * 正当な NAMESPACE を拒否しないことを固定する。
+ */
+test("decodeNamespacePayload: prefix と suffix の合計が 4,096 バイトちょうどは通る", () => {
+  const prefix = createTrackNamespace(["a".repeat(MAX_TRACK_NAMESPACE_SIZE - 1)]);
+  const payload = encodeNamespacePayload({
+    type: MessageType.NAMESPACE,
+    trackNamespaceSuffix: createTrackNamespace(["b"]),
+    parameters: [],
+  });
+
+  const decoded = decodeNamespacePayload(payload, 0, prefix);
+  assert.deepEqual(trackNamespaceToStrings(decoded.trackNamespaceSuffix), ["b"]);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.16 (NAMESPACE_DONE) / §8.7:
+ * NAMESPACE_DONE も NAMESPACE と同じ prefix 基準の suffix を運ぶため、
+ * 合成後のフィールド数で §8.7 の上限を判定する。
+ */
+test("decodeNamespaceDonePayload: prefix 32 フィールド + suffix 1 フィールドは INVALID_TRACK_NAMESPACE", () => {
+  const prefix = createThirtyTwoFieldNamespace();
+  const payload = encodeNamespaceDonePayload({
+    type: MessageType.NAMESPACE_DONE,
+    trackNamespaceSuffix: createTrackNamespace(["sports"]),
+  });
+
+  const error = assert.throws(() => decodeNamespaceDonePayload(payload, 0, prefix));
+  assert.instanceOf(error, ProtocolViolationError);
+  assert.equal((error as ProtocolViolationError).code, SessionErrorCode.INVALID_TRACK_NAMESPACE);
+  assert.match(
+    (error as ProtocolViolationError).message,
+    /NAMESPACE_DONE track namespace fields exceeds maximum: 33 > 32/,
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.16 (NAMESPACE_DONE) / §8.7:
+ * prefix 4,096 バイト + suffix 1 バイトの合成後 4,097 バイトは
+ * FIELD_LENGTH_EXCEEDED で拒否する。
+ */
+test("decodeNamespaceDonePayload: prefix と suffix の合計が 4,097 バイトで FIELD_LENGTH_EXCEEDED", () => {
+  const prefix = createTrackNamespace(["a".repeat(MAX_TRACK_NAMESPACE_SIZE)]);
+  const payload = encodeNamespaceDonePayload({
+    type: MessageType.NAMESPACE_DONE,
+    trackNamespaceSuffix: createTrackNamespace(["b"]),
+  });
+
+  const error = assert.throws(() => decodeNamespaceDonePayload(payload, 0, prefix));
+  assert.instanceOf(error, ProtocolViolationError);
+  assert.equal((error as ProtocolViolationError).code, SessionErrorCode.FIELD_LENGTH_EXCEEDED);
+  assert.match(
+    (error as ProtocolViolationError).message,
+    /NAMESPACE_DONE track namespace exceeds maximum size: 4097 > 4096/,
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.18 (PUBLISH_SKIPPED) / §8.7:
+ * "The length of a Full Track Name is computed as the sum of the Track Namespace
+ *  Field Length fields and the Track Name Length field."
+ * PUBLISH_SKIPPED の Track Namespace Suffix は SUBSCRIBE_TRACKS の
+ * Track Namespace Prefix の後ろに連結されるため、Full Track Name の上限は
+ * prefix + suffix + Track Name で判定する。prefix 4,095 バイト + suffix 1 バイト
+ * + Track Name 1 バイトの 4,097 バイトは FIELD_LENGTH_EXCEEDED になる。
+ */
+test("decodePublishSkippedPayload: prefix + suffix + Track Name の合計が 4,097 バイトで FIELD_LENGTH_EXCEEDED", () => {
+  const prefix = createTrackNamespace(["a".repeat(MAX_TRACK_NAMESPACE_SIZE - 1)]);
+  const payload = encodePublishSkippedPayload({
+    type: MessageType.PUBLISH_SKIPPED,
+    trackNamespaceSuffix: createTrackNamespace(["b"]),
+    trackName: new TextEncoder().encode("c"),
+  });
+
+  const error = assert.throws(() => decodePublishSkippedPayload(payload, 0, prefix));
+  assert.instanceOf(error, ProtocolViolationError);
+  assert.equal((error as ProtocolViolationError).code, SessionErrorCode.FIELD_LENGTH_EXCEEDED);
+  assert.match(
+    (error as ProtocolViolationError).message,
+    /full track name exceeds maximum size: 4097 > 4096/,
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.18 (PUBLISH_SKIPPED) / §8.7:
+ * PUBLISH_SKIPPED でも合成後のフィールド数が 32 を超えたら
+ * INVALID_TRACK_NAMESPACE で拒否する。
+ */
+test("decodePublishSkippedPayload: prefix 32 フィールド + suffix 1 フィールドは INVALID_TRACK_NAMESPACE", () => {
+  const prefix = createThirtyTwoFieldNamespace();
+  const payload = encodePublishSkippedPayload({
+    type: MessageType.PUBLISH_SKIPPED,
+    trackNamespaceSuffix: createTrackNamespace(["sports"]),
+    trackName: new TextEncoder().encode("video"),
+  });
+
+  const error = assert.throws(() => decodePublishSkippedPayload(payload, 0, prefix));
+  assert.instanceOf(error, ProtocolViolationError);
+  assert.equal((error as ProtocolViolationError).code, SessionErrorCode.INVALID_TRACK_NAMESPACE);
+  assert.match(
+    (error as ProtocolViolationError).message,
+    /PUBLISH_SKIPPED track namespace fields exceeds maximum: 33 > 32/,
   );
 });

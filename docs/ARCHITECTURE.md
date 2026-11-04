@@ -153,12 +153,12 @@ LOC モジュール (`LOC` 名前空間) は次にも対応するが、高レベ
 音声にはキーフレームが無く、Chromium の `AudioEncoder` では description が configure 後の
 最初の出力にしか現れない (実装依存であり将来変わり得る)。後着の購読者へ届けるために、
 音声 Publisher の購読が paused でなくなった時点
-(draft-ietf-moq-transport-23 §7.6) で保持している `AUDIO_CONFIG` を次の Object に
+(draft-ietf-moq-transport-23 §7.7) で保持している `AUDIO_CONFIG` を次の Object に
 1 度だけ載せ直す。
 
 映像の description も configure 後の最初の出力と構成変更時にしか現れない (実装依存であり
 将来変わり得る)。後着の購読者へ届けるために、映像 Publisher の購読が paused でなく
-なった時点 (§7.6) で保持している `VIDEO_CONFIG` の送り直しを要求し、次に届く
+なった時点 (§7.7) で保持している `VIDEO_CONFIG` の送り直しを要求し、次に届く
 キーフレームの Object に 1 度だけ載せ直す。キーフレーム以外の Object に載せると購読側が
 GOP の途中で復号器を再構成することになり、参照フレームも揃わないため載せない。
 購読側 (`createMediaSubscriber`) は再構成の完了まで入力を止め、

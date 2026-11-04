@@ -332,7 +332,7 @@ async function readPublishOkWithParameters(
 }
 
 /**
- * draft-ietf-moq-transport-23 §9.3 (PUBLISH_OK) / §9.19.16 (EXPIRES):
+ * draft-ietf-moq-transport-23 §9.3 (REQUEST_OK) / §9.19.16 (EXPIRES):
  * PUBLISH_OK に出現できるのは EXPIRES のみである。パラメータ無しと EXPIRES 付きの
  * どちらもスコープ違反にならず、保留中の発行が同一オブジェクトで解決され、
  * PAUSED 省略のため paused は初期値 false (unpaused) のままであることを

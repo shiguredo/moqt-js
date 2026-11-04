@@ -70,9 +70,9 @@ export interface Fetcher {
    * - LARGEST_OBJECT が要求 End より後なら要求した End Location (§3.2 の otherwise)
    * - 閉端の要求で LARGEST_OBJECT を欠く場合は要求した End Location (§3.2.2)
    * - 開端の要求 (フィルタなし / 0x00 / 0x02) では LARGEST_OBJECT が要求 End
-   *   そのものであり、LARGEST_OBJECT を欠く成功応答は PROTOCOL_VIOLATION になる
+   *   そのものであり、LARGEST_OBJECT を欠く成功応答は MALFORMED_MESSAGE になる
    * - LARGEST_OBJECT が要求 Start より前にある応答は、開端・閉端のどちらでも
-   *   §3.2 の INVALID_RANGE 対象であり PROTOCOL_VIOLATION になる
+   *   §3.2 の INVALID_RANGE 対象であり INVALID_FIELD になる
    *
    * Location Filter Type 0x03 (Absolute Start, Group End) で LARGEST_OBJECT に
    * よる終端が得られない場合、この値は {StartGroup + EndGroupDelta, 2^64-1} に

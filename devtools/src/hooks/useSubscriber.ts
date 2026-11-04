@@ -178,7 +178,7 @@ interface TrackErrorCallbacks {
 /**
  * トラックの終了通知から、表示するトラックの終了状態を決める
  *
- * draft-ietf-moq-transport-22 §9.9 (PUBLISH_DONE) / §12.4 (Publish Done Codes): 終了の理由は
+ * draft-ietf-moq-transport-23 §9.9 (PUBLISH_DONE) / §12.4 (Publish Done Codes): 終了の理由は
  * Status Code が表す。エラーを示す Status Code はエラーとして残す。
  */
 export function resolveTrackEndState(publishDone: PublishDoneInfo): TrackEndState {
@@ -334,7 +334,7 @@ function foldCatchUpGate(
 /**
  * トラックの終了 (PUBLISH_DONE) を購読へ反映する
  *
- * draft-ietf-moq-transport-22 §9.9 (PUBLISH_DONE): publisher は購読の最後のメッセージとして
+ * draft-ietf-moq-transport-23 §9.9 (PUBLISH_DONE): publisher は購読の最後のメッセージとして
  * PUBLISH_DONE を送る。これはトラック単位の購読の終了であり、セッションの終了ではない。
  * セッションは明示的に閉じるまで維持し (§6.6 Termination の CONNECTION_CLOSE /
  * CLOSE_WEBTRANSPORT_SESSION)、他の購読への影響を考慮する ("Implementations need to consider
@@ -1693,7 +1693,7 @@ export function useSubscriber(
         },
       },
       {
-        // draft-ietf-moq-transport-22 §9.20.6 (RENDEZVOUS TIMEOUT):
+        // draft-ietf-moq-transport-23 §9.19.6 (RENDEZVOUS TIMEOUT):
         // Catalog が広告する event timeline トラックは、Catalog の到着直後にはまだ
         // publish されていないことがある。relay に購読を保持させる
         rendezvousTimeout: BigInt(settings.catalogSubscriptionTimeout.value),
@@ -1836,14 +1836,14 @@ export function useSubscriber(
     const recentAudioObjectIdSet = new Set<string>();
     // 受信した音声 Object の順序逆転を測るための、購読ごとの観測器。
     // 音声は 1 Object = 1 Group であり、Group が異なる Object の順序は保証されない
-    // (draft-ietf-moq-transport-22 §2.3.1)。復号は到着順のままなので、逆順に届いたかを
+    // (draft-ietf-moq-transport-23 §2.3.1)。復号は到着順のままなので、逆順に届いたかを
     // 計器で読めるようにする。境界の扱いと最近見た Location の窓は観測器が持つ
     const audioReceiveOrder = new AudioReceiveOrderTracker(AUDIO_RECENT_OBJECT_IDS_MAX);
 
     /**
      * 受信した音声 Object の Location から、順序逆転の計器を更新する
      *
-     * 比較は Group ID → Object ID の順である (draft-ietf-moq-transport-22 §8.2 の Location
+     * 比較は Group ID → Object ID の順である (draft-ietf-moq-transport-23 §8.2 の Location
      * 比較)。同じ Location は重複である。重複は enqueueAudioDecodeDirect が
      * `duplicateObjectsDropped` として数えるため、順序逆転としては数えない。
      */
@@ -1983,7 +1983,7 @@ export function useSubscriber(
 
     // 到着順にデコードする。映像とは独立したチェーンにすることで、映像のデコード待ちが
     // 音声の到着を遅らせないようにする。datagram で届いた Object も同じチェーンへ流す
-    // (同じ Track の音声は 1 本の順序で扱う。draft-ietf-moq-transport-22 §11)
+    // (同じ Track の音声は 1 本の順序で扱う。draft-ietf-moq-transport-23 §11)
     const enqueueAudioDecodeDirect = (
       obj: MoqtObject,
       viaDatagram: boolean,
@@ -2089,7 +2089,7 @@ export function useSubscriber(
         },
       },
       {
-        // draft-ietf-moq-transport-22 §9.20.6 (RENDEZVOUS TIMEOUT):
+        // draft-ietf-moq-transport-23 §9.19.6 (RENDEZVOUS TIMEOUT):
         // 映像と同じく、publisher が現れるまで relay に購読を保持させる
         rendezvousTimeout: BigInt(settings.catalogSubscriptionTimeout.value),
         // draft-ietf-moq-msf-01 §11.4.3: authInfo を持つ track には SETUP に載せたトークンを
@@ -2555,7 +2555,7 @@ export function useSubscriber(
         return;
       }
 
-      // draft-ietf-moq-transport-22 Section 2.1: Object は順不同で届きうる。Group ごとに
+      // draft-ietf-moq-transport-23 Section 2.1: Object は順不同で届きうる。Group ごとに
       // 別の stream で届くため、前の Group の末尾が次の Group の先頭より後に届くことが
       // ある。参照するフレームを復号していない Object は decoder へ渡さない
       const admission = videoDecodeOrderRef.current.admit({
@@ -2730,7 +2730,7 @@ export function useSubscriber(
       let tracksFromCatalog: CatalogMediaTracks;
 
       try {
-        // draft-ietf-moq-transport-22 に準拠した Catalog 購読:
+        // draft-ietf-moq-transport-23 に準拠した Catalog 購読:
         // 1. Next Object (Location Filter Type 0x05) の Location Filter で SUBSCRIBE し、
         //    live の Catalog 更新を受信
         // 2. 独立した FETCH (フィルタなし) で過去の Catalog を取得
@@ -2897,7 +2897,7 @@ export function useSubscriber(
                 // Location Filter で SUBSCRIBE する。live の Catalog 更新は
                 // この SUBSCRIBE で受信し、過去の Catalog は FETCH で取得する
                 filter: { nextObject: true },
-                // draft-ietf-moq-transport-22 §9.20.6 (RENDEZVOUS TIMEOUT):
+                // draft-ietf-moq-transport-23 §9.19.6 (RENDEZVOUS TIMEOUT):
                 // publisher がまだ居ない場合は relay がこの時間だけ購読を保持し、
                 // publisher が現れたら SUBSCRIBE_OK を返す。配信開始前に視聴を
                 // 始められるようにするため、Catalog Timeout と同じ値を使う
@@ -2991,7 +2991,7 @@ export function useSubscriber(
           // 位置は保ち、復旧中に遅着した古い Group や Object を再び復号しない。
           // 定期間隔が長い配信で自然な次の Group を待つと、映像が数秒間止まる。
           videoDecodeOrderRef.current.requireKeyFrame();
-          // draft-ietf-moq-transport-22 §9.20.19: DYNAMIC_GROUPS=1 を広告する Track に限り、
+          // draft-ietf-moq-transport-23 §9.19.19: DYNAMIC_GROUPS=1 を広告する Track に限り、
           // REQUEST_UPDATE で新しい Group を要求できる。仕様はドラフトであり変更され得る。
           // 要求は復号器の再構成後に送り、届いたキーフレームを再構成中に捨てないようにする。
           const activeSubscriber = instance.subscriber.value;
@@ -3082,7 +3082,7 @@ export function useSubscriber(
         rendezvousTimeout?: bigint;
         authorizationToken?: AuthorizationToken;
       } = {
-        // draft-ietf-moq-transport-22 §9.20.6 (RENDEZVOUS TIMEOUT):
+        // draft-ietf-moq-transport-23 §9.19.6 (RENDEZVOUS TIMEOUT):
         // Catalog が広告する映像トラックは Catalog の到着直後にはまだ publish
         // されていないことがある。relay に購読を保持させる
         rendezvousTimeout: BigInt(settings.catalogSubscriptionTimeout.value),
@@ -3095,7 +3095,7 @@ export function useSubscriber(
       };
 
       // NEW_GROUP_REQUEST: 0 = グループ情報なし、新規開始を要求
-      // draft-ietf-moq-transport-22 §9.20.19: SUBSCRIBE では MAY (foreknowledge 不要、
+      // draft-ietf-moq-transport-23 §9.19.19: SUBSCRIBE では MAY (foreknowledge 不要、
       // サポート外なら publisher が無視する) ため、DYNAMIC_GROUPS 確認は不要。
       // REQUEST_UPDATE 経路の requestNewGroup では DYNAMIC_GROUPS=1 を確認する。
       if (newGroupRequestEnabled) {
@@ -3107,7 +3107,7 @@ export function useSubscriber(
         actualTrackName,
         {
           object: (obj: MoqtObject) => {
-            // stream の間の到着順は保証されない (draft-ietf-moq-transport-22 Section 2.1)。
+            // stream の間の到着順は保証されない (draft-ietf-moq-transport-23 Section 2.1)。
             // 前の Group の stream が開いている間は次の Group の Object を保留し
             // (videoGroupGateRef)、前の Group の Object を先に Promise チェーンへ積む。
             // handleObject は Group の順序と欠落を見て、復号してよい Object だけを decoder へ
@@ -3344,7 +3344,7 @@ export function useSubscriber(
    *
    * MOQT にはキーフレームの要求というメッセージは無い。新しい Group の開始を要求し、
    * 映像なら Group の先頭がキーフレームになることでキーフレームが届く
-   * (draft-ietf-moq-transport-22 §9.20.19)。
+   * (draft-ietf-moq-transport-23 §9.19.19)。
    *
    * @returns REQUEST_UPDATE を送れたら true。購読していない、DYNAMIC_GROUPS=1 が無い、
    *   送信に失敗した場合は false
@@ -3357,7 +3357,7 @@ export function useSubscriber(
       return false;
     }
 
-    // draft-ietf-moq-transport-22 §9.20.19:
+    // draft-ietf-moq-transport-23 §9.19.19:
     // "A subscriber MUST NOT send this parameter in
     //  REQUEST_UPDATE if the Track did not include the DYNAMIC_GROUPS
     //  Property with value 1."
@@ -3372,7 +3372,7 @@ export function useSubscriber(
 
     try {
       // NEW_GROUP_REQUEST パラメータを含む REQUEST_UPDATE を送信
-      // draft-ietf-moq-transport-22 §9.20.19 (NEW_GROUP_REQUEST = 0x32)。
+      // draft-ietf-moq-transport-23 §9.19.19 (NEW_GROUP_REQUEST = 0x32)。
       // 値は購読者が知る最大 Group ID + 1 とする。LARGEST_OBJECT の snapshot だけでなく
       // 購読で受信した Object の最大 Location も使う。値が Largest Group 以下だと relay は
       // 上流へ送らず、publisher も新しい Group を始めない (要求が無言で捨てられる)

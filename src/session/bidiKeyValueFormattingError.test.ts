@@ -229,7 +229,7 @@ const MALFORMED_TRACK_PROPERTY_CASES: MalformedTrackPropertyCase[] = [
 ];
 
 /**
- * draft-ietf-moq-transport-23 §8.3 / §9.3 / §9.7 / §9.12 / §9.13:
+ * draft-ietf-moq-transport-23 §8.3 / §9.3 / §9.7 / §9.11 / §9.12:
  * malformed な Track Properties を含む OK 応答は、どの reader でも
  * MALFORMED_KEY_VALUE でセッションを閉じる。pending には close と同一の
  * SessionError オブジェクトが reject され、reader ごとの削除集合が掃除される。

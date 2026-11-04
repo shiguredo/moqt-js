@@ -91,7 +91,7 @@ export interface StartPublisherOptions {
      */
     codec: "opus" | "aac";
     bitrate: number;
-    /** 音声 Object の送り方 (未指定ならライブラリの既定 "datagram")。draft-ietf-moq-transport-22 §11 */
+    /** 音声 Object の送り方 (未指定ならライブラリの既定 "datagram")。draft-ietf-moq-transport-23 §11 */
     delivery?: AudioDelivery;
     /**
      * 取り出し経路へ要求するサンプルレート。省略時は既定の 48000 Hz
@@ -106,7 +106,7 @@ export interface StartPublisherOptions {
   /**
    * namespace を PUBLISH_NAMESPACE で告知する (既定は false)
    *
-   * draft-ietf-moq-transport-22 §4.1: true のとき、PUBLISH の後に PUBLISH_NAMESPACE を
+   * draft-ietf-moq-transport-23 §4.1: true のとき、PUBLISH の後に PUBLISH_NAMESPACE を
    * 送って REQUEST_OK を待つ。relay の SUBSCRIBE_NAMESPACE で発見できるかを確かめる spec が使う
    */
   announceNamespace?: boolean;
@@ -182,7 +182,7 @@ export interface StartSubscriberOptions {
   /**
    * SUBSCRIBE に載せる RENDEZVOUS_TIMEOUT (ms)
    *
-   * draft-ietf-moq-transport-22 §9.20.6: publisher の出現を待つ上限。省略すると
+   * draft-ietf-moq-transport-23 §9.19.6: publisher の出現を待つ上限。省略すると
    * パラメータを載せない (relay の既定 0)
    */
   rendezvousTimeout?: number;
@@ -212,7 +212,7 @@ export interface SubscriberStartFailure {
  * 「途切れの少なさ」を数値で見るための値である。分母は鳴らすと決めた音の長さ
  * (`playedMs`) であり、補間率は `concealedMs` / `playedMs`、捨て率は `droppedMs` /
  * `playedMs` になる。経路別の受信数は、Subgroup が再送されるのに対して Datagram は
- * 再送されない (draft-ietf-moq-transport-22 §11.2) ため、欠落率と合わせて経路ごとに比べる
+ * 再送されない (draft-ietf-moq-transport-23 §11.2) ため、欠落率と合わせて経路ごとに比べる
  */
 export interface SubscriberAudioStatus {
   /** 復号へ渡した音声 Object の数 (`subgroupFramesReceived` と `datagramFramesReceived` の和) */
@@ -262,7 +262,7 @@ export interface SubscriberStatus {
 /**
  * FETCH の取得範囲 (相対指定)
  *
- * draft-ietf-moq-transport-22 Section 9.20.9:
+ * draft-ietf-moq-transport-23 Section 9.19.9:
  * `{ startGroup }` の 1 フィールド (Location Filter Type 0x01) は相対指定であり、
  * Start Group = Largest Object の Group + 1 - startGroup になる。
  */
@@ -273,7 +273,7 @@ export interface FetchRelativeFilterOptions {
 /**
  * FETCH の取得範囲 (絶対開始)
  *
- * draft-ietf-moq-transport-22 Section 9.20.9:
+ * draft-ietf-moq-transport-23 Section 9.19.9:
  * `{ startGroup, startObject }` の 2 フィールド (Location Filter Type 0x02) は絶対開始として解釈される。
  */
 export interface FetchAbsoluteFilterOptions {
@@ -297,12 +297,12 @@ export interface StartFetchOptions {
   trackName: string;
   /**
    * 取得する範囲。省略すると全オブジェクト ({0, 0} から Largest Object まで) を要求する。
-   * draft-ietf-moq-transport-22 Section 9.20.9 (LOCATION FILTER Parameter)
+   * draft-ietf-moq-transport-23 Section 9.19.9 (LOCATION FILTER Parameter)
    */
   filter?: FetchFilterOptions;
   /**
    * FILL TIMEOUT (ミリ秒)
-   * draft-ietf-moq-transport-22 §9.20.5 (FILL TIMEOUT Parameter)
+   * draft-ietf-moq-transport-23 §9.19.5 (FILL TIMEOUT Parameter)
    *
    * relay が欠損 Object の fill を待つ最大時間。0 は即座に利用可能な Object だけを要求する。
    * 省略するとパラメータを送らず、fill を待つ時間は relay の既定に委ねられる。
@@ -315,7 +315,7 @@ export interface FetchStatus {
   state: string;
   /** end が通知されたか (取得範囲の終端まで到達したか) */
   endNotified: boolean;
-  /** Track 終端を確認済みか (FETCH 応答では変更されない。現時点では常に false) */
+  /** Track 終端を確認済みか (FETCH 応答では変更されず、End of Track indicator (0x81) を受信すると true になる) */
   endOfTrack: boolean;
   objectCount: number;
   bytesReceived: number;
@@ -609,7 +609,7 @@ function readFetchStatus(handle: FetchHandle): FetchStatus {
 /**
  * 実リレーへ接続し、SETUP の交換が完了したことを確認してから閉じる
  *
- * draft-ietf-moq-transport-22 §6.2 (Session establishment)
+ * draft-ietf-moq-transport-23 §6.2 (Session establishment)
  */
 async function connectRelay(options: ConnectRelayOptions): Promise<ConnectRelayResult> {
   rememberRelayUri(options.url);
@@ -855,7 +855,7 @@ async function stopSubscriber(id: HandleId): Promise<SubscriberStatus> {
 /**
  * テストページが受け取った範囲の指定を moqt-js の Location Filter へ変換する
  *
- * draft-ietf-moq-transport-22 Section 9.20.9: Location Filter Type で意味が変わるため、
+ * draft-ietf-moq-transport-23 Section 9.19.9: Location Filter Type で意味が変わるため、
  * `startObject` の有無で 0x01 (相対指定) と 0x02 (絶対開始) を切り替える。
  */
 function toLocationFilter(options: FetchFilterOptions): LocationFilter {

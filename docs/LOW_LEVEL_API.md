@@ -388,7 +388,7 @@ Safari 系の `WebTransport` では `writer.close()` が resolve しない場合
 publisher を待つ SHOULD であり、期限切れでは `TIMEOUT` を返す SHOULD (relay は要求より
 短い時間で `TIMEOUT` を返し得る MAY)。0 を指定した場合も 0 のパラメータを載せる。この値は
 `SUBSCRIBE` のみに意味を持ち、catalog 取得の `FETCH` には載せない。`REQUEST_ERROR` は
-`RequestError` で reject され、`code` と Retry Interval (§9.4.2) の生値である
+`RequestError` で reject され、`code` と Retry Interval (§9.4.1) の生値である
 `retryInterval` (「ミリ秒 + 1」、0 は「そのままでは再試行しない」) を読める。
 
 #### `REQUEST_UPDATE`
@@ -418,8 +418,8 @@ publisher を待つ SHOULD であり、期限切れでは `TIMEOUT` を返す SH
 
 - `LARGEST_OBJECT` が要求範囲内なら、その位置が `endLocation` になる
 - 要求 End Location より後なら要求 End Location が `endLocation` になる
-- 開端の要求 (フィルタなし / Type 0x00 / Type 0x02) は `LARGEST_OBJECT` が必須であり、欠く成功応答は `PROTOCOL_VIOLATION` になる
-- `LARGEST_OBJECT` が要求 Start より前にある応答は、開端・閉端のどちらでも `PROTOCOL_VIOLATION` になる
+- 開端の要求 (フィルタなし / Type 0x00 / Type 0x02) は `LARGEST_OBJECT` が必須であり、欠く成功応答は `MALFORMED_MESSAGE` になる
+- `LARGEST_OBJECT` が要求 Start より前にある応答は、開端・閉端のどちらでも `INVALID_FIELD` になる
 - 閉端の要求 (Type 0x03 / 0x04) で `LARGEST_OBJECT` を欠く成功応答は、要求 End Location で終わる
 - Type 0x03 で `LARGEST_OBJECT` による終端が得られない場合は `{ StartGroup + EndGroupDelta, 2^64-1 }` に正規化する。この Object ID は Group 全体を含む境界値であり、実在する最後の Object ID ではない
 
@@ -444,9 +444,9 @@ Joining FETCH は draft-20 で削除された (draft-ietf-moq-transport-23 §A.3
 
 - `FetchHeaderType` なら Fetch data stream
 - `0x10-0x1F` / `0x30-0x3F` / `0x50-0x5F` / `0x70-0x7F` なら Subgroup stream (FIRST_OBJECT bit の有無を含む)
-  - ただし SUBGROUP_ID_MODE = 0b11 の予約値 (`0x16` / `0x17` / `0x1E` / `0x1F` / `0x36` / `0x37` / `0x3E` / `0x3F`) は `PROTOCOL_VIOLATION`
+  - ただし SUBGROUP_ID_MODE = 0b11 の予約値 (`0x16` / `0x17` / `0x1E` / `0x1F` / `0x36` / `0x37` / `0x3E` / `0x3F`) は `INVALID_STREAM_HEADER`
 - `0x132b3e28` なら PADDING stream (データをすべて読み捨てる)
-- それ以外は `PROTOCOL_VIOLATION`
+- それ以外は `INVALID_STREAM_HEADER`
 
 #### 先行到着への対応
 
@@ -459,7 +459,7 @@ MOQT / QUIC ではレスポンスとデータストリームの順序が保証�
 
 #### Graceful 終了 (FIN) と未完成 Object
 
-FIN (ピアの graceful 終了) 検出時点で残バッファが非空、つまりシリアライズされた Object の途中なら、draft-ietf-moq-transport-23 §11.3 に従い `PROTOCOL_VIOLATION` でセッションを閉じる。
+FIN (ピアの graceful 終了) 検出時点で残バッファが非空、つまりシリアライズされた Object の途中なら、draft-ietf-moq-transport-23 §11.3 に従い `TRUNCATED_OBJECT` でセッションを閉じる。
 失効範囲は Object 1 個ではなくセッション全体 (全 Track・全 Fetch) であり、アプリは再接続が必要になる。
 早期終了が RESET_STREAM で行われた場合は read が reject されるだけで本判定には該当しない (§11.3.2 は配信途中での終了を reset と規定している)。
 
@@ -490,7 +490,7 @@ End of Range / End of Group / End of Track の indicator は Object ではない
 統計は受信したストリームの種別で分ける。通常 FETCH のデータストリームは `objectsReceivedViaFetch` / `bytesReceivedViaFetch`、fill fetch ストリームは `objectsReceivedViaFill` / `bytesReceivedViaFill` に加算し、購読側へは合算しない。fill 範囲と購読の Location Filter が重なる Object は publisher が両経路で送るため、受信したストリームの種別どおりに 1 回ずつ計上する。
 
 ストリーム末尾 (ピアの FIN) まで読んで残バッファが空なら `fetcher.handleEnd()` を呼び、`fetchers` から外す。
-未完成 Object の途中バイトが残る場合は `fetcher.handleEnd()` を呼ばず、§11.3 に従い `PROTOCOL_VIOLATION` でセッションを閉じる。
+未完成 Object の途中バイトが残る場合は `fetcher.handleEnd()` を呼ばず、§11.3 に従い `TRUNCATED_OBJECT` でセッションを閉じる。
 
 ### `handleIncomingDatagram()`
 
@@ -507,7 +507,7 @@ Datagram 受信時は `decodeObjectDatagram()` で decode し、`trackAlias` か
 
 ### 制御ストリーム
 
-`startControlMessageLoop()` はセッション期間中ずっと制御ストリームを読み続ける。制御ストリームが途中で閉じた場合は `PROTOCOL_VIOLATION` とする。
+`startControlMessageLoop()` はセッション期間中ずっと制御ストリームを読み続ける。制御ストリームが途中で閉じた場合は `CLOSED_CONTROL_STREAM` とする。
 
 制御メッセージの `Message Length` が自 endpoint の受信上限 (`maxControlMessageSize`、既定 65535) を超えた場合は `FIELD_LENGTH_EXCEEDED` (0x401) でセッションを閉じる (draft-ietf-moq-transport-23 §9)。
 
@@ -527,7 +527,7 @@ Datagram 受信時は `decodeObjectDatagram()` で decode し、`trackAlias` か
 3. timeout が指定されていればローカルタイマーを張る
 4. timeout 経過後も接続中なら graceful shutdown を試みる
 
-`GOAWAY` を複数回受信した場合は `PROTOCOL_VIOLATION` とする。`goawayReceived` が立った後は新しい `publish()` / `subscribe()` / `fetch()` / `trackStatus()` / Namespace 系 request を拒否する。
+`GOAWAY` を複数回受信した場合は `UNEXPECTED_MESSAGE` とする。`goawayReceived` が立った後は新しい `publish()` / `subscribe()` / `fetch()` / `trackStatus()` / Namespace 系 request を拒否する。
 
 ---
 

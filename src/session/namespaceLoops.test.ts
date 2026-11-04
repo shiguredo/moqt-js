@@ -9,9 +9,9 @@
  * MALFORMED_MESSAGE でセッションが閉じる挙動。
  *
  * draft-ietf-moq-transport-23 §9.2 (GOAWAY) / §9.3 (REQUEST_OK) /
- * §9.5.2 (Updating Namespace Subscriptions) / §9.14 (PUBLISH_NAMESPACE) /
- * §9.16 (NAMESPACE) / §9.17 (NAMESPACE_DONE) / §9.18 (SUBSCRIBE_TRACKS) /
- * §9.19 (PUBLISH_SKIPPED)
+ * §9.5.2 (Updating Namespace Subscriptions) / §9.13 (PUBLISH_NAMESPACE) /
+ * §9.15 (NAMESPACE) / §9.16 (NAMESPACE_DONE) / §9.17 (SUBSCRIBE_TRACKS) /
+ * §9.18 (PUBLISH_SKIPPED)
  */
 
 import { test, assert } from "vite-plus/test";
@@ -29,7 +29,12 @@ import {
   SessionError,
   SessionErrorCode,
 } from "../error";
-import { createTrackNamespace, encodeTrackNamespace } from "../message/parameter";
+import {
+  createTrackNamespace,
+  encodeTrackNamespace,
+  MAX_TRACK_NAMESPACE_FIELDS,
+  MAX_TRACK_NAMESPACE_SIZE,
+} from "../message/parameter";
 import { encodeParameterTrackNamespace } from "../message";
 import { encodeRequestUpdatePayload } from "../message/subscribe";
 import { encodeVarint } from "../varint";
@@ -367,7 +372,7 @@ function registerPendingUpdate(
  */
 function firstUnexpectedMessage(kind: LoopKind, controlWriter: ControlStreamWriter): Uint8Array {
   if (kind === "tracks") {
-    // tracks ループにだけ届く PUBLISH_SKIPPED (§9.19) を先頭に置く
+    // tracks ループにだけ届く PUBLISH_SKIPPED (§9.18) を先頭に置く
     return controlWriter.encode(
       MessageType.PUBLISH_SKIPPED,
       encodePublishSkippedPayload({
@@ -377,7 +382,7 @@ function firstUnexpectedMessage(kind: LoopKind, controlWriter: ControlStreamWrit
       }),
     );
   }
-  // namespace / publication は NAMESPACE (§9.16) を先頭に置く
+  // namespace / publication は NAMESPACE (§9.15) を先頭に置く
   return controlWriter.encode(
     MessageType.NAMESPACE,
     encodeNamespacePayload({
@@ -1716,6 +1721,208 @@ test("namespaceStartNamespaceStreamLoop: NAMESPACE の未知 Parameter 型は IN
   assert.include(ctx.getClosedWithError()!.message, "unknown message parameter type: 0x1f");
 });
 
+// ============================================================================
+// prefix と suffix を合成した §8.7 の上限検証 (受信ループ)
+// ============================================================================
+
+/**
+ * 32 フィールドの Track Namespace を組み立てる
+ *
+ * draft-ietf-moq-transport-23 §8.7 の上限は 32 フィールドであり、
+ * prefix に使うと suffix を 1 フィールド足しただけで超過する。
+ */
+function createThirtyTwoFieldPrefix(): string[] {
+  return Array.from({ length: MAX_TRACK_NAMESPACE_FIELDS }, (_, index) => `p${index}`);
+}
+
+/**
+ * draft-ietf-moq-transport-23 §9.15 (NAMESPACE) / §8.7 (Track Namespace Structure):
+ * NAMESPACE の Track Namespace Suffix は SUBSCRIBE_NAMESPACE で送信した
+ * Track Namespace Prefix の後ろに連結される。受信ループは prefix を合成した
+ * Track Namespace で §8.7 の上限を判定しなければならない。
+ * "If an endpoint receives a Track Namespace consisting of greater than 32 Track
+ *  Namespace Fields, it MUST close the session with INVALID_TRACK_NAMESPACE."
+ * prefix 32 フィールド + suffix 1 フィールドの 33 フィールドは suffix 単体では
+ * 検出できないため、ループが prefix を渡していることをここで固定する。
+ */
+test("namespaceStartNamespaceStreamLoop: prefix と合成して 33 フィールドになる NAMESPACE は INVALID_TRACK_NAMESPACE で閉じる", async () => {
+  const ctx = createNamespaceLoopTestContext("namespace");
+  ctx.target.namespacePrefix = createThirtyTwoFieldPrefix();
+  let namespaceCalls = 0;
+  ctx.target.callbacks.onNamespace = () => {
+    namespaceCalls++;
+  };
+
+  const readPromise = startLoop(
+    "namespace",
+    ctx.session,
+    ctx.requestId,
+    () => {},
+    () => {},
+  );
+
+  ctx.readableController.enqueue(requestOkMessage(ctx.controlWriter));
+  ctx.readableController.enqueue(
+    ctx.controlWriter.encode(
+      MessageType.NAMESPACE,
+      encodeNamespacePayload({
+        type: MessageType.NAMESPACE,
+        // suffix 単体は 1 フィールドであり、§8.7 の上限内である
+        trackNamespaceSuffix: createTrackNamespace(["sports"]),
+        parameters: [],
+      }),
+    ),
+  );
+  ctx.readableController.close();
+  await readPromise;
+
+  // 合成後の違反はセッションを閉じるため、通知はコールバックへ届かない
+  assert.equal(namespaceCalls, 0);
+  assert.isDefined(ctx.getClosedWithError());
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.INVALID_TRACK_NAMESPACE);
+  assert.include(
+    ctx.getClosedWithError()!.message,
+    "NAMESPACE track namespace fields exceeds maximum: 33 > 32",
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.16 (NAMESPACE_DONE) / §8.7:
+ * NAMESPACE_DONE も NAMESPACE と同じ prefix 基準の suffix を運ぶため、
+ * 合成後のフィールド数が 32 を超えたら INVALID_TRACK_NAMESPACE で閉じる。
+ * 対応する NAMESPACE を受信していない場合でも、まず §8.7 の違反として閉じる
+ * (UNEXPECTED_MESSAGE に化けない) ことを固定する。
+ */
+test("namespaceStartNamespaceStreamLoop: prefix と合成して 33 フィールドになる NAMESPACE_DONE は INVALID_TRACK_NAMESPACE で閉じる", async () => {
+  const ctx = createNamespaceLoopTestContext("namespace");
+  ctx.target.namespacePrefix = createThirtyTwoFieldPrefix();
+  let doneCalls = 0;
+  ctx.target.callbacks.onNamespaceDone = () => {
+    doneCalls++;
+  };
+
+  const readPromise = startLoop(
+    "namespace",
+    ctx.session,
+    ctx.requestId,
+    () => {},
+    () => {},
+  );
+
+  ctx.readableController.enqueue(requestOkMessage(ctx.controlWriter));
+  ctx.readableController.enqueue(
+    ctx.controlWriter.encode(
+      MessageType.NAMESPACE_DONE,
+      encodeNamespaceDonePayload({
+        type: MessageType.NAMESPACE_DONE,
+        trackNamespaceSuffix: createTrackNamespace(["sports"]),
+      }),
+    ),
+  );
+  ctx.readableController.close();
+  await readPromise;
+
+  assert.equal(doneCalls, 0);
+  assert.isDefined(ctx.getClosedWithError());
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.INVALID_TRACK_NAMESPACE);
+  assert.include(
+    ctx.getClosedWithError()!.message,
+    "NAMESPACE_DONE track namespace fields exceeds maximum: 33 > 32",
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.15 (NAMESPACE) / §8.7:
+ * "The length of a Track Namespace is the sum of the Track Namespace Field
+ *  Length fields." / "If an endpoint receives a Track Namespace or a Full Track
+ *  Name exceeding 4,096 bytes, it MUST close the session with FIELD_LENGTH_EXCEEDED."
+ * prefix 4,096 バイト + suffix 1 バイトの合成後 4,097 バイトは、suffix 単体では
+ * 検出できない上限超過である。
+ */
+test("namespaceStartNamespaceStreamLoop: prefix と suffix の合計が 4,097 バイトの NAMESPACE は FIELD_LENGTH_EXCEEDED で閉じる", async () => {
+  const ctx = createNamespaceLoopTestContext("namespace");
+  ctx.target.namespacePrefix = ["a".repeat(MAX_TRACK_NAMESPACE_SIZE)];
+  let namespaceCalls = 0;
+  ctx.target.callbacks.onNamespace = () => {
+    namespaceCalls++;
+  };
+
+  const readPromise = startLoop(
+    "namespace",
+    ctx.session,
+    ctx.requestId,
+    () => {},
+    () => {},
+  );
+
+  ctx.readableController.enqueue(requestOkMessage(ctx.controlWriter));
+  ctx.readableController.enqueue(
+    ctx.controlWriter.encode(
+      MessageType.NAMESPACE,
+      encodeNamespacePayload({
+        type: MessageType.NAMESPACE,
+        trackNamespaceSuffix: createTrackNamespace(["b"]),
+        parameters: [],
+      }),
+    ),
+  );
+  ctx.readableController.close();
+  await readPromise;
+
+  assert.equal(namespaceCalls, 0);
+  assert.isDefined(ctx.getClosedWithError());
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.FIELD_LENGTH_EXCEEDED);
+  assert.include(
+    ctx.getClosedWithError()!.message,
+    "NAMESPACE track namespace exceeds maximum size: 4097 > 4096",
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.18 (PUBLISH_SKIPPED) / §8.7:
+ * "The length of a Full Track Name is computed as the sum of the Track Namespace
+ *  Field Length fields and the Track Name Length field."
+ * PUBLISH_SKIPPED の Track Namespace Suffix は SUBSCRIBE_TRACKS の
+ * Track Namespace Prefix の後ろに連結される。prefix 4,095 バイト + suffix 1 バイト
+ * + Track Name 1 バイトの 4,097 バイトは FIELD_LENGTH_EXCEEDED で閉じ、
+ * アプリの onPublishSkipped へは通知しない。
+ */
+test("namespaceStartTracksStreamLoop: prefix + suffix + Track Name の合計が 4,097 バイトの PUBLISH_SKIPPED は FIELD_LENGTH_EXCEEDED で閉じる", async () => {
+  const ctx = createNamespaceLoopTestContext("tracks");
+  ctx.target.namespacePrefix = ["a".repeat(MAX_TRACK_NAMESPACE_SIZE - 1)];
+  let publishSkippedCalls = 0;
+  ctx.target.callbacks.onPublishSkipped = () => {
+    publishSkippedCalls++;
+  };
+
+  const readPromise = startLoop(
+    "tracks",
+    ctx.session,
+    ctx.requestId,
+    () => {},
+    () => {},
+  );
+
+  ctx.readableController.enqueue(requestOkMessage(ctx.controlWriter));
+  ctx.readableController.enqueue(
+    ctx.controlWriter.encode(
+      MessageType.PUBLISH_SKIPPED,
+      encodePublishSkippedPayload({
+        type: MessageType.PUBLISH_SKIPPED,
+        trackNamespaceSuffix: createTrackNamespace(["b"]),
+        trackName: new TextEncoder().encode("c"),
+      }),
+    ),
+  );
+  ctx.readableController.close();
+  await readPromise;
+
+  assert.equal(publishSkippedCalls, 0);
+  assert.isDefined(ctx.getClosedWithError());
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.FIELD_LENGTH_EXCEEDED);
+  assert.include(ctx.getClosedWithError()!.message, "full track name exceeds maximum size: 4097");
+});
+
 /**
  * draft-ietf-moq-transport-23 §9.5.2 (Updating Namespace Subscriptions) /
  * §4.2 (Subscribing to Namespaces):
@@ -2605,7 +2812,7 @@ SUBSCRIPTION_LOOP_CASES.forEach(({ kind, loop }) => {
 
 // ============================================================================
 // 確立前の検証失敗で Promise が reject される
-// draft-ietf-moq-transport-23 §9.14 / §9.15 / §9.18 (メッセージ定義) と
+// draft-ietf-moq-transport-23 §9.13 / §9.14 / §9.17 (メッセージ定義) と
 // §4.1 / §4.2 / §3.6 (先頭メッセージ MUST):
 // ピアの初期応答が仕様違反でも呼び出し元の Promise を永久ハングさせず、
 // closeWithError に渡す SessionError と同一オブジェクトで reject する

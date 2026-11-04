@@ -702,7 +702,7 @@ export async function requestsTrackStatus(
   });
 
   // TRACK_STATUS メッセージを双方向ストリームで送信
-  // draft-ietf-moq-transport-23 Section 9.13 (TRACK_STATUS):
+  // draft-ietf-moq-transport-23 Section 9.12 (TRACK_STATUS):
   // TRACK_STATUS は新しい双方向ストリームで送信される。
   // draft-ietf-moq-transport-23 Section 6.3
   // draft-ietf-moq-transport-23 Section 9.19.22:
@@ -976,7 +976,7 @@ export function requestsReadFetchResponse(
 /**
  * TRACK_STATUS リクエストの双方向ストリームからレスポンスを読み取る
  *
- * draft-ietf-moq-transport-23 Section 9.13 (TRACK_STATUS):
+ * draft-ietf-moq-transport-23 Section 9.12 (TRACK_STATUS):
  * TRACK_STATUS へのレスポンスは REQUEST_OK で返される。
  * draft-ietf-moq-transport-23 Section 6.3
  */

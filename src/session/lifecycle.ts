@@ -395,7 +395,7 @@ export async function sessionClose(
   session.namespaceSubscriptions.clear();
 
   // SUBSCRIBE_TRACKS 用の双方向ストリーム
-  // draft-ietf-moq-transport-23 §3.6 / §9.18 (SUBSCRIBE_TRACKS)
+  // draft-ietf-moq-transport-23 §3.6 / §9.17 (SUBSCRIBE_TRACKS)
   // (state の closed 化は markRequestObjectsClosed() 済み)
   for (const subscription of session.tracksSubscriptions.values()) {
     if (subscription.writer) {
@@ -810,7 +810,7 @@ export function sessionCloseControlStreamViolation(
  * 制御ストリームに残るのは GOAWAY のみ。
  * draft-ietf-moq-transport-23 Section 6.3
  *
- * draft-ietf-moq-transport-23 Section 9.14 (PUBLISH_NAMESPACE):
+ * draft-ietf-moq-transport-23 Section 9.13 (PUBLISH_NAMESPACE):
  * PUBLISH_NAMESPACE は新しい双方向ストリームの先頭メッセージとして送信される。
  * 制御ストリーム上で受信した場合は UNEXPECTED_MESSAGE でセッションを閉じる。
  */

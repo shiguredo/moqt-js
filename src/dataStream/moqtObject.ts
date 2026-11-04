@@ -35,8 +35,8 @@ export function validatePublisherPriority(priority: number): void {
  * Object Status の値を検証する
  *
  * draft-ietf-moq-transport-23 §11.1.1:
- * "Any other value SHOULD be treated as a protocol error and the session
- *  SHOULD be closed with a PROTOCOL_VIOLATION."
+ * "If an endpoint receives any other value, it SHOULD close the session
+ *  with INVALID_OBJECT_STATUS (Section 12.2)."
  */
 export function validateObjectStatus(status: number): void {
   if (

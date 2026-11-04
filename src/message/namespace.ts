@@ -1,6 +1,6 @@
 /**
  * MOQT Namespace Messages
- * draft-ietf-moq-transport-23 Section 9.14 (PUBLISH_NAMESPACE) — 9.19 (PUBLISH_SKIPPED)
+ * draft-ietf-moq-transport-23 Section 9.13 (PUBLISH_NAMESPACE) — 9.18 (PUBLISH_SKIPPED)
  *
  * 制御メッセージのフレーミング (Type / Message Length) は
  * draft-ietf-moq-transport-23 §9 に従う。
@@ -16,8 +16,11 @@ import { ProtocolViolationError, SessionErrorCode } from "../error";
 import {
   type Parameter,
   type TrackNamespace,
+  MAX_TRACK_NAMESPACE_FIELDS,
+  MAX_TRACK_NAMESPACE_SIZE,
   decodeParameters,
   decodeTrackNamespace,
+  validateFullTrackNameBytes,
   validateTrackNameNonEmpty,
   encodeParameters,
   encodeTrackNamespace,
@@ -25,7 +28,94 @@ import {
 import { MessageType } from "./types";
 
 /**
- * PUBLISH_NAMESPACE メッセージ (Section 9.14 PUBLISH_NAMESPACE)
+ * prefix を特定できない呼び出しで合成検証に使う空の Track Namespace
+ *
+ * 受信経路は必ずリクエストで送信した Track Namespace Prefix を渡す。
+ * ラウンドトリップ検証のように合成後の Track Namespace を特定できない
+ * 呼び出しでは空 prefix として扱い、Suffix 単体の上限だけを判定する。
+ * Suffix 単体で上限を超える Track Namespace は prefix が何であっても
+ * 上限を超えるため、この扱いで正当なメッセージを誤って拒否することはない。
+ */
+const EMPTY_TRACK_NAMESPACE: TrackNamespace = { tuple: [] };
+
+/**
+ * 受信した Track Namespace Suffix を prefix と合成して §8.7 の上限を検証する
+ *
+ * draft-ietf-moq-transport-23 §9.15 (NAMESPACE) / §9.16 (NAMESPACE_DONE) /
+ * §9.18 (PUBLISH_SKIPPED):
+ * これらのメッセージは SUBSCRIBE_NAMESPACE (§9.14) / SUBSCRIBE_TRACKS (§9.17) の
+ * Track Namespace Prefix の後ろに連結される Track Namespace Suffix だけを運ぶ。
+ * §8.7 の上限は suffix 単体ではなく prefix と連結した Track Namespace に対して
+ * 判定しなければならない (decodeTrackNamespace は suffix 単体の上限しか見ない)。
+ * そのため受信経路は prefix を渡して本関数を通す。
+ *
+ * draft-ietf-moq-transport-23 §8.7 (Track Namespace Structure):
+ * - "If an endpoint receives a Track Namespace consisting of greater than 32
+ *    Track Namespace Fields, it MUST close the session with
+ *    INVALID_TRACK_NAMESPACE."
+ * - "The length of a Track Namespace is the sum of the Track Namespace Field
+ *    Length fields." / "If an endpoint receives a Track Namespace or a Full
+ *    Track Name exceeding 4,096 bytes, it MUST close the session with
+ *    FIELD_LENGTH_EXCEEDED."
+ * - "The length of a Full Track Name is computed as the sum of the Track
+ *    Namespace Field Length fields and the Track Name Length field."
+ *
+ * 各 Field Value が 1 バイト以上であることと Length のワイヤ構造は、suffix 側は
+ * decodeTrackNamespace が、prefix 側は送信時の createTrackNamespace /
+ * validateTrackNamespaceForSend が検証済みのため、ここでは再検証しない。
+ * §8.7 の上限値と 32 フィールドの制限は将来の draft で変わり得るため、
+ * 変更時は本関数と decodeTrackNamespace の双方を追随させること。
+ *
+ * @param trackNamespacePrefix - リクエストで送信した Track Namespace Prefix
+ * @param trackNamespaceSuffix - メッセージが運ぶ Track Namespace Suffix
+ * @param contextName - エラーメッセージ用のメッセージ名
+ * @param trackName - Track Name。持たないメッセージ (NAMESPACE / NAMESPACE_DONE)
+ *   では省略し、Full Track Name ではなく Track Namespace の上限だけを判定する
+ * @throws ProtocolViolationError 32 フィールド超 (INVALID_TRACK_NAMESPACE) /
+ *   4,096 バイト超 (FIELD_LENGTH_EXCEEDED)
+ */
+export function validateReceivedTrackNamespace(
+  trackNamespacePrefix: TrackNamespace,
+  trackNamespaceSuffix: TrackNamespace,
+  contextName: string,
+  trackName?: Uint8Array,
+): void {
+  const combined: TrackNamespace = {
+    tuple: [...trackNamespacePrefix.tuple, ...trackNamespaceSuffix.tuple],
+  };
+
+  // draft-ietf-moq-transport-23 §8.7:
+  // フィールド数が 32 を超える場合は INVALID_TRACK_NAMESPACE
+  if (combined.tuple.length > MAX_TRACK_NAMESPACE_FIELDS) {
+    throw new ProtocolViolationError(
+      `${contextName} track namespace fields exceeds maximum: ${combined.tuple.length} > ${MAX_TRACK_NAMESPACE_FIELDS}`,
+      SessionErrorCode.INVALID_TRACK_NAMESPACE,
+    );
+  }
+
+  // draft-ietf-moq-transport-23 §8.7:
+  // Track Namespace の長さは Field Length の和。4,096 バイト超は FIELD_LENGTH_EXCEEDED
+  let trackNamespaceSize = 0;
+  for (const field of combined.tuple) {
+    trackNamespaceSize += field.length;
+  }
+  if (trackNamespaceSize > MAX_TRACK_NAMESPACE_SIZE) {
+    throw new ProtocolViolationError(
+      `${contextName} track namespace exceeds maximum size: ${trackNamespaceSize} > ${MAX_TRACK_NAMESPACE_SIZE}`,
+      SessionErrorCode.FIELD_LENGTH_EXCEEDED,
+    );
+  }
+
+  // draft-ietf-moq-transport-23 §8.7:
+  // Full Track Name の長さは Track Namespace のフィールド長と Track Name Length の和。
+  // Track Name を持つメッセージだけ、既存の Full Track Name 検証と規則を共有する。
+  if (trackName !== undefined) {
+    validateFullTrackNameBytes(combined, trackName);
+  }
+}
+
+/**
+ * PUBLISH_NAMESPACE メッセージ (Section 9.13 PUBLISH_NAMESPACE)
  *
  * パブリッシャーが Track Namespace 内にトラックがあることを通知する。
  */
@@ -65,7 +155,7 @@ export interface Namespace {
 }
 
 /**
- * NAMESPACE_DONE メッセージ (Section 9.17 NAMESPACE_DONE)
+ * NAMESPACE_DONE メッセージ (Section 9.16 NAMESPACE_DONE)
  *
  * SUBSCRIBE_NAMESPACE への応答として専用ストリームで送信される。
  * Track Namespace Prefix を除いた Suffix のみを含む。
@@ -82,7 +172,7 @@ export interface NamespaceDone {
 }
 
 /**
- * SUBSCRIBE_NAMESPACE メッセージ (Section 9.15 SUBSCRIBE_NAMESPACE)
+ * SUBSCRIBE_NAMESPACE メッセージ (Section 9.14 SUBSCRIBE_NAMESPACE)
  *
  * draft-ietf-moq-transport-23:
  * 旧 SUBSCRIBE_NAMESPACE (0x11) が SUBSCRIBE_NAMESPACE (0x50) と
@@ -104,7 +194,7 @@ export interface NamespaceDone {
  * Track Namespace Prefix は 0〜32 タプルを許可する（空のネームスペースも可）。
  * 空のネームスペースはワイルドカードとして機能し、全てのネームスペースにマッチする。
  *
- * draft-ietf-moq-transport-23 §9.15
+ * draft-ietf-moq-transport-23 §9.14
  */
 export interface SubscribeNamespace {
   type: typeof MessageType.SUBSCRIBE_NAMESPACE;
@@ -114,7 +204,7 @@ export interface SubscribeNamespace {
 }
 
 /**
- * SUBSCRIBE_TRACKS メッセージ (Section 9.18 SUBSCRIBE_TRACKS)
+ * SUBSCRIBE_TRACKS メッセージ (Section 9.17 SUBSCRIBE_TRACKS)
  *
  * draft-ietf-moq-transport-23:
  * 旧 SUBSCRIBE_NAMESPACE (0x11) が SUBSCRIBE_NAMESPACE (0x50) と
@@ -134,7 +224,7 @@ export interface SubscribeNamespace {
  *   Parameters (..) ...
  * }
  *
- * draft-ietf-moq-transport-23 §9.18
+ * draft-ietf-moq-transport-23 §9.17
  */
 export interface SubscribeTracks {
   type: typeof MessageType.SUBSCRIBE_TRACKS;
@@ -232,8 +322,17 @@ export function encodeNamespacePayload(msg: Namespace): Uint8Array {
  * パラメータ型が NAMESPACE に出現してよいか (§9.19.1 Parameter Scope) は
  * メッセージ定義側の規則であり、このコードでは検証しない。session の
  * namespace ループが NAMESPACE_ALLOWED_PARAMS で検証する。
+ *
+ * @param trackNamespacePrefix - SUBSCRIBE_NAMESPACE で送信した Track Namespace
+ *   Prefix。Track Namespace Suffix は prefix の後ろに連結されるため、§8.7 の
+ *   上限は prefix と合成した Track Namespace で判定する。受信経路は必ず渡し、
+ *   省略時は空 prefix (suffix 単体) として検証する
  */
-export function decodeNamespacePayload(data: Uint8Array, offset = 0): Namespace {
+export function decodeNamespacePayload(
+  data: Uint8Array,
+  offset = 0,
+  trackNamespacePrefix?: TrackNamespace,
+): Namespace {
   let totalConsumed = 0;
 
   const [trackNamespaceSuffix, namespaceConsumed] = decodeTrackNamespace(
@@ -241,6 +340,16 @@ export function decodeNamespacePayload(data: Uint8Array, offset = 0): Namespace 
     offset + totalConsumed,
   );
   totalConsumed += namespaceConsumed;
+
+  // draft-ietf-moq-transport-23 §9.15 / §8.7:
+  // NAMESPACE の Track Namespace Suffix は SUBSCRIBE_NAMESPACE の Track Namespace
+  // Prefix の後ろに連結されて 1 つの Track Namespace を成す。32 フィールド /
+  // 4,096 バイトの上限は合成後の Track Namespace で判定する
+  validateReceivedTrackNamespace(
+    trackNamespacePrefix ?? EMPTY_TRACK_NAMESPACE,
+    trackNamespaceSuffix,
+    "NAMESPACE",
+  );
 
   const [parameters, parametersConsumed] = decodeParameters(data, offset + totalConsumed);
   totalConsumed += parametersConsumed;
@@ -267,7 +376,7 @@ export function decodeNamespacePayload(data: Uint8Array, offset = 0): Namespace 
 /**
  * NamespaceDone のペイロードをエンコード
  *
- * draft-ietf-moq-transport-23 Section 9.17 (NAMESPACE_DONE):
+ * draft-ietf-moq-transport-23 Section 9.16 (NAMESPACE_DONE):
  * NAMESPACE_DONE Message {
  *   Type (vi64) = 0xE,
  *   Length (vi64),
@@ -280,9 +389,28 @@ export function encodeNamespaceDonePayload(msg: NamespaceDone): Uint8Array {
 
 /**
  * NamespaceDone のペイロードをデコード
+ *
+ * draft-ietf-moq-transport-23 §9.16 (NAMESPACE_DONE):
+ * Track Namespace Suffix は SUBSCRIBE_NAMESPACE の Track Namespace Prefix の
+ * 後ろに連結されるため、§8.7 の上限は prefix と合成して判定する。
+ *
+ * @param trackNamespacePrefix - SUBSCRIBE_NAMESPACE で送信した Track Namespace
+ *   Prefix。受信経路は必ず渡し、省略時は空 prefix (suffix 単体) として検証する
  */
-export function decodeNamespaceDonePayload(data: Uint8Array, offset = 0): NamespaceDone {
+export function decodeNamespaceDonePayload(
+  data: Uint8Array,
+  offset = 0,
+  trackNamespacePrefix?: TrackNamespace,
+): NamespaceDone {
   const [trackNamespaceSuffix, namespaceConsumed] = decodeTrackNamespace(data, offset);
+
+  // draft-ietf-moq-transport-23 §9.16 / §8.7:
+  // 32 フィールド / 4,096 バイトの上限は prefix と合成した Track Namespace で判定する
+  validateReceivedTrackNamespace(
+    trackNamespacePrefix ?? EMPTY_TRACK_NAMESPACE,
+    trackNamespaceSuffix,
+    "NAMESPACE_DONE",
+  );
 
   // draft-ietf-moq-transport-23 §9:
   // "If the length does not match the length of the Message Body,
@@ -305,7 +433,7 @@ export function decodeNamespaceDonePayload(data: Uint8Array, offset = 0): Namesp
 /**
  * SubscribeNamespace のペイロードをエンコード
  *
- * draft-ietf-moq-transport-23 Section 9.15 (SUBSCRIBE_NAMESPACE):
+ * draft-ietf-moq-transport-23 Section 9.14 (SUBSCRIBE_NAMESPACE):
  * SUBSCRIBE_NAMESPACE Message {
  *   Type (vi64) = 0x50,
  *   Length (vi64),
@@ -335,7 +463,7 @@ export function encodeSubscribeNamespacePayload(msg: SubscribeNamespace): Uint8A
 /**
  * SubscribeNamespace のペイロードをデコード
  *
- * draft-ietf-moq-transport-23 Section 9.15 (SUBSCRIBE_NAMESPACE)
+ * draft-ietf-moq-transport-23 Section 9.14 (SUBSCRIBE_NAMESPACE)
  */
 export function decodeSubscribeNamespacePayload(data: Uint8Array, offset = 0): SubscribeNamespace {
   let totalConsumed = 0;
@@ -372,7 +500,7 @@ export function decodeSubscribeNamespacePayload(data: Uint8Array, offset = 0): S
 /**
  * SubscribeTracks のペイロードをエンコード
  *
- * draft-ietf-moq-transport-23 Section 9.18 (SUBSCRIBE_TRACKS):
+ * draft-ietf-moq-transport-23 Section 9.17 (SUBSCRIBE_TRACKS):
  * SUBSCRIBE_TRACKS Message {
  *   Type (vi64) = 0x51,
  *   Length (vi64),
@@ -404,7 +532,7 @@ export function encodeSubscribeTracksPayload(msg: SubscribeTracks): Uint8Array {
 /**
  * SubscribeTracks のペイロードをデコード
  *
- * draft-ietf-moq-transport-23 Section 9.18 (SUBSCRIBE_TRACKS)
+ * draft-ietf-moq-transport-23 Section 9.17 (SUBSCRIBE_TRACKS)
  */
 export function decodeSubscribeTracksPayload(data: Uint8Array, offset = 0): SubscribeTracks {
   let totalConsumed = 0;
@@ -439,9 +567,9 @@ export function decodeSubscribeTracksPayload(data: Uint8Array, offset = 0): Subs
 }
 
 /**
- * PUBLISH_SKIPPED メッセージ (Section 9.19 PUBLISH_SKIPPED)
+ * PUBLISH_SKIPPED メッセージ (Section 9.18 PUBLISH_SKIPPED)
  *
- * draft-ietf-moq-transport-23 Section 9.19 (PUBLISH_SKIPPED):
+ * draft-ietf-moq-transport-23 Section 9.18 (PUBLISH_SKIPPED):
  * Publisher が Track に対する PUBLISH を送信しないことを示す。
  *
  * PUBLISH_SKIPPED Message {
@@ -484,8 +612,20 @@ export function encodePublishSkippedPayload(msg: PublishSkipped): Uint8Array {
 
 /**
  * PublishSkipped のペイロードをデコード
+ *
+ * draft-ietf-moq-transport-23 §9.18 (PUBLISH_SKIPPED):
+ * Track Namespace Suffix は SUBSCRIBE_TRACKS の Track Namespace Prefix の後ろに
+ * 連結されるため、§8.7 の Track Namespace と Full Track Name の上限は prefix を
+ * 含めて判定する。
+ *
+ * @param trackNamespacePrefix - SUBSCRIBE_TRACKS で送信した Track Namespace
+ *   Prefix。受信経路は必ず渡し、省略時は空 prefix (suffix 単体) として検証する
  */
-export function decodePublishSkippedPayload(data: Uint8Array, offset = 0): PublishSkipped {
+export function decodePublishSkippedPayload(
+  data: Uint8Array,
+  offset = 0,
+  trackNamespacePrefix?: TrackNamespace,
+): PublishSkipped {
   let totalConsumed = 0;
 
   const [trackNamespaceSuffix, namespaceSize] = decodeTrackNamespace(data, offset + totalConsumed);
@@ -504,6 +644,17 @@ export function decodePublishSkippedPayload(data: Uint8Array, offset = 0): Publi
 
   // draft-ietf-moq-transport-23 §2.4.1: 通常の Track Name は 1 バイト以上
   validateTrackNameNonEmpty(trackName, "publish skipped");
+
+  // draft-ietf-moq-transport-23 §9.18 / §8.7:
+  // Track Namespace Suffix と Track Name は SUBSCRIBE_TRACKS の Track Namespace
+  // Prefix の後ろに連結される。32 フィールド / 4,096 バイトの上限は prefix と
+  // 合成したうえで、Track Namespace と Full Track Name の双方に対して判定する
+  validateReceivedTrackNamespace(
+    trackNamespacePrefix ?? EMPTY_TRACK_NAMESPACE,
+    trackNamespaceSuffix,
+    "PUBLISH_SKIPPED",
+    trackName,
+  );
 
   // draft-ietf-moq-transport-23 §9:
   // "If the length does not match the length of the Message Body,

@@ -1113,7 +1113,7 @@ export async function bidiReadPublishResponse(
       session.pendingPublish.delete(requestId);
       session.publishers.set(requestId, pending.impl);
 
-      // draft-ietf-moq-transport-23 §9.3 (PUBLISH_OK) / §9.19.16 (EXPIRES):
+      // draft-ietf-moq-transport-23 §9.3 (REQUEST_OK) / §9.19.16 (EXPIRES):
       // PUBLISH_OK に出現できるのは EXPIRES のみであり、PAUSED 等の
       // Subscription Parameters は運ばれない。Publisher の paused 状態は
       // PUBLISH 送信時の指定値のままにし、更新は REQUEST_UPDATE 経路で扱う。
@@ -1574,7 +1574,7 @@ export async function bidiReadTrackStatusResponse(
 
       session.pendingTrackStatus.delete(requestId);
       pending.resolve({ parameters: decoded.parameters });
-      // draft-ietf-moq-transport-23 §9.13 / §6.4.2.2:
+      // draft-ietf-moq-transport-23 §9.12 / §6.4.2.2:
       // "The bidi stream is closed with a FIN after TRACK_STATUS_OK or
       //  TRACK_STATUS_ERROR are sent." レスポンスを受けた requester も自方向を
       // FIN で閉じ、ストリームを graceful に完了させる。requestStreams の
@@ -1587,7 +1587,7 @@ export async function bidiReadTrackStatusResponse(
       const decoded = decodeRequestErrorPayload(payload);
       session.pendingTrackStatus.delete(requestId);
       pending.reject(buildRequestErrorFromDecoded(decoded));
-      // REQUEST_OK 経路と同じく自方向を FIN で閉じる (§9.13 / §6.4.2.2)。
+      // REQUEST_OK 経路と同じく自方向を FIN で閉じる (§9.12 / §6.4.2.2)。
       await closeRequestStreamWriter(session, requestId);
       session.requestStreams.delete(requestId);
     },
@@ -1615,7 +1615,7 @@ export async function bidiReadTrackStatusResponse(
     },
     handleMalformedTrack: async (context, error) => {
       const { session, requestId, pending } = context;
-      // draft-ietf-moq-transport-23 §9.13 / §12.1:
+      // draft-ietf-moq-transport-23 §9.12 / §12.1:
       // TRACK_STATUS_OK は SUBSCRIBE_OK と同じ Track Properties を運ぶため、未知 Mandatory
       // Track Property の受信は malformed Track の検出に当たる。reject を先に行い
       // (後始末の完了にアプリの失敗通知を依存させない)、自方向を FIN で閉じてから

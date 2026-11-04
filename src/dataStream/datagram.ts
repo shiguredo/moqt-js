@@ -426,6 +426,26 @@ export function decodeObjectDatagram(data: Uint8Array, offset = 0): [ObjectDatag
         SessionErrorCode.INVALID_OBJECT_STATUS,
       );
     }
+
+    // draft-ietf-moq-transport-23 §11.2.1 (Object Datagram):
+    // "The *STATUS* bit (0x20) indicates whether the datagram contains an
+    //  Object Status or Object Payload.  When set to 1, the Object Status
+    //  field is present and there is no Object Payload."
+    // draft-ietf-moq-transport-23 §11.1.1 (Object Status):
+    // "An Object MUST have an empty payload unless its Object Status value is
+    //  registered as permitting a payload in the Object Status registry
+    //  (Section 16.9).  Of the values defined in this document, only Normal
+    //  (0x0) permits a payload."
+    // Status フィールドの後ろに残るバイトは Object Payload にあたるため、
+    // STATUS 付き datagram では存在してはならない。受信経路
+    // (incomingHandleDatagram) は返る consumed を無視して payload を空として
+    // 配送するため、ここで拒否しないと余剰バイトが黙って捨てられる。
+    if (offset + totalConsumed !== data.length) {
+      throw new ProtocolViolationError(
+        `status datagram has trailing bytes: expected ${data.length} bytes, consumed ${offset + totalConsumed}`,
+        SessionErrorCode.MALFORMED_OBJECT,
+      );
+    }
   } else {
     payload = data.slice(offset + totalConsumed);
     totalConsumed = data.length - offset;

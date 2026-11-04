@@ -23,7 +23,8 @@ export const MessageType = {
    *
    * draft-ietf-moq-transport-23:
    * publisher が subscription の bidi ストリーム上で送る片方向の状態通知。
-   * 応答なし。購読以外の文脈・subscriber 発での受信は PROTOCOL_VIOLATION。
+   * 応答なし。購読以外の文脈ではセッションを閉じる (publish ロールは
+   * ROLE_VIOLATION、fetch ロールは UNEXPECTED_MESSAGE)。
    */
   PUBLISH_STATE_NOTIFY: 0x22,
 
@@ -50,29 +51,29 @@ export const MessageType = {
   NAMESPACE: 0x08,
   NAMESPACE_DONE: 0x0e,
   /**
-   * PUBLISH_SKIPPED (Section 9.19 PUBLISH_SKIPPED)
+   * PUBLISH_SKIPPED (Section 9.18 PUBLISH_SKIPPED)
    *
-   * draft-ietf-moq-transport-23 Section 9.19 (PUBLISH_SKIPPED):
+   * draft-ietf-moq-transport-23 Section 9.18 (PUBLISH_SKIPPED):
    * Publisher が Track に対する PUBLISH を送信しないことを示す。
    * SUBSCRIBE_TRACKS の応答ストリーム上で送信される。
    * draft-ietf-moq-transport-23 Section 3.6.3: "or any other reason"
    */
   PUBLISH_SKIPPED: 0x0f,
   /**
-   * SUBSCRIBE_NAMESPACE (Section 9.15 SUBSCRIBE_NAMESPACE)
+   * SUBSCRIBE_NAMESPACE (Section 9.14 SUBSCRIBE_NAMESPACE)
    *
    * draft-ietf-moq-transport-23:
    * namespace discovery (NAMESPACE / NAMESPACE_DONE 受信) を担当する。
-   * draft-ietf-moq-transport-23 Section 9.15
+   * draft-ietf-moq-transport-23 Section 9.14
    */
   SUBSCRIBE_NAMESPACE: 0x50,
   /**
-   * SUBSCRIBE_TRACKS (Section 9.18 SUBSCRIBE_TRACKS)
+   * SUBSCRIBE_TRACKS (Section 9.17 SUBSCRIBE_TRACKS)
    *
    * draft-ietf-moq-transport-23 §3.6:
    * track subscription (PUBLISH メッセージは新規 bidi で到着、
    * PUBLISH_SKIPPED は応答ストリーム上で到着) を担当する。
-   * メッセージの定義は §9.18 である。
+   * メッセージの定義は §9.17 である。
    */
   SUBSCRIBE_TRACKS: 0x51,
 } as const;
@@ -223,8 +224,7 @@ export const MessageParameterType = {
    * PUBLISH / SUBSCRIBE_TRACKS / PUBLISH_STATE_NOTIFY に出現可能。
    * REQUEST_UPDATE と PUBLISH_STATE_NOTIFY で省略した場合は状態維持、
    * それ以外のメッセージで省略した場合は既定値 0 (unpaused)。
-   * 値域外を受信した endpoint は INVALID_PARAMETER でセッションを閉じる
-   * (現行の受信経路は SessionErrorCode への変換都合で PROTOCOL_VIOLATION として扱う)。
+   * 値域外を受信した endpoint は INVALID_PARAMETER でセッションを閉じる。
    *
    * draft-22 の FORWARD (0x10) を置き換えた型であり、ID と値の意味が反転している
    * (draft-22 FORWARD: 1 = 転送する / draft-23 PAUSED: 1 = 停止)。

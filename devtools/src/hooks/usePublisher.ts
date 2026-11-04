@@ -661,7 +661,7 @@ export function recordAudioDatagramSent(
  *
  * keyframeInterval 秒ごとのキーフレームに加えて、新しい Group の要求 (NEW_GROUP_REQUEST) を
  * 受けていれば次のフレームをキーフレームにして新しい Group を始める
- * (draft-ietf-moq-transport-22 Section 9.20.19: dynamic Groups に対応する publisher は、現在の
+ * (draft-ietf-moq-transport-23 Section 9.19.19: dynamic Groups に対応する publisher は、現在の
  * Group を終えて新しい Group をできるだけ早く始める SHOULD)。キーフレームにしたフレームから
  * 間隔を数え直す。次のフレームまでに届いた複数の要求は 1 枚のキーフレームにまとまる
  *
@@ -876,7 +876,7 @@ export interface PublishStopPlan {
 /**
  * Stop Publish の止め方を、送るメッセージと後始末の段取りにする
  *
- * draft-ietf-moq-transport-22 §7.4 (A subscriber remains subscribed to a Track at a Relay until
+ * draft-ietf-moq-transport-23 §7.5 (A subscriber remains subscribed to a Track at a Relay until
  * it unsubscribes, the upstream publisher terminates the subscription, or the subscription
  * expires.): 購読者に届く終了通知は止め方で変わるため、切り分けのために選べるようにする。
  *
@@ -1479,7 +1479,7 @@ export function usePublisher() {
         onPausedChange: (paused) => {
           pub.paused.value = paused;
         },
-        // draft-ietf-moq-transport-22 Section 9.20.19:
+        // draft-ietf-moq-transport-23 Section 9.19.19:
         // 新しい Group の要求を受けたら、次に符号化するフレームをキーフレームにする
         onNewGroupRequest: (newGroupRequest) => {
           pub.newGroupRequestsReceived.value++;
@@ -1491,7 +1491,7 @@ export function usePublisher() {
       },
       {
         maxCacheDuration: BigInt(options.maxCacheDuration),
-        // draft-ietf-moq-transport-22 Section 10.6: DYNAMIC_GROUPS=1 を広告し、後から視聴を
+        // draft-ietf-moq-transport-23 Section 10.6: DYNAMIC_GROUPS=1 を広告し、後から視聴を
         // 始めた購読者が NEW_GROUP_REQUEST で新しい Group を要求できるようにする
         dynamicGroups: true,
         // draft-ietf-moq-msf-01 §11.4.3: track に紐づくトークンは PUBLISH にも MUST 付与する
@@ -1728,7 +1728,7 @@ export function usePublisher() {
     });
 
     // Object を送信する (送信完了は待たない。完了待ちは stopPublishing の done() で行う)。
-    // Datagram は draft-ietf-moq-transport-22 §11.2。WT-H2 は datagram を運べない
+    // Datagram は draft-ietf-moq-transport-23 §11.2。WT-H2 は datagram を運べない
     const sendParams = {
       groupId: allocation.groupId,
       objectId: allocation.objectId,
@@ -1803,7 +1803,7 @@ export function usePublisher() {
     let sendResult: Promise<void>;
     try {
       // 音声は 1 Object = 1 Group なので、この Object で Subgroup を閉じる
-      // (draft-ietf-moq-transport-22 §11.3.2)。sendDatagram には渡さない
+      // (draft-ietf-moq-transport-23 §11.3.2)。sendDatagram には渡さない
       // (構造的部分型で通ってしまい、Datagram では読まれないフィールドになるため)
       sendResult = audioPublisherInstance.sendObject({ ...sendParams, endOfSubgroup: true });
     } catch (error) {
@@ -1935,7 +1935,7 @@ export function usePublisher() {
         objectId: 0,
         payload: encodeEventTimeline(eventHistory),
         // 1 メッセージ = 1 Group = 1 Object。送信の直後に Subgroup を閉じる
-        // (draft-ietf-moq-transport-22 §11.3.2)。次のメッセージが 30 秒以上来ないと
+        // (draft-ietf-moq-transport-23 §11.3.2)。次のメッセージが 30 秒以上来ないと
         // 開いたままになり、次の Object を待つ購読側が DATA_STREAM_TIMEOUT で閉じる (§12.2)
         endOfSubgroup: true,
       });
@@ -2327,7 +2327,7 @@ export function usePublisher() {
   /**
    * 各 track で開いている Subgroup を閉じる
    *
-   * draft-ietf-moq-transport-22 §11.3.2 (Closing Subgroup Streams):
+   * draft-ietf-moq-transport-23 §11.3.2 (Closing Subgroup Streams):
    * 開いている Subgroup が無い track と、既に closed の Publisher では何もしない。
    * 戻り値は reject しないため待たない
    */
@@ -2348,14 +2348,14 @@ export function usePublisher() {
    * 配信の送信経路を止める (セッションは閉じない)
    *
    * フレームの読み出しと encoder を止め、catalog の送り直しも止める。PUBLISH は残るため、
-   * 購読者には何も届かない状態が続く (draft-ietf-moq-transport-22 §7.4: 購読は unsubscribe
+   * 購読者には何も届かない状態が続く (draft-ietf-moq-transport-23 §7.5: 購読は unsubscribe
    * するか、上流の publisher が購読を終えるか、購読の期限が切れるまで残る)。
    */
   function stopSendingPaths(): void {
     // これ以降に届く符号化の出力を捨てる (Encoder を閉じた後も emit 済みの出力は届き得る)
     advanceEncodeGeneration(encodeState);
 
-    // 開いている Subgroup を閉じる (draft-ietf-moq-transport-22 §11.3.2)。セッションと
+    // 開いている Subgroup を閉じる (draft-ietf-moq-transport-23 §11.3.2)。セッションと
     // PUBLISH は維持したまま送信だけを止めるため、閉じないと次の Object を待つ購読側が
     // DATA_STREAM_TIMEOUT (0x12) でセッションを閉じうる
     closePublisherSubgroups();

@@ -230,7 +230,7 @@ export interface Session {
   ): Promise<Fetcher>;
   /**
    * トラックの状態を問い合わせる
-   * draft-ietf-moq-transport-23 Section 9.13 (TRACK_STATUS)
+   * draft-ietf-moq-transport-23 Section 9.12 (TRACK_STATUS)
    */
   trackStatus(
     namespace: string[],
@@ -240,7 +240,7 @@ export interface Session {
   /**
    * Namespace をサブスクライブする（namespace discovery 用）
    *
-   * draft-ietf-moq-transport-23 §9.15 (SUBSCRIBE_NAMESPACE):
+   * draft-ietf-moq-transport-23 §9.14 (SUBSCRIBE_NAMESPACE):
    * SUBSCRIBE_NAMESPACE は新しい双方向ストリームで送信される。
    * 応答として NAMESPACE / NAMESPACE_DONE が送られる。
    *
@@ -267,7 +267,7 @@ export interface Session {
   /**
    * Track をサブスクライブする（track subscription 用）
    *
-   * draft-ietf-moq-transport-23 §3.6 / §9.18 (SUBSCRIBE_TRACKS):
+   * draft-ietf-moq-transport-23 §3.6 / §9.17 (SUBSCRIBE_TRACKS):
    * SUBSCRIBE_TRACKS は新しい双方向ストリームで送信される。
    * Publisher はマッチするネームスペース内のトラックに対して PUBLISH メッセージを
    * 別の新規双方向ストリームで送信する。応答ストリーム上では PUBLISH_SKIPPED が
@@ -288,7 +288,7 @@ export interface Session {
   ): Promise<TracksSubscription>;
   /**
    * Namespace を公開する（トラック発見用）
-   * draft-ietf-moq-transport-23 Section 9.14 (PUBLISH_NAMESPACE)
+   * draft-ietf-moq-transport-23 Section 9.13 (PUBLISH_NAMESPACE)
    *
    * Publisher が Track Namespace 内にトラックがあることを通知する。
    * Subscriber は SUBSCRIBE_NAMESPACE でこの通知を受け取れる。
@@ -366,7 +366,7 @@ export class SessionImpl implements Session {
   private receivedGoaway = false;
   // リクエストストリームごとの GOAWAY 受信済みフラグ
   // draft-ietf-moq-transport-23 §9.2 (GOAWAY):
-  // 単一リクエストストリーム上の重複 GOAWAY は PROTOCOL_VIOLATION
+  // 単一リクエストストリーム上の重複 GOAWAY は UNEXPECTED_MESSAGE
   goawayReceivedOnRequestStreams = new Set<bigint>();
   // pending の無い REQUEST_OK を許容する枠 (coalescing された REQUEST_ERROR で
   // pending を消した件数)。詳細は BidiSessionInternal の同名フィールドの doc を参照
@@ -538,7 +538,7 @@ export class SessionImpl implements Session {
   /**
    * SUBSCRIBE_NAMESPACE の状態管理
    *
-   * draft-ietf-moq-transport-23 §9.15 (SUBSCRIBE_NAMESPACE):
+   * draft-ietf-moq-transport-23 §9.14 (SUBSCRIBE_NAMESPACE):
    * SUBSCRIBE_NAMESPACE は専用の双方向ストリームで送受信される。
    * 応答として NAMESPACE / NAMESPACE_DONE のみが送られる。
    */
@@ -546,7 +546,7 @@ export class SessionImpl implements Session {
   /**
    * SUBSCRIBE_TRACKS の状態管理
    *
-   * draft-ietf-moq-transport-23 §3.6 / §9.18 (SUBSCRIBE_TRACKS):
+   * draft-ietf-moq-transport-23 §3.6 / §9.17 (SUBSCRIBE_TRACKS):
    * SUBSCRIBE_TRACKS は SUBSCRIBE_NAMESPACE とは別の専用の双方向ストリームで
    * 送受信される。応答ストリーム上では PUBLISH_SKIPPED が送られる。PUBLISH は
    * 別の新規双方向ストリームで到着する。
@@ -555,10 +555,10 @@ export class SessionImpl implements Session {
   /**
    * PUBLISH_NAMESPACE の状態管理
    *
-   * draft-ietf-moq-transport-23 Section 9.14 (PUBLISH_NAMESPACE):
+   * draft-ietf-moq-transport-23 Section 9.13 (PUBLISH_NAMESPACE):
    * PUBLISH_NAMESPACE は新しい双方向ストリームの先頭メッセージとして送信される。
    * REQUEST_OK / REQUEST_ERROR が同じ双方向ストリームで応答される。
-   * https://www.ietf.org/archive/id/draft-ietf-moq-transport-23.html#section-9.14
+   * https://www.ietf.org/archive/id/draft-ietf-moq-transport-23.html#section-9.13
    */
   namespacePublications = new Map<bigint, NamespacePublicationState>();
 
@@ -895,7 +895,7 @@ export class SessionImpl implements Session {
   /**
    * トラックの状態を問い合わせる
    *
-   * draft-ietf-moq-transport-23 Section 9.13 (TRACK_STATUS):
+   * draft-ietf-moq-transport-23 Section 9.12 (TRACK_STATUS):
    * TRACK_STATUS は subscribe せずにトラックの情報を要求する
    * 応答は SUBSCRIBE_OK と同じパラメータを持つ REQUEST_OK である
    */
@@ -915,7 +915,7 @@ export class SessionImpl implements Session {
   /**
    * Namespace をサブスクライブする（namespace discovery 用）
    *
-   * draft-ietf-moq-transport-23 §9.15 (SUBSCRIBE_NAMESPACE):
+   * draft-ietf-moq-transport-23 §9.14 (SUBSCRIBE_NAMESPACE):
    * SUBSCRIBE_NAMESPACE (0x50) は新しい双方向ストリームで送信される。
    * REQUEST_OK または REQUEST_ERROR が最初のレスポンスとして返され、
    * 以降は NAMESPACE / NAMESPACE_DONE のみが応答ストリーム上で送られる。
@@ -947,7 +947,7 @@ export class SessionImpl implements Session {
   /**
    * Track をサブスクライブする（track subscription 用）
    *
-   * draft-ietf-moq-transport-23 §3.6 / §9.18 (SUBSCRIBE_TRACKS):
+   * draft-ietf-moq-transport-23 §3.6 / §9.17 (SUBSCRIBE_TRACKS):
    * SUBSCRIBE_TRACKS (0x51) は新しい双方向ストリームで送信される。
    * REQUEST_OK または REQUEST_ERROR が最初のレスポンスとして返され、
    * 以降は PUBLISH_SKIPPED のみが応答ストリーム上で送られる。
@@ -973,10 +973,10 @@ export class SessionImpl implements Session {
   /**
    * Namespace を公開する（トラック発見用）
    *
-   * draft-ietf-moq-transport-23 Section 9.14 (PUBLISH_NAMESPACE):
+   * draft-ietf-moq-transport-23 Section 9.13 (PUBLISH_NAMESPACE):
    * PUBLISH_NAMESPACE は新しい双方向ストリームの先頭メッセージとして送信される。
    * REQUEST_OK / REQUEST_ERROR が同じ双方向ストリームで応答される。
-   * https://www.ietf.org/archive/id/draft-ietf-moq-transport-23.html#section-9.14
+   * https://www.ietf.org/archive/id/draft-ietf-moq-transport-23.html#section-9.13
    *
    * draft-ietf-moq-transport-23 §4.1 / §6.4.2.3:
    * 公開の撤回は request のキャンセル (RESET_STREAM と STOP_SENDING) で行う。
@@ -1159,12 +1159,12 @@ export class SessionImpl implements Session {
   }
 
   /**
-   * 制御ストリームの閉鎖を PROTOCOL_VIOLATION として扱う
+   * 制御ストリームの閉鎖を CLOSED_CONTROL_STREAM として扱う
    *
    * draft-ietf-moq-transport-23 §6.3:
    * 「A control stream MUST NOT be closed at the underlying transport layer
-   *  during the session's lifetime.  Doing so results in the session being
-   *  closed as a PROTOCOL_VIOLATION.」
+   *  during the session's lifetime.  If the control stream is closed, the
+   *  peer MUST close the session with CLOSED_CONTROL_STREAM.」
    * FIN 経路 (done) と RESET_STREAM 経路 (isPeerStreamError) で
    * sessionState === "connected" のガードを共通化し、片方だけの修正漏れと
    * 既に閉じたセッションへの誤通知を防ぐ。
@@ -1182,9 +1182,9 @@ export class SessionImpl implements Session {
    * 制御ストリームに残るのは GOAWAY のみ。
    * draft-ietf-moq-transport-23 Section 6.3
    *
-   * draft-ietf-moq-transport-23 Section 9.14 (PUBLISH_NAMESPACE):
+   * draft-ietf-moq-transport-23 Section 9.13 (PUBLISH_NAMESPACE):
    * PUBLISH_NAMESPACE は新しい双方向ストリームの先頭メッセージとして送信される。
-   * 制御ストリーム上で受信した場合は PROTOCOL_VIOLATION でセッションを閉じる。
+   * 制御ストリーム上で受信した場合は UNEXPECTED_MESSAGE でセッションを閉じる。
    */
   handleControlMessage(type: number, payload: Uint8Array): void {
     sessionHandleControlMessage(this as unknown as SessionLifecycleInternal, type, payload);
@@ -1198,7 +1198,7 @@ export class SessionImpl implements Session {
    * SUBSCRIBE_NAMESPACE, TRACK_STATUS を含む新規リクエストを peer に対して
    * 開始すべきでない。
    *
-   * 複数の GOAWAY メッセージを受信した場合、エンドポイントは PROTOCOL_VIOLATION で
+   * 複数の GOAWAY メッセージを受信した場合、エンドポイントは UNEXPECTED_MESSAGE で
    * セッションを終了しなければならない。
    */
   handleGoaway(payload: Uint8Array): Record<string, unknown> {
@@ -1218,7 +1218,7 @@ export class SessionImpl implements Session {
   /**
    * TracksSubscription オブジェクトを作成する
    *
-   * draft-ietf-moq-transport-23 §9.18 (SUBSCRIBE_TRACKS)
+   * draft-ietf-moq-transport-23 §9.17 (SUBSCRIBE_TRACKS)
    */
   createTracksSubscription(requestId: bigint): TracksSubscription {
     return namespacesCreateTracksSubscription(
