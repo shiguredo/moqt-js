@@ -483,8 +483,18 @@ export async function requestsSubscribe(
     }
     // 送信失敗時は fill 関連付けと保留中の SUBSCRIBE を削除して残留を防ぐ
     // (bidiSendRequestUpdate の write 失敗時と同パターン)。
+    const failedPending = session.pendingSubscribe.get(requestId);
     session.fillFetchTargets.delete(requestId);
     session.pendingSubscribe.delete(requestId);
+    // draft-ietf-moq-transport-23 §12.1 条件 10 の検出に使う Track 単位の状態は、
+    // その Track の利用者がいなくなった時点で解放する (解放時期は §12.1 の規定
+    // ではなく実装判断)。送信失敗で応答待ちが消える経路でも解放する。
+    if (failedPending !== undefined) {
+      bidi.clearPriorGapTrackingIfUnused(
+        session as unknown as bidi.BidiSessionInternal,
+        failedPending.impl.getFullTrackNameKey(),
+      );
+    }
     throw error;
   }
 
@@ -629,7 +639,16 @@ export async function requestsFetch(
     }
     // 送信失敗時は保留中の FETCH を削除して残留を防ぐ
     // (subscribe() の sendRequestOnBidiStream 失敗時と同パターン)。
+    const failedPending = session.pendingFetch.get(requestId);
     session.pendingFetch.delete(requestId);
+    // draft-ietf-moq-transport-23 §12.1 条件 10 の検出に使う Track 単位の状態は、
+    // その Track の利用者がいなくなった時点で解放する (実装判断)。
+    if (failedPending !== undefined) {
+      bidi.clearPriorGapTrackingIfUnused(
+        session as unknown as bidi.BidiSessionInternal,
+        failedPending.impl.getFullTrackNameKey(),
+      );
+    }
     throw error;
   }
 
