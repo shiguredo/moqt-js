@@ -300,15 +300,22 @@ export interface BidiSessionInternal {
   receivedEndOfGroupFinalObjectIds: EndOfGroupTracking;
 
   /**
-   * Track 単位の Prior Group ID Gap / Prior Object ID Gap 追跡
+   * Track 単位の Prior Group ID Gap / Prior Object ID Gap と Object 状態の追跡
    *
    * draft-ietf-moq-transport-22 §10.8 (Prior Group ID Gap) / §10.9 (Prior Object
    * ID Gap) の malformed 条件のうち、同一 Track の複数 Object と過去の受信状態を
    * 必要とする条件の判定に使う。キーは fullTrackNameKey が生成する比較キー。
    * 購読単位ではなく Track 単位で保持するのは、同一 Track の複数購読 / FETCH を
-   * またいで判定する必要があるためである。その Track の購読と FETCH が尽きた
-   * 時点で clearPriorGapTrackingIfUnused がエントリを削除する。free function から
-   * 読み書きするため readonly 不可。
+   * またいで判定する必要があるためである。
+   *
+   * draft-ietf-moq-transport-23 §12.1 条件 4 / 5 / 10:
+   * 同じエントリに、FETCH の End of Group / End of Track indicator が確定した
+   * Group / Track の最終 Object と、§12.1 条件 10 の受信済み位置 / 確定した非存在
+   * 範囲 (区間) も保持する。実 Object の受信、非存在通知の受理、FETCH 終端の確定が
+   * すべて同じ Track 単位の履歴を共有するため、受信経路をまたいだ矛盾を検出できる。
+   *
+   * その Track の購読と FETCH が尽きた時点で clearPriorGapTrackingIfUnused が
+   * エントリを削除する。free function から読み書きするため readonly 不可。
    */
   priorGapTrackingByTrack: Map<FullTrackNameKey, PriorGapTracking>;
 

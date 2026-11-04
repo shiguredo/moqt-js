@@ -560,6 +560,11 @@ export async function requestsFetch(
   // 確定するため、要求範囲を Fetcher に保持する
   impl.setFetchRequestRange(fetchRequestRange);
 
+  // draft-ietf-moq-transport-23 §3.2.2 (Gaps in a Fetch Stream):
+  // Range Filter を含む要求では、応答のマークされていない gap は Unknown 状態の
+  // Object を示す。非存在と誤認しないよう、要求時の有無を Fetcher に保持する。
+  impl.setFetchRequestRangeFiltersPresent((options?.rangeFilters?.length ?? 0) > 0);
+
   // draft-ietf-moq-transport-22 Section 3.2.4:
   // キャンセルは bidi リクエストストリームへ STOP_SENDING を送ることで行う (MUST)。
   impl.onCancel = async () => {

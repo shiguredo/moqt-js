@@ -92,6 +92,7 @@ import { FetcherImpl } from "../fetcher";
 import { SubscriberImpl } from "../subscriber";
 import type { PublishDoneInfo } from "../session";
 import { fullTrackNameKey, type FullTrackNameKey } from "../fullTrackName";
+import { createObjectStateTracking } from "./objectStateTracking";
 import { type PriorGapTracking } from "./priorGapTracking";
 import {
   encodeLocation,
@@ -602,6 +603,7 @@ test("clearPriorGapTrackingIfUnused: 対象 Track の購読と FETCH が尽き�
     // この PBT は追跡エントリの破棄だけを対象にするため空の状態で作る。
     fetchGroupFinalObjectIds: new Map<bigint, bigint>(),
     fetchTrackEnd: undefined,
+    objectState: createObjectStateTracking(),
   });
 
   fc.assert(

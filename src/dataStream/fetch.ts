@@ -464,6 +464,20 @@ export interface FetchObjectContext {
    */
   lastActualObject?: { groupId: bigint; objectId: bigint };
   /**
+   * 直前にシリアライズされたエントリー (実 Object または End of Range indicator) の位置
+   *
+   * draft-ietf-moq-transport-23 §3.2.2 (Gaps in a Fetch Stream):
+   * 暗黙 gap は「直前のエントリーの次」から「次のエントリーの前」までであり、
+   * ストリーム末尾では「最後のエントリーの次」から End Location までである。
+   * その開始位置を決めるために、実 Object は自身の位置、End of Range indicator は
+   * 復号した位置で更新する。End of Group / End of Track indicator は自身の位置を
+   * 持たないため、直前の実 Object の位置を引き継ぐ。
+   * lastActualObject と異なり、End of Range indicator でも更新される。
+   * optional (undefined) は「まだ 1 件もシリアライズされていない」ことを表し、
+   * ハードコードされたテストコンテキストとの互換のため許容する。
+   */
+  lastSerializedLocation?: { groupId: bigint; objectId: bigint };
+  /**
    * 現在の Group 内の Subgroup ID ごとの直近の Publisher Priority。
    * draft-ietf-moq-transport-22 §12.1 の比較対象
    * ("the previous Object with the same Subgroup ID") を Subgroup が
@@ -869,6 +883,10 @@ function decodeEndOfRange(
     ...(context?.lastActualObject !== undefined
       ? { lastActualObject: context.lastActualObject }
       : {}),
+    // draft-ietf-moq-transport-23 §3.2.2:
+    // 暗黙 gap の開始位置は「直前にシリアライズされたエントリーの次」である。
+    // End of Range indicator は復号した位置をエントリーの位置として引き継ぐ。
+    lastSerializedLocation: { groupId, objectId },
     // 同一 Group 内では Subgroup ごとの追跡を引き継ぎ、Group 変更時は捨てる。
     // 引き継ぎは参照共有とし、更新時は decodeFetchObjectFields 側で
     // コピーして置き換える (呼び出し元の再利用を壊さない)。
@@ -1435,6 +1453,10 @@ export function decodeFetchObjectFields(
     // End of Range indicator は算術用の prior を更新するが実 Object ではないため、
     // 終端の参照先として使える最後の実 Object の位置を別に保持する。
     lastActualObject: { groupId, objectId },
+    // draft-ietf-moq-transport-23 §3.2.2:
+    // 暗黙 gap の開始位置となる「直前にシリアライズされたエントリーの位置」。
+    // 実 Object では自身の位置になる。
+    lastSerializedLocation: { groupId, objectId },
     subgroupPriorities,
   };
   return [

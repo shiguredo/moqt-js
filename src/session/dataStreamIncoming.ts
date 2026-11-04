@@ -38,10 +38,15 @@ import type { PendingSubgroupBuffer } from "../pendingSubgroupBuffer";
 import * as bidi from "./bidi";
 import { incomingProcessFetchObjects, incomingProcessSubgroupObjects } from "./incoming";
 import { isPeerStreamError, isSessionClosedError, toSessionCloseError } from "./errors";
-import { cancelStreamQuiet, concatChunks } from "./stream";
+import { cancelStreamQuiet, concatChunks, type FetchGapSemantics } from "./stream";
 import type { SessionInternal } from "./types";
 import type { ConnectCallbacks, SessionState, SubgroupStreamEnd } from "./publicTypes";
-import type { PriorGapTracking } from "./priorGapTracking";
+import {
+  assertAndRecordFetchNonExistentRange,
+  assertAndRecordFetchTrailingGap,
+  type PriorGapTracking,
+} from "./priorGapTracking";
+import { MAX_VARINT } from "../varint";
 import { recordEndOfGroupFinalObjectId, type EndOfGroupTracking } from "./endOfGroupTracking";
 import type { FullTrackNameKey } from "../fullTrackName";
 
@@ -380,7 +385,7 @@ export async function dataStreamHandleIncomingStream(
 
     // ストリーム終了処理 (条件はループ内のオブジェクト解析部と対称)
     if (isFetchStream && fetcher && fetchHeader) {
-      dataStreamFinishFetchStream(session, fetchHeader, fetcher, buffer);
+      dataStreamFinishFetchStream(session, fetchHeader, fetcher, buffer, fetchContext);
     }
   } catch (err) {
     await dataStreamHandleIncomingStreamError(session, err, reader, fetchHeader, fetcher);
@@ -524,6 +529,7 @@ function dataStreamFinishFetchStream(
   fetchHeader: FetchHeader,
   fetcher: FetcherImpl,
   buffer: Uint8Array,
+  finalContext: FetchObjectContext | null,
 ): void {
   if (buffer.byteLength > 0) {
     if (session.sessionState === "connected") {
@@ -535,6 +541,38 @@ function dataStreamFinishFetchStream(
       );
     }
     return;
+  }
+  // draft-ietf-moq-transport-23 §3.2.2 (Gaps in a Fetch Stream):
+  // "Gaps at the end of a stream are only detectable when the stream is
+  //  terminated by a FIN."
+  // FIN 時点で、最後にシリアライズされた位置から End Location までの無印の範囲を
+  // 非存在として扱う。Range Filter を含む要求では無印の gap は Unknown であるため
+  // 記録しない (assertAndRecordFetchTrailingGap が判定する)。要求範囲が確定した
+  // 通常の FETCH だけを対象とし、fill fetch は範囲を保持していないため行わない。
+  // malformed track と判定した場合、この関数を呼ぶ dataStreamHandleIncomingStream の
+  // catch (dataStreamHandleIncomingStreamError) が同一 Track の購読 / FETCH を
+  // cancel する。
+  // セッション終了後は追跡状態が解放済みであり、再作成しない
+  // (終了後に追跡状態を残さない)。閉じたセッションへの spurious な判定も避ける。
+  if (session.sessionState === "connected" && fetcher.hasFetchRequestRange()) {
+    const requestRange = fetcher.getFetchRequestRange();
+    assertAndRecordFetchTrailingGap(
+      { trackingByTrack: session.priorGapTrackingByTrack, trackKey: fetcher.getFullTrackNameKey() },
+      {
+        groupOrder: fetcher.getGroupOrder(),
+        startLocation: requestRange.startLocation,
+        endLocation: fetcher.endLocation,
+        ...(finalContext?.lastSerializedLocation !== undefined
+          ? {
+              lastSerializedLocation: {
+                group: finalContext.lastSerializedLocation.groupId,
+                object: finalContext.lastSerializedLocation.objectId,
+              },
+            }
+          : {}),
+        rangeFiltersPresent: fetcher.getFetchRequestRangeFiltersPresent(),
+      },
+    );
   }
   fetcher.handleEnd();
   session.fetchers.delete(fetchHeader.requestId);
@@ -921,6 +959,19 @@ export function dataStreamProcessFetchObjects(
   context: FetchObjectContext | null;
   isFirst: boolean;
 } {
+  // draft-ietf-moq-transport-23 §3.2.2 (Gaps in a Fetch Stream):
+  // 暗黙 gap を非存在として扱うには要求範囲 (Start / End Location) と Range
+  // Filter の有無が必要である。要求範囲が確定している通常の FETCH だけがこれらを
+  // 持ち、直接生成した FetcherImpl や fill fetch では渡さない。
+  let fetchGap: FetchGapSemantics | undefined;
+  if (fetcher.hasFetchRequestRange()) {
+    const requestRange = fetcher.getFetchRequestRange();
+    fetchGap = {
+      startLocation: requestRange.startLocation,
+      endLocation: fetcher.endLocation,
+      rangeFiltersPresent: fetcher.getFetchRequestRangeFiltersPresent(),
+    };
+  }
   return incomingProcessFetchObjects(
     session as unknown as SessionInternal,
     buffer,
@@ -932,6 +983,7 @@ export function dataStreamProcessFetchObjects(
     false,
     // 追跡対象 Track は FETCH を発行した Fetcher が持つ比較キーで決まる
     fetcher.getFullTrackNameKey(),
+    fetchGap,
   );
 }
 
@@ -1416,7 +1468,15 @@ export async function dataStreamHandleSubgroupStream(
 
   // ここに到達した時点でピアの FIN を検出している (上記ループは
   // result.done でしか抜けない)。
-  dataStreamFinishSubgroupStream(session, subscribers, header, buffer, resolvedSubgroupId);
+  await dataStreamFinishSubgroupStream(
+    session,
+    reader,
+    subscribers,
+    header,
+    buffer,
+    resolvedSubgroupId,
+    previousObjectId,
+  );
 }
 
 /**
@@ -1436,16 +1496,19 @@ export async function dataStreamHandleSubgroupStream(
  * 対象とする。closeWithError はセッション終了済みだと呼ばない
  * (終了済みセッションへの spurious な通知を防ぐため)
  *
- * 未完成 Object を残さずに終わった stream は、購読へ stream の終わりを知らせる
- * (dataStreamNotifySubgroupEnd)。
+ * 未完成 Object を残さずに終わった stream は、END_OF_GROUP ビットがあれば Group の
+ * 最終 Object を非存在通知として記録し (dataStreamRecordSubgroupEndOfGroup)、
+ * 購読へ stream の終わりを知らせる (dataStreamNotifySubgroupEnd)。
  */
-function dataStreamFinishSubgroupStream(
+async function dataStreamFinishSubgroupStream(
   session: DataStreamSessionInternal,
+  reader: ReadableStreamDefaultReader<Uint8Array>,
   subscribers: SubscriberImpl[],
   header: SubgroupHeader,
   buffer: Uint8Array,
   resolvedSubgroupId: bigint | undefined,
-): void {
+  lastObjectId: bigint | undefined,
+): Promise<void> {
   if (session.sessionState === "connected" && buffer.byteLength > 0) {
     session.closeWithError(
       new SessionError(
@@ -1455,7 +1518,73 @@ function dataStreamFinishSubgroupStream(
     );
     return;
   }
+  // セッション終了後は追跡状態が解放済みであり、再作成しない
+  // (終了後に追跡状態を残さない)。
+  if (session.sessionState === "connected") {
+    try {
+      dataStreamRecordSubgroupEndOfGroup(session, subscribers, header, lastObjectId);
+    } catch (err) {
+      if (err instanceof MalformedTrackError) {
+        // FIN で確定した終端宣言が、同じ Track の別経路で受信済みの Object を
+        // 覆う malformed track である。§12.1 に従い同一 Track の購読 / FETCH を
+        // cancel する (セッションは閉じない)。このストリームは FIN 済みであり、
+        // 通知は cancel された購読へ届けても意味を持たないため行わない。
+        await dataStreamHandleMalformedSubgroupTrack(session, reader, header, subscribers, err);
+        return;
+      }
+      throw err;
+    }
+  }
   dataStreamNotifySubgroupEnd(subscribers, header, resolvedSubgroupId, "fin");
+}
+
+/**
+ * Subgroup Header の END_OF_GROUP ビットと FIN で確定した Group 最終 Object を
+ * 非存在通知として記録する
+ *
+ * draft-ietf-moq-transport-23 §12.1 (Malformed Tracks) 条件 4:
+ * "The final Object in a Group is the Object with Status END_OF_GROUP, or the
+ *  last Object before a FIN in a Subgroup which has the END_OF_GROUP bit set."
+ * FIN を観測して初めて確定するため、この経路はデータストリームの終了時だけが
+ * 判定できる。最終 Object より後は Group に存在しないため、Track 単位の非存在
+ * 区間として記録し、別経路で受信済みの Object と矛盾すれば malformed とする。
+ * Object を 1 件も受信していない stream では終端位置が定まらないため記録しない。
+ * また、セッション終了後は追跡状態が解放済みのため、呼び出し側が接続中のときだけ
+ * 呼ぶ (終了後に追跡状態を残さない)。
+ *
+ * 記録先の Track は、Object の受信時検証と同じくストリームの先頭の購読が持つ
+ * 比較キーを使う (incomingProcessSubgroupObjects の解決規則と一致させる)。
+ * Track Alias は本来同一 Track の購読だけが共有するため、同一 Track の複数購読は
+ * 同じキーになり 1 回の記録で足りる。
+ */
+function dataStreamRecordSubgroupEndOfGroup(
+  session: DataStreamSessionInternal,
+  subscribers: SubscriberImpl[],
+  header: SubgroupHeader,
+  lastObjectId: bigint | undefined,
+): void {
+  // lastObjectId は Object を 1 件も受信していない場合 -1 (未確定) であり、
+  // その場合は Group の最終 Object を定められないため記録しない。
+  // 最終 Object が Group の末尾 (Object ID 2^64-1) の場合も後続が無い。
+  if (
+    !header.endOfGroup ||
+    lastObjectId === undefined ||
+    lastObjectId < 0n ||
+    lastObjectId === MAX_VARINT
+  ) {
+    return;
+  }
+  const trackKey = subscribers[0]?.getFullTrackNameKey();
+  if (trackKey === undefined) {
+    return;
+  }
+  assertAndRecordFetchNonExistentRange(
+    { trackingByTrack: session.priorGapTrackingByTrack, trackKey },
+    {
+      start: { group: header.groupId, object: lastObjectId + 1n },
+      end: { group: header.groupId, object: MAX_VARINT },
+    },
+  );
 }
 
 /**

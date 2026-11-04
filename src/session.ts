@@ -591,7 +591,7 @@ export class SessionImpl implements Session {
   receivedEndOfGroupFinalObjectIds: EndOfGroupTracking = new Map<bigint, Map<bigint, bigint>>();
 
   /**
-   * Track 単位の Prior Group ID Gap / Prior Object ID Gap 追跡
+   * Track 単位の Prior Group ID Gap / Prior Object ID Gap と Object 状態の追跡
    *
    * draft-ietf-moq-transport-22 §10.8 / §10.9 の malformed 条件のうち、同一 Track
    * の複数 Object と過去の受信状態を必要とする条件の判定に使う。キーは
@@ -603,6 +603,11 @@ export class SessionImpl implements Session {
    * Track の最終 Object も保持する。End of Range の範囲端や算術用の 2^64-1 は
    * 実 Object の終端として登録せず、decode 側が保持した最後の実 Object の位置を
    * 記録する。
+   *
+   * draft-ietf-moq-transport-23 §2.1.2 / §12.1 条件 10:
+   * さらに、受信済み位置と確定した非存在範囲を区間で保持する。実 Object の受信時と
+   * 非存在通知の受理時に両方向の矛盾を判定するためであり、受信経路をまたいだ判定も
+   * 同じエントリで行う。
    *
    * 購読と FETCH が尽きた Track のエントリは bidi 層が削除し、セッション終了時は
    * close() が全消しする。

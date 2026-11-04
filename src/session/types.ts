@@ -165,9 +165,10 @@ export interface SessionInternal extends BidiSessionInternal {
   // receivedEndOfGroupFinalObjectIds は BidiSessionInternal 側で宣言済み
   // (SessionInternal extends BidiSessionInternal のため継承する)。
   // validateIncomingRequestId も同様に BidiSessionInternal 側で宣言済み。
-  // priorGapTrackingByTrack (§10.8 / §10.9 の Track 単位追跡と、FETCH の
-  // End of Group / End of Track indicator が確定した終端の追跡) も同じく
-  // BidiSessionInternal 側で宣言済みであり、この interface へ継承される。
+  // priorGapTrackingByTrack (§10.8 / §10.9 の Track 単位追跡、FETCH の End of
+  // Group / End of Track indicator が確定した終端、および §12.1 条件 10 の
+  // 受信済み位置 / 確定した非存在範囲の追跡) も同じく BidiSessionInternal 側で
+  // 宣言済みであり、この interface へ継承される。
 
   // ============================================================
   // その他 (incoming.ts / namespaceLoops.ts / publish.ts / session.ts)

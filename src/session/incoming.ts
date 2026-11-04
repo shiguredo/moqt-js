@@ -35,6 +35,7 @@ import { assertNoObjectAfterFetchEnd, assertNoPriorIdGapTrackViolation } from ".
 import {
   processFetchObjects as streamProcessFetchObjects,
   processSubgroupObjects as streamProcessSubgroupObjects,
+  type FetchGapSemantics,
   type FetchObjectSink,
 } from "./stream";
 import type { FetcherImpl } from "../fetcher";
@@ -375,11 +376,15 @@ export function incomingHandleDatagram(session: SessionInternal, data: Uint8Arra
       // draft-ietf-moq-transport-23 §12.1 条件 4 / 5 (FETCH の終端 indicator)。
       // 詳細は assertNoObjectAfterFetchEnd の JSDoc を参照する。
       assertNoObjectAfterFetchEnd(tracking, datagram.groupId, datagram.objectId);
+      // draft-ietf-moq-transport-23 §12.1 条件 10:
+      // Datagram の Object Status (END_OF_GROUP / END_OF_TRACK) も非存在の通知で
+      // あるため、Track 単位の状態として受信位置との前後関係を検証・記録する。
       assertNoPriorIdGapTrackViolation(
         tracking,
         datagram.groupId,
         datagram.objectId,
         datagram.properties,
+        datagram.status ?? ObjectStatus.NORMAL,
       );
     }
   } catch (err) {
@@ -608,6 +613,8 @@ export function incomingWaitForFetcher(
  * @param trackKey - 追跡対象 Track の比較キー。通常 FETCH は Fetcher、fill fetch は
  *   購読が持つ比較キーを渡す (§10.8 / §10.9 の Track 横断検証と、FETCH の
  *   End of Group / End of Track indicator が確定した終端の検証に使う)。
+ * @param fetchGap - FETCH 要求の範囲と Range Filter の有無。通常 FETCH だけが渡し、
+ *   fill fetch では省略する (§3.2.2 の暗黙 gap を非存在として扱うかの判定に使う)。
  */
 export function incomingProcessFetchObjects(
   session: SessionInternal,
@@ -618,6 +625,7 @@ export function incomingProcessFetchObjects(
   groupOrder: GroupOrder,
   viaFill: boolean,
   trackKey: FullTrackNameKey,
+  fetchGap?: FetchGapSemantics,
 ): {
   remainingBuffer: Uint8Array;
   context: import("../dataStream").FetchObjectContext | null;
@@ -654,6 +662,7 @@ export function incomingProcessFetchObjects(
     },
     groupOrder,
     { trackingByTrack: session.priorGapTrackingByTrack, trackKey },
+    fetchGap,
   );
 }
 

@@ -9,14 +9,20 @@ import type { FetchObjectContext, MoqtObject, SubgroupHeader } from "../dataStre
 import { decodeFetchObjectFields, decodeObjectFields } from "../dataStream";
 import { IncompleteDataError, MalformedTrackError, ProtocolViolationError } from "../error";
 import { ObjectStatus } from "../message";
+import type { GroupOrder, Location } from "../message/types";
 import { MAX_VARINT } from "../varint";
 import type { SubscriberImpl } from "../subscriber";
-import type { GroupOrder } from "../message/types";
 import {
   assertPriorIdGapInObjectProperties,
   readDeliveryTimeoutObjectProperties,
 } from "../properties";
 import {
+  buildFetchTraversalGapRanges,
+  getFetchTraversalBoundaries,
+  type FetchTraversalEndpoint,
+} from "./objectStateTracking";
+import {
+  assertAndRecordFetchNonExistentRange,
   assertNoObjectAfterFetchEnd,
   assertNoPriorIdGapTrackViolation,
   recordFetchObjectEnd,
@@ -53,12 +59,132 @@ export interface FetchObjectSink {
 // ============================================================================
 
 /**
+ * FETCH 応答の暗黙 gap を非存在として解釈するための要求範囲の情報
+ *
+ * draft-ietf-moq-transport-23 §3.2.2 (Gaps in a Fetch Stream):
+ * Range Filter を含まない要求では、応答内のマークされていない gap は存在しない
+ * Object を示す。Range Filter を含む要求では Unknown 状態を示すため、非存在と
+ * みなさない。Start / End Location は gap の境界 (先頭・末尾と、Descending で
+ * Group をまたぐ場合の期待位置) を決めるのに使う。
+ *
+ * 要求範囲を保持していない fill fetch ではこの情報を渡さない (暗黙 gap を
+ * 推論しない。検出漏れのみで誤検出は生まない)。
+ */
+export interface FetchGapSemantics {
+  /** 要求した Start Location (含む) */
+  readonly startLocation: Location;
+  /** 応答がカバーする inclusive な上限 (End Location) */
+  readonly endLocation: Location;
+  /**
+   * Range Filter を含む要求か
+   *
+   * true のとき、マークされていない gap は Unknown 状態の Object を示す
+   * (§3.2.2)。非存在と誤認しないよう、gap を記録しない。
+   */
+  readonly rangeFiltersPresent: boolean;
+}
+
+/**
+ * 直前のシリアライズ位置を追跡用の Location へ変換する
+ *
+ * FetchObjectContext.lastSerializedLocation は直前にシリアライズされた実 Object
+ * または End of Range indicator の位置を保持する。End of Group / End of Track
+ * indicator は自身の位置を持たないため、直前の実 Object の位置が残る。
+ * ハードコードされた古いコンテキストとの互換のため、無い場合は復号済みの
+ * Group ID / Object ID を使う。
+ */
+function fetchEntryLocation(context: FetchObjectContext | null): Location | undefined {
+  if (context === null) {
+    return undefined;
+  }
+  const lastSerialized = context.lastSerializedLocation;
+  if (lastSerialized !== undefined) {
+    return { group: lastSerialized.groupId, object: lastSerialized.objectId };
+  }
+  return { group: context.groupId, object: context.objectId };
+}
+
+/**
+ * FETCH 応答の traversal order 上の区間を、Track 単位の非存在範囲として記録する
+ *
+ * draft-ietf-moq-transport-23 §3.2.2: 暗黙 gap と End of Non-Existent Range の
+ * 範囲はいずれも「直前のエントリーの次」から端点までであり、traversal order の
+ * 連続区間は Descending で Group をまたぐ場合に辞書式順序の複数区間へ分かれる。
+ * 区間の変換は objectStateTracking の buildFetchTraversalGapRanges が行う。
+ * 事前に Range Filter の有無を確認済みであることを前提とする。
+ *
+ * @throws MalformedTrackError 区間が受信済み Object を覆った場合
+ */
+function recordFetchGapRanges(
+  target: PriorGapTrackingTarget,
+  groupOrder: GroupOrder,
+  fetchGap: FetchGapSemantics,
+  previousEntryLocation: Location | undefined,
+  to: FetchTraversalEndpoint,
+): void {
+  const boundaries = getFetchTraversalBoundaries(
+    groupOrder,
+    fetchGap.startLocation,
+    fetchGap.endLocation,
+  );
+  const from: FetchTraversalEndpoint =
+    previousEntryLocation === undefined
+      ? { location: boundaries.first, inclusive: true }
+      : { location: previousEntryLocation, inclusive: false };
+  const ranges = buildFetchTraversalGapRanges({
+    groupOrder,
+    startLocation: fetchGap.startLocation,
+    endLocation: fetchGap.endLocation,
+    from,
+    to,
+  });
+  for (const range of ranges) {
+    assertAndRecordFetchNonExistentRange(target, range);
+  }
+}
+
+/**
+ * 明示された非存在範囲を、要求範囲の境界を使わずに記録する
+ *
+ * draft-ietf-moq-transport-23 §11.4.2: End of Non-Existent Range は直前の
+ * シリアライズ済み Object と復号した Location の間 (両端を含む) が存在しないこと
+ * を通知する。要求範囲 (Start / End Location) を保持しない fill fetch などでも
+ * 記録できるよう、直前のエントリーを traversal order の始点にして区間を求める。
+ * 先頭エントリーが End of Range の場合は始点が要求範囲に依存するため記録しない。
+ *
+ * @throws MalformedTrackError 区間が受信済み Object を覆った場合
+ */
+function recordMarkedNonExistentRange(
+  target: PriorGapTrackingTarget,
+  groupOrder: GroupOrder,
+  previousEntryLocation: Location,
+  endLocation: Location,
+): void {
+  // 直前のエントリーを要求範囲の始点とみなし、そこから復号位置までを traversal
+  // order で辿る (区間のクランプにも同じ 2 点を使う)
+  const ranges = buildFetchTraversalGapRanges({
+    groupOrder,
+    startLocation: previousEntryLocation,
+    endLocation,
+    from: { location: previousEntryLocation, inclusive: false },
+    to: { location: endLocation, inclusive: true },
+  });
+  for (const range of ranges) {
+    assertAndRecordFetchNonExistentRange(target, range);
+  }
+}
+
+/**
  * @param groupOrder - Group Order (GroupOrder.ASCENDING or GroupOrder.DESCENDING)
  *   draft-ietf-moq-transport-22 §11.4.1.1 / §9.20.8
  * @param priorGap - Track 単位の追跡対象。Prior ID Gap の 5 条件に加え、FETCH の
- *   End of Group / End of Track indicator が確定した終端の記録と検証にも使う。
+ *   End of Group / End of Track indicator が確定した終端の記録と検証、End of
+ *   Non-Existent Range と暗黙 gap の非存在範囲の記録に使う。
  *   FETCH は Fetcher が持つ比較キー、fill fetch は購読が持つ比較キーで解決した
  *   結果を渡す。Track を特定できない場合は省略し、追跡検証を行わない。
+ * @param fetchGap - FETCH 要求の範囲と Range Filter の有無。通常の FETCH だけが
+ *   渡し、fill fetch と要求範囲を特定できない経路では省略する。省略時は暗黙 gap
+ *   の推論を行わない。
  */
 export function processFetchObjects(
   buffer: Uint8Array,
@@ -68,6 +194,7 @@ export function processFetchObjects(
   stats: StreamStatsUpdate,
   groupOrder: GroupOrder,
   priorGap?: PriorGapTrackingTarget,
+  fetchGap?: FetchGapSemantics,
 ): {
   remainingBuffer: Uint8Array;
   context: FetchObjectContext | null;
@@ -79,6 +206,10 @@ export function processFetchObjects(
 
   while (offset < buffer.length) {
     try {
+      // draft-ietf-moq-transport-23 §3.2.2:
+      // gap の開始位置は「直前にシリアライズされたエントリーの次」である。
+      // 復号でコンテキストが更新される前に、直前エントリーの位置を控える。
+      const previousEntryLocation = fetchEntryLocation(currentContext);
       const [fields, fieldsConsumed, newContext] = decodeFetchObjectFields(
         buffer,
         currentContext,
@@ -108,10 +239,9 @@ export function processFetchObjects(
       // 既に復号され、newContext に入っている (§11.4.2.1)。後続の Object はその
       // 復号位置を prior として ID を復元する (§11.4.2.2)。
       // End of Range は Object ではないため、Track 横断の追跡検証も通さない。
-      // Gone (0x40C) も同じく配送しないが、§2.1.2 のとおり Gone は「存在しない」
-      // の断定ではないため、後で実 Object が届いてもこの経路では拒否しない。
-      // 実 Object と非存在範囲の矛盾検出は Track 単位の状態追跡で行う予定であり、
-      // 現状は未実装である。
+      // Gone / Unknown / Timed-Out は非存在の断定ではないため (§2.1.2)、実 Object が
+      // 後から届いても拒否しない。End of Non-Existent Range だけが範囲の非存在を
+      // 通知するため、Track 単位の非存在区間として記録する (§12.1 条件 10)。
       //
       // §3.2.2 のギャップの意味論: ギャップは「Object が存在しない」「subscriber の
       // フィルタで除外された」「状態を判定できない」で起こり、Range Filter を送っていなければ
@@ -121,6 +251,22 @@ export function processFetchObjects(
       // FIN でのみ検出できる。アプリへのギャップの通知は仕様が求めていないため行わない
       // (要求されたら別途対応する)。
       if (fields.endOfRange) {
+        // End of Non-Existent Range は「マークされた」非存在通知であり、Range Filter
+        // の有無に関わらず非存在として記録する (§3.2.2 の "unmarked gaps" の既定則は
+        // マークされていない gap にだけ適用される)。要求範囲が分かる通常 FETCH では
+        // traversal order の境界でクランプし、fill fetch など要求範囲が分からない
+        // 経路では直前のエントリーから復号位置までを記録する。
+        if (fields.endOfRange === "non_existent" && priorGap !== undefined) {
+          const endLocation = { group: fields.groupId, object: fields.objectId };
+          if (fetchGap !== undefined) {
+            recordFetchGapRanges(priorGap, groupOrder, fetchGap, previousEntryLocation, {
+              location: endLocation,
+              inclusive: true,
+            });
+          } else if (previousEntryLocation !== undefined) {
+            recordMarkedNonExistentRange(priorGap, groupOrder, previousEntryLocation, endLocation);
+          }
+        }
         continue;
       }
 
@@ -149,12 +295,26 @@ export function processFetchObjects(
         // draft-ietf-moq-transport-23 §12.1 条件 4 / 5 (FETCH の終端 indicator)。
         // 詳細は assertNoObjectAfterFetchEnd の JSDoc を参照する。
         assertNoObjectAfterFetchEnd(priorGap, fields.groupId, fields.objectId);
+        // draft-ietf-moq-transport-23 §12.1 条件 10:
+        // 確定済みの非存在範囲内の Object を拒否し、非存在の根拠にしないよう
+        // malformed と判定した Object は受信済みとして登録しない。
         assertNoPriorIdGapTrackViolation(
           priorGap,
           fields.groupId,
           fields.objectId,
           fields.properties,
         );
+
+        // draft-ietf-moq-transport-23 §3.2.2:
+        // Range Filter を含まない要求では、直前のエントリーとこの Object の間の
+        // マークされていない gap は存在しない Object を示す。Range Filter を
+        // 含む要求では Unknown 状態を示すため、非存在とみなさない。
+        if (fetchGap !== undefined && !fetchGap.rangeFiltersPresent) {
+          recordFetchGapRanges(priorGap, groupOrder, fetchGap, previousEntryLocation, {
+            location: { group: fields.groupId, object: fields.objectId },
+            inclusive: false,
+          });
+        }
       }
 
       // draft-ietf-moq-transport-22 Section 11.1.1:
@@ -326,7 +486,18 @@ export function processSubgroupObjects(
         // Group / Track の終端より後の Object は malformed である。詳細は
         // assertNoObjectAfterFetchEnd の JSDoc を参照する。
         assertNoObjectAfterFetchEnd(priorGap, header.groupId, objectId);
-        assertNoPriorIdGapTrackViolation(priorGap, header.groupId, objectId, fields.properties);
+        // draft-ietf-moq-transport-23 §12.1 条件 10:
+        // Object Status の END_OF_GROUP / END_OF_TRACK は「その位置より後が存在
+        // しない」通知でもあるため、同じ Track の他経路で受信済みの Object との
+        // 矛盾を判定する。単一 Object で完結する END_OF_GROUP の大小比較 (上の
+        // endOfGroupFinalObjectId 検証) とは別に、Track 全体の状態で判定する。
+        assertNoPriorIdGapTrackViolation(
+          priorGap,
+          header.groupId,
+          objectId,
+          fields.properties,
+          fields.status,
+        );
       }
       if (fields.status === ObjectStatus.END_OF_GROUP) {
         if (endOfGroupFinalObjectId !== undefined && objectId < endOfGroupFinalObjectId) {

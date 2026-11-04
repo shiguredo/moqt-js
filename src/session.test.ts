@@ -100,7 +100,10 @@ import {
 import { REQUEST_UPDATE_STREAM_CLOSED_MESSAGE } from "./session/namespaceLoops";
 import { sessionHandleFieldLengthExceeded } from "./session/lifecycle";
 import { incomingHandleFirstBidiMessage } from "./session/incoming";
-import type { PriorGapTracking } from "./session/priorGapTracking";
+import {
+  assertNoPriorIdGapTrackViolation,
+  type PriorGapTracking,
+} from "./session/priorGapTracking";
 import type { EndOfGroupTracking } from "./session/endOfGroupTracking";
 import type { FullTrackNameKey } from "./fullTrackName";
 import type { SessionInternal } from "./session/types";
@@ -12631,4 +12634,384 @@ test("sessionHandleFieldLengthExceeded: FLE は閉鎖済みでも処理済みと
   // SessionError でない値でも閉じない
   assert.isFalse(sessionHandleFieldLengthExceeded(session, closeWithError, new Error("boom")));
   assert.equal(closedWith.length, 1);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §3.2.2 (Gaps in a Fetch Stream) / §12.1 条件 10:
+ * "Gaps at the end of a stream are only detectable when the stream is terminated
+ *  by a FIN."
+ * Range Filter を含まない FETCH 応答が FIN で終わったとき、最後にシリアライズ
+ * された位置から End Location までのマークされていない範囲は存在しない Object を
+ * 示す。同じ Track の別経路で受信済みの Object がその範囲に含まれる場合、
+ * malformed Track として同一 Track の購読 / FETCH を cancel し、セッションは
+ * 閉じない。
+ */
+test("Fetch データストリーム: FIN 時の末尾 gap が受信済み Object と矛盾すると Track を cancel する", async () => {
+  const ctx = createDataStreamFinContext();
+  const requestId = 1n;
+  const errorCallbackErrors: Error[] = [];
+  const fetcher = new FetcherImpl(
+    ["live"],
+    "video",
+    requestId,
+    () => {},
+    () => {},
+    (error) => {
+      errorCallbackErrors.push(error);
+    },
+  );
+  fetcher.setGroupOrder(GroupOrder.ASCENDING);
+  fetcher.setFetchRequestRange({
+    startLocation: { group: 10n, object: 0n },
+    endLocation: { group: 10n, object: 9n },
+  });
+  fetcher.setFetchRequestRangeFiltersPresent(false);
+  // FETCH_OK の受理で確定する End Location (通常のセッションでは
+  // resolveFetchResponseEndLocation が設定する値)
+  fetcher.setFetchOkInfo({ group: 10n, object: 9n }, []);
+  // fetch() 実装と同じ挙動になるよう onCancel を bidiCancelFetch に配線する
+  // (cancel で fetchers から削除される経路を実セッションと同じにする)
+  fetcher.onCancel = async () => {
+    await bidiCancelFetch(ctx.session as unknown as BidiSessionInternal, fetcher);
+  };
+  ctx.internal.fetchers.set(requestId, fetcher);
+
+  // 同じ Track の購読経路で Object (Group 10, Object 7) を先に受信済みにしておく
+  const trackKey = fetcher.getFullTrackNameKey();
+  assertNoPriorIdGapTrackViolation(
+    { trackingByTrack: ctx.internal.priorGapTrackingByTrack, trackKey },
+    10n,
+    7n,
+    undefined,
+  );
+
+  // FETCH 応答: Group 10 / Object 0 の 1 件だけで FIN する
+  const first: FetchObjectFields = {
+    serializationFlags: createFirstFetchObjectFlags(),
+    groupId: 10n,
+    subgroupId: 1n,
+    objectId: 0n,
+    publisherPriority: 100,
+    payloadLength: 0n,
+  };
+  const headerBytes = encodeFetchHeader({ type: FetchHeaderType, requestId });
+  const fieldsBytes = encodeFetchObjectFields(first);
+
+  const handlePromise = ctx.run();
+  ctx.enqueue(concatUint8Arrays([headerBytes, fieldsBytes]));
+  ctx.fin();
+  await handlePromise;
+
+  // セッションは閉じず、fetcher の error コールバックへ MalformedTrackError が届く
+  assert.isUndefined(ctx.sessionError.current);
+  assert.equal(ctx.session.state, "connected");
+  assert.equal(errorCallbackErrors.length, 1);
+  assert.instanceOf(errorCallbackErrors[0], MalformedTrackError);
+  // 対象 Track の FETCH は状態を破棄して cancel される
+  assert.equal(ctx.internal.fetchers.size, 0);
+});
+
+// ============================================================================
+// Subgroup Header の END_OF_GROUP ビット + FIN による Group 終端の追跡
+// draft-ietf-moq-transport-23 §12.1 条件 4 / §2.1.2 / §3.2.2
+// ============================================================================
+
+/**
+ * END_OF_GROUP ビット付き Subgroup データストリームのバイト列を構築する
+ *
+ * draft-ietf-moq-transport-22 §11.3.1: END_OF_GROUP ビットは、その Subgroup が
+ * Group の最大 Object を含むことを示し、FIN で終わった時点で Group の最終 Object
+ * が確定する。Object ID Delta は先頭 Object が絶対値、以降は前の Object との差 -
+ * 1 である。
+ *
+ * @param objectIds - 配送する Object ID の列 (昇順)。空配列は Object 0 件。
+ */
+function buildEndOfGroupSubgroupStreamBytes(
+  trackAlias: bigint,
+  groupId: bigint,
+  subgroupId: bigint,
+  objectIds: readonly bigint[],
+): Uint8Array {
+  const headerType = SubgroupHeaderType.EXPLICIT;
+  const parts: Uint8Array[] = [
+    encodeSubgroupHeader({
+      type: headerType,
+      trackAlias,
+      groupId,
+      subgroupId,
+      publisherPriority: 128,
+      firstObject: false,
+      endOfGroup: true,
+    }),
+  ];
+  let previousObjectId: bigint | undefined;
+  for (const objectId of objectIds) {
+    const objectIdDelta =
+      previousObjectId === undefined ? objectId : objectId - previousObjectId - 1n;
+    parts.push(encodeObjectFields(objectIdDelta, 0n, headerType, ObjectStatus.NORMAL));
+    previousObjectId = objectId;
+  }
+  return concatUint8Arrays(parts);
+}
+
+/**
+ * draft-ietf-moq-transport-23 §12.1 条件 4:
+ * "The final Object in a Group is ... the last Object before a FIN in a Subgroup
+ *  which has the END_OF_GROUP bit set."
+ * END_OF_GROUP ビット付き Subgroup を FIN で閉じると Group の最終 Object が確定し、
+ * それより後は Group に存在しない。同じ Track の別 Subgroup で後続 Object を
+ * 受信すると malformed Track として購読を cancel し、セッションは閉じない。
+ */
+test("Subgroup データストリーム: END_OF_GROUP ビット付き FIN の後の Object で Track を cancel する", async () => {
+  const ctx = createDataStreamFinContext();
+  let delivered = 0;
+  let notified: Error | undefined;
+  const subscriber = new SubscriberImpl(
+    ["live"],
+    "video",
+    1n,
+    7n,
+    () => {
+      delivered++;
+    },
+    undefined,
+    undefined,
+    (error) => {
+      notified = error;
+    },
+  );
+  ctx.internal.subscribersByAlias.set(7n, [subscriber]);
+
+  // 1 本目: Group 10 の Object 5 を最終 Object として FIN で閉じる
+  const firstPromise = ctx.run();
+  ctx.enqueue(buildEndOfGroupSubgroupStreamBytes(7n, 10n, 1n, [5n]));
+  ctx.fin();
+  await firstPromise;
+  assert.equal(delivered, 1);
+  assert.isUndefined(notified);
+  // FIN 時点で Group の最終 Object が非存在通知として記録されている
+  const trackKey = subscriber.getFullTrackNameKey();
+  assert.isTrue(ctx.internal.priorGapTrackingByTrack.has(trackKey));
+
+  // 2 本目: 別 Subgroup で最終 Object の次の Object 6 を受信する
+  const second = ctx.openStream();
+  const secondPromise = second.run();
+  second.enqueue(
+    buildSingleObjectSubgroupStreamBytes({
+      trackAlias: 7n,
+      groupId: 10n,
+      subgroupId: 2n,
+      objectId: 6n,
+      status: ObjectStatus.NORMAL,
+    }),
+  );
+  second.fin();
+  await secondPromise;
+
+  // malformed として購読を cancel し、セッションは閉じない
+  assert.equal(delivered, 1);
+  assert.instanceOf(notified, MalformedTrackError);
+  assert.isUndefined(ctx.sessionError.current);
+  assert.equal(ctx.session.state, "connected");
+  assert.equal(subscriber.state, "closed");
+  assert.equal((ctx.internal.subscribersByAlias.get(7n) ?? []).length, 0);
+  // 購読が尽きたため Track 単位の追跡状態も残らない
+  assert.isFalse(ctx.internal.priorGapTrackingByTrack.has(trackKey));
+});
+
+/**
+ * draft-ietf-moq-transport-23 §12.1 条件 4:
+ * END_OF_GROUP ビット付きでも Object を 1 件も受信していない stream では、FIN を
+ * 観測しても Group の最終 Object を定められない。したがって非存在範囲を記録せず、
+ * 同じ Group の Object を後から受信しても拒否しない。
+ */
+test("Subgroup データストリーム: Object の無い END_OF_GROUP ビット付き FIN は非存在を記録しない", async () => {
+  const ctx = createDataStreamFinContext();
+  let delivered = 0;
+  let notified: Error | undefined;
+  const subscriber = new SubscriberImpl(
+    ["live"],
+    "video",
+    1n,
+    7n,
+    () => {
+      delivered++;
+    },
+    undefined,
+    undefined,
+    (error) => {
+      notified = error;
+    },
+  );
+  ctx.internal.subscribersByAlias.set(7n, [subscriber]);
+  const trackKey = subscriber.getFullTrackNameKey();
+
+  // 1 本目: END_OF_GROUP ビット付きヘッダーだけを送って FIN する (Object 0 件)
+  const firstPromise = ctx.run();
+  ctx.enqueue(buildEndOfGroupSubgroupStreamBytes(7n, 10n, 1n, []));
+  ctx.fin();
+  await firstPromise;
+  // 最終 Object が定まらないため、非存在範囲も追跡エントリも作られない
+  assert.equal(delivered, 0);
+  assert.isUndefined(notified);
+  assert.isFalse(ctx.internal.priorGapTrackingByTrack.has(trackKey));
+
+  // 2 本目: 同じ Group の Object 5 は正当に受理される
+  const second = ctx.openStream();
+  const secondPromise = second.run();
+  second.enqueue(
+    buildSingleObjectSubgroupStreamBytes({
+      trackAlias: 7n,
+      groupId: 10n,
+      subgroupId: 2n,
+      objectId: 5n,
+      status: ObjectStatus.NORMAL,
+    }),
+  );
+  second.fin();
+  await secondPromise;
+
+  assert.equal(delivered, 1);
+  assert.isUndefined(notified);
+  assert.isUndefined(ctx.sessionError.current);
+  assert.equal(subscriber.state, "active");
+});
+
+/**
+ * draft-ietf-moq-transport-23 §12.1 条件 4:
+ * END_OF_GROUP ビット付き Subgroup の FIN で確定するのは「最後に受信した Object が
+ * Group の最終 Object」である。FIN までに受信した Object は最終 Object 以前の
+ * 位置であり正当に受理され、非存在範囲は最終 Object より後に限られる。
+ */
+test("Subgroup データストリーム: END_OF_GROUP ビット付き FIN は最終 Object より後だけを非存在にする", async () => {
+  const ctx = createDataStreamFinContext();
+  let delivered = 0;
+  let notified: Error | undefined;
+  const subscriber = new SubscriberImpl(
+    ["live"],
+    "video",
+    1n,
+    7n,
+    () => {
+      delivered++;
+    },
+    undefined,
+    undefined,
+    (error) => {
+      notified = error;
+    },
+  );
+  ctx.internal.subscribersByAlias.set(7n, [subscriber]);
+
+  // 1 本目: Group 10 の Object 5 と 7 を配送して FIN。最終 Object は 10:7
+  const firstPromise = ctx.run();
+  ctx.enqueue(buildEndOfGroupSubgroupStreamBytes(7n, 10n, 1n, [5n, 7n]));
+  ctx.fin();
+  await firstPromise;
+  // FIN までに受信した Object は正当に受理される
+  assert.equal(delivered, 2);
+  assert.isUndefined(notified);
+
+  // 2 本目: 最終 Object より前の Object 6 は別 Subgroup でも受理される
+  const second = ctx.openStream();
+  const secondPromise = second.run();
+  second.enqueue(
+    buildSingleObjectSubgroupStreamBytes({
+      trackAlias: 7n,
+      groupId: 10n,
+      subgroupId: 2n,
+      objectId: 6n,
+      status: ObjectStatus.NORMAL,
+    }),
+  );
+  second.fin();
+  await secondPromise;
+  assert.equal(delivered, 3);
+  assert.isUndefined(notified);
+  assert.equal(subscriber.state, "active");
+
+  // 3 本目: 最終 Object より後の Object 8 は malformed として購読を cancel する
+  const third = ctx.openStream();
+  const thirdPromise = third.run();
+  third.enqueue(
+    buildSingleObjectSubgroupStreamBytes({
+      trackAlias: 7n,
+      groupId: 10n,
+      subgroupId: 3n,
+      objectId: 8n,
+      status: ObjectStatus.NORMAL,
+    }),
+  );
+  third.fin();
+  await thirdPromise;
+
+  assert.equal(delivered, 3);
+  assert.instanceOf(notified, MalformedTrackError);
+  assert.isUndefined(ctx.sessionError.current);
+  assert.equal(ctx.session.state, "connected");
+  assert.equal(subscriber.state, "closed");
+});
+
+/**
+ * draft-ietf-moq-transport-23 §12.1 条件 10:
+ * "or is signalled as not existing after it was received"
+ * END_OF_GROUP ビット付き Subgroup の FIN が確定する Group の最終 Object が、同じ
+ * Track の別経路で受信済みの Object より前にある場合、終端宣言が受信済み Object を
+ * 覆うため malformed Track である。FIN 時点で検出し、同一 Track の購読を cancel
+ * してセッションは閉じない。
+ */
+test("Subgroup データストリーム: FIN の END_OF_GROUP 終端が受信済み Object を覆うと Track を cancel する", async () => {
+  const ctx = createDataStreamFinContext();
+  let delivered = 0;
+  let notified: Error | undefined;
+  const subscriber = new SubscriberImpl(
+    ["live"],
+    "video",
+    1n,
+    7n,
+    () => {
+      delivered++;
+    },
+    undefined,
+    undefined,
+    (error) => {
+      notified = error;
+    },
+  );
+  ctx.internal.subscribersByAlias.set(7n, [subscriber]);
+  const trackKey = subscriber.getFullTrackNameKey();
+
+  // 1 本目: EOG ビットなしの Subgroup で Group 10 の Object 7 を先に受信する
+  const firstPromise = ctx.run();
+  ctx.enqueue(
+    buildSingleObjectSubgroupStreamBytes({
+      trackAlias: 7n,
+      groupId: 10n,
+      subgroupId: 1n,
+      objectId: 7n,
+      status: ObjectStatus.NORMAL,
+    }),
+  );
+  ctx.fin();
+  await firstPromise;
+  assert.equal(delivered, 1);
+  assert.isUndefined(notified);
+
+  // 2 本目: END_OF_GROUP ビット付き Subgroup で Object 5 を配送して FIN する。
+  // 最終 Object は 10:5 となり、受信済みの 10:7 を覆う
+  const second = ctx.openStream();
+  const secondPromise = second.run();
+  second.enqueue(buildEndOfGroupSubgroupStreamBytes(7n, 10n, 2n, [5n]));
+  second.fin();
+  await secondPromise;
+
+  // malformed として購読を cancel し、セッションは閉じない
+  assert.equal(delivered, 2);
+  assert.instanceOf(notified, MalformedTrackError);
+  assert.isUndefined(ctx.sessionError.current);
+  assert.equal(ctx.session.state, "connected");
+  assert.equal(subscriber.state, "closed");
+  assert.equal((ctx.internal.subscribersByAlias.get(7n) ?? []).length, 0);
+  // 購読が尽きたため Track 単位の追跡状態も残らない
+  assert.isFalse(ctx.internal.priorGapTrackingByTrack.has(trackKey));
 });

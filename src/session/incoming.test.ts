@@ -40,6 +40,7 @@ import {
 import { encodeProperties } from "../properties";
 import { fullTrackNameKey } from "../fullTrackName";
 import { GroupOrder } from "../message/types";
+import { ObjectStatus } from "../message";
 import { concatChunks, type FetchObjectSink } from "./stream";
 import { recordEndOfGroupFinalObjectId } from "./endOfGroupTracking";
 import { recordFetchObjectEnd } from "./priorGapTracking";
@@ -1714,4 +1715,103 @@ test("incomingSendRequestErrorAndClose: ピアの MAX_CONTROL_MESSAGE_SIZE を�
 
   assert.isFalse(written);
   assert.isTrue(cancelled);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §11.1.1 (Object Status) / §12.1 条件 10:
+ * Datagram で受信した Object Status END_OF_GROUP は、その Group の Object ID より
+ * 後が存在しないことを通知する。通知より後の Object を後の datagram で受信すると
+ * malformed Track であり、同一 Track の購読を cancel してセッションは閉じない。
+ */
+test("incomingHandleDatagram: Object Status END_OF_GROUP の後の Object で購読を cancel する", () => {
+  const ctx = createDatagramDeliveryTestContext();
+  let delivered = 0;
+  let notified: Error | undefined;
+  const subscriber = new SubscriberImpl(
+    ["test"],
+    "track",
+    0n,
+    7n,
+    () => {
+      delivered++;
+    },
+    undefined,
+    undefined,
+    (error) => {
+      notified = error;
+    },
+  );
+  ctx.session.subscribersByAlias.set(7n, [subscriber]);
+  ctx.session.subscribers.set(0n, subscriber);
+
+  // Group 10 の Object 5 を最終 Object とする END_OF_GROUP を通知する
+  incomingHandleDatagram(
+    ctx.session,
+    encodeObjectDatagram({
+      type: DatagramType.STATUS_OBJ,
+      trackAlias: 7n,
+      groupId: 10n,
+      objectId: 5n,
+      publisherPriority: 128,
+      status: ObjectStatus.END_OF_GROUP,
+    }),
+  );
+  assert.equal(delivered, 1);
+
+  // 通知より後の Object 6 は malformed であり、配送せず購読を cancel する
+  incomingHandleDatagram(ctx.session, trackingDatagramWire(10n, 6n));
+  assert.equal(delivered, 1);
+  assert.instanceOf(notified, MalformedTrackError);
+  assert.isUndefined(ctx.getClosedWithError());
+  assert.equal(subscriber.state, "closed");
+  assert.equal((ctx.session.subscribersByAlias.get(7n) ?? []).length, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §12.1 条件 10:
+ * "or is signalled as not existing after it was received"
+ * Datagram で実 Object を先に受信している場合、その位置を覆う Object Status の
+ * END_OF_TRACK は malformed Track である。
+ */
+test("incomingHandleDatagram: 受信済み Object を覆う Object Status END_OF_TRACK で購読を cancel する", () => {
+  const ctx = createDatagramDeliveryTestContext();
+  let delivered = 0;
+  let notified: Error | undefined;
+  const subscriber = new SubscriberImpl(
+    ["test"],
+    "track",
+    0n,
+    7n,
+    () => {
+      delivered++;
+    },
+    undefined,
+    undefined,
+    (error) => {
+      notified = error;
+    },
+  );
+  ctx.session.subscribersByAlias.set(7n, [subscriber]);
+  ctx.session.subscribers.set(0n, subscriber);
+
+  // Group 11 の Object 0 を先に受信しておく
+  incomingHandleDatagram(ctx.session, trackingDatagramWire(11n, 0n));
+  assert.equal(delivered, 1);
+
+  // Group 10 の Object 5 より後が存在しないという通知は受信済み Object を覆う
+  incomingHandleDatagram(
+    ctx.session,
+    encodeObjectDatagram({
+      type: DatagramType.STATUS_OBJ,
+      trackAlias: 7n,
+      groupId: 10n,
+      objectId: 5n,
+      publisherPriority: 128,
+      status: ObjectStatus.END_OF_TRACK,
+    }),
+  );
+  assert.equal(delivered, 1);
+  assert.instanceOf(notified, MalformedTrackError);
+  assert.isUndefined(ctx.getClosedWithError());
+  assert.equal(subscriber.state, "closed");
 });

@@ -133,6 +133,13 @@ export class FetcherImpl implements Fetcher {
   // フィルタなしの要求と同じ {0, 0} から Largest Object までとして扱う。
   private fetchRequestStartLocation: Location = { group: 0n, object: 0n };
   private fetchRequestEndLocation: Location | undefined = undefined;
+  // 要求範囲が設定済みか。直接生成した FetcherImpl (単体テスト等) と、要求範囲が
+  // 確定している実際の FETCH を区別する。FETCH 応答の暗黙 gap を非存在として
+  // 扱えるのは要求範囲が分かる場合だけである (draft-ietf-moq-transport-23 §3.2.2)。
+  private fetchRequestRangeSet = false;
+  // 要求に Range Filter を含むか。含む場合、FETCH 応答のマークされていない gap は
+  // Unknown 状態の Object を示すため、非存在とみなさない (§3.2.2)。
+  private fetchRequestRangeFiltersPresent = false;
 
   /**
    * Fetch リクエストの Group Order
@@ -198,6 +205,7 @@ export class FetcherImpl implements Fetcher {
   setFetchRequestRange(range: FetchRequestRange): void {
     this.fetchRequestStartLocation = range.startLocation;
     this.fetchRequestEndLocation = range.endLocation;
+    this.fetchRequestRangeSet = true;
   }
 
   /** 要求した範囲を取得する (開端の要求では End Location が undefined) */
@@ -206,6 +214,34 @@ export class FetcherImpl implements Fetcher {
       startLocation: this.fetchRequestStartLocation,
       endLocation: this.fetchRequestEndLocation,
     };
+  }
+
+  /**
+   * 要求範囲が確定しているか
+   *
+   * draft-ietf-moq-transport-23 §3.2.2 (Gaps in a Fetch Stream):
+   * Start / End Location は暗黙 gap の境界を決めるため、要求範囲が分かる場合だけ
+   * 暗黙 gap を非存在として扱う。直接生成した FetcherImpl では false のままに
+   * して、推測した範囲を根拠にしない。
+   */
+  hasFetchRequestRange(): boolean {
+    return this.fetchRequestRangeSet;
+  }
+
+  /**
+   * 要求に Range Filter を含むかを設定する (セッション内部コールバック)
+   *
+   * draft-ietf-moq-transport-23 §3.2.2: Range Filter を含む要求では、応答の
+   * マークされていない gap は Unknown 状態の Object を示す。非存在と誤認しない
+   * よう、要求時の有無を保持する。
+   */
+  setFetchRequestRangeFiltersPresent(present: boolean): void {
+    this.fetchRequestRangeFiltersPresent = present;
+  }
+
+  /** 要求に Range Filter を含むかを取得する */
+  getFetchRequestRangeFiltersPresent(): boolean {
+    return this.fetchRequestRangeFiltersPresent;
   }
 
   get trackProperties(): ReadonlyArray<Property> {

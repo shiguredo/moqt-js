@@ -7,6 +7,7 @@ import {
   concatChunks,
   processFetchObjects,
   processSubgroupObjects,
+  type FetchGapSemantics,
   type SubgroupDeliveryHooks,
 } from "./stream";
 import { createCountingStreamStats, type CountingStreamStats } from "../testSupport/streamStats";
@@ -16,6 +17,7 @@ import {
   encodeObjectFields,
   FetchSerializationFlags,
   SubgroupHeaderType,
+  type FetchObjectContext,
   type FetchObjectFields,
   type MoqtObject,
   type SubgroupHeader,
@@ -1089,6 +1091,674 @@ test("processSubgroupObjects: FETCH の Group 終端を超える Subgroup Object
     undefined,
     {},
     target,
+  );
+  assert.equal(delivered.length, 1);
+});
+
+// ============================================================================
+// processFetchObjects: FETCH 応答の非存在 gap の追跡
+// draft-ietf-moq-transport-23 §3.2.2 (Gaps in a Fetch Stream) / §12.1 条件 10
+// ============================================================================
+
+/** FETCH 要求の範囲と Range Filter の有無 (末尾 gap は FIN 処理が担当する) */
+function fetchGapSemantics(
+  startGroup: bigint,
+  startObject: bigint,
+  endGroup: bigint,
+  endObject: bigint,
+  rangeFiltersPresent = false,
+): FetchGapSemantics {
+  return {
+    startLocation: { group: startGroup, object: startObject },
+    endLocation: { group: endGroup, object: endObject },
+    rangeFiltersPresent,
+  };
+}
+
+/** End of Range indicator のワイヤを組み立てる (先頭エントリーは絶対 ID) */
+function endOfRangeWire(
+  flags: number,
+  groupId: bigint,
+  objectId: bigint,
+  context: FetchObjectContext | null,
+  groupOrder: GroupOrder = GroupOrder.ASCENDING,
+): Uint8Array {
+  return encodeFetchObjectFields(
+    { serializationFlags: flags, groupId, objectId, payloadLength: 0n },
+    false,
+    context,
+    groupOrder,
+  );
+}
+
+/**
+ * draft-ietf-moq-transport-23 §3.2.2:
+ * End of Non-Existent Range が明示した範囲を非存在として記録し、その範囲内の
+ * Object を後続の受信経路 (FETCH) で受信したら malformed Track とする。
+ * 同じ Track の別 FETCH をまたいだ矛盾検出である。
+ */
+test("processFetchObjects: End of Non-Existent Range 内の Object を後続 FETCH で拒否する", () => {
+  const target = fetchTrackingTarget();
+  const first = fetchTestSetup();
+  const gap = fetchGapSemantics(10n, 0n, 10n, 9n);
+
+  // 1 本目: Object (10:5) の後に End of Non-Existent Range (10:9)。
+  // 範囲は直前の Object の次から 10:9 までである。End of Range の ID は直前の
+  // Object を基準にした delta で符号化する (§11.4.2.1) ため、1 件目を処理して
+  // 得た context を使ってワイヤを組み立てる
+  const objectResult = processFetchObjects(
+    fetchObjectWire(10n, 1n, 5n, 100),
+    first.fetcher,
+    null,
+    true,
+    first.stats,
+    GroupOrder.ASCENDING,
+    target,
+    gap,
+  );
+  assert.equal(first.delivered.length, 1);
+  const eor = endOfRangeWire(
+    FetchSerializationFlags.END_OF_NON_EXISTENT_RANGE,
+    10n,
+    9n,
+    objectResult.context,
+  );
+  processFetchObjects(
+    eor,
+    first.fetcher,
+    objectResult.context,
+    objectResult.isFirst,
+    first.stats,
+    GroupOrder.ASCENDING,
+    target,
+    gap,
+  );
+  assert.equal(first.delivered.length, 1);
+
+  // 2 本目: 非存在範囲内の Object (10:7) は malformed
+  const second = fetchTestSetup();
+  assert.throws(
+    () =>
+      processFetchObjects(
+        fetchObjectWire(10n, 1n, 7n, 100),
+        second.fetcher,
+        null,
+        true,
+        second.stats,
+        GroupOrder.ASCENDING,
+        target,
+        fetchGapSemantics(10n, 7n, 10n, 9n),
+      ),
+    MalformedTrackError,
+    /signalled as not existing/,
+  );
+  assert.equal(second.delivered.length, 0);
+
+  // 非存在範囲の手前の Object (10:5) は受理する
+  const third = fetchTestSetup();
+  processFetchObjects(
+    fetchObjectWire(10n, 1n, 5n, 100),
+    third.fetcher,
+    null,
+    true,
+    third.stats,
+    GroupOrder.ASCENDING,
+    target,
+    fetchGapSemantics(10n, 5n, 10n, 9n),
+  );
+  assert.equal(third.delivered.length, 1);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §3.2.2 / §11.4.2:
+ * End of Non-Existent Range は「マークされた」非存在通知であり、Range Filter を
+ * 含む要求でも非存在として記録する ("unmarked gaps" の既定則はマークされて
+ * いない gap にだけ適用される)。範囲内の Object を後続 FETCH で拒否する。
+ */
+test("processFetchObjects: Range Filter 付きの End of Non-Existent Range も非存在として記録する", () => {
+  const target = fetchTrackingTarget();
+  const first = fetchTestSetup();
+  // Range Filter を含む要求 (rangeFiltersPresent = true)
+  const gap = fetchGapSemantics(10n, 0n, 10n, 9n, true);
+
+  const objectResult = processFetchObjects(
+    fetchObjectWire(10n, 1n, 5n, 100),
+    first.fetcher,
+    null,
+    true,
+    first.stats,
+    GroupOrder.ASCENDING,
+    target,
+    gap,
+  );
+  assert.equal(first.delivered.length, 1);
+  processFetchObjects(
+    endOfRangeWire(
+      FetchSerializationFlags.END_OF_NON_EXISTENT_RANGE,
+      10n,
+      9n,
+      objectResult.context,
+    ),
+    first.fetcher,
+    objectResult.context,
+    objectResult.isFirst,
+    first.stats,
+    GroupOrder.ASCENDING,
+    target,
+    gap,
+  );
+
+  // 非存在範囲内の Object (10:7) は、Range Filter の有無に関わらず malformed
+  const second = fetchTestSetup();
+  assert.throws(
+    () =>
+      processFetchObjects(
+        fetchObjectWire(10n, 1n, 7n, 100),
+        second.fetcher,
+        null,
+        true,
+        second.stats,
+        GroupOrder.ASCENDING,
+        target,
+        fetchGapSemantics(10n, 7n, 10n, 9n, true),
+      ),
+    MalformedTrackError,
+    /signalled as not existing/,
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-23 §11.4.2:
+ * fill fetch は要求範囲を保持しないため暗黙 gap は推論しないが、明示された
+ * End of Non-Existent Range は通知そのものであり、直前のエントリーから復号位置
+ * までを非存在として記録する。範囲内の Object を後続経路で拒否する。
+ */
+test("processFetchObjects: fill fetch (要求範囲なし) でも End of Non-Existent Range を記録する", () => {
+  const target = fetchTrackingTarget();
+  const first = fetchTestSetup();
+
+  // fetchGap を渡さない (fill fetch 相当)
+  const objectResult = processFetchObjects(
+    fetchObjectWire(10n, 1n, 5n, 100),
+    first.fetcher,
+    null,
+    true,
+    first.stats,
+    GroupOrder.ASCENDING,
+    target,
+  );
+  assert.equal(first.delivered.length, 1);
+  processFetchObjects(
+    endOfRangeWire(
+      FetchSerializationFlags.END_OF_NON_EXISTENT_RANGE,
+      10n,
+      9n,
+      objectResult.context,
+    ),
+    first.fetcher,
+    objectResult.context,
+    objectResult.isFirst,
+    first.stats,
+    GroupOrder.ASCENDING,
+    target,
+  );
+
+  // 非存在範囲内の Object (10:7) は malformed
+  const second = fetchTestSetup();
+  assert.throws(
+    () =>
+      processFetchObjects(
+        fetchObjectWire(10n, 1n, 7n, 100),
+        second.fetcher,
+        null,
+        true,
+        second.stats,
+        GroupOrder.ASCENDING,
+        target,
+      ),
+    MalformedTrackError,
+    /signalled as not existing/,
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-23 §3.2.2:
+ * "Unless the request included Range Filters ... any gaps in the Group and
+ *  Object IDs in the response stream that are not otherwise marked indicate
+ *  objects that do not exist."
+ * Range Filter を含まない FETCH の暗黙 gap を非存在として記録し、別経路でその
+ * 位置を受信したら malformed Track とする。
+ */
+test("processFetchObjects: Range Filter が無い FETCH の暗黙 gap を非存在として記録する", () => {
+  const target = fetchTrackingTarget();
+  const { delivered, fetcher, stats } = fetchTestSetup();
+  const gap = fetchGapSemantics(10n, 0n, 10n, 9n);
+
+  // Group 10 の Object 0 の後に Object 3 が届き、その間 (0:1-0:2) が暗黙 gap になる
+  const firstResult = processFetchObjects(
+    fetchObjectWire(10n, 1n, 0n, 100),
+    fetcher,
+    null,
+    true,
+    stats,
+    GroupOrder.ASCENDING,
+    target,
+    gap,
+  );
+  processFetchObjects(
+    encodeFetchObjectFields(
+      {
+        serializationFlags:
+          FetchSerializationFlags.SUBGROUP_SAME | FetchSerializationFlags.OBJECT_ID_PRESENT,
+        objectId: 3n,
+        payloadLength: 0n,
+      },
+      false,
+      firstResult.context,
+      GroupOrder.ASCENDING,
+    ),
+    fetcher,
+    firstResult.context,
+    firstResult.isFirst,
+    stats,
+    GroupOrder.ASCENDING,
+    target,
+    gap,
+  );
+  assert.equal(delivered.length, 2);
+
+  // 別経路 (subgroup) で暗黙 gap 内の Object を受信すると malformed
+  const subgroup = subgroupTestSetup();
+  const gapObjectWire = encodeObjectFields(
+    2n,
+    0n,
+    SubgroupHeaderType.BASE_EXT,
+    ObjectStatus.NORMAL,
+  );
+  assert.throws(
+    () =>
+      processSubgroupObjects(
+        gapObjectWire,
+        [subgroup.subscriber],
+        { ...subgroup.header, groupId: 10n },
+        -1n,
+        subgroup.stats,
+        silentDelivery,
+        undefined,
+        {},
+        target,
+      ),
+    MalformedTrackError,
+    /signalled as not existing/,
+  );
+  assert.equal(subgroup.delivered.length, 0);
+
+  // gap の外 (10:4) は受理する
+  const allowedWire = encodeObjectFields(4n, 0n, SubgroupHeaderType.BASE_EXT, ObjectStatus.NORMAL);
+  processSubgroupObjects(
+    allowedWire,
+    [subgroup.subscriber],
+    { ...subgroup.header, groupId: 10n },
+    -1n,
+    subgroup.stats,
+    silentDelivery,
+    undefined,
+    {},
+    target,
+  );
+  assert.equal(subgroup.delivered.length, 1);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §3.2.2:
+ * "When one or more Range Filters are present, unmarked gaps indicate objects in
+ *  the Unknown state."
+ * Range Filter を含む FETCH の暗黙 gap は非存在ではないため、その位置の Object を
+ * 後から受信しても拒否しない。
+ */
+test("processFetchObjects: Range Filter を含む FETCH の暗黙 gap は非存在と誤認しない", () => {
+  const target = fetchTrackingTarget();
+  const { delivered, fetcher, stats } = fetchTestSetup();
+  const gap = fetchGapSemantics(10n, 0n, 10n, 9n, true);
+
+  // Object 0 の後に Object 3 が届く (間に 0:1-0:2 の無印 gap)
+  const firstResult = processFetchObjects(
+    fetchObjectWire(10n, 1n, 0n, 100),
+    fetcher,
+    null,
+    true,
+    stats,
+    GroupOrder.ASCENDING,
+    target,
+    gap,
+  );
+  processFetchObjects(
+    encodeFetchObjectFields(
+      {
+        serializationFlags:
+          FetchSerializationFlags.SUBGROUP_SAME | FetchSerializationFlags.OBJECT_ID_PRESENT,
+        objectId: 3n,
+        payloadLength: 0n,
+      },
+      false,
+      firstResult.context,
+      GroupOrder.ASCENDING,
+    ),
+    fetcher,
+    firstResult.context,
+    firstResult.isFirst,
+    stats,
+    GroupOrder.ASCENDING,
+    target,
+    gap,
+  );
+  assert.equal(delivered.length, 2);
+
+  // Range Filter があるため gap は Unknown であり、subgroup で 10:2 を受信しても
+  // malformed にしない
+  const subgroup = subgroupTestSetup();
+  const unknownObjectWire = encodeObjectFields(
+    2n,
+    0n,
+    SubgroupHeaderType.BASE_EXT,
+    ObjectStatus.NORMAL,
+  );
+  processSubgroupObjects(
+    unknownObjectWire,
+    [subgroup.subscriber],
+    { ...subgroup.header, groupId: 10n },
+    -1n,
+    subgroup.stats,
+    silentDelivery,
+    undefined,
+    {},
+    target,
+  );
+  assert.equal(subgroup.delivered.length, 1);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §3.2.2:
+ * gap は "ranges between the Start Location and the first object in the stream"
+ * も含む。先頭 Object より前の暗黙 gap も非存在として記録する。
+ */
+test("processFetchObjects: 先頭 Object より前の暗黙 gap を非存在として記録する", () => {
+  const target = fetchTrackingTarget();
+  const { delivered, fetcher, stats } = fetchTestSetup();
+
+  // Start Location (10:0) から最初の Object (10:5) の前までが gap になる
+  processFetchObjects(
+    fetchObjectWire(10n, 1n, 5n, 100),
+    fetcher,
+    null,
+    true,
+    stats,
+    GroupOrder.ASCENDING,
+    target,
+    fetchGapSemantics(10n, 0n, 10n, 9n),
+  );
+  assert.equal(delivered.length, 1);
+
+  // gap 内の Object を別経路で受信すると malformed
+  const subgroup = subgroupTestSetup();
+  const gapObjectWire = encodeObjectFields(
+    3n,
+    0n,
+    SubgroupHeaderType.BASE_EXT,
+    ObjectStatus.NORMAL,
+  );
+  assert.throws(
+    () =>
+      processSubgroupObjects(
+        gapObjectWire,
+        [subgroup.subscriber],
+        { ...subgroup.header, groupId: 10n },
+        -1n,
+        subgroup.stats,
+        silentDelivery,
+        undefined,
+        {},
+        target,
+      ),
+    MalformedTrackError,
+    /signalled as not existing/,
+  );
+
+  // 先頭 Object より後は受理する
+  const afterWire = encodeObjectFields(6n, 0n, SubgroupHeaderType.BASE_EXT, ObjectStatus.NORMAL);
+  processSubgroupObjects(
+    afterWire,
+    [subgroup.subscriber],
+    { ...subgroup.header, groupId: 10n },
+    -1n,
+    subgroup.stats,
+    silentDelivery,
+    undefined,
+    {},
+    target,
+  );
+  assert.equal(subgroup.delivered.length, 1);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §2.1.2:
+ * "receiving an Object that was recorded as Gone or Unknown is not an error."
+ * Gone / Unknown / Timed-Out の End of Range は非存在の断定ではないため、
+ * その範囲の内側 / 外側を問わず、後の実 Object を拒否しない。
+ */
+test("processFetchObjects: Gone / Unknown / Timed-Out の後の実 Object を受理する", () => {
+  const flagsList = [
+    FetchSerializationFlags.END_OF_UNKNOWN_RANGE,
+    FetchSerializationFlags.END_OF_TIMED_OUT_RANGE,
+    FetchSerializationFlags.END_OF_GONE_RANGE,
+  ] as const;
+
+  for (const flags of flagsList) {
+    const target = fetchTrackingTarget();
+    const { delivered, fetcher, stats } = fetchTestSetup();
+    const gap = fetchGapSemantics(10n, 0n, 10n, 9n);
+
+    // 先頭エントリーの End of Range (絶対 ID) を受理する。直前のエントリーが
+    // 無いため、この indicator が覆う範囲は要求範囲の先頭 (10:0) から 10:5 まで
+    // である。Gone / Unknown / Timed-Out はその範囲を非存在として記録しない。
+    const eorResult = processFetchObjects(
+      endOfRangeWire(flags, 10n, 5n, null),
+      fetcher,
+      null,
+      true,
+      stats,
+      GroupOrder.ASCENDING,
+      target,
+      gap,
+    );
+    assert.equal(delivered.length, 0, `End of Range flags=0x${flags.toString(16)} は配送しない`);
+
+    // End of Range が覆う範囲の内側 (10:3) の Object を別経路 (subgroup) で受信して
+    // も、Gone / Unknown / Timed-Out は非存在の断定ではないため受理する
+    const subgroup = subgroupTestSetup();
+    const insideWire = encodeObjectFields(3n, 0n, SubgroupHeaderType.BASE_EXT, ObjectStatus.NORMAL);
+    processSubgroupObjects(
+      insideWire,
+      [subgroup.subscriber],
+      { ...subgroup.header, groupId: 10n },
+      -1n,
+      subgroup.stats,
+      silentDelivery,
+      undefined,
+      {},
+      target,
+    );
+    assert.equal(
+      subgroup.delivered.length,
+      1,
+      `End of Range flags=0x${flags.toString(16)} の範囲内の Object は受理する`,
+    );
+
+    // End of Range の後の実 Object も拒否しない (Gone / Unknown / Timed-Out は
+    // 非存在ではない)
+    processFetchObjects(
+      encodeFetchObjectFields(
+        {
+          serializationFlags:
+            FetchSerializationFlags.SUBGROUP_PRESENT |
+            FetchSerializationFlags.OBJECT_ID_PRESENT |
+            FetchSerializationFlags.PRIORITY_PRESENT,
+          subgroupId: 1n,
+          objectId: 7n,
+          publisherPriority: 100,
+          payloadLength: 0n,
+        },
+        false,
+        eorResult.context,
+        GroupOrder.ASCENDING,
+      ),
+      fetcher,
+      eorResult.context,
+      eorResult.isFirst,
+      stats,
+      GroupOrder.ASCENDING,
+      target,
+      gap,
+    );
+    assert.equal(
+      delivered.length,
+      1,
+      `End of Range flags=0x${flags.toString(16)} の後の Object は受理する`,
+    );
+  }
+});
+
+/**
+ * draft-ietf-moq-transport-23 §11.1.1 (Object Status) / §12.1 条件 10:
+ * 通常購読の Object Status END_OF_GROUP は Group の残りが存在しないことを
+ * 通知する。同じ Track の別 Subgroup ストリームで後続 Object を受信したら
+ * malformed Track である。
+ */
+test("processSubgroupObjects: Object Status END_OF_GROUP の後の Object を別 Subgroup で拒否する", () => {
+  const target = fetchTrackingTarget();
+  const { delivered, subscriber, header, stats } = subgroupTestSetup();
+  const groupHeader = { ...header, groupId: 10n };
+
+  // Group 10 の Object 5 を最終 Object とする END_OF_GROUP
+  const endOfGroupWire = encodeObjectFields(
+    5n,
+    0n,
+    SubgroupHeaderType.BASE_EXT,
+    ObjectStatus.END_OF_GROUP,
+  );
+  processSubgroupObjects(
+    endOfGroupWire,
+    [subscriber],
+    groupHeader,
+    -1n,
+    stats,
+    silentDelivery,
+    undefined,
+    {},
+    target,
+  );
+  assert.equal(delivered.length, 1);
+
+  // 別 Subgroup ストリームで後続 Object 6 を受信すると malformed
+  const beyondWire = encodeObjectFields(6n, 0n, SubgroupHeaderType.BASE_EXT, ObjectStatus.NORMAL);
+  assert.throws(
+    () =>
+      processSubgroupObjects(
+        beyondWire,
+        [subscriber],
+        { ...groupHeader, subgroupId: 1n, type: SubgroupHeaderType.BASE_EXT },
+        -1n,
+        stats,
+        silentDelivery,
+        undefined,
+        {},
+        target,
+      ),
+    MalformedTrackError,
+    /signalled as not existing/,
+  );
+  assert.equal(delivered.length, 1);
+
+  // 通知より前の Object 4 は受理する
+  const beforeWire = encodeObjectFields(4n, 0n, SubgroupHeaderType.BASE_EXT, ObjectStatus.NORMAL);
+  processSubgroupObjects(
+    beforeWire,
+    [subscriber],
+    { ...groupHeader, subgroupId: 2n },
+    -1n,
+    stats,
+    silentDelivery,
+    undefined,
+    {},
+    target,
+  );
+  assert.equal(delivered.length, 2);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §3.2.2 / §12.1 条件 10:
+ * Range Filter を含まない FETCH の暗黙 gap は、別経路で先に受信済みの Object を
+ * 覆う場合に malformed Track とする ("... or is signalled as not existing after
+ * it was received" の方向)。FETCH 応答の 2 件目の Object を処理した時点で、
+ * その間の gap が受信済み位置と突き合わされる。
+ */
+test("processFetchObjects: 受信済み Object を覆う暗黙 gap は MalformedTrackError", () => {
+  const target = fetchTrackingTarget();
+
+  // 別経路 (subgroup) で Group 10 の Object 2 を先に受信しておく
+  const subgroup = subgroupTestSetup();
+  const receivedWire = encodeObjectFields(2n, 0n, SubgroupHeaderType.BASE_EXT, ObjectStatus.NORMAL);
+  processSubgroupObjects(
+    receivedWire,
+    [subgroup.subscriber],
+    { ...subgroup.header, groupId: 10n },
+    -1n,
+    subgroup.stats,
+    silentDelivery,
+    undefined,
+    {},
+    target,
+  );
+  assert.equal(subgroup.delivered.length, 1);
+
+  // FETCH 応答: Object 0 の後に Object 3 が届き、間の 10:1-10:2 が暗黙 gap になる。
+  // 受信済みの 10:2 を覆うため malformed である
+  const { delivered, fetcher, stats } = fetchTestSetup();
+  const gap = fetchGapSemantics(10n, 0n, 10n, 9n);
+  const firstResult = processFetchObjects(
+    fetchObjectWire(10n, 1n, 0n, 100),
+    fetcher,
+    null,
+    true,
+    stats,
+    GroupOrder.ASCENDING,
+    target,
+    gap,
+  );
+  assert.throws(
+    () =>
+      processFetchObjects(
+        encodeFetchObjectFields(
+          {
+            serializationFlags:
+              FetchSerializationFlags.SUBGROUP_SAME | FetchSerializationFlags.OBJECT_ID_PRESENT,
+            objectId: 3n,
+            payloadLength: 0n,
+          },
+          false,
+          firstResult.context,
+          GroupOrder.ASCENDING,
+        ),
+        fetcher,
+        firstResult.context,
+        firstResult.isFirst,
+        stats,
+        GroupOrder.ASCENDING,
+        target,
+        gap,
+      ),
+    MalformedTrackError,
+    /includes already received object/,
   );
   assert.equal(delivered.length, 1);
 });
