@@ -329,9 +329,9 @@ export class SessionError extends MoqtError {
 }
 
 /**
- * Redirect 情報 (Section 9.4.1)
+ * Redirect 情報 (Section 9.4.2.1 REDIRECT)
  *
- * draft-ietf-moq-transport-22 Section 9.4.1 (Redirect Structure):
+ * draft-ietf-moq-transport-23 Section 9.4.2.1 (REDIRECT):
  * サーバーがクライアントに対して別の接続先への再接続を指示する。
  * Track Namespace は tuple 形式で保持する。
  */
@@ -339,7 +339,7 @@ export interface RedirectInfo {
   /**
    * 新しいセッションの URI
    *
-   * draft-ietf-moq-transport-22 Section 9.4.1: 空のときは要求側が現在のセッション URI を
+   * draft-ietf-moq-transport-23 Section 9.4.2.1: 空のときは要求側が現在のセッション URI を
    * 使う SHOULD。
    */
   connectUri: string;
@@ -353,7 +353,7 @@ export interface RedirectInfo {
    * 再試行先の Track Name
    *
    * track-scoped のリクエストではこの値で置き換える。namespace-scoped のリクエストでは
-   * 空でなければならない (Section 9.4.1 の MUST)。
+   * 空でなければならない (Section 9.4.2.1 の MUST)。
    */
   trackName: Uint8Array;
 }
@@ -365,7 +365,7 @@ export class RequestError extends MoqtError {
   /**
    * 再試行までの最小時間
    *
-   * draft-ietf-moq-transport-22 Section 9.4.2: 「ミリ秒 + 1」の生値であり、0 は
+   * draft-ietf-moq-transport-23 Section 9.4.1: 「ミリ秒 + 1」の生値であり、0 は
    * 「そのままでは再試行しない」を意味する (Section 12.3 により、0 であっても
    * Redirect の追従は妨げられない)。受信した REQUEST_ERROR ではこのフィールドは必須の
    * ため、undefined になるのはライブラリがローカルに生成したエラー (GOAWAY による
@@ -375,23 +375,37 @@ export class RequestError extends MoqtError {
   /**
    * Redirect 情報
    *
-   * draft-ietf-moq-transport-22 Section 9.4.2: Error Code が REDIRECT のときだけ存在する。
-   * ライブラリは値の保持とアプリへの通知のみを行い、再試行や追従は自動では行わない
-   * (Section 12.3 の SHOULD は要求側が新しいセッションを張って再試行することを求めるが、
-   * 再試行の判断はアプリに委ねる)。
+   * draft-ietf-moq-transport-23 Section 9.4.2.1: Error Code が REDIRECT のときだけ存在する
+   * REDIRECT Error Detail の内容。ライブラリは値の保持とアプリへの通知のみを行い、
+   * 再試行や追従は自動では行わない (Section 12.3 の SHOULD は要求側が新しい
+   * セッションを張って再試行することを求めるが、再試行の判断はアプリに委ねる)。
    */
   readonly redirect: RedirectInfo | undefined;
+  /**
+   * 未対応の Mandatory Track Property の Type 一覧
+   *
+   * draft-ietf-moq-transport-23 Section 9.4.2.2 (UNSUPPORTED_PROPERTY):
+   * UNSUPPORTED_EXTENSION で拒否された要求では、送信者が理解できなかった
+   * Mandatory Track Property の Type が UNSUPPORTED_PROPERTY Error Detail として
+   * 1 つ以上載る (複数出現可)。ライブラリは受信した Detail をそのまま保持する。
+   * それ以外の Error Code や、Detail を持たない REQUEST_ERROR では空配列になる
+   * (Section 9.4.2 のとおり、未知の Error Detail と適用外の既知 Error Detail は
+   * 無視する)。理由文字列から Type を復元することはしない。
+   */
+  readonly unsupportedPropertyTypes: readonly bigint[];
 
   constructor(
     message: string,
     code: RequestErrorCode,
     retryInterval?: bigint,
     redirect?: RedirectInfo,
+    unsupportedPropertyTypes: readonly bigint[] = [],
   ) {
     super(message, code);
     this.name = "RequestError";
     this.retryInterval = retryInterval;
     this.redirect = redirect;
+    this.unsupportedPropertyTypes = unsupportedPropertyTypes;
   }
 }
 
@@ -437,18 +451,36 @@ export class ProtocolViolationError extends Error {
 /**
  * Malformed Track を検出したときに投げるエラー
  *
- * draft-ietf-moq-transport-22 §12.1 / §10.7 / §10.8 / §10.9:
+ * draft-ietf-moq-transport-23 §12.1 / §10.7 / §10.8 / §10.9:
  * Object 内で MUST 規定 (IMMUTABLE_PROPERTIES の再帰禁止、各 Property の Object 当たり
  * 1 つだけ、同一 Subgroup 内の Publisher Priority 不一致等) が違反された場合、
  * Track は malformed として扱われる。セッションは閉じず、データストリーム単位で
  * STOP_SENDING 相当 (cancelStreamQuiet) で打ち切るか、FETCH データストリームの場合は
  * 対応する FETCH をキャンセルして error コールバックで通知する上位ハンドリングへ
  * 伝搬する。
+ *
+ * 未知の Mandatory Track Property を含む Track Properties を検出した場合も
+ * malformed として扱い、その Type 一覧を unsupportedPropertyTypes に載せる。
+ * 受信 PUBLISH の拒否では、この一覧を REQUEST_ERROR の UNSUPPORTED_PROPERTY
+ * Error Detail に載せる (§3.7 / §9.4.2.2)。呼び出し側が理由文字列から Type を
+ * 復元することはしない。
  */
 export class MalformedTrackError extends Error {
-  constructor(message: string) {
+  /**
+   * 未知の Mandatory Track Property の Type 一覧
+   *
+   * draft-ietf-moq-transport-23 §3.7 (Mandatory to Understand Track Properties):
+   * 受信側が理解できない Mandatory Track Property (0x4000-0x7FFF) の Type を、
+   * 検出順に重複を除かず保持する。Track Properties の decodeProperties 系は
+   * 1 件目で打ち切らず構造全体を検証してから本エラーを投げるため、複数件が載り得る。
+   * 未知 Mandatory Track Property 以外の理由で malformed と判定した場合は空配列。
+   */
+  readonly unsupportedPropertyTypes: readonly bigint[];
+
+  constructor(message: string, unsupportedPropertyTypes: readonly bigint[] = []) {
     super(message);
     this.name = "MalformedTrackError";
+    this.unsupportedPropertyTypes = unsupportedPropertyTypes;
   }
 }
 

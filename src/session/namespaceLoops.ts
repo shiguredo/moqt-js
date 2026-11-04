@@ -1512,10 +1512,10 @@ function createPublicationStreamHandlers(
       if (ctx.progress.goawayReceived) {
         return "continue";
       }
-      // draft-ietf-moq-transport-22 §9.4.1 / §9.4.2:
-      // PUBLISH_NAMESPACE も namespace 系リクエストであり、Redirect の Track Name は
-      // 空でなければならない (非空は INVALID_FIELD)。SUBSCRIBE_NAMESPACE /
-      // SUBSCRIBE_TRACKS と同じ検証と構築を通す。
+      // draft-ietf-moq-transport-23 §9.4.2.1:
+      // PUBLISH_NAMESPACE も namespace 系リクエストであり、REDIRECT Error Detail の
+      // Track Name は空でなければならない (非空は INVALID_FIELD)。
+      // SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS と同じ検証と構築を通す。
       const error = decodeRequestErrorToRequestError(payload);
       ctx.target.state = "closed";
       namespaceNotifyError(ctx.session, ctx.requestId, ctx.callbacks, error);

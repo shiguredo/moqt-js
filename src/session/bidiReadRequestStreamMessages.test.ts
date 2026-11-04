@@ -119,6 +119,63 @@ test("bidiReadRequestStreamMessages: 確立後の REQUEST_ERROR の retryInterva
 });
 
 /**
+ * draft-ietf-moq-transport-23 §9.4.2.2:
+ * 確立後の REQUEST_ERROR (REQUEST_UPDATE の失敗) でも、UNSUPPORTED_EXTENSION の
+ * UNSUPPORTED_PROPERTY Error Detail の Type 一覧を RequestError に載せる。
+ * coalescing で複数の pending を失敗させる場合も同じ一覧と同じインスタンスを共有する。
+ */
+test("bidiReadRequestStreamMessages: 確立後の UNSUPPORTED_PROPERTY の Type 一覧が RequestError に載る", async () => {
+  const ctx = createPublishReadTestContext({});
+  const rejectedErrors: Error[] = [];
+  ctx.session.pendingRequestUpdate.set(100n, {
+    resolve: () => {},
+    reject: (error: Error) => {
+      rejectedErrors.push(error);
+    },
+    targetRequestId: ctx.requestId,
+  });
+  ctx.session.pendingRequestUpdate.set(102n, {
+    resolve: () => {},
+    reject: (error: Error) => {
+      rejectedErrors.push(error);
+    },
+    targetRequestId: ctx.requestId,
+  });
+
+  const readPromise = bidiReadRequestStreamMessages(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+    "publish",
+  );
+  const errorPayload = encodeRequestErrorPayload({
+    type: MessageType.REQUEST_ERROR,
+    errorCode: BigInt(RequestErrorCode.UNSUPPORTED_EXTENSION),
+    reasonPhrase: "unsupported mandatory property",
+    retryInterval: 0n,
+    unsupportedPropertyTypes: [0x4000n, 0x4001n],
+  });
+  ctx.readableController.enqueue(
+    ctx.session.controlWriter!.encode(MessageType.REQUEST_ERROR, errorPayload),
+  );
+  ctx.readableController.close();
+  await readPromise;
+
+  assert.equal(rejectedErrors.length, 2);
+  assert.equal(rejectedErrors[0], rejectedErrors[1]);
+  for (const error of rejectedErrors) {
+    assert.instanceOf(error, RequestError);
+    const requestError = error as RequestError;
+    assert.equal(requestError.code, RequestErrorCode.UNSUPPORTED_EXTENSION);
+    assert.deepEqual(requestError.unsupportedPropertyTypes, [0x4000n, 0x4001n]);
+    assert.isUndefined(requestError.redirect);
+  }
+  assert.equal(ctx.session.pendingRequestUpdate.size, 0);
+  assert.isUndefined(ctx.closedWithError);
+});
+
+/**
  * draft-ietf-moq-transport-22 §6.4.2.2:
  * PUBLISH_OK 受信前 (Established 前) にピアが FIN を送った場合、リクエストは
  * 失敗として処理される。bidiReadResponseFromBidiStream の throw が

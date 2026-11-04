@@ -96,6 +96,38 @@ test("incomingSendRequestErrorAndClose: REQUEST_ERROR を書き込み、FIN で�
 });
 
 /**
+ * draft-ietf-moq-transport-23 §3.7 / §9.4.2.2:
+ * 未対応の Mandatory Track Property で要求を拒否するとき、理解できなかった各 Type を
+ * UNSUPPORTED_PROPERTY Error Detail に載せた REQUEST_ERROR を送る。
+ */
+test("incomingSendRequestErrorAndClose: UNSUPPORTED_PROPERTY の Type 一覧を載せる", async () => {
+  const written: Uint8Array[] = [];
+  const writable = new WritableStream<Uint8Array>({
+    write(chunk) {
+      written.push(chunk);
+    },
+  });
+  const readable = new ReadableStream<Uint8Array>({});
+  const stream = { readable, writable } as unknown as WebTransportBidirectionalStream;
+
+  await incomingSendRequestErrorAndClose(
+    stream,
+    RequestErrorCode.UNSUPPORTED_EXTENSION,
+    "unknown mandatory track properties: 0x4000, 0x4001",
+    DEFAULT_MAX_CONTROL_MESSAGE_SIZE,
+    { unsupportedPropertyTypes: [0x4000n, 0x4001n] },
+  );
+
+  const messages = new ControlStreamReader().feed(concatUint8Arrays(written));
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].type, MessageType.REQUEST_ERROR);
+  const decoded = decodeRequestErrorPayload(messages[0].payload);
+  assert.equal(decoded.errorCode, BigInt(RequestErrorCode.UNSUPPORTED_EXTENSION));
+  assert.equal(decoded.reasonPhrase, "unknown mandatory track properties: 0x4000, 0x4001");
+  assert.deepEqual(decoded.unsupportedPropertyTypes, [0x4000n, 0x4001n]);
+});
+
+/**
  * write が失敗した場合でも受信方向がキャンセルされ、例外が外に漏れない
  * (Promise が resolve する) ことを検証する。
  * write 失敗は writable がエラー状態 (ピアの RESET_STREAM / セッション終了等)

@@ -987,11 +987,13 @@ async function bidiDispatchResponse<TPending extends BidiPendingRejectable>(
  * デコード済みの REQUEST_ERROR から RequestError を組み立てる
  *
  * フィールドの意味は RequestError / RedirectInfo の JSDoc を参照 (§9.4.1 / §9.4.2 /
- * §12.3)。ここでは wire 固有の扱いだけを定める。
+ * §9.4.2.1 / §9.4.2.2 / §12.3)。ここでは wire 固有の扱いだけを定める。
  * - デコード済みの生値をそのまま渡す (Retry Interval の変換はしない)。
  * - §12.3 の REDIRECT の適用先に REQUEST_UPDATE は無いが、確立後の REQUEST_ERROR で
  *   受信した値も捨てずにアプリへ渡す。
  * - reasonPhrase が空のときは Error Code を含む固定文言にする。
+ * - UNSUPPORTED_PROPERTY Error Detail の Type 一覧は、適用外の Error Code では
+ *   デコーダが既に無視しているため、そのままアプリへ渡す (§9.4.2.2)。
  */
 export function buildRequestErrorFromDecoded(decoded: DecodedRequestError): RequestError {
   return new RequestError(
@@ -1005,6 +1007,7 @@ export function buildRequestErrorFromDecoded(decoded: DecodedRequestError): Requ
           trackName: decoded.redirect.trackName,
         }
       : undefined,
+    decoded.unsupportedPropertyTypes,
   );
 }
 

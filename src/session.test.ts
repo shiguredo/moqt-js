@@ -29,6 +29,7 @@ import {
 } from "./message";
 import {
   decodePublishStateNotifyPayload,
+  decodeRequestErrorPayload,
   encodeRequestErrorPayload,
   encodeRequestOkPayload,
   encodePublishStateNotifyPayload,
@@ -85,7 +86,7 @@ import {
   decodeFetchObjectFields,
 } from "./dataStream";
 import { decodeFetchPayload, type Fetch } from "./message/fetch";
-import { encodeProperties } from "./properties";
+import { MOQTPropertyId, encodeProperties } from "./properties";
 import { SubscriberImpl } from "./subscriber";
 import type { SubgroupStreamEnd } from "./session/publicTypes";
 import { PublisherImpl } from "./publisher";
@@ -757,6 +758,119 @@ test("受信 PUBLISH で TRACK_PROPERTY_FILTER 不通過なら onPublish が呼�
   const messages = new ControlStreamReader().feed(concatUint8Arrays(written));
   assert.equal(messages.length, 1);
   assert.equal(messages[0].type, MessageType.REQUEST_ERROR);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §3.7 / §9.4.2.2:
+ * 受信 PUBLISH に複数の未対応 Mandatory Track Property が含まれる場合、本番の拒否経路は
+ * REQUEST_ERROR (UNSUPPORTED_EXTENSION) を送り、理解できなかった各 Type を
+ * UNSUPPORTED_PROPERTY Error Detail として載せる (SHOULD)。
+ * 理由文字列から Type を解析せず、デコード時に収集した構造情報を使う。
+ */
+test("受信 PUBLISH の複数の未対応 Mandatory Track Property を UNSUPPORTED_PROPERTY Detail 付きで拒否する", async () => {
+  const session = createSessionImpl();
+  const sessionInternal = session as unknown as {
+    handleIncomingBidirectionalStream: (stream: WebTransportBidirectionalStream) => Promise<void>;
+  };
+
+  // 偶数 Type 0x4000 と奇数 Type 0x4001 の 2 件 (値の解析が打ち切られないことも確認する)
+  const publishPayload = encodePublishPayload({
+    type: MessageType.PUBLISH,
+    requestId: 1n,
+    trackNamespace: createTrackNamespace(["live"]),
+    trackName: new TextEncoder().encode("track"),
+    trackAlias: 1n,
+    parameters: [],
+    trackProperties: [
+      { id: 0x4000n, value: 0n },
+      { id: 0x4001n, data: new Uint8Array([0x01]) },
+    ],
+  });
+  const framed = new ControlStreamWriter().encode(MessageType.PUBLISH, publishPayload);
+
+  const written: Uint8Array[] = [];
+  const readable = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(framed);
+      controller.close();
+    },
+  });
+  const writable = new WritableStream<Uint8Array>({
+    write(chunk) {
+      written.push(chunk);
+    },
+  });
+  const stream = { readable, writable } as unknown as WebTransportBidirectionalStream;
+
+  await sessionInternal.handleIncomingBidirectionalStream(stream);
+
+  const messages = new ControlStreamReader().feed(concatUint8Arrays(written));
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].type, MessageType.REQUEST_ERROR);
+  const decoded = decodeRequestErrorPayload(messages[0].payload);
+  assert.equal(decoded.errorCode, BigInt(RequestErrorCode.UNSUPPORTED_EXTENSION));
+  assert.deepEqual(decoded.unsupportedPropertyTypes, [0x4000n, 0x4001n]);
+  assert.equal(decoded.reasonPhrase, "unsupported mandatory track properties");
+});
+
+/**
+ * draft-ietf-moq-transport-23 §6.4.2.3 / §12.1:
+ * 未知 Mandatory Track Property 以外の理由で malformed になった受信 PUBLISH は、
+ * UNSUPPORTED_EXTENSION に置き換えず、要求の取消しとして送受信の方向を abruptly
+ * 終了する (PUBLISH への応答に使える Error Code が無いため)。ここでは
+ * IMMUTABLE_PROPERTIES の再帰ネスト (既知 KVP の不整合) を例にする。
+ */
+test("受信 PUBLISH の既知 KVP 不整合は UNSUPPORTED_EXTENSION にせず要求を取り消す", async () => {
+  const session = createSessionImpl();
+  const sessionInternal = session as unknown as {
+    handleIncomingBidirectionalStream: (stream: WebTransportBidirectionalStream) => Promise<void>;
+  };
+
+  // Immutable Properties の内側に Immutable Properties を入れて再帰ネストにする
+  const nestedImmutable = encodeProperties([
+    { id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: new Uint8Array(0) },
+  ]);
+  const publishPayload = encodePublishPayload({
+    type: MessageType.PUBLISH,
+    requestId: 1n,
+    trackNamespace: createTrackNamespace(["live"]),
+    trackName: new TextEncoder().encode("track"),
+    trackAlias: 1n,
+    parameters: [],
+    trackProperties: [{ id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: nestedImmutable }],
+  });
+  const framed = new ControlStreamWriter().encode(MessageType.PUBLISH, publishPayload);
+
+  const written: Uint8Array[] = [];
+  let cancelReason: string | undefined;
+  let abortReason: string | undefined;
+  // 最初のメッセージだけを読ませるため、受信方向は閉じずに残す
+  // (cancel が underlying source の cancel まで届くようにする)
+  const readable = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(framed);
+    },
+    cancel(reason) {
+      cancelReason = reason as string;
+    },
+  });
+  const writable = new WritableStream<Uint8Array>({
+    write(chunk) {
+      written.push(chunk);
+    },
+    abort(reason) {
+      abortReason = reason as string;
+    },
+  });
+  const stream = { readable, writable } as unknown as WebTransportBidirectionalStream;
+
+  await sessionInternal.handleIncomingBidirectionalStream(stream);
+
+  // REQUEST_ERROR は送らない (UNSUPPORTED_EXTENSION に置き換えない)
+  assert.equal(written.length, 0);
+  // 受信方向は STOP_SENDING 相当、送信方向は RESET_STREAM 相当で終了する
+  assert.equal(cancelReason, "malformed PUBLISH request");
+  assert.equal(abortReason, "malformed PUBLISH request");
 });
 
 /**

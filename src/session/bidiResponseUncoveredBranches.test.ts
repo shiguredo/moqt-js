@@ -226,6 +226,42 @@ test("REQUEST_ERROR の retryInterval と redirect はどの応答 reader でも
 });
 
 /**
+ * draft-ietf-moq-transport-23 §9.4.2.2:
+ * UNSUPPORTED_EXTENSION の REQUEST_ERROR は、理解できなかった Mandatory Track
+ * Property の Type を UNSUPPORTED_PROPERTY Error Detail として複数載せられる。
+ * どの応答 reader でも、その一覧を公開 RequestError の unsupportedPropertyTypes に
+ * 保持してアプリへ渡す。pending と requestStreams は残さず、セッションは閉じない。
+ */
+test("UNSUPPORTED_PROPERTY の Type 一覧はどの応答 reader でも RequestError に載る", async () => {
+  for (const testCase of REDIRECT_ERROR_CASES) {
+    const ctx = createOkResponseReadTestContext();
+    let rejected: Error | undefined;
+    const errorPayload = encodeRequestErrorPayload({
+      type: MessageType.REQUEST_ERROR,
+      errorCode: BigInt(RequestErrorCode.UNSUPPORTED_EXTENSION),
+      reasonPhrase: "unsupported mandatory property",
+      retryInterval: 0n,
+      unsupportedPropertyTypes: [0x4000n, 0x4001n, 0x7fffn],
+    });
+
+    await testCase.run(ctx, errorPayload, (error) => {
+      rejected = error;
+    });
+
+    assert.instanceOf(rejected, RequestError);
+    const requestError = rejected as RequestError;
+    assert.equal(requestError.message, "unsupported mandatory property");
+    assert.equal(requestError.code, RequestErrorCode.UNSUPPORTED_EXTENSION);
+    assert.deepEqual(requestError.unsupportedPropertyTypes, [0x4000n, 0x4001n, 0x7fffn]);
+    // UNSUPPORTED_EXTENSION では REDIRECT Detail は適用外であり、復元されない
+    assert.isUndefined(requestError.redirect);
+    // リクエスト単位の失敗でありセッションは閉じない
+    assert.isUndefined(ctx.getClosedWithError());
+    testCase.verifyCleanup?.(ctx);
+  }
+});
+
+/**
  * draft-ietf-moq-transport-22 §9.4:
  * SUBSCRIBE の REQUEST_ERROR では pending と requestStreams に加えて、
  * 初回 fill の関連付け (fillFetchTargets) も残さない。

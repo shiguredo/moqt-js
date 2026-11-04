@@ -25,7 +25,12 @@ import {
   TrackPropertyId,
   type Property,
 } from "./properties";
-import { IncompleteDataError, MalformedTrackError, ProtocolViolationError } from "./error";
+import {
+  IncompleteDataError,
+  MalformedTrackError,
+  ProtocolViolationError,
+  SessionErrorCode,
+} from "./error";
 import { isGreaseValue } from "./grease";
 import { encodeVarint, MAX_VARINT } from "./varint";
 import {
@@ -418,6 +423,119 @@ test("decodeProperties: IMMUTABLE_PROPERTIES 内の Mandatory Track Property (0x
 test("decodeImmutableProperties: 内部に Mandatory Track Property (0x4000) を含むと MalformedTrackError", () => {
   const immutable = encodeImmutableProperties({ extensions: [{ id: 0x4000n, value: 0n }] });
   assert.throws(() => decodeImmutableProperties(immutable), MalformedTrackError);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §3.7 / §9.4.2.2:
+ * decodeProperties は未知の Mandatory Track Property を 1 件目で打ち切らず、
+ * 構造全体を検証した後に Type 一覧を持つ MalformedTrackError を送出する。
+ * 一覧は検出順で、受信 PUBLISH の REQUEST_ERROR の UNSUPPORTED_PROPERTY Detail に
+ * そのまま載せられる。
+ */
+test("decodeProperties: 複数の未知 Mandatory Track Property の Type 一覧を構造情報として持つ", () => {
+  // 偶数 Type (0x4000) と奇数 Type (0x4001, 0x7FFF) を混在させ、値の解析が
+  // 打ち切られずに続くことを確認する。encodeProperties は ID 昇順に並べる。
+  const data = encodeProperties([
+    { id: 0x4000n, value: 0n },
+    { id: 0x4001n, data: new Uint8Array([0x01, 0x02]) },
+    { id: 0x7fffn, data: new Uint8Array([0x03]) },
+  ]);
+
+  const thrown = captureThrownError(() => decodeProperties(data));
+  assert.instanceOf(thrown, MalformedTrackError);
+  assert.deepEqual((thrown as MalformedTrackError).unsupportedPropertyTypes, [
+    0x4000n,
+    0x4001n,
+    0x7fffn,
+  ]);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §3.7:
+ * IMMUTABLE_PROPERTIES 配下の未知 Mandatory Track Property も同じ一覧へ集約し、
+ * 外側の Mandatory Track Property と合わせて通知する。
+ */
+test("decodeProperties: IMMUTABLE_PROPERTIES 内と外の Mandatory Track Property をまとめて通知する", () => {
+  const inner = encodeProperties([{ id: 0x4001n, data: new Uint8Array([0x01]) }]);
+  const data = encodeProperties([
+    { id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: inner },
+    { id: 0x4000n, value: 0n },
+  ]);
+
+  const thrown = captureThrownError(() => decodeProperties(data));
+  assert.instanceOf(thrown, MalformedTrackError);
+  // Immutable Properties (0x0B) の内側を先に走査するため 0x4001 が先になる
+  assert.deepEqual((thrown as MalformedTrackError).unsupportedPropertyTypes, [0x4001n, 0x4000n]);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §3.7 / §8.3:
+ * 未知 Mandatory Track Property の Type 収集は、構造破損や既知 KVP の不整合を
+ * UNSUPPORTED_EXTENSION 用のエラーへ置き換えない。構造検証の違反が後から現れた
+ * 場合は、その ProtocolViolationError を優先して送出する。
+ */
+test("decodeProperties: Mandatory Type 収集より構造破損の ProtocolViolationError を優先する", () => {
+  // 0x4001 (奇数 Type, Length 0) を 1 件収集した後、0x8001 (未知, 奇数 Type) の
+  // Length 5 が残りバイト 0 を超える破損を置く (delta は 0x8001 - 0x4001 = 0x4000)。
+  const data = new Uint8Array([
+    ...encodeVarint(0x4001n),
+    ...encodeVarint(0x00n),
+    ...encodeVarint(0x4000n),
+    ...encodeVarint(0x05n),
+  ]);
+
+  const thrown = captureThrownError(() => decodeProperties(data));
+  assert.instanceOf(thrown, ProtocolViolationError);
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.MALFORMED_MESSAGE);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §3.7:
+ * 未知 Mandatory Track Property 以外の理由 (IMMUTABLE_PROPERTIES の再帰ネスト) で
+ * malformed と判定した場合、unsupportedPropertyTypes は空のままにする。
+ * 呼び出し側は一覧の有無で UNSUPPORTED_EXTENSION の Detail を載せるか区別できる。
+ */
+test("decodeProperties: 未知 Mandatory 以外の malformed では unsupportedPropertyTypes が空", () => {
+  const inner = encodeProperties([
+    { id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: new Uint8Array(0) },
+  ]);
+  const data = encodeProperties([{ id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: inner }]);
+
+  const thrown = captureThrownError(() => decodeProperties(data));
+  assert.instanceOf(thrown, MalformedTrackError);
+  assert.deepEqual((thrown as MalformedTrackError).unsupportedPropertyTypes, []);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §3.7:
+ * decodeImmutableProperties でも複数の未知 Mandatory Track Property を収集する。
+ */
+test("decodeImmutableProperties: 複数の Mandatory Track Property の Type 一覧を持つ", () => {
+  const immutable = encodeImmutableProperties({
+    extensions: [
+      { id: 0x4000n, value: 0n },
+      { id: 0x4002n, value: 0n },
+    ],
+  });
+
+  const thrown = captureThrownError(() => decodeImmutableProperties(immutable));
+  assert.instanceOf(thrown, MalformedTrackError);
+  assert.deepEqual((thrown as MalformedTrackError).unsupportedPropertyTypes, [0x4000n, 0x4002n]);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §3.7:
+ * parseProperties でも複数の未知 Mandatory Track Property を収集する。
+ */
+test("parseProperties: 複数の Mandatory Track Property の Type 一覧を持つ", () => {
+  const data = encodeProperties([
+    { id: 0x4003n, data: new Uint8Array([0x01]) },
+    { id: 0x4004n, value: 0n },
+  ]);
+
+  const thrown = captureThrownError(() => parseProperties(data));
+  assert.instanceOf(thrown, MalformedTrackError);
+  assert.deepEqual((thrown as MalformedTrackError).unsupportedPropertyTypes, [0x4003n, 0x4004n]);
 });
 
 /**

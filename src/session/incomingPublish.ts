@@ -586,6 +586,85 @@ export async function incomingPublishCancelIfNotConnected(
   return true;
 }
 
+/**
+ * 応答コードを伴わない要求の取消し
+ *
+ * draft-ietf-moq-transport-23 §6.4.2.3 (Request Cancellation and Rejection):
+ * 受信側は要求に応答しないことを選べる。この場合は送信方向を RESET_STREAM、
+ * 受信方向を STOP_SENDING で abruptly 終了する (WebTransport API では
+ * writable.abort() / readable.cancel() が対応する)。
+ *
+ * PUBLISH への応答には、未知 Mandatory Track Property 以外の malformed track を
+ * 表せる Error Code が無い (§12.3)。そのため UNSUPPORTED_EXTENSION に置き換えず、
+ * 要求の取消しとして扱う。
+ */
+async function incomingPublishCancelRequestStream(
+  stream: WebTransportBidirectionalStream,
+): Promise<void> {
+  try {
+    await stream.readable.cancel("malformed PUBLISH request");
+  } catch {
+    // 既に閉じているストリームの操作失敗は無視する
+  }
+  try {
+    await stream.writable.abort("malformed PUBLISH request");
+  } catch {
+    // 既に閉じているストリームの操作失敗は無視する
+  }
+}
+
+/**
+ * 受信 PUBLISH のペイロードをデコードし、失敗時の拒否・取消しまで行う
+ *
+ * draft-ietf-moq-transport-23 §3.7 / §9.4.2.2:
+ * 未知の Mandatory Track Property を含む PUBLISH には
+ * REQUEST_ERROR(UNSUPPORTED_EXTENSION) を返し、理解できなかった各 Type を
+ * UNSUPPORTED_PROPERTY Error Detail に載せる (SHOULD)。Type 一覧は
+ * MalformedTrackError の構造情報から取り出し、理由文字列は解析しない。
+ *
+ * 未知 Mandatory Track Property 以外の理由で malformed になった PUBLISH は、
+ * UNSUPPORTED_PROPERTY を載せられず、PUBLISH への応答に使えるエラーコードも無い。
+ * 既知 KVP の不整合を UNSUPPORTED_EXTENSION に置き換えず、要求の取消しとして
+ * 送受信の方向を abruptly 終了する (§6.4.2.3 / §12.1)。
+ *
+ * @returns デコードに成功した PUBLISH。拒否・取消しを行った場合は null
+ */
+async function incomingPublishDecodeOrReject(
+  session: IncomingPublishSessionInternal,
+  stream: WebTransportBidirectionalStream,
+  payload: Uint8Array,
+): Promise<ReturnType<typeof decodePublishPayload> | null> {
+  try {
+    return decodePublishPayload(payload);
+  } catch (err) {
+    if (err instanceof MalformedTrackError && err.unsupportedPropertyTypes.length > 0) {
+      // draft-ietf-moq-transport-23 §8.5: Reason Phrase の長さには上限があり、
+      // 上限超過は受信側が FIELD_LENGTH_EXCEEDED でセッションを閉じる。
+      // 未対応 Type の一覧は Reason に埋めず UNSUPPORTED_PROPERTY Detail だけに
+      // 載せ、Reason は固定の短い文言にする (1 件でも 1024 バイトを超えない)。
+      await incomingSendRequestErrorAndClose(
+        stream,
+        RequestErrorCode.UNSUPPORTED_EXTENSION,
+        "unsupported mandatory track properties",
+        session.peerMaxControlMessageSize,
+        { unsupportedPropertyTypes: err.unsupportedPropertyTypes },
+      );
+      return null;
+    }
+    // SessionError はそのコードのまま、ProtocolViolationError は自身の code、
+    // IncompleteDataError は MALFORMED_MESSAGE で閉じる
+    const sessionError = toSessionCloseError(err);
+    if (sessionError !== null) {
+      session.closeWithError(sessionError);
+      return null;
+    }
+    if (err instanceof MalformedTrackError) {
+      await incomingPublishCancelRequestStream(stream);
+    }
+    return null;
+  }
+}
+
 export async function incomingPublishHandleBidirectionalStream(
   session: IncomingPublishSessionInternal,
   stream: WebTransportBidirectionalStream,
@@ -615,30 +694,9 @@ export async function incomingPublishHandleBidirectionalStream(
     return;
   }
 
-  // PUBLISH ペイロードをデコード
-  // draft-ietf-moq-transport-22 §9.8
-  let decodedPublish: ReturnType<typeof decodePublishPayload>;
-  try {
-    decodedPublish = decodePublishPayload(firstMsg.payload);
-  } catch (err) {
-    // draft-ietf-moq-transport-22 §3.7:
-    // 未知の Mandatory Track Property を含む PUBLISH には
-    // REQUEST_ERROR(UNSUPPORTED_EXTENSION) を返す
-    if (err instanceof MalformedTrackError) {
-      await incomingSendRequestErrorAndClose(
-        stream,
-        RequestErrorCode.UNSUPPORTED_EXTENSION,
-        err.message,
-        session.peerMaxControlMessageSize,
-      );
-      return;
-    }
-    // SessionError はそのコードのまま、ProtocolViolationError は自身の code、
-    // IncompleteDataError は MALFORMED_MESSAGE で閉じる
-    const sessionError = toSessionCloseError(err);
-    if (sessionError !== null) {
-      session.closeWithError(sessionError);
-    }
+  // PUBLISH ペイロードをデコードする。失敗時は拒否・取消しまで済ませて null を返す
+  const decodedPublish = await incomingPublishDecodeOrReject(session, stream, firstMsg.payload);
+  if (decodedPublish === null) {
     return;
   }
 

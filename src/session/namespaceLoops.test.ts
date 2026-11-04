@@ -872,6 +872,43 @@ test("namespaceStartPublicationStreamLoop: Redirect の retryInterval と redire
   assert.isUndefined(ctx.getClosedWithError());
 });
 
+/**
+ * draft-ietf-moq-transport-23 §9.4.2.2:
+ * namespace 系の応答でも、UNSUPPORTED_EXTENSION の UNSUPPORTED_PROPERTY Error Detail の
+ * Type 一覧を保持してアプリへ渡す (namespaceLoops も共通の RequestError 構築を使う)。
+ */
+test("namespaceStartPublicationStreamLoop: UNSUPPORTED_PROPERTY の Type 一覧が保持される", async () => {
+  const ctx = createNamespaceLoopTestContext("publication");
+  let rejectedPublication: Error | undefined;
+  const readPromise = startLoop(
+    "publication",
+    ctx.session,
+    ctx.requestId,
+    () => {},
+    (error) => {
+      rejectedPublication = error;
+    },
+  );
+
+  const payload = encodeRequestErrorPayload({
+    type: MessageType.REQUEST_ERROR,
+    errorCode: BigInt(RequestErrorCode.UNSUPPORTED_EXTENSION),
+    reasonPhrase: "unsupported mandatory property",
+    retryInterval: 0n,
+    unsupportedPropertyTypes: [0x4000n, 0x4002n],
+  });
+  ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.REQUEST_ERROR, payload));
+  ctx.readableController.close();
+  await readPromise;
+
+  assert.instanceOf(rejectedPublication, RequestError);
+  const requestError = rejectedPublication as RequestError;
+  assert.equal(requestError.code, RequestErrorCode.UNSUPPORTED_EXTENSION);
+  assert.deepEqual(requestError.unsupportedPropertyTypes, [0x4000n, 0x4002n]);
+  // リクエスト単位の失敗でありセッションは閉じない
+  assert.isUndefined(ctx.getClosedWithError());
+});
+
 // ============================================================================
 // 自側が要求した namespace / tracks ストリームで受信する REQUEST_UPDATE
 // draft-ietf-moq-transport-22 §9.5 (REQUEST_UPDATE) / §9.5.2
@@ -2378,7 +2415,7 @@ test("namespaceStartPublicationStreamLoop: 確立後の 2 通目 REQUEST_OK の�
 
   assert.isDefined(ctx.getClosedWithError());
   assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.INVALID_FIELD);
-  assert.isTrue(ctx.getClosedWithError()!.message.includes("unknown mandatory track property"));
+  assert.isTrue(ctx.getClosedWithError()!.message.includes("unknown mandatory track properties"));
 });
 
 // ============================================================================
@@ -2536,7 +2573,7 @@ INITIAL_UNKNOWN_MANDATORY_CASES.forEach((loop) => {
     // 確立前の違反は呼び出し元の Promise を reject してから閉じる
     assert.isDefined(ctx.getClosedWithError());
     assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.INVALID_FIELD);
-    assert.isTrue(ctx.getClosedWithError()!.message.includes("unknown mandatory track property"));
+    assert.isTrue(ctx.getClosedWithError()!.message.includes("unknown mandatory track properties"));
     assert.strictEqual(rejectedError, ctx.getClosedWithError());
   });
 });

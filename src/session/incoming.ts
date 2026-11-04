@@ -84,6 +84,26 @@ export function incomingClassifyFirstBidiMessage(
 }
 
 /**
+ * REQUEST_ERROR の送信に載せる Error Details
+ *
+ * draft-ietf-moq-transport-23 §9.4.2:
+ * REQUEST_ERROR の末尾は §8.3 の Key-Value-Pair 列 (Error Details) であり、
+ * Message Parameters とは別の型空間・処理規則を持つ。現在この送信経路が載せる
+ * 既知の Detail は UNSUPPORTED_PROPERTY (§9.4.2.2) だけである。
+ */
+export interface IncomingRequestErrorOptions {
+  /**
+   * UNSUPPORTED_PROPERTY Error Detail に載せる Mandatory Track Property の Type
+   *
+   * draft-ietf-moq-transport-23 §3.7 / §9.4.2.2:
+   * 未対応の Mandatory Track Property で要求を拒否するとき、理解できなかった
+   * 各 Type の Detail を載せることが SHOULD。同じ型の Detail を複数載せられる。
+   * UNSUPPORTED_EXTENSION 以外の Error Code では指定してはならない。
+   */
+  readonly unsupportedPropertyTypes?: readonly bigint[];
+}
+
+/**
  * REQUEST_ERROR を送信し、送信方向を FIN で閉じた後に受信方向をキャンセルする
  *
  * draft-ietf-moq-transport-22 §6.4.2.3 (Request Cancellation and Rejection):
@@ -98,21 +118,28 @@ export function incomingClassifyFirstBidiMessage(
  * TypeError で reject する Promise を返すため、try ブロック内で await し
  * catch で吸収する。受信方向 (readable) は FIN 送信後に cancel() で閉じる
  * (draft-ietf-moq-transport-22 §6.4.2.3 の STOP_SENDING 相当)。
+ *
+ * @param options - Error Details として載せる構造情報 (省略時は Detail なし)
  */
 export async function incomingSendRequestErrorAndClose(
   stream: WebTransportBidirectionalStream,
   errorCode: RequestErrorCode,
   reasonPhrase: string,
   peerMaxControlMessageSize: number,
+  options: IncomingRequestErrorOptions = {},
 ): Promise<void> {
   let writer: WritableStreamDefaultWriter<Uint8Array> | null = null;
   try {
     writer = stream.writable.getWriter();
+    const unsupportedPropertyTypes = options.unsupportedPropertyTypes ?? [];
     const errorPayload = encodeRequestErrorPayload({
       type: MessageType.REQUEST_ERROR,
       errorCode: BigInt(errorCode),
       retryInterval: 0n,
       reasonPhrase,
+      // exactOptionalPropertyTypes では optional なフィールドに undefined を渡せないため、
+      // 値がある場合だけ載せる
+      ...(unsupportedPropertyTypes.length > 0 ? { unsupportedPropertyTypes } : {}),
     });
     // 送信上限はピアが広告した MAX_CONTROL_MESSAGE_SIZE に合わせる
     // (draft-ietf-moq-transport-23 §9.1.8)。
