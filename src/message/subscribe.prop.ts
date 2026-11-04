@@ -17,7 +17,7 @@ import { createTrackNamespace, trackNamespaceToStrings } from "./parameter";
 import { MessageType } from "./types";
 import {
   parametersArb,
-  trackPropertiesArb,
+  trackScopePropertiesArb,
   namespaceStringsArb,
   trackNameArb,
 } from "./parameterArb";
@@ -65,7 +65,7 @@ test("SubscribeOk のエンコード・デコードがラウンドトリップ�
     fc.property(
       fc.bigInt({ min: 0n, max: 1000000n }),
       parametersArb,
-      trackPropertiesArb,
+      trackScopePropertiesArb,
       (trackAlias, parameters, trackProperties) => {
         const original = {
           type: MessageType.SUBSCRIBE_OK as typeof MessageType.SUBSCRIBE_OK,

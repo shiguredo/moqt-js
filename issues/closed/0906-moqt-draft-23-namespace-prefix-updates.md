@@ -59,4 +59,3 @@ draft 23 §4.2 / §9.5.2 は prefix の overlap 制約を削除し、SUBSCRIBE_N
 - エラーコード登録の同期 (0915)
 - docs の一括更新 (0925)
 
-{未着手}

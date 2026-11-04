@@ -203,7 +203,10 @@ export function decodeSubscribeOkPayload(data: Uint8Array, offset = 0): Subscrib
   // draft-ietf-moq-transport-22 Section 9.7 (SUBSCRIBE_OK):
   // Track Properties は残りバイトすべて
   const propertiesData = data.slice(offset + totalConsumed);
-  const trackProperties = decodeProperties(propertiesData);
+  // draft-ietf-moq-transport-23 §8.4 / §9.7:
+  // SUBSCRIBE_OK の Track Properties は Track scope の対応済み Property を運ぶ。
+  // scope 外の対応済み Property と重複は malformed track とする (§12.1 条件 8 / 9)。
+  const trackProperties = decodeProperties(propertiesData, "track");
 
   return {
     type: MessageType.SUBSCRIBE_OK,

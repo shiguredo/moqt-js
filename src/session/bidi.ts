@@ -370,6 +370,8 @@ export interface BidiSessionInternal {
    * 保持バイトは待機中もデータストリームの受信バッファ計上 (§12.5) に含まれる。
    */
   readonly publishFillReadyCallbacks: Map<bigint, Array<() => void>>;
+  /** PUBLISH 初期 fill の待機中の stream 総数 (Session 単位の上限判定に使う) */
+  publishFillWaitingStreams: number;
 
   /**
    * 受信 PUBLISH の処理中の Request ID

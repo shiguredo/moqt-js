@@ -289,7 +289,7 @@ export async function incomingHandleFirstBidiMessage(
     // 未対応リクエストでも、Request ID の直後にある共通 prefix
     // (Track Namespace、Track Name を持つ種別では Track Name Length と Track Name)
     // を検証する。名前の検証だけを行い、要求を受理する機能は追加しない。
-    // 構造不正・上限超過は 0902 の分類 (INVALID_TRACK_NAMESPACE /
+    // 構造不正・上限超過は §8.7 / §12.2 の分類 (INVALID_TRACK_NAMESPACE /
     // FIELD_LENGTH_EXCEEDED / MALFORMED_MESSAGE / 空 Track Name は
     // PROTOCOL_VIOLATION) で閉じ、NOT_SUPPORTED で隠さない。
     const prefixResult = incomingValidateUnsupportedRequestPrefix(
@@ -397,7 +397,7 @@ function incomingValidateUnsupportedRequestPrefix(
  * 未対応リクエストの prefix 検証エラーでセッションを閉じる
  *
  * 切詰めは MALFORMED_MESSAGE、§2.4.1 / §8.7 の構造違反はデコード済みエラーの
- * SessionErrorCode をそのまま使う (0902 の分類に揃える)。
+ * SessionErrorCode をそのまま使う (§12.2 の分類に揃える)。
  */
 function incomingCloseOnUnsupportedRequestPrefixError(
   session: SessionInternal,
@@ -670,16 +670,18 @@ export function incomingWaitForPublishFillTarget(
       resolve(null);
       return;
     }
-    if (session.publishFillReadyCallbacks.size >= MAX_WAITING_PUBLISH_FILL_STREAMS) {
+    if (session.publishFillWaitingStreams >= MAX_WAITING_PUBLISH_FILL_STREAMS) {
       resolve(null);
       return;
     }
+    session.publishFillWaitingStreams += 1;
 
     let resolved = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const doResolve = () => {
       if (resolved) return;
       resolved = true;
+      session.publishFillWaitingStreams -= 1;
       if (timer !== undefined) {
         clearTimeout(timer);
         timer = undefined;

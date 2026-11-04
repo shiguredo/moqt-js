@@ -469,6 +469,8 @@ export class SessionImpl implements Session {
   // FETCH_OK より先にデータストリームが到着する可能性がある
   fetcherReadyCallbacks = new Map<bigint, Array<() => void>>();
   publishFillReadyCallbacks = new Map<bigint, Array<() => void>>();
+  /** PUBLISH 初期 fill の待機中の stream 総数 */
+  publishFillWaitingStreams = 0;
   publishingRequestIds = new Set<bigint>();
 
   // fill 要求元の Request ID から購読への関連付け

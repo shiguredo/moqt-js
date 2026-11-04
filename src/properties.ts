@@ -349,7 +349,7 @@ const PROPERTY_SCOPES: ReadonlyMap<bigint, PropertyScope> = new Map<bigint, Prop
  *
  * MOQT 本体の Track / Object Property に加え、LOC-05 の Property のうち本実装が
  * 解釈するものを含める。CODEC_STRING (0x11) は値の意味論が未対応のため含めない
- * (0916 で追加したときに対応済み集合へ加える)。
+ * (CODEC_STRING の値の意味論に対応したら対応済み集合へ加える)。
  */
 const SUPPORTED_PROPERTY_TYPES: ReadonlySet<bigint> = new Set<bigint>([
   ...Object.values(MOQTPropertyId),
