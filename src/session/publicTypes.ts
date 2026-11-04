@@ -446,6 +446,15 @@ export interface PublishOptions {
   locAudioConfig?: Uint8Array;
 
   /**
+   * LOC Codec String（Track Property として送信）
+   * draft-ietf-moq-loc-05 Section 2.3.1.3 (CODEC_STRING, Scope: Track, Object)
+   *
+   * WebCodecs の codec に対応する UTF-8 文字列。Track 初期化時に Track Property として
+   * 広告し、Object 単位の冗長送信を削減する。送らない場合は Object Properties のみ。
+   */
+  locCodecString?: string;
+
+  /**
    * PUBLISH に付与する認可トークン
    * draft-ietf-moq-transport-23 Section 9.19.2 (AUTHORIZATION TOKEN Parameter)
    *

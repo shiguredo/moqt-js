@@ -513,6 +513,15 @@ export function buildPublishTrackProperties(
     });
   }
 
+  // LOC CODEC_STRING (0x11) - draft-ietf-moq-loc-05 §2.3.1.3 (Scope: Track, Object)
+  // 奇数 ID のため data 形式。UTF-8 文字列をそのままバイト列にする。
+  if (options?.locCodecString !== undefined) {
+    trackProperties.push({
+      id: LOCPropertyId.CODEC_STRING,
+      data: new TextEncoder().encode(options.locCodecString),
+    });
+  }
+
   // GREASE Property - draft-ietf-moq-transport-23 §13 (Grease)
   // opt-in 時、0x7f * N + 0x9D パターンの予約値を 1 つ追加する。対向が未知の Property を
   // gracefully に扱えることを保証する。encodeProperties の delta encoding / 昇順ソートは

@@ -64,8 +64,9 @@ const keyFrameMarking: VideoFrameMarking = {
   spatialLayerId: 0,
 };
 
-// 完了条件: LOCPropertyId.TIMESCALE / VIDEO_CONFIG / AUDIO_CONFIG を Property オブジェクトとして
-// 構築し、encodeProperties() 経由で Track Properties バイト列に載せて復元できること。
+// 完了条件: LOCPropertyId.TIMESCALE / VIDEO_CONFIG / AUDIO_CONFIG / CODEC_STRING を
+// Property オブジェクトとして構築し、encodeProperties() 経由で Track Properties バイト列に
+// 載せて復元できること。
 test("LOC Track Properties を encodeProperties / decodeProperties で roundtrip する", () => {
   const videoConfig = new Uint8Array([0x01, 0x02, 0x03]);
   const audioConfig = new Uint8Array([0x04, 0x05]);
@@ -73,6 +74,7 @@ test("LOC Track Properties を encodeProperties / decodeProperties で roundtrip
     locTimescale: 90000n,
     locVideoConfig: videoConfig,
     locAudioConfig: audioConfig,
+    locCodecString: "av01.0.04M.08",
   });
 
   const encoded = encodeProperties(trackProperties);
@@ -81,9 +83,18 @@ test("LOC Track Properties を encodeProperties / decodeProperties で roundtrip
   const timescale = decoded.find((p) => p.id === LOCPropertyId.TIMESCALE);
   const video = decoded.find((p) => p.id === LOCPropertyId.VIDEO_CONFIG);
   const audio = decoded.find((p) => p.id === LOCPropertyId.AUDIO_CONFIG);
+  const codec = decoded.find((p) => p.id === LOCPropertyId.CODEC_STRING);
   assert.equal(timescale?.value, 90000n);
   assert.deepEqual(Array.from(video?.data ?? []), Array.from(videoConfig));
   assert.deepEqual(Array.from(audio?.data ?? []), Array.from(audioConfig));
+  assert.deepEqual(
+    Array.from(codec?.data ?? []),
+    Array.from(new TextEncoder().encode("av01.0.04M.08")),
+  );
+
+  // Track Property として広告した CODEC_STRING は resolve で Track 値として解決される
+  const resolved = resolveVideoProperties(decoded, undefined);
+  assert.equal(resolved.codecString, "av01.0.04M.08");
 });
 
 // resolveVideoProperties: Object のみ。Track Property がない場合は Object の値を使う。
