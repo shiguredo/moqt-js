@@ -46,7 +46,7 @@ export const MsfCompressionAlgorithm = {
 /**
  * LOC の Audio Level の Property ID と Value の上限
  *
- * draft-ietf-moq-loc-04 §2.3.3.2:
+ * draft-ietf-moq-loc-05 §2.3.3.2:
  * Value 行は "vi64 (1-2 bytes to encode values 0x00-0xFF)" と値域を 0x00-0xFF に
  * 限定する (TIMESTAMP / TIMESCALE の "vi64 (1-9 bytes)" とは異なる)。
  * Description 行の "encoded in the least significant 8 bits of a vi64" は
@@ -87,6 +87,39 @@ export function locAudioLevelValueRangeError(value: bigint): SessionError {
     `key-value-pair value does not match serialization for known type 0x${LOC_AUDIO_LEVEL_PROPERTY_ID.toString(16)}: audio level 0x${value.toString(16)} > 0x${LOC_AUDIO_LEVEL_MAX_VALUE.toString(16)}`,
     SessionErrorCode.MALFORMED_KEY_VALUE,
   );
+}
+
+/**
+ * LOC-05 の CODEC_STRING Property ID
+ *
+ * draft-ietf-moq-loc-05 Section 2.3.1.3 (Codec String):
+ * WebCodecs の codec に対応する UTF-8 文字列を length + bytes で運ぶ。
+ * Track / Object の両スコープを持つ (同 draft §6.1 Table 1)。
+ * loc.ts の LOCPropertyId.CODEC_STRING と同じ値を参照する。
+ */
+export const LOC_CODEC_STRING_PROPERTY_ID = 0x11n;
+
+/**
+ * CODEC_STRING の Value が UTF-8 として妥当かを検証する
+ *
+ * draft-ietf-moq-transport-23 §8.3:
+ * "If a receiver understands a Type, and the following Value or Length/Value
+ *  does not match the serialization defined by that Type, the receiver MUST
+ *  close the session with error code MALFORMED_KEY_VALUE."
+ * CODEC_STRING の serialization は UTF-8 文字列であるため、UTF-8 として
+ * 解釈できないバイト列は MALFORMED_KEY_VALUE で拒否する。
+ *
+ * @throws ProtocolViolationError UTF-8 として不正な場合
+ */
+export function assertLocCodecStringValue(data: Uint8Array): void {
+  try {
+    new TextDecoder("utf-8", { fatal: true }).decode(data);
+  } catch {
+    throw new ProtocolViolationError(
+      `key-value-pair value does not match serialization for known type 0x${LOC_CODEC_STRING_PROPERTY_ID.toString(16)}: codec string is not valid UTF-8`,
+      SessionErrorCode.MALFORMED_KEY_VALUE,
+    );
+  }
 }
 
 /**
@@ -291,12 +324,14 @@ export function validateTrackPropertyValue(id: bigint, value: bigint): void {
  *  does not match the serialization defined by that Type, the receiver MUST
  *  close the session with MALFORMED_KEY_VALUE."
  * MOQT 本体で定義された Track / Object Property (MOQTPropertyId /
- * TrackPropertyId) を既知 Type として扱う。未知 Type は受信者が理解しない
- * ため、この検証の対象外とする。
+ * TrackPropertyId) と、本実装が意味論を解釈する LOC の Property を既知 Type として
+ * 扱う。未知 Type は受信者が理解しないため、この検証の対象外とする。
+ * CODEC_STRING は UTF-8 文字列として解釈するため既知 Type に含める。
  */
 const KNOWN_PROPERTY_TYPES: ReadonlySet<bigint> = new Set<bigint>([
   ...Object.values(MOQTPropertyId),
   ...Object.values(TrackPropertyId),
+  LOC_CODEC_STRING_PROPERTY_ID,
 ]);
 
 /**
@@ -317,9 +352,7 @@ export type PropertyScope = "track" | "object" | "both";
  * 0x0B (IMMUTABLE_PROPERTIES) は Track / Object の両 scope を持ち、内側の
  * Property は周囲の scope を継承する (§10.7)。
  *
- * 0x11 (CODEC_STRING) は LOC-05 で Track, Object の両 scope だが、本実装の
- * 値の意味論は未対応のため SUPPORTED_PROPERTY_TYPES には含めない。対応時は
- * 同じ scope 定義をそのまま使える。
+ * 0x11 (CODEC_STRING) は LOC-05 で Track, Object の両 scope を持つ。
  */
 const PROPERTY_SCOPES: ReadonlyMap<bigint, PropertyScope> = new Map<bigint, PropertyScope>([
   // draft-ietf-moq-transport-23 §16.8 Table 15
@@ -350,8 +383,8 @@ const PROPERTY_SCOPES: ReadonlyMap<bigint, PropertyScope> = new Map<bigint, Prop
  * 適用される。未知 Property は scope を知らないため、この規則だけでは拒否しない。
  *
  * MOQT 本体の Track / Object Property に加え、LOC-05 の Property のうち本実装が
- * 解釈するものを含める。CODEC_STRING (0x11) は値の意味論が未対応のため含めない
- * (CODEC_STRING の値の意味論に対応したら対応済み集合へ加える)。
+ * 解釈するものを含める。CODEC_STRING (0x11) も WebCodecs の codec 文字列として
+ * 解釈するため含める。
  */
 const SUPPORTED_PROPERTY_TYPES: ReadonlySet<bigint> = new Set<bigint>([
   ...Object.values(MOQTPropertyId),
@@ -362,6 +395,7 @@ const SUPPORTED_PROPERTY_TYPES: ReadonlySet<bigint> = new Set<bigint>([
   0x0dn, // VIDEO_CONFIG
   0x0fn, // AUDIO_CONFIG
   0x10n, // TIMESTAMP
+  LOC_CODEC_STRING_PROPERTY_ID, // CODEC_STRING
 ]);
 
 /**
@@ -1687,6 +1721,11 @@ export function decodeProperties(data: Uint8Array, scope?: "track" | "object"): 
           }
         }
       }
+      // draft-ietf-moq-loc-05 §2.3.1.3: CODEC_STRING は UTF-8 文字列なので、
+      // UTF-8 として解釈できないバイト列は §8.3 の serialization 不一致とする。
+      if (id === LOC_CODEC_STRING_PROPERTY_ID) {
+        assertLocCodecStringValue(extData);
+      }
       extensions.push({ id, data: extData });
       offset += deltaIdLen + lengthLen + Number(length);
     }
@@ -1827,7 +1866,7 @@ export function decodeObjectPropertiesTolerant(data: Uint8Array): {
  *
  * LOC の AUDIO_LEVEL (0x0C) の Value が 0x00-0xFF の範囲外の場合も同じ
  * serialization 不一致として SessionError を送出する
- * (draft-ietf-moq-loc-04 §2.3.3.2 の値域)。
+ * (draft-ietf-moq-loc-05 §2.3.3.2 の値域)。
  *
  * decodeObjectPropertiesTolerant は失敗を吸収して読めた分だけを返すため、
  * 生バイト列を走査して既知 Type (KNOWN_PROPERTY_TYPES) の Value / Length が
@@ -1890,7 +1929,7 @@ export function assertKnownPropertyValueInObjectProperties(data: Uint8Array): vo
         }
         return;
       }
-      // draft-ietf-moq-loc-04 §2.3.3.2 の値域外 (0xFF 超) は §8.3 の serialization
+      // draft-ietf-moq-loc-05 §2.3.3.2 の値域外 (0xFF 超) は §8.3 の serialization
       // 不一致として MALFORMED_KEY_VALUE でセッションを閉じる。KNOWN_PROPERTY_TYPES
       // には LOC の Type を足さず、値域だけを見る (他の LOC 型の寛容な扱いを変えないため)。
       // 対象はこの階層の Property 列であり、Immutable Properties (0x0B) の内側は
@@ -1936,6 +1975,11 @@ export function assertKnownPropertyValueInObjectProperties(data: Uint8Array): vo
         throw knownPropertyLengthOverrunError(id, length, data.length - offset);
       }
       return;
+    }
+    // draft-ietf-moq-loc-05 §2.3.1.3: CODEC_STRING は UTF-8 文字列なので、
+    // UTF-8 として解釈できないバイト列は §8.3 の serialization 不一致とする。
+    if (id === LOC_CODEC_STRING_PROPERTY_ID) {
+      assertLocCodecStringValue(data.slice(offset, offset + Number(length)));
     }
     offset += Number(length);
   }

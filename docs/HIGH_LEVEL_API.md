@@ -594,7 +594,7 @@ MediaPublisherOptions も `audio` / `video` / `useWorker` / `serverCertificateHa
 `authorizationToken` と `pendingSubgroup` を持つ (購読側と同じ形)。
 
 初期 configure (`SUBSCRIBE_OK` の Track Property の `VIDEO_CONFIG` / `AUDIO_CONFIG`) を反映する
-までの間に届いた Object は、到着順に保留してから復号する (draft-ietf-moq-loc-04 Table 1 /
+までの間に届いた Object は、到着順に保留してから復号する (draft-ietf-moq-loc-05 Table 1 /
 §2.3.2.1 / §2.3.3.1)。保留は購読要求から初期 configure 完了までの短い区間に限られるが、
 購読が確立しない異常時は区間が伸びるため、件数とバイト数の両方に上限を設ける。
 バイト数の上限は payload と properties の長さの合計で数える (受信統計の `bytesReceived` と

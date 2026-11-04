@@ -3,7 +3,7 @@
  *
  * 同じ render group の track は同じ targetLatency を持ち (draft-ietf-moq-msf-01 §5.2.8)、
  * 同時に描画するよう設計されている (§5.2.11)。LOC の TIMESTAMP は Timescale が無ければ
- * Unix epoch マイクロ秒の壁時計である (draft-ietf-moq-loc-04 §2.3.1.1)。
+ * Unix epoch マイクロ秒の壁時計である (draft-ietf-moq-loc-05 §2.3.1.1)。
  *
  * 表示時刻 = TIMESTAMP + 基準の遅れ + 表示の遅れ
  *

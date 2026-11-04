@@ -336,11 +336,11 @@ test("filterPendingCatalogObjects: 同一 Group で FETCH 配信済みより新�
 });
 
 // ============================================================================
-// isVideoKeyFrameObject（draft-ietf-moq-loc-04 §2.2 / §2.3.2.2 / §4.2）
+// isVideoKeyFrameObject（draft-ietf-moq-loc-05 §2.2 / §2.3.2.2 / §4.2）
 // ============================================================================
 
 /**
- * draft-ietf-moq-loc-04 §2.2 / §2.3.2.2 と draft-ietf-moq-msf-01 §6.2 / §4.1:
+ * draft-ietf-moq-loc-05 §2.2 / §2.3.2.2 と draft-ietf-moq-msf-01 §6.2 / §4.1:
  * VIDEO_FRAME_MARKING は任意の Property であり、draft-ietf-moq-msf-01 も要求しない。無い場合は
  * Group 先頭の Object ID 0 (Group ID は IDR 境界で +1 され、Object ID は Group
  * 先頭で 0 に戻る) をキーフレームとして扱い、それ以外はデルタにする。
@@ -559,7 +559,7 @@ function createAudioCatchUpHarness(options: {
 }
 
 /**
- * draft-ietf-moq-loc-04 Table 1 / §2.3.2.1:
+ * draft-ietf-moq-loc-05 Table 1 / §2.3.2.1:
  * VIDEO_CONFIG は Track Property でも届く。SUBSCRIBE_OK の Track Property を初期 configure に
  * 反映し、その完了までに届いた Object を保留して復号に渡す (最初の Object を捨てない)。
  */
@@ -608,7 +608,7 @@ test("applyInitialVideoConfig: Track Property の VIDEO_CONFIG が初期 configu
 });
 
 /**
- * draft-ietf-moq-loc-04 Table 1 / §2.3.2.1:
+ * draft-ietf-moq-loc-05 Table 1 / §2.3.2.1:
  * subscribeMediaTracks は購読確立直後 (SUBSCRIBE_OK の trackProperties 取得後) に
  * 初期 configure を適用する。最小の Session 代役で subscribe の戻り値を与え、
  * 配線 (setupDecoders が有効化した保留 → 購読直後の適用 → 解放) を固定する。
@@ -663,7 +663,7 @@ test("subscribeMediaTracks: SUBSCRIBE_OK の Track Property を購読直後に�
 });
 
 /**
- * draft-ietf-moq-loc-04 Table 1 / §2.3.3.1:
+ * draft-ietf-moq-loc-05 Table 1 / §2.3.3.1:
  * subscribeMediaTracks は音声でも購読確立直後に初期 configure を適用する。
  * 映像側と同じ配線 (購読要求前の保留有効化 → 購読直後の適用 → 到着順の解放) を固定する。
  */
@@ -883,7 +883,7 @@ test("subscribeMediaTracks: rendezvousTimeout を映像の SUBSCRIBE に載せ�
 });
 
 /**
- * draft-ietf-moq-loc-04 §2.3.2.1:
+ * draft-ietf-moq-loc-05 §2.3.2.1:
  * 初期 configure で適用済みの config と同じ config を持つ Object では再構成しない。
  */
 test("applyInitialVideoConfig: 適用後に同じ config の Object では再構成しない", async () => {
@@ -919,7 +919,7 @@ test("applyInitialVideoConfig: 適用後に同じ config の Object では再構
 });
 
 /**
- * draft-ietf-moq-loc-04 Table 1 / §2.3.3.1:
+ * draft-ietf-moq-loc-05 Table 1 / §2.3.3.1:
  * 音声側も Track Property の AUDIO_CONFIG を初期 configure に反映し、保留中の Object を復号する。
  */
 test("applyInitialAudioConfig: Track Property の AUDIO_CONFIG が初期 configure に渡り保留中の Object が復号される", async () => {

@@ -39,8 +39,8 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
   - [Media over QUIC Transport](https://datatracker.ietf.org/doc/html/draft-ietf-moq-transport-23)
   - `draft-23` 対応 (接続時のプロトコル識別子は `moqt-23`。draft-23 対応の実リレーとの相互接続は未検証であり、単体テストの成功を実リレーでの成功として扱っていない)
 - Low Overhead Media Container (LOC) 対応
-  - [Low Overhead Media Container](https://datatracker.ietf.org/doc/html/draft-ietf-moq-loc-04)
-  - `draft-04` 対応 (LOC 05 の `CODEC_STRING` Property は未対応)
+  - [Low Overhead Media Container](https://datatracker.ietf.org/doc/html/draft-ietf-moq-loc-05)
+  - `draft-05` 対応
 - MOQT Streaming Format (MSF) 対応
   - [MOQT Streaming Format](https://datatracker.ietf.org/doc/html/draft-ietf-moq-msf-01)
   - `draft-01` 対応
@@ -166,7 +166,7 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
 
 ### Low Overhead Media Container
 
-[draft-ietf-moq-loc-04](https://datatracker.ietf.org/doc/html/draft-ietf-moq-loc-04) の機能実装状況です。
+[draft-ietf-moq-loc-05](https://datatracker.ietf.org/doc/html/draft-ietf-moq-loc-05) の機能実装状況です。
 
 #### LOC Properties
 
@@ -176,13 +176,14 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
 - Video Frame Marking
 - Audio Config
 - Audio Level
+- Codec String
 
 #### LOC の公開 API
 
 - `LOC` 名前空間として Properties と Object payload の encode / decode を公開する
   - `LOCPropertyId` と各 Property の encode / decode (`encodeVideoProperties` / `decodeAudioProperties` など)
   - Object payload の encode / decode (`encodeLocObjectPayload` / `decodeLocObjectPayload`)
-  - Timescale / Video Config / Audio Config は `PublishOptions` で Track Property としても広告できる (draft-ietf-moq-loc-04 Table 1 の Scope: Track, Object)
+  - Timescale / Video Config / Audio Config / Codec String は `PublishOptions` で Track Property としても広告できる (draft-ietf-moq-loc-05 §6.1 Table 1 の Scope: Track, Object)
 
 ### MOQT Streaming Format
 

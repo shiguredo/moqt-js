@@ -694,10 +694,13 @@ for (const tc of objectFieldsTestCases) {
   });
 }
 
-test("ObjectFields: Properties 付き roundtrip (0x11 タイプ)", () => {
-  const properties = new Uint8Array([0x11, 0x22, 0x33, 0x44, 0x55]);
-  const encoded = encodeObjectFields(42n, 256n, 0x11, ObjectStatus.NORMAL, properties);
-  const [decoded, consumed] = decodeObjectFields(encoded, 0x11);
+test("ObjectFields: Properties 付き roundtrip (未知の 0x13 タイプ)", () => {
+  // 0x13 は MOQT / LOC のどちらにも定義が無い未知 Type であり、Property の
+  // 意味検証を通らずにバイト列がそのまま往復する。
+  // (0x11 は LOC-05 の CODEC_STRING であり、意味検証の対象になるため使わない。)
+  const properties = new Uint8Array([0x13, 0x22, 0x33, 0x44, 0x55]);
+  const encoded = encodeObjectFields(42n, 256n, 0x13, ObjectStatus.NORMAL, properties);
+  const [decoded, consumed] = decodeObjectFields(encoded, 0x13);
 
   assert.equal(decoded.objectIdDelta, 42n);
   assert.equal(decoded.propertiesLength, 5);

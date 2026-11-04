@@ -1,6 +1,6 @@
 /**
  * LOC (Low Overhead Container) Property-Based Tests
- * draft-ietf-moq-loc-04 に基づくプロパティテスト
+ * draft-ietf-moq-loc-05 に基づくプロパティテスト
  */
 
 import { test, assert } from "vite-plus/test";
@@ -324,7 +324,7 @@ test("AudioProperties: 全てのプロパティを含む場合のラウンドト
 });
 
 // =============================================================================
-// Property ID 形式のテスト (draft-ietf-moq-loc-04 §6.1 Table 1)
+// Property ID 形式のテスト (draft-ietf-moq-loc-05 §6.1 Table 1)
 // =============================================================================
 
 test("Timestamp: ID=0x10 (偶数) は varint 形式でエンコードされる", () => {
@@ -719,9 +719,10 @@ test("未知の偶数 ID は vi64 としてスキップされる", () => {
 });
 
 test("未知の奇数 ID は length + bytes としてスキップされる", () => {
-  // TIMESTAMP (0x10, delta 0x10) の後に未知奇数 ID 0x11 (delta 0x01) + length 3 + 3 bytes
-  // timestamp value 456 の varint は [0x81, 0xc8]
-  const data = new Uint8Array([0x10, 0x81, 0xc8, 0x01, 0x03, 0x01, 0x02, 0x03]);
+  // TIMESTAMP (0x10, delta 0x10) の後に未知奇数 ID 0x13 (delta 0x03) + length 3 + 3 bytes
+  // timestamp value 456 の varint は [0x81, 0xc8]。0x13 は LOC にも MOQT にも
+  // 定義が無い未知 Type であり、CODEC_STRING (0x11) ではない。
+  const data = new Uint8Array([0x10, 0x81, 0xc8, 0x03, 0x03, 0x01, 0x02, 0x03]);
 
   const video = decodeVideoProperties(data);
   assert.strictEqual(video.timestamp, 456n);
@@ -938,7 +939,7 @@ test("encodeVideoProperties → encodeLocObjectPayload → framed decode → dec
   assert.deepEqual(Array.from(decodedPayload), Array.from(locPayload));
 });
 
-// draft-ietf-moq-loc-04 §2.3.3.2:
+// draft-ietf-moq-loc-05 §2.3.3.2:
 // Audio Level の Value は "vi64 (1-2 bytes to encode values 0x00-0xFF)" であり、
 // 0xFF を超える値は 0x100 から MAX_VARINT までの全域で拒否する
 // (draft-ietf-moq-transport-23 §8.3 の serialization 不一致)。

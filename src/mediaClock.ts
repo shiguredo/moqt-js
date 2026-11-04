@@ -1,7 +1,7 @@
 /**
  * 映像フレームのメディア時刻を Unix epoch の壁時計に換算する
  *
- * draft-ietf-moq-loc-04 Section 2.3.1.1: Timescale を載せない TIMESTAMP は
+ * draft-ietf-moq-loc-05 Section 2.3.1.1: Timescale を載せない TIMESTAMP は
  * Unix epoch からのマイクロ秒 (壁時計) として解釈される。
  *
  * MediaStreamTrackProcessor から読んだ VideoFrame の timestamp は取得元ごとに基準が

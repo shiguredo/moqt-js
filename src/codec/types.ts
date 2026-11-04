@@ -264,7 +264,7 @@ export interface MediaPublisherOptions {
   audio?: AudioPublishOptions;
   video?: VideoPublishOptions;
   // 音声が live から遅れたときの追いつき方 (src/audioPublishCatchUp.ts)。
-  // draft-ietf-moq-loc-04 §4.1: 音声は 1 chunk = 1 Object = 1 Group であり、映像のような
+  // draft-ietf-moq-loc-05 §4.1: 音声は 1 chunk = 1 Object = 1 Group であり、映像のような
   // 抑制が無いため、符号化が実時間に追いつかなくなるとキューに溜まった分だけ遅れが
   // 固定される。既定の "drop" は、遅れが健全時の値から一定を超えたら読んだフレームを
   // 符号化せずに捨てて live へ追いつく (数フレームの穴は受信側の concealment が埋める)。
@@ -369,7 +369,7 @@ export interface MediaSubscriberOptions {
   // 未指定 field は DEFAULT_PENDING_SUBGROUP_BUFFER_OPTIONS で補完される
   pendingSubgroup?: Partial<import("../pendingSubgroupBuffer").PendingSubgroupBufferOptions>;
   // 初期 configure (SUBSCRIBE_OK の Track Property の VIDEO_CONFIG / AUDIO_CONFIG。
-  // draft-ietf-moq-loc-04 Table 1) の完了まで保留する Object の上限
+  // draft-ietf-moq-loc-05 Table 1) の完了まで保留する Object の上限
   // (件数 / payload と properties の長さの合計)。0 以下で上限なし
   // 未指定 field は DEFAULT_PENDING_OBJECT_QUEUE_OPTIONS で補完される
   // 音声と映像は別々のキューを持ち、上限もキューごとに判定する。上限を超えた Object は

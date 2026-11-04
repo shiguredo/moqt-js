@@ -485,7 +485,7 @@ export function buildPublishTrackProperties(
     });
   }
 
-  // LOC TIMESCALE (0x08) - draft-ietf-moq-loc-04 Table 1 (Scope: Track, Object)
+  // LOC TIMESCALE (0x08) - draft-ietf-moq-loc-05 Table 1 (Scope: Track, Object)
   // 偶数 ID のため value 形式。Track 初期化時に広告し Object 単位の冗長送信を削減する。
   if (options?.locTimescale !== undefined) {
     validateNonNegative(options.locTimescale, "LOC TIMESCALE");
@@ -495,7 +495,7 @@ export function buildPublishTrackProperties(
     });
   }
 
-  // LOC VIDEO_CONFIG (0x0D) - draft-ietf-moq-loc-04 Table 1 (Scope: Track, Object)
+  // LOC VIDEO_CONFIG (0x0D) - draft-ietf-moq-loc-05 Table 1 (Scope: Track, Object)
   // 奇数 ID のため data 形式。
   if (options?.locVideoConfig !== undefined) {
     trackProperties.push({
@@ -504,7 +504,7 @@ export function buildPublishTrackProperties(
     });
   }
 
-  // LOC AUDIO_CONFIG (0x0F) - draft-ietf-moq-loc-04 Table 1 (Scope: Track, Object)
+  // LOC AUDIO_CONFIG (0x0F) - draft-ietf-moq-loc-05 Table 1 (Scope: Track, Object)
   // 奇数 ID のため data 形式。
   if (options?.locAudioConfig !== undefined) {
     trackProperties.push({

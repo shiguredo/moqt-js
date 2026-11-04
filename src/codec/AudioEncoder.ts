@@ -133,7 +133,7 @@ export class AudioEncoderWrapper {
           const data = new Uint8Array(chunk.byteLength);
           chunk.copyTo(data);
 
-          // draft-ietf-moq-loc-04 §2.3.3.1 (Audio Config):
+          // draft-ietf-moq-loc-05 §2.3.3.1 (Audio Config):
           // AAC は decoderConfig.description (AudioSpecificConfig) を必要とする。
           // 映像と同じく、metadata に現れたときだけ運ぶ。opus では運ばない
           // (既存の復号 timestamp 挙動を変えないため)。

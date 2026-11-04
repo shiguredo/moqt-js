@@ -172,7 +172,7 @@ export class LastTimestampKind<K extends string> {
 }
 
 /**
- * 音声と映像で共通の TIMESTAMP の種類 (`draft-ietf-moq-loc-04 §2.3.1.1 / §2.3.1.2`)
+ * 音声と映像で共通の TIMESTAMP の種類 (`draft-ietf-moq-loc-05 §2.3.1.1 / §2.3.1.2`)
  *
  * - `wallClock`: TIMESCALE が無い TIMESTAMP (Unix epoch マイクロ秒)
  * - `mediaTime`: TIMESCALE がある TIMESTAMP

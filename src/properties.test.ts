@@ -30,6 +30,7 @@ import {
   isPropertyScopeAllowed,
   resolveDefaultPublisherPriority,
   isMandatoryTrackPropertyId,
+  LOC_CODEC_STRING_PROPERTY_ID,
   MOQTPropertyId,
   TrackPropertyId,
   type Property,
@@ -1936,4 +1937,68 @@ test("assertNoDuplicatePropertiesForSend: 対応済み重複を拒否し未知 T
       { id: 0x100n, value: 2n },
     ]),
   );
+});
+
+// ============================================================================
+// CODEC_STRING (draft-ietf-moq-loc-05 §2.3.1.3)
+// ============================================================================
+
+// CODEC_STRING: UTF-8 として妥当な値は Track / Object の両方で受理する。
+test("CODEC_STRING: 妥当な UTF-8 は Track / Object の両方で受理する", () => {
+  const utf8 = new TextEncoder().encode("av01.0.04M.08");
+  const trackWire = encodeProperties([{ id: LOC_CODEC_STRING_PROPERTY_ID, data: utf8 }]);
+  const trackProperties = decodeProperties(trackWire, "track");
+  assert.equal(trackProperties.length, 1);
+  assert.deepEqual(Array.from(trackProperties[0].data ?? []), Array.from(utf8));
+
+  // Object Properties の検証層でも受理する
+  assert.doesNotThrow(() => assertKnownPropertyValueInObjectProperties(trackWire));
+});
+
+// CODEC_STRING: UTF-8 として不正なバイト列は MALFORMED_KEY_VALUE で拒否する (§8.3)。
+test("CODEC_STRING: 不正な UTF-8 は Track Properties で MALFORMED_KEY_VALUE", () => {
+  // 0x80 は単独では妥当な UTF-8 にならない (継続バイト)
+  const wire = encodeProperties([
+    { id: LOC_CODEC_STRING_PROPERTY_ID, data: new Uint8Array([0x80]) },
+  ]);
+  const thrown = captureThrownError(() => decodeProperties(wire, "track"));
+  assert.instanceOf(thrown, ProtocolViolationError);
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.MALFORMED_KEY_VALUE);
+});
+
+// CODEC_STRING: Object Properties でも不正な UTF-8 は MALFORMED_KEY_VALUE。
+test("CODEC_STRING: 不正な UTF-8 は Object Properties で MALFORMED_KEY_VALUE", () => {
+  const wire = encodeProperties([
+    { id: LOC_CODEC_STRING_PROPERTY_ID, data: new Uint8Array([0x80]) },
+  ]);
+  const thrown = captureThrownError(() => assertKnownPropertyValueInObjectProperties(wire));
+  assert.instanceOf(thrown, ProtocolViolationError);
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.MALFORMED_KEY_VALUE);
+});
+
+// CODEC_STRING: 対応済み Property の重複は MalformedTrackError (§8.4 / §12.1 条件 9)。
+test("CODEC_STRING: 重複は MalformedTrackError", () => {
+  const utf8 = new TextEncoder().encode("opus");
+  // 同一 ID (0x11) を 2 回並べる。2 件目は Delta Type 0 で同じ ID になる
+  const duplicated = new Uint8Array([
+    ...encodeVarint(LOC_CODEC_STRING_PROPERTY_ID),
+    ...encodeVarint(BigInt(utf8.length)),
+    ...utf8,
+    ...encodeVarint(0n),
+    ...encodeVarint(BigInt(utf8.length)),
+    ...utf8,
+  ]);
+  assert.throws(() => decodeProperties(duplicated, "track"), MalformedTrackError);
+});
+
+// CODEC_STRING: Length が残りバイトを超える切り詰めは MALFORMED_KEY_VALUE。
+test("CODEC_STRING: Length が残りバイトを超えると MALFORMED_KEY_VALUE", () => {
+  // ID 0x11 + Length 10 を宣言するが Value は 1 バイトしかない
+  // (既知 Type の長さ不一致は throwLengthOverrunError が MALFORMED_KEY_VALUE にする)
+  const wire = new Uint8Array([
+    ...encodeVarint(LOC_CODEC_STRING_PROPERTY_ID),
+    ...encodeVarint(10n),
+    0x61,
+  ]);
+  assertMalformedKeyValueError(() => decodeProperties(wire, "track"));
 });

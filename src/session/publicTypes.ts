@@ -422,7 +422,7 @@ export interface PublishOptions {
 
   /**
    * LOC Timescale（Track Property として送信）
-   * draft-ietf-moq-loc-04 Table 1 (TIMESCALE, Scope: Track, Object)
+   * draft-ietf-moq-loc-05 Table 1 (TIMESCALE, Scope: Track, Object)
    *
    * 1 秒あたりの Timestamp 単位数。Track 初期化時に Track Property として広告し、
    * Object 単位の冗長送信を削減する。送らない場合は既存どおり Object Properties のみ。
@@ -431,7 +431,7 @@ export interface PublishOptions {
 
   /**
    * LOC Video Config（Track Property として送信）
-   * draft-ietf-moq-loc-04 Table 1 (VIDEO_CONFIG, Scope: Track, Object)
+   * draft-ietf-moq-loc-05 Table 1 (VIDEO_CONFIG, Scope: Track, Object)
    *
    * VideoDecoderConfig の description。Track 初期化時に Track Property として広告する。
    */
@@ -439,7 +439,7 @@ export interface PublishOptions {
 
   /**
    * LOC Audio Config（Track Property として送信）
-   * draft-ietf-moq-loc-04 Table 1 (AUDIO_CONFIG, Scope: Track, Object)
+   * draft-ietf-moq-loc-05 Table 1 (AUDIO_CONFIG, Scope: Track, Object)
    *
    * AudioDecoderConfig の description。Track 初期化時に Track Property として広告する。
    */

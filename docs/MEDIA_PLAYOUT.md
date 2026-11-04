@@ -394,7 +394,7 @@ moqt-devtools は「受信から表示までの時間」の統計へ記録する
 `trackVideoDecodeInput` で記録し、復号の出力を push したときに対応を引く。
 
 ```typescript
-// TIMESTAMP の種類。音声と映像で共通 (draft-ietf-moq-loc-04 §2.3.1.1 / §2.3.1.2)
+// TIMESTAMP の種類。音声と映像で共通 (draft-ietf-moq-loc-05 §2.3.1.1 / §2.3.1.2)
 // - "wallClock": TIMESCALE が無い TIMESTAMP (Unix epoch マイクロ秒)
 // - "mediaTime": TIMESCALE がある TIMESTAMP (メディア時刻)
 // - "none": TIMESTAMP が無い (decoder へは 0 を渡す)

@@ -45,7 +45,7 @@ export class AudioDecoderWrapper {
   /**
    * デコーダーを設定する
    *
-   * @param description - AAC の AudioSpecificConfig (draft-ietf-moq-loc-04 §2.3.3.1)。
+   * @param description - AAC の AudioSpecificConfig (draft-ietf-moq-loc-05 §2.3.3.1)。
    *   opus では不要。
    */
   async configure(

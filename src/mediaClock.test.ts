@@ -23,7 +23,7 @@ function biasOf(mapper: WallClockMapper, index: number): number {
   return Number(converted) - (CAPTURE_ORIGIN_MICROS + index * FRAME_MICROS);
 }
 
-// draft-ietf-moq-loc-04 Section 2.3.1.1: Timescale を載せない TIMESTAMP は Unix epoch の
+// draft-ietf-moq-loc-05 Section 2.3.1.1: Timescale を載せない TIMESTAMP は Unix epoch の
 // マイクロ秒の壁時計である。撮ってから読むまでの遅れが最も小さいフレームに合わせて換算する。
 // 最初のフレームだけで対応をとると、開始時の大きな遅れ (encoder の初期化など) の分だけ
 // 以降の TIMESTAMP が未来にずれ、受信側の遅延が小さく (負に) 出る

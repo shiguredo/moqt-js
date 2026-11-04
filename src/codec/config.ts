@@ -116,7 +116,7 @@ const SURROUND_CHANNEL_COUNTS: ReadonlyMap<string, number> = new Map([
 /**
  * カタログの channelConfig をチャンネル数に解決する
  *
- * draft-ietf-moq-loc-04 §4.1 の名前付き例 mono (→ 1) に対応し、
+ * draft-ietf-moq-loc-05 §4.1 の名前付き例 mono (→ 1) に対応し、
  * stereo (→ 2) は慣用値として定める。サラウンド系の複合表記は
  * SURROUND_CHANNEL_COUNTS の対応表で解決する。整数文字列は 1 以上の整数
  * (safe integer 範囲内) のみ受理する。
@@ -218,7 +218,7 @@ export function resolveAudioContextSampleRate(
 /**
  * コーデックが description (AudioSpecificConfig) を必要とするかを返す
  *
- * draft-ietf-moq-loc-04 §2.3.3.1 (Audio Config):
+ * draft-ietf-moq-loc-05 §2.3.3.1 (Audio Config):
  * AAC の復号には AudioSpecificConfig が必須である。opus は不要で、渡すと
  * codec delay の適用により復号 timestamp が変わるため運ばない。
  */
@@ -245,7 +245,7 @@ export function getAudioDecoderConfig(
         // 復号 timestamp が変わるため、受け取っても使わない (既存挙動を維持する)
       };
     case "aac":
-      // draft-ietf-moq-loc-04 §2.3.3.1 (Audio Config):
+      // draft-ietf-moq-loc-05 §2.3.3.1 (Audio Config):
       // AAC の復号には AudioSpecificConfig (AudioDecoderConfig.description) が必須。
       // exactOptionalPropertyTypes では undefined を渡せないため、値がある場合だけ載せる
       return description === undefined

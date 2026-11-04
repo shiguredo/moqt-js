@@ -9,7 +9,7 @@ moqt-js からの入口のみを示す。
 
 - 正本: [`refs/moq/draft-ietf-moq-msf-01.txt`](../refs/moq/draft-ietf-moq-msf-01.txt)
 - 公開版: [draft-ietf-moq-msf-01](https://datatracker.ietf.org/doc/html/draft-ietf-moq-msf-01)
-- LOC: [draft-ietf-moq-loc-04](https://datatracker.ietf.org/doc/html/draft-ietf-moq-loc-04)
+- LOC: [draft-ietf-moq-loc-05](https://datatracker.ietf.org/doc/html/draft-ietf-moq-loc-05)
 
 ## draft-23 前提
 
