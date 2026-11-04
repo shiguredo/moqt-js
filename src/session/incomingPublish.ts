@@ -28,10 +28,11 @@ import {
   type Parameter,
   type LocationFilter,
 } from "../message";
-import { decodeFillParameters, type RangeFilterSpec } from "../message/parameter";
+import { decodeFillParameters, decodeParameters, type RangeFilterSpec } from "../message/parameter";
 import { MalformedTrackError, RequestErrorCode, SessionError, SessionErrorCode } from "../error";
 import { ControlStreamReader, ControlStreamWriter, type ControlMessage } from "../controlStream";
 import { decodeVarint } from "../varint";
+import { assertLengthWithinData } from "../length";
 import { PUBLISH_ALLOWED_PARAMS, validateParameterScope } from "../message/parameterScope";
 import { type RequestUpdateOptions, SubscriberImpl } from "../subscriber";
 import { fullTrackNameKey, type FullTrackNameKey } from "../fullTrackName";
@@ -616,6 +617,35 @@ async function incomingPublishCancelRequestStream(
  * @returns デコードに成功した PUBLISH。拒否・取消しを行った場合は null
  */
 /**
+ * PUBLISH ペイロードの Parameters までを読み出す
+ *
+ * draft-ietf-moq-transport-22 §9.8: PUBLISH は Request ID / Track Namespace /
+ * Track Name / Track Alias / Parameters / Track Properties の順に並ぶ。
+ * Track Properties の意味検証が失敗しても Parameters は復元できるため、
+ * §8.9 の AUTHORIZATION TOKEN の REGISTER をセッションエラーにならない拒否でも
+ * キャッシュへ登録するために使う。
+ *
+ * @returns Parameters。Parameters までの構造が壊れている場合は undefined
+ */
+function incomingPublishPeekParameters(payload: Uint8Array): Parameter[] | undefined {
+  try {
+    const [, requestIdLength] = decodeVarint(payload, 0);
+    const [, namespaceLength] = decodeTrackNamespace(payload, requestIdLength);
+    let offset = requestIdLength + namespaceLength;
+    const [nameLength, nameLengthConsumed] = decodeVarint(payload, offset);
+    offset += nameLengthConsumed;
+    assertLengthWithinData("publish track name", nameLength, offset, payload.length);
+    offset += Number(nameLength);
+    const [, trackAliasLength] = decodeVarint(payload, offset);
+    offset += trackAliasLength;
+    const [parameters] = decodeParameters(payload, offset);
+    return parameters;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * PUBLISH ペイロードの先頭から Full Track Name を復元する
  *
  * PUBLISH の先頭は Request ID / Track Namespace / Track Name の順に並ぶため、
@@ -687,6 +717,22 @@ async function incomingPublishDecodeOrReject(
       return null;
     }
     if (err instanceof MalformedTrackError) {
+      // draft-ietf-moq-transport-23 §8.9:
+      // "If a REGISTER Alias ... even if the message is rejected for a reason
+      //  other than a session error, the endpoint MUST add the Alias to the
+      //  cache." Track Properties の意味検証で拒否する場合も、Parameters が
+      // 復元できれば AUTHORIZATION TOKEN を処理してから取り消す。
+      const earlyParameters = incomingPublishPeekParameters(payload);
+      if (earlyParameters !== undefined) {
+        incomingPublishProcessAuthorizationTokens(
+          session,
+          incomingPublishPeekRequestId(payload) ?? 0n,
+          earlyParameters,
+        );
+        if (session.sessionState !== "connected") {
+          return null;
+        }
+      }
       await incomingPublishCancelRequestStream(stream);
       // draft-ietf-moq-transport-23 §12.1 (Malformed Tracks):
       // 同じ Full Track Name の既存購読 / FETCH も cancel する MUST。
