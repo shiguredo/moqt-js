@@ -1390,7 +1390,7 @@ export async function bidiReadFetchResponse(
       // FETCH の成功応答は REQUEST_OK に統合され、旧 FETCH_OK の End Of Track /
       // End Location フィールドは削除された。EXPIRES / LARGEST_OBJECT と
       // Track Properties を受け取る。
-      const decoded = decodeRequestOkPayload(payload);
+      const decoded = decodeRequestOkPayload(payload, 0, "track");
       // draft-ietf-moq-transport-23 §9.19.1 (Parameter Scope) / §9.3:
       // FETCH_OK に出現できるのは EXPIRES と LARGEST_OBJECT のみ。
       // スコープ違反は INVALID_PARAMETER でセッションを閉じる。
@@ -1531,7 +1531,7 @@ export async function bidiReadTrackStatusResponse(
     },
     handleOk: async (context, payload) => {
       const { session, requestId, pending } = context;
-      const decoded = decodeRequestOkPayload(payload);
+      const decoded = decodeRequestOkPayload(payload, 0, "track");
 
       // draft-ietf-moq-transport-22 §9.20.1 (Parameter Scope):
       // スコープ違反は INVALID_PARAMETER でセッションを閉じる。

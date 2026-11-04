@@ -417,12 +417,20 @@ export function encodeRequestOkPayload(msg: RequestOk): Uint8Array {
  * Number of Parameters + Parameters + Track Properties
  * - Track Properties は残りバイトすべて
  */
-export function decodeRequestOkPayload(data: Uint8Array, offset = 0): RequestOk {
+export function decodeRequestOkPayload(
+  data: Uint8Array,
+  offset = 0,
+  propertyScope?: "track" | "object",
+): RequestOk {
   const [parameters, paramsConsumed] = decodeParameters(data, offset);
   offset += paramsConsumed;
 
   const propertiesData = data.slice(offset);
-  const trackProperties = decodeProperties(propertiesData);
+  // draft-ietf-moq-transport-23 §8.4: Track Properties を運ぶ応答
+  // (FETCH_OK / TRACK_STATUS_OK / PUBLISH_OK) では scope と重複の検証を行う。
+  // 空必須の応答 (REQUEST_UPDATE_OK など) は scope を渡さず、§9.3 の
+  // INVALID_FIELD 優先を維持する。
+  const trackProperties = decodeProperties(propertiesData, propertyScope);
 
   return {
     type: MessageType.REQUEST_OK,
