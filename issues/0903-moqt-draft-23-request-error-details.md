@@ -1,8 +1,8 @@
 # REQUEST_ERROR の末尾を Error Details にし REDIRECT と UNSUPPORTED_PROPERTY を扱う
 
 - Created: 2026-11-03
-- Completed: {YYYY-MM-DD}
-- Branch: feature/change-request-error-details
+- Completed: 2026-11-04
+- Branch: feature/change-moqt-draft-23
 - Polished: 2026-11-03
 
 ## 目的
@@ -43,4 +43,26 @@ draft 23 §9.4 は REQUEST_ERROR の末尾を汎用の Error Details KVP 列へ�
 
 ## 解決方法
 
-{未着手}
+- `src/message/session.ts` の REQUEST_ERROR を draft-23 §9.4 の形にした。末尾を §8.3 の KVP 列 (Error Details) として encode / decode し、`ErrorDetailType` を追加した。REDIRECT (0x01) は Length 付き Value、UNSUPPORTED_PROPERTY (0x02) は vi64 Value を持ち複数出現できる。
+- Detail の扱いを §9.4.1 / §9.4.2 に合わせた。未知の Detail と適用外の既知 Detail は読み飛ばして無視し、未知型の重複は許容する。REDIRECT の欠落 (Track namespace scope) と重複は MALFORMED_MESSAGE、既知 Detail の Length / Value の不整合は MALFORMED_KEY_VALUE、Length の最大超過は FIELD_LENGTH_EXCEEDED、Type Delta の累積超過は DELTA_ENCODING_OVERFLOW とする (§12.2 の優先順位)。
+- 公開 API に `RequestError.unsupportedPropertyTypes: readonly bigint[]` を追加した。コンストラクタの 5 番目の省略可能引数で既定 `[]` とし、既存利用者に対して後方互換を保つ。
+- `src/properties.ts` の `decodeProperties` / `parseProperties` / `decodeImmutableProperties` が、未知の Mandatory Track Property の Type を 1 件目で打ち切らずすべて収集し、構造全体の検証を終えてから一覧付きの `MalformedTrackError` で通知するようにした。KVP の構造破損と既知 Property の不整合は従来どおり Session エラーを優先する。
+- draft-23 §3.7 に従い、Mandatory Track Property の範囲に含まれる GREASE 値は未知 Mandatory として扱わないようにした。
+- 受信 PUBLISH の拒否経路 (`src/session/incomingPublish.ts`) が、未対応 Mandatory Property の Type を UNSUPPORTED_PROPERTY Detail に載せて REQUEST_ERROR を送るようにした。Reason Phrase は固定の短い文言 `unsupported mandatory track properties` とし、Type の一覧は Detail だけに載せる (§8.5 の長さ上限で受信側が FIELD_LENGTH_EXCEEDED にしないため)。
+- 未知 Mandatory 以外の理由で malformed になった PUBLISH は、PUBLISH への応答に使える Error Code が §12.3 に無いため、UNSUPPORTED_EXTENSION に置き換えず REQUIRE の取消しとして送受信を終了する。
+- `src/session/incoming.ts` の `incomingSendRequestErrorAndClose` に `IncomingRequestErrorOptions` を追加し、Detail を載せた REQUEST_ERROR を送れるようにした。`src/session/bidi.ts` の `buildRequestErrorFromDecoded` が一覧を公開 `RequestError` へ伝搬する。
+- テストは固定ワイヤ (REDIRECT / UNSUPPORTED_PROPERTY / 未知 Detail / 適用外 Detail / 未知型重複 / Detail 欠落 / Detail 重複 / 長さ不整合 / 上限超過 / delta 超過)、PBT、本番経路の PUBLISH 拒否 E2E、各応答 reader / namespace / REQUEST_UPDATE 経路への伝搬を検証する。
+
+### 既知の制限
+
+- Track-scoped Redirect の空 Track Name の非空検証は、非空 Track Name の issue で扱う。generic decoder は空を許容し、namespace-scoped の非空検証は維持している。
+- GREASE の Error Detail を送る機構は既存に無いため送信は未実装。受信時は未登録 Type として読み飛ばすことをテストしている。
+- 未対応 Mandatory 以外の malformed PUBLISH の取消しは、CANCELLED コード付き取消しを扱う issue で再検討する。
+- `ErrorDetailType` は非公開のまま。UNSUPPORTED_PROPERTY の値域検証は行っていない。
+- 実リレー E2E は統合ブランチの制約 (ALPN は移行完了まで moqt-22) のため未実施である。
+
+### 残課題 (別 issue で扱う)
+
+- Track-scoped Redirect の空 Track Name 検証 (0911)
+- CANCELLED コード付き取消しと scope 違反の構造化 (0913)
+- Property scope / 重複検証 (0913 / 0914)
