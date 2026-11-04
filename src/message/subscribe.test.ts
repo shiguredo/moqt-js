@@ -85,7 +85,7 @@ test("decodeSubscribePayload: offset 指定でも末尾判定は対象範囲全�
  * draft-ietf-moq-transport-23 §8.4 / §12.1 条件 8:
  * 対応済み Property を定義外の scope で受信したら Track を malformed とする。
  * SUBSCRIBE_OK は Track Properties を運ぶため、Object-only の Property
- * (LOC の TIMESTAMP 0x06) を受けたら MalformedTrackError になる。
+ * (LOC の TIMESTAMP 0x10) を受けたら MalformedTrackError になる。
  */
 test("decodeSubscribeOkPayload: Object-only Property を Track Properties に受けると MalformedTrackError", () => {
   // TIMESTAMP (0x10) は Object scope 専用
@@ -108,7 +108,7 @@ test("decodeSubscribeOkPayload: Object-only Property を Track Properties に受
  * 対応済み Property の重複も Track を malformed とする。
  */
 test("decodeSubscribeOkPayload: 対応済み Track Property の重複は MalformedTrackError", () => {
-  // EXPIRES (0x08) を 2 回載せる
+  // TIMESCALE (0x08) を 2 回載せる
   const duplicated = encodeProperties([
     { id: 0x08n, value: 1000n },
     { id: 0x08n, value: 2000n },

@@ -52,6 +52,6 @@ draft 23 §8.4 は、定義が反復を許す場合を除いて同じ Track / Ob
 ### 既知の制限 (未実装)
 
 - 既知 Property の重複した PUBLISH は `MalformedTrackError` になり、`incomingPublishPeekTrackKey` で Track を復元して `cancelMalformedTrackPeers` を呼ぶ (実装済み)。受信要求ストリームも cancel し、Session は閉じない。
-- SUBSCRIBE_OK / FETCH_OK / TRACK_STATUS_OK / REQUEST_UPDATE_OK の Track Properties 重複検証は未接続である (§9.3 の INVALID_FIELD 優先のため、応答ハンドラ単位の配置と同 Track 取消し配線が別途必要)。
+- SUBSCRIBE_OK / FETCH_OK / TRACK_STATUS_OK の Track Properties 重複検証は実装済み。REQUEST_UPDATE_OK は空必須のため §9.3 の INVALID_FIELD 優先を維持し、意図的に未接続である。
 - 将来、複数インスタンスを許す Property 定義が追加された場合は `REPEATABLE_PROPERTY_TYPES` へ登録する必要がある。
 - 実リレー E2E は統合ブランチの制約 (ALPN は移行完了まで moqt-22) のため未実施である。

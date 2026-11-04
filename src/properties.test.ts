@@ -1251,7 +1251,7 @@ test("isMandatoryTrackPropertyId: 値域内の GREASE 値は Mandatory Track Pro
  * 受理される (未知 Mandatory として Track を拒否しない)。
  */
 test("GREASE Property: 値域内の GREASE は Track / Object Properties で未知として受理される", () => {
-  // 0x7f * 200 + 0x9d = 0x63DD + 0x9D = 0x647A は 0x4000-0x7FFF に入る
+  // 0x7f * 200 + 0x9d = 0x63D5 は 0x4000-0x7FFF に入る
   const greaseId = 0x7fn * 200n + 0x9dn;
   assert.isTrue(greaseId >= 0x4000n && greaseId <= 0x7fffn);
   assert.isTrue(isGreaseValue(greaseId));

@@ -748,18 +748,19 @@ export function sessionHandleGoaway(
 
   session.receivedGoaway = true;
 
-  // GOAWAY コールバックを呼び出す。アプリのコールバック例外は制御ループの catch が
-  // callbacks.error へ流し、セッションは閉じない (startControlMessageLoop の契約)
-  session.callbacks.goaway?.(msg.newSessionUri);
-
   // draft-ietf-moq-transport-23 §9.2 / §3.4.1:
   // GOAWAY 後は新しい要求を期待しないため、受信 PUBLISH の初期 fill を待って
   // いるデータストリームを即座に解放する。Session 終了まで 5 秒待たせない。
   // settle は反復中に該当キーを削除するが、Map の keys() 反復は削除済み
-  // エントリを飛ばすだけで例外にならない。
+  // エントリを飛ばすだけで例外にならない。アプリのコールバックより先に実行し、
+  // コールバック例外で解放がスキップされないようにする。
   for (const requestId of session.publishFillReadyCallbacks.keys()) {
     incomingSettlePublishFillWaiters(session as unknown as SessionInternal, requestId);
   }
+
+  // GOAWAY コールバックを呼び出す。アプリのコールバック例外は制御ループの catch が
+  // callbacks.error へ流し、セッションは閉じない (startControlMessageLoop の契約)
+  session.callbacks.goaway?.(msg.newSessionUri);
 
   // draft-ietf-moq-transport-22 Section 6.6.1:
   // "After the client receives a GOAWAY, it's RECOMMENDED that the client

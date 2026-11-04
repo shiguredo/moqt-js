@@ -50,7 +50,7 @@ draft 23 §4.2 / §9.5.2 は prefix の overlap 制約を削除し、SUBSCRIBE_N
 
 ### 既知の制限
 
-- `RequestErrorCode.PREFIX_OVERLAP` は定数として残っている (登録コードの同期は別 issue)。
+- `RequestErrorCode.PREFIX_OVERLAP` は登録コード同期の issue で削除済みである。
 - docs は 0925 で一括更新するため触っていない。
 - 実リレー E2E は統合ブランチの制約 (ALPN は移行完了まで moqt-22) のため未実施である。
 
