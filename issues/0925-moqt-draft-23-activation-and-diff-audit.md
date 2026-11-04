@@ -1,7 +1,7 @@
 # MOQT draft 23 の適合確認を完了してプロトコル識別子と仕様参照を切り替える
 
 - Created: 2026-11-03
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-05
 - Branch: feature/change-moqt-draft-23
 - Polished: 2026-11-03
 
@@ -145,4 +145,24 @@ MSF-01 自体は今回更新されておらず、§§9 / 10 と normative refere
 
 ## 解決方法
 
-{未着手}
+- `src/connect.ts` の WebTransport で提示するプロトコル識別子を `moqt-22` から `moqt-23` に切り替えた。draft-23 §6.2.1 の WT-Available-Protocols と、ドラフト版の識別子を「moqt-」+ ドラフト番号とする規則に基づく。
+- `CODEBASE.md` のクライアント用途に限定する根拠の仕様引用を draft-23 §7 に同期した。この変更は `shiguredo-git` の特別ルールに従い、`develop` へ単独の「整備」コミットとして先行反映し、そのコミットを統合ブランチに取り込んだ。
+- src / テスト / README / docs の仕様参照を draft-23 に更新した。`draft-ietf-moq-transport-22` を `draft-ietf-moq-transport-23` に置き換え、draft-23 で番号が変わった節を移した。
+  - `§9.20` (Control Message Parameters) → `§9.19`
+  - `§9.20.21` (INCLUDE_PROPERTIES) → `§9.19.22` (draft-23 で `SUBSCRIBE_TRACKS_ID` が §9.19.21 に入ったため)
+  - `§16.11` (Error Codes) → `§16.12` (`§16.12.1`〜`§16.12.4` を含む)
+- 置換後に、`draft-ietf-moq-transport-23` を含む行の `§` 参照がすべて draft-23 の目次に存在することを機械的に検証した。存在しない参照は 0 件である。`§5.x` / `§11.4.3` / `§7.4.1` など別ドラフト (MSF-01 / LOC) 由来の参照は対象外として維持している。
+- README の対応版を `draft-23` / `moqt-23` に更新し、companion の対応範囲を実装状況と一致させた (LOC 05 の `CODEC_STRING`、C4M 02 の claim map / confirmation / CWT 移行は未対応と明記)。
+- MSF / API 文書の前提記述を draft-23 に揃えた。
+- 検証: `vp check` / `vp run typecheck` / `vp test run` (272 ファイル / 4830 テスト) / `vp run build` / `vp run build:devtools` がすべて通る。
+
+### 既知の制限
+
+- draft-23 対応の実リレーとの相互接続 (接続・namespace・購読・PUBLISH・FETCH / fill) は未検証である。検証環境に draft-23 対応のリレーが無いため、単体・統合テストの成功を実リレーでの成功として扱っていない。README にも相互接続未検証と明記した。
+- companion draft の 0916〜0924 (LOC 05 の CODEC_STRING、C4M 02 の各項目、log 04、metrics 03) は未実装であり、参照も旧版のまま維持している。README に対応範囲を明記した。
+- `CHANGES.md` は `CODEBASE.md` の MOQT RFC ドラフト中の特別ルールに従い更新していない。
+
+### 残課題 (別 issue で扱う)
+
+- 0916〜0924 (companion draft の移行項目)
+- draft-23 対応リレーでの実接続 E2E (0703 / 0817 / 0892 の役割分担に従う)
