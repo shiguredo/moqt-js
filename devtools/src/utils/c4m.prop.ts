@@ -448,9 +448,10 @@ const actionTokenArbitrary: fc.Arbitrary<ActionToken> = fc.oneof(
       .map((action) => ({ kind: "known" as const, action })),
   },
   {
+    // draft-ietf-moq-c4m-02 Table 1 のアクションは 1〜9 なので、表に無い番号は 10 以上を使う
     weight: 1,
     arbitrary: fc
-      .integer({ min: 9, max: 1_000 })
+      .integer({ min: 10, max: 1_000 })
       .map((value) => ({ kind: "unknown" as const, value })),
   },
 );
