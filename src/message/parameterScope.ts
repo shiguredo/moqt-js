@@ -191,6 +191,12 @@ export const NAMESPACE_REQUEST_UPDATE_ALLOWED_PARAMS = new Set<number>([
  * この値で PUBLISH を元の SUBSCRIBE_TRACKS の要求へ結び付ける (§3.6)。
  * PUBLISH 以外のメッセージで受信した場合は §9.19.1 の MUST により
  * INVALID_PARAMETER でセッションを閉じる (本集合に含めない)。
+ *
+ * draft-ietf-moq-transport-23 §3.6.2 (Parameters on SUBSCRIBE_TRACKS):
+ * 「結果 PUBLISH に含める」と一般に述べるが、§9.8 の明示一覧には Range Filters /
+ * INCLUDE_PROPERTIES が無い。本文間の不整合のため、本集合は §9.8 の明示一覧を
+ * 優先し、一般文だけを根拠に許可型を広げない (SUBSCRIBE_TRACKS で送った
+ * Range Filters / INCLUDE_PROPERTIES が PUBLISH に載っても受理しない)。
  */
 export const PUBLISH_ALLOWED_PARAMS = new Set<number>([
   MessageParameterType.AUTHORIZATION_TOKEN,

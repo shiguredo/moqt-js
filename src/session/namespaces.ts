@@ -247,14 +247,14 @@ export async function namespacesSubscribeTracks(
   // draft-ietf-moq-transport-22 §2.4.3 / §6.5: 予約 namespace / .session の送信拒否
   validateTrackNamespaceForSend(namespacePrefix);
 
-  // draft-ietf-moq-transport-22 §9.1.6: ピアの MAX_FILTER_RANGES が 0 のとき、および
-  // 購読単位の Ranges 合計が上限を超えるときは Range Filter を送信できない
-  // draft-ietf-moq-transport-22 §3.6.1: SUBSCRIBE_TRACKS で Range Filter を送信できる
-  // 現行の SubscribeTracksOptions は FILL_PARAMETERS を送らないため fill 内側は数えない
-  // (collectSubscriptionRangeFilters の第 2 引数は SUBSCRIBE 経路のみ)。
-  // 上限の解釈は SUBSCRIBE 経路と共通であり、検証はストリーム生成より前に行う
+  // draft-ietf-moq-transport-23 §9.1.6: ピアの MAX_FILTER_RANGES が 0 のとき、および
+  // 購読単位の Ranges 合計が上限を超えるときは Range Filter を送信できない。
+  // draft-ietf-moq-transport-23 §3.6.1: SUBSCRIBE_TRACKS で Range Filter を送信できる。
+  // FILL_PARAMETERS を運ぶ場合、内側の fill.rangeFilters も同じ購読に載るため
+  // 外側と合算する (collectSubscriptionRangeFilters の第 2 引数)。
+  // 上限の解釈は SUBSCRIBE 経路と共通であり、検証はストリーム生成より前に行う。
   validateRangeFilterLimits(
-    collectSubscriptionRangeFilters(options?.rangeFilters, undefined),
+    collectSubscriptionRangeFilters(options?.rangeFilters, options?.fill),
     session.peerMaxFilterRanges,
     "SUBSCRIBE_TRACKS",
   );
@@ -272,8 +272,9 @@ export async function namespacesSubscribeTracks(
 
   try {
     // SUBSCRIBE_TRACKS メッセージを構築
-    // SUBSCRIBE_TRACKS の許可一覧は draft-ietf-moq-transport-23 §9.17 / §3.6.2。
-    // PAUSED は §9.19.18、GROUP_ORDER は §9.19.8、Range Filters は §3.3.2 で定義される
+    // SUBSCRIBE_TRACKS の許可一覧と扱いは draft-ietf-moq-transport-23 §9.17 / §3.6.2。
+    // 各 Parameter の定義は §9.19 (timeouts / priority / LOCATION_FILTER /
+    // FILL_PARAMETERS / PAUSED / GROUP_ORDER / Range Filters) を参照する。
     // draft-ietf-moq-transport-22 §8.9 / §9.1.4: SETUP の REGISTER の登録成否に
     // 応じて付与するトークンを正規化する (登録成功 → USE_ALIAS、登録失敗 →
     // USE_VALUE。詳細は normalizeAuthorizationTokenForSend の JSDoc)

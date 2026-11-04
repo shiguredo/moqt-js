@@ -735,13 +735,66 @@ export interface SubscribeOptions {
  *  PAUSED / SUBSCRIBER_PRIORITY / LOCATION_FILTER / GROUP_ORDER /
  *  FILL_PARAMETERS / SUBGROUP_FILTER / OBJECTID_FILTER / PRIORITY_FILTER /
  *  OBJECT_PROPERTY_FILTER / TRACK_PROPERTY_FILTER / INCLUDE_PROPERTIES) のうち、
- * 現行の実装が対応しているものだけを扱う。
+ * RENDEZVOUS_TIMEOUT / NEW_GROUP_REQUEST を除く型を扱う。
  *
- * SUBSCRIBER_PRIORITY / LOCATION_FILTER / FILL_PARAMETERS などは §9.17 が
- * SUBSCRIBE_TRACKS での出現を許可しているが、本インターフェースでは未対応のため
- * 送らない (対応は別途行う)。
+ * draft-ietf-moq-transport-23 §3.6.2 (Parameters on SUBSCRIBE_TRACKS):
+ * AUTHORIZATION_TOKEN と TRACK_PROPERTY_FILTER は SUBSCRIBE_TRACKS 自身に適用され、
+ * それ以外は結果 PUBLISH で確立する subscription の初期条件として publisher が
+ * PUBLISH に含める。RENDEZVOUS_TIMEOUT / NEW_GROUP_REQUEST は単一 Track の
+ * SUBSCRIBE 専用であり、SUBSCRIBE_TRACKS には出現できないため扱わない。
  */
 export interface SubscribeTracksOptions {
+  /**
+   * Location Filter
+   * draft-ietf-moq-transport-23 §9.17 (SUBSCRIBE_TRACKS) /
+   * §9.19.9 (LOCATION_FILTER Parameter) / §3.6.2
+   *
+   * 結果 PUBLISH で確立する subscription の初期 Location Filter。
+   * 形式は SubscribeOptions.filter と同じ (§9.19.9 Table 6)。省略時はパラメータを
+   * 送らず、publisher の既定値 (フィルタ無し) に従う。
+   */
+  filter?: LocationFilter;
+
+  /**
+   * Delivery Timeout（ミリ秒）
+   * draft-ietf-moq-transport-23 §9.17 (SUBSCRIBE_TRACKS) /
+   * §9.19.4 (OBJECT_DELIVERY_TIMEOUT Parameter) / §3.6.2
+   *
+   * 結果 PUBLISH で確立する subscription の初期値。省略時は送らず、
+   * publisher の既定値に従う。
+   */
+  deliveryTimeout?: bigint;
+
+  /**
+   * Subgroup Delivery Timeout（ミリ秒）
+   * draft-ietf-moq-transport-23 §9.17 (SUBSCRIBE_TRACKS) /
+   * §9.19.3 (SUBGROUP_DELIVERY_TIMEOUT Parameter) / §3.6.2
+   *
+   * 結果 PUBLISH で確立する subscription の初期値。省略時は送らず、
+   * publisher の既定値に従う。
+   */
+  subgroupDeliveryTimeout?: bigint;
+
+  /**
+   * Subscriber Priority（0-255）
+   * draft-ietf-moq-transport-23 §9.17 (SUBSCRIBE_TRACKS) /
+   * §9.19.7 (SUBSCRIBER PRIORITY Parameter) / §3.6.2
+   *
+   * 結果 PUBLISH で確立する subscription の初期値。省略時は送らず、
+   * publisher の既定値 (128) に従う。
+   */
+  subscriberPriority?: number;
+
+  /**
+   * fill fetch の要求
+   * draft-ietf-moq-transport-23 §9.17 (SUBSCRIBE_TRACKS) /
+   * §9.19.15 (FILL_PARAMETERS Parameter) / §3.6.2
+   *
+   * FILL_PARAMETERS として送り、結果 PUBLISH の subscription に適用する初期
+   * fill 要求。内側の Parameter は §9.19.15 の制限に従う。省略時は送らない。
+   */
+  fill?: FillRequestOptions;
+
   /**
    * Group Order
    * draft-ietf-moq-transport-22 Section 9.20.8 (GROUP ORDER Parameter)
@@ -764,8 +817,8 @@ export interface SubscribeTracksOptions {
    * draft-ietf-moq-transport-22 Section 3.3.2 (Range Filters)
    *
    * ピアの MAX_FILTER_RANGES が 0（未広告含む）の場合、および購読単位の Ranges
-   * 合計が上限を超える場合に指定すると throw する。SUBSCRIBE_TRACKS は
-   * FILL_PARAMETERS を運ばないため、数えるのはここで指定した Ranges のみである。
+   * 合計が上限を超える場合に指定すると throw する。合計には fill 内側の
+   * fill.rangeFilters も含む (FILL_PARAMETERS の内側も同じ購読に載るため)。
    */
   rangeFilters?: RangeFilterSpec[];
 
@@ -775,6 +828,8 @@ export interface SubscribeTracksOptions {
    *
    * true (1) は結果 PUBLISH に Track Properties を載せるよう要求し、
    * false (0) は空にするよう要求する。省略時は送らない (デフォルト 1 と同等)。
+   * §9.17 は SUBSCRIBE_TRACKS での出現を許可するが、§9.8 の PUBLISH 許可一覧には
+   * 無いため、結果 PUBLISH にこのパラメータが載ることは想定しない。
    */
   includeProperties?: boolean;
 

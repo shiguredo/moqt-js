@@ -20,6 +20,7 @@ import {
   validateTrackNamespaceForSend,
 } from "./params";
 import { InvalidFilterError, ProtocolViolationError } from "../error";
+import { decodeFillParameters, encodeLocationFilterParameter } from "../message/parameter";
 import { MAX_VARINT, encodeVarint } from "../varint";
 import { MessageParameterType, GroupOrder } from "../message/types";
 import { TrackPropertyId } from "../properties";
@@ -100,29 +101,83 @@ test("buildFetchParameters: 不正な groupOrder で throw する", () => {
 });
 
 /**
- * draft-ietf-moq-transport-23 §9.17 (SUBSCRIBE_TRACKS):
- * §9.17 は SUBSCRIBER_PRIORITY / LOCATION_FILTER / FILL_PARAMETERS などの
- * 出現も許可しているが、現行の SubscribeTracksOptions は未対応のため、
- * 対応済みの型 (PAUSED / GROUP_ORDER / INCLUDE_PROPERTIES) だけを送る。
+ * draft-ietf-moq-transport-23 §9.17 (SUBSCRIBE_TRACKS) / §3.6.2:
+ * SUBSCRIBE_TRACKS の許可一覧のうち、単一 Track 専用の RENDEZVOUS_TIMEOUT /
+ * NEW_GROUP_REQUEST を除く初期購読条件をすべて送る。未指定時は既定値を変えない
+ * (空の Parameters を送る)。
  */
-test("buildSubscribeTracksParameters: 対応済みのパラメータだけを送る", () => {
+test("buildSubscribeTracksParameters: §9.17 の初期購読条件をすべて送る", () => {
   const parameters = buildSubscribeTracksParameters({
-    groupOrder: "Ascending",
+    filter: { startGroup: 10n, startObject: 2n },
+    deliveryTimeout: 5000n,
+    subgroupDeliveryTimeout: 3000n,
+    subscriberPriority: 7,
+    groupOrder: "Descending",
     paused: true,
+    rangeFilters: [
+      {
+        type: "trackProperty",
+        setId: 0,
+        propertyType: 0x20n,
+        ranges: [{ start: 100n, end: 100n }],
+      },
+    ],
+    fill: {
+      filter: { startGroup: 1n },
+      rangeFilters: [{ type: "subgroup", setId: 0, ranges: [{ start: 0n, end: 1n }] }],
+    },
     includeProperties: true,
+    authorizationToken: useValueToken(),
   });
 
-  // 一覧にある型だけが現れる
+  const types = parameters.map((parameter) => parameter.type);
+  for (const type of [
+    MessageParameterType.OBJECT_DELIVERY_TIMEOUT,
+    MessageParameterType.SUBGROUP_DELIVERY_TIMEOUT,
+    MessageParameterType.SUBSCRIBER_PRIORITY,
+    MessageParameterType.LOCATION_FILTER,
+    MessageParameterType.GROUP_ORDER,
+    MessageParameterType.PAUSED,
+    MessageParameterType.TRACK_PROPERTY_FILTER,
+    MessageParameterType.FILL_PARAMETERS,
+    MessageParameterType.INCLUDE_PROPERTIES,
+    MessageParameterType.AUTHORIZATION_TOKEN,
+  ]) {
+    assert.include(types, type);
+  }
+  // 単一 Track 専用の RENDEZVOUS_TIMEOUT / NEW_GROUP_REQUEST は送らない
+  assert.notInclude(types, MessageParameterType.RENDEZVOUS_TIMEOUT);
+  assert.notInclude(types, MessageParameterType.NEW_GROUP_REQUEST);
+
+  // 各初期条件の値をワイヤで確認する
+  const valueOf = (type: number): Uint8Array | undefined =>
+    parameters.find((parameter) => parameter.type === type)?.value;
+  assert.deepEqual(valueOf(MessageParameterType.OBJECT_DELIVERY_TIMEOUT), encodeVarint(5000n));
+  assert.deepEqual(valueOf(MessageParameterType.SUBGROUP_DELIVERY_TIMEOUT), encodeVarint(3000n));
+  assert.deepEqual(valueOf(MessageParameterType.SUBSCRIBER_PRIORITY), new Uint8Array([7]));
+  assert.deepEqual(valueOf(MessageParameterType.GROUP_ORDER), new Uint8Array([0x02]));
+  assert.deepEqual(valueOf(MessageParameterType.PAUSED), new Uint8Array([1]));
+  assert.deepEqual(valueOf(MessageParameterType.INCLUDE_PROPERTIES), new Uint8Array([1]));
   assert.deepEqual(
-    parameters.map((p) => p.type).sort((a, b) => a - b),
-    [
-      MessageParameterType.PAUSED,
-      MessageParameterType.GROUP_ORDER,
-      MessageParameterType.INCLUDE_PROPERTIES,
-    ].sort((a, b) => a - b),
+    valueOf(MessageParameterType.LOCATION_FILTER),
+    encodeLocationFilterParameter({ startGroup: 10n, startObject: 2n }).value,
   );
-  // 未対応の型は型の上でも指定できない (空オブジェクトで確認)
+
+  // FILL_PARAMETERS の内側に fill の LOCATION_FILTER と Range Filter が載る
+  const fillValue = valueOf(MessageParameterType.FILL_PARAMETERS);
+  assert.isDefined(fillValue);
+  const innerTypes = decodeFillParameters({
+    type: MessageParameterType.FILL_PARAMETERS,
+    value: fillValue!,
+  }).map((parameter) => parameter.type);
+  assert.deepEqual(innerTypes, [
+    MessageParameterType.LOCATION_FILTER,
+    MessageParameterType.SUBGROUP_FILTER,
+  ]);
+
+  // 未指定時は既定値を変えない (パラメータを送らない)
   assert.deepEqual(buildSubscribeTracksParameters({}), []);
+  assert.deepEqual(buildSubscribeTracksParameters({ paused: false }), []);
 });
 
 // ============================================================================

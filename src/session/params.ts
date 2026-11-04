@@ -874,19 +874,53 @@ export function buildSubscribeNamespaceParameters(options?: {
 /**
  * 純粋関数: SUBSCRIBE_TRACKS のパラメータを構築する
  *
- * draft-ietf-moq-transport-23 §9.17 (SUBSCRIBE_TRACKS) / §3.6.2 (Parameters on
- * SUBSCRIBE_TRACKS): §9.17 は SUBSCRIBER_PRIORITY / LOCATION_FILTER /
- * FILL_PARAMETERS なども許可するが、現行の SubscribeTracksOptions は未対応のため
- * 対応済みの型だけを送る (SubscribeTracksOptions の JSDoc を参照)。
+ * draft-ietf-moq-transport-23 §9.17 (SUBSCRIBE_TRACKS):
+ * 許可される Parameters のうち、単一 Track 専用の RENDEZVOUS_TIMEOUT /
+ * NEW_GROUP_REQUEST を除く型を送る (SubscribeTracksOptions の JSDoc を参照)。
+ *
+ * draft-ietf-moq-transport-23 §3.6.2 (Parameters on SUBSCRIBE_TRACKS):
+ * AUTHORIZATION_TOKEN と TRACK_PROPERTY_FILTER は SUBSCRIBE_TRACKS 自身に適用し、
+ * それ以外は結果 PUBLISH の subscription の初期条件になる。AUTHORIZATION_TOKEN は
+ * §9.19.2 により結果 PUBLISH へ複製してはならない。
  *
  * draft-ietf-moq-transport-23 §3.6.1 (Filtering SUBSCRIBE_TRACKS):
  * "Range Filters Section 3.3.2 can be used in SUBSCRIBE_TRACKS to filter
  *  Tracks in a namespace using the Track Property Filter."
  */
 export function buildSubscribeTracksParameters(options?: SubscribeTracksOptions): Parameter[] {
-  // draft-ietf-moq-transport-23 §9.17 の許可一覧のうち、現行の
-  // SubscribeTracksOptions が対応している型だけを送る。
   const parameters: Parameter[] = [];
+
+  // LOCATION_FILTER (0x21) - draft-ietf-moq-transport-23 §9.19.9
+  // End Group 超過は encodeLocationFilterParameter が InvalidFilterError で拒否する
+  if (options?.filter !== undefined) {
+    parameters.push(encodeLocationFilterParameter(options.filter));
+  }
+
+  // OBJECT_DELIVERY_TIMEOUT (0x02) - draft-ietf-moq-transport-23 §9.19.4
+  if (options?.deliveryTimeout !== undefined) {
+    validateNonNegative(options.deliveryTimeout, "OBJECT_DELIVERY_TIMEOUT");
+    parameters.push({
+      type: MessageParameterType.OBJECT_DELIVERY_TIMEOUT,
+      value: encodeVarint(options.deliveryTimeout),
+    });
+  }
+
+  // SUBGROUP_DELIVERY_TIMEOUT (0x06) - draft-ietf-moq-transport-23 §9.19.3
+  if (options?.subgroupDeliveryTimeout !== undefined) {
+    validateNonNegative(options.subgroupDeliveryTimeout, "SUBGROUP_DELIVERY_TIMEOUT");
+    parameters.push({
+      type: MessageParameterType.SUBGROUP_DELIVERY_TIMEOUT,
+      value: encodeVarint(options.subgroupDeliveryTimeout),
+    });
+  }
+
+  // SUBSCRIBER_PRIORITY (0x20) - draft-ietf-moq-transport-23 §9.19.7 (uint8)
+  if (options?.subscriberPriority !== undefined) {
+    parameters.push({
+      type: MessageParameterType.SUBSCRIBER_PRIORITY,
+      value: encodeUint8ParameterValue(options.subscriberPriority, "SUBSCRIBER_PRIORITY"),
+    });
+  }
 
   // GROUP_ORDER (0x22) - draft-ietf-moq-transport-22 Section 9.20.8 (uint8)
   if (options?.groupOrder !== undefined) {
@@ -921,11 +955,18 @@ export function buildSubscribeTracksParameters(options?: SubscribeTracksOptions)
     parameters.push(...buildRangeFilterParameters(options.rangeFilters));
   }
 
-  // AUTHORIZATION_TOKEN (0x03) - draft-ietf-moq-transport-22 Section 9.20.2
-  // §9.20.2: "This Parameter MUST NOT be copied from a SUBSCRIBE_TRACKS to the
-  //  resulting PUBLISH message Parameters." (受信側で PUBLISH へ複製しない)
+  // AUTHORIZATION_TOKEN (0x03) - draft-ietf-moq-transport-23 §9.19.2
+  // "This Parameter MUST NOT be copied from a SUBSCRIBE_TRACKS to the
+  //  resulting PUBLISH message Parameters."
   if (options?.authorizationToken !== undefined) {
     parameters.push(encodeAuthorizationTokenParameter(options.authorizationToken));
+  }
+
+  // FILL_PARAMETERS (0x23) - draft-ietf-moq-transport-23 §9.19.15
+  // 内側の Parameter は §9.19.15 の制限に従う (buildFillParameters が検証する)。
+  // fill fetch ストリームの関連付けは受信 PUBLISH 側で行う。
+  if (options?.fill !== undefined) {
+    parameters.push(encodeFillParameters(buildFillParameters(options.fill, "SUBSCRIBE_TRACKS")));
   }
 
   // INCLUDE_PROPERTIES (0x35) - draft-ietf-moq-transport-22 Section 9.20.21
