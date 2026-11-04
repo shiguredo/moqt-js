@@ -1134,6 +1134,31 @@ test("encodeParameters: TRACK_NAMESPACE_PREFIX は外側 Length なしでエン�
 });
 
 /**
+ * draft-ietf-moq-transport-23 §9.19.21 (SUBSCRIBE_TRACKS_ID):
+ * SUBSCRIBE_TRACKS_ID (0x36) は varint であり、Value は元の SUBSCRIBE_TRACKS の
+ * Request ID をそのまま varint で符号化する (外側 Length なし)。
+ * 固定ワイヤで確認する。例: Request ID = 0x11 のとき
+ * Number of Parameters (0x01) + Type Delta (0x36) + Value (0x11)。
+ */
+test("encodeParameters: SUBSCRIBE_TRACKS_ID は varint で外側 Length なし", () => {
+  const encoded = encodeParameters([
+    {
+      type: MessageParameterType.SUBSCRIBE_TRACKS_ID,
+      value: encodeVarint(0x11n),
+    },
+  ]);
+
+  assert.deepEqual(encoded, new Uint8Array([0x01, 0x36, 0x11]));
+
+  // ラウンドトリップして Request ID が復元される
+  const [parameters, consumed] = decodeParameters(encoded);
+  assert.equal(consumed, encoded.length);
+  assert.equal(parameters.length, 1);
+  assert.equal(parameters[0]?.type, MessageParameterType.SUBSCRIBE_TRACKS_ID);
+  assert.deepEqual(parameters[0]?.value, encodeVarint(0x11n));
+});
+
+/**
  * draft-ietf-moq-transport-22 §9.20.20 / §8.7:
  * 外側 Length を持たない TRACK_NAMESPACE_PREFIX のワイヤをデコードし、
  * 消費バイト数がワイヤ長と一致することを検証する (外側 Length を要求しない)。

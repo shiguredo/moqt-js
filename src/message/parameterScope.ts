@@ -185,6 +185,12 @@ export const NAMESPACE_REQUEST_UPDATE_ALLOWED_PARAMS = new Set<number>([
  * として運べる。§3.6.2 により SUBSCRIBE_TRACKS 由来の PUBLISH でも明示される。
  * NEW_GROUP_REQUEST / Range Filters は PUBLISH に出現できない
  * (FILL_PARAMETERS は未対応のため PUBLISH では受理しない)。
+ *
+ * draft-ietf-moq-transport-23 §9.19.21 (SUBSCRIBE_TRACKS_ID):
+ * SUBSCRIBE_TRACKS の結果として送信された PUBLISH にだけ出現する。受信側は
+ * この値で PUBLISH を元の SUBSCRIBE_TRACKS の要求へ結び付ける (§3.6)。
+ * PUBLISH 以外のメッセージで受信した場合は §9.19.1 の MUST により
+ * INVALID_PARAMETER でセッションを閉じる (本集合に含めない)。
  */
 export const PUBLISH_ALLOWED_PARAMS = new Set<number>([
   MessageParameterType.AUTHORIZATION_TOKEN,
@@ -196,6 +202,7 @@ export const PUBLISH_ALLOWED_PARAMS = new Set<number>([
   MessageParameterType.SUBGROUP_DELIVERY_TIMEOUT,
   MessageParameterType.SUBSCRIBER_PRIORITY,
   MessageParameterType.LOCATION_FILTER,
+  MessageParameterType.SUBSCRIBE_TRACKS_ID,
 ]);
 
 /**

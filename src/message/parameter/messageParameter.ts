@@ -218,6 +218,10 @@ const MESSAGE_PARAMETER_VALUE_ENCODING: Record<number, MessageParameterValueEnco
   0x34: "track-namespace",
   // INCLUDE_PROPERTIES (Section 9.19.22)
   0x35: "uint8",
+  // SUBSCRIBE_TRACKS_ID (draft-ietf-moq-transport-23 Section 9.19.21)
+  // varint。SUBSCRIBE_TRACKS の結果として届いた PUBLISH にだけ出現し、
+  // 元の SUBSCRIBE_TRACKS の Request ID を保持する。
+  0x36: "varint",
   // Range Filters (draft-ietf-moq-transport-23 Section 3.3.2 / §9.19.10–§9.19.14)
   // Value は Length (vi64) + [SetID + [Property Type] + Range 列] の 1 Length 構造。
   // 外側に Length を付加しない (length-prefixed から分離した専用種別)。

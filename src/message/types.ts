@@ -307,6 +307,17 @@ export const MessageParameterType = {
    * SUBSCRIBE / TRACK_STATUS / FETCH / SUBSCRIBE_TRACKS に出現可能。
    */
   INCLUDE_PROPERTIES: 0x35,
+  /**
+   * SUBSCRIBE_TRACKS_ID (draft-ietf-moq-transport-23 §9.19.21)
+   *
+   * draft-ietf-moq-transport-23 §9.19.21:
+   * varint。SUBSCRIBE_TRACKS の結果として送信された PUBLISH にだけ出現し、
+   * 元の SUBSCRIBE_TRACKS の Request ID を保持する。重なる複数の
+   * SUBSCRIBE_TRACKS が同じ Track に一致した場合、publisher は要求ごとに
+   * PUBLISH を送るため (§3.6)、受信側はこの値で callback とフィルタを
+   * 対応する要求へ結び付ける。
+   */
+  SUBSCRIBE_TRACKS_ID: 0x36,
 } as const;
 
 export type MessageParameterType = (typeof MessageParameterType)[keyof typeof MessageParameterType];

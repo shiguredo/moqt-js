@@ -37,6 +37,7 @@ import {
   SessionErrorCode,
 } from "../error";
 import { ControlStreamReader, ControlStreamWriter, type ControlMessage } from "../controlStream";
+import { decodeVarint } from "../varint";
 import { PUBLISH_ALLOWED_PARAMS, validateParameterScope } from "../message/parameterScope";
 import { type RequestUpdateOptions, SubscriberImpl } from "../subscriber";
 import { fullTrackNameKey } from "../fullTrackName";
@@ -764,8 +765,14 @@ export async function incomingPublishHandleBidirectionalStream(
     return;
   }
 
-  // trackNamespace がアクティブな tracksSubscriptions の namespacePrefix に前方一致するか検証
-  const match = incomingPublishMatchToSubscription(session, publishTrackNamespace);
+  // trackNamespace が PUBLISH の指定先 (SUBSCRIBE_TRACKS_ID) または興味のある
+  // active な tracksSubscriptions に一致するか検証する
+  // (draft-ietf-moq-transport-23 §3.6 / §9.19.21)
+  const match = incomingPublishMatchToSubscription(
+    session,
+    publishTrackNamespace,
+    decodedPublish.parameters,
+  );
   if (match === null) {
     // draft-ietf-moq-transport-22 §9.8 (SHOULD): マッチしない PUBLISH は UNINTERESTED
     await incomingSendRequestErrorAndClose(
@@ -845,6 +852,33 @@ export async function incomingPublishHandleBidirectionalStream(
     return;
   }
 
+  // draft-ietf-moq-transport-23 §3.6 / §9.19.21:
+  // onPublish の await 中に元の SUBSCRIBE_TRACKS が取消し・prefix 更新・
+  // フィルタ変更されることがある。callback の返した設定を使って Subscriber を
+  // 登録する前に、指定先要求が現在も active で、現在の prefix と
+  // TRACK_PROPERTY_FILTER に一致することを再確認する。不一致なら callback の
+  // 設定は使わず、通常の興味なし経路 (UNINTERESTED + FIN + 受信方向 cancel) へ進む
+  // (Subscriber / Alias / request stream を残さない)。
+  const revalidatedMatch = incomingPublishMatchToSubscription(
+    session,
+    publishTrackNamespace,
+    decodedPublish.parameters,
+  );
+  if (
+    revalidatedMatch === null ||
+    revalidatedMatch.subscription !== match.subscription ||
+    (revalidatedMatch.rangeFilters !== undefined &&
+      !trackPropertyFiltersMatch(revalidatedMatch.rangeFilters, decodedPublish.trackProperties))
+  ) {
+    await incomingSendRequestErrorAndClose(
+      stream,
+      RequestErrorCode.UNINTERESTED,
+      "uninterested",
+      session.peerMaxControlMessageSize,
+    );
+    return;
+  }
+
   // SubscriberImpl を生成して登録
   const impl = new SubscriberImpl(
     publishTrackNamespace,
@@ -873,8 +907,9 @@ export async function incomingPublishHandleBidirectionalStream(
   // SubscriberImpl に設定し、handleObject / handleDatagram で評価する。
   // TRACK_PROPERTY_FILTER (0x29) は track 単位の評価として既に通過しており、
   // オブジェクト受信経路では評価しないため除外する。
-  if (match.rangeFilters !== undefined) {
-    const objectLevelFilters = match.rangeFilters.filter(
+  // 最終確認後の現在の購読 (revalidatedMatch) のフィルタを使う。
+  if (revalidatedMatch.rangeFilters !== undefined) {
+    const objectLevelFilters = revalidatedMatch.rangeFilters.filter(
       (spec) => !("remove" in spec) && spec.type !== "trackProperty",
     );
     impl.setRangeFilters(objectLevelFilters);
@@ -1119,30 +1154,92 @@ export function incomingPublishApplyParameters(
 }
 
 /**
- * PUBLISH の trackNamespace をアクティブな tracksSubscriptions にマッチさせる
+ * PUBLISH の SUBSCRIBE_TRACKS_ID パラメータ値を取り出す
  *
- * @returns マッチした subscription の callbacks と suffix、マッチしなければ null
+ * draft-ietf-moq-transport-23 §9.19.21:
+ * "It appears only in a PUBLISH sent as a result of a SUBSCRIBE_TRACKS, and
+ *  contains that SUBSCRIBE_TRACKS's Request ID."
+ *
+ * @returns パラメータが無ければ undefined (unsolicited PUBLISH として扱う)
+ */
+function incomingPublishExtractSubscribeTracksId(parameters: Parameter[]): bigint | undefined {
+  const parameter = parameters.find(
+    (candidate) => candidate.type === MessageParameterType.SUBSCRIBE_TRACKS_ID,
+  );
+  if (parameter === undefined) {
+    return undefined;
+  }
+  // decodeParameters が varint を encodeVarint で正規化した値を保持しているため、
+  // 先頭から読み直しても同じ値になる
+  const [value] = decodeVarint(parameter.value, 0);
+  return value;
+}
+
+/**
+ * PUBLISH と一致した SUBSCRIBE_TRACKS
+ *
+ * `subscription` は非同期 onPublish の完了後に同一の要求かを再確認するために保持する。
+ */
+interface IncomingPublishSubscriptionMatch {
+  callbacks: TracksSubscriptionCallbacks;
+  suffix: string[];
+  subscription: TracksSubscriptionState;
+  rangeFilters?: RangeFilterSpec[];
+}
+
+/**
+ * 1 件の SUBSCRIBE_TRACKS が PUBLISH の Track Namespace に一致するか判定する
+ *
+ * @returns 一致した場合は callbacks / suffix / 購読状態、しなければ null
+ */
+function incomingPublishMatchSubscription(
+  publishTrackNamespace: string[],
+  subscription: TracksSubscriptionState,
+): IncomingPublishSubscriptionMatch | null {
+  const suffix = matchNamespacePrefix(publishTrackNamespace, subscription.namespacePrefix);
+  if (suffix === null) {
+    return null;
+  }
+  // exactOptionalPropertyTypes では optional な rangeFilters に undefined を渡せないため、
+  // 値がある場合だけ載せる
+  const matched = { callbacks: subscription.callbacks, suffix, subscription };
+  return subscription.rangeFilters === undefined
+    ? matched
+    : { ...matched, rangeFilters: subscription.rangeFilters };
+}
+
+/**
+ * PUBLISH を SUBSCRIBE_TRACKS の要求にマッチさせる
+ *
+ * draft-ietf-moq-transport-23 §3.6 / §9.19.21:
+ * - SUBSCRIBE_TRACKS_ID を持つ PUBLISH は、その Request ID の要求だけを参照する。
+ *   未知 / 取消し済み / 現在の prefix に一致しない場合は、他の要求の prefix 検索で
+ *   救済せず null (UNINTERESTED 応答) にする。
+ * - ID を持たない unsolicited PUBLISH は従来どおり、prefix が最初に一致した active な
+ *   要求へ結び付ける (ID が無いこと自体は形式違反ではない)。
+ *
+ * @returns 一致した要求、しなければ null
  */
 export function incomingPublishMatchToSubscription(
   session: IncomingPublishSessionInternal,
   publishTrackNamespace: string[],
-): {
-  callbacks: TracksSubscriptionCallbacks;
-  suffix: string[];
-  rangeFilters?: RangeFilterSpec[];
-} | null {
+  parameters: Parameter[],
+): IncomingPublishSubscriptionMatch | null {
+  const subscribeTracksId = incomingPublishExtractSubscribeTracksId(parameters);
+  if (subscribeTracksId !== undefined) {
+    const subscription = session.tracksSubscriptions.get(subscribeTracksId);
+    if (subscription === undefined || subscription.state !== "active") {
+      return null;
+    }
+    return incomingPublishMatchSubscription(publishTrackNamespace, subscription);
+  }
   for (const [, subscription] of session.tracksSubscriptions) {
     if (subscription.state !== "active") {
       continue;
     }
-    const suffix = matchNamespacePrefix(publishTrackNamespace, subscription.namespacePrefix);
-    if (suffix !== null) {
-      // exactOptionalPropertyTypes では optional な rangeFilters に undefined を渡せないため、
-      // 値がある場合だけ載せる
-      const matched = { callbacks: subscription.callbacks, suffix };
-      return subscription.rangeFilters === undefined
-        ? matched
-        : { ...matched, rangeFilters: subscription.rangeFilters };
+    const matched = incomingPublishMatchSubscription(publishTrackNamespace, subscription);
+    if (matched !== null) {
+      return matched;
     }
   }
   return null;

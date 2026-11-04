@@ -224,6 +224,37 @@ test("PUBLISH に許可されないパラメータは INVALID_PARAMETER のエ�
 });
 
 /**
+ * draft-ietf-moq-transport-23 §9.19.21 (SUBSCRIBE_TRACKS_ID):
+ * SUBSCRIBE_TRACKS_ID は SUBSCRIBE_TRACKS の結果として届いた PUBLISH にだけ
+ * 出現できるため、PUBLISH では許可され、それ以外のメッセージでは §9.19.1 の
+ * MUST により INVALID_PARAMETER になる。
+ */
+test("SUBSCRIBE_TRACKS_ID は PUBLISH でのみ許可される", () => {
+  assert.isNull(
+    validateParameterScope(
+      [{ type: MessageParameterType.SUBSCRIBE_TRACKS_ID }],
+      PUBLISH_ALLOWED_PARAMS,
+      "PUBLISH",
+    ),
+  );
+
+  // PUBLISH 以外 (REQUEST_OK 系・PUBLISH_STATE_NOTIFY) では scope 違反
+  for (const [allowed, contextName] of [
+    [NAMESPACE_OK_ALLOWED_PARAMS, "SUBSCRIBE_NAMESPACE_OK"],
+    [REQUEST_UPDATE_OK_ALLOWED_PARAMS, "REQUEST_UPDATE_OK"],
+    [PUBLISH_STATE_NOTIFY_ALLOWED_PARAMS, "PUBLISH_STATE_NOTIFY"],
+    [SUBSCRIBE_OK_ALLOWED_PARAMS, "SUBSCRIBE_OK"],
+  ] as const) {
+    const error = validateParameterScope(
+      [{ type: MessageParameterType.SUBSCRIBE_TRACKS_ID }],
+      allowed,
+      contextName,
+    );
+    assertProtocolViolation(error, `parameter type 0x36 not allowed in ${contextName}`);
+  }
+});
+
+/**
  * draft-ietf-moq-transport-23 §9.3 (REQUEST_OK) / §9.19.16 / §9.19.17:
  * FETCH の成功応答 (REQUEST_OK) に出現できるのは EXPIRES と LARGEST_OBJECT
  * のみである。

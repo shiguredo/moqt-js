@@ -761,6 +761,377 @@ test("受信 PUBLISH で TRACK_PROPERTY_FILTER 不通過なら onPublish が呼�
 });
 
 /**
+ * PUBLISH を 1 件だけ流したまま受信方向を開いておき、拒否経路の応答を観測する
+ *
+ * UNINTERESTED 拒否では REQUEST_ERROR の書き込み後に送信方向を FIN で閉じ、
+ * 受信方向を cancel する (draft-ietf-moq-transport-22 §9.8 の SHOULD /
+ * §6.4.2.3)。書込み内容・FIN・cancel の 3 点を検証できるようにする。
+ *
+ * @param parameters - PUBLISH の Message Parameters (SUBSCRIBE_TRACKS_ID の検証用)
+ * @param trackNamespace - PUBLISH の Track Namespace
+ * @param requestId - PUBLISH の Request ID (受信側はサーバー発の奇数)
+ */
+function createIncomingPublishRejectionStream(
+  parameters: { type: number; value: Uint8Array }[],
+  trackNamespace: string[] = INCOMING_PUBLISH_NAMESPACE,
+  requestId: bigint = INCOMING_PUBLISH_REQUEST_ID,
+): {
+  stream: WebTransportBidirectionalStream;
+  written: Uint8Array[];
+  isReadableCancelled: () => boolean;
+  isResponseClosed: () => boolean;
+} {
+  const publishPayload = encodePublishPayload({
+    type: MessageType.PUBLISH,
+    requestId,
+    trackNamespace: createTrackNamespace(trackNamespace),
+    trackName: new TextEncoder().encode("track"),
+    trackAlias: INCOMING_PUBLISH_TRACK_ALIAS,
+    parameters,
+    trackProperties: [],
+  });
+  const framed = new ControlStreamWriter().encode(MessageType.PUBLISH, publishPayload);
+  const written: Uint8Array[] = [];
+  let readableCancelled = false;
+  let responseClosed = false;
+  const readable = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(framed);
+    },
+    cancel() {
+      readableCancelled = true;
+    },
+  });
+  const writable = new WritableStream<Uint8Array>({
+    write(chunk) {
+      written.push(chunk);
+    },
+    close() {
+      responseClosed = true;
+    },
+  });
+  return {
+    stream: { readable, writable } as unknown as WebTransportBidirectionalStream,
+    written,
+    isReadableCancelled: () => readableCancelled,
+    isResponseClosed: () => responseClosed,
+  };
+}
+
+/**
+ * 拒否経路で書き込まれた REQUEST_ERROR のコードを取り出す
+ *
+ * @param written - 応答方向へ書き込まれたフレーム列
+ */
+function readWrittenRequestErrorCode(written: Uint8Array[]): bigint {
+  const messages = new ControlStreamReader().feed(concatUint8Arrays(written));
+  assert.equal(messages.length, 1);
+  const message = messages[0];
+  if (message === undefined) {
+    throw new Error("REQUEST_ERROR の応答が書き込まれていない");
+  }
+  assert.equal(message.type, MessageType.REQUEST_ERROR);
+  return decodeRequestErrorPayload(message.payload).errorCode;
+}
+
+/**
+ * draft-ietf-moq-transport-23 §3.6 / §9.19.21 (SUBSCRIBE_TRACKS_ID):
+ * 重なる SUBSCRIBE_TRACKS が同じ Track に一致した場合、publisher は要求ごとに
+ * PUBLISH を送り、それぞれに元要求の Request ID を SUBSCRIBE_TRACKS_ID として
+ * 載せる。受信側は ID で指定された要求の callback だけを呼び、prefix が
+ * 最初に一致した別要求へ取り違えない。
+ */
+test("受信 PUBLISH の SUBSCRIBE_TRACKS_ID で重なる要求の callback を正しく選ぶ", async () => {
+  const session = createSessionImpl();
+  const internal = session as unknown as IncomingPublishStreamInternals;
+  const calls: { request: string; suffix: string[] }[] = [];
+  // 広い prefix の要求 (Request ID 2n) と、包含関係にある狭い prefix の要求 (4n)
+  internal.tracksSubscriptions.set(2n, {
+    callbacks: {
+      onPublish: async (suffix: string[]) => {
+        calls.push({ request: "wide", suffix });
+        return { object: () => {} };
+      },
+    },
+    state: "active",
+    namespacePrefix: ["live"],
+  });
+  internal.tracksSubscriptions.set(4n, {
+    callbacks: {
+      onPublish: async (suffix: string[]) => {
+        calls.push({ request: "narrow", suffix });
+        return { object: () => {} };
+      },
+    },
+    state: "active",
+    namespacePrefix: ["live", "sports"],
+  });
+
+  // ID 4n (狭い prefix の要求) を指定した PUBLISH
+  const handle = internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream(
+      () => {},
+      [],
+      [{ type: MessageParameterType.SUBSCRIBE_TRACKS_ID, value: encodeVarint(4n) }],
+      new WritableStream<Uint8Array>({}),
+      "track",
+      INCOMING_PUBLISH_REQUEST_ID,
+      new Uint8Array(0),
+      ["live", "sports", "news"],
+    ),
+  );
+  await waitForIncomingPublishSubscriber(internal);
+
+  // 狭い prefix の要求だけが呼ばれ、suffix はその prefix 基準になる
+  assert.deepEqual(calls, [{ request: "narrow", suffix: ["news"] }]);
+  assert.equal(internal.sessionState, "connected");
+
+  // 後始末: 購読を解除してストリームの読み取りループを終わらせる
+  await internal.subscribers.get(INCOMING_PUBLISH_REQUEST_ID)?.unsubscribe();
+  await handle;
+});
+
+/**
+ * draft-ietf-moq-transport-23 §3.6 / §9.19.21:
+ * 同じ Track Namespace Prefix で TRACK_PROPERTY_FILTER だけが異なる複数の
+ * SUBSCRIBE_TRACKS でも、SUBSCRIBE_TRACKS_ID で指定された要求の callback と
+ * フィルタだけを使う。ID を見ずに最初の一致へ結び付けると、フィルタの異なる
+ * 要求の callback が呼ばれたり、通過するはずの PUBLISH が UNINTERESTED になる。
+ */
+test("受信 PUBLISH の SUBSCRIBE_TRACKS_ID で同じ prefix の要求もフィルタごと選ぶ", async () => {
+  const session = createSessionImpl();
+  const internal = session as unknown as IncomingPublishStreamInternals;
+  const calls: string[] = [];
+  // 4n は Track Property 0x20 の値 100 を要求するフィルタ付き。
+  // この PUBLISH の Track Properties は空なので、4n が選ばれると不通過になる。
+  internal.tracksSubscriptions.set(4n, {
+    callbacks: {
+      onPublish: async () => {
+        calls.push("filtered");
+        return { object: () => {} };
+      },
+    },
+    state: "active",
+    namespacePrefix: ["live"],
+    rangeFilters: [
+      {
+        type: "trackProperty",
+        setId: 0,
+        propertyType: 0x20n,
+        ranges: [{ start: 100n, end: 100n }],
+      },
+    ],
+  });
+  // 2n はフィルタ無し。ID で 2n が正しく選ばれれば callback が呼ばれる。
+  internal.tracksSubscriptions.set(2n, {
+    callbacks: {
+      onPublish: async () => {
+        calls.push("unfiltered");
+        return { object: () => {} };
+      },
+    },
+    state: "active",
+    namespacePrefix: ["live"],
+  });
+
+  const handle = internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream(
+      () => {},
+      [],
+      [{ type: MessageParameterType.SUBSCRIBE_TRACKS_ID, value: encodeVarint(2n) }],
+    ),
+  );
+  await waitForIncomingPublishSubscriber(internal);
+
+  assert.deepEqual(calls, ["unfiltered"]);
+  assert.equal(internal.sessionState, "connected");
+
+  await internal.subscribers.get(INCOMING_PUBLISH_REQUEST_ID)?.unsubscribe();
+  await handle;
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.19.21 / §9.19.1:
+ * SUBSCRIBE_TRACKS_ID が未知の要求 / 取消し済みの要求 / 現在の prefix と一致しない
+ * 要求を指す PUBLISH は、別の要求の prefix 検索で救済しない。興味の無い PUBLISH
+ * として REQUEST_ERROR (UNINTERESTED) + FIN で拒否し、受信方向も cancel し、
+ * セッションは閉じない。
+ */
+test("受信 PUBLISH の SUBSCRIBE_TRACKS_ID が無効なら別要求へ fallback せず UNINTERESTED", async () => {
+  const session = createSessionImpl();
+  const internal = session as unknown as IncomingPublishStreamInternals;
+  let activeCalls = 0;
+  // active で prefix が一致する要求 (fallback してはいけない)
+  internal.tracksSubscriptions.set(2n, {
+    callbacks: {
+      onPublish: async () => {
+        activeCalls += 1;
+        return { object: () => {} };
+      },
+    },
+    state: "active",
+    namespacePrefix: ["live"],
+  });
+  // 取消し済みの要求
+  internal.tracksSubscriptions.set(4n, {
+    callbacks: { onPublish: async () => ({ object: () => {} }) },
+    state: "closed",
+    namespacePrefix: ["live"],
+  });
+  // prefix が一致しない要求
+  internal.tracksSubscriptions.set(6n, {
+    callbacks: { onPublish: async () => ({ object: () => {} }) },
+    state: "active",
+    namespacePrefix: ["other"],
+  });
+
+  // PUBLISH の Request ID は受信ごとに重複不可のため、ケースごとに変える
+  const cases: { subscribeTracksId: bigint; publishRequestId: bigint }[] = [
+    // 未知の Request ID
+    { subscribeTracksId: 8n, publishRequestId: 1n },
+    // 取消し済みの Request ID
+    { subscribeTracksId: 4n, publishRequestId: 3n },
+    // prefix が一致しない Request ID
+    { subscribeTracksId: 6n, publishRequestId: 5n },
+  ];
+  for (const testCase of cases) {
+    const rejection = createIncomingPublishRejectionStream(
+      [
+        {
+          type: MessageParameterType.SUBSCRIBE_TRACKS_ID,
+          value: encodeVarint(testCase.subscribeTracksId),
+        },
+      ],
+      ["live", "news"],
+      testCase.publishRequestId,
+    );
+    await internal.handleIncomingBidirectionalStream(rejection.stream);
+
+    // callback は呼ばれず、UNINTERESTED の応答と両方向の終了が行われる
+    assert.equal(
+      readWrittenRequestErrorCode(rejection.written),
+      BigInt(RequestErrorCode.UNINTERESTED),
+    );
+    assert.isTrue(rejection.isResponseClosed());
+    assert.isTrue(rejection.isReadableCancelled());
+    assert.equal(internal.subscribers.size, 0);
+    assert.equal(internal.sessionState, "connected");
+  }
+  // prefix が一致する active な要求への fallback は起きない
+  assert.equal(activeCalls, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §3.6 / §9.19.21:
+ * onPublish の await 中に元の SUBSCRIBE_TRACKS が取消された場合、callback が
+ * 返した設定では Subscriber を登録せず、UNINTERESTED の拒否経路 (REQUEST_ERROR +
+ * FIN + 受信方向 cancel) へ進む。Subscriber / Alias / request stream は残らない。
+ */
+test("onPublish の await 中に元の SUBSCRIBE_TRACKS が取消されると UNINTERESTED で拒否する", async () => {
+  const session = createSessionImpl();
+  const internal = session as unknown as IncomingPublishStreamInternals;
+  let notifyOnPublishStarted: (() => void) | undefined;
+  const onPublishStarted = new Promise<void>((resolve) => {
+    notifyOnPublishStarted = resolve;
+  });
+  let resolveOnPublish: (() => void) | undefined;
+  const onPublishGate = new Promise<void>((resolve) => {
+    resolveOnPublish = resolve;
+  });
+  internal.tracksSubscriptions.set(2n, {
+    callbacks: {
+      onPublish: async () => {
+        notifyOnPublishStarted?.();
+        await onPublishGate;
+        return { object: () => {} };
+      },
+    },
+    state: "active",
+    namespacePrefix: ["live"],
+  });
+
+  const rejection = createIncomingPublishRejectionStream([
+    { type: MessageParameterType.SUBSCRIBE_TRACKS_ID, value: encodeVarint(2n) },
+  ]);
+  const handle = internal.handleIncomingBidirectionalStream(rejection.stream);
+  // onPublish が呼ばれて待機に入るまで進める
+  await onPublishStarted;
+
+  // 待機中に元要求を取消して callback を解決する
+  const subscription = internal.tracksSubscriptions.get(2n);
+  if (subscription === undefined) {
+    throw new Error("SUBSCRIBE_TRACKS の状態が登録されていない");
+  }
+  subscription.state = "closed";
+  if (resolveOnPublish === undefined) {
+    throw new Error("onPublish の待機を解決する関数が未設定");
+  }
+  resolveOnPublish();
+  await handle;
+
+  // Subscriber は登録されず、拒否の応答と両方向の終了が行われる
+  assert.equal(
+    readWrittenRequestErrorCode(rejection.written),
+    BigInt(RequestErrorCode.UNINTERESTED),
+  );
+  assert.isTrue(rejection.isResponseClosed());
+  assert.isTrue(rejection.isReadableCancelled());
+  assert.equal(internal.subscribers.size, 0);
+  assert.equal(
+    (internal as unknown as { requestStreams: Map<bigint, unknown> }).requestStreams.size,
+    0,
+  );
+  assert.equal(internal.sessionState, "connected");
+});
+
+/**
+ * draft-ietf-moq-transport-23 §3.6:
+ * "Cancelling a SUBSCRIBE_TRACKS has no effect on existing subscriptions."
+ * 個別 Subscriber の登録後は元要求から独立しており、元要求の取消しで確立済みの
+ * 個別購読を取消さない。
+ */
+test("個別購読の登録後は元 SUBSCRIBE_TRACKS の取消しで購読を取消さない", async () => {
+  let endCalled = false;
+  const session = createSessionImpl();
+  const internal = session as unknown as IncomingPublishStreamInternals;
+  internal.tracksSubscriptions.set(2n, {
+    callbacks: {
+      onPublish: async () => ({
+        object: () => {},
+        end: () => {
+          endCalled = true;
+        },
+      }),
+    },
+    state: "active",
+    namespacePrefix: ["live"],
+  });
+
+  const handle = internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream(
+      () => {},
+      [],
+      [{ type: MessageParameterType.SUBSCRIBE_TRACKS_ID, value: encodeVarint(2n) }],
+    ),
+  );
+  const subscriber = await waitForIncomingPublishSubscriber(internal);
+  assert.equal(subscriber.state, "active");
+
+  // 元要求を取り消しても、確立済みの個別購読は残る
+  internal.tracksSubscriptions.delete(2n);
+  assert.equal(internal.subscribers.get(INCOMING_PUBLISH_REQUEST_ID), subscriber);
+  assert.equal(internal.subscribersByAlias.get(INCOMING_PUBLISH_TRACK_ALIAS)?.length, 1);
+  assert.equal(subscriber.state, "active");
+  assert.isFalse(endCalled);
+  assert.equal(internal.sessionState, "connected");
+
+  // 後始末: 個別購読の解除では既存の cleanup で解放される
+  await subscriber.unsubscribe();
+  await handle;
+  assert.equal(internal.subscribers.size, 0);
+});
+
+/**
  * draft-ietf-moq-transport-23 §3.7 / §9.4.2.2:
  * 受信 PUBLISH に複数の未対応 Mandatory Track Property が含まれる場合、本番の拒否経路は
  * REQUEST_ERROR (UNSUPPORTED_EXTENSION) を送り、理解できなかった各 Type を
