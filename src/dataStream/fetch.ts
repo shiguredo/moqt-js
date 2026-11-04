@@ -1,14 +1,19 @@
 /**
  * MOQT Fetch Stream
- * draft-ietf-moq-transport-22 Section 11.4 (Fetch Streams)
+ * draft-ietf-moq-transport-23 Section 11.4 (Fetch Streams)
  *
  * Fetch Header (Section 11.4.1) と Fetch Object fields (Figure 29) の
  * エンコードとデコードを扱う。Fetch Object は Subgroup / Datagram と異なり
  * 前オブジェクトからの delta でフィールドを省略する (§11.4.1.1 Table 9 / 10)
  * ため、直前の値を持つ FetchObjectContext を引き回す。
+ * 同一 Group の Object ID は prior Object ID + Object ID Delta + 2 であり、
+ * Delta 省略時は prior Object ID + 1 である (§11.4.1.1)。End of Range
+ * indicator の ID は別式 (FETCH_HEADER 直後の先頭エントリーだけ絶対値、それ以外は
+ * Group ID Delta が 0 なら +1、非 0 なら絶対値) なので、通常 Object の +2 を
+ * 共通化しない。
  *
  * Object の Delivery Mode (Subgroup か Datagram か) は Original Publisher が最初の
- * 送信方法で決める (draft-ietf-moq-transport-22 §2.1.1)。Fetch では Delivery Mode が
+ * 送信方法で決める (draft-ietf-moq-transport-23 §2.1.1)。Fetch では Delivery Mode が
  * 適用されない (§3.2.1) ため、Fetch Object の DATAGRAM ビット (0x40) は Delivery Mode
  * ではなく「Subgroup ID フィールドを持たない」ことだけを示す。
  */
@@ -84,14 +89,14 @@ export function decodeFetchHeader(data: Uint8Array, offset = 0): [FetchHeader, n
 /**
  * Serialization Flags for Fetch Object (Section 11.4.1)
  *
- * Section 11.4.1.1 Table 9: Subgroup ID encoding (bits 0-1)
+ * draft-ietf-moq-transport-23 §11.4.1.1 Table 9: Subgroup ID encoding (bits 0-1)
  * | Bitmask (flags & 0x03) | Meaning |
  * | 0x00 | Subgroup ID is zero |
  * | 0x01 | Subgroup ID is prior Object's Subgroup ID |
  * | 0x02 | Subgroup ID is prior Object's Subgroup ID + 1 |
  * | 0x03 | Subgroup ID field is present |
  *
- * Section 11.4.1.1 Table 10: Flags (independent flag bits)
+ * draft-ietf-moq-transport-23 §11.4.1.1 Table 10: Flags (independent flag bits)
  * | Bitmask | Condition if set |
  * | 0x04 | Object ID Delta is present (else prior + 1) |
  * | 0x08 | Group ID Delta is present (else prior Group ID) |
@@ -99,7 +104,11 @@ export function decodeFetchHeader(data: Uint8Array, offset = 0): [FetchHeader, n
  * | 0x20 | Properties field is present |
  * | 0x40 | Datagram: Subgroup ID の 2 ビットを無視 |
  *
- * End of Range (Section 11.4.1.2):
+ * 0x04 が立つ Object ID Delta は、Group ID Delta が無い場合に限り
+ * prior Object ID + Delta + 2 を表す (§11.4.1.1)。Delta 省略時は Group ID の
+ * 有無に関わらず prior Object ID + 1 である。
+ *
+ * End of Range (draft-ietf-moq-transport-23 §11.4.2):
  * | 0x8C  | End of Non-Existent Range |
  * | 0x10C | End of Unknown Range      |
  * | 0x20C | End of Timed-Out Range    |
@@ -128,11 +137,12 @@ export const FetchSerializationFlags = {
   DATAGRAM: 0x40,
 
   /**
-   * End of Non-Existent Range (Section 11.4.1.2)
+   * End of Non-Existent Range (draft-ietf-moq-transport-23 §11.4.2)
    *
-   * draft-ietf-moq-transport-22 Section 11.4.1.2:
+   * draft-ietf-moq-transport-23 §11.4.2:
    * 指定した Location までの Object が存在しないことを示す。
-   * Group ID と Object ID フィールドが存在する。
+   * Group ID Delta と Object ID Delta フィールドが常に存在する
+   * (FETCH_HEADER 直後の先頭エントリーでは絶対値、それ以外は delta)。
    * Subgroup ID, Priority, Properties は存在しない。
    *
    * publisher は Object を直列化しない範囲を分割する目的以外で End of Non-Existent
@@ -140,20 +150,22 @@ export const FetchSerializationFlags = {
    */
   END_OF_NON_EXISTENT_RANGE: 0x8c,
   /**
-   * End of Unknown Range (Section 11.4.1.2)
+   * End of Unknown Range (draft-ietf-moq-transport-23 §11.4.2)
    *
-   * draft-ietf-moq-transport-22 Section 11.4.1.2:
+   * draft-ietf-moq-transport-23 §11.4.2:
    * 指定した Location までの Object のステータスが不明であることを示す。
-   * Group ID と Object ID フィールドが存在する。
+   * Group ID Delta と Object ID Delta フィールドが常に存在する
+   * (FETCH_HEADER 直後の先頭エントリーでは絶対値、それ以外は delta)。
    * Subgroup ID, Priority, Properties は存在しない。
    */
   END_OF_UNKNOWN_RANGE: 0x10c,
   /**
-   * End of Timed-Out Range (Section 11.4.1.2)
+   * End of Timed-Out Range (draft-ietf-moq-transport-23 §11.4.2)
    *
-   * draft-ietf-moq-transport-22 Section 11.4.1.2:
+   * draft-ietf-moq-transport-23 §11.4.2:
    * Fill Timeout の失効により放棄された Object の範囲を示す。
-   * Group ID と Object ID フィールドが存在する。
+   * Group ID Delta と Object ID Delta フィールドが常に存在する
+   * (FETCH_HEADER 直後の先頭エントリーでは絶対値、それ以外は delta)。
    * Subgroup ID, Priority, Properties は存在しない。
    */
   END_OF_TIMED_OUT_RANGE: 0x20c,
@@ -169,6 +181,19 @@ export interface FetchObjectFields {
   serializationFlags: number;
   groupId?: bigint;
   subgroupId?: bigint;
+  /**
+   * Object ID。
+   *
+   * draft-ietf-moq-transport-23 §11.4.1.1:
+   * 通常 Object では OBJECT_ID_PRESENT が立つ場合だけ wire に書かれ、Group ID
+   * Delta が無ければ prior Object ID + Object ID Delta + 2、Group ID Delta が
+   * あれば絶対値として復号される。OBJECT_ID_PRESENT が立たない場合は Group ID
+   * Delta の有無に関わらず prior Object ID + 1 として復号されるため、指定する
+   * ならその値でなければならない (encodeFetchObjectFields が非先頭で送信前に
+   * 検証する)。先頭 Object は createFirstFetchObjectFlags が両フラグを立てる。
+   * End of Range indicator では §11.4.2 の別規則により、フラグに関係なく Group ID
+   * とともに常に書かれる。
+   */
   objectId?: bigint;
   publisherPriority?: number;
   properties?: Uint8Array;
@@ -291,7 +316,7 @@ export interface FetchObjectContext {
 }
 
 /**
- * Serialization Flags が End of Range (Section 11.4.1.2) かを判定する
+ * Serialization Flags が End of Range (draft-ietf-moq-transport-23 §11.4.2) かを判定する
  *
  * draft-ietf-moq-transport-22 §11.4.1 Table 8:
  * 0x8C (End of Non-Existent Range) / 0x10C (End of Unknown Range) /
@@ -307,7 +332,7 @@ function isEndOfRangeFlags(flags: number): boolean {
 
 /**
  * Encode Fetch Object Fields
- * draft-ietf-moq-transport-22 Section 11.4.1 Figure 29
+ * draft-ietf-moq-transport-23 §11.4.1 Figure 29
  *
  * リレーサーバー実装用。moqt-js はクライアント専用のため、ランタイムでは使用しない。
  * PBT（Property-Based Testing）でのラウンドトリップテストで使用。
@@ -325,8 +350,9 @@ export function encodeFetchObjectFields(
   parts.push(encodeVarint(fields.serializationFlags));
 
   // End of Range の場合は Group ID と Object ID のみ
-  // draft-ietf-moq-transport-22 §11.4.1.2: End of Range indicator は通常 Object と
-  // 異なり Object Payload Length / Object Payload を持たない。
+  // draft-ietf-moq-transport-23 §11.4.2: End of Range indicator は通常 Object と
+  // 異なり Object Payload Length / Object Payload を持たない。2 件目以降の EOR の
+  // delta 符号化は未実装であり、ここでは常に絶対値を書く。
   // FetchObjectFields.payloadLength は通常 Object 用であり、ここでは wire に書かない。
   if (isEndOfRangeFlags(fields.serializationFlags)) {
     if (fields.groupId === undefined || fields.objectId === undefined) {
@@ -379,12 +405,27 @@ export function encodeFetchObjectFields(
   }
 
   // Object ID (フラグ 0x04 がセットされている場合)
-  // draft-ietf-moq-transport-22 §11.4.1.1 Table 10:
-  // "When the Group ID Delta field is not present, the Object ID is the
-  //  prior Object's ID plus the Object ID Delta if present."
+  // draft-ietf-moq-transport-23 §11.4.1.1:
+  // "When the Group ID Delta field is present, the Object ID is the value of
+  //  Object ID Delta if present. When the Group ID Delta field is not present,
+  //  the Object ID is the prior Object's ID plus the Object ID Delta + 2 if
+  //  present. If Object ID Delta is not present, the Object ID is the prior
+  //  Object's ID plus one, regardless of which group it belongs to."
   // エンコード時:
-  //   - Group 不変 (!GROUP_ID_PRESENT) かつ context あり: delta = currentObjectId - priorObjectId
-  //   - それ以外（先頭または Group 変化）: delta = currentObjectId (絶対値)
+  //   - Group 不変 (!GROUP_ID_PRESENT) かつ context あり:
+  //       delta = currentObjectId - priorObjectId - 2n
+  //     明示 Delta は prior + 2 以上の増分だけを表せる。増分 1 は Delta 省略
+  //     (prior + 1) で表すため、増分 0 / 1 を明示 Delta で送ろうとした場合は
+  //     送信前に拒否する。
+  //   - それ以外 (先頭または Group 変化): delta は絶対値。Delta 省略時は
+  //     Group ID Delta の有無に関わらず prior + 1 である。
+  // Object ID は varint の範囲 (0 以上 2^64-1 以下) でなければならない。
+  // 受信側は上限超過を DELTA_ENCODING_OVERFLOW として拒否する (§11.4.1.1)。
+  // 分類移行までは PROTOCOL_VIOLATION として扱う。フラグの有無に関わらず、
+  // 指定された Object ID は送信前に検証する。
+  if (fields.objectId !== undefined && (fields.objectId < 0n || fields.objectId > MAX_VARINT)) {
+    throw new Error(`object id out of range: ${fields.objectId}, expected 0 to 2^64-1`);
+  }
   if (fields.serializationFlags & FetchSerializationFlags.OBJECT_ID_PRESENT) {
     if (fields.objectId === undefined) {
       throw new Error("Object ID required when OBJECT_ID_PRESENT flag is set");
@@ -393,10 +434,36 @@ export function encodeFetchObjectFields(
       !(fields.serializationFlags & FetchSerializationFlags.GROUP_ID_PRESENT) &&
       context !== null
     ) {
-      const delta = fields.objectId - context.objectId;
+      const delta = fields.objectId - context.objectId - 2n;
+      if (delta < 0n) {
+        throw new Error(
+          `object id delta cannot represent increment: current=${fields.objectId}, ` +
+            `prior=${context.objectId}, expected current >= prior + 2 when OBJECT_ID_PRESENT is set ` +
+            `(increment 0 cannot be represented; increment 1 omits OBJECT_ID_PRESENT)`,
+        );
+      }
       parts.push(encodeVarint(delta));
     } else {
       parts.push(encodeVarint(fields.objectId));
+    }
+  } else if (context !== null) {
+    // Delta 省略時は Group ID Delta の有無に関わらず prior Object ID + 1 で復号
+    // される (§11.4.1.1)。暗黙の +1 が 2^64-1 を超える場合は受信側が
+    // DELTA_ENCODING_OVERFLOW で拒否するため、送信前に拒否する。
+    const impliedObjectId = context.objectId + 1n;
+    if (impliedObjectId > MAX_VARINT) {
+      throw new Error(
+        `object id overflow when OBJECT_ID_PRESENT is not set: prior=${context.objectId}, ` +
+          `implied=${impliedObjectId} exceeds 2^64-1`,
+      );
+    }
+    // 指定された Object ID と一致しない場合は、要求した ID と異なる ID を
+    // 送ることになるため送信前に拒否する。
+    if (fields.objectId !== undefined && fields.objectId !== impliedObjectId) {
+      throw new Error(
+        `object id mismatch when OBJECT_ID_PRESENT is not set: current=${fields.objectId}, ` +
+          `prior=${context.objectId}, expected ${impliedObjectId}`,
+      );
     }
   }
 
@@ -437,7 +504,8 @@ export function encodeFetchObjectFields(
 /**
  * End of Range レコードをデコードする
  *
- * draft-ietf-moq-transport-22 §11.4.1.2: Group ID と Object ID のみが存在する。
+ * draft-ietf-moq-transport-23 §11.4.2: Group ID と Object ID のみが存在する。
+ * 2 件目以降の Group ID / Object ID の delta 復号は未実装。
  */
 function decodeEndOfRange(
   data: Uint8Array,
@@ -716,7 +784,7 @@ function resolvePriorFetchPublisherPriority(context: FetchObjectContext | null):
 
 /**
  * Decode Fetch Object Fields
- * draft-ietf-moq-transport-22 Section 11.4.1 Figure 29
+ * draft-ietf-moq-transport-23 §11.4.1 Figure 29
  *
  * @param data - Data buffer
  * @param context - Context with prior object's values (required after first object)
@@ -765,10 +833,12 @@ export function decodeFetchObjectFields(
   }
 
   // Group ID
-  // draft-ietf-moq-transport-22 §11.4.1.1 Table 10:
+  // draft-ietf-moq-transport-23 §11.4.1.1 Table 10:
   // Ascending: "The Group ID is the prior Object's Group ID plus the Group ID Delta + 1."
   // Descending: "The Group ID is the prior Object's Group ID minus the (Group ID Delta + 1)."
-  // "If the computed Group ID would be less than 0 or greater than 2^64-1, the Subscriber MUST close the Session with error 'PROTOCOL_VIOLATION'."
+  // "If the computed Group ID would be less than 0 or greater than 2^64-1, the
+  //  Subscriber MUST close the Session with error 'DELTA_ENCODING_OVERFLOW'."
+  // 現行の受信経路はエラー分類の移行まで PROTOCOL_VIOLATION として扱う。
   // 先頭オブジェクト (isFirst) の場合は delta が絶対値と等価。
   let groupId: bigint;
   if (flags & FetchSerializationFlags.GROUP_ID_PRESENT) {
@@ -789,10 +859,12 @@ export function decodeFetchObjectFields(
   }
 
   // Group ID の範囲検証: 0 以上 2^64-1 以下
-  // draft-ietf-moq-transport-22 §11.4.1.1 Table 10:
+  // draft-ietf-moq-transport-23 §11.4.1.1:
   // "If the computed Group ID would be less than 0 or greater than 2^64-1,
-  //  the Subscriber MUST close the Session with error 'PROTOCOL_VIOLATION'."
-  // 上限は varint の最大値と同一のため MAX_VARINT を使う。
+  //  the Subscriber MUST close the Session with DELTA_ENCODING_OVERFLOW."
+  // 現行の受信経路はエラー分類の移行まで ProtocolViolationError を
+  // PROTOCOL_VIOLATION として扱う。上限は varint の最大値と同一のため
+  // MAX_VARINT を使う。
   if (groupId < 0n || groupId > MAX_VARINT) {
     throw new ProtocolViolationError(
       `computed group id out of range: ${groupId}, expected 0 to 2^64-1`,
@@ -808,16 +880,26 @@ export function decodeFetchObjectFields(
   totalConsumed += subgroupConsumed;
 
   // Object ID
-  // draft-ietf-moq-transport-22 §11.4.1.1 Table 10:
-  // "When the Group ID Delta field is not present, the Object ID is the
-  //  prior Object's ID plus the Object ID Delta if present."
-  // Group 不変時 (!GROUP_ID_PRESENT) かつ非先頭の場合、delta は prior + delta。
-  // 先頭オブジェクトまたは Group 変化時は delta が絶対値。
+  // draft-ietf-moq-transport-23 §11.4.1.1:
+  // "When the Group ID Delta field is present, the Object ID is the value of
+  //  Object ID Delta if present. When the Group ID Delta field is not present,
+  //  the Object ID is the prior Object's ID plus the Object ID Delta + 2 if
+  //  present. If Object ID Delta is not present, the Object ID is the prior
+  //  Object's ID plus one, regardless of which group it belongs to."
+  // 先頭 Object は Group ID Delta と Object ID Delta を必ず持ち、両方とも絶対値。
+  // Group 変化時 (GROUP_ID_PRESENT) に Object ID Delta があれば絶対値。
+  // Group 不変時の Object ID Delta は prior + delta + 2 を指す。Delta 省略時は
+  // Group ID Delta の有無に関わらず prior + 1。End of Range indicator の ID は、
+  // FETCH_HEADER 直後の先頭エントリーが EOR のときだけ Group ID / Object ID とも
+  // 絶対値であり、それ以外の EOR は直前の Object / indicator を基準にする
+  // (§11.4.2.1)。Group ID は prior ± Group ID Delta、Group ID Delta が 0 なら
+  // Object ID は prior + Object ID Delta + 1、非 0 なら絶対 Object ID である。
+  // この +2 を共通化しない。
   let objectId: bigint;
   if (flags & FetchSerializationFlags.OBJECT_ID_PRESENT) {
     const [delta, deltaConsumed] = decodeVarint(data, offset + totalConsumed);
-    if (!(flags & FetchSerializationFlags.GROUP_ID_PRESENT) && !isFirst && context !== null) {
-      objectId = context.objectId + delta;
+    if (!(flags & FetchSerializationFlags.GROUP_ID_PRESENT) && context !== null) {
+      objectId = context.objectId + delta + 2n;
     } else {
       objectId = delta;
     }
@@ -830,10 +912,12 @@ export function decodeFetchObjectFields(
   }
 
   // Object ID の範囲検証: 0 以上 2^64-1 以下
-  // draft-ietf-moq-transport-22 §11.4.1.1 Table 10:
-  // "If the computed Object ID would be greater than 2^64-1, the
-  //  Subscriber MUST close the Session with error 'PROTOCOL_VIOLATION'."
-  // 上限は varint の最大値と同一のため MAX_VARINT を使う。
+  // draft-ietf-moq-transport-23 §11.4.1.1:
+  // "If the computed Object ID would be greater than 2^64-1, the Subscriber
+  //  MUST close the Session with DELTA_ENCODING_OVERFLOW."
+  // 現行の受信経路はエラー分類の移行まで ProtocolViolationError を
+  // PROTOCOL_VIOLATION として扱う。上限は varint の最大値と同一のため
+  // MAX_VARINT を使う。
   if (objectId > MAX_VARINT) {
     throw new ProtocolViolationError(
       `computed object id out of range: ${objectId}, expected 0 to 2^64-1`,
@@ -955,6 +1039,10 @@ export function decodeFetchObjectFields(
  * Create serialization flags for first Fetch object
  * First object must have all fields present
  *
+ * draft-ietf-moq-transport-23 §11.4.1.1:
+ * "The first Object MUST include a Group ID Delta and Object ID Delta, and
+ *  these values are the absolute Group ID and Object ID."
+ *
  * @param hasExtensions - Whether the object has extension properties
  * @param isDatagram - Whether the DATAGRAM bit (0x40) is set (no Subgroup ID)
  */
@@ -983,6 +1071,11 @@ export function createFirstFetchObjectFlags(hasExtensions = false, isDatagram = 
 
 /**
  * Create serialization flags based on delta from prior object
+ *
+ * draft-ietf-moq-transport-23 §11.4.1.1:
+ * Group ID Delta が無い場合の Object ID は prior Object ID + Object ID Delta + 2
+ * であり、Delta 省略時は prior Object ID + 1 である。Group ID Delta の有無は
+ * Object ID の +1 の式に影響しない。
  */
 export function createFetchObjectFlags(
   current: { groupId: bigint; subgroupId: bigint; objectId: bigint; publisherPriority: number },
@@ -1008,6 +1101,12 @@ export function createFetchObjectFlags(
   }
 
   // Object ID
+  // 増分 1 は Group の有無に関わらず Delta 省略 (prior + 1) で表すため、
+  // そのときだけ OBJECT_ID_PRESENT を立てない。同一 Group で増分 2 以上は
+  // 明示 Delta (増分 - 2) で表し、Group 変更時に明示する場合は絶対 Object ID を
+  // 書く。増分 0 以下は同一 Group 内で Object ID が増加しない不正な状態であり、
+  // Delta でも表現できないため、ここでは OBJECT_ID_PRESENT を立てて
+  // encodeFetchObjectFields の送信前検証に委ねる。
   if (current.objectId !== prior.objectId + 1n) {
     flags |= FetchSerializationFlags.OBJECT_ID_PRESENT;
   }

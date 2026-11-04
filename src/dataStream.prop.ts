@@ -12,6 +12,7 @@ import {
   type FetchObjectFields,
   type SubgroupHeader,
   SubgroupHeaderType,
+  createFetchObjectFlags,
   createFirstFetchObjectFlags,
   encodeFetchObjectFields,
   decodeFetchObjectFields,
@@ -359,6 +360,135 @@ test("FetchObjectFields: Ascending/Descending 両方で先頭オブジェクト�
       assert.equal(decoded.publisherPriority, original.publisherPriority);
       assert.equal(decoded.payloadLength, original.payloadLength);
     }),
+  );
+});
+
+// ============================================================================
+// 同一 Group の Object ID Delta +2 の PBT
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-23 §11.4.1.1:
+ * "When the Group ID Delta field is not present, the Object ID is the prior
+ *  Object's ID plus the Object ID Delta + 2 if present. If Object ID Delta is
+ *  not present, the Object ID is the prior Object's ID plus one, regardless of
+ *  which group it belongs to."
+ *
+ * 先頭 Object の後ろに同一 Group の Object を増分 1〜4 で並べ、
+ * - 増分 1 は Delta 省略 (prior + 1)
+ * - 増分 2 以上は明示 Delta (prior + Delta + 2、Delta = 増分 - 2)
+ * で encode / decode / フラグ生成が一致することを検証する。wire の Delta
+ * バイト列も直接検証し、送受信双方が同じ誤りを持つラウンドトリップだけでは
+ * 検出できないことを補う。
+ */
+test("FetchObjectFields: 同一 Group の Object ID が prior + Delta + 2 で復元される", () => {
+  fc.assert(
+    fc.property(
+      // groupId / subgroupId / 先頭 Object の Object ID / publisherPriority / 増分
+      fc.bigInt({ min: 0n, max: 1000000n }),
+      fc.bigInt({ min: 0n, max: 1000000n }),
+      fc.bigInt({ min: 0n, max: 1000000n }),
+      fc.integer({ min: 0, max: 255 }),
+      fc.array(fc.bigInt({ min: 1n, max: 4n }), { minLength: 1, maxLength: 4 }),
+      groupOrderArb,
+      (groupId, subgroupId, firstObjectId, publisherPriority, increments, groupOrder) => {
+        // 先頭 Object は Group ID / Object ID を絶対値で持つ
+        const first: FetchObjectFields = {
+          serializationFlags: createFirstFetchObjectFlags(false),
+          groupId,
+          subgroupId,
+          objectId: firstObjectId,
+          publisherPriority,
+          payloadLength: 0n,
+        };
+        const firstEncoded = encodeFetchObjectFields(first, false, null, groupOrder);
+        const [, , firstContext] = decodeFetchObjectFields(firstEncoded, null, 0, true, groupOrder);
+
+        let context: FetchObjectContext = firstContext;
+        let previousObjectId = firstObjectId;
+        for (const increment of increments) {
+          const objectId = previousObjectId + increment;
+          const flags = createFetchObjectFlags(
+            { groupId, subgroupId, objectId, publisherPriority },
+            context,
+            false,
+          );
+          // 同一 Group では増分 1 だけ Delta を省略する
+          assert.equal((flags & FetchSerializationFlags.OBJECT_ID_PRESENT) !== 0, increment >= 2n);
+
+          const fields: FetchObjectFields = {
+            serializationFlags: flags,
+            objectId,
+            payloadLength: 0n,
+          };
+          const encoded = encodeFetchObjectFields(fields, false, context, groupOrder);
+
+          // wire は [Flags][Object ID Delta (明示時のみ)][Object Payload Length] の
+          // 順である。Group / Subgroup / Priority は先頭と同じため省略される
+          const expectedParts: number[] = [flags];
+          if (increment >= 2n) {
+            expectedParts.push(...encodeVarint(increment - 2n));
+          }
+          expectedParts.push(0);
+          assert.deepEqual([...encoded], expectedParts);
+
+          const [decoded, , nextContext] = decodeFetchObjectFields(
+            encoded,
+            context,
+            0,
+            false,
+            groupOrder,
+          );
+          assert.equal(decoded.objectId, objectId);
+          assert.equal(decoded.groupId, groupId);
+          assert.equal(decoded.subgroupId, subgroupId);
+          assert.equal(decoded.publisherPriority, publisherPriority);
+
+          // 実際の受信経路と同じく、decode が返した context を次段へ引き継ぐ
+          context = nextContext;
+          previousObjectId = objectId;
+        }
+      },
+    ),
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-23 §11.4.1.1:
+ * Group ID Delta が無い Object の Object ID は prior + Delta + 2 である。
+ * 任意の prior と Delta を組み立て、2^64-1 を超える場合は
+ * DELTA_ENCODING_OVERFLOW (現行は ProtocolViolationError = PROTOCOL_VIOLATION)
+ * として拒否されることを検証する。
+ */
+test("FetchObjectFields: 任意の prior と Delta から Object ID が prior + Delta + 2 で復元される", () => {
+  fc.assert(
+    fc.property(
+      // prior Object ID / Object ID Delta
+      fc.bigInt({ min: 0n, max: MAX_VARINT }),
+      fc.bigInt({ min: 0n, max: MAX_VARINT }),
+      (priorObjectId, delta) => {
+        const prior: FetchObjectContext = {
+          groupId: 0n,
+          subgroupId: 0n,
+          objectId: priorObjectId,
+          publisherPriority: 0,
+        };
+
+        // Serialization Flags = SUBGROUP_SAME | OBJECT_ID_PRESENT、Payload Length=0
+        const data = new Uint8Array([0x05, ...encodeVarint(delta), 0x00]);
+        const expectedObjectId = priorObjectId + delta + 2n;
+
+        if (expectedObjectId > MAX_VARINT) {
+          assert.throws(
+            () => decodeFetchObjectFields(data, prior, 0, false),
+            ProtocolViolationError,
+          );
+        } else {
+          const [decoded] = decodeFetchObjectFields(data, prior, 0, false);
+          assert.equal(decoded.objectId, expectedObjectId);
+        }
+      },
+    ),
   );
 });
 

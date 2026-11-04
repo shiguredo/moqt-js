@@ -3947,11 +3947,10 @@ function buildPriorityMismatchFetchChunks(requestId: bigint): Uint8Array[] {
   const [, , firstContext] = decodeFetchObjectFields(firstEncoded, null, 0, true);
 
   // 同一 Group・同一 Subgroup で異なる Priority (200) のオブジェクト
+  // Object ID は直前 + 1 なので Delta を省略する
   const second: FetchObjectFields = {
     serializationFlags:
-      FetchSerializationFlags.SUBGROUP_SAME |
-      FetchSerializationFlags.OBJECT_ID_PRESENT |
-      FetchSerializationFlags.PRIORITY_PRESENT,
+      FetchSerializationFlags.SUBGROUP_SAME | FetchSerializationFlags.PRIORITY_PRESENT,
     objectId: 1n,
     publisherPriority: 200,
     payloadLength: 0n,
